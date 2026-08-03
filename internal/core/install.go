@@ -1,0 +1,266 @@
+package core
+
+import (
+	"archive/zip"
+	"compress/gzip"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/LeeShunEE/mihari/internal/control/protocol"
+)
+
+const (
+	maxCoreArchiveSize = 128 << 20
+	maxCoreBinarySize  = 256 << 20
+)
+
+type Installer struct {
+	HTTPClient *http.Client
+	APIBase    string
+	Repository string
+	GOOS       string
+	GOARCH     string
+	Runner     CommandRunner
+}
+
+type InstallRequest struct {
+	BinaryPath     string
+	DataDir        string
+	ConfigPath     string
+	StagingDir     string
+	CurrentVersion string
+}
+
+type InstallResult struct {
+	Version string
+	Updated bool
+}
+
+func (i Installer) Install(ctx context.Context, request InstallRequest) (InstallResult, error) {
+	release, err := i.latestRelease(ctx)
+	if err != nil {
+		return InstallResult{}, err
+	}
+	if request.CurrentVersion == release.TagName {
+		if info, err := os.Stat(request.BinaryPath); err == nil && !info.IsDir() {
+			return InstallResult{Version: release.TagName, Updated: false}, nil
+		}
+	}
+	asset, err := SelectAsset(release, i.targetOS(), i.targetArch())
+	if err != nil {
+		return InstallResult{}, err
+	}
+	if asset.Size < 0 || asset.Size > maxCoreArchiveSize {
+		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo asset is too large"}
+	}
+	if err := os.MkdirAll(request.StagingDir, 0o700); err != nil {
+		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core staging directory"}
+	}
+	archive, err := os.CreateTemp(request.StagingDir, ".mihomo-download-*")
+	if err != nil {
+		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core download file"}
+	}
+	archivePath := archive.Name()
+	archive.Close()
+	defer os.Remove(archivePath)
+	if err := i.download(ctx, asset, archivePath); err != nil {
+		return InstallResult{}, err
+	}
+
+	candidate, err := os.CreateTemp(request.StagingDir, ".mihomo-candidate-*")
+	if err != nil {
+		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core candidate"}
+	}
+	candidatePath := candidate.Name()
+	candidate.Close()
+	defer os.Remove(candidatePath)
+	if err := extractAsset(archivePath, asset.Name, candidatePath); err != nil {
+		return InstallResult{}, err
+	}
+	if err := os.Chmod(candidatePath, 0o700); err != nil {
+		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "set core executable permissions"}
+	}
+	runner := i.Runner
+	if runner == nil {
+		runner = OSCommandRunner{}
+	}
+	versionOutput, err := runner.Run(ctx, candidatePath, "-v")
+	if err != nil || len(strings.TrimSpace(string(versionOutput))) == 0 {
+		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo candidate did not start"}
+	}
+	if err := ValidateConfig(ctx, runner, candidatePath, request.DataDir, request.ConfigPath); err != nil {
+		return InstallResult{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(request.BinaryPath), 0o700); err != nil {
+		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core binary directory"}
+	}
+	if err := replaceBinary(candidatePath, request.BinaryPath); err != nil {
+		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "replace mihomo core"}
+	}
+	return InstallResult{Version: release.TagName, Updated: true}, nil
+}
+
+func (i Installer) download(ctx context.Context, asset Asset, destination string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
+	if err != nil {
+		return protocol.APIError{Code: protocol.CodeInternal, Message: "create core download request"}
+	}
+	request.Header.Set("User-Agent", "mihari")
+	response, err := i.httpClient().Do(request)
+	if err != nil {
+		return protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download mihomo core failed"}
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download mihomo core failed", Details: map[string]any{"status": response.StatusCode}}
+	}
+	file, err := os.OpenFile(destination, os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "open core download file"}
+	}
+	hash := sha256.New()
+	written, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, maxCoreArchiveSize+1))
+	closeErr := file.Close()
+	if copyErr != nil || closeErr != nil {
+		return protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "save mihomo core download failed"}
+	}
+	if written > maxCoreArchiveSize || (asset.Size > 0 && written != asset.Size) {
+		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo asset size mismatch"}
+	}
+	if asset.Digest != "" {
+		algorithm, expected, found := strings.Cut(asset.Digest, ":")
+		if !found || algorithm != "sha256" {
+			return protocol.APIError{Code: protocol.CodeDataFailure, Message: "unsupported mihomo asset digest"}
+		}
+		actual := hex.EncodeToString(hash.Sum(nil))
+		if !strings.EqualFold(actual, expected) {
+			return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo asset digest mismatch"}
+		}
+	}
+	return nil
+}
+
+func extractAsset(archivePath, assetName, candidatePath string) error {
+	if strings.HasSuffix(strings.ToLower(assetName), ".gz") {
+		return extractGzip(archivePath, candidatePath)
+	}
+	if strings.HasSuffix(strings.ToLower(assetName), ".zip") {
+		return extractZip(archivePath, candidatePath)
+	}
+	return protocol.APIError{Code: protocol.CodeDataFailure, Message: "unsupported mihomo archive"}
+}
+
+func extractGzip(archivePath, candidatePath string) error {
+	archive, err := os.Open(archivePath)
+	if err != nil {
+		return dataFailure("open mihomo archive")
+	}
+	defer archive.Close()
+	reader, err := gzip.NewReader(archive)
+	if err != nil {
+		return dataFailure("invalid mihomo gzip archive")
+	}
+	defer reader.Close()
+	return writeCandidate(candidatePath, reader)
+}
+
+func extractZip(archivePath, candidatePath string) error {
+	archive, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return dataFailure("invalid mihomo zip archive")
+	}
+	defer archive.Close()
+	var selected *zip.File
+	for _, file := range archive.File {
+		if !safeArchiveName(file.Name) {
+			return dataFailure("unsafe path in mihomo archive")
+		}
+		base := strings.ToLower(filepath.Base(file.Name))
+		if !file.FileInfo().IsDir() && strings.Contains(base, "mihomo") && strings.HasSuffix(base, ".exe") && selected == nil {
+			selected = file
+		}
+	}
+	if selected == nil {
+		return dataFailure("mihomo executable is missing from archive")
+	}
+	reader, err := selected.Open()
+	if err != nil {
+		return dataFailure("open mihomo executable in archive")
+	}
+	defer reader.Close()
+	return writeCandidate(candidatePath, reader)
+}
+
+func safeArchiveName(name string) bool {
+	forward := strings.ReplaceAll(name, "\\", "/")
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(forward)))
+	return clean != ".." && !strings.HasPrefix(clean, "../") && !strings.HasPrefix(forward, "/") && !filepath.IsAbs(filepath.FromSlash(forward))
+}
+
+func writeCandidate(path string, source io.Reader) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o700)
+	if err != nil {
+		return dataFailure("open mihomo candidate")
+	}
+	written, copyErr := io.Copy(file, io.LimitReader(source, maxCoreBinarySize+1))
+	if syncErr := file.Sync(); copyErr == nil {
+		copyErr = syncErr
+	}
+	if closeErr := file.Close(); copyErr == nil {
+		copyErr = closeErr
+	}
+	if copyErr != nil {
+		return dataFailure("write mihomo candidate")
+	}
+	if written > maxCoreBinarySize {
+		return dataFailure("mihomo executable is too large")
+	}
+	return nil
+}
+
+func (i Installer) httpClient() *http.Client {
+	if i.HTTPClient != nil {
+		return i.HTTPClient
+	}
+	return &http.Client{Timeout: 15 * time.Minute}
+}
+
+func (i Installer) apiBase() string {
+	if i.APIBase != "" {
+		return i.APIBase
+	}
+	return "https://api.github.com"
+}
+
+func (i Installer) repository() string {
+	if i.Repository != "" {
+		return i.Repository
+	}
+	return "MetaCubeX/mihomo"
+}
+
+func (i Installer) targetOS() string {
+	if i.GOOS != "" {
+		return i.GOOS
+	}
+	return runtime.GOOS
+}
+
+func (i Installer) targetArch() string {
+	if i.GOARCH != "" {
+		return i.GOARCH
+	}
+	return runtime.GOARCH
+}
+
+func dataFailure(message string) error {
+	return protocol.APIError{Code: protocol.CodeDataFailure, Message: message}
+}
