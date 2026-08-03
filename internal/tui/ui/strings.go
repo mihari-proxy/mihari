@@ -98,6 +98,19 @@ const (
 	EscCloseHint               = "Esc close"
 )
 
+const (
+	LevelLabel      = "Level"
+	WrapLabel       = "Wrap"
+	UnreadLabel     = "Unread"
+	DroppedLabel    = "Dropped"
+	TimeLabel       = "Time"
+	MessageLabel    = "Message"
+	NoMatchingLogs  = "No matching logs."
+	LogDetailsTitle = "Log details"
+	OnLabel         = "On"
+	OffLabel        = "Off"
+)
+
 var connectionColumnLabels = map[string]string{
 	"host": "Host", "network": "Network", "source": "Source", "destination": "Destination",
 	"chain": "Chain", "rule": "Rule", "process": "Process", "upload": "Upload",

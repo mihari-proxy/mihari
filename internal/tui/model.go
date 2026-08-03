@@ -7,6 +7,7 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	connectionspage "github.com/LeeShunEE/mihari/internal/tui/pages/connections"
+	logspage "github.com/LeeShunEE/mihari/internal/tui/pages/logs"
 	"github.com/LeeShunEE/mihari/internal/tui/pages/overview"
 	proxypage "github.com/LeeShunEE/mihari/internal/tui/pages/proxies"
 	rulespage "github.com/LeeShunEE/mihari/internal/tui/pages/rules"
@@ -58,6 +59,7 @@ func newModelWithPageClients(proxyClient proxypage.Client, connectionsClient con
 	pages[ui.PageProxies] = proxypage.New(proxyClient, nil)
 	pages[ui.PageConnections] = connectionspage.New(connectionsClient, nil)
 	pages[ui.PageRules] = rulespage.New(rulesClient, nil)
+	pages[ui.PageLogs] = logspage.New(0)
 	active := rail[0]
 	model := Model{
 		pages: pages, rail: rail, active: active,
@@ -96,6 +98,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.stale = true
 			model.mutationsEnabled = false
 			model.monitor.SetStale(true)
+			model.setLogsStale(true)
 			model.syncOverview()
 			return model, nil
 		}
@@ -195,19 +198,31 @@ func (model *Model) applySessionEvent(event session.Event) {
 		if page, ok := model.pages[ui.PageRules].(*rulespage.Model); ok {
 			page.SetProviders(event.RuleProviders)
 		}
+	case session.EventLog:
+		if page, ok := model.pages[ui.PageLogs].(*logspage.Model); ok {
+			page.Observe(event.Log, event.ObservedAt)
+		}
 	case session.EventConnected:
 		model.connected = true
 		model.stale = false
 		model.mutationsEnabled = true
+		model.setLogsStale(false)
 	case session.EventReconnecting, session.EventTerminalError:
 		model.connected = false
 		model.stale = true
 		model.mutationsEnabled = false
+		model.setLogsStale(true)
 		if page, ok := model.pages[ui.PageConnections].(*connectionspage.Model); ok {
 			page.ResetSession()
 		}
 	}
 	model.syncOverview()
+}
+
+func (model *Model) setLogsStale(stale bool) {
+	if page, ok := model.pages[ui.PageLogs].(*logspage.Model); ok {
+		page.SetStale(stale)
+	}
 }
 
 func (model *Model) recordOperation(operation ui.OperationRecord) {

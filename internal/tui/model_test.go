@@ -51,6 +51,28 @@ func TestModelRoutesRulesAndProvidersToPage(t *testing.T) {
 	}
 }
 
+func TestModelRoutesStructuredLogsToPage(t *testing.T) {
+	model := NewModel()
+	model.applySessionEvent(session.Event{Kind: session.EventLog, ObservedAt: time.Unix(3, 0), Log: protocol.LogEntry{Level: "info", Message: "daemon ready"}})
+	page := model.pages[ui.PageLogs]
+	if !strings.Contains(page.View(), "daemon ready") || !strings.Contains(page.View(), "INFO") {
+		t.Fatalf("logs view=%s", page.View())
+	}
+}
+
+func TestModelMarksRetainedLogsStaleDuringReconnect(t *testing.T) {
+	model := NewModel()
+	model.applySessionEvent(session.Event{Kind: session.EventLog, ObservedAt: time.Unix(3, 0), Log: protocol.LogEntry{Level: "info", Message: "retained"}})
+	model.applySessionEvent(session.Event{Kind: session.EventReconnecting})
+	if view := model.pages[ui.PageLogs].View(); !strings.Contains(view, "retained") || !strings.Contains(view, ui.StaleLabel) {
+		t.Fatalf("stale logs view=%s", view)
+	}
+	model.applySessionEvent(session.Event{Kind: session.EventConnected})
+	if view := model.pages[ui.PageLogs].View(); strings.Contains(view, ui.StaleLabel) {
+		t.Fatalf("connected logs remained stale: %s", view)
+	}
+}
+
 func TestModelReconnectResetsSessionScopedConnectionHistory(t *testing.T) {
 	model := NewModel()
 	page := model.pages[ui.PageConnections].(*connectionspage.Model)
