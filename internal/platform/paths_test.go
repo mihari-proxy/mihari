@@ -21,6 +21,10 @@ func TestNewPathsBuildsRuntimeLayout(t *testing.T) {
 		"settings":       filepath.Join(root, "mihari.yaml"),
 		"log":            filepath.Join(root, "logs", "mihari.log"),
 		"staging":        filepath.Join(root, "staging"),
+		"subscriptions":  filepath.Join(root, "subscriptions"),
+		"catalog":        filepath.Join(root, "subscriptions", "catalog.yaml"),
+		"cache":          filepath.Join(root, "subscriptions", "cache"),
+		"sub staging":    filepath.Join(root, "staging", "subscriptions"),
 	}
 	gots := map[string]string{
 		"root":           paths.Root,
@@ -30,6 +34,10 @@ func TestNewPathsBuildsRuntimeLayout(t *testing.T) {
 		"settings":       paths.Settings,
 		"log":            paths.Log,
 		"staging":        paths.Staging,
+		"subscriptions":  paths.Subscriptions,
+		"catalog":        paths.SubscriptionCatalog,
+		"cache":          paths.SubscriptionCache,
+		"sub staging":    paths.SubscriptionStaging,
 	}
 	for name, want := range wants {
 		if got := gots[name]; got != want {

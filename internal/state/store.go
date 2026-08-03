@@ -6,11 +6,25 @@ import (
 )
 
 type Snapshot struct {
-	Revision  uint64
-	Version   string
-	StartedAt time.Time
-	Health    string
-	Core      CoreState
+	Revision           uint64
+	Version            string
+	StartedAt          time.Time
+	Health             string
+	Core               CoreState
+	ActiveSubscription string
+	Subscriptions      []SubscriptionState
+}
+
+type SubscriptionState struct {
+	ID          string
+	Name        string
+	Enabled     bool
+	AutoRefresh bool
+	Interval    string
+	Cached      bool
+	Generation  uint64
+	UpdatedAt   time.Time
+	LastError   string
 }
 
 type CoreState struct {
@@ -33,10 +47,15 @@ func NewStore(initial Snapshot) *Store {
 }
 
 func (s *Store) Load() Snapshot {
-	return *s.current.Load()
+	return clone(*s.current.Load())
 }
 
 func (s *Store) Store(next Snapshot) {
-	copy := next
+	copy := clone(next)
 	s.current.Store(&copy)
+}
+
+func clone(snapshot Snapshot) Snapshot {
+	snapshot.Subscriptions = append([]SubscriptionState(nil), snapshot.Subscriptions...)
+	return snapshot
 }
