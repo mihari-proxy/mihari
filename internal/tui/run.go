@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	controlclient "github.com/LeeShunEE/mihari/internal/control/client"
+	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
 
@@ -18,8 +19,15 @@ type Options struct {
 
 // Run starts the full-screen Mihari terminal interface and blocks until it exits.
 func Run(ctx context.Context, options Options) error {
+	model := NewModel()
+	var controlSession *session.Session
+	if options.Client != nil {
+		controlSession = session.New(options.Client, session.Options{})
+		model = NewModelWithEvents(controlSession.Start(ctx))
+		defer controlSession.Close()
+	}
 	program := tea.NewProgram(
-		NewModel(),
+		model,
 		tea.WithContext(ctx),
 		tea.WithInput(options.Input),
 		tea.WithOutput(options.Output),

@@ -5,20 +5,30 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
 
 type Model struct {
-	pages     map[ui.PageID]ui.Page
-	rail      []ui.PageID
-	railIndex int
-	active    ui.PageID
-	focus     ui.Focus
-	inputMode ui.InputMode
-	modal     *Modal
-	width     int
-	height    int
-	theme     ui.Theme
+	pages            map[ui.PageID]ui.Page
+	rail             []ui.PageID
+	railIndex        int
+	active           ui.PageID
+	focus            ui.Focus
+	inputMode        ui.InputMode
+	modal            *Modal
+	width            int
+	height           int
+	theme            ui.Theme
+	events           <-chan session.Event
+	connected        bool
+	stale            bool
+	mutationsEnabled bool
+	status           protocol.Status
+	traffic          protocol.TrafficSample
+	memory           protocol.MemorySample
+	connections      protocol.ConnectionList
 }
 
 func NewModel() Model {
@@ -37,10 +47,25 @@ func NewModel() Model {
 	return model
 }
 
-func (Model) Init() tea.Cmd { return nil }
+func NewModelWithEvents(events <-chan session.Event) Model {
+	model := NewModel()
+	model.events = events
+	return model
+}
+
+func (model Model) Init() tea.Cmd { return waitSessionEvent(model.events) }
 
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch typed := message.(type) {
+	case sessionEventMsg:
+		if !typed.Open {
+			model.connected = false
+			model.stale = true
+			model.mutationsEnabled = false
+			return model, nil
+		}
+		model.applySessionEvent(typed.Event)
+		return model, waitSessionEvent(model.events)
 	case tea.WindowSizeMsg:
 		model.width, model.height = typed.Width, typed.Height
 		model.resizePages()
@@ -86,6 +111,27 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model.updateRail(name)
 	}
 	return model.dispatchPage(message)
+}
+
+func (model *Model) applySessionEvent(event session.Event) {
+	switch event.Kind {
+	case session.EventStatus:
+		model.status = event.Status
+	case session.EventTraffic:
+		model.traffic = event.Traffic
+	case session.EventMemory:
+		model.memory = event.Memory
+	case session.EventConnections:
+		model.connections = event.Connections
+	case session.EventConnected:
+		model.connected = true
+		model.stale = false
+		model.mutationsEnabled = true
+	case session.EventReconnecting, session.EventTerminalError:
+		model.connected = false
+		model.stale = true
+		model.mutationsEnabled = false
+	}
 }
 
 func (model Model) updateRail(key string) (tea.Model, tea.Cmd) {

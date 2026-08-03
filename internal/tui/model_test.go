@@ -4,8 +4,36 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
+
+func TestModelSessionReconnectMarksSnapshotStaleAndKeepsWaiting(t *testing.T) {
+	events := make(chan session.Event, 2)
+	model := NewModelWithEvents(events)
+	command := model.Init()
+	if command == nil {
+		t.Fatal("model did not wait for session events")
+	}
+	events <- session.Event{Kind: session.EventReconnecting}
+	updated, next := model.Update(command())
+	model = updated.(Model)
+	if !model.stale || model.connected || next == nil {
+		t.Fatalf("stale=%v connected=%v next=%v", model.stale, model.connected, next != nil)
+	}
+	events <- session.Event{Kind: session.EventConnected}
+	updated, next = model.Update(next())
+	model = updated.(Model)
+	if model.stale || !model.connected || next == nil {
+		t.Fatalf("stale=%v connected=%v next=%v", model.stale, model.connected, next != nil)
+	}
+	close(events)
+	updated, next = model.Update(next())
+	model = updated.(Model)
+	if next != nil {
+		t.Fatal("closed session channel was reissued")
+	}
+}
 
 func TestRail_EnterAndRightEnterContentButTabDoesNot(t *testing.T) {
 	for _, enterKey := range []tea.KeyPressMsg{{Code: tea.KeyEnter}, {Code: tea.KeyRight}} {
