@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	controlclient "github.com/LeeShunEE/mihari/internal/control/client"
+	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
 
 // Options contains the control client and terminal streams used by the TUI.
@@ -18,7 +19,7 @@ type Options struct {
 // Run starts the full-screen Mihari terminal interface and blocks until it exits.
 func Run(ctx context.Context, options Options) error {
 	program := tea.NewProgram(
-		loadingModel{},
+		NewModel(),
 		tea.WithContext(ctx),
 		tea.WithInput(options.Input),
 		tea.WithOutput(options.Output),
@@ -42,7 +43,7 @@ func (model loadingModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (loadingModel) View() tea.View {
-	view := tea.NewView("Mihari is connecting…\n")
+	view := tea.NewView(ui.Connecting + "\n")
 	view.AltScreen = true
 	return view
 }
