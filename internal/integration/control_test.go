@@ -62,6 +62,22 @@ func TestControlPlaneLifecycleAndConcurrentStatus(t *testing.T) {
 		t.Error(err)
 	}
 
+	unauthorizedStdout := &bytes.Buffer{}
+	unauthorizedStderr := &bytes.Buffer{}
+	unauthorizedExit := cli.Execute(context.Background(), []string{"status", "--json"}, unauthorizedStdout, unauthorizedStderr, cli.Dependencies{
+		StatusClient: controlclient.New(endpoint, "wrong-token"),
+	})
+	if unauthorizedExit != cli.ExitPermission {
+		t.Fatalf("unauthorized exit=%d stdout=%q stderr=%q", unauthorizedExit, unauthorizedStdout.String(), unauthorizedStderr.String())
+	}
+	var unauthorizedEnvelope protocol.ErrorEnvelope
+	if err := json.Unmarshal(unauthorizedStderr.Bytes(), &unauthorizedEnvelope); err != nil {
+		t.Fatalf("decode unauthorized error: %v: %q", err, unauthorizedStderr.String())
+	}
+	if unauthorizedEnvelope.Error.Code != protocol.CodePermissionDenied {
+		t.Fatalf("unauthorized error=%#v", unauthorizedEnvelope.Error)
+	}
+
 	cancel()
 	select {
 	case err := <-done:
