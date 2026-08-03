@@ -13,15 +13,10 @@ import (
 	"github.com/LeeShunEE/mihari/internal/supervisor"
 )
 
-type PreparedCore interface {
-	Version() string
-	Updated() bool
-	Commit() (core.InstallResult, error)
-	Cleanup()
-}
+type PreparedCore = core.PreparedCore
 
 type CoreInstaller interface {
-	Prepare(context.Context, core.InstallRequest) (PreparedCore, error)
+	Prepare(context.Context, core.InstallRequest) (core.PreparedCore, error)
 }
 
 type CoreSupervisor interface {
