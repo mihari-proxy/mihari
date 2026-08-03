@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -106,6 +107,16 @@ func TestConfirmationEmitsResultOnlyFromConfirmButton(t *testing.T) {
 	}
 	if _, ok := command().(ModalConfirmedMsg); !ok {
 		t.Fatalf("message=%T", command())
+	}
+}
+
+func TestOperationLedgerKeepsNewestFiftyEntries(t *testing.T) {
+	model := NewModel()
+	for index := 0; index < 60; index++ {
+		model.recordOperation(ui.OperationRecord{ID: strconv.Itoa(index)})
+	}
+	if len(model.operations) != 50 || model.operations[0].ID != "10" || model.operations[49].ID != "59" {
+		t.Fatalf("operations=%v", model.operations)
 	}
 }
 

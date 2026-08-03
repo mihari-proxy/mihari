@@ -51,6 +51,20 @@ func TestSession_ReportsReconnectBeforeConnected(t *testing.T) {
 	waitForEvent(t, events, EventConnected)
 }
 
+func TestSession_LoadsCapabilitySnapshotsBeforeConnected(t *testing.T) {
+	fake := newFakeClient()
+	fake.status = protocol.Status{Schema: "mihari/v1", Capabilities: []string{
+		protocol.CapabilityCore, protocol.CapabilitySubscriptions,
+	}}
+	session := New(fake, Options{Backoff: func(int) time.Duration { return 0 }})
+	events := session.Start(context.Background())
+	defer session.Close()
+	waitForEvent(t, events, EventStatus)
+	waitForEvent(t, events, EventCore)
+	waitForEvent(t, events, EventSubscriptions)
+	waitForEvent(t, events, EventConnected)
+}
+
 func TestPutLatestCoalescesTraffic(t *testing.T) {
 	slot := make(chan Event, 1)
 	ctx := context.Background()
@@ -101,6 +115,7 @@ type fakeClient struct {
 	statusFailures int
 	streamCalls    map[string]int
 	started        chan string
+	status         protocol.Status
 }
 
 func newFakeClient() *fakeClient {
@@ -114,7 +129,18 @@ func (f *fakeClient) Status(context.Context) (protocol.Status, error) {
 		f.statusFailures--
 		return protocol.Status{}, errors.New("offline")
 	}
+	if f.status.Schema != "" {
+		return f.status, nil
+	}
 	return protocol.Status{Schema: "mihari/v1", Revision: 3}, nil
+}
+
+func (f *fakeClient) Core(context.Context) (protocol.CoreStatus, error) {
+	return protocol.CoreStatus{Schema: "mihari/v1", Status: "running"}, nil
+}
+
+func (f *fakeClient) Subscriptions(context.Context) (protocol.SubscriptionList, error) {
+	return protocol.SubscriptionList{Schema: "mihari/v1", Subscriptions: []protocol.Subscription{}}, nil
 }
 
 func (f *fakeClient) Stream(ctx context.Context, kind string, _ func(protocol.StreamEvent) error) error {
