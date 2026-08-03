@@ -11,6 +11,7 @@ type Profile struct {
 	Enabled      bool      `yaml:"enabled"`
 	AutoRefresh  bool      `yaml:"auto-refresh"`
 	Interval     string    `yaml:"interval,omitempty"`
+	Version      uint64    `yaml:"version,omitempty"`
 	Generation   uint64    `yaml:"generation,omitempty"`
 	UpdatedAt    time.Time `yaml:"updated-at,omitempty"`
 	ETag         string    `yaml:"etag,omitempty"`

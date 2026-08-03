@@ -115,14 +115,6 @@ func (c *Catalog) Normalize() error {
 				break
 			}
 		}
-		if c.ActiveID == "" {
-			for _, profile := range c.Profiles {
-				if profile.Enabled {
-					c.ActiveID = profile.ID
-					break
-				}
-			}
-		}
 	}
 	return nil
 }
