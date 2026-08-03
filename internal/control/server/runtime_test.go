@@ -114,7 +114,13 @@ func TestRuntimeRequestRejectsUnknownOrOversizedJSON(t *testing.T) {
 
 func TestRuntimeStreamWrapsEveryUpstreamMessage(t *testing.T) {
 	fake := &fakeRuntime{streamMessages: []json.RawMessage{json.RawMessage(`{"up":1,"down":2}`)}}
-	control := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: fake})
+	fixed := time.Date(2026, time.August, 3, 12, 30, 0, 0, time.FixedZone("test", 8*60*60))
+	control := New(Options{
+		Token:   "token",
+		Store:   state.NewStore(state.Snapshot{}),
+		Runtime: fake,
+		Now:     func() time.Time { return fixed },
+	})
 	server := httptest.NewServer(control.Handler())
 	defer server.Close()
 	header := http.Header{}
@@ -133,6 +139,9 @@ func TestRuntimeStreamWrapsEveryUpstreamMessage(t *testing.T) {
 	if event.Schema != "mihari/v1" || event.Stream != "traffic" || string(event.Data) != `{"up":1,"down":2}` {
 		t.Fatalf("event=%#v", event)
 	}
+	if !event.ObservedAt.Equal(fixed) || event.ObservedAt.Location() != time.UTC {
+		t.Fatalf("observed_at=%v want=%v", event.ObservedAt, fixed.UTC())
+	}
 }
 
 func authorizedRequest(method, path string, body io.Reader) *http.Request {
@@ -142,6 +151,7 @@ func authorizedRequest(method, path string, body io.Reader) *http.Request {
 }
 
 type fakeRuntime struct {
+	capabilities   []string
 	snapshot       state.Snapshot
 	operation      runtimeapi.Operation
 	selectedGroup  string
@@ -152,6 +162,8 @@ type fakeRuntime struct {
 	rules          mihomo.Rules
 	streamMessages []json.RawMessage
 }
+
+func (f *fakeRuntime) Capabilities() []string { return append([]string(nil), f.capabilities...) }
 
 func (f *fakeRuntime) Snapshot() state.Snapshot { return f.snapshot }
 

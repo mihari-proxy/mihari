@@ -2,6 +2,20 @@ package protocol
 
 import "time"
 
+const (
+	CapabilityCore          = "core"
+	CapabilityProxies       = "proxies"
+	CapabilityConnections   = "connections"
+	CapabilityRules         = "rules"
+	CapabilityLogs          = "logs"
+	CapabilitySubscriptions = "subscriptions"
+	CapabilityRuleProviders = "rule-providers"
+	CapabilityGeoIP         = "geoip"
+	CapabilityPreferences   = "preferences"
+	CapabilityOnboarding    = "onboarding"
+	CapabilityWebGUI        = "web-gui"
+)
+
 type Status struct {
 	Schema          string        `json:"schema"`
 	ProtocolVersion string        `json:"protocol_version"`
@@ -10,6 +24,8 @@ type Status struct {
 	Health          string        `json:"health"`
 	StartedAt       time.Time     `json:"started_at"`
 	Config          *ConfigStatus `json:"config,omitempty"`
+	Capabilities    []string      `json:"capabilities,omitempty"`
+	SetupRequired   bool          `json:"setup_required,omitempty"`
 }
 
 type ConfigStatus struct {

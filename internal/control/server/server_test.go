@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -52,6 +53,32 @@ func TestStatusReturnsStableEnvelope(t *testing.T) {
 	}
 	if got.Schema != "mihari/v1" || got.ProtocolVersion != "v1" || got.Revision != 7 || got.Health != "ok" {
 		t.Fatalf("status=%#v", got)
+	}
+}
+
+func TestStatusReturnsSortedUniqueRuntimeCapabilities(t *testing.T) {
+	server := New(Options{
+		Token: "test-token",
+		Store: state.NewStore(state.Snapshot{}),
+		Runtime: &fakeRuntime{capabilities: []string{
+			protocol.CapabilityLogs,
+			protocol.CapabilityCore,
+			protocol.CapabilityLogs,
+		}},
+	})
+	request := httptest.NewRequest(http.MethodGet, "/v1/status", nil)
+	request.Header.Set("Authorization", "Bearer test-token")
+	response := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(response, request)
+
+	var got protocol.Status
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{protocol.CapabilityCore, protocol.CapabilityLogs}
+	if !slices.Equal(got.Capabilities, want) {
+		t.Fatalf("capabilities=%v want=%v", got.Capabilities, want)
 	}
 }
 

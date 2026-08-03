@@ -100,7 +100,23 @@ type CoreInstallResult struct {
 }
 
 type StreamEvent struct {
-	Schema string          `json:"schema"`
-	Stream string          `json:"stream"`
-	Data   json.RawMessage `json:"data"`
+	Schema     string          `json:"schema"`
+	Stream     string          `json:"stream"`
+	ObservedAt time.Time       `json:"observed_at,omitzero"`
+	Data       json.RawMessage `json:"data"`
+}
+
+type TrafficSample struct {
+	Up   int64 `json:"up"`
+	Down int64 `json:"down"`
+}
+
+type MemorySample struct {
+	InUse   int64 `json:"inuse"`
+	OSLimit int64 `json:"oslimit,omitempty"`
+}
+
+type LogEntry struct {
+	Level   string `json:"type"`
+	Message string `json:"payload"`
 }
