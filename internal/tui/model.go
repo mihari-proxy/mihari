@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/LeeShunEE/mihari/internal/tui/pages/overview"
 	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
@@ -29,6 +30,10 @@ type Model struct {
 	traffic          protocol.TrafficSample
 	memory           protocol.MemorySample
 	connections      protocol.ConnectionList
+	core             protocol.CoreStatus
+	subscriptions    protocol.SubscriptionList
+	monitor          MonitorModel
+	operations       []ui.OperationRecord
 }
 
 func NewModel() Model {
@@ -37,11 +42,12 @@ func NewModel() Model {
 	for _, id := range rail {
 		pages[id] = ui.NewUnavailablePage(id)
 	}
+	pages[ui.PageOverview] = overview.New()
 	active := rail[0]
 	model := Model{
 		pages: pages, rail: rail, active: active,
 		focus: ui.Focus{Area: ui.FocusRail, Page: active},
-		width: 100, height: 28, theme: ui.DefaultTheme(),
+		width: 100, height: 28, theme: ui.DefaultTheme(), monitor: NewMonitor(),
 	}
 	model.resizePages()
 	return model
@@ -62,10 +68,15 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.connected = false
 			model.stale = true
 			model.mutationsEnabled = false
+			model.monitor.SetStale(true)
+			model.syncOverview()
 			return model, nil
 		}
 		model.applySessionEvent(typed.Event)
 		return model, waitSessionEvent(model.events)
+	case OperationRecordMsg:
+		model.recordOperation(typed.Record)
+		return model, nil
 	case tea.WindowSizeMsg:
 		model.width, model.height = typed.Width, typed.Height
 		model.resizePages()
@@ -114,6 +125,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (model *Model) applySessionEvent(event session.Event) {
+	model.monitor.Observe(event)
 	switch event.Kind {
 	case session.EventStatus:
 		model.status = event.Status
@@ -123,6 +135,10 @@ func (model *Model) applySessionEvent(event session.Event) {
 		model.memory = event.Memory
 	case session.EventConnections:
 		model.connections = event.Connections
+	case session.EventCore:
+		model.core = event.Core
+	case session.EventSubscriptions:
+		model.subscriptions = event.Subscriptions
 	case session.EventConnected:
 		model.connected = true
 		model.stale = false
@@ -132,6 +148,26 @@ func (model *Model) applySessionEvent(event session.Event) {
 		model.stale = true
 		model.mutationsEnabled = false
 	}
+	model.syncOverview()
+}
+
+func (model *Model) recordOperation(operation ui.OperationRecord) {
+	model.operations = append(model.operations, operation)
+	if len(model.operations) > 50 {
+		model.operations = append([]ui.OperationRecord(nil), model.operations[len(model.operations)-50:]...)
+	}
+	model.syncOverview()
+}
+
+func (model *Model) syncOverview() {
+	page, ok := model.pages[ui.PageOverview].(*overview.Model)
+	if !ok {
+		return
+	}
+	page.SetSnapshot(overview.Snapshot{
+		Status: model.status, Core: model.core, Subscriptions: model.subscriptions,
+		Monitor: model.monitor.Snapshot(), Operations: model.operations,
+	})
 }
 
 func (model Model) updateRail(key string) (tea.Model, tea.Cmd) {
@@ -169,13 +205,19 @@ func (model Model) View() tea.View {
 		content = lipgloss.Place(model.width, model.height, lipgloss.Center, lipgloss.Center,
 			model.theme.Title.Render(ui.ResizeRequired)+"\n"+model.theme.Muted.Render(ui.ResizeInstructions))
 	} else {
-		rail := ui.RenderRail(model.theme, model.rail, model.railIndex, model.focus.Area == ui.FocusRail, layout.RailWidth, layout.ContentHeight)
+		rail := ui.RenderRail(model.theme, model.rail, model.railIndex, model.focus.Area == ui.FocusRail, layout.RailWidth, layout.RailNavHeight)
+		if layout.MonitorHeight > 0 {
+			rail += "\n" + model.monitor.ViewFull(layout.RailWidth-2, layout.MonitorHeight)
+		}
 		page := model.pages[model.active]
 		body := model.theme.Content.Width(layout.ContentWidth).Height(layout.ContentHeight).Render(page.View())
 		main := lipgloss.JoinHorizontal(lipgloss.Top, rail, body)
 		footer := ui.FooterRail
 		if model.focus.Area == ui.FocusContent {
 			footer = ui.FooterContent
+		}
+		if layout.Class == ui.Compact {
+			footer += "  ·  " + model.monitor.ViewSummary(model.width)
 		}
 		content = strings.TrimRight(main, "\n") + "\n" + model.theme.Footer.Width(model.width).Render(footer)
 	}
