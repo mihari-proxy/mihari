@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	connectionspage "github.com/LeeShunEE/mihari/internal/tui/pages/connections"
 	"github.com/LeeShunEE/mihari/internal/tui/pages/overview"
 	proxypage "github.com/LeeShunEE/mihari/internal/tui/pages/proxies"
 	"github.com/LeeShunEE/mihari/internal/tui/session"
@@ -35,6 +36,7 @@ type Model struct {
 	subscriptions    protocol.SubscriptionList
 	monitor          MonitorModel
 	operations       []ui.OperationRecord
+	confirmationCmd  tea.Cmd
 }
 
 func NewModel() Model {
@@ -42,6 +44,10 @@ func NewModel() Model {
 }
 
 func newModel(proxyClient proxypage.Client) Model {
+	return newModelWithPageClients(proxyClient, nil)
+}
+
+func newModelWithPageClients(proxyClient proxypage.Client, connectionsClient connectionspage.Client) Model {
 	rail := ui.RailPages()
 	pages := make(map[ui.PageID]ui.Page, len(rail))
 	for _, id := range rail {
@@ -49,6 +55,7 @@ func newModel(proxyClient proxypage.Client) Model {
 	}
 	pages[ui.PageOverview] = overview.New()
 	pages[ui.PageProxies] = proxypage.New(proxyClient, nil)
+	pages[ui.PageConnections] = connectionspage.New(connectionsClient, nil)
 	active := rail[0]
 	model := Model{
 		pages: pages, rail: rail, active: active,
@@ -65,8 +72,13 @@ func NewModelWithEvents(events <-chan session.Event) Model {
 	return model
 }
 
-func newModelWithClient(events <-chan session.Event, proxyClient proxypage.Client) Model {
-	model := newModel(proxyClient)
+type pageClient interface {
+	proxypage.Client
+	connectionspage.Client
+}
+
+func newModelWithClient(events <-chan session.Event, client pageClient) Model {
+	model := newModelWithPageClients(client, client)
 	model.events = events
 	return model
 }
@@ -99,6 +111,10 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case ui.InputModeMsg:
 		model.inputMode = typed.Mode
 		return model, nil
+	case ui.ConfirmationRequestMsg:
+		model.modal = NewConfirmation(typed.Title, typed.Object, typed.Impact, typed.Rollback)
+		model.confirmationCmd = typed.OnConfirm
+		return model, nil
 	}
 
 	key, isKey := message.(tea.KeyPressMsg)
@@ -112,9 +128,15 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		switch model.modal.Update(key) {
 		case ModalClose:
 			model.modal = nil
+			model.confirmationCmd = nil
 		case ModalConfirm:
+			command := model.confirmationCmd
 			result := ModalConfirmedMsg{Title: model.modal.title, Object: model.modal.object}
 			model.modal = nil
+			model.confirmationCmd = nil
+			if command != nil {
+				return model, command
+			}
 			return model, func() tea.Msg { return result }
 		}
 		return model, nil
@@ -147,6 +169,9 @@ func (model *Model) applySessionEvent(event session.Event) {
 		model.memory = event.Memory
 	case session.EventConnections:
 		model.connections = event.Connections
+		if page, ok := model.pages[ui.PageConnections].(*connectionspage.Model); ok {
+			page.Observe(event.Connections, event.ObservedAt)
+		}
 	case session.EventCore:
 		model.core = event.Core
 	case session.EventSubscriptions:
@@ -154,6 +179,10 @@ func (model *Model) applySessionEvent(event session.Event) {
 	case session.EventProxies:
 		if page, ok := model.pages[ui.PageProxies].(*proxypage.Model); ok {
 			page.SetGroups(event.Proxies)
+		}
+	case session.EventPreferences:
+		if page, ok := model.pages[ui.PageConnections].(*connectionspage.Model); ok {
+			page.SetPreferences(event.Preferences)
 		}
 	case session.EventConnected:
 		model.connected = true
@@ -163,6 +192,9 @@ func (model *Model) applySessionEvent(event session.Event) {
 		model.connected = false
 		model.stale = true
 		model.mutationsEnabled = false
+		if page, ok := model.pages[ui.PageConnections].(*connectionspage.Model); ok {
+			page.ResetSession()
+		}
 	}
 	model.syncOverview()
 }

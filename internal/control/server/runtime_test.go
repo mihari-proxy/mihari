@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -137,6 +138,37 @@ func TestProxiesMapsNodeProtocolMetadata(t *testing.T) {
 	}
 }
 
+func TestConnectionsMapsCompleteSafeMetadataAndChain(t *testing.T) {
+	started := time.Date(2026, time.August, 3, 12, 0, 0, 0, time.UTC)
+	fake := &fakeRuntime{connections: mihomo.Connections{Connections: []mihomo.Connection{{
+		ID: "connection-1", Start: started, Upload: 10, Download: 20,
+		Chains: []string{"GLOBAL", "Streaming", "Auto Select", "Japan 01"}, Rule: "RuleSet", RulePay: "OpenAI",
+		Metadata: mihomo.ConnectionMetadata{
+			Network: "tcp", Type: "HTTPS", SourceIP: "127.0.0.1", SourcePort: "46154",
+			DestinationIP: "172.64.155.209", DestinationPort: "443", Host: "chatgpt.com",
+			Process: "codex.exe", ProcessPath: `C:\tools\codex.exe`, InboundName: "DEFAULT-MIXED",
+			InboundUser: "local", SniffHost: "chatgpt.com", RemoteDestination: "103.73.220.63:443",
+		},
+	}}}}
+	server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: fake})
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, authorizedRequest(http.MethodGet, "/v1/connections", nil))
+	var got protocol.ConnectionList
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Connections) != 1 {
+		t.Fatalf("connections=%#v", got.Connections)
+	}
+	connection := got.Connections[0]
+	if !connection.Start.Equal(started) || !slices.Equal(connection.Chains, []string{"GLOBAL", "Streaming", "Auto Select", "Japan 01"}) ||
+		connection.Metadata.Process != "codex.exe" || connection.Metadata.ProcessPath == "" ||
+		connection.Metadata.InboundName != "DEFAULT-MIXED" || connection.Metadata.InboundUser != "local" ||
+		connection.Metadata.SniffHost != "chatgpt.com" || connection.Metadata.RemoteDestination != "103.73.220.63:443" {
+		t.Fatalf("connection=%#v", connection)
+	}
+}
+
 func TestRuntimeRequestRejectsUnknownOrOversizedJSON(t *testing.T) {
 	server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: &fakeRuntime{}})
 	for _, body := range []string{
@@ -185,6 +217,42 @@ func TestRuntimeStreamWrapsEveryUpstreamMessage(t *testing.T) {
 	}
 	if !event.ObservedAt.Equal(fixed) || event.ObservedAt.Location() != time.UTC {
 		t.Fatalf("observed_at=%v want=%v", event.ObservedAt, fixed.UTC())
+	}
+}
+
+func TestConnectionStreamMapsSafeDTOAndCompleteChain(t *testing.T) {
+	fake := &fakeRuntime{streamMessages: []json.RawMessage{json.RawMessage(`{
+		"downloadTotal":20,"uploadTotal":10,"connections":[{
+			"id":"connection-1","chains":["GLOBAL","Auto Select","Japan 01"],
+			"metadata":{"sourceIP":"127.0.0.1","host":"example.com","processPath":"C:\\\\tools\\\\client.exe"}
+		}]
+	}`)}}
+	control := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: fake})
+	server := httptest.NewServer(control.Handler())
+	defer server.Close()
+	header := http.Header{}
+	header.Set("Authorization", "Bearer token")
+	connection, _, err := websocket.Dial(context.Background(), "ws"+server.URL[len("http"):]+"/v1/streams/connections", &websocket.DialOptions{HTTPHeader: header})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.CloseNow()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var event protocol.StreamEvent
+	if err := wsjson.Read(ctx, connection, &event); err != nil {
+		t.Fatal(err)
+	}
+	var got protocol.ConnectionList
+	if err := json.Unmarshal(event.Data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Schema != "mihari/v1" || got.DownloadTotal != 20 || len(got.Connections) != 1 {
+		t.Fatalf("connections=%#v", got)
+	}
+	item := got.Connections[0]
+	if !slices.Equal(item.Chains, []string{"GLOBAL", "Auto Select", "Japan 01"}) || item.Metadata.SourceIP != "127.0.0.1" || item.Metadata.ProcessPath == "" {
+		t.Fatalf("connection=%#v", item)
 	}
 }
 

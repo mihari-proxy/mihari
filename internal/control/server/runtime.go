@@ -189,21 +189,28 @@ func (s *Server) connections(writer http.ResponseWriter, request *http.Request) 
 		writeControlError(writer, err)
 		return
 	}
+	writeJSON(writer, http.StatusOK, connectionListDTO(upstream))
+}
+
+func connectionListDTO(upstream mihomo.Connections) protocol.ConnectionList {
 	connections := make([]protocol.Connection, 0, len(upstream.Connections))
 	for _, connection := range upstream.Connections {
 		connections = append(connections, protocol.Connection{
-			ID: connection.ID, Upload: connection.Upload, Download: connection.Download,
+			ID: connection.ID, Start: connection.Start, Upload: connection.Upload, Download: connection.Download,
 			Chains: append([]string(nil), connection.Chains...), Rule: connection.Rule, RulePay: connection.RulePay,
 			Metadata: protocol.ConnectionMetadata{
 				Network: connection.Metadata.Network, Type: connection.Metadata.Type, SourceIP: connection.Metadata.SourceIP,
 				DestinationIP: connection.Metadata.DestinationIP, SourcePort: connection.Metadata.SourcePort,
 				DestinationPort: connection.Metadata.DestinationPort, Host: connection.Metadata.Host,
+				Process: connection.Metadata.Process, ProcessPath: connection.Metadata.ProcessPath,
+				InboundName: connection.Metadata.InboundName, InboundUser: connection.Metadata.InboundUser,
+				SniffHost: connection.Metadata.SniffHost, RemoteDestination: connection.Metadata.RemoteDestination,
 			},
 		})
 	}
-	writeJSON(writer, http.StatusOK, protocol.ConnectionList{
+	return protocol.ConnectionList{
 		Schema: "mihari/v1", DownloadTotal: upstream.DownloadTotal, UploadTotal: upstream.UploadTotal, Connections: connections,
-	})
+	}
 }
 
 func (s *Server) closeConnection(writer http.ResponseWriter, request *http.Request) {
@@ -267,6 +274,17 @@ func (s *Server) stream(writer http.ResponseWriter, request *http.Request) {
 	}
 	defer connection.CloseNow()
 	err = s.runtime.Stream(request.Context(), kind, func(message json.RawMessage) error {
+		if kind == mihomo.StreamConnections {
+			var upstream mihomo.Connections
+			if err := json.Unmarshal(message, &upstream); err != nil {
+				return err
+			}
+			mapped, err := json.Marshal(connectionListDTO(upstream))
+			if err != nil {
+				return err
+			}
+			message = mapped
+		}
 		event, err := json.Marshal(protocol.StreamEvent{
 			Schema:     "mihari/v1",
 			Stream:     string(kind),
