@@ -2,11 +2,13 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"sync/atomic"
 
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/core"
+	"github.com/LeeShunEE/mihari/internal/mihomo"
 	"github.com/LeeShunEE/mihari/internal/state"
 	"github.com/LeeShunEE/mihari/internal/supervisor"
 )
@@ -28,7 +30,14 @@ type CoreSupervisor interface {
 }
 
 type Controller interface {
+	Proxies(context.Context) (mihomo.Proxies, error)
 	SelectProxy(context.Context, string, string) error
+	DelayGroup(context.Context, string, string, int) (mihomo.Delays, error)
+	Connections(context.Context) (mihomo.Connections, error)
+	CloseConnection(context.Context, string) error
+	CloseAllConnections(context.Context) error
+	Rules(context.Context) (mihomo.Rules, error)
+	Stream(context.Context, mihomo.StreamKind, func(json.RawMessage) error) error
 }
 
 type Operation struct {
@@ -145,6 +154,43 @@ func (m *Manager) Observe(observation supervisor.Observation) {
 	})
 }
 
+func (m *Manager) Snapshot() state.Snapshot { return m.store.Load() }
+
+func (m *Manager) Proxies(ctx context.Context) (mihomo.Proxies, error) {
+	if m.controller == nil {
+		return mihomo.Proxies{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
+	}
+	return m.controller.Proxies(ctx)
+}
+
+func (m *Manager) DelayGroup(ctx context.Context, group, testURL string, timeoutMilliseconds int) (mihomo.Delays, error) {
+	if m.controller == nil {
+		return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
+	}
+	return m.controller.DelayGroup(ctx, group, testURL, timeoutMilliseconds)
+}
+
+func (m *Manager) Connections(ctx context.Context) (mihomo.Connections, error) {
+	if m.controller == nil {
+		return mihomo.Connections{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
+	}
+	return m.controller.Connections(ctx)
+}
+
+func (m *Manager) Rules(ctx context.Context) (mihomo.Rules, error) {
+	if m.controller == nil {
+		return mihomo.Rules{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
+	}
+	return m.controller.Rules(ctx)
+}
+
+func (m *Manager) Stream(ctx context.Context, kind mihomo.StreamKind, receive func(json.RawMessage) error) error {
+	if m.controller == nil {
+		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
+	}
+	return m.controller.Stream(ctx, kind, receive)
+}
+
 func (m *Manager) Install(ctx context.Context, operation Operation) (core.InstallResult, error) {
 	result, err := m.doOperation(ctx, "install:"+operation.ID, func() (any, error) {
 		if m.installer == nil {
@@ -223,6 +269,32 @@ func (m *Manager) SelectProxy(ctx context.Context, operation Operation, group, n
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
 		}
 		if err := m.withMaintenance(ctx, func() error { return m.controller.SelectProxy(ctx, group, name) }); err != nil {
+			return nil, err
+		}
+		return struct{}{}, nil
+	})
+	return err
+}
+
+func (m *Manager) CloseConnection(ctx context.Context, operation Operation, id string) error {
+	_, err := m.doOperation(ctx, "close:"+operation.ID, func() (any, error) {
+		if m.controller == nil {
+			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
+		}
+		if err := m.withMaintenance(ctx, func() error { return m.controller.CloseConnection(ctx, id) }); err != nil {
+			return nil, err
+		}
+		return struct{}{}, nil
+	})
+	return err
+}
+
+func (m *Manager) CloseAllConnections(ctx context.Context, operation Operation) error {
+	_, err := m.doOperation(ctx, "close-all:"+operation.ID, func() (any, error) {
+		if m.controller == nil {
+			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
+		}
+		if err := m.withMaintenance(ctx, func() error { return m.controller.CloseAllConnections(ctx) }); err != nil {
 			return nil, err
 		}
 		return struct{}{}, nil

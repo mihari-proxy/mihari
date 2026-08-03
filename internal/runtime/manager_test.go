@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync/atomic"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/core"
+	"github.com/LeeShunEE/mihari/internal/mihomo"
 	"github.com/LeeShunEE/mihari/internal/state"
 	"github.com/LeeShunEE/mihari/internal/supervisor"
 )
@@ -302,10 +304,34 @@ type fakeController struct {
 	selectProxy func(context.Context, string, string) error
 }
 
+func (c *fakeController) Proxies(context.Context) (mihomo.Proxies, error) {
+	return mihomo.Proxies{}, nil
+}
+
 func (c *fakeController) SelectProxy(ctx context.Context, group, name string) error {
 	if c.selectProxy != nil {
 		return c.selectProxy(ctx, group, name)
 	}
+	return nil
+}
+
+func (c *fakeController) DelayGroup(context.Context, string, string, int) (mihomo.Delays, error) {
+	return nil, nil
+}
+
+func (c *fakeController) Connections(context.Context) (mihomo.Connections, error) {
+	return mihomo.Connections{}, nil
+}
+
+func (c *fakeController) CloseConnection(context.Context, string) error { return nil }
+
+func (c *fakeController) CloseAllConnections(context.Context) error { return nil }
+
+func (c *fakeController) Rules(context.Context) (mihomo.Rules, error) {
+	return mihomo.Rules{}, nil
+}
+
+func (c *fakeController) Stream(context.Context, mihomo.StreamKind, func(json.RawMessage) error) error {
 	return nil
 }
 
