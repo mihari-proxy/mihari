@@ -79,6 +79,18 @@ func (c *Client) Rules(ctx context.Context) (protocol.RuleList, error) {
 	return result, err
 }
 
+func (c *Client) TUIPreferences(ctx context.Context) (protocol.TUIPreferences, error) {
+	var result protocol.TUIPreferences
+	err := c.doRuntime(ctx, http.MethodGet, "/v1/preferences/tui", nil, &result)
+	return result, err
+}
+
+func (c *Client) UpdateTUIPreferences(ctx context.Context, request protocol.UpdateTUIPreferencesRequest) (protocol.TUIPreferences, error) {
+	var result protocol.TUIPreferences
+	err := c.doRuntime(ctx, http.MethodPatch, "/v1/preferences/tui", request, &result)
+	return result, err
+}
+
 func (c *Client) Subscriptions(ctx context.Context) (protocol.SubscriptionList, error) {
 	var result protocol.SubscriptionList
 	err := c.doRuntime(ctx, http.MethodGet, "/v1/subscriptions", nil, &result)
