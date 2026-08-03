@@ -63,6 +63,16 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 			func(ctx context.Context, client *Client) error { _, err := client.Rules(ctx); return err }},
 		{"subscriptions", http.MethodGet, "/v1/subscriptions", "", `{"schema":"mihari/v1","revision":1,"global_interval":"12h","subscriptions":[]}`,
 			func(ctx context.Context, client *Client) error { _, err := client.Subscriptions(ctx); return err }},
+		{"TUI preferences", http.MethodGet, "/v1/preferences/tui", "", `{"schema":"mihari/v1","revision":1,"connections_columns":["host","chain"]}`,
+			func(ctx context.Context, client *Client) error { _, err := client.TUIPreferences(ctx); return err }},
+		{"update TUI preferences", http.MethodPatch, "/v1/preferences/tui", `{"operation_id":"columns-1","if_revision":1,"connections_columns":["source","traffic"]}`, `{"schema":"mihari/v1","revision":2,"connections_columns":["source","traffic"]}`,
+			func(ctx context.Context, client *Client) error {
+				revision := uint64(1)
+				_, err := client.UpdateTUIPreferences(ctx, protocol.UpdateTUIPreferencesRequest{
+					OperationID: "columns-1", IfRevision: &revision, ConnectionsColumns: []string{"source", "traffic"},
+				})
+				return err
+			}},
 		{"subscription add", http.MethodPost, "/v1/subscriptions", `{"operation_id":"op","name":"main","url":"https://example.test/sub"}`, `{"schema":"mihari/v1","revision":2,"subscription":{"id":"one","name":"main","enabled":true,"auto_refresh":true,"interval":"","cached":false,"generation":0}}`,
 			func(ctx context.Context, client *Client) error {
 				_, err := client.AddSubscription(ctx, protocol.SubscriptionAddRequest{OperationID: "op", Name: "main", URL: "https://example.test/sub"})

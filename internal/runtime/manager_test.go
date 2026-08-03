@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,9 +13,40 @@ import (
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/core"
 	"github.com/LeeShunEE/mihari/internal/mihomo"
+	"github.com/LeeShunEE/mihari/internal/preferences"
 	"github.com/LeeShunEE/mihari/internal/state"
 	"github.com/LeeShunEE/mihari/internal/supervisor"
 )
+
+func TestUpdateTUIPreferencesCommitsThroughCoordinator(t *testing.T) {
+	service, err := preferences.Open(filepath.Join(t.TempDir(), "tui.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newTestManager(Options{Preferences: service})
+	want := []string{"host", "chain", "traffic"}
+	got, err := manager.UpdateTUIPreferences(context.Background(), Operation{
+		ID: "columns-1", Source: "test",
+	}, preferences.Update{ConnectionsColumns: want})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.ConnectionsColumns, want) || manager.Snapshot().Revision != 1 {
+		t.Fatalf("preferences=%#v revision=%d", got, manager.Snapshot().Revision)
+	}
+
+	stale := uint64(0)
+	_, err = manager.UpdateTUIPreferences(context.Background(), Operation{
+		ID: "columns-stale", Source: "test", IfRevision: &stale,
+	}, preferences.Update{ConnectionsColumns: []string{"source"}})
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeRevisionConflict {
+		t.Fatalf("err=%v", err)
+	}
+	if got := service.Snapshot().ConnectionsColumns; !reflect.DeepEqual(got, want) {
+		t.Fatalf("stale update persisted columns=%v", got)
+	}
+}
 
 func TestInstallCommitAndRestartCannotOverlap(t *testing.T) {
 	commitEntered := make(chan struct{})

@@ -10,6 +10,7 @@ import (
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/core"
 	"github.com/LeeShunEE/mihari/internal/mihomo"
+	"github.com/LeeShunEE/mihari/internal/preferences"
 	"github.com/LeeShunEE/mihari/internal/state"
 	"github.com/LeeShunEE/mihari/internal/subscription"
 	"github.com/LeeShunEE/mihari/internal/supervisor"
@@ -52,6 +53,7 @@ type Options struct {
 	Controller     Controller
 	BinaryExists   func() bool
 	Subscriptions  *subscription.Service
+	Preferences    *preferences.Service
 	Settings       config.Settings
 	RuntimeConfig  string
 	StagingDir     string
@@ -68,6 +70,7 @@ type Manager struct {
 	controller     Controller
 	binaryExists   func() bool
 	subscriptions  *subscription.Service
+	preferences    *preferences.Service
 	settings       config.Settings
 	runtimeConfig  string
 	stagingDir     string
@@ -109,6 +112,7 @@ func New(options Options) *Manager {
 		controller:     options.Controller,
 		binaryExists:   binaryExists,
 		subscriptions:  options.Subscriptions,
+		preferences:    options.Preferences,
 		settings:       options.Settings,
 		runtimeConfig:  options.RuntimeConfig,
 		stagingDir:     options.StagingDir,
