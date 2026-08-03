@@ -19,6 +19,7 @@ import (
 const maxControlBodySize = 1 << 20
 
 type RuntimeAPI interface {
+	Capabilities() []string
 	Snapshot() state.Snapshot
 	Install(context.Context, runtimeapi.Operation) (core.InstallResult, error)
 	Restart(context.Context, runtimeapi.Operation) error
@@ -234,7 +235,12 @@ func (s *Server) stream(writer http.ResponseWriter, request *http.Request) {
 	}
 	defer connection.CloseNow()
 	err = s.runtime.Stream(request.Context(), kind, func(message json.RawMessage) error {
-		event, err := json.Marshal(protocol.StreamEvent{Schema: "mihari/v1", Stream: string(kind), Data: message})
+		event, err := json.Marshal(protocol.StreamEvent{
+			Schema:     "mihari/v1",
+			Stream:     string(kind),
+			ObservedAt: s.now().UTC(),
+			Data:       message,
+		})
 		if err != nil {
 			return err
 		}
