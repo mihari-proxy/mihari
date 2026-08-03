@@ -111,6 +111,23 @@ func TestClientRuntimeRequests(t *testing.T) {
 			},
 		},
 		{
+			name: "rule providers", method: http.MethodGet, path: "/providers/rules", response: `{"providers":{"OpenAI":{"behavior":"Classical","format":"YamlRule","name":"OpenAI","ruleCount":12,"type":"Rule","vehicleType":"HTTP","updatedAt":"2026-08-03T01:02:03Z"}}}`,
+			invoke: func(ctx context.Context, client *Client) error {
+				got, err := client.RuleProviders(ctx)
+				provider := got.Providers["OpenAI"]
+				if err == nil && (provider.Name != "OpenAI" || provider.VehicleType != "HTTP" || provider.RuleCount != 12 || provider.UpdatedAt.IsZero()) {
+					t.Fatalf("providers=%#v", got)
+				}
+				return err
+			},
+		},
+		{
+			name: "update escaped rule provider", method: http.MethodPut, path: "/providers/rules/AI%2FSearch", statusCode: http.StatusNoContent,
+			invoke: func(ctx context.Context, client *Client) error {
+				return client.UpdateRuleProvider(ctx, "AI/Search")
+			},
+		},
+		{
 			name: "reload", method: http.MethodPut, path: "/configs", query: url.Values{"force": {"true"}}, body: `{"path":"C:\\managed\\config.yaml"}`,
 			invoke: func(ctx context.Context, client *Client) error {
 				return client.Reload(ctx, `C:\managed\config.yaml`, true)
@@ -157,6 +174,22 @@ func TestClientRuntimeRequests(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestUpdateRuleProviderDoesNotLeakControllerOrUpstreamBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(response, `update https://user:password@example.test/rules?token=secret failed`)
+	}))
+	defer server.Close()
+
+	err := NewClient(server.URL, "controller-secret", server.Client()).UpdateRuleProvider(context.Background(), "private")
+	message := err.Error()
+	for _, sensitive := range []string{"controller-secret", "password", "token=secret", "example.test"} {
+		if strings.Contains(message, sensitive) {
+			t.Fatalf("error leaked %q: %s", sensitive, message)
+		}
 	}
 }
 

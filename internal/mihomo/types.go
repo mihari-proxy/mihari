@@ -68,3 +68,17 @@ type Rule struct {
 type Rules struct {
 	Rules []Rule `json:"rules"`
 }
+
+type RuleProvider struct {
+	Name        string    `json:"name"`
+	Type        string    `json:"type"`
+	VehicleType string    `json:"vehicleType"`
+	Behavior    string    `json:"behavior"`
+	Format      string    `json:"format"`
+	RuleCount   int       `json:"ruleCount"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+type RuleProviders struct {
+	Providers map[string]RuleProvider `json:"providers"`
+}

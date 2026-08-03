@@ -8,6 +8,7 @@ func (m *Manager) Capabilities() []string {
 		protocol.CapabilityProxies,
 		protocol.CapabilityConnections,
 		protocol.CapabilityRules,
+		protocol.CapabilityRuleProviders,
 		protocol.CapabilityLogs,
 		protocol.CapabilitySubscriptions,
 	}

@@ -55,6 +55,7 @@ func TestSession_LoadsCapabilitySnapshotsBeforeConnected(t *testing.T) {
 	fake := newFakeClient()
 	fake.status = protocol.Status{Schema: "mihari/v1", Capabilities: []string{
 		protocol.CapabilityCore, protocol.CapabilitySubscriptions, protocol.CapabilityProxies,
+		protocol.CapabilityRules, protocol.CapabilityRuleProviders,
 	}}
 	session := New(fake, Options{Backoff: func(int) time.Duration { return 0 }})
 	events := session.Start(context.Background())
@@ -63,6 +64,8 @@ func TestSession_LoadsCapabilitySnapshotsBeforeConnected(t *testing.T) {
 	waitForEvent(t, events, EventCore)
 	waitForEvent(t, events, EventSubscriptions)
 	waitForEvent(t, events, EventProxies)
+	waitForEvent(t, events, EventRules)
+	waitForEvent(t, events, EventRuleProviders)
 	waitForEvent(t, events, EventConnected)
 }
 
@@ -161,6 +164,14 @@ func (f *fakeClient) Subscriptions(context.Context) (protocol.SubscriptionList, 
 
 func (f *fakeClient) ProxyGroups(context.Context) (protocol.ProxyGroups, error) {
 	return protocol.ProxyGroups{Schema: "mihari/v1", Groups: []protocol.ProxyGroup{}}, nil
+}
+
+func (f *fakeClient) Rules(context.Context) (protocol.RuleList, error) {
+	return protocol.RuleList{Schema: "mihari/v1", Rules: []protocol.Rule{{Type: "MATCH", Proxy: "DIRECT"}}}, nil
+}
+
+func (f *fakeClient) RuleProviders(context.Context) (protocol.RuleProviderList, error) {
+	return protocol.RuleProviderList{Schema: "mihari/v1", Providers: []protocol.RuleProvider{{Name: "OpenAI"}}}, nil
 }
 
 func (f *fakeClient) TUIPreferences(context.Context) (protocol.TUIPreferences, error) {

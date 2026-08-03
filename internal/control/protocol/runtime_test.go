@@ -80,6 +80,7 @@ func TestRuntimeDTOsUseStableSchema(t *testing.T) {
 		ProxyGroups{Schema: "mihari/v1", Groups: []ProxyGroup{{Name: "GLOBAL", Type: "Selector", Now: "DIRECT", All: []string{"DIRECT"}}}},
 		ConnectionList{Schema: "mihari/v1", Connections: []Connection{{ID: "one"}}},
 		RuleList{Schema: "mihari/v1", Rules: []Rule{{Type: "MATCH", Proxy: "DIRECT"}}},
+		RuleProviderList{Schema: "mihari/v1", Providers: []RuleProvider{{Name: "OpenAI", Type: "HTTP", Behavior: "Classical", Format: "YamlRule", RuleCount: 12, Status: "Ready"}}},
 		DelayResult{Schema: "mihari/v1", Delays: map[string]uint16{"DIRECT": 1}},
 		MutationResult{Schema: "mihari/v1", OperationID: "op-1"},
 	}
@@ -91,5 +92,23 @@ func TestRuntimeDTOsUseStableSchema(t *testing.T) {
 		if !strings.Contains(string(raw), `"schema":"mihari/v1"`) {
 			t.Fatalf("response=%s", raw)
 		}
+	}
+}
+
+func TestRuleProviderListJSONContract(t *testing.T) {
+	result := RuleProviderList{
+		Schema: "mihari/v1", Revision: 9,
+		Providers: []RuleProvider{{
+			Name: "OpenAI", Type: "HTTP", Behavior: "Classical", Format: "YamlRule",
+			RuleCount: 12, UpdatedAt: time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC), Status: "Ready",
+		}},
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"schema":"mihari/v1","revision":9,"providers":[{"name":"OpenAI","type":"HTTP","behavior":"Classical","format":"YamlRule","rule_count":12,"updated_at":"2026-08-03T01:02:03Z","status":"Ready"}]}`
+	if string(raw) != want {
+		t.Fatalf("json=%s want=%s", raw, want)
 	}
 }

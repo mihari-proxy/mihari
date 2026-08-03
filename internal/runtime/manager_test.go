@@ -242,6 +242,37 @@ func TestRuntimeMutationWaitsForRestart(t *testing.T) {
 	}
 }
 
+func TestUpdateRuleProviderUsesCoordinatorAndRevision(t *testing.T) {
+	store := state.NewStore(state.Snapshot{Revision: 7})
+	var updated []string
+	manager := New(Options{
+		Store:        store,
+		Coordinator:  state.NewCoordinator(store),
+		BinaryExists: func() bool { return true },
+		Controller: &fakeController{updateRuleProvider: func(_ context.Context, name string) error {
+			updated = append(updated, name)
+			return nil
+		}},
+	})
+	stale := uint64(6)
+	err := manager.UpdateRuleProvider(context.Background(), Operation{ID: "stale", Source: "test", IfRevision: &stale}, "OpenAI")
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeRevisionConflict || len(updated) != 0 {
+		t.Fatalf("err=%v updated=%v", err, updated)
+	}
+	current := uint64(7)
+	operation := Operation{ID: "provider-1", Source: "test", IfRevision: &current}
+	if err := manager.UpdateRuleProvider(context.Background(), operation, "OpenAI"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.UpdateRuleProvider(context.Background(), operation, "OpenAI"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(updated, []string{"OpenAI"}) || manager.Snapshot().Revision != 8 {
+		t.Fatalf("updated=%v revision=%d", updated, manager.Snapshot().Revision)
+	}
+}
+
 func TestDuplicateOperationIDExecutesOnce(t *testing.T) {
 	prepareEntered := make(chan struct{})
 	releasePrepare := make(chan struct{})
@@ -442,7 +473,8 @@ func (s *fakeSupervisor) Restart(ctx context.Context) error {
 }
 
 type fakeController struct {
-	selectProxy func(context.Context, string, string) error
+	selectProxy        func(context.Context, string, string) error
+	updateRuleProvider func(context.Context, string) error
 }
 
 func (c *fakeController) Proxies(context.Context) (mihomo.Proxies, error) {
@@ -474,6 +506,17 @@ func (c *fakeController) CloseAllConnections(context.Context) error { return nil
 
 func (c *fakeController) Rules(context.Context) (mihomo.Rules, error) {
 	return mihomo.Rules{}, nil
+}
+
+func (c *fakeController) RuleProviders(context.Context) (mihomo.RuleProviders, error) {
+	return mihomo.RuleProviders{}, nil
+}
+
+func (c *fakeController) UpdateRuleProvider(ctx context.Context, name string) error {
+	if c.updateRuleProvider != nil {
+		return c.updateRuleProvider(ctx, name)
+	}
+	return nil
 }
 
 func (c *fakeController) Stream(context.Context, mihomo.StreamKind, func(json.RawMessage) error) error {
