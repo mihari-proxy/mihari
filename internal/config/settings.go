@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"go.yaml.in/yaml/v3"
@@ -71,6 +73,25 @@ func LoadOrCreate(path string) (Settings, error) {
 	if !errors.Is(err, os.ErrNotExist) {
 		return Settings{}, err
 	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return Settings{}, fmt.Errorf("create settings directory: %w", err)
+	}
+	lock, err := acquireCreationLock(path + ".lock")
+	if err != nil {
+		return Settings{}, err
+	}
+	lockPath := lock.Name()
+	defer func() {
+		_ = lock.Close()
+		_ = os.Remove(lockPath)
+	}()
+	settings, err = Load(path)
+	if err == nil {
+		return settings, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return Settings{}, err
+	}
 	settings = Defaults()
 	var secret [32]byte
 	if _, err := rand.Read(secret[:]); err != nil {
@@ -81,6 +102,25 @@ func LoadOrCreate(path string) (Settings, error) {
 		return Settings{}, err
 	}
 	return settings, nil
+}
+
+func acquireCreationLock(path string) (*os.File, error) {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			return file, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			if _, statError := os.Stat(path); statError != nil {
+				return nil, fmt.Errorf("create settings lock: %w", err)
+			}
+		}
+		if time.Now().After(deadline) {
+			return nil, dataError("timed out waiting for settings initialization")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func Save(path string, settings Settings) error {

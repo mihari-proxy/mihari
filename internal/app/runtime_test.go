@@ -1,18 +1,21 @@
 package app
 
 import (
+	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/LeeShunEE/mihari/internal/config"
+	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/platform"
 )
 
 func TestBuildRuntimeCreatesBootstrapAndSharedState(t *testing.T) {
 	paths := platform.NewPaths(filepath.Join(t.TempDir(), "data"))
-	settings := config.Defaults()
+	settings := testRuntimeSettings(t)
 	settings.ControllerSecret = strings.Repeat("a", 64)
 	assembly, err := BuildRuntime(paths, settings, "test-version", nil, nil)
 	if err != nil {
@@ -28,8 +31,25 @@ func TestBuildRuntimeCreatesBootstrapAndSharedState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "external-controller: 127.0.0.1:9090") || !strings.Contains(string(raw), settings.ControllerSecret) {
+	if !strings.Contains(string(raw), "external-controller: "+settings.ControllerAddr) || !strings.Contains(string(raw), settings.ControllerSecret) {
 		t.Fatalf("config=%s", raw)
+	}
+}
+
+func TestBuildRuntimeRejectsOccupiedManagedPort(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	paths := platform.NewPaths(filepath.Join(t.TempDir(), "data"))
+	settings := testRuntimeSettings(t)
+	settings.ControllerSecret = strings.Repeat("c", 64)
+	settings.ControllerAddr = listener.Addr().String()
+	_, err = BuildRuntime(paths, settings, "test-version", nil, nil)
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeInvalidState || apiError.Details["setting"] != "controller-addr" {
+		t.Fatalf("err=%v", err)
 	}
 }
 
@@ -41,9 +61,33 @@ func TestBuildRuntimeRejectsExistingConfigWithoutManagedInvariants(t *testing.T)
 	if err := os.WriteFile(paths.RuntimeConfig, []byte("existing: true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	settings := config.Defaults()
+	settings := testRuntimeSettings(t)
 	settings.ControllerSecret = strings.Repeat("b", 64)
 	if _, err := BuildRuntime(paths, settings, "test-version", nil, nil); err == nil {
 		t.Fatal("expected unmanaged runtime config to fail")
 	}
+}
+
+func testRuntimeSettings(t *testing.T) config.Settings {
+	t.Helper()
+	listeners := make([]net.Listener, 0, 3)
+	addresses := make([]string, 0, 3)
+	for range 3 {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		listeners = append(listeners, listener)
+		addresses = append(addresses, listener.Addr().String())
+	}
+	for _, listener := range listeners {
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settings := config.Defaults()
+	settings.MixedAddr = addresses[0]
+	settings.ControllerAddr = addresses[1]
+	settings.WebAddr = addresses[2]
+	return settings
 }

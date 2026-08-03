@@ -3,10 +3,12 @@ package app
 import (
 	"context"
 	"io"
+	"net"
 	"os"
 	"time"
 
 	"github.com/LeeShunEE/mihari/internal/config"
+	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/core"
 	"github.com/LeeShunEE/mihari/internal/mihomo"
 	"github.com/LeeShunEE/mihari/internal/platform"
@@ -33,12 +35,33 @@ func BuildRuntime(paths platform.Paths, settings config.Settings, daemonVersion 
 	if err := core.EnsureRuntimeConfig(paths.RuntimeConfig, settings); err != nil {
 		return nil, err
 	}
+	for _, endpoint := range []struct{ setting, address string }{
+		{"mixed-addr", settings.MixedAddr},
+		{"controller-addr", settings.ControllerAddr},
+		{"web-addr", settings.WebAddr},
+	} {
+		listener, err := net.Listen("tcp", endpoint.address)
+		if err != nil {
+			return nil, protocol.APIError{
+				Code: protocol.CodeInvalidState, Message: "managed port is unavailable",
+				Details: map[string]any{"setting": endpoint.setting, "address": endpoint.address},
+			}
+		}
+		_ = listener.Close()
+	}
 
 	store := state.NewStore(state.Snapshot{
 		Version:   daemonVersion,
 		StartedAt: time.Now().UTC(),
 		Health:    "ok",
 	})
+	if info, err := os.Stat(paths.CoreBinary); err == nil && !info.IsDir() {
+		if version, err := core.DetectVersion(context.Background(), core.OSCommandRunner{}, paths.CoreBinary); err == nil {
+			snapshot := store.Load()
+			snapshot.Core = state.CoreState{Status: "stopped", Version: version}
+			store.Store(snapshot)
+		}
+	}
 	coordinator := state.NewCoordinator(store)
 	controller := mihomo.NewClient("http://"+settings.ControllerAddr, settings.ControllerSecret, nil)
 	var manager *runtimeapi.Manager
