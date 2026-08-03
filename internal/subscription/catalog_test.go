@@ -60,7 +60,7 @@ func TestValidateRepairsActiveAndRejectsDuplicateIDs(t *testing.T) {
 	catalog.ActiveID = "missing"
 	catalog.Profiles = []Profile{
 		{ID: "0123456789abcdef0123456789abcdef", Name: "disabled", URL: "https://one.test", Enabled: false, AutoRefresh: true},
-		{ID: "fedcba9876543210fedcba9876543210", Name: "enabled", URL: "https://two.test", Enabled: true, AutoRefresh: true},
+		{ID: "fedcba9876543210fedcba9876543210", Name: "enabled", URL: "https://two.test", Enabled: true, AutoRefresh: true, Generation: 1},
 	}
 	if err := catalog.Normalize(); err != nil {
 		t.Fatal(err)
