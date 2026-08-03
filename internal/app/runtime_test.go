@@ -27,6 +27,9 @@ func TestBuildRuntimeCreatesBootstrapAndSharedState(t *testing.T) {
 	if snapshot := assembly.Store.Load(); snapshot.Version != "test-version" || snapshot.Health != "ok" {
 		t.Fatalf("snapshot=%#v", snapshot)
 	}
+	if columns := assembly.Manager.TUIPreferences().ConnectionsColumns; len(columns) == 0 {
+		t.Fatal("runtime assembly did not open TUI preferences")
+	}
 	raw, err := os.ReadFile(paths.RuntimeConfig)
 	if err != nil {
 		t.Fatal(err)

@@ -46,6 +46,7 @@ func (s *Server) runtimeRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/rules", s.rules)
 	mux.HandleFunc("GET /v1/streams/{kind}", s.stream)
 	s.subscriptionRoutes(mux)
+	s.preferencesRoutes(mux)
 }
 
 func (s *Server) coreStatus(writer http.ResponseWriter, _ *http.Request) {

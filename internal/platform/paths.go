@@ -18,6 +18,7 @@ type Paths struct {
 	SubscriptionCatalog string
 	SubscriptionCache   string
 	SubscriptionStaging string
+	TUIPreferences      string
 }
 
 func NewPaths(root string) Paths {
@@ -37,6 +38,7 @@ func NewPaths(root string) Paths {
 		SubscriptionCatalog: filepath.Join(root, "subscriptions", "catalog.yaml"),
 		SubscriptionCache:   filepath.Join(root, "subscriptions", "cache"),
 		SubscriptionStaging: filepath.Join(root, "staging", "subscriptions"),
+		TUIPreferences:      filepath.Join(root, "preferences", "tui.json"),
 	}
 }
 
@@ -63,7 +65,7 @@ func defaultDataRoot() string {
 }
 
 func (p Paths) EnsureDirs() error {
-	for _, path := range []string{p.Root, p.Bin, filepath.Dir(p.RuntimeConfig), filepath.Dir(p.Log), p.Staging, p.Subscriptions, p.SubscriptionCache, p.SubscriptionStaging} {
+	for _, path := range []string{p.Root, p.Bin, filepath.Dir(p.RuntimeConfig), filepath.Dir(p.Log), p.Staging, p.Subscriptions, p.SubscriptionCache, p.SubscriptionStaging, filepath.Dir(p.TUIPreferences)} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			return err
 		}

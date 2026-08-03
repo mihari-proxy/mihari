@@ -12,6 +12,7 @@ import (
 	"github.com/LeeShunEE/mihari/internal/core"
 	"github.com/LeeShunEE/mihari/internal/mihomo"
 	"github.com/LeeShunEE/mihari/internal/platform"
+	"github.com/LeeShunEE/mihari/internal/preferences"
 	runtimeapi "github.com/LeeShunEE/mihari/internal/runtime"
 	"github.com/LeeShunEE/mihari/internal/state"
 	"github.com/LeeShunEE/mihari/internal/subscription"
@@ -72,6 +73,10 @@ func BuildRuntime(paths platform.Paths, settings config.Settings, daemonVersion 
 	if err != nil {
 		return nil, err
 	}
+	tuiPreferences, err := preferences.Open(paths.TUIPreferences)
+	if err != nil {
+		return nil, err
+	}
 	var manager *runtimeapi.Manager
 	coreSupervisor := supervisor.New(supervisor.Options{
 		Starter: supervisor.CommandStarter{
@@ -104,6 +109,7 @@ func BuildRuntime(paths platform.Paths, settings config.Settings, daemonVersion 
 		Supervisor:    coreSupervisor,
 		Controller:    controller,
 		Subscriptions: subscriptions,
+		Preferences:   tuiPreferences,
 		Settings:      settings,
 		RuntimeConfig: paths.RuntimeConfig,
 		StagingDir:    paths.SubscriptionStaging,
