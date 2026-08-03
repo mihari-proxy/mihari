@@ -17,10 +17,18 @@ type CoreStatus struct {
 }
 
 type ProxyGroup struct {
-	Name string   `json:"name"`
-	Type string   `json:"type"`
-	Now  string   `json:"now,omitempty"`
-	All  []string `json:"all,omitempty"`
+	Name  string      `json:"name"`
+	Type  string      `json:"type"`
+	Now   string      `json:"now,omitempty"`
+	All   []string    `json:"all,omitempty"`
+	Nodes []ProxyNode `json:"nodes,omitempty"`
+}
+
+type ProxyNode struct {
+	Name string `json:"name"`
+	Type string `json:"type,omitempty"`
+	UDP  bool   `json:"udp,omitempty"`
+	XUDP bool   `json:"xudp,omitempty"`
 }
 
 type ProxyGroups struct {

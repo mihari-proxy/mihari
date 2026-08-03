@@ -55,6 +55,26 @@ func TestRuntimeMutationRoutesThroughManager(t *testing.T) {
 	}
 }
 
+func TestProxyDelayEndpointTestsOneNode(t *testing.T) {
+	fake := &fakeRuntime{proxyDelay: 42}
+	server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: fake})
+	request := authorizedRequest(http.MethodPost, "/v1/proxies/Node%20A/delay-test", bytes.NewBufferString(
+		`{"url":"https://example.com/ping","timeout_ms":3500}`,
+	))
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if fake.delayedProxy != "Node A" {
+		t.Fatalf("proxy=%q", fake.delayedProxy)
+	}
+	var result protocol.DelayResult
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.Delays["Node A"] != 42 {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
 func TestInstallAndQueryEndpoints(t *testing.T) {
 	fake := &fakeRuntime{
 		installResult: core.InstallResult{Version: "v1.19.0", Updated: true},
@@ -90,6 +110,30 @@ func TestInstallAndQueryEndpoints(t *testing.T) {
 		if !bytes.Contains(recorder.Body.Bytes(), []byte(`"schema":"mihari/v1"`)) {
 			t.Errorf("%s %s body=%s", test.method, test.path, recorder.Body.String())
 		}
+	}
+}
+
+func TestProxiesMapsNodeProtocolMetadata(t *testing.T) {
+	fake := &fakeRuntime{proxies: mihomo.Proxies{Proxies: map[string]mihomo.Proxy{
+		"GLOBAL": {Name: "GLOBAL", Type: "Selector", Now: "node-a", All: []string{"node-a"}},
+		"node-a": {Name: "node-a", Type: "VLESS", UDP: true, XUDP: true},
+	}}}
+	server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: fake})
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, authorizedRequest(http.MethodGet, "/v1/proxies", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var got protocol.ProxyGroups
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Groups) != 1 || len(got.Groups[0].Nodes) != 1 {
+		t.Fatalf("groups=%#v", got.Groups)
+	}
+	node := got.Groups[0].Nodes[0]
+	if node.Name != "node-a" || node.Type != "VLESS" || !node.UDP || !node.XUDP {
+		t.Fatalf("node=%#v", node)
 	}
 }
 
@@ -161,6 +205,8 @@ type fakeRuntime struct {
 	connections    mihomo.Connections
 	rules          mihomo.Rules
 	streamMessages []json.RawMessage
+	delayedProxy   string
+	proxyDelay     uint16
 }
 
 func (f *fakeRuntime) Capabilities() []string { return append([]string(nil), f.capabilities...) }
@@ -188,6 +234,11 @@ func (f *fakeRuntime) SelectProxy(_ context.Context, operation runtimeapi.Operat
 
 func (f *fakeRuntime) DelayGroup(context.Context, string, string, int) (mihomo.Delays, error) {
 	return mihomo.Delays{"DIRECT": 1}, nil
+}
+
+func (f *fakeRuntime) DelayProxy(_ context.Context, name, _ string, _ int) (uint16, error) {
+	f.delayedProxy = name
+	return f.proxyDelay, nil
 }
 
 func (f *fakeRuntime) Connections(context.Context) (mihomo.Connections, error) {

@@ -38,6 +38,10 @@ const (
 	SubscriptionCardTitle   = "Subscription"
 	WebGUICardTitle         = "Web GUI"
 	RecentOperationsTitle   = "Recent operations"
+	NoProxyGroups           = "No proxy groups are available."
+	MissingValue            = "—"
+	TestingLabel            = "Testing…"
+	TimeoutLabel            = "Timeout"
 )
 
 var pageLabels = map[PageID]string{

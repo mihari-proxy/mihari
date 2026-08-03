@@ -47,6 +47,11 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 				_, err := client.DelayTest(ctx, "GLOBAL", protocol.DelayTestRequest{URL: "https://example.com", TimeoutMilliseconds: 3000})
 				return err
 			}},
+		{"delay proxy", http.MethodPost, "/v1/proxies/Node%20A/delay-test", `{"url":"https://example.com","timeout_ms":3000}`, `{"schema":"mihari/v1","delays":{"Node A":1}}`,
+			func(ctx context.Context, client *Client) error {
+				_, err := client.DelayProxy(ctx, "Node A", protocol.DelayTestRequest{URL: "https://example.com", TimeoutMilliseconds: 3000})
+				return err
+			}},
 		{"connections", http.MethodGet, "/v1/connections", "", `{"schema":"mihari/v1","download_total":0,"upload_total":0,"connections":[]}`,
 			func(ctx context.Context, client *Client) error { _, err := client.Connections(ctx); return err }},
 		{"close", http.MethodDelete, "/v1/connections/id%2Fone", `{"operation_id":"op"}`, `{"schema":"mihari/v1","operation_id":"op"}`,

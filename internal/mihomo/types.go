@@ -13,6 +13,8 @@ type Proxy struct {
 	Now     string            `json:"now,omitempty"`
 	All     []string          `json:"all,omitempty"`
 	History []json.RawMessage `json:"history,omitempty"`
+	UDP     bool              `json:"udp,omitempty"`
+	XUDP    bool              `json:"xudp,omitempty"`
 }
 
 type Proxies struct {

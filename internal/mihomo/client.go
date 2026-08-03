@@ -59,6 +59,17 @@ func (c *Client) DelayGroup(ctx context.Context, group, testURL string, timeoutM
 	return result, err
 }
 
+func (c *Client) DelayProxy(ctx context.Context, name, testURL string, timeoutMilliseconds int) (uint16, error) {
+	query := url.Values{}
+	query.Set("url", testURL)
+	query.Set("timeout", strconv.Itoa(timeoutMilliseconds))
+	var result struct {
+		Delay uint16 `json:"delay"`
+	}
+	err := c.do(ctx, http.MethodGet, "/proxies/"+url.PathEscape(name)+"/delay", query, nil, &result)
+	return result.Delay, err
+}
+
 func (c *Client) Connections(ctx context.Context) (Connections, error) {
 	var result Connections
 	err := c.do(ctx, http.MethodGet, "/connections", nil, nil, &result)

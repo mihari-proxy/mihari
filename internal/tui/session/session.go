@@ -16,6 +16,7 @@ const (
 	EventStatus        EventKind = "status"
 	EventCore          EventKind = "core"
 	EventSubscriptions EventKind = "subscriptions"
+	EventProxies       EventKind = "proxies"
 	EventTraffic       EventKind = "traffic"
 	EventMemory        EventKind = "memory"
 	EventLog           EventKind = "log"
@@ -32,6 +33,7 @@ type Event struct {
 	Status        protocol.Status
 	Core          protocol.CoreStatus
 	Subscriptions protocol.SubscriptionList
+	Proxies       protocol.ProxyGroups
 	Traffic       protocol.TrafficSample
 	Memory        protocol.MemorySample
 	Log           protocol.LogEntry
@@ -160,6 +162,19 @@ func (s *Session) supervise(ctx context.Context) {
 				continue
 			}
 			if !putOrdered(ctx, s.control, Event{Kind: EventSubscriptions, Subscriptions: subscriptions}) {
+				return
+			}
+		}
+		if slices.Contains(status.Capabilities, protocol.CapabilityProxies) {
+			proxies, proxiesErr := s.client.ProxyGroups(ctx)
+			if proxiesErr != nil {
+				attempt++
+				if !putOrdered(ctx, s.control, Event{Kind: EventReconnecting, Attempt: attempt, Err: proxiesErr}) || !waitBackoff(ctx, s.options.Backoff(attempt)) {
+					return
+				}
+				continue
+			}
+			if !putOrdered(ctx, s.control, Event{Kind: EventProxies, Proxies: proxies}) {
 				return
 			}
 		}

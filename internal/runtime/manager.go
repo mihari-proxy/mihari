@@ -31,6 +31,7 @@ type Controller interface {
 	Proxies(context.Context) (mihomo.Proxies, error)
 	SelectProxy(context.Context, string, string) error
 	DelayGroup(context.Context, string, string, int) (mihomo.Delays, error)
+	DelayProxy(context.Context, string, string, int) (uint16, error)
 	Connections(context.Context) (mihomo.Connections, error)
 	CloseConnection(context.Context, string) error
 	CloseAllConnections(context.Context) error
@@ -195,6 +196,13 @@ func (m *Manager) DelayGroup(ctx context.Context, group, testURL string, timeout
 		return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
 	}
 	return m.controller.DelayGroup(ctx, group, testURL, timeoutMilliseconds)
+}
+
+func (m *Manager) DelayProxy(ctx context.Context, name, testURL string, timeoutMilliseconds int) (uint16, error) {
+	if m.controller == nil {
+		return 0, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
+	}
+	return m.controller.DelayProxy(ctx, name, testURL, timeoutMilliseconds)
 }
 
 func (m *Manager) Connections(ctx context.Context) (mihomo.Connections, error) {

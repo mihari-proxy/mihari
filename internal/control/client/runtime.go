@@ -55,6 +55,12 @@ func (c *Client) DelayTest(ctx context.Context, group string, request protocol.D
 	return result, err
 }
 
+func (c *Client) DelayProxy(ctx context.Context, name string, request protocol.DelayTestRequest) (protocol.DelayResult, error) {
+	var result protocol.DelayResult
+	err := c.doRuntime(ctx, http.MethodPost, "/v1/proxies/"+url.PathEscape(name)+"/delay-test", request, &result)
+	return result, err
+}
+
 func (c *Client) Connections(ctx context.Context) (protocol.ConnectionList, error) {
 	var result protocol.ConnectionList
 	err := c.doRuntime(ctx, http.MethodGet, "/v1/connections", nil, &result)
