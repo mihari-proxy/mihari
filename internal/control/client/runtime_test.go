@@ -61,6 +61,18 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 			}},
 		{"rules", http.MethodGet, "/v1/rules", "", `{"schema":"mihari/v1","rules":[]}`,
 			func(ctx context.Context, client *Client) error { _, err := client.Rules(ctx); return err }},
+		{"subscriptions", http.MethodGet, "/v1/subscriptions", "", `{"schema":"mihari/v1","revision":1,"global_interval":"12h","subscriptions":[]}`,
+			func(ctx context.Context, client *Client) error { _, err := client.Subscriptions(ctx); return err }},
+		{"subscription add", http.MethodPost, "/v1/subscriptions", `{"operation_id":"op","name":"main","url":"https://example.test/sub"}`, `{"schema":"mihari/v1","revision":2,"subscription":{"id":"one","name":"main","enabled":true,"auto_refresh":true,"interval":"","cached":false,"generation":0}}`,
+			func(ctx context.Context, client *Client) error {
+				_, err := client.AddSubscription(ctx, protocol.SubscriptionAddRequest{OperationID: "op", Name: "main", URL: "https://example.test/sub"})
+				return err
+			}},
+		{"subscription refresh", http.MethodPost, "/v1/subscriptions/id%2Fone/refresh", `{"operation_id":"op"}`, `{"schema":"mihari/v1","revision":2,"subscription":{"id":"one","name":"main","enabled":true,"auto_refresh":true,"interval":"","cached":true,"generation":1}}`,
+			func(ctx context.Context, client *Client) error {
+				_, err := client.RefreshSubscription(ctx, "id/one", protocol.MutationRequest{OperationID: "op"})
+				return err
+			}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
