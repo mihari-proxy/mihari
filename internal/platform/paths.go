@@ -19,6 +19,9 @@ type Paths struct {
 	SubscriptionCache   string
 	SubscriptionStaging string
 	TUIPreferences      string
+	GeoIPCountry        string
+	GeoIPASN            string
+	GeoIPStaging        string
 }
 
 func NewPaths(root string) Paths {
@@ -39,6 +42,9 @@ func NewPaths(root string) Paths {
 		SubscriptionCache:   filepath.Join(root, "subscriptions", "cache"),
 		SubscriptionStaging: filepath.Join(root, "staging", "subscriptions"),
 		TUIPreferences:      filepath.Join(root, "preferences", "tui.json"),
+		GeoIPCountry:        filepath.Join(root, "geoip", "GeoLite2-Country.mmdb"),
+		GeoIPASN:            filepath.Join(root, "geoip", "GeoLite2-ASN.mmdb"),
+		GeoIPStaging:        filepath.Join(root, "staging", "geoip"),
 	}
 }
 
@@ -65,7 +71,7 @@ func defaultDataRoot() string {
 }
 
 func (p Paths) EnsureDirs() error {
-	for _, path := range []string{p.Root, p.Bin, filepath.Dir(p.RuntimeConfig), filepath.Dir(p.Log), p.Staging, p.Subscriptions, p.SubscriptionCache, p.SubscriptionStaging, filepath.Dir(p.TUIPreferences)} {
+	for _, path := range []string{p.Root, p.Bin, filepath.Dir(p.RuntimeConfig), filepath.Dir(p.Log), p.Staging, p.Subscriptions, p.SubscriptionCache, p.SubscriptionStaging, filepath.Dir(p.TUIPreferences), filepath.Dir(p.GeoIPCountry), p.GeoIPStaging} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			return err
 		}

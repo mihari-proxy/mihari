@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"path/filepath"
 	"reflect"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/core"
+	"github.com/LeeShunEE/mihari/internal/geoip"
 	"github.com/LeeShunEE/mihari/internal/mihomo"
 	"github.com/LeeShunEE/mihari/internal/preferences"
 	"github.com/LeeShunEE/mihari/internal/state"
@@ -47,6 +49,112 @@ func TestUpdateTUIPreferencesCommitsThroughCoordinator(t *testing.T) {
 		t.Fatalf("stale update persisted columns=%v", got)
 	}
 }
+
+func TestGeoIPUpdatePreparesOutsideCoordinatorAndRejectsStaleRevision(t *testing.T) {
+	prepared := &fakeGeoIPCandidate{valid: true, identity: "pair-1"}
+	service := &fakeGeoIPService{}
+	manager := newTestManager(Options{
+		GeoIP:        service,
+		PrepareGeoIP: func(context.Context) (GeoIPCandidate, error) { return prepared, nil },
+	})
+	manager.store.Store(state.Snapshot{Revision: 3})
+	stale := uint64(2)
+	_, err := manager.UpdateGeoIP(context.Background(), Operation{ID: "geoip-stale", Source: "test", IfRevision: &stale})
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeRevisionConflict {
+		t.Fatalf("err=%v", err)
+	}
+	if prepared.commits != 0 || prepared.cleanups != 1 {
+		t.Fatalf("commits=%d cleanups=%d", prepared.commits, prepared.cleanups)
+	}
+	if service.recordedError {
+		t.Fatal("revision conflict degraded geoip health")
+	}
+
+	current := uint64(3)
+	prepared = &fakeGeoIPCandidate{valid: true, identity: "pair-2"}
+	status, err := manager.UpdateGeoIP(context.Background(), Operation{ID: "geoip-current", Source: "test", IfRevision: &current})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.commits != 1 || status.Country.Available != true || manager.Snapshot().Revision != 4 {
+		t.Fatalf("candidate=%#v status=%#v revision=%d", prepared, status, manager.Snapshot().Revision)
+	}
+}
+
+func TestGeoIPUpdateFailureIsRecordedWithoutReplacingCurrentDatabases(t *testing.T) {
+	service := &fakeGeoIPService{}
+	manager := newTestManager(Options{
+		GeoIP:        service,
+		PrepareGeoIP: func(context.Context) (GeoIPCandidate, error) { return nil, errors.New("download failed with secret") },
+	})
+	_, err := manager.UpdateGeoIP(context.Background(), Operation{ID: "geoip-failed", Source: "test"})
+	if err == nil || !service.recordedError {
+		t.Fatalf("err=%v recorded=%v", err, service.recordedError)
+	}
+}
+
+func TestGeoIPStaleCandidateDoesNotDegradeNewerDatabaseHealth(t *testing.T) {
+	service := &fakeGeoIPService{}
+	candidate := &fakeGeoIPCandidate{valid: true, identity: "stale", commitErr: geoip.ErrStaleCandidate}
+	manager := newTestManager(Options{
+		GeoIP:        service,
+		PrepareGeoIP: func(context.Context) (GeoIPCandidate, error) { return candidate, nil },
+	})
+	_, err := manager.UpdateGeoIP(context.Background(), Operation{ID: "geoip-stale-candidate", Source: "test"})
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeRevisionConflict || service.recordedError {
+		t.Fatalf("err=%v recorded=%v", err, service.recordedError)
+	}
+}
+
+func TestManagerCancelsOwnedSchedulerWhenSupervisorStops(t *testing.T) {
+	schedulerStopped := make(chan struct{})
+	manager := newTestManager(Options{
+		Supervisor: &fakeSupervisor{run: func(context.Context) error { return errors.New("stopped") }},
+		RunScheduler: func(ctx context.Context) error {
+			<-ctx.Done()
+			close(schedulerStopped)
+			return nil
+		},
+	})
+	done := make(chan error, 1)
+	go func() { done <- manager.Run(context.Background()) }()
+	select {
+	case <-schedulerStopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("owned scheduler was not canceled")
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("supervisor error was lost")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("manager did not return after scheduler stopped")
+	}
+}
+
+type fakeGeoIPCandidate struct {
+	valid     bool
+	identity  string
+	commits   int
+	cleanups  int
+	commitErr error
+}
+
+func (c *fakeGeoIPCandidate) Identity() string { return c.identity }
+func (c *fakeGeoIPCandidate) Valid() bool      { return c.valid }
+func (c *fakeGeoIPCandidate) Commit() error    { c.commits++; return c.commitErr }
+func (c *fakeGeoIPCandidate) Cleanup()         { c.cleanups++ }
+
+type fakeGeoIPService struct{ recordedError bool }
+
+func (*fakeGeoIPService) Status() geoip.Status {
+	return geoip.Status{Country: geoip.DatabaseStatus{Available: true}, ASN: geoip.DatabaseStatus{Available: true}}
+}
+func (*fakeGeoIPService) Lookup(netip.Addr) (geoip.Record, error) { return geoip.Record{}, nil }
+func (s *fakeGeoIPService) RecordUpdateError(err error)           { s.recordedError = err != nil }
 
 func TestInstallCommitAndRestartCannotOverlap(t *testing.T) {
 	commitEntered := make(chan struct{})

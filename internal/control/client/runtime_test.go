@@ -66,6 +66,19 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 			}},
 		{"rules", http.MethodGet, "/v1/rules", "", `{"schema":"mihari/v1","rules":[]}`,
 			func(ctx context.Context, client *Client) error { _, err := client.Rules(ctx); return err }},
+		{"geoip status", http.MethodGet, "/v1/geoip/status", "", `{"schema":"mihari/v1","revision":1,"country":{"available":false},"asn":{"available":false}}`,
+			func(ctx context.Context, client *Client) error { _, err := client.GeoIPStatus(ctx); return err }},
+		{"geoip lookup", http.MethodPost, "/v1/geoip/lookup", `{"addresses":["1.1.1.1"]}`, `{"schema":"mihari/v1","records":[{"address":"1.1.1.1","country_code":"AU"}]}`,
+			func(ctx context.Context, client *Client) error {
+				_, err := client.LookupGeoIP(ctx, protocol.GeoIPLookupRequest{Addresses: []string{"1.1.1.1"}})
+				return err
+			}},
+		{"geoip update", http.MethodPost, "/v1/geoip/update", `{"operation_id":"geoip-1","if_revision":1}`, `{"schema":"mihari/v1","operation_id":"geoip-1","revision":2,"status":{"schema":"mihari/v1","revision":2,"country":{"available":true},"asn":{"available":true}}}`,
+			func(ctx context.Context, client *Client) error {
+				revision := uint64(1)
+				_, err := client.UpdateGeoIP(ctx, protocol.MutationRequest{OperationID: "geoip-1", IfRevision: &revision})
+				return err
+			}},
 		{"subscriptions", http.MethodGet, "/v1/subscriptions", "", `{"schema":"mihari/v1","revision":1,"global_interval":"12h","subscriptions":[]}`,
 			func(ctx context.Context, client *Client) error { _, err := client.Subscriptions(ctx); return err }},
 		{"TUI preferences", http.MethodGet, "/v1/preferences/tui", "", `{"schema":"mihari/v1","revision":1,"connections_columns":["host","chain"]}`,

@@ -7,12 +7,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/core"
+	"github.com/LeeShunEE/mihari/internal/geoip"
 	"github.com/LeeShunEE/mihari/internal/mihomo"
 	runtimeapi "github.com/LeeShunEE/mihari/internal/runtime"
 	"github.com/LeeShunEE/mihari/internal/state"
@@ -275,6 +277,8 @@ type fakeRuntime struct {
 	streamMessages []json.RawMessage
 	delayedProxy   string
 	proxyDelay     uint16
+	geoIPStatus    geoip.Status
+	geoIPRecords   []geoip.Record
 }
 
 func (f *fakeRuntime) Capabilities() []string { return append([]string(nil), f.capabilities...) }
@@ -332,4 +336,15 @@ func (f *fakeRuntime) Stream(ctx context.Context, _ mihomo.StreamKind, receive f
 		}
 	}
 	return nil
+}
+
+func (f *fakeRuntime) GeoIPStatus(context.Context) (geoip.Status, error) { return f.geoIPStatus, nil }
+
+func (f *fakeRuntime) LookupGeoIP(context.Context, []netip.Addr) ([]geoip.Record, error) {
+	return append([]geoip.Record(nil), f.geoIPRecords...), nil
+}
+
+func (f *fakeRuntime) UpdateGeoIP(_ context.Context, operation runtimeapi.Operation) (geoip.Status, error) {
+	f.operation = operation
+	return f.geoIPStatus, nil
 }

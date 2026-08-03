@@ -26,6 +26,9 @@ func TestNewPathsBuildsRuntimeLayout(t *testing.T) {
 		"cache":           filepath.Join(root, "subscriptions", "cache"),
 		"sub staging":     filepath.Join(root, "staging", "subscriptions"),
 		"tui preferences": filepath.Join(root, "preferences", "tui.json"),
+		"geoip country":   filepath.Join(root, "geoip", "GeoLite2-Country.mmdb"),
+		"geoip asn":       filepath.Join(root, "geoip", "GeoLite2-ASN.mmdb"),
+		"geoip staging":   filepath.Join(root, "staging", "geoip"),
 	}
 	gots := map[string]string{
 		"root":            paths.Root,
@@ -40,6 +43,9 @@ func TestNewPathsBuildsRuntimeLayout(t *testing.T) {
 		"cache":           paths.SubscriptionCache,
 		"sub staging":     paths.SubscriptionStaging,
 		"tui preferences": paths.TUIPreferences,
+		"geoip country":   paths.GeoIPCountry,
+		"geoip asn":       paths.GeoIPASN,
+		"geoip staging":   paths.GeoIPStaging,
 	}
 	for name, want := range wants {
 		if got := gots[name]; got != want {
