@@ -352,6 +352,10 @@ func (c *fakeController) DelayGroup(context.Context, string, string, int) (mihom
 	return nil, nil
 }
 
+func (c *fakeController) DelayProxy(context.Context, string, string, int) (uint16, error) {
+	return 0, nil
+}
+
 func (c *fakeController) Connections(context.Context) (mihomo.Connections, error) {
 	return mihomo.Connections{}, nil
 }

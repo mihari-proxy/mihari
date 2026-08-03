@@ -7,6 +7,7 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/tui/pages/overview"
+	proxypage "github.com/LeeShunEE/mihari/internal/tui/pages/proxies"
 	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
@@ -37,12 +38,17 @@ type Model struct {
 }
 
 func NewModel() Model {
+	return newModel(nil)
+}
+
+func newModel(proxyClient proxypage.Client) Model {
 	rail := ui.RailPages()
 	pages := make(map[ui.PageID]ui.Page, len(rail))
 	for _, id := range rail {
 		pages[id] = ui.NewUnavailablePage(id)
 	}
 	pages[ui.PageOverview] = overview.New()
+	pages[ui.PageProxies] = proxypage.New(proxyClient, nil)
 	active := rail[0]
 	model := Model{
 		pages: pages, rail: rail, active: active,
@@ -54,7 +60,13 @@ func NewModel() Model {
 }
 
 func NewModelWithEvents(events <-chan session.Event) Model {
-	model := NewModel()
+	model := newModel(nil)
+	model.events = events
+	return model
+}
+
+func newModelWithClient(events <-chan session.Event, proxyClient proxypage.Client) Model {
+	model := newModel(proxyClient)
 	model.events = events
 	return model
 }
@@ -139,6 +151,10 @@ func (model *Model) applySessionEvent(event session.Event) {
 		model.core = event.Core
 	case session.EventSubscriptions:
 		model.subscriptions = event.Subscriptions
+	case session.EventProxies:
+		if page, ok := model.pages[ui.PageProxies].(*proxypage.Model); ok {
+			page.SetGroups(event.Proxies)
+		}
 	case session.EventConnected:
 		model.connected = true
 		model.stale = false

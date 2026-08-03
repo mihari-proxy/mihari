@@ -47,10 +47,10 @@ func TestClientRuntimeRequests(t *testing.T) {
 		statusCode int
 	}{
 		{
-			name: "proxies", method: http.MethodGet, path: "/proxies", response: `{"proxies":{"GLOBAL":{"name":"GLOBAL","type":"Selector","now":"DIRECT","all":["DIRECT"]}}}`,
+			name: "proxies", method: http.MethodGet, path: "/proxies", response: `{"proxies":{"GLOBAL":{"name":"GLOBAL","type":"Selector","now":"node-a","all":["node-a"]},"node-a":{"name":"node-a","type":"VLESS","udp":true,"xudp":true}}}`,
 			invoke: func(ctx context.Context, client *Client) error {
 				got, err := client.Proxies(ctx)
-				if err == nil && got.Proxies["GLOBAL"].Now != "DIRECT" {
+				if err == nil && (got.Proxies["GLOBAL"].Now != "node-a" || !got.Proxies["node-a"].UDP || !got.Proxies["node-a"].XUDP) {
 					t.Fatalf("proxies=%#v", got)
 				}
 				return err
@@ -68,6 +68,16 @@ func TestClientRuntimeRequests(t *testing.T) {
 				got, err := client.DelayGroup(ctx, "Auto/Select", "https://example.com/ping", 3500)
 				if err == nil && got["Node A"] != 42 {
 					t.Fatalf("delays=%#v", got)
+				}
+				return err
+			},
+		},
+		{
+			name: "delay proxy", method: http.MethodGet, path: "/proxies/Node%20A/delay", query: url.Values{"url": {"https://example.com/ping"}, "timeout": {"3500"}}, response: `{"delay":42}`,
+			invoke: func(ctx context.Context, client *Client) error {
+				delay, err := client.DelayProxy(ctx, "Node A", "https://example.com/ping", 3500)
+				if err == nil && delay != 42 {
+					t.Fatalf("delay=%d", delay)
 				}
 				return err
 			},

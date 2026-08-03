@@ -54,7 +54,7 @@ func TestSession_ReportsReconnectBeforeConnected(t *testing.T) {
 func TestSession_LoadsCapabilitySnapshotsBeforeConnected(t *testing.T) {
 	fake := newFakeClient()
 	fake.status = protocol.Status{Schema: "mihari/v1", Capabilities: []string{
-		protocol.CapabilityCore, protocol.CapabilitySubscriptions,
+		protocol.CapabilityCore, protocol.CapabilitySubscriptions, protocol.CapabilityProxies,
 	}}
 	session := New(fake, Options{Backoff: func(int) time.Duration { return 0 }})
 	events := session.Start(context.Background())
@@ -62,6 +62,7 @@ func TestSession_LoadsCapabilitySnapshotsBeforeConnected(t *testing.T) {
 	waitForEvent(t, events, EventStatus)
 	waitForEvent(t, events, EventCore)
 	waitForEvent(t, events, EventSubscriptions)
+	waitForEvent(t, events, EventProxies)
 	waitForEvent(t, events, EventConnected)
 }
 
@@ -141,6 +142,10 @@ func (f *fakeClient) Core(context.Context) (protocol.CoreStatus, error) {
 
 func (f *fakeClient) Subscriptions(context.Context) (protocol.SubscriptionList, error) {
 	return protocol.SubscriptionList{Schema: "mihari/v1", Subscriptions: []protocol.Subscription{}}, nil
+}
+
+func (f *fakeClient) ProxyGroups(context.Context) (protocol.ProxyGroups, error) {
+	return protocol.ProxyGroups{Schema: "mihari/v1", Groups: []protocol.ProxyGroup{}}, nil
 }
 
 func (f *fakeClient) Stream(ctx context.Context, kind string, _ func(protocol.StreamEvent) error) error {
