@@ -30,12 +30,24 @@ type RuntimeClient interface {
 	Stream(context.Context, string, func(protocol.StreamEvent) error) error
 }
 
+type SubscriptionClient interface {
+	Subscriptions(context.Context) (protocol.SubscriptionList, error)
+	Subscription(context.Context, string) (protocol.SubscriptionResult, error)
+	AddSubscription(context.Context, protocol.SubscriptionAddRequest) (protocol.SubscriptionResult, error)
+	RefreshSubscription(context.Context, string, protocol.MutationRequest) (protocol.SubscriptionResult, error)
+	UseSubscription(context.Context, string, protocol.MutationRequest) (protocol.SubscriptionResult, error)
+	SetSubscriptionEnabled(context.Context, string, protocol.SubscriptionEnabledRequest) (protocol.SubscriptionResult, error)
+	UpdateSubscription(context.Context, string, protocol.SubscriptionUpdateRequest) (protocol.SubscriptionResult, error)
+	RemoveSubscription(context.Context, string, protocol.MutationRequest) (protocol.MutationResult, error)
+}
+
 type Dependencies struct {
-	StatusClient   StatusClient
-	RuntimeClient  RuntimeClient
-	RunDaemon      func(context.Context) error
-	NewOperationID func() string
-	SetupError     error
+	StatusClient       StatusClient
+	RuntimeClient      RuntimeClient
+	SubscriptionClient SubscriptionClient
+	RunDaemon          func(context.Context) error
+	NewOperationID     func() string
+	SetupError         error
 }
 
 type runOptions struct {
@@ -92,6 +104,7 @@ func newRoot(dependencies Dependencies, options *runOptions) *cobra.Command {
 	root.AddCommand(newRulesCommand(dependencies, options))
 	root.AddCommand(newStreamCommand("traffic", dependencies, options))
 	root.AddCommand(newStreamCommand("logs", dependencies, options))
+	root.AddCommand(newSubscriptionCommand(dependencies, options))
 	return root
 }
 

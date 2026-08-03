@@ -23,10 +23,12 @@ func main() {
 
 	endpoint := transport.DefaultEndpoint()
 	token, setupError := credential.LoadOrCreate(transport.DefaultCredentialPath())
+	localClient := controlclient.New(endpoint, token)
 	dependencies := cli.Dependencies{
-		StatusClient:  controlclient.New(endpoint, token),
-		RuntimeClient: controlclient.New(endpoint, token),
-		SetupError:    setupError,
+		StatusClient:       localClient,
+		RuntimeClient:      localClient,
+		SubscriptionClient: localClient,
+		SetupError:         setupError,
 		RunDaemon: func(ctx context.Context) error {
 			paths := platform.DefaultPaths()
 			if err := paths.EnsureDirs(); err != nil {
