@@ -44,6 +44,7 @@ func (s *Server) runtimeRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /v1/connections", s.closeAllConnections)
 	mux.HandleFunc("GET /v1/rules", s.rules)
 	mux.HandleFunc("GET /v1/streams/{kind}", s.stream)
+	s.subscriptionRoutes(mux)
 }
 
 func (s *Server) coreStatus(writer http.ResponseWriter, _ *http.Request) {

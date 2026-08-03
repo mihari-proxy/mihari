@@ -79,6 +79,54 @@ func (c *Client) Rules(ctx context.Context) (protocol.RuleList, error) {
 	return result, err
 }
 
+func (c *Client) Subscriptions(ctx context.Context) (protocol.SubscriptionList, error) {
+	var result protocol.SubscriptionList
+	err := c.doRuntime(ctx, http.MethodGet, "/v1/subscriptions", nil, &result)
+	return result, err
+}
+
+func (c *Client) Subscription(ctx context.Context, id string) (protocol.SubscriptionResult, error) {
+	var result protocol.SubscriptionResult
+	err := c.doRuntime(ctx, http.MethodGet, "/v1/subscriptions/"+url.PathEscape(id), nil, &result)
+	return result, err
+}
+
+func (c *Client) AddSubscription(ctx context.Context, request protocol.SubscriptionAddRequest) (protocol.SubscriptionResult, error) {
+	var result protocol.SubscriptionResult
+	err := c.doRuntime(ctx, http.MethodPost, "/v1/subscriptions", request, &result)
+	return result, err
+}
+
+func (c *Client) RefreshSubscription(ctx context.Context, id string, request protocol.MutationRequest) (protocol.SubscriptionResult, error) {
+	var result protocol.SubscriptionResult
+	err := c.doRuntime(ctx, http.MethodPost, "/v1/subscriptions/"+url.PathEscape(id)+"/refresh", request, &result)
+	return result, err
+}
+
+func (c *Client) UseSubscription(ctx context.Context, id string, request protocol.MutationRequest) (protocol.SubscriptionResult, error) {
+	var result protocol.SubscriptionResult
+	err := c.doRuntime(ctx, http.MethodPut, "/v1/subscriptions/"+url.PathEscape(id)+"/active", request, &result)
+	return result, err
+}
+
+func (c *Client) SetSubscriptionEnabled(ctx context.Context, id string, request protocol.SubscriptionEnabledRequest) (protocol.SubscriptionResult, error) {
+	var result protocol.SubscriptionResult
+	err := c.doRuntime(ctx, http.MethodPut, "/v1/subscriptions/"+url.PathEscape(id)+"/enabled", request, &result)
+	return result, err
+}
+
+func (c *Client) UpdateSubscription(ctx context.Context, id string, request protocol.SubscriptionUpdateRequest) (protocol.SubscriptionResult, error) {
+	var result protocol.SubscriptionResult
+	err := c.doRuntime(ctx, http.MethodPatch, "/v1/subscriptions/"+url.PathEscape(id), request, &result)
+	return result, err
+}
+
+func (c *Client) RemoveSubscription(ctx context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+	var result protocol.MutationResult
+	err := c.doRuntime(ctx, http.MethodDelete, "/v1/subscriptions/"+url.PathEscape(id), request, &result)
+	return result, err
+}
+
 func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.StreamEvent) error) error {
 	if receive == nil {
 		return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "stream receiver is required"}
