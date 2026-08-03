@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -82,5 +83,41 @@ func TestSaveRejectsMissingControllerSecret(t *testing.T) {
 	settings := Defaults()
 	if err := Save(filepath.Join(t.TempDir(), "mihari.yaml"), settings); err == nil {
 		t.Fatal("expected missing controller secret to fail")
+	}
+}
+
+func TestConcurrentLoadOrCreateUsesOneControllerSecret(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mihari.yaml")
+	start := make(chan struct{})
+	results := make(chan Settings, 32)
+	errors := make(chan error, 32)
+	var wait sync.WaitGroup
+	for range 32 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			settings, err := LoadOrCreate(path)
+			results <- settings
+			errors <- err
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(results)
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := ""
+	for settings := range results {
+		if want == "" {
+			want = settings.ControllerSecret
+		}
+		if settings.ControllerSecret != want {
+			t.Fatalf("controller secrets differ: %q and %q", want, settings.ControllerSecret)
+		}
 	}
 }
