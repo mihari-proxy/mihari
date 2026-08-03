@@ -46,6 +46,8 @@ type Dependencies struct {
 	RuntimeClient      RuntimeClient
 	SubscriptionClient SubscriptionClient
 	RunDaemon          func(context.Context) error
+	RunTUI             func(context.Context) error
+	Interactive        bool
 	NewOperationID     func() string
 	SetupError         error
 }
@@ -83,7 +85,13 @@ func newRoot(dependencies Dependencies, options *runOptions) *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(command *cobra.Command, _ []string) error {
-			return command.Help()
+			if !dependencies.Interactive || options.json {
+				return invalidArgument("interactive terminal required when no command is specified")
+			}
+			if dependencies.RunTUI == nil {
+				return protocol.APIError{Code: protocol.CodeInvalidState, Message: "TUI is unavailable"}
+			}
+			return dependencies.RunTUI(command.Context())
 		},
 		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
 			if dependencies.SetupError == nil {

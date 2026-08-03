@@ -15,6 +15,7 @@ import (
 	"github.com/LeeShunEE/mihari/internal/control/transport"
 	"github.com/LeeShunEE/mihari/internal/daemon"
 	"github.com/LeeShunEE/mihari/internal/platform"
+	"github.com/LeeShunEE/mihari/internal/tui"
 )
 
 func main() {
@@ -29,6 +30,14 @@ func main() {
 		RuntimeClient:      localClient,
 		SubscriptionClient: localClient,
 		SetupError:         setupError,
+		Interactive:        isInteractiveTerminal(os.Stdin, os.Stdout),
+		RunTUI: func(ctx context.Context) error {
+			return tui.Run(ctx, tui.Options{
+				Client: localClient,
+				Input:  os.Stdin,
+				Output: os.Stdout,
+			})
+		},
 		RunDaemon: func(ctx context.Context) error {
 			paths := platform.DefaultPaths()
 			if err := paths.EnsureDirs(); err != nil {
@@ -52,4 +61,13 @@ func main() {
 		},
 	}
 	os.Exit(cli.Execute(ctx, os.Args[1:], os.Stdout, os.Stderr, dependencies))
+}
+
+func isInteractiveTerminal(input, output *os.File) bool {
+	inputInfo, err := input.Stat()
+	if err != nil || inputInfo.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	outputInfo, err := output.Stat()
+	return err == nil && outputInfo.Mode()&os.ModeCharDevice != 0
 }
