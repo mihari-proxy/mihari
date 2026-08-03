@@ -14,9 +14,17 @@ type Options struct {
 	Token    string
 	Version  string
 	Ready    chan<- struct{}
+	Store    *state.Store
+	Runtime  Runtime
 }
 
-func Run(ctx context.Context, options Options) error {
+type Runtime interface {
+	Run(context.Context) error
+}
+
+func Run(parent context.Context, options Options) error {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
 	listener, err := transport.Listen(options.Endpoint)
 	if err != nil {
 		return err
@@ -26,12 +34,25 @@ func Run(ctx context.Context, options Options) error {
 		close(options.Ready)
 	}
 
-	store := state.NewStore(state.Snapshot{
-		Revision:  0,
-		Version:   options.Version,
-		StartedAt: time.Now().UTC(),
-		Health:    "ok",
-	})
+	store := options.Store
+	if store == nil {
+		store = state.NewStore(state.Snapshot{
+			Revision:  0,
+			Version:   options.Version,
+			StartedAt: time.Now().UTC(),
+			Health:    "ok",
+		})
+	}
+	var runtimeDone chan error
+	if options.Runtime != nil {
+		runtimeDone = make(chan error, 1)
+		go func() { runtimeDone <- options.Runtime.Run(ctx) }()
+	}
 	server := controlserver.New(controlserver.Options{Token: options.Token, Store: store})
-	return server.Serve(ctx, listener)
+	serverError := server.Serve(ctx, listener)
+	cancel()
+	if runtimeDone != nil {
+		<-runtimeDone
+	}
+	return serverError
 }

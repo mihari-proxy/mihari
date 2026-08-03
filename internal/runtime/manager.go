@@ -1,0 +1,309 @@
+package runtime
+
+import (
+	"context"
+	"sync"
+	"sync/atomic"
+
+	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/LeeShunEE/mihari/internal/core"
+	"github.com/LeeShunEE/mihari/internal/state"
+	"github.com/LeeShunEE/mihari/internal/supervisor"
+)
+
+type PreparedCore interface {
+	Version() string
+	Updated() bool
+	Commit() (core.InstallResult, error)
+	Cleanup()
+}
+
+type CoreInstaller interface {
+	Prepare(context.Context, core.InstallRequest) (PreparedCore, error)
+}
+
+type CoreSupervisor interface {
+	Run(context.Context) error
+	Restart(context.Context) error
+}
+
+type Controller interface {
+	SelectProxy(context.Context, string, string) error
+}
+
+type Operation struct {
+	ID         string
+	Source     string
+	IfRevision *uint64
+}
+
+type Options struct {
+	Store          *state.Store
+	Coordinator    *state.Coordinator
+	Installer      CoreInstaller
+	InstallRequest core.InstallRequest
+	Supervisor     CoreSupervisor
+	Controller     Controller
+	BinaryExists   func() bool
+}
+
+type Manager struct {
+	store          *state.Store
+	coordinator    *state.Coordinator
+	installer      CoreInstaller
+	installRequest core.InstallRequest
+	supervisor     CoreSupervisor
+	controller     Controller
+	binaryExists   func() bool
+	maintenance    chan struct{}
+	installed      chan struct{}
+	closing        atomic.Bool
+	running        atomic.Bool
+	operationsMu   sync.Mutex
+	operations     map[string]*operationEntry
+}
+
+type operationEntry struct {
+	done   chan struct{}
+	result any
+	err    error
+}
+
+func New(options Options) *Manager {
+	store := options.Store
+	if store == nil {
+		store = state.NewStore(state.Snapshot{Health: "ok"})
+	}
+	coordinator := options.Coordinator
+	if coordinator == nil {
+		coordinator = state.NewCoordinator(store)
+	}
+	binaryExists := options.BinaryExists
+	if binaryExists == nil {
+		binaryExists = func() bool { return true }
+	}
+	manager := &Manager{
+		store:          store,
+		coordinator:    coordinator,
+		installer:      options.Installer,
+		installRequest: options.InstallRequest,
+		supervisor:     options.Supervisor,
+		controller:     options.Controller,
+		binaryExists:   binaryExists,
+		maintenance:    make(chan struct{}, 1),
+		installed:      make(chan struct{}, 1),
+		operations:     make(map[string]*operationEntry),
+	}
+	manager.maintenance <- struct{}{}
+	return manager
+}
+
+func (m *Manager) Run(ctx context.Context) error {
+	defer m.closing.Store(true)
+	shutdownObserved := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			m.closing.Store(true)
+		case <-shutdownObserved:
+		}
+	}()
+	defer close(shutdownObserved)
+	if m.supervisor == nil {
+		m.setCoreState(state.CoreState{Status: "degraded", LastError: "mihomo supervisor is unavailable"})
+		<-ctx.Done()
+		return nil
+	}
+	for !m.binaryExists() {
+		m.setCoreState(state.CoreState{Status: "missing"})
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-m.installed:
+		}
+	}
+	m.running.Store(true)
+	err := m.supervisor.Run(ctx)
+	m.running.Store(false)
+	if ctx.Err() != nil {
+		return nil
+	}
+	if err != nil {
+		m.setCoreState(state.CoreState{Status: "degraded", LastError: "mihomo supervisor stopped"})
+	}
+	return err
+}
+
+func (m *Manager) Observe(observation supervisor.Observation) {
+	m.setCoreState(state.CoreState{
+		Status:      string(observation.Status),
+		PID:         observation.PID,
+		Restarts:    observation.Restarts,
+		LastError:   observation.LastError,
+		NextRetryAt: observation.NextRetryAt,
+		Version:     m.store.Load().Core.Version,
+	})
+}
+
+func (m *Manager) Install(ctx context.Context, operation Operation) (core.InstallResult, error) {
+	result, err := m.doOperation(ctx, "install:"+operation.ID, func() (any, error) {
+		if m.installer == nil {
+			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "core installer is unavailable"}
+		}
+		installRequest := m.installRequest
+		installRequest.CurrentVersion = m.store.Load().Core.Version
+		candidate, err := m.installer.Prepare(ctx, installRequest)
+		if err != nil {
+			return nil, err
+		}
+		defer candidate.Cleanup()
+		if err := m.lock(ctx); err != nil {
+			return nil, err
+		}
+		defer m.unlock()
+		if err := m.checkOpen(); err != nil {
+			return nil, err
+		}
+		var result core.InstallResult
+		if candidate.Updated() {
+			_, err = m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+				result, err = candidate.Commit()
+				if err != nil {
+					return snapshot, err
+				}
+				snapshot.Core.Version = result.Version
+				return snapshot, nil
+			})
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			result, err = candidate.Commit()
+			if err != nil {
+				return nil, err
+			}
+		}
+		if !result.Updated {
+			return result, nil
+		}
+		if m.running.Load() {
+			if err := m.supervisor.Restart(ctx); err != nil {
+				return nil, err
+			}
+		} else {
+			select {
+			case m.installed <- struct{}{}:
+			default:
+			}
+		}
+		return result, nil
+	})
+	if err != nil {
+		return core.InstallResult{}, err
+	}
+	return result.(core.InstallResult), nil
+}
+
+func (m *Manager) Restart(ctx context.Context, operation Operation) error {
+	_, err := m.doOperation(ctx, "restart:"+operation.ID, func() (any, error) {
+		if m.supervisor == nil {
+			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo is not running"}
+		}
+		if err := m.withMaintenance(ctx, func() error { return m.supervisor.Restart(ctx) }); err != nil {
+			return nil, err
+		}
+		return struct{}{}, nil
+	})
+	return err
+}
+
+func (m *Manager) SelectProxy(ctx context.Context, operation Operation, group, name string) error {
+	_, err := m.doOperation(ctx, "select:"+operation.ID, func() (any, error) {
+		if m.controller == nil {
+			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
+		}
+		if err := m.withMaintenance(ctx, func() error { return m.controller.SelectProxy(ctx, group, name) }); err != nil {
+			return nil, err
+		}
+		return struct{}{}, nil
+	})
+	return err
+}
+
+func (m *Manager) withMaintenance(ctx context.Context, operation func() error) error {
+	if err := m.lock(ctx); err != nil {
+		return err
+	}
+	defer m.unlock()
+	if err := m.checkOpen(); err != nil {
+		return err
+	}
+	return operation()
+}
+
+func (m *Manager) lock(ctx context.Context) error {
+	select {
+	case <-m.maintenance:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *Manager) unlock() { m.maintenance <- struct{}{} }
+
+func (m *Manager) checkOpen() error {
+	if m.closing.Load() {
+		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihari daemon is shutting down"}
+	}
+	return nil
+}
+
+func (m *Manager) doOperation(ctx context.Context, key string, execute func() (any, error)) (any, error) {
+	if err := m.checkOpen(); err != nil {
+		return nil, err
+	}
+	if key == "" || key[len(key)-1] == ':' {
+		return execute()
+	}
+	m.operationsMu.Lock()
+	if existing := m.operations[key]; existing != nil {
+		m.operationsMu.Unlock()
+		select {
+		case <-existing.done:
+			return existing.result, existing.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	entry := &operationEntry{done: make(chan struct{})}
+	if len(m.operations) >= 256 {
+		for operationKey, operation := range m.operations {
+			select {
+			case <-operation.done:
+				delete(m.operations, operationKey)
+			default:
+			}
+			if len(m.operations) < 256 {
+				break
+			}
+		}
+		if len(m.operations) >= 256 {
+			m.operationsMu.Unlock()
+			return execute()
+		}
+	}
+	m.operations[key] = entry
+	m.operationsMu.Unlock()
+
+	entry.result, entry.err = execute()
+	close(entry.done)
+	return entry.result, entry.err
+}
+
+func (m *Manager) setCoreState(coreState state.CoreState) {
+	_, _ = m.coordinator.Do(context.Background(), state.CommandMeta{Source: "runtime"}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		snapshot.Core = coreState
+		return snapshot, nil
+	})
+}

@@ -10,6 +10,16 @@ type Snapshot struct {
 	Version   string
 	StartedAt time.Time
 	Health    string
+	Core      CoreState
+}
+
+type CoreState struct {
+	Status      string
+	Version     string
+	PID         int
+	Restarts    uint64
+	LastError   string
+	NextRetryAt time.Time
 }
 
 type Store struct {
