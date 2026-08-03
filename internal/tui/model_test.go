@@ -2,12 +2,50 @@ package tui
 
 import (
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	connectionspage "github.com/LeeShunEE/mihari/internal/tui/pages/connections"
 	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
+
+func TestModelRoutesConnectionSnapshotsAndPreferencesToPage(t *testing.T) {
+	model := NewModel()
+	page, ok := model.pages[ui.PageConnections].(*connectionspage.Model)
+	if !ok {
+		t.Fatalf("connections page=%T", model.pages[ui.PageConnections])
+	}
+	model.applySessionEvent(session.Event{Kind: session.EventPreferences, Preferences: protocol.TUIPreferences{
+		Revision: 4, ConnectionsColumns: []string{"host", "chain"},
+	}})
+	model.applySessionEvent(session.Event{Kind: session.EventConnections, ObservedAt: time.Unix(2, 0), Connections: protocol.ConnectionList{
+		Connections: []protocol.Connection{{ID: "one", Metadata: protocol.ConnectionMetadata{Host: "example.com"}}},
+	}})
+	view := page.View()
+	if !strings.Contains(view, "example.com") || !strings.Contains(view, "Chain") {
+		t.Fatalf("view=%s", view)
+	}
+}
+
+func TestModelReconnectResetsSessionScopedConnectionHistory(t *testing.T) {
+	model := NewModel()
+	page := model.pages[ui.PageConnections].(*connectionspage.Model)
+	model.applySessionEvent(session.Event{Kind: session.EventConnections, ObservedAt: time.Unix(1, 0), Connections: protocol.ConnectionList{
+		Connections: []protocol.Connection{{ID: "one"}},
+	}})
+	model.applySessionEvent(session.Event{Kind: session.EventConnections, ObservedAt: time.Unix(2, 0), Connections: protocol.ConnectionList{}})
+	if !strings.Contains(page.View(), "Closed 1") {
+		t.Fatalf("history before reconnect=%s", page.View())
+	}
+	model.applySessionEvent(session.Event{Kind: session.EventReconnecting})
+	if !strings.Contains(page.View(), "Closed 0") {
+		t.Fatalf("history after reconnect=%s", page.View())
+	}
+}
 
 func TestModelSessionReconnectMarksSnapshotStaleAndKeepsWaiting(t *testing.T) {
 	events := make(chan session.Event, 2)
@@ -107,6 +145,29 @@ func TestConfirmationEmitsResultOnlyFromConfirmButton(t *testing.T) {
 	}
 	if _, ok := command().(ModalConfirmedMsg); !ok {
 		t.Fatalf("message=%T", command())
+	}
+}
+
+func TestConfirmationRequestRunsOnlyAfterConfirm(t *testing.T) {
+	model := NewModel()
+	run := false
+	updated, command := model.Update(ui.ConfirmationRequestMsg{
+		Title: "Close all", Object: "connections", Impact: "closed", Rollback: "none",
+		OnConfirm: func() tea.Msg { run = true; return nil },
+	})
+	model = updated.(Model)
+	if model.modal == nil || command != nil || run {
+		t.Fatalf("modal=%v command=%v run=%v", model.modal != nil, command != nil, run)
+	}
+	model.modal.selected = 0
+	updated, command = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+	if model.modal != nil || command == nil || run {
+		t.Fatalf("modal=%v command=%v run=%v", model.modal != nil, command != nil, run)
+	}
+	command()
+	if !run {
+		t.Fatal("confirmed command did not run")
 	}
 }
 

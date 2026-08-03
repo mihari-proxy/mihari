@@ -17,6 +17,7 @@ const (
 	EventCore          EventKind = "core"
 	EventSubscriptions EventKind = "subscriptions"
 	EventProxies       EventKind = "proxies"
+	EventPreferences   EventKind = "preferences"
 	EventTraffic       EventKind = "traffic"
 	EventMemory        EventKind = "memory"
 	EventLog           EventKind = "log"
@@ -34,6 +35,7 @@ type Event struct {
 	Core          protocol.CoreStatus
 	Subscriptions protocol.SubscriptionList
 	Proxies       protocol.ProxyGroups
+	Preferences   protocol.TUIPreferences
 	Traffic       protocol.TrafficSample
 	Memory        protocol.MemorySample
 	Log           protocol.LogEntry
@@ -175,6 +177,19 @@ func (s *Session) supervise(ctx context.Context) {
 				continue
 			}
 			if !putOrdered(ctx, s.control, Event{Kind: EventProxies, Proxies: proxies}) {
+				return
+			}
+		}
+		if slices.Contains(status.Capabilities, protocol.CapabilityPreferences) {
+			preferences, preferencesErr := s.client.TUIPreferences(ctx)
+			if preferencesErr != nil {
+				attempt++
+				if !putOrdered(ctx, s.control, Event{Kind: EventReconnecting, Attempt: attempt, Err: preferencesErr}) || !waitBackoff(ctx, s.options.Backoff(attempt)) {
+					return
+				}
+				continue
+			}
+			if !putOrdered(ctx, s.control, Event{Kind: EventPreferences, Preferences: preferences}) {
 				return
 			}
 		}

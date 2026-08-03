@@ -1,5 +1,7 @@
 package ui
 
+import tea "charm.land/bubbletea/v2"
+
 type SizeClass uint8
 
 const (
@@ -30,3 +32,11 @@ const (
 type FocusRailMsg struct{}
 
 type InputModeMsg struct{ Mode InputMode }
+
+type ConfirmationRequestMsg struct {
+	Title     string
+	Object    string
+	Impact    string
+	Rollback  string
+	OnConfirm tea.Cmd
+}
