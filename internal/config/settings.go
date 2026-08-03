@@ -111,7 +111,10 @@ func acquireCreationLock(path string) (*os.File, error) {
 		if err == nil {
 			return file, nil
 		}
-		if !errors.Is(err, os.ErrExist) {
+		// Windows can report a sharing violation as os.ErrPermission while the
+		// winning process still has the lock file open. Treat that transient
+		// state exactly like os.ErrExist and retry within the same deadline.
+		if !errors.Is(err, os.ErrExist) && !errors.Is(err, os.ErrPermission) {
 			if _, statError := os.Stat(path); statError != nil {
 				return nil, fmt.Errorf("create settings lock: %w", err)
 			}
