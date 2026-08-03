@@ -65,6 +65,8 @@ const (
 	AllActiveConnections     = "All active connections"
 	CloseAllImpact           = "Every current connection will be interrupted."
 	CloseAllRollback         = "Closed connections cannot be restored."
+	GeoIPSectionTitle        = "GeoIP"
+	LoadingLabel             = "Loading…"
 )
 
 var connectionColumnLabels = map[string]string{

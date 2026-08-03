@@ -2,6 +2,7 @@ package connections
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -104,7 +105,58 @@ func TestModel_CloseAllRequestsConfirmation(t *testing.T) {
 	}
 }
 
-type fakeConnectionsClient struct{ closedID string }
+func TestModel_DetailLooksUpOnlyPublicDestinationAddresses(t *testing.T) {
+	client := &fakeConnectionsClient{geoIPResult: protocol.GeoIPLookupResult{Records: []protocol.GeoIPRecord{
+		{Address: "1.1.1.1", CountryCode: "AU", ASN: 13335, Organization: "Cloudflare, Inc."},
+		{Address: "8.8.8.8", CountryCode: "US", ASN: 15169, Organization: "Google LLC"},
+	}}}
+	model := New(client, nil)
+	model.SetSize(100, 28)
+	model.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{
+		ID: "one", Metadata: protocol.ConnectionMetadata{
+			SourceIP: "127.0.0.1", DestinationIP: "1.1.1.1", RemoteDestination: "8.8.8.8:443",
+		},
+	}}}, time.Unix(1, 0))
+	model.focus = pageFocus{kind: focusRow, rowID: "one"}
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("detail did not request geoip lookup")
+	}
+	message := command()
+	model.Update(message)
+	if got := strings.Join(client.geoIPAddresses, ","); got != "1.1.1.1,8.8.8.8" {
+		t.Fatalf("addresses=%q", got)
+	}
+	view := model.View()
+	for _, want := range []string{"GeoIP", "AU", "AS13335", "Cloudflare, Inc.", "Basic"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q: %s", want, view)
+		}
+	}
+}
+
+func TestModel_GeoIPFailureDegradesOnlyGeoIPCard(t *testing.T) {
+	client := &fakeConnectionsClient{geoIPErr: errors.New("database unavailable")}
+	model := New(client, nil)
+	model.SetSize(100, 28)
+	model.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{
+		ID: "one", Metadata: protocol.ConnectionMetadata{DestinationIP: "1.1.1.1"},
+	}}}, time.Unix(1, 0))
+	model.focus = pageFocus{kind: focusRow, rowID: "one"}
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model.Update(command())
+	view := model.View()
+	if !strings.Contains(view, "GeoIP") || !strings.Contains(view, "Unavailable") || !strings.Contains(view, "Basic") {
+		t.Fatalf("view=%s", view)
+	}
+}
+
+type fakeConnectionsClient struct {
+	closedID       string
+	geoIPAddresses []string
+	geoIPResult    protocol.GeoIPLookupResult
+	geoIPErr       error
+}
 
 func (c *fakeConnectionsClient) CloseConnection(_ context.Context, id string, _ protocol.MutationRequest) (protocol.MutationResult, error) {
 	c.closedID = id
@@ -117,4 +169,9 @@ func (c *fakeConnectionsClient) UpdateTUIPreferences(_ context.Context, request 
 
 func (c *fakeConnectionsClient) CloseAllConnections(context.Context, protocol.MutationRequest) (protocol.MutationResult, error) {
 	return protocol.MutationResult{Schema: "mihari/v1"}, nil
+}
+
+func (c *fakeConnectionsClient) LookupGeoIP(_ context.Context, request protocol.GeoIPLookupRequest) (protocol.GeoIPLookupResult, error) {
+	c.geoIPAddresses = append([]string(nil), request.Addresses...)
+	return c.geoIPResult, c.geoIPErr
 }

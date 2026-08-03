@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -29,6 +30,9 @@ func TestBuildRuntimeCreatesBootstrapAndSharedState(t *testing.T) {
 	}
 	if columns := assembly.Manager.TUIPreferences().ConnectionsColumns; len(columns) == 0 {
 		t.Fatal("runtime assembly did not open TUI preferences")
+	}
+	if !slices.Contains(assembly.Manager.Capabilities(), protocol.CapabilityGeoIP) {
+		t.Fatalf("capabilities=%v", assembly.Manager.Capabilities())
 	}
 	raw, err := os.ReadFile(paths.RuntimeConfig)
 	if err != nil {

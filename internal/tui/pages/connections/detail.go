@@ -16,6 +16,9 @@ type Detail struct {
 	closed     bool
 	tab        int
 	scroll     int
+	geoIP      []protocol.GeoIPRecord
+	geoIPReady bool
+	geoIPErr   error
 }
 
 func NewDetail(connection protocol.Connection, closed bool) *Detail {
@@ -47,6 +50,12 @@ func (d *Detail) Update(message tea.Msg) bool {
 func (d *Detail) Refresh(connection protocol.Connection, closed bool) {
 	d.connection = cloneConnection(connection)
 	d.closed = closed
+}
+
+func (d *Detail) SetGeoIP(records []protocol.GeoIPRecord, err error) {
+	d.geoIP = append([]protocol.GeoIPRecord(nil), records...)
+	d.geoIPReady = true
+	d.geoIPErr = err
 }
 
 func (d *Detail) View(width, height int) string {
@@ -86,16 +95,34 @@ func (d *Detail) View(width, height int) string {
 func (d *Detail) overview() string {
 	connection := d.connection
 	chain := strings.Join(connection.Chains, " \u2192 ")
-	return fmt.Sprintf("%s\nID  %s\nType  %s / %s\nRule  %s %s\nProcess  %s\nInbound  %s / %s\n\n%s\nSource  %s:%s\nHost  %s\nResolved  %s:%s\nRemote  %s\n\n%s\nUL  %d B - %d B/s\nDL  %d B - %d B/s\n\n%s\n%s  %s",
+	return fmt.Sprintf("%s\nID  %s\nType  %s / %s\nRule  %s %s\nProcess  %s\nInbound  %s / %s\n\n%s\nSource  %s:%s\nHost  %s\nResolved  %s:%s\nRemote  %s\n\n%s\n%s\n\n%s\nUL  %d B - %d B/s\nDL  %d B - %d B/s\n\n%s\n%s  %s",
 		ui.BasicSectionTitle, value(connection.ID), value(connection.Metadata.Type), value(connection.Metadata.Network),
 		value(connection.Rule), value(connection.RulePay), value(connection.Metadata.Process),
 		value(connection.Metadata.InboundName), value(connection.Metadata.InboundUser),
 		ui.SourceDestinationTitle, value(connection.Metadata.SourceIP), value(connection.Metadata.SourcePort),
 		value(connection.Metadata.Host), value(connection.Metadata.DestinationIP), value(connection.Metadata.DestinationPort),
-		value(connection.Metadata.RemoteDestination), ui.TrafficSectionTitle,
+		value(connection.Metadata.RemoteDestination), ui.GeoIPSectionTitle, d.geoIPView(), ui.TrafficSectionTitle,
 		connection.Upload, connection.UploadSpeed, connection.Download, connection.DownloadSpeed,
 		ui.OutboundSectionTitle, ui.ChainLabel, value(chain),
 	)
+}
+
+func (d *Detail) geoIPView() string {
+	if !d.geoIPReady {
+		return ui.LoadingLabel
+	}
+	if d.geoIPErr != nil || len(d.geoIP) == 0 {
+		return ui.UnavailableTitle
+	}
+	lines := make([]string, 0, len(d.geoIP))
+	for _, record := range d.geoIP {
+		asn := ui.MissingValue
+		if record.ASN != 0 {
+			asn = fmt.Sprintf("AS%d", record.ASN)
+		}
+		lines = append(lines, fmt.Sprintf("%s  %s  %s  %s", record.Address, value(record.CountryCode), asn, value(record.Organization)))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func value(input string) string {
