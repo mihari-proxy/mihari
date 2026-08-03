@@ -102,14 +102,18 @@ func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, 
 			}
 			if receipt.After.ActiveID == id {
 				if applyErr := m.commitRuntimeConfig(ctx, candidate.content); applyErr != nil {
-					_ = m.subscriptions.Rollback(receipt)
+					if rollbackErr := m.subscriptions.Rollback(receipt); rollbackErr != nil {
+						return snapshot, degradedConfigError()
+					}
 					return snapshot, applyErr
 				}
+				markConfigApplied(&snapshot)
 			}
 			m.syncSubscriptionState(&snapshot, receipt.After)
 			return snapshot, nil
 		})
 		if err != nil {
+			m.markConfigDegraded(ctx, err)
 			return nil, err
 		}
 		return findPublicProfile(m.subscriptions.Snapshot().Public(), id)
@@ -158,13 +162,17 @@ func (m *Manager) UseSubscription(ctx context.Context, operation Operation, id s
 				return snapshot, mutateErr
 			}
 			if applyErr := m.commitRuntimeConfig(ctx, candidate.content); applyErr != nil {
-				_ = m.subscriptions.Restore(before)
+				if restoreErr := m.subscriptions.Restore(before); restoreErr != nil {
+					return snapshot, degradedConfigError()
+				}
 				return snapshot, applyErr
 			}
+			markConfigApplied(&snapshot)
 			m.syncSubscriptionState(&snapshot, after)
 			return snapshot, nil
 		})
 		if err != nil {
+			m.markConfigDegraded(ctx, err)
 			return nil, err
 		}
 		return findPublicProfile(m.subscriptions.Snapshot().Public(), id)
@@ -204,14 +212,18 @@ func (m *Manager) RemoveSubscription(ctx context.Context, operation Operation, i
 				}
 				defer os.Remove(candidate.path)
 				if applyErr := m.commitRuntimeConfig(ctx, candidate.content); applyErr != nil {
-					_ = m.subscriptions.Restore(before)
+					if restoreErr := m.subscriptions.Restore(before); restoreErr != nil {
+						return snapshot, degradedConfigError()
+					}
 					return snapshot, applyErr
 				}
+				markConfigApplied(&snapshot)
 			}
 			m.syncSubscriptionState(&snapshot, after)
 			return snapshot, nil
 		})
 		if err != nil {
+			m.markConfigDegraded(ctx, err)
 			return nil, err
 		}
 		_ = os.Remove(m.subscriptions.CachePath(id))
@@ -288,14 +300,18 @@ func (m *Manager) mutateSubscription(ctx context.Context, prefix string, operati
 				}
 				defer os.Remove(candidate.path)
 				if applyErr := m.commitRuntimeConfig(ctx, candidate.content); applyErr != nil {
-					_ = m.subscriptions.Restore(before)
+					if restoreErr := m.subscriptions.Restore(before); restoreErr != nil {
+						return snapshot, degradedConfigError()
+					}
 					return snapshot, applyErr
 				}
+				markConfigApplied(&snapshot)
 			}
 			m.syncSubscriptionState(&snapshot, after)
 			return snapshot, nil
 		})
 		if err != nil {
+			m.markConfigDegraded(ctx, err)
 			return nil, err
 		}
 		return findPublicProfile(m.subscriptions.Snapshot().Public(), id)
@@ -430,4 +446,28 @@ func findPublicProfile(catalog subscription.PublicCatalog, id string) (subscript
 
 func subscriptionsUnavailable() error {
 	return protocol.APIError{Code: protocol.CodeInvalidState, Message: "subscription manager is unavailable"}
+}
+
+func markConfigApplied(snapshot *state.Snapshot) {
+	nextRevision := snapshot.Revision + 1
+	snapshot.Config = state.ConfigState{Status: "ok", DesiredRevision: nextRevision, ObservedRevision: nextRevision}
+}
+
+func (m *Manager) markConfigDegraded(ctx context.Context, err error) {
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Details == nil || apiError.Details["degraded"] != true {
+		return
+	}
+	_, _ = m.coordinator.Do(ctx, state.CommandMeta{Source: "runtime"}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		snapshot.Health = "degraded"
+		snapshot.Config = state.ConfigState{
+			Status: "degraded", DesiredRevision: snapshot.Revision + 1,
+			ObservedRevision: snapshot.Revision, LastError: "generated configuration rollback could not be confirmed",
+		}
+		return snapshot, nil
+	})
+}
+
+func degradedConfigError() error {
+	return protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription state rollback failed", Details: map[string]any{"degraded": true}}
 }

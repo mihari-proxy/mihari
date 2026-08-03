@@ -144,4 +144,7 @@ func TestReloadFailureRollsBackSubscriptionActivation(t *testing.T) {
 	if got.ActiveID != "" || got.Profiles[0].Generation != 0 {
 		t.Fatalf("subscription state was not rolled back: %#v", got)
 	}
+	if snapshot := manager.Snapshot(); snapshot.Health != "degraded" || snapshot.Config.DesiredRevision <= snapshot.Config.ObservedRevision {
+		t.Fatalf("rollback failure was not published as degraded: %#v", snapshot)
+	}
 }

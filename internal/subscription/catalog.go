@@ -107,7 +107,7 @@ func (c *Catalog) Normalize() error {
 			}
 		}
 	}
-	if index := c.Index(c.ActiveID); index < 0 || !c.Profiles[index].Enabled {
+	if index := c.Index(c.ActiveID); index < 0 || !c.Profiles[index].Enabled || c.Profiles[index].Generation == 0 {
 		c.ActiveID = ""
 		for _, profile := range c.Profiles {
 			if profile.Enabled && profile.Generation > 0 {
