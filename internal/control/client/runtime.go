@@ -85,6 +85,27 @@ func (c *Client) Rules(ctx context.Context) (protocol.RuleList, error) {
 	return result, err
 }
 
+// GeoIPStatus returns daemon-owned local database health.
+func (c *Client) GeoIPStatus(ctx context.Context) (protocol.GeoIPStatus, error) {
+	var result protocol.GeoIPStatus
+	err := c.doRuntime(ctx, http.MethodGet, "/v1/geoip/status", nil, &result)
+	return result, err
+}
+
+// LookupGeoIP resolves a bounded batch through the daemon.
+func (c *Client) LookupGeoIP(ctx context.Context, request protocol.GeoIPLookupRequest) (protocol.GeoIPLookupResult, error) {
+	var result protocol.GeoIPLookupResult
+	err := c.doRuntime(ctx, http.MethodPost, "/v1/geoip/lookup", request, &result)
+	return result, err
+}
+
+// UpdateGeoIP requests a coordinated Country/ASN database refresh.
+func (c *Client) UpdateGeoIP(ctx context.Context, request protocol.MutationRequest) (protocol.GeoIPUpdateResult, error) {
+	var result protocol.GeoIPUpdateResult
+	err := c.doRuntime(ctx, http.MethodPost, "/v1/geoip/update", request, &result)
+	return result, err
+}
+
 func (c *Client) TUIPreferences(ctx context.Context) (protocol.TUIPreferences, error) {
 	var result protocol.TUIPreferences
 	err := c.doRuntime(ctx, http.MethodGet, "/v1/preferences/tui", nil, &result)

@@ -3,12 +3,14 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 
 	"github.com/LeeShunEE/mihari/internal/config"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/core"
+	"github.com/LeeShunEE/mihari/internal/geoip"
 	"github.com/LeeShunEE/mihari/internal/mihomo"
 	"github.com/LeeShunEE/mihari/internal/preferences"
 	"github.com/LeeShunEE/mihari/internal/state"
@@ -45,6 +47,20 @@ type Operation struct {
 	IfRevision *uint64
 }
 
+// GeoIPCandidate is the minimal prepared-pair contract used by the mutation coordinator.
+type GeoIPCandidate interface {
+	Identity() string
+	Valid() bool
+	Commit() error
+	Cleanup()
+}
+
+// GeoIPService is the local lookup and health boundary used by the runtime.
+type GeoIPService interface {
+	Status() geoip.Status
+	Lookup(netip.Addr) (geoip.Record, error)
+}
+
 type Options struct {
 	Store          *state.Store
 	Coordinator    *state.Coordinator
@@ -60,6 +76,8 @@ type Options struct {
 	StagingDir     string
 	ValidateConfig func(context.Context, string) error
 	RunScheduler   func(context.Context) error
+	GeoIP          GeoIPService
+	PrepareGeoIP   func(context.Context) (GeoIPCandidate, error)
 }
 
 type Manager struct {
@@ -77,6 +95,8 @@ type Manager struct {
 	stagingDir     string
 	validateConfig func(context.Context, string) error
 	runScheduler   func(context.Context) error
+	geoip          GeoIPService
+	prepareGeoIP   func(context.Context) (GeoIPCandidate, error)
 	maintenance    chan struct{}
 	installed      chan struct{}
 	closing        atomic.Bool
@@ -119,6 +139,8 @@ func New(options Options) *Manager {
 		stagingDir:     options.StagingDir,
 		validateConfig: options.ValidateConfig,
 		runScheduler:   options.RunScheduler,
+		geoip:          options.GeoIP,
+		prepareGeoIP:   options.PrepareGeoIP,
 		maintenance:    make(chan struct{}, 1),
 		installed:      make(chan struct{}, 1),
 		operations:     make(map[string]*operationEntry),
@@ -134,8 +156,20 @@ func New(options Options) *Manager {
 
 func (m *Manager) Run(ctx context.Context) error {
 	defer m.closing.Store(true)
+	if closer, ok := m.geoip.(interface{ Close() error }); ok {
+		defer closer.Close()
+	}
 	if m.runScheduler != nil {
-		go func() { _ = m.runScheduler(ctx) }()
+		schedulerCtx, cancelScheduler := context.WithCancel(ctx)
+		schedulerDone := make(chan struct{})
+		go func() {
+			defer close(schedulerDone)
+			_ = m.runScheduler(schedulerCtx)
+		}()
+		defer func() {
+			cancelScheduler()
+			<-schedulerDone
+		}()
 	}
 	shutdownObserved := make(chan struct{})
 	go func() {

@@ -6,10 +6,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/netip"
 	"sort"
 
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/core"
+	"github.com/LeeShunEE/mihari/internal/geoip"
 	"github.com/LeeShunEE/mihari/internal/mihomo"
 	runtimeapi "github.com/LeeShunEE/mihari/internal/runtime"
 	"github.com/LeeShunEE/mihari/internal/state"
@@ -32,6 +34,9 @@ type RuntimeAPI interface {
 	CloseAllConnections(context.Context, runtimeapi.Operation) error
 	Rules(context.Context) (mihomo.Rules, error)
 	Stream(context.Context, mihomo.StreamKind, func(json.RawMessage) error) error
+	GeoIPStatus(context.Context) (geoip.Status, error)
+	LookupGeoIP(context.Context, []netip.Addr) ([]geoip.Record, error)
+	UpdateGeoIP(context.Context, runtimeapi.Operation) (geoip.Status, error)
 }
 
 func (s *Server) runtimeRoutes(mux *http.ServeMux) {
@@ -49,6 +54,7 @@ func (s *Server) runtimeRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/streams/{kind}", s.stream)
 	s.subscriptionRoutes(mux)
 	s.preferencesRoutes(mux)
+	s.geoIPRoutes(mux)
 }
 
 func (s *Server) coreStatus(writer http.ResponseWriter, _ *http.Request) {

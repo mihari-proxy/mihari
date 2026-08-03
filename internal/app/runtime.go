@@ -5,11 +5,13 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/LeeShunEE/mihari/internal/config"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/core"
+	"github.com/LeeShunEE/mihari/internal/geoip"
 	"github.com/LeeShunEE/mihari/internal/mihomo"
 	"github.com/LeeShunEE/mihari/internal/platform"
 	"github.com/LeeShunEE/mihari/internal/preferences"
@@ -77,6 +79,11 @@ func BuildRuntime(paths platform.Paths, settings config.Settings, daemonVersion 
 	if err != nil {
 		return nil, err
 	}
+	geoIPService := geoip.New(geoip.ServiceOptions{
+		CountryPath: paths.GeoIPCountry,
+		ASNPath:     paths.GeoIPASN,
+		Downloader:  geoip.Downloader{StagingDir: paths.GeoIPStaging},
+	})
 	var manager *runtimeapi.Manager
 	coreSupervisor := supervisor.New(supervisor.Options{
 		Starter: supervisor.CommandStarter{
@@ -110,6 +117,10 @@ func BuildRuntime(paths platform.Paths, settings config.Settings, daemonVersion 
 		Controller:    controller,
 		Subscriptions: subscriptions,
 		Preferences:   tuiPreferences,
+		GeoIP:         geoIPService,
+		PrepareGeoIP: func(ctx context.Context) (runtimeapi.GeoIPCandidate, error) {
+			return geoIPService.PrepareUpdate(ctx)
+		},
 		Settings:      settings,
 		RuntimeConfig: paths.RuntimeConfig,
 		StagingDir:    paths.SubscriptionStaging,
@@ -117,16 +128,37 @@ func BuildRuntime(paths platform.Paths, settings config.Settings, daemonVersion 
 			return core.ValidateConfig(ctx, core.OSCommandRunner{}, paths.CoreBinary, paths.Root, candidatePath)
 		},
 		RunScheduler: func(ctx context.Context) error {
-			scheduler := subscription.NewScheduler(subscription.SchedulerOptions{
-				Snapshot: subscriptions.Snapshot,
-				Refresh: func(refreshContext context.Context, id string) error {
-					_, err := manager.RefreshSubscription(refreshContext, runtimeapi.Operation{
-						ID: "scheduler-" + id + "-" + time.Now().UTC().Format("20060102T150405.000000000"), Source: "scheduler",
-					}, id)
-					return err
-				},
-			})
-			return scheduler.Run(ctx)
+			var schedulers sync.WaitGroup
+			schedulers.Add(2)
+			go func() {
+				defer schedulers.Done()
+				scheduler := subscription.NewScheduler(subscription.SchedulerOptions{
+					Snapshot: subscriptions.Snapshot,
+					Refresh: func(refreshContext context.Context, id string) error {
+						_, err := manager.RefreshSubscription(refreshContext, runtimeapi.Operation{
+							ID: "scheduler-" + id + "-" + time.Now().UTC().Format("20060102T150405.000000000"), Source: "scheduler",
+						}, id)
+						return err
+					},
+				})
+				_ = scheduler.Run(ctx)
+			}()
+			go func() {
+				defer schedulers.Done()
+				scheduler := geoip.Scheduler{
+					NeedsUpdate: geoIPService.NeedsUpdate,
+					Refresh: func(refreshContext context.Context) error {
+						_, err := manager.UpdateGeoIP(refreshContext, runtimeapi.Operation{
+							ID: "scheduler-geoip-" + time.Now().UTC().Format("20060102T150405.000000000"), Source: "scheduler",
+						})
+						return err
+					},
+				}
+				_ = scheduler.Run(ctx)
+			}()
+			<-ctx.Done()
+			schedulers.Wait()
+			return nil
 		},
 		BinaryExists: func() bool {
 			info, err := os.Stat(paths.CoreBinary)

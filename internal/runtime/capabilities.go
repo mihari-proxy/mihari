@@ -14,5 +14,8 @@ func (m *Manager) Capabilities() []string {
 	if m.preferences != nil {
 		capabilities = append(capabilities, protocol.CapabilityPreferences)
 	}
+	if m.geoip != nil {
+		capabilities = append(capabilities, protocol.CapabilityGeoIP)
+	}
 	return capabilities
 }

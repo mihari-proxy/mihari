@@ -53,6 +53,8 @@ mihari sub remove ID --yes
 
 Subscription URLs are stored only in the daemon-private catalog and are omitted from list/show responses and normal errors. Each valid profile has an independent cache, so `sub use` works without provider network access. Generated configuration always restores Mihari's managed loopback controller, secret, and port invariants before `mihomo -t` and reload.
 
+GeoIP connection details are resolved locally by the daemon. Country and ASN MMDB files are downloaded from the public `Loyalsoldier/geoip` release branch, verified against the matching `.sha256sum` files, validated as MMDB databases, and refreshed when either local file is missing or at least 30 days old. A failed refresh retains the previous valid database pair and does not disable other connection details.
+
 `--json` emits a versioned success or error envelope and stable process exit codes for automation.
 
 ## Platform targets

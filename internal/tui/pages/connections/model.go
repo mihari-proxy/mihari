@@ -3,6 +3,8 @@ package connections
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -18,6 +20,7 @@ type Client interface {
 	CloseConnection(context.Context, string, protocol.MutationRequest) (protocol.MutationResult, error)
 	CloseAllConnections(context.Context, protocol.MutationRequest) (protocol.MutationResult, error)
 	UpdateTUIPreferences(context.Context, protocol.UpdateTUIPreferencesRequest) (protocol.TUIPreferences, error)
+	LookupGeoIP(context.Context, protocol.GeoIPLookupRequest) (protocol.GeoIPLookupResult, error)
 }
 
 type datasetKind uint8
@@ -89,6 +92,12 @@ type preferencesResultMsg struct {
 	err         error
 }
 
+type geoIPResultMsg struct {
+	connectionID string
+	records      []protocol.GeoIPRecord
+	err          error
+}
+
 func New(client Client, newOperationID func() string) *Model {
 	if newOperationID == nil {
 		newOperationID = defaultConnectionOperationID
@@ -138,15 +147,6 @@ func (m *Model) Observe(snapshot protocol.ConnectionList, observedAt time.Time) 
 }
 
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
-	if m.detail != nil {
-		if m.detail.Update(message) {
-			m.detail = nil
-		}
-		return m, nil
-	}
-	if m.columnsOpen {
-		return m.updateColumns(message)
-	}
 	switch typed := message.(type) {
 	case closeResultMsg:
 		delete(m.closing, typed.id)
@@ -157,6 +157,20 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		m.columnsOpen = false
 		return m, nil
+	case geoIPResultMsg:
+		if m.detail != nil && m.detail.connection.ID == typed.connectionID {
+			m.detail.SetGeoIP(typed.records, typed.err)
+		}
+		return m, nil
+	}
+	if m.detail != nil {
+		if m.detail.Update(message) {
+			m.detail = nil
+		}
+		return m, nil
+	}
+	if m.columnsOpen {
+		return m.updateColumns(message)
 	}
 	if m.searching {
 		return m.updateSearch(message)
@@ -261,7 +275,7 @@ func (m *Model) updateRow(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 		}
 	case "enter":
 		if index >= 0 {
-			m.detail = NewDetail(rows[index], m.dataset == datasetClosed)
+			return m, m.openDetail(rows[index])
 		}
 	case "x":
 		if m.dataset == datasetActive && index >= 0 {
@@ -269,6 +283,49 @@ func (m *Model) updateRow(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) openDetail(connection protocol.Connection) tea.Cmd {
+	m.detail = NewDetail(connection, m.dataset == datasetClosed)
+	addresses := publicConnectionAddresses(connection)
+	if m.client == nil || len(addresses) == 0 {
+		m.detail.SetGeoIP(nil, nil)
+		return nil
+	}
+	connectionID := connection.ID
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		result, err := m.client.LookupGeoIP(ctx, protocol.GeoIPLookupRequest{Addresses: addresses})
+		return geoIPResultMsg{connectionID: connectionID, records: result.Records, err: err}
+	}
+}
+
+func publicConnectionAddresses(connection protocol.Connection) []string {
+	candidates := []string{connection.Metadata.DestinationIP}
+	remote := connection.Metadata.RemoteDestination
+	if host, _, err := net.SplitHostPort(remote); err == nil {
+		remote = host
+	}
+	candidates = append(candidates, strings.Trim(remote, "[]"))
+	result := make([]string, 0, len(candidates))
+	seen := make(map[netip.Addr]struct{}, len(candidates))
+	for _, raw := range candidates {
+		address, err := netip.ParseAddr(raw)
+		if err != nil {
+			continue
+		}
+		address = address.Unmap()
+		if !address.IsGlobalUnicast() || address.IsPrivate() || address.IsLoopback() || address.IsMulticast() || address.IsUnspecified() {
+			continue
+		}
+		if _, exists := seen[address]; exists {
+			continue
+		}
+		seen[address] = struct{}{}
+		result = append(result, address.String())
+	}
+	return result
 }
 
 func (m *Model) updateSearch(message tea.Msg) (ui.Page, tea.Cmd) {
