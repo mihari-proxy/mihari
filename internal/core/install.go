@@ -62,6 +62,13 @@ type Candidate struct {
 	cleanup    sync.Once
 }
 
+type PreparedCore interface {
+	Version() string
+	Updated() bool
+	Commit() (InstallResult, error)
+	Cleanup()
+}
+
 func (c *Candidate) Version() string { return c.version }
 
 func (c *Candidate) Updated() bool { return c.updated }
@@ -91,7 +98,7 @@ func (c *Candidate) Cleanup() {
 	})
 }
 
-func (i Installer) Prepare(ctx context.Context, request InstallRequest) (*Candidate, error) {
+func (i Installer) Prepare(ctx context.Context, request InstallRequest) (PreparedCore, error) {
 	release, err := i.latestRelease(ctx)
 	if err != nil {
 		return nil, err

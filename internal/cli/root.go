@@ -16,10 +16,26 @@ type StatusClient interface {
 	Status(context.Context) (protocol.Status, error)
 }
 
+type RuntimeClient interface {
+	Core(context.Context) (protocol.CoreStatus, error)
+	InstallCore(context.Context, protocol.MutationRequest) (protocol.CoreInstallResult, error)
+	RestartCore(context.Context, protocol.MutationRequest) (protocol.MutationResult, error)
+	ProxyGroups(context.Context) (protocol.ProxyGroups, error)
+	SelectProxy(context.Context, string, protocol.ProxySelectionRequest) (protocol.MutationResult, error)
+	DelayTest(context.Context, string, protocol.DelayTestRequest) (protocol.DelayResult, error)
+	Connections(context.Context) (protocol.ConnectionList, error)
+	CloseConnection(context.Context, string, protocol.MutationRequest) (protocol.MutationResult, error)
+	CloseAllConnections(context.Context, protocol.MutationRequest) (protocol.MutationResult, error)
+	Rules(context.Context) (protocol.RuleList, error)
+	Stream(context.Context, string, func(protocol.StreamEvent) error) error
+}
+
 type Dependencies struct {
-	StatusClient StatusClient
-	RunDaemon    func(context.Context) error
-	SetupError   error
+	StatusClient   StatusClient
+	RuntimeClient  RuntimeClient
+	RunDaemon      func(context.Context) error
+	NewOperationID func() string
+	SetupError     error
 }
 
 type runOptions struct {
@@ -70,6 +86,12 @@ func newRoot(dependencies Dependencies, options *runOptions) *cobra.Command {
 	})
 	root.AddCommand(newStatusCommand(dependencies, options))
 	root.AddCommand(newDaemonCommand(dependencies))
+	root.AddCommand(newCoreCommand(dependencies, options))
+	root.AddCommand(newProxyCommand(dependencies, options))
+	root.AddCommand(newConnectionsCommand(dependencies, options))
+	root.AddCommand(newRulesCommand(dependencies, options))
+	root.AddCommand(newStreamCommand("traffic", dependencies, options))
+	root.AddCommand(newStreamCommand("logs", dependencies, options))
 	return root
 }
 
@@ -92,4 +114,8 @@ func wantsJSON(args []string) bool {
 		}
 	}
 	return false
+}
+
+func invalidArgument(message string) error {
+	return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: message}
 }
