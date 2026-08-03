@@ -7,13 +7,17 @@ import (
 )
 
 type Paths struct {
-	Root          string
-	Bin           string
-	CoreBinary    string
-	RuntimeConfig string
-	Settings      string
-	Log           string
-	Staging       string
+	Root                string
+	Bin                 string
+	CoreBinary          string
+	RuntimeConfig       string
+	Settings            string
+	Log                 string
+	Staging             string
+	Subscriptions       string
+	SubscriptionCatalog string
+	SubscriptionCache   string
+	SubscriptionStaging string
 }
 
 func NewPaths(root string) Paths {
@@ -22,13 +26,17 @@ func NewPaths(root string) Paths {
 		coreName += ".exe"
 	}
 	return Paths{
-		Root:          root,
-		Bin:           filepath.Join(root, "bin"),
-		CoreBinary:    filepath.Join(root, "bin", coreName),
-		RuntimeConfig: filepath.Join(root, "runtime", "config.yaml"),
-		Settings:      filepath.Join(root, "mihari.yaml"),
-		Log:           filepath.Join(root, "logs", "mihari.log"),
-		Staging:       filepath.Join(root, "staging"),
+		Root:                root,
+		Bin:                 filepath.Join(root, "bin"),
+		CoreBinary:          filepath.Join(root, "bin", coreName),
+		RuntimeConfig:       filepath.Join(root, "runtime", "config.yaml"),
+		Settings:            filepath.Join(root, "mihari.yaml"),
+		Log:                 filepath.Join(root, "logs", "mihari.log"),
+		Staging:             filepath.Join(root, "staging"),
+		Subscriptions:       filepath.Join(root, "subscriptions"),
+		SubscriptionCatalog: filepath.Join(root, "subscriptions", "catalog.yaml"),
+		SubscriptionCache:   filepath.Join(root, "subscriptions", "cache"),
+		SubscriptionStaging: filepath.Join(root, "staging", "subscriptions"),
 	}
 }
 
@@ -55,7 +63,7 @@ func defaultDataRoot() string {
 }
 
 func (p Paths) EnsureDirs() error {
-	for _, path := range []string{p.Root, p.Bin, filepath.Dir(p.RuntimeConfig), filepath.Dir(p.Log), p.Staging} {
+	for _, path := range []string{p.Root, p.Bin, filepath.Dir(p.RuntimeConfig), filepath.Dir(p.Log), p.Staging, p.Subscriptions, p.SubscriptionCache, p.SubscriptionStaging} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			return err
 		}
