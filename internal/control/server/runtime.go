@@ -26,6 +26,7 @@ type RuntimeAPI interface {
 	Proxies(context.Context) (mihomo.Proxies, error)
 	SelectProxy(context.Context, runtimeapi.Operation, string, string) error
 	DelayGroup(context.Context, string, string, int) (mihomo.Delays, error)
+	DelayProxy(context.Context, string, string, int) (uint16, error)
 	Connections(context.Context) (mihomo.Connections, error)
 	CloseConnection(context.Context, runtimeapi.Operation, string) error
 	CloseAllConnections(context.Context, runtimeapi.Operation) error
@@ -40,6 +41,7 @@ func (s *Server) runtimeRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/proxies", s.proxies)
 	mux.HandleFunc("PUT /v1/proxy-groups/{name}", s.selectProxy)
 	mux.HandleFunc("POST /v1/proxy-groups/{name}/delay-test", s.delayTest)
+	mux.HandleFunc("POST /v1/proxies/{name}/delay-test", s.delayProxy)
 	mux.HandleFunc("GET /v1/connections", s.connections)
 	mux.HandleFunc("DELETE /v1/connections/{id}", s.closeConnection)
 	mux.HandleFunc("DELETE /v1/connections", s.closeAllConnections)
@@ -104,7 +106,15 @@ func (s *Server) proxies(writer http.ResponseWriter, request *http.Request) {
 		if len(proxy.All) == 0 {
 			continue
 		}
-		groups = append(groups, protocol.ProxyGroup{Name: proxy.Name, Type: proxy.Type, Now: proxy.Now, All: append([]string(nil), proxy.All...)})
+		nodes := make([]protocol.ProxyNode, 0, len(proxy.All))
+		for _, name := range proxy.All {
+			node := upstream.Proxies[name]
+			nodes = append(nodes, protocol.ProxyNode{Name: name, Type: node.Type, UDP: node.UDP, XUDP: node.XUDP})
+		}
+		groups = append(groups, protocol.ProxyGroup{
+			Name: proxy.Name, Type: proxy.Type, Now: proxy.Now,
+			All: append([]string(nil), proxy.All...), Nodes: nodes,
+		})
 	}
 	sort.Slice(groups, func(i, j int) bool { return groups[i].Name < groups[j].Name })
 	writeJSON(writer, http.StatusOK, protocol.ProxyGroups{Schema: "mihari/v1", Groups: groups})
@@ -147,6 +157,27 @@ func (s *Server) delayTest(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeJSON(writer, http.StatusOK, protocol.DelayResult{Schema: "mihari/v1", Delays: map[string]uint16(delays)})
+}
+
+func (s *Server) delayProxy(writer http.ResponseWriter, request *http.Request) {
+	if !s.requireRuntime(writer) {
+		return
+	}
+	var body protocol.DelayTestRequest
+	if !decodeControlJSON(writer, request, &body) {
+		return
+	}
+	if body.URL == "" || body.TimeoutMilliseconds <= 0 || body.TimeoutMilliseconds > 60_000 {
+		writeInvalidArgument(writer, "delay test URL and timeout are invalid")
+		return
+	}
+	name := request.PathValue("name")
+	delay, err := s.runtime.DelayProxy(request.Context(), name, body.URL, body.TimeoutMilliseconds)
+	if err != nil {
+		writeControlError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, protocol.DelayResult{Schema: "mihari/v1", Delays: map[string]uint16{name: delay}})
 }
 
 func (s *Server) connections(writer http.ResponseWriter, request *http.Request) {
