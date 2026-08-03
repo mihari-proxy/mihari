@@ -13,18 +13,20 @@ import (
 )
 
 type Options struct {
-	Token string
-	Store *state.Store
+	Token   string
+	Store   *state.Store
+	Runtime RuntimeAPI
 }
 
 type Server struct {
-	token string
-	store *state.Store
-	http  *http.Server
+	token   string
+	store   *state.Store
+	runtime RuntimeAPI
+	http    *http.Server
 }
 
 func New(options Options) *Server {
-	server := &Server{token: options.Token, store: options.Store}
+	server := &Server{token: options.Token, store: options.Store, runtime: options.Runtime}
 	server.http = &http.Server{
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -35,6 +37,7 @@ func New(options Options) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/status", s.status)
+	s.runtimeRoutes(mux)
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		want := "Bearer " + s.token
 		if subtle.ConstantTimeCompare([]byte(request.Header.Get("Authorization")), []byte(want)) != 1 {
