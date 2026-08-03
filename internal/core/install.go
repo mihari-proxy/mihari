@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
@@ -45,48 +46,99 @@ type InstallResult struct {
 }
 
 func (i Installer) Install(ctx context.Context, request InstallRequest) (InstallResult, error) {
-	release, err := i.latestRelease(ctx)
+	candidate, err := i.Prepare(ctx, request)
 	if err != nil {
 		return InstallResult{}, err
 	}
+	defer candidate.Cleanup()
+	return candidate.Commit()
+}
+
+type Candidate struct {
+	path       string
+	binaryPath string
+	version    string
+	updated    bool
+	cleanup    sync.Once
+}
+
+func (c *Candidate) Version() string { return c.version }
+
+func (c *Candidate) Updated() bool { return c.updated }
+
+func (c *Candidate) Commit() (InstallResult, error) {
+	if !c.updated {
+		return InstallResult{Version: c.version, Updated: false}, nil
+	}
+	if c.path == "" {
+		return InstallResult{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo candidate is unavailable"}
+	}
+	if err := os.MkdirAll(filepath.Dir(c.binaryPath), 0o700); err != nil {
+		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core binary directory"}
+	}
+	if err := replaceBinary(c.path, c.binaryPath); err != nil {
+		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "replace mihomo core"}
+	}
+	c.path = ""
+	return InstallResult{Version: c.version, Updated: true}, nil
+}
+
+func (c *Candidate) Cleanup() {
+	c.cleanup.Do(func() {
+		if c.path != "" {
+			_ = os.Remove(c.path)
+		}
+	})
+}
+
+func (i Installer) Prepare(ctx context.Context, request InstallRequest) (*Candidate, error) {
+	release, err := i.latestRelease(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if request.CurrentVersion == release.TagName {
 		if info, err := os.Stat(request.BinaryPath); err == nil && !info.IsDir() {
-			return InstallResult{Version: release.TagName, Updated: false}, nil
+			return &Candidate{binaryPath: request.BinaryPath, version: release.TagName, updated: false}, nil
 		}
 	}
 	asset, err := SelectAsset(release, i.targetOS(), i.targetArch())
 	if err != nil {
-		return InstallResult{}, err
+		return nil, err
 	}
 	if asset.Size < 0 || asset.Size > maxCoreArchiveSize {
-		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo asset is too large"}
+		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo asset is too large"}
 	}
 	if err := os.MkdirAll(request.StagingDir, 0o700); err != nil {
-		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core staging directory"}
+		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core staging directory"}
 	}
 	archive, err := os.CreateTemp(request.StagingDir, ".mihomo-download-*")
 	if err != nil {
-		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core download file"}
+		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core download file"}
 	}
 	archivePath := archive.Name()
 	archive.Close()
 	defer os.Remove(archivePath)
 	if err := i.download(ctx, asset, archivePath); err != nil {
-		return InstallResult{}, err
+		return nil, err
 	}
 
 	candidate, err := os.CreateTemp(request.StagingDir, ".mihomo-candidate-*")
 	if err != nil {
-		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core candidate"}
+		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core candidate"}
 	}
 	candidatePath := candidate.Name()
 	candidate.Close()
-	defer os.Remove(candidatePath)
+	keepCandidate := false
+	defer func() {
+		if !keepCandidate {
+			_ = os.Remove(candidatePath)
+		}
+	}()
 	if err := extractAsset(archivePath, asset.Name, candidatePath); err != nil {
-		return InstallResult{}, err
+		return nil, err
 	}
 	if err := os.Chmod(candidatePath, 0o700); err != nil {
-		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "set core executable permissions"}
+		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "set core executable permissions"}
 	}
 	runner := i.Runner
 	if runner == nil {
@@ -94,18 +146,13 @@ func (i Installer) Install(ctx context.Context, request InstallRequest) (Install
 	}
 	versionOutput, err := runner.Run(ctx, candidatePath, "-v")
 	if err != nil || len(strings.TrimSpace(string(versionOutput))) == 0 {
-		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo candidate did not start"}
+		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo candidate did not start"}
 	}
 	if err := ValidateConfig(ctx, runner, candidatePath, request.DataDir, request.ConfigPath); err != nil {
-		return InstallResult{}, err
+		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(request.BinaryPath), 0o700); err != nil {
-		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core binary directory"}
-	}
-	if err := replaceBinary(candidatePath, request.BinaryPath); err != nil {
-		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "replace mihomo core"}
-	}
-	return InstallResult{Version: release.TagName, Updated: true}, nil
+	keepCandidate = true
+	return &Candidate{path: candidatePath, binaryPath: request.BinaryPath, version: release.TagName, updated: true}, nil
 }
 
 func (i Installer) download(ctx context.Context, asset Asset, destination string) error {

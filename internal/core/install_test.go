@@ -114,6 +114,38 @@ func TestInstallerPreservesOldBinaryOnCorruptArchive(t *testing.T) {
 	}
 }
 
+func TestInstallerPrepareDoesNotReplaceUntilCommit(t *testing.T) {
+	archive := gzipFixture(t, []byte("new-binary"))
+	server := releaseFixture(t, "mihomo-linux-amd64-compatible-v1.19.0.gz", archive)
+	defer server.Close()
+	root := t.TempDir()
+	binaryPath := filepath.Join(root, "mihomo")
+	if err := os.WriteFile(binaryPath, []byte("old-binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	installer := Installer{HTTPClient: server.Client(), APIBase: server.URL, Repository: "MetaCubeX/mihomo", GOOS: "linux", GOARCH: "amd64", Runner: &recordingRunner{output: []byte("Mihomo Meta v1.19.0")}}
+	candidate, err := installer.Prepare(context.Background(), InstallRequest{BinaryPath: binaryPath, DataDir: root, ConfigPath: filepath.Join(root, "config.yaml"), StagingDir: filepath.Join(root, "staging")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer candidate.Cleanup()
+	before, err := os.ReadFile(binaryPath)
+	if err != nil || string(before) != "old-binary" {
+		t.Fatalf("before commit=%q err=%v", before, err)
+	}
+	result, err := candidate.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Version != "v1.19.0" || !result.Updated {
+		t.Fatalf("result=%#v", result)
+	}
+	after, err := os.ReadFile(binaryPath)
+	if err != nil || string(after) != "new-binary" {
+		t.Fatalf("after commit=%q err=%v", after, err)
+	}
+}
+
 func TestInstallerRejectsUnsafeZipMember(t *testing.T) {
 	var archive bytes.Buffer
 	writer := zip.NewWriter(&archive)
