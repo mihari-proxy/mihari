@@ -6,10 +6,12 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/LeeShunEE/mihari/internal/config"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/core"
 	"github.com/LeeShunEE/mihari/internal/mihomo"
 	"github.com/LeeShunEE/mihari/internal/state"
+	"github.com/LeeShunEE/mihari/internal/subscription"
 	"github.com/LeeShunEE/mihari/internal/supervisor"
 )
 
@@ -49,6 +51,11 @@ type Options struct {
 	Supervisor     CoreSupervisor
 	Controller     Controller
 	BinaryExists   func() bool
+	Subscriptions  *subscription.Service
+	Settings       config.Settings
+	RuntimeConfig  string
+	StagingDir     string
+	ValidateConfig func(context.Context, string) error
 }
 
 type Manager struct {
@@ -59,6 +66,11 @@ type Manager struct {
 	supervisor     CoreSupervisor
 	controller     Controller
 	binaryExists   func() bool
+	subscriptions  *subscription.Service
+	settings       config.Settings
+	runtimeConfig  string
+	stagingDir     string
+	validateConfig func(context.Context, string) error
 	maintenance    chan struct{}
 	installed      chan struct{}
 	closing        atomic.Bool
@@ -94,11 +106,21 @@ func New(options Options) *Manager {
 		supervisor:     options.Supervisor,
 		controller:     options.Controller,
 		binaryExists:   binaryExists,
+		subscriptions:  options.Subscriptions,
+		settings:       options.Settings,
+		runtimeConfig:  options.RuntimeConfig,
+		stagingDir:     options.StagingDir,
+		validateConfig: options.ValidateConfig,
 		maintenance:    make(chan struct{}, 1),
 		installed:      make(chan struct{}, 1),
 		operations:     make(map[string]*operationEntry),
 	}
 	manager.maintenance <- struct{}{}
+	if manager.subscriptions != nil {
+		snapshot := manager.store.Load()
+		manager.syncSubscriptionState(&snapshot, manager.subscriptions.Snapshot())
+		manager.store.Store(snapshot)
+	}
 	return manager
 }
 
