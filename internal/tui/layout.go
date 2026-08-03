@@ -17,6 +17,8 @@ type Layout struct {
 	ContentWidth  int
 	ContentHeight int
 	FooterHeight  int
+	RailNavHeight int
+	MonitorHeight int
 }
 
 func Classify(width, height int) ui.SizeClass {
@@ -41,5 +43,9 @@ func calculateLayout(width, height int) Layout {
 	}
 	result.ContentWidth = max(1, width-result.RailWidth)
 	result.ContentHeight = max(1, height-result.FooterHeight)
+	result.RailNavHeight = min(result.ContentHeight, 11)
+	if class == ui.Full {
+		result.MonitorHeight = max(0, result.ContentHeight-result.RailNavHeight)
+	}
 	return result
 }

@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -13,6 +14,8 @@ type EventKind string
 
 const (
 	EventStatus        EventKind = "status"
+	EventCore          EventKind = "core"
+	EventSubscriptions EventKind = "subscriptions"
 	EventTraffic       EventKind = "traffic"
 	EventMemory        EventKind = "memory"
 	EventLog           EventKind = "log"
@@ -23,15 +26,17 @@ const (
 )
 
 type Event struct {
-	Kind        EventKind
-	ObservedAt  time.Time
-	Attempt     int
-	Status      protocol.Status
-	Traffic     protocol.TrafficSample
-	Memory      protocol.MemorySample
-	Log         protocol.LogEntry
-	Connections protocol.ConnectionList
-	Err         error
+	Kind          EventKind
+	ObservedAt    time.Time
+	Attempt       int
+	Status        protocol.Status
+	Core          protocol.CoreStatus
+	Subscriptions protocol.SubscriptionList
+	Traffic       protocol.TrafficSample
+	Memory        protocol.MemorySample
+	Log           protocol.LogEntry
+	Connections   protocol.ConnectionList
+	Err           error
 }
 
 type Options struct {
@@ -129,7 +134,36 @@ func (s *Session) supervise(ctx context.Context) {
 			continue
 		}
 		attempt = 0
-		if !putOrdered(ctx, s.control, Event{Kind: EventStatus, Status: status}) || !putOrdered(ctx, s.control, Event{Kind: EventConnected}) {
+		if !putOrdered(ctx, s.control, Event{Kind: EventStatus, Status: status}) {
+			return
+		}
+		if slices.Contains(status.Capabilities, protocol.CapabilityCore) {
+			coreStatus, coreErr := s.client.Core(ctx)
+			if coreErr != nil {
+				attempt++
+				if !putOrdered(ctx, s.control, Event{Kind: EventReconnecting, Attempt: attempt, Err: coreErr}) || !waitBackoff(ctx, s.options.Backoff(attempt)) {
+					return
+				}
+				continue
+			}
+			if !putOrdered(ctx, s.control, Event{Kind: EventCore, Core: coreStatus}) {
+				return
+			}
+		}
+		if slices.Contains(status.Capabilities, protocol.CapabilitySubscriptions) {
+			subscriptions, subscriptionsErr := s.client.Subscriptions(ctx)
+			if subscriptionsErr != nil {
+				attempt++
+				if !putOrdered(ctx, s.control, Event{Kind: EventReconnecting, Attempt: attempt, Err: subscriptionsErr}) || !waitBackoff(ctx, s.options.Backoff(attempt)) {
+					return
+				}
+				continue
+			}
+			if !putOrdered(ctx, s.control, Event{Kind: EventSubscriptions, Subscriptions: subscriptions}) {
+				return
+			}
+		}
+		if !putOrdered(ctx, s.control, Event{Kind: EventConnected}) {
 			return
 		}
 		if err := s.runStreams(ctx); err == nil || ctx.Err() != nil {
