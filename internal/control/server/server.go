@@ -54,14 +54,21 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) status(writer http.ResponseWriter, _ *http.Request) {
 	snapshot := s.store.Load()
-	writeJSON(writer, http.StatusOK, protocol.Status{
+	status := protocol.Status{
 		Schema:          "mihari/v1",
 		ProtocolVersion: "v1",
 		DaemonVersion:   snapshot.Version,
 		Revision:        snapshot.Revision,
 		Health:          snapshot.Health,
 		StartedAt:       snapshot.StartedAt,
-	})
+	}
+	if snapshot.Config.Status != "" {
+		status.Config = &protocol.ConfigStatus{
+			Status: snapshot.Config.Status, DesiredRevision: snapshot.Config.DesiredRevision,
+			ObservedRevision: snapshot.Config.ObservedRevision, LastError: snapshot.Config.LastError,
+		}
+	}
+	writeJSON(writer, http.StatusOK, status)
 }
 
 func (s *Server) Serve(ctx context.Context, listener net.Listener) error {

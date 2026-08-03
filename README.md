@@ -2,7 +2,7 @@
 
 Mihari is a new, independent local manager for mihomo. It targets Windows, Linux, and macOS equally and is designed around a single daemon-owned control plane shared by the CLI, the future TUI, and browser panels.
 
-The current runtime slice provides an authenticated local daemon control API over a Windows named pipe or Unix domain socket. It can install, validate, supervise, query, and restart mihomo while keeping the controller on loopback. Mihari's control API does not bind a TCP port.
+The current runtime slice provides an authenticated local daemon control API over a Windows named pipe or Unix domain socket. It can install, validate, supervise, query, and restart mihomo while keeping the controller on loopback. It also owns subscription persistence, bounded automatic refresh, validated config generation, reload rollback, and offline profile switching. Mihari's control API does not bind a TCP port.
 
 ## Current commands
 
@@ -37,6 +37,22 @@ mihari traffic --follow
 mihari logs --follow
 ```
 
+Manage subscriptions through the same daemon mutation coordinator:
+
+```console
+mihari sub add NAME URL
+mihari sub list
+mihari sub show ID
+mihari sub refresh ID
+mihari sub use ID
+mihari sub enable ID
+mihari sub disable ID
+mihari sub set ID --interval 6h --auto-refresh=true
+mihari sub remove ID --yes
+```
+
+Subscription URLs are stored only in the daemon-private catalog and are omitted from list/show responses and normal errors. Each valid profile has an independent cache, so `sub use` works without provider network access. Generated configuration always restores Mihari's managed loopback controller, secret, and port invariants before `mihomo -t` and reload.
+
 `--json` emits a versioned success or error envelope and stable process exit codes for automation.
 
 ## Platform targets
@@ -57,4 +73,4 @@ go vet ./...
 
 The architecture and staged delivery scope are recorded in the [architecture design](docs/superpowers/specs/2026-08-03-mihari-architecture-design.md) and [delivery roadmap](docs/superpowers/plans/2026-08-03-mihari-delivery-roadmap.md).
 
-Subscriptions, TUI, and Web panels remain planned work and are not implemented yet.
+The implementation is intentionally stopped at the Phase 3 audit boundary. TUI interaction design and Web-panel support are the next phases and are not implemented yet.
