@@ -33,6 +33,8 @@ type RuntimeAPI interface {
 	CloseConnection(context.Context, runtimeapi.Operation, string) error
 	CloseAllConnections(context.Context, runtimeapi.Operation) error
 	Rules(context.Context) (mihomo.Rules, error)
+	RuleProviders(context.Context) (mihomo.RuleProviders, error)
+	UpdateRuleProvider(context.Context, runtimeapi.Operation, string) error
 	Stream(context.Context, mihomo.StreamKind, func(json.RawMessage) error) error
 	GeoIPStatus(context.Context) (geoip.Status, error)
 	LookupGeoIP(context.Context, []netip.Addr) ([]geoip.Record, error)
@@ -51,6 +53,8 @@ func (s *Server) runtimeRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /v1/connections/{id}", s.closeConnection)
 	mux.HandleFunc("DELETE /v1/connections", s.closeAllConnections)
 	mux.HandleFunc("GET /v1/rules", s.rules)
+	mux.HandleFunc("GET /v1/rule-providers", s.ruleProviders)
+	mux.HandleFunc("POST /v1/rule-providers/{name}/update", s.updateRuleProvider)
 	mux.HandleFunc("GET /v1/streams/{kind}", s.stream)
 	s.subscriptionRoutes(mux)
 	s.preferencesRoutes(mux)
@@ -263,6 +267,57 @@ func (s *Server) rules(writer http.ResponseWriter, request *http.Request) {
 		rules = append(rules, protocol.Rule{Type: rule.Type, Payload: rule.Payload, Proxy: rule.Proxy})
 	}
 	writeJSON(writer, http.StatusOK, protocol.RuleList{Schema: "mihari/v1", Rules: rules})
+}
+
+func (s *Server) ruleProviders(writer http.ResponseWriter, request *http.Request) {
+	if !s.requireRuntime(writer) {
+		return
+	}
+	upstream, err := s.runtime.RuleProviders(request.Context())
+	if err != nil {
+		writeControlError(writer, err)
+		return
+	}
+	names := make([]string, 0, len(upstream.Providers))
+	for name := range upstream.Providers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	providers := make([]protocol.RuleProvider, 0, len(names))
+	for _, name := range names {
+		provider := upstream.Providers[name]
+		typeName := provider.VehicleType
+		if typeName == "" {
+			typeName = provider.Type
+		}
+		providers = append(providers, protocol.RuleProvider{
+			Name: provider.Name, Type: typeName, Behavior: provider.Behavior, Format: provider.Format,
+			RuleCount: provider.RuleCount, UpdatedAt: provider.UpdatedAt, Status: "Ready",
+		})
+	}
+	writeJSON(writer, http.StatusOK, protocol.RuleProviderList{Schema: "mihari/v1", Revision: s.runtime.Snapshot().Revision, Providers: providers})
+}
+
+func (s *Server) updateRuleProvider(writer http.ResponseWriter, request *http.Request) {
+	if !s.requireRuntime(writer) {
+		return
+	}
+	name := request.PathValue("name")
+	if name == "" {
+		writeInvalidArgument(writer, "rule provider name is required")
+		return
+	}
+	var body protocol.MutationRequest
+	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+		return
+	}
+	if err := s.runtime.UpdateRuleProvider(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, name); err != nil {
+		writeControlError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, protocol.MutationResult{
+		Schema: "mihari/v1", OperationID: body.OperationID, Revision: s.runtime.Snapshot().Revision,
+	})
 }
 
 func (s *Server) stream(writer http.ResponseWriter, request *http.Request) {

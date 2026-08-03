@@ -1,10 +1,18 @@
 # mihari
 
-Mihari is a new, independent local manager for mihomo. It targets Windows, Linux, and macOS equally and is designed around a single daemon-owned control plane shared by the CLI, the future TUI, and browser panels.
+Mihari is a new, independent local manager for mihomo. It targets Windows, Linux, and macOS equally and is designed around a single daemon-owned control plane shared by the CLI, TUI, and browser panels.
 
 The current runtime slice provides an authenticated local daemon control API over a Windows named pipe or Unix domain socket. It can install, validate, supervise, query, and restart mihomo while keeping the controller on loopback. It also owns subscription persistence, bounded automatic refresh, validated config generation, reload rollback, and offline profile switching. Mihari's control API does not bind a TCP port.
 
 ## Current commands
+
+Launch the interactive TUI:
+
+```console
+mihari
+```
+
+The current TUI includes Overview, expandable Proxies, active/closed Connections with local GeoIP details, and Rules/Providers. Rule order is never sorted; provider refreshes run through the daemon mutation coordinator, and updating all providers requires confirmation.
 
 Run the daemon in the foreground:
 
@@ -75,4 +83,4 @@ go vet ./...
 
 The architecture and staged delivery scope are recorded in the [architecture design](docs/superpowers/specs/2026-08-03-mihari-architecture-design.md) and [delivery roadmap](docs/superpowers/plans/2026-08-03-mihari-delivery-roadmap.md).
 
-The implementation is intentionally stopped at the Phase 3 audit boundary. TUI interaction design and Web-panel support are the next phases and are not implemented yet.
+The remaining TUI management pages and Web GUI support are being delivered in later roadmap stages.

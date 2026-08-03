@@ -69,6 +69,35 @@ const (
 	LoadingLabel             = "Loading…"
 )
 
+const (
+	RulesTabLabel              = "Rules"
+	RuleProvidersTabLabel      = "Providers"
+	TypeLabel                  = "Type"
+	TargetLabel                = "Target"
+	BehaviorLabel              = "Behavior"
+	FormatLabel                = "Format"
+	RulesCountLabel            = "Rules"
+	UpdatedLabel               = "Updated"
+	StatusLabel                = "Status"
+	NameLabel                  = "Name"
+	PayloadLabel               = "Payload"
+	EvaluationOrderLabel       = "Evaluation order"
+	FilterAllLabel             = "All"
+	PendingLabel               = "Pending"
+	RulesUnavailable           = "Rules unavailable"
+	RuleProvidersUnavailable   = "Providers unavailable"
+	ProviderUpdateFailed       = "Provider update failed"
+	NoMatchingRules            = "No matching rules."
+	NoMatchingRuleProviders    = "No matching rule providers."
+	RuleDetailsTitle           = "Rule details"
+	RuleProviderDetailsTitle   = "Rule provider details"
+	UpdateAllProvidersTitle    = "Update all rule providers"
+	AllRuleProviders           = "All rule providers"
+	UpdateAllProvidersImpact   = "Each provider will be refreshed in sequence."
+	UpdateAllProvidersRollback = "Existing provider data remains available if an update fails."
+	EscCloseHint               = "Esc close"
+)
+
 var connectionColumnLabels = map[string]string{
 	"host": "Host", "network": "Network", "source": "Source", "destination": "Destination",
 	"chain": "Chain", "rule": "Rule", "process": "Process", "upload": "Upload",

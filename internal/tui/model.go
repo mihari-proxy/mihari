@@ -9,6 +9,7 @@ import (
 	connectionspage "github.com/LeeShunEE/mihari/internal/tui/pages/connections"
 	"github.com/LeeShunEE/mihari/internal/tui/pages/overview"
 	proxypage "github.com/LeeShunEE/mihari/internal/tui/pages/proxies"
+	rulespage "github.com/LeeShunEE/mihari/internal/tui/pages/rules"
 	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
@@ -44,10 +45,10 @@ func NewModel() Model {
 }
 
 func newModel(proxyClient proxypage.Client) Model {
-	return newModelWithPageClients(proxyClient, nil)
+	return newModelWithPageClients(proxyClient, nil, nil)
 }
 
-func newModelWithPageClients(proxyClient proxypage.Client, connectionsClient connectionspage.Client) Model {
+func newModelWithPageClients(proxyClient proxypage.Client, connectionsClient connectionspage.Client, rulesClient rulespage.Client) Model {
 	rail := ui.RailPages()
 	pages := make(map[ui.PageID]ui.Page, len(rail))
 	for _, id := range rail {
@@ -56,6 +57,7 @@ func newModelWithPageClients(proxyClient proxypage.Client, connectionsClient con
 	pages[ui.PageOverview] = overview.New()
 	pages[ui.PageProxies] = proxypage.New(proxyClient, nil)
 	pages[ui.PageConnections] = connectionspage.New(connectionsClient, nil)
+	pages[ui.PageRules] = rulespage.New(rulesClient, nil)
 	active := rail[0]
 	model := Model{
 		pages: pages, rail: rail, active: active,
@@ -75,10 +77,11 @@ func NewModelWithEvents(events <-chan session.Event) Model {
 type pageClient interface {
 	proxypage.Client
 	connectionspage.Client
+	rulespage.Client
 }
 
 func newModelWithClient(events <-chan session.Event, client pageClient) Model {
-	model := newModelWithPageClients(client, client)
+	model := newModelWithPageClients(client, client, client)
 	model.events = events
 	return model
 }
@@ -183,6 +186,14 @@ func (model *Model) applySessionEvent(event session.Event) {
 	case session.EventPreferences:
 		if page, ok := model.pages[ui.PageConnections].(*connectionspage.Model); ok {
 			page.SetPreferences(event.Preferences)
+		}
+	case session.EventRules:
+		if page, ok := model.pages[ui.PageRules].(*rulespage.Model); ok {
+			page.SetRules(event.Rules)
+		}
+	case session.EventRuleProviders:
+		if page, ok := model.pages[ui.PageRules].(*rulespage.Model); ok {
+			page.SetProviders(event.RuleProviders)
 		}
 	case session.EventConnected:
 		model.connected = true

@@ -66,6 +66,14 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 			}},
 		{"rules", http.MethodGet, "/v1/rules", "", `{"schema":"mihari/v1","rules":[]}`,
 			func(ctx context.Context, client *Client) error { _, err := client.Rules(ctx); return err }},
+		{"rule providers", http.MethodGet, "/v1/rule-providers", "", `{"schema":"mihari/v1","providers":[]}`,
+			func(ctx context.Context, client *Client) error { _, err := client.RuleProviders(ctx); return err }},
+		{"update rule provider", http.MethodPost, "/v1/rule-providers/AI%2FSearch/update", `{"operation_id":"provider-1","if_revision":3}`, `{"schema":"mihari/v1","operation_id":"provider-1","revision":4}`,
+			func(ctx context.Context, client *Client) error {
+				revision := uint64(3)
+				_, err := client.UpdateRuleProvider(ctx, "AI/Search", protocol.MutationRequest{OperationID: "provider-1", IfRevision: &revision})
+				return err
+			}},
 		{"geoip status", http.MethodGet, "/v1/geoip/status", "", `{"schema":"mihari/v1","revision":1,"country":{"available":false},"asn":{"available":false}}`,
 			func(ctx context.Context, client *Client) error { _, err := client.GeoIPStatus(ctx); return err }},
 		{"geoip lookup", http.MethodPost, "/v1/geoip/lookup", `{"addresses":["1.1.1.1"]}`, `{"schema":"mihari/v1","records":[{"address":"1.1.1.1","country_code":"AU"}]}`,

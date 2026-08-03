@@ -85,6 +85,18 @@ func (c *Client) Rules(ctx context.Context) (protocol.RuleList, error) {
 	return result, err
 }
 
+func (c *Client) RuleProviders(ctx context.Context) (protocol.RuleProviderList, error) {
+	var result protocol.RuleProviderList
+	err := c.doRuntime(ctx, http.MethodGet, "/v1/rule-providers", nil, &result)
+	return result, err
+}
+
+func (c *Client) UpdateRuleProvider(ctx context.Context, name string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+	var result protocol.MutationResult
+	err := c.doRuntime(ctx, http.MethodPost, "/v1/rule-providers/"+url.PathEscape(name)+"/update", request, &result)
+	return result, err
+}
+
 // GeoIPStatus returns daemon-owned local database health.
 func (c *Client) GeoIPStatus(ctx context.Context) (protocol.GeoIPStatus, error) {
 	var result protocol.GeoIPStatus

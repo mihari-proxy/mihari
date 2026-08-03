@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,6 +87,9 @@ func TestInstallAndQueryEndpoints(t *testing.T) {
 		}},
 		connections: mihomo.Connections{DownloadTotal: 2, UploadTotal: 3, Connections: []mihomo.Connection{{ID: "abc"}}},
 		rules:       mihomo.Rules{Rules: []mihomo.Rule{{Type: "MATCH", Proxy: "DIRECT"}}},
+		ruleProviders: mihomo.RuleProviders{Providers: map[string]mihomo.RuleProvider{
+			"OpenAI": {Name: "OpenAI", Type: "Rule", VehicleType: "HTTP", Behavior: "Classical", Format: "YamlRule", RuleCount: 12, UpdatedAt: time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC)},
+		}},
 	}
 	store := state.NewStore(state.Snapshot{Revision: 11})
 	fake.snapshot = store.Load()
@@ -102,6 +106,8 @@ func TestInstallAndQueryEndpoints(t *testing.T) {
 		{http.MethodDelete, "/v1/connections/abc", `{"operation_id":"close-1"}`},
 		{http.MethodDelete, "/v1/connections", `{"operation_id":"close-all-1"}`},
 		{http.MethodGet, "/v1/rules", ""},
+		{http.MethodGet, "/v1/rule-providers", ""},
+		{http.MethodPost, "/v1/rule-providers/OpenAI/update", `{"operation_id":"provider-1","if_revision":11}`},
 	}
 	for _, test := range tests {
 		request := authorizedRequest(test.method, test.path, bytes.NewBufferString(test.body))
@@ -112,6 +118,33 @@ func TestInstallAndQueryEndpoints(t *testing.T) {
 		}
 		if !bytes.Contains(recorder.Body.Bytes(), []byte(`"schema":"mihari/v1"`)) {
 			t.Errorf("%s %s body=%s", test.method, test.path, recorder.Body.String())
+		}
+	}
+	if fake.updatedRuleProvider != "OpenAI" || fake.operation.ID != "provider-1" || fake.operation.IfRevision == nil || *fake.operation.IfRevision != 11 {
+		t.Fatalf("provider=%q operation=%#v", fake.updatedRuleProvider, fake.operation)
+	}
+}
+
+func TestRuleProvidersExposeSafeTypedFields(t *testing.T) {
+	fake := &fakeRuntime{ruleProviders: mihomo.RuleProviders{Providers: map[string]mihomo.RuleProvider{
+		"OpenAI": {Name: "OpenAI", Type: "Rule", VehicleType: "HTTP", Behavior: "Classical", Format: "YamlRule", RuleCount: 12, UpdatedAt: time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC)},
+	}}}
+	server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: fake})
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, authorizedRequest(http.MethodGet, "/v1/rule-providers", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var got protocol.RuleProviderList
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Providers) != 1 || got.Providers[0].Type != "HTTP" || got.Providers[0].Status != "Ready" {
+		t.Fatalf("providers=%#v", got.Providers)
+	}
+	for _, forbidden := range []string{"url", "secret", "controller"} {
+		if strings.Contains(strings.ToLower(response.Body.String()), forbidden) {
+			t.Fatalf("response leaked %q: %s", forbidden, response.Body.String())
 		}
 	}
 }
@@ -265,20 +298,22 @@ func authorizedRequest(method, path string, body io.Reader) *http.Request {
 }
 
 type fakeRuntime struct {
-	capabilities   []string
-	snapshot       state.Snapshot
-	operation      runtimeapi.Operation
-	selectedGroup  string
-	selectedName   string
-	installResult  core.InstallResult
-	proxies        mihomo.Proxies
-	connections    mihomo.Connections
-	rules          mihomo.Rules
-	streamMessages []json.RawMessage
-	delayedProxy   string
-	proxyDelay     uint16
-	geoIPStatus    geoip.Status
-	geoIPRecords   []geoip.Record
+	capabilities        []string
+	snapshot            state.Snapshot
+	operation           runtimeapi.Operation
+	selectedGroup       string
+	selectedName        string
+	installResult       core.InstallResult
+	proxies             mihomo.Proxies
+	connections         mihomo.Connections
+	rules               mihomo.Rules
+	ruleProviders       mihomo.RuleProviders
+	updatedRuleProvider string
+	streamMessages      []json.RawMessage
+	delayedProxy        string
+	proxyDelay          uint16
+	geoIPStatus         geoip.Status
+	geoIPRecords        []geoip.Record
 }
 
 func (f *fakeRuntime) Capabilities() []string { return append([]string(nil), f.capabilities...) }
@@ -328,6 +363,16 @@ func (f *fakeRuntime) CloseAllConnections(_ context.Context, operation runtimeap
 }
 
 func (f *fakeRuntime) Rules(context.Context) (mihomo.Rules, error) { return f.rules, nil }
+
+func (f *fakeRuntime) RuleProviders(context.Context) (mihomo.RuleProviders, error) {
+	return f.ruleProviders, nil
+}
+
+func (f *fakeRuntime) UpdateRuleProvider(_ context.Context, operation runtimeapi.Operation, name string) error {
+	f.operation = operation
+	f.updatedRuleProvider = name
+	return nil
+}
 
 func (f *fakeRuntime) Stream(ctx context.Context, _ mihomo.StreamKind, receive func(json.RawMessage) error) error {
 	for _, message := range f.streamMessages {

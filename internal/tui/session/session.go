@@ -18,6 +18,8 @@ const (
 	EventSubscriptions EventKind = "subscriptions"
 	EventProxies       EventKind = "proxies"
 	EventPreferences   EventKind = "preferences"
+	EventRules         EventKind = "rules"
+	EventRuleProviders EventKind = "rule-providers"
 	EventTraffic       EventKind = "traffic"
 	EventMemory        EventKind = "memory"
 	EventLog           EventKind = "log"
@@ -36,6 +38,8 @@ type Event struct {
 	Subscriptions protocol.SubscriptionList
 	Proxies       protocol.ProxyGroups
 	Preferences   protocol.TUIPreferences
+	Rules         protocol.RuleList
+	RuleProviders protocol.RuleProviderList
 	Traffic       protocol.TrafficSample
 	Memory        protocol.MemorySample
 	Log           protocol.LogEntry
@@ -177,6 +181,32 @@ func (s *Session) supervise(ctx context.Context) {
 				continue
 			}
 			if !putOrdered(ctx, s.control, Event{Kind: EventProxies, Proxies: proxies}) {
+				return
+			}
+		}
+		if slices.Contains(status.Capabilities, protocol.CapabilityRules) {
+			rules, rulesErr := s.client.Rules(ctx)
+			if rulesErr != nil {
+				attempt++
+				if !putOrdered(ctx, s.control, Event{Kind: EventReconnecting, Attempt: attempt, Err: rulesErr}) || !waitBackoff(ctx, s.options.Backoff(attempt)) {
+					return
+				}
+				continue
+			}
+			if !putOrdered(ctx, s.control, Event{Kind: EventRules, Rules: rules}) {
+				return
+			}
+		}
+		if slices.Contains(status.Capabilities, protocol.CapabilityRuleProviders) {
+			providers, providersErr := s.client.RuleProviders(ctx)
+			if providersErr != nil {
+				attempt++
+				if !putOrdered(ctx, s.control, Event{Kind: EventReconnecting, Attempt: attempt, Err: providersErr}) || !waitBackoff(ctx, s.options.Backoff(attempt)) {
+					return
+				}
+				continue
+			}
+			if !putOrdered(ctx, s.control, Event{Kind: EventRuleProviders, RuleProviders: providers}) {
 				return
 			}
 		}
