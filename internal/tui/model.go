@@ -11,6 +11,7 @@ import (
 	"github.com/LeeShunEE/mihari/internal/tui/pages/overview"
 	proxypage "github.com/LeeShunEE/mihari/internal/tui/pages/proxies"
 	rulespage "github.com/LeeShunEE/mihari/internal/tui/pages/rules"
+	subscriptionspage "github.com/LeeShunEE/mihari/internal/tui/pages/subscriptions"
 	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
@@ -46,10 +47,10 @@ func NewModel() Model {
 }
 
 func newModel(proxyClient proxypage.Client) Model {
-	return newModelWithPageClients(proxyClient, nil, nil)
+	return newModelWithPageClients(proxyClient, nil, nil, nil)
 }
 
-func newModelWithPageClients(proxyClient proxypage.Client, connectionsClient connectionspage.Client, rulesClient rulespage.Client) Model {
+func newModelWithPageClients(proxyClient proxypage.Client, connectionsClient connectionspage.Client, rulesClient rulespage.Client, subscriptionsClient subscriptionspage.Client) Model {
 	rail := ui.RailPages()
 	pages := make(map[ui.PageID]ui.Page, len(rail))
 	for _, id := range rail {
@@ -60,6 +61,7 @@ func newModelWithPageClients(proxyClient proxypage.Client, connectionsClient con
 	pages[ui.PageConnections] = connectionspage.New(connectionsClient, nil)
 	pages[ui.PageRules] = rulespage.New(rulesClient, nil)
 	pages[ui.PageLogs] = logspage.New(0)
+	pages[ui.PageSubscriptions] = subscriptionspage.New(subscriptionsClient, nil, nil)
 	active := rail[0]
 	model := Model{
 		pages: pages, rail: rail, active: active,
@@ -80,10 +82,11 @@ type pageClient interface {
 	proxypage.Client
 	connectionspage.Client
 	rulespage.Client
+	subscriptionspage.Client
 }
 
 func newModelWithClient(events <-chan session.Event, client pageClient) Model {
-	model := newModelWithPageClients(client, client, client)
+	model := newModelWithPageClients(client, client, client, client)
 	model.events = events
 	return model
 }
@@ -182,6 +185,9 @@ func (model *Model) applySessionEvent(event session.Event) {
 		model.core = event.Core
 	case session.EventSubscriptions:
 		model.subscriptions = event.Subscriptions
+		if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
+			page.SetSubscriptions(event.Subscriptions)
+		}
 	case session.EventProxies:
 		if page, ok := model.pages[ui.PageProxies].(*proxypage.Model); ok {
 			page.SetGroups(event.Proxies)

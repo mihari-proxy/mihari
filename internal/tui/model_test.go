@@ -60,6 +60,15 @@ func TestModelRoutesStructuredLogsToPage(t *testing.T) {
 	}
 }
 
+func TestModelRoutesSubscriptionsToPage(t *testing.T) {
+	model := NewModel()
+	model.applySessionEvent(session.Event{Kind: session.EventSubscriptions, Subscriptions: protocol.SubscriptionList{Revision: 3, ActiveID: "one", GlobalInterval: "12h", Subscriptions: []protocol.Subscription{{ID: "one", Name: "Main", Enabled: true, Cached: true}}}})
+	view := model.pages[ui.PageSubscriptions].View()
+	if !strings.Contains(view, "Main") || !strings.Contains(view, "*") || strings.Contains(view, "Generation") {
+		t.Fatalf("subscriptions view=%s", view)
+	}
+}
+
 func TestModelMarksRetainedLogsStaleDuringReconnect(t *testing.T) {
 	model := NewModel()
 	model.applySessionEvent(session.Event{Kind: session.EventLog, ObservedAt: time.Unix(3, 0), Log: protocol.LogEntry{Level: "info", Message: "retained"}})

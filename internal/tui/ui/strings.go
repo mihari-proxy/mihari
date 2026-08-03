@@ -111,6 +111,36 @@ const (
 	OffLabel        = "Off"
 )
 
+const (
+	SubscriptionsTitle          = "Subscriptions"
+	EnabledLabel                = "Enabled"
+	DisabledLabel               = "Disabled"
+	CacheReadyState             = "Ready"
+	CacheMissingState           = "Missing"
+	CacheStaleState             = "Stale"
+	CacheUpdatingState          = "Updating"
+	ManualLabel                 = "Manual"
+	RetryPendingLabel           = "Retry pending"
+	NoSubscriptions             = "No subscriptions are configured."
+	SubscriptionChangedMessage  = "Subscription changed; reloaded current state."
+	SubscriptionOperationFailed = "Subscription operation failed"
+	SubscriptionsUnavailable    = "Subscriptions unavailable"
+	RemoveSubscriptionTitle     = "Remove subscription"
+	RemoveSubscriptionImpact    = "The subscription and its cached profile will be removed."
+	RemoveSubscriptionRollback  = "The removed subscription cannot be restored automatically."
+	AddSubscriptionTitle        = "Add subscription"
+	EditSubscriptionTitle       = "Edit subscription"
+	SubscriptionDetailsTitle    = "Subscription details"
+	FormHelp                    = "Tab/Shift+Tab fields  Enter next/save  Esc cancel"
+	InvalidSubscriptionForm     = "Complete the required fields with valid values."
+	AutoRefreshLabel            = "Auto refresh"
+	CacheLabel                  = "Cache"
+	IntervalLabel               = "Interval"
+	GlobalLabel                 = "Global"
+	LastSuccessLabel            = "Last success"
+	LastErrorLabel              = "Last error"
+)
+
 var connectionColumnLabels = map[string]string{
 	"host": "Host", "network": "Network", "source": "Source", "destination": "Destination",
 	"chain": "Chain", "rule": "Rule", "process": "Process", "upload": "Upload",
