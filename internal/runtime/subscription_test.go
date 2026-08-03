@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/LeeShunEE/mihari/internal/config"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
@@ -20,13 +21,18 @@ type reloadController struct {
 	mu        sync.Mutex
 	reloads   int
 	reloadErr error
+	reload    func(context.Context) error
 }
 
-func (c *reloadController) Reload(context.Context, string, bool) error {
+func (c *reloadController) Reload(ctx context.Context, _ string, _ bool) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.reloads++
-	return c.reloadErr
+	reload, reloadErr := c.reload, c.reloadErr
+	c.mu.Unlock()
+	if reload != nil {
+		return reload(ctx)
+	}
+	return reloadErr
 }
 
 func subscriptionManager(t *testing.T, handler http.Handler) (*Manager, *subscription.Service, *reloadController, string) {
@@ -146,5 +152,49 @@ func TestReloadFailureRollsBackSubscriptionActivation(t *testing.T) {
 	}
 	if snapshot := manager.Snapshot(); snapshot.Health != "degraded" || snapshot.Config.DesiredRevision <= snapshot.Config.ObservedRevision {
 		t.Fatalf("rollback failure was not published as degraded: %#v", snapshot)
+	}
+}
+
+func TestProxySelectionWaitsForSubscriptionReload(t *testing.T) {
+	manager, _, controller, url := subscriptionManager(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte("proxies: []\n"))
+	}))
+	reloadEntered := make(chan struct{})
+	releaseReload := make(chan struct{})
+	selected := make(chan struct{})
+	controller.reload = func(context.Context) error {
+		close(reloadEntered)
+		<-releaseReload
+		return nil
+	}
+	controller.fakeController.selectProxy = func(context.Context, string, string) error {
+		close(selected)
+		return nil
+	}
+	profile, err := manager.AddSubscription(context.Background(), Operation{ID: "add", Source: "test"}, AddSubscriptionInput{Name: "A", URL: url})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshDone := make(chan error, 1)
+	go func() {
+		_, err := manager.RefreshSubscription(context.Background(), Operation{ID: "refresh", Source: "test"}, profile.ID)
+		refreshDone <- err
+	}()
+	<-reloadEntered
+	selectDone := make(chan error, 1)
+	go func() {
+		selectDone <- manager.SelectProxy(context.Background(), Operation{ID: "select", Source: "test"}, "GLOBAL", "DIRECT")
+	}()
+	select {
+	case <-selected:
+		t.Fatal("proxy selection overlapped subscription reload")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(releaseReload)
+	if err := <-refreshDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-selectDone; err != nil {
+		t.Fatal(err)
 	}
 }
