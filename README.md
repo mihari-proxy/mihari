@@ -12,7 +12,7 @@ Launch the interactive TUI:
 mihari
 ```
 
-The current TUI includes Overview, expandable Proxies, active/closed Connections with local GeoIP details, Rules/Providers, and a bounded structured Logs stream. Rule order is never sorted; provider refreshes run through the daemon mutation coordinator, and updating all providers requires confirmation.
+The current TUI includes Overview, expandable Proxies, active/closed Connections with local GeoIP details, Rules/Providers, a bounded structured Logs stream, and subscription management forms. Rule order is never sorted; provider and subscription mutations run through the daemon mutation coordinator, and destructive or broad operations require confirmation.
 
 Run the daemon in the foreground:
 
