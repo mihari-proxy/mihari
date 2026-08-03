@@ -37,23 +37,33 @@ type ProxyGroups struct {
 }
 
 type ConnectionMetadata struct {
-	Network         string `json:"network,omitempty"`
-	Type            string `json:"type,omitempty"`
-	SourceIP        string `json:"source_ip,omitempty"`
-	DestinationIP   string `json:"destination_ip,omitempty"`
-	SourcePort      string `json:"source_port,omitempty"`
-	DestinationPort string `json:"destination_port,omitempty"`
-	Host            string `json:"host,omitempty"`
+	Network           string `json:"network,omitempty"`
+	Type              string `json:"type,omitempty"`
+	SourceIP          string `json:"source_ip,omitempty"`
+	DestinationIP     string `json:"destination_ip,omitempty"`
+	SourcePort        string `json:"source_port,omitempty"`
+	DestinationPort   string `json:"destination_port,omitempty"`
+	Host              string `json:"host,omitempty"`
+	Process           string `json:"process,omitempty"`
+	ProcessPath       string `json:"process_path,omitempty"`
+	InboundName       string `json:"inbound_name,omitempty"`
+	InboundUser       string `json:"inbound_user,omitempty"`
+	SniffHost         string `json:"sniff_host,omitempty"`
+	RemoteDestination string `json:"remote_destination,omitempty"`
 }
 
 type Connection struct {
-	ID       string             `json:"id"`
-	Upload   int64              `json:"upload"`
-	Download int64              `json:"download"`
-	Chains   []string           `json:"chains,omitempty"`
-	Rule     string             `json:"rule,omitempty"`
-	RulePay  string             `json:"rule_payload,omitempty"`
-	Metadata ConnectionMetadata `json:"metadata,omitzero"`
+	ID            string             `json:"id"`
+	Start         time.Time          `json:"start,omitzero"`
+	ClosedAt      time.Time          `json:"closed_at,omitzero"`
+	Upload        int64              `json:"upload"`
+	Download      int64              `json:"download"`
+	UploadSpeed   int64              `json:"upload_speed,omitempty"`
+	DownloadSpeed int64              `json:"download_speed,omitempty"`
+	Chains        []string           `json:"chains,omitempty"`
+	Rule          string             `json:"rule,omitempty"`
+	RulePay       string             `json:"rule_payload,omitempty"`
+	Metadata      ConnectionMetadata `json:"metadata,omitzero"`
 }
 
 type ConnectionList struct {

@@ -66,6 +66,20 @@ func TestSession_LoadsCapabilitySnapshotsBeforeConnected(t *testing.T) {
 	waitForEvent(t, events, EventConnected)
 }
 
+func TestSession_LoadsTUIPreferencesBeforeConnected(t *testing.T) {
+	fake := newFakeClient()
+	fake.status = protocol.Status{Schema: "mihari/v1", Capabilities: []string{protocol.CapabilityPreferences}}
+	fake.preferences = protocol.TUIPreferences{Schema: "mihari/v1", Revision: 7, ConnectionsColumns: []string{"host", "chain"}}
+	session := New(fake, Options{Backoff: func(int) time.Duration { return 0 }})
+	events := session.Start(context.Background())
+	defer session.Close()
+	event := waitForEvent(t, events, EventPreferences)
+	if event.Preferences.Revision != 7 || len(event.Preferences.ConnectionsColumns) != 2 {
+		t.Fatalf("preferences=%#v", event.Preferences)
+	}
+	waitForEvent(t, events, EventConnected)
+}
+
 func TestPutLatestCoalescesTraffic(t *testing.T) {
 	slot := make(chan Event, 1)
 	ctx := context.Background()
@@ -117,6 +131,7 @@ type fakeClient struct {
 	streamCalls    map[string]int
 	started        chan string
 	status         protocol.Status
+	preferences    protocol.TUIPreferences
 }
 
 func newFakeClient() *fakeClient {
@@ -146,6 +161,10 @@ func (f *fakeClient) Subscriptions(context.Context) (protocol.SubscriptionList, 
 
 func (f *fakeClient) ProxyGroups(context.Context) (protocol.ProxyGroups, error) {
 	return protocol.ProxyGroups{Schema: "mihari/v1", Groups: []protocol.ProxyGroup{}}, nil
+}
+
+func (f *fakeClient) TUIPreferences(context.Context) (protocol.TUIPreferences, error) {
+	return f.preferences, nil
 }
 
 func (f *fakeClient) Stream(ctx context.Context, kind string, _ func(protocol.StreamEvent) error) error {

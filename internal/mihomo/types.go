@@ -1,6 +1,9 @@
 package mihomo
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 type Version struct {
 	Meta    bool   `json:"meta"`
@@ -25,6 +28,7 @@ type Delays map[string]uint16
 
 type Connection struct {
 	ID       string             `json:"id"`
+	Start    time.Time          `json:"start,omitempty"`
 	Upload   int64              `json:"upload"`
 	Download int64              `json:"download"`
 	Chains   []string           `json:"chains,omitempty"`
@@ -34,13 +38,19 @@ type Connection struct {
 }
 
 type ConnectionMetadata struct {
-	Network         string `json:"network,omitempty"`
-	Type            string `json:"type,omitempty"`
-	SourceIP        string `json:"sourceIP,omitempty"`
-	DestinationIP   string `json:"destinationIP,omitempty"`
-	SourcePort      string `json:"sourcePort,omitempty"`
-	DestinationPort string `json:"destinationPort,omitempty"`
-	Host            string `json:"host,omitempty"`
+	Network           string `json:"network,omitempty"`
+	Type              string `json:"type,omitempty"`
+	SourceIP          string `json:"sourceIP,omitempty"`
+	DestinationIP     string `json:"destinationIP,omitempty"`
+	SourcePort        string `json:"sourcePort,omitempty"`
+	DestinationPort   string `json:"destinationPort,omitempty"`
+	Host              string `json:"host,omitempty"`
+	Process           string `json:"process,omitempty"`
+	ProcessPath       string `json:"processPath,omitempty"`
+	InboundName       string `json:"inboundName,omitempty"`
+	InboundUser       string `json:"inboundUser,omitempty"`
+	SniffHost         string `json:"sniffHost,omitempty"`
+	RemoteDestination string `json:"remoteDestination,omitempty"`
 }
 
 type Connections struct {
