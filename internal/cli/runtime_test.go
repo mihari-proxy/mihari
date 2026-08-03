@@ -4,10 +4,32 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"testing"
 
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 )
+
+func TestExecute_NoArgsNonInteractiveRejectsTUI(t *testing.T) {
+	exit := Execute(context.Background(), nil, io.Discard, io.Discard, Dependencies{})
+	if exit != ExitUsage {
+		t.Fatalf("exit=%d", exit)
+	}
+}
+
+func TestExecute_NoArgsInteractiveRunsTUI(t *testing.T) {
+	called := false
+	exit := Execute(context.Background(), nil, io.Discard, io.Discard, Dependencies{
+		Interactive: true,
+		RunTUI: func(context.Context) error {
+			called = true
+			return nil
+		},
+	})
+	if exit != ExitOK || !called {
+		t.Fatalf("exit=%d called=%v", exit, called)
+	}
+}
 
 func TestCoreStatusJSON(t *testing.T) {
 	client := &fakeRuntimeClient{core: protocol.CoreStatus{Schema: "mihari/v1", Revision: 4, Status: "running", Version: "v1.19.0", PID: 42}}
