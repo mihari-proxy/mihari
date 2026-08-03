@@ -2,10 +2,60 @@ package protocol
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestStatus_AdditiveCapabilitiesRoundTrip(t *testing.T) {
+	want := Status{
+		Schema:        "mihari/v1",
+		Capabilities:  []string{CapabilityCore, CapabilityLogs},
+		SetupRequired: true,
+	}
+	raw, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Status
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Capabilities, want.Capabilities) || !got.SetupRequired {
+		t.Fatalf("got=%#v", got)
+	}
+}
+
+func TestStatus_OldJSONStillDecodes(t *testing.T) {
+	var got Status
+	if err := json.Unmarshal([]byte(`{"schema":"mihari/v1","protocol_version":"v1"}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Schema != "mihari/v1" || got.ProtocolVersion != "v1" || len(got.Capabilities) != 0 || got.SetupRequired {
+		t.Fatalf("got=%#v", got)
+	}
+}
+
+func TestTypedStreamPayloadsUseMihomoFieldNames(t *testing.T) {
+	tests := []struct {
+		value any
+		want  string
+	}{
+		{TrafficSample{Up: 1, Down: 2}, `{"up":1,"down":2}`},
+		{MemorySample{InUse: 3, OSLimit: 4}, `{"inuse":3,"oslimit":4}`},
+		{LogEntry{Level: "info", Message: "ready"}, `{"type":"info","payload":"ready"}`},
+	}
+	for _, test := range tests {
+		raw, err := json.Marshal(test.value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(raw) != test.want {
+			t.Fatalf("json=%s want=%s", raw, test.want)
+		}
+	}
+}
 
 func TestCoreStatusJSONDoesNotExposeControllerDetails(t *testing.T) {
 	status := CoreStatus{

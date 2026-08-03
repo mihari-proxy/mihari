@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
@@ -16,17 +17,23 @@ type Options struct {
 	Token   string
 	Store   *state.Store
 	Runtime RuntimeAPI
+	Now     func() time.Time
 }
 
 type Server struct {
 	token   string
 	store   *state.Store
 	runtime RuntimeAPI
+	now     func() time.Time
 	http    *http.Server
 }
 
 func New(options Options) *Server {
-	server := &Server{token: options.Token, store: options.Store, runtime: options.Runtime}
+	now := options.Now
+	if now == nil {
+		now = time.Now
+	}
+	server := &Server{token: options.Token, store: options.Store, runtime: options.Runtime, now: now}
 	server.http = &http.Server{
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -62,6 +69,9 @@ func (s *Server) status(writer http.ResponseWriter, _ *http.Request) {
 		Health:          snapshot.Health,
 		StartedAt:       snapshot.StartedAt,
 	}
+	if s.runtime != nil {
+		status.Capabilities = sortedUnique(s.runtime.Capabilities())
+	}
 	if snapshot.Config.Status != "" {
 		status.Config = &protocol.ConfigStatus{
 			Status: snapshot.Config.Status, DesiredRevision: snapshot.Config.DesiredRevision,
@@ -69,6 +79,23 @@ func (s *Server) status(writer http.ResponseWriter, _ *http.Request) {
 		}
 	}
 	writeJSON(writer, http.StatusOK, status)
+}
+
+func sortedUnique(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
