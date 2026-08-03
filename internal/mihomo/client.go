@@ -90,6 +90,16 @@ func (c *Client) Rules(ctx context.Context) (Rules, error) {
 	return result, err
 }
 
+func (c *Client) RuleProviders(ctx context.Context) (RuleProviders, error) {
+	var result RuleProviders
+	err := c.do(ctx, http.MethodGet, "/providers/rules", nil, nil, &result)
+	return result, err
+}
+
+func (c *Client) UpdateRuleProvider(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodPut, "/providers/rules/"+url.PathEscape(name), nil, nil, nil)
+}
+
 func (c *Client) Reload(ctx context.Context, path string, force bool) error {
 	query := url.Values{}
 	query.Set("force", strconv.FormatBool(force))

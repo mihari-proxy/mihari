@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	connectionspage "github.com/LeeShunEE/mihari/internal/tui/pages/connections"
+	rulespage "github.com/LeeShunEE/mihari/internal/tui/pages/rules"
 	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
@@ -28,6 +29,25 @@ func TestModelRoutesConnectionSnapshotsAndPreferencesToPage(t *testing.T) {
 	view := page.View()
 	if !strings.Contains(view, "example.com") || !strings.Contains(view, "Chain") {
 		t.Fatalf("view=%s", view)
+	}
+}
+
+func TestModelRoutesRulesAndProvidersToPage(t *testing.T) {
+	model := NewModel()
+	page, ok := model.pages[ui.PageRules].(*rulespage.Model)
+	if !ok {
+		t.Fatalf("rules page=%T", model.pages[ui.PageRules])
+	}
+	model.applySessionEvent(session.Event{Kind: session.EventRules, Rules: protocol.RuleList{Rules: []protocol.Rule{{Type: "DOMAIN", Payload: "example.test", Proxy: "DIRECT"}}}})
+	model.applySessionEvent(session.Event{Kind: session.EventRuleProviders, RuleProviders: protocol.RuleProviderList{Providers: []protocol.RuleProvider{{Name: "OpenAI", Type: "HTTP", Status: "Ready"}}}})
+	view := page.View()
+	if !strings.Contains(view, "example.test") {
+		t.Fatalf("rules view=%s", view)
+	}
+	page.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	page.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !strings.Contains(page.View(), "OpenAI") {
+		t.Fatalf("providers view=%s", page.View())
 	}
 }
 

@@ -84,6 +84,22 @@ type RuleList struct {
 	Rules  []Rule `json:"rules"`
 }
 
+type RuleProvider struct {
+	Name      string    `json:"name"`
+	Type      string    `json:"type"`
+	Behavior  string    `json:"behavior,omitempty"`
+	Format    string    `json:"format,omitempty"`
+	RuleCount int       `json:"rule_count"`
+	UpdatedAt time.Time `json:"updated_at,omitzero"`
+	Status    string    `json:"status"`
+}
+
+type RuleProviderList struct {
+	Schema    string         `json:"schema"`
+	Revision  uint64         `json:"revision"`
+	Providers []RuleProvider `json:"providers"`
+}
+
 type DelayResult struct {
 	Schema string            `json:"schema"`
 	Delays map[string]uint16 `json:"delays"`

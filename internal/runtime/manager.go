@@ -38,6 +38,8 @@ type Controller interface {
 	CloseConnection(context.Context, string) error
 	CloseAllConnections(context.Context) error
 	Rules(context.Context) (mihomo.Rules, error)
+	RuleProviders(context.Context) (mihomo.RuleProviders, error)
+	UpdateRuleProvider(context.Context, string) error
 	Stream(context.Context, mihomo.StreamKind, func(json.RawMessage) error) error
 }
 
@@ -251,6 +253,33 @@ func (m *Manager) Rules(ctx context.Context) (mihomo.Rules, error) {
 		return mihomo.Rules{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
 	}
 	return m.controller.Rules(ctx)
+}
+
+func (m *Manager) RuleProviders(ctx context.Context) (mihomo.RuleProviders, error) {
+	if m.controller == nil {
+		return mihomo.RuleProviders{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
+	}
+	return m.controller.RuleProviders(ctx)
+}
+
+func (m *Manager) UpdateRuleProvider(ctx context.Context, operation Operation, name string) error {
+	_, err := m.doOperation(ctx, "rule-provider:"+operation.ID, func() (any, error) {
+		if m.controller == nil {
+			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
+		}
+		if err := m.lock(ctx); err != nil {
+			return nil, err
+		}
+		defer m.unlock()
+		_, err := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+			if updateErr := m.controller.UpdateRuleProvider(ctx, name); updateErr != nil {
+				return snapshot, updateErr
+			}
+			return snapshot, nil
+		})
+		return struct{}{}, err
+	})
+	return err
 }
 
 func (m *Manager) Stream(ctx context.Context, kind mihomo.StreamKind, receive func(json.RawMessage) error) error {
