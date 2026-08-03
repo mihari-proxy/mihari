@@ -85,6 +85,20 @@ func runFakeMihomo(arguments []string) int {
 	mux.HandleFunc("GET /rules", func(response http.ResponseWriter, _ *http.Request) {
 		writeFakeJSON(response, map[string]any{"rules": []any{map[string]any{"type": "MATCH", "payload": "", "proxy": "DIRECT"}}})
 	})
+	mux.HandleFunc("PUT /configs", func(response http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Path string `json:"path"`
+		}
+		if json.NewDecoder(request.Body).Decode(&body) != nil || body.Path == "" {
+			http.Error(response, "bad request", http.StatusBadRequest)
+			return
+		}
+		if _, err := os.Stat(body.Path); err != nil {
+			http.Error(response, "missing config", http.StatusUnprocessableEntity)
+			return
+		}
+		response.WriteHeader(http.StatusNoContent)
+	})
 	for _, stream := range []string{"traffic", "memory", "logs"} {
 		stream := stream
 		mux.HandleFunc("GET /"+stream, func(response http.ResponseWriter, request *http.Request) {

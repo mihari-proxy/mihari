@@ -11,8 +11,16 @@ type Snapshot struct {
 	StartedAt          time.Time
 	Health             string
 	Core               CoreState
+	Config             ConfigState
 	ActiveSubscription string
 	Subscriptions      []SubscriptionState
+}
+
+type ConfigState struct {
+	Status           string
+	DesiredRevision  uint64
+	ObservedRevision uint64
+	LastError        string
 }
 
 type SubscriptionState struct {

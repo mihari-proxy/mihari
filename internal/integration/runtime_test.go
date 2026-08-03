@@ -2,9 +2,14 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +80,32 @@ func TestMihomoRuntimeLifecycleAndControlCommands(t *testing.T) {
 	if err != nil || len(rules.Rules) != 1 {
 		t.Fatalf("rules=%#v err=%v", rules, err)
 	}
+	provider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		name := request.URL.Query().Get("name")
+		_, _ = io.WriteString(writer, "proxies:\n  - {name: "+name+", type: direct}\n")
+	}))
+	first, err := client.AddSubscription(context.Background(), protocol.SubscriptionAddRequest{OperationID: "sub-add-a", Name: "A", URL: provider.URL + "?name=A&token=private-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := client.AddSubscription(context.Background(), protocol.SubscriptionAddRequest{OperationID: "sub-add-b", Name: "B", URL: provider.URL + "?name=B&token=private-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshSubscription(t, client, first.Subscription.ID, "sub-refresh-a")
+	refreshSubscription(t, client, second.Subscription.ID, "sub-refresh-b")
+	provider.Close()
+	if _, err := client.UseSubscription(context.Background(), second.Subscription.ID, protocol.MutationRequest{OperationID: "sub-use-b"}); err != nil {
+		t.Fatalf("offline activation failed: %v", err)
+	}
+	subscriptions, err := client.Subscriptions(context.Background())
+	if err != nil || subscriptions.ActiveID != second.Subscription.ID || len(subscriptions.Subscriptions) != 2 {
+		t.Fatalf("subscriptions=%#v err=%v", subscriptions, err)
+	}
+	rawSubscriptions, _ := json.Marshal(subscriptions)
+	if stringContainsAny(string(rawSubscriptions), "private-a", "private-b", provider.URL) {
+		t.Fatalf("subscription response leaked URL: %s", rawSubscriptions)
+	}
 	var streamEvents int
 	if err := client.Stream(context.Background(), "traffic", func(protocol.StreamEvent) error {
 		streamEvents++
@@ -101,6 +132,30 @@ func TestMihomoRuntimeLifecycleAndControlCommands(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("daemon did not stop")
 	}
+}
+
+func refreshSubscription(t *testing.T, client *controlclient.Client, id, operationID string) {
+	t.Helper()
+	for attempt := range 5 {
+		_, err := client.RefreshSubscription(context.Background(), id, protocol.MutationRequest{OperationID: operationID + string(rune('0'+attempt))})
+		if err == nil {
+			return
+		}
+		var apiError protocol.APIError
+		if !errors.As(err, &apiError) || apiError.Code != protocol.CodeRevisionConflict {
+			t.Fatal(err)
+		}
+	}
+	t.Fatal("subscription refresh remained conflicted")
+}
+
+func stringContainsAny(value string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(value, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func copyExecutable(t *testing.T, destination string) {
