@@ -48,7 +48,8 @@ func Run(parent context.Context, options Options) error {
 		runtimeDone = make(chan error, 1)
 		go func() { runtimeDone <- options.Runtime.Run(ctx) }()
 	}
-	server := controlserver.New(controlserver.Options{Token: options.Token, Store: store})
+	runtimeAPI, _ := options.Runtime.(controlserver.RuntimeAPI)
+	server := controlserver.New(controlserver.Options{Token: options.Token, Store: store, Runtime: runtimeAPI})
 	serverError := server.Serve(ctx, listener)
 	cancel()
 	if runtimeDone != nil {

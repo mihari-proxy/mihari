@@ -22,13 +22,23 @@ type Proxies struct {
 type Delays map[string]uint16
 
 type Connection struct {
-	ID       string          `json:"id"`
-	Upload   int64           `json:"upload"`
-	Download int64           `json:"download"`
-	Chains   []string        `json:"chains,omitempty"`
-	Rule     string          `json:"rule,omitempty"`
-	RulePay  string          `json:"rulePayload,omitempty"`
-	Metadata json.RawMessage `json:"metadata,omitempty"`
+	ID       string             `json:"id"`
+	Upload   int64              `json:"upload"`
+	Download int64              `json:"download"`
+	Chains   []string           `json:"chains,omitempty"`
+	Rule     string             `json:"rule,omitempty"`
+	RulePay  string             `json:"rulePayload,omitempty"`
+	Metadata ConnectionMetadata `json:"metadata,omitempty"`
+}
+
+type ConnectionMetadata struct {
+	Network         string `json:"network,omitempty"`
+	Type            string `json:"type,omitempty"`
+	SourceIP        string `json:"sourceIP,omitempty"`
+	DestinationIP   string `json:"destinationIP,omitempty"`
+	SourcePort      string `json:"sourcePort,omitempty"`
+	DestinationPort string `json:"destinationPort,omitempty"`
+	Host            string `json:"host,omitempty"`
 }
 
 type Connections struct {
