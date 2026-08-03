@@ -220,6 +220,92 @@ func (m *Manager) RemoveSubscription(ctx context.Context, operation Operation, i
 	return err
 }
 
+func (m *Manager) SetSubscriptionEnabled(ctx context.Context, operation Operation, id string, enabled bool) (subscription.PublicProfile, error) {
+	return m.mutateSubscription(ctx, "sub-enabled:", operation, id, func(catalog *subscription.Catalog, profile *subscription.Profile) error {
+		profile.Enabled = enabled
+		profile.Version++
+		if !enabled && catalog.ActiveID == profile.ID {
+			catalog.ActiveID = ""
+		}
+		return nil
+	})
+}
+
+func (m *Manager) SetSubscription(ctx context.Context, operation Operation, id string, input SetSubscriptionInput) (subscription.PublicProfile, error) {
+	return m.mutateSubscription(ctx, "sub-set:", operation, id, func(catalog *subscription.Catalog, profile *subscription.Profile) error {
+		if input.Name != nil {
+			profile.Name = *input.Name
+		}
+		if input.Interval != nil {
+			profile.Interval = *input.Interval
+		}
+		if input.AutoRefresh != nil {
+			profile.AutoRefresh = *input.AutoRefresh
+		}
+		if input.GlobalPeriod != nil {
+			catalog.GlobalInterval = *input.GlobalPeriod
+		}
+		if input.URL != nil && *input.URL != profile.URL {
+			profile.URL = *input.URL
+			profile.Generation = 0
+			profile.UpdatedAt = subscription.Profile{}.UpdatedAt
+			profile.ETag = ""
+			profile.LastModified = ""
+			if catalog.ActiveID == profile.ID {
+				catalog.ActiveID = ""
+			}
+		}
+		profile.Version++
+		return nil
+	})
+}
+
+func (m *Manager) mutateSubscription(ctx context.Context, prefix string, operation Operation, id string, mutate func(*subscription.Catalog, *subscription.Profile) error) (subscription.PublicProfile, error) {
+	result, err := m.doOperation(ctx, prefix+operation.ID, func() (any, error) {
+		if m.subscriptions == nil {
+			return nil, subscriptionsUnavailable()
+		}
+		if err := m.lock(ctx); err != nil {
+			return nil, err
+		}
+		defer m.unlock()
+		_, err := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+			before, after, mutateErr := m.subscriptions.Mutate(func(next *subscription.Catalog) error {
+				index := next.Index(id)
+				if index < 0 {
+					return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "subscription not found"}
+				}
+				return mutate(next, &next.Profiles[index])
+			})
+			if mutateErr != nil {
+				return snapshot, mutateErr
+			}
+			if before.ActiveID != after.ActiveID {
+				candidate, prepareErr := m.prepareCatalogConfig(ctx, after)
+				if prepareErr != nil {
+					_ = m.subscriptions.Restore(before)
+					return snapshot, prepareErr
+				}
+				defer os.Remove(candidate.path)
+				if applyErr := m.commitRuntimeConfig(ctx, candidate.content); applyErr != nil {
+					_ = m.subscriptions.Restore(before)
+					return snapshot, applyErr
+				}
+			}
+			m.syncSubscriptionState(&snapshot, after)
+			return snapshot, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		return findPublicProfile(m.subscriptions.Snapshot().Public(), id)
+	})
+	if err != nil {
+		return subscription.PublicProfile{}, err
+	}
+	return result.(subscription.PublicProfile), nil
+}
+
 func (m *Manager) prepareCatalogConfig(ctx context.Context, catalog subscription.Catalog) (configCandidate, error) {
 	if catalog.ActiveID == "" {
 		content, err := core.BootstrapConfig(m.settings)
