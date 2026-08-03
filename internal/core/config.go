@@ -2,7 +2,10 @@ package core
 
 import (
 	"context"
+	"errors"
 	"net/netip"
+	"os"
+	"reflect"
 
 	"github.com/LeeShunEE/mihari/internal/config"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
@@ -58,6 +61,37 @@ func WriteBootstrapConfig(path string, settings config.Settings) error {
 		return err
 	}
 	return config.AtomicWrite(path, content, 0o600)
+}
+
+func EnsureRuntimeConfig(path string, settings config.Settings) error {
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return WriteBootstrapConfig(path, settings)
+	}
+	if err != nil {
+		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "read runtime configuration"}
+	}
+	if len(content) > 32<<20 {
+		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "runtime configuration is too large"}
+	}
+	var document map[string]any
+	if err := yaml.Unmarshal(content, &document); err != nil {
+		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid runtime configuration"}
+	}
+	bootstrap, err := BootstrapConfig(settings)
+	if err != nil {
+		return err
+	}
+	var managed map[string]any
+	if err := yaml.Unmarshal(bootstrap, &managed); err != nil {
+		return protocol.APIError{Code: protocol.CodeInternal, Message: "decode managed runtime invariants"}
+	}
+	for _, key := range []string{"mixed-port", "allow-lan", "bind-address", "external-controller", "secret"} {
+		if !reflect.DeepEqual(document[key], managed[key]) {
+			return protocol.APIError{Code: protocol.CodeDataFailure, Message: "runtime configuration violates a mihari-managed field", Details: map[string]any{"field": key}}
+		}
+	}
+	return nil
 }
 
 func ValidateConfig(ctx context.Context, runner CommandRunner, binaryPath, dataDir, configPath string) error {
