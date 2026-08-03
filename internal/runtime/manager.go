@@ -56,6 +56,7 @@ type Options struct {
 	RuntimeConfig  string
 	StagingDir     string
 	ValidateConfig func(context.Context, string) error
+	RunScheduler   func(context.Context) error
 }
 
 type Manager struct {
@@ -71,6 +72,7 @@ type Manager struct {
 	runtimeConfig  string
 	stagingDir     string
 	validateConfig func(context.Context, string) error
+	runScheduler   func(context.Context) error
 	maintenance    chan struct{}
 	installed      chan struct{}
 	closing        atomic.Bool
@@ -111,6 +113,7 @@ func New(options Options) *Manager {
 		runtimeConfig:  options.RuntimeConfig,
 		stagingDir:     options.StagingDir,
 		validateConfig: options.ValidateConfig,
+		runScheduler:   options.RunScheduler,
 		maintenance:    make(chan struct{}, 1),
 		installed:      make(chan struct{}, 1),
 		operations:     make(map[string]*operationEntry),
@@ -126,6 +129,9 @@ func New(options Options) *Manager {
 
 func (m *Manager) Run(ctx context.Context) error {
 	defer m.closing.Store(true)
+	if m.runScheduler != nil {
+		go func() { _ = m.runScheduler(ctx) }()
+	}
 	shutdownObserved := make(chan struct{})
 	go func() {
 		select {

@@ -14,6 +14,7 @@ import (
 	"github.com/LeeShunEE/mihari/internal/platform"
 	runtimeapi "github.com/LeeShunEE/mihari/internal/runtime"
 	"github.com/LeeShunEE/mihari/internal/state"
+	"github.com/LeeShunEE/mihari/internal/subscription"
 	"github.com/LeeShunEE/mihari/internal/supervisor"
 )
 
@@ -64,6 +65,13 @@ func BuildRuntime(paths platform.Paths, settings config.Settings, daemonVersion 
 	}
 	coordinator := state.NewCoordinator(store)
 	controller := mihomo.NewClient("http://"+settings.ControllerAddr, settings.ControllerSecret, nil)
+	subscriptions, err := subscription.Open(subscription.ServiceOptions{
+		CatalogPath: paths.SubscriptionCatalog,
+		CacheDir:    paths.SubscriptionCache,
+	})
+	if err != nil {
+		return nil, err
+	}
 	var manager *runtimeapi.Manager
 	coreSupervisor := supervisor.New(supervisor.Options{
 		Starter: supervisor.CommandStarter{
@@ -93,8 +101,27 @@ func BuildRuntime(paths platform.Paths, settings config.Settings, daemonVersion 
 			ConfigPath: paths.RuntimeConfig,
 			StagingDir: paths.Staging,
 		},
-		Supervisor: coreSupervisor,
-		Controller: controller,
+		Supervisor:    coreSupervisor,
+		Controller:    controller,
+		Subscriptions: subscriptions,
+		Settings:      settings,
+		RuntimeConfig: paths.RuntimeConfig,
+		StagingDir:    paths.SubscriptionStaging,
+		ValidateConfig: func(ctx context.Context, candidatePath string) error {
+			return core.ValidateConfig(ctx, core.OSCommandRunner{}, paths.CoreBinary, paths.Root, candidatePath)
+		},
+		RunScheduler: func(ctx context.Context) error {
+			scheduler := subscription.NewScheduler(subscription.SchedulerOptions{
+				Snapshot: subscriptions.Snapshot,
+				Refresh: func(refreshContext context.Context, id string) error {
+					_, err := manager.RefreshSubscription(refreshContext, runtimeapi.Operation{
+						ID: "scheduler-" + id + "-" + time.Now().UTC().Format("20060102T150405.000000000"), Source: "scheduler",
+					}, id)
+					return err
+				},
+			})
+			return scheduler.Run(ctx)
+		},
 		BinaryExists: func() bool {
 			info, err := os.Stat(paths.CoreBinary)
 			return err == nil && !info.IsDir()
