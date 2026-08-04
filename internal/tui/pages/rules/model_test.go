@@ -77,6 +77,34 @@ func TestRules_ControlRowActivatesTabsSearchAndFilters(t *testing.T) {
 	}
 }
 
+func TestModel_SearchSupportsPasteMsg(t *testing.T) {
+	model := New(nil, nil)
+	model.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if !model.searching {
+		t.Fatal("expected search mode after /")
+	}
+	model.Update(tea.PasteMsg{Content: "hello\nworld"})
+	if model.query != "helloworld" {
+		t.Fatalf("query=%q", model.query)
+	}
+	_, command := model.Update(tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl})
+	if command == nil {
+		t.Fatal("expected clipboard read command")
+	}
+	model.Update(command())
+	_, leave := model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if model.searching {
+		t.Fatal("esc should leave search")
+	}
+	if leave == nil {
+		t.Fatal("expected input mode restore command")
+	}
+	mode, ok := leave().(ui.InputModeMsg)
+	if !ok || mode.Mode != ui.InputNavigation {
+		t.Fatalf("mode=%#v", mode)
+	}
+}
+
 func TestProviders_UpdateOneAndConfirmUpdateAll(t *testing.T) {
 	client := &fakeClient{providers: protocol.RuleProviderList{Providers: []protocol.RuleProvider{
 		{Name: "OpenAI", Type: "HTTP", Status: "Ready"},
