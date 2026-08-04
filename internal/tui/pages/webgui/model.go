@@ -45,6 +45,7 @@ type Model struct {
 	selected       int
 	lastError      string
 	toast          string
+	contentFocused bool
 	width          int
 	height         int
 	theme          ui.Theme
@@ -83,6 +84,9 @@ func (m *Model) SetOperationID(gen func() string) {
 func (m *Model) ID() ui.PageID { return ui.PageWebGUI }
 
 func (m *Model) SetSize(width, height int) { m.width, m.height = width, height }
+
+// SetContentFocused reports whether the root shell has given keyboard focus to this page.
+func (m *Model) SetContentFocused(focused bool) { m.contentFocused = focused }
 
 func (m *Model) FocusFirst() {
 	if len(m.status.Panels) > 0 {
@@ -307,15 +311,21 @@ func (m *Model) View() string {
 		}
 		// Focus marker sits outside the card so the border is not interrupted.
 		cursor := "  "
-		if index == m.selected {
+		selected := index == m.selected
+		if selected {
 			cursor = ui.FocusMarker
 		}
 		body := fmt.Sprintf("Installed  %s\nLatest     %s\nHealth     %s\nRollback   %s",
 			valueOr(panel.InstalledBuild, ui.MissingValue), valueOr(panel.LatestBuild, ui.MissingValue),
 			valueOr(panel.Health, ui.UnknownLabel), valueOr(panel.RollbackBuild, ui.MissingValue))
+		border := m.theme.ColorSurfaceBorder
+		// Accent the focused panel only while content owns keyboard focus.
+		if selected && m.contentFocused {
+			border = m.theme.ColorAccent
+		}
 		card := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(m.theme.ColorSurfaceBorder).
+			BorderForeground(border).
 			Padding(0, 1).
 			Width(max(28, min(56, m.width-4))).
 			Render(m.theme.Title.Render(valueOr(panel.Name, panel.ID)+state) + "\n" + body)

@@ -159,6 +159,36 @@ func TestModel_FooterHintsAreContextual(t *testing.T) {
 	}
 }
 
+func TestView_ControlStripHighlightsActiveWhenContentFocused(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSize(100, 24)
+	model.FocusFirst()
+	model.controlIndex = 2 // Columns
+
+	model.SetContentFocused(false)
+	railControl := strings.Split(model.View(), "\n")[0]
+	if strings.Contains(railControl, "\x1b[") {
+		t.Fatalf("control strip should stay plain while rail owns focus: %q", railControl)
+	}
+
+	model.SetContentFocused(true)
+	focusedControl := strings.Split(model.View(), "\n")[0]
+	if !strings.Contains(focusedControl, "\x1b[") {
+		t.Fatalf("active control chip should highlight when content focused: %q", focusedControl)
+	}
+	if focusedControl == railControl {
+		t.Fatal("content-focused control strip should differ from rail-focused")
+	}
+
+	// Header focus also gets a visible accent.
+	model.focus = pageFocus{kind: focusHeader}
+	model.headerIndex = 0
+	headerLine := strings.Split(model.View(), "\n")[2]
+	if !strings.Contains(headerLine, "\x1b[") {
+		t.Fatalf("focused header should highlight: %q", headerLine)
+	}
+}
+
 func TestConnections_SearchNotInControlStrip(t *testing.T) {
 	model := New(nil, nil)
 	model.SetSize(100, 24)

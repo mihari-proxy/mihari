@@ -59,6 +59,24 @@ func TestModel_LevelSearchAndWrapControls(t *testing.T) {
 	}
 }
 
+func TestView_ControlStripHighlightsActiveWhenContentFocused(t *testing.T) {
+	model := New(10)
+	model.SetSize(100, 16)
+	model.FocusFirst()
+	model.controlIndex = 1 // Wrap
+
+	model.SetContentFocused(false)
+	if control := strings.Split(model.View(), "\n")[0]; strings.Contains(control, "\x1b[") {
+		t.Fatalf("control strip should stay plain while rail owns focus: %q", control)
+	}
+
+	model.SetContentFocused(true)
+	control := strings.Split(model.View(), "\n")[0]
+	if !strings.Contains(control, "\x1b[") {
+		t.Fatalf("active control chip should highlight when content focused: %q", control)
+	}
+}
+
 func TestLogs_SearchNotInControlStrip(t *testing.T) {
 	model := New(10)
 	model.SetSize(100, 16)

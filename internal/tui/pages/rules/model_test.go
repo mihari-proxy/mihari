@@ -141,6 +141,24 @@ func TestRules_SearchUsesVisibleColumnsOnly(t *testing.T) {
 	}
 }
 
+func TestView_ControlStripHighlightsActiveWhenContentFocused(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSize(100, 16)
+	model.FocusFirst()
+	model.controlIndex = 2 // Type filter
+
+	model.SetContentFocused(false)
+	if control := strings.Split(model.View(), "\n")[0]; strings.Contains(control, "\x1b[") {
+		t.Fatalf("control strip should stay plain while rail owns focus: %q", control)
+	}
+
+	model.SetContentFocused(true)
+	control := strings.Split(model.View(), "\n")[0]
+	if !strings.Contains(control, "\x1b[") {
+		t.Fatalf("active control chip should highlight when content focused: %q", control)
+	}
+}
+
 func TestView_FocusedRowHighlightOnlyWhenContentFocused(t *testing.T) {
 	model := New(nil, nil)
 	model.SetRules(protocol.RuleList{Rules: []protocol.Rule{
