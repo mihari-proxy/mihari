@@ -30,6 +30,10 @@ func TestNewPathsBuildsRuntimeLayout(t *testing.T) {
 		"geoip country":   filepath.Join(root, "geoip", "GeoLite2-Country.mmdb"),
 		"geoip asn":       filepath.Join(root, "geoip", "GeoLite2-ASN.mmdb"),
 		"geoip staging":   filepath.Join(root, "staging", "geoip"),
+		"web root":        filepath.Join(root, "web"),
+		"web active":      filepath.Join(root, "web", "active.json"),
+		"web credential":  filepath.Join(root, "web", "credential"),
+		"panel staging":   filepath.Join(root, "staging", "panels"),
 	}
 	gots := map[string]string{
 		"root":            paths.Root,
@@ -48,6 +52,10 @@ func TestNewPathsBuildsRuntimeLayout(t *testing.T) {
 		"geoip country":   paths.GeoIPCountry,
 		"geoip asn":       paths.GeoIPASN,
 		"geoip staging":   paths.GeoIPStaging,
+		"web root":        paths.WebRoot,
+		"web active":      paths.WebActive,
+		"web credential":  paths.WebCredential,
+		"panel staging":   paths.PanelStaging,
 	}
 	for name, want := range wants {
 		if got := gots[name]; got != want {
