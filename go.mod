@@ -9,6 +9,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.8
 	charm.land/lipgloss/v2 v2.0.5
 	github.com/Microsoft/go-winio v0.6.2
+	github.com/atotto/clipboard v0.1.4
 	github.com/coder/websocket v1.8.15
 	github.com/oschwald/maxminddb-golang/v2 v2.4.1
 	github.com/spf13/cobra v1.9.1
@@ -17,7 +18,6 @@ require (
 )
 
 require (
-	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260703014108-f5a850f9c2b7 // indirect
 	github.com/charmbracelet/x/ansi v0.11.7 // indirect

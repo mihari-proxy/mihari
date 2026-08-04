@@ -58,6 +58,24 @@ func TestModel_LevelSearchAndWrapControls(t *testing.T) {
 	}
 }
 
+func TestModel_SearchSupportsPasteMsg(t *testing.T) {
+	model := New(10)
+	model.searching = true
+	model.Update(tea.PasteMsg{Content: "match\nme"})
+	if model.query != "matchme" {
+		t.Fatalf("query=%q", model.query)
+	}
+	updated, command := model.Update(tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("expected clipboard read command")
+	}
+	updated, _ = model.Update(command())
+	model = updated.(*Model)
+	// Clipboard content is environment-dependent; ensure the command path stays live.
+	_ = model
+}
+
 func TestModel_EnterOpensTypedDetailAndEscCloses(t *testing.T) {
 	model := New(10)
 	model.SetSize(100, 20)

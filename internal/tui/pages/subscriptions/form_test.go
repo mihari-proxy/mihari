@@ -26,6 +26,18 @@ func TestForm_TabTraversalAndEscCancel(t *testing.T) {
 	}
 }
 
+func TestForm_PasteMsgInsertsIntoFocusedInput(t *testing.T) {
+	form := newAddForm()
+	form.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	closed, _ := form.Update(tea.PasteMsg{Content: "https://paste.example/sub"})
+	if closed {
+		t.Fatal("paste closed form")
+	}
+	if got := form.inputs[1].Value(); got != "https://paste.example/sub" {
+		t.Fatalf("url value=%q", got)
+	}
+}
+
 func TestEditForm_LeavesURLBlankAndBuildsTypedUpdate(t *testing.T) {
 	form := newEditForm(protocol.Subscription{Name: "Main", Interval: "6h", AutoRefresh: true})
 	if form.inputs[1].Value() != "" {

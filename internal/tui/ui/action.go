@@ -5,17 +5,18 @@ import tea "charm.land/bubbletea/v2"
 type Action string
 
 const (
-	ActionDeleteSubscription  Action = "delete-subscription"
-	ActionCloseAllConnections Action = "close-all-connections"
-	ActionUpdateAllProviders  Action = "update-all-providers"
-	ActionRollbackPanel       Action = "rollback-panel"
-	ActionRestartCore         Action = "restart-core"
-	ActionUpdateCore          Action = "update-core"
-	ActionApplyEndpointChange Action = "apply-endpoint-change"
-	ActionSelectProxy         Action = "select-proxy"
-	ActionCloseConnection     Action = "close-connection"
-	ActionRefreshSubscription Action = "refresh-subscription"
-	ActionUpdateProvider      Action = "update-provider"
+	ActionDeleteSubscription      Action = "delete-subscription"
+	ActionCloseAllConnections     Action = "close-all-connections"
+	ActionUpdateAllProviders      Action = "update-all-providers"
+	ActionRollbackPanel           Action = "rollback-panel"
+	ActionRestartCore             Action = "restart-core"
+	ActionUpdateCore              Action = "update-core"
+	ActionApplyEndpointChange     Action = "apply-endpoint-change"
+	ActionSelectProxy             Action = "select-proxy"
+	ActionCloseConnection         Action = "close-connection"
+	ActionRefreshSubscription     Action = "refresh-subscription"
+	ActionRefreshAllSubscriptions Action = "refresh-all-subscriptions"
+	ActionUpdateProvider          Action = "update-provider"
 )
 
 type ActionIntentMsg struct {

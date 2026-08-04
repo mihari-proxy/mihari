@@ -110,6 +110,7 @@ type Model struct {
 	width          int
 	height         int
 	theme          ui.Theme
+	contentFocused bool
 }
 
 type mutationKind uint8
@@ -136,6 +137,11 @@ type subscriptionsResultMsg struct {
 	err    error
 }
 
+type refreshAllResultMsg struct {
+	revision uint64
+	err      error
+}
+
 func New(client Client, newOperationID func() string, now func() time.Time) *Model {
 	if newOperationID == nil {
 		newOperationID = defaultOperationID
@@ -147,6 +153,9 @@ func New(client Client, newOperationID func() string, now func() time.Time) *Mod
 }
 
 func (m *Model) ID() ui.PageID { return ui.PageSubscriptions }
+
+// SetContentFocused reports whether the root shell has given keyboard focus to this page.
+func (m *Model) SetContentFocused(focused bool) { m.contentFocused = focused }
 
 func (m *Model) SetSize(width, height int) { m.width, m.height = width, height }
 
@@ -182,7 +191,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 				m.lastError = ui.SubscriptionChangedMessage
 				return m, m.reload()
 			}
-			m.lastError = ui.SubscriptionOperationFailed
+			m.lastError = subscriptionErrorMessage(typed.err)
 			return m, nil
 		}
 		m.lastError = ""
@@ -207,6 +216,22 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			m.SetSubscriptions(typed.result)
 		}
 		return m, nil
+	case refreshAllResultMsg:
+		clear(m.pending)
+		if typed.err != nil {
+			var apiError protocol.APIError
+			if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
+				m.lastError = ui.SubscriptionChangedMessage
+				return m, m.reload()
+			}
+			m.lastError = subscriptionErrorMessage(typed.err)
+			return m, nil
+		}
+		m.lastError = ""
+		if typed.revision > 0 {
+			m.revision = typed.revision
+		}
+		return m, m.reload()
 	}
 
 	key, ok := message.(tea.KeyPressMsg)
@@ -255,6 +280,17 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		if index >= 0 {
 			return m, m.refresh(m.subscriptions[index].ID)
 		}
+	case "ctrl+r":
+		if len(m.subscriptions) > 0 {
+			return m, func() tea.Msg {
+				return ui.ActionIntentMsg{
+					Action: ui.ActionRefreshAllSubscriptions, Page: ui.PageSubscriptions, Capability: protocol.CapabilitySubscriptions, Key: "subscriptions:refresh-all",
+					Title: ui.RefreshAllSubscriptionsTitle, Object: ui.AllSubscriptionsLabel,
+					Impact: ui.RefreshAllSubscriptionsImpact, Rollback: ui.RefreshAllSubscriptionsRollback,
+					Execute: m.refreshAll(),
+				}
+			}
+		}
 	case "u":
 		if index >= 0 {
 			return m, m.use(m.subscriptions[index].ID)
@@ -275,6 +311,18 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	return m, nil
 }
 
+// FooterHints returns contextual shortcuts for the root shell footer.
+func (m *Model) FooterHints() string {
+	switch {
+	case m.form != nil:
+		return ui.FormHelp
+	case m.detail != nil:
+		return ui.DetailCloseHelp + "  ? help  q quit"
+	default:
+		return ui.FooterSubscriptions
+	}
+}
+
 func (m *Model) View() string {
 	lines := []string{m.theme.Title.Render(ui.SubscriptionsTitle), "  Active  Name                  State      Cache       Last success  Next refresh"}
 	if m.lastError != "" {
@@ -284,14 +332,20 @@ func (m *Model) View() string {
 		lines = append(lines, m.theme.Muted.Render(ui.NoSubscriptions))
 	}
 	for _, subscription := range m.subscriptions {
+		rowFocused := m.focus.kind == focusRow && m.focus.id == subscription.ID
 		marker := "  "
-		if m.focus.kind == focusRow && m.focus.id == subscription.ID {
+		if rowFocused {
 			marker = "> "
 		}
 		entry := rowFrom(subscription, subscription.ID == m.activeID, m.pending[subscription.ID] == "refresh", m.now(), m.globalInterval)
 		line := marker + entry.Render()
 		if action := m.pending[subscription.ID]; action != "" && action != "refresh" {
 			line += "  " + ui.PendingLabel
+		}
+		// Color highlight only while the content pane owns focus, so the rail
+		// selection style and the row selection style never compete.
+		if rowFocused && m.contentFocused {
+			line = m.theme.RowSelected.Render(line)
 		}
 		lines = append(lines, line)
 	}
@@ -380,6 +434,37 @@ func (m *Model) refresh(id string) tea.Cmd {
 	}
 }
 
+// refreshAll refreshes every subscription in list order. Presentation pending
+// is owned by the Root Shell confirmation dispatcher until execute begins.
+func (m *Model) refreshAll() tea.Cmd {
+	if m.client == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(m.subscriptions))
+	for _, subscription := range m.subscriptions {
+		ids = append(ids, subscription.ID)
+	}
+	baseID, revision := m.newOperationID(), m.revision
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(max(1, len(ids)))*30*time.Second)
+		defer cancel()
+		for index, id := range ids {
+			request := protocol.MutationRequest{OperationID: fmt.Sprintf("%s-%d", baseID, index+1)}
+			if revision != 0 {
+				request.IfRevision = &revision
+			}
+			result, err := m.client.RefreshSubscription(ctx, id, request)
+			if err != nil {
+				return refreshAllResultMsg{revision: revision, err: err}
+			}
+			if result.Revision != 0 {
+				revision = result.Revision
+			}
+		}
+		return refreshAllResultMsg{revision: revision}
+	}
+}
+
 func (m *Model) use(id string) tea.Cmd {
 	if m.client == nil {
 		return nil
@@ -460,9 +545,22 @@ func (m *Model) detailView() string {
 	subscription := m.detail.subscription
 	errorState := ui.MissingValue
 	if subscription.LastError != "" {
-		errorState = ui.SubscriptionOperationFailed
+		errorState = subscription.LastError
 	}
 	return fmt.Sprintf("%s: %s\n%s: %s\n%s: %t\n%s: %t\n%s: %s\n%s: %s\n%s: %s\n\n%s", ui.NameLabel, subscription.Name, ui.StatusLabel, enabledLabel(subscription.Enabled), ui.AutoRefreshLabel, subscription.AutoRefresh, ui.CacheLabel, subscription.Cached, ui.IntervalLabel, valueOr(subscription.Interval, ui.GlobalLabel), ui.LastSuccessLabel, formatTimestamp(subscription.UpdatedAt), ui.LastErrorLabel, errorState, ui.EscCloseHint)
+}
+
+// subscriptionErrorMessage returns a user-visible failure reason without leaking
+// URL tokens. Prefer the protocol message when available.
+func subscriptionErrorMessage(err error) string {
+	var apiError protocol.APIError
+	if errors.As(err, &apiError) && strings.TrimSpace(apiError.Message) != "" {
+		return apiError.Message
+	}
+	if err != nil && strings.TrimSpace(err.Error()) != "" {
+		return err.Error()
+	}
+	return ui.SubscriptionOperationFailed
 }
 
 func (m *Model) modal(title, body string) string {

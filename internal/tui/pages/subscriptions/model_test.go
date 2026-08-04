@@ -2,6 +2,7 @@ package subscriptions
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,49 @@ func TestRows_RenderActiveCacheAndRefreshStates(t *testing.T) {
 	}
 }
 
+func TestView_FocusedSubscriptionRowIsHighlightedOnlyWhenContentFocused(t *testing.T) {
+	model := New(nil, nil, func() time.Time { return time.Unix(100, 0) })
+	model.SetSubscriptions(protocol.SubscriptionList{Subscriptions: []protocol.Subscription{
+		{ID: "a", Name: "Alpha", Enabled: true},
+		{ID: "b", Name: "Beta", Enabled: true},
+	}})
+	model.focus = pageFocus{kind: focusRow, id: "b"}
+
+	model.SetContentFocused(false)
+	view := model.View()
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "Beta") {
+			if !strings.Contains(line, ">") {
+				t.Fatalf("row marker missing while rail-focused: %q", line)
+			}
+			if strings.Contains(line, "\x1b[") {
+				t.Fatalf("row should not use accent while rail owns focus: %q", line)
+			}
+		}
+	}
+
+	model.SetContentFocused(true)
+	view = model.View()
+	var focused, other string
+	for _, line := range strings.Split(view, "\n") {
+		switch {
+		case strings.Contains(line, "Beta"):
+			focused = line
+		case strings.Contains(line, "Alpha"):
+			other = line
+		}
+	}
+	if focused == "" || other == "" {
+		t.Fatalf("missing rows in view:\n%s", view)
+	}
+	if !strings.Contains(focused, ">") || !strings.Contains(focused, "\x1b[") {
+		t.Fatalf("focused content row missing color highlight: %q", focused)
+	}
+	if strings.Contains(other, "\x1b[") {
+		t.Fatalf("unfocused row unexpectedly styled: %q", other)
+	}
+}
+
 func TestModel_PinsFocusBySubscriptionIDAcrossReload(t *testing.T) {
 	model := New(nil, nil, func() time.Time { return time.Unix(100, 0) })
 	model.SetSubscriptions(protocol.SubscriptionList{Subscriptions: []protocol.Subscription{{ID: "a", Name: "A"}, {ID: "b", Name: "B"}}})
@@ -84,8 +128,9 @@ func TestModel_MutationUsesRevisionAndReconcilesTypedResult(t *testing.T) {
 }
 
 func TestModel_AddEditRefreshAndUseKeysAreAvailable(t *testing.T) {
-	model := New(&fakeClient{}, nil, nil)
-	model.SetSubscriptions(protocol.SubscriptionList{Revision: 3, Subscriptions: []protocol.Subscription{{ID: "a", Name: "A", Enabled: true, Cached: true}}})
+	client := &fakeClient{}
+	model := New(client, func() string { return "sub-op" }, nil)
+	model.SetSubscriptions(protocol.SubscriptionList{Revision: 3, Subscriptions: []protocol.Subscription{{ID: "a", Name: "A", Enabled: true, Cached: true}, {ID: "b", Name: "B", Enabled: true}}})
 	model.focus = pageFocus{kind: focusRow, id: "a"}
 	model.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	if model.form == nil || model.form.kind != formAdd {
@@ -103,6 +148,83 @@ func TestModel_AddEditRefreshAndUseKeysAreAvailable(t *testing.T) {
 			t.Fatalf("key %q returned no command", key.String())
 		}
 		model.pending = make(map[string]string)
+	}
+}
+
+func TestModel_RefreshFocusedAndConfirmRefreshAll(t *testing.T) {
+	list := protocol.SubscriptionList{Revision: 7, Subscriptions: []protocol.Subscription{
+		{ID: "a", Name: "A", Enabled: true},
+		{ID: "b", Name: "B", Enabled: true},
+	}}
+	client := &fakeClient{list: list}
+	model := New(client, func() string { return "refresh-op" }, nil)
+	model.SetSubscriptions(list)
+	model.focus = pageFocus{kind: focusRow, id: "a"}
+	_, command := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if command == nil || model.pending["a"] != "refresh" {
+		t.Fatalf("r command=%v pending=%v", command != nil, model.pending)
+	}
+	updated, _ := model.Update(command())
+	model = updated.(*Model)
+	if len(client.refreshed) != 1 || client.refreshed[0] != "a" || model.revision != 1 {
+		t.Fatalf("refreshed=%v revision=%d", client.refreshed, model.revision)
+	}
+
+	_, command = model.Update(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
+	if command == nil {
+		t.Fatal("ctrl+r did not request confirmation")
+	}
+	confirmation, ok := command().(ui.ActionIntentMsg)
+	if !ok || confirmation.Action != ui.ActionRefreshAllSubscriptions || confirmation.Execute == nil {
+		t.Fatalf("confirmation=%#v", confirmation)
+	}
+	if len(model.pending) != 0 {
+		t.Fatalf("pending before confirmation: %v", model.pending)
+	}
+	// Advance the authoritative list revision so the post-refresh reload is visible.
+	client.list.Revision = 9
+	updated, reload := model.Update(confirmation.Execute())
+	model = updated.(*Model)
+	if reload == nil {
+		t.Fatal("refresh-all did not reload list")
+	}
+	updated, _ = model.Update(reload())
+	model = updated.(*Model)
+	if !reflect.DeepEqual(client.refreshed, []string{"a", "a", "b"}) {
+		t.Fatalf("refreshed=%v", client.refreshed)
+	}
+	if model.revision != 9 {
+		t.Fatalf("revision after refresh-all=%d", model.revision)
+	}
+}
+
+func TestModel_RefreshFailureShowsProtocolMessage(t *testing.T) {
+	client := &fakeClient{refreshErr: protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid subscription YAML"}}
+	model := New(client, func() string { return "refresh-op" }, nil)
+	model.SetSubscriptions(protocol.SubscriptionList{Revision: 7, Subscriptions: []protocol.Subscription{{ID: "a", Name: "A"}}})
+	model.focus = pageFocus{kind: focusRow, id: "a"}
+	_, command := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	updated, _ := model.Update(command())
+	model = updated.(*Model)
+	if model.lastError != "invalid subscription YAML" {
+		t.Fatalf("lastError=%q", model.lastError)
+	}
+}
+
+func TestModel_FooterHintsAreContextual(t *testing.T) {
+	model := New(nil, nil, nil)
+	model.SetSubscriptions(protocol.SubscriptionList{Subscriptions: []protocol.Subscription{{ID: "a", Name: "A"}}})
+	if hints := model.FooterHints(); !strings.Contains(hints, "r refresh") || !strings.Contains(hints, "Ctrl+R") {
+		t.Fatalf("list footer=%q", hints)
+	}
+	model.detail = &detailState{subscription: protocol.Subscription{ID: "a", Name: "A"}}
+	if hints := model.FooterHints(); !strings.Contains(hints, "Esc") {
+		t.Fatalf("detail footer=%q", hints)
+	}
+	model.detail = nil
+	model.form = newAddForm()
+	if hints := model.FooterHints(); hints != ui.FormHelp {
+		t.Fatalf("form footer=%q", hints)
 	}
 }
 
@@ -196,14 +318,18 @@ func TestModel_EditFormKeepsOpeningRevision(t *testing.T) {
 }
 
 type fakeClient struct {
-	list         protocol.SubscriptionList
-	toggle       protocol.SubscriptionEnabledRequest
-	toggleResult protocol.SubscriptionResult
-	toggleErr    error
-	update       protocol.SubscriptionUpdateRequest
-	updateResult protocol.SubscriptionResult
-	remove       protocol.MutationRequest
-	removeErr    error
+	list          protocol.SubscriptionList
+	toggle        protocol.SubscriptionEnabledRequest
+	toggleResult  protocol.SubscriptionResult
+	toggleErr     error
+	update        protocol.SubscriptionUpdateRequest
+	updateResult  protocol.SubscriptionResult
+	remove        protocol.MutationRequest
+	removeErr     error
+	refreshed     []string
+	refreshResult protocol.SubscriptionResult
+	refreshErr    error
+	refreshRev    uint64
 }
 
 func (f *fakeClient) Subscriptions(context.Context) (protocol.SubscriptionList, error) {
@@ -212,8 +338,20 @@ func (f *fakeClient) Subscriptions(context.Context) (protocol.SubscriptionList, 
 func (f *fakeClient) AddSubscription(context.Context, protocol.SubscriptionAddRequest) (protocol.SubscriptionResult, error) {
 	return protocol.SubscriptionResult{}, nil
 }
-func (f *fakeClient) RefreshSubscription(context.Context, string, protocol.MutationRequest) (protocol.SubscriptionResult, error) {
-	return protocol.SubscriptionResult{}, nil
+func (f *fakeClient) RefreshSubscription(_ context.Context, id string, _ protocol.MutationRequest) (protocol.SubscriptionResult, error) {
+	f.refreshed = append(f.refreshed, id)
+	if f.refreshErr != nil {
+		return protocol.SubscriptionResult{}, f.refreshErr
+	}
+	f.refreshRev++
+	result := f.refreshResult
+	if result.Subscription.ID == "" {
+		result.Subscription = protocol.Subscription{ID: id, Name: id, Cached: true}
+	} else {
+		result.Subscription.ID = id
+	}
+	result.Revision = f.refreshRev
+	return result, nil
 }
 func (f *fakeClient) UseSubscription(context.Context, string, protocol.MutationRequest) (protocol.SubscriptionResult, error) {
 	return protocol.SubscriptionResult{}, nil

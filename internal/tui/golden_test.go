@@ -93,10 +93,14 @@ func TestGoldenOverviewFull(t *testing.T) {
 		Schema: "mihari/v1", Status: "running", Version: "v1.19.0", PID: 4242,
 	}})
 	model.applySessionEvent(session.Event{Kind: session.EventSubscriptions, Subscriptions: protocol.SubscriptionList{
-		Revision: 1,
+		Revision: 1, ActiveID: "main",
 		Subscriptions: []protocol.Subscription{
-			{ID: "main", Name: "Main", Enabled: true, Cached: true},
+			{ID: "main", Name: "Main", Enabled: true, Cached: true, UpdatedAt: time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)},
 		},
+	}})
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{
+		Schema: "mihari/v1", Revision: 1, Capabilities: fullCapabilities(),
+		Config: &protocol.ConfigStatus{Status: "ok", DesiredRevision: 1, ObservedRevision: 1},
 	}})
 	assertGolden(t, "full/overview", model)
 }

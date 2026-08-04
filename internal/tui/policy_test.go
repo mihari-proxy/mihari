@@ -4,7 +4,7 @@ import "testing"
 
 func TestConfirmationPolicy(t *testing.T) {
 	want := map[Action]bool{
-		DeleteSubscription: true, CloseAllConnections: true, UpdateAllProviders: true,
+		DeleteSubscription: true, CloseAllConnections: true, UpdateAllProviders: true, RefreshAllSubscriptions: true,
 		RollbackPanel: true, RestartCore: true, UpdateCore: true, ApplyEndpointChange: true,
 		SelectProxy: false, CloseConnection: false, RefreshSubscription: false, UpdateProvider: false,
 	}

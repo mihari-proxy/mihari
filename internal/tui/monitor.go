@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
@@ -72,10 +73,12 @@ func (m MonitorModel) Snapshot() ui.MonitorSnapshot {
 }
 
 func (m MonitorModel) ViewFull(width, height int) string {
+	width = max(1, width)
 	if height < 12 {
-		return m.ViewNumbers(width)
+		return clampLines(m.ViewNumbers(width), width)
 	}
-	chartWidth := max(1, width-4)
+	// "UL " / "DL " prefix plus sparkline must fit inside the fixed rail column.
+	chartWidth := max(1, width-len(ui.MonitorUploadShort)-1)
 	upload := make([]int64, len(m.traffic))
 	download := make([]int64, len(m.traffic))
 	for index, point := range m.traffic {
@@ -85,27 +88,47 @@ func (m MonitorModel) ViewFull(width, height int) string {
 	for index, point := range m.memory {
 		memory[index] = point.InUse
 	}
-	return strings.Join([]string{
+	return clampLines(strings.Join([]string{
 		ui.MonitorTrafficTitle,
 		ui.MonitorUploadShort + " " + ui.Sparkline(upload, chartWidth),
 		ui.MonitorDownloadShort + " " + ui.Sparkline(download, chartWidth),
 		ui.MonitorMemoryTitle,
-		"  " + ui.Sparkline(memory, chartWidth),
+		ui.Sparkline(memory, width),
 		m.ViewNumbers(width),
-	}, "\n")
+	}, "\n"), width)
 }
 
-func (m MonitorModel) ViewNumbers(_ int) string {
+func (m MonitorModel) ViewNumbers(width int) string {
 	state := ""
 	if m.stale {
 		state = " · " + ui.StaleLabel
 	}
-	return fmt.Sprintf("%s %d%s\n%s %s\n%s %s  %s %s\n%s %s  %s %s",
-		ui.MonitorConnectionsLabel, m.connections, state,
-		ui.MonitorMemoryLabel, formatIEC(m.memoryInUse, false),
-		ui.MonitorUploadShort, formatIEC(m.uploadRate, true), ui.MonitorDownloadShort, formatIEC(m.downloadRate, true),
-		ui.MonitorUploadTotal, formatIEC(m.uploadTotal, false), ui.MonitorDownloadTotal, formatIEC(m.downloadTotal, false),
-	)
+	// Prefer stacked rates/totals so large IEC values still fit a 18–24 column rail.
+	lines := []string{
+		fmt.Sprintf("%s %d%s", ui.MonitorConnectionsLabel, m.connections, state),
+		fmt.Sprintf("%s %s", ui.MonitorMemoryLabel, ui.FormatBytes(m.memoryInUse)),
+		fmt.Sprintf("%s %s", ui.MonitorUploadShort, ui.FormatRate(m.uploadRate)),
+		fmt.Sprintf("%s %s", ui.MonitorDownloadShort, ui.FormatRate(m.downloadRate)),
+		fmt.Sprintf("%s %s", ui.MonitorUploadTotal, ui.FormatBytes(m.uploadTotal)),
+		fmt.Sprintf("%s %s", ui.MonitorDownloadTotal, ui.FormatBytes(m.downloadTotal)),
+	}
+	if width <= 0 {
+		return strings.Join(lines, "\n")
+	}
+	return clampLines(strings.Join(lines, "\n"), width)
+}
+
+func clampLines(view string, width int) string {
+	if width <= 0 {
+		return view
+	}
+	lines := strings.Split(view, "\n")
+	for index, line := range lines {
+		if lipgloss.Width(line) > width {
+			lines[index] = lipgloss.NewStyle().MaxWidth(width).Render(line)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m MonitorModel) ViewSummary(_ int) string {
@@ -115,9 +138,9 @@ func (m MonitorModel) ViewSummary(_ int) string {
 	}
 	return fmt.Sprintf("%s%s %d  %s %s  %s %s  %s %s",
 		state, ui.MonitorConnectionsLabel, m.connections,
-		ui.MonitorUploadShort, formatIEC(m.uploadRate, true),
-		ui.MonitorDownloadShort, formatIEC(m.downloadRate, true),
-		ui.MonitorMemoryShort, formatIEC(m.memoryInUse, false),
+		ui.MonitorUploadShort, ui.FormatRate(m.uploadRate),
+		ui.MonitorDownloadShort, ui.FormatRate(m.downloadRate),
+		ui.MonitorMemoryShort, ui.FormatBytes(m.memoryInUse),
 	)
 }
 
@@ -128,25 +151,4 @@ func appendBounded[T any](values []T, value T) []T {
 		return values
 	}
 	return append(values, value)
-}
-
-func formatIEC(value int64, rate bool) string {
-	if value < 0 {
-		value = 0
-	}
-	units := []string{"B", "KiB", "MiB", "GiB", "TiB"}
-	amount := float64(value)
-	unit := 0
-	for amount >= 1024 && unit < len(units)-1 {
-		amount /= 1024
-		unit++
-	}
-	suffix := units[unit]
-	if rate {
-		suffix += "/s"
-	}
-	if unit == 0 {
-		return fmt.Sprintf("%d %s", value, suffix)
-	}
-	return fmt.Sprintf("%.1f %s", amount, suffix)
 }
