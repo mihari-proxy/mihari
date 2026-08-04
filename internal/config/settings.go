@@ -66,19 +66,25 @@ func Load(path string) (Settings, error) {
 }
 
 func LoadOrCreate(path string) (Settings, error) {
+	settings, _, err := LoadOrCreateResult(path)
+	return settings, err
+}
+
+// LoadOrCreateResult loads settings or creates them and reports whether this call created the file.
+func LoadOrCreateResult(path string) (Settings, bool, error) {
 	settings, err := Load(path)
 	if err == nil {
-		return settings, nil
+		return settings, false, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
-		return Settings{}, err
+		return Settings{}, false, err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return Settings{}, fmt.Errorf("create settings directory: %w", err)
+		return Settings{}, false, fmt.Errorf("create settings directory: %w", err)
 	}
 	lock, err := acquireCreationLock(path + ".lock")
 	if err != nil {
-		return Settings{}, err
+		return Settings{}, false, err
 	}
 	lockPath := lock.Name()
 	defer func() {
@@ -87,21 +93,21 @@ func LoadOrCreate(path string) (Settings, error) {
 	}()
 	settings, err = Load(path)
 	if err == nil {
-		return settings, nil
+		return settings, false, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
-		return Settings{}, err
+		return Settings{}, false, err
 	}
 	settings = Defaults()
 	var secret [32]byte
 	if _, err := rand.Read(secret[:]); err != nil {
-		return Settings{}, fmt.Errorf("generate controller secret: %w", err)
+		return Settings{}, false, fmt.Errorf("generate controller secret: %w", err)
 	}
 	settings.ControllerSecret = hex.EncodeToString(secret[:])
 	if err := Save(path, settings); err != nil {
-		return Settings{}, err
+		return Settings{}, false, err
 	}
-	return settings, nil
+	return settings, true, nil
 }
 
 func acquireCreationLock(path string) (*os.File, error) {

@@ -59,6 +59,7 @@ func (s *Server) runtimeRoutes(mux *http.ServeMux) {
 	s.subscriptionRoutes(mux)
 	s.preferencesRoutes(mux)
 	s.geoIPRoutes(mux)
+	s.onboardingRoutes(mux)
 }
 
 func (s *Server) coreStatus(writer http.ResponseWriter, _ *http.Request) {

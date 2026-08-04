@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"net"
 	"os"
@@ -34,12 +35,31 @@ func TestBuildRuntimeCreatesBootstrapAndSharedState(t *testing.T) {
 	if !slices.Contains(assembly.Manager.Capabilities(), protocol.CapabilityGeoIP) {
 		t.Fatalf("capabilities=%v", assembly.Manager.Capabilities())
 	}
+	if !slices.Contains(assembly.Manager.Capabilities(), protocol.CapabilityOnboarding) {
+		t.Fatalf("capabilities=%v", assembly.Manager.Capabilities())
+	}
 	raw, err := os.ReadFile(paths.RuntimeConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(raw), "external-controller: "+settings.ControllerAddr) || !strings.Contains(string(raw), settings.ControllerSecret) {
 		t.Fatalf("config=%s", raw)
+	}
+}
+
+func TestBuildRuntimeWithOptionsMarksNewInstallationSetupRequired(t *testing.T) {
+	paths := platform.NewPaths(filepath.Join(t.TempDir(), "data"))
+	settings := testRuntimeSettings(t)
+	settings.ControllerSecret = strings.Repeat("d", 64)
+	assembly, err := BuildRuntimeWithOptions(paths, settings, "test-version", nil, nil, RuntimeBuildOptions{
+		InitialSetupRequired: true, SettingsPath: paths.Settings,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := assembly.Manager.OnboardingStatus(context.Background())
+	if err != nil || status.Status.Complete {
+		t.Fatalf("status=%#v err=%v", status, err)
 	}
 }
 

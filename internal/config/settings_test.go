@@ -79,6 +79,18 @@ func TestLoadOrCreateSettingsIsStablePrivateAndStrict(t *testing.T) {
 	}
 }
 
+func TestLoadOrCreateResultReportsOnlyNewlyCreatedSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mihari.yaml")
+	first, created, err := LoadOrCreateResult(path)
+	if err != nil || !created || first.ControllerSecret == "" {
+		t.Fatalf("first=%#v created=%v err=%v", first, created, err)
+	}
+	second, created, err := LoadOrCreateResult(path)
+	if err != nil || created || second.ControllerSecret != first.ControllerSecret {
+		t.Fatalf("second=%#v created=%v err=%v", second, created, err)
+	}
+}
+
 func TestSaveRejectsMissingControllerSecret(t *testing.T) {
 	settings := Defaults()
 	if err := Save(filepath.Join(t.TempDir(), "mihari.yaml"), settings); err == nil {
