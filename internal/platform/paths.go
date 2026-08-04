@@ -23,6 +23,10 @@ type Paths struct {
 	GeoIPCountry        string
 	GeoIPASN            string
 	GeoIPStaging        string
+	WebRoot             string
+	WebActive           string
+	WebCredential       string
+	PanelStaging        string
 }
 
 func NewPaths(root string) Paths {
@@ -47,6 +51,10 @@ func NewPaths(root string) Paths {
 		GeoIPCountry:        filepath.Join(root, "geoip", "GeoLite2-Country.mmdb"),
 		GeoIPASN:            filepath.Join(root, "geoip", "GeoLite2-ASN.mmdb"),
 		GeoIPStaging:        filepath.Join(root, "staging", "geoip"),
+		WebRoot:             filepath.Join(root, "web"),
+		WebActive:           filepath.Join(root, "web", "active.json"),
+		WebCredential:       filepath.Join(root, "web", "credential"),
+		PanelStaging:        filepath.Join(root, "staging", "panels"),
 	}
 }
 
@@ -73,7 +81,7 @@ func defaultDataRoot() string {
 }
 
 func (p Paths) EnsureDirs() error {
-	for _, path := range []string{p.Root, p.Bin, filepath.Dir(p.RuntimeConfig), filepath.Dir(p.Log), p.Staging, p.Subscriptions, p.SubscriptionCache, p.SubscriptionStaging, filepath.Dir(p.TUIPreferences), filepath.Dir(p.GeoIPCountry), p.GeoIPStaging} {
+	for _, path := range []string{p.Root, p.Bin, filepath.Dir(p.RuntimeConfig), filepath.Dir(p.Log), p.Staging, p.Subscriptions, p.SubscriptionCache, p.SubscriptionStaging, filepath.Dir(p.TUIPreferences), filepath.Dir(p.GeoIPCountry), p.GeoIPStaging, p.WebRoot, p.PanelStaging} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			return err
 		}
