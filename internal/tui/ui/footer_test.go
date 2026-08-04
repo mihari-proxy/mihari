@@ -8,7 +8,7 @@ import (
 )
 
 func TestFitFooter_DropsMiddleBeforeHelpAndQuit(t *testing.T) {
-	hints := "← back  Enter details  a add  e edit  Space toggle  r refresh  Ctrl+R refresh all  u use  d delete  ? help  q quit"
+	hints := "Esc back  Enter details  a add  e edit  Space toggle  r refresh  Ctrl+R refresh all  u use  d delete  ? help  q quit"
 	global := "⠋ Working…"
 	// Narrow enough that the full line cannot fit.
 	width := 48

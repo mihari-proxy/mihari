@@ -258,7 +258,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	}
 	index := m.index(m.focus.id)
 	switch key.String() {
-	case "left":
+	case "esc":
 		return m, func() tea.Msg { return ui.FocusRailMsg{} }
 	case "up":
 		if index > 0 {

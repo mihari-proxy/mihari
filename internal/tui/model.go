@@ -445,7 +445,8 @@ func (model Model) updateRail(key string) (tea.Model, tea.Cmd) {
 		model.railIndex = max(0, model.railIndex-1)
 	case "down":
 		model.railIndex = min(len(model.rail)-1, model.railIndex+1)
-	case "enter", "right":
+	case "enter":
+		// Enter opens the selected page; arrow keys never cross rail ↔ content.
 		model.focus = ui.Focus{Area: ui.FocusContent, Page: model.active}
 		model.pages[model.active].FocusFirst()
 		if page, ok := model.pages[model.active].(interface{ Load() tea.Cmd }); ok {

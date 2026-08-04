@@ -175,13 +175,15 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	if key.String() == "ctrl+t" {
 		return m, m.testAll()
 	}
+	if key.String() == "esc" {
+		// Esc always returns to the rail; arrows stay inside this page.
+		return m, func() tea.Msg { return ui.FocusRailMsg{} }
+	}
 	if m.focus.Node == "" {
 		switch key.String() {
 		case "enter":
 			m.expanded[m.focus.Group] = !m.expanded[m.focus.Group]
 			m.ensureFocusVisible()
-		case "left":
-			return m, func() tea.Msg { return ui.FocusRailMsg{} }
 		case "up", "down":
 			m.move(key.String())
 		}
