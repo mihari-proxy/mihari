@@ -52,6 +52,7 @@ type Model struct {
 	globalState      ui.GlobalState
 	now              time.Time // spinner clock; advanced only while work is pending
 	spinning         bool      // true while a spinner tick loop is scheduled
+	spinGen          uint64    // generation so only the latest tick loop may reschedule
 }
 
 type actionExecuteMsg struct{ Intent ui.ActionIntentMsg }
@@ -62,17 +63,20 @@ type actionCompletedMsg struct {
 }
 
 // spinnerTickMsg advances the braille spinner frame while pending work exists.
-type spinnerTickMsg struct{ t time.Time }
+type spinnerTickMsg struct {
+	t   time.Time
+	gen uint64
+}
 
 // startSpinnerTickMsg kicks off the spinner tick loop without blocking callers
 // (unlike tea.Tick). executeAction batches this with the action command.
-type startSpinnerTickMsg struct{}
+type startSpinnerTickMsg struct{ gen uint64 }
 
 const spinnerTickInterval = 100 * time.Millisecond
 
-func spinnerTick() tea.Cmd {
+func spinnerTick(gen uint64) tea.Cmd {
 	return tea.Tick(spinnerTickInterval, func(t time.Time) tea.Msg {
-		return spinnerTickMsg{t: t}
+		return spinnerTickMsg{t: t, gen: gen}
 	})
 }
 
@@ -206,17 +210,22 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model, tea.Batch(pageCmd, model.spinnerCmdIfNeeded())
 	case startSpinnerTickMsg:
 		// Real tea.Tick starts here so executeAction's Batch stays non-blocking.
-		if model.needsSpinner() {
-			model.spinning = true
-			return model, spinnerTick()
+		if typed.gen != model.spinGen || !model.needsSpinner() {
+			if typed.gen == model.spinGen {
+				model.spinning = false
+			}
+			return model, nil
 		}
-		model.spinning = false
-		return model, nil
+		model.spinning = true
+		return model, spinnerTick(typed.gen)
 	case spinnerTickMsg:
+		if typed.gen != model.spinGen {
+			return model, nil
+		}
 		model.now = typed.t
 		if model.needsSpinner() {
 			model.spinning = true
-			return model, spinnerTick()
+			return model, spinnerTick(typed.gen)
 		}
 		model.spinning = false
 		return model, nil
@@ -518,8 +527,10 @@ func (model Model) needsSpinner() bool {
 	return len(model.pendingActions) > 0 || model.globalState == ui.StatePending
 }
 
-// spinnerCmdIfNeeded schedules a spinner tick when pending work exists and a
-// loop is not already running. Idle models return nil so ticks stop cleanly.
+// spinnerCmdIfNeeded schedules a spinner tick when pending work exists.
+// If a loop is already running (spinning), returns nil so only one generation is active.
+// A new generation is started only when spinning is false (idle → pending).
+// Idle models clear spinning and return nil.
 func (model *Model) spinnerCmdIfNeeded() tea.Cmd {
 	if !model.needsSpinner() {
 		model.spinning = false
@@ -528,9 +539,11 @@ func (model *Model) spinnerCmdIfNeeded() tea.Cmd {
 	if model.spinning {
 		return nil
 	}
+	model.spinGen++
+	gen := model.spinGen
 	model.spinning = true
 	// Instant message first so Batch expansion in tests does not block on tea.Tick.
-	return func() tea.Msg { return startSpinnerTickMsg{} }
+	return func() tea.Msg { return startSpinnerTickMsg{gen: gen} }
 }
 
 func (model Model) statusBarData() ui.StatusBarData {
@@ -618,11 +631,8 @@ func (model Model) View() tea.View {
 			}
 		}
 		// Compact mode metrics live in the status bar — never append ViewSummary.
-		if segment := model.footerGlobalSegment(); segment != "" {
-			footer += "  ·  " + segment
-		}
-		// Keep the footer on one terminal row so long page shortcuts stay visible.
-		footer = lipgloss.NewStyle().MaxWidth(max(1, model.width)).Render(footer)
+		// Prefer dropping middle shortcuts before ?/q and the global spinner segment.
+		footer = ui.FitFooter(footer, model.footerGlobalSegment(), max(1, model.width))
 		content = status + "\n" + strings.TrimRight(main, "\n") + "\n" + model.theme.Footer.Width(model.width).MaxWidth(model.width).Render(footer)
 	}
 	if model.modal != nil {

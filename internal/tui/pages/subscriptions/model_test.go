@@ -14,7 +14,7 @@ import (
 
 func TestRows_DoNotExposeInternalGenerationOrURL(t *testing.T) {
 	row := rowFrom(protocol.Subscription{ID: "one", Name: "Main", Generation: 42, Cached: true, LastError: "https://example.test/?token=secret"}, false, false, time.Unix(100, 0), "12h")
-	rendered := row.Render()
+	rendered := row.Render(ui.DefaultTheme())
 	for _, forbidden := range []string{"42", "example.test", "token", "secret", "http"} {
 		if strings.Contains(rendered, forbidden) {
 			t.Fatalf("row leaked %q: %s", forbidden, rendered)
@@ -24,6 +24,7 @@ func TestRows_DoNotExposeInternalGenerationOrURL(t *testing.T) {
 
 func TestRows_RenderActiveCacheAndRefreshStates(t *testing.T) {
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	theme := ui.DefaultTheme()
 	tests := []struct {
 		name         string
 		subscription protocol.Subscription
@@ -31,7 +32,7 @@ func TestRows_RenderActiveCacheAndRefreshStates(t *testing.T) {
 		updating     bool
 		want         []string
 	}{
-		{"ready", protocol.Subscription{Name: "Ready", Enabled: true, AutoRefresh: true, Cached: true, UpdatedAt: now.Add(-time.Hour)}, true, false, []string{"*", "Ready", "Enabled", "Ready", "1h ago", "in 11h"}},
+		{"ready", protocol.Subscription{Name: "Ready", Enabled: true, AutoRefresh: true, Cached: true, UpdatedAt: now.Add(-time.Hour)}, true, false, []string{"●", "Ready", "Enabled", "Ready", "1h ago", "in 11h"}},
 		{"missing", protocol.Subscription{Name: "Missing", Enabled: true, AutoRefresh: false}, false, false, []string{"Missing", "Manual"}},
 		{"stale", protocol.Subscription{Name: "Stale", Enabled: true, AutoRefresh: true, Cached: true, UpdatedAt: now.Add(-13 * time.Hour)}, false, false, []string{"Stale", "Retry pending"}},
 		{"updating", protocol.Subscription{Name: "Updating", Enabled: true}, false, true, []string{"Updating"}},
@@ -39,7 +40,7 @@ func TestRows_RenderActiveCacheAndRefreshStates(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := rowFrom(test.subscription, test.active, test.updating, now, "12h").Render()
+			got := rowFrom(test.subscription, test.active, test.updating, now, "12h").Render(theme)
 			for _, want := range test.want {
 				if !strings.Contains(got, want) {
 					t.Fatalf("row missing %q: %s", want, got)
