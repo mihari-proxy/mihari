@@ -31,3 +31,6 @@ go.work.sum
 # .idea/
 # .vscode/
 .superpowers
+# Git worktrees (local isolation)
+.worktrees/
+
