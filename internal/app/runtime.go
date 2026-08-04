@@ -14,17 +14,22 @@ import (
 	"github.com/LeeShunEE/mihari/internal/geoip"
 	"github.com/LeeShunEE/mihari/internal/mihomo"
 	"github.com/LeeShunEE/mihari/internal/onboarding"
+	"github.com/LeeShunEE/mihari/internal/panel"
+	"github.com/LeeShunEE/mihari/internal/panel/metacubexd"
+	"github.com/LeeShunEE/mihari/internal/panel/zashboard"
 	"github.com/LeeShunEE/mihari/internal/platform"
 	"github.com/LeeShunEE/mihari/internal/preferences"
 	runtimeapi "github.com/LeeShunEE/mihari/internal/runtime"
 	"github.com/LeeShunEE/mihari/internal/state"
 	"github.com/LeeShunEE/mihari/internal/subscription"
 	"github.com/LeeShunEE/mihari/internal/supervisor"
+	"github.com/LeeShunEE/mihari/internal/web"
 )
 
 type RuntimeAssembly struct {
 	Manager *runtimeapi.Manager
 	Store   *state.Store
+	Web     *web.Server
 }
 
 type RuntimeBuildOptions struct {
@@ -104,6 +109,33 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	if err != nil {
 		return nil, err
 	}
+	webCredential, err := panel.LoadOrCreateCredential(paths.WebCredential)
+	if err != nil {
+		return nil, err
+	}
+	panelService, err := panel.Open(panel.ServiceOptions{
+		WebRoot: paths.WebRoot, WebActive: paths.WebActive, StagingDir: paths.PanelStaging,
+		Adapters: []panel.Adapter{
+			zashboard.New(nil, ""),
+			metacubexd.New(nil, ""),
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	webGateway, err := web.New(web.Options{
+		Addr: settings.WebAddr,
+		Auth: web.Authenticator{
+			WebCredential:    webCredential,
+			ControllerSecret: settings.ControllerSecret,
+		},
+		ControllerURL:    "http://" + settings.ControllerAddr,
+		ControllerSecret: settings.ControllerSecret,
+		Panel:            panelService,
+	})
+	if err != nil {
+		return nil, err
+	}
 	var manager *runtimeapi.Manager
 	coreSupervisor := supervisor.New(supervisor.Options{
 		Starter: supervisor.CommandStarter{
@@ -142,6 +174,8 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 			return geoIPService.PrepareUpdate(ctx)
 		},
 		Onboarding:    onboardingService,
+		Panels:        panelService,
+		WebGateway:    webGateway,
 		Settings:      settings,
 		RuntimeConfig: paths.RuntimeConfig,
 		StagingDir:    paths.SubscriptionStaging,
@@ -186,5 +220,29 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 			return err == nil && !info.IsDir()
 		},
 	})
-	return &RuntimeAssembly{Manager: manager, Store: store}, nil
+	webGateway.Mutator = webMutator{manager: manager}
+	return &RuntimeAssembly{Manager: manager, Store: store, Web: webGateway}, nil
+}
+
+// webMutator routes browser mutations through the daemon coordinator.
+type webMutator struct {
+	manager *runtimeapi.Manager
+}
+
+func (m webMutator) SelectProxy(ctx context.Context, group, name string) error {
+	return m.manager.SelectProxy(ctx, runtimeapi.Operation{
+		ID: "web-select-" + time.Now().UTC().Format("20060102T150405.000000000"), Source: "web",
+	}, group, name)
+}
+
+func (m webMutator) CloseConnection(ctx context.Context, id string) error {
+	return m.manager.CloseConnection(ctx, runtimeapi.Operation{
+		ID: "web-close-" + time.Now().UTC().Format("20060102T150405.000000000"), Source: "web",
+	}, id)
+}
+
+func (m webMutator) CloseAllConnections(ctx context.Context) error {
+	return m.manager.CloseAllConnections(ctx, runtimeapi.Operation{
+		ID: "web-close-all-" + time.Now().UTC().Format("20060102T150405.000000000"), Source: "web",
+	})
 }
