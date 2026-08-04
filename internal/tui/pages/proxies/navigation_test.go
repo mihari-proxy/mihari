@@ -48,8 +48,12 @@ func TestNavigation_GroupAndNodeArrowRules(t *testing.T) {
 		t.Fatalf("group right changed focus=%#v", model.focus)
 	}
 	_, command = model.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if command != nil || model.focus != (FocusID{Group: "A"}) {
+		t.Fatalf("group left should stay on page: focus=%#v command=%v", model.focus, command != nil)
+	}
+	_, command = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if command == nil {
-		t.Fatal("group left did not return to rail")
+		t.Fatal("esc did not return to rail")
 	}
 	if _, ok := command().(ui.FocusRailMsg); !ok {
 		t.Fatalf("message=%T", command())
