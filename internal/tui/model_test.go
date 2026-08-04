@@ -11,6 +11,8 @@ import (
 	connectionspage "github.com/LeeShunEE/mihari/internal/tui/pages/connections"
 	rulespage "github.com/LeeShunEE/mihari/internal/tui/pages/rules"
 	setuppage "github.com/LeeShunEE/mihari/internal/tui/pages/setup"
+	systempage "github.com/LeeShunEE/mihari/internal/tui/pages/system"
+	webguipage "github.com/LeeShunEE/mihari/internal/tui/pages/webgui"
 	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
@@ -67,6 +69,38 @@ func TestModelRoutesSubscriptionsToPage(t *testing.T) {
 	view := model.pages[ui.PageSubscriptions].View()
 	if !strings.Contains(view, "Main") || !strings.Contains(view, "*") || strings.Contains(view, "Generation") {
 		t.Fatalf("subscriptions view=%s", view)
+	}
+}
+
+func TestModelRegistersCapabilityGatedWebGUIAndSystemPages(t *testing.T) {
+	model := NewModel()
+	web, ok := model.pages[ui.PageWebGUI].(*webguipage.Model)
+	if !ok || !strings.Contains(web.View(), ui.UnavailableTitle) {
+		t.Fatalf("web GUI page=%T view=%s", model.pages[ui.PageWebGUI], model.pages[ui.PageWebGUI].View())
+	}
+	system, ok := model.pages[ui.PageSystem].(*systempage.Model)
+	if !ok {
+		t.Fatalf("system page=%T", model.pages[ui.PageSystem])
+	}
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{DaemonVersion: "v0.4.0", Health: "ok", Revision: 3}})
+	model.applySessionEvent(session.Event{Kind: session.EventCore, Core: protocol.CoreStatus{Status: "running", Version: "v1.19.0"}})
+	if view := system.View(); !strings.Contains(view, "v0.4.0") || !strings.Contains(view, "v1.19.0") {
+		t.Fatalf("system view=%s", view)
+	}
+}
+
+func TestRootAcceptsSystemRouteRequestForStandaloneSetup(t *testing.T) {
+	model := NewModel()
+	model.active = ui.PageSystem
+	updated, _ := model.Update(ui.RouteRequestMsg{Page: ui.PageSetup})
+	model = updated.(Model)
+	if model.Route() != ui.PageSetup || model.focus.Area != ui.FocusContent {
+		t.Fatalf("route=%v focus=%v", model.Route(), model.focus)
+	}
+	updated, _ = model.Update(setuppage.CancelledMsg{})
+	model = updated.(Model)
+	if model.Route() != ui.PageSystem || model.focus.Area != ui.FocusContent {
+		t.Fatalf("cancel route=%v focus=%v", model.Route(), model.focus)
 	}
 }
 

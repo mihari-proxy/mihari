@@ -1,6 +1,9 @@
 package ui
 
-import tea "charm.land/bubbletea/v2"
+import (
+	tea "charm.land/bubbletea/v2"
+	"github.com/LeeShunEE/mihari/internal/control/protocol"
+)
 
 type SizeClass uint8
 
@@ -32,6 +35,12 @@ const (
 type FocusRailMsg struct{}
 
 type InputModeMsg struct{ Mode InputMode }
+
+type RouteRequestMsg struct{ Page PageID }
+
+type CoreObservedMsg struct{ Core protocol.CoreStatus }
+
+type RuntimeRevisionMsg struct{ Revision uint64 }
 
 type ConfirmationRequestMsg struct {
 	Title     string
