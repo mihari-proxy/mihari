@@ -29,6 +29,8 @@ func main() {
 		StatusClient:       localClient,
 		RuntimeClient:      localClient,
 		SubscriptionClient: localClient,
+		PanelClient:        localClient,
+		OpenBrowser:        platform.OpenBrowser,
 		SetupError:         setupError,
 		Interactive:        isInteractiveTerminal(os.Stdin, os.Stdout),
 		RunTUI: func(ctx context.Context) error {
