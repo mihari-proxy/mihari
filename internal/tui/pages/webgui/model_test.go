@@ -104,6 +104,28 @@ func TestWebGUIRendersCardsAndFooterWithoutSecrets(t *testing.T) {
 	}
 }
 
+func TestView_SelectedPanelAccentOnlyWhenContentFocused(t *testing.T) {
+	model := New(nil, []string{protocol.CapabilityWebGUI})
+	model.SetStatus(sampleStatus())
+	model.selected = 0
+
+	model.SetContentFocused(false)
+	railView := model.View()
+	if !strings.Contains(railView, ui.FocusMarker) {
+		t.Fatalf("selected panel should keep marker while rail-focused: %s", railView)
+	}
+
+	model.SetContentFocused(true)
+	contentView := model.View()
+	if contentView == railView {
+		t.Fatal("content-focused selected panel should differ (accent border)")
+	}
+	// Accent border uses ColorAccent; surface border uses ColorSurfaceBorder — views must diverge.
+	if !strings.Contains(contentView, "\x1b[") {
+		t.Fatalf("content-focused panel should use accent styling: %s", contentView)
+	}
+}
+
 func TestWebGUIActionsActivateInstallUpdateOpenWithoutConfirm(t *testing.T) {
 	fake := &fakeClient{status: sampleStatus(), openURL: "http://127.0.0.1:9191/?token=hidden"}
 	model := New(fake, []string{protocol.CapabilityWebGUI})

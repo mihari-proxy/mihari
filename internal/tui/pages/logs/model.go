@@ -203,20 +203,29 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 
 func (m *Model) View() string {
 	level := valueOr(m.level, ui.FilterAllLabel)
-	control := fmt.Sprintf("%s: %s  %s: %s  %s: %s", ui.LevelLabel, level, ui.WrapLabel, onOff(m.wrap), ui.PauseLabel, onOff(m.buffer.Paused()))
+	controlFocused := m.contentFocused && m.focus == focusControl
+	control := ui.RenderControlStrip(m.theme, []string{
+		fmt.Sprintf("%s: %s", ui.LevelLabel, level),
+		fmt.Sprintf("%s: %s", ui.WrapLabel, onOff(m.wrap)),
+		fmt.Sprintf("%s: %s", ui.PauseLabel, onOff(m.buffer.Paused())),
+	}, m.controlIndex, controlFocused, "  ")
+	var status []string
 	if unread := m.Unread(); unread > 0 {
-		control += fmt.Sprintf("  %s: %d", ui.UnreadLabel, unread)
+		status = append(status, fmt.Sprintf("%s: %d", ui.UnreadLabel, unread))
 	}
 	if dropped := m.buffer.Dropped(); dropped > 0 {
-		control += fmt.Sprintf("  %s: %d", ui.DroppedLabel, dropped)
+		status = append(status, fmt.Sprintf("%s: %d", ui.DroppedLabel, dropped))
 	}
 	if m.stale {
-		control += "  " + ui.StaleLabel
+		status = append(status, ui.StaleLabel)
 	}
-	searchFocused := m.searching || m.focus == focusSearch
+	if len(status) > 0 {
+		control += "  " + m.theme.Muted.Render(strings.Join(status, "  "))
+	}
+	searchFocused := m.searching || (m.contentFocused && m.focus == focusSearch)
 	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.width)
 	lines := []string{
-		m.theme.Title.Render(control),
+		control,
 		searchBar,
 		fmt.Sprintf("  %-8s  %-7s  %s", ui.TimeLabel, ui.LevelLabel, ui.MessageLabel),
 	}
