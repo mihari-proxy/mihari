@@ -3,15 +3,18 @@ package protocol
 type ErrorCode string
 
 const (
-	CodeInvalidArgument   ErrorCode = "invalid_argument"
-	CodeDaemonUnavailable ErrorCode = "daemon_unavailable"
-	CodeInvalidState      ErrorCode = "invalid_state"
-	CodePermissionDenied  ErrorCode = "permission_denied"
-	CodeRevisionConflict  ErrorCode = "revision_conflict"
-	CodeUpstreamFailure   ErrorCode = "upstream_failure"
-	CodeNetworkFailure    ErrorCode = "network_failure"
-	CodeDataFailure       ErrorCode = "data_failure"
-	CodeInternal          ErrorCode = "internal"
+	CodeInvalidArgument     ErrorCode = "invalid_argument"
+	CodeDaemonUnavailable   ErrorCode = "daemon_unavailable"
+	CodeInvalidState        ErrorCode = "invalid_state"
+	CodePermissionDenied    ErrorCode = "permission_denied"
+	CodeRevisionConflict    ErrorCode = "revision_conflict"
+	CodeUpstreamFailure     ErrorCode = "upstream_failure"
+	CodeNetworkFailure      ErrorCode = "network_failure"
+	CodeDataFailure         ErrorCode = "data_failure"
+	CodeInternal            ErrorCode = "internal"
+	CodeManagedField        ErrorCode = "managed_field"
+	CodeManagedOperation    ErrorCode = "managed_operation"
+	CodeUnsupportedMutation ErrorCode = "unsupported_mutation"
 )
 
 type APIError struct {
