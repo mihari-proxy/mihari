@@ -3,17 +3,21 @@ package connections
 import (
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
 
 func (m *Model) View() string {
-	control := fmt.Sprintf("[%s %d | %s %d]  [%s: %s]  [%s]  [%s]",
-		ui.ConnectionsActiveLabel, len(m.history.Active()), ui.ConnectionsClosedLabel, len(m.history.Closed()),
-		ui.SourceIPLabel, m.source, ui.ColumnsLabel, m.pauseLabel())
-	searchFocused := m.searching || m.focus.kind == focusSearch
+	controlFocused := m.contentFocused && m.focus.kind == focusControl
+	control := ui.RenderControlStrip(m.theme, []string{
+		fmt.Sprintf("[%s %d | %s %d]", ui.ConnectionsActiveLabel, len(m.history.Active()), ui.ConnectionsClosedLabel, len(m.history.Closed())),
+		fmt.Sprintf("[%s: %s]", ui.SourceIPLabel, m.source),
+		fmt.Sprintf("[%s]", ui.ColumnsLabel),
+		fmt.Sprintf("[%s]", m.pauseLabel()),
+	}, m.controlIndex, controlFocused, "  ")
+	searchFocused := m.searching || (m.contentFocused && m.focus.kind == focusSearch)
 	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.width)
 	lines := m.tableLines()
 	base := clipLines(control, m.width) + "\n" + searchBar + "\n" + clipLinesAt(strings.Join(lines, "\n"), m.width, m.horizontalOffset)
@@ -30,15 +34,17 @@ func (m *Model) tableLines() []string {
 	rows := m.visibleRows()
 	headers := make([]string, len(m.columns))
 	for index, column := range m.columns {
-		headers[index] = ui.ConnectionColumnLabel(column)
+		label := ui.ConnectionColumnLabel(column)
 		if column == m.sortColumn {
 			switch m.sortDirection {
 			case sortDescending:
-				headers[index] += " ↓"
+				label += " ↓"
 			case sortAscending:
-				headers[index] += " ↑"
+				label += " ↑"
 			}
 		}
+		headerFocused := m.focus.kind == focusHeader && m.headerIndex == index
+		headers[index] = ui.RenderHeaderCell(m.theme, label, headerFocused, m.contentFocused)
 	}
 	lines := []string{strings.Join(headers, "  ")}
 	if len(rows) == 0 {
@@ -67,7 +73,7 @@ func (m *Model) tableLines() []string {
 func (m *Model) tableWidth() int {
 	width := 0
 	for _, line := range m.tableLines() {
-		width = max(width, utf8.RuneCountInString(line))
+		width = max(width, lipgloss.Width(line))
 	}
 	return width
 }
@@ -87,10 +93,15 @@ func (m *Model) columnsView() string {
 			mark = "[x]"
 		}
 		focus := "  "
-		if index == m.columnCursor {
+		rowFocused := index == m.columnCursor
+		if rowFocused {
 			focus = ui.FocusMarker
 		}
-		lines = append(lines, focus+mark+" "+ui.ConnectionColumnLabel(column))
+		line := focus + mark + " " + ui.ConnectionColumnLabel(column)
+		if rowFocused && m.contentFocused {
+			line = m.theme.RowFocus.Render(line)
+		}
+		lines = append(lines, line)
 	}
 	return strings.Join(append(lines, ui.SaveLabel+" - Enter"), "\n")
 }
@@ -163,16 +174,69 @@ func clipLinesAt(content string, width, offset int) string {
 	}
 	lines := strings.Split(content, "\n")
 	for index, line := range lines {
-		runes := []rune(line)
-		start := min(max(0, offset), len(runes))
-		runes = runes[start:]
-		if len(runes) > width {
-			lines[index] = string(runes[:max(0, width-1)]) + "\u2026"
-		} else {
-			lines[index] = string(runes)
-		}
+		// Clip by printable width so RowFocus / header ANSI does not inflate the budget.
+		lines[index] = clipStyledLine(line, width, offset)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// clipStyledLine pans and truncates a possibly styled line by visible columns.
+func clipStyledLine(line string, width, offset int) string {
+	if width <= 0 {
+		return ""
+	}
+	if offset <= 0 && lipgloss.Width(line) <= width {
+		return line
+	}
+	// Decompose into printable runes with preceding escape sequences.
+	type cell struct {
+		prefix string
+		r      rune
+	}
+	cells := make([]cell, 0, len(line))
+	var escape strings.Builder
+	inEscape := false
+	for _, r := range line {
+		switch {
+		case r == '\x1b':
+			inEscape = true
+			escape.WriteRune(r)
+		case inEscape:
+			escape.WriteRune(r)
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEscape = false
+			}
+		default:
+			cells = append(cells, cell{prefix: escape.String(), r: r})
+			escape.Reset()
+		}
+	}
+	trailing := escape.String()
+
+	start := min(max(0, offset), len(cells))
+	rest := cells[start:]
+	if len(rest) == 0 {
+		return trailing
+	}
+	if len(rest) <= width {
+		var out strings.Builder
+		for _, c := range rest {
+			out.WriteString(c.prefix)
+			out.WriteRune(c.r)
+		}
+		out.WriteString(trailing)
+		return out.String()
+	}
+	// Truncate: keep width-1 cells + ellipsis.
+	keep := max(0, width-1)
+	var out strings.Builder
+	for _, c := range rest[:keep] {
+		out.WriteString(c.prefix)
+		out.WriteRune(c.r)
+	}
+	out.WriteString("\u2026")
+	out.WriteString(trailing)
+	return out.String()
 }
 
 func formatBytes(value int64) string {

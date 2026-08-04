@@ -273,19 +273,26 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 }
 
 func (m *Model) View() string {
-	tabs := "[" + ui.RulesTabLabel + "]  " + ui.RuleProvidersTabLabel
-	if m.view == viewProviders {
-		tabs = ui.RulesTabLabel + "  [" + ui.RuleProvidersTabLabel + "]"
-	}
-	control := tabs
+	rulesTab := ui.RulesTabLabel
+	providersTab := ui.RuleProvidersTabLabel
 	if m.view == viewRules {
-		control += fmt.Sprintf("  %s: %s  %s: %s", ui.TypeLabel, valueOr(m.typeFilter, ui.FilterAllLabel), ui.TargetLabel, valueOr(m.targetFilter, ui.FilterAllLabel))
+		rulesTab = "[" + ui.RulesTabLabel + "]"
 	} else {
-		control += fmt.Sprintf("  %s: %s  %s: %s", ui.BehaviorLabel, valueOr(m.behaviorFilter, ui.FilterAllLabel), ui.StatusLabel, valueOr(m.statusFilter, ui.FilterAllLabel))
+		providersTab = "[" + ui.RuleProvidersTabLabel + "]"
 	}
-	searchFocused := m.searching || m.focus.kind == focusSearch
+	var filterA, filterB string
+	if m.view == viewRules {
+		filterA = fmt.Sprintf("%s: %s", ui.TypeLabel, valueOr(m.typeFilter, ui.FilterAllLabel))
+		filterB = fmt.Sprintf("%s: %s", ui.TargetLabel, valueOr(m.targetFilter, ui.FilterAllLabel))
+	} else {
+		filterA = fmt.Sprintf("%s: %s", ui.BehaviorLabel, valueOr(m.behaviorFilter, ui.FilterAllLabel))
+		filterB = fmt.Sprintf("%s: %s", ui.StatusLabel, valueOr(m.statusFilter, ui.FilterAllLabel))
+	}
+	controlFocused := m.contentFocused && m.focus.kind == focusControl
+	control := ui.RenderControlStrip(m.theme, []string{rulesTab, providersTab, filterA, filterB}, m.controlIndex, controlFocused, "  ")
+	searchFocused := m.searching || (m.contentFocused && m.focus.kind == focusSearch)
 	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.width)
-	lines := []string{m.theme.Title.Render(control), searchBar}
+	lines := []string{control, searchBar}
 	if m.lastError != "" {
 		lines = append(lines, m.theme.Muted.Render(m.lastError))
 	}
