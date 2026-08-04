@@ -1,0 +1,38 @@
+package tui
+
+import "github.com/LeeShunEE/mihari/internal/tui/ui"
+
+type Action = ui.Action
+
+const (
+	DeleteSubscription  = ui.ActionDeleteSubscription
+	CloseAllConnections = ui.ActionCloseAllConnections
+	UpdateAllProviders  = ui.ActionUpdateAllProviders
+	RollbackPanel       = ui.ActionRollbackPanel
+	RestartCore         = ui.ActionRestartCore
+	UpdateCore          = ui.ActionUpdateCore
+	ApplyEndpointChange = ui.ActionApplyEndpointChange
+	SelectProxy         = ui.ActionSelectProxy
+	CloseConnection     = ui.ActionCloseConnection
+	RefreshSubscription = ui.ActionRefreshSubscription
+	UpdateProvider      = ui.ActionUpdateProvider
+)
+
+func RequiresConfirmation(action Action) bool {
+	switch action {
+	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RollbackPanel, RestartCore, UpdateCore, ApplyEndpointChange:
+		return true
+	default:
+		return false
+	}
+}
+
+func knownAction(action Action) bool {
+	switch action {
+	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RollbackPanel, RestartCore, UpdateCore, ApplyEndpointChange,
+		SelectProxy, CloseConnection, RefreshSubscription, UpdateProvider:
+		return true
+	default:
+		return false
+	}
+}
