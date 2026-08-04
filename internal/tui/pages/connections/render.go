@@ -11,8 +11,9 @@ import (
 
 func (m *Model) View() string {
 	controlFocused := m.contentFocused && m.focus.kind == focusControl
+	activeN, closedN := len(m.history.Active()), len(m.history.Closed())
 	control := ui.RenderControlStrip(m.theme, []string{
-		fmt.Sprintf("[%s %d | %s %d]", ui.ConnectionsActiveLabel, len(m.history.Active()), ui.ConnectionsClosedLabel, len(m.history.Closed())),
+		fmt.Sprintf("[%s %d | %s %d]", ui.ConnectionsActiveLabel, activeN, ui.ConnectionsClosedLabel, closedN),
 		fmt.Sprintf("[%s: %s]", ui.SourceIPLabel, m.source),
 		fmt.Sprintf("[%s]", ui.ColumnsLabel),
 		fmt.Sprintf("[%s]", m.pauseLabel()),
@@ -20,7 +21,8 @@ func (m *Model) View() string {
 	searchFocused := m.searching || (m.contentFocused && m.focus.kind == focusSearch)
 	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.width)
 	lines := m.tableLines()
-	base := clipLines(control, m.width) + "\n" + searchBar + "\n" + clipLinesAt(strings.Join(lines, "\n"), m.width, m.horizontalOffset)
+	body := strings.Join(lines, "\n")
+	base := clipLines(control, m.width) + "\n" + searchBar + "\n" + clipLines(body, m.width)
 	if m.columnsOpen {
 		return base + "\n" + m.columnsView()
 	}
@@ -32,50 +34,144 @@ func (m *Model) View() string {
 
 func (m *Model) tableLines() []string {
 	rows := m.visibleRows()
-	headers := make([]string, len(m.columns))
-	for index, column := range m.columns {
-		label := ui.ConnectionColumnLabel(column)
-		if column == m.sortColumn {
-			switch m.sortDirection {
-			case sortDescending:
-				label += " ↓"
-			case sortAscending:
-				label += " ↑"
-			}
-		}
-		headerFocused := m.focus.kind == focusHeader && m.headerIndex == index
-		headers[index] = ui.RenderHeaderCell(m.theme, label, headerFocused, m.contentFocused)
-	}
-	lines := []string{strings.Join(headers, "  ")}
+	header, rule := m.connectionHeader()
+	lines := []string{header, rule}
 	if len(rows) == 0 {
-		lines = append(lines, m.theme.Muted.Render(ui.NoConnections))
-	} else {
-		for _, connection := range rows {
-			values := make([]string, len(m.columns))
-			for index, column := range m.columns {
-				values[index] = columnValue(connection, column)
-			}
-			prefix := "  "
-			rowFocused := m.focus.kind == focusRow && m.focus.rowID == connection.ID
-			if rowFocused {
-				prefix = ui.FocusMarker
-			}
-			line := prefix + strings.Join(values, "  ")
-			if rowFocused && m.contentFocused {
-				line = m.theme.RowFocus.Render(line)
-			}
-			lines = append(lines, line)
-		}
+		return append(lines, m.theme.Muted.Render(ui.NoConnections))
+	}
+	for _, connection := range rows {
+		rowFocused := m.focus.kind == focusRow && m.focus.rowID == connection.ID
+		lines = append(lines, m.renderConnection(connection, rowFocused)...)
 	}
 	return lines
 }
 
-func (m *Model) tableWidth() int {
-	width := 0
-	for _, line := range m.tableLines() {
-		width = max(width, lipgloss.Width(line))
+func (m *Model) connectionHeader() (string, string) {
+	// Dual-line cards: short guide headers rather than every preference column.
+	titles := []string{ui.ConnectionColumnLabel("host"), ui.ConnectionColumnLabel("traffic")}
+	widths := m.connectionPrimaryWidths()
+	header, rule := ui.RenderHeaderRow(m.theme, titles, widths, 2, -1, false)
+	return "  " + header, "  " + rule
+}
+
+func (m *Model) layoutWidth() int {
+	if m.width > 0 {
+		return m.width
 	}
-	return width
+	return 100
+}
+
+func (m *Model) connectionPrimaryWidths() []int {
+	// Budget for host+traffic after focus marker (2) and shell Content horizontal padding (2).
+	avail := max(24, m.layoutWidth()-4)
+	return ui.FitColumnWidths([]ui.TableColumn{
+		{ID: "host", MinWidth: 12, Flex: 3},
+		{ID: "traffic", MinWidth: 14, MaxWidth: 24, Flex: 1, Align: ui.AlignRight},
+	}, avail, 2)
+}
+
+func (m *Model) renderConnection(connection protocol.Connection, focused bool) []string {
+	marker := ui.FocusPrefix(focused)
+	widths := m.connectionPrimaryWidths()
+	host := primaryHost(connection)
+	up := "↑" + formatRate(connection.UploadSpeed)
+	down := "↓" + formatRate(connection.DownloadSpeed)
+	traffic := up + "  " + down
+	if m.contentFocused {
+		traffic = ui.StyleTrafficPair(m.theme, up, down)
+	}
+	hostCell := ui.PadCell(host, widths[0], ui.AlignLeft)
+	// Traffic is pre-styled; pad by visible width toward the right.
+	trafficPad := widths[1] - lipgloss.Width(traffic)
+	if trafficPad < 0 {
+		traffic = ui.TruncateVisible(traffic, widths[1])
+		trafficPad = 0
+	}
+	trafficCell := strings.Repeat(" ", trafficPad) + traffic
+	primary := marker + ui.JoinCells([]string{hostCell, trafficCell}, 2)
+
+	secondary := m.secondaryLine(connection)
+	// Align secondary under host cell (after marker); clip by visible width.
+	secondaryLine := "  " + ui.TruncateVisible(secondary, max(8, m.layoutWidth()-2))
+
+	if focused && m.contentFocused {
+		primary = m.theme.RowFocus.Render(primary)
+	}
+	return []string{primary, secondaryLine}
+}
+
+func (m *Model) secondaryLine(connection protocol.Connection) string {
+	colorful := m.contentFocused
+	sep := "  ·  "
+	if colorful {
+		sep = m.theme.Muted.Render(sep)
+	}
+	net := networkLabel(connection)
+	if colorful {
+		net = ui.StyleNetwork(m.theme, net)
+	}
+	parts := []string{net}
+	chain := strings.Join(connection.Chains, " → ")
+	if chain == "" {
+		chain = ui.MissingValue
+	}
+	if colorful {
+		chain = m.theme.Muted.Render(chain)
+	}
+	parts = append(parts, chain)
+	if ui.ClassifyContentWidth(m.layoutWidth()) == ui.ContentFull {
+		rule := strings.TrimSpace(connection.Rule + " " + connection.RulePay)
+		if rule != "" {
+			if colorful {
+				rule = m.theme.Muted.Render(rule)
+			}
+			parts = append(parts, rule)
+		}
+		if process := connection.Metadata.Process; process != "" {
+			if colorful {
+				process = m.theme.Muted.Render(process)
+			}
+			parts = append(parts, process)
+		}
+	}
+	if !connection.Start.IsZero() {
+		start := connection.Start.Local().Format("15:04:05")
+		if colorful {
+			start = m.theme.Muted.Render(start)
+		}
+		parts = append(parts, start)
+	}
+	return strings.Join(parts, sep)
+}
+
+func primaryHost(connection protocol.Connection) string {
+	if connection.Metadata.Host != "" {
+		return address(connection.Metadata.Host, connection.Metadata.DestinationPort)
+	}
+	if connection.Metadata.DestinationIP != "" {
+		return address(connection.Metadata.DestinationIP, connection.Metadata.DestinationPort)
+	}
+	return value(connection.Metadata.Process)
+}
+
+func networkLabel(connection protocol.Connection) string {
+	typ := value(connection.Metadata.Type)
+	net := value(connection.Metadata.Network)
+	if typ == ui.MissingValue && net == ui.MissingValue {
+		return ui.MissingValue
+	}
+	if typ == ui.MissingValue {
+		return net
+	}
+	if net == ui.MissingValue {
+		return typ
+	}
+	return typ + "/" + net
+}
+
+func (m *Model) tableWidth() int {
+	// Dual-line layout no longer pans a mega-row; keep helper for callers.
+	return m.width
 }
 
 func (m *Model) pauseLabel() string {
@@ -174,7 +270,6 @@ func clipLinesAt(content string, width, offset int) string {
 	}
 	lines := strings.Split(content, "\n")
 	for index, line := range lines {
-		// Clip by printable width so RowFocus / header ANSI does not inflate the budget.
 		lines[index] = clipStyledLine(line, width, offset)
 	}
 	return strings.Join(lines, "\n")
@@ -188,7 +283,6 @@ func clipStyledLine(line string, width, offset int) string {
 	if offset <= 0 && lipgloss.Width(line) <= width {
 		return line
 	}
-	// Decompose into printable runes with preceding escape sequences.
 	type cell struct {
 		prefix string
 		r      rune
@@ -227,7 +321,6 @@ func clipStyledLine(line string, width, offset int) string {
 		out.WriteString(trailing)
 		return out.String()
 	}
-	// Truncate: keep width-1 cells + ellipsis.
 	keep := max(0, width-1)
 	var out strings.Builder
 	for _, c := range rest[:keep] {

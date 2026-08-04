@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
@@ -221,11 +220,13 @@ func (m *Model) View() string {
 	}
 	searchFocused := m.searching || (m.contentFocused && m.focus == focusSearch)
 	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.width)
-	lines := []string{
-		control,
-		searchBar,
-		fmt.Sprintf("  %-8s  %-7s  %s", ui.TimeLabel, ui.LevelLabel, ui.MessageLabel),
-	}
+	widths := m.logColumnWidths()
+	header, rule := ui.RenderHeaderRow(m.theme,
+		[]string{ui.TimeLabel, ui.LevelLabel, ui.MessageLabel},
+		widths, logColGap, -1, false)
+	// Indent header under focus marker column so it lines up with data.
+	indent := "  "
+	lines := []string{control, searchBar, indent + header, indent + rule}
 	entries := m.visibleEntries()
 	if len(entries) == 0 {
 		lines = append(lines, m.theme.Muted.Render(ui.NoMatchingLogs))
@@ -240,6 +241,25 @@ func (m *Model) View() string {
 		content = m.renderDetail()
 	}
 	return content
+}
+
+const logColGap = 2
+
+func (m *Model) layoutWidth() int {
+	if m.width > 0 {
+		return m.width
+	}
+	return 100
+}
+
+func (m *Model) logColumnWidths() []int {
+	// Focus marker (2) + shell Content horizontal padding (2) sit outside fitted columns.
+	avail := max(20, m.layoutWidth()-4)
+	return ui.FitColumnWidths([]ui.TableColumn{
+		{ID: "time", MinWidth: 8, MaxWidth: 8, Flex: 0},
+		{ID: "level", MinWidth: 7, MaxWidth: 8, Flex: 0},
+		{ID: "message", MinWidth: 8, Flex: 1},
+	}, avail, logColGap)
 }
 
 func (m *Model) visibleEntries() []Entry {
@@ -268,7 +288,8 @@ func (m *Model) visibleEntries() []Entry {
 }
 
 func (m *Model) visibleWindow(count int) (int, int) {
-	rows := max(1, m.height-4)
+	// control + search + header + rule
+	rows := max(1, m.height-5)
 	if count <= rows {
 		return 0, count
 	}
@@ -280,16 +301,19 @@ func (m *Model) visibleWindow(count int) (int, int) {
 }
 
 func (m *Model) renderEntry(entry Entry, focused bool) []string {
-	marker := "  "
-	if focused {
-		marker = ui.FocusMarker
-	}
+	marker := ui.FocusPrefix(focused)
+	widths := m.logColumnWidths()
 	timestamp := ui.MissingValue
 	if !entry.ObservedAt.IsZero() {
 		timestamp = entry.ObservedAt.Local().Format("15:04:05")
 	}
-	prefix := fmt.Sprintf("%s%-8s  %-7s  ", marker, timestamp, strings.ToUpper(safeLine(entry.Log.Level)))
-	messageWidth := max(8, m.width-utf8.RuneCountInString(prefix)-1)
+	timeCell := ui.PadCell(timestamp, widths[0], ui.AlignLeft)
+	levelText := strings.ToUpper(safeLine(entry.Log.Level))
+	if m.contentFocused {
+		levelText = ui.StyleLogLevel(m.theme, safeLine(entry.Log.Level))
+	}
+	levelCell := ui.PadCell(levelText, widths[1], ui.AlignLeft)
+	messageWidth := widths[2]
 	message := safeLine(entry.Log.Message)
 	styleLine := func(line string) string {
 		if focused && m.contentFocused {
@@ -297,16 +321,23 @@ func (m *Model) renderEntry(entry Entry, focused bool) []string {
 		}
 		return line
 	}
+	meta := ui.JoinCells([]string{timeCell, levelCell}, logColGap)
 	if !m.wrap {
-		return []string{styleLine(prefix + truncate(message, messageWidth))}
+		msg := ui.PadCell(message, messageWidth, ui.AlignLeft)
+		return []string{styleLine(marker + ui.JoinCells([]string{meta, msg}, logColGap))}
 	}
 	wrapped := wrapText(message, messageWidth)
+	if len(wrapped) == 0 {
+		wrapped = []string{""}
+	}
 	lines := make([]string, 0, len(wrapped))
+	padMeta := lipgloss.Width(marker) + lipgloss.Width(meta) + logColGap
 	for index, line := range wrapped {
 		if index == 0 {
-			lines = append(lines, styleLine(prefix+line))
+			msg := ui.PadCell(line, messageWidth, ui.AlignLeft)
+			lines = append(lines, styleLine(marker+ui.JoinCells([]string{meta, msg}, logColGap)))
 		} else {
-			lines = append(lines, styleLine(strings.Repeat(" ", utf8.RuneCountInString(prefix))+line))
+			lines = append(lines, styleLine(strings.Repeat(" ", padMeta)+ui.PadCell(line, messageWidth, ui.AlignLeft)))
 		}
 	}
 	return lines
