@@ -92,6 +92,9 @@ func (m *Model) SetFilter(level, query string) {
 func (m *Model) Unread() int { return m.scrollUnread + m.buffer.Unread() }
 
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
+	if m.searching {
+		return m.updateSearch(message)
+	}
 	key, ok := message.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
@@ -101,9 +104,6 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			m.detail = nil
 		}
 		return m, nil
-	}
-	if m.searching {
-		return m.updateSearch(key)
 	}
 	switch key.String() {
 	case "/":
@@ -294,21 +294,19 @@ func (m *Model) activateControl() tea.Cmd {
 	return nil
 }
 
-func (m *Model) updateSearch(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
-	switch key.String() {
-	case "enter", "esc":
-		m.searching = false
-		m.reconcileFocus()
-		return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
-	case "backspace":
-		if len(m.query) > 0 {
-			_, size := utf8.DecodeLastRuneInString(m.query)
-			m.query = m.query[:len(m.query)-size]
+func (m *Model) updateSearch(message tea.Msg) (ui.Page, tea.Cmd) {
+	if key, ok := message.(tea.KeyPressMsg); ok {
+		switch key.String() {
+		case "enter", "esc":
+			m.searching = false
+			m.reconcileFocus()
+			return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
 		}
-	default:
-		if key.Text != "" && key.Mod == 0 {
-			m.query += key.Text
-		}
+	}
+	value, handled, command := ui.EditTextField(m.query, message, 256)
+	if handled {
+		m.query = value
+		return m, command
 	}
 	return m, nil
 }

@@ -163,8 +163,15 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, func() tea.Msg { return CompletedMsg{Status: typed.status} }
 	}
 
+	if m.loading {
+		return m, nil
+	}
 	key, ok := message.(tea.KeyPressMsg)
-	if !ok || m.loading || len(m.inputs) == 0 {
+	if !ok {
+		// Bracketed paste, clipboard results, and textinput blink updates must reach focused fields.
+		return m.forwardTextInput(message)
+	}
+	if len(m.inputs) == 0 && m.step != stepSubscription {
 		return m, nil
 	}
 	if key.String() == "esc" {
@@ -213,6 +220,27 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) forwardTextInput(message tea.Msg) (ui.Page, tea.Cmd) {
+	switch m.step {
+	case stepEndpoints:
+		if len(m.inputs) == 0 || m.focusedField < 0 || m.focusedField >= len(m.inputs) {
+			return m, nil
+		}
+		updated, command := m.inputs[m.focusedField].Update(message)
+		m.inputs[m.focusedField] = updated
+		return m, command
+	case stepSubscription:
+		if len(m.subscriptionInputs) == 0 || m.focusedField < 0 || m.focusedField >= len(m.subscriptionInputs) {
+			return m, nil
+		}
+		updated, command := m.subscriptionInputs[m.focusedField].Update(message)
+		m.subscriptionInputs[m.focusedField] = updated
+		return m, command
+	default:
+		return m, nil
+	}
 }
 
 func (m *Model) updateEndpoints(message tea.Msg, key tea.KeyPressMsg) (ui.Page, tea.Cmd) {

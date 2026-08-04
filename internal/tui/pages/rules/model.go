@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
@@ -181,6 +180,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, m.reloadProviders()
 	}
 
+	if m.searching {
+		return m.updateSearch(message)
+	}
 	key, ok := message.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
@@ -190,9 +192,6 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			m.detail = nil
 		}
 		return m, nil
-	}
-	if m.searching {
-		return m.updateSearch(key)
 	}
 	switch key.String() {
 	case "/":
@@ -443,21 +442,19 @@ func (m *Model) openDetail() {
 	m.detail = &detailState{title: ui.RuleProviderDetailsTitle, body: fmt.Sprintf("%s: %s\n%s: %s\n%s: %s\n%s: %s\n%s: %d\n%s: %s\n%s: %s", ui.NameLabel, provider.Name, ui.TypeLabel, provider.Type, ui.BehaviorLabel, valueOr(provider.Behavior, ui.MissingValue), ui.FormatLabel, valueOr(provider.Format, ui.MissingValue), ui.RulesCountLabel, provider.RuleCount, ui.UpdatedLabel, updated, ui.StatusLabel, provider.Status)}
 }
 
-func (m *Model) updateSearch(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
-	switch key.String() {
-	case "enter", "esc":
-		m.searching = false
-		m.reconcileFocus()
-		return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
-	case "backspace":
-		if len(m.query) > 0 {
-			_, size := utf8.DecodeLastRuneInString(m.query)
-			m.query = m.query[:len(m.query)-size]
+func (m *Model) updateSearch(message tea.Msg) (ui.Page, tea.Cmd) {
+	if key, ok := message.(tea.KeyPressMsg); ok {
+		switch key.String() {
+		case "enter", "esc":
+			m.searching = false
+			m.reconcileFocus()
+			return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
 		}
-	default:
-		if key.Text != "" && key.Mod == 0 {
-			m.query += key.Text
-		}
+	}
+	value, handled, command := ui.EditTextField(m.query, message, 256)
+	if handled {
+		m.query = value
+		return m, command
 	}
 	return m, nil
 }

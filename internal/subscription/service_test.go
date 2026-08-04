@@ -2,6 +2,7 @@ package subscription
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -112,6 +113,26 @@ func TestNotModifiedRetainsCacheAndAdvancesMetadataVersion(t *testing.T) {
 	}
 	if secondReceipt.After.Profiles[0].Version <= firstReceipt.After.Profiles[0].Version {
 		t.Fatal("304 did not advance metadata version")
+	}
+}
+
+func TestPrepareRefresh_RecordsLastErrorWithoutCachingInvalidBody(t *testing.T) {
+	service, url := newServiceForTest(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte("not-a-clash-document"))
+	}))
+	profile, err := service.Add("broken", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PrepareRefresh(context.Background(), profile.ID); err == nil {
+		t.Fatal("expected prepare failure")
+	}
+	snap := service.Snapshot()
+	if snap.Profiles[0].LastError == "" {
+		t.Fatal("last-error was not recorded")
+	}
+	if _, err := os.Stat(service.CachePath(profile.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid body was cached: %v", err)
 	}
 }
 

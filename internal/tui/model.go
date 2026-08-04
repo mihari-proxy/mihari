@@ -329,6 +329,10 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 			page.ResetSession()
 		}
 	}
+	// Transient reconnect banner clears once live data resumes.
+	if model.globalState == ui.StateReconnected && event.Kind != session.EventConnected {
+		model.globalState = ""
+	}
 	model.syncSystem()
 	model.syncOverview()
 	return command
@@ -483,16 +487,28 @@ func (model Model) View() tea.View {
 		content = lipgloss.Place(model.width, model.height, lipgloss.Center, lipgloss.Center,
 			model.theme.Title.Render(ui.ResizeRequired)+"\n"+model.theme.Muted.Render(ui.ResizeInstructions))
 	} else {
-		rail := ui.RenderRail(model.theme, model.rail, model.railIndex, model.focus.Area == ui.FocusRail, layout.RailWidth, layout.RailNavHeight)
+		// Keep the left column at a hard RailWidth so long monitor lines cannot
+		// push the content pane past the terminal edge (which clips card borders).
+		railNav := ui.RenderRail(model.theme, model.rail, model.railIndex, model.focus.Area == ui.FocusRail, layout.RailWidth, layout.RailNavHeight)
+		left := railNav
 		if layout.MonitorHeight > 0 {
-			rail += "\n" + model.monitor.ViewFull(layout.RailWidth-2, layout.MonitorHeight)
+			monitor := model.monitor.ViewFull(layout.RailWidth, layout.MonitorHeight)
+			left = lipgloss.JoinVertical(lipgloss.Left, railNav, monitor)
 		}
+		rail := lipgloss.NewStyle().Width(layout.RailWidth).MaxWidth(layout.RailWidth).Height(layout.ContentHeight).MaxHeight(layout.ContentHeight).Render(left)
 		page := model.pages[model.active]
-		body := model.theme.Content.Width(layout.ContentWidth).Height(layout.ContentHeight).Render(page.View())
+		if focused, ok := page.(ui.ContentFocusable); ok {
+			focused.SetContentFocused(model.focus.Area == ui.FocusContent)
+		}
+		body := model.theme.Content.Width(layout.ContentWidth).MaxWidth(layout.ContentWidth).Height(layout.ContentHeight).Render(page.View())
 		main := lipgloss.JoinHorizontal(lipgloss.Top, rail, body)
 		footer := ui.FooterRail
 		if model.focus.Area == ui.FocusContent {
-			footer = ui.FooterContent
+			if hints, ok := page.(ui.FooterHintProvider); ok {
+				footer = hints.FooterHints()
+			} else {
+				footer = ui.PageFooterHints(model.active)
+			}
 		}
 		if layout.Class == ui.Compact {
 			footer += "  ·  " + model.monitor.ViewSummary(model.width)
@@ -500,7 +516,9 @@ func (model Model) View() tea.View {
 		if label := ui.GlobalStateLabel(model.globalState); label != "" {
 			footer += "  ·  " + label
 		}
-		content = strings.TrimRight(main, "\n") + "\n" + model.theme.Footer.Width(model.width).Render(footer)
+		// Keep the footer on one terminal row so long page shortcuts stay visible.
+		footer = lipgloss.NewStyle().MaxWidth(max(1, model.width)).Render(footer)
+		content = strings.TrimRight(main, "\n") + "\n" + model.theme.Footer.Width(model.width).MaxWidth(model.width).Render(footer)
 	}
 	if model.modal != nil {
 		content = model.modal.View(model.width, model.height)
