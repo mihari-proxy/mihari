@@ -197,6 +197,10 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	if key.String() == "esc" {
+		// Esc returns to the rail; nested modes (search/detail/columns) are handled above.
+		return m, func() tea.Msg { return ui.FocusRailMsg{} }
+	}
 	if key.String() == "/" {
 		return m, m.startSearch()
 	}
@@ -230,10 +234,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 func (m *Model) updateControl(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 	switch key.String() {
 	case "left":
-		if m.controlIndex == 0 {
-			return m, func() tea.Msg { return ui.FocusRailMsg{} }
-		}
-		m.controlIndex--
+		m.controlIndex = max(0, m.controlIndex-1)
 	case "right", "tab":
 		m.controlIndex = min(3, m.controlIndex+1)
 	case "down":
@@ -264,8 +265,6 @@ func (m *Model) updateSearchFocus(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 		m.focus = pageFocus{kind: focusHeader}
 	case "enter":
 		return m, m.startSearch()
-	case "left":
-		return m, func() tea.Msg { return ui.FocusRailMsg{} }
 	}
 	return m, nil
 }

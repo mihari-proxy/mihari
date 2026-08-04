@@ -143,7 +143,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, m.Load()
 	case tea.KeyPressMsg:
 		if !m.available {
-			if typed.String() == "left" {
+			if typed.String() == "esc" {
 				return m, func() tea.Msg { return ui.FocusRailMsg{} }
 			}
 			return m, nil
@@ -155,7 +155,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 
 func (m *Model) handleKey(name string) tea.Cmd {
 	switch name {
-	case "left":
+	case "esc":
 		return func() tea.Msg { return ui.FocusRailMsg{} }
 	case "up", "k":
 		if m.selected > 0 {

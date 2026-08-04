@@ -195,17 +195,19 @@ func TestModelSessionReconnectMarksSnapshotStaleAndKeepsWaiting(t *testing.T) {
 	}
 }
 
-func TestRail_EnterAndRightEnterContentButTabDoesNot(t *testing.T) {
-	for _, enterKey := range []tea.KeyPressMsg{{Code: tea.KeyEnter}, {Code: tea.KeyRight}} {
-		model := NewModel()
-		model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
-		if model.focus.Area != ui.FocusRail {
-			t.Fatalf("tab focus=%v", model.focus)
-		}
-		model = updateModelKey(t, model, enterKey)
-		if model.focus.Area != ui.FocusContent {
-			t.Fatalf("key=%q focus=%v", enterKey.String(), model.focus)
-		}
+func TestRail_EnterOpensContentButArrowsDoNot(t *testing.T) {
+	model := NewModel()
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
+	if model.focus.Area != ui.FocusRail {
+		t.Fatalf("tab focus=%v", model.focus)
+	}
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyRight})
+	if model.focus.Area != ui.FocusRail {
+		t.Fatalf("right should stay on rail: focus=%v", model.focus)
+	}
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if model.focus.Area != ui.FocusContent {
+		t.Fatalf("enter focus=%v", model.focus)
 	}
 }
 
@@ -230,9 +232,9 @@ func TestRail_HJKLNeverNavigates(t *testing.T) {
 	}
 }
 
-func TestContent_HDoesNotReturnToRail(t *testing.T) {
+func TestContent_EscReturnsToRailButArrowsDoNot(t *testing.T) {
 	model := NewModel()
-	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyRight})
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if model.focus.Area != ui.FocusContent {
 		t.Fatalf("focus=%v", model.focus)
 	}
@@ -244,8 +246,14 @@ func TestContent_HDoesNotReturnToRail(t *testing.T) {
 
 	updated, command = model.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	model = updated.(Model)
+	if command != nil || model.focus.Area != ui.FocusContent {
+		t.Fatalf("left should stay in content: command=%v focus=%v", command != nil, model.focus)
+	}
+
+	updated, command = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = updated.(Model)
 	if command == nil {
-		t.Fatal("left arrow did not request rail focus")
+		t.Fatal("esc did not request rail focus")
 	}
 	updated, _ = model.Update(command())
 	model = updated.(Model)

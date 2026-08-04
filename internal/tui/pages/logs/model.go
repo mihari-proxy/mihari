@@ -123,6 +123,8 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, nil
 	}
 	switch key.String() {
+	case "esc":
+		return m, func() tea.Msg { return ui.FocusRailMsg{} }
 	case "/":
 		m.searching = true
 		return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputText} }
@@ -140,12 +142,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, nil
 	case "left":
 		if m.focus == focusControl {
-			if m.controlIndex == 0 {
-				return m, func() tea.Msg { return ui.FocusRailMsg{} }
-			}
-			m.controlIndex--
-		} else if m.focus == focusSearch {
-			return m, func() tea.Msg { return ui.FocusRailMsg{} }
+			m.controlIndex = max(0, m.controlIndex-1)
 		}
 		return m, nil
 	case "right":

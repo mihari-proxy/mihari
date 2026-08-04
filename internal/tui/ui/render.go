@@ -76,7 +76,7 @@ func (p *UnavailablePage) SetSize(width, height int) { p.width, p.height = width
 func (p *UnavailablePage) FocusFirst() {}
 
 func (p *UnavailablePage) Update(message tea.Msg) (Page, tea.Cmd) {
-	if key, ok := message.(tea.KeyPressMsg); ok && key.String() == "left" {
+	if key, ok := message.(tea.KeyPressMsg); ok && key.String() == "esc" {
 		return p, func() tea.Msg { return FocusRailMsg{} }
 	}
 	return p, nil

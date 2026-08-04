@@ -45,7 +45,7 @@ func (m *Model) SetSnapshot(snapshot Snapshot) {
 }
 
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
-	if key, ok := message.(tea.KeyPressMsg); ok && key.String() == "left" {
+	if key, ok := message.(tea.KeyPressMsg); ok && key.String() == "esc" {
 		return m, func() tea.Msg { return ui.FocusRailMsg{} }
 	}
 	return m, nil
