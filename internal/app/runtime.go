@@ -176,6 +176,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		Onboarding:    onboardingService,
 		Panels:        panelService,
 		WebGateway:    webGateway,
+		WebOpenToken:  webCredential,
 		Settings:      settings,
 		RuntimeConfig: paths.RuntimeConfig,
 		StagingDir:    paths.SubscriptionStaging,
