@@ -51,6 +51,7 @@ type Model struct {
 	contentFocused bool
 	width          int
 	height         int
+	scrollY        int // top visible content line (viewport origin)
 	theme          ui.Theme
 	now            time.Time // delay-test spinner clock
 	delaySpinning  bool
@@ -95,12 +96,17 @@ func (m *Model) ID() ui.PageID { return ui.PageProxies }
 // SetContentFocused reports whether the root shell has given keyboard focus to this page.
 func (m *Model) SetContentFocused(focused bool) { m.contentFocused = focused }
 
-func (m *Model) SetSize(width, height int) { m.width, m.height = width, height }
+func (m *Model) SetSize(width, height int) {
+	m.width, m.height = width, height
+	m.ensureFocusVisible()
+}
 
 func (m *Model) FocusFirst() {
 	if len(m.groups) > 0 {
 		m.focus = FocusID{Group: m.groups[0].Name}
 	}
+	m.scrollY = 0
+	m.ensureFocusVisible()
 }
 
 func (m *Model) SetGroups(groups protocol.ProxyGroups) {
@@ -119,6 +125,7 @@ func (m *Model) SetGroups(groups protocol.ProxyGroups) {
 			m.focus = FocusID{Group: group.Name}
 		}
 	}
+	m.ensureFocusVisible()
 }
 
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
@@ -172,6 +179,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		switch key.String() {
 		case "enter":
 			m.expanded[m.focus.Group] = !m.expanded[m.focus.Group]
+			m.ensureFocusVisible()
 		case "left":
 			return m, func() tea.Msg { return ui.FocusRailMsg{} }
 		case "up", "down":
@@ -194,8 +202,23 @@ func (m *Model) View() string {
 	if len(m.groups) == 0 {
 		return m.theme.Muted.Render(ui.NoProxyGroups)
 	}
-	sections := make([]string, 0, len(m.groups))
-	for _, group := range m.groups {
+	lines, _, _ := m.buildContent()
+	if m.height > 0 && len(lines) > m.height {
+		start := min(max(0, m.scrollY), max(0, len(lines)-m.height))
+		end := min(len(lines), start+m.height)
+		lines = lines[start:end]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// buildContent renders the full page as terminal lines and reports the inclusive
+// line range of the keyboard focus target (end exclusive).
+func (m *Model) buildContent() (lines []string, focusStart, focusEnd int) {
+	focusStart, focusEnd = -1, -1
+	for index, group := range m.groups {
+		if index > 0 {
+			lines = append(lines, "")
+		}
 		marker := "▸"
 		if m.expanded[group.Name] {
 			marker = "▾"
@@ -212,27 +235,66 @@ func (m *Model) View() string {
 		case !groupFocused:
 			header = m.theme.Title.Render(header)
 		}
-		lines := []string{header}
-		if m.expanded[group.Name] {
-			lines = append(lines, m.renderNodes(group)...)
+		headerStart := len(lines)
+		lines = append(lines, header)
+		if groupFocused {
+			focusStart, focusEnd = headerStart, len(lines)
 		}
-		sections = append(sections, strings.Join(lines, "\n"))
+		if !m.expanded[group.Name] {
+			continue
+		}
+		columns := m.columns()
+		barWidth := min(proxyBarMaxWidth, max(18, m.width/columns-1))
+		for start := 0; start < len(group.Nodes); start += columns {
+			bars := make([]string, 0, columns)
+			rowFocusStart := -1
+			for i := start; i < min(start+columns, len(group.Nodes)); i++ {
+				node := group.Nodes[i]
+				bars = append(bars, m.renderNode(group, node, barWidth))
+				if m.focus == (FocusID{Group: group.Name, Node: node.Name}) {
+					rowFocusStart = len(lines)
+				}
+			}
+			row := lipgloss.JoinHorizontal(lipgloss.Top, bars...)
+			rowLines := strings.Split(row, "\n")
+			if rowFocusStart >= 0 {
+				focusStart = rowFocusStart
+				focusEnd = rowFocusStart + len(rowLines)
+			}
+			lines = append(lines, rowLines...)
+		}
 	}
-	return strings.Join(sections, "\n\n")
+	return lines, focusStart, focusEnd
 }
 
-func (m *Model) renderNodes(group protocol.ProxyGroup) []string {
-	columns := m.columns()
-	barWidth := min(proxyBarMaxWidth, max(18, m.width/columns-1))
-	rows := make([]string, 0, (len(group.Nodes)+columns-1)/columns)
-	for start := 0; start < len(group.Nodes); start += columns {
-		bars := make([]string, 0, columns)
-		for index := start; index < min(start+columns, len(group.Nodes)); index++ {
-			bars = append(bars, m.renderNode(group, group.Nodes[index], barWidth))
-		}
-		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, bars...))
+// ensureFocusVisible scrolls so the focused group/node stays inside the viewport.
+func (m *Model) ensureFocusVisible() {
+	if m.height <= 0 || len(m.groups) == 0 {
+		return
 	}
-	return rows
+	lines, focusStart, focusEnd := m.buildContent()
+	if focusStart < 0 || focusEnd <= focusStart {
+		m.scrollY = min(m.scrollY, max(0, len(lines)-m.height))
+		if m.scrollY < 0 {
+			m.scrollY = 0
+		}
+		return
+	}
+	viewH := m.height
+	// Prefer keeping the whole focus block visible; if taller than the viewport,
+	// pin the top of the focused block.
+	if focusEnd-focusStart >= viewH {
+		m.scrollY = focusStart
+	} else {
+		if focusStart < m.scrollY {
+			m.scrollY = focusStart
+		}
+		if focusEnd > m.scrollY+viewH {
+			m.scrollY = focusEnd - viewH
+		}
+	}
+	maxScroll := max(0, len(lines)-viewH)
+	m.scrollY = min(max(0, m.scrollY), maxScroll)
 }
 
 func (m *Model) renderNode(group protocol.ProxyGroup, node protocol.ProxyNode, width int) string {
