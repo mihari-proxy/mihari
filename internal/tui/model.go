@@ -105,6 +105,7 @@ type pageClient interface {
 	subscriptionspage.Client
 	setuppage.Client
 	systempage.Client
+	webguipage.Client
 }
 
 func newModelWithClient(events <-chan session.Event, client pageClient) Model {
@@ -115,6 +116,7 @@ func newModelWithClientContext(ctx context.Context, events <-chan session.Event,
 	model := newModelWithPageClients(client, client, client, client)
 	model.pages[ui.PageSetup] = setuppage.NewWithContext(ctx, client, nil)
 	model.pages[ui.PageSystem] = systempage.NewWithContext(ctx, client, nil)
+	model.pages[ui.PageWebGUI] = webguipage.NewWithContext(ctx, client, nil)
 	model.resizePages()
 	model.events = events
 	return model

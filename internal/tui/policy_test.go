@@ -12,6 +12,7 @@ func TestConfirmationPolicy(t *testing.T) {
 		DeleteSubscription: true, CloseAllConnections: true, UpdateAllProviders: true, RefreshAllSubscriptions: true,
 		RollbackPanel: true, RestartCore: true, UpdateCore: true, ApplyEndpointChange: true,
 		SelectProxy: false, CloseConnection: false, RefreshSubscription: false, UpdateProvider: false,
+		InstallPanel: false, UpdatePanel: false, ActivatePanel: false, OpenWebGUI: false,
 	}
 	for action, required := range want {
 		if got := RequiresConfirmation(action); got != required {
