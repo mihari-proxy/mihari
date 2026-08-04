@@ -14,6 +14,8 @@ import (
 	rulespage "github.com/LeeShunEE/mihari/internal/tui/pages/rules"
 	setuppage "github.com/LeeShunEE/mihari/internal/tui/pages/setup"
 	subscriptionspage "github.com/LeeShunEE/mihari/internal/tui/pages/subscriptions"
+	systempage "github.com/LeeShunEE/mihari/internal/tui/pages/system"
+	webguipage "github.com/LeeShunEE/mihari/internal/tui/pages/webgui"
 	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
@@ -43,6 +45,7 @@ type Model struct {
 	operations       []ui.OperationRecord
 	confirmationCmd  tea.Cmd
 	setupObserved    bool
+	setupReturn      ui.PageID
 }
 
 func NewModel() Model {
@@ -66,6 +69,8 @@ func newModelWithPageClients(proxyClient proxypage.Client, connectionsClient con
 	pages[ui.PageLogs] = logspage.New(0)
 	pages[ui.PageSubscriptions] = subscriptionspage.New(subscriptionsClient, nil, nil)
 	pages[ui.PageSetup] = setuppage.New(nil, nil)
+	pages[ui.PageWebGUI] = webguipage.New(nil, nil)
+	pages[ui.PageSystem] = systempage.New(nil, nil)
 	active := rail[0]
 	model := Model{
 		pages: pages, rail: rail, active: active,
@@ -88,6 +93,7 @@ type pageClient interface {
 	rulespage.Client
 	subscriptionspage.Client
 	setuppage.Client
+	systempage.Client
 }
 
 func newModelWithClient(events <-chan session.Event, client pageClient) Model {
@@ -97,6 +103,7 @@ func newModelWithClient(events <-chan session.Event, client pageClient) Model {
 func newModelWithClientContext(ctx context.Context, events <-chan session.Event, client pageClient) Model {
 	model := newModelWithPageClients(client, client, client, client)
 	model.pages[ui.PageSetup] = setuppage.NewWithContext(ctx, client, nil)
+	model.pages[ui.PageSystem] = systempage.NewWithContext(ctx, client, nil)
 	model.resizePages()
 	model.events = events
 	return model
@@ -113,6 +120,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.mutationsEnabled = false
 			model.monitor.SetStale(true)
 			model.setLogsStale(true)
+			model.syncSystem()
 			model.syncOverview()
 			return model, nil
 		}
@@ -122,11 +130,29 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.status.SetupRequired = !typed.Status.Complete
 		model.setupObserved = true
 		if typed.Status.Complete {
+			model.setupReturn = ""
 			model.activateOverview()
 			if typed.Status.RestartRequired {
 				model.modal = NewDetail(ui.RestartRequiredTitle, ui.RestartRequiredBody)
 			}
 		}
+		return model, nil
+	case setuppage.CancelledMsg:
+		if model.setupReturn != "" {
+			model.active = model.setupReturn
+			model.focus = ui.Focus{Area: ui.FocusContent, Page: model.setupReturn}
+			model.setupReturn = ""
+		}
+		return model, nil
+	case ui.CoreObservedMsg:
+		model.core = typed.Core
+		model.syncOverview()
+		model.syncSystem()
+		return model, nil
+	case ui.RuntimeRevisionMsg:
+		model.status.Revision = max(model.status.Revision, typed.Revision)
+		model.syncOverview()
+		model.syncSystem()
 		return model, nil
 	case OperationRecordMsg:
 		model.recordOperation(typed.Record)
@@ -140,6 +166,17 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model, nil
 	case ui.InputModeMsg:
 		model.inputMode = typed.Mode
+		return model, nil
+	case ui.RouteRequestMsg:
+		if typed.Page != ui.PageSetup {
+			return model, nil
+		}
+		model.setupReturn = model.active
+		model.active = ui.PageSetup
+		model.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageSetup}
+		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
+			return model, page.Load()
+		}
 		return model, nil
 	case ui.ConfirmationRequestMsg:
 		model.modal = NewConfirmation(typed.Title, typed.Object, typed.Impact, typed.Rollback)
@@ -197,9 +234,13 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 	switch event.Kind {
 	case session.EventStatus:
 		model.status = event.Status
+		if page, ok := model.pages[ui.PageWebGUI].(*webguipage.Model); ok {
+			page.SetCapabilities(event.Status.Capabilities)
+		}
 		model.setupObserved = true
 		if event.Status.SetupRequired {
 			entering := model.active != ui.PageSetup
+			model.setupReturn = ""
 			model.active = ui.PageSetup
 			model.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageSetup}
 			if entering {
@@ -260,6 +301,7 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 			page.ResetSession()
 		}
 	}
+	model.syncSystem()
 	model.syncOverview()
 	return command
 }
@@ -306,6 +348,13 @@ func (model *Model) syncOverview() {
 	})
 }
 
+func (model *Model) syncSystem() {
+	if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
+		page.SetSnapshot(model.status, model.core)
+		page.SetMutationsEnabled(model.mutationsEnabled)
+	}
+}
+
 func (model Model) updateRail(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "up":
@@ -315,6 +364,9 @@ func (model Model) updateRail(key string) (tea.Model, tea.Cmd) {
 	case "enter", "right":
 		model.focus = ui.Focus{Area: ui.FocusContent, Page: model.active}
 		model.pages[model.active].FocusFirst()
+		if page, ok := model.pages[model.active].(interface{ Load() tea.Cmd }); ok {
+			return model, page.Load()
+		}
 		return model, nil
 	default:
 		return model, nil

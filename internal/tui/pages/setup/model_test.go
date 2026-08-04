@@ -72,6 +72,19 @@ func TestSetupFormUsesTabOnlyToMoveBetweenEndpointFields(t *testing.T) {
 	}
 }
 
+func TestSetupEscapeAtFirstStepRequestsCancelWithoutCompleting(t *testing.T) {
+	client := &fakeClient{status: defaultStatus(true)}
+	model := loadedModel(client)
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = updated.(*Model)
+	if command == nil || client.updateCalls != 0 {
+		t.Fatalf("command=%v updates=%d", command != nil, client.updateCalls)
+	}
+	if _, ok := command().(CancelledMsg); !ok || model.status.Complete != true {
+		t.Fatalf("message=%T status=%#v", command(), model.status)
+	}
+}
+
 func TestSetupRejectsInvalidOrCollidingEndpointsBeforeAdvancing(t *testing.T) {
 	model := loadedModel(&fakeClient{status: defaultStatus(false)})
 	model.inputs[1].SetValue("0.0.0.0:9090")
