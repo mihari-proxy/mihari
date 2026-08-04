@@ -209,35 +209,43 @@ func TestRail_EnterAndRightEnterContentButTabDoesNot(t *testing.T) {
 	}
 }
 
-func TestRail_HJKLDisabledDuringTextEntry(t *testing.T) {
+func TestRail_HJKLNeverNavigates(t *testing.T) {
 	model := NewModel()
-	model.inputMode = ui.InputText
-	model = updateModelKey(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
-	if model.railIndex != 0 {
-		t.Fatalf("rail index=%d", model.railIndex)
-	}
 	model.inputMode = ui.InputNavigation
-	model = updateModelKey(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	for _, key := range []tea.KeyPressMsg{
+		{Code: 'h', Text: "h"},
+		{Code: 'j', Text: "j"},
+		{Code: 'k', Text: "k"},
+		{Code: 'l', Text: "l"},
+		{Code: 'i', Text: "i"},
+	} {
+		model = updateModelKey(t, model, key)
+		if model.railIndex != 0 {
+			t.Fatalf("key %q moved rail to %d", key.Text, model.railIndex)
+		}
+	}
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
 	if model.railIndex != 1 {
-		t.Fatalf("rail index=%d", model.railIndex)
+		t.Fatalf("arrow down rail index=%d", model.railIndex)
 	}
 }
 
-func TestContent_HAliasDoesNotNavigateDuringTextEntry(t *testing.T) {
+func TestContent_HDoesNotReturnToRail(t *testing.T) {
 	model := NewModel()
 	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyRight})
-	model.inputMode = ui.InputText
+	if model.focus.Area != ui.FocusContent {
+		t.Fatalf("focus=%v", model.focus)
+	}
 	updated, command := model.Update(tea.KeyPressMsg{Code: 'h', Text: "h"})
 	model = updated.(Model)
 	if command != nil || model.focus.Area != ui.FocusContent {
-		t.Fatalf("text input command=%v focus=%v", command != nil, model.focus)
+		t.Fatalf("h alias command=%v focus=%v", command != nil, model.focus)
 	}
 
-	model.inputMode = ui.InputNavigation
-	updated, command = model.Update(tea.KeyPressMsg{Code: 'h', Text: "h"})
+	updated, command = model.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	model = updated.(Model)
 	if command == nil {
-		t.Fatal("navigation h did not request rail focus")
+		t.Fatal("left arrow did not request rail focus")
 	}
 	updated, _ = model.Update(command())
 	model = updated.(Model)

@@ -237,7 +237,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if model.active == ui.PageSetup {
 		return model.dispatchPage(message)
 	}
-	name := routedKey(key, model.inputMode)
+	name := key.String()
 	if name == "?" {
 		model.modal = NewDetail(ui.HelpTitle, ui.HelpBody)
 		return model, nil
@@ -416,7 +416,7 @@ func (model Model) dispatchPageTo(id ui.PageID, message tea.Msg) (tea.Model, tea
 	if page == nil {
 		return model, nil
 	}
-	updated, command := page.Update(routedMessage(message, model.inputMode))
+	updated, command := page.Update(message)
 	model.pages[id] = updated
 	return model, command
 }
