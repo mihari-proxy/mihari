@@ -47,8 +47,13 @@ type row struct {
 	nextRefresh string
 }
 
-func (r row) Render() string {
-	return fmt.Sprintf("%-6s  %-20s  %-9s  %-10s  %-12s  %s", r.active, truncate(r.name, 20), r.state, r.cache, r.lastSuccess, r.nextRefresh)
+func (r row) Render(theme ui.Theme) string {
+	active := fmt.Sprintf("%-6s", r.active)
+	if strings.TrimSpace(r.active) == "●" {
+		// Dual-channel: glyph + Success color; pad after styled rune to keep columns stable.
+		active = theme.Success.Render("●") + "     "
+	}
+	return fmt.Sprintf("%s  %-20s  %-9s  %-10s  %-12s  %s", active, truncate(r.name, 20), r.state, r.cache, r.lastSuccess, r.nextRefresh)
 }
 
 func rowFrom(subscription protocol.Subscription, active, updating bool, now time.Time, globalInterval string) row {
@@ -85,7 +90,7 @@ func rowFrom(subscription protocol.Subscription, active, updating bool, now time
 	}
 	marker := ""
 	if active {
-		marker = "*"
+		marker = "●"
 	}
 	return row{active: marker, name: subscription.Name, state: state, cache: cache, lastSuccess: lastSuccess, nextRefresh: next}
 }
@@ -338,14 +343,13 @@ func (m *Model) View() string {
 			marker = ui.FocusMarker
 		}
 		entry := rowFrom(subscription, subscription.ID == m.activeID, m.pending[subscription.ID] == "refresh", m.now(), m.globalInterval)
-		line := marker + entry.Render()
+		line := marker + entry.Render(m.theme)
 		if action := m.pending[subscription.ID]; action != "" && action != "refresh" {
 			line += "  " + ui.PendingLabel
 		}
-		// Color highlight only while the content pane owns focus, so the rail
-		// selection style and the row selection style never compete.
+		// Keyboard focus uses RowFocus; business active marker is ● (Success).
 		if rowFocused && m.contentFocused {
-			line = m.theme.RowSelected.Render(line)
+			line = m.theme.RowFocus.Render(line)
 		}
 		lines = append(lines, line)
 	}

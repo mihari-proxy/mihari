@@ -176,11 +176,31 @@ func TestFooterShowsSubscriptionPageActionsWhenContentFocused(t *testing.T) {
 			t.Fatalf("footer missing %q in:\n%s", want, content)
 		}
 	}
-	// Footer MaxWidth clamp keeps the long Subscriptions shortcut line on one terminal row.
+	// Footer FitFooter keeps one terminal row and prefers retaining ?/q.
 	for _, line := range strings.Split(content, "\n") {
 		if width := lipgloss.Width(line); width > model.width {
 			t.Fatalf("subscriptions footer line exceeded width: %d > %d %q", width, model.width, line)
 		}
+	}
+}
+
+func TestFooter_NarrowPreservesHelpAndQuit(t *testing.T) {
+	// Unit-level guarantee is FitFooter; shell View pads footer to width via lipgloss.
+	width := 40
+	hints := ui.FooterSubscriptions
+	global := ui.SpinnerLabel(time.Unix(0, 0), ui.GlobalStatePendingLabel)
+	got := ui.FitFooter(hints, global, width)
+	if lipgloss.Width(got) > width {
+		t.Fatalf("FitFooter width %d > %d: %q", lipgloss.Width(got), width, got)
+	}
+	if !strings.Contains(got, "?") {
+		t.Fatalf("narrow footer should keep help: %q", got)
+	}
+	if !strings.Contains(got, "q") {
+		t.Fatalf("narrow footer should keep quit: %q", got)
+	}
+	if !strings.Contains(got, "Working") {
+		t.Fatalf("narrow footer should keep spinner label: %q", got)
 	}
 }
 

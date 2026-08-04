@@ -339,7 +339,7 @@ func (m *Model) renderRules() []string {
 		}
 		line := fmt.Sprintf("%s%4d  %-16s  %-39s  %s", marker, index+1, truncate(rule.Type, 16), truncate(rule.Payload, 39), rule.Proxy)
 		if rowFocused && m.contentFocused {
-			line = m.theme.RowSelected.Render(line)
+			line = m.theme.RowFocus.Render(line)
 		}
 		lines = append(lines, line)
 	}
@@ -369,7 +369,7 @@ func (m *Model) renderProviders() []string {
 		}
 		line := fmt.Sprintf("%s%-16s  %-8s  %-13s  %-10s  %5d  %-19s  %s", marker, truncate(provider.Name, 16), provider.Type, provider.Behavior, provider.Format, provider.RuleCount, updated, status)
 		if rowFocused && m.contentFocused {
-			line = m.theme.RowSelected.Render(line)
+			line = m.theme.RowFocus.Render(line)
 		}
 		lines = append(lines, line)
 	}

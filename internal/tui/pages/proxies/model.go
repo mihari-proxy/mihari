@@ -52,6 +52,9 @@ type Model struct {
 	width          int
 	height         int
 	theme          ui.Theme
+	now            time.Time // delay-test spinner clock
+	delaySpinning  bool
+	delaySpinGen   uint64
 }
 
 type selectionResultMsg struct {
@@ -65,6 +68,16 @@ type delayResultMsg struct {
 	delay uint16
 	err   error
 }
+
+// delaySpinTickMsg advances braille frames while any node is DelayTesting.
+type delaySpinTickMsg struct {
+	t   time.Time
+	gen uint64
+}
+
+type startDelaySpinMsg struct{ gen uint64 }
+
+const delaySpinInterval = 100 * time.Millisecond
 
 func New(client Client, newOperationID func() string) *Model {
 	if newOperationID == nil {
@@ -124,7 +137,29 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		} else {
 			m.delays[typed.node] = DelayState{Kind: DelayValue, Milliseconds: typed.delay}
 		}
-		return m, nil
+		return m, m.delaySpinCmdIfNeeded()
+	case startDelaySpinMsg:
+		if typed.gen != m.delaySpinGen || !m.hasTesting() {
+			if typed.gen == m.delaySpinGen {
+				m.delaySpinning = false
+			}
+			return m, nil
+		}
+		return m, tea.Tick(delaySpinInterval, func(t time.Time) tea.Msg {
+			return delaySpinTickMsg{t: t, gen: typed.gen}
+		})
+	case delaySpinTickMsg:
+		if typed.gen != m.delaySpinGen {
+			return m, nil
+		}
+		m.now = typed.t
+		if !m.hasTesting() {
+			m.delaySpinning = false
+			return m, nil
+		}
+		return m, tea.Tick(delaySpinInterval, func(t time.Time) tea.Msg {
+			return delaySpinTickMsg{t: t, gen: typed.gen}
+		})
 	}
 	key, ok := message.(tea.KeyPressMsg)
 	if !ok {
@@ -150,7 +185,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	case "enter":
 		return m, m.selectFocused()
 	case "t":
-		return m, m.testNode(m.focus.Node)
+		return m, tea.Batch(m.testNode(m.focus.Node), m.delaySpinCmdIfNeeded())
 	}
 	return m, nil
 }
@@ -173,7 +208,7 @@ func (m *Model) View() string {
 		header := fmt.Sprintf("%s%s %s  %s · %d", focus, marker, group.Name, strings.ToUpper(group.Type), len(group.Nodes))
 		switch {
 		case groupFocused && m.contentFocused:
-			header = m.theme.RowSelected.Render(header)
+			header = m.theme.RowFocus.Render(header)
 		case !groupFocused:
 			header = m.theme.Title.Render(header)
 		}
@@ -222,7 +257,7 @@ func (m *Model) renderNode(group protocol.ProxyGroup, node protocol.ProxyNode, w
 	} else if node.UDP {
 		metadata += " / UDP"
 	}
-	content := fmt.Sprintf("%s%s %s\n%s  %s", focus, selected, node.Name, metadata, renderDelay(m.theme, m.delays[node.Name]))
+	content := fmt.Sprintf("%s%s %s\n%s  %s", focus, selected, node.Name, metadata, renderDelay(m.theme, m.delays[node.Name], m.now))
 	style := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(width)
 	// Accent the focused node only while content owns keyboard focus.
 	if m.focus == id && m.contentFocused {
@@ -278,7 +313,31 @@ func (m *Model) testAll() tea.Cmd {
 			commands = append(commands, m.testNode(node.Name))
 		}
 	}
+	if spin := m.delaySpinCmdIfNeeded(); spin != nil {
+		commands = append(commands, spin)
+	}
 	return tea.Batch(commands...)
+}
+
+func (m *Model) hasTesting() bool {
+	for _, delay := range m.delays {
+		if delay.Kind == DelayTesting {
+			return true
+		}
+	}
+	return false
+}
+
+// delaySpinCmdIfNeeded starts a generation-owned spin loop while any delay test is in flight.
+func (m *Model) delaySpinCmdIfNeeded() tea.Cmd {
+	if !m.hasTesting() {
+		m.delaySpinning = false
+		return nil
+	}
+	m.delaySpinGen++
+	gen := m.delaySpinGen
+	m.delaySpinning = true
+	return func() tea.Msg { return startDelaySpinMsg{gen: gen} }
 }
 
 // delayStyle maps latency state onto the theme color ladder.
@@ -303,12 +362,15 @@ func delayStyle(theme ui.Theme, delay DelayState) lipgloss.Style {
 	}
 }
 
-func renderDelay(theme ui.Theme, delay DelayState) string {
+func renderDelay(theme ui.Theme, delay DelayState, now time.Time) string {
 	style := delayStyle(theme, delay)
 	switch delay.Kind {
 	case DelayTesting:
-		// Static label until the page is wired to a shell clock for SpinnerLabel.
-		return style.Render(ui.TestingLabel)
+		if now.IsZero() {
+			now = time.Unix(0, 0)
+		}
+		// Braille spinner + "Testing" (not static Testing…).
+		return style.Render(ui.SpinnerLabel(now, "Testing"))
 	case DelayValue:
 		return style.Render(fmt.Sprintf("%d ms", delay.Milliseconds))
 	case DelayTimeout:
