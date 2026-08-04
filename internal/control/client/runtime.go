@@ -118,6 +118,18 @@ func (c *Client) UpdateGeoIP(ctx context.Context, request protocol.MutationReque
 	return result, err
 }
 
+func (c *Client) Onboarding(ctx context.Context) (protocol.OnboardingStatus, error) {
+	var result protocol.OnboardingStatus
+	err := c.doRuntime(ctx, http.MethodGet, "/v1/onboarding", nil, &result)
+	return result, err
+}
+
+func (c *Client) UpdateOnboarding(ctx context.Context, request protocol.OnboardingUpdateRequest) (protocol.OnboardingStatus, error) {
+	var result protocol.OnboardingStatus
+	err := c.doRuntime(ctx, http.MethodPatch, "/v1/onboarding", request, &result)
+	return result, err
+}
+
 func (c *Client) TUIPreferences(ctx context.Context) (protocol.TUIPreferences, error) {
 	var result protocol.TUIPreferences
 	err := c.doRuntime(ctx, http.MethodGet, "/v1/preferences/tui", nil, &result)

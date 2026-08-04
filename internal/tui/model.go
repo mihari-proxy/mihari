@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -11,6 +12,7 @@ import (
 	"github.com/LeeShunEE/mihari/internal/tui/pages/overview"
 	proxypage "github.com/LeeShunEE/mihari/internal/tui/pages/proxies"
 	rulespage "github.com/LeeShunEE/mihari/internal/tui/pages/rules"
+	setuppage "github.com/LeeShunEE/mihari/internal/tui/pages/setup"
 	subscriptionspage "github.com/LeeShunEE/mihari/internal/tui/pages/subscriptions"
 	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
@@ -40,6 +42,7 @@ type Model struct {
 	monitor          MonitorModel
 	operations       []ui.OperationRecord
 	confirmationCmd  tea.Cmd
+	setupObserved    bool
 }
 
 func NewModel() Model {
@@ -62,6 +65,7 @@ func newModelWithPageClients(proxyClient proxypage.Client, connectionsClient con
 	pages[ui.PageRules] = rulespage.New(rulesClient, nil)
 	pages[ui.PageLogs] = logspage.New(0)
 	pages[ui.PageSubscriptions] = subscriptionspage.New(subscriptionsClient, nil, nil)
+	pages[ui.PageSetup] = setuppage.New(nil, nil)
 	active := rail[0]
 	model := Model{
 		pages: pages, rail: rail, active: active,
@@ -83,10 +87,17 @@ type pageClient interface {
 	connectionspage.Client
 	rulespage.Client
 	subscriptionspage.Client
+	setuppage.Client
 }
 
 func newModelWithClient(events <-chan session.Event, client pageClient) Model {
+	return newModelWithClientContext(context.Background(), events, client)
+}
+
+func newModelWithClientContext(ctx context.Context, events <-chan session.Event, client pageClient) Model {
 	model := newModelWithPageClients(client, client, client, client)
+	model.pages[ui.PageSetup] = setuppage.NewWithContext(ctx, client, nil)
+	model.resizePages()
 	model.events = events
 	return model
 }
@@ -105,8 +116,18 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.syncOverview()
 			return model, nil
 		}
-		model.applySessionEvent(typed.Event)
-		return model, waitSessionEvent(model.events)
+		command := model.applySessionEvent(typed.Event)
+		return model, tea.Batch(command, waitSessionEvent(model.events))
+	case setuppage.CompletedMsg:
+		model.status.SetupRequired = !typed.Status.Complete
+		model.setupObserved = true
+		if typed.Status.Complete {
+			model.activateOverview()
+			if typed.Status.RestartRequired {
+				model.modal = NewDetail(ui.RestartRequiredTitle, ui.RestartRequiredBody)
+			}
+		}
+		return model, nil
 	case OperationRecordMsg:
 		model.recordOperation(typed.Record)
 		return model, nil
@@ -150,6 +171,9 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return model, nil
 	}
+	if model.active == ui.PageSetup {
+		return model.dispatchPage(message)
+	}
 	name := routedKey(key, model.inputMode)
 	if name == "?" {
 		model.modal = NewDetail(ui.HelpTitle, ui.HelpBody)
@@ -167,11 +191,25 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return model.dispatchPage(message)
 }
 
-func (model *Model) applySessionEvent(event session.Event) {
+func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
+	var command tea.Cmd
 	model.monitor.Observe(event)
 	switch event.Kind {
 	case session.EventStatus:
 		model.status = event.Status
+		model.setupObserved = true
+		if event.Status.SetupRequired {
+			entering := model.active != ui.PageSetup
+			model.active = ui.PageSetup
+			model.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageSetup}
+			if entering {
+				if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
+					command = page.Load()
+				}
+			}
+		} else if model.active == ui.PageSetup {
+			model.activateOverview()
+		}
 	case session.EventTraffic:
 		model.traffic = event.Traffic
 	case session.EventMemory:
@@ -223,6 +261,24 @@ func (model *Model) applySessionEvent(event session.Event) {
 		}
 	}
 	model.syncOverview()
+	return command
+}
+
+// Route reports the root-level route currently presented to the user.
+func (model Model) Route() ui.PageID { return model.active }
+
+// SetupComplete reports an authoritative completed onboarding state.
+func (model Model) SetupComplete() bool { return model.setupObserved && !model.status.SetupRequired }
+
+func (model *Model) activateOverview() {
+	model.active = ui.PageOverview
+	model.focus = ui.Focus{Area: ui.FocusRail, Page: ui.PageOverview}
+	for index, page := range model.rail {
+		if page == ui.PageOverview {
+			model.railIndex = index
+			break
+		}
+	}
 }
 
 func (model *Model) setLogsStale(stale bool) {
@@ -279,6 +335,18 @@ func (model Model) dispatchPage(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (model Model) View() tea.View {
+	if model.active == ui.PageSetup {
+		body := model.pages[ui.PageSetup].View()
+		content := model.theme.Content.Width(model.width).Height(max(1, model.height-1)).Render(body) + "\n" +
+			model.theme.Footer.Width(model.width).Render(ui.SetupFooter)
+		if model.modal != nil {
+			content = model.modal.View(model.width, model.height)
+		}
+		view := tea.NewView(content)
+		view.AltScreen = true
+		view.WindowTitle = ui.AppName
+		return view
+	}
 	layout := calculateLayout(model.width, model.height)
 	var content string
 	if layout.Class == ui.TooSmall {

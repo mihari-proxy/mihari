@@ -70,6 +70,35 @@ const (
 )
 
 const (
+	SetupTitle                   = "Setup"
+	SetupProgress                = "Step %d of %d"
+	SetupUnavailable             = "Setup state is unavailable"
+	SetupActionFailed            = "Setup action failed"
+	SetupChangedMessage          = "State changed; reloaded current setup values."
+	SetupCompletionFailed        = "Setup could not be completed"
+	LocalEndpointsLabel          = "Local endpoints"
+	SetupEndpointHelp            = "Tab/Shift+Tab fields  Enter continue  Esc back"
+	SetupCoreTitle               = "mihomo core"
+	SetupCoreBody                = "Install or verify the daemon-owned mihomo core."
+	SetupEnterInstall            = "Enter install  Esc back"
+	SetupSubscriptionTitle       = "Subscription (optional)"
+	SetupSubscriptionBody        = "Add an initial subscription, or leave both fields blank."
+	SetupSubscriptionHelp        = "Enter add/skip empty form  Tab fields  Esc back"
+	SetupGeoIPTitle              = "Local GeoIP databases"
+	SetupGeoIPBody               = "Prepare Country and ASN databases for local connection details."
+	SetupEnterOrSkip             = "Enter continue  s skip  Esc back"
+	SetupReviewTitle             = "Review"
+	SetupWebGUIUnavailable       = "Web GUI: Unavailable in this build (does not block setup)"
+	SetupCompleteHelp            = "Enter complete setup  Esc back"
+	SetupFooter                  = "Tab fields  Enter continue  Esc back  Ctrl+C quit"
+	ReplaceConfigurationTitle    = "Replace effective configuration"
+	ReplaceConfigurationImpact   = "Endpoint changes are saved by the daemon and require a restart."
+	ReplaceConfigurationRollback = "The previous settings remain recoverable only until the new settings are accepted."
+	RestartRequiredTitle         = "Restart required"
+	RestartRequiredBody          = "Endpoint changes are saved. Restart the Mihari daemon to apply them."
+)
+
+const (
 	RulesTabLabel              = "Rules"
 	RuleProvidersTabLabel      = "Providers"
 	TypeLabel                  = "Type"

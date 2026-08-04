@@ -10,6 +10,7 @@ import (
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	connectionspage "github.com/LeeShunEE/mihari/internal/tui/pages/connections"
 	rulespage "github.com/LeeShunEE/mihari/internal/tui/pages/rules"
+	setuppage "github.com/LeeShunEE/mihari/internal/tui/pages/setup"
 	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
@@ -66,6 +67,41 @@ func TestModelRoutesSubscriptionsToPage(t *testing.T) {
 	view := model.pages[ui.PageSubscriptions].View()
 	if !strings.Contains(view, "Main") || !strings.Contains(view, "*") || strings.Contains(view, "Generation") {
 		t.Fatalf("subscriptions view=%s", view)
+	}
+}
+
+func TestRootSetupRequiredRoutesToStandaloneSetupAndEscDoesNotComplete(t *testing.T) {
+	model := NewModel()
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{SetupRequired: true}})
+	if model.Route() != ui.PageSetup {
+		t.Fatalf("route=%v", model.Route())
+	}
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	if model.Route() == ui.PageOverview && model.SetupComplete() {
+		t.Fatal("escape completed onboarding")
+	}
+	if strings.Contains(model.View().Content, ui.PageLabel(ui.PageOverview)+"\n") {
+		t.Fatalf("setup rendered navigation rail: %s", model.View().Content)
+	}
+}
+
+func TestRootSetupCompletionReturnsToOverview(t *testing.T) {
+	model := NewModel()
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{SetupRequired: true}})
+	updated, _ := model.Update(setuppage.CompletedMsg{Status: protocol.OnboardingStatus{Complete: true}})
+	model = updated.(Model)
+	if model.Route() != ui.PageOverview || !model.SetupComplete() {
+		t.Fatalf("route=%v complete=%v", model.Route(), model.SetupComplete())
+	}
+}
+
+func TestRootSetupCompletionReportsRestartRequired(t *testing.T) {
+	model := NewModel()
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{SetupRequired: true}})
+	updated, _ := model.Update(setuppage.CompletedMsg{Status: protocol.OnboardingStatus{Complete: true, RestartRequired: true}})
+	model = updated.(Model)
+	if model.Route() != ui.PageOverview || model.modal == nil || !strings.Contains(model.View().Content, ui.RestartRequiredTitle) {
+		t.Fatalf("route=%v modal=%v view=%s", model.Route(), model.modal != nil, model.View().Content)
 	}
 }
 

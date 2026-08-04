@@ -12,6 +12,7 @@ import (
 	"github.com/LeeShunEE/mihari/internal/core"
 	"github.com/LeeShunEE/mihari/internal/geoip"
 	"github.com/LeeShunEE/mihari/internal/mihomo"
+	"github.com/LeeShunEE/mihari/internal/onboarding"
 	"github.com/LeeShunEE/mihari/internal/preferences"
 	"github.com/LeeShunEE/mihari/internal/state"
 	"github.com/LeeShunEE/mihari/internal/subscription"
@@ -80,6 +81,7 @@ type Options struct {
 	RunScheduler   func(context.Context) error
 	GeoIP          GeoIPService
 	PrepareGeoIP   func(context.Context) (GeoIPCandidate, error)
+	Onboarding     *onboarding.Service
 }
 
 type Manager struct {
@@ -99,6 +101,7 @@ type Manager struct {
 	runScheduler   func(context.Context) error
 	geoip          GeoIPService
 	prepareGeoIP   func(context.Context) (GeoIPCandidate, error)
+	onboarding     *onboarding.Service
 	maintenance    chan struct{}
 	installed      chan struct{}
 	closing        atomic.Bool
@@ -143,6 +146,7 @@ func New(options Options) *Manager {
 		runScheduler:   options.RunScheduler,
 		geoip:          options.GeoIP,
 		prepareGeoIP:   options.PrepareGeoIP,
+		onboarding:     options.Onboarding,
 		maintenance:    make(chan struct{}, 1),
 		installed:      make(chan struct{}, 1),
 		operations:     make(map[string]*operationEntry),

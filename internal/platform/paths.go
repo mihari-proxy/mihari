@@ -12,6 +12,7 @@ type Paths struct {
 	CoreBinary          string
 	RuntimeConfig       string
 	Settings            string
+	Onboarding          string
 	Log                 string
 	Staging             string
 	Subscriptions       string
@@ -35,6 +36,7 @@ func NewPaths(root string) Paths {
 		CoreBinary:          filepath.Join(root, "bin", coreName),
 		RuntimeConfig:       filepath.Join(root, "runtime", "config.yaml"),
 		Settings:            filepath.Join(root, "mihari.yaml"),
+		Onboarding:          filepath.Join(root, "onboarding.json"),
 		Log:                 filepath.Join(root, "logs", "mihari.log"),
 		Staging:             filepath.Join(root, "staging"),
 		Subscriptions:       filepath.Join(root, "subscriptions"),

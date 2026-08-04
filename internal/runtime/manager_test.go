@@ -7,18 +7,59 @@ import (
 	"net/netip"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/LeeShunEE/mihari/internal/config"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/core"
 	"github.com/LeeShunEE/mihari/internal/geoip"
 	"github.com/LeeShunEE/mihari/internal/mihomo"
+	"github.com/LeeShunEE/mihari/internal/onboarding"
 	"github.com/LeeShunEE/mihari/internal/preferences"
 	"github.com/LeeShunEE/mihari/internal/state"
 	"github.com/LeeShunEE/mihari/internal/supervisor"
 )
+
+func TestUpdateOnboardingRejectsStaleRevisionBeforePersistingEndpoints(t *testing.T) {
+	directory := t.TempDir()
+	settingsPath := filepath.Join(directory, "settings.json")
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("a", 64)
+	if err := config.Save(settingsPath, settings); err != nil {
+		t.Fatal(err)
+	}
+	service, err := onboarding.Open(onboarding.Options{
+		StatePath: filepath.Join(directory, "onboarding.json"), SettingsPath: settingsPath,
+		Settings: settings, InitialSetupRequired: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newTestManager(Options{Onboarding: service})
+	manager.store.Store(state.Snapshot{Revision: 3})
+	webAddr := "127.0.0.1:9292"
+	stale := uint64(2)
+	_, err = manager.UpdateOnboarding(context.Background(), Operation{ID: "setup-stale", Source: "test", IfRevision: &stale}, onboarding.Update{WebAddr: &webAddr})
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeRevisionConflict {
+		t.Fatalf("err=%v", err)
+	}
+	if got := service.Status().WebAddr; got != settings.WebAddr {
+		t.Fatalf("stale update persisted web address=%q", got)
+	}
+
+	current := uint64(3)
+	status, err := manager.UpdateOnboarding(context.Background(), Operation{ID: "setup-current", Source: "test", IfRevision: &current}, onboarding.Update{WebAddr: &webAddr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status.WebAddr != webAddr || !status.Status.RestartRequired || status.Revision != 4 || manager.Snapshot().Revision != 4 {
+		t.Fatalf("status=%#v revision=%d", status, manager.Snapshot().Revision)
+	}
+}
 
 func TestUpdateTUIPreferencesCommitsThroughCoordinator(t *testing.T) {
 	service, err := preferences.Open(filepath.Join(t.TempDir(), "tui.json"))
