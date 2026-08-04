@@ -85,4 +85,4 @@ go vet ./...
 
 The architecture and staged delivery scope are recorded in the [architecture design](docs/superpowers/specs/2026-08-03-mihari-architecture-design.md) and [delivery roadmap](docs/superpowers/plans/2026-08-03-mihari-delivery-roadmap.md).
 
-Phase 4 (Full TUI) is complete on the development host: package and repository tests, race detection, `go vet`, formatting, and CGO-free six-target cross-builds all pass. Web GUI install/lifecycle support remains Phase 5.
+Phase 4 (Full TUI) is complete on the development host: package and repository tests, race detection, `go vet`, formatting, and CGO-free six-target cross-builds all pass. A follow-up Phase 4 polish pass covers unified search/form paste (bracketed paste and Ctrl+V), focus-aware rail/row chrome, contextual footers, monitor IEC layout, and subscription refresh-all with safe LastError persistence. Web GUI install/lifecycle support remains Phase 5.
