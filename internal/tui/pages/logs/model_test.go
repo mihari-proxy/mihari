@@ -59,6 +59,54 @@ func TestModel_LevelSearchAndWrapControls(t *testing.T) {
 	}
 }
 
+func TestView_FocusedRowHighlightOnlyWhenContentFocused(t *testing.T) {
+	model := New(10)
+	model.SetSize(100, 12)
+	model.Append(logAt("alpha-line", "info", 1))
+	model.Append(logAt("beta-line", "warn", 2))
+	model.focus = focusRow
+	model.focused = 1
+
+	model.SetContentFocused(false)
+	for _, line := range strings.Split(model.View(), "\n") {
+		if strings.Contains(line, "beta-line") {
+			if !strings.Contains(line, ">") {
+				t.Fatalf("row marker missing while rail-focused: %q", line)
+			}
+			if strings.Contains(line, "\x1b[") {
+				t.Fatalf("row should not use accent while rail owns focus: %q", line)
+			}
+		}
+	}
+
+	model.SetContentFocused(true)
+	var focused string
+	for _, line := range strings.Split(model.View(), "\n") {
+		if strings.Contains(line, "beta-line") {
+			focused = line
+		}
+	}
+	if focused == "" || !strings.Contains(focused, ">") || !strings.Contains(focused, "\x1b[") {
+		t.Fatalf("focused content row missing highlight: %q", focused)
+	}
+}
+
+func TestModel_FooterHintsAreContextual(t *testing.T) {
+	model := New(10)
+	if hints := model.FooterHints(); !strings.Contains(hints, "/ search") {
+		t.Fatalf("default=%q", hints)
+	}
+	model.searching = true
+	if hints := model.FooterHints(); hints != ui.FooterSearchMode {
+		t.Fatalf("search=%q", hints)
+	}
+	model.searching = false
+	model.detail = &detailState{entry: logAt("detail", "info", 1)}
+	if hints := model.FooterHints(); hints != ui.FooterDetailMode {
+		t.Fatalf("detail=%q", hints)
+	}
+}
+
 func TestModel_SearchSupportsPasteMsg(t *testing.T) {
 	model := New(10)
 	model.Update(tea.KeyPressMsg{Code: '/', Text: "/"})

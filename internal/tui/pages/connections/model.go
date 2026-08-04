@@ -76,6 +76,7 @@ type Model struct {
 	columnCursor     int
 	columnDraft      map[string]bool
 	closing          map[string]bool
+	contentFocused   bool
 	width            int
 	height           int
 	theme            ui.Theme
@@ -110,6 +111,23 @@ func New(client Client, newOperationID func() string) *Model {
 }
 
 func (m *Model) ID() ui.PageID { return ui.PageConnections }
+
+// SetContentFocused reports whether the root shell has given keyboard focus to this page.
+func (m *Model) SetContentFocused(focused bool) { m.contentFocused = focused }
+
+// FooterHints returns contextual shortcuts for the root shell footer.
+func (m *Model) FooterHints() string {
+	switch {
+	case m.detail != nil:
+		return ui.FooterDetailMode
+	case m.columnsOpen:
+		return ui.FooterColumnsMode
+	case m.searching:
+		return ui.FooterSearchMode
+	default:
+		return ui.FooterConnections
+	}
+}
 
 func (m *Model) SetSize(width, height int) { m.width, m.height = width, height }
 

@@ -79,6 +79,7 @@ type Model struct {
 	pending          bool
 	mutationsEnabled bool
 	lastError        string
+	contentFocused   bool
 	width            int
 	height           int
 	theme            ui.Theme
@@ -99,6 +100,9 @@ func NewWithContext(ctx context.Context, client Client, newOperationID func() st
 }
 
 func (m *Model) ID() ui.PageID { return ui.PageSystem }
+
+// SetContentFocused reports whether the root shell has given keyboard focus to this page.
+func (m *Model) SetContentFocused(focused bool) { m.contentFocused = focused }
 
 func (m *Model) SetSize(width, height int) { m.width, m.height = width, height }
 
@@ -232,14 +236,19 @@ func (m *Model) View() string {
 			lines = append(lines, m.theme.Title.Render(section))
 		}
 		marker := "  "
-		if item.id == m.focusID {
+		rowFocused := item.id == m.focusID
+		if rowFocused {
 			marker = "> "
 		}
 		value := item.value
 		if value != "" {
 			value = "  " + value
 		}
-		lines = append(lines, marker+item.label+value)
+		line := marker + item.label + value
+		if rowFocused && m.contentFocused {
+			line = m.theme.RowSelected.Render(line)
+		}
+		lines = append(lines, line)
 	}
 	if m.pending {
 		lines = append(lines, "", ui.PendingLabel)
