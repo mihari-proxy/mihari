@@ -85,6 +85,9 @@ type Options struct {
 	Panels         PanelService
 	// WebGateway is the optional loopback browser gateway. Failures do not stop the core supervisor.
 	WebGateway WebGateway
+	// WebOpenToken is the Web access credential used only to mint open-browser URLs for local clients.
+	// It must never appear in status DTOs, logs, or default CLI output.
+	WebOpenToken string
 }
 
 // WebGateway is the loopback HTTP server for panel hosting and API proxying.
@@ -114,6 +117,7 @@ type Manager struct {
 	onboarding     *onboarding.Service
 	panels         PanelService
 	webGateway     WebGateway
+	webOpenToken   string
 	maintenance    chan struct{}
 	installed      chan struct{}
 	closing        atomic.Bool
@@ -161,6 +165,7 @@ func New(options Options) *Manager {
 		onboarding:     options.Onboarding,
 		panels:         options.Panels,
 		webGateway:     options.WebGateway,
+		webOpenToken:   options.WebOpenToken,
 		maintenance:    make(chan struct{}, 1),
 		installed:      make(chan struct{}, 1),
 		operations:     make(map[string]*operationEntry),
