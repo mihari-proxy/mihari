@@ -7,7 +7,8 @@ import (
 )
 
 func RenderRail(theme Theme, pages []PageID, selected int, focused bool, width, height int) string {
-	lines := []string{theme.Title.Render(AppName), ""}
+	// Brand lives only on the status bar; do not repeat AppName here.
+	lines := make([]string, 0, len(pages))
 	for index, page := range pages {
 		label := "  " + PageLabel(page)
 		if index == selected {

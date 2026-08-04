@@ -1,15 +1,15 @@
  Mihari  ·  ●  ·  1 conn  ·  ↑0 B/s  ↓0 B/s  ·  0 B 
- Mihari          [Active 1 | Closed 0]  [Source IP: All]  [Columns]  [Pause]                        
-                  / Search…                                                                         
-    Overview     Host  Network  Chain  Traffic                                                      
-    Proxies        example.com  —/TCP  DIRECT  UL 0 B/s DL 0 B/s                                    
-  › Connections                                                                                     
-    Rules                                                                                           
+    Overview     [Active 1 | Closed 0]  [Source IP: All]  [Columns]  [Pause]                        
+    Proxies       / Search…                                                                         
+  › Connections  Host  Network  Chain  Traffic                                                      
+    Rules          example.com  —/TCP  DIRECT  UL 0 B/s DL 0 B/s                                    
     Logs                                                                                            
                                                                                                     
  Subscriptions                                                                                      
     Web GUI                                                                                         
     System                                                                                          
+                                                                                                    
+                                                                                                    
                                                                                                     
                                                                                                     
                                                                                                     
