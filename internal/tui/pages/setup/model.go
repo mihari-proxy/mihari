@@ -55,6 +55,9 @@ type completeResultMsg struct {
 // CompletedMsg tells the root model to leave the standalone Setup route.
 type CompletedMsg struct{ Status protocol.OnboardingStatus }
 
+// CancelledMsg requests leaving a manually launched Setup flow without persisting completion.
+type CancelledMsg struct{}
+
 type Model struct {
 	ctx                context.Context
 	client             Client
@@ -167,8 +170,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	if key.String() == "esc" {
 		if m.step > stepEndpoints {
 			m.step--
+			return m, nil
 		}
-		return m, nil
+		return m, func() tea.Msg { return CancelledMsg{} }
 	}
 	if key.String() == "q" && m.step != stepEndpoints && m.step != stepSubscription {
 		return m, tea.Quit

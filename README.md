@@ -12,7 +12,7 @@ Launch the interactive TUI:
 mihari
 ```
 
-The current TUI includes a standalone first-run Setup route, Overview, expandable Proxies, active/closed Connections with local GeoIP details, Rules/Providers, a bounded structured Logs stream, and subscription management forms. Setup installs the core, can add an initial subscription, prepares local GeoIP data, and asks the daemon to persist validated local endpoints. Rule order is never sorted; onboarding, provider, and subscription mutations run through the daemon mutation coordinator, and destructive or broad operations require confirmation.
+The current TUI includes a standalone first-run Setup route, Overview, expandable Proxies, active/closed Connections with local GeoIP details, Rules/Providers, a bounded structured Logs stream, subscription management forms, and a categorized System page. Setup installs the core, can add an initial subscription, prepares local GeoIP data, and asks the daemon to persist validated local endpoints. The Web GUI page remains capability-gated and unavailable until the gateway lifecycle work lands in Phase 5. Rule order is never sorted; onboarding, system, provider, and subscription mutations run through the daemon mutation coordinator, and destructive or broad operations require confirmation.
 
 Run the daemon in the foreground:
 
