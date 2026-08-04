@@ -36,6 +36,8 @@ func Run(ctx context.Context, options Options) error {
 	return err
 }
 
+// loadingModel is a minimal AltScreen sample used by run_test.go only.
+// Production Run() constructs the full Root Shell via NewModel / newModelWithClientContext.
 type loadingModel struct{}
 
 func (loadingModel) Init() tea.Cmd { return nil }
