@@ -48,10 +48,15 @@ func (m *Model) tableLines() []string {
 				values[index] = columnValue(connection, column)
 			}
 			prefix := "  "
-			if m.focus.kind == focusRow && m.focus.rowID == connection.ID {
+			rowFocused := m.focus.kind == focusRow && m.focus.rowID == connection.ID
+			if rowFocused {
 				prefix = "> "
 			}
-			lines = append(lines, prefix+strings.Join(values, "  "))
+			line := prefix + strings.Join(values, "  ")
+			if rowFocused && m.contentFocused {
+				line = m.theme.RowSelected.Render(line)
+			}
+			lines = append(lines, line)
 		}
 	}
 	return lines

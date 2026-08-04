@@ -28,21 +28,22 @@ type detailState struct {
 }
 
 type Model struct {
-	buffer       *Buffer
-	focus        focusKind
-	controlIndex int
-	focused      int
-	following    bool
-	scrollUnread int
-	level        string
-	query        string
-	searching    bool
-	wrap         bool
-	detail       *detailState
-	stale        bool
-	width        int
-	height       int
-	theme        ui.Theme
+	buffer         *Buffer
+	focus          focusKind
+	controlIndex   int
+	focused        int
+	following      bool
+	scrollUnread   int
+	level          string
+	query          string
+	searching      bool
+	wrap           bool
+	detail         *detailState
+	stale          bool
+	contentFocused bool
+	width          int
+	height         int
+	theme          ui.Theme
 }
 
 func New(capacity int) *Model {
@@ -53,6 +54,21 @@ func New(capacity int) *Model {
 }
 
 func (m *Model) ID() ui.PageID { return ui.PageLogs }
+
+// SetContentFocused reports whether the root shell has given keyboard focus to this page.
+func (m *Model) SetContentFocused(focused bool) { m.contentFocused = focused }
+
+// FooterHints returns contextual shortcuts for the root shell footer.
+func (m *Model) FooterHints() string {
+	switch {
+	case m.detail != nil:
+		return ui.FooterDetailMode
+	case m.searching:
+		return ui.FooterSearchMode
+	default:
+		return ui.FooterLogs
+	}
+}
 
 func (m *Model) SetSize(width, height int) { m.width, m.height = width, height }
 
@@ -243,16 +259,22 @@ func (m *Model) renderEntry(entry Entry, focused bool) []string {
 	prefix := fmt.Sprintf("%s%-8s  %-7s  ", marker, timestamp, strings.ToUpper(safeLine(entry.Log.Level)))
 	messageWidth := max(8, m.width-utf8.RuneCountInString(prefix)-1)
 	message := safeLine(entry.Log.Message)
+	styleLine := func(line string) string {
+		if focused && m.contentFocused {
+			return m.theme.RowSelected.Render(line)
+		}
+		return line
+	}
 	if !m.wrap {
-		return []string{prefix + truncate(message, messageWidth)}
+		return []string{styleLine(prefix + truncate(message, messageWidth))}
 	}
 	wrapped := wrapText(message, messageWidth)
 	lines := make([]string, 0, len(wrapped))
 	for index, line := range wrapped {
 		if index == 0 {
-			lines = append(lines, prefix+line)
+			lines = append(lines, styleLine(prefix+line))
 		} else {
-			lines = append(lines, strings.Repeat(" ", utf8.RuneCountInString(prefix))+line)
+			lines = append(lines, styleLine(strings.Repeat(" ", utf8.RuneCountInString(prefix))+line))
 		}
 	}
 	return lines

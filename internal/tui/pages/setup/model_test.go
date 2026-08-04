@@ -83,6 +83,18 @@ func TestSetup_PasteMsgInsertsIntoFocusedField(t *testing.T) {
 	}
 }
 
+func TestSetup_IgnoresPasteWhileLoading(t *testing.T) {
+	model := loadedModel(&fakeClient{status: defaultStatus(false)})
+	model.inputs[0].SetValue("127.0.0.1:9090")
+	model.focusEndpoint(0)
+	model.loading = true
+	updated, _ := model.Update(tea.PasteMsg{Content: "127.0.0.1:17890"})
+	model = updated.(*Model)
+	if got := model.inputs[0].Value(); got != "127.0.0.1:9090" {
+		t.Fatalf("loading paste should be ignored, got=%q", got)
+	}
+}
+
 func TestSetup_SubscriptionPasteMsgInsertsURL(t *testing.T) {
 	model := loadedModel(&fakeClient{status: defaultStatus(false)})
 	model.step = stepSubscription

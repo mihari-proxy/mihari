@@ -3,10 +3,12 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	connectionspage "github.com/LeeShunEE/mihari/internal/tui/pages/connections"
 	subscriptionspage "github.com/LeeShunEE/mihari/internal/tui/pages/subscriptions"
 	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
@@ -173,5 +175,36 @@ func TestFooterShowsSubscriptionPageActionsWhenContentFocused(t *testing.T) {
 		if !strings.Contains(content, want) {
 			t.Fatalf("footer missing %q in:\n%s", want, content)
 		}
+	}
+}
+
+func TestFooterShowsConnectionsModeHints(t *testing.T) {
+	model := NewModel()
+	model.width, model.height = 120, 30
+	model.resizePages()
+	model.active = ui.PageConnections
+	model.railIndex = 2
+	model.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageConnections}
+	page, ok := model.pages[ui.PageConnections].(*connectionspage.Model)
+	if !ok {
+		t.Fatal("connections page missing")
+	}
+	page.SetContentFocused(true)
+	page.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{
+		ID: "one", Metadata: protocol.ConnectionMetadata{Host: "one.test"},
+	}}}, time.Unix(1, 0))
+
+	page.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if hints := page.FooterHints(); hints != ui.FooterSearchMode {
+		t.Fatalf("search footer=%q", hints)
+	}
+	content := model.View().Content
+	if !strings.Contains(content, "Type to filter") {
+		t.Fatalf("footer missing search hints:\n%s", content)
+	}
+
+	page.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if hints := page.FooterHints(); !strings.Contains(hints, "/ search") {
+		t.Fatalf("default footer=%q", hints)
 	}
 }

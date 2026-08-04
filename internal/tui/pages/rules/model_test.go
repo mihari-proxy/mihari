@@ -77,6 +77,54 @@ func TestRules_ControlRowActivatesTabsSearchAndFilters(t *testing.T) {
 	}
 }
 
+func TestView_FocusedRowHighlightOnlyWhenContentFocused(t *testing.T) {
+	model := New(nil, nil)
+	model.SetRules(protocol.RuleList{Rules: []protocol.Rule{
+		{Type: "DOMAIN", Payload: "one.test", Proxy: "Proxy"},
+		{Type: "DOMAIN", Payload: "two.test", Proxy: "DIRECT"},
+	}})
+	model.focus = pageFocus{kind: focusRow, row: 1}
+
+	model.SetContentFocused(false)
+	for _, line := range strings.Split(model.View(), "\n") {
+		if strings.Contains(line, "two.test") {
+			if !strings.Contains(line, ">") {
+				t.Fatalf("row marker missing while rail-focused: %q", line)
+			}
+			if strings.Contains(line, "\x1b[") {
+				t.Fatalf("row should not use accent while rail owns focus: %q", line)
+			}
+		}
+	}
+
+	model.SetContentFocused(true)
+	var focused string
+	for _, line := range strings.Split(model.View(), "\n") {
+		if strings.Contains(line, "two.test") {
+			focused = line
+		}
+	}
+	if focused == "" || !strings.Contains(focused, ">") || !strings.Contains(focused, "\x1b[") {
+		t.Fatalf("focused content row missing highlight: %q", focused)
+	}
+}
+
+func TestModel_FooterHintsAreContextual(t *testing.T) {
+	model := New(nil, nil)
+	if hints := model.FooterHints(); !strings.Contains(hints, "/ search") {
+		t.Fatalf("default=%q", hints)
+	}
+	model.searching = true
+	if hints := model.FooterHints(); hints != ui.FooterSearchMode {
+		t.Fatalf("search=%q", hints)
+	}
+	model.searching = false
+	model.detail = &detailState{title: "x", body: "y"}
+	if hints := model.FooterHints(); hints != ui.FooterDetailMode {
+		t.Fatalf("detail=%q", hints)
+	}
+}
+
 func TestModel_SearchSupportsPasteMsg(t *testing.T) {
 	model := New(nil, nil)
 	model.Update(tea.KeyPressMsg{Code: '/', Text: "/"})

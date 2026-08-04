@@ -48,6 +48,7 @@ type Model struct {
 	focus          FocusID
 	delays         map[string]DelayState
 	pending        map[FocusID]bool
+	contentFocused bool
 	width          int
 	height         int
 	theme          ui.Theme
@@ -77,6 +78,9 @@ func New(client Client, newOperationID func() string) *Model {
 }
 
 func (m *Model) ID() ui.PageID { return ui.PageProxies }
+
+// SetContentFocused reports whether the root shell has given keyboard focus to this page.
+func (m *Model) SetContentFocused(focused bool) { m.contentFocused = focused }
 
 func (m *Model) SetSize(width, height int) { m.width, m.height = width, height }
 
@@ -162,11 +166,18 @@ func (m *Model) View() string {
 			marker = "▾"
 		}
 		focus := "  "
-		if m.focus == (FocusID{Group: group.Name}) {
+		groupFocused := m.focus == (FocusID{Group: group.Name})
+		if groupFocused {
 			focus = "> "
 		}
 		header := fmt.Sprintf("%s%s %s  %s · %d", focus, marker, group.Name, strings.ToUpper(group.Type), len(group.Nodes))
-		lines := []string{m.theme.Title.Render(header)}
+		switch {
+		case groupFocused && m.contentFocused:
+			header = m.theme.RowSelected.Render(header)
+		case !groupFocused:
+			header = m.theme.Title.Render(header)
+		}
+		lines := []string{header}
 		if m.expanded[group.Name] {
 			lines = append(lines, m.renderNodes(group)...)
 		}
@@ -213,7 +224,8 @@ func (m *Model) renderNode(group protocol.ProxyGroup, node protocol.ProxyNode, w
 	}
 	content := fmt.Sprintf("%s%s %s\n%s  %s", focus, selected, node.Name, metadata, renderDelay(m.delays[node.Name]))
 	style := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(width)
-	if m.focus == id {
+	// Accent the focused node only while content owns keyboard focus.
+	if m.focus == id && m.contentFocused {
 		style = style.BorderForeground(lipgloss.Color("63"))
 	}
 	return style.Render(content)
