@@ -66,6 +66,7 @@ type Model struct {
 	height          int
 	theme           ui.Theme
 	lastError       string
+	contentFocused  bool
 }
 
 type rulesResultMsg struct {
@@ -96,6 +97,21 @@ func New(client Client, newOperationID func() string) *Model {
 	return &Model{
 		client: client, newOperationID: newOperationID, pending: make(map[string]bool),
 		focus: pageFocus{kind: focusControl}, theme: ui.DefaultTheme(),
+	}
+}
+
+// SetContentFocused reports whether the root shell has given keyboard focus to this page.
+func (m *Model) SetContentFocused(focused bool) { m.contentFocused = focused }
+
+// FooterHints returns contextual shortcuts for the root shell footer.
+func (m *Model) FooterHints() string {
+	switch {
+	case m.detail != nil:
+		return ui.FooterDetailMode
+	case m.searching:
+		return ui.FooterSearchMode
+	default:
+		return ui.FooterRules
 	}
 }
 
@@ -311,10 +327,15 @@ func (m *Model) renderRules() []string {
 	for visibleRow, index := range indexes {
 		rule := m.rules[index]
 		marker := "  "
-		if m.focus.kind == focusRow && m.focus.row == visibleRow {
+		rowFocused := m.focus.kind == focusRow && m.focus.row == visibleRow
+		if rowFocused {
 			marker = "> "
 		}
-		lines = append(lines, fmt.Sprintf("%s%4d  %-16s  %-39s  %s", marker, index+1, truncate(rule.Type, 16), truncate(rule.Payload, 39), rule.Proxy))
+		line := fmt.Sprintf("%s%4d  %-16s  %-39s  %s", marker, index+1, truncate(rule.Type, 16), truncate(rule.Payload, 39), rule.Proxy)
+		if rowFocused && m.contentFocused {
+			line = m.theme.RowSelected.Render(line)
+		}
+		lines = append(lines, line)
 	}
 	return lines
 }
@@ -328,7 +349,8 @@ func (m *Model) renderProviders() []string {
 	for visibleRow, index := range indexes {
 		provider := m.providers[index]
 		marker := "  "
-		if m.focus.kind == focusRow && m.focus.row == visibleRow {
+		rowFocused := m.focus.kind == focusRow && m.focus.row == visibleRow
+		if rowFocused {
 			marker = "> "
 		}
 		status := provider.Status
@@ -339,7 +361,11 @@ func (m *Model) renderProviders() []string {
 		if !provider.UpdatedAt.IsZero() {
 			updated = provider.UpdatedAt.Local().Format("2006-01-02 15:04")
 		}
-		lines = append(lines, fmt.Sprintf("%s%-16s  %-8s  %-13s  %-10s  %5d  %-19s  %s", marker, truncate(provider.Name, 16), provider.Type, provider.Behavior, provider.Format, provider.RuleCount, updated, status))
+		line := fmt.Sprintf("%s%-16s  %-8s  %-13s  %-10s  %5d  %-19s  %s", marker, truncate(provider.Name, 16), provider.Type, provider.Behavior, provider.Format, provider.RuleCount, updated, status)
+		if rowFocused && m.contentFocused {
+			line = m.theme.RowSelected.Render(line)
+		}
+		lines = append(lines, line)
 	}
 	return lines
 }

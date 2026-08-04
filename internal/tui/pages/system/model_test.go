@@ -33,6 +33,28 @@ func (f *fakeClient) Core(context.Context) (protocol.CoreStatus, error) {
 	return protocol.CoreStatus{Schema: "mihari/v1", Revision: f.onboarding.Revision, Status: "running", Version: "v1.19.0"}, nil
 }
 
+func TestView_FocusedRowHighlightOnlyWhenContentFocused(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSize(80, 24)
+	model.SetSnapshot(protocol.Status{DaemonVersion: "1.0.0"}, protocol.CoreStatus{Status: "running"})
+	model.focusID = rowDaemon
+
+	model.SetContentFocused(false)
+	railView := model.View()
+	if !strings.Contains(railView, ">") {
+		t.Fatalf("row marker missing while rail-focused:\n%s", railView)
+	}
+
+	model.SetContentFocused(true)
+	contentView := model.View()
+	if railView == contentView {
+		t.Fatal("content focus should add row selection styling")
+	}
+	if !strings.Contains(contentView, ">") || !strings.Contains(contentView, "\x1b[") {
+		t.Fatalf("focused content row missing highlight:\n%s", contentView)
+	}
+}
+
 func TestSystemRevisionConflictReloadsWithoutLosingStableFocus(t *testing.T) {
 	client := &fakeClient{onboarding: protocol.OnboardingStatus{Revision: 9}}
 	model := New(client, func() string { return "system-op" })

@@ -39,6 +39,28 @@ func TestModel_SelectsNodeAndRendersProtocolAndLatencyUnit(t *testing.T) {
 	}
 }
 
+func TestView_FocusedNodeAccentOnlyWhenContentFocused(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSize(80, 20)
+	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{
+		Name: "GLOBAL", Now: "node-a", Nodes: []protocol.ProxyNode{{Name: "node-a", Type: "VLESS"}},
+	}}})
+	model.expanded["GLOBAL"] = true
+	model.focus = FocusID{Group: "GLOBAL", Node: "node-a"}
+
+	model.SetContentFocused(false)
+	plain := model.View()
+	if !strings.Contains(plain, "> ") {
+		t.Fatalf("focus marker missing while rail owns focus:\n%s", plain)
+	}
+
+	model.SetContentFocused(true)
+	accented := model.View()
+	if plain == accented {
+		t.Fatal("content focus should change node border accent styling")
+	}
+}
+
 func TestModel_ControlTTestsEveryUniqueNodeOnce(t *testing.T) {
 	client := &fakeClient{delay: 10}
 	model := New(client, func() string { return "unused" })
