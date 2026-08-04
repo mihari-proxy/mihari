@@ -1,17 +1,17 @@
  Mihari  ·  ●  ·  0c  ·  ↑0 ↓0  ·  0 
- Mihari        Level: All  Wrap: Off  Pause: Off                        
-               / Search…                                                
-    Overview     Time      Level    Message                             
-    Proxies      22:13:20  INFO     daemon started                      
-                 22:13:21  WARNING  geoip database missing              
- Connections     22:13:22  ERROR    upstream connection reset           
-    Rules                                                               
-  › Logs                                                                
+    Overview   Level: All  Wrap: Off  Pause: Off                        
+    Proxies    / Search…                                                
+                 Time      Level    Message                             
+ Connections     22:13:20  INFO     daemon started                      
+    Rules        22:13:21  WARNING  geoip database missing              
+  › Logs         22:13:22  ERROR    upstream connection reset           
                                                                         
  Subscription                                                           
  s                                                                      
     Web GUI                                                             
     System                                                              
+                                                                        
+                                                                        
                                                                         
                                                                         
                                                                         
