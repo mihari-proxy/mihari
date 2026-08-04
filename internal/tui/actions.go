@@ -17,6 +17,10 @@ const (
 	RefreshSubscription     = ui.ActionRefreshSubscription
 	RefreshAllSubscriptions = ui.ActionRefreshAllSubscriptions
 	UpdateProvider          = ui.ActionUpdateProvider
+	InstallPanel            = ui.ActionInstallPanel
+	UpdatePanel             = ui.ActionUpdatePanel
+	ActivatePanel           = ui.ActionActivatePanel
+	OpenWebGUI              = ui.ActionOpenWebGUI
 )
 
 func RequiresConfirmation(action Action) bool {
@@ -31,7 +35,8 @@ func RequiresConfirmation(action Action) bool {
 func knownAction(action Action) bool {
 	switch action {
 	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, ApplyEndpointChange,
-		SelectProxy, CloseConnection, RefreshSubscription, UpdateProvider:
+		SelectProxy, CloseConnection, RefreshSubscription, UpdateProvider,
+		InstallPanel, UpdatePanel, ActivatePanel, OpenWebGUI:
 		return true
 	default:
 		return false
