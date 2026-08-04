@@ -11,9 +11,11 @@ import (
 )
 
 // Active is the atomic pointer to the panel build served by the Web gateway.
+// Previous maps panel ID → retained prior build for one-step rollback.
 type Active struct {
-	Panel string `json:"panel"`
-	Build string `json:"build"`
+	Panel    string            `json:"panel"`
+	Build    string            `json:"build"`
+	Previous map[string]string `json:"previous,omitempty"`
 }
 
 // LoadActive reads active.json. Missing file yields an empty Active without error.

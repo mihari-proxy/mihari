@@ -82,6 +82,7 @@ type Options struct {
 	GeoIP          GeoIPService
 	PrepareGeoIP   func(context.Context) (GeoIPCandidate, error)
 	Onboarding     *onboarding.Service
+	Panels         PanelService
 }
 
 type Manager struct {
@@ -102,6 +103,7 @@ type Manager struct {
 	geoip          GeoIPService
 	prepareGeoIP   func(context.Context) (GeoIPCandidate, error)
 	onboarding     *onboarding.Service
+	panels         PanelService
 	maintenance    chan struct{}
 	installed      chan struct{}
 	closing        atomic.Bool
@@ -147,6 +149,7 @@ func New(options Options) *Manager {
 		geoip:          options.GeoIP,
 		prepareGeoIP:   options.PrepareGeoIP,
 		onboarding:     options.Onboarding,
+		panels:         options.Panels,
 		maintenance:    make(chan struct{}, 1),
 		installed:      make(chan struct{}, 1),
 		operations:     make(map[string]*operationEntry),
