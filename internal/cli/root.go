@@ -46,6 +46,8 @@ type Dependencies struct {
 	RuntimeClient      RuntimeClient
 	SubscriptionClient SubscriptionClient
 	PanelClient        PanelClient
+	ServiceController  ServiceController
+	SelfUpdater        SelfUpdater
 	OpenBrowser        func(url string) error
 	RunDaemon          func(context.Context) error
 	RunTUI             func(context.Context) error
@@ -116,6 +118,8 @@ func newRoot(dependencies Dependencies, options *runOptions) *cobra.Command {
 	root.AddCommand(newStreamCommand("logs", dependencies, options))
 	root.AddCommand(newSubscriptionCommand(dependencies, options))
 	root.AddCommand(newPanelCommand(dependencies, options))
+	root.AddCommand(newServiceCommand(dependencies, options))
+	root.AddCommand(newSelfCommand(dependencies, options))
 	return root
 }
 

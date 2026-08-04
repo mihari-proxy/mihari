@@ -11,6 +11,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/atotto/clipboard v0.1.4
 	github.com/coder/websocket v1.8.15
+	github.com/kardianos/service v1.3.0
 	github.com/oschwald/maxminddb-golang/v2 v2.4.1
 	github.com/spf13/cobra v1.9.1
 	go.yaml.in/yaml/v3 v3.0.5

@@ -16,13 +16,34 @@ Bare `mihari` starts the TUI only when stdin is an interactive terminal. Non-int
 
 The TUI talks only to the local daemon through `internal/control/client` over the native IPC control plane. It never opens the mihomo controller, never receives the controller secret, and never performs durable writes itself. Bracketed paste and Ctrl+V in search and form fields use the pure-Go `github.com/atotto/clipboard` helper; Mihari itself never writes secrets to the clipboard. The current TUI includes a standalone first-run Setup route, Overview, expandable Proxies, active/closed Connections with local GeoIP details, Rules/Providers, a bounded structured Logs stream, subscription management forms, a categorized System page, and a Web GUI page that drives panel install/update/activate/open/rollback once the daemon advertises the `web-gui` capability. Setup installs the core, can add an initial subscription, prepares local GeoIP data, and asks the daemon to persist validated local endpoints. Rule order is never sorted; onboarding, system, provider, subscription, panel, and browser mutations run through the daemon mutation coordinator, and destructive or broad operations require confirmation.
 
-Run the daemon in the foreground:
+Run the daemon in the foreground (debug / one-off):
 
 ```console
 mihari daemon
 ```
 
-Query its status:
+Install as an OS service so it keeps running after you close the terminal (**Administrator / root required**; Mihari does **not** auto-elevate):
+
+```console
+# Windows: open "Terminal (Admin)" or elevated PowerShell first
+mihari service install
+mihari service start
+mihari service status
+mihari service stop
+mihari service restart
+mihari service uninstall
+```
+
+After `service install` + `start`, closing the TUI or a normal console does **not** stop Mihari; only `service stop`, uninstall, or the OS does.
+
+Update the mihari binary itself (also requires elevation):
+
+```console
+mihari self version
+mihari self update
+```
+
+Query daemon status (works without admin once the service/daemon is up):
 
 ```console
 mihari status
@@ -100,4 +121,4 @@ go vet ./...
 
 The architecture and staged delivery scope are recorded in the [architecture design](docs/superpowers/specs/2026-08-03-mihari-architecture-design.md) and [delivery roadmap](docs/superpowers/plans/2026-08-03-mihari-delivery-roadmap.md).
 
-Phase 4 (Full TUI) is sealed. Phase 5 (Web gateway and panels) is complete on the development host: loopback gateway with separate Web credential, Zashboard/MetaCubeXD adapters, panel install/activate/rollback, secret-injecting reverse proxy with default-deny writes, control API + CLI + TUI surfaces, fixture integration coverage, race detection, `go vet`, formatting, and CGO-free six-target cross-builds all pass.
+Phase 4–5 are sealed. Phase 6 adds OS service install/control (Windows Service / systemd / launchd via `kardianos/service`), **no automatic privilege elevation** (commands fail until run as Administrator/root), mihari self-update from GitHub Releases, and CI cross-builds.
