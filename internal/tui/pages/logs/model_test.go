@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
 
 func TestModel_ScrollingUpDisablesFollowAndGReturnsToNewest(t *testing.T) {
@@ -60,7 +61,10 @@ func TestModel_LevelSearchAndWrapControls(t *testing.T) {
 
 func TestModel_SearchSupportsPasteMsg(t *testing.T) {
 	model := New(10)
-	model.searching = true
+	model.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if !model.searching {
+		t.Fatal("expected search mode after /")
+	}
 	model.Update(tea.PasteMsg{Content: "match\nme"})
 	if model.query != "matchme" {
 		t.Fatalf("query=%q", model.query)
@@ -73,7 +77,18 @@ func TestModel_SearchSupportsPasteMsg(t *testing.T) {
 	updated, _ = model.Update(command())
 	model = updated.(*Model)
 	// Clipboard content is environment-dependent; ensure the command path stays live.
-	_ = model
+	updated, leave := model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	model = updated.(*Model)
+	if model.searching {
+		t.Fatal("esc should leave search")
+	}
+	if leave == nil {
+		t.Fatal("expected input mode restore command")
+	}
+	mode, ok := leave().(ui.InputModeMsg)
+	if !ok || mode.Mode != ui.InputNavigation {
+		t.Fatalf("mode=%#v", mode)
+	}
 }
 
 func TestModel_EnterOpensTypedDetailAndEscCloses(t *testing.T) {
