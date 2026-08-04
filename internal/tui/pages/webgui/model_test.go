@@ -65,8 +65,15 @@ func sampleStatus() protocol.WebGUIStatus {
 func TestWebGUINoCapabilityRendersUnavailableWithoutCallingClient(t *testing.T) {
 	fake := &fakeClient{}
 	model := New(fake, nil)
-	if got := model.View(); !strings.Contains(got, "Unavailable") {
+	got := model.View()
+	if !strings.Contains(got, "Unavailable") {
 		t.Fatalf("view=%q", got)
+	}
+	if strings.Contains(got, "Phase") {
+		t.Fatalf("unavailable copy must not mention Phase: %q", got)
+	}
+	if !strings.Contains(got, ui.WebGUILifecycleUnavailable) {
+		t.Fatalf("missing neutral unavailable reason: %q", got)
 	}
 	if command := model.Load(); command != nil || fake.calls != 0 {
 		t.Fatalf("command=%v calls=%d", command != nil, fake.calls)

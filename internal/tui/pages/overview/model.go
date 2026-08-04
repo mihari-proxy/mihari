@@ -11,6 +11,9 @@ import (
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
 
+// wideMinWidth is the content width at which KPI cards switch to a 2-column grid.
+const wideMinWidth = 60
+
 type Snapshot struct {
 	Status        protocol.Status
 	Core          protocol.CoreStatus
@@ -64,7 +67,7 @@ func (m *Model) View() string {
 
 	subscription := renderActiveSubscription(m.snapshot.Subscriptions)
 
-	webGUI := ui.WebGUIPhaseBoundary
+	webGUI := ui.WebGUIUnavailable
 	if slices.Contains(m.snapshot.Status.Capabilities, protocol.CapabilityWebGUI) {
 		webGUI = ui.AvailableLabel
 	}
@@ -93,18 +96,35 @@ func (m *Model) View() string {
 	traffic += "\n" + ui.MonitorUploadShort + " " + ui.Sparkline(upload, chartWidth)
 	traffic += "\n" + ui.MonitorDownloadShort + " " + ui.Sparkline(download, chartWidth)
 
-	cards := []string{
+	// Do not force another full-width Content box here: the root shell already
+	// sizes the content pane. Re-applying Width(m.width) plus card borders clips
+	// the right edge of every card.
+	if m.width >= wideMinWidth {
+		half := m.halfCardInner()
+		row1 := lipgloss.JoinHorizontal(lipgloss.Top,
+			m.cardAt(ui.CoreCardTitle, core, half),
+			m.cardAt(ui.ConfigCardTitle, config, half),
+		)
+		row2 := lipgloss.JoinHorizontal(lipgloss.Top,
+			m.cardAt(ui.SubscriptionCardTitle, subscription, half),
+			m.cardAt(ui.WebGUICardTitle, webGUI, half),
+		)
+		return lipgloss.JoinVertical(lipgloss.Left,
+			row1,
+			row2,
+			m.card(ui.MonitorTrafficTitle, traffic),
+			m.card(ui.RecentOperationsTitle, operations),
+		)
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left,
 		m.card(ui.CoreCardTitle, core),
 		m.card(ui.ConfigCardTitle, config),
 		m.card(ui.SubscriptionCardTitle, subscription),
 		m.card(ui.WebGUICardTitle, webGUI),
 		m.card(ui.MonitorTrafficTitle, traffic),
 		m.card(ui.RecentOperationsTitle, operations),
-	}
-	// Do not force another full-width Content box here: the root shell already
-	// sizes the content pane. Re-applying Width(m.width) plus card borders clips
-	// the right edge of every card.
-	return strings.Join(cards, "\n")
+	)
 }
 
 func renderActiveSubscription(list protocol.SubscriptionList) string {
@@ -129,13 +149,30 @@ func renderActiveSubscription(list protocol.SubscriptionList) string {
 	return ui.NoActiveSubscriptionLabel
 }
 
-func (m *Model) card(title, body string) string {
+func (m *Model) fullCardInner() int {
 	// Lipgloss Width is the inner block; rounded borders add 2 columns outside.
 	// Leave room for root Content horizontal padding (2) and the border (2).
-	inner := max(20, m.width-4)
-	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(inner).MaxWidth(inner).Render(
-		m.theme.Title.Render(title) + "\n" + body,
-	)
+	return max(20, m.width-4)
+}
+
+func (m *Model) halfCardInner() int {
+	// Two side-by-side cards: each has a 2-column border; leave content padding (2).
+	// 2*(inner+2) <= m.width-2  =>  inner <= (m.width-6)/2
+	return max(10, (m.width-6)/2)
+}
+
+func (m *Model) card(title, body string) string {
+	return m.cardAt(title, body, m.fullCardInner())
+}
+
+func (m *Model) cardAt(title, body string, inner int) string {
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.theme.ColorSurfaceBorder).
+		Padding(0, 1).
+		Width(inner).
+		MaxWidth(inner).
+		Render(m.theme.Title.Render(title) + "\n" + body)
 }
 
 func valueOr(value, fallback string) string {

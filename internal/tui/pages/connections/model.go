@@ -33,6 +33,7 @@ type focusKind uint8
 
 const (
 	focusControl focusKind = iota
+	focusSearch
 	focusHeader
 	focusRow
 )
@@ -215,6 +216,8 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	switch m.focus.kind {
 	case focusControl:
 		return m.updateControl(key)
+	case focusSearch:
+		return m.updateSearchFocus(key)
 	case focusHeader:
 		return m.updateHeader(key)
 	case focusRow:
@@ -232,9 +235,9 @@ func (m *Model) updateControl(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 		}
 		m.controlIndex--
 	case "right", "tab":
-		m.controlIndex = min(4, m.controlIndex+1)
+		m.controlIndex = min(3, m.controlIndex+1)
 	case "down":
-		m.focus = pageFocus{kind: focusHeader}
+		m.focus = pageFocus{kind: focusSearch}
 	case "enter":
 		switch m.controlIndex {
 		case 0:
@@ -245,12 +248,24 @@ func (m *Model) updateControl(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 			m.source = options[(slices.Index(options, m.source)+1)%len(options)]
 			m.reconcile()
 		case 2:
-			return m, m.startSearch()
-		case 3:
 			m.openColumns()
-		case 4:
+		case 3:
 			m.setPaused(!m.paused)
 		}
+	}
+	return m, nil
+}
+
+func (m *Model) updateSearchFocus(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
+	switch key.String() {
+	case "up":
+		m.focus = pageFocus{kind: focusControl}
+	case "down":
+		m.focus = pageFocus{kind: focusHeader}
+	case "enter":
+		return m, m.startSearch()
+	case "left":
+		return m, func() tea.Msg { return ui.FocusRailMsg{} }
 	}
 	return m, nil
 }
@@ -262,7 +277,7 @@ func (m *Model) updateHeader(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 	case "right":
 		m.headerIndex = min(len(m.columns)-1, m.headerIndex+1)
 	case "up":
-		m.focus = pageFocus{kind: focusControl}
+		m.focus = pageFocus{kind: focusSearch}
 	case "down":
 		if rows := m.visibleRows(); len(rows) > 0 {
 			m.focus = pageFocus{kind: focusRow, rowID: rows[0].ID}
@@ -459,7 +474,7 @@ func (m *Model) visibleRows() []protocol.Connection {
 	rows := m.datasetRows()
 	filtered := make([]protocol.Connection, 0, len(rows))
 	for _, connection := range rows {
-		if matchesConnection(connection, m.query, m.source) {
+		if matchesConnection(connection, m.query, m.source, m.columns) {
 			filtered = append(filtered, connection)
 		}
 	}

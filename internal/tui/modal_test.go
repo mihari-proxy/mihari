@@ -15,6 +15,12 @@ func TestConfirmationStatesImpactAndRollbackWithoutRetyping(t *testing.T) {
 			t.Fatalf("view does not contain %q: %s", want, view)
 		}
 	}
+	// Plain-language body: no Object:/Impact:/Rollback: field labels.
+	for _, forbidden := range []string{"Object:", "Impact:", "Rollback:"} {
+		if strings.Contains(view, forbidden) {
+			t.Fatalf("confirmation still uses field dump %q: %s", forbidden, view)
+		}
+	}
 	if strings.Contains(strings.ToLower(view), "type the") {
 		t.Fatalf("confirmation requires retyping: %s", view)
 	}

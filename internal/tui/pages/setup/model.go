@@ -352,7 +352,7 @@ func renderInputs(labels []string, inputs []textinput.Model, focused int) []stri
 	for index := range inputs {
 		marker := "  "
 		if index == focused {
-			marker = "> "
+			marker = ui.FocusMarker
 		}
 		lines = append(lines, marker+labels[index], "  "+inputs[index].View())
 	}

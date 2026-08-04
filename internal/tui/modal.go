@@ -1,7 +1,7 @@
 package tui
 
 import (
-	"fmt"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
@@ -74,7 +74,21 @@ func (m *Modal) View(width, height int) string {
 	theme := ui.DefaultTheme()
 	body := m.body
 	if m.kind == modalConfirmation {
-		body = fmt.Sprintf("%s: %s\n%s: %s\n%s: %s", ui.ObjectLabel, m.object, ui.ImpactLabel, m.impact, ui.RollbackLabel, m.rollback)
+		// Plain-language confirmation: object, impact sentence, optional muted rollback.
+		parts := make([]string, 0, 3)
+		if m.object != "" {
+			parts = append(parts, m.object)
+		}
+		if m.impact != "" {
+			parts = append(parts, m.impact)
+		}
+		body = strings.Join(parts, "\n")
+		if m.rollback != "" {
+			if body != "" {
+				body += "\n"
+			}
+			body += theme.Muted.Render(m.rollback)
+		}
 		confirm := theme.Button.Render(ui.ConfirmLabel)
 		cancel := theme.Button.Render(ui.CancelLabel)
 		if m.selected == 0 {

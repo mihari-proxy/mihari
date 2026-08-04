@@ -11,7 +11,7 @@ func RenderRail(theme Theme, pages []PageID, selected int, focused bool, width, 
 	for index, page := range pages {
 		label := "  " + PageLabel(page)
 		if index == selected {
-			label = "› " + PageLabel(page)
+			label = FocusMarker + PageLabel(page)
 			if focused {
 				// Keyboard focus is on the rail: strong selection highlight.
 				lines = append(lines, theme.RailSelected.Render(label))

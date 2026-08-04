@@ -49,6 +49,24 @@ func TestRows_RenderActiveCacheAndRefreshStates(t *testing.T) {
 	}
 }
 
+func TestView_HeaderUsesLastUpdateAndNextUpdate(t *testing.T) {
+	model := New(nil, nil, func() time.Time { return time.Unix(100, 0) })
+	model.SetSubscriptions(protocol.SubscriptionList{Subscriptions: []protocol.Subscription{
+		{ID: "a", Name: "Alpha", Enabled: true},
+	}})
+	view := model.View()
+	for _, want := range []string{ui.LastUpdateLabel, ui.NextUpdateLabel} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("header missing %q:\n%s", want, view)
+		}
+	}
+	for _, forbidden := range []string{"Last success", "Next refresh"} {
+		if strings.Contains(view, forbidden) {
+			t.Fatalf("header still contains legacy label %q:\n%s", forbidden, view)
+		}
+	}
+}
+
 func TestView_FocusedSubscriptionRowIsHighlightedOnlyWhenContentFocused(t *testing.T) {
 	model := New(nil, nil, func() time.Time { return time.Unix(100, 0) })
 	model.SetSubscriptions(protocol.SubscriptionList{Subscriptions: []protocol.Subscription{
@@ -61,7 +79,7 @@ func TestView_FocusedSubscriptionRowIsHighlightedOnlyWhenContentFocused(t *testi
 	view := model.View()
 	for _, line := range strings.Split(view, "\n") {
 		if strings.Contains(line, "Beta") {
-			if !strings.Contains(line, ">") {
+			if !strings.Contains(line, ui.FocusMarker) {
 				t.Fatalf("row marker missing while rail-focused: %q", line)
 			}
 			if strings.Contains(line, "\x1b[") {
@@ -84,7 +102,7 @@ func TestView_FocusedSubscriptionRowIsHighlightedOnlyWhenContentFocused(t *testi
 	if focused == "" || other == "" {
 		t.Fatalf("missing rows in view:\n%s", view)
 	}
-	if !strings.Contains(focused, ">") || !strings.Contains(focused, "\x1b[") {
+	if !strings.Contains(focused, ui.FocusMarker) || !strings.Contains(focused, "\x1b[") {
 		t.Fatalf("focused content row missing color highlight: %q", focused)
 	}
 	if strings.Contains(other, "\x1b[") {

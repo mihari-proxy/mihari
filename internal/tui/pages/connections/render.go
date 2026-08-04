@@ -10,11 +10,13 @@ import (
 )
 
 func (m *Model) View() string {
-	control := fmt.Sprintf("[%s %d | %s %d]  [%s: %s]  [%s]  [%s]  [%s]",
+	control := fmt.Sprintf("[%s %d | %s %d]  [%s: %s]  [%s]  [%s]",
 		ui.ConnectionsActiveLabel, len(m.history.Active()), ui.ConnectionsClosedLabel, len(m.history.Closed()),
-		ui.SourceIPLabel, m.source, m.searchView(), ui.ColumnsLabel, m.pauseLabel())
+		ui.SourceIPLabel, m.source, ui.ColumnsLabel, m.pauseLabel())
+	searchFocused := m.searching || m.focus.kind == focusSearch
+	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.width)
 	lines := m.tableLines()
-	base := clipLines(control, m.width) + "\n" + clipLinesAt(strings.Join(lines, "\n"), m.width, m.horizontalOffset)
+	base := clipLines(control, m.width) + "\n" + searchBar + "\n" + clipLinesAt(strings.Join(lines, "\n"), m.width, m.horizontalOffset)
 	if m.columnsOpen {
 		return base + "\n" + m.columnsView()
 	}
@@ -50,7 +52,7 @@ func (m *Model) tableLines() []string {
 			prefix := "  "
 			rowFocused := m.focus.kind == focusRow && m.focus.rowID == connection.ID
 			if rowFocused {
-				prefix = "> "
+				prefix = ui.FocusMarker
 			}
 			line := prefix + strings.Join(values, "  ")
 			if rowFocused && m.contentFocused {
@@ -70,13 +72,6 @@ func (m *Model) tableWidth() int {
 	return width
 }
 
-func (m *Model) searchView() string {
-	if m.searching || m.query != "" {
-		return "/ " + m.query
-	}
-	return "/ " + ui.SearchPlaceholder
-}
-
 func (m *Model) pauseLabel() string {
 	if m.paused {
 		return ui.ResumeLabel
@@ -93,7 +88,7 @@ func (m *Model) columnsView() string {
 		}
 		focus := "  "
 		if index == m.columnCursor {
-			focus = "> "
+			focus = ui.FocusMarker
 		}
 		lines = append(lines, focus+mark+" "+ui.ConnectionColumnLabel(column))
 	}
