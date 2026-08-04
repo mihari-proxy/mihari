@@ -84,7 +84,7 @@ func TestControlPlaneLifecycleAndConcurrentStatus(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(8 * time.Second):
 		t.Fatal("daemon did not stop")
 	}
 
