@@ -72,6 +72,29 @@ func TestSetupFormUsesTabOnlyToMoveBetweenEndpointFields(t *testing.T) {
 	}
 }
 
+func TestSetup_PasteMsgInsertsIntoFocusedField(t *testing.T) {
+	model := loadedModel(&fakeClient{status: defaultStatus(false)})
+	model.inputs[0].SetValue("")
+	model.focusEndpoint(0)
+	updated, _ := model.Update(tea.PasteMsg{Content: "127.0.0.1:8080"})
+	model = updated.(*Model)
+	if got := model.inputs[0].Value(); got != "127.0.0.1:8080" {
+		t.Fatalf("endpoint value=%q", got)
+	}
+}
+
+func TestSetup_SubscriptionPasteMsgInsertsURL(t *testing.T) {
+	model := loadedModel(&fakeClient{status: defaultStatus(false)})
+	model.step = stepSubscription
+	model.subscriptionInputs = subscriptionInputs()
+	model.focusSubscription(1)
+	updated, _ := model.Update(tea.PasteMsg{Content: "https://example.test/sub"})
+	model = updated.(*Model)
+	if got := model.subscriptionInputs[1].Value(); got != "https://example.test/sub" {
+		t.Fatalf("url value=%q", got)
+	}
+}
+
 func TestSetupEscapeAtFirstStepRequestsCancelWithoutCompleting(t *testing.T) {
 	client := &fakeClient{status: defaultStatus(true)}
 	model := loadedModel(client)

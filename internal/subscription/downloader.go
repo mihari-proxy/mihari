@@ -12,7 +12,10 @@ import (
 
 const (
 	defaultMaxSubscriptionBytes = 16 << 20
-	subscriptionUserAgent       = "mihari/1 subscription-fetcher"
+	// Many providers only return a Clash YAML document when the User-Agent looks
+	// like a Clash client (same approach as zashhomo). A generic agent often
+	// receives base64 share-link lists instead.
+	subscriptionUserAgent = "clash.meta/mihari"
 )
 
 type FetchRequest struct {

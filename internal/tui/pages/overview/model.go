@@ -53,7 +53,7 @@ func (m *Model) View() string {
 	coreVersion := valueOr(m.snapshot.Core.Version, ui.UnknownLabel)
 	core := fmt.Sprintf("%s · %s\n%s %d", coreStatus, coreVersion, ui.PIDLabel, m.snapshot.Core.PID)
 
-	config := ui.UnavailableTitle
+	config := ui.ConfigNotAppliedLabel
 	if current := m.snapshot.Status.Config; current != nil {
 		config = fmt.Sprintf("%s\n%s %d · %s %d", valueOr(current.Status, ui.UnknownLabel),
 			ui.DesiredLabel, current.DesiredRevision, ui.ObservedLabel, current.ObservedRevision)
@@ -62,24 +62,9 @@ func (m *Model) View() string {
 		}
 	}
 
-	subscription := ui.UnavailableTitle
-	for _, profile := range m.snapshot.Subscriptions.Subscriptions {
-		if profile.ID != m.snapshot.Subscriptions.ActiveID {
-			continue
-		}
-		subscription = profile.Name
-		if profile.UpdatedAt.IsZero() {
-			subscription += " · " + ui.CacheMissingLabel
-		} else {
-			subscription += " · " + profile.UpdatedAt.Local().Format("2006-01-02 15:04")
-		}
-		if profile.LastError != "" {
-			subscription += "\n" + profile.LastError
-		}
-		break
-	}
+	subscription := renderActiveSubscription(m.snapshot.Subscriptions)
 
-	webGUI := ui.UnavailableTitle
+	webGUI := ui.WebGUIPhaseBoundary
 	if slices.Contains(m.snapshot.Status.Capabilities, protocol.CapabilityWebGUI) {
 		webGUI = ui.AvailableLabel
 	}
@@ -96,9 +81,9 @@ func (m *Model) View() string {
 
 	traffic := fmt.Sprintf("%s %d\n%s %s · %s %s · %s %s",
 		ui.MonitorConnectionsLabel, m.snapshot.Monitor.Connections,
-		ui.MonitorUploadShort, formatRate(m.snapshot.Monitor.UploadRate),
-		ui.MonitorDownloadShort, formatRate(m.snapshot.Monitor.DownloadRate),
-		ui.MonitorMemoryShort, formatBytes(m.snapshot.Monitor.MemoryInUse))
+		ui.MonitorUploadShort, ui.FormatRate(m.snapshot.Monitor.UploadRate),
+		ui.MonitorDownloadShort, ui.FormatRate(m.snapshot.Monitor.DownloadRate),
+		ui.MonitorMemoryShort, ui.FormatBytes(m.snapshot.Monitor.MemoryInUse))
 	chartWidth := min(50, max(8, m.width-12))
 	upload := make([]int64, len(m.snapshot.Monitor.Traffic))
 	download := make([]int64, len(m.snapshot.Monitor.Traffic))
@@ -116,11 +101,39 @@ func (m *Model) View() string {
 		m.card(ui.MonitorTrafficTitle, traffic),
 		m.card(ui.RecentOperationsTitle, operations),
 	}
-	return m.theme.Content.Width(m.width).Height(m.height).Render(strings.Join(cards, "\n"))
+	// Do not force another full-width Content box here: the root shell already
+	// sizes the content pane. Re-applying Width(m.width) plus card borders clips
+	// the right edge of every card.
+	return strings.Join(cards, "\n")
+}
+
+func renderActiveSubscription(list protocol.SubscriptionList) string {
+	if len(list.Subscriptions) == 0 {
+		return ui.NoSubscriptionsConfiguredLabel
+	}
+	for _, profile := range list.Subscriptions {
+		if list.ActiveID == "" || profile.ID != list.ActiveID {
+			continue
+		}
+		subscription := profile.Name
+		if profile.UpdatedAt.IsZero() {
+			subscription += " · " + ui.CacheMissingLabel
+		} else {
+			subscription += " · " + profile.UpdatedAt.Local().Format("2006-01-02 15:04")
+		}
+		if profile.LastError != "" {
+			subscription += "\n" + profile.LastError
+		}
+		return subscription
+	}
+	return ui.NoActiveSubscriptionLabel
 }
 
 func (m *Model) card(title, body string) string {
-	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(max(24, m.width-4)).Render(
+	// Lipgloss Width is the inner block; rounded borders add 2 columns outside.
+	// Leave room for root Content horizontal padding (2) and the border (2).
+	inner := max(20, m.width-4)
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(inner).MaxWidth(inner).Render(
 		m.theme.Title.Render(title) + "\n" + body,
 	)
 }
@@ -130,13 +143,4 @@ func valueOr(value, fallback string) string {
 		return fallback
 	}
 	return value
-}
-
-func formatRate(value int64) string { return formatBytes(value) + "/s" }
-
-func formatBytes(value int64) string {
-	if value < 1024 {
-		return fmt.Sprintf("%d B", max(int64(0), value))
-	}
-	return fmt.Sprintf("%.1f KiB", float64(value)/1024)
 }

@@ -53,8 +53,7 @@ func newForm(kind formKind, labels, values, placeholders []string) *formModel {
 }
 
 func (f *formModel) Update(message tea.Msg) (bool, tea.Cmd) {
-	key, ok := message.(tea.KeyPressMsg)
-	if ok {
+	if key, ok := message.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "esc":
 			return true, nil
@@ -64,6 +63,7 @@ func (f *formModel) Update(message tea.Msg) (bool, tea.Cmd) {
 			return false, f.move(-1)
 		}
 	}
+	// Forward keys, bracketed paste, and clipboard paste results into the focused textinput.
 	updated, command := f.inputs[f.index].Update(message)
 	f.inputs[f.index] = updated
 	return false, command

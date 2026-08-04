@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	subscriptionspage "github.com/LeeShunEE/mihari/internal/tui/pages/subscriptions"
 	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
@@ -135,6 +136,10 @@ func TestFooterRendersDisconnectedGlobalState(t *testing.T) {
 	if !strings.Contains(model.View().Content, ui.GlobalStateReconnectedLabel) {
 		t.Fatalf("footer missing reconnected state: %s", model.View().Content)
 	}
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{Health: "ok"}})
+	if strings.Contains(model.View().Content, ui.GlobalStateReconnectedLabel) {
+		t.Fatalf("reconnected banner was not cleared after live data: %s", model.View().Content)
+	}
 }
 
 func TestCompactFooterRendersWithoutOverflow(t *testing.T) {
@@ -148,6 +153,25 @@ func TestCompactFooterRendersWithoutOverflow(t *testing.T) {
 	for _, line := range strings.Split(content, "\n") {
 		if width := lipgloss.Width(line); width > model.width {
 			t.Fatalf("compact line exceeded width: %d > %d %q", width, model.width, line)
+		}
+	}
+}
+
+func TestFooterShowsSubscriptionPageActionsWhenContentFocused(t *testing.T) {
+	model := NewModel()
+	model.width, model.height = 120, 30
+	model.resizePages()
+	model.active = ui.PageSubscriptions
+	model.railIndex = 5
+	model.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageSubscriptions}
+	if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
+		page.SetSubscriptions(protocol.SubscriptionList{Subscriptions: []protocol.Subscription{{ID: "a", Name: "A"}}})
+		page.SetContentFocused(true)
+	}
+	content := model.View().Content
+	for _, want := range []string{"r refresh", "Ctrl+R", "a add", "Space toggle", "d delete"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("footer missing %q in:\n%s", want, content)
 		}
 	}
 }

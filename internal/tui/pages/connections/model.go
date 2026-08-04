@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
@@ -330,24 +329,19 @@ func publicConnectionAddresses(connection protocol.Connection) []string {
 }
 
 func (m *Model) updateSearch(message tea.Msg) (ui.Page, tea.Cmd) {
-	key, ok := message.(tea.KeyPressMsg)
-	if !ok {
-		return m, nil
-	}
-	if key.String() == "enter" || key.String() == "esc" {
-		m.searching = false
-		m.reconcile()
-		return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
-	}
-	if key.String() == "backspace" {
-		runes := []rune(m.query)
-		if len(runes) > 0 {
-			m.query = string(runes[:len(runes)-1])
+	if key, ok := message.(tea.KeyPressMsg); ok {
+		if key.String() == "enter" || key.String() == "esc" {
+			m.searching = false
+			m.reconcile()
+			return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
 		}
-	} else if key.Text != "" && utf8.RuneCountInString(m.query+key.Text) <= 256 {
-		m.query += key.Text
 	}
-	m.reconcile()
+	value, handled, command := ui.EditTextField(m.query, message, 256)
+	if handled {
+		m.query = value
+		m.reconcile()
+		return m, command
+	}
 	return m, nil
 }
 

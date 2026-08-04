@@ -125,20 +125,43 @@ func (s *Service) PrepareRefresh(ctx context.Context, id string) (PreparedRefres
 	s.mu.RUnlock()
 	result, err := s.downloader.Fetch(ctx, FetchRequest{URL: profile.URL, ETag: profile.ETag, LastModified: profile.LastModified})
 	if err != nil {
+		_ = s.noteRefreshError(id, err)
 		return PreparedRefresh{}, err
 	}
 	content := result.Content
 	if result.NotModified {
 		content, err = os.ReadFile(s.CachePath(id))
 		if err != nil {
-			return PreparedRefresh{}, dataError("subscription provider returned not-modified without a valid cache")
+			fail := dataError("subscription provider returned not-modified without a valid cache")
+			_ = s.noteRefreshError(id, fail)
+			return PreparedRefresh{}, fail
 		}
 	}
 	document, err := ParseDocument(content)
 	if err != nil {
+		_ = s.noteRefreshError(id, err)
 		return PreparedRefresh{}, err
 	}
 	return PreparedRefresh{profileID: id, profileVersion: profile.Version, result: result, document: document}, nil
+}
+
+// noteRefreshError records a safe last-error on the profile without replacing
+// a valid cache. Failures here are best-effort and do not mask the original error.
+func (s *Service) noteRefreshError(id string, cause error) error {
+	message := "subscription refresh failed"
+	var apiError protocol.APIError
+	if errors.As(cause, &apiError) && apiError.Message != "" {
+		message = apiError.Message
+	}
+	_, _, err := s.Mutate(func(catalog *Catalog) error {
+		index := catalog.Index(id)
+		if index < 0 {
+			return notFoundError()
+		}
+		catalog.Profiles[index].LastError = message
+		return nil
+	})
+	return err
 }
 
 func (s *Service) CommitRefresh(prepared PreparedRefresh) (Receipt, error) {
