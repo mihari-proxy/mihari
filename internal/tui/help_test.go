@@ -53,7 +53,7 @@ func TestModalKeysDoNotLeakToRailOrPage(t *testing.T) {
 	}
 	before := model.railIndex
 	for _, key := range []tea.KeyPressMsg{
-		{Code: tea.KeyDown}, {Code: tea.KeyUp}, {Code: 'j', Text: "j"}, {Code: 'k', Text: "k"},
+		{Code: tea.KeyDown}, {Code: tea.KeyUp}, {Code: tea.KeyLeft}, {Code: tea.KeyRight},
 	} {
 		model = updateModelKey(t, model, key)
 	}
