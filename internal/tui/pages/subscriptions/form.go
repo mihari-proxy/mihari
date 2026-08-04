@@ -7,6 +7,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
 
 type formKind uint8
@@ -80,7 +81,7 @@ func (f *formModel) View() string {
 	for index := range f.inputs {
 		marker := "  "
 		if index == f.index {
-			marker = "> "
+			marker = ui.FocusMarker
 		}
 		lines = append(lines, marker+f.labels[index], "  "+f.inputs[index].View())
 	}

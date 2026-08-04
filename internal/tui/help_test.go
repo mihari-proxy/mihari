@@ -176,6 +176,12 @@ func TestFooterShowsSubscriptionPageActionsWhenContentFocused(t *testing.T) {
 			t.Fatalf("footer missing %q in:\n%s", want, content)
 		}
 	}
+	// Footer MaxWidth clamp keeps the long Subscriptions shortcut line on one terminal row.
+	for _, line := range strings.Split(content, "\n") {
+		if width := lipgloss.Width(line); width > model.width {
+			t.Fatalf("subscriptions footer line exceeded width: %d > %d %q", width, model.width, line)
+		}
+	}
 }
 
 func TestFooterShowsConnectionsModeHints(t *testing.T) {

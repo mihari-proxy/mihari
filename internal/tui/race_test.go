@@ -8,6 +8,29 @@ import (
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
 
+// applyRootCmd expands BatchMsg and applies non-blocking messages. tea.Tick
+// spinner cmds are not executed (they sleep); call spinnerTickMsg directly to
+// exercise the animation loop.
+func applyRootCmd(model Model, cmd tea.Cmd) (Model, tea.Cmd) {
+	if cmd == nil {
+		return model, nil
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var pending tea.Cmd
+		for _, child := range batch {
+			var next tea.Cmd
+			model, next = applyRootCmd(model, child)
+			if next != nil {
+				pending = next
+			}
+		}
+		return model, pending
+	}
+	updated, next := model.Update(msg)
+	return updated.(Model), next
+}
+
 func TestGlobalActionDispatcherGatesStaleCapabilityConfirmationAndPending(t *testing.T) {
 	runs := 0
 	intent := ui.ActionIntentMsg{
@@ -38,6 +61,10 @@ func TestGlobalActionDispatcherGatesStaleCapabilityConfirmationAndPending(t *tes
 	model.modal.selected = 0
 	updated, command = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(Model)
+	if command == nil {
+		t.Fatal("confirm did not return actionExecute command")
+	}
+	// confirmationCmd yields actionExecuteMsg → executeAction (pending + Batch).
 	updated, command = model.Update(command())
 	model = updated.(Model)
 	if command == nil || model.globalState != ui.StatePending {
@@ -48,8 +75,7 @@ func TestGlobalActionDispatcherGatesStaleCapabilityConfirmationAndPending(t *tes
 	if duplicate != nil || model.globalState != ui.StatePending {
 		t.Fatalf("duplicate=%v state=%s", duplicate != nil, model.globalState)
 	}
-	updated, _ = model.Update(command())
-	model = updated.(Model)
+	model, _ = applyRootCmd(model, command)
 	if runs != 1 || len(model.pendingActions) != 0 {
 		t.Fatalf("runs=%d pending=%v", runs, model.pendingActions)
 	}
@@ -68,8 +94,7 @@ func TestGlobalActionDispatcherRunsSafeActionWithoutConfirmation(t *testing.T) {
 	if command == nil || model.modal != nil {
 		t.Fatalf("command=%v modal=%v", command != nil, model.modal != nil)
 	}
-	updated, _ = model.Update(command())
-	model = updated.(Model)
+	model, _ = applyRootCmd(model, command)
 	if runs != 1 || len(model.pendingActions) != 0 {
 		t.Fatalf("runs=%d pending=%v", runs, model.pendingActions)
 	}
@@ -105,8 +130,7 @@ func TestGlobalActionResultReturnsToOriginPageAfterNavigation(t *testing.T) {
 	model = updated.(Model)
 	model.active = ui.PageOverview
 	model.focus = ui.Focus{Area: ui.FocusRail, Page: ui.PageOverview}
-	updated, _ = model.Update(command())
-	model = updated.(Model)
+	model, _ = applyRootCmd(model, command)
 	if page.received != 1 || len(model.pendingActions) != 0 {
 		t.Fatalf("received=%d pending=%v", page.received, model.pendingActions)
 	}
@@ -133,7 +157,12 @@ func TestConfirmationActionResultRoutesToOriginPageWithoutRetry(t *testing.T) {
 	model.modal.selected = 0
 	updated, command = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(Model)
-	updated, command = model.Update(command())
+	// Enter queues actionExecuteMsg; apply it to enter pending without completing yet.
+	if command == nil {
+		t.Fatal("confirmation did not return execute command")
+	}
+	executeMsg := command()
+	updated, command = model.Update(executeMsg)
 	model = updated.(Model)
 	if command == nil || len(model.pendingActions) != 1 {
 		t.Fatalf("confirmation did not enter pending: command=%v pending=%v", command != nil, model.pendingActions)
@@ -141,8 +170,7 @@ func TestConfirmationActionResultRoutesToOriginPageWithoutRetry(t *testing.T) {
 	// Navigate away during the pending window; the result must still reach the origin page.
 	model.active = ui.PageOverview
 	model.focus = ui.Focus{Area: ui.FocusRail, Page: ui.PageOverview}
-	updated, _ = model.Update(command())
-	model = updated.(Model)
+	model, _ = applyRootCmd(model, command)
 	if executes != 1 || len(model.pendingActions) != 0 || page.received != 1 {
 		t.Fatalf("executes=%d pending=%v received=%d (no blind retry, result routed)", executes, model.pendingActions, page.received)
 	}

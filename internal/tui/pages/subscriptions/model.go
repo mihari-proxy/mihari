@@ -324,7 +324,7 @@ func (m *Model) FooterHints() string {
 }
 
 func (m *Model) View() string {
-	lines := []string{m.theme.Title.Render(ui.SubscriptionsTitle), "  Active  Name                  State      Cache       Last success  Next refresh"}
+	lines := []string{m.theme.Title.Render(ui.SubscriptionsTitle), "  Active  Name                  State      Cache       " + ui.LastUpdateLabel + "  " + ui.NextUpdateLabel}
 	if m.lastError != "" {
 		lines = append(lines, m.theme.Muted.Render(m.lastError))
 	}
@@ -335,7 +335,7 @@ func (m *Model) View() string {
 		rowFocused := m.focus.kind == focusRow && m.focus.id == subscription.ID
 		marker := "  "
 		if rowFocused {
-			marker = "> "
+			marker = ui.FocusMarker
 		}
 		entry := rowFrom(subscription, subscription.ID == m.activeID, m.pending[subscription.ID] == "refresh", m.now(), m.globalInterval)
 		line := marker + entry.Render()
@@ -547,7 +547,7 @@ func (m *Model) detailView() string {
 	if subscription.LastError != "" {
 		errorState = subscription.LastError
 	}
-	return fmt.Sprintf("%s: %s\n%s: %s\n%s: %t\n%s: %t\n%s: %s\n%s: %s\n%s: %s\n\n%s", ui.NameLabel, subscription.Name, ui.StatusLabel, enabledLabel(subscription.Enabled), ui.AutoRefreshLabel, subscription.AutoRefresh, ui.CacheLabel, subscription.Cached, ui.IntervalLabel, valueOr(subscription.Interval, ui.GlobalLabel), ui.LastSuccessLabel, formatTimestamp(subscription.UpdatedAt), ui.LastErrorLabel, errorState, ui.EscCloseHint)
+	return fmt.Sprintf("%s: %s\n%s: %s\n%s: %t\n%s: %t\n%s: %s\n%s: %s\n%s: %s\n\n%s", ui.NameLabel, subscription.Name, ui.StatusLabel, enabledLabel(subscription.Enabled), ui.AutoRefreshLabel, subscription.AutoRefresh, ui.CacheLabel, subscription.Cached, ui.IntervalLabel, valueOr(subscription.Interval, ui.GlobalLabel), ui.LastUpdateLabel, formatTimestamp(subscription.UpdatedAt), ui.LastErrorLabel, errorState, ui.EscCloseHint)
 }
 
 // subscriptionErrorMessage returns a user-visible failure reason without leaking

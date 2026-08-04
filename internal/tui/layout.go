@@ -16,6 +16,7 @@ type Layout struct {
 	RailWidth     int
 	ContentWidth  int
 	ContentHeight int
+	StatusHeight  int
 	FooterHeight  int
 	RailNavHeight int
 	MonitorHeight int
@@ -37,15 +38,20 @@ func calculateLayout(width, height int) Layout {
 	if class == ui.TooSmall {
 		return result
 	}
-	result.RailWidth = 24
+
+	result.StatusHeight = 1
+	result.RailWidth = 16
 	if class == ui.Compact {
-		result.RailWidth = 18
+		result.RailWidth = 14
 	}
+
 	result.ContentWidth = max(1, width-result.RailWidth)
-	result.ContentHeight = max(1, height-result.FooterHeight)
-	result.RailNavHeight = min(result.ContentHeight, 11)
-	if class == ui.Full {
-		result.MonitorHeight = max(0, result.ContentHeight-result.RailNavHeight)
-	}
+	result.ContentHeight = max(1, height-result.StatusHeight-result.FooterHeight)
+
+	// Large rail monitor removed. Prefer MonitorHeight=0; optional 1-line mini
+	// sparkline under nav is reserved for Full when content height allows.
+	// Keep MonitorHeight=0 for simplicity (View/status shell land in later tasks).
+	result.MonitorHeight = 0
+	result.RailNavHeight = max(1, result.ContentHeight-result.MonitorHeight)
 	return result
 }

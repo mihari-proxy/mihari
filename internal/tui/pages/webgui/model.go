@@ -289,7 +289,7 @@ func (m *Model) openBrowserAction() tea.Cmd {
 func (m *Model) View() string {
 	if !m.available {
 		return m.theme.Content.Width(m.width).Height(m.height).Render(
-			m.theme.Title.Render(ui.WebGUITitle) + "\n\n" + m.theme.Muted.Render(ui.UnavailableTitle+": "+ui.WebGUIPhaseBoundary),
+			m.theme.Title.Render(ui.WebGUITitle) + "\n\n" + m.theme.Muted.Render(ui.UnavailableTitle+": "+ui.WebGUILifecycleUnavailable),
 		)
 	}
 	active := valueOr(m.status.ActivePanel, ui.MissingValue)
@@ -305,16 +305,20 @@ func (m *Model) View() string {
 		if panel.Active {
 			state = "  " + ui.ActiveLabel
 		}
+		// Focus marker sits outside the card so the border is not interrupted.
 		cursor := "  "
 		if index == m.selected {
-			cursor = "› "
+			cursor = ui.FocusMarker
 		}
 		body := fmt.Sprintf("Installed  %s\nLatest     %s\nHealth     %s\nRollback   %s",
 			valueOr(panel.InstalledBuild, ui.MissingValue), valueOr(panel.LatestBuild, ui.MissingValue),
 			valueOr(panel.Health, ui.UnknownLabel), valueOr(panel.RollbackBuild, ui.MissingValue))
-		card := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(max(28, min(56, m.width-4))).Render(
-			m.theme.Title.Render(valueOr(panel.Name, panel.ID)+state) + "\n" + body,
-		)
+		card := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(m.theme.ColorSurfaceBorder).
+			Padding(0, 1).
+			Width(max(28, min(56, m.width-4))).
+			Render(m.theme.Title.Render(valueOr(panel.Name, panel.ID)+state) + "\n" + body)
 		lines = append(lines, cursor+card)
 	}
 	safeguards := []string{

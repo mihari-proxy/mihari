@@ -59,6 +59,57 @@ func TestModel_LevelSearchAndWrapControls(t *testing.T) {
 	}
 }
 
+func TestLogs_SearchNotInControlStrip(t *testing.T) {
+	model := New(10)
+	model.SetSize(100, 16)
+	model.Append(logAt("daemon started", "info", 1))
+	view := model.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) < 3 {
+		t.Fatalf("expected strip + search + header, got %d lines: %s", len(lines), view)
+	}
+	control := lines[0]
+	if strings.Contains(control, "Search") || strings.Contains(control, "/ ") {
+		t.Fatalf("control strip must not embed search: %q", control)
+	}
+	for _, want := range []string{"Level", "Wrap", "Pause"} {
+		if !strings.Contains(control, want) {
+			t.Fatalf("control missing %q: %q", want, control)
+		}
+	}
+	if !strings.Contains(lines[1], ui.SearchPlaceholder) && !strings.Contains(lines[1], "/ ") {
+		t.Fatalf("search bar missing: %q", lines[1])
+	}
+	if !strings.Contains(lines[2], ui.TimeLabel) || !strings.Contains(lines[2], ui.MessageLabel) {
+		t.Fatalf("table header missing: %q", lines[2])
+	}
+}
+
+func TestLogs_SearchMatchesVisibleColumns(t *testing.T) {
+	model := New(10)
+	model.Append(logAt("upstream reset", "error", 2))
+	model.Append(logAt("daemon started", "info", 1))
+	model.query = "error"
+	visible := model.visibleEntries()
+	if len(visible) != 1 || visible[0].Log.Message != "upstream reset" {
+		t.Fatalf("level column match failed: %#v", visible)
+	}
+	model.query = "daemon"
+	visible = model.visibleEntries()
+	if len(visible) != 1 || visible[0].Log.Message != "daemon started" {
+		t.Fatalf("message column match failed: %#v", visible)
+	}
+	// Time is formatted via Local(); pin UTC for a stable HH:MM:SS substring.
+	orig := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = orig })
+	model.query = "00:00:01"
+	visible = model.visibleEntries()
+	if len(visible) != 1 || visible[0].Log.Message != "daemon started" {
+		t.Fatalf("time column match failed: %#v", visible)
+	}
+}
+
 func TestView_FocusedRowHighlightOnlyWhenContentFocused(t *testing.T) {
 	model := New(10)
 	model.SetSize(100, 12)
@@ -70,7 +121,7 @@ func TestView_FocusedRowHighlightOnlyWhenContentFocused(t *testing.T) {
 	model.SetContentFocused(false)
 	for _, line := range strings.Split(model.View(), "\n") {
 		if strings.Contains(line, "beta-line") {
-			if !strings.Contains(line, ">") {
+			if !strings.Contains(line, ui.FocusMarker) {
 				t.Fatalf("row marker missing while rail-focused: %q", line)
 			}
 			if strings.Contains(line, "\x1b[") {
@@ -86,7 +137,7 @@ func TestView_FocusedRowHighlightOnlyWhenContentFocused(t *testing.T) {
 			focused = line
 		}
 	}
-	if focused == "" || !strings.Contains(focused, ">") || !strings.Contains(focused, "\x1b[") {
+	if focused == "" || !strings.Contains(focused, ui.FocusMarker) || !strings.Contains(focused, "\x1b[") {
 		t.Fatalf("focused content row missing highlight: %q", focused)
 	}
 }

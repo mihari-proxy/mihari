@@ -233,12 +233,12 @@ func (m *Model) View() string {
 			if len(lines) > 2 {
 				lines = append(lines, "")
 			}
-			lines = append(lines, m.theme.Title.Render(section))
+			lines = append(lines, m.theme.TableHeader.Render(section))
 		}
 		marker := "  "
 		rowFocused := item.id == m.focusID
 		if rowFocused {
-			marker = "> "
+			marker = ui.FocusMarker
 		}
 		value := item.value
 		if value != "" {
@@ -246,7 +246,7 @@ func (m *Model) View() string {
 		}
 		line := marker + item.label + value
 		if rowFocused && m.contentFocused {
-			line = m.theme.RowSelected.Render(line)
+			line = m.theme.RowFocus.Render(line)
 		}
 		lines = append(lines, line)
 	}

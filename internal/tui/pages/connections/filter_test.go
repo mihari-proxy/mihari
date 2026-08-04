@@ -2,11 +2,12 @@ package connections
 
 import (
 	"testing"
+	"time"
 
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 )
 
-func TestFilter_SearchesEveryAcceptedSafeFieldAndFullChain(t *testing.T) {
+func TestFilter_SearchesVisibleColumnValues(t *testing.T) {
 	connection := protocol.Connection{
 		ID: "one", Rule: "RuleSet", RulePay: "OpenAI",
 		Chains: []string{"GLOBAL", "Streaming", "Japan 01"},
@@ -15,13 +16,38 @@ func TestFilter_SearchesEveryAcceptedSafeFieldAndFullChain(t *testing.T) {
 			Process: "codex.exe", InboundName: "DEFAULT-MIXED", SniffHost: "api.openai.com",
 		},
 	}
-	for _, query := range []string{"chatgpt", "127.0.0.1", "172.64", "RuleSet", "OpenAI", "Streaming", "Japan 01", "codex", "DEFAULT-MIXED", "api.openai"} {
-		if !matchesConnection(connection, query, allSources) {
-			t.Fatalf("query=%q did not match", query)
+	visible := []string{"host", "network", "source", "destination", "chain", "rule", "process", "traffic"}
+	for _, query := range []string{"chatgpt", "127.0.0.1", "RuleSet", "OpenAI", "Streaming", "Japan 01", "codex"} {
+		if !matchesConnection(connection, query, allSources, visible) {
+			t.Fatalf("query=%q did not match visible columns", query)
 		}
 	}
-	if matchesConnection(connection, "missing", allSources) {
+	// Hidden / non-column fields must not match when not in visible set.
+	hiddenOnly := []string{"host"}
+	if matchesConnection(connection, "codex", allSources, hiddenOnly) {
+		t.Fatal("process match should not apply when process column is hidden")
+	}
+	if matchesConnection(connection, "DEFAULT-MIXED", allSources, visible) {
+		t.Fatal("inbound name is not a table column and must not match")
+	}
+	if matchesConnection(connection, "missing", allSources, visible) {
 		t.Fatal("unexpected match")
+	}
+}
+
+func TestConnections_SearchUsesVisibleColumnsOnly(t *testing.T) {
+	model := New(nil, nil)
+	model.SetPreferences(protocol.TUIPreferences{ConnectionsColumns: []string{"host"}})
+	model.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{
+		ID: "one", Metadata: protocol.ConnectionMetadata{Host: "visible.host", Process: "secret-process.exe"},
+	}}}, time.Unix(1, 0))
+	model.query = "secret-process"
+	if rows := model.visibleRows(); len(rows) != 0 {
+		t.Fatalf("hidden process column should not match search: rows=%v", rows)
+	}
+	model.query = "visible.host"
+	if rows := model.visibleRows(); len(rows) != 1 || rows[0].ID != "one" {
+		t.Fatalf("visible host should match: rows=%v", rows)
 	}
 }
 

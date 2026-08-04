@@ -117,7 +117,7 @@ func TestView_FocusedRowHighlightOnlyWhenContentFocused(t *testing.T) {
 	model.SetContentFocused(false)
 	for _, line := range strings.Split(model.View(), "\n") {
 		if strings.Contains(line, "two.test") {
-			if !strings.Contains(line, ">") {
+			if !strings.Contains(line, ui.FocusMarker) {
 				t.Fatalf("row marker missing while rail-focused: %q", line)
 			}
 			if strings.Contains(line, "\x1b[") {
@@ -133,7 +133,7 @@ func TestView_FocusedRowHighlightOnlyWhenContentFocused(t *testing.T) {
 			focused = line
 		}
 	}
-	if focused == "" || !strings.Contains(focused, ">") || !strings.Contains(focused, "\x1b[") {
+	if focused == "" || !strings.Contains(focused, ui.FocusMarker) || !strings.Contains(focused, "\x1b[") {
 		t.Fatalf("focused content row missing highlight: %q", focused)
 	}
 }
@@ -156,6 +156,40 @@ func TestModel_FooterHintsAreContextual(t *testing.T) {
 	model.detail = &Detail{}
 	if hints := model.FooterHints(); hints != ui.FooterDetailMode {
 		t.Fatalf("detail=%q", hints)
+	}
+}
+
+func TestConnections_SearchNotInControlStrip(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSize(100, 24)
+	model.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{
+		ID: "one", Metadata: protocol.ConnectionMetadata{Host: "example.com"},
+	}}}, time.Unix(1, 0))
+	view := model.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected control strip + search bar, got %d lines: %s", len(lines), view)
+	}
+	control := lines[0]
+	if strings.Contains(control, "Search") || strings.Contains(control, "/ ") {
+		t.Fatalf("control strip must not embed search: %q", control)
+	}
+	for _, want := range []string{"Active", "Source IP", "Columns", "Pause"} {
+		if !strings.Contains(control, want) {
+			t.Fatalf("control missing %q: %q", want, control)
+		}
+	}
+	search := lines[1]
+	if !strings.Contains(search, ui.SearchPlaceholder) && !strings.Contains(search, "/ ") {
+		t.Fatalf("search bar missing: %q", search)
+	}
+	if !strings.Contains(view, "example.com") {
+		t.Fatalf("table body missing host: %s", view)
+	}
+	// `/` still enters search mode.
+	model.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if !model.searching {
+		t.Fatal("expected search mode after /")
 	}
 }
 

@@ -31,6 +31,7 @@ type focusKind uint8
 
 const (
 	focusControl focusKind = iota
+	focusSearch
 	focusRow
 )
 
@@ -142,9 +143,14 @@ func (m *Model) SetFilter(query, typeFilter, targetFilter string) {
 
 func (m *Model) VisibleIndexes() []int {
 	indexes := make([]int, 0, len(m.rules))
-	query := strings.ToLower(strings.TrimSpace(m.query))
+	visible := []string{"type", "payload", "target"}
 	for index, rule := range m.rules {
-		if query != "" && !strings.Contains(strings.ToLower(rule.Type+"\n"+rule.Payload+"\n"+rule.Proxy), query) {
+		cells := map[string]string{
+			"type":    rule.Type,
+			"payload": rule.Payload,
+			"target":  rule.Proxy,
+		}
+		if !ui.MatchVisibleColumns(cells, visible, m.query) {
 			continue
 		}
 		if m.typeFilter != "" && !strings.EqualFold(rule.Type, m.typeFilter) {
@@ -223,7 +229,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 	case "right":
 		if m.focus.kind == focusControl {
-			m.controlIndex = min(4, m.controlIndex+1)
+			m.controlIndex = min(3, m.controlIndex+1)
 		}
 		return m, nil
 	case "up":
@@ -235,6 +241,10 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	case "enter":
 		if m.focus.kind == focusControl {
 			return m, m.activateControl()
+		}
+		if m.focus.kind == focusSearch {
+			m.searching = true
+			return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputText} }
 		}
 		m.openDetail()
 		return m, nil
@@ -267,16 +277,15 @@ func (m *Model) View() string {
 	if m.view == viewProviders {
 		tabs = ui.RulesTabLabel + "  [" + ui.RuleProvidersTabLabel + "]"
 	}
-	control := fmt.Sprintf("%s  / %s", tabs, valueOr(m.query, ui.SearchPlaceholder))
+	control := tabs
 	if m.view == viewRules {
 		control += fmt.Sprintf("  %s: %s  %s: %s", ui.TypeLabel, valueOr(m.typeFilter, ui.FilterAllLabel), ui.TargetLabel, valueOr(m.targetFilter, ui.FilterAllLabel))
 	} else {
 		control += fmt.Sprintf("  %s: %s  %s: %s", ui.BehaviorLabel, valueOr(m.behaviorFilter, ui.FilterAllLabel), ui.StatusLabel, valueOr(m.statusFilter, ui.FilterAllLabel))
 	}
-	if m.searching {
-		control += "_"
-	}
-	lines := []string{m.theme.Title.Render(control)}
+	searchFocused := m.searching || m.focus.kind == focusSearch
+	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.width)
+	lines := []string{m.theme.Title.Render(control), searchBar}
 	if m.lastError != "" {
 		lines = append(lines, m.theme.Muted.Render(m.lastError))
 	}
@@ -299,15 +308,12 @@ func (m *Model) activateControl() tea.Cmd {
 	case 1:
 		m.view = viewProviders
 	case 2:
-		m.searching = true
-		return func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputText} }
-	case 3:
 		if m.view == viewRules {
 			m.typeFilter = cycleValue(m.typeFilter, ruleValues(m.rules, func(rule protocol.Rule) string { return rule.Type }))
 		} else {
 			m.behaviorFilter = cycleValue(m.behaviorFilter, providerValues(m.providers, func(provider protocol.RuleProvider) string { return provider.Behavior }))
 		}
-	case 4:
+	case 3:
 		if m.view == viewRules {
 			m.targetFilter = cycleValue(m.targetFilter, ruleValues(m.rules, func(rule protocol.Rule) string { return rule.Proxy }))
 		} else {
@@ -329,7 +335,7 @@ func (m *Model) renderRules() []string {
 		marker := "  "
 		rowFocused := m.focus.kind == focusRow && m.focus.row == visibleRow
 		if rowFocused {
-			marker = "> "
+			marker = ui.FocusMarker
 		}
 		line := fmt.Sprintf("%s%4d  %-16s  %-39s  %s", marker, index+1, truncate(rule.Type, 16), truncate(rule.Payload, 39), rule.Proxy)
 		if rowFocused && m.contentFocused {
@@ -351,7 +357,7 @@ func (m *Model) renderProviders() []string {
 		marker := "  "
 		rowFocused := m.focus.kind == focusRow && m.focus.row == visibleRow
 		if rowFocused {
-			marker = "> "
+			marker = ui.FocusMarker
 		}
 		status := provider.Status
 		if m.pending[provider.Name] {
@@ -372,9 +378,26 @@ func (m *Model) renderProviders() []string {
 
 func (m *Model) visibleProviderIndexes() []int {
 	indexes := make([]int, 0, len(m.providers))
-	query := strings.ToLower(strings.TrimSpace(m.query))
+	visible := []string{"name", "type", "behavior", "format", "rule_count", "updated", "status"}
 	for index, provider := range m.providers {
-		if query != "" && !strings.Contains(strings.ToLower(provider.Name+"\n"+provider.Type+"\n"+provider.Behavior+"\n"+provider.Format+"\n"+provider.Status), query) {
+		updated := ui.MissingValue
+		if !provider.UpdatedAt.IsZero() {
+			updated = provider.UpdatedAt.Local().Format("2006-01-02 15:04")
+		}
+		status := provider.Status
+		if m.pending[provider.Name] {
+			status = ui.PendingLabel
+		}
+		cells := map[string]string{
+			"name":       provider.Name,
+			"type":       provider.Type,
+			"behavior":   provider.Behavior,
+			"format":     provider.Format,
+			"rule_count": fmt.Sprintf("%d", provider.RuleCount),
+			"updated":    updated,
+			"status":     status,
+		}
+		if !ui.MatchVisibleColumns(cells, visible, m.query) {
 			continue
 		}
 		if m.behaviorFilter != "" && !strings.EqualFold(provider.Behavior, m.behaviorFilter) {
@@ -393,7 +416,17 @@ func (m *Model) move(delta int) {
 	if m.view == viewProviders {
 		count = len(m.visibleProviderIndexes())
 	}
-	if m.focus.kind == focusControl {
+	switch m.focus.kind {
+	case focusControl:
+		if delta > 0 {
+			m.focus = pageFocus{kind: focusSearch}
+		}
+		return
+	case focusSearch:
+		if delta < 0 {
+			m.focus = pageFocus{kind: focusControl}
+			return
+		}
 		if delta > 0 && count > 0 {
 			m.focus = pageFocus{kind: focusRow}
 			m.rememberFocusedProvider()
@@ -401,7 +434,7 @@ func (m *Model) move(delta int) {
 		return
 	}
 	if delta < 0 && m.focus.row == 0 {
-		m.focus = pageFocus{kind: focusControl}
+		m.focus = pageFocus{kind: focusSearch}
 		return
 	}
 	m.focus.row = min(max(0, m.focus.row+delta), max(0, count-1))
