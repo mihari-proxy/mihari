@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
@@ -31,12 +32,44 @@ func TestModel_SelectsNodeAndRendersProtocolAndLatencyUnit(t *testing.T) {
 	}
 
 	command = updateProxyKey(t, model, tea.KeyPressMsg{Code: 't', Text: "t"})
-	updated, _ = model.Update(command())
-	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("delay test did not return a command")
+	}
+	// 't' returns Batch(delayResult, startDelaySpin); apply delay only (skip sleeping ticks).
+	applyProxyCmd(t, model, command)
 	view := model.View()
 	for _, want := range []string{"VLESS / XUDP", "28 ms"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view does not contain %q: %s", want, view)
+		}
+	}
+}
+
+// applyProxyCmd expands BatchMsg and applies non-sleeping messages (delay/selection results).
+func applyProxyCmd(t *testing.T, model *Model, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, child := range batch {
+			applyProxyCmd(t, model, child)
+		}
+		return
+	}
+	switch msg.(type) {
+	case startDelaySpinMsg, delaySpinTickMsg:
+		return
+	}
+	updated, next := model.Update(msg)
+	if updated != model {
+		t.Fatalf("model identity changed: %T", updated)
+	}
+	if next != nil {
+		// Do not auto-run tea.Tick children.
+		if _, ok := next().(tea.BatchMsg); ok {
+			return
 		}
 	}
 }
@@ -106,7 +139,8 @@ func TestDelayStyle_BandsAndTimeout(t *testing.T) {
 
 func TestRenderDelay_TimeoutUsesDangerStyle(t *testing.T) {
 	theme := ui.DefaultTheme()
-	got := renderDelay(theme, DelayState{Kind: DelayTimeout})
+	zero := time.Unix(0, 0)
+	got := renderDelay(theme, DelayState{Kind: DelayTimeout}, zero)
 	want := theme.DelayBad.Render(ui.TimeoutLabel)
 	if got != want {
 		t.Fatalf("timeout render=%q want=%q", got, want)
@@ -115,14 +149,42 @@ func TestRenderDelay_TimeoutUsesDangerStyle(t *testing.T) {
 		t.Fatalf("timeout label missing: %q", got)
 	}
 	// Untested is muted dash; good delay is green text.
-	if renderDelay(theme, DelayState{Kind: DelayUntested}) != theme.Muted.Render(ui.MissingValue) {
+	if renderDelay(theme, DelayState{Kind: DelayUntested}, zero) != theme.Muted.Render(ui.MissingValue) {
 		t.Fatal("untested should use muted MissingValue")
 	}
-	if renderDelay(theme, DelayState{Kind: DelayValue, Milliseconds: 28}) != theme.DelayGood.Render("28 ms") {
+	if renderDelay(theme, DelayState{Kind: DelayValue, Milliseconds: 28}, zero) != theme.DelayGood.Render("28 ms") {
 		t.Fatal("low latency should use DelayGood")
 	}
-	if renderDelay(theme, DelayState{Kind: DelayTesting}) != theme.Warning.Render(ui.TestingLabel) {
-		t.Fatal("testing should use Warning style")
+	testingGot := renderDelay(theme, DelayState{Kind: DelayTesting}, zero)
+	testingWant := theme.Warning.Render(ui.SpinnerLabel(zero, "Testing"))
+	if testingGot != testingWant {
+		t.Fatalf("testing should use Warning + braille SpinnerLabel: got %q want %q", testingGot, testingWant)
+	}
+	if !strings.Contains(testingGot, "Testing") || strings.Contains(testingGot, ui.TestingLabel) {
+		// SpinnerLabel uses "Testing" without the old static ellipsis-only label alone.
+		if !strings.Contains(testingGot, "Testing") {
+			t.Fatalf("testing label missing: %q", testingGot)
+		}
+	}
+}
+
+func TestRenderDelay_TestingUsesBrailleSpinner(t *testing.T) {
+	theme := ui.DefaultTheme()
+	a := renderDelay(theme, DelayState{Kind: DelayTesting}, time.Unix(0, 0))
+	b := renderDelay(theme, DelayState{Kind: DelayTesting}, time.Unix(0, 100*int64(time.Millisecond)))
+	if a == b {
+		t.Fatalf("expected spinner frame to advance with time: %q vs %q", a, b)
+	}
+	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	found := false
+	for _, frame := range frames {
+		if strings.Contains(a, frame) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("testing render missing braille frame: %q", a)
 	}
 }
 
@@ -167,11 +229,22 @@ func TestModel_ControlTTestsEveryUniqueNodeOnce(t *testing.T) {
 	}})
 	_, command := model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
 	batch, ok := command().(tea.BatchMsg)
-	if !ok || len(batch) != 3 {
+	if !ok || len(batch) < 3 {
 		t.Fatalf("message=%T commands=%d", command(), len(batch))
 	}
+	// Apply delay results only; skip spinner start/tick cmds that would sleep.
 	for _, delayCommand := range batch {
-		model.Update(delayCommand())
+		msg := delayCommand()
+		if _, isStart := msg.(startDelaySpinMsg); isStart {
+			continue
+		}
+		if _, isTick := msg.(delaySpinTickMsg); isTick {
+			continue
+		}
+		if _, isBatch := msg.(tea.BatchMsg); isBatch {
+			continue
+		}
+		model.Update(msg)
 	}
 	if client.delayCalls["shared"] != 1 || client.delayCalls["only-a"] != 1 || client.delayCalls["only-b"] != 1 {
 		t.Fatalf("calls=%v", client.delayCalls)

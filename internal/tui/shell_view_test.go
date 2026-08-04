@@ -141,8 +141,12 @@ func TestShell_SpinnerTickWhilePendingAndStopsWhenIdle(t *testing.T) {
 		t.Fatalf("state=%q pending=%v", model.globalState, model.pendingActions)
 	}
 
-	// Tick while still pending should advance now and re-schedule.
-	updated, cmd = model.Update(spinnerTickMsg{t: time.Unix(1, 0)})
+	// Tick while still pending should advance now and re-schedule (must match spinGen).
+	gen := model.spinGen
+	if gen == 0 {
+		t.Fatal("expected spinGen after pending action")
+	}
+	updated, cmd = model.Update(spinnerTickMsg{t: time.Unix(1, 0), gen: gen})
 	model = updated.(Model)
 	if !model.now.Equal(time.Unix(1, 0)) {
 		t.Fatalf("now=%v", model.now)
@@ -160,7 +164,8 @@ func TestShell_SpinnerTickWhilePendingAndStopsWhenIdle(t *testing.T) {
 		t.Fatalf("pending remaining: %v", model.pendingActions)
 	}
 
-	updated, cmd = model.Update(spinnerTickMsg{t: time.Unix(2, 0)})
+	// Stale generation must not reschedule after idle.
+	updated, cmd = model.Update(spinnerTickMsg{t: time.Unix(2, 0), gen: gen})
 	model = updated.(Model)
 	if cmd != nil {
 		t.Fatal("should not re-tick when idle")

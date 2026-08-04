@@ -34,9 +34,9 @@ func (m *Model) tableLines() []string {
 		if column == m.sortColumn {
 			switch m.sortDirection {
 			case sortDescending:
-				headers[index] += " v"
+				headers[index] += " ↓"
 			case sortAscending:
-				headers[index] += " ^"
+				headers[index] += " ↑"
 			}
 		}
 	}
@@ -56,7 +56,7 @@ func (m *Model) tableLines() []string {
 			}
 			line := prefix + strings.Join(values, "  ")
 			if rowFocused && m.contentFocused {
-				line = m.theme.RowSelected.Render(line)
+				line = m.theme.RowFocus.Render(line)
 			}
 			lines = append(lines, line)
 		}
