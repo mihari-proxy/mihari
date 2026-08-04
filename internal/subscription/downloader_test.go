@@ -29,6 +29,24 @@ func TestDownloaderConditionalRequestAndNotModified(t *testing.T) {
 	}
 }
 
+func TestDownloader_UserAgentLooksLikeClashClient(t *testing.T) {
+	var userAgent string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		userAgent = request.Header.Get("User-Agent")
+		_, _ = writer.Write([]byte("proxies: []\n"))
+	}))
+	defer server.Close()
+	if _, err := NewDownloader(server.Client()).Fetch(context.Background(), FetchRequest{URL: server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if userAgent != subscriptionUserAgent {
+		t.Fatalf("user agent=%q want %q", userAgent, subscriptionUserAgent)
+	}
+	if !strings.Contains(strings.ToLower(userAgent), "clash") {
+		t.Fatalf("user agent should look Clash-like: %q", userAgent)
+	}
+}
+
 func TestDownloaderBoundsBodyAndRedactsURLFromErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte(strings.Repeat("x", 33)))
