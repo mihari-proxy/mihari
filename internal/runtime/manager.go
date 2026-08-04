@@ -83,6 +83,15 @@ type Options struct {
 	PrepareGeoIP   func(context.Context) (GeoIPCandidate, error)
 	Onboarding     *onboarding.Service
 	Panels         PanelService
+	// WebGateway is the optional loopback browser gateway. Failures do not stop the core supervisor.
+	WebGateway WebGateway
+}
+
+// WebGateway is the loopback HTTP server for panel hosting and API proxying.
+type WebGateway interface {
+	Serve(context.Context) error
+	SessionCount() int
+	ListenAddr() string
 }
 
 type Manager struct {
@@ -104,6 +113,7 @@ type Manager struct {
 	prepareGeoIP   func(context.Context) (GeoIPCandidate, error)
 	onboarding     *onboarding.Service
 	panels         PanelService
+	webGateway     WebGateway
 	maintenance    chan struct{}
 	installed      chan struct{}
 	closing        atomic.Bool
@@ -150,6 +160,7 @@ func New(options Options) *Manager {
 		prepareGeoIP:   options.PrepareGeoIP,
 		onboarding:     options.Onboarding,
 		panels:         options.Panels,
+		webGateway:     options.WebGateway,
 		maintenance:    make(chan struct{}, 1),
 		installed:      make(chan struct{}, 1),
 		operations:     make(map[string]*operationEntry),
@@ -167,6 +178,15 @@ func (m *Manager) Run(ctx context.Context) error {
 	defer m.closing.Store(true)
 	if closer, ok := m.geoip.(interface{ Close() error }); ok {
 		defer closer.Close()
+	}
+	if m.webGateway != nil {
+		webDone := make(chan struct{})
+		go func() {
+			defer close(webDone)
+			// Panel/gateway failure must not stop mihomo supervision.
+			_ = m.webGateway.Serve(ctx)
+		}()
+		defer func() { <-webDone }()
 	}
 	if m.runScheduler != nil {
 		schedulerCtx, cancelScheduler := context.WithCancel(ctx)
@@ -226,6 +246,25 @@ func (m *Manager) Observe(observation supervisor.Observation) {
 }
 
 func (m *Manager) Snapshot() state.Snapshot { return m.store.Load() }
+
+// BrowserSessions returns the approximate concurrent authenticated Web gateway sessions.
+func (m *Manager) BrowserSessions() int {
+	if m.webGateway == nil {
+		return 0
+	}
+	return m.webGateway.SessionCount()
+}
+
+// WebListenAddr returns the bound Web gateway address when available.
+func (m *Manager) WebListenAddr() string {
+	if m.webGateway == nil {
+		return m.settings.WebAddr
+	}
+	if addr := m.webGateway.ListenAddr(); addr != "" {
+		return addr
+	}
+	return m.settings.WebAddr
+}
 
 func (m *Manager) Proxies(ctx context.Context) (mihomo.Proxies, error) {
 	if m.controller == nil {

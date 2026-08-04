@@ -38,6 +38,15 @@ func TestBuildRuntimeCreatesBootstrapAndSharedState(t *testing.T) {
 	if !slices.Contains(assembly.Manager.Capabilities(), protocol.CapabilityOnboarding) {
 		t.Fatalf("capabilities=%v", assembly.Manager.Capabilities())
 	}
+	if !slices.Contains(assembly.Manager.Capabilities(), protocol.CapabilityWebGUI) {
+		t.Fatalf("capabilities=%v", assembly.Manager.Capabilities())
+	}
+	if assembly.Web == nil {
+		t.Fatal("runtime assembly did not wire web gateway")
+	}
+	if _, err := os.Stat(paths.WebCredential); err != nil {
+		t.Fatalf("web credential missing: %v", err)
+	}
 	raw, err := os.ReadFile(paths.RuntimeConfig)
 	if err != nil {
 		t.Fatal(err)
