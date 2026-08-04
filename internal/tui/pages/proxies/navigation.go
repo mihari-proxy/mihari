@@ -13,9 +13,10 @@ func (m *Model) move(key string) {
 	}
 	if m.focus.Node == "" {
 		m.moveGroup(key)
-		return
+	} else {
+		m.moveNode(key)
 	}
-	m.moveNode(key)
+	m.ensureFocusVisible()
 }
 
 func (m *Model) moveGroup(key string) {
