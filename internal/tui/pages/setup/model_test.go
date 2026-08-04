@@ -208,16 +208,12 @@ func TestSetupConfirmsBeforeChangingCompletedEffectiveConfiguration(t *testing.T
 	if command == nil {
 		t.Fatal("missing confirmation request")
 	}
-	request, ok := command().(ui.ConfirmationRequestMsg)
-	if !ok || request.OnConfirm == nil || client.updateCalls != 0 {
+	request, ok := command().(ui.ActionIntentMsg)
+	if !ok || request.Execute == nil || request.Action != ui.ActionApplyEndpointChange || client.updateCalls != 0 {
 		t.Fatalf("message=%T updates=%d", command(), client.updateCalls)
 	}
-	updated, command = model.Update(request.OnConfirm())
+	updated, _ = model.Update(request.Execute())
 	model = updated.(*Model)
-	if command == nil {
-		t.Fatal("confirmation did not start completion")
-	}
-	_, _ = model.Update(command())
 	if client.updateCalls != 1 {
 		t.Fatalf("updates=%d", client.updateCalls)
 	}

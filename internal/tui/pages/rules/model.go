@@ -90,8 +90,6 @@ type providersUpdateAllResultMsg struct {
 	err      error
 }
 
-type providersUpdateAllStartMsg struct{}
-
 func New(client Client, newOperationID func() string) *Model {
 	if newOperationID == nil {
 		newOperationID = defaultOperationID
@@ -181,8 +179,6 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			m.revision = typed.revision
 		}
 		return m, m.reloadProviders()
-	case providersUpdateAllStartMsg:
-		return m, m.updateAllProviders()
 	}
 
 	key, ok := message.(tea.KeyPressMsg)
@@ -239,10 +235,11 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	case "ctrl+u":
 		if m.view == viewProviders && len(m.providers) > 0 {
 			return m, func() tea.Msg {
-				return ui.ConfirmationRequestMsg{
+				return ui.ActionIntentMsg{
+					Action: ui.ActionUpdateAllProviders, Page: ui.PageRules, Capability: protocol.CapabilityRuleProviders, Key: "providers:update-all",
 					Title: ui.UpdateAllProvidersTitle, Object: ui.AllRuleProviders,
 					Impact: ui.UpdateAllProvidersImpact, Rollback: ui.UpdateAllProvidersRollback,
-					OnConfirm: func() tea.Msg { return providersUpdateAllStartMsg{} },
+					Execute: m.updateAllProviders(),
 				}
 			}
 		}
@@ -513,12 +510,14 @@ func (m *Model) updateFocusedProvider() tea.Cmd {
 	}
 }
 
+// updateAllProviders returns the command that refreshes every provider. It has
+// no presentation side effects: the Root Shell confirmation dispatcher owns the
+// pending state, so per-provider pending is not marked until the typed result
+// is reconciled. This mirrors the system and subscriptions action-intent paths.
 func (m *Model) updateAllProviders() tea.Cmd {
 	names := make([]string, 0, len(m.providers))
 	for _, provider := range m.providers {
-		name := provider.Name
-		names = append(names, name)
-		m.pending[name] = true
+		names = append(names, provider.Name)
 	}
 	baseID := m.newOperationID()
 	revision := m.revision

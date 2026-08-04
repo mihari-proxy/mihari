@@ -188,9 +188,10 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	}
 	if key.String() == "ctrl+x" && m.dataset == datasetActive {
 		return m, func() tea.Msg {
-			return ui.ConfirmationRequestMsg{
+			return ui.ActionIntentMsg{
+				Action: ui.ActionCloseAllConnections, Page: ui.PageConnections, Capability: protocol.CapabilityConnections, Key: "connections:close-all",
 				Title: ui.CloseAllConnectionsTitle, Object: ui.AllActiveConnections,
-				Impact: ui.CloseAllImpact, Rollback: ui.CloseAllRollback, OnConfirm: m.closeAllConnections(),
+				Impact: ui.CloseAllImpact, Rollback: ui.CloseAllRollback, Execute: m.closeAllConnections(),
 			}
 		}
 	}

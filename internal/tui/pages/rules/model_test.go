@@ -100,18 +100,14 @@ func TestProviders_UpdateOneAndConfirmUpdateAll(t *testing.T) {
 	if command == nil {
 		t.Fatal("ctrl+u did not request confirmation")
 	}
-	confirmation, ok := command().(ui.ConfirmationRequestMsg)
-	if !ok || confirmation.OnConfirm == nil {
+	confirmation, ok := command().(ui.ActionIntentMsg)
+	if !ok || confirmation.Execute == nil || confirmation.Action != ui.ActionUpdateAllProviders {
 		t.Fatalf("message=%T confirmation=%#v", command(), confirmation)
 	}
 	if len(model.pending) != 0 {
 		t.Fatalf("providers became pending before confirmation: %v", model.pending)
 	}
-	_, batchCommand := model.Update(confirmation.OnConfirm())
-	if batchCommand == nil {
-		t.Fatal("confirmation did not start provider updates")
-	}
-	model.Update(batchCommand())
+	model.Update(confirmation.Execute())
 	if !reflect.DeepEqual(client.updated, []string{"OpenAI", "OpenAI", "GitHub"}) {
 		t.Fatalf("updated=%v", client.updated)
 	}

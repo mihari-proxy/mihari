@@ -136,12 +136,6 @@ type subscriptionsResultMsg struct {
 	err    error
 }
 
-type deleteStartMsg struct {
-	id          string
-	operationID string
-	revision    uint64
-}
-
 func New(client Client, newOperationID func() string, now func() time.Time) *Model {
 	if newOperationID == nil {
 		newOperationID = defaultOperationID
@@ -213,8 +207,6 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			m.SetSubscriptions(typed.result)
 		}
 		return m, nil
-	case deleteStartMsg:
-		return m, m.remove(typed.id, typed.operationID, typed.revision)
 	}
 
 	key, ok := message.(tea.KeyPressMsg)
@@ -272,9 +264,11 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			subscription := m.subscriptions[index]
 			operationID, revision := m.newOperationID(), m.revision
 			return m, func() tea.Msg {
-				return ui.ConfirmationRequestMsg{Title: ui.RemoveSubscriptionTitle, Object: subscription.Name, Impact: ui.RemoveSubscriptionImpact, Rollback: ui.RemoveSubscriptionRollback, OnConfirm: func() tea.Msg {
-					return deleteStartMsg{id: subscription.ID, operationID: operationID, revision: revision}
-				}}
+				return ui.ActionIntentMsg{
+					Action: ui.ActionDeleteSubscription, Page: ui.PageSubscriptions, Capability: protocol.CapabilitySubscriptions, Key: "subscription:delete:" + subscription.ID,
+					Title: ui.RemoveSubscriptionTitle, Object: subscription.Name, Impact: ui.RemoveSubscriptionImpact, Rollback: ui.RemoveSubscriptionRollback,
+					Execute: m.remove(subscription.ID, operationID, revision),
+				}
 			}
 		}
 	}
@@ -400,11 +394,14 @@ func (m *Model) use(id string) tea.Cmd {
 	}
 }
 
+// remove returns the command that deletes a subscription. It has no
+// presentation side effects: the Root Shell confirmation dispatcher owns the
+// pending state, so the row is not marked until the typed result is reconciled.
+// This mirrors the rules, system, connections, and setup action-intent paths.
 func (m *Model) remove(id, operationID string, revision uint64) tea.Cmd {
 	if m.client == nil {
 		return nil
 	}
-	m.pending[id] = "remove"
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()

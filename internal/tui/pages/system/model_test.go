@@ -127,16 +127,11 @@ func TestSystemCoreUpdateAndRestartRequireConfirmationWithCapturedRevision(t *te
 		if command == nil || test.calls() != 0 {
 			t.Fatalf("row=%s command=%v calls=%d", test.id, command != nil, test.calls())
 		}
-		confirmation, ok := command().(ui.ConfirmationRequestMsg)
-		if !ok || confirmation.Title != test.wantTitle || confirmation.OnConfirm == nil {
-			t.Fatalf("row=%s confirmation=%#v", test.id, confirmation)
+		intent, ok := command().(ui.ActionIntentMsg)
+		if !ok || intent.Title != test.wantTitle || intent.Execute == nil {
+			t.Fatalf("row=%s intent=%#v", test.id, intent)
 		}
-		updated, command = model.Update(confirmation.OnConfirm())
-		model = updated.(*Model)
-		if command == nil {
-			t.Fatalf("row=%s confirmation did not start action", test.id)
-		}
-		updated, reconcile := model.Update(command())
+		updated, reconcile := model.Update(intent.Execute())
 		model = updated.(*Model)
 		if test.calls() != 1 || client.lastMutation.IfRevision == nil || *client.lastMutation.IfRevision != 11 || reconcile == nil {
 			t.Fatalf("row=%s calls=%d mutation=%#v", test.id, test.calls(), client.lastMutation)
@@ -157,9 +152,9 @@ func TestSystemOffersCoreInstallWhenNoVersionIsPresent(t *testing.T) {
 	if command == nil {
 		t.Fatal("install confirmation missing")
 	}
-	confirmation := command().(ui.ConfirmationRequestMsg)
-	if confirmation.Title != ui.InstallCoreTitle {
-		t.Fatalf("title=%q", confirmation.Title)
+	intent := command().(ui.ActionIntentMsg)
+	if intent.Title != ui.InstallCoreTitle || intent.Action != ui.ActionUpdateCore {
+		t.Fatalf("intent=%#v", intent)
 	}
 }
 
