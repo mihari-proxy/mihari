@@ -136,6 +136,48 @@ func TestPrepareRefresh_RecordsLastErrorWithoutCachingInvalidBody(t *testing.T) 
 	}
 }
 
+func TestService_PrepareRefreshFailureNotesLastErrorWithoutDroppingCache(t *testing.T) {
+	body := "proxies: []\nrules: [MATCH,DIRECT]\n"
+	fail := false
+	service, url := newServiceForTest(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if fail {
+			_, _ = writer.Write([]byte("not-a-clash-document"))
+			return
+		}
+		_, _ = writer.Write([]byte(body))
+	}))
+	profile, err := service.Add("main", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := service.PrepareRefresh(context.Background(), profile.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CommitRefresh(prepared); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(service.CachePath(profile.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fail = true
+	if _, err := service.PrepareRefresh(context.Background(), profile.ID); err == nil {
+		t.Fatal("expected prepare failure")
+	}
+	snap := service.Snapshot()
+	if snap.Profiles[0].LastError == "" {
+		t.Fatal("last-error was not recorded")
+	}
+	after, err := os.ReadFile(service.CachePath(profile.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("valid cache was changed on failed refresh")
+	}
+}
+
 func TestRollbackRefreshRestoresCatalogAndCache(t *testing.T) {
 	body := "proxies: []\n"
 	service, url := newServiceForTest(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {

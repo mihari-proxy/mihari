@@ -211,6 +211,82 @@ func TestModel_RefreshFailureShowsProtocolMessage(t *testing.T) {
 	}
 }
 
+func TestModel_RefreshAllStopsOnFirstErrorAndReloadsOnSuccess(t *testing.T) {
+	list := protocol.SubscriptionList{Revision: 3, Subscriptions: []protocol.Subscription{
+		{ID: "a", Name: "A"}, {ID: "b", Name: "B"}, {ID: "c", Name: "C"},
+	}}
+	client := &fakeClient{list: list}
+	// Fail after the first successful refresh so we can assert early stop.
+	client.refreshHook = func(id string, call int) error {
+		if call > 1 {
+			return protocol.APIError{Code: protocol.CodeDataFailure, Message: "provider unavailable"}
+		}
+		return nil
+	}
+	model := New(client, func() string { return "refresh-all" }, nil)
+	model.SetSubscriptions(list)
+	_, command := model.Update(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
+	confirmation := command().(ui.ActionIntentMsg)
+	updated, follow := model.Update(confirmation.Execute())
+	model = updated.(*Model)
+	if follow != nil {
+		t.Fatal("failed refresh-all should not reload list")
+	}
+	if model.lastError != "provider unavailable" {
+		t.Fatalf("lastError=%q", model.lastError)
+	}
+	if !reflect.DeepEqual(client.refreshed, []string{"a", "b"}) {
+		t.Fatalf("refreshed=%v want [a b] (stop after first failure)", client.refreshed)
+	}
+
+	// Success path: every ID refreshed and list reloaded.
+	client = &fakeClient{list: protocol.SubscriptionList{Revision: 11, Subscriptions: list.Subscriptions}}
+	model = New(client, func() string { return "refresh-all-ok" }, nil)
+	model.SetSubscriptions(list)
+	_, command = model.Update(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
+	confirmation = command().(ui.ActionIntentMsg)
+	updated, reload := model.Update(confirmation.Execute())
+	model = updated.(*Model)
+	if reload == nil {
+		t.Fatal("successful refresh-all should reload")
+	}
+	updated, _ = model.Update(reload())
+	model = updated.(*Model)
+	if !reflect.DeepEqual(client.refreshed, []string{"a", "b", "c"}) {
+		t.Fatalf("refreshed=%v", client.refreshed)
+	}
+	if model.revision != 11 {
+		t.Fatalf("revision=%d", model.revision)
+	}
+}
+
+func TestModel_RevisionConflictOnRefreshAllReloads(t *testing.T) {
+	list := protocol.SubscriptionList{Revision: 4, Subscriptions: []protocol.Subscription{
+		{ID: "a", Name: "A"}, {ID: "b", Name: "B"},
+	}}
+	client := &fakeClient{
+		list:       protocol.SubscriptionList{Revision: 12, Subscriptions: list.Subscriptions},
+		refreshErr: protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "changed"},
+	}
+	model := New(client, func() string { return "refresh-all" }, nil)
+	model.SetSubscriptions(list)
+	_, command := model.Update(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
+	confirmation := command().(ui.ActionIntentMsg)
+	updated, reload := model.Update(confirmation.Execute())
+	model = updated.(*Model)
+	if reload == nil {
+		t.Fatal("revision conflict did not reload")
+	}
+	if model.lastError != ui.SubscriptionChangedMessage {
+		t.Fatalf("lastError=%q", model.lastError)
+	}
+	updated, _ = model.Update(reload())
+	model = updated.(*Model)
+	if model.revision != 12 {
+		t.Fatalf("revision=%d", model.revision)
+	}
+}
+
 func TestModel_FooterHintsAreContextual(t *testing.T) {
 	model := New(nil, nil, nil)
 	model.SetSubscriptions(protocol.SubscriptionList{Subscriptions: []protocol.Subscription{{ID: "a", Name: "A"}}})
@@ -330,6 +406,7 @@ type fakeClient struct {
 	refreshResult protocol.SubscriptionResult
 	refreshErr    error
 	refreshRev    uint64
+	refreshHook   func(id string, call int) error
 }
 
 func (f *fakeClient) Subscriptions(context.Context) (protocol.SubscriptionList, error) {
@@ -340,7 +417,11 @@ func (f *fakeClient) AddSubscription(context.Context, protocol.SubscriptionAddRe
 }
 func (f *fakeClient) RefreshSubscription(_ context.Context, id string, _ protocol.MutationRequest) (protocol.SubscriptionResult, error) {
 	f.refreshed = append(f.refreshed, id)
-	if f.refreshErr != nil {
+	if f.refreshHook != nil {
+		if err := f.refreshHook(id, len(f.refreshed)); err != nil {
+			return protocol.SubscriptionResult{}, err
+		}
+	} else if f.refreshErr != nil {
 		return protocol.SubscriptionResult{}, f.refreshErr
 	}
 	f.refreshRev++
