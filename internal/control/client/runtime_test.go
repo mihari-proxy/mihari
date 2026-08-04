@@ -87,6 +87,16 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 				_, err := client.UpdateGeoIP(ctx, protocol.MutationRequest{OperationID: "geoip-1", IfRevision: &revision})
 				return err
 			}},
+		{"onboarding", http.MethodGet, "/v1/onboarding", "", `{"schema":"mihari/v1","revision":3,"complete":false,"mixed_addr":"127.0.0.1:7890","controller_addr":"127.0.0.1:9090","web_addr":"127.0.0.1:9191","restart_required":false}`,
+			func(ctx context.Context, client *Client) error { _, err := client.Onboarding(ctx); return err }},
+		{"update onboarding", http.MethodPatch, "/v1/onboarding", `{"operation_id":"setup-1","if_revision":3,"complete":true,"web_addr":"127.0.0.1:9292"}`, `{"schema":"mihari/v1","revision":4,"complete":true,"mixed_addr":"127.0.0.1:7890","controller_addr":"127.0.0.1:9090","web_addr":"127.0.0.1:9292","restart_required":true}`,
+			func(ctx context.Context, client *Client) error {
+				revision := uint64(3)
+				complete := true
+				webAddr := "127.0.0.1:9292"
+				_, err := client.UpdateOnboarding(ctx, protocol.OnboardingUpdateRequest{OperationID: "setup-1", IfRevision: &revision, Complete: &complete, WebAddr: &webAddr})
+				return err
+			}},
 		{"subscriptions", http.MethodGet, "/v1/subscriptions", "", `{"schema":"mihari/v1","revision":1,"global_interval":"12h","subscriptions":[]}`,
 			func(ctx context.Context, client *Client) error { _, err := client.Subscriptions(ctx); return err }},
 		{"TUI preferences", http.MethodGet, "/v1/preferences/tui", "", `{"schema":"mihari/v1","revision":1,"connections_columns":["host","chain"]}`,

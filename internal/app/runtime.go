@@ -13,6 +13,7 @@ import (
 	"github.com/LeeShunEE/mihari/internal/core"
 	"github.com/LeeShunEE/mihari/internal/geoip"
 	"github.com/LeeShunEE/mihari/internal/mihomo"
+	"github.com/LeeShunEE/mihari/internal/onboarding"
 	"github.com/LeeShunEE/mihari/internal/platform"
 	"github.com/LeeShunEE/mihari/internal/preferences"
 	runtimeapi "github.com/LeeShunEE/mihari/internal/runtime"
@@ -26,7 +27,16 @@ type RuntimeAssembly struct {
 	Store   *state.Store
 }
 
+type RuntimeBuildOptions struct {
+	InitialSetupRequired bool
+	SettingsPath         string
+}
+
 func BuildRuntime(paths platform.Paths, settings config.Settings, daemonVersion string, stdout, stderr io.Writer) (*RuntimeAssembly, error) {
+	return BuildRuntimeWithOptions(paths, settings, daemonVersion, stdout, stderr, RuntimeBuildOptions{SettingsPath: paths.Settings})
+}
+
+func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, daemonVersion string, stdout, stderr io.Writer, options RuntimeBuildOptions) (*RuntimeAssembly, error) {
 	if stdout == nil {
 		stdout = io.Discard
 	}
@@ -84,6 +94,16 @@ func BuildRuntime(paths platform.Paths, settings config.Settings, daemonVersion 
 		ASNPath:     paths.GeoIPASN,
 		Downloader:  geoip.Downloader{StagingDir: paths.GeoIPStaging},
 	})
+	settingsPath := options.SettingsPath
+	if settingsPath == "" {
+		settingsPath = paths.Settings
+	}
+	onboardingService, err := onboarding.Open(onboarding.Options{
+		StatePath: paths.Onboarding, SettingsPath: settingsPath, Settings: settings, InitialSetupRequired: options.InitialSetupRequired,
+	})
+	if err != nil {
+		return nil, err
+	}
 	var manager *runtimeapi.Manager
 	coreSupervisor := supervisor.New(supervisor.Options{
 		Starter: supervisor.CommandStarter{
@@ -121,6 +141,7 @@ func BuildRuntime(paths platform.Paths, settings config.Settings, daemonVersion 
 		PrepareGeoIP: func(ctx context.Context) (runtimeapi.GeoIPCandidate, error) {
 			return geoIPService.PrepareUpdate(ctx)
 		},
+		Onboarding:    onboardingService,
 		Settings:      settings,
 		RuntimeConfig: paths.RuntimeConfig,
 		StagingDir:    paths.SubscriptionStaging,

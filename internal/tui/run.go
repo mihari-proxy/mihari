@@ -23,7 +23,7 @@ func Run(ctx context.Context, options Options) error {
 	var controlSession *session.Session
 	if options.Client != nil {
 		controlSession = session.New(options.Client, session.Options{})
-		model = newModelWithClient(controlSession.Start(ctx), options.Client)
+		model = newModelWithClientContext(ctx, controlSession.Start(ctx), options.Client)
 		defer controlSession.Close()
 	}
 	program := tea.NewProgram(

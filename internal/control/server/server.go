@@ -59,7 +59,7 @@ func (s *Server) Handler() http.Handler {
 	})
 }
 
-func (s *Server) status(writer http.ResponseWriter, _ *http.Request) {
+func (s *Server) status(writer http.ResponseWriter, request *http.Request) {
 	snapshot := s.store.Load()
 	status := protocol.Status{
 		Schema:          "mihari/v1",
@@ -71,6 +71,11 @@ func (s *Server) status(writer http.ResponseWriter, _ *http.Request) {
 	}
 	if s.runtime != nil {
 		status.Capabilities = sortedUnique(s.runtime.Capabilities())
+		if runtime, ok := s.runtime.(onboardingAPI); ok {
+			if onboardingStatus, err := runtime.OnboardingStatus(request.Context()); err == nil {
+				status.SetupRequired = !onboardingStatus.Status.Complete
+			}
+		}
 	}
 	if snapshot.Config.Status != "" {
 		status.Config = &protocol.ConfigStatus{

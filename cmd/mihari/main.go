@@ -43,11 +43,13 @@ func main() {
 			if err := paths.EnsureDirs(); err != nil {
 				return protocol.APIError{Code: protocol.CodeDataFailure, Message: "create mihari data directories"}
 			}
-			settings, err := config.LoadOrCreate(paths.Settings)
+			settings, created, err := config.LoadOrCreateResult(paths.Settings)
 			if err != nil {
 				return err
 			}
-			assembly, err := app.BuildRuntime(paths, settings, buildinfo.Version, os.Stdout, os.Stderr)
+			assembly, err := app.BuildRuntimeWithOptions(paths, settings, buildinfo.Version, os.Stdout, os.Stderr, app.RuntimeBuildOptions{
+				InitialSetupRequired: created, SettingsPath: paths.Settings,
+			})
 			if err != nil {
 				return err
 			}
