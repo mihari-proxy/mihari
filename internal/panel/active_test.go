@@ -3,6 +3,7 @@ package panel
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -27,7 +28,7 @@ func TestSaveAndLoadActiveAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got=%#v want=%#v", got, want)
 	}
 	// Overwrite replaces content; no leftover temp files in parent.
@@ -36,7 +37,7 @@ func TestSaveAndLoadActiveAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = LoadActive(path)
-	if err != nil || got != next {
+	if err != nil || !reflect.DeepEqual(got, next) {
 		t.Fatalf("got=%#v err=%v", got, err)
 	}
 	entries, err := os.ReadDir(filepath.Dir(path))
