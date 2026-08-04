@@ -1,6 +1,7 @@
 package protocol
 
 // WebGUIStatus is the future-safe read model for the Mihari browser gateway.
+// It must never include controller secrets, web credentials, or open-browser tokens.
 type WebGUIStatus struct {
 	Schema          string            `json:"schema"`
 	Revision        uint64            `json:"revision"`
@@ -23,7 +24,28 @@ type PanelStatus struct {
 	RollbackBuild  string `json:"rollback_build,omitempty"`
 }
 
-// GatewaySafeguards reports security invariants enforced by the future Web gateway.
+// PanelList is the additive list response for GET /v1/panels.
+type PanelList struct {
+	Schema   string        `json:"schema"`
+	Revision uint64        `json:"revision"`
+	Panels   []PanelStatus `json:"panels"`
+}
+
+// PanelInstallRequest installs or pins a panel build.
+type PanelInstallRequest struct {
+	OperationID string  `json:"operation_id"`
+	IfRevision  *uint64 `json:"if_revision,omitempty"`
+	Build       string  `json:"build,omitempty"`
+}
+
+// WebGUIOpenResult returns a short-lived open URL only to privileged local clients.
+// Consumers must open immediately and must not store the URL in snapshots or logs.
+type WebGUIOpenResult struct {
+	Schema  string `json:"schema"`
+	OpenURL string `json:"open_url"`
+}
+
+// GatewaySafeguards reports security invariants enforced by the Web gateway.
 type GatewaySafeguards struct {
 	LoopbackBound        bool `json:"loopback_bound"`
 	BrowserAuthenticated bool `json:"browser_authenticated"`
