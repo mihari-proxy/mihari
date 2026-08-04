@@ -6,13 +6,15 @@ The current runtime slice provides an authenticated local daemon control API ove
 
 ## Current commands
 
-Launch the interactive TUI:
+Launch the interactive TUI (attached terminal only):
 
 ```console
 mihari
 ```
 
-The current TUI includes a standalone first-run Setup route, Overview, expandable Proxies, active/closed Connections with local GeoIP details, Rules/Providers, a bounded structured Logs stream, subscription management forms, and a categorized System page. Setup installs the core, can add an initial subscription, prepares local GeoIP data, and asks the daemon to persist validated local endpoints. The Web GUI page remains capability-gated and unavailable until the gateway lifecycle work lands in Phase 5. Rule order is never sorted; onboarding, system, provider, and subscription mutations run through the daemon mutation coordinator, and destructive or broad operations require confirmation.
+Bare `mihari` starts the TUI only when stdin is an interactive terminal. Non-interactive or piped invocations reject the bare entry point so automation never accidentally enters full-screen mode. Explicit CLI subcommands always remain available and retain `--json` for machine-readable output.
+
+The TUI talks only to the local daemon through `internal/control/client` over the native IPC control plane. It never opens the mihomo controller, never receives the controller secret, and never performs durable writes itself. The current TUI includes a standalone first-run Setup route, Overview, expandable Proxies, active/closed Connections with local GeoIP details, Rules/Providers, a bounded structured Logs stream, subscription management forms, and a categorized System page. Setup installs the core, can add an initial subscription, prepares local GeoIP data, and asks the daemon to persist validated local endpoints. The Web GUI page remains capability-gated and unavailable until the gateway lifecycle work lands in Phase 5. Rule order is never sorted; onboarding, system, provider, and subscription mutations run through the daemon mutation coordinator, and destructive or broad operations require confirmation.
 
 Run the daemon in the foreground:
 
@@ -63,7 +65,7 @@ Subscription URLs are stored only in the daemon-private catalog and are omitted 
 
 GeoIP connection details are resolved locally by the daemon. Country and ASN MMDB files are downloaded from the public `Loyalsoldier/geoip` release branch, verified against the matching `.sha256sum` files, validated as MMDB databases, and refreshed when either local file is missing or at least 30 days old. A failed refresh retains the previous valid database pair and does not disable other connection details.
 
-`--json` emits a versioned success or error envelope and stable process exit codes for automation.
+Every explicit CLI command supports human-readable output and `--json`. `--json` emits a versioned success or error envelope and stable process exit codes for automation.
 
 ## Platform targets
 
@@ -83,4 +85,4 @@ go vet ./...
 
 The architecture and staged delivery scope are recorded in the [architecture design](docs/superpowers/specs/2026-08-03-mihari-architecture-design.md) and [delivery roadmap](docs/superpowers/plans/2026-08-03-mihari-delivery-roadmap.md).
 
-The remaining TUI management pages and Web GUI support are being delivered in later roadmap stages.
+Phase 4 (Full TUI) is complete on the development host: package and repository tests, race detection, `go vet`, formatting, and CGO-free six-target cross-builds all pass. Web GUI install/lifecycle support remains Phase 5.
