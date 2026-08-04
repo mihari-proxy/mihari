@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -46,6 +47,15 @@ type Model struct {
 	confirmationCmd  tea.Cmd
 	setupObserved    bool
 	setupReturn      ui.PageID
+	pendingActions   map[string]ui.Action
+	globalState      ui.GlobalState
+}
+
+type actionExecuteMsg struct{ Intent ui.ActionIntentMsg }
+
+type actionCompletedMsg struct {
+	Intent ui.ActionIntentMsg
+	Result tea.Msg
 }
 
 func NewModel() Model {
@@ -76,6 +86,7 @@ func newModelWithPageClients(proxyClient proxypage.Client, connectionsClient con
 		pages: pages, rail: rail, active: active,
 		focus: ui.Focus{Area: ui.FocusRail, Page: active},
 		width: 100, height: 28, theme: ui.DefaultTheme(), monitor: NewMonitor(),
+		pendingActions: make(map[string]ui.Action),
 	}
 	model.resizePages()
 	return model
@@ -118,6 +129,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.connected = false
 			model.stale = true
 			model.mutationsEnabled = false
+			model.globalState = ui.StateStale
 			model.monitor.SetStale(true)
 			model.setLogsStale(true)
 			model.syncSystem()
@@ -153,6 +165,20 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.status.Revision = max(model.status.Revision, typed.Revision)
 		model.syncOverview()
 		model.syncSystem()
+		return model, nil
+	case ui.ActionIntentMsg:
+		return model.handleActionIntent(typed)
+	case actionExecuteMsg:
+		return model.executeAction(typed.Intent)
+	case actionCompletedMsg:
+		delete(model.pendingActions, typed.Intent.Key)
+		model.globalState = ""
+		if typed.Result == nil {
+			return model, nil
+		}
+		return model.dispatchPageTo(typed.Intent.Page, typed.Result)
+	case ui.GlobalStateMsg:
+		model.globalState = typed.State
 		return model, nil
 	case OperationRecordMsg:
 		model.recordOperation(typed.Record)
@@ -292,10 +318,12 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		model.stale = false
 		model.mutationsEnabled = true
 		model.setLogsStale(false)
+		model.globalState = ui.StateReconnected
 	case session.EventReconnecting, session.EventTerminalError:
 		model.connected = false
 		model.stale = true
 		model.mutationsEnabled = false
+		model.globalState = ui.StateStale
 		model.setLogsStale(true)
 		if page, ok := model.pages[ui.PageConnections].(*connectionspage.Model); ok {
 			page.ResetSession()
@@ -377,13 +405,63 @@ func (model Model) updateRail(key string) (tea.Model, tea.Cmd) {
 }
 
 func (model Model) dispatchPage(message tea.Msg) (tea.Model, tea.Cmd) {
-	page := model.pages[model.active]
-	if page == nil || model.focus.Area != ui.FocusContent {
+	if model.focus.Area != ui.FocusContent {
+		return model, nil
+	}
+	return model.dispatchPageTo(model.active, message)
+}
+
+func (model Model) dispatchPageTo(id ui.PageID, message tea.Msg) (tea.Model, tea.Cmd) {
+	page := model.pages[id]
+	if page == nil {
 		return model, nil
 	}
 	updated, command := page.Update(routedMessage(message, model.inputMode))
-	model.pages[model.active] = updated
+	model.pages[id] = updated
 	return model, command
+}
+
+func (model Model) handleActionIntent(intent ui.ActionIntentMsg) (tea.Model, tea.Cmd) {
+	if intent.Page == "" {
+		intent.Page = model.active
+	}
+	if !knownAction(intent.Action) {
+		model.globalState = ui.StateCapabilityLost
+		return model, nil
+	}
+	if !model.mutationsEnabled {
+		model.globalState = ui.StateStale
+		return model, nil
+	}
+	if intent.Capability != "" && !slices.Contains(model.status.Capabilities, intent.Capability) {
+		model.globalState = ui.StateCapabilityLost
+		return model, nil
+	}
+	key := intent.Key
+	if key == "" {
+		key = string(intent.Action)
+		intent.Key = key
+	}
+	if _, pending := model.pendingActions[key]; pending {
+		model.globalState = ui.StatePending
+		return model, nil
+	}
+	if RequiresConfirmation(intent.Action) {
+		model.modal = NewConfirmation(intent.Title, intent.Object, intent.Impact, intent.Rollback)
+		model.confirmationCmd = func() tea.Msg { return actionExecuteMsg{Intent: intent} }
+		return model, nil
+	}
+	return model.executeAction(intent)
+}
+
+func (model Model) executeAction(intent ui.ActionIntentMsg) (tea.Model, tea.Cmd) {
+	if intent.Execute == nil {
+		model.globalState = ui.StateCapabilityLost
+		return model, nil
+	}
+	model.pendingActions[intent.Key] = intent.Action
+	model.globalState = ui.StatePending
+	return model, func() tea.Msg { return actionCompletedMsg{Intent: intent, Result: intent.Execute()} }
 }
 
 func (model Model) View() tea.View {
@@ -418,6 +496,9 @@ func (model Model) View() tea.View {
 		}
 		if layout.Class == ui.Compact {
 			footer += "  ·  " + model.monitor.ViewSummary(model.width)
+		}
+		if label := ui.GlobalStateLabel(model.globalState); label != "" {
+			footer += "  ·  " + label
 		}
 		content = strings.TrimRight(main, "\n") + "\n" + model.theme.Footer.Width(model.width).Render(footer)
 	}

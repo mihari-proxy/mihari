@@ -131,15 +131,48 @@ func TestModel_DeleteRequestsOrdinaryConfirmation(t *testing.T) {
 	model.SetSubscriptions(protocol.SubscriptionList{Revision: 7, Subscriptions: []protocol.Subscription{{ID: "a", Name: "A"}}})
 	model.focus = pageFocus{kind: focusRow, id: "a"}
 	_, command := model.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
-	confirmation, ok := command().(ui.ConfirmationRequestMsg)
-	if !ok || confirmation.OnConfirm == nil || strings.Contains(strings.ToLower(confirmation.Object), "retype") {
+	confirmation, ok := command().(ui.ActionIntentMsg)
+	if !ok || confirmation.Execute == nil || confirmation.Action != ui.ActionDeleteSubscription || strings.Contains(strings.ToLower(confirmation.Object), "retype") {
 		t.Fatalf("confirmation=%#v", confirmation)
 	}
+	if model.pending["a"] != "" {
+		t.Fatalf("delete marked pending before confirmation: %v", model.pending)
+	}
 	model.SetSubscriptions(protocol.SubscriptionList{Revision: 8, Subscriptions: []protocol.Subscription{{ID: "a", Name: "A"}}})
-	_, remove := model.Update(confirmation.OnConfirm())
-	model.Update(remove())
+	model.Update(confirmation.Execute())
 	if client.remove.IfRevision == nil || *client.remove.IfRevision != 7 || client.remove.OperationID != "delete-1" {
 		t.Fatalf("remove request=%#v", client.remove)
+	}
+}
+
+func TestModel_DeleteRevisionConflictReloadsAndPreservesFocus(t *testing.T) {
+	client := &fakeClient{
+		list:      protocol.SubscriptionList{Revision: 9, Subscriptions: []protocol.Subscription{{ID: "b", Name: "B"}, {ID: "a", Name: "A"}}},
+		removeErr: protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "changed"},
+	}
+	model := New(client, func() string { return "delete-1" }, nil)
+	model.SetSubscriptions(protocol.SubscriptionList{Revision: 7, Subscriptions: []protocol.Subscription{{ID: "a", Name: "A"}, {ID: "b", Name: "B"}}})
+	model.focus = pageFocus{kind: focusRow, id: "a"}
+	_, command := model.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	confirmation, ok := command().(ui.ActionIntentMsg)
+	if !ok || confirmation.Action != ui.ActionDeleteSubscription || confirmation.Execute == nil {
+		t.Fatalf("confirmation=%#v", confirmation)
+	}
+	// Another client (CLI/Web) edits the list while confirmation is open.
+	model.SetSubscriptions(protocol.SubscriptionList{Revision: 8, Subscriptions: []protocol.Subscription{{ID: "a", Name: "A"}, {ID: "b", Name: "B"}}})
+	conflictPage, reload := model.Update(confirmation.Execute())
+	if reload == nil {
+		t.Fatal("revision conflict did not trigger a reload instead of a blind retry")
+	}
+	if conflictPage.(*Model).lastError != ui.SubscriptionChangedMessage {
+		t.Fatalf("revision conflict did not render a toast: %q", conflictPage.(*Model).lastError)
+	}
+	if client.remove.IfRevision == nil || *client.remove.IfRevision != 7 {
+		t.Fatalf("remove used non-captured revision=%#v", client.remove)
+	}
+	model.Update(reload())
+	if model.revision != 9 || model.focus.id != "a" {
+		t.Fatalf("revision=%d focus=%#v", model.revision, model.focus)
 	}
 }
 
@@ -170,6 +203,7 @@ type fakeClient struct {
 	update       protocol.SubscriptionUpdateRequest
 	updateResult protocol.SubscriptionResult
 	remove       protocol.MutationRequest
+	removeErr    error
 }
 
 func (f *fakeClient) Subscriptions(context.Context) (protocol.SubscriptionList, error) {
@@ -194,5 +228,5 @@ func (f *fakeClient) UpdateSubscription(_ context.Context, _ string, request pro
 }
 func (f *fakeClient) RemoveSubscription(_ context.Context, _ string, request protocol.MutationRequest) (protocol.MutationResult, error) {
 	f.remove = request
-	return protocol.MutationResult{}, nil
+	return protocol.MutationResult{}, f.removeErr
 }

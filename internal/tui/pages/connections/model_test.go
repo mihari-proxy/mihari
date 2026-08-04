@@ -99,8 +99,8 @@ func TestModel_CloseAllRequestsConfirmation(t *testing.T) {
 	if command == nil {
 		t.Fatal("close all did not request confirmation")
 	}
-	request, ok := command().(ui.ConfirmationRequestMsg)
-	if !ok || request.OnConfirm == nil {
+	request, ok := command().(ui.ActionIntentMsg)
+	if !ok || request.Execute == nil || request.Action != ui.ActionCloseAllConnections {
 		t.Fatalf("message=%T request=%#v", command(), request)
 	}
 }

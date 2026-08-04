@@ -200,10 +200,11 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		if key.String() == "enter" {
 			if m.endpointsChanged() {
 				return m, func() tea.Msg {
-					return ui.ConfirmationRequestMsg{
+					return ui.ActionIntentMsg{
+						Action: ui.ActionApplyEndpointChange, Page: ui.PageSetup, Capability: protocol.CapabilityOnboarding, Key: "setup:endpoints",
 						Title: ui.ReplaceConfigurationTitle, Object: ui.LocalEndpointsLabel,
 						Impact: ui.ReplaceConfigurationImpact, Rollback: ui.ReplaceConfigurationRollback,
-						OnConfirm: func() tea.Msg { return completeStartMsg{} },
+						Execute: m.complete(),
 					}
 				}
 			}

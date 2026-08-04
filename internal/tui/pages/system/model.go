@@ -286,16 +286,20 @@ func (m *Model) currentRevision() uint64 {
 func (m *Model) confirmAction(kind actionKind) tea.Cmd {
 	revision, operationID := m.currentRevision(), m.newOperationID()
 	title, object, impact, rollback := ui.UpdateCoreTitle, ui.MihomoCoreLabel, ui.UpdateCoreImpact, ui.UpdateCoreRollback
+	action := ui.ActionUpdateCore
 	if kind == actionUpdate && m.core.Version == "" {
 		title, impact = ui.InstallCoreTitle, ui.InstallCoreImpact
 	}
 	if kind == actionRestart {
 		title, impact, rollback = ui.RestartCoreTitle, ui.RestartCoreImpact, ui.RestartCoreRollback
+		action = ui.ActionRestartCore
 	}
 	return func() tea.Msg {
-		return ui.ConfirmationRequestMsg{Title: title, Object: object, Impact: impact, Rollback: rollback, OnConfirm: func() tea.Msg {
-			return actionStartMsg{kind: kind, operationID: operationID, revision: revision}
-		}}
+		return ui.ActionIntentMsg{
+			Action: action, Page: ui.PageSystem, Capability: protocol.CapabilityCore, Key: "system:" + string(action),
+			Title: title, Object: object, Impact: impact, Rollback: rollback,
+			Execute: m.runAction(actionStartMsg{kind: kind, operationID: operationID, revision: revision}),
+		}
 	}
 }
 
