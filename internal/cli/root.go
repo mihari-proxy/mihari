@@ -45,6 +45,8 @@ type Dependencies struct {
 	StatusClient       StatusClient
 	RuntimeClient      RuntimeClient
 	SubscriptionClient SubscriptionClient
+	PanelClient        PanelClient
+	OpenBrowser        func(url string) error
 	RunDaemon          func(context.Context) error
 	RunTUI             func(context.Context) error
 	Interactive        bool
@@ -113,6 +115,7 @@ func newRoot(dependencies Dependencies, options *runOptions) *cobra.Command {
 	root.AddCommand(newStreamCommand("traffic", dependencies, options))
 	root.AddCommand(newStreamCommand("logs", dependencies, options))
 	root.AddCommand(newSubscriptionCommand(dependencies, options))
+	root.AddCommand(newPanelCommand(dependencies, options))
 	return root
 }
 
