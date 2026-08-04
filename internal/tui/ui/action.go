@@ -17,6 +17,10 @@ const (
 	ActionRefreshSubscription     Action = "refresh-subscription"
 	ActionRefreshAllSubscriptions Action = "refresh-all-subscriptions"
 	ActionUpdateProvider          Action = "update-provider"
+	ActionInstallPanel            Action = "install-panel"
+	ActionUpdatePanel             Action = "update-panel"
+	ActionActivatePanel           Action = "activate-panel"
+	ActionOpenWebGUI              Action = "open-web-gui"
 )
 
 type ActionIntentMsg struct {
