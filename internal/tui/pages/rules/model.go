@@ -330,20 +330,54 @@ func (m *Model) activateControl() tea.Cmd {
 	return nil
 }
 
+const rulesColGap = 2
+
+func (m *Model) rulesColumnSpec() ([]ui.TableColumn, []string) {
+	cols := []ui.TableColumn{
+		{ID: "num", MinWidth: 4, MaxWidth: 4, Flex: 0, Align: ui.AlignRight},
+		{ID: "type", MinWidth: 10, MaxWidth: 18, Flex: 0},
+		{ID: "payload", MinWidth: 12, Flex: 3},
+		{ID: "target", MinWidth: 8, MaxWidth: 16, Flex: 1},
+	}
+	titles := []string{"#", ui.TypeLabel, ui.PayloadLabel, ui.TargetLabel}
+	return cols, titles
+}
+
+func (m *Model) layoutWidth() int {
+	if m.width > 0 {
+		return m.width
+	}
+	return 100
+}
+
 func (m *Model) renderRules() []string {
-	lines := []string{fmt.Sprintf("    #  %-16s  %-39s  %s", ui.TypeLabel, ui.PayloadLabel, ui.TargetLabel)}
+	cols, titles := m.rulesColumnSpec()
+	// Marker (2) + Content padding (2).
+	widths := ui.FitColumnWidths(cols, max(24, m.layoutWidth()-4), rulesColGap)
+	header, ruleLine := ui.RenderHeaderRow(m.theme, titles, widths, rulesColGap, -1, false)
+	lines := []string{"  " + header, "  " + ruleLine}
 	indexes := m.VisibleIndexes()
 	if len(indexes) == 0 {
 		return append(lines, m.theme.Muted.Render(ui.NoMatchingRules))
 	}
+	colorful := m.contentFocused
 	for visibleRow, index := range indexes {
-		rule := m.rules[index]
-		marker := "  "
+		item := m.rules[index]
 		rowFocused := m.focus.kind == focusRow && m.focus.row == visibleRow
-		if rowFocused {
-			marker = ui.FocusMarker
+		marker := ui.FocusPrefix(rowFocused)
+		num := ui.PadCell(fmt.Sprintf("%d", index+1), widths[0], ui.AlignRight)
+		typeText := item.Type
+		if colorful {
+			typeText = ui.StyleRuleType(m.theme, item.Type)
 		}
-		line := fmt.Sprintf("%s%4d  %-16s  %-39s  %s", marker, index+1, truncate(rule.Type, 16), truncate(rule.Payload, 39), rule.Proxy)
+		typ := ui.PadCell(typeText, widths[1], ui.AlignLeft)
+		payload := ui.PadCell(item.Payload, widths[2], ui.AlignLeft)
+		targetText := item.Proxy
+		if colorful {
+			targetText = ui.StyleProxyTarget(m.theme, item.Proxy)
+		}
+		target := ui.PadCell(targetText, widths[3], ui.AlignLeft)
+		line := marker + ui.JoinCells([]string{num, typ, payload, target}, rulesColGap)
 		if rowFocused && m.contentFocused {
 			line = m.theme.RowFocus.Render(line)
 		}
@@ -352,19 +386,42 @@ func (m *Model) renderRules() []string {
 	return lines
 }
 
+func (m *Model) providerColumnSpec() ([]ui.TableColumn, []string) {
+	// Light C: compact drops behavior/format/updated.
+	if ui.ClassifyContentWidth(m.layoutWidth()) == ui.ContentCompact {
+		return []ui.TableColumn{
+			{ID: "name", MinWidth: 10, Flex: 2},
+			{ID: "type", MinWidth: 6, MaxWidth: 10, Flex: 0},
+			{ID: "count", MinWidth: 5, MaxWidth: 6, Flex: 0, Align: ui.AlignRight},
+			{ID: "status", MinWidth: 8, MaxWidth: 12, Flex: 1},
+		}, []string{ui.NameLabel, ui.TypeLabel, ui.RulesCountLabel, ui.StatusLabel}
+	}
+	return []ui.TableColumn{
+		{ID: "name", MinWidth: 10, Flex: 2},
+		{ID: "type", MinWidth: 6, MaxWidth: 10, Flex: 0},
+		{ID: "behavior", MinWidth: 8, MaxWidth: 12, Flex: 0},
+		{ID: "format", MinWidth: 6, MaxWidth: 10, Flex: 0},
+		{ID: "count", MinWidth: 5, MaxWidth: 6, Flex: 0, Align: ui.AlignRight},
+		{ID: "updated", MinWidth: 14, MaxWidth: 16, Flex: 0},
+		{ID: "status", MinWidth: 8, MaxWidth: 12, Flex: 1},
+	}, []string{ui.NameLabel, ui.TypeLabel, ui.BehaviorLabel, ui.FormatLabel, ui.RulesCountLabel, ui.UpdatedLabel, ui.StatusLabel}
+}
+
 func (m *Model) renderProviders() []string {
-	lines := []string{fmt.Sprintf("  %-16s  %-8s  %-13s  %-10s  %5s  %-19s  %s", ui.NameLabel, ui.TypeLabel, ui.BehaviorLabel, ui.FormatLabel, ui.RulesCountLabel, ui.UpdatedLabel, ui.StatusLabel)}
+	cols, titles := m.providerColumnSpec()
+	widths := ui.FitColumnWidths(cols, max(24, m.layoutWidth()-4), rulesColGap)
+	header, ruleLine := ui.RenderHeaderRow(m.theme, titles, widths, rulesColGap, -1, false)
+	lines := []string{"  " + header, "  " + ruleLine}
 	indexes := m.visibleProviderIndexes()
 	if len(indexes) == 0 {
 		return append(lines, m.theme.Muted.Render(ui.NoMatchingRuleProviders))
 	}
+	compact := ui.ClassifyContentWidth(m.layoutWidth()) == ui.ContentCompact
+	colorful := m.contentFocused
 	for visibleRow, index := range indexes {
 		provider := m.providers[index]
-		marker := "  "
 		rowFocused := m.focus.kind == focusRow && m.focus.row == visibleRow
-		if rowFocused {
-			marker = ui.FocusMarker
-		}
+		marker := ui.FocusPrefix(rowFocused)
 		status := provider.Status
 		if m.pending[provider.Name] {
 			status = ui.PendingLabel
@@ -373,7 +430,38 @@ func (m *Model) renderProviders() []string {
 		if !provider.UpdatedAt.IsZero() {
 			updated = provider.UpdatedAt.Local().Format("2006-01-02 15:04")
 		}
-		line := fmt.Sprintf("%s%-16s  %-8s  %-13s  %-10s  %5d  %-19s  %s", marker, truncate(provider.Name, 16), provider.Type, provider.Behavior, provider.Format, provider.RuleCount, updated, status)
+		typeText := provider.Type
+		statusText := status
+		if colorful {
+			typeText = ui.StyleRuleType(m.theme, provider.Type)
+			statusText = ui.StyleProviderStatus(m.theme, status)
+		}
+		var cells []string
+		if compact {
+			cells = []string{
+				ui.PadCell(provider.Name, widths[0], ui.AlignLeft),
+				ui.PadCell(typeText, widths[1], ui.AlignLeft),
+				ui.PadCell(fmt.Sprintf("%d", provider.RuleCount), widths[2], ui.AlignRight),
+				ui.PadCell(statusText, widths[3], ui.AlignLeft),
+			}
+		} else {
+			behavior, format, updatedCell := provider.Behavior, provider.Format, updated
+			if colorful {
+				behavior = m.theme.Muted.Render(behavior)
+				format = m.theme.Muted.Render(format)
+				updatedCell = m.theme.Muted.Render(updated)
+			}
+			cells = []string{
+				ui.PadCell(provider.Name, widths[0], ui.AlignLeft),
+				ui.PadCell(typeText, widths[1], ui.AlignLeft),
+				ui.PadCell(behavior, widths[2], ui.AlignLeft),
+				ui.PadCell(format, widths[3], ui.AlignLeft),
+				ui.PadCell(fmt.Sprintf("%d", provider.RuleCount), widths[4], ui.AlignRight),
+				ui.PadCell(updatedCell, widths[5], ui.AlignLeft),
+				ui.PadCell(statusText, widths[6], ui.AlignLeft),
+			}
+		}
+		line := marker + ui.JoinCells(cells, rulesColGap)
 		if rowFocused && m.contentFocused {
 			line = m.theme.RowFocus.Render(line)
 		}
