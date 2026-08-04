@@ -59,23 +59,42 @@ func TestModel_ControlRowAndDetailsPreserveFullChain(t *testing.T) {
 	}
 }
 
-func TestModel_RowLeftRightScrollsWithoutTruncatingChainState(t *testing.T) {
+func TestModel_DualLineKeepsFullChainInModelAndShowsHost(t *testing.T) {
 	model := New(nil, nil)
-	model.SetSize(32, 16)
+	model.SetSize(80, 16)
 	model.SetPreferences(protocol.TUIPreferences{ConnectionsColumns: []string{"host", "chain"}})
 	model.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{
 		ID: "one", Chains: []string{"GLOBAL", "Streaming", "Auto Select", "Japan 01"},
-		Metadata: protocol.ConnectionMetadata{Host: "example.com"},
+		Metadata: protocol.ConnectionMetadata{Host: "example.com", Type: "HTTP", Network: "tcp"},
 	}}}, time.Unix(1, 0))
 	model.focus = pageFocus{kind: focusRow, rowID: "one"}
-	for range 8 {
-		model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	view := model.View()
+	if !strings.Contains(view, "example.com") {
+		t.Fatalf("primary host missing: %s", view)
 	}
-	if !strings.Contains(model.View(), "Japan 01") {
-		t.Fatalf("scrolled view lost chain tail: %s", model.View())
+	if !strings.Contains(view, "GLOBAL") || !strings.Contains(view, "Japan 01") {
+		t.Fatalf("secondary chain missing: %s", view)
 	}
 	if got := strings.Join(model.visibleRows()[0].Chains, " / "); got != "GLOBAL / Streaming / Auto Select / Japan 01" {
 		t.Fatalf("chain=%q", got)
+	}
+}
+
+func TestModel_CompactHidesRuleAndProcessOnSecondary(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSize(70, 16) // Compact < 90
+	model.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{
+		ID: "one", Chains: []string{"DIRECT"}, Rule: "MATCH", RulePay: "final",
+		Metadata: protocol.ConnectionMetadata{Host: "a.test", Process: "chrome.exe", Type: "HTTPS", Network: "tcp"},
+	}}}, time.Unix(1, 0))
+	view := model.View()
+	if strings.Contains(view, "chrome.exe") || strings.Contains(view, "MATCH") {
+		t.Fatalf("compact should hide rule/process: %s", view)
+	}
+	model.SetSize(100, 16)
+	view = model.View()
+	if !strings.Contains(view, "chrome.exe") || !strings.Contains(view, "MATCH") {
+		t.Fatalf("full should show rule/process: %s", view)
 	}
 }
 

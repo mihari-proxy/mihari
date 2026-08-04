@@ -30,7 +30,9 @@ func TestModelRoutesConnectionSnapshotsAndPreferencesToPage(t *testing.T) {
 		Connections: []protocol.Connection{{ID: "one", Metadata: protocol.ConnectionMetadata{Host: "example.com"}}},
 	}})
 	view := page.View()
-	if !strings.Contains(view, "example.com") || !strings.Contains(view, "Chain") {
+	// Dual-line cards: host on the primary line; chain lives on the secondary metadata line
+	// (header is Host/Traffic, not the preference column list).
+	if !strings.Contains(view, "example.com") || !strings.Contains(view, "Host") {
 		t.Fatalf("view=%s", view)
 	}
 }

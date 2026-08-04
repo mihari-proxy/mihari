@@ -1,0 +1,333 @@
+package ui
+
+import (
+	"strings"
+
+	lipgloss "charm.land/lipgloss/v2"
+)
+
+// ContentWidthClass is the light responsive tier for table pages.
+type ContentWidthClass uint8
+
+const (
+	// ContentCompact uses priority fields only (< 90 content columns).
+	ContentCompact ContentWidthClass = iota
+	// ContentFull shows the expanded field set.
+	ContentFull
+)
+
+// CompactContentWidth is the threshold for light responsive tables (design C-lite).
+const CompactContentWidth = 90
+
+// Align is horizontal cell alignment.
+type Align uint8
+
+const (
+	AlignLeft Align = iota
+	AlignRight
+)
+
+// TableColumn describes a flex-capable column for FitColumnWidths.
+type TableColumn struct {
+	ID       string
+	Title    string
+	MinWidth int
+	MaxWidth int // 0 means unlimited
+	Flex     int // 0 means fixed at MinWidth (clamped by MaxWidth)
+	Align    Align
+}
+
+// ClassifyContentWidth returns Compact vs Full for the given content pane width.
+func ClassifyContentWidth(width int) ContentWidthClass {
+	if width < CompactContentWidth {
+		return ContentCompact
+	}
+	return ContentFull
+}
+
+// FitColumnWidths distributes total width across columns.
+// gap is the number of spaces between adjacent columns (applied len(cols)-1 times).
+func FitColumnWidths(cols []TableColumn, total, gap int) []int {
+	n := len(cols)
+	if n == 0 {
+		return nil
+	}
+	if gap < 0 {
+		gap = 0
+	}
+	widths := make([]int, n)
+	usedGaps := gap * max(0, n-1)
+	budget := max(0, total-usedGaps)
+
+	flexTotal := 0
+	fixedSum := 0
+	for i, col := range cols {
+		minW := max(1, col.MinWidth)
+		if col.Flex <= 0 {
+			w := minW
+			if col.MaxWidth > 0 {
+				w = min(w, col.MaxWidth)
+			}
+			widths[i] = w
+			fixedSum += w
+			continue
+		}
+		widths[i] = minW
+		flexTotal += col.Flex
+	}
+	if flexTotal == 0 {
+		return widths
+	}
+	remain := budget - fixedSum
+	// remain already accounts for fixed columns only; flex mins are inside widths.
+	// Recompute remain after assigning flex mins.
+	flexMinSum := 0
+	for i, col := range cols {
+		if col.Flex > 0 {
+			flexMinSum += widths[i]
+		}
+	}
+	// fixedSum above included only Flex==0; total assigned so far = fixedSum + flexMinSum.
+	remain = budget - fixedSum - flexMinSum
+	if remain < 0 {
+		// Shrink flex columns proportionally toward 1 if over budget.
+		need := fixedSum + flexMinSum - budget
+		for need > 0 {
+			progress := false
+			for i, col := range cols {
+				if col.Flex <= 0 || widths[i] <= 1 {
+					continue
+				}
+				widths[i]--
+				need--
+				progress = true
+				if need == 0 {
+					break
+				}
+			}
+			if !progress {
+				break
+			}
+		}
+		return widths
+	}
+	// Distribute remain by flex weight.
+	given := 0
+	for i, col := range cols {
+		if col.Flex <= 0 {
+			continue
+		}
+		extra := remain * col.Flex / flexTotal
+		widths[i] += extra
+		given += extra
+		if col.MaxWidth > 0 && widths[i] > col.MaxWidth {
+			given -= widths[i] - col.MaxWidth
+			widths[i] = col.MaxWidth
+		}
+	}
+	// Hand leftover to the last flex column.
+	leftover := remain - given
+	if leftover != 0 {
+		for i := n - 1; i >= 0; i-- {
+			if cols[i].Flex <= 0 {
+				continue
+			}
+			widths[i] += leftover
+			if cols[i].MaxWidth > 0 && widths[i] > cols[i].MaxWidth {
+				widths[i] = cols[i].MaxWidth
+			}
+			break
+		}
+	}
+	return widths
+}
+
+// TruncateVisible shortens s to at most width terminal columns, appending "…".
+func TruncateVisible(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	if width == 1 {
+		return "…"
+	}
+	// Walk runes until width-1, then ellipsis.
+	var b strings.Builder
+	used := 0
+	limit := width - 1
+	for _, r := range s {
+		rw := runeWidth(r)
+		if used+rw > limit {
+			break
+		}
+		b.WriteRune(r)
+		used += rw
+	}
+	b.WriteString("…")
+	return b.String()
+}
+
+func runeWidth(r rune) int {
+	// lipgloss/Width uses unicode width; approximate with utf8 display via lipgloss.
+	return lipgloss.Width(string(r))
+}
+
+// PadCell pads or truncates s to exactly width visible columns.
+func PadCell(s string, width int, align Align) string {
+	if width <= 0 {
+		return ""
+	}
+	s = TruncateVisible(s, width)
+	pad := width - lipgloss.Width(s)
+	if pad <= 0 {
+		return s
+	}
+	spaces := strings.Repeat(" ", pad)
+	if align == AlignRight {
+		return spaces + s
+	}
+	return s + spaces
+}
+
+// JoinCells joins already-padded cells with gap spaces.
+func JoinCells(cells []string, gap int) string {
+	if gap < 0 {
+		gap = 0
+	}
+	return strings.Join(cells, strings.Repeat(" ", gap))
+}
+
+// RenderHeaderRow builds a TableHeader-styled header and a muted rule line.
+// focusedIndex < 0 means no focused column. Returns (headerLine, ruleLine).
+func RenderHeaderRow(theme Theme, titles []string, widths []int, gap, focusedIndex int, contentFocused bool) (string, string) {
+	n := min(len(titles), len(widths))
+	cells := make([]string, n)
+	total := gap * max(0, n-1)
+	for i := 0; i < n; i++ {
+		label := titles[i]
+		padded := PadCell(label, widths[i], AlignLeft)
+		if contentFocused && focusedIndex == i {
+			cells[i] = theme.ControlActive.UnsetPadding().Render(padded)
+		} else {
+			cells[i] = theme.TableHeader.Render(padded)
+		}
+		total += widths[i]
+	}
+	header := JoinCells(cells, gap)
+	rule := theme.SurfaceBorder.Render(strings.Repeat("─", max(1, lipgloss.Width(header))))
+	return header, rule
+}
+
+// StyleLogLevel colors a log level label (returns uppercase display text styled).
+func StyleLogLevel(theme Theme, level string) string {
+	label := strings.ToUpper(strings.TrimSpace(level))
+	if label == "" {
+		label = MissingValue
+	}
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "error", "err", "fatal", "panic":
+		return theme.Danger.Render(label)
+	case "warning", "warn":
+		return theme.Warning.Render(label)
+	case "info", "information":
+		return theme.Info.Render(label)
+	case "debug", "trace":
+		return theme.Muted.Render(label)
+	default:
+		return theme.Muted.Render(label)
+	}
+}
+
+// StyleRuleType colors a Clash-style rule type token.
+func StyleRuleType(theme Theme, ruleType string) string {
+	label := strings.TrimSpace(ruleType)
+	if label == "" {
+		return theme.Muted.Render(MissingValue)
+	}
+	upper := strings.ToUpper(label)
+	switch {
+	case strings.Contains(upper, "DOMAIN"), strings.Contains(upper, "GEOSITE"), strings.HasPrefix(upper, "HOST"):
+		return theme.Info.Render(label)
+	case strings.Contains(upper, "IP"), strings.Contains(upper, "GEOIP"), strings.Contains(upper, "SRC"):
+		return theme.Warning.Render(label)
+	case strings.Contains(upper, "MATCH"), strings.Contains(upper, "FINAL"):
+		return lipgloss.NewStyle().Bold(true).Foreground(theme.ColorAccent).Render(label)
+	case strings.Contains(upper, "PROCESS"), strings.Contains(upper, "UID"), strings.Contains(upper, "PORT"):
+		return theme.Success.Render(label)
+	default:
+		return theme.Muted.Render(label)
+	}
+}
+
+// StyleProxyTarget colors rule/proxy targets.
+func StyleProxyTarget(theme Theme, target string) string {
+	label := strings.TrimSpace(target)
+	if label == "" {
+		return theme.Muted.Render(MissingValue)
+	}
+	switch strings.ToUpper(label) {
+	case "DIRECT":
+		return theme.Muted.Render(label)
+	case "REJECT", "REJECT-DROP", "BLOCK":
+		return theme.Danger.Render(label)
+	case "PASS", "COMPATIBLE":
+		return theme.Warning.Render(label)
+	default:
+		return theme.Success.Render(label)
+	}
+}
+
+// StyleProviderStatus colors rule-provider status text.
+func StyleProviderStatus(theme Theme, status string) string {
+	label := strings.TrimSpace(status)
+	if label == "" {
+		return theme.Muted.Render(MissingValue)
+	}
+	switch strings.ToLower(label) {
+	case "ready", "ok", "success", "healthy":
+		return theme.Success.Render(label)
+	case "pending", "updating", "loading", strings.ToLower(PendingLabel):
+		return theme.Warning.Render(label)
+	case "failed", "error", "unhealthy":
+		return theme.Danger.Render(label)
+	default:
+		return theme.Muted.Render(label)
+	}
+}
+
+// StyleTrafficPair formats colored UL/DL rate pair for connection primary lines.
+func StyleTrafficPair(theme Theme, upLabel, downLabel string) string {
+	up := theme.Success.Render(upLabel)
+	down := theme.Info.Render(downLabel)
+	return up + "  " + down
+}
+
+// StyleNetwork colors network/protocol tokens like TCP/UDP.
+func StyleNetwork(theme Theme, network string) string {
+	label := strings.TrimSpace(network)
+	if label == "" {
+		return theme.Muted.Render(MissingValue)
+	}
+	upper := strings.ToUpper(label)
+	switch {
+	case strings.Contains(upper, "UDP"):
+		return theme.Warning.Render(label)
+	case strings.Contains(upper, "TCP"):
+		return theme.Info.Render(label)
+	default:
+		return theme.Muted.Render(label)
+	}
+}
+
+// VisibleWidth is lipgloss.Width for call sites that prefer the name.
+func VisibleWidth(s string) int { return lipgloss.Width(s) }
+
+// FocusPrefix returns the focus marker or two spaces.
+func FocusPrefix(focused bool) string {
+	if focused {
+		return FocusMarker
+	}
+	return "  "
+}
