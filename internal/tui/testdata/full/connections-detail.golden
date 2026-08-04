@@ -1,28 +1,28 @@
- Mihari                  [Active 1 | Closed 0]  [Source IP: All]  [/ Search…]  [Columns]  [Pause]   
-                         Host v  Network  Chain  Traffic                                            
-    Overview               example.com  —/TCP  DIRECT  UL 0 B/s DL 0 B/s                            
-    Proxies                                                                                         
+ Mihari  ·  ●  ·  1 conn  ·  ↑0 B/s  ↓0 B/s  ·  0 B 
+ Mihari          [Active 1 | Closed 0]  [Source IP: All]  [Columns]  [Pause]                        
+                  / Search…                                                                         
+    Overview     Host  Network  Chain  Traffic                                                      
+    Proxies        example.com  —/TCP  DIRECT  UL 0 B/s DL 0 B/s                                    
   › Connections                                                                                     
     Rules                                                                                           
     Logs                                                                                            
-    Subscriptions                                                                                   
+                                                                                                    
+ Subscriptions                                                                                      
     Web GUI                                                                                         
     System                                                                                          
                                                                                                     
-Traffic · 60 s                                                                                      
-UL ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁                                                                            
-DL ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁                                                                            
-Memory · 60 s                                                                                       
-▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁                                                                            
-Connections 1                                                                                       
-Memory 0 B                                                                                          
-UL 0 B/s                                                                                            
-DL 0 B/s                                                                                            
-Uploaded 2.0 KiB                                                                                    
-Downloaded 8.0 KiB                                                                                  
                                                                                                     
                                                                                                     
                                                                                                     
                                                                                                     
                                                                                                     
- ← back  / search  x close  p pause  Enter details  ? help  q quit                                  
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+ Type to filter  Enter/Esc done  ? help  q quit                                                     

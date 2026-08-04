@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
@@ -49,6 +50,8 @@ type Model struct {
 	setupReturn      ui.PageID
 	pendingActions   map[string]ui.Action
 	globalState      ui.GlobalState
+	now              time.Time // spinner clock; advanced only while work is pending
+	spinning         bool      // true while a spinner tick loop is scheduled
 }
 
 type actionExecuteMsg struct{ Intent ui.ActionIntentMsg }
@@ -56,6 +59,21 @@ type actionExecuteMsg struct{ Intent ui.ActionIntentMsg }
 type actionCompletedMsg struct {
 	Intent ui.ActionIntentMsg
 	Result tea.Msg
+}
+
+// spinnerTickMsg advances the braille spinner frame while pending work exists.
+type spinnerTickMsg struct{ t time.Time }
+
+// startSpinnerTickMsg kicks off the spinner tick loop without blocking callers
+// (unlike tea.Tick). executeAction batches this with the action command.
+type startSpinnerTickMsg struct{}
+
+const spinnerTickInterval = 100 * time.Millisecond
+
+func spinnerTick() tea.Cmd {
+	return tea.Tick(spinnerTickInterval, func(t time.Time) tea.Msg {
+		return spinnerTickMsg{t: t}
+	})
 }
 
 func NewModel() Model {
@@ -174,14 +192,37 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model.executeAction(typed.Intent)
 	case actionCompletedMsg:
 		delete(model.pendingActions, typed.Intent.Key)
-		model.globalState = ""
-		if typed.Result == nil {
-			return model, nil
+		if len(model.pendingActions) == 0 {
+			model.globalState = ""
+		} else {
+			model.globalState = ui.StatePending
 		}
-		return model.dispatchPageTo(typed.Intent.Page, typed.Result)
+		var pageCmd tea.Cmd
+		if typed.Result != nil {
+			var next tea.Model
+			next, pageCmd = model.dispatchPageTo(typed.Intent.Page, typed.Result)
+			model = next.(Model)
+		}
+		return model, tea.Batch(pageCmd, model.spinnerCmdIfNeeded())
+	case startSpinnerTickMsg:
+		// Real tea.Tick starts here so executeAction's Batch stays non-blocking.
+		if model.needsSpinner() {
+			model.spinning = true
+			return model, spinnerTick()
+		}
+		model.spinning = false
+		return model, nil
+	case spinnerTickMsg:
+		model.now = typed.t
+		if model.needsSpinner() {
+			model.spinning = true
+			return model, spinnerTick()
+		}
+		model.spinning = false
+		return model, nil
 	case ui.GlobalStateMsg:
 		model.globalState = typed.State
-		return model, nil
+		return model, model.spinnerCmdIfNeeded()
 	case OperationRecordMsg:
 		model.recordOperation(typed.Record)
 		return model, nil
@@ -450,7 +491,7 @@ func (model Model) handleActionIntent(intent ui.ActionIntentMsg) (tea.Model, tea
 	}
 	if _, pending := model.pendingActions[key]; pending {
 		model.globalState = ui.StatePending
-		return model, nil
+		return model, model.spinnerCmdIfNeeded()
 	}
 	if RequiresConfirmation(intent.Action) {
 		model.modal = NewConfirmation(intent.Title, intent.Object, intent.Impact, intent.Rollback)
@@ -467,13 +508,76 @@ func (model Model) executeAction(intent ui.ActionIntentMsg) (tea.Model, tea.Cmd)
 	}
 	model.pendingActions[intent.Key] = intent.Action
 	model.globalState = ui.StatePending
-	return model, func() tea.Msg { return actionCompletedMsg{Intent: intent, Result: intent.Execute()} }
+	exec := func() tea.Msg {
+		return actionCompletedMsg{Intent: intent, Result: intent.Execute()}
+	}
+	return model, tea.Batch(exec, model.spinnerCmdIfNeeded())
+}
+
+func (model Model) needsSpinner() bool {
+	return len(model.pendingActions) > 0 || model.globalState == ui.StatePending
+}
+
+// spinnerCmdIfNeeded schedules a spinner tick when pending work exists and a
+// loop is not already running. Idle models return nil so ticks stop cleanly.
+func (model *Model) spinnerCmdIfNeeded() tea.Cmd {
+	if !model.needsSpinner() {
+		model.spinning = false
+		return nil
+	}
+	if model.spinning {
+		return nil
+	}
+	model.spinning = true
+	// Instant message first so Batch expansion in tests does not block on tea.Tick.
+	return func() tea.Msg { return startSpinnerTickMsg{} }
+}
+
+func (model Model) statusBarData() ui.StatusBarData {
+	snap := model.monitor.Snapshot()
+	return ui.StatusBarData{
+		CoreStatus:   model.core.Status,
+		CoreVersion:  model.core.Version,
+		Subscription: activeSubscriptionName(model.subscriptions),
+		Connections:  snap.Connections,
+		UploadRate:   snap.UploadRate,
+		DownloadRate: snap.DownloadRate,
+		MemoryInUse:  snap.MemoryInUse,
+		Stale:        model.stale || snap.Stale,
+	}
+}
+
+func activeSubscriptionName(list protocol.SubscriptionList) string {
+	if list.ActiveID == "" {
+		return ""
+	}
+	for _, sub := range list.Subscriptions {
+		if sub.ID == list.ActiveID {
+			return sub.Name
+		}
+	}
+	return ""
+}
+
+func (model Model) footerGlobalSegment() string {
+	if model.needsSpinner() {
+		label := ui.GlobalStatePendingLabel
+		if model.globalState != ui.StatePending && model.globalState != "" {
+			if mapped := ui.GlobalStateLabel(model.globalState); mapped != "" {
+				label = mapped
+			}
+		}
+		return ui.SpinnerLabel(model.now, label)
+	}
+	return ui.GlobalStateLabel(model.globalState)
 }
 
 func (model Model) View() tea.View {
 	if model.active == ui.PageSetup {
 		body := model.pages[ui.PageSetup].View()
-		content := model.theme.Content.Width(model.width).Height(max(1, model.height-1)).Render(body) + "\n" +
+		status := ui.RenderStatusBar(model.theme, model.statusBarData(), model.width, true)
+		content := status + "\n" +
+			model.theme.Content.Width(model.width).Height(max(1, model.height-2)).Render(body) + "\n" +
 			model.theme.Footer.Width(model.width).Render(ui.SetupFooter)
 		if model.modal != nil {
 			content = model.modal.View(model.width, model.height)
@@ -489,6 +593,7 @@ func (model Model) View() tea.View {
 		content = lipgloss.Place(model.width, model.height, lipgloss.Center, lipgloss.Center,
 			model.theme.Title.Render(ui.ResizeRequired)+"\n"+model.theme.Muted.Render(ui.ResizeInstructions))
 	} else {
+		status := ui.RenderStatusBar(model.theme, model.statusBarData(), model.width, layout.Class == ui.Compact)
 		// Keep the left column at a hard RailWidth so long monitor lines cannot
 		// push the content pane past the terminal edge (which clips card borders).
 		railNav := ui.RenderRail(model.theme, model.rail, model.railIndex, model.focus.Area == ui.FocusRail, layout.RailWidth, layout.RailNavHeight)
@@ -512,15 +617,13 @@ func (model Model) View() tea.View {
 				footer = ui.PageFooterHints(model.active)
 			}
 		}
-		if layout.Class == ui.Compact {
-			footer += "  ·  " + model.monitor.ViewSummary(model.width)
-		}
-		if label := ui.GlobalStateLabel(model.globalState); label != "" {
-			footer += "  ·  " + label
+		// Compact mode metrics live in the status bar — never append ViewSummary.
+		if segment := model.footerGlobalSegment(); segment != "" {
+			footer += "  ·  " + segment
 		}
 		// Keep the footer on one terminal row so long page shortcuts stay visible.
 		footer = lipgloss.NewStyle().MaxWidth(max(1, model.width)).Render(footer)
-		content = strings.TrimRight(main, "\n") + "\n" + model.theme.Footer.Width(model.width).MaxWidth(model.width).Render(footer)
+		content = status + "\n" + strings.TrimRight(main, "\n") + "\n" + model.theme.Footer.Width(model.width).MaxWidth(model.width).Render(footer)
 	}
 	if model.modal != nil {
 		content = model.modal.View(model.width, model.height)

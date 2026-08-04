@@ -58,14 +58,19 @@ func TestRules_ControlRowActivatesTabsSearchAndFilters(t *testing.T) {
 		{Type: "IP-CIDR", Payload: "1.1.1.0/24", Proxy: "DIRECT"},
 	}})
 	model.FocusFirst()
-	model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	// Down focuses SearchBar; Enter starts text input.
+	model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if model.focus.kind != focusSearch {
+		t.Fatalf("focus=%#v", model.focus)
+	}
 	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !model.searching || command == nil {
 		t.Fatalf("searching=%v command=%v", model.searching, command != nil)
 	}
 	model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
-	model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	// Control strip: Type filter is controlIndex 2 (tabs 0/1, type 2, target 3).
+	model.focus = pageFocus{kind: focusControl}
+	model.controlIndex = 2
 	model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if model.typeFilter != "DOMAIN" || !reflect.DeepEqual(model.VisibleIndexes(), []int{0}) {
 		t.Fatalf("type=%q indexes=%v", model.typeFilter, model.VisibleIndexes())
@@ -74,6 +79,65 @@ func TestRules_ControlRowActivatesTabsSearchAndFilters(t *testing.T) {
 	model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if model.view != viewProviders {
 		t.Fatalf("view=%d", model.view)
+	}
+}
+
+func TestRules_SearchNotInControlStrip(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSize(100, 24)
+	model.SetRules(protocol.RuleList{Rules: []protocol.Rule{
+		{Type: "DOMAIN", Payload: "one.test", Proxy: "Proxy"},
+	}})
+	view := model.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) < 3 {
+		t.Fatalf("expected strip + search + header, got %d lines: %s", len(lines), view)
+	}
+	control := lines[0]
+	if strings.Contains(control, "Search") || strings.Contains(control, "/ ") {
+		t.Fatalf("control strip must not embed search: %q", control)
+	}
+	for _, want := range []string{"Rules", "Providers", "Type", "Target"} {
+		if !strings.Contains(control, want) {
+			t.Fatalf("control missing %q: %q", want, control)
+		}
+	}
+	if !strings.Contains(lines[1], ui.SearchPlaceholder) && !strings.Contains(lines[1], "/ ") {
+		t.Fatalf("search bar missing: %q", lines[1])
+	}
+}
+
+func TestRules_SearchUsesVisibleColumnsOnly(t *testing.T) {
+	model := New(nil, nil)
+	model.SetRules(protocol.RuleList{Rules: []protocol.Rule{
+		{Type: "DOMAIN", Payload: "match.payload", Proxy: "Proxy"},
+		{Type: "IP-CIDR", Payload: "1.1.1.0/24", Proxy: "DIRECT"},
+	}})
+	model.query = "match.payload"
+	if got := model.VisibleIndexes(); !reflect.DeepEqual(got, []int{0}) {
+		t.Fatalf("payload match indexes=%v", got)
+	}
+	model.query = "DOMAIN"
+	if got := model.VisibleIndexes(); !reflect.DeepEqual(got, []int{0}) {
+		t.Fatalf("type match indexes=%v", got)
+	}
+	model.query = "DIRECT"
+	if got := model.VisibleIndexes(); !reflect.DeepEqual(got, []int{1}) {
+		t.Fatalf("target match indexes=%v", got)
+	}
+	// Providers: match visible columns only.
+	model.view = viewProviders
+	model.SetProviders(protocol.RuleProviderList{Providers: []protocol.RuleProvider{
+		{Name: "OpenAI", Type: "HTTP", Behavior: "Classical", Format: "YamlRule", Status: "Ready", RuleCount: 12},
+		{Name: "GitHub", Type: "File", Behavior: "Domain", Format: "MrsRule", Status: "Idle", RuleCount: 3},
+	}})
+	model.query = "Classical"
+	if got := model.visibleProviderIndexes(); !reflect.DeepEqual(got, []int{0}) {
+		t.Fatalf("behavior match indexes=%v", got)
+	}
+	model.query = "nope"
+	if got := model.visibleProviderIndexes(); len(got) != 0 {
+		t.Fatalf("unexpected match indexes=%v", got)
 	}
 }
 
@@ -88,7 +152,7 @@ func TestView_FocusedRowHighlightOnlyWhenContentFocused(t *testing.T) {
 	model.SetContentFocused(false)
 	for _, line := range strings.Split(model.View(), "\n") {
 		if strings.Contains(line, "two.test") {
-			if !strings.Contains(line, ">") {
+			if !strings.Contains(line, ui.FocusMarker) {
 				t.Fatalf("row marker missing while rail-focused: %q", line)
 			}
 			if strings.Contains(line, "\x1b[") {
@@ -104,7 +168,7 @@ func TestView_FocusedRowHighlightOnlyWhenContentFocused(t *testing.T) {
 			focused = line
 		}
 	}
-	if focused == "" || !strings.Contains(focused, ">") || !strings.Contains(focused, "\x1b[") {
+	if focused == "" || !strings.Contains(focused, ui.FocusMarker) || !strings.Contains(focused, "\x1b[") {
 		t.Fatalf("focused content row missing highlight: %q", focused)
 	}
 }

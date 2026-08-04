@@ -41,16 +41,16 @@ func TestView_FocusedRowHighlightOnlyWhenContentFocused(t *testing.T) {
 
 	model.SetContentFocused(false)
 	railView := model.View()
-	if !strings.Contains(railView, ">") {
+	if !strings.Contains(railView, ui.FocusMarker) {
 		t.Fatalf("row marker missing while rail-focused:\n%s", railView)
 	}
 
 	model.SetContentFocused(true)
 	contentView := model.View()
 	if railView == contentView {
-		t.Fatal("content focus should add row selection styling")
+		t.Fatal("content focus should add row focus styling")
 	}
-	if !strings.Contains(contentView, ">") || !strings.Contains(contentView, "\x1b[") {
+	if !strings.Contains(contentView, ui.FocusMarker) || !strings.Contains(contentView, "\x1b[") {
 		t.Fatalf("focused content row missing highlight:\n%s", contentView)
 	}
 }

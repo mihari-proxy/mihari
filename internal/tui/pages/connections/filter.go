@@ -2,36 +2,24 @@ package connections
 
 import (
 	"slices"
-	"strings"
 
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
 
 const allSources = "All"
 
-func matchesConnection(connection protocol.Connection, query, source string) bool {
+// matchesConnection applies the Source IP chip first, then case-insensitive
+// substring search over currently visible column cell values only.
+func matchesConnection(connection protocol.Connection, query, source string, visibleColumns []string) bool {
 	if source != "" && source != allSources && connection.Metadata.SourceIP != source {
 		return false
 	}
-	query = strings.ToLower(strings.TrimSpace(query))
-	if query == "" {
-		return true
+	cells := make(map[string]string, len(visibleColumns))
+	for _, column := range visibleColumns {
+		cells[column] = columnValue(connection, column)
 	}
-	values := []string{
-		connection.ID, connection.Rule, connection.RulePay, strings.Join(connection.Chains, " "),
-		connection.Metadata.Network, connection.Metadata.Type,
-		connection.Metadata.SourceIP, connection.Metadata.SourcePort,
-		connection.Metadata.DestinationIP, connection.Metadata.DestinationPort,
-		connection.Metadata.Host, connection.Metadata.Process, connection.Metadata.ProcessPath,
-		connection.Metadata.InboundName, connection.Metadata.InboundUser,
-		connection.Metadata.SniffHost, connection.Metadata.RemoteDestination,
-	}
-	for _, value := range values {
-		if strings.Contains(strings.ToLower(value), query) {
-			return true
-		}
-	}
-	return false
+	return ui.MatchVisibleColumns(cells, visibleColumns, query)
 }
 
 func sourceOptions(connections []protocol.Connection) []string {

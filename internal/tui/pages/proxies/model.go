@@ -168,7 +168,7 @@ func (m *Model) View() string {
 		focus := "  "
 		groupFocused := m.focus == (FocusID{Group: group.Name})
 		if groupFocused {
-			focus = "> "
+			focus = ui.FocusMarker
 		}
 		header := fmt.Sprintf("%s%s %s  %s · %d", focus, marker, group.Name, strings.ToUpper(group.Type), len(group.Nodes))
 		switch {
@@ -204,7 +204,7 @@ func (m *Model) renderNode(group protocol.ProxyGroup, node protocol.ProxyNode, w
 	id := FocusID{Group: group.Name, Node: node.Name}
 	focus := "  "
 	if m.focus == id {
-		focus = "> "
+		focus = ui.FocusMarker
 	}
 	selected := " "
 	if group.Now == node.Name {
@@ -222,11 +222,11 @@ func (m *Model) renderNode(group protocol.ProxyGroup, node protocol.ProxyNode, w
 	} else if node.UDP {
 		metadata += " / UDP"
 	}
-	content := fmt.Sprintf("%s%s %s\n%s  %s", focus, selected, node.Name, metadata, renderDelay(m.delays[node.Name]))
+	content := fmt.Sprintf("%s%s %s\n%s  %s", focus, selected, node.Name, metadata, renderDelay(m.theme, m.delays[node.Name]))
 	style := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(width)
 	// Accent the focused node only while content owns keyboard focus.
 	if m.focus == id && m.contentFocused {
-		style = style.BorderForeground(lipgloss.Color("63"))
+		style = style.BorderForeground(m.theme.ColorAccent)
 	}
 	return style.Render(content)
 }
@@ -281,16 +281,40 @@ func (m *Model) testAll() tea.Cmd {
 	return tea.Batch(commands...)
 }
 
-func renderDelay(delay DelayState) string {
+// delayStyle maps latency state onto the theme color ladder.
+// Bands (ms): <100 good, 100–399 mid, ≥400 bad; timeout → DelayBad; untested → Muted; testing → Warning.
+func delayStyle(theme ui.Theme, delay DelayState) lipgloss.Style {
 	switch delay.Kind {
 	case DelayTesting:
-		return ui.TestingLabel
-	case DelayValue:
-		return fmt.Sprintf("%d ms", delay.Milliseconds)
+		return theme.Warning
 	case DelayTimeout:
-		return ui.TimeoutLabel
+		return theme.DelayBad
+	case DelayValue:
+		switch {
+		case delay.Milliseconds < 100:
+			return theme.DelayGood
+		case delay.Milliseconds < 400:
+			return theme.DelayMid
+		default:
+			return theme.DelayBad
+		}
 	default:
-		return ui.MissingValue
+		return theme.Muted
+	}
+}
+
+func renderDelay(theme ui.Theme, delay DelayState) string {
+	style := delayStyle(theme, delay)
+	switch delay.Kind {
+	case DelayTesting:
+		// Static label until the page is wired to a shell clock for SpinnerLabel.
+		return style.Render(ui.TestingLabel)
+	case DelayValue:
+		return style.Render(fmt.Sprintf("%d ms", delay.Milliseconds))
+	case DelayTimeout:
+		return style.Render(ui.TimeoutLabel)
+	default:
+		return style.Render(ui.MissingValue)
 	}
 }
 

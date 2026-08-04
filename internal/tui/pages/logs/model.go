@@ -20,6 +20,7 @@ type focusKind uint8
 
 const (
 	focusControl focusKind = iota
+	focusSearch
 	focusRow
 )
 
@@ -143,39 +144,53 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 				return m, func() tea.Msg { return ui.FocusRailMsg{} }
 			}
 			m.controlIndex--
+		} else if m.focus == focusSearch {
+			return m, func() tea.Msg { return ui.FocusRailMsg{} }
 		}
 		return m, nil
 	case "right":
 		if m.focus == focusControl {
-			m.controlIndex = min(3, m.controlIndex+1)
+			m.controlIndex = min(2, m.controlIndex+1)
 		}
 		return m, nil
 	case "up":
-		if m.focus == focusRow {
+		switch m.focus {
+		case focusRow:
 			m.following = false
 			if m.focused > 0 {
 				m.focused--
 			} else {
-				m.focus = focusControl
+				m.focus = focusSearch
 			}
+		case focusSearch:
+			m.focus = focusControl
 		}
 		return m, nil
 	case "down":
 		entries := m.visibleEntries()
-		if m.focus == focusControl {
+		switch m.focus {
+		case focusControl:
+			m.focus = focusSearch
+		case focusSearch:
 			if len(entries) > 0 {
 				m.focus = focusRow
 				if m.following {
 					m.focused = len(entries) - 1
 				}
 			}
-		} else if m.focused+1 < len(entries) {
-			m.focused++
+		case focusRow:
+			if m.focused+1 < len(entries) {
+				m.focused++
+			}
 		}
 		return m, nil
 	case "enter":
 		if m.focus == focusControl {
 			return m, m.activateControl()
+		}
+		if m.focus == focusSearch {
+			m.searching = true
+			return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputText} }
 		}
 		entries := m.visibleEntries()
 		if m.focused >= 0 && m.focused < len(entries) {
@@ -188,11 +203,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 
 func (m *Model) View() string {
 	level := valueOr(m.level, ui.FilterAllLabel)
-	search := valueOr(m.query, ui.SearchPlaceholder)
-	control := fmt.Sprintf("%s: %s  / %s  %s: %s  %s: %s", ui.LevelLabel, level, search, ui.WrapLabel, onOff(m.wrap), ui.PauseLabel, onOff(m.buffer.Paused()))
-	if m.searching {
-		control += "_"
-	}
+	control := fmt.Sprintf("%s: %s  %s: %s  %s: %s", ui.LevelLabel, level, ui.WrapLabel, onOff(m.wrap), ui.PauseLabel, onOff(m.buffer.Paused()))
 	if unread := m.Unread(); unread > 0 {
 		control += fmt.Sprintf("  %s: %d", ui.UnreadLabel, unread)
 	}
@@ -202,7 +213,13 @@ func (m *Model) View() string {
 	if m.stale {
 		control += "  " + ui.StaleLabel
 	}
-	lines := []string{m.theme.Title.Render(control), fmt.Sprintf("  %-8s  %-7s  %s", ui.TimeLabel, ui.LevelLabel, ui.MessageLabel)}
+	searchFocused := m.searching || m.focus == focusSearch
+	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.width)
+	lines := []string{
+		m.theme.Title.Render(control),
+		searchBar,
+		fmt.Sprintf("  %-8s  %-7s  %s", ui.TimeLabel, ui.LevelLabel, ui.MessageLabel),
+	}
 	entries := m.visibleEntries()
 	if len(entries) == 0 {
 		lines = append(lines, m.theme.Muted.Render(ui.NoMatchingLogs))
@@ -222,12 +239,21 @@ func (m *Model) View() string {
 func (m *Model) visibleEntries() []Entry {
 	entries := m.buffer.Visible()
 	result := make([]Entry, 0, len(entries))
-	query := strings.ToLower(strings.TrimSpace(m.query))
+	visible := []string{"time", "level", "message"}
 	for _, entry := range entries {
 		if m.level != "" && !strings.EqualFold(entry.Log.Level, m.level) {
 			continue
 		}
-		if query != "" && !strings.Contains(strings.ToLower(entry.Log.Message), query) {
+		timestamp := ui.MissingValue
+		if !entry.ObservedAt.IsZero() {
+			timestamp = entry.ObservedAt.Local().Format("15:04:05")
+		}
+		cells := map[string]string{
+			"time":    timestamp,
+			"level":   entry.Log.Level,
+			"message": entry.Log.Message,
+		}
+		if !ui.MatchVisibleColumns(cells, visible, m.query) {
 			continue
 		}
 		result = append(result, entry)
@@ -236,7 +262,7 @@ func (m *Model) visibleEntries() []Entry {
 }
 
 func (m *Model) visibleWindow(count int) (int, int) {
-	rows := max(1, m.height-3)
+	rows := max(1, m.height-4)
 	if count <= rows {
 		return 0, count
 	}
@@ -250,7 +276,7 @@ func (m *Model) visibleWindow(count int) (int, int) {
 func (m *Model) renderEntry(entry Entry, focused bool) []string {
 	marker := "  "
 	if focused {
-		marker = "> "
+		marker = ui.FocusMarker
 	}
 	timestamp := ui.MissingValue
 	if !entry.ObservedAt.IsZero() {
@@ -306,11 +332,8 @@ func (m *Model) activateControl() tea.Cmd {
 		m.level = cycleValue(m.level, []string{"debug", "info", "warning", "warn", "error"})
 		m.reconcileFocus()
 	case 1:
-		m.searching = true
-		return func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputText} }
-	case 2:
 		m.wrap = !m.wrap
-	case 3:
+	case 2:
 		m.togglePause()
 	}
 	return nil
