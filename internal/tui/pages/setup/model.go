@@ -314,7 +314,7 @@ func (m *Model) View() string {
 		mixed, controller, web := m.endpointValues()
 		lines = append(lines, ui.SetupReviewTitle,
 			"Mixed       "+mixed, "Controller  "+controller, "Web         "+web, "",
-			ui.SetupWebGUIUnavailable, "", ui.SetupCompleteHelp)
+			ui.SetupCompleteHelp)
 	}
 	if m.loading {
 		lines = append(lines, "", ui.LoadingLabel)

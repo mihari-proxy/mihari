@@ -12,8 +12,40 @@ import (
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
 
+// drainCmd expands tea.BatchMsg, applies mutation results, and ignores spinner tick sleeps.
+// Returns any leftover non-tick command (e.g. reload after revision conflict).
+func drainCmd(t *testing.T, model *Model, cmd tea.Cmd) tea.Cmd {
+	t.Helper()
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var leftover tea.Cmd
+		for _, child := range batch {
+			if next := drainCmd(t, model, child); next != nil {
+				leftover = next
+			}
+		}
+		return leftover
+	}
+	switch msg.(type) {
+	case startLoadSpinMsg:
+		_, _ = model.Update(msg) // arm spinning; do not follow tea.Tick
+		return nil
+	case loadSpinTickMsg:
+		return nil
+	}
+	updated, next := model.Update(msg)
+	if updated != model {
+		t.Fatalf("model identity changed: %T", updated)
+	}
+	return next
+}
+
 func TestRows_DoNotExposeInternalGenerationOrURL(t *testing.T) {
-	row := rowFrom(protocol.Subscription{ID: "one", Name: "Main", Generation: 42, Cached: true, LastError: "https://example.test/?token=secret"}, false, false, time.Unix(100, 0), "12h")
+	now := time.Unix(100, 0)
+	row := rowFrom(protocol.Subscription{ID: "one", Name: "Main", Generation: 42, Cached: true, LastError: "https://example.test/?token=secret"}, false, "", now, now, "12h")
 	rendered := row.Render(ui.DefaultTheme())
 	for _, forbidden := range []string{"42", "example.test", "token", "secret", "http"} {
 		if strings.Contains(rendered, forbidden) {
@@ -22,31 +54,137 @@ func TestRows_DoNotExposeInternalGenerationOrURL(t *testing.T) {
 	}
 }
 
-func TestRows_RenderActiveCacheAndRefreshStates(t *testing.T) {
+func TestRows_RenderLoadPhases(t *testing.T) {
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	clock := time.Unix(0, 0) // ⠋
 	theme := ui.DefaultTheme()
 	tests := []struct {
 		name         string
 		subscription protocol.Subscription
 		active       bool
-		updating     bool
+		pending      string
 		want         []string
+		banned       []string
 	}{
-		{"ready", protocol.Subscription{Name: "Ready", Enabled: true, AutoRefresh: true, Cached: true, UpdatedAt: now.Add(-time.Hour)}, true, false, []string{"●", "Ready", "Enabled", "Ready", "1h ago", "in 11h"}},
-		{"missing", protocol.Subscription{Name: "Missing", Enabled: true, AutoRefresh: false}, false, false, []string{"Missing", "Manual"}},
-		{"stale", protocol.Subscription{Name: "Stale", Enabled: true, AutoRefresh: true, Cached: true, UpdatedAt: now.Add(-13 * time.Hour)}, false, false, []string{"Stale", "Retry pending"}},
-		{"updating", protocol.Subscription{Name: "Updating", Enabled: true}, false, true, []string{"Updating"}},
-		{"disabled", protocol.Subscription{Name: "Off", Enabled: false, Cached: true}, false, false, []string{"Disabled"}},
+		{
+			name:         "live only when active cached and applied",
+			subscription: protocol.Subscription{Name: "Live", Enabled: true, AutoRefresh: true, Cached: true, UpdatedAt: now.Add(-time.Hour)},
+			active:       true,
+			want:         []string{"●", "Live", "Enabled", ui.LoadLiveState, "1h ago", "in 11h"},
+			banned:       []string{"Ready", "Cached"},
+		},
+		{
+			name:         "cached but not active is not live",
+			subscription: protocol.Subscription{Name: "Standby", Enabled: true, AutoRefresh: true, Cached: true, UpdatedAt: now.Add(-time.Hour)},
+			want:         []string{"Standby", ui.LoadCachedState, "Enabled"},
+			banned:       []string{ui.LoadLiveState, "●"},
+		},
+		{
+			name:         "missing cache",
+			subscription: protocol.Subscription{Name: "Missing", Enabled: true, AutoRefresh: false},
+			want:         []string{ui.LoadMissingState, "Manual"},
+		},
+		{
+			name:         "stale cache",
+			subscription: protocol.Subscription{Name: "Stale", Enabled: true, AutoRefresh: true, Cached: true, UpdatedAt: now.Add(-13 * time.Hour)},
+			want:         []string{ui.LoadStaleState, "Retry pending"},
+			banned:       []string{ui.LoadLiveState},
+		},
+		{
+			name:         "fetching uses braille spinner",
+			subscription: protocol.Subscription{Name: "Updating", Enabled: true},
+			pending:      "refresh",
+			want:         []string{"⠋", ui.LoadFetchingLabel},
+		},
+		{
+			name:         "applying uses braille spinner",
+			subscription: protocol.Subscription{Name: "Activate", Enabled: true, Cached: true, UpdatedAt: now.Add(-time.Hour)},
+			pending:      "use",
+			want:         []string{"⠋", ui.LoadApplyingLabel},
+		},
+		{
+			name:         "failed after last error",
+			subscription: protocol.Subscription{Name: "Broken", Enabled: true, Cached: true, UpdatedAt: now.Add(-time.Hour), LastError: "provider timeout"},
+			active:       true,
+			want:         []string{ui.LoadFailedState},
+			banned:       []string{ui.LoadLiveState},
+		},
+		{
+			name:         "disabled",
+			subscription: protocol.Subscription{Name: "Off", Enabled: false, Cached: true},
+			want:         []string{"Disabled"},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := rowFrom(test.subscription, test.active, test.updating, now, "12h").Render(theme)
+			got := rowFrom(test.subscription, test.active, test.pending, now, clock, "12h").Render(theme)
 			for _, want := range test.want {
 				if !strings.Contains(got, want) {
 					t.Fatalf("row missing %q: %s", want, got)
 				}
 			}
+			for _, banned := range test.banned {
+				if strings.Contains(got, banned) {
+					t.Fatalf("row should not contain %q: %s", banned, got)
+				}
+			}
 		})
+	}
+}
+
+func TestView_LoadHeaderAndLivePhase(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	model := New(nil, nil, func() time.Time { return now })
+	model.SetSubscriptions(protocol.SubscriptionList{
+		ActiveID: "a", GlobalInterval: "12h",
+		Subscriptions: []protocol.Subscription{
+			{ID: "a", Name: "kanata2", Enabled: true, AutoRefresh: true, Cached: true, UpdatedAt: now.Add(-9 * time.Minute)},
+			{ID: "b", Name: "other", Enabled: true, Cached: true, UpdatedAt: now.Add(-time.Hour)},
+		},
+	})
+	view := model.View()
+	for _, want := range []string{ui.LoadLabel, ui.LoadLiveState, ui.LoadCachedState, "kanata2"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, " Cache ") {
+		t.Fatalf("header still uses Cache column:\n%s", view)
+	}
+}
+
+func TestRefreshStartsBrailleLoadSpin(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client, func() string { return "op" }, func() time.Time { return time.Unix(0, 0) })
+	model.SetSubscriptions(protocol.SubscriptionList{Revision: 1, Subscriptions: []protocol.Subscription{
+		{ID: "a", Name: "A", Enabled: true},
+	}})
+	model.focus = pageFocus{kind: focusRow, id: "a"}
+	_, cmd := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if cmd == nil {
+		t.Fatal("expected refresh command batch")
+	}
+	if model.pending["a"] != "refresh" {
+		t.Fatalf("pending=%v", model.pending)
+	}
+	// Apply startLoadSpinMsg from the batch without running the network cmd fully:
+	// drain network result too so pending clears; re-set pending to assert spinner label path.
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok || len(batch) < 2 {
+		t.Fatalf("want batch with work+spin, got %T len=%d", msg, len(batch))
+	}
+	// First child is network work; run it. Second is startLoadSpin.
+	_ = drainCmd(t, model, batch[0])
+	// pending cleared after successful refresh — set pending again to inspect label rendering.
+	model.pending["a"] = "refresh"
+	model.loadSpinClock = time.Unix(0, 0)
+	view := model.View()
+	if !strings.Contains(view, ui.LoadFetchingLabel) {
+		t.Fatalf("view missing fetching label:\n%s", view)
+	}
+	if !strings.Contains(view, "⠋") {
+		t.Fatalf("view missing braille frame:\n%s", view)
 	}
 }
 
@@ -140,7 +278,7 @@ func TestModel_MutationUsesRevisionAndReconcilesTypedResult(t *testing.T) {
 	if command == nil || model.pending["a"] == "" {
 		t.Fatalf("command=%v pending=%v", command != nil, model.pending)
 	}
-	model.Update(command())
+	_ = drainCmd(t, model, command)
 	if client.toggle.IfRevision == nil || *client.toggle.IfRevision != 7 || client.toggle.OperationID != "toggle-1" || model.revision != 8 || model.subscriptions[0].Enabled {
 		t.Fatalf("request=%#v revision=%d subscriptions=%#v", client.toggle, model.revision, model.subscriptions)
 	}
@@ -183,8 +321,7 @@ func TestModel_RefreshFocusedAndConfirmRefreshAll(t *testing.T) {
 	if command == nil || model.pending["a"] != "refresh" {
 		t.Fatalf("r command=%v pending=%v", command != nil, model.pending)
 	}
-	updated, _ := model.Update(command())
-	model = updated.(*Model)
+	_ = drainCmd(t, model, command)
 	if len(client.refreshed) != 1 || client.refreshed[0] != "a" || model.revision != 1 {
 		t.Fatalf("refreshed=%v revision=%d", client.refreshed, model.revision)
 	}
@@ -223,8 +360,7 @@ func TestModel_RefreshFailureShowsProtocolMessage(t *testing.T) {
 	model.SetSubscriptions(protocol.SubscriptionList{Revision: 7, Subscriptions: []protocol.Subscription{{ID: "a", Name: "A"}}})
 	model.focus = pageFocus{kind: focusRow, id: "a"}
 	_, command := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
-	updated, _ := model.Update(command())
-	model = updated.(*Model)
+	_ = drainCmd(t, model, command)
 	if model.lastError != "invalid subscription YAML" {
 		t.Fatalf("lastError=%q", model.lastError)
 	}
@@ -332,11 +468,11 @@ func TestModel_RevisionConflictReloadsAndPreservesFocus(t *testing.T) {
 	model.SetSubscriptions(protocol.SubscriptionList{Revision: 7, Subscriptions: []protocol.Subscription{{ID: "a", Name: "A", Enabled: true}, {ID: "b", Name: "B"}}})
 	model.focus = pageFocus{kind: focusRow, id: "a"}
 	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeySpace})
-	_, reload := model.Update(command())
+	reload := drainCmd(t, model, command)
 	if reload == nil {
 		t.Fatal("revision conflict did not reload")
 	}
-	model.Update(reload())
+	_ = drainCmd(t, model, reload)
 	if model.revision != 9 || model.focus.id != "a" || model.subscriptions[1].ID != "a" {
 		t.Fatalf("revision=%d focus=%#v subscriptions=%#v", model.revision, model.focus, model.subscriptions)
 	}
@@ -402,11 +538,7 @@ func TestModel_EditFormKeepsOpeningRevision(t *testing.T) {
 	model.SetSubscriptions(protocol.SubscriptionList{Revision: 8, Subscriptions: []protocol.Subscription{{ID: "a", Name: "Changed", Enabled: true}}})
 	model.form.index = len(model.form.inputs) - 1
 	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	for _, message := range command().(tea.BatchMsg) {
-		if result := message(); result != nil {
-			model.Update(result)
-		}
-	}
+	_ = drainCmd(t, model, command)
 	if client.update.IfRevision == nil || *client.update.IfRevision != 7 {
 		t.Fatalf("update request=%#v", client.update)
 	}

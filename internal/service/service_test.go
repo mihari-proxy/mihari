@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -75,6 +76,63 @@ func TestManagerInstallStartStopStatus(t *testing.T) {
 	}
 }
 
+func TestManagerReinstallStopUninstallInstallStart(t *testing.T) {
+	fake := &fakeController{status: StatusRunning}
+	manager := New(Options{
+		Executable: "C:\\fake\\mihari.exe",
+		NewController: func(RunFunc, string, []string) (Controller, error) {
+			return fake, nil
+		},
+	})
+	if err := manager.Reinstall(); err != nil {
+		t.Fatal(err)
+	}
+	if fake.stops != 1 || fake.uninstalls != 1 || fake.installs != 1 || fake.starts != 1 {
+		t.Fatalf("stops=%d uninstalls=%d installs=%d starts=%d", fake.stops, fake.uninstalls, fake.installs, fake.starts)
+	}
+}
+
+func TestManagerReinstallWhenNotInstalled(t *testing.T) {
+	// Stop/Uninstall report not-installed; Install/Start must still succeed.
+	step := &reinstallFake{}
+	manager := New(Options{
+		Executable: "C:\\fake\\mihari.exe",
+		NewController: func(RunFunc, string, []string) (Controller, error) {
+			return step, nil
+		},
+	})
+	if err := manager.Reinstall(); err != nil {
+		t.Fatal(err)
+	}
+	if step.installs != 1 || step.starts != 1 {
+		t.Fatalf("installs=%d starts=%d", step.installs, step.starts)
+	}
+}
+
+type reinstallFake struct {
+	installs, starts, stops, uninstalls int
+}
+
+func (f *reinstallFake) Install() error {
+	f.installs++
+	return nil
+}
+func (f *reinstallFake) Uninstall() error {
+	f.uninstalls++
+	return errors.New("service mihari is not installed")
+}
+func (f *reinstallFake) Start() error {
+	f.starts++
+	return nil
+}
+func (f *reinstallFake) Stop() error {
+	f.stops++
+	return errors.New("service mihari is not installed")
+}
+func (f *reinstallFake) Restart() error              { return nil }
+func (f *reinstallFake) Status() (StatusKind, error) { return StatusNotInstalled, nil }
+func (f *reinstallFake) Run() error                  { return nil }
+
 func TestManagerMapsNotInstalled(t *testing.T) {
 	fake := &fakeController{controlErr: errors.New("service mihari is not installed")}
 	manager := New(Options{
@@ -144,6 +202,29 @@ func TestMapServiceErrorStartTimeout(t *testing.T) {
 	}
 	if !strings.Contains(api.Message, "failed to start in time") {
 		t.Fatalf("message=%q", api.Message)
+	}
+}
+
+func TestInstallEnvVarsPinsAbsoluteMIHARI_DATA(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "service-data")
+	t.Setenv("MIHARI_DATA", root)
+	env := installEnvVars()
+	got, ok := env["MIHARI_DATA"]
+	if !ok || got == "" {
+		t.Fatalf("env=%v", env)
+	}
+	if !filepath.IsAbs(got) {
+		t.Fatalf("MIHARI_DATA not absolute: %q", got)
+	}
+	if got != filepath.Clean(root) && got != root {
+		// AbsoluteDataRoot cleans; accept either equal after Abs.
+		want, err := filepath.Abs(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("MIHARI_DATA=%q want=%q", got, want)
+		}
 	}
 }
 

@@ -254,6 +254,32 @@ func TestSetupConfirmsBeforeChangingCompletedEffectiveConfiguration(t *testing.T
 	}
 }
 
+func TestSetupReviewShowsEndpointsWithoutLegacyWebGUIUnavailableCopy(t *testing.T) {
+	model := loadedModel(&fakeClient{status: defaultStatus(false)})
+	model.step = stepReview
+	view := model.View()
+	for _, want := range []string{
+		ui.SetupReviewTitle,
+		"Mixed       127.0.0.1:9190",
+		"Controller  127.0.0.1:9090",
+		"Web         127.0.0.1:9191",
+		ui.SetupCompleteHelp,
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %q in review:\n%s", want, view)
+		}
+	}
+	for _, banned := range []string{
+		"Unavailable in this build",
+		"does not block setup",
+		"Phase 5",
+	} {
+		if strings.Contains(view, banned) {
+			t.Fatalf("review still has legacy Web GUI residual %q:\n%s", banned, view)
+		}
+	}
+}
+
 func defaultStatus(complete bool) protocol.OnboardingStatus {
 	return protocol.OnboardingStatus{Schema: "mihari/v1", Revision: 4, Complete: complete, MixedAddr: "127.0.0.1:9190", ControllerAddr: "127.0.0.1:9090", WebAddr: "127.0.0.1:9191"}
 }

@@ -23,6 +23,7 @@ const (
 	ActionOpenWebGUI              Action = "open-web-gui"
 	ActionServiceInstall          Action = "service-install"
 	ActionServiceUninstall        Action = "service-uninstall"
+	ActionServiceReinstall        Action = "service-reinstall"
 	ActionServiceStart            Action = "service-start"
 	ActionServiceStop             Action = "service-stop"
 	ActionServiceRestart          Action = "service-restart"
@@ -43,6 +44,14 @@ type ActionIntentMsg struct {
 	Impact     string
 	Rollback   string
 	Execute    tea.Cmd
+}
+
+// ActionPendingMsg is delivered to the target page when a confirmed action begins
+// executing, so pages can show row-local progress (braille + note) before the result.
+type ActionPendingMsg struct {
+	Page   PageID
+	Action Action
+	Key    string
 }
 
 type GlobalState string

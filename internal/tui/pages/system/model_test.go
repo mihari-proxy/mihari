@@ -45,6 +45,7 @@ type fakeService struct {
 	starts     int
 	stops      int
 	restarts   int
+	reinstalls int
 	status     service.StatusKind
 	statusErr  error
 	controlErr error
@@ -56,6 +57,10 @@ func (f *fakeService) Install() error {
 }
 func (f *fakeService) Uninstall() error {
 	f.uninstalls++
+	return f.controlErr
+}
+func (f *fakeService) Reinstall() error {
+	f.reinstalls++
 	return f.controlErr
 }
 func (f *fakeService) Start() error {
@@ -256,7 +261,7 @@ func TestSystemServiceRendersStatusAndActionsWhenControllerPresent(t *testing.T)
 	updated, _ := model.Update(serviceStatusMsg{status: service.StatusRunning, elevated: false})
 	model = updated.(*Model)
 	view := model.View()
-	for _, want := range []string{ui.SystemServiceSectionTitle, ui.ServiceStatusLabel, string(service.StatusRunning), ui.ServiceInstallLabel, ui.ServiceUninstallLabel, ui.ServiceStartLabel, ui.ServiceStopLabel, ui.ServiceRestartLabel, ui.ServiceNeedsElevation} {
+	for _, want := range []string{ui.SystemServiceSectionTitle, ui.ServiceStatusLabel, string(service.StatusRunning), ui.ServiceInstallLabel, ui.ServiceUninstallLabel, ui.ServiceReinstallLabel, ui.ServiceStartLabel, ui.ServiceStopLabel, ui.ServiceRestartLabel, ui.ServiceNeedsElevation} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("missing %q in view=%s", want, view)
 		}
@@ -324,6 +329,43 @@ func TestSystemServiceMutationRequiresElevation(t *testing.T) {
 	}
 	if !strings.Contains(model.View(), ui.ServiceElevationRequired) {
 		t.Fatalf("view=%s", model.View())
+	}
+}
+
+func TestSystemServiceReinstallConfirmsWhenElevated(t *testing.T) {
+	withElevation(t, true)
+	svc := &fakeService{status: service.StatusRunning}
+	model := NewWithService(nil, svc, func() string { return "op" })
+	updated, _ := model.Update(serviceStatusMsg{status: service.StatusRunning, elevated: true})
+	model = updated.(*Model)
+	model.focusID = rowServiceReinstall
+	model.SetContentFocused(true)
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("missing confirmation intent")
+	}
+	intent, ok := command().(ui.ActionIntentMsg)
+	if !ok || intent.Action != ui.ActionServiceReinstall || intent.Title != ui.ServiceReinstallTitle {
+		t.Fatalf("intent=%#v", intent)
+	}
+	// Simulate root ActionPending then execute.
+	updated, spin := model.Update(ui.ActionPendingMsg{Action: ui.ActionServiceReinstall})
+	model = updated.(*Model)
+	if !model.pending || model.pendingRow != rowServiceReinstall || model.pendingNote != ui.ServiceProgressReinstalling {
+		t.Fatalf("pending row=%q note=%q pending=%v", model.pendingRow, model.pendingNote, model.pending)
+	}
+	if spin == nil {
+		t.Fatal("expected row spin cmd")
+	}
+	model.rowSpinClock = time.Unix(0, 0)
+	view := model.View()
+	if !strings.Contains(view, ui.ServiceProgressReinstalling) || !strings.Contains(view, "⠋") {
+		t.Fatalf("view missing in-row braille progress:\n%s", view)
+	}
+	updated, _ = model.Update(intent.Execute())
+	model = updated.(*Model)
+	if svc.reinstalls != 1 || model.pending {
+		t.Fatalf("reinstalls=%d pending=%v", svc.reinstalls, model.pending)
 	}
 }
 
