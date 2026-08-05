@@ -60,7 +60,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 }
 
 func (m *Model) View() string {
-	strip := m.renderSummaryStrip()
+	general := m.renderGeneralBody()
 
 	coreStatus := valueOr(m.snapshot.Core.Status, ui.UnknownLabel)
 	coreVersion := valueOr(m.snapshot.Core.Version, ui.UnknownLabel)
@@ -109,7 +109,7 @@ func (m *Model) View() string {
 	// Do not force another full-width Content box here: the root shell already
 	// sizes the content pane. Re-applying Width(m.width) plus card borders clips
 	// the right edge of every card.
-	var body string
+	generalCard := m.card(ui.OverviewGeneralTitle, general)
 	if m.width >= wideMinWidth {
 		half := m.halfCardInner()
 		row1 := lipgloss.JoinHorizontal(lipgloss.Top,
@@ -120,40 +120,42 @@ func (m *Model) View() string {
 			m.cardAt(ui.SubscriptionCardTitle, subscription, half),
 			m.cardAt(ui.WebGUICardTitle, webGUI, half),
 		)
-		body = lipgloss.JoinVertical(lipgloss.Left,
+		return lipgloss.JoinVertical(lipgloss.Left,
+			generalCard,
 			row1,
 			row2,
 			m.card(ui.MonitorTrafficTitle, traffic),
 			m.card(ui.RecentOperationsTitle, operations),
 		)
-	} else {
-		body = lipgloss.JoinVertical(lipgloss.Left,
-			m.card(ui.CoreCardTitle, core),
-			m.card(ui.ConfigCardTitle, config),
-			m.card(ui.SubscriptionCardTitle, subscription),
-			m.card(ui.WebGUICardTitle, webGUI),
-			m.card(ui.MonitorTrafficTitle, traffic),
-			m.card(ui.RecentOperationsTitle, operations),
-		)
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, strip, body)
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		generalCard,
+		m.card(ui.CoreCardTitle, core),
+		m.card(ui.ConfigCardTitle, config),
+		m.card(ui.SubscriptionCardTitle, subscription),
+		m.card(ui.WebGUICardTitle, webGUI),
+		m.card(ui.MonitorTrafficTitle, traffic),
+		m.card(ui.RecentOperationsTitle, operations),
+	)
 }
 
-// renderSummaryStrip is the top Overview line:
-// Service · Mihari version · SysProxy · TUN
-func (m *Model) renderSummaryStrip() string {
-	parts := []string{
-		fmt.Sprintf("%s  %s", ui.OverviewServiceLabel, formatServiceValue(m.snapshot)),
-		fmt.Sprintf("%s  %s", ui.OverviewMihariLabel, formatMihariVersion(m.snapshot.MihariVersion)),
-		fmt.Sprintf("%s  %s", ui.OverviewSysProxyLabel, formatSysProxyValue(m.snapshot)),
-		fmt.Sprintf("%s  %s", ui.OverviewTunLabel, formatTunValue(m.snapshot)),
+// renderGeneralBody is the General card content: Service / Mihari / SysProxy / TUN.
+func (m *Model) renderGeneralBody() string {
+	// Two-column-ish label layout for readability inside the bordered card.
+	rows := []struct{ label, value string }{
+		{ui.OverviewServiceLabel, formatServiceValue(m.snapshot)},
+		{ui.OverviewMihariLabel, formatMihariVersion(m.snapshot.MihariVersion)},
+		{ui.OverviewSysProxyLabel, formatSysProxyValue(m.snapshot)},
+		{ui.OverviewTunLabel, formatTunValue(m.snapshot)},
 	}
-	line := strings.Join(parts, "  ·  ")
-	style := lipgloss.NewStyle().Foreground(m.theme.ColorMuted)
-	if m.width > 0 {
-		return style.MaxWidth(m.width).Render(line)
+	const labelWidth = 9 // longest label "SysProxy"
+	lines := make([]string, 0, len(rows))
+	for _, row := range rows {
+		label := row.label + strings.Repeat(" ", max(0, labelWidth-len(row.label)))
+		lines = append(lines, label+"  "+row.value)
 	}
-	return style.Render(line)
+	return strings.Join(lines, "\n")
 }
 
 func formatServiceValue(snap Snapshot) string {
@@ -260,13 +262,9 @@ func (m *Model) card(title, body string) string {
 }
 
 func (m *Model) cardAt(title, body string, inner int) string {
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.theme.ColorSurfaceBorder).
-		Padding(0, 1).
-		Width(inner).
-		MaxWidth(inner).
-		Render(m.theme.Title.Render(title) + "\n" + body)
+	// Title sits in the top border edge: ╭─── Name ────────╮
+	// `inner` matches the previous lipgloss content Width (padding included).
+	return ui.RenderBorderedSection(m.theme, title, body, inner)
 }
 
 func valueOr(value, fallback string) string {
