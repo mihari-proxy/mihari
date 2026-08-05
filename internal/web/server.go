@@ -169,11 +169,21 @@ func (s *Server) handler() http.Handler {
 		}
 
 		// One-shot open token: set cookie and redirect stripping token from URL.
+		// Bare root open lands on the panel setup deep-link so backends point at
+		// the gateway (same-origin), not the panel default controller port.
 		if token := r.URL.Query().Get("token"); token != "" && s.Auth.matchesWeb(token) {
 			s.Auth.SetSessionCookie(w)
 			q := r.URL.Query()
 			q.Del("token")
-			redirect := r.URL.Path
+			path := r.URL.Path
+			if path == "" {
+				path = "/"
+			}
+			if path == "/" && q.Encode() == "" {
+				http.Redirect(w, r, s.panelSetupPath(r), http.StatusFound)
+				return
+			}
+			redirect := path
 			if encoded := q.Encode(); encoded != "" {
 				redirect += "?" + encoded
 			}
@@ -237,8 +247,8 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Auth.SetSessionCookie(w)
 		next := r.FormValue("next")
-		if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
-			next = "/"
+		if next == "" || next == "/" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
+			next = s.panelSetupPath(r)
 		}
 		http.Redirect(w, r, next, http.StatusFound)
 	default:
@@ -247,15 +257,21 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, s.panelSetupPath(r), http.StatusFound)
+}
+
+// panelSetupPath returns the active panel's same-origin setup deep-link for r.Host.
+func (s *Server) panelSetupPath(r *http.Request) string {
 	host := r.Host
 	if host == "" {
 		host = s.ListenAddr()
 	}
-	setup := "/"
 	if s.Panel != nil {
-		setup = s.Panel.SetupPath(host)
+		if setup := s.Panel.SetupPath(host); setup != "" {
+			return setup
+		}
 	}
-	http.Redirect(w, r, setup, http.StatusFound)
+	return "/"
 }
 
 func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
