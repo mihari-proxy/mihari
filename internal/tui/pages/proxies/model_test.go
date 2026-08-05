@@ -275,3 +275,81 @@ func (c *fakeClient) DelayProxy(_ context.Context, name string, _ protocol.Delay
 	}
 	return protocol.DelayResult{Schema: "mihari/v1", Delays: map[string]uint16{name: c.delay}}, nil
 }
+
+func TestView_GroupWrappedInBorderedSection(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSize(80, 24)
+	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{
+		Name: "GLOBAL", Type: "Selector", Now: "node-a",
+		Nodes: []protocol.ProxyNode{{Name: "node-a", Type: "VLESS"}},
+	}}})
+	view := model.View()
+	if !strings.Contains(view, "╭") || !strings.Contains(view, "╰") {
+		t.Fatalf("missing section border:\n%s", view)
+	}
+	if !strings.Contains(view, "GLOBAL") || !strings.Contains(view, "SELECTOR") {
+		t.Fatalf("missing title metadata:\n%s", view)
+	}
+	title := ui.FormatProxyGroupTitle("GLOBAL", "Selector", 1)
+	if !strings.Contains(view, title) {
+		t.Fatalf("missing group title %q in:\n%s", title, view)
+	}
+	if !strings.Contains(view, "Now:") {
+		t.Fatalf("missing Now: body field:\n%s", view)
+	}
+}
+
+func TestView_ExpandedNodesInsideSection(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSize(80, 24)
+	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{
+		Name: "GLOBAL", Type: "Selector", Now: "node-a",
+		Nodes: []protocol.ProxyNode{{Name: "node-a", Type: "VLESS"}},
+	}}})
+	model.expanded["GLOBAL"] = true
+	view := model.View()
+	plain := stripProxyANSI(view)
+	top := strings.Index(plain, "╭")
+	bottom := strings.LastIndex(plain, "╰")
+	if top < 0 || bottom < 0 || bottom <= top {
+		t.Fatalf("section borders missing:\n%s", plain)
+	}
+	block := plain[top : bottom+1]
+	if !strings.Contains(block, "node-a") {
+		t.Fatalf("node not inside section:\n%s", block)
+	}
+	if !strings.Contains(block, "VLESS") {
+		t.Fatalf("node type not inside section:\n%s", block)
+	}
+}
+
+func TestView_EmptyGroupsInSection(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSize(80, 24)
+	view := model.View()
+	if !strings.Contains(view, "╭") || !strings.Contains(view, "╰") {
+		t.Fatalf("empty state missing section border:\n%s", view)
+	}
+	if !strings.Contains(view, ui.ProxiesSectionTitle) {
+		t.Fatalf("empty state missing Proxies title:\n%s", view)
+	}
+	if !strings.Contains(view, ui.NoProxyGroups) {
+		t.Fatalf("empty state missing empty message:\n%s", view)
+	}
+}
+
+func stripProxyANSI(value string) string {
+	var builder strings.Builder
+	inEscape := false
+	for _, r := range value {
+		switch {
+		case r == '\x1b':
+			inEscape = true
+		case inEscape && ((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z')):
+			inEscape = false
+		case !inEscape:
+			builder.WriteRune(r)
+		}
+	}
+	return builder.String()
+}

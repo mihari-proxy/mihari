@@ -12,7 +12,8 @@ import (
 
 func TestNavigation_GroupAndNodeArrowRules(t *testing.T) {
 	model := New(nil, nil)
-	model.SetSize(56, 20)
+	// Width must leave section text width >= 2*proxyBarMaxWidth for a 2-column node grid.
+	model.SetSize(80, 20)
 	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{
 		{Name: "A", Nodes: []protocol.ProxyNode{{Name: "one"}, {Name: "two"}, {Name: "three"}}},
 		{Name: "B", Nodes: []protocol.ProxyNode{{Name: "four"}}},
