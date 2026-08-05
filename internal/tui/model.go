@@ -602,9 +602,22 @@ func (model Model) updateRail(key string) (tea.Model, tea.Cmd) {
 	default:
 		return model, nil
 	}
+	prev := model.active
 	model.active = model.rail[model.railIndex]
 	model.focus.Page = model.active
+	if prev != model.active {
+		model.clearSystemDoneIfLeaving(prev)
+	}
 	return model, nil
+}
+
+func (model *Model) clearSystemDoneIfLeaving(prev ui.PageID) {
+	if prev != ui.PageSystem {
+		return
+	}
+	if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
+		page.ClearDone()
+	}
 }
 
 func (model Model) dispatchPage(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -723,25 +736,10 @@ func (model Model) statusBarData() ui.StatusBarData {
 //	Service: not installed | stopped | running | unknown
 //	Daemon:  Connected | Reconnecting | Offline
 //
-// Healthy quiet state (service running + daemon connected) returns empty.
-// Foreground-only setups keep "Service not installed" while connected as a nudge.
+// Always show known dimensions so the corner remains informative (including healthy).
 func (model Model) statusBarRightStatus() string {
 	servicePart := model.serviceRightLabel()
 	daemonPart := model.daemonRightLabel()
-
-	// Fully healthy under service install: no badge noise.
-	if servicePart == ui.StatusServiceRunning && daemonPart == ui.StatusDaemonConnected {
-		return ""
-	}
-	// Connected with no service reading yet → quiet (still establishing).
-	if servicePart == "" && daemonPart == ui.StatusDaemonConnected {
-		return ""
-	}
-	// Connected + not installed: show service nudge only (daemon is fine).
-	if daemonPart == ui.StatusDaemonConnected {
-		return servicePart
-	}
-	// Disconnected / reconnecting: always show both dimensions when known.
 	switch {
 	case servicePart != "" && daemonPart != "":
 		return servicePart + ui.StatusRightJoin + daemonPart

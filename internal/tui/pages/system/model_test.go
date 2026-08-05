@@ -367,6 +367,17 @@ func TestSystemServiceReinstallConfirmsWhenElevated(t *testing.T) {
 	if svc.reinstalls != 1 || model.pending {
 		t.Fatalf("reinstalls=%d pending=%v", svc.reinstalls, model.pending)
 	}
+	if model.doneRow != rowServiceReinstall {
+		t.Fatalf("doneRow=%q", model.doneRow)
+	}
+	view = model.View()
+	if !strings.Contains(view, ui.DoneLabel) {
+		t.Fatalf("view missing Done badge:\n%s", view)
+	}
+	model.ClearDone()
+	if model.doneRow != "" || strings.Contains(model.View(), ui.DoneLabel) {
+		t.Fatalf("ClearDone left sticky badge: doneRow=%q", model.doneRow)
+	}
 }
 
 func TestSystemServiceInstallConfirmsAndExecutesWhenElevated(t *testing.T) {

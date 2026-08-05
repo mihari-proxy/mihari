@@ -12,6 +12,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/elevate"
 	"github.com/LeeShunEE/mihari/internal/service"
@@ -184,6 +185,7 @@ type Model struct {
 	pending           bool
 	pendingRow        string // row id showing in-row braille progress
 	pendingNote       string // short status text next to the row (e.g. Installing)
+	doneRow           string // sticky success row; cleared on page leave or re-run
 	rowSpinClock      time.Time
 	rowSpinning       bool
 	rowSpinGen        uint64
@@ -387,6 +389,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.pending = true
 		return m, m.runAction(typed)
 	case actionResultMsg:
+		rowID := m.pendingRow
 		m.clearRowPending()
 		if typed.err != nil {
 			var apiError protocol.APIError
@@ -398,18 +401,21 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, m.rowSpinCmdIfNeeded()
 		}
 		m.lastError = ""
+		m.markRowDone(rowID)
 		revision := typed.restart.Revision
 		if typed.kind == actionUpdate {
 			revision = typed.install.Revision
 		}
 		return m, tea.Batch(m.Load(), m.loadCore(), func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: revision} }, m.rowSpinCmdIfNeeded())
 	case serviceResultMsg:
+		rowID := m.pendingRow
 		m.clearRowPending()
 		if typed.err != nil {
 			m.lastError = serviceErrorMessage(typed.err)
 			return m, tea.Batch(m.loadServiceStatus(), m.rowSpinCmdIfNeeded())
 		}
 		m.lastError = ""
+		m.markRowDone(rowID)
 		return m, tea.Batch(m.loadServiceStatus(), m.rowSpinCmdIfNeeded())
 	case systemProxyActionResultMsg:
 		return m.handleSystemProxyActionResult(typed)
@@ -485,6 +491,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 }
 
 func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) (ui.Page, tea.Cmd) {
+	rowID := m.pendingRow
 	m.clearRowPending()
 	if typed.err != nil {
 		var apiError protocol.APIError
@@ -504,6 +511,7 @@ func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) 
 		return m, tea.Batch(m.loadSystemProxy(), m.rowSpinCmdIfNeeded())
 	}
 	m.lastError = ""
+	m.markRowDone(rowID)
 	m.systemProxy = typed.status
 	m.systemProxyLoaded = true
 	return m, tea.Batch(m.loadSystemProxy(), func() tea.Msg {
@@ -512,6 +520,7 @@ func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) 
 }
 
 func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cmd) {
+	rowID := m.pendingRow
 	m.clearRowPending()
 	if typed.err != nil {
 		var apiError protocol.APIError
@@ -523,6 +532,7 @@ func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cm
 		return m, tea.Batch(m.loadTun(), m.rowSpinCmdIfNeeded())
 	}
 	m.lastError = ""
+	m.markRowDone(rowID)
 	m.tun = typed.status
 	m.tunLoaded = true
 	return m, tea.Batch(m.loadTun(), func() tea.Msg {
@@ -556,9 +566,13 @@ func (m *Model) View() string {
 			marker = ui.FocusMarker
 		}
 		value := item.value
-		if m.pending && m.pendingRow == item.id && m.pendingNote != "" {
+		switch {
+		case m.pending && m.pendingRow == item.id && m.pendingNote != "":
 			// Prefer in-row braille + status note over static value while work runs.
 			value = m.theme.Warning.Render(ui.SpinnerLabel(clock, m.pendingNote))
+		case m.doneRow == item.id:
+			// Sticky green Done until page leave or another action starts.
+			value = m.doneBadge()
 		}
 		if value != "" {
 			value = "  " + value
@@ -789,12 +803,34 @@ func (m *Model) beginRowPending(action ui.Action) {
 	m.pending = true
 	m.pendingRow = rowID
 	m.pendingNote = note
+	m.doneRow = "" // new run replaces any sticky Done
 }
 
 func (m *Model) clearRowPending() {
 	m.pending = false
 	m.pendingRow = ""
 	m.pendingNote = ""
+}
+
+func (m *Model) markRowDone(rowID string) {
+	if rowID == "" {
+		return
+	}
+	m.doneRow = rowID
+}
+
+// ClearDone drops sticky success badges (call when leaving the System page).
+func (m *Model) ClearDone() {
+	m.doneRow = ""
+}
+
+func (m *Model) doneBadge() string {
+	// Green background pill so completion is obvious next to the action label.
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color("0")).
+		Background(m.theme.ColorSuccess).
+		Padding(0, 1).
+		Render(ui.DoneLabel)
 }
 
 func (m *Model) rowSpinCmdIfNeeded() tea.Cmd {
