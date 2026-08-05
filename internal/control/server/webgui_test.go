@@ -52,7 +52,9 @@ func (f *panelFakeRuntime) RollbackPanel(_ context.Context, op runtimeapi.Operat
 	f.snapshot.Revision++
 	return nil
 }
-func (f *panelFakeRuntime) OpenWebGUI(context.Context) (string, error) { return f.openURL, nil }
+func (f *panelFakeRuntime) OpenWebGUI(_ context.Context, panelID string) (string, string, error) {
+	return f.openURL, panelID, nil
+}
 
 func TestWebGUIAndPanelRoutesSecretFreeAndMutate(t *testing.T) {
 	fake := &panelFakeRuntime{

@@ -48,6 +48,12 @@ func InstallFromZip(request InstallRequest) (string, error) {
 		_ = os.RemoveAll(stagingDir)
 		return "", err
 	}
+	// GitHub zipballs wrap contents in a single top-level directory; hoist so the
+	// build root itself is servable (index.html at web/{panel}/{build}/).
+	if err := hoistSingleRootDir(stagingDir); err != nil {
+		_ = os.RemoveAll(stagingDir)
+		return "", fmt.Errorf("normalize panel archive root: %w", err)
+	}
 
 	finalDir := PanelBuildDir(request.WebRoot, request.PanelID, request.Build)
 	if err := os.MkdirAll(filepath.Dir(finalDir), 0o700); err != nil {

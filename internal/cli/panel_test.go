@@ -24,9 +24,10 @@ type fakePanelClient struct {
 func (f *fakePanelClient) WebGUI(context.Context) (protocol.WebGUIStatus, error) {
 	return protocol.WebGUIStatus{Schema: "mihari/v1", GatewayAddr: "127.0.0.1:9191", GatewayHealth: "healthy"}, nil
 }
-func (f *fakePanelClient) OpenWebGUI(context.Context) (protocol.WebGUIOpenResult, error) {
+func (f *fakePanelClient) OpenWebGUI(_ context.Context, panelID string) (protocol.WebGUIOpenResult, error) {
 	f.opened++
-	return protocol.WebGUIOpenResult{Schema: "mihari/v1", OpenURL: f.openURL}, nil
+	f.lastID = panelID
+	return protocol.WebGUIOpenResult{Schema: "mihari/v1", OpenURL: f.openURL, Panel: panelID}, nil
 }
 func (f *fakePanelClient) Panels(context.Context) (protocol.PanelList, error) {
 	return f.list, nil
@@ -95,7 +96,7 @@ func TestPanelMutationsAndRollbackRequiresYes(t *testing.T) {
 }
 
 func TestPanelOpenDoesNotPrintToken(t *testing.T) {
-	client := &fakePanelClient{openURL: "http://127.0.0.1:9191/?token=super-secret-web-token"}
+	client := &fakePanelClient{openURL: "http://127.0.0.1:9191/__mihari/panels/zashboard/?token=super-secret-web-token"}
 	var opened string
 	deps := Dependencies{
 		PanelClient: client,
@@ -110,9 +111,9 @@ func TestPanelOpenDoesNotPrintToken(t *testing.T) {
 		t.Fatalf("human open printed token: %s", stdout)
 	}
 	stdout.Reset()
-	exit = Execute(context.Background(), []string{"panel", "open", "--json"}, stdout, stderr, deps)
-	if exit != ExitOK || !strings.Contains(stdout.String(), `"opened":true`) {
-		t.Fatalf("json exit=%d stdout=%q", exit, stdout)
+	exit = Execute(context.Background(), []string{"panel", "open", "metacubexd", "--json"}, stdout, stderr, deps)
+	if exit != ExitOK || !strings.Contains(stdout.String(), `"opened":true`) || client.lastID != "metacubexd" {
+		t.Fatalf("json exit=%d stdout=%q lastID=%s", exit, stdout, client.lastID)
 	}
 	if strings.Contains(stdout.String(), "token") || strings.Contains(stdout.String(), "super-secret") {
 		t.Fatalf("json open printed token: %s", stdout)
