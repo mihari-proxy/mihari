@@ -74,6 +74,14 @@ func defaultDataRoot() string {
 			return filepath.Join(home, ".local", "share", "mihari")
 		}
 	}
+	// Windows: ProgramData so LocalSystem service and interactive TUI/CLI share state.
+	// UserConfigDir under LocalSystem is the systemprofile hive and diverges from the desktop user.
+	if runtime.GOOS == "windows" {
+		if root := os.Getenv("ProgramData"); root != "" {
+			return filepath.Join(root, "mihari")
+		}
+		return filepath.Join(`C:\ProgramData`, "mihari")
+	}
 	if root, err := os.UserConfigDir(); err == nil {
 		return filepath.Join(root, "mihari")
 	}
