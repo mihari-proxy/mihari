@@ -231,7 +231,7 @@ func (s *Server) handler() http.Handler {
 
 		action := ClassifyUpgrade(r.Method, r.URL.Path, isUpgradeRequest(r))
 		switch action {
-		case ActionProxyRead:
+		case ActionProxyRead, ActionProxyStorage:
 			s.Proxy.ServeHTTP(w, r)
 			return
 		case ActionProxyWS:
