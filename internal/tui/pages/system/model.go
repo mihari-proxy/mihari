@@ -252,6 +252,13 @@ func (m *Model) SetContentFocused(focused bool) { m.contentFocused = focused }
 
 func (m *Model) SetSize(width, height int) { m.width, m.height = width, height }
 
+func (m *Model) layoutWidth() int {
+	if m.width > 0 {
+		return m.width
+	}
+	return 100
+}
+
 func (m *Model) FocusFirst() {
 	if m.rowIndex(m.focusID) < 0 {
 		m.focusID = rowDaemon
@@ -575,26 +582,27 @@ func (m *Model) View() string {
 			m.theme.Title.Render(m.detail.label+" details") + "\n\n" + m.detail.detail + "\n\n" + ui.EscCloseHint,
 		)
 	}
-	lines := []string{m.theme.Title.Render(ui.SystemTitle)}
-	// Pin failure reason under the title so Content.Height cannot clip it away.
+	inner := ui.FullSectionInner(m.layoutWidth())
+	var parts []string
+	// Pin failure reason at the top so it is not clipped away.
 	if detail := m.visibleErrorDetail(); detail != "" {
-		lines = append(lines, m.theme.Danger.Render(detail), "")
-	} else {
-		lines = append(lines, "")
+		parts = append(parts, m.theme.Danger.Render(detail))
 	}
-	section := ""
 	clock := m.rowSpinClock
 	if clock.IsZero() {
 		clock = time.Unix(0, 0)
 	}
+	// Group rows into bordered sections by item.section.
+	type sectionBuf struct {
+		title string
+		lines []string
+	}
+	var sections []sectionBuf
 	for _, item := range m.rows() {
-		if item.section != section {
-			section = item.section
-			if len(lines) > 2 {
-				lines = append(lines, "")
-			}
-			lines = append(lines, m.theme.TableHeader.Render(section))
+		if len(sections) == 0 || sections[len(sections)-1].title != item.section {
+			sections = append(sections, sectionBuf{title: item.section})
 		}
+		idx := len(sections) - 1
 		marker := "  "
 		rowFocused := item.id == m.focusID
 		if rowFocused {
@@ -624,9 +632,16 @@ func (m *Model) View() string {
 		if rowFocused && m.contentFocused {
 			line = m.theme.RowFocus.Render(line)
 		}
-		lines = append(lines, line)
+		sections[idx].lines = append(sections[idx].lines, line)
 	}
-	return m.theme.Content.Width(m.width).Height(m.height).Render(strings.Join(lines, "\n"))
+	for _, sec := range sections {
+		body := strings.Join(sec.lines, "\n")
+		if body == "" {
+			body = " "
+		}
+		parts = append(parts, ui.RenderBorderedSection(m.theme, sec.title, body, inner))
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (m *Model) rows() []row {

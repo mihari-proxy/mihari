@@ -403,11 +403,11 @@ func TestSystemServiceUninstallFailureShowsStickyFailed(t *testing.T) {
 	if model.outcomeDetail == "" {
 		t.Fatal("expected outcomeDetail reason")
 	}
-	// Reason must appear near the top (under title), not only below the fold.
-	titleIdx := strings.Index(view, ui.SystemTitle)
+	// Reason must appear near the top (before the first bordered section), not only below the fold.
 	detailIdx := strings.Index(view, model.outcomeDetail)
-	if titleIdx < 0 || detailIdx < 0 || detailIdx < titleIdx {
-		t.Fatalf("failure reason not pinned under title:\n%s", view)
+	sectionIdx := strings.Index(view, "╭")
+	if detailIdx < 0 || sectionIdx < 0 || detailIdx > sectionIdx {
+		t.Fatalf("failure reason not pinned above sections:\n%s", view)
 	}
 }
 

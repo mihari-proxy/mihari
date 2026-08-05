@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 
 	lipgloss "charm.land/lipgloss/v2"
@@ -67,6 +68,12 @@ func FormatSubscriptionsTitle(n int) string {
 // padding of 1), matching the previous lipgloss Width() for these cards.
 // Outer visual width is contentWidth+2 (left/right border runes).
 func RenderBorderedSection(theme Theme, title, body string, contentWidth int) string {
+	return RenderBorderedSectionWithBorder(theme, title, body, contentWidth, theme.ColorSurfaceBorder)
+}
+
+// RenderBorderedSectionWithBorder is RenderBorderedSection with an explicit border color
+// (e.g. ColorAccent for a focused Web GUI panel).
+func RenderBorderedSectionWithBorder(theme Theme, title, body string, contentWidth int, borderColor color.Color) string {
 	if contentWidth < 8 {
 		contentWidth = 8
 	}
@@ -74,7 +81,7 @@ func RenderBorderedSection(theme Theme, title, body string, contentWidth int) st
 	pad := 1
 	textWidth := max(1, contentWidth-pad*2)
 
-	borderFG := lipgloss.NewStyle().Foreground(theme.ColorSurfaceBorder)
+	borderFG := lipgloss.NewStyle().Foreground(borderColor)
 	titleStyled := theme.Title.Render(strings.TrimSpace(title))
 
 	top := renderTopBorder(borderFG, titleStyled, outer)

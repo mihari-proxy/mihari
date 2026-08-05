@@ -232,20 +232,18 @@ func TestView_FocusedSubscriptionRowIsHighlightedOnlyWhenContentFocused(t *testi
 	model.focus = pageFocus{kind: focusRow, id: "b"}
 
 	model.SetContentFocused(false)
-	view := model.View()
-	for _, line := range strings.Split(view, "\n") {
-		if strings.Contains(line, "Beta") {
-			if !strings.Contains(line, ui.FocusMarker) {
-				t.Fatalf("row marker missing while rail-focused: %q", line)
-			}
-			if strings.Contains(line, "\x1b[") {
-				t.Fatalf("row should not use accent while rail owns focus: %q", line)
-			}
+	railView := model.View()
+	for _, line := range strings.Split(railView, "\n") {
+		if strings.Contains(line, "Beta") && !strings.Contains(line, ui.FocusMarker) {
+			t.Fatalf("row marker missing while rail-focused: %q", line)
 		}
 	}
 
 	model.SetContentFocused(true)
-	view = model.View()
+	view := model.View()
+	if view == railView {
+		t.Fatal("content focus should change focused row styling")
+	}
 	var focused, other string
 	for _, line := range strings.Split(view, "\n") {
 		switch {
@@ -258,11 +256,25 @@ func TestView_FocusedSubscriptionRowIsHighlightedOnlyWhenContentFocused(t *testi
 	if focused == "" || other == "" {
 		t.Fatalf("missing rows in view:\n%s", view)
 	}
-	if !strings.Contains(focused, ui.FocusMarker) || !strings.Contains(focused, "\x1b[") {
-		t.Fatalf("focused content row missing color highlight: %q", focused)
+	if !strings.Contains(focused, ui.FocusMarker) {
+		t.Fatalf("focused content row missing marker: %q", focused)
 	}
-	if strings.Contains(other, "\x1b[") {
-		t.Fatalf("unfocused row unexpectedly styled: %q", other)
+	// RowFocus wraps the focused body; unfocused rows may still have section-border ANSI.
+	// Contract: only the focused row should differ from its rail-focused counterpart.
+	railFocused, railOther := "", ""
+	for _, line := range strings.Split(railView, "\n") {
+		switch {
+		case strings.Contains(line, "Beta"):
+			railFocused = line
+		case strings.Contains(line, "Alpha"):
+			railOther = line
+		}
+	}
+	if focused == railFocused {
+		t.Fatalf("focused row should gain RowFocus styling when content owns focus")
+	}
+	if other != railOther {
+		t.Fatalf("unfocused row should not change with content focus:\n got %q\nwant %q", other, railOther)
 	}
 }
 

@@ -256,6 +256,14 @@ func (m *Model) SetContentFocused(focused bool) { m.contentFocused = focused }
 
 func (m *Model) SetSize(width, height int) { m.width, m.height = width, height }
 
+func (m *Model) layoutWidth() int {
+	if m.width > 0 {
+		return m.width
+	}
+	// Default wide enough for the fixed subscription table header columns.
+	return 120
+}
+
 func (m *Model) FocusFirst() {
 	if len(m.subscriptions) == 0 {
 		m.focus = pageFocus{}
@@ -443,15 +451,13 @@ func (m *Model) FooterHints() string {
 }
 
 func (m *Model) View() string {
-	lines := []string{
-		m.theme.Title.Render(ui.SubscriptionsTitle),
-		"  Active  Name                State      Load         " + ui.TrafficLabel + "              " + ui.LastUpdateLabel + "  " + ui.NextUpdateLabel,
-	}
+	header := "  Active  Name                State      Load         " + ui.TrafficLabel + "              " + ui.LastUpdateLabel + "  " + ui.NextUpdateLabel
+	bodyLines := []string{header}
 	if m.lastError != "" {
-		lines = append(lines, m.theme.Muted.Render(m.lastError))
+		bodyLines = append(bodyLines, m.theme.Muted.Render(m.lastError))
 	}
 	if len(m.subscriptions) == 0 {
-		lines = append(lines, m.theme.Muted.Render(ui.NoSubscriptions))
+		bodyLines = append(bodyLines, m.theme.Muted.Render(ui.NoSubscriptions))
 	}
 	clock := m.loadSpinClock
 	if clock.IsZero() {
@@ -470,15 +476,17 @@ func (m *Model) View() string {
 		if rowFocused && m.contentFocused {
 			line = m.theme.RowFocus.Render(line)
 		}
-		lines = append(lines, line)
+		bodyLines = append(bodyLines, line)
 	}
-	content := strings.Join(lines, "\n")
+	inner := ui.FullSectionInner(m.layoutWidth())
+	title := ui.FormatSubscriptionsTitle(len(m.subscriptions))
+	content := ui.RenderBorderedSection(m.theme, title, strings.Join(bodyLines, "\n"), inner)
 	if m.form != nil {
-		title := ui.AddSubscriptionTitle
+		formTitle := ui.AddSubscriptionTitle
 		if m.form.kind == formEdit {
-			title = ui.EditSubscriptionTitle
+			formTitle = ui.EditSubscriptionTitle
 		}
-		content = m.modal(title, m.form.View()+"\n\n"+ui.FormHelp)
+		content = m.modal(formTitle, m.form.View()+"\n\n"+ui.FormHelp)
 	} else if m.detail != nil {
 		content = m.modal(ui.SubscriptionDetailsTitle, m.detailView())
 	}

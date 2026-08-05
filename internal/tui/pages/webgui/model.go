@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/platform"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
@@ -290,46 +289,49 @@ func (m *Model) openBrowserAction() tea.Cmd {
 	}
 }
 
+func (m *Model) layoutWidth() int {
+	if m.width > 0 {
+		return m.width
+	}
+	return 100
+}
+
 func (m *Model) View() string {
+	inner := ui.FullSectionInner(m.layoutWidth())
 	if !m.available {
-		return m.theme.Content.Width(m.width).Height(m.height).Render(
-			m.theme.Title.Render(ui.WebGUITitle) + "\n\n" + m.theme.Muted.Render(ui.UnavailableTitle+": "+ui.WebGUILifecycleUnavailable),
-		)
+		body := m.theme.Muted.Render(ui.UnavailableTitle + ": " + ui.WebGUILifecycleUnavailable)
+		return ui.RenderBorderedSection(m.theme, ui.WebGUITitle, body, inner)
 	}
 	active := valueOr(m.status.ActivePanel, ui.MissingValue)
 	header := fmt.Sprintf("%s  %s  %s %s  %s %d  %s",
 		valueOr(m.status.GatewayHealth, ui.UnknownLabel), valueOr(m.status.GatewayAddr, ui.MissingValue),
 		ui.ActivePanelLabel, active, ui.BrowserSessionsLabel, m.status.BrowserSessions, ui.OpenBrowserHint)
-	lines := []string{m.theme.Title.Render(ui.WebGUITitle), header, ""}
+	var parts []string
+	parts = append(parts, ui.RenderBorderedSection(m.theme, ui.WebGUITitle, header, inner))
+
 	if len(m.status.Panels) == 0 {
-		lines = append(lines, ui.NoWebGUIPanels)
+		parts = append(parts, ui.RenderBorderedSection(m.theme, "Panels", m.theme.Muted.Render(ui.NoWebGUIPanels), inner))
 	}
 	for index, panel := range m.status.Panels {
 		state := ""
 		if panel.Active {
 			state = "  " + ui.ActiveLabel
 		}
-		// Focus marker sits outside the card so the border is not interrupted.
-		cursor := "  "
 		selected := index == m.selected
+		marker := "  "
 		if selected {
-			cursor = ui.FocusMarker
+			marker = ui.FocusMarker
 		}
-		body := fmt.Sprintf("Installed  %s\nLatest     %s\nHealth     %s\nRollback   %s",
-			valueOr(panel.InstalledBuild, ui.MissingValue), valueOr(panel.LatestBuild, ui.MissingValue),
+		body := fmt.Sprintf("%sInstalled  %s\n  Latest     %s\n  Health     %s\n  Rollback   %s",
+			marker, valueOr(panel.InstalledBuild, ui.MissingValue), valueOr(panel.LatestBuild, ui.MissingValue),
 			valueOr(panel.Health, ui.UnknownLabel), valueOr(panel.RollbackBuild, ui.MissingValue))
+		title := valueOr(panel.Name, panel.ID) + state
 		border := m.theme.ColorSurfaceBorder
 		// Accent the focused panel only while content owns keyboard focus.
 		if selected && m.contentFocused {
 			border = m.theme.ColorAccent
 		}
-		card := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(border).
-			Padding(0, 1).
-			Width(max(28, min(56, m.width-4))).
-			Render(m.theme.Title.Render(valueOr(panel.Name, panel.ID)+state) + "\n" + body)
-		lines = append(lines, cursor+card)
+		parts = append(parts, ui.RenderBorderedSectionWithBorder(m.theme, title, body, inner, border))
 	}
 	safeguards := []string{
 		boolState("Loopback binding", m.status.Safeguards.LoopbackBound),
@@ -337,18 +339,18 @@ func (m *Model) View() string {
 		boolState("Controller isolation", m.status.Safeguards.ControllerIsolated),
 		boolState("Mutation coordinator", m.status.Safeguards.MutationsCoordinated),
 	}
-	lines = append(lines, "", m.theme.Title.Render(ui.GatewaySafeguardsTitle), strings.Join(safeguards, "  "))
+	parts = append(parts, ui.RenderBorderedSection(m.theme, ui.GatewaySafeguardsTitle, strings.Join(safeguards, "  "), inner))
 	if m.lastError != "" {
-		lines = append(lines, "", m.lastError)
+		parts = append(parts, m.lastError)
 	}
 	if m.toast != "" {
-		lines = append(lines, "", m.toast)
+		parts = append(parts, m.toast)
 	}
 	// Never render auth tokens or open URLs.
-	view := m.theme.Content.Width(m.width).Height(m.height).Render(strings.Join(lines, "\n"))
+	view := strings.Join(parts, "\n")
 	lower := strings.ToLower(view)
 	if strings.Contains(lower, "token=") || strings.Contains(lower, "open_url") {
-		return m.theme.Content.Width(m.width).Height(m.height).Render(ui.WebGUITitle + "\n\n" + ui.WebGUIUnavailable)
+		return ui.RenderBorderedSection(m.theme, ui.WebGUITitle, ui.WebGUIUnavailable, inner)
 	}
 	return view
 }
