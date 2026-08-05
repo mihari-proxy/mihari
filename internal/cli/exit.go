@@ -25,7 +25,7 @@ func exitCode(err error) int {
 		return ExitInternal
 	}
 	switch apiError.Code {
-	case protocol.CodeInvalidArgument:
+	case protocol.CodeInvalidArgument, protocol.CodeSystemProxyNotOwned:
 		return ExitUsage
 	case protocol.CodeDaemonUnavailable:
 		return ExitDaemonUnavailable
@@ -33,7 +33,7 @@ func exitCode(err error) int {
 		return ExitInvalidState
 	case protocol.CodePermissionDenied:
 		return ExitPermission
-	case protocol.CodeRevisionConflict:
+	case protocol.CodeRevisionConflict, protocol.CodeSystemProxyConflict:
 		return ExitConflict
 	case protocol.CodeUpstreamFailure:
 		return ExitUpstream

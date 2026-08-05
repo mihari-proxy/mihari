@@ -70,6 +70,7 @@ func main() {
 		RuntimeClient:      localClient,
 		SubscriptionClient: localClient,
 		PanelClient:        localClient,
+		SystemProxyClient:  localClient,
 		ServiceController:  serviceManager,
 		SelfUpdater:        selfUpdater,
 		OpenBrowser:        platform.OpenBrowser,
