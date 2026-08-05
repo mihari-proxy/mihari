@@ -13,6 +13,8 @@ func TestConfirmationPolicy(t *testing.T) {
 		RollbackPanel: true, RestartCore: true, UpdateCore: true, ApplyEndpointChange: true,
 		SelectProxy: false, CloseConnection: false, RefreshSubscription: false, UpdateProvider: false,
 		InstallPanel: false, UpdatePanel: false, ActivatePanel: false, OpenWebGUI: false,
+		ServiceInstall: true, ServiceUninstall: true, ServiceStart: true, ServiceStop: true, ServiceRestart: true,
+		EnableSystemProxy: true, ForceSystemProxy: true, DisableSystemProxy: true, EnableTun: true, DisableTun: true,
 	}
 	for action, required := range want {
 		if got := RequiresConfirmation(action); got != required {
@@ -21,6 +23,14 @@ func TestConfirmationPolicy(t *testing.T) {
 	}
 	if RequiresConfirmation(Action("unknown")) {
 		t.Fatal("unknown action unexpectedly requires confirmation instead of being rejected")
+	}
+	for _, action := range []Action{ServiceInstall, ServiceUninstall, ServiceStart, ServiceStop, ServiceRestart} {
+		if RequiresDaemon(action) {
+			t.Fatalf("%v should not require daemon connection", action)
+		}
+	}
+	if !RequiresDaemon(UpdateCore) {
+		t.Fatal("core update should require daemon connection")
 	}
 }
 

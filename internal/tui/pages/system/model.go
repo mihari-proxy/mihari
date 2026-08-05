@@ -13,25 +13,50 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/LeeShunEE/mihari/internal/elevate"
+	"github.com/LeeShunEE/mihari/internal/service"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
 
 const (
-	rowDaemon      = "daemon"
-	rowCore        = "core"
-	rowCoreUpdate  = "core-update"
-	rowCoreRestart = "core-restart"
-	rowEndpoints   = "endpoints"
-	rowRunSetup    = "run-setup"
-	rowTUN         = "tun"
-	rowService     = "service"
+	rowDaemon           = "daemon"
+	rowCore             = "core"
+	rowCoreUpdate       = "core-update"
+	rowCoreRestart      = "core-restart"
+	rowEndpoints        = "endpoints"
+	rowRunSetup         = "run-setup"
+	rowServiceStatus    = "service-status"
+	rowServiceInstall   = "service-install"
+	rowServiceUninstall = "service-uninstall"
+	rowServiceStart     = "service-start"
+	rowServiceStop      = "service-stop"
+	rowServiceRestart   = "service-restart"
+	rowSystemProxy      = "system-proxy"
+	rowTUN              = "tun"
 )
 
+// Client is the daemon control surface used by System page actions.
 type Client interface {
 	Onboarding(context.Context) (protocol.OnboardingStatus, error)
 	Core(context.Context) (protocol.CoreStatus, error)
 	InstallCore(context.Context, protocol.MutationRequest) (protocol.CoreInstallResult, error)
 	RestartCore(context.Context, protocol.MutationRequest) (protocol.MutationResult, error)
+	SystemProxy(context.Context) (protocol.SystemProxyStatus, error)
+	EnableSystemProxy(context.Context, protocol.SystemProxyMutationRequest) (protocol.SystemProxyStatus, error)
+	DisableSystemProxy(context.Context, protocol.SystemProxyMutationRequest) (protocol.SystemProxyStatus, error)
+	Tun(context.Context) (protocol.TunStatus, error)
+	EnableTun(context.Context, protocol.TunMutationRequest) (protocol.TunStatus, error)
+	DisableTun(context.Context, protocol.TunMutationRequest) (protocol.TunStatus, error)
+}
+
+// ServiceController is the local OS service manager surface (not daemon IPC).
+type ServiceController interface {
+	Install() error
+	Uninstall() error
+	Start() error
+	Stop() error
+	Restart() error
+	Status() (service.StatusKind, error)
 }
 
 type row struct {
@@ -47,11 +72,69 @@ type onboardingResultMsg struct {
 	err    error
 }
 
+type serviceStatusMsg struct {
+	status   service.StatusKind
+	elevated bool
+	err      error
+}
+
+type serviceResultMsg struct {
+	kind serviceActionKind
+	err  error
+}
+
+type systemProxyStatusMsg struct {
+	status protocol.SystemProxyStatus
+	err    error
+}
+
+type systemProxyActionResultMsg struct {
+	kind   proxyActionKind
+	status protocol.SystemProxyStatus
+	err    error
+}
+
+type tunStatusMsg struct {
+	status protocol.TunStatus
+	err    error
+}
+
+type tunActionResultMsg struct {
+	kind   tunActionKind
+	status protocol.TunStatus
+	err    error
+}
+
 type actionKind uint8
 
 const (
 	actionUpdate actionKind = iota
 	actionRestart
+)
+
+type serviceActionKind uint8
+
+const (
+	serviceInstall serviceActionKind = iota
+	serviceUninstall
+	serviceStart
+	serviceStop
+	serviceRestart
+)
+
+type proxyActionKind uint8
+
+const (
+	proxyEnable proxyActionKind = iota
+	proxyForceEnable
+	proxyDisable
+)
+
+type tunActionKind uint8
+
+const (
+	tunEnable tunActionKind = iota
+	tunDisable
 )
 
 type actionStartMsg struct {
@@ -67,36 +150,64 @@ type actionResultMsg struct {
 	err     error
 }
 
+// Model is the System page.
 type Model struct {
-	ctx              context.Context
-	client           Client
-	newOperationID   func() string
-	status           protocol.Status
-	core             protocol.CoreStatus
-	onboarding       protocol.OnboardingStatus
-	focusID          string
-	detail           *row
-	pending          bool
-	mutationsEnabled bool
-	lastError        string
-	contentFocused   bool
-	width            int
-	height           int
-	theme            ui.Theme
+	ctx               context.Context
+	client            Client
+	service           ServiceController
+	newOperationID    func() string
+	status            protocol.Status
+	core              protocol.CoreStatus
+	onboarding        protocol.OnboardingStatus
+	systemProxy       protocol.SystemProxyStatus
+	systemProxyLoaded bool
+	tun               protocol.TunStatus
+	tunLoaded         bool
+	serviceStatus     service.StatusKind
+	serviceLoaded     bool
+	elevated          bool
+	focusID           string
+	detail            *row
+	pending           bool
+	mutationsEnabled  bool
+	lastError         string
+	contentFocused    bool
+	width             int
+	height            int
+	theme             ui.Theme
 }
 
+// New constructs a System page without a service controller.
 func New(client Client, newOperationID func() string) *Model {
-	return NewWithContext(context.Background(), client, newOperationID)
+	return NewWithService(client, nil, newOperationID)
 }
 
-func NewWithContext(ctx context.Context, client Client, newOperationID func() string) *Model {
+// NewWithService constructs a System page with optional local service control.
+func NewWithService(client Client, svc ServiceController, newOperationID func() string) *Model {
+	return NewWithContext(context.Background(), client, svc, newOperationID)
+}
+
+// NewWithContext constructs a System page bound to ctx.
+func NewWithContext(ctx context.Context, client Client, svc ServiceController, newOperationID func() string) *Model {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if newOperationID == nil {
 		newOperationID = defaultOperationID
 	}
-	return &Model{ctx: ctx, client: client, newOperationID: newOperationID, focusID: rowDaemon, theme: ui.DefaultTheme()}
+	return &Model{
+		ctx:            ctx,
+		client:         client,
+		service:        svc,
+		newOperationID: newOperationID,
+		focusID:        rowDaemon,
+		theme:          ui.DefaultTheme(),
+	}
+}
+
+// SetServiceController injects or replaces the OS service controller.
+func (m *Model) SetServiceController(svc ServiceController) {
+	m.service = svc
 }
 
 func (m *Model) ID() ui.PageID { return ui.PageSystem }
@@ -118,15 +229,66 @@ func (m *Model) SetSnapshot(status protocol.Status, core protocol.CoreStatus) {
 
 func (m *Model) SetOnboarding(status protocol.OnboardingStatus) { m.onboarding = status }
 
+// SetSystemProxy injects system-proxy status (tests and optional external refresh).
+func (m *Model) SetSystemProxy(status protocol.SystemProxyStatus) {
+	m.systemProxy = status
+	m.systemProxyLoaded = true
+}
+
+// SetTun injects TUN status (tests and optional external refresh).
+func (m *Model) SetTun(status protocol.TunStatus) {
+	m.tun = status
+	m.tunLoaded = true
+}
+
 func (m *Model) SetMutationsEnabled(enabled bool) { m.mutationsEnabled = enabled }
 
+// Load refreshes onboarding, OS service status, system proxy, and TUN when available.
 func (m *Model) Load() tea.Cmd {
-	if m.client == nil || !m.hasCapability(protocol.CapabilityOnboarding) {
-		return nil
+	var cmds []tea.Cmd
+	if m.client != nil && m.hasCapability(protocol.CapabilityOnboarding) {
+		cmds = append(cmds, func() tea.Msg {
+			status, err := m.client.Onboarding(m.ctx)
+			return onboardingResultMsg{status: status, err: err}
+		})
 	}
+	if m.service != nil {
+		cmds = append(cmds, m.loadServiceStatus())
+	}
+	if m.client != nil && m.hasCapability(protocol.CapabilitySystemProxy) {
+		cmds = append(cmds, m.loadSystemProxy())
+	}
+	if m.client != nil && m.hasCapability(protocol.CapabilityTUN) {
+		cmds = append(cmds, m.loadTun())
+	}
+	switch len(cmds) {
+	case 0:
+		return nil
+	case 1:
+		return cmds[0]
+	default:
+		return tea.Batch(cmds...)
+	}
+}
+
+func (m *Model) loadServiceStatus() tea.Cmd {
 	return func() tea.Msg {
-		status, err := m.client.Onboarding(m.ctx)
-		return onboardingResultMsg{status: status, err: err}
+		status, err := m.service.Status()
+		return serviceStatusMsg{status: status, elevated: elevate.IsElevated(), err: err}
+	}
+}
+
+func (m *Model) loadSystemProxy() tea.Cmd {
+	return func() tea.Msg {
+		status, err := m.client.SystemProxy(m.ctx)
+		return systemProxyStatusMsg{status: status, err: err}
+	}
+}
+
+func (m *Model) loadTun() tea.Cmd {
+	return func() tea.Msg {
+		status, err := m.client.Tun(m.ctx)
+		return tunStatusMsg{status: status, err: err}
 	}
 }
 
@@ -139,6 +301,38 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			m.lastError = ""
 			m.onboarding = typed.status
 		}
+		return m, nil
+	case serviceStatusMsg:
+		m.serviceLoaded = true
+		m.elevated = typed.elevated
+		if typed.err != nil {
+			m.serviceStatus = service.StatusUnknown
+			if m.lastError == "" {
+				m.lastError = ui.ServiceStatusUnavailable
+			}
+		} else {
+			m.serviceStatus = typed.status
+		}
+		return m, nil
+	case systemProxyStatusMsg:
+		m.systemProxyLoaded = true
+		if typed.err != nil {
+			if m.lastError == "" {
+				m.lastError = ui.SystemProxyStateUnavailable
+			}
+			return m, nil
+		}
+		m.systemProxy = typed.status
+		return m, nil
+	case tunStatusMsg:
+		m.tunLoaded = true
+		if typed.err != nil {
+			if m.lastError == "" {
+				m.lastError = ui.TunStateUnavailable
+			}
+			return m, nil
+		}
+		m.tun = typed.status
 		return m, nil
 	case ui.CoreObservedMsg:
 		m.core = typed.Core
@@ -166,6 +360,18 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			revision = typed.install.Revision
 		}
 		return m, tea.Batch(m.Load(), m.loadCore(), func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: revision} })
+	case serviceResultMsg:
+		m.pending = false
+		if typed.err != nil {
+			m.lastError = serviceErrorMessage(typed.err)
+			return m, m.loadServiceStatus()
+		}
+		m.lastError = ""
+		return m, m.loadServiceStatus()
+	case systemProxyActionResultMsg:
+		return m.handleSystemProxyActionResult(typed)
+	case tunActionResultMsg:
+		return m.handleTunActionResult(typed)
 	}
 
 	key, ok := message.(tea.KeyPressMsg)
@@ -211,12 +417,72 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 				return m, nil
 			}
 			return m, m.confirmAction(actionRestart)
+		case rowServiceInstall:
+			return m, m.confirmServiceAction(serviceInstall)
+		case rowServiceUninstall:
+			return m, m.confirmServiceAction(serviceUninstall)
+		case rowServiceStart:
+			return m, m.confirmServiceAction(serviceStart)
+		case rowServiceStop:
+			return m, m.confirmServiceAction(serviceStop)
+		case rowServiceRestart:
+			return m, m.confirmServiceAction(serviceRestart)
+		case rowSystemProxy:
+			return m, m.confirmSystemProxyToggle()
+		case rowTUN:
+			return m, m.confirmTunToggle()
 		default:
 			selected := rows[index]
 			m.detail = &selected
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) (ui.Page, tea.Cmd) {
+	m.pending = false
+	if typed.err != nil {
+		var apiError protocol.APIError
+		if errors.As(typed.err, &apiError) {
+			switch apiError.Code {
+			case protocol.CodeSystemProxyConflict:
+				return m, m.confirmForceSystemProxy(apiError)
+			case protocol.CodeSystemProxyNotOwned:
+				m.lastError = ui.SystemProxyNotOwnedMessage
+				return m, m.loadSystemProxy()
+			case protocol.CodeRevisionConflict:
+				m.lastError = ui.SystemChangedMessage
+				return m, m.Load()
+			}
+		}
+		m.lastError = ui.SystemProxyActionFailed
+		return m, m.loadSystemProxy()
+	}
+	m.lastError = ""
+	m.systemProxy = typed.status
+	m.systemProxyLoaded = true
+	return m, tea.Batch(m.loadSystemProxy(), func() tea.Msg {
+		return ui.RuntimeRevisionMsg{Revision: typed.status.Revision}
+	})
+}
+
+func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cmd) {
+	m.pending = false
+	if typed.err != nil {
+		var apiError protocol.APIError
+		if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
+			m.lastError = ui.SystemChangedMessage
+			return m, m.Load()
+		}
+		m.lastError = ui.TunActionFailed
+		return m, m.loadTun()
+	}
+	m.lastError = ""
+	m.tun = typed.status
+	m.tunLoaded = true
+	return m, tea.Batch(m.loadTun(), func() tea.Msg {
+		return ui.RuntimeRevisionMsg{Revision: typed.status.Revision}
+	})
 }
 
 func (m *Model) View() string {
@@ -267,15 +533,327 @@ func (m *Model) rows() []row {
 	daemon := fmt.Sprintf("Version %s\nUptime %s\nHealth %s\nRevision %d\nConfig %s", valueOr(m.status.DaemonVersion, ui.UnknownLabel), uptime(m.status.StartedAt), valueOr(m.status.Health, ui.UnknownLabel), m.status.Revision, configState)
 	core := fmt.Sprintf("Status %s\nVersion %s\nPID %d\nRestarts %d", valueOr(m.core.Status, ui.UnknownLabel), valueOr(m.core.Version, ui.UnknownLabel), m.core.PID, m.core.Restarts)
 	endpoints := fmt.Sprintf("Mixed %s\nController %s\nWeb GUI %s", valueOr(m.onboarding.MixedAddr, ui.MissingValue), valueOr(m.onboarding.ControllerAddr, ui.MissingValue), valueOr(m.onboarding.WebAddr, ui.MissingValue))
-	return []row{
+	rows := []row{
 		{id: rowDaemon, section: ui.DaemonSectionTitle, label: ui.DaemonLabel, value: valueOr(m.status.DaemonVersion, ui.UnknownLabel) + " · " + valueOr(m.status.Health, ui.UnknownLabel), detail: daemon},
 		{id: rowCore, section: ui.CoreSectionTitle, label: ui.MihomoCoreLabel, value: valueOr(m.core.Status, ui.UnknownLabel) + " · " + valueOr(m.core.Version, ui.UnknownLabel), detail: core},
 		{id: rowCoreUpdate, section: ui.CoreSectionTitle, label: m.coreActionLabel(), value: actionState(m.pending, m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.UpdateCoreImpact},
 		{id: rowCoreRestart, section: ui.CoreSectionTitle, label: ui.RestartCoreLabel, value: actionState(m.pending, m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.RestartCoreImpact},
 		{id: rowEndpoints, section: ui.LocalEndpointsLabel, label: ui.LocalEndpointsLabel, value: endpointSummary(m.onboarding), detail: endpoints},
 		{id: rowRunSetup, section: ui.MaintenanceSectionTitle, label: ui.RunSetupLabel, detail: ui.RunSetupDetail},
-		{id: rowTUN, section: ui.FutureCapabilitiesTitle, label: ui.TUNLabel, value: ui.UnavailableTitle, detail: ui.TUNUnavailableDetail},
-		{id: rowService, section: ui.FutureCapabilitiesTitle, label: ui.SystemServiceLabel, value: ui.UnavailableTitle, detail: ui.ServiceUnavailableDetail},
+	}
+	rows = append(rows, m.serviceRows()...)
+	rows = append(rows, m.networkRows()...)
+	return rows
+}
+
+func (m *Model) networkRows() []row {
+	section := ui.NetworkSectionTitle
+	var rows []row
+	if m.hasCapability(protocol.CapabilitySystemProxy) {
+		value := ui.LoadingLabel
+		detail := ui.EnableSystemProxyImpact
+		if m.systemProxyLoaded {
+			value = systemProxySummary(m.systemProxy)
+			detail = systemProxyDetail(m.systemProxy)
+		}
+		if m.pending {
+			value = ui.PendingLabel
+		} else if !m.mutationsEnabled {
+			value = actionState(false, true, false)
+			if m.systemProxyLoaded {
+				value = systemProxySummary(m.systemProxy) + " · " + ui.StaleLabel
+			}
+		}
+		rows = append(rows, row{
+			id: rowSystemProxy, section: section, label: ui.SystemProxyLabel,
+			value: value, detail: detail,
+		})
+	}
+	// TUN row is always listed; live status when capability is present.
+	tunValue := ui.UnavailableTitle
+	tunDetail := ui.TUNUnavailableDetail
+	if m.hasCapability(protocol.CapabilityTUN) {
+		tunValue = ui.LoadingLabel
+		tunDetail = ui.EnableTunImpact
+		if m.tunLoaded {
+			tunValue = tunSummary(m.tun)
+			tunDetail = tunDetailText(m.tun)
+		}
+		if m.pending {
+			tunValue = ui.PendingLabel
+		} else if !m.mutationsEnabled {
+			if m.tunLoaded {
+				tunValue = tunSummary(m.tun) + " · " + ui.StaleLabel
+			} else {
+				tunValue = ui.StaleLabel
+			}
+		}
+	}
+	rows = append(rows, row{
+		id: rowTUN, section: section, label: ui.TUNLabel,
+		value: tunValue, detail: tunDetail,
+	})
+	return rows
+}
+
+func (m *Model) serviceRows() []row {
+	section := ui.SystemServiceSectionTitle
+	if m.service == nil {
+		return []row{{
+			id: rowServiceStatus, section: section, label: ui.ServiceStatusLabel,
+			value: ui.UnavailableTitle, detail: ui.ServiceUnavailableDetail,
+		}}
+	}
+	statusValue := string(m.serviceStatus)
+	if !m.serviceLoaded || statusValue == "" {
+		statusValue = ui.UnknownLabel
+	}
+	privilege := ui.ServiceNotElevatedLabel
+	if m.elevated {
+		privilege = ui.ServiceElevatedLabel
+	}
+	statusDetail := fmt.Sprintf("Status %s\nPrivileges %s\n%s", statusValue, privilege, ui.ServiceElevationRequired)
+	if m.elevated {
+		statusDetail = fmt.Sprintf("Status %s\nPrivileges %s", statusValue, privilege)
+	}
+	return []row{
+		{id: rowServiceStatus, section: section, label: ui.ServiceStatusLabel, value: statusValue + " · " + privilege, detail: statusDetail},
+		{id: rowServiceInstall, section: section, label: ui.ServiceInstallLabel, value: m.serviceActionState(serviceInstall), detail: ui.ServiceInstallImpact},
+		{id: rowServiceUninstall, section: section, label: ui.ServiceUninstallLabel, value: m.serviceActionState(serviceUninstall), detail: ui.ServiceUninstallImpact},
+		{id: rowServiceStart, section: section, label: ui.ServiceStartLabel, value: m.serviceActionState(serviceStart), detail: ui.ServiceStartImpact},
+		{id: rowServiceStop, section: section, label: ui.ServiceStopLabel, value: m.serviceActionState(serviceStop), detail: ui.ServiceStopImpact},
+		{id: rowServiceRestart, section: section, label: ui.ServiceRestartLabel, value: m.serviceActionState(serviceRestart), detail: ui.ServiceRestartImpact},
+	}
+}
+
+func (m *Model) serviceActionState(kind serviceActionKind) string {
+	if m.service == nil {
+		return ui.UnavailableTitle
+	}
+	if m.pending {
+		return ui.PendingLabel
+	}
+	if !m.elevated {
+		return ui.ServiceNeedsElevation
+	}
+	if !m.serviceActionAllowed(kind) {
+		return ui.UnavailableTitle
+	}
+	return ""
+}
+
+func (m *Model) serviceActionAllowed(kind serviceActionKind) bool {
+	status := m.serviceStatus
+	if !m.serviceLoaded {
+		status = service.StatusUnknown
+	}
+	switch kind {
+	case serviceInstall:
+		return status == service.StatusNotInstalled || status == service.StatusUnknown
+	case serviceUninstall:
+		return status != service.StatusNotInstalled
+	case serviceStart:
+		return status == service.StatusStopped || status == service.StatusUnknown
+	case serviceStop:
+		return status == service.StatusRunning || status == service.StatusUnknown
+	case serviceRestart:
+		return status == service.StatusRunning || status == service.StatusStopped || status == service.StatusUnknown
+	default:
+		return false
+	}
+}
+
+func (m *Model) confirmServiceAction(kind serviceActionKind) tea.Cmd {
+	if m.service == nil || m.pending {
+		return nil
+	}
+	if !m.elevated {
+		m.lastError = ui.ServiceElevationRequired
+		return nil
+	}
+	if !m.serviceActionAllowed(kind) {
+		return nil
+	}
+	title, impact, rollback, action := serviceActionCopy(kind)
+	return func() tea.Msg {
+		return ui.ActionIntentMsg{
+			Action: action, Page: ui.PageSystem, Capability: "", Key: "system:" + string(action),
+			Title: title, Object: ui.SystemServiceLabel, Impact: impact, Rollback: rollback,
+			Execute: m.runServiceAction(kind),
+		}
+	}
+}
+
+func serviceActionCopy(kind serviceActionKind) (title, impact, rollback string, action ui.Action) {
+	switch kind {
+	case serviceInstall:
+		return ui.ServiceInstallTitle, ui.ServiceInstallImpact, ui.ServiceInstallRollback, ui.ActionServiceInstall
+	case serviceUninstall:
+		return ui.ServiceUninstallTitle, ui.ServiceUninstallImpact, ui.ServiceUninstallRollback, ui.ActionServiceUninstall
+	case serviceStart:
+		return ui.ServiceStartTitle, ui.ServiceStartImpact, ui.ServiceStartRollback, ui.ActionServiceStart
+	case serviceStop:
+		return ui.ServiceStopTitle, ui.ServiceStopImpact, ui.ServiceStopRollback, ui.ActionServiceStop
+	case serviceRestart:
+		return ui.ServiceRestartTitle, ui.ServiceRestartImpact, ui.ServiceRestartRollback, ui.ActionServiceRestart
+	default:
+		return ui.ServiceInstallTitle, ui.ServiceInstallImpact, ui.ServiceInstallRollback, ui.ActionServiceInstall
+	}
+}
+
+func (m *Model) runServiceAction(kind serviceActionKind) tea.Cmd {
+	return func() tea.Msg {
+		if err := elevate.RequireElevated(); err != nil {
+			return serviceResultMsg{kind: kind, err: err}
+		}
+		var err error
+		switch kind {
+		case serviceInstall:
+			err = m.service.Install()
+		case serviceUninstall:
+			err = m.service.Uninstall()
+		case serviceStart:
+			err = m.service.Start()
+		case serviceStop:
+			err = m.service.Stop()
+		case serviceRestart:
+			err = m.service.Restart()
+		}
+		return serviceResultMsg{kind: kind, err: err}
+	}
+}
+
+func serviceErrorMessage(err error) string {
+	var apiError protocol.APIError
+	if errors.As(err, &apiError) && apiError.Message != "" {
+		return apiError.Message
+	}
+	return ui.ServiceActionFailed
+}
+
+func (m *Model) confirmSystemProxyToggle() tea.Cmd {
+	if m.client == nil || m.pending || !m.mutationsEnabled || !m.hasCapability(protocol.CapabilitySystemProxy) {
+		return nil
+	}
+	// Foreign observed → secondary force-enable confirm (never claim disable clears it).
+	if m.systemProxy.Observed.Foreign {
+		return m.confirmForceSystemProxyFromStatus()
+	}
+	// Owned or desired on → confirm disable.
+	if m.systemProxy.Desired || m.systemProxy.Observed.Owned {
+		return m.confirmSystemProxyAction(proxyDisable)
+	}
+	return m.confirmSystemProxyAction(proxyEnable)
+}
+
+func (m *Model) confirmSystemProxyAction(kind proxyActionKind) tea.Cmd {
+	revision, operationID := m.proxyRevision(), m.newOperationID()
+	title, impact, rollback, action := ui.EnableSystemProxyTitle, ui.EnableSystemProxyImpact, ui.EnableSystemProxyRollback, ui.ActionEnableSystemProxy
+	force := false
+	switch kind {
+	case proxyForceEnable:
+		title, impact, rollback, action = ui.ForceSystemProxyTitle, forceImpactFromStatus(m.systemProxy), ui.ForceSystemProxyRollback, ui.ActionForceSystemProxy
+		force = true
+	case proxyDisable:
+		title, impact, rollback, action = ui.DisableSystemProxyTitle, ui.DisableSystemProxyImpact, ui.DisableSystemProxyRollback, ui.ActionDisableSystemProxy
+	}
+	return func() tea.Msg {
+		return ui.ActionIntentMsg{
+			Action: action, Page: ui.PageSystem, Capability: protocol.CapabilitySystemProxy,
+			Key: "system:" + string(action), Title: title, Object: ui.SystemProxyLabel,
+			Impact: impact, Rollback: rollback,
+			Execute: m.runSystemProxyAction(kind, operationID, revision, force),
+		}
+	}
+}
+
+func (m *Model) confirmForceSystemProxyFromStatus() tea.Cmd {
+	return m.confirmSystemProxyAction(proxyForceEnable)
+}
+
+func (m *Model) confirmForceSystemProxy(apiError protocol.APIError) tea.Cmd {
+	revision, operationID := m.proxyRevision(), m.newOperationID()
+	current := detailString(apiError.Details, "current_server")
+	target := detailString(apiError.Details, "target_server")
+	if current == "" {
+		current = valueOr(m.systemProxy.Observed.Server, ui.MissingValue)
+	}
+	if target == "" {
+		target = valueOr(m.systemProxy.Target, ui.MissingValue)
+	}
+	impact := fmt.Sprintf(ui.ForceSystemProxyImpact, valueOr(current, ui.MissingValue), valueOr(target, ui.MissingValue))
+	return func() tea.Msg {
+		return ui.ActionIntentMsg{
+			Action: ui.ActionForceSystemProxy, Page: ui.PageSystem, Capability: protocol.CapabilitySystemProxy,
+			Key: "system:" + string(ui.ActionForceSystemProxy), Title: ui.ForceSystemProxyTitle, Object: ui.SystemProxyLabel,
+			Impact: impact, Rollback: ui.ForceSystemProxyRollback,
+			Execute: m.runSystemProxyAction(proxyForceEnable, operationID, revision, true),
+		}
+	}
+}
+
+func (m *Model) runSystemProxyAction(kind proxyActionKind, operationID string, revision uint64, force bool) tea.Cmd {
+	return func() tea.Msg {
+		request := protocol.SystemProxyMutationRequest{OperationID: operationID, Force: force}
+		if revision > 0 {
+			request.IfRevision = &revision
+		}
+		var (
+			status protocol.SystemProxyStatus
+			err    error
+		)
+		switch kind {
+		case proxyDisable:
+			status, err = m.client.DisableSystemProxy(m.ctx, request)
+		default:
+			status, err = m.client.EnableSystemProxy(m.ctx, request)
+		}
+		return systemProxyActionResultMsg{kind: kind, status: status, err: err}
+	}
+}
+
+func (m *Model) confirmTunToggle() tea.Cmd {
+	if m.client == nil || m.pending || !m.mutationsEnabled || !m.hasCapability(protocol.CapabilityTUN) {
+		return nil
+	}
+	if m.tun.DesiredEnable {
+		return m.confirmTunAction(tunDisable)
+	}
+	return m.confirmTunAction(tunEnable)
+}
+
+func (m *Model) confirmTunAction(kind tunActionKind) tea.Cmd {
+	revision, operationID := m.tunRevision(), m.newOperationID()
+	title, impact, rollback, action := ui.EnableTunTitle, ui.EnableTunImpact, ui.EnableTunRollback, ui.ActionEnableTun
+	if kind == tunDisable {
+		title, impact, rollback, action = ui.DisableTunTitle, ui.DisableTunImpact, ui.DisableTunRollback, ui.ActionDisableTun
+	}
+	return func() tea.Msg {
+		return ui.ActionIntentMsg{
+			Action: action, Page: ui.PageSystem, Capability: protocol.CapabilityTUN,
+			Key: "system:" + string(action), Title: title, Object: ui.TUNLabel,
+			Impact: impact, Rollback: rollback,
+			Execute: m.runTunAction(kind, operationID, revision),
+		}
+	}
+}
+
+func (m *Model) runTunAction(kind tunActionKind, operationID string, revision uint64) tea.Cmd {
+	return func() tea.Msg {
+		request := protocol.TunMutationRequest{OperationID: operationID}
+		if revision > 0 {
+			request.IfRevision = &revision
+		}
+		var (
+			status protocol.TunStatus
+			err    error
+		)
+		if kind == tunDisable {
+			status, err = m.client.DisableTun(m.ctx, request)
+		} else {
+			status, err = m.client.EnableTun(m.ctx, request)
+		}
+		return tunActionResultMsg{kind: kind, status: status, err: err}
 	}
 }
 
@@ -289,7 +867,21 @@ func (m *Model) rowIndex(id string) int {
 }
 
 func (m *Model) currentRevision() uint64 {
-	return max(m.status.Revision, m.core.Revision, m.onboarding.Revision)
+	return max(m.status.Revision, m.core.Revision, m.onboarding.Revision, m.systemProxy.Revision, m.tun.Revision)
+}
+
+func (m *Model) proxyRevision() uint64 {
+	if m.systemProxy.Revision > 0 {
+		return m.systemProxy.Revision
+	}
+	return m.currentRevision()
+}
+
+func (m *Model) tunRevision() uint64 {
+	if m.tun.Revision > 0 {
+		return m.tun.Revision
+	}
+	return m.currentRevision()
 }
 
 func (m *Model) confirmAction(kind actionKind) tea.Cmd {
@@ -360,6 +952,109 @@ func actionState(pending, available, enabled bool) string {
 		return ui.PendingLabel
 	}
 	return ""
+}
+
+func systemProxySummary(status protocol.SystemProxyStatus) string {
+	desired := ui.OffLabel
+	if status.Desired {
+		desired = ui.OnLabel
+	}
+	observed := ui.OffLabel
+	if status.Observed.Enabled {
+		observed = valueOr(status.Observed.Server, ui.OnLabel)
+		switch {
+		case status.Observed.Owned:
+			observed += " · " + ui.OwnedLabel
+		case status.Observed.Foreign:
+			observed += " · " + ui.ForeignLabel
+		}
+	} else if status.Observed.Foreign {
+		// Residual foreign config with ProxyEnable=0 still surfaces classification.
+		observed = valueOr(status.Observed.Server, ui.OffLabel) + " · " + ui.ForeignLabel
+	}
+	return fmt.Sprintf("%s %s · %s %s", ui.DesiredLabel, desired, ui.ObservedLabel, observed)
+}
+
+func systemProxyDetail(status protocol.SystemProxyStatus) string {
+	return fmt.Sprintf(
+		"%s %v\n%s %s\n%s %v\n%s %s\n%s %v\n%s %v\n%s %s",
+		ui.DesiredLabel, status.Desired,
+		"Target", valueOr(status.Target, ui.MissingValue),
+		"Enabled", status.Observed.Enabled,
+		"Server", valueOr(status.Observed.Server, ui.MissingValue),
+		ui.OwnedLabel, status.Observed.Owned,
+		ui.ForeignLabel, status.Observed.Foreign,
+		"Last error", valueOr(status.LastError, ui.MissingValue),
+	)
+}
+
+func tunSummary(status protocol.TunStatus) string {
+	desired := ui.OffLabel
+	if status.DesiredEnable {
+		desired = ui.OnLabel
+	}
+	live := ui.UnknownLabel
+	if status.LiveEnable != nil {
+		if *status.LiveEnable {
+			live = ui.OnLabel
+		} else {
+			live = ui.OffLabel
+		}
+	}
+	managed := ui.UnmanagedLabel
+	if status.Managed {
+		managed = ui.ActiveLabel
+	}
+	parts := []string{
+		fmt.Sprintf("%s %s", ui.DesiredLabel, desired),
+		fmt.Sprintf("%s %s", ui.LiveLabel, live),
+		managed,
+	}
+	if status.Stack != "" {
+		parts = append(parts, status.Stack)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func tunDetailText(status protocol.TunStatus) string {
+	live := ui.UnknownLabel
+	if status.LiveEnable != nil {
+		if *status.LiveEnable {
+			live = ui.OnLabel
+		} else {
+			live = ui.OffLabel
+		}
+	}
+	return fmt.Sprintf(
+		"%s %v\n%s %s\nStack %s\nManaged %v\nLast error %s",
+		ui.DesiredLabel, status.DesiredEnable,
+		ui.LiveLabel, live,
+		valueOr(status.Stack, ui.MissingValue),
+		status.Managed,
+		valueOr(status.LastError, ui.MissingValue),
+	)
+}
+
+func forceImpactFromStatus(status protocol.SystemProxyStatus) string {
+	return fmt.Sprintf(
+		ui.ForceSystemProxyImpact,
+		valueOr(status.Observed.Server, ui.MissingValue),
+		valueOr(status.Target, ui.MissingValue),
+	)
+}
+
+func detailString(details map[string]any, key string) string {
+	if details == nil {
+		return ""
+	}
+	value, ok := details[key]
+	if !ok || value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return fmt.Sprint(value)
 }
 
 func (m *Model) hasCapability(capability string) bool {
