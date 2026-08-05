@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -13,6 +14,12 @@ func TestDefaultSettingsUseManagedPortsAndLoopback(t *testing.T) {
 	settings := Defaults()
 	if settings.Schema != "mihari.settings/v1" || settings.MixedAddr != "127.0.0.1:9190" || settings.ControllerAddr != "127.0.0.1:9090" || settings.WebAddr != "127.0.0.1:9191" {
 		t.Fatalf("settings=%#v", settings)
+	}
+	if settings.SystemProxyDesired {
+		t.Fatalf("default system-proxy-desired=%v, want false", settings.SystemProxyDesired)
+	}
+	if settings.Tun != nil {
+		t.Fatalf("default tun=%#v, want nil", settings.Tun)
 	}
 	if err := settings.Validate(); err != nil {
 		t.Fatal(err)
@@ -50,7 +57,7 @@ func TestLoadOrCreateSettingsIsStablePrivateAndStrict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first != second || len(first.ControllerSecret) != 64 {
+	if !reflect.DeepEqual(first, second) || len(first.ControllerSecret) != 64 {
 		t.Fatalf("first=%#v second=%#v", first, second)
 	}
 	if runtime.GOOS != "windows" {
@@ -95,6 +102,106 @@ func TestSaveRejectsMissingControllerSecret(t *testing.T) {
 	settings := Defaults()
 	if err := Save(filepath.Join(t.TempDir(), "mihari.yaml"), settings); err == nil {
 		t.Fatal("expected missing controller secret to fail")
+	}
+}
+
+func TestSettingsPersistSystemProxyAndTunDesired(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mihari.yaml")
+	settings := Defaults()
+	settings.ControllerSecret = strings.Repeat("ab", 32)
+	settings.SystemProxyDesired = true
+	settings.Tun = map[string]any{
+		"enable": true,
+		"stack":  "gVisor",
+	}
+	if err := Save(path, settings); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.SystemProxyDesired {
+		t.Fatalf("system-proxy-desired=%v, want true", loaded.SystemProxyDesired)
+	}
+	if loaded.Tun["enable"] != true {
+		t.Fatalf("tun.enable=%#v, want true", loaded.Tun["enable"])
+	}
+	if loaded.Tun["stack"] != "gVisor" {
+		t.Fatalf("tun.stack=%#v, want gVisor", loaded.Tun["stack"])
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, "system-proxy-desired: true") {
+		t.Fatalf("saved YAML missing system-proxy-desired: %s", text)
+	}
+	if !strings.Contains(text, "tun:") || !strings.Contains(text, "enable: true") || !strings.Contains(text, "stack: gVisor") {
+		t.Fatalf("saved YAML missing tun block: %s", text)
+	}
+}
+
+func TestLoadSettingsWithoutSystemProxyAndTunIsBackwardCompatible(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mihari.yaml")
+	settings := Defaults()
+	settings.ControllerSecret = strings.Repeat("cd", 32)
+	if err := Save(path, settings); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.SystemProxyDesired {
+		t.Fatalf("system-proxy-desired=%v, want false", loaded.SystemProxyDesired)
+	}
+	if loaded.Tun != nil {
+		t.Fatalf("tun=%#v, want nil", loaded.Tun)
+	}
+}
+
+func TestSettingsValidationRejectsInvalidTunTypes(t *testing.T) {
+	tests := []struct {
+		name string
+		tun  map[string]any
+	}{
+		{"enable string", map[string]any{"enable": "yes"}},
+		{"enable int", map[string]any{"enable": 1}},
+		{"stack bool", map[string]any{"enable": true, "stack": true}},
+		{"stack int", map[string]any{"stack": 42}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			settings := Defaults()
+			settings.Tun = test.tun
+			if err := settings.Validate(); err == nil {
+				t.Fatalf("expected invalid tun settings: %#v", settings)
+			}
+		})
+	}
+}
+
+func TestSettingsValidationAcceptsValidTunBlock(t *testing.T) {
+	settings := Defaults()
+	settings.Tun = map[string]any{
+		"enable": true,
+		"stack":  "system",
+	}
+	if err := settings.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	settings.Tun = map[string]any{}
+	if err := settings.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	settings.SystemProxyDesired = true
+	if err := settings.Validate(); err != nil {
+		t.Fatal(err)
 	}
 }
 
