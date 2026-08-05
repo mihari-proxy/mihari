@@ -18,11 +18,13 @@ import (
 const maxSettingsSize = 1 << 20
 
 type Settings struct {
-	Schema           string `yaml:"schema"`
-	MixedAddr        string `yaml:"mixed-addr"`
-	ControllerAddr   string `yaml:"controller-addr"`
-	WebAddr          string `yaml:"web-addr"`
-	ControllerSecret string `yaml:"controller-secret"`
+	Schema             string         `yaml:"schema"`
+	MixedAddr          string         `yaml:"mixed-addr"`
+	ControllerAddr     string         `yaml:"controller-addr"`
+	WebAddr            string         `yaml:"web-addr"`
+	ControllerSecret   string         `yaml:"controller-secret"`
+	SystemProxyDesired bool           `yaml:"system-proxy-desired,omitempty"`
+	Tun                map[string]any `yaml:"tun,omitempty"` // managed block; empty = unmanaged
 }
 
 func Defaults() Settings {
@@ -169,6 +171,26 @@ func (s Settings) Validate() error {
 		decoded, err := hex.DecodeString(s.ControllerSecret)
 		if err != nil || len(decoded) != 32 {
 			return dataError("invalid controller secret")
+		}
+	}
+	if err := validateTun(s.Tun); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateTun(tun map[string]any) error {
+	if tun == nil {
+		return nil
+	}
+	if enable, ok := tun["enable"]; ok {
+		if _, isBool := enable.(bool); !isBool {
+			return dataError("tun.enable must be a boolean")
+		}
+	}
+	if stack, ok := tun["stack"]; ok {
+		if _, isString := stack.(string); !isString {
+			return dataError("tun.stack must be a string")
 		}
 	}
 	return nil
