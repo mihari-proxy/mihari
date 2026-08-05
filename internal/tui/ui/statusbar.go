@@ -112,8 +112,10 @@ func renderRightStatus(theme Theme, label string) string {
 		style = theme.Danger
 	case strings.Contains(lower, "not installed"), strings.Contains(lower, "stopped"):
 		style = theme.Warning
+	case strings.Contains(lower, "running") && strings.Contains(lower, "connected"):
+		// Healthy dual badge: service running + daemon connected.
+		style = theme.Success
 	case strings.Contains(lower, "connected") && !strings.Contains(lower, "reconnect"):
-		// Dual badge may end with Connected only in hybrid cases; keep muted success.
 		style = theme.Success
 	default:
 		style = theme.Warning

@@ -162,14 +162,15 @@ func TestShellView_RightStatusDualServiceAndDaemon(t *testing.T) {
 		t.Fatalf("want %q top-right, got %q", want, first)
 	}
 
-	// Service not installed + connected → nudge only.
+	// Service not installed + connected → dual badge.
 	model.connected = true
 	model.stale = false
 	model.serviceStatus = service.StatusNotInstalled
 	plain = normalizeRender(model.View().Content)
 	first = nonEmptyLines(plain)[0]
-	if !strings.HasSuffix(strings.TrimRight(first, " "), ui.StatusServiceNotInstalled) {
-		t.Fatalf("want service not installed top-right, got %q", first)
+	want = ui.StatusServiceNotInstalled + ui.StatusRightJoin + ui.StatusDaemonConnected
+	if !strings.HasSuffix(strings.TrimRight(first, " "), want) {
+		t.Fatalf("want %q top-right, got %q", want, first)
 	}
 }
 
