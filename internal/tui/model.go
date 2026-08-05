@@ -137,7 +137,7 @@ func newModelWithClient(events <-chan session.Event, client pageClient) Model {
 func newModelWithClientContext(ctx context.Context, events <-chan session.Event, client pageClient) Model {
 	model := newModelWithPageClients(client, client, client, client)
 	model.pages[ui.PageSetup] = setuppage.NewWithContext(ctx, client, nil)
-	model.pages[ui.PageSystem] = systempage.NewWithContext(ctx, client, nil)
+	model.pages[ui.PageSystem] = systempage.NewWithContext(ctx, client, nil, nil)
 	model.pages[ui.PageWebGUI] = webguipage.NewWithContext(ctx, client, nil)
 	model.resizePages()
 	model.events = events
@@ -486,13 +486,15 @@ func (model Model) handleActionIntent(intent ui.ActionIntentMsg) (tea.Model, tea
 		model.globalState = ui.StateCapabilityLost
 		return model, nil
 	}
-	if !model.mutationsEnabled {
-		model.globalState = ui.StateStale
-		return model, nil
-	}
-	if intent.Capability != "" && !slices.Contains(model.status.Capabilities, intent.Capability) {
-		model.globalState = ui.StateCapabilityLost
-		return model, nil
+	if RequiresDaemon(intent.Action) {
+		if !model.mutationsEnabled {
+			model.globalState = ui.StateStale
+			return model, nil
+		}
+		if intent.Capability != "" && !slices.Contains(model.status.Capabilities, intent.Capability) {
+			model.globalState = ui.StateCapabilityLost
+			return model, nil
+		}
 	}
 	key := intent.Key
 	if key == "" {

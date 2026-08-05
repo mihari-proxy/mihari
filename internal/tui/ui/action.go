@@ -21,6 +21,16 @@ const (
 	ActionUpdatePanel             Action = "update-panel"
 	ActionActivatePanel           Action = "activate-panel"
 	ActionOpenWebGUI              Action = "open-web-gui"
+	ActionServiceInstall          Action = "service-install"
+	ActionServiceUninstall        Action = "service-uninstall"
+	ActionServiceStart            Action = "service-start"
+	ActionServiceStop             Action = "service-stop"
+	ActionServiceRestart          Action = "service-restart"
+	ActionEnableSystemProxy       Action = "enable-system-proxy"
+	ActionForceSystemProxy        Action = "force-system-proxy"
+	ActionDisableSystemProxy      Action = "disable-system-proxy"
+	ActionEnableTun               Action = "enable-tun"
+	ActionDisableTun              Action = "disable-tun"
 )
 
 type ActionIntentMsg struct {

@@ -6,15 +6,17 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	controlclient "github.com/LeeShunEE/mihari/internal/control/client"
+	systempage "github.com/LeeShunEE/mihari/internal/tui/pages/system"
 	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
 
 // Options contains the control client and terminal streams used by the TUI.
 type Options struct {
-	Client *controlclient.Client
-	Input  io.Reader
-	Output io.Writer
+	Client  *controlclient.Client
+	Service systempage.ServiceController
+	Input   io.Reader
+	Output  io.Writer
 }
 
 // Run starts the full-screen Mihari terminal interface and blocks until it exits.
@@ -25,6 +27,11 @@ func Run(ctx context.Context, options Options) error {
 		controlSession = session.New(options.Client, session.Options{})
 		model = newModelWithClientContext(ctx, controlSession.Start(ctx), options.Client)
 		defer controlSession.Close()
+	}
+	if options.Service != nil {
+		if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
+			page.SetServiceController(options.Service)
+		}
 	}
 	program := tea.NewProgram(
 		model,

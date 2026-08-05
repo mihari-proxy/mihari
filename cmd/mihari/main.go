@@ -79,9 +79,10 @@ func main() {
 		Interactive:        isInteractiveTerminal(os.Stdin, os.Stdout),
 		RunTUI: func(ctx context.Context) error {
 			return tui.Run(ctx, tui.Options{
-				Client: localClient,
-				Input:  os.Stdin,
-				Output: os.Stdout,
+				Client:  localClient,
+				Service: serviceManager,
+				Input:   os.Stdin,
+				Output:  os.Stdout,
 			})
 		},
 		RunDaemon: runDaemon,
