@@ -38,11 +38,18 @@ type PanelInstallRequest struct {
 	Build       string  `json:"build,omitempty"`
 }
 
+// WebGUIOpenRequest selects which installed panel to open. Empty panel opens the default active panel.
+type WebGUIOpenRequest struct {
+	Panel string `json:"panel,omitempty"`
+}
+
 // WebGUIOpenResult returns a short-lived open URL only to privileged local clients.
 // Consumers must open immediately and must not store the URL in snapshots or logs.
+// OpenURL points at /__mihari/panels/{panel}/ when a panel is installed so multiple panels can run concurrently.
 type WebGUIOpenResult struct {
 	Schema  string `json:"schema"`
 	OpenURL string `json:"open_url"`
+	Panel   string `json:"panel,omitempty"`
 }
 
 // GatewaySafeguards reports security invariants enforced by the Web gateway.

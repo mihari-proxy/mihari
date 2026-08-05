@@ -46,9 +46,10 @@ func (f *fakeClient) RollbackPanel(_ context.Context, id string, _ protocol.Muta
 	f.lastID = id
 	return protocol.MutationResult{Schema: "mihari/v1"}, nil
 }
-func (f *fakeClient) OpenWebGUI(context.Context) (protocol.WebGUIOpenResult, error) {
+func (f *fakeClient) OpenWebGUI(_ context.Context, id string) (protocol.WebGUIOpenResult, error) {
 	f.opened++
-	return protocol.WebGUIOpenResult{Schema: "mihari/v1", OpenURL: f.openURL}, nil
+	f.lastID = id
+	return protocol.WebGUIOpenResult{Schema: "mihari/v1", OpenURL: f.openURL, Panel: id}, nil
 }
 
 func sampleStatus() protocol.WebGUIStatus {
@@ -91,7 +92,7 @@ func TestWebGUIRendersCardsAndFooterWithoutSecrets(t *testing.T) {
 	updated, _ := model.Update(command())
 	model = updated.(*Model)
 	view := model.View()
-	for _, want := range []string{"127.0.0.1:9191", "Zashboard", "v2.1.0", "v2.0.0", "MetaCubeXD", "8e31c4a", "3", "Loopback", "Controller isolation", "Mutation coordinator", "Open Browser"} {
+	for _, want := range []string{"127.0.0.1:9191", "Zashboard", "v2.1.0", "v2.0.0", "MetaCubeXD", "8e31c4a", "3", "Loopback", "Controller isolation", "Mutation coordinator", "Open selected"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("missing %q in view=%s", want, view)
 		}
@@ -99,7 +100,7 @@ func TestWebGUIRendersCardsAndFooterWithoutSecrets(t *testing.T) {
 	if strings.Contains(view, "token=") || strings.Contains(view, "super-secret") {
 		t.Fatalf("view leaked open token: %s", view)
 	}
-	if hints := model.FooterHints(); !strings.Contains(hints, "Space activate") || !strings.Contains(hints, "b rollback") {
+	if hints := model.FooterHints(); !strings.Contains(hints, "Space set default") || !strings.Contains(hints, "b rollback") {
 		t.Fatalf("hints=%q", hints)
 	}
 }
@@ -127,14 +128,14 @@ func TestView_SelectedPanelAccentOnlyWhenContentFocused(t *testing.T) {
 }
 
 func TestWebGUIActionsActivateInstallUpdateOpenWithoutConfirm(t *testing.T) {
-	fake := &fakeClient{status: sampleStatus(), openURL: "http://127.0.0.1:9191/?token=hidden"}
+	fake := &fakeClient{status: sampleStatus(), openURL: "http://127.0.0.1:9191/__mihari/panels/zashboard/?token=hidden"}
 	model := New(fake, []string{protocol.CapabilityWebGUI})
 	model.SetOperationID(func() string { return "op" })
 	model.SetStatus(sampleStatus())
 	var opened string
 	model.SetOpenBrowser(func(url string) error { opened = url; return nil })
 
-	// activate
+	// activate (set default)
 	_, cmd := model.Update(tea.KeyPressMsg{Code: ' ', Text: "space"})
 	intent := cmd().(ui.ActionIntentMsg)
 	if intent.Action != ui.ActionActivatePanel {
@@ -163,15 +164,24 @@ func TestWebGUIActionsActivateInstallUpdateOpenWithoutConfirm(t *testing.T) {
 	}
 	_ = intent.Execute()
 
-	// open
+	// open focused panel (zashboard at selection 0)
 	_, cmd = model.Update(tea.KeyPressMsg{Code: 'o', Text: "o"})
 	intent = cmd().(ui.ActionIntentMsg)
 	if intent.Action != ui.ActionOpenWebGUI {
 		t.Fatalf("open action=%s", intent.Action)
 	}
 	_ = intent.Execute()
-	if opened != fake.openURL || fake.opened != 1 {
-		t.Fatalf("opened=%q calls=%d", opened, fake.opened)
+	if opened != fake.openURL || fake.opened != 1 || fake.lastID != "zashboard" {
+		t.Fatalf("opened=%q calls=%d lastID=%s", opened, fake.opened, fake.lastID)
+	}
+
+	// open selected metacubexd
+	model.selected = 1
+	_, cmd = model.Update(tea.KeyPressMsg{Code: 'o', Text: "o"})
+	intent = cmd().(ui.ActionIntentMsg)
+	_ = intent.Execute()
+	if fake.opened != 2 || fake.lastID != "metacubexd" {
+		t.Fatalf("open selected metacubexd lastID=%s opened=%d", fake.lastID, fake.opened)
 	}
 	if strings.Contains(model.View(), "token=") {
 		t.Fatal("view rendered open token after open")

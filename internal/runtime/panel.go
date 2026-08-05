@@ -13,11 +13,13 @@ type PanelService interface {
 	List() []panel.PanelInfo
 	Active() (panel.Active, error)
 	ActiveDir() (string, error)
+	PanelDir(panelID string) (string, error)
 	Install(ctx context.Context, panelID, pinBuild string) error
 	Update(ctx context.Context, panelID string) error
 	Activate(ctx context.Context, panelID string) error
 	Rollback(ctx context.Context, panelID string) error
 	SetupPath(gatewayHost string) string
+	SetupPathFor(panelID, gatewayHost string) string
 }
 
 // Panels returns the redacted panel catalog with install state.

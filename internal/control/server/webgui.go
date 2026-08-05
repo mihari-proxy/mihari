@@ -17,7 +17,7 @@ type panelAPI interface {
 	UpdatePanel(context.Context, runtimeapi.Operation, string) error
 	ActivatePanel(context.Context, runtimeapi.Operation, string) error
 	RollbackPanel(context.Context, runtimeapi.Operation, string) error
-	OpenWebGUI(context.Context) (string, error)
+	OpenWebGUI(context.Context, string) (string, string, error)
 }
 
 func (s *Server) webGUIRoutes(mux *http.ServeMux) {
@@ -56,12 +56,19 @@ func (s *Server) openWebGUI(writer http.ResponseWriter, request *http.Request) {
 	if !ok {
 		return
 	}
-	openURL, err := runtime.OpenWebGUI(request.Context())
+	var body protocol.WebGUIOpenRequest
+	// Empty body is allowed and opens the default active panel.
+	if request.ContentLength != 0 {
+		if !decodeControlJSON(writer, request, &body) {
+			return
+		}
+	}
+	openURL, panelID, err := runtime.OpenWebGUI(request.Context(), body.Panel)
 	if err != nil {
 		writeControlError(writer, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, protocol.WebGUIOpenResult{Schema: "mihari/v1", OpenURL: openURL})
+	writeJSON(writer, http.StatusOK, protocol.WebGUIOpenResult{Schema: "mihari/v1", OpenURL: openURL, Panel: panelID})
 }
 
 func (s *Server) listPanels(writer http.ResponseWriter, request *http.Request) {

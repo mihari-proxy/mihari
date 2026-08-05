@@ -16,9 +16,14 @@ func (c *Client) WebGUI(ctx context.Context) (protocol.WebGUIStatus, error) {
 }
 
 // OpenWebGUI returns a short-lived open URL for the local browser helper.
-func (c *Client) OpenWebGUI(ctx context.Context) (protocol.WebGUIOpenResult, error) {
+// panelID selects an installed panel; empty opens the default active panel.
+func (c *Client) OpenWebGUI(ctx context.Context, panelID string) (protocol.WebGUIOpenResult, error) {
 	var result protocol.WebGUIOpenResult
-	err := c.doRuntime(ctx, http.MethodPost, "/v1/web-gui/open", nil, &result)
+	var body any
+	if panelID != "" {
+		body = protocol.WebGUIOpenRequest{Panel: panelID}
+	}
+	err := c.doRuntime(ctx, http.MethodPost, "/v1/web-gui/open", body, &result)
 	return result, err
 }
 

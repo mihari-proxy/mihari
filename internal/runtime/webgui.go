@@ -50,10 +50,33 @@ func (m *Manager) ListPanels(context.Context) ([]panel.PanelInfo, error) {
 }
 
 // OpenWebGUI returns a one-shot local open URL that includes the Web access token.
+// panelID selects which installed panel to open; empty uses the default active panel.
 // Callers must not log or persist the result beyond immediately launching a browser.
-func (m *Manager) OpenWebGUI(context.Context) (string, error) {
+func (m *Manager) OpenWebGUI(_ context.Context, panelID string) (string, string, error) {
 	if m.webGateway == nil || m.webOpenToken == "" {
-		return "", protocol.APIError{Code: protocol.CodeInvalidState, Message: "web gui open is unavailable"}
+		return "", "", protocol.APIError{Code: protocol.CodeInvalidState, Message: "web gui open is unavailable"}
+	}
+	id := strings.TrimSpace(panelID)
+	if id == "" {
+		if m.panels != nil {
+			active, err := m.panels.Active()
+			if err != nil {
+				return "", "", err
+			}
+			id = active.Panel
+		}
+	}
+	if id != "" {
+		if m.panels == nil {
+			return "", "", protocol.APIError{Code: protocol.CodeInvalidState, Message: "panel service is unavailable"}
+		}
+		dir, err := m.panels.PanelDir(id)
+		if err != nil {
+			return "", "", err
+		}
+		if dir == "" {
+			return "", "", protocol.APIError{Code: protocol.CodeInvalidState, Message: "panel is not installed"}
+		}
 	}
 	addr := m.WebListenAddr()
 	if addr == "" {
@@ -62,7 +85,11 @@ func (m *Manager) OpenWebGUI(context.Context) (string, error) {
 	if !strings.Contains(addr, "://") {
 		addr = "http://" + addr
 	}
-	return strings.TrimRight(addr, "/") + "/?token=" + m.webOpenToken, nil
+	base := strings.TrimRight(addr, "/")
+	if id == "" {
+		return base + "/?token=" + m.webOpenToken, "", nil
+	}
+	return base + panel.UIMount(id) + "/?token=" + m.webOpenToken, id, nil
 }
 
 func panelInfoDTO(info panel.PanelInfo) protocol.PanelStatus {

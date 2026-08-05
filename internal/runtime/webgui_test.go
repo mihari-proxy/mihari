@@ -29,8 +29,18 @@ func TestWebGUIStatusAndOpenURL(t *testing.T) {
 	if strings.Contains(strings.ToLower(status.GatewayAddr+status.ActivePanel), "token") {
 		t.Fatal("status embedded token material")
 	}
-	openURL, err := manager.OpenWebGUI(context.Background())
+	openURL, panelID, err := manager.OpenWebGUI(context.Background(), "")
 	if err != nil || !strings.Contains(openURL, "token=web-open-token-value") {
 		t.Fatalf("openURL=%q err=%v", openURL, err)
+	}
+	if panelID != panel.IDZashboard || !strings.Contains(openURL, "/__mihari/panels/zashboard/") {
+		t.Fatalf("default open should target active panel mount, openURL=%q panel=%q", openURL, panelID)
+	}
+	openURL, panelID, err = manager.OpenWebGUI(context.Background(), panel.IDMetaCubeXD)
+	if err != nil || panelID != panel.IDMetaCubeXD || !strings.Contains(openURL, "/__mihari/panels/metacubexd/") {
+		t.Fatalf("openURL=%q panel=%q err=%v", openURL, panelID, err)
+	}
+	if strings.Contains(openURL, "zashboard") {
+		t.Fatalf("selected panel open leaked default panel: %s", openURL)
 	}
 }

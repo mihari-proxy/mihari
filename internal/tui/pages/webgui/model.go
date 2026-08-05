@@ -21,7 +21,7 @@ type Client interface {
 	UpdatePanel(context.Context, string, protocol.MutationRequest) (protocol.MutationResult, error)
 	ActivatePanel(context.Context, string, protocol.MutationRequest) (protocol.MutationResult, error)
 	RollbackPanel(context.Context, string, protocol.MutationRequest) (protocol.MutationResult, error)
-	OpenWebGUI(context.Context) (protocol.WebGUIOpenResult, error)
+	OpenWebGUI(context.Context, string) (protocol.WebGUIOpenResult, error)
 }
 
 type statusResultMsg struct {
@@ -265,18 +265,27 @@ func (m *Model) openBrowserAction() tea.Cmd {
 	if m.client == nil {
 		return nil
 	}
+	panel, ok := m.selectedPanel()
+	if !ok {
+		return nil
+	}
 	openBrowser := m.openBrowser
 	if openBrowser == nil {
 		openBrowser = platform.OpenBrowser
 	}
+	object := panel.Name
+	if object == "" {
+		object = panel.ID
+	}
 	return func() tea.Msg {
 		return ui.ActionIntentMsg{
 			Action: ui.ActionOpenWebGUI, Page: ui.PageWebGUI, Capability: protocol.CapabilityWebGUI,
-			Key: "web-gui:open", Title: ui.OpenWebGUITitle, Object: ui.WebGUITitle,
+			Key: "web-gui:open:" + panel.ID, Title: ui.OpenWebGUITitle, Object: object,
 			Impact: ui.OpenWebGUIImpact, Rollback: ui.OpenWebGUIRollback,
 			Execute: func() tea.Msg {
 				// Token stays inside this command; never surface it in the view.
-				result, err := m.client.OpenWebGUI(m.ctx)
+				// Open the focused panel at /__mihari/panels/{id}/ so panels can run concurrently.
+				result, err := m.client.OpenWebGUI(m.ctx, panel.ID)
 				if err != nil {
 					return mutationDoneMsg{err: err}
 				}

@@ -92,7 +92,8 @@ func (s *Service) Active() (Active, error) {
 	return LoadActive(s.webActive)
 }
 
-// ActiveDir returns the filesystem path of the active panel build, or empty if none.
+// ActiveDir returns the filesystem path of the active panel static tree, or empty if none.
+// Nested archive layouts (dist/, single GitHub zipball root) are resolved.
 func (s *Service) ActiveDir() (string, error) {
 	active, err := s.Active()
 	if err != nil {
@@ -101,22 +102,69 @@ func (s *Service) ActiveDir() (string, error) {
 	if active.Panel == "" || active.Build == "" {
 		return "", nil
 	}
-	return PanelBuildDir(s.webRoot, active.Panel, active.Build), nil
+	return ResolveFileRoot(PanelBuildDir(s.webRoot, active.Panel, active.Build)), nil
 }
 
-// SetupPath returns the active adapter's same-origin setup path, if any.
+// PanelDir returns the static file root for an installed panel, independent of the default active pointer.
+// When panelID is the default active panel, the active build is preferred; otherwise the newest ready build.
+func (s *Service) PanelDir(panelID string) (string, error) {
+	if panelID == "" {
+		return "", protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "panel id is required"}
+	}
+	if _, ok := Lookup(panelID); !ok {
+		return "", protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "unknown panel"}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	active, err := LoadActive(s.webActive)
+	if err != nil {
+		return "", err
+	}
+	build := ""
+	if active.Panel == panelID && active.Build != "" && s.buildReadyLocked(panelID, active.Build) {
+		build = active.Build
+	} else {
+		builds := s.listBuildsLocked(panelID)
+		if len(builds) == 0 {
+			return "", nil
+		}
+		build = builds[0]
+	}
+	return ResolveFileRoot(PanelBuildDir(s.webRoot, panelID, build)), nil
+}
+
+// SetupPath returns the default active panel's same-origin setup deep-link (under /__mihari/panels/{id}/).
 func (s *Service) SetupPath(gatewayHost string) string {
 	active, err := s.Active()
 	if err != nil || active.Panel == "" {
 		return "/"
 	}
-	s.mu.Lock()
-	adapter := s.adapters[active.Panel]
-	s.mu.Unlock()
-	if adapter == nil {
+	return s.SetupPathFor(active.Panel, gatewayHost)
+}
+
+// SetupPathFor returns a same-origin setup deep-link mounted at /__mihari/panels/{panelID}/.
+func (s *Service) SetupPathFor(panelID, gatewayHost string) string {
+	if panelID == "" {
 		return "/"
 	}
-	return adapter.SetupPath(gatewayHost)
+	s.mu.Lock()
+	adapter := s.adapters[panelID]
+	s.mu.Unlock()
+	if adapter == nil {
+		return UIMount(panelID) + "/"
+	}
+	setup := adapter.SetupPath(gatewayHost)
+	if setup == "" || setup == "/" {
+		return UIMount(panelID) + "/"
+	}
+	// Adapters return root-relative hash routes like /#/setup?... — mount under the panel URL.
+	if strings.HasPrefix(setup, "/#") || strings.HasPrefix(setup, "/?") {
+		return UIMount(panelID) + setup
+	}
+	if strings.HasPrefix(setup, "/") {
+		return UIMount(panelID) + setup
+	}
+	return UIMount(panelID) + "/" + setup
 }
 
 // List returns catalog entries with install/active metadata (no secrets).
