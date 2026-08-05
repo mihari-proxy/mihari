@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"image/color"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -639,9 +640,30 @@ func (m *Model) View() string {
 		if body == "" {
 			body = " "
 		}
-		parts = append(parts, ui.RenderBorderedSection(m.theme, sec.title, body, inner))
+		borderColor, titleColor := m.sectionColors(sec.title)
+		parts = append(parts, ui.RenderBorderedSectionColored(m.theme, sec.title, body, inner, borderColor, titleColor))
 	}
 	return strings.Join(parts, "\n")
+}
+
+// sectionColors maps a System section title to its semantic border and title
+// color so each region of the page reads as one cohesive, color-coded unit:
+// control-plane info (info), mihomo core (accent), privileged OS service
+// (warning), and the network path (success). Unknown sections fall back to the
+// default muted border with an accent title.
+func (m *Model) sectionColors(title string) (border, titleColor color.Color) {
+	switch title {
+	case ui.DaemonSectionTitle:
+		return m.theme.ColorInfo, m.theme.ColorInfo
+	case ui.CoreSectionTitle:
+		return m.theme.ColorAccent, m.theme.ColorAccent
+	case ui.SystemServiceSectionTitle:
+		return m.theme.ColorWarning, m.theme.ColorWarning
+	case ui.NetworkSectionTitle:
+		return m.theme.ColorSuccess, m.theme.ColorSuccess
+	default:
+		return m.theme.ColorSurfaceBorder, m.theme.ColorAccent
+	}
 }
 
 func (m *Model) rows() []row {
@@ -654,11 +676,11 @@ func (m *Model) rows() []row {
 	endpoints := fmt.Sprintf("Mixed %s\nController %s\nWeb GUI %s", valueOr(m.onboarding.MixedAddr, ui.MissingValue), valueOr(m.onboarding.ControllerAddr, ui.MissingValue), valueOr(m.onboarding.WebAddr, ui.MissingValue))
 	rows := []row{
 		{id: rowDaemon, section: ui.DaemonSectionTitle, label: ui.DaemonLabel, value: valueOr(m.status.DaemonVersion, ui.UnknownLabel) + " · " + valueOr(m.status.Health, ui.UnknownLabel), detail: daemon},
+		{id: rowEndpoints, section: ui.DaemonSectionTitle, label: ui.LocalEndpointsLabel, value: endpointSummary(m.onboarding), detail: endpoints},
+		{id: rowRunSetup, section: ui.DaemonSectionTitle, label: ui.RunSetupLabel, detail: ui.RunSetupDetail},
 		{id: rowCore, section: ui.CoreSectionTitle, label: ui.MihomoCoreLabel, value: valueOr(m.core.Status, ui.UnknownLabel) + " · " + valueOr(m.core.Version, ui.UnknownLabel), detail: core},
 		{id: rowCoreUpdate, section: ui.CoreSectionTitle, label: m.coreActionLabel(), value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.UpdateCoreImpact},
 		{id: rowCoreRestart, section: ui.CoreSectionTitle, label: ui.RestartCoreLabel, value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.RestartCoreImpact},
-		{id: rowEndpoints, section: ui.LocalEndpointsLabel, label: ui.LocalEndpointsLabel, value: endpointSummary(m.onboarding), detail: endpoints},
-		{id: rowRunSetup, section: ui.MaintenanceSectionTitle, label: ui.RunSetupLabel, detail: ui.RunSetupDetail},
 	}
 	rows = append(rows, m.serviceRows()...)
 	rows = append(rows, m.networkRows()...)

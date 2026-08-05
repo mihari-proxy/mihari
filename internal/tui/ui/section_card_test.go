@@ -127,3 +127,38 @@ func TestFormatSubscriptionsTitle(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestRenderBorderedSectionColored_TitleAndBorderShareColor(t *testing.T) {
+	theme := DefaultTheme()
+	got := RenderBorderedSectionColored(theme, "Network", "System proxy  on", 30, theme.ColorSuccess, theme.ColorSuccess)
+	// Both the border frame and the embedded title carry the success 256-color
+	// foreground sequence (38;5;78).
+	if !strings.Contains(got, "38;5;78") {
+		t.Fatalf("missing success color 78:\n%s", got)
+	}
+	plain := stripANSI(got)
+	top := strings.Split(plain, "\n")[0]
+	if !strings.Contains(top, "Network") || !strings.Contains(top, "╭") || !strings.Contains(top, "╮") {
+		t.Fatalf("colored top border malformed: %q", top)
+	}
+	// Width stays consistent with the default renderer.
+	wantW := lipgloss.Width(strings.Split(plain, "\n")[0])
+	for i, line := range strings.Split(plain, "\n") {
+		if w := lipgloss.Width(line); w != wantW {
+			t.Fatalf("line %d width=%d want %d", i, w, wantW)
+		}
+	}
+}
+
+func TestRenderBorderedSection_DefaultColorsUnchanged(t *testing.T) {
+	theme := DefaultTheme()
+	got := RenderBorderedSection(theme, "General", "body", 30)
+	// Default keeps an accent (63) title and a muted (240) border so existing
+	// pages (Overview, Web GUI) render exactly as before.
+	if !strings.Contains(got, "38;5;63") {
+		t.Fatalf("default title lost accent color:\n%s", got)
+	}
+	if !strings.Contains(got, "38;5;240") {
+		t.Fatalf("default border lost surface color:\n%s", got)
+	}
+}
