@@ -18,6 +18,8 @@ type PanelClient interface {
 	UpdatePanel(context.Context, string, protocol.MutationRequest) (protocol.MutationResult, error)
 	ActivatePanel(context.Context, string, protocol.MutationRequest) (protocol.MutationResult, error)
 	RollbackPanel(context.Context, string, protocol.MutationRequest) (protocol.MutationResult, error)
+	UninstallPanel(context.Context, string, protocol.MutationRequest) (protocol.MutationResult, error)
+	ReinstallPanel(context.Context, string, protocol.MutationRequest) (protocol.MutationResult, error)
 }
 
 func newPanelCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
@@ -28,6 +30,8 @@ func newPanelCommand(dependencies Dependencies, options *runOptions) *cobra.Comm
 	root.AddCommand(newPanelUseCommand(dependencies, options))
 	root.AddCommand(newPanelOpenCommand(dependencies, options))
 	root.AddCommand(newPanelRollbackCommand(dependencies, options))
+	root.AddCommand(newPanelUninstallCommand(dependencies, options))
+	root.AddCommand(newPanelReinstallCommand(dependencies, options))
 	return root
 }
 
@@ -195,6 +199,60 @@ func newPanelRollbackCommand(dependencies Dependencies, options *runOptions) *co
 		return renderMutation(command, options, result)
 	}}
 	command.Flags().BoolVar(&yes, "yes", false, "confirm panel rollback")
+	command.Flags().Uint64Var(&revision, "if-revision", 0, "require this state revision")
+	return command
+}
+
+func newPanelUninstallCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
+	var yes bool
+	var revision uint64
+	command := &cobra.Command{Use: "uninstall ID", Short: "Uninstall a panel and remove local builds", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
+		if !yes {
+			return invalidArgument("panel uninstall requires --yes")
+		}
+		client, err := panelClient(dependencies)
+		if err != nil {
+			return err
+		}
+		request, err := mutationRequest(dependencies)
+		if err != nil {
+			return err
+		}
+		request.IfRevision = revisionFlag(command, revision)
+		result, err := client.UninstallPanel(command.Context(), args[0], request)
+		if err != nil {
+			return classifyRuntimeError(err)
+		}
+		return renderMutation(command, options, result)
+	}}
+	command.Flags().BoolVar(&yes, "yes", false, "confirm panel uninstall")
+	command.Flags().Uint64Var(&revision, "if-revision", 0, "require this state revision")
+	return command
+}
+
+func newPanelReinstallCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
+	var yes bool
+	var revision uint64
+	command := &cobra.Command{Use: "reinstall ID", Short: "Uninstall then reinstall a panel", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
+		if !yes {
+			return invalidArgument("panel reinstall requires --yes")
+		}
+		client, err := panelClient(dependencies)
+		if err != nil {
+			return err
+		}
+		request, err := mutationRequest(dependencies)
+		if err != nil {
+			return err
+		}
+		request.IfRevision = revisionFlag(command, revision)
+		result, err := client.ReinstallPanel(command.Context(), args[0], request)
+		if err != nil {
+			return classifyRuntimeError(err)
+		}
+		return renderMutation(command, options, result)
+	}}
+	command.Flags().BoolVar(&yes, "yes", false, "confirm panel reinstall")
 	command.Flags().Uint64Var(&revision, "if-revision", 0, "require this state revision")
 	return command
 }

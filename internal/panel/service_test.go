@@ -94,6 +94,116 @@ func TestServiceInstallActivateRollback(t *testing.T) {
 	}
 }
 
+func TestServiceUninstallRemovesBuildsAndClearsDefault(t *testing.T) {
+	paths, server, _, _ := panelFixture(t)
+	defer server.Close()
+	service, err := Open(ServiceOptions{
+		WebRoot: paths.WebRoot, WebActive: paths.WebActive, StagingDir: paths.PanelStaging,
+		HTTPClient: server.Client(), AllowHTTP: true,
+		Adapters: []Adapter{
+			fixtureAdapter{id: IDZashboard, name: "Zashboard", build: "v1.0.0", asset: server.URL + "/v1.zip"},
+			fixtureAdapter{id: IDMetaCubeXD, name: "MetaCubeXD", build: "abc123", asset: server.URL + "/v1.zip"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Install(context.Background(), IDZashboard, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Install(context.Background(), IDMetaCubeXD, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Activate(context.Background(), IDZashboard); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Uninstall(context.Background(), IDZashboard); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(paths.WebRoot, IDZashboard)); !os.IsNotExist(err) {
+		t.Fatalf("zashboard tree should be removed, err=%v", err)
+	}
+	active, err := service.Active()
+	if err != nil || active.Panel != "" || active.Build != "" {
+		t.Fatalf("default should be cleared after uninstalling active panel: %#v err=%v", active, err)
+	}
+	// Other panel remains installed and openable by path.
+	dir, err := service.PanelDir(IDMetaCubeXD)
+	if err != nil || dir == "" {
+		t.Fatalf("metacubexd dir=%q err=%v", dir, err)
+	}
+	infos := service.List()
+	var z, m PanelInfo
+	for _, info := range infos {
+		switch info.ID {
+		case IDZashboard:
+			z = info
+		case IDMetaCubeXD:
+			m = info
+		}
+	}
+	if z.Health != "missing" || z.InstalledBuild != "" || z.Active {
+		t.Fatalf("zashboard after uninstall=%#v", z)
+	}
+	if m.Health != "installed" || m.InstalledBuild == "" {
+		t.Fatalf("metacubexd after peer uninstall=%#v", m)
+	}
+}
+
+func TestServiceReinstallReplacesTreeAndRestoresDefault(t *testing.T) {
+	paths, server, _, _ := panelFixture(t)
+	defer server.Close()
+	service, err := Open(ServiceOptions{
+		WebRoot: paths.WebRoot, WebActive: paths.WebActive, StagingDir: paths.PanelStaging,
+		HTTPClient: server.Client(), AllowHTTP: true,
+		Adapters: []Adapter{
+			fixtureAdapter{id: IDZashboard, name: "Zashboard", build: "v1.0.0", asset: server.URL + "/v1.zip"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Install(context.Background(), IDZashboard, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Activate(context.Background(), IDZashboard); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(paths.WebRoot, IDZashboard, "v1.0.0", "stale.txt")
+	if err := os.WriteFile(marker, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Same build id: reinstall must still replace the tree (force reinstall).
+	if err := service.Reinstall(context.Background(), IDZashboard); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("stale file should be gone after reinstall, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(paths.WebRoot, IDZashboard, "v1.0.0", "index.html")); err != nil {
+		t.Fatal(err)
+	}
+	active, err := service.Active()
+	if err != nil || active.Panel != IDZashboard || active.Build != "v1.0.0" {
+		t.Fatalf("default should be restored after reinstall: %#v err=%v", active, err)
+	}
+}
+
+func TestServiceUninstallUnknownPanel(t *testing.T) {
+	paths, server, _, _ := panelFixture(t)
+	defer server.Close()
+	service, err := Open(ServiceOptions{
+		WebRoot: paths.WebRoot, WebActive: paths.WebActive, StagingDir: paths.PanelStaging,
+		HTTPClient: server.Client(), AllowHTTP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Uninstall(context.Background(), "nope"); err == nil {
+		t.Fatal("expected unknown panel rejection")
+	}
+}
+
 func TestServiceRefuseDeleteActiveBuild(t *testing.T) {
 	paths, server, _, _ := panelFixture(t)
 	defer server.Close()

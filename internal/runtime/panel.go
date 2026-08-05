@@ -18,6 +18,8 @@ type PanelService interface {
 	Update(ctx context.Context, panelID string) error
 	Activate(ctx context.Context, panelID string) error
 	Rollback(ctx context.Context, panelID string) error
+	Uninstall(ctx context.Context, panelID string) error
+	Reinstall(ctx context.Context, panelID string) error
 	SetupPath(gatewayHost string) string
 	SetupPathFor(panelID, gatewayHost string) string
 }
@@ -128,6 +130,56 @@ func (m *Manager) RollbackPanel(ctx context.Context, operation Operation, panelI
 			if err := m.panels.Rollback(ctx, panelID); err != nil {
 				return snapshot, err
 			}
+			return snapshot, nil
+		})
+		return struct{}{}, err
+	})
+	return err
+}
+
+// UninstallPanel removes all local builds for a panel under the mutation lock.
+func (m *Manager) UninstallPanel(ctx context.Context, operation Operation, panelID string) error {
+	_, err := m.doOperation(ctx, "panel-uninstall:"+operation.ID, func() (any, error) {
+		if m.panels == nil {
+			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "panel service is unavailable"}
+		}
+		if err := m.lock(ctx); err != nil {
+			return nil, err
+		}
+		defer m.unlock()
+		if err := m.checkOpen(); err != nil {
+			return nil, err
+		}
+		_, err := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+			if err := m.panels.Uninstall(ctx, panelID); err != nil {
+				return snapshot, err
+			}
+			return snapshot, nil
+		})
+		return struct{}{}, err
+	})
+	return err
+}
+
+// ReinstallPanel uninstalls then reinstalls outside/inside commit as needed, then bumps revision.
+// Download runs outside the commit section after uninstall clears local state.
+func (m *Manager) ReinstallPanel(ctx context.Context, operation Operation, panelID string) error {
+	_, err := m.doOperation(ctx, "panel-reinstall:"+operation.ID, func() (any, error) {
+		if m.panels == nil {
+			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "panel service is unavailable"}
+		}
+		// Full reinstall owns download; run under the operation path then publish revision.
+		if err := m.panels.Reinstall(ctx, panelID); err != nil {
+			return nil, err
+		}
+		if err := m.lock(ctx); err != nil {
+			return nil, err
+		}
+		defer m.unlock()
+		if err := m.checkOpen(); err != nil {
+			return nil, err
+		}
+		_, err := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			return snapshot, nil
 		})
 		return struct{}{}, err

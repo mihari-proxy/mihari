@@ -325,6 +325,69 @@ func (s *Service) RemoveBuild(panelID, build string) error {
 	return os.RemoveAll(PanelBuildDir(s.webRoot, panelID, build))
 }
 
+// Uninstall removes all installed builds for panelID and clears default/rollback
+// pointers that referenced them. Other installed panels are left intact.
+func (s *Service) Uninstall(ctx context.Context, panelID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if panelID == "" {
+		return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "panel id is required"}
+	}
+	if _, ok := Lookup(panelID); !ok {
+		return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "unknown panel"}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	active, err := LoadActive(s.webActive)
+	if err != nil {
+		return err
+	}
+	previous := clonePrevious(active.Previous)
+	delete(previous, panelID)
+	if active.Panel == panelID {
+		if err := SaveActive(s.webActive, Active{Previous: previous}); err != nil {
+			return err
+		}
+	} else if active.Panel != "" {
+		next := Active{Panel: active.Panel, Build: active.Build, Previous: previous}
+		if err := SaveActive(s.webActive, next); err != nil {
+			return err
+		}
+	} else if len(previous) != len(active.Previous) {
+		if err := SaveActive(s.webActive, Active{Previous: previous}); err != nil {
+			return err
+		}
+	}
+	// Remove the entire panel tree (all builds), including incomplete installs.
+	if err := os.RemoveAll(filepath.Join(s.webRoot, panelID)); err != nil {
+		return fmt.Errorf("remove panel install tree: %w", err)
+	}
+	return nil
+}
+
+// Reinstall uninstalls panelID then installs the latest build.
+// When the panel was the default active panel, it is re-activated after install.
+func (s *Service) Reinstall(ctx context.Context, panelID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	wasDefault := false
+	if active, err := s.Active(); err == nil && active.Panel == panelID && active.Panel != "" {
+		wasDefault = true
+	}
+	if err := s.Uninstall(ctx, panelID); err != nil {
+		return err
+	}
+	if err := s.Install(ctx, panelID, ""); err != nil {
+		return err
+	}
+	if wasDefault {
+		return s.Activate(ctx, panelID)
+	}
+	return nil
+}
+
 func (s *Service) installBuild(ctx context.Context, panelID, build, assetURL string) error {
 	if err := validateDownloadURL(assetURL, s.allowHTTP); err != nil {
 		return err
