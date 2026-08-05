@@ -19,10 +19,23 @@ func (m *Model) View() string {
 		fmt.Sprintf("[%s]", m.pauseLabel()),
 	}, m.controlIndex, controlFocused, "  ")
 	searchFocused := m.searching || (m.contentFocused && m.focus.kind == focusSearch)
-	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.queryCursor, m.width)
-	lines := m.tableLines()
-	body := strings.Join(lines, "\n")
-	base := clipLines(control, m.width) + "\n" + searchBar + "\n" + clipLines(body, m.width)
+	// Search bar width is the section body text width, not the raw page width.
+	inner := ui.FullSectionInner(m.layoutWidth())
+	textW := ui.SectionTextWidth(inner)
+	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.queryCursor, textW)
+	controlsBody := clipLines(control, textW) + "\n" + searchBar
+	controls := ui.RenderBorderedSection(m.theme, ui.ControlsSectionTitle, controlsBody, inner)
+
+	listN := activeN
+	activeMode := m.dataset == datasetActive
+	if !activeMode {
+		listN = closedN
+	}
+	listTitle := ui.FormatConnectionsTitle(activeMode, listN)
+	listBody := clipLines(strings.Join(m.tableLines(), "\n"), textW)
+	list := ui.RenderBorderedSection(m.theme, listTitle, listBody, inner)
+
+	base := controls + "\n" + list
 	if m.columnsOpen {
 		return base + "\n" + m.columnsView()
 	}
@@ -62,8 +75,9 @@ func (m *Model) layoutWidth() int {
 }
 
 func (m *Model) connectionPrimaryWidths() []int {
-	// Budget for host+traffic after focus marker (2) and shell Content horizontal padding (2).
-	avail := max(24, m.layoutWidth()-4)
+	// Fit columns to the section body text width (page minus shell + section chrome).
+	textW := ui.SectionTextWidth(ui.FullSectionInner(m.layoutWidth()))
+	avail := max(24, textW-2) // focus marker budget inside section
 	return ui.FitColumnWidths([]ui.TableColumn{
 		{ID: "host", MinWidth: 12, Flex: 3},
 		{ID: "traffic", MinWidth: 14, MaxWidth: 24, Flex: 1, Align: ui.AlignRight},
