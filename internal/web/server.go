@@ -20,13 +20,20 @@ import (
 	"time"
 
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/LeeShunEE/mihari/internal/panel"
 	"github.com/coder/websocket"
 )
 
-// PanelSource provides the active panel static tree and setup deep-link.
+// PanelSource provides panel static trees and setup deep-links.
+// Multiple installed panels may be served concurrently under /__mihari/panels/{panelID}/;
+// ActiveDir/SetupPath describe the default panel for root "/".
 type PanelSource interface {
 	ActiveDir() (string, error)
 	SetupPath(gatewayHost string) string
+	// PanelDir returns the static file root for an installed panel, or empty when missing.
+	PanelDir(panelID string) (string, error)
+	// SetupPathFor returns the same-origin setup deep-link for a specific panel.
+	SetupPathFor(panelID, gatewayHost string) string
 }
 
 // Mutator handles allowlisted browser writes through the daemon coordinator.
@@ -169,21 +176,21 @@ func (s *Server) handler() http.Handler {
 		}
 
 		// One-shot open token: set cookie and redirect stripping token from URL.
-		// Bare root open lands on the panel setup deep-link so backends point at
-		// the gateway (same-origin), not the panel default controller port.
+		// Bare panel mount or root open lands on that panel's setup deep-link so
+		// backends point at the gateway (same-origin), not the controller port.
 		if token := r.URL.Query().Get("token"); token != "" && s.Auth.matchesWeb(token) {
 			s.Auth.SetSessionCookie(w)
 			q := r.URL.Query()
 			q.Del("token")
-			path := r.URL.Path
-			if path == "" {
-				path = "/"
+			reqPath := r.URL.Path
+			if reqPath == "" {
+				reqPath = "/"
 			}
-			if path == "/" && q.Encode() == "" {
+			if q.Encode() == "" && isPanelEntryPath(reqPath) {
 				http.Redirect(w, r, s.panelSetupPath(r), http.StatusFound)
 				return
 			}
-			redirect := path
+			redirect := reqPath
 			if encoded := q.Encode(); encoded != "" {
 				redirect += "?" + encoded
 			}
@@ -260,16 +267,22 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, s.panelSetupPath(r), http.StatusFound)
 }
 
-// panelSetupPath returns the active panel's same-origin setup deep-link for r.Host.
+// panelSetupPath returns the same-origin setup deep-link for the panel addressed by r.
 func (s *Server) panelSetupPath(r *http.Request) string {
 	host := r.Host
 	if host == "" {
 		host = s.ListenAddr()
 	}
-	if s.Panel != nil {
-		if setup := s.Panel.SetupPath(host); setup != "" {
+	if s.Panel == nil {
+		return "/"
+	}
+	if panelID := panelIDFromPath(r.URL.Path); panelID != "" {
+		if setup := s.Panel.SetupPathFor(panelID, host); setup != "" {
 			return setup
 		}
+	}
+	if setup := s.Panel.SetupPath(host); setup != "" {
+		return setup
 	}
 	return "/"
 }
@@ -279,31 +292,90 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no active panel", http.StatusServiceUnavailable)
 		return
 	}
-	root, err := s.Panel.ActiveDir()
-	if err != nil || root == "" {
-		http.Error(w, "no active panel", http.StatusServiceUnavailable)
-		return
+	reqPath := path.Clean("/" + r.URL.Path)
+	fileRoot := ""
+	servePath := reqPath
+	if panelID := panelIDFromPath(reqPath); panelID != "" {
+		root, err := s.Panel.PanelDir(panelID)
+		if err != nil || root == "" {
+			http.Error(w, "panel is not installed", http.StatusNotFound)
+			return
+		}
+		fileRoot = root
+		prefix := panel.UIMount(panelID)
+		servePath = strings.TrimPrefix(reqPath, prefix)
+		if servePath == "" {
+			servePath = "/"
+		}
+	} else {
+		root, err := s.Panel.ActiveDir()
+		if err != nil || root == "" {
+			http.Error(w, "no active panel", http.StatusServiceUnavailable)
+			return
+		}
+		fileRoot = root
 	}
-	// Prefer nested dist/ when present (common panel layout).
-	fileRoot := root
-	if info, err := os.Stat(filepath.Join(root, "dist")); err == nil && info.IsDir() {
-		if _, err := os.Stat(filepath.Join(root, "dist", "index.html")); err == nil {
-			fileRoot = filepath.Join(root, "dist")
+	// ResolveFileRoot already prefers dist/ and nested index; keep a defensive dist check
+	// for PanelSource implementations that return the raw build directory.
+	if info, err := os.Stat(filepath.Join(fileRoot, "dist")); err == nil && info.IsDir() {
+		if _, err := os.Stat(filepath.Join(fileRoot, "dist", "index.html")); err == nil {
+			fileRoot = filepath.Join(fileRoot, "dist")
 		}
 	}
 	fsys := http.FS(os.DirFS(fileRoot))
-	// SPA fallback: missing paths serve index.html when present.
-	upath := path.Clean("/" + r.URL.Path)
-	if upath == "/" {
-		upath = "/index.html"
+	// Serve under the stripped panel path (or original path for the default root panel).
+	// Do not rewrite "/" → "/index.html": FileServer redirects */index.html to "./" and that loops.
+	upath := path.Clean("/" + servePath)
+	if upath != r.URL.Path {
+		r = r.Clone(r.Context())
+		r.URL.Path = upath
 	}
-	if f, err := fs.Stat(os.DirFS(fileRoot), strings.TrimPrefix(upath, "/")); err != nil || f.IsDir() {
+	// SPA fallback: missing paths (and directories) serve index.html when present.
+	rel := strings.TrimPrefix(upath, "/")
+	if rel == "" {
+		rel = "."
+	}
+	if f, err := fs.Stat(os.DirFS(fileRoot), rel); err != nil || (f != nil && f.IsDir() && upath != "/") {
 		if _, err := fs.Stat(os.DirFS(fileRoot), "index.html"); err == nil {
-			r = r.Clone(r.Context())
-			r.URL.Path = "/index.html"
+			// Serve index bytes directly for SPA routes to avoid FileServer's index.html→./ redirect.
+			http.ServeFile(w, r, filepath.Join(fileRoot, "index.html"))
+			return
 		}
 	}
 	http.FileServer(fsys).ServeHTTP(w, r)
+}
+
+// panelIDFromPath extracts {id} from /__mihari/panels/{id} or /__mihari/panels/{id}/....
+func panelIDFromPath(reqPath string) string {
+	cleaned := path.Clean("/" + reqPath)
+	prefix := panel.UIPathPrefix + "/"
+	if cleaned == panel.UIPathPrefix || cleaned == panel.UIPathPrefix+"/" {
+		return ""
+	}
+	if !strings.HasPrefix(cleaned, prefix) {
+		return ""
+	}
+	rest := strings.TrimPrefix(cleaned, prefix)
+	id, _, _ := strings.Cut(rest, "/")
+	id = strings.TrimSpace(id)
+	if id == "" || strings.Contains(id, "..") {
+		return ""
+	}
+	return id
+}
+
+// isPanelEntryPath reports paths that should land on setup after one-shot open.
+func isPanelEntryPath(reqPath string) bool {
+	cleaned := path.Clean("/" + reqPath)
+	if cleaned == "/" {
+		return true
+	}
+	panelID := panelIDFromPath(cleaned)
+	if panelID == "" {
+		return false
+	}
+	prefix := panel.UIMount(panelID)
+	return cleaned == prefix || cleaned == prefix+"/"
 }
 
 func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, action Action) {

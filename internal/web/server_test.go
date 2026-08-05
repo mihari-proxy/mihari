@@ -45,8 +45,10 @@ func (m *recordingMutator) lastPatch() map[string]any {
 }
 
 type memoryPanel struct {
-	dir  string
-	path string
+	dir    string
+	path   string
+	panels map[string]string // panelID → static root
+	setups map[string]string // panelID → setup path
 }
 
 func (m memoryPanel) ActiveDir() (string, error) { return m.dir, nil }
@@ -59,11 +61,25 @@ func (m memoryPanel) SetupPath(host string) string {
 	if i := strings.LastIndex(host, ":"); i >= 0 && !strings.Contains(host[:i], ":") {
 		hostname, port = host[:i], host[i+1:]
 	}
-	path := "/#/setup?hostname=" + hostname + "&disableUpgrade=true"
+	path := "/__mihari/panels/zashboard/#/setup?hostname=" + hostname + "&disableUpgrade=true"
 	if port != "" {
-		path = "/#/setup?hostname=" + hostname + "&port=" + port + "&disableUpgrade=true"
+		path = "/__mihari/panels/zashboard/#/setup?hostname=" + hostname + "&port=" + port + "&disableUpgrade=true"
 	}
 	return path
+}
+func (m memoryPanel) PanelDir(panelID string) (string, error) {
+	if m.panels != nil {
+		return m.panels[panelID], nil
+	}
+	return "", nil
+}
+func (m memoryPanel) SetupPathFor(panelID, host string) string {
+	if m.setups != nil {
+		if setup := m.setups[panelID]; setup != "" {
+			return setup
+		}
+	}
+	return "/__mihari/panels/" + panelID + "/#/setup?hostname=" + host
 }
 
 func TestGatewayProxiesVersionWithAuthAndRejectsUpgrade(t *testing.T) {
@@ -208,6 +224,91 @@ func TestGatewayProxiesVersionWithAuthAndRejectsUpgrade(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("gateway did not shut down")
+	}
+}
+
+func TestGatewayServesInstalledPanelsConcurrentlyAtUIPaths(t *testing.T) {
+	const webToken = "web-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const controllerSecret = "controller-secret-bbbbbbbbbbbbbbbbbbbbbbbb"
+	controller := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"version":"v1"}`))
+	}))
+	defer controller.Close()
+
+	root := t.TempDir()
+	zashDir := filepath.Join(root, "zashboard")
+	metaDir := filepath.Join(root, "metacubexd")
+	if err := os.MkdirAll(zashDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(metaDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(zashDir, "index.html"), []byte("<html>zashboard</html>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(metaDir, "index.html"), []byte("<html>metacubexd</html>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	gateway, err := New(Options{
+		Addr:          "127.0.0.1:0",
+		Auth:          Authenticator{WebCredential: webToken, ControllerSecret: controllerSecret},
+		ControllerURL: controller.URL, ControllerSecret: controllerSecret,
+		Panel: memoryPanel{
+			dir: zashDir,
+			panels: map[string]string{
+				"zashboard":  zashDir,
+				"metacubexd": metaDir,
+			},
+			setups: map[string]string{
+				"zashboard":  "/__mihari/panels/zashboard/#/setup?hostname=127.0.0.1:9191",
+				"metacubexd": "/__mihari/panels/metacubexd/#/setup?hostname=127.0.0.1:9191&http=true",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = gateway.Serve(ctx) }()
+	base := waitGatewayBase(t, gateway)
+
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{"/__mihari/panels/zashboard/", "zashboard"},
+		{"/__mihari/panels/metacubexd/", "metacubexd"},
+		{"/", "zashboard"}, // default active remains available at root
+	} {
+		req, _ := http.NewRequest(http.MethodGet, base+tc.path, nil)
+		req.AddCookie(&http.Cookie{Name: CookieName, Value: webToken})
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), tc.want) {
+			t.Fatalf("path=%s status=%d body=%s", tc.path, resp.StatusCode, body)
+		}
+	}
+
+	// Opening metacubexd lands on metacubexd setup, not the default zashboard.
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Get(base + "/__mihari/panels/metacubexd/?token=" + webToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.Contains(loc, "/__mihari/panels/metacubexd/") || strings.Contains(loc, "zashboard") || strings.Contains(loc, "token=") {
+		t.Fatalf("open metacubexd location=%q", loc)
 	}
 }
 

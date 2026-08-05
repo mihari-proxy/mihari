@@ -32,7 +32,13 @@ func TestClientWebGUIRoundTrip(t *testing.T) {
 			sawInstallPath = r.URL.Path
 			_ = json.NewEncoder(w).Encode(protocol.MutationResult{Schema: "mihari/v1", OperationID: "op-1", Revision: 2})
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/web-gui/open":
-			_ = json.NewEncoder(w).Encode(protocol.WebGUIOpenResult{Schema: "mihari/v1", OpenURL: "http://127.0.0.1:9191/?token=abc"})
+			var body protocol.WebGUIOpenRequest
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			openURL := "http://127.0.0.1:9191/__mihari/panels/zashboard/?token=abc"
+			if body.Panel != "" {
+				openURL = "http://127.0.0.1:9191/__mihari/panels/" + body.Panel + "/?token=abc"
+			}
+			_ = json.NewEncoder(w).Encode(protocol.WebGUIOpenResult{Schema: "mihari/v1", OpenURL: openURL, Panel: body.Panel})
 		default:
 			http.NotFound(w, r)
 		}
@@ -58,9 +64,13 @@ func TestClientWebGUIRoundTrip(t *testing.T) {
 	if err != nil || result.Revision != 2 || sawInstallPath != "/v1/panels/zashboard/install" {
 		t.Fatalf("install=%#v path=%s err=%v", result, sawInstallPath, err)
 	}
-	open, err := c.OpenWebGUI(context.Background())
+	open, err := c.OpenWebGUI(context.Background(), "")
 	if err != nil || !strings.Contains(open.OpenURL, "token=") {
 		t.Fatalf("open=%#v err=%v", open, err)
+	}
+	open, err = c.OpenWebGUI(context.Background(), "metacubexd")
+	if err != nil || open.Panel != "metacubexd" || !strings.Contains(open.OpenURL, "/__mihari/panels/metacubexd/") {
+		t.Fatalf("open selected=%#v err=%v", open, err)
 	}
 }
 

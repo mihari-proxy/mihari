@@ -37,6 +37,10 @@ const (
 // Unknown writes never fall through to the controller.
 func Classify(method, path string) Action {
 	method = strings.ToUpper(method)
+	// Panel static mounts are never mihomo API traffic (must run before /ui prefix matching).
+	if isPanelMountPath(path) {
+		return ActionNotAPI
+	}
 	path = normalizeAPIPath(path)
 	if path == "" {
 		return ActionNotAPI
@@ -116,6 +120,18 @@ func normalizeAPIPath(path string) string {
 		path = strings.TrimSuffix(path, "/")
 	}
 	return path
+}
+
+// isPanelMountPath reports Mihari-hosted panel static trees under /__mihari/panels/{id}/.
+func isPanelMountPath(path string) bool {
+	if path == "" {
+		return false
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	const prefix = "/__mihari/panels"
+	return path == prefix || strings.HasPrefix(path, prefix+"/")
 }
 
 func looksLikeAPIPath(path string) bool {

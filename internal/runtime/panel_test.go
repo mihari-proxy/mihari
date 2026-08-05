@@ -33,7 +33,17 @@ func (f *fakePanels) Active() (panel.Active, error) {
 	return f.active, nil
 }
 func (f *fakePanels) ActiveDir() (string, error) { return "", nil }
-func (f *fakePanels) SetupPath(string) string    { return "/" }
+func (f *fakePanels) PanelDir(id string) (string, error) {
+	// Non-empty marks the panel as installed for OpenWebGUI tests.
+	if id == "" {
+		return "", nil
+	}
+	return "/tmp/mihari-panel-" + id, nil
+}
+func (f *fakePanels) SetupPath(string) string { return "/" }
+func (f *fakePanels) SetupPathFor(string, string) string {
+	return "/__mihari/panels/zashboard/#/setup"
+}
 func (f *fakePanels) Install(ctx context.Context, id, pin string) error {
 	if f.install != nil {
 		return f.install(ctx, id, pin)

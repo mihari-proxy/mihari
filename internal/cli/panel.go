@@ -12,7 +12,7 @@ import (
 // PanelClient is the typed control surface used by panel CLI commands.
 type PanelClient interface {
 	WebGUI(context.Context) (protocol.WebGUIStatus, error)
-	OpenWebGUI(context.Context) (protocol.WebGUIOpenResult, error)
+	OpenWebGUI(context.Context, string) (protocol.WebGUIOpenResult, error)
 	Panels(context.Context) (protocol.PanelList, error)
 	InstallPanel(context.Context, string, protocol.PanelInstallRequest) (protocol.MutationResult, error)
 	UpdatePanel(context.Context, string, protocol.MutationRequest) (protocol.MutationResult, error)
@@ -112,7 +112,7 @@ func newPanelUpdateCommand(dependencies Dependencies, options *runOptions) *cobr
 
 func newPanelUseCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
 	var revision uint64
-	command := &cobra.Command{Use: "use ID", Short: "Activate an installed panel", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
+	command := &cobra.Command{Use: "use ID", Short: "Set the default Web GUI panel for root /", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
 		client, err := panelClient(dependencies)
 		if err != nil {
 			return err
@@ -133,29 +133,43 @@ func newPanelUseCommand(dependencies Dependencies, options *runOptions) *cobra.C
 }
 
 func newPanelOpenCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
-	return &cobra.Command{Use: "open", Short: "Open the active Web GUI in a browser", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
-		client, err := panelClient(dependencies)
-		if err != nil {
+	return &cobra.Command{
+		Use:   "open [ID]",
+		Short: "Open an installed Web GUI panel in a browser",
+		Long:  "Open a panel at its own /__mihari/panels/{id}/ URL. Omit ID to open the default active panel. Installed panels are not mutually exclusive.",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			client, err := panelClient(dependencies)
+			if err != nil {
+				return err
+			}
+			panelID := ""
+			if len(args) == 1 {
+				panelID = args[0]
+			}
+			open, err := client.OpenWebGUI(command.Context(), panelID)
+			if err != nil {
+				return classifyRuntimeError(err)
+			}
+			openBrowser := dependencies.OpenBrowser
+			if openBrowser == nil {
+				openBrowser = platform.OpenBrowser
+			}
+			if err := openBrowser(open.OpenURL); err != nil {
+				return protocol.APIError{Code: protocol.CodeInternal, Message: "failed to open browser"}
+			}
+			// Never print the open URL or token (human or JSON default CLI output).
+			if options.json {
+				payload := map[string]any{"schema": "mihari/v1", "opened": true}
+				if open.Panel != "" {
+					payload["panel"] = open.Panel
+				}
+				return renderJSON(command.OutOrStdout(), payload)
+			}
+			_, err = fmt.Fprintln(command.OutOrStdout(), "Opened Web GUI in browser")
 			return err
-		}
-		open, err := client.OpenWebGUI(command.Context())
-		if err != nil {
-			return classifyRuntimeError(err)
-		}
-		openBrowser := dependencies.OpenBrowser
-		if openBrowser == nil {
-			openBrowser = platform.OpenBrowser
-		}
-		if err := openBrowser(open.OpenURL); err != nil {
-			return protocol.APIError{Code: protocol.CodeInternal, Message: "failed to open browser"}
-		}
-		// Never print the open URL or token (human or JSON default CLI output).
-		if options.json {
-			return renderJSON(command.OutOrStdout(), map[string]any{"schema": "mihari/v1", "opened": true})
-		}
-		_, err = fmt.Fprintln(command.OutOrStdout(), "Opened Web GUI in browser")
-		return err
-	}}
+		},
+	}
 }
 
 func newPanelRollbackCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
