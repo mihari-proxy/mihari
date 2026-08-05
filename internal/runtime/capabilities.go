@@ -27,5 +27,7 @@ func (m *Manager) Capabilities() []string {
 	if m.sysProxy != nil {
 		capabilities = append(capabilities, protocol.CapabilitySystemProxy)
 	}
+	// TUN is always advertised; live apply depends on the mihomo controller.
+	capabilities = append(capabilities, protocol.CapabilityTUN)
 	return capabilities
 }

@@ -516,6 +516,11 @@ func (s *fakeSupervisor) Restart(ctx context.Context) error {
 type fakeController struct {
 	selectProxy        func(context.Context, string, string) error
 	updateRuleProvider func(context.Context, string) error
+	configs            map[string]any
+	configsErr         error
+	patchConfigs       func(context.Context, map[string]any) error
+	lastPatch          map[string]any
+	patchCalls         int
 }
 
 func (c *fakeController) Proxies(context.Context) (mihomo.Proxies, error) {
@@ -561,10 +566,26 @@ func (c *fakeController) UpdateRuleProvider(ctx context.Context, name string) er
 }
 
 func (c *fakeController) Configs(context.Context) (map[string]any, error) {
+	if c.configsErr != nil {
+		return nil, c.configsErr
+	}
+	if c.configs != nil {
+		return c.configs, nil
+	}
 	return map[string]any{}, nil
 }
 
-func (c *fakeController) PatchConfigs(context.Context, map[string]any) error {
+func (c *fakeController) PatchConfigs(ctx context.Context, patch map[string]any) error {
+	c.patchCalls++
+	c.lastPatch = patch
+	if c.patchConfigs != nil {
+		return c.patchConfigs(ctx, patch)
+	}
+	if c.configs != nil {
+		if tun, ok := patch["tun"].(map[string]any); ok {
+			c.configs["tun"] = cloneTunMap(tun)
+		}
+	}
 	return nil
 }
 
