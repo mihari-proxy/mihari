@@ -23,6 +23,7 @@ import (
 	"github.com/LeeShunEE/mihari/internal/state"
 	"github.com/LeeShunEE/mihari/internal/subscription"
 	"github.com/LeeShunEE/mihari/internal/supervisor"
+	"github.com/LeeShunEE/mihari/internal/sysproxy"
 	"github.com/LeeShunEE/mihari/internal/web"
 )
 
@@ -178,6 +179,8 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		WebGateway:    webGateway,
 		WebOpenToken:  webCredential,
 		Settings:      settings,
+		SettingsPath:  settingsPath,
+		SysProxy:      sysproxy.Platform(),
 		RuntimeConfig: paths.RuntimeConfig,
 		StagingDir:    paths.SubscriptionStaging,
 		ValidateConfig: func(ctx context.Context, candidatePath string) error {
