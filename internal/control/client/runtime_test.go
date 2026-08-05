@@ -100,6 +100,19 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 				_, err := client.DisableSystemProxy(ctx, protocol.SystemProxyMutationRequest{OperationID: "sysproxy-2"})
 				return err
 			}},
+		{"tun", http.MethodGet, "/v1/tun", "", `{"schema":"mihari/v1","revision":5,"desired_enable":true,"live_enable":true,"stack":"gVisor","managed":true}`,
+			func(ctx context.Context, client *Client) error { _, err := client.Tun(ctx); return err }},
+		{"tun enable", http.MethodPost, "/v1/tun/enable", `{"operation_id":"tun-1","if_revision":5}`, `{"schema":"mihari/v1","revision":6,"desired_enable":true,"live_enable":true,"stack":"gVisor","managed":true}`,
+			func(ctx context.Context, client *Client) error {
+				revision := uint64(5)
+				_, err := client.EnableTun(ctx, protocol.TunMutationRequest{OperationID: "tun-1", IfRevision: &revision})
+				return err
+			}},
+		{"tun disable", http.MethodPost, "/v1/tun/disable", `{"operation_id":"tun-2"}`, `{"schema":"mihari/v1","revision":7,"desired_enable":false,"managed":true,"stack":"gVisor"}`,
+			func(ctx context.Context, client *Client) error {
+				_, err := client.DisableTun(ctx, protocol.TunMutationRequest{OperationID: "tun-2"})
+				return err
+			}},
 		{"onboarding", http.MethodGet, "/v1/onboarding", "", `{"schema":"mihari/v1","revision":3,"complete":false,"mixed_addr":"127.0.0.1:7890","controller_addr":"127.0.0.1:9090","web_addr":"127.0.0.1:9191","restart_required":false}`,
 			func(ctx context.Context, client *Client) error { _, err := client.Onboarding(ctx); return err }},
 		{"update onboarding", http.MethodPatch, "/v1/onboarding", `{"operation_id":"setup-1","if_revision":3,"complete":true,"web_addr":"127.0.0.1:9292"}`, `{"schema":"mihari/v1","revision":4,"complete":true,"mixed_addr":"127.0.0.1:7890","controller_addr":"127.0.0.1:9090","web_addr":"127.0.0.1:9292","restart_required":true}`,
