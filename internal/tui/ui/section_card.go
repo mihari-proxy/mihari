@@ -68,12 +68,27 @@ func FormatSubscriptionsTitle(n int) string {
 // padding of 1), matching the previous lipgloss Width() for these cards.
 // Outer visual width is contentWidth+2 (left/right border runes).
 func RenderBorderedSection(theme Theme, title, body string, contentWidth int) string {
-	return RenderBorderedSectionWithBorder(theme, title, body, contentWidth, theme.ColorSurfaceBorder)
+	return renderBorderedSectionEx(theme, title, body, contentWidth, theme.ColorSurfaceBorder, theme.ColorAccent)
 }
 
 // RenderBorderedSectionWithBorder is RenderBorderedSection with an explicit border color
-// (e.g. ColorAccent for a focused Web GUI panel).
+// (e.g. ColorAccent for a focused Web GUI panel). The title keeps the default
+// accent foreground.
 func RenderBorderedSectionWithBorder(theme Theme, title, body string, contentWidth int, borderColor color.Color) string {
+	return renderBorderedSectionEx(theme, title, body, contentWidth, borderColor, theme.ColorAccent)
+}
+
+// RenderBorderedSectionColored draws a bordered section whose border and title
+// share one semantic color, so the card reads as a single cohesive unit. Use it
+// to partition a page into color-coded regions (e.g. the System page: info,
+// core, OS service, network). Pass the same color for both to tint the card.
+func RenderBorderedSectionColored(theme Theme, title, body string, contentWidth int, borderColor, titleColor color.Color) string {
+	return renderBorderedSectionEx(theme, title, body, contentWidth, borderColor, titleColor)
+}
+
+// renderBorderedSectionEx is the shared painter behind the RenderBorderedSection
+// family. borderColor tints the box frame; titleColor tints the embedded title.
+func renderBorderedSectionEx(theme Theme, title, body string, contentWidth int, borderColor, titleColor color.Color) string {
 	if contentWidth < 8 {
 		contentWidth = 8
 	}
@@ -82,7 +97,7 @@ func RenderBorderedSectionWithBorder(theme Theme, title, body string, contentWid
 	textWidth := max(1, contentWidth-pad*2)
 
 	borderFG := lipgloss.NewStyle().Foreground(borderColor)
-	titleStyled := theme.Title.Render(strings.TrimSpace(title))
+	titleStyled := lipgloss.NewStyle().Bold(true).Foreground(titleColor).Render(strings.TrimSpace(title))
 
 	top := renderTopBorder(borderFG, titleStyled, outer)
 	bottom := borderFG.Render("╰" + strings.Repeat("─", max(0, outer-2)) + "╯")

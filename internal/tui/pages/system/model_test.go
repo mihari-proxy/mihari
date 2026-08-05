@@ -245,10 +245,14 @@ func TestSystemRendersCategorizedRowsWithoutStopDaemon(t *testing.T) {
 	updated, _ := model.Update(onboardingResultMsg{status: client.onboarding})
 	model = updated.(*Model)
 	view := model.View()
-	for _, want := range []string{"Daemon", "v0.4.0", "mihomo core", "v1.19.0", "Local endpoints", "127.0.0.1:9190", "Maintenance", "Run Setup", "TUN", "Unavailable"} {
+	for _, want := range []string{"Daemon", "v0.4.0", "mihomo core", "v1.19.0", "Local endpoints", "127.0.0.1:9190", "Run Setup", "TUN", "Unavailable"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("missing %q in view=%s", want, view)
 		}
+	}
+	// Maintenance was a single-row section; it is now merged into Daemon.
+	if strings.Contains(view, ui.MaintenanceSectionTitle) {
+		t.Fatalf("Maintenance section should be merged into Daemon: %s", view)
 	}
 	if strings.Contains(view, "Stop Daemon") {
 		t.Fatalf("system page offered destructive self-stop: %s", view)
