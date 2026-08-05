@@ -45,18 +45,38 @@ func (a *Adapter) ResolveLatest(ctx context.Context) (string, string, error) {
 	return rel.TagName, asset.URL, nil
 }
 
-// SetupPath returns a same-origin setup deep-link that points only at the gateway host.
-// Zashboard-style configuration uses hostname (and optional port) without a secret.
+// SetupPath returns a same-origin setup deep-link that points only at the gateway.
+// Zashboard expects hostname and port as separate query params on /#/setup (no secret).
 func (a *Adapter) SetupPath(gatewayHost string) string {
 	host := strings.TrimSpace(gatewayHost)
 	if host == "" {
 		host = "127.0.0.1:9191"
 	}
+	hostname := host
+	port := ""
+	if i := strings.LastIndex(host, ":"); i >= 0 {
+		// Bracketed IPv6: [::1]:9191 — keep hostname as [::1].
+		if strings.HasPrefix(host, "[") {
+			if end := strings.Index(host, "]"); end > 0 && end+1 < len(host) && host[end+1] == ':' {
+				hostname = host[:end+1]
+				port = host[end+2:]
+			}
+		} else if !strings.Contains(host[:i], ":") {
+			hostname = host[:i]
+			port = host[i+1:]
+		}
+	}
+	if hostname == "" {
+		hostname = "127.0.0.1"
+	}
 	values := url.Values{}
-	values.Set("hostname", host)
+	values.Set("hostname", hostname)
+	if port != "" {
+		values.Set("port", port)
+	}
 	// Disable core-upgrade UI surface when the panel honors the query (backend still rejects /upgrade).
 	values.Set("disableUpgrade", "true")
-	return "/?" + values.Encode()
+	return "/#/setup?" + values.Encode()
 }
 
 // SelectAsset chooses a Zashboard dist zip, preferring no-fonts / smaller names.

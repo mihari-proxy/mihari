@@ -81,8 +81,14 @@ func TestAdapterResolveLatestRejectsMissingAsset(t *testing.T) {
 
 func TestSetupPathHasNoSecret(t *testing.T) {
 	path := New(nil, "").SetupPath("127.0.0.1:9191")
+	if !strings.HasPrefix(path, "/#/setup?") {
+		t.Fatalf("path=%q, want /#/setup? deep-link", path)
+	}
 	if !strings.Contains(path, "hostname=127.0.0.1") {
 		t.Fatalf("path=%q", path)
+	}
+	if !strings.Contains(path, "port=9191") {
+		t.Fatalf("path=%q, want separate port query", path)
 	}
 	lower := strings.ToLower(path)
 	for _, forbidden := range []string{"secret", "token", "9090", "bearer"} {
@@ -92,6 +98,19 @@ func TestSetupPathHasNoSecret(t *testing.T) {
 	}
 	if !strings.Contains(path, "disableUpgrade=true") {
 		t.Fatalf("expected disableUpgrade in setup path: %s", path)
+	}
+}
+
+func TestSetupPathIPv6HostPort(t *testing.T) {
+	path := New(nil, "").SetupPath("[::1]:9191")
+	if !strings.Contains(path, "hostname=%5B%3A%3A1%5D") && !strings.Contains(path, "hostname=[::1]") {
+		// url.Values encodes brackets; accept either raw form in assertion via QueryUnescape path.
+		if !strings.Contains(path, "hostname=") || !strings.Contains(path, "port=9191") {
+			t.Fatalf("path=%q", path)
+		}
+	}
+	if !strings.Contains(path, "port=9191") {
+		t.Fatalf("path=%q", path)
 	}
 }
 

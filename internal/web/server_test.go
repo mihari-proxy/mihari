@@ -54,7 +54,16 @@ func (m memoryPanel) SetupPath(host string) string {
 	if m.path != "" {
 		return m.path
 	}
-	return "/?hostname=" + host + "&disableUpgrade=true"
+	// Mirror Zashboard-style same-origin setup deep-link (host may be host:port).
+	hostname, port := host, ""
+	if i := strings.LastIndex(host, ":"); i >= 0 && !strings.Contains(host[:i], ":") {
+		hostname, port = host[:i], host[i+1:]
+	}
+	path := "/#/setup?hostname=" + hostname + "&disableUpgrade=true"
+	if port != "" {
+		path = "/#/setup?hostname=" + hostname + "&port=" + port + "&disableUpgrade=true"
+	}
+	return path
 }
 
 func TestGatewayProxiesVersionWithAuthAndRejectsUpgrade(t *testing.T) {
@@ -163,7 +172,7 @@ func TestGatewayProxiesVersionWithAuthAndRejectsUpgrade(t *testing.T) {
 		t.Fatalf("static status=%d body=%s", resp.StatusCode, body)
 	}
 
-	// One-shot token sets cookie and redirects without token.
+	// One-shot token sets cookie and redirects to panel setup (no token, no :9090).
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -177,8 +186,15 @@ func TestGatewayProxiesVersionWithAuthAndRejectsUpgrade(t *testing.T) {
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("token redirect status=%d", resp.StatusCode)
 	}
-	if loc := resp.Header.Get("Location"); strings.Contains(loc, "token=") {
+	loc := resp.Header.Get("Location")
+	if strings.Contains(loc, "token=") {
 		t.Fatalf("redirect kept token: %s", loc)
+	}
+	if !strings.Contains(loc, "/#/setup?") {
+		t.Fatalf("token open should land on setup deep-link, got %q", loc)
+	}
+	if strings.Contains(loc, "9090") {
+		t.Fatalf("setup must not target controller port: %s", loc)
 	}
 	if len(resp.Cookies()) == 0 || resp.Cookies()[0].Name != CookieName {
 		t.Fatalf("cookies=%v", resp.Cookies())
