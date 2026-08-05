@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -15,6 +16,7 @@ func TestNewPathsBuildsRuntimeLayout(t *testing.T) {
 	}
 	wants := map[string]string{
 		"root":            root,
+		"control token":   filepath.Join(root, "control.token"),
 		"bin":             filepath.Join(root, "bin"),
 		"core":            filepath.Join(root, "bin", coreName),
 		"runtime config":  filepath.Join(root, "runtime", "config.yaml"),
@@ -37,6 +39,7 @@ func TestNewPathsBuildsRuntimeLayout(t *testing.T) {
 	}
 	gots := map[string]string{
 		"root":            paths.Root,
+		"control token":   paths.ControlToken,
 		"bin":             paths.Bin,
 		"core":            paths.CoreBinary,
 		"runtime config":  paths.RuntimeConfig,
@@ -70,17 +73,56 @@ func TestDefaultPathsHonorsDataOverride(t *testing.T) {
 	if got := DefaultPaths(); got.Root != root {
 		t.Fatalf("root=%q want=%q", got.Root, root)
 	}
+	if got := DefaultDataRoot(); got != root {
+		t.Fatalf("DefaultDataRoot=%q want=%q", got, root)
+	}
+	if got := DefaultPaths().ControlToken; got != filepath.Join(root, "control.token") {
+		t.Fatalf("token=%q", got)
+	}
 }
 
-func TestDefaultDataRootWindowsUsesProgramData(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("windows-only path policy")
-	}
+func TestDefaultDataRootUsesHomeDotMihari(t *testing.T) {
 	t.Setenv("MIHARI_DATA", "")
-	t.Setenv("ProgramData", `C:\ProgramData`)
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("UserHomeDir unavailable")
+	}
 	got := defaultDataRoot()
-	want := filepath.Join(`C:\ProgramData`, "mihari")
+	want := filepath.Join(home, ".mihari")
 	if got != want {
 		t.Fatalf("root=%q want=%q", got, want)
+	}
+	// DefaultPaths without override must match.
+	if root := DefaultPaths().Root; root != want {
+		t.Fatalf("DefaultPaths.Root=%q want=%q", root, want)
+	}
+}
+
+func TestAbsoluteDataRootResolvesRelativeAndAbsolute(t *testing.T) {
+	abs := filepath.Join(t.TempDir(), "abs-data")
+	t.Setenv("MIHARI_DATA", abs)
+	got, err := AbsoluteDataRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != filepath.Clean(abs) {
+		t.Fatalf("got=%q want=%q", got, abs)
+	}
+
+	rel := filepath.Join(".", "rel-mihari-data")
+	t.Setenv("MIHARI_DATA", rel)
+	got, err = AbsoluteDataRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(got) {
+		t.Fatalf("expected absolute path, got %q", got)
+	}
+	wantAbs, err := filepath.Abs(rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != wantAbs {
+		t.Fatalf("got=%q want=%q", got, wantAbs)
 	}
 }

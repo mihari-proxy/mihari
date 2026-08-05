@@ -59,6 +59,7 @@ type row struct {
 	name        string
 	state       string
 	load        string
+	traffic     string
 	lastSuccess string
 	nextRefresh string
 	spinning    bool
@@ -74,7 +75,12 @@ func (r row) Render(theme ui.Theme) string {
 	if r.spinning {
 		load = theme.Warning.Render(load)
 	}
-	return fmt.Sprintf("%s  %-20s  %-9s  %-11s  %-12s  %s", active, truncate(r.name, 20), r.state, load, r.lastSuccess, r.nextRefresh)
+	traffic := r.traffic
+	if traffic == "" {
+		traffic = ui.MissingValue
+	}
+	return fmt.Sprintf("%s  %-18s  %-9s  %-11s  %-18s  %-12s  %s",
+		active, truncate(r.name, 18), r.state, load, truncate(traffic, 18), r.lastSuccess, r.nextRefresh)
 }
 
 // resolveLoadPhase maps catalog + local pending work onto intermediate load states.
@@ -160,7 +166,11 @@ func rowFrom(subscription protocol.Subscription, active bool, pending string, no
 	if active {
 		marker = "●"
 	}
-	return row{active: marker, name: subscription.Name, state: state, load: load, lastSuccess: lastSuccess, nextRefresh: next, spinning: spinning}
+	traffic := ui.FormatSubscriptionTraffic(subscription.Upload, subscription.Download, subscription.Total)
+	return row{
+		active: marker, name: subscription.Name, state: state, load: load,
+		traffic: traffic, lastSuccess: lastSuccess, nextRefresh: next, spinning: spinning,
+	}
 }
 
 type detailState struct{ subscription protocol.Subscription }
@@ -433,7 +443,10 @@ func (m *Model) FooterHints() string {
 }
 
 func (m *Model) View() string {
-	lines := []string{m.theme.Title.Render(ui.SubscriptionsTitle), "  Active  Name                  State      Load         " + ui.LastUpdateLabel + "  " + ui.NextUpdateLabel}
+	lines := []string{
+		m.theme.Title.Render(ui.SubscriptionsTitle),
+		"  Active  Name                State      Load         " + ui.TrafficLabel + "              " + ui.LastUpdateLabel + "  " + ui.NextUpdateLabel,
+	}
 	if m.lastError != "" {
 		lines = append(lines, m.theme.Muted.Render(m.lastError))
 	}
@@ -678,11 +691,16 @@ func (m *Model) detailView() string {
 	}
 	phase := resolveLoadPhase(subscription, subscription.ID == m.activeID, m.pending[subscription.ID], m.now(), m.globalInterval)
 	load, _ := loadPhaseLabel(phase, m.now())
-	return fmt.Sprintf("%s: %s\n%s: %s\n%s: %t\n%s: %s\n%s: %t\n%s: %s\n%s: %s\n%s: %s\n\n%s",
+	traffic := ui.FormatSubscriptionTraffic(subscription.Upload, subscription.Download, subscription.Total)
+	if traffic == "" {
+		traffic = ui.MissingValue
+	}
+	return fmt.Sprintf("%s: %s\n%s: %s\n%s: %t\n%s: %s\n%s: %s\n%s: %t\n%s: %s\n%s: %s\n%s: %s\n\n%s",
 		ui.NameLabel, subscription.Name,
 		ui.StatusLabel, enabledLabel(subscription.Enabled),
 		ui.AutoRefreshLabel, subscription.AutoRefresh,
 		ui.LoadLabel, load,
+		ui.TrafficLabel, traffic,
 		ui.CacheLabel, subscription.Cached,
 		ui.IntervalLabel, valueOr(subscription.Interval, ui.GlobalLabel),
 		ui.LastUpdateLabel, formatTimestamp(subscription.UpdatedAt),

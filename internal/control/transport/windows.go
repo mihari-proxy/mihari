@@ -6,8 +6,8 @@ import (
 	"context"
 	"net"
 	"os"
-	"path/filepath"
 
+	"github.com/LeeShunEE/mihari/internal/platform"
 	"github.com/Microsoft/go-winio"
 )
 
@@ -38,10 +38,7 @@ func DefaultCredentialPath() string {
 	if value := os.Getenv("MIHARI_CONTROL_CREDENTIAL"); value != "" {
 		return value
 	}
-	// Machine-wide path so LocalSystem service and interactive clients share one token.
-	// (UserConfigDir under LocalSystem is the systemprofile hive and is not shared.)
-	if dir := os.Getenv("ProgramData"); dir != "" {
-		return filepath.Join(dir, "mihari", "control.token")
-	}
-	return filepath.Join(`C:\ProgramData`, "mihari", "control.token")
+	// Token lives under the shared data root ($HOME/.mihari/control.token).
+	// Service installs pin MIHARI_DATA so LocalSystem uses the same file as the desktop user.
+	return platform.DefaultPaths().ControlToken
 }

@@ -128,8 +128,12 @@ func (m *Manager) Install() error {
 	return mapServiceError(c.Install())
 }
 
-// Uninstall removes the OS service.
+// Uninstall stops the service (if running), then removes the OS service registration.
+// Stopping first avoids Windows SCM "marked for deletion" while the process is still alive.
 func (m *Manager) Uninstall() error {
+	if err := m.prepareForRemoval(); err != nil {
+		return err
+	}
 	c, err := m.controller(nil)
 	if err != nil {
 		return err
@@ -164,11 +168,10 @@ func (m *Manager) Restart() error {
 	return mapServiceError(c.Restart())
 }
 
-// Reinstall re-registers the OS service using this process's executable path
-// (or Options.Executable). Intended for upgrades: stop → uninstall → install → start.
-// Stop/uninstall errors for a missing or already-stopped service are ignored.
+// Reinstall stops the service, removes registration, copies this binary into the
+// install directory, re-registers ImagePath, and starts the service.
 func (m *Manager) Reinstall() error {
-	_ = m.Stop()
+	// Uninstall already stops first; ignore missing service so a fresh install still proceeds.
 	if err := m.Uninstall(); err != nil && !isServiceNotInstalled(err) {
 		return err
 	}
@@ -178,12 +181,34 @@ func (m *Manager) Reinstall() error {
 	return m.Start()
 }
 
+// prepareForRemoval stops the service before uninstall/reinstall. Missing or
+// already-stopped services are treated as success so deletion can proceed.
+func (m *Manager) prepareForRemoval() error {
+	err := m.Stop()
+	if err == nil || isIgnorableStopError(err) {
+		return nil
+	}
+	return err
+}
+
 func isServiceNotInstalled(err error) bool {
 	var apiError protocol.APIError
 	if errors.As(err, &apiError) {
 		return apiError.Code == protocol.CodeInvalidState && strings.Contains(strings.ToLower(apiError.Message), "not installed")
 	}
 	return isNotInstalledError(err)
+}
+
+func isIgnorableStopError(err error) bool {
+	if err == nil || isServiceNotInstalled(err) {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "not been started") ||
+		strings.Contains(lower, "has not been started") ||
+		strings.Contains(lower, "not started") ||
+		strings.Contains(lower, "already stopped") ||
+		strings.Contains(lower, "service is not started")
 }
 
 // Status reports the service state.
@@ -241,6 +266,11 @@ func mapServiceError(err error) error {
 		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihari service is not installed"}
 	case strings.Contains(lower, "access is denied"), strings.Contains(lower, "permission"), strings.Contains(lower, "operation not permitted"):
 		return protocol.APIError{Code: protocol.CodePermissionDenied, Message: "administrator privileges are required; re-run from an elevated shell"}
+	case strings.Contains(lower, "marked for deletion"), strings.Contains(lower, "1072"):
+		return protocol.APIError{
+			Code:    protocol.CodeInvalidState,
+			Message: "service is marked for deletion; stop any remaining mihari process, close Services.msc, wait a few seconds or reboot, then retry",
+		}
 	case strings.Contains(lower, "did not respond to the start or control request"),
 		strings.Contains(lower, "timely fashion"),
 		strings.Contains(lower, "timeout was reached"),

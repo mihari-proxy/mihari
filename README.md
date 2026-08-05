@@ -127,6 +127,35 @@ Every explicit CLI command supports human-readable output and `--json`. `--json`
 
 All release binaries are CGO-free.
 
+## Data paths
+
+Mihari keeps **one data root** per install (override with `MIHARI_DATA`). Default:
+
+| Platform | Data root |
+|----------|-----------|
+| Windows | `%USERPROFILE%\.mihari` |
+| macOS / Linux | `$HOME/.mihari` |
+
+Almost everything lives under that root: settings, control token (`control.token`), runtime config, core binary, subscriptions, GeoIP, panel assets, logs, and staging.
+
+Control endpoint (separate from the data tree):
+
+| Platform | Default endpoint |
+|----------|------------------|
+| Windows | `\\.\pipe\mihari-control` (named pipe; no file) |
+| Linux | `$XDG_RUNTIME_DIR/mihari/control.sock`, else `$DATA/control.sock` |
+| macOS | `$DATA/control.sock` |
+
+`service install` writes **absolute** `MIHARI_DATA=<data root>` into the OS service environment so a LocalSystem/root service shares the same tree as the user who installed it (not `systemprofile` or `/root`). Overrides:
+
+```text
+MIHARI_DATA=/abs/path
+MIHARI_CONTROL_ENDPOINT=...
+MIHARI_CONTROL_CREDENTIAL=...
+```
+
+`service uninstall` removes the OS registration only and **keeps** the data root. Delete the data directory manually (or a future `--purge`) to clear residual files. Old trees under `%AppData%\mihari` or `%ProgramData%\mihari` are not auto-migrated or auto-deleted.
+
 ## Development
 
 ```console

@@ -3,10 +3,13 @@ package transport
 import (
 	"context"
 	"io"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	transporttest "github.com/LeeShunEE/mihari/internal/control/transport/testutil"
+	"github.com/LeeShunEE/mihari/internal/platform"
 )
 
 func TestListenAndDialRoundTrip(t *testing.T) {
@@ -53,5 +56,53 @@ func TestEndpointIsUnique(t *testing.T) {
 			t.Fatalf("duplicate endpoint %q", endpoint)
 		}
 		seen[endpoint] = true
+	}
+}
+
+func TestDefaultCredentialPathUsesDataRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cred-data")
+	t.Setenv("MIHARI_DATA", root)
+	t.Setenv("MIHARI_CONTROL_CREDENTIAL", "")
+	got := DefaultCredentialPath()
+	want := filepath.Join(root, "control.token")
+	if got != want {
+		t.Fatalf("credential=%q want=%q", got, want)
+	}
+	if got != platform.DefaultPaths().ControlToken {
+		t.Fatalf("credential diverged from platform paths: %q vs %q", got, platform.DefaultPaths().ControlToken)
+	}
+}
+
+func TestDefaultCredentialPathHonorsExplicitOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "custom.token")
+	t.Setenv("MIHARI_CONTROL_CREDENTIAL", path)
+	if got := DefaultCredentialPath(); got != path {
+		t.Fatalf("got=%q want=%q", got, path)
+	}
+}
+
+func TestDefaultEndpointHonorsOverride(t *testing.T) {
+	const want = "custom-endpoint-value"
+	t.Setenv("MIHARI_CONTROL_ENDPOINT", want)
+	if got := DefaultEndpoint(); got != want {
+		t.Fatalf("got=%q want=%q", got, want)
+	}
+}
+
+func TestDefaultEndpointWithoutOverride(t *testing.T) {
+	t.Setenv("MIHARI_CONTROL_ENDPOINT", "")
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	root := filepath.Join(t.TempDir(), "sock-data")
+	t.Setenv("MIHARI_DATA", root)
+	got := DefaultEndpoint()
+	if runtime.GOOS == "windows" {
+		if got != `\\.\pipe\mihari-control` {
+			t.Fatalf("windows endpoint=%q", got)
+		}
+		return
+	}
+	want := filepath.Join(root, "control.sock")
+	if got != want {
+		t.Fatalf("unix endpoint=%q want=%q", got, want)
 	}
 }

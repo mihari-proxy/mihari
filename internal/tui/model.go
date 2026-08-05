@@ -81,7 +81,7 @@ type rootServiceStatusMsg struct {
 	err    error
 }
 
-// networkStatusMsg carries daemon-backed sysproxy/TUN snapshots for Overview.
+// networkStatusMsg carries daemon-backed sysproxy/TUN snapshots for Overview and System.
 type networkStatusMsg struct {
 	proxy    protocol.SystemProxyStatus
 	proxyErr error
@@ -183,8 +183,22 @@ func newModelWithClientContext(ctx context.Context, events <-chan session.Event,
 	return model
 }
 
+const servicePollInterval = 2 * time.Second
+
+// servicePollTickMsg drives periodic OS service status refresh for the top-right badge.
+type servicePollTickMsg struct{}
+
 func (model Model) Init() tea.Cmd {
-	return tea.Batch(waitSessionEvent(model.events), model.loadRootServiceStatus())
+	return tea.Batch(waitSessionEvent(model.events), model.loadRootServiceStatus(), model.scheduleServicePoll())
+}
+
+func (model Model) scheduleServicePoll() tea.Cmd {
+	if model.serviceCtrl == nil {
+		return nil
+	}
+	return tea.Tick(servicePollInterval, func(time.Time) tea.Msg {
+		return servicePollTickMsg{}
+	})
 }
 
 // SetServiceController injects the OS service controller used for the top-right badge
@@ -207,8 +221,40 @@ func (model Model) loadRootServiceStatus() tea.Cmd {
 	}
 }
 
+func isOSServiceAction(action ui.Action) bool {
+	switch action {
+	case ui.ActionServiceInstall, ui.ActionServiceUninstall, ui.ActionServiceReinstall,
+		ui.ActionServiceStart, ui.ActionServiceStop, ui.ActionServiceRestart:
+		return true
+	default:
+		return false
+	}
+}
+
+// syncSystemServiceStatus pushes the root-polled OS service state into the System page
+// so the in-page Status line does not lag behind (or lead) the top-right badge.
+func (model *Model) syncSystemServiceStatus() {
+	page, ok := model.pages[ui.PageSystem].(*systempage.Model)
+	if !ok {
+		return
+	}
+	page.ApplyServiceStatus(model.serviceStatus, model.serviceLoaded)
+}
+
+// syncSystemNetworkStatus pushes the root-polled system-proxy/TUN snapshot into the
+// System page so Network rows do not stay on Loading… until the page's own Load().
+func (model *Model) syncSystemNetworkStatus() {
+	page, ok := model.pages[ui.PageSystem].(*systempage.Model)
+	if !ok {
+		return
+	}
+	page.ApplyRootNetworkStatus(model.systemProxy, model.systemProxyOK, model.tunStatus, model.tunOK)
+}
+
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch typed := message.(type) {
+	case servicePollTickMsg:
+		return model, tea.Batch(model.loadRootServiceStatus(), model.scheduleServicePoll())
 	case rootServiceStatusMsg:
 		model.serviceLoaded = true
 		if typed.err != nil {
@@ -222,6 +268,8 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.serviceStatus = typed.status
 		}
 		model.syncOverview()
+		// Keep System page status line in sync with the root badge source of truth.
+		model.syncSystemServiceStatus()
 		return model, nil
 	case networkStatusMsg:
 		if typed.proxyErr == nil {
@@ -237,6 +285,8 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.tunOK = false
 		}
 		model.syncOverview()
+		// Keep System page Network rows aligned with the root poll (Overview already syncs).
+		model.syncSystemNetworkStatus()
 		return model, nil
 	case sessionEventMsg:
 		if !typed.Open {
@@ -305,7 +355,12 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			next, pageCmd = model.dispatchPageTo(typed.Intent.Page, typed.Result)
 			model = next.(Model)
 		}
-		return model, tea.Batch(pageCmd, model.spinnerCmdIfNeeded())
+		cmds := []tea.Cmd{pageCmd, model.spinnerCmdIfNeeded()}
+		// Service mutations change OS state immediately; refresh the top-right badge now.
+		if isOSServiceAction(typed.Intent.Action) {
+			cmds = append(cmds, model.loadRootServiceStatus())
+		}
+		return model, tea.Batch(cmds...)
 	case startSpinnerTickMsg:
 		// Real tea.Tick starts here so executeAction's Batch stays non-blocking.
 		if typed.gen != model.spinGen || !model.needsSpinner() {
@@ -607,6 +662,13 @@ func (model Model) updateRail(key string) (tea.Model, tea.Cmd) {
 	model.focus.Page = model.active
 	if prev != model.active {
 		model.clearSystemDoneIfLeaving(prev)
+		// Refresh System-owned snapshots (onboarding endpoints, elevation, network)
+		// when the rail lands on the page; Enter still Load()s after content focus.
+		if model.active == ui.PageSystem {
+			if page, ok := model.pages[model.active].(interface{ Load() tea.Cmd }); ok {
+				return model, page.Load()
+			}
+		}
 	}
 	return model, nil
 }
@@ -787,7 +849,11 @@ func activeSubscriptionName(list protocol.SubscriptionList) string {
 	}
 	for _, sub := range list.Subscriptions {
 		if sub.ID == list.ActiveID {
-			return sub.Name
+			name := strings.TrimSpace(sub.Name)
+			if name == "" {
+				name = sub.ID
+			}
+			return ui.FormatSubscriptionLabel(name, sub.Upload, sub.Download, sub.Total)
 		}
 	}
 	return ""

@@ -31,6 +31,7 @@ func newServiceForTest(t *testing.T, handler http.Handler) (*Service, string) {
 func TestPrepareRefreshDoesNotPersistUntilCommit(t *testing.T) {
 	service, url := newServiceForTest(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("ETag", `"one"`)
+		writer.Header().Set("Subscription-Userinfo", "upload=10; download=20; total=100")
 		_, _ = writer.Write([]byte("proxies: []\nrules: [MATCH,DIRECT]\n"))
 	}))
 	profile, err := service.Add("main", url)
@@ -48,8 +49,12 @@ func TestPrepareRefreshDoesNotPersistUntilCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.After.Profiles[0].Generation != 1 || receipt.After.Profiles[0].ETag != `"one"` {
-		t.Fatalf("metadata not committed: %#v", receipt.After.Profiles[0])
+	got := receipt.After.Profiles[0]
+	if got.Generation != 1 || got.ETag != `"one"` {
+		t.Fatalf("metadata not committed: %#v", got)
+	}
+	if got.Upload != 10 || got.Download != 20 || got.Total != 100 {
+		t.Fatalf("userinfo not committed: %#v", got)
 	}
 	if _, err := os.Stat(service.CachePath(profile.ID)); err != nil {
 		t.Fatal(err)

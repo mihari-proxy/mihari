@@ -12,6 +12,11 @@ type Subscription struct {
 	Generation  uint64    `json:"generation"`
 	UpdatedAt   time.Time `json:"updated_at,omitempty"`
 	LastError   string    `json:"last_error,omitempty"`
+	// Traffic quota from provider subscription-userinfo (bytes).
+	Upload   int64 `json:"upload,omitempty"`
+	Download int64 `json:"download,omitempty"`
+	Total    int64 `json:"total,omitempty"`
+	Expire   int64 `json:"expire,omitempty"`
 }
 
 type SubscriptionList struct {

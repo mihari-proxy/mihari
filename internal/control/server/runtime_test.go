@@ -173,6 +173,39 @@ func TestProxiesMapsNodeProtocolMetadata(t *testing.T) {
 	}
 }
 
+func TestProxiesPreservesGLOBALAllOrder(t *testing.T) {
+	// Names deliberately reverse-alphabetical so A-Z sort would fail this test.
+	fake := &fakeRuntime{proxies: mihomo.Proxies{Proxies: map[string]mihomo.Proxy{
+		"GLOBAL":    {Name: "GLOBAL", Type: "Selector", All: []string{"Zebra", "YouTube", "Alpha", "leaf"}},
+		"Zebra":     {Name: "Zebra", Type: "Selector", Now: "leaf", All: []string{"leaf"}},
+		"YouTube":   {Name: "YouTube", Type: "Selector", Now: "leaf", All: []string{"leaf"}},
+		"Alpha":     {Name: "Alpha", Type: "Selector", Now: "leaf", All: []string{"leaf"}},
+		"leaf":      {Name: "leaf", Type: "Direct"},
+		"OrphanGrp": {Name: "OrphanGrp", Type: "Selector", All: []string{"leaf"}}, // leftover not in GLOBAL
+	}}}
+	// Fix orphan name for valid Go map key
+	fake.proxies.Proxies["Orphan"] = mihomo.Proxy{Name: "Orphan", Type: "Selector", All: []string{"leaf"}}
+	delete(fake.proxies.Proxies, "Orphan蛤")
+	groups := orderedProxyGroups(fake.proxies.Proxies)
+	if len(groups) < 3 {
+		t.Fatalf("groups=%#v", groups)
+	}
+	want := []string{"Zebra", "YouTube", "Alpha"}
+	for i, name := range want {
+		if groups[i].Name != name {
+			t.Fatalf("order[%d]=%q want %q full=%v", i, groups[i].Name, name, groupNames(groups))
+		}
+	}
+}
+
+func groupNames(groups []protocol.ProxyGroup) []string {
+	names := make([]string, len(groups))
+	for i, g := range groups {
+		names[i] = g.Name
+	}
+	return names
+}
+
 func TestConnectionsMapsCompleteSafeMetadataAndChain(t *testing.T) {
 	started := time.Date(2026, time.August, 3, 12, 0, 0, 0, time.UTC)
 	fake := &fakeRuntime{connections: mihomo.Connections{Connections: []mihomo.Connection{{

@@ -121,23 +121,47 @@ func (s *Server) proxies(writer http.ResponseWriter, request *http.Request) {
 		writeControlError(writer, err)
 		return
 	}
-	groups := make([]protocol.ProxyGroup, 0, len(upstream.Proxies))
-	for _, proxy := range upstream.Proxies {
-		if len(proxy.All) == 0 {
-			continue
-		}
+	// Preserve mihomo/config order: follow GLOBAL.All when present. Do not sort
+	// alphabetically — panel UIs expect subscription default group order.
+	groups := orderedProxyGroups(upstream.Proxies)
+	writeJSON(writer, http.StatusOK, protocol.ProxyGroups{Schema: "mihari/v1", Groups: groups})
+}
+
+func orderedProxyGroups(proxies map[string]mihomo.Proxy) []protocol.ProxyGroup {
+	isGroup := func(p mihomo.Proxy) bool { return len(p.All) > 0 }
+	toGroup := func(proxy mihomo.Proxy) protocol.ProxyGroup {
 		nodes := make([]protocol.ProxyNode, 0, len(proxy.All))
 		for _, name := range proxy.All {
-			node := upstream.Proxies[name]
+			node := proxies[name]
 			nodes = append(nodes, protocol.ProxyNode{Name: name, Type: node.Type, UDP: node.UDP, XUDP: node.XUDP})
 		}
-		groups = append(groups, protocol.ProxyGroup{
+		return protocol.ProxyGroup{
 			Name: proxy.Name, Type: proxy.Type, Now: proxy.Now,
 			All: append([]string(nil), proxy.All...), Nodes: nodes,
-		})
+		}
 	}
-	sort.Slice(groups, func(i, j int) bool { return groups[i].Name < groups[j].Name })
-	writeJSON(writer, http.StatusOK, protocol.ProxyGroups{Schema: "mihari/v1", Groups: groups})
+
+	seen := make(map[string]bool, len(proxies))
+	groups := make([]protocol.ProxyGroup, 0, len(proxies))
+	if global, ok := proxies["GLOBAL"]; ok {
+		for _, name := range global.All {
+			proxy, ok := proxies[name]
+			if !ok || !isGroup(proxy) || seen[name] {
+				continue
+			}
+			seen[name] = true
+			groups = append(groups, toGroup(proxy))
+		}
+	}
+	// Append any remaining groups (e.g. when GLOBAL is missing). Order among
+	// leftovers is unspecified map order, but keeps completeness.
+	for name, proxy := range proxies {
+		if !isGroup(proxy) || seen[name] {
+			continue
+		}
+		groups = append(groups, toGroup(proxy))
+	}
+	return groups
 }
 
 func (s *Server) selectProxy(writer http.ResponseWriter, request *http.Request) {

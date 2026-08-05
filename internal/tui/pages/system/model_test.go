@@ -2,6 +2,7 @@ package system
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -367,16 +368,46 @@ func TestSystemServiceReinstallConfirmsWhenElevated(t *testing.T) {
 	if svc.reinstalls != 1 || model.pending {
 		t.Fatalf("reinstalls=%d pending=%v", svc.reinstalls, model.pending)
 	}
-	if model.doneRow != rowServiceReinstall {
-		t.Fatalf("doneRow=%q", model.doneRow)
+	if model.outcomeRow != rowServiceReinstall || !model.outcomeOK {
+		t.Fatalf("outcome row=%q ok=%v", model.outcomeRow, model.outcomeOK)
 	}
 	view = model.View()
 	if !strings.Contains(view, ui.DoneLabel) {
 		t.Fatalf("view missing Done badge:\n%s", view)
 	}
 	model.ClearDone()
-	if model.doneRow != "" || strings.Contains(model.View(), ui.DoneLabel) {
-		t.Fatalf("ClearDone left sticky badge: doneRow=%q", model.doneRow)
+	if model.outcomeRow != "" || strings.Contains(model.View(), ui.DoneLabel) {
+		t.Fatalf("ClearDone left sticky badge: outcomeRow=%q", model.outcomeRow)
+	}
+}
+
+func TestSystemServiceUninstallFailureShowsStickyFailed(t *testing.T) {
+	withElevation(t, true)
+	svc := &fakeService{status: service.StatusRunning, controlErr: errors.New("access is denied")}
+	model := NewWithService(nil, svc, func() string { return "op" })
+	updated, _ := model.Update(serviceStatusMsg{status: service.StatusRunning, elevated: true})
+	model = updated.(*Model)
+	model.focusID = rowServiceUninstall
+	updated, _ = model.Update(ui.ActionPendingMsg{Action: ui.ActionServiceUninstall})
+	model = updated.(*Model)
+	result := serviceResultMsg{kind: serviceUninstall, err: errors.New("access is denied")}
+	updated, _ = model.Update(result)
+	model = updated.(*Model)
+	if model.outcomeRow != rowServiceUninstall || model.outcomeOK {
+		t.Fatalf("outcome row=%q ok=%v", model.outcomeRow, model.outcomeOK)
+	}
+	view := model.View()
+	if !strings.Contains(view, ui.FailedLabel) {
+		t.Fatalf("view missing Failed badge:\n%s", view)
+	}
+	if model.outcomeDetail == "" {
+		t.Fatal("expected outcomeDetail reason")
+	}
+	// Reason must appear near the top (under title), not only below the fold.
+	titleIdx := strings.Index(view, ui.SystemTitle)
+	detailIdx := strings.Index(view, model.outcomeDetail)
+	if titleIdx < 0 || detailIdx < 0 || detailIdx < titleIdx {
+		t.Fatalf("failure reason not pinned under title:\n%s", view)
 	}
 }
 
