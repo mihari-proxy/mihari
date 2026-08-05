@@ -12,7 +12,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/elevate"
 	"github.com/LeeShunEE/mihari/internal/service"
@@ -436,7 +435,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 				m.markRowOutcome(rowID, false, ui.SystemChangedMessage)
 				return m, tea.Batch(m.Load(), m.loadCore(), m.rowSpinCmdIfNeeded())
 			}
-			m.markRowOutcome(rowID, false, ui.SystemActionFailed)
+			m.markRowOutcome(rowID, false, actionErrorDetail(typed.err, ui.SystemActionFailed))
 			return m, m.rowSpinCmdIfNeeded()
 		}
 		m.markRowOutcome(rowID, true, "")
@@ -449,7 +448,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		rowID := m.outcomeRowID(serviceRowForKind(typed.kind))
 		m.clearRowPending()
 		if typed.err != nil {
-			m.markRowOutcome(rowID, false, serviceErrorMessage(typed.err))
+			m.markRowOutcome(rowID, false, actionErrorDetail(typed.err, ui.ServiceActionFailed))
 			return m, tea.Batch(m.loadServiceStatus(), m.rowSpinCmdIfNeeded())
 		}
 		m.markRowOutcome(rowID, true, "")
@@ -538,6 +537,7 @@ func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) 
 				// Secondary confirm is not a terminal failure; keep waiting for force path.
 				return m, tea.Batch(m.confirmForceSystemProxy(apiError), m.rowSpinCmdIfNeeded())
 			case protocol.CodeSystemProxyNotOwned:
+				// Fixed copy: never imply Mihari will clear a foreign proxy.
 				m.markRowOutcome(rowID, false, ui.SystemProxyNotOwnedMessage)
 				return m, tea.Batch(m.loadSystemProxy(), m.rowSpinCmdIfNeeded())
 			case protocol.CodeRevisionConflict:
@@ -545,7 +545,7 @@ func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) 
 				return m, tea.Batch(m.Load(), m.rowSpinCmdIfNeeded())
 			}
 		}
-		m.markRowOutcome(rowID, false, ui.SystemProxyActionFailed)
+		m.markRowOutcome(rowID, false, actionErrorDetail(typed.err, ui.SystemProxyActionFailed))
 		return m, tea.Batch(m.loadSystemProxy(), m.rowSpinCmdIfNeeded())
 	}
 	m.markRowOutcome(rowID, true, "")
@@ -565,7 +565,7 @@ func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cm
 			m.markRowOutcome(rowID, false, ui.SystemChangedMessage)
 			return m, tea.Batch(m.Load(), m.rowSpinCmdIfNeeded())
 		}
-		m.markRowOutcome(rowID, false, ui.TunActionFailed)
+		m.markRowOutcome(rowID, false, actionErrorDetail(typed.err, ui.TunActionFailed))
 		return m, tea.Batch(m.loadTun(), m.rowSpinCmdIfNeeded())
 	}
 	m.markRowOutcome(rowID, true, "")
@@ -608,18 +608,19 @@ func (m *Model) View() string {
 		if rowFocused {
 			marker = ui.FocusMarker
 		}
+		// Lifecycle chips use absolute solid colors; apply RowFocus only to the
+		// label side so reverse video does not wash out Success/Warning/Danger fills.
+		labelPart := marker + item.label
 		value := item.value
 		switch {
 		case m.pending && m.pendingRow == item.id && m.pendingNote != "":
-			// Prefer in-row braille + status note over static value while work runs.
-			value = m.theme.Warning.Render(ui.SpinnerLabel(clock, m.pendingNote))
+			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, m.pendingNote))
 		case m.outcomeRow == item.id:
 			// Sticky Done/Failed until page leave or another action starts.
 			if m.outcomeOK {
-				value = m.outcomeBadge(true)
+				value = ui.RenderStatusChip(m.theme, ui.StatusChipDone, ui.DoneLabel)
 			} else {
-				value = m.outcomeBadge(false)
-				// Also put a short reason on the same row when space allows.
+				value = ui.RenderStatusChip(m.theme, ui.StatusChipFailed, ui.FailedLabel)
 				if m.outcomeDetail != "" {
 					value += "  " + m.theme.Danger.Render(truncateRunes(m.outcomeDetail, 48))
 				}
@@ -628,11 +629,10 @@ func (m *Model) View() string {
 		if value != "" {
 			value = "  " + value
 		}
-		line := marker + item.label + value
 		if rowFocused && m.contentFocused {
-			line = m.theme.RowFocus.Render(line)
+			labelPart = m.theme.RowFocus.Render(labelPart)
 		}
-		sections[idx].lines = append(sections[idx].lines, line)
+		sections[idx].lines = append(sections[idx].lines, labelPart+value)
 	}
 	for _, sec := range sections {
 		body := strings.Join(sec.lines, "\n")
@@ -655,8 +655,8 @@ func (m *Model) rows() []row {
 	rows := []row{
 		{id: rowDaemon, section: ui.DaemonSectionTitle, label: ui.DaemonLabel, value: valueOr(m.status.DaemonVersion, ui.UnknownLabel) + " · " + valueOr(m.status.Health, ui.UnknownLabel), detail: daemon},
 		{id: rowCore, section: ui.CoreSectionTitle, label: ui.MihomoCoreLabel, value: valueOr(m.core.Status, ui.UnknownLabel) + " · " + valueOr(m.core.Version, ui.UnknownLabel), detail: core},
-		{id: rowCoreUpdate, section: ui.CoreSectionTitle, label: m.coreActionLabel(), value: actionState(m.pending, m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.UpdateCoreImpact},
-		{id: rowCoreRestart, section: ui.CoreSectionTitle, label: ui.RestartCoreLabel, value: actionState(m.pending, m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.RestartCoreImpact},
+		{id: rowCoreUpdate, section: ui.CoreSectionTitle, label: m.coreActionLabel(), value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.UpdateCoreImpact},
+		{id: rowCoreRestart, section: ui.CoreSectionTitle, label: ui.RestartCoreLabel, value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.RestartCoreImpact},
 		{id: rowEndpoints, section: ui.LocalEndpointsLabel, label: ui.LocalEndpointsLabel, value: endpointSummary(m.onboarding), detail: endpoints},
 		{id: rowRunSetup, section: ui.MaintenanceSectionTitle, label: ui.RunSetupLabel, detail: ui.RunSetupDetail},
 	}
@@ -669,18 +669,18 @@ func (m *Model) networkRows() []row {
 	section := ui.NetworkSectionTitle
 	var rows []row
 	if m.hasCapability(protocol.CapabilitySystemProxy) {
+		// Idle value only; pending/outcome chips are overlaid in View for pendingRow/outcomeRow.
 		value := ui.LoadingLabel
 		detail := ui.EnableSystemProxyImpact
 		if m.systemProxyLoaded {
 			value = systemProxySummary(m.systemProxy)
 			detail = systemProxyDetail(m.systemProxy)
 		}
-		if m.pending {
-			value = ui.PendingLabel
-		} else if !m.mutationsEnabled {
-			value = actionState(false, true, false)
+		if !m.mutationsEnabled {
 			if m.systemProxyLoaded {
 				value = systemProxySummary(m.systemProxy) + " · " + ui.StaleLabel
+			} else {
+				value = ui.StaleLabel
 			}
 		}
 		rows = append(rows, row{
@@ -698,9 +698,7 @@ func (m *Model) networkRows() []row {
 			tunValue = tunSummary(m.tun)
 			tunDetail = tunDetailText(m.tun)
 		}
-		if m.pending {
-			tunValue = ui.PendingLabel
-		} else if !m.mutationsEnabled {
+		if !m.mutationsEnabled {
 			if m.tunLoaded {
 				tunValue = tunSummary(m.tun) + " · " + ui.StaleLabel
 			} else {
@@ -750,9 +748,7 @@ func (m *Model) serviceActionState(kind serviceActionKind) string {
 	if m.service == nil {
 		return ui.UnavailableTitle
 	}
-	if m.pending {
-		return ui.PendingLabel
-	}
+	// Do not mirror global pending here; View paints a chip only on pendingRow.
 	if !m.elevated {
 		return ui.ServiceNeedsElevation
 	}
@@ -912,20 +908,6 @@ func (m *Model) visibleErrorDetail() string {
 	return strings.TrimSpace(m.lastError)
 }
 
-func (m *Model) outcomeBadge(ok bool) string {
-	label := ui.FailedLabel
-	bg := m.theme.ColorDanger
-	if ok {
-		label = ui.DoneLabel
-		bg = m.theme.ColorSuccess
-	}
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color("0")).
-		Background(bg).
-		Padding(0, 1).
-		Render(label)
-}
-
 func truncateRunes(value string, max int) string {
 	runes := []rune(value)
 	if max <= 0 || len(runes) <= max {
@@ -1015,12 +997,15 @@ func rowProgressForAction(action ui.Action, coreMissing bool) (rowID, note strin
 	}
 }
 
-func serviceErrorMessage(err error) string {
+// actionErrorDetail prefers a redacted API message, else the domain fallback.
+func actionErrorDetail(err error, fallback string) string {
 	var apiError protocol.APIError
-	if errors.As(err, &apiError) && apiError.Message != "" {
-		return apiError.Message
+	if errors.As(err, &apiError) {
+		if msg := strings.TrimSpace(apiError.Message); msg != "" {
+			return msg
+		}
 	}
-	return ui.ServiceActionFailed
+	return fallback
 }
 
 func (m *Model) confirmSystemProxyToggle() tea.Cmd {
@@ -1233,15 +1218,14 @@ func endpointSummary(status protocol.OnboardingStatus) string {
 	return fmt.Sprintf("%s · %s · %s", valueOr(status.MixedAddr, ui.MissingValue), valueOr(status.ControllerAddr, ui.MissingValue), valueOr(status.WebAddr, ui.MissingValue))
 }
 
-func actionState(pending, available, enabled bool) string {
+// actionState is the idle suffix for action rows. In-flight/outcome chips are
+// applied in View and must not depend on a global pending flag.
+func actionState(available, enabled bool) string {
 	if !available {
 		return ui.UnavailableTitle
 	}
 	if !enabled {
 		return ui.StaleLabel
-	}
-	if pending {
-		return ui.PendingLabel
 	}
 	return ""
 }
