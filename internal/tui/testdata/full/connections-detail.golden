@@ -1,14 +1,14 @@
  Mihari  ·  ●  ·  1 conn  ·  ↑0 B/s  ↓0 B/s  ·  0 B                                         Offline 
-    Overview     [Active 1 | Closed 0]  [Source IP: All]  [Columns]  [Pause]                        
-    Proxies       / Search…                                                                         
-  › Conns          Host                                                 Traffic                     
-    Rules          ─────────────────────────────────────────────────────────────────────────────    
-    Logs           example.com                                                    ↑0 B/s  ↓0 B/s    
-    Subs           TCP  ·  DIRECT                                                                   
-    Web GUI                                                                                         
-    System                                                                                          
-                                                                                                    
-                                                                                                    
+    Overview     ╭───Controls─────────────────────────────────────────────────────────────────────╮ 
+    Proxies      │ [Active 1 | Closed 0]  [Source IP: All]  [Columns]  [Pause]                    │ 
+  › Conns        │  / Search…                                                                     │ 
+    Rules        ╰────────────────────────────────────────────────────────────────────────────────╯ 
+    Logs         ╭───Connections · 1 active───────────────────────────────────────────────────────╮ 
+    Subs         │   Host                                              Traffic                    │ 
+    Web GUI      │   ──────────────────────────────────────────────────────────────────────────   │ 
+    System       │   example.com                                                 ↑0 B/s  ↓0 B/s   │ 
+                 │   TCP  ·  DIRECT                                                               │ 
+                 ╰────────────────────────────────────────────────────────────────────────────────╯ 
                                                                                                     
                                                                                                     
                                                                                                     
