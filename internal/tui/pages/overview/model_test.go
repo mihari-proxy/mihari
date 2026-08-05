@@ -33,10 +33,10 @@ func TestOverview_RendersAuthoritativeCardsAndSessionOperations(t *testing.T) {
 	}
 }
 
-func TestOverview_SummaryStripServiceMihariSysProxyTun(t *testing.T) {
+func TestOverview_GeneralCardServiceMihariSysProxyTun(t *testing.T) {
 	live := true
 	model := New()
-	model.SetSize(100, 26)
+	model.SetSize(100, 30)
 	model.SetSnapshot(Snapshot{
 		ServiceLoaded: true,
 		ServiceStatus: service.StatusStopped,
@@ -46,19 +46,25 @@ func TestOverview_SummaryStripServiceMihariSysProxyTun(t *testing.T) {
 			Desired:  true,
 			Observed: protocol.SystemProxyObserved{Enabled: true, Server: "127.0.0.1:9190", Owned: true},
 		},
-		Tun: &protocol.TunStatus{DesiredEnable: true, LiveEnable: &live, Stack: "gVisor", Managed: true},
+		Tun:  &protocol.TunStatus{DesiredEnable: true, LiveEnable: &live, Stack: "gVisor", Managed: true},
 		Core: protocol.CoreStatus{Status: "running", Version: "v1.19.0", PID: 1},
 	})
 	view := model.View()
 	for _, want := range []string{
+		ui.OverviewGeneralTitle,
 		ui.OverviewServiceLabel, string(service.StatusStopped),
 		ui.OverviewMihariLabel, "v0.1.0",
 		ui.OverviewSysProxyLabel, ui.OverviewValueOwned,
 		ui.OverviewTunLabel, ui.OverviewValueOn + "/gVisor",
+		ui.CoreCardTitle,
 	} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("summary strip missing %q:\n%s", want, view)
+			t.Fatalf("general card missing %q:\n%s", want, view)
 		}
+	}
+	// Title is embedded in the top border, not a body line "---General---".
+	if strings.Contains(view, "---General---") {
+		t.Fatalf("title must be in top border, not body:\n%s", view)
 	}
 
 	// Offline daemon: sysproxy/TUN show dash; service still visible.
@@ -71,14 +77,43 @@ func TestOverview_SummaryStripServiceMihariSysProxyTun(t *testing.T) {
 	})
 	view = model.View()
 	for _, want := range []string{
-		ui.OverviewServiceLabel, string(service.StatusNotInstalled),
-		ui.OverviewMihariLabel, "dev",
-		ui.OverviewSysProxyLabel + "  " + ui.OverviewValueDash,
-		ui.OverviewTunLabel + "  " + ui.OverviewValueDash,
+		ui.OverviewGeneralTitle,
+		string(service.StatusNotInstalled),
+		"dev",
+		ui.OverviewSysProxyLabel, ui.OverviewValueDash,
+		ui.OverviewTunLabel, ui.OverviewValueDash,
 	} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("offline strip missing %q:\n%s", want, view)
+			t.Fatalf("offline general card missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestOverview_SectionTitlesEmbeddedInBorder(t *testing.T) {
+	model := New()
+	model.SetSize(90, 28)
+	model.SetSnapshot(Snapshot{
+		Core: protocol.CoreStatus{Status: "running", Version: "v1.0.0", PID: 1},
+	})
+	view := model.View()
+	for _, name := range []string{
+		ui.OverviewGeneralTitle, ui.CoreCardTitle, ui.ConfigCardTitle,
+		ui.SubscriptionCardTitle, ui.WebGUICardTitle, ui.MonitorTrafficTitle, ui.RecentOperationsTitle,
+	} {
+		if !strings.Contains(view, name) {
+			t.Fatalf("missing section title %q:\n%s", name, view)
+		}
+	}
+	// Spot-check: a line containing General also has top-border corners.
+	found := false
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, ui.OverviewGeneralTitle) && strings.Contains(line, "╭") && strings.Contains(line, "╮") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("General title should sit on top border line:\n%s", view)
 	}
 }
 
