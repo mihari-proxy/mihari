@@ -211,25 +211,32 @@ func (m *Model) View() string {
 	if len(status) > 0 {
 		control += "  " + m.theme.Muted.Render(strings.Join(status, "  "))
 	}
+	inner := ui.FullSectionInner(m.layoutWidth())
+	textW := ui.SectionTextWidth(inner)
 	searchFocused := m.searching || (m.contentFocused && m.focus == focusSearch)
-	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.queryCursor, m.width)
+	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.queryCursor, textW)
+	controlsBody := control + "\n" + searchBar
+	controls := ui.RenderBorderedSection(m.theme, ui.ControlsSectionTitle, controlsBody, inner)
+
 	widths := m.logColumnWidths()
 	header, rule := ui.RenderHeaderRow(m.theme,
 		[]string{ui.TimeLabel, ui.LevelLabel, ui.MessageLabel},
 		widths, logColGap, -1, false)
 	// Indent header under focus marker column so it lines up with data.
 	indent := "  "
-	lines := []string{control, searchBar, indent + header, indent + rule}
+	listLines := []string{indent + header, indent + rule}
 	entries := m.visibleEntries()
 	if len(entries) == 0 {
-		lines = append(lines, m.theme.Muted.Render(ui.NoMatchingLogs))
+		listLines = append(listLines, m.theme.Muted.Render(ui.NoMatchingLogs))
 	} else {
 		start, end := m.visibleWindow(len(entries))
 		for index := start; index < end; index++ {
-			lines = append(lines, m.renderEntry(entries[index], index == m.focused && m.focus == focusRow)...)
+			listLines = append(listLines, m.renderEntry(entries[index], index == m.focused && m.focus == focusRow)...)
 		}
 	}
-	content := strings.Join(lines, "\n")
+	list := ui.RenderBorderedSection(m.theme, ui.LogsSectionTitle, strings.Join(listLines, "\n"), inner)
+
+	content := controls + "\n" + list
 	if m.detail != nil {
 		content = m.renderDetail()
 	}
@@ -246,8 +253,9 @@ func (m *Model) layoutWidth() int {
 }
 
 func (m *Model) logColumnWidths() []int {
-	// Focus marker (2) + shell Content horizontal padding (2) sit outside fitted columns.
-	avail := max(20, m.layoutWidth()-4)
+	// Fit columns inside the Logs section body text width.
+	textW := ui.SectionTextWidth(ui.FullSectionInner(m.layoutWidth()))
+	avail := max(20, textW-2) // focus marker budget
 	return ui.FitColumnWidths([]ui.TableColumn{
 		{ID: "time", MinWidth: 8, MaxWidth: 8, Flex: 0},
 		{ID: "level", MinWidth: 7, MaxWidth: 8, Flex: 0},
@@ -281,8 +289,12 @@ func (m *Model) visibleEntries() []Entry {
 }
 
 func (m *Model) visibleWindow(count int) (int, int) {
-	// control + search + header + rule
-	rows := max(1, m.height-5)
+	// Dual-section chrome:
+	// Controls: top + control + search + bottom = 4 lines
+	// Logs:     top + header + rule + bottom = 4 lines (data rows extra)
+	// Leave remaining height for log entry rows.
+	const sectionChrome = 8
+	rows := max(1, m.height-sectionChrome)
 	if count <= rows {
 		return 0, count
 	}
