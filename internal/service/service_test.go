@@ -3,11 +3,13 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/LeeShunEE/mihari/internal/platform"
 )
 
 type fakeController struct {
@@ -44,19 +46,43 @@ func (f *fakeController) Restart() error {
 func (f *fakeController) Status() (StatusKind, error) { return f.status, f.statusErr }
 func (f *fakeController) Run() error                  { return nil }
 
+func writeTempBinary(t *testing.T, dir, name string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("payload"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestManagerInstallStartStopStatus(t *testing.T) {
+	installRoot := t.TempDir()
+	t.Setenv("MIHARI_INSTALL_ROOT", installRoot)
+	src := writeTempBinary(t, t.TempDir(), "mihari-download.bin")
 	fake := &fakeController{status: StatusRunning}
+	var installExe string
 	manager := New(Options{
-		Executable: "C:\\fake\\mihari.exe",
+		Executable: src,
 		NewController: func(run RunFunc, executable string, arguments []string) (Controller, error) {
 			if executable == "" || len(arguments) == 0 || arguments[0] != "daemon" {
 				t.Fatalf("exe=%q args=%v", executable, arguments)
 			}
+			installExe = executable
 			return fake, nil
 		},
 	})
 	if err := manager.Install(); err != nil || fake.installs != 1 {
 		t.Fatalf("install err=%v n=%d", err, fake.installs)
+	}
+	wantInstalled, err := platform.AbsoluteInstalledBinaryPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installExe != wantInstalled {
+		t.Fatalf("service ImagePath=%q want installed %q (not download path %q)", installExe, wantInstalled, src)
+	}
+	if _, err := os.Stat(wantInstalled); err != nil {
+		t.Fatalf("installed binary missing: %v", err)
 	}
 	if err := manager.Start(); err != nil || fake.starts != 1 {
 		t.Fatal(err)
@@ -77,9 +103,11 @@ func TestManagerInstallStartStopStatus(t *testing.T) {
 }
 
 func TestManagerReinstallStopUninstallInstallStart(t *testing.T) {
+	t.Setenv("MIHARI_INSTALL_ROOT", t.TempDir())
+	src := writeTempBinary(t, t.TempDir(), "mihari-download.bin")
 	fake := &fakeController{status: StatusRunning}
 	manager := New(Options{
-		Executable: "C:\\fake\\mihari.exe",
+		Executable: src,
 		NewController: func(RunFunc, string, []string) (Controller, error) {
 			return fake, nil
 		},
@@ -93,10 +121,12 @@ func TestManagerReinstallStopUninstallInstallStart(t *testing.T) {
 }
 
 func TestManagerReinstallWhenNotInstalled(t *testing.T) {
+	t.Setenv("MIHARI_INSTALL_ROOT", t.TempDir())
+	src := writeTempBinary(t, t.TempDir(), "mihari-download.bin")
 	// Stop/Uninstall report not-installed; Install/Start must still succeed.
 	step := &reinstallFake{}
 	manager := New(Options{
-		Executable: "C:\\fake\\mihari.exe",
+		Executable: src,
 		NewController: func(RunFunc, string, []string) (Controller, error) {
 			return step, nil
 		},
