@@ -16,6 +16,9 @@ type Theme struct {
 	ColorInfo          color.Color
 	ColorMuted         color.Color
 	ColorSurfaceBorder color.Color
+	// ColorOnSolid is the foreground for solid-background chips (Done/Failed/Pending).
+	// Dark text keeps contrast on Success/Warning/Danger fills in 256-color terminals.
+	ColorOnSolid color.Color
 
 	Rail         lipgloss.Style
 	RailSelected lipgloss.Style
@@ -57,6 +60,7 @@ func DefaultTheme() Theme {
 	info := lipgloss.Color("75")
 	surfaceBorder := lipgloss.Color("240")
 	muted := lipgloss.Color("245")
+	onSolid := lipgloss.Color("0")
 
 	return Theme{
 		ColorAccent:        accent,
@@ -66,6 +70,7 @@ func DefaultTheme() Theme {
 		ColorInfo:          info,
 		ColorMuted:         muted,
 		ColorSurfaceBorder: surfaceBorder,
+		ColorOnSolid:       onSolid,
 
 		Rail:         lipgloss.NewStyle().Padding(0, 1),
 		RailSelected: lipgloss.NewStyle().Bold(true).Foreground(accent).Padding(0, 1),
