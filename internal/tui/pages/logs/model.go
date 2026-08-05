@@ -301,10 +301,8 @@ func (m *Model) renderEntry(entry Entry, focused bool) []string {
 		timestamp = entry.ObservedAt.Local().Format("15:04:05")
 	}
 	timeCell := ui.PadCell(timestamp, widths[0], ui.AlignLeft)
-	levelText := strings.ToUpper(safeLine(entry.Log.Level))
-	if m.contentFocused {
-		levelText = ui.StyleLogLevel(m.theme, safeLine(entry.Log.Level))
-	}
+	// Semantic level colors are always applied; only RowFocus chrome waits on content focus.
+	levelText := ui.StyleLogLevel(m.theme, safeLine(entry.Log.Level))
 	levelCell := ui.PadCell(levelText, widths[1], ui.AlignLeft)
 	messageWidth := widths[2]
 	message := safeLine(entry.Log.Message)
