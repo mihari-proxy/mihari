@@ -59,3 +59,71 @@ func TestRenderBorderedSection_LongTitleTruncates(t *testing.T) {
 		}
 	}
 }
+
+func TestFullSectionInner(t *testing.T) {
+	if got := FullSectionInner(100); got != 96 {
+		t.Fatalf("FullSectionInner(100)=%d want 96", got)
+	}
+	if got := FullSectionInner(10); got != 20 {
+		t.Fatalf("FullSectionInner(10)=%d want floor 20", got)
+	}
+	if got := FullSectionInner(24); got != 20 {
+		t.Fatalf("FullSectionInner(24)=%d want 20", got)
+	}
+	if got := FullSectionInner(25); got != 21 {
+		t.Fatalf("FullSectionInner(25)=%d want 21", got)
+	}
+}
+
+func TestHalfSectionInner(t *testing.T) {
+	// half := max(10, (width-6)/2)
+	if got := HalfSectionInner(100); got != 47 {
+		t.Fatalf("HalfSectionInner(100)=%d want 47", got)
+	}
+	if got := HalfSectionInner(10); got != 10 {
+		t.Fatalf("HalfSectionInner(10)=%d want floor 10", got)
+	}
+	if got := HalfSectionInner(26); got != 10 {
+		t.Fatalf("HalfSectionInner(26)=%d want 10", got)
+	}
+	if got := HalfSectionInner(28); got != 11 {
+		t.Fatalf("HalfSectionInner(28)=%d want 11", got)
+	}
+}
+
+func TestFormatProxyGroupTitle(t *testing.T) {
+	got := FormatProxyGroupTitle("GLOBAL", "Selector", 12)
+	want := "GLOBAL · SELECTOR · 12"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	// Type is uppercased; count is appended; DisplayProxyName applied to name.
+	got = FormatProxyGroupTitle("Proxy", "URLTest", 8)
+	if got != "Proxy · URLTEST · 8" {
+		t.Fatalf("got %q want %q", got, "Proxy · URLTEST · 8")
+	}
+}
+
+func TestFormatConnectionsTitle(t *testing.T) {
+	if got := FormatConnectionsTitle(true, 76); got != "Connections · 76 active" {
+		t.Fatalf("active: got %q", got)
+	}
+	if got := FormatConnectionsTitle(false, 24); got != "Connections · 24 closed" {
+		t.Fatalf("closed: got %q", got)
+	}
+}
+
+func TestFormatRulesTitle(t *testing.T) {
+	if got := FormatRulesTitle(true, 42); got != "Rules · 42" {
+		t.Fatalf("rules: got %q", got)
+	}
+	if got := FormatRulesTitle(false, 5); got != "Providers · 5" {
+		t.Fatalf("providers: got %q", got)
+	}
+}
+
+func TestFormatSubscriptionsTitle(t *testing.T) {
+	if got := FormatSubscriptionsTitle(3); got != "Subscriptions · 3" {
+		t.Fatalf("got %q", got)
+	}
+}

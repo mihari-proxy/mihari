@@ -1,10 +1,60 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	lipgloss "charm.land/lipgloss/v2"
 )
+
+// FullSectionInner returns the content-box width for a full-width bordered
+// section inside a page of pageWidth columns. Matches Overview fullCardInner:
+// leave room for root Content horizontal padding (2) and the border (2).
+func FullSectionInner(pageWidth int) int {
+	return max(20, pageWidth-4)
+}
+
+// HalfSectionInner returns the content-box width for one of two side-by-side
+// bordered sections. Matches Overview halfCardInner.
+func HalfSectionInner(pageWidth int) int {
+	return max(10, (pageWidth-6)/2)
+}
+
+// SectionTextWidth is the printable body width inside a section of contentWidth
+// (contentWidth includes 1-col horizontal padding on each side).
+func SectionTextWidth(contentWidth int) int {
+	if contentWidth < 8 {
+		contentWidth = 8
+	}
+	return max(1, contentWidth-2)
+}
+
+// FormatProxyGroupTitle builds "Name · TYPE · N" for Proxies group sections.
+func FormatProxyGroupTitle(name, typ string, n int) string {
+	display := DisplayProxyName(name)
+	return fmt.Sprintf("%s · %s · %d", display, strings.ToUpper(strings.TrimSpace(typ)), n)
+}
+
+// FormatConnectionsTitle builds "Connections · N active|closed".
+func FormatConnectionsTitle(active bool, n int) string {
+	if active {
+		return fmt.Sprintf("Connections · %d active", n)
+	}
+	return fmt.Sprintf("Connections · %d closed", n)
+}
+
+// FormatRulesTitle builds "Rules · N" or "Providers · N".
+func FormatRulesTitle(rulesView bool, n int) string {
+	if rulesView {
+		return fmt.Sprintf("Rules · %d", n)
+	}
+	return fmt.Sprintf("Providers · %d", n)
+}
+
+// FormatSubscriptionsTitle builds "Subscriptions · N".
+func FormatSubscriptionsTitle(n int) string {
+	return fmt.Sprintf("Subscriptions · %d", n)
+}
 
 // RenderBorderedSection draws a rounded card whose section title is embedded in
 // the top border line (not as body text):
