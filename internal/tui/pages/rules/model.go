@@ -289,18 +289,30 @@ func (m *Model) View() string {
 	}
 	controlFocused := m.contentFocused && m.focus.kind == focusControl
 	control := ui.RenderControlStrip(m.theme, []string{rulesTab, providersTab, filterA, filterB}, m.controlIndex, controlFocused, "  ")
+	inner := ui.FullSectionInner(m.layoutWidth())
+	textW := ui.SectionTextWidth(inner)
 	searchFocused := m.searching || (m.contentFocused && m.focus.kind == focusSearch)
-	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.queryCursor, m.width)
-	lines := []string{control, searchBar}
+	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.queryCursor, textW)
+	controlsBody := control + "\n" + searchBar
 	if m.lastError != "" {
-		lines = append(lines, m.theme.Muted.Render(m.lastError))
+		controlsBody += "\n" + m.theme.Muted.Render(m.lastError)
 	}
-	if m.view == viewRules {
-		lines = append(lines, m.renderRules()...)
+	controls := ui.RenderBorderedSection(m.theme, ui.ControlsSectionTitle, controlsBody, inner)
+
+	var listLines []string
+	var listN int
+	rulesView := m.view == viewRules
+	if rulesView {
+		listLines = m.renderRules()
+		listN = len(m.VisibleIndexes())
 	} else {
-		lines = append(lines, m.renderProviders()...)
+		listLines = m.renderProviders()
+		listN = len(m.visibleProviderIndexes())
 	}
-	content := strings.Join(lines, "\n")
+	listTitle := ui.FormatRulesTitle(rulesView, listN)
+	list := ui.RenderBorderedSection(m.theme, listTitle, strings.Join(listLines, "\n"), inner)
+
+	content := controls + "\n" + list
 	if m.detail != nil {
 		content += "\n\n" + m.theme.Dialog.Render(m.theme.Title.Render(m.detail.title)+"\n\n"+m.detail.body+"\n\n"+ui.EscCloseHint)
 	}
@@ -350,10 +362,14 @@ func (m *Model) layoutWidth() int {
 	return 100
 }
 
+func (m *Model) sectionTextWidth() int {
+	return ui.SectionTextWidth(ui.FullSectionInner(m.layoutWidth()))
+}
+
 func (m *Model) renderRules() []string {
 	cols, titles := m.rulesColumnSpec()
-	// Marker (2) + Content padding (2).
-	widths := ui.FitColumnWidths(cols, max(24, m.layoutWidth()-4), rulesColGap)
+	// Fit columns inside the list section body (focus marker budget).
+	widths := ui.FitColumnWidths(cols, max(24, m.sectionTextWidth()-2), rulesColGap)
 	header, ruleLine := ui.RenderHeaderRow(m.theme, titles, widths, rulesColGap, -1, false)
 	lines := []string{"  " + header, "  " + ruleLine}
 	indexes := m.VisibleIndexes()
@@ -401,7 +417,7 @@ func (m *Model) providerColumnSpec() ([]ui.TableColumn, []string) {
 
 func (m *Model) renderProviders() []string {
 	cols, titles := m.providerColumnSpec()
-	widths := ui.FitColumnWidths(cols, max(24, m.layoutWidth()-4), rulesColGap)
+	widths := ui.FitColumnWidths(cols, max(24, m.sectionTextWidth()-2), rulesColGap)
 	header, ruleLine := ui.RenderHeaderRow(m.theme, titles, widths, rulesColGap, -1, false)
 	lines := []string{"  " + header, "  " + ruleLine}
 	indexes := m.visibleProviderIndexes()
