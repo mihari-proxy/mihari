@@ -76,10 +76,8 @@ func (m *Model) renderConnection(connection protocol.Connection, focused bool) [
 	host := primaryHost(connection)
 	up := "↑" + formatRate(connection.UploadSpeed)
 	down := "↓" + formatRate(connection.DownloadSpeed)
-	traffic := up + "  " + down
-	if m.contentFocused {
-		traffic = ui.StyleTrafficPair(m.theme, up, down)
-	}
+	// Semantic traffic colors always; RowFocus chrome stays content-focus gated.
+	traffic := ui.StyleTrafficPair(m.theme, up, down)
 	hostCell := ui.PadCell(host, widths[0], ui.AlignLeft)
 	// Traffic is pre-styled; pad by visible width toward the right.
 	trafficPad := widths[1] - lipgloss.Width(traffic)
@@ -101,45 +99,26 @@ func (m *Model) renderConnection(connection protocol.Connection, focused bool) [
 }
 
 func (m *Model) secondaryLine(connection protocol.Connection) string {
-	colorful := m.contentFocused
-	sep := "  ·  "
-	if colorful {
-		sep = m.theme.Muted.Render(sep)
-	}
-	net := networkLabel(connection)
-	if colorful {
-		net = ui.StyleNetwork(m.theme, net)
-	}
+	// Secondary metadata uses semantic/muted colors whenever the page is visible.
+	sep := m.theme.Muted.Render("  ·  ")
+	net := ui.StyleNetwork(m.theme, networkLabel(connection))
 	parts := []string{net}
 	chain := strings.Join(connection.Chains, " → ")
 	if chain == "" {
 		chain = ui.MissingValue
 	}
-	if colorful {
-		chain = m.theme.Muted.Render(chain)
-	}
-	parts = append(parts, chain)
+	parts = append(parts, m.theme.Muted.Render(chain))
 	if ui.ClassifyContentWidth(m.layoutWidth()) == ui.ContentFull {
 		rule := strings.TrimSpace(connection.Rule + " " + connection.RulePay)
 		if rule != "" {
-			if colorful {
-				rule = m.theme.Muted.Render(rule)
-			}
-			parts = append(parts, rule)
+			parts = append(parts, m.theme.Muted.Render(rule))
 		}
 		if process := connection.Metadata.Process; process != "" {
-			if colorful {
-				process = m.theme.Muted.Render(process)
-			}
-			parts = append(parts, process)
+			parts = append(parts, m.theme.Muted.Render(process))
 		}
 	}
 	if !connection.Start.IsZero() {
-		start := connection.Start.Local().Format("15:04:05")
-		if colorful {
-			start = m.theme.Muted.Render(start)
-		}
-		parts = append(parts, start)
+		parts = append(parts, m.theme.Muted.Render(connection.Start.Local().Format("15:04:05")))
 	}
 	return strings.Join(parts, sep)
 }

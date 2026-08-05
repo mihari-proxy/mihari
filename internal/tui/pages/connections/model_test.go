@@ -124,6 +124,23 @@ func TestModel_CloseAllRequestsConfirmation(t *testing.T) {
 	}
 }
 
+func TestView_TrafficDataColorsWhileRailFocused(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSize(100, 24)
+	model.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{
+		ID: "one", UploadSpeed: 1024, DownloadSpeed: 2048,
+		Metadata: protocol.ConnectionMetadata{Host: "one.test", Network: "tcp", Type: "HTTP"},
+	}}}, time.Unix(1, 0))
+	model.SetContentFocused(false)
+	view := model.View()
+	// StyleTrafficPair always paints UL Success / DL Info.
+	up := model.theme.Success.Render("↑" + "1.0 KiB/s")
+	down := model.theme.Info.Render("↓" + "2.0 KiB/s")
+	if !strings.Contains(view, up) || !strings.Contains(view, down) {
+		t.Fatalf("traffic semantic colors missing while rail-focused:\n%s", view)
+	}
+}
+
 func TestView_FocusedRowHighlightOnlyWhenContentFocused(t *testing.T) {
 	model := New(nil, nil)
 	model.SetPreferences(protocol.TUIPreferences{ConnectionsColumns: []string{"host"}})
@@ -133,27 +150,32 @@ func TestView_FocusedRowHighlightOnlyWhenContentFocused(t *testing.T) {
 	}}, time.Unix(1, 0))
 	model.focus = pageFocus{kind: focusRow, rowID: "two"}
 
-	model.SetContentFocused(false)
-	for _, line := range strings.Split(model.View(), "\n") {
-		if strings.Contains(line, "two.test") {
-			if !strings.Contains(line, ui.FocusMarker) {
-				t.Fatalf("row marker missing while rail-focused: %q", line)
-			}
-			if strings.Contains(line, "\x1b[") {
-				t.Fatalf("row should not use accent while rail owns focus: %q", line)
+	findHost := func() string {
+		for _, line := range strings.Split(model.View(), "\n") {
+			if strings.Contains(line, "two.test") {
+				return line
 			}
 		}
+		return ""
+	}
+
+	model.SetContentFocused(false)
+	railLine := findHost()
+	if railLine == "" || !strings.Contains(railLine, ui.FocusMarker) {
+		t.Fatalf("row marker missing while rail-focused: %q", railLine)
+	}
+	// Data colors may use ANSI; reverse RowFocus must wait for content focus.
+	if strings.Contains(railLine, "\x1b[7m") {
+		t.Fatalf("row should not use reverse focus chrome while rail owns focus: %q", railLine)
 	}
 
 	model.SetContentFocused(true)
-	var focused string
-	for _, line := range strings.Split(model.View(), "\n") {
-		if strings.Contains(line, "two.test") {
-			focused = line
-		}
+	focused := findHost()
+	if focused == "" || !strings.Contains(focused, ui.FocusMarker) {
+		t.Fatalf("focused content row missing marker: %q", focused)
 	}
-	if focused == "" || !strings.Contains(focused, ui.FocusMarker) || !strings.Contains(focused, "\x1b[") {
-		t.Fatalf("focused content row missing highlight: %q", focused)
+	if focused == railLine {
+		t.Fatalf("content focus should add RowFocus styling: rail=%q content=%q", railLine, focused)
 	}
 }
 
