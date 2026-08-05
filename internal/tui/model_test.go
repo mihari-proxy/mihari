@@ -407,6 +407,27 @@ func TestOperationLedgerKeepsNewestFiftyEntries(t *testing.T) {
 	}
 }
 
+// Page-owned async results (Load completions, etc.) must reach the active page even when
+// the shell focus is still on the rail. Focus gates keyboard routing only — not IO results.
+// Regression: rail-preview Load() left System Network on Loading… forever.
+func TestDispatchPageDeliversAsyncResultsWhileRailFocused(t *testing.T) {
+	page := &recordingPage{}
+	model := NewModel()
+	model.pages[ui.PageSystem] = page
+	model.active = ui.PageSystem
+	model.focus = ui.Focus{Area: ui.FocusRail, Page: ui.PageSystem}
+
+	updated, _ := model.Update(asyncMarkerMsg{})
+	model = updated.(Model)
+	if page.received != 1 {
+		t.Fatalf("async result dropped while rail focused: received=%d", page.received)
+	}
+	// Rail focus must be unchanged — delivery is not "enter content".
+	if model.focus.Area != ui.FocusRail {
+		t.Fatalf("focus leaked to %v", model.focus.Area)
+	}
+}
+
 // Root loadNetworkStatus must push into System page (same pattern as service status),
 // otherwise Network rows stay on Loading… when the user only arrows onto System.
 func TestNetworkStatusMsgSyncsSystemPageProxyAndTun(t *testing.T) {
