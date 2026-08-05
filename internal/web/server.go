@@ -35,6 +35,8 @@ type Mutator interface {
 	SelectProxy(ctx context.Context, group, name string) error
 	CloseConnection(ctx context.Context, id string) error
 	CloseAllConnections(ctx context.Context) error
+	// ApplyConfigPatch applies allowlisted config mutations (currently TUN only).
+	ApplyConfigPatch(ctx context.Context, patch map[string]any) error
 }
 
 // Server is the loopback Web gateway: auth, static panel hosting, and API proxy.
@@ -329,10 +331,82 @@ func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, action A
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	case ActionMutateConfigs:
+		s.handleConfigMutation(w, r)
 	default:
-		// Delay/restart/configs are classified but not fully implemented until control wiring matures.
+		// Delay/restart are classified but not fully implemented until control wiring matures.
 		WriteReject(w, ActionRejectUnknown)
 	}
+}
+
+// handleConfigMutation validates the browser PATCH/PUT /configs body against the
+// allowlist (TUN only in this phase) and routes through the coordinator mutator.
+func (s *Server) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
+	var patch map[string]any
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&patch); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if len(patch) == 0 {
+		WriteReject(w, ActionRejectUnknown)
+		return
+	}
+
+	// Managed fields reject even when mixed with allowlisted keys.
+	for key := range patch {
+		if isManagedConfigField(key) {
+			WriteReject(w, ActionRejectManaged)
+			return
+		}
+	}
+	// Only "tun" is allowlisted for this phase.
+	for key := range patch {
+		if key != "tun" {
+			WriteReject(w, ActionRejectUnknown)
+			return
+		}
+	}
+
+	tunRaw, ok := patch["tun"]
+	if !ok {
+		WriteReject(w, ActionRejectUnknown)
+		return
+	}
+	tun, ok := tunRaw.(map[string]any)
+	if !ok {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if _, ok := tun["enable"].(bool); !ok {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if stack, exists := tun["stack"]; exists {
+		if _, ok := stack.(string); !ok {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if err := s.Mutator.ApplyConfigPatch(r.Context(), patch); err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// isManagedConfigField reports mihomo config keys that Mihari owns and never
+// accepts from the browser (controller, secret, ports, external UI).
+func isManagedConfigField(key string) bool {
+	switch key {
+	case "external-controller", "secret", "mixed-port", "bind-address",
+		"external-ui", "external-ui-name", "external-ui-url":
+		return true
+	}
+	if strings.HasPrefix(key, "external-ui") {
+		return true
+	}
+	return false
 }
 
 func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {
