@@ -231,11 +231,12 @@ func TestStatusBarRightStatusDualServiceAndDaemon(t *testing.T) {
 		t.Fatalf("not installed+offline: got %q want %q", got, want)
 	}
 
-	// Service not installed + connected → service nudge only.
+	// Service not installed + connected → dual badge (service nudge + connected).
 	model.connected = true
 	model.stale = false
-	if got := model.statusBarRightStatus(); got != ui.StatusServiceNotInstalled {
-		t.Fatalf("not installed+connected: got %q want %q", got, ui.StatusServiceNotInstalled)
+	want = ui.StatusServiceNotInstalled + ui.StatusRightJoin + ui.StatusDaemonConnected
+	if got := model.statusBarRightStatus(); got != want {
+		t.Fatalf("not installed+connected: got %q want %q", got, want)
 	}
 
 	// Service running + reconnecting.
@@ -255,11 +256,12 @@ func TestStatusBarRightStatusDualServiceAndDaemon(t *testing.T) {
 		t.Fatalf("running+offline: got %q want %q", got, want)
 	}
 
-	// Healthy: service running + connected → quiet.
+	// Healthy: service running + connected → still show dual badge.
 	model.connected = true
 	model.stale = false
-	if got := model.statusBarRightStatus(); got != "" {
-		t.Fatalf("healthy: got %q want empty", got)
+	want = ui.StatusServiceRunning + ui.StatusRightJoin + ui.StatusDaemonConnected
+	if got := model.statusBarRightStatus(); got != want {
+		t.Fatalf("healthy: got %q want %q", got, want)
 	}
 
 	// Service unknown while reconnecting.
