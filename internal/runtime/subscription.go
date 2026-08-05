@@ -74,7 +74,20 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 	if err != nil {
 		return subscription.PublicProfile{}, err
 	}
-	return result.(subscription.PublicProfile), nil
+	profile := result.(subscription.PublicProfile)
+	// Pull once immediately so the profile does not sit in Missing until a manual refresh.
+	// Registration is already durable: fetch failures keep the profile and surface last_error.
+	refreshed, refreshErr := m.RefreshSubscription(ctx, Operation{
+		ID:     operation.ID + "-fetch",
+		Source: operation.Source,
+	}, profile.ID)
+	if refreshErr != nil {
+		if current, findErr := findPublicProfile(m.subscriptions.Snapshot().Public(), profile.ID); findErr == nil {
+			return current, nil
+		}
+		return profile, nil
+	}
+	return refreshed, nil
 }
 
 func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, id string) (subscription.PublicProfile, error) {

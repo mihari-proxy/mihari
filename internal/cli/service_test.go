@@ -11,13 +11,15 @@ import (
 )
 
 type fakeService struct {
-	installs int
-	starts   int
-	status   service.StatusKind
+	installs   int
+	reinstalls int
+	starts     int
+	status     service.StatusKind
 }
 
 func (f *fakeService) Install() error                      { f.installs++; return nil }
 func (f *fakeService) Uninstall() error                    { return nil }
+func (f *fakeService) Reinstall() error                    { f.reinstalls++; return nil }
 func (f *fakeService) Start() error                        { f.starts++; return nil }
 func (f *fakeService) Stop() error                         { return nil }
 func (f *fakeService) Restart() error                      { return nil }
@@ -52,5 +54,17 @@ func TestServiceStatusJSON(t *testing.T) {
 	exit := Execute(context.Background(), []string{"service", "status", "--json"}, stdout, &bytes.Buffer{}, Dependencies{ServiceController: fake})
 	if exit != ExitOK || !strings.Contains(stdout.String(), `"status":"running"`) {
 		t.Fatalf("exit=%d stdout=%q", exit, stdout)
+	}
+}
+
+func TestServiceReinstallWhenElevated(t *testing.T) {
+	prev := elevate.Check
+	t.Cleanup(func() { elevate.Check = prev })
+	elevate.Check = func() bool { return true }
+	fake := &fakeService{}
+	stdout := &bytes.Buffer{}
+	exit := Execute(context.Background(), []string{"service", "reinstall", "--json"}, stdout, &bytes.Buffer{}, Dependencies{ServiceController: fake})
+	if exit != ExitOK || fake.reinstalls != 1 || !strings.Contains(stdout.String(), `"action":"reinstall"`) {
+		t.Fatalf("exit=%d reinstalls=%d stdout=%q", exit, fake.reinstalls, stdout)
 	}
 }

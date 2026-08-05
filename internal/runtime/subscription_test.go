@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -80,16 +81,17 @@ func TestSubscriptionRefreshAndOfflineSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !a.Cached {
+		t.Fatalf("add should fetch immediately: %#v", a)
+	}
 	b, err := manager.AddSubscription(context.Background(), Operation{ID: "add-b", Source: "test"}, AddSubscriptionInput{Name: "B", URL: url + "?name=b"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.RefreshSubscription(context.Background(), Operation{ID: "refresh-a", Source: "test"}, a.ID); err != nil {
-		t.Fatal(err)
+	if !b.Cached {
+		t.Fatalf("add should fetch immediately: %#v", b)
 	}
-	if _, err := manager.RefreshSubscription(context.Background(), Operation{ID: "refresh-b", Source: "test"}, b.ID); err != nil {
-		t.Fatal(err)
-	}
+	// First successful fetch becomes active; switch offline to B.
 	if _, err := manager.UseSubscription(context.Background(), Operation{ID: "use-b", Source: "test"}, b.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -104,10 +106,53 @@ func TestSubscriptionRefreshAndOfflineSwitch(t *testing.T) {
 	}
 }
 
+func TestAddSubscriptionFetchesImmediately(t *testing.T) {
+	var fetches atomic.Int32
+	manager, _, _, url := subscriptionManager(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		fetches.Add(1)
+		_, _ = writer.Write([]byte("proxies:\n  - {name: node-a, type: direct}\n"))
+	}))
+	profile, err := manager.AddSubscription(context.Background(), Operation{ID: "add", Source: "test"}, AddSubscriptionInput{Name: "Main", URL: url})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fetches.Load() != 1 {
+		t.Fatalf("fetches=%d want 1", fetches.Load())
+	}
+	if !profile.Cached || profile.Generation == 0 || profile.UpdatedAt.IsZero() {
+		t.Fatalf("profile not cached after add: %#v", profile)
+	}
+	if got := manager.Subscriptions().ActiveID; got != profile.ID {
+		t.Fatalf("first fetch should become active: %q", got)
+	}
+}
+
+func TestAddSubscriptionKeepsProfileWhenFetchFails(t *testing.T) {
+	manager, _, _, url := subscriptionManager(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusBadGateway)
+	}))
+	profile, err := manager.AddSubscription(context.Background(), Operation{ID: "add", Source: "test"}, AddSubscriptionInput{Name: "Broken", URL: url})
+	if err != nil {
+		t.Fatalf("add should keep registration when fetch fails: %v", err)
+	}
+	if profile.Cached || profile.LastError == "" {
+		t.Fatalf("expected uncached profile with last_error: %#v", profile)
+	}
+	if len(manager.Subscriptions().Profiles) != 1 {
+		t.Fatalf("profiles=%#v", manager.Subscriptions().Profiles)
+	}
+}
+
 func TestRefreshCannotRecreateSubscriptionDeletedDuringDownload(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	var calls atomic.Int32
 	manager, _, _, url := subscriptionManager(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			// Auto-fetch on add completes immediately.
+			_, _ = writer.Write([]byte("proxies: []\n"))
+			return
+		}
 		close(entered)
 		<-release
 		_, _ = writer.Write([]byte("proxies: []\n"))
@@ -140,15 +185,15 @@ func TestReloadFailureRollsBackSubscriptionActivation(t *testing.T) {
 	manager, _, controller, url := subscriptionManager(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte("proxies: []\n"))
 	}))
-	profile, _ := manager.AddSubscription(context.Background(), Operation{ID: "add", Source: "test"}, AddSubscriptionInput{Name: "A", URL: url})
+	// Force the auto-fetch that runs inside Add to fail at mihomo reload.
 	controller.reloadErr = protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "reload failed"}
-	_, err := manager.RefreshSubscription(context.Background(), Operation{ID: "refresh", Source: "test"}, profile.ID)
-	if err == nil {
-		t.Fatal("expected reload failure")
+	profile, err := manager.AddSubscription(context.Background(), Operation{ID: "add", Source: "test"}, AddSubscriptionInput{Name: "A", URL: url})
+	if err != nil {
+		t.Fatalf("add should not fail hard when auto-fetch reloads fail: %v", err)
 	}
 	got := manager.Subscriptions()
-	if got.ActiveID != "" || got.Profiles[0].Generation != 0 {
-		t.Fatalf("subscription state was not rolled back: %#v", got)
+	if got.ActiveID != "" || got.Profiles[0].Generation != 0 || profile.Cached {
+		t.Fatalf("failed auto-fetch should roll back cache/activation: profile=%#v catalog=%#v", profile, got)
 	}
 	if snapshot := manager.Snapshot(); snapshot.Health != "degraded" || snapshot.Config.DesiredRevision <= snapshot.Config.ObservedRevision {
 		t.Fatalf("rollback failure was not published as degraded: %#v", snapshot)
@@ -159,6 +204,11 @@ func TestProxySelectionWaitsForSubscriptionReload(t *testing.T) {
 	manager, _, controller, url := subscriptionManager(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte("proxies: []\n"))
 	}))
+	// Add auto-fetches once; only block reload on the subsequent explicit refresh.
+	profile, err := manager.AddSubscription(context.Background(), Operation{ID: "add", Source: "test"}, AddSubscriptionInput{Name: "A", URL: url})
+	if err != nil {
+		t.Fatal(err)
+	}
 	reloadEntered := make(chan struct{})
 	releaseReload := make(chan struct{})
 	selected := make(chan struct{})
@@ -170,10 +220,6 @@ func TestProxySelectionWaitsForSubscriptionReload(t *testing.T) {
 	controller.fakeController.selectProxy = func(context.Context, string, string) error {
 		close(selected)
 		return nil
-	}
-	profile, err := manager.AddSubscription(context.Background(), Operation{ID: "add", Source: "test"}, AddSubscriptionInput{Name: "A", URL: url})
-	if err != nil {
-		t.Fatal(err)
 	}
 	refreshDone := make(chan error, 1)
 	go func() {

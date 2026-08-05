@@ -13,6 +13,7 @@ import (
 type ServiceController interface {
 	Install() error
 	Uninstall() error
+	Reinstall() error
 	Start() error
 	Stop() error
 	Restart() error
@@ -23,6 +24,7 @@ func newServiceCommand(dependencies Dependencies, options *runOptions) *cobra.Co
 	root := &cobra.Command{Use: "service", Aliases: []string{"svc"}, Short: "Install and control the OS service"}
 	root.AddCommand(newServiceActionCommand("install", "Register Mihari as an OS service", dependencies, options, true, func(c ServiceController) error { return c.Install() }))
 	root.AddCommand(newServiceActionCommand("uninstall", "Remove the Mihari OS service", dependencies, options, true, func(c ServiceController) error { return c.Uninstall() }))
+	root.AddCommand(newServiceActionCommand("reinstall", "Re-register the OS service from this binary (upgrade path)", dependencies, options, true, func(c ServiceController) error { return c.Reinstall() }))
 	root.AddCommand(newServiceActionCommand("start", "Start the Mihari OS service", dependencies, options, true, func(c ServiceController) error { return c.Start() }))
 	root.AddCommand(newServiceActionCommand("stop", "Stop the Mihari OS service", dependencies, options, true, func(c ServiceController) error { return c.Stop() }))
 	root.AddCommand(newServiceActionCommand("restart", "Restart the Mihari OS service", dependencies, options, true, func(c ServiceController) error { return c.Restart() }))
