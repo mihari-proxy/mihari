@@ -15,6 +15,8 @@ const (
 	CodeManagedField        ErrorCode = "managed_field"
 	CodeManagedOperation    ErrorCode = "managed_operation"
 	CodeUnsupportedMutation ErrorCode = "unsupported_mutation"
+	CodeSystemProxyConflict ErrorCode = "system_proxy_conflict"
+	CodeSystemProxyNotOwned ErrorCode = "system_proxy_not_owned"
 )
 
 type APIError struct {
