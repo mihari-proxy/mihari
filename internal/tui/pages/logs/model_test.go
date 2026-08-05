@@ -233,6 +233,46 @@ func TestModel_SearchSupportsPasteMsg(t *testing.T) {
 	}
 }
 
+func TestLogs_SearchDirectTypeNoEnter(t *testing.T) {
+	model := New(10)
+	model.Append(Entry{ObservedAt: time.Unix(1, 0), Log: protocol.LogEntry{Level: "info", Message: "hello"}})
+	model.FocusFirst()
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model = updated.(*Model)
+	if !model.searching || model.focus != focusSearch || command == nil {
+		t.Fatalf("searching=%v focus=%v command=%v", model.searching, model.focus, command != nil)
+	}
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'h', Text: "h"})
+	model = updated.(*Model)
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	model = updated.(*Model)
+	if model.query != "hi" {
+		t.Fatalf("query=%q", model.query)
+	}
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	model = updated.(*Model)
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'X', Text: "X"})
+	model = updated.(*Model)
+	if model.query != "hXi" {
+		t.Fatalf("cursor insert query=%q", model.query)
+	}
+	// Page shortcuts disabled (p would pause).
+	wasPaused := model.buffer.Paused()
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	model = updated.(*Model)
+	if model.query != "hXpi" || model.buffer.Paused() != wasPaused {
+		t.Fatalf("p should type: query=%q paused=%v", model.query, model.buffer.Paused())
+	}
+	updated, leave := model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	model = updated.(*Model)
+	if model.searching || model.focus != focusControl {
+		t.Fatalf("up leave searching=%v focus=%v", model.searching, model.focus)
+	}
+	if leave == nil {
+		t.Fatal("expected input mode restore")
+	}
+}
+
 func TestModel_EnterOpensTypedDetailAndEscCloses(t *testing.T) {
 	model := New(10)
 	model.SetSize(100, 20)

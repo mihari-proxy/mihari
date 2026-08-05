@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
@@ -36,6 +37,7 @@ type Model struct {
 	scrollUnread   int
 	level          string
 	query          string
+	queryCursor    int
 	searching      bool
 	wrap           bool
 	detail         *detailState
@@ -111,6 +113,11 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	if m.searching {
 		return m.updateSearch(message)
 	}
+	// Search bar focus is a character-input surface: typing starts filter without Enter.
+	// Page shortcuts (p, w, /…) are disabled here so printable keys edit the query.
+	if m.detail == nil && m.focus == focusSearch {
+		return m.updateSearchFocus(message)
+	}
 	key, ok := message.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
@@ -125,8 +132,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	case "esc":
 		return m, func() tea.Msg { return ui.FocusRailMsg{} }
 	case "/":
-		m.searching = true
-		return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputText} }
+		return m, m.startSearch()
 	case "p":
 		m.togglePause()
 		return m, nil
@@ -156,24 +162,15 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			if m.focused > 0 {
 				m.focused--
 			} else {
-				m.focus = focusSearch
+				return m, m.startSearch()
 			}
-		case focusSearch:
-			m.focus = focusControl
 		}
 		return m, nil
 	case "down":
 		entries := m.visibleEntries()
 		switch m.focus {
 		case focusControl:
-			m.focus = focusSearch
-		case focusSearch:
-			if len(entries) > 0 {
-				m.focus = focusRow
-				if m.following {
-					m.focused = len(entries) - 1
-				}
-			}
+			return m, m.startSearch()
 		case focusRow:
 			if m.focused+1 < len(entries) {
 				m.focused++
@@ -183,10 +180,6 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	case "enter":
 		if m.focus == focusControl {
 			return m, m.activateControl()
-		}
-		if m.focus == focusSearch {
-			m.searching = true
-			return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputText} }
 		}
 		entries := m.visibleEntries()
 		if m.focused >= 0 && m.focused < len(entries) {
@@ -219,7 +212,7 @@ func (m *Model) View() string {
 		control += "  " + m.theme.Muted.Render(strings.Join(status, "  "))
 	}
 	searchFocused := m.searching || (m.contentFocused && m.focus == focusSearch)
-	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.width)
+	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.queryCursor, m.width)
 	widths := m.logColumnWidths()
 	header, rule := ui.RenderHeaderRow(m.theme,
 		[]string{ui.TimeLabel, ui.LevelLabel, ui.MessageLabel},
@@ -376,21 +369,70 @@ func (m *Model) activateControl() tea.Cmd {
 	return nil
 }
 
+func (m *Model) updateSearchFocus(message tea.Msg) (ui.Page, tea.Cmd) {
+	if key, ok := message.(tea.KeyPressMsg); ok {
+		switch key.String() {
+		case "up":
+			m.focus = focusControl
+			return m, nil
+		case "down":
+			entries := m.visibleEntries()
+			if len(entries) > 0 {
+				m.focus = focusRow
+				if m.following {
+					m.focused = len(entries) - 1
+				}
+			}
+			return m, nil
+		}
+	}
+	if ui.IsTextEditMsg(message) {
+		enter := m.startSearch()
+		page, edit := m.updateSearch(message)
+		return page, tea.Batch(enter, edit)
+	}
+	return m, nil
+}
+
 func (m *Model) updateSearch(message tea.Msg) (ui.Page, tea.Cmd) {
 	if key, ok := message.(tea.KeyPressMsg); ok {
 		switch key.String() {
-		case "enter", "esc":
+		case "esc":
 			m.searching = false
+			m.reconcileFocus()
+			return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
+		case "up":
+			m.searching = false
+			m.focus = focusControl
+			m.reconcileFocus()
+			return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
+		case "down":
+			m.searching = false
+			entries := m.visibleEntries()
+			if len(entries) > 0 {
+				m.focus = focusRow
+				if m.following {
+					m.focused = len(entries) - 1
+				}
+			}
 			m.reconcileFocus()
 			return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
 		}
 	}
-	value, handled, command := ui.EditTextField(m.query, message, 256)
+	value, cursor, handled, command := ui.EditTextField(m.query, m.queryCursor, message, 256)
 	if handled {
 		m.query = value
+		m.queryCursor = cursor
 		return m, command
 	}
 	return m, nil
+}
+
+func (m *Model) startSearch() tea.Cmd {
+	m.searching = true
+	m.focus = focusSearch
+	m.queryCursor = utf8.RuneCountInString(m.query)
+	return func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputText} }
 }
 
 func (m *Model) togglePause() {
