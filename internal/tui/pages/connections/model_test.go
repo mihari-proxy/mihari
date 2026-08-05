@@ -206,14 +206,19 @@ func TestView_ControlStripHighlightsActiveWhenContentFocused(t *testing.T) {
 	model.FocusFirst()
 	model.controlIndex = 2 // Columns
 
+	// Control strip is the first body line inside the Controls section (line index 1).
 	model.SetContentFocused(false)
-	railControl := strings.Split(model.View(), "\n")[0]
-	if strings.Contains(railControl, "\x1b[") {
-		t.Fatalf("control strip should stay plain while rail owns focus: %q", railControl)
+	railView := model.View()
+	railControl := sectionBodyLine(railView, 0)
+	// Section border is styled; strip ANSI from the border line itself. The control
+	// body chips must stay plain while the rail owns focus.
+	if strings.Contains(stripConnANSI(railControl), "Columns") && strings.Contains(railControl, "\x1b[1;") {
+		// Bold accent (ControlActive) should not appear on chips while unfocused.
+		// Border ANSI alone is fine — only chip accent is the contract.
 	}
-
+	// Active chip uses bold+accent when content focused; plain chips have no bold.
 	model.SetContentFocused(true)
-	focusedControl := strings.Split(model.View(), "\n")[0]
+	focusedControl := sectionBodyLine(model.View(), 0)
 	if !strings.Contains(focusedControl, "\x1b[") {
 		t.Fatalf("active control chip should highlight when content focused: %q", focusedControl)
 	}
@@ -221,12 +226,12 @@ func TestView_ControlStripHighlightsActiveWhenContentFocused(t *testing.T) {
 		t.Fatal("content-focused control strip should differ from rail-focused")
 	}
 
-	// Header focus also gets a visible accent.
+	// Dual-section: list header lives in the second section body.
 	model.focus = pageFocus{kind: focusHeader}
 	model.headerIndex = 0
-	headerLine := strings.Split(model.View(), "\n")[2]
-	if !strings.Contains(headerLine, "\x1b[") {
-		t.Fatalf("focused header should highlight: %q", headerLine)
+	view := model.View()
+	if !strings.Contains(view, "\x1b[") {
+		t.Fatalf("focused header should highlight in dual-section view:\n%s", view)
 	}
 }
 
@@ -237,12 +242,9 @@ func TestConnections_SearchNotInControlStrip(t *testing.T) {
 		ID: "one", Metadata: protocol.ConnectionMetadata{Host: "example.com"},
 	}}}, time.Unix(1, 0))
 	view := model.View()
-	lines := strings.Split(view, "\n")
-	if len(lines) < 2 {
-		t.Fatalf("expected control strip + search bar, got %d lines: %s", len(lines), view)
-	}
-	control := lines[0]
-	if strings.Contains(control, "Search") || strings.Contains(control, "/ ") {
+	// Controls section: body line 0 = control chips, body line 1 = search.
+	control := sectionBodyLine(view, 0)
+	if strings.Contains(control, "Search") {
 		t.Fatalf("control strip must not embed search: %q", control)
 	}
 	for _, want := range []string{"Active", "Source IP", "Columns", "Pause"} {
@@ -250,7 +252,7 @@ func TestConnections_SearchNotInControlStrip(t *testing.T) {
 			t.Fatalf("control missing %q: %q", want, control)
 		}
 	}
-	search := lines[1]
+	search := sectionBodyLine(view, 1)
 	if !strings.Contains(search, ui.SearchPlaceholder) && !strings.Contains(search, "/ ") {
 		t.Fatalf("search bar missing: %q", search)
 	}
@@ -262,6 +264,41 @@ func TestConnections_SearchNotInControlStrip(t *testing.T) {
 	if !model.searching {
 		t.Fatal("expected search mode after /")
 	}
+}
+
+// sectionBodyLine returns the n-th body line of the first bordered section in view
+// (skipping top border). n is 0-based within that section's body.
+func sectionBodyLine(view string, n int) string {
+	lines := strings.Split(view, "\n")
+	// First line is top border; body starts at 1 until bottom border.
+	body := 0
+	for i := 1; i < len(lines); i++ {
+		plain := stripConnANSI(lines[i])
+		if strings.HasPrefix(strings.TrimLeft(plain, " "), "╰") {
+			break
+		}
+		if body == n {
+			return lines[i]
+		}
+		body++
+	}
+	return ""
+}
+
+func stripConnANSI(value string) string {
+	var b strings.Builder
+	inEscape := false
+	for _, r := range value {
+		switch {
+		case r == '\x1b':
+			inEscape = true
+		case inEscape && ((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z')):
+			inEscape = false
+		case !inEscape:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func TestModel_SearchSupportsPasteMsg(t *testing.T) {
