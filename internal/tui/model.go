@@ -662,9 +662,11 @@ func (model Model) updateRail(key string) (tea.Model, tea.Cmd) {
 	model.focus.Page = model.active
 	if prev != model.active {
 		model.clearSystemDoneIfLeaving(prev)
-		// Refresh System-owned snapshots (onboarding endpoints, elevation, network)
-		// when the rail lands on the page; Enter still Load()s after content focus.
-		if model.active == ui.PageSystem {
+		// Refresh page-owned snapshots when the rail lands on the page so previews
+		// are not empty until Enter. System (network/service) and Web GUI (panels)
+		// both need this; Enter still Load()s after content focus.
+		switch model.active {
+		case ui.PageSystem, ui.PageWebGUI:
 			if page, ok := model.pages[model.active].(interface{ Load() tea.Cmd }); ok {
 				return model, page.Load()
 			}
