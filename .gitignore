@@ -34,3 +34,4 @@ go.work.sum
 # Git worktrees (local isolation)
 .worktrees/
 
+.codegraph
