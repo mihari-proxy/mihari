@@ -188,6 +188,34 @@ func TestGatewayProxiesVersionWithAuthAndRejectsUpgrade(t *testing.T) {
 		t.Fatalf("static status=%d body=%s", resp.StatusCode, body)
 	}
 
+	// Credential-less module/script fetch (Vite crossorigin) must still get static bytes.
+	if err := os.WriteFile(filepath.Join(uiDir, "index-BcsehOF5.js"), []byte("export default 1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req, _ = http.NewRequest(http.MethodGet, base+"/index-BcsehOF5.js", nil)
+	req.Header.Set("Sec-Fetch-Dest", "script")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "export default") {
+		t.Fatalf("credential-less script status=%d body=%s", resp.StatusCode, body)
+	}
+	// Document navigation without a session still shows login (not the panel shell).
+	req, _ = http.NewRequest(http.MethodGet, base+"/", nil)
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized || !strings.Contains(string(body), "Access token") {
+		t.Fatalf("unauth document status=%d body=%s", resp.StatusCode, body)
+	}
+
 	// One-shot token sets cookie and redirects to panel setup (no token, no :9090).
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -309,6 +337,37 @@ func TestGatewayServesInstalledPanelsConcurrentlyAtUIPaths(t *testing.T) {
 	loc := resp.Header.Get("Location")
 	if !strings.Contains(loc, "/__mihari/panels/metacubexd/") || strings.Contains(loc, "zashboard") || strings.Contains(loc, "token=") {
 		t.Fatalf("open metacubexd location=%q", loc)
+	}
+
+	// Panel assets under /__mihari/panels/{id}/ load without a cookie (crossorigin omit).
+	if err := os.WriteFile(filepath.Join(zashDir, "app.js"), []byte("console.log(1)"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(zashDir, "manifest.webmanifest"), []byte(`{"name":"z"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		"/__mihari/panels/zashboard/app.js",
+		"/__mihari/panels/zashboard/manifest.webmanifest",
+	} {
+		resp, err := http.Get(base + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("path=%s status=%d body=%s", path, resp.StatusCode, body)
+		}
+	}
+	// API under the same origin still requires auth.
+	resp, err = http.Get(base + "/version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauth api status=%d", resp.StatusCode)
 	}
 }
 
