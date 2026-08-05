@@ -407,6 +407,64 @@ func TestOperationLedgerKeepsNewestFiftyEntries(t *testing.T) {
 	}
 }
 
+// loadCountingPage records Load() calls for rail-preview refresh tests.
+type loadCountingPage struct {
+	id    ui.PageID
+	loads int
+}
+
+func (p *loadCountingPage) ID() ui.PageID                      { return p.id }
+func (p *loadCountingPage) SetSize(int, int)                   {}
+func (p *loadCountingPage) FocusFirst()                        {}
+func (p *loadCountingPage) View() string                       { return "" }
+func (p *loadCountingPage) Update(tea.Msg) (ui.Page, tea.Cmd)  { return p, nil }
+func (p *loadCountingPage) Load() tea.Cmd {
+	p.loads++
+	return nil
+}
+
+// Rail preview must Load Web GUI when the cursor lands on it (not only after Enter),
+// matching System. Regression: empty "No panels installed" until content focus.
+func TestRailLandingOnWebGUILoadsPage(t *testing.T) {
+	page := &loadCountingPage{id: ui.PageWebGUI}
+	model := NewModel()
+	model.pages[ui.PageWebGUI] = page
+	webIdx := -1
+	for index, id := range model.rail {
+		if id == ui.PageWebGUI {
+			webIdx = index
+			break
+		}
+	}
+	if webIdx <= 0 {
+		t.Fatalf("web GUI rail index=%d", webIdx)
+	}
+	model.railIndex = webIdx - 1
+	model.active = model.rail[webIdx-1]
+	model.focus = ui.Focus{Area: ui.FocusRail, Page: model.active}
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyDown, Text: "down"})
+	model = updated.(Model)
+	if model.active != ui.PageWebGUI {
+		t.Fatalf("active=%s", model.active)
+	}
+	if page.loads != 1 {
+		t.Fatalf("web GUI Load on rail land: loads=%d cmd=%v", page.loads, cmd != nil)
+	}
+	// Stay on rail; do not force content focus.
+	if model.focus.Area != ui.FocusRail {
+		t.Fatalf("focus=%v", model.focus.Area)
+	}
+	// Re-selecting the same page (another down then up) should Load again when re-entering.
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyUp, Text: "up"})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown, Text: "down"})
+	model = updated.(Model)
+	if page.loads != 2 {
+		t.Fatalf("re-land should Load again: loads=%d", page.loads)
+	}
+}
+
 // Page-owned async results (Load completions, etc.) must reach the active page even when
 // the shell focus is still on the rail. Focus gates keyboard routing only — not IO results.
 // Regression: rail-preview Load() left System Network on Loading… forever.
