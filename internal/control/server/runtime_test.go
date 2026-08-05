@@ -298,22 +298,25 @@ func authorizedRequest(method, path string, body io.Reader) *http.Request {
 }
 
 type fakeRuntime struct {
-	capabilities        []string
-	snapshot            state.Snapshot
-	operation           runtimeapi.Operation
-	selectedGroup       string
-	selectedName        string
-	installResult       core.InstallResult
-	proxies             mihomo.Proxies
-	connections         mihomo.Connections
-	rules               mihomo.Rules
-	ruleProviders       mihomo.RuleProviders
-	updatedRuleProvider string
-	streamMessages      []json.RawMessage
-	delayedProxy        string
-	proxyDelay          uint16
-	geoIPStatus         geoip.Status
-	geoIPRecords        []geoip.Record
+	capabilities          []string
+	snapshot              state.Snapshot
+	operation             runtimeapi.Operation
+	selectedGroup         string
+	selectedName          string
+	installResult         core.InstallResult
+	proxies               mihomo.Proxies
+	connections           mihomo.Connections
+	rules                 mihomo.Rules
+	ruleProviders         mihomo.RuleProviders
+	updatedRuleProvider   string
+	streamMessages        []json.RawMessage
+	delayedProxy          string
+	proxyDelay            uint16
+	geoIPStatus           geoip.Status
+	geoIPRecords          []geoip.Record
+	systemProxyStatus     protocol.SystemProxyStatus
+	systemProxyForce      bool
+	disableSystemProxyErr error
 }
 
 func (f *fakeRuntime) Capabilities() []string { return append([]string(nil), f.capabilities...) }
@@ -392,4 +395,22 @@ func (f *fakeRuntime) LookupGeoIP(context.Context, []netip.Addr) ([]geoip.Record
 func (f *fakeRuntime) UpdateGeoIP(_ context.Context, operation runtimeapi.Operation) (geoip.Status, error) {
 	f.operation = operation
 	return f.geoIPStatus, nil
+}
+
+func (f *fakeRuntime) SystemProxyStatus(context.Context) (protocol.SystemProxyStatus, error) {
+	return f.systemProxyStatus, nil
+}
+
+func (f *fakeRuntime) EnableSystemProxy(_ context.Context, operation runtimeapi.Operation, force bool) (protocol.SystemProxyStatus, error) {
+	f.operation = operation
+	f.systemProxyForce = force
+	return f.systemProxyStatus, nil
+}
+
+func (f *fakeRuntime) DisableSystemProxy(_ context.Context, operation runtimeapi.Operation) (protocol.SystemProxyStatus, error) {
+	f.operation = operation
+	if f.disableSystemProxyErr != nil {
+		return protocol.SystemProxyStatus{}, f.disableSystemProxyErr
+	}
+	return f.systemProxyStatus, nil
 }
