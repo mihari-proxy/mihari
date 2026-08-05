@@ -199,6 +199,14 @@ func (s *Server) handler() http.Handler {
 		}
 
 		if !s.Auth.Authorized(r) {
+			// Vite ships <script type="module" crossorigin> / <link crossorigin>, which
+			// fetch same-origin assets with credentials=omit (no session cookie). Panel
+			// static files are not secret (loopback gateway; controller secret never
+			// embedded). Allow those GETs without a session; API/WS/mutations stay gated.
+			if allowsCredentialLessStatic(r) {
+				s.serveStatic(w, r)
+				return
+			}
 			if looksLikeAPIPath(normalizeAPIPath(r.URL.Path)) || isUpgradeRequest(r) {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
@@ -376,6 +384,70 @@ func isPanelEntryPath(reqPath string) bool {
 	}
 	prefix := panel.UIMount(panelID)
 	return cleaned == prefix || cleaned == prefix+"/"
+}
+
+// allowsCredentialLessStatic reports GET/HEAD panel/static asset requests that
+// browsers may issue without cookies (crossorigin=anonymous module scripts, SW,
+// manifest). Document navigations still require a session so the login gate works.
+func allowsCredentialLessStatic(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, "":
+	default:
+		return false
+	}
+	if isUpgradeRequest(r) {
+		return false
+	}
+	reqPath := r.URL.Path
+	if looksLikeAPIPath(normalizeAPIPath(reqPath)) {
+		return false
+	}
+	// Reserved mihari control paths stay authenticated (except panel static trees).
+	if strings.HasPrefix(path.Clean("/"+reqPath), "/__mihari/") && !isPanelMountPath(reqPath) {
+		return false
+	}
+	dest := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Dest")))
+	switch dest {
+	case "script", "style", "image", "font", "manifest",
+		"worker", "serviceworker", "sharedworker",
+		"audio", "video", "track", "object", "embed":
+		return true
+	case "document", "iframe", "frame":
+		return false
+	}
+	// Missing/empty Sec-Fetch-Dest (tests, older clients, some SW imports): allow
+	// known static extensions under any path, and any non-entry file under a panel mount.
+	if looksLikeStaticAssetPath(reqPath) {
+		return true
+	}
+	if isPanelMountPath(reqPath) && !isPanelEntryPath(reqPath) {
+		return true
+	}
+	return false
+}
+
+func looksLikeStaticAssetPath(reqPath string) bool {
+	base := strings.ToLower(path.Base(reqPath))
+	if base == "" || base == "." || base == "/" {
+		return false
+	}
+	// Common Vite/PWA static names without a conventional extension.
+	switch base {
+	case "registersw.js", "sw.js", "service-worker.js", "manifest.webmanifest", "manifest.json", "favicon.ico":
+		return true
+	}
+	for _, ext := range []string{
+		".js", ".mjs", ".css", ".map", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp",
+		".ico", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".webmanifest", ".wasm",
+	} {
+		if strings.HasSuffix(base, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, action Action) {
