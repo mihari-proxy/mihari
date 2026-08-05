@@ -41,28 +41,60 @@ func TestStatusBar_FullIncludesRates(t *testing.T) {
 			t.Fatalf("full status bar missing %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "STALE") {
-		t.Fatalf("full status bar should not be STALE when Stale=false:\n%s", got)
+	if strings.Contains(got, StatusDaemonOffline) || strings.Contains(got, StatusDaemonReconnecting) {
+		t.Fatalf("full status bar should not show right badge when RightStatus empty:\n%s", got)
 	}
 }
 
-func TestStatusBar_StalePrefix(t *testing.T) {
+func TestStatusBar_RightStatusAligned(t *testing.T) {
 	theme := DefaultTheme()
 	data := sampleStatusBarData()
-	data.Stale = true
 	data.CoreStatus = "disconnected"
 	data.CoreVersion = ""
+	data.RightStatus = StatusServiceStopped + StatusRightJoin + StatusDaemonOffline
 
-	got := stripANSI(RenderStatusBar(theme, data, 120, false))
-	if !strings.HasPrefix(strings.TrimLeft(got, " "), "STALE") {
-		t.Fatalf("stale bar should prefix STALE:\n%s", got)
+	const width = 110
+	got := RenderStatusBar(theme, data, width, false)
+	plain := stripANSI(got)
+	if strings.Contains(plain, "STALE") && strings.HasPrefix(strings.TrimLeft(plain, " "), "STALE") {
+		t.Fatalf("stale must not be a left prefix:\n%s", plain)
 	}
-	if !strings.Contains(got, "○") {
-		t.Fatalf("disconnected should use ○:\n%s", got)
+	if !strings.Contains(plain, StatusServiceStopped) || !strings.Contains(plain, StatusDaemonOffline) {
+		t.Fatalf("stale bar missing dual right status:\n%s", plain)
 	}
-	// Keep last numeric snapshot even when stale.
-	if !strings.Contains(got, "12 conn") {
-		t.Fatalf("stale bar should keep connection count:\n%s", got)
+	if !strings.Contains(plain, "○") {
+		t.Fatalf("disconnected should use ○:\n%s", plain)
+	}
+	if !strings.Contains(plain, "12 conn") {
+		t.Fatalf("stale bar should keep connection count:\n%s", plain)
+	}
+	// Right status should sit near the end of the padded line.
+	trimmed := strings.TrimRight(plain, " ")
+	if !strings.HasSuffix(trimmed, StatusDaemonOffline) {
+		t.Fatalf("right status should be right-aligned, got:\n%q", plain)
+	}
+	if w := lipgloss.Width(got); w != width {
+		t.Fatalf("status bar width=%d want %d", w, width)
+	}
+}
+
+func TestStatusBar_RightStatusServiceAndDaemonLabels(t *testing.T) {
+	theme := DefaultTheme()
+	for _, label := range []string{
+		StatusServiceNotInstalled,
+		StatusServiceStopped + StatusRightJoin + StatusDaemonOffline,
+		StatusServiceRunning + StatusRightJoin + StatusDaemonReconnecting,
+	} {
+		data := sampleStatusBarData()
+		data.RightStatus = label
+		plain := stripANSI(RenderStatusBar(theme, data, 120, false))
+		if !strings.Contains(plain, label) {
+			t.Fatalf("missing %q:\n%s", label, plain)
+		}
+		if !strings.HasSuffix(strings.TrimRight(plain, " "), strings.TrimSpace(label[strings.LastIndex(label, "·")+1:])) &&
+			!strings.HasSuffix(strings.TrimRight(plain, " "), label) {
+			t.Fatalf("%q should be right-aligned:\n%q", label, plain)
+		}
 	}
 }
 

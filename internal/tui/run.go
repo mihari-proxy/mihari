@@ -29,9 +29,7 @@ func Run(ctx context.Context, options Options) error {
 		defer controlSession.Close()
 	}
 	if options.Service != nil {
-		if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
-			page.SetServiceController(options.Service)
-		}
+		model.SetServiceController(options.Service)
 	}
 	program := tea.NewProgram(
 		model,

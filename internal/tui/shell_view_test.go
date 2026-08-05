@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/LeeShunEE/mihari/internal/service"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
 
@@ -102,7 +103,7 @@ func TestShellView_PendingFooterUsesBrailleSpinner(t *testing.T) {
 	}
 }
 
-func TestShellView_StaleUsesStatusPrefixNotSpinner(t *testing.T) {
+func TestShellView_StaleUsesRightStatusNotSpinner(t *testing.T) {
 	model := NewModel()
 	model.width, model.height = 100, 28
 	model.resizePages()
@@ -111,8 +112,19 @@ func TestShellView_StaleUsesStatusPrefixNotSpinner(t *testing.T) {
 	model.monitor.SetStale(true)
 
 	plain := normalizeRender(model.View().Content)
-	if !strings.Contains(plain, "STALE") {
-		t.Fatalf("stale status bar missing STALE:\n%s", plain)
+	lines := nonEmptyLines(plain)
+	if len(lines) == 0 {
+		t.Fatal("empty view")
+	}
+	first := lines[0]
+	if !strings.Contains(first, ui.StatusDaemonOffline) {
+		t.Fatalf("stale status bar missing right badge %q:\n%s", ui.StatusDaemonOffline, plain)
+	}
+	if !strings.HasSuffix(strings.TrimRight(first, " "), ui.StatusDaemonOffline) {
+		t.Fatalf("stale badge should be top-right, first line=%q", first)
+	}
+	if strings.HasPrefix(strings.TrimLeft(first, " "), "STALE") {
+		t.Fatalf("must not use left STALE prefix:\n%s", first)
 	}
 	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 	for _, frame := range frames {
@@ -122,6 +134,42 @@ func TestShellView_StaleUsesStatusPrefixNotSpinner(t *testing.T) {
 	}
 	if !strings.Contains(plain, ui.GlobalStateStaleLabel) {
 		t.Fatalf("stale footer missing label:\n%s", plain)
+	}
+}
+
+func TestShellView_RightStatusDualServiceAndDaemon(t *testing.T) {
+	model := NewModel()
+	model.width, model.height = 120, 28
+	model.resizePages()
+
+	// No service reading yet + reconnecting → daemon only.
+	model.stale = true
+	model.reconnecting = true
+	plain := normalizeRender(model.View().Content)
+	first := nonEmptyLines(plain)[0]
+	if !strings.HasSuffix(strings.TrimRight(first, " "), ui.StatusDaemonReconnecting) {
+		t.Fatalf("want reconnecting top-right, got %q", first)
+	}
+
+	// Service stopped + offline (not masked by reconnecting).
+	model.reconnecting = false
+	model.serviceLoaded = true
+	model.serviceStatus = service.StatusStopped
+	plain = normalizeRender(model.View().Content)
+	first = nonEmptyLines(plain)[0]
+	want := ui.StatusServiceStopped + ui.StatusRightJoin + ui.StatusDaemonOffline
+	if !strings.HasSuffix(strings.TrimRight(first, " "), want) {
+		t.Fatalf("want %q top-right, got %q", want, first)
+	}
+
+	// Service not installed + connected → nudge only.
+	model.connected = true
+	model.stale = false
+	model.serviceStatus = service.StatusNotInstalled
+	plain = normalizeRender(model.View().Content)
+	first = nonEmptyLines(plain)[0]
+	if !strings.HasSuffix(strings.TrimRight(first, " "), ui.StatusServiceNotInstalled) {
+		t.Fatalf("want service not installed top-right, got %q", first)
 	}
 }
 

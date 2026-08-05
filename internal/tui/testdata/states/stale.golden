@@ -1,13 +1,14 @@
- STALE  ·  Mihari  ·  ● running v1.19.0  ·  0 conn  ·  ↑0 B/s  ↓0 B/s  ·  0 B 
-  › Overview     ╭─────────────────────────────────────╮╭─────────────────────────────────────╮     
-    Proxies      │ Core                                ││ Config                              │     
-    Connections  │ running · v1.19.0                   ││ Not applied                         │     
-    Rules        │ PID 0                               │╰─────────────────────────────────────╯     
-    Logs         ╰─────────────────────────────────────╯                                            
-                 ╭─────────────────────────────────────╮╭─────────────────────────────────────╮     
- Subscriptions   │ Subscription                        ││ Web GUI                             │     
-    Web GUI      │ None configured                     ││ Web GUI status unavailable          │     
-    System       ╰─────────────────────────────────────╯╰─────────────────────────────────────╯     
+ Mihari  ·  ● running v1.19.0  ·  0 conn  ·  ↑0 B/s  ↓0 B/s  ·  0 B                    Reconnecting 
+  › Overview     Service  —  ·  Mihari  dev  ·  SysProxy  —  ·  TUN  —                              
+    Proxies      ╭─────────────────────────────────────╮╭─────────────────────────────────────╮     
+    Conns        │ Core                                ││ Config                              │     
+    Rules        │ running · v1.19.0                   ││ Not applied                         │     
+    Logs         │ PID 0                               │╰─────────────────────────────────────╯     
+    Subs         ╰─────────────────────────────────────╯                                            
+    Web GUI      ╭─────────────────────────────────────╮╭─────────────────────────────────────╮     
+    System       │ Subscription                        ││ Web GUI                             │     
+                 │ None configured                     ││ Web GUI status unavailable          │     
+                 ╰─────────────────────────────────────╯╰─────────────────────────────────────╯     
                  ╭──────────────────────────────────────────────────────────────────────────────╮   
                  │ Traffic · 60 s                                                               │   
                  │ Connections 0                                                                │   
@@ -19,7 +20,6 @@
                  │ Recent operations                                                            │   
                  │ No operations in this session                                                │   
                  ╰──────────────────────────────────────────────────────────────────────────────╯   
-                                                                                                    
                                                                                                     
                                                                                                     
                                                                                                     

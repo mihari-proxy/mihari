@@ -1,13 +1,13 @@
- Mihari  ·  ●  ·  1 conn  ·  ↑0 B/s  ↓0 B/s  ·  0 B 
+ Mihari  ·  ●  ·  1 conn  ·  ↑0 B/s  ↓0 B/s  ·  0 B                                         Offline 
     Overview     [Active 1 | Closed 0]  [Source IP: All]  [Columns]  [Pause]                        
     Proxies       / Search…                                                                         
-  › Connections    Host                                                 Traffic                     
+  › Conns          Host                                                 Traffic                     
     Rules          ─────────────────────────────────────────────────────────────────────────────    
     Logs           example.com                                                    ↑0 B/s  ↓0 B/s    
-                   TCP  ·  DIRECT                                                                   
- Subscriptions                                                                                      
+    Subs           TCP  ·  DIRECT                                                                   
     Web GUI                                                                                         
     System                                                                                          
+                                                                                                    
                                                                                                     
                                                                                                     
                                                                                                     
