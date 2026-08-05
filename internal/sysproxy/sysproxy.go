@@ -1,5 +1,9 @@
 // Package sysproxy provides OS system HTTP(S) proxy control and ownership helpers.
-// Platform backends implement unexported get/enable/disable; Task 1 ships stubs.
+//
+// Platform backends implement unexported get/enable/disable:
+//   - Windows: WinINET registry (HKCU or console-user hive under LocalSystem)
+//   - macOS: networksetup for web/secure-web proxies
+//   - Linux: GNOME gsettings (best effort)
 package sysproxy
 
 import (
@@ -20,6 +24,10 @@ type Backend interface {
 	Enable(host string, port int) error
 	Disable() error
 }
+
+// defaultBypass lists hosts that should bypass the proxy. Platform layers
+// format this to their own syntax (Windows ';'-separated, GNOME string list, …).
+var defaultBypass = []string{"localhost", "127.0.0.1", "::1"}
 
 // Get returns the current system proxy state from the platform backend.
 func Get() (State, error) {
