@@ -21,6 +21,8 @@ const (
 	ActionUpdatePanel             Action = "update-panel"
 	ActionActivatePanel           Action = "activate-panel"
 	ActionOpenWebGUI              Action = "open-web-gui"
+	ActionUninstallPanel          Action = "uninstall-panel"
+	ActionReinstallPanel          Action = "reinstall-panel"
 	ActionServiceInstall          Action = "service-install"
 	ActionServiceUninstall        Action = "service-uninstall"
 	ActionServiceReinstall        Action = "service-reinstall"

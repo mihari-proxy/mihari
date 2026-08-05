@@ -10,15 +10,17 @@ import (
 )
 
 type fakePanelClient struct {
-	list       protocol.PanelList
-	lastID     string
-	lastOp     string
-	installed  int
-	updated    int
-	activated  int
-	rolledBack int
-	opened     int
-	openURL    string
+	list        protocol.PanelList
+	lastID      string
+	lastOp      string
+	installed   int
+	updated     int
+	activated   int
+	rolledBack  int
+	uninstalled int
+	reinstalled int
+	opened      int
+	openURL     string
 }
 
 func (f *fakePanelClient) WebGUI(context.Context) (protocol.WebGUIStatus, error) {
@@ -47,6 +49,14 @@ func (f *fakePanelClient) ActivatePanel(_ context.Context, id string, request pr
 func (f *fakePanelClient) RollbackPanel(_ context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
 	f.lastID, f.lastOp, f.rolledBack = id, request.OperationID, f.rolledBack+1
 	return protocol.MutationResult{Schema: "mihari/v1", OperationID: request.OperationID, Revision: 5}, nil
+}
+func (f *fakePanelClient) UninstallPanel(_ context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+	f.lastID, f.lastOp, f.uninstalled = id, request.OperationID, f.uninstalled+1
+	return protocol.MutationResult{Schema: "mihari/v1", OperationID: request.OperationID, Revision: 6}, nil
+}
+func (f *fakePanelClient) ReinstallPanel(_ context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+	f.lastID, f.lastOp, f.reinstalled = id, request.OperationID, f.reinstalled+1
+	return protocol.MutationResult{Schema: "mihari/v1", OperationID: request.OperationID, Revision: 7}, nil
 }
 
 func TestPanelListHumanAndJSON(t *testing.T) {
@@ -80,18 +90,29 @@ func TestPanelMutationsAndRollbackRequiresYes(t *testing.T) {
 		{"panel", "update", "zashboard", "--json"},
 		{"panel", "use", "zashboard", "--json"},
 		{"panel", "rollback", "zashboard", "--yes", "--json"},
+		{"panel", "uninstall", "zashboard", "--yes", "--json"},
+		{"panel", "reinstall", "zashboard", "--yes", "--json"},
 	} {
 		stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 		if exit := Execute(context.Background(), args, stdout, stderr, deps); exit != ExitOK || stderr.Len() != 0 {
 			t.Fatalf("args=%v exit=%d stdout=%q stderr=%q", args, exit, stdout, stderr)
 		}
 	}
-	if client.installed != 1 || client.updated != 1 || client.activated != 1 || client.rolledBack != 1 || client.lastOp != "fixed-op" {
+	if client.installed != 1 || client.updated != 1 || client.activated != 1 || client.rolledBack != 1 ||
+		client.uninstalled != 1 || client.reinstalled != 1 || client.lastOp != "fixed-op" {
 		t.Fatalf("client=%#v", client)
 	}
 	exit := Execute(context.Background(), []string{"panel", "rollback", "zashboard", "--json"}, &bytes.Buffer{}, &bytes.Buffer{}, deps)
 	if exit != ExitUsage || client.rolledBack != 1 {
 		t.Fatalf("exit=%d rolledBack=%d", exit, client.rolledBack)
+	}
+	exit = Execute(context.Background(), []string{"panel", "uninstall", "zashboard", "--json"}, &bytes.Buffer{}, &bytes.Buffer{}, deps)
+	if exit != ExitUsage || client.uninstalled != 1 {
+		t.Fatalf("uninstall without --yes exit=%d uninstalled=%d", exit, client.uninstalled)
+	}
+	exit = Execute(context.Background(), []string{"panel", "reinstall", "zashboard", "--json"}, &bytes.Buffer{}, &bytes.Buffer{}, deps)
+	if exit != ExitUsage || client.reinstalled != 1 {
+		t.Fatalf("reinstall without --yes exit=%d reinstalled=%d", exit, client.reinstalled)
 	}
 }
 

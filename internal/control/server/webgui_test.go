@@ -52,6 +52,16 @@ func (f *panelFakeRuntime) RollbackPanel(_ context.Context, op runtimeapi.Operat
 	f.snapshot.Revision++
 	return nil
 }
+func (f *panelFakeRuntime) UninstallPanel(_ context.Context, op runtimeapi.Operation, id string) error {
+	f.lastOp, f.lastID = op, id
+	f.snapshot.Revision++
+	return nil
+}
+func (f *panelFakeRuntime) ReinstallPanel(_ context.Context, op runtimeapi.Operation, id string) error {
+	f.lastOp, f.lastID = op, id
+	f.snapshot.Revision++
+	return nil
+}
 func (f *panelFakeRuntime) OpenWebGUI(_ context.Context, panelID string) (string, string, error) {
 	return f.openURL, panelID, nil
 }
@@ -115,6 +125,18 @@ func TestWebGUIAndPanelRoutesSecretFreeAndMutate(t *testing.T) {
 	server.Handler().ServeHTTP(response, authorizedRequest(http.MethodPost, "/v1/panels/zashboard/rollback", bytes.NewBufferString(`{"operation_id":"p4"}`)))
 	if response.Code != http.StatusOK {
 		t.Fatalf("rollback status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, authorizedRequest(http.MethodPost, "/v1/panels/zashboard/uninstall", bytes.NewBufferString(`{"operation_id":"p5"}`)))
+	if response.Code != http.StatusOK || fake.lastID != "zashboard" || fake.lastOp.ID != "p5" {
+		t.Fatalf("uninstall status=%d id=%s op=%#v body=%s", response.Code, fake.lastID, fake.lastOp, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, authorizedRequest(http.MethodPost, "/v1/panels/zashboard/reinstall", bytes.NewBufferString(`{"operation_id":"p6"}`)))
+	if response.Code != http.StatusOK || fake.lastOp.ID != "p6" {
+		t.Fatalf("reinstall status=%d op=%#v body=%s", response.Code, fake.lastOp, response.Body.String())
 	}
 
 	response = httptest.NewRecorder()
