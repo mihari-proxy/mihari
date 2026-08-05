@@ -198,17 +198,28 @@ func (s *Server) handler() http.Handler {
 			return
 		}
 
-		if !s.Auth.Authorized(r) {
-			// Vite ships <script type="module" crossorigin> / <link crossorigin>, which
-			// fetch same-origin assets with credentials=omit (no session cookie). Panel
-			// static files are not secret (loopback gateway; controller secret never
-			// embedded). Allow those GETs without a session; API/WS/mutations stay gated.
-			if allowsCredentialLessStatic(r) {
-				s.serveStatic(w, r)
+		if r.URL.Path == "/__mihari/setup" {
+			if !s.Auth.Authorized(r) {
+				s.writeLogin(w, r)
 				return
 			}
+			s.sessions.Add(1)
+			defer s.sessions.Add(-1)
+			s.handleSetup(w, r)
+			return
+		}
+
+		if !s.Auth.Authorized(r) {
+			// Panel static is not secret (loopback only; controller secret never embedded).
+			// Vite module scripts use crossorigin → credentials=omit (no session cookie),
+			// and Workbox precaches index.html the same way. Gate only API/WS/mutations;
+			// any non-API GET/HEAD serves static without a session.
 			if looksLikeAPIPath(normalizeAPIPath(r.URL.Path)) || isUpgradeRequest(r) {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == "" {
+				s.serveStatic(w, r)
 				return
 			}
 			s.writeLogin(w, r)
@@ -217,11 +228,6 @@ func (s *Server) handler() http.Handler {
 
 		s.sessions.Add(1)
 		defer s.sessions.Add(-1)
-
-		if r.URL.Path == "/__mihari/setup" {
-			s.handleSetup(w, r)
-			return
-		}
 
 		action := ClassifyUpgrade(r.Method, r.URL.Path, isUpgradeRequest(r))
 		switch action {
@@ -303,6 +309,7 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 	reqPath := path.Clean("/" + r.URL.Path)
 	fileRoot := ""
 	servePath := reqPath
+	mountPrefix := ""
 	if panelID := panelIDFromPath(reqPath); panelID != "" {
 		root, err := s.Panel.PanelDir(panelID)
 		if err != nil || root == "" {
@@ -310,18 +317,29 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fileRoot = root
-		prefix := panel.UIMount(panelID)
-		servePath = strings.TrimPrefix(reqPath, prefix)
+		mountPrefix = panel.UIMount(panelID)
+		servePath = strings.TrimPrefix(reqPath, mountPrefix)
 		if servePath == "" {
 			servePath = "/"
 		}
 	} else {
-		root, err := s.Panel.ActiveDir()
-		if err != nil || root == "" {
-			http.Error(w, "no active panel", http.StatusServiceUnavailable)
-			return
+		// Root-absolute Vite assets (/assets/…, /registerSW.js) often load while the
+		// document lives under /__mihari/panels/{id}/. Prefer the referer panel so the
+		// correct tree is used when the default active panel differs.
+		if panelID := panelIDFromReferer(r); panelID != "" {
+			if root, err := s.Panel.PanelDir(panelID); err == nil && root != "" {
+				fileRoot = root
+				mountPrefix = panel.UIMount(panelID)
+			}
 		}
-		fileRoot = root
+		if fileRoot == "" {
+			root, err := s.Panel.ActiveDir()
+			if err != nil || root == "" {
+				http.Error(w, "no active panel", http.StatusServiceUnavailable)
+				return
+			}
+			fileRoot = root
+		}
 	}
 	// ResolveFileRoot already prefers dist/ and nested index; keep a defensive dist check
 	// for PanelSource implementations that return the raw build directory.
@@ -330,7 +348,6 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 			fileRoot = filepath.Join(fileRoot, "dist")
 		}
 	}
-	fsys := http.FS(os.DirFS(fileRoot))
 	// Serve under the stripped panel path (or original path for the default root panel).
 	// Do not rewrite "/" → "/index.html": FileServer redirects */index.html to "./" and that loops.
 	upath := path.Clean("/" + servePath)
@@ -338,19 +355,126 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 		r = r.Clone(r.Context())
 		r.URL.Path = upath
 	}
-	// SPA fallback: missing paths (and directories) serve index.html when present.
 	rel := strings.TrimPrefix(upath, "/")
 	if rel == "" {
 		rel = "."
 	}
-	if f, err := fs.Stat(os.DirFS(fileRoot), rel); err != nil || (f != nil && f.IsDir() && upath != "/") {
-		if _, err := fs.Stat(os.DirFS(fileRoot), "index.html"); err == nil {
-			// Serve index bytes directly for SPA routes to avoid FileServer's index.html→./ redirect.
-			http.ServeFile(w, r, filepath.Join(fileRoot, "index.html"))
+	dirFS := os.DirFS(fileRoot)
+	indexPath := filepath.Join(fileRoot, "index.html")
+	// Directory entry (/ or /__mihari/panels/{id}/) always serves rewritten index when present.
+	if upath == "/" || upath == "." {
+		if _, err := os.Stat(indexPath); err == nil {
+			s.servePanelIndex(w, r, indexPath, mountPrefix)
 			return
 		}
+		http.NotFound(w, r)
+		return
 	}
-	http.FileServer(fsys).ServeHTTP(w, r)
+	f, err := fs.Stat(dirFS, rel)
+	if err != nil || (f != nil && f.IsDir()) {
+		// Never SPA-fallback for real static extensions — that yields text/html for
+		// module scripts (strict MIME check) and breaks Vite/Workbox loads.
+		if looksLikeStaticAssetPath(upath) {
+			http.NotFound(w, r)
+			return
+		}
+		if _, err := os.Stat(indexPath); err == nil {
+			s.servePanelIndex(w, r, indexPath, mountPrefix)
+			return
+		}
+		http.NotFound(w, r)
+		return
+	}
+	// Explicit index.html also needs mount rewriting when under a panel.
+	if strings.EqualFold(path.Base(upath), "index.html") {
+		s.servePanelIndex(w, r, filepath.Join(fileRoot, filepath.FromSlash(rel)), mountPrefix)
+		return
+	}
+	http.FileServer(http.FS(dirFS)).ServeHTTP(w, r)
+}
+
+// servePanelIndex serves index.html, rewriting root-absolute asset URLs so a panel
+// built with Vite base "/" works under /__mihari/panels/{id}/.
+func (s *Server) servePanelIndex(w http.ResponseWriter, r *http.Request, indexPath, mountPrefix string) {
+	raw, err := os.ReadFile(indexPath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	body := raw
+	if mountPrefix != "" {
+		body = rewriteRootAbsoluteURLs(raw, mountPrefix)
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// Avoid long-lived wrong-base caches while panels move between mounts.
+	w.Header().Set("Cache-Control", "no-cache")
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+}
+
+// rewriteRootAbsoluteURLs prefixes same-origin absolute paths (src="/…", href="/…")
+// with the panel mount. Scheme-relative // and already-mounted paths are left alone.
+func rewriteRootAbsoluteURLs(html []byte, mount string) []byte {
+	mount = strings.TrimSuffix(strings.TrimSpace(mount), "/")
+	if mount == "" || mount == "/" {
+		return html
+	}
+	s := string(html)
+	for _, attr := range []string{`src="`, `href="`, `src='`, `href='`} {
+		s = rewriteRootAbsoluteAttr(s, attr, mount)
+	}
+	// import("/…") and similar in inline modulepreload hints.
+	s = strings.ReplaceAll(s, `"/assets/`, `"`+mount+`/assets/`)
+	s = strings.ReplaceAll(s, `'/assets/`, `'`+mount+`/assets/`)
+	return []byte(s)
+}
+
+func rewriteRootAbsoluteAttr(s, attr, mount string) string {
+	// attr includes the quote, e.g. src="
+	quote := attr[len(attr)-1]
+	old := attr + `/`
+	var b strings.Builder
+	b.Grow(len(s) + len(mount))
+	for {
+		i := strings.Index(s, old)
+		if i < 0 {
+			b.WriteString(s)
+			break
+		}
+		rest := s[i+len(attr):]
+		// Protocol-relative // or already rewritten mount.
+		if strings.HasPrefix(rest, "//") || strings.HasPrefix(rest, mount+"/") || strings.HasPrefix(rest, mount+string(quote)) {
+			b.WriteString(s[:i+len(old)])
+			s = s[i+len(old):]
+			continue
+		}
+		b.WriteString(s[:i])
+		b.WriteString(attr)
+		b.WriteString(mount)
+		b.WriteString("/")
+		s = s[i+len(old):]
+	}
+	return b.String()
+}
+
+// panelIDFromReferer extracts a panel id from the Referer path when present.
+func panelIDFromReferer(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	ref := strings.TrimSpace(r.Header.Get("Referer"))
+	if ref == "" {
+		return ""
+	}
+	u, err := url.Parse(ref)
+	if err != nil {
+		return ""
+	}
+	return panelIDFromPath(u.Path)
 }
 
 // panelIDFromPath extracts {id} from /__mihari/panels/{id} or /__mihari/panels/{id}/....
@@ -386,49 +510,6 @@ func isPanelEntryPath(reqPath string) bool {
 	return cleaned == prefix || cleaned == prefix+"/"
 }
 
-// allowsCredentialLessStatic reports GET/HEAD panel/static asset requests that
-// browsers may issue without cookies (crossorigin=anonymous module scripts, SW,
-// manifest). Document navigations still require a session so the login gate works.
-func allowsCredentialLessStatic(r *http.Request) bool {
-	if r == nil {
-		return false
-	}
-	switch r.Method {
-	case http.MethodGet, http.MethodHead, "":
-	default:
-		return false
-	}
-	if isUpgradeRequest(r) {
-		return false
-	}
-	reqPath := r.URL.Path
-	if looksLikeAPIPath(normalizeAPIPath(reqPath)) {
-		return false
-	}
-	// Reserved mihari control paths stay authenticated (except panel static trees).
-	if strings.HasPrefix(path.Clean("/"+reqPath), "/__mihari/") && !isPanelMountPath(reqPath) {
-		return false
-	}
-	dest := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Dest")))
-	switch dest {
-	case "script", "style", "image", "font", "manifest",
-		"worker", "serviceworker", "sharedworker",
-		"audio", "video", "track", "object", "embed":
-		return true
-	case "document", "iframe", "frame":
-		return false
-	}
-	// Missing/empty Sec-Fetch-Dest (tests, older clients, some SW imports): allow
-	// known static extensions under any path, and any non-entry file under a panel mount.
-	if looksLikeStaticAssetPath(reqPath) {
-		return true
-	}
-	if isPanelMountPath(reqPath) && !isPanelEntryPath(reqPath) {
-		return true
-	}
-	return false
-}
-
 func looksLikeStaticAssetPath(reqPath string) bool {
 	base := strings.ToLower(path.Base(reqPath))
 	if base == "" || base == "." || base == "/" {
@@ -436,12 +517,12 @@ func looksLikeStaticAssetPath(reqPath string) bool {
 	}
 	// Common Vite/PWA static names without a conventional extension.
 	switch base {
-	case "registersw.js", "sw.js", "service-worker.js", "manifest.webmanifest", "manifest.json", "favicon.ico":
+	case "registersw.js", "sw.js", "service-worker.js", "manifest.webmanifest", "manifest.json", "favicon.ico", "index.html":
 		return true
 	}
 	for _, ext := range []string{
 		".js", ".mjs", ".css", ".map", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp",
-		".ico", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".webmanifest", ".wasm",
+		".ico", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".webmanifest", ".wasm", ".html",
 	} {
 		if strings.HasSuffix(base, ext) {
 			return true
