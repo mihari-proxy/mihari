@@ -916,6 +916,129 @@ func TestSystemProxyAndTunMutationsDisabledWhileDisconnected(t *testing.T) {
 	}
 }
 
+func TestSystemCoreUpdateStickyDoneAndFailedWithAPIMessage(t *testing.T) {
+	model := New(&fakeClient{}, func() string { return "op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityCore}}, protocol.CoreStatus{Version: "v1.19.0", Status: "running"})
+	model.SetMutationsEnabled(true)
+
+	updated, _ := model.Update(ui.ActionPendingMsg{Action: ui.ActionUpdateCore})
+	model = updated.(*Model)
+	if model.pendingRow != rowCoreUpdate || model.pendingNote != ui.CoreProgressUpdating {
+		t.Fatalf("pending row=%q note=%q", model.pendingRow, model.pendingNote)
+	}
+	model.rowSpinClock = time.Unix(0, 0)
+	view := model.View()
+	if !strings.Contains(view, ui.CoreProgressUpdating) || !strings.Contains(view, "\x1b[") {
+		t.Fatalf("expected solid pending chip:\n%s", view)
+	}
+
+	updated, _ = model.Update(actionResultMsg{
+		kind:    actionUpdate,
+		install: protocol.CoreInstallResult{Revision: 3, Version: "v1.20.0"},
+	})
+	model = updated.(*Model)
+	if model.outcomeRow != rowCoreUpdate || !model.outcomeOK {
+		t.Fatalf("outcome row=%q ok=%v", model.outcomeRow, model.outcomeOK)
+	}
+	if !strings.Contains(model.View(), ui.DoneLabel) {
+		t.Fatalf("missing Done:\n%s", model.View())
+	}
+
+	updated, _ = model.Update(ui.ActionPendingMsg{Action: ui.ActionUpdateCore})
+	model = updated.(*Model)
+	updated, _ = model.Update(actionResultMsg{
+		kind: actionUpdate,
+		err:  protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download core asset failed"},
+	})
+	model = updated.(*Model)
+	if model.outcomeOK || model.outcomeDetail != "download core asset failed" {
+		t.Fatalf("outcome ok=%v detail=%q", model.outcomeOK, model.outcomeDetail)
+	}
+	view = model.View()
+	if !strings.Contains(view, ui.FailedLabel) || !strings.Contains(view, "download core asset failed") {
+		t.Fatalf("failed view:\n%s", view)
+	}
+}
+
+func TestSystemPendingDoesNotPolluteSiblingRows(t *testing.T) {
+	withElevation(t, true)
+	client := &fakeClient{
+		systemProxy: protocol.SystemProxyStatus{
+			Revision: 1, Desired: false, Target: "127.0.0.1:9190",
+			Observed: protocol.SystemProxyObserved{Enabled: false},
+		},
+	}
+	svc := &fakeService{status: service.StatusRunning}
+	model := NewWithService(client, svc, func() string { return "op" })
+	model.SetSnapshot(protocol.Status{
+		Capabilities: []string{protocol.CapabilityCore, protocol.CapabilitySystemProxy, protocol.CapabilityTUN},
+	}, protocol.CoreStatus{Version: "v1", Status: "running"})
+	model.SetMutationsEnabled(true)
+	model.SetSystemProxy(client.systemProxy)
+	model.SetTun(protocol.TunStatus{DesiredEnable: false, LiveEnable: boolPtr(false)})
+	updated, _ := model.Update(serviceStatusMsg{status: service.StatusRunning, elevated: true})
+	model = updated.(*Model)
+
+	updated, _ = model.Update(ui.ActionPendingMsg{Action: ui.ActionServiceReinstall})
+	model = updated.(*Model)
+	view := model.View()
+	// Only the active service row shows progress; proxy must keep its summary, not "Pending".
+	if strings.Count(view, ui.PendingLabel) > 0 {
+		t.Fatalf("sibling rows should not show Pending label:\n%s", view)
+	}
+	if !strings.Contains(view, ui.ServiceProgressReinstalling) {
+		t.Fatalf("missing reinstall progress:\n%s", view)
+	}
+	if !strings.Contains(view, ui.DesiredLabel) {
+		t.Fatalf("proxy idle summary missing:\n%s", view)
+	}
+}
+
+func TestSystemProxyAndTunStickyOutcomes(t *testing.T) {
+	client := &fakeClient{
+		systemProxy: protocol.SystemProxyStatus{Revision: 2, Desired: true, Target: "127.0.0.1:9190"},
+		tun:         protocol.TunStatus{Revision: 2, DesiredEnable: true, LiveEnable: boolPtr(true), Managed: true},
+	}
+	model := New(client, func() string { return "op" })
+	model.SetSnapshot(protocol.Status{
+		Capabilities: []string{protocol.CapabilitySystemProxy, protocol.CapabilityTUN},
+	}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(true)
+	model.SetSystemProxy(client.systemProxy)
+	model.SetTun(client.tun)
+
+	updated, _ := model.Update(ui.ActionPendingMsg{Action: ui.ActionDisableSystemProxy})
+	model = updated.(*Model)
+	updated, _ = model.Update(systemProxyActionResultMsg{
+		kind: proxyDisable,
+		err:  protocol.APIError{Code: protocol.CodePermissionDenied, Message: "elevation required for system proxy"},
+	})
+	model = updated.(*Model)
+	if model.outcomeRow != rowSystemProxy || model.outcomeOK || model.outcomeDetail != "elevation required for system proxy" {
+		t.Fatalf("proxy outcome row=%q ok=%v detail=%q", model.outcomeRow, model.outcomeOK, model.outcomeDetail)
+	}
+	if !strings.Contains(model.View(), ui.FailedLabel) {
+		t.Fatalf("proxy failed view:\n%s", model.View())
+	}
+
+	updated, _ = model.Update(ui.ActionPendingMsg{Action: ui.ActionEnableTun})
+	model = updated.(*Model)
+	if model.outcomeRow != "" {
+		t.Fatal("new action should clear sticky proxy outcome")
+	}
+	updated, _ = model.Update(tunActionResultMsg{
+		kind:   tunEnable,
+		status: protocol.TunStatus{Revision: 3, DesiredEnable: true, Managed: true},
+	})
+	model = updated.(*Model)
+	if model.outcomeRow != rowTUN || !model.outcomeOK {
+		t.Fatalf("tun outcome row=%q ok=%v", model.outcomeRow, model.outcomeOK)
+	}
+	if !strings.Contains(model.View(), ui.DoneLabel) {
+		t.Fatalf("tun done view:\n%s", model.View())
+	}
+}
+
 func updateKey(t *testing.T, model *Model, key tea.KeyPressMsg) *Model {
 	t.Helper()
 	updated, _ := model.Update(key)
