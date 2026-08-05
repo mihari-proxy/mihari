@@ -17,6 +17,7 @@ import (
 	"github.com/LeeShunEE/mihari/internal/state"
 	"github.com/LeeShunEE/mihari/internal/subscription"
 	"github.com/LeeShunEE/mihari/internal/supervisor"
+	"github.com/LeeShunEE/mihari/internal/sysproxy"
 )
 
 type PreparedCore = core.PreparedCore
@@ -88,6 +89,11 @@ type Options struct {
 	// WebOpenToken is the Web access credential used only to mint open-browser URLs for local clients.
 	// It must never appear in status DTOs, logs, or default CLI output.
 	WebOpenToken string
+	// SysProxy is the OS system-proxy backend. Nil installs the platform default in New.
+	SysProxy sysproxy.Backend
+	// SettingsPath is where config.Save writes settings after system-proxy (and related) mutations.
+	// Empty skips persistence (in-memory settings only).
+	SettingsPath string
 }
 
 // WebGateway is the loopback HTTP server for panel hosting and API proxying.
@@ -118,6 +124,9 @@ type Manager struct {
 	panels         PanelService
 	webGateway     WebGateway
 	webOpenToken   string
+	sysProxy       sysproxy.Backend
+	settingsPath   string
+	settingsMu     sync.Mutex
 	maintenance    chan struct{}
 	installed      chan struct{}
 	closing        atomic.Bool
@@ -145,6 +154,10 @@ func New(options Options) *Manager {
 	if binaryExists == nil {
 		binaryExists = func() bool { return true }
 	}
+	sysProxy := options.SysProxy
+	if sysProxy == nil {
+		sysProxy = sysproxy.Platform()
+	}
 	manager := &Manager{
 		store:          store,
 		coordinator:    coordinator,
@@ -166,6 +179,8 @@ func New(options Options) *Manager {
 		panels:         options.Panels,
 		webGateway:     options.WebGateway,
 		webOpenToken:   options.WebOpenToken,
+		sysProxy:       sysProxy,
+		settingsPath:   options.SettingsPath,
 		maintenance:    make(chan struct{}, 1),
 		installed:      make(chan struct{}, 1),
 		operations:     make(map[string]*operationEntry),
@@ -228,6 +243,9 @@ func (m *Manager) Run(ctx context.Context) error {
 		}
 	}
 	m.running.Store(true)
+	// Best-effort restore of desired OS system proxy; failures must not block core supervision.
+	_ = m.ApplyDesiredSystemProxy(ctx)
+	defer func() { _ = m.ClearOwnedSystemProxy(context.Background()) }()
 	err := m.supervisor.Run(ctx)
 	m.running.Store(false)
 	if ctx.Err() != nil {

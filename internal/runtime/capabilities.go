@@ -24,5 +24,8 @@ func (m *Manager) Capabilities() []string {
 	if m.webGateway != nil && m.panels != nil {
 		capabilities = append(capabilities, protocol.CapabilityWebGUI)
 	}
+	if m.sysProxy != nil {
+		capabilities = append(capabilities, protocol.CapabilitySystemProxy)
+	}
 	return capabilities
 }
