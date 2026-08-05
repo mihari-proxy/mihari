@@ -134,6 +134,31 @@ func TestClientRuntimeRequests(t *testing.T) {
 			},
 		},
 		{
+			name: "configs", method: http.MethodGet, path: "/configs", response: `{"mode":"rule","tun":{"enable":true,"stack":"gVisor"}}`,
+			invoke: func(ctx context.Context, client *Client) error {
+				got, err := client.Configs(ctx)
+				if err != nil {
+					return err
+				}
+				if got["mode"] != "rule" {
+					t.Fatalf("configs.mode=%#v", got["mode"])
+				}
+				tun, _ := got["tun"].(map[string]any)
+				if tun["enable"] != true || tun["stack"] != "gVisor" {
+					t.Fatalf("configs.tun=%#v", tun)
+				}
+				return nil
+			},
+		},
+		{
+			name: "patch configs", method: http.MethodPatch, path: "/configs", body: `{"tun":{"enable":true,"stack":"gVisor"}}`, statusCode: http.StatusNoContent,
+			invoke: func(ctx context.Context, client *Client) error {
+				return client.PatchConfigs(ctx, map[string]any{
+					"tun": map[string]any{"enable": true, "stack": "gVisor"},
+				})
+			},
+		},
+		{
 			name: "restart", method: http.MethodPost, path: "/restart",
 			invoke: func(ctx context.Context, client *Client) error { return client.Restart(ctx) },
 		},
