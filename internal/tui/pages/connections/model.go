@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
@@ -64,6 +65,7 @@ type Model struct {
 	horizontalOffset int
 	source           string
 	query            string
+	queryCursor      int
 	searching        bool
 	paused           bool
 	pending          *protocol.ConnectionList
@@ -193,6 +195,11 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	if m.searching {
 		return m.updateSearch(message)
 	}
+	// Search bar focus is a character-input surface: typing starts filter without Enter.
+	// Page shortcuts (p, x, /…) are disabled here so printable keys edit the query.
+	if m.focus.kind == focusSearch {
+		return m.updateSearchFocus(message)
+	}
 	key, ok := message.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
@@ -220,8 +227,6 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	switch m.focus.kind {
 	case focusControl:
 		return m.updateControl(key)
-	case focusSearch:
-		return m.updateSearchFocus(key)
 	case focusHeader:
 		return m.updateHeader(key)
 	case focusRow:
@@ -238,7 +243,7 @@ func (m *Model) updateControl(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 	case "right", "tab":
 		m.controlIndex = min(3, m.controlIndex+1)
 	case "down":
-		m.focus = pageFocus{kind: focusSearch}
+		return m, m.startSearch()
 	case "enter":
 		switch m.controlIndex {
 		case 0:
@@ -257,15 +262,25 @@ func (m *Model) updateControl(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) updateSearchFocus(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
-	switch key.String() {
-	case "up":
-		m.focus = pageFocus{kind: focusControl}
-	case "down":
-		m.focus = pageFocus{kind: focusHeader}
-	case "enter":
-		return m, m.startSearch()
+// updateSearchFocus handles keys while the search bar is focused but not yet in
+// active character-input mode (after Esc). Typing re-enters input mode without Enter.
+func (m *Model) updateSearchFocus(message tea.Msg) (ui.Page, tea.Cmd) {
+	if key, ok := message.(tea.KeyPressMsg); ok {
+		switch key.String() {
+		case "up":
+			m.focus = pageFocus{kind: focusControl}
+			return m, nil
+		case "down":
+			m.focus = pageFocus{kind: focusHeader}
+			return m, nil
+		}
 	}
+	if ui.IsTextEditMsg(message) {
+		enter := m.startSearch()
+		page, edit := m.updateSearch(message)
+		return page, tea.Batch(enter, edit)
+	}
+	// Non-text keys (enter, page shortcuts) are ignored while search is focused.
 	return m, nil
 }
 
@@ -276,7 +291,7 @@ func (m *Model) updateHeader(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 	case "right":
 		m.headerIndex = min(len(m.columns)-1, m.headerIndex+1)
 	case "up":
-		m.focus = pageFocus{kind: focusSearch}
+		return m, m.startSearch()
 	case "down":
 		if rows := m.visibleRows(); len(rows) > 0 {
 			m.focus = pageFocus{kind: focusRow, rowID: rows[0].ID}
@@ -362,23 +377,38 @@ func publicConnectionAddresses(connection protocol.Connection) []string {
 
 func (m *Model) updateSearch(message tea.Msg) (ui.Page, tea.Cmd) {
 	if key, ok := message.(tea.KeyPressMsg); ok {
-		if key.String() == "enter" || key.String() == "esc" {
+		switch key.String() {
+		case "esc":
 			m.searching = false
+			m.reconcile()
+			return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
+		case "up":
+			m.searching = false
+			m.focus = pageFocus{kind: focusControl}
+			m.reconcile()
+			return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
+		case "down":
+			m.searching = false
+			m.focus = pageFocus{kind: focusHeader}
 			m.reconcile()
 			return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
 		}
 	}
-	value, handled, command := ui.EditTextField(m.query, message, 256)
+	value, cursor, handled, command := ui.EditTextField(m.query, m.queryCursor, message, 256)
 	if handled {
 		m.query = value
+		m.queryCursor = cursor
 		m.reconcile()
 		return m, command
 	}
+	// Page shortcuts disabled while typing (left/right already handled as cursor).
 	return m, nil
 }
 
 func (m *Model) startSearch() tea.Cmd {
 	m.searching = true
+	m.focus = pageFocus{kind: focusSearch}
+	m.queryCursor = utf8.RuneCountInString(m.query)
 	return func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputText} }
 }
 

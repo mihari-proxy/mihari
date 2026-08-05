@@ -257,9 +257,9 @@ func TestModel_SearchSupportsPasteMsg(t *testing.T) {
 		t.Fatal("expected clipboard read command")
 	}
 	model.Update(command())
-	_, leave := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	_, leave := model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if model.searching {
-		t.Fatal("enter should leave search")
+		t.Fatal("esc should leave search")
 	}
 	if leave == nil {
 		t.Fatal("expected input mode restore command")
@@ -267,6 +267,50 @@ func TestModel_SearchSupportsPasteMsg(t *testing.T) {
 	mode, ok := leave().(ui.InputModeMsg)
 	if !ok || mode.Mode != ui.InputNavigation {
 		t.Fatalf("mode=%#v", mode)
+	}
+}
+
+func TestConnections_SearchDirectTypeNoEnter(t *testing.T) {
+	model := New(nil, nil)
+	model.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{
+		ID: "one", Metadata: protocol.ConnectionMetadata{Host: "example.com"},
+	}}}, time.Unix(1, 0))
+	model.FocusFirst()
+	// Down from control enters search input mode immediately.
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if !model.searching || model.focus.kind != focusSearch || command == nil {
+		t.Fatalf("searching=%v focus=%#v command=%v", model.searching, model.focus, command != nil)
+	}
+	model.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	model.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if model.query != "ex" {
+		t.Fatalf("query=%q", model.query)
+	}
+	// Left/right are cursor, not horizontal table scroll.
+	model.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	model.Update(tea.KeyPressMsg{Code: 'Y', Text: "Y"})
+	if model.query != "eYx" {
+		t.Fatalf("cursor insert query=%q", model.query)
+	}
+	// Page shortcuts disabled (p would pause otherwise).
+	model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	if model.query != "eYpx" || model.paused {
+		t.Fatalf("p should type: query=%q paused=%v", model.query, model.paused)
+	}
+	// Esc leaves input mode; focus stays on search bar.
+	model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if model.searching || model.focus.kind != focusSearch {
+		t.Fatalf("after esc searching=%v focus=%#v", model.searching, model.focus)
+	}
+	// Typing again re-enters without Enter.
+	model.Update(tea.KeyPressMsg{Code: 'z', Text: "z"})
+	if !model.searching || model.query != "eYpxz" {
+		t.Fatalf("re-enter searching=%v query=%q", model.searching, model.query)
+	}
+	// Up leaves search and focuses control.
+	model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if model.searching || model.focus.kind != focusControl {
+		t.Fatalf("up leave searching=%v focus=%#v", model.searching, model.focus)
 	}
 }
 

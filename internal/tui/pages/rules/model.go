@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
@@ -55,6 +56,7 @@ type Model struct {
 	controlIndex    int
 	focusedProvider string
 	query           string
+	queryCursor     int
 	typeFilter      string
 	targetFilter    string
 	behaviorFilter  string
@@ -205,6 +207,11 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	if m.searching {
 		return m.updateSearch(message)
 	}
+	// Search bar focus is a character-input surface: typing starts filter without Enter.
+	// Page shortcuts (r, u, /…) are disabled here so printable keys edit the query.
+	if m.detail == nil && m.focus.kind == focusSearch {
+		return m.updateSearchFocus(message)
+	}
 	key, ok := message.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
@@ -219,8 +226,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	case "esc":
 		return m, func() tea.Msg { return ui.FocusRailMsg{} }
 	case "/":
-		m.searching = true
-		return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputText} }
+		return m, m.startSearch()
 	case "left":
 		if m.focus.kind == focusControl {
 			m.controlIndex = max(0, m.controlIndex-1)
@@ -232,18 +238,12 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		return m, nil
 	case "up":
-		m.move(-1)
-		return m, nil
+		return m, m.moveFocus(-1)
 	case "down":
-		m.move(1)
-		return m, nil
+		return m, m.moveFocus(1)
 	case "enter":
 		if m.focus.kind == focusControl {
 			return m, m.activateControl()
-		}
-		if m.focus.kind == focusSearch {
-			m.searching = true
-			return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputText} }
 		}
 		m.openDetail()
 		return m, nil
@@ -290,7 +290,7 @@ func (m *Model) View() string {
 	controlFocused := m.contentFocused && m.focus.kind == focusControl
 	control := ui.RenderControlStrip(m.theme, []string{rulesTab, providersTab, filterA, filterB}, m.controlIndex, controlFocused, "  ")
 	searchFocused := m.searching || (m.contentFocused && m.focus.kind == focusSearch)
-	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.width)
+	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.queryCursor, m.width)
 	lines := []string{control, searchBar}
 	if m.lastError != "" {
 		lines = append(lines, m.theme.Muted.Render(m.lastError))
@@ -505,7 +505,9 @@ func (m *Model) visibleProviderIndexes() []int {
 	return indexes
 }
 
-func (m *Model) move(delta int) {
+// moveFocus moves vertical focus. Entering the search bar starts character-input
+// mode so typing works without an extra Enter.
+func (m *Model) moveFocus(delta int) tea.Cmd {
 	count := len(m.VisibleIndexes())
 	if m.view == viewProviders {
 		count = len(m.visibleProviderIndexes())
@@ -513,26 +515,26 @@ func (m *Model) move(delta int) {
 	switch m.focus.kind {
 	case focusControl:
 		if delta > 0 {
-			m.focus = pageFocus{kind: focusSearch}
+			return m.startSearch()
 		}
-		return
+		return nil
 	case focusSearch:
 		if delta < 0 {
 			m.focus = pageFocus{kind: focusControl}
-			return
+			return nil
 		}
 		if delta > 0 && count > 0 {
 			m.focus = pageFocus{kind: focusRow}
 			m.rememberFocusedProvider()
 		}
-		return
+		return nil
 	}
 	if delta < 0 && m.focus.row == 0 {
-		m.focus = pageFocus{kind: focusSearch}
-		return
+		return m.startSearch()
 	}
 	m.focus.row = min(max(0, m.focus.row+delta), max(0, count-1))
 	m.rememberFocusedProvider()
+	return nil
 }
 
 func (m *Model) reconcileFocus() {
@@ -595,21 +597,72 @@ func (m *Model) openDetail() {
 	m.detail = &detailState{title: ui.RuleProviderDetailsTitle, body: fmt.Sprintf("%s: %s\n%s: %s\n%s: %s\n%s: %s\n%s: %d\n%s: %s\n%s: %s", ui.NameLabel, provider.Name, ui.TypeLabel, provider.Type, ui.BehaviorLabel, valueOr(provider.Behavior, ui.MissingValue), ui.FormatLabel, valueOr(provider.Format, ui.MissingValue), ui.RulesCountLabel, provider.RuleCount, ui.UpdatedLabel, updated, ui.StatusLabel, provider.Status)}
 }
 
+func (m *Model) updateSearchFocus(message tea.Msg) (ui.Page, tea.Cmd) {
+	if key, ok := message.(tea.KeyPressMsg); ok {
+		switch key.String() {
+		case "up":
+			m.focus = pageFocus{kind: focusControl}
+			return m, nil
+		case "down":
+			count := len(m.VisibleIndexes())
+			if m.view == viewProviders {
+				count = len(m.visibleProviderIndexes())
+			}
+			if count > 0 {
+				m.focus = pageFocus{kind: focusRow}
+				m.rememberFocusedProvider()
+			}
+			return m, nil
+		}
+	}
+	if ui.IsTextEditMsg(message) {
+		enter := m.startSearch()
+		page, edit := m.updateSearch(message)
+		return page, tea.Batch(enter, edit)
+	}
+	return m, nil
+}
+
 func (m *Model) updateSearch(message tea.Msg) (ui.Page, tea.Cmd) {
 	if key, ok := message.(tea.KeyPressMsg); ok {
 		switch key.String() {
-		case "enter", "esc":
+		case "esc":
 			m.searching = false
+			m.reconcileFocus()
+			return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
+		case "up":
+			m.searching = false
+			m.focus = pageFocus{kind: focusControl}
+			m.reconcileFocus()
+			return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
+		case "down":
+			m.searching = false
+			count := len(m.VisibleIndexes())
+			if m.view == viewProviders {
+				count = len(m.visibleProviderIndexes())
+			}
+			if count > 0 {
+				m.focus = pageFocus{kind: focusRow}
+				m.rememberFocusedProvider()
+			}
 			m.reconcileFocus()
 			return m, func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
 		}
 	}
-	value, handled, command := ui.EditTextField(m.query, message, 256)
+	value, cursor, handled, command := ui.EditTextField(m.query, m.queryCursor, message, 256)
 	if handled {
 		m.query = value
+		m.queryCursor = cursor
 		return m, command
 	}
 	return m, nil
+}
+
+func (m *Model) startSearch() tea.Cmd {
+	m.searching = true
+	m.focus = pageFocus{kind: focusSearch}
+	m.queryCursor = utf8.RuneCountInString(m.query)
+	return func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputText} }
 }
 
 func (m *Model) reloadRules() tea.Cmd {

@@ -21,7 +21,7 @@ const (
 	FooterWebGUI                   = "Esc back  ? help  q quit"
 	FooterWebGUIActions            = "Esc back  ↑/↓ panel  Space activate  o open  i install  u update  b rollback  ? help  q quit"
 	FooterSystem                   = "Esc back  Enter activate  ? help  q quit"
-	FooterSearchMode               = "Type to filter  Enter/Esc done  ? help  q quit"
+	FooterSearchMode               = "Type to filter  ←/→ cursor  ↑/↓ leave  Esc done  ? help  q quit"
 	FooterDetailMode               = "Enter/Esc close  ? help  q quit"
 	FooterColumnsMode              = "↑/↓ column  Space toggle  Enter save  Esc cancel  ? help  q quit"
 	HelpTitle                      = "Keyboard help"
