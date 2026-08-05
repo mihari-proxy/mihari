@@ -207,8 +207,9 @@ const (
 	ProxyProgressDisabling      = "Disabling"
 	TunProgressEnabling         = "Enabling"
 	TunProgressDisabling        = "Disabling"
-	// DoneLabel is the sticky success badge after a System row action completes.
+	// Sticky row outcome badges after a System action finishes (until page leave / re-run).
 	DoneLabel                    = "Done"
+	FailedLabel                  = "Failed"
 	ServiceElevatedLabel         = "elevated"
 	ServiceNotElevatedLabel      = "not elevated"
 	TUNUnavailableDetail         = "TUN management is unavailable in this build."
@@ -363,6 +364,7 @@ const (
 	GlobalLabel                     = "Global"
 	LastUpdateLabel                 = "Last update"
 	NextUpdateLabel                 = "Next update"
+	TrafficLabel                    = "Traffic"
 	LastErrorLabel                  = "Last error"
 )
 

@@ -54,6 +54,23 @@ func TestRows_DoNotExposeInternalGenerationOrURL(t *testing.T) {
 	}
 }
 
+func TestRows_RenderTrafficUsage(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	theme := ui.DefaultTheme()
+	sub := protocol.Subscription{
+		Name: "kanata", Enabled: true, Cached: true, UpdatedAt: now.Add(-time.Hour),
+		Upload: 5 << 30, Download: 5 << 30, Total: 80 << 30,
+	}
+	got := rowFrom(sub, true, "", now, now, "12h").Render(theme)
+	want := ui.FormatSubscriptionTraffic(sub.Upload, sub.Download, sub.Total)
+	if !strings.Contains(got, want) {
+		t.Fatalf("row missing traffic %q:\n%s", want, got)
+	}
+	if !strings.Contains(got, "●") || !strings.Contains(got, "kanata") {
+		t.Fatalf("row missing basics:\n%s", got)
+	}
+}
+
 func TestRows_RenderLoadPhases(t *testing.T) {
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	clock := time.Unix(0, 0) // ⠋

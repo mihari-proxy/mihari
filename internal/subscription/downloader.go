@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
@@ -28,7 +29,9 @@ type FetchResult struct {
 	Content      []byte
 	ETag         string
 	LastModified string
-	NotModified  bool
+	// Userinfo is the raw subscription-userinfo response header when present.
+	Userinfo    string
+	NotModified bool
 }
 
 type Downloader struct {
@@ -75,7 +78,12 @@ func (d *Downloader) Fetch(ctx context.Context, input FetchRequest) (FetchResult
 		return FetchResult{}, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "subscription download failed"}
 	}
 	defer response.Body.Close()
-	result := FetchResult{ETag: response.Header.Get("ETag"), LastModified: response.Header.Get("Last-Modified")}
+	result := FetchResult{
+		ETag:         response.Header.Get("ETag"),
+		LastModified: response.Header.Get("Last-Modified"),
+		// Go canonicalizes the header key; providers send "subscription-userinfo".
+		Userinfo: strings.TrimSpace(response.Header.Get("Subscription-Userinfo")),
+	}
 	if response.StatusCode == http.StatusNotModified {
 		result.NotModified = true
 		return result, nil

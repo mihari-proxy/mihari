@@ -174,7 +174,12 @@ func subscriptionResultDTO(profile subscription.PublicProfile, operationID strin
 }
 
 func subscriptionDTO(profile subscription.PublicProfile) protocol.Subscription {
-	return protocol.Subscription{ID: profile.ID, Name: profile.Name, Enabled: profile.Enabled, AutoRefresh: profile.AutoRefresh, Interval: profile.Interval, Cached: profile.Cached, Generation: profile.Generation, UpdatedAt: profile.UpdatedAt, LastError: profile.LastError}
+	return protocol.Subscription{
+		ID: profile.ID, Name: profile.Name, Enabled: profile.Enabled, AutoRefresh: profile.AutoRefresh,
+		Interval: profile.Interval, Cached: profile.Cached, Generation: profile.Generation,
+		UpdatedAt: profile.UpdatedAt, LastError: profile.LastError,
+		Upload: profile.Upload, Download: profile.Download, Total: profile.Total, Expire: profile.Expire,
+	}
 }
 
 func publicProfile(catalog subscription.PublicCatalog, id string) (subscription.PublicProfile, bool) {

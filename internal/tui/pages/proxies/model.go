@@ -230,7 +230,7 @@ func (m *Model) buildContent() (lines []string, focusStart, focusEnd int) {
 		if groupFocused {
 			focus = ui.FocusMarker
 		}
-		header := fmt.Sprintf("%s%s %s  %s · %d", focus, marker, group.Name, strings.ToUpper(group.Type), len(group.Nodes))
+		header := fmt.Sprintf("%s%s %s  %s · %d", focus, marker, ui.DisplayProxyName(group.Name), strings.ToUpper(group.Type), len(group.Nodes))
 		switch {
 		case groupFocused && m.contentFocused:
 			header = m.theme.RowFocus.Render(header)
@@ -321,7 +321,7 @@ func (m *Model) renderNode(group protocol.ProxyGroup, node protocol.ProxyNode, w
 	} else if node.UDP {
 		metadata += " / UDP"
 	}
-	content := fmt.Sprintf("%s%s %s\n%s  %s", focus, selected, node.Name, metadata, renderDelay(m.theme, m.delays[node.Name], m.now))
+	content := fmt.Sprintf("%s%s %s\n%s  %s", focus, selected, ui.DisplayProxyName(node.Name), metadata, renderDelay(m.theme, m.delays[node.Name], m.now))
 	style := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(width)
 	// Accent the focused node only while content owns keyboard focus.
 	if m.focus == id && m.contentFocused {

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,6 +18,8 @@ import (
 	"github.com/LeeShunEE/mihari/internal/tui/session"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
+
+var errNetworkStatusTest = errors.New("network status test failure")
 
 func TestModelRoutesConnectionSnapshotsAndPreferencesToPage(t *testing.T) {
 	model := NewModel()
@@ -401,6 +404,66 @@ func TestOperationLedgerKeepsNewestFiftyEntries(t *testing.T) {
 	}
 	if len(model.operations) != 50 || model.operations[0].ID != "10" || model.operations[49].ID != "59" {
 		t.Fatalf("operations=%v", model.operations)
+	}
+}
+
+// Root loadNetworkStatus must push into System page (same pattern as service status),
+// otherwise Network rows stay on Loading… when the user only arrows onto System.
+func TestNetworkStatusMsgSyncsSystemPageProxyAndTun(t *testing.T) {
+	model := NewModel()
+	system, ok := model.pages[ui.PageSystem].(*systempage.Model)
+	if !ok {
+		t.Fatalf("system page=%T", model.pages[ui.PageSystem])
+	}
+	// Connected + mutations enabled matches the live TUI path that shows Loading….
+	model.applySessionEvent(session.Event{Kind: session.EventConnected})
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{
+		Capabilities: []string{protocol.CapabilitySystemProxy, protocol.CapabilityTUN},
+	}})
+	system = model.pages[ui.PageSystem].(*systempage.Model)
+	if view := system.View(); !strings.Contains(view, ui.LoadingLabel) {
+		t.Fatalf("expected Loading before networkStatusMsg, view=%s", view)
+	}
+
+	live := true
+	updated, _ := model.Update(networkStatusMsg{
+		proxy: protocol.SystemProxyStatus{
+			Revision: 5, Desired: true, Target: "127.0.0.1:9190",
+			Observed: protocol.SystemProxyObserved{Enabled: true, Server: "127.0.0.1:9190", Owned: true},
+		},
+		tun: protocol.TunStatus{
+			Revision: 5, DesiredEnable: false, LiveEnable: &live, Stack: "system", Managed: true,
+		},
+	})
+	model = updated.(Model)
+	system = model.pages[ui.PageSystem].(*systempage.Model)
+	view := system.View()
+	if strings.Contains(view, ui.LoadingLabel) {
+		t.Fatalf("system Network still Loading after networkStatusMsg: %s", view)
+	}
+	for _, want := range []string{ui.SystemProxyLabel, "127.0.0.1:9190", ui.OwnedLabel, ui.TUNLabel, "system"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %q in system view=%s", want, view)
+		}
+	}
+}
+
+func TestNetworkStatusMsgFailureClearsSystemPageLoading(t *testing.T) {
+	// Failed root poll must not leave permanent Loading when the attempt completed.
+	model := NewModel()
+	model.applySessionEvent(session.Event{Kind: session.EventConnected})
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{
+		Capabilities: []string{protocol.CapabilitySystemProxy, protocol.CapabilityTUN},
+	}})
+	updated, _ := model.Update(networkStatusMsg{
+		proxyErr: errNetworkStatusTest,
+		tunErr:   errNetworkStatusTest,
+	})
+	model = updated.(Model)
+	system := model.pages[ui.PageSystem].(*systempage.Model)
+	view := system.View()
+	if strings.Contains(view, ui.LoadingLabel) {
+		t.Fatalf("failed network poll still Loading: %s", view)
 	}
 }
 

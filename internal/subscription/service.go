@@ -196,6 +196,12 @@ func (s *Service) CommitRefresh(prepared PreparedRefresh) (Receipt, error) {
 	if prepared.result.LastModified != "" {
 		profile.LastModified = prepared.result.LastModified
 	}
+	if info, ok := ParseUserInfo(prepared.result.Userinfo); ok {
+		profile.Upload = info.Upload
+		profile.Download = info.Download
+		profile.Total = info.Total
+		profile.Expire = info.Expire
+	}
 	if err := after.Normalize(); err != nil {
 		s.restoreCache(cachePath, cacheBefore, hadCache, wroteCache)
 		return Receipt{}, err

@@ -97,8 +97,30 @@ func TestManagerInstallStartStopStatus(t *testing.T) {
 	if err := manager.Restart(); err != nil || fake.restarts != 1 {
 		t.Fatal(err)
 	}
+	// Uninstall stops first, then deletes registration.
 	if err := manager.Uninstall(); err != nil || fake.uninstalls != 1 {
 		t.Fatal(err)
+	}
+	if fake.stops != 2 {
+		t.Fatalf("uninstall should stop first: stops=%d", fake.stops)
+	}
+}
+
+func TestManagerUninstallStopsBeforeDelete(t *testing.T) {
+	t.Setenv("MIHARI_INSTALL_ROOT", t.TempDir())
+	src := writeTempBinary(t, t.TempDir(), "mihari-download.bin")
+	fake := &fakeController{status: StatusRunning}
+	manager := New(Options{
+		Executable: src,
+		NewController: func(RunFunc, string, []string) (Controller, error) {
+			return fake, nil
+		},
+	})
+	if err := manager.Uninstall(); err != nil {
+		t.Fatal(err)
+	}
+	if fake.stops != 1 || fake.uninstalls != 1 {
+		t.Fatalf("stops=%d uninstalls=%d want both 1", fake.stops, fake.uninstalls)
 	}
 }
 
@@ -115,6 +137,7 @@ func TestManagerReinstallStopUninstallInstallStart(t *testing.T) {
 	if err := manager.Reinstall(); err != nil {
 		t.Fatal(err)
 	}
+	// Uninstall path stops once; reinstall does not add an extra stop before that.
 	if fake.stops != 1 || fake.uninstalls != 1 || fake.installs != 1 || fake.starts != 1 {
 		t.Fatalf("stops=%d uninstalls=%d installs=%d starts=%d", fake.stops, fake.uninstalls, fake.installs, fake.starts)
 	}
