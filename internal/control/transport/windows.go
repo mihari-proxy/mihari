@@ -12,8 +12,10 @@ import (
 )
 
 func Listen(endpoint string) (net.Listener, error) {
+	// LocalSystem service creates the pipe: allow SYSTEM, Administrators, and
+	// interactive users so a non-admin desktop TUI/CLI can still connect.
 	config := &winio.PipeConfig{
-		SecurityDescriptor: "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;OW)",
+		SecurityDescriptor: "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)(A;;GRGW;;;AU)",
 		MessageMode:        false,
 		InputBufferSize:    64 * 1024,
 		OutputBufferSize:   64 * 1024,
@@ -36,9 +38,10 @@ func DefaultCredentialPath() string {
 	if value := os.Getenv("MIHARI_CONTROL_CREDENTIAL"); value != "" {
 		return value
 	}
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		dir = os.TempDir()
+	// Machine-wide path so LocalSystem service and interactive clients share one token.
+	// (UserConfigDir under LocalSystem is the systemprofile hive and is not shared.)
+	if dir := os.Getenv("ProgramData"); dir != "" {
+		return filepath.Join(dir, "mihari", "control.token")
 	}
-	return filepath.Join(dir, "mihari", "control.token")
+	return filepath.Join(`C:\ProgramData`, "mihari", "control.token")
 }
