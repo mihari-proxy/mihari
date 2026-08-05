@@ -116,6 +116,10 @@ const (
 	CloseAllRollback         = "Closed connections cannot be restored."
 	GeoIPSectionTitle        = "GeoIP"
 	LoadingLabel             = "Loading…"
+	// Section card titles (embedded in top border via RenderBorderedSection).
+	ControlsSectionTitle = "Controls"
+	ProxiesSectionTitle  = "Proxies"
+	LogsSectionTitle     = "Logs"
 )
 
 const (
