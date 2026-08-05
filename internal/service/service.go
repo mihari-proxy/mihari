@@ -83,9 +83,45 @@ func (m *Manager) controller(run RunFunc) (Controller, error) {
 	return m.opts.NewController(run, exe, m.opts.Arguments)
 }
 
-// Install registers the OS service.
+// stageServiceBinary copies the source executable into the platform install
+// directory and returns that absolute path. The OS service ImagePath must never
+// point at a download folder or developer workspace copy.
+func (m *Manager) stageServiceBinary() (string, error) {
+	src := m.opts.Executable
+	if src == "" {
+		var err error
+		src, err = os.Executable()
+		if err != nil {
+			return "", protocol.APIError{Code: protocol.CodeInternal, Message: "resolve mihari executable path"}
+		}
+	}
+	dest, err := platform.StageInstalledBinary(src)
+	if err != nil {
+		return "", protocol.APIError{
+			Code:    protocol.CodeDataFailure,
+			Message: "copy mihari into install directory failed",
+			Details: map[string]any{"error": err.Error()},
+		}
+	}
+	return dest, nil
+}
+
+// Install copies mihari into the machine install directory, then registers the
+// OS service with that installed path (never the caller's download location).
 func (m *Manager) Install() error {
-	c, err := m.controller(nil)
+	installed, err := m.stageServiceBinary()
+	if err != nil {
+		return err
+	}
+	newController := m.opts.NewController
+	if newController == nil {
+		newController = newKardianosController
+	}
+	args := m.opts.Arguments
+	if len(args) == 0 {
+		args = []string{"daemon"}
+	}
+	c, err := newController(nil, installed, args)
 	if err != nil {
 		return err
 	}
