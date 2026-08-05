@@ -12,10 +12,12 @@ func TestExitCodeMapsStableErrorClasses(t *testing.T) {
 		want int
 	}{
 		{protocol.CodeInvalidArgument, ExitUsage},
+		{protocol.CodeSystemProxyNotOwned, ExitUsage},
 		{protocol.CodeDaemonUnavailable, ExitDaemonUnavailable},
 		{protocol.CodeInvalidState, ExitInvalidState},
 		{protocol.CodePermissionDenied, ExitPermission},
 		{protocol.CodeRevisionConflict, ExitConflict},
+		{protocol.CodeSystemProxyConflict, ExitConflict},
 		{protocol.CodeUpstreamFailure, ExitUpstream},
 		{protocol.CodeNetworkFailure, ExitNetwork},
 		{protocol.CodeDataFailure, ExitData},
