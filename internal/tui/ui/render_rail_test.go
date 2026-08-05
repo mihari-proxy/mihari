@@ -18,7 +18,7 @@ func TestRenderRail_UsesUnderlineWhenContentOwnsFocus(t *testing.T) {
 	}
 
 	// Both should mark the selected page.
-	if !strings.Contains(stripANSI(railFocused), "› Subscriptions") || !strings.Contains(stripANSI(contentFocused), "› Subscriptions") {
+	if !strings.Contains(stripANSI(railFocused), "› Subs") || !strings.Contains(stripANSI(contentFocused), "› Subs") {
 		t.Fatalf("selected page missing\nrail=%q\ncontent=%q", railFocused, contentFocused)
 	}
 	// Strong accent styling only while the rail itself is focused.

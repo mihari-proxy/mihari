@@ -86,6 +86,44 @@ func TestManagerMapsNotInstalled(t *testing.T) {
 	}
 }
 
+func TestManagerStatusNotInstalledIsNilError(t *testing.T) {
+	fake := &fakeController{statusErr: errors.New("the specified service does not exist as an installed service")}
+	manager := New(Options{
+		NewController: func(RunFunc, string, []string) (Controller, error) { return fake, nil },
+	})
+	st, err := manager.Status()
+	if err != nil {
+		t.Fatalf("Status() err=%v, want nil for not-installed", err)
+	}
+	if st != StatusNotInstalled {
+		t.Fatalf("status=%q want %q", st, StatusNotInstalled)
+	}
+}
+
+func TestManagerStatusAccessDeniedFallsBackToPlatformQuery(t *testing.T) {
+	// Simulate kardianos Access is denied; without a working platform fallback
+	// on non-Windows this returns mapped permission error — on Windows
+	// platformQueryStatus may still succeed for a real local service.
+	fake := &fakeController{statusErr: errors.New("Access is denied.")}
+	manager := New(Options{
+		NewController: func(RunFunc, string, []string) (Controller, error) { return fake, nil },
+	})
+	st, err := manager.Status()
+	// Either platform fallback succeeds (any StatusKind, nil err) or permission error.
+	if err == nil {
+		switch st {
+		case StatusRunning, StatusStopped, StatusNotInstalled, StatusUnknown:
+			return
+		default:
+			t.Fatalf("unexpected status %q", st)
+		}
+	}
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodePermissionDenied {
+		t.Fatalf("err=%v (status=%q)", err, st)
+	}
+}
+
 func TestManagerRunRequiresFunc(t *testing.T) {
 	manager := New(Options{
 		NewController: func(RunFunc, string, []string) (Controller, error) { return &fakeController{}, nil },

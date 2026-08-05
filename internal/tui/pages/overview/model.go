@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/LeeShunEE/mihari/internal/service"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
 
@@ -20,6 +21,13 @@ type Snapshot struct {
 	Subscriptions protocol.SubscriptionList
 	Monitor       ui.MonitorSnapshot
 	Operations    []ui.OperationRecord
+	// Local / daemon-backed strip fields (Service is OS-local; others need daemon).
+	ServiceStatus service.StatusKind
+	ServiceLoaded bool
+	Connected     bool
+	MihariVersion string
+	SystemProxy   *protocol.SystemProxyStatus
+	Tun           *protocol.TunStatus
 }
 
 type Model struct {
@@ -52,6 +60,8 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 }
 
 func (m *Model) View() string {
+	strip := m.renderSummaryStrip()
+
 	coreStatus := valueOr(m.snapshot.Core.Status, ui.UnknownLabel)
 	coreVersion := valueOr(m.snapshot.Core.Version, ui.UnknownLabel)
 	core := fmt.Sprintf("%s · %s\n%s %d", coreStatus, coreVersion, ui.PIDLabel, m.snapshot.Core.PID)
@@ -99,6 +109,7 @@ func (m *Model) View() string {
 	// Do not force another full-width Content box here: the root shell already
 	// sizes the content pane. Re-applying Width(m.width) plus card borders clips
 	// the right edge of every card.
+	var body string
 	if m.width >= wideMinWidth {
 		half := m.halfCardInner()
 		row1 := lipgloss.JoinHorizontal(lipgloss.Top,
@@ -109,22 +120,105 @@ func (m *Model) View() string {
 			m.cardAt(ui.SubscriptionCardTitle, subscription, half),
 			m.cardAt(ui.WebGUICardTitle, webGUI, half),
 		)
-		return lipgloss.JoinVertical(lipgloss.Left,
+		body = lipgloss.JoinVertical(lipgloss.Left,
 			row1,
 			row2,
 			m.card(ui.MonitorTrafficTitle, traffic),
 			m.card(ui.RecentOperationsTitle, operations),
 		)
+	} else {
+		body = lipgloss.JoinVertical(lipgloss.Left,
+			m.card(ui.CoreCardTitle, core),
+			m.card(ui.ConfigCardTitle, config),
+			m.card(ui.SubscriptionCardTitle, subscription),
+			m.card(ui.WebGUICardTitle, webGUI),
+			m.card(ui.MonitorTrafficTitle, traffic),
+			m.card(ui.RecentOperationsTitle, operations),
+		)
 	}
+	return lipgloss.JoinVertical(lipgloss.Left, strip, body)
+}
 
-	return lipgloss.JoinVertical(lipgloss.Left,
-		m.card(ui.CoreCardTitle, core),
-		m.card(ui.ConfigCardTitle, config),
-		m.card(ui.SubscriptionCardTitle, subscription),
-		m.card(ui.WebGUICardTitle, webGUI),
-		m.card(ui.MonitorTrafficTitle, traffic),
-		m.card(ui.RecentOperationsTitle, operations),
-	)
+// renderSummaryStrip is the top Overview line:
+// Service · Mihari version · SysProxy · TUN
+func (m *Model) renderSummaryStrip() string {
+	parts := []string{
+		fmt.Sprintf("%s  %s", ui.OverviewServiceLabel, formatServiceValue(m.snapshot)),
+		fmt.Sprintf("%s  %s", ui.OverviewMihariLabel, formatMihariVersion(m.snapshot.MihariVersion)),
+		fmt.Sprintf("%s  %s", ui.OverviewSysProxyLabel, formatSysProxyValue(m.snapshot)),
+		fmt.Sprintf("%s  %s", ui.OverviewTunLabel, formatTunValue(m.snapshot)),
+	}
+	line := strings.Join(parts, "  ·  ")
+	style := lipgloss.NewStyle().Foreground(m.theme.ColorMuted)
+	if m.width > 0 {
+		return style.MaxWidth(m.width).Render(line)
+	}
+	return style.Render(line)
+}
+
+func formatServiceValue(snap Snapshot) string {
+	if !snap.ServiceLoaded {
+		return ui.OverviewValueDash
+	}
+	switch snap.ServiceStatus {
+	case service.StatusNotInstalled:
+		return string(service.StatusNotInstalled)
+	case service.StatusStopped:
+		return string(service.StatusStopped)
+	case service.StatusRunning:
+		return string(service.StatusRunning)
+	default:
+		return string(service.StatusUnknown)
+	}
+}
+
+func formatMihariVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return ui.OverviewValueDash
+	}
+	if !strings.HasPrefix(strings.ToLower(version), "v") && version != "dev" {
+		return "v" + version
+	}
+	return version
+}
+
+func formatSysProxyValue(snap Snapshot) string {
+	if !snap.Connected || snap.SystemProxy == nil {
+		return ui.OverviewValueDash
+	}
+	obs := snap.SystemProxy.Observed
+	switch {
+	case obs.Foreign:
+		return ui.OverviewValueForeign
+	case obs.Owned:
+		return ui.OverviewValueOwned
+	case obs.Enabled:
+		return ui.OverviewValueOn
+	case snap.SystemProxy.Desired:
+		return ui.OverviewValueOn
+	default:
+		return ui.OverviewValueOff
+	}
+}
+
+func formatTunValue(snap Snapshot) string {
+	if !snap.Connected || snap.Tun == nil {
+		return ui.OverviewValueDash
+	}
+	if snap.Tun.LiveEnable != nil {
+		if *snap.Tun.LiveEnable {
+			if snap.Tun.Stack != "" {
+				return ui.OverviewValueOn + "/" + snap.Tun.Stack
+			}
+			return ui.OverviewValueOn
+		}
+		return ui.OverviewValueOff
+	}
+	if snap.Tun.DesiredEnable {
+		return ui.OverviewValueOn
+	}
+	return ui.OverviewValueOff
 }
 
 func renderActiveSubscription(list protocol.SubscriptionList) string {

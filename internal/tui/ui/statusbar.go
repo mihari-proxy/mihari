@@ -18,7 +18,9 @@ type StatusBarData struct {
 	UploadRate   int64
 	DownloadRate int64
 	MemoryInUse  int64
-	Stale        bool
+	// RightStatus is shown in the top-right corner (e.g. Stale, Reconnecting,
+	// Service not installed). Empty means live / no badge.
+	RightStatus string
 }
 
 const (
@@ -26,16 +28,13 @@ const (
 	statusCoreRunning   = "●"
 	statusCoreOffline   = "○"
 	statusCoreReconnect = "◌"
-	statusStalePrefix   = "STALE"
 )
 
 // RenderStatusBar builds the top status-shell bar (Full or Compact).
-// When width > 0 the line is clamped with MaxWidth; secrets must not appear in data.
+// Metrics stay left-aligned; RightStatus is pinned to the top-right when width > 0.
+// Secrets must not appear in data.
 func RenderStatusBar(theme Theme, data StatusBarData, width int, compact bool) string {
 	parts := make([]string, 0, 7)
-	if data.Stale {
-		parts = append(parts, theme.Warning.Render(statusStalePrefix))
-	}
 	parts = append(parts, theme.Title.Render(AppName))
 	parts = append(parts, renderStatusCore(theme, data.CoreStatus, data.CoreVersion, compact))
 
@@ -61,12 +60,65 @@ func RenderStatusBar(theme Theme, data StatusBarData, width int, compact bool) s
 		parts = append(parts, FormatBytes(data.MemoryInUse))
 	}
 
-	line := strings.Join(parts, statusSep)
-	style := lipgloss.NewStyle().Padding(0, 1)
-	if width > 0 {
-		style = style.MaxWidth(width)
+	left := strings.Join(parts, statusSep)
+	rightLabel := strings.TrimSpace(data.RightStatus)
+	var right string
+	if rightLabel != "" {
+		right = renderRightStatus(theme, rightLabel)
 	}
-	return style.Render(line)
+
+	if width <= 0 {
+		if right == "" {
+			return lipgloss.NewStyle().Padding(0, 1).Render(left)
+		}
+		return lipgloss.NewStyle().Padding(0, 1).Render(left + statusSep + right)
+	}
+
+	// Inner width accounts for horizontal padding (1 cell each side).
+	inner := max(1, width-2)
+	if right == "" {
+		return lipgloss.NewStyle().Padding(0, 1).MaxWidth(width).Width(width).Render(
+			lipgloss.NewStyle().MaxWidth(inner).Render(left),
+		)
+	}
+
+	rightWidth := lipgloss.Width(right)
+	// At least one space between left metrics and the right badge.
+	leftBudget := inner - rightWidth - 1
+	if leftBudget < 8 {
+		// Prefer keeping the right badge; shrink left aggressively.
+		leftBudget = max(1, inner-rightWidth)
+	}
+	leftClamped := lipgloss.NewStyle().MaxWidth(leftBudget).Render(left)
+	gap := inner - lipgloss.Width(leftClamped) - rightWidth
+	if gap < 1 {
+		gap = 1
+		// Re-clamp left so left+gap+right fits.
+		leftBudget = max(1, inner-rightWidth-gap)
+		leftClamped = lipgloss.NewStyle().MaxWidth(leftBudget).Render(left)
+		gap = max(1, inner-lipgloss.Width(leftClamped)-rightWidth)
+	}
+	line := leftClamped + strings.Repeat(" ", gap) + right
+	return lipgloss.NewStyle().Padding(0, 1).MaxWidth(width).Width(width).Render(line)
+}
+
+func renderRightStatus(theme Theme, label string) string {
+	lower := strings.ToLower(label)
+	style := theme.Warning
+	switch {
+	case strings.Contains(lower, "reconnect"):
+		style = theme.Warning
+	case strings.Contains(lower, "offline"):
+		style = theme.Danger
+	case strings.Contains(lower, "not installed"), strings.Contains(lower, "stopped"):
+		style = theme.Warning
+	case strings.Contains(lower, "connected") && !strings.Contains(lower, "reconnect"):
+		// Dual badge may end with Connected only in hybrid cases; keep muted success.
+		style = theme.Success
+	default:
+		style = theme.Warning
+	}
+	return style.Render(label)
 }
 
 func renderStatusCore(theme Theme, status, version string, compact bool) string {

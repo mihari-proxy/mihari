@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/LeeShunEE/mihari/internal/service"
 	connectionspage "github.com/LeeShunEE/mihari/internal/tui/pages/connections"
 	rulespage "github.com/LeeShunEE/mihari/internal/tui/pages/rules"
 	setuppage "github.com/LeeShunEE/mihari/internal/tui/pages/setup"
@@ -180,20 +181,101 @@ func TestModelSessionReconnectMarksSnapshotStaleAndKeepsWaiting(t *testing.T) {
 	events <- session.Event{Kind: session.EventReconnecting}
 	updated, next := model.Update(command())
 	model = updated.(Model)
-	if !model.stale || model.connected || next == nil {
-		t.Fatalf("stale=%v connected=%v next=%v", model.stale, model.connected, next != nil)
+	if !model.stale || !model.reconnecting || model.connected || next == nil {
+		t.Fatalf("stale=%v reconnecting=%v connected=%v next=%v", model.stale, model.reconnecting, model.connected, next != nil)
+	}
+	if model.statusBarRightStatus() != ui.StatusRightReconnecting {
+		t.Fatalf("right status=%q want reconnecting", model.statusBarRightStatus())
 	}
 	events <- session.Event{Kind: session.EventConnected}
 	updated, next = model.Update(next())
 	model = updated.(Model)
-	if model.stale || !model.connected || next == nil {
-		t.Fatalf("stale=%v connected=%v next=%v", model.stale, model.connected, next != nil)
+	if model.stale || model.reconnecting || !model.connected || next == nil {
+		t.Fatalf("stale=%v reconnecting=%v connected=%v next=%v", model.stale, model.reconnecting, model.connected, next != nil)
 	}
 	close(events)
 	updated, next = model.Update(next())
 	model = updated.(Model)
 	if next != nil {
 		t.Fatal("closed session channel was reissued")
+	}
+}
+
+func TestStatusBarRightStatusDualServiceAndDaemon(t *testing.T) {
+	model := NewModel()
+	model.serviceLoaded = true
+
+	// Service stopped + daemon offline (common: installed but not started).
+	model.serviceStatus = service.StatusStopped
+	model.connected = false
+	model.reconnecting = false
+	model.stale = true
+	want := ui.StatusServiceStopped + ui.StatusRightJoin + ui.StatusDaemonOffline
+	if got := model.statusBarRightStatus(); got != want {
+		t.Fatalf("stopped+offline: got %q want %q", got, want)
+	}
+
+	// Service stopped + reconnecting.
+	model.reconnecting = true
+	want = ui.StatusServiceStopped + ui.StatusRightJoin + ui.StatusDaemonReconnecting
+	if got := model.statusBarRightStatus(); got != want {
+		t.Fatalf("stopped+reconnecting: got %q want %q", got, want)
+	}
+
+	// Service not installed + offline.
+	model.serviceStatus = service.StatusNotInstalled
+	model.reconnecting = false
+	model.stale = true
+	want = ui.StatusServiceNotInstalled + ui.StatusRightJoin + ui.StatusDaemonOffline
+	if got := model.statusBarRightStatus(); got != want {
+		t.Fatalf("not installed+offline: got %q want %q", got, want)
+	}
+
+	// Service not installed + connected → service nudge only.
+	model.connected = true
+	model.stale = false
+	if got := model.statusBarRightStatus(); got != ui.StatusServiceNotInstalled {
+		t.Fatalf("not installed+connected: got %q want %q", got, ui.StatusServiceNotInstalled)
+	}
+
+	// Service running + reconnecting.
+	model.serviceStatus = service.StatusRunning
+	model.connected = false
+	model.reconnecting = true
+	model.stale = true
+	want = ui.StatusServiceRunning + ui.StatusRightJoin + ui.StatusDaemonReconnecting
+	if got := model.statusBarRightStatus(); got != want {
+		t.Fatalf("running+reconnecting: got %q want %q", got, want)
+	}
+
+	// Service running + offline (not mid-retry).
+	model.reconnecting = false
+	want = ui.StatusServiceRunning + ui.StatusRightJoin + ui.StatusDaemonOffline
+	if got := model.statusBarRightStatus(); got != want {
+		t.Fatalf("running+offline: got %q want %q", got, want)
+	}
+
+	// Healthy: service running + connected → quiet.
+	model.connected = true
+	model.stale = false
+	if got := model.statusBarRightStatus(); got != "" {
+		t.Fatalf("healthy: got %q want empty", got)
+	}
+
+	// Service unknown while reconnecting.
+	model.serviceStatus = service.StatusUnknown
+	model.connected = false
+	model.reconnecting = true
+	model.stale = true
+	want = ui.StatusServiceUnknown + ui.StatusRightJoin + ui.StatusDaemonReconnecting
+	if got := model.statusBarRightStatus(); got != want {
+		t.Fatalf("unknown+reconnecting: got %q want %q", got, want)
+	}
+
+	// Service not loaded yet + reconnecting → daemon only.
+	model.serviceLoaded = false
+	if got := model.statusBarRightStatus(); got != ui.StatusDaemonReconnecting {
+		t.Fatalf("unloaded+reconnecting: got %q want %q", got, ui.StatusDaemonReconnecting)
 	}
 }
 
