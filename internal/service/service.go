@@ -163,6 +163,13 @@ func (m *Manager) Run() error {
 	return mapServiceError(c.Run())
 }
 
+// IsInteractive reports whether this process is running outside the OS service
+// manager. When false (Windows service session), the daemon entrypoint must call
+// Manager.Run so the process registers with SCM (StartServiceCtrlDispatcher).
+func IsInteractive() bool {
+	return kardservice.Interactive()
+}
+
 func mapServiceError(err error) error {
 	if err == nil {
 		return nil
@@ -174,6 +181,16 @@ func mapServiceError(err error) error {
 		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihari service is not installed"}
 	case strings.Contains(lower, "access is denied"), strings.Contains(lower, "permission"), strings.Contains(lower, "operation not permitted"):
 		return protocol.APIError{Code: protocol.CodePermissionDenied, Message: "administrator privileges are required; re-run from an elevated shell"}
+	case strings.Contains(lower, "did not respond to the start or control request"),
+		strings.Contains(lower, "timely fashion"),
+		strings.Contains(lower, "timeout was reached"),
+		strings.Contains(lower, "1053"):
+		// Classic SCM failure when the process never called StartServiceCtrlDispatcher
+		// (e.g. old builds ran `daemon` as a plain CLI under the service ImagePath).
+		return protocol.APIError{
+			Code:    protocol.CodeInvalidState,
+			Message: "service failed to start in time; ensure this mihari binary is used for the service ImagePath and reinstall/start after upgrading",
+		}
 	default:
 		return protocol.APIError{Code: protocol.CodeInvalidState, Message: fmt.Sprintf("service operation failed: %s", msg)}
 	}

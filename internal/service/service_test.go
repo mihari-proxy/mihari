@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
@@ -132,6 +133,17 @@ func TestManagerRunRequiresFunc(t *testing.T) {
 	var api protocol.APIError
 	if !errors.As(err, &api) || api.Code != protocol.CodeInvalidArgument {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestMapServiceErrorStartTimeout(t *testing.T) {
+	err := mapServiceError(errors.New("Failed to start Mihari: The service did not respond to the start or control request in a timely fashion."))
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodeInvalidState {
+		t.Fatalf("err=%v", err)
+	}
+	if !strings.Contains(api.Message, "failed to start in time") {
+		t.Fatalf("message=%q", api.Message)
 	}
 }
 

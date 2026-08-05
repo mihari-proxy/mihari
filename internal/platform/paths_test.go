@@ -71,3 +71,16 @@ func TestDefaultPathsHonorsDataOverride(t *testing.T) {
 		t.Fatalf("root=%q want=%q", got.Root, root)
 	}
 }
+
+func TestDefaultDataRootWindowsUsesProgramData(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("windows-only path policy")
+	}
+	t.Setenv("MIHARI_DATA", "")
+	t.Setenv("ProgramData", `C:\ProgramData`)
+	got := defaultDataRoot()
+	want := filepath.Join(`C:\ProgramData`, "mihari")
+	if got != want {
+		t.Fatalf("root=%q want=%q", got, want)
+	}
+}

@@ -28,7 +28,7 @@ func main() {
 	endpoint := transport.DefaultEndpoint()
 	token, setupError := credential.LoadOrCreate(transport.DefaultCredentialPath())
 	localClient := controlclient.New(endpoint, token)
-	runDaemon := func(ctx context.Context) error {
+	runDaemonBody := func(ctx context.Context) error {
 		paths := platform.DefaultPaths()
 		if err := paths.EnsureDirs(); err != nil {
 			return protocol.APIError{Code: protocol.CodeDataFailure, Message: "create mihari data directories"}
@@ -51,7 +51,16 @@ func main() {
 			Runtime:  assembly.Manager,
 		})
 	}
-	serviceManager := service.New(service.Options{Run: runDaemon})
+	// When SCM launches ImagePath `mihari.exe daemon`, the process is non-interactive.
+	// Manager.Run registers with the service control manager; a plain daemon body never
+	// calls StartServiceCtrlDispatcher and Windows fails the start with a 30s timeout.
+	serviceManager := service.New(service.Options{Run: runDaemonBody})
+	runDaemon := func(ctx context.Context) error {
+		if !service.IsInteractive() {
+			return serviceManager.Run()
+		}
+		return runDaemonBody(ctx)
+	}
 	selfUpdater := update.SelfUpdater{
 		AfterReplace: func(ctx context.Context, _ string) error {
 			// Best-effort restart when service is installed; ignore not-installed.
