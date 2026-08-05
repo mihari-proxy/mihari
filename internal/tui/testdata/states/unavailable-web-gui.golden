@@ -1,7 +1,7 @@
  Mihari  ·  ●  ·  0 conn  ·  ↑0 B/s  ↓0 B/s  ·  0 B                                         Offline 
-    Overview      Web GUI                                                                           
-    Proxies                                                                                         
-    Conns         Unavailable: Web GUI lifecycle is not available in this build.                    
+    Overview     ╭───Web GUI──────────────────────────────────────────────────────────────────────╮ 
+    Proxies      │ Unavailable: Web GUI lifecycle is not available in this build.                 │ 
+    Conns        ╰────────────────────────────────────────────────────────────────────────────────╯ 
     Rules                                                                                           
     Logs                                                                                            
     Subs                                                                                            
