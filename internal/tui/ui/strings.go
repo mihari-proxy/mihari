@@ -54,7 +54,8 @@ const (
 	StatusRightServiceStopped      = StatusServiceStopped
 	StatusRightServiceUnknown      = StatusServiceUnknown
 	StatusRightJoin                = " · "
-	// Overview summary strip labels.
+	// Overview General section field labels.
+	OverviewGeneralTitle  = "General"
 	OverviewServiceLabel  = "Service"
 	OverviewMihariLabel   = "Mihari"
 	OverviewSysProxyLabel = "SysProxy"
@@ -64,6 +65,7 @@ const (
 	OverviewValueOwned    = "owned"
 	OverviewValueForeign  = "foreign"
 	OverviewValueDash     = "—"
+	// Section titles are embedded in the top border line (╭─── Name ───╮), not body text.
 	MonitorTrafficTitle            = "Traffic · 60 s"
 	MonitorMemoryTitle             = "Memory · 60 s"
 	MonitorConnectionsLabel        = "Connections"
