@@ -84,6 +84,22 @@ mihari sub remove ID --yes
 
 Subscription URLs are stored only in the daemon-private catalog and are omitted from list/show responses and normal errors. Each valid profile has an independent cache, so `sub use` works without provider network access. Generated configuration always restores Mihari's managed loopback controller, secret, and port invariants before `mihomo -t` and reload.
 
+Manage OS system proxy and managed TUN through the same daemon mutation path:
+
+```console
+mihari sysproxy status
+mihari sysproxy enable
+mihari sysproxy enable --force
+mihari sysproxy disable
+mihari tun status
+mihari tun enable
+mihari tun disable
+```
+
+`sysproxy enable` points the desktop HTTP/HTTPS/SOCKS system proxy at Mihari’s mixed endpoint. If another product already owns the proxy, enable fails with `system_proxy_conflict` unless you pass `--force` (TUI asks for confirmation). `sysproxy disable` only clears a proxy **owned by Mihari**; it will not turn off a foreign proxy. On Windows, when Mihari runs as a LocalSystem service it writes the **interactive console user’s** WinINET hive (`HKEY_USERS\<SID>\…`), not SYSTEM’s own `HKCU`, so desktop browsers pick up the change.
+
+`tun enable|disable` persists a managed TUN block, injects it into generated mihomo config, and applies live via the controller when available. TUN may require elevated privileges or a service install depending on the OS.
+
 Manage browser panels through the same daemon-owned lifecycle:
 
 ```console
