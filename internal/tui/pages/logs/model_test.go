@@ -66,14 +66,14 @@ func TestView_ControlStripHighlightsActiveWhenContentFocused(t *testing.T) {
 	model.controlIndex = 1 // Wrap
 
 	model.SetContentFocused(false)
-	if control := strings.Split(model.View(), "\n")[0]; strings.Contains(control, "\x1b[") {
-		t.Fatalf("control strip should stay plain while rail owns focus: %q", control)
-	}
-
+	railControl := logsSectionBodyLine(model.View(), 0)
 	model.SetContentFocused(true)
-	control := strings.Split(model.View(), "\n")[0]
+	control := logsSectionBodyLine(model.View(), 0)
 	if !strings.Contains(control, "\x1b[") {
 		t.Fatalf("active control chip should highlight when content focused: %q", control)
+	}
+	if control == railControl {
+		t.Fatal("content-focused control strip should differ from rail-focused")
 	}
 }
 
@@ -82,12 +82,8 @@ func TestLogs_SearchNotInControlStrip(t *testing.T) {
 	model.SetSize(100, 16)
 	model.Append(logAt("daemon started", "info", 1))
 	view := model.View()
-	lines := strings.Split(view, "\n")
-	if len(lines) < 3 {
-		t.Fatalf("expected strip + search + header, got %d lines: %s", len(lines), view)
-	}
-	control := lines[0]
-	if strings.Contains(control, "Search") || strings.Contains(control, "/ ") {
+	control := logsSectionBodyLine(view, 0)
+	if strings.Contains(control, "Search") {
 		t.Fatalf("control strip must not embed search: %q", control)
 	}
 	for _, want := range []string{"Level", "Wrap", "Pause"} {
@@ -95,12 +91,48 @@ func TestLogs_SearchNotInControlStrip(t *testing.T) {
 			t.Fatalf("control missing %q: %q", want, control)
 		}
 	}
-	if !strings.Contains(lines[1], ui.SearchPlaceholder) && !strings.Contains(lines[1], "/ ") {
-		t.Fatalf("search bar missing: %q", lines[1])
+	search := logsSectionBodyLine(view, 1)
+	if !strings.Contains(search, ui.SearchPlaceholder) && !strings.Contains(search, "/ ") {
+		t.Fatalf("search bar missing: %q", search)
 	}
-	if !strings.Contains(lines[2], ui.TimeLabel) || !strings.Contains(lines[2], ui.MessageLabel) {
-		t.Fatalf("table header missing: %q", lines[2])
+	if !strings.Contains(view, ui.TimeLabel) || !strings.Contains(view, ui.MessageLabel) {
+		t.Fatalf("table header missing in dual-section view:\n%s", view)
 	}
+	if !strings.Contains(view, ui.ControlsSectionTitle) || !strings.Contains(view, ui.LogsSectionTitle) {
+		t.Fatalf("section titles missing:\n%s", view)
+	}
+}
+
+func logsSectionBodyLine(view string, n int) string {
+	lines := strings.Split(view, "\n")
+	body := 0
+	for i := 1; i < len(lines); i++ {
+		plain := logsStripANSI(lines[i])
+		if strings.HasPrefix(strings.TrimLeft(plain, " "), "╰") {
+			break
+		}
+		if body == n {
+			return lines[i]
+		}
+		body++
+	}
+	return ""
+}
+
+func logsStripANSI(value string) string {
+	var b strings.Builder
+	inEscape := false
+	for _, r := range value {
+		switch {
+		case r == '\x1b':
+			inEscape = true
+		case inEscape && ((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z')):
+			inEscape = false
+		case !inEscape:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func TestLogs_SearchMatchesVisibleColumns(t *testing.T) {

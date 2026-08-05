@@ -1,15 +1,15 @@
  Mihari  ·  ●  ·  0c  ·  ↑0 ↓0  ·  0                            Offline 
-    Overview   Level: All  Wrap: Off  Pause: Off                        
-    Proxies    / Search…                                                
-    Conns        Time      Level    Message                             
-    Rules        ────────────────────────────────────────────────────── 
-  › Logs         22:13:20  INFO     daemon started                      
-    Subs         22:13:21  WARNING  geoip database missing              
-    Web GUI      22:13:22  ERROR    upstream connection reset           
-    System                                                              
-                                                                        
-                                                                        
-                                                                        
+    Overview   ╭───Controls───────────────────────────────────────────╮ 
+    Proxies    │ Level: All  Wrap: Off  Pause: Off                    │ 
+    Conns      │ / Search…                                            │ 
+    Rules      ╰──────────────────────────────────────────────────────╯ 
+  › Logs       ╭───Logs───────────────────────────────────────────────╮ 
+    Subs       │   Time      Level    Message                         │ 
+    Web GUI    │   ────────────────────────────────────────────────── │ 
+    System     │   22:13:20  INFO     daemon started                  │ 
+               │   22:13:21  WARNING  geoip database missing          │ 
+               │   22:13:22  ERROR    upstream connection reset       │ 
+               ╰──────────────────────────────────────────────────────╯ 
                                                                         
                                                                         
                                                                         
