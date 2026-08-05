@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"io"
 	"net"
 	"os"
@@ -249,4 +251,45 @@ func (m webMutator) CloseAllConnections(ctx context.Context) error {
 	return m.manager.CloseAllConnections(ctx, runtimeapi.Operation{
 		ID: "web-close-all-" + time.Now().UTC().Format("20060102T150405.000000000"), Source: "web",
 	})
+}
+
+// ApplyConfigPatch applies allowlisted config mutations (currently TUN only) via the coordinator.
+func (m webMutator) ApplyConfigPatch(ctx context.Context, patch map[string]any) error {
+	tunRaw, ok := patch["tun"]
+	if !ok {
+		return protocol.APIError{
+			Code:    protocol.CodeUnsupportedMutation,
+			Message: "unsupported config mutation",
+		}
+	}
+	tun, ok := tunRaw.(map[string]any)
+	if !ok {
+		return protocol.APIError{
+			Code:    protocol.CodeInvalidArgument,
+			Message: "tun config must be an object",
+		}
+	}
+	enable, ok := tun["enable"].(bool)
+	if !ok {
+		return protocol.APIError{
+			Code:    protocol.CodeInvalidArgument,
+			Message: "tun.enable must be a boolean",
+		}
+	}
+	op := runtimeapi.Operation{ID: "web-tun-" + newWebOperationID(), Source: "web"}
+	if enable {
+		_, err := m.manager.EnableTun(ctx, op)
+		return err
+	}
+	_, err := m.manager.DisableTun(ctx, op)
+	return err
+}
+
+func newWebOperationID() string {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		// Fallback keeps operation IDs unique enough for coordinator logging.
+		return time.Now().UTC().Format("20060102T150405.000000000")
+	}
+	return hex.EncodeToString(value[:])
 }

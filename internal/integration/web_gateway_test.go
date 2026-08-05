@@ -293,6 +293,27 @@ func (m integrationWebMutator) CloseConnection(ctx context.Context, id string) e
 func (m integrationWebMutator) CloseAllConnections(ctx context.Context) error {
 	return m.manager.CloseAllConnections(ctx, runtimeapi.Operation{ID: "web-close-all", Source: "web"})
 }
+func (m integrationWebMutator) ApplyConfigPatch(ctx context.Context, patch map[string]any) error {
+	tunRaw, ok := patch["tun"]
+	if !ok {
+		return nil
+	}
+	tun, ok := tunRaw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	enable, ok := tun["enable"].(bool)
+	if !ok {
+		return nil
+	}
+	op := runtimeapi.Operation{ID: "web-tun", Source: "web"}
+	if enable {
+		_, err := m.manager.EnableTun(ctx, op)
+		return err
+	}
+	_, err := m.manager.DisableTun(ctx, op)
+	return err
+}
 
 type stubWebGateway struct{}
 
