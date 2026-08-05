@@ -682,10 +682,11 @@ func (model *Model) clearSystemDoneIfLeaving(prev ui.PageID) {
 	}
 }
 
+// dispatchPage delivers non-root messages to the active page.
+// Keyboard focus is enforced by Update before keys reach here (rail keys never
+// call this). Async Load/IO results must still land while the rail is focused,
+// so the page preview can leave Loading… without requiring Enter.
 func (model Model) dispatchPage(message tea.Msg) (tea.Model, tea.Cmd) {
-	if model.focus.Area != ui.FocusContent {
-		return model, nil
-	}
 	return model.dispatchPageTo(model.active, message)
 }
 
