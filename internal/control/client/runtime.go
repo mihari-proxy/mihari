@@ -118,6 +118,27 @@ func (c *Client) UpdateGeoIP(ctx context.Context, request protocol.MutationReque
 	return result, err
 }
 
+// SystemProxy returns desired intent and live OS system-proxy observation.
+func (c *Client) SystemProxy(ctx context.Context) (protocol.SystemProxyStatus, error) {
+	var result protocol.SystemProxyStatus
+	err := c.doRuntime(ctx, http.MethodGet, "/v1/system-proxy", nil, &result)
+	return result, err
+}
+
+// EnableSystemProxy enables the OS system proxy via the daemon mutation path.
+func (c *Client) EnableSystemProxy(ctx context.Context, request protocol.SystemProxyMutationRequest) (protocol.SystemProxyStatus, error) {
+	var result protocol.SystemProxyStatus
+	err := c.doRuntime(ctx, http.MethodPost, "/v1/system-proxy/enable", request, &result)
+	return result, err
+}
+
+// DisableSystemProxy clears Mihari-owned system proxy via the daemon mutation path.
+func (c *Client) DisableSystemProxy(ctx context.Context, request protocol.SystemProxyMutationRequest) (protocol.SystemProxyStatus, error) {
+	var result protocol.SystemProxyStatus
+	err := c.doRuntime(ctx, http.MethodPost, "/v1/system-proxy/disable", request, &result)
+	return result, err
+}
+
 func (c *Client) Onboarding(ctx context.Context) (protocol.OnboardingStatus, error) {
 	var result protocol.OnboardingStatus
 	err := c.doRuntime(ctx, http.MethodGet, "/v1/onboarding", nil, &result)

@@ -87,6 +87,19 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 				_, err := client.UpdateGeoIP(ctx, protocol.MutationRequest{OperationID: "geoip-1", IfRevision: &revision})
 				return err
 			}},
+		{"system proxy", http.MethodGet, "/v1/system-proxy", "", `{"schema":"mihari/v1","revision":5,"desired":true,"target":"127.0.0.1:9190","observed":{"enabled":true,"server":"127.0.0.1:9190","owned":true,"foreign":false}}`,
+			func(ctx context.Context, client *Client) error { _, err := client.SystemProxy(ctx); return err }},
+		{"system proxy enable", http.MethodPost, "/v1/system-proxy/enable", `{"operation_id":"sysproxy-1","if_revision":5,"force":true}`, `{"schema":"mihari/v1","revision":6,"desired":true,"target":"127.0.0.1:9190","observed":{"enabled":true,"server":"127.0.0.1:9190","owned":true,"foreign":false}}`,
+			func(ctx context.Context, client *Client) error {
+				revision := uint64(5)
+				_, err := client.EnableSystemProxy(ctx, protocol.SystemProxyMutationRequest{OperationID: "sysproxy-1", IfRevision: &revision, Force: true})
+				return err
+			}},
+		{"system proxy disable", http.MethodPost, "/v1/system-proxy/disable", `{"operation_id":"sysproxy-2"}`, `{"schema":"mihari/v1","revision":7,"desired":false,"observed":{"enabled":false,"owned":false,"foreign":false}}`,
+			func(ctx context.Context, client *Client) error {
+				_, err := client.DisableSystemProxy(ctx, protocol.SystemProxyMutationRequest{OperationID: "sysproxy-2"})
+				return err
+			}},
 		{"onboarding", http.MethodGet, "/v1/onboarding", "", `{"schema":"mihari/v1","revision":3,"complete":false,"mixed_addr":"127.0.0.1:7890","controller_addr":"127.0.0.1:9090","web_addr":"127.0.0.1:9191","restart_required":false}`,
 			func(ctx context.Context, client *Client) error { _, err := client.Onboarding(ctx); return err }},
 		{"update onboarding", http.MethodPatch, "/v1/onboarding", `{"operation_id":"setup-1","if_revision":3,"complete":true,"web_addr":"127.0.0.1:9292"}`, `{"schema":"mihari/v1","revision":4,"complete":true,"mixed_addr":"127.0.0.1:7890","controller_addr":"127.0.0.1:9090","web_addr":"127.0.0.1:9292","restart_required":true}`,
