@@ -246,15 +246,11 @@ func renderActiveSubscription(list protocol.SubscriptionList) string {
 }
 
 func (m *Model) fullCardInner() int {
-	// Lipgloss Width is the inner block; rounded borders add 2 columns outside.
-	// Leave room for root Content horizontal padding (2) and the border (2).
-	return max(20, m.width-4)
+	return ui.FullSectionInner(m.width)
 }
 
 func (m *Model) halfCardInner() int {
-	// Two side-by-side cards: each has a 2-column border; leave content padding (2).
-	// 2*(inner+2) <= m.width-2  =>  inner <= (m.width-6)/2
-	return max(10, (m.width-6)/2)
+	return ui.HalfSectionInner(m.width)
 }
 
 func (m *Model) card(title, body string) string {
