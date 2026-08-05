@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/LeeShunEE/mihari/internal/service"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
 
@@ -29,6 +30,55 @@ func TestOverview_RendersAuthoritativeCardsAndSessionOperations(t *testing.T) {
 	}
 	if strings.Contains(view, "Phase 5") {
 		t.Fatalf("overview must not mention Phase 5: %s", view)
+	}
+}
+
+func TestOverview_SummaryStripServiceMihariSysProxyTun(t *testing.T) {
+	live := true
+	model := New()
+	model.SetSize(100, 26)
+	model.SetSnapshot(Snapshot{
+		ServiceLoaded: true,
+		ServiceStatus: service.StatusStopped,
+		Connected:     true,
+		MihariVersion: "0.1.0",
+		SystemProxy: &protocol.SystemProxyStatus{
+			Desired:  true,
+			Observed: protocol.SystemProxyObserved{Enabled: true, Server: "127.0.0.1:9190", Owned: true},
+		},
+		Tun: &protocol.TunStatus{DesiredEnable: true, LiveEnable: &live, Stack: "gVisor", Managed: true},
+		Core: protocol.CoreStatus{Status: "running", Version: "v1.19.0", PID: 1},
+	})
+	view := model.View()
+	for _, want := range []string{
+		ui.OverviewServiceLabel, string(service.StatusStopped),
+		ui.OverviewMihariLabel, "v0.1.0",
+		ui.OverviewSysProxyLabel, ui.OverviewValueOwned,
+		ui.OverviewTunLabel, ui.OverviewValueOn + "/gVisor",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("summary strip missing %q:\n%s", want, view)
+		}
+	}
+
+	// Offline daemon: sysproxy/TUN show dash; service still visible.
+	model.SetSnapshot(Snapshot{
+		ServiceLoaded: true,
+		ServiceStatus: service.StatusNotInstalled,
+		Connected:     false,
+		MihariVersion: "dev",
+		Core:          protocol.CoreStatus{Status: "stopped"},
+	})
+	view = model.View()
+	for _, want := range []string{
+		ui.OverviewServiceLabel, string(service.StatusNotInstalled),
+		ui.OverviewMihariLabel, "dev",
+		ui.OverviewSysProxyLabel + "  " + ui.OverviewValueDash,
+		ui.OverviewTunLabel + "  " + ui.OverviewValueDash,
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("offline strip missing %q:\n%s", want, view)
+		}
 	}
 }
 

@@ -8,7 +8,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/LeeShunEE/mihari/internal/buildinfo"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/LeeShunEE/mihari/internal/service"
 	connectionspage "github.com/LeeShunEE/mihari/internal/tui/pages/connections"
 	logspage "github.com/LeeShunEE/mihari/internal/tui/pages/logs"
 	"github.com/LeeShunEE/mihari/internal/tui/pages/overview"
@@ -36,6 +38,7 @@ type Model struct {
 	events           <-chan session.Event
 	connected        bool
 	stale            bool
+	reconnecting     bool
 	mutationsEnabled bool
 	status           protocol.Status
 	traffic          protocol.TrafficSample
@@ -53,6 +56,37 @@ type Model struct {
 	now              time.Time // spinner clock; advanced only while work is pending
 	spinning         bool      // true while a spinner tick loop is scheduled
 	spinGen          uint64    // generation so only the latest tick loop may reschedule
+	// OS service observation for top-right status badge (local, not daemon IPC).
+	serviceCtrl   systempage.ServiceController
+	serviceStatus service.StatusKind
+	serviceLoaded bool
+	// Daemon network features for Overview strip (via control client when live).
+	pageCtx       context.Context
+	networkClient networkStatusClient
+	systemProxy   protocol.SystemProxyStatus
+	systemProxyOK bool
+	tunStatus     protocol.TunStatus
+	tunOK         bool
+}
+
+// networkStatusClient is the minimal control surface for Overview network KPIs.
+type networkStatusClient interface {
+	SystemProxy(context.Context) (protocol.SystemProxyStatus, error)
+	Tun(context.Context) (protocol.TunStatus, error)
+}
+
+// rootServiceStatusMsg is the root-level poll of OS service install state.
+type rootServiceStatusMsg struct {
+	status service.StatusKind
+	err    error
+}
+
+// networkStatusMsg carries daemon-backed sysproxy/TUN snapshots for Overview.
+type networkStatusMsg struct {
+	proxy    protocol.SystemProxyStatus
+	proxyErr error
+	tun      protocol.TunStatus
+	tunErr   error
 }
 
 type actionExecuteMsg struct{ Intent ui.ActionIntentMsg }
@@ -141,26 +175,90 @@ func newModelWithClientContext(ctx context.Context, events <-chan session.Event,
 	model.pages[ui.PageWebGUI] = webguipage.NewWithContext(ctx, client, nil)
 	model.resizePages()
 	model.events = events
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	model.pageCtx = ctx
+	model.networkClient = client
 	return model
 }
 
-func (model Model) Init() tea.Cmd { return waitSessionEvent(model.events) }
+func (model Model) Init() tea.Cmd {
+	return tea.Batch(waitSessionEvent(model.events), model.loadRootServiceStatus())
+}
+
+// SetServiceController injects the OS service controller used for the top-right badge
+// and the System page. Safe to call before Run.
+func (model *Model) SetServiceController(ctrl systempage.ServiceController) {
+	model.serviceCtrl = ctrl
+	if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
+		page.SetServiceController(ctrl)
+	}
+}
+
+func (model Model) loadRootServiceStatus() tea.Cmd {
+	ctrl := model.serviceCtrl
+	if ctrl == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		status, err := ctrl.Status()
+		return rootServiceStatusMsg{status: status, err: err}
+	}
+}
 
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch typed := message.(type) {
+	case rootServiceStatusMsg:
+		model.serviceLoaded = true
+		if typed.err != nil {
+			// Status() normally maps not-installed to a nil error; keep a text fallback.
+			if strings.Contains(strings.ToLower(typed.err.Error()), "not installed") {
+				model.serviceStatus = service.StatusNotInstalled
+			} else {
+				model.serviceStatus = service.StatusUnknown
+			}
+		} else {
+			model.serviceStatus = typed.status
+		}
+		model.syncOverview()
+		return model, nil
+	case networkStatusMsg:
+		if typed.proxyErr == nil {
+			model.systemProxy = typed.proxy
+			model.systemProxyOK = true
+		} else {
+			model.systemProxyOK = false
+		}
+		if typed.tunErr == nil {
+			model.tunStatus = typed.tun
+			model.tunOK = true
+		} else {
+			model.tunOK = false
+		}
+		model.syncOverview()
+		return model, nil
 	case sessionEventMsg:
 		if !typed.Open {
 			model.connected = false
 			model.stale = true
+			model.reconnecting = false
 			model.mutationsEnabled = false
 			model.globalState = ui.StateStale
 			model.monitor.SetStale(true)
 			model.setLogsStale(true)
 			model.syncSystem()
 			model.syncOverview()
-			return model, nil
+			return model, model.loadRootServiceStatus()
 		}
+		// Refresh service install state when connectivity transitions, not on every stream tick.
+		refreshService := typed.Event.Kind == session.EventConnected ||
+			typed.Event.Kind == session.EventReconnecting ||
+			typed.Event.Kind == session.EventTerminalError
 		command := model.applySessionEvent(typed.Event)
+		if refreshService {
+			return model, tea.Batch(command, waitSessionEvent(model.events), model.loadRootServiceStatus())
+		}
 		return model, tea.Batch(command, waitSessionEvent(model.events))
 	case setuppage.CompletedMsg:
 		model.status.SetupRequired = !typed.Status.Complete
@@ -329,6 +427,10 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		} else if model.active == ui.PageSetup {
 			model.activateOverview()
 		}
+		// Refresh network strip when status/capabilities land after connect.
+		if model.connected {
+			command = tea.Batch(command, model.loadNetworkStatus())
+		}
 	case session.EventTraffic:
 		model.traffic = event.Traffic
 	case session.EventMemory:
@@ -368,15 +470,32 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 	case session.EventConnected:
 		model.connected = true
 		model.stale = false
+		model.reconnecting = false
 		model.mutationsEnabled = true
 		model.setLogsStale(false)
 		model.globalState = ui.StateReconnected
-	case session.EventReconnecting, session.EventTerminalError:
+		command = tea.Batch(command, model.loadNetworkStatus())
+	case session.EventReconnecting:
 		model.connected = false
 		model.stale = true
+		model.reconnecting = true
 		model.mutationsEnabled = false
 		model.globalState = ui.StateStale
 		model.setLogsStale(true)
+		model.systemProxyOK = false
+		model.tunOK = false
+		if page, ok := model.pages[ui.PageConnections].(*connectionspage.Model); ok {
+			page.ResetSession()
+		}
+	case session.EventTerminalError:
+		model.connected = false
+		model.stale = true
+		model.reconnecting = false
+		model.mutationsEnabled = false
+		model.globalState = ui.StateStale
+		model.setLogsStale(true)
+		model.systemProxyOK = false
+		model.tunOK = false
 		if page, ok := model.pages[ui.PageConnections].(*connectionspage.Model); ok {
 			page.ResetSession()
 		}
@@ -388,6 +507,22 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 	model.syncSystem()
 	model.syncOverview()
 	return command
+}
+
+func (model Model) loadNetworkStatus() tea.Cmd {
+	client := model.networkClient
+	if client == nil || !model.connected {
+		return nil
+	}
+	ctx := model.pageCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return func() tea.Msg {
+		proxy, proxyErr := client.SystemProxy(ctx)
+		tun, tunErr := client.Tun(ctx)
+		return networkStatusMsg{proxy: proxy, proxyErr: proxyErr, tun: tun, tunErr: tunErr}
+	}
 }
 
 // Route reports the root-level route currently presented to the user.
@@ -426,10 +561,21 @@ func (model *Model) syncOverview() {
 	if !ok {
 		return
 	}
-	page.SetSnapshot(overview.Snapshot{
+	snap := overview.Snapshot{
 		Status: model.status, Core: model.core, Subscriptions: model.subscriptions,
 		Monitor: model.monitor.Snapshot(), Operations: model.operations,
-	})
+		ServiceStatus: model.serviceStatus, ServiceLoaded: model.serviceLoaded,
+		Connected: model.connected, MihariVersion: buildinfo.Version,
+	}
+	if model.systemProxyOK {
+		proxy := model.systemProxy
+		snap.SystemProxy = &proxy
+	}
+	if model.tunOK {
+		tun := model.tunStatus
+		snap.Tun = &tun
+	}
+	page.SetSnapshot(snap)
 }
 
 func (model *Model) syncSystem() {
@@ -559,8 +705,73 @@ func (model Model) statusBarData() ui.StatusBarData {
 		UploadRate:   snap.UploadRate,
 		DownloadRate: snap.DownloadRate,
 		MemoryInUse:  snap.MemoryInUse,
-		Stale:        model.stale || snap.Stale,
+		RightStatus:  model.statusBarRightStatus(),
 	}
+}
+
+// statusBarRightStatus builds the top-right dual badge: Service (OS) + Daemon (IPC).
+//
+//	Service: not installed | stopped | running | unknown
+//	Daemon:  Connected | Reconnecting | Offline
+//
+// Healthy quiet state (service running + daemon connected) returns empty.
+// Foreground-only setups keep "Service not installed" while connected as a nudge.
+func (model Model) statusBarRightStatus() string {
+	servicePart := model.serviceRightLabel()
+	daemonPart := model.daemonRightLabel()
+
+	// Fully healthy under service install: no badge noise.
+	if servicePart == ui.StatusServiceRunning && daemonPart == ui.StatusDaemonConnected {
+		return ""
+	}
+	// Connected with no service reading yet → quiet (still establishing).
+	if servicePart == "" && daemonPart == ui.StatusDaemonConnected {
+		return ""
+	}
+	// Connected + not installed: show service nudge only (daemon is fine).
+	if daemonPart == ui.StatusDaemonConnected {
+		return servicePart
+	}
+	// Disconnected / reconnecting: always show both dimensions when known.
+	switch {
+	case servicePart != "" && daemonPart != "":
+		return servicePart + ui.StatusRightJoin + daemonPart
+	case servicePart != "":
+		return servicePart
+	default:
+		return daemonPart
+	}
+}
+
+func (model Model) serviceRightLabel() string {
+	if !model.serviceLoaded {
+		return ""
+	}
+	switch model.serviceStatus {
+	case service.StatusNotInstalled:
+		return ui.StatusServiceNotInstalled
+	case service.StatusStopped:
+		return ui.StatusServiceStopped
+	case service.StatusRunning:
+		return ui.StatusServiceRunning
+	default:
+		return ui.StatusServiceUnknown
+	}
+}
+
+func (model Model) daemonRightLabel() string {
+	if model.connected {
+		return ui.StatusDaemonConnected
+	}
+	if model.reconnecting {
+		return ui.StatusDaemonReconnecting
+	}
+	// Disconnected and not mid-retry (terminal error, closed session, or initial offline).
+	if model.stale || model.monitor.Snapshot().Stale {
+		return ui.StatusDaemonOffline
+	}
+	// Initial frame before any session event: treat as offline.
+	return ui.StatusDaemonOffline
 }
 
 func activeSubscriptionName(list protocol.SubscriptionList) string {

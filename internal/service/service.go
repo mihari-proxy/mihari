@@ -127,16 +127,28 @@ func (m *Manager) Restart() error {
 }
 
 // Status reports the service state.
+// When the service is not registered, it returns StatusNotInstalled with a nil error
+// so callers (CLI status, TUI badge) can distinguish "not installed" without elevation.
+// On Windows, Access is denied from the default service library falls back to a
+// low-privilege SCM query so non-admin users still see running/stopped/not_installed.
 func (m *Manager) Status() (StatusKind, error) {
 	c, err := m.controller(nil)
 	if err != nil {
 		return StatusUnknown, err
 	}
 	st, err := c.Status()
-	if err != nil {
-		return StatusUnknown, mapServiceError(err)
+	if err == nil {
+		return st, nil
 	}
-	return st, nil
+	if isNotInstalledError(err) {
+		return StatusNotInstalled, nil
+	}
+	if isAccessDeniedError(err) {
+		if st, qerr := platformQueryStatus(serviceName); qerr == nil {
+			return st, nil
+		}
+	}
+	return StatusUnknown, mapServiceError(err)
 }
 
 // Run executes under the service manager (or foreground when interactive).
@@ -158,13 +170,26 @@ func mapServiceError(err error) error {
 	msg := err.Error()
 	lower := strings.ToLower(msg)
 	switch {
-	case strings.Contains(lower, "not installed"), strings.Contains(lower, "does not exist"), strings.Contains(lower, "not found"):
+	case isNotInstalledError(err):
 		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihari service is not installed"}
 	case strings.Contains(lower, "access is denied"), strings.Contains(lower, "permission"), strings.Contains(lower, "operation not permitted"):
 		return protocol.APIError{Code: protocol.CodePermissionDenied, Message: "administrator privileges are required; re-run from an elevated shell"}
 	default:
 		return protocol.APIError{Code: protocol.CodeInvalidState, Message: fmt.Sprintf("service operation failed: %s", msg)}
 	}
+}
+
+// isNotInstalledError reports OS/service-manager phrasing for a missing registration.
+func isNotInstalledError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "not installed") ||
+		strings.Contains(lower, "does not exist") ||
+		strings.Contains(lower, "not found") ||
+		strings.Contains(lower, "no such service") ||
+		strings.Contains(lower, "the specified service does not exist")
 }
 
 type program struct {
@@ -231,6 +256,9 @@ func (c *kardianosController) Run() error       { return c.svc.Run() }
 func (c *kardianosController) Status() (StatusKind, error) {
 	st, err := c.svc.Status()
 	if err != nil {
+		if isNotInstalledError(err) {
+			return StatusNotInstalled, nil
+		}
 		return StatusUnknown, err
 	}
 	switch st {

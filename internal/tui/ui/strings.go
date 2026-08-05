@@ -36,7 +36,34 @@ const (
 	ObjectLabel                    = "Object"
 	ImpactLabel                    = "Impact"
 	RollbackLabel                  = "Rollback"
-	StaleLabel                     = "Stale"
+	StaleLabel = "Stale"
+	// Top-right dual badges: Service (OS) and Daemon (control plane link).
+	// Combined as "Service … · Daemon …" via StatusRightJoin.
+	StatusServiceNotInstalled = "Service not installed"
+	StatusServiceStopped      = "Service stopped"
+	StatusServiceRunning      = "Service running"
+	StatusServiceUnknown      = "Service unknown"
+	StatusDaemonConnected     = "Connected"
+	StatusDaemonReconnecting  = "Reconnecting"
+	StatusDaemonOffline       = "Offline"
+	// Legacy aliases used by older tests / footer copy.
+	StatusRightStale               = StatusDaemonOffline
+	StatusRightDaemonOffline       = StatusDaemonOffline
+	StatusRightReconnecting        = StatusDaemonReconnecting
+	StatusRightServiceNotInstalled = StatusServiceNotInstalled
+	StatusRightServiceStopped      = StatusServiceStopped
+	StatusRightServiceUnknown      = StatusServiceUnknown
+	StatusRightJoin                = " · "
+	// Overview summary strip labels.
+	OverviewServiceLabel  = "Service"
+	OverviewMihariLabel   = "Mihari"
+	OverviewSysProxyLabel = "SysProxy"
+	OverviewTunLabel      = "TUN"
+	OverviewValueOff      = "off"
+	OverviewValueOn       = "on"
+	OverviewValueOwned    = "owned"
+	OverviewValueForeign  = "foreign"
+	OverviewValueDash     = "—"
 	MonitorTrafficTitle            = "Traffic · 60 s"
 	MonitorMemoryTitle             = "Memory · 60 s"
 	MonitorConnectionsLabel        = "Connections"
@@ -326,10 +353,10 @@ func ConnectionColumnLabel(id string) string {
 var pageLabels = map[PageID]string{
 	PageOverview:      "Overview",
 	PageProxies:       "Proxies",
-	PageConnections:   "Connections",
+	PageConnections:   "Conns",
 	PageRules:         "Rules",
 	PageLogs:          "Logs",
-	PageSubscriptions: "Subscriptions",
+	PageSubscriptions: "Subs",
 	PageWebGUI:        "Web GUI",
 	PageSystem:        "System",
 	PageSetup:         "Setup",
