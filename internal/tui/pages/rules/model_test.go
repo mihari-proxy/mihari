@@ -58,16 +58,23 @@ func TestRules_ControlRowActivatesTabsSearchAndFilters(t *testing.T) {
 		{Type: "IP-CIDR", Payload: "1.1.1.0/24", Proxy: "DIRECT"},
 	}})
 	model.FocusFirst()
-	// Down focuses SearchBar; Enter starts text input.
-	model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	// Down focuses SearchBar and enters character-input mode (no Enter needed).
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if model.focus.kind != focusSearch {
 		t.Fatalf("focus=%#v", model.focus)
 	}
-	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !model.searching || command == nil {
 		t.Fatalf("searching=%v command=%v", model.searching, command != nil)
 	}
+	// Typing filters immediately without a separate enter-to-edit step.
+	model.Update(tea.KeyPressMsg{Code: 'o', Text: "o"})
+	if model.query != "o" {
+		t.Fatalf("query=%q", model.query)
+	}
 	model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if model.searching {
+		t.Fatal("esc should leave search input")
+	}
 	// Control strip: Type filter is controlIndex 2 (tabs 0/1, type 2, target 3).
 	model.focus = pageFocus{kind: focusControl}
 	model.controlIndex = 2
@@ -232,6 +239,43 @@ func TestModel_SearchSupportsPasteMsg(t *testing.T) {
 	mode, ok := leave().(ui.InputModeMsg)
 	if !ok || mode.Mode != ui.InputNavigation {
 		t.Fatalf("mode=%#v", mode)
+	}
+}
+
+func TestRules_SearchDirectTypeAndCursorKeys(t *testing.T) {
+	model := New(nil, nil)
+	model.SetRules(protocol.RuleList{Rules: []protocol.Rule{
+		{Type: "DOMAIN", Payload: "one.test", Proxy: "Proxy"},
+	}})
+	model.FocusFirst()
+	// Focus search via down — input mode starts immediately.
+	model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if !model.searching {
+		t.Fatal("expected searching after focusing search bar")
+	}
+	model.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	model.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	if model.query != "ab" {
+		t.Fatalf("query=%q", model.query)
+	}
+	// Left/right move cursor; insert in the middle.
+	model.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	model.Update(tea.KeyPressMsg{Code: 'X', Text: "X"})
+	if model.query != "aXb" {
+		t.Fatalf("mid insert query=%q", model.query)
+	}
+	// Page shortcuts disabled while typing.
+	model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if model.query != "aXrb" {
+		t.Fatalf("r should type, not reload shortcut: query=%q", model.query)
+	}
+	// Up leaves input mode and focuses control strip.
+	_, leave := model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if model.searching || model.focus.kind != focusControl {
+		t.Fatalf("searching=%v focus=%#v", model.searching, model.focus)
+	}
+	if leave == nil {
+		t.Fatal("expected input mode restore")
 	}
 }
 

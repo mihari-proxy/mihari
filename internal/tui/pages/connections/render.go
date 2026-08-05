@@ -19,7 +19,7 @@ func (m *Model) View() string {
 		fmt.Sprintf("[%s]", m.pauseLabel()),
 	}, m.controlIndex, controlFocused, "  ")
 	searchFocused := m.searching || (m.contentFocused && m.focus.kind == focusSearch)
-	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.width)
+	searchBar := ui.RenderSearchBar(m.theme, m.query, ui.SearchPlaceholder, searchFocused, m.queryCursor, m.width)
 	lines := m.tableLines()
 	body := strings.Join(lines, "\n")
 	base := clipLines(control, m.width) + "\n" + searchBar + "\n" + clipLines(body, m.width)
