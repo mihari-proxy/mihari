@@ -202,7 +202,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 
 func (m *Model) View() string {
 	if len(m.groups) == 0 {
-		return m.theme.Muted.Render(ui.NoProxyGroups)
+		inner := ui.FullSectionInner(m.width)
+		body := m.theme.Muted.Render(ui.NoProxyGroups)
+		return ui.RenderBorderedSection(m.theme, ui.ProxiesSectionTitle, body, inner)
 	}
 	lines, _, _ := m.buildContent()
 	if m.height > 0 && len(lines) > m.height {
@@ -214,13 +216,13 @@ func (m *Model) View() string {
 }
 
 // buildContent renders the full page as terminal lines and reports the inclusive
-// line range of the keyboard focus target (end exclusive).
+// line range of the keyboard focus target (end exclusive). Each proxy group is
+// a bordered section; expanded node cards sit inside the parent section body.
 func (m *Model) buildContent() (lines []string, focusStart, focusEnd int) {
 	focusStart, focusEnd = -1, -1
-	for index, group := range m.groups {
-		if index > 0 {
-			lines = append(lines, "")
-		}
+	inner := ui.FullSectionInner(m.width)
+	textW := ui.SectionTextWidth(inner)
+	for _, group := range m.groups {
 		marker := "▸"
 		if m.expanded[group.Name] {
 			marker = "▾"
@@ -230,40 +232,63 @@ func (m *Model) buildContent() (lines []string, focusStart, focusEnd int) {
 		if groupFocused {
 			focus = ui.FocusMarker
 		}
-		header := fmt.Sprintf("%s%s %s  %s · %d", focus, marker, ui.DisplayProxyName(group.Name), strings.ToUpper(group.Type), len(group.Nodes))
+		now := ui.DisplayProxyName(group.Now)
+		if now == "" {
+			now = ui.MissingValue
+		}
+		header := fmt.Sprintf("%s%s  Now: %s", focus, marker, now)
 		switch {
 		case groupFocused && m.contentFocused:
 			header = m.theme.RowFocus.Render(header)
-		case !groupFocused:
-			header = m.theme.Title.Render(header)
 		}
-		headerStart := len(lines)
-		lines = append(lines, header)
-		if groupFocused {
-			focusStart, focusEnd = headerStart, len(lines)
-		}
-		if !m.expanded[group.Name] {
-			continue
-		}
-		columns := m.columns()
-		barWidth := min(proxyBarMaxWidth, max(18, m.width/columns-1))
-		for start := 0; start < len(group.Nodes); start += columns {
-			bars := make([]string, 0, columns)
-			rowFocusStart := -1
-			for i := start; i < min(start+columns, len(group.Nodes)); i++ {
-				node := group.Nodes[i]
-				bars = append(bars, m.renderNode(group, node, barWidth))
-				if m.focus == (FocusID{Group: group.Name, Node: node.Name}) {
-					rowFocusStart = len(lines)
+
+		bodyLines := []string{header}
+		// Body-relative line of the group header (0). After section wrap, this
+		// maps to sectionLines[1] (after the top border).
+		groupBodyLine := 0
+		nodeFocusBodyStart := -1
+		nodeFocusBodyEnd := -1
+
+		if m.expanded[group.Name] {
+			columns := m.columnsFor(textW)
+			barWidth := min(proxyBarMaxWidth, max(18, textW/columns-1))
+			for start := 0; start < len(group.Nodes); start += columns {
+				bars := make([]string, 0, columns)
+				rowHasFocus := false
+				for i := start; i < min(start+columns, len(group.Nodes)); i++ {
+					node := group.Nodes[i]
+					bars = append(bars, m.renderNode(group, node, barWidth))
+					if m.focus == (FocusID{Group: group.Name, Node: node.Name}) {
+						rowHasFocus = true
+					}
 				}
+				row := lipgloss.JoinHorizontal(lipgloss.Top, bars...)
+				rowLines := strings.Split(row, "\n")
+				if rowHasFocus {
+					nodeFocusBodyStart = len(bodyLines)
+					nodeFocusBodyEnd = len(bodyLines) + len(rowLines)
+				}
+				bodyLines = append(bodyLines, rowLines...)
 			}
-			row := lipgloss.JoinHorizontal(lipgloss.Top, bars...)
-			rowLines := strings.Split(row, "\n")
-			if rowFocusStart >= 0 {
-				focusStart = rowFocusStart
-				focusEnd = rowFocusStart + len(rowLines)
-			}
-			lines = append(lines, rowLines...)
+		}
+
+		title := ui.FormatProxyGroupTitle(group.Name, group.Type, len(group.Nodes))
+		section := ui.RenderBorderedSection(m.theme, title, strings.Join(bodyLines, "\n"), inner)
+		sectionLines := strings.Split(section, "\n")
+		sectionBase := len(lines)
+		lines = append(lines, sectionLines...)
+
+		// Map body-relative focus into absolute line indices (body starts after top border).
+		// Group focus spans top border + header body line so the section title stays
+		// visible when scrolling to the first group (scrollY can pin to 0).
+		bodyOffset := sectionBase + 1
+		if groupFocused {
+			focusStart = sectionBase
+			focusEnd = bodyOffset + groupBodyLine + 1
+		}
+		if nodeFocusBodyStart >= 0 {
+			focusStart = bodyOffset + nodeFocusBodyStart
+			focusEnd = bodyOffset + nodeFocusBodyEnd
 		}
 	}
 	return lines, focusStart, focusEnd
@@ -331,10 +356,15 @@ func (m *Model) renderNode(group protocol.ProxyGroup, node protocol.ProxyNode, w
 }
 
 func (m *Model) columns() int {
-	if m.width < 56 {
+	return m.columnsFor(ui.SectionTextWidth(ui.FullSectionInner(m.width)))
+}
+
+// columnsFor picks a node-card column count for a given section text width.
+func (m *Model) columnsFor(textW int) int {
+	if textW < 56 {
 		return 1
 	}
-	return max(1, m.width/proxyBarMaxWidth)
+	return max(1, textW/proxyBarMaxWidth)
 }
 
 func (m *Model) selectFocused() tea.Cmd {

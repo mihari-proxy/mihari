@@ -1,10 +1,10 @@
  Mihari  ·  ●  ·  0 conn  ·  ↑0 B/s  ↓0 B/s  ·  0 B                                         Offline 
-    Overview     › ▸ GLOBAL  SELECTOR · 2                                                           
-  › Proxies                                                                                         
-    Conns          ▸ Auto  URLTEST · 2                                                              
-    Rules                                                                                           
-    Logs                                                                                            
-    Subs                                                                                            
+    Overview     ╭───GLOBAL · SELECTOR · 2────────────────────────────────────────────────────────╮ 
+  › Proxies      │ › ▸  Now: node-a                                                               │ 
+    Conns        ╰────────────────────────────────────────────────────────────────────────────────╯ 
+    Rules        ╭───Auto · URLTEST · 2───────────────────────────────────────────────────────────╮ 
+    Logs         │   ▸  Now: node-a                                                               │ 
+    Subs         ╰────────────────────────────────────────────────────────────────────────────────╯ 
     Web GUI                                                                                         
     System                                                                                          
                                                                                                     
