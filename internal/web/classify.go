@@ -13,6 +13,10 @@ const (
 	ActionProxyRead Action = iota
 	// ActionProxyWS upgrades and proxies a streaming endpoint.
 	ActionProxyWS
+	// ActionProxyStorage forwards a /storage/{key} read or write (GET/HEAD/PUT/DELETE) to
+	// the mihomo controller. Storage is a generic KV store isolated from mihari-managed
+	// config, so writes pass through rather than routing through the coordinator.
+	ActionProxyStorage
 	// ActionMutateSelectProxy submits group selection through the coordinator.
 	ActionMutateSelectProxy
 	// ActionMutateClose closes one or all connections through the coordinator.
@@ -44,6 +48,16 @@ func Classify(method, path string) Action {
 	path = normalizeAPIPath(path)
 	if path == "" {
 		return ActionNotAPI
+	}
+
+	// Panel KV storage (/storage/{key}) is isolated from mihari-managed config, so reads
+	// and writes pass straight through to the controller instead of the coordinator.
+	if isStoragePath(path) {
+		switch method {
+		case http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete:
+			return ActionProxyStorage
+		}
+		return ActionRejectUnknown
 	}
 
 	// WebSocket stream roots (method is typically GET).
@@ -134,12 +148,18 @@ func isPanelMountPath(path string) bool {
 	return path == prefix || strings.HasPrefix(path, prefix+"/")
 }
 
+// isStoragePath reports mihomo's generic KV store: /storage/{key} (key optional here;
+// the controller enforces its own key rules). Callers must normalize path first.
+func isStoragePath(path string) bool {
+	return path == "/storage" || strings.HasPrefix(path, "/storage/")
+}
+
 func looksLikeAPIPath(path string) bool {
 	prefixes := []string{
 		"/version", "/proxies", "/proxy-providers", "/rules", "/rule-providers",
 		"/connections", "/configs", "/providers", "/cache", "/dns", "/traffic",
 		"/memory", "/logs", "/upgrade", "/restart", "/group", "/script",
-		"/meta", "/debug", "/ui", "/fakeip",
+		"/meta", "/debug", "/ui", "/fakeip", "/storage",
 	}
 	for _, prefix := range prefixes {
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
