@@ -14,6 +14,8 @@ const (
 	CapabilityPreferences   = "preferences"
 	CapabilityOnboarding    = "onboarding"
 	CapabilityWebGUI        = "web-gui"
+	CapabilitySystemProxy   = "system-proxy"
+	CapabilityTUN           = "tun"
 )
 
 type Status struct {

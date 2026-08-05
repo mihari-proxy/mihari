@@ -11,7 +11,7 @@ import (
 func TestStatus_AdditiveCapabilitiesRoundTrip(t *testing.T) {
 	want := Status{
 		Schema:        "mihari/v1",
-		Capabilities:  []string{CapabilityCore, CapabilityLogs},
+		Capabilities:  []string{CapabilityCore, CapabilityLogs, CapabilitySystemProxy, CapabilityTUN},
 		SetupRequired: true,
 	}
 	raw, err := json.Marshal(want)
