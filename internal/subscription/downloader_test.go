@@ -17,6 +17,7 @@ func TestDownloaderConditionalRequestAndNotModified(t *testing.T) {
 		if request.Header.Get("User-Agent") != subscriptionUserAgent {
 			t.Errorf("user agent=%q", request.Header.Get("User-Agent"))
 		}
+		writer.Header().Set("Subscription-Userinfo", "upload=1; download=2; total=3")
 		writer.WriteHeader(http.StatusNotModified)
 	}))
 	defer server.Close()
@@ -26,6 +27,9 @@ func TestDownloaderConditionalRequestAndNotModified(t *testing.T) {
 	}
 	if !result.NotModified || len(result.Content) != 0 {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+	if result.Userinfo != "upload=1; download=2; total=3" {
+		t.Fatalf("userinfo=%q", result.Userinfo)
 	}
 }
 

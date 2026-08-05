@@ -17,6 +17,11 @@ type Profile struct {
 	ETag         string    `yaml:"etag,omitempty"`
 	LastModified string    `yaml:"last-modified,omitempty"`
 	LastError    string    `yaml:"last-error,omitempty"`
+	// Traffic quota from subscription-userinfo (bytes). Zero means unknown.
+	Upload   int64 `yaml:"upload,omitempty"`
+	Download int64 `yaml:"download,omitempty"`
+	Total    int64 `yaml:"total,omitempty"`
+	Expire   int64 `yaml:"expire,omitempty"` // unix seconds
 }
 
 type Catalog struct {
@@ -36,6 +41,11 @@ type PublicProfile struct {
 	Generation  uint64    `json:"generation"`
 	UpdatedAt   time.Time `json:"updated_at,omitempty"`
 	LastError   string    `json:"last_error,omitempty"`
+	// Traffic from subscription-userinfo (bytes). Omitted when unknown.
+	Upload   int64 `json:"upload,omitempty"`
+	Download int64 `json:"download,omitempty"`
+	Total    int64 `json:"total,omitempty"`
+	Expire   int64 `json:"expire,omitempty"`
 }
 
 type PublicCatalog struct {
@@ -51,6 +61,7 @@ func (c Catalog) Public() PublicCatalog {
 			ID: profile.ID, Name: profile.Name, Enabled: profile.Enabled, AutoRefresh: profile.AutoRefresh,
 			Interval: profile.Interval, Cached: profile.Generation > 0, Generation: profile.Generation,
 			UpdatedAt: profile.UpdatedAt, LastError: profile.LastError,
+			Upload: profile.Upload, Download: profile.Download, Total: profile.Total, Expire: profile.Expire,
 		})
 	}
 	return result

@@ -185,16 +185,19 @@ type Model struct {
 	pending           bool
 	pendingRow        string // row id showing in-row braille progress
 	pendingNote       string // short status text next to the row (e.g. Installing)
-	doneRow           string // sticky success row; cleared on page leave or re-run
-	rowSpinClock      time.Time
-	rowSpinning       bool
-	rowSpinGen        uint64
-	mutationsEnabled  bool
-	lastError         string
-	contentFocused    bool
-	width             int
-	height            int
-	theme             ui.Theme
+	// Sticky outcome after an action finishes (cleared on page leave or re-run).
+	outcomeRow       string
+	outcomeOK        bool   // true=Done (green), false=Failed (red)
+	outcomeDetail    string // failure reason (shown under title + next to Failed)
+	rowSpinClock     time.Time
+	rowSpinning      bool
+	rowSpinGen       uint64
+	mutationsEnabled bool
+	lastError        string
+	contentFocused   bool
+	width            int
+	height           int
+	theme            ui.Theme
 }
 
 // New constructs a System page without a service controller.
@@ -222,6 +225,18 @@ func NewWithContext(ctx context.Context, client Client, svc ServiceController, n
 		newOperationID: newOperationID,
 		focusID:        rowDaemon,
 		theme:          ui.DefaultTheme(),
+	}
+}
+
+// ApplyServiceStatus updates the OS service observation from the root shell poll
+// so the System page Status line stays aligned with the top-right badge.
+func (m *Model) ApplyServiceStatus(status service.StatusKind, loaded bool) {
+	if m == nil {
+		return
+	}
+	m.serviceLoaded = loaded
+	if loaded {
+		m.serviceStatus = status
 	}
 }
 
@@ -258,6 +273,23 @@ func (m *Model) SetSystemProxy(status protocol.SystemProxyStatus) {
 // SetTun injects TUN status (tests and optional external refresh).
 func (m *Model) SetTun(status protocol.TunStatus) {
 	m.tun = status
+	m.tunLoaded = true
+}
+
+// ApplyRootNetworkStatus applies a completed root-level network poll so Network
+// rows leave Loading… even when the page has not run Load() yet.
+// A failed half of the poll marks that row settled without clearing a prior good snapshot.
+func (m *Model) ApplyRootNetworkStatus(proxy protocol.SystemProxyStatus, proxyOK bool, tun protocol.TunStatus, tunOK bool) {
+	if m == nil {
+		return
+	}
+	if proxyOK {
+		m.systemProxy = proxy
+	}
+	m.systemProxyLoaded = true
+	if tunOK {
+		m.tun = tun
+	}
 	m.tunLoaded = true
 }
 
@@ -389,33 +421,31 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.pending = true
 		return m, m.runAction(typed)
 	case actionResultMsg:
-		rowID := m.pendingRow
+		rowID := m.outcomeRowID(coreRowForKind(typed.kind))
 		m.clearRowPending()
 		if typed.err != nil {
 			var apiError protocol.APIError
 			if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
-				m.lastError = ui.SystemChangedMessage
+				m.markRowOutcome(rowID, false, ui.SystemChangedMessage)
 				return m, tea.Batch(m.Load(), m.loadCore(), m.rowSpinCmdIfNeeded())
 			}
-			m.lastError = ui.SystemActionFailed
+			m.markRowOutcome(rowID, false, ui.SystemActionFailed)
 			return m, m.rowSpinCmdIfNeeded()
 		}
-		m.lastError = ""
-		m.markRowDone(rowID)
+		m.markRowOutcome(rowID, true, "")
 		revision := typed.restart.Revision
 		if typed.kind == actionUpdate {
 			revision = typed.install.Revision
 		}
 		return m, tea.Batch(m.Load(), m.loadCore(), func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: revision} }, m.rowSpinCmdIfNeeded())
 	case serviceResultMsg:
-		rowID := m.pendingRow
+		rowID := m.outcomeRowID(serviceRowForKind(typed.kind))
 		m.clearRowPending()
 		if typed.err != nil {
-			m.lastError = serviceErrorMessage(typed.err)
+			m.markRowOutcome(rowID, false, serviceErrorMessage(typed.err))
 			return m, tea.Batch(m.loadServiceStatus(), m.rowSpinCmdIfNeeded())
 		}
-		m.lastError = ""
-		m.markRowDone(rowID)
+		m.markRowOutcome(rowID, true, "")
 		return m, tea.Batch(m.loadServiceStatus(), m.rowSpinCmdIfNeeded())
 	case systemProxyActionResultMsg:
 		return m.handleSystemProxyActionResult(typed)
@@ -491,27 +521,27 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 }
 
 func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) (ui.Page, tea.Cmd) {
-	rowID := m.pendingRow
+	rowID := m.outcomeRowID(rowSystemProxy)
 	m.clearRowPending()
 	if typed.err != nil {
 		var apiError protocol.APIError
 		if errors.As(typed.err, &apiError) {
 			switch apiError.Code {
 			case protocol.CodeSystemProxyConflict:
+				// Secondary confirm is not a terminal failure; keep waiting for force path.
 				return m, tea.Batch(m.confirmForceSystemProxy(apiError), m.rowSpinCmdIfNeeded())
 			case protocol.CodeSystemProxyNotOwned:
-				m.lastError = ui.SystemProxyNotOwnedMessage
+				m.markRowOutcome(rowID, false, ui.SystemProxyNotOwnedMessage)
 				return m, tea.Batch(m.loadSystemProxy(), m.rowSpinCmdIfNeeded())
 			case protocol.CodeRevisionConflict:
-				m.lastError = ui.SystemChangedMessage
+				m.markRowOutcome(rowID, false, ui.SystemChangedMessage)
 				return m, tea.Batch(m.Load(), m.rowSpinCmdIfNeeded())
 			}
 		}
-		m.lastError = ui.SystemProxyActionFailed
+		m.markRowOutcome(rowID, false, ui.SystemProxyActionFailed)
 		return m, tea.Batch(m.loadSystemProxy(), m.rowSpinCmdIfNeeded())
 	}
-	m.lastError = ""
-	m.markRowDone(rowID)
+	m.markRowOutcome(rowID, true, "")
 	m.systemProxy = typed.status
 	m.systemProxyLoaded = true
 	return m, tea.Batch(m.loadSystemProxy(), func() tea.Msg {
@@ -520,19 +550,18 @@ func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) 
 }
 
 func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cmd) {
-	rowID := m.pendingRow
+	rowID := m.outcomeRowID(rowTUN)
 	m.clearRowPending()
 	if typed.err != nil {
 		var apiError protocol.APIError
 		if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
-			m.lastError = ui.SystemChangedMessage
+			m.markRowOutcome(rowID, false, ui.SystemChangedMessage)
 			return m, tea.Batch(m.Load(), m.rowSpinCmdIfNeeded())
 		}
-		m.lastError = ui.TunActionFailed
+		m.markRowOutcome(rowID, false, ui.TunActionFailed)
 		return m, tea.Batch(m.loadTun(), m.rowSpinCmdIfNeeded())
 	}
-	m.lastError = ""
-	m.markRowDone(rowID)
+	m.markRowOutcome(rowID, true, "")
 	m.tun = typed.status
 	m.tunLoaded = true
 	return m, tea.Batch(m.loadTun(), func() tea.Msg {
@@ -546,7 +575,13 @@ func (m *Model) View() string {
 			m.theme.Title.Render(m.detail.label+" details") + "\n\n" + m.detail.detail + "\n\n" + ui.EscCloseHint,
 		)
 	}
-	lines := []string{m.theme.Title.Render(ui.SystemTitle), ""}
+	lines := []string{m.theme.Title.Render(ui.SystemTitle)}
+	// Pin failure reason under the title so Content.Height cannot clip it away.
+	if detail := m.visibleErrorDetail(); detail != "" {
+		lines = append(lines, m.theme.Danger.Render(detail), "")
+	} else {
+		lines = append(lines, "")
+	}
 	section := ""
 	clock := m.rowSpinClock
 	if clock.IsZero() {
@@ -570,9 +605,17 @@ func (m *Model) View() string {
 		case m.pending && m.pendingRow == item.id && m.pendingNote != "":
 			// Prefer in-row braille + status note over static value while work runs.
 			value = m.theme.Warning.Render(ui.SpinnerLabel(clock, m.pendingNote))
-		case m.doneRow == item.id:
-			// Sticky green Done until page leave or another action starts.
-			value = m.doneBadge()
+		case m.outcomeRow == item.id:
+			// Sticky Done/Failed until page leave or another action starts.
+			if m.outcomeOK {
+				value = m.outcomeBadge(true)
+			} else {
+				value = m.outcomeBadge(false)
+				// Also put a short reason on the same row when space allows.
+				if m.outcomeDetail != "" {
+					value += "  " + m.theme.Danger.Render(truncateRunes(m.outcomeDetail, 48))
+				}
+			}
 		}
 		if value != "" {
 			value = "  " + value
@@ -582,9 +625,6 @@ func (m *Model) View() string {
 			line = m.theme.RowFocus.Render(line)
 		}
 		lines = append(lines, line)
-	}
-	if m.lastError != "" {
-		lines = append(lines, "", m.lastError)
 	}
 	return m.theme.Content.Width(m.width).Height(m.height).Render(strings.Join(lines, "\n"))
 }
@@ -803,7 +843,11 @@ func (m *Model) beginRowPending(action ui.Action) {
 	m.pending = true
 	m.pendingRow = rowID
 	m.pendingNote = note
-	m.doneRow = "" // new run replaces any sticky Done
+	// New run replaces any sticky Done/Failed on this page.
+	m.outcomeRow = ""
+	m.outcomeOK = false
+	m.outcomeDetail = ""
+	m.lastError = ""
 }
 
 func (m *Model) clearRowPending() {
@@ -812,25 +856,100 @@ func (m *Model) clearRowPending() {
 	m.pendingNote = ""
 }
 
-func (m *Model) markRowDone(rowID string) {
+// outcomeRowID prefers the in-flight pending row, then an explicit fallback, then focus.
+func (m *Model) outcomeRowID(fallback string) string {
+	if m.pendingRow != "" {
+		return m.pendingRow
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return m.focusID
+}
+
+func (m *Model) markRowOutcome(rowID string, ok bool, detail string) {
 	if rowID == "" {
 		return
 	}
-	m.doneRow = rowID
+	m.outcomeRow = rowID
+	m.outcomeOK = ok
+	if ok {
+		m.outcomeDetail = ""
+		m.lastError = ""
+		return
+	}
+	m.outcomeDetail = strings.TrimSpace(detail)
+	m.lastError = m.outcomeDetail
 }
 
-// ClearDone drops sticky success badges (call when leaving the System page).
+// ClearDone drops sticky Done/Failed badges (call when leaving the System page).
 func (m *Model) ClearDone() {
-	m.doneRow = ""
+	m.outcomeRow = ""
+	m.outcomeOK = false
+	m.outcomeDetail = ""
+	m.lastError = ""
 }
 
-func (m *Model) doneBadge() string {
-	// Green background pill so completion is obvious next to the action label.
+func (m *Model) visibleErrorDetail() string {
+	if m.outcomeRow != "" && !m.outcomeOK && m.outcomeDetail != "" {
+		return m.outcomeDetail
+	}
+	return strings.TrimSpace(m.lastError)
+}
+
+func (m *Model) outcomeBadge(ok bool) string {
+	label := ui.FailedLabel
+	bg := m.theme.ColorDanger
+	if ok {
+		label = ui.DoneLabel
+		bg = m.theme.ColorSuccess
+	}
 	return lipgloss.NewStyle().
 		Foreground(lipgloss.Color("0")).
-		Background(m.theme.ColorSuccess).
+		Background(bg).
 		Padding(0, 1).
-		Render(ui.DoneLabel)
+		Render(label)
+}
+
+func truncateRunes(value string, max int) string {
+	runes := []rune(value)
+	if max <= 0 || len(runes) <= max {
+		return value
+	}
+	if max == 1 {
+		return "…"
+	}
+	return string(runes[:max-1]) + "…"
+}
+
+func serviceRowForKind(kind serviceActionKind) string {
+	switch kind {
+	case serviceInstall:
+		return rowServiceInstall
+	case serviceUninstall:
+		return rowServiceUninstall
+	case serviceReinstall:
+		return rowServiceReinstall
+	case serviceStart:
+		return rowServiceStart
+	case serviceStop:
+		return rowServiceStop
+	case serviceRestart:
+		return rowServiceRestart
+	default:
+		return ""
+	}
+}
+
+func coreRowForKind(kind actionKind) string {
+	switch kind {
+	case actionUpdate:
+		return rowCoreUpdate
+	case actionRestart:
+		return rowCoreRestart
+	default:
+		return ""
+	}
 }
 
 func (m *Model) rowSpinCmdIfNeeded() tea.Cmd {

@@ -8,6 +8,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+
+	"github.com/LeeShunEE/mihari/internal/platform"
 )
 
 func Listen(endpoint string) (net.Listener, error) {
@@ -50,19 +52,17 @@ func DefaultEndpoint() string {
 	if value := os.Getenv("MIHARI_CONTROL_ENDPOINT"); value != "" {
 		return value
 	}
+	// Linux: prefer XDG_RUNTIME_DIR (often cleared on logout).
+	// macOS and Linux without XDG_RUNTIME_DIR: socket under data root.
 	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
 		return filepath.Join(runtimeDir, "mihari", "control.sock")
 	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("mihari-%d", os.Getuid()), "control.sock")
+	return filepath.Join(platform.DefaultDataRoot(), "control.sock")
 }
 
 func DefaultCredentialPath() string {
 	if value := os.Getenv("MIHARI_CONTROL_CREDENTIAL"); value != "" {
 		return value
 	}
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		dir = filepath.Dir(DefaultEndpoint())
-	}
-	return filepath.Join(dir, "mihari", "control.token")
+	return platform.DefaultPaths().ControlToken
 }
