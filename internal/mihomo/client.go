@@ -106,6 +106,18 @@ func (c *Client) Reload(ctx context.Context, path string, force bool) error {
 	return c.do(ctx, http.MethodPut, "/configs", query, map[string]string{"path": path}, nil)
 }
 
+// Configs returns the live mihomo config document (GET /configs).
+func (c *Client) Configs(ctx context.Context) (map[string]any, error) {
+	var result map[string]any
+	err := c.do(ctx, http.MethodGet, "/configs", nil, nil, &result)
+	return result, err
+}
+
+// PatchConfigs PATCHes allowlisted fields (PATCH /configs).
+func (c *Client) PatchConfigs(ctx context.Context, patch map[string]any) error {
+	return c.do(ctx, http.MethodPatch, "/configs", nil, patch, nil)
+}
+
 func (c *Client) Restart(ctx context.Context) error {
 	return c.do(ctx, http.MethodPost, "/restart", nil, nil, nil)
 }

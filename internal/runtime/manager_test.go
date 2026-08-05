@@ -560,6 +560,14 @@ func (c *fakeController) UpdateRuleProvider(ctx context.Context, name string) er
 	return nil
 }
 
+func (c *fakeController) Configs(context.Context) (map[string]any, error) {
+	return map[string]any{}, nil
+}
+
+func (c *fakeController) PatchConfigs(context.Context, map[string]any) error {
+	return nil
+}
+
 func (c *fakeController) Stream(context.Context, mihomo.StreamKind, func(json.RawMessage) error) error {
 	return nil
 }

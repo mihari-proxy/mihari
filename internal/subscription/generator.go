@@ -35,6 +35,14 @@ func Generate(base Document, overrides map[string]any, settings config.Settings)
 	delete(document, "external-ui")
 	delete(document, "external-ui-name")
 	delete(document, "external-ui-url")
+	// Managed TUN wins over subscription base and caller overrides when set.
+	if len(settings.Tun) > 0 {
+		tun, err := cloneDocument(Document(settings.Tun))
+		if err != nil {
+			return nil, err
+		}
+		document["tun"] = map[string]any(tun)
+	}
 	content, err := yaml.Marshal(document)
 	if err != nil {
 		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "encode generated configuration"}
