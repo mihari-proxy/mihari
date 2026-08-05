@@ -47,6 +47,7 @@ type Dependencies struct {
 	SubscriptionClient SubscriptionClient
 	PanelClient        PanelClient
 	SystemProxyClient  SystemProxyClient
+	TunClient          TunClient
 	ServiceController  ServiceController
 	SelfUpdater        SelfUpdater
 	OpenBrowser        func(url string) error
@@ -120,6 +121,7 @@ func newRoot(dependencies Dependencies, options *runOptions) *cobra.Command {
 	root.AddCommand(newSubscriptionCommand(dependencies, options))
 	root.AddCommand(newPanelCommand(dependencies, options))
 	root.AddCommand(newSysproxyCommand(dependencies, options))
+	root.AddCommand(newTunCommand(dependencies, options))
 	root.AddCommand(newServiceCommand(dependencies, options))
 	root.AddCommand(newSelfCommand(dependencies, options))
 	return root

@@ -317,6 +317,9 @@ type fakeRuntime struct {
 	systemProxyStatus     protocol.SystemProxyStatus
 	systemProxyForce      bool
 	disableSystemProxyErr error
+	tunStatus             protocol.TunStatus
+	enableTunErr          error
+	disableTunErr         error
 }
 
 func (f *fakeRuntime) Capabilities() []string { return append([]string(nil), f.capabilities...) }
@@ -413,4 +416,24 @@ func (f *fakeRuntime) DisableSystemProxy(_ context.Context, operation runtimeapi
 		return protocol.SystemProxyStatus{}, f.disableSystemProxyErr
 	}
 	return f.systemProxyStatus, nil
+}
+
+func (f *fakeRuntime) TunStatus(context.Context) (protocol.TunStatus, error) {
+	return f.tunStatus, nil
+}
+
+func (f *fakeRuntime) EnableTun(_ context.Context, operation runtimeapi.Operation) (protocol.TunStatus, error) {
+	f.operation = operation
+	if f.enableTunErr != nil {
+		return protocol.TunStatus{}, f.enableTunErr
+	}
+	return f.tunStatus, nil
+}
+
+func (f *fakeRuntime) DisableTun(_ context.Context, operation runtimeapi.Operation) (protocol.TunStatus, error) {
+	f.operation = operation
+	if f.disableTunErr != nil {
+		return protocol.TunStatus{}, f.disableTunErr
+	}
+	return f.tunStatus, nil
 }

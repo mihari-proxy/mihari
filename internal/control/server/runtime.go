@@ -42,6 +42,9 @@ type RuntimeAPI interface {
 	SystemProxyStatus(context.Context) (protocol.SystemProxyStatus, error)
 	EnableSystemProxy(context.Context, runtimeapi.Operation, bool) (protocol.SystemProxyStatus, error)
 	DisableSystemProxy(context.Context, runtimeapi.Operation) (protocol.SystemProxyStatus, error)
+	TunStatus(context.Context) (protocol.TunStatus, error)
+	EnableTun(context.Context, runtimeapi.Operation) (protocol.TunStatus, error)
+	DisableTun(context.Context, runtimeapi.Operation) (protocol.TunStatus, error)
 }
 
 func (s *Server) runtimeRoutes(mux *http.ServeMux) {
@@ -63,6 +66,7 @@ func (s *Server) runtimeRoutes(mux *http.ServeMux) {
 	s.preferencesRoutes(mux)
 	s.geoIPRoutes(mux)
 	s.systemProxyRoutes(mux)
+	s.tunRoutes(mux)
 	s.onboardingRoutes(mux)
 	s.webGUIRoutes(mux)
 }

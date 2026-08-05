@@ -139,6 +139,27 @@ func (c *Client) DisableSystemProxy(ctx context.Context, request protocol.System
 	return result, err
 }
 
+// Tun returns desired managed TUN intent and live mihomo observation when available.
+func (c *Client) Tun(ctx context.Context) (protocol.TunStatus, error) {
+	var result protocol.TunStatus
+	err := c.doRuntime(ctx, http.MethodGet, "/v1/tun", nil, &result)
+	return result, err
+}
+
+// EnableTun enables managed TUN via the daemon mutation path.
+func (c *Client) EnableTun(ctx context.Context, request protocol.TunMutationRequest) (protocol.TunStatus, error) {
+	var result protocol.TunStatus
+	err := c.doRuntime(ctx, http.MethodPost, "/v1/tun/enable", request, &result)
+	return result, err
+}
+
+// DisableTun disables managed TUN via the daemon mutation path.
+func (c *Client) DisableTun(ctx context.Context, request protocol.TunMutationRequest) (protocol.TunStatus, error) {
+	var result protocol.TunStatus
+	err := c.doRuntime(ctx, http.MethodPost, "/v1/tun/disable", request, &result)
+	return result, err
+}
+
 func (c *Client) Onboarding(ctx context.Context) (protocol.OnboardingStatus, error) {
 	var result protocol.OnboardingStatus
 	err := c.doRuntime(ctx, http.MethodGet, "/v1/onboarding", nil, &result)
