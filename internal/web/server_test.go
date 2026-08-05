@@ -203,7 +203,7 @@ func TestGatewayProxiesVersionWithAuthAndRejectsUpgrade(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "export default") {
 		t.Fatalf("credential-less script status=%d body=%s", resp.StatusCode, body)
 	}
-	// Document navigation without a session still shows login (not the panel shell).
+	// Unauthenticated document GET serves panel HTML (API remains gated); no login wall for SPA shells.
 	req, _ = http.NewRequest(http.MethodGet, base+"/", nil)
 	req.Header.Set("Sec-Fetch-Dest", "document")
 	resp, err = http.DefaultClient.Do(req)
@@ -212,8 +212,17 @@ func TestGatewayProxiesVersionWithAuthAndRejectsUpgrade(t *testing.T) {
 	}
 	body, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized || !strings.Contains(string(body), "Access token") {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "panel") {
 		t.Fatalf("unauth document status=%d body=%s", resp.StatusCode, body)
+	}
+	// Missing .js must 404 as application error, not SPA index.html (wrong MIME for modules).
+	resp, err = http.Get(base + "/missing-module.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing module status=%d", resp.StatusCode)
 	}
 
 	// One-shot token sets cookie and redirects to panel setup (no token, no :9090).
@@ -346,9 +355,17 @@ func TestGatewayServesInstalledPanelsConcurrentlyAtUIPaths(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(zashDir, "manifest.webmanifest"), []byte(`{"name":"z"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Vite base "/" index: rewrite root-absolute assets onto the panel mount.
+	if err := os.WriteFile(filepath.Join(zashDir, "index.html"), []byte(
+		`<html><script type="module" crossorigin src="/assets/index-BcsehOF5.js"></script>`+
+			`<link rel="manifest" href="/manifest.webmanifest"><body>zashboard</body></html>`,
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for _, path := range []string{
 		"/__mihari/panels/zashboard/app.js",
 		"/__mihari/panels/zashboard/manifest.webmanifest",
+		"/__mihari/panels/zashboard/index.html",
 	} {
 		resp, err := http.Get(base + path)
 		if err != nil {
@@ -359,6 +376,29 @@ func TestGatewayServesInstalledPanelsConcurrentlyAtUIPaths(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("path=%s status=%d body=%s", path, resp.StatusCode, body)
 		}
+		if strings.HasSuffix(path, "index.html") {
+			if !strings.Contains(string(body), `/__mihari/panels/zashboard/assets/index-BcsehOF5.js`) {
+				t.Fatalf("index missing rewritten asset path: %s", body)
+			}
+			if strings.Contains(string(body), `src="/assets/`) {
+				t.Fatalf("index still has root-absolute asset: %s", body)
+			}
+		}
+	}
+	// Root-absolute asset with panel Referer resolves from that panel tree (not only active).
+	if err := os.WriteFile(filepath.Join(metaDir, "only-meta.js"), []byte("meta"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodGet, base+"/only-meta.js", nil)
+	req.Header.Set("Referer", base+"/__mihari/panels/metacubexd/")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "meta" {
+		t.Fatalf("referer panel asset status=%d body=%s", resp.StatusCode, body)
 	}
 	// API under the same origin still requires auth.
 	resp, err = http.Get(base + "/version")
@@ -368,6 +408,20 @@ func TestGatewayServesInstalledPanelsConcurrentlyAtUIPaths(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauth api status=%d", resp.StatusCode)
+	}
+}
+
+func TestRewriteRootAbsoluteURLs(t *testing.T) {
+	in := []byte(`<script src="/assets/a.js"></script><link href="//cdn.example/x.css"><a href="/__mihari/panels/zashboard/ok">`)
+	out := string(rewriteRootAbsoluteURLs(in, "/__mihari/panels/zashboard"))
+	if !strings.Contains(out, `src="/__mihari/panels/zashboard/assets/a.js"`) {
+		t.Fatalf("out=%s", out)
+	}
+	if !strings.Contains(out, `href="//cdn.example/x.css"`) {
+		t.Fatalf("protocol-relative rewritten: %s", out)
+	}
+	if !strings.Contains(out, `href="/__mihari/panels/zashboard/ok"`) {
+		t.Fatalf("existing mount broken: %s", out)
 	}
 }
 
