@@ -42,6 +42,8 @@ type Controller interface {
 	Rules(context.Context) (mihomo.Rules, error)
 	RuleProviders(context.Context) (mihomo.RuleProviders, error)
 	UpdateRuleProvider(context.Context, string) error
+	Configs(context.Context) (map[string]any, error)
+	PatchConfigs(context.Context, map[string]any) error
 	Stream(context.Context, mihomo.StreamKind, func(json.RawMessage) error) error
 }
 

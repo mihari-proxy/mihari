@@ -76,3 +76,141 @@ func TestGenerateDoesNotMutateBase(t *testing.T) {
 		t.Fatal("base was mutated")
 	}
 }
+
+func TestGenerateInjectsManagedTun(t *testing.T) {
+	base, err := ParseDocument([]byte("proxies: []\nrules: [MATCH,DIRECT]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := testSettings()
+	settings.Tun = map[string]any{
+		"enable": true,
+		"stack":  "gVisor",
+	}
+	content, err := Generate(base, nil, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := yaml.Unmarshal(content, &got); err != nil {
+		t.Fatal(err)
+	}
+	tun, ok := got["tun"].(map[string]any)
+	if !ok {
+		t.Fatalf("tun missing or wrong type: %#v", got["tun"])
+	}
+	if tun["enable"] != true {
+		t.Fatalf("tun.enable=%#v, want true", tun["enable"])
+	}
+	if tun["stack"] != "gVisor" {
+		t.Fatalf("tun.stack=%#v, want gVisor", tun["stack"])
+	}
+}
+
+func TestGenerateManagedTunOverridesBaseAndOverrides(t *testing.T) {
+	base, err := ParseDocument([]byte(`proxies: []
+rules: [MATCH,DIRECT]
+tun:
+  enable: false
+  stack: system
+  device: sub-tun
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := testSettings()
+	settings.Tun = map[string]any{
+		"enable": true,
+		"stack":  "gVisor",
+	}
+	content, err := Generate(base, map[string]any{
+		"tun": map[string]any{"enable": false, "stack": "mixed"},
+	}, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := yaml.Unmarshal(content, &got); err != nil {
+		t.Fatal(err)
+	}
+	tun, ok := got["tun"].(map[string]any)
+	if !ok {
+		t.Fatalf("tun missing or wrong type: %#v", got["tun"])
+	}
+	if tun["enable"] != true || tun["stack"] != "gVisor" {
+		t.Fatalf("managed tun did not win: %#v", tun)
+	}
+	if _, exists := tun["device"]; exists {
+		t.Fatalf("subscription tun keys should not remain: %#v", tun)
+	}
+}
+
+func TestGenerateEmptyTunLeavesSubscriptionTun(t *testing.T) {
+	base, err := ParseDocument([]byte(`proxies: []
+rules: [MATCH,DIRECT]
+tun:
+  enable: true
+  stack: system
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := testSettings()
+	// Tun nil / empty = unmanaged: subscription tun is left alone.
+	if settings.Tun != nil {
+		t.Fatalf("default Tun=%#v, want nil", settings.Tun)
+	}
+	content, err := Generate(base, nil, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := yaml.Unmarshal(content, &got); err != nil {
+		t.Fatal(err)
+	}
+	tun, ok := got["tun"].(map[string]any)
+	if !ok {
+		t.Fatalf("subscription tun should remain: %#v", got["tun"])
+	}
+	if tun["enable"] != true || tun["stack"] != "system" {
+		t.Fatalf("subscription tun changed: %#v", tun)
+	}
+
+	settings.Tun = map[string]any{}
+	content, err = Generate(base, nil, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(content, &got); err != nil {
+		t.Fatal(err)
+	}
+	tun, ok = got["tun"].(map[string]any)
+	if !ok {
+		t.Fatalf("empty managed Tun should leave subscription tun: %#v", got["tun"])
+	}
+	if tun["enable"] != true || tun["stack"] != "system" {
+		t.Fatalf("subscription tun changed with empty managed: %#v", tun)
+	}
+}
+
+func TestGenerateDoesNotMutateSettingsTun(t *testing.T) {
+	base, err := ParseDocument([]byte("proxies: []\nrules: [MATCH,DIRECT]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := testSettings()
+	settings.Tun = map[string]any{"enable": true, "stack": "gVisor"}
+	content, err := Generate(base, nil, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := yaml.Unmarshal(content, &got); err != nil {
+		t.Fatal(err)
+	}
+	tun := got["tun"].(map[string]any)
+	tun["enable"] = false
+	if settings.Tun["enable"] != true {
+		t.Fatal("settings.Tun was mutated through generated document")
+	}
+}
