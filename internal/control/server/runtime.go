@@ -39,6 +39,9 @@ type RuntimeAPI interface {
 	GeoIPStatus(context.Context) (geoip.Status, error)
 	LookupGeoIP(context.Context, []netip.Addr) ([]geoip.Record, error)
 	UpdateGeoIP(context.Context, runtimeapi.Operation) (geoip.Status, error)
+	SystemProxyStatus(context.Context) (protocol.SystemProxyStatus, error)
+	EnableSystemProxy(context.Context, runtimeapi.Operation, bool) (protocol.SystemProxyStatus, error)
+	DisableSystemProxy(context.Context, runtimeapi.Operation) (protocol.SystemProxyStatus, error)
 }
 
 func (s *Server) runtimeRoutes(mux *http.ServeMux) {
@@ -59,6 +62,7 @@ func (s *Server) runtimeRoutes(mux *http.ServeMux) {
 	s.subscriptionRoutes(mux)
 	s.preferencesRoutes(mux)
 	s.geoIPRoutes(mux)
+	s.systemProxyRoutes(mux)
 	s.onboardingRoutes(mux)
 	s.webGUIRoutes(mux)
 }
@@ -420,7 +424,8 @@ func writeControlError(writer http.ResponseWriter, err error) {
 		status = http.StatusBadRequest
 	case protocol.CodePermissionDenied:
 		status = http.StatusForbidden
-	case protocol.CodeRevisionConflict, protocol.CodeInvalidState:
+	case protocol.CodeRevisionConflict, protocol.CodeInvalidState,
+		protocol.CodeSystemProxyConflict, protocol.CodeSystemProxyNotOwned:
 		status = http.StatusConflict
 	case protocol.CodeDataFailure:
 		status = http.StatusUnprocessableEntity
