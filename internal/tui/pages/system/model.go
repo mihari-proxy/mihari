@@ -28,6 +28,7 @@ const (
 	rowServiceStatus    = "service-status"
 	rowServiceInstall   = "service-install"
 	rowServiceUninstall = "service-uninstall"
+	rowServiceReinstall = "service-reinstall"
 	rowServiceStart     = "service-start"
 	rowServiceStop      = "service-stop"
 	rowServiceRestart   = "service-restart"
@@ -53,6 +54,7 @@ type Client interface {
 type ServiceController interface {
 	Install() error
 	Uninstall() error
+	Reinstall() error
 	Start() error
 	Stop() error
 	Restart() error
@@ -117,10 +119,21 @@ type serviceActionKind uint8
 const (
 	serviceInstall serviceActionKind = iota
 	serviceUninstall
+	serviceReinstall
 	serviceStart
 	serviceStop
 	serviceRestart
 )
+
+// rowSpinTickMsg advances braille frames while a System row action is in flight.
+type rowSpinTickMsg struct {
+	t   time.Time
+	gen uint64
+}
+
+type startRowSpinMsg struct{ gen uint64 }
+
+const rowSpinInterval = 100 * time.Millisecond
 
 type proxyActionKind uint8
 
@@ -169,6 +182,11 @@ type Model struct {
 	focusID           string
 	detail            *row
 	pending           bool
+	pendingRow        string // row id showing in-row braille progress
+	pendingNote       string // short status text next to the row (e.g. Installing)
+	rowSpinClock      time.Time
+	rowSpinning       bool
+	rowSpinGen        uint64
 	mutationsEnabled  bool
 	lastError         string
 	contentFocused    bool
@@ -337,6 +355,31 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	case ui.CoreObservedMsg:
 		m.core = typed.Core
 		return m, nil
+	case ui.ActionPendingMsg:
+		m.beginRowPending(typed.Action)
+		return m, m.rowSpinCmdIfNeeded()
+	case startRowSpinMsg:
+		if typed.gen != m.rowSpinGen || !m.pending {
+			if typed.gen == m.rowSpinGen {
+				m.rowSpinning = false
+			}
+			return m, nil
+		}
+		return m, tea.Tick(rowSpinInterval, func(t time.Time) tea.Msg {
+			return rowSpinTickMsg{t: t, gen: typed.gen}
+		})
+	case rowSpinTickMsg:
+		if typed.gen != m.rowSpinGen {
+			return m, nil
+		}
+		m.rowSpinClock = typed.t
+		if !m.pending {
+			m.rowSpinning = false
+			return m, nil
+		}
+		return m, tea.Tick(rowSpinInterval, func(t time.Time) tea.Msg {
+			return rowSpinTickMsg{t: t, gen: typed.gen}
+		})
 	case actionStartMsg:
 		if m.pending {
 			return m, nil
@@ -344,30 +387,30 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.pending = true
 		return m, m.runAction(typed)
 	case actionResultMsg:
-		m.pending = false
+		m.clearRowPending()
 		if typed.err != nil {
 			var apiError protocol.APIError
 			if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
 				m.lastError = ui.SystemChangedMessage
-				return m, tea.Batch(m.Load(), m.loadCore())
+				return m, tea.Batch(m.Load(), m.loadCore(), m.rowSpinCmdIfNeeded())
 			}
 			m.lastError = ui.SystemActionFailed
-			return m, nil
+			return m, m.rowSpinCmdIfNeeded()
 		}
 		m.lastError = ""
 		revision := typed.restart.Revision
 		if typed.kind == actionUpdate {
 			revision = typed.install.Revision
 		}
-		return m, tea.Batch(m.Load(), m.loadCore(), func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: revision} })
+		return m, tea.Batch(m.Load(), m.loadCore(), func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: revision} }, m.rowSpinCmdIfNeeded())
 	case serviceResultMsg:
-		m.pending = false
+		m.clearRowPending()
 		if typed.err != nil {
 			m.lastError = serviceErrorMessage(typed.err)
-			return m, m.loadServiceStatus()
+			return m, tea.Batch(m.loadServiceStatus(), m.rowSpinCmdIfNeeded())
 		}
 		m.lastError = ""
-		return m, m.loadServiceStatus()
+		return m, tea.Batch(m.loadServiceStatus(), m.rowSpinCmdIfNeeded())
 	case systemProxyActionResultMsg:
 		return m.handleSystemProxyActionResult(typed)
 	case tunActionResultMsg:
@@ -421,6 +464,8 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, m.confirmServiceAction(serviceInstall)
 		case rowServiceUninstall:
 			return m, m.confirmServiceAction(serviceUninstall)
+		case rowServiceReinstall:
+			return m, m.confirmServiceAction(serviceReinstall)
 		case rowServiceStart:
 			return m, m.confirmServiceAction(serviceStart)
 		case rowServiceStop:
@@ -440,49 +485,49 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 }
 
 func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) (ui.Page, tea.Cmd) {
-	m.pending = false
+	m.clearRowPending()
 	if typed.err != nil {
 		var apiError protocol.APIError
 		if errors.As(typed.err, &apiError) {
 			switch apiError.Code {
 			case protocol.CodeSystemProxyConflict:
-				return m, m.confirmForceSystemProxy(apiError)
+				return m, tea.Batch(m.confirmForceSystemProxy(apiError), m.rowSpinCmdIfNeeded())
 			case protocol.CodeSystemProxyNotOwned:
 				m.lastError = ui.SystemProxyNotOwnedMessage
-				return m, m.loadSystemProxy()
+				return m, tea.Batch(m.loadSystemProxy(), m.rowSpinCmdIfNeeded())
 			case protocol.CodeRevisionConflict:
 				m.lastError = ui.SystemChangedMessage
-				return m, m.Load()
+				return m, tea.Batch(m.Load(), m.rowSpinCmdIfNeeded())
 			}
 		}
 		m.lastError = ui.SystemProxyActionFailed
-		return m, m.loadSystemProxy()
+		return m, tea.Batch(m.loadSystemProxy(), m.rowSpinCmdIfNeeded())
 	}
 	m.lastError = ""
 	m.systemProxy = typed.status
 	m.systemProxyLoaded = true
 	return m, tea.Batch(m.loadSystemProxy(), func() tea.Msg {
 		return ui.RuntimeRevisionMsg{Revision: typed.status.Revision}
-	})
+	}, m.rowSpinCmdIfNeeded())
 }
 
 func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cmd) {
-	m.pending = false
+	m.clearRowPending()
 	if typed.err != nil {
 		var apiError protocol.APIError
 		if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
 			m.lastError = ui.SystemChangedMessage
-			return m, m.Load()
+			return m, tea.Batch(m.Load(), m.rowSpinCmdIfNeeded())
 		}
 		m.lastError = ui.TunActionFailed
-		return m, m.loadTun()
+		return m, tea.Batch(m.loadTun(), m.rowSpinCmdIfNeeded())
 	}
 	m.lastError = ""
 	m.tun = typed.status
 	m.tunLoaded = true
 	return m, tea.Batch(m.loadTun(), func() tea.Msg {
 		return ui.RuntimeRevisionMsg{Revision: typed.status.Revision}
-	})
+	}, m.rowSpinCmdIfNeeded())
 }
 
 func (m *Model) View() string {
@@ -493,6 +538,10 @@ func (m *Model) View() string {
 	}
 	lines := []string{m.theme.Title.Render(ui.SystemTitle), ""}
 	section := ""
+	clock := m.rowSpinClock
+	if clock.IsZero() {
+		clock = time.Unix(0, 0)
+	}
 	for _, item := range m.rows() {
 		if item.section != section {
 			section = item.section
@@ -507,6 +556,10 @@ func (m *Model) View() string {
 			marker = ui.FocusMarker
 		}
 		value := item.value
+		if m.pending && m.pendingRow == item.id && m.pendingNote != "" {
+			// Prefer in-row braille + status note over static value while work runs.
+			value = m.theme.Warning.Render(ui.SpinnerLabel(clock, m.pendingNote))
+		}
 		if value != "" {
 			value = "  " + value
 		}
@@ -515,9 +568,6 @@ func (m *Model) View() string {
 			line = m.theme.RowFocus.Render(line)
 		}
 		lines = append(lines, line)
-	}
-	if m.pending {
-		lines = append(lines, "", ui.PendingLabel)
 	}
 	if m.lastError != "" {
 		lines = append(lines, "", m.lastError)
@@ -620,6 +670,7 @@ func (m *Model) serviceRows() []row {
 		{id: rowServiceStatus, section: section, label: ui.ServiceStatusLabel, value: statusValue + " · " + privilege, detail: statusDetail},
 		{id: rowServiceInstall, section: section, label: ui.ServiceInstallLabel, value: m.serviceActionState(serviceInstall), detail: ui.ServiceInstallImpact},
 		{id: rowServiceUninstall, section: section, label: ui.ServiceUninstallLabel, value: m.serviceActionState(serviceUninstall), detail: ui.ServiceUninstallImpact},
+		{id: rowServiceReinstall, section: section, label: ui.ServiceReinstallLabel, value: m.serviceActionState(serviceReinstall), detail: ui.ServiceReinstallImpact},
 		{id: rowServiceStart, section: section, label: ui.ServiceStartLabel, value: m.serviceActionState(serviceStart), detail: ui.ServiceStartImpact},
 		{id: rowServiceStop, section: section, label: ui.ServiceStopLabel, value: m.serviceActionState(serviceStop), detail: ui.ServiceStopImpact},
 		{id: rowServiceRestart, section: section, label: ui.ServiceRestartLabel, value: m.serviceActionState(serviceRestart), detail: ui.ServiceRestartImpact},
@@ -652,6 +703,9 @@ func (m *Model) serviceActionAllowed(kind serviceActionKind) bool {
 		return status == service.StatusNotInstalled || status == service.StatusUnknown
 	case serviceUninstall:
 		return status != service.StatusNotInstalled
+	case serviceReinstall:
+		// Always available when elevated: upgrades replace ImagePath even if not installed.
+		return true
 	case serviceStart:
 		return status == service.StatusStopped || status == service.StatusUnknown
 	case serviceStop:
@@ -690,6 +744,8 @@ func serviceActionCopy(kind serviceActionKind) (title, impact, rollback string, 
 		return ui.ServiceInstallTitle, ui.ServiceInstallImpact, ui.ServiceInstallRollback, ui.ActionServiceInstall
 	case serviceUninstall:
 		return ui.ServiceUninstallTitle, ui.ServiceUninstallImpact, ui.ServiceUninstallRollback, ui.ActionServiceUninstall
+	case serviceReinstall:
+		return ui.ServiceReinstallTitle, ui.ServiceReinstallImpact, ui.ServiceReinstallRollback, ui.ActionServiceReinstall
 	case serviceStart:
 		return ui.ServiceStartTitle, ui.ServiceStartImpact, ui.ServiceStartRollback, ui.ActionServiceStart
 	case serviceStop:
@@ -712,6 +768,8 @@ func (m *Model) runServiceAction(kind serviceActionKind) tea.Cmd {
 			err = m.service.Install()
 		case serviceUninstall:
 			err = m.service.Uninstall()
+		case serviceReinstall:
+			err = m.service.Reinstall()
 		case serviceStart:
 			err = m.service.Start()
 		case serviceStop:
@@ -720,6 +778,70 @@ func (m *Model) runServiceAction(kind serviceActionKind) tea.Cmd {
 			err = m.service.Restart()
 		}
 		return serviceResultMsg{kind: kind, err: err}
+	}
+}
+
+func (m *Model) beginRowPending(action ui.Action) {
+	rowID, note := rowProgressForAction(action, m.core.Version == "")
+	if rowID == "" {
+		return
+	}
+	m.pending = true
+	m.pendingRow = rowID
+	m.pendingNote = note
+}
+
+func (m *Model) clearRowPending() {
+	m.pending = false
+	m.pendingRow = ""
+	m.pendingNote = ""
+}
+
+func (m *Model) rowSpinCmdIfNeeded() tea.Cmd {
+	if !m.pending || m.pendingRow == "" {
+		m.rowSpinning = false
+		return nil
+	}
+	if m.rowSpinning {
+		return nil
+	}
+	m.rowSpinGen++
+	gen := m.rowSpinGen
+	m.rowSpinning = true
+	return func() tea.Msg { return startRowSpinMsg{gen: gen} }
+}
+
+func rowProgressForAction(action ui.Action, coreMissing bool) (rowID, note string) {
+	switch action {
+	case ui.ActionServiceInstall:
+		return rowServiceInstall, ui.ServiceProgressInstalling
+	case ui.ActionServiceUninstall:
+		return rowServiceUninstall, ui.ServiceProgressUninstalling
+	case ui.ActionServiceReinstall:
+		return rowServiceReinstall, ui.ServiceProgressReinstalling
+	case ui.ActionServiceStart:
+		return rowServiceStart, ui.ServiceProgressStarting
+	case ui.ActionServiceStop:
+		return rowServiceStop, ui.ServiceProgressStopping
+	case ui.ActionServiceRestart:
+		return rowServiceRestart, ui.ServiceProgressRestarting
+	case ui.ActionUpdateCore:
+		if coreMissing {
+			return rowCoreUpdate, ui.CoreProgressInstalling
+		}
+		return rowCoreUpdate, ui.CoreProgressUpdating
+	case ui.ActionRestartCore:
+		return rowCoreRestart, ui.CoreProgressRestarting
+	case ui.ActionEnableSystemProxy, ui.ActionForceSystemProxy:
+		return rowSystemProxy, ui.ProxyProgressEnabling
+	case ui.ActionDisableSystemProxy:
+		return rowSystemProxy, ui.ProxyProgressDisabling
+	case ui.ActionEnableTun:
+		return rowTUN, ui.TunProgressEnabling
+	case ui.ActionDisableTun:
+		return rowTUN, ui.TunProgressDisabling
+	default:
+		return "", ""
 	}
 }
 

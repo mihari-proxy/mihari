@@ -3,11 +3,13 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/LeeShunEE/mihari/internal/platform"
 	kardservice "github.com/kardianos/service"
 )
 
@@ -124,6 +126,28 @@ func (m *Manager) Restart() error {
 		return err
 	}
 	return mapServiceError(c.Restart())
+}
+
+// Reinstall re-registers the OS service using this process's executable path
+// (or Options.Executable). Intended for upgrades: stop → uninstall → install → start.
+// Stop/uninstall errors for a missing or already-stopped service are ignored.
+func (m *Manager) Reinstall() error {
+	_ = m.Stop()
+	if err := m.Uninstall(); err != nil && !isServiceNotInstalled(err) {
+		return err
+	}
+	if err := m.Install(); err != nil {
+		return err
+	}
+	return m.Start()
+}
+
+func isServiceNotInstalled(err error) bool {
+	var apiError protocol.APIError
+	if errors.As(err, &apiError) {
+		return apiError.Code == protocol.CodeInvalidState && strings.Contains(strings.ToLower(apiError.Message), "not installed")
+	}
+	return isNotInstalledError(err)
 }
 
 // Status reports the service state.
@@ -254,6 +278,9 @@ func newKardianosController(run RunFunc, executable string, arguments []string) 
 		Description: serviceDescription,
 		Arguments:   arguments,
 		Executable:  executable,
+		// Pin the installer's resolved data root so LocalSystem/root does not
+		// fall back to systemprofile or /root home and split state from the desktop client.
+		EnvVars: installEnvVars(),
 	}
 	prog := &program{run: run}
 	svc, err := kardservice.New(prog, cfg)
@@ -261,6 +288,18 @@ func newKardianosController(run RunFunc, executable string, arguments []string) 
 		return nil, protocol.APIError{Code: protocol.CodeInternal, Message: "create service definition"}
 	}
 	return &kardianosController{svc: svc}, nil
+}
+
+// installEnvVars returns environment variables written into the OS service unit
+// at install time. MIHARI_DATA is always an absolute path.
+func installEnvVars() map[string]string {
+	root, err := platform.AbsoluteDataRoot()
+	if err != nil || root == "" {
+		root = platform.DefaultDataRoot()
+	}
+	return map[string]string{
+		"MIHARI_DATA": root,
+	}
 }
 
 func (c *kardianosController) Install() error   { return kardservice.Control(c.svc, "install") }

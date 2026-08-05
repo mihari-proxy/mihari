@@ -23,6 +23,7 @@ const (
 	OpenWebGUI              = ui.ActionOpenWebGUI
 	ServiceInstall          = ui.ActionServiceInstall
 	ServiceUninstall        = ui.ActionServiceUninstall
+	ServiceReinstall        = ui.ActionServiceReinstall
 	ServiceStart            = ui.ActionServiceStart
 	ServiceStop             = ui.ActionServiceStop
 	ServiceRestart          = ui.ActionServiceRestart
@@ -36,7 +37,7 @@ const (
 func RequiresConfirmation(action Action) bool {
 	switch action {
 	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, ApplyEndpointChange,
-		ServiceInstall, ServiceUninstall, ServiceStart, ServiceStop, ServiceRestart,
+		ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart,
 		EnableSystemProxy, ForceSystemProxy, DisableSystemProxy, EnableTun, DisableTun:
 		return true
 	default:
@@ -48,7 +49,7 @@ func RequiresConfirmation(action Action) bool {
 // OS service control talks to the local service manager and works while disconnected.
 func RequiresDaemon(action Action) bool {
 	switch action {
-	case ServiceInstall, ServiceUninstall, ServiceStart, ServiceStop, ServiceRestart:
+	case ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart:
 		return false
 	default:
 		return true
@@ -60,7 +61,7 @@ func knownAction(action Action) bool {
 	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, ApplyEndpointChange,
 		SelectProxy, CloseConnection, RefreshSubscription, UpdateProvider,
 		InstallPanel, UpdatePanel, ActivatePanel, OpenWebGUI,
-		ServiceInstall, ServiceUninstall, ServiceStart, ServiceStop, ServiceRestart,
+		ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart,
 		EnableSystemProxy, ForceSystemProxy, DisableSystemProxy, EnableTun, DisableTun:
 		return true
 	default:

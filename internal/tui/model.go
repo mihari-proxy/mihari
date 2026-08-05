@@ -666,10 +666,19 @@ func (model Model) executeAction(intent ui.ActionIntentMsg) (tea.Model, tea.Cmd)
 	}
 	model.pendingActions[intent.Key] = intent.Action
 	model.globalState = ui.StatePending
+	page := intent.Page
+	if page == "" {
+		page = model.active
+	}
+	// Arm row-local braille progress on the origin page before the work cmd runs.
+	var pageCmd tea.Cmd
+	var next tea.Model
+	next, pageCmd = model.dispatchPageTo(page, ui.ActionPendingMsg{Page: page, Action: intent.Action, Key: intent.Key})
+	model = next.(Model)
 	exec := func() tea.Msg {
 		return actionCompletedMsg{Intent: intent, Result: intent.Execute()}
 	}
-	return model, tea.Batch(exec, model.spinnerCmdIfNeeded())
+	return model, tea.Batch(pageCmd, exec, model.spinnerCmdIfNeeded())
 }
 
 func (model Model) needsSpinner() bool {

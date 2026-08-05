@@ -38,13 +38,30 @@ type pageFocus struct {
 	id   string
 }
 
+// loadPhase is the user-visible readiness of a subscription relative to mihomo.
+// Only loadLive means the active profile has been applied so the core can use it.
+type loadPhase uint8
+
+const (
+	loadDisabled loadPhase = iota
+	loadMissing
+	loadFetching
+	loadApplying
+	loadWorking
+	loadCached
+	loadStale
+	loadFailed
+	loadLive
+)
+
 type row struct {
 	active      string
 	name        string
 	state       string
-	cache       string
+	load        string
 	lastSuccess string
 	nextRefresh string
+	spinning    bool
 }
 
 func (r row) Render(theme ui.Theme) string {
@@ -53,26 +70,77 @@ func (r row) Render(theme ui.Theme) string {
 		// Dual-channel: glyph + Success color; pad after styled rune to keep columns stable.
 		active = theme.Success.Render("●") + "     "
 	}
-	return fmt.Sprintf("%s  %-20s  %-9s  %-10s  %-12s  %s", active, truncate(r.name, 20), r.state, r.cache, r.lastSuccess, r.nextRefresh)
+	load := r.load
+	if r.spinning {
+		load = theme.Warning.Render(load)
+	}
+	return fmt.Sprintf("%s  %-20s  %-9s  %-11s  %-12s  %s", active, truncate(r.name, 20), r.state, load, r.lastSuccess, r.nextRefresh)
 }
 
-func rowFrom(subscription protocol.Subscription, active, updating bool, now time.Time, globalInterval string) row {
+// resolveLoadPhase maps catalog + local pending work onto intermediate load states.
+// Live is reserved for: active catalog selection + valid cache + no last error
+// (daemon applied that generation to mihomo on the last successful use/refresh).
+func resolveLoadPhase(subscription protocol.Subscription, active bool, pending string, now time.Time, globalInterval string) loadPhase {
+	switch pending {
+	case "refresh":
+		return loadFetching
+	case "use":
+		return loadApplying
+	case "toggle", "edit", "add":
+		return loadWorking
+	}
+	if !subscription.Enabled {
+		return loadDisabled
+	}
+	if subscription.LastError != "" {
+		return loadFailed
+	}
+	if !subscription.Cached {
+		return loadMissing
+	}
+	interval := effectiveInterval(subscription.Interval, globalInterval)
+	stale := !subscription.UpdatedAt.IsZero() && interval > 0 && !now.Before(subscription.UpdatedAt.Add(interval))
+	if stale {
+		return loadStale
+	}
+	if active {
+		return loadLive
+	}
+	return loadCached
+}
+
+func loadPhaseLabel(phase loadPhase, clock time.Time) (label string, spinning bool) {
+	switch phase {
+	case loadFetching:
+		return ui.SpinnerLabel(clock, ui.LoadFetchingLabel), true
+	case loadApplying:
+		return ui.SpinnerLabel(clock, ui.LoadApplyingLabel), true
+	case loadWorking:
+		return ui.SpinnerLabel(clock, ui.LoadWorkingLabel), true
+	case loadLive:
+		return ui.LoadLiveState, false
+	case loadCached:
+		return ui.LoadCachedState, false
+	case loadMissing:
+		return ui.LoadMissingState, false
+	case loadStale:
+		return ui.LoadStaleState, false
+	case loadFailed:
+		return ui.LoadFailedState, false
+	default:
+		return ui.DisabledLabel, false
+	}
+}
+
+func rowFrom(subscription protocol.Subscription, active bool, pending string, now, clock time.Time, globalInterval string) row {
 	state := ui.DisabledLabel
 	if subscription.Enabled {
 		state = ui.EnabledLabel
 	}
-	cache := ui.CacheMissingState
+	phase := resolveLoadPhase(subscription, active, pending, now, globalInterval)
+	load, spinning := loadPhaseLabel(phase, clock)
 	interval := effectiveInterval(subscription.Interval, globalInterval)
 	stale := subscription.Cached && (subscription.LastError != "" || (!subscription.UpdatedAt.IsZero() && interval > 0 && !now.Before(subscription.UpdatedAt.Add(interval))))
-	if subscription.Cached {
-		cache = ui.CacheReadyState
-	}
-	if stale {
-		cache = ui.CacheStaleState
-	}
-	if updating {
-		cache = ui.CacheUpdatingState
-	}
 	lastSuccess := ui.MissingValue
 	if !subscription.UpdatedAt.IsZero() {
 		lastSuccess = relativeTime(now, subscription.UpdatedAt)
@@ -92,7 +160,7 @@ func rowFrom(subscription protocol.Subscription, active, updating bool, now time
 	if active {
 		marker = "●"
 	}
-	return row{active: marker, name: subscription.Name, state: state, cache: cache, lastSuccess: lastSuccess, nextRefresh: next}
+	return row{active: marker, name: subscription.Name, state: state, load: load, lastSuccess: lastSuccess, nextRefresh: next, spinning: spinning}
 }
 
 type detailState struct{ subscription protocol.Subscription }
@@ -116,7 +184,21 @@ type Model struct {
 	height         int
 	theme          ui.Theme
 	contentFocused bool
+	// loadSpinClock advances braille frames while any row has in-flight work.
+	loadSpinClock time.Time
+	loadSpinning  bool
+	loadSpinGen   uint64
 }
+
+// loadSpinTickMsg advances braille frames while any subscription mutation is pending.
+type loadSpinTickMsg struct {
+	t   time.Time
+	gen uint64
+}
+
+type startLoadSpinMsg struct{ gen uint64 }
+
+const loadSpinInterval = 100 * time.Millisecond
 
 type mutationKind uint8
 
@@ -194,16 +276,16 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			var apiError protocol.APIError
 			if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
 				m.lastError = ui.SubscriptionChangedMessage
-				return m, m.reload()
+				return m, tea.Batch(m.reload(), m.loadSpinCmdIfNeeded())
 			}
 			m.lastError = subscriptionErrorMessage(typed.err)
-			return m, nil
+			return m, m.loadSpinCmdIfNeeded()
 		}
 		m.lastError = ""
 		if typed.kind == mutationRemove {
 			m.revision = typed.remove.Revision
 			m.removeLocal(typed.id)
-			return m, nil
+			return m, m.loadSpinCmdIfNeeded()
 		}
 		m.revision = typed.result.Revision
 		m.upsert(typed.result.Subscription)
@@ -212,7 +294,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		} else if m.activeID == typed.id && ((typed.kind == mutationToggle && !typed.result.Subscription.Enabled) || (typed.kind == mutationUpdate && !typed.result.Subscription.Cached)) {
 			m.activeID = ""
 		}
-		return m, nil
+		return m, m.loadSpinCmdIfNeeded()
 	case subscriptionsResultMsg:
 		if typed.err != nil {
 			m.lastError = ui.SubscriptionsUnavailable
@@ -220,23 +302,45 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			m.lastError = ""
 			m.SetSubscriptions(typed.result)
 		}
-		return m, nil
+		return m, m.loadSpinCmdIfNeeded()
 	case refreshAllResultMsg:
 		clear(m.pending)
 		if typed.err != nil {
 			var apiError protocol.APIError
 			if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
 				m.lastError = ui.SubscriptionChangedMessage
-				return m, m.reload()
+				return m, tea.Batch(m.reload(), m.loadSpinCmdIfNeeded())
 			}
 			m.lastError = subscriptionErrorMessage(typed.err)
-			return m, nil
+			return m, m.loadSpinCmdIfNeeded()
 		}
 		m.lastError = ""
 		if typed.revision > 0 {
 			m.revision = typed.revision
 		}
-		return m, m.reload()
+		return m, tea.Batch(m.reload(), m.loadSpinCmdIfNeeded())
+	case startLoadSpinMsg:
+		if typed.gen != m.loadSpinGen || !m.hasPendingLoadWork() {
+			if typed.gen == m.loadSpinGen {
+				m.loadSpinning = false
+			}
+			return m, nil
+		}
+		return m, tea.Tick(loadSpinInterval, func(t time.Time) tea.Msg {
+			return loadSpinTickMsg{t: t, gen: typed.gen}
+		})
+	case loadSpinTickMsg:
+		if typed.gen != m.loadSpinGen {
+			return m, nil
+		}
+		m.loadSpinClock = typed.t
+		if !m.hasPendingLoadWork() {
+			m.loadSpinning = false
+			return m, nil
+		}
+		return m, tea.Tick(loadSpinInterval, func(t time.Time) tea.Msg {
+			return loadSpinTickMsg{t: t, gen: typed.gen}
+		})
 	}
 
 	key, ok := message.(tea.KeyPressMsg)
@@ -329,24 +433,26 @@ func (m *Model) FooterHints() string {
 }
 
 func (m *Model) View() string {
-	lines := []string{m.theme.Title.Render(ui.SubscriptionsTitle), "  Active  Name                  State      Cache       " + ui.LastUpdateLabel + "  " + ui.NextUpdateLabel}
+	lines := []string{m.theme.Title.Render(ui.SubscriptionsTitle), "  Active  Name                  State      Load         " + ui.LastUpdateLabel + "  " + ui.NextUpdateLabel}
 	if m.lastError != "" {
 		lines = append(lines, m.theme.Muted.Render(m.lastError))
 	}
 	if len(m.subscriptions) == 0 {
 		lines = append(lines, m.theme.Muted.Render(ui.NoSubscriptions))
 	}
+	clock := m.loadSpinClock
+	if clock.IsZero() {
+		clock = m.now()
+	}
+	wall := m.now()
 	for _, subscription := range m.subscriptions {
 		rowFocused := m.focus.kind == focusRow && m.focus.id == subscription.ID
 		marker := "  "
 		if rowFocused {
 			marker = ui.FocusMarker
 		}
-		entry := rowFrom(subscription, subscription.ID == m.activeID, m.pending[subscription.ID] == "refresh", m.now(), m.globalInterval)
+		entry := rowFrom(subscription, subscription.ID == m.activeID, m.pending[subscription.ID], wall, clock, m.globalInterval)
 		line := marker + entry.Render(m.theme)
-		if action := m.pending[subscription.ID]; action != "" && action != "refresh" {
-			line += "  " + ui.PendingLabel
-		}
 		// Keyboard focus uses RowFocus; business active marker is ● (Success).
 		if rowFocused && m.contentFocused {
 			line = m.theme.RowFocus.Render(line)
@@ -393,21 +499,21 @@ func (m *Model) submitForm(form *formModel, id string, revision uint64) tea.Cmd 
 	if form.kind == formAdd {
 		m.pending["__add"] = "add"
 		request := form.addRequest(operationID, revision)
-		return func() tea.Msg {
+		return tea.Batch(func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			result, err := m.client.AddSubscription(ctx, request)
 			return mutationResultMsg{kind: mutationAdd, result: result, err: err}
-		}
+		}, m.loadSpinCmdIfNeeded())
 	}
 	m.pending[id] = "edit"
 	request := form.updateRequest(operationID, revision)
-	return func() tea.Msg {
+	return tea.Batch(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		result, err := m.client.UpdateSubscription(ctx, id, request)
 		return mutationResultMsg{kind: mutationUpdate, id: id, result: result, err: err}
-	}
+	}, m.loadSpinCmdIfNeeded())
 }
 
 func (m *Model) toggle(subscription protocol.Subscription) tea.Cmd {
@@ -416,12 +522,12 @@ func (m *Model) toggle(subscription protocol.Subscription) tea.Cmd {
 	}
 	id, operationID, revision := subscription.ID, m.newOperationID(), m.revision
 	m.pending[id] = "toggle"
-	return func() tea.Msg {
+	return tea.Batch(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		result, err := m.client.SetSubscriptionEnabled(ctx, id, protocol.SubscriptionEnabledRequest{OperationID: operationID, IfRevision: &revision, Enabled: !subscription.Enabled})
 		return mutationResultMsg{kind: mutationToggle, id: id, result: result, err: err}
-	}
+	}, m.loadSpinCmdIfNeeded())
 }
 
 func (m *Model) refresh(id string) tea.Cmd {
@@ -430,12 +536,12 @@ func (m *Model) refresh(id string) tea.Cmd {
 	}
 	operationID, revision := m.newOperationID(), m.revision
 	m.pending[id] = "refresh"
-	return func() tea.Msg {
+	return tea.Batch(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		result, err := m.client.RefreshSubscription(ctx, id, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision})
 		return mutationResultMsg{kind: mutationRefresh, id: id, result: result, err: err}
-	}
+	}, m.loadSpinCmdIfNeeded())
 }
 
 // refreshAll refreshes every subscription in list order. Presentation pending
@@ -475,12 +581,31 @@ func (m *Model) use(id string) tea.Cmd {
 	}
 	operationID, revision := m.newOperationID(), m.revision
 	m.pending[id] = "use"
-	return func() tea.Msg {
+	return tea.Batch(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		result, err := m.client.UseSubscription(ctx, id, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision})
 		return mutationResultMsg{kind: mutationUse, id: id, result: result, err: err}
+	}, m.loadSpinCmdIfNeeded())
+}
+
+func (m *Model) hasPendingLoadWork() bool {
+	return len(m.pending) > 0
+}
+
+// loadSpinCmdIfNeeded starts a generation-owned braille spin loop while mutations run.
+func (m *Model) loadSpinCmdIfNeeded() tea.Cmd {
+	if !m.hasPendingLoadWork() {
+		m.loadSpinning = false
+		return nil
 	}
+	if m.loadSpinning {
+		return nil
+	}
+	m.loadSpinGen++
+	gen := m.loadSpinGen
+	m.loadSpinning = true
+	return func() tea.Msg { return startLoadSpinMsg{gen: gen} }
 }
 
 // remove returns the command that deletes a subscription. It has no
@@ -551,7 +676,18 @@ func (m *Model) detailView() string {
 	if subscription.LastError != "" {
 		errorState = subscription.LastError
 	}
-	return fmt.Sprintf("%s: %s\n%s: %s\n%s: %t\n%s: %t\n%s: %s\n%s: %s\n%s: %s\n\n%s", ui.NameLabel, subscription.Name, ui.StatusLabel, enabledLabel(subscription.Enabled), ui.AutoRefreshLabel, subscription.AutoRefresh, ui.CacheLabel, subscription.Cached, ui.IntervalLabel, valueOr(subscription.Interval, ui.GlobalLabel), ui.LastUpdateLabel, formatTimestamp(subscription.UpdatedAt), ui.LastErrorLabel, errorState, ui.EscCloseHint)
+	phase := resolveLoadPhase(subscription, subscription.ID == m.activeID, m.pending[subscription.ID], m.now(), m.globalInterval)
+	load, _ := loadPhaseLabel(phase, m.now())
+	return fmt.Sprintf("%s: %s\n%s: %s\n%s: %t\n%s: %s\n%s: %t\n%s: %s\n%s: %s\n%s: %s\n\n%s",
+		ui.NameLabel, subscription.Name,
+		ui.StatusLabel, enabledLabel(subscription.Enabled),
+		ui.AutoRefreshLabel, subscription.AutoRefresh,
+		ui.LoadLabel, load,
+		ui.CacheLabel, subscription.Cached,
+		ui.IntervalLabel, valueOr(subscription.Interval, ui.GlobalLabel),
+		ui.LastUpdateLabel, formatTimestamp(subscription.UpdatedAt),
+		ui.LastErrorLabel, errorState,
+		ui.EscCloseHint)
 }
 
 // subscriptionErrorMessage returns a user-visible failure reason without leaking
