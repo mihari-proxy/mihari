@@ -61,3 +61,17 @@ func (c *Client) RollbackPanel(ctx context.Context, id string, request protocol.
 	err := c.doRuntime(ctx, http.MethodPost, "/v1/panels/"+url.PathEscape(id)+"/rollback", request, &result)
 	return result, err
 }
+
+// UninstallPanel removes all local builds for a panel.
+func (c *Client) UninstallPanel(ctx context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+	var result protocol.MutationResult
+	err := c.doRuntime(ctx, http.MethodPost, "/v1/panels/"+url.PathEscape(id)+"/uninstall", request, &result)
+	return result, err
+}
+
+// ReinstallPanel uninstalls then reinstalls the latest build for a panel.
+func (c *Client) ReinstallPanel(ctx context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+	var result protocol.MutationResult
+	err := c.doRuntime(ctx, http.MethodPost, "/v1/panels/"+url.PathEscape(id)+"/reinstall", request, &result)
+	return result, err
+}

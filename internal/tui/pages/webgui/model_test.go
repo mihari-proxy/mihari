@@ -11,15 +11,17 @@ import (
 )
 
 type fakeClient struct {
-	calls      int
-	status     protocol.WebGUIStatus
-	installed  int
-	updated    int
-	activated  int
-	rolledBack int
-	opened     int
-	openURL    string
-	lastID     string
+	calls       int
+	status      protocol.WebGUIStatus
+	installed   int
+	updated     int
+	activated   int
+	rolledBack  int
+	uninstalled int
+	reinstalled int
+	opened      int
+	openURL     string
+	lastID      string
 }
 
 func (f *fakeClient) WebGUI(context.Context) (protocol.WebGUIStatus, error) {
@@ -43,6 +45,16 @@ func (f *fakeClient) ActivatePanel(_ context.Context, id string, _ protocol.Muta
 }
 func (f *fakeClient) RollbackPanel(_ context.Context, id string, _ protocol.MutationRequest) (protocol.MutationResult, error) {
 	f.rolledBack++
+	f.lastID = id
+	return protocol.MutationResult{Schema: "mihari/v1"}, nil
+}
+func (f *fakeClient) UninstallPanel(_ context.Context, id string, _ protocol.MutationRequest) (protocol.MutationResult, error) {
+	f.uninstalled++
+	f.lastID = id
+	return protocol.MutationResult{Schema: "mihari/v1"}, nil
+}
+func (f *fakeClient) ReinstallPanel(_ context.Context, id string, _ protocol.MutationRequest) (protocol.MutationResult, error) {
+	f.reinstalled++
 	f.lastID = id
 	return protocol.MutationResult{Schema: "mihari/v1"}, nil
 }
@@ -100,7 +112,8 @@ func TestWebGUIRendersCardsAndFooterWithoutSecrets(t *testing.T) {
 	if strings.Contains(view, "token=") || strings.Contains(view, "super-secret") {
 		t.Fatalf("view leaked open token: %s", view)
 	}
-	if hints := model.FooterHints(); !strings.Contains(hints, "Space set default") || !strings.Contains(hints, "b rollback") {
+	if hints := model.FooterHints(); !strings.Contains(hints, "Space set default") || !strings.Contains(hints, "b rollback") ||
+		!strings.Contains(hints, "x uninstall") || !strings.Contains(hints, "r reinstall") {
 		t.Fatalf("hints=%q", hints)
 	}
 }
@@ -205,5 +218,38 @@ func TestWebGUIRollbackRequiresConfirmationAction(t *testing.T) {
 	_ = intent.Execute()
 	if fake.rolledBack != 1 {
 		t.Fatalf("rolledBack=%d", fake.rolledBack)
+	}
+}
+
+func TestWebGUIUninstallAndReinstallActions(t *testing.T) {
+	fake := &fakeClient{status: sampleStatus()}
+	model := New(fake, []string{protocol.CapabilityWebGUI})
+	model.SetOperationID(func() string { return "op" })
+	model.SetStatus(sampleStatus())
+
+	_, cmd := model.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if cmd == nil {
+		t.Fatal("expected uninstall intent")
+	}
+	intent := cmd().(ui.ActionIntentMsg)
+	if intent.Action != ui.ActionUninstallPanel {
+		t.Fatalf("action=%s", intent.Action)
+	}
+	_ = intent.Execute()
+	if fake.uninstalled != 1 || fake.lastID != "zashboard" {
+		t.Fatalf("uninstalled=%d lastID=%s", fake.uninstalled, fake.lastID)
+	}
+
+	_, cmd = model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if cmd == nil {
+		t.Fatal("expected reinstall intent")
+	}
+	intent = cmd().(ui.ActionIntentMsg)
+	if intent.Action != ui.ActionReinstallPanel {
+		t.Fatalf("action=%s", intent.Action)
+	}
+	_ = intent.Execute()
+	if fake.reinstalled != 1 {
+		t.Fatalf("reinstalled=%d", fake.reinstalled)
 	}
 }

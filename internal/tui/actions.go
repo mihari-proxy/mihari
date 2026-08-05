@@ -21,6 +21,8 @@ const (
 	UpdatePanel             = ui.ActionUpdatePanel
 	ActivatePanel           = ui.ActionActivatePanel
 	OpenWebGUI              = ui.ActionOpenWebGUI
+	UninstallPanel          = ui.ActionUninstallPanel
+	ReinstallPanel          = ui.ActionReinstallPanel
 	ServiceInstall          = ui.ActionServiceInstall
 	ServiceUninstall        = ui.ActionServiceUninstall
 	ServiceReinstall        = ui.ActionServiceReinstall
@@ -37,6 +39,7 @@ const (
 func RequiresConfirmation(action Action) bool {
 	switch action {
 	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, ApplyEndpointChange,
+		UninstallPanel, ReinstallPanel,
 		ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart,
 		EnableSystemProxy, ForceSystemProxy, DisableSystemProxy, EnableTun, DisableTun:
 		return true
@@ -60,7 +63,7 @@ func knownAction(action Action) bool {
 	switch action {
 	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, ApplyEndpointChange,
 		SelectProxy, CloseConnection, RefreshSubscription, UpdateProvider,
-		InstallPanel, UpdatePanel, ActivatePanel, OpenWebGUI,
+		InstallPanel, UpdatePanel, ActivatePanel, OpenWebGUI, UninstallPanel, ReinstallPanel,
 		ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart,
 		EnableSystemProxy, ForceSystemProxy, DisableSystemProxy, EnableTun, DisableTun:
 		return true

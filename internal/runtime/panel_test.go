@@ -71,6 +71,20 @@ func (f *fakePanels) Rollback(ctx context.Context, id string) error {
 	}
 	return nil
 }
+func (f *fakePanels) Uninstall(ctx context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.active.Panel == id {
+		f.active = panel.Active{}
+	}
+	return nil
+}
+func (f *fakePanels) Reinstall(ctx context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.active = panel.Active{Panel: id, Build: "v1"}
+	return nil
+}
 
 func TestActivatePanelCommitsThroughCoordinator(t *testing.T) {
 	panels := &fakePanels{}

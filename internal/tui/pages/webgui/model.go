@@ -21,6 +21,8 @@ type Client interface {
 	UpdatePanel(context.Context, string, protocol.MutationRequest) (protocol.MutationResult, error)
 	ActivatePanel(context.Context, string, protocol.MutationRequest) (protocol.MutationResult, error)
 	RollbackPanel(context.Context, string, protocol.MutationRequest) (protocol.MutationResult, error)
+	UninstallPanel(context.Context, string, protocol.MutationRequest) (protocol.MutationResult, error)
+	ReinstallPanel(context.Context, string, protocol.MutationRequest) (protocol.MutationResult, error)
 	OpenWebGUI(context.Context, string) (protocol.WebGUIOpenResult, error)
 }
 
@@ -172,6 +174,10 @@ func (m *Model) handleKey(name string) tea.Cmd {
 		return m.installSelected()
 	case "u":
 		return m.updateSelected()
+	case "r":
+		return m.reinstallSelected()
+	case "x", "d":
+		return m.uninstallSelected()
 	case "b":
 		return m.rollbackSelected()
 	}
@@ -255,6 +261,48 @@ func (m *Model) rollbackSelected() tea.Cmd {
 			Impact: ui.RollbackPanelImpact, Rollback: ui.RollbackPanelRollback,
 			Execute: func() tea.Msg {
 				_, err := m.client.RollbackPanel(m.ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
+				return mutationDoneMsg{err: err}
+			},
+		}
+	}
+}
+
+func (m *Model) uninstallSelected() tea.Cmd {
+	panel, ok := m.selectedPanel()
+	if !ok || m.client == nil {
+		return nil
+	}
+	// Only uninstall when something is installed (or marked active).
+	if panel.InstalledBuild == "" && !panel.Active && panel.Health == "missing" {
+		return nil
+	}
+	operationID := m.newOperationID()
+	return func() tea.Msg {
+		return ui.ActionIntentMsg{
+			Action: ui.ActionUninstallPanel, Page: ui.PageWebGUI, Capability: protocol.CapabilityWebGUI,
+			Key: "panel:uninstall:" + panel.ID, Title: ui.UninstallPanelTitle, Object: panel.Name,
+			Impact: ui.UninstallPanelImpact, Rollback: ui.UninstallPanelRollback,
+			Execute: func() tea.Msg {
+				_, err := m.client.UninstallPanel(m.ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
+				return mutationDoneMsg{err: err}
+			},
+		}
+	}
+}
+
+func (m *Model) reinstallSelected() tea.Cmd {
+	panel, ok := m.selectedPanel()
+	if !ok || m.client == nil {
+		return nil
+	}
+	operationID := m.newOperationID()
+	return func() tea.Msg {
+		return ui.ActionIntentMsg{
+			Action: ui.ActionReinstallPanel, Page: ui.PageWebGUI, Capability: protocol.CapabilityWebGUI,
+			Key: "panel:reinstall:" + panel.ID, Title: ui.ReinstallPanelTitle, Object: panel.Name,
+			Impact: ui.ReinstallPanelImpact, Rollback: ui.ReinstallPanelRollback,
+			Execute: func() tea.Msg {
+				_, err := m.client.ReinstallPanel(m.ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
 				return mutationDoneMsg{err: err}
 			},
 		}

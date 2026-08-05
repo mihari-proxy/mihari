@@ -38,11 +38,22 @@ func LoadActive(path string) (Active, error) {
 }
 
 // SaveActive atomically replaces active.json after validating panel and build identity.
+// Both Panel and Build must be set together, or both empty to clear the default panel
+// while optionally retaining Previous entries for other panels.
 func SaveActive(path string, active Active) error {
-	if active.Panel == "" || active.Build == "" {
+	if (active.Panel == "") != (active.Build == "") {
 		return protocol.APIError{
 			Code:    protocol.CodeInvalidArgument,
 			Message: "panel active pointer requires panel and build",
+		}
+	}
+	if active.Panel == "" {
+		// Drop empty previous map for a clean clear.
+		if len(active.Previous) == 0 {
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			return nil
 		}
 	}
 	raw, err := json.Marshal(active)

@@ -17,6 +17,8 @@ type panelAPI interface {
 	UpdatePanel(context.Context, runtimeapi.Operation, string) error
 	ActivatePanel(context.Context, runtimeapi.Operation, string) error
 	RollbackPanel(context.Context, runtimeapi.Operation, string) error
+	UninstallPanel(context.Context, runtimeapi.Operation, string) error
+	ReinstallPanel(context.Context, runtimeapi.Operation, string) error
 	OpenWebGUI(context.Context, string) (string, string, error)
 }
 
@@ -28,6 +30,8 @@ func (s *Server) webGUIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/panels/{id}/update", s.updatePanel)
 	mux.HandleFunc("PUT /v1/panels/{id}/active", s.activatePanel)
 	mux.HandleFunc("POST /v1/panels/{id}/rollback", s.rollbackPanel)
+	mux.HandleFunc("POST /v1/panels/{id}/uninstall", s.uninstallPanel)
+	mux.HandleFunc("POST /v1/panels/{id}/reinstall", s.reinstallPanel)
 }
 
 func (s *Server) panelRuntime(writer http.ResponseWriter) (panelAPI, bool) {
@@ -134,6 +138,18 @@ func (s *Server) activatePanel(writer http.ResponseWriter, request *http.Request
 func (s *Server) rollbackPanel(writer http.ResponseWriter, request *http.Request) {
 	s.panelMutation(writer, request, func(runtime panelAPI, operation runtimeapi.Operation, id string) error {
 		return runtime.RollbackPanel(request.Context(), operation, id)
+	})
+}
+
+func (s *Server) uninstallPanel(writer http.ResponseWriter, request *http.Request) {
+	s.panelMutation(writer, request, func(runtime panelAPI, operation runtimeapi.Operation, id string) error {
+		return runtime.UninstallPanel(request.Context(), operation, id)
+	})
+}
+
+func (s *Server) reinstallPanel(writer http.ResponseWriter, request *http.Request) {
+	s.panelMutation(writer, request, func(runtime panelAPI, operation runtimeapi.Operation, id string) error {
+		return runtime.ReinstallPanel(request.Context(), operation, id)
 	})
 }
 
