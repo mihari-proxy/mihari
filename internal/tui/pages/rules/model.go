@@ -360,23 +360,15 @@ func (m *Model) renderRules() []string {
 	if len(indexes) == 0 {
 		return append(lines, m.theme.Muted.Render(ui.NoMatchingRules))
 	}
-	colorful := m.contentFocused
 	for visibleRow, index := range indexes {
 		item := m.rules[index]
 		rowFocused := m.focus.kind == focusRow && m.focus.row == visibleRow
 		marker := ui.FocusPrefix(rowFocused)
 		num := ui.PadCell(fmt.Sprintf("%d", index+1), widths[0], ui.AlignRight)
-		typeText := item.Type
-		if colorful {
-			typeText = ui.StyleRuleType(m.theme, item.Type)
-		}
-		typ := ui.PadCell(typeText, widths[1], ui.AlignLeft)
+		// Semantic type/target colors always; RowFocus chrome waits on content focus.
+		typ := ui.PadCell(ui.StyleRuleType(m.theme, item.Type), widths[1], ui.AlignLeft)
 		payload := ui.PadCell(item.Payload, widths[2], ui.AlignLeft)
-		targetText := item.Proxy
-		if colorful {
-			targetText = ui.StyleProxyTarget(m.theme, item.Proxy)
-		}
-		target := ui.PadCell(targetText, widths[3], ui.AlignLeft)
+		target := ui.PadCell(ui.StyleProxyTarget(m.theme, item.Proxy), widths[3], ui.AlignLeft)
 		line := marker + ui.JoinCells([]string{num, typ, payload, target}, rulesColGap)
 		if rowFocused && m.contentFocused {
 			line = m.theme.RowFocus.Render(line)
@@ -417,7 +409,6 @@ func (m *Model) renderProviders() []string {
 		return append(lines, m.theme.Muted.Render(ui.NoMatchingRuleProviders))
 	}
 	compact := ui.ClassifyContentWidth(m.layoutWidth()) == ui.ContentCompact
-	colorful := m.contentFocused
 	for visibleRow, index := range indexes {
 		provider := m.providers[index]
 		rowFocused := m.focus.kind == focusRow && m.focus.row == visibleRow
@@ -430,12 +421,9 @@ func (m *Model) renderProviders() []string {
 		if !provider.UpdatedAt.IsZero() {
 			updated = provider.UpdatedAt.Local().Format("2006-01-02 15:04")
 		}
-		typeText := provider.Type
-		statusText := status
-		if colorful {
-			typeText = ui.StyleRuleType(m.theme, provider.Type)
-			statusText = ui.StyleProviderStatus(m.theme, status)
-		}
+		// Semantic type/status colors always; RowFocus chrome waits on content focus.
+		typeText := ui.StyleRuleType(m.theme, provider.Type)
+		statusText := ui.StyleProviderStatus(m.theme, status)
 		var cells []string
 		if compact {
 			cells = []string{
@@ -445,19 +433,13 @@ func (m *Model) renderProviders() []string {
 				ui.PadCell(statusText, widths[3], ui.AlignLeft),
 			}
 		} else {
-			behavior, format, updatedCell := provider.Behavior, provider.Format, updated
-			if colorful {
-				behavior = m.theme.Muted.Render(behavior)
-				format = m.theme.Muted.Render(format)
-				updatedCell = m.theme.Muted.Render(updated)
-			}
 			cells = []string{
 				ui.PadCell(provider.Name, widths[0], ui.AlignLeft),
 				ui.PadCell(typeText, widths[1], ui.AlignLeft),
-				ui.PadCell(behavior, widths[2], ui.AlignLeft),
-				ui.PadCell(format, widths[3], ui.AlignLeft),
+				ui.PadCell(m.theme.Muted.Render(provider.Behavior), widths[2], ui.AlignLeft),
+				ui.PadCell(m.theme.Muted.Render(provider.Format), widths[3], ui.AlignLeft),
 				ui.PadCell(fmt.Sprintf("%d", provider.RuleCount), widths[4], ui.AlignRight),
-				ui.PadCell(updatedCell, widths[5], ui.AlignLeft),
+				ui.PadCell(m.theme.Muted.Render(updated), widths[5], ui.AlignLeft),
 				ui.PadCell(statusText, widths[6], ui.AlignLeft),
 			}
 		}

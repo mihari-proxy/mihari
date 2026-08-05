@@ -128,7 +128,7 @@ func TestLogs_SearchMatchesVisibleColumns(t *testing.T) {
 	}
 }
 
-func TestView_LogLevelsUseSemanticColorsWhenContentFocused(t *testing.T) {
+func TestView_LogLevelsUseSemanticColorsWhileRailFocused(t *testing.T) {
 	model := New(10)
 	model.SetSize(100, 16)
 	model.Append(logAt("err-msg", "error", 1))
@@ -136,20 +136,19 @@ func TestView_LogLevelsUseSemanticColorsWhenContentFocused(t *testing.T) {
 	model.focus = focusRow
 	model.focused = 0
 
+	// Data colors must show as soon as the page is visible, even before Enter into content.
 	model.SetContentFocused(false)
-	plain := model.View()
-	if strings.Contains(plain, "\x1b[") && strings.Contains(plain, "err-msg") {
-		// Header may use TableHeader ANSI; ensure ERROR itself is not specially colored on data path.
-		// Accept header styling; require focused data line without reverse when rail-focused.
-	}
-
-	model.SetContentFocused(true)
 	view := model.View()
-	if !strings.Contains(view, "\x1b[") {
-		t.Fatalf("expected semantic colors when content focused: %s", view)
-	}
 	if !strings.Contains(view, "err-msg") || !strings.Contains(view, "warn-msg") {
 		t.Fatalf("messages missing: %s", view)
+	}
+	errorStyled := model.theme.Danger.Render("ERROR")
+	warnStyled := model.theme.Warning.Render("WARN")
+	if !strings.Contains(view, errorStyled) {
+		t.Fatalf("ERROR should use Danger while rail-focused: %s", view)
+	}
+	if !strings.Contains(view, warnStyled) {
+		t.Fatalf("WARN should use Warning while rail-focused: %s", view)
 	}
 }
 
@@ -161,27 +160,32 @@ func TestView_FocusedRowHighlightOnlyWhenContentFocused(t *testing.T) {
 	model.focus = focusRow
 	model.focused = 1
 
-	model.SetContentFocused(false)
-	for _, line := range strings.Split(model.View(), "\n") {
-		if strings.Contains(line, "beta-line") {
-			if !strings.Contains(line, ui.FocusMarker) {
-				t.Fatalf("row marker missing while rail-focused: %q", line)
-			}
-			if strings.Contains(line, "\x1b[") {
-				t.Fatalf("row should not use accent while rail owns focus: %q", line)
+	findBeta := func() string {
+		for _, line := range strings.Split(model.View(), "\n") {
+			if strings.Contains(line, "beta-line") {
+				return line
 			}
 		}
+		return ""
+	}
+
+	model.SetContentFocused(false)
+	railLine := findBeta()
+	if railLine == "" || !strings.Contains(railLine, ui.FocusMarker) {
+		t.Fatalf("row marker missing while rail-focused: %q", railLine)
+	}
+	// Semantic level color is fine; reverse RowFocus chrome must wait for content focus.
+	if strings.Contains(railLine, "\x1b[7m") {
+		t.Fatalf("row should not use reverse focus chrome while rail owns focus: %q", railLine)
 	}
 
 	model.SetContentFocused(true)
-	var focused string
-	for _, line := range strings.Split(model.View(), "\n") {
-		if strings.Contains(line, "beta-line") {
-			focused = line
-		}
+	focused := findBeta()
+	if focused == "" || !strings.Contains(focused, ui.FocusMarker) {
+		t.Fatalf("focused content row missing marker: %q", focused)
 	}
-	if focused == "" || !strings.Contains(focused, ui.FocusMarker) || !strings.Contains(focused, "\x1b[") {
-		t.Fatalf("focused content row missing highlight: %q", focused)
+	if focused == railLine {
+		t.Fatalf("content focus should add RowFocus styling: rail=%q content=%q", railLine, focused)
 	}
 }
 
