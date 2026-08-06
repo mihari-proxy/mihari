@@ -26,8 +26,10 @@ jobs:
           # against a GitHub-generated merge commit that has no Signed-off-by.
           if [ "${{ github.event_name }}" = "push" ]; then
             before=${{ github.event.before }}
-            if [ "$before" = "0000000000000000000000000000000000000000" ]; then
-              # First push of the repository: no base commit to diff against.
+            if [ "$before" = "0000000000000000000000000000000000000000" ] ||
+               ! git rev-parse --verify -q "$before^{commit}" >/dev/null 2>&1; then
+              # First push of the repository (all-zero before), or a force
+              # push that replaced the previous tip: check the whole history.
               commits=$(git rev-list --no-merges ${{ github.sha }})
             else
               commits=$(git rev-list --no-merges "$before"..${{ github.sha }})
