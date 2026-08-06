@@ -3,7 +3,8 @@
 ## 1. 适用范围与指令优先级
 
 - 本文件适用于整个仓库。子目录若新增 `AGENTS.md`，以离目标文件最近的规则为补充或覆盖。
-- 修改前先阅读 `README.md`、相关包代码与测试；涉及架构边界时同时阅读 `docs/superpowers/specs/2026-08-03-mihari-architecture-design.md`。
+- 开始任何开发之前先阅读 `CONTRIBUTING.md`；修改代码前再阅读 `README.md`、相关包代码与测试；涉及架构边界时同时阅读 `docs/superpowers/specs/2026-08-03-mihari-architecture-design.md`。
+- 禁止在 `main` 分支上直接修改或提交。任何变更都必须在独立分支中完成，验证通过并经用户确认后再合并回 `main`。
 - 保留用户已有的未提交修改，不覆盖、不清理、不顺手重构无关代码。
 - 只做当前任务要求的变更。发现邻近问题时记录并说明，除非它直接阻塞当前任务，否则不要扩大范围。
 - 新增依赖、改变持久化格式、修改公开 CLI/JSON 契约、调整安全边界或改变跨平台支持范围前，必须先说明影响并取得用户确认。
@@ -172,6 +173,7 @@ $env:GOOS = 'darwin';  $env:GOARCH = 'arm64'; go build ./cmd/mihari
 
 ## 9. Commit 规范
 
+- commit 只允许在 `main` 之外的分支创建；`main` 上的变更必须经分支合并完成，不在 `main` 上直接提交。
 - 仅在用户明确要求时创建 commit；提交前展示或检查准确的变更范围。
 - 使用 Conventional Commits，类型保持英文、摘要使用简洁中文，例如 `feat: 增加订阅刷新事务`、`fix: 修复重启期间的竞态`。
 - 常用类型：`feat`、`fix`、`refactor`、`test`、`docs`、`build`、`ci`、`chore`。
