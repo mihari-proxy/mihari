@@ -344,12 +344,15 @@ func (m *Model) activateControl() tea.Cmd {
 
 const rulesColGap = 2
 
+// rulesColumnSpec: priorities are protective — 4 cols (34 + 6 gaps = 40)
+// always fit the narrowest content width, so no column ever drops in
+// practice; the priority order just pins what would go first if it did.
 func (m *Model) rulesColumnSpec() []ui.TableColumn {
 	return []ui.TableColumn{
-		{ID: "num", Title: "#", MinWidth: 4, MaxWidth: 4, Flex: 0, Align: ui.AlignRight},
-		{ID: "type", Title: ui.TypeLabel, MinWidth: 10, MaxWidth: 18, Flex: 0},
-		{ID: "payload", Title: ui.PayloadLabel, MinWidth: 12, Flex: 3},
-		{ID: "target", Title: ui.TargetLabel, MinWidth: 8, MaxWidth: 16, Flex: 1},
+		{ID: "num", Title: "#", MinWidth: 4, MaxWidth: 4, Flex: 0, Align: ui.AlignRight, Priority: 4},
+		{ID: "type", Title: ui.TypeLabel, MinWidth: 10, MaxWidth: 18, Flex: 0, Priority: 3},
+		{ID: "payload", Title: ui.PayloadLabel, MinWidth: 12, Flex: 3, Priority: 1},
+		{ID: "target", Title: ui.TargetLabel, MinWidth: 8, MaxWidth: 16, Flex: 1, Priority: 2},
 	}
 }
 
@@ -364,21 +367,31 @@ func (m *Model) sectionTextWidth() int {
 	return ui.SectionTextWidth(ui.FullSectionInner(m.layoutWidth()))
 }
 
+// rulesChrome is the page chrome outside table rows: Controls section
+// (top-title + control strip + search + bottom = 4) plus List section
+// (top-title + bottom = 2) — the header/rule lines are part of the returned
+// lines; 9 leaves one spare row at the tightest layouts.
+const rulesChrome = 9
+
 func (m *Model) renderRules() []string {
-	cols := m.rulesColumnSpec()
 	// Fit columns inside the list section body (focus marker budget).
-	widths := ui.FitColumnWidths(cols, max(24, m.sectionTextWidth()-2), rulesColGap)
+	cols, widths := ui.FitPriorityColumns(m.rulesColumnSpec(), max(24, m.sectionTextWidth()-2), rulesColGap)
 	header, ruleLine := ui.RenderHeaderRow(m.theme, cols, widths, rulesColGap, -1, false)
 	lines := []string{"  " + header, "  " + ruleLine}
 	indexes := m.VisibleIndexes()
 	if len(indexes) == 0 {
 		return append(lines, m.theme.Muted.Render(ui.NoMatchingRules))
 	}
-	for visibleRow, index := range indexes {
-		item := m.rules[index]
+	focused := 0
+	if m.focus.kind == focusRow {
+		focused = m.focus.row
+	}
+	start, end := ui.VisibleWindow(len(indexes), m.height, rulesChrome, false, focused)
+	for visibleRow := start; visibleRow < end; visibleRow++ {
+		item := m.rules[indexes[visibleRow]]
 		rowFocused := m.focus.kind == focusRow && m.focus.row == visibleRow
 		marker := ui.FocusPrefix(rowFocused)
-		num := ui.PadCell(fmt.Sprintf("%d", index+1), widths[0], ui.AlignRight)
+		num := ui.PadCell(fmt.Sprintf("%d", indexes[visibleRow]+1), widths[0], ui.AlignRight)
 		// Semantic type/target colors always; RowFocus chrome waits on content focus.
 		typ := ui.PadCell(ui.StyleRuleType(m.theme, item.Type), widths[1], ui.AlignLeft)
 		payload := ui.PadCell(item.Payload, widths[2], ui.AlignLeft)
@@ -392,39 +405,37 @@ func (m *Model) renderRules() []string {
 	return lines
 }
 
+// providerColumnSpec: display order is the array order (unchanged); drop
+// order follows Priority — name 7 > type 6 > count 5 > status 4 > behavior 3
+// > format 2 > updated 1. The old ClassifyContentWidth two-tier switch is
+// replaced by continuous priority dropping (design R2).
 func (m *Model) providerColumnSpec() []ui.TableColumn {
-	// Light C: compact drops behavior/format/updated.
-	if ui.ClassifyContentWidth(m.layoutWidth()) == ui.ContentCompact {
-		return []ui.TableColumn{
-			{ID: "name", Title: ui.NameLabel, MinWidth: 10, Flex: 2},
-			{ID: "type", Title: ui.TypeLabel, MinWidth: 6, MaxWidth: 10, Flex: 0},
-			{ID: "count", Title: ui.RulesCountLabel, MinWidth: 5, MaxWidth: 6, Flex: 0, Align: ui.AlignRight},
-			{ID: "status", Title: ui.StatusLabel, MinWidth: 8, MaxWidth: 12, Flex: 1},
-		}
-	}
 	return []ui.TableColumn{
-		{ID: "name", Title: ui.NameLabel, MinWidth: 10, Flex: 2},
-		{ID: "type", Title: ui.TypeLabel, MinWidth: 6, MaxWidth: 10, Flex: 0},
-		{ID: "behavior", Title: ui.BehaviorLabel, MinWidth: 8, MaxWidth: 12, Flex: 0},
-		{ID: "format", Title: ui.FormatLabel, MinWidth: 6, MaxWidth: 10, Flex: 0},
-		{ID: "count", Title: ui.RulesCountLabel, MinWidth: 5, MaxWidth: 6, Flex: 0, Align: ui.AlignRight},
-		{ID: "updated", Title: ui.UpdatedLabel, MinWidth: 14, MaxWidth: 16, Flex: 0},
-		{ID: "status", Title: ui.StatusLabel, MinWidth: 8, MaxWidth: 12, Flex: 1},
+		{ID: "name", Title: ui.NameLabel, MinWidth: 10, Flex: 2, Priority: 7},
+		{ID: "type", Title: ui.TypeLabel, MinWidth: 6, MaxWidth: 10, Flex: 0, Priority: 6},
+		{ID: "behavior", Title: ui.BehaviorLabel, MinWidth: 8, MaxWidth: 12, Flex: 0, Priority: 3},
+		{ID: "format", Title: ui.FormatLabel, MinWidth: 6, MaxWidth: 10, Flex: 0, Priority: 2},
+		{ID: "count", Title: ui.RulesCountLabel, MinWidth: 5, MaxWidth: 6, Flex: 0, Align: ui.AlignRight, Priority: 5},
+		{ID: "updated", Title: ui.UpdatedLabel, MinWidth: 14, MaxWidth: 16, Flex: 0, Priority: 1},
+		{ID: "status", Title: ui.StatusLabel, MinWidth: 8, MaxWidth: 12, Flex: 1, Priority: 4},
 	}
 }
 
 func (m *Model) renderProviders() []string {
-	cols := m.providerColumnSpec()
-	widths := ui.FitColumnWidths(cols, max(24, m.sectionTextWidth()-2), rulesColGap)
+	cols, widths := ui.FitPriorityColumns(m.providerColumnSpec(), max(24, m.sectionTextWidth()-2), rulesColGap)
 	header, ruleLine := ui.RenderHeaderRow(m.theme, cols, widths, rulesColGap, -1, false)
 	lines := []string{"  " + header, "  " + ruleLine}
 	indexes := m.visibleProviderIndexes()
 	if len(indexes) == 0 {
 		return append(lines, m.theme.Muted.Render(ui.NoMatchingRuleProviders))
 	}
-	compact := ui.ClassifyContentWidth(m.layoutWidth()) == ui.ContentCompact
-	for visibleRow, index := range indexes {
-		provider := m.providers[index]
+	focused := 0
+	if m.focus.kind == focusRow {
+		focused = m.focus.row
+	}
+	start, end := ui.VisibleWindow(len(indexes), m.height, rulesChrome, false, focused)
+	for visibleRow := start; visibleRow < end; visibleRow++ {
+		provider := m.providers[indexes[visibleRow]]
 		rowFocused := m.focus.kind == focusRow && m.focus.row == visibleRow
 		marker := ui.FocusPrefix(rowFocused)
 		status := provider.Status
@@ -438,24 +449,18 @@ func (m *Model) renderProviders() []string {
 		// Semantic type/status colors always; RowFocus chrome waits on content focus.
 		typeText := ui.StyleRuleType(m.theme, provider.Type)
 		statusText := ui.StyleProviderStatus(m.theme, status)
-		var cells []string
-		if compact {
-			cells = []string{
-				ui.PadCell(provider.Name, widths[0], ui.AlignLeft),
-				ui.PadCell(typeText, widths[1], ui.AlignLeft),
-				ui.PadCell(fmt.Sprintf("%d", provider.RuleCount), widths[2], ui.AlignRight),
-				ui.PadCell(statusText, widths[3], ui.AlignLeft),
-			}
-		} else {
-			cells = []string{
-				ui.PadCell(provider.Name, widths[0], ui.AlignLeft),
-				ui.PadCell(typeText, widths[1], ui.AlignLeft),
-				ui.PadCell(m.theme.Muted.Render(provider.Behavior), widths[2], ui.AlignLeft),
-				ui.PadCell(m.theme.Muted.Render(provider.Format), widths[3], ui.AlignLeft),
-				ui.PadCell(fmt.Sprintf("%d", provider.RuleCount), widths[4], ui.AlignRight),
-				ui.PadCell(m.theme.Muted.Render(updated), widths[5], ui.AlignLeft),
-				ui.PadCell(statusText, widths[6], ui.AlignLeft),
-			}
+		values := map[string]string{
+			"name":     provider.Name,
+			"type":     typeText,
+			"behavior": m.theme.Muted.Render(provider.Behavior),
+			"format":   m.theme.Muted.Render(provider.Format),
+			"count":    fmt.Sprintf("%d", provider.RuleCount),
+			"updated":  m.theme.Muted.Render(updated),
+			"status":   statusText,
+		}
+		cells := make([]string, 0, len(cols))
+		for index, col := range cols {
+			cells = append(cells, ui.PadCell(values[col.ID], widths[index], col.Align))
 		}
 		line := marker + ui.JoinCells(cells, rulesColGap)
 		if rowFocused && m.contentFocused {
