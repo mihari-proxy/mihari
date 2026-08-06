@@ -1,10 +1,6 @@
 package overview
 
-import (
-	"strings"
-
-	"github.com/LeeShunEE/mihari/internal/tui/ui"
-)
+import "strings"
 
 // dosRebelBanner is the "Mihari" wordmark rendered in the dos_rebel figlet
 // font (59 columns wide, 8 rows). The blank rows the font emits at the end
@@ -29,17 +25,13 @@ var dosRebelBanner = []string{
 	"░░░░░     ░░░░░ ░░░░░ ░░░░ ░░░░░  ░░░░░░░░ ░░░░░     ░░░░░",
 }
 
-// renderBanner renders the dos_rebel wordmark for the top of the Overview
-// page, uniformly in the muted foreground so it reads as a quiet brand
-// mark above the KPI cards. Returns "" when the window is too narrow or too
-// short for the banner to fit cleanly.
-func renderBanner(theme ui.Theme, width, height int) string {
+// renderBanner returns the dos_rebel wordmark for the top of the Overview
+// page, unstyled so it renders in the terminal's default (brightest)
+// foreground and the block glyphs stay crisp. Returns "" when the window is
+// too narrow or too short for the banner to fit cleanly.
+func renderBanner(width, height int) string {
 	if width < dosRebelBannerMinWidth || height < dosRebelBannerMinHeight {
 		return ""
 	}
-	lines := make([]string, len(dosRebelBanner))
-	for index, line := range dosRebelBanner {
-		lines[index] = theme.Muted.Render(line)
-	}
-	return strings.Join(lines, "\n")
+	return strings.Join(dosRebelBanner, "\n")
 }
