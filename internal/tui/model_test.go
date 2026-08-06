@@ -555,3 +555,67 @@ func updateModelKey(t *testing.T, model Model, key tea.KeyPressMsg) Model {
 	}
 	return result
 }
+
+// outcomeResultMsg is a page-like Execute result: implements the outcome
+// contract, so the shell records Succeeded/Failed from its error.
+type outcomeResultMsg struct{ err error }
+
+func (m outcomeResultMsg) Err() error { return m.err }
+
+func TestActionCompletedRecordsOperations(t *testing.T) {
+	newModelWith := func(t *testing.T, result tea.Msg) Model {
+		t.Helper()
+		model := NewModel()
+		updated, _ := model.Update(actionCompletedMsg{
+			Intent: ui.ActionIntentMsg{Key: "restart-core", Object: "mihomo", Title: "Restart mihomo core"},
+			Result: result,
+		})
+		return updated.(Model)
+	}
+	assertRecord := func(t *testing.T, model Model, state string) {
+		t.Helper()
+		if len(model.operations) != 1 {
+			t.Fatalf("operations=%v", model.operations)
+		}
+		record := model.operations[0]
+		if record.ID != "restart-core" || record.Object != "mihomo" || record.State != state {
+			t.Fatalf("record=%+v", record)
+		}
+		if record.At.IsZero() {
+			t.Fatalf("record.At zero: %+v", record)
+		}
+	}
+
+	// Success: a nil-error outcome result is recorded as Succeeded.
+	model := newModelWith(t, outcomeResultMsg{})
+	assertRecord(t, model, ui.SucceededLabel)
+
+	// Failure: an outcome result carrying an error is recorded as Failed.
+	model = newModelWith(t, outcomeResultMsg{err: errors.New("service failed")})
+	assertRecord(t, model, ui.FailedLabel)
+
+	// A nil result fails open to Succeeded (no outcome contract to inspect).
+	model = newModelWith(t, nil)
+	assertRecord(t, model, ui.SucceededLabel)
+
+	// A result that does not implement Err() fails open to Succeeded.
+	model = newModelWith(t, asyncMarkerMsg{})
+	assertRecord(t, model, ui.SucceededLabel)
+
+	// Empty Object falls back to Title; the Overview card renders the record.
+	model = NewModel()
+	updated, _ := model.Update(actionCompletedMsg{
+		Intent: ui.ActionIntentMsg{Key: "restart-core", Title: "Restart mihomo core"},
+		Result: outcomeResultMsg{},
+	})
+	model = updated.(Model)
+	if len(model.operations) != 1 || model.operations[0].Object != "Restart mihomo core" {
+		t.Fatalf("operations=%v", model.operations)
+	}
+	view := model.pages[ui.PageOverview].View()
+	for _, want := range []string{"Restart mihomo core", ui.SucceededLabel} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("overview view missing %q: %s", want, view)
+		}
+	}
+}

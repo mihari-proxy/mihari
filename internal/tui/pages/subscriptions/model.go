@@ -264,6 +264,12 @@ type mutationResultMsg struct {
 	err    error
 }
 
+// Err implements the shell's action-outcome contract so subscription mutations
+// are classified Succeeded/Failed in the Recent operations ledger.
+func (m mutationResultMsg) Err() error { return m.err }
+
+var _ interface{ Err() error } = mutationResultMsg{}
+
 type subscriptionsResultMsg struct {
 	result protocol.SubscriptionList
 	err    error
@@ -273,6 +279,12 @@ type refreshAllResultMsg struct {
 	revision uint64
 	err      error
 }
+
+// Err implements the shell's action-outcome contract so bulk refreshes are
+// classified Succeeded/Failed in the Recent operations ledger.
+func (m refreshAllResultMsg) Err() error { return m.err }
+
+var _ interface{ Err() error } = refreshAllResultMsg{}
 
 func New(client Client, newOperationID func() string, now func() time.Time) *Model {
 	if newOperationID == nil {

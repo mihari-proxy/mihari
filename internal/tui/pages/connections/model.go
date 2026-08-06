@@ -92,6 +92,12 @@ type closeResultMsg struct {
 	err error
 }
 
+// Err implements the shell's action-outcome contract so connection closes are
+// classified Succeeded/Failed in the Recent operations ledger.
+func (m closeResultMsg) Err() error { return m.err }
+
+var _ interface{ Err() error } = closeResultMsg{}
+
 type preferencesResultMsg struct {
 	preferences protocol.TUIPreferences
 	err         error
