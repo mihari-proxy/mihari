@@ -104,25 +104,6 @@ git tag -d v0.1.0
 # 删除 GitHub Release（需在网页操作）
 ```
 
-## 更新日志
-
-### v0.1.0 (2026-08-06)
-
-**初始开源发布**
-
-- 本地守护 daemon：Windows named pipe / Unix domain socket 控制平面，不绑 TCP
-- 系统服务支持（Windows Service / systemd / launchd，kardianos/service），不自动提权
-- mihomo 内核安装 / 更新 / 重启 / 健康检查 / 崩溃退避重启
-- 订阅管理：profile 模型、独立缓存、离线切换、定时刷新、原子配置生成与回滚
-- 交互式 TUI：Setup、Overview、Proxies、Connections（本地 GeoIP）、Rules/Providers、Logs、订阅管理、System、Web GUI
-- 浏览器面板：zashboard / MetaCubeXD 安装、更新、激活、回滚、打开；loopback Web gateway + 独立访问凭证
-- 系统代理管理（Windows 注册表 / GNOME / networksetup）与 TUN 持久化
-- GeoIP 本地解析（MMDB 下载、校验、30 天刷新）
-- CLI 全命令 `--json` 输出与稳定退出码
-- 自更新（GitHub Releases）+ 6 平台无 CGO 预编译发布
-
----
-
 ## CI/CD 检查项
 
 每次发布前确保：
@@ -130,5 +111,5 @@ git tag -d v0.1.0
 - [ ] 所有测试通过 (`go test -race ./...`)
 - [ ] 代码格式正确 (`gofmt -l cmd internal`)
 - [ ] 静态分析通过 (`go vet ./...`)
-- [ ] 变更日志已更新
-- [ ] 标签版本号与变更日志一致
+- [ ] [CHANGELOG.md](../CHANGELOG.md) 已更新
+- [ ] 标签版本号与 CHANGELOG.md 一致

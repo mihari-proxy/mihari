@@ -225,7 +225,7 @@ git config user.email "you@example.com"
 
 ## 发布流程（仅维护者）
 
-参见 [RELEASE.md](RELEASE.md)。
+参见 [docs/RELEASE.md](docs/RELEASE.md)。
 
 ## 问题反馈
 
