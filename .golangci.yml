@@ -1,0 +1,13 @@
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - govet         # go vet
+    - ineffassign   # 检测无效赋值
+    - unused        # 未使用的代码
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

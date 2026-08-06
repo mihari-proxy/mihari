@@ -413,11 +413,11 @@ type loadCountingPage struct {
 	loads int
 }
 
-func (p *loadCountingPage) ID() ui.PageID                      { return p.id }
-func (p *loadCountingPage) SetSize(int, int)                   {}
-func (p *loadCountingPage) FocusFirst()                        {}
-func (p *loadCountingPage) View() string                       { return "" }
-func (p *loadCountingPage) Update(tea.Msg) (ui.Page, tea.Cmd)  { return p, nil }
+func (p *loadCountingPage) ID() ui.PageID                     { return p.id }
+func (p *loadCountingPage) SetSize(int, int)                  {}
+func (p *loadCountingPage) FocusFirst()                       {}
+func (p *loadCountingPage) View() string                      { return "" }
+func (p *loadCountingPage) Update(tea.Msg) (ui.Page, tea.Cmd) { return p, nil }
 func (p *loadCountingPage) Load() tea.Cmd {
 	p.loads++
 	return nil
