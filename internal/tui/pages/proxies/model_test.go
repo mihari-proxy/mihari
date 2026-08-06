@@ -68,9 +68,7 @@ func applyProxyCmd(t *testing.T, model *Model, cmd tea.Cmd) {
 	}
 	if next != nil {
 		// Do not auto-run tea.Tick children.
-		if _, ok := next().(tea.BatchMsg); ok {
-			return
-		}
+		_, _ = next().(tea.BatchMsg)
 	}
 }
 

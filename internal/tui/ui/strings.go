@@ -231,12 +231,12 @@ const (
 	TunProgressEnabling         = "Enabling"
 	TunProgressDisabling        = "Disabling"
 	// Sticky row outcome badges after a System action finishes (until page leave / re-run).
-	DoneLabel                    = "Done"
-	FailedLabel                  = "Failed"
+	DoneLabel   = "Done"
+	FailedLabel = "Failed"
 	// SucceededLabel/FailedLabel are the Recent operations ledger states. "Succeeded"
 	// is a dedicated word (not Done): ClassifyStatusTone matches it exactly as
 	// Positive, while "Done" falls through to the neutral substring fallback.
-	SucceededLabel = "Succeeded"
+	SucceededLabel               = "Succeeded"
 	ServiceElevatedLabel         = "elevated"
 	ServiceNotElevatedLabel      = "not elevated"
 	TUNUnavailableDetail         = "TUN management is unavailable in this build."

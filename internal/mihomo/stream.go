@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/coder/websocket"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 const maxStreamMessageSize = 1 << 20

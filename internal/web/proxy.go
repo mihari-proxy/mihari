@@ -25,22 +25,22 @@ func NewControllerProxy(options ProxyOptions) (*httputil.ReverseProxy, error) {
 	if err != nil || target.Scheme == "" || target.Host == "" {
 		return nil, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid controller url"}
 	}
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	if options.Transport != nil {
-		proxy.Transport = options.Transport
-	}
 	secret := options.ControllerSecret
-	// Rewrite replaces Director (deprecated since Go 1.26) and fully overrides
-	// the default single-host rewrite, so SetURL must be called explicitly.
-	proxy.Rewrite = func(pr *httputil.ProxyRequest) {
-		pr.SetURL(target)
-		// Strip any browser-supplied auth so the web credential never reaches the controller.
-		pr.Out.Header.Del("Authorization")
-		if secret != "" {
-			pr.Out.Header.Set("Authorization", "Bearer "+secret)
-		}
-		// Mihomo often expects Host of the controller.
-		pr.Out.Host = target.Host
+	// Rewrite replaces Director (deprecated since Go 1.26); a nil Transport
+	// falls back to http.DefaultTransport. Rewrite fully overrides the
+	// single-host rewrite, so SetURL must be called explicitly.
+	proxy := &httputil.ReverseProxy{
+		Transport: options.Transport,
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(target)
+			// Strip any browser-supplied auth so the web credential never reaches the controller.
+			pr.Out.Header.Del("Authorization")
+			if secret != "" {
+				pr.Out.Header.Set("Authorization", "Bearer "+secret)
+			}
+			// Mihomo often expects Host of the controller.
+			pr.Out.Host = target.Host
+		},
 	}
 	// Do not rewrite Location in a way that exposes controller host if avoidable; default is fine for loopback.
 	proxy.ModifyResponse = func(resp *http.Response) error {

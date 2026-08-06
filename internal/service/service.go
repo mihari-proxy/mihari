@@ -8,9 +8,9 @@ import (
 	"os"
 	"strings"
 
+	kardservice "github.com/kardianos/service"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/platform"
-	kardservice "github.com/kardianos/service"
 )
 
 const (

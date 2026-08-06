@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/coder/websocket"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 func TestStreamReadsAllSupportedKindsWithAuthentication(t *testing.T) {

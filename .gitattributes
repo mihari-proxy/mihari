@@ -8,6 +8,10 @@
 # Shell scripts must be LF or they break under bash.
 *.sh text eol=lf
 
+# Golden render fixtures are byte-compared in tests; the comparison normalizes
+# to LF, so checkout must always produce LF even under core.autocrlf=true.
+*.golden text eol=lf
+
 # Treat binaries as binary (no EOL munging) if any are ever added.
 # NOTE: `binary` only unsets `text`; `eol` must be explicitly unset too,
 # otherwise `* eol=lf` above forces EOL conversion on binaries and corrupts them.

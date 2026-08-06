@@ -49,11 +49,24 @@ gofmt -l cmd internal
 # 无输出表示格式正确
 ```
 
+> Windows 上若 `core.autocrlf=true`，`gofmt -l` 会因 CRLF 误报未格式化，以 CI（checkout 后为 LF）为准。
+
 ### 静态检查
 
 ```sh
 go vet ./...
 ```
+
+### Lint（与 CI 一致）
+
+CI 的 `lint` job 使用 golangci-lint v2（配置见 `.golangci.yml`）。本地安装并运行：
+
+```sh
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+golangci-lint run ./...
+```
+
+> 版本必须与 CI 一致（`ci.yml` 中钉死 `version: v2.12.2`），因为 v1 线构建于 go1.24，无法加载本项目 go1.26 的配置。
 
 ### 代码风格
 
@@ -121,6 +134,30 @@ git commit -s -m "feat: your feature description"
 ```
 Signed-off-by: Your Name <your.email@example.com>
 ```
+
+#### 本地 commit hook（推荐）
+
+仓库自带 `.githooks/commit-msg` hook：提交信息缺少 `Signed-off-by` 时自动追加（取 `git config user.name` / `user.email`），忘记 `-s` 也不会被 CI 打回。安装：
+
+```sh
+git config core.hooksPath .githooks
+```
+
+安装后普通 `git commit` 即可，hook 会在消息尾部自动补签名：
+
+```console
+$ git commit -m "feat: your feature description"
+commit-msg: appended Signed-off-by: Your Name <your.email@example.com>
+```
+
+如果 hook 提示 `git user.name and user.email must be set`，先配置身份：
+
+```sh
+git config user.name "Your Name"
+git config user.email "you@example.com"
+```
+
+> `git commit --no-verify` 可绕过 hook，但 CI 仍会拒绝未签名的提交，不要依赖它。
 
 ## Pull Request 流程
 

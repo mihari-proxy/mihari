@@ -46,13 +46,13 @@ func (p PreparedRefresh) ProfileID() string  { return p.profileID }
 func (p PreparedRefresh) Document() Document { return p.document }
 
 type Receipt struct {
-	Before       Catalog
-	After        Catalog
-	cachePath    string
-	cacheBefore  []byte
-	hadCache     bool
-	wroteCache   bool
-	profileID    string
+	Before      Catalog
+	After       Catalog
+	cachePath   string
+	cacheBefore []byte
+	hadCache    bool
+	wroteCache  bool
+	profileID   string
 }
 
 func Open(options ServiceOptions) (*Service, error) {
