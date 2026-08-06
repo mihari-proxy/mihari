@@ -44,18 +44,20 @@ func PriorityBar(width int, segments []PrioritySegment, sep string) string {
 		return segments[droppable[i].index].Priority > segments[droppable[j].index].Priority
 	})
 
+	// sepWidth is the visible width (len() counts UTF-8 bytes for ·).
+	sepWidth := lipgloss.Width(sep)
 	selected := append([]measured{}, always...)
 	used := 0
 	for _, m := range selected {
 		used += m.w
 	}
 	if len(selected) > 1 {
-		used += len(sep) * (len(selected) - 1)
+		used += sepWidth * (len(selected) - 1)
 	}
 	for _, m := range droppable {
 		add := m.w
 		if len(selected) > 0 {
-			add += len(sep)
+			add += sepWidth
 		}
 		if used+add > width {
 			break

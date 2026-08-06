@@ -118,15 +118,83 @@ func TestStatusBar_CompactShorterThanFull(t *testing.T) {
 	if strings.Contains(compact, "12 conn") {
 		t.Fatalf("compact should not use full conn label:\n%s", compact)
 	}
-	// Compact omits subscription and version to save width.
-	if strings.Contains(compact, "Main") {
-		t.Fatalf("compact should omit subscription:\n%s", compact)
+	// Compact shows the subscription with compact usage (decision 5) but no
+	// IEC GiB labels, and never the version (Full only).
+	if !strings.Contains(compact, "Main") {
+		t.Fatalf("compact should show subscription:\n%s", compact)
+	}
+	if strings.Contains(compact, "GiB") {
+		t.Fatalf("compact subscription should use compact usage:\n%s", compact)
 	}
 	if strings.Contains(compact, "v1.19.0") {
 		t.Fatalf("compact should omit core version:\n%s", compact)
 	}
 	if len(compact) >= len(full) {
 		t.Fatalf("compact should be shorter than full:\nfull=%q\ncompact=%q", full, compact)
+	}
+}
+
+// TestStatusBar_SegmentDropTiers pins the priority-drop behavior of the
+// status bar (design §2.1): segments are dropped in priority order
+// 版本(1) → 内存(2) → 订阅(3) → conn/速率(5) → Core(5) → Title(6), with the
+// right badge (27 cols, "Service running · Connected") always kept.
+// Budget = width−2−27−1 with badge, width−2 without.
+func TestStatusBar_SegmentDropTiers(t *testing.T) {
+	theme := DefaultTheme()
+	data := StatusBarData{
+		CoreStatus:          "running",
+		CoreVersion:         "v1.19.0",
+		Subscription:        "Main · 9.0 GiB/100.0 GiB",
+		SubscriptionCompact: "Main · 9G/100G",
+		Connections:         3,
+		UploadRate:          3 * 1024 * 1024,
+		DownloadRate:        12 * 1024 * 1024,
+		MemoryInUse:         256 * 1024 * 1024,
+		RightStatus:         "Service running · Connected",
+	}
+	cases := []struct {
+		name        string
+		width       int
+		compact     bool
+		rightStatus string
+		want        string // plain segment sequence in positional order
+	}{
+		// Budget 70: version/memory/subscription dropped, rates kept.
+		{"full-100-badge", 100, false, "Service running · Connected", "Mihari  ·  ● running  ·  3 conn  ·  ↑3.0 MiB/s  ↓12.0 MiB/s"},
+		// Budget 98: only version and memory dropped.
+		{"full-100-nobadge", 100, false, "", "Mihari  ·  ● running  ·  Main · 9.0 GiB/100.0 GiB  ·  3 conn  ·  ↑3.0 MiB/s  ↓12.0 MiB/s"},
+		// Budget 64: subscription kept (compact), memory dropped.
+		{"compact-94-badge", 94, true, "Service running · Connected", "Mihari  ·  ● running  ·  Main · 9G/100G  ·  3c  ·  ↑3M/s ↓12M/s"},
+		// Budget 44: subscription dropped, rates kept.
+		{"compact-74-badge", 74, true, "Service running · Connected", "Mihari  ·  ● running  ·  3c  ·  ↑3M/s ↓12M/s"},
+		// Budget 40: rates dropped too.
+		{"compact-72-badge", 72, true, "Service running · Connected", "Mihari  ·  ● running  ·  3c"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data.RightStatus = tc.rightStatus
+			plain := stripANSI(RenderStatusBar(theme, data, tc.width, tc.compact))
+			// Peel padding and the pinned right badge, leaving the left segments.
+			left := strings.TrimSpace(plain)
+			left = strings.TrimSuffix(left, tc.rightStatus)
+			left = strings.TrimSpace(left)
+			if left != tc.want {
+				t.Fatalf("width=%d compact=%v got:\n%q\nwant:\n%q", tc.width, tc.compact, left, tc.want)
+			}
+		})
+	}
+}
+
+func TestStatusBar_StaleCoreDotDegrades(t *testing.T) {
+	theme := DefaultTheme()
+	data := StatusBarData{CoreStatus: "running", Stale: true}
+	got := RenderStatusBar(theme, data, 80, true)
+	if !strings.Contains(got, "\x1b[38;5;214m●") {
+		t.Fatalf("stale core dot should degrade to caution yellow:\n%q", got)
+	}
+	data.Stale = false
+	if strings.Contains(stripANSI(RenderStatusBar(theme, data, 80, true)), "●") == false {
+		t.Fatal("live dot missing")
 	}
 }
 
