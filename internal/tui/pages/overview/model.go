@@ -28,6 +28,9 @@ type Snapshot struct {
 	MihariVersion string
 	SystemProxy   *protocol.SystemProxyStatus
 	Tun           *protocol.TunStatus
+	// Stale marks last-known values when the daemon stream is stale; cards
+	// keep the last values and append " · Stale" (design G2).
+	Stale bool
 }
 
 type Model struct {
@@ -63,7 +66,14 @@ func (m *Model) View() string {
 	general := m.renderGeneralBody()
 
 	coreStatusRaw := valueOr(m.snapshot.Core.Status, ui.UnknownLabel)
-	coreStatus := ui.StatusDot(m.theme, ui.ClassifyStatusTone(coreStatusRaw), coreStatusRaw)
+	coreTone := ui.ClassifyStatusTone(coreStatusRaw)
+	if m.snapshot.Stale {
+		// Keep the last-known glyph, degrade the dot to caution yellow, and
+		// mark the value as stale (design G2).
+		coreTone = ui.ToneCaution
+		coreStatusRaw += " · " + ui.StaleLabel
+	}
+	coreStatus := ui.StatusDot(m.theme, coreTone, coreStatusRaw)
 	coreVersion := valueOr(m.snapshot.Core.Version, ui.UnknownLabel)
 	core := fmt.Sprintf("%s  %s\n%s %d", coreStatus, m.theme.Muted.Render(coreVersion), ui.PIDLabel, m.snapshot.Core.PID)
 
@@ -77,7 +87,7 @@ func (m *Model) View() string {
 		}
 	}
 
-	subscription := renderActiveSubscription(m.snapshot.Subscriptions)
+	subscription := renderActiveSubscription(m.snapshot.Subscriptions, m.snapshot.Stale)
 
 	var webGUI string
 	if slices.Contains(m.snapshot.Status.Capabilities, protocol.CapabilityWebGUI) {
@@ -97,8 +107,12 @@ func (m *Model) View() string {
 		operations = strings.Join(lines, "\n")
 	}
 
-	traffic := fmt.Sprintf("%s %d\n%s %s · %s %s · %s %s",
-		ui.MonitorConnectionsLabel, m.snapshot.Monitor.Connections,
+	connLabel := fmt.Sprintf("%d conn", m.snapshot.Monitor.Connections)
+	if m.snapshot.Stale {
+		connLabel += " · " + ui.StaleLabel
+	}
+	traffic := fmt.Sprintf("%s\n%s %s · %s %s · %s %s",
+		connLabel,
 		ui.MonitorUploadShort, ui.FormatRate(m.snapshot.Monitor.UploadRate),
 		ui.MonitorDownloadShort, ui.FormatRate(m.snapshot.Monitor.DownloadRate),
 		ui.MonitorMemoryShort, ui.FormatBytes(m.snapshot.Monitor.MemoryInUse))
@@ -215,6 +229,10 @@ func formatSysProxyValue(theme ui.Theme, snap Snapshot) string {
 	default:
 		label = ui.OverviewValueOff
 	}
+	if snap.Stale {
+		// Keep the last-known value and mark it stale (design G2).
+		label += " · " + ui.StaleLabel
+	}
 	return ui.StatusDot(theme, tone, label)
 }
 
@@ -240,10 +258,14 @@ func formatTunValue(theme ui.Theme, snap Snapshot) string {
 	} else {
 		label = ui.OverviewValueOff
 	}
+	if snap.Stale {
+		// Keep the last-known value and mark it stale (design G2).
+		label += " · " + ui.StaleLabel
+	}
 	return ui.StatusDot(theme, tone, label)
 }
 
-func renderActiveSubscription(list protocol.SubscriptionList) string {
+func renderActiveSubscription(list protocol.SubscriptionList, stale bool) string {
 	if len(list.Subscriptions) == 0 {
 		return ui.NoSubscriptionsConfiguredLabel
 	}
@@ -256,6 +278,14 @@ func renderActiveSubscription(list protocol.SubscriptionList) string {
 			subscription += " · " + ui.CacheMissingLabel
 		} else {
 			subscription += " · " + profile.UpdatedAt.Local().Format("2006-01-02 15:04")
+		}
+		// Usage line (design G3): ↑/↓ IEC values, total omitted; hidden when
+		// the provider published no usage (0/0/0).
+		if profile.Upload > 0 || profile.Download > 0 {
+			subscription += "\n↑" + ui.FormatBytes(profile.Upload) + " · ↓" + ui.FormatBytes(profile.Download)
+		}
+		if stale {
+			subscription += " · " + ui.StaleLabel
 		}
 		if profile.LastError != "" {
 			subscription += "\n" + profile.LastError
