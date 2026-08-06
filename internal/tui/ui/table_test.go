@@ -63,6 +63,65 @@ func TestRenderHeaderRow_UsesTableHeaderAndSeparator(t *testing.T) {
 	}
 }
 
+func TestTruncateVisible_AnsiStyled(t *testing.T) {
+	// Style prefixes must not consume width budget, and the SGR state must be
+	// closed at the cut point (design R1).
+	const blue = "\x1b[38;5;75m" // StyleRuleType colors the type in info blue.
+	styled := blue + "DOMAIN-SUFFIX" + "\x1b[0m"
+	got := TruncateVisible(styled, 10)
+	// 10 columns: "DOMAIN-SU…" keeps full color for the visible runes.
+	if lipgloss.Width(got) != 10 {
+		t.Fatalf("width=%d %q", lipgloss.Width(got), got)
+	}
+	if !strings.HasPrefix(got, blue+"DOMAIN-SU") {
+		t.Fatalf("lost style prefix: %q", got)
+	}
+	if !strings.Contains(got, "…") {
+		t.Fatalf("no ellipsis: %q", got)
+	}
+	if !strings.HasSuffix(got, "\x1b[0m") {
+		t.Fatalf("SGR not closed: %q", got)
+	}
+	// Bare ellipsis when the budget is one column.
+	if one := TruncateVisible(styled, 1); one != "…\x1b[0m" {
+		t.Fatalf("width 1 = %q", one)
+	}
+	// No truncation keeps the string verbatim.
+	if full := TruncateVisible(styled, 30); full != styled {
+		t.Fatalf("no-truncate changed it: %q", full)
+	}
+}
+
+func TestTruncateVisible_MultiSegmentStyles(t *testing.T) {
+	// ↑/↓ two-color traffic pair: each segment keeps its own prefix.
+	const up = "\x1b[38;5;78m"
+	const down = "\x1b[38;5;214m"
+	pair := up + "↑1.0 MiB/s" + "\x1b[0m" + "  " + down + "↓2.0 KiB/s" + "\x1b[0m"
+	got := TruncateVisible(pair, 18)
+	if lipgloss.Width(got) != 18 {
+		t.Fatalf("width=%d %q", lipgloss.Width(got), got)
+	}
+	if !strings.Contains(got, up) || !strings.Contains(got, down) {
+		t.Fatalf("segment styles lost: %q", got)
+	}
+}
+
+func TestTruncateVisible_CJKWidth(t *testing.T) {
+	// CJK chars are double-width: 4 CJK + "…" = 9 columns.
+	got := TruncateVisible("中文测试abcd", 9)
+	if lipgloss.Width(got) != 9 {
+		t.Fatalf("width=%d %q", lipgloss.Width(got), got)
+	}
+	if got != "中文测试…" {
+		t.Fatalf("got %q", got)
+	}
+	// A double-width char at the boundary is not split: "中文测…" = 7 columns.
+	boundary := TruncateVisible("中文测试abcd", 8)
+	if lipgloss.Width(boundary) != 7 || strings.Contains(boundary, "测试") {
+		t.Fatalf("boundary=%q (width %d)", boundary, lipgloss.Width(boundary))
+	}
+}
+
 func TestStyleLogLevel_MapsSemanticColors(t *testing.T) {
 	theme := DefaultTheme()
 	errorStyled := StyleLogLevel(theme, "error")
