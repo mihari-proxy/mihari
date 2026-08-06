@@ -266,13 +266,40 @@ func TestSystemServiceRendersStatusAndActionsWhenControllerPresent(t *testing.T)
 	updated, _ := model.Update(serviceStatusMsg{status: service.StatusRunning, elevated: false})
 	model = updated.(*Model)
 	view := model.View()
-	for _, want := range []string{ui.SystemServiceSectionTitle, ui.ServiceStatusLabel, string(service.StatusRunning), ui.ServiceInstallLabel, ui.ServiceUninstallLabel, ui.ServiceReinstallLabel, ui.ServiceStartLabel, ui.ServiceStopLabel, ui.ServiceRestartLabel, ui.ServiceNeedsElevation} {
+	// Not elevated: status row + a single elevation hint, action rows folded
+	// away entirely (design SY1).
+	for _, want := range []string{ui.SystemServiceSectionTitle, ui.ServiceStatusLabel, string(service.StatusRunning), "(" + ui.ServiceNeedsElevation + ")"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("missing %q in view=%s", want, view)
 		}
 	}
+	for _, banned := range []string{ui.ServiceInstallLabel, ui.ServiceUninstallLabel, ui.ServiceReinstallLabel, ui.ServiceStartLabel, ui.ServiceStopLabel, ui.ServiceRestartLabel} {
+		if strings.Contains(view, banned) {
+			t.Fatalf("action rows should be folded when not elevated, found %q: %s", banned, view)
+		}
+	}
 	if strings.Contains(view, ui.ServiceUnavailableDetail) {
 		t.Fatalf("service still unavailable: %s", view)
+	}
+}
+
+func TestSystemServiceElevatedFiltersUnavailableActions(t *testing.T) {
+	withElevation(t, true)
+	svc := &fakeService{status: service.StatusRunning}
+	model := NewWithService(&fakeClient{}, svc, func() string { return "system-op" })
+	updated, _ := model.Update(serviceStatusMsg{status: service.StatusRunning, elevated: true})
+	model = updated.(*Model)
+	view := model.View()
+	// Running: start/install are not available and must not render.
+	for _, want := range []string{ui.ServiceUninstallLabel, ui.ServiceReinstallLabel, ui.ServiceStopLabel, ui.ServiceRestartLabel} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %q in view=%s", want, view)
+		}
+	}
+	for _, banned := range []string{ui.ServiceInstallLabel, ui.ServiceStartLabel} {
+		if strings.Contains(view, banned) {
+			t.Fatalf("unavailable action should not render, found %q: %s", banned, view)
+		}
 	}
 }
 
@@ -326,7 +353,9 @@ func TestSystemServiceMutationRequiresElevation(t *testing.T) {
 	model := NewWithService(nil, svc, func() string { return "system-op" })
 	updated, _ := model.Update(serviceStatusMsg{status: service.StatusNotInstalled, elevated: false})
 	model = updated.(*Model)
-	model.focusID = rowServiceInstall
+	// Action rows are folded away; the hint row's detail carries the
+	// elevation requirement when Entered.
+	model.focusID = rowServiceHint
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(*Model)
 	if cmd != nil || svc.installs != 0 {
