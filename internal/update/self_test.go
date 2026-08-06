@@ -39,7 +39,7 @@ func TestSelfUpdateDownloadsAndReplaces(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/LeeShunEE/mihari/releases/latest":
+		case "/repos/mihari-proxy/mihari/releases/latest":
 			_ = json.NewEncoder(w).Encode(Release{
 				TagName: "v9.9.9",
 				Assets:  []Asset{{Name: "mihari-linux-amd64", URL: server.URL + "/asset", Size: int64(len(payload))}},

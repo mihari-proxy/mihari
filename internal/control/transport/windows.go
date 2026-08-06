@@ -7,7 +7,7 @@ import (
 	"net"
 	"os"
 
-	"github.com/LeeShunEE/mihari/internal/platform"
+	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/Microsoft/go-winio"
 )
 

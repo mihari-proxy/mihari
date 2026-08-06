@@ -13,13 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 const (
 	maxReleaseResponseSize = 2 << 20
 	maxSelfBinarySize      = 128 << 20
-	defaultRepo            = "LeeShunEE/mihari"
+	defaultRepo            = "mihari-proxy/mihari"
 )
 
 // Asset is a GitHub release asset.

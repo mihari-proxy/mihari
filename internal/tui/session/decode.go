@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 func decodeStreamEvent(source protocol.StreamEvent) (Event, error) {

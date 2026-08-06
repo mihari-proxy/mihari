@@ -13,7 +13,7 @@
 
 请使用 GitHub Security Advisories 私密报告：
 
-1. 访问 [Security Advisories](https://github.com/LeeShunEE/mihari/security/advisories)
+1. 访问 [Security Advisories](https://github.com/mihari-proxy/mihari/security/advisories)
 2. 点击 "Report a vulnerability"
 3. 填写漏洞详情
 

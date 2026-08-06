@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/platform"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/spf13/cobra"
 )
 

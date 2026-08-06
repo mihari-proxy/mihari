@@ -5,8 +5,8 @@ import (
 	"net"
 	"strings"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/panel"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/panel"
 )
 
 // WebGUIStatus returns a secret-free gateway and panel status for local clients.

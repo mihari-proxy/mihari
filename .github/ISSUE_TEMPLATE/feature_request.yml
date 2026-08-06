@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        感谢你的建议！请先搜索 [已有 Issues](https://github.com/LeeShunEE/mihari/issues) 确认没有重复。
+        感谢你的建议！请先搜索 [已有 Issues](https://github.com/mihari-proxy/mihari/issues) 确认没有重复。
   - type: textarea
     id: problem
     attributes:

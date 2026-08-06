@@ -1,7 +1,7 @@
 // Package elevate reports process privilege. It never auto-relaunches elevated.
 package elevate
 
-import "github.com/LeeShunEE/mihari/internal/control/protocol"
+import "github.com/mihari-proxy/mihari/internal/control/protocol"
 
 // Checker reports whether the current process already has install privileges.
 type Checker func() bool

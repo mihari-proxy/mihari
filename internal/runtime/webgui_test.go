@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeeShunEE/mihari/internal/config"
-	"github.com/LeeShunEE/mihari/internal/panel"
+	"github.com/mihari-proxy/mihari/internal/config"
+	"github.com/mihari-proxy/mihari/internal/panel"
 )
 
 func TestWebGUIStatusAndOpenURL(t *testing.T) {

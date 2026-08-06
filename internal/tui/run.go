@@ -5,10 +5,10 @@ import (
 	"io"
 
 	tea "charm.land/bubbletea/v2"
-	controlclient "github.com/LeeShunEE/mihari/internal/control/client"
-	systempage "github.com/LeeShunEE/mihari/internal/tui/pages/system"
-	"github.com/LeeShunEE/mihari/internal/tui/session"
-	"github.com/LeeShunEE/mihari/internal/tui/ui"
+	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
+	systempage "github.com/mihari-proxy/mihari/internal/tui/pages/system"
+	"github.com/mihari-proxy/mihari/internal/tui/session"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
 // Options contains the control client and terminal streams used by the TUI.

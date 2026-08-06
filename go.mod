@@ -1,4 +1,4 @@
-module github.com/LeeShunEE/mihari
+module github.com/mihari-proxy/mihari
 
 go 1.26.0
 

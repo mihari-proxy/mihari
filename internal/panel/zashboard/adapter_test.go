@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeeShunEE/mihari/internal/panel"
-	"github.com/LeeShunEE/mihari/internal/panel/release"
+	"github.com/mihari-proxy/mihari/internal/panel"
+	"github.com/mihari-proxy/mihari/internal/panel/release"
 )
 
 func TestAdapterResolveLatestPrefersNoFontsZip(t *testing.T) {

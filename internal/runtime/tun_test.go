@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeeShunEE/mihari/internal/config"
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/config"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/state"
 )
 
 func TestTunStatusUnmanagedByDefault(t *testing.T) {

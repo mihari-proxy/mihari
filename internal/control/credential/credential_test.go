@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 func TestLoadOrCreateCredentialIsStableAndPrivate(t *testing.T) {

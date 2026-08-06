@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 // WebGUI returns the secret-free gateway and panel status.

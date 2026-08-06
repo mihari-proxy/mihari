@@ -9,12 +9,12 @@ import (
 	"net/netip"
 	"sort"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/core"
-	"github.com/LeeShunEE/mihari/internal/geoip"
-	"github.com/LeeShunEE/mihari/internal/mihomo"
-	runtimeapi "github.com/LeeShunEE/mihari/internal/runtime"
-	"github.com/LeeShunEE/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/core"
+	"github.com/mihari-proxy/mihari/internal/geoip"
+	"github.com/mihari-proxy/mihari/internal/mihomo"
+	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
+	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/coder/websocket"
 )
 

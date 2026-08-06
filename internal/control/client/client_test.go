@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 func TestStatusDecodesSuccess(t *testing.T) {

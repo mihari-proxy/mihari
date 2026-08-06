@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"net/netip"
 
-	"github.com/LeeShunEE/mihari/internal/config"
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/state"
-	"github.com/LeeShunEE/mihari/internal/sysproxy"
+	"github.com/mihari-proxy/mihari/internal/config"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/sysproxy"
 )
 
 // SystemProxyStatus returns desired intent plus live OS observation.

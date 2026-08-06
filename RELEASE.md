@@ -41,7 +41,7 @@ git push origin v0.1.0
 推送标签后，GitHub Actions Release 工作流会自动：
 
 1. 交叉编译 linux / darwin / windows（各 amd64 + arm64）
-2. 注入版本号（`-X github.com/LeeShunEE/mihari/internal/buildinfo.Version=<tag>`）
+2. 注入版本号（`-X github.com/mihari-proxy/mihari/internal/buildinfo.Version=<tag>`）
 3. 生成 SHA256 校验和
 4. 创建 GitHub Release 并上传所有产物
 

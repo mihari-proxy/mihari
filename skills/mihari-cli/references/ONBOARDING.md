@@ -23,10 +23,10 @@ mihari self version
 
 ```sh
 # Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/LeeShunEE/mihari/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.sh | bash
 
 # Windows (PowerShell，需要管理员)
-irm https://raw.githubusercontent.com/LeeShunEE/mihari/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.ps1 | iex
 ```
 
 - 安装后可能需要新开终端使 `mihari` 进入 PATH。
