@@ -9,11 +9,11 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v7
+      - uses: golangci/golangci-lint-action@v9
         with:
           # Pin a v2 release: the v1 line is built with go1.24 and cannot load
           # configs targeting go1.26 (go.mod); action v6 does not support v2.
@@ -22,8 +22,8 @@ jobs:
   test:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Test
@@ -36,7 +36,7 @@ jobs:
         shell: bash
         run: test -z "$(gofmt -l .)"
 
-  cross-build:
+  build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -54,8 +54,8 @@ jobs:
           - goos: darwin
             goarch: arm64
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Build
@@ -64,3 +64,19 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go build -o /tmp/mihari-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/mihari
+
+  # Fan-in gate: branch protection requires a status named "cross-build", but
+  # GitHub reports each matrix leg under its expanded name (build (linux,
+  # amd64)), so no run ever reports the bare name and the check stays
+  # "Expected - Waiting for status to be reported" forever. This job posts
+  # the exact "cross-build" status and fails when any leg failed.
+  cross-build:
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [build]
+    steps:
+      - name: Verify all matrix builds passed
+        run: |
+          for result in ${{ join(needs.build.result, ' ') }}; do
+            [ "$result" = "success" ] || { echo "build matrix result: $result"; exit 1; }
+          done
