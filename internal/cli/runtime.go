@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 func runtimeClient(dependencies Dependencies) (RuntimeClient, error) {

@@ -4,9 +4,9 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/onboarding"
-	runtimeapi "github.com/LeeShunEE/mihari/internal/runtime"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/onboarding"
+	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 )
 
 type onboardingAPI interface {

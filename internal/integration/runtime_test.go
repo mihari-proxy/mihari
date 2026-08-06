@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeeShunEE/mihari/internal/app"
-	"github.com/LeeShunEE/mihari/internal/config"
-	controlclient "github.com/LeeShunEE/mihari/internal/control/client"
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	transporttest "github.com/LeeShunEE/mihari/internal/control/transport/testutil"
-	"github.com/LeeShunEE/mihari/internal/daemon"
-	"github.com/LeeShunEE/mihari/internal/platform"
+	"github.com/mihari-proxy/mihari/internal/app"
+	"github.com/mihari-proxy/mihari/internal/config"
+	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	transporttest "github.com/mihari-proxy/mihari/internal/control/transport/testutil"
+	"github.com/mihari-proxy/mihari/internal/daemon"
+	"github.com/mihari-proxy/mihari/internal/platform"
 )
 
 func TestMihomoRuntimeLifecycleAndControlCommands(t *testing.T) {

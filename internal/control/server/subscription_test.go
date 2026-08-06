@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	runtimeapi "github.com/LeeShunEE/mihari/internal/runtime"
-	"github.com/LeeShunEE/mihari/internal/subscription"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
+	"github.com/mihari-proxy/mihari/internal/subscription"
 )
 
 type fakeSubscriptionRuntime struct {

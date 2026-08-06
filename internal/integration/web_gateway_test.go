@@ -15,12 +15,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeeShunEE/mihari/internal/mihomo"
-	"github.com/LeeShunEE/mihari/internal/panel"
-	"github.com/LeeShunEE/mihari/internal/platform"
-	runtimeapi "github.com/LeeShunEE/mihari/internal/runtime"
-	"github.com/LeeShunEE/mihari/internal/state"
-	"github.com/LeeShunEE/mihari/internal/web"
+	"github.com/mihari-proxy/mihari/internal/mihomo"
+	"github.com/mihari-proxy/mihari/internal/panel"
+	"github.com/mihari-proxy/mihari/internal/platform"
+	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
+	"github.com/mihari-proxy/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/web"
 )
 
 type fixturePanelAdapter struct {

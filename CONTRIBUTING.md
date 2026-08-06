@@ -26,7 +26,7 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o mihari ./cmd/mihari
 发布构建会额外注入版本号：
 
 ```sh
-CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X github.com/LeeShunEE/mihari/internal/buildinfo.Version=<tag>" -o mihari ./cmd/mihari
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X github.com/mihari-proxy/mihari/internal/buildinfo.Version=<tag>" -o mihari ./cmd/mihari
 ```
 
 ### 运行测试
@@ -192,7 +192,7 @@ Signed-off-by: Your Name <your.email@example.com>
 
 ## 问题反馈
 
-- Bug 报告：使用 [GitHub Issues](https://github.com/LeeShunEE/mihari/issues)
+- Bug 报告：使用 [GitHub Issues](https://github.com/mihari-proxy/mihari/issues)
 - 功能请求：同样使用 Issues
 - 安全漏洞：请参见 [SECURITY.md](SECURITY.md)
 

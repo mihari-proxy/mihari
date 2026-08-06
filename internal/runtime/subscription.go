@@ -5,11 +5,11 @@ import (
 	"errors"
 	"os"
 
-	"github.com/LeeShunEE/mihari/internal/config"
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/core"
-	"github.com/LeeShunEE/mihari/internal/state"
-	"github.com/LeeShunEE/mihari/internal/subscription"
+	"github.com/mihari-proxy/mihari/internal/config"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/core"
+	"github.com/mihari-proxy/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/subscription"
 )
 
 type AddSubscriptionInput struct {

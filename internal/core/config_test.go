@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/LeeShunEE/mihari/internal/config"
+	"github.com/mihari-proxy/mihari/internal/config"
 	"go.yaml.in/yaml/v3"
 )
 

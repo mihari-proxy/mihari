@@ -9,10 +9,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/preferences"
-	runtimeapi "github.com/LeeShunEE/mihari/internal/runtime"
-	"github.com/LeeShunEE/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/preferences"
+	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
+	"github.com/mihari-proxy/mihari/internal/state"
 )
 
 func TestTUIPreferencesEndpointsUseRuntimeMutation(t *testing.T) {

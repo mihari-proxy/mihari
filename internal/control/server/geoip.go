@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"net/netip"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/geoip"
-	runtimeapi "github.com/LeeShunEE/mihari/internal/runtime"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/geoip"
+	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 )
 
 func (s *Server) geoIPRoutes(mux *http.ServeMux) {

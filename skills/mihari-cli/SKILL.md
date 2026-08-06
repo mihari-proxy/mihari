@@ -12,7 +12,7 @@ description: |
 
 - **Author**: [Mihar1](https://github.com/Mihar1)
 - **Organization**: [KinemaClawWorkspace](https://github.com/KinemaClawWorkspace)
-- **GitHub**: https://github.com/LeeShunEE/mihari
+- **GitHub**: https://github.com/mihari-proxy/mihari
 
 ## ⚠️ Before First Use | 首次使用必读
 

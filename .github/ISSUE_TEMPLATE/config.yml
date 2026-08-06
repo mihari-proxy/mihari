@@ -1,5 +1,5 @@
 blank_issues_enabled: true
 contact_links:
   - name: 安全漏洞
-    url: https://github.com/LeeShunEE/mihari/security/advisories
+    url: https://github.com/mihari-proxy/mihari/security/advisories
     about: 请不要公开报告安全漏洞，使用 GitHub Security Advisories 私密报告

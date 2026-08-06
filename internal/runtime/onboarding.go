@@ -3,9 +3,9 @@ package runtime
 import (
 	"context"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/onboarding"
-	"github.com/LeeShunEE/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/onboarding"
+	"github.com/mihari-proxy/mihari/internal/state"
 )
 
 func (m *Manager) OnboardingStatus(ctx context.Context) (onboarding.Snapshot, error) {

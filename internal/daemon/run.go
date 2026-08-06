@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	controlserver "github.com/LeeShunEE/mihari/internal/control/server"
-	"github.com/LeeShunEE/mihari/internal/control/transport"
-	"github.com/LeeShunEE/mihari/internal/state"
+	controlserver "github.com/mihari-proxy/mihari/internal/control/server"
+	"github.com/mihari-proxy/mihari/internal/control/transport"
+	"github.com/mihari-proxy/mihari/internal/state"
 )
 
 type Options struct {

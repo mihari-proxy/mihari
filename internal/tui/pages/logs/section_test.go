@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeeShunEE/mihari/internal/tui/ui"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
 func TestView_DualSectionFraming(t *testing.T) {

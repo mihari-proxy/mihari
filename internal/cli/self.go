@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/LeeShunEE/mihari/internal/buildinfo"
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/elevate"
-	"github.com/LeeShunEE/mihari/internal/update"
+	"github.com/mihari-proxy/mihari/internal/buildinfo"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/elevate"
+	"github.com/mihari-proxy/mihari/internal/update"
 	"github.com/spf13/cobra"
 )
 

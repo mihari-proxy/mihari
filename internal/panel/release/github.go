@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 const maxResponseSize = 2 << 20

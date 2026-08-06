@@ -1,6 +1,6 @@
 package tui
 
-import "github.com/LeeShunEE/mihari/internal/tui/ui"
+import "github.com/mihari-proxy/mihari/internal/tui/ui"
 
 const (
 	minimumWidth  = 72

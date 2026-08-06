@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeeShunEE/mihari/internal/cli"
-	controlclient "github.com/LeeShunEE/mihari/internal/control/client"
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	transporttest "github.com/LeeShunEE/mihari/internal/control/transport/testutil"
-	"github.com/LeeShunEE/mihari/internal/daemon"
+	"github.com/mihari-proxy/mihari/internal/cli"
+	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	transporttest "github.com/mihari-proxy/mihari/internal/control/transport/testutil"
+	"github.com/mihari-proxy/mihari/internal/daemon"
 )
 
 func TestControlPlaneLifecycleAndConcurrentStatus(t *testing.T) {

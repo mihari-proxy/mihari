@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/LeeShunEE/mihari/internal/platform"
+	"github.com/mihari-proxy/mihari/internal/platform"
 )
 
 func Listen(endpoint string) (net.Listener, error) {

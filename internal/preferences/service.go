@@ -10,7 +10,7 @@ import (
 	"os"
 	"sync/atomic"
 
-	"github.com/LeeShunEE/mihari/internal/config"
+	"github.com/mihari-proxy/mihari/internal/config"
 )
 
 const (

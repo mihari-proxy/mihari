@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 func DetectVersion(ctx context.Context, runner CommandRunner, binaryPath string) (string, error) {

@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeeShunEE/mihari/internal/config"
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/subscription"
+	"github.com/mihari-proxy/mihari/internal/config"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/subscription"
 )
 
 type reloadController struct {

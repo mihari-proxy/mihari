@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 type stubGateway struct{}

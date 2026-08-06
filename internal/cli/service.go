@@ -3,9 +3,9 @@ package cli
 import (
 	"fmt"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/elevate"
-	"github.com/LeeShunEE/mihari/internal/service"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/elevate"
+	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/spf13/cobra"
 )
 

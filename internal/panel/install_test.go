@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/LeeShunEE/mihari/internal/platform"
+	"github.com/mihari-proxy/mihari/internal/platform"
 )
 
 func TestInstallCandidateExtractsToStagingThenPromotes(t *testing.T) {

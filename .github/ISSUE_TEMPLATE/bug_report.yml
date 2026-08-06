@@ -6,8 +6,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        感谢报告问题！请先搜索 [已有 Issues](https://github.com/LeeShunEE/mihari/issues) 确认没有重复。
-        注意：**安全漏洞请不要在这里报告**，请使用 [Security Advisories](https://github.com/LeeShunEE/mihari/security/advisories) 私密报告。
+        感谢报告问题！请先搜索 [已有 Issues](https://github.com/mihari-proxy/mihari/issues) 确认没有重复。
+        注意：**安全漏洞请不要在这里报告**，请使用 [Security Advisories](https://github.com/mihari-proxy/mihari/security/advisories) 私密报告。
   - type: input
     id: version
     attributes:

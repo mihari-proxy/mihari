@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/LeeShunEE/mihari/internal/config"
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/config"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 // Active is the atomic pointer to the panel build served by the Web gateway.

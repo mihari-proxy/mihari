@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	transporttest "github.com/LeeShunEE/mihari/internal/control/transport/testutil"
-	"github.com/LeeShunEE/mihari/internal/platform"
+	transporttest "github.com/mihari-proxy/mihari/internal/control/transport/testutil"
+	"github.com/mihari-proxy/mihari/internal/platform"
 )
 
 func TestListenAndDialRoundTrip(t *testing.T) {

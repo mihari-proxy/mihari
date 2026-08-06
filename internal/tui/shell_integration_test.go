@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/tui/session"
-	"github.com/LeeShunEE/mihari/internal/tui/ui"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/tui/session"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
 // Package-level shell smoke: no real terminal or IPC. Closes the Phase 4 audit

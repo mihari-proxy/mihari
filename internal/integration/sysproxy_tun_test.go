@@ -9,15 +9,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeeShunEE/mihari/internal/config"
-	controlclient "github.com/LeeShunEE/mihari/internal/control/client"
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	transporttest "github.com/LeeShunEE/mihari/internal/control/transport/testutil"
-	"github.com/LeeShunEE/mihari/internal/daemon"
-	"github.com/LeeShunEE/mihari/internal/mihomo"
-	runtimeapi "github.com/LeeShunEE/mihari/internal/runtime"
-	"github.com/LeeShunEE/mihari/internal/state"
-	"github.com/LeeShunEE/mihari/internal/sysproxy"
+	"github.com/mihari-proxy/mihari/internal/config"
+	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	transporttest "github.com/mihari-proxy/mihari/internal/control/transport/testutil"
+	"github.com/mihari-proxy/mihari/internal/daemon"
+	"github.com/mihari-proxy/mihari/internal/mihomo"
+	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
+	"github.com/mihari-proxy/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/sysproxy"
 )
 
 // TestSystemProxyForeignConflictAndForceOverIPC exercises the control path

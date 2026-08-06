@@ -5,9 +5,9 @@ import (
 	"errors"
 	"net/netip"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/geoip"
-	"github.com/LeeShunEE/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/geoip"
+	"github.com/mihari-proxy/mihari/internal/state"
 )
 
 // GeoIPStatus returns the current redacted database health.

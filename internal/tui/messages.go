@@ -2,8 +2,8 @@ package tui
 
 import (
 	tea "charm.land/bubbletea/v2"
-	"github.com/LeeShunEE/mihari/internal/tui/session"
-	"github.com/LeeShunEE/mihari/internal/tui/ui"
+	"github.com/mihari-proxy/mihari/internal/tui/session"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
 type OperationRecordMsg struct{ Record ui.OperationRecord }

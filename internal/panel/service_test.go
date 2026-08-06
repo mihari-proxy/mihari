@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeeShunEE/mihari/internal/platform"
+	"github.com/mihari-proxy/mihari/internal/platform"
 )
 
 type fixtureAdapter struct {
