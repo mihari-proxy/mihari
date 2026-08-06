@@ -66,30 +66,47 @@ type row struct {
 	stateTone   ui.StatusTone
 }
 
-func (r row) Render(theme ui.Theme) string {
-	active := ""
-	if strings.TrimSpace(r.active) == "●" {
-		// Active selection marker stays a single Positive dot (no label) so it does
-		// not collide with the tone-colored state/load columns.
-		active = ui.StatusDot(theme, ui.TonePositive, "")
+// cellValue renders one column's value with its semantic styling.
+func (r row) cellValue(theme ui.Theme, id string) string {
+	switch id {
+	case "active":
+		if strings.TrimSpace(r.active) == "●" {
+			// Active selection marker stays a single Positive dot (no label) so it
+			// does not collide with the tone-colored state/load columns.
+			return ui.StatusDot(theme, ui.TonePositive, "")
+		}
+		return ""
+	case "name":
+		return r.name
+	case "state":
+		return ui.ToneStyle(theme, r.stateTone).Render(r.state)
+	case "load":
+		return ui.ToneStyle(theme, r.loadTone).Render(r.load)
+	case "traffic":
+		if r.traffic == "" {
+			return ui.MissingValue
+		}
+		return r.traffic
+	case "lastSuccess":
+		return r.lastSuccess
+	case "nextRefresh":
+		return ui.ToneStyle(theme, ui.ClassifyStatusTone(r.nextRefresh)).Render(r.nextRefresh)
+	default:
+		return ui.MissingValue
 	}
-	traffic := r.traffic
-	if traffic == "" {
-		traffic = ui.MissingValue
-	}
-	// Visible-width padding (ui.PadCell) so ANSI-styled cells keep their column.
-	const gap = "  "
-	cells := []string{
-		ui.PadCell(active, 6, ui.AlignLeft),
-		ui.PadCell(truncate(r.name, 18), 18, ui.AlignLeft),
-		ui.PadCell(ui.ToneStyle(theme, r.stateTone).Render(r.state), 9, ui.AlignLeft),
-		ui.PadCell(ui.ToneStyle(theme, r.loadTone).Render(r.load), 11, ui.AlignLeft),
-		ui.PadCell(truncate(traffic, 18), 18, ui.AlignLeft),
-		ui.PadCell(r.lastSuccess, 12, ui.AlignLeft),
-		ui.ToneStyle(theme, ui.ClassifyStatusTone(r.nextRefresh)).Render(r.nextRefresh),
-	}
-	return strings.Join(cells, gap)
 }
+
+// Render lays the row out by the fitted column set, sharing the widths with
+// the header (design S1).
+func (r row) Render(theme ui.Theme, cols []ui.TableColumn, widths []int) string {
+	cells := make([]string, 0, len(cols))
+	for index, col := range cols {
+		cells = append(cells, ui.PadCell(r.cellValue(theme, col.ID), widths[index], col.Align))
+	}
+	return strings.Join(cells, subscriptionColGapText)
+}
+
+const subscriptionColGapText = "  "
 
 // phaseTone maps a load phase onto a status tone so the Load column carries
 // meaning even when no spinner is running (Live=Positive, Failed=Negative,
@@ -169,23 +186,11 @@ func rowFrom(subscription protocol.Subscription, active bool, pending string, no
 	}
 	phase := resolveLoadPhase(subscription, active, pending, now, globalInterval)
 	load, _ := loadPhaseLabel(phase, clock)
-	interval := effectiveInterval(subscription.Interval, globalInterval)
-	stale := subscription.Cached && (subscription.LastError != "" || (!subscription.UpdatedAt.IsZero() && interval > 0 && !now.Before(subscription.UpdatedAt.Add(interval))))
 	lastSuccess := ui.MissingValue
 	if !subscription.UpdatedAt.IsZero() {
 		lastSuccess = relativeTime(now, subscription.UpdatedAt)
 	}
-	next := ui.ManualLabel
-	switch {
-	case !subscription.Enabled:
-		next = ui.DisabledLabel
-	case !subscription.AutoRefresh:
-		next = ui.ManualLabel
-	case stale || subscription.LastError != "" || subscription.UpdatedAt.IsZero():
-		next = ui.RetryPendingLabel
-	case interval > 0:
-		next = relativeTime(now, subscription.UpdatedAt.Add(interval))
-	}
+	next := nextRefreshLabel(subscription, now, globalInterval)
 	marker := ""
 	if active {
 		marker = "●"
@@ -194,7 +199,8 @@ func rowFrom(subscription protocol.Subscription, active bool, pending string, no
 	if subscription.Enabled {
 		stateTone = ui.TonePositive
 	}
-	traffic := ui.FormatSubscriptionTraffic(subscription.Upload, subscription.Download, subscription.Total)
+	// Column traffic uses the compact quota form (e.g. 9G/100G, design S1).
+	traffic := ui.FormatSubscriptionTrafficCompact(subscription.Upload, subscription.Download, subscription.Total)
 	return row{
 		active: marker, name: subscription.Name, state: state, load: load,
 		traffic: traffic, lastSuccess: lastSuccess, nextRefresh: next,
@@ -479,9 +485,36 @@ func (m *Model) FooterHints() string {
 	}
 }
 
+// subscriptionColumns is the checked table definition (design S1 table):
+// name is highest priority, nextRefresh drops first.
+func (m *Model) subscriptionColumns() []ui.TableColumn {
+	return []ui.TableColumn{
+		{ID: "name", Title: ui.NameLabel, MinWidth: 10, Flex: 3, Priority: 7},
+		{ID: "active", Title: ui.ActiveLabel, MinWidth: 6, Flex: 0, Priority: 6},
+		{ID: "state", Title: "State", MinWidth: 8, Flex: 0, Priority: 5},
+		{ID: "load", Title: ui.LoadLabel, MinWidth: 9, Flex: 0, Priority: 4},
+		{ID: "traffic", Title: ui.TrafficLabel, MinWidth: 11, Flex: 1, Priority: 3},
+		{ID: "lastSuccess", Title: ui.LastUpdateLabel, MinWidth: 11, Flex: 0, Priority: 2},
+		{ID: "nextRefresh", Title: ui.NextUpdateLabel, MinWidth: 11, Flex: 0, Priority: 1},
+	}
+}
+
+// subscriptionWidths fits the columns to the section body; header and rows
+// share the same result. Budget = textW−2 (focus marker prefix): the bordered
+// section clips body lines at textW, so marker + columns must fit exactly.
+// At 100 terminal columns the 7-column set's 78 min width exceeds the 76
+// budget, so nextRefresh (lowest priority) drops — the design's 7-column
+// figure assumes an unclipped budget, which the section frame cannot allow.
+func (m *Model) subscriptionWidths() ([]ui.TableColumn, []int) {
+	textW := ui.SectionTextWidth(ui.FullSectionInner(m.layoutWidth()))
+	avail := max(20, textW-2)
+	return ui.FitPriorityColumns(m.subscriptionColumns(), avail, 2)
+}
+
 func (m *Model) View() string {
-	header := "  Active  Name                State      Load         " + ui.TrafficLabel + "              " + ui.LastUpdateLabel + "  " + ui.NextUpdateLabel
-	bodyLines := []string{header}
+	cols, widths := m.subscriptionWidths()
+	header, rule := ui.RenderHeaderRow(m.theme, cols, widths, 2, -1, false)
+	bodyLines := []string{"  " + header, "  " + rule}
 	if m.lastError != "" {
 		bodyLines = append(bodyLines, m.theme.Muted.Render(m.lastError))
 	}
@@ -500,7 +533,7 @@ func (m *Model) View() string {
 			marker = ui.FocusMarker
 		}
 		entry := rowFrom(subscription, subscription.ID == m.activeID, m.pending[subscription.ID], wall, clock, m.globalInterval)
-		line := marker + entry.Render(m.theme)
+		line := marker + entry.Render(m.theme, cols, widths)
 		// Keyboard focus uses RowFocus; business active marker is ● (Success).
 		if rowFocused && m.contentFocused {
 			line = m.theme.RowFocus.Render(line)
@@ -740,7 +773,8 @@ func (m *Model) detailView() string {
 		errorTone = ui.ToneNegative
 	}
 	errorValue := ui.ToneStyle(m.theme, errorTone).Render(errorState)
-	return fmt.Sprintf("%s: %s\n%s: %s\n%s: %t\n%s: %s\n%s: %s\n%s: %t\n%s: %s\n%s: %s\n%s: %s\n\n%s",
+	next := nextRefreshLabel(subscription, m.now(), m.globalInterval)
+	return fmt.Sprintf("%s: %s\n%s: %s\n%s: %t\n%s: %s\n%s: %s\n%s: %t\n%s: %s\n%s: %s\n%s: %s\n%s: %s\n\n%s",
 		ui.NameLabel, subscription.Name,
 		ui.StatusLabel, statusValue,
 		ui.AutoRefreshLabel, subscription.AutoRefresh,
@@ -749,8 +783,28 @@ func (m *Model) detailView() string {
 		ui.CacheLabel, subscription.Cached,
 		ui.IntervalLabel, valueOr(subscription.Interval, ui.GlobalLabel),
 		ui.LastUpdateLabel, formatTimestamp(subscription.UpdatedAt),
+		ui.NextUpdateLabel, next,
 		ui.LastErrorLabel, errorValue,
 		ui.EscCloseHint)
+}
+
+// nextRefreshLabel predicts the next refresh from UpdatedAt + effective
+// interval, mirroring the list column semantics.
+func nextRefreshLabel(subscription protocol.Subscription, now time.Time, globalInterval string) string {
+	interval := effectiveInterval(subscription.Interval, globalInterval)
+	stale := !subscription.UpdatedAt.IsZero() && interval > 0 && !now.Before(subscription.UpdatedAt.Add(interval))
+	switch {
+	case !subscription.Enabled:
+		return ui.DisabledLabel
+	case !subscription.AutoRefresh:
+		return ui.ManualLabel
+	case stale || subscription.LastError != "" || subscription.UpdatedAt.IsZero():
+		return ui.RetryPendingLabel
+	case interval > 0:
+		return relativeTime(now, subscription.UpdatedAt.Add(interval))
+	default:
+		return ui.ManualLabel
+	}
 }
 
 // subscriptionErrorMessage returns a user-visible failure reason without leaking
