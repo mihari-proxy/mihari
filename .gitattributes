@@ -9,7 +9,9 @@
 *.sh text eol=lf
 
 # Treat binaries as binary (no EOL munging) if any are ever added.
-*.gz binary
-*.zip binary
-*.png binary
-*.exe binary
+# NOTE: `binary` only unsets `text`; `eol` must be explicitly unset too,
+# otherwise `* eol=lf` above forces EOL conversion on binaries and corrupts them.
+*.gz binary -eol
+*.zip binary -eol
+*.png binary -eol
+*.exe binary -eol
