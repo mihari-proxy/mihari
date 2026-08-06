@@ -41,6 +41,36 @@ func TestSession_OneUpstreamPerStreamAndStopsAllGoroutines(t *testing.T) {
 	}
 }
 
+func TestSession_PollsStateWhileStreamsStayConnected(t *testing.T) {
+	fake := newFakeClient()
+	fake.status = protocol.Status{Schema: "mihari/v1", Capabilities: []string{protocol.CapabilityCore}}
+	session := New(fake, Options{Backoff: func(int) time.Duration { return 0 }, PollInterval: 20 * time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := session.Start(ctx)
+	waitForEvent(t, events, EventConnected)
+	// Core must keep being re-polled while the push streams remain connected;
+	// a stale single snapshot here is the starting-stuck regression.
+	deadline := time.After(3 * time.Second)
+	for {
+		fake.mu.Lock()
+		calls := fake.coreCalls
+		fake.mu.Unlock()
+		if calls >= 3 {
+			return
+		}
+		select {
+		case _, open := <-events:
+			if !open {
+				t.Fatalf("events closed while streams stayed connected (core calls=%d)", calls)
+			}
+		case <-time.After(50 * time.Millisecond):
+		case <-deadline:
+			t.Fatalf("core was polled only %d times while streams stayed connected", calls)
+		}
+	}
+}
+
 func TestSession_ReportsReconnectBeforeConnected(t *testing.T) {
 	fake := newFakeClient()
 	fake.statusFailures = 1
@@ -131,6 +161,7 @@ func waitForEvent(t *testing.T, events <-chan Event, want EventKind) Event {
 type fakeClient struct {
 	mu             sync.Mutex
 	statusFailures int
+	coreCalls      int
 	streamCalls    map[string]int
 	started        chan string
 	status         protocol.Status
@@ -155,6 +186,9 @@ func (f *fakeClient) Status(context.Context) (protocol.Status, error) {
 }
 
 func (f *fakeClient) Core(context.Context) (protocol.CoreStatus, error) {
+	f.mu.Lock()
+	f.coreCalls++
+	f.mu.Unlock()
 	return protocol.CoreStatus{Schema: "mihari/v1", Status: "running"}, nil
 }
 
@@ -176,6 +210,10 @@ func (f *fakeClient) RuleProviders(context.Context) (protocol.RuleProviderList, 
 
 func (f *fakeClient) TUIPreferences(context.Context) (protocol.TUIPreferences, error) {
 	return f.preferences, nil
+}
+
+func (f *fakeClient) WebGUI(context.Context) (protocol.WebGUIStatus, error) {
+	return protocol.WebGUIStatus{Schema: "mihari/v1", GatewayAddr: "127.0.0.1:9191", GatewayHealth: "healthy"}, nil
 }
 
 func (f *fakeClient) Stream(ctx context.Context, kind string, _ func(protocol.StreamEvent) error) error {

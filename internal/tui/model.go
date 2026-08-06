@@ -46,6 +46,7 @@ type Model struct {
 	connections      protocol.ConnectionList
 	core             protocol.CoreStatus
 	subscriptions    protocol.SubscriptionList
+	webGUI           *protocol.WebGUIStatus
 	monitor          MonitorModel
 	operations       []ui.OperationRecord
 	confirmationCmd  tea.Cmd
@@ -518,6 +519,9 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		if page, ok := model.pages[ui.PageRules].(*rulespage.Model); ok {
 			page.SetProviders(event.RuleProviders)
 		}
+	case session.EventWebGUI:
+		webGUI := event.WebGUI
+		model.webGUI = &webGUI
 	case session.EventLog:
 		if page, ok := model.pages[ui.PageLogs].(*logspage.Model); ok {
 			page.Observe(event.Log, event.ObservedAt)
@@ -622,7 +626,7 @@ func (model *Model) syncOverview() {
 		Monitor: monitorSnap, Operations: model.operations,
 		ServiceStatus: model.serviceStatus, ServiceLoaded: model.serviceLoaded,
 		Connected: model.connected, MihariVersion: buildinfo.Version,
-		Stale: monitorSnap.Stale,
+		Stale: monitorSnap.Stale, WebGUI: model.webGUI,
 	}
 	if model.systemProxyOK {
 		proxy := model.systemProxy

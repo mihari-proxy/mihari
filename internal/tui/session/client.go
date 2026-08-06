@@ -14,5 +14,6 @@ type Client interface {
 	Rules(context.Context) (protocol.RuleList, error)
 	RuleProviders(context.Context) (protocol.RuleProviderList, error)
 	TUIPreferences(context.Context) (protocol.TUIPreferences, error)
+	WebGUI(context.Context) (protocol.WebGUIStatus, error)
 	Stream(context.Context, string, func(protocol.StreamEvent) error) error
 }
