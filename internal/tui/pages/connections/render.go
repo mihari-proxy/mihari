@@ -36,13 +36,19 @@ func (m *Model) View() string {
 
 	base := controls + "\n" + list
 	if m.columnsOpen {
-		return base + "\n" + m.columnsView()
+		return m.columnsView()
 	}
 	if m.detail != nil {
-		return base + "\n" + m.detail.View(m.width, m.height)
+		return m.detail.View(m.width, m.height)
 	}
 	return base
 }
+
+// connectionChrome is the page chrome outside table rows: Controls section
+// (top + title + control strip + search + bottom = 5) plus List section
+// (top + title + header + rule + bottom = 5 minus the header/rule lines that
+// are part of tableLines itself; effective 9).
+const connectionChrome = 9
 
 func (m *Model) tableLines() []string {
 	rows := m.visibleRows()
@@ -51,7 +57,14 @@ func (m *Model) tableLines() []string {
 	if len(rows) == 0 {
 		return append(lines, m.theme.Muted.Render(ui.NoConnections))
 	}
-	for _, connection := range rows {
+	// Window the rows; focused row stays inside, header focus pins to the top.
+	focusedIndex := 0
+	if m.focus.kind == focusRow {
+		focusedIndex = max(0, rowIndex(rows, m.focus.rowID))
+	}
+	start, end := ui.VisibleWindow(len(rows), m.height, connectionChrome, false, focusedIndex)
+	for index := start; index < end; index++ {
+		connection := rows[index]
 		rowFocused := m.focus.kind == focusRow && m.focus.rowID == connection.ID
 		lines = append(lines, m.renderConnection(connection, rowFocused)...)
 	}
