@@ -198,10 +198,9 @@ func TestWebGatewayAuthProxyRejectInstallActivateRollback(t *testing.T) {
 	if got := controller.selected.Load().(string); got != "REJECT" {
 		t.Fatalf("selected=%q", got)
 	}
-	if manager.Snapshot().Revision < 1 {
-		// SelectProxy uses maintenance lock but may not bump revision; coordinator path for panels does.
-		// Ensure manager accepted the mutation without error above is enough.
-	}
+	// SelectProxy uses the maintenance lock but may not bump the revision
+	// (the coordinator path for panels does). What matters here is that the
+	// manager accepted the mutation without error above.
 
 	// 4) Install fixture panel → activate → static index.html
 	if err := panels.Install(context.Background(), panel.IDZashboard, ""); err != nil {

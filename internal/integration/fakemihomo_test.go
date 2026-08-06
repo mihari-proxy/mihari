@@ -27,7 +27,7 @@ func TestMain(m *testing.M) {
 func runFakeMihomo(arguments []string) int {
 	for _, argument := range arguments {
 		if argument == "-v" {
-			fmt.Fprintln(os.Stdout, "Mihomo Meta v1.19.0")
+			_, _ = fmt.Fprintln(os.Stdout, "Mihomo Meta v1.19.0")
 			return 0
 		}
 	}

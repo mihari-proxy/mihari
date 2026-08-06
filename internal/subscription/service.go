@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -52,7 +53,6 @@ type Receipt struct {
 	hadCache     bool
 	wroteCache   bool
 	profileID    string
-	generatedNow bool
 }
 
 func Open(options ServiceOptions) (*Service, error) {
@@ -203,12 +203,10 @@ func (s *Service) CommitRefresh(prepared PreparedRefresh) (Receipt, error) {
 		profile.Expire = info.Expire
 	}
 	if err := after.Normalize(); err != nil {
-		s.restoreCache(cachePath, cacheBefore, hadCache, wroteCache)
-		return Receipt{}, err
+		return Receipt{}, s.failAfterRestore(err, cachePath, cacheBefore, hadCache, wroteCache)
 	}
 	if err := Save(s.catalogPath, after); err != nil {
-		s.restoreCache(cachePath, cacheBefore, hadCache, wroteCache)
-		return Receipt{}, err
+		return Receipt{}, s.failAfterRestore(err, cachePath, cacheBefore, hadCache, wroteCache)
 	}
 	s.catalog = after
 	return Receipt{Before: before, After: after.Clone(), cachePath: cachePath, cacheBefore: cacheBefore, hadCache: hadCache, wroteCache: wroteCache, profileID: profile.ID}, nil
@@ -251,6 +249,15 @@ func (s *Service) ReadCache(id string) ([]byte, Document, error) {
 	}
 	document, err := ParseDocument(content)
 	return content, document, err
+}
+
+// failAfterRestore returns original, joined with the cache rollback error when
+// the rollback itself fails, so a failed refresh never hides a failed restore.
+func (s *Service) failAfterRestore(original error, path string, content []byte, existed, changed bool) error {
+	if err := s.restoreCache(path, content, existed, changed); err != nil {
+		return errors.Join(original, fmt.Errorf("restore subscription cache: %w", err))
+	}
+	return original
 }
 
 func (s *Service) restoreCache(path string, content []byte, existed, changed bool) error {

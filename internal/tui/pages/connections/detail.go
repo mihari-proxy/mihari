@@ -67,11 +67,12 @@ func (d *Detail) View(width, height int) string {
 		}
 	}
 	body := d.overview()
-	if d.tab == 1 {
+	switch d.tab {
+	case 1:
 		if raw, err := json.MarshalIndent(d.connection, "", "  "); err == nil {
 			body = string(raw)
 		}
-	} else if d.tab == 2 {
+	case 2:
 		lines := make([]string, len(d.connection.Chains))
 		for index, hop := range d.connection.Chains {
 			lines[index] = strings.Repeat("  ", index) + "\u2192 " + ui.DisplayProxyName(hop)

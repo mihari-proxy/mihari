@@ -543,7 +543,7 @@ func TestGatewayConfigPatchAllowlistTUN(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ = io.ReadAll(resp.Body)
+	_, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusNoContent {
 		t.Fatal("empty patch must not succeed")

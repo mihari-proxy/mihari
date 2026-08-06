@@ -1,13 +1,45 @@
+version: "2"
+
 run:
-  timeout: 5m
   modules-download-mode: readonly
 
 linters:
+  default: standard
   enable:
-    - govet         # go vet
-    - ineffassign   # 检测无效赋值
-    - unused        # 未使用的代码
+    - ineffassign # 检测无效赋值
+    - unused      # 未使用的代码
+  settings:
+    errcheck:
+      exclude-functions:
+        # Deferred teardown during shutdown: the error is not actionable.
+        # Note: errcheck matches types.Func.FullName, so third-party packages
+        # use their full import path, and concrete types need the
+        # (*pkg.Type).Method form (interface names only match interface-typed
+        # receivers, e.g. resp.Body is io.ReadCloser).
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (*archive/zip.ReadCloser).Close
+        - (*compress/gzip.Reader).Close
+        - (net.Listener).Close
+        - (net.Conn).Close
+        - (*github.com/coder/websocket.Conn).CloseNow
+        - (*github.com/oschwald/maxminddb-golang/v2.Reader).Close
+        - (*github.com/mihari-proxy/mihari/internal/geoip.Service).Close
+        - (golang.org/x/sys/windows.Token).Close
+        - (golang.org/x/sys/windows/registry.Key).Close
+        - (*golang.org/x/sys/windows/svc/mgr.Mgr).Disconnect
+        - (*golang.org/x/sys/windows/svc/mgr.Service).Close
+        # Best-effort cleanup on error paths.
+        - os.Remove
+        - os.RemoveAll
+        # OS handle close never fails meaningfully on this code path.
+        - golang.org/x/sys/windows.CloseHandle
 
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
+  exclude-rules:
+    # QF1001 (De Morgan rewrite) is a stylistic suggestion; the rewritten
+    # boolean is no clearer than the original in our cases.
+    - linters: [staticcheck]
+      text: QF1001

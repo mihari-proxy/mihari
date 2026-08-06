@@ -495,17 +495,6 @@ func wrapText(value string, width int) []string {
 	return lines
 }
 
-func truncate(value string, width int) string {
-	runes := []rune(value)
-	if len(runes) <= width {
-		return value
-	}
-	if width <= 1 {
-		return string(runes[:max(0, width)])
-	}
-	return string(runes[:width-1]) + "…"
-}
-
 func cycleValue(current string, values []string) string {
 	if current == "" {
 		return values[0]

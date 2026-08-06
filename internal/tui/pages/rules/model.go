@@ -758,17 +758,6 @@ func valueOr(value, fallback string) string {
 	return value
 }
 
-func truncate(value string, width int) string {
-	runes := []rune(value)
-	if len(runes) <= width {
-		return value
-	}
-	if width <= 1 {
-		return string(runes[:width])
-	}
-	return string(runes[:width-1]) + "…"
-}
-
 func ruleValues(rules []protocol.Rule, value func(protocol.Rule) string) []string {
 	values := make([]string, 0)
 	seen := make(map[string]struct{})

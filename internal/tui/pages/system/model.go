@@ -809,7 +809,7 @@ func (m *Model) panelEndpointRow(id, label, webAddr string) (row, bool) {
 	if m.webGUILoaded && !m.webGUIErr && !webGUIPanelInstalled(m.webGUI, id) {
 		return row{}, false
 	}
-	value := ui.UnavailableTitle
+	var value string
 	switch {
 	case m.webGUIErr:
 		value = ui.UnavailableTitle

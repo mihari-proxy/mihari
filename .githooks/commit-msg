@@ -1,0 +1,26 @@
+#!/bin/sh
+# commit-msg hook — enforce Developer Certificate of Origin (DCO).
+#
+# Every commit must carry a `Signed-off-by: Name <email>` trailer, matching
+# the check in .github/workflows/dco.yml. If the trailer is missing it is
+# appended from git user.name / user.email, so a plain `git commit` is enough;
+# use `git commit --no-verify` only if you know what you are doing.
+#
+# Install with: git config core.hooksPath .githooks
+
+name=$(git config user.name)
+email=$(git config user.email)
+if [ -z "$name" ] || [ -z "$email" ]; then
+    echo "commit-msg: git user.name and user.email must be set for DCO sign-off" >&2
+    echo "commit-msg:   git config user.name \"Your Name\"" >&2
+    echo "commit-msg:   git config user.email \"you@example.com\"" >&2
+    exit 1
+fi
+
+if ! grep -qi '^Signed-off-by:' "$1"; then
+    trailer="Signed-off-by: $name <$email>"
+    git interpret-trailers --if-exists=doNothing --trailer "$trailer" "$1" > "$1.dco.tmp" || exit 1
+    mv "$1.dco.tmp" "$1"
+    echo "commit-msg: appended $trailer"
+fi
+exit 0

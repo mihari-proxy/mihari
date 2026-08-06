@@ -145,7 +145,7 @@ func TestConfirmationActionResultRoutesToOriginPageWithoutRetry(t *testing.T) {
 	model.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageSystem}
 	model.mutationsEnabled = true
 	model.status.Capabilities = []string{protocol.CapabilityCore}
-	updated, command := model.Update(ui.ActionIntentMsg{
+	updated, _ := model.Update(ui.ActionIntentMsg{
 		Action: ui.ActionRestartCore, Page: ui.PageSystem, Capability: protocol.CapabilityCore, Key: "restart",
 		Title: "Restart", Object: "core", Impact: "interrupt", Rollback: "policy",
 		Execute: func() tea.Msg { executes++; return asyncMarkerMsg{} },
@@ -155,7 +155,7 @@ func TestConfirmationActionResultRoutesToOriginPageWithoutRetry(t *testing.T) {
 		t.Fatal("confirmation modal did not open")
 	}
 	model.modal.selected = 0
-	updated, command = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(Model)
 	// Enter queues actionExecuteMsg; apply it to enter pending without completing yet.
 	if command == nil {

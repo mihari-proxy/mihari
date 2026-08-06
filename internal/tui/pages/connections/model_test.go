@@ -244,11 +244,9 @@ func TestView_ControlStripHighlightsActiveWhenContentFocused(t *testing.T) {
 	railView := model.View()
 	railControl := sectionBodyLine(railView, 0)
 	// Section border is styled; strip ANSI from the border line itself. The control
-	// body chips must stay plain while the rail owns focus.
-	if strings.Contains(stripConnANSI(railControl), "Columns") && strings.Contains(railControl, "\x1b[1;") {
-		// Bold accent (ControlActive) should not appear on chips while unfocused.
-		// Border ANSI alone is fine — only chip accent is the contract.
-	}
+	// body chips must stay plain while the rail owns focus. Bold accent
+	// (ControlActive) must not appear on chips while unfocused — border ANSI
+	// alone is fine, only chip accent is the contract.
 	// Active chip uses bold+accent when content focused; plain chips have no bold.
 	model.SetContentFocused(true)
 	focusedControl := sectionBodyLine(model.View(), 0)

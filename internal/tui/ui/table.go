@@ -82,17 +82,14 @@ func FitColumnWidths(cols []TableColumn, total, gap int) []int {
 	if flexTotal == 0 {
 		return widths
 	}
-	remain := budget - fixedSum
-	// remain already accounts for fixed columns only; flex mins are inside widths.
-	// Recompute remain after assigning flex mins.
+	// fixedSum above included only Flex==0; total assigned so far = fixedSum + flexMinSum.
 	flexMinSum := 0
 	for i, col := range cols {
 		if col.Flex > 0 {
 			flexMinSum += widths[i]
 		}
 	}
-	// fixedSum above included only Flex==0; total assigned so far = fixedSum + flexMinSum.
-	remain = budget - fixedSum - flexMinSum
+	remain := budget - fixedSum - flexMinSum
 	if remain < 0 {
 		// Shrink flex columns proportionally toward 1 if over budget.
 		need := fixedSum + flexMinSum - budget

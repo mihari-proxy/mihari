@@ -892,14 +892,6 @@ func valueOr(value, fallback string) string {
 	return value
 }
 
-func truncate(value string, width int) string {
-	runes := []rune(value)
-	if len(runes) <= width {
-		return value
-	}
-	return string(runes[:width-1]) + "…"
-}
-
 var fallbackOperationID atomic.Uint64
 
 func defaultOperationID() string {
