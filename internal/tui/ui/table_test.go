@@ -50,7 +50,12 @@ func TestPadCell_LeftRightAndTruncate(t *testing.T) {
 
 func TestRenderHeaderRow_UsesTableHeaderAndSeparator(t *testing.T) {
 	theme := DefaultTheme()
-	header, rule := RenderHeaderRow(theme, []string{"Time", "Level", "Message"}, []int{8, 7, 20}, 2, -1, false)
+	cols := []TableColumn{
+		{ID: "time", Title: "Time", MinWidth: 8, MaxWidth: 8, Flex: 0},
+		{ID: "level", Title: "Level", MinWidth: 7, MaxWidth: 8, Flex: 0},
+		{ID: "message", Title: "Message", MinWidth: 20, Flex: 1},
+	}
+	header, rule := RenderHeaderRow(theme, cols, []int{8, 7, 20}, 2, -1, false)
 	if lipgloss.Width(header) == 0 {
 		t.Fatal("empty header")
 	}

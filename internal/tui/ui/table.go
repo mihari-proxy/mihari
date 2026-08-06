@@ -242,14 +242,14 @@ func JoinCells(cells []string, gap int) string {
 }
 
 // RenderHeaderRow builds a TableHeader-styled header and a muted rule line.
-// focusedIndex < 0 means no focused column. Returns (headerLine, ruleLine).
-func RenderHeaderRow(theme Theme, titles []string, widths []int, gap, focusedIndex int, contentFocused bool) (string, string) {
-	n := min(len(titles), len(widths))
+// Titles and alignment come from the column definitions; focusedIndex < 0
+// means no focused column. Returns (headerLine, ruleLine).
+func RenderHeaderRow(theme Theme, cols []TableColumn, widths []int, gap, focusedIndex int, contentFocused bool) (string, string) {
+	n := min(len(cols), len(widths))
 	cells := make([]string, n)
 	total := gap * max(0, n-1)
 	for i := 0; i < n; i++ {
-		label := titles[i]
-		padded := PadCell(label, widths[i], AlignLeft)
+		padded := PadCell(cols[i].Title, widths[i], cols[i].Align)
 		if contentFocused && focusedIndex == i {
 			cells[i] = theme.ControlActive.UnsetPadding().Render(padded)
 		} else {

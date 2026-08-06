@@ -219,9 +219,7 @@ func (m *Model) View() string {
 	controls := ui.RenderBorderedSection(m.theme, ui.ControlsSectionTitle, controlsBody, inner)
 
 	widths := m.logColumnWidths()
-	header, rule := ui.RenderHeaderRow(m.theme,
-		[]string{ui.TimeLabel, ui.LevelLabel, ui.MessageLabel},
-		widths, logColGap, -1, false)
+	header, rule := ui.RenderHeaderRow(m.theme, m.logColumns(), widths, logColGap, -1, false)
 	// Indent header under focus marker column so it lines up with data.
 	indent := "  "
 	listLines := []string{indent + header, indent + rule}
@@ -229,7 +227,7 @@ func (m *Model) View() string {
 	if len(entries) == 0 {
 		listLines = append(listLines, m.theme.Muted.Render(ui.NoMatchingLogs))
 	} else {
-		start, end := m.visibleWindow(len(entries))
+		start, end := ui.VisibleWindow(len(entries), m.height, logChrome, m.following, m.focused)
 		for index := start; index < end; index++ {
 			listLines = append(listLines, m.renderEntry(entries[index], index == m.focused && m.focus == focusRow)...)
 		}
@@ -252,15 +250,19 @@ func (m *Model) layoutWidth() int {
 	return 100
 }
 
+func (m *Model) logColumns() []ui.TableColumn {
+	return []ui.TableColumn{
+		{ID: "time", Title: ui.TimeLabel, MinWidth: 8, MaxWidth: 8, Flex: 0},
+		{ID: "level", Title: ui.LevelLabel, MinWidth: 7, MaxWidth: 8, Flex: 0},
+		{ID: "message", Title: ui.MessageLabel, MinWidth: 8, Flex: 1},
+	}
+}
+
 func (m *Model) logColumnWidths() []int {
 	// Fit columns inside the Logs section body text width.
 	textW := ui.SectionTextWidth(ui.FullSectionInner(m.layoutWidth()))
 	avail := max(20, textW-2) // focus marker budget
-	return ui.FitColumnWidths([]ui.TableColumn{
-		{ID: "time", MinWidth: 8, MaxWidth: 8, Flex: 0},
-		{ID: "level", MinWidth: 7, MaxWidth: 8, Flex: 0},
-		{ID: "message", MinWidth: 8, Flex: 1},
-	}, avail, logColGap)
+	return ui.FitColumnWidths(m.logColumns(), avail, logColGap)
 }
 
 func (m *Model) visibleEntries() []Entry {
@@ -288,22 +290,10 @@ func (m *Model) visibleEntries() []Entry {
 	return result
 }
 
-func (m *Model) visibleWindow(count int) (int, int) {
-	// Dual-section chrome:
-	// Controls: top + control + search + bottom = 4 lines
-	// Logs:     top + header + rule + bottom = 4 lines (data rows extra)
-	// Leave remaining height for log entry rows.
-	const sectionChrome = 8
-	rows := max(1, m.height-sectionChrome)
-	if count <= rows {
-		return 0, count
-	}
-	if m.following {
-		return count - rows, count
-	}
-	start := min(max(0, m.focused-rows+1), count-rows)
-	return start, start + rows
-}
+// logChrome is the page chrome outside log rows: Controls section
+// (top + control + search + bottom = 4) plus Logs section (top + header +
+// rule + bottom = 4), leaving the rest for data rows.
+const logChrome = 8
 
 func (m *Model) renderEntry(entry Entry, focused bool) []string {
 	marker := ui.FocusPrefix(focused)

@@ -344,15 +344,13 @@ func (m *Model) activateControl() tea.Cmd {
 
 const rulesColGap = 2
 
-func (m *Model) rulesColumnSpec() ([]ui.TableColumn, []string) {
-	cols := []ui.TableColumn{
-		{ID: "num", MinWidth: 4, MaxWidth: 4, Flex: 0, Align: ui.AlignRight},
-		{ID: "type", MinWidth: 10, MaxWidth: 18, Flex: 0},
-		{ID: "payload", MinWidth: 12, Flex: 3},
-		{ID: "target", MinWidth: 8, MaxWidth: 16, Flex: 1},
+func (m *Model) rulesColumnSpec() []ui.TableColumn {
+	return []ui.TableColumn{
+		{ID: "num", Title: "#", MinWidth: 4, MaxWidth: 4, Flex: 0, Align: ui.AlignRight},
+		{ID: "type", Title: ui.TypeLabel, MinWidth: 10, MaxWidth: 18, Flex: 0},
+		{ID: "payload", Title: ui.PayloadLabel, MinWidth: 12, Flex: 3},
+		{ID: "target", Title: ui.TargetLabel, MinWidth: 8, MaxWidth: 16, Flex: 1},
 	}
-	titles := []string{"#", ui.TypeLabel, ui.PayloadLabel, ui.TargetLabel}
-	return cols, titles
 }
 
 func (m *Model) layoutWidth() int {
@@ -367,10 +365,10 @@ func (m *Model) sectionTextWidth() int {
 }
 
 func (m *Model) renderRules() []string {
-	cols, titles := m.rulesColumnSpec()
+	cols := m.rulesColumnSpec()
 	// Fit columns inside the list section body (focus marker budget).
 	widths := ui.FitColumnWidths(cols, max(24, m.sectionTextWidth()-2), rulesColGap)
-	header, ruleLine := ui.RenderHeaderRow(m.theme, titles, widths, rulesColGap, -1, false)
+	header, ruleLine := ui.RenderHeaderRow(m.theme, cols, widths, rulesColGap, -1, false)
 	lines := []string{"  " + header, "  " + ruleLine}
 	indexes := m.VisibleIndexes()
 	if len(indexes) == 0 {
@@ -394,31 +392,31 @@ func (m *Model) renderRules() []string {
 	return lines
 }
 
-func (m *Model) providerColumnSpec() ([]ui.TableColumn, []string) {
+func (m *Model) providerColumnSpec() []ui.TableColumn {
 	// Light C: compact drops behavior/format/updated.
 	if ui.ClassifyContentWidth(m.layoutWidth()) == ui.ContentCompact {
 		return []ui.TableColumn{
-			{ID: "name", MinWidth: 10, Flex: 2},
-			{ID: "type", MinWidth: 6, MaxWidth: 10, Flex: 0},
-			{ID: "count", MinWidth: 5, MaxWidth: 6, Flex: 0, Align: ui.AlignRight},
-			{ID: "status", MinWidth: 8, MaxWidth: 12, Flex: 1},
-		}, []string{ui.NameLabel, ui.TypeLabel, ui.RulesCountLabel, ui.StatusLabel}
+			{ID: "name", Title: ui.NameLabel, MinWidth: 10, Flex: 2},
+			{ID: "type", Title: ui.TypeLabel, MinWidth: 6, MaxWidth: 10, Flex: 0},
+			{ID: "count", Title: ui.RulesCountLabel, MinWidth: 5, MaxWidth: 6, Flex: 0, Align: ui.AlignRight},
+			{ID: "status", Title: ui.StatusLabel, MinWidth: 8, MaxWidth: 12, Flex: 1},
+		}
 	}
 	return []ui.TableColumn{
-		{ID: "name", MinWidth: 10, Flex: 2},
-		{ID: "type", MinWidth: 6, MaxWidth: 10, Flex: 0},
-		{ID: "behavior", MinWidth: 8, MaxWidth: 12, Flex: 0},
-		{ID: "format", MinWidth: 6, MaxWidth: 10, Flex: 0},
-		{ID: "count", MinWidth: 5, MaxWidth: 6, Flex: 0, Align: ui.AlignRight},
-		{ID: "updated", MinWidth: 14, MaxWidth: 16, Flex: 0},
-		{ID: "status", MinWidth: 8, MaxWidth: 12, Flex: 1},
-	}, []string{ui.NameLabel, ui.TypeLabel, ui.BehaviorLabel, ui.FormatLabel, ui.RulesCountLabel, ui.UpdatedLabel, ui.StatusLabel}
+		{ID: "name", Title: ui.NameLabel, MinWidth: 10, Flex: 2},
+		{ID: "type", Title: ui.TypeLabel, MinWidth: 6, MaxWidth: 10, Flex: 0},
+		{ID: "behavior", Title: ui.BehaviorLabel, MinWidth: 8, MaxWidth: 12, Flex: 0},
+		{ID: "format", Title: ui.FormatLabel, MinWidth: 6, MaxWidth: 10, Flex: 0},
+		{ID: "count", Title: ui.RulesCountLabel, MinWidth: 5, MaxWidth: 6, Flex: 0, Align: ui.AlignRight},
+		{ID: "updated", Title: ui.UpdatedLabel, MinWidth: 14, MaxWidth: 16, Flex: 0},
+		{ID: "status", Title: ui.StatusLabel, MinWidth: 8, MaxWidth: 12, Flex: 1},
+	}
 }
 
 func (m *Model) renderProviders() []string {
-	cols, titles := m.providerColumnSpec()
+	cols := m.providerColumnSpec()
 	widths := ui.FitColumnWidths(cols, max(24, m.sectionTextWidth()-2), rulesColGap)
-	header, ruleLine := ui.RenderHeaderRow(m.theme, titles, widths, rulesColGap, -1, false)
+	header, ruleLine := ui.RenderHeaderRow(m.theme, cols, widths, rulesColGap, -1, false)
 	lines := []string{"  " + header, "  " + ruleLine}
 	indexes := m.visibleProviderIndexes()
 	if len(indexes) == 0 {
