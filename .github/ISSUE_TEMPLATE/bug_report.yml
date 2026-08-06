@@ -1,0 +1,72 @@
+name: Bug 报告
+description: 报告一个可复现的问题
+title: "[bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢报告问题！请先搜索 [已有 Issues](https://github.com/LeeShunEE/mihari/issues) 确认没有重复。
+        注意：**安全漏洞请不要在这里报告**，请使用 [Security Advisories](https://github.com/LeeShunEE/mihari/security/advisories) 私密报告。
+  - type: input
+    id: version
+    attributes:
+      label: mihari 版本
+      description: 运行 `mihari self version` 或 `mihari status` 的输出
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台
+      options:
+        - Windows amd64
+        - Windows arm64
+        - Linux amd64
+        - Linux arm64
+        - macOS amd64
+        - macOS arm64
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: 使用方式
+      options:
+        - CLI 命令
+        - TUI
+        - Web GUI 面板
+        - 系统服务
+        - 安装/更新脚本
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请给出完整可复现的步骤
+      placeholder: |
+        1. 运行 `mihari daemon`
+        2. 执行 ...
+        3. 观察到 ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+      description: 附上输出、错误信息、日志（注意不要把订阅 URL / token 贴出来）
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: 其他上下文
+      description: 日志文件、截图、相关配置（脱敏后）等

@@ -58,33 +58,33 @@ const (
 var allColumnIDs = []string{"host", "traffic", "network", "rule", "start", "process", "chain", "source", "destination", "upload", "download"}
 
 type Model struct {
-	client           Client
-	newOperationID   func() string
-	history          *History
-	dataset          datasetKind
-	focus            pageFocus
-	controlIndex     int
-	headerIndex      int
-	source           string
-	query            string
-	queryCursor      int
-	searching        bool
-	paused           bool
-	pending          *protocol.ConnectionList
-	pendingAt        time.Time
-	columns          []string
-	preferenceRev    uint64
-	sortColumn       string
-	sortDirection    sortDirection
-	detail           *Detail
-	columnsOpen      bool
-	columnCursor     int
-	columnDraft      map[string]bool
-	closing          map[string]bool
-	contentFocused   bool
-	width            int
-	height           int
-	theme            ui.Theme
+	client         Client
+	newOperationID func() string
+	history        *History
+	dataset        datasetKind
+	focus          pageFocus
+	controlIndex   int
+	headerIndex    int
+	source         string
+	query          string
+	queryCursor    int
+	searching      bool
+	paused         bool
+	pending        *protocol.ConnectionList
+	pendingAt      time.Time
+	columns        []string
+	preferenceRev  uint64
+	sortColumn     string
+	sortDirection  sortDirection
+	detail         *Detail
+	columnsOpen    bool
+	columnCursor   int
+	columnDraft    map[string]bool
+	closing        map[string]bool
+	contentFocused bool
+	width          int
+	height         int
+	theme          ui.Theme
 }
 
 type closeResultMsg struct {

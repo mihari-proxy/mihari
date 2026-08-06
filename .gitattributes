@@ -1,0 +1,15 @@
+# Normalize line endings. Default everything to LF in the repo and on checkout
+# so shell scripts and Go files stay LF regardless of the host OS.
+* text=auto eol=lf
+
+# PowerShell is a Windows citizen; keep CRLF for it.
+*.ps1 text eol=crlf
+
+# Shell scripts must be LF or they break under bash.
+*.sh text eol=lf
+
+# Treat binaries as binary (no EOL munging) if any are ever added.
+*.gz binary
+*.zip binary
+*.png binary
+*.exe binary
