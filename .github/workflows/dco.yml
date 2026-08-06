@@ -1,0 +1,42 @@
+name: DCO
+
+on:
+  pull_request:
+  # Only run on branch pushes. Tag pushes have a zero SHA for event.before, which
+  # makes the rev-list range invalid, and tags carry no new commits to check.
+  push:
+    branches:
+      - '**'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check DCO
+        run: |
+          # Check that all commits have Signed-off-by
+          # --no-merges skips merge commits: on a pull_request the workflow runs
+          # against a GitHub-generated merge commit that has no Signed-off-by.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            commits=$(git rev-list --no-merges ${{ github.event.before }}..${{ github.sha }})
+          else
+            commits=$(git rev-list --no-merges origin/${{ github.base_ref }}..HEAD)
+          fi
+
+          for commit in $commits; do
+            message=$(git log --format=%B -n 1 $commit)
+            if ! echo "$message" | grep -q "^Signed-off-by:"; then
+              echo "Commit $commit is missing Signed-off-by line"
+              echo "Message: $message"
+              exit 1
+            fi
+          done
+
+          echo "All commits have proper DCO sign-off"
