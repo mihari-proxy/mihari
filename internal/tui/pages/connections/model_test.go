@@ -50,20 +50,30 @@ func TestModel_ControlRowAndDetailsPreserveFullChain(t *testing.T) {
 		Metadata: protocol.ConnectionMetadata{Host: "chatgpt.com", SourceIP: "127.0.0.1"},
 	}}}, time.Unix(1, 0))
 	model.focus = pageFocus{kind: focusRow, rowID: "one"}
-	model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	// List mode: controls + single-line table with the chain column visible.
 	view := model.View()
 	for _, want := range []string{"Active 1", "Source IP: All", "Columns", "Pause"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view does not contain %q: %s", want, view)
 		}
 	}
-	// Single-line table: the chain column truncates in the list; the model
-	// keeps the full chain (the detail pane shows it when scrolled).
 	if !strings.Contains(view, "GLOBAL") {
 		t.Fatalf("chain column missing: %s", view)
 	}
 	if got := strings.Join(model.visibleRows()[0].Chains, " / "); got != "GLOBAL / Streaming / Auto Select / Japan 01" {
 		t.Fatalf("model chain=%q", got)
+	}
+	// Detail replaces the whole page (design C1); the pane shows the chain
+	// once scrolled into view.
+	model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	view = model.View()
+	if strings.Contains(view, "Active 1") {
+		t.Fatalf("detail should replace the list: %s", view)
+	}
+	model.detail.scroll = 6
+	view = model.View()
+	if !strings.Contains(view, "GLOBAL → Streaming → Auto Select → Japan 01") {
+		t.Fatalf("detail should show the full chain: %s", view)
 	}
 }
 
