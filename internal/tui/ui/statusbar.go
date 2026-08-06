@@ -103,24 +103,10 @@ func RenderStatusBar(theme Theme, data StatusBarData, width int, compact bool) s
 }
 
 func renderRightStatus(theme Theme, label string) string {
-	lower := strings.ToLower(label)
-	style := theme.Warning
-	switch {
-	case strings.Contains(lower, "reconnect"):
-		style = theme.Warning
-	case strings.Contains(lower, "offline"):
-		style = theme.Danger
-	case strings.Contains(lower, "not installed"), strings.Contains(lower, "stopped"):
-		style = theme.Warning
-	case strings.Contains(lower, "running") && strings.Contains(lower, "connected"):
-		// Healthy dual badge: service running + daemon connected.
-		style = theme.Success
-	case strings.Contains(lower, "connected") && !strings.Contains(lower, "reconnect"):
-		style = theme.Success
-	default:
-		style = theme.Warning
-	}
-	return style.Render(label)
+	// Color decision routes through the shared status-tone classifier so the bar
+	// agrees with every page (e.g. "not installed" → Neutral, "offline" → Danger,
+	// "Reconnecting" → Caution, "running · Connected" → Positive).
+	return ToneStyle(theme, ClassifyStatusTone(label)).Render(label)
 }
 
 func renderStatusCore(theme Theme, status, version string, compact bool) string {
@@ -145,15 +131,17 @@ func renderStatusCore(theme Theme, status, version string, compact bool) string 
 }
 
 func coreStatusGlyph(theme Theme, status string) (string, lipgloss.Style) {
+	// Glyphs stay (disconnect→○, reconnect→◌, else ●); only the color now flows
+	// from the shared tone classifier instead of hand-written substring matches.
 	lower := strings.ToLower(status)
+	glyph := statusCoreRunning
 	switch {
 	case strings.Contains(lower, "disconnect"):
-		return statusCoreOffline, theme.Danger
+		glyph = statusCoreOffline
 	case strings.Contains(lower, "reconnect"):
-		return statusCoreReconnect, theme.Warning
-	default:
-		return statusCoreRunning, theme.Success
+		glyph = statusCoreReconnect
 	}
+	return glyph, ToneStyle(theme, ClassifyStatusTone(status))
 }
 
 // formatCompactIEC renders a short IEC magnitude for compact status (e.g. 1.2M, 84M).

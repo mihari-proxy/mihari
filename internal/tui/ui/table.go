@@ -240,61 +240,45 @@ func StyleLogLevel(theme Theme, level string) string {
 	}
 }
 
-// StyleRuleType colors a Clash-style rule type token.
+// StyleRuleType colors a Clash-style rule type token. Rule TYPE is a category,
+// not a status: it stays one Info color so the column reads as a single band
+// (DOMAIN/IP/MATCH/PROCESS no longer get four divergent colors).
 func StyleRuleType(theme Theme, ruleType string) string {
 	label := strings.TrimSpace(ruleType)
 	if label == "" {
 		return theme.Muted.Render(MissingValue)
 	}
-	upper := strings.ToUpper(label)
-	switch {
-	case strings.Contains(upper, "DOMAIN"), strings.Contains(upper, "GEOSITE"), strings.HasPrefix(upper, "HOST"):
-		return theme.Info.Render(label)
-	case strings.Contains(upper, "IP"), strings.Contains(upper, "GEOIP"), strings.Contains(upper, "SRC"):
-		return theme.Warning.Render(label)
-	case strings.Contains(upper, "MATCH"), strings.Contains(upper, "FINAL"):
-		return lipgloss.NewStyle().Bold(true).Foreground(theme.ColorAccent).Render(label)
-	case strings.Contains(upper, "PROCESS"), strings.Contains(upper, "UID"), strings.Contains(upper, "PORT"):
-		return theme.Success.Render(label)
-	default:
-		return theme.Muted.Render(label)
-	}
+	return theme.Info.Render(label)
 }
 
-// StyleProxyTarget colors rule/proxy targets.
-func StyleProxyTarget(theme Theme, target string) string {
-	label := strings.TrimSpace(target)
-	if label == "" {
-		return theme.Muted.Render(MissingValue)
-	}
-	switch strings.ToUpper(label) {
-	case "DIRECT":
-		return theme.Muted.Render(label)
-	case "REJECT", "REJECT-DROP", "BLOCK":
-		return theme.Danger.Render(label)
-	case "PASS", "COMPATIBLE":
-		return theme.Warning.Render(label)
-	default:
-		return theme.Success.Render(label)
-	}
-}
-
-// StyleProviderStatus colors rule-provider status text.
+// StyleProviderStatus colors rule-provider status text through the shared tone
+// classifier so the whole shell agrees on what each status word means.
 func StyleProviderStatus(theme Theme, status string) string {
 	label := strings.TrimSpace(status)
 	if label == "" {
 		return theme.Muted.Render(MissingValue)
 	}
-	switch strings.ToLower(label) {
-	case "ready", "ok", "success", "healthy":
-		return theme.Success.Render(label)
-	case "pending", "updating", "loading", strings.ToLower(PendingLabel):
-		return theme.Warning.Render(label)
-	case "failed", "error", "unhealthy":
-		return theme.Danger.Render(label)
-	default:
-		return theme.Muted.Render(label)
+	return ToneStyle(theme, ClassifyStatusTone(label)).Render(label)
+}
+
+// StyleProxyTarget colors rule/proxy targets through the shared tone classifier
+// (DIRECT→Neutral, REJECT/BLOCK→Negative, PASS/COMPATIBLE→Caution, default
+// proxy→Positive). Behavior is unchanged; only the dispatch is unified.
+func StyleProxyTarget(theme Theme, target string) string {
+	label := strings.TrimSpace(target)
+	if label == "" {
+		return theme.Muted.Render(MissingValue)
 	}
+	tone := TonePositive
+	switch strings.ToUpper(label) {
+	case "DIRECT":
+		tone = ToneNeutral
+	case "REJECT", "REJECT-DROP", "BLOCK":
+		tone = ToneNegative
+	case "PASS", "COMPATIBLE":
+		tone = ToneCaution
+	}
+	return ToneStyle(theme, tone).Render(label)
 }
 
 // StyleTrafficPair formats colored UL/DL rate pair for connection primary lines.

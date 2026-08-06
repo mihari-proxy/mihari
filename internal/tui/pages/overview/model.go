@@ -62,24 +62,28 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 func (m *Model) View() string {
 	general := m.renderGeneralBody()
 
-	coreStatus := valueOr(m.snapshot.Core.Status, ui.UnknownLabel)
+	coreStatusRaw := valueOr(m.snapshot.Core.Status, ui.UnknownLabel)
+	coreStatus := ui.StatusDot(m.theme, ui.ClassifyStatusTone(coreStatusRaw), coreStatusRaw)
 	coreVersion := valueOr(m.snapshot.Core.Version, ui.UnknownLabel)
-	core := fmt.Sprintf("%s · %s\n%s %d", coreStatus, coreVersion, ui.PIDLabel, m.snapshot.Core.PID)
+	core := fmt.Sprintf("%s  %s\n%s %d", coreStatus, m.theme.Muted.Render(coreVersion), ui.PIDLabel, m.snapshot.Core.PID)
 
 	config := ui.ConfigNotAppliedLabel
 	if current := m.snapshot.Status.Config; current != nil {
-		config = fmt.Sprintf("%s\n%s %d · %s %d", valueOr(current.Status, ui.UnknownLabel),
+		configStatus := valueOr(current.Status, ui.UnknownLabel)
+		config = fmt.Sprintf("%s\n%s %d · %s %d", ui.StatusDot(m.theme, ui.ClassifyStatusTone(configStatus), configStatus),
 			ui.DesiredLabel, current.DesiredRevision, ui.ObservedLabel, current.ObservedRevision)
 		if current.LastError != "" {
-			config += "\n" + current.LastError
+			config += "\n" + ui.ToneStyle(m.theme, ui.ToneNegative).Render(current.LastError)
 		}
 	}
 
 	subscription := renderActiveSubscription(m.snapshot.Subscriptions)
 
-	webGUI := ui.WebGUIUnavailable
+	var webGUI string
 	if slices.Contains(m.snapshot.Status.Capabilities, protocol.CapabilityWebGUI) {
-		webGUI = ui.AvailableLabel
+		webGUI = ui.StatusDot(m.theme, ui.TonePositive, ui.AvailableLabel)
+	} else {
+		webGUI = ui.ToneStyle(m.theme, ui.ToneNeutral).Render(ui.WebGUIUnavailable)
 	}
 
 	operations := ui.NoRecentOperations
@@ -87,7 +91,8 @@ func (m *Model) View() string {
 		lines := make([]string, 0, min(5, len(m.snapshot.Operations)))
 		start := max(0, len(m.snapshot.Operations)-5)
 		for _, operation := range m.snapshot.Operations[start:] {
-			lines = append(lines, fmt.Sprintf("%s · %s", valueOr(operation.Object, operation.ID), operation.State))
+			state := ui.ToneStyle(m.theme, ui.ClassifyStatusTone(operation.State)).Render(operation.State)
+			lines = append(lines, fmt.Sprintf("%s · %s", valueOr(operation.Object, operation.ID), state))
 		}
 		operations = strings.Join(lines, "\n")
 	}
@@ -144,10 +149,10 @@ func (m *Model) View() string {
 func (m *Model) renderGeneralBody() string {
 	// Two-column-ish label layout for readability inside the bordered card.
 	rows := []struct{ label, value string }{
-		{ui.OverviewServiceLabel, formatServiceValue(m.snapshot)},
+		{ui.OverviewServiceLabel, formatServiceValue(m.theme, m.snapshot)},
 		{ui.OverviewMihariLabel, formatMihariVersion(m.snapshot.MihariVersion)},
-		{ui.OverviewSysProxyLabel, formatSysProxyValue(m.snapshot)},
-		{ui.OverviewTunLabel, formatTunValue(m.snapshot)},
+		{ui.OverviewSysProxyLabel, formatSysProxyValue(m.theme, m.snapshot)},
+		{ui.OverviewTunLabel, formatTunValue(m.theme, m.snapshot)},
 	}
 	const labelWidth = 9 // longest label "SysProxy"
 	lines := make([]string, 0, len(rows))
@@ -158,20 +163,22 @@ func (m *Model) renderGeneralBody() string {
 	return strings.Join(lines, "\n")
 }
 
-func formatServiceValue(snap Snapshot) string {
+func formatServiceValue(theme ui.Theme, snap Snapshot) string {
 	if !snap.ServiceLoaded {
 		return ui.OverviewValueDash
 	}
+	var status string
 	switch snap.ServiceStatus {
 	case service.StatusNotInstalled:
-		return string(service.StatusNotInstalled)
+		status = string(service.StatusNotInstalled)
 	case service.StatusStopped:
-		return string(service.StatusStopped)
+		status = string(service.StatusStopped)
 	case service.StatusRunning:
-		return string(service.StatusRunning)
+		status = string(service.StatusRunning)
 	default:
-		return string(service.StatusUnknown)
+		status = string(service.StatusUnknown)
 	}
+	return ui.StatusDot(theme, ui.ClassifyStatusTone(status), status)
 }
 
 func formatMihariVersion(version string) string {
@@ -185,42 +192,55 @@ func formatMihariVersion(version string) string {
 	return version
 }
 
-func formatSysProxyValue(snap Snapshot) string {
+func formatSysProxyValue(theme ui.Theme, snap Snapshot) string {
 	if !snap.Connected || snap.SystemProxy == nil {
 		return ui.OverviewValueDash
 	}
 	obs := snap.SystemProxy.Observed
+	var label string
+	tone := ui.ToneNeutral
 	switch {
 	case obs.Foreign:
-		return ui.OverviewValueForeign
+		label = ui.OverviewValueForeign
+		tone = ui.ToneCaution
 	case obs.Owned:
-		return ui.OverviewValueOwned
+		label = ui.OverviewValueOwned
+		tone = ui.TonePositive
 	case obs.Enabled:
-		return ui.OverviewValueOn
+		label = ui.OverviewValueOn
+		tone = ui.TonePositive
 	case snap.SystemProxy.Desired:
-		return ui.OverviewValueOn
+		label = ui.OverviewValueOn
+		tone = ui.TonePositive
 	default:
-		return ui.OverviewValueOff
+		label = ui.OverviewValueOff
 	}
+	return ui.StatusDot(theme, tone, label)
 }
 
-func formatTunValue(snap Snapshot) string {
+func formatTunValue(theme ui.Theme, snap Snapshot) string {
 	if !snap.Connected || snap.Tun == nil {
 		return ui.OverviewValueDash
 	}
+	var label string
+	tone := ui.ToneNeutral
 	if snap.Tun.LiveEnable != nil {
 		if *snap.Tun.LiveEnable {
+			tone = ui.TonePositive
 			if snap.Tun.Stack != "" {
-				return ui.OverviewValueOn + "/" + snap.Tun.Stack
+				label = ui.OverviewValueOn + "/" + snap.Tun.Stack
+			} else {
+				label = ui.OverviewValueOn
 			}
-			return ui.OverviewValueOn
+		} else {
+			label = ui.OverviewValueOff
 		}
-		return ui.OverviewValueOff
+	} else if snap.Tun.DesiredEnable {
+		label = ui.OverviewValueOn
+	} else {
+		label = ui.OverviewValueOff
 	}
-	if snap.Tun.DesiredEnable {
-		return ui.OverviewValueOn
-	}
-	return ui.OverviewValueOff
+	return ui.StatusDot(theme, tone, label)
 }
 
 func renderActiveSubscription(list protocol.SubscriptionList) string {

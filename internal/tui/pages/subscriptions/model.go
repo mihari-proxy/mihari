@@ -62,25 +62,49 @@ type row struct {
 	traffic     string
 	lastSuccess string
 	nextRefresh string
-	spinning    bool
+	loadTone    ui.StatusTone
+	stateTone   ui.StatusTone
 }
 
 func (r row) Render(theme ui.Theme) string {
-	active := fmt.Sprintf("%-6s", r.active)
+	active := ""
 	if strings.TrimSpace(r.active) == "●" {
-		// Dual-channel: glyph + Success color; pad after styled rune to keep columns stable.
-		active = theme.Success.Render("●") + "     "
-	}
-	load := r.load
-	if r.spinning {
-		load = theme.Warning.Render(load)
+		// Active selection marker stays a single Positive dot (no label) so it does
+		// not collide with the tone-colored state/load columns.
+		active = ui.StatusDot(theme, ui.TonePositive, "")
 	}
 	traffic := r.traffic
 	if traffic == "" {
 		traffic = ui.MissingValue
 	}
-	return fmt.Sprintf("%s  %-18s  %-9s  %-11s  %-18s  %-12s  %s",
-		active, truncate(r.name, 18), r.state, load, truncate(traffic, 18), r.lastSuccess, r.nextRefresh)
+	// Visible-width padding (ui.PadCell) so ANSI-styled cells keep their column.
+	const gap = "  "
+	cells := []string{
+		ui.PadCell(active, 6, ui.AlignLeft),
+		ui.PadCell(truncate(r.name, 18), 18, ui.AlignLeft),
+		ui.PadCell(ui.ToneStyle(theme, r.stateTone).Render(r.state), 9, ui.AlignLeft),
+		ui.PadCell(ui.ToneStyle(theme, r.loadTone).Render(r.load), 11, ui.AlignLeft),
+		ui.PadCell(truncate(traffic, 18), 18, ui.AlignLeft),
+		ui.PadCell(r.lastSuccess, 12, ui.AlignLeft),
+		ui.ToneStyle(theme, ui.ClassifyStatusTone(r.nextRefresh)).Render(r.nextRefresh),
+	}
+	return strings.Join(cells, gap)
+}
+
+// phaseTone maps a load phase onto a status tone so the Load column carries
+// meaning even when no spinner is running (Live=Positive, Failed=Negative,
+// intermediate/cache states=Caution, Disabled=Neutral).
+func phaseTone(phase loadPhase) ui.StatusTone {
+	switch phase {
+	case loadLive:
+		return ui.TonePositive
+	case loadFailed:
+		return ui.ToneNegative
+	case loadCached, loadMissing, loadStale, loadFetching, loadApplying, loadWorking:
+		return ui.ToneCaution
+	default:
+		return ui.ToneNeutral
+	}
 }
 
 // resolveLoadPhase maps catalog + local pending work onto intermediate load states.
@@ -144,7 +168,7 @@ func rowFrom(subscription protocol.Subscription, active bool, pending string, no
 		state = ui.EnabledLabel
 	}
 	phase := resolveLoadPhase(subscription, active, pending, now, globalInterval)
-	load, spinning := loadPhaseLabel(phase, clock)
+	load, _ := loadPhaseLabel(phase, clock)
 	interval := effectiveInterval(subscription.Interval, globalInterval)
 	stale := subscription.Cached && (subscription.LastError != "" || (!subscription.UpdatedAt.IsZero() && interval > 0 && !now.Before(subscription.UpdatedAt.Add(interval))))
 	lastSuccess := ui.MissingValue
@@ -166,10 +190,15 @@ func rowFrom(subscription protocol.Subscription, active bool, pending string, no
 	if active {
 		marker = "●"
 	}
+	stateTone := ui.ToneNeutral
+	if subscription.Enabled {
+		stateTone = ui.TonePositive
+	}
 	traffic := ui.FormatSubscriptionTraffic(subscription.Upload, subscription.Download, subscription.Total)
 	return row{
 		active: marker, name: subscription.Name, state: state, load: load,
-		traffic: traffic, lastSuccess: lastSuccess, nextRefresh: next, spinning: spinning,
+		traffic: traffic, lastSuccess: lastSuccess, nextRefresh: next,
+		loadTone: phaseTone(phase), stateTone: stateTone,
 	}
 }
 
@@ -703,16 +732,24 @@ func (m *Model) detailView() string {
 	if traffic == "" {
 		traffic = ui.MissingValue
 	}
+	// Status / Load / Last-error values carry a tone color; the rest stays plain.
+	statusValue := ui.ToneStyle(m.theme, ui.ClassifyStatusTone(enabledLabel(subscription.Enabled))).Render(enabledLabel(subscription.Enabled))
+	loadValue := ui.ToneStyle(m.theme, phaseTone(phase)).Render(load)
+	errorTone := ui.ToneNeutral
+	if subscription.LastError != "" {
+		errorTone = ui.ToneNegative
+	}
+	errorValue := ui.ToneStyle(m.theme, errorTone).Render(errorState)
 	return fmt.Sprintf("%s: %s\n%s: %s\n%s: %t\n%s: %s\n%s: %s\n%s: %t\n%s: %s\n%s: %s\n%s: %s\n\n%s",
 		ui.NameLabel, subscription.Name,
-		ui.StatusLabel, enabledLabel(subscription.Enabled),
+		ui.StatusLabel, statusValue,
 		ui.AutoRefreshLabel, subscription.AutoRefresh,
-		ui.LoadLabel, load,
+		ui.LoadLabel, loadValue,
 		ui.TrafficLabel, traffic,
 		ui.CacheLabel, subscription.Cached,
 		ui.IntervalLabel, valueOr(subscription.Interval, ui.GlobalLabel),
 		ui.LastUpdateLabel, formatTimestamp(subscription.UpdatedAt),
-		ui.LastErrorLabel, errorState,
+		ui.LastErrorLabel, errorValue,
 		ui.EscCloseHint)
 }
 
