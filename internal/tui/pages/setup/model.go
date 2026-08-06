@@ -52,6 +52,12 @@ type completeResultMsg struct {
 	err    error
 }
 
+// Err implements the shell's action-outcome contract so Setup completion is
+// classified Succeeded/Failed in the Recent operations ledger.
+func (m completeResultMsg) Err() error { return m.err }
+
+var _ interface{ Err() error } = completeResultMsg{}
+
 // CompletedMsg tells the root model to leave the standalone Setup route.
 type CompletedMsg struct{ Status protocol.OnboardingStatus }
 

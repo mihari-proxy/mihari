@@ -93,6 +93,12 @@ type providersUpdateAllResultMsg struct {
 	err      error
 }
 
+// Err implements the shell's action-outcome contract so bulk provider updates
+// are classified Succeeded/Failed in the Recent operations ledger.
+func (m providersUpdateAllResultMsg) Err() error { return m.err }
+
+var _ interface{ Err() error } = providersUpdateAllResultMsg{}
+
 func New(client Client, newOperationID func() string) *Model {
 	if newOperationID == nil {
 		newOperationID = defaultOperationID
