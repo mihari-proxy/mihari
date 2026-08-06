@@ -785,14 +785,16 @@ func (model *Model) spinnerCmdIfNeeded() tea.Cmd {
 func (model Model) statusBarData() ui.StatusBarData {
 	snap := model.monitor.Snapshot()
 	return ui.StatusBarData{
-		CoreStatus:   model.core.Status,
-		CoreVersion:  model.core.Version,
-		Subscription: activeSubscriptionName(model.subscriptions),
-		Connections:  snap.Connections,
-		UploadRate:   snap.UploadRate,
-		DownloadRate: snap.DownloadRate,
-		MemoryInUse:  snap.MemoryInUse,
-		RightStatus:  model.statusBarRightStatus(),
+		CoreStatus:          model.core.Status,
+		CoreVersion:         model.core.Version,
+		Subscription:        activeSubscriptionName(model.subscriptions),
+		SubscriptionCompact: activeSubscriptionNameCompact(model.subscriptions),
+		Connections:         snap.Connections,
+		UploadRate:          snap.UploadRate,
+		DownloadRate:        snap.DownloadRate,
+		MemoryInUse:         snap.MemoryInUse,
+		Stale:               snap.Stale,
+		RightStatus:         model.statusBarRightStatus(),
 	}
 }
 
@@ -846,9 +848,9 @@ func (model Model) daemonRightLabel() string {
 	return ui.StatusDaemonOffline
 }
 
-func activeSubscriptionName(list protocol.SubscriptionList) string {
+func activeSubscription(list protocol.SubscriptionList) (name string, upload, download, total int64) {
 	if list.ActiveID == "" {
-		return ""
+		return "", 0, 0, 0
 	}
 	for _, sub := range list.Subscriptions {
 		if sub.ID == list.ActiveID {
@@ -856,10 +858,26 @@ func activeSubscriptionName(list protocol.SubscriptionList) string {
 			if name == "" {
 				name = sub.ID
 			}
-			return ui.FormatSubscriptionLabel(name, sub.Upload, sub.Download, sub.Total)
+			return name, sub.Upload, sub.Download, sub.Total
 		}
 	}
-	return ""
+	return "", 0, 0, 0
+}
+
+func activeSubscriptionName(list protocol.SubscriptionList) string {
+	name, upload, download, total := activeSubscription(list)
+	if name == "" {
+		return ""
+	}
+	return ui.FormatSubscriptionLabel(name, upload, download, total)
+}
+
+func activeSubscriptionNameCompact(list protocol.SubscriptionList) string {
+	name, upload, download, total := activeSubscription(list)
+	if name == "" {
+		return ""
+	}
+	return ui.FormatSubscriptionLabelCompact(name, upload, download, total)
 }
 
 func (model Model) footerGlobalSegment() string {
