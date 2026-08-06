@@ -93,6 +93,16 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	if err != nil {
 		return nil, err
 	}
+	// A persisted active subscription already had its generated config installed
+	// into the runtime config file; without this the status API would report
+	// "Not applied" after every daemon restart until the next subscription op.
+	if catalog := subscriptions.Snapshot(); catalog.ActiveID != "" {
+		if index := catalog.Index(catalog.ActiveID); index >= 0 && catalog.Profiles[index].Generation > 0 {
+			snapshot := store.Load()
+			snapshot.Config = state.ConfigState{Status: "ok", DesiredRevision: snapshot.Revision + 1, ObservedRevision: snapshot.Revision + 1}
+			store.Store(snapshot)
+		}
+	}
 	tuiPreferences, err := preferences.Open(paths.TUIPreferences)
 	if err != nil {
 		return nil, err
