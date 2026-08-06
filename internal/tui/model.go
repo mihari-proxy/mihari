@@ -616,11 +616,13 @@ func (model *Model) syncOverview() {
 	if !ok {
 		return
 	}
+	monitorSnap := model.monitor.Snapshot()
 	snap := overview.Snapshot{
 		Status: model.status, Core: model.core, Subscriptions: model.subscriptions,
-		Monitor: model.monitor.Snapshot(), Operations: model.operations,
+		Monitor: monitorSnap, Operations: model.operations,
 		ServiceStatus: model.serviceStatus, ServiceLoaded: model.serviceLoaded,
 		Connected: model.connected, MihariVersion: buildinfo.Version,
+		Stale: monitorSnap.Stale,
 	}
 	if model.systemProxyOK {
 		proxy := model.systemProxy
