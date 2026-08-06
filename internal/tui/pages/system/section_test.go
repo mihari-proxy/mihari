@@ -35,11 +35,17 @@ func TestView_SectionGroups(t *testing.T) {
 	if !strings.Contains(view, "v0.4.0") || !strings.Contains(view, "v1.19.0") {
 		t.Fatalf("status values missing:\n%s", view)
 	}
-	// Each visible region carries its semantic border color: Daemon=info(75),
-	// core=accent(63), system service=warning(214).
-	for _, want := range []string{"38;5;75", "38;5;63", "38;5;214"} {
+	// Borders are globally constant: every section uses the surface border
+	// (240) with an accent (63) title. The old per-section palette
+	// (info 75 / warning 214) must be gone — color now means status, not region.
+	for _, want := range []string{"38;5;240", "38;5;63"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("missing section color %q:\n%s", want, view)
+			t.Fatalf("missing constant section color %q:\n%s", want, view)
+		}
+	}
+	for _, gone := range []string{"38;5;75", "38;5;214"} {
+		if strings.Contains(view, gone) {
+			t.Fatalf("section color %q should be gone (constant borders):\n%s", gone, view)
 		}
 	}
 }
