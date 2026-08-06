@@ -43,10 +43,33 @@ func drainCmd(t *testing.T, model *Model, cmd tea.Cmd) tea.Cmd {
 	return next
 }
 
+// testRowCols is the full subscription table definition used by row-level
+// tests; widths are generous so assertions see complete values.
+func testRowCols() []ui.TableColumn {
+	return []ui.TableColumn{
+		{ID: "name", Title: ui.NameLabel, MinWidth: 10, Flex: 3, Priority: 7},
+		{ID: "active", Title: ui.ActiveLabel, MinWidth: 6, Flex: 0, Priority: 6},
+		{ID: "state", Title: "State", MinWidth: 8, Flex: 0, Priority: 5},
+		{ID: "load", Title: ui.LoadLabel, MinWidth: 9, Flex: 0, Priority: 4},
+		{ID: "traffic", Title: ui.TrafficLabel, MinWidth: 11, Flex: 1, Priority: 3},
+		{ID: "lastSuccess", Title: ui.LastUpdateLabel, MinWidth: 11, Flex: 0, Priority: 2},
+		{ID: "nextRefresh", Title: ui.NextUpdateLabel, MinWidth: 11, Flex: 0, Priority: 1},
+	}
+}
+
+func renderTestRow(theme ui.Theme, row row) string {
+	cols := testRowCols()
+	widths := make([]int, len(cols))
+	for index, col := range cols {
+		widths[index] = max(col.MinWidth, 14)
+	}
+	return row.Render(theme, cols, widths)
+}
+
 func TestRows_DoNotExposeInternalGenerationOrURL(t *testing.T) {
 	now := time.Unix(100, 0)
 	row := rowFrom(protocol.Subscription{ID: "one", Name: "Main", Generation: 42, Cached: true, LastError: "https://example.test/?token=secret"}, false, "", now, now, "12h")
-	rendered := row.Render(ui.DefaultTheme())
+	rendered := renderTestRow(ui.DefaultTheme(), row)
 	for _, forbidden := range []string{"42", "example.test", "token", "secret", "http"} {
 		if strings.Contains(rendered, forbidden) {
 			t.Fatalf("row leaked %q: %s", forbidden, rendered)
@@ -61,10 +84,14 @@ func TestRows_RenderTrafficUsage(t *testing.T) {
 		Name: "kanata", Enabled: true, Cached: true, UpdatedAt: now.Add(-time.Hour),
 		Upload: 5 << 30, Download: 5 << 30, Total: 80 << 30,
 	}
-	got := rowFrom(sub, true, "", now, now, "12h").Render(theme)
-	want := ui.FormatSubscriptionTraffic(sub.Upload, sub.Download, sub.Total)
+	got := renderTestRow(theme, rowFrom(sub, true, "", now, now, "12h"))
+	// The column uses compact quota (9G/100G), not the full IEC form.
+	want := ui.FormatSubscriptionTrafficCompact(sub.Upload, sub.Download, sub.Total)
 	if !strings.Contains(got, want) {
-		t.Fatalf("row missing traffic %q:\n%s", want, got)
+		t.Fatalf("row missing compact traffic %q:\n%s", want, got)
+	}
+	if strings.Contains(got, ui.FormatSubscriptionTraffic(sub.Upload, sub.Download, sub.Total)) {
+		t.Fatalf("row should not use full traffic form:\n%s", got)
 	}
 	if !strings.Contains(got, "●") || !strings.Contains(got, "kanata") {
 		t.Fatalf("row missing basics:\n%s", got)
@@ -134,7 +161,7 @@ func TestRows_RenderLoadPhases(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := rowFrom(test.subscription, test.active, test.pending, now, clock, "12h").Render(theme)
+			got := renderTestRow(theme, rowFrom(test.subscription, test.active, test.pending, now, clock, "12h"))
 			for _, want := range test.want {
 				if !strings.Contains(got, want) {
 					t.Fatalf("row missing %q: %s", want, got)
@@ -197,7 +224,8 @@ func TestRefreshStartsBrailleLoadSpin(t *testing.T) {
 	model.pending["a"] = "refresh"
 	model.loadSpinClock = time.Unix(0, 0)
 	view := model.View()
-	if !strings.Contains(view, ui.LoadFetchingLabel) {
+	// Load column is 9 wide by design; "⠋ Fetching" truncates to "⠋ Fetchi…".
+	if !strings.Contains(view, "Fetch") || !strings.Contains(view, "…") {
 		t.Fatalf("view missing fetching label:\n%s", view)
 	}
 	if !strings.Contains(view, "⠋") {
