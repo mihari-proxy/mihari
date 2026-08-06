@@ -31,7 +31,7 @@ func (d *Detail) Update(message tea.Msg) bool {
 		return false
 	}
 	switch key.String() {
-	case "esc":
+	case "esc", "enter":
 		return true
 	case "left":
 		d.tab = max(0, d.tab-1)
@@ -80,14 +80,35 @@ func (d *Detail) View(width, height int) string {
 	}
 	lines := strings.Split(body, "\n")
 	visibleHeight := max(1, height-8)
+	// Scroll indicators (▴ / ▾ N more lines) each consume one body row.
 	start := min(d.scroll, max(0, len(lines)-visibleHeight))
 	end := min(len(lines), start+visibleHeight)
+	indicators := 0
+	if start > 0 {
+		indicators++
+	}
+	if end < len(lines) {
+		indicators++
+	}
+	if indicators > 0 {
+		contentRows := max(1, visibleHeight-indicators)
+		start = min(d.scroll, max(0, len(lines)-contentRows))
+		end = min(len(lines), start+contentRows)
+	}
+	bodyLines := make([]string, 0, end-start+2)
+	if start > 0 {
+		bodyLines = append(bodyLines, theme.Muted.Render("▴"))
+	}
+	bodyLines = append(bodyLines, lines[start:end]...)
+	if end < len(lines) {
+		bodyLines = append(bodyLines, theme.Muted.Render(fmt.Sprintf("▾ %d more lines", len(lines)-end)))
+	}
 	state := ""
 	if d.closed {
 		state = " - " + ui.ToneStyle(theme, ui.ClassifyStatusTone(ui.ConnectionsClosedLabel)).Render(ui.ConnectionsClosedLabel)
 	}
 	content := theme.Dialog.Width(min(84, max(36, width-4))).Render(
-		theme.Title.Render(ui.ConnectionDetailsTitle+state) + "\n" + strings.Join(tabs, "  ") + "\n\n" + strings.Join(lines[start:end], "\n"),
+		theme.Title.Render(ui.ConnectionDetailsTitle+state) + "\n" + strings.Join(tabs, "  ") + "\n\n" + strings.Join(bodyLines, "\n"),
 	)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, content)
 }
