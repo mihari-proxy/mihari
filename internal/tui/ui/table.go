@@ -35,6 +35,10 @@ type TableColumn struct {
 	MaxWidth int // 0 means unlimited
 	Flex     int // 0 means fixed at MinWidth (clamped by MaxWidth)
 	Align    Align
+	// Priority is the drop order when width runs out: larger survives longer.
+	// 0 means never dropped (always kept; the zero value is the safe default
+	// that degrades to plain FitColumnWidths shrinking).
+	Priority int
 }
 
 // ClassifyContentWidth returns Compact vs Full for the given content pane width.
