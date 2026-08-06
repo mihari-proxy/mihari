@@ -52,14 +52,22 @@ func TestModel_ControlRowAndDetailsPreserveFullChain(t *testing.T) {
 	model.focus = pageFocus{kind: focusRow, rowID: "one"}
 	model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	view := model.View()
-	for _, want := range []string{"Active 1", "Source IP: All", "Columns", "Pause", "GLOBAL \u2192 Streaming \u2192 Auto Select \u2192 Japan 01"} {
+	for _, want := range []string{"Active 1", "Source IP: All", "Columns", "Pause"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view does not contain %q: %s", want, view)
 		}
 	}
+	// Single-line table: the chain column truncates in the list; the model
+	// keeps the full chain (the detail pane shows it when scrolled).
+	if !strings.Contains(view, "GLOBAL") {
+		t.Fatalf("chain column missing: %s", view)
+	}
+	if got := strings.Join(model.visibleRows()[0].Chains, " / "); got != "GLOBAL / Streaming / Auto Select / Japan 01" {
+		t.Fatalf("model chain=%q", got)
+	}
 }
 
-func TestModel_DualLineKeepsFullChainInModelAndShowsHost(t *testing.T) {
+func TestModel_SingleLineKeepsFullChainInModelAndShowsHost(t *testing.T) {
 	model := New(nil, nil)
 	model.SetSize(80, 16)
 	model.SetPreferences(protocol.TUIPreferences{ConnectionsColumns: []string{"host", "chain"}})
@@ -70,31 +78,39 @@ func TestModel_DualLineKeepsFullChainInModelAndShowsHost(t *testing.T) {
 	model.focus = pageFocus{kind: focusRow, rowID: "one"}
 	view := model.View()
 	if !strings.Contains(view, "example.com") {
-		t.Fatalf("primary host missing: %s", view)
+		t.Fatalf("host missing: %s", view)
 	}
-	if !strings.Contains(view, "GLOBAL") || !strings.Contains(view, "Japan 01") {
-		t.Fatalf("secondary chain missing: %s", view)
+	// Single line truncates the chain at the column width (no secondary line).
+	if !strings.Contains(view, "GLOBAL") {
+		t.Fatalf("chain column missing: %s", view)
+	}
+	if strings.Contains(view, "Japan 01") {
+		t.Fatalf("chain should truncate in the list: %s", view)
 	}
 	if got := strings.Join(model.visibleRows()[0].Chains, " / "); got != "GLOBAL / Streaming / Auto Select / Japan 01" {
 		t.Fatalf("chain=%q", got)
 	}
 }
 
-func TestModel_CompactHidesRuleAndProcessOnSecondary(t *testing.T) {
+func TestModel_ColumnDropsFollowPriority(t *testing.T) {
 	model := New(nil, nil)
-	model.SetSize(70, 16) // Compact < 90
+	model.SetPreferences(protocol.TUIPreferences{ConnectionsColumns: []string{"host", "traffic", "network", "rule", "start", "process"}})
 	model.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{
-		ID: "one", Chains: []string{"DIRECT"}, Rule: "MATCH", RulePay: "final",
+		ID: "one", Rule: "MATCH", RulePay: "final",
 		Metadata: protocol.ConnectionMetadata{Host: "a.test", Process: "chrome.exe", Type: "HTTPS", Network: "tcp"},
 	}}}, time.Unix(1, 0))
+	// Page width 70: host/traffic/network/rule fit (4 cols); start and process
+	// are dropped by priority.
+	model.SetSize(70, 16)
 	view := model.View()
-	if strings.Contains(view, "chrome.exe") || strings.Contains(view, "MATCH") {
-		t.Fatalf("compact should hide rule/process: %s", view)
+	if !strings.Contains(view, "MATCH") || strings.Contains(view, "chrome.exe") {
+		t.Fatalf("70px should show rule but drop process: %s", view)
 	}
-	model.SetSize(100, 16)
+	// Page width 90: all six checked columns fit.
+	model.SetSize(90, 16)
 	view = model.View()
-	if !strings.Contains(view, "chrome.exe") || !strings.Contains(view, "MATCH") {
-		t.Fatalf("full should show rule/process: %s", view)
+	if !strings.Contains(view, "chrome.exe") {
+		t.Fatalf("90px should show process: %s", view)
 	}
 }
 
@@ -133,11 +149,15 @@ func TestView_TrafficDataColorsWhileRailFocused(t *testing.T) {
 	}}}, time.Unix(1, 0))
 	model.SetContentFocused(false)
 	view := model.View()
-	// StyleTrafficPair always paints UL Success / DL Info.
+	// StyleTrafficPair always paints UL Success / DL Info. The traffic column
+	// truncates mid-down-segment, so the SGR stays open there; assert on the
+	// colored up-segment and the bare Info prefix of the down arrow.
 	up := model.theme.Success.Render("↑" + "1.0 KiB/s")
-	down := model.theme.Info.Render("↓" + "2.0 KiB/s")
-	if !strings.Contains(view, up) || !strings.Contains(view, down) {
+	if !strings.Contains(view, up) {
 		t.Fatalf("traffic semantic colors missing while rail-focused:\n%s", view)
+	}
+	if !strings.Contains(view, "\x1b[38;5;75m↓") {
+		t.Fatalf("download color missing while rail-focused:\n%s", view)
 	}
 }
 

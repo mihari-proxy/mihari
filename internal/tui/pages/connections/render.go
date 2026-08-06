@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	lipgloss "charm.land/lipgloss/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
@@ -60,10 +59,30 @@ func (m *Model) tableLines() []string {
 }
 
 func (m *Model) connectionHeader() (string, string) {
-	// Dual-line cards: short guide headers rather than every preference column.
-	cols := m.connectionPrimaryColumns()
-	widths := m.connectionPrimaryWidths()
-	header, rule := ui.RenderHeaderRow(m.theme, cols, widths, 2, -1, false)
+	cols, widths := m.keptConnectionColumns()
+	if len(cols) == 0 {
+		return "  ", "  "
+	}
+	// Sort indicator: ▲ ascending / ▼ descending on the sorted column.
+	if m.sortDirection != sortDefault {
+		for index := range cols {
+			if cols[index].ID != m.sortColumn {
+				continue
+			}
+			if m.sortDirection == sortAscending {
+				cols[index].Title += " ▲"
+			} else {
+				cols[index].Title += " ▼"
+			}
+			break
+		}
+	}
+	// headerIndex addresses the kept set; highlight only while focused on it.
+	focusedIndex := -1
+	if m.focus.kind == focusHeader {
+		focusedIndex = m.headerIndex
+	}
+	header, rule := ui.RenderHeaderRow(m.theme, cols, widths, 2, focusedIndex, m.contentFocused)
 	return "  " + header, "  " + rule
 }
 
@@ -74,101 +93,71 @@ func (m *Model) layoutWidth() int {
 	return 100
 }
 
-func (m *Model) connectionPrimaryColumns() []ui.TableColumn {
-	return []ui.TableColumn{
-		{ID: "host", Title: ui.ConnectionColumnLabel("host"), MinWidth: 12, Flex: 3},
-		{ID: "traffic", Title: ui.ConnectionColumnLabel("traffic"), MinWidth: 14, MaxWidth: 24, Flex: 1, Align: ui.AlignRight},
+// connectionColumns maps the checked column set to table column definitions.
+// Priority is positional-reverse (host is never dropped, tail columns drop
+// first), so the checked order, table order and drop order are one.
+func (m *Model) connectionColumns() []ui.TableColumn {
+	specs := map[string]ui.TableColumn{
+		"host":        {MinWidth: 12, Flex: 3, Priority: 0},
+		"traffic":     {MinWidth: 16, MaxWidth: 24, Flex: 1, Align: ui.AlignRight, Priority: 10},
+		"network":     {MinWidth: 10, Flex: 1, Priority: 9},
+		"rule":        {MinWidth: 12, Flex: 2, Priority: 8},
+		"start":       {MinWidth: 10, Flex: 1, Priority: 7},
+		"process":     {MinWidth: 12, Flex: 1, Priority: 6},
+		"chain":       {MinWidth: 12, Flex: 2, Priority: 5},
+		"source":      {MinWidth: 14, Flex: 1, Priority: 4},
+		"destination": {MinWidth: 14, Flex: 1, Priority: 3},
+		"upload":      {MinWidth: 10, Flex: 1, Align: ui.AlignRight, Priority: 2},
+		"download":    {MinWidth: 10, Flex: 1, Align: ui.AlignRight, Priority: 1},
 	}
+	cols := make([]ui.TableColumn, 0, len(m.columns))
+	for _, id := range m.columns {
+		spec := specs[id]
+		spec.ID = id
+		spec.Title = ui.ConnectionColumnLabel(id)
+		cols = append(cols, spec)
+	}
+	return cols
 }
 
-func (m *Model) connectionPrimaryWidths() []int {
-	// Fit columns to the section body text width (page minus shell + section chrome).
+// keptConnectionColumns fits the checked columns into the section body width,
+// dropping low-priority tail columns that no longer fit (design §2.4).
+func (m *Model) keptConnectionColumns() ([]ui.TableColumn, []int) {
 	textW := ui.SectionTextWidth(ui.FullSectionInner(m.layoutWidth()))
 	avail := max(24, textW-2) // focus marker budget inside section
-	return ui.FitColumnWidths(m.connectionPrimaryColumns(), avail, 2)
+	return ui.FitPriorityColumns(m.connectionColumns(), avail, 2)
+}
+
+// headerColumnCount is the number of columns visible on screen; headerIndex
+// walks this set so focus and sort never land on a dropped column.
+func (m *Model) headerColumnCount() int {
+	cols, _ := m.keptConnectionColumns()
+	return len(cols)
 }
 
 func (m *Model) renderConnection(connection protocol.Connection, focused bool) []string {
+	cols, widths := m.keptConnectionColumns()
 	marker := ui.FocusPrefix(focused)
-	widths := m.connectionPrimaryWidths()
-	host := primaryHost(connection)
-	up := "↑" + formatRate(connection.UploadSpeed)
-	down := "↓" + formatRate(connection.DownloadSpeed)
-	// Semantic traffic colors always; RowFocus chrome stays content-focus gated.
-	traffic := ui.StyleTrafficPair(m.theme, up, down)
-	hostCell := ui.PadCell(host, widths[0], ui.AlignLeft)
-	// Traffic is pre-styled; pad by visible width toward the right.
-	trafficPad := widths[1] - lipgloss.Width(traffic)
-	if trafficPad < 0 {
-		traffic = ui.TruncateVisible(traffic, widths[1])
-		trafficPad = 0
+	cells := make([]string, 0, len(cols))
+	for index, col := range cols {
+		var text string
+		switch col.ID {
+		case "traffic":
+			up := "↑" + formatRate(connection.UploadSpeed)
+			down := "↓" + formatRate(connection.DownloadSpeed)
+			text = ui.StyleTrafficPair(m.theme, up, down)
+		case "network":
+			text = ui.StyleNetwork(m.theme, columnValue(connection, col.ID))
+		default:
+			text = columnValue(connection, col.ID)
+		}
+		cells = append(cells, ui.PadCell(text, widths[index], col.Align))
 	}
-	trafficCell := strings.Repeat(" ", trafficPad) + traffic
-	primary := marker + ui.JoinCells([]string{hostCell, trafficCell}, 2)
-
-	secondary := m.secondaryLine(connection)
-	// Align secondary under host cell (after marker); clip by visible width.
-	secondaryLine := "  " + ui.TruncateVisible(secondary, max(8, m.layoutWidth()-2))
-
+	line := marker + ui.JoinCells(cells, 2)
 	if focused && m.contentFocused {
-		primary = m.theme.RowFocus.Render(primary)
+		line = m.theme.RowFocus.Render(line)
 	}
-	return []string{primary, secondaryLine}
-}
-
-func (m *Model) secondaryLine(connection protocol.Connection) string {
-	// Secondary metadata uses semantic/muted colors whenever the page is visible.
-	sep := m.theme.Muted.Render("  ·  ")
-	net := ui.StyleNetwork(m.theme, networkLabel(connection))
-	parts := []string{net}
-	chain := strings.Join(connection.Chains, " → ")
-	if chain == "" {
-		chain = ui.MissingValue
-	}
-	parts = append(parts, m.theme.Muted.Render(chain))
-	if ui.ClassifyContentWidth(m.layoutWidth()) == ui.ContentFull {
-		rule := strings.TrimSpace(connection.Rule + " " + connection.RulePay)
-		if rule != "" {
-			parts = append(parts, m.theme.Muted.Render(rule))
-		}
-		if process := connection.Metadata.Process; process != "" {
-			parts = append(parts, m.theme.Muted.Render(process))
-		}
-	}
-	if !connection.Start.IsZero() {
-		parts = append(parts, m.theme.Muted.Render(connection.Start.Local().Format("15:04:05")))
-	}
-	return strings.Join(parts, sep)
-}
-
-func primaryHost(connection protocol.Connection) string {
-	if connection.Metadata.Host != "" {
-		return address(connection.Metadata.Host, connection.Metadata.DestinationPort)
-	}
-	if connection.Metadata.DestinationIP != "" {
-		return address(connection.Metadata.DestinationIP, connection.Metadata.DestinationPort)
-	}
-	return value(connection.Metadata.Process)
-}
-
-func networkLabel(connection protocol.Connection) string {
-	typ := value(connection.Metadata.Type)
-	net := value(connection.Metadata.Network)
-	if typ == ui.MissingValue && net == ui.MissingValue {
-		return ui.MissingValue
-	}
-	if typ == ui.MissingValue {
-		return net
-	}
-	if net == ui.MissingValue {
-		return typ
-	}
-	return typ + "/" + net
-}
-
-func (m *Model) tableWidth() int {
-	// Dual-line layout no longer pans a mega-row; keep helper for callers.
-	return m.width
+	return []string{line}
 }
 
 func (m *Model) pauseLabel() string {
@@ -223,7 +212,7 @@ func columnValue(connection protocol.Connection, column string) string {
 	case "download":
 		return formatBytes(connection.Download)
 	case "traffic":
-		return fmt.Sprintf("UL %s DL %s", formatRate(connection.UploadSpeed), formatRate(connection.DownloadSpeed))
+		return fmt.Sprintf("↑%s ↓%s", formatRate(connection.UploadSpeed), formatRate(connection.DownloadSpeed))
 	case "start":
 		if connection.Start.IsZero() {
 			return ui.MissingValue
