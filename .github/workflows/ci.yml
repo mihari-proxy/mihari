@@ -13,10 +13,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v7
         with:
-          # Pin a v2 release: v1 line is built with go1.24 and cannot load
-          # configs targeting go1.26 (go.mod), and action v6 requires v2+.
+          # Pin a v2 release: the v1 line is built with go1.24 and cannot load
+          # configs targeting go1.26 (go.mod); action v6 does not support v2.
           version: v2.12.2
 
   test:
