@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/LeeShunEE/mihari/internal/config"
+	"github.com/mihari-proxy/mihari/internal/config"
 )
 
 func TestOpen_MigratesNewAndExistingInstallations(t *testing.T) {

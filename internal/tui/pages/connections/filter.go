@@ -3,8 +3,8 @@ package connections
 import (
 	"slices"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/tui/ui"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
 const allSources = "All"

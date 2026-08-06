@@ -3,8 +3,8 @@ package server
 import (
 	"net/http"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	runtimeapi "github.com/LeeShunEE/mihari/internal/runtime"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 )
 
 func (s *Server) tunRoutes(mux *http.ServeMux) {

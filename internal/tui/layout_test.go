@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/LeeShunEE/mihari/internal/tui/ui"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
 func TestClassify(t *testing.T) {

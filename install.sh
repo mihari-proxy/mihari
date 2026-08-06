@@ -1,15 +1,15 @@
 #!/usr/bin/env sh
 # mihari one-line installer for Linux and macOS.
-#   curl -fsSL https://raw.githubusercontent.com/LeeShunEE/mihari/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.sh | bash
 #
 # Environment overrides:
-#   MIHARI_REPO        owner/repo (default LeeShunEE/mihari)
+#   MIHARI_REPO        owner/repo (default mihari-proxy/mihari)
 #   MIHARI_BIN         install dir (default /usr/local/bin)
 #   MIHARI_VERSION     release tag to install (default: latest)
 #   MIHARI_NO_INSTALL=1  download only; skip service install
 set -eu
 
-REPO="${MIHARI_REPO:-LeeShunEE/mihari}"
+REPO="${MIHARI_REPO:-mihari-proxy/mihari}"
 BIN_DIR="${MIHARI_BIN:-/usr/local/bin}"
 
 info() { printf '\033[1;34m•\033[0m %s\n' "$*"; }

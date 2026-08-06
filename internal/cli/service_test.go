@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeeShunEE/mihari/internal/elevate"
-	"github.com/LeeShunEE/mihari/internal/service"
+	"github.com/mihari-proxy/mihari/internal/elevate"
+	"github.com/mihari-proxy/mihari/internal/service"
 )
 
 type fakeService struct {

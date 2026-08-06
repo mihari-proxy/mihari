@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 func TestRequireElevatedRejectsWhenNotAdmin(t *testing.T) {

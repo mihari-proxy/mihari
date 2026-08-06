@@ -3,8 +3,8 @@ package subscription
 import (
 	"net/netip"
 
-	"github.com/LeeShunEE/mihari/internal/config"
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/config"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"go.yaml.in/yaml/v3"
 )
 

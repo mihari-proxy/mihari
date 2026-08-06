@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeeShunEE/mihari/internal/elevate"
-	"github.com/LeeShunEE/mihari/internal/update"
+	"github.com/mihari-proxy/mihari/internal/elevate"
+	"github.com/mihari-proxy/mihari/internal/update"
 )
 
 type fakeSelfUpdater struct {

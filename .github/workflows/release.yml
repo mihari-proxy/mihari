@@ -40,7 +40,7 @@ jobs:
           # internal/update SelectSelfAsset and the install scripts rely on the
           # fixed prefix, and it keeps the /releases/latest/download/ URL stable.
           OUT="mihari-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
-          go build -trimpath -ldflags "-s -w -X github.com/LeeShunEE/mihari/internal/buildinfo.Version=${GITHUB_REF_NAME}" -o "dist/${OUT}" ./cmd/mihari
+          go build -trimpath -ldflags "-s -w -X github.com/mihari-proxy/mihari/internal/buildinfo.Version=${GITHUB_REF_NAME}" -o "dist/${OUT}" ./cmd/mihari
           ls -la dist/
 
       - name: Upload artifact

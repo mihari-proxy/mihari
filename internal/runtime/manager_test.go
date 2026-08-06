@@ -12,15 +12,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeeShunEE/mihari/internal/config"
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/core"
-	"github.com/LeeShunEE/mihari/internal/geoip"
-	"github.com/LeeShunEE/mihari/internal/mihomo"
-	"github.com/LeeShunEE/mihari/internal/onboarding"
-	"github.com/LeeShunEE/mihari/internal/preferences"
-	"github.com/LeeShunEE/mihari/internal/state"
-	"github.com/LeeShunEE/mihari/internal/supervisor"
+	"github.com/mihari-proxy/mihari/internal/config"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/core"
+	"github.com/mihari-proxy/mihari/internal/geoip"
+	"github.com/mihari-proxy/mihari/internal/mihomo"
+	"github.com/mihari-proxy/mihari/internal/onboarding"
+	"github.com/mihari-proxy/mihari/internal/preferences"
+	"github.com/mihari-proxy/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/supervisor"
 )
 
 func TestUpdateOnboardingRejectsStaleRevisionBeforePersistingEndpoints(t *testing.T) {

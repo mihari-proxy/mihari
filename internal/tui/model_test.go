@@ -8,15 +8,15 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/service"
-	connectionspage "github.com/LeeShunEE/mihari/internal/tui/pages/connections"
-	rulespage "github.com/LeeShunEE/mihari/internal/tui/pages/rules"
-	setuppage "github.com/LeeShunEE/mihari/internal/tui/pages/setup"
-	systempage "github.com/LeeShunEE/mihari/internal/tui/pages/system"
-	webguipage "github.com/LeeShunEE/mihari/internal/tui/pages/webgui"
-	"github.com/LeeShunEE/mihari/internal/tui/session"
-	"github.com/LeeShunEE/mihari/internal/tui/ui"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/service"
+	connectionspage "github.com/mihari-proxy/mihari/internal/tui/pages/connections"
+	rulespage "github.com/mihari-proxy/mihari/internal/tui/pages/rules"
+	setuppage "github.com/mihari-proxy/mihari/internal/tui/pages/setup"
+	systempage "github.com/mihari-proxy/mihari/internal/tui/pages/system"
+	webguipage "github.com/mihari-proxy/mihari/internal/tui/pages/webgui"
+	"github.com/mihari-proxy/mihari/internal/tui/session"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
 var errNetworkStatusTest = errors.New("network status test failure")

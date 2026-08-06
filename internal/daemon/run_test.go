@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	transporttest "github.com/LeeShunEE/mihari/internal/control/transport/testutil"
+	transporttest "github.com/mihari-proxy/mihari/internal/control/transport/testutil"
 )
 
 func TestRunStopsWhenContextIsCancelled(t *testing.T) {

@@ -7,11 +7,11 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	connectionspage "github.com/LeeShunEE/mihari/internal/tui/pages/connections"
-	subscriptionspage "github.com/LeeShunEE/mihari/internal/tui/pages/subscriptions"
-	"github.com/LeeShunEE/mihari/internal/tui/session"
-	"github.com/LeeShunEE/mihari/internal/tui/ui"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	connectionspage "github.com/mihari-proxy/mihari/internal/tui/pages/connections"
+	subscriptionspage "github.com/mihari-proxy/mihari/internal/tui/pages/subscriptions"
+	"github.com/mihari-proxy/mihari/internal/tui/session"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
 func TestHelpDialogOpensFromRailAndContentAndClosesOnEsc(t *testing.T) {

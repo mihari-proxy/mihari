@@ -1,14 +1,14 @@
 # mihari one-line installer for Windows (PowerShell).
-#   irm https://raw.githubusercontent.com/LeeShunEE/mihari/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.ps1 | iex
 #
 # Environment overrides:
-#   $env:MIHARI_REPO        owner/repo (default LeeShunEE/mihari)
+#   $env:MIHARI_REPO        owner/repo (default mihari-proxy/mihari)
 #   $env:MIHARI_BIN         install dir (default %LOCALAPPDATA%\Programs\mihari)
 #   $env:MIHARI_VERSION     release tag to install (default: latest)
 #   $env:MIHARI_NO_INSTALL  set to 1 to download only
 $ErrorActionPreference = 'Stop'
 
-$repo = if ($env:MIHARI_REPO) { $env:MIHARI_REPO } else { 'LeeShunEE/mihari' }
+$repo = if ($env:MIHARI_REPO) { $env:MIHARI_REPO } else { 'mihari-proxy/mihari' }
 $binDir = if ($env:MIHARI_BIN) { $env:MIHARI_BIN } else { Join-Path $env:LOCALAPPDATA 'Programs\mihari' }
 
 function Info($m) { Write-Host "* $m" -ForegroundColor Cyan }

@@ -7,9 +7,9 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
-	"github.com/LeeShunEE/mihari/internal/panel"
-	"github.com/LeeShunEE/mihari/internal/panel/release"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/panel"
+	"github.com/mihari-proxy/mihari/internal/panel/release"
 )
 
 const (

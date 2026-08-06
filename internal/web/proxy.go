@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/LeeShunEE/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 // ProxyOptions configures the secret-injecting reverse proxy to the mihomo controller.

@@ -2,10 +2,10 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-[![license](https://img.shields.io/github/license/LeeShunEE/mihari)](LICENSE)
-[![ci](https://img.shields.io/github/actions/workflow/status/LeeShunEE/mihari/ci.yml?branch=main)](https://github.com/LeeShunEE/mihari/actions)
-[![go version](https://img.shields.io/github/go-mod/go-version/LeeShunEE/mihari)](go.mod)
-[![release](https://img.shields.io/github/v/release/LeeShunEE/mihari)](https://github.com/LeeShunEE/mihari/releases)
+[![license](https://img.shields.io/github/license/mihari-proxy/mihari)](LICENSE)
+[![ci](https://img.shields.io/github/actions/workflow/status/mihari-proxy/mihari/ci.yml?branch=main)](https://github.com/mihari-proxy/mihari/actions)
+[![go version](https://img.shields.io/github/go-mod/go-version/mihari-proxy/mihari)](go.mod)
+[![release](https://img.shields.io/github/v/release/mihari-proxy/mihari)](https://github.com/mihari-proxy/mihari/releases)
 
 Mihari 是一款全新的、独立的 [mihomo](https://github.com/MetaCubeX/mihomo) 本地管理器。它平等地支持 Windows、Linux 和 macOS,围绕由 CLI、TUI 和浏览器面板共享的单一守护进程控制面进行设计。
 
@@ -40,15 +40,15 @@ Mihari 是一款全新的、独立的 [mihomo](https://github.com/MetaCubeX/miho
 
 ```sh
 # Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/LeeShunEE/mihari/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.sh | bash
 ```
 
 ```powershell
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/LeeShunEE/mihari/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.ps1 | iex
 ```
 
-或从 [Releases 页面](https://github.com/LeeShunEE/mihari/releases) 下载对应平台的二进制。
+或从 [Releases 页面](https://github.com/mihari-proxy/mihari/releases) 下载对应平台的二进制。
 
 **首次运行**
 
