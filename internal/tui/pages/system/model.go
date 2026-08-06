@@ -99,6 +99,12 @@ type serviceResultMsg struct {
 	err  error
 }
 
+// Err implements the shell's action-outcome contract so OS service actions are
+// classified Succeeded/Failed in the Recent operations ledger.
+func (m serviceResultMsg) Err() error { return m.err }
+
+var _ interface{ Err() error } = serviceResultMsg{}
+
 type systemProxyStatusMsg struct {
 	status protocol.SystemProxyStatus
 	err    error
@@ -109,6 +115,12 @@ type systemProxyActionResultMsg struct {
 	status protocol.SystemProxyStatus
 	err    error
 }
+
+// Err implements the shell's action-outcome contract so system proxy actions
+// are classified Succeeded/Failed in the Recent operations ledger.
+func (m systemProxyActionResultMsg) Err() error { return m.err }
+
+var _ interface{ Err() error } = systemProxyActionResultMsg{}
 
 type tunStatusMsg struct {
 	status protocol.TunStatus
@@ -127,11 +139,23 @@ type webGUIOpenResultMsg struct {
 	err   error
 }
 
+// Err implements the shell's action-outcome contract so browser-open actions
+// are classified Succeeded/Failed in the Recent operations ledger.
+func (m webGUIOpenResultMsg) Err() error { return m.err }
+
+var _ interface{ Err() error } = webGUIOpenResultMsg{}
+
 type tunActionResultMsg struct {
 	kind   tunActionKind
 	status protocol.TunStatus
 	err    error
 }
+
+// Err implements the shell's action-outcome contract so TUN actions are
+// classified Succeeded/Failed in the Recent operations ledger.
+func (m tunActionResultMsg) Err() error { return m.err }
+
+var _ interface{ Err() error } = tunActionResultMsg{}
 
 type actionKind uint8
 
@@ -188,6 +212,12 @@ type actionResultMsg struct {
 	restart protocol.MutationResult
 	err     error
 }
+
+// Err implements the shell's action-outcome contract so core update/restart
+// actions are classified Succeeded/Failed in the Recent operations ledger.
+func (m actionResultMsg) Err() error { return m.err }
+
+var _ interface{ Err() error } = actionResultMsg{}
 
 // Model is the System page.
 type Model struct {

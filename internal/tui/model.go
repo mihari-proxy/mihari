@@ -97,6 +97,10 @@ type actionCompletedMsg struct {
 	Result tea.Msg
 }
 
+// resultErr is the outcome contract every ActionIntentMsg Execute result must
+// implement so the shell can classify actions for the Recent operations card.
+type resultErr interface{ Err() error }
+
 // spinnerTickMsg advances the braille spinner frame while pending work exists.
 type spinnerTickMsg struct {
 	t   time.Time
@@ -350,6 +354,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			model.globalState = ui.StatePending
 		}
+		model.recordActionOutcome(typed.Intent, typed.Result)
 		var pageCmd tea.Cmd
 		if typed.Result != nil {
 			var next tea.Model
@@ -605,6 +610,23 @@ func (model *Model) setLogsStale(stale bool) {
 	if page, ok := model.pages[ui.PageLogs].(*logspage.Model); ok {
 		page.SetStale(stale)
 	}
+}
+
+// recordActionOutcome appends a completed action to the Recent operations
+// ledger. A result reporting no error — including nil and results that do not
+// implement Err() — is recorded as Succeeded; an error is recorded as Failed.
+func (model *Model) recordActionOutcome(intent ui.ActionIntentMsg, result tea.Msg) {
+	state := ui.SucceededLabel
+	if res, ok := result.(resultErr); ok && res.Err() != nil {
+		state = ui.FailedLabel
+	}
+	object := intent.Object
+	if object == "" {
+		object = intent.Title
+	}
+	model.recordOperation(ui.OperationRecord{
+		ID: intent.Key, Object: object, State: state, At: time.Now(),
+	})
 }
 
 func (model *Model) recordOperation(operation ui.OperationRecord) {
