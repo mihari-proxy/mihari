@@ -350,7 +350,10 @@ func (m *Model) renderNode(group protocol.ProxyGroup, node protocol.ProxyNode, w
 	}
 	// Network/protocol metadata shares the TCP/UDP network styling.
 	metadata = ui.StyleNetwork(m.theme, metadata)
-	content := fmt.Sprintf("%s%s %s\n%s  %s", focus, selected, ui.DisplayProxyName(node.Name), metadata, renderDelay(m.theme, m.delays[node.Name], m.now))
+	// Truncate long names to the card's inner width so the card stays a stable
+	// two lines (design P3): width − border 2 − padding 2 − marker/✓ 2.
+	name := ui.TruncateVisible(ui.DisplayProxyName(node.Name), max(4, width-7))
+	content := fmt.Sprintf("%s%s %s\n%s  %s", focus, selected, name, metadata, renderDelay(m.theme, m.delays[node.Name], m.now))
 	style := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(width)
 	// Accent the focused node only while content owns keyboard focus.
 	if m.focus == id && m.contentFocused {
@@ -364,11 +367,10 @@ func (m *Model) columns() int {
 }
 
 // columnsFor picks a node-card column count for a given section text width.
+// Cards are ~25 wide (design P1): textW/25 gives 3 columns at 100 terminal
+// columns and 2 at 72; below 25 it degrades to a single column automatically.
 func (m *Model) columnsFor(textW int) int {
-	if textW < 56 {
-		return 1
-	}
-	return max(1, textW/proxyBarMaxWidth)
+	return max(1, textW/25)
 }
 
 func (m *Model) selectFocused() tea.Cmd {
