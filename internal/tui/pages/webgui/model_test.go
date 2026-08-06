@@ -104,10 +104,14 @@ func TestWebGUIRendersCardsAndFooterWithoutSecrets(t *testing.T) {
 	updated, _ := model.Update(command())
 	model = updated.(*Model)
 	view := model.View()
-	for _, want := range []string{"127.0.0.1:9191", "Zashboard", "v2.1.0", "v2.0.0", "MetaCubeXD", "8e31c4a", "3", "Loopback", "Controller isolation", "Mutation coordinator", "Open selected"} {
+	for _, want := range []string{"127.0.0.1:9191", "Zashboard", "v2.1.0", "v2.0.0", "MetaCubeXD", "8e31c4a", "3", "Loopback", "Controller isolation", "Mutation coordinator"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("missing %q in view=%s", want, view)
 		}
+	}
+	// OpenBrowserHint moved out of the summary (the footer declares the o key).
+	if strings.Contains(view, ui.OpenBrowserHint) {
+		t.Fatalf("OpenBrowserHint should not render in the page: %s", view)
 	}
 	if strings.Contains(view, "token=") || strings.Contains(view, "super-secret") {
 		t.Fatalf("view leaked open token: %s", view)
