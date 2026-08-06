@@ -96,14 +96,14 @@ func (d *Detail) overview() string {
 	theme := ui.DefaultTheme()
 	connection := d.connection
 	chain := strings.Join(connection.Chains, " \u2192 ")
-	return fmt.Sprintf("%s\nID  %s\nType  %s / %s\nRule  %s %s\nProcess  %s\nInbound  %s / %s\n\n%s\nSource  %s:%s\nHost  %s\nResolved  %s:%s\nRemote  %s\n\n%s\n%s\n\n%s\nUL  %d B - %d B/s\nDL  %d B - %d B/s\n\n%s\n%s  %s",
+	return fmt.Sprintf("%s\nID  %s\nType  %s / %s\nRule  %s %s\nProcess  %s\nInbound  %s / %s\n\n%s\nSource  %s:%s\nHost  %s\nResolved  %s:%s\nRemote  %s\n\n%s\n%s\n\n%s\n↑%s ↓%s\n\n%s\n%s  %s",
 		ui.BasicSectionTitle, value(connection.ID), value(connection.Metadata.Type), ui.StyleNetwork(theme, value(connection.Metadata.Network)),
 		value(connection.Rule), value(connection.RulePay), value(connection.Metadata.Process),
 		value(connection.Metadata.InboundName), value(connection.Metadata.InboundUser),
 		ui.SourceDestinationTitle, value(connection.Metadata.SourceIP), value(connection.Metadata.SourcePort),
 		value(connection.Metadata.Host), value(connection.Metadata.DestinationIP), value(connection.Metadata.DestinationPort),
 		value(connection.Metadata.RemoteDestination), ui.GeoIPSectionTitle, d.geoIPView(), ui.TrafficSectionTitle,
-		connection.Upload, connection.UploadSpeed, connection.Download, connection.DownloadSpeed,
+		formatRate(connection.UploadSpeed), formatRate(connection.DownloadSpeed),
 		ui.OutboundSectionTitle, ui.ChainLabel, value(chain),
 	)
 }
