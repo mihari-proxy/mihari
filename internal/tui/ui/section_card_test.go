@@ -60,6 +60,21 @@ func TestRenderBorderedSection_LongTitleTruncates(t *testing.T) {
 	}
 }
 
+func TestEqualizeLineCount(t *testing.T) {
+	a, b := EqualizeLineCount("one\nlonger", "short")
+	if a != "one\nlonger" || b != "short\n" {
+		t.Fatalf("got %q %q", a, b)
+	}
+	a, b = EqualizeLineCount("same", "same")
+	if a != "same" || b != "same" {
+		t.Fatalf("equal: %q %q", a, b)
+	}
+	a, b = EqualizeLineCount("a", "x\ny\nz")
+	if a != "a\n\n" || b != "x\ny\nz" {
+		t.Fatalf("got %q %q", a, b)
+	}
+}
+
 func TestFullSectionInner(t *testing.T) {
 	if got := FullSectionInner(100); got != 96 {
 		t.Fatalf("FullSectionInner(100)=%d want 96", got)

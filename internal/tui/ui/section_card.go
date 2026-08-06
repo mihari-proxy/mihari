@@ -57,6 +57,20 @@ func FormatSubscriptionsTitle(n int) string {
 	return fmt.Sprintf("Subscriptions · %d", n)
 }
 
+// EqualizeLineCount pads the shorter of two card bodies with blank lines so
+// both bordered cards share a height and their bottom borders align. Line
+// count matches RenderBorderedSection's per-line rendering of strings.Split.
+func EqualizeLineCount(a, b string) (string, string) {
+	la, lb := strings.Count(a, "\n")+1, strings.Count(b, "\n")+1
+	switch {
+	case la < lb:
+		a += strings.Repeat("\n", lb-la)
+	case lb < la:
+		b += strings.Repeat("\n", la-lb)
+	}
+	return a, b
+}
+
 // RenderBorderedSection draws a rounded card whose section title is embedded in
 // the top border line (not as body text):
 //

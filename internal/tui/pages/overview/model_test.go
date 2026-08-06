@@ -197,11 +197,53 @@ func TestOverview_WideLayoutUsesTwoColumnKPIGrid(t *testing.T) {
 	narrow.SetSize(40, 26)
 	narrow.SetSnapshot(snapshot)
 	narrowView := narrow.View()
+	// The wide view carries the banner above the cards while the narrow view
+	// does not; compare only the card rows so the layout claim stays about
+	// card density, not banner presence.
 	wideLines := strings.Count(wideView, "\n") + 1
+	if strings.Contains(wideView, dosRebelBanner[0]) {
+		wideLines -= len(dosRebelBanner)
+	}
 	narrowLines := strings.Count(narrowView, "\n") + 1
 	if wideLines >= narrowLines {
 		t.Fatalf("wide 2-column layout should use fewer lines than narrow stack: wide=%d narrow=%d\nwide:\n%s\nnarrow:\n%s",
 			wideLines, narrowLines, wideView, narrowView)
+	}
+}
+
+func TestOverview_BannerVisibility(t *testing.T) {
+	snapshot := Snapshot{
+		Core: protocol.CoreStatus{Status: "running", Version: "v1.0.0", PID: 1},
+	}
+
+	// Wide + tall window: the dos_rebel wordmark shows above the cards.
+	wide := New()
+	wide.SetSize(90, 26)
+	wide.SetSnapshot(snapshot)
+	view := wide.View()
+	for _, want := range []string{"██████", "░░███"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("wide view missing banner glyph %q:\n%s", want, view)
+		}
+	}
+	if index := strings.Index(view, "██████"); index < 0 || index > strings.Index(view, ui.OverviewGeneralTitle) {
+		t.Fatalf("banner should render above the cards:\n%s", view)
+	}
+
+	// Narrow window: the 59-column banner cannot fit, so it is hidden.
+	narrow := New()
+	narrow.SetSize(40, 26)
+	narrow.SetSnapshot(snapshot)
+	if strings.Contains(narrow.View(), "██████") {
+		t.Fatalf("narrow view must not render the banner:\n%s", narrow.View())
+	}
+
+	// Short window: cards stay fully visible, banner is hidden.
+	short := New()
+	short.SetSize(90, 20)
+	short.SetSnapshot(snapshot)
+	if strings.Contains(short.View(), "██████") {
+		t.Fatalf("short view must not render the banner:\n%s", short.View())
 	}
 }
 

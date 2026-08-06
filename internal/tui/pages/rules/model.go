@@ -398,7 +398,7 @@ func (m *Model) renderRules() []string {
 		target := ui.PadCell(ui.StyleProxyTarget(m.theme, item.Proxy), widths[3], ui.AlignLeft)
 		line := marker + ui.JoinCells([]string{num, typ, payload, target}, rulesColGap)
 		if rowFocused && m.contentFocused {
-			line = m.theme.RowFocus.Render(line)
+			line = ui.ApplyFocusStyle(line, m.theme.RowFocus)
 		}
 		lines = append(lines, line)
 	}
@@ -464,7 +464,7 @@ func (m *Model) renderProviders() []string {
 		}
 		line := marker + ui.JoinCells(cells, rulesColGap)
 		if rowFocused && m.contentFocused {
-			line = m.theme.RowFocus.Render(line)
+			line = ui.ApplyFocusStyle(line, m.theme.RowFocus)
 		}
 		lines = append(lines, line)
 	}

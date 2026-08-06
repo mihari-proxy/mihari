@@ -162,6 +162,49 @@ func TestStyleProxyTarget_AndProviderStatus(t *testing.T) {
 	}
 }
 
+func TestRenderTrafficColumn_UnitAnchoredRight(t *testing.T) {
+	theme := DefaultTheme()
+	p1 := stripANSI(RenderTrafficColumn(theme, "1.0 KiB/s", "2.0 KiB/s", 24))
+	p2 := stripANSI(RenderTrafficColumn(theme, "100.0 MiB/s", "1.5 GiB/s", 24))
+	if w := lipgloss.Width(p1); w != 24 {
+		t.Fatalf("row1 width=%d %q", w, p1)
+	}
+	if w := lipgloss.Width(p2); w != 24 {
+		t.Fatalf("row2 width=%d %q", w, p2)
+	}
+	// Units of both rows must sit in the same display columns (right-anchored).
+	// Compare lipgloss widths of the prefixes — byte indices shift with the
+	// multibyte ↑/… runes.
+	col := lipgloss.Width(p1[:strings.Index(p1, "KiB/s")])
+	if other := lipgloss.Width(p2[:strings.Index(p2, "MiB/s")]); col != other {
+		t.Fatalf("up units misaligned: %q vs %q (cols %d/%d)", p1, p2, col, other)
+	}
+	col = lipgloss.Width(p1[:strings.LastIndex(p1, "KiB/s")])
+	if other := lipgloss.Width(p2[:strings.LastIndex(p2, "GiB/s")]); col != other {
+		t.Fatalf("down units misaligned: %q vs %q (cols %d/%d)", p1, p2, col, other)
+	}
+	// A wider number truncates the digits ("↑100…"), never the unit.
+	if !strings.Contains(p2, "↑100…") || !strings.Contains(p2, "MiB/s") || !strings.Contains(p2, "GiB/s") {
+		t.Fatalf("digit truncation lost the unit: %q", p2)
+	}
+	// Small rates fit whole at 24 columns.
+	if !strings.Contains(p1, "↑1.0 KiB/s") || !strings.Contains(p1, "↓2.0 KiB/s") {
+		t.Fatalf("small rates truncated: %q", p1)
+	}
+}
+
+func TestRenderTrafficColumn_NarrowSlotTruncatesDigits(t *testing.T) {
+	theme := DefaultTheme()
+	p := stripANSI(RenderTrafficColumn(theme, "1.0 KiB/s", "2.0 KiB/s", 16))
+	if w := lipgloss.Width(p); w != 16 {
+		t.Fatalf("width=%d %q", w, p)
+	}
+	// 16 → slots 7/7: the digits collapse to "…", the units stay anchored.
+	if !strings.Contains(p, "…") || !strings.Contains(p, "KiB/s") {
+		t.Fatalf("got %q", p)
+	}
+}
+
 func TestClassifyContentWidth(t *testing.T) {
 	if ClassifyContentWidth(80) != ContentCompact {
 		t.Fatal("80 should be compact")

@@ -707,7 +707,7 @@ func (m *Model) View() string {
 			value = "  " + value
 		}
 		if rowFocused && m.contentFocused {
-			labelPart = m.theme.RowFocus.Render(labelPart)
+			labelPart = ui.ApplyFocusStyle(labelPart, m.theme.RowFocus)
 		}
 		sections[idx].lines = append(sections[idx].lines, labelPart+value)
 	}

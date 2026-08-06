@@ -88,33 +88,42 @@ func (m *Model) View() string {
 	// Do not force another full-width Content box here: the root shell already
 	// sizes the content pane. Re-applying Width(m.width) plus card borders clips
 	// the right edge of every card.
+	// The dos_rebel wordmark sits above the cards; renderBanner returns "" on
+	// narrow or short windows, so build the joined parts only from non-empty
+	// strings to avoid a stray blank line.
+	parts := make([]string, 0, 3)
+	if banner := renderBanner(m.theme, m.width, m.height); banner != "" {
+		parts = append(parts, banner)
+	}
 	// Wide layout: General pairs with Core on row 1, Subscription with Web GUI
 	// on row 2 (config state lives in the General Health row). Below wideMinWidth
 	// everything stacks single-column.
 	if m.width >= wideMinWidth {
 		half := m.halfCardInner()
+		// Equalize body line counts so both cards of a row end at the same
+		// bottom border (JoinHorizontal aligns tops; card height is body-driven).
+		generalBody, coreBody := ui.EqualizeLineCount(m.renderGeneralBody(half), m.renderCoreCard(half))
 		row1 := lipgloss.JoinHorizontal(lipgloss.Top,
-			m.cardAt(ui.OverviewGeneralTitle, m.renderGeneralBody(half), half),
-			m.cardAt(ui.CoreCardTitle, m.renderCoreCard(half), half),
+			m.cardAt(ui.OverviewGeneralTitle, generalBody, half),
+			m.cardAt(ui.CoreCardTitle, coreBody, half),
 		)
+		subBody, guiBody := ui.EqualizeLineCount(subscription, webGUI)
 		row2 := lipgloss.JoinHorizontal(lipgloss.Top,
-			m.cardAt(ui.SubscriptionCardTitle, subscription, half),
-			m.cardAt(ui.WebGUICardTitle, webGUI, half),
+			m.cardAt(ui.SubscriptionCardTitle, subBody, half),
+			m.cardAt(ui.WebGUICardTitle, guiBody, half),
 		)
-		return lipgloss.JoinVertical(lipgloss.Left,
-			row1,
-			row2,
-			m.card(ui.RecentOperationsTitle, operations),
-		)
+		parts = append(parts, row1, row2, m.card(ui.RecentOperationsTitle, operations))
+		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left,
+	parts = append(parts,
 		m.card(ui.OverviewGeneralTitle, general),
 		m.card(ui.CoreCardTitle, m.renderCoreCard(m.fullCardInner())),
 		m.card(ui.SubscriptionCardTitle, subscription),
 		m.card(ui.WebGUICardTitle, webGUI),
 		m.card(ui.RecentOperationsTitle, operations),
 	)
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 // renderCoreCard merges core state and live traffic into one card (design G4):
