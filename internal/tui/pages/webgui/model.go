@@ -362,9 +362,12 @@ func (m *Model) View() string {
 		return ui.RenderBorderedSection(m.theme, ui.WebGUITitle, body, inner)
 	}
 	active := valueOr(m.status.ActivePanel, ui.MissingValue)
-	header := fmt.Sprintf("%s  %s  %s %s  %s %d  %s",
-		valueOr(m.status.GatewayHealth, ui.UnknownLabel), valueOr(m.status.GatewayAddr, ui.MissingValue),
-		ui.ActivePanelLabel, active, ui.BrowserSessionsLabel, m.status.BrowserSessions, ui.OpenBrowserHint)
+	// Two summary lines (design W1): health+addr, then Active panel + sessions.
+	// OpenBrowserHint moved out — the footer already declares the o key.
+	textW := ui.SectionTextWidth(inner)
+	line1 := ui.TruncateVisible(valueOr(m.status.GatewayHealth, ui.UnknownLabel)+"  "+valueOr(m.status.GatewayAddr, ui.MissingValue), textW)
+	line2 := ui.TruncateVisible(fmt.Sprintf("%s %s  ·  %s %d", ui.ActivePanelLabel, active, ui.BrowserSessionsLabel, m.status.BrowserSessions), textW)
+	header := line1 + "\n" + line2
 	var parts []string
 	parts = append(parts, ui.RenderBorderedSection(m.theme, ui.WebGUITitle, header, inner))
 
@@ -398,7 +401,10 @@ func (m *Model) View() string {
 		boolState("Controller isolation", m.status.Safeguards.ControllerIsolated),
 		boolState("Mutation coordinator", m.status.Safeguards.MutationsCoordinated),
 	}
-	parts = append(parts, ui.RenderBorderedSection(m.theme, ui.GatewaySafeguardsTitle, strings.Join(safeguards, "  "), inner))
+	// 2×2 layout (design W1); each line clips to the section text width.
+	row1 := ui.TruncateVisible(safeguards[0]+"  "+safeguards[1], textW)
+	row2 := ui.TruncateVisible(safeguards[2]+"  "+safeguards[3], textW)
+	parts = append(parts, ui.RenderBorderedSection(m.theme, ui.GatewaySafeguardsTitle, row1+"\n"+row2, inner))
 	if m.lastError != "" {
 		parts = append(parts, m.lastError)
 	}
