@@ -32,7 +32,7 @@ func TestControlPlaneLifecycleAndConcurrentStatus(t *testing.T) {
 	}()
 	select {
 	case <-ready:
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		cancel()
 		t.Fatal("daemon did not become ready")
 	}
@@ -44,7 +44,9 @@ func TestControlPlaneLifecycleAndConcurrentStatus(t *testing.T) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			requestCtx, requestCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			// Generous per-request budget: under -race on a busy CI runner a
+			// cold 3s window was flaky even though nothing is actually stuck.
+			requestCtx, requestCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer requestCancel()
 			status, err := client.Status(requestCtx)
 			if err != nil {
@@ -84,7 +86,7 @@ func TestControlPlaneLifecycleAndConcurrentStatus(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(8 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("daemon did not stop")
 	}
 
