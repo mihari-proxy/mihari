@@ -114,7 +114,7 @@ Build a local binary:
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o mihari ./cmd/mihari
 ```
 
-The architecture invariants, package boundaries, and contribution guidance are recorded in [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md). See [RELEASE.md](RELEASE.md) for the release process.
+The architecture invariants, package boundaries, and contribution guidance are recorded in [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md). See [docs/RELEASE.md](docs/RELEASE.md) for the release process.
 
 ## License
 

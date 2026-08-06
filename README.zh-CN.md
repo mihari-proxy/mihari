@@ -114,7 +114,7 @@ go vet ./...
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o mihari ./cmd/mihari
 ```
 
-架构不变量、包边界与贡献指南见 [AGENTS.md](AGENTS.md) 与 [CONTRIBUTING.md](CONTRIBUTING.md),发布流程见 [RELEASE.md](RELEASE.md)。
+架构不变量、包边界与贡献指南见 [AGENTS.md](AGENTS.md) 与 [CONTRIBUTING.md](CONTRIBUTING.md),发布流程见 [docs/RELEASE.md](docs/RELEASE.md)。
 
 ## 许可
 
