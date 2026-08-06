@@ -92,6 +92,18 @@ func sameFilePath(a, b string) bool {
 	if a == b {
 		return true
 	}
+	// Resolve symlinks and Windows 8.3 short names (e.g. RUNNER~1 vs the real
+	// long name) so the same file spelled differently still compares equal.
+	// EvalSymlinks fails for paths that do not exist yet; keep the given path.
+	if resolved, err := filepath.EvalSymlinks(a); err == nil {
+		a = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(b); err == nil {
+		b = resolved
+	}
+	if a == b {
+		return true
+	}
 	// Windows paths are case-insensitive for service ImagePath identity.
 	if runtime.GOOS == "windows" {
 		return strings.EqualFold(a, b)
@@ -100,6 +112,10 @@ func sameFilePath(a, b string) bool {
 }
 
 func copyFileReplace(src, dst string) error {
+	// Defensive: never rename a file over itself (Windows denies it).
+	if sameFilePath(src, dst) {
+		return nil
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return err

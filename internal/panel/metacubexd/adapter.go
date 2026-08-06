@@ -43,8 +43,8 @@ func (a *Adapter) ResolveLatest(ctx context.Context) (string, string, error) {
 	if len(sha) > 12 {
 		build = sha[:12]
 	}
-	assetURL := release.ArchiveURL(a.Client.APIBase, owner, repo, branch)
 	// When using a real GitHub API base, point downloads at the commit zipball for immutability.
+	var assetURL string
 	if a.Client.APIBase == "" || strings.Contains(a.Client.APIBase, "api.github.com") {
 		assetURL = "https://github.com/" + owner + "/" + repo + "/archive/" + sha + ".zip"
 	} else {

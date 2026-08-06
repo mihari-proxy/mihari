@@ -53,12 +53,8 @@ func resolveInternetSettingsTarget() (root registry.Key, path string, err error)
 
 // detectLocalSystem reports whether the current process token is LocalSystem.
 func detectLocalSystem() (bool, error) {
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		return false, fmt.Errorf("sysproxy: open process token: %w", err)
-	}
-	defer token.Close()
-
+	// GetCurrentProcessToken is a pseudo-handle; it must not be closed.
+	token := windows.GetCurrentProcessToken()
 	tu, err := token.GetTokenUser()
 	if err != nil {
 		return false, fmt.Errorf("sysproxy: get token user: %w", err)

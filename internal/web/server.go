@@ -644,10 +644,7 @@ func isManagedConfigField(key string) bool {
 		"external-ui", "external-ui-name", "external-ui-url":
 		return true
 	}
-	if strings.HasPrefix(key, "external-ui") {
-		return true
-	}
-	return false
+	return strings.HasPrefix(key, "external-ui")
 }
 
 func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {

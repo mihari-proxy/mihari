@@ -199,7 +199,7 @@ func New(options Options) *Manager {
 func (m *Manager) Run(ctx context.Context) error {
 	defer m.closing.Store(true)
 	if closer, ok := m.geoip.(interface{ Close() error }); ok {
-		defer closer.Close()
+		defer func() { _ = closer.Close() }()
 	}
 	if m.webGateway != nil {
 		webDone := make(chan struct{})

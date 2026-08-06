@@ -169,10 +169,6 @@ type pageClient interface {
 	webguipage.Client
 }
 
-func newModelWithClient(events <-chan session.Event, client pageClient) Model {
-	return newModelWithClientContext(context.Background(), events, client)
-}
-
 func newModelWithClientContext(ctx context.Context, events <-chan session.Event, client pageClient) Model {
 	model := newModelWithPageClients(client, client, client, client)
 	model.pages[ui.PageSetup] = setuppage.NewWithContext(ctx, client, nil)

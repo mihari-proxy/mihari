@@ -15,7 +15,9 @@ jobs:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          # Pin a v2 release: v1 line is built with go1.24 and cannot load
+          # configs targeting go1.26 (go.mod), and action v6 requires v2+.
+          version: v2.12.2
 
   test:
     runs-on: windows-latest

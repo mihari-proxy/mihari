@@ -157,10 +157,9 @@ func renderTopBorder(borderFG lipgloss.Style, titleStyled string, outer int) str
 	}
 	// Prefer 3-dash lead when space allows: ╭───Name──…──╮
 	leftDashes := 0
-	switch {
-	case remain == 0:
-		leftDashes = 0
-	case remain == 1:
+	switch remain {
+	case 0:
+	case 1:
 		leftDashes = 1
 	default:
 		leftDashes = min(3, remain-1)

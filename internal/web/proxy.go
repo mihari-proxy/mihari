@@ -29,17 +29,18 @@ func NewControllerProxy(options ProxyOptions) (*httputil.ReverseProxy, error) {
 	if options.Transport != nil {
 		proxy.Transport = options.Transport
 	}
-	originalDirector := proxy.Director
 	secret := options.ControllerSecret
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
+	// Rewrite replaces Director (deprecated since Go 1.26) and fully overrides
+	// the default single-host rewrite, so SetURL must be called explicitly.
+	proxy.Rewrite = func(pr *httputil.ProxyRequest) {
+		pr.SetURL(target)
 		// Strip any browser-supplied auth so the web credential never reaches the controller.
-		req.Header.Del("Authorization")
+		pr.Out.Header.Del("Authorization")
 		if secret != "" {
-			req.Header.Set("Authorization", "Bearer "+secret)
+			pr.Out.Header.Set("Authorization", "Bearer "+secret)
 		}
 		// Mihomo often expects Host of the controller.
-		req.Host = target.Host
+		pr.Out.Host = target.Host
 	}
 	// Do not rewrite Location in a way that exposes controller host if avoidable; default is fine for loopback.
 	proxy.ModifyResponse = func(resp *http.Response) error {

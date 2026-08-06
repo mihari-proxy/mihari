@@ -15,7 +15,7 @@ import (
 // When width > 0 the line is clamped with MaxWidth.
 func RenderSearchBar(theme Theme, query, placeholder string, focused bool, cursor, width int) string {
 	text := query
-	bodyCursor := cursor
+	var bodyCursor int
 	if text == "" {
 		text = placeholder
 		bodyCursor = 0

@@ -217,7 +217,7 @@ func TestProxySelectionWaitsForSubscriptionReload(t *testing.T) {
 		<-releaseReload
 		return nil
 	}
-	controller.fakeController.selectProxy = func(context.Context, string, string) error {
+	controller.selectProxy = func(context.Context, string, string) error {
 		close(selected)
 		return nil
 	}

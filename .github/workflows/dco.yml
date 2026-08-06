@@ -25,7 +25,13 @@ jobs:
           # --no-merges skips merge commits: on a pull_request the workflow runs
           # against a GitHub-generated merge commit that has no Signed-off-by.
           if [ "${{ github.event_name }}" = "push" ]; then
-            commits=$(git rev-list --no-merges ${{ github.event.before }}..${{ github.sha }})
+            before=${{ github.event.before }}
+            if [ "$before" = "0000000000000000000000000000000000000000" ]; then
+              # First push of the repository: no base commit to diff against.
+              commits=$(git rev-list --no-merges ${{ github.sha }})
+            else
+              commits=$(git rev-list --no-merges "$before"..${{ github.sha }})
+            fi
           else
             commits=$(git rev-list --no-merges origin/${{ github.base_ref }}..HEAD)
           fi
