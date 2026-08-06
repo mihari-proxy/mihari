@@ -106,6 +106,16 @@ git tag -d v0.1.0
 
 ## 更新日志
 
+### v0.1.1 (2026-08-06)
+
+**Bug 修复**
+
+- 修复 Windows 上并发首次加载配置时,文件原子替换窗口内的共享违规被误报为错误(`loadSettings` 以文件存在为信号重试,与锁文件兜底逻辑一致)
+- 修复 GitHub Actions 的 Node 20 弃用警告:升级 `actions/checkout` v7、`actions/setup-go` v7、`golangci-lint-action` v9、`actions/upload-artifact` v7、`actions/download-artifact` v8、`softprops/action-gh-release` v3
+- 修复分支保护 required check `cross-build` 因矩阵展开命名而永远 "Waiting for status" 的问题:新增 fan-in gate job 精确报告该状态
+- 修复 `release` 工作流手动触发(workflow_dispatch)只构建不发布的问题
+- 文档:README 标题品牌名统一为大写 Mihari
+
 ### v0.1.0 (2026-08-06)
 
 **初始开源发布**
