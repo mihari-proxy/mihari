@@ -92,7 +92,7 @@ func (m *Model) View() string {
 	// narrow or short windows, so build the joined parts only from non-empty
 	// strings to avoid a stray blank line.
 	parts := make([]string, 0, 3)
-	if banner := renderBanner(m.theme, m.width, m.height); banner != "" {
+	if banner := renderBanner(m.width, m.height); banner != "" {
 		parts = append(parts, banner)
 	}
 	// Wide layout: General pairs with Core on row 1, Subscription with Web GUI
