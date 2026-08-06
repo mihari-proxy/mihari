@@ -194,9 +194,9 @@ func (m *Model) View() string {
 	level := valueOr(m.level, ui.FilterAllLabel)
 	controlFocused := m.contentFocused && m.focus == focusControl
 	control := ui.RenderControlStrip(m.theme, []string{
-		fmt.Sprintf("%s: %s", ui.LevelLabel, level),
-		fmt.Sprintf("%s: %s", ui.WrapLabel, onOff(m.wrap)),
-		fmt.Sprintf("%s: %s", ui.PauseLabel, onOff(m.buffer.Paused())),
+		fmt.Sprintf("%s: %s", ui.LevelLabel, ui.StyleLogLevel(m.theme, level)),
+		fmt.Sprintf("%s: %s", ui.WrapLabel, ui.StatusDot(m.theme, ui.ClassifyStatusTone(onOff(m.wrap)), onOff(m.wrap))),
+		fmt.Sprintf("%s: %s", ui.PauseLabel, ui.StatusDot(m.theme, ui.ClassifyStatusTone(onOff(m.buffer.Paused())), onOff(m.buffer.Paused()))),
 	}, m.controlIndex, controlFocused, "  ")
 	var status []string
 	if unread := m.Unread(); unread > 0 {
@@ -361,7 +361,7 @@ func (m *Model) renderDetail() string {
 	if !entry.ObservedAt.IsZero() {
 		timestamp = entry.ObservedAt.Local().Format(time.RFC3339)
 	}
-	body := fmt.Sprintf("%s: %s\n%s: %s\n\n%s\n%s\n\n%s\n%s\n\n%s", ui.TimeLabel, timestamp, ui.LevelLabel, safe.Level, ui.MessageLabel, safe.Message, ui.RawTabLabel, raw, ui.EscCloseHint)
+	body := fmt.Sprintf("%s: %s\n%s: %s\n\n%s\n%s\n\n%s\n%s\n\n%s", ui.TimeLabel, timestamp, ui.LevelLabel, ui.StyleLogLevel(m.theme, safe.Level), ui.MessageLabel, safe.Message, ui.RawTabLabel, raw, ui.EscCloseHint)
 	content := m.theme.Dialog.Width(min(84, max(36, m.width-4))).Render(m.theme.Title.Render(ui.LogDetailsTitle) + "\n\n" + body)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }

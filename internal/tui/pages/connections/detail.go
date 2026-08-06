@@ -84,7 +84,7 @@ func (d *Detail) View(width, height int) string {
 	end := min(len(lines), start+visibleHeight)
 	state := ""
 	if d.closed {
-		state = " - " + ui.ConnectionsClosedLabel
+		state = " - " + ui.ToneStyle(theme, ui.ClassifyStatusTone(ui.ConnectionsClosedLabel)).Render(ui.ConnectionsClosedLabel)
 	}
 	content := theme.Dialog.Width(min(84, max(36, width-4))).Render(
 		theme.Title.Render(ui.ConnectionDetailsTitle+state) + "\n" + strings.Join(tabs, "  ") + "\n\n" + strings.Join(lines[start:end], "\n"),
@@ -93,10 +93,11 @@ func (d *Detail) View(width, height int) string {
 }
 
 func (d *Detail) overview() string {
+	theme := ui.DefaultTheme()
 	connection := d.connection
 	chain := strings.Join(connection.Chains, " \u2192 ")
 	return fmt.Sprintf("%s\nID  %s\nType  %s / %s\nRule  %s %s\nProcess  %s\nInbound  %s / %s\n\n%s\nSource  %s:%s\nHost  %s\nResolved  %s:%s\nRemote  %s\n\n%s\n%s\n\n%s\nUL  %d B - %d B/s\nDL  %d B - %d B/s\n\n%s\n%s  %s",
-		ui.BasicSectionTitle, value(connection.ID), value(connection.Metadata.Type), value(connection.Metadata.Network),
+		ui.BasicSectionTitle, value(connection.ID), value(connection.Metadata.Type), ui.StyleNetwork(theme, value(connection.Metadata.Network)),
 		value(connection.Rule), value(connection.RulePay), value(connection.Metadata.Process),
 		value(connection.Metadata.InboundName), value(connection.Metadata.InboundUser),
 		ui.SourceDestinationTitle, value(connection.Metadata.SourceIP), value(connection.Metadata.SourcePort),

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"image/color"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -640,30 +639,11 @@ func (m *Model) View() string {
 		if body == "" {
 			body = " "
 		}
-		borderColor, titleColor := m.sectionColors(sec.title)
-		parts = append(parts, ui.RenderBorderedSectionColored(m.theme, sec.title, body, inner, borderColor, titleColor))
+		// Borders are globally constant (surface border + accent title); the
+		// status meaning lives in the row values via StatusDot, not in the frame.
+		parts = append(parts, ui.RenderBorderedSection(m.theme, sec.title, body, inner))
 	}
 	return strings.Join(parts, "\n")
-}
-
-// sectionColors maps a System section title to its semantic border and title
-// color so each region of the page reads as one cohesive, color-coded unit:
-// control-plane info (info), mihomo core (accent), privileged OS service
-// (warning), and the network path (success). Unknown sections fall back to the
-// default muted border with an accent title.
-func (m *Model) sectionColors(title string) (border, titleColor color.Color) {
-	switch title {
-	case ui.DaemonSectionTitle:
-		return m.theme.ColorInfo, m.theme.ColorInfo
-	case ui.CoreSectionTitle:
-		return m.theme.ColorAccent, m.theme.ColorAccent
-	case ui.SystemServiceSectionTitle:
-		return m.theme.ColorWarning, m.theme.ColorWarning
-	case ui.NetworkSectionTitle:
-		return m.theme.ColorSuccess, m.theme.ColorSuccess
-	default:
-		return m.theme.ColorSurfaceBorder, m.theme.ColorAccent
-	}
 }
 
 func (m *Model) rows() []row {
@@ -675,10 +655,10 @@ func (m *Model) rows() []row {
 	core := fmt.Sprintf("Status %s\nVersion %s\nPID %d\nRestarts %d", valueOr(m.core.Status, ui.UnknownLabel), valueOr(m.core.Version, ui.UnknownLabel), m.core.PID, m.core.Restarts)
 	endpoints := fmt.Sprintf("Mixed %s\nController %s\nWeb GUI %s", valueOr(m.onboarding.MixedAddr, ui.MissingValue), valueOr(m.onboarding.ControllerAddr, ui.MissingValue), valueOr(m.onboarding.WebAddr, ui.MissingValue))
 	rows := []row{
-		{id: rowDaemon, section: ui.DaemonSectionTitle, label: ui.DaemonLabel, value: valueOr(m.status.DaemonVersion, ui.UnknownLabel) + " · " + valueOr(m.status.Health, ui.UnknownLabel), detail: daemon},
+		{id: rowDaemon, section: ui.DaemonSectionTitle, label: ui.DaemonLabel, value: daemonValue(m.theme, m.status), detail: daemon},
 		{id: rowEndpoints, section: ui.DaemonSectionTitle, label: ui.LocalEndpointsLabel, value: endpointSummary(m.onboarding), detail: endpoints},
 		{id: rowRunSetup, section: ui.DaemonSectionTitle, label: ui.RunSetupLabel, detail: ui.RunSetupDetail},
-		{id: rowCore, section: ui.CoreSectionTitle, label: ui.MihomoCoreLabel, value: valueOr(m.core.Status, ui.UnknownLabel) + " · " + valueOr(m.core.Version, ui.UnknownLabel), detail: core},
+		{id: rowCore, section: ui.CoreSectionTitle, label: ui.MihomoCoreLabel, value: coreValue(m.theme, m.core), detail: core},
 		{id: rowCoreUpdate, section: ui.CoreSectionTitle, label: m.coreActionLabel(), value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.UpdateCoreImpact},
 		{id: rowCoreRestart, section: ui.CoreSectionTitle, label: ui.RestartCoreLabel, value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.RestartCoreImpact},
 	}
@@ -695,12 +675,12 @@ func (m *Model) networkRows() []row {
 		value := ui.LoadingLabel
 		detail := ui.EnableSystemProxyImpact
 		if m.systemProxyLoaded {
-			value = systemProxySummary(m.systemProxy)
+			value = systemProxySummary(m.theme, m.systemProxy)
 			detail = systemProxyDetail(m.systemProxy)
 		}
 		if !m.mutationsEnabled {
 			if m.systemProxyLoaded {
-				value = systemProxySummary(m.systemProxy) + " · " + ui.StaleLabel
+				value = systemProxySummary(m.theme, m.systemProxy) + " · " + ui.StaleLabel
 			} else {
 				value = ui.StaleLabel
 			}
@@ -717,12 +697,12 @@ func (m *Model) networkRows() []row {
 		tunValue = ui.LoadingLabel
 		tunDetail = ui.EnableTunImpact
 		if m.tunLoaded {
-			tunValue = tunSummary(m.tun)
+			tunValue = tunSummary(m.theme, m.tun)
 			tunDetail = tunDetailText(m.tun)
 		}
 		if !m.mutationsEnabled {
 			if m.tunLoaded {
-				tunValue = tunSummary(m.tun) + " · " + ui.StaleLabel
+				tunValue = tunSummary(m.theme, m.tun) + " · " + ui.StaleLabel
 			} else {
 				tunValue = ui.StaleLabel
 			}
@@ -756,7 +736,7 @@ func (m *Model) serviceRows() []row {
 		statusDetail = fmt.Sprintf("Status %s\nPrivileges %s", statusValue, privilege)
 	}
 	return []row{
-		{id: rowServiceStatus, section: section, label: ui.ServiceStatusLabel, value: statusValue + " · " + privilege, detail: statusDetail},
+		{id: rowServiceStatus, section: section, label: ui.ServiceStatusLabel, value: ui.StatusDot(m.theme, ui.ClassifyStatusTone(statusValue), statusValue) + "  " + m.theme.Muted.Render("· "+privilege), detail: statusDetail},
 		{id: rowServiceInstall, section: section, label: ui.ServiceInstallLabel, value: m.serviceActionState(serviceInstall), detail: ui.ServiceInstallImpact},
 		{id: rowServiceUninstall, section: section, label: ui.ServiceUninstallLabel, value: m.serviceActionState(serviceUninstall), detail: ui.ServiceUninstallImpact},
 		{id: rowServiceReinstall, section: section, label: ui.ServiceReinstallLabel, value: m.serviceActionState(serviceReinstall), detail: ui.ServiceReinstallImpact},
@@ -1252,7 +1232,69 @@ func actionState(available, enabled bool) string {
 	return ""
 }
 
-func systemProxySummary(status protocol.SystemProxyStatus) string {
+// daemonValue renders the daemon row value: a status dot for health (tone from
+// the health word) followed by the version as muted context.
+func daemonValue(theme ui.Theme, status protocol.Status) string {
+	health := valueOr(status.Health, ui.UnknownLabel)
+	return ui.StatusDot(theme, ui.ClassifyStatusTone(health), health) + "  " +
+		theme.Muted.Render(valueOr(status.DaemonVersion, ui.UnknownLabel))
+}
+
+// coreTone maps the mihomo core status to a tone. "running" is Positive; an
+// explicit "missing" (not installed yet) is Neutral rather than a fault; any
+// other word falls through to the shared classifier.
+func coreTone(status string) ui.StatusTone {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "running":
+		return ui.TonePositive
+	case "missing":
+		return ui.ToneNeutral
+	default:
+		return ui.ClassifyStatusTone(status)
+	}
+}
+
+// coreValue renders the core row value: a status dot (tone from coreTone) and
+// the version as muted context.
+func coreValue(theme ui.Theme, core protocol.CoreStatus) string {
+	status := valueOr(core.Status, ui.UnknownLabel)
+	return ui.StatusDot(theme, coreTone(core.Status), status) + "  " +
+		theme.Muted.Render(valueOr(core.Version, ui.UnknownLabel))
+}
+
+// proxyTone derives the system-proxy status tone: a foreign observer or a
+// desired/observed drift needs attention (Caution); an owned, enabled proxy is
+// Positive; otherwise (off) Neutral.
+func proxyTone(status protocol.SystemProxyStatus) ui.StatusTone {
+	switch {
+	case status.Observed.Foreign:
+		return ui.ToneCaution
+	case status.Desired != status.Observed.Enabled:
+		return ui.ToneCaution
+	case status.Observed.Owned && status.Observed.Enabled:
+		return ui.TonePositive
+	default:
+		return ui.ToneNeutral
+	}
+}
+
+// tunTone derives the TUN status tone: unknown live state is Neutral; a
+// desired/live drift is Caution; live-on is Positive.
+func tunTone(status protocol.TunStatus) ui.StatusTone {
+	liveOn := status.LiveEnable != nil && *status.LiveEnable
+	switch {
+	case status.LiveEnable == nil:
+		return ui.ToneNeutral
+	case status.DesiredEnable != liveOn:
+		return ui.ToneCaution
+	case liveOn:
+		return ui.TonePositive
+	default:
+		return ui.ToneNeutral
+	}
+}
+
+func systemProxySummary(theme ui.Theme, status protocol.SystemProxyStatus) string {
 	desired := ui.OffLabel
 	if status.Desired {
 		desired = ui.OnLabel
@@ -1260,17 +1302,23 @@ func systemProxySummary(status protocol.SystemProxyStatus) string {
 	observed := ui.OffLabel
 	if status.Observed.Enabled {
 		observed = valueOr(status.Observed.Server, ui.OnLabel)
-		switch {
-		case status.Observed.Owned:
-			observed += " · " + ui.OwnedLabel
-		case status.Observed.Foreign:
-			observed += " · " + ui.ForeignLabel
-		}
 	} else if status.Observed.Foreign {
 		// Residual foreign config with ProxyEnable=0 still surfaces classification.
-		observed = valueOr(status.Observed.Server, ui.OffLabel) + " · " + ui.ForeignLabel
+		observed = valueOr(status.Observed.Server, ui.OffLabel)
 	}
-	return fmt.Sprintf("%s %s · %s %s", ui.DesiredLabel, desired, ui.ObservedLabel, observed)
+	classification := ""
+	switch {
+	case status.Observed.Owned:
+		classification = ui.OwnedLabel
+	case status.Observed.Foreign:
+		classification = ui.ForeignLabel
+	}
+	context := fmt.Sprintf("%s %s · %s %s", ui.DesiredLabel, desired, ui.ObservedLabel, observed)
+	if classification != "" {
+		context += " · " + classification
+	}
+	// Status dot carries the tone; the desired/observed detail stays muted.
+	return ui.StatusDot(theme, proxyTone(status), "") + "  " + theme.Muted.Render(context)
 }
 
 func systemProxyDetail(status protocol.SystemProxyStatus) string {
@@ -1286,7 +1334,7 @@ func systemProxyDetail(status protocol.SystemProxyStatus) string {
 	)
 }
 
-func tunSummary(status protocol.TunStatus) string {
+func tunSummary(theme ui.Theme, status protocol.TunStatus) string {
 	desired := ui.OffLabel
 	if status.DesiredEnable {
 		desired = ui.OnLabel
@@ -1311,7 +1359,8 @@ func tunSummary(status protocol.TunStatus) string {
 	if status.Stack != "" {
 		parts = append(parts, status.Stack)
 	}
-	return strings.Join(parts, " · ")
+	// Status dot carries the tone; desired/live/stack detail stays muted.
+	return ui.StatusDot(theme, tunTone(status), "") + "  " + theme.Muted.Render(strings.Join(parts, " · "))
 }
 
 func tunDetailText(status protocol.TunStatus) string {
