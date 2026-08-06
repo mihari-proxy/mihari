@@ -74,7 +74,7 @@ func LoadOrCreate(path string) (Settings, error) {
 
 // LoadOrCreateResult loads settings or creates them and reports whether this call created the file.
 func LoadOrCreateResult(path string) (Settings, bool, error) {
-	settings, err := Load(path)
+	settings, err := loadSettings(path)
 	if err == nil {
 		return settings, false, nil
 	}
@@ -93,7 +93,7 @@ func LoadOrCreateResult(path string) (Settings, bool, error) {
 		_ = lock.Close()
 		_ = os.Remove(lockPath)
 	}()
-	settings, err = Load(path)
+	settings, err = loadSettings(path)
 	if err == nil {
 		return settings, false, nil
 	}
@@ -110,6 +110,25 @@ func LoadOrCreateResult(path string) (Settings, bool, error) {
 		return Settings{}, false, err
 	}
 	return settings, true, nil
+}
+
+// loadSettings loads settings, retrying while the file exists on disk but is
+// momentarily unopenable. A concurrent writer replaces it via MoveFileEx;
+// during that window Windows reports a sharing violation that is neither
+// os.ErrNotExist nor os.ErrPermission, so existence is the reliable retry
+// signal. Genuine errors (permissions, deletion) surface immediately.
+func loadSettings(path string) (Settings, error) {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		settings, err := Load(path)
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			return settings, err
+		}
+		if _, statErr := os.Stat(path); statErr != nil || time.Now().After(deadline) {
+			return Settings{}, err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func acquireCreationLock(path string) (*os.File, error) {
