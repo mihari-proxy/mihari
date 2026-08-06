@@ -512,7 +512,7 @@ func TestSystemServiceStopRequiresConfirmationWithDisconnectImpact(t *testing.T)
 	model = updated.(*Model)
 	model.focusID = rowServiceStop
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
+	_ = updated.(*Model)
 	if cmd == nil {
 		t.Fatal("missing confirmation")
 	}
@@ -535,7 +535,7 @@ func TestSystemServiceActionsWorkWhileDaemonDisconnected(t *testing.T) {
 	model = updated.(*Model)
 	model.focusID = rowServiceStart
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
+	_ = updated.(*Model)
 	if cmd == nil {
 		t.Fatal("service start should work without daemon mutations")
 	}
@@ -561,7 +561,7 @@ func TestSystemEnterInspectsRowsAndRoutesSetupToStandaloneSetup(t *testing.T) {
 	model = updateKey(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
 	model.focusID = rowRunSetup
 	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
+	_ = updated.(*Model)
 	if command == nil {
 		t.Fatal("row=run-setup missing route command")
 	}
@@ -595,7 +595,7 @@ func TestSystemCoreUpdateAndRestartRequireConfirmationWithCapturedRevision(t *te
 			t.Fatalf("row=%s intent=%#v", test.id, intent)
 		}
 		updated, reconcile := model.Update(intent.Execute())
-		model = updated.(*Model)
+		_ = updated.(*Model)
 		if test.calls() != 1 || client.lastMutation.IfRevision == nil || *client.lastMutation.IfRevision != 11 || reconcile == nil {
 			t.Fatalf("row=%s calls=%d mutation=%#v", test.id, test.calls(), client.lastMutation)
 		}
@@ -611,7 +611,7 @@ func TestSystemOffersCoreInstallWhenNoVersionIsPresent(t *testing.T) {
 		t.Fatalf("view=%s", model.View())
 	}
 	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
+	_ = updated.(*Model)
 	if command == nil {
 		t.Fatal("install confirmation missing")
 	}
@@ -793,7 +793,7 @@ func TestSystemProxyForeignEnterRequestsForceOverwrite(t *testing.T) {
 	model.SetSystemProxy(client.systemProxy)
 	model.focusID = rowSystemProxy
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
+	_ = updated.(*Model)
 	if cmd == nil {
 		t.Fatal("missing force confirmation")
 	}
@@ -905,7 +905,7 @@ func TestSystemProxyOwnedEnterConfirmsDisable(t *testing.T) {
 	model.SetSystemProxy(client.systemProxy)
 	model.focusID = rowSystemProxy
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
+	_ = updated.(*Model)
 	intent := cmd().(ui.ActionIntentMsg)
 	if intent.Action != ui.ActionDisableSystemProxy {
 		t.Fatalf("intent=%#v", intent)
@@ -1249,7 +1249,7 @@ func TestSystemPanelOpenBlockedWhenNotInstalledOrDisabled(t *testing.T) {
 	model = updated.(*Model)
 	model.focusID = rowMetaCubeXD
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
+	_ = updated.(*Model)
 	if cmd != nil {
 		t.Fatalf("enter on uninstalled panel row must be silent, got %T", cmd())
 	}
@@ -1261,7 +1261,7 @@ func TestSystemPanelOpenBlockedWhenNotInstalledOrDisabled(t *testing.T) {
 	model = updated.(*Model)
 	model.focusID = rowZashboard
 	updated, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
+	_ = updated.(*Model)
 	if cmd != nil {
 		t.Fatalf("enter with mutations disabled must be silent, got %T", cmd())
 	}
@@ -1270,7 +1270,7 @@ func TestSystemPanelOpenBlockedWhenNotInstalledOrDisabled(t *testing.T) {
 	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityOnboarding}}, protocol.CoreStatus{})
 	model.focusID = rowZashboard
 	updated, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
+	_ = updated.(*Model)
 	if cmd != nil {
 		t.Fatalf("enter without web-gui capability must be silent, got %T", cmd())
 	}
@@ -1320,7 +1320,7 @@ func TestSystemWebGUIErrorShowsUnavailablePanelPlaceholders(t *testing.T) {
 	// Placeholder rows must not open anything.
 	model.focusID = rowZashboard
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
+	_ = updated.(*Model)
 	if cmd != nil {
 		t.Fatalf("placeholder row must not open a browser, got %T", cmd())
 	}

@@ -251,7 +251,7 @@ func TestOverview_CoreCardMergesCoreAndTraffic(t *testing.T) {
 	model := New()
 	model.SetSize(90, 26)
 	model.SetSnapshot(Snapshot{
-		Core:    protocol.CoreStatus{Status: "running", Version: "v1.19.0", PID: 42},
+		Core: protocol.CoreStatus{Status: "running", Version: "v1.19.0", PID: 42},
 		Monitor: ui.MonitorSnapshot{
 			Connections: 3, UploadTotal: 1 << 30, DownloadTotal: 2 << 30,
 			UploadRate: 3 << 20, DownloadRate: 4 << 20, MemoryInUse: 1024,

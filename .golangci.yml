@@ -34,12 +34,13 @@ linters:
         - os.RemoveAll
         # OS handle close never fails meaningfully on this code path.
         - golang.org/x/sys/windows.CloseHandle
+  exclusions:
+    rules:
+      # QF1001 (De Morgan rewrite) is a stylistic suggestion; the rewritten
+      # boolean is no clearer than the original in our cases.
+      - linters: [staticcheck]
+        text: QF1001
 
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-  exclude-rules:
-    # QF1001 (De Morgan rewrite) is a stylistic suggestion; the rewritten
-    # boolean is no clearer than the original in our cases.
-    - linters: [staticcheck]
-      text: QF1001

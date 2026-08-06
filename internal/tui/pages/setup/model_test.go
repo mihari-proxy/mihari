@@ -223,7 +223,7 @@ func TestSetupCommandsUseOwnedContext(t *testing.T) {
 	model.step = stepCore
 	cancel()
 	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
+	_ = updated.(*Model)
 	if command == nil {
 		t.Fatal("install command missing")
 	}
@@ -248,7 +248,7 @@ func TestSetupConfirmsBeforeChangingCompletedEffectiveConfiguration(t *testing.T
 		t.Fatalf("message=%T updates=%d", command(), client.updateCalls)
 	}
 	updated, _ = model.Update(request.Execute())
-	model = updated.(*Model)
+	_ = updated.(*Model)
 	if client.updateCalls != 1 {
 		t.Fatalf("updates=%d", client.updateCalls)
 	}

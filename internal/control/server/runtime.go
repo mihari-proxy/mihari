@@ -9,13 +9,13 @@ import (
 	"net/netip"
 	"sort"
 
+	"github.com/coder/websocket"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/geoip"
 	"github.com/mihari-proxy/mihari/internal/mihomo"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 	"github.com/mihari-proxy/mihari/internal/state"
-	"github.com/coder/websocket"
 )
 
 const maxControlBodySize = 1 << 20

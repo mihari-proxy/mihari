@@ -490,7 +490,7 @@ func TestDispatchPageDeliversAsyncResultsWhileRailFocused(t *testing.T) {
 // otherwise Network rows stay on Loading… when the user only arrows onto System.
 func TestNetworkStatusMsgSyncsSystemPageProxyAndTun(t *testing.T) {
 	model := NewModel()
-	system, ok := model.pages[ui.PageSystem].(*systempage.Model)
+	_, ok := model.pages[ui.PageSystem].(*systempage.Model)
 	if !ok {
 		t.Fatalf("system page=%T", model.pages[ui.PageSystem])
 	}
@@ -499,7 +499,7 @@ func TestNetworkStatusMsgSyncsSystemPageProxyAndTun(t *testing.T) {
 	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{
 		Capabilities: []string{protocol.CapabilitySystemProxy, protocol.CapabilityTUN},
 	}})
-	system = model.pages[ui.PageSystem].(*systempage.Model)
+	system := model.pages[ui.PageSystem].(*systempage.Model)
 	if view := system.View(); !strings.Contains(view, ui.LoadingLabel) {
 		t.Fatalf("expected Loading before networkStatusMsg, view=%s", view)
 	}

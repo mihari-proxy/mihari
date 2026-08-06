@@ -7,8 +7,8 @@ import (
 	"net"
 	"os"
 
-	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/Microsoft/go-winio"
+	"github.com/mihari-proxy/mihari/internal/platform"
 )
 
 func Listen(endpoint string) (net.Listener, error) {

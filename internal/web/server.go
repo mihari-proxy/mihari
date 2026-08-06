@@ -19,9 +19,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/panel"
-	"github.com/coder/websocket"
 )
 
 // PanelSource provides panel static trees and setup deep-links.
