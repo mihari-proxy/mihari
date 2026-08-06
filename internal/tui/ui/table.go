@@ -144,29 +144,67 @@ func FitColumnWidths(cols []TableColumn, total, gap int) []int {
 
 // TruncateVisible shortens s to at most width terminal columns, appending "…".
 func TruncateVisible(s string, width int) string {
+	return truncateStyled(s, width)
+}
+
+// truncateStyled shortens a possibly styled string to at most width terminal
+// columns, appending "…". ANSI escape sequences (\x1b[…m) carry no width and
+// are preserved verbatim as style prefixes for the runes they precede; a
+// trailing unterminated sequence is kept so the SGR state closes at the cut
+// point instead of leaking into following cells.
+func truncateStyled(text string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if lipgloss.Width(s) <= width {
-		return s
+	type cell struct {
+		prefix string
+		r      rune
+	}
+	cells := make([]cell, 0, len(text))
+	var escape strings.Builder
+	inEscape := false
+	for _, r := range text {
+		switch {
+		case r == '\x1b':
+			inEscape = true
+			escape.WriteRune(r)
+		case inEscape:
+			escape.WriteRune(r)
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEscape = false
+			}
+		default:
+			cells = append(cells, cell{prefix: escape.String(), r: r})
+			escape.Reset()
+		}
+	}
+	trailing := escape.String()
+	total := 0
+	for _, c := range cells {
+		total += runeWidth(c.r)
+	}
+	if total <= width {
+		return text
 	}
 	if width == 1 {
-		return "…"
+		return "…" + trailing
 	}
-	// Walk runes until width-1, then ellipsis.
-	var b strings.Builder
+	// Walk visible runes until width-1 columns, then ellipsis.
 	used := 0
 	limit := width - 1
-	for _, r := range s {
-		rw := runeWidth(r)
+	var out strings.Builder
+	for _, c := range cells {
+		rw := runeWidth(c.r)
 		if used+rw > limit {
 			break
 		}
-		b.WriteRune(r)
+		out.WriteString(c.prefix)
+		out.WriteRune(c.r)
 		used += rw
 	}
-	b.WriteString("…")
-	return b.String()
+	out.WriteString("…")
+	out.WriteString(trailing)
+	return out.String()
 }
 
 func runeWidth(r rune) int {
