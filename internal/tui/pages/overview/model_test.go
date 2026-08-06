@@ -23,7 +23,7 @@ func TestOverview_RendersAuthoritativeCardsAndSessionOperations(t *testing.T) {
 		Operations: []ui.OperationRecord{{Object: "mihomo", State: "Succeeded", At: time.Unix(100, 0).UTC()}},
 	})
 	view := model.View()
-	for _, want := range []string{"running", "v1.19.0", "PID 42", "Desired 5", "Observed 4", "Web GUI", "mihomo", "Succeeded", "27.7 MiB"} {
+	for _, want := range []string{"running", "v1.19.0", ui.ConfigApplyingLabel, "Web GUI", "mihomo", "Succeeded", "27.7 MiB"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view does not contain %q: %s", want, view)
 		}
@@ -97,8 +97,8 @@ func TestOverview_SectionTitlesEmbeddedInBorder(t *testing.T) {
 	})
 	view := model.View()
 	for _, name := range []string{
-		ui.OverviewGeneralTitle, ui.CoreCardTitle, ui.ConfigCardTitle,
-		ui.SubscriptionCardTitle, ui.WebGUICardTitle, ui.MonitorTrafficTitle, ui.RecentOperationsTitle,
+		ui.OverviewGeneralTitle, ui.CoreCardTitle,
+		ui.SubscriptionCardTitle, ui.WebGUICardTitle, ui.RecentOperationsTitle,
 	} {
 		if !strings.Contains(view, name) {
 			t.Fatalf("missing section title %q:\n%s", name, view)
@@ -169,22 +169,28 @@ func TestOverview_WideLayoutUsesTwoColumnKPIGrid(t *testing.T) {
 	wide.SetSnapshot(snapshot)
 	wideView := wide.View()
 
-	for _, want := range []string{ui.CoreCardTitle, ui.ConfigCardTitle, ui.SubscriptionCardTitle, ui.WebGUICardTitle, ui.MonitorTrafficTitle, ui.RecentOperationsTitle} {
+	for _, want := range []string{ui.CoreCardTitle, ui.SubscriptionCardTitle, ui.WebGUICardTitle, ui.RecentOperationsTitle} {
 		if !strings.Contains(wideView, want) {
 			t.Fatalf("wide view missing %q: %s", want, wideView)
 		}
 	}
 
-	// Core and Config titles should share a visual row when joined horizontally.
+	// Config state lives in the General Health row with the ok phrase; in a
+	// half-width card the long phrase wraps, so match the visible fragments.
+	if !strings.Contains(wideView, ui.OverviewHealthLabel) || !strings.Contains(wideView, "All Config Desired and") || !strings.Contains(wideView, "Applied Successfully") {
+		t.Fatalf("wide view missing Health row:\n%s", wideView)
+	}
+
+	// General and Core titles should share a visual row when joined horizontally.
 	foundPair := false
 	for _, line := range strings.Split(wideView, "\n") {
-		if strings.Contains(line, ui.CoreCardTitle) && strings.Contains(line, ui.ConfigCardTitle) {
+		if strings.Contains(line, ui.OverviewGeneralTitle) && strings.Contains(line, ui.CoreCardTitle) {
 			foundPair = true
 			break
 		}
 	}
 	if !foundPair {
-		t.Fatalf("expected Core and Config titles on the same row in wide layout:\n%s", wideView)
+		t.Fatalf("expected General and Core titles on the same row in wide layout:\n%s", wideView)
 	}
 
 	narrow := New()
@@ -199,6 +205,60 @@ func TestOverview_WideLayoutUsesTwoColumnKPIGrid(t *testing.T) {
 	}
 }
 
+func TestOverview_CoreCardMergesCoreAndTraffic(t *testing.T) {
+	model := New()
+	model.SetSize(90, 26)
+	model.SetSnapshot(Snapshot{
+		Core:    protocol.CoreStatus{Status: "running", Version: "v1.19.0", PID: 42},
+		Monitor: ui.MonitorSnapshot{
+			Connections: 3, UploadTotal: 1 << 30, DownloadTotal: 2 << 30,
+			UploadRate: 3 << 20, DownloadRate: 4 << 20, MemoryInUse: 1024,
+		},
+	})
+	view := model.View()
+	for _, want := range []string{
+		"running", "v1.19.0", ui.MonitorMemoryShort, "3 conn",
+		"↑1.0 GiB", "↓2.0 GiB", "3.0 MiB/s", "4.0 MiB/s",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, ui.MonitorTrafficTitle) {
+		t.Fatalf("traffic card must be merged into Core: %s", view)
+	}
+}
+
+func TestOverview_WebGUICardShowsAllAvailableStatus(t *testing.T) {
+	model := New()
+	model.SetSize(90, 26)
+	model.SetSnapshot(Snapshot{
+		Status: protocol.Status{Capabilities: []string{protocol.CapabilityWebGUI}},
+		WebGUI: &protocol.WebGUIStatus{
+			GatewayHealth: "healthy", GatewayAddr: "127.0.0.1:9191",
+			ActivePanel: "Zashboard", BrowserSessions: 2,
+		},
+	})
+	view := model.View()
+	for _, want := range []string{"healthy", "127.0.0.1:9191", "Zashboard", "2 sessions"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+
+	// No default panel: show the address and single-session form.
+	model.SetSnapshot(Snapshot{
+		Status: protocol.Status{Capabilities: []string{protocol.CapabilityWebGUI}},
+		WebGUI: &protocol.WebGUIStatus{GatewayHealth: "idle", BrowserSessions: 1},
+	})
+	view = model.View()
+	for _, want := range []string{"idle", ui.NoDefaultPanelLabel, "1 session"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestOverview_NarrowLayoutStacksSingleColumn(t *testing.T) {
 	model := New()
 	model.SetSize(40, 26)
@@ -206,13 +266,13 @@ func TestOverview_NarrowLayoutStacksSingleColumn(t *testing.T) {
 		Core: protocol.CoreStatus{Status: "running", Version: "v1.0.0", PID: 1},
 	})
 	view := model.View()
-	// Single-column: Core title line should not also contain Config.
+	// Single-column: General title line should not also contain Core.
 	for _, line := range strings.Split(view, "\n") {
-		if strings.Contains(line, ui.CoreCardTitle) && strings.Contains(line, ui.ConfigCardTitle) {
-			t.Fatalf("narrow layout should stack cards, not join Core/Config horizontally:\n%s", view)
+		if strings.Contains(line, ui.OverviewGeneralTitle) && strings.Contains(line, ui.CoreCardTitle) {
+			t.Fatalf("narrow layout should stack cards, not join General/Core horizontally:\n%s", view)
 		}
 	}
-	if !strings.Contains(view, ui.CoreCardTitle) || !strings.Contains(view, ui.ConfigCardTitle) {
+	if !strings.Contains(view, ui.OverviewGeneralTitle) || !strings.Contains(view, ui.CoreCardTitle) {
 		t.Fatalf("narrow layout still needs all cards: %s", view)
 	}
 }
