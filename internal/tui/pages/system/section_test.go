@@ -19,7 +19,7 @@ func TestView_SectionGroups(t *testing.T) {
 	if !strings.Contains(view, "╭") || !strings.Contains(view, "╰") {
 		t.Fatalf("missing section borders:\n%s", view)
 	}
-	// Daemon now absorbs the endpoints and Run Setup rows; the standalone
+	// Daemon now absorbs the endpoint and Run Setup rows; the standalone
 	// Maintenance and Local endpoints cards are gone.
 	for _, title := range []string{ui.DaemonSectionTitle, ui.CoreSectionTitle, ui.SystemServiceSectionTitle} {
 		if !strings.Contains(view, title) {
@@ -29,7 +29,7 @@ func TestView_SectionGroups(t *testing.T) {
 	if strings.Contains(view, ui.MaintenanceSectionTitle) {
 		t.Fatalf("Maintenance section should be merged into Daemon:\n%s", view)
 	}
-	if !strings.Contains(view, ui.RunSetupLabel) || !strings.Contains(view, ui.LocalEndpointsLabel) {
+	if !strings.Contains(view, ui.RunSetupLabel) || !strings.Contains(view, ui.ProxyEndpointLabel) {
 		t.Fatalf("merged Daemon rows missing labels:\n%s", view)
 	}
 	if !strings.Contains(view, "v0.4.0") || !strings.Contains(view, "v1.19.0") {

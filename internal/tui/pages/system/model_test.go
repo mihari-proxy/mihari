@@ -38,6 +38,13 @@ type fakeClient struct {
 	lastTunMutation protocol.TunMutationRequest
 	enableTunErr    error
 	disableTunErr   error
+
+	webGUI          protocol.WebGUIStatus
+	webGUICalls     int
+	webGUIErr       error
+	openWebGUICalls int
+	lastOpenPanel   string
+	openWebGUIErr   error
 }
 
 type fakeService struct {
@@ -182,6 +189,25 @@ func (f *fakeClient) DisableTun(_ context.Context, request protocol.TunMutationR
 	f.tun = status
 	return status, nil
 }
+func (f *fakeClient) WebGUI(context.Context) (protocol.WebGUIStatus, error) {
+	f.webGUICalls++
+	if f.webGUIErr != nil {
+		return protocol.WebGUIStatus{}, f.webGUIErr
+	}
+	return f.webGUI, nil
+}
+func (f *fakeClient) OpenWebGUI(_ context.Context, panelID string) (protocol.WebGUIOpenResult, error) {
+	f.openWebGUICalls++
+	f.lastOpenPanel = panelID
+	if f.openWebGUIErr != nil {
+		return protocol.WebGUIOpenResult{}, f.openWebGUIErr
+	}
+	return protocol.WebGUIOpenResult{
+		Schema:  "mihari/v1",
+		OpenURL: "http://127.0.0.1:9191/__mihari/panels/" + panelID + "/?token=test-token",
+		Panel:   panelID,
+	}, nil
+}
 
 func withElevation(t *testing.T, elevated bool) {
 	t.Helper()
@@ -245,7 +271,7 @@ func TestSystemRendersCategorizedRowsWithoutStopDaemon(t *testing.T) {
 	updated, _ := model.Update(onboardingResultMsg{status: client.onboarding})
 	model = updated.(*Model)
 	view := model.View()
-	for _, want := range []string{"Daemon", "v0.4.0", "mihomo core", "v1.19.0", "Local endpoints", "127.0.0.1:9190", "Run Setup", "TUN", "Unavailable"} {
+	for _, want := range []string{"Daemon", "v0.4.0", "mihomo core", "v1.19.0", "Proxy endpoint", "127.0.0.1:9190", "Run Setup", "TUN", "Unavailable"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("missing %q in view=%s", want, view)
 		}
@@ -523,7 +549,7 @@ func TestSystemServiceActionsWorkWhileDaemonDisconnected(t *testing.T) {
 	}
 }
 
-func TestSystemEnterInspectsRowsAndRoutesEndpointAndSetupToStandaloneSetup(t *testing.T) {
+func TestSystemEnterInspectsRowsAndRoutesSetupToStandaloneSetup(t *testing.T) {
 	model := New(&fakeClient{}, func() string { return "system-op" })
 	model.SetSnapshot(protocol.Status{DaemonVersion: "v0.4.0", Health: "ok", StartedAt: time.Now().Add(-5 * time.Minute), Capabilities: []string{protocol.CapabilityOnboarding}}, protocol.CoreStatus{Status: "running"})
 	model.SetMutationsEnabled(true)
@@ -533,17 +559,15 @@ func TestSystemEnterInspectsRowsAndRoutesEndpointAndSetupToStandaloneSetup(t *te
 		t.Fatalf("detail view=%s", model.View())
 	}
 	model = updateKey(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
-	for _, id := range []string{rowEndpoints, rowRunSetup} {
-		model.focusID = id
-		updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-		model = updated.(*Model)
-		if command == nil {
-			t.Fatalf("row=%s missing route command", id)
-		}
-		message, ok := command().(ui.RouteRequestMsg)
-		if !ok || message.Page != ui.PageSetup {
-			t.Fatalf("row=%s message=%T %#v", id, command(), command())
-		}
+	model.focusID = rowRunSetup
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("row=run-setup missing route command")
+	}
+	message, ok := command().(ui.RouteRequestMsg)
+	if !ok || message.Page != ui.PageSetup {
+		t.Fatalf("row=run-setup message=%T %#v", command(), command())
 	}
 }
 
@@ -600,7 +624,7 @@ func TestSystemOffersCoreInstallWhenNoVersionIsPresent(t *testing.T) {
 func TestSystemDisablesMutationsAndSetupRouteWhileDisconnected(t *testing.T) {
 	model := New(&fakeClient{}, func() string { return "system-op" })
 	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityCore, protocol.CapabilityOnboarding}}, protocol.CoreStatus{Version: "v1.19.0"})
-	for _, id := range []string{rowCoreUpdate, rowCoreRestart, rowEndpoints, rowRunSetup} {
+	for _, id := range []string{rowCoreUpdate, rowCoreRestart, rowRunSetup} {
 		model.focusID = id
 		updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		model = updated.(*Model)
@@ -1069,6 +1093,278 @@ func TestSystemProxyAndTunStickyOutcomes(t *testing.T) {
 	}
 	if !strings.Contains(model.View(), ui.DoneLabel) {
 		t.Fatalf("tun done view:\n%s", model.View())
+	}
+}
+
+func TestSystemRendersPanelEndpointRowsWhenInstalled(t *testing.T) {
+	client := &fakeClient{
+		onboarding: protocol.OnboardingStatus{MixedAddr: "127.0.0.1:9190", ControllerAddr: "127.0.0.1:9090", WebAddr: "127.0.0.1:9191"},
+		webGUI: protocol.WebGUIStatus{
+			Panels: []protocol.PanelStatus{
+				{ID: "zashboard", Name: "Zashboard", InstalledBuild: "v1"},
+				{ID: "metacubexd", Name: "MetaCubeXD", InstalledBuild: "abc123"},
+			},
+		},
+	}
+	model := New(client, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityWebGUI}}, protocol.CoreStatus{})
+	updated, _ := model.Update(onboardingResultMsg{status: client.onboarding})
+	model = updated.(*Model)
+	updated, _ = model.Update(webGUIStatusMsg{status: client.webGUI})
+	model = updated.(*Model)
+	view := model.View()
+	for _, want := range []string{
+		ui.ProxyEndpointLabel, "127.0.0.1:9190",
+		ui.MihomoCoreAPILabel, "127.0.0.1:9090",
+		ui.ZashboardLabel, ui.MetaCubeXDLabel, "/__mihari/panels/",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %q in view=%s", want, view)
+		}
+	}
+	// URLs are token-free; an exactly-48-column URL renders whole, a longer
+	// one truncates at 48 with an ellipsis.
+	if strings.Contains(view, "token=") {
+		t.Fatalf("panel URL must be token-free:\n%s", view)
+	}
+	if !strings.Contains(view, "http://127.0.0.1:9191/__mihari/panels/zashboard/") {
+		t.Fatalf("48-column panel URL must render whole:\n%s", view)
+	}
+	client.onboarding.WebAddr = "http://192.168.1.100:9191"
+	updated, _ = model.Update(onboardingResultMsg{status: client.onboarding})
+	model = updated.(*Model)
+	view = model.View()
+	if strings.Contains(view, "http://192.168.1.100:9191/__mihari/panels/zashboard/") || !strings.Contains(view, "…") {
+		t.Fatalf("longer panel URL must truncate at 48 columns:\n%s", view)
+	}
+}
+
+func TestSystemHidesUninstalledPanelRow(t *testing.T) {
+	client := &fakeClient{
+		onboarding: protocol.OnboardingStatus{WebAddr: "127.0.0.1:9191"},
+		webGUI: protocol.WebGUIStatus{
+			Panels: []protocol.PanelStatus{
+				{ID: "zashboard", Name: "Zashboard", InstalledBuild: "v1"},
+				{ID: "metacubexd", Name: "MetaCubeXD"},
+			},
+		},
+	}
+	model := New(client, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityWebGUI}}, protocol.CoreStatus{})
+	updated, _ := model.Update(webGUIStatusMsg{status: client.webGUI})
+	model = updated.(*Model)
+	view := model.View()
+	if !strings.Contains(view, ui.ZashboardLabel) || strings.Contains(view, ui.MetaCubeXDLabel) {
+		t.Fatalf("uninstalled panel row must hide (zashboard=%v metacubexd=%v):\n%s",
+			strings.Contains(view, ui.ZashboardLabel), strings.Contains(view, ui.MetaCubeXDLabel), view)
+	}
+}
+
+func TestSystemHidesPanelRowsWithoutWebGUICapability(t *testing.T) {
+	model := New(&fakeClient{onboarding: protocol.OnboardingStatus{WebAddr: "127.0.0.1:9191"}}, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityOnboarding}}, protocol.CoreStatus{})
+	view := model.View()
+	for _, banned := range []string{ui.ZashboardLabel, ui.MetaCubeXDLabel} {
+		if strings.Contains(view, banned) {
+			t.Fatalf("panel row %q without web-gui capability: %s", banned, view)
+		}
+	}
+	if !strings.Contains(view, ui.ProxyEndpointLabel) || !strings.Contains(view, ui.MihomoCoreAPILabel) {
+		t.Fatalf("proxy/core endpoint rows must always render:\n%s", view)
+	}
+}
+
+func TestSystemEndpointRowsOpenDetailPopup(t *testing.T) {
+	model := New(&fakeClient{onboarding: protocol.OnboardingStatus{MixedAddr: "127.0.0.1:9190", ControllerAddr: "127.0.0.1:9090"}}, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{}, protocol.CoreStatus{})
+	for _, test := range []struct {
+		id         string
+		detailText string
+	}{
+		{rowProxyEndpoint, ui.ProxyEndpointDetail},
+		{rowCoreAPI, ui.MihomoCoreAPIDetail},
+	} {
+		model.focusID = test.id
+		model = updateKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+		view := model.View()
+		if !strings.Contains(view, " details") || !strings.Contains(view, test.detailText) {
+			t.Fatalf("row=%s detail view=%s", test.id, view)
+		}
+		model = updateKey(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	}
+}
+
+func TestSystemPanelEnterOpensBrowser(t *testing.T) {
+	client := &fakeClient{
+		onboarding: protocol.OnboardingStatus{WebAddr: "127.0.0.1:9191"},
+		webGUI: protocol.WebGUIStatus{
+			Panels: []protocol.PanelStatus{{ID: "zashboard", Name: "Zashboard", InstalledBuild: "v1"}},
+		},
+	}
+	model := New(client, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityWebGUI}}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(true)
+	var opened []string
+	model.SetOpenBrowser(func(url string) error { opened = append(opened, url); return nil })
+	updated, _ := model.Update(webGUIStatusMsg{status: client.webGUI})
+	model = updated.(*Model)
+	model.focusID = rowZashboard
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if cmd == nil {
+		t.Fatal("missing open intent")
+	}
+	intent, ok := cmd().(ui.ActionIntentMsg)
+	if !ok || intent.Action != ui.ActionOpenWebGUI || intent.Page != ui.PageSystem || intent.Capability != protocol.CapabilityWebGUI || intent.Execute == nil {
+		t.Fatalf("intent=%#v", intent)
+	}
+	if len(opened) != 0 {
+		t.Fatalf("browser opened before Execute: %v", opened)
+	}
+	updated, _ = model.Update(intent.Execute())
+	model = updated.(*Model)
+	if client.openWebGUICalls != 1 || client.lastOpenPanel != "zashboard" {
+		t.Fatalf("open calls=%d panel=%q", client.openWebGUICalls, client.lastOpenPanel)
+	}
+	if len(opened) != 1 || !strings.Contains(opened[0], "/__mihari/panels/zashboard/") || !strings.Contains(opened[0], "token=") {
+		t.Fatalf("opened=%v", opened)
+	}
+	view := model.View()
+	if strings.Contains(view, ui.FailedLabel) || strings.Contains(view, ui.DoneLabel) {
+		t.Fatalf("successful open must stay silent (no sticky badge):\n%s", view)
+	}
+}
+
+func TestSystemPanelOpenBlockedWhenNotInstalledOrDisabled(t *testing.T) {
+	client := &fakeClient{
+		onboarding: protocol.OnboardingStatus{WebAddr: "127.0.0.1:9191"},
+		webGUI: protocol.WebGUIStatus{
+			Panels: []protocol.PanelStatus{{ID: "zashboard", Name: "Zashboard", InstalledBuild: "v1"}},
+		},
+	}
+	// Not installed: the metacubexd row is hidden entirely, enter stays silent.
+	model := New(client, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityWebGUI}}, protocol.CoreStatus{})
+	updated, _ := model.Update(webGUIStatusMsg{status: client.webGUI})
+	model = updated.(*Model)
+	model.focusID = rowMetaCubeXD
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if cmd != nil {
+		t.Fatalf("enter on uninstalled panel row must be silent, got %T", cmd())
+	}
+	// Mutations disabled: no intent even when the panel is installed.
+	model = New(client, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityWebGUI}}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(false)
+	updated, _ = model.Update(webGUIStatusMsg{status: client.webGUI})
+	model = updated.(*Model)
+	model.focusID = rowZashboard
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if cmd != nil {
+		t.Fatalf("enter with mutations disabled must be silent, got %T", cmd())
+	}
+	// No capability: rows are hidden, enter stays silent.
+	model = New(client, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityOnboarding}}, protocol.CoreStatus{})
+	model.focusID = rowZashboard
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if cmd != nil {
+		t.Fatalf("enter without web-gui capability must be silent, got %T", cmd())
+	}
+}
+
+func TestSystemLoadFetchesWebGUI(t *testing.T) {
+	client := &fakeClient{webGUI: protocol.WebGUIStatus{GatewayAddr: "127.0.0.1:9191"}}
+	model := New(client, nil)
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityWebGUI}}, protocol.CoreStatus{})
+	cmd := model.Load()
+	if cmd == nil {
+		t.Fatal("Load should fetch web gui status")
+	}
+	msg := cmd()
+	found := false
+	if typed, ok := msg.(webGUIStatusMsg); ok {
+		found = typed.err == nil
+	} else if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, item := range batch {
+			if typed, ok := item().(webGUIStatusMsg); ok {
+				found = typed.err == nil
+			}
+		}
+	} else {
+		t.Fatalf("unexpected Load msg %T", msg)
+	}
+	if !found || client.webGUICalls != 1 {
+		t.Fatalf("found=%v calls=%d", found, client.webGUICalls)
+	}
+}
+
+func TestSystemWebGUIErrorShowsUnavailablePanelPlaceholders(t *testing.T) {
+	model := New(&fakeClient{onboarding: protocol.OnboardingStatus{WebAddr: "127.0.0.1:9191"}}, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityWebGUI}}, protocol.CoreStatus{})
+	updated, _ := model.Update(webGUIStatusMsg{err: errors.New("boom")})
+	model = updated.(*Model)
+	view := model.View()
+	if !strings.Contains(view, ui.ZashboardLabel) || !strings.Contains(view, ui.MetaCubeXDLabel) {
+		t.Fatalf("panel placeholder rows missing on fetch error:\n%s", view)
+	}
+	if !strings.Contains(view, ui.UnavailableTitle) {
+		t.Fatalf("placeholder value missing:\n%s", view)
+	}
+	if model.lastError != ui.WebGUIUnavailable {
+		t.Fatalf("lastError=%q", model.lastError)
+	}
+	// Placeholder rows must not open anything.
+	model.focusID = rowZashboard
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if cmd != nil {
+		t.Fatalf("placeholder row must not open a browser, got %T", cmd())
+	}
+}
+
+func TestPanelURLNormalizesSchemeAndTrailingSlash(t *testing.T) {
+	for _, test := range []struct{ addr, id, want string }{
+		{"127.0.0.1:9191", "zashboard", "http://127.0.0.1:9191/__mihari/panels/zashboard/"},
+		{"http://127.0.0.1:9191/", "metacubexd", "http://127.0.0.1:9191/__mihari/panels/metacubexd/"},
+		{"https://127.0.0.1:9191//", "zashboard", "https://127.0.0.1:9191/__mihari/panels/zashboard/"},
+		{"http://localhost:9191", "zashboard", "http://localhost:9191/__mihari/panels/zashboard/"},
+		{"", "zashboard", ""},
+	} {
+		if got := panelURL(test.addr, test.id); got != test.want {
+			t.Fatalf("panelURL(%q, %q)=%q want %q", test.addr, test.id, got, test.want)
+		}
+	}
+}
+
+func TestSystemPanelOpenFailureShowsStickyFailed(t *testing.T) {
+	client := &fakeClient{
+		onboarding: protocol.OnboardingStatus{WebAddr: "127.0.0.1:9191"},
+		webGUI: protocol.WebGUIStatus{
+			Panels: []protocol.PanelStatus{{ID: "zashboard", Name: "Zashboard", InstalledBuild: "v1"}},
+		},
+		openWebGUIErr: protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "open browser failed"},
+	}
+	model := New(client, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityWebGUI}}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(true)
+	updated, _ := model.Update(webGUIStatusMsg{status: client.webGUI})
+	model = updated.(*Model)
+	model.focusID = rowZashboard
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	intent := cmd().(ui.ActionIntentMsg)
+	updated, _ = model.Update(intent.Execute())
+	model = updated.(*Model)
+	if model.outcomeRow != rowZashboard || model.outcomeOK {
+		t.Fatalf("outcome row=%q ok=%v", model.outcomeRow, model.outcomeOK)
+	}
+	view := model.View()
+	if !strings.Contains(view, ui.FailedLabel) || !strings.Contains(view, "open browser failed") {
+		t.Fatalf("failed view:\n%s", view)
 	}
 }
 

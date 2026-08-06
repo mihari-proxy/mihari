@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/LeeShunEE/mihari/internal/control/protocol"
 	"github.com/LeeShunEE/mihari/internal/elevate"
+	"github.com/LeeShunEE/mihari/internal/platform"
 	"github.com/LeeShunEE/mihari/internal/service"
 	"github.com/LeeShunEE/mihari/internal/tui/ui"
 )
@@ -23,7 +24,10 @@ const (
 	rowCore             = "core"
 	rowCoreUpdate       = "core-update"
 	rowCoreRestart      = "core-restart"
-	rowEndpoints        = "endpoints"
+	rowProxyEndpoint    = "proxy-endpoint"
+	rowCoreAPI          = "core-api"
+	rowZashboard        = "zashboard"
+	rowMetaCubeXD       = "metacubexd"
 	rowRunSetup         = "run-setup"
 	rowServiceStatus    = "service-status"
 	rowServiceHint      = "service-hint"
@@ -35,6 +39,13 @@ const (
 	rowServiceRestart   = "service-restart"
 	rowSystemProxy      = "system-proxy"
 	rowTUN              = "tun"
+)
+
+// Panel IDs mirrored from internal/panel/catalog.go; local constants keep the
+// panel package out of the presentation layer.
+const (
+	panelIDZashboard  = "zashboard"
+	panelIDMetaCubeXD = "metacubexd"
 )
 
 // Client is the daemon control surface used by System page actions.
@@ -49,6 +60,8 @@ type Client interface {
 	Tun(context.Context) (protocol.TunStatus, error)
 	EnableTun(context.Context, protocol.TunMutationRequest) (protocol.TunStatus, error)
 	DisableTun(context.Context, protocol.TunMutationRequest) (protocol.TunStatus, error)
+	WebGUI(context.Context) (protocol.WebGUIStatus, error)
+	OpenWebGUI(context.Context, string) (protocol.WebGUIOpenResult, error)
 }
 
 // ServiceController is the local OS service manager surface (not daemon IPC).
@@ -100,6 +113,18 @@ type systemProxyActionResultMsg struct {
 type tunStatusMsg struct {
 	status protocol.TunStatus
 	err    error
+}
+
+type webGUIStatusMsg struct {
+	status protocol.WebGUIStatus
+	err    error
+}
+
+// webGUIOpenResultMsg reports a panel browser-open outcome. rowID is captured
+// inside the Execute closure: focus may move while the open request is in flight.
+type webGUIOpenResultMsg struct {
+	rowID string
+	err   error
 }
 
 type tunActionResultMsg struct {
@@ -169,6 +194,7 @@ type Model struct {
 	ctx               context.Context
 	client            Client
 	service           ServiceController
+	openBrowser       func(string) error
 	newOperationID    func() string
 	status            protocol.Status
 	core              protocol.CoreStatus
@@ -177,6 +203,9 @@ type Model struct {
 	systemProxyLoaded bool
 	tun               protocol.TunStatus
 	tunLoaded         bool
+	webGUI            protocol.WebGUIStatus
+	webGUILoaded      bool
+	webGUIErr         bool
 	serviceStatus     service.StatusKind
 	serviceLoaded     bool
 	elevated          bool
@@ -222,6 +251,7 @@ func NewWithContext(ctx context.Context, client Client, svc ServiceController, n
 		ctx:            ctx,
 		client:         client,
 		service:        svc,
+		openBrowser:    platform.OpenBrowser,
 		newOperationID: newOperationID,
 		focusID:        rowDaemon,
 		theme:          ui.DefaultTheme(),
@@ -243,6 +273,19 @@ func (m *Model) ApplyServiceStatus(status service.StatusKind, loaded bool) {
 // SetServiceController injects or replaces the OS service controller.
 func (m *Model) SetServiceController(svc ServiceController) {
 	m.service = svc
+}
+
+// SetOpenBrowser injects the browser launcher (tests and headless environments).
+func (m *Model) SetOpenBrowser(open func(string) error) {
+	if open != nil {
+		m.openBrowser = open
+	}
+}
+
+// SetWebGUI injects Web GUI status (tests and optional external refresh).
+func (m *Model) SetWebGUI(status protocol.WebGUIStatus) {
+	m.webGUI = status
+	m.webGUILoaded = true
 }
 
 func (m *Model) ID() ui.PageID { return ui.PageSystem }
@@ -320,6 +363,9 @@ func (m *Model) Load() tea.Cmd {
 	if m.client != nil && m.hasCapability(protocol.CapabilityTUN) {
 		cmds = append(cmds, m.loadTun())
 	}
+	if m.client != nil && m.hasCapability(protocol.CapabilityWebGUI) {
+		cmds = append(cmds, m.loadWebGUI())
+	}
 	switch len(cmds) {
 	case 0:
 		return nil
@@ -348,6 +394,13 @@ func (m *Model) loadTun() tea.Cmd {
 	return func() tea.Msg {
 		status, err := m.client.Tun(m.ctx)
 		return tunStatusMsg{status: status, err: err}
+	}
+}
+
+func (m *Model) loadWebGUI() tea.Cmd {
+	return func() tea.Msg {
+		status, err := m.client.WebGUI(m.ctx)
+		return webGUIStatusMsg{status: status, err: err}
 	}
 }
 
@@ -392,6 +445,25 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, nil
 		}
 		m.tun = typed.status
+		return m, nil
+	case webGUIStatusMsg:
+		m.webGUILoaded = true
+		if typed.err != nil {
+			m.webGUIErr = true
+			if m.lastError == "" {
+				m.lastError = ui.WebGUIUnavailable
+			}
+			return m, nil
+		}
+		m.webGUIErr = false
+		m.webGUI = typed.status
+		return m, nil
+	case webGUIOpenResultMsg:
+		if typed.err == nil {
+			// Browser open is silent on success; no sticky Done badge.
+			return m, nil
+		}
+		m.markRowOutcome(typed.rowID, false, actionErrorDetail(typed.err, ui.WebGUIUnavailable))
 		return m, nil
 	case ui.CoreObservedMsg:
 		m.core = typed.Core
@@ -488,7 +560,11 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, nil
 		}
 		switch m.focusID {
-		case rowEndpoints, rowRunSetup:
+		case rowZashboard:
+			return m, m.openPanelBrowser(panelIDZashboard)
+		case rowMetaCubeXD:
+			return m, m.openPanelBrowser(panelIDMetaCubeXD)
+		case rowRunSetup:
 			if m.client == nil || !m.mutationsEnabled || !m.hasCapability(protocol.CapabilityOnboarding) {
 				return m, nil
 			}
@@ -580,7 +656,7 @@ func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cm
 func (m *Model) View() string {
 	if m.detail != nil {
 		return m.theme.Content.Width(m.width).Height(m.height).Render(
-			m.theme.Title.Render(m.detail.label+" details") + "\n\n" + m.detail.detail + "\n\n" + ui.EscCloseHint,
+			m.theme.Title.Render(strings.TrimSpace(m.detail.label)+" details") + "\n\n" + m.detail.detail + "\n\n" + ui.EscCloseHint,
 		)
 	}
 	inner := ui.FullSectionInner(m.layoutWidth())
@@ -654,18 +730,99 @@ func (m *Model) rows() []row {
 	}
 	daemon := fmt.Sprintf("Version %s\nUptime %s\nHealth %s\nRevision %d\nConfig %s", valueOr(m.status.DaemonVersion, ui.UnknownLabel), uptime(m.status.StartedAt), valueOr(m.status.Health, ui.UnknownLabel), m.status.Revision, configState)
 	core := fmt.Sprintf("Status %s\nVersion %s\nPID %d\nRestarts %d", valueOr(m.core.Status, ui.UnknownLabel), valueOr(m.core.Version, ui.UnknownLabel), m.core.PID, m.core.Restarts)
-	endpoints := fmt.Sprintf("Mixed %s\nController %s\nWeb GUI %s", valueOr(m.onboarding.MixedAddr, ui.MissingValue), valueOr(m.onboarding.ControllerAddr, ui.MissingValue), valueOr(m.onboarding.WebAddr, ui.MissingValue))
-	rows := []row{
-		{id: rowDaemon, section: ui.DaemonSectionTitle, label: ui.DaemonLabel, value: daemonValue(m.theme, m.status), detail: daemon},
-		{id: rowEndpoints, section: ui.DaemonSectionTitle, label: ui.LocalEndpointsLabel, value: endpointSummary(m.onboarding), detail: endpoints},
-		{id: rowRunSetup, section: ui.DaemonSectionTitle, label: ui.RunSetupLabel, detail: ui.RunSetupDetail},
-		{id: rowCore, section: ui.CoreSectionTitle, label: ui.MihomoCoreLabel, value: coreValue(m.theme, m.core), detail: core},
-		{id: rowCoreUpdate, section: ui.CoreSectionTitle, label: m.coreActionLabel(), value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.UpdateCoreImpact},
-		{id: rowCoreRestart, section: ui.CoreSectionTitle, label: ui.RestartCoreLabel, value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.RestartCoreImpact},
-	}
+	rows := []row{{id: rowDaemon, section: ui.DaemonSectionTitle, label: ui.DaemonLabel, value: daemonValue(m.theme, m.status), detail: daemon}}
+	rows = append(rows, m.endpointRows()...)
+	rows = append(rows,
+		row{id: rowRunSetup, section: ui.DaemonSectionTitle, label: ui.RunSetupLabel, detail: ui.RunSetupDetail},
+		row{id: rowCore, section: ui.CoreSectionTitle, label: ui.MihomoCoreLabel, value: coreValue(m.theme, m.core), detail: core},
+		row{id: rowCoreUpdate, section: ui.CoreSectionTitle, label: m.coreActionLabel(), value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.UpdateCoreImpact},
+		row{id: rowCoreRestart, section: ui.CoreSectionTitle, label: ui.RestartCoreLabel, value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.RestartCoreImpact},
+	)
 	rows = append(rows, m.serviceRows()...)
 	rows = append(rows, m.networkRows()...)
 	return rows
+}
+
+// endpointRows renders the Daemon endpoint rows: proxy and core API always,
+// then the installed Web GUI panels when the capability is present.
+func (m *Model) endpointRows() []row {
+	section := ui.DaemonSectionTitle
+	rows := []row{
+		{
+			id: rowProxyEndpoint, section: section,
+			label: padEndpointLabel(ui.ProxyEndpointLabel),
+			value: valueOr(m.onboarding.MixedAddr, ui.MissingValue), detail: ui.ProxyEndpointDetail,
+		},
+		{
+			id: rowCoreAPI, section: section,
+			label: padEndpointLabel(ui.MihomoCoreAPILabel),
+			value: valueOr(m.onboarding.ControllerAddr, ui.MissingValue), detail: ui.MihomoCoreAPIDetail,
+		},
+	}
+	if !m.hasCapability(protocol.CapabilityWebGUI) {
+		return rows
+	}
+	webAddr := m.onboarding.WebAddr
+	if panelRow, ok := m.panelEndpointRow(panelIDZashboard, ui.ZashboardLabel, webAddr); ok {
+		rows = append(rows, panelRow)
+	}
+	if panelRow, ok := m.panelEndpointRow(panelIDMetaCubeXD, ui.MetaCubeXDLabel, webAddr); ok {
+		rows = append(rows, panelRow)
+	}
+	return rows
+}
+
+// panelEndpointRow builds one Web GUI panel endpoint row. A settled
+// not-installed state hides the row (user decision); unknown state shows a
+// Loading…/Unavailable placeholder instead.
+func (m *Model) panelEndpointRow(id, label, webAddr string) (row, bool) {
+	if m.webGUILoaded && !m.webGUIErr && !webGUIPanelInstalled(m.webGUI, id) {
+		return row{}, false
+	}
+	value := ui.UnavailableTitle
+	switch {
+	case m.webGUIErr:
+		value = ui.UnavailableTitle
+	case !m.webGUILoaded:
+		value = ui.LoadingLabel
+	default:
+		value = ui.TruncateVisible(valueOr(panelURL(webAddr, id), ui.MissingValue), 48)
+	}
+	return row{
+		id: id, section: ui.DaemonSectionTitle, label: padEndpointLabel(label),
+		value: value, detail: ui.PanelOpenDetail,
+	}, true
+}
+
+// webGUIPanelInstalled reports whether the panel has a local build, using the
+// same source of truth as the Web GUI page uninstall guard.
+func webGUIPanelInstalled(status protocol.WebGUIStatus, id string) bool {
+	for _, panel := range status.Panels {
+		if panel.ID == id {
+			return panel.InstalledBuild != "" || panel.Active
+		}
+	}
+	return false
+}
+
+// panelURL builds the token-free mount URL for a panel at a Web GUI gateway
+// address. The path anchors panel.UIPathPrefix (internal/panel/static_root.go);
+// local assembly keeps the panel package out of the presentation layer.
+func panelURL(webAddr, panelID string) string {
+	addr := strings.TrimSpace(webAddr)
+	if addr == "" {
+		return addr
+	}
+	if !strings.Contains(addr, "://") {
+		addr = "http://" + addr
+	}
+	return strings.TrimRight(addr, "/") + "/__mihari/panels/" + panelID + "/"
+}
+
+// padEndpointLabel aligns endpoint row labels so values start at a fixed
+// column; "Mihomo Core API" is the widest label at 15 runes.
+func padEndpointLabel(label string) string {
+	return fmt.Sprintf("%-15s", label)
 }
 
 func (m *Model) networkRows() []row {
@@ -1165,6 +1322,46 @@ func (m *Model) runTunAction(kind tunActionKind, operationID string, revision ui
 	}
 }
 
+// openPanelBrowser returns the no-confirm open-browser intent for an installed
+// panel row. RequiresDaemon gating (mutationsEnabled) is applied by the root
+// shell; the one-shot token stays inside Execute — the view only ever renders
+// token-free mount URLs (webgui page constraint).
+func (m *Model) openPanelBrowser(panelID string) tea.Cmd {
+	if m.client == nil || !m.mutationsEnabled || !m.hasCapability(protocol.CapabilityWebGUI) {
+		return nil
+	}
+	// Rows only render when installed; do not open placeholder rows whose
+	// install state is unknown (loading) or failed.
+	if !m.webGUILoaded || m.webGUIErr || !webGUIPanelInstalled(m.webGUI, panelID) {
+		return nil
+	}
+	openBrowser := m.openBrowser
+	if openBrowser == nil {
+		openBrowser = platform.OpenBrowser
+	}
+	object := ui.ZashboardLabel
+	if panelID == panelIDMetaCubeXD {
+		object = ui.MetaCubeXDLabel
+	}
+	return func() tea.Msg {
+		return ui.ActionIntentMsg{
+			Action: ui.ActionOpenWebGUI, Page: ui.PageSystem, Capability: protocol.CapabilityWebGUI,
+			Key: "system:web-gui:open:" + panelID, Title: ui.OpenWebGUITitle, Object: object,
+			Impact: ui.OpenWebGUIImpact, Rollback: ui.OpenWebGUIRollback,
+			Execute: func() tea.Msg {
+				result, err := m.client.OpenWebGUI(m.ctx, panelID)
+				if err != nil {
+					return webGUIOpenResultMsg{rowID: panelID, err: err}
+				}
+				if err := openBrowser(result.OpenURL); err != nil {
+					return webGUIOpenResultMsg{rowID: panelID, err: err}
+				}
+				return webGUIOpenResultMsg{rowID: panelID}
+			},
+		}
+	}
+}
+
 func (m *Model) rowIndex(id string) int {
 	for index, item := range m.rows() {
 		if item.id == id {
@@ -1243,10 +1440,6 @@ func (m *Model) loadCore() tea.Cmd {
 		}
 		return ui.CoreObservedMsg{Core: core}
 	}
-}
-
-func endpointSummary(status protocol.OnboardingStatus) string {
-	return fmt.Sprintf("%s · %s · %s", valueOr(status.MixedAddr, ui.MissingValue), valueOr(status.ControllerAddr, ui.MissingValue), valueOr(status.WebAddr, ui.MissingValue))
 }
 
 // actionState is the idle suffix for action rows. In-flight/outcome chips are
