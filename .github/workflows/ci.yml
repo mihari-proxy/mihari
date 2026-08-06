@@ -36,7 +36,7 @@ jobs:
         shell: bash
         run: test -z "$(gofmt -l .)"
 
-  cross-build:
+  build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -64,3 +64,19 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go build -o /tmp/mihari-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/mihari
+
+  # Fan-in gate: branch protection requires a status named "cross-build", but
+  # GitHub reports each matrix leg under its expanded name (build (linux,
+  # amd64)), so no run ever reports the bare name and the check stays
+  # "Expected - Waiting for status to be reported" forever. This job posts
+  # the exact "cross-build" status and fails when any leg failed.
+  cross-build:
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [build]
+    steps:
+      - name: Verify all matrix builds passed
+        run: |
+          for result in ${{ join(needs.build.result, ' ') }}; do
+            [ "$result" = "success" ] || { echo "build matrix result: $result"; exit 1; }
+          done
