@@ -26,6 +26,7 @@ const (
 	rowEndpoints        = "endpoints"
 	rowRunSetup         = "run-setup"
 	rowServiceStatus    = "service-status"
+	rowServiceHint      = "service-hint"
 	rowServiceInstall   = "service-install"
 	rowServiceUninstall = "service-uninstall"
 	rowServiceReinstall = "service-reinstall"
@@ -735,15 +736,43 @@ func (m *Model) serviceRows() []row {
 	if m.elevated {
 		statusDetail = fmt.Sprintf("Status %s\nPrivileges %s", statusValue, privilege)
 	}
-	return []row{
+	rows := []row{
 		{id: rowServiceStatus, section: section, label: ui.ServiceStatusLabel, value: ui.StatusDot(m.theme, ui.ClassifyStatusTone(statusValue), statusValue) + "  " + m.theme.Muted.Render("· "+privilege), detail: statusDetail},
-		{id: rowServiceInstall, section: section, label: ui.ServiceInstallLabel, value: m.serviceActionState(serviceInstall), detail: ui.ServiceInstallImpact},
-		{id: rowServiceUninstall, section: section, label: ui.ServiceUninstallLabel, value: m.serviceActionState(serviceUninstall), detail: ui.ServiceUninstallImpact},
-		{id: rowServiceReinstall, section: section, label: ui.ServiceReinstallLabel, value: m.serviceActionState(serviceReinstall), detail: ui.ServiceReinstallImpact},
-		{id: rowServiceStart, section: section, label: ui.ServiceStartLabel, value: m.serviceActionState(serviceStart), detail: ui.ServiceStartImpact},
-		{id: rowServiceStop, section: section, label: ui.ServiceStopLabel, value: m.serviceActionState(serviceStop), detail: ui.ServiceStopImpact},
-		{id: rowServiceRestart, section: section, label: ui.ServiceRestartLabel, value: m.serviceActionState(serviceRestart), detail: ui.ServiceRestartImpact},
 	}
+	if !m.elevated {
+		// Fold all six action rows into one elevation hint (design SY1).
+		rows = append(rows, row{
+			id: rowServiceHint, section: section,
+			value:  "(" + ui.ServiceNeedsElevation + ")",
+			detail: ui.ServiceElevationRequired,
+		})
+		return rows
+	}
+	// Elevated: render only the actions that apply right now (design SY1 —
+	// unavailable actions are not shown instead of showing "Unavailable").
+	actions := []struct {
+		id     string
+		kind   serviceActionKind
+		label  string
+		impact string
+	}{
+		{rowServiceInstall, serviceInstall, ui.ServiceInstallLabel, ui.ServiceInstallImpact},
+		{rowServiceUninstall, serviceUninstall, ui.ServiceUninstallLabel, ui.ServiceUninstallImpact},
+		{rowServiceReinstall, serviceReinstall, ui.ServiceReinstallLabel, ui.ServiceReinstallImpact},
+		{rowServiceStart, serviceStart, ui.ServiceStartLabel, ui.ServiceStartImpact},
+		{rowServiceStop, serviceStop, ui.ServiceStopLabel, ui.ServiceStopImpact},
+		{rowServiceRestart, serviceRestart, ui.ServiceRestartLabel, ui.ServiceRestartImpact},
+	}
+	for _, action := range actions {
+		if !m.serviceActionAllowed(action.kind) {
+			continue
+		}
+		rows = append(rows, row{
+			id: action.id, section: section, label: action.label,
+			value: m.serviceActionState(action.kind), detail: action.impact,
+		})
+	}
+	return rows
 }
 
 func (m *Model) serviceActionState(kind serviceActionKind) string {
