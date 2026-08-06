@@ -241,7 +241,7 @@ func (m *Model) buildContent() (lines []string, focusStart, focusEnd int) {
 		header := fmt.Sprintf("%s%s  Now: %s", focus, marker, nowDisplay)
 		switch {
 		case groupFocused && m.contentFocused:
-			header = m.theme.RowFocus.Render(header)
+			header = ui.ApplyFocusStyle(header, m.theme.RowFocus)
 		}
 
 		bodyLines := []string{header}

@@ -6,7 +6,7 @@
     Logs         ╭───Connections · 1 active───────────────────────────────────────────────────────╮ 
     Subs         │   Host                  Network       Chain                            Traffic │ 
     Web GUI      │   ──────────────────────────────────────────────────────────────────────────── │ 
-    System       │   example.com           —/TCP         DIRECT                    ↑0 B/s  ↓0 B/s │ 
+    System       │   example.com           —/TCP         DIRECT                  ↑0 B/s    ↓0 B/s │ 
                  ╰────────────────────────────────────────────────────────────────────────────────╯ 
                                                                                                     
                                                                                                     

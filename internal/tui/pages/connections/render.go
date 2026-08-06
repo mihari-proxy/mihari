@@ -156,9 +156,9 @@ func (m *Model) renderConnection(connection protocol.Connection, focused bool) [
 		var text string
 		switch col.ID {
 		case "traffic":
-			up := "↑" + formatRate(connection.UploadSpeed)
-			down := "↓" + formatRate(connection.DownloadSpeed)
-			text = ui.StyleTrafficPair(m.theme, up, down)
+			text = ui.RenderTrafficColumn(m.theme,
+				ui.FormatRate(connection.UploadSpeed),
+				ui.FormatRate(connection.DownloadSpeed), widths[index])
 		case "network":
 			text = ui.StyleNetwork(m.theme, columnValue(connection, col.ID))
 		default:
@@ -168,7 +168,7 @@ func (m *Model) renderConnection(connection protocol.Connection, focused bool) [
 	}
 	line := marker + ui.JoinCells(cells, 2)
 	if focused && m.contentFocused {
-		line = m.theme.RowFocus.Render(line)
+		line = ui.ApplyFocusStyle(line, m.theme.RowFocus)
 	}
 	return []string{line}
 }
@@ -194,7 +194,7 @@ func (m *Model) columnsView() string {
 		}
 		line := focus + mark + " " + ui.ConnectionColumnLabel(column)
 		if rowFocused && m.contentFocused {
-			line = m.theme.RowFocus.Render(line)
+			line = ui.ApplyFocusStyle(line, m.theme.RowFocus)
 		}
 		lines = append(lines, line)
 	}
@@ -215,17 +215,17 @@ func columnValue(connection protocol.Connection, column string) string {
 		}
 		return address(connection.Metadata.DestinationIP, connection.Metadata.DestinationPort)
 	case "chain":
-		return strings.Join(connection.Chains, " \u2192 ")
+		return ui.DisplayProxyName(strings.Join(connection.Chains, " \u2192 "))
 	case "rule":
 		return strings.TrimSpace(connection.Rule + " " + connection.RulePay)
 	case "process":
 		return value(connection.Metadata.Process)
 	case "upload":
-		return formatBytes(connection.Upload)
+		return ui.FormatBytes(connection.Upload)
 	case "download":
-		return formatBytes(connection.Download)
+		return ui.FormatBytes(connection.Download)
 	case "traffic":
-		return fmt.Sprintf("↑%s ↓%s", formatRate(connection.UploadSpeed), formatRate(connection.DownloadSpeed))
+		return fmt.Sprintf("↑%s ↓%s", ui.FormatRate(connection.UploadSpeed), ui.FormatRate(connection.DownloadSpeed))
 	case "start":
 		if connection.Start.IsZero() {
 			return ui.MissingValue
@@ -271,12 +271,3 @@ func clipLines(content string, width int) string {
 	}
 	return strings.Join(lines, "\n")
 }
-
-func formatBytes(value int64) string {
-	if value < 1024 {
-		return fmt.Sprintf("%d B", max(int64(0), value))
-	}
-	return fmt.Sprintf("%.1f KiB", float64(value)/1024)
-}
-
-func formatRate(value int64) string { return formatBytes(value) + "/s" }

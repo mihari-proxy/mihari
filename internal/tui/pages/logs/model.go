@@ -310,7 +310,7 @@ func (m *Model) renderEntry(entry Entry, focused bool) []string {
 	message := safeLine(entry.Log.Message)
 	styleLine := func(line string) string {
 		if focused && m.contentFocused {
-			return m.theme.RowFocus.Render(line)
+			return ui.ApplyFocusStyle(line, m.theme.RowFocus)
 		}
 		return line
 	}
