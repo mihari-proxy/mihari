@@ -536,7 +536,7 @@ func (m *Model) View() string {
 		line := marker + entry.Render(m.theme, cols, widths)
 		// Keyboard focus uses RowFocus; business active marker is ● (Success).
 		if rowFocused && m.contentFocused {
-			line = m.theme.RowFocus.Render(line)
+			line = ui.ApplyFocusStyle(line, m.theme.RowFocus)
 		}
 		bodyLines = append(bodyLines, line)
 	}

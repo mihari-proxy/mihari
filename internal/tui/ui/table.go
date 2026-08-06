@@ -330,6 +330,47 @@ func StyleTrafficPair(theme Theme, upLabel, downLabel string) string {
 	return up + "  " + down
 }
 
+// splitRate splits a formatted rate ("1.2 MiB/s") at its last space into the
+// number part ("1.2") and the unit part ("MiB/s").
+func splitRate(rate string) (digits, unit string) {
+	if index := strings.LastIndexByte(rate, ' '); index >= 0 {
+		return rate[:index], rate[index+1:]
+	}
+	return rate, ""
+}
+
+// RenderTrafficSlot renders marker+rate (e.g. "↑1.2 MiB/s") into a w-wide
+// slot: the unit is right-anchored at the slot's right edge and the digits
+// stretch between marker and unit. When the slot is too narrow the digits are
+// truncated first — the unit is never cut.
+func RenderTrafficSlot(style lipgloss.Style, marker, rate string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	digits, unit := splitRate(rate)
+	reserve := lipgloss.Width(unit) + 1 // space before the anchored unit
+	bodyW := max(0, w-reserve)
+	body := TruncateVisible(marker+digits, bodyW)
+	if bodyW > 0 {
+		body = strings.Repeat(" ", bodyW-lipgloss.Width(body)) + body
+	}
+	slot := body + " " + unit
+	if bodyW == 0 && lipgloss.Width(slot) > w {
+		// Narrower than unit+space: fall back to truncating the unit itself.
+		slot = TruncateVisible(marker+unit, w)
+	}
+	return style.Render(slot)
+}
+
+// RenderTrafficColumn combines the ↑/↓ slots (two spaces apart) into the
+// Conns traffic column cell of width w, keeping both units vertically aligned.
+func RenderTrafficColumn(theme Theme, upRate, downRate string, w int) string {
+	slot := max(1, (w-2)/2)
+	up := RenderTrafficSlot(theme.Success, "↑", upRate, slot)
+	down := RenderTrafficSlot(theme.Info, "↓", downRate, w-slot-2)
+	return up + "  " + down
+}
+
 // StyleNetwork colors network/protocol tokens like TCP/UDP.
 func StyleNetwork(theme Theme, network string) string {
 	label := strings.TrimSpace(network)

@@ -74,7 +74,7 @@ func (d *Detail) View(width, height int) string {
 	} else if d.tab == 2 {
 		lines := make([]string, len(d.connection.Chains))
 		for index, hop := range d.connection.Chains {
-			lines[index] = strings.Repeat("  ", index) + "\u2192 " + hop
+			lines[index] = strings.Repeat("  ", index) + "\u2192 " + ui.DisplayProxyName(hop)
 		}
 		body = strings.Join(lines, "\n")
 	}
@@ -116,7 +116,7 @@ func (d *Detail) View(width, height int) string {
 func (d *Detail) overview() string {
 	theme := ui.DefaultTheme()
 	connection := d.connection
-	chain := strings.Join(connection.Chains, " \u2192 ")
+	chain := ui.DisplayProxyName(strings.Join(connection.Chains, " \u2192 "))
 	return fmt.Sprintf("%s\nID  %s\nType  %s / %s\nRule  %s %s\nProcess  %s\nInbound  %s / %s\n\n%s\nSource  %s:%s\nHost  %s\nResolved  %s:%s\nRemote  %s\n\n%s\n%s\n\n%s\n↑%s ↓%s\n\n%s\n%s  %s",
 		ui.BasicSectionTitle, value(connection.ID), value(connection.Metadata.Type), ui.StyleNetwork(theme, value(connection.Metadata.Network)),
 		value(connection.Rule), value(connection.RulePay), value(connection.Metadata.Process),
@@ -124,7 +124,7 @@ func (d *Detail) overview() string {
 		ui.SourceDestinationTitle, value(connection.Metadata.SourceIP), value(connection.Metadata.SourcePort),
 		value(connection.Metadata.Host), value(connection.Metadata.DestinationIP), value(connection.Metadata.DestinationPort),
 		value(connection.Metadata.RemoteDestination), ui.GeoIPSectionTitle, d.geoIPView(), ui.TrafficSectionTitle,
-		formatRate(connection.UploadSpeed), formatRate(connection.DownloadSpeed),
+		ui.FormatRate(connection.UploadSpeed), ui.FormatRate(connection.DownloadSpeed),
 		ui.OutboundSectionTitle, ui.ChainLabel, value(chain),
 	)
 }

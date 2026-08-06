@@ -159,15 +159,18 @@ func TestView_TrafficDataColorsWhileRailFocused(t *testing.T) {
 	}}}, time.Unix(1, 0))
 	model.SetContentFocused(false)
 	view := model.View()
-	// StyleTrafficPair always paints UL Success / DL Info. The traffic column
-	// truncates mid-down-segment, so the SGR stays open there; assert on the
-	// colored up-segment and the bare Info prefix of the down arrow.
-	up := model.theme.Success.Render("↑" + "1.0 KiB/s")
-	if !strings.Contains(view, up) {
+	// RenderTrafficColumn always paints UL Success / DL Info with the units
+	// right-anchored; at the default 100-col layout the 19-wide column splits
+	// into slots that truncate the digits ("↑… KiB/s"), keeping markers, colors
+	// and units.
+	if !strings.Contains(view, "\x1b[38;5;78m↑") {
 		t.Fatalf("traffic semantic colors missing while rail-focused:\n%s", view)
 	}
 	if !strings.Contains(view, "\x1b[38;5;75m↓") {
 		t.Fatalf("download color missing while rail-focused:\n%s", view)
+	}
+	if !strings.Contains(view, "↑… KiB/s") || !strings.Contains(view, "↓2… KiB/s") {
+		t.Fatalf("traffic slot layout unexpected:\n%s", view)
 	}
 }
 
