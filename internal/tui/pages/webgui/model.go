@@ -273,7 +273,9 @@ func (m *Model) uninstallSelected() tea.Cmd {
 		return nil
 	}
 	// Only uninstall when something is installed (or marked active).
-	if panel.InstalledBuild == "" && !panel.Active && panel.Health == "missing" {
+	// InstalledBuild empty = not installed, same source of truth as the
+	// rendered "Installed —" line (design W2).
+	if panel.InstalledBuild == "" && !panel.Active {
 		return nil
 	}
 	operationID := m.newOperationID()
