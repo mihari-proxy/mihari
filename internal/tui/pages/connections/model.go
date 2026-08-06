@@ -52,7 +52,10 @@ const (
 	sortAscending
 )
 
-var allColumnIDs = []string{"host", "network", "source", "destination", "chain", "rule", "process", "upload", "download", "traffic", "start"}
+// allColumnIDs is the positional order of connection columns, which is also
+// the priority order: position is importance, so narrower widths drop from
+// the tail (design §2.4). Checked order, table order and drop order are one.
+var allColumnIDs = []string{"host", "traffic", "network", "rule", "start", "process", "chain", "source", "destination", "upload", "download"}
 
 type Model struct {
 	client           Client
@@ -62,7 +65,6 @@ type Model struct {
 	focus            pageFocus
 	controlIndex     int
 	headerIndex      int
-	horizontalOffset int
 	source           string
 	query            string
 	queryCursor      int
@@ -108,7 +110,9 @@ func New(client Client, newOperationID func() string) *Model {
 	return &Model{
 		client: client, newOperationID: newOperationID, history: NewHistory(500),
 		focus: pageFocus{kind: focusControl}, source: allSources,
-		columns: []string{"host", "network", "source", "destination", "chain", "rule", "traffic"},
+		// Default 5 columns = the 5 highest-priority slots in allColumnIDs order,
+		// so the checked set matches what a 100-column terminal actually shows.
+		columns: []string{"host", "traffic", "network", "rule", "start"},
 		closing: make(map[string]bool), theme: ui.DefaultTheme(),
 	}
 }
@@ -149,7 +153,8 @@ func (m *Model) SetPreferences(preferences protocol.TUIPreferences) {
 		m.columns = append([]string(nil), preferences.ConnectionsColumns...)
 	}
 	m.preferenceRev = preferences.Revision
-	m.headerIndex = min(m.headerIndex, max(0, len(m.columns)-1))
+	// headerIndex addresses the kept-column set, so clamp to its size.
+	m.headerIndex = min(m.headerIndex, max(0, m.headerColumnCount()-1))
 }
 
 func (m *Model) Observe(snapshot protocol.ConnectionList, observedAt time.Time) {
@@ -289,7 +294,8 @@ func (m *Model) updateHeader(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 	case "left":
 		m.headerIndex = max(0, m.headerIndex-1)
 	case "right":
-		m.headerIndex = min(len(m.columns)-1, m.headerIndex+1)
+		// headerIndex walks the kept columns (columns that fit on screen).
+		m.headerIndex = min(m.headerColumnCount()-1, m.headerIndex+1)
 	case "up":
 		return m, m.startSearch()
 	case "down":
@@ -306,10 +312,6 @@ func (m *Model) updateRow(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 	rows := m.visibleRows()
 	index := rowIndex(rows, m.focus.rowID)
 	switch key.String() {
-	case "left":
-		m.horizontalOffset = max(0, m.horizontalOffset-8)
-	case "right":
-		m.horizontalOffset = min(max(0, m.tableWidth()-m.width), m.horizontalOffset+8)
 	case "up":
 		if index <= 0 {
 			m.focus = pageFocus{kind: focusHeader}
@@ -480,10 +482,12 @@ func (m *Model) setPaused(paused bool) {
 }
 
 func (m *Model) cycleSort() {
-	if len(m.columns) == 0 {
+	cols, _ := m.keptConnectionColumns()
+	if len(cols) == 0 {
 		return
 	}
-	column := m.columns[m.headerIndex]
+	// headerIndex addresses the kept set; map back to the checked column ID.
+	column := cols[min(m.headerIndex, len(cols)-1)].ID
 	if m.sortColumn != column {
 		m.sortColumn, m.sortDirection = column, sortDescending
 	} else {
