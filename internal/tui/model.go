@@ -942,7 +942,9 @@ func (model Model) View() tea.View {
 		}
 		// Compact mode metrics live in the status bar — never append ViewSummary.
 		// Prefer dropping middle shortcuts before ?/q and the global spinner segment.
-		footer = ui.FitFooter(footer, model.footerGlobalSegment(), max(1, model.width))
+		// Budget = width−2: the Footer style pads 1 cell each side (design S2),
+		// so the full width would word-wrap candidate strings at the edge.
+		footer = ui.FitFooter(footer, model.footerGlobalSegment(), max(1, model.width-2))
 		content = status + "\n" + strings.TrimRight(main, "\n") + "\n" + model.theme.Footer.Width(model.width).MaxWidth(model.width).Render(footer)
 	}
 	if model.modal != nil {
