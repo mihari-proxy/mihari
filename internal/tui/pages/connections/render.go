@@ -61,9 +61,9 @@ func (m *Model) tableLines() []string {
 
 func (m *Model) connectionHeader() (string, string) {
 	// Dual-line cards: short guide headers rather than every preference column.
-	titles := []string{ui.ConnectionColumnLabel("host"), ui.ConnectionColumnLabel("traffic")}
+	cols := m.connectionPrimaryColumns()
 	widths := m.connectionPrimaryWidths()
-	header, rule := ui.RenderHeaderRow(m.theme, titles, widths, 2, -1, false)
+	header, rule := ui.RenderHeaderRow(m.theme, cols, widths, 2, -1, false)
 	return "  " + header, "  " + rule
 }
 
@@ -74,14 +74,18 @@ func (m *Model) layoutWidth() int {
 	return 100
 }
 
+func (m *Model) connectionPrimaryColumns() []ui.TableColumn {
+	return []ui.TableColumn{
+		{ID: "host", Title: ui.ConnectionColumnLabel("host"), MinWidth: 12, Flex: 3},
+		{ID: "traffic", Title: ui.ConnectionColumnLabel("traffic"), MinWidth: 14, MaxWidth: 24, Flex: 1, Align: ui.AlignRight},
+	}
+}
+
 func (m *Model) connectionPrimaryWidths() []int {
 	// Fit columns to the section body text width (page minus shell + section chrome).
 	textW := ui.SectionTextWidth(ui.FullSectionInner(m.layoutWidth()))
 	avail := max(24, textW-2) // focus marker budget inside section
-	return ui.FitColumnWidths([]ui.TableColumn{
-		{ID: "host", MinWidth: 12, Flex: 3},
-		{ID: "traffic", MinWidth: 14, MaxWidth: 24, Flex: 1, Align: ui.AlignRight},
-	}, avail, 2)
+	return ui.FitColumnWidths(m.connectionPrimaryColumns(), avail, 2)
 }
 
 func (m *Model) renderConnection(connection protocol.Connection, focused bool) []string {
