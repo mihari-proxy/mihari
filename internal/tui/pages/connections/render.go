@@ -253,76 +253,17 @@ func address(host, port string) string {
 	return host + ":" + port
 }
 
+// clipLines clips every line of content to width visible columns, keeping
+// ANSI style prefixes intact (truncateStyled semantics).
 func clipLines(content string, width int) string {
-	return clipLinesAt(content, width, 0)
-}
-
-func clipLinesAt(content string, width, offset int) string {
 	if width <= 0 {
 		return content
 	}
 	lines := strings.Split(content, "\n")
 	for index, line := range lines {
-		lines[index] = clipStyledLine(line, width, offset)
+		lines[index] = ui.TruncateVisible(line, width)
 	}
 	return strings.Join(lines, "\n")
-}
-
-// clipStyledLine pans and truncates a possibly styled line by visible columns.
-func clipStyledLine(line string, width, offset int) string {
-	if width <= 0 {
-		return ""
-	}
-	if offset <= 0 && lipgloss.Width(line) <= width {
-		return line
-	}
-	type cell struct {
-		prefix string
-		r      rune
-	}
-	cells := make([]cell, 0, len(line))
-	var escape strings.Builder
-	inEscape := false
-	for _, r := range line {
-		switch {
-		case r == '\x1b':
-			inEscape = true
-			escape.WriteRune(r)
-		case inEscape:
-			escape.WriteRune(r)
-			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
-				inEscape = false
-			}
-		default:
-			cells = append(cells, cell{prefix: escape.String(), r: r})
-			escape.Reset()
-		}
-	}
-	trailing := escape.String()
-
-	start := min(max(0, offset), len(cells))
-	rest := cells[start:]
-	if len(rest) == 0 {
-		return trailing
-	}
-	if len(rest) <= width {
-		var out strings.Builder
-		for _, c := range rest {
-			out.WriteString(c.prefix)
-			out.WriteRune(c.r)
-		}
-		out.WriteString(trailing)
-		return out.String()
-	}
-	keep := max(0, width-1)
-	var out strings.Builder
-	for _, c := range rest[:keep] {
-		out.WriteString(c.prefix)
-		out.WriteRune(c.r)
-	}
-	out.WriteString("\u2026")
-	out.WriteString(trailing)
-	return out.String()
 }
 
 func formatBytes(value int64) string {
