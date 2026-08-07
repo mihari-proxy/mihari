@@ -113,7 +113,7 @@ func (c *Candidate) Cleanup() {
 
 func (i Installer) Prepare(ctx context.Context, request InstallRequest) (PreparedCore, error) {
 	checkCtx, cancel := context.WithTimeout(ctx, i.checkTimeout())
-	release, err := i.latestRelease(checkCtx)
+	release, err := i.LatestRelease(checkCtx)
 	cancel()
 	if err != nil {
 		return nil, withAIOHint(err)
@@ -148,7 +148,7 @@ func (i Installer) Prepare(ctx context.Context, request InstallRequest) (Prepare
 	archivePath := archive.Name()
 	archive.Close()
 	defer os.Remove(archivePath)
-	if err := i.download(ctx, asset, archivePath); err != nil {
+	if err := i.Download(ctx, asset, archivePath); err != nil {
 		return nil, err
 	}
 
@@ -185,7 +185,10 @@ func (i Installer) Prepare(ctx context.Context, request InstallRequest) (Prepare
 	return &Candidate{path: candidatePath, binaryPath: request.BinaryPath, version: release.TagName, updated: true}, nil
 }
 
-func (i Installer) download(ctx context.Context, asset Asset, destination string) error {
+// Download 取 asset 并落盘到 destination，校验 asset.Digest 的 sha256:<hex>
+// （bundler 复用入口，design §4.1 export 边界；绝不照 self.go 复刻——其无 Digest 校验）。
+// 以 O_WRONLY|O_TRUNC 写入：调用方需先落盘目标文件（与 Prepare 内 CreateTemp 同契约）。
+func (i Installer) Download(ctx context.Context, asset Asset, destination string) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
 	if err != nil {
 		return protocol.APIError{Code: protocol.CodeInternal, Message: "create core download request"}

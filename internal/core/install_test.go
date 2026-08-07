@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -472,4 +474,57 @@ func slowReleaseServer(t *testing.T, assetName string, archive []byte, delay tim
 		}
 	}))
 	return server
+}
+
+func TestLatestReleaseExport(t *testing.T) {
+	archive := gzipFixture(t, []byte("payload"))
+	server := releaseFixture(t, "mihomo-linux-amd64-compatible-v1.19.0.gz", archive)
+	defer server.Close()
+	installer := Installer{HTTPClient: server.Client(), APIBase: server.URL, Repository: "MetaCubeX/mihomo"}
+	release, err := installer.LatestRelease(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.TagName != "v1.19.0" || len(release.Assets) != 1 {
+		t.Fatalf("release=%#v", release)
+	}
+	if release.Assets[0].Name != "mihomo-linux-amd64-compatible-v1.19.0.gz" {
+		t.Fatalf("asset=%#v", release.Assets[0])
+	}
+}
+
+// TestDownloadExportVerifiesSha256Digest 断言导出的 Download 与原 unexported download 行为
+// 一致：落盘字节 + asset.Digest 的 sha256:<hex> 校验。这是 bundler（Task 8）复用、绝不绕过
+// 校验的契约（design §4.1）。Download 以 O_WRONLY|O_TRUNC 写入，调用方需先落盘目标文件——
+// 与 Prepare 内 CreateTemp 同契约；bundler 自管 staging（design §4.1「解压归 bundler 自管」）。
+func TestDownloadExportVerifiesSha256Digest(t *testing.T) {
+	payload := []byte("the-core-binary")
+	sum := sha256.Sum256(payload)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write(payload)
+	}))
+	defer server.Close()
+	installer := Installer{HTTPClient: server.Client()}
+	dest := filepath.Join(t.TempDir(), "mihomo.gz")
+	if err := os.WriteFile(dest, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	asset := Asset{
+		Name: "mihomo-linux-amd64-v1.19.0.gz", URL: server.URL,
+		Size: int64(len(payload)), Digest: "sha256:" + hex.EncodeToString(sum[:]),
+	}
+	if err := installer.Download(context.Background(), asset, dest); err != nil {
+		t.Fatalf("download err=%v", err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("dest=%q err=%v", got, err)
+	}
+
+	// 摘要不一致必须失败——证明 export 后 Download 仍带 sha256 校验。
+	tampered := asset
+	tampered.Digest = "sha256:" + strings.Repeat("0", 64)
+	if err := installer.Download(context.Background(), tampered, dest); err == nil {
+		t.Fatal("expected digest mismatch error, got nil")
+	}
 }
