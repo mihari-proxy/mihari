@@ -85,7 +85,7 @@ func (s *Server) geoIPUpdate(writer http.ResponseWriter, request *http.Request) 
 	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
 		return
 	}
-	status, err := s.runtime.UpdateGeoIP(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision})
+	status, err := s.runtime.UpdateGeoIP(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision})
 	if err != nil {
 		writeControlError(writer, err)
 		return

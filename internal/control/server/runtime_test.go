@@ -470,3 +470,28 @@ func (f *fakeRuntime) DisableTun(_ context.Context, operation runtimeapi.Operati
 	}
 	return f.tunStatus, nil
 }
+
+func TestInstallCoreThreadsRequestSource(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"setup source", `{"operation_id":"install-1","source":"setup"}`, "setup"},
+		{"default control source", `{"operation_id":"install-2"}`, "control"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &fakeRuntime{installResult: core.InstallResult{Version: "v1.19.0"}}
+			server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: fake})
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodPost, "/v1/core/install", bytes.NewBufferString(test.body)))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if fake.operation.Source != test.want {
+				t.Fatalf("source=%q want %q", fake.operation.Source, test.want)
+			}
+		})
+	}
+}

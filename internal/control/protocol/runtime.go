@@ -108,6 +108,7 @@ type DelayResult struct {
 type MutationRequest struct {
 	OperationID string  `json:"operation_id"`
 	IfRevision  *uint64 `json:"if_revision,omitempty"`
+	Source      string  `json:"source,omitempty"` // request origin; empty defaults to "control" (normalized by handlers)
 }
 
 type ProxySelectionRequest struct {
