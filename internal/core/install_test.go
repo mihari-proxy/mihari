@@ -11,7 +11,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
@@ -244,4 +246,230 @@ func TestInstallerDetectVersionReportsExistingBinary(t *testing.T) {
 	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure {
 		t.Fatalf("err=%v", err)
 	}
+}
+
+func TestPrepare(t *testing.T) {
+	t.Run("API timeout with local binary fails fast with aio hint", func(t *testing.T) {
+		archive := gzipFixture(t, []byte("payload"))
+		server := slowReleaseServer(t, "mihomo-linux-amd64-compatible-v1.19.0.gz", archive, 150*time.Millisecond)
+		defer server.Close()
+		root := t.TempDir()
+		binaryPath := filepath.Join(root, "mihomo")
+		if err := os.WriteFile(binaryPath, []byte("existing"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		installer := Installer{
+			HTTPClient: server.Client(), APIBase: server.URL, Repository: "MetaCubeX/mihomo",
+			GOOS: "linux", GOARCH: "amd64", Runner: &recordingRunner{output: []byte("Mihomo Meta v1.19.0")},
+			CheckTimeout: 40 * time.Millisecond,
+		}
+		start := time.Now()
+		_, err := installer.Prepare(context.Background(), InstallRequest{
+			BinaryPath: binaryPath, CurrentVersion: "v1.19.0",
+			DataDir: root, ConfigPath: filepath.Join(root, "config.yaml"), StagingDir: filepath.Join(root, "staging"),
+		})
+		if elapsed := time.Since(start); elapsed >= time.Second {
+			t.Fatalf("Prepare did not fail fast: elapsed=%v", elapsed)
+		}
+		var apiError protocol.APIError
+		if !errors.As(err, &apiError) || apiError.Code != protocol.CodeNetworkFailure {
+			t.Fatalf("err=%v", err)
+		}
+		if !strings.Contains(apiError.Message, "install-aio-remote") {
+			t.Fatalf("message=%q missing aio hint", apiError.Message)
+		}
+	})
+
+	t.Run("same version with valid local binary short-circuits", func(t *testing.T) {
+		server := releaseFixture(t, "mihomo-linux-amd64-compatible-v1.19.0.gz", gzipFixture(t, []byte("new-binary")))
+		defer server.Close()
+		root := t.TempDir()
+		binaryPath := filepath.Join(root, "mihomo")
+		if err := os.WriteFile(binaryPath, []byte("existing-valid"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		installer := Installer{
+			HTTPClient: server.Client(), APIBase: server.URL, Repository: "MetaCubeX/mihomo",
+			GOOS: "linux", GOARCH: "amd64", Runner: &recordingRunner{output: []byte("Mihomo Meta v1.19.0")},
+		}
+		candidate, err := installer.Prepare(context.Background(), InstallRequest{
+			BinaryPath: binaryPath, CurrentVersion: "v1.19.0",
+			DataDir: root, ConfigPath: filepath.Join(root, "config.yaml"), StagingDir: filepath.Join(root, "staging"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer candidate.Cleanup()
+		if candidate.Updated() {
+			t.Fatal("expected short-circuit, got updated candidate")
+		}
+		if got, _ := os.ReadFile(binaryPath); string(got) != "existing-valid" {
+			t.Fatalf("binary changed=%q (download should not happen)", got)
+		}
+	})
+
+	t.Run("same version with failing dash-v downloads repair", func(t *testing.T) {
+		server := releaseFixture(t, "mihomo-linux-amd64-compatible-v1.19.0.gz", gzipFixture(t, []byte("fresh-binary")))
+		defer server.Close()
+		root := t.TempDir()
+		binaryPath := filepath.Join(root, "mihomo")
+		if err := os.WriteFile(binaryPath, []byte("corrupt"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		installer := Installer{
+			HTTPClient: server.Client(), APIBase: server.URL, Repository: "MetaCubeX/mihomo",
+			GOOS: "linux", GOARCH: "amd64",
+			Runner: &selectiveRunner{existingPath: binaryPath, output: []byte("Mihomo Meta v1.19.0")},
+		}
+		candidate, err := installer.Prepare(context.Background(), InstallRequest{
+			BinaryPath: binaryPath, CurrentVersion: "v1.19.0",
+			DataDir: root, ConfigPath: filepath.Join(root, "config.yaml"), StagingDir: filepath.Join(root, "staging"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer candidate.Cleanup()
+		if !candidate.Updated() {
+			t.Fatalf("expected download repair, got unmodified candidate")
+		}
+	})
+
+	t.Run("same version with unparseable dash-v downloads repair", func(t *testing.T) {
+		server := releaseFixture(t, "mihomo-linux-amd64-compatible-v1.19.0.gz", gzipFixture(t, []byte("fresh-binary")))
+		defer server.Close()
+		root := t.TempDir()
+		binaryPath := filepath.Join(root, "mihomo")
+		if err := os.WriteFile(binaryPath, []byte("weird"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		installer := Installer{
+			HTTPClient: server.Client(), APIBase: server.URL, Repository: "MetaCubeX/mihomo",
+			GOOS: "linux", GOARCH: "amd64",
+			Runner: &selectiveRunner{existingPath: binaryPath, existingOut: []byte("not-a-version"), output: []byte("Mihomo Meta v1.19.0")},
+		}
+		candidate, err := installer.Prepare(context.Background(), InstallRequest{
+			BinaryPath: binaryPath, CurrentVersion: "v1.19.0",
+			DataDir: root, ConfigPath: filepath.Join(root, "config.yaml"), StagingDir: filepath.Join(root, "staging"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer candidate.Cleanup()
+		if !candidate.Updated() {
+			t.Fatalf("expected download repair, got unmodified candidate")
+		}
+	})
+
+	t.Run("new version downloads update", func(t *testing.T) {
+		server := releaseFixture(t, "mihomo-linux-amd64-compatible-v1.19.0.gz", gzipFixture(t, []byte("new-mihomo")))
+		defer server.Close()
+		root := t.TempDir()
+		binaryPath := filepath.Join(root, "mihomo")
+		if err := os.WriteFile(binaryPath, []byte("old"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		installer := Installer{
+			HTTPClient: server.Client(), APIBase: server.URL, Repository: "MetaCubeX/mihomo",
+			GOOS: "linux", GOARCH: "amd64", Runner: &recordingRunner{output: []byte("Mihomo Meta v1.19.0")},
+		}
+		candidate, err := installer.Prepare(context.Background(), InstallRequest{
+			BinaryPath: binaryPath, CurrentVersion: "v1.18.0",
+			DataDir: root, ConfigPath: filepath.Join(root, "config.yaml"), StagingDir: filepath.Join(root, "staging"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer candidate.Cleanup()
+		if !candidate.Updated() {
+			t.Fatalf("expected update, got unmodified candidate")
+		}
+	})
+
+	t.Run("corrupt local binary and API 500 fails with aio hint", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+			response.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+		root := t.TempDir()
+		binaryPath := filepath.Join(root, "mihomo")
+		if err := os.WriteFile(binaryPath, []byte("corrupt"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		installer := Installer{
+			HTTPClient: server.Client(), APIBase: server.URL, Repository: "MetaCubeX/mihomo",
+			GOOS: "linux", GOARCH: "amd64",
+			Runner: &selectiveRunner{existingPath: binaryPath, output: []byte("Mihomo Meta v1.19.0")},
+		}
+		_, err := installer.Prepare(context.Background(), InstallRequest{
+			BinaryPath: binaryPath, CurrentVersion: "v1.19.0",
+			DataDir: root, ConfigPath: filepath.Join(root, "config.yaml"), StagingDir: filepath.Join(root, "staging"),
+		})
+		var apiError protocol.APIError
+		if !errors.As(err, &apiError) || apiError.Code != protocol.CodeNetworkFailure {
+			t.Fatalf("err=%v", err)
+		}
+		if !strings.Contains(apiError.Message, "install-aio-remote") {
+			t.Fatalf("message=%q missing aio hint", apiError.Message)
+		}
+	})
+
+	t.Run("no local binary and API timeout fails fast", func(t *testing.T) {
+		archive := gzipFixture(t, []byte("payload"))
+		server := slowReleaseServer(t, "mihomo-linux-amd64-compatible-v1.19.0.gz", archive, 150*time.Millisecond)
+		defer server.Close()
+		root := t.TempDir()
+		installer := Installer{
+			HTTPClient: server.Client(), APIBase: server.URL, Repository: "MetaCubeX/mihomo",
+			GOOS: "linux", GOARCH: "amd64", Runner: &recordingRunner{output: []byte("Mihomo Meta v1.19.0")},
+			CheckTimeout: 40 * time.Millisecond,
+		}
+		start := time.Now()
+		_, err := installer.Prepare(context.Background(), InstallRequest{
+			BinaryPath: filepath.Join(root, "missing"), CurrentVersion: "v1.18.0",
+			DataDir: root, ConfigPath: filepath.Join(root, "config.yaml"), StagingDir: filepath.Join(root, "staging"),
+		})
+		if elapsed := time.Since(start); elapsed >= time.Second {
+			t.Fatalf("Prepare did not fail fast: elapsed=%v", elapsed)
+		}
+		var apiError protocol.APIError
+		if !errors.As(err, &apiError) || apiError.Code != protocol.CodeNetworkFailure {
+			t.Fatalf("err=%v", err)
+		}
+	})
+}
+
+// selectiveRunner mimics a broken/odd existing binary (existingPath) while
+// serving a valid candidate response for any other path (downloaded candidate,
+// config validation). existingOut nil → running existingPath errors.
+type selectiveRunner struct {
+	existingPath string
+	existingOut  []byte
+	output       []byte
+}
+
+func (r *selectiveRunner) Run(_ context.Context, name string, _ ...string) ([]byte, error) {
+	if name == r.existingPath {
+		if r.existingOut == nil {
+			return nil, errors.New("existing binary broken")
+		}
+		return r.existingOut, nil
+	}
+	return r.output, nil
+}
+
+func slowReleaseServer(t *testing.T, assetName string, archive []byte, delay time.Duration) *httptest.Server {
+	t.Helper()
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		time.Sleep(delay)
+		switch request.URL.Path {
+		case "/repos/MetaCubeX/mihomo/releases/latest":
+			_ = json.NewEncoder(response).Encode(Release{TagName: "v1.19.0", Assets: []Asset{{Name: assetName, URL: server.URL + "/asset", Size: int64(len(archive))}}})
+		case "/asset":
+			_, _ = response.Write(archive)
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	return server
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -24,12 +25,13 @@ const (
 )
 
 type Installer struct {
-	HTTPClient *http.Client
-	APIBase    string
-	Repository string
-	GOOS       string
-	GOARCH     string
-	Runner     CommandRunner
+	HTTPClient   *http.Client
+	APIBase      string
+	Repository   string
+	GOOS         string
+	GOARCH       string
+	Runner       CommandRunner
+	CheckTimeout time.Duration // 包住"检查最新版"请求，默认 8s；下载仍用 httpClient 超时（design §4.3）
 }
 
 type InstallRequest struct {
@@ -110,13 +112,23 @@ func (c *Candidate) Cleanup() {
 }
 
 func (i Installer) Prepare(ctx context.Context, request InstallRequest) (PreparedCore, error) {
-	release, err := i.latestRelease(ctx)
+	checkCtx, cancel := context.WithTimeout(ctx, i.checkTimeout())
+	release, err := i.latestRelease(checkCtx)
+	cancel()
 	if err != nil {
-		return nil, err
+		return nil, withAIOHint(err)
 	}
 	if request.CurrentVersion == release.TagName {
-		if info, err := os.Stat(request.BinaryPath); err == nil && !info.IsDir() {
-			return &Candidate{binaryPath: request.BinaryPath, version: release.TagName, updated: false}, nil
+		if info, statErr := os.Stat(request.BinaryPath); statErr == nil && !info.IsDir() {
+			// 文件存在还要 -v 成功才短路；判据复用 DetectVersion（含 ParseVersion 版本格式校验）
+			// ——design §4.3，与 Manager.Install setup 预检同一判据、DRY。-v 失败 → 走下载修复。
+			runner := i.Runner
+			if runner == nil {
+				runner = OSCommandRunner{}
+			}
+			if version, vErr := DetectVersion(ctx, runner, request.BinaryPath); vErr == nil && version != "" {
+				return &Candidate{binaryPath: request.BinaryPath, version: release.TagName, updated: false}, nil
+			}
 		}
 	}
 	asset, err := SelectAsset(release, i.targetOS(), i.targetArch())
@@ -296,6 +308,24 @@ func (i Installer) httpClient() *http.Client {
 		return i.HTTPClient
 	}
 	return &http.Client{Timeout: 15 * time.Minute}
+}
+
+// checkTimeout 返回"检查最新版"请求的超时（默认 8s）；下载仍用 httpClient 的 15min 超时（design §4.3）。
+func (i Installer) checkTimeout() time.Duration {
+	if i.CheckTimeout > 0 {
+		return i.CheckTimeout
+	}
+	return 8 * time.Second
+}
+
+// withAIOHint 给网络类失败的错误信息追加 aio 离线安装脚本引导（design §6 错误处理）。
+func withAIOHint(err error) error {
+	var apiError protocol.APIError
+	if errors.As(err, &apiError) && apiError.Code == protocol.CodeNetworkFailure {
+		apiError.Message += "；若处于无网/受限网络环境，请使用 all-in-one 安装脚本（install-aio-remote.sh / .ps1）离线安装"
+		return apiError
+	}
+	return err
 }
 
 func (i Installer) apiBase() string {
