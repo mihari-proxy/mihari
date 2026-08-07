@@ -416,7 +416,7 @@ func (m *Model) endpointsChanged() bool {
 func (m *Model) installCore() tea.Cmd {
 	revision, operationID := m.status.Revision, m.newOperationID()
 	return func() tea.Msg {
-		result, err := m.client.InstallCore(m.ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision})
+		result, err := m.client.InstallCore(m.ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision, Source: "setup"})
 		return actionResultMsg{next: stepSubscription, revision: result.Revision, err: err}
 	}
 }
@@ -432,7 +432,7 @@ func (m *Model) addSubscription(name, url string) tea.Cmd {
 func (m *Model) updateGeoIP() tea.Cmd {
 	revision, operationID := m.status.Revision, m.newOperationID()
 	return func() tea.Msg {
-		result, err := m.client.UpdateGeoIP(m.ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision})
+		result, err := m.client.UpdateGeoIP(m.ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision, Source: "setup"})
 		return actionResultMsg{next: stepReview, revision: result.Revision, err: err}
 	}
 }

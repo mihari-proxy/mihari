@@ -17,6 +17,10 @@ coverage.*
 *.coverprofile
 profile.cov
 
+# Python (release/retract helper scripts under scripts/)
+__pycache__/
+*.pyc
+
 # Dependency directories (remove the comment below to include it)
 # vendor/
 

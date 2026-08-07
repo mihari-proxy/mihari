@@ -87,7 +87,7 @@ func (s *Server) installCore(writer http.ResponseWriter, request *http.Request) 
 	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
 		return
 	}
-	result, err := s.runtime.Install(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision})
+	result, err := s.runtime.Install(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision})
 	if err != nil {
 		writeControlError(writer, err)
 		return
@@ -435,6 +435,15 @@ func requireOperationID(writer http.ResponseWriter, operationID string) bool {
 	}
 	writeInvalidArgument(writer, "operation_id is required")
 	return false
+}
+
+// mutationSource 归一化请求来源：空值默认 "control"。只有 setup 流程显式传 "setup"
+// 以触发 daemon 侧本地预检短路；其余 mutation 保持 "control" 语义（design §4.3）。
+func mutationSource(raw string) string {
+	if raw == "" {
+		return "control"
+	}
+	return raw
 }
 
 func writeInvalidArgument(writer http.ResponseWriter, message string) {

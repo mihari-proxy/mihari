@@ -14,8 +14,10 @@ import (
 type fakeClient struct {
 	status          protocol.OnboardingStatus
 	installCalls    int
+	installRequest  protocol.MutationRequest
 	addCalls        int
 	geoIPCalls      int
+	geoIPRequest    protocol.MutationRequest
 	updateCalls     int
 	update          protocol.OnboardingUpdateRequest
 	onboardingCalls int
@@ -26,8 +28,9 @@ func (f *fakeClient) Onboarding(context.Context) (protocol.OnboardingStatus, err
 	f.onboardingCalls++
 	return f.status, nil
 }
-func (f *fakeClient) InstallCore(ctx context.Context, _ protocol.MutationRequest) (protocol.CoreInstallResult, error) {
+func (f *fakeClient) InstallCore(ctx context.Context, request protocol.MutationRequest) (protocol.CoreInstallResult, error) {
 	f.installCalls++
+	f.installRequest = request
 	if f.installErr != nil {
 		return protocol.CoreInstallResult{}, f.installErr
 	}
@@ -40,8 +43,9 @@ func (f *fakeClient) AddSubscription(context.Context, protocol.SubscriptionAddRe
 	f.addCalls++
 	return protocol.SubscriptionResult{Schema: "mihari/v1", Revision: f.status.Revision + 1}, nil
 }
-func (f *fakeClient) UpdateGeoIP(context.Context, protocol.MutationRequest) (protocol.GeoIPUpdateResult, error) {
+func (f *fakeClient) UpdateGeoIP(_ context.Context, request protocol.MutationRequest) (protocol.GeoIPUpdateResult, error) {
 	f.geoIPCalls++
+	f.geoIPRequest = request
 	return protocol.GeoIPUpdateResult{Schema: "mihari/v1", Revision: f.status.Revision + 1}, nil
 }
 func (f *fakeClient) UpdateOnboarding(_ context.Context, request protocol.OnboardingUpdateRequest) (protocol.OnboardingStatus, error) {
@@ -305,4 +309,19 @@ func runKeyCommand(t *testing.T, model *Model, key tea.KeyPressMsg) *Model {
 	}
 	updated, _ = model.Update(command())
 	return updated.(*Model)
+}
+
+func TestSetupCoreAndGeoIPRequestsCarrySetupSource(t *testing.T) {
+	client := &fakeClient{status: defaultStatus(false)}
+	model := loadedModel(client)
+
+	_ = model.installCore()()
+	if client.installRequest.Source != "setup" {
+		t.Fatalf("install source=%q want setup", client.installRequest.Source)
+	}
+
+	_ = model.updateGeoIP()()
+	if client.geoIPRequest.Source != "setup" {
+		t.Fatalf("geoip source=%q want setup", client.geoIPRequest.Source)
+	}
 }
