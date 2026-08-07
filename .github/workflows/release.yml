@@ -171,7 +171,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          NOTES="$(gh release view "${VERSION}" --json notes -q .notes)"
+          NOTES="$(gh release view "${VERSION}" --json body -q .body)"
           MARKER='<!-- aio-install -->'
           printf '%s\n' "$NOTES" | grep -qF "$MARKER" && { echo "install commands already present"; exit 0; }
           # Quoted heredoc delimiter: backticks and placeholders pass through
