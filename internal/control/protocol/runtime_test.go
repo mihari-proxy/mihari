@@ -112,3 +112,21 @@ func TestRuleProviderListJSONContract(t *testing.T) {
 		t.Fatalf("json=%s want=%s", raw, want)
 	}
 }
+
+func TestMutationRequestThreadsSource(t *testing.T) {
+	var setup MutationRequest
+	if err := json.Unmarshal([]byte(`{"operation_id":"x","source":"setup"}`), &setup); err != nil {
+		t.Fatal(err)
+	}
+	if setup.Source != "setup" {
+		t.Fatalf("source=%q want setup", setup.Source)
+	}
+
+	var omitted MutationRequest
+	if err := json.Unmarshal([]byte(`{"operation_id":"x"}`), &omitted); err != nil {
+		t.Fatal(err)
+	}
+	if omitted.Source != "" {
+		t.Fatalf("source=%q want empty", omitted.Source)
+	}
+}

@@ -189,9 +189,15 @@ func (c *fakeGeoIPCandidate) Valid() bool      { return c.valid }
 func (c *fakeGeoIPCandidate) Commit() error    { c.commits++; return c.commitErr }
 func (c *fakeGeoIPCandidate) Cleanup()         { c.cleanups++ }
 
-type fakeGeoIPService struct{ recordedError bool }
+type fakeGeoIPService struct {
+	statusFunc    func() geoip.Status
+	recordedError bool
+}
 
-func (*fakeGeoIPService) Status() geoip.Status {
+func (s *fakeGeoIPService) Status() geoip.Status {
+	if s.statusFunc != nil {
+		return s.statusFunc()
+	}
 	return geoip.Status{Country: geoip.DatabaseStatus{Available: true}, ASN: geoip.DatabaseStatus{Available: true}}
 }
 func (*fakeGeoIPService) Lookup(netip.Addr) (geoip.Record, error) { return geoip.Record{}, nil }
@@ -460,9 +466,11 @@ func newTestManager(options Options) *Manager {
 }
 
 type fakeInstaller struct {
-	calls     atomic.Int64
-	candidate PreparedCore
-	prepare   func(context.Context, core.InstallRequest) (PreparedCore, error)
+	calls         atomic.Int64
+	detectCalls   atomic.Int64
+	candidate     PreparedCore
+	prepare       func(context.Context, core.InstallRequest) (PreparedCore, error)
+	detectVersion func(context.Context, string) (string, error)
 }
 
 func (i *fakeInstaller) Prepare(ctx context.Context, request core.InstallRequest) (PreparedCore, error) {
@@ -471,6 +479,14 @@ func (i *fakeInstaller) Prepare(ctx context.Context, request core.InstallRequest
 		return i.prepare(ctx, request)
 	}
 	return i.candidate, nil
+}
+
+func (i *fakeInstaller) DetectVersion(ctx context.Context, binaryPath string) (string, error) {
+	i.detectCalls.Add(1)
+	if i.detectVersion != nil {
+		return i.detectVersion(ctx, binaryPath)
+	}
+	return "", nil
 }
 
 type fakeCandidate struct {
@@ -617,5 +633,139 @@ func waitManager(t *testing.T, done <-chan error) error {
 	case <-time.After(3 * time.Second):
 		t.Fatal("manager did not stop")
 		return nil
+	}
+}
+
+func TestManagerInstallSetupSkipsNetworkWhenLocalCoreValid(t *testing.T) {
+	installer := &fakeInstaller{}
+	installer.detectVersion = func(context.Context, string) (string, error) {
+		return "v1.18.0", nil
+	}
+	installer.prepare = func(context.Context, core.InstallRequest) (PreparedCore, error) {
+		t.Fatal("Prepare must not be called when setup local core is valid")
+		return nil, nil
+	}
+	manager := newTestManager(Options{Installer: installer})
+	manager.installRequest.BinaryPath = "mihomo"
+
+	result, err := manager.Install(context.Background(), Operation{ID: "setup-valid", Source: "setup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Version != "v1.18.0" || result.Updated {
+		t.Fatalf("result=%#v", result)
+	}
+	if got := installer.calls.Load(); got != 0 {
+		t.Fatalf("prepare calls=%d (setup must skip network)", got)
+	}
+	if got := installer.detectCalls.Load(); got != 1 {
+		t.Fatalf("detect calls=%d", got)
+	}
+}
+
+func TestManagerInstallSetupFallsBackToPrepareWhenLocalCoreInvalid(t *testing.T) {
+	installer := &fakeInstaller{candidate: &fakeCandidate{version: "v1.19.0"}}
+	installer.detectVersion = func(context.Context, string) (string, error) {
+		return "", errors.New("binary missing or corrupt")
+	}
+	prepareCalled := false
+	installer.prepare = func(_ context.Context, _ core.InstallRequest) (PreparedCore, error) {
+		prepareCalled = true
+		return installer.candidate, nil
+	}
+	manager := newTestManager(Options{Installer: installer, Supervisor: &fakeSupervisor{}})
+	manager.installRequest.BinaryPath = "mihomo"
+
+	result, err := manager.Install(context.Background(), Operation{ID: "setup-invalid", Source: "setup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Version != "v1.19.0" {
+		t.Fatalf("result=%#v", result)
+	}
+	if !prepareCalled {
+		t.Fatal("Prepare must run when local core is invalid")
+	}
+	if got := installer.detectCalls.Load(); got != 1 {
+		t.Fatalf("detect calls=%d (DetectVersion must run before fallback)", got)
+	}
+}
+
+func TestManagerInstallControlDoesNotShortCircuit(t *testing.T) {
+	installer := &fakeInstaller{candidate: &fakeCandidate{version: "v1.19.0", notUpdated: true}}
+	installer.detectVersion = func(context.Context, string) (string, error) { return "v1.18.0", nil }
+	manager := newTestManager(Options{Installer: installer, Supervisor: &fakeSupervisor{}})
+	manager.installRequest.BinaryPath = "mihomo"
+
+	if _, err := manager.Install(context.Background(), Operation{ID: "control-install", Source: "control"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := installer.detectCalls.Load(); got != 0 {
+		t.Fatalf("detect calls=%d (must be 0 for control source)", got)
+	}
+	if got := installer.calls.Load(); got != 1 {
+		t.Fatalf("prepare calls=%d (must be 1 for control source)", got)
+	}
+}
+
+func TestUpdateGeoIPSetupSkipsNetworkWhenMMDBValid(t *testing.T) {
+	service := &fakeGeoIPService{} // default: Country+ASN Available
+	var prepareCalls atomic.Int64
+	manager := newTestManager(Options{
+		GeoIP: service,
+		PrepareGeoIP: func(context.Context) (GeoIPCandidate, error) {
+			prepareCalls.Add(1)
+			return nil, errors.New("prepareGeoIP must not be called when setup MMDB is valid")
+		},
+	})
+	status, err := manager.UpdateGeoIP(context.Background(), Operation{ID: "setup-valid", Source: "setup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Country.Available || !status.ASN.Available {
+		t.Fatalf("status=%#v", status)
+	}
+	if got := prepareCalls.Load(); got != 0 {
+		t.Fatalf("prepareGeoIP calls=%d (setup must skip network)", got)
+	}
+}
+
+func TestUpdateGeoIPSetupFallsBackToNetworkWhenMMDBInvalid(t *testing.T) {
+	service := &fakeGeoIPService{statusFunc: func() geoip.Status {
+		return geoip.Status{Country: geoip.DatabaseStatus{Available: true}, ASN: geoip.DatabaseStatus{Available: false}}
+	}}
+	prepared := &fakeGeoIPCandidate{valid: true, identity: "fresh-pair"}
+	var prepareCalls atomic.Int64
+	manager := newTestManager(Options{
+		GeoIP: service,
+		PrepareGeoIP: func(context.Context) (GeoIPCandidate, error) {
+			prepareCalls.Add(1)
+			return prepared, nil
+		},
+	})
+	if _, err := manager.UpdateGeoIP(context.Background(), Operation{ID: "setup-invalid", Source: "setup"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := prepareCalls.Load(); got != 1 {
+		t.Fatalf("prepareGeoIP calls=%d (must download when MMDB invalid)", got)
+	}
+}
+
+func TestUpdateGeoIPControlDoesNotShortCircuit(t *testing.T) {
+	service := &fakeGeoIPService{} // both Available — would short-circuit if source were setup
+	prepared := &fakeGeoIPCandidate{valid: true, identity: "control-pair"}
+	var prepareCalls atomic.Int64
+	manager := newTestManager(Options{
+		GeoIP: service,
+		PrepareGeoIP: func(context.Context) (GeoIPCandidate, error) {
+			prepareCalls.Add(1)
+			return prepared, nil
+		},
+	})
+	if _, err := manager.UpdateGeoIP(context.Background(), Operation{ID: "control-geoip", Source: "control"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := prepareCalls.Load(); got != 1 {
+		t.Fatalf("prepareGeoIP calls=%d (control must always download)", got)
 	}
 }

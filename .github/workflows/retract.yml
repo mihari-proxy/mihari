@@ -1,0 +1,74 @@
+name: retract
+
+# Withdraw a fatally-broken release from every distribution channel (design §4.6).
+# Manual dispatch only, with a boolean double-confirm. Idempotent: re-running on
+# an already-retracted version removes nothing more and reports so.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to retract, e.g. v0.3.0 (must match ^v[0-9]+\.[0-9]+\.[0-9]+$)'
+        required: true
+        type: string
+      confirm:
+        description: 'Type-check confirmation. The version is permanently deleted from AList and GitHub — check this ONLY after verifying the breakage.'
+        required: true
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  VERSION: ${{ inputs.version }}
+  CONFIRM: ${{ inputs.confirm }}
+
+jobs:
+  retract:
+    name: retract ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    env:
+      # Job-scope so the AList step's `if: env.ALIST_URL != ''` can read it
+      # (secrets are unreadable in step `if`; step env isn't either). Empty when
+      # unconfigured → AList step skips; the GitHub release is still deleted.
+      ALIST_URL: ${{ secrets.ALIST_URL }}
+      ALIST_USERNAME: ${{ secrets.ALIST_USERNAME }}
+      ALIST_PASSWORD: ${{ secrets.ALIST_PASSWORD }}
+      ALIST_BASE_PATH: ${{ vars.ALIST_BASE_PATH }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Gate (semver + confirm)
+        # design §4.6 step 1: pure-semver gate (same rule as §4.2) + the boolean
+        # double-confirm must be true before anything destructive runs.
+        run: |
+          echo "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::version '${VERSION}' must match ^v[0-9]+\.[0-9]+\.[0-9]+$"; exit 1; }
+          [ "${CONFIRM}" = "true" ] \
+            || { echo "::error::confirm must be true to retract ${VERSION} (this permanently deletes it)"; exit 1; }
+          echo "Retracting ${VERSION} (confirmed)."
+
+      - name: Retract from AList drive
+        # design §4.6 steps 2-4: read index, remove the version dir, rebuild
+        # index.txt to point at the highest remaining complete version (or empty).
+        # Conditional on ALIST_URL so retraction still works GitHub-only.
+        if: ${{ env.ALIST_URL != '' }}
+        run: |
+          python -c "import requests" 2>/dev/null || pip install requests
+          python scripts/retract-alist.py \
+            --version "${VERSION}" \
+            --base-path "${ALIST_BASE_PATH:-/mihari}"
+
+      - name: Delete GitHub release
+        # design §4.6 step 5: release + assets + tag. --cleanup-tag lets the same
+        # version number be re-cut after a fix. Idempotent: a missing release is
+        # reported, not fatal (re-run after a partial retract).
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${VERSION}" >/dev/null 2>&1; then
+            gh release delete "${VERSION}" --yes --cleanup-tag
+            echo "Deleted GitHub release ${VERSION} (release + assets + tag)."
+          else
+            echo "GitHub release ${VERSION} not found (already retracted?) — nothing to delete."
+          fi

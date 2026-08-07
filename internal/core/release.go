@@ -24,7 +24,8 @@ type Release struct {
 	Assets  []Asset `json:"assets"`
 }
 
-func (i Installer) latestRelease(ctx context.Context) (Release, error) {
+// LatestRelease 取 mihomo 最新 release（bundler 复用入口，design §4.1 export 边界）。
+func (i Installer) LatestRelease(ctx context.Context) (Release, error) {
 	var release Release
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(i.apiBase(), "/")+"/repos/"+i.repository()+"/releases/latest", nil)
 	if err != nil {

@@ -1,0 +1,150 @@
+"""Shared AList v3 client + helpers for the release/retract workflows.
+
+Both scripts/release-alist.py (publish) and scripts/retract-alist.py
+(withdraw) talk to the same self-hosted AList drive via the v3 REST API
+(login / fs/get / fs/list / fs/put / fs/remove / fs/mkdir) and share the
+same notion of a version directory, bundle names, and semver ordering.
+Centralizing the client keeps the two flows consistent and avoids drifting
+two copies of the API surface.
+"""
+import hashlib
+import os
+import re
+import sys
+from pathlib import Path
+from urllib.parse import quote
+
+import requests
+
+DEFAULT_BASE_PATH = "/mihari"
+DEFAULT_KEEP_VERSIONS = 5
+PLATFORMS = [
+    "linux/amd64", "linux/arm64",
+    "darwin/amd64", "darwin/arm64",
+    "windows/amd64", "windows/arm64",
+]
+SEMVER_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+INDEX_PLACEHOLDER = "__MIHARI_INDEX_URL__"
+
+
+def fail(message):
+    print(f"::error::{message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def info(message):
+    print(f"::notice::{message}")
+
+
+def semver_key(name):
+    match = SEMVER_RE.match(name)
+    return tuple(int(x) for x in match.groups()) if match else None
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def bundle_name(goos, goarch):
+    ext = ".zip" if goos == "windows" else ".tar.gz"
+    return f"mihari-all-in-one-{goos}-{goarch}{ext}"
+
+
+class AList:
+    """Thin client over the AList v3 REST API."""
+
+    def __init__(self, base_url, username, password):
+        self.base = base_url.rstrip("/")
+        self.session = requests.Session()
+        token = self._login(username, password)
+        self.session.headers["Authorization"] = token
+
+    def _post(self, path, **kwargs):
+        response = self.session.post(self.base + path, timeout=120, **kwargs)
+        response.raise_for_status()
+        return response.json()
+
+    def _login(self, username, password):
+        data = self._post("/api/auth/login", json={"username": username, "password": password})
+        if data.get("code") != 200:
+            fail(f"alist login failed: {data.get('message')}")
+        return data["data"]["token"]
+
+    def get(self, path):
+        return self._post("/api/fs/get", json={"path": path, "password": ""})
+
+    def exists(self, path):
+        return self.get(path).get("code") == 200
+
+    def sign_of(self, path):
+        data = self.get(path)
+        if data.get("code") != 200:
+            return None
+        return data["data"].get("sign", "")
+
+    def list_dir(self, path):
+        data = self._post("/api/fs/list", json={"path": path, "password": "", "page": 1, "per_page": 0, "refresh": False})
+        return data.get("data", {}).get("content") or []
+
+    def mkdir(self, path):
+        self._post("/api/fs/mkdir", json={"path": path})
+
+    def upload(self, local, remote_path):
+        with open(local, "rb") as handle:
+            response = self.session.put(
+                self.base + "/api/fs/put",
+                headers={
+                    "File-Path": quote(remote_path, safe=""),
+                    "As-Task": "false",
+                    "Content-Type": "application/octet-stream",
+                },
+                data=handle,
+                timeout=900,
+            )
+        response.raise_for_status()
+
+    def upload_text(self, text, remote_path):
+        response = self.session.put(
+            self.base + "/api/fs/put",
+            headers={
+                "File-Path": quote(remote_path, safe=""),
+                "As-Task": "false",
+                "Content-Type": "text/plain",
+            },
+            data=text.encode("utf-8"),
+            timeout=120,
+        )
+        response.raise_for_status()
+
+    def remove(self, dir_path, names):
+        self._post("/api/fs/remove", json={"dir": dir_path, "names": list(names)})
+
+    def content(self, path):
+        """Read a remote text file via its signed proxy route. Returns None when
+        the file does not exist (sign_of is None). Used by retract to read the
+        root index.txt and a version dir's SHA256SUMS.txt."""
+        sign = self.sign_of(path)
+        if sign is None:
+            return None
+        response = self.session.get(self.signed_url(path, sign), timeout=120)
+        response.raise_for_status()
+        return response.text
+
+    def signed_url(self, path, sign):
+        # /p<path>?sign=... is AList's proxy/stream route (design §4.4 URL form).
+        return f"{self.base}/p{path}?sign={sign}"
+
+
+def connect():
+    """Build an AList client from the standard ALIST_* environment variables,
+    failing loudly if any required one is missing."""
+    base_url = os.environ.get("ALIST_URL")
+    username = os.environ.get("ALIST_USERNAME")
+    password = os.environ.get("ALIST_PASSWORD")
+    if not base_url or not username or not password:
+        fail("ALIST_URL / ALIST_USERNAME / ALIST_PASSWORD are required")
+    return AList(base_url, username, password)

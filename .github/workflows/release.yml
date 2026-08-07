@@ -5,9 +5,21 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, e.g. v0.3.0 (must match ^v[0-9]+\.[0-9]+\.[0-9]+$; enforced by the version gate)'
+        required: true
+        type: string
 
 permissions:
   contents: write
+
+env:
+  # Single source of truth for the version: explicit input on dispatch, else the
+  # pushed tag. workflow_dispatch on a branch would otherwise inject the branch
+  # name via GITHUB_REF_NAME (design §4.2 — fixes the binary-version bug).
+  VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+  PLATFORMS: linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64,windows/arm64
 
 jobs:
   build:
@@ -30,6 +42,14 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Version gate
+        # Layer ② (design §4.2): reject pre-release suffixes / non-semver at every
+        # entry point. The dispatch input is UI-gated upstream; this also covers
+        # tag pushes and any API-direct triggering.
+        run: |
+          echo "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::version '${VERSION}' must match ^v[0-9]+\.[0-9]+\.[0-9]+$ (no pre-release suffix)"; exit 1; }
+
       - name: Build
         env:
           CGO_ENABLED: '0'
@@ -40,7 +60,7 @@ jobs:
           # internal/update SelectSelfAsset and the install scripts rely on the
           # fixed prefix, and it keeps the /releases/latest/download/ URL stable.
           OUT="mihari-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
-          go build -trimpath -ldflags "-s -w -X github.com/mihari-proxy/mihari/internal/buildinfo.Version=${GITHUB_REF_NAME}" -o "dist/${OUT}" ./cmd/mihari
+          go build -trimpath -ldflags "-s -w -X github.com/mihari-proxy/mihari/internal/buildinfo.Version=${VERSION}" -o "dist/${OUT}" ./cmd/mihari
           ls -la dist/
 
       - name: Upload artifact
@@ -49,24 +69,129 @@ jobs:
           name: mihari-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*
 
+  bundle:
+    name: bundle all-in-one
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Build all-in-one bundles
+        # One mihomo release fetch + shared GeoIP download, then 6 platform packs
+        # (design §4.1). GITHUB_TOKEN raises the unauthenticated API rate ceiling.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          go run ./scripts/build-all-in-one \
+            --mihari-dir dist --out bundles --platforms "${PLATFORMS}"
+          ls -la bundles/
+
+      - name: Upload bundle artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: aio-bundles
+          path: bundles/*
+
   release:
     name: publish release
-    needs: build
-    runs-on: ubuntu-latest
-    # workflow_dispatch also publishes: docs/RELEASE.md documents manual triggering.
+    needs: [build, bundle]
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      # Mapped at job scope so the AList steps' `if: env.ALIST_URL != ''` can see
+      # them (step `if` cannot read step-level env, and secrets are unreadable in
+      # `if`). Empty when unconfigured → AList steps skip, never blocking GitHub.
+      ALIST_URL: ${{ secrets.ALIST_URL }}
+      ALIST_USERNAME: ${{ secrets.ALIST_USERNAME }}
+      ALIST_PASSWORD: ${{ secrets.ALIST_PASSWORD }}
+      ALIST_BASE_PATH: ${{ vars.ALIST_BASE_PATH }}
+      MIHARI_KEEP_VERSIONS: ${{ vars.MIHARI_KEEP_VERSIONS }}
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@v7
+
+      - name: Version gate (final)
+        # Layer ③ (design §4.2): last-chance gate before anything is published.
+        run: |
+          echo "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::version '${VERSION}' rejected at final gate"; exit 1; }
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
 
       - name: Checksums
         working-directory: dist
-        run: sha256sum * > SHA256SUMS.txt
+        run: |
+          # GitHub release: every artifact. AList version dir: aio bundles only
+          # (design §4.5 step 2).
+          sha256sum * > SHA256SUMS.txt
+          sha256sum mihari-all-in-one-* > AIO_SHA256SUMS.txt
 
-      - name: Publish
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@v3
         with:
+          # Explicit tag so workflow_dispatch (on a branch) tags/publishes the
+          # requested version rather than the branch name (design §4.2).
+          tag_name: ${{ env.VERSION }}
           files: dist/*
           generate_release_notes: true
+
+      - name: Publish to AList drive
+        # design §4.5 steps 1-6. Conditional on ALIST_URL so GitHub-only releases
+        # still succeed without the §9 prerequisites. End-to-end verified later.
+        if: ${{ env.ALIST_URL != '' }}
+        run: |
+          # requests ships on the ubuntu runner image; install only if absent to
+          # avoid the externally-managed-environment error on newer images.
+          python -c "import requests" 2>/dev/null || pip install requests
+          python scripts/release-alist.py \
+            --version "${VERSION}" \
+            --dist-dir dist \
+            --repo-root . \
+            --base-path "${ALIST_BASE_PATH:-/mihari}" \
+            --keep-versions "${MIHARI_KEEP_VERSIONS:-5}"
+
+      - name: Append offline install commands to release notes
+        # design §4.5 step 7. Idempotent via a marker (generate_release_notes
+        # regenerates the body each publish, so the appendix is re-added cleanly).
+        if: ${{ env.ALIST_URL != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NOTES="$(gh release view "${VERSION}" --json notes -q .notes)"
+          MARKER='<!-- aio-install -->'
+          printf '%s\n' "$NOTES" | grep -qF "$MARKER" && { echo "install commands already present"; exit 0; }
+          # Quoted heredoc delimiter: backticks and placeholders pass through
+          # verbatim (no shell expansion); the two URLs are injected via sed.
+          cat > /tmp/aio_append.md <<'TEMPLATE'
+
+          <!-- aio-install -->
+          ## 国内离线安装（AList 网盘，免 GitHub 访问）
+
+          Linux / macOS：
+
+          ```bash
+          curl -fsSL __SH_URL__ | bash
+          ```
+
+          Windows (PowerShell)：
+
+          ```powershell
+          & ([scriptblock]::Create((irm __PS1_URL__)))
+          ```
+          TEMPLATE
+          sed -i "s#__SH_URL__#${ALIST_REMOTE_SH_URL}#g; s#__PS1_URL__#${ALIST_REMOTE_PS1_URL}#g" /tmp/aio_append.md
+          gh release edit "${VERSION}" --notes "$(printf '%s\n%s\n' "$NOTES" "$(cat /tmp/aio_append.md)")"
