@@ -9,6 +9,8 @@
 
 Mihari is a new, independent local manager for [mihomo](https://github.com/MetaCubeX/mihomo). It targets Windows, Linux, and macOS equally and is designed around a single daemon-owned control plane shared by the CLI, TUI, and browser panels.
 
+![Overview](assets/overview.png)
+
 ## What is this?
 
 **TLDR**: Mihari is a terminal manager for mihomo — the same family of tools as mihomo GUIs like Clash Party and Sparkle, but it runs in the terminal and is hosted by a daemon in the background, so the CLI, TUI, and browser panels share one control plane.
@@ -21,8 +23,6 @@ Specifically:
 - **System proxy / TUN**: enable system proxy or TUN mode in one click
 - **Web panels**: one-click install and open of the zashboard / MetaCubeXD panels
 - **Connections & rules**: live view of connections, proxy groups, and rules, with local GeoIP resolution
-
-![Overview](assets/overview.png)
 
 ## Features
 
@@ -49,6 +49,22 @@ irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.ps1 | iex
 ```
 
 Or download the binary for your platform from the [Releases page](https://github.com/mihari-proxy/mihari/releases).
+
+**China / no GitHub access (offline)**
+
+An all-in-one bundle (mihari binary + mihomo core + GeoIP, sha256-verified) is mirrored on a self-hosted AList drive, so installs never touch GitHub. The signed one-line installer URL for each platform is appended to every release's notes under "国内离线安装":
+
+```sh
+# Linux / macOS
+curl -fsSL <install-aio-remote.sh signed link from release notes> | bash
+```
+
+```powershell
+# Windows (PowerShell)
+& ([scriptblock]::Create((irm <install-aio-remote.ps1 signed link from release notes>)))
+```
+
+Copy the real signed link from the [latest release notes](https://github.com/mihari-proxy/mihari/releases). See [docs/distribution.md](docs/distribution.md) for the offline distribution design.
 
 **First run**
 
