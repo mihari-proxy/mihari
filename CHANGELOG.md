@@ -2,6 +2,24 @@
 
 本文件记录 Mihari 每个版本的变更。版本遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.2.0] - 2026-08-07
+
+### Added
+
+- all-in-one 整合包：6 平台（linux/darwin/windows × amd64/arm64）离线整合包，内含 mihari 二进制 + mihomo 核心 + GeoIP（Country + ASN），供网络受限环境一键安装（#11）
+- AList 国内分发：整合包发布到 AList 网盘的不可变版本目录，配 `index.txt` 路由表与签名直链，墙内用户免 GitHub 访问离线安装（#11）
+- 离线安装脚本：`install-aio.sh/.ps1`（安装本地整合包）、`install-aio-remote.sh/.ps1`（从 AList 下载并安装，含 sha256 校验、版本检查、服务停启）（#11）
+- release 工作流：新增整合包打包作业、版本闸门（`^vX.Y.Z$`，禁预发布后缀）、条件化 AList 上传（未配置 secrets 时不阻塞 GitHub 发布）（#11）
+- retract 工作流：手动撤回致命错误版本（删 AList 版本目录 + 重建 `index.txt` + 删 GitHub release/tag，幂等）（#11）
+
+### Fixed
+
+- 控制平面优雅关闭误报 `context deadline exceeded`：`control/server.Serve` 在关闭预算内未排空在途连接时不再把超时当致命错误传播，消除集成测试在慢速/-race CI 上的 flake（#12）
+
+### Docs
+
+- 新增 [分发方案](docs/distribution.md)：安装入口、AList 布局、`index.txt` 格式、发布顺序、保留策略、撤回流程
+
 ## [v0.1.1] - 2026-08-06
 
 ### Fixed
