@@ -189,9 +189,15 @@ func (c *fakeGeoIPCandidate) Valid() bool      { return c.valid }
 func (c *fakeGeoIPCandidate) Commit() error    { c.commits++; return c.commitErr }
 func (c *fakeGeoIPCandidate) Cleanup()         { c.cleanups++ }
 
-type fakeGeoIPService struct{ recordedError bool }
+type fakeGeoIPService struct {
+	statusFunc    func() geoip.Status
+	recordedError bool
+}
 
-func (*fakeGeoIPService) Status() geoip.Status {
+func (s *fakeGeoIPService) Status() geoip.Status {
+	if s.statusFunc != nil {
+		return s.statusFunc()
+	}
 	return geoip.Status{Country: geoip.DatabaseStatus{Available: true}, ASN: geoip.DatabaseStatus{Available: true}}
 }
 func (*fakeGeoIPService) Lookup(netip.Addr) (geoip.Record, error) { return geoip.Record{}, nil }
@@ -699,5 +705,67 @@ func TestManagerInstallControlDoesNotShortCircuit(t *testing.T) {
 	}
 	if got := installer.calls.Load(); got != 1 {
 		t.Fatalf("prepare calls=%d (must be 1 for control source)", got)
+	}
+}
+
+func TestUpdateGeoIPSetupSkipsNetworkWhenMMDBValid(t *testing.T) {
+	service := &fakeGeoIPService{} // default: Country+ASN Available
+	var prepareCalls atomic.Int64
+	manager := newTestManager(Options{
+		GeoIP: service,
+		PrepareGeoIP: func(context.Context) (GeoIPCandidate, error) {
+			prepareCalls.Add(1)
+			return nil, errors.New("prepareGeoIP must not be called when setup MMDB is valid")
+		},
+	})
+	status, err := manager.UpdateGeoIP(context.Background(), Operation{ID: "setup-valid", Source: "setup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Country.Available || !status.ASN.Available {
+		t.Fatalf("status=%#v", status)
+	}
+	if got := prepareCalls.Load(); got != 0 {
+		t.Fatalf("prepareGeoIP calls=%d (setup must skip network)", got)
+	}
+}
+
+func TestUpdateGeoIPSetupFallsBackToNetworkWhenMMDBInvalid(t *testing.T) {
+	service := &fakeGeoIPService{statusFunc: func() geoip.Status {
+		return geoip.Status{Country: geoip.DatabaseStatus{Available: true}, ASN: geoip.DatabaseStatus{Available: false}}
+	}}
+	prepared := &fakeGeoIPCandidate{valid: true, identity: "fresh-pair"}
+	var prepareCalls atomic.Int64
+	manager := newTestManager(Options{
+		GeoIP: service,
+		PrepareGeoIP: func(context.Context) (GeoIPCandidate, error) {
+			prepareCalls.Add(1)
+			return prepared, nil
+		},
+	})
+	if _, err := manager.UpdateGeoIP(context.Background(), Operation{ID: "setup-invalid", Source: "setup"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := prepareCalls.Load(); got != 1 {
+		t.Fatalf("prepareGeoIP calls=%d (must download when MMDB invalid)", got)
+	}
+}
+
+func TestUpdateGeoIPControlDoesNotShortCircuit(t *testing.T) {
+	service := &fakeGeoIPService{} // both Available — would short-circuit if source were setup
+	prepared := &fakeGeoIPCandidate{valid: true, identity: "control-pair"}
+	var prepareCalls atomic.Int64
+	manager := newTestManager(Options{
+		GeoIP: service,
+		PrepareGeoIP: func(context.Context) (GeoIPCandidate, error) {
+			prepareCalls.Add(1)
+			return prepared, nil
+		},
+	})
+	if _, err := manager.UpdateGeoIP(context.Background(), Operation{ID: "control-geoip", Source: "control"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := prepareCalls.Load(); got != 1 {
+		t.Fatalf("prepareGeoIP calls=%d (control must always download)", got)
 	}
 }
