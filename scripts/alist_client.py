@@ -18,10 +18,13 @@ import requests
 
 DEFAULT_BASE_PATH = "/mihari"
 DEFAULT_KEEP_VERSIONS = 5
+# (goos, goarch) pairs so the release/retract `for goos, goarch in PLATFORMS`
+# loops unpack correctly. v0.2.0 crashed at release-alist.py:47 because these
+# were "goos/goarch" strings; test_alist_client.test_platforms_* pins the shape.
 PLATFORMS = [
-    "linux/amd64", "linux/arm64",
-    "darwin/amd64", "darwin/arm64",
-    "windows/amd64", "windows/arm64",
+    ("linux", "amd64"), ("linux", "arm64"),
+    ("darwin", "amd64"), ("darwin", "arm64"),
+    ("windows", "amd64"), ("windows", "arm64"),
 ]
 SEMVER_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 INDEX_PLACEHOLDER = "__MIHARI_INDEX_URL__"
