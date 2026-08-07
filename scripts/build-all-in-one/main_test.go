@@ -226,7 +226,7 @@ func fakeGitHubAPI(t *testing.T) *httptest.Server {
 			response.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(response).Encode(core.Release{TagName: "v1.19.0", Assets: assets})
 		case strings.HasPrefix(request.URL.Path, "/asset/"):
-			response.Write(archives[strings.TrimPrefix(request.URL.Path, "/asset/")])
+			_, _ = response.Write(archives[strings.TrimPrefix(request.URL.Path, "/asset/")])
 		default:
 			http.NotFound(response, request)
 		}
@@ -245,7 +245,7 @@ func fakeGeoIPServer(t *testing.T) *httptest.Server {
 	}
 	return httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if data, ok := files[strings.TrimPrefix(request.URL.Path, "/")]; ok {
-			response.Write(data)
+			_, _ = response.Write(data)
 			return
 		}
 		http.NotFound(response, request)

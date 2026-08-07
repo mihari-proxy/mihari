@@ -402,16 +402,24 @@ func packStage(stage, out, goos, goarch string) error {
 	return tarStage(stage, filepath.Join(out, name+".tar.gz"))
 }
 
-func tarStage(stage, dest string) error {
+func tarStage(stage, dest string) (err error) {
 	out, err := os.Create(dest)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
 	gzipWriter := gzip.NewWriter(out)
-	defer gzipWriter.Close()
+	defer func() {
+		if cerr := gzipWriter.Close(); err == nil {
+			err = cerr
+		}
+	}()
 	tarWriter := tar.NewWriter(gzipWriter)
-	defer tarWriter.Close()
+	defer func() {
+		if cerr := tarWriter.Close(); err == nil {
+			err = cerr
+		}
+	}()
 	return filepath.Walk(stage, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -437,14 +445,18 @@ func tarStage(stage, dest string) error {
 	})
 }
 
-func zipStage(stage, dest string) error {
+func zipStage(stage, dest string) (err error) {
 	out, err := os.Create(dest)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
 	zipWriter := zip.NewWriter(out)
-	defer zipWriter.Close()
+	defer func() {
+		if cerr := zipWriter.Close(); err == nil {
+			err = cerr
+		}
+	}()
 	return filepath.Walk(stage, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
