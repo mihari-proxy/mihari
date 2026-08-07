@@ -629,3 +629,75 @@ func waitManager(t *testing.T, done <-chan error) error {
 		return nil
 	}
 }
+
+func TestManagerInstallSetupSkipsNetworkWhenLocalCoreValid(t *testing.T) {
+	installer := &fakeInstaller{}
+	installer.detectVersion = func(context.Context, string) (string, error) {
+		return "v1.18.0", nil
+	}
+	installer.prepare = func(context.Context, core.InstallRequest) (PreparedCore, error) {
+		t.Fatal("Prepare must not be called when setup local core is valid")
+		return nil, nil
+	}
+	manager := newTestManager(Options{Installer: installer})
+	manager.installRequest.BinaryPath = "mihomo"
+
+	result, err := manager.Install(context.Background(), Operation{ID: "setup-valid", Source: "setup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Version != "v1.18.0" || result.Updated {
+		t.Fatalf("result=%#v", result)
+	}
+	if got := installer.calls.Load(); got != 0 {
+		t.Fatalf("prepare calls=%d (setup must skip network)", got)
+	}
+	if got := installer.detectCalls.Load(); got != 1 {
+		t.Fatalf("detect calls=%d", got)
+	}
+}
+
+func TestManagerInstallSetupFallsBackToPrepareWhenLocalCoreInvalid(t *testing.T) {
+	installer := &fakeInstaller{candidate: &fakeCandidate{version: "v1.19.0"}}
+	installer.detectVersion = func(context.Context, string) (string, error) {
+		return "", errors.New("binary missing or corrupt")
+	}
+	prepareCalled := false
+	installer.prepare = func(_ context.Context, _ core.InstallRequest) (PreparedCore, error) {
+		prepareCalled = true
+		return installer.candidate, nil
+	}
+	manager := newTestManager(Options{Installer: installer, Supervisor: &fakeSupervisor{}})
+	manager.installRequest.BinaryPath = "mihomo"
+
+	result, err := manager.Install(context.Background(), Operation{ID: "setup-invalid", Source: "setup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Version != "v1.19.0" {
+		t.Fatalf("result=%#v", result)
+	}
+	if !prepareCalled {
+		t.Fatal("Prepare must run when local core is invalid")
+	}
+	if got := installer.detectCalls.Load(); got != 1 {
+		t.Fatalf("detect calls=%d (DetectVersion must run before fallback)", got)
+	}
+}
+
+func TestManagerInstallControlDoesNotShortCircuit(t *testing.T) {
+	installer := &fakeInstaller{candidate: &fakeCandidate{version: "v1.19.0", notUpdated: true}}
+	installer.detectVersion = func(context.Context, string) (string, error) { return "v1.18.0", nil }
+	manager := newTestManager(Options{Installer: installer, Supervisor: &fakeSupervisor{}})
+	manager.installRequest.BinaryPath = "mihomo"
+
+	if _, err := manager.Install(context.Background(), Operation{ID: "control-install", Source: "control"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := installer.detectCalls.Load(); got != 0 {
+		t.Fatalf("detect calls=%d (must be 0 for control source)", got)
+	}
+	if got := installer.calls.Load(); got != 1 {
+		t.Fatalf("prepare calls=%d (must be 1 for control source)", got)
+	}
+}

@@ -368,6 +368,14 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		}
 		installRequest := m.installRequest
 		installRequest.CurrentVersion = m.store.Load().Core.Version
+		// setup 预检（design §4.3）：aio 脚本已预置核心时，对现有文件 -v 成功即秒过，不联网。
+		// store.Core.Version 不作判据（DetectVersion 失败时旧值残留，见 runtime.go 启动检测）。
+		if operation.Source == "setup" {
+			if version, detectErr := m.installer.DetectVersion(ctx, installRequest.BinaryPath); detectErr == nil && version != "" {
+				return core.InstallResult{Version: version, Updated: false}, nil
+			}
+			// -v 失败（缺失/损坏）→ 落 Prepare 联网修复（失败由 Prepare 报错并提示 aio 脚本）。
+		}
 		candidate, err := m.installer.Prepare(ctx, installRequest)
 		if err != nil {
 			return nil, err
