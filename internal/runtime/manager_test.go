@@ -460,9 +460,11 @@ func newTestManager(options Options) *Manager {
 }
 
 type fakeInstaller struct {
-	calls     atomic.Int64
-	candidate PreparedCore
-	prepare   func(context.Context, core.InstallRequest) (PreparedCore, error)
+	calls         atomic.Int64
+	detectCalls   atomic.Int64
+	candidate     PreparedCore
+	prepare       func(context.Context, core.InstallRequest) (PreparedCore, error)
+	detectVersion func(context.Context, string) (string, error)
 }
 
 func (i *fakeInstaller) Prepare(ctx context.Context, request core.InstallRequest) (PreparedCore, error) {
@@ -471,6 +473,14 @@ func (i *fakeInstaller) Prepare(ctx context.Context, request core.InstallRequest
 		return i.prepare(ctx, request)
 	}
 	return i.candidate, nil
+}
+
+func (i *fakeInstaller) DetectVersion(ctx context.Context, binaryPath string) (string, error) {
+	i.detectCalls.Add(1)
+	if i.detectVersion != nil {
+		return i.detectVersion(ctx, binaryPath)
+	}
+	return "", nil
 }
 
 type fakeCandidate struct {

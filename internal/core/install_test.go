@@ -224,3 +224,24 @@ func zipFixture(t *testing.T, content []byte) []byte {
 	}
 	return archive.Bytes()
 }
+
+func TestInstallerDetectVersionReportsExistingBinary(t *testing.T) {
+	runner := &recordingRunner{output: []byte("Mihomo Meta v1.18.2")}
+	version, err := Installer{Runner: runner}.DetectVersion(context.Background(), "mihomo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != "v1.18.2" {
+		t.Fatalf("version=%q", version)
+	}
+	if len(runner.args) != 1 || runner.args[0] != "-v" {
+		t.Fatalf("args=%q", runner.args)
+	}
+
+	failing := &recordingRunner{err: errors.New("exec failed")}
+	_, err = Installer{Runner: failing}.DetectVersion(context.Background(), "mihomo")
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure {
+		t.Fatalf("err=%v", err)
+	}
+}

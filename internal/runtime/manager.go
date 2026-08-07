@@ -24,6 +24,7 @@ type PreparedCore = core.PreparedCore
 
 type CoreInstaller interface {
 	Prepare(context.Context, core.InstallRequest) (core.PreparedCore, error)
+	DetectVersion(context.Context, string) (string, error)
 }
 
 type CoreSupervisor interface {

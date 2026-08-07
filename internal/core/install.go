@@ -54,6 +54,17 @@ func (i Installer) Install(ctx context.Context, request InstallRequest) (Install
 	return candidate.Commit()
 }
 
+// DetectVersion 报告现有核心二进制的版本（运行 mihomo -v）。供 runtime 侧 setup 本地预检
+// 复用，避免在 runtime.Manager 里另持 Runner；判据复用 DetectVersion（含 ParseVersion 版本
+// 格式校验），与 Prepare 的同版本短路同一判据、DRY（design §4.3 实现位置）。
+func (i Installer) DetectVersion(ctx context.Context, binaryPath string) (string, error) {
+	runner := i.Runner
+	if runner == nil {
+		runner = OSCommandRunner{}
+	}
+	return DetectVersion(ctx, runner, binaryPath)
+}
+
 type Candidate struct {
 	path       string
 	binaryPath string
