@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -339,11 +340,14 @@ func writeAll(dest string, reader io.Reader, maxBytes int64) error {
 	return nil
 }
 
-// smokeMihomo runs `-v` for linux/amd64 (the only target the build host can
-// execute) and verifies the executable magic number for the other five
-// platforms — design §4.1 step 2.
+// smokeMihomo runs `-v` for the target matching the build host (the only target
+// the host can actually execute) and verifies the executable magic number for
+// the other platforms — design §4.1 step 2. Matching on runtime.GOOS/GOARCH
+// keeps the bundler runnable on any host (CI is linux/amd64, but local dev on
+// Windows/macOS now smokes its own platform instead of failing to exec a
+// foreign binary).
 func smokeMihomo(ctx context.Context, goos, goarch, path string, runner core.CommandRunner) error {
-	if goos == "linux" && goarch == "amd64" {
+	if goos == runtime.GOOS && goarch == runtime.GOARCH {
 		runner := runner
 		if runner == nil {
 			runner = core.OSCommandRunner{}

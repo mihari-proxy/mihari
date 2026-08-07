@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -21,11 +22,23 @@ import (
 	"github.com/mihari-proxy/mihari/internal/core"
 )
 
-// fakeRunner satisfies core.CommandRunner for the linux/amd64 `-v` smoke.
+// fakeRunner satisfies core.CommandRunner for the host-matching `-v` smoke.
 type fakeRunner struct{ output []byte }
 
 func (f fakeRunner) Run(_ context.Context, _ string, _ ...string) ([]byte, error) {
 	return f.output, nil
+}
+
+// recordingRunner records whether Run was invoked, so a test can assert that the
+// host-matching target goes through the exec path (not the magic-number path).
+type recordingRunner struct {
+	called bool
+	output []byte
+}
+
+func (r *recordingRunner) Run(_ context.Context, _ string, _ ...string) ([]byte, error) {
+	r.called = true
+	return r.output, nil
 }
 
 func TestBundlerProducesSixPlatformBundles(t *testing.T) {
@@ -90,11 +103,71 @@ func TestBundlerProducesSixPlatformBundles(t *testing.T) {
 				t.Fatalf("%s: missing %q in bundle, got=%v", platform, w, sortedKeys(got))
 			}
 		}
-		// mihomo magic number sanity (linux/amd64 was -v-smoked via fakeRunner; check bytes anyway).
+		// mihomo magic number sanity (the host-matching target was -v-smoked via
+		// fakeRunner; the other five went through the magic check; verify bytes).
 		if mihomo := entries["data/bin/mihomo"+suffix]; len(mihomo) == 0 {
 			t.Fatalf("%s: empty mihomo binary", platform)
 		}
 	}
+}
+
+func TestSmokeMihomoExecutesHostTarget(t *testing.T) {
+	ctx := context.Background()
+	// Deliberately invalid magic: the host-matching target must exec the runner
+	// (returning output), NOT fall through to the magic-number check. A
+	// host-assumption bug (hardcoding linux/amd64) fails this on any non-linux
+	// host because the magic check would reject the garbage bytes.
+	path := filepath.Join(t.TempDir(), "mihomo")
+	if err := os.WriteFile(path, []byte("not a valid executable magic"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingRunner{output: []byte("Mihomo Meta v1.19.0")}
+	if err := smokeMihomo(ctx, runtime.GOOS, runtime.GOARCH, path, runner); err != nil {
+		t.Fatalf("host-matching smoke: %v", err)
+	}
+	if !runner.called {
+		t.Fatal("host-matching platform must exec the runner, not magic-check")
+	}
+}
+
+func TestSmokeMihomoMagicChecksNonHostTarget(t *testing.T) {
+	ctx := context.Background()
+	goos, goarch := nonHostTarget(t)
+	validMagic := map[string][]byte{
+		"linux":   {0x7f, 'E', 'L', 'F'},
+		"darwin":  {0xcf, 0xfa, 0xed, 0xfe},
+		"windows": {'M', 'Z'},
+	}[goos]
+	path := filepath.Join(t.TempDir(), "mihomo")
+	if err := os.WriteFile(path, validMagic, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := smokeMihomo(ctx, goos, goarch, path, nil); err != nil {
+		t.Fatalf("non-host valid magic: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("bad magic"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := smokeMihomo(ctx, goos, goarch, path, nil); err == nil {
+		t.Fatal("expected magic mismatch error for non-host target")
+	}
+}
+
+// nonHostTarget returns any of the 6 supported platforms that is not the build
+// host's, so a magic-number test is deterministic regardless of where it runs.
+func nonHostTarget(t *testing.T) (string, string) {
+	t.Helper()
+	for _, target := range []struct{ goos, goarch string }{
+		{"linux", "amd64"}, {"linux", "arm64"},
+		{"darwin", "amd64"}, {"darwin", "arm64"},
+		{"windows", "amd64"}, {"windows", "arm64"},
+	} {
+		if target.goos != runtime.GOOS || target.goarch != runtime.GOARCH {
+			return target.goos, target.goarch
+		}
+	}
+	t.Fatal("could not find a non-host target")
+	return "", ""
 }
 
 func TestAssertStageEnforcesWhitelist(t *testing.T) {
