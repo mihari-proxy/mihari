@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"sort"
@@ -21,11 +22,12 @@ type Options struct {
 }
 
 type Server struct {
-	token   string
-	store   *state.Store
-	runtime RuntimeAPI
-	now     func() time.Time
-	http    *http.Server
+	token           string
+	store           *state.Store
+	runtime         RuntimeAPI
+	now             func() time.Time
+	shutdownTimeout time.Duration
+	http            *http.Server
 }
 
 func New(options Options) *Server {
@@ -33,7 +35,7 @@ func New(options Options) *Server {
 	if now == nil {
 		now = time.Now
 	}
-	server := &Server{token: options.Token, store: options.Store, runtime: options.Runtime, now: now}
+	server := &Server{token: options.Token, store: options.Store, runtime: options.Runtime, now: now, shutdownTimeout: 5 * time.Second}
 	server.http = &http.Server{
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -116,9 +118,17 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		}
 		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
 		defer cancel()
-		return s.http.Shutdown(shutdownCtx)
+		// Graceful shutdown is best-effort: if in-flight connections prevent
+		// draining within the budget, http.Shutdown returns DeadlineExceeded.
+		// On the cancellation path that timeout is expected and must not be
+		// surfaced as a daemon error (it flaked the integration suite under
+		// -race on slow CI). Only propagate genuine, non-deadline errors.
+		if err := s.http.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return nil
 	}
 }
 
