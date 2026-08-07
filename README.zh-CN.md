@@ -9,6 +9,8 @@
 
 Mihari 是一款全新的、独立的 [mihomo](https://github.com/MetaCubeX/mihomo) 本地管理器。它平等地支持 Windows、Linux 和 macOS,围绕由 CLI、TUI 和浏览器面板共享的单一守护进程控制面进行设计。
 
+![Overview](assets/overview.png)
+
 ## 这是什么?
 
 **TLDR**:Mihari 是 mihomo 的终端管理器——和 Clash Party、Sparkle 等 mihomo GUI 是同类工具,但它运行在终端里,并由一个守护进程在后台托管,CLI、TUI 和浏览器面板共享同一个控制面。
@@ -21,8 +23,6 @@ Mihari 是一款全新的、独立的 [mihomo](https://github.com/MetaCubeX/miho
 - **系统代理 / TUN**:一键开启系统代理或 TUN 模式
 - **Web 面板**:一键安装并打开 zashboard / MetaCubeXD 面板
 - **连接与规则**:实时查看连接、代理组与规则,本地 GeoIP 解析
-
-![Overview](assets/overview.png)
 
 ## 特性
 
@@ -49,6 +49,22 @@ irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.ps1 | iex
 ```
 
 或从 [Releases 页面](https://github.com/mihari-proxy/mihari/releases) 下载对应平台的二进制。
+
+**国内 / 无 GitHub 访问（离线）**
+
+整合包（mihari 二进制 + mihomo 核心 + GeoIP,含 sha256 校验）镜像在自建 AList 网盘上,安装全程不触碰 GitHub。各平台的签名直链一键安装命令会追加到每个 release notes 的「国内离线安装」一节:
+
+```sh
+# Linux / macOS
+curl -fsSL <install-aio-remote.sh 签名直链> | bash
+```
+
+```powershell
+# Windows (PowerShell)
+& ([scriptblock]::Create((irm <install-aio-remote.ps1 签名直链>)))
+```
+
+真实签名直链从[最新 release notes](https://github.com/mihari-proxy/mihari/releases) 复制。离线分发设计见 [docs/distribution.md](docs/distribution.md)。
 
 **首次运行**
 
