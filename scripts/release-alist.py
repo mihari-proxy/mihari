@@ -2,8 +2,8 @@
 """AList drive distribution for mihari all-in-one releases (design §4.5).
 
 Runs inside the release.yml job after the GitHub release is published:
-  1. upload the 6 platform bundles (+ aio-only SHA256SUMS) into an immutable
-     per-version directory, then a COMPLETE marker (skip if already complete);
+  1. upload the 6 platform bundles (+ per-version SHA256SUMS + COMPLETE) into an
+     immutable per-version directory (skip if COMPLETE already exists);
   2. resolve the root index.txt sign (placeholder on first release);
   3. build index.txt (latest line + per-platform signed direct link + sha256)
      and overwrite-upload it (the publish-complete signal);
@@ -11,135 +11,31 @@ Runs inside the release.yml job after the GitHub release is published:
   5. prune old versions (keep N, index-pointed always retained);
   6. emit the signed URLs to GITHUB_ENV for the release-notes append step.
 
-Operations target the AList v3 REST API (login / fs/get / fs/list / fs/put /
-fs/remove / fs/mkdir) via requests — the standard surface the design's alist-cli
-wraps. The whole block is conditional on ALIST_URL in the workflow and is
-verified post-release (§9 prerequisites: alist-cli fork + secrets).
+The AList REST client and shared constants live in alist_client.py, imported by
+both this publish flow and the retract flow.
 """
 import argparse
-import hashlib
 import os
-import re
-import sys
 from pathlib import Path
-from urllib.parse import quote
 
-import requests
-
-DEFAULT_BASE_PATH = "/mihari"
-DEFAULT_KEEP_VERSIONS = 5
-PLATFORMS = [
-    "linux/amd64", "linux/arm64",
-    "darwin/amd64", "darwin/arm64",
-    "windows/amd64", "windows/arm64",
-]
-SEMVER_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
-INDEX_PLACEHOLDER = "__MIHARI_INDEX_URL__"
-
-
-def fail(message):
-    print(f"::error::{message}", file=sys.stderr)
-    sys.exit(1)
-
-
-def info(message):
-    print(f"::notice::{message}")
-
-
-def semver_key(name):
-    match = SEMVER_RE.match(name)
-    return tuple(int(x) for x in match.groups()) if match else None
-
-
-def sha256_file(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def bundle_name(goos, goarch):
-    ext = ".zip" if goos == "windows" else ".tar.gz"
-    return f"mihari-all-in-one-{goos}-{goarch}{ext}"
-
-
-class AList:
-    """Thin client over the AList v3 REST API."""
-
-    def __init__(self, base_url, username, password):
-        self.base = base_url.rstrip("/")
-        self.session = requests.Session()
-        token = self._login(username, password)
-        self.session.headers["Authorization"] = token
-
-    def _post(self, path, **kwargs):
-        response = self.session.post(self.base + path, timeout=120, **kwargs)
-        response.raise_for_status()
-        return response.json()
-
-    def _login(self, username, password):
-        data = self._post("/api/auth/login", json={"username": username, "password": password})
-        if data.get("code") != 200:
-            fail(f"alist login failed: {data.get('message')}")
-        return data["data"]["token"]
-
-    def get(self, path):
-        return self._post("/api/fs/get", json={"path": path, "password": ""})
-
-    def exists(self, path):
-        return self.get(path).get("code") == 200
-
-    def sign_of(self, path):
-        data = self.get(path)
-        if data.get("code") != 200:
-            return None
-        return data["data"].get("sign", "")
-
-    def list_dir(self, path):
-        data = self._post("/api/fs/list", json={"path": path, "password": "", "page": 1, "per_page": 0, "refresh": False})
-        return data.get("data", {}).get("content") or []
-
-    def mkdir(self, path):
-        self._post("/api/fs/mkdir", json={"path": path})
-
-    def upload(self, local, remote_path):
-        with open(local, "rb") as handle:
-            response = self.session.put(
-                self.base + "/api/fs/put",
-                headers={
-                    "File-Path": quote(remote_path, safe=""),
-                    "As-Task": "false",
-                    "Content-Type": "application/octet-stream",
-                },
-                data=handle,
-                timeout=900,
-            )
-        response.raise_for_status()
-
-    def upload_text(self, text, remote_path):
-        response = self.session.put(
-            self.base + "/api/fs/put",
-            headers={
-                "File-Path": quote(remote_path, safe=""),
-                "As-Task": "false",
-                "Content-Type": "text/plain",
-            },
-            data=text.encode("utf-8"),
-            timeout=120,
-        )
-        response.raise_for_status()
-
-    def remove(self, dir_path, names):
-        self._post("/api/fs/remove", json={"dir": dir_path, "names": list(names)})
-
-    def signed_url(self, path, sign):
-        # /p<path>?sign=... is AList's proxy/stream route (design §4.4 URL form).
-        return f"{self.base}/p{path}?sign={sign}"
+from alist_client import (
+    AList,
+    DEFAULT_BASE_PATH,
+    DEFAULT_KEEP_VERSIONS,
+    INDEX_PLACEHOLDER,
+    PLATFORMS,
+    SEMVER_RE,
+    bundle_name,
+    connect,
+    fail,
+    info,
+    semver_key,
+    sha256_file,
+)
 
 
 def upload_version_dir(alist, dist_dir, base_path, version):
-    """Steps 1-2: upload bundles + aio SHA256SUMS, then COMPLETE. Immutable —
+    """Steps 1-2: upload bundles + per-version SHA256SUMS + COMPLETE. Immutable —
     skip the whole directory when COMPLETE already exists (idempotent re-run /
     rebuild after retract)."""
     version_dir = f"{base_path}/{version}"
@@ -147,12 +43,17 @@ def upload_version_dir(alist, dist_dir, base_path, version):
         info(f"version dir {version_dir} already complete — skipping upload")
         return version_dir
     alist.mkdir(version_dir)
+    sums_lines = []
     for goos, goarch in PLATFORMS:
         name = bundle_name(goos, goarch)
         local = Path(dist_dir) / name
         if not local.exists():
             fail(f"bundle artifact missing: {local}")
         alist.upload(str(local), f"{version_dir}/{name}")
+        sums_lines.append(f"{sha256_file(local)}  {name}")
+    # Per-version aio-only checksums: retract step 4 reads this to rebuild index
+    # when the retracted version was latest (design §4.5 step 2 / §4.6 step 4).
+    alist.upload_text("\n".join(sums_lines) + "\n", f"{version_dir}/SHA256SUMS.txt")
     alist.upload_text(f"{version}\n", f"{version_dir}/COMPLETE")
     return version_dir
 
@@ -250,13 +151,7 @@ def main():
     if not SEMVER_RE.match(args.version):
         fail(f"version {args.version!r} must match {SEMVER_RE.pattern}")
 
-    base_url = os.environ.get("ALIST_URL")
-    username = os.environ.get("ALIST_USERNAME")
-    password = os.environ.get("ALIST_PASSWORD")
-    if not base_url or not username or not password:
-        fail("ALIST_URL / ALIST_USERNAME / ALIST_PASSWORD are required")
-
-    alist = AList(base_url, username, password)
+    alist = connect()
     version_dir = upload_version_dir(alist, args.dist_dir, args.base_path, args.version)
     index_body, index_signed_url = build_index(alist, args.dist_dir, args.base_path, args.version)
     alist.upload_text(index_body, f"{args.base_path}/index.txt")
