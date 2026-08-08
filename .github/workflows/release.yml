@@ -165,15 +165,20 @@ jobs:
             --keep-versions "${MIHARI_KEEP_VERSIONS:-5}"
 
       - name: Append offline install commands to release notes
-        # design §4.5 step 7. Idempotent via a marker (generate_release_notes
-        # regenerates the body each publish, so the appendix is re-added cleanly).
+        # design §4.5 step 7. Re-renders the appendix from the marker onward
+        # every publish (idempotent + self-healing: a token rotation that
+        # invalidated prior links is recovered on the next run).
         if: ${{ env.ALIST_URL != '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           NOTES="$(gh release view "${VERSION}" --json body -q .body)"
           MARKER='<!-- aio-install -->'
-          printf '%s\n' "$NOTES" | grep -qF "$MARKER" && { echo "install commands already present"; exit 0; }
+          # Replace (not skip) any existing aio-install section so the freshest
+          # signed URLs re-render every publish — recovers from a token rotation
+          # that invalidated previously injected links. The marker is unique to
+          # this appendix, so from it through EOF is ours to overwrite.
+          NOTES="$(printf '%s\n' "$NOTES" | awk -v m="$MARKER" 'index($0,m){f=1} !f')"
           # Quoted heredoc delimiter: backticks and placeholders pass through
           # verbatim (no shell expansion); the two URLs are injected via sed.
           cat > /tmp/aio_append.md <<'TEMPLATE'
