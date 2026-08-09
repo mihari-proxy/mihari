@@ -1,22 +1,23 @@
 #!/usr/bin/env sh
 # mihari all-in-one REMOTE downloader (script 3). Fetches the platform bundle
-# from the AList drive (index.txt → signed direct link + sha256), verifies it,
+# from the AList drive (index.txt → public direct link + sha256), verifies it,
 # extracts, and hands off to the local installer (script 2) inside the bundle.
-#   curl -fsSL <ALIST>/p/mihari/install-aio-remote.sh?sign=<fixed> | bash
+#   curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.sh | bash
 #   sh install-aio-remote.sh [--yes|-y]
 #
 # One-time: only the first offline install goes through this downloader; later
 # reinstalls run script 2 (install-aio.sh) directly from an existing bundle.
 #
 # Environment overrides:
-#   MIHARI_INDEX_URL   index.txt signed direct link (default: CI-injected placeholder)
+#   MIHARI_INDEX_URL   index.txt public direct link (default: the fixed public URL below)
 #   MIHARI_BUNDLE_URL  explicit bundle URL (skips index + sha256 — trust borne by user)
 set -eu
 
-# Placeholder: the release workflow (design §4.5 step 5) injects the root
-# index.txt signed direct link here. Pre-injection this token is not a URL, so
-# the index fetch fails with a clear "not published yet" message.
-INDEX_URL="${MIHARI_INDEX_URL:-__MIHARI_INDEX_URL__}"
+# Fixed public direct link to the root index.txt. mihari distribution is fully
+# public (signing disabled on the AList drive), so this URL is stable and
+# identical across releases — copy-paste, never hand-edit. The release workflow
+# uploads index.txt to this exact path each publish.
+INDEX_URL="${MIHARI_INDEX_URL:-https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/index.txt}"
 BUNDLE_URL="${MIHARI_BUNDLE_URL:-}"
 YES=0
 for arg in "$@"; do
@@ -88,7 +89,7 @@ if [ -n "$BUNDLE_URL" ]; then
   bundle_url="$BUNDLE_URL"
 else
   # index.txt line format: "<key> <rest...>". key="latest" → <version>;
-  # key="<goos>-<goarch>" → <signed_url> <sha256>.
+  # key="<goos>-<goarch>" → <public_url> <sha256>.
   index="$(fetch "$INDEX_URL" 2>/dev/null || true)"
   [ -n "$index" ] || err "尚未发布完成：无法获取 index（请稍后重试，或检查网络/网盘可用性）。"
   # Heredoc (not a pipe) so parsed values survive outside the loop's subshell.

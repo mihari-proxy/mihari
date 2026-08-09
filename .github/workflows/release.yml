@@ -161,26 +161,26 @@ jobs:
             --version "${VERSION}" \
             --dist-dir dist \
             --repo-root . \
-            --base-path "${ALIST_BASE_PATH:-/mihari}" \
+            --base-path "${ALIST_BASE_PATH:-/mihari-release/mihari}" \
             --keep-versions "${MIHARI_KEEP_VERSIONS:-5}"
 
       - name: Append offline install commands to release notes
-        # design §4.5 step 7. Re-renders the appendix from the marker onward
-        # every publish (idempotent + self-healing: a token rotation that
-        # invalidated prior links is recovered on the next run).
+        # design §4.5 step 7. The install commands are fixed public direct
+        # links (signing is off on the AList drive), so they never change
+        # between releases — append once per release; skip if the marker is
+        # already present (idempotent re-runs).
         if: ${{ env.ALIST_URL != '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           NOTES="$(gh release view "${VERSION}" --json body -q .body)"
           MARKER='<!-- aio-install -->'
-          # Replace (not skip) any existing aio-install section so the freshest
-          # signed URLs re-render every publish — recovers from a token rotation
-          # that invalidated previously injected links. The marker is unique to
-          # this appendix, so from it through EOF is ours to overwrite.
-          NOTES="$(printf '%s\n' "$NOTES" | awk -v m="$MARKER" 'index($0,m){f=1} !f')"
-          # Quoted heredoc delimiter: backticks and placeholders pass through
-          # verbatim (no shell expansion); the two URLs are injected via sed.
+          if printf '%s' "$NOTES" | grep -qF "$MARKER"; then
+            echo "offline install section already present — skipping"
+            exit 0
+          fi
+          # Quoted heredoc delimiter: backticks and the irm scriptblock pass
+          # through verbatim (no shell expansion). URLs are fixed public links.
           cat > /tmp/aio_append.md <<'TEMPLATE'
 
           <!-- aio-install -->
@@ -189,14 +189,13 @@ jobs:
           Linux / macOS：
 
           ```bash
-          curl -fsSL __SH_URL__ | bash
+          curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.sh | bash
           ```
 
           Windows (PowerShell)：
 
           ```powershell
-          & ([scriptblock]::Create((irm __PS1_URL__)))
+          & ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1)))
           ```
           TEMPLATE
-          sed -i "s#__SH_URL__#${ALIST_REMOTE_SH_URL}#g; s#__PS1_URL__#${ALIST_REMOTE_PS1_URL}#g" /tmp/aio_append.md
           gh release edit "${VERSION}" --notes "$(printf '%s\n%s\n' "$NOTES" "$(cat /tmp/aio_append.md)")"

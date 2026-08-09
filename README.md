@@ -52,19 +52,19 @@ Or download the binary for your platform from the [Releases page](https://github
 
 **China / no GitHub access (offline)**
 
-An all-in-one bundle (mihari binary + mihomo core + GeoIP, sha256-verified) is mirrored on a self-hosted AList drive, so installs never touch GitHub. The signed one-line installer URL for each platform is appended to every release's notes under "国内离线安装":
+An all-in-one bundle (mihari binary + mihomo core + GeoIP, sha256-verified) is mirrored on a self-hosted AList drive, so installs never touch GitHub. One fixed command per platform — copy and run:
 
 ```sh
 # Linux / macOS
-curl -fsSL <install-aio-remote.sh signed link from release notes> | bash
+curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.sh | bash
 ```
 
 ```powershell
 # Windows (PowerShell)
-& ([scriptblock]::Create((irm <install-aio-remote.ps1 signed link from release notes>)))
+& ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1)))
 ```
 
-Copy the real signed link from the [latest release notes](https://github.com/mihari-proxy/mihari/releases). See [docs/distribution.md](docs/distribution.md) for the offline distribution design.
+See [docs/distribution.md](docs/distribution.md) for the offline distribution design.
 
 **First run**
 
