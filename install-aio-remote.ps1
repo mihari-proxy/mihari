@@ -1,23 +1,24 @@
 # mihari all-in-one REMOTE downloader for Windows (script 3). Fetches the
-# platform bundle from the AList drive (index.txt -> signed direct link +
+# platform bundle from the AList drive (index.txt -> public direct link +
 # sha256), verifies it, extracts, and hands off to the local installer
 # (script 2) inside the bundle.
-#   & ([scriptblock]::Create((irm <ALIST>/p/mihari/install-aio-remote.ps1?sign=<fixed>)))
-#   & ([scriptblock]::Create((irm <ALIST>/p/mihari/install-aio-remote.ps1?sign=<fixed>))) -Yes
+#   & ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1)))
+#   & ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1))) -Yes
 #
 # One-time: only the first offline install goes through this downloader; later
 # reinstalls run script 2 (install-aio.ps1) directly from an existing bundle.
 #
 # Environment overrides:
-#   $env:MIHARI_INDEX_URL   index.txt signed direct link (default: CI-injected placeholder)
+#   $env:MIHARI_INDEX_URL   index.txt public direct link (default: the fixed public URL below)
 #   $env:MIHARI_BUNDLE_URL  explicit bundle URL (skips index + sha256)
 param([switch]$Yes)
 $ErrorActionPreference = 'Stop'
 
-# Placeholder: the release workflow (design 4.5 step 5) injects the root
-# index.txt signed direct link here. Pre-injection this token is not a URL, so
-# the index fetch fails with a clear "not published yet" message.
-$indexUrl = if ($env:MIHARI_INDEX_URL) { $env:MIHARI_INDEX_URL } else { '__MIHARI_INDEX_URL__' }
+# Fixed public direct link to the root index.txt. mihari distribution is fully
+# public (signing disabled on the AList drive), so this URL is stable and
+# identical across releases — copy-paste, never hand-edit. The release workflow
+# uploads index.txt to this exact path each publish.
+$indexUrl = if ($env:MIHARI_INDEX_URL) { $env:MIHARI_INDEX_URL } else { 'https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/index.txt' }
 $bundleUrl = $env:MIHARI_BUNDLE_URL
 
 function Info($m) { Write-Host "* $m" -ForegroundColor Cyan }
@@ -42,7 +43,7 @@ $platform = "windows-$arch"
 $latest = ''; $wantSum = ''; $resolvedUrl = $bundleUrl
 if (-not $resolvedUrl) {
   # index.txt line format: "<key> <rest...>". key="latest" -> <version>;
-  # key="<goos>-<goarch>" -> <signed_url> <sha256>.
+  # key="<goos>-<goarch>" -> <public_url> <sha256>.
   $index = ''
   try { $index = (Invoke-WebRequest -Uri $indexUrl -UseBasicParsing).Content } catch { $index = '' }
   if (-not $index) { Fail "尚未发布完成：无法获取 index（请稍后重试，或检查网络/网盘可用性）。" }

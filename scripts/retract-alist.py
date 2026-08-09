@@ -6,10 +6,10 @@ the AList side of the withdrawal — steps 2-4 of the design flow — while step
 (`gh release delete --cleanup-tag`) runs as a shell step in the workflow:
 
   2. read index.txt to learn whether the retracted version is the current latest;
-  3. remove the AList version directory /mihari/<version>/;
+  3. remove the AList version directory <base_path>/<version>/;
   4. rebuild index.txt ONLY when the retracted version was latest — point it at
-     the highest remaining COMPLETE version (sign from fs/get, sha256 read from
-     that version dir's SHA256SUMS.txt), or leave it empty if none remain.
+     the highest remaining COMPLETE version (public direct link, sha256 read
+     from that version dir's SHA256SUMS.txt), or leave it empty if none remain.
 
 Withdrawal removes distribution channels only; already-installed users are not
 recallable (design §4.6 boundary). The AList client and shared helpers come from
@@ -60,8 +60,8 @@ def highest_complete(alist, base_path, excluded):
 
 def rebuild_index(alist, base_path, new_latest):
     """Rewrite index.txt to point at new_latest: latest line + one per-platform
-    signed direct link (fs/get sign) + sha256 (read from that dir's
-    SHA256SUMS.txt). Uploads the new body."""
+    public direct link + sha256 (read from that dir's SHA256SUMS.txt). Uploads
+    the new body."""
     sums_text = alist.content(f"{base_path}/{new_latest}/SHA256SUMS.txt")
     if sums_text is None:
         fail(f"new-latest {new_latest} has no SHA256SUMS.txt — cannot rebuild index")
@@ -76,14 +76,13 @@ def rebuild_index(alist, base_path, new_latest):
         platform = f"{goos}-{goarch}"
         name = bundle_name(goos, goarch)
         remote = f"{base_path}/{new_latest}/{name}"
-        sign = alist.sign_of(remote)
-        if sign is None:
-            fail(f"new-latest bundle missing for sign: {remote}")
-        signed = alist.signed_url(remote, sign)
+        if not alist.exists(remote):
+            fail(f"new-latest bundle missing: {remote}")
+        public = alist.public_url(remote)
         digest = sums.get(name)
         if not digest:
             fail(f"SHA256SUMS.txt in {new_latest} missing entry for {name}")
-        lines.append(f"{platform} {signed} {digest}")
+        lines.append(f"{platform} {public} {digest}")
     alist.upload_text("\n".join(lines) + "\n", f"{base_path}/index.txt")
     info(f"index.txt rebuilt to point at {new_latest}")
 

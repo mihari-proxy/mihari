@@ -57,7 +57,7 @@ jobs:
           python -c "import requests" 2>/dev/null || pip install requests
           python scripts/retract-alist.py \
             --version "${VERSION}" \
-            --base-path "${ALIST_BASE_PATH:-/mihari}"
+            --base-path "${ALIST_BASE_PATH:-/mihari-release/mihari}"
 
       - name: Delete GitHub release
         # design §4.6 step 5: release + assets + tag. --cleanup-tag lets the same

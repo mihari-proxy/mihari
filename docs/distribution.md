@@ -29,17 +29,17 @@ curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.sh
 
 ```bash
 # Linux / macOS
-curl -fsSL <install-aio-remote.sh 签名直链> | bash
+curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.sh | bash
 
 # Windows (PowerShell)
-& ([scriptblock]::Create((irm <install-aio-remote.ps1 签名直链>)))
+& ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1)))
 ```
 
-> **签名直链从哪里来**：每个 GitHub Release 的 release notes 会自动追加「国内离线安装」一节，含上述两条命令的真实签名直链。首次发版后，把这两条命令回填到 README 即可。
+> 命令中的网址是 AList 网盘的固定公开直链（签名已关闭），永久不变，复制即用。
 
 脚本3 下载器的执行流程：
 
-1. 下载根目录 `index.txt`（固定签名直链，永久有效），解析出最新版本号与本平台的整合包签名直链 + sha256；
+1. 下载根目录 `index.txt`（固定公开直链，永久有效），解析出最新版本号与本平台的整合包公开直链 + sha256；
 2. 询问确认（`--yes` / `-y` 可跳过；stdin 非 tty 时读 `/dev/tty`）；
 3. 下载整合包 → `Downloads/mihari-aio/` → sha256 校验；
 4. 解压到 `Downloads/mihari-aio/`；
@@ -62,19 +62,19 @@ sh install-aio.sh        # Windows: powershell -File install-aio.ps1
 |------|--------|------|
 | `MIHARI_BIN` | `/usr/local/bin`（Linux/macOS）<br>`%LOCALAPPDATA%\Programs\mihari`（Windows） | mihari 二进制安装目录 |
 | `MIHARI_DATA` | `$HOME/.mihari`（Linux/macOS）<br>`%USERPROFILE%\.mihari`（Windows） | 数据根目录（核心 + GeoIP 落地处） |
-| `MIHARI_INDEX_URL` | （CI 注入） | index.txt 签名直链（脚本3） |
+| `MIHARI_INDEX_URL` | 公开直链（见脚本默认值） | index.txt 公开直链（脚本3） |
 | `MIHARI_BUNDLE_URL` | 空 | 显式指定整合包 URL，**跳过 index 与 sha256 校验**（信任自担） |
 
 ---
 
 ## 二、AList 网盘目录结构
 
-base_path 默认 `/mihari`（通过 GitHub 变量 `ALIST_BASE_PATH` 配置）：
+base_path 默认 `/mihari-release/mihari`（AList fs/API 路径，通过 GitHub 变量 `ALIST_BASE_PATH` 配置）：
 
 ```
-/mihari/
-├── index.txt                       路由表（根目录固定签名直链）
-├── install-aio-remote.sh / .ps1    脚本3 下载器（CI 注入 index 直链，每次发布覆盖）
+/mihari-release/mihari/             base_path（fs/API 路径）
+├── index.txt                       路由表（公开直链）
+├── install-aio-remote.sh / .ps1    脚本3 下载器（内含固定公开 index 直链，每次发布覆盖）
 ├── v0.3.0/                         不可变版本目录
 │   ├── mihari-all-in-one-{linux,darwin,windows}-{amd64,arm64}.tar.gz / .zip
 │   ├── SHA256SUMS.txt              本版本 6 个整合包的 sha256
@@ -83,19 +83,21 @@ base_path 默认 `/mihari`（通过 GitHub 变量 `ALIST_BASE_PATH` 配置）：
 └── v0.1.0/
 ```
 
+> **AList 拓扑 quirk**：fs/API 路径（上传、list、get）用 `/mihari-release/mihari/…`，但**公开下载 URL** 需在 `/p` 后加 `/public` 挂载点前缀，即 `https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/…`（`alist_client.public_url` 自动处理）。若日后恢复 `/mihari` 挂载点，此 quirk 消失：base_path 改回 `/mihari`、`public_url` 去掉 `/public` 中缀。
+
 ### index.txt 格式
 
 ```
 latest v0.3.0
-linux-amd64   <签名直链>  <sha256>
-linux-arm64   <签名直链>  <sha256>
-darwin-amd64  <签名直链>  <sha256>
-darwin-arm64  <签名直链>  <sha256>
-windows-amd64 <签名直链>  <sha256>
-windows-arm64 <签名直链>  <sha256>
+linux-amd64   <公开直链>  <sha256>
+linux-arm64   <公开直链>  <sha256>
+darwin-amd64  <公开直链>  <sha256>
+darwin-arm64  <公开直链>  <sha256>
+windows-amd64 <公开直链>  <sha256>
+windows-arm64 <公开直链>  <sha256>
 ```
 
-每行 `<key> <rest...>`：`latest` 行的 key 后是版本号；平台行的 key 是 `<goos>-<goarch>`，后跟签名直链与 sha256。脚本3 按此解析。
+每行 `<key> <rest...>`：`latest` 行的 key 后是版本号；平台行的 key 是 `<goos>-<goarch>`，后跟公开直链与 sha256。脚本3 按此解析。
 
 ### 发布顺序（零失败窗口）
 
@@ -125,7 +127,7 @@ release workflow 的 AList 步骤顺序保证用户永远拿不到半成品：
 
 1. `workflow_dispatch` 输入 `version`（纯 semver 闸门）+ `confirm`（布尔双保险）；
 2. 读 `index.txt` 判断撤回版本是否为当前 latest；
-3. 删除 AList 版本目录 `/mihari/<version>/`；
+3. 删除 AList 版本目录 `<base_path>/<version>/`；
 4. **仅当撤回的是 latest** 才重建 `index.txt`：latest 改为现存最高且完整（含 `COMPLETE`）的版本（sha256 从该目录的 `SHA256SUMS.txt` 读取）；无完整版本 → `index.txt` 置空；
 5. `gh release delete <version> --yes --cleanup-tag`（删 release + 资产 + tag，允许修复后同版本号重发）。
 
@@ -153,7 +155,7 @@ AList 分发步骤在 release workflow 中以 `if: env.ALIST_URL != ''` 包裹�
 
 | Variable | 默认值 | 用途 |
 |----------|--------|------|
-| `ALIST_BASE_PATH` | `/mihari` | 网盘 base_path |
+| `ALIST_BASE_PATH` | `/mihari-release/mihari` | 网盘 base_path（fs/API 路径） |
 | `MIHARI_KEEP_VERSIONS` | `5` | 保留版本数 |
 
-> **签名直链失效**：直链的 sign 依赖 AList 站点 **Token**（后台 settings 的 `token` 项，非登录 JWT）。直接改登录账号密码**不**作废直链；改站点 Token 才让全部旧 sign 失效。恢复 = **重跑 release workflow**（fs/get 现有 index.txt 取新 sign 重建，幂等）。
+> **前置：关闭签名**。AList 存储必须关闭「签名」（per-storage Sign 关），公开直链才不会 401。

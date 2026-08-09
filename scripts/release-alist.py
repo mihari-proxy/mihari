@@ -22,7 +22,6 @@ from alist_client import (
     AList,
     DEFAULT_BASE_PATH,
     DEFAULT_KEEP_VERSIONS,
-    INDEX_PLACEHOLDER,
     PLATFORMS,
     SEMVER_RE,
     bundle_name,
@@ -59,46 +58,33 @@ def upload_version_dir(alist, dist_dir, base_path, version):
 
 
 def build_index(alist, dist_dir, base_path, version):
-    """Steps 2-3: resolve the root index sign + each bundle sign, then return
-    the index.txt body (latest line + per-platform <signed_url> <sha256>)."""
+    """Steps 2-3: return the index.txt body (latest line + per-platform
+    <public_url> <sha256>) plus the root index's public direct link. Public
+    links need no per-file sign, so there's no first-release placeholder dance."""
     root_index_path = f"{base_path}/index.txt"
-    index_sign = alist.sign_of(root_index_path)
-    if index_sign is None:
-        # First release: upload an empty placeholder so fs/get yields a sign.
-        alist.upload_text("", root_index_path)
-        index_sign = alist.sign_of(root_index_path) or ""
 
     lines = [f"latest {version}"]
     for goos, goarch in PLATFORMS:
         platform = f"{goos}-{goarch}"
         name = bundle_name(goos, goarch)
         remote = f"{base_path}/{version}/{name}"
-        sign = alist.sign_of(remote)
-        if sign is None:
-            fail(f"uploaded bundle not found for sign: {remote}")
-        signed = alist.signed_url(remote, sign)
+        if not alist.exists(remote):
+            fail(f"uploaded bundle not found: {remote}")
+        public = alist.public_url(remote)
         digest = sha256_file(Path(dist_dir) / name)
-        lines.append(f"{platform} {signed} {digest}")
-    return "\n".join(lines) + "\n", alist.signed_url(root_index_path, index_sign)
+        lines.append(f"{platform} {public} {digest}")
+    return "\n".join(lines) + "\n", alist.public_url(root_index_path)
 
 
-def render_root_scripts(alist, repo_root, base_path, index_signed_url):
-    """Step 4: inject the root index signed link into script 3 and upload to the
-    drive root (content is constant across releases; overwritten each time).
-    Returns the rendered scripts' signed direct links for release notes."""
-    rendered = {}
+def upload_root_scripts(alist, repo_root, base_path):
+    """Step 4: upload the (now static) downloader scripts to the drive root.
+    They hardcode the public INDEX_URL, so no injection is needed; they're
+    overwritten each release purely to keep the AList copy self-healing."""
     for filename in ("install-aio-remote.sh", "install-aio-remote.ps1"):
         source = Path(repo_root) / filename
         if not source.exists():
             fail(f"downloader script missing: {source}")
-        text = source.read_text(encoding="utf-8").replace(INDEX_PLACEHOLDER, index_signed_url)
-        remote = f"{base_path}/{filename}"
-        alist.upload_text(text, remote)
-        sign = alist.sign_of(remote)
-        if sign is None:
-            fail(f"rendered script not found for sign: {remote}")
-        rendered[filename] = alist.signed_url(remote, sign)
-    return rendered
+        alist.upload_text(source.read_text(encoding="utf-8"), f"{base_path}/{filename}")
 
 
 def prune_versions(alist, base_path, version, keep):
@@ -153,16 +139,13 @@ def main():
 
     alist = connect()
     version_dir = upload_version_dir(alist, args.dist_dir, args.base_path, args.version)
-    index_body, index_signed_url = build_index(alist, args.dist_dir, args.base_path, args.version)
+    index_body, index_url = build_index(alist, args.dist_dir, args.base_path, args.version)
     alist.upload_text(index_body, f"{args.base_path}/index.txt")
-    rendered = render_root_scripts(alist, args.repo_root, args.base_path, index_signed_url)
+    upload_root_scripts(alist, args.repo_root, args.base_path)
     prune_versions(alist, args.base_path, args.version, args.keep_versions)
 
-    emit_env("ALIST_INDEX_URL", index_signed_url)
     emit_env("ALIST_VERSION_DIR", version_dir)
-    emit_env("ALIST_REMOTE_SH_URL", rendered["install-aio-remote.sh"])
-    emit_env("ALIST_REMOTE_PS1_URL", rendered["install-aio-remote.ps1"])
-    info(f"published {args.version} to {args.base_path}; index at {index_signed_url}")
+    info(f"published {args.version} to {args.base_path}; index at {index_url}")
 
 
 if __name__ == "__main__":

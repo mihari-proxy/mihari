@@ -52,19 +52,19 @@ irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.ps1 | iex
 
 **国内 / 无 GitHub 访问（离线）**
 
-整合包（mihari 二进制 + mihomo 核心 + GeoIP,含 sha256 校验）镜像在自建 AList 网盘上,安装全程不触碰 GitHub。各平台的签名直链一键安装命令会追加到每个 release notes 的「国内离线安装」一节:
+整合包（mihari 二进制 + mihomo 核心 + GeoIP,含 sha256 校验）镜像在自建 AList 网盘上,安装全程不触碰 GitHub。各平台一条固定命令,复制即用:
 
 ```sh
 # Linux / macOS
-curl -fsSL <install-aio-remote.sh 签名直链> | bash
+curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.sh | bash
 ```
 
 ```powershell
 # Windows (PowerShell)
-& ([scriptblock]::Create((irm <install-aio-remote.ps1 签名直链>)))
+& ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1)))
 ```
 
-真实签名直链从[最新 release notes](https://github.com/mihari-proxy/mihari/releases) 复制。离线分发设计见 [docs/distribution.md](docs/distribution.md)。
+离线分发设计见 [docs/distribution.md](docs/distribution.md)。
 
 **首次运行**
 
