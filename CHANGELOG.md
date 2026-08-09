@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v0.3.0] - 2026-08-09
+
 ### Changed
 
 - 离线分发去 sign 化 + 适配 AList 深层路径：AList 改为公开分发（关闭签名），所有直链去掉 `?sign=`；`install-aio-remote.{sh,ps1}` 改为硬编码固定公开 `INDEX_URL`（去掉 CI 占位符注入），README 安装命令变为永久固定字面量，复制即用、无需手改。base_path 适配当前 AList 拓扑 `/mihari-release/mihari`，`public_url` 注入 `/public` 中缀以绕过 AList 的 fs/API 路径与 `/p` 下载路由前缀不一致的 quirk。
