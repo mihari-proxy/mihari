@@ -55,18 +55,19 @@ def test_public_url_is_signless_proxy_route():
     assert bundle == "https://cloud.example.com/p/public/mihari-release/mihari/v0.3.0/mihari-all-in-one-linux-amd64.tar.gz"
 
 
-def test_write_path_strips_mount_segment():
-    # AList write-path doubling quirk: fs/put|mkdir|remove prepend the leading
-    # mount segment again, so a write of /mihari-release/mihari/X lands at
-    # /mihari-release/mihari-release/mihari/X. _write_path drops the first
-    # segment so writes land where reads (and /p/public downloads) see them.
+def test_fs_path_strips_mount_segment():
+    # AList fs-path quirk: EVERY fs API op (get/list/put/mkdir/remove) resolves
+    # its path relative to the storage root (/mihari-release), prepending it
+    # again — so /mihari-release/mihari/X must be passed as /mihari/X or it
+    # reads/writes the doubled location. _fs_path drops the first segment for
+    # ALL fs ops (read and write) so they agree with /p/public downloads.
     alist = AList.__new__(AList)
-    assert alist._write_path("/mihari-release/mihari/v0.3.0/mihari-all-in-one-linux-amd64.tar.gz") == "/mihari/v0.3.0/mihari-all-in-one-linux-amd64.tar.gz"
-    assert alist._write_path("/mihari-release/mihari/index.txt") == "/mihari/index.txt"
-    # fs/remove's `dir` is the bare base_path.
-    assert alist._write_path("/mihari-release/mihari") == "/mihari"
+    assert alist._fs_path("/mihari-release/mihari/v0.3.0/mihari-all-in-one-linux-amd64.tar.gz") == "/mihari/v0.3.0/mihari-all-in-one-linux-amd64.tar.gz"
+    assert alist._fs_path("/mihari-release/mihari/index.txt") == "/mihari/index.txt"
+    # fs/remove's `dir` / fs:list of base_path is the bare base_path.
+    assert alist._fs_path("/mihari-release/mihari") == "/mihari"
     # No leading segment to strip → returned unchanged (no crash on odd shapes).
-    assert alist._write_path("/mihari-release") == "/mihari-release"
+    assert alist._fs_path("/mihari-release") == "/mihari-release"
 
 
 def _load_release_alist():
