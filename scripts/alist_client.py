@@ -90,38 +90,72 @@ class AList:
         data = self._post("/api/fs/list", json={"path": path, "password": "", "page": 1, "per_page": 0, "refresh": False})
         return data.get("data", {}).get("content") or []
 
+    def _write_path(self, path):
+        """Strip the leading mount segment so an fs/put|mkdir|remove write lands
+        where fs/list|get and /p/public downloads see it.
+
+        AList write-path quirk (verified 2026-08-10): fs/put, fs/mkdir and
+        fs/remove resolve the File-Path (and fs/remove's `dir`) RELATIVE to the
+        storage root, so the leading path segment — the mount point — gets
+        prepended again. A write of "/mihari-release/mihari/X" physically lands at
+        "/mihari-release/mihari-release/mihari/X", which is NOT where the read
+        APIs (virtual absolute) nor /p/public downloads serve it. The read APIs
+        are unaffected, so ONLY the write paths drop the first segment. Bound to
+        the current topology; if the drive is restructured so reads and writes
+        agree (e.g. a /mihari mount restored), make this return `path` unchanged.
+        """
+        rest = path.lstrip("/")
+        sep = rest.find("/")
+        if sep <= 0:
+            return path
+        return "/" + rest[sep + 1:]
+
+    def _check_write(self, response, remote_path):
+        """AList always answers HTTP 200 with the real status in the JSON body's
+        `code` (200 = ok). raise_for_status alone swallows a write failure as a
+        silent success — surface the message instead. Defensive: only fail when a
+        `code` is present and non-200, so a non-standard success body can't
+        false-alarm."""
+        response.raise_for_status()
+        try:
+            data = response.json()
+        except ValueError:
+            return
+        if data.get("code") not in (200, None):
+            fail(f"alist write failed for {remote_path}: {data.get('message')}")
+
     def mkdir(self, path):
-        self._post("/api/fs/mkdir", json={"path": path})
+        self._post("/api/fs/mkdir", json={"path": self._write_path(path)})
 
     def upload(self, local, remote_path):
         with open(local, "rb") as handle:
             response = self.session.put(
                 self.base + "/api/fs/put",
                 headers={
-                    "File-Path": quote(remote_path, safe=""),
+                    "File-Path": quote(self._write_path(remote_path), safe=""),
                     "As-Task": "false",
                     "Content-Type": "application/octet-stream",
                 },
                 data=handle,
                 timeout=900,
             )
-        response.raise_for_status()
+        self._check_write(response, remote_path)
 
     def upload_text(self, text, remote_path):
         response = self.session.put(
             self.base + "/api/fs/put",
             headers={
-                "File-Path": quote(remote_path, safe=""),
+                "File-Path": quote(self._write_path(remote_path), safe=""),
                 "As-Task": "false",
                 "Content-Type": "text/plain",
             },
             data=text.encode("utf-8"),
             timeout=120,
         )
-        response.raise_for_status()
+        self._check_write(response, remote_path)
 
     def remove(self, dir_path, names):
-        self._post("/api/fs/remove", json={"dir": dir_path, "names": list(names)})
+        self._post("/api/fs/remove", json={"dir": self._write_path(dir_path), "names": list(names)})
 
     def content(self, path):
         """Read a remote text file via its public proxy route. Returns None when
