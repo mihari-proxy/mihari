@@ -4,12 +4,11 @@
 Runs inside the release.yml job after the GitHub release is published:
   1. upload the 6 platform bundles (+ per-version SHA256SUMS + COMPLETE) into an
      immutable per-version directory (skip if COMPLETE already exists);
-  2. resolve the root index.txt sign (placeholder on first release);
-  3. build index.txt (latest line + per-platform signed direct link + sha256)
-     and overwrite-upload it (the publish-complete signal);
-  4. render the root downloader scripts (script 3) with the index link injected;
+  2. build index.txt (latest line + per-platform public direct link + sha256);
+  3. overwrite-upload index.txt — the publish-complete signal;
+  4. overwrite the root downloader scripts (script 3) at the drive root;
   5. prune old versions (keep N, index-pointed always retained);
-  6. emit the signed URLs to GITHUB_ENV for the release-notes append step.
+  6. emit the version dir to GITHUB_ENV for the release-notes append step.
 
 The AList REST client and shared constants live in alist_client.py, imported by
 both this publish flow and the retract flow.
