@@ -81,28 +81,31 @@ class AList:
         return data["data"]["token"]
 
     def get(self, path):
-        return self._post("/api/fs/get", json={"path": path, "password": ""})
+        return self._post("/api/fs/get", json={"path": self._fs_path(path), "password": ""})
 
     def exists(self, path):
         return self.get(path).get("code") == 200
 
     def list_dir(self, path):
-        data = self._post("/api/fs/list", json={"path": path, "password": "", "page": 1, "per_page": 0, "refresh": False})
+        data = self._post("/api/fs/list", json={"path": self._fs_path(path), "password": "", "page": 1, "per_page": 0, "refresh": False})
         return data.get("data", {}).get("content") or []
 
-    def _write_path(self, path):
-        """Strip the leading mount segment so an fs/put|mkdir|remove write lands
-        where fs/list|get and /p/public downloads see it.
+    def _fs_path(self, path):
+        """Convert a logical base_path path into the path the AList fs API needs.
 
-        AList write-path quirk (verified 2026-08-10): fs/put, fs/mkdir and
-        fs/remove resolve the File-Path (and fs/remove's `dir`) RELATIVE to the
-        storage root, so the leading path segment — the mount point — gets
-        prepended again. A write of "/mihari-release/mihari/X" physically lands at
-        "/mihari-release/mihari-release/mihari/X", which is NOT where the read
-        APIs (virtual absolute) nor /p/public downloads serve it. The read APIs
-        are unaffected, so ONLY the write paths drop the first segment. Bound to
-        the current topology; if the drive is restructured so reads and writes
-        agree (e.g. a /mihari mount restored), make this return `path` unchanged.
+        AList topology quirk (verified 2026-08-10): EVERY fs API op (get/list/
+        put/mkdir/remove) resolves its path RELATIVE to the storage root_folder
+        (/mihari-release), prepending the root again — so a logical path like
+        "/mihari-release/mihari/X" must be handed to the fs API as "/mihari/X", or
+        it lands at (writes) / is looked up at (reads) the doubled physical
+        "/mihari-release/mihari-release/mihari/X". The /p/public download route,
+        by contrast, serves the logical (virtual absolute) path verbatim. So the
+        fs-API path = logical path with its leading mount segment dropped, and
+        ALL fs ops (read AND write) go through this so reads, writes, and public
+        downloads agree on one location. public_url does NOT transform (it takes
+        the logical path). Bound to the current topology; if the drive is
+        restructured so the fs API takes the logical path verbatim, make this
+        return `path` unchanged.
         """
         rest = path.lstrip("/")
         sep = rest.find("/")
@@ -125,14 +128,14 @@ class AList:
             fail(f"alist write failed for {remote_path}: {data.get('message')}")
 
     def mkdir(self, path):
-        self._post("/api/fs/mkdir", json={"path": self._write_path(path)})
+        self._post("/api/fs/mkdir", json={"path": self._fs_path(path)})
 
     def upload(self, local, remote_path):
         with open(local, "rb") as handle:
             response = self.session.put(
                 self.base + "/api/fs/put",
                 headers={
-                    "File-Path": quote(self._write_path(remote_path), safe=""),
+                    "File-Path": quote(self._fs_path(remote_path), safe=""),
                     "As-Task": "false",
                     "Content-Type": "application/octet-stream",
                 },
@@ -145,7 +148,7 @@ class AList:
         response = self.session.put(
             self.base + "/api/fs/put",
             headers={
-                "File-Path": quote(self._write_path(remote_path), safe=""),
+                "File-Path": quote(self._fs_path(remote_path), safe=""),
                 "As-Task": "false",
                 "Content-Type": "text/plain",
             },
@@ -155,7 +158,7 @@ class AList:
         self._check_write(response, remote_path)
 
     def remove(self, dir_path, names):
-        self._post("/api/fs/remove", json={"dir": self._write_path(dir_path), "names": list(names)})
+        self._post("/api/fs/remove", json={"dir": self._fs_path(dir_path), "names": list(names)})
 
     def content(self, path):
         """Read a remote text file via its public proxy route. Returns None when
