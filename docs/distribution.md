@@ -83,7 +83,11 @@ base_path 默认 `/mihari-release/mihari`（AList fs/API 路径，通过 GitHub 
 └── v0.1.0/
 ```
 
-> **AList 拓扑 quirk**：fs/API 路径（上传、list、get）用 `/mihari-release/mihari/…`，但**公开下载 URL** 需在 `/p` 后加 `/public` 挂载点前缀，即 `https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/…`（`alist_client.public_url` 自动处理）。若日后恢复 `/mihari` 挂载点，此 quirk 消失：base_path 改回 `/mihari`、`public_url` 去掉 `/public` 中缀。
+> **AList 拓扑 quirk（读路径 / 下载）**：fs/list、fs/get 用虚拟绝对路径 `/mihari-release/mihari/…`；**公开下载 URL** 需在 `/p` 后加 `/public` 挂载点前缀，即 `https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/…`（`alist_client.public_url` 自动处理）。
+>
+> **AList 拓扑 quirk（写路径）**：fs/put、fs/mkdir、fs/remove 把 File-Path 当成**相对存储根**的路径，首段（挂载点 `/mihari-release`）会被重复拼接——写 `/mihari-release/mihari/X` 实际落到 `/mihari-release/mihari-release/mihari/X`（读路径读不到）。读 API（list/get）不受影响。`alist_client._write_path` 在所有写操作里去掉首段，让写落到读路径；`upload`/`upload_text` 还会检查 AList body `code`（AList 永远返 HTTP 200，真失败此前被静默吞掉），写失败即报错。
+>
+> 若日后恢复 `/mihari` 挂载点（读写在同一路径、`/p` 也无需 `/public`），这两个 quirk 同时消失：base_path 改回 `/mihari`，`public_url` 去掉 `/public` 中缀，`_write_path` 改为原样返回。
 
 ### index.txt 格式
 

@@ -55,6 +55,20 @@ def test_public_url_is_signless_proxy_route():
     assert bundle == "https://cloud.example.com/p/public/mihari-release/mihari/v0.3.0/mihari-all-in-one-linux-amd64.tar.gz"
 
 
+def test_write_path_strips_mount_segment():
+    # AList write-path doubling quirk: fs/put|mkdir|remove prepend the leading
+    # mount segment again, so a write of /mihari-release/mihari/X lands at
+    # /mihari-release/mihari-release/mihari/X. _write_path drops the first
+    # segment so writes land where reads (and /p/public downloads) see them.
+    alist = AList.__new__(AList)
+    assert alist._write_path("/mihari-release/mihari/v0.3.0/mihari-all-in-one-linux-amd64.tar.gz") == "/mihari/v0.3.0/mihari-all-in-one-linux-amd64.tar.gz"
+    assert alist._write_path("/mihari-release/mihari/index.txt") == "/mihari/index.txt"
+    # fs/remove's `dir` is the bare base_path.
+    assert alist._write_path("/mihari-release/mihari") == "/mihari"
+    # No leading segment to strip → returned unchanged (no crash on odd shapes).
+    assert alist._write_path("/mihari-release") == "/mihari-release"
+
+
 def _load_release_alist():
     # release-alist.py has a hyphen in its name, so import it manually.
     path = Path(__file__).with_name("release-alist.py")

@@ -13,6 +13,7 @@
 ### Fixed
 
 - 修复国内离线安装命令失效：签名直链全部返回 `sign invalid`（401）。根因为 AList 签名机制在部署层失效；改公开分发后根除（前置：AList 存储关闭签名）。
+- 修复 AList 发版文件落点错误 + 上传静默失败：fs/put|mkdir|remove 把 File-Path 当相对存储根路径，首段挂载点 `/mihari-release` 被重复拼接，导致整个版本目录 + `index.txt` 实际写到 `/mihari-release/mihari-release/mihari/`（用户访问的读路径 `/mihari-release/mihari/` 读不到）。`alist_client._write_path` 在所有写操作里去掉首段，让写落到读路径；同时 `upload`/`upload_text` 改为检查 AList body `code`（AList 永远返 HTTP 200，真失败此前被静默吞掉），写失败即报错。
 
 ## [v0.2.0] - 2026-08-07
 
