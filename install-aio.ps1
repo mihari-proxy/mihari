@@ -20,7 +20,7 @@ $ErrorActionPreference = 'Stop'
 if (-not $BundleDir) { $BundleDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path } }
 
 function Info($m) { Write-Host "* $m" -ForegroundColor Cyan }
-function Fail($m) { Write-Host "error: $m" -ForegroundColor Red; exit 1 }
+function Fail($m) { Write-Host "error: $m" -ForegroundColor Red; throw $m }
 # Invoke-MihariService runs a `mihari service ...` step, elevating via UAC when
 # the current session is not admin (service control needs elevation on Windows).
 function Invoke-MihariService([string[]]$ServiceArgs) {
