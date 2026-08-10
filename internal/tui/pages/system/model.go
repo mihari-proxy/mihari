@@ -1515,15 +1515,15 @@ func coreValue(theme ui.Theme, core protocol.CoreStatus) string {
 }
 
 // proxyTone derives the system-proxy status tone: a foreign observer or a
-// desired/observed drift needs attention (Caution); an owned, enabled proxy is
-// Positive; otherwise (off) Neutral.
+// desired/owned drift needs attention (Caution); an owned proxy is Positive
+// (Owned already implies Enabled, per sysproxy.IsOwned); otherwise (off) Neutral.
 func proxyTone(status protocol.SystemProxyStatus) ui.StatusTone {
 	switch {
 	case status.Observed.Foreign:
 		return ui.ToneCaution
-	case status.Desired != status.Observed.Enabled:
+	case status.Desired != status.Observed.Owned:
 		return ui.ToneCaution
-	case status.Observed.Owned && status.Observed.Enabled:
+	case status.Observed.Owned:
 		return ui.TonePositive
 	default:
 		return ui.ToneNeutral
