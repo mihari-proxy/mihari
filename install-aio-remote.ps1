@@ -22,7 +22,7 @@ $indexUrl = if ($env:MIHARI_INDEX_URL) { $env:MIHARI_INDEX_URL } else { 'https:/
 $bundleUrl = $env:MIHARI_BUNDLE_URL
 
 function Info($m) { Write-Host "* $m" -ForegroundColor Cyan }
-function Fail($m) { Write-Host "error: $m" -ForegroundColor Red; exit 1 }
+function Fail($m) { Write-Host "error: $m" -ForegroundColor Red; throw $m }
 function Confirm($p) {
   # Read-Host reads the host console (not the stdin pipe), so no /dev/tty
   # special-casing is needed (design 4.4 step 2).
@@ -45,7 +45,13 @@ if (-not $resolvedUrl) {
   # index.txt line format: "<key> <rest...>". key="latest" -> <version>;
   # key="<goos>-<goarch>" -> <public_url> <sha256>.
   $index = ''
-  try { $index = (Invoke-WebRequest -Uri $indexUrl -UseBasicParsing).Content } catch { $index = '' }
+  try {
+    $resp = Invoke-WebRequest -Uri $indexUrl -UseBasicParsing
+    # PS 5.1 returns .Content as [byte[]] for application/octet-stream (AList serves
+    # every file with that content-type), which would defeat the string -split below.
+    # Decode to UTF-8 text so parsing works on any PS version / content-type.
+    if ($resp.Content -is [byte[]]) { $index = [System.Text.Encoding]::UTF8.GetString($resp.Content) } else { $index = $resp.Content }
+  } catch { $index = '' }
   if (-not $index) { Fail "尚未发布完成：无法获取 index（请稍后重试，或检查网络/网盘可用性）。" }
   foreach ($line in ($index -split "`n")) {
     $line = $line.Trim()
