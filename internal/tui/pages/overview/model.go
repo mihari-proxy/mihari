@@ -285,7 +285,10 @@ func formatSysProxyValue(theme ui.Theme, snap Snapshot) string {
 	status := snap.SystemProxy
 	obs := status.Observed
 	var label string
-	tone := ui.ToneNeutral
+	// Declared without an initializer: every switch branch below (including
+	// default) assigns tone, so an initializer value would never be read
+	// (ineffassign). The zero value equals ToneNeutral regardless.
+	var tone ui.StatusTone
 	switch {
 	case obs.Foreign:
 		label, tone = ui.OverviewValueForeign, ui.ToneCaution
@@ -294,9 +297,10 @@ func formatSysProxyValue(theme ui.Theme, snap Snapshot) string {
 	case obs.Enabled:
 		label, tone = ui.OverviewValueOn, ui.TonePositive
 	case status.Desired:
-		// Desired-on but not owned live: base the badge on intent; the drift
-		// suffix + caution tone below flag that it has not taken effect.
-		label, tone = ui.OverviewValueOn, ui.ToneCaution
+		// Desired-on but not owned live: base the badge on intent. This branch
+		// only fires when Owned is false, so the drift block below is guaranteed
+		// to set the caution tone + suffix — no need to assign tone here.
+		label = ui.OverviewValueOn
 	default:
 		label, tone = ui.OverviewValueOff, ui.ToneNeutral
 	}
