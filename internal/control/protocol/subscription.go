@@ -17,6 +17,8 @@ type Subscription struct {
 	Download int64 `json:"download,omitempty"`
 	Total    int64 `json:"total,omitempty"`
 	Expire   int64 `json:"expire,omitempty"`
+	// ProxyMode is the per-subscription refresh transport: direct (omitted), proxy, or auto.
+	ProxyMode string `json:"proxy_mode,omitempty"`
 }
 
 type SubscriptionList struct {
@@ -39,6 +41,7 @@ type SubscriptionAddRequest struct {
 	IfRevision  *uint64 `json:"if_revision,omitempty"`
 	Name        string  `json:"name"`
 	URL         string  `json:"url"`
+	ProxyMode   string  `json:"proxy_mode,omitempty"`
 }
 
 type SubscriptionEnabledRequest struct {
@@ -55,4 +58,5 @@ type SubscriptionUpdateRequest struct {
 	Interval       *string `json:"interval,omitempty"`
 	AutoRefresh    *bool   `json:"auto_refresh,omitempty"`
 	GlobalInterval *string `json:"global_interval,omitempty"`
+	ProxyMode      *string `json:"proxy_mode,omitempty"`
 }

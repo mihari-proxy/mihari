@@ -4,13 +4,33 @@ import "time"
 
 const CatalogSchema = "mihari.subscriptions/v1"
 
+// Per-subscription proxy modes select how a refresh fetch reaches its provider.
+// The zero value (ProxyModeDirect) is backward compatible: catalogs persisted
+// before this field existed fetch directly, matching the old behavior.
+const (
+	ProxyModeDirect = ""      // fetch the provider directly
+	ProxyModeProxy  = "proxy" // fetch only through the configured mihomo mixed-port
+	ProxyModeAuto   = "auto"  // proxy first, fall back to direct on network failure
+)
+
+// ValidProxyMode reports whether mode is a recognized per-subscription proxy mode.
+func ValidProxyMode(mode string) bool {
+	switch mode {
+	case ProxyModeDirect, ProxyModeProxy, ProxyModeAuto:
+		return true
+	}
+	return false
+}
+
 type Profile struct {
-	ID           string    `yaml:"id"`
-	Name         string    `yaml:"name"`
-	URL          string    `yaml:"url"`
-	Enabled      bool      `yaml:"enabled"`
-	AutoRefresh  bool      `yaml:"auto-refresh"`
-	Interval     string    `yaml:"interval,omitempty"`
+	ID          string `yaml:"id"`
+	Name        string `yaml:"name"`
+	URL         string `yaml:"url"`
+	Enabled     bool   `yaml:"enabled"`
+	AutoRefresh bool   `yaml:"auto-refresh"`
+	Interval    string `yaml:"interval,omitempty"`
+	// ProxyMode controls how refresh fetches reach this provider. Empty = direct.
+	ProxyMode    string    `yaml:"proxy-mode,omitempty"`
 	Version      uint64    `yaml:"version,omitempty"`
 	Generation   uint64    `yaml:"generation,omitempty"`
 	UpdatedAt    time.Time `yaml:"updated-at,omitempty"`
@@ -46,6 +66,8 @@ type PublicProfile struct {
 	Download int64 `json:"download,omitempty"`
 	Total    int64 `json:"total,omitempty"`
 	Expire   int64 `json:"expire,omitempty"`
+	// ProxyMode is the per-subscription refresh transport (direct/proxy/auto).
+	ProxyMode string `json:"proxy_mode,omitempty"`
 }
 
 type PublicCatalog struct {
@@ -62,6 +84,7 @@ func (c Catalog) Public() PublicCatalog {
 			Interval: profile.Interval, Cached: profile.Generation > 0, Generation: profile.Generation,
 			UpdatedAt: profile.UpdatedAt, LastError: profile.LastError,
 			Upload: profile.Upload, Download: profile.Download, Total: profile.Total, Expire: profile.Expire,
+			ProxyMode: profile.ProxyMode,
 		})
 	}
 	return result

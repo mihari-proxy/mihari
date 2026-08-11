@@ -161,7 +161,7 @@ func TestCompactFooterRendersWithoutOverflow(t *testing.T) {
 
 func TestFooterShowsSubscriptionPageActionsWhenContentFocused(t *testing.T) {
 	model := NewModel()
-	model.width, model.height = 120, 30
+	model.width, model.height = 132, 30
 	model.resizePages()
 	model.active = ui.PageSubscriptions
 	model.railIndex = 5
@@ -171,7 +171,7 @@ func TestFooterShowsSubscriptionPageActionsWhenContentFocused(t *testing.T) {
 		page.SetContentFocused(true)
 	}
 	content := model.View().Content
-	for _, want := range []string{"r refresh", "Ctrl+R", "a add", "Space toggle", "d delete"} {
+	for _, want := range []string{"r refresh", "Ctrl+R", "a add", "Space toggle", "p proxy", "d delete"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("footer missing %q in:\n%s", want, content)
 		}

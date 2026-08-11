@@ -89,6 +89,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	subscriptions, err := subscription.Open(subscription.ServiceOptions{
 		CatalogPath: paths.SubscriptionCatalog,
 		CacheDir:    paths.SubscriptionCache,
+		ProxyAddr:   settings.MixedAddr,
 	})
 	if err != nil {
 		return nil, err
