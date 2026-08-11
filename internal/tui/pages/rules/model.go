@@ -350,13 +350,16 @@ func (m *Model) activateControl() tea.Cmd {
 
 const rulesColGap = 2
 
-// rulesColumnSpec: priorities are protective — 4 cols (34 + 6 gaps = 40)
+// rulesColumnSpec: priorities are protective — 4 cols (36 + 6 gaps = 42)
 // always fit the narrowest content width, so no column ever drops in
 // practice; the priority order just pins what would go first if it did.
+// Type is a flex column: MinWidth 12 covers the common DomainSuffix, and it
+// grows toward MaxWidth 18 to fit DomainKeyword (and any future longer tokens
+// from upstream mihomo) instead of truncating at a fixed width (issue #29).
 func (m *Model) rulesColumnSpec() []ui.TableColumn {
 	return []ui.TableColumn{
 		{ID: "num", Title: "#", MinWidth: 4, MaxWidth: 4, Flex: 0, Align: ui.AlignRight, Priority: 4},
-		{ID: "type", Title: ui.TypeLabel, MinWidth: 10, MaxWidth: 18, Flex: 0, Priority: 3},
+		{ID: "type", Title: ui.TypeLabel, MinWidth: 12, MaxWidth: 18, Flex: 1, Priority: 3},
 		{ID: "payload", Title: ui.PayloadLabel, MinWidth: 12, Flex: 3, Priority: 1},
 		{ID: "target", Title: ui.TargetLabel, MinWidth: 8, MaxWidth: 16, Flex: 1, Priority: 2},
 	}
