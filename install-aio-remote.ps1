@@ -21,14 +21,72 @@ $ErrorActionPreference = 'Stop'
 $indexUrl = if ($env:MIHARI_INDEX_URL) { $env:MIHARI_INDEX_URL } else { 'https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/index.txt' }
 $bundleUrl = $env:MIHARI_BUNDLE_URL
 
-function Info($m) { Write-Host "* $m" -ForegroundColor Cyan }
-function Fail($m) { Write-Host "error: $m" -ForegroundColor Red; throw $m }
+# PS 5.1's irm decodes UTF-8 bytes from the signless octet-stream response as
+# ISO-8859-1, so Chinese string literals turn into mojibake (code points 128-255)
+# before the scriptblock runs. Detect that and round-trip the bytes back through
+# Latin-1 -> UTF-8 to recover the text. No-op under ReadAllText / -File / PS 7.
+function FixEncoding($s) {
+  if (-not $s) { return $s }
+  $mojibake = $false
+  foreach ($c in [char[]]$s) { $cp = [int]$c; if ($cp -ge 128 -and $cp -le 255) { $mojibake = $true; break } }
+  if (-not $mojibake) { return $s }
+  return [System.Text.Encoding]::UTF8.GetString([System.Text.Encoding]::GetEncoding('ISO-8859-1').GetBytes($s))
+}
+function Info($m) { Write-Host ("* " + (FixEncoding $m)) -ForegroundColor Cyan }
+function Fail($m) { $f = FixEncoding $m; Write-Host ("error: " + $f) -ForegroundColor Red; throw $f }
 function Confirm($p) {
   # Read-Host reads the host console (not the stdin pipe), so no /dev/tty
   # special-casing is needed (design 4.4 step 2).
   if ($Yes) { return $true }
-  $ans = Read-Host "$p [y/N]"
+  $ans = Read-Host ((FixEncoding $p) + ' [y/N]')
   return $ans -match '^[Yy]'
+}
+# Download with a Write-Progress bar. HttpClient streaming keeps FixEncoding in
+# main scope (event-based WebClient callbacks can't reach it reliably) and shows
+# downloaded/total MB + percent. Replaces IWR -OutFile, which has no progress.
+function Download-FileWithProgress($url, $dest) {
+  Add-Type -AssemblyName System.Net.Http
+  $client = New-Object System.Net.Http.HttpClient
+  $client.Timeout = [TimeSpan]::FromMinutes(30)
+  try {
+    $resp = $client.GetAsync($url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+    $resp.EnsureSuccessStatusCode() | Out-Null
+    $total = 0L
+    [long]::TryParse([string]$resp.Content.Headers.ContentLength, [ref]$total) | Out-Null
+    $inStream = $resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+    $outStream = [IO.File]::Create($dest)
+    try {
+      $buffer = New-Object byte[] 81920
+      $read = 0L
+      while (($n = $inStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+        $outStream.Write($buffer, 0, $n)
+        $read += $n
+        if ($total -gt 0) {
+          $pct = [int]($read * 100 / $total)
+          Write-Progress -Activity (FixEncoding '下载 mihari 安装包') -Status (FixEncoding ('已下载 {0:N1} / {1:N1} MB' -f ($read/1MB), ($total/1MB))) -PercentComplete $pct
+        } else {
+          Write-Progress -Activity (FixEncoding '下载 mihari 安装包') -Status (FixEncoding ('已下载 {0:N1} MB' -f ($read/1MB)))
+        }
+      }
+    } finally { $outStream.Dispose() }
+  } finally { $client.Dispose() }
+  Write-Progress -Activity (FixEncoding '下载 mihari 安装包') -Completed
+}
+# Print a short install plan + what's affected, then confirm. Runs once before the
+# download, unifying the per-branch confirms that used to scatter the version block.
+function Show-InstallPlan {
+  $binHint = if ($env:MIHARI_BIN) { $env:MIHARI_BIN } else { Join-Path $env:LOCALAPPDATA 'Programs\mihari' }
+  $dataHint = if ($env:MIHARI_DATA) { $env:MIHARI_DATA } else { Join-Path $env:USERPROFILE '.mihari' }
+  $ver = if ($latest) { $latest } else { '(未知)' }
+  Write-Host ''
+  Write-Host (FixEncoding "即将安装 mihari $ver") -ForegroundColor Yellow
+  Write-Host (FixEncoding "  平台     : $platform")
+  Write-Host (FixEncoding "  下载来源 : $resolvedUrl")
+  Write-Host (FixEncoding "  二进制   : $binHint")
+  Write-Host (FixEncoding "  数据目录 : $dataHint")
+  Write-Host (FixEncoding "  操作     : 注册系统服务 (需 UAC 提权)")
+  Write-Host (FixEncoding "  不影响   : mihari.yaml / 订阅 / 面板状态 等用户配置")
+  Write-Host ''
 }
 
 # Detect platform (mirrors install.ps1).
@@ -79,16 +137,19 @@ if ($mihariCmd) {
 }
 
 if (-not $haveMihari) {
-  Info ("未检测到 mihari，安装最新版" + $(if ($latest) { " ($latest)" }) + "…")
+  Info ("未检测到 mihari，将安装最新版" + $(if ($latest) { " ($latest)" }))
 } elseif (-not $current) {
-  Info '检测到 mihari 但版本未知（二进制可能损坏）。'
-  if (-not (Confirm '  重新安装（修复）？')) { Info '已取消。'; exit 0 }
+  Info '检测到 mihari 但版本未知（二进制可能损坏），将重新安装修复。'
 } elseif ($latest -and $current -eq $latest) {
-  Info "已是最新版本 ($current)。"
-  if (-not (Confirm '  重新安装（用于修复）？')) { Info '已取消。'; exit 0 }
+  Info "已是最新版本 ($current)，将重新安装（用于修复）。"
 } else {
-  Info ("当前已安装 $current" + $(if ($latest) { "，最新版本为 $latest" }) + "。")
-  if (-not (Confirm '  安装？')) { Info '已取消。'; exit 0 }
+  Info ("当前已安装 $current" + $(if ($latest) { "，最新版本为 $latest，将升级。" }))
+}
+
+# Install plan + confirm before the (large) download. -Yes skips it.
+if (-not $Yes) {
+  Show-InstallPlan
+  if (-not (Confirm '确认开始安装？')) { Info '已取消。'; exit 0 }
 }
 
 # Download to a temp file (outside the work dir) so the work dir can be fully
@@ -98,7 +159,7 @@ $workdir = Join-Path $env:USERPROFILE 'Downloads\mihari-aio'
 New-Item -ItemType Directory -Force -Path $workdir | Out-Null
 $tmpArchive = Join-Path ([IO.Path]::GetTempPath()) ("mihari-aio-" + ([guid]::NewGuid().ToString('N')) + ".zip")
 Info "下载 $resolvedUrl …"
-Invoke-WebRequest -Uri $resolvedUrl -OutFile $tmpArchive -UseBasicParsing
+Download-FileWithProgress -url $resolvedUrl -dest $tmpArchive
 if ($wantSum) {
   $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $tmpArchive).Hash.ToLower()
   if ($got -ne $wantSum.ToLower()) { Remove-Item -LiteralPath $tmpArchive -Force; Fail "sha256 校验失败：期望 $wantSum，实际 $got。" }
