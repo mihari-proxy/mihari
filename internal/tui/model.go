@@ -455,6 +455,17 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if Classify(model.width, model.height) == ui.TooSmall {
 		return model, nil
 	}
+	// Digit keys 1–9 jump straight to the matching rail page while the focus is
+	// not in a text input (search box / form). InputText mode passes digits
+	// through to the focused field, so this never fires there. Digits past the
+	// rail length (9 on the 8-page rail) are ignored by the bounds check.
+	if model.inputMode == ui.InputNavigation {
+		if n, ok := railDigit(name); ok && n >= 1 && n <= len(model.rail) {
+			prev := model.active
+			model.railIndex = n - 1
+			return model.landRailPage(prev)
+		}
+	}
 	if model.focus.Area == ui.FocusRail {
 		return model.updateRail(name)
 	}
@@ -664,6 +675,16 @@ func (model *Model) syncSystem() {
 	}
 }
 
+// railDigit reports the 1-based rail position a digit key selects, or ok=false
+// for non-single-digit keys. Callers bound the result against the rail length so
+// 9 (and any digit past the rail) is ignored on an 8-page rail.
+func railDigit(name string) (int, bool) {
+	if len(name) != 1 || name[0] < '1' || name[0] > '9' {
+		return 0, false
+	}
+	return int(name[0] - '0'), true
+}
+
 func (model Model) updateRail(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "up":
@@ -681,19 +702,28 @@ func (model Model) updateRail(key string) (tea.Model, tea.Cmd) {
 	default:
 		return model, nil
 	}
-	prev := model.active
+	return model.landRailPage(model.active)
+}
+
+// landRailPage applies the rail selection at model.railIndex: updates the active
+// page and focus, clears stale System Done state when leaving, and refreshes
+// page-owned snapshots when the rail lands on System or Web GUI. It is the shared
+// tail of arrow-key rail movement and the 1–8 digit shortcuts (see railDigit), so
+// both stay in sync on focus handling and preview Load() behavior.
+func (model Model) landRailPage(prev ui.PageID) (tea.Model, tea.Cmd) {
 	model.active = model.rail[model.railIndex]
 	model.focus.Page = model.active
-	if prev != model.active {
-		model.clearSystemDoneIfLeaving(prev)
-		// Refresh page-owned snapshots when the rail lands on the page so previews
-		// are not empty until Enter. System (network/service) and Web GUI (panels)
-		// both need this; Enter still Load()s after content focus.
-		switch model.active {
-		case ui.PageSystem, ui.PageWebGUI:
-			if page, ok := model.pages[model.active].(interface{ Load() tea.Cmd }); ok {
-				return model, page.Load()
-			}
+	if prev == model.active {
+		return model, nil
+	}
+	model.clearSystemDoneIfLeaving(prev)
+	// Refresh page-owned snapshots when the rail lands on the page so previews
+	// are not empty until Enter. System (network/service) and Web GUI (panels)
+	// both need this; Enter still Load()s after content focus.
+	switch model.active {
+	case ui.PageSystem, ui.PageWebGUI:
+		if page, ok := model.pages[model.active].(interface{ Load() tea.Cmd }); ok {
+			return model, page.Load()
 		}
 	}
 	return model, nil
