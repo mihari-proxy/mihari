@@ -282,24 +282,34 @@ func formatSysProxyValue(theme ui.Theme, snap Snapshot) string {
 	if !snap.Connected || snap.SystemProxy == nil {
 		return ui.OverviewValueDash
 	}
-	obs := snap.SystemProxy.Observed
+	status := snap.SystemProxy
+	obs := status.Observed
 	var label string
-	tone := ui.ToneNeutral
+	// Declared without an initializer: every switch branch below (including
+	// default) assigns tone, so an initializer value would never be read
+	// (ineffassign). The zero value equals ToneNeutral regardless.
+	var tone ui.StatusTone
 	switch {
 	case obs.Foreign:
-		label = ui.OverviewValueForeign
-		tone = ui.ToneCaution
+		label, tone = ui.OverviewValueForeign, ui.ToneCaution
 	case obs.Owned:
-		label = ui.OverviewValueOwned
-		tone = ui.TonePositive
+		label, tone = ui.OverviewValueOwned, ui.TonePositive
 	case obs.Enabled:
+		label, tone = ui.OverviewValueOn, ui.TonePositive
+	case status.Desired:
+		// Desired-on but not owned live: base the badge on intent. This branch
+		// only fires when Owned is false, so the drift block below is guaranteed
+		// to set the caution tone + suffix — no need to assign tone here.
 		label = ui.OverviewValueOn
-		tone = ui.TonePositive
-	case snap.SystemProxy.Desired:
-		label = ui.OverviewValueOn
-		tone = ui.TonePositive
 	default:
-		label = ui.OverviewValueOff
+		label, tone = ui.OverviewValueOff, ui.ToneNeutral
+	}
+	// Owned already implies Enabled (sysproxy.IsOwned gates on it), so
+	// comparing intent (Desired) against ownership is the precise drift check:
+	// it also catches enabled-but-wrong-server, which Desired!=Enabled misses.
+	if status.Desired != obs.Owned && !obs.Foreign {
+		label += " · " + ui.OverviewDriftLabel
+		tone = ui.ToneCaution
 	}
 	if snap.Stale {
 		// Keep the last-known value and mark it stale (design G2).

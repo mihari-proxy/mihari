@@ -89,6 +89,61 @@ func TestOverview_GeneralCardServiceMihariSysProxyTun(t *testing.T) {
 	}
 }
 
+func TestOverview_SysProxyDesiredObservedDrift(t *testing.T) {
+	model := New()
+	model.SetSize(100, 30)
+	// Desired on but observed off. Note Owned is false here: sysproxy.IsOwned
+	// gates on Enabled, so an off proxy can never be Owned. The daemon derives
+	// Owned=false for this state; Overview must still flag the Desired-vs-Owned
+	// drift (caution + "on · drift") instead of a green "on".
+	model.SetSnapshot(Snapshot{
+		Connected: true,
+		SystemProxy: &protocol.SystemProxyStatus{
+			Desired:  true,
+			Observed: protocol.SystemProxyObserved{Enabled: false, Owned: false},
+		},
+		Core: protocol.CoreStatus{Status: "running"},
+	})
+	view := model.View()
+	want := ui.OverviewValueOn + " · " + ui.OverviewDriftLabel
+	if !strings.Contains(view, want) {
+		t.Fatalf("drift badge should render %q:\n%s", want, view)
+	}
+
+	// Desired on but enabled to the wrong server (owned=false, foreign=false):
+	// Desired!=Owned catches this; the older Desired!=Enabled check would miss
+	// it because Enabled happens to be true.
+	model.SetSnapshot(Snapshot{
+		Connected: true,
+		SystemProxy: &protocol.SystemProxyStatus{
+			Desired:  true,
+			Observed: protocol.SystemProxyObserved{Enabled: true, Server: "10.0.0.1:1", Owned: false, Foreign: false},
+		},
+		Core: protocol.CoreStatus{Status: "running"},
+	})
+	view = model.View()
+	if !strings.Contains(view, ui.OverviewValueOn+" · "+ui.OverviewDriftLabel) {
+		t.Fatalf("enabled-but-not-owned drift should render %q:\n%s", ui.OverviewValueOn+" · "+ui.OverviewDriftLabel, view)
+	}
+
+	// When desired and ownership agree (owned), the badge stays clean.
+	model.SetSnapshot(Snapshot{
+		Connected: true,
+		SystemProxy: &protocol.SystemProxyStatus{
+			Desired:  true,
+			Observed: protocol.SystemProxyObserved{Enabled: true, Owned: true},
+		},
+		Core: protocol.CoreStatus{Status: "running"},
+	})
+	view = model.View()
+	if strings.Contains(view, ui.OverviewDriftLabel) {
+		t.Fatalf("no drift suffix when desired==owned:\n%s", view)
+	}
+	if !strings.Contains(view, ui.OverviewValueOwned) {
+		t.Fatalf("owned badge should render %q:\n%s", ui.OverviewValueOwned, view)
+	}
+}
+
 func TestOverview_SectionTitlesEmbeddedInBorder(t *testing.T) {
 	model := New()
 	model.SetSize(90, 28)

@@ -66,6 +66,9 @@ const (
 	OverviewValueOwned    = "owned"
 	OverviewValueForeign  = "foreign"
 	OverviewValueDash     = "—"
+	// OverviewDriftLabel flags a desired/observed system-proxy drift on the
+	// Overview badge (appended as "on · drift") so it matches the System page.
+	OverviewDriftLabel = "drift"
 	// Section titles are embedded in the top border line (╭─── Name ───╮), not body text.
 	MonitorTrafficTitle      = "Traffic · 60 s"
 	MonitorMemoryTitle       = "Memory · 60 s"
