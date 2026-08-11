@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -23,7 +24,10 @@ type ServiceOptions struct {
 	CatalogPath string
 	CacheDir    string
 	Downloader  Fetcher
-	Now         func() time.Time
+	// ProxyAddr is the mihomo mixed-port address (host:port). When non-empty,
+	// subscriptions with proxy/auto modes fetch through it.
+	ProxyAddr string
+	Now       func() time.Time
 }
 
 type Service struct {
@@ -65,7 +69,14 @@ func Open(options ServiceOptions) (*Service, error) {
 	}
 	downloader := options.Downloader
 	if downloader == nil {
-		downloader = NewDownloader(nil)
+		var proxyURL *url.URL
+		if options.ProxyAddr != "" {
+			// MixedAddr is host:port; the HTTP proxy scheme is implicit.
+			if parsed, err := url.Parse("http://" + options.ProxyAddr); err == nil {
+				proxyURL = parsed
+			}
+		}
+		downloader = NewDownloader(DownloaderOptions{ProxyURL: proxyURL})
 	}
 	now := options.Now
 	if now == nil {
@@ -80,12 +91,12 @@ func (s *Service) Snapshot() Catalog {
 	return s.catalog.Clone()
 }
 
-func (s *Service) Add(name, rawURL string) (Profile, error) {
+func (s *Service) Add(name, rawURL, proxyMode string) (Profile, error) {
 	id, err := newProfileID()
 	if err != nil {
 		return Profile{}, protocol.APIError{Code: protocol.CodeInternal, Message: "generate subscription ID"}
 	}
-	profile := Profile{ID: id, Name: name, URL: rawURL, Enabled: true, AutoRefresh: true, Version: 1}
+	profile := Profile{ID: id, Name: name, URL: rawURL, Enabled: true, AutoRefresh: true, Version: 1, ProxyMode: proxyMode}
 	_, after, err := s.Mutate(func(catalog *Catalog) error {
 		catalog.Profiles = append(catalog.Profiles, profile)
 		return nil
@@ -123,7 +134,7 @@ func (s *Service) PrepareRefresh(ctx context.Context, id string) (PreparedRefres
 	}
 	profile := s.catalog.Profiles[index]
 	s.mu.RUnlock()
-	result, err := s.downloader.Fetch(ctx, FetchRequest{URL: profile.URL, ETag: profile.ETag, LastModified: profile.LastModified})
+	result, err := s.downloader.Fetch(ctx, FetchRequest{URL: profile.URL, ETag: profile.ETag, LastModified: profile.LastModified, Mode: profile.ProxyMode})
 	if err != nil {
 		_ = s.noteRefreshError(id, err)
 		return PreparedRefresh{}, err

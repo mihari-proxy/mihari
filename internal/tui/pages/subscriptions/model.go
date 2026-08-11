@@ -59,6 +59,7 @@ type row struct {
 	name        string
 	state       string
 	load        string
+	proxy       string
 	traffic     string
 	lastSuccess string
 	nextRefresh string
@@ -82,6 +83,8 @@ func (r row) cellValue(theme ui.Theme, id string) string {
 		return ui.ToneStyle(theme, r.stateTone).Render(r.state)
 	case "load":
 		return ui.ToneStyle(theme, r.loadTone).Render(r.load)
+	case "proxy":
+		return r.proxy
 	case "traffic":
 		if r.traffic == "" {
 			return ui.MissingValue
@@ -133,7 +136,7 @@ func resolveLoadPhase(subscription protocol.Subscription, active bool, pending s
 		return loadFetching
 	case "use":
 		return loadApplying
-	case "toggle", "edit", "add":
+	case "toggle", "edit", "add", "proxy":
 		return loadWorking
 	}
 	if !subscription.Enabled {
@@ -203,7 +206,7 @@ func rowFrom(subscription protocol.Subscription, active bool, pending string, no
 	traffic := ui.FormatSubscriptionTrafficCompact(subscription.Upload, subscription.Download, subscription.Total)
 	return row{
 		active: marker, name: subscription.Name, state: state, load: load,
-		traffic: traffic, lastSuccess: lastSuccess, nextRefresh: next,
+		proxy: proxyModeLabel(subscription.ProxyMode), traffic: traffic, lastSuccess: lastSuccess, nextRefresh: next,
 		loadTone: phaseTone(phase), stateTone: stateTone,
 	}
 }
@@ -469,6 +472,10 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		if index >= 0 {
 			return m, m.use(m.subscriptions[index].ID)
 		}
+	case "p":
+		if index >= 0 {
+			return m, m.cycleProxy(m.subscriptions[index])
+		}
 	case "d":
 		if index >= 0 {
 			subscription := m.subscriptions[index]
@@ -501,10 +508,11 @@ func (m *Model) FooterHints() string {
 // name is highest priority, nextRefresh drops first.
 func (m *Model) subscriptionColumns() []ui.TableColumn {
 	return []ui.TableColumn{
-		{ID: "name", Title: ui.NameLabel, MinWidth: 10, Flex: 3, Priority: 7},
-		{ID: "active", Title: ui.ActiveLabel, MinWidth: 6, Flex: 0, Priority: 6},
-		{ID: "state", Title: "State", MinWidth: 8, Flex: 0, Priority: 5},
-		{ID: "load", Title: ui.LoadLabel, MinWidth: 9, Flex: 0, Priority: 4},
+		{ID: "name", Title: ui.NameLabel, MinWidth: 10, Flex: 3, Priority: 8},
+		{ID: "active", Title: ui.ActiveLabel, MinWidth: 6, Flex: 0, Priority: 7},
+		{ID: "state", Title: "State", MinWidth: 8, Flex: 0, Priority: 6},
+		{ID: "load", Title: ui.LoadLabel, MinWidth: 9, Flex: 0, Priority: 5},
+		{ID: "proxy", Title: "Proxy", MinWidth: 6, Flex: 0, Priority: 4},
 		{ID: "traffic", Title: ui.TrafficLabel, MinWidth: 11, Flex: 1, Priority: 3},
 		{ID: "lastSuccess", Title: ui.LastUpdateLabel, MinWidth: 11, Flex: 0, Priority: 2},
 		{ID: "nextRefresh", Title: ui.NextUpdateLabel, MinWidth: 11, Flex: 0, Priority: 1},
@@ -623,6 +631,49 @@ func (m *Model) toggle(subscription protocol.Subscription) tea.Cmd {
 		result, err := m.client.SetSubscriptionEnabled(ctx, id, protocol.SubscriptionEnabledRequest{OperationID: operationID, IfRevision: &revision, Enabled: !subscription.Enabled})
 		return mutationResultMsg{kind: mutationToggle, id: id, result: result, err: err}
 	}, m.loadSpinCmdIfNeeded())
+}
+
+// cycleProxy advances the focused subscription's refresh transport through the
+// direct → proxy → auto → direct cycle. The server validates the value; an
+// unsupported build surfaces the error via the normal mutation path.
+func (m *Model) cycleProxy(subscription protocol.Subscription) tea.Cmd {
+	if m.client == nil {
+		return nil
+	}
+	mode := nextProxyMode(subscription.ProxyMode)
+	id, operationID, revision := subscription.ID, m.newOperationID(), m.revision
+	m.pending[id] = "proxy"
+	return tea.Batch(func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		result, err := m.client.UpdateSubscription(ctx, id, protocol.SubscriptionUpdateRequest{OperationID: operationID, IfRevision: &revision, ProxyMode: &mode})
+		return mutationResultMsg{kind: mutationUpdate, id: id, result: result, err: err}
+	}, m.loadSpinCmdIfNeeded())
+}
+
+// nextProxyMode cycles the per-subscription refresh transport one step forward.
+// Values mirror the protocol proxy_mode field (empty = direct).
+func nextProxyMode(mode string) string {
+	switch mode {
+	case "proxy":
+		return "auto"
+	case "auto":
+		return ""
+	default:
+		return "proxy"
+	}
+}
+
+// proxyModeLabel renders a stored proxy mode for the Proxy column.
+func proxyModeLabel(mode string) string {
+	switch mode {
+	case "proxy":
+		return "PROXY"
+	case "auto":
+		return "AUTO"
+	default:
+		return "DIRECT"
+	}
 }
 
 func (m *Model) refresh(id string) tea.Cmd {

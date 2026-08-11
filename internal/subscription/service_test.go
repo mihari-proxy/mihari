@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -19,7 +20,7 @@ func newServiceForTest(t *testing.T, handler http.Handler) (*Service, string) {
 	service, err := Open(ServiceOptions{
 		CatalogPath: filepath.Join(root, "catalog.yaml"),
 		CacheDir:    filepath.Join(root, "cache"),
-		Downloader:  NewDownloader(server.Client()),
+		Downloader:  NewDownloader(DownloaderOptions{Client: server.Client()}),
 		Now:         func() time.Time { return time.Unix(500, 0).UTC() },
 	})
 	if err != nil {
@@ -34,7 +35,7 @@ func TestPrepareRefreshDoesNotPersistUntilCommit(t *testing.T) {
 		writer.Header().Set("Subscription-Userinfo", "upload=10; download=20; total=100")
 		_, _ = writer.Write([]byte("proxies: []\nrules: [MATCH,DIRECT]\n"))
 	}))
-	profile, err := service.Add("main", url)
+	profile, err := service.Add("main", url, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +66,7 @@ func TestStalePreparedRefreshCannotRecreateDeletedProfile(t *testing.T) {
 	service, url := newServiceForTest(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte("proxies: []\n"))
 	}))
-	profile, _ := service.Add("main", url)
+	profile, _ := service.Add("main", url, "")
 	prepared, err := service.PrepareRefresh(context.Background(), profile.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +100,7 @@ func TestNotModifiedRetainsCacheAndAdvancesMetadataVersion(t *testing.T) {
 		}
 		writer.WriteHeader(http.StatusNotModified)
 	}))
-	profile, _ := service.Add("main", url)
+	profile, _ := service.Add("main", url, "")
 	first, _ := service.PrepareRefresh(context.Background(), profile.ID)
 	firstReceipt, err := service.CommitRefresh(first)
 	if err != nil {
@@ -125,7 +126,7 @@ func TestPrepareRefresh_RecordsLastErrorWithoutCachingInvalidBody(t *testing.T) 
 	service, url := newServiceForTest(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte("not-a-clash-document"))
 	}))
-	profile, err := service.Add("broken", url)
+	profile, err := service.Add("broken", url, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +152,7 @@ func TestService_PrepareRefreshFailureNotesLastErrorWithoutDroppingCache(t *test
 		}
 		_, _ = writer.Write([]byte(body))
 	}))
-	profile, err := service.Add("main", url)
+	profile, err := service.Add("main", url, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +189,7 @@ func TestRollbackRefreshRestoresCatalogAndCache(t *testing.T) {
 	service, url := newServiceForTest(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte(body))
 	}))
-	profile, _ := service.Add("main", url)
+	profile, _ := service.Add("main", url, "")
 	first, _ := service.PrepareRefresh(context.Background(), profile.ID)
 	_, _ = service.CommitRefresh(first)
 	body = "proxies: [{name: changed}]\n"
@@ -203,5 +204,95 @@ func TestRollbackRefreshRestoresCatalogAndCache(t *testing.T) {
 	content, _ := os.ReadFile(service.CachePath(profile.ID))
 	if string(content) != "proxies: []\n" {
 		t.Fatalf("cache not restored: %q", content)
+	}
+}
+
+type recordingFetcher struct {
+	last FetchRequest
+	give FetchResult
+}
+
+func (r *recordingFetcher) Fetch(_ context.Context, request FetchRequest) (FetchResult, error) {
+	r.last = request
+	return r.give, nil
+}
+
+func openServiceWithFetcher(t *testing.T, fetcher Fetcher) *Service {
+	t.Helper()
+	root := t.TempDir()
+	service, err := Open(ServiceOptions{
+		CatalogPath: filepath.Join(root, "catalog.yaml"),
+		CacheDir:    filepath.Join(root, "cache"),
+		Downloader:  fetcher,
+		Now:         func() time.Time { return time.Unix(500, 0).UTC() },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+func TestAddPersistsProxyMode(t *testing.T) {
+	service := openServiceWithFetcher(t, &recordingFetcher{})
+	profile, err := service.Add("main", "https://example.test/sub", ProxyModeAuto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.ProxyMode != ProxyModeAuto {
+		t.Fatalf("Add did not persist proxy mode: %q", profile.ProxyMode)
+	}
+	// The persisted catalog should also carry the value after a fresh load.
+	loaded, err := Load(service.catalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Profiles[0].ProxyMode != ProxyModeAuto {
+		t.Fatalf("catalog did not persist proxy mode: %q", loaded.Profiles[0].ProxyMode)
+	}
+}
+
+func TestPrepareRefreshPassesProxyMode(t *testing.T) {
+	recorder := &recordingFetcher{give: FetchResult{Content: []byte("proxies: []\nrules: [MATCH,DIRECT]\n")}}
+	service := openServiceWithFetcher(t, recorder)
+	profile, err := service.Add("main", "https://example.test/sub", ProxyModeProxy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PrepareRefresh(context.Background(), profile.ID); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.last.Mode != ProxyModeProxy {
+		t.Fatalf("PrepareRefresh passed Mode=%q want %q", recorder.last.Mode, ProxyModeProxy)
+	}
+}
+
+// TestOpenProxyAddrRoutesFetchThroughProxy verifies the assembly chain the feature
+// depends on: a host:port ProxyAddr is turned into a real proxy-capable downloader,
+// so a proxy-mode refresh actually reaches the proxy instead of silently going direct.
+func TestOpenProxyAddrRoutesFetchThroughProxy(t *testing.T) {
+	body := []byte("proxies: []\nrules: [MATCH,DIRECT]\n")
+	directServer, proxyServer, directHits, proxyHits := proxyCountingServers(t, body)
+	root := t.TempDir()
+	service, err := Open(ServiceOptions{
+		CatalogPath: filepath.Join(root, "catalog.yaml"),
+		CacheDir:    filepath.Join(root, "cache"),
+		ProxyAddr:   mustProxyURL(t, proxyServer.URL).Host,
+		Now:         func() time.Time { return time.Unix(500, 0).UTC() },
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	profile, err := service.Add("main", directServer.URL, ProxyModeProxy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PrepareRefresh(context.Background(), profile.ID); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if got := atomic.LoadInt32(proxyHits); got != 1 {
+		t.Fatalf("ProxyAddr should route proxy-mode fetch through it: proxyHits=%d", got)
+	}
+	if got := atomic.LoadInt32(directHits); got != 0 {
+		t.Fatalf("proxy mode should not reach direct: directHits=%d", got)
 	}
 }

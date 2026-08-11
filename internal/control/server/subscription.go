@@ -72,7 +72,7 @@ func (s *Server) addSubscription(writer http.ResponseWriter, request *http.Reque
 		writeInvalidArgument(writer, "subscription name and URL are required")
 		return
 	}
-	profile, err := runtime.AddSubscription(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, runtimeapi.AddSubscriptionInput{Name: body.Name, URL: body.URL})
+	profile, err := runtime.AddSubscription(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, runtimeapi.AddSubscriptionInput{Name: body.Name, URL: body.URL, ProxyMode: body.ProxyMode})
 	if err != nil {
 		writeControlError(writer, err)
 		return
@@ -136,7 +136,7 @@ func (s *Server) updateSubscription(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	profile, err := runtime.SetSubscription(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, request.PathValue("id"), runtimeapi.SetSubscriptionInput{
-		Name: body.Name, URL: body.URL, Interval: body.Interval, AutoRefresh: body.AutoRefresh, GlobalPeriod: body.GlobalInterval,
+		Name: body.Name, URL: body.URL, Interval: body.Interval, AutoRefresh: body.AutoRefresh, GlobalPeriod: body.GlobalInterval, ProxyMode: body.ProxyMode,
 	})
 	if err != nil {
 		writeControlError(writer, err)
@@ -179,6 +179,7 @@ func subscriptionDTO(profile subscription.PublicProfile) protocol.Subscription {
 		Interval: profile.Interval, Cached: profile.Cached, Generation: profile.Generation,
 		UpdatedAt: profile.UpdatedAt, LastError: profile.LastError,
 		Upload: profile.Upload, Download: profile.Download, Total: profile.Total, Expire: profile.Expire,
+		ProxyMode: profile.ProxyMode,
 	}
 }
 

@@ -15,6 +15,8 @@ import (
 type AddSubscriptionInput struct {
 	Name string
 	URL  string
+	// ProxyMode selects the per-subscription refresh transport (direct/proxy/auto).
+	ProxyMode string
 }
 
 type SetSubscriptionInput struct {
@@ -23,6 +25,7 @@ type SetSubscriptionInput struct {
 	Interval     *string
 	AutoRefresh  *bool
 	GlobalPeriod *string
+	ProxyMode    *string
 }
 
 type configCandidate struct {
@@ -53,7 +56,7 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 		var added subscription.Profile
 		_, err := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			var addErr error
-			added, addErr = m.subscriptions.Add(input.Name, input.URL)
+			added, addErr = m.subscriptions.Add(input.Name, input.URL, input.ProxyMode)
 			if addErr != nil {
 				return snapshot, addErr
 			}
@@ -269,6 +272,9 @@ func (m *Manager) SetSubscription(ctx context.Context, operation Operation, id s
 		}
 		if input.GlobalPeriod != nil {
 			catalog.GlobalInterval = *input.GlobalPeriod
+		}
+		if input.ProxyMode != nil {
+			profile.ProxyMode = *input.ProxyMode
 		}
 		if input.URL != nil && *input.URL != profile.URL {
 			profile.URL = *input.URL

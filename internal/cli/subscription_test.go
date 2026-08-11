@@ -94,3 +94,50 @@ func TestSubscriptionRemoveRequiresYes(t *testing.T) {
 		t.Fatalf("exit=%d removed=%d", exit, client.removed)
 	}
 }
+
+func TestSubscriptionAddForwardsProxyMode(t *testing.T) {
+	client := &fakeSubscriptionClient{}
+	dependencies := Dependencies{SubscriptionClient: client, NewOperationID: func() string { return "op" }}
+	exit := Execute(context.Background(), []string{"sub", "add", "main", "https://example.test/sub", "--proxy", "auto", "--json"}, &bytes.Buffer{}, &bytes.Buffer{}, dependencies)
+	if exit != ExitOK {
+		t.Fatalf("exit=%d", exit)
+	}
+	if client.lastAdd.ProxyMode != "auto" {
+		t.Fatalf("add did not forward proxy mode: %#v", client.lastAdd)
+	}
+}
+
+func TestSubscriptionAddResolvesDirectAlias(t *testing.T) {
+	client := &fakeSubscriptionClient{}
+	dependencies := Dependencies{SubscriptionClient: client, NewOperationID: func() string { return "op" }}
+	exit := Execute(context.Background(), []string{"sub", "add", "main", "https://example.test/sub", "--proxy", "direct", "--json"}, &bytes.Buffer{}, &bytes.Buffer{}, dependencies)
+	if exit != ExitOK {
+		t.Fatalf("exit=%d", exit)
+	}
+	if client.lastAdd.ProxyMode != "" {
+		t.Fatalf("--proxy direct should resolve to the empty direct value: %q", client.lastAdd.ProxyMode)
+	}
+}
+
+func TestSubscriptionAddRejectsInvalidProxyMode(t *testing.T) {
+	client := &fakeSubscriptionClient{}
+	exit := Execute(context.Background(), []string{"sub", "add", "main", "https://example.test/sub", "--proxy", "bogus", "--json"}, &bytes.Buffer{}, &bytes.Buffer{}, Dependencies{SubscriptionClient: client})
+	if exit != ExitUsage {
+		t.Fatalf("exit=%d want ExitUsage", exit)
+	}
+	if client.lastAdd.URL != "" {
+		t.Fatalf("invalid proxy mode should not reach the client: %#v", client.lastAdd)
+	}
+}
+
+func TestSubscriptionSetForwardsProxyMode(t *testing.T) {
+	client := &fakeSubscriptionClient{}
+	dependencies := Dependencies{SubscriptionClient: client, NewOperationID: func() string { return "op" }}
+	exit := Execute(context.Background(), []string{"sub", "set", "one", "--proxy", "proxy", "--json"}, &bytes.Buffer{}, &bytes.Buffer{}, dependencies)
+	if exit != ExitOK {
+		t.Fatalf("exit=%d", exit)
+	}
+	if client.lastUpdate.ProxyMode == nil || *client.lastUpdate.ProxyMode != "proxy" {
+		t.Fatalf("set did not forward proxy mode: %#v", client.lastUpdate)
+	}
+}
