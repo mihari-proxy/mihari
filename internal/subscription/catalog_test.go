@@ -85,3 +85,37 @@ func TestEffectiveInterval(t *testing.T) {
 		t.Fatalf("global interval=%v", got)
 	}
 }
+
+func TestPublicCatalogExposesProxyMode(t *testing.T) {
+	catalog := Defaults()
+	catalog.Profiles = []Profile{
+		{ID: "0123456789abcdef0123456789abcdef", Name: "direct", URL: "https://one.test"},
+		{ID: "fedcba9876543210fedcba9876543210", Name: "proxy", URL: "https://two.test", ProxyMode: ProxyModeProxy},
+		{ID: "0123456789abcdef0123456789abcde0", Name: "auto", URL: "https://three.test", ProxyMode: ProxyModeAuto},
+	}
+	public := catalog.Public()
+	want := []string{ProxyModeDirect, ProxyModeProxy, ProxyModeAuto}
+	if len(public.Profiles) != len(want) {
+		t.Fatalf("profile count=%d", len(public.Profiles))
+	}
+	for index, expected := range want {
+		if got := public.Profiles[index].ProxyMode; got != expected {
+			t.Fatalf("profile[%d] proxy mode=%q want %q", index, got, expected)
+		}
+	}
+}
+
+func TestNormalizeValidatesProxyMode(t *testing.T) {
+	for _, mode := range []string{ProxyModeDirect, ProxyModeProxy, ProxyModeAuto} {
+		catalog := Defaults()
+		catalog.Profiles = []Profile{{ID: "0123456789abcdef0123456789abcdef", Name: "ok", URL: "https://one.test", ProxyMode: mode}}
+		if err := catalog.Normalize(); err != nil {
+			t.Fatalf("mode=%q should be valid: %v", mode, err)
+		}
+	}
+	catalog := Defaults()
+	catalog.Profiles = []Profile{{ID: "0123456789abcdef0123456789abcdef", Name: "bad", URL: "https://one.test", ProxyMode: "bogus"}}
+	if err := catalog.Normalize(); err == nil {
+		t.Fatal("expected invalid proxy mode to be rejected")
+	}
+}

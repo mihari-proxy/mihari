@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/subscription"
 	"github.com/spf13/cobra"
 )
 
@@ -40,7 +41,7 @@ func newSubscriptionListCommand(dependencies Dependencies, options *runOptions) 
 			if profile.ID == result.ActiveID {
 				marker = "*"
 			}
-			if _, err := fmt.Fprintf(command.OutOrStdout(), "%s %s\t%s\tenabled=%t\tcached=%t\tauto=%t\t%s\n", marker, profile.ID, profile.Name, profile.Enabled, profile.Cached, profile.AutoRefresh, effectiveInterval(profile.Interval, result.GlobalInterval)); err != nil {
+			if _, err := fmt.Fprintf(command.OutOrStdout(), "%s %s\t%s\tenabled=%t\tcached=%t\tauto=%t\tproxy=%s\t%s\n", marker, profile.ID, profile.Name, profile.Enabled, profile.Cached, profile.AutoRefresh, proxyModeLabel(profile.ProxyMode), effectiveInterval(profile.Interval, result.GlobalInterval)); err != nil {
 				return err
 			}
 		}
@@ -67,22 +68,28 @@ func newSubscriptionShowCommand(dependencies Dependencies, options *runOptions) 
 
 func newSubscriptionAddCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
 	var revision uint64
+	var proxyMode string
 	command := &cobra.Command{Use: "add NAME URL", Short: "Add a subscription", Args: cobra.ExactArgs(2), RunE: func(command *cobra.Command, args []string) error {
 		client, err := subscriptionClient(dependencies)
 		if err != nil {
 			return err
 		}
+		mode := resolveProxyFlag(proxyMode)
+		if !subscription.ValidProxyMode(mode) {
+			return invalidArgument(fmt.Sprintf("invalid --proxy mode %q (use direct, proxy, or auto)", proxyMode))
+		}
 		id, err := operationID(dependencies)
 		if err != nil {
 			return err
 		}
-		result, err := client.AddSubscription(command.Context(), protocol.SubscriptionAddRequest{OperationID: id, IfRevision: revisionFlag(command, revision), Name: args[0], URL: args[1]})
+		result, err := client.AddSubscription(command.Context(), protocol.SubscriptionAddRequest{OperationID: id, IfRevision: revisionFlag(command, revision), Name: args[0], URL: args[1], ProxyMode: mode})
 		if err != nil {
 			return classifyRuntimeError(err)
 		}
 		return renderSubscriptionResult(command, options, result)
 	}}
 	command.Flags().Uint64Var(&revision, "if-revision", 0, "require this state revision")
+	command.Flags().StringVar(&proxyMode, "proxy", "", "refresh fetch mode: direct (default), proxy, or auto")
 	return command
 }
 
@@ -135,7 +142,7 @@ func newSubscriptionEnabledCommand(action string, enabled bool, dependencies Dep
 }
 
 func newSubscriptionSetCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
-	var name, rawURL, interval, globalInterval string
+	var name, rawURL, interval, globalInterval, proxyMode string
 	var autoRefresh bool
 	var revision uint64
 	command := &cobra.Command{Use: "set ID", Short: "Change subscription settings", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
@@ -163,7 +170,14 @@ func newSubscriptionSetCommand(dependencies Dependencies, options *runOptions) *
 		if command.Flags().Changed("global-interval") {
 			request.GlobalInterval = &globalInterval
 		}
-		if request.Name == nil && request.URL == nil && request.Interval == nil && request.AutoRefresh == nil && request.GlobalInterval == nil {
+		if command.Flags().Changed("proxy") {
+			mode := resolveProxyFlag(proxyMode)
+			if !subscription.ValidProxyMode(mode) {
+				return invalidArgument(fmt.Sprintf("invalid --proxy mode %q (use direct, proxy, or auto)", proxyMode))
+			}
+			request.ProxyMode = &mode
+		}
+		if request.Name == nil && request.URL == nil && request.Interval == nil && request.AutoRefresh == nil && request.GlobalInterval == nil && request.ProxyMode == nil {
 			return invalidArgument("at least one setting flag is required")
 		}
 		result, err := client.UpdateSubscription(command.Context(), args[0], request)
@@ -177,6 +191,7 @@ func newSubscriptionSetCommand(dependencies Dependencies, options *runOptions) *
 	command.Flags().StringVar(&interval, "interval", "", "per-subscription interval; empty follows global")
 	command.Flags().BoolVar(&autoRefresh, "auto-refresh", true, "enable scheduled refresh")
 	command.Flags().StringVar(&globalInterval, "global-interval", "", "global refresh interval")
+	command.Flags().StringVar(&proxyMode, "proxy", "", "refresh fetch mode: direct (default), proxy, or auto")
 	command.Flags().Uint64Var(&revision, "if-revision", 0, "require this state revision")
 	return command
 }
@@ -236,8 +251,25 @@ func printSubscription(command *cobra.Command, profile protocol.Subscription) er
 	if !profile.UpdatedAt.IsZero() {
 		updated = profile.UpdatedAt.Local().Format(time.RFC3339)
 	}
-	_, err := fmt.Fprintf(command.OutOrStdout(), "ID: %s\nName: %s\nEnabled: %t\nCached: %t\nAutomatic refresh: %t\nUpdated: %s\n", profile.ID, profile.Name, profile.Enabled, profile.Cached, profile.AutoRefresh, updated)
+	_, err := fmt.Fprintf(command.OutOrStdout(), "ID: %s\nName: %s\nEnabled: %t\nCached: %t\nAutomatic refresh: %t\nProxy mode: %s\nUpdated: %s\n", profile.ID, profile.Name, profile.Enabled, profile.Cached, profile.AutoRefresh, proxyModeLabel(profile.ProxyMode), updated)
 	return err
+}
+
+// proxyModeLabel renders a stored proxy mode for humans; the zero value is direct.
+func proxyModeLabel(mode string) string {
+	if mode == "" {
+		return "direct"
+	}
+	return mode
+}
+
+// resolveProxyFlag maps the human-facing --proxy token to the stored proxy mode.
+// "direct" is accepted as the spelling of the zero value (direct).
+func resolveProxyFlag(mode string) string {
+	if mode == "direct" {
+		return ""
+	}
+	return mode
 }
 
 func effectiveInterval(profile, global string) string {

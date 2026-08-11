@@ -44,7 +44,7 @@ func subscriptionManager(t *testing.T, handler http.Handler) (*Manager, *subscri
 	service, err := subscription.Open(subscription.ServiceOptions{
 		CatalogPath: filepath.Join(root, "subscriptions", "catalog.yaml"),
 		CacheDir:    filepath.Join(root, "subscriptions", "cache"),
-		Downloader:  subscription.NewDownloader(server.Client()),
+		Downloader:  subscription.NewDownloader(subscription.DownloaderOptions{Client: server.Client()}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -242,5 +242,36 @@ func TestProxySelectionWaitsForSubscriptionReload(t *testing.T) {
 	}
 	if err := <-selectDone; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSubscriptionAddPersistsProxyMode(t *testing.T) {
+	manager, _, _, url := subscriptionManager(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte("proxies: []\nrules: [MATCH,DIRECT]\n"))
+	}))
+	profile, err := manager.AddSubscription(context.Background(), Operation{ID: "add", Source: "test"}, AddSubscriptionInput{Name: "A", URL: url, ProxyMode: subscription.ProxyModeAuto})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.ProxyMode != subscription.ProxyModeAuto {
+		t.Fatalf("ProxyMode=%q want %q", profile.ProxyMode, subscription.ProxyModeAuto)
+	}
+}
+
+func TestSubscriptionSetUpdatesProxyMode(t *testing.T) {
+	manager, _, _, url := subscriptionManager(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte("proxies: []\nrules: [MATCH,DIRECT]\n"))
+	}))
+	added, err := manager.AddSubscription(context.Background(), Operation{ID: "add", Source: "test"}, AddSubscriptionInput{Name: "A", URL: url})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode := subscription.ProxyModeProxy
+	updated, err := manager.SetSubscription(context.Background(), Operation{ID: "set", Source: "test"}, added.ID, SetSubscriptionInput{ProxyMode: &mode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ProxyMode != subscription.ProxyModeProxy {
+		t.Fatalf("ProxyMode=%q want %q", updated.ProxyMode, subscription.ProxyModeProxy)
 	}
 }

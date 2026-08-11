@@ -601,6 +601,99 @@ func TestModel_EditFormKeepsOpeningRevision(t *testing.T) {
 	}
 }
 
+func TestProxyModeLabelRendersThreeStates(t *testing.T) {
+	for mode, want := range map[string]string{"": "DIRECT", "proxy": "PROXY", "auto": "AUTO"} {
+		if got := proxyModeLabel(mode); got != want {
+			t.Errorf("proxyModeLabel(%q)=%q want %q", mode, got, want)
+		}
+	}
+}
+
+func TestNextProxyModeCyclesDirectProxyAuto(t *testing.T) {
+	steps := []struct{ in, want string }{
+		{"", "proxy"},
+		{"proxy", "auto"},
+		{"auto", ""},
+	}
+	for _, step := range steps {
+		if got := nextProxyMode(step.in); got != step.want {
+			t.Errorf("nextProxyMode(%q)=%q want %q", step.in, got, step.want)
+		}
+	}
+}
+
+func TestRowFromCarriesProxyMode(t *testing.T) {
+	now := time.Unix(100, 0)
+	theme := ui.DefaultTheme()
+	for _, mode := range []string{"", "proxy", "auto"} {
+		got := rowFrom(protocol.Subscription{ID: "a", Name: "A", ProxyMode: mode}, false, "", now, now, "12h")
+		if got.proxy != proxyModeLabel(mode) {
+			t.Fatalf("mode=%q row.proxy=%q want %q", mode, got.proxy, proxyModeLabel(mode))
+		}
+		if cell := got.cellValue(theme, "proxy"); cell != proxyModeLabel(mode) {
+			t.Fatalf("mode=%q cellValue=%q want %q", mode, cell, proxyModeLabel(mode))
+		}
+	}
+}
+
+func TestView_RendersProxyColumnAndThreeLabels(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	model := New(nil, nil, func() time.Time { return now })
+	model.SetSubscriptions(protocol.SubscriptionList{
+		ActiveID: "a", GlobalInterval: "12h",
+		Subscriptions: []protocol.Subscription{
+			{ID: "a", Name: "direct-sub", Enabled: true, Cached: true, UpdatedAt: now.Add(-time.Hour)},
+			{ID: "b", Name: "proxy-sub", Enabled: true, Cached: true, ProxyMode: "proxy", UpdatedAt: now.Add(-time.Hour)},
+			{ID: "c", Name: "auto-sub", Enabled: true, ProxyMode: "auto"},
+		},
+	})
+	view := model.View()
+	for _, want := range []string{"Proxy", "DIRECT", "PROXY", "AUTO"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestModel_CycleProxyKeyDispatchesUpdate(t *testing.T) {
+	client := &fakeClient{updateResult: protocol.SubscriptionResult{Revision: 8, Subscription: protocol.Subscription{ID: "a", Name: "A", ProxyMode: "proxy"}}}
+	model := New(client, func() string { return "proxy-1" }, nil)
+	model.SetSubscriptions(protocol.SubscriptionList{Revision: 7, Subscriptions: []protocol.Subscription{{ID: "a", Name: "A", Enabled: true, ProxyMode: ""}}})
+	model.focus = pageFocus{kind: focusRow, id: "a"}
+	_, command := model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	if command == nil {
+		t.Fatal("p key returned no command")
+	}
+	if model.pending["a"] != "proxy" {
+		t.Fatalf("pending=%v", model.pending)
+	}
+	_ = drainCmd(t, model, command)
+	if client.update.ProxyMode == nil || *client.update.ProxyMode != "proxy" {
+		t.Fatalf("cycleProxy did not forward next mode: %#v", client.update)
+	}
+	if client.update.IfRevision == nil || *client.update.IfRevision != 7 || client.update.OperationID != "proxy-1" {
+		t.Fatalf("cycleProxy request missing revision/op: %#v", client.update)
+	}
+	if model.revision != 8 || model.subscriptions[0].ProxyMode != "proxy" {
+		t.Fatalf("result not reconciled: revision=%d sub=%#v", model.revision, model.subscriptions[0])
+	}
+}
+
+func TestModel_CycleProxyWrapsAutoToDirect(t *testing.T) {
+	client := &fakeClient{updateResult: protocol.SubscriptionResult{Revision: 8, Subscription: protocol.Subscription{ID: "a", Name: "A", ProxyMode: ""}}}
+	model := New(client, func() string { return "proxy-2" }, nil)
+	model.SetSubscriptions(protocol.SubscriptionList{Revision: 7, Subscriptions: []protocol.Subscription{{ID: "a", Name: "A", Enabled: true, ProxyMode: "auto"}}})
+	model.focus = pageFocus{kind: focusRow, id: "a"}
+	_, command := model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	if command == nil {
+		t.Fatal("p key returned no command")
+	}
+	_ = drainCmd(t, model, command)
+	if client.update.ProxyMode == nil || *client.update.ProxyMode != "" {
+		t.Fatalf("auto → direct wrap failed: %#v", client.update)
+	}
+}
+
 type fakeClient struct {
 	list          protocol.SubscriptionList
 	toggle        protocol.SubscriptionEnabledRequest

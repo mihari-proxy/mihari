@@ -101,6 +101,9 @@ func (c *Catalog) Normalize() error {
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 			return dataError("subscription URL must use HTTP or HTTPS")
 		}
+		if !ValidProxyMode(profile.ProxyMode) {
+			return dataError("invalid subscription proxy mode")
+		}
 		if profile.Interval != "" {
 			if _, err := parseInterval(profile.Interval); err != nil {
 				return err
