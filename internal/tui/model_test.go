@@ -465,6 +465,78 @@ func TestRailLandingOnWebGUILoadsPage(t *testing.T) {
 	}
 }
 
+// Digit keys 1–8 jump straight to the matching rail page while in navigation
+// mode, without first focusing the rail or stepping with arrows.
+func TestRail_DigitShortcutsJumpToPage(t *testing.T) {
+	model := NewModel()
+	model.inputMode = ui.InputNavigation
+	// From Overview (index 0), pressing 3 lands on Connections (index 2).
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: '3', Text: "3"})
+	if model.active != ui.PageConnections || model.railIndex != 2 {
+		t.Fatalf("digit 3: active=%s railIndex=%d", model.active, model.railIndex)
+	}
+	// 8 lands on System (index 7).
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: '8', Text: "8"})
+	if model.active != ui.PageSystem || model.railIndex != 7 {
+		t.Fatalf("digit 8: active=%s railIndex=%d", model.active, model.railIndex)
+	}
+}
+
+// 9 is out of range for the 8-page rail and must be ignored.
+func TestRail_DigitShortcutOutOfRangeIsIgnored(t *testing.T) {
+	model := NewModel()
+	model.inputMode = ui.InputNavigation
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: '9', Text: "9"})
+	if model.active != ui.PageOverview || model.railIndex != 0 {
+		t.Fatalf("digit 9 moved rail: active=%s railIndex=%d", model.active, model.railIndex)
+	}
+}
+
+// Digit shortcuts fire from content focus too (browsing a page and jumping to
+// another); the focus area is preserved.
+func TestRail_DigitShortcutWorksFromContentFocus(t *testing.T) {
+	model := NewModel()
+	model.inputMode = ui.InputNavigation
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if model.focus.Area != ui.FocusContent {
+		t.Fatalf("enter focus=%v", model.focus.Area)
+	}
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: '4', Text: "4"})
+	if model.active != ui.PageRules || model.railIndex != 3 {
+		t.Fatalf("digit 4 from content: active=%s railIndex=%d", model.active, model.railIndex)
+	}
+	if model.focus.Area != ui.FocusContent {
+		t.Fatalf("focus area changed: %v", model.focus.Area)
+	}
+}
+
+// In text-input mode (form / search focused) digits must type, never switch pages.
+func TestRail_DigitShortcutDisabledInTextInputMode(t *testing.T) {
+	model := NewModel()
+	model.inputMode = ui.InputText
+	model.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageOverview}
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: '3', Text: "3"})
+	if model.active != ui.PageOverview || model.railIndex != 0 {
+		t.Fatalf("digit 3 in text mode switched page: active=%s railIndex=%d", model.active, model.railIndex)
+	}
+}
+
+// Digit-jumping to Web GUI must Load() the page on land, matching arrow-key rail
+// movement (landRailPage is the shared tail).
+func TestRail_DigitShortcutLoadsWebGUIOnLand(t *testing.T) {
+	page := &loadCountingPage{id: ui.PageWebGUI}
+	model := NewModel()
+	model.pages[ui.PageWebGUI] = page
+	model.inputMode = ui.InputNavigation
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: '7', Text: "7"})
+	if model.active != ui.PageWebGUI {
+		t.Fatalf("active=%s", model.active)
+	}
+	if page.loads != 1 {
+		t.Fatalf("digit jump did not Load Web GUI: loads=%d", page.loads)
+	}
+}
+
 // Page-owned async results (Load completions, etc.) must reach the active page even when
 // the shell focus is still on the rail. Focus gates keyboard routing only — not IO results.
 // Regression: rail-preview Load() left System Network on Loading… forever.

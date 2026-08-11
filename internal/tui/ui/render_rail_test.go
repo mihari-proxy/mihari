@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -17,8 +18,9 @@ func TestRenderRail_UsesUnderlineWhenContentOwnsFocus(t *testing.T) {
 		t.Fatalf("rail should not repeat brand name: %q", railFocused)
 	}
 
-	// Both should mark the selected page.
-	if !strings.Contains(stripANSI(railFocused), "› Subs") || !strings.Contains(stripANSI(contentFocused), "› Subs") {
+	// Both should mark the selected page. The 1-based rail shortcut digit now
+	// prefixes the label, so Subscriptions at index 1 reads "› 2 Subs".
+	if !strings.Contains(stripANSI(railFocused), "› 2 Subs") || !strings.Contains(stripANSI(contentFocused), "› 2 Subs") {
 		t.Fatalf("selected page missing\nrail=%q\ncontent=%q", railFocused, contentFocused)
 	}
 	// Strong accent styling only while the rail itself is focused.
@@ -32,6 +34,16 @@ func TestRenderRail_UsesUnderlineWhenContentOwnsFocus(t *testing.T) {
 	}
 	if !strings.Contains(contentFocused, "\x1b[") {
 		t.Fatalf("content-focused current page missing style: %q", contentFocused)
+	}
+}
+
+func TestRenderRailShowsDigitShortcuts(t *testing.T) {
+	rendered := stripANSI(RenderRail(DefaultTheme(), RailPages(), 0, false, 24, 10))
+	for index, page := range RailPages() {
+		want := strconv.Itoa(index+1) + " " + PageLabel(page)
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rail missing shortcut label %q: %s", want, rendered)
+		}
 	}
 }
 

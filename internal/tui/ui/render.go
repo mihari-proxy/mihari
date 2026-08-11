@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -10,9 +11,9 @@ func RenderRail(theme Theme, pages []PageID, selected int, focused bool, width, 
 	// Brand lives only on the status bar; do not repeat AppName here.
 	lines := make([]string, 0, len(pages))
 	for index, page := range pages {
-		label := "  " + PageLabel(page)
+		label := "  " + railTabLabel(index, page)
 		if index == selected {
-			label = FocusMarker + PageLabel(page)
+			label = FocusMarker + railTabLabel(index, page)
 			if focused {
 				// Keyboard focus is on the rail: strong selection highlight.
 				lines = append(lines, theme.RailSelected.Render(label))
@@ -25,6 +26,12 @@ func RenderRail(theme Theme, pages []PageID, selected int, focused bool, width, 
 		lines = append(lines, theme.Rail.Render(label))
 	}
 	return theme.Rail.Width(width).Height(height).Render(strings.Join(lines, "\n"))
+}
+
+// railTabLabel prefixes a rail entry with its 1-based shortcut digit so the rail
+// doubles as the key map for the 1–8 jump shortcuts (see tui.railDigit).
+func railTabLabel(index int, page PageID) string {
+	return strconv.Itoa(index+1) + " " + PageLabel(page)
 }
 
 // ContentFocusable pages can suppress in-page selection chrome while the rail owns focus.
