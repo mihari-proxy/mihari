@@ -403,6 +403,25 @@ func TestProviders_PinsFocusByNameAcrossReload(t *testing.T) {
 	}
 }
 
+func TestView_RuleTypeNotTruncated(t *testing.T) {
+	// Regression for #29: the Type column must render the longest common
+	// mihomo rule types (DomainSuffix, DomainKeyword) in full. Type arrives from
+	// upstream mihomo as an unconstrained string, so the column grows via Flex
+	// rather than betting on a fixed enumeration width.
+	model := New(nil, nil)
+	model.SetSize(160, 30)
+	model.SetRules(protocol.RuleList{Rules: []protocol.Rule{
+		{Type: "DomainSuffix", Payload: "steamcontent.com", Proxy: "DIRECT"},
+		{Type: "DomainKeyword", Payload: "steam", Proxy: "DIRECT"},
+	}})
+	view := model.View()
+	for _, want := range []string{"DomainSuffix", "DomainKeyword"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing full type %q (truncated?):\n%s", want, view)
+		}
+	}
+}
+
 type fakeClient struct {
 	rules     protocol.RuleList
 	providers protocol.RuleProviderList
