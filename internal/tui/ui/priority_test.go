@@ -152,6 +152,46 @@ func TestFitPriorityColumns_EdgeCases(t *testing.T) {
 	})
 }
 
+func widthFor(cols []TableColumn, widths []int, id string) int {
+	for i, col := range cols {
+		if col.ID == id {
+			return widths[i]
+		}
+	}
+	return -1
+}
+
+func TestFitPriorityColumns_TypeColumnGrowsToFit(t *testing.T) {
+	// Modeled on the rules page (issue #29): the Type column is a flex column
+	// so the longest common mihomo rule types render in full rather than being
+	// truncated at a fixed MinWidth.
+	cols := []TableColumn{
+		{ID: "num", MinWidth: 4, MaxWidth: 4, Flex: 0, Align: AlignRight, Priority: 4},
+		{ID: "type", MinWidth: 12, MaxWidth: 18, Flex: 1, Priority: 3},
+		{ID: "payload", MinWidth: 12, Flex: 3, Priority: 1},
+		{ID: "target", MinWidth: 8, MaxWidth: 16, Flex: 1, Priority: 2},
+	}
+	// Wide terminal: all four columns kept; type grows toward MaxWidth 18 and
+	// clears DomainKeyword (13), the longest common type.
+	kept, widths := FitPriorityColumns(cols, 100, 2)
+	if ids(kept) != "num,type,payload,target" {
+		t.Fatalf("kept=%q", ids(kept))
+	}
+	tw := widthFor(kept, widths, "type")
+	if tw < 13 {
+		t.Fatalf("wide type width %d < 13 (DomainKeyword)", tw)
+	}
+	if tw > 18 {
+		t.Fatalf("wide type width %d > MaxWidth 18", tw)
+	}
+	// Just above the all-fit threshold (36 MinWidth + 6 gaps = 42): type still
+	// meets its MinWidth 12, which covers the common DomainSuffix.
+	kept, widths = FitPriorityColumns(cols, 44, 2)
+	if tw := widthFor(kept, widths, "type"); tw < 12 {
+		t.Fatalf("narrow type width %d < MinWidth 12", tw)
+	}
+}
+
 func TestPriorityBar_ByBudget(t *testing.T) {
 	segments := []PrioritySegment{
 		{Priority: 6, Render: func() string { return "Mihari" }},
