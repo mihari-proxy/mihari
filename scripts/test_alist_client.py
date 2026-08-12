@@ -107,9 +107,9 @@ def test_build_index_emits_public_urls_no_sign():
 
 
 def test_install_scripts_hardcode_public_index_url():
-    repo_root = Path(__file__).resolve().parent.parent
+    install_dir = Path(__file__).resolve().parent / "install"
     for name in ("install-aio-remote.sh", "install-aio-remote.ps1"):
-        text = (repo_root / name).read_text(encoding="utf-8")
+        text = (install_dir / name).read_text(encoding="utf-8")
         assert "__MIHARI_INDEX_URL__" not in text, f"{name} still has the CI placeholder"
         assert "https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/index.txt" in text, (
             f"{name} lacks the fixed public index URL"

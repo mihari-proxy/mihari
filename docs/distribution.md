@@ -15,10 +15,10 @@ mihari 面向两类用户分发：
 
 ```bash
 # Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/main/scripts/install/install.sh | bash
 
 # Windows (PowerShell)
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.ps1)))
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/scripts/install/install.ps1)))
 ```
 
 脚本1 仅安装 mihari 二进制，核心（mihomo）与 GeoIP 在首次运行时联网下载。
