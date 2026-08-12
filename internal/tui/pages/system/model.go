@@ -217,6 +217,22 @@ type startRowSpinMsg struct{ gen uint64 }
 
 const rowSpinInterval = 100 * time.Millisecond
 
+// Outcome fade: a successful System proxy / TUN toggle shows a Done badge that
+// self-clears after outcomeFadeInterval (the status row keeps showing the live
+// result). Failures stay sticky. The gen + row guard on outcomeFadeMsg means a
+// newer action, a later failure, or leaving the page invalidates a pending fade.
+type startOutcomeFadeMsg struct {
+	gen uint64
+	row string
+}
+
+type outcomeFadeMsg struct {
+	gen uint64
+	row string
+}
+
+const outcomeFadeInterval = 3 * time.Second
+
 type proxyActionKind uint8
 
 const (
@@ -290,6 +306,7 @@ type Model struct {
 	rowSpinClock     time.Time
 	rowSpinning      bool
 	rowSpinGen       uint64
+	outcomeFadeGen   uint64
 	mutationsEnabled bool
 	lastError        string
 	contentFocused   bool
@@ -642,6 +659,20 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, tea.Tick(rowSpinInterval, func(t time.Time) tea.Msg {
 			return ui.PageResultMsg{Page: ui.PageSystem, Result: rowSpinTickMsg{t: t, gen: typed.gen}}
 		})
+	case startOutcomeFadeMsg:
+		return m, tea.Tick(outcomeFadeInterval, func(time.Time) tea.Msg {
+			return ui.PageResultMsg{Page: ui.PageSystem, Result: outcomeFadeMsg{gen: typed.gen, row: typed.row}}
+		})
+	case outcomeFadeMsg:
+		// Only clear a still-current successful outcome; a newer action, a later
+		// failure, or leaving the page must keep its badge.
+		if typed.gen != m.outcomeFadeGen || m.outcomeRow != typed.row || !m.outcomeOK {
+			return m, nil
+		}
+		m.outcomeRow = ""
+		m.outcomeOK = false
+		m.outcomeDetail = ""
+		return m, nil
 	case actionStartMsg:
 		if m.pending {
 			return m, nil
@@ -820,7 +851,7 @@ func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) 
 	m.systemProxyLoaded = true
 	return m, tea.Batch(m.loadSystemProxy(), func() tea.Msg {
 		return ui.RuntimeRevisionMsg{Revision: typed.status.Revision}
-	}, m.rowSpinCmdIfNeeded())
+	}, m.rowSpinCmdIfNeeded(), m.scheduleOutcomeFade(rowID))
 }
 
 func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cmd) {
@@ -840,7 +871,7 @@ func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cm
 	m.tunLoaded = true
 	return m, tea.Batch(m.loadTun(), func() tea.Msg {
 		return ui.RuntimeRevisionMsg{Revision: typed.status.Revision}
-	}, m.rowSpinCmdIfNeeded())
+	}, m.rowSpinCmdIfNeeded(), m.scheduleOutcomeFade(rowID))
 }
 
 func (m *Model) View() string {
@@ -1378,6 +1409,17 @@ func (m *Model) rowSpinCmdIfNeeded() tea.Cmd {
 	m.rowSpinning = true
 	return func() tea.Msg {
 		return ui.PageResultMsg{Page: ui.PageSystem, Result: startRowSpinMsg{gen: gen}}
+	}
+}
+
+// scheduleOutcomeFade arms a one-shot timer that clears a successful outcome
+// badge after outcomeFadeInterval, so the live status row (not a stale Done)
+// carries the result. Called only on the success path; failures stay sticky.
+func (m *Model) scheduleOutcomeFade(row string) tea.Cmd {
+	m.outcomeFadeGen++
+	gen := m.outcomeFadeGen
+	return func() tea.Msg {
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: startOutcomeFadeMsg{gen: gen, row: row}}
 	}
 }
 

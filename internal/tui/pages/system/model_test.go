@@ -1098,7 +1098,7 @@ func TestSystemPendingDoesNotPolluteSiblingRows(t *testing.T) {
 	}
 }
 
-func TestSystemProxyAndTunStickyOutcomes(t *testing.T) {
+func TestSystemProxyFailedStickyAndTunDoneFades(t *testing.T) {
 	client := &fakeClient{
 		systemProxy: protocol.SystemProxyStatus{Revision: 2, Desired: true, Target: "127.0.0.1:9190"},
 		tun:         protocol.TunStatus{Revision: 2, DesiredEnable: true, LiveEnable: boolPtr(true), Managed: true},
@@ -1111,6 +1111,8 @@ func TestSystemProxyAndTunStickyOutcomes(t *testing.T) {
 	model.SetSystemProxy(client.systemProxy)
 	model.SetTun(client.tun)
 
+	// System proxy disable fails: the Failed badge is sticky — the fade guard
+	// (!outcomeOK) must keep it even if a stray fade tick fires.
 	updated, _ := model.Update(ui.ActionPendingMsg{Action: ui.ActionDisableSystemProxy})
 	model = updated.(*Model)
 	updated, _ = model.Update(systemProxyActionResultMsg{
@@ -1124,7 +1126,17 @@ func TestSystemProxyAndTunStickyOutcomes(t *testing.T) {
 	if !strings.Contains(model.View(), ui.FailedLabel) {
 		t.Fatalf("proxy failed view:\n%s", model.View())
 	}
+	updated, _ = model.Update(outcomeFadeMsg{gen: model.outcomeFadeGen, row: rowSystemProxyAction})
+	model = updated.(*Model)
+	if model.outcomeRow != rowSystemProxyAction || model.outcomeOK {
+		t.Fatalf("failed outcome must stay sticky row=%q ok=%v", model.outcomeRow, model.outcomeOK)
+	}
+	if !strings.Contains(model.View(), ui.FailedLabel) {
+		t.Fatalf("proxy failed view after fade:\n%s", model.View())
+	}
 
+	// TUN enable succeeds: Done badge shows, then the armed fade clears it while
+	// the status row keeps carrying the live result.
 	updated, _ = model.Update(ui.ActionPendingMsg{Action: ui.ActionEnableTun})
 	model = updated.(*Model)
 	if model.outcomeRow != "" {
@@ -1140,6 +1152,15 @@ func TestSystemProxyAndTunStickyOutcomes(t *testing.T) {
 	}
 	if !strings.Contains(model.View(), ui.DoneLabel) {
 		t.Fatalf("tun done view:\n%s", model.View())
+	}
+	// The success path armed a fade; firing it clears the Done badge.
+	updated, _ = model.Update(outcomeFadeMsg{gen: model.outcomeFadeGen, row: rowTUNAction})
+	model = updated.(*Model)
+	if model.outcomeRow != "" || model.outcomeOK {
+		t.Fatalf("done outcome should fade row=%q ok=%v", model.outcomeRow, model.outcomeOK)
+	}
+	if strings.Contains(model.View(), ui.DoneLabel) {
+		t.Fatalf("tun done view should not show Done after fade:\n%s", model.View())
 	}
 }
 
