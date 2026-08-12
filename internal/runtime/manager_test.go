@@ -453,6 +453,41 @@ func TestMissingCoreStaysControllableAndStartsAfterInstall(t *testing.T) {
 	}
 }
 
+func TestManagerLocalCoreReflectsDetectVersion(t *testing.T) {
+	installer := &fakeInstaller{detectVersion: func(context.Context, string) (string, error) {
+		return "v1.18.5", nil
+	}}
+	manager := newTestManager(Options{Installer: installer})
+	info, err := manager.LocalCore(context.Background())
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if !info.Ready || info.Version != "v1.18.5" {
+		t.Fatalf("info=%#v", info)
+	}
+	if got := installer.detectCalls.Load(); got != 1 {
+		t.Fatalf("detect calls=%d", got)
+	}
+
+	missing := &fakeInstaller{detectVersion: func(context.Context, string) (string, error) {
+		return "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "missing"}
+	}}
+	manager = newTestManager(Options{Installer: missing})
+	info, err = manager.LocalCore(context.Background())
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if info.Ready || info.Version != "" {
+		t.Fatalf("missing core should not be ready: %#v", info)
+	}
+
+	// No installer wired (e.g. minimal runtime) must report not-ready, never error.
+	none := newTestManager(Options{})
+	if info, err := none.LocalCore(context.Background()); err != nil || info.Ready {
+		t.Fatalf("nil installer err=%v info=%#v", err, info)
+	}
+}
+
 func newTestManager(options Options) *Manager {
 	store := state.NewStore(state.Snapshot{Health: "ok"})
 	options.Store = store

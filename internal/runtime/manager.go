@@ -428,6 +428,21 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 	return result.(core.InstallResult), nil
 }
 
+// LocalCore reports whether the configured core binary already satisfies setup
+// locally (mihomo -v succeeds), so onboarding can hint "use existing" without a
+// network install. Read-only: no lock, no store mutation. Mirrors the Install
+// setup fast-path predicate (design §4.3), DRY — same DetectVersion judgment.
+func (m *Manager) LocalCore(ctx context.Context) (core.LocalCoreInfo, error) {
+	if m.installer == nil {
+		return core.LocalCoreInfo{}, nil
+	}
+	version, err := m.installer.DetectVersion(ctx, m.installRequest.BinaryPath)
+	if err != nil || version == "" {
+		return core.LocalCoreInfo{}, nil
+	}
+	return core.LocalCoreInfo{Ready: true, Version: version}, nil
+}
+
 func (m *Manager) Restart(ctx context.Context, operation Operation) error {
 	_, err := m.doOperation(ctx, "restart:"+operation.ID, func() (any, error) {
 		if m.supervisor == nil {

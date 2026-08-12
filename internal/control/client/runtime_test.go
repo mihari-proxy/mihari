@@ -209,3 +209,20 @@ func valuesEqual(a, b any) bool {
 	second, _ := json.Marshal(b)
 	return string(first) == string(second)
 }
+
+func TestClientCoreDecodesLocalReadiness(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/core" || request.Header.Get("Authorization") != "Bearer token" {
+			t.Errorf("request=%s auth=%q", request.URL.Path, request.Header.Get("Authorization"))
+		}
+		_, _ = io.WriteString(response, `{"schema":"mihari/v1","revision":1,"status":"running","localReady":true,"localVersion":"v1.18.5"}`)
+	}))
+	defer server.Close()
+	status, err := NewHTTP(server.URL, "token", server.Client()).Core(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.LocalReady || status.LocalVersion != "v1.18.5" {
+		t.Fatalf("status=%#v", status)
+	}
+}

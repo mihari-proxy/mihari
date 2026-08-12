@@ -14,6 +14,11 @@ type CoreStatus struct {
 	Restarts    uint64    `json:"restarts"`
 	LastError   string    `json:"last_error,omitempty"`
 	NextRetryAt time.Time `json:"next_retry_at,omitzero"`
+	// LocalReady reports whether an existing local core binary already satisfies
+	// setup without a network download (onboarding hint). Optional: omitted unless
+	// the runtime exposes local-core detection (design §4.3).
+	LocalReady   bool   `json:"localReady,omitempty"`
+	LocalVersion string `json:"localVersion,omitempty"`
 }
 
 type ProxyGroup struct {

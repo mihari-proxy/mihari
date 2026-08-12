@@ -353,6 +353,7 @@ type fakeRuntime struct {
 	tunStatus             protocol.TunStatus
 	enableTunErr          error
 	disableTunErr         error
+	localCore             core.LocalCoreInfo
 }
 
 func (f *fakeRuntime) Capabilities() []string { return append([]string(nil), f.capabilities...) }
@@ -469,6 +470,28 @@ func (f *fakeRuntime) DisableTun(_ context.Context, operation runtimeapi.Operati
 		return protocol.TunStatus{}, f.disableTunErr
 	}
 	return f.tunStatus, nil
+}
+
+func (f *fakeRuntime) LocalCore(context.Context) (core.LocalCoreInfo, error) {
+	return f.localCore, nil
+}
+
+func TestCoreEndpointReportsLocalReadiness(t *testing.T) {
+	store := state.NewStore(state.Snapshot{Revision: 3, Core: state.CoreState{Status: "stopped"}})
+	runtime := &fakeRuntime{snapshot: store.Load(), localCore: core.LocalCoreInfo{Ready: true, Version: "v1.18.5"}}
+	server := New(Options{Token: "token", Store: store, Runtime: runtime})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodGet, "/v1/core", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var status protocol.CoreStatus
+	if err := json.Unmarshal(recorder.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.LocalReady || status.LocalVersion != "v1.18.5" {
+		t.Fatalf("status=%#v", status)
+	}
 }
 
 func TestInstallCoreThreadsRequestSource(t *testing.T) {
