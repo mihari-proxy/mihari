@@ -20,13 +20,13 @@ cd mihari
 ### 构建
 
 ```sh
-CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o mihari ./cmd/mihari
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/mihari ./cmd/mihari
 ```
 
 发布构建会额外注入版本号：
 
 ```sh
-CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X github.com/mihari-proxy/mihari/internal/buildinfo.Version=<tag>" -o mihari ./cmd/mihari
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X github.com/mihari-proxy/mihari/internal/buildinfo.Version=<tag>" -o bin/mihari ./cmd/mihari
 ```
 
 ### 运行测试
@@ -182,7 +182,7 @@ git config user.email "you@example.com"
    ```sh
    git push origin feat/your-feature
    ```
-   然后在 GitHub 上创建 Pull Request，按 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md) 填写。
+   然后在 GitHub 上创建 Pull Request，按 [PR 模板](PULL_REQUEST_TEMPLATE.md) 填写。
 
 5. **等待审核**
    - CI 检查必须通过（test / race / vet / cross-build / DCO）
@@ -218,14 +218,13 @@ git config user.email "you@example.com"
 │   ├── tui/              # 终端交互界面（bubbletea）
 │   ├── update/           # mihari 自更新（GitHub Releases）
 │   └── web/              # Web gateway 与面板静态托管
-├── install.sh            # Linux/macOS 一键安装脚本
-├── install.ps1           # Windows 一键安装脚本
+├── scripts/install/      # 一键安装脚本（install / install-aio / install-aio-remote，.sh + .ps1）
 └── go.mod                # 依赖声明
 ```
 
 ## 发布流程（仅维护者）
 
-参见 [docs/RELEASE.md](docs/RELEASE.md)。
+参见 [docs/RELEASE.md](../docs/RELEASE.md)。
 
 ## 问题反馈
 
@@ -235,4 +234,4 @@ git config user.email "you@example.com"
 
 ## 许可证
 
-本项目采用 [GPL-3.0](LICENSE)。通过提交 PR 贡献代码即表示你同意以相同许可证发布你的贡献（inbound = outbound）。
+本项目采用 [GPL-3.0](../LICENSE)。通过提交 PR 贡献代码即表示你同意以相同许可证发布你的贡献（inbound = outbound）。

@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # mihari one-line installer for Linux and macOS.
-#   curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/main/scripts/install/install.sh | bash
 #
 # Environment overrides:
 #   MIHARI_REPO        owner/repo (default mihari-proxy/mihari)

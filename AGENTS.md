@@ -3,7 +3,7 @@
 ## 1. 适用范围与指令优先级
 
 - 本文件适用于整个仓库。子目录若新增 `AGENTS.md`，以离目标文件最近的规则为补充或覆盖。
-- 开始任何开发之前先阅读 `CONTRIBUTING.md`；修改代码前再阅读 `README.md`、相关包代码与测试；涉及架构边界时同时阅读 `docs/superpowers/specs/2026-08-03-mihari-architecture-design.md`。
+- 开始任何开发之前先阅读 `.github/CONTRIBUTING.md`；修改代码前再阅读 `README.md`、相关包代码与测试；涉及架构边界时同时阅读 `docs/superpowers/specs/2026-08-03-mihari-architecture-design.md`。
 - 禁止在 `main` 分支上直接修改或提交。任何变更都必须在独立分支中完成，验证通过并经用户确认后再合并回 `main`。
 - 保留用户已有的未提交修改，不覆盖、不清理、不顺手重构无关代码。
 - 只做当前任务要求的变更。发现邻近问题时记录并说明，除非它直接阻塞当前任务，否则不要扩大范围。
@@ -151,9 +151,9 @@ go tool cover -func=coverage.out
 
 ```console
 $env:CGO_ENABLED = '0'
-$env:GOOS = 'windows'; $env:GOARCH = 'amd64'; go build ./cmd/mihari
-$env:GOOS = 'linux';   $env:GOARCH = 'amd64'; go build ./cmd/mihari
-$env:GOOS = 'darwin';  $env:GOARCH = 'arm64'; go build ./cmd/mihari
+$env:GOOS = 'windows'; $env:GOARCH = 'amd64'; go build -o bin/mihari-windows-amd64.exe ./cmd/mihari
+$env:GOOS = 'linux';   $env:GOARCH = 'amd64'; go build -o bin/mihari-linux-amd64 ./cmd/mihari
+$env:GOOS = 'darwin';  $env:GOARCH = 'arm64'; go build -o bin/mihari-darwin-arm64 ./cmd/mihari
 ```
 
 不要声称“已通过”未实际运行的命令。若因平台、权限或外部环境无法执行，明确列出未验证项及原因。

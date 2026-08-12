@@ -41,12 +41,12 @@ Mihari 是一款全新的、独立的 [mihomo](https://github.com/MetaCubeX/miho
 
 ```sh
 # Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/main/scripts/install/install.sh | bash
 ```
 
 ```powershell
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/scripts/install/install.ps1 | iex
 ```
 
 或从 [Releases 页面](https://github.com/mihari-proxy/mihari/releases) 下载对应平台的二进制。
@@ -128,10 +128,10 @@ go vet ./...
 构建本地二进制:
 
 ```console
-CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o mihari ./cmd/mihari
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/mihari ./cmd/mihari
 ```
 
-架构不变量、包边界与贡献指南见 [AGENTS.md](AGENTS.md) 与 [CONTRIBUTING.md](CONTRIBUTING.md),发布流程见 [docs/RELEASE.md](docs/RELEASE.md)。
+架构不变量、包边界与贡献指南见 [AGENTS.md](AGENTS.md) 与 [CONTRIBUTING.md](.github/CONTRIBUTING.md),发布流程见 [docs/RELEASE.md](docs/RELEASE.md)。
 
 ## 许可
 

@@ -37,7 +37,7 @@ const maxMihomoBinary int64 = 256 << 20
 type options struct {
 	MihariDir   string // dist/ — CI cross-build artifacts (mihari-<os>-<arch>[.exe])
 	Out         string // bundles/
-	ScriptsDir  string // directory holding install-aio.sh / install-aio.ps1 (repo root in CI)
+	ScriptsDir  string // directory holding install-aio.sh / install-aio.ps1 (scripts/install in CI)
 	Platforms   []string
 	GitHubToken string // optional; adds Authorization: Bearer when set
 
@@ -54,7 +54,7 @@ func main() {
 	mihariDir := flag.String("mihari-dir", "dist", "directory with mihari-<os>-<arch>[.exe] build artifacts")
 	out := flag.String("out", "bundles", "output directory for all-in-one bundles")
 	platforms := flag.String("platforms", strings.Join(defaultPlatforms, ","), "comma-separated goos/goarch targets")
-	scriptsDir := flag.String("scripts-dir", ".", "directory holding install-aio.sh / install-aio.ps1")
+	scriptsDir := flag.String("scripts-dir", "scripts/install", "directory holding install-aio.sh / install-aio.ps1")
 	token := flag.String("github-token", os.Getenv("GITHUB_TOKEN"), "GitHub API token (default $GITHUB_TOKEN)")
 	flag.Parse()
 
@@ -78,7 +78,7 @@ func run(o options) error {
 		o.Platforms = defaultPlatforms
 	}
 	if o.ScriptsDir == "" {
-		o.ScriptsDir = "."
+		o.ScriptsDir = "scripts/install"
 	}
 	if err := os.MkdirAll(o.Out, 0o755); err != nil {
 		return fmt.Errorf("create bundles directory: %w", err)

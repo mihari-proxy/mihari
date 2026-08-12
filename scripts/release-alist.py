@@ -80,7 +80,7 @@ def upload_root_scripts(alist, repo_root, base_path):
     They hardcode the public INDEX_URL, so no injection is needed; they're
     overwritten each release purely to keep the AList copy self-healing."""
     for filename in ("install-aio-remote.sh", "install-aio-remote.ps1"):
-        source = Path(repo_root) / filename
+        source = Path(repo_root) / "scripts" / "install" / filename
         if not source.exists():
             fail(f"downloader script missing: {source}")
         alist.upload_text(source.read_text(encoding="utf-8"), f"{base_path}/{filename}")
