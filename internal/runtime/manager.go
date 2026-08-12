@@ -97,6 +97,10 @@ type Options struct {
 	// SettingsPath is where config.Save writes settings after system-proxy (and related) mutations.
 	// Empty skips persistence (in-memory settings only).
 	SettingsPath string
+	// ServiceStatus reports the OS service registration state for onboarding review.
+	// Optional; nil reports "unknown". Injected as a func (not *service.Manager) to keep
+	// runtime free of the service package and break the main↔daemon assembly cycle.
+	ServiceStatus func() (string, error)
 }
 
 // WebGateway is the loopback HTTP server for panel hosting and API proxying.
@@ -129,6 +133,7 @@ type Manager struct {
 	webOpenToken   string
 	sysProxy       sysproxy.Backend
 	settingsPath   string
+	serviceStatus  func() (string, error)
 	settingsMu     sync.Mutex
 	maintenance    chan struct{}
 	installed      chan struct{}
@@ -184,6 +189,7 @@ func New(options Options) *Manager {
 		webOpenToken:   options.WebOpenToken,
 		sysProxy:       sysProxy,
 		settingsPath:   options.SettingsPath,
+		serviceStatus:  options.ServiceStatus,
 		maintenance:    make(chan struct{}, 1),
 		installed:      make(chan struct{}, 1),
 		operations:     make(map[string]*operationEntry),
@@ -441,6 +447,20 @@ func (m *Manager) LocalCore(ctx context.Context) (core.LocalCoreInfo, error) {
 		return core.LocalCoreInfo{}, nil
 	}
 	return core.LocalCoreInfo{Ready: true, Version: version}, nil
+}
+
+// ServiceStatus reports the OS service registration state for onboarding review.
+// Advisory: a nil injector or any error resolves to "unknown" and never fails, so the
+// endpoint stays 200 and onboarding is never blocked (design §5.3, §8).
+func (m *Manager) ServiceStatus(context.Context) (protocol.ServiceStatus, error) {
+	if m.serviceStatus == nil {
+		return protocol.ServiceStatus{Schema: "mihari/v1", Status: "unknown"}, nil
+	}
+	status, err := m.serviceStatus()
+	if err != nil || status == "" {
+		return protocol.ServiceStatus{Schema: "mihari/v1", Status: "unknown"}, nil
+	}
+	return protocol.ServiceStatus{Schema: "mihari/v1", Status: status}, nil
 }
 
 func (m *Manager) Restart(ctx context.Context, operation Operation) error {

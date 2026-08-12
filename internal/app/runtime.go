@@ -38,6 +38,7 @@ type RuntimeAssembly struct {
 type RuntimeBuildOptions struct {
 	InitialSetupRequired bool
 	SettingsPath         string
+	ServiceStatus        func() (string, error)
 }
 
 func BuildRuntime(paths platform.Paths, settings config.Settings, daemonVersion string, stdout, stderr io.Writer) (*RuntimeAssembly, error) {
@@ -193,6 +194,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		WebOpenToken:  webCredential,
 		Settings:      settings,
 		SettingsPath:  settingsPath,
+		ServiceStatus: options.ServiceStatus,
 		SysProxy:      sysproxy.Platform(),
 		RuntimeConfig: paths.RuntimeConfig,
 		StagingDir:    paths.SubscriptionStaging,

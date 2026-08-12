@@ -354,6 +354,8 @@ type fakeRuntime struct {
 	enableTunErr          error
 	disableTunErr         error
 	localCore             core.LocalCoreInfo
+	serviceStatusResult   protocol.ServiceStatus
+	serviceStatusErr      error
 }
 
 func (f *fakeRuntime) Capabilities() []string { return append([]string(nil), f.capabilities...) }
@@ -476,6 +478,10 @@ func (f *fakeRuntime) LocalCore(context.Context) (core.LocalCoreInfo, error) {
 	return f.localCore, nil
 }
 
+func (f *fakeRuntime) ServiceStatus(context.Context) (protocol.ServiceStatus, error) {
+	return f.serviceStatusResult, f.serviceStatusErr
+}
+
 func TestCoreEndpointReportsLocalReadiness(t *testing.T) {
 	store := state.NewStore(state.Snapshot{Revision: 3, Core: state.CoreState{Status: "stopped"}})
 	runtime := &fakeRuntime{snapshot: store.Load(), localCore: core.LocalCoreInfo{Ready: true, Version: "v1.18.5"}}
@@ -491,6 +497,19 @@ func TestCoreEndpointReportsLocalReadiness(t *testing.T) {
 	}
 	if !status.LocalReady || status.LocalVersion != "v1.18.5" {
 		t.Fatalf("status=%#v", status)
+	}
+}
+
+func TestServiceStatusEndpoint(t *testing.T) {
+	server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: &fakeRuntime{serviceStatusResult: protocol.ServiceStatus{Schema: "mihari/v1", Status: "running"}}})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodGet, "/v1/service/status", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var report protocol.ServiceStatus
+	if err := json.Unmarshal(recorder.Body.Bytes(), &report); err != nil || report.Status != "running" {
+		t.Fatalf("report=%#v err=%v", report, err)
 	}
 }
 

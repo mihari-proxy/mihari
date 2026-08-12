@@ -226,3 +226,20 @@ func TestClientCoreDecodesLocalReadiness(t *testing.T) {
 		t.Fatalf("status=%#v", status)
 	}
 }
+
+func TestClientServiceStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/service/status" || request.Header.Get("Authorization") != "Bearer token" {
+			t.Errorf("request=%s auth=%q", request.URL.Path, request.Header.Get("Authorization"))
+		}
+		_, _ = io.WriteString(response, `{"schema":"mihari/v1","status":"not_installed"}`)
+	}))
+	defer server.Close()
+	status, err := NewHTTP(server.URL, "token", server.Client()).ServiceStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != "not_installed" {
+		t.Fatalf("status=%#v", status)
+	}
+}

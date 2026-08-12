@@ -500,6 +500,31 @@ func newTestManager(options Options) *Manager {
 	return manager
 }
 
+func TestManagerServiceStatusDelegatesToInjectedFunc(t *testing.T) {
+	running := newTestManager(Options{ServiceStatus: func() (string, error) {
+		return "running", nil
+	}})
+	status, err := running.ServiceStatus(context.Background())
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if status.Schema != "mihari/v1" || status.Status != "running" {
+		t.Fatalf("status=%#v", status)
+	}
+
+	failing := newTestManager(Options{ServiceStatus: func() (string, error) {
+		return "", protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "scm offline"}
+	}})
+	if status, err := failing.ServiceStatus(context.Background()); err != nil || status.Status != "unknown" {
+		t.Fatalf("error should resolve to unknown: status=%#v err=%v", status, err)
+	}
+
+	none := newTestManager(Options{})
+	if status, err := none.ServiceStatus(context.Background()); err != nil || status.Status != "unknown" {
+		t.Fatalf("nil injector err=%v status=%#v", err, status)
+	}
+}
+
 type fakeInstaller struct {
 	calls         atomic.Int64
 	detectCalls   atomic.Int64

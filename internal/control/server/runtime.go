@@ -77,6 +77,7 @@ func (s *Server) runtimeRoutes(mux *http.ServeMux) {
 	s.tunRoutes(mux)
 	s.onboardingRoutes(mux)
 	s.webGUIRoutes(mux)
+	s.serviceRoutes(mux)
 }
 
 func (s *Server) coreStatus(writer http.ResponseWriter, request *http.Request) {
