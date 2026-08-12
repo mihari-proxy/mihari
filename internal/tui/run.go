@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 
 	tea "charm.land/bubbletea/v2"
@@ -13,10 +15,15 @@ import (
 
 // Options contains the control client and terminal streams used by the TUI.
 type Options struct {
-	Client  *controlclient.Client
-	Service systempage.ServiceController
-	Input   io.Reader
-	Output  io.Writer
+	Client         *controlclient.Client
+	Service        systempage.ServiceController
+	SelfUpdater    systempage.SelfUpdater
+	CurrentVersion string
+	BinaryPath     string
+	Elevated       func() bool
+	Relaunch       func() error
+	Input          io.Reader
+	Output         io.Writer
 }
 
 // Run starts the full-screen Mihari terminal interface and blocks until it exits.
@@ -31,14 +38,47 @@ func Run(ctx context.Context, options Options) error {
 	if options.Service != nil {
 		model.SetServiceController(options.Service)
 	}
+	model.SetSelfUpdater(options.SelfUpdater, options.CurrentVersion, options.BinaryPath, options.Elevated)
 	program := tea.NewProgram(
 		model,
 		tea.WithContext(ctx),
 		tea.WithInput(options.Input),
 		tea.WithOutput(options.Output),
 	)
-	_, err := program.Run()
-	return err
+	final, err := program.Run()
+	return finishRun(final, err, options.Output, options.Relaunch)
+}
+
+func finishRun(final tea.Model, runErr error, warningWriter io.Writer, relaunch func() error) error {
+	if runErr != nil {
+		return runErr
+	}
+	var requested bool
+	var warning string
+	switch model := final.(type) {
+	case Model:
+		requested = model.RelaunchRequested()
+		warning = model.RelaunchWarning()
+	case *Model:
+		requested = model.RelaunchRequested()
+		warning = model.RelaunchWarning()
+	}
+	if !requested {
+		return nil
+	}
+	var warningErr error
+	if warning != "" && warningWriter != nil {
+		if _, err := fmt.Fprintf(warningWriter, "Warning: %s\n", warning); err != nil {
+			warningErr = fmt.Errorf("write Mihari update warning: %w", err)
+		}
+	}
+	if relaunch == nil {
+		return errors.Join(warningErr, fmt.Errorf("relaunch updated Mihari: relaunch is unavailable"))
+	}
+	if err := relaunch(); err != nil {
+		return errors.Join(warningErr, fmt.Errorf("relaunch updated Mihari: %w", err))
+	}
+	return nil
 }
 
 // loadingModel is a minimal AltScreen sample used by run_test.go only.

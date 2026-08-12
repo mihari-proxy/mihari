@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/signal"
+	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/buildinfo"
@@ -15,6 +16,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/control/transport"
 	"github.com/mihari-proxy/mihari/internal/daemon"
+	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/tui"
@@ -64,16 +66,10 @@ func main() {
 	selfUpdater := update.SelfUpdater{
 		AfterReplace: func(ctx context.Context, _ string) error {
 			// Best-effort restart when service is installed; ignore not-installed.
-			if err := serviceManager.Restart(); err != nil {
-				var api protocol.APIError
-				if errors.As(err, &api) && api.Code == protocol.CodeInvalidState {
-					return nil
-				}
-				return err
-			}
-			return nil
+			return restartServiceAfterReplace(serviceManager.Restart)
 		},
 	}
+	executable, executableError := os.Executable()
 	dependencies := cli.Dependencies{
 		StatusClient:       localClient,
 		RuntimeClient:      localClient,
@@ -87,16 +83,42 @@ func main() {
 		SetupError:         setupError,
 		Interactive:        isInteractiveTerminal(os.Stdin, os.Stdout),
 		RunTUI: func(ctx context.Context) error {
+			if executableError != nil {
+				return protocol.APIError{Code: protocol.CodeInternal, Message: "resolve Mihari executable path"}
+			}
 			return tui.Run(ctx, tui.Options{
-				Client:  localClient,
-				Service: serviceManager,
-				Input:   os.Stdin,
-				Output:  os.Stdout,
+				Client:         localClient,
+				Service:        serviceManager,
+				SelfUpdater:    selfUpdater,
+				CurrentVersion: buildinfo.Version,
+				BinaryPath:     executable,
+				Elevated:       elevate.IsElevated,
+				Relaunch: func() error {
+					return platform.Relaunch(executable, tuiRelaunchArgs(executable), os.Environ())
+				},
+				Input:  os.Stdin,
+				Output: os.Stdout,
 			})
 		},
 		RunDaemon: runDaemon,
 	}
 	os.Exit(cli.Execute(ctx, os.Args[1:], os.Stdout, os.Stderr, dependencies))
+}
+
+func restartServiceAfterReplace(restart func() error) error {
+	err := restart()
+	if err == nil {
+		return nil
+	}
+	var api protocol.APIError
+	if errors.As(err, &api) && api.Code == protocol.CodeInvalidState && strings.Contains(strings.ToLower(api.Message), "not installed") {
+		return nil
+	}
+	return err
+}
+
+func tuiRelaunchArgs(binary string) []string {
+	return []string{binary}
 }
 
 func isInteractiveTerminal(input, output *os.File) bool {
