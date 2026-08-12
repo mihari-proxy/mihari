@@ -277,15 +277,15 @@ func compare(base, head report, p policy) result {
 func formatReport(rep report) string {
 	var b strings.Builder
 	b.WriteString("## Coverage report\n\n")
-	b.WriteString(fmt.Sprintf("- **total**: %s\n\n", formatCoverage(rep.Total)))
+	fmt.Fprintf(&b, "- **total**: %s\n\n", formatCoverage(rep.Total))
 	b.WriteString("| package | coverage |\n|---|---|\n")
 	for _, pkg := range criticalPackages {
 		cov, ok := rep.Packages[pkg]
 		if !ok {
-			b.WriteString(fmt.Sprintf("| `%s` | n/a |\n", shortPkg(pkg)))
+			fmt.Fprintf(&b, "| `%s` | n/a |\n", shortPkg(pkg))
 			continue
 		}
-		b.WriteString(fmt.Sprintf("| `%s` | %s |\n", shortPkg(pkg), formatCoverage(cov)))
+		fmt.Fprintf(&b, "| `%s` | %s |\n", shortPkg(pkg), formatCoverage(cov))
 	}
 	b.WriteString("\n")
 	return b.String()
@@ -294,11 +294,11 @@ func formatReport(rep report) string {
 func formatCompare(base, head report, res result) string {
 	var b strings.Builder
 	b.WriteString("## Coverage compare\n\n")
-	b.WriteString(fmt.Sprintf("- **base total**: %s\n", formatCoverage(base.Total)))
-	b.WriteString(fmt.Sprintf("- **head total**: %s\n", formatCoverage(head.Total)))
+	fmt.Fprintf(&b, "- **base total**: %s\n", formatCoverage(base.Total))
+	fmt.Fprintf(&b, "- **head total**: %s\n", formatCoverage(head.Total))
 	if _, ok := base.Total.percent(); ok {
 		if _, ok := head.Total.percent(); ok {
-			b.WriteString(fmt.Sprintf("- **total delta**: %+.2fpp\n", res.TotalDelta))
+			fmt.Fprintf(&b, "- **total delta**: %+.2fpp\n", res.TotalDelta)
 		}
 	}
 	b.WriteString("\n| package | base | head | delta |\n|---|---|---|---|\n")
@@ -316,14 +316,14 @@ func formatCompare(base, head report, res result) string {
 		if d, ok := res.PackageDeltas[pkg]; ok && bOK && hOK {
 			deltaS = fmt.Sprintf("%+.2fpp", d)
 		}
-		b.WriteString(fmt.Sprintf("| `%s` | %s | %s | %s |\n", shortPkg(pkg), baseS, headS, deltaS))
+		fmt.Fprintf(&b, "| `%s` | %s | %s | %s |\n", shortPkg(pkg), baseS, headS, deltaS)
 	}
 	if len(res.Violations) == 0 {
 		b.WriteString("\n**result**: pass\n")
 	} else {
 		b.WriteString("\n**result**: fail\n\n")
 		for _, v := range res.Violations {
-			b.WriteString(fmt.Sprintf("- %s\n", v))
+			fmt.Fprintf(&b, "- %s\n", v)
 		}
 	}
 	b.WriteString("\n")
