@@ -243,9 +243,17 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	return &RuntimeAssembly{Manager: manager, Store: store, Web: webGateway}, nil
 }
 
+type webMutationRuntime interface {
+	SelectProxy(context.Context, runtimeapi.Operation, string, string) error
+	CloseConnection(context.Context, runtimeapi.Operation, string) error
+	CloseAllConnections(context.Context, runtimeapi.Operation) error
+	EnableTun(context.Context, runtimeapi.Operation) (protocol.TunStatus, error)
+	DisableTun(context.Context, runtimeapi.Operation) (protocol.TunStatus, error)
+}
+
 // webMutator routes browser mutations through the daemon coordinator.
 type webMutator struct {
-	manager *runtimeapi.Manager
+	manager webMutationRuntime
 }
 
 func (m webMutator) SelectProxy(ctx context.Context, group, name string) error {

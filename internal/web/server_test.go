@@ -1,16 +1,24 @@
 package web
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 // recordingMutator captures ApplyConfigPatch calls for allowlist tests.
@@ -80,6 +88,778 @@ func (m memoryPanel) SetupPathFor(panelID, host string) string {
 		}
 	}
 	return "/__mihari/panels/" + panelID + "/#/setup?hostname=" + host
+}
+
+func newWebSocketController(t *testing.T, wantSecret, forbiddenWebCredential, responseHeaderSentinel string) *httptest.Server {
+	t.Helper()
+
+	type observedFrame struct {
+		messageType websocket.MessageType
+		data        []byte
+	}
+	var observed struct {
+		sync.Mutex
+		requests int
+		path     string
+		rawQuery string
+		headers  http.Header
+		frames   []observedFrame
+		errors   []string
+	}
+	handlerDone := make(chan struct{})
+	var handlerDoneOnce sync.Once
+
+	controller := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer handlerDoneOnce.Do(func() { close(handlerDone) })
+
+		observed.Lock()
+		observed.requests++
+		observed.path = r.URL.Path
+		observed.rawQuery = r.URL.RawQuery
+		observed.headers = r.Header.Clone()
+		observed.Unlock()
+
+		w.Header().Set("X-Upstream-Response-Sentinel", responseHeaderSentinel)
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			observed.Lock()
+			observed.errors = append(observed.errors, "accept: "+err.Error())
+			observed.Unlock()
+			return
+		}
+		defer conn.CloseNow()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		for range 2 {
+			messageType, data, err := conn.Read(ctx)
+			if err != nil {
+				observed.Lock()
+				observed.errors = append(observed.errors, "read: "+err.Error())
+				observed.Unlock()
+				return
+			}
+			observed.Lock()
+			observed.frames = append(observed.frames, observedFrame{
+				messageType: messageType,
+				data:        append([]byte(nil), data...),
+			})
+			observed.Unlock()
+			if err := conn.Write(ctx, messageType, data); err != nil {
+				observed.Lock()
+				observed.errors = append(observed.errors, "write: "+err.Error())
+				observed.Unlock()
+				return
+			}
+		}
+	}))
+
+	t.Cleanup(func() {
+		controller.CloseClientConnections()
+		controller.Close()
+
+		timer := time.NewTimer(3 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-handlerDone:
+		case <-timer.C:
+			t.Error("WebSocket controller handler did not stop")
+		}
+
+		observed.Lock()
+		defer observed.Unlock()
+		if observed.requests != 1 {
+			t.Errorf("controller requests = %d, want 1", observed.requests)
+		}
+		if observed.path != "/connections" {
+			t.Errorf("controller path = %q, want /connections", observed.path)
+		}
+		if observed.rawQuery != "scope=active&format=full" {
+			t.Errorf("controller query = %q, want scope=active&format=full", observed.rawQuery)
+		}
+		if observed.headers.Get("Authorization") != "Bearer "+wantSecret {
+			t.Errorf("controller authorization was not the injected controller secret")
+		}
+		if cookie := observed.headers.Get("Cookie"); cookie != "" {
+			t.Errorf("controller received browser cookie %q", cookie)
+		}
+		for name, values := range observed.headers {
+			joined := strings.Join(values, "\n")
+			if strings.Contains(joined, forbiddenWebCredential) {
+				t.Errorf("controller header %q leaked browser web credential", name)
+			}
+			if !strings.EqualFold(name, "Authorization") && strings.Contains(joined, wantSecret) {
+				t.Errorf("controller header %q leaked controller secret outside Authorization", name)
+			}
+		}
+		if len(observed.errors) != 0 {
+			t.Errorf("controller relay errors: %v", observed.errors)
+		}
+
+		wantFrames := []observedFrame{
+			{messageType: websocket.MessageText, data: []byte(`{"command":"ping"}`)},
+			{messageType: websocket.MessageBinary, data: []byte{0x00, 0x7f, 0x80, 0xff}},
+		}
+		if len(observed.frames) != len(wantFrames) {
+			t.Errorf("controller frames = %d, want %d", len(observed.frames), len(wantFrames))
+			return
+		}
+		for i, want := range wantFrames {
+			got := observed.frames[i]
+			if got.messageType != want.messageType {
+				t.Errorf("controller frame %d type = %v, want %v", i, got.messageType, want.messageType)
+			}
+			if !bytes.Equal(got.data, want.data) {
+				t.Errorf("controller frame %d data = %v, want %v", i, got.data, want.data)
+			}
+		}
+	})
+
+	return controller
+}
+
+type gatewayServeState struct {
+	done chan struct{}
+	err  error
+}
+
+func waitGatewayServeReady(t *testing.T, gateway *Server, serveState *gatewayServeState) string {
+	t.Helper()
+
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	retry := time.NewTicker(10 * time.Millisecond)
+	defer retry.Stop()
+
+	probe := func() string {
+		addr := gateway.ListenAddr()
+		if addr == "" || addr == "127.0.0.1:0" {
+			return ""
+		}
+		probeCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		conn, err := (&net.Dialer{}).DialContext(probeCtx, "tcp", addr)
+		if err != nil {
+			return ""
+		}
+		if err := conn.Close(); err != nil {
+			t.Errorf("close gateway readiness probe: %v", err)
+		}
+		return "http://" + addr
+	}
+
+	for {
+		if base := probe(); base != "" {
+			return base
+		}
+		select {
+		case <-serveState.done:
+			t.Fatalf("gateway stopped before becoming ready: %v", serveState.err)
+		case <-retry.C:
+		case <-deadline.C:
+			t.Fatal("gateway did not become network-ready")
+		}
+	}
+}
+
+const (
+	task5WebCredential    = "web-token-task5-aaaaaaaaaaaaaaaaaaaaaaaaaa"
+	task5ControllerSecret = "controller-secret-task5-bbbbbbbbbbbbbbbbb"
+)
+
+type task5RoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f task5RoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+type task5ControllerState struct {
+	started         chan struct{}
+	accepted        chan struct{}
+	done            chan struct{}
+	relayErr        error
+	relayContextErr error
+	cancel          context.CancelFunc
+}
+
+type webSocketRelayJoinObserver struct {
+	active        atomic.Int32
+	handlerResult chan int32
+}
+
+func newWebSocketRelayJoinObserver() *webSocketRelayJoinObserver {
+	return &webSocketRelayJoinObserver{handlerResult: make(chan int32, 1)}
+}
+
+func (o *webSocketRelayJoinObserver) relayStarted() {
+	o.active.Add(1)
+}
+
+func (o *webSocketRelayJoinObserver) relayFinished() {
+	o.active.Add(-1)
+}
+
+func (o *webSocketRelayJoinObserver) handlerFinished() {
+	o.handlerResult <- o.active.Load()
+}
+
+func newTask5WebSocketController(
+	t *testing.T,
+	relay func(context.Context, *websocket.Conn) error,
+) (*httptest.Server, *task5ControllerState) {
+	t.Helper()
+
+	controllerCtx, cancelController := context.WithCancel(context.Background())
+	state := &task5ControllerState{
+		started:  make(chan struct{}),
+		accepted: make(chan struct{}),
+		done:     make(chan struct{}),
+		cancel:   cancelController,
+	}
+	controller := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(state.started)
+		defer close(state.done)
+
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			state.relayErr = err
+			return
+		}
+		defer conn.CloseNow()
+		close(state.accepted)
+
+		relayCtx, cancelRelay := context.WithTimeout(controllerCtx, 3*time.Second)
+		defer cancelRelay()
+		state.relayErr = relay(relayCtx, conn)
+		state.relayContextErr = relayCtx.Err()
+	}))
+	t.Cleanup(controller.Close)
+	t.Cleanup(func() {
+		state.cancel()
+		controller.CloseClientConnections()
+		select {
+		case <-state.started:
+			waitDone(t, state.done, "WebSocket controller handler")
+		default:
+		}
+	})
+	return controller, state
+}
+
+func newTask5Gateway(t *testing.T, controllerURL string, transport http.RoundTripper) *Server {
+	t.Helper()
+
+	gateway, err := New(Options{
+		Addr:             "127.0.0.1:0",
+		Auth:             Authenticator{WebCredential: task5WebCredential, ControllerSecret: task5ControllerSecret},
+		ControllerURL:    controllerURL,
+		ControllerSecret: task5ControllerSecret,
+		Transport:        transport,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return gateway
+}
+
+func serveWebSocketGateway(t *testing.T, gateway *Server) string {
+	t.Helper()
+
+	gatewayCtx, cancelGateway := context.WithCancel(context.Background())
+	serveState := &gatewayServeState{done: make(chan struct{})}
+	go func() {
+		serveState.err = gateway.Serve(gatewayCtx)
+		close(serveState.done)
+	}()
+	t.Cleanup(func() {
+		cancelGateway()
+		waitDone(t, serveState.done, "gateway")
+		if serveState.err != nil {
+			t.Errorf("serve gateway: %v", serveState.err)
+		}
+	})
+	return waitGatewayServeReady(t, gateway, serveState)
+}
+
+func dialTask5GatewayStream(t *testing.T, base string) *websocket.Conn {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+task5WebCredential)
+	stream, response, err := websocket.Dial(
+		ctx,
+		"ws"+strings.TrimPrefix(base, "http")+"/connections?scope=active",
+		&websocket.DialOptions{HTTPHeader: header},
+	)
+	if err != nil {
+		t.Fatalf("dial gateway WebSocket: %v", err)
+	}
+	if response == nil || response.StatusCode != http.StatusSwitchingProtocols {
+		stream.CloseNow()
+		t.Fatalf("gateway handshake response = %v", response)
+	}
+	t.Cleanup(func() { stream.CloseNow() })
+	return stream
+}
+
+func waitDone(t *testing.T, done <-chan struct{}, label string) {
+	t.Helper()
+
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return
+	case <-timer.C:
+		select {
+		case <-done:
+			return
+		default:
+			t.Fatalf("%s did not stop before its deadline", label)
+		}
+	}
+}
+
+func requireTask5NotDone(t *testing.T, done <-chan struct{}, label string) {
+	t.Helper()
+
+	select {
+	case <-done:
+		t.Fatalf("%s stopped before the shutdown trigger", label)
+	default:
+	}
+}
+
+func requireTask5PeerClose(t *testing.T, state *task5ControllerState) {
+	t.Helper()
+
+	if state.relayContextErr != nil {
+		t.Fatalf("controller relay ended from its context instead of its peer: %v", state.relayContextErr)
+	}
+	if state.relayErr == nil {
+		t.Fatal("controller relay returned no peer-close error")
+	}
+}
+
+func waitTask5SessionCount(t *testing.T, gateway *Server, want int) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if got := gateway.SessionCount(); got == want {
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			t.Fatalf("gateway session count = %d, want %d: %v", gateway.SessionCount(), want, ctx.Err())
+		}
+	}
+}
+
+func TestGatewayWebSocketHandlerWaitsForBothRelaysAfterNormalClose(t *testing.T) {
+	closeUpstream := make(chan struct{})
+	controller, controllerState := newTask5WebSocketController(t, func(ctx context.Context, conn *websocket.Conn) error {
+		select {
+		case <-closeUpstream:
+			return conn.Close(websocket.StatusNormalClosure, "")
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	observer := newWebSocketRelayJoinObserver()
+	gateway := newTask5Gateway(t, controller.URL, nil)
+	gateway.wsObserver = observer
+	base := serveWebSocketGateway(t, gateway)
+	stream := dialTask5GatewayStream(t, base)
+	waitDone(t, controllerState.accepted, "upstream WebSocket acceptance")
+
+	readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelRead()
+	readErr := make(chan error, 1)
+	go func() {
+		_, _, err := stream.Read(readCtx)
+		readErr <- err
+	}()
+	close(closeUpstream)
+
+	var activeAtHandlerFinish int32
+	select {
+	case activeAtHandlerFinish = <-observer.handlerResult:
+	case <-readCtx.Done():
+		t.Fatalf("gateway WebSocket handler did not finish: %v", readCtx.Err())
+	}
+	if activeAtHandlerFinish != 0 {
+		t.Fatalf("gateway WebSocket handler finished with %d relay copier still running; want 0", activeAtHandlerFinish)
+	}
+
+	select {
+	case err := <-readErr:
+		if err == nil {
+			t.Fatal("browser WebSocket remained open after normal upstream close")
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			t.Fatalf("browser read ended from its context instead of upstream close: %v", err)
+		}
+	case <-readCtx.Done():
+		t.Fatalf("browser did not receive graceful close: %v", readCtx.Err())
+	}
+	waitDone(t, controllerState.done, "normal upstream close")
+	if controllerState.relayErr != nil || controllerState.relayContextErr != nil {
+		t.Fatalf("normal upstream close failed: relay=%v context=%v", controllerState.relayErr, controllerState.relayContextErr)
+	}
+}
+
+func TestGatewayWebSocketUpstreamCloseStopsRelay(t *testing.T) {
+	closeUpstream := make(chan struct{})
+	controller, controllerState := newTask5WebSocketController(t, func(ctx context.Context, conn *websocket.Conn) error {
+		select {
+		case <-closeUpstream:
+			conn.CloseNow()
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	gateway := newTask5Gateway(t, controller.URL, nil)
+	base := serveWebSocketGateway(t, gateway)
+	stream := dialTask5GatewayStream(t, base)
+	waitDone(t, controllerState.accepted, "upstream WebSocket acceptance")
+	waitTask5SessionCount(t, gateway, 1)
+	requireTask5NotDone(t, controllerState.done, "upstream WebSocket")
+
+	close(closeUpstream)
+	readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelRead()
+	if _, _, err := stream.Read(readCtx); err == nil {
+		t.Fatal("browser WebSocket remained readable after upstream close")
+	}
+	if err := readCtx.Err(); err != nil {
+		t.Fatalf("browser WebSocket read ended from its deadline instead of upstream close: %v", err)
+	}
+	waitDone(t, controllerState.done, "upstream WebSocket")
+	if controllerState.relayContextErr != nil {
+		t.Fatalf("upstream WebSocket close ended from its relay context: %v", controllerState.relayContextErr)
+	}
+	if controllerState.relayErr != nil {
+		t.Fatalf("upstream WebSocket shutdown: %v", controllerState.relayErr)
+	}
+	waitTask5SessionCount(t, gateway, 0)
+}
+
+func TestGatewayWebSocketClientCloseStopsUpstream(t *testing.T) {
+	controller, controllerState := newTask5WebSocketController(t, func(ctx context.Context, conn *websocket.Conn) error {
+		_, _, err := conn.Read(ctx)
+		return err
+	})
+	gateway := newTask5Gateway(t, controller.URL, nil)
+	base := serveWebSocketGateway(t, gateway)
+	stream := dialTask5GatewayStream(t, base)
+	waitDone(t, controllerState.accepted, "upstream WebSocket acceptance")
+	waitTask5SessionCount(t, gateway, 1)
+	requireTask5NotDone(t, controllerState.done, "upstream WebSocket")
+
+	stream.CloseNow()
+	waitDone(t, controllerState.done, "upstream WebSocket")
+	requireTask5PeerClose(t, controllerState)
+	waitTask5SessionCount(t, gateway, 0)
+}
+
+func TestGatewayWebSocketContextCancelReleasesBothSides(t *testing.T) {
+	controller, controllerState := newTask5WebSocketController(t, func(ctx context.Context, conn *websocket.Conn) error {
+		_, _, err := conn.Read(ctx)
+		return err
+	})
+	gateway := newTask5Gateway(t, controller.URL, nil)
+
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	t.Cleanup(cancelRequest)
+	handlerDone := make(chan struct{})
+	originalHandler := gateway.httpServer.Handler
+	gateway.httpServer.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originalHandler.ServeHTTP(w, r.WithContext(requestCtx))
+		close(handlerDone)
+	})
+	base := serveWebSocketGateway(t, gateway)
+	stream := dialTask5GatewayStream(t, base)
+	waitDone(t, controllerState.accepted, "upstream WebSocket acceptance")
+	waitTask5SessionCount(t, gateway, 1)
+	requireTask5NotDone(t, controllerState.done, "upstream WebSocket")
+
+	cancelRequest()
+	readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelRead()
+	if _, _, err := stream.Read(readCtx); err == nil {
+		t.Fatal("browser WebSocket remained readable after relay context cancellation")
+	}
+	if err := readCtx.Err(); err != nil {
+		t.Fatalf("browser WebSocket read ended from its deadline instead of relay cancellation: %v", err)
+	}
+	waitDone(t, controllerState.done, "upstream WebSocket")
+	requireTask5PeerClose(t, controllerState)
+	waitDone(t, handlerDone, "gateway WebSocket handler")
+	waitTask5SessionCount(t, gateway, 0)
+}
+
+func TestGatewayWebSocketHandshakeFailuresAreSanitized(t *testing.T) {
+	const upstreamBody = "upstream-private-diagnostic-task5"
+	tests := []struct {
+		name             string
+		upstreamStatus   int
+		transportFailure bool
+		invalidURL       bool
+		wantStatus       int
+		wantBody         string
+	}{
+		{name: "upstream 401", upstreamStatus: http.StatusUnauthorized, wantStatus: http.StatusUnauthorized, wantBody: "upstream stream unavailable\n"},
+		{name: "upstream 500", upstreamStatus: http.StatusInternalServerError, wantStatus: http.StatusInternalServerError, wantBody: "upstream stream unavailable\n"},
+		{name: "controller unavailable", transportFailure: true, wantStatus: http.StatusBadGateway, wantBody: "upstream stream unavailable\n"},
+		{name: "invalid controller URL", invalidURL: true, wantStatus: http.StatusBadGateway, wantBody: "bad gateway\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			controllerURL := "http://controller.invalid"
+			var transport http.RoundTripper
+			if tt.upstreamStatus != 0 {
+				controller := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("X-Upstream-Diagnostic", task5ControllerSecret+" "+upstreamBody)
+					w.WriteHeader(tt.upstreamStatus)
+					_, _ = io.WriteString(w, task5ControllerSecret+" "+upstreamBody)
+				}))
+				t.Cleanup(func() {
+					controller.CloseClientConnections()
+					controller.Close()
+				})
+				controllerURL = controller.URL
+			}
+			if tt.transportFailure {
+				transport = task5RoundTripFunc(func(*http.Request) (*http.Response, error) {
+					return nil, errors.New(task5ControllerSecret + " " + upstreamBody)
+				})
+			}
+
+			gateway := newTask5Gateway(t, controllerURL, transport)
+			if tt.invalidURL {
+				gateway.ControllerURL = "%"
+			}
+			base := serveWebSocketGateway(t, gateway)
+			dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancelDial()
+			header := http.Header{}
+			header.Set("Authorization", "Bearer "+task5WebCredential)
+			stream, response, err := websocket.Dial(
+				dialCtx,
+				"ws"+strings.TrimPrefix(base, "http")+"/connections",
+				&websocket.DialOptions{HTTPHeader: header},
+			)
+			if stream != nil {
+				stream.CloseNow()
+				t.Fatal("gateway WebSocket handshake unexpectedly succeeded")
+			}
+			if err == nil {
+				t.Fatal("gateway WebSocket handshake returned no error")
+			}
+			if response == nil {
+				t.Fatalf("gateway WebSocket handshake returned no HTTP response: %v", err)
+			}
+			body, readErr := io.ReadAll(response.Body)
+			response.Body.Close()
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if response.StatusCode != tt.wantStatus {
+				t.Fatalf("gateway handshake status = %d, want %d", response.StatusCode, tt.wantStatus)
+			}
+			if got := string(body); got != tt.wantBody {
+				t.Fatalf("gateway handshake body = %q, want %q", got, tt.wantBody)
+			}
+			for _, sensitive := range []string{task5ControllerSecret, upstreamBody} {
+				if bytes.Contains(body, []byte(sensitive)) {
+					t.Fatalf("gateway handshake body leaked %q", sensitive)
+				}
+				if strings.Contains(err.Error(), sensitive) {
+					t.Fatalf("gateway handshake error leaked %q", sensitive)
+				}
+				for name, values := range response.Header {
+					if strings.Contains(strings.Join(values, "\n"), sensitive) {
+						t.Fatalf("gateway handshake header %q leaked %q", name, sensitive)
+					}
+				}
+			}
+			waitTask5SessionCount(t, gateway, 0)
+		})
+	}
+}
+
+func TestGatewayWebSocketRelaysBidirectionallyAndInjectsOnlyControllerSecret(t *testing.T) {
+	const webCredential = "web-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const controllerSecret = "controller-secret-bbbbbbbbbbbbbbbbbbbbbbbb"
+	const upstreamResponseHeaderSentinel = "upstream-response-header-cccccccccccccccc"
+
+	controller := newWebSocketController(t, controllerSecret, webCredential, upstreamResponseHeaderSentinel)
+	gateway, err := New(Options{
+		Addr:             "127.0.0.1:0",
+		Auth:             Authenticator{WebCredential: webCredential, ControllerSecret: controllerSecret},
+		ControllerURL:    controller.URL,
+		ControllerSecret: controllerSecret,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := serveWebSocketGateway(t, gateway)
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	browser := &http.Client{
+		Jar: jar,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	t.Cleanup(browser.CloseIdleConnections)
+	streamURL := "ws" + strings.TrimPrefix(base, "http") + "/connections?scope=active&format=full"
+	unauthenticatedCtx, cancelUnauthenticated := context.WithTimeout(context.Background(), 5*time.Second)
+	unauthenticatedStream, unauthenticatedResponse, err := websocket.Dial(
+		unauthenticatedCtx,
+		streamURL,
+		&websocket.DialOptions{HTTPClient: browser},
+	)
+	cancelUnauthenticated()
+	if err == nil {
+		unauthenticatedStream.CloseNow()
+		t.Fatal("unauthenticated browser stream succeeded")
+	}
+	if unauthenticatedResponse == nil {
+		t.Fatalf("unauthenticated browser stream returned no HTTP response: %v", err)
+	}
+	unauthenticatedBody, readErr := io.ReadAll(unauthenticatedResponse.Body)
+	unauthenticatedResponse.Body.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if unauthenticatedResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated stream status = %d, want %d", unauthenticatedResponse.StatusCode, http.StatusUnauthorized)
+	}
+	if bytes.Contains(unauthenticatedBody, []byte(controllerSecret)) {
+		t.Fatal("controller secret leaked in unauthenticated response body")
+	}
+	for name, values := range unauthenticatedResponse.Header {
+		if strings.Contains(strings.Join(values, "\n"), controllerSecret) {
+			t.Fatalf("controller secret leaked in unauthenticated response header %q", name)
+		}
+	}
+
+	loginValues := url.Values{
+		"password": {webCredential},
+		"next":     {"/connections?scope=active&format=full"},
+	}
+	loginCtx, cancelLogin := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancelLogin)
+	loginRequest, err := http.NewRequestWithContext(
+		loginCtx,
+		http.MethodPost,
+		base+AuthPath,
+		strings.NewReader(loginValues.Encode()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginResponse, err := browser.Do(loginRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginBody, err := io.ReadAll(loginResponse.Body)
+	loginResponse.Body.Close()
+	cancelLogin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loginResponse.StatusCode != http.StatusFound {
+		t.Fatalf("login status = %d, want %d", loginResponse.StatusCode, http.StatusFound)
+	}
+	if bytes.Contains(loginBody, []byte(controllerSecret)) {
+		t.Fatal("controller secret leaked in login response body")
+	}
+	for name, values := range loginResponse.Header {
+		if strings.Contains(strings.Join(values, "\n"), controllerSecret) {
+			t.Fatalf("controller secret leaked in login response header %q", name)
+		}
+	}
+
+	baseURL, err := url.Parse(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sessionCookie *http.Cookie
+	for _, cookie := range browser.Jar.Cookies(baseURL) {
+		if cookie.Name == CookieName {
+			sessionCookie = cookie
+			break
+		}
+	}
+	if sessionCookie == nil || sessionCookie.Value != webCredential {
+		t.Fatalf("browser session cookie = %v", sessionCookie)
+	}
+
+	streamCtx, cancelStream := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancelStream)
+	stream, handshakeResponse, err := websocket.Dial(streamCtx, streamURL, &websocket.DialOptions{
+		HTTPClient: browser,
+	})
+	if err != nil {
+		t.Fatalf("dial gateway stream: %v", err)
+	}
+	t.Cleanup(func() { stream.CloseNow() })
+	if handshakeResponse == nil || handshakeResponse.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("gateway handshake response = %v", handshakeResponse)
+	}
+	if got := handshakeResponse.Header.Get("X-Upstream-Response-Sentinel"); got != "" {
+		t.Fatalf("gateway handshake exposed upstream response header sentinel %q", got)
+	}
+	for name, values := range handshakeResponse.Header {
+		if strings.Contains(strings.Join(values, "\n"), controllerSecret) {
+			t.Fatalf("controller secret leaked in gateway handshake header %q", name)
+		}
+		if strings.Contains(strings.Join(values, "\n"), upstreamResponseHeaderSentinel) {
+			t.Fatalf("upstream response header leaked through gateway handshake header %q", name)
+		}
+	}
+
+	frames := []struct {
+		messageType websocket.MessageType
+		data        []byte
+	}{
+		{messageType: websocket.MessageText, data: []byte(`{"command":"ping"}`)},
+		{messageType: websocket.MessageBinary, data: []byte{0x00, 0x7f, 0x80, 0xff}},
+	}
+	for i, frame := range frames {
+		if err := stream.Write(streamCtx, frame.messageType, frame.data); err != nil {
+			t.Fatalf("write browser frame %d: %v", i, err)
+		}
+		messageType, data, err := stream.Read(streamCtx)
+		if err != nil {
+			t.Fatalf("read browser frame %d: %v", i, err)
+		}
+		if messageType != frame.messageType {
+			t.Errorf("browser frame %d type = %v, want %v", i, messageType, frame.messageType)
+		}
+		if !bytes.Equal(data, frame.data) {
+			t.Errorf("browser frame %d data = %v, want %v", i, data, frame.data)
+		}
+		if bytes.Contains(data, []byte(controllerSecret)) {
+			t.Errorf("controller secret leaked in browser frame %d", i)
+		}
+	}
 }
 
 func TestGatewayProxiesVersionWithAuthAndRejectsUpgrade(t *testing.T) {

@@ -39,3 +39,17 @@ func TestIsElevatedUsesChecker(t *testing.T) {
 		t.Fatal("expected not elevated")
 	}
 }
+
+func TestSetCheckerNilRestoresPlatformProbe(t *testing.T) {
+	prev := Check
+	t.Cleanup(func() { Check = prev })
+	SetChecker(func() bool { return true })
+	if !IsElevated() {
+		t.Fatal("expected injected elevated checker")
+	}
+	SetChecker(nil)
+	// platformElevated is OS-specific; only assert the hook restored a non-nil function.
+	if Check == nil {
+		t.Fatal("Check is nil after SetChecker(nil)")
+	}
+}

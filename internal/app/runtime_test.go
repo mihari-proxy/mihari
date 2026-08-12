@@ -13,7 +13,141 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/platform"
+	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 )
+
+type webProxySelectionCall struct {
+	operation runtimeapi.Operation
+	group     string
+	name      string
+}
+
+type webConnectionCloseCall struct {
+	operation runtimeapi.Operation
+	id        string
+}
+
+type recordingWebMutationRuntime struct {
+	selectCalls        []webProxySelectionCall
+	closeCalls         []webConnectionCloseCall
+	closeAllOperations []runtimeapi.Operation
+	enableOperations   []runtimeapi.Operation
+	disableOperations  []runtimeapi.Operation
+}
+
+func (r *recordingWebMutationRuntime) SelectProxy(_ context.Context, operation runtimeapi.Operation, group, name string) error {
+	r.selectCalls = append(r.selectCalls, webProxySelectionCall{operation: operation, group: group, name: name})
+	return nil
+}
+
+func (r *recordingWebMutationRuntime) CloseConnection(_ context.Context, operation runtimeapi.Operation, id string) error {
+	r.closeCalls = append(r.closeCalls, webConnectionCloseCall{operation: operation, id: id})
+	return nil
+}
+
+func (r *recordingWebMutationRuntime) CloseAllConnections(_ context.Context, operation runtimeapi.Operation) error {
+	r.closeAllOperations = append(r.closeAllOperations, operation)
+	return nil
+}
+
+func (r *recordingWebMutationRuntime) EnableTun(_ context.Context, operation runtimeapi.Operation) (protocol.TunStatus, error) {
+	r.enableOperations = append(r.enableOperations, operation)
+	return protocol.TunStatus{}, nil
+}
+
+func (r *recordingWebMutationRuntime) DisableTun(_ context.Context, operation runtimeapi.Operation) (protocol.TunStatus, error) {
+	r.disableOperations = append(r.disableOperations, operation)
+	return protocol.TunStatus{}, nil
+}
+
+func TestWebMutatorRoutesOperationsThroughRuntime(t *testing.T) {
+	runtime := &recordingWebMutationRuntime{}
+	mutator := webMutator{manager: runtime}
+	ctx := context.Background()
+
+	if err := mutator.SelectProxy(ctx, "Proxy Group", "selected-proxy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mutator.CloseConnection(ctx, "connection-id"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mutator.CloseAllConnections(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(runtime.selectCalls) != 1 {
+		t.Fatalf("select calls=%d", len(runtime.selectCalls))
+	}
+	selectCall := runtime.selectCalls[0]
+	if selectCall.group != "Proxy Group" || selectCall.name != "selected-proxy" {
+		t.Fatalf("select call=%#v", selectCall)
+	}
+	assertWebOperation(t, selectCall.operation, "web-select-")
+
+	if len(runtime.closeCalls) != 1 {
+		t.Fatalf("close calls=%d", len(runtime.closeCalls))
+	}
+	closeCall := runtime.closeCalls[0]
+	if closeCall.id != "connection-id" {
+		t.Fatalf("close call=%#v", closeCall)
+	}
+	assertWebOperation(t, closeCall.operation, "web-close-")
+
+	if len(runtime.closeAllOperations) != 1 {
+		t.Fatalf("close all calls=%d", len(runtime.closeAllOperations))
+	}
+	assertWebOperation(t, runtime.closeAllOperations[0], "web-close-all-")
+}
+
+func TestWebMutatorConfigPatchAllowlist(t *testing.T) {
+	runtime := &recordingWebMutationRuntime{}
+	mutator := webMutator{manager: runtime}
+	ctx := context.Background()
+
+	if err := mutator.ApplyConfigPatch(ctx, map[string]any{"tun": map[string]any{"enable": true}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mutator.ApplyConfigPatch(ctx, map[string]any{"tun": map[string]any{"enable": false}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(runtime.enableOperations) != 1 {
+		t.Fatalf("enable calls=%d", len(runtime.enableOperations))
+	}
+	assertWebOperation(t, runtime.enableOperations[0], "web-tun-")
+	if len(runtime.disableOperations) != 1 {
+		t.Fatalf("disable calls=%d", len(runtime.disableOperations))
+	}
+	assertWebOperation(t, runtime.disableOperations[0], "web-tun-")
+
+	for _, test := range []struct {
+		name  string
+		patch map[string]any
+		code  protocol.ErrorCode
+	}{
+		{name: "missing tun", patch: map[string]any{}, code: protocol.CodeUnsupportedMutation},
+		{name: "non object tun", patch: map[string]any{"tun": "enabled"}, code: protocol.CodeInvalidArgument},
+		{name: "non boolean enable", patch: map[string]any{"tun": map[string]any{"enable": "true"}}, code: protocol.CodeInvalidArgument},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := mutator.ApplyConfigPatch(ctx, test.patch)
+			var apiError protocol.APIError
+			if !errors.As(err, &apiError) || apiError.Code != test.code {
+				t.Fatalf("err=%v, code=%q", err, apiError.Code)
+			}
+		})
+	}
+}
+
+func assertWebOperation(t *testing.T, operation runtimeapi.Operation, prefix string) {
+	t.Helper()
+	if operation.Source != "web" {
+		t.Fatalf("operation source=%q", operation.Source)
+	}
+	if operation.ID == "" || !strings.HasPrefix(operation.ID, prefix) {
+		t.Fatalf("operation ID=%q, prefix=%q", operation.ID, prefix)
+	}
+}
 
 func TestBuildRuntimeCreatesBootstrapAndSharedState(t *testing.T) {
 	paths := platform.NewPaths(filepath.Join(t.TempDir(), "data"))

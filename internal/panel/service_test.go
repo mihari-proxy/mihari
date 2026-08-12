@@ -189,6 +189,130 @@ func TestServiceReinstallReplacesTreeAndRestoresDefault(t *testing.T) {
 	}
 }
 
+func TestServicePrepareUpdateDoesNotPromoteUntilCommit(t *testing.T) {
+	paths, server, _, _ := panelFixture(t)
+	defer server.Close()
+	service, err := Open(ServiceOptions{
+		WebRoot: paths.WebRoot, WebActive: paths.WebActive, StagingDir: paths.PanelStaging,
+		HTTPClient: server.Client(), AllowHTTP: true,
+		Adapters: []Adapter{
+			fixtureAdapter{id: IDZashboard, name: "Zashboard", build: "v2.0.0", asset: server.URL + "/v2.zip"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prepared, err := service.PrepareUpdate(context.Background(), IDZashboard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Cleanup()
+	if !prepared.Valid() {
+		t.Fatal("prepared update candidate is not valid")
+	}
+	buildDir := filepath.Join(paths.WebRoot, IDZashboard, "v2.0.0")
+	if _, err := os.Stat(buildDir); !os.IsNotExist(err) {
+		t.Fatalf("prepared update promoted before commit: %v", err)
+	}
+	if err := prepared.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(buildDir, "index.html")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServicePreparedUpdateCleanupRemovesStagingCandidate(t *testing.T) {
+	paths, server, _, _ := panelFixture(t)
+	defer server.Close()
+	service, err := Open(ServiceOptions{
+		WebRoot: paths.WebRoot, WebActive: paths.WebActive, StagingDir: paths.PanelStaging,
+		HTTPClient: server.Client(), AllowHTTP: true,
+		Adapters: []Adapter{
+			fixtureAdapter{id: IDZashboard, name: "Zashboard", build: "v2.0.0", asset: server.URL + "/v2.zip"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := service.PrepareUpdate(context.Background(), IDZashboard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared.Cleanup()
+	entries, err := os.ReadDir(paths.PanelStaging)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("staging entries after cleanup=%v", entries)
+	}
+	if _, err := os.Stat(filepath.Join(paths.WebRoot, IDZashboard, "v2.0.0")); !os.IsNotExist(err) {
+		t.Fatalf("cleaned candidate promoted into web root: %v", err)
+	}
+}
+
+func TestServicePrepareReinstallDoesNotMutateUntilCommit(t *testing.T) {
+	paths, server, _, _ := panelFixture(t)
+	defer server.Close()
+	service, err := Open(ServiceOptions{
+		WebRoot: paths.WebRoot, WebActive: paths.WebActive, StagingDir: paths.PanelStaging,
+		HTTPClient: server.Client(), AllowHTTP: true,
+		Adapters: []Adapter{
+			fixtureAdapter{id: IDZashboard, name: "Zashboard", build: "v1.0.0", asset: server.URL + "/v1.zip"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Install(context.Background(), IDZashboard, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Activate(context.Background(), IDZashboard); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(paths.WebRoot, IDZashboard, "v1.0.0", "stale.txt")
+	if err := os.WriteFile(marker, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	prepared, err := service.PrepareReinstall(context.Background(), IDZashboard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Cleanup()
+	if !prepared.Valid() {
+		t.Fatal("prepared reinstall candidate is not valid")
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("reinstall mutated existing tree during prepare: %v", err)
+	}
+	active, err := service.Active()
+	if err != nil || active.Panel != IDZashboard || active.Build != "v1.0.0" {
+		t.Fatalf("active changed during prepare: %#v err=%v", active, err)
+	}
+
+	if err := prepared.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("stale marker survived reinstall commit: %v", err)
+	}
+	active, err = service.Active()
+	if err != nil || active.Panel != IDZashboard || active.Build != "v1.0.0" {
+		t.Fatalf("active not restored after reinstall commit: %#v err=%v", active, err)
+	}
+	prepared.Cleanup()
+	entries, err := os.ReadDir(paths.PanelStaging)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("staging entries after reinstall cleanup=%v", entries)
+	}
+}
+
 func TestServiceUninstallUnknownPanel(t *testing.T) {
 	paths, server, _, _ := panelFixture(t)
 	defer server.Close()

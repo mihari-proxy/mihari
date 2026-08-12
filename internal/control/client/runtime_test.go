@@ -3,9 +3,12 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -123,8 +126,18 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 				_, err := client.UpdateOnboarding(ctx, protocol.OnboardingUpdateRequest{OperationID: "setup-1", IfRevision: &revision, Complete: &complete, WebAddr: &webAddr})
 				return err
 			}},
-		{"subscriptions", http.MethodGet, "/v1/subscriptions", "", `{"schema":"mihari/v1","revision":1,"global_interval":"12h","subscriptions":[]}`,
-			func(ctx context.Context, client *Client) error { _, err := client.Subscriptions(ctx); return err }},
+		{"subscriptions", http.MethodGet, "/v1/subscriptions", "", `{"schema":"mihari/v1","revision":11,"active_id":"listed-one","global_interval":"9h","subscriptions":[{"id":"listed-one","name":"listed","enabled":true,"auto_refresh":false,"interval":"3h","cached":true,"generation":4,"proxy_mode":"auto"}]}`,
+			func(ctx context.Context, client *Client) error {
+				result, err := client.Subscriptions(ctx)
+				if err != nil {
+					return err
+				}
+				wantSubscription := protocol.Subscription{ID: "listed-one", Name: "listed", Enabled: true, AutoRefresh: false, Interval: "3h", Cached: true, Generation: 4, ProxyMode: "auto"}
+				if result.Schema != "mihari/v1" || result.Revision != 11 || result.ActiveID != "listed-one" || result.GlobalInterval != "9h" || len(result.Subscriptions) != 1 || result.Subscriptions[0] != wantSubscription {
+					return fmt.Errorf("subscription list=%#v", result)
+				}
+				return nil
+			}},
 		{"TUI preferences", http.MethodGet, "/v1/preferences/tui", "", `{"schema":"mihari/v1","revision":1,"connections_columns":["host","chain"]}`,
 			func(ctx context.Context, client *Client) error { _, err := client.TUIPreferences(ctx); return err }},
 		{"update TUI preferences", http.MethodPatch, "/v1/preferences/tui", `{"operation_id":"columns-1","if_revision":1,"connections_columns":["source","traffic"]}`, `{"schema":"mihari/v1","revision":2,"connections_columns":["source","traffic"]}`,
@@ -135,28 +148,114 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 				})
 				return err
 			}},
-		{"subscription add", http.MethodPost, "/v1/subscriptions", `{"operation_id":"op","name":"main","url":"https://example.test/sub"}`, `{"schema":"mihari/v1","revision":2,"subscription":{"id":"one","name":"main","enabled":true,"auto_refresh":true,"interval":"","cached":false,"generation":0}}`,
+		{"subscription add", http.MethodPost, "/v1/subscriptions", `{"operation_id":"add-1","if_revision":11,"name":"added","url":"https://example.test/sub","proxy_mode":"proxy"}`, `{"schema":"mihari/v1","operation_id":"add-1","revision":12,"subscription":{"id":"added-one","name":"added","enabled":true,"auto_refresh":true,"interval":"6h","cached":false,"generation":0,"proxy_mode":"proxy"}}`,
 			func(ctx context.Context, client *Client) error {
-				_, err := client.AddSubscription(ctx, protocol.SubscriptionAddRequest{OperationID: "op", Name: "main", URL: "https://example.test/sub"})
-				return err
+				revision := uint64(11)
+				result, err := client.AddSubscription(ctx, protocol.SubscriptionAddRequest{OperationID: "add-1", IfRevision: &revision, Name: "added", URL: "https://example.test/sub", ProxyMode: "proxy"})
+				if err != nil {
+					return err
+				}
+				return assertSubscriptionResult(result, protocol.SubscriptionResult{
+					Schema: "mihari/v1", OperationID: "add-1", Revision: 12,
+					Subscription: protocol.Subscription{ID: "added-one", Name: "added", Enabled: true, AutoRefresh: true, Interval: "6h", Cached: false, Generation: 0, ProxyMode: "proxy"},
+				})
 			}},
-		{"subscription refresh", http.MethodPost, "/v1/subscriptions/id%2Fone/refresh", `{"operation_id":"op"}`, `{"schema":"mihari/v1","revision":2,"subscription":{"id":"one","name":"main","enabled":true,"auto_refresh":true,"interval":"","cached":true,"generation":1}}`,
+		{"subscription refresh", http.MethodPost, "/v1/subscriptions/id%2Fone/refresh", `{"operation_id":"refresh-1","if_revision":12}`, `{"schema":"mihari/v1","operation_id":"refresh-1","revision":13,"subscription":{"id":"id/one","name":"refreshed","enabled":true,"auto_refresh":true,"interval":"2h","cached":true,"generation":8,"proxy_mode":"auto"}}`,
 			func(ctx context.Context, client *Client) error {
-				_, err := client.RefreshSubscription(ctx, "id/one", protocol.MutationRequest{OperationID: "op"})
-				return err
+				revision := uint64(12)
+				result, err := client.RefreshSubscription(ctx, "id/one", protocol.MutationRequest{OperationID: "refresh-1", IfRevision: &revision})
+				if err != nil {
+					return err
+				}
+				return assertSubscriptionResult(result, protocol.SubscriptionResult{
+					Schema: "mihari/v1", OperationID: "refresh-1", Revision: 13,
+					Subscription: protocol.Subscription{ID: "id/one", Name: "refreshed", Enabled: true, AutoRefresh: true, Interval: "2h", Cached: true, Generation: 8, ProxyMode: "auto"},
+				})
+			}},
+		{"subscription show", http.MethodGet, "/v1/subscriptions/id%2Fone", "", `{"schema":"mihari/v1","revision":14,"subscription":{"id":"id/one","name":"shown","enabled":true,"auto_refresh":false,"interval":"1h","cached":true,"generation":5}}`,
+			func(ctx context.Context, client *Client) error {
+				result, err := client.Subscription(ctx, "id/one")
+				if err != nil {
+					return err
+				}
+				return assertSubscriptionResult(result, protocol.SubscriptionResult{
+					Schema: "mihari/v1", Revision: 14,
+					Subscription: protocol.Subscription{ID: "id/one", Name: "shown", Enabled: true, AutoRefresh: false, Interval: "1h", Cached: true, Generation: 5},
+				})
+			}},
+		{"subscription use", http.MethodPut, "/v1/subscriptions/id%2Fone/active", `{"operation_id":"use-1","if_revision":14}`, `{"schema":"mihari/v1","operation_id":"use-1","revision":15,"subscription":{"id":"id/one","name":"active","enabled":true,"auto_refresh":true,"interval":"4h","cached":true,"generation":6}}`,
+			func(ctx context.Context, client *Client) error {
+				revision := uint64(14)
+				result, err := client.UseSubscription(ctx, "id/one", protocol.MutationRequest{OperationID: "use-1", IfRevision: &revision})
+				if err != nil {
+					return err
+				}
+				return assertSubscriptionResult(result, protocol.SubscriptionResult{
+					Schema: "mihari/v1", OperationID: "use-1", Revision: 15,
+					Subscription: protocol.Subscription{ID: "id/one", Name: "active", Enabled: true, AutoRefresh: true, Interval: "4h", Cached: true, Generation: 6},
+				})
+			}},
+		{"subscription enable", http.MethodPut, "/v1/subscriptions/id%2Fone/enabled", `{"operation_id":"enable-1","if_revision":15,"enabled":false}`, `{"schema":"mihari/v1","operation_id":"enable-1","revision":16,"subscription":{"id":"id/one","name":"disabled","enabled":false,"auto_refresh":false,"interval":"5h","cached":true,"generation":6}}`,
+			func(ctx context.Context, client *Client) error {
+				revision := uint64(15)
+				result, err := client.SetSubscriptionEnabled(ctx, "id/one", protocol.SubscriptionEnabledRequest{OperationID: "enable-1", IfRevision: &revision, Enabled: false})
+				if err != nil {
+					return err
+				}
+				return assertSubscriptionResult(result, protocol.SubscriptionResult{
+					Schema: "mihari/v1", OperationID: "enable-1", Revision: 16,
+					Subscription: protocol.Subscription{ID: "id/one", Name: "disabled", Enabled: false, AutoRefresh: false, Interval: "5h", Cached: true, Generation: 6},
+				})
+			}},
+		{"subscription update", http.MethodPatch, "/v1/subscriptions/id%2Fone", `{"operation_id":"update-1","if_revision":16,"interval":"","auto_refresh":false}`, `{"schema":"mihari/v1","operation_id":"update-1","revision":17,"subscription":{"id":"id/one","name":"updated","enabled":true,"auto_refresh":false,"interval":"","cached":true,"generation":7,"proxy_mode":"proxy"}}`,
+			func(ctx context.Context, client *Client) error {
+				revision := uint64(16)
+				interval := ""
+				autoRefresh := false
+				result, err := client.UpdateSubscription(ctx, "id/one", protocol.SubscriptionUpdateRequest{
+					OperationID: "update-1", IfRevision: &revision, Interval: &interval, AutoRefresh: &autoRefresh,
+				})
+				if err != nil {
+					return err
+				}
+				return assertSubscriptionResult(result, protocol.SubscriptionResult{
+					Schema: "mihari/v1", OperationID: "update-1", Revision: 17,
+					Subscription: protocol.Subscription{ID: "id/one", Name: "updated", Enabled: true, AutoRefresh: false, Interval: "", Cached: true, Generation: 7, ProxyMode: "proxy"},
+				})
+			}},
+		{"subscription remove", http.MethodDelete, "/v1/subscriptions/id%2Fone", `{"operation_id":"remove-1","if_revision":17}`, `{"schema":"mihari/v1","operation_id":"remove-1","revision":18}`,
+			func(ctx context.Context, client *Client) error {
+				revision := uint64(17)
+				result, err := client.RemoveSubscription(ctx, "id/one", protocol.MutationRequest{OperationID: "remove-1", IfRevision: &revision})
+				if err != nil {
+					return err
+				}
+				if result.Schema != "mihari/v1" || result.OperationID != "remove-1" || result.Revision != 18 {
+					return fmt.Errorf("remove result=%#v", result)
+				}
+				return nil
 			}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			var requestCount atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				requestCount.Add(1)
 				if request.Method != test.method || request.URL.EscapedPath() != test.path || request.Header.Get("Authorization") != "Bearer token" {
 					t.Errorf("request=%s %s auth=%q", request.Method, request.URL.EscapedPath(), request.Header.Get("Authorization"))
 				}
-				if test.body != "" {
-					raw, _ := io.ReadAll(request.Body)
+				raw, readErr := io.ReadAll(request.Body)
+				if readErr != nil {
+					t.Errorf("read request body: %v", readErr)
+				} else if test.body != "" {
+					if request.Header.Get("Content-Type") != "application/json" {
+						t.Errorf("content type=%q", request.Header.Get("Content-Type"))
+					}
 					if !sameJSON(raw, []byte(test.body)) {
 						t.Errorf("body=%s want=%s", raw, test.body)
 					}
+				} else if len(raw) != 0 {
+					t.Errorf("unexpected body=%s", raw)
 				}
 				_, _ = io.WriteString(response, test.response)
 			}))
@@ -164,7 +263,54 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 			if err := test.invoke(context.Background(), NewHTTP(server.URL, "token", server.Client())); err != nil {
 				t.Fatal(err)
 			}
+			if got := requestCount.Load(); got != 1 {
+				t.Fatalf("request count=%d, want 1", got)
+			}
 		})
+	}
+}
+
+func assertSubscriptionResult(result, want protocol.SubscriptionResult) error {
+	if result != want {
+		return fmt.Errorf("subscription result=%#v want=%#v", result, want)
+	}
+	return nil
+}
+
+func TestClientSetSubscriptionEnabledDecodesRevisionConflict(t *testing.T) {
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requestCount.Add(1)
+		if request.Method != http.MethodPut || request.URL.EscapedPath() != "/v1/subscriptions/id%2Fone/enabled" || request.Header.Get("Authorization") != "Bearer token" {
+			t.Errorf("request=%s %s auth=%q", request.Method, request.URL.EscapedPath(), request.Header.Get("Authorization"))
+		}
+		raw, readErr := io.ReadAll(request.Body)
+		if readErr != nil || !sameJSON(raw, []byte(`{"operation_id":"enable-stale","if_revision":7,"enabled":false}`)) {
+			t.Errorf("body=%s err=%v", raw, readErr)
+		}
+		response.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(response).Encode(protocol.NewError(protocol.CodeRevisionConflict, "subscription revision changed", map[string]any{
+			"expected_revision": 7,
+			"actual_revision":   8,
+		}))
+	}))
+	defer server.Close()
+
+	revision := uint64(7)
+	_, err := NewHTTP(server.URL, "token", server.Client()).SetSubscriptionEnabled(context.Background(), "id/one", protocol.SubscriptionEnabledRequest{
+		OperationID: "enable-stale",
+		IfRevision:  &revision,
+		Enabled:     false,
+	})
+	var apiErr protocol.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected APIError, got %T: %v", err, err)
+	}
+	if apiErr.Code != protocol.CodeRevisionConflict || apiErr.Details["expected_revision"] != float64(7) || apiErr.Details["actual_revision"] != float64(8) {
+		t.Fatalf("api error=%#v", apiErr)
+	}
+	if got := requestCount.Load(); got != 1 {
+		t.Fatalf("request count=%d, want 1", got)
 	}
 }
 

@@ -19,22 +19,79 @@ jobs:
           # configs targeting go1.26 (go.mod); action v6 does not support v2.
           version: v2.12.2
 
-  test:
-    runs-on: windows-latest
+  unit:
+    name: unit (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Test
-        run: go test ./...
+        run: go test -count=1 ./...
+
+  # Fan-in for branch protection rules that still require a status named "test".
+  test:
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [unit]
+    steps:
+      - name: Verify unit matrix
+        run: |
+          for result in ${{ join(needs.unit.result, ' ') }}; do
+            [ "$result" = "success" ] || { echo "unit matrix result: $result"; exit 1; }
+          done
+
+  race:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
       - name: Race
-        run: go test -race ./...
+        run: go test -count=1 -race ./...
+
+  vet-format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
       - name: Vet
         run: go vet ./...
       - name: Format
-        shell: bash
         run: test -z "$(gofmt -l .)"
+
+  # Observe-only coverage: reports total/critical packages; does not fail on percentage.
+  # Relative regression gate (Task 4) requires ≥10 successful main observations first.
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Coverage profile
+        shell: bash
+        run: |
+          profile="$RUNNER_TEMP/mihari-coverage.out"
+          go test -count=1 -covermode=atomic -coverpkg=./... -coverprofile="$profile" ./...
+          go test -count=1 ./scripts/coverage-gate
+          go run ./scripts/coverage-gate report -profile "$profile" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mihari-coverage-profile
+          path: ${{ runner.temp }}/mihari-coverage.out
+          retention-days: 14
+          if-no-files-found: ignore
 
   build:
     runs-on: ubuntu-latest

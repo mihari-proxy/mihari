@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -252,17 +253,14 @@ func TestInstallCommitAndRestartCannotOverlap(t *testing.T) {
 func TestRuntimeMutationWaitsForRestart(t *testing.T) {
 	restartEntered := make(chan struct{})
 	releaseRestart := make(chan struct{})
-	selectCalled := make(chan struct{})
+	selectEntered := make(chan struct{}, 1)
 	manager := newTestManager(Options{
 		Supervisor: &fakeSupervisor{restart: func(context.Context) error {
 			close(restartEntered)
 			<-releaseRestart
 			return nil
 		}},
-		Controller: &fakeController{selectProxy: func(context.Context, string, string) error {
-			close(selectCalled)
-			return nil
-		}},
+		Controller: &fakeController{entered: selectEntered},
 	})
 	restartDone := make(chan error, 1)
 	go func() { restartDone <- manager.Restart(context.Background(), Operation{ID: "restart", Source: "test"}) }()
@@ -271,21 +269,245 @@ func TestRuntimeMutationWaitsForRestart(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("restart did not begin")
 	}
+	mutationCtx := &doneObservedContext{Context: context.Background(), observed: make(chan struct{})}
 	selectDone := make(chan error, 1)
 	go func() {
-		selectDone <- manager.SelectProxy(context.Background(), Operation{ID: "select", Source: "test"}, "GLOBAL", "DIRECT")
+		selectDone <- manager.SelectProxy(mutationCtx, Operation{ID: "select", Source: "test"}, "GLOBAL", "DIRECT")
 	}()
 	select {
-	case <-selectCalled:
+	case <-mutationCtx.observed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("proxy selection did not wait on the maintenance gate")
+	}
+	select {
+	case <-selectEntered:
 		t.Fatal("proxy selection overlapped restart")
-	case <-time.After(30 * time.Millisecond):
+	default:
 	}
 	close(releaseRestart)
 	if err := <-restartDone; err != nil {
 		t.Fatal(err)
 	}
+	select {
+	case <-selectEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("proxy selection did not enter controller after restart")
+	}
 	if err := <-selectDone; err != nil {
 		t.Fatal(err)
+	}
+}
+
+type doneObservedContext struct {
+	context.Context
+	once     sync.Once
+	observed chan struct{}
+}
+
+func (c *doneObservedContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.observed) })
+	return c.Context.Done()
+}
+
+type controllerMutationContextKey struct{}
+
+func TestControllerMutationsCommitRevisionAndPropagateErrors(t *testing.T) {
+	controllerErr := errors.New("controller mutation failed")
+	tests := []struct {
+		name     string
+		kind     string
+		wantArgs []string
+		setError func(*fakeController, error)
+		invoke   func(context.Context, *Manager, Operation) error
+	}{
+		{
+			name:     "select proxy",
+			kind:     "select",
+			wantArgs: []string{"GLOBAL", "DIRECT"},
+			setError: func(controller *fakeController, err error) { controller.selectProxyErr = err },
+			invoke: func(ctx context.Context, manager *Manager, operation Operation) error {
+				return manager.SelectProxy(ctx, operation, "GLOBAL", "DIRECT")
+			},
+		},
+		{
+			name:     "close connection",
+			kind:     "close",
+			wantArgs: []string{"connection-1"},
+			setError: func(controller *fakeController, err error) { controller.closeConnectionErr = err },
+			invoke: func(ctx context.Context, manager *Manager, operation Operation) error {
+				return manager.CloseConnection(ctx, operation, "connection-1")
+			},
+		},
+		{
+			name:     "close all connections",
+			kind:     "close-all",
+			wantArgs: nil,
+			setError: func(controller *fakeController, err error) { controller.closeAllConnectionsErr = err },
+			invoke: func(ctx context.Context, manager *Manager, operation Operation) error {
+				return manager.CloseAllConnections(ctx, operation)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name+" success", func(t *testing.T) {
+			controller := &fakeController{}
+			manager := newTestManager(Options{Controller: controller})
+			ctx := context.WithValue(context.Background(), controllerMutationContextKey{}, test.name)
+
+			if err := test.invoke(ctx, manager, Operation{ID: "success", Source: "test"}); err != nil {
+				t.Fatal(err)
+			}
+			if revision := manager.Snapshot().Revision; revision != 1 {
+				t.Fatalf("revision=%d want=1", revision)
+			}
+			requireControllerCall(t, controller, test.kind, ctx, test.wantArgs)
+		})
+
+		t.Run(test.name+" error", func(t *testing.T) {
+			controller := &fakeController{}
+			test.setError(controller, controllerErr)
+			manager := newTestManager(Options{Controller: controller})
+			ctx := context.WithValue(context.Background(), controllerMutationContextKey{}, test.name)
+
+			err := test.invoke(ctx, manager, Operation{ID: "error", Source: "test"})
+			if !errors.Is(err, controllerErr) {
+				t.Fatalf("err=%v want controller error", err)
+			}
+			if revision := manager.Snapshot().Revision; revision != 0 {
+				t.Fatalf("revision=%d want=0", revision)
+			}
+			requireControllerCall(t, controller, test.kind, ctx, test.wantArgs)
+		})
+	}
+}
+
+func TestControllerMutationsRunControllerIOOutsideCoordinatorLock(t *testing.T) {
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	controller := &fakeController{entered: entered, release: release}
+	manager := newTestManager(Options{Controller: controller})
+	current := uint64(0)
+	mutationDone := make(chan error, 1)
+	go func() {
+		mutationDone <- manager.SelectProxy(context.Background(), Operation{
+			ID: "select-with-concurrent-state", Source: "test", IfRevision: &current,
+		}, "GLOBAL", "DIRECT")
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("controller mutation did not begin")
+	}
+
+	coordinatorStarted := make(chan struct{})
+	coordinatorDone := make(chan error, 1)
+	go func() {
+		close(coordinatorStarted)
+		_, err := manager.coordinator.Do(context.Background(), state.CommandMeta{Source: "concurrent-test"}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+			return snapshot, nil
+		})
+		coordinatorDone <- err
+	}()
+	<-coordinatorStarted
+	select {
+	case err := <-coordinatorDone:
+		if err != nil {
+			close(release)
+			<-mutationDone
+			t.Fatalf("concurrent coordinator mutation: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		close(release)
+		<-mutationDone
+		<-coordinatorDone
+		t.Fatal("coordinator mutation remained blocked while controller I/O was in progress")
+	}
+
+	close(release)
+	err := <-mutationDone
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeRevisionConflict {
+		t.Fatalf("err=%v want revision conflict", err)
+	}
+	if revision := manager.Snapshot().Revision; revision != 1 {
+		t.Fatalf("revision=%d want=1", revision)
+	}
+}
+
+func TestControllerMutationsRejectStaleRevisionBeforeControllerIO(t *testing.T) {
+	controller := &fakeController{}
+	manager := newTestManager(Options{Controller: controller})
+	manager.store.Store(state.Snapshot{Revision: 2})
+	stale := uint64(1)
+
+	err := manager.CloseAllConnections(context.Background(), Operation{
+		ID: "stale-close-all", Source: "test", IfRevision: &stale,
+	})
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeRevisionConflict {
+		t.Fatalf("err=%v want revision conflict", err)
+	}
+	if calls := controller.callsFor("close-all"); len(calls) != 0 {
+		t.Fatalf("close-all calls=%d want=0", len(calls))
+	}
+	if revision := manager.Snapshot().Revision; revision != 2 {
+		t.Fatalf("revision=%d want=2", revision)
+	}
+}
+
+func TestControllerMutationsDeduplicateConcurrentOperationID(t *testing.T) {
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	controller := &fakeController{entered: entered, release: release}
+	manager := newTestManager(Options{Controller: controller})
+	operation := Operation{ID: "same-select", Source: "test"}
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- manager.SelectProxy(context.Background(), operation, "GLOBAL", "DIRECT")
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("controller mutation did not begin")
+	}
+
+	secondCtx := &doneObservedContext{Context: context.Background(), observed: make(chan struct{})}
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- manager.SelectProxy(secondCtx, operation, "GLOBAL", "DIRECT")
+	}()
+	select {
+	case <-secondCtx.observed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("duplicate mutation did not enter existing-operation wait")
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+	if calls := controller.callsFor("select"); len(calls) != 1 {
+		t.Fatalf("select calls=%d want=1", len(calls))
+	}
+	if revision := manager.Snapshot().Revision; revision != 1 {
+		t.Fatalf("revision=%d want=1", revision)
+	}
+}
+
+func requireControllerCall(t *testing.T, controller *fakeController, kind string, wantContext context.Context, wantArgs []string) {
+	t.Helper()
+	calls := controller.callsFor(kind)
+	if len(calls) != 1 {
+		t.Fatalf("%s calls=%d want=1", kind, len(calls))
+	}
+	if calls[0].ctx != wantContext {
+		t.Fatalf("%s context was not propagated", kind)
+	}
+	if !reflect.DeepEqual(calls[0].args, wantArgs) {
+		t.Fatalf("%s args=%v want=%v", kind, calls[0].args, wantArgs)
 	}
 }
 
@@ -599,13 +821,50 @@ func (s *fakeSupervisor) Restart(ctx context.Context) error {
 }
 
 type fakeController struct {
-	selectProxy        func(context.Context, string, string) error
-	updateRuleProvider func(context.Context, string) error
-	configs            map[string]any
-	configsErr         error
-	patchConfigs       func(context.Context, map[string]any) error
-	lastPatch          map[string]any
-	patchCalls         int
+	mu                     sync.Mutex
+	calls                  []controllerCall
+	entered                chan<- struct{}
+	release                <-chan struct{}
+	selectProxy            func(context.Context, string, string) error
+	selectProxyErr         error
+	closeConnectionErr     error
+	closeAllConnectionsErr error
+	updateRuleProvider     func(context.Context, string) error
+	configs                map[string]any
+	configsErr             error
+	patchConfigs           func(context.Context, map[string]any) error
+	lastPatch              map[string]any
+	patchCalls             int
+}
+
+type controllerCall struct {
+	kind string
+	ctx  context.Context
+	args []string
+}
+
+func (c *fakeController) recordCall(kind string, ctx context.Context, args ...string) {
+	c.mu.Lock()
+	c.calls = append(c.calls, controllerCall{kind: kind, ctx: ctx, args: append([]string(nil), args...)})
+	c.mu.Unlock()
+	if c.entered != nil {
+		c.entered <- struct{}{}
+	}
+	if c.release != nil {
+		<-c.release
+	}
+}
+
+func (c *fakeController) callsFor(kind string) []controllerCall {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var calls []controllerCall
+	for _, call := range c.calls {
+		if call.kind == kind {
+			calls = append(calls, call)
+		}
+	}
+	return calls
 }
 
 func (c *fakeController) Proxies(context.Context) (mihomo.Proxies, error) {
@@ -613,10 +872,11 @@ func (c *fakeController) Proxies(context.Context) (mihomo.Proxies, error) {
 }
 
 func (c *fakeController) SelectProxy(ctx context.Context, group, name string) error {
+	c.recordCall("select", ctx, group, name)
 	if c.selectProxy != nil {
 		return c.selectProxy(ctx, group, name)
 	}
-	return nil
+	return c.selectProxyErr
 }
 
 func (c *fakeController) DelayGroup(context.Context, string, string, int) (mihomo.Delays, error) {
@@ -631,9 +891,15 @@ func (c *fakeController) Connections(context.Context) (mihomo.Connections, error
 	return mihomo.Connections{}, nil
 }
 
-func (c *fakeController) CloseConnection(context.Context, string) error { return nil }
+func (c *fakeController) CloseConnection(ctx context.Context, id string) error {
+	c.recordCall("close", ctx, id)
+	return c.closeConnectionErr
+}
 
-func (c *fakeController) CloseAllConnections(context.Context) error { return nil }
+func (c *fakeController) CloseAllConnections(ctx context.Context) error {
+	c.recordCall("close-all", ctx)
+	return c.closeAllConnectionsErr
+}
 
 func (c *fakeController) Rules(context.Context) (mihomo.Rules, error) {
 	return mihomo.Rules{}, nil

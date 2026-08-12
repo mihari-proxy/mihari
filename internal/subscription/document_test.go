@@ -39,3 +39,35 @@ func TestParseDocumentRejectsInvalidNonClashAndMultipleDocuments(t *testing.T) {
 		})
 	}
 }
+
+func FuzzParseDocument(f *testing.F) {
+	seeds := []string{
+		"",
+		"proxies: []\n",
+		"proxy-providers: {}\n",
+		"proxies:\n  - {name: one, type: ss, server: 127.0.0.1, port: 443, cipher: aes-128-gcm, password: x}\n",
+		"proxies: not-a-list\n",
+		"hello: world\n",
+		"proxies: []\n---\nproxies: []\n",
+		"proxies: &a []\nextra: *a\n",
+		"proxies: [" + string(make([]byte, 256)) + "]\n",
+		"!unknown tag\n",
+	}
+	for _, seed := range seeds {
+		f.Add([]byte(seed))
+	}
+	f.Fuzz(func(t *testing.T, input []byte) {
+		document, err := ParseDocument(input)
+		if err == nil && document == nil {
+			t.Fatal("nil document without error")
+		}
+		if err != nil {
+			return
+		}
+		_, proxies := document["proxies"]
+		_, providers := document["proxy-providers"]
+		if !proxies && !providers {
+			t.Fatal("accepted non-subscription document")
+		}
+	})
+}
