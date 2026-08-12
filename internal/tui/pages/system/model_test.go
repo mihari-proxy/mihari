@@ -1284,6 +1284,34 @@ func TestSystemNetworkStatusRowUpdatesDynamically(t *testing.T) {
 	}
 }
 
+func TestSystemNetworkStatusRowEnterShowsObserveDetail(t *testing.T) {
+	client := &fakeClient{
+		systemProxy: protocol.SystemProxyStatus{
+			Revision: 3, Desired: true, Target: "127.0.0.1:9190",
+			Observed: protocol.SystemProxyObserved{Enabled: true, Server: "127.0.0.1:9190", Owned: true},
+		},
+	}
+	model := New(client, func() string { return "op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilitySystemProxy}}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(true)
+	model.SetSystemProxy(client.systemProxy)
+	model.focusID = rowSystemProxy // status row, not the action row
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if cmd != nil {
+		t.Fatalf("status row enter must not fire a command, got %v", cmd)
+	}
+	if model.detail == nil {
+		t.Fatal("status row enter should open the observe detail panel")
+	}
+	view := model.View()
+	for _, want := range []string{"Target", "127.0.0.1:9190"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("observe detail missing %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestSystemRendersPanelEndpointRowsWhenInstalled(t *testing.T) {
 	client := &fakeClient{
 		onboarding: protocol.OnboardingStatus{MixedAddr: "127.0.0.1:9190", ControllerAddr: "127.0.0.1:9090", WebAddr: "127.0.0.1:9191"},
