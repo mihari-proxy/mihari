@@ -918,12 +918,12 @@ func (m *Model) rows() []row {
 	}
 	daemon := fmt.Sprintf("Version %s\nUptime %s\nHealth %s\nRevision %d\nConfig %s", valueOr(m.status.DaemonVersion, ui.UnknownLabel), uptime(m.status.StartedAt), valueOr(m.status.Health, ui.UnknownLabel), m.status.Revision, configState)
 	core := fmt.Sprintf("Status %s\nVersion %s\nPID %d\nRestarts %d", valueOr(m.core.Status, ui.UnknownLabel), valueOr(m.core.Version, ui.UnknownLabel), m.core.PID, m.core.Restarts)
-	rows := []row{{id: rowDaemon, section: ui.DaemonSectionTitle, label: ui.DaemonLabel, value: daemonValue(m.theme, m.status), detail: daemon}}
+	rows := []row{{id: rowDaemon, section: ui.DaemonSectionTitle, label: ui.DaemonLabel, value: daemonValue(m.theme, m.status, !m.mutationsEnabled), detail: daemon}}
 	rows = append(rows, m.endpointRows()...)
 	rows = append(rows, m.mihariUpdateRow())
 	rows = append(rows,
 		row{id: rowRunSetup, section: ui.DaemonSectionTitle, label: ui.RunSetupLabel, detail: ui.RunSetupDetail},
-		row{id: rowCore, section: ui.CoreSectionTitle, label: ui.MihomoCoreLabel, value: coreValue(m.theme, m.core), detail: core},
+		row{id: rowCore, section: ui.CoreSectionTitle, label: ui.MihomoCoreLabel, value: coreValue(m.theme, m.core, !m.mutationsEnabled), detail: core},
 		row{id: rowCoreUpdate, section: ui.CoreSectionTitle, label: m.coreActionLabel(), value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.UpdateCoreImpact},
 		row{id: rowCoreRestart, section: ui.CoreSectionTitle, label: ui.RestartCoreLabel, value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.RestartCoreImpact},
 	)
@@ -1664,10 +1664,17 @@ func actionState(available, enabled bool) string {
 }
 
 // daemonValue renders the daemon row value: a status dot for health (tone from
-// the health word) followed by the version as muted context.
-func daemonValue(theme ui.Theme, status protocol.Status) string {
+// the health word) followed by the version as muted context. When the control
+// connection is stale the dot degrades to caution yellow and the health word is
+// marked stale (design G2), mirroring the Overview core card.
+func daemonValue(theme ui.Theme, status protocol.Status, stale bool) string {
 	health := valueOr(status.Health, ui.UnknownLabel)
-	return ui.StatusDot(theme, ui.ClassifyStatusTone(health), health) + "  " +
+	tone := ui.ClassifyStatusTone(health)
+	if stale {
+		tone = ui.ToneCaution
+		health += " · " + ui.StaleLabel
+	}
+	return ui.StatusDot(theme, tone, health) + "  " +
 		theme.Muted.Render(valueOr(status.DaemonVersion, ui.UnknownLabel))
 }
 
@@ -1686,10 +1693,17 @@ func coreTone(status string) ui.StatusTone {
 }
 
 // coreValue renders the core row value: a status dot (tone from coreTone) and
-// the version as muted context.
-func coreValue(theme ui.Theme, core protocol.CoreStatus) string {
+// the version as muted context. When the control connection is stale the dot
+// degrades to caution yellow and the status word is marked stale (design G2),
+// mirroring the Overview core card.
+func coreValue(theme ui.Theme, core protocol.CoreStatus, stale bool) string {
 	status := valueOr(core.Status, ui.UnknownLabel)
-	return ui.StatusDot(theme, coreTone(core.Status), status) + "  " +
+	tone := coreTone(core.Status)
+	if stale {
+		tone = ui.ToneCaution
+		status += " · " + ui.StaleLabel
+	}
+	return ui.StatusDot(theme, tone, status) + "  " +
 		theme.Muted.Render(valueOr(core.Version, ui.UnknownLabel))
 }
 

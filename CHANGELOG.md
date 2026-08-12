@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- System 页 daemon / mihomo core 行在控制连接断开后降级显示：保留末值但圆点转黄并追加 `· Stale`,与 Overview core 卡及同页其它行一致（#36）
+
 ## [v0.4.0] - 2026-08-12
 
 ### Added
