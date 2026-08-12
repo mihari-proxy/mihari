@@ -3,6 +3,7 @@ package setup
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
 	"testing"
 
@@ -545,5 +546,131 @@ func TestSetupReviewShowsServiceStatus(t *testing.T) {
 	model = updated.(*Model)
 	if model.serviceLoaded {
 		t.Fatalf("stale service result applied")
+	}
+}
+
+func TestProbeEndpointDetectsOccupiedAndFree(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	occupied := listener.Addr().String()
+	if got := probeEndpoint(occupied); got != portOccupied {
+		t.Fatalf("probeEndpoint(occupied)=%v want portOccupied", got)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if got := probeEndpoint(occupied); got != portFree {
+		t.Fatalf("probeEndpoint(freed)=%v want portFree", got)
+	}
+}
+
+func TestFindAvailablePortsSkipsOccupied(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+	occupied := listener.Addr().String()
+	current := [3]string{occupied, "127.0.0.1:20001", "127.0.0.1:20002"}
+	result := findAvailablePorts(current)
+	if result[0] == occupied {
+		t.Fatalf("occupied port not replaced: %s", result[0])
+	}
+	if got := probeEndpoint(result[0]); got != portFree {
+		t.Fatalf("replacement %s probe=%v want portFree", result[0], got)
+	}
+	if result[0] == result[1] || result[0] == result[2] || result[1] == result[2] {
+		t.Fatalf("results not distinct: %v", result)
+	}
+}
+
+func TestSetupEndpointsMarksOccupiedPortRed(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+	occupied := listener.Addr().String()
+	model := loadedModel(&fakeClient{status: defaultStatus(false)})
+	model.inputs[0].SetValue(occupied)
+	updated, _ := model.Update(model.probePorts()())
+	model = updated.(*Model)
+	if model.portProbe[0] != portOccupied {
+		t.Fatalf("portProbe[0]=%v want portOccupied", model.portProbe[0])
+	}
+	if !strings.Contains(model.View(), ui.SetupPortInUse) {
+		t.Fatalf("port in-use marker missing:\n%s", model.View())
+	}
+}
+
+func TestSetupEndpointsEnterAutoFixesOccupiedPorts(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+	occupied := listener.Addr().String()
+	model := loadedModel(&fakeClient{status: defaultStatus(false)})
+	model.inputs[0].SetValue(occupied)
+	model.inputs[1].SetValue("127.0.0.1:20001")
+	model.inputs[2].SetValue("127.0.0.1:20002")
+	updated, _ := model.Update(model.probePorts()())
+	model = updated.(*Model)
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if model.step != stepEndpoints {
+		t.Fatalf("advanced before auto-fix: step=%v", model.step)
+	}
+	if command == nil {
+		t.Fatal("expected re-probe command after auto-fix")
+	}
+	updated, _ = model.Update(command())
+	model = updated.(*Model)
+	if model.inputs[0].Value() == occupied {
+		t.Fatalf("occupied port not rewritten: %s", model.inputs[0].Value())
+	}
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if model.step != stepCore {
+		t.Fatalf("did not advance after fix: step=%v", model.step)
+	}
+}
+
+func TestSetupEndpointsEnterAdvancesWhenAllFree(t *testing.T) {
+	model := loadedModel(&fakeClient{status: defaultStatus(false)})
+	model.portProbe = [3]portState{portFree, portFree, portFree}
+	model.portProbeLoaded = true
+	model = updateKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if model.step != stepCore {
+		t.Fatalf("step=%v want stepCore", model.step)
+	}
+}
+
+func TestSetupPortProbeStaleResultsIgnored(t *testing.T) {
+	model := loadedModel(&fakeClient{status: defaultStatus(false)})
+	first := model.probePorts()
+	model.probePorts()
+	updated, _ := model.Update(first())
+	model = updated.(*Model)
+	if model.portProbeLoaded {
+		t.Fatalf("stale probe result applied")
+	}
+}
+
+func TestSetupPortProbeDoesNotBlockOnUnknown(t *testing.T) {
+	model := loadedModel(&fakeClient{status: defaultStatus(false)})
+	model.probe = func(string) portState { return portUnknown }
+	updated, _ := model.Update(model.probePorts()())
+	model = updated.(*Model)
+	view := model.View()
+	if strings.Contains(view, ui.SetupPortInUse) {
+		t.Fatalf("unknown port marked in-use:\n%s", view)
+	}
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if model.step != stepCore {
+		t.Fatalf("unknown port blocked enter: step=%v", model.step)
 	}
 }

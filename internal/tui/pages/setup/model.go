@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"strings"
 	"sync/atomic"
+	"syscall"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -73,6 +75,23 @@ type serviceStatusMsg struct {
 	err    error
 }
 
+// portState is the three-valued result of a single endpoint port probe.
+type portState uint8
+
+const (
+	portFree     portState = iota // bindable — net.Listen succeeded
+	portOccupied                  // EADDRINUSE — another process holds the port
+	portUnknown                   // any other error (permissions) — not red, not blocking
+)
+
+// portProbeMsg carries generation-guarded endpoint port probe results for
+// stepEndpoints. A stale generation is discarded so rapid edits honor only the
+// latest probe.
+type portProbeMsg struct {
+	gen     uint64
+	results [3]portState
+}
+
 type completeStartMsg struct{}
 
 type completeResultMsg struct {
@@ -118,6 +137,10 @@ type Model struct {
 	serviceLoaded      bool
 	serviceErr         bool
 	serviceGen         uint64
+	portProbe          [3]portState
+	portProbeLoaded    bool
+	portProbeGen       uint64
+	probe              func(string) portState
 	width              int
 	height             int
 	theme              ui.Theme
@@ -170,7 +193,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.inputs = endpointInputs(typed.status)
 		m.subscriptionInputs = subscriptionInputs()
 		m.focusEndpoint(0)
-		return m, nil
+		return m, m.probePorts()
 	case actionResultMsg:
 		m.loading = false
 		if typed.err != nil {
@@ -227,6 +250,13 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		} else {
 			m.serviceErr = true
 		}
+		return m, nil
+	case portProbeMsg:
+		if typed.gen != m.portProbeGen {
+			return m, nil
+		}
+		m.portProbe = typed.results
+		m.portProbeLoaded = true
 		return m, nil
 	case completeStartMsg:
 		m.loading = true
@@ -341,13 +371,19 @@ func (m *Model) updateEndpoints(message tea.Msg, key tea.KeyPressMsg) (ui.Page, 
 			m.lastError = err.Error()
 			return m, nil
 		}
+		if m.portProbeLoaded && m.anyPortOccupied() {
+			fixed := findAvailablePorts(m.endpointValuesArray())
+			m.writeEndpoints(fixed)
+			m.lastError = ui.SetupPortAutoFixHint
+			return m, m.probePorts()
+		}
 		m.lastError = ""
 		m.step = stepCore
 		return m, m.fetchCoreLocal()
 	}
 	updated, command := m.inputs[m.focusedField].Update(message)
 	m.inputs[m.focusedField] = updated
-	return m, command
+	return m, tea.Batch(command, m.probePorts())
 }
 
 func (m *Model) updateSubscription(message tea.Msg, key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
@@ -385,7 +421,7 @@ func (m *Model) View() string {
 	switch m.step {
 	case stepEndpoints:
 		lines = append(lines, ui.LocalEndpointsLabel)
-		lines = append(lines, renderInputs([]string{"Mixed", "Controller", "Web"}, m.inputs, m.focusedField)...)
+		lines = append(lines, m.renderEndpoints()...)
 		lines = append(lines, "", ui.SetupEndpointHelp)
 	case stepCore:
 		lines = append(lines, ui.SetupCoreTitle, ui.SetupCoreBody)
@@ -516,6 +552,136 @@ func validateEndpoints(mixedValue, controllerValue, webValue string) error {
 func (m *Model) endpointsChanged() bool {
 	mixed, controller, web := m.endpointValues()
 	return mixed != m.initial.MixedAddr || controller != m.initial.ControllerAddr || web != m.initial.WebAddr
+}
+
+func (m *Model) endpointValuesArray() [3]string {
+	mixed, controller, web := m.endpointValues()
+	return [3]string{mixed, controller, web}
+}
+
+func (m *Model) writeEndpoints(values [3]string) {
+	for index, value := range values {
+		if index < len(m.inputs) {
+			m.inputs[index].SetValue(value)
+		}
+	}
+}
+
+// anyPortOccupied reports whether any probed endpoint is held by another process.
+// portUnknown is intentionally excluded (design §8): permission failures must not
+// block onboarding or render red — the daemon's startup check remains the backstop.
+func (m *Model) anyPortOccupied() bool {
+	for _, state := range m.portProbe {
+		if state == portOccupied {
+			return true
+		}
+	}
+	return false
+}
+
+// probePorts schedules a generation-guarded endpoint probe. Each call bumps
+// portProbeGen so only the most recently scheduled probe's result lands; earlier
+// probes are discarded by the gen guard in the portProbeMsg case. This is the
+// debounce (design §7.2) — a race-free override instead of a wall-clock timer.
+func (m *Model) probePorts() tea.Cmd {
+	m.portProbeGen++
+	gen := m.portProbeGen
+	probe := m.probe
+	if probe == nil {
+		probe = probeEndpoint
+	}
+	return func() tea.Msg {
+		values := m.endpointValuesArray()
+		return portProbeMsg{gen: gen, results: [3]portState{probe(values[0]), probe(values[1]), probe(values[2])}}
+	}
+}
+
+// renderEndpoints renders the three endpoint inputs with focus markers and, once a
+// probe has landed, a trailing ✓ for free ports or ✗ in use for occupied ones; the
+// occupied value is colored Danger. Unknown ports get no marker (design §8).
+func (m *Model) renderEndpoints() []string {
+	labels := []string{"Mixed", "Controller", "Web"}
+	lines := make([]string, 0, len(labels)*2)
+	for index := range m.inputs {
+		marker := "  "
+		if index == m.focusedField {
+			marker = ui.FocusMarker
+		}
+		value := m.inputs[index].View()
+		suffix := ""
+		if m.portProbeLoaded {
+			switch m.portProbe[index] {
+			case portFree:
+				suffix = "  " + m.theme.Success.Render("✓")
+			case portOccupied:
+				value = m.theme.Danger.Render(value)
+				suffix = "  " + m.theme.Danger.Render(ui.SetupPortInUse)
+			}
+		}
+		lines = append(lines, marker+labels[index], "  "+value+suffix)
+	}
+	return lines
+}
+
+// probeEndpoint reports the bindability of a loopback address via a short-lived
+// net.Listen that closes immediately (design §7.2). Success → free; EADDRINUSE →
+// occupied; any other error (permissions) → unknown — the socket never contends
+// with core startup.
+func probeEndpoint(addr string) portState {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		if isAddrInUse(err) {
+			return portOccupied
+		}
+		return portUnknown
+	}
+	_ = listener.Close()
+	return portFree
+}
+
+// isAddrInUse reports whether a listen error means the address is already bound.
+// Cross-platform: EADDRINUSE on Unix, WSAEADDRINUSE (10048) on Windows. Go's
+// syscall.EADDRINUSE constant does not equal the raw Windows socket errno
+// (10048 vs 536870914), so both values are checked explicitly.
+func isAddrInUse(err error) bool {
+	var errno syscall.Errno
+	if !errors.As(err, &errno) {
+		return false
+	}
+	return errno == syscall.EADDRINUSE || errno == 10048
+}
+
+// findAvailablePorts rewrites occupied endpoints to the next free port (walking
+// port+1 up to +1024), leaving free/unknown ports unchanged. Results stay mutually
+// distinct so validateEndpoints' collision rule still holds. If no free port is
+// found within the cap the input is left as-is (design §8) — never an invalid value.
+func findAvailablePorts(current [3]string) [3]string {
+	result := current
+	used := make(map[uint16]bool)
+	for index, addr := range current {
+		parsed, err := netip.ParseAddrPort(addr)
+		if err != nil {
+			continue
+		}
+		if probeEndpoint(addr) != portOccupied {
+			used[parsed.Port()] = true
+			continue
+		}
+		host := parsed.Addr()
+		for offset := 1; offset <= 1024; offset++ {
+			candidate := uint16(parsed.Port()) + uint16(offset)
+			if used[candidate] {
+				continue
+			}
+			candidateAddr := netip.AddrPortFrom(host, candidate).String()
+			if probeEndpoint(candidateAddr) == portFree {
+				result[index] = candidateAddr
+				used[candidate] = true
+				break
+			}
+		}
+	}
+	return result
 }
 
 func (m *Model) installCore() tea.Cmd {
