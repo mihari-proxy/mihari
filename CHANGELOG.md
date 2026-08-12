@@ -6,11 +6,21 @@
 
 ### Added
 
+### Fixed
+
+## [v0.4.1] - 2026-08-12
+
+### Added
+
 - TUI stale footer 显示最后数据时间 `last observed HH:MM`：daemon 控制连接断开后，footer stale 横幅追加最后一次成功数据推送的本地时间，便于判断屏幕上冻结数据的新旧（#37）
 
 ### Fixed
 
 - System 页 daemon / mihomo core 行在控制连接断开后降级显示：保留末值但圆点转黄并追加 `· Stale`,与 Overview core 卡及同页其它行一致（#36）
+
+### Changed
+
+- 仓库根目录整理：install 脚本归入 `scripts/install/`，本地编译产物统一到 `bin/`，社区文档（CONTRIBUTING/CODE_OF_CONDUCT/SECURITY）归入 `.github/`；在线一键安装 raw 地址相应变为 `.../main/scripts/install/install.{sh,ps1}`，AList 离线直链不变（#27, #44）
 
 ## [v0.4.0] - 2026-08-12
 
