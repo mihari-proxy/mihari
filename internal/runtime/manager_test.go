@@ -519,6 +519,15 @@ func TestManagerServiceStatusDelegatesToInjectedFunc(t *testing.T) {
 		t.Fatalf("error should resolve to unknown: status=%#v err=%v", status, err)
 	}
 
+	// Empty status string with nil error must still resolve to "unknown" — a blank
+	// SCM reply is not a positive signal and must never read as a registered state.
+	empty := newTestManager(Options{ServiceStatus: func() (string, error) {
+		return "", nil
+	}})
+	if status, err := empty.ServiceStatus(context.Background()); err != nil || status.Status != "unknown" {
+		t.Fatalf("empty injector string should resolve to unknown: status=%#v err=%v", status, err)
+	}
+
 	none := newTestManager(Options{})
 	if status, err := none.ServiceStatus(context.Background()); err != nil || status.Status != "unknown" {
 		t.Fatalf("nil injector err=%v status=%#v", err, status)

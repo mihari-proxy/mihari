@@ -354,6 +354,7 @@ type fakeRuntime struct {
 	enableTunErr          error
 	disableTunErr         error
 	localCore             core.LocalCoreInfo
+	localCoreErr          error
 	serviceStatusResult   protocol.ServiceStatus
 	serviceStatusErr      error
 }
@@ -475,11 +476,92 @@ func (f *fakeRuntime) DisableTun(_ context.Context, operation runtimeapi.Operati
 }
 
 func (f *fakeRuntime) LocalCore(context.Context) (core.LocalCoreInfo, error) {
-	return f.localCore, nil
+	return f.localCore, f.localCoreErr
 }
 
 func (f *fakeRuntime) ServiceStatus(context.Context) (protocol.ServiceStatus, error) {
 	return f.serviceStatusResult, f.serviceStatusErr
+}
+
+// strippedRuntime wraps a RuntimeAPI to hide the optional capability interfaces
+// (LocalCore, ServiceStatus). Embedding the RuntimeAPI interface rather than
+// *fakeRuntime keeps the wrapper's method set equal to RuntimeAPI, so the server's
+// type-assertion fallback paths (409 on /v1/service/status, omitted local fields on
+// /v1/core) fire exactly as they would for a minimal runtime that never implements
+// them — exercising the degradation contract without a 20-method stub.
+type strippedRuntime struct{ RuntimeAPI }
+
+func TestServiceStatusEndpointRejectsRuntimeWithoutCapability(t *testing.T) {
+	server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: strippedRuntime{&fakeRuntime{}}})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodGet, "/v1/service/status", nil))
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var envelope protocol.ErrorEnvelope
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil || envelope.Error.Code != protocol.CodeInvalidState {
+		t.Fatalf("envelope=%#v err=%v", envelope, err)
+	}
+}
+
+func TestServiceStatusEndpointPropagatesRuntimeError(t *testing.T) {
+	server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: &fakeRuntime{serviceStatusErr: protocol.APIError{Code: protocol.CodeInternal, Message: "scm offline"}}})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodGet, "/v1/service/status", nil))
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var envelope protocol.ErrorEnvelope
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil || envelope.Error.Code != protocol.CodeInternal {
+		t.Fatalf("envelope=%#v err=%v", envelope, err)
+	}
+}
+
+func TestCoreEndpointOmitsLocalFieldsWhenCapabilityAbsent(t *testing.T) {
+	store := state.NewStore(state.Snapshot{Revision: 3, Core: state.CoreState{Status: "running", Version: "v1.19.0"}})
+	server := New(Options{Token: "token", Store: store, Runtime: strippedRuntime{&fakeRuntime{snapshot: store.Load()}}})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodGet, "/v1/core", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if bytes.Contains(recorder.Body.Bytes(), []byte("localReady")) {
+		t.Fatalf("local fields must be omitted without capability: %s", recorder.Body.String())
+	}
+	var status protocol.CoreStatus
+	if err := json.Unmarshal(recorder.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.LocalReady || status.LocalVersion != "" {
+		t.Fatalf("local fields should be zero without capability: %#v", status)
+	}
+	if status.Status != "running" || status.Version != "v1.19.0" {
+		t.Fatalf("stable status dropped: %#v", status)
+	}
+}
+
+func TestCoreEndpointOmitsLocalFieldsOnDetectError(t *testing.T) {
+	store := state.NewStore(state.Snapshot{Revision: 3, Core: state.CoreState{Status: "running", Version: "v1.19.0"}})
+	runtime := &fakeRuntime{snapshot: store.Load(), localCoreErr: protocol.APIError{Code: protocol.CodeDataFailure, Message: "binary corrupt"}}
+	server := New(Options{Token: "token", Store: store, Runtime: runtime})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodGet, "/v1/core", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if bytes.Contains(recorder.Body.Bytes(), []byte("localReady")) {
+		t.Fatalf("local fields must stay omitted on detect error: %s", recorder.Body.String())
+	}
+	var status protocol.CoreStatus
+	if err := json.Unmarshal(recorder.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.LocalReady || status.LocalVersion != "" {
+		t.Fatalf("local fields should stay zero on detect error: %#v", status)
+	}
+	if status.Status != "running" {
+		t.Fatalf("stable status dropped: %#v", status)
+	}
 }
 
 func TestCoreEndpointReportsLocalReadiness(t *testing.T) {
