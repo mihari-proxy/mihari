@@ -661,7 +661,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		})
 	case startOutcomeFadeMsg:
 		return m, tea.Tick(outcomeFadeInterval, func(time.Time) tea.Msg {
-			return ui.PageResultMsg{Page: ui.PageSystem, Result: outcomeFadeMsg{gen: typed.gen, row: typed.row}}
+			// outcomeFadeMsg has the same shape as startOutcomeFadeMsg; convert
+			// rather than rebuild the literal (staticcheck S1016).
+			return ui.PageResultMsg{Page: ui.PageSystem, Result: outcomeFadeMsg(typed)}
 		})
 	case outcomeFadeMsg:
 		// Only clear a still-current successful outcome; a newer action, a later
