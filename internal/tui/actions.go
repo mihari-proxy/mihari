@@ -11,6 +11,7 @@ const (
 	RollbackPanel           = ui.ActionRollbackPanel
 	RestartCore             = ui.ActionRestartCore
 	UpdateCore              = ui.ActionUpdateCore
+	UpdateMihari            = ui.ActionUpdateMihari
 	ApplyEndpointChange     = ui.ActionApplyEndpointChange
 	SelectProxy             = ui.ActionSelectProxy
 	CloseConnection         = ui.ActionCloseConnection
@@ -38,7 +39,7 @@ const (
 
 func RequiresConfirmation(action Action) bool {
 	switch action {
-	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, ApplyEndpointChange,
+	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, UpdateMihari, ApplyEndpointChange,
 		UninstallPanel, ReinstallPanel,
 		ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart,
 		EnableSystemProxy, ForceSystemProxy, DisableSystemProxy, EnableTun, DisableTun:
@@ -52,7 +53,7 @@ func RequiresConfirmation(action Action) bool {
 // OS service control talks to the local service manager and works while disconnected.
 func RequiresDaemon(action Action) bool {
 	switch action {
-	case ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart:
+	case ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart, UpdateMihari:
 		return false
 	default:
 		return true
@@ -61,7 +62,7 @@ func RequiresDaemon(action Action) bool {
 
 func knownAction(action Action) bool {
 	switch action {
-	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, ApplyEndpointChange,
+	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, UpdateMihari, ApplyEndpointChange,
 		SelectProxy, CloseConnection, RefreshSubscription, UpdateProvider,
 		InstallPanel, UpdatePanel, ActivatePanel, OpenWebGUI, UninstallPanel, ReinstallPanel,
 		ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart,

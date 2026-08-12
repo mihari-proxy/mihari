@@ -11,6 +11,7 @@ const (
 	ActionRollbackPanel           Action = "rollback-panel"
 	ActionRestartCore             Action = "restart-core"
 	ActionUpdateCore              Action = "update-core"
+	ActionUpdateMihari            Action = "update-mihari"
 	ActionApplyEndpointChange     Action = "apply-endpoint-change"
 	ActionSelectProxy             Action = "select-proxy"
 	ActionCloseConnection         Action = "close-connection"
@@ -35,6 +36,18 @@ const (
 	ActionEnableTun               Action = "enable-tun"
 	ActionDisableTun              Action = "disable-tun"
 )
+
+// RelaunchRequestMsg asks the root shell to exit and enter the replacement TUI.
+// Warning must already be sanitized for display after terminal restoration.
+type RelaunchRequestMsg struct {
+	Warning string
+}
+
+// PageResultMsg routes asynchronous page-owned work back to its originating page.
+type PageResultMsg struct {
+	Page   PageID
+	Result tea.Msg
+}
 
 type ActionIntentMsg struct {
 	Action     Action

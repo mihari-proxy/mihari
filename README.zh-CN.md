@@ -31,6 +31,7 @@ Mihari 是一款全新的、独立的 [mihomo](https://github.com/MetaCubeX/miho
 - **订阅配置**:每个订阅独立缓存、离线切换、按配置独立的刷新间隔,以及经过校验的原子化配置生成与回滚。
 - **Web 面板**:一键安装 / 更新 / 激活 / 回滚 zashboard 与 MetaCubeXD,置于带独立访问凭据的回环 Web 网关之后。
 - **系统代理与 TUN**:跨平台的系统代理控制与托管 TUN,均由守护进程持有并持久化。
+- **TUI 内更新 Mihari**:System 页面进入时检查 GitHub Releases,显示 `当前版本 · 最新版本 available` 或 `当前版本 · Up to date`;以管理员/root 权限启动时可替换二进制并自动进入更新后的 TUI。
 
 单个无 CGO 的静态二进制(< 15 MB)即包含全部功能,内置 GitHub Releases 自动更新与本地 GeoIP 解析。
 
@@ -94,7 +95,7 @@ mihari sysproxy enable
 | 系统代理 / TUN | `mihari sysproxy enable` · `mihari tun enable` |
 | Web 面板 | `mihari panel list` · `mihari panel open` |
 | 服务控制 | `mihari service status` · `mihari service stop` |
-| 更新 mihari | `mihari self update` |
+| 更新 mihari | System 页 `Update Mihari` · `mihari self update` |
 
 完整命令参考见 [docs/commands.md](docs/commands.md),架构与安全机制见 [docs/architecture.md](docs/architecture.md)。
 

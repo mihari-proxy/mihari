@@ -31,6 +31,7 @@ Specifically:
 - **Subscription profiles**: per-subscription independent caches, offline switching, per-profile refresh intervals, and validated atomic config generation with rollback.
 - **Web panels**: one-click install / update / activate / rollback for zashboard and MetaCubeXD, served behind a loopback Web gateway with its own access credential.
 - **System proxy & TUN**: cross-platform system proxy control and managed TUN, both daemon-owned and persisted.
+- **In-TUI Mihari updates**: the System page checks GitHub Releases on entry, shows `current · latest available` or `current · Up to date`, and—when Mihari was started with administrator/root privileges—replaces the binary and automatically enters the updated TUI.
 
 A single CGO-free static binary (< 15 MB) contains everything, with built-in GitHub Releases self-update and local GeoIP resolution.
 
@@ -94,7 +95,7 @@ mihari sysproxy enable
 | System proxy / TUN | `mihari sysproxy enable` · `mihari tun enable` |
 | Web panels | `mihari panel list` · `mihari panel open` |
 | Service control | `mihari service status` · `mihari service stop` |
-| Update mihari | `mihari self update` |
+| Update mihari | System page `Update Mihari` · `mihari self update` |
 
 See [docs/commands.md](docs/commands.md) for the full command reference, and [docs/architecture.md](docs/architecture.md) for the architecture and security model.
 

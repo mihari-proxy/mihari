@@ -52,6 +52,13 @@ type Result struct {
 	Updated bool
 }
 
+// CheckResult describes the latest Mihari release relative to the running version.
+type CheckResult struct {
+	Current   string
+	Latest    string
+	Available bool
+}
+
 func (u SelfUpdater) httpClient() *http.Client {
 	if u.HTTPClient != nil {
 		return u.HTTPClient
@@ -85,6 +92,19 @@ func (u SelfUpdater) targetArch() string {
 		return u.GOARCH
 	}
 	return runtime.GOARCH
+}
+
+// Check reports whether GitHub Releases contains a different Mihari version.
+func (u SelfUpdater) Check(ctx context.Context, currentVersion string) (CheckResult, error) {
+	release, err := u.latestRelease(ctx)
+	if err != nil {
+		return CheckResult{}, err
+	}
+	return CheckResult{
+		Current:   currentVersion,
+		Latest:    release.TagName,
+		Available: !sameTag(currentVersion, release.TagName),
+	}, nil
 }
 
 // Update downloads the latest release when newer than currentVersion and replaces binaryPath.
