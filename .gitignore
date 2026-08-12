@@ -40,3 +40,5 @@ go.work.sum
 
 .codegraph
 .playwright-mcp
+# 开发期间设计文档（中间文件，不进仓库）
+docs/plans/
