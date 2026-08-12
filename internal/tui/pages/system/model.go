@@ -21,26 +21,28 @@ import (
 )
 
 const (
-	rowDaemon           = "daemon"
-	rowCore             = "core"
-	rowCoreUpdate       = "core-update"
-	rowCoreRestart      = "core-restart"
-	rowMihariUpdate     = "mihari-update"
-	rowProxyEndpoint    = "proxy-endpoint"
-	rowCoreAPI          = "core-api"
-	rowZashboard        = "zashboard"
-	rowMetaCubeXD       = "metacubexd"
-	rowRunSetup         = "run-setup"
-	rowServiceStatus    = "service-status"
-	rowServiceHint      = "service-hint"
-	rowServiceInstall   = "service-install"
-	rowServiceUninstall = "service-uninstall"
-	rowServiceReinstall = "service-reinstall"
-	rowServiceStart     = "service-start"
-	rowServiceStop      = "service-stop"
-	rowServiceRestart   = "service-restart"
-	rowSystemProxy      = "system-proxy"
-	rowTUN              = "tun"
+	rowDaemon            = "daemon"
+	rowCore              = "core"
+	rowCoreUpdate        = "core-update"
+	rowCoreRestart       = "core-restart"
+	rowMihariUpdate      = "mihari-update"
+	rowProxyEndpoint     = "proxy-endpoint"
+	rowCoreAPI           = "core-api"
+	rowZashboard         = "zashboard"
+	rowMetaCubeXD        = "metacubexd"
+	rowRunSetup          = "run-setup"
+	rowServiceStatus     = "service-status"
+	rowServiceHint       = "service-hint"
+	rowServiceInstall    = "service-install"
+	rowServiceUninstall  = "service-uninstall"
+	rowServiceReinstall  = "service-reinstall"
+	rowServiceStart      = "service-start"
+	rowServiceStop       = "service-stop"
+	rowServiceRestart    = "service-restart"
+	rowSystemProxy       = "system-proxy"
+	rowSystemProxyAction = "system-proxy-action"
+	rowTUN               = "tun"
+	rowTUNAction         = "tun-action"
 )
 
 // Panel IDs mirrored from internal/panel/catalog.go; local constants keep the
@@ -1623,6 +1625,28 @@ func (m *Model) coreActionLabel() string {
 		return ui.InstallCoreLabel
 	}
 	return ui.UpdateCoreLabel
+}
+
+// systemProxyActionLabel is the Network action-row label: the verb for what
+// pressing enter will do next. Mirrors the decision in confirmSystemProxyToggle
+// so the label always matches the action that fires.
+func (m *Model) systemProxyActionLabel() string {
+	switch {
+	case m.systemProxy.Observed.Foreign:
+		return ui.ForceEnableSystemProxyLabel
+	case m.systemProxy.Desired || m.systemProxy.Observed.Owned:
+		return ui.DisableSystemProxyLabel
+	default:
+		return ui.EnableSystemProxyLabel
+	}
+}
+
+// tunActionLabel is the Network action-row label, mirroring confirmTunToggle.
+func (m *Model) tunActionLabel() string {
+	if m.tun.DesiredEnable {
+		return ui.DisableTunLabel
+	}
+	return ui.EnableTunLabel
 }
 
 func (m *Model) runAction(start actionStartMsg) tea.Cmd {
