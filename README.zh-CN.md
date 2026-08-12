@@ -73,7 +73,7 @@ curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/insta
 mihari
 ```
 
-交互式设置会安装 mihomo 核心、引导添加首个订阅并准备本地 GeoIP 数据。
+交互式设置会安装 mihomo 核心、引导添加首个订阅并准备本地 GeoIP 数据。它会在首页预检托管端口(冲突时一键切换到可用端口),复用已有的本地 core/GeoIP,并在最后的审查页汇总端口、core、订阅、GeoIP 与服务注册状态。
 
 **添加订阅并启用系统代理**
 

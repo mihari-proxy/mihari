@@ -47,6 +47,14 @@ type RuntimeAPI interface {
 	DisableTun(context.Context, runtimeapi.Operation) (protocol.TunStatus, error)
 }
 
+// localCoreAPI is the optional read-only local-core readiness contract. Runtimes
+// that implement it let GET /v1/core surface onboarding "use existing" hints
+// without a network install; runtimes without it simply omit the fields. Mirrors
+// the onboardingAPI / preferencesAPI optional-capability pattern (design §6.2).
+type localCoreAPI interface {
+	LocalCore(context.Context) (core.LocalCoreInfo, error)
+}
+
 func (s *Server) runtimeRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/core", s.coreStatus)
 	mux.HandleFunc("POST /v1/core/install", s.installCore)
@@ -69,14 +77,22 @@ func (s *Server) runtimeRoutes(mux *http.ServeMux) {
 	s.tunRoutes(mux)
 	s.onboardingRoutes(mux)
 	s.webGUIRoutes(mux)
+	s.serviceRoutes(mux)
 }
 
-func (s *Server) coreStatus(writer http.ResponseWriter, _ *http.Request) {
+func (s *Server) coreStatus(writer http.ResponseWriter, request *http.Request) {
 	if !s.requireRuntime(writer) {
 		return
 	}
 	snapshot := s.runtime.Snapshot()
-	writeJSON(writer, http.StatusOK, coreStatusDTO(snapshot))
+	status := coreStatusDTO(snapshot)
+	if runtime, ok := s.runtime.(localCoreAPI); ok {
+		if info, err := runtime.LocalCore(request.Context()); err == nil {
+			status.LocalReady = info.Ready
+			status.LocalVersion = info.Version
+		}
+	}
+	writeJSON(writer, http.StatusOK, status)
 }
 
 func (s *Server) installCore(writer http.ResponseWriter, request *http.Request) {

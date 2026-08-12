@@ -30,6 +30,7 @@ func main() {
 	endpoint := transport.DefaultEndpoint()
 	token, setupError := credential.LoadOrCreate(transport.DefaultCredentialPath())
 	localClient := controlclient.New(endpoint, token)
+	var serviceManager *service.Manager
 	runDaemonBody := func(ctx context.Context) error {
 		paths := platform.DefaultPaths()
 		if err := paths.EnsureDirs(); err != nil {
@@ -41,6 +42,13 @@ func main() {
 		}
 		assembly, err := app.BuildRuntimeWithOptions(paths, settings, buildinfo.Version, os.Stdout, os.Stderr, app.RuntimeBuildOptions{
 			InitialSetupRequired: created, SettingsPath: paths.Settings,
+			ServiceStatus: func() (string, error) {
+				if serviceManager == nil {
+					return string(service.StatusUnknown), nil
+				}
+				kind, err := serviceManager.Status()
+				return string(kind), err
+			},
 		})
 		if err != nil {
 			return err
@@ -56,7 +64,7 @@ func main() {
 	// When SCM launches ImagePath `mihari.exe daemon`, the process is non-interactive.
 	// Manager.Run registers with the service control manager; a plain daemon body never
 	// calls StartServiceCtrlDispatcher and Windows fails the start with a 30s timeout.
-	serviceManager := service.New(service.Options{Run: runDaemonBody})
+	serviceManager = service.New(service.Options{Run: runDaemonBody})
 	runDaemon := func(ctx context.Context) error {
 		if !service.IsInteractive() {
 			return serviceManager.Run()

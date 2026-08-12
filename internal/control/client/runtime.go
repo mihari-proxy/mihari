@@ -104,6 +104,13 @@ func (c *Client) GeoIPStatus(ctx context.Context) (protocol.GeoIPStatus, error) 
 	return result, err
 }
 
+// ServiceStatus returns the advisory OS service registration state for onboarding review.
+func (c *Client) ServiceStatus(ctx context.Context) (protocol.ServiceStatus, error) {
+	var result protocol.ServiceStatus
+	err := c.doRuntime(ctx, http.MethodGet, "/v1/service/status", nil, &result)
+	return result, err
+}
+
 // LookupGeoIP resolves a bounded batch through the daemon.
 func (c *Client) LookupGeoIP(ctx context.Context, request protocol.GeoIPLookupRequest) (protocol.GeoIPLookupResult, error) {
 	var result protocol.GeoIPLookupResult

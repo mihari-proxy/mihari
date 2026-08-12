@@ -130,3 +130,20 @@ func TestMutationRequestThreadsSource(t *testing.T) {
 		t.Fatalf("source=%q want empty", omitted.Source)
 	}
 }
+
+func TestCoreStatusMarshalsLocalReadinessOptionally(t *testing.T) {
+	raw, err := json.Marshal(CoreStatus{Schema: "mihari/v1", LocalReady: true, LocalVersion: "v1.18.5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"localReady":true`) || !strings.Contains(string(raw), `"localVersion":"v1.18.5"`) {
+		t.Fatalf("local readiness not surfaced: %s", raw)
+	}
+	omitted, err := json.Marshal(CoreStatus{Schema: "mihari/v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(omitted), "localReady") || strings.Contains(string(omitted), "localVersion") {
+		t.Fatalf("zero-value local fields should be omitted: %s", omitted)
+	}
+}
