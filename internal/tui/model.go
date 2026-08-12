@@ -54,7 +54,7 @@ type Model struct {
 	setupReturn       ui.PageID
 	pendingActions    map[string]ui.Action
 	globalState       ui.GlobalState
-	lastObservedAt    time.Time // last successful daemon data push; shown in stale footer
+	lastObservedAt    time.Time // last daemon stream sample; shown in stale footer
 	relaunchRequested bool
 	relaunchWarning   string
 	now               time.Time // spinner clock; advanced only while work is pending
@@ -503,8 +503,8 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 	var command tea.Cmd
 	model.monitor.Observe(event)
-	// Only push-stream events carry a non-zero ObservedAt; control/error events
-	// are zero-valued, so this freezes at the last successful data push.
+	// Only push-stream events carry a non-zero ObservedAt; non-stream events
+	// are synthesized locally (zero ObservedAt), so this freezes at the last push.
 	if !event.ObservedAt.IsZero() {
 		model.lastObservedAt = event.ObservedAt
 	}
