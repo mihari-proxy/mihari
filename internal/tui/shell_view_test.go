@@ -137,6 +137,37 @@ func TestShellView_StaleUsesRightStatusNotSpinner(t *testing.T) {
 	}
 }
 
+func TestShellView_StaleFooterShowsLastObserved(t *testing.T) {
+	freezeUTC(t)
+	model := NewModel()
+	model.width, model.height = 100, 28
+	model.resizePages()
+	model.stale = true
+	model.globalState = ui.StateStale
+	model.lastObservedAt = time.Date(2026, 8, 12, 14, 32, 0, 0, time.UTC)
+	model.monitor.SetStale(true)
+
+	plain := normalizeRender(model.View().Content)
+	want := "last observed " + model.lastObservedAt.Local().Format("15:04")
+	if !strings.Contains(plain, want) {
+		t.Fatalf("stale footer missing %q:\n%s", want, plain)
+	}
+
+	// Zero timestamp (disconnect before any data): suffix must not appear.
+	model.lastObservedAt = time.Time{}
+	if plain := normalizeRender(model.View().Content); strings.Contains(plain, "last observed") {
+		t.Fatalf("zero lastObservedAt must not show suffix:\n%s", plain)
+	}
+
+	// Non-stale state must not show the suffix.
+	model.lastObservedAt = time.Date(2026, 8, 12, 14, 32, 0, 0, time.UTC)
+	model.globalState = ui.StateReconnected
+	model.stale = false
+	if plain := normalizeRender(model.View().Content); strings.Contains(plain, "last observed") {
+		t.Fatalf("non-stale footer must not show last observed:\n%s", plain)
+	}
+}
+
 func TestShellView_RightStatusDualServiceAndDaemon(t *testing.T) {
 	model := NewModel()
 	model.width, model.height = 120, 28

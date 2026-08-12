@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- TUI stale footer 显示最后数据时间 `last observed HH:MM`：daemon 控制连接断开后，footer stale 横幅追加最后一次成功数据推送的本地时间，便于判断屏幕上冻结数据的新旧（#37）
+
 ### Fixed
 
 - System 页 daemon / mihomo core 行在控制连接断开后降级显示：保留末值但圆点转黄并追加 `· Stale`,与 Overview core 卡及同页其它行一致（#36）
