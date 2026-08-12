@@ -12,16 +12,22 @@ import (
 )
 
 type fakeClient struct {
-	status          protocol.OnboardingStatus
-	installCalls    int
-	installRequest  protocol.MutationRequest
-	addCalls        int
-	geoIPCalls      int
-	geoIPRequest    protocol.MutationRequest
-	updateCalls     int
-	update          protocol.OnboardingUpdateRequest
-	onboardingCalls int
-	installErr      error
+	status           protocol.OnboardingStatus
+	installCalls     int
+	installRequest   protocol.MutationRequest
+	addCalls         int
+	geoIPCalls       int
+	geoIPRequest     protocol.MutationRequest
+	updateCalls      int
+	update           protocol.OnboardingUpdateRequest
+	onboardingCalls  int
+	installErr       error
+	coreStatus       protocol.CoreStatus
+	coreErr          error
+	coreCalls        int
+	geoIPStatus      protocol.GeoIPStatus
+	geoIPErr         error
+	geoIPStatusCalls int
 }
 
 func (f *fakeClient) Onboarding(context.Context) (protocol.OnboardingStatus, error) {
@@ -54,6 +60,14 @@ func (f *fakeClient) UpdateOnboarding(_ context.Context, request protocol.Onboar
 	f.status.Complete = request.Complete != nil && *request.Complete
 	f.status.Revision++
 	return f.status, nil
+}
+func (f *fakeClient) Core(context.Context) (protocol.CoreStatus, error) {
+	f.coreCalls++
+	return f.coreStatus, f.coreErr
+}
+func (f *fakeClient) GeoIPStatus(context.Context) (protocol.GeoIPStatus, error) {
+	f.geoIPStatusCalls++
+	return f.geoIPStatus, f.geoIPErr
 }
 
 func TestSetupFormUsesTabOnlyToMoveBetweenEndpointFields(t *testing.T) {
@@ -323,5 +337,79 @@ func TestSetupCoreAndGeoIPRequestsCarrySetupSource(t *testing.T) {
 	_ = model.updateGeoIP()()
 	if client.geoIPRequest.Source != "setup" {
 		t.Fatalf("geoip source=%q want setup", client.geoIPRequest.Source)
+	}
+}
+
+func TestSetupStepCoreShowsLocalCoreReady(t *testing.T) {
+	client := &fakeClient{status: defaultStatus(false), coreStatus: protocol.CoreStatus{LocalReady: true, LocalVersion: "v1.18.5"}}
+	model := loadedModel(client)
+	model.step = stepCore
+	updated, _ := model.Update(model.fetchCoreLocal()())
+	model = updated.(*Model)
+	view := model.View()
+	if !strings.Contains(view, "v1.18.5") || strings.Contains(view, ui.SetupCoreWillDownload) {
+		t.Fatalf("ready view missing version or shows will-download:\n%s", view)
+	}
+	if client.coreCalls != 1 {
+		t.Fatalf("coreCalls=%d", client.coreCalls)
+	}
+}
+
+func TestSetupStepCoreShowsWillDownloadWhenNotReady(t *testing.T) {
+	client := &fakeClient{status: defaultStatus(false), coreStatus: protocol.CoreStatus{LocalReady: false}}
+	model := loadedModel(client)
+	model.step = stepCore
+	updated, _ := model.Update(model.fetchCoreLocal()())
+	model = updated.(*Model)
+	if !strings.Contains(model.View(), ui.SetupCoreWillDownload) {
+		t.Fatalf("view=%s", model.View())
+	}
+}
+
+func TestSetupStepGeoIPShowsLocalReadyAndSkipStillWorks(t *testing.T) {
+	client := &fakeClient{status: defaultStatus(false), geoIPStatus: protocol.GeoIPStatus{Country: protocol.GeoIPDatabaseStatus{Available: true}, ASN: protocol.GeoIPDatabaseStatus{Available: true}}}
+	model := loadedModel(client)
+	model.step = stepGeoIP
+	updated, _ := model.Update(model.fetchGeoIPLocal()())
+	model = updated.(*Model)
+	if !strings.Contains(model.View(), ui.SetupGeoIPLocalReady) {
+		t.Fatalf("view=%s", model.View())
+	}
+	model = updateKey(t, model, tea.KeyPressMsg{Code: 's', Text: "s"})
+	if model.step != stepReview {
+		t.Fatalf("skip did not advance: step=%v", model.step)
+	}
+}
+
+func TestSetupLocalDetectionStaleResultsIgnored(t *testing.T) {
+	client := &fakeClient{status: defaultStatus(false), coreStatus: protocol.CoreStatus{LocalReady: true, LocalVersion: "v1.18.5"}}
+	model := loadedModel(client)
+	model.step = stepCore
+	first := model.fetchCoreLocal()
+	model.fetchCoreLocal() // bump generation, making first stale
+	updated, _ := model.Update(first())
+	model = updated.(*Model)
+	if model.coreLocalLoaded {
+		t.Fatalf("stale core result was applied: loaded=%v", model.coreLocalLoaded)
+	}
+}
+
+func TestSetupLocalDetectionFallsBackToStaticOnProbeFailure(t *testing.T) {
+	client := &fakeClient{status: defaultStatus(false), coreErr: protocol.APIError{Code: protocol.CodeDaemonUnavailable}}
+	model := loadedModel(client)
+	model.step = stepCore
+	updated, _ := model.Update(model.fetchCoreLocal()())
+	model = updated.(*Model)
+	if model.coreLocalLoaded {
+		t.Fatalf("probe error should not set loaded")
+	}
+	view := model.View()
+	if !strings.Contains(view, ui.SetupCoreBody) {
+		t.Fatalf("static fallback missing:\n%s", view)
+	}
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if !model.loading || command == nil {
+		t.Fatalf("enter blocked after probe failure: loading=%v command=%v", model.loading, command != nil)
 	}
 }

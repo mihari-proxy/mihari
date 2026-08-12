@@ -19,6 +19,8 @@ import (
 type Client interface {
 	Onboarding(context.Context) (protocol.OnboardingStatus, error)
 	UpdateOnboarding(context.Context, protocol.OnboardingUpdateRequest) (protocol.OnboardingStatus, error)
+	Core(context.Context) (protocol.CoreStatus, error)
+	GeoIPStatus(context.Context) (protocol.GeoIPStatus, error)
 	InstallCore(context.Context, protocol.MutationRequest) (protocol.CoreInstallResult, error)
 	AddSubscription(context.Context, protocol.SubscriptionAddRequest) (protocol.SubscriptionResult, error)
 	UpdateGeoIP(context.Context, protocol.MutationRequest) (protocol.GeoIPUpdateResult, error)
@@ -43,6 +45,22 @@ type actionResultMsg struct {
 	next     step
 	revision uint64
 	err      error
+}
+
+// coreLocalResultMsg carries an advisory local-core readiness probe for stepCore.
+// A stale generation (step re-entered) or non-nil err leaves the step on its static
+// copy (design §4.4) — local detection never blocks onboarding.
+type coreLocalResultMsg struct {
+	gen    uint64
+	status protocol.CoreStatus
+	err    error
+}
+
+// geoipLocalResultMsg carries an advisory local GeoIP database probe for stepGeoIP.
+type geoipLocalResultMsg struct {
+	gen    uint64
+	status protocol.GeoIPStatus
+	err    error
 }
 
 type completeStartMsg struct{}
@@ -76,6 +94,12 @@ type Model struct {
 	focusedField       int
 	loading            bool
 	lastError          string
+	coreLocal          protocol.CoreStatus
+	coreLocalLoaded    bool
+	coreLocalGen       uint64
+	geoipLocal         protocol.GeoIPStatus
+	geoipLocalLoaded   bool
+	geoipLocalGen      uint64
 	width              int
 	height             int
 	theme              ui.Theme
@@ -146,8 +170,31 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			m.status.Revision = typed.revision
 		}
 		m.step = typed.next
-		if m.step == stepSubscription {
+		switch m.step {
+		case stepCore:
+			return m, m.fetchCoreLocal()
+		case stepSubscription:
 			m.focusSubscription(0)
+		case stepGeoIP:
+			return m, m.fetchGeoIPLocal()
+		}
+		return m, nil
+	case coreLocalResultMsg:
+		if typed.gen != m.coreLocalGen {
+			return m, nil
+		}
+		if typed.err == nil {
+			m.coreLocal = typed.status
+			m.coreLocalLoaded = true
+		}
+		return m, nil
+	case geoipLocalResultMsg:
+		if typed.gen != m.geoipLocalGen {
+			return m, nil
+		}
+		if typed.err == nil {
+			m.geoipLocal = typed.status
+			m.geoipLocalLoaded = true
 		}
 		return m, nil
 	case completeStartMsg:
@@ -264,7 +311,7 @@ func (m *Model) updateEndpoints(message tea.Msg, key tea.KeyPressMsg) (ui.Page, 
 		}
 		m.lastError = ""
 		m.step = stepCore
-		return m, nil
+		return m, m.fetchCoreLocal()
 	}
 	updated, command := m.inputs[m.focusedField].Update(message)
 	m.inputs[m.focusedField] = updated
@@ -284,7 +331,7 @@ func (m *Model) updateSubscription(message tea.Msg, key tea.KeyPressMsg) (ui.Pag
 		url := strings.TrimSpace(m.subscriptionInputs[1].Value())
 		if name == "" && url == "" {
 			m.step = stepGeoIP
-			return m, nil
+			return m, m.fetchGeoIPLocal()
 		}
 		if name == "" || url == "" {
 			m.lastError = ui.InvalidSubscriptionForm
@@ -309,13 +356,33 @@ func (m *Model) View() string {
 		lines = append(lines, renderInputs([]string{"Mixed", "Controller", "Web"}, m.inputs, m.focusedField)...)
 		lines = append(lines, "", ui.SetupEndpointHelp)
 	case stepCore:
-		lines = append(lines, ui.SetupCoreTitle, ui.SetupCoreBody, "", ui.SetupEnterInstall)
+		lines = append(lines, ui.SetupCoreTitle, ui.SetupCoreBody)
+		if m.coreLocalLoaded {
+			if m.coreLocal.LocalReady {
+				version := m.coreLocal.LocalVersion
+				if version == "" {
+					version = "unknown"
+				}
+				lines = append(lines, "", fmt.Sprintf(ui.SetupCoreLocalReady, version))
+			} else {
+				lines = append(lines, "", ui.SetupCoreWillDownload)
+			}
+		}
+		lines = append(lines, "", ui.SetupEnterInstall)
 	case stepSubscription:
 		lines = append(lines, ui.SetupSubscriptionTitle, ui.SetupSubscriptionBody)
 		lines = append(lines, renderInputs([]string{"Name", "URL"}, m.subscriptionInputs, m.focusedField)...)
 		lines = append(lines, "", ui.SetupSubscriptionHelp)
 	case stepGeoIP:
-		lines = append(lines, ui.SetupGeoIPTitle, ui.SetupGeoIPBody, "", ui.SetupEnterOrSkip)
+		lines = append(lines, ui.SetupGeoIPTitle, ui.SetupGeoIPBody)
+		if m.geoipLocalLoaded {
+			if m.geoipLocal.Country.Available && m.geoipLocal.ASN.Available {
+				lines = append(lines, "", ui.SetupGeoIPLocalReady)
+			} else {
+				lines = append(lines, "", ui.SetupGeoIPWillDownload)
+			}
+		}
+		lines = append(lines, "", ui.SetupEnterOrSkip)
 	case stepReview:
 		mixed, controller, web := m.endpointValues()
 		lines = append(lines, ui.SetupReviewTitle,
@@ -434,6 +501,28 @@ func (m *Model) updateGeoIP() tea.Cmd {
 	return func() tea.Msg {
 		result, err := m.client.UpdateGeoIP(m.ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision, Source: "setup"})
 		return actionResultMsg{next: stepReview, revision: result.Revision, err: err}
+	}
+}
+
+// fetchCoreLocal probes GET /v1/core for the stepCore "use existing" hint. Advisory
+// only: failures leave coreLocalLoaded=false and the step renders its static copy.
+// The generation guard rejects results from a prior step entry.
+func (m *Model) fetchCoreLocal() tea.Cmd {
+	m.coreLocalGen++
+	gen := m.coreLocalGen
+	return func() tea.Msg {
+		status, err := m.client.Core(m.ctx)
+		return coreLocalResultMsg{gen: gen, status: status, err: err}
+	}
+}
+
+// fetchGeoIPLocal probes GET /v1/geoip/status for the stepGeoIP reuse hint.
+func (m *Model) fetchGeoIPLocal() tea.Cmd {
+	m.geoipLocalGen++
+	gen := m.geoipLocalGen
+	return func() tea.Msg {
+		status, err := m.client.GeoIPStatus(m.ctx)
+		return geoipLocalResultMsg{gen: gen, status: status, err: err}
 	}
 }
 
