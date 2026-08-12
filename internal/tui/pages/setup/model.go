@@ -24,6 +24,7 @@ type Client interface {
 	InstallCore(context.Context, protocol.MutationRequest) (protocol.CoreInstallResult, error)
 	AddSubscription(context.Context, protocol.SubscriptionAddRequest) (protocol.SubscriptionResult, error)
 	UpdateGeoIP(context.Context, protocol.MutationRequest) (protocol.GeoIPUpdateResult, error)
+	ServiceStatus(context.Context) (protocol.ServiceStatus, error)
 }
 
 type step uint8
@@ -60,6 +61,15 @@ type coreLocalResultMsg struct {
 type geoipLocalResultMsg struct {
 	gen    uint64
 	status protocol.GeoIPStatus
+	err    error
+}
+
+// serviceStatusMsg carries the daemon's service registration status for stepReview.
+// A stale generation or non-nil err leaves the 服务 row on its fallback (design §5.3) —
+// service detection never blocks the review step.
+type serviceStatusMsg struct {
+	gen    uint64
+	status protocol.ServiceStatus
 	err    error
 }
 
@@ -100,6 +110,14 @@ type Model struct {
 	geoipLocal         protocol.GeoIPStatus
 	geoipLocalLoaded   bool
 	geoipLocalGen      uint64
+	coreResult         protocol.CoreInstallResult
+	addedSubscription  *protocol.Subscription
+	geoipResult        *protocol.GeoIPUpdateResult
+	geoipSkipped       bool
+	serviceStatus      protocol.ServiceStatus
+	serviceLoaded      bool
+	serviceErr         bool
+	serviceGen         uint64
 	width              int
 	height             int
 	theme              ui.Theme
@@ -177,6 +195,8 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			m.focusSubscription(0)
 		case stepGeoIP:
 			return m, m.fetchGeoIPLocal()
+		case stepReview:
+			return m, m.fetchServiceStatus()
 		}
 		return m, nil
 	case coreLocalResultMsg:
@@ -195,6 +215,17 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		if typed.err == nil {
 			m.geoipLocal = typed.status
 			m.geoipLocalLoaded = true
+		}
+		return m, nil
+	case serviceStatusMsg:
+		if typed.gen != m.serviceGen {
+			return m, nil
+		}
+		if typed.err == nil {
+			m.serviceStatus = typed.status
+			m.serviceLoaded = true
+		} else {
+			m.serviceErr = true
 		}
 		return m, nil
 	case completeStartMsg:
@@ -250,7 +281,8 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	case stepGeoIP:
 		if key.String() == "s" {
 			m.step = stepReview
-			return m, nil
+			m.geoipSkipped = true
+			return m, m.fetchServiceStatus()
 		}
 		if key.String() == "enter" {
 			m.loading = true
@@ -386,8 +418,14 @@ func (m *Model) View() string {
 	case stepReview:
 		mixed, controller, web := m.endpointValues()
 		lines = append(lines, ui.SetupReviewTitle,
-			"Mixed       "+mixed, "Controller  "+controller, "Web         "+web, "",
-			ui.SetupCompleteHelp)
+			"Mixed        "+mixed,
+			"Controller   "+controller,
+			"Web          "+web+m.restartSuffix(),
+			"Core         "+m.coreSummary(),
+			"Subscription "+m.subscriptionSummary(),
+			"GeoIP        "+m.geoipSummary(),
+			"服务         "+m.serviceSummary(),
+			"", ui.SetupCompleteHelp)
 	}
 	if m.loading {
 		lines = append(lines, "", ui.LoadingLabel)
@@ -484,6 +522,9 @@ func (m *Model) installCore() tea.Cmd {
 	revision, operationID := m.status.Revision, m.newOperationID()
 	return func() tea.Msg {
 		result, err := m.client.InstallCore(m.ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision, Source: "setup"})
+		// Capture the install outcome so stepReview can summarize "本地已有/新装/安装失败".
+		// The cmd→channel→Update path provides the happens-before guarantee (design §7.4).
+		m.coreResult = result
 		return actionResultMsg{next: stepSubscription, revision: result.Revision, err: err}
 	}
 }
@@ -492,6 +533,10 @@ func (m *Model) addSubscription(name, url string) tea.Cmd {
 	revision, operationID := m.status.Revision, m.newOperationID()
 	return func() tea.Msg {
 		result, err := m.client.AddSubscription(m.ctx, protocol.SubscriptionAddRequest{OperationID: operationID, IfRevision: &revision, Name: name, URL: url})
+		// Capture the added subscription so stepReview shows its name, not the
+		// "未添加（已跳过）" fallback. See installCore for the happens-before note.
+		subscription := result.Subscription
+		m.addedSubscription = &subscription
 		return actionResultMsg{next: stepGeoIP, revision: result.Revision, err: err}
 	}
 }
@@ -500,6 +545,10 @@ func (m *Model) updateGeoIP() tea.Cmd {
 	revision, operationID := m.status.Revision, m.newOperationID()
 	return func() tea.Msg {
 		result, err := m.client.UpdateGeoIP(m.ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision, Source: "setup"})
+		// Capture the update outcome so stepReview shows "Country ✓ ASN ✓" or "更新失败".
+		// Copied by value; the runtime result is not retained. See installCore for the note.
+		resultCopy := result
+		m.geoipResult = &resultCopy
 		return actionResultMsg{next: stepReview, revision: result.Revision, err: err}
 	}
 }
@@ -524,6 +573,86 @@ func (m *Model) fetchGeoIPLocal() tea.Cmd {
 		status, err := m.client.GeoIPStatus(m.ctx)
 		return geoipLocalResultMsg{gen: gen, status: status, err: err}
 	}
+}
+
+// fetchServiceStatus probes GET /v1/service/status for the stepReview 服务 row.
+// Advisory only: failures set serviceErr and the row renders "未知".
+func (m *Model) fetchServiceStatus() tea.Cmd {
+	m.serviceGen++
+	gen := m.serviceGen
+	return func() tea.Msg {
+		status, err := m.client.ServiceStatus(m.ctx)
+		return serviceStatusMsg{gen: gen, status: status, err: err}
+	}
+}
+
+// coreSummary renders the Core review row: version plus source label, or the
+// install-failed fallback when no version was recorded.
+func (m *Model) coreSummary() string {
+	if m.coreResult.Version == "" {
+		return ui.SetupReviewCoreFailed
+	}
+	source := ui.SetupReviewCoreLocal
+	if m.coreResult.Updated {
+		source = ui.SetupReviewCoreFresh
+	}
+	return m.coreResult.Version + "  " + source
+}
+
+// subscriptionSummary renders the Subscription review row: the added
+// subscription name, or the skipped fallback when none was added.
+func (m *Model) subscriptionSummary() string {
+	if m.addedSubscription != nil && m.addedSubscription.Name != "" {
+		return m.addedSubscription.Name
+	}
+	return ui.SetupReviewSubscriptionNone
+}
+
+// geoipSummary renders the GeoIP review row: ready, skipped, or failed.
+func (m *Model) geoipSummary() string {
+	if m.geoipSkipped {
+		return ui.SetupReviewGeoIPSkipped
+	}
+	if m.geoipResult == nil {
+		return ui.SetupReviewGeoIPFailed
+	}
+	if m.geoipResult.Status.Country.Error != "" || m.geoipResult.Status.ASN.Error != "" {
+		return ui.SetupReviewGeoIPFailed
+	}
+	if m.geoipResult.Status.Country.Available && m.geoipResult.Status.ASN.Available {
+		return ui.SetupReviewGeoIPReady
+	}
+	return ui.SetupReviewGeoIPFailed
+}
+
+// serviceSummary renders the 服务 review row, mapping the daemon's literal
+// service status to localized copy. Loading/unknown stay on fallbacks.
+func (m *Model) serviceSummary() string {
+	if !m.serviceLoaded {
+		return ui.LoadingLabel
+	}
+	if m.serviceErr {
+		return ui.SetupReviewServiceUnknown
+	}
+	switch m.serviceStatus.Status {
+	case "running":
+		return "running"
+	case "stopped":
+		return "stopped"
+	case "not_installed":
+		return ui.SetupReviewServiceNotRegistered
+	default:
+		return ui.SetupReviewServiceUnknown
+	}
+}
+
+// restartSuffix appends the "（需重启生效）" hint to the Web endpoint row when
+// the user changed endpoints and the daemon reports a restart is required.
+func (m *Model) restartSuffix() string {
+	if m.endpointsChanged() && m.status.RestartRequired {
+		return "  " + ui.SetupReviewRestartRequired
+	}
+	return ""
 }
 
 func (m *Model) complete() tea.Cmd {

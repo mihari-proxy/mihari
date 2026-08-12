@@ -12,22 +12,28 @@ import (
 )
 
 type fakeClient struct {
-	status           protocol.OnboardingStatus
-	installCalls     int
-	installRequest   protocol.MutationRequest
-	addCalls         int
-	geoIPCalls       int
-	geoIPRequest     protocol.MutationRequest
-	updateCalls      int
-	update           protocol.OnboardingUpdateRequest
-	onboardingCalls  int
-	installErr       error
-	coreStatus       protocol.CoreStatus
-	coreErr          error
-	coreCalls        int
-	geoIPStatus      protocol.GeoIPStatus
-	geoIPErr         error
-	geoIPStatusCalls int
+	status             protocol.OnboardingStatus
+	installCalls       int
+	installRequest     protocol.MutationRequest
+	addCalls           int
+	geoIPCalls         int
+	geoIPRequest       protocol.MutationRequest
+	updateCalls        int
+	update             protocol.OnboardingUpdateRequest
+	onboardingCalls    int
+	installErr         error
+	coreStatus         protocol.CoreStatus
+	coreErr            error
+	coreCalls          int
+	geoIPStatus        protocol.GeoIPStatus
+	geoIPErr           error
+	geoIPStatusCalls   int
+	installResult      protocol.CoreInstallResult
+	subscriptionResult protocol.SubscriptionResult
+	geoIPUpdateResult  protocol.GeoIPUpdateResult
+	serviceStatus      protocol.ServiceStatus
+	serviceErr         error
+	serviceCalls       int
 }
 
 func (f *fakeClient) Onboarding(context.Context) (protocol.OnboardingStatus, error) {
@@ -43,16 +49,34 @@ func (f *fakeClient) InstallCore(ctx context.Context, request protocol.MutationR
 	if err := ctx.Err(); err != nil {
 		return protocol.CoreInstallResult{}, err
 	}
-	return protocol.CoreInstallResult{Schema: "mihari/v1", Revision: f.status.Revision + 1}, nil
+	result := f.installResult
+	result.Schema = "mihari/v1"
+	if result.Revision == 0 {
+		result.Revision = f.status.Revision + 1
+	}
+	return result, nil
 }
-func (f *fakeClient) AddSubscription(context.Context, protocol.SubscriptionAddRequest) (protocol.SubscriptionResult, error) {
+func (f *fakeClient) AddSubscription(_ context.Context, request protocol.SubscriptionAddRequest) (protocol.SubscriptionResult, error) {
 	f.addCalls++
-	return protocol.SubscriptionResult{Schema: "mihari/v1", Revision: f.status.Revision + 1}, nil
+	result := f.subscriptionResult
+	result.Schema = "mihari/v1"
+	if result.Revision == 0 {
+		result.Revision = f.status.Revision + 1
+	}
+	if result.Subscription.Name == "" {
+		result.Subscription.Name = request.Name
+	}
+	return result, nil
 }
 func (f *fakeClient) UpdateGeoIP(_ context.Context, request protocol.MutationRequest) (protocol.GeoIPUpdateResult, error) {
 	f.geoIPCalls++
 	f.geoIPRequest = request
-	return protocol.GeoIPUpdateResult{Schema: "mihari/v1", Revision: f.status.Revision + 1}, nil
+	result := f.geoIPUpdateResult
+	result.Schema = "mihari/v1"
+	if result.Revision == 0 {
+		result.Revision = f.status.Revision + 1
+	}
+	return result, nil
 }
 func (f *fakeClient) UpdateOnboarding(_ context.Context, request protocol.OnboardingUpdateRequest) (protocol.OnboardingStatus, error) {
 	f.updateCalls++
@@ -68,6 +92,10 @@ func (f *fakeClient) Core(context.Context) (protocol.CoreStatus, error) {
 func (f *fakeClient) GeoIPStatus(context.Context) (protocol.GeoIPStatus, error) {
 	f.geoIPStatusCalls++
 	return f.geoIPStatus, f.geoIPErr
+}
+func (f *fakeClient) ServiceStatus(context.Context) (protocol.ServiceStatus, error) {
+	f.serviceCalls++
+	return f.serviceStatus, f.serviceErr
 }
 
 func TestSetupFormUsesTabOnlyToMoveBetweenEndpointFields(t *testing.T) {
@@ -278,9 +306,9 @@ func TestSetupReviewShowsEndpointsWithoutLegacyWebGUIUnavailableCopy(t *testing.
 	view := model.View()
 	for _, want := range []string{
 		ui.SetupReviewTitle,
-		"Mixed       127.0.0.1:9190",
-		"Controller  127.0.0.1:9090",
-		"Web         127.0.0.1:9191",
+		"Mixed        127.0.0.1:9190",
+		"Controller   127.0.0.1:9090",
+		"Web          127.0.0.1:9191",
 		ui.SetupCompleteHelp,
 	} {
 		if !strings.Contains(view, want) {
@@ -411,5 +439,111 @@ func TestSetupLocalDetectionFallsBackToStaticOnProbeFailure(t *testing.T) {
 	model = updated.(*Model)
 	if !model.loading || command == nil {
 		t.Fatalf("enter blocked after probe failure: loading=%v command=%v", model.loading, command != nil)
+	}
+}
+
+func resolveServiceStatus(t *testing.T, model *Model) *Model {
+	t.Helper()
+	updated, _ := model.Update(model.fetchServiceStatus()())
+	return updated.(*Model)
+}
+
+func TestSetupReviewSummarizesLocalCoreAndSubscriptionAndGeoIP(t *testing.T) {
+	client := &fakeClient{
+		status:             defaultStatus(false),
+		installResult:      protocol.CoreInstallResult{Version: "v1.18.5", Updated: false},
+		subscriptionResult: protocol.SubscriptionResult{Subscription: protocol.Subscription{Name: "Main"}},
+		geoIPUpdateResult:  protocol.GeoIPUpdateResult{Status: protocol.GeoIPStatus{Country: protocol.GeoIPDatabaseStatus{Available: true}, ASN: protocol.GeoIPDatabaseStatus{Available: true}}},
+		serviceStatus:      protocol.ServiceStatus{Schema: "mihari/v1", Status: "running"},
+	}
+	model := loadedModel(client)
+	model = updateKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = runKeyCommand(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	model.subscriptionInputs[0].SetValue("Main")
+	model.subscriptionInputs[1].SetValue("https://example.test/sub")
+	model = runKeyCommand(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = runKeyCommand(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if model.step != stepReview {
+		t.Fatalf("step=%v", model.step)
+	}
+	model = resolveServiceStatus(t, model)
+	view := model.View()
+	for _, want := range []string{"v1.18.5", ui.SetupReviewCoreLocal, "Main", ui.SetupReviewGeoIPReady, "running"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %q in review:\n%s", want, view)
+		}
+	}
+}
+
+func TestSetupReviewMarksFreshCoreInstall(t *testing.T) {
+	client := &fakeClient{status: defaultStatus(false), installResult: protocol.CoreInstallResult{Version: "v1.18.7", Updated: true}}
+	model := loadedModel(client)
+	model = updateKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = runKeyCommand(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = runKeyCommand(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = runKeyCommand(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if model.step != stepReview {
+		t.Fatalf("step=%v", model.step)
+	}
+	if !strings.Contains(model.View(), ui.SetupReviewCoreFresh) {
+		t.Fatalf("fresh core missing:\n%s", model.View())
+	}
+}
+
+func TestSetupReviewShowsSkippedSubscriptionAndGeoIP(t *testing.T) {
+	client := &fakeClient{status: defaultStatus(false)}
+	model := loadedModel(client)
+	model.step = stepGeoIP
+	model = updateKey(t, model, tea.KeyPressMsg{Code: 's', Text: "s"})
+	if model.step != stepReview || !model.geoipSkipped {
+		t.Fatalf("step=%v skipped=%v", model.step, model.geoipSkipped)
+	}
+	model = resolveServiceStatus(t, model)
+	view := model.View()
+	if !strings.Contains(view, ui.SetupReviewSubscriptionNone) {
+		t.Fatalf("subscription none missing:\n%s", view)
+	}
+	if !strings.Contains(view, ui.SetupReviewGeoIPSkipped) {
+		t.Fatalf("geoip skipped missing:\n%s", view)
+	}
+}
+
+func TestSetupReviewShowsRestartRequiredWhenEndpointsChanged(t *testing.T) {
+	client := &fakeClient{status: defaultStatus(false)}
+	model := loadedModel(client)
+	model.inputs[0].SetValue("127.0.0.1:9290")
+	model.status.RestartRequired = true
+	model.step = stepReview
+	if !strings.Contains(model.View(), ui.SetupReviewRestartRequired) {
+		t.Fatalf("restart hint missing:\n%s", model.View())
+	}
+}
+
+func TestSetupReviewShowsServiceStatus(t *testing.T) {
+	running := &fakeClient{status: defaultStatus(false), serviceStatus: protocol.ServiceStatus{Status: "running"}}
+	model := loadedModel(running)
+	model.step = stepReview
+	model = resolveServiceStatus(t, model)
+	if !strings.Contains(model.View(), "running") {
+		t.Fatalf("running view:\n%s", model.View())
+	}
+
+	notInstalled := &fakeClient{status: defaultStatus(false), serviceStatus: protocol.ServiceStatus{Status: "not_installed"}}
+	model = loadedModel(notInstalled)
+	model.step = stepReview
+	model = resolveServiceStatus(t, model)
+	if !strings.Contains(model.View(), ui.SetupReviewServiceNotRegistered) {
+		t.Fatalf("not_installed view:\n%s", model.View())
+	}
+
+	stale := &fakeClient{status: defaultStatus(false), serviceStatus: protocol.ServiceStatus{Status: "running"}}
+	model = loadedModel(stale)
+	model.step = stepReview
+	first := model.fetchServiceStatus()
+	model.fetchServiceStatus()
+	updated, _ := model.Update(first())
+	model = updated.(*Model)
+	if model.serviceLoaded {
+		t.Fatalf("stale service result applied")
 	}
 }
