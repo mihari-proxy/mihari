@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -146,4 +147,48 @@ func addZipFile(t *testing.T, writer *zip.Writer, name, content string) {
 	if _, err := entry.Write([]byte(content)); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func FuzzSafeArchivePath(f *testing.F) {
+	seeds := []string{
+		"index.html",
+		"assets/app.js",
+		".",
+		"..",
+		"../evil",
+		"nested/../../evil",
+		"/tmp/abs",
+		"C:/Windows/system32",
+		`\\unc\share\file`,
+		"a\\b/c",
+		"name\x00evil",
+		"",
+		"café/index.html",
+		strings.Repeat("a", 300) + "/b",
+	}
+	for _, seed := range seeds {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, name string) {
+		root := t.TempDir()
+		safe := SafeName(name)
+		target, err := resolveTarget(root, name)
+		if !safe {
+			if err == nil {
+				t.Fatalf("SafeName rejected %q but resolveTarget accepted %q", name, target)
+			}
+			return
+		}
+		if err != nil {
+			// SafeName may accept names that Join still rejects on this platform.
+			return
+		}
+		rel, relErr := filepath.Rel(root, target)
+		if relErr != nil {
+			t.Fatalf("Rel(%q,%q): %v", root, target, relErr)
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			t.Fatalf("resolved outside root: name=%q target=%q rel=%q", name, target, rel)
+		}
+	})
 }

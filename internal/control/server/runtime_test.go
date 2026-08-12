@@ -619,3 +619,46 @@ func TestInstallCoreThreadsRequestSource(t *testing.T) {
 		})
 	}
 }
+
+func FuzzDecodeControlJSON(f *testing.F) {
+	seeds := [][]byte{
+		[]byte(`{"operation_id":"op-1"}`),
+		[]byte(`{"operation_id":"op-2","if_revision":3,"source":"control"}`),
+		[]byte(`{"operation_id":"op","name":"sub","url":"https://example.invalid/x"}`),
+		[]byte(`{"operation_id":"op","unknown":true}`),
+		[]byte(`{"operation_id":"op"}{"extra":1}`),
+		[]byte(`{"operation_id":"op",`),
+		[]byte("\xff\xfe\x00not-json"),
+		[]byte(`{"operation_id":"` + strings.Repeat("x", 1024) + `"}`),
+		[]byte(`{"operation_id":"` + strings.Repeat("y", 8192) + `"}`),
+	}
+	for _, seed := range seeds {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, body []byte) {
+		for _, target := range []any{&protocol.MutationRequest{}, &protocol.SubscriptionUpdateRequest{}} {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/v1/fuzz", bytes.NewReader(body))
+			ok := decodeControlJSON(recorder, request, target)
+			if ok {
+				if recorder.Body.Len() != 0 {
+					t.Fatalf("success wrote body: %s", recorder.Body.String())
+				}
+				continue
+			}
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("failure status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			var envelope protocol.ErrorEnvelope
+			if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("invalid error envelope: %v body=%s", err, recorder.Body.String())
+			}
+			if envelope.Error.Code != protocol.CodeInvalidArgument {
+				t.Fatalf("code=%q body=%s", envelope.Error.Code, recorder.Body.String())
+			}
+			if len(body) > 8 && bytes.Contains(recorder.Body.Bytes(), body) {
+				t.Fatalf("error body echoed raw input")
+			}
+		}
+	})
+}

@@ -481,7 +481,7 @@ func (m *Manager) SelectProxy(ctx context.Context, operation Operation, group, n
 		if m.controller == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
 		}
-		if err := m.withMaintenance(ctx, func() error { return m.controller.SelectProxy(ctx, group, name) }); err != nil {
+		if err := m.withControllerMutation(ctx, operation, func() error { return m.controller.SelectProxy(ctx, group, name) }); err != nil {
 			return nil, err
 		}
 		return struct{}{}, nil
@@ -494,7 +494,7 @@ func (m *Manager) CloseConnection(ctx context.Context, operation Operation, id s
 		if m.controller == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
 		}
-		if err := m.withMaintenance(ctx, func() error { return m.controller.CloseConnection(ctx, id) }); err != nil {
+		if err := m.withControllerMutation(ctx, operation, func() error { return m.controller.CloseConnection(ctx, id) }); err != nil {
 			return nil, err
 		}
 		return struct{}{}, nil
@@ -507,12 +507,41 @@ func (m *Manager) CloseAllConnections(ctx context.Context, operation Operation) 
 		if m.controller == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
 		}
-		if err := m.withMaintenance(ctx, func() error { return m.controller.CloseAllConnections(ctx) }); err != nil {
+		if err := m.withControllerMutation(ctx, operation, func() error { return m.controller.CloseAllConnections(ctx) }); err != nil {
 			return nil, err
 		}
 		return struct{}{}, nil
 	})
 	return err
+}
+
+func (m *Manager) withControllerMutation(ctx context.Context, operation Operation, mutation func() error) error {
+	return m.withMaintenance(ctx, func() error {
+		if operation.IfRevision != nil {
+			current := m.store.Load().Revision
+			if *operation.IfRevision != current {
+				return protocol.APIError{
+					Code:    protocol.CodeRevisionConflict,
+					Message: "state revision changed",
+					Details: map[string]any{
+						"expected_revision": *operation.IfRevision,
+						"current_revision":  current,
+					},
+				}
+			}
+		}
+		if err := mutation(); err != nil {
+			return err
+		}
+		_, err := m.coordinator.Do(ctx, state.CommandMeta{
+			ID:         operation.ID,
+			Source:     operation.Source,
+			IfRevision: operation.IfRevision,
+		}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+			return snapshot, nil
+		})
+		return err
+	})
 }
 
 func (m *Manager) withMaintenance(ctx context.Context, operation func() error) error {

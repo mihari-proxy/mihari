@@ -1,0 +1,76 @@
+name: fuzz
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  bounded-fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Fuzz subscription document parser
+        id: fuzz_document
+        run: go test -run '^$' -fuzz '^FuzzParseDocument$' -fuzztime=60s ./internal/subscription
+
+      - name: Fuzz archive path safety
+        id: fuzz_archive
+        run: go test -run '^$' -fuzz '^FuzzSafeArchivePath$' -fuzztime=60s ./internal/panel/archive
+
+      - name: Fuzz control JSON decoder
+        id: fuzz_json
+        run: go test -run '^$' -fuzz '^FuzzDecodeControlJSON$' -fuzztime=60s ./internal/control/server
+
+      - name: Fuzz subscription userinfo
+        id: fuzz_userinfo
+        run: go test -run '^$' -fuzz '^FuzzParseUserInfo$' -fuzztime=60s ./internal/subscription
+
+      - name: Collect failure corpus (sanitized)
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/fuzz-failure"
+          mkdir -p "$out/logs"
+          # Capture recent test output is already in job logs; collect corpus candidates only.
+          mapfile -t dirs < <(find internal -type d -path '*/testdata/fuzz/*' 2>/dev/null || true)
+          upload_corpus=1
+          for dir in "${dirs[@]:-}"; do
+            [ -d "$dir" ] || continue
+            # Reject oversized individual files.
+            while IFS= read -r -d '' file; do
+              size=$(wc -c <"$file")
+              if [ "$size" -gt 1048576 ]; then
+                echo "skip oversized corpus file: $file ($size bytes)"
+                upload_corpus=0
+              fi
+            done < <(find "$dir" -type f -print0 2>/dev/null || true)
+            # Reject likely-sensitive content.
+            if command -v rg >/dev/null 2>&1; then
+              if rg -a -n '(https?://|Bearer |token=|secret=)' "$dir" >/dev/null 2>&1; then
+                echo "sensitive pattern in corpus $dir; skipping corpus upload"
+                upload_corpus=0
+              fi
+            fi
+            if [ "$upload_corpus" -eq 1 ]; then
+              mkdir -p "$out/corpus"
+              cp -a "$dir" "$out/corpus/" || true
+            fi
+          done
+          echo "corpus_upload=$upload_corpus" >>"$GITHUB_OUTPUT"
+          echo "prepared=$out" >>"$GITHUB_OUTPUT"
+
+      - name: Upload fuzz failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failure
+          path: ${{ runner.temp }}/fuzz-failure
+          retention-days: 7
+          if-no-files-found: ignore

@@ -258,6 +258,34 @@ func TestMapServiceErrorStartTimeout(t *testing.T) {
 	}
 }
 
+func TestMapServiceErrorPermissionAndMarkedForDeletion(t *testing.T) {
+	err := mapServiceError(errors.New("Access is denied."))
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodePermissionDenied {
+		t.Fatalf("permission err=%v", err)
+	}
+
+	err = mapServiceError(errors.New("The specified service has been marked for deletion. (1072)"))
+	if !errors.As(err, &api) || api.Code != protocol.CodeInvalidState {
+		t.Fatalf("marked-for-deletion err=%v", err)
+	}
+	if !strings.Contains(strings.ToLower(api.Message), "marked for deletion") {
+		t.Fatalf("message=%q", api.Message)
+	}
+}
+
+func TestIsIgnorableStopError(t *testing.T) {
+	if !isIgnorableStopError(errors.New("service has not been started")) {
+		t.Fatal("expected not-started to be ignorable")
+	}
+	if !isIgnorableStopError(errors.New("service mihari is not installed")) {
+		t.Fatal("expected not-installed to be ignorable")
+	}
+	if isIgnorableStopError(errors.New("access is denied")) {
+		t.Fatal("permission errors must not be ignored")
+	}
+}
+
 func TestInstallEnvVarsPinsAbsoluteMIHARI_DATA(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "service-data")
 	t.Setenv("MIHARI_DATA", root)

@@ -183,5 +183,7 @@ $env:GOOS = 'darwin';  $env:GOARCH = 'arm64'; go build ./cmd/mihari
 ## 10. 当前治理状态
 
 - 本文件只建立开发与测试规范，不代表现有代码已经通过规范审计。
-- 当前不新增或修改测试代码、CI、Git hooks，也不迁移目录。
-- 覆盖率固定门槛、测试分层一致性、fixture 治理、CI 矩阵与 hooks 留待后续独立审计和仓库完善阶段处理。
+- 用户已授权按 `docs/superpowers/plans/2026-08-12-test-governance-roadmap.md` 完整实施 Phase A-D，包括计划内测试、被测试证明必要的最小生产修复、CI/Actions、提交、推送与 PR。
+- 各阶段仍按计划边界和独立评审切分实施，不把无关重构混入测试治理变更。
+- 覆盖率当前先进入观察期；相对回归门禁必须满足至少 10 次成功 `main` workflow 的数据前置条件，固定覆盖率门槛仍须基于至少 30 次数据另行审核，不能提前写死。
+- Git hooks、目录迁移、真实订阅、真实 mihomo、系统服务安装及其他 testenv 操作不在本次授权范围内。
