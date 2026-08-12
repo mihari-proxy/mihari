@@ -47,6 +47,15 @@ type InstallResult struct {
 	Updated bool
 }
 
+// LocalCoreInfo reports whether an existing local core binary satisfies setup
+// without a network download. Ready mirrors the Install setup fast-path predicate
+// (DetectVersion success + non-empty version), kept DRY with manager.Install
+// (design §4.3). Read-only; never persists or mutates state.
+type LocalCoreInfo struct {
+	Ready   bool
+	Version string
+}
+
 func (i Installer) Install(ctx context.Context, request InstallRequest) (InstallResult, error) {
 	candidate, err := i.Prepare(ctx, request)
 	if err != nil {

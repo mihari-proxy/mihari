@@ -453,6 +453,41 @@ func TestMissingCoreStaysControllableAndStartsAfterInstall(t *testing.T) {
 	}
 }
 
+func TestManagerLocalCoreReflectsDetectVersion(t *testing.T) {
+	installer := &fakeInstaller{detectVersion: func(context.Context, string) (string, error) {
+		return "v1.18.5", nil
+	}}
+	manager := newTestManager(Options{Installer: installer})
+	info, err := manager.LocalCore(context.Background())
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if !info.Ready || info.Version != "v1.18.5" {
+		t.Fatalf("info=%#v", info)
+	}
+	if got := installer.detectCalls.Load(); got != 1 {
+		t.Fatalf("detect calls=%d", got)
+	}
+
+	missing := &fakeInstaller{detectVersion: func(context.Context, string) (string, error) {
+		return "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "missing"}
+	}}
+	manager = newTestManager(Options{Installer: missing})
+	info, err = manager.LocalCore(context.Background())
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if info.Ready || info.Version != "" {
+		t.Fatalf("missing core should not be ready: %#v", info)
+	}
+
+	// No installer wired (e.g. minimal runtime) must report not-ready, never error.
+	none := newTestManager(Options{})
+	if info, err := none.LocalCore(context.Background()); err != nil || info.Ready {
+		t.Fatalf("nil installer err=%v info=%#v", err, info)
+	}
+}
+
 func newTestManager(options Options) *Manager {
 	store := state.NewStore(state.Snapshot{Health: "ok"})
 	options.Store = store
@@ -463,6 +498,40 @@ func newTestManager(options Options) *Manager {
 	manager := New(options)
 	manager.store = store
 	return manager
+}
+
+func TestManagerServiceStatusDelegatesToInjectedFunc(t *testing.T) {
+	running := newTestManager(Options{ServiceStatus: func() (string, error) {
+		return "running", nil
+	}})
+	status, err := running.ServiceStatus(context.Background())
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if status.Schema != "mihari/v1" || status.Status != "running" {
+		t.Fatalf("status=%#v", status)
+	}
+
+	failing := newTestManager(Options{ServiceStatus: func() (string, error) {
+		return "", protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "scm offline"}
+	}})
+	if status, err := failing.ServiceStatus(context.Background()); err != nil || status.Status != "unknown" {
+		t.Fatalf("error should resolve to unknown: status=%#v err=%v", status, err)
+	}
+
+	// Empty status string with nil error must still resolve to "unknown" — a blank
+	// SCM reply is not a positive signal and must never read as a registered state.
+	empty := newTestManager(Options{ServiceStatus: func() (string, error) {
+		return "", nil
+	}})
+	if status, err := empty.ServiceStatus(context.Background()); err != nil || status.Status != "unknown" {
+		t.Fatalf("empty injector string should resolve to unknown: status=%#v err=%v", status, err)
+	}
+
+	none := newTestManager(Options{})
+	if status, err := none.ServiceStatus(context.Background()); err != nil || status.Status != "unknown" {
+		t.Fatalf("nil injector err=%v status=%#v", err, status)
+	}
 }
 
 type fakeInstaller struct {

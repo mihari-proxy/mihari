@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"strings"
 	"sync/atomic"
+	"syscall"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -19,9 +21,12 @@ import (
 type Client interface {
 	Onboarding(context.Context) (protocol.OnboardingStatus, error)
 	UpdateOnboarding(context.Context, protocol.OnboardingUpdateRequest) (protocol.OnboardingStatus, error)
+	Core(context.Context) (protocol.CoreStatus, error)
+	GeoIPStatus(context.Context) (protocol.GeoIPStatus, error)
 	InstallCore(context.Context, protocol.MutationRequest) (protocol.CoreInstallResult, error)
 	AddSubscription(context.Context, protocol.SubscriptionAddRequest) (protocol.SubscriptionResult, error)
 	UpdateGeoIP(context.Context, protocol.MutationRequest) (protocol.GeoIPUpdateResult, error)
+	ServiceStatus(context.Context) (protocol.ServiceStatus, error)
 }
 
 type step uint8
@@ -43,6 +48,48 @@ type actionResultMsg struct {
 	next     step
 	revision uint64
 	err      error
+}
+
+// coreLocalResultMsg carries an advisory local-core readiness probe for stepCore.
+// A stale generation (step re-entered) or non-nil err leaves the step on its static
+// copy (design §4.4) — local detection never blocks onboarding.
+type coreLocalResultMsg struct {
+	gen    uint64
+	status protocol.CoreStatus
+	err    error
+}
+
+// geoipLocalResultMsg carries an advisory local GeoIP database probe for stepGeoIP.
+type geoipLocalResultMsg struct {
+	gen    uint64
+	status protocol.GeoIPStatus
+	err    error
+}
+
+// serviceStatusMsg carries the daemon's service registration status for stepReview.
+// A stale generation or non-nil err leaves the 服务 row on its fallback (design §5.3) —
+// service detection never blocks the review step.
+type serviceStatusMsg struct {
+	gen    uint64
+	status protocol.ServiceStatus
+	err    error
+}
+
+// portState is the three-valued result of a single endpoint port probe.
+type portState uint8
+
+const (
+	portFree     portState = iota // bindable — net.Listen succeeded
+	portOccupied                  // EADDRINUSE — another process holds the port
+	portUnknown                   // any other error (permissions) — not red, not blocking
+)
+
+// portProbeMsg carries generation-guarded endpoint port probe results for
+// stepEndpoints. A stale generation is discarded so rapid edits honor only the
+// latest probe.
+type portProbeMsg struct {
+	gen     uint64
+	results [3]portState
 }
 
 type completeStartMsg struct{}
@@ -76,6 +123,24 @@ type Model struct {
 	focusedField       int
 	loading            bool
 	lastError          string
+	coreLocal          protocol.CoreStatus
+	coreLocalLoaded    bool
+	coreLocalGen       uint64
+	geoipLocal         protocol.GeoIPStatus
+	geoipLocalLoaded   bool
+	geoipLocalGen      uint64
+	coreResult         protocol.CoreInstallResult
+	addedSubscription  *protocol.Subscription
+	geoipResult        *protocol.GeoIPUpdateResult
+	geoipSkipped       bool
+	serviceStatus      protocol.ServiceStatus
+	serviceLoaded      bool
+	serviceErr         bool
+	serviceGen         uint64
+	portProbe          [3]portState
+	portProbeLoaded    bool
+	portProbeGen       uint64
+	probe              func(string) portState
 	width              int
 	height             int
 	theme              ui.Theme
@@ -128,7 +193,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.inputs = endpointInputs(typed.status)
 		m.subscriptionInputs = subscriptionInputs()
 		m.focusEndpoint(0)
-		return m, nil
+		return m, m.probePorts()
 	case actionResultMsg:
 		m.loading = false
 		if typed.err != nil {
@@ -146,9 +211,52 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			m.status.Revision = typed.revision
 		}
 		m.step = typed.next
-		if m.step == stepSubscription {
+		switch m.step {
+		case stepCore:
+			return m, m.fetchCoreLocal()
+		case stepSubscription:
 			m.focusSubscription(0)
+		case stepGeoIP:
+			return m, m.fetchGeoIPLocal()
+		case stepReview:
+			return m, m.fetchServiceStatus()
 		}
+		return m, nil
+	case coreLocalResultMsg:
+		if typed.gen != m.coreLocalGen {
+			return m, nil
+		}
+		if typed.err == nil {
+			m.coreLocal = typed.status
+			m.coreLocalLoaded = true
+		}
+		return m, nil
+	case geoipLocalResultMsg:
+		if typed.gen != m.geoipLocalGen {
+			return m, nil
+		}
+		if typed.err == nil {
+			m.geoipLocal = typed.status
+			m.geoipLocalLoaded = true
+		}
+		return m, nil
+	case serviceStatusMsg:
+		if typed.gen != m.serviceGen {
+			return m, nil
+		}
+		if typed.err == nil {
+			m.serviceStatus = typed.status
+			m.serviceLoaded = true
+		} else {
+			m.serviceErr = true
+		}
+		return m, nil
+	case portProbeMsg:
+		if typed.gen != m.portProbeGen {
+			return m, nil
+		}
+		m.portProbe = typed.results
+		m.portProbeLoaded = true
 		return m, nil
 	case completeStartMsg:
 		m.loading = true
@@ -203,7 +311,8 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	case stepGeoIP:
 		if key.String() == "s" {
 			m.step = stepReview
-			return m, nil
+			m.geoipSkipped = true
+			return m, m.fetchServiceStatus()
 		}
 		if key.String() == "enter" {
 			m.loading = true
@@ -262,13 +371,19 @@ func (m *Model) updateEndpoints(message tea.Msg, key tea.KeyPressMsg) (ui.Page, 
 			m.lastError = err.Error()
 			return m, nil
 		}
+		if m.portProbeLoaded && m.anyPortOccupied() {
+			fixed := findAvailablePorts(m.endpointValuesArray())
+			m.writeEndpoints(fixed)
+			m.lastError = ui.SetupPortAutoFixHint
+			return m, m.probePorts()
+		}
 		m.lastError = ""
 		m.step = stepCore
-		return m, nil
+		return m, m.fetchCoreLocal()
 	}
 	updated, command := m.inputs[m.focusedField].Update(message)
 	m.inputs[m.focusedField] = updated
-	return m, command
+	return m, tea.Batch(command, m.probePorts())
 }
 
 func (m *Model) updateSubscription(message tea.Msg, key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
@@ -284,7 +399,7 @@ func (m *Model) updateSubscription(message tea.Msg, key tea.KeyPressMsg) (ui.Pag
 		url := strings.TrimSpace(m.subscriptionInputs[1].Value())
 		if name == "" && url == "" {
 			m.step = stepGeoIP
-			return m, nil
+			return m, m.fetchGeoIPLocal()
 		}
 		if name == "" || url == "" {
 			m.lastError = ui.InvalidSubscriptionForm
@@ -306,21 +421,47 @@ func (m *Model) View() string {
 	switch m.step {
 	case stepEndpoints:
 		lines = append(lines, ui.LocalEndpointsLabel)
-		lines = append(lines, renderInputs([]string{"Mixed", "Controller", "Web"}, m.inputs, m.focusedField)...)
+		lines = append(lines, m.renderEndpoints()...)
 		lines = append(lines, "", ui.SetupEndpointHelp)
 	case stepCore:
-		lines = append(lines, ui.SetupCoreTitle, ui.SetupCoreBody, "", ui.SetupEnterInstall)
+		lines = append(lines, ui.SetupCoreTitle, ui.SetupCoreBody)
+		if m.coreLocalLoaded {
+			if m.coreLocal.LocalReady {
+				version := m.coreLocal.LocalVersion
+				if version == "" {
+					version = "unknown"
+				}
+				lines = append(lines, "", fmt.Sprintf(ui.SetupCoreLocalReady, version))
+			} else {
+				lines = append(lines, "", ui.SetupCoreWillDownload)
+			}
+		}
+		lines = append(lines, "", ui.SetupEnterInstall)
 	case stepSubscription:
 		lines = append(lines, ui.SetupSubscriptionTitle, ui.SetupSubscriptionBody)
 		lines = append(lines, renderInputs([]string{"Name", "URL"}, m.subscriptionInputs, m.focusedField)...)
 		lines = append(lines, "", ui.SetupSubscriptionHelp)
 	case stepGeoIP:
-		lines = append(lines, ui.SetupGeoIPTitle, ui.SetupGeoIPBody, "", ui.SetupEnterOrSkip)
+		lines = append(lines, ui.SetupGeoIPTitle, ui.SetupGeoIPBody)
+		if m.geoipLocalLoaded {
+			if m.geoipLocal.Country.Available && m.geoipLocal.ASN.Available {
+				lines = append(lines, "", ui.SetupGeoIPLocalReady)
+			} else {
+				lines = append(lines, "", ui.SetupGeoIPWillDownload)
+			}
+		}
+		lines = append(lines, "", ui.SetupEnterOrSkip)
 	case stepReview:
 		mixed, controller, web := m.endpointValues()
 		lines = append(lines, ui.SetupReviewTitle,
-			"Mixed       "+mixed, "Controller  "+controller, "Web         "+web, "",
-			ui.SetupCompleteHelp)
+			"Mixed        "+mixed,
+			"Controller   "+controller,
+			"Web          "+web+m.restartSuffix(),
+			"Core         "+m.coreSummary(),
+			"Subscription "+m.subscriptionSummary(),
+			"GeoIP        "+m.geoipSummary(),
+			"服务         "+m.serviceSummary(),
+			"", ui.SetupCompleteHelp)
 	}
 	if m.loading {
 		lines = append(lines, "", ui.LoadingLabel)
@@ -413,10 +554,143 @@ func (m *Model) endpointsChanged() bool {
 	return mixed != m.initial.MixedAddr || controller != m.initial.ControllerAddr || web != m.initial.WebAddr
 }
 
+func (m *Model) endpointValuesArray() [3]string {
+	mixed, controller, web := m.endpointValues()
+	return [3]string{mixed, controller, web}
+}
+
+func (m *Model) writeEndpoints(values [3]string) {
+	for index, value := range values {
+		if index < len(m.inputs) {
+			m.inputs[index].SetValue(value)
+		}
+	}
+}
+
+// anyPortOccupied reports whether any probed endpoint is held by another process.
+// portUnknown is intentionally excluded (design §8): permission failures must not
+// block onboarding or render red — the daemon's startup check remains the backstop.
+func (m *Model) anyPortOccupied() bool {
+	for _, state := range m.portProbe {
+		if state == portOccupied {
+			return true
+		}
+	}
+	return false
+}
+
+// probePorts schedules a generation-guarded endpoint probe. Each call bumps
+// portProbeGen so only the most recently scheduled probe's result lands; earlier
+// probes are discarded by the gen guard in the portProbeMsg case. This is the
+// debounce (design §7.2) — a race-free override instead of a wall-clock timer.
+func (m *Model) probePorts() tea.Cmd {
+	m.portProbeGen++
+	gen := m.portProbeGen
+	probe := m.probe
+	if probe == nil {
+		probe = probeEndpoint
+	}
+	return func() tea.Msg {
+		values := m.endpointValuesArray()
+		return portProbeMsg{gen: gen, results: [3]portState{probe(values[0]), probe(values[1]), probe(values[2])}}
+	}
+}
+
+// renderEndpoints renders the three endpoint inputs with focus markers and, once a
+// probe has landed, a trailing ✓ for free ports or ✗ in use for occupied ones; the
+// occupied value is colored Danger. Unknown ports get no marker (design §8).
+func (m *Model) renderEndpoints() []string {
+	labels := []string{"Mixed", "Controller", "Web"}
+	lines := make([]string, 0, len(labels)*2)
+	for index := range m.inputs {
+		marker := "  "
+		if index == m.focusedField {
+			marker = ui.FocusMarker
+		}
+		value := m.inputs[index].View()
+		suffix := ""
+		if m.portProbeLoaded {
+			switch m.portProbe[index] {
+			case portFree:
+				suffix = "  " + m.theme.Success.Render("✓")
+			case portOccupied:
+				value = m.theme.Danger.Render(value)
+				suffix = "  " + m.theme.Danger.Render(ui.SetupPortInUse)
+			}
+		}
+		lines = append(lines, marker+labels[index], "  "+value+suffix)
+	}
+	return lines
+}
+
+// probeEndpoint reports the bindability of a loopback address via a short-lived
+// net.Listen that closes immediately (design §7.2). Success → free; EADDRINUSE →
+// occupied; any other error (permissions) → unknown — the socket never contends
+// with core startup.
+func probeEndpoint(addr string) portState {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		if isAddrInUse(err) {
+			return portOccupied
+		}
+		return portUnknown
+	}
+	_ = listener.Close()
+	return portFree
+}
+
+// isAddrInUse reports whether a listen error means the address is already bound.
+// Cross-platform: EADDRINUSE on Unix, WSAEADDRINUSE (10048) on Windows. Go's
+// syscall.EADDRINUSE constant does not equal the raw Windows socket errno
+// (10048 vs 536870914), so both values are checked explicitly.
+func isAddrInUse(err error) bool {
+	var errno syscall.Errno
+	if !errors.As(err, &errno) {
+		return false
+	}
+	return errno == syscall.EADDRINUSE || errno == 10048
+}
+
+// findAvailablePorts rewrites occupied endpoints to the next free port (walking
+// port+1 up to +1024), leaving free/unknown ports unchanged. Results stay mutually
+// distinct so validateEndpoints' collision rule still holds. If no free port is
+// found within the cap the input is left as-is (design §8) — never an invalid value.
+func findAvailablePorts(current [3]string) [3]string {
+	result := current
+	used := make(map[uint16]bool)
+	for index, addr := range current {
+		parsed, err := netip.ParseAddrPort(addr)
+		if err != nil {
+			continue
+		}
+		if probeEndpoint(addr) != portOccupied {
+			used[parsed.Port()] = true
+			continue
+		}
+		host := parsed.Addr()
+		for offset := 1; offset <= 1024; offset++ {
+			candidate := uint16(parsed.Port()) + uint16(offset)
+			if used[candidate] {
+				continue
+			}
+			candidateAddr := netip.AddrPortFrom(host, candidate).String()
+			if probeEndpoint(candidateAddr) == portFree {
+				result[index] = candidateAddr
+				used[candidate] = true
+				break
+			}
+		}
+	}
+	return result
+}
+
 func (m *Model) installCore() tea.Cmd {
 	revision, operationID := m.status.Revision, m.newOperationID()
 	return func() tea.Msg {
 		result, err := m.client.InstallCore(m.ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision, Source: "setup"})
+		// Capture the install outcome so stepReview can summarize "本地已有/新装/安装失败".
+		// The cmd→channel→Update path provides the happens-before guarantee (design §7.4).
+		m.coreResult = result
 		return actionResultMsg{next: stepSubscription, revision: result.Revision, err: err}
 	}
 }
@@ -425,6 +699,10 @@ func (m *Model) addSubscription(name, url string) tea.Cmd {
 	revision, operationID := m.status.Revision, m.newOperationID()
 	return func() tea.Msg {
 		result, err := m.client.AddSubscription(m.ctx, protocol.SubscriptionAddRequest{OperationID: operationID, IfRevision: &revision, Name: name, URL: url})
+		// Capture the added subscription so stepReview shows its name, not the
+		// "未添加（已跳过）" fallback. See installCore for the happens-before note.
+		subscription := result.Subscription
+		m.addedSubscription = &subscription
 		return actionResultMsg{next: stepGeoIP, revision: result.Revision, err: err}
 	}
 }
@@ -433,8 +711,114 @@ func (m *Model) updateGeoIP() tea.Cmd {
 	revision, operationID := m.status.Revision, m.newOperationID()
 	return func() tea.Msg {
 		result, err := m.client.UpdateGeoIP(m.ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision, Source: "setup"})
+		// Capture the update outcome so stepReview shows "Country ✓ ASN ✓" or "更新失败".
+		// Copied by value; the runtime result is not retained. See installCore for the note.
+		resultCopy := result
+		m.geoipResult = &resultCopy
 		return actionResultMsg{next: stepReview, revision: result.Revision, err: err}
 	}
+}
+
+// fetchCoreLocal probes GET /v1/core for the stepCore "use existing" hint. Advisory
+// only: failures leave coreLocalLoaded=false and the step renders its static copy.
+// The generation guard rejects results from a prior step entry.
+func (m *Model) fetchCoreLocal() tea.Cmd {
+	m.coreLocalGen++
+	gen := m.coreLocalGen
+	return func() tea.Msg {
+		status, err := m.client.Core(m.ctx)
+		return coreLocalResultMsg{gen: gen, status: status, err: err}
+	}
+}
+
+// fetchGeoIPLocal probes GET /v1/geoip/status for the stepGeoIP reuse hint.
+func (m *Model) fetchGeoIPLocal() tea.Cmd {
+	m.geoipLocalGen++
+	gen := m.geoipLocalGen
+	return func() tea.Msg {
+		status, err := m.client.GeoIPStatus(m.ctx)
+		return geoipLocalResultMsg{gen: gen, status: status, err: err}
+	}
+}
+
+// fetchServiceStatus probes GET /v1/service/status for the stepReview 服务 row.
+// Advisory only: failures set serviceErr and the row renders "未知".
+func (m *Model) fetchServiceStatus() tea.Cmd {
+	m.serviceGen++
+	gen := m.serviceGen
+	return func() tea.Msg {
+		status, err := m.client.ServiceStatus(m.ctx)
+		return serviceStatusMsg{gen: gen, status: status, err: err}
+	}
+}
+
+// coreSummary renders the Core review row: version plus source label, or the
+// install-failed fallback when no version was recorded.
+func (m *Model) coreSummary() string {
+	if m.coreResult.Version == "" {
+		return ui.SetupReviewCoreFailed
+	}
+	source := ui.SetupReviewCoreLocal
+	if m.coreResult.Updated {
+		source = ui.SetupReviewCoreFresh
+	}
+	return m.coreResult.Version + "  " + source
+}
+
+// subscriptionSummary renders the Subscription review row: the added
+// subscription name, or the skipped fallback when none was added.
+func (m *Model) subscriptionSummary() string {
+	if m.addedSubscription != nil && m.addedSubscription.Name != "" {
+		return m.addedSubscription.Name
+	}
+	return ui.SetupReviewSubscriptionNone
+}
+
+// geoipSummary renders the GeoIP review row: ready, skipped, or failed.
+func (m *Model) geoipSummary() string {
+	if m.geoipSkipped {
+		return ui.SetupReviewGeoIPSkipped
+	}
+	if m.geoipResult == nil {
+		return ui.SetupReviewGeoIPFailed
+	}
+	if m.geoipResult.Status.Country.Error != "" || m.geoipResult.Status.ASN.Error != "" {
+		return ui.SetupReviewGeoIPFailed
+	}
+	if m.geoipResult.Status.Country.Available && m.geoipResult.Status.ASN.Available {
+		return ui.SetupReviewGeoIPReady
+	}
+	return ui.SetupReviewGeoIPFailed
+}
+
+// serviceSummary renders the 服务 review row, mapping the daemon's literal
+// service status to localized copy. Loading/unknown stay on fallbacks.
+func (m *Model) serviceSummary() string {
+	if !m.serviceLoaded {
+		return ui.LoadingLabel
+	}
+	if m.serviceErr {
+		return ui.SetupReviewServiceUnknown
+	}
+	switch m.serviceStatus.Status {
+	case "running":
+		return "running"
+	case "stopped":
+		return "stopped"
+	case "not_installed":
+		return ui.SetupReviewServiceNotRegistered
+	default:
+		return ui.SetupReviewServiceUnknown
+	}
+}
+
+// restartSuffix appends the "（需重启生效）" hint to the Web endpoint row when
+// the user changed endpoints and the daemon reports a restart is required.
+func (m *Model) restartSuffix() string {
+	if m.endpointsChanged() && m.status.RestartRequired {
+		return "  " + ui.SetupReviewRestartRequired
+	}
+	return ""
 }
 
 func (m *Model) complete() tea.Cmd {

@@ -73,7 +73,7 @@ See [docs/distribution.md](docs/distribution.md) for the offline distribution de
 mihari
 ```
 
-The interactive setup installs the mihomo core, guides you through adding your first subscription, and prepares local GeoIP data.
+The interactive setup installs the mihomo core, guides you through adding your first subscription, and prepares local GeoIP data. It pre-checks the managed ports up front (with one-key auto-fix on conflict), reuses any local core/GeoIP already present, and the final review summarizes ports, core, subscription, GeoIP and service registration.
 
 **Add a subscription and enable the system proxy**
 
