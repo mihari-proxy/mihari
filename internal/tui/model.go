@@ -977,7 +977,11 @@ func (model Model) footerGlobalSegment() string {
 		}
 		return ui.SpinnerLabel(model.now, label)
 	}
-	return ui.GlobalStateLabel(model.globalState)
+	label := ui.GlobalStateLabel(model.globalState)
+	if model.globalState == ui.StateStale && !model.lastObservedAt.IsZero() {
+		label += " · last observed " + model.lastObservedAt.Local().Format("15:04")
+	}
+	return label
 }
 
 func (model Model) View() tea.View {
