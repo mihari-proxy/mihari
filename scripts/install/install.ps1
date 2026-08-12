@@ -1,5 +1,5 @@
 # mihari one-line installer for Windows (PowerShell).
-#   irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/scripts/install/install.ps1 | iex
 #
 # Environment overrides:
 #   $env:MIHARI_REPO        owner/repo (default mihari-proxy/mihari)

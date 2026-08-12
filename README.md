@@ -41,12 +41,12 @@ A single CGO-free static binary (< 15 MB) contains everything, with built-in Git
 
 ```sh
 # Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/main/scripts/install/install.sh | bash
 ```
 
 ```powershell
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/scripts/install/install.ps1 | iex
 ```
 
 Or download the binary for your platform from the [Releases page](https://github.com/mihari-proxy/mihari/releases).
@@ -128,10 +128,10 @@ go vet ./...
 Build a local binary:
 
 ```console
-CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o mihari ./cmd/mihari
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/mihari ./cmd/mihari
 ```
 
-The architecture invariants, package boundaries, and contribution guidance are recorded in [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md). See [docs/RELEASE.md](docs/RELEASE.md) for the release process.
+The architecture invariants, package boundaries, and contribution guidance are recorded in [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](.github/CONTRIBUTING.md). See [docs/RELEASE.md](docs/RELEASE.md) for the release process.
 
 ## License
 
