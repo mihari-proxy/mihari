@@ -751,9 +751,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, m.confirmServiceAction(serviceStop)
 		case rowServiceRestart:
 			return m, m.confirmServiceAction(serviceRestart)
-		case rowSystemProxy:
+		case rowSystemProxyAction:
 			return m, m.confirmSystemProxyToggle()
-		case rowTUN:
+		case rowTUNAction:
 			return m, m.confirmTunToggle()
 		default:
 			selected := rows[index]
@@ -794,7 +794,7 @@ func (m *Model) updateMihari() tea.Cmd {
 }
 
 func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) (ui.Page, tea.Cmd) {
-	rowID := m.outcomeRowID(rowSystemProxy)
+	rowID := m.outcomeRowID(rowSystemProxyAction)
 	m.clearRowPending()
 	if typed.err != nil {
 		var apiError protocol.APIError
@@ -824,7 +824,7 @@ func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) 
 }
 
 func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cmd) {
-	rowID := m.outcomeRowID(rowTUN)
+	rowID := m.outcomeRowID(rowTUNAction)
 	m.clearRowPending()
 	if typed.err != nil {
 		var apiError protocol.APIError
@@ -1036,12 +1036,12 @@ func (m *Model) networkRows() []row {
 	section := ui.NetworkSectionTitle
 	var rows []row
 	if m.hasCapability(protocol.CapabilitySystemProxy) {
-		// Idle value only; pending/outcome chips are overlaid in View for pendingRow/outcomeRow.
+		// Status row shows observed state. It is never overlaid by the
+		// pending/outcome chips (those bind the action row below), so the live
+		// status stays visible even right after a toggle.
 		value := ui.LoadingLabel
-		detail := ui.EnableSystemProxyImpact
 		if m.systemProxyLoaded {
 			value = systemProxySummary(m.theme, m.systemProxy)
-			detail = systemProxyDetail(m.systemProxy)
 		}
 		if !m.mutationsEnabled {
 			if m.systemProxyLoaded {
@@ -1052,18 +1052,28 @@ func (m *Model) networkRows() []row {
 		}
 		rows = append(rows, row{
 			id: rowSystemProxy, section: section, label: ui.SystemProxyLabel,
-			value: value, detail: detail,
+			value: value, detail: systemProxyDetail(m.systemProxy),
+		})
+		// Action row carries the toggle verb; its badge (pending/Done/Failed)
+		// binds here via rowProgressForAction / outcomeRowID.
+		impact := ui.EnableSystemProxyImpact
+		if m.systemProxy.Desired || m.systemProxy.Observed.Owned {
+			impact = ui.DisableSystemProxyImpact
+		}
+		rows = append(rows, row{
+			id: rowSystemProxyAction, section: section, label: m.systemProxyActionLabel(),
+			value:  actionState(m.hasCapability(protocol.CapabilitySystemProxy), m.mutationsEnabled),
+			detail: impact,
 		})
 	}
-	// TUN row is always listed; live status when capability is present.
+	// TUN status row is always listed; live status when capability is present.
 	tunValue := ui.UnavailableTitle
 	tunDetail := ui.TUNUnavailableDetail
 	if m.hasCapability(protocol.CapabilityTUN) {
 		tunValue = ui.LoadingLabel
-		tunDetail = ui.EnableTunImpact
+		tunDetail = tunDetailText(m.tun)
 		if m.tunLoaded {
 			tunValue = tunSummary(m.theme, m.tun)
-			tunDetail = tunDetailText(m.tun)
 		}
 		if !m.mutationsEnabled {
 			if m.tunLoaded {
@@ -1077,6 +1087,17 @@ func (m *Model) networkRows() []row {
 		id: rowTUN, section: section, label: ui.TUNLabel,
 		value: tunValue, detail: tunDetail,
 	})
+	if m.hasCapability(protocol.CapabilityTUN) {
+		tunImpact := ui.EnableTunImpact
+		if m.tun.DesiredEnable {
+			tunImpact = ui.DisableTunImpact
+		}
+		rows = append(rows, row{
+			id: rowTUNAction, section: section, label: m.tunActionLabel(),
+			value:  actionState(m.hasCapability(protocol.CapabilityTUN), m.mutationsEnabled),
+			detail: tunImpact,
+		})
+	}
 	return rows
 }
 
@@ -1384,13 +1405,13 @@ func rowProgressForAction(action ui.Action, coreMissing bool) (rowID, note strin
 	case ui.ActionRestartCore:
 		return rowCoreRestart, ui.CoreProgressRestarting
 	case ui.ActionEnableSystemProxy, ui.ActionForceSystemProxy:
-		return rowSystemProxy, ui.ProxyProgressEnabling
+		return rowSystemProxyAction, ui.ProxyProgressEnabling
 	case ui.ActionDisableSystemProxy:
-		return rowSystemProxy, ui.ProxyProgressDisabling
+		return rowSystemProxyAction, ui.ProxyProgressDisabling
 	case ui.ActionEnableTun:
-		return rowTUN, ui.TunProgressEnabling
+		return rowTUNAction, ui.TunProgressEnabling
 	case ui.ActionDisableTun:
-		return rowTUN, ui.TunProgressDisabling
+		return rowTUNAction, ui.TunProgressDisabling
 	default:
 		return "", ""
 	}

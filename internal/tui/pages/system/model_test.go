@@ -780,7 +780,7 @@ func TestSystemProxyEnableConfirmsAndExecutes(t *testing.T) {
 	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilitySystemProxy}}, protocol.CoreStatus{})
 	model.SetMutationsEnabled(true)
 	model.SetSystemProxy(client.systemProxy)
-	model.focusID = rowSystemProxy
+	model.focusID = rowSystemProxyAction
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(*Model)
 	if cmd == nil {
@@ -815,7 +815,7 @@ func TestSystemProxyForeignEnterRequestsForceOverwrite(t *testing.T) {
 	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilitySystemProxy}}, protocol.CoreStatus{})
 	model.SetMutationsEnabled(true)
 	model.SetSystemProxy(client.systemProxy)
-	model.focusID = rowSystemProxy
+	model.focusID = rowSystemProxyAction
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = updated.(*Model)
 	if cmd == nil {
@@ -927,7 +927,7 @@ func TestSystemProxyOwnedEnterConfirmsDisable(t *testing.T) {
 	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilitySystemProxy}}, protocol.CoreStatus{})
 	model.SetMutationsEnabled(true)
 	model.SetSystemProxy(client.systemProxy)
-	model.focusID = rowSystemProxy
+	model.focusID = rowSystemProxyAction
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = updated.(*Model)
 	intent := cmd().(ui.ActionIntentMsg)
@@ -948,7 +948,7 @@ func TestSystemTunToggleEnableDisableWithConfirm(t *testing.T) {
 	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityTUN}}, protocol.CoreStatus{})
 	model.SetMutationsEnabled(true)
 	model.SetTun(client.tun)
-	model.focusID = rowTUN
+	model.focusID = rowTUNAction
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(*Model)
 	intent := cmd().(ui.ActionIntentMsg)
@@ -962,7 +962,7 @@ func TestSystemTunToggleEnableDisableWithConfirm(t *testing.T) {
 		t.Fatalf("enable calls=%d desired=%v", client.enableTunCalls, model.tun.DesiredEnable)
 	}
 
-	model.focusID = rowTUN
+	model.focusID = rowTUNAction
 	updated, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(*Model)
 	intent = cmd().(ui.ActionIntentMsg)
@@ -987,7 +987,7 @@ func TestSystemProxyAndTunMutationsDisabledWhileDisconnected(t *testing.T) {
 	model.SetMutationsEnabled(false)
 	model.SetSystemProxy(client.systemProxy)
 	model.SetTun(client.tun)
-	for _, id := range []string{rowSystemProxy, rowTUN} {
+	for _, id := range []string{rowSystemProxyAction, rowTUNAction} {
 		model.focusID = id
 		updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		model = updated.(*Model)
@@ -1118,7 +1118,7 @@ func TestSystemProxyAndTunStickyOutcomes(t *testing.T) {
 		err:  protocol.APIError{Code: protocol.CodePermissionDenied, Message: "elevation required for system proxy"},
 	})
 	model = updated.(*Model)
-	if model.outcomeRow != rowSystemProxy || model.outcomeOK || model.outcomeDetail != "elevation required for system proxy" {
+	if model.outcomeRow != rowSystemProxyAction || model.outcomeOK || model.outcomeDetail != "elevation required for system proxy" {
 		t.Fatalf("proxy outcome row=%q ok=%v detail=%q", model.outcomeRow, model.outcomeOK, model.outcomeDetail)
 	}
 	if !strings.Contains(model.View(), ui.FailedLabel) {
@@ -1135,7 +1135,7 @@ func TestSystemProxyAndTunStickyOutcomes(t *testing.T) {
 		status: protocol.TunStatus{Revision: 3, DesiredEnable: true, Managed: true},
 	})
 	model = updated.(*Model)
-	if model.outcomeRow != rowTUN || !model.outcomeOK {
+	if model.outcomeRow != rowTUNAction || !model.outcomeOK {
 		t.Fatalf("tun outcome row=%q ok=%v", model.outcomeRow, model.outcomeOK)
 	}
 	if !strings.Contains(model.View(), ui.DoneLabel) {
