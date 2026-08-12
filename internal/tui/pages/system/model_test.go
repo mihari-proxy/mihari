@@ -1654,27 +1654,37 @@ func TestSystemDaemonCoreRowsDegradeWhenDisconnected(t *testing.T) {
 		protocol.CoreStatus{Status: "running", Version: "v1.19.0"},
 	)
 
-	// Online: daemon shows the raw health word, core the raw status word — no
-	// stale marker on either row.
+	// Online: positive green dots (78), raw health/status words, no stale
+	// marker and no caution color on either row.
 	model.SetMutationsEnabled(true)
 	online := model.View()
-	for _, want := range []string{"v0.4.0", "v1.19.0"} {
+	for _, want := range []string{"v0.4.0", "v1.19.0", "38;5;78"} { // 78 = TonePositive (Success)
 		if !strings.Contains(online, want) {
 			t.Fatalf("online view missing %q:\n%s", want, online)
 		}
 	}
-	if strings.Contains(online, "ok · "+ui.StaleLabel) || strings.Contains(online, "running · "+ui.StaleLabel) {
-		t.Fatalf("online daemon/core rows should not be marked stale:\n%s", online)
+	for _, stale := range []string{"ok · " + ui.StaleLabel, "running · " + ui.StaleLabel, "38;5;214"} { // 214 = ToneCaution (Warning)
+		if strings.Contains(online, stale) {
+			t.Fatalf("online daemon/core rows should not be stale:\n%s", online)
+		}
 	}
 
-	// Disconnected: keep the last value (version stays) but degrade the dot and
-	// append " · Stale" (design G2), matching the Overview core card and the
-	// rest of the System page.
+	// Disconnected: keep the last value (version stays) but degrade the dot to
+	// caution yellow and append " · Stale" (design G2), matching the Overview
+	// core card and the rest of the System page.
 	model.SetMutationsEnabled(false)
 	disconnected := model.View()
-	for _, want := range []string{"ok · " + ui.StaleLabel, "running · " + ui.StaleLabel, "v0.4.0", "v1.19.0"} {
+	for _, want := range []string{"ok · " + ui.StaleLabel, "running · " + ui.StaleLabel, "v0.4.0", "v1.19.0", "38;5;214"} {
 		if !strings.Contains(disconnected, want) {
 			t.Fatalf("disconnected view missing %q:\n%s", want, disconnected)
 		}
+	}
+
+	// Reconnect: stale marker and caution color clear, green dot returns — the
+	// degradation must be reversible, not sticky.
+	model.SetMutationsEnabled(true)
+	reconnected := model.View()
+	if strings.Contains(reconnected, " · "+ui.StaleLabel) || !strings.Contains(reconnected, "38;5;78") {
+		t.Fatalf("reconnected view should drop stale and restore green:\n%s", reconnected)
 	}
 }
