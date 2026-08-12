@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [v0.4.0] - 2026-08-12
+
+### Added
+
+- 订阅级代理模式：每个订阅可独立配置拉取代理，失败回退直连（#33）
+- TUI System 页自更新 Mihari：在 TUI 内检查 / 下载 / 应用 Mihari 自身新版本（#34）
+- onboarding 状态反馈：Setup 流程新增端口预检、本地就绪检测、review 汇总与服务状态展示（#35）
+- TUI 数字键 1–8 快捷跳转各 rail 页面（#31）
+
+### Fixed
+
+- Rules 页 Type 列宽自适应，完整显示 `DomainSuffix` / `DomainKeyword` 等长类型名（#30）
+
+## [v0.3.1] - 2026-08-11
+
+### Fixed
+
+- Overview 页对系统代理 desired / owned 状态漂移打标（#22）
+- 安装脚本中文乱码修复，新增下载进度显示与安装前确认（#21）
+
 ## [v0.3.0] - 2026-08-09
 
 ### Changed
