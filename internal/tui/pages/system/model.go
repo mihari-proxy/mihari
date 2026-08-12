@@ -17,6 +17,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
+	"github.com/mihari-proxy/mihari/internal/update"
 )
 
 const (
@@ -24,6 +25,7 @@ const (
 	rowCore             = "core"
 	rowCoreUpdate       = "core-update"
 	rowCoreRestart      = "core-restart"
+	rowMihariUpdate     = "mihari-update"
 	rowProxyEndpoint    = "proxy-endpoint"
 	rowCoreAPI          = "core-api"
 	rowZashboard        = "zashboard"
@@ -64,6 +66,12 @@ type Client interface {
 	OpenWebGUI(context.Context, string) (protocol.WebGUIOpenResult, error)
 }
 
+// SelfUpdater is the local Mihari binary lifecycle surface used by the System page.
+type SelfUpdater interface {
+	Check(context.Context, string) (update.CheckResult, error)
+	Update(context.Context, string, string) (update.Result, error)
+}
+
 // ServiceController is the local OS service manager surface (not daemon IPC).
 type ServiceController interface {
 	Install() error
@@ -87,6 +95,28 @@ type onboardingResultMsg struct {
 	status protocol.OnboardingStatus
 	err    error
 }
+
+type selfCheckResultMsg struct {
+	generation uint64
+	result     update.CheckResult
+	err        error
+}
+
+type selfUpdateResultMsg struct {
+	result update.Result
+	err    error
+}
+
+// Err implements the shell action-outcome contract. Once replacement commits,
+// a service restart error is a warning and must not classify the update as failed.
+func (m selfUpdateResultMsg) Err() error {
+	if m.result.Updated {
+		return nil
+	}
+	return m.err
+}
+
+var _ interface{ Err() error } = selfUpdateResultMsg{}
 
 type serviceStatusMsg struct {
 	status   service.StatusKind
@@ -221,29 +251,36 @@ var _ interface{ Err() error } = actionResultMsg{}
 
 // Model is the System page.
 type Model struct {
-	ctx               context.Context
-	client            Client
-	service           ServiceController
-	openBrowser       func(string) error
-	newOperationID    func() string
-	status            protocol.Status
-	core              protocol.CoreStatus
-	onboarding        protocol.OnboardingStatus
-	systemProxy       protocol.SystemProxyStatus
-	systemProxyLoaded bool
-	tun               protocol.TunStatus
-	tunLoaded         bool
-	webGUI            protocol.WebGUIStatus
-	webGUILoaded      bool
-	webGUIErr         bool
-	serviceStatus     service.StatusKind
-	serviceLoaded     bool
-	elevated          bool
-	focusID           string
-	detail            *row
-	pending           bool
-	pendingRow        string // row id showing in-row braille progress
-	pendingNote       string // short status text next to the row (e.g. Installing)
+	ctx                 context.Context
+	client              Client
+	service             ServiceController
+	openBrowser         func(string) error
+	newOperationID      func() string
+	selfUpdater         SelfUpdater
+	currentVersion      string
+	binaryPath          string
+	isElevated          func() bool
+	selfCheckResult     update.CheckResult
+	selfCheckLoaded     bool
+	selfCheckGeneration uint64
+	status              protocol.Status
+	core                protocol.CoreStatus
+	onboarding          protocol.OnboardingStatus
+	systemProxy         protocol.SystemProxyStatus
+	systemProxyLoaded   bool
+	tun                 protocol.TunStatus
+	tunLoaded           bool
+	webGUI              protocol.WebGUIStatus
+	webGUILoaded        bool
+	webGUIErr           bool
+	serviceStatus       service.StatusKind
+	serviceLoaded       bool
+	elevated            bool
+	focusID             string
+	detail              *row
+	pending             bool
+	pendingRow          string // row id showing in-row braille progress
+	pendingNote         string // short status text next to the row (e.g. Installing)
 	// Sticky outcome after an action finishes (cleared on page leave or re-run).
 	outcomeRow       string
 	outcomeOK        bool   // true=Done (green), false=Failed (red)
@@ -312,6 +349,18 @@ func (m *Model) SetOpenBrowser(open func(string) error) {
 	}
 }
 
+// SetSelfUpdater configures local Mihari release checks and binary updates.
+func (m *Model) SetSelfUpdater(updater SelfUpdater, currentVersion, binaryPath string, elevated func() bool) {
+	m.selfUpdater = updater
+	m.currentVersion = currentVersion
+	m.binaryPath = binaryPath
+	if elevated == nil {
+		m.isElevated = elevate.IsElevated
+	} else {
+		m.isElevated = elevated
+	}
+}
+
 // SetWebGUI injects Web GUI status (tests and optional external refresh).
 func (m *Model) SetWebGUI(status protocol.WebGUIStatus) {
 	m.webGUI = status
@@ -377,7 +426,18 @@ func (m *Model) SetMutationsEnabled(enabled bool) { m.mutationsEnabled = enabled
 
 // Load refreshes onboarding, OS service status, system proxy, and TUN when available.
 func (m *Model) Load() tea.Cmd {
+	return m.load(true)
+}
+
+func (m *Model) refresh() tea.Cmd {
+	return m.load(false)
+}
+
+func (m *Model) load(checkMihari bool) tea.Cmd {
 	var cmds []tea.Cmd
+	if checkMihari && m.selfUpdater != nil && !m.pending {
+		cmds = append(cmds, m.checkMihariVersion())
+	}
 	if m.client != nil && m.hasCapability(protocol.CapabilityOnboarding) {
 		cmds = append(cmds, func() tea.Msg {
 			status, err := m.client.Onboarding(m.ctx)
@@ -404,6 +464,29 @@ func (m *Model) Load() tea.Cmd {
 	default:
 		return tea.Batch(cmds...)
 	}
+}
+
+func (m *Model) checkMihariVersion() tea.Cmd {
+	if m.selfUpdater == nil || m.pending {
+		return nil
+	}
+	m.selfCheckGeneration++
+	generation := m.selfCheckGeneration
+	m.pending = true
+	m.pendingRow = rowMihariUpdate
+	m.pendingNote = ui.MihariProgressChecking
+	m.outcomeRow = ""
+	m.outcomeOK = false
+	m.outcomeDetail = ""
+	m.lastError = ""
+	check := func() tea.Msg {
+		result, err := m.selfUpdater.Check(m.ctx, m.currentVersion)
+		return ui.PageResultMsg{
+			Page:   ui.PageSystem,
+			Result: selfCheckResultMsg{generation: generation, result: result, err: err},
+		}
+	}
+	return tea.Batch(check, m.rowSpinCmdIfNeeded())
 }
 
 func (m *Model) loadServiceStatus() tea.Cmd {
@@ -436,6 +519,40 @@ func (m *Model) loadWebGUI() tea.Cmd {
 
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	switch typed := message.(type) {
+	case selfCheckResultMsg:
+		if typed.generation != m.selfCheckGeneration {
+			return m, nil
+		}
+		m.clearRowPending()
+		if typed.err != nil {
+			m.selfCheckLoaded = false
+			m.markRowOutcome(rowMihariUpdate, false, actionErrorDetail(typed.err, ui.UpdateMihariCheckFailed))
+			return m, m.rowSpinCmdIfNeeded()
+		}
+		m.selfCheckResult = typed.result
+		m.selfCheckLoaded = true
+		m.outcomeRow = ""
+		m.outcomeDetail = ""
+		m.lastError = ""
+		return m, m.rowSpinCmdIfNeeded()
+	case selfUpdateResultMsg:
+		m.clearRowPending()
+		if !typed.result.Updated {
+			if typed.err != nil {
+				m.markRowOutcome(rowMihariUpdate, false, actionErrorDetail(typed.err, ui.UpdateMihariActionFailed))
+				return m, m.rowSpinCmdIfNeeded()
+			}
+			m.selfCheckResult = update.CheckResult{Current: m.currentVersion, Latest: typed.result.Version, Available: false}
+			m.selfCheckLoaded = true
+			m.outcomeRow = ""
+			return m, m.rowSpinCmdIfNeeded()
+		}
+		m.markRowOutcome(rowMihariUpdate, true, "")
+		warning := ""
+		if typed.err != nil {
+			warning = actionErrorDetail(typed.err, ui.UpdateMihariActionFailed)
+		}
+		return m, tea.Batch(func() tea.Msg { return ui.RelaunchRequestMsg{Warning: warning} }, m.rowSpinCmdIfNeeded())
 	case onboardingResultMsg:
 		if typed.err != nil {
 			m.lastError = ui.SystemStateUnavailable
@@ -509,7 +626,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Tick(rowSpinInterval, func(t time.Time) tea.Msg {
-			return rowSpinTickMsg{t: t, gen: typed.gen}
+			return ui.PageResultMsg{Page: ui.PageSystem, Result: rowSpinTickMsg{t: t, gen: typed.gen}}
 		})
 	case rowSpinTickMsg:
 		if typed.gen != m.rowSpinGen {
@@ -521,7 +638,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Tick(rowSpinInterval, func(t time.Time) tea.Msg {
-			return rowSpinTickMsg{t: t, gen: typed.gen}
+			return ui.PageResultMsg{Page: ui.PageSystem, Result: rowSpinTickMsg{t: t, gen: typed.gen}}
 		})
 	case actionStartMsg:
 		if m.pending {
@@ -536,7 +653,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			var apiError protocol.APIError
 			if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
 				m.markRowOutcome(rowID, false, ui.SystemChangedMessage)
-				return m, tea.Batch(m.Load(), m.loadCore(), m.rowSpinCmdIfNeeded())
+				return m, tea.Batch(m.refresh(), m.loadCore(), m.rowSpinCmdIfNeeded())
 			}
 			m.markRowOutcome(rowID, false, actionErrorDetail(typed.err, ui.SystemActionFailed))
 			return m, m.rowSpinCmdIfNeeded()
@@ -546,7 +663,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		if typed.kind == actionUpdate {
 			revision = typed.install.Revision
 		}
-		return m, tea.Batch(m.Load(), m.loadCore(), func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: revision} }, m.rowSpinCmdIfNeeded())
+		return m, tea.Batch(m.refresh(), m.loadCore(), func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: revision} }, m.rowSpinCmdIfNeeded())
 	case serviceResultMsg:
 		rowID := m.outcomeRowID(serviceRowForKind(typed.kind))
 		m.clearRowPending()
@@ -589,11 +706,22 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		if index < 0 {
 			return m, nil
 		}
+		if m.pending {
+			return m, nil
+		}
 		switch m.focusID {
 		case rowZashboard:
 			return m, m.openPanelBrowser(panelIDZashboard)
 		case rowMetaCubeXD:
 			return m, m.openPanelBrowser(panelIDMetaCubeXD)
+		case rowMihariUpdate:
+			if m.pending || m.selfUpdater == nil {
+				return m, nil
+			}
+			if m.selfCheckLoaded && m.selfCheckResult.Available {
+				return m, m.confirmMihariUpdate()
+			}
+			return m, m.checkMihariVersion()
 		case rowRunSetup:
 			if m.client == nil || !m.mutationsEnabled || !m.hasCapability(protocol.CapabilityOnboarding) {
 				return m, nil
@@ -633,6 +761,36 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) confirmMihariUpdate() tea.Cmd {
+	current := valueOr(m.currentVersion, ui.UnknownLabel)
+	latest := valueOr(m.selfCheckResult.Latest, ui.UnknownLabel)
+	return func() tea.Msg {
+		return ui.ActionIntentMsg{
+			Action: ui.ActionUpdateMihari, Page: ui.PageSystem, Key: "mihari:update",
+			Title: ui.UpdateMihariTitle, Object: fmt.Sprintf("Mihari %s → %s", current, latest),
+			Impact: ui.UpdateMihariImpact, Rollback: ui.UpdateMihariRollback,
+			Execute: m.updateMihari(),
+		}
+	}
+}
+
+func (m *Model) updateMihari() tea.Cmd {
+	updater := m.selfUpdater
+	binaryPath := m.binaryPath
+	currentVersion := m.currentVersion
+	isElevated := m.isElevated
+	return func() tea.Msg {
+		if isElevated == nil || !isElevated() {
+			return selfUpdateResultMsg{err: protocol.APIError{
+				Code:    protocol.CodePermissionDenied,
+				Message: "administrator privileges are required; re-run Mihari from an elevated shell",
+			}}
+		}
+		result, err := updater.Update(m.ctx, binaryPath, currentVersion)
+		return selfUpdateResultMsg{result: result, err: err}
+	}
+}
+
 func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) (ui.Page, tea.Cmd) {
 	rowID := m.outcomeRowID(rowSystemProxy)
 	m.clearRowPending()
@@ -649,7 +807,7 @@ func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) 
 				return m, tea.Batch(m.loadSystemProxy(), m.rowSpinCmdIfNeeded())
 			case protocol.CodeRevisionConflict:
 				m.markRowOutcome(rowID, false, ui.SystemChangedMessage)
-				return m, tea.Batch(m.Load(), m.rowSpinCmdIfNeeded())
+				return m, tea.Batch(m.refresh(), m.rowSpinCmdIfNeeded())
 			}
 		}
 		m.markRowOutcome(rowID, false, actionErrorDetail(typed.err, ui.SystemProxyActionFailed))
@@ -670,7 +828,7 @@ func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cm
 		var apiError protocol.APIError
 		if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
 			m.markRowOutcome(rowID, false, ui.SystemChangedMessage)
-			return m, tea.Batch(m.Load(), m.rowSpinCmdIfNeeded())
+			return m, tea.Batch(m.refresh(), m.rowSpinCmdIfNeeded())
 		}
 		m.markRowOutcome(rowID, false, actionErrorDetail(typed.err, ui.TunActionFailed))
 		return m, tea.Batch(m.loadTun(), m.rowSpinCmdIfNeeded())
@@ -762,6 +920,7 @@ func (m *Model) rows() []row {
 	core := fmt.Sprintf("Status %s\nVersion %s\nPID %d\nRestarts %d", valueOr(m.core.Status, ui.UnknownLabel), valueOr(m.core.Version, ui.UnknownLabel), m.core.PID, m.core.Restarts)
 	rows := []row{{id: rowDaemon, section: ui.DaemonSectionTitle, label: ui.DaemonLabel, value: daemonValue(m.theme, m.status), detail: daemon}}
 	rows = append(rows, m.endpointRows()...)
+	rows = append(rows, m.mihariUpdateRow())
 	rows = append(rows,
 		row{id: rowRunSetup, section: ui.DaemonSectionTitle, label: ui.RunSetupLabel, detail: ui.RunSetupDetail},
 		row{id: rowCore, section: ui.CoreSectionTitle, label: ui.MihomoCoreLabel, value: coreValue(m.theme, m.core), detail: core},
@@ -771,6 +930,22 @@ func (m *Model) rows() []row {
 	rows = append(rows, m.serviceRows()...)
 	rows = append(rows, m.networkRows()...)
 	return rows
+}
+
+func (m *Model) mihariUpdateRow() row {
+	current := valueOr(m.currentVersion, ui.UnknownLabel)
+	value := current + " · " + ui.UnavailableTitle
+	if m.selfCheckLoaded {
+		if m.selfCheckResult.Available {
+			value = current + " · " + valueOr(m.selfCheckResult.Latest, ui.UnknownLabel) + " " + ui.UpdateMihariAvailable
+		} else {
+			value = current + " · " + ui.UpdateMihariUpToDate
+		}
+	}
+	return row{
+		id: rowMihariUpdate, section: ui.DaemonSectionTitle,
+		label: ui.UpdateMihariLabel, value: value, detail: ui.UpdateMihariImpact,
+	}
 }
 
 // endpointRows renders the Daemon endpoint rows: proxy and core API always,
@@ -1178,11 +1353,15 @@ func (m *Model) rowSpinCmdIfNeeded() tea.Cmd {
 	m.rowSpinGen++
 	gen := m.rowSpinGen
 	m.rowSpinning = true
-	return func() tea.Msg { return startRowSpinMsg{gen: gen} }
+	return func() tea.Msg {
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: startRowSpinMsg{gen: gen}}
+	}
 }
 
 func rowProgressForAction(action ui.Action, coreMissing bool) (rowID, note string) {
 	switch action {
+	case ui.ActionUpdateMihari:
+		return rowMihariUpdate, ui.MihariProgressUpdating
 	case ui.ActionServiceInstall:
 		return rowServiceInstall, ui.ServiceProgressInstalling
 	case ui.ActionServiceUninstall:

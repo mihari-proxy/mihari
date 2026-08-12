@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"strings"
@@ -17,7 +18,20 @@ import (
 	webguipage "github.com/mihari-proxy/mihari/internal/tui/pages/webgui"
 	"github.com/mihari-proxy/mihari/internal/tui/session"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
+	"github.com/mihari-proxy/mihari/internal/update"
 )
+
+type rootSelfUpdater struct {
+	result update.CheckResult
+}
+
+func (f rootSelfUpdater) Check(context.Context, string) (update.CheckResult, error) {
+	return f.result, nil
+}
+
+func (rootSelfUpdater) Update(context.Context, string, string) (update.Result, error) {
+	return update.Result{}, nil
+}
 
 var errNetworkStatusTest = errors.New("network status test failure")
 
@@ -489,6 +503,59 @@ func TestRail_DigitShortcutOutOfRangeIsIgnored(t *testing.T) {
 	model = updateModelKey(t, model, tea.KeyPressMsg{Code: '9', Text: "9"})
 	if model.active != ui.PageOverview || model.railIndex != 0 {
 		t.Fatalf("digit 9 moved rail: active=%s railIndex=%d", model.active, model.railIndex)
+	}
+}
+
+func TestModelRelaunchRequestQuitsAndRecordsIntent(t *testing.T) {
+	model := NewModel()
+	updated, command := model.Update(ui.RelaunchRequestMsg{Warning: "service restart failed"})
+	got := updated.(Model)
+	if !got.RelaunchRequested() || got.RelaunchWarning() != "service restart failed" {
+		t.Fatalf("requested=%v warning=%q", got.RelaunchRequested(), got.RelaunchWarning())
+	}
+	if command == nil || command() != tea.Quit() {
+		t.Fatalf("quit command=%v", command != nil)
+	}
+}
+
+func TestModelRoutesMihariCheckResultToSystemAfterLeavingPage(t *testing.T) {
+	model := NewModel()
+	model.SetSelfUpdater(rootSelfUpdater{result: update.CheckResult{
+		Current: "v0.3.1", Latest: "v0.4.0", Available: true,
+	}}, "v0.3.1", "mihari", func() bool { return true })
+	page := model.pages[ui.PageSystem].(*systempage.Model)
+	command := page.Load()
+	batch, ok := command().(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatalf("load result=%T", command())
+	}
+
+	// Overview remains active when the System-owned async result arrives.
+	if model.active != ui.PageOverview {
+		t.Fatalf("active=%s", model.active)
+	}
+	updated, _ := model.Update(batch[0]())
+	model = updated.(Model)
+	if view := model.pages[ui.PageSystem].View(); !strings.Contains(view, "v0.3.1 · v0.4.0 available") {
+		t.Fatalf("System did not receive its async result:\n%s", view)
+	}
+}
+
+func TestModelRoutesMihariCheckSpinnerToSystemAfterLeavingPage(t *testing.T) {
+	model := NewModel()
+	model.SetSelfUpdater(rootSelfUpdater{}, "v0.3.1", "mihari", func() bool { return true })
+	page := model.pages[ui.PageSystem].(*systempage.Model)
+	command := page.Load()
+	batch, ok := command().(tea.BatchMsg)
+	if !ok || len(batch) < 2 {
+		t.Fatalf("load result=%T commands=%d", command(), len(batch))
+	}
+
+	// Overview remains active while the System-owned spinner starts.
+	updated, tick := model.Update(batch[1]())
+	model = updated.(Model)
+	if model.active != ui.PageOverview || tick == nil {
+		t.Fatalf("active=%s tick=%v", model.active, tick != nil)
 	}
 }
 

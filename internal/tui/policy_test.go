@@ -35,6 +35,18 @@ func TestConfirmationPolicy(t *testing.T) {
 	}
 }
 
+func TestSelfUpdatePolicyIsConfirmedAndDaemonIndependent(t *testing.T) {
+	if !knownAction(UpdateMihari) {
+		t.Fatal("self update must be registered")
+	}
+	if !RequiresConfirmation(UpdateMihari) {
+		t.Fatal("self update must require confirmation")
+	}
+	if RequiresDaemon(UpdateMihari) {
+		t.Fatal("self update must work without a daemon connection")
+	}
+}
+
 func TestRevisionConflictPolicyIsPageLocalPathA(t *testing.T) {
 	// Path A: pages show a local conflict toast and reload; Root does not need
 	// to force globalState=StateRevisionConflict for correct UX.

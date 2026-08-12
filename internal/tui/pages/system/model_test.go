@@ -12,7 +12,31 @@ import (
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
+	"github.com/mihari-proxy/mihari/internal/update"
 )
+
+type fakeSelfUpdater struct {
+	checkResult  update.CheckResult
+	checkErr     error
+	updateResult update.Result
+	updateErr    error
+	checkCalls   int
+	updateCalls  int
+	lastBinary   string
+	lastCurrent  string
+}
+
+func (f *fakeSelfUpdater) Check(context.Context, string) (update.CheckResult, error) {
+	f.checkCalls++
+	return f.checkResult, f.checkErr
+}
+
+func (f *fakeSelfUpdater) Update(_ context.Context, binaryPath, currentVersion string) (update.Result, error) {
+	f.updateCalls++
+	f.lastBinary = binaryPath
+	f.lastCurrent = currentVersion
+	return f.updateResult, f.updateErr
+}
 
 type fakeClient struct {
 	onboarding      protocol.OnboardingStatus
@@ -1017,6 +1041,29 @@ func TestSystemCoreUpdateStickyDoneAndFailedWithAPIMessage(t *testing.T) {
 	}
 }
 
+func TestSystemCoreOutcomeDoesNotStartMihariCheck(t *testing.T) {
+	updater := &fakeSelfUpdater{}
+	model := New(&fakeClient{}, func() string { return "op" })
+	model.SetSelfUpdater(updater, "v0.3.1", "mihari", func() bool { return true })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityCore}}, protocol.CoreStatus{Version: "v1.19.0", Status: "running"})
+	updated, _ := model.Update(ui.ActionPendingMsg{Action: ui.ActionUpdateCore})
+	model = updated.(*Model)
+
+	updated, _ = model.Update(actionResultMsg{
+		kind: actionUpdate,
+		install: protocol.CoreInstallResult{
+			Revision: 2, Version: "v1.20.0", Updated: true,
+		},
+	})
+	model = updated.(*Model)
+	if model.outcomeRow != rowCoreUpdate || !model.outcomeOK {
+		t.Fatalf("outcome row=%q ok=%v", model.outcomeRow, model.outcomeOK)
+	}
+	if model.pending || model.selfCheckGeneration != 0 || updater.checkCalls != 0 {
+		t.Fatalf("pending=%v generation=%d checks=%d", model.pending, model.selfCheckGeneration, updater.checkCalls)
+	}
+}
+
 func TestSystemPendingDoesNotPolluteSiblingRows(t *testing.T) {
 	withElevation(t, true)
 	client := &fakeClient{
@@ -1366,6 +1413,232 @@ func TestSystemPanelOpenFailureShowsStickyFailed(t *testing.T) {
 	if !strings.Contains(view, ui.FailedLabel) || !strings.Contains(view, "open browser failed") {
 		t.Fatalf("failed view:\n%s", view)
 	}
+}
+
+func TestSystemLoadStartsMihariVersionCheck(t *testing.T) {
+	updater := &fakeSelfUpdater{checkResult: update.CheckResult{Current: "v0.3.1", Latest: "v0.4.0", Available: true}}
+	model := New(nil, nil)
+	model.SetSelfUpdater(updater, "v0.3.1", `C:\Program Files\Mihari\mihari.exe`, func() bool { return true })
+
+	command := model.Load()
+	if command == nil {
+		t.Fatal("load did not start version check")
+	}
+	view := model.View()
+	if !strings.Contains(view, ui.UpdateMihariLabel) || !strings.Contains(view, ui.MihariProgressChecking) {
+		t.Fatalf("checking view:\n%s", view)
+	}
+	if updater.checkCalls != 0 {
+		t.Fatalf("check ran synchronously: calls=%d", updater.checkCalls)
+	}
+}
+
+func TestSystemMihariVersionCheckRendersAvailable(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.3.1", "mihari", func() bool { return true })
+	model.selfCheckGeneration = 2
+
+	updated, _ := model.Update(selfCheckResultMsg{
+		generation: 2,
+		result:     update.CheckResult{Current: "v0.3.1", Latest: "v0.4.0", Available: true},
+	})
+	model = updated.(*Model)
+	if view := model.View(); !strings.Contains(view, "v0.3.1 · v0.4.0 available") {
+		t.Fatalf("available view:\n%s", view)
+	}
+}
+
+func TestSystemMihariVersionCheckRendersUpToDate(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.3.1", "mihari", func() bool { return true })
+	model.selfCheckGeneration = 3
+
+	updated, _ := model.Update(selfCheckResultMsg{
+		generation: 3,
+		result:     update.CheckResult{Current: "v0.3.1", Latest: "v0.3.1", Available: false},
+	})
+	model = updated.(*Model)
+	if view := model.View(); !strings.Contains(view, "v0.3.1 · Up to date") {
+		t.Fatalf("up-to-date view:\n%s", view)
+	}
+}
+
+func TestSystemMihariVersionCheckFailureUsesFailedChip(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.3.1", "mihari", func() bool { return true })
+	model.selfCheckGeneration = 4
+
+	updated, _ := model.Update(selfCheckResultMsg{generation: 4, err: errors.New("secret transport detail")})
+	model = updated.(*Model)
+	view := model.View()
+	if !strings.Contains(view, ui.FailedLabel) || !strings.Contains(view, ui.UpdateMihariCheckFailed) {
+		t.Fatalf("failed view:\n%s", view)
+	}
+	if strings.Contains(view, "secret transport detail") {
+		t.Fatalf("raw error leaked:\n%s", view)
+	}
+}
+
+func TestSystemMihariVersionCheckRetryIgnoresStaleResult(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.3.1", "mihari", func() bool { return true })
+	model.selfCheckGeneration = 1
+	model.markRowOutcome(rowMihariUpdate, false, ui.UpdateMihariCheckFailed)
+	model.focusID = rowMihariUpdate
+
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil || model.selfCheckGeneration != 2 || !strings.Contains(model.View(), ui.MihariProgressChecking) {
+		t.Fatalf("retry generation=%d command=%v view=\n%s", model.selfCheckGeneration, command != nil, model.View())
+	}
+
+	updated, _ = model.Update(selfCheckResultMsg{
+		generation: 1,
+		result:     update.CheckResult{Current: "v0.3.1", Latest: "v9.9.9", Available: true},
+	})
+	model = updated.(*Model)
+	view := model.View()
+	if !strings.Contains(view, ui.MihariProgressChecking) || strings.Contains(view, "v9.9.9") {
+		t.Fatalf("stale result replaced pending check:\n%s", view)
+	}
+}
+
+func TestSystemCheckingMihariBlocksOtherRowActions(t *testing.T) {
+	model := New(&fakeClient{}, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityCore}}, protocol.CoreStatus{Version: "v1.19.0"})
+	model.SetMutationsEnabled(true)
+	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.3.1", "mihari", func() bool { return true })
+	if command := model.Load(); command == nil {
+		t.Fatal("version check did not start")
+	}
+	model.focusID = rowCoreUpdate
+
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if command != nil {
+		t.Fatalf("core update was offered while Mihari check pending: %T", command())
+	}
+	if model.pendingRow != rowMihariUpdate {
+		t.Fatalf("pending row=%q", model.pendingRow)
+	}
+}
+
+func TestSystemMihariUpdateOffersConfirmationWhenAvailable(t *testing.T) {
+	model, _ := availableMihariUpdateModel(t, true, update.Result{})
+
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("available update did not offer confirmation")
+	}
+	intent, ok := command().(ui.ActionIntentMsg)
+	if !ok || intent.Action != ui.ActionUpdateMihari || intent.Page != ui.PageSystem || intent.Capability != "" || intent.Execute == nil {
+		t.Fatalf("intent=%#v", intent)
+	}
+	if !strings.Contains(intent.Object, "v0.3.1") || !strings.Contains(intent.Object, "v0.4.0") {
+		t.Fatalf("confirmation object=%q", intent.Object)
+	}
+}
+
+func TestSystemMihariUpdatePermissionFailureDoesNotCallUpdater(t *testing.T) {
+	model, updater := availableMihariUpdateModel(t, false, update.Result{})
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	intent := command().(ui.ActionIntentMsg)
+	updated, _ := model.Update(ui.ActionPendingMsg{Page: ui.PageSystem, Action: ui.ActionUpdateMihari})
+	model = updated.(*Model)
+
+	updated, relaunch := model.Update(intent.Execute())
+	model = updated.(*Model)
+	if updater.updateCalls != 0 || relaunch != nil || model.outcomeOK || model.outcomeRow != rowMihariUpdate {
+		t.Fatalf("calls=%d relaunch=%v outcome=%q ok=%v", updater.updateCalls, relaunch != nil, model.outcomeRow, model.outcomeOK)
+	}
+	if view := model.View(); !strings.Contains(view, ui.FailedLabel) || !strings.Contains(strings.ToLower(view), "administrator") {
+		t.Fatalf("permission view:\n%s", view)
+	}
+}
+
+func TestSystemMihariUpdateFailureStaysInCurrentTUI(t *testing.T) {
+	model, _ := availableMihariUpdateModel(t, true, update.Result{})
+	model.selfUpdater.(*fakeSelfUpdater).updateErr = errors.New("raw replacement detail")
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	intent := command().(ui.ActionIntentMsg)
+	updated, _ := model.Update(ui.ActionPendingMsg{Page: ui.PageSystem, Action: ui.ActionUpdateMihari})
+	model = updated.(*Model)
+
+	updated, relaunch := model.Update(intent.Execute())
+	model = updated.(*Model)
+	if relaunch != nil || model.outcomeOK {
+		t.Fatalf("relaunch=%v outcomeOK=%v", relaunch != nil, model.outcomeOK)
+	}
+	view := model.View()
+	if !strings.Contains(view, ui.UpdateMihariActionFailed) || strings.Contains(view, "raw replacement detail") {
+		t.Fatalf("failure view:\n%s", view)
+	}
+}
+
+func TestSystemMihariUpdateSuccessRequestsRelaunch(t *testing.T) {
+	model, updater := availableMihariUpdateModel(t, true, update.Result{Version: "v0.4.0", Updated: true})
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	intent := command().(ui.ActionIntentMsg)
+	updated, _ := model.Update(ui.ActionPendingMsg{Page: ui.PageSystem, Action: ui.ActionUpdateMihari})
+	model = updated.(*Model)
+	if view := model.View(); !strings.Contains(view, ui.MihariProgressUpdating) {
+		t.Fatalf("updating view:\n%s", view)
+	}
+
+	result := intent.Execute()
+	if outcome, ok := result.(interface{ Err() error }); !ok || outcome.Err() != nil {
+		t.Fatalf("result=%T err=%v", result, outcome.Err())
+	}
+	updated, relaunch := model.Update(result)
+	model = updated.(*Model)
+	if updater.updateCalls != 1 || updater.lastBinary != `C:\Program Files\Mihari\mihari.exe` || updater.lastCurrent != "v0.3.1" {
+		t.Fatalf("calls=%d binary=%q current=%q", updater.updateCalls, updater.lastBinary, updater.lastCurrent)
+	}
+	if !model.outcomeOK || !strings.Contains(model.View(), ui.DoneLabel) || relaunch == nil {
+		t.Fatalf("outcomeOK=%v relaunch=%v view=\n%s", model.outcomeOK, relaunch != nil, model.View())
+	}
+	request, ok := relaunch().(ui.RelaunchRequestMsg)
+	if !ok || request.Warning != "" {
+		t.Fatalf("request=%#v", request)
+	}
+}
+
+func TestSystemMihariUpdateCommittedWithServiceFailureStillRelaunches(t *testing.T) {
+	model, updater := availableMihariUpdateModel(t, true, update.Result{Version: "v0.4.0", Updated: true})
+	updater.updateErr = protocol.APIError{Code: protocol.CodeInvalidState, Message: "restart installed service failed"}
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	intent := command().(ui.ActionIntentMsg)
+	updated, _ := model.Update(ui.ActionPendingMsg{Page: ui.PageSystem, Action: ui.ActionUpdateMihari})
+	model = updated.(*Model)
+
+	result := intent.Execute()
+	if outcome := result.(interface{ Err() error }); outcome.Err() != nil {
+		t.Fatalf("committed replacement classified as failed: %v", outcome.Err())
+	}
+	updated, relaunch := model.Update(result)
+	model = updated.(*Model)
+	if !model.outcomeOK || relaunch == nil {
+		t.Fatalf("outcomeOK=%v relaunch=%v", model.outcomeOK, relaunch != nil)
+	}
+	request := relaunch().(ui.RelaunchRequestMsg)
+	if request.Warning != "restart installed service failed" {
+		t.Fatalf("warning=%q", request.Warning)
+	}
+}
+
+func availableMihariUpdateModel(t *testing.T, elevated bool, result update.Result) (*Model, *fakeSelfUpdater) {
+	t.Helper()
+	updater := &fakeSelfUpdater{updateResult: result}
+	model := New(nil, nil)
+	model.SetSelfUpdater(updater, "v0.3.1", `C:\Program Files\Mihari\mihari.exe`, func() bool { return elevated })
+	model.selfCheckGeneration = 1
+	updated, _ := model.Update(selfCheckResultMsg{
+		generation: 1,
+		result:     update.CheckResult{Current: "v0.3.1", Latest: "v0.4.0", Available: true},
+	})
+	model = updated.(*Model)
+	model.focusID = rowMihariUpdate
+	return model, updater
 }
 
 func updateKey(t *testing.T, model *Model, key tea.KeyPressMsg) *Model {

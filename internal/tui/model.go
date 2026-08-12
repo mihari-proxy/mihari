@@ -25,38 +25,40 @@ import (
 )
 
 type Model struct {
-	pages            map[ui.PageID]ui.Page
-	rail             []ui.PageID
-	railIndex        int
-	active           ui.PageID
-	focus            ui.Focus
-	inputMode        ui.InputMode
-	modal            *Modal
-	width            int
-	height           int
-	theme            ui.Theme
-	events           <-chan session.Event
-	connected        bool
-	stale            bool
-	reconnecting     bool
-	mutationsEnabled bool
-	status           protocol.Status
-	traffic          protocol.TrafficSample
-	memory           protocol.MemorySample
-	connections      protocol.ConnectionList
-	core             protocol.CoreStatus
-	subscriptions    protocol.SubscriptionList
-	webGUI           *protocol.WebGUIStatus
-	monitor          MonitorModel
-	operations       []ui.OperationRecord
-	confirmationCmd  tea.Cmd
-	setupObserved    bool
-	setupReturn      ui.PageID
-	pendingActions   map[string]ui.Action
-	globalState      ui.GlobalState
-	now              time.Time // spinner clock; advanced only while work is pending
-	spinning         bool      // true while a spinner tick loop is scheduled
-	spinGen          uint64    // generation so only the latest tick loop may reschedule
+	pages             map[ui.PageID]ui.Page
+	rail              []ui.PageID
+	railIndex         int
+	active            ui.PageID
+	focus             ui.Focus
+	inputMode         ui.InputMode
+	modal             *Modal
+	width             int
+	height            int
+	theme             ui.Theme
+	events            <-chan session.Event
+	connected         bool
+	stale             bool
+	reconnecting      bool
+	mutationsEnabled  bool
+	status            protocol.Status
+	traffic           protocol.TrafficSample
+	memory            protocol.MemorySample
+	connections       protocol.ConnectionList
+	core              protocol.CoreStatus
+	subscriptions     protocol.SubscriptionList
+	webGUI            *protocol.WebGUIStatus
+	monitor           MonitorModel
+	operations        []ui.OperationRecord
+	confirmationCmd   tea.Cmd
+	setupObserved     bool
+	setupReturn       ui.PageID
+	pendingActions    map[string]ui.Action
+	globalState       ui.GlobalState
+	relaunchRequested bool
+	relaunchWarning   string
+	now               time.Time // spinner clock; advanced only while work is pending
+	spinning          bool      // true while a spinner tick loop is scheduled
+	spinGen           uint64    // generation so only the latest tick loop may reschedule
 	// OS service observation for top-right status badge (local, not daemon IPC).
 	serviceCtrl   systempage.ServiceController
 	serviceStatus service.StatusKind
@@ -159,6 +161,22 @@ func NewModelWithEvents(events <-chan session.Event) Model {
 	return model
 }
 
+// SetSelfUpdater configures the System page's local Mihari lifecycle action.
+func (model *Model) SetSelfUpdater(updater systempage.SelfUpdater, currentVersion, binaryPath string, elevated func() bool) {
+	if model == nil {
+		return
+	}
+	if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
+		page.SetSelfUpdater(updater, currentVersion, binaryPath, elevated)
+	}
+}
+
+// RelaunchRequested reports whether the updated binary should enter the TUI.
+func (model Model) RelaunchRequested() bool { return model.relaunchRequested }
+
+// RelaunchWarning returns sanitized partial-success detail for the restored terminal.
+func (model Model) RelaunchWarning() string { return model.relaunchWarning }
+
 type pageClient interface {
 	proxypage.Client
 	connectionspage.Client
@@ -254,6 +272,15 @@ func (model *Model) syncSystemNetworkStatus() {
 
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch typed := message.(type) {
+	case ui.RelaunchRequestMsg:
+		model.relaunchRequested = true
+		model.relaunchWarning = typed.Warning
+		return model, tea.Quit
+	case ui.PageResultMsg:
+		if typed.Result == nil {
+			return model, nil
+		}
+		return model.dispatchPageTo(typed.Page, typed.Result)
 	case servicePollTickMsg:
 		return model, tea.Batch(model.loadRootServiceStatus(), model.scheduleServicePoll())
 	case rootServiceStatusMsg:

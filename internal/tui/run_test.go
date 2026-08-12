@@ -1,10 +1,93 @@
 package tui
 
 import (
+	"bytes"
+	"errors"
+	"io"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 )
+
+func TestFinishRunRelaunchesOnlyWhenRequested(t *testing.T) {
+	model := NewModel()
+	model.relaunchRequested = true
+	model.relaunchWarning = "service restart failed"
+	var warnings bytes.Buffer
+	calls := 0
+	err := finishRun(model, nil, &warnings, func() error {
+		calls++
+		if !strings.Contains(warnings.String(), "service restart failed") {
+			t.Fatal("relaunch ran before warning was written")
+		}
+		return nil
+	})
+	if err != nil || calls != 1 {
+		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+}
+
+func TestFinishRunNormalExitDoesNotRelaunch(t *testing.T) {
+	calls := 0
+	if err := finishRun(NewModel(), nil, io.Discard, func() error { calls++; return nil }); err != nil || calls != 0 {
+		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+}
+
+func TestFinishRunProgramErrorPreventsRelaunch(t *testing.T) {
+	model := NewModel()
+	model.relaunchRequested = true
+	runErr := errors.New("program failed")
+	calls := 0
+	err := finishRun(model, runErr, io.Discard, func() error { calls++; return nil })
+	if !errors.Is(err, runErr) || calls != 0 {
+		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+}
+
+func TestFinishRunReturnsRelaunchError(t *testing.T) {
+	model := NewModel()
+	model.relaunchRequested = true
+	relaunchErr := errors.New("start replacement failed")
+	err := finishRun(model, nil, io.Discard, func() error { return relaunchErr })
+	if !errors.Is(err, relaunchErr) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+type failingWriter struct{ err error }
+
+func (writer failingWriter) Write([]byte) (int, error) { return 0, writer.err }
+
+func TestFinishRunWarningWriteFailureStillRelaunches(t *testing.T) {
+	model := NewModel()
+	model.relaunchRequested = true
+	model.relaunchWarning = "service restart failed"
+	writeErr := errors.New("terminal is closed")
+	calls := 0
+
+	err := finishRun(model, nil, failingWriter{err: writeErr}, func() error {
+		calls++
+		return nil
+	})
+	if err != nil || calls != 1 {
+		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+}
+
+func TestFinishRunPreservesWarningAndRelaunchErrors(t *testing.T) {
+	model := NewModel()
+	model.relaunchRequested = true
+	model.relaunchWarning = "service restart failed"
+	writeErr := errors.New("terminal is closed")
+	relaunchErr := errors.New("start replacement failed")
+
+	err := finishRun(model, nil, failingWriter{err: writeErr}, func() error { return relaunchErr })
+	if !errors.Is(err, writeErr) || !errors.Is(err, relaunchErr) {
+		t.Fatalf("err=%v", err)
+	}
+}
 
 func TestLoadingModel_ViewUsesAlternateScreen(t *testing.T) {
 	view := (loadingModel{}).View()
