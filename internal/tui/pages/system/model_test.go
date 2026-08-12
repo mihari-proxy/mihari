@@ -1164,6 +1164,126 @@ func TestSystemProxyFailedStickyAndTunDoneFades(t *testing.T) {
 	}
 }
 
+func TestSystemNetworkActionLabelFlipsWithState(t *testing.T) {
+	tests := []struct {
+		name      string
+		proxy     protocol.SystemProxyStatus
+		tun       protocol.TunStatus
+		wantProxy string
+		wantTun   string
+	}{
+		{
+			name:      "both idle",
+			proxy:     protocol.SystemProxyStatus{Target: "127.0.0.1:9190"},
+			tun:       protocol.TunStatus{},
+			wantProxy: ui.EnableSystemProxyLabel,
+			wantTun:   ui.EnableTunLabel,
+		},
+		{
+			name: "proxy owned and desired, tun desired on",
+			proxy: protocol.SystemProxyStatus{
+				Desired: true, Target: "127.0.0.1:9190",
+				Observed: protocol.SystemProxyObserved{Enabled: true, Server: "127.0.0.1:9190", Owned: true},
+			},
+			tun:       protocol.TunStatus{DesiredEnable: true},
+			wantProxy: ui.DisableSystemProxyLabel,
+			wantTun:   ui.DisableTunLabel,
+		},
+		{
+			name: "proxy foreign forces enable",
+			proxy: protocol.SystemProxyStatus{
+				Target:   "127.0.0.1:9190",
+				Observed: protocol.SystemProxyObserved{Enabled: true, Server: "127.0.0.1:7890", Foreign: true},
+			},
+			tun:       protocol.TunStatus{},
+			wantProxy: ui.ForceEnableSystemProxyLabel,
+			wantTun:   ui.EnableTunLabel,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeClient{systemProxy: tt.proxy, tun: tt.tun}
+			model := New(client, func() string { return "op" })
+			model.SetSnapshot(protocol.Status{
+				Capabilities: []string{protocol.CapabilitySystemProxy, protocol.CapabilityTUN},
+			}, protocol.CoreStatus{})
+			model.SetMutationsEnabled(true)
+			model.SetSystemProxy(tt.proxy)
+			model.SetTun(tt.tun)
+			view := model.View()
+			if !strings.Contains(view, tt.wantProxy) {
+				t.Fatalf("proxy action label %q missing:\n%s", tt.wantProxy, view)
+			}
+			if !strings.Contains(view, tt.wantTun) {
+				t.Fatalf("tun action label %q missing:\n%s", tt.wantTun, view)
+			}
+		})
+	}
+}
+
+func TestSystemNetworkStatusAndActionRowsCoexist(t *testing.T) {
+	client := &fakeClient{
+		systemProxy: protocol.SystemProxyStatus{
+			Desired: true, Target: "127.0.0.1:9190",
+			Observed: protocol.SystemProxyObserved{Enabled: true, Server: "127.0.0.1:9190", Owned: true},
+		},
+		tun: protocol.TunStatus{Revision: 1, DesiredEnable: true, LiveEnable: boolPtr(true), Managed: true},
+	}
+	model := New(client, func() string { return "op" })
+	model.SetSnapshot(protocol.Status{
+		Capabilities: []string{protocol.CapabilitySystemProxy, protocol.CapabilityTUN},
+	}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(true)
+	model.SetSystemProxy(client.systemProxy)
+	model.SetTun(client.tun)
+	view := model.View()
+	// Status rows carry the live observed state.
+	for _, want := range []string{"127.0.0.1:9190", ui.OwnedLabel, ui.LiveLabel} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("status row missing %q:\n%s", want, view)
+		}
+	}
+	// Action rows carry the toggle verbs (both desired-on → Disable).
+	if strings.Count(view, ui.DisableSystemProxyLabel) < 2 {
+		t.Fatalf("expected both proxy and tun action rows to show Disable:\n%s", view)
+	}
+}
+
+func TestSystemNetworkStatusRowUpdatesDynamically(t *testing.T) {
+	client := &fakeClient{systemProxy: protocol.SystemProxyStatus{Target: "127.0.0.1:9190"}}
+	model := New(client, func() string { return "op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilitySystemProxy}}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(true)
+	model.SetSystemProxy(client.systemProxy)
+
+	push := func(server string) {
+		model.ApplyRootNetworkStatus(protocol.SystemProxyStatus{
+			Desired: true, Target: "127.0.0.1:9190",
+			Observed: protocol.SystemProxyObserved{Enabled: true, Server: server, Owned: true},
+		}, true, protocol.TunStatus{}, false)
+	}
+
+	push("127.0.0.1:9190")
+	if view := model.View(); !strings.Contains(view, "127.0.0.1:9190") {
+		t.Fatalf("status row missing first server:\n%s", view)
+	}
+	push("127.0.0.1:9191")
+	view := model.View()
+	if !strings.Contains(view, "127.0.0.1:9191") {
+		t.Fatalf("status row did not update to new server:\n%s", view)
+	}
+	if strings.Contains(view, "127.0.0.1:9190") {
+		t.Fatalf("status row kept stale server after update:\n%s", view)
+	}
+
+	// While a toggle is pending on the action row, the status row must keep
+	// showing the live summary — the pending chip binds the action row only.
+	model.Update(ui.ActionPendingMsg{Action: ui.ActionEnableSystemProxy})
+	if view := model.View(); !strings.Contains(view, "127.0.0.1:9191") {
+		t.Fatalf("status row lost summary while action pending:\n%s", view)
+	}
+}
+
 func TestSystemRendersPanelEndpointRowsWhenInstalled(t *testing.T) {
 	client := &fakeClient{
 		onboarding: protocol.OnboardingStatus{MixedAddr: "127.0.0.1:9190", ControllerAddr: "127.0.0.1:9090", WebAddr: "127.0.0.1:9191"},
