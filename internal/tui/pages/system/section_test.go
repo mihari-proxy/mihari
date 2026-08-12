@@ -15,6 +15,11 @@ func TestView_SectionGroups(t *testing.T) {
 		protocol.Status{DaemonVersion: "v0.4.0", Health: "ok", Capabilities: []string{protocol.CapabilityCore}},
 		protocol.CoreStatus{Status: "running", Version: "v1.19.0"},
 	)
+	// This test asserts section structure and the constant border palette; take
+	// it online so the daemon/core status dots use their positive (green) tone
+	// instead of the caution-yellow stale tone, which would otherwise bleed
+	// warning color into the palette assertion below.
+	model.SetMutationsEnabled(true)
 	view := model.View()
 	if !strings.Contains(view, "╭") || !strings.Contains(view, "╰") {
 		t.Fatalf("missing section borders:\n%s", view)

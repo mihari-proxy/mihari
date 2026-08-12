@@ -1646,3 +1646,35 @@ func updateKey(t *testing.T, model *Model, key tea.KeyPressMsg) *Model {
 	updated, _ := model.Update(key)
 	return updated.(*Model)
 }
+
+func TestSystemDaemonCoreRowsDegradeWhenDisconnected(t *testing.T) {
+	model := New(&fakeClient{}, func() string { return "system-op" })
+	model.SetSnapshot(
+		protocol.Status{DaemonVersion: "v0.4.0", Health: "ok", Capabilities: []string{protocol.CapabilityCore}},
+		protocol.CoreStatus{Status: "running", Version: "v1.19.0"},
+	)
+
+	// Online: daemon shows the raw health word, core the raw status word — no
+	// stale marker on either row.
+	model.SetMutationsEnabled(true)
+	online := model.View()
+	for _, want := range []string{"v0.4.0", "v1.19.0"} {
+		if !strings.Contains(online, want) {
+			t.Fatalf("online view missing %q:\n%s", want, online)
+		}
+	}
+	if strings.Contains(online, "ok · "+ui.StaleLabel) || strings.Contains(online, "running · "+ui.StaleLabel) {
+		t.Fatalf("online daemon/core rows should not be marked stale:\n%s", online)
+	}
+
+	// Disconnected: keep the last value (version stays) but degrade the dot and
+	// append " · Stale" (design G2), matching the Overview core card and the
+	// rest of the System page.
+	model.SetMutationsEnabled(false)
+	disconnected := model.View()
+	for _, want := range []string{"ok · " + ui.StaleLabel, "running · " + ui.StaleLabel, "v0.4.0", "v1.19.0"} {
+		if !strings.Contains(disconnected, want) {
+			t.Fatalf("disconnected view missing %q:\n%s", want, disconnected)
+		}
+	}
+}
