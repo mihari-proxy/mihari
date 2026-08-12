@@ -72,6 +72,25 @@ func TestEnable_RejectsInvalidPort(t *testing.T) {
 	}
 }
 
+func TestNormalizeEnableArgsDefaultsBlankHost(t *testing.T) {
+	t.Parallel()
+
+	host, port, err := normalizeEnableArgs("  ", 9190)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "127.0.0.1" || port != 9190 {
+		t.Fatalf("host=%q port=%d", host, port)
+	}
+	host, port, err = normalizeEnableArgs("proxy.local", 8080)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "proxy.local" || port != 8080 {
+		t.Fatalf("host=%q port=%d", host, port)
+	}
+}
+
 func TestClassifyOwnedForeign(t *testing.T) {
 	t.Parallel()
 

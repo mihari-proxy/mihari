@@ -8,12 +8,15 @@ import (
 	"strings"
 )
 
+// startProcess starts a process and is replaced in tests to avoid spawning binaries.
+var startProcess = os.StartProcess
+
 // Relaunch starts the replacement Mihari binary attached to the current console.
 func Relaunch(binary string, args, env []string) error {
 	if strings.TrimSpace(binary) == "" || len(args) == 0 {
 		return fmt.Errorf("relaunch Mihari: binary and arguments are required")
 	}
-	process, err := os.StartProcess(binary, args, &os.ProcAttr{
+	process, err := startProcess(binary, args, &os.ProcAttr{
 		Env:   env,
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
 	})

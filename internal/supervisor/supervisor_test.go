@@ -166,6 +166,140 @@ func TestSupervisorStableRuntimeResetsBackoff(t *testing.T) {
 	}
 }
 
+func TestSupervisorStopsChildAfterTerminate(t *testing.T) {
+	starter := newFakeStarter()
+	supervisor := New(Options{
+		Starter:     starter,
+		Waiter:      realWaiter{},
+		Now:         time.Now,
+		StopTimeout: time.Second,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+
+	child := starter.next(t)
+	cancel()
+	if err := waitDone(t, done); err != nil {
+		t.Fatal(err)
+	}
+	if got := child.terminateCallsCount(); got != 1 {
+		t.Fatalf("terminate calls=%d, want 1", got)
+	}
+	if got := child.killCallsCount(); got != 0 {
+		t.Fatalf("kill calls=%d, want 0", got)
+	}
+	select {
+	case <-child.terminated:
+	default:
+		t.Fatal("terminate was not observed")
+	}
+}
+
+func TestSupervisorKillsChildAfterGraceTimeout(t *testing.T) {
+	starter := newFakeStarter()
+	supervisor := New(Options{
+		Starter:     starter,
+		Waiter:      realWaiter{},
+		Now:         time.Now,
+		StopTimeout: 40 * time.Millisecond,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+
+	child := starter.next(t)
+	child.setHangOnTerminate(true)
+	cancel()
+	if err := waitDone(t, done); err != nil {
+		t.Fatal(err)
+	}
+	if got := child.terminateCallsCount(); got != 1 {
+		t.Fatalf("terminate calls=%d, want 1", got)
+	}
+	if got := child.killCallsCount(); got != 1 {
+		t.Fatalf("kill calls=%d, want 1", got)
+	}
+	select {
+	case <-child.killed:
+	default:
+		t.Fatal("kill was not observed")
+	}
+}
+
+func TestSupervisorPropagatesKillError(t *testing.T) {
+	starter := newFakeStarter()
+	killErr := errors.New("force kill failed")
+	supervisor := New(Options{
+		Starter:     starter,
+		Waiter:      realWaiter{},
+		Now:         time.Now,
+		StopTimeout: 40 * time.Millisecond,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+
+	child := starter.next(t)
+	child.setHangOnTerminate(true)
+	child.setKillError(killErr)
+
+	restarted := make(chan error, 1)
+	go func() { restarted <- supervisor.Restart(context.Background()) }()
+	select {
+	case err := <-restarted:
+		if !errors.Is(err, killErr) {
+			t.Fatalf("restart error=%v, want %v", err, killErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("restart did not return")
+	}
+
+	// After a failed kill, Wait may remain blocked; cancel must still stop the outer loop.
+	cancel()
+	if err := waitDone(t, done); err != nil {
+		t.Fatal(err)
+	}
+	if got := child.killCallsCount(); got != 1 {
+		t.Fatalf("kill calls=%d, want 1", got)
+	}
+}
+
+func TestSupervisorCancellationWaitsForChildCleanup(t *testing.T) {
+	starter := newFakeStarter()
+	supervisor := New(Options{
+		Starter:     starter,
+		Waiter:      realWaiter{},
+		Now:         time.Now,
+		StopTimeout: 40 * time.Millisecond,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+
+	child := starter.next(t)
+	// Delay Wait completion until after Kill so cancellation must wait for the full stop path.
+	child.setHangOnTerminate(true)
+	releaseKill := make(chan struct{})
+	child.setKillHook(func() {
+		<-releaseKill
+	})
+
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("supervisor returned before child cleanup finished")
+	case <-time.After(80 * time.Millisecond):
+	}
+	close(releaseKill)
+	if err := waitDone(t, done); err != nil {
+		t.Fatal(err)
+	}
+	if got := child.killCallsCount(); got != 1 {
+		t.Fatalf("kill calls=%d, want 1", got)
+	}
+}
+
 type fakeStarter struct {
 	started chan *fakeChild
 	nextPID atomic.Int64
@@ -180,6 +314,7 @@ func (s *fakeStarter) Start() (Child, error) {
 		pid:        int(s.nextPID.Add(1)),
 		done:       make(chan error, 1),
 		terminated: make(chan struct{}),
+		killed:     make(chan struct{}),
 	}
 	s.started <- child
 	return child, nil
@@ -200,7 +335,18 @@ type fakeChild struct {
 	pid        int
 	done       chan error
 	terminated chan struct{}
+	killed     chan struct{}
 	exitOnce   sync.Once
+	termOnce   sync.Once
+	killOnce   sync.Once
+
+	mu              sync.Mutex
+	hangOnTerminate bool
+	terminateErr    error
+	killErr         error
+	killHook        func()
+	terminateCalls  int
+	killCalls       int
 }
 
 func (c *fakeChild) PID() int { return c.pid }
@@ -208,17 +354,73 @@ func (c *fakeChild) PID() int { return c.pid }
 func (c *fakeChild) Wait() error { return <-c.done }
 
 func (c *fakeChild) Terminate() error {
+	c.mu.Lock()
+	c.terminateCalls++
+	err := c.terminateErr
+	hang := c.hangOnTerminate
+	c.mu.Unlock()
+
+	c.termOnce.Do(func() { close(c.terminated) })
+	if !hang {
+		c.exitOnce.Do(func() {
+			c.done <- errors.New("terminated by supervisor")
+		})
+	}
+	return err
+}
+
+func (c *fakeChild) Kill() error {
+	c.mu.Lock()
+	c.killCalls++
+	err := c.killErr
+	hook := c.killHook
+	c.mu.Unlock()
+
+	c.killOnce.Do(func() { close(c.killed) })
+	if hook != nil {
+		hook()
+	}
+	if err != nil {
+		return err
+	}
 	c.exitOnce.Do(func() {
-		close(c.terminated)
-		c.done <- errors.New("terminated by supervisor")
+		c.done <- errors.New("killed by supervisor")
 	})
 	return nil
 }
 
-func (c *fakeChild) Kill() error { return c.Terminate() }
-
 func (c *fakeChild) exit(err error) {
 	c.exitOnce.Do(func() { c.done <- err })
+}
+
+func (c *fakeChild) setHangOnTerminate(hang bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.hangOnTerminate = hang
+}
+
+func (c *fakeChild) setKillError(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.killErr = err
+}
+
+func (c *fakeChild) setKillHook(hook func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.killHook = hook
+}
+
+func (c *fakeChild) terminateCallsCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.terminateCalls
+}
+
+func (c *fakeChild) killCallsCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.killCalls
 }
 
 type waitRequest struct {

@@ -27,20 +27,28 @@ func PanelBuildDir(webRoot, panelID, build string) string {
 // InstallFromZip extracts a validated panel archive into staging, then atomically
 // promotes it to web/{panelID}/{build}/. The caller must supply a unique build id.
 func InstallFromZip(request InstallRequest) (string, error) {
+	stagingDir, err := prepareInstallCandidate(request)
+	if err != nil {
+		return "", err
+	}
+	finalDir := PanelBuildDir(request.WebRoot, request.PanelID, request.Build)
+	if err := promoteInstallCandidate(stagingDir, finalDir); err != nil {
+		_ = os.RemoveAll(stagingDir)
+		return "", err
+	}
+	return finalDir, nil
+}
+
+func prepareInstallCandidate(request InstallRequest) (string, error) {
 	if err := validateInstallRequest(request); err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(request.StagingDir, 0o700); err != nil {
 		return "", fmt.Errorf("create panel staging directory: %w", err)
 	}
-	if err := os.MkdirAll(request.WebRoot, 0o700); err != nil {
-		return "", fmt.Errorf("create web root: %w", err)
-	}
 
-	stagingName := request.PanelID + "-" + sanitizeBuild(request.Build)
-	stagingDir := filepath.Join(request.StagingDir, stagingName)
-	_ = os.RemoveAll(stagingDir)
-	if err := os.MkdirAll(stagingDir, 0o700); err != nil {
+	stagingDir, err := os.MkdirTemp(request.StagingDir, request.PanelID+"-"+sanitizeBuild(request.Build)+"-")
+	if err != nil {
 		return "", fmt.Errorf("create panel staging candidate: %w", err)
 	}
 
@@ -55,22 +63,23 @@ func InstallFromZip(request InstallRequest) (string, error) {
 		return "", fmt.Errorf("normalize panel archive root: %w", err)
 	}
 
-	finalDir := PanelBuildDir(request.WebRoot, request.PanelID, request.Build)
+	return stagingDir, nil
+}
+
+func promoteInstallCandidate(stagingDir, finalDir string) error {
 	if err := os.MkdirAll(filepath.Dir(finalDir), 0o700); err != nil {
-		_ = os.RemoveAll(stagingDir)
-		return "", fmt.Errorf("create panel install directory: %w", err)
+		return fmt.Errorf("create panel install directory: %w", err)
 	}
 	// Replace any previous incomplete install of the same build.
 	_ = os.RemoveAll(finalDir)
 	if err := os.Rename(stagingDir, finalDir); err != nil {
 		// Cross-device rename fallback: copy is not implemented; fail closed.
-		_ = os.RemoveAll(stagingDir)
-		return "", protocol.APIError{
+		return protocol.APIError{
 			Code:    protocol.CodeDataFailure,
 			Message: "promote panel install candidate",
 		}
 	}
-	return finalDir, nil
+	return nil
 }
 
 func validateInstallRequest(request InstallRequest) error {

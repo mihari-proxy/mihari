@@ -2,6 +2,7 @@ package panel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,6 +40,14 @@ type PanelInfo struct {
 	LatestBuild    string
 	RollbackBuild  string
 	Health         string
+}
+
+// PreparedMutation is a validated panel candidate whose filesystem mutation is deferred until Commit.
+type PreparedMutation interface {
+	Identity() string
+	Valid() bool
+	Commit() error
+	Cleanup()
 }
 
 // Service owns panel install trees under web/ and the active.json pointer.
@@ -222,23 +231,36 @@ func (s *Service) Install(ctx context.Context, panelID, pinBuild string) error {
 
 // Update installs the latest build when it differs from the current installed build for panelID.
 func (s *Service) Update(ctx context.Context, panelID string) error {
-	adapter, err := s.adapter(panelID)
+	prepared, err := s.PrepareUpdate(ctx, panelID)
 	if err != nil {
 		return err
 	}
+	defer prepared.Cleanup()
+	return prepared.Commit()
+}
+
+// PrepareUpdate downloads and validates the latest build without changing the installed tree.
+func (s *Service) PrepareUpdate(ctx context.Context, panelID string) (PreparedMutation, error) {
+	adapter, err := s.adapter(panelID)
+	if err != nil {
+		return nil, err
+	}
 	build, assetURL, err := adapter.ResolveLatest(ctx)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if build == "" || assetURL == "" {
+		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "panel adapter returned empty build"}
 	}
 	s.mu.Lock()
 	builds := s.listBuildsLocked(panelID)
 	s.mu.Unlock()
 	if len(builds) > 0 && builds[0] == build {
 		if s.buildReady(panelID, build) {
-			return nil
+			return &preparedPanelMutation{service: s, panelID: panelID, build: build, noOp: true}, nil
 		}
 	}
-	return s.installBuild(ctx, panelID, build, assetURL)
+	return s.prepareBuild(ctx, panelID, build, assetURL, false)
 }
 
 // Activate sets active.json to the newest complete installed build for panelID.
@@ -369,23 +391,28 @@ func (s *Service) Uninstall(ctx context.Context, panelID string) error {
 // Reinstall uninstalls panelID then installs the latest build.
 // When the panel was the default active panel, it is re-activated after install.
 func (s *Service) Reinstall(ctx context.Context, panelID string) error {
-	if err := ctx.Err(); err != nil {
+	prepared, err := s.PrepareReinstall(ctx, panelID)
+	if err != nil {
 		return err
 	}
-	wasDefault := false
-	if active, err := s.Active(); err == nil && active.Panel == panelID && active.Panel != "" {
-		wasDefault = true
+	defer prepared.Cleanup()
+	return prepared.Commit()
+}
+
+// PrepareReinstall downloads and validates a replacement without deleting the installed tree.
+func (s *Service) PrepareReinstall(ctx context.Context, panelID string) (PreparedMutation, error) {
+	adapter, err := s.adapter(panelID)
+	if err != nil {
+		return nil, err
 	}
-	if err := s.Uninstall(ctx, panelID); err != nil {
-		return err
+	build, assetURL, err := adapter.ResolveLatest(ctx)
+	if err != nil {
+		return nil, err
 	}
-	if err := s.Install(ctx, panelID, ""); err != nil {
-		return err
+	if build == "" || assetURL == "" {
+		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "panel adapter returned empty build"}
 	}
-	if wasDefault {
-		return s.Activate(ctx, panelID)
-	}
-	return nil
+	return s.prepareBuild(ctx, panelID, build, assetURL, true)
 }
 
 func (s *Service) installBuild(ctx context.Context, panelID, build, assetURL string) error {
@@ -410,6 +437,206 @@ func (s *Service) installBuild(ctx context.Context, panelID, build, assetURL str
 		StagingDir: s.stagingDir, WebRoot: s.webRoot,
 	})
 	return err
+}
+
+func (s *Service) prepareBuild(ctx context.Context, panelID, build, assetURL string, reinstall bool) (PreparedMutation, error) {
+	if err := validateDownloadURL(assetURL, s.allowHTTP); err != nil {
+		return nil, err
+	}
+	zipPath, err := s.download(ctx, panelID, build, assetURL)
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(zipPath)
+	candidateDir, err := prepareInstallCandidate(InstallRequest{
+		PanelID: panelID, Build: build, Archive: zipPath,
+		StagingDir: s.stagingDir, WebRoot: s.webRoot,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &preparedPanelMutation{
+		service: s, panelID: panelID, build: build, candidateDir: candidateDir, reinstall: reinstall,
+	}, nil
+}
+
+type preparedPanelMutation struct {
+	mu           sync.Mutex
+	service      *Service
+	panelID      string
+	build        string
+	candidateDir string
+	cleanupDirs  []string
+	reinstall    bool
+	noOp         bool
+	committed    bool
+	cleaned      bool
+}
+
+func (p *preparedPanelMutation) Valid() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.validLocked()
+}
+
+func (p *preparedPanelMutation) Identity() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.panelID + "\x00" + p.build
+}
+
+func (p *preparedPanelMutation) validLocked() bool {
+	if p.cleaned || p.service == nil || p.panelID == "" || p.build == "" {
+		return false
+	}
+	if p.noOp || p.committed {
+		return true
+	}
+	return candidateReady(p.candidateDir)
+}
+
+func (p *preparedPanelMutation) Commit() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.committed {
+		return nil
+	}
+	if !p.validLocked() {
+		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "panel update candidate changed before commit"}
+	}
+	if p.noOp {
+		p.committed = true
+		return nil
+	}
+	p.service.mu.Lock()
+	defer p.service.mu.Unlock()
+	var err error
+	if p.reinstall {
+		err = p.commitReinstallLocked()
+	} else {
+		err = p.commitUpdateLocked()
+	}
+	if err != nil {
+		return err
+	}
+	p.committed = true
+	p.candidateDir = ""
+	return nil
+}
+
+func (p *preparedPanelMutation) Cleanup() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.candidateDir != "" {
+		// Cleanup cannot change the committed result; removal is best-effort because the interface has no error return.
+		_ = os.RemoveAll(p.candidateDir)
+		p.candidateDir = ""
+	}
+	for _, dir := range p.cleanupDirs {
+		// Committed backups are no longer live state; remove them after the coordinator lock is released.
+		_ = os.RemoveAll(dir)
+	}
+	p.cleanupDirs = nil
+	p.cleaned = true
+}
+
+func (p *preparedPanelMutation) commitUpdateLocked() error {
+	finalDir := PanelBuildDir(p.service.webRoot, p.panelID, p.build)
+	backupDir, hadPrevious, err := moveAside(finalDir, p.candidateDir+"-previous")
+	if err != nil {
+		return err
+	}
+	if err := promoteInstallCandidate(p.candidateDir, finalDir); err != nil {
+		if hadPrevious {
+			if restoreErr := os.Rename(backupDir, finalDir); restoreErr != nil {
+				return errors.Join(err, fmt.Errorf("restore previous panel build: %w", restoreErr))
+			}
+		}
+		return err
+	}
+	if hadPrevious {
+		p.cleanupDirs = append(p.cleanupDirs, backupDir)
+	}
+	return nil
+}
+
+func (p *preparedPanelMutation) commitReinstallLocked() error {
+	current, err := LoadActive(p.service.webActive)
+	if err != nil {
+		return err
+	}
+	panelDir := filepath.Join(p.service.webRoot, p.panelID)
+	backupDir, hadPrevious, err := moveAside(panelDir, p.candidateDir+"-previous-panel")
+	if err != nil {
+		return err
+	}
+	finalDir := PanelBuildDir(p.service.webRoot, p.panelID, p.build)
+	if err := promoteInstallCandidate(p.candidateDir, finalDir); err != nil {
+		if hadPrevious {
+			if restoreErr := os.Rename(backupDir, panelDir); restoreErr != nil {
+				return errors.Join(err, fmt.Errorf("restore previous panel install: %w", restoreErr))
+			}
+		}
+		return err
+	}
+	previous := clonePrevious(current.Previous)
+	delete(previous, p.panelID)
+	next := Active{Panel: current.Panel, Build: current.Build, Previous: previous}
+	if current.Panel == p.panelID {
+		next.Panel = p.panelID
+		next.Build = p.build
+	}
+	if err := SaveActive(p.service.webActive, next); err != nil {
+		if removeErr := os.RemoveAll(panelDir); removeErr != nil {
+			return errors.Join(err, fmt.Errorf("remove uncommitted panel install: %w", removeErr))
+		}
+		if hadPrevious {
+			if restoreErr := os.Rename(backupDir, panelDir); restoreErr != nil {
+				return errors.Join(err, fmt.Errorf("restore previous panel install: %w", restoreErr))
+			}
+		}
+		return err
+	}
+	if hadPrevious {
+		p.cleanupDirs = append(p.cleanupDirs, backupDir)
+	}
+	return nil
+}
+
+func moveAside(path, backup string) (string, bool, error) {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return backup, false, nil
+		}
+		return backup, false, err
+	}
+	// Backup names are candidate-unique; a leftover is cleanup debris and a failed removal makes Rename fail closed.
+	_ = os.RemoveAll(backup)
+	if err := os.Rename(path, backup); err != nil {
+		return backup, false, fmt.Errorf("retain previous panel install: %w", err)
+	}
+	return backup, true, nil
+}
+
+func candidateReady(root string) bool {
+	if root == "" {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(root, "index.html")); err == nil {
+		return true
+	}
+	var found bool
+	_ = filepath.WalkDir(root, func(_ string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if strings.EqualFold(d.Name(), "index.html") {
+			found = true
+			return io.EOF
+		}
+		return nil
+	})
+	return found
 }
 
 func (s *Service) download(ctx context.Context, panelID, build, assetURL string) (string, error) {

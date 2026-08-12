@@ -126,3 +126,34 @@ func TestAbsoluteDataRootResolvesRelativeAndAbsolute(t *testing.T) {
 		t.Fatalf("got=%q want=%q", got, wantAbs)
 	}
 }
+
+func TestEnsureDirsCreatesDurableLayout(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "ensure-root")
+	paths := NewPaths(root)
+	if err := paths.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		paths.Root,
+		paths.Bin,
+		filepath.Dir(paths.RuntimeConfig),
+		filepath.Dir(paths.Log),
+		paths.Staging,
+		paths.Subscriptions,
+		paths.SubscriptionCache,
+		paths.SubscriptionStaging,
+		filepath.Dir(paths.TUIPreferences),
+		filepath.Dir(paths.GeoIPCountry),
+		paths.GeoIPStaging,
+		paths.WebRoot,
+		paths.PanelStaging,
+	} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("missing %s: %v", path, err)
+		}
+		if !info.IsDir() {
+			t.Fatalf("%s is not a directory", path)
+		}
+	}
+}

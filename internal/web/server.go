@@ -46,6 +46,12 @@ type Mutator interface {
 	ApplyConfigPatch(ctx context.Context, patch map[string]any) error
 }
 
+type webSocketRelayObserver interface {
+	relayStarted()
+	relayFinished()
+	handlerFinished()
+}
+
 // Server is the loopback Web gateway: auth, static panel hosting, and API proxy.
 type Server struct {
 	Addr             string
@@ -60,6 +66,7 @@ type Server struct {
 	listener   net.Listener
 	httpServer *http.Server
 	sessions   atomic.Int64
+	wsObserver webSocketRelayObserver
 	mu         sync.Mutex
 	serving    bool
 }
@@ -683,23 +690,54 @@ func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer client.CloseNow()
 
-	errc := make(chan error, 2)
-	copyWS := func(dst, src *websocket.Conn) {
+	observer := s.wsObserver
+	if observer != nil {
+		observer.relayStarted()
+		observer.relayStarted()
+		defer observer.handlerFinished()
+	}
+	relayCtx, cancelRelay := context.WithCancel(r.Context())
+	defer cancelRelay()
+	type relayResult struct {
+		peer *websocket.Conn
+		err  error
+	}
+	results := make(chan relayResult, 2)
+	copyWS := func(dst, src *websocket.Conn) error {
 		for {
-			msgType, data, err := src.Read(r.Context())
+			msgType, data, err := src.Read(relayCtx)
 			if err != nil {
-				errc <- err
-				return
+				return err
 			}
-			if err := dst.Write(r.Context(), msgType, data); err != nil {
-				errc <- err
-				return
+			if err := dst.Write(relayCtx, msgType, data); err != nil {
+				return err
 			}
 		}
 	}
-	go copyWS(upstream, client)
-	go copyWS(client, upstream)
-	<-errc
+	runCopy := func(dst, src *websocket.Conn) {
+		err := copyWS(dst, src)
+		if observer != nil {
+			observer.relayFinished()
+		}
+		results <- relayResult{peer: dst, err: err}
+	}
+	go runCopy(upstream, client)
+	go runCopy(client, upstream)
+	first := <-results
+	cancelRelay()
+	closeWebSocketRelayPeer(first.peer, first.err)
+	upstream.CloseNow()
+	client.CloseNow()
+	<-results
+}
+
+func closeWebSocketRelayPeer(peer *websocket.Conn, relayErr error) {
+	status := websocket.CloseStatus(relayErr)
+	if status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway {
+		_ = peer.Close(status, "")
+		return
+	}
+	peer.CloseNow()
 }
 
 func (s *Server) writeLogin(w http.ResponseWriter, r *http.Request) {
