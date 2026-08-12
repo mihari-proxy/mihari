@@ -758,3 +758,24 @@ func TestActionCompletedRecordsOperations(t *testing.T) {
 		}
 	}
 }
+
+func TestApplySessionEvent_RecordsLastObservedAt(t *testing.T) {
+	model := NewModel()
+	fixed := time.Date(2026, 8, 12, 14, 32, 0, 0, time.UTC)
+
+	model.applySessionEvent(session.Event{
+		Kind:       session.EventTraffic,
+		ObservedAt: fixed,
+		Traffic:    protocol.TrafficSample{},
+	})
+	if !model.lastObservedAt.Equal(fixed) {
+		t.Fatalf("lastObservedAt=%v want %v", model.lastObservedAt, fixed)
+	}
+
+	// Error/control events carry a zero ObservedAt and must not advance the frozen timestamp.
+	before := model.lastObservedAt
+	model.applySessionEvent(session.Event{Kind: session.EventReconnecting})
+	if !model.lastObservedAt.Equal(before) {
+		t.Fatalf("reconnecting must not change lastObservedAt: %v", model.lastObservedAt)
+	}
+}
