@@ -6,9 +6,20 @@
 
 ### Added
 
-- System 页与 daemon 可在 stable / alpha 通道间切换 mihomo 核心（#42）
-
 ### Fixed
+
+## [v0.5.0] - 2026-08-13
+
+### Added
+
+- mihomo 核心 stable / alpha 通道切换：System 页与 daemon 可在两通道间切换核心版本（#48）
+- TUN 多实例冲突检测：开启 managed TUN 前检测系统其他 TUN 网卡与其他 mihomo 进程，冲突即拒绝（HTTP 409 / CLI exit 6），可用 `--force` 或 TUI 二次确认覆盖，并按情形给出证据（#45）
+- System 页系统代理 / TUN 行拆为状态行 + 动作行：状态行持续显示真实状态（不再被 Done badge 遮盖），动作行承载 toggle 并绑定 pending / Done / Failed；Done badge 约 3s 自动淡出，Failed 保持 sticky（#43）
+- TUI 选中行改用对比色背景渲染替代纯反白：焦点行用暗紫背景填充，rules / logs 最宽列获得连续背景，光标一眼可辨（#47）
+
+### Changed
+
+- 订阅配置加载引入分层：`KnownFields` 未知字段报错改为点名具体字段并提示可能为更高版本写入或拼写错误（#49）
 
 ## [v0.4.1] - 2026-08-12
 
