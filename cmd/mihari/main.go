@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"errors"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/buildinfo"
@@ -73,12 +71,8 @@ func main() {
 		}
 		return runDaemonBody(ctx)
 	}
-	selfUpdater := update.SelfUpdater{
-		AfterReplace: func(ctx context.Context, _ string) error {
-			// Best-effort restart when service is installed; ignore not-installed.
-			return restartServiceAfterReplace(serviceManager.Restart)
-		},
-	}
+	selfUpdateCompletion := app.NewSelfUpdateServiceCompletion(serviceManager, localClient)
+	selfUpdater := update.SelfUpdater{AfterReplace: selfUpdateCompletion.AfterReplace}
 	executable, executableError := os.Executable()
 	dependencies := cli.Dependencies{
 		StatusClient:       localClient,
@@ -113,18 +107,6 @@ func main() {
 		RunDaemon: runDaemon,
 	}
 	os.Exit(cli.Execute(ctx, os.Args[1:], os.Stdout, os.Stderr, dependencies))
-}
-
-func restartServiceAfterReplace(restart func() error) error {
-	err := restart()
-	if err == nil {
-		return nil
-	}
-	var api protocol.APIError
-	if errors.As(err, &api) && api.Code == protocol.CodeInvalidState && strings.Contains(strings.ToLower(api.Message), "not installed") {
-		return nil
-	}
-	return err
 }
 
 func tuiRelaunchArgs(binary string) []string {

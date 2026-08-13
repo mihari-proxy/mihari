@@ -31,7 +31,7 @@ Specifically:
 - **Subscription profiles**: per-subscription independent caches, offline switching, per-profile refresh intervals, and validated atomic config generation with rollback.
 - **Web panels**: one-click install / update / activate / rollback for zashboard and MetaCubeXD, served behind a loopback Web gateway with its own access credential.
 - **System proxy & TUN**: cross-platform system proxy control and managed TUN, both daemon-owned and persisted.
-- **In-TUI Mihari updates**: the System page checks GitHub Releases on entry, shows `current · latest available` or `current · Up to date`, and—when Mihari was started with administrator/root privileges—replaces the binary and automatically enters the updated TUI.
+- **In-TUI Mihari updates**: the System page checks GitHub Releases on entry, shows `current · latest available` or `current · Up to date`, and—when Mihari was started with administrator/root privileges—replaces the binary, synchronizes and restarts an installed OS-service copy, verifies its daemon version, and automatically enters the updated TUI.
 - **Core channel**: the System page can switch the mihomo core between `stable` and `alpha`.
 
 A single CGO-free static binary (< 15 MB) contains everything, with built-in GitHub Releases self-update and local GeoIP resolution.
