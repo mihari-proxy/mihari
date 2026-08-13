@@ -91,7 +91,7 @@ func run(o options) error {
 	ctx := context.Background()
 
 	// Exactly one mihomo API request returns every platform asset.
-	release, err := installer.LatestRelease(ctx)
+	release, err := installer.LatestRelease(ctx, "stable")
 	if err != nil {
 		return fmt.Errorf("fetch mihomo release: %w", err)
 	}
@@ -126,7 +126,7 @@ func buildPlatform(ctx context.Context, installer core.Installer, release core.R
 	}
 	defer os.RemoveAll(stage)
 
-	asset, err := core.SelectAsset(release, goos, goarch)
+	asset, err := core.SelectAsset(release, goos, goarch, "stable")
 	if err != nil {
 		return err
 	}

@@ -38,11 +38,32 @@ func TestSelectAssetForReleaseTargets(t *testing.T) {
 		{"windows", "arm64", "mihomo-windows-arm64-v1.19.0.zip"},
 	} {
 		t.Run(target.goos+"/"+target.goarch, func(t *testing.T) {
-			asset, err := SelectAsset(release, target.goos, target.goarch)
+			asset, err := SelectAsset(release, target.goos, target.goarch, "stable")
 			if err != nil || asset.Name != target.want {
 				t.Fatalf("asset=%#v err=%v", asset, err)
 			}
 		})
+	}
+}
+
+func TestSelectAssetAlphaPicksStandardName(t *testing.T) {
+	release := Release{TagName: "Prerelease-Alpha", Assets: []Asset{
+		{Name: "mihomo-linux-amd64-compatible-alpha-e183c58.gz"},
+		{Name: "mihomo-linux-amd64-v3-alpha-e183c58.gz"},
+		{Name: "mihomo-linux-amd64-alpha-e183c58-go124.gz"},
+		{Name: "mihomo-linux-amd64-alpha-e183c58.gz"},
+		{Name: "mihomo-windows-amd64-compatible-alpha-e183c58.zip"},
+		{Name: "mihomo-windows-amd64-v3-alpha-e183c58.zip"},
+		{Name: "mihomo-windows-amd64-alpha-e183c58-go124.zip"},
+		{Name: "mihomo-windows-amd64-alpha-e183c58.zip"},
+	}}
+	asset, err := SelectAsset(release, "linux", "amd64", "alpha")
+	if err != nil || asset.Name != "mihomo-linux-amd64-alpha-e183c58.gz" {
+		t.Fatalf("linux asset=%#v err=%v", asset, err)
+	}
+	asset, err = SelectAsset(release, "windows", "amd64", "alpha")
+	if err != nil || asset.Name != "mihomo-windows-amd64-alpha-e183c58.zip" {
+		t.Fatalf("windows asset=%#v err=%v", asset, err)
 	}
 }
 
@@ -190,6 +211,28 @@ func releaseFixture(t *testing.T, assetName string, archive []byte) *httptest.Se
 				t.Errorf("missing GitHub API headers")
 			}
 			_ = json.NewEncoder(response).Encode(Release{TagName: "v1.19.0", Assets: []Asset{{Name: assetName, URL: server.URL + "/asset", Size: int64(len(archive))}}})
+		case "/asset":
+			_, _ = response.Write(archive)
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	return server
+}
+
+func alphaReleaseFixture(t *testing.T, assetName string, archive []byte, requested *[]string) *httptest.Server {
+	t.Helper()
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if requested != nil {
+			*requested = append(*requested, request.URL.Path)
+		}
+		switch request.URL.Path {
+		case "/repos/MetaCubeX/mihomo/releases/tags/Prerelease-Alpha":
+			if request.Header.Get("Accept") != "application/vnd.github+json" || request.Header.Get("X-GitHub-Api-Version") == "" {
+				t.Errorf("missing GitHub API headers")
+			}
+			_ = json.NewEncoder(response).Encode(Release{TagName: "Prerelease-Alpha", Assets: []Asset{{Name: assetName, URL: server.URL + "/asset", Size: int64(len(archive))}}})
 		case "/asset":
 			_, _ = response.Write(archive)
 		default:
@@ -481,7 +524,7 @@ func TestLatestReleaseExport(t *testing.T) {
 	server := releaseFixture(t, "mihomo-linux-amd64-compatible-v1.19.0.gz", archive)
 	defer server.Close()
 	installer := Installer{HTTPClient: server.Client(), APIBase: server.URL, Repository: "MetaCubeX/mihomo"}
-	release, err := installer.LatestRelease(context.Background())
+	release, err := installer.LatestRelease(context.Background(), "stable")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,6 +533,23 @@ func TestLatestReleaseExport(t *testing.T) {
 	}
 	if release.Assets[0].Name != "mihomo-linux-amd64-compatible-v1.19.0.gz" {
 		t.Fatalf("asset=%#v", release.Assets[0])
+	}
+}
+
+func TestLatestReleaseAlphaHitsPrereleaseTag(t *testing.T) {
+	var requested []string
+	server := alphaReleaseFixture(t, "mihomo-linux-amd64-alpha-e183c58.gz", gzipFixture(t, []byte("payload")), &requested)
+	defer server.Close()
+	installer := Installer{HTTPClient: server.Client(), APIBase: server.URL, Repository: "MetaCubeX/mihomo"}
+	release, err := installer.LatestRelease(context.Background(), "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.TagName != "Prerelease-Alpha" {
+		t.Fatalf("TagName=%q", release.TagName)
+	}
+	if len(requested) != 1 || requested[0] != "/repos/MetaCubeX/mihomo/releases/tags/Prerelease-Alpha" {
+		t.Fatalf("requested=%q", requested)
 	}
 }
 

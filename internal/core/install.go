@@ -40,6 +40,7 @@ type InstallRequest struct {
 	ConfigPath     string
 	StagingDir     string
 	CurrentVersion string
+	Channel        string
 }
 
 type InstallResult struct {
@@ -122,7 +123,7 @@ func (c *Candidate) Cleanup() {
 
 func (i Installer) Prepare(ctx context.Context, request InstallRequest) (PreparedCore, error) {
 	checkCtx, cancel := context.WithTimeout(ctx, i.checkTimeout())
-	release, err := i.LatestRelease(checkCtx)
+	release, err := i.LatestRelease(checkCtx, request.Channel)
 	cancel()
 	if err != nil {
 		return nil, withAIOHint(err)
@@ -140,7 +141,7 @@ func (i Installer) Prepare(ctx context.Context, request InstallRequest) (Prepare
 			}
 		}
 	}
-	asset, err := SelectAsset(release, i.targetOS(), i.targetArch())
+	asset, err := SelectAsset(release, i.targetOS(), i.targetArch(), request.Channel)
 	if err != nil {
 		return nil, err
 	}
