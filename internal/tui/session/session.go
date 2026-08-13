@@ -153,16 +153,10 @@ func (s *Session) supervise(ctx context.Context) {
 		if !putOrdered(ctx, s.control, Event{Kind: EventStatus, Status: status}) {
 			return
 		}
-		if err := s.poll(ctx, status); err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			attempt++
-			if !putOrdered(ctx, s.control, Event{Kind: EventReconnecting, Attempt: attempt, Err: err}) || !waitBackoff(ctx, s.options.Backoff(attempt)) {
-				return
-			}
-			continue
-		}
+		// Status is the daemon transport health boundary. Capability snapshots
+		// backed by mihomo may fail while its controller starts or restarts; keep
+		// the daemon connected and retry those snapshots during supervision.
+		_ = s.poll(ctx, status)
 		if !putOrdered(ctx, s.control, Event{Kind: EventConnected}) {
 			return
 		}
@@ -179,8 +173,8 @@ func (s *Session) supervise(ctx context.Context) {
 }
 
 // poll pulls one snapshot of every capability-backed resource and forwards it
-// as ordered events. It returns the first error; callers decide whether to
-// reconnect (errors from putOrdered are surfaced as the context error).
+// as ordered events. It returns the first error so callers can retain the last
+// observed snapshot and retry without changing daemon transport state.
 func (s *Session) poll(ctx context.Context, status protocol.Status) error {
 	if slices.Contains(status.Capabilities, protocol.CapabilityCore) {
 		coreStatus, err := s.client.Core(ctx)
@@ -248,21 +242,35 @@ func (s *Session) poll(ctx context.Context, status protocol.Status) error {
 	return nil
 }
 
-// superviseStreams keeps the push streams resident for the whole connected
-// session while re-polling state snapshots on PollInterval. It returns when a
-// stream fails or a poll fails (callers reconnect), or nil when the session
-// context is cancelled.
+// superviseStreams keeps the push streams resident for the whole daemon
+// session while re-polling state snapshots on PollInterval. A controller
+// stream may end while mihomo restarts even though the daemon's local control
+// transport remains healthy, so only a failed Status probe returns an error to
+// the daemon-level supervisor.
 func (s *Session) superviseStreams(ctx context.Context) error {
 	streamCtx, cancelStreams := context.WithCancel(ctx)
 	defer cancelStreams()
 	streamErr := make(chan error, 1)
-	go func() { streamErr <- s.runStreams(streamCtx) }()
+	streamHealthy := make(chan struct{}, 1)
+	startStreams := func() {
+		// runStreams joins every old producer before reporting its error, so any
+		// buffered health signal here belongs to the completed generation.
+		select {
+		case <-streamHealthy:
+		default:
+		}
+		go func() { streamErr <- s.runStreams(streamCtx, streamHealthy) }()
+	}
+	startStreams()
+	streamAttempt := 0
 	ticker := time.NewTicker(s.options.PollInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-streamHealthy:
+			streamAttempt = 0
 		case err := <-streamErr:
 			if ctx.Err() != nil {
 				return nil
@@ -270,7 +278,23 @@ func (s *Session) superviseStreams(ctx context.Context) error {
 			if err == nil {
 				err = errors.New("control streams ended")
 			}
-			return err
+			status, statusErr := s.client.Status(streamCtx)
+			if statusErr != nil {
+				return errors.Join(err, statusErr)
+			}
+			if !putOrdered(streamCtx, s.control, Event{Kind: EventStatus, Status: status}) {
+				return streamCtx.Err()
+			}
+			streamAttempt++
+			if !waitBackoff(streamCtx, s.options.Backoff(streamAttempt)) {
+				return nil
+			}
+			startStreams()
+			// Snapshot endpoints backed by the mihomo controller can remain
+			// temporarily unavailable after Status proves the daemon is alive.
+			// Reopen streams first, retain the last observed snapshot, and let
+			// this or the next periodic poll refresh it when mihomo is ready.
+			_ = s.poll(streamCtx, status)
 		case <-ticker.C:
 			status, err := s.client.Status(streamCtx)
 			if err != nil {
@@ -279,14 +303,15 @@ func (s *Session) superviseStreams(ctx context.Context) error {
 			if !putOrdered(streamCtx, s.control, Event{Kind: EventStatus, Status: status}) {
 				return streamCtx.Err()
 			}
-			if err := s.poll(streamCtx, status); err != nil {
-				return err
-			}
+			// Status is the daemon transport health boundary. A snapshot error
+			// after it succeeds may only mean the restarted controller is not
+			// ready yet and must not mark the daemon stale.
+			_ = s.poll(streamCtx, status)
 		}
 	}
 }
 
-func (s *Session) runStreams(parent context.Context) error {
+func (s *Session) runStreams(parent context.Context, healthy chan<- struct{}) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	errCh := make(chan error, 1)
@@ -314,6 +339,10 @@ func (s *Session) runStreams(parent context.Context) error {
 					if !putOrdered(ctx, s.ordered, event) {
 						return ctx.Err()
 					}
+				}
+				select {
+				case healthy <- struct{}{}:
+				default:
 				}
 				return nil
 			})
