@@ -2039,7 +2039,9 @@ func TestSystemCoreChannelEnterSwitchesToOtherChannel(t *testing.T) {
 	model.SetMutationsEnabled(true)
 	model.focusID = rowCoreChannel
 	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
+	if _, ok := updated.(*Model); !ok {
+		t.Fatalf("updated=%T", updated)
+	}
 	if command == nil || client.installCalls != 0 {
 		t.Fatalf("command=%v installCalls=%d", command != nil, client.installCalls)
 	}

@@ -23,7 +23,7 @@ import (
 const (
 	rowDaemon            = "daemon"
 	rowCore              = "core"
-	rowCoreChannel      = "core-channel"
+	rowCoreChannel       = "core-channel"
 	rowCoreUpdate        = "core-update"
 	rowCoreRestart       = "core-restart"
 	rowMihariUpdate      = "mihari-update"
