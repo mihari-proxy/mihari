@@ -3,13 +3,21 @@
 package platform
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 )
 
+type replacementProcess interface {
+	Wait() (*os.ProcessState, error)
+	Release() error
+}
+
 // startProcess starts a process and is replaced in tests to avoid spawning binaries.
-var startProcess = os.StartProcess
+var startProcess = func(name string, argv []string, attr *os.ProcAttr) (replacementProcess, error) {
+	return os.StartProcess(name, argv, attr)
+}
 
 // Relaunch starts the replacement Mihari binary attached to the current console.
 func Relaunch(binary string, args, env []string) error {
@@ -23,8 +31,12 @@ func Relaunch(binary string, args, env []string) error {
 	if err != nil {
 		return fmt.Errorf("start updated Mihari: %w", err)
 	}
-	if err := process.Release(); err != nil {
-		return fmt.Errorf("release updated Mihari process: %w", err)
+	if _, err := process.Wait(); err != nil {
+		waitErr := fmt.Errorf("wait for updated Mihari: %w", err)
+		if releaseErr := process.Release(); releaseErr != nil {
+			return errors.Join(waitErr, fmt.Errorf("release updated Mihari after wait failure: %w", releaseErr))
+		}
+		return waitErr
 	}
 	return nil
 }
