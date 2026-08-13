@@ -1,7 +1,7 @@
 # TUI 连接页 Traffic 列固定宽度设计
 
 日期：2026-08-13
-状态：设计中
+状态：已实施，待 Pull Request
 关联 issue：mihari-proxy/mihari#71
 目标分支：`fix/issue-71-conns-traffic-width`
 前序：状态栏同类修复 #67 / PR #68（`2026-08-13-statusbar-fixed-rate-width-design.md`）
