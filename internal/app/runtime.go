@@ -26,6 +26,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/subscription"
 	"github.com/mihari-proxy/mihari/internal/supervisor"
 	"github.com/mihari-proxy/mihari/internal/sysproxy"
+	"github.com/mihari-proxy/mihari/internal/tundetect"
 	"github.com/mihari-proxy/mihari/internal/web"
 )
 
@@ -196,6 +197,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		SettingsPath:  settingsPath,
 		ServiceStatus: options.ServiceStatus,
 		SysProxy:      sysproxy.Platform(),
+		TunDetect:     tundetect.Platform(),
 		RuntimeConfig: paths.RuntimeConfig,
 		StagingDir:    paths.SubscriptionStaging,
 		ValidateConfig: func(ctx context.Context, candidatePath string) error {
@@ -247,7 +249,7 @@ type webMutationRuntime interface {
 	SelectProxy(context.Context, runtimeapi.Operation, string, string) error
 	CloseConnection(context.Context, runtimeapi.Operation, string) error
 	CloseAllConnections(context.Context, runtimeapi.Operation) error
-	EnableTun(context.Context, runtimeapi.Operation) (protocol.TunStatus, error)
+	EnableTun(context.Context, runtimeapi.Operation, bool) (protocol.TunStatus, error)
 	DisableTun(context.Context, runtimeapi.Operation) (protocol.TunStatus, error)
 }
 
@@ -299,7 +301,7 @@ func (m webMutator) ApplyConfigPatch(ctx context.Context, patch map[string]any) 
 	}
 	op := runtimeapi.Operation{ID: "web-tun-" + newWebOperationID(), Source: "web"}
 	if enable {
-		_, err := m.manager.EnableTun(ctx, op)
+		_, err := m.manager.EnableTun(ctx, op, false)
 		return err
 	}
 	_, err := m.manager.DisableTun(ctx, op)

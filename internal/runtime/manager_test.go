@@ -22,6 +22,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/preferences"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/supervisor"
+	"github.com/mihari-proxy/mihari/internal/tundetect"
 )
 
 func TestUpdateOnboardingRejectsStaleRevisionBeforePersistingEndpoints(t *testing.T) {
@@ -716,6 +717,10 @@ func newTestManager(options Options) *Manager {
 	options.Coordinator = state.NewCoordinator(store)
 	if options.BinaryExists == nil {
 		options.BinaryExists = func() bool { return true }
+	}
+	// 默认注入空 FakeBackend：避免开发机上 Platform() 枚举到真实 TUN 网卡而误伤现有测试。
+	if options.TunDetect == nil {
+		options.TunDetect = &tundetect.FakeBackend{}
 	}
 	manager := New(options)
 	manager.store = store

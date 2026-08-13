@@ -245,6 +245,7 @@ type tunActionKind uint8
 
 const (
 	tunEnable tunActionKind = iota
+	tunForceEnable
 	tunDisable
 )
 
@@ -861,9 +862,15 @@ func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cm
 	m.clearRowPending()
 	if typed.err != nil {
 		var apiError protocol.APIError
-		if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
-			m.markRowOutcome(rowID, false, ui.SystemChangedMessage)
-			return m, tea.Batch(m.refresh(), m.rowSpinCmdIfNeeded())
+		if errors.As(typed.err, &apiError) {
+			switch apiError.Code {
+			case protocol.CodeTunConflict:
+				// 二次确认非终态失败；保持等待 force 路径。
+				return m, tea.Batch(m.confirmForceTun(apiError), m.rowSpinCmdIfNeeded())
+			case protocol.CodeRevisionConflict:
+				m.markRowOutcome(rowID, false, ui.SystemChangedMessage)
+				return m, tea.Batch(m.refresh(), m.rowSpinCmdIfNeeded())
+			}
 		}
 		m.markRowOutcome(rowID, false, actionErrorDetail(typed.err, ui.TunActionFailed))
 		return m, tea.Batch(m.loadTun(), m.rowSpinCmdIfNeeded())
@@ -1452,7 +1459,7 @@ func rowProgressForAction(action ui.Action, coreMissing bool) (rowID, note strin
 		return rowSystemProxyAction, ui.ProxyProgressEnabling
 	case ui.ActionDisableSystemProxy:
 		return rowSystemProxyAction, ui.ProxyProgressDisabling
-	case ui.ActionEnableTun:
+	case ui.ActionEnableTun, ui.ActionForceTun:
 		return rowTUNAction, ui.TunProgressEnabling
 	case ui.ActionDisableTun:
 		return rowTUNAction, ui.TunProgressDisabling
@@ -1557,6 +1564,10 @@ func (m *Model) confirmTunToggle() tea.Cmd {
 	if m.client == nil || m.pending || !m.mutationsEnabled || !m.hasCapability(protocol.CapabilityTUN) {
 		return nil
 	}
+	// 前置：status 已携带其他 TUN 网卡证据（信号 A）且当前非 enable → 直接走 force 确认。
+	if !m.tun.DesiredEnable && m.tun.Conflict != nil && len(m.tun.Conflict.OtherTunInterfaces) > 0 {
+		return m.confirmForceTunFromStatus()
+	}
 	if m.tun.DesiredEnable {
 		return m.confirmTunAction(tunDisable)
 	}
@@ -1566,7 +1577,12 @@ func (m *Model) confirmTunToggle() tea.Cmd {
 func (m *Model) confirmTunAction(kind tunActionKind) tea.Cmd {
 	revision, operationID := m.tunRevision(), m.newOperationID()
 	title, impact, rollback, action := ui.EnableTunTitle, ui.EnableTunImpact, ui.EnableTunRollback, ui.ActionEnableTun
-	if kind == tunDisable {
+	force := false
+	switch kind {
+	case tunForceEnable:
+		title, impact, rollback, action = ui.ForceTunTitle, forceTunImpactFromStatus(m.tun), ui.ForceTunRollback, ui.ActionForceTun
+		force = true
+	case tunDisable:
 		title, impact, rollback, action = ui.DisableTunTitle, ui.DisableTunImpact, ui.DisableTunRollback, ui.ActionDisableTun
 	}
 	return func() tea.Msg {
@@ -1574,14 +1590,32 @@ func (m *Model) confirmTunAction(kind tunActionKind) tea.Cmd {
 			Action: action, Page: ui.PageSystem, Capability: protocol.CapabilityTUN,
 			Key: "system:" + string(action), Title: title, Object: ui.TUNLabel,
 			Impact: impact, Rollback: rollback,
-			Execute: m.runTunAction(kind, operationID, revision),
+			Execute: m.runTunAction(kind, operationID, revision, force),
 		}
 	}
 }
 
-func (m *Model) runTunAction(kind tunActionKind, operationID string, revision uint64) tea.Cmd {
+func (m *Model) confirmForceTunFromStatus() tea.Cmd {
+	return m.confirmTunAction(tunForceEnable)
+}
+
+// confirmForceTun 从后置 CodeTunConflict 错误的 Details 取证据构造分情形 force 确认
+// （对称 confirmForceSystemProxy；与 disable 不对称——TUN disable 永不门控，见设计决策 1）。
+func (m *Model) confirmForceTun(apiError protocol.APIError) tea.Cmd {
+	impact := forceTunImpactFromDetails(apiError.Details)
 	return func() tea.Msg {
-		request := protocol.TunMutationRequest{OperationID: operationID}
+		return ui.ActionIntentMsg{
+			Action: ui.ActionForceTun, Page: ui.PageSystem, Capability: protocol.CapabilityTUN,
+			Key: "system:" + string(ui.ActionForceTun), Title: ui.ForceTunTitle, Object: ui.TUNLabel,
+			Impact: impact, Rollback: ui.ForceTunRollback,
+			Execute: m.runTunAction(tunForceEnable, m.newOperationID(), m.tunRevision(), true),
+		}
+	}
+}
+
+func (m *Model) runTunAction(kind tunActionKind, operationID string, revision uint64, force bool) tea.Cmd {
+	return func() tea.Msg {
+		request := protocol.TunMutationRequest{OperationID: operationID, Force: force}
 		if revision > 0 {
 			request.IfRevision = &revision
 		}
@@ -1815,6 +1849,9 @@ func proxyTone(status protocol.SystemProxyStatus) ui.StatusTone {
 // tunTone derives the TUN status tone: unknown live state is Neutral; a
 // desired/live drift is Caution; live-on is Positive.
 func tunTone(status protocol.TunStatus) ui.StatusTone {
+	if status.Conflict != nil && len(status.Conflict.OtherTunInterfaces) > 0 {
+		return ui.ToneCaution
+	}
 	liveOn := status.LiveEnable != nil && *status.LiveEnable
 	switch {
 	case status.LiveEnable == nil:
@@ -1893,6 +1930,9 @@ func tunSummary(theme ui.Theme, status protocol.TunStatus) string {
 	if status.Stack != "" {
 		parts = append(parts, status.Stack)
 	}
+	if label := tunConflictLabel(status.Conflict); label != "" {
+		parts = append(parts, label)
+	}
 	// Status dot carries the tone; desired/live/stack detail stays muted.
 	return ui.StatusDot(theme, tunTone(status), "") + "  " + theme.Muted.Render(strings.Join(parts, " · "))
 }
@@ -1922,6 +1962,83 @@ func forceImpactFromStatus(status protocol.SystemProxyStatus) string {
 		valueOr(status.Observed.Server, ui.MissingValue),
 		valueOr(status.Target, ui.MissingValue),
 	)
+}
+
+// forceTunImpactFromStatus 用 live status 的冲突证据构造分情形 force impact（前置路径）。
+func forceTunImpactFromStatus(status protocol.TunStatus) string {
+	return forceTunImpact(status.Conflict)
+}
+
+// forceTunImpactFromDetails 从后置 CodeTunConflict 错误的 Details 取证据构造 impact。
+func forceTunImpactFromDetails(details map[string]any) string {
+	return forceTunImpact(&protocol.TunConflict{
+		OtherTunInterfaces:   detailStrings(details, "other_tun_interfaces"),
+		OtherMihomoProcesses: detailStrings(details, "other_mihomo_processes"),
+	})
+}
+
+// forceTunImpact 按信号 A/B 的有无分情形选择 force 确认文案（设计决策 2）。
+// 进入 force 路径要求 OtherTunInterfaces 非空；兜底返回标题以防空 impact。
+func forceTunImpact(conflict *protocol.TunConflict) string {
+	tunNames := []string(nil)
+	mihomoCount := 0
+	if conflict != nil {
+		tunNames = conflict.OtherTunInterfaces
+		mihomoCount = len(conflict.OtherMihomoProcesses)
+	}
+	if len(tunNames) == 0 {
+		return ui.ForceTunTitle
+	}
+	joined := strings.Join(tunNames, ", ")
+	if mihomoCount > 0 {
+		return fmt.Sprintf(ui.ForceTunImpactAB, len(tunNames), joined, mihomoCount)
+	}
+	return fmt.Sprintf(ui.ForceTunImpactA, len(tunNames), joined)
+}
+
+// tunConflictLabel 把分情形证据压缩成 summary 行 label（仅 B 也要展示，设计决策 2）。
+func tunConflictLabel(conflict *protocol.TunConflict) string {
+	if conflict == nil {
+		return ""
+	}
+	tunCount := len(conflict.OtherTunInterfaces)
+	mihomoCount := len(conflict.OtherMihomoProcesses)
+	switch {
+	case tunCount > 0 && mihomoCount > 0:
+		return fmt.Sprintf(ui.TunConflictLabelAB, tunCount, mihomoCount)
+	case tunCount > 0:
+		return fmt.Sprintf(ui.TunConflictLabelA, tunCount)
+	case mihomoCount > 0:
+		return fmt.Sprintf(ui.TunConflictLabelB, mihomoCount)
+	}
+	return ""
+}
+
+// detailStrings 从 error Details 取 []string 字段（对称 detailString 的单串版本）。
+// 兼容两种来源：进程内构造的 APIError（[]string）与经 HTTP/JSON 解码的 APIError
+// （JSON 数组解码为 []any）。后者正是后置 CodeTunConflict 路径——若只接受 []string，
+// force 确认的 Impact 会丢失接口证据。
+func detailStrings(details map[string]any, key string) []string {
+	if details == nil {
+		return nil
+	}
+	value, ok := details[key]
+	if !ok || value == nil {
+		return nil
+	}
+	switch slice := value.(type) {
+	case []string:
+		return slice
+	case []any:
+		out := make([]string, 0, len(slice))
+		for _, item := range slice {
+			if text, ok := item.(string); ok {
+				out = append(out, text)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 func detailString(details map[string]any, key string) string {

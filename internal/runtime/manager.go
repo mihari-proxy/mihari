@@ -18,6 +18,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/subscription"
 	"github.com/mihari-proxy/mihari/internal/supervisor"
 	"github.com/mihari-proxy/mihari/internal/sysproxy"
+	"github.com/mihari-proxy/mihari/internal/tundetect"
 )
 
 type PreparedCore = core.PreparedCore
@@ -94,6 +95,8 @@ type Options struct {
 	WebOpenToken string
 	// SysProxy is the OS system-proxy backend. Nil installs the platform default in New.
 	SysProxy sysproxy.Backend
+	// TunDetect is the TUN conflict detection backend. Nil installs the platform default in New.
+	TunDetect tundetect.Backend
 	// SettingsPath is where config.Save writes settings after system-proxy (and related) mutations.
 	// Empty skips persistence (in-memory settings only).
 	SettingsPath string
@@ -132,6 +135,7 @@ type Manager struct {
 	webGateway     WebGateway
 	webOpenToken   string
 	sysProxy       sysproxy.Backend
+	tunDetect      tundetect.Backend
 	settingsPath   string
 	serviceStatus  func() (string, error)
 	settingsMu     sync.Mutex
@@ -166,6 +170,10 @@ func New(options Options) *Manager {
 	if sysProxy == nil {
 		sysProxy = sysproxy.Platform()
 	}
+	tunDetect := options.TunDetect
+	if tunDetect == nil {
+		tunDetect = tundetect.Platform()
+	}
 	manager := &Manager{
 		store:          store,
 		coordinator:    coordinator,
@@ -188,6 +196,7 @@ func New(options Options) *Manager {
 		webGateway:     options.WebGateway,
 		webOpenToken:   options.WebOpenToken,
 		sysProxy:       sysProxy,
+		tunDetect:      tunDetect,
 		settingsPath:   options.SettingsPath,
 		serviceStatus:  options.ServiceStatus,
 		maintenance:    make(chan struct{}, 1),

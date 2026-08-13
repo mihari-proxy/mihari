@@ -33,7 +33,7 @@ func exitCode(err error) int {
 		return ExitInvalidState
 	case protocol.CodePermissionDenied:
 		return ExitPermission
-	case protocol.CodeRevisionConflict, protocol.CodeSystemProxyConflict:
+	case protocol.CodeRevisionConflict, protocol.CodeSystemProxyConflict, protocol.CodeTunConflict:
 		return ExitConflict
 	case protocol.CodeUpstreamFailure:
 		return ExitUpstream

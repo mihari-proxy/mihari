@@ -459,7 +459,7 @@ func (f *fakeRuntime) TunStatus(context.Context) (protocol.TunStatus, error) {
 	return f.tunStatus, nil
 }
 
-func (f *fakeRuntime) EnableTun(_ context.Context, operation runtimeapi.Operation) (protocol.TunStatus, error) {
+func (f *fakeRuntime) EnableTun(_ context.Context, operation runtimeapi.Operation, _ bool) (protocol.TunStatus, error) {
 	f.operation = operation
 	if f.enableTunErr != nil {
 		return protocol.TunStatus{}, f.enableTunErr
