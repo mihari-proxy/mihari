@@ -48,31 +48,135 @@ confirm() {
   esac
 }
 
-# Detect platform (mirrors install.sh).
-os="$(uname -s)"
-case "$os" in
-  Linux) os="linux" ;;
-  Darwin) os="darwin" ;;
-  *) err "unsupported OS: $os" ;;
-esac
-arch="$(uname -m)"
-case "$arch" in
-  x86_64|amd64) arch="amd64" ;;
-  aarch64|arm64) arch="arm64" ;;
-  *) err "unsupported architecture: $arch" ;;
-esac
-platform="${os}-${arch}"
+# Detect platform (mirrors install.sh). Test mode loads only the downloader and
+# therefore also works under Git Bash on the Windows CI runner.
+if [ "${MIHARI_INSTALL_TEST_MODE:-}" != "1" ]; then
+  os="$(uname -s)"
+  case "$os" in
+    Linux) os="linux" ;;
+    Darwin) os="darwin" ;;
+    *) err "unsupported OS: $os" ;;
+  esac
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) arch="amd64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *) err "unsupported architecture: $arch" ;;
+  esac
+  platform="${os}-${arch}"
+fi
 
 # Downloader: dl writes to a file, fetch writes to stdout (mirrors install.sh).
 if command -v curl >/dev/null 2>&1; then
+  downloader="curl"
   dl() { curl -fsSL "$1" -o "$2"; }
   fetch() { curl -fsSL "$1"; }
 elif command -v wget >/dev/null 2>&1; then
+  downloader="wget"
   dl() { wget -qO "$2" "$1"; }
   fetch() { wget -qO- "$1"; }
 else
   err "need curl or wget"
 fi
+
+download_file_with_progress() {
+  url="$1"
+  dest="$2"
+  if [ "$downloader" != "curl" ]; then
+    dl "$url" "$dest"
+    return
+  fi
+
+  probe_headers="${dest}.probe-headers-$$"
+  probe_body="${dest}.probe-body-$$"
+  probe_status="${dest}.probe-status-$$"
+  parts_dir=""
+  pids=""
+  cancel_download() {
+    trap - HUP INT TERM
+    for cancel_pid in $pids; do kill "$cancel_pid" 2>/dev/null || true; done
+    for cancel_pid in $pids; do wait "$cancel_pid" 2>/dev/null || true; done
+    [ -z "$parts_dir" ] || rm -rf "$parts_dir"
+    rm -f "$probe_headers" "$probe_body" "$probe_status" "$dest"
+    exit 1
+  }
+  trap 'cancel_download' HUP INT TERM
+  curl -fsSL -H 'Range: bytes=0-0' -D "$probe_headers" -o "$probe_body" -w '%{http_code}' "$url" >"$probe_status" 2>/dev/null &
+  pids="$!"
+  wait "$pids" 2>/dev/null || true
+  pids=""
+  status="$(cat "$probe_status" 2>/dev/null || true)"
+  content_range="$(tr -d '\r' <"$probe_headers" | awk 'tolower($1) == "content-range:" {print $2 " " $3}' | tail -n 1)"
+  rm -f "$probe_headers" "$probe_body" "$probe_status"
+  total="$(printf '%s\n' "$content_range" | sed -n 's#^bytes 0-0/\([0-9][0-9]*\)$#\1#p')"
+  if [ "$status" != "206" ] || [ -z "$total" ] || [ "$total" -lt 4 ]; then
+    trap - HUP INT TERM
+    dl "$url" "$dest"
+    return
+  fi
+
+  parts_dir="$(mktemp -d "${dest}.parts-XXXXXX")"
+  failed=0
+  base_size=$((total / 4))
+  index=0
+  while [ "$index" -lt 4 ]; do
+    start=$((index * base_size))
+    if [ "$index" -eq 3 ]; then end=$((total - 1)); else end=$((start + base_size - 1)); fi
+    part="${parts_dir}/part-$(printf '%02d' "$index")"
+    header="${part}.headers"
+    curl -fsSL --range "${start}-${end}" -D "$header" -o "$part" -w '%{http_code}' "$url" >"${part}.status" &
+    pids="$pids $!"
+    index=$((index + 1))
+  done
+
+  while :; do
+    running=0
+    for pid in $pids; do kill -0 "$pid" 2>/dev/null && running=1; done
+    [ "$running" = 1 ] || break
+    downloaded=0
+    for progress_part in "$parts_dir"/part-[0-9][0-9]; do
+      [ -f "$progress_part" ] || continue
+      progress_size="$(wc -c <"$progress_part" | tr -d ' ')"
+      downloaded=$((downloaded + progress_size))
+    done
+    percent=$((downloaded * 100 / total))
+    printf '\r  downloaded %.1f / %.1f MB (%d%%)' "$(awk "BEGIN {print $downloaded/1048576}")" "$(awk "BEGIN {print $total/1048576}")" "$percent"
+    sleep 0.1
+  done
+  for pid in $pids; do wait "$pid" || failed=1; done
+  printf '\n'
+
+  if [ "$failed" = 0 ]; then
+    index=0
+    while [ "$index" -lt 4 ]; do
+      part="${parts_dir}/part-$(printf '%02d' "$index")"
+      start=$((index * base_size))
+      if [ "$index" -eq 3 ]; then end=$((total - 1)); else end=$((start + base_size - 1)); fi
+      got_range="$(tr -d '\r' <"${part}.headers" | awk 'tolower($1) == "content-range:" {print $2 " " $3}' | tail -n 1)"
+      [ "$(cat "${part}.status")" = "206" ] || failed=1
+      [ "$got_range" = "bytes ${start}-${end}/${total}" ] || failed=1
+      [ "$(wc -c <"$part" | tr -d ' ')" = "$((end - start + 1))" ] || failed=1
+      index=$((index + 1))
+    done
+  fi
+
+  if [ "$failed" = 0 ]; then
+    : >"$dest"
+    index=0
+    while [ "$index" -lt 4 ]; do
+      part="${parts_dir}/part-$(printf '%02d' "$index")"
+      cat "$part" >>"$dest" || failed=1
+      index=$((index + 1))
+    done
+    [ "$(wc -c <"$dest" | tr -d ' ')" = "$total" ] || failed=1
+  fi
+  rm -rf "$parts_dir"
+  trap - HUP INT TERM
+  if [ "$failed" != 0 ]; then
+    rm -f "$dest"
+    return 1
+  fi
+}
 
 checksum() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
@@ -80,6 +184,10 @@ checksum() {
   else err "need sha256sum or shasum"
   fi
 }
+
+# Tests source this standalone script to exercise the real downloader against
+# a local HTTP server without running the installation flow.
+[ "${MIHARI_INSTALL_TEST_MODE:-}" = "1" ] && return 0
 
 # Resolve bundle URL + expected sha256 + latest version.
 latest=""
@@ -140,7 +248,7 @@ workdir="${HOME}/Downloads/mihari-aio"
 mkdir -p "$workdir"
 archive="${workdir}/mihari-all-in-one-${platform}.tar.gz"
 info "下载 ${bundle_url} …"
-dl "$bundle_url" "$archive" || err "下载失败: $bundle_url"
+download_file_with_progress "$bundle_url" "$archive" || err "下载失败: $bundle_url"
 if [ -n "$want_sum" ]; then
   got="$(checksum "$archive")"
   [ "$got" = "$want_sum" ] || err "sha256 校验失败：期望 $want_sum，实际 $got。"

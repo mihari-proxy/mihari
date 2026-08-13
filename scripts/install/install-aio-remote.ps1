@@ -41,10 +41,9 @@ function Confirm($p) {
   $ans = Read-Host ((FixEncoding $p) + ' [y/N]')
   return $ans -match '^[Yy]'
 }
-# Download with a Write-Progress bar. HttpClient streaming keeps FixEncoding in
-# main scope (event-based WebClient callbacks can't reach it reliably) and shows
-# downloaded/total MB + percent. Replaces IWR -OutFile, which has no progress.
-function Download-FileWithProgress($url, $dest) {
+# Stream one response to disk with progress. This is also the compatibility
+# fallback when the origin does not provide a reliable byte-range contract.
+function Download-SingleFileWithProgress($url, $dest) {
   Add-Type -AssemblyName System.Net.Http
   $client = New-Object System.Net.Http.HttpClient
   $client.Timeout = [TimeSpan]::FromMinutes(30)
@@ -69,8 +68,114 @@ function Download-FileWithProgress($url, $dest) {
         }
       }
     } finally { $outStream.Dispose() }
-  } finally { $client.Dispose() }
+  } finally {
+    if ($resp) { $resp.Dispose() }
+    $client.Dispose()
+  }
   Write-Progress -Activity (FixEncoding '下载 mihari 安装包') -Completed
+}
+
+# Return the remote length only when a bytes=0-0 probe proves strict Range
+# support. A 200 response (or an incomplete Content-Range) deliberately selects
+# the single-stream compatibility path.
+function Get-RangeDownloadLength($url) {
+  Add-Type -AssemblyName System.Net.Http
+  $client = New-Object System.Net.Http.HttpClient
+  $client.Timeout = [TimeSpan]::FromSeconds(30)
+  $request = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Get, $url)
+  $request.Headers.Range = New-Object System.Net.Http.Headers.RangeHeaderValue(0, 0)
+  try {
+    $response = $client.SendAsync($request, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+    if ([int]$response.StatusCode -ne 206) { return 0L }
+    $range = $response.Content.Headers.ContentRange
+    if (-not $range -or $range.From -ne 0 -or $range.To -ne 0 -or -not $range.Length -or $range.Length -le 0) { return 0L }
+    return [long]$range.Length
+  } catch {
+    return 0L
+  } finally {
+    if ($response) { $response.Dispose() }
+    $request.Dispose()
+    $client.Dispose()
+  }
+}
+
+function Download-FileWithProgress($url, $dest) {
+  $total = Get-RangeDownloadLength $url
+  $segments = 4
+  if ($total -lt $segments) {
+    Download-SingleFileWithProgress $url $dest
+    return
+  }
+
+  $partsDir = $dest + '.parts-' + [guid]::NewGuid().ToString('N')
+  New-Item -ItemType Directory -Path $partsDir | Out-Null
+  $pool = [runspacefactory]::CreateRunspacePool(1, $segments)
+  $pool.Open()
+  $workers = @()
+  $workerScript = {
+    param($DownloadUrl, $PartPath, [long]$Start, [long]$End, [long]$WholeLength)
+    Add-Type -AssemblyName System.Net.Http
+    $client = New-Object System.Net.Http.HttpClient
+    $client.Timeout = [TimeSpan]::FromMinutes(30)
+    $request = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Get, $DownloadUrl)
+    $request.Headers.Range = New-Object System.Net.Http.Headers.RangeHeaderValue($Start, $End)
+    try {
+      $response = $client.SendAsync($request, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+      $range = $response.Content.Headers.ContentRange
+      if ([int]$response.StatusCode -ne 206 -or -not $range -or $range.From -ne $Start -or $range.To -ne $End -or $range.Length -ne $WholeLength) {
+        throw "invalid range response for bytes=$Start-$End"
+      }
+      $input = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+      $output = [IO.File]::Create($PartPath)
+      try { $input.CopyTo($output) } finally { $output.Dispose(); $input.Dispose() }
+      $expected = $End - $Start + 1
+      if ((Get-Item -LiteralPath $PartPath).Length -ne $expected) {
+        throw "invalid segment length for bytes=$Start-$End"
+      }
+    } finally {
+      if ($response) { $response.Dispose() }
+      $request.Dispose()
+      $client.Dispose()
+    }
+  }
+
+  try {
+    $baseSize = [long][Math]::Floor($total / $segments)
+    for ($index = 0; $index -lt $segments; $index++) {
+      $start = $index * $baseSize
+      $end = if ($index -eq $segments - 1) { $total - 1 } else { $start + $baseSize - 1 }
+      $partPath = Join-Path $partsDir ('part-{0:D2}' -f $index)
+      $powershell = [powershell]::Create()
+      $powershell.RunspacePool = $pool
+      [void]$powershell.AddScript($workerScript).AddArgument($url).AddArgument($partPath).AddArgument($start).AddArgument($end).AddArgument($total)
+      $workers += [pscustomobject]@{ PowerShell = $powershell; Handle = $powershell.BeginInvoke(); Path = $partPath }
+    }
+
+    while (($workers | Where-Object { -not $_.Handle.IsCompleted }).Count -gt 0) {
+      $read = [long](($workers | ForEach-Object { if (Test-Path -LiteralPath $_.Path) { (Get-Item -LiteralPath $_.Path).Length } else { 0 } } | Measure-Object -Sum).Sum)
+      $pct = [int]($read * 100 / $total)
+      Write-Progress -Activity (FixEncoding '下载 mihari 安装包') -Status (FixEncoding ('已下载 {0:N1} / {1:N1} MB' -f ($read/1MB), ($total/1MB))) -PercentComplete $pct
+      Start-Sleep -Milliseconds 100
+    }
+    foreach ($worker in $workers) { $worker.PowerShell.EndInvoke($worker.Handle) | Out-Null }
+
+    $output = [IO.File]::Create($dest)
+    try {
+      foreach ($worker in $workers) {
+        $input = [IO.File]::OpenRead($worker.Path)
+        try { $input.CopyTo($output) } finally { $input.Dispose() }
+      }
+    } finally { $output.Dispose() }
+    if ((Get-Item -LiteralPath $dest).Length -ne $total) { throw 'merged download length mismatch' }
+  } catch {
+    Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
+    throw
+  } finally {
+    foreach ($worker in $workers) { $worker.PowerShell.Dispose() }
+    $pool.Dispose()
+    Remove-Item -LiteralPath $partsDir -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Progress -Activity (FixEncoding '下载 mihari 安装包') -Completed
+  }
 }
 # Print a short install plan + what's affected, then confirm. Runs once before the
 # download, unifying the per-branch confirms that used to scatter the version block.
@@ -88,6 +193,10 @@ function Show-InstallPlan {
   Write-Host (FixEncoding "  不影响   : mihari.yaml / 订阅 / 面板状态 等用户配置")
   Write-Host ''
 }
+
+# Tests dot-source this standalone script to exercise the real downloader
+# against a local HTTP server without running the installation flow.
+if ($env:MIHARI_INSTALL_TEST_MODE -eq '1') { return }
 
 # Detect platform (mirrors install.ps1).
 $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
