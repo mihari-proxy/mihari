@@ -318,7 +318,14 @@ func (m *Model) View() string {
 	listTitle := ui.FormatRulesTitle(rulesView, listN)
 	list := ui.RenderBorderedSection(m.theme, listTitle, strings.Join(listLines, "\n"), inner)
 
-	content := controls + "\n" + list
+	listPos, listFocused := 0, m.focus.kind == focusRow && listN > 0
+	if listFocused {
+		listPos = m.focus.row + 1
+	}
+	listIndicator := m.theme.Muted.Render(ui.FormatPositionIndicator(listFocused, listPos, listN))
+	listStatus := ui.PadCell(listIndicator, inner, ui.AlignRight)
+
+	content := controls + "\n" + list + "\n" + listStatus
 	if m.detail != nil {
 		content += "\n\n" + m.theme.Dialog.Render(m.theme.Title.Render(m.detail.title)+"\n\n"+m.detail.body+"\n\n"+ui.EscCloseHint)
 	}
@@ -377,10 +384,11 @@ func (m *Model) sectionTextWidth() int {
 }
 
 // rulesChrome is the page chrome outside table rows: Controls section
-// (top-title + control strip + search + bottom = 4) plus List section
-// (top-title + bottom = 2) — the header/rule lines are part of the returned
-// lines; 9 leaves one spare row at the tightest layouts.
-const rulesChrome = 9
+// (top-title + control strip + search + bottom = 4), List section (top-title +
+// bottom = 2), the header/rule lines returned by render* (= 2), plus the
+// position indicator line below the list (= 1) — 9 accounted, 10 leaves one
+// spare row at the tightest layouts.
+const rulesChrome = 10
 
 func (m *Model) renderRules() []string {
 	// Fit columns inside the list section body (focus marker budget).

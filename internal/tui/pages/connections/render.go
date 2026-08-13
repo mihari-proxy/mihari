@@ -31,10 +31,21 @@ func (m *Model) View() string {
 		listN = closedN
 	}
 	listTitle := ui.FormatConnectionsTitle(activeMode, listN)
-	listBody := clipLines(strings.Join(m.tableLines(), "\n"), textW)
+	rows := m.visibleRows()
+	listBody := clipLines(strings.Join(m.tableLines(rows), "\n"), textW)
 	list := ui.RenderBorderedSection(m.theme, listTitle, listBody, inner)
 
-	base := controls + "\n" + list
+	total := len(rows)
+	pos, onRow := 0, false
+	if m.focus.kind == focusRow {
+		if idx := rowIndex(rows, m.focus.rowID); idx >= 0 && total > 0 {
+			pos, onRow = idx+1, true
+		}
+	}
+	indicator := m.theme.Muted.Render(ui.FormatPositionIndicator(onRow, pos, total))
+	listStatus := ui.PadCell(indicator, inner, ui.AlignRight)
+
+	base := controls + "\n" + list + "\n" + listStatus
 	if m.columnsOpen {
 		return m.columnsView()
 	}
@@ -45,13 +56,13 @@ func (m *Model) View() string {
 }
 
 // connectionChrome is the page chrome outside table rows: Controls section
-// (top + title + control strip + search + bottom = 5) plus List section
-// (top + title + header + rule + bottom = 5 minus the header/rule lines that
-// are part of tableLines itself; effective 9).
-const connectionChrome = 9
+// (top border + control strip + search bar + bottom border = 4), List section
+// (top border + header + rule + bottom border = 4), plus the position indicator
+// line below the list (= 1) — 9 accounted, 10 leaves one spare row at the
+// tightest layouts.
+const connectionChrome = 10
 
-func (m *Model) tableLines() []string {
-	rows := m.visibleRows()
+func (m *Model) tableLines(rows []protocol.Connection) []string {
 	header, rule := m.connectionHeader()
 	lines := []string{header, rule}
 	if len(rows) == 0 {
