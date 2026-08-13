@@ -11,7 +11,7 @@ import (
 )
 
 func TestExecute_NoArgsNonInteractiveRejectsTUI(t *testing.T) {
-	exit := Execute(context.Background(), nil, io.Discard, io.Discard, Dependencies{})
+	exit := Execute(context.Background(), []string{}, io.Discard, io.Discard, Dependencies{})
 	if exit != ExitUsage {
 		t.Fatalf("exit=%d", exit)
 	}
@@ -19,7 +19,7 @@ func TestExecute_NoArgsNonInteractiveRejectsTUI(t *testing.T) {
 
 func TestExecute_NoArgsInteractiveRunsTUI(t *testing.T) {
 	called := false
-	exit := Execute(context.Background(), nil, io.Discard, io.Discard, Dependencies{
+	exit := Execute(context.Background(), []string{}, io.Discard, io.Discard, Dependencies{
 		Interactive: true,
 		RunTUI: func(context.Context) error {
 			called = true
