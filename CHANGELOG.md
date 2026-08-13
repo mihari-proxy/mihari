@@ -6,6 +6,8 @@
 
 ### Added
 
+- System 页与 daemon 可在 stable / alpha 通道间切换 mihomo 核心（#42）
+
 ### Fixed
 
 ## [v0.4.1] - 2026-08-12

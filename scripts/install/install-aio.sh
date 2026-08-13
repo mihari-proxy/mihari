@@ -4,9 +4,10 @@
 #   sh install-aio.sh [bundle_dir]      (bundle_dir defaults to this script's dir)
 #
 # Bundle layout (produced by scripts/build-all-in-one):
-#   mihari            -> $BIN_DIR/mihari
-#   data/bin/mihomo   -> $MIHARI_DATA/bin/mihomo      (overwrite)
-#   data/geoip/*.mmdb -> $MIHARI_DATA/geoip/*.mmdb    (overwrite)
+#   mihari                 -> $BIN_DIR/mihari
+#   data/bin/mihomo        -> $MIHARI_DATA/bin/mihomo         (overwrite)
+#   data/bin/core-channel  -> $MIHARI_DATA/bin/core-channel   (overwrite if present)
+#   data/geoip/*.mmdb      -> $MIHARI_DATA/geoip/*.mmdb       (overwrite)
 #
 # Never touches: mihari.yaml, subscriptions/, control.token, onboarding.json,
 # logs/, web/ (user-private config and panel state stay intact).
@@ -65,6 +66,9 @@ $SUDO install -m 0755 "$bundle_dir/mihari" "$mihari_bin"
 mkdir -p "$DATA_DIR/bin" "$DATA_DIR/geoip"
 info "覆盖 mihomo 核心与 GeoIP 到 $DATA_DIR"
 install -m 0755 "$bundle_dir/data/bin/mihomo" "$DATA_DIR/bin/mihomo"
+if [ -f "$bundle_dir/data/bin/core-channel" ]; then
+  install -m 0644 "$bundle_dir/data/bin/core-channel" "$DATA_DIR/bin/core-channel"
+fi
 install -m 0644 "$bundle_dir/data/geoip/GeoLite2-Country.mmdb" "$DATA_DIR/geoip/GeoLite2-Country.mmdb"
 install -m 0644 "$bundle_dir/data/geoip/GeoLite2-ASN.mmdb" "$DATA_DIR/geoip/GeoLite2-ASN.mmdb"
 

@@ -38,6 +38,8 @@ type SubscriptionState struct {
 type CoreState struct {
 	Status      string
 	Version     string
+	Channel     string
+	AlphaSHA    string
 	PID         int
 	Restarts    uint64
 	LastError   string

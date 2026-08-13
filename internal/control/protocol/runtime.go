@@ -19,6 +19,7 @@ type CoreStatus struct {
 	// the runtime exposes local-core detection (design §4.3).
 	LocalReady   bool   `json:"localReady,omitempty"`
 	LocalVersion string `json:"localVersion,omitempty"`
+	Channel      string `json:"channel,omitempty"`
 }
 
 type ProxyGroup struct {
@@ -114,6 +115,7 @@ type MutationRequest struct {
 	OperationID string  `json:"operation_id"`
 	IfRevision  *uint64 `json:"if_revision,omitempty"`
 	Source      string  `json:"source,omitempty"` // request origin; empty defaults to "control" (normalized by handlers)
+	Channel     *string `json:"channel,omitempty"`
 }
 
 type ProxySelectionRequest struct {
@@ -137,6 +139,7 @@ type CoreInstallResult struct {
 	Version  string `json:"version"`
 	Updated  bool   `json:"updated"`
 	Revision uint64 `json:"revision"`
+	Channel  string `json:"channel,omitempty"`
 }
 
 type StreamEvent struct {

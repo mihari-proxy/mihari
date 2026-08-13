@@ -12,6 +12,16 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 - 守护进程可以安装、校验、托管、查询并重启 mihomo,同时将控制器保持在内环回。
 - 守护进程还负责订阅持久化、有界的自动刷新、校验过的配置生成、重载回滚与离线配置切换。
 - 控制面新增只读端点 `GET /v1/service/status`,返回 mihari 自身的 OS 服务注册状态(`running`/`stopped`/`not_installed`/`unknown`);`GET /v1/core` 增加可选 `localReady`/`localVersion` 字段反映本地 core 就绪。两者均为向后兼容增量,不改变现有协议字段、onboarding `Complete` 契约或持久化格式。
+- `/v1` 的 `CoreStatus`、`CoreInstallResult` 增加可选 `channel`;`MutationRequest` 增加可选 `channel` 以显式指定本次安装通道。均为向后兼容增量。
+
+## 核心安装
+
+守护进程通过同一条下载、校验、替换链路安装 mihomo,并支持 `stable` 与 `alpha` 两个通道:
+
+- `stable` 从 GitHub `/releases/latest` 取当前稳定版;`alpha` 从固定滚动 tag `Prerelease-Alpha` 取预览版。
+- 展示与协议里的 Version 永远来自 `ParseVersion(mihomo -v)`:稳定版为 semver(如 `v1.19.x`),alpha 为 `alpha-{sha}`(实测 `-v` 形如 `Mihomo Meta alpha-dd7bc4c ...`,不是 `v1.19.x`)。GitHub tag `Prerelease-Alpha` 从不作为版本显示或写入 Version。
+- 本次安装意图随请求进入安装链路;`settings.core-channel` 只在 Commit 成功后写入,表示上次成功安装的通道。切换失败或未提交时,持久化通道与界面仍为旧值。
+- all-in-one 包在 `data/bin/core-channel` 写入 sidecar(第 1 行通道,第 2 行 stamp)。安装器覆盖 sidecar,不改 `mihari.yaml`;守护进程仅在 stamp 变化时把打包通道写入 settings,避免旧 sidecar 覆盖用户后来在 System 页切换的通道。
 
 ## TUI
 
@@ -24,6 +34,7 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 - Setup 审查页汇总端口(改端口且守护进程报告需重启时标注「需重启生效」)/ core 来源与版本(本地已有/新装/安装失败)/ 订阅 / GeoIP / mihari 服务注册状态(经 `GET /v1/service/status` 拉取);跳过项如实标注。各步结果在命令闭包内回写 Model,依赖 Bubble Tea 的 cmd→channel→Update happens-before 保证。
 - System 页面通过与 `mihari service` 相同的本地服务适配器管理 OS 服务(安装/卸载/启动/停止/重启/状态);这些操作要求进程已经提权,且不经过守护进程控制协议。当守护进程通告相应能力时,System 页面显示实时的系统代理与 TUN 状态,并通过本地控制 API 切换它们(开启外部代理需要强制确认;Mihari 从不清除其他产品的代理)。
 - System 页面还在进入时以只读方式检查 Mihari 的最新 GitHub Release,并用 `当前版本 · 最新版本 available` 或 `当前版本 · Up to date` 展示结果。确认更新后,本地 updater 在控制协议之外替换 Mihari 可执行文件并尝试重启已安装服务;该写操作要求 TUI 进程已经具备管理员/root 权限,不会自动触发 UAC 或 sudo。旧 Bubble Tea 程序先退出并恢复终端,随后平台适配器从已替换的二进制自动进入新 TUI。
+- System 页面的 `Core Channel` 行可在 `stable` / `alpha` 之间切换;切换后由守护进程按新通道重装核心。版本行显示 `ParseVersion(mihomo -v)` 的身份 token,从不显示 `Prerelease-Alpha`。
 - 规则顺序从不排序;onboarding、系统、provider、订阅、面板和浏览器变更都经由守护进程变更协调器,破坏性或大范围操作需要确认。
 
 ## Web 网关

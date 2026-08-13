@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -635,6 +636,165 @@ func TestInstallUsesCurrentVersionAndSkipsRestartWhenUnchanged(t *testing.T) {
 	}
 }
 
+func TestInstallCoalescesSettingsChannelWhenOperationChannelNil(t *testing.T) {
+	requestSeen := make(chan core.InstallRequest, 1)
+	installer := &fakeInstaller{candidate: &fakeCandidate{version: "v1.19.0"}}
+	installer.prepare = func(_ context.Context, request core.InstallRequest) (PreparedCore, error) {
+		requestSeen <- request
+		return installer.candidate, nil
+	}
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("a", 64)
+	settings.CoreChannel = "alpha"
+	manager := newTestManager(Options{Installer: installer, Settings: settings, Supervisor: &fakeSupervisor{}})
+	snapshot := manager.store.Load()
+	snapshot.Core.AlphaSHA = "e183c58"
+	manager.store.Store(snapshot)
+
+	if _, err := manager.Install(context.Background(), Operation{ID: "coalesce-settings", Source: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	request := <-requestSeen
+	if request.Channel != "alpha" {
+		t.Fatalf("request.Channel=%q want alpha", request.Channel)
+	}
+	if request.AlphaSHA != "e183c58" {
+		t.Fatalf("request.AlphaSHA=%q want e183c58", request.AlphaSHA)
+	}
+}
+
+func TestInstallDoesNotPersistChannelWhenPrepareFails(t *testing.T) {
+	requestSeen := make(chan core.InstallRequest, 1)
+	installer := &fakeInstaller{}
+	installer.prepare = func(_ context.Context, request core.InstallRequest) (PreparedCore, error) {
+		requestSeen <- request
+		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "prepare failed"}
+	}
+	settings, settingsPath := persistedChannelSettings(t, "stable")
+	manager := newTestManager(Options{Installer: installer, Settings: settings, SettingsPath: settingsPath})
+	channel := "alpha"
+	_, err := manager.Install(context.Background(), Operation{ID: "switch-fail", Source: "test", Channel: &channel})
+	if err == nil {
+		t.Fatal("expected prepare error")
+	}
+	request := <-requestSeen
+	if request.Channel != "alpha" {
+		t.Fatalf("request.Channel=%q want alpha", request.Channel)
+	}
+	loaded, err := config.Load(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.CoreChannel != "stable" {
+		t.Fatalf("settings.CoreChannel=%q want stable", loaded.CoreChannel)
+	}
+	if got := manager.store.Load().Core.Channel; got != "" {
+		t.Fatalf("store.Core.Channel=%q want empty", got)
+	}
+}
+
+func TestInstallCommitPersistsChannelAndClearsAlphaSHAOnStable(t *testing.T) {
+	installer := &fakeInstaller{candidate: &fakeCandidate{
+		version:  "v1.19.0",
+		alphaSHA: "e183c58",
+	}}
+	settings, settingsPath := persistedChannelSettings(t, "stable")
+	manager := newTestManager(Options{
+		Installer: installer, Settings: settings, SettingsPath: settingsPath, Supervisor: &fakeSupervisor{},
+	})
+	alpha := "alpha"
+	if _, err := manager.Install(context.Background(), Operation{ID: "alpha-install", Source: "test", Channel: &alpha}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.CoreChannel != "alpha" {
+		t.Fatalf("settings.CoreChannel=%q want alpha", loaded.CoreChannel)
+	}
+	core := manager.store.Load().Core
+	if core.Version != "v1.19.0" || core.Channel != "alpha" || core.AlphaSHA != "e183c58" {
+		t.Fatalf("after alpha install core=%#v", core)
+	}
+
+	installer.candidate = &fakeCandidate{version: "v1.19.1"}
+	stable := "stable"
+	if _, err := manager.Install(context.Background(), Operation{ID: "stable-install", Source: "test", Channel: &stable}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = config.Load(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.CoreChannel != "stable" {
+		t.Fatalf("settings.CoreChannel=%q want stable", loaded.CoreChannel)
+	}
+	core = manager.store.Load().Core
+	if core.Channel != "stable" || core.AlphaSHA != "" {
+		t.Fatalf("after stable install core=%#v", core)
+	}
+}
+
+func TestObservePreservesCoreChannelAndAlphaSHA(t *testing.T) {
+	installer := &fakeInstaller{candidate: &fakeCandidate{
+		version:  "v1.19.0",
+		alphaSHA: "e183c58",
+	}}
+	settings, settingsPath := persistedChannelSettings(t, "stable")
+	manager := newTestManager(Options{
+		Installer: installer, Settings: settings, SettingsPath: settingsPath, Supervisor: &fakeSupervisor{},
+	})
+	alpha := "alpha"
+	if _, err := manager.Install(context.Background(), Operation{ID: "alpha-install", Source: "test", Channel: &alpha}); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.Observe(supervisor.Observation{Status: supervisor.StatusRunning, PID: 4242})
+
+	core := manager.store.Load().Core
+	if core.Status != string(supervisor.StatusRunning) || core.PID != 4242 {
+		t.Fatalf("observe did not apply runtime fields: %#v", core)
+	}
+	if core.Version != "v1.19.0" || core.Channel != "alpha" || core.AlphaSHA != "e183c58" {
+		t.Fatalf("observe wiped identity: %#v", core)
+	}
+}
+
+func TestInstallRejectsNightlyChannelBeforePrepare(t *testing.T) {
+	installer := &fakeInstaller{candidate: &fakeCandidate{version: "v1.19.0"}}
+	settings, settingsPath := persistedChannelSettings(t, "stable")
+	manager := newTestManager(Options{Installer: installer, Settings: settings, SettingsPath: settingsPath})
+	nightly := "nightly"
+	_, err := manager.Install(context.Background(), Operation{ID: "nightly", Source: "test", Channel: &nightly})
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure {
+		t.Fatalf("err=%v", err)
+	}
+	if got := installer.calls.Load(); got != 0 {
+		t.Fatalf("Prepare called %d times", got)
+	}
+	loaded, err := config.Load(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.CoreChannel != "stable" {
+		t.Fatalf("settings.CoreChannel=%q want stable", loaded.CoreChannel)
+	}
+}
+
+func persistedChannelSettings(t *testing.T, channel string) (config.Settings, string) {
+	t.Helper()
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("a", 64)
+	settings.CoreChannel = channel
+	path := filepath.Join(t.TempDir(), "settings.yaml")
+	if err := config.Save(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	return settings, path
+}
+
 func TestMissingCoreStaysControllableAndStartsAfterInstall(t *testing.T) {
 	var exists atomic.Bool
 	supervisorStarted := make(chan struct{})
@@ -787,6 +947,7 @@ func (i *fakeInstaller) DetectVersion(ctx context.Context, binaryPath string) (s
 
 type fakeCandidate struct {
 	version    string
+	alphaSHA   string
 	notUpdated bool
 	commit     func() (core.InstallResult, error)
 	cleaned    atomic.Bool
@@ -800,7 +961,7 @@ func (c *fakeCandidate) Commit() (core.InstallResult, error) {
 	if c.commit != nil {
 		return c.commit()
 	}
-	return core.InstallResult{Version: c.version, Updated: !c.notUpdated}, nil
+	return core.InstallResult{Version: c.version, Updated: !c.notUpdated, AlphaSHA: c.alphaSHA}, nil
 }
 
 func (c *fakeCandidate) Cleanup() { c.cleaned.Store(true) }
@@ -1000,6 +1161,116 @@ func TestManagerInstallSetupSkipsNetworkWhenLocalCoreValid(t *testing.T) {
 	}
 	if got := installer.detectCalls.Load(); got != 1 {
 		t.Fatalf("detect calls=%d", got)
+	}
+}
+
+func TestManagerInstallSetupAppliesSidecarChannelWhenStampNew(t *testing.T) {
+	installer := &fakeInstaller{}
+	installer.detectVersion = func(context.Context, string) (string, error) {
+		return "v1.18.0", nil
+	}
+	installer.prepare = func(context.Context, core.InstallRequest) (PreparedCore, error) {
+		t.Fatal("Prepare must not be called when setup local core is valid")
+		return nil, nil
+	}
+
+	binDir := t.TempDir()
+	binaryPath := filepath.Join(binDir, "mihomo")
+	if err := os.WriteFile(binaryPath, []byte("placeholder"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "core-channel"), []byte("alpha\nalpha-e183c58\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, settingsPath := persistedChannelSettings(t, "stable")
+	manager := newTestManager(Options{Installer: installer, Settings: settings, SettingsPath: settingsPath})
+	manager.installRequest.BinaryPath = binaryPath
+	seeded := manager.store.Load()
+	seeded.Core.Status = "running"
+	seeded.Core.PID = 4242
+	seeded.Core.Restarts = 3
+	seeded.Core.AlphaSHA = "deadbeef"
+	manager.store.Store(seeded)
+	beforeRevision := manager.store.Load().Revision
+
+	result, err := manager.Install(context.Background(), Operation{ID: "setup-sidecar", Source: "setup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Version != "v1.18.0" || result.Updated {
+		t.Fatalf("result=%#v", result)
+	}
+	if got := installer.calls.Load(); got != 0 {
+		t.Fatalf("prepare calls=%d (setup must skip network)", got)
+	}
+	if manager.settings.CoreChannel != "alpha" || manager.settings.CoreChannelBundle != "alpha-e183c58" {
+		t.Fatalf("settings channel=%q bundle=%q", manager.settings.CoreChannel, manager.settings.CoreChannelBundle)
+	}
+	core := manager.store.Load().Core
+	if core.Channel != "alpha" {
+		t.Fatalf("store.Core.Channel=%q want alpha", core.Channel)
+	}
+	if core.Version != "v1.18.0" {
+		t.Fatalf("store.Core.Version=%q want v1.18.0", core.Version)
+	}
+	if core.Status != "running" || core.PID != 4242 || core.Restarts != 3 || core.AlphaSHA != "deadbeef" {
+		t.Fatalf("setup sidecar store write must preserve existing Core fields: %#v", core)
+	}
+	if got := manager.store.Load().Revision; got != beforeRevision+1 {
+		t.Fatalf("revision=%d want %d (coordinator.Do must increment)", got, beforeRevision+1)
+	}
+	loaded, err := config.Load(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.CoreChannel != "alpha" || loaded.CoreChannelBundle != "alpha-e183c58" {
+		t.Fatalf("persisted settings=%#v", loaded)
+	}
+}
+
+func TestManagerInstallSetupDoesNotRevertTUIChannelWhenSidecarStampMatches(t *testing.T) {
+	installer := &fakeInstaller{}
+	installer.detectVersion = func(context.Context, string) (string, error) {
+		return "v1.18.0", nil
+	}
+	installer.prepare = func(context.Context, core.InstallRequest) (PreparedCore, error) {
+		t.Fatal("Prepare must not be called when setup local core is valid")
+		return nil, nil
+	}
+
+	binDir := t.TempDir()
+	binaryPath := filepath.Join(binDir, "mihomo")
+	if err := os.WriteFile(binaryPath, []byte("placeholder"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "core-channel"), []byte("alpha\nalpha-e183c58\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, settingsPath := persistedChannelSettings(t, "stable")
+	settings.CoreChannelBundle = "alpha-e183c58"
+	if err := config.Save(settingsPath, settings); err != nil {
+		t.Fatal(err)
+	}
+	manager := newTestManager(Options{Installer: installer, Settings: settings, SettingsPath: settingsPath})
+	manager.installRequest.BinaryPath = binaryPath
+
+	if _, err := manager.Install(context.Background(), Operation{ID: "setup-sidecar-stamp", Source: "setup"}); err != nil {
+		t.Fatal(err)
+	}
+	if manager.settings.CoreChannel != "stable" {
+		t.Fatalf("settings.CoreChannel=%q want stable", manager.settings.CoreChannel)
+	}
+	if got := manager.store.Load().Core.Channel; got == "alpha" {
+		t.Fatalf("store.Core.Channel=%q must not revert to alpha", got)
+	}
+	loaded, err := config.Load(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.CoreChannel != "stable" || loaded.CoreChannelBundle != "alpha-e183c58" {
+		t.Fatalf("persisted settings=%#v", loaded)
 	}
 }
 

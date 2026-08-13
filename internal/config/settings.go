@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -25,6 +26,8 @@ type Settings struct {
 	ControllerSecret   string         `yaml:"controller-secret"`
 	SystemProxyDesired bool           `yaml:"system-proxy-desired,omitempty"`
 	Tun                map[string]any `yaml:"tun,omitempty"` // managed block; empty = unmanaged
+	CoreChannel        string         `yaml:"core-channel,omitempty"`
+	CoreChannelBundle  string         `yaml:"core-channel-bundle,omitempty"`
 }
 
 func Defaults() Settings {
@@ -33,6 +36,7 @@ func Defaults() Settings {
 		MixedAddr:      "127.0.0.1:9190",
 		ControllerAddr: "127.0.0.1:9090",
 		WebAddr:        "127.0.0.1:9191",
+		CoreChannel:    "stable",
 	}
 }
 
@@ -74,9 +78,20 @@ func LoadOrCreate(path string) (Settings, error) {
 
 // LoadOrCreateResult loads settings or creates them and reports whether this call created the file.
 func LoadOrCreateResult(path string) (Settings, bool, error) {
+	return loadOrCreate(path, "")
+}
+
+// LoadOrCreateWithSidecar loads settings or creates them, applying a packaged
+// core-channel sidecar. On first create the sidecar is applied before the first
+// Save so the file is never written as a stable-only default and then rewritten.
+func LoadOrCreateWithSidecar(path, sidecar string) (Settings, bool, error) {
+	return loadOrCreate(path, sidecar)
+}
+
+func loadOrCreate(path, sidecar string) (Settings, bool, error) {
 	settings, err := loadSettings(path)
 	if err == nil {
-		return settings, false, nil
+		return persistSidecarIfChanged(path, settings, sidecar)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return Settings{}, false, err
@@ -95,7 +110,7 @@ func LoadOrCreateResult(path string) (Settings, bool, error) {
 	}()
 	settings, err = loadSettings(path)
 	if err == nil {
-		return settings, false, nil
+		return persistSidecarIfChanged(path, settings, sidecar)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return Settings{}, false, err
@@ -106,10 +121,33 @@ func LoadOrCreateResult(path string) (Settings, bool, error) {
 		return Settings{}, false, fmt.Errorf("generate controller secret: %w", err)
 	}
 	settings.ControllerSecret = hex.EncodeToString(secret[:])
+	if _, err := applySidecarIfPresent(&settings, sidecar); err != nil {
+		return Settings{}, false, err
+	}
 	if err := Save(path, settings); err != nil {
 		return Settings{}, false, err
 	}
 	return settings, true, nil
+}
+
+func persistSidecarIfChanged(path string, settings Settings, sidecar string) (Settings, bool, error) {
+	changed, err := applySidecarIfPresent(&settings, sidecar)
+	if err != nil {
+		return Settings{}, false, err
+	}
+	if changed {
+		if err := Save(path, settings); err != nil {
+			return Settings{}, false, err
+		}
+	}
+	return settings, false, nil
+}
+
+func applySidecarIfPresent(settings *Settings, sidecar string) (bool, error) {
+	if sidecar == "" {
+		return false, nil
+	}
+	return ApplyCoreChannelSidecar(settings, sidecar)
 }
 
 // loadSettings loads settings, retrying while the file exists on disk but is
@@ -195,7 +233,40 @@ func (s Settings) Validate() error {
 	if err := validateTun(s.Tun); err != nil {
 		return err
 	}
+	switch s.CoreChannel {
+	case "", "stable", "alpha":
+	default:
+		return dataError("invalid core channel")
+	}
 	return nil
+}
+
+// ApplyCoreChannelSidecar applies a packaged core-channel sidecar to settings.
+// A missing or invalid sidecar is ignored. An unchanged stamp is a no-op so a
+// later TUI channel switch is not reverted by an old sidecar file.
+func ApplyCoreChannelSidecar(settings *Settings, sidecarPath string) (bool, error) {
+	raw, err := os.ReadFile(sidecarPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	lines := strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
+	if len(lines) < 2 {
+		return false, nil
+	}
+	channel := strings.TrimSpace(lines[0])
+	stamp := strings.TrimSpace(lines[1])
+	if stamp == "" || (channel != "stable" && channel != "alpha") {
+		return false, nil
+	}
+	if settings.CoreChannelBundle == stamp {
+		return false, nil
+	}
+	settings.CoreChannel = channel
+	settings.CoreChannelBundle = stamp
+	return true, nil
 }
 
 func validateTun(tun map[string]any) error {
