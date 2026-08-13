@@ -16,6 +16,10 @@ type Theme struct {
 	ColorInfo          color.Color
 	ColorMuted         color.Color
 	ColorSurfaceBorder color.Color
+	// ColorFocusBg is the row keyboard-focus background: a desaturated dim of
+	// accent that reads as a clear block in dense lists, replacing the
+	// low-contrast Reverse(true) highlight (issue #46).
+	ColorFocusBg color.Color
 	// ColorOnSolid is the foreground for solid-background chips (Done/Failed/Pending).
 	// Dark text keeps contrast on Success/Warning/Danger fills in 256-color terminals.
 	ColorOnSolid color.Color
@@ -60,6 +64,7 @@ func DefaultTheme() Theme {
 	info := lipgloss.Color("75")
 	surfaceBorder := lipgloss.Color("240")
 	muted := lipgloss.Color("245")
+	focusBg := lipgloss.Color("60")
 	onSolid := lipgloss.Color("0")
 
 	return Theme{
@@ -70,6 +75,7 @@ func DefaultTheme() Theme {
 		ColorInfo:          info,
 		ColorMuted:         muted,
 		ColorSurfaceBorder: surfaceBorder,
+		ColorFocusBg:       focusBg,
 		ColorOnSolid:       onSolid,
 
 		Rail:         lipgloss.NewStyle().Padding(0, 1),
@@ -83,7 +89,7 @@ func DefaultTheme() Theme {
 		Button:       lipgloss.NewStyle().Padding(0, 1),
 		ButtonActive: lipgloss.NewStyle().Bold(true).Foreground(accent).Padding(0, 1),
 		RowSelected:  lipgloss.NewStyle().Bold(true).Foreground(accent),
-		RowFocus:     lipgloss.NewStyle().Reverse(true),
+		RowFocus:     lipgloss.NewStyle().Background(focusBg),
 
 		Success: lipgloss.NewStyle().Foreground(success),
 		Warning: lipgloss.NewStyle().Foreground(warning),
