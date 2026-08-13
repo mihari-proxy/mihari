@@ -23,6 +23,7 @@ import (
 const (
 	rowDaemon            = "daemon"
 	rowCore              = "core"
+	rowCoreChannel      = "core-channel"
 	rowCoreUpdate        = "core-update"
 	rowCoreRestart       = "core-restart"
 	rowMihariUpdate      = "mihari-update"
@@ -194,6 +195,7 @@ type actionKind uint8
 const (
 	actionUpdate actionKind = iota
 	actionRestart
+	actionSwitchChannel
 )
 
 type serviceActionKind uint8
@@ -253,6 +255,8 @@ type actionStartMsg struct {
 	kind        actionKind
 	operationID string
 	revision    uint64
+	channel     string
+	source      string
 }
 
 type actionResultMsg struct {
@@ -696,7 +700,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		m.markRowOutcome(rowID, true, "")
 		revision := typed.restart.Revision
-		if typed.kind == actionUpdate {
+		if typed.kind == actionUpdate || typed.kind == actionSwitchChannel {
 			revision = typed.install.Revision
 		}
 		return m, tea.Batch(m.refresh(), m.loadCore(), func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: revision} }, m.rowSpinCmdIfNeeded())
@@ -763,6 +767,11 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 				return m, nil
 			}
 			return m, func() tea.Msg { return ui.RouteRequestMsg{Page: ui.PageSetup} }
+		case rowCoreChannel:
+			if m.client == nil || !m.mutationsEnabled || !m.hasCapability(protocol.CapabilityCore) {
+				return m, nil
+			}
+			return m, m.confirmSwitchCoreChannel(otherCoreChannel(m.core.Channel))
 		case rowCoreUpdate:
 			if m.client == nil || !m.mutationsEnabled || !m.hasCapability(protocol.CapabilityCore) {
 				return m, nil
@@ -966,6 +975,7 @@ func (m *Model) rows() []row {
 	rows = append(rows,
 		row{id: rowRunSetup, section: ui.DaemonSectionTitle, label: ui.RunSetupLabel, detail: ui.RunSetupDetail},
 		row{id: rowCore, section: ui.CoreSectionTitle, label: ui.MihomoCoreLabel, value: coreValue(m.theme, m.core, !m.mutationsEnabled), detail: core},
+		row{id: rowCoreChannel, section: ui.CoreSectionTitle, label: ui.CoreChannelLabel, value: coreChannelName(m.core.Channel), detail: ui.SwitchCoreChannelImpact},
 		row{id: rowCoreUpdate, section: ui.CoreSectionTitle, label: m.coreActionLabel(), value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.UpdateCoreImpact},
 		row{id: rowCoreRestart, section: ui.CoreSectionTitle, label: ui.RestartCoreLabel, value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.RestartCoreImpact},
 	)
@@ -1400,6 +1410,8 @@ func coreRowForKind(kind actionKind) string {
 		return rowCoreUpdate
 	case actionRestart:
 		return rowCoreRestart
+	case actionSwitchChannel:
+		return rowCoreChannel
 	default:
 		return ""
 	}
@@ -1453,6 +1465,8 @@ func rowProgressForAction(action ui.Action, coreMissing bool) (rowID, note strin
 			return rowCoreUpdate, ui.CoreProgressInstalling
 		}
 		return rowCoreUpdate, ui.CoreProgressUpdating
+	case ui.ActionSwitchCoreChannel:
+		return rowCoreChannel, ui.CoreProgressSwitching
 	case ui.ActionRestartCore:
 		return rowCoreRestart, ui.CoreProgressRestarting
 	case ui.ActionEnableSystemProxy, ui.ActionForceSystemProxy:
@@ -1699,6 +1713,25 @@ func (m *Model) tunRevision() uint64 {
 	return m.currentRevision()
 }
 
+func (m *Model) confirmSwitchCoreChannel(target string) tea.Cmd {
+	if coreChannelName(m.core.Channel) == target {
+		return nil
+	}
+	revision, operationID := m.currentRevision(), m.newOperationID()
+	return func() tea.Msg {
+		return ui.ActionIntentMsg{
+			Action: ui.ActionSwitchCoreChannel, Page: ui.PageSystem, Capability: protocol.CapabilityCore,
+			Key:   "system:" + string(ui.ActionSwitchCoreChannel),
+			Title: ui.SwitchCoreChannelTitle, Object: ui.MihomoCoreLabel,
+			Impact: ui.SwitchCoreChannelImpact, Rollback: ui.SwitchCoreChannelRollback,
+			Execute: m.runAction(actionStartMsg{
+				kind: actionSwitchChannel, operationID: operationID, revision: revision,
+				channel: target, source: "channel-switch",
+			}),
+		}
+	}
+}
+
 func (m *Model) confirmAction(kind actionKind) tea.Cmd {
 	revision, operationID := m.currentRevision(), m.newOperationID()
 	title, object, impact, rollback := ui.UpdateCoreTitle, ui.MihomoCoreLabel, ui.UpdateCoreImpact, ui.UpdateCoreRollback
@@ -1751,8 +1784,12 @@ func (m *Model) tunActionLabel() string {
 func (m *Model) runAction(start actionStartMsg) tea.Cmd {
 	return func() tea.Msg {
 		revision := start.revision
-		request := protocol.MutationRequest{OperationID: start.operationID, IfRevision: &revision}
-		if start.kind == actionUpdate {
+		request := protocol.MutationRequest{OperationID: start.operationID, IfRevision: &revision, Source: start.source}
+		if start.channel != "" {
+			channel := start.channel
+			request.Channel = &channel
+		}
+		if start.kind == actionUpdate || start.kind == actionSwitchChannel {
 			result, err := m.client.InstallCore(m.ctx, request)
 			return actionResultMsg{kind: start.kind, install: result, err: err}
 		}
@@ -1827,7 +1864,21 @@ func coreValue(theme ui.Theme, core protocol.CoreStatus, stale bool) string {
 		status += " · " + ui.StaleLabel
 	}
 	return ui.StatusDot(theme, tone, status) + "  " +
-		theme.Muted.Render(valueOr(core.Version, ui.UnknownLabel))
+		theme.Muted.Render(valueOr(core.Version, ui.UnknownLabel)+"  "+coreChannelName(core.Channel))
+}
+
+func coreChannelName(channel string) string {
+	if strings.TrimSpace(channel) == "" {
+		return "stable"
+	}
+	return channel
+}
+
+func otherCoreChannel(channel string) string {
+	if coreChannelName(channel) == "alpha" {
+		return "stable"
+	}
+	return "alpha"
 }
 
 // proxyTone derives the system-proxy status tone: a foreign observer or a

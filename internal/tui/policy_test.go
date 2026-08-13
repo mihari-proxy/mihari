@@ -10,7 +10,7 @@ import (
 func TestConfirmationPolicy(t *testing.T) {
 	want := map[Action]bool{
 		DeleteSubscription: true, CloseAllConnections: true, UpdateAllProviders: true, RefreshAllSubscriptions: true,
-		RollbackPanel: true, RestartCore: true, UpdateCore: true, ApplyEndpointChange: true,
+		RollbackPanel: true, RestartCore: true, UpdateCore: true, SwitchCoreChannel: true, ApplyEndpointChange: true,
 		SelectProxy: false, CloseConnection: false, RefreshSubscription: false, UpdateProvider: false,
 		InstallPanel: false, UpdatePanel: false, ActivatePanel: false, OpenWebGUI: false,
 		UninstallPanel: true, ReinstallPanel: true,
@@ -32,6 +32,18 @@ func TestConfirmationPolicy(t *testing.T) {
 	}
 	if !RequiresDaemon(UpdateCore) {
 		t.Fatal("core update should require daemon connection")
+	}
+}
+
+func TestCoreChannelPolicyRequiresConfirmationAndDaemon(t *testing.T) {
+	if !knownAction(SwitchCoreChannel) {
+		t.Fatal("core channel switch must be registered")
+	}
+	if !RequiresConfirmation(SwitchCoreChannel) {
+		t.Fatal("core channel switch must require confirmation")
+	}
+	if !RequiresDaemon(SwitchCoreChannel) {
+		t.Fatal("core channel switch must require a daemon connection")
 	}
 }
 

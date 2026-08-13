@@ -11,6 +11,7 @@ const (
 	ActionRollbackPanel           Action = "rollback-panel"
 	ActionRestartCore             Action = "restart-core"
 	ActionUpdateCore              Action = "update-core"
+	ActionSwitchCoreChannel       Action = "switch-core-channel"
 	ActionUpdateMihari            Action = "update-mihari"
 	ActionApplyEndpointChange     Action = "apply-endpoint-change"
 	ActionSelectProxy             Action = "select-proxy"

@@ -40,6 +40,9 @@ func TestView_SectionGroups(t *testing.T) {
 	if !strings.Contains(view, "v0.4.0") || !strings.Contains(view, "v1.19.0") {
 		t.Fatalf("status values missing:\n%s", view)
 	}
+	if !strings.Contains(view, ui.CoreChannelLabel) {
+		t.Fatalf("missing core channel row in Core section:\n%s", view)
+	}
 	// Borders are globally constant: every section uses the surface border
 	// (240) with an accent (63) title. The old per-section palette
 	// (info 75 / warning 214) must be gone — color now means status, not region.
