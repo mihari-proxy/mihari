@@ -201,3 +201,37 @@ func TestTunDisableSuccess(t *testing.T) {
 		t.Fatalf("status=%#v", status)
 	}
 }
+
+// TestTunStatusHumanConflictEvidence 验证 CLI 文本渲染把结构化冲突证据按信号分行展示
+// （对称 sysproxy 的 conflict exit 测试）。覆盖 printTunStatus 的 Other TUN / Other mihomo
+// 两条渲染分支——这是本次 feature 在 CLI 侧的用户可见证据出口。
+func TestTunStatusHumanConflictEvidence(t *testing.T) {
+	live := true
+	client := &fakeTunClient{status: protocol.TunStatus{
+		DesiredEnable: true,
+		LiveEnable:    &live,
+		Stack:         "gVisor",
+		Managed:       true,
+		Revision:      5,
+		Conflict: &protocol.TunConflict{
+			OtherTunInterfaces:   []string{"Wintun0", "Wintun1"},
+			OtherMihomoProcesses: []string{"mihomo (4321)", "mihomo (8765)"},
+		},
+	}}
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	exit := Execute(context.Background(), []string{"tun", "status"}, stdout, stderr, Dependencies{
+		TunClient: client,
+	})
+	if exit != ExitOK || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stderr=%q", exit, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"Other TUN: Wintun0, Wintun1",
+		"Other mihomo: 2",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout missing %q: %q", want, out)
+		}
+	}
+}

@@ -3,6 +3,8 @@ package system
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -974,6 +976,153 @@ func TestSystemTunToggleEnableDisableWithConfirm(t *testing.T) {
 	model = updated.(*Model)
 	if client.disableTunCalls != 1 || model.tun.DesiredEnable {
 		t.Fatalf("disable calls=%d desired=%v", client.disableTunCalls, model.tun.DesiredEnable)
+	}
+}
+
+// TestSystemTunConflictEnterRequestsForceOverwrite：前置路径——status 已携带其他
+// TUN 网卡证据（信号 A∧B），Enter 直接走 force 确认，Impact 列出接口名，Execute 带 Force。
+func TestSystemTunConflictEnterRequestsForceOverwrite(t *testing.T) {
+	client := &fakeClient{
+		tun: protocol.TunStatus{
+			Revision: 5, DesiredEnable: false, LiveEnable: boolPtr(false), Managed: false,
+			Conflict: &protocol.TunConflict{
+				OtherTunInterfaces:   []string{"Wintun0"},
+				OtherMihomoProcesses: []string{"mihomo (4321)"},
+			},
+		},
+	}
+	model := New(client, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityTUN}}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(true)
+	model.SetTun(client.tun)
+	model.focusID = rowTUNAction
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	_ = updated.(*Model)
+	if cmd == nil {
+		t.Fatal("missing force confirmation")
+	}
+	intent := cmd().(ui.ActionIntentMsg)
+	if intent.Action != ui.ActionForceTun {
+		t.Fatalf("intent=%#v", intent)
+	}
+	if !strings.Contains(intent.Impact, "Wintun0") {
+		t.Fatalf("force impact=%q", intent.Impact)
+	}
+	_ = intent.Execute()
+	if client.enableTunCalls != 1 || !client.lastTunMutation.Force {
+		t.Fatalf("mutation=%#v", client.lastTunMutation)
+	}
+}
+
+// TestSystemTunEnableConflictEntersForceConfirmPath：后置路径——enable 返回
+// CodeTunConflict，handleTunActionResult 捕获并弹出分情形 force 确认。
+func TestSystemTunEnableConflictEntersForceConfirmPath(t *testing.T) {
+	client := &fakeClient{
+		tun: protocol.TunStatus{Revision: 6, DesiredEnable: false, LiveEnable: boolPtr(false)},
+	}
+	model := New(client, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityTUN}}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(true)
+	model.SetTun(client.tun)
+	updated, cmd := model.Update(tunActionResultMsg{
+		kind: tunEnable,
+		err: protocol.APIError{
+			Code:    protocol.CodeTunConflict,
+			Message: "other TUN adapters detected",
+			// []any 模拟 HTTP/JSON 解码后的 Details（JSON 数组 → []any，非 []string），
+			// 验证 detailStrings 的 []any 分支，确保后置 force 确认不丢失接口证据。
+			Details: map[string]any{
+				"other_tun_interfaces":   []any{"Wintun0"},
+				"other_mihomo_processes": []any{"mihomo (4321)"},
+			},
+		},
+	})
+	model = updated.(*Model)
+	if cmd == nil {
+		t.Fatal("conflict should open force confirmation")
+	}
+	intent := cmd().(ui.ActionIntentMsg)
+	if intent.Action != ui.ActionForceTun || intent.Title != ui.ForceTunTitle {
+		t.Fatalf("intent=%#v", intent)
+	}
+	if !strings.Contains(intent.Impact, "Wintun0") {
+		t.Fatalf("impact=%q", intent.Impact)
+	}
+	result := intent.Execute()
+	model.Update(result)
+	if client.enableTunCalls != 1 || !client.lastTunMutation.Force {
+		t.Fatalf("force mutation=%#v calls=%d", client.lastTunMutation, client.enableTunCalls)
+	}
+}
+
+// TestSystemTunConflictSummaryShowsEvidence：status View 在 TUN 行展示分情形冲突证据（A∧B）。
+func TestSystemTunConflictSummaryShowsEvidence(t *testing.T) {
+	client := &fakeClient{
+		tun: protocol.TunStatus{
+			Revision: 7, DesiredEnable: false, LiveEnable: boolPtr(false), Managed: true, Stack: "gVisor",
+			Conflict: &protocol.TunConflict{
+				OtherTunInterfaces:   []string{"Wintun0"},
+				OtherMihomoProcesses: []string{"mihomo (4321)"},
+			},
+		},
+	}
+	model := New(client, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityTUN}}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(true)
+	model.SetTun(client.tun)
+	view := model.View()
+	if !strings.Contains(view, "Conflict") || !strings.Contains(view, "1 TUN") {
+		t.Fatalf("A∧B evidence missing in view=\n%s", view)
+	}
+}
+
+// TestTunConflictLabelClassifiesEvidence 覆盖 tunConflictLabel 的全部分支：nil/empty 返回
+// 空，A∧B 优先于单独信号，仅 A、仅 B 各自落到对应文案（设计决策 2 的分情形展示）。
+func TestTunConflictLabelClassifiesEvidence(t *testing.T) {
+	tests := []struct {
+		name     string
+		conflict *protocol.TunConflict
+		want     string
+	}{
+		{"nil", nil, ""},
+		{"empty", &protocol.TunConflict{}, ""},
+		{"A and B", &protocol.TunConflict{OtherTunInterfaces: []string{"Wintun0"}, OtherMihomoProcesses: []string{"mihomo (1)"}}, fmt.Sprintf(ui.TunConflictLabelAB, 1, 1)},
+		{"only A", &protocol.TunConflict{OtherTunInterfaces: []string{"Wintun0", "Wintun1"}}, fmt.Sprintf(ui.TunConflictLabelA, 2)},
+		{"only B", &protocol.TunConflict{OtherMihomoProcesses: []string{"mihomo (1)", "mihomo (2)"}}, fmt.Sprintf(ui.TunConflictLabelB, 2)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tunConflictLabel(tt.conflict); got != tt.want {
+				t.Fatalf("got=%q want=%q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDetailStringsHandlesDecodedArrays 覆盖 detailStrings 的 nil/缺 key/[]string/[]any/
+// 非 string 元素/异类型六条路径。[]any 分支正是经 HTTP/JSON 解码的后置 CodeTunConflict 路径
+// ——若只接受 []string，force 确认的 Impact 会丢失接口证据（code-reviewer 发现 #1 的回归保护）。
+func TestDetailStringsHandlesDecodedArrays(t *testing.T) {
+	tests := []struct {
+		name    string
+		details map[string]any
+		want    []string
+	}{
+		{"nil map", nil, nil},
+		{"missing key", map[string]any{}, nil},
+		{"nil value", map[string]any{"other_tun_interfaces": nil}, nil},
+		{"string slice (in-process)", map[string]any{"other_tun_interfaces": []string{"Wintun0"}}, []string{"Wintun0"}},
+		{"any slice (HTTP-decoded)", map[string]any{"other_tun_interfaces": []any{"Wintun0", "Wintun1"}}, []string{"Wintun0", "Wintun1"}},
+		{"any slice skips non-string items", map[string]any{"other_tun_interfaces": []any{"Wintun0", 42, true}}, []string{"Wintun0"}},
+		{"unrelated type", map[string]any{"other_tun_interfaces": "Wintun0"}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := detailStrings(tt.details, "other_tun_interfaces")
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("got=%v want=%v", got, tt.want)
+			}
+		})
 	}
 }
 

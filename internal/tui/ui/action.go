@@ -35,6 +35,7 @@ const (
 	ActionDisableSystemProxy      Action = "disable-system-proxy"
 	ActionEnableTun               Action = "enable-tun"
 	ActionDisableTun              Action = "disable-tun"
+	ActionForceTun                Action = "force-tun"
 )
 
 // RelaunchRequestMsg asks the root shell to exit and enter the replacement TUI.

@@ -8,6 +8,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/tundetect"
 )
 
 const defaultTunStack = "gVisor"
@@ -21,9 +22,11 @@ func (m *Manager) TunStatus(ctx context.Context) (protocol.TunStatus, error) {
 }
 
 // EnableTun persists managed TUN enable=true and applies it to the running core.
-func (m *Manager) EnableTun(ctx context.Context, op Operation) (protocol.TunStatus, error) {
+// When other TUN adapters are detected (routing conflict or loop risk), force
+// must be true to proceed. Disable is never gated (see mutateTun).
+func (m *Manager) EnableTun(ctx context.Context, op Operation, force bool) (protocol.TunStatus, error) {
 	result, err := m.doOperation(ctx, "tun-enable:"+op.ID, func() (any, error) {
-		return m.mutateTun(ctx, op, true)
+		return m.mutateTun(ctx, op, true, force)
 	})
 	if err != nil {
 		return protocol.TunStatus{}, err
@@ -34,7 +37,7 @@ func (m *Manager) EnableTun(ctx context.Context, op Operation) (protocol.TunStat
 // DisableTun persists managed TUN enable=false (block stays non-empty so subscription tun stays overridden).
 func (m *Manager) DisableTun(ctx context.Context, op Operation) (protocol.TunStatus, error) {
 	result, err := m.doOperation(ctx, "tun-disable:"+op.ID, func() (any, error) {
-		return m.mutateTun(ctx, op, false)
+		return m.mutateTun(ctx, op, false, false)
 	})
 	if err != nil {
 		return protocol.TunStatus{}, err
@@ -42,7 +45,22 @@ func (m *Manager) DisableTun(ctx context.Context, op Operation) (protocol.TunSta
 	return result.(protocol.TunStatus), nil
 }
 
-func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool) (protocol.TunStatus, error) {
+func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, force bool) (protocol.TunStatus, error) {
+	// Enable is gated when other TUN adapters are detected (signal A), mirroring the
+	// system-proxy foreign gate. Disable is intentionally NOT gated: tearing down this
+	// daemon's own mihomo tun block is non-destructive to other actors' TUN adapters.
+	if enable && !force {
+		if conflict := m.detectTunConflict(ctx); conflict != nil && len(conflict.OtherTunInterfaces) > 0 {
+			return protocol.TunStatus{}, protocol.APIError{
+				Code:    protocol.CodeTunConflict,
+				Message: "other TUN adapters detected; routing conflict or loop risk",
+				Details: map[string]any{
+					"other_tun_interfaces":   conflict.OtherTunInterfaces,
+					"other_mihomo_processes": conflict.OtherMihomoProcesses,
+				},
+			}
+		}
+	}
 	if err := m.lock(ctx); err != nil {
 		return protocol.TunStatus{}, err
 	}
@@ -156,6 +174,10 @@ func (m *Manager) buildTunStatus(ctx context.Context, lastError string) protocol
 		Stack:         tunStack(tun),
 		LastError:     lastError,
 	}
+	// Conflict evidence is always surfaced (even when only corroborating signal B is
+	// present) so status/CLI/TUI can display it; the enable gate keys off
+	// OtherTunInterfaces alone.
+	status.Conflict = m.detectTunConflict(ctx)
 
 	if m.controller == nil {
 		return status
@@ -259,4 +281,33 @@ func mapTunApplyError(err error) error {
 		Code:    protocol.CodeUpstreamFailure,
 		Message: "apply TUN configuration",
 	}
+}
+
+// detectTunConflict returns classified conflict evidence, or nil when detection
+// is unavailable or finds nothing. Detection failures are best-effort and never
+// block enable: nil means "no evidence", so an opaque detection error cannot
+// prevent a legitimate user action.
+func (m *Manager) detectTunConflict(ctx context.Context) *protocol.TunConflict {
+	if m.tunDetect == nil {
+		return nil
+	}
+	detection, err := m.tunDetect.Detect(ctx)
+	if err != nil {
+		return nil
+	}
+	return tundetect.Classify(detection, m.selfTunLiveActive(ctx))
+}
+
+// selfTunLiveActive reports whether mihomo's live tun.enable is true, so Classify
+// subtracts this daemon's own TUN adapter from the detected set.
+func (m *Manager) selfTunLiveActive(ctx context.Context) bool {
+	if m.controller == nil {
+		return false
+	}
+	configs, err := m.controller.Configs(ctx)
+	if err != nil {
+		return false
+	}
+	live, ok := liveTunEnable(configs)
+	return ok && live
 }

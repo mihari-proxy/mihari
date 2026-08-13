@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/spf13/cobra"
@@ -50,6 +51,7 @@ func newTunStatusCommand(dependencies Dependencies, options *runOptions) *cobra.
 
 func newTunEnableCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
 	var revision uint64
+	var force bool
 	command := &cobra.Command{
 		Use: "enable", Short: "Enable managed TUN via the daemon", Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
@@ -64,6 +66,7 @@ func newTunEnableCommand(dependencies Dependencies, options *runOptions) *cobra.
 			status, err := client.EnableTun(command.Context(), protocol.TunMutationRequest{
 				OperationID: id,
 				IfRevision:  revisionFlag(command, revision),
+				Force:       force,
 			})
 			if err != nil {
 				return classifyRuntimeError(err)
@@ -72,6 +75,7 @@ func newTunEnableCommand(dependencies Dependencies, options *runOptions) *cobra.
 		},
 	}
 	command.Flags().Uint64Var(&revision, "if-revision", 0, "require this state revision")
+	command.Flags().BoolVar(&force, "force", false, "overwrite when other TUN adapters are detected")
 	return command
 }
 
@@ -125,6 +129,21 @@ func printTunStatus(writer io.Writer, status protocol.TunStatus) error {
 	}
 	if status.LastError != "" {
 		_, err = fmt.Fprintf(writer, "LastError: %s\n", status.LastError)
+		if err != nil {
+			return err
+		}
+	}
+	if status.Conflict != nil {
+		if len(status.Conflict.OtherTunInterfaces) > 0 {
+			if _, err = fmt.Fprintf(writer, "Other TUN: %s\n", strings.Join(status.Conflict.OtherTunInterfaces, ", ")); err != nil {
+				return err
+			}
+		}
+		if len(status.Conflict.OtherMihomoProcesses) > 0 {
+			if _, err = fmt.Fprintf(writer, "Other mihomo: %d\n", len(status.Conflict.OtherMihomoProcesses)); err != nil {
+				return err
+			}
+		}
 	}
 	return err
 }

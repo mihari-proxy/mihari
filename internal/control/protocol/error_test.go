@@ -47,6 +47,21 @@ func TestSystemProxyErrorCodesExist(t *testing.T) {
 	}
 }
 
+func TestTunConflictCodeExists(t *testing.T) {
+	const want = "tun_conflict"
+	if string(CodeTunConflict) != want {
+		t.Fatalf("code=%q want=%q", CodeTunConflict, want)
+	}
+	env := NewError(CodeTunConflict, "tun conflict", nil)
+	raw, err := json.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !jsonContainsCode(raw, want) {
+		t.Fatalf("envelope missing code %q: %s", want, raw)
+	}
+}
+
 func jsonContainsCode(raw []byte, code string) bool {
 	var env ErrorEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {

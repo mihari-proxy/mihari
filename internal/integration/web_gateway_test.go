@@ -307,7 +307,7 @@ func (m integrationWebMutator) ApplyConfigPatch(ctx context.Context, patch map[s
 	}
 	op := runtimeapi.Operation{ID: "web-tun", Source: "web"}
 	if enable {
-		_, err := m.manager.EnableTun(ctx, op)
+		_, err := m.manager.EnableTun(ctx, op, false)
 		return err
 	}
 	_, err := m.manager.DisableTun(ctx, op)

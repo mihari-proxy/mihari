@@ -17,6 +17,7 @@ const (
 	CodeUnsupportedMutation ErrorCode = "unsupported_mutation"
 	CodeSystemProxyConflict ErrorCode = "system_proxy_conflict"
 	CodeSystemProxyNotOwned ErrorCode = "system_proxy_not_owned"
+	CodeTunConflict         ErrorCode = "tun_conflict"
 )
 
 type APIError struct {
