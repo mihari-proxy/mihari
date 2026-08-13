@@ -418,10 +418,14 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 					return nil, applyErr
 				}
 				if changed {
-					snapshot := m.store.Load()
-					snapshot.Core.Version = version
-					snapshot.Core.Channel = appliedChannel
-					m.store.Store(snapshot)
+					_, coordErr := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+						snapshot.Core.Version = version
+						snapshot.Core.Channel = appliedChannel
+						return snapshot, nil
+					})
+					if coordErr != nil {
+						return nil, coordErr
+					}
 				}
 				return core.InstallResult{Version: version, Updated: false}, nil
 			}

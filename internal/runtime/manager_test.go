@@ -1186,6 +1186,13 @@ func TestManagerInstallSetupAppliesSidecarChannelWhenStampNew(t *testing.T) {
 	settings, settingsPath := persistedChannelSettings(t, "stable")
 	manager := newTestManager(Options{Installer: installer, Settings: settings, SettingsPath: settingsPath})
 	manager.installRequest.BinaryPath = binaryPath
+	seeded := manager.store.Load()
+	seeded.Core.Status = "running"
+	seeded.Core.PID = 4242
+	seeded.Core.Restarts = 3
+	seeded.Core.AlphaSHA = "deadbeef"
+	manager.store.Store(seeded)
+	beforeRevision := manager.store.Load().Revision
 
 	result, err := manager.Install(context.Background(), Operation{ID: "setup-sidecar", Source: "setup"})
 	if err != nil {
@@ -1200,11 +1207,18 @@ func TestManagerInstallSetupAppliesSidecarChannelWhenStampNew(t *testing.T) {
 	if manager.settings.CoreChannel != "alpha" || manager.settings.CoreChannelBundle != "alpha-e183c58" {
 		t.Fatalf("settings channel=%q bundle=%q", manager.settings.CoreChannel, manager.settings.CoreChannelBundle)
 	}
-	if got := manager.store.Load().Core.Channel; got != "alpha" {
-		t.Fatalf("store.Core.Channel=%q want alpha", got)
+	core := manager.store.Load().Core
+	if core.Channel != "alpha" {
+		t.Fatalf("store.Core.Channel=%q want alpha", core.Channel)
 	}
-	if got := manager.store.Load().Core.Version; got != "v1.18.0" {
-		t.Fatalf("store.Core.Version=%q want v1.18.0", got)
+	if core.Version != "v1.18.0" {
+		t.Fatalf("store.Core.Version=%q want v1.18.0", core.Version)
+	}
+	if core.Status != "running" || core.PID != 4242 || core.Restarts != 3 || core.AlphaSHA != "deadbeef" {
+		t.Fatalf("setup sidecar store write must preserve existing Core fields: %#v", core)
+	}
+	if got := manager.store.Load().Revision; got != beforeRevision+1 {
+		t.Fatalf("revision=%d want %d (coordinator.Do must increment)", got, beforeRevision+1)
 	}
 	loaded, err := config.Load(settingsPath)
 	if err != nil {
