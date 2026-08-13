@@ -118,6 +118,7 @@ func (s *Service) Mutate(mutate func(*Catalog) error) (Catalog, Catalog, error) 
 	if err := after.Normalize(); err != nil {
 		return Catalog{}, Catalog{}, err
 	}
+	after.fillDefaults()
 	if err := Save(s.catalogPath, after); err != nil {
 		return Catalog{}, Catalog{}, err
 	}
@@ -216,6 +217,7 @@ func (s *Service) CommitRefresh(prepared PreparedRefresh) (Receipt, error) {
 	if err := after.Normalize(); err != nil {
 		return Receipt{}, s.failAfterRestore(err, cachePath, cacheBefore, hadCache, wroteCache)
 	}
+	after.fillDefaults()
 	if err := Save(s.catalogPath, after); err != nil {
 		return Receipt{}, s.failAfterRestore(err, cachePath, cacheBefore, hadCache, wroteCache)
 	}
