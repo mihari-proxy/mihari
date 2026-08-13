@@ -23,6 +23,19 @@ func Defaults() Catalog {
 	return Catalog{Schema: CatalogSchema, GlobalInterval: "12h", Profiles: []Profile{}}
 }
 
+// Catalog loading pipeline (Load) runs these stages after decode:
+//
+//	migrate       — forward schema migrations (no-op for current schema);
+//	                extension point for future vN→vN+1 reshapes.
+//	Normalize     — validates schema and fields, repairs invariants. Reports
+//	                errors; does NOT fill defaults.
+//	fillDefaults  — fills zero values with intended defaults. Pure filling,
+//	                never validates. Runs last so cleared values get a default.
+//
+// Contract: any caller that Normalize()s an in-memory catalog (Load, Save,
+// service.Mutate, service.CommitRefresh) MUST follow with fillDefaults().
+// Add new "zero ≠ default" fields to fillDefaults; keep Normalize about
+// validation and invariant repair only.
 func Load(path string) (Catalog, error) {
 	file, err := os.Open(path)
 	if err != nil {
