@@ -21,30 +21,53 @@ type fakeController struct {
 	status     StatusKind
 	statusErr  error
 	controlErr error
+	startErr   error
+	stopErr    error
+	events     *[]string
+}
+
+func (f *fakeController) record(event string) {
+	if f.events != nil {
+		*f.events = append(*f.events, event)
+	}
 }
 
 func (f *fakeController) Install() error {
+	f.record("install")
 	f.installs++
 	return f.controlErr
 }
 func (f *fakeController) Uninstall() error {
+	f.record("uninstall")
 	f.uninstalls++
 	return f.controlErr
 }
 func (f *fakeController) Start() error {
+	f.record("start")
 	f.starts++
+	if f.startErr != nil {
+		return f.startErr
+	}
 	return f.controlErr
 }
 func (f *fakeController) Stop() error {
+	f.record("stop")
 	f.stops++
+	if f.stopErr != nil {
+		return f.stopErr
+	}
 	return f.controlErr
 }
 func (f *fakeController) Restart() error {
+	f.record("restart")
 	f.restarts++
 	return f.controlErr
 }
-func (f *fakeController) Status() (StatusKind, error) { return f.status, f.statusErr }
-func (f *fakeController) Run() error                  { return nil }
+func (f *fakeController) Status() (StatusKind, error) {
+	f.record("status")
+	return f.status, f.statusErr
+}
+func (f *fakeController) Run() error { return nil }
 
 func writeTempBinary(t *testing.T, dir, name string) string {
 	t.Helper()
@@ -103,6 +126,254 @@ func TestManagerInstallStartStopStatus(t *testing.T) {
 	}
 	if fake.stops != 2 {
 		t.Fatalf("uninstall should stop first: stops=%d", fake.stops)
+	}
+}
+
+func TestManagerUpdateInstalledBinaryCopiesBeforeRestart(t *testing.T) {
+	installRoot := t.TempDir()
+	t.Setenv("MIHARI_INSTALL_ROOT", installRoot)
+	source := writeTempBinary(t, t.TempDir(), "mihari-new")
+	installed, err := platform.AbsoluteInstalledBinaryPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(installed, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	events := []string{}
+	fake := &fakeController{status: StatusRunning, events: &events}
+	manager := New(Options{
+		Executable: source,
+		NewController: func(RunFunc, string, []string) (Controller, error) {
+			return fake, nil
+		},
+	})
+	manager.stageBinary = func(path string) (string, error) {
+		events = append(events, "sync")
+		return platform.StageInstalledBinary(path)
+	}
+
+	updated, err := manager.UpdateInstalledBinary()
+	if err != nil || !updated {
+		t.Fatalf("updated=%v err=%v", updated, err)
+	}
+	if got, want := strings.Join(events, ","), "status,stop,sync,start"; got != want {
+		t.Fatalf("events=%q want=%q", got, want)
+	}
+	payload, err := os.ReadFile(installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(payload), "payload"; got != want {
+		t.Fatalf("installed payload=%q want=%q", got, want)
+	}
+}
+
+func TestManagerUpdateInstalledBinarySkipsMissingService(t *testing.T) {
+	t.Setenv("MIHARI_INSTALL_ROOT", t.TempDir())
+	events := []string{}
+	fake := &fakeController{status: StatusNotInstalled, events: &events}
+	manager := New(Options{
+		Executable: writeTempBinary(t, t.TempDir(), "mihari-new"),
+		NewController: func(RunFunc, string, []string) (Controller, error) {
+			return fake, nil
+		},
+	})
+	manager.stageBinary = func(string) (string, error) {
+		events = append(events, "sync")
+		return "", nil
+	}
+
+	updated, err := manager.UpdateInstalledBinary()
+	if err != nil || updated {
+		t.Fatalf("updated=%v err=%v", updated, err)
+	}
+	if got, want := strings.Join(events, ","), "status"; got != want {
+		t.Fatalf("events=%q want=%q", got, want)
+	}
+}
+
+func TestManagerUpdateInstalledBinaryStatusFailureIsRedacted(t *testing.T) {
+	events := []string{}
+	fake := &fakeController{
+		statusErr: errors.New(`query C:\Users\secret\mihari.exe: failed`),
+		events:    &events,
+	}
+	manager := New(Options{
+		Executable: "mihari-new",
+		NewController: func(RunFunc, string, []string) (Controller, error) {
+			return fake, nil
+		},
+	})
+
+	installed, err := manager.UpdateInstalledBinary()
+	if installed || err == nil {
+		t.Fatalf("installed=%v err=%v", installed, err)
+	}
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodeInvalidState {
+		t.Fatalf("err=%v", err)
+	}
+	if strings.Contains(api.Message, "secret") || strings.Contains(api.Message, `C:\Users`) {
+		t.Fatalf("unsafe message=%q", api.Message)
+	}
+	if got, want := strings.Join(events, ","), "status"; got != want {
+		t.Fatalf("events=%q want=%q", got, want)
+	}
+}
+
+func TestManagerUpdateInstalledBinarySamePathDoesNotCorruptBinary(t *testing.T) {
+	installRoot := t.TempDir()
+	t.Setenv("MIHARI_INSTALL_ROOT", installRoot)
+	installed, err := platform.AbsoluteInstalledBinaryPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(installed, []byte("new-version"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeController{status: StatusRunning}
+	manager := New(Options{
+		Executable: installed,
+		NewController: func(RunFunc, string, []string) (Controller, error) {
+			return fake, nil
+		},
+	})
+
+	updated, err := manager.UpdateInstalledBinary()
+	if err != nil || !updated {
+		t.Fatalf("updated=%v err=%v", updated, err)
+	}
+	payload, err := os.ReadFile(installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(payload), "new-version"; got != want {
+		t.Fatalf("installed payload=%q want=%q", got, want)
+	}
+	if fake.stops != 1 || fake.starts != 1 {
+		t.Fatalf("stops=%d starts=%d", fake.stops, fake.starts)
+	}
+}
+
+func TestManagerUpdateInstalledBinarySyncFailureRestartsPreviousService(t *testing.T) {
+	raw := errors.New(`copy C:\Users\secret\mihari.exe: access denied`)
+	events := []string{}
+	fake := &fakeController{status: StatusRunning, events: &events}
+	manager := New(Options{
+		Executable: "mihari-new",
+		NewController: func(RunFunc, string, []string) (Controller, error) {
+			return fake, nil
+		},
+	})
+	manager.stageBinary = func(string) (string, error) {
+		events = append(events, "sync")
+		return "", raw
+	}
+
+	updated, err := manager.UpdateInstalledBinary()
+	if !updated || err == nil {
+		t.Fatalf("updated=%v err=%v", updated, err)
+	}
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodeDataFailure {
+		t.Fatalf("err=%v", err)
+	}
+	if strings.Contains(api.Message, "secret") || strings.Contains(api.Message, "access denied") {
+		t.Fatalf("unsafe message=%q", api.Message)
+	}
+	if got, want := strings.Join(events, ","), "status,stop,sync,start"; got != want {
+		t.Fatalf("events=%q want=%q", got, want)
+	}
+}
+
+func TestManagerUpdateInstalledBinaryStopFailureDoesNotTouchInstalledCopy(t *testing.T) {
+	raw := errors.New(`stop C:\Users\secret\mihari.exe: access denied`)
+	events := []string{}
+	fake := &fakeController{status: StatusRunning, stopErr: raw, events: &events}
+	manager := New(Options{
+		Executable: "mihari-new",
+		NewController: func(RunFunc, string, []string) (Controller, error) {
+			return fake, nil
+		},
+	})
+	manager.stageBinary = func(string) (string, error) {
+		events = append(events, "sync")
+		return "", nil
+	}
+
+	installed, err := manager.UpdateInstalledBinary()
+	if !installed || err == nil {
+		t.Fatalf("installed=%v err=%v", installed, err)
+	}
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodeInvalidState {
+		t.Fatalf("err=%v", err)
+	}
+	if strings.Contains(api.Message, "secret") || strings.Contains(api.Message, "access denied") {
+		t.Fatalf("unsafe message=%q", api.Message)
+	}
+	if got, want := strings.Join(events, ","), "status,stop"; got != want {
+		t.Fatalf("events=%q want=%q", got, want)
+	}
+}
+
+func TestManagerUpdateInstalledBinaryStartFailureReportsSynchronizedPartialSuccess(t *testing.T) {
+	raw := errors.New(`start C:\Users\secret\mihari.exe: timed out`)
+	events := []string{}
+	fake := &fakeController{status: StatusRunning, startErr: raw, events: &events}
+	manager := New(Options{
+		Executable: "mihari-new",
+		NewController: func(RunFunc, string, []string) (Controller, error) {
+			return fake, nil
+		},
+	})
+	manager.stageBinary = func(string) (string, error) {
+		events = append(events, "sync")
+		return "installed-mihari", nil
+	}
+
+	installed, err := manager.UpdateInstalledBinary()
+	if !installed || err == nil {
+		t.Fatalf("installed=%v err=%v", installed, err)
+	}
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodeInvalidState || !strings.Contains(api.Message, "synchronized") {
+		t.Fatalf("err=%v", err)
+	}
+	if strings.Contains(api.Message, "secret") || strings.Contains(api.Message, "timed out") {
+		t.Fatalf("unsafe message=%q", api.Message)
+	}
+	if got, want := strings.Join(events, ","), "status,stop,sync,start"; got != want {
+		t.Fatalf("events=%q want=%q", got, want)
+	}
+}
+
+func TestManagerUpdateInstalledBinarySyncAndRecoveryFailureReportsBoth(t *testing.T) {
+	events := []string{}
+	fake := &fakeController{status: StatusRunning, startErr: errors.New("recovery failed"), events: &events}
+	manager := New(Options{
+		Executable: "mihari-new",
+		NewController: func(RunFunc, string, []string) (Controller, error) {
+			return fake, nil
+		},
+	})
+	manager.stageBinary = func(string) (string, error) {
+		events = append(events, "sync")
+		return "", errors.New("sync failed")
+	}
+
+	installed, err := manager.UpdateInstalledBinary()
+	if !installed || err == nil {
+		t.Fatalf("installed=%v err=%v", installed, err)
+	}
+	var api protocol.APIError
+	if !errors.As(err, &api) || !strings.Contains(api.Message, "synchronization failed") || !strings.Contains(api.Message, "previous service") {
+		t.Fatalf("err=%v", err)
+	}
+	if got, want := strings.Join(events, ","), "status,stop,sync,start"; got != want {
+		t.Fatalf("events=%q want=%q", got, want)
 	}
 }
 
