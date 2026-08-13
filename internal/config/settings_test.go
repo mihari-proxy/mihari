@@ -349,3 +349,71 @@ func TestApplyCoreChannelSidecar(t *testing.T) {
 		t.Fatalf("missing sidecar must be ignored: %#v changed=%v err=%v", settings, changed, err)
 	}
 }
+
+func TestLoadOrCreateAppliesSidecarBeforeFirstSave(t *testing.T) {
+	root := t.TempDir()
+	sidecar := filepath.Join(root, "bin", "core-channel")
+	if err := os.MkdirAll(filepath.Dir(sidecar), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sidecar, []byte("alpha\nalpha-e183c58\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(root, "mihari.yaml")
+	settings, created, err := LoadOrCreateWithSidecar(path, sidecar)
+	if err != nil || !created {
+		t.Fatalf("created=%v err=%v settings=%#v", created, err, settings)
+	}
+	if settings.CoreChannel != "alpha" || settings.CoreChannelBundle != "alpha-e183c58" {
+		t.Fatalf("settings=%#v", settings)
+	}
+	if settings.ControllerSecret == "" {
+		t.Fatal("controller secret must be generated before first save")
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, "core-channel: alpha") {
+		t.Fatalf("first save missing alpha channel: %s", text)
+	}
+	if !strings.Contains(text, "core-channel-bundle: alpha-e183c58") {
+		t.Fatalf("first save missing sidecar stamp: %s", text)
+	}
+}
+
+func TestLoadOrCreateWithSidecarAppliesNewStampToExistingSettings(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "mihari.yaml")
+	settings := Defaults()
+	settings.ControllerSecret = strings.Repeat("ab", 32)
+	settings.CoreChannel = "stable"
+	settings.CoreChannelBundle = "alpha-e183c58"
+	if err := Save(path, settings); err != nil {
+		t.Fatal(err)
+	}
+
+	sidecar := filepath.Join(root, "bin", "core-channel")
+	if err := os.MkdirAll(filepath.Dir(sidecar), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sidecar, []byte("alpha\nalpha-ffffff\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, created, err := LoadOrCreateWithSidecar(path, sidecar)
+	if err != nil || created {
+		t.Fatalf("created=%v err=%v loaded=%#v", created, err, loaded)
+	}
+	if loaded.CoreChannel != "alpha" || loaded.CoreChannelBundle != "alpha-ffffff" {
+		t.Fatalf("loaded=%#v", loaded)
+	}
+
+	reloaded, err := Load(path)
+	if err != nil || reloaded.CoreChannel != "alpha" || reloaded.CoreChannelBundle != "alpha-ffffff" {
+		t.Fatalf("reloaded=%#v err=%v", reloaded, err)
+	}
+}

@@ -78,9 +78,20 @@ func LoadOrCreate(path string) (Settings, error) {
 
 // LoadOrCreateResult loads settings or creates them and reports whether this call created the file.
 func LoadOrCreateResult(path string) (Settings, bool, error) {
+	return loadOrCreate(path, "")
+}
+
+// LoadOrCreateWithSidecar loads settings or creates them, applying a packaged
+// core-channel sidecar. On first create the sidecar is applied before the first
+// Save so the file is never written as a stable-only default and then rewritten.
+func LoadOrCreateWithSidecar(path, sidecar string) (Settings, bool, error) {
+	return loadOrCreate(path, sidecar)
+}
+
+func loadOrCreate(path, sidecar string) (Settings, bool, error) {
 	settings, err := loadSettings(path)
 	if err == nil {
-		return settings, false, nil
+		return persistSidecarIfChanged(path, settings, sidecar)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return Settings{}, false, err
@@ -99,7 +110,7 @@ func LoadOrCreateResult(path string) (Settings, bool, error) {
 	}()
 	settings, err = loadSettings(path)
 	if err == nil {
-		return settings, false, nil
+		return persistSidecarIfChanged(path, settings, sidecar)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return Settings{}, false, err
@@ -110,10 +121,33 @@ func LoadOrCreateResult(path string) (Settings, bool, error) {
 		return Settings{}, false, fmt.Errorf("generate controller secret: %w", err)
 	}
 	settings.ControllerSecret = hex.EncodeToString(secret[:])
+	if _, err := applySidecarIfPresent(&settings, sidecar); err != nil {
+		return Settings{}, false, err
+	}
 	if err := Save(path, settings); err != nil {
 		return Settings{}, false, err
 	}
 	return settings, true, nil
+}
+
+func persistSidecarIfChanged(path string, settings Settings, sidecar string) (Settings, bool, error) {
+	changed, err := applySidecarIfPresent(&settings, sidecar)
+	if err != nil {
+		return Settings{}, false, err
+	}
+	if changed {
+		if err := Save(path, settings); err != nil {
+			return Settings{}, false, err
+		}
+	}
+	return settings, false, nil
+}
+
+func applySidecarIfPresent(settings *Settings, sidecar string) (bool, error) {
+	if sidecar == "" {
+		return false, nil
+	}
+	return ApplyCoreChannelSidecar(settings, sidecar)
 }
 
 // loadSettings loads settings, retrying while the file exists on disk but is
