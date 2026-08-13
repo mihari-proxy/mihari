@@ -735,6 +735,31 @@ func TestInstallCommitPersistsChannelAndClearsAlphaSHAOnStable(t *testing.T) {
 	}
 }
 
+func TestObservePreservesCoreChannelAndAlphaSHA(t *testing.T) {
+	installer := &fakeInstaller{candidate: &fakeCandidate{
+		version:  "v1.19.0",
+		alphaSHA: "e183c58",
+	}}
+	settings, settingsPath := persistedChannelSettings(t, "stable")
+	manager := newTestManager(Options{
+		Installer: installer, Settings: settings, SettingsPath: settingsPath, Supervisor: &fakeSupervisor{},
+	})
+	alpha := "alpha"
+	if _, err := manager.Install(context.Background(), Operation{ID: "alpha-install", Source: "test", Channel: &alpha}); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.Observe(supervisor.Observation{Status: supervisor.StatusRunning, PID: 4242})
+
+	core := manager.store.Load().Core
+	if core.Status != string(supervisor.StatusRunning) || core.PID != 4242 {
+		t.Fatalf("observe did not apply runtime fields: %#v", core)
+	}
+	if core.Version != "v1.19.0" || core.Channel != "alpha" || core.AlphaSHA != "e183c58" {
+		t.Fatalf("observe wiped identity: %#v", core)
+	}
+}
+
 func TestInstallRejectsNightlyChannelBeforePrepare(t *testing.T) {
 	installer := &fakeInstaller{candidate: &fakeCandidate{version: "v1.19.0"}}
 	settings, settingsPath := persistedChannelSettings(t, "stable")

@@ -277,13 +277,16 @@ func (m *Manager) Run(ctx context.Context) error {
 }
 
 func (m *Manager) Observe(observation supervisor.Observation) {
+	current := m.store.Load().Core
 	m.setCoreState(state.CoreState{
 		Status:      string(observation.Status),
 		PID:         observation.PID,
 		Restarts:    observation.Restarts,
 		LastError:   observation.LastError,
 		NextRetryAt: observation.NextRetryAt,
-		Version:     m.store.Load().Core.Version,
+		Version:     current.Version,
+		Channel:     current.Channel,
+		AlphaSHA:    current.AlphaSHA,
 	})
 }
 
