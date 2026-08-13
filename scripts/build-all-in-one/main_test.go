@@ -159,6 +159,27 @@ func TestBundlerAlphaChannelWritesSidecar(t *testing.T) {
 	}
 }
 
+func TestSidecarScriptInstallersCopyCoreChannel(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
+	for _, name := range []string{"install-aio.sh", "install-aio.ps1"} {
+		data, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		text := string(data)
+		if !strings.Contains(text, "core-channel") {
+			t.Errorf("%s: expected to copy data/bin/core-channel sidecar", name)
+		}
+		if !strings.Contains(text, "Never touches") || !strings.Contains(text, "mihari.yaml") {
+			t.Errorf("%s: expected Never touches comment to mention mihari.yaml", name)
+		}
+	}
+}
+
 func TestSmokeMihomoExecutesHostTarget(t *testing.T) {
 	ctx := context.Background()
 	// Deliberately invalid magic: the host-matching target must exec the runner

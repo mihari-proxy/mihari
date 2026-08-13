@@ -4,9 +4,10 @@
 #   powershell -File install-aio.ps1 [-BundleDir <path>]   (default: script dir)
 #
 # Bundle layout (produced by scripts/build-all-in-one):
-#   mihari.exe          -> $binDir\mihari.exe
-#   data\bin\mihomo.exe -> $MIHARI_DATA\bin\mihomo.exe       (overwrite)
-#   data\geoip\*.mmdb   -> $MIHARI_DATA\geoip\*.mmdb         (overwrite)
+#   mihari.exe             -> $binDir\mihari.exe
+#   data\bin\mihomo.exe    -> $MIHARI_DATA\bin\mihomo.exe       (overwrite)
+#   data\bin\core-channel  -> $MIHARI_DATA\bin\core-channel     (overwrite if present)
+#   data\geoip\*.mmdb      -> $MIHARI_DATA\geoip\*.mmdb         (overwrite)
 #
 # Never touches: mihari.yaml, subscriptions\, control.token, onboarding.json,
 # logs\, web\ (user-private config and panel state stay intact).
@@ -87,6 +88,10 @@ New-Item -ItemType Directory -Force -Path (Join-Path $dataDir 'bin') | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $dataDir 'geoip') | Out-Null
 Info "覆盖 mihomo 核心与 GeoIP 到 $dataDir"
 Copy-Item -LiteralPath $mihomoSrc -Destination (Join-Path $dataDir 'bin\mihomo.exe') -Force
+$sidecarSrc = Join-Path $BundleDir 'data\bin\core-channel'
+if (Test-Path -LiteralPath $sidecarSrc) {
+  Copy-Item -LiteralPath $sidecarSrc -Destination (Join-Path $dataDir 'bin\core-channel') -Force
+}
 Copy-Item -LiteralPath (Join-Path $BundleDir 'data\geoip\GeoLite2-Country.mmdb') -Destination (Join-Path $dataDir 'geoip\GeoLite2-Country.mmdb') -Force
 Copy-Item -LiteralPath (Join-Path $BundleDir 'data\geoip\GeoLite2-ASN.mmdb') -Destination (Join-Path $dataDir 'geoip\GeoLite2-ASN.mmdb') -Force
 
