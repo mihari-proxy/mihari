@@ -15,6 +15,7 @@ func TestFormatPositionIndicator(t *testing.T) {
 		{"empty list", false, 0, 0, "0/0"},
 		{"empty list stays zero even if focused", true, 1, 0, "0/0"},
 		{"full ten-thousand buffer", true, 10000, 10000, "10000/10000"},
+		{"negative total treated as empty", true, 1, -5, "0/0"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
