@@ -122,6 +122,34 @@ func (c *Catalog) Normalize() error {
 	return nil
 }
 
+// migrate applies forward schema migrations to a decoded catalog before
+// Normalize validates it. The current schema needs no migration; this switch
+// is the extension point for future vN→vN+1 field renames or reshapes that
+// fillDefaults cannot express. Schema validity itself stays enforced by
+// Normalize, so unknown schemas are left untouched here.
+func (c *Catalog) migrate() {
+	switch c.Schema {
+	case CatalogSchema:
+		// no migration needed
+	}
+}
+
+// fillDefaults fills zero values with their intended defaults. It only fills,
+// never validates — run it after Normalize so values Normalize cleared get a
+// sensible default. Today it selects an active subscription when none is set;
+// future "zero ≠ default" fields belong here rather than scattered in Normalize.
+func (c *Catalog) fillDefaults() {
+	if c.ActiveID != "" {
+		return
+	}
+	for _, profile := range c.Profiles {
+		if profile.Enabled && profile.Generation > 0 {
+			c.ActiveID = profile.ID
+			return
+		}
+	}
+}
+
 func (c Catalog) Index(id string) int {
 	for index := range c.Profiles {
 		if c.Profiles[index].ID == id {

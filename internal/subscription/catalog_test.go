@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -117,5 +118,50 @@ func TestNormalizeValidatesProxyMode(t *testing.T) {
 	catalog.Profiles = []Profile{{ID: "0123456789abcdef0123456789abcdef", Name: "bad", URL: "https://one.test", ProxyMode: "bogus"}}
 	if err := catalog.Normalize(); err == nil {
 		t.Fatal("expected invalid proxy mode to be rejected")
+	}
+}
+
+// fillDefaults picks the first enabled profile with a fetched generation when
+// no active id is set; leaves a set id untouched; no-op without a usable profile.
+func TestFillDefaultsSelectsActiveProfile(t *testing.T) {
+	disabled := Profile{ID: "0123456789abcdef0123456789abcdef", Name: "disabled", URL: "https://one.test", Enabled: false, AutoRefresh: true}
+	enabled := Profile{ID: "fedcba9876543210fedcba9876543210", Name: "enabled", URL: "https://two.test", Enabled: true, AutoRefresh: true, Generation: 1}
+	t.Run("picks first enabled with generation", func(t *testing.T) {
+		catalog := Defaults()
+		catalog.Profiles = []Profile{disabled, enabled}
+		catalog.fillDefaults()
+		if catalog.ActiveID != enabled.ID {
+			t.Fatalf("active=%q want %q", catalog.ActiveID, enabled.ID)
+		}
+	})
+	t.Run("leaves existing id untouched", func(t *testing.T) {
+		catalog := Defaults()
+		catalog.ActiveID = "preset"
+		catalog.Profiles = []Profile{enabled}
+		catalog.fillDefaults()
+		if catalog.ActiveID != "preset" {
+			t.Fatalf("overwrote set id: %q", catalog.ActiveID)
+		}
+	})
+	t.Run("no-op without a usable profile", func(t *testing.T) {
+		catalog := Defaults()
+		catalog.Profiles = []Profile{disabled}
+		catalog.fillDefaults()
+		if catalog.ActiveID != "" {
+			t.Fatalf("active=%q want empty", catalog.ActiveID)
+		}
+	})
+}
+
+// migrate must not mutate a current-schema catalog (reflective deep check,
+// not just a few fields, so future profile-level migrations can't slip through).
+func TestMigrateNoOpForCurrentSchema(t *testing.T) {
+	catalog := Defaults()
+	catalog.Profiles = []Profile{{ID: "0123456789abcdef0123456789abcdef", Name: "ok", URL: "https://one.test", Enabled: true, AutoRefresh: true, Generation: 1}}
+	catalog.ActiveID = catalog.Profiles[0].ID
+	before := catalog
+	catalog.migrate()
+	if !reflect.DeepEqual(before, catalog) {
+		t.Fatalf("migrate mutated current-schema catalog:\n before=%#v\n after=%#v", before, catalog)
 	}
 }
