@@ -17,6 +17,7 @@ func TestDefaultTheme_HasSemanticRoles(t *testing.T) {
 	assertColor(t, "ColorDanger", theme.ColorDanger, lipgloss.Color("203"))
 	assertColor(t, "ColorInfo", theme.ColorInfo, lipgloss.Color("75"))
 	assertColor(t, "ColorSurfaceBorder", theme.ColorSurfaceBorder, lipgloss.Color("240"))
+	assertColor(t, "ColorFocusBg", theme.ColorFocusBg, lipgloss.Color("60"))
 	assertColor(t, "ColorMuted", theme.ColorMuted, lipgloss.Color("245"))
 	assertColor(t, "ColorOnSolid", theme.ColorOnSolid, lipgloss.Color("0"))
 
@@ -57,13 +58,17 @@ func TestDefaultTheme_HasSemanticRoles(t *testing.T) {
 
 	// RowFocus is distinct from business RowSelected.
 	if theme.RowFocus.GetReverse() == theme.RowSelected.GetReverse() &&
+		colorsEqual(theme.RowFocus.GetBackground(), theme.RowSelected.GetBackground()) &&
 		colorsEqual(theme.RowFocus.GetForeground(), theme.RowSelected.GetForeground()) &&
 		theme.RowFocus.GetBold() == theme.RowSelected.GetBold() {
 		t.Fatal("RowFocus must be visually distinct from RowSelected")
 	}
-	if !theme.RowFocus.GetReverse() && isNoColor(theme.RowFocus.GetForeground()) && !theme.RowFocus.GetBold() {
-		t.Fatal("RowFocus should apply reverse, foreground, or bold")
+	if !theme.RowFocus.GetReverse() && isNoColor(theme.RowFocus.GetForeground()) &&
+		isNoColor(theme.RowFocus.GetBackground()) && !theme.RowFocus.GetBold() {
+		t.Fatal("RowFocus should apply reverse, foreground, background, or bold")
 	}
+	// RowFocus now fills the row background (issue #46) instead of reverse video.
+	assertStyleBG(t, "RowFocus", theme.RowFocus, theme.ColorFocusBg)
 }
 
 func assertColor(t *testing.T, name string, got, want color.Color) {
@@ -78,6 +83,14 @@ func assertStyleFG(t *testing.T, name string, style lipgloss.Style, want color.C
 	got := style.GetForeground()
 	if !colorsEqual(got, want) {
 		t.Fatalf("%s foreground: got %#v want %#v", name, got, want)
+	}
+}
+
+func assertStyleBG(t *testing.T, name string, style lipgloss.Style, want color.Color) {
+	t.Helper()
+	got := style.GetBackground()
+	if !colorsEqual(got, want) {
+		t.Fatalf("%s background: got %#v want %#v", name, got, want)
 	}
 }
 
