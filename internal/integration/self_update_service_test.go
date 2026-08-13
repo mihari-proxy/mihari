@@ -2,6 +2,8 @@ package integration
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -82,14 +84,21 @@ func TestSelfUpdateSynchronizesDifferentServiceBinaryAndVerifiesDaemonVersion(t 
 	if runtime.GOOS == "windows" {
 		assetName += ".exe"
 	}
+	digest := sha256.Sum256(payload)
+	manifest := hex.EncodeToString(digest[:]) + "  " + assetName + "\n"
 	var releaseServer *httptest.Server
 	releaseServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/mihari-proxy/mihari/releases/latest":
 			_ = json.NewEncoder(w).Encode(update.Release{
 				TagName: "v9.9.9",
-				Assets:  []update.Asset{{Name: assetName, URL: releaseServer.URL + "/asset", Size: int64(len(payload))}},
+				Assets: []update.Asset{
+					{Name: assetName, URL: releaseServer.URL + "/asset", Size: int64(len(payload))},
+					{Name: "SHA256SUMS.txt", URL: releaseServer.URL + "/checksum", Size: int64(len(manifest))},
+				},
 			})
+		case "/checksum":
+			_, _ = w.Write([]byte(manifest))
 		case "/asset":
 			_, _ = w.Write(payload)
 		default:
