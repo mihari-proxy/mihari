@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -55,7 +56,31 @@ func TestLoadRejectsUnknownFieldsAndInvalidInterval(t *testing.T) {
 	}
 }
 
-func TestValidateRepairsActiveAndRejectsDuplicateIDs(t *testing.T) {
+// An unknown field must surface the offending name and a newer-version/typo
+// hint, not the generic "invalid subscription catalog" message KnownFields
+// used to collapse every decode error into.
+func TestLoadReportsUnknownField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "catalog.yaml")
+	doc := []byte("schema: mihari.subscriptions/v1\nglobal-interval: 12h\nmystery-field: true\n")
+	if err := os.WriteFile(path, doc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected load failure")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "mystery-field") {
+		t.Fatalf("error should name the unknown field: %s", msg)
+	}
+	if !strings.Contains(msg, "newer") && !strings.Contains(msg, "typo") {
+		t.Fatalf("error should hint at newer-version/typo: %s", msg)
+	}
+}
+
+// Normalize only clears an invalid ActiveID; it must NOT re-pick a default
+// (that is fillDefaults' job). Keeps the duplicate-ID rejection assertion.
+func TestNormalizeClearsInvalidActiveIDAndRejectsDuplicates(t *testing.T) {
 	catalog := Defaults()
 	catalog.ActiveID = "missing"
 	catalog.Profiles = []Profile{
@@ -65,12 +90,49 @@ func TestValidateRepairsActiveAndRejectsDuplicateIDs(t *testing.T) {
 	if err := catalog.Normalize(); err != nil {
 		t.Fatal(err)
 	}
-	if catalog.ActiveID != catalog.Profiles[1].ID {
-		t.Fatalf("active=%q", catalog.ActiveID)
+	if catalog.ActiveID != "" {
+		t.Fatalf("normalize should clear invalid active, got %q", catalog.ActiveID)
 	}
 	catalog.Profiles[1].ID = catalog.Profiles[0].ID
 	if err := catalog.Normalize(); err == nil {
 		t.Fatal("expected duplicate ID failure")
+	}
+}
+
+// Load's full pipeline must repair an invalid ActiveID exactly like the
+// pre-split Normalize self-heal. Covers missing / disabled / gen=0 / empty.
+func TestLoadPipelineRepairsActiveID(t *testing.T) {
+	const profileDisabled = "0123456789abcdef0123456789abcdef"
+	const profileEnabled = "fedcba9876543210fedcba9876543210"
+	const profileGenZero = "00112233445566778899aabbccddeeff"
+	base := "schema: mihari.subscriptions/v1\nglobal-interval: 12h\n" +
+		"profiles:\n" +
+		"  - id: \"" + profileDisabled + "\"\n    name: disabled\n    url: https://one.test\n    enabled: false\n    auto-refresh: true\n" +
+		"  - id: \"" + profileGenZero + "\"\n    name: genzero\n    url: https://three.test\n    enabled: true\n    auto-refresh: true\n    generation: 0\n" +
+		"  - id: \"" + profileEnabled + "\"\n    name: enabled\n    url: https://two.test\n    enabled: true\n    auto-refresh: true\n    generation: 1\n"
+	for name, active := range map[string]string{
+		"missing":  "nonexistent",
+		"disabled": profileDisabled,
+		"gen-zero": profileGenZero,
+		"empty":    "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			doc := base
+			if active != "" {
+				doc = "active-id: " + active + "\n" + base
+			}
+			path := filepath.Join(t.TempDir(), "catalog.yaml")
+			if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded.ActiveID != profileEnabled {
+				t.Fatalf("active=%q want %q", loaded.ActiveID, profileEnabled)
+			}
+		})
 	}
 }
 
@@ -117,5 +179,50 @@ func TestNormalizeValidatesProxyMode(t *testing.T) {
 	catalog.Profiles = []Profile{{ID: "0123456789abcdef0123456789abcdef", Name: "bad", URL: "https://one.test", ProxyMode: "bogus"}}
 	if err := catalog.Normalize(); err == nil {
 		t.Fatal("expected invalid proxy mode to be rejected")
+	}
+}
+
+// fillDefaults picks the first enabled profile with a fetched generation when
+// no active id is set; leaves a set id untouched; no-op without a usable profile.
+func TestFillDefaultsSelectsActiveProfile(t *testing.T) {
+	disabled := Profile{ID: "0123456789abcdef0123456789abcdef", Name: "disabled", URL: "https://one.test", Enabled: false, AutoRefresh: true}
+	enabled := Profile{ID: "fedcba9876543210fedcba9876543210", Name: "enabled", URL: "https://two.test", Enabled: true, AutoRefresh: true, Generation: 1}
+	t.Run("picks first enabled with generation", func(t *testing.T) {
+		catalog := Defaults()
+		catalog.Profiles = []Profile{disabled, enabled}
+		catalog.fillDefaults()
+		if catalog.ActiveID != enabled.ID {
+			t.Fatalf("active=%q want %q", catalog.ActiveID, enabled.ID)
+		}
+	})
+	t.Run("leaves existing id untouched", func(t *testing.T) {
+		catalog := Defaults()
+		catalog.ActiveID = "preset"
+		catalog.Profiles = []Profile{enabled}
+		catalog.fillDefaults()
+		if catalog.ActiveID != "preset" {
+			t.Fatalf("overwrote set id: %q", catalog.ActiveID)
+		}
+	})
+	t.Run("no-op without a usable profile", func(t *testing.T) {
+		catalog := Defaults()
+		catalog.Profiles = []Profile{disabled}
+		catalog.fillDefaults()
+		if catalog.ActiveID != "" {
+			t.Fatalf("active=%q want empty", catalog.ActiveID)
+		}
+	})
+}
+
+// migrate must not mutate a current-schema catalog (reflective deep check,
+// not just a few fields, so future profile-level migrations can't slip through).
+func TestMigrateNoOpForCurrentSchema(t *testing.T) {
+	catalog := Defaults()
+	catalog.Profiles = []Profile{{ID: "0123456789abcdef0123456789abcdef", Name: "ok", URL: "https://one.test", Enabled: true, AutoRefresh: true, Generation: 1}}
+	catalog.ActiveID = catalog.Profiles[0].ID
+	before := catalog
+	catalog.migrate()
+	if !reflect.DeepEqual(before, catalog) {
+		t.Fatalf("migrate mutated current-schema catalog:\n before=%#v\n after=%#v", before, catalog)
 	}
 }

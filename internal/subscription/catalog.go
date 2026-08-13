@@ -23,6 +23,19 @@ func Defaults() Catalog {
 	return Catalog{Schema: CatalogSchema, GlobalInterval: "12h", Profiles: []Profile{}}
 }
 
+// Catalog loading pipeline (Load) runs these stages after decode:
+//
+//	migrate       — forward schema migrations (no-op for current schema);
+//	                extension point for future vN→vN+1 reshapes.
+//	Normalize     — validates schema and fields, repairs invariants. Reports
+//	                errors; does NOT fill defaults.
+//	fillDefaults  — fills zero values with intended defaults. Pure filling,
+//	                never validates. Runs last so cleared values get a default.
+//
+// Contract: any caller that Normalize()s an in-memory catalog (Load, Save,
+// service.Mutate, service.CommitRefresh) MUST follow with fillDefaults().
+// Add new "zero ≠ default" fields to fillDefaults; keep Normalize about
+// validation and invariant repair only.
 func Load(path string) (Catalog, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -38,15 +51,17 @@ func Load(path string) (Catalog, error) {
 	decoder.KnownFields(true)
 	var catalog Catalog
 	if err := decoder.Decode(&catalog); err != nil {
-		return Catalog{}, dataError("invalid subscription catalog")
+		return Catalog{}, dataError(decodeErrorMessage(err, "subscription catalog"))
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return Catalog{}, dataError("subscription catalog must contain one document")
 	}
+	catalog.migrate()
 	if err := catalog.Normalize(); err != nil {
 		return Catalog{}, err
 	}
+	catalog.fillDefaults()
 	return catalog, nil
 }
 
@@ -69,6 +84,7 @@ func Save(path string, catalog Catalog) error {
 	if err := catalog.Normalize(); err != nil {
 		return err
 	}
+	catalog.fillDefaults()
 	content, err := yaml.Marshal(catalog)
 	if err != nil {
 		return dataError("encode subscription catalog")
@@ -110,16 +126,43 @@ func (c *Catalog) Normalize() error {
 			}
 		}
 	}
-	if index := c.Index(c.ActiveID); index < 0 || !c.Profiles[index].Enabled || c.Profiles[index].Generation == 0 {
-		c.ActiveID = ""
-		for _, profile := range c.Profiles {
-			if profile.Enabled && profile.Generation > 0 {
-				c.ActiveID = profile.ID
-				break
-			}
+	// ActiveID must point at an enabled profile with a fetched generation;
+	// otherwise clear it so fillDefaults can re-pick. Pure repair — default
+	// selection lives in fillDefaults, not here.
+	if c.ActiveID != "" {
+		if index := c.Index(c.ActiveID); index < 0 || !c.Profiles[index].Enabled || c.Profiles[index].Generation == 0 {
+			c.ActiveID = ""
 		}
 	}
 	return nil
+}
+
+// migrate applies forward schema migrations to a decoded catalog before
+// Normalize validates it. The current schema needs no migration; this switch
+// is the extension point for future vN→vN+1 field renames or reshapes that
+// fillDefaults cannot express. Schema validity itself stays enforced by
+// Normalize, so unknown schemas are left untouched here.
+func (c *Catalog) migrate() {
+	switch c.Schema {
+	case CatalogSchema:
+		// no migration needed
+	}
+}
+
+// fillDefaults fills zero values with their intended defaults. It only fills,
+// never validates — run it after Normalize so values Normalize cleared get a
+// sensible default. Today it selects an active subscription when none is set;
+// future "zero ≠ default" fields belong here rather than scattered in Normalize.
+func (c *Catalog) fillDefaults() {
+	if c.ActiveID != "" {
+		return
+	}
+	for _, profile := range c.Profiles {
+		if profile.Enabled && profile.Generation > 0 {
+			c.ActiveID = profile.ID
+			return
+		}
+	}
 }
 
 func (c Catalog) Index(id string) int {
@@ -150,4 +193,20 @@ func parseInterval(value string) (time.Duration, error) {
 
 func dataError(message string) error {
 	return protocol.APIError{Code: protocol.CodeDataFailure, Message: message}
+}
+
+// decodeErrorMessage turns a yaml decode error into a user-facing message.
+// Unknown fields (surfaced as *yaml.TypeError with "not found in type") are
+// called out explicitly so a downgrade mismatch or a typo is obvious instead
+// of a generic "invalid" failure.
+func decodeErrorMessage(err error, what string) string {
+	var te *yaml.TypeError
+	if errors.As(err, &te) {
+		for _, item := range te.Errors {
+			if strings.Contains(item, "not found in type") {
+				return fmt.Sprintf("invalid %s: unknown field — %s; it may have been written by a newer mihari version or be a typo", what, item)
+			}
+		}
+	}
+	return "invalid " + what
 }
