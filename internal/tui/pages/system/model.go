@@ -21,26 +21,28 @@ import (
 )
 
 const (
-	rowDaemon           = "daemon"
-	rowCore             = "core"
-	rowCoreUpdate       = "core-update"
-	rowCoreRestart      = "core-restart"
-	rowMihariUpdate     = "mihari-update"
-	rowProxyEndpoint    = "proxy-endpoint"
-	rowCoreAPI          = "core-api"
-	rowZashboard        = "zashboard"
-	rowMetaCubeXD       = "metacubexd"
-	rowRunSetup         = "run-setup"
-	rowServiceStatus    = "service-status"
-	rowServiceHint      = "service-hint"
-	rowServiceInstall   = "service-install"
-	rowServiceUninstall = "service-uninstall"
-	rowServiceReinstall = "service-reinstall"
-	rowServiceStart     = "service-start"
-	rowServiceStop      = "service-stop"
-	rowServiceRestart   = "service-restart"
-	rowSystemProxy      = "system-proxy"
-	rowTUN              = "tun"
+	rowDaemon            = "daemon"
+	rowCore              = "core"
+	rowCoreUpdate        = "core-update"
+	rowCoreRestart       = "core-restart"
+	rowMihariUpdate      = "mihari-update"
+	rowProxyEndpoint     = "proxy-endpoint"
+	rowCoreAPI           = "core-api"
+	rowZashboard         = "zashboard"
+	rowMetaCubeXD        = "metacubexd"
+	rowRunSetup          = "run-setup"
+	rowServiceStatus     = "service-status"
+	rowServiceHint       = "service-hint"
+	rowServiceInstall    = "service-install"
+	rowServiceUninstall  = "service-uninstall"
+	rowServiceReinstall  = "service-reinstall"
+	rowServiceStart      = "service-start"
+	rowServiceStop       = "service-stop"
+	rowServiceRestart    = "service-restart"
+	rowSystemProxy       = "system-proxy"
+	rowSystemProxyAction = "system-proxy-action"
+	rowTUN               = "tun"
+	rowTUNAction         = "tun-action"
 )
 
 // Panel IDs mirrored from internal/panel/catalog.go; local constants keep the
@@ -215,6 +217,22 @@ type startRowSpinMsg struct{ gen uint64 }
 
 const rowSpinInterval = 100 * time.Millisecond
 
+// Outcome fade: a successful System proxy / TUN toggle shows a Done badge that
+// self-clears after outcomeFadeInterval (the status row keeps showing the live
+// result). Failures stay sticky. The gen + row guard on outcomeFadeMsg means a
+// newer action, a later failure, or leaving the page invalidates a pending fade.
+type startOutcomeFadeMsg struct {
+	gen uint64
+	row string
+}
+
+type outcomeFadeMsg struct {
+	gen uint64
+	row string
+}
+
+const outcomeFadeInterval = 3 * time.Second
+
 type proxyActionKind uint8
 
 const (
@@ -288,6 +306,7 @@ type Model struct {
 	rowSpinClock     time.Time
 	rowSpinning      bool
 	rowSpinGen       uint64
+	outcomeFadeGen   uint64
 	mutationsEnabled bool
 	lastError        string
 	contentFocused   bool
@@ -640,6 +659,22 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, tea.Tick(rowSpinInterval, func(t time.Time) tea.Msg {
 			return ui.PageResultMsg{Page: ui.PageSystem, Result: rowSpinTickMsg{t: t, gen: typed.gen}}
 		})
+	case startOutcomeFadeMsg:
+		return m, tea.Tick(outcomeFadeInterval, func(time.Time) tea.Msg {
+			// outcomeFadeMsg has the same shape as startOutcomeFadeMsg; convert
+			// rather than rebuild the literal (staticcheck S1016).
+			return ui.PageResultMsg{Page: ui.PageSystem, Result: outcomeFadeMsg(typed)}
+		})
+	case outcomeFadeMsg:
+		// Only clear a still-current successful outcome; a newer action, a later
+		// failure, or leaving the page must keep its badge.
+		if typed.gen != m.outcomeFadeGen || m.outcomeRow != typed.row || !m.outcomeOK {
+			return m, nil
+		}
+		m.outcomeRow = ""
+		m.outcomeOK = false
+		m.outcomeDetail = ""
+		return m, nil
 	case actionStartMsg:
 		if m.pending {
 			return m, nil
@@ -749,9 +784,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, m.confirmServiceAction(serviceStop)
 		case rowServiceRestart:
 			return m, m.confirmServiceAction(serviceRestart)
-		case rowSystemProxy:
+		case rowSystemProxyAction:
 			return m, m.confirmSystemProxyToggle()
-		case rowTUN:
+		case rowTUNAction:
 			return m, m.confirmTunToggle()
 		default:
 			selected := rows[index]
@@ -792,7 +827,7 @@ func (m *Model) updateMihari() tea.Cmd {
 }
 
 func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) (ui.Page, tea.Cmd) {
-	rowID := m.outcomeRowID(rowSystemProxy)
+	rowID := m.outcomeRowID(rowSystemProxyAction)
 	m.clearRowPending()
 	if typed.err != nil {
 		var apiError protocol.APIError
@@ -818,11 +853,11 @@ func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) 
 	m.systemProxyLoaded = true
 	return m, tea.Batch(m.loadSystemProxy(), func() tea.Msg {
 		return ui.RuntimeRevisionMsg{Revision: typed.status.Revision}
-	}, m.rowSpinCmdIfNeeded())
+	}, m.rowSpinCmdIfNeeded(), m.scheduleOutcomeFade(rowID))
 }
 
 func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cmd) {
-	rowID := m.outcomeRowID(rowTUN)
+	rowID := m.outcomeRowID(rowTUNAction)
 	m.clearRowPending()
 	if typed.err != nil {
 		var apiError protocol.APIError
@@ -838,7 +873,7 @@ func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cm
 	m.tunLoaded = true
 	return m, tea.Batch(m.loadTun(), func() tea.Msg {
 		return ui.RuntimeRevisionMsg{Revision: typed.status.Revision}
-	}, m.rowSpinCmdIfNeeded())
+	}, m.rowSpinCmdIfNeeded(), m.scheduleOutcomeFade(rowID))
 }
 
 func (m *Model) View() string {
@@ -1034,12 +1069,12 @@ func (m *Model) networkRows() []row {
 	section := ui.NetworkSectionTitle
 	var rows []row
 	if m.hasCapability(protocol.CapabilitySystemProxy) {
-		// Idle value only; pending/outcome chips are overlaid in View for pendingRow/outcomeRow.
+		// Status row shows observed state. It is never overlaid by the
+		// pending/outcome chips (those bind the action row below), so the live
+		// status stays visible even right after a toggle.
 		value := ui.LoadingLabel
-		detail := ui.EnableSystemProxyImpact
 		if m.systemProxyLoaded {
 			value = systemProxySummary(m.theme, m.systemProxy)
-			detail = systemProxyDetail(m.systemProxy)
 		}
 		if !m.mutationsEnabled {
 			if m.systemProxyLoaded {
@@ -1050,18 +1085,28 @@ func (m *Model) networkRows() []row {
 		}
 		rows = append(rows, row{
 			id: rowSystemProxy, section: section, label: ui.SystemProxyLabel,
-			value: value, detail: detail,
+			value: value, detail: systemProxyDetail(m.systemProxy),
+		})
+		// Action row carries the toggle verb; its badge (pending/Done/Failed)
+		// binds here via rowProgressForAction / outcomeRowID.
+		impact := ui.EnableSystemProxyImpact
+		if m.systemProxy.Desired || m.systemProxy.Observed.Owned {
+			impact = ui.DisableSystemProxyImpact
+		}
+		rows = append(rows, row{
+			id: rowSystemProxyAction, section: section, label: m.systemProxyActionLabel(),
+			value:  actionState(m.hasCapability(protocol.CapabilitySystemProxy), m.mutationsEnabled),
+			detail: impact,
 		})
 	}
-	// TUN row is always listed; live status when capability is present.
+	// TUN status row is always listed; live status when capability is present.
 	tunValue := ui.UnavailableTitle
 	tunDetail := ui.TUNUnavailableDetail
 	if m.hasCapability(protocol.CapabilityTUN) {
 		tunValue = ui.LoadingLabel
-		tunDetail = ui.EnableTunImpact
+		tunDetail = tunDetailText(m.tun)
 		if m.tunLoaded {
 			tunValue = tunSummary(m.theme, m.tun)
-			tunDetail = tunDetailText(m.tun)
 		}
 		if !m.mutationsEnabled {
 			if m.tunLoaded {
@@ -1075,6 +1120,17 @@ func (m *Model) networkRows() []row {
 		id: rowTUN, section: section, label: ui.TUNLabel,
 		value: tunValue, detail: tunDetail,
 	})
+	if m.hasCapability(protocol.CapabilityTUN) {
+		tunImpact := ui.EnableTunImpact
+		if m.tun.DesiredEnable {
+			tunImpact = ui.DisableTunImpact
+		}
+		rows = append(rows, row{
+			id: rowTUNAction, section: section, label: m.tunActionLabel(),
+			value:  actionState(m.hasCapability(protocol.CapabilityTUN), m.mutationsEnabled),
+			detail: tunImpact,
+		})
+	}
 	return rows
 }
 
@@ -1358,6 +1414,17 @@ func (m *Model) rowSpinCmdIfNeeded() tea.Cmd {
 	}
 }
 
+// scheduleOutcomeFade arms a one-shot timer that clears a successful outcome
+// badge after outcomeFadeInterval, so the live status row (not a stale Done)
+// carries the result. Called only on the success path; failures stay sticky.
+func (m *Model) scheduleOutcomeFade(row string) tea.Cmd {
+	m.outcomeFadeGen++
+	gen := m.outcomeFadeGen
+	return func() tea.Msg {
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: startOutcomeFadeMsg{gen: gen, row: row}}
+	}
+}
+
 func rowProgressForAction(action ui.Action, coreMissing bool) (rowID, note string) {
 	switch action {
 	case ui.ActionUpdateMihari:
@@ -1382,13 +1449,13 @@ func rowProgressForAction(action ui.Action, coreMissing bool) (rowID, note strin
 	case ui.ActionRestartCore:
 		return rowCoreRestart, ui.CoreProgressRestarting
 	case ui.ActionEnableSystemProxy, ui.ActionForceSystemProxy:
-		return rowSystemProxy, ui.ProxyProgressEnabling
+		return rowSystemProxyAction, ui.ProxyProgressEnabling
 	case ui.ActionDisableSystemProxy:
-		return rowSystemProxy, ui.ProxyProgressDisabling
+		return rowSystemProxyAction, ui.ProxyProgressDisabling
 	case ui.ActionEnableTun:
-		return rowTUN, ui.TunProgressEnabling
+		return rowTUNAction, ui.TunProgressEnabling
 	case ui.ActionDisableTun:
-		return rowTUN, ui.TunProgressDisabling
+		return rowTUNAction, ui.TunProgressDisabling
 	default:
 		return "", ""
 	}
@@ -1623,6 +1690,28 @@ func (m *Model) coreActionLabel() string {
 		return ui.InstallCoreLabel
 	}
 	return ui.UpdateCoreLabel
+}
+
+// systemProxyActionLabel is the Network action-row label: the verb for what
+// pressing enter will do next. Mirrors the decision in confirmSystemProxyToggle
+// so the label always matches the action that fires.
+func (m *Model) systemProxyActionLabel() string {
+	switch {
+	case m.systemProxy.Observed.Foreign:
+		return ui.ForceEnableSystemProxyLabel
+	case m.systemProxy.Desired || m.systemProxy.Observed.Owned:
+		return ui.DisableSystemProxyLabel
+	default:
+		return ui.EnableSystemProxyLabel
+	}
+}
+
+// tunActionLabel is the Network action-row label, mirroring confirmTunToggle.
+func (m *Model) tunActionLabel() string {
+	if m.tun.DesiredEnable {
+		return ui.DisableTunLabel
+	}
+	return ui.EnableTunLabel
 }
 
 func (m *Model) runAction(start actionStartMsg) tea.Cmd {
