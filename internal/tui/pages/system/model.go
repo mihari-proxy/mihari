@@ -266,6 +266,11 @@ type actionResultMsg struct {
 	err     error
 }
 
+type coreLoadResultMsg struct {
+	core protocol.CoreStatus
+	err  error
+}
+
 // Err implements the shell's action-outcome contract so core update/restart
 // actions are classified Succeeded/Failed in the Recent operations ledger.
 func (m actionResultMsg) Err() error { return m.err }
@@ -638,6 +643,11 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, nil
 	case ui.CoreObservedMsg:
 		m.core = typed.Core
+		return m, nil
+	case coreLoadResultMsg:
+		if typed.err == nil {
+			m.core = typed.core
+		}
 		return m, nil
 	case ui.ActionPendingMsg:
 		m.beginRowPending(typed.Action)
@@ -1804,10 +1814,7 @@ func (m *Model) loadCore() tea.Cmd {
 	}
 	return func() tea.Msg {
 		core, err := m.client.Core(m.ctx)
-		if err != nil {
-			return actionResultMsg{err: err}
-		}
-		return ui.CoreObservedMsg{Core: core}
+		return coreLoadResultMsg{core: core, err: err}
 	}
 }
 

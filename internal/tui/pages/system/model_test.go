@@ -48,6 +48,7 @@ type fakeClient struct {
 	onboardingCalls int
 	coreCalls       int
 	coreStatus      protocol.CoreStatus
+	coreErr         error
 
 	systemProxy       protocol.SystemProxyStatus
 	systemProxyCalls  int
@@ -117,6 +118,9 @@ func (f *fakeClient) Onboarding(context.Context) (protocol.OnboardingStatus, err
 }
 func (f *fakeClient) Core(context.Context) (protocol.CoreStatus, error) {
 	f.coreCalls++
+	if f.coreErr != nil {
+		return protocol.CoreStatus{}, f.coreErr
+	}
 	if f.coreStatus.Schema != "" {
 		return f.coreStatus, nil
 	}
@@ -2089,6 +2093,75 @@ func TestSystemCoreChannelEnterSwitchesToOtherChannel(t *testing.T) {
 			}
 			if client.lastMutation.OperationID != "system-op" {
 				t.Fatalf("operation=%q", client.lastMutation.OperationID)
+			}
+		})
+	}
+}
+
+func TestSystemCoreChannelSwitchStaysPendingUntilSuccessAndShowsTargetChannel(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		from string
+		to   string
+	}{
+		{name: "stable to alpha", from: "stable", to: "alpha"},
+		{name: "alpha to stable", from: "alpha", to: "stable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeClient{onboarding: protocol.OnboardingStatus{Revision: 11}}
+			model := New(client, func() string { return "system-op" })
+			status := protocol.Status{Revision: 11, Capabilities: []string{protocol.CapabilityCore}}
+			model.SetSnapshot(status, protocol.CoreStatus{
+				Revision: 11, Status: "running", Version: "v1.19.0", Channel: test.from,
+			})
+			model.SetMutationsEnabled(true)
+
+			updated, _ := model.Update(ui.ActionPendingMsg{Action: ui.ActionSwitchCoreChannel})
+			model = updated.(*Model)
+			if !model.pending || model.pendingRow != rowCoreChannel || !model.mutationsEnabled {
+				t.Fatalf("pending=%v row=%q mutations=%v", model.pending, model.pendingRow, model.mutationsEnabled)
+			}
+			if view := model.View(); !strings.Contains(view, ui.CoreProgressSwitching) {
+				t.Fatalf("pending channel switch is not visible:\n%s", view)
+			}
+
+			client.coreErr = errors.New("mihomo controller unavailable")
+			updated, command := model.Update(actionResultMsg{
+				kind:    actionSwitchChannel,
+				install: protocol.CoreInstallResult{Schema: "mihari/v1", Revision: 12, Version: "v1.20.0", Updated: true},
+			})
+			model = updated.(*Model)
+			batch, ok := command().(tea.BatchMsg)
+			if !ok {
+				t.Fatalf("success follow-up=%T want tea.BatchMsg", command())
+			}
+			for _, followUp := range batch {
+				message := followUp()
+				switch message.(type) {
+				case actionResultMsg, coreLoadResultMsg:
+					updated, _ = model.Update(message)
+					model = updated.(*Model)
+				}
+			}
+			if model.pending || model.outcomeRow != rowCoreChannel || !model.outcomeOK {
+				t.Fatalf("temporary core refresh replaced mutation success: pending=%v outcome row=%q ok=%v", model.pending, model.outcomeRow, model.outcomeOK)
+			}
+
+			client.coreErr = nil
+			client.coreStatus = protocol.CoreStatus{
+				Schema: "mihari/v1", Revision: 12, Status: "running", Version: "v1.20.0", Channel: test.to,
+			}
+			updated, _ = model.Update(model.loadCore()())
+			model = updated.(*Model)
+			status.Revision = 12
+			model.status = status
+
+			if model.pending || model.outcomeRow != rowCoreChannel || !model.outcomeOK {
+				t.Fatalf("pending=%v outcome row=%q ok=%v", model.pending, model.outcomeRow, model.outcomeOK)
+			}
+			view := model.View()
+			if !strings.Contains(view, ui.DoneLabel) || !strings.Contains(view, test.to) {
+				t.Fatalf("successful switch did not converge to Done and %q:\n%s", test.to, view)
 			}
 		})
 	}
