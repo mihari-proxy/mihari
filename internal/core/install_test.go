@@ -536,6 +536,102 @@ func TestPrepare(t *testing.T) {
 	})
 }
 
+func TestPrepareAlphaShortCircuitUsesSHA(t *testing.T) {
+	const assetName = "mihomo-linux-amd64-alpha-e183c58.gz"
+	archive := gzipFixture(t, []byte("alpha-binary"))
+
+	tests := []struct {
+		name           string
+		currentVersion string
+		alphaSHA       string
+		wantUpdated    bool
+		wantAssetHits  int
+	}{
+		{
+			name:           "matching sha short-circuits",
+			currentVersion: "alpha-e183c58",
+			alphaSHA:       "e183c58",
+			wantUpdated:    false,
+			wantAssetHits:  0,
+		},
+		{
+			name:           "rolling sha downloads",
+			currentVersion: "alpha-oldsha",
+			alphaSHA:       "oldsha",
+			wantUpdated:    true,
+			wantAssetHits:  1,
+		},
+		{
+			name:           "B1 rolling sha downloads despite Prerelease-Alpha version",
+			currentVersion: "Prerelease-Alpha",
+			alphaSHA:       "oldsha",
+			wantUpdated:    true,
+			wantAssetHits:  1,
+		},
+		{
+			name:           "B1 matching sha short-circuits despite Prerelease-Alpha version",
+			currentVersion: "Prerelease-Alpha",
+			alphaSHA:       "e183c58",
+			wantUpdated:    false,
+			wantAssetHits:  0,
+		},
+		{
+			name:           "empty AlphaSHA must download",
+			currentVersion: "alpha-e183c58",
+			alphaSHA:       "",
+			wantUpdated:    true,
+			wantAssetHits:  1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var requested []string
+			server := alphaReleaseFixture(t, assetName, archive, &requested)
+			defer server.Close()
+
+			root := t.TempDir()
+			binaryPath := filepath.Join(root, "mihomo")
+			if err := os.WriteFile(binaryPath, []byte("existing-alpha"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			installer := Installer{
+				HTTPClient: server.Client(), APIBase: server.URL, Repository: "MetaCubeX/mihomo",
+				GOOS: "linux", GOARCH: "amd64",
+				Runner: &recordingRunner{output: []byte("Mihomo Meta alpha-e183c58 linux amd64")},
+			}
+			candidate, err := installer.Prepare(context.Background(), InstallRequest{
+				BinaryPath:     binaryPath,
+				DataDir:        root,
+				ConfigPath:     filepath.Join(root, "config.yaml"),
+				StagingDir:     filepath.Join(root, "staging"),
+				CurrentVersion: test.currentVersion,
+				Channel:        "alpha",
+				AlphaSHA:       test.alphaSHA,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer candidate.Cleanup()
+			if candidate.Updated() != test.wantUpdated {
+				t.Fatalf("Updated=%v want %v", candidate.Updated(), test.wantUpdated)
+			}
+			if got := candidate.Version(); got != "alpha-e183c58" {
+				t.Fatalf("Version=%q want alpha-e183c58", got)
+			}
+			assetHits := 0
+			for _, path := range requested {
+				if path == "/asset" {
+					assetHits++
+				}
+			}
+			if assetHits != test.wantAssetHits {
+				t.Fatalf("asset downloads=%d want %d requested=%q", assetHits, test.wantAssetHits, requested)
+			}
+		})
+	}
+}
+
 // selectiveRunner mimics a broken/odd existing binary (existingPath) while
 // serving a valid candidate response for any other path (downloaded candidate,
 // config validation). existingOut nil → running existingPath errors.

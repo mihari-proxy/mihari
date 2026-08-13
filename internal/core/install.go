@@ -124,6 +124,24 @@ func (c *Candidate) Cleanup() {
 	})
 }
 
+// localReadyVersion 在二进制存在且 DetectVersion（含 ParseVersion）成功时返回版本。
+// 判据与 Manager.Install setup 预检同一路径（design §4.3）；失败则走下载修复。
+func (i Installer) localReadyVersion(ctx context.Context, binaryPath string) (string, bool) {
+	info, err := os.Stat(binaryPath)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	runner := i.Runner
+	if runner == nil {
+		runner = OSCommandRunner{}
+	}
+	version, err := DetectVersion(ctx, runner, binaryPath)
+	if err != nil || version == "" {
+		return "", false
+	}
+	return version, true
+}
+
 func (i Installer) Prepare(ctx context.Context, request InstallRequest) (PreparedCore, error) {
 	checkCtx, cancel := context.WithTimeout(ctx, i.checkTimeout())
 	release, err := i.LatestRelease(checkCtx, request.Channel)
@@ -131,22 +149,22 @@ func (i Installer) Prepare(ctx context.Context, request InstallRequest) (Prepare
 	if err != nil {
 		return nil, withAIOHint(err)
 	}
-	if request.CurrentVersion == release.TagName {
-		if info, statErr := os.Stat(request.BinaryPath); statErr == nil && !info.IsDir() {
-			// 文件存在还要 -v 成功才短路；判据复用 DetectVersion（含 ParseVersion 版本格式校验）
-			// ——design §4.3，与 Manager.Install setup 预检同一判据、DRY。-v 失败 → 走下载修复。
-			runner := i.Runner
-			if runner == nil {
-				runner = OSCommandRunner{}
-			}
-			if version, vErr := DetectVersion(ctx, runner, request.BinaryPath); vErr == nil && version != "" {
-				return &Candidate{binaryPath: request.BinaryPath, version: version, updated: false}, nil
-			}
+	if request.Channel != "alpha" && request.CurrentVersion == release.TagName {
+		if version, ok := i.localReadyVersion(ctx, request.BinaryPath); ok {
+			return &Candidate{binaryPath: request.BinaryPath, version: version, updated: false}, nil
 		}
 	}
 	asset, err := SelectAsset(release, i.targetOS(), i.targetArch(), request.Channel)
 	if err != nil {
 		return nil, err
+	}
+	if request.Channel == "alpha" {
+		releaseSHA := ParseAlphaSHA(asset.Name)
+		if releaseSHA != "" && releaseSHA == request.AlphaSHA {
+			if version, ok := i.localReadyVersion(ctx, request.BinaryPath); ok {
+				return &Candidate{binaryPath: request.BinaryPath, version: version, alphaSHA: releaseSHA, updated: false}, nil
+			}
+		}
 	}
 	if asset.Size < 0 || asset.Size > maxCoreArchiveSize {
 		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo asset is too large"}
