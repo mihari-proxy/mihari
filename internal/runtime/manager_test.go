@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -1160,6 +1161,102 @@ func TestManagerInstallSetupSkipsNetworkWhenLocalCoreValid(t *testing.T) {
 	}
 	if got := installer.detectCalls.Load(); got != 1 {
 		t.Fatalf("detect calls=%d", got)
+	}
+}
+
+func TestManagerInstallSetupAppliesSidecarChannelWhenStampNew(t *testing.T) {
+	installer := &fakeInstaller{}
+	installer.detectVersion = func(context.Context, string) (string, error) {
+		return "v1.18.0", nil
+	}
+	installer.prepare = func(context.Context, core.InstallRequest) (PreparedCore, error) {
+		t.Fatal("Prepare must not be called when setup local core is valid")
+		return nil, nil
+	}
+
+	binDir := t.TempDir()
+	binaryPath := filepath.Join(binDir, "mihomo")
+	if err := os.WriteFile(binaryPath, []byte("placeholder"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "core-channel"), []byte("alpha\nalpha-e183c58\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, settingsPath := persistedChannelSettings(t, "stable")
+	manager := newTestManager(Options{Installer: installer, Settings: settings, SettingsPath: settingsPath})
+	manager.installRequest.BinaryPath = binaryPath
+
+	result, err := manager.Install(context.Background(), Operation{ID: "setup-sidecar", Source: "setup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Version != "v1.18.0" || result.Updated {
+		t.Fatalf("result=%#v", result)
+	}
+	if got := installer.calls.Load(); got != 0 {
+		t.Fatalf("prepare calls=%d (setup must skip network)", got)
+	}
+	if manager.settings.CoreChannel != "alpha" || manager.settings.CoreChannelBundle != "alpha-e183c58" {
+		t.Fatalf("settings channel=%q bundle=%q", manager.settings.CoreChannel, manager.settings.CoreChannelBundle)
+	}
+	if got := manager.store.Load().Core.Channel; got != "alpha" {
+		t.Fatalf("store.Core.Channel=%q want alpha", got)
+	}
+	if got := manager.store.Load().Core.Version; got != "v1.18.0" {
+		t.Fatalf("store.Core.Version=%q want v1.18.0", got)
+	}
+	loaded, err := config.Load(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.CoreChannel != "alpha" || loaded.CoreChannelBundle != "alpha-e183c58" {
+		t.Fatalf("persisted settings=%#v", loaded)
+	}
+}
+
+func TestManagerInstallSetupDoesNotRevertTUIChannelWhenSidecarStampMatches(t *testing.T) {
+	installer := &fakeInstaller{}
+	installer.detectVersion = func(context.Context, string) (string, error) {
+		return "v1.18.0", nil
+	}
+	installer.prepare = func(context.Context, core.InstallRequest) (PreparedCore, error) {
+		t.Fatal("Prepare must not be called when setup local core is valid")
+		return nil, nil
+	}
+
+	binDir := t.TempDir()
+	binaryPath := filepath.Join(binDir, "mihomo")
+	if err := os.WriteFile(binaryPath, []byte("placeholder"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "core-channel"), []byte("alpha\nalpha-e183c58\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, settingsPath := persistedChannelSettings(t, "stable")
+	settings.CoreChannelBundle = "alpha-e183c58"
+	if err := config.Save(settingsPath, settings); err != nil {
+		t.Fatal(err)
+	}
+	manager := newTestManager(Options{Installer: installer, Settings: settings, SettingsPath: settingsPath})
+	manager.installRequest.BinaryPath = binaryPath
+
+	if _, err := manager.Install(context.Background(), Operation{ID: "setup-sidecar-stamp", Source: "setup"}); err != nil {
+		t.Fatal(err)
+	}
+	if manager.settings.CoreChannel != "stable" {
+		t.Fatalf("settings.CoreChannel=%q want stable", manager.settings.CoreChannel)
+	}
+	if got := manager.store.Load().Core.Channel; got == "alpha" {
+		t.Fatalf("store.Core.Channel=%q must not revert to alpha", got)
+	}
+	loaded, err := config.Load(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.CoreChannel != "stable" || loaded.CoreChannelBundle != "alpha-e183c58" {
+		t.Fatalf("persisted settings=%#v", loaded)
 	}
 }
 

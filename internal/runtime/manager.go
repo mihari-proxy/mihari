@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/netip"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 
@@ -405,6 +406,23 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		// store.Core.Version 不作判据（DetectVersion 失败时旧值残留，见 runtime.go 启动检测）。
 		if operation.Source == "setup" {
 			if version, detectErr := m.installer.DetectVersion(ctx, installRequest.BinaryPath); detectErr == nil && version != "" {
+				sidecar := filepath.Join(filepath.Dir(installRequest.BinaryPath), "core-channel")
+				m.settingsMu.Lock()
+				changed, applyErr := config.ApplyCoreChannelSidecar(&m.settings, sidecar)
+				if changed && applyErr == nil {
+					applyErr = m.persistSettings()
+				}
+				appliedChannel := m.settings.CoreChannel
+				m.settingsMu.Unlock()
+				if applyErr != nil {
+					return nil, applyErr
+				}
+				if changed {
+					snapshot := m.store.Load()
+					snapshot.Core.Version = version
+					snapshot.Core.Channel = appliedChannel
+					m.store.Store(snapshot)
+				}
 				return core.InstallResult{Version: version, Updated: false}, nil
 			}
 			// -v 失败（缺失/损坏）→ 落 Prepare 联网修复（失败由 Prepare 报错并提示 aio 脚本）。
