@@ -1049,8 +1049,7 @@ func TestSystemTunEnableConflictEntersForceConfirmPath(t *testing.T) {
 		t.Fatalf("impact=%q", intent.Impact)
 	}
 	result := intent.Execute()
-	updated, _ = model.Update(result)
-	model = updated.(*Model)
+	model.Update(result)
 	if client.enableTunCalls != 1 || !client.lastTunMutation.Force {
 		t.Fatalf("force mutation=%#v calls=%d", client.lastTunMutation, client.enableTunCalls)
 	}
