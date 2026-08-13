@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	tea "charm.land/bubbletea/v2"
 	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
@@ -30,10 +31,18 @@ type Options struct {
 func Run(ctx context.Context, options Options) error {
 	model := NewModel()
 	var controlSession *session.Session
+	var closeSessionOnce sync.Once
+	closeSession := func() {
+		closeSessionOnce.Do(func() {
+			if controlSession != nil {
+				controlSession.Close()
+			}
+		})
+	}
+	defer closeSession()
 	if options.Client != nil {
 		controlSession = session.New(options.Client, session.Options{})
 		model = newModelWithClientContext(ctx, controlSession.Start(ctx), options.Client)
-		defer controlSession.Close()
 	}
 	if options.Service != nil {
 		model.SetServiceController(options.Service)
@@ -46,10 +55,13 @@ func Run(ctx context.Context, options Options) error {
 		tea.WithOutput(options.Output),
 	)
 	final, err := program.Run()
-	return finishRun(final, err, options.Output, options.Relaunch)
+	return finishRun(final, err, options.Output, options.Relaunch, closeSession)
 }
 
-func finishRun(final tea.Model, runErr error, warningWriter io.Writer, relaunch func() error) error {
+func finishRun(final tea.Model, runErr error, warningWriter io.Writer, relaunch func() error, cleanup func()) error {
+	if cleanup != nil {
+		cleanup()
+	}
 	if runErr != nil {
 		return runErr
 	}
