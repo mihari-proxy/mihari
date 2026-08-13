@@ -38,7 +38,7 @@ func Load(path string) (Catalog, error) {
 	decoder.KnownFields(true)
 	var catalog Catalog
 	if err := decoder.Decode(&catalog); err != nil {
-		return Catalog{}, dataError("invalid subscription catalog")
+		return Catalog{}, dataError(decodeErrorMessage(err, "subscription catalog"))
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
@@ -180,4 +180,20 @@ func parseInterval(value string) (time.Duration, error) {
 
 func dataError(message string) error {
 	return protocol.APIError{Code: protocol.CodeDataFailure, Message: message}
+}
+
+// decodeErrorMessage turns a yaml decode error into a user-facing message.
+// Unknown fields (surfaced as *yaml.TypeError with "not found in type") are
+// called out explicitly so a downgrade mismatch or a typo is obvious instead
+// of a generic "invalid" failure.
+func decodeErrorMessage(err error, what string) string {
+	var te *yaml.TypeError
+	if errors.As(err, &te) {
+		for _, item := range te.Errors {
+			if strings.Contains(item, "not found in type") {
+				return fmt.Sprintf("invalid %s: unknown field — %s; it may have been written by a newer mihari version or be a typo", what, item)
+			}
+		}
+	}
+	return "invalid " + what
 }

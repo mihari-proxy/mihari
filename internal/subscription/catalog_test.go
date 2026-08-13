@@ -56,6 +56,28 @@ func TestLoadRejectsUnknownFieldsAndInvalidInterval(t *testing.T) {
 	}
 }
 
+// An unknown field must surface the offending name and a newer-version/typo
+// hint, not the generic "invalid subscription catalog" message KnownFields
+// used to collapse every decode error into.
+func TestLoadReportsUnknownField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "catalog.yaml")
+	doc := []byte("schema: mihari.subscriptions/v1\nglobal-interval: 12h\nmystery-field: true\n")
+	if err := os.WriteFile(path, doc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected load failure")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "mystery-field") {
+		t.Fatalf("error should name the unknown field: %s", msg)
+	}
+	if !strings.Contains(msg, "newer") && !strings.Contains(msg, "typo") {
+		t.Fatalf("error should hint at newer-version/typo: %s", msg)
+	}
+}
+
 // Normalize only clears an invalid ActiveID; it must NOT re-pick a default
 // (that is fillDefaults' job). Keeps the duplicate-ID rejection assertion.
 func TestNormalizeClearsInvalidActiveIDAndRejectsDuplicates(t *testing.T) {
