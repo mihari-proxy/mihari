@@ -30,10 +30,12 @@ type StatusBarData struct {
 }
 
 const (
-	statusSep           = "  ·  "
-	statusCoreRunning   = "●"
-	statusCoreOffline   = "○"
-	statusCoreReconnect = "◌"
+	statusSep              = "  ·  "
+	statusCoreRunning      = "●"
+	statusCoreOffline      = "○"
+	statusCoreReconnect    = "◌"
+	statusRateWidth        = 11 // "999.9 MiB/s"
+	statusCompactRateWidth = 6  // "999.9M"
 )
 
 // RenderStatusBar builds the top status-shell bar (Full or Compact).
@@ -65,7 +67,7 @@ func RenderStatusBar(theme Theme, data StatusBarData, width int, compact bool) s
 		segments = append(segments,
 			PrioritySegment{Priority: 5, Render: func() string { return fmt.Sprintf("%dc", data.Connections) }},
 			PrioritySegment{Priority: 5, Render: func() string {
-				return fmt.Sprintf("↑%s/s ↓%s/s", formatCompactIEC(data.UploadRate), formatCompactIEC(data.DownloadRate))
+				return fmt.Sprintf("↑%s/s ↓%s/s", statusRateLabel(data.UploadRate, true), statusRateLabel(data.DownloadRate, true))
 			}},
 			PrioritySegment{Priority: 2, Render: func() string { return formatCompactIEC(data.MemoryInUse) }},
 		)
@@ -73,7 +75,7 @@ func RenderStatusBar(theme Theme, data StatusBarData, width int, compact bool) s
 		segments = append(segments,
 			PrioritySegment{Priority: 5, Render: func() string { return fmt.Sprintf("%d conn", data.Connections) }},
 			PrioritySegment{Priority: 5, Render: func() string {
-				return fmt.Sprintf("↑%s  ↓%s", FormatRate(data.UploadRate), FormatRate(data.DownloadRate))
+				return fmt.Sprintf("↑%s  ↓%s", statusRateLabel(data.UploadRate, false), statusRateLabel(data.DownloadRate, false))
 			}},
 			PrioritySegment{Priority: 2, Render: func() string { return FormatBytes(data.MemoryInUse) }},
 		)
@@ -164,6 +166,13 @@ func coreStatusGlyph(theme Theme, status string, stale bool) (string, lipgloss.S
 		style = ToneStyle(theme, ToneCaution)
 	}
 	return glyph, style
+}
+
+func statusRateLabel(value int64, compact bool) string {
+	if compact {
+		return PadCell(formatCompactIEC(value), statusCompactRateWidth, AlignRight)
+	}
+	return PadCell(FormatRate(value), statusRateWidth, AlignRight)
 }
 
 // formatCompactIEC renders a short IEC magnitude for compact status (e.g. 1.2M, 84M).
