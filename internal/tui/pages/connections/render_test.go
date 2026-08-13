@@ -3,7 +3,9 @@ package connections
 import (
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -38,5 +40,38 @@ func TestView_ClosedDatasetTitle(t *testing.T) {
 	want := ui.FormatConnectionsTitle(false, 0)
 	if !strings.Contains(view, want) {
 		t.Fatalf("missing closed list title %q in:\n%s", want, view)
+	}
+}
+
+func TestView_PositionIndicator(t *testing.T) {
+	// Empty history, focus on control → "0/0".
+	empty := New(nil, nil)
+	empty.SetSize(80, 24)
+	if view := empty.View(); !strings.Contains(view, "0/0") {
+		t.Fatalf("empty list should show 0/0:\n%s", view)
+	}
+
+	// Two connections; focus on the control strip (not a data row) → "—/2".
+	controlled := New(nil, nil)
+	controlled.SetSize(80, 24)
+	controlled.Observe(protocol.ConnectionList{Connections: []protocol.Connection{
+		{ID: "one", Metadata: protocol.ConnectionMetadata{Host: "one.test"}},
+		{ID: "two", Metadata: protocol.ConnectionMetadata{Host: "two.test"}},
+	}}, time.Unix(1, 0))
+	controlled.focus = pageFocus{kind: focusControl}
+	if view := controlled.View(); !strings.Contains(view, "—/2") {
+		t.Fatalf("control focus should show —/2:\n%s", view)
+	}
+
+	// Focus on the first connection row → "1/2".
+	onRow := New(nil, nil)
+	onRow.SetSize(80, 24)
+	onRow.Observe(protocol.ConnectionList{Connections: []protocol.Connection{
+		{ID: "one", Metadata: protocol.ConnectionMetadata{Host: "one.test"}},
+		{ID: "two", Metadata: protocol.ConnectionMetadata{Host: "two.test"}},
+	}}, time.Unix(1, 0))
+	onRow.focus = pageFocus{kind: focusRow, rowID: "one"}
+	if view := onRow.View(); !strings.Contains(view, "1/2") {
+		t.Fatalf("focused first row should show 1/2:\n%s", view)
 	}
 }

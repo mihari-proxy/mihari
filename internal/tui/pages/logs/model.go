@@ -234,7 +234,14 @@ func (m *Model) View() string {
 	}
 	list := ui.RenderBorderedSection(m.theme, ui.LogsSectionTitle, strings.Join(listLines, "\n"), inner)
 
-	content := controls + "\n" + list
+	pos, total, onRow := 0, len(entries), false
+	if m.focus == focusRow && total > 0 {
+		pos, onRow = m.focused+1, true
+	}
+	indicator := m.theme.Muted.Render(ui.FormatPositionIndicator(onRow, pos, total))
+	listStatus := ui.PadCell(indicator, inner, ui.AlignRight)
+
+	content := controls + "\n" + list + "\n" + listStatus
 	if m.detail != nil {
 		content = m.renderDetail()
 	}
@@ -291,9 +298,10 @@ func (m *Model) visibleEntries() []Entry {
 }
 
 // logChrome is the page chrome outside log rows: Controls section
-// (top + control + search + bottom = 4) plus Logs section (top + header +
-// rule + bottom = 4), leaving the rest for data rows.
-const logChrome = 8
+// (top + control + search + bottom = 4), Logs section (top + header + rule +
+// bottom = 4), plus the position indicator line below the list (= 1), leaving
+// the rest for data rows.
+const logChrome = 9
 
 func (m *Model) renderEntry(entry Entry, focused bool) []string {
 	marker := ui.FocusPrefix(focused)

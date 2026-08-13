@@ -250,6 +250,46 @@ func TestView_FocusedRowHighlightOnlyWhenContentFocused(t *testing.T) {
 	}
 }
 
+func TestView_PositionIndicator(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSize(80, 24)
+	model.SetRules(protocol.RuleList{Rules: []protocol.Rule{
+		{Type: "DOMAIN", Payload: "a.com", Proxy: "DIRECT"},
+		{Type: "DOMAIN", Payload: "b.com", Proxy: "REJECT"},
+	}})
+	model.SetContentFocused(true)
+
+	// Focused on the second rule row: position is 2 of 2.
+	model.focus = pageFocus{kind: focusRow, row: 1}
+	if view := model.View(); !strings.Contains(view, "2/2") {
+		t.Fatalf("focused row 2 of 2 should show 2/2:\n%s", view)
+	}
+
+	// Focus on the control strip (not a data row): em-dash over total.
+	model.focus = pageFocus{kind: focusControl}
+	if view := model.View(); !strings.Contains(view, "—/2") {
+		t.Fatalf("control focus should show —/2:\n%s", view)
+	}
+
+	// Empty filtered list renders 0/0.
+	model.SetRules(protocol.RuleList{})
+	model.focus = pageFocus{kind: focusControl}
+	if view := model.View(); !strings.Contains(view, "0/0") {
+		t.Fatalf("empty list should show 0/0:\n%s", view)
+	}
+
+	// Providers view shares the indicator path: focused first of two shows 1/2.
+	model.view = viewProviders
+	model.SetProviders(protocol.RuleProviderList{Providers: []protocol.RuleProvider{
+		{Name: "OpenAI", Type: "HTTP"},
+		{Name: "GitHub", Type: "File"},
+	}})
+	model.focus = pageFocus{kind: focusRow, row: 0}
+	if view := model.View(); !strings.Contains(view, "1/2") {
+		t.Fatalf("providers view focused row 1 of 2 should show 1/2:\n%s", view)
+	}
+}
+
 func TestModel_FooterHintsAreContextual(t *testing.T) {
 	model := New(nil, nil)
 	if hints := model.FooterHints(); !strings.Contains(hints, "/ search") {

@@ -331,6 +331,39 @@ func TestModel_EnterOpensTypedDetailAndEscCloses(t *testing.T) {
 	}
 }
 
+func TestView_PositionIndicator(t *testing.T) {
+	// Empty buffer + focus on control → "0/0".
+	empty := New(0)
+	empty.SetSize(80, 24)
+	empty.SetContentFocused(true)
+	if view := empty.View(); !strings.Contains(view, "0/0") {
+		t.Fatalf("empty list should show 0/0:\n%s", view)
+	}
+
+	// Non-empty buffer with focus off data rows → "—/total".
+	controlled := New(0)
+	controlled.SetSize(80, 24)
+	controlled.SetContentFocused(true)
+	controlled.Append(logAt("one", "info", 1))
+	controlled.Append(logAt("two", "warn", 2))
+	controlled.focus = focusControl
+	if view := controlled.View(); !strings.Contains(view, "—/2") {
+		t.Fatalf("focus off rows should show —/2:\n%s", view)
+	}
+
+	// Focus on a data row → "<pos>/<total>".
+	onRow := New(0)
+	onRow.SetSize(80, 24)
+	onRow.SetContentFocused(true)
+	onRow.Append(logAt("one", "info", 1))
+	onRow.Append(logAt("two", "warn", 2))
+	onRow.focus = focusRow
+	onRow.focused = 0 // first row → pos 1
+	if view := onRow.View(); !strings.Contains(view, "1/2") {
+		t.Fatalf("focused first row should show 1/2:\n%s", view)
+	}
+}
+
 func logAt(message, level string, second int64) Entry {
 	return Entry{ObservedAt: time.Unix(second, 0), Log: protocol.LogEntry{Level: level, Message: message}}
 }
