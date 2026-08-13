@@ -103,13 +103,14 @@ func (s *Server) installCore(writer http.ResponseWriter, request *http.Request) 
 	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
 		return
 	}
-	result, err := s.runtime.Install(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision})
+	result, err := s.runtime.Install(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision, Channel: body.Channel})
 	if err != nil {
 		writeControlError(writer, err)
 		return
 	}
+	snapshot := s.runtime.Snapshot()
 	writeJSON(writer, http.StatusOK, protocol.CoreInstallResult{
-		Schema: "mihari/v1", Version: result.Version, Updated: result.Updated, Revision: s.runtime.Snapshot().Revision,
+		Schema: "mihari/v1", Version: result.Version, Updated: result.Updated, Revision: snapshot.Revision, Channel: snapshot.Core.Channel,
 	})
 }
 
@@ -424,7 +425,7 @@ func (s *Server) requireRuntime(writer http.ResponseWriter) bool {
 
 func coreStatusDTO(snapshot state.Snapshot) protocol.CoreStatus {
 	return protocol.CoreStatus{
-		Schema: "mihari/v1", Revision: snapshot.Revision, Status: snapshot.Core.Status, Version: snapshot.Core.Version,
+		Schema: "mihari/v1", Revision: snapshot.Revision, Status: snapshot.Core.Status, Version: snapshot.Core.Version, Channel: snapshot.Core.Channel,
 		PID: snapshot.Core.PID, Restarts: snapshot.Core.Restarts, LastError: snapshot.Core.LastError, NextRetryAt: snapshot.Core.NextRetryAt,
 	}
 }
