@@ -147,3 +147,55 @@ func TestCoreStatusMarshalsLocalReadinessOptionally(t *testing.T) {
 		t.Fatalf("zero-value local fields should be omitted: %s", omitted)
 	}
 }
+
+func TestCoreStatusMarshalsChannelOptionally(t *testing.T) {
+	raw, err := json.Marshal(CoreStatus{Channel: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"channel":"alpha"`) {
+		t.Fatalf("channel not surfaced: %s", raw)
+	}
+	omitted, err := json.Marshal(CoreStatus{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(omitted), "channel") {
+		t.Fatalf("zero-value channel should be omitted: %s", omitted)
+	}
+}
+
+func TestCoreInstallResultMarshalsChannelOptionally(t *testing.T) {
+	raw, err := json.Marshal(CoreInstallResult{Channel: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"channel":"alpha"`) {
+		t.Fatalf("channel not surfaced: %s", raw)
+	}
+	omitted, err := json.Marshal(CoreInstallResult{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(omitted), "channel") {
+		t.Fatalf("zero-value channel should be omitted: %s", omitted)
+	}
+}
+
+func TestMutationRequestDecodesChannelOptionally(t *testing.T) {
+	var withChannel MutationRequest
+	if err := json.Unmarshal([]byte(`{"operation_id":"x","channel":"alpha"}`), &withChannel); err != nil {
+		t.Fatal(err)
+	}
+	if withChannel.Channel == nil || *withChannel.Channel != "alpha" {
+		t.Fatalf("channel=%v want non-nil alpha", withChannel.Channel)
+	}
+
+	var omitted MutationRequest
+	if err := json.Unmarshal([]byte(`{"operation_id":"x"}`), &omitted); err != nil {
+		t.Fatal(err)
+	}
+	if omitted.Channel != nil {
+		t.Fatalf("channel=%v want nil", omitted.Channel)
+	}
+}
