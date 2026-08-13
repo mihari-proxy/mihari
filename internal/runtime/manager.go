@@ -53,6 +53,7 @@ type Operation struct {
 	ID         string
 	Source     string
 	IfRevision *uint64
+	Channel    *string
 }
 
 // GeoIPCandidate is the minimal prepared-pair contract used by the mutation coordinator.
@@ -381,8 +382,22 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		if m.installer == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "core installer is unavailable"}
 		}
+		m.settingsMu.Lock()
+		channel := m.settings.CoreChannel
+		m.settingsMu.Unlock()
+		if channel == "" {
+			channel = "stable"
+		}
+		if operation.Channel != nil {
+			channel = *operation.Channel
+		}
+		if channel != "stable" && channel != "alpha" {
+			return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid core channel"}
+		}
 		installRequest := m.installRequest
 		installRequest.CurrentVersion = m.store.Load().Core.Version
+		installRequest.Channel = channel
+		installRequest.AlphaSHA = m.store.Load().Core.AlphaSHA
 		// setup 预检（design §4.3）：aio 脚本已预置核心时，对现有文件 -v 成功即秒过，不联网。
 		// store.Core.Version 不作判据（DetectVersion 失败时旧值残留，见 runtime.go 启动检测）。
 		if operation.Source == "setup" {
@@ -411,6 +426,18 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 					return snapshot, err
 				}
 				snapshot.Core.Version = result.Version
+				snapshot.Core.Channel = channel
+				snapshot.Core.AlphaSHA = result.AlphaSHA
+				if channel == "stable" {
+					snapshot.Core.AlphaSHA = ""
+				}
+				m.settingsMu.Lock()
+				m.settings.CoreChannel = channel
+				saveErr := m.persistSettings()
+				m.settingsMu.Unlock()
+				if saveErr != nil {
+					return snapshot, saveErr
+				}
 				return snapshot, nil
 			})
 			if err != nil {
