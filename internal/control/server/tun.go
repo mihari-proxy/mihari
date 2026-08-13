@@ -35,7 +35,7 @@ func (s *Server) enableTun(writer http.ResponseWriter, request *http.Request) {
 	}
 	status, err := s.runtime.EnableTun(request.Context(), runtimeapi.Operation{
 		ID: body.OperationID, Source: "control", IfRevision: body.IfRevision,
-	})
+	}, body.Force)
 	if err != nil {
 		writeControlError(writer, err)
 		return

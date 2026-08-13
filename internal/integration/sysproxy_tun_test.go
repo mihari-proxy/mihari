@@ -18,6 +18,7 @@ import (
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/sysproxy"
+	"github.com/mihari-proxy/mihari/internal/tundetect"
 )
 
 // TestSystemProxyForeignConflictAndForceOverIPC exercises the control path
@@ -27,7 +28,7 @@ func TestSystemProxyForeignConflictAndForceOverIPC(t *testing.T) {
 	controller := &stubMihomoController{configs: map[string]any{
 		"tun": map[string]any{"enable": false, "stack": "system"},
 	}}
-	client, cancel := startControlDaemon(t, backend, controller)
+	client, cancel := startControlDaemon(t, backend, controller, &tundetect.FakeBackend{})
 	defer cancel()
 
 	status, err := client.SystemProxy(context.Background())
@@ -96,7 +97,7 @@ func TestTunEnableDisableOverIPC(t *testing.T) {
 	controller := &stubMihomoController{configs: map[string]any{
 		"tun": map[string]any{"enable": false, "stack": "system"},
 	}}
-	client, cancel := startControlDaemon(t, backend, controller)
+	client, cancel := startControlDaemon(t, backend, controller, &tundetect.FakeBackend{})
 	defer cancel()
 
 	status, err := client.Tun(context.Background())
@@ -147,7 +148,57 @@ func TestTunEnableDisableOverIPC(t *testing.T) {
 	}
 }
 
-func startControlDaemon(t *testing.T, backend *sysproxy.FakeBackend, controller *stubMihomoController) (*controlclient.Client, context.CancelFunc) {
+// TestTunConflictAndForceOverIPC exercises TUN conflict gating end-to-end:
+// client → transport → daemon → Manager → FakeBackend。验证信号 A 门控 + force 覆盖。
+func TestTunConflictAndForceOverIPC(t *testing.T) {
+	backend := &sysproxy.FakeBackend{State: sysproxy.State{Enabled: false}}
+	controller := &stubMihomoController{configs: map[string]any{
+		"tun": map[string]any{"enable": false, "stack": "system"},
+	}}
+	tunDetect := &tundetect.FakeBackend{Detection: tundetect.Detection{
+		TunInterfaces: []string{"Wintun0", "Wintun1"},
+	}}
+	client, cancel := startControlDaemon(t, backend, controller, tunDetect)
+	defer cancel()
+
+	// status 携带结构化冲突证据（信号 A）。
+	status, err := client.Tun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Conflict == nil || len(status.Conflict.OtherTunInterfaces) == 0 {
+		t.Fatalf("status missing conflict evidence: %#v", status.Conflict)
+	}
+
+	// enable 无 force → CodeTunConflict，不下发 PATCH。
+	_, err = client.EnableTun(context.Background(), protocol.TunMutationRequest{
+		OperationID: "tun-conflict-1",
+	})
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeTunConflict {
+		t.Fatalf("enable without force err=%v", err)
+	}
+	if controller.patchCalls != 0 {
+		t.Fatalf("patchCalls=%d want 0 on conflict", controller.patchCalls)
+	}
+
+	// enable 带 force → 成功，下发 PATCH。
+	enabled, err := client.EnableTun(context.Background(), protocol.TunMutationRequest{
+		OperationID: "tun-force-1",
+		Force:       true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !enabled.DesiredEnable {
+		t.Fatalf("enabled=%#v", enabled)
+	}
+	if controller.patchCalls != 1 {
+		t.Fatalf("patchCalls=%d after force enable", controller.patchCalls)
+	}
+}
+
+func startControlDaemon(t *testing.T, backend *sysproxy.FakeBackend, controller *stubMihomoController, tunDetect tundetect.Backend) (*controlclient.Client, context.CancelFunc) {
 	t.Helper()
 	settingsPath := filepath.Join(t.TempDir(), "settings.yaml")
 	settings := config.Settings{
@@ -173,6 +224,7 @@ func startControlDaemon(t *testing.T, backend *sysproxy.FakeBackend, controller 
 		Coordinator:  state.NewCoordinator(store),
 		Controller:   controller,
 		SysProxy:     backend,
+		TunDetect:    tunDetect,
 		Settings:     settings,
 		SettingsPath: settingsPath,
 		BinaryExists: func() bool { return true },

@@ -50,7 +50,7 @@ func (r *recordingWebMutationRuntime) CloseAllConnections(_ context.Context, ope
 	return nil
 }
 
-func (r *recordingWebMutationRuntime) EnableTun(_ context.Context, operation runtimeapi.Operation) (protocol.TunStatus, error) {
+func (r *recordingWebMutationRuntime) EnableTun(_ context.Context, operation runtimeapi.Operation, _ bool) (protocol.TunStatus, error) {
 	r.enableOperations = append(r.enableOperations, operation)
 	return protocol.TunStatus{}, nil
 }

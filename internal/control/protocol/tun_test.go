@@ -88,3 +88,50 @@ func TestTunMutationRequest_OmitEmptyOptionalFields(t *testing.T) {
 		t.Fatalf("json=%s want=%s", raw, want)
 	}
 }
+
+func TestTunStatus_ConflictEvidence(t *testing.T) {
+	status := TunStatus{
+		Schema:        "mihari/v1",
+		Revision:      7,
+		DesiredEnable: false,
+		Conflict: &TunConflict{
+			OtherTunInterfaces:   []string{"Wintun 2"},
+			OtherMihomoProcesses: []string{"mihomo.exe (4321)"},
+		},
+	}
+	raw, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"schema":"mihari/v1","revision":7,"desired_enable":false,"managed":false,"conflict":{"other_tun_interfaces":["Wintun 2"],"other_mihomo_processes":["mihomo.exe (4321)"]}}`
+	if string(raw) != want {
+		t.Fatalf("json=%s want=%s", raw, want)
+	}
+
+	var got TunStatus
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Conflict == nil ||
+		len(got.Conflict.OtherTunInterfaces) != 1 || got.Conflict.OtherTunInterfaces[0] != "Wintun 2" ||
+		len(got.Conflict.OtherMihomoProcesses) != 1 || got.Conflict.OtherMihomoProcesses[0] != "mihomo.exe (4321)" {
+		t.Fatalf("got=%#v", got)
+	}
+}
+
+func TestTunMutationRequest_ForceFlag(t *testing.T) {
+	revision := uint64(5)
+	req := TunMutationRequest{
+		OperationID: "op-tun-force",
+		IfRevision:  &revision,
+		Force:       true,
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"operation_id":"op-tun-force","if_revision":5,"force":true}`
+	if string(raw) != want {
+		t.Fatalf("json=%s want=%s", raw, want)
+	}
+}

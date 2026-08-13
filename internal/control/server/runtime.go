@@ -43,7 +43,7 @@ type RuntimeAPI interface {
 	EnableSystemProxy(context.Context, runtimeapi.Operation, bool) (protocol.SystemProxyStatus, error)
 	DisableSystemProxy(context.Context, runtimeapi.Operation) (protocol.SystemProxyStatus, error)
 	TunStatus(context.Context) (protocol.TunStatus, error)
-	EnableTun(context.Context, runtimeapi.Operation) (protocol.TunStatus, error)
+	EnableTun(context.Context, runtimeapi.Operation, bool) (protocol.TunStatus, error)
 	DisableTun(context.Context, runtimeapi.Operation) (protocol.TunStatus, error)
 }
 
@@ -478,7 +478,8 @@ func writeControlError(writer http.ResponseWriter, err error) {
 	case protocol.CodePermissionDenied:
 		status = http.StatusForbidden
 	case protocol.CodeRevisionConflict, protocol.CodeInvalidState,
-		protocol.CodeSystemProxyConflict, protocol.CodeSystemProxyNotOwned:
+		protocol.CodeSystemProxyConflict, protocol.CodeSystemProxyNotOwned,
+		protocol.CodeTunConflict:
 		status = http.StatusConflict
 	case protocol.CodeDataFailure:
 		status = http.StatusUnprocessableEntity

@@ -11,6 +11,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/tundetect"
 )
 
 func TestTunStatusUnmanagedByDefault(t *testing.T) {
@@ -78,7 +79,7 @@ func TestEnableTunPersistsAndPatches(t *testing.T) {
 	controller := &fakeController{configs: map[string]any{}}
 	manager := newTunManager(t, controller, defaultTunSettings(nil))
 
-	status, err := manager.EnableTun(context.Background(), Operation{ID: "tun-en", Source: "test"})
+	status, err := manager.EnableTun(context.Background(), Operation{ID: "tun-en", Source: "test"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +133,7 @@ func TestEnableTunPreservesExistingStack(t *testing.T) {
 		"enable": false, "stack": "system",
 	}))
 
-	status, err := manager.EnableTun(context.Background(), Operation{ID: "tun-stack", Source: "test"})
+	status, err := manager.EnableTun(context.Background(), Operation{ID: "tun-stack", Source: "test"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +154,7 @@ func TestEnableTunRejectsStaleRevision(t *testing.T) {
 	stale := uint64(4)
 	_, err := manager.EnableTun(context.Background(), Operation{
 		ID: "tun-stale", Source: "test", IfRevision: &stale,
-	})
+	}, false)
 	var apiError protocol.APIError
 	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeRevisionConflict {
 		t.Fatalf("err=%v", err)
@@ -174,7 +175,7 @@ func TestEnableTunRollsBackSettingsWhenApplyFails(t *testing.T) {
 	}
 	manager := newTunManager(t, controller, defaultTunSettings(nil))
 
-	_, err := manager.EnableTun(context.Background(), Operation{ID: "tun-fail", Source: "test"})
+	_, err := manager.EnableTun(context.Background(), Operation{ID: "tun-fail", Source: "test"}, false)
 	if err == nil {
 		t.Fatal("expected apply failure")
 	}
@@ -198,7 +199,7 @@ func TestEnableTunMapsPermissionErrors(t *testing.T) {
 	}
 	manager := newTunManager(t, controller, defaultTunSettings(nil))
 
-	_, err := manager.EnableTun(context.Background(), Operation{ID: "tun-perm", Source: "test"})
+	_, err := manager.EnableTun(context.Background(), Operation{ID: "tun-perm", Source: "test"}, false)
 	var apiError protocol.APIError
 	if !errors.As(err, &apiError) || apiError.Code != protocol.CodePermissionDenied {
 		t.Fatalf("err=%v", err)
@@ -234,6 +235,11 @@ func defaultTunSettings(tun map[string]any) config.Settings {
 
 func newTunManager(t *testing.T, controller *fakeController, settings config.Settings) *Manager {
 	t.Helper()
+	return newTunManagerWithDetect(t, controller, settings, nil)
+}
+
+func newTunManagerWithDetect(t *testing.T, controller *fakeController, settings config.Settings, detect tundetect.Backend) *Manager {
+	t.Helper()
 	settingsPath := filepath.Join(t.TempDir(), "settings.yaml")
 	if err := config.Save(settingsPath, settings); err != nil {
 		t.Fatal(err)
@@ -242,6 +248,7 @@ func newTunManager(t *testing.T, controller *fakeController, settings config.Set
 		Controller:   controller,
 		SettingsPath: settingsPath,
 		Settings:     settings,
+		TunDetect:    detect,
 	})
 }
 
@@ -259,5 +266,137 @@ func assertPersistedTun(t *testing.T, path string, wantEnable bool, wantStack st
 	}
 	if loaded.Tun["stack"] != wantStack {
 		t.Fatalf("tun.stack=%#v want %q", loaded.Tun["stack"], wantStack)
+	}
+}
+
+// TestEnableTunGatesOnOtherTunAdapters 验证核心门控：检测到其他 TUN 网卡且非 force
+// 时拒绝 enable，且不触碰 controller（PatchConfigs 未被调用）。对应设计决策 1/2 的信号 A。
+func TestEnableTunGatesOnOtherTunAdapters(t *testing.T) {
+	controller := &fakeController{configs: map[string]any{}}
+	manager := newTunManagerWithDetect(t, controller, defaultTunSettings(nil), &tundetect.FakeBackend{
+		Detection: tundetect.Detection{TunInterfaces: []string{"Wintun0", "Wintun1"}},
+	})
+
+	_, err := manager.EnableTun(context.Background(), Operation{ID: "tun-conflict", Source: "test"}, false)
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeTunConflict {
+		t.Fatalf("err=%v", err)
+	}
+	if controller.patchCalls != 0 {
+		t.Fatalf("patchCalls=%d; gate must block apply", controller.patchCalls)
+	}
+	names, ok := apiError.Details["other_tun_interfaces"].([]string)
+	if !ok || len(names) == 0 {
+		t.Fatalf("details missing other_tun_interfaces: %#v", apiError.Details)
+	}
+}
+
+// TestEnableTunForceOverridesConflict 验证 --force 绕过冲突门控，正常下发 PATCH。
+func TestEnableTunForceOverridesConflict(t *testing.T) {
+	controller := &fakeController{configs: map[string]any{}}
+	manager := newTunManagerWithDetect(t, controller, defaultTunSettings(nil), &tundetect.FakeBackend{
+		Detection: tundetect.Detection{TunInterfaces: []string{"Wintun0"}},
+	})
+
+	status, err := manager.EnableTun(context.Background(), Operation{ID: "tun-force", Source: "test"}, true)
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if !status.DesiredEnable {
+		t.Fatalf("status=%#v", status)
+	}
+	if controller.patchCalls != 1 {
+		t.Fatalf("patchCalls=%d", controller.patchCalls)
+	}
+}
+
+// TestEnableTunIgnoresOtherMihomoWithoutTun 验证信号 B 单独非空不触发门控：
+// 另一个 mihomo 未开 TUN 时 enable 不冲突，正常成功。
+func TestEnableTunIgnoresOtherMihomoWithoutTun(t *testing.T) {
+	controller := &fakeController{configs: map[string]any{}}
+	manager := newTunManagerWithDetect(t, controller, defaultTunSettings(nil), &tundetect.FakeBackend{
+		Detection: tundetect.Detection{MihomoProcesses: []string{"mihomo (123)", "mihomo (456)"}},
+	})
+
+	status, err := manager.EnableTun(context.Background(), Operation{ID: "tun-mihomo", Source: "test"}, false)
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if !status.DesiredEnable {
+		t.Fatalf("status=%#v", status)
+	}
+	if controller.patchCalls != 1 {
+		t.Fatalf("patchCalls=%d", controller.patchCalls)
+	}
+}
+
+// TestDisableTunNotGatedByConflict 验证有意的不对称：disable 永不受冲突门控，
+// 即使存在其他 TUN 网卡也正常下发（拆卸自身 tun 块对其他参与者非破坏性）。
+func TestDisableTunNotGatedByConflict(t *testing.T) {
+	controller := &fakeController{configs: map[string]any{
+		"tun": map[string]any{"enable": true, "stack": "gVisor"},
+	}}
+	manager := newTunManagerWithDetect(t, controller, defaultTunSettings(map[string]any{
+		"enable": true, "stack": "gVisor",
+	}), &tundetect.FakeBackend{
+		Detection: tundetect.Detection{TunInterfaces: []string{"Wintun0"}},
+	})
+
+	status, err := manager.DisableTun(context.Background(), Operation{ID: "tun-dis-conflict", Source: "test"})
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if status.DesiredEnable {
+		t.Fatalf("status=%#v", status)
+	}
+	if controller.patchCalls != 1 {
+		t.Fatalf("patchCalls=%d", controller.patchCalls)
+	}
+}
+
+// TestEnableTunSubtractsSelfWhenLiveActive 验证决策 3 的端到端：mihomo 自身已开 TUN
+// （live tun.enable=true）且检测到的唯一 TUN 网卡就是自身那一个时，Classify 扣除自身后
+// 无其他 TUN → enable 不被门控。覆盖 selfTunLiveActive 从 live configs 读取的链路。
+func TestEnableTunSubtractsSelfWhenLiveActive(t *testing.T) {
+	controller := &fakeController{configs: map[string]any{
+		"tun": map[string]any{"enable": true, "stack": "gVisor"},
+	}}
+	manager := newTunManagerWithDetect(t, controller, defaultTunSettings(nil), &tundetect.FakeBackend{
+		Detection: tundetect.Detection{TunInterfaces: []string{"Wintun0"}},
+	})
+
+	status, err := manager.EnableTun(context.Background(), Operation{ID: "tun-self", Source: "test"}, false)
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if !status.DesiredEnable {
+		t.Fatalf("status=%#v", status)
+	}
+	if controller.patchCalls != 1 {
+		t.Fatalf("patchCalls=%d", controller.patchCalls)
+	}
+}
+
+// TestEnableTunNotGatedWhenDetectionFails 验证设计决策 3 的核心契约：tundetect 失败时
+// detectTunConflict best-effort 返回 nil，enable 绝不被不透明的检测错误阻塞——即便 backend
+// 返回 err，enable(!force) 仍正常成功下发，且 status.Conflict 为 nil（不构造证据）。
+func TestEnableTunNotGatedWhenDetectionFails(t *testing.T) {
+	controller := &fakeController{configs: map[string]any{}}
+	manager := newTunManagerWithDetect(t, controller, defaultTunSettings(nil), &tundetect.FakeBackend{
+		Err: errors.New("detection backend unavailable"),
+	})
+
+	status, err := manager.EnableTun(context.Background(), Operation{ID: "tun-detect-fail", Source: "test"}, false)
+	if err != nil {
+		t.Fatalf("best-effort: enable must not be blocked by detection error, got err=%v", err)
+	}
+	if !status.DesiredEnable {
+		t.Fatalf("status=%#v", status)
+	}
+	if controller.patchCalls != 1 {
+		t.Fatalf("patchCalls=%d; enable should apply despite detection failure", controller.patchCalls)
+	}
+	if status.Conflict != nil {
+		t.Fatalf("conflict=%#v; detection failure must yield nil conflict evidence", status.Conflict)
 	}
 }
