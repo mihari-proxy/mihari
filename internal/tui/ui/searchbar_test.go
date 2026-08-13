@@ -44,9 +44,9 @@ func TestSearchBar_ViewShowsQuery(t *testing.T) {
 
 func TestSearchBar_FocusedShowsCursor(t *testing.T) {
 	theme := DefaultTheme()
-	// Cursor mid-query: reverse-video on that rune.
+	// Cursor mid-query stays on the same white focus surface. It must not use
+	// reverse video, which would turn the cursor cell black again.
 	got := RenderSearchBar(theme, "ab", "Search…", true, 1, 0)
-	// Unfocused never embeds reverse.
 	plain := stripANSI(got)
 	if !strings.Contains(plain, "ab") {
 		t.Fatalf("query missing: %q", plain)
@@ -54,11 +54,47 @@ func TestSearchBar_FocusedShowsCursor(t *testing.T) {
 	if !strings.Contains(got, "\x1b[") {
 		t.Fatalf("focused bar should embed style codes for cursor: %q", got)
 	}
-	// Cursor at end appends a reverse space.
+	if hasReverseSGR(got) {
+		t.Fatalf("focused search cursor should not reverse the white surface: %q", got)
+	}
+	focusSurface := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("0")).
+		Background(lipgloss.Color("15"))
+	want := focusSurface.Render(" ") +
+		focusSurface.Render("/ ") +
+		focusSurface.Render("a") +
+		focusSurface.Underline(true).Render("b") +
+		focusSurface.Render(" ")
+	if got != want {
+		t.Fatalf("focused search should keep padding, text, and cursor on the white surface\ngot=%q\nwant=%q", got, want)
+	}
+	// Cursor at end appends an underlined space.
 	atEnd := RenderSearchBar(theme, "ab", "Search…", true, 2, 0)
-	if lipgloss.Width(stripANSI(atEnd)) < lipgloss.Width(stripANSI(got)) {
+	if lipgloss.Width(stripANSI(atEnd)) <= lipgloss.Width(stripANSI(got)) {
 		t.Fatalf("end cursor should add a cell: end=%q mid=%q", stripANSI(atEnd), stripANSI(got))
 	}
+}
+
+func hasReverseSGR(value string) bool {
+	for start := 0; start < len(value); start++ {
+		if value[start] != '\x1b' || start+2 >= len(value) || value[start+1] != '[' {
+			continue
+		}
+		end := start + 2
+		for end < len(value) && value[end] != 'm' {
+			end++
+		}
+		if end == len(value) {
+			return false
+		}
+		for _, parameter := range strings.Split(value[start+2:end], ";") {
+			if parameter == "7" {
+				return true
+			}
+		}
+		start = end
+	}
+	return false
 }
 
 func TestSearchBar_TruncatesToWidth(t *testing.T) {
