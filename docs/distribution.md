@@ -41,7 +41,7 @@ curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/insta
 
 1. 下载根目录 `index.txt`（固定公开直链，永久有效），解析出最新版本号与本平台的整合包公开直链 + sha256；
 2. 询问确认（`--yes` / `-y` 可跳过；stdin 非 tty 时读 `/dev/tty`）；
-3. 下载整合包 → `Downloads/mihari-aio/` → sha256 校验；
+3. 下载整合包 → `Downloads/mihari-aio/`：源站支持 HTTP Range 时默认使用 4 个并发分段，否则自动回退单流；随后执行 sha256 校验；
 4. 解压到 `Downloads/mihari-aio/`；
 5. 调用包内的本地安装器（脚本2），传入 bundle 目录；
 6. 提示重启终端，运行 `mihari`。
