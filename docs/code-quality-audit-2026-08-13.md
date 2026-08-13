@@ -8,7 +8,7 @@
 
 仓库的主要优势是架构边界明确，daemon 单写入者、版本化本地控制协议、mutation coordinator、候选文件验证和回滚等关键不变量大体落实；测试体量充足，race、vet、gofmt、lint 及六目标 CGO-free 构建均通过。主要不足集中在：自更新二进制未做内容完整性校验、面板解压缺少总展开量限制、面板 GitHub 元数据请求缺省无超时、CI 使用的全仓覆盖率命令可重复触发 CLI 测试失败，以及 Windows 默认全仓并行负载下配置初始化锁可重复超时。后续复测还表明普通 `go test ./...` 并非稳定健康，因此测试门禁可靠性低于初次采样结论。
 
-一期本地整改（2026-08-14，Windows/amd64，工作树 HEAD `34f7649`）已落地 AQ-01、AQ-04、AQ-05 的行为修复；AQ-02、AQ-03 仍开放。实际命令、次数与未通过项见 §3.1 与 §11。无远端 CI 证据，不得将一期标为已验收。
+一期本地整改已落地 AQ-01、AQ-04、AQ-05；AQ-02、AQ-03 仍开放。CI-1 在 PR https://github.com/mihari-proxy/mihari/pull/73 HEAD `b06d990` 上全绿（run https://github.com/mihari-proxy/mihari/actions/runs/31722030062）。roadmap 状态 `已验收` 仅在本 closure commit 的 required jobs 全部 green 后生效。
 
 ### 风险概览
 
@@ -103,7 +103,7 @@
 
 **建议：** 发布 checksum 资产后，自更新必须先解析受信 release 中的 checksum 清单并对目标资产做 SHA-256 比对；更稳妥的长期方案是对清单签名并内置验证公钥。任何校验缺失、重复条目、资产名歧义或 digest 不匹配都应 fail closed，并增加篡改回归测试。
 
-**状态（2026-08-14）：** 本地整改完成。commit `34f7649`（`fix: 校验自更新二进制摘要`）。本机 Windows/amd64 上该行为随全仓两次 `go test -count=1 ./...`、一次 `-race`、三次 `-coverpkg=./...` 通过。Task 4 全量 `golangci-lint run ./...` 在 `parseChecksumManifest` 的 GNU `*` 前缀处理上报 1 条 S1017；本期未改生产代码。无远端 CI 证据。
+**状态（2026-08-14）：** 本地整改完成。commit `34f7649`（`fix: 校验自更新二进制摘要`）与 `1647385`（S1017）。本机 Windows/amd64 上该行为随全仓两次 `go test -count=1 ./...`、一次 `-race`、三次 `-coverpkg=./...` 通过。CI-1 见 §11.3。
 
 ### AQ-02（中）：panel zip 只限制单文件，未限制总展开大小和条目数
 
@@ -252,11 +252,11 @@ Mihari 当前不是“低质量代码库”：其架构约束、类型化协议�
 
 “管理员权限自更新却不校验下载内容”与项目安全目标不相容，应作为发布前最高优先级问题；coverage workflow 与配置初始化锁的可复现失败也会阻断既定测试治理路线。完成 AQ-01 至 AQ-05 后，仓库可进入较稳健的 8+/10 区间；随后重点应从增加测试数量转向平台边界、生产装配、失败可观测性和复杂度控制。
 
-一期行为修复已在独立 commit 中落地（见 §11），但全量本地 lint 仍有 1 条 S1017，且尚无三 OS CI 证据，因此一期不得标为已验收。
+一期行为修复已在独立 commit 中落地（见 §11）。S1017 已由 `1647385` 消除。CI-1 在 PR #73 HEAD `b06d990` 上全绿。
 
 ## 11. 一期本地整改记录（2026-08-14）
 
-平台：Windows/amd64。工具：Go 1.26.5、golangci-lint v2.12.2、Python 3.13.11。工作树分支 `docs/code-quality-audit-2026-08-13`，复测起点 HEAD `34f7649bef4305777496ba0a99e28b4193840bf1`。未 push、未开 PR、未合并、未开始二期。
+平台：Windows/amd64。工具：Go 1.26.5、golangci-lint v2.12.2、Python 3.13.11。工作树分支 `docs/code-quality-audit-2026-08-13`。PR https://github.com/mihari-proxy/mihari/pull/73。未合并进 main、未开始二期。
 
 ### 11.1 整改 commit
 
@@ -266,19 +266,23 @@ Mihari 当前不是“低质量代码库”：其架构约束、类型化协议�
 | Task 1 / AQ-05 | `8c27ed2` | `fix: 修复配置初始化锁队列超时` |
 | Task 2 / AQ-04 | `6180790` | `test: 稳定无参数 CLI 覆盖率测试` |
 | Task 3 / AQ-01 | `34f7649` | `fix: 校验自更新二进制摘要` |
+| lint fix | `1647385` | `fix: 消除 checksum 解析的 S1017` |
+| merge + fixture | `b06d990` | `test: 为服务同步自更新补 checksum fixture` |
 
 ### 11.2 发现状态
 
 | 发现 | 状态 | 依据 |
 |---|---|---|
-| AQ-01 | 本地整改完成 | `34f7649`；本机默认测试两次、race、coverage 三次通过。全量 golangci-lint 仍报 `internal/update/self.go:235` S1017，本期未改生产代码 |
+| AQ-01 | 本地整改完成 | `34f7649` + `1647385`；本机默认测试两次、race、coverage 三次通过；S1017 已消除 |
 | AQ-04 | 本地整改完成 | `6180790`；本机三次 CI 同款 `-coverpkg=./...` 命令与 coverage-gate report 均 exit 0 |
 | AQ-05 | 本地整改完成 | `8c27ed2`；本机默认 `go test -count=1 ./...` 连续两次通过，未使用 `-p 1` |
 | AQ-02 | 仍开放 | 不在一期范围 |
 | AQ-03 | 仍开放 | 不在一期范围 |
 
-### 11.3 未验证项
+### 11.3 CI-1（HEAD `b06d990`）
 
-- 无 GitHub Actions 运行记录，Linux/macOS unit、CI lint/race/coverage/cross-build 与 DCO 均未在本机之外验证。
+- PR：https://github.com/mihari-proxy/mihari/pull/73
+- ci.yml：https://github.com/mihari-proxy/mihari/actions/runs/31722030062
+- 已绿：lint、unit (windows/ubuntu/macos)、test、race、vet-format、coverage、build 六目标、cross-build
+- DCO：https://github.com/mihari-proxy/mihari/actions/runs/31722030115 、https://github.com/mihari-proxy/mihari/actions/runs/31722024459
 - 安装脚本 2 个 POSIX 信号用例在 Windows 上按设计跳过。
-- `golangci-lint` 的 S1017 未清零；Task 4 不修改生产 Go，故一期本地门禁不能记为全部通过。

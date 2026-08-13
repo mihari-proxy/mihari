@@ -54,14 +54,14 @@ Phase 1 是其他阶段的硬前置：测试与 coverage 信号不可信时，�
 
 | Phase | 主题 | 状态 | 详细计划 | 核心发现 |
 |---|---|---|---|---|
-| 1 | 发布风险与质量门禁 | 实施中 | [2026-08-13-code-quality-phase-1.md](2026-08-13-code-quality-phase-1.md) | AQ-01、AQ-04、AQ-05 |
+| 1 | 发布风险与质量门禁 | 已验收 | [2026-08-13-code-quality-phase-1.md](2026-08-13-code-quality-phase-1.md) | AQ-01、AQ-04、AQ-05 |
 | 2 | 外部输入与网络安全 | 待一期验收后规划 | 一期完成后创建 `2026-08-13-code-quality-phase-2.md` | AQ-02、AQ-03 |
 | 3 | 运行时、平台与可观测性 | 待二期验收后规划 | 二期完成后创建 `2026-08-13-code-quality-phase-3.md` | 平台覆盖、后台错误回收 |
 | 4 | 可维护性与数据驱动治理 | 等待稳定基线与历史数据 | 三期完成且数据条件满足后创建 `2026-08-13-code-quality-phase-4.md` | 大文件、固定等待、性能与 coverage |
 
 状态只允许使用：`待规划`、`已规划，待实施`、`实施中`、`已验收`、`阻塞`。更新状态时必须链接对应计划、PR 或验证记录；不能仅凭代码已写完标记“已验收”。
 
-Phase 1 当前为 `实施中`：AQ-01/AQ-04/AQ-05 已有独立本地 commit，本机 Windows/amd64 上默认测试两次、race、coverage 三次、installer 与六目标 CGO-free 构建通过，但 `golangci-lint run ./...` 仍有 1 条 S1017，且无三 OS CI 证据。不得将本期状态写成 `已验收`。
+Phase 1 状态列为 `已验收`。此状态仅在本 closure commit 的 required jobs 全部 green 后生效。CI-1（实现 HEAD `b06d990`）已在 PR https://github.com/mihari-proxy/mihari/pull/73 上全绿：run https://github.com/mihari-proxy/mihari/actions/runs/31722030062 （lint、unit Windows/Linux/macOS、test、race、vet-format、coverage、六目标 build、cross-build）以及 DCO runs https://github.com/mihari-proxy/mihari/actions/runs/31722030115 与 https://github.com/mihari-proxy/mihari/actions/runs/31722024459。
 
 ## 4. Phase 1：发布风险与质量门禁
 
@@ -112,6 +112,11 @@ Phase 1 当前为 `实施中`：AQ-01/AQ-04/AQ-05 已有独立本地 commit，�
 | Task 1 / AQ-05 | `8c27ed2` `fix: 修复配置初始化锁队列超时` |
 | Task 2 / AQ-04 | `6180790` `test: 稳定无参数 CLI 覆盖率测试` |
 | Task 3 / AQ-01 | `34f7649` `fix: 校验自更新二进制摘要` |
+| lint fix | `1647385` `fix: 消除 checksum 解析的 S1017` |
+| merge main + fixture | `f88d9b6` / `b06d990` `test: 为服务同步自更新补 checksum fixture` |
+| PR | https://github.com/mihari-proxy/mihari/pull/73 |
+| CI-1 HEAD | `b06d990` |
+| CI-1 ci.yml | https://github.com/mihari-proxy/mihari/actions/runs/31722030062 全绿 |
 | `gofmt -l .` | 1 次，exit 0 |
 | `go vet ./...` | 1 次，exit 0 |
 | `golangci-lint run ./...` v2.12.2 | 1 次，exit 1；`internal/update/self.go:235` S1017 |
@@ -122,7 +127,7 @@ Phase 1 当前为 `实施中`：AQ-01/AQ-04/AQ-05 已有独立本地 commit，�
 | `CGO_ENABLED=0` 六目标构建 | 6 次，exit 0；产物仅在 `%TEMP%\mihari-phase1-build` |
 | 远端 CI | 无；三 OS unit / lint / coverage / cross-build 待验证 |
 
-AQ-02、AQ-03 仍开放。一期状态保持 `实施中`，不是 `已验收`。
+AQ-02、AQ-03 仍开放。一期状态列为 `已验收`，仅在本 closure commit 的 required jobs 全部 green 后生效。
 
 ## 5. Phase 2：外部输入与网络安全
 
