@@ -3,6 +3,8 @@ package ui
 import (
 	"strings"
 	"testing"
+
+	lipgloss "charm.land/lipgloss/v2"
 )
 
 func TestRenderControlStrip_HighlightsActiveWhenContentFocused(t *testing.T) {
@@ -24,15 +26,37 @@ func TestRenderControlStrip_HighlightsActiveWhenContentFocused(t *testing.T) {
 	if !strings.Contains(focused, "\x1b[") {
 		t.Fatalf("content-focused strip should emit ANSI: %q", focused)
 	}
-	// Active chip should match ControlActive colors (bold + accent).
-	wantActive := controlActiveChip(theme).Render("[B]")
+	// Active control focus is a literal light surface: ordinary text becomes
+	// black while the focused cell gets a white background.
+	wantActive := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("0")).
+		Background(lipgloss.Color("15")).
+		Render("[B]")
 	if !strings.Contains(focused, wantActive) {
-		t.Fatalf("active chip missing ControlActive style\ngot=%q\nwant substring=%q", focused, wantActive)
+		t.Fatalf("active chip missing black-on-white focus style\ngot=%q\nwant substring=%q", focused, wantActive)
 	}
 	// Inactive chips are muted.
 	wantMuted := theme.Muted.Render("[A]")
 	if !strings.Contains(focused, wantMuted) {
 		t.Fatalf("inactive chip missing Muted style\ngot=%q\nwant substring=%q", focused, wantMuted)
+	}
+}
+
+func TestRenderControlStrip_ActiveChipPreservesSemanticForeground(t *testing.T) {
+	theme := DefaultTheme()
+	semantic := theme.Warning.Render("WARN")
+	part := "Level: " + semantic
+
+	got := RenderControlStrip(theme, []string{part}, 0, true, "  ")
+	if !strings.Contains(got, semantic) {
+		t.Fatalf("active chip changed semantic foreground\ngot=%q\nwant semantic span=%q", got, semantic)
+	}
+	want := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("0")).
+		Background(lipgloss.Color("15")).
+		Render(part)
+	if got != want {
+		t.Fatalf("active chip should put the complete mixed-color value on the focus surface\ngot=%q\nwant=%q", got, want)
 	}
 }
 

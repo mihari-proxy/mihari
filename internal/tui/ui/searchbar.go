@@ -9,9 +9,9 @@ import (
 // RenderSearchBar draws the independent search strip used between a control strip
 // and a table header (Connections, Rules, Logs).
 // Empty query shows "/ " + placeholder; non-empty shows "/ " + query.
-// When focused, a reverse-video cursor is drawn at cursor (rune offset in query;
+// When focused, an underlined cursor is drawn at cursor (rune offset in query;
 // empty query places the cursor at the start of the placeholder).
-// Focused styling matches ControlActive (bold accent); unfocused uses Muted.
+// Focused styling uses the controls' black-on-white surface; unfocused uses Muted.
 // When width > 0 the line is clamped with MaxWidth.
 func RenderSearchBar(theme Theme, query, placeholder string, focused bool, cursor, width int) string {
 	text := query
@@ -25,11 +25,11 @@ func RenderSearchBar(theme Theme, query, placeholder string, focused bool, curso
 
 	var styled string
 	if focused {
-		// Compose bold-accent segments so reverse cursor works without
-		// re-styling an already-colored string. Match ControlActive padding.
-		active := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorAccent)
+		// Render every segment on the same explicit surface. Keeping padding as
+		// styled cells avoids black gaps at either end of the focused search bar.
+		active := controlFocusSurface(theme)
 		inner := active.Render("/ ") + renderCursorText(text, bodyCursor, active)
-		styled = lipgloss.NewStyle().Padding(0, 1).Render(inner)
+		styled = active.Render(" ") + inner + active.Render(" ")
 	} else {
 		styled = theme.Muted.Render("/ " + text)
 	}
@@ -40,8 +40,8 @@ func RenderSearchBar(theme Theme, query, placeholder string, focused bool, curso
 	return lipgloss.NewStyle().MaxWidth(width).Render(styled)
 }
 
-// renderCursorText inserts a reverse-video cursor into text at the given rune offset.
-// When cursor is at the end, a reverse space is appended. Non-cursor segments use active.
+// renderCursorText inserts an underlined cursor into text at the given rune offset.
+// When cursor is at the end, an underlined space is appended. Non-cursor segments use active.
 func renderCursorText(text string, cursor int, active lipgloss.Style) string {
 	runes := []rune(text)
 	if cursor < 0 {
@@ -50,11 +50,18 @@ func renderCursorText(text string, cursor int, active lipgloss.Style) string {
 	if cursor > len(runes) {
 		cursor = len(runes)
 	}
-	rev := active.Reverse(true)
+	cursorStyle := active.Underline(true)
 	if cursor < len(runes) {
-		return active.Render(string(runes[:cursor])) + rev.Render(string(runes[cursor])) + active.Render(string(runes[cursor+1:]))
+		var before, after string
+		if cursor > 0 {
+			before = active.Render(string(runes[:cursor]))
+		}
+		if cursor+1 < len(runes) {
+			after = active.Render(string(runes[cursor+1:]))
+		}
+		return before + cursorStyle.Render(string(runes[cursor])) + after
 	}
-	return active.Render(text) + rev.Render(" ")
+	return active.Render(text) + cursorStyle.Render(" ")
 }
 
 // ClampSearchCursor returns cursor clamped to the query rune length.

@@ -7,8 +7,8 @@ import (
 )
 
 // RenderControlStrip joins navigable control chips with sep.
-// When contentFocused is true, activeIndex uses the ControlActive look (bold accent,
-// no padding so multi-chip layout stays stable); other chips use Muted.
+// When contentFocused is true, activeIndex uses a black-on-white focus surface
+// (no padding so multi-chip layout stays stable); other chips use Muted.
 // When contentFocused is false, chips stay plain so the rail can own focus chrome.
 func RenderControlStrip(theme Theme, parts []string, activeIndex int, contentFocused bool, sep string) string {
 	if len(parts) == 0 {
@@ -18,7 +18,7 @@ func RenderControlStrip(theme Theme, parts []string, activeIndex int, contentFoc
 	for index, part := range parts {
 		switch {
 		case contentFocused && index == activeIndex:
-			styled[index] = controlActiveChip(theme).Render(part)
+			styled[index] = controlFocusSurface(theme).Render(part)
 		case contentFocused:
 			styled[index] = theme.Muted.Render(part)
 		default:
@@ -26,6 +26,13 @@ func RenderControlStrip(theme Theme, parts []string, activeIndex int, contentFoc
 		}
 	}
 	return strings.Join(styled, sep)
+}
+
+// controlFocusSurface is the explicit light keyboard-focus surface used by
+// controls and search. Applying it outside an already-colored span lets that
+// span keep its semantic foreground while inheriting the white background.
+func controlFocusSurface(theme Theme) lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(theme.ColorOnSolid).Background(lipgloss.Color("15"))
 }
 
 // controlActiveChip matches ControlActive colors without horizontal padding so
