@@ -8,6 +8,8 @@
 
 仓库的主要优势是架构边界明确，daemon 单写入者、版本化本地控制协议、mutation coordinator、候选文件验证和回滚等关键不变量大体落实；测试体量充足，race、vet、gofmt、lint 及六目标 CGO-free 构建均通过。主要不足集中在：自更新二进制未做内容完整性校验、面板解压缺少总展开量限制、面板 GitHub 元数据请求缺省无超时、CI 使用的全仓覆盖率命令可重复触发 CLI 测试失败，以及 Windows 默认全仓并行负载下配置初始化锁可重复超时。后续复测还表明普通 `go test ./...` 并非稳定健康，因此测试门禁可靠性低于初次采样结论。
 
+一期本地整改（2026-08-14，Windows/amd64，工作树 HEAD `34f7649`）已落地 AQ-01、AQ-04、AQ-05 的行为修复；AQ-02、AQ-03 仍开放。实际命令、次数与未通过项见 §3.1 与 §11。无远端 CI 证据，不得将一期标为已验收。
+
 ### 风险概览
 
 | 等级 | 数量 | 主题 |
@@ -60,6 +62,24 @@
 
 `-coverpkg=./...` 失败后不会生成完整 profile，因此本次不能把 73.9% 当作 CI 的全仓跨包覆盖率基线。失败证据本身应作为测试治理问题修复。
 
+### 3.1 一期本地复测（2026-08-14，Windows/amd64，Go 1.26.5，HEAD `34f7649`）
+
+以下为 Task 4 在本工作树实际运行的命令。未运行的远端 CI 不记为通过。
+
+| 命令 | 次数 | 退出码 | 说明 |
+|---|---:|---:|---|
+| `gofmt -l .` | 1 | 0 | 无未格式化文件 |
+| `go vet ./...` | 1 | 0 | 无诊断 |
+| `golangci-lint run ./...`（v2.12.2） | 1 | **1** | `internal/update/self.go:235` staticcheck S1017：`should replace this if statement with an unconditional strings.TrimPrefix`；1 issue。按 Task 4 范围未改生产 Go |
+| `go test -count=1 ./...` | 2 | 0 / 0 | 未使用 `-p 1`；`internal/config` 与 `internal/cli` 均通过 |
+| `go test -count=1 -race ./...` | 1 | 0 | Windows/amd64 |
+| `python scripts/install/test_parallel_download.py -v` | 1 | 0 | 6 个测试，2 个 POSIX 信号用例按设计跳过 |
+| `go test -count=1 -covermode=atomic -coverpkg=./... -coverprofile=... ./...` | 3 | 0 / 0 / 0 | 三次均生成可解析 profile |
+| `go run ./scripts/coverage-gate report -profile ...` | 3 | 0 / 0 / 0 | 74.13%（9480/12788）、74.13%（9480/12788）、74.12%（9478/12788）；观察期方差，未启用百分比门槛 |
+| `CGO_ENABLED=0` 六目标 `go build -trimpath` | 6 | 0 | Windows/Linux/macOS × amd64/arm64；产物仅在 `%TEMP%\mihari-phase1-build`，仓库无 binary；`CGO_ENABLED`/`GOOS`/`GOARCH` 已恢复 |
+
+覆盖率 profile 路径与大小：`%TEMP%\mihari-phase1-final-1.out` 701142 字节、`...-2.out` 701148 字节、`...-3.out` 701136 字节。
+
 ## 4. 分维度评价
 
 | 维度 | 评分 | 评价 |
@@ -83,6 +103,8 @@
 
 **建议：** 发布 checksum 资产后，自更新必须先解析受信 release 中的 checksum 清单并对目标资产做 SHA-256 比对；更稳妥的长期方案是对清单签名并内置验证公钥。任何校验缺失、重复条目、资产名歧义或 digest 不匹配都应 fail closed，并增加篡改回归测试。
 
+**状态（2026-08-14）：** 本地整改完成。commit `34f7649`（`fix: 校验自更新二进制摘要`）。本机 Windows/amd64 上该行为随全仓两次 `go test -count=1 ./...`、一次 `-race`、三次 `-coverpkg=./...` 通过。Task 4 全量 `golangci-lint run ./...` 在 `parseChecksumManifest` 的 GNU `*` 前缀处理上报 1 条 S1017；本期未改生产代码。无远端 CI 证据。
+
 ### AQ-02（中）：panel zip 只限制单文件，未限制总展开大小和条目数
 
 **证据：** `internal/panel/archive/zip.go:15-19,49-100,115-143` 将压缩包限制为 128 MiB、单个展开文件限制为 64 MiB，但遍历全部 entry 时没有累计展开字节或条目数。`internal/panel/service.go:667-681` 只限制下载字节；测试覆盖单文件过大、路径穿越和 symlink，但没有多文件 zip bomb 用例。
@@ -90,6 +112,8 @@
 **影响：** 一个由大量小于 64 MiB 文件组成的高压缩率归档可耗尽磁盘、inode 或长时间占用 daemon，影响更新、持久化及服务可用性。输入通常来自受信 panel 上游，因此评为中风险而非高风险。
 
 **建议：** 在读取前累计 `UncompressedSize64`，同时在实际 copy 时累计真实写入量；设置总展开字节、最大 entry 数和可选目录深度上限，超限时删除整个 staging candidate。增加“许多合法小文件但总量超限”和伪造 size 元数据测试。
+
+**状态：** 仍开放。不在一期范围。
 
 ### AQ-03（中）：panel release 元数据的默认 HTTP client 没有超时
 
@@ -99,6 +123,8 @@
 
 **建议：** `release.Client` 缺省使用带明确 timeout 的私有 `http.Client`，或要求调用方显式注入；同时保持 request context 传播。增加一个阻塞 handler 的 deadline 回归测试。
 
+**状态：** 仍开放。不在一期范围。
+
 ### AQ-04（中）：CI 覆盖率命令可重复触发 CLI 测试失败
 
 **证据：** `.github/workflows/ci.yml` 的 coverage job 执行 `go test -count=1 -covermode=atomic -coverpkg=./... -coverprofile="$profile" ./...`。本机连续两次执行均在 `internal/cli/runtime_test.go:20-31` 的 `TestExecute_NoArgsInteractiveRunsTUI` 失败（`exit=2 called=false`），而普通 `go test ./...` 和该测试单独重复 20 次均通过。测试向 `Execute` 传入 `nil` 参数；`Execute` 再调用 Cobra `SetArgs(args)`，nil 与明确空参数在 Cobra 中并非可靠等价，容易落回测试进程参数。
@@ -106,6 +132,8 @@
 **影响：** coverage workflow 无法稳定产出 profile，观察期数据和后续相对回归门禁失真；如果 coverage job 被设为 required，会直接阻塞 PR。
 
 **建议：** 测试无参数 CLI 时传入非 nil 空切片 `[]string{}`，并增加覆盖率命令的本地回归验证。修复后以 CI 完整命令至少重复运行数次，再开始累计 main 覆盖率观测数据。
+
+**状态（2026-08-14）：** 本地整改完成。commit `6180790`（`test: 稳定无参数 CLI 覆盖率测试`）。本机 Windows/amd64 连续三次 CI 同款 `-covermode=atomic -coverpkg=./...` 命令 exit 0，profile 可被 coverage-gate 解析；`internal/cli` 三次均为 `coverage: 70.6% of statements`。无远端 CI 证据。
 
 ### AQ-05（中）：配置初始化锁在默认全仓并行负载下可重复超时
 
@@ -116,6 +144,8 @@
 **影响：** 默认质量门禁在开发机和潜在 CI 高负载环境中出现非确定失败；同一锁路径也用于真实首次初始化，极端负载下可能向用户返回数据错误。简单增大超时只会降低复现概率，不能消除锁队列和无效等待。
 
 **建议：** 把创建协调改为“重新观察最终设置文件 → 尝试获得创建锁 → 冲突时继续观察”的收敛循环。等待者一旦看到有效设置就直接返回，不再逐个获取和释放创建锁；锁拥有者在临界区内仍需二次检查后再生成 secret。保留总等待上限和 Windows `os.ErrPermission` 冲突兼容，并增加“锁仍存在但最终设置已就绪时等待者立即返回”的确定性回归测试。
+
+**状态（2026-08-14）：** 本地整改完成。commit `8c27ed2`（`fix: 修复配置初始化锁队列超时`）。本机 Windows/amd64 默认 `go test -count=1 ./...` 连续两次通过，未使用 `-p 1`；`go test -count=1 -race ./...` 通过。无远端 CI 证据。
 
 ## 6. 生产代码审计
 
@@ -221,3 +251,34 @@
 Mihari 当前不是“低质量代码库”：其架构约束、类型化协议、事务式配置更新、测试密度和跨平台 CI 都明显高于一般早期 Go 项目。静态检查、race 与跨平台构建健康，关键状态 mutation 的设计尤其扎实；但普通全仓测试和 coverage 路径尚未形成可信的稳定门禁。
 
 “管理员权限自更新却不校验下载内容”与项目安全目标不相容，应作为发布前最高优先级问题；coverage workflow 与配置初始化锁的可复现失败也会阻断既定测试治理路线。完成 AQ-01 至 AQ-05 后，仓库可进入较稳健的 8+/10 区间；随后重点应从增加测试数量转向平台边界、生产装配、失败可观测性和复杂度控制。
+
+一期行为修复已在独立 commit 中落地（见 §11），但全量本地 lint 仍有 1 条 S1017，且尚无三 OS CI 证据，因此一期不得标为已验收。
+
+## 11. 一期本地整改记录（2026-08-14）
+
+平台：Windows/amd64。工具：Go 1.26.5、golangci-lint v2.12.2、Python 3.13.11。工作树分支 `docs/code-quality-audit-2026-08-13`，复测起点 HEAD `34f7649bef4305777496ba0a99e28b4193840bf1`。未 push、未开 PR、未合并、未开始二期。
+
+### 11.1 整改 commit
+
+| 任务 | Commit | 主题 |
+|---|---|---|
+| Task 0 | `cb1d086` | `docs: 建立代码质量治理路线图` |
+| Task 1 / AQ-05 | `8c27ed2` | `fix: 修复配置初始化锁队列超时` |
+| Task 2 / AQ-04 | `6180790` | `test: 稳定无参数 CLI 覆盖率测试` |
+| Task 3 / AQ-01 | `34f7649` | `fix: 校验自更新二进制摘要` |
+
+### 11.2 发现状态
+
+| 发现 | 状态 | 依据 |
+|---|---|---|
+| AQ-01 | 本地整改完成 | `34f7649`；本机默认测试两次、race、coverage 三次通过。全量 golangci-lint 仍报 `internal/update/self.go:235` S1017，本期未改生产代码 |
+| AQ-04 | 本地整改完成 | `6180790`；本机三次 CI 同款 `-coverpkg=./...` 命令与 coverage-gate report 均 exit 0 |
+| AQ-05 | 本地整改完成 | `8c27ed2`；本机默认 `go test -count=1 ./...` 连续两次通过，未使用 `-p 1` |
+| AQ-02 | 仍开放 | 不在一期范围 |
+| AQ-03 | 仍开放 | 不在一期范围 |
+
+### 11.3 未验证项
+
+- 无 GitHub Actions 运行记录，Linux/macOS unit、CI lint/race/coverage/cross-build 与 DCO 均未在本机之外验证。
+- 安装脚本 2 个 POSIX 信号用例在 Windows 上按设计跳过。
+- `golangci-lint` 的 S1017 未清零；Task 4 不修改生产 Go，故一期本地门禁不能记为全部通过。
