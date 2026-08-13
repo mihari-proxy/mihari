@@ -186,6 +186,70 @@ func TestSettingsValidationRejectsInvalidTunTypes(t *testing.T) {
 	}
 }
 
+func TestDefaultsCoreChannelIsStable(t *testing.T) {
+	settings := Defaults()
+	if settings.CoreChannel != "stable" {
+		t.Fatalf("CoreChannel=%q", settings.CoreChannel)
+	}
+	if settings.CoreChannelBundle != "" {
+		t.Fatalf("CoreChannelBundle=%q", settings.CoreChannelBundle)
+	}
+}
+
+func TestSettingsCoreChannelRoundTripAndValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mihari.yaml")
+	settings := Defaults()
+	settings.ControllerSecret = strings.Repeat("ab", 32)
+	if err := Save(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.CoreChannel != "stable" {
+		t.Fatalf("CoreChannel=%q, want stable from Defaults", loaded.CoreChannel)
+	}
+
+	settings.CoreChannel = "alpha"
+	settings.CoreChannelBundle = "alpha-e183c58"
+	if err := Save(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = Load(path)
+	if err != nil || loaded.CoreChannel != "alpha" || loaded.CoreChannelBundle != "alpha-e183c58" {
+		t.Fatalf("loaded=%#v err=%v", loaded, err)
+	}
+
+	settings.CoreChannel = "nightly"
+	if err := settings.Validate(); err == nil {
+		t.Fatal("expected invalid core-channel")
+	}
+
+	omittedPath := filepath.Join(t.TempDir(), "legacy.yaml")
+	legacy := strings.Join([]string{
+		"schema: mihari.settings/v1",
+		"mixed-addr: 127.0.0.1:9190",
+		"controller-addr: 127.0.0.1:9090",
+		"web-addr: 127.0.0.1:9191",
+		"controller-secret: " + strings.Repeat("ab", 32),
+		"",
+	}, "\n")
+	if err := os.WriteFile(omittedPath, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = Load(omittedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.CoreChannel != "" {
+		t.Fatalf("omitted core-channel loaded as %q", loaded.CoreChannel)
+	}
+	if err := loaded.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSettingsValidationAcceptsValidTunBlock(t *testing.T) {
 	settings := Defaults()
 	settings.Tun = map[string]any{

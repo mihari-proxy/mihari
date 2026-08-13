@@ -25,6 +25,8 @@ type Settings struct {
 	ControllerSecret   string         `yaml:"controller-secret"`
 	SystemProxyDesired bool           `yaml:"system-proxy-desired,omitempty"`
 	Tun                map[string]any `yaml:"tun,omitempty"` // managed block; empty = unmanaged
+	CoreChannel        string         `yaml:"core-channel,omitempty"`
+	CoreChannelBundle  string         `yaml:"core-channel-bundle,omitempty"`
 }
 
 func Defaults() Settings {
@@ -33,6 +35,7 @@ func Defaults() Settings {
 		MixedAddr:      "127.0.0.1:9190",
 		ControllerAddr: "127.0.0.1:9090",
 		WebAddr:        "127.0.0.1:9191",
+		CoreChannel:    "stable",
 	}
 }
 
@@ -194,6 +197,11 @@ func (s Settings) Validate() error {
 	}
 	if err := validateTun(s.Tun); err != nil {
 		return err
+	}
+	switch s.CoreChannel {
+	case "", "stable", "alpha":
+	default:
+		return dataError("invalid core channel")
 	}
 	return nil
 }
