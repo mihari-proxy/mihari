@@ -780,7 +780,7 @@ func TestSystemProxyEnableConfirmsAndExecutes(t *testing.T) {
 	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilitySystemProxy}}, protocol.CoreStatus{})
 	model.SetMutationsEnabled(true)
 	model.SetSystemProxy(client.systemProxy)
-	model.focusID = rowSystemProxy
+	model.focusID = rowSystemProxyAction
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(*Model)
 	if cmd == nil {
@@ -815,7 +815,7 @@ func TestSystemProxyForeignEnterRequestsForceOverwrite(t *testing.T) {
 	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilitySystemProxy}}, protocol.CoreStatus{})
 	model.SetMutationsEnabled(true)
 	model.SetSystemProxy(client.systemProxy)
-	model.focusID = rowSystemProxy
+	model.focusID = rowSystemProxyAction
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = updated.(*Model)
 	if cmd == nil {
@@ -927,7 +927,7 @@ func TestSystemProxyOwnedEnterConfirmsDisable(t *testing.T) {
 	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilitySystemProxy}}, protocol.CoreStatus{})
 	model.SetMutationsEnabled(true)
 	model.SetSystemProxy(client.systemProxy)
-	model.focusID = rowSystemProxy
+	model.focusID = rowSystemProxyAction
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = updated.(*Model)
 	intent := cmd().(ui.ActionIntentMsg)
@@ -948,7 +948,7 @@ func TestSystemTunToggleEnableDisableWithConfirm(t *testing.T) {
 	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityTUN}}, protocol.CoreStatus{})
 	model.SetMutationsEnabled(true)
 	model.SetTun(client.tun)
-	model.focusID = rowTUN
+	model.focusID = rowTUNAction
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(*Model)
 	intent := cmd().(ui.ActionIntentMsg)
@@ -962,7 +962,7 @@ func TestSystemTunToggleEnableDisableWithConfirm(t *testing.T) {
 		t.Fatalf("enable calls=%d desired=%v", client.enableTunCalls, model.tun.DesiredEnable)
 	}
 
-	model.focusID = rowTUN
+	model.focusID = rowTUNAction
 	updated, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(*Model)
 	intent = cmd().(ui.ActionIntentMsg)
@@ -987,7 +987,7 @@ func TestSystemProxyAndTunMutationsDisabledWhileDisconnected(t *testing.T) {
 	model.SetMutationsEnabled(false)
 	model.SetSystemProxy(client.systemProxy)
 	model.SetTun(client.tun)
-	for _, id := range []string{rowSystemProxy, rowTUN} {
+	for _, id := range []string{rowSystemProxyAction, rowTUNAction} {
 		model.focusID = id
 		updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		model = updated.(*Model)
@@ -1098,7 +1098,7 @@ func TestSystemPendingDoesNotPolluteSiblingRows(t *testing.T) {
 	}
 }
 
-func TestSystemProxyAndTunStickyOutcomes(t *testing.T) {
+func TestSystemProxyFailedStickyAndTunDoneFades(t *testing.T) {
 	client := &fakeClient{
 		systemProxy: protocol.SystemProxyStatus{Revision: 2, Desired: true, Target: "127.0.0.1:9190"},
 		tun:         protocol.TunStatus{Revision: 2, DesiredEnable: true, LiveEnable: boolPtr(true), Managed: true},
@@ -1111,6 +1111,8 @@ func TestSystemProxyAndTunStickyOutcomes(t *testing.T) {
 	model.SetSystemProxy(client.systemProxy)
 	model.SetTun(client.tun)
 
+	// System proxy disable fails: the Failed badge is sticky — the fade guard
+	// (!outcomeOK) must keep it even if a stray fade tick fires.
 	updated, _ := model.Update(ui.ActionPendingMsg{Action: ui.ActionDisableSystemProxy})
 	model = updated.(*Model)
 	updated, _ = model.Update(systemProxyActionResultMsg{
@@ -1118,13 +1120,23 @@ func TestSystemProxyAndTunStickyOutcomes(t *testing.T) {
 		err:  protocol.APIError{Code: protocol.CodePermissionDenied, Message: "elevation required for system proxy"},
 	})
 	model = updated.(*Model)
-	if model.outcomeRow != rowSystemProxy || model.outcomeOK || model.outcomeDetail != "elevation required for system proxy" {
+	if model.outcomeRow != rowSystemProxyAction || model.outcomeOK || model.outcomeDetail != "elevation required for system proxy" {
 		t.Fatalf("proxy outcome row=%q ok=%v detail=%q", model.outcomeRow, model.outcomeOK, model.outcomeDetail)
 	}
 	if !strings.Contains(model.View(), ui.FailedLabel) {
 		t.Fatalf("proxy failed view:\n%s", model.View())
 	}
+	updated, _ = model.Update(outcomeFadeMsg{gen: model.outcomeFadeGen, row: rowSystemProxyAction})
+	model = updated.(*Model)
+	if model.outcomeRow != rowSystemProxyAction || model.outcomeOK {
+		t.Fatalf("failed outcome must stay sticky row=%q ok=%v", model.outcomeRow, model.outcomeOK)
+	}
+	if !strings.Contains(model.View(), ui.FailedLabel) {
+		t.Fatalf("proxy failed view after fade:\n%s", model.View())
+	}
 
+	// TUN enable succeeds: Done badge shows, then the armed fade clears it while
+	// the status row keeps carrying the live result.
 	updated, _ = model.Update(ui.ActionPendingMsg{Action: ui.ActionEnableTun})
 	model = updated.(*Model)
 	if model.outcomeRow != "" {
@@ -1135,11 +1147,168 @@ func TestSystemProxyAndTunStickyOutcomes(t *testing.T) {
 		status: protocol.TunStatus{Revision: 3, DesiredEnable: true, Managed: true},
 	})
 	model = updated.(*Model)
-	if model.outcomeRow != rowTUN || !model.outcomeOK {
+	if model.outcomeRow != rowTUNAction || !model.outcomeOK {
 		t.Fatalf("tun outcome row=%q ok=%v", model.outcomeRow, model.outcomeOK)
 	}
 	if !strings.Contains(model.View(), ui.DoneLabel) {
 		t.Fatalf("tun done view:\n%s", model.View())
+	}
+	// The success path armed a fade; firing it clears the Done badge.
+	updated, _ = model.Update(outcomeFadeMsg{gen: model.outcomeFadeGen, row: rowTUNAction})
+	model = updated.(*Model)
+	if model.outcomeRow != "" || model.outcomeOK {
+		t.Fatalf("done outcome should fade row=%q ok=%v", model.outcomeRow, model.outcomeOK)
+	}
+	if strings.Contains(model.View(), ui.DoneLabel) {
+		t.Fatalf("tun done view should not show Done after fade:\n%s", model.View())
+	}
+}
+
+func TestSystemNetworkActionLabelFlipsWithState(t *testing.T) {
+	tests := []struct {
+		name      string
+		proxy     protocol.SystemProxyStatus
+		tun       protocol.TunStatus
+		wantProxy string
+		wantTun   string
+	}{
+		{
+			name:      "both idle",
+			proxy:     protocol.SystemProxyStatus{Target: "127.0.0.1:9190"},
+			tun:       protocol.TunStatus{},
+			wantProxy: ui.EnableSystemProxyLabel,
+			wantTun:   ui.EnableTunLabel,
+		},
+		{
+			name: "proxy owned and desired, tun desired on",
+			proxy: protocol.SystemProxyStatus{
+				Desired: true, Target: "127.0.0.1:9190",
+				Observed: protocol.SystemProxyObserved{Enabled: true, Server: "127.0.0.1:9190", Owned: true},
+			},
+			tun:       protocol.TunStatus{DesiredEnable: true},
+			wantProxy: ui.DisableSystemProxyLabel,
+			wantTun:   ui.DisableTunLabel,
+		},
+		{
+			name: "proxy foreign forces enable",
+			proxy: protocol.SystemProxyStatus{
+				Target:   "127.0.0.1:9190",
+				Observed: protocol.SystemProxyObserved{Enabled: true, Server: "127.0.0.1:7890", Foreign: true},
+			},
+			tun:       protocol.TunStatus{},
+			wantProxy: ui.ForceEnableSystemProxyLabel,
+			wantTun:   ui.EnableTunLabel,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeClient{systemProxy: tt.proxy, tun: tt.tun}
+			model := New(client, func() string { return "op" })
+			model.SetSnapshot(protocol.Status{
+				Capabilities: []string{protocol.CapabilitySystemProxy, protocol.CapabilityTUN},
+			}, protocol.CoreStatus{})
+			model.SetMutationsEnabled(true)
+			model.SetSystemProxy(tt.proxy)
+			model.SetTun(tt.tun)
+			view := model.View()
+			if !strings.Contains(view, tt.wantProxy) {
+				t.Fatalf("proxy action label %q missing:\n%s", tt.wantProxy, view)
+			}
+			if !strings.Contains(view, tt.wantTun) {
+				t.Fatalf("tun action label %q missing:\n%s", tt.wantTun, view)
+			}
+		})
+	}
+}
+
+func TestSystemNetworkStatusAndActionRowsCoexist(t *testing.T) {
+	client := &fakeClient{
+		systemProxy: protocol.SystemProxyStatus{
+			Desired: true, Target: "127.0.0.1:9190",
+			Observed: protocol.SystemProxyObserved{Enabled: true, Server: "127.0.0.1:9190", Owned: true},
+		},
+		tun: protocol.TunStatus{Revision: 1, DesiredEnable: true, LiveEnable: boolPtr(true), Managed: true},
+	}
+	model := New(client, func() string { return "op" })
+	model.SetSnapshot(protocol.Status{
+		Capabilities: []string{protocol.CapabilitySystemProxy, protocol.CapabilityTUN},
+	}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(true)
+	model.SetSystemProxy(client.systemProxy)
+	model.SetTun(client.tun)
+	view := model.View()
+	// Status rows carry the live observed state.
+	for _, want := range []string{"127.0.0.1:9190", ui.OwnedLabel, ui.LiveLabel} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("status row missing %q:\n%s", want, view)
+		}
+	}
+	// Action rows carry the toggle verbs (both desired-on → Disable).
+	if strings.Count(view, ui.DisableSystemProxyLabel) < 2 {
+		t.Fatalf("expected both proxy and tun action rows to show Disable:\n%s", view)
+	}
+}
+
+func TestSystemNetworkStatusRowUpdatesDynamically(t *testing.T) {
+	client := &fakeClient{systemProxy: protocol.SystemProxyStatus{Target: "127.0.0.1:9190"}}
+	model := New(client, func() string { return "op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilitySystemProxy}}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(true)
+	model.SetSystemProxy(client.systemProxy)
+
+	push := func(server string) {
+		model.ApplyRootNetworkStatus(protocol.SystemProxyStatus{
+			Desired: true, Target: "127.0.0.1:9190",
+			Observed: protocol.SystemProxyObserved{Enabled: true, Server: server, Owned: true},
+		}, true, protocol.TunStatus{}, false)
+	}
+
+	push("127.0.0.1:9190")
+	if view := model.View(); !strings.Contains(view, "127.0.0.1:9190") {
+		t.Fatalf("status row missing first server:\n%s", view)
+	}
+	push("127.0.0.1:9191")
+	view := model.View()
+	if !strings.Contains(view, "127.0.0.1:9191") {
+		t.Fatalf("status row did not update to new server:\n%s", view)
+	}
+	if strings.Contains(view, "127.0.0.1:9190") {
+		t.Fatalf("status row kept stale server after update:\n%s", view)
+	}
+
+	// While a toggle is pending on the action row, the status row must keep
+	// showing the live summary — the pending chip binds the action row only.
+	model.Update(ui.ActionPendingMsg{Action: ui.ActionEnableSystemProxy})
+	if view := model.View(); !strings.Contains(view, "127.0.0.1:9191") {
+		t.Fatalf("status row lost summary while action pending:\n%s", view)
+	}
+}
+
+func TestSystemNetworkStatusRowEnterShowsObserveDetail(t *testing.T) {
+	client := &fakeClient{
+		systemProxy: protocol.SystemProxyStatus{
+			Revision: 3, Desired: true, Target: "127.0.0.1:9190",
+			Observed: protocol.SystemProxyObserved{Enabled: true, Server: "127.0.0.1:9190", Owned: true},
+		},
+	}
+	model := New(client, func() string { return "op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilitySystemProxy}}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(true)
+	model.SetSystemProxy(client.systemProxy)
+	model.focusID = rowSystemProxy // status row, not the action row
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if cmd != nil {
+		t.Fatalf("status row enter must not fire a command, got %v", cmd)
+	}
+	if model.detail == nil {
+		t.Fatal("status row enter should open the observe detail panel")
+	}
+	view := model.View()
+	for _, want := range []string{"Target", "127.0.0.1:9190"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("observe detail missing %q:\n%s", want, view)
+		}
 	}
 }
 
