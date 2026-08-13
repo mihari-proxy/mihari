@@ -293,7 +293,7 @@ const (
 	UnmanagedLabel               = "unmanaged"
 	UpdateCoreTitle              = "Update mihomo core"
 	UpdateMihariTitle            = "Update Mihari"
-	UpdateMihariImpact           = "The Mihari binary will be replaced, the installed service will be restarted, and this terminal will enter the updated TUI."
+	UpdateMihariImpact           = "The Mihari binary will be replaced, an installed service copy will be synchronized and restarted, its daemon version will be verified, and this terminal will enter the updated TUI."
 	UpdateMihariRollback         = "The current TUI stays open if replacement does not complete."
 	UpdateMihariUpToDate         = "Up to date"
 	UpdateMihariAvailable        = "available"

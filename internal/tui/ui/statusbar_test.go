@@ -159,15 +159,15 @@ func TestStatusBar_SegmentDropTiers(t *testing.T) {
 		rightStatus string
 		want        string // plain segment sequence in positional order
 	}{
-		// Budget 70: version/memory/subscription dropped, rates kept.
-		{"full-100-badge", 100, false, "Service running · Connected", "Mihari  ·  ● running  ·  3 conn  ·  ↑3.0 MiB/s  ↓12.0 MiB/s"},
+		// Budget 70: version/memory/subscription dropped, padded rates kept.
+		{"full-100-badge", 100, false, "Service running · Connected", "Mihari  ·  ● running  ·  3 conn  ·  ↑  3.0 MiB/s  ↓ 12.0 MiB/s"},
 		// Budget 98: only version and memory dropped.
-		{"full-100-nobadge", 100, false, "", "Mihari  ·  ● running  ·  Main · 9.0 GiB/100.0 GiB  ·  3 conn  ·  ↑3.0 MiB/s  ↓12.0 MiB/s"},
-		// Budget 64: subscription kept (compact), memory dropped.
-		{"compact-94-badge", 94, true, "Service running · Connected", "Mihari  ·  ● running  ·  Main · 9G/100G  ·  3c  ·  ↑3M/s ↓12M/s"},
-		// Budget 44: subscription dropped, rates kept.
-		{"compact-74-badge", 74, true, "Service running · Connected", "Mihari  ·  ● running  ·  3c  ·  ↑3M/s ↓12M/s"},
-		// Budget 40: rates dropped too.
+		{"full-100-nobadge", 100, false, "", "Mihari  ·  ● running  ·  Main · 9.0 GiB/100.0 GiB  ·  3 conn  ·  ↑  3.0 MiB/s  ↓ 12.0 MiB/s"},
+		// Budget 64: padded compact rates leave no room for subscription.
+		{"compact-94-badge", 94, true, "Service running · Connected", "Mihari  ·  ● running  ·  3c  ·  ↑    3M/s ↓   12M/s"},
+		// Budget 51: subscription dropped, padded rates kept.
+		{"compact-81-badge", 81, true, "Service running · Connected", "Mihari  ·  ● running  ·  3c  ·  ↑    3M/s ↓   12M/s"},
+		// Budget 42: rates dropped too.
 		{"compact-72-badge", 72, true, "Service running · Connected", "Mihari  ·  ● running  ·  3c"},
 	}
 	for _, tc := range cases {
@@ -180,6 +180,117 @@ func TestStatusBar_SegmentDropTiers(t *testing.T) {
 			left = strings.TrimSpace(left)
 			if left != tc.want {
 				t.Fatalf("width=%d compact=%v got:\n%q\nwant:\n%q", tc.width, tc.compact, left, tc.want)
+			}
+		})
+	}
+}
+
+func statusBarRateSegment(plain string) string {
+	start := strings.Index(plain, "↑")
+	if start < 0 {
+		return ""
+	}
+	rest := plain[start:]
+	if i := strings.Index(rest, "  ·  "); i >= 0 {
+		return rest[:i]
+	}
+	return strings.TrimRight(rest, " ")
+}
+
+func statusBarFieldSet(plain string, compact bool) string {
+	var parts []string
+	if strings.Contains(plain, AppName) {
+		parts = append(parts, "title")
+	}
+	if strings.Contains(plain, "running") {
+		parts = append(parts, "core")
+	}
+	if strings.Contains(plain, "v1.19.0") {
+		parts = append(parts, "version")
+	}
+	if strings.Contains(plain, "Main") {
+		parts = append(parts, "sub")
+	}
+	if compact {
+		if strings.Contains(plain, "3c") {
+			parts = append(parts, "conn")
+		}
+		if strings.Contains(plain, "256M") {
+			parts = append(parts, "mem")
+		}
+	} else {
+		if strings.Contains(plain, "3 conn") {
+			parts = append(parts, "conn")
+		}
+		if strings.Contains(plain, "256.0 MiB") {
+			parts = append(parts, "mem")
+		}
+	}
+	if strings.Contains(plain, "↑") {
+		parts = append(parts, "rate")
+	}
+	return strings.Join(parts, ",")
+}
+
+func TestStatusBar_RateSegmentWidthStable(t *testing.T) {
+	theme := DefaultTheme()
+	base := StatusBarData{
+		CoreStatus:          "running",
+		CoreVersion:         "v1.19.0",
+		Subscription:        "Main · 9.0 GiB/100.0 GiB",
+		SubscriptionCompact: "Main · 9G/100G",
+		Connections:         3,
+		MemoryInUse:         256 * 1024 * 1024,
+	}
+	const width = 160
+	idle := base
+	busy := base
+	busy.UploadRate = 12*1024*1024 + 300*1024
+	busy.DownloadRate = 12*1024*1024 + 300*1024
+	for _, compact := range []bool{false, true} {
+		idleSeg := statusBarRateSegment(stripANSI(RenderStatusBar(theme, idle, width, compact)))
+		busySeg := statusBarRateSegment(stripANSI(RenderStatusBar(theme, busy, width, compact)))
+		if idleSeg == "" || busySeg == "" {
+			t.Fatalf("compact=%v missing rate segment idle=%q busy=%q", compact, idleSeg, busySeg)
+		}
+		if got, want := lipgloss.Width(idleSeg), lipgloss.Width(busySeg); got != want {
+			t.Fatalf("compact=%v rate width idle=%d (%q) busy=%d (%q)", compact, got, idleSeg, want, busySeg)
+		}
+	}
+}
+
+func TestStatusBar_RateChangeDoesNotDropFields(t *testing.T) {
+	theme := DefaultTheme()
+	data := StatusBarData{
+		CoreStatus:          "running",
+		CoreVersion:         "v1.19.0",
+		Subscription:        "Main · 9.0 GiB/100.0 GiB",
+		SubscriptionCompact: "Main · 9G/100G",
+		Connections:         3,
+		MemoryInUse:         256 * 1024 * 1024,
+	}
+	cases := []struct {
+		name    string
+		width   int
+		compact bool
+		badge   string
+	}{
+		// Full no-badge budget 86: idle keeps subscription, busy 12 MiB/s drops it.
+		{"full-88-nobadge", 88, false, ""},
+		// Compact with badge budget 63: idle keeps subscription, busy 12 MiB/s drops it.
+		{"compact-93-badge", 93, true, "Service running · Connected"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			idle := data
+			idle.RightStatus = tc.badge
+			busy := idle
+			busy.UploadRate = 12 * 1024 * 1024
+			busy.DownloadRate = 12 * 1024 * 1024
+			idleSet := statusBarFieldSet(stripANSI(RenderStatusBar(theme, idle, tc.width, tc.compact)), tc.compact)
+			busySet := statusBarFieldSet(stripANSI(RenderStatusBar(theme, busy, tc.width, tc.compact)), tc.compact)
+			if idleSet != busySet {
+				t.Fatalf("field set changed with rate: idle=%s busy=%s", idleSet, busySet)
 			}
 		})
 	}

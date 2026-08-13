@@ -57,7 +57,8 @@ type Options struct {
 
 // Manager is the production entry for service control.
 type Manager struct {
-	opts Options
+	opts        Options
+	stageBinary func(string) (string, error)
 }
 
 // New returns a Manager with defaults.
@@ -68,7 +69,7 @@ func New(opts Options) *Manager {
 	if opts.NewController == nil {
 		opts.NewController = newKardianosController
 	}
-	return &Manager{opts: opts}
+	return &Manager{opts: opts, stageBinary: platform.StageInstalledBinary}
 }
 
 func (m *Manager) controller(run RunFunc) (Controller, error) {
@@ -95,7 +96,7 @@ func (m *Manager) stageServiceBinary() (string, error) {
 			return "", protocol.APIError{Code: protocol.CodeInternal, Message: "resolve mihari executable path"}
 		}
 	}
-	dest, err := platform.StageInstalledBinary(src)
+	dest, err := m.stageBinary(src)
 	if err != nil {
 		return "", protocol.APIError{
 			Code:    protocol.CodeDataFailure,
@@ -104,6 +105,48 @@ func (m *Manager) stageServiceBinary() (string, error) {
 		}
 	}
 	return dest, nil
+}
+
+// UpdateInstalledBinary synchronizes the current executable into the machine
+// install directory and restarts an existing OS service from that copy. It
+// reports whether a service installation was found. A missing service is a
+// successful no-op.
+func (m *Manager) UpdateInstalledBinary() (bool, error) {
+	status, err := m.Status()
+	if err != nil {
+		return false, protocol.APIError{
+			Code:    protocol.CodeInvalidState,
+			Message: "Mihari updated, but the installed service status could not be determined",
+		}
+	}
+	if status == StatusNotInstalled {
+		return false, nil
+	}
+	if err := m.Stop(); err != nil && !isIgnorableStopError(err) {
+		return true, protocol.APIError{
+			Code:    protocol.CodeInvalidState,
+			Message: "Mihari updated, but the installed service could not be stopped",
+		}
+	}
+	if _, err := m.stageServiceBinary(); err != nil {
+		if restartErr := m.Start(); restartErr != nil {
+			return true, protocol.APIError{
+				Code:    protocol.CodeInvalidState,
+				Message: "Mihari updated, but service synchronization failed and the previous service could not be restarted",
+			}
+		}
+		return true, protocol.APIError{
+			Code:    protocol.CodeDataFailure,
+			Message: "Mihari updated, but the installed service binary could not be synchronized",
+		}
+	}
+	if err := m.Start(); err != nil {
+		return true, protocol.APIError{
+			Code:    protocol.CodeInvalidState,
+			Message: "Mihari updated and synchronized the installed service binary, but the service could not be restarted",
+		}
+	}
+	return true, nil
 }
 
 // Install copies mihari into the machine install directory, then registers the
