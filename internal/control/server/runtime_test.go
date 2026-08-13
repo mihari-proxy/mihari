@@ -620,6 +620,84 @@ func TestInstallCoreThreadsRequestSource(t *testing.T) {
 	}
 }
 
+func TestInstallCoreThreadsRequestChannel(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want *string
+	}{
+		{"alpha channel", `{"operation_id":"install-1","channel":"alpha"}`, stringPtr("alpha")},
+		{"omitted channel", `{"operation_id":"install-2"}`, nil},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &fakeRuntime{installResult: core.InstallResult{Version: "v1.19.0"}}
+			server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: fake})
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodPost, "/v1/core/install", bytes.NewBufferString(test.body)))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if test.want == nil {
+				if fake.operation.Channel != nil {
+					t.Fatalf("channel=%v want nil", fake.operation.Channel)
+				}
+				return
+			}
+			if fake.operation.Channel == nil || *fake.operation.Channel != *test.want {
+				t.Fatalf("channel=%v want %q", fake.operation.Channel, *test.want)
+			}
+		})
+	}
+}
+
+func TestCoreEndpointIncludesChannelFromSnapshot(t *testing.T) {
+	store := state.NewStore(state.Snapshot{Revision: 8, Core: state.CoreState{Status: "running", Version: "v1.19.0", Channel: "alpha"}})
+	server := New(Options{Token: "token", Store: store, Runtime: &fakeRuntime{snapshot: store.Load()}})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodGet, "/v1/core", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte(`"channel":"alpha"`)) {
+		t.Fatalf("channel missing: %s", recorder.Body.String())
+	}
+	var status protocol.CoreStatus
+	if err := json.Unmarshal(recorder.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Channel != "alpha" {
+		t.Fatalf("status=%#v", status)
+	}
+}
+
+func TestInstallCoreResponseIncludesChannelFromSnapshot(t *testing.T) {
+	fake := &fakeRuntime{
+		installResult: core.InstallResult{Version: "v1.19.0", Updated: true},
+		snapshot:      state.Snapshot{Revision: 12, Core: state.CoreState{Channel: "alpha"}},
+	}
+	server := New(Options{Token: "token", Store: state.NewStore(fake.snapshot), Runtime: fake})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodPost, "/v1/core/install", bytes.NewBufferString(`{"operation_id":"install-1"}`)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte(`"channel":"alpha"`)) {
+		t.Fatalf("channel missing: %s", recorder.Body.String())
+	}
+	var result protocol.CoreInstallResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Channel != "alpha" || result.Version != "v1.19.0" || result.Revision != 12 {
+		t.Fatalf("result=%#v", result)
+	}
+}
+
+func stringPtr(value string) *string {
+	return &value
+}
+
 func FuzzDecodeControlJSON(f *testing.F) {
 	seeds := [][]byte{
 		[]byte(`{"operation_id":"op-1"}`),

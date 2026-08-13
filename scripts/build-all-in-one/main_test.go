@@ -88,6 +88,7 @@ func TestBundlerProducesSixPlatformBundles(t *testing.T) {
 			"mihari" + suffix:                  true,
 			script:                             true,
 			"data/bin/mihomo" + suffix:         true,
+			"data/bin/core-channel":            true,
 			"data/geoip/GeoLite2-Country.mmdb": true,
 			"data/geoip/GeoLite2-ASN.mmdb":     true,
 		}
@@ -107,6 +108,74 @@ func TestBundlerProducesSixPlatformBundles(t *testing.T) {
 		// fakeRunner; the other five went through the magic check; verify bytes).
 		if mihomo := entries["data/bin/mihomo"+suffix]; len(mihomo) == 0 {
 			t.Fatalf("%s: empty mihomo binary", platform)
+		}
+		assertCoreChannelSidecar(t, entries, "stable", "stable-v1.19.0")
+	}
+}
+
+func TestBundlerAlphaChannelWritesSidecar(t *testing.T) {
+	api := fakeGitHubAlphaAPI(t)
+	defer api.Close()
+	geoipSrv := fakeGeoIPServer(t)
+	defer geoipSrv.Close()
+
+	mihariDir := t.TempDir()
+	writeMihariDist(t, mihariDir)
+
+	scriptsDir := t.TempDir()
+	for _, name := range []string{"install-aio.sh", "install-aio.ps1"} {
+		if err := os.WriteFile(filepath.Join(scriptsDir, name), []byte("# aio installer\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out := t.TempDir()
+	err := run(options{
+		MihariDir: mihariDir, Out: out, ScriptsDir: scriptsDir,
+		Channel:    "alpha",
+		Platforms:  []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64", "windows/arm64"},
+		HTTPClient: api.Client(), APIBase: api.URL, Repository: "MetaCubeX/mihomo",
+		GeoIPBase: geoipSrv.URL, GeoIPValidate: func(string) error { return nil },
+		Runner: fakeRunner{output: []byte("Mihomo Meta alpha-e183c58")},
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	expected := map[string]string{
+		"linux/amd64":   "mihari-all-in-one-linux-amd64.tar.gz",
+		"linux/arm64":   "mihari-all-in-one-linux-arm64.tar.gz",
+		"darwin/amd64":  "mihari-all-in-one-darwin-amd64.tar.gz",
+		"darwin/arm64":  "mihari-all-in-one-darwin-arm64.tar.gz",
+		"windows/amd64": "mihari-all-in-one-windows-amd64.zip",
+		"windows/arm64": "mihari-all-in-one-windows-arm64.zip",
+	}
+	for platform, bundle := range expected {
+		entries := extractBundle(t, filepath.Join(out, bundle))
+		assertCoreChannelSidecar(t, entries, "alpha", "alpha-e183c58")
+		if _, ok := entries["data/bin/core-channel"]; !ok {
+			t.Fatalf("%s: missing data/bin/core-channel", platform)
+		}
+	}
+}
+
+func TestSidecarScriptInstallersCopyCoreChannel(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
+	for _, name := range []string{"install-aio.sh", "install-aio.ps1"} {
+		data, err := os.ReadFile(filepath.Join(root, "scripts", "install", name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		text := string(data)
+		if !strings.Contains(text, "core-channel") {
+			t.Errorf("%s: expected to copy data/bin/core-channel sidecar", name)
+		}
+		if !strings.Contains(text, "Never touches") || !strings.Contains(text, "mihari.yaml") {
+			t.Errorf("%s: expected Never touches comment to mention mihari.yaml", name)
 		}
 	}
 }
@@ -177,11 +246,11 @@ func TestAssertStageEnforcesWhitelist(t *testing.T) {
 		files   []string
 		wantErr bool
 	}{
-		{name: "unix complete", goos: "linux", files: []string{"mihari", "install-aio.sh", "data/bin/mihomo", "data/geoip/GeoLite2-Country.mmdb", "data/geoip/GeoLite2-ASN.mmdb"}},
-		{name: "windows complete", goos: "windows", files: []string{"mihari.exe", "install-aio.ps1", "data/bin/mihomo.exe", "data/geoip/GeoLite2-Country.mmdb", "data/geoip/GeoLite2-ASN.mmdb"}},
-		{name: "missing geoip", goos: "linux", files: []string{"mihari", "install-aio.sh", "data/bin/mihomo", "data/geoip/GeoLite2-Country.mmdb"}, wantErr: true},
-		{name: "forbidden onboarding.json", goos: "linux", files: []string{"mihari", "install-aio.sh", "data/bin/mihomo", "data/geoip/GeoLite2-Country.mmdb", "data/geoip/GeoLite2-ASN.mmdb", "onboarding.json"}, wantErr: true},
-		{name: "forbidden mihari.yaml", goos: "windows", files: []string{"mihari.exe", "install-aio.ps1", "data/bin/mihomo.exe", "data/geoip/GeoLite2-Country.mmdb", "data/geoip/GeoLite2-ASN.mmdb", "mihari.yaml"}, wantErr: true},
+		{name: "unix complete", goos: "linux", files: []string{"mihari", "install-aio.sh", "data/bin/mihomo", "data/bin/core-channel", "data/geoip/GeoLite2-Country.mmdb", "data/geoip/GeoLite2-ASN.mmdb"}},
+		{name: "windows complete", goos: "windows", files: []string{"mihari.exe", "install-aio.ps1", "data/bin/mihomo.exe", "data/bin/core-channel", "data/geoip/GeoLite2-Country.mmdb", "data/geoip/GeoLite2-ASN.mmdb"}},
+		{name: "missing geoip", goos: "linux", files: []string{"mihari", "install-aio.sh", "data/bin/mihomo", "data/bin/core-channel", "data/geoip/GeoLite2-Country.mmdb"}, wantErr: true},
+		{name: "forbidden onboarding.json", goos: "linux", files: []string{"mihari", "install-aio.sh", "data/bin/mihomo", "data/bin/core-channel", "data/geoip/GeoLite2-Country.mmdb", "data/geoip/GeoLite2-ASN.mmdb", "onboarding.json"}, wantErr: true},
+		{name: "forbidden mihari.yaml", goos: "windows", files: []string{"mihari.exe", "install-aio.ps1", "data/bin/mihomo.exe", "data/bin/core-channel", "data/geoip/GeoLite2-Country.mmdb", "data/geoip/GeoLite2-ASN.mmdb", "mihari.yaml"}, wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -194,6 +263,52 @@ func TestAssertStageEnforcesWhitelist(t *testing.T) {
 			}
 		})
 	}
+}
+
+func fakeGitHubAlphaAPI(t *testing.T) *httptest.Server {
+	t.Helper()
+	// Standard names first; variants must exist so a stable-style scorer
+	// that prefers -compatible / would accept -v3 is observable as a miss.
+	names := []string{
+		"mihomo-linux-amd64-compatible-alpha-e183c58.gz",
+		"mihomo-linux-amd64-v3-alpha-e183c58.gz",
+		"mihomo-linux-amd64-alpha-e183c58.gz",
+		"mihomo-linux-arm64-alpha-e183c58.gz",
+		"mihomo-darwin-amd64-compatible-alpha-e183c58.gz",
+		"mihomo-darwin-amd64-v3-alpha-e183c58.gz",
+		"mihomo-darwin-amd64-alpha-e183c58.gz",
+		"mihomo-darwin-arm64-alpha-e183c58.gz",
+		"mihomo-windows-amd64-compatible-alpha-e183c58.zip",
+		"mihomo-windows-amd64-v3-alpha-e183c58.zip",
+		"mihomo-windows-amd64-alpha-e183c58.zip",
+		"mihomo-windows-arm64-alpha-e183c58.zip",
+	}
+	archives := make(map[string][]byte, len(names))
+	for _, name := range names {
+		archives[name] = fakeMihomoArchive(t, name)
+	}
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.URL.Path == "/repos/MetaCubeX/mihomo/releases/tags/Prerelease-Alpha":
+			assets := make([]core.Asset, 0, len(names))
+			for _, name := range names {
+				data := archives[name]
+				sum := sha256.Sum256(data)
+				assets = append(assets, core.Asset{
+					Name: name, URL: server.URL + "/asset/" + name,
+					Size: int64(len(data)), Digest: "sha256:" + hex.EncodeToString(sum[:]),
+				})
+			}
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(core.Release{TagName: "Prerelease-Alpha", Assets: assets})
+		case strings.HasPrefix(request.URL.Path, "/asset/"):
+			_, _ = response.Write(archives[strings.TrimPrefix(request.URL.Path, "/asset/")])
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	return server
 }
 
 func fakeGitHubAPI(t *testing.T) *httptest.Server {
@@ -365,6 +480,29 @@ func extractBundle(t *testing.T, path string) map[string][]byte {
 		t.Fatalf("unknown bundle type: %s", path)
 	}
 	return entries
+}
+
+func assertCoreChannelSidecar(t *testing.T, entries map[string][]byte, wantChannel, wantStamp string) {
+	t.Helper()
+	raw, ok := entries["data/bin/core-channel"]
+	if !ok {
+		t.Fatal("missing data/bin/core-channel")
+	}
+	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	lines := strings.Split(text, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("sidecar %q: want at least 2 lines", text)
+	}
+	if got := strings.TrimSpace(lines[0]); got != wantChannel {
+		t.Fatalf("sidecar channel=%q want %q", got, wantChannel)
+	}
+	stamp := strings.TrimSpace(lines[1])
+	if stamp == "" {
+		t.Fatal("sidecar stamp is empty")
+	}
+	if wantStamp != "" && stamp != wantStamp {
+		t.Fatalf("sidecar stamp=%q want %q", stamp, wantStamp)
+	}
 }
 
 func sortedKeys(m map[string]bool) []string {

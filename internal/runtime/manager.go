@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/netip"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 
@@ -53,6 +54,7 @@ type Operation struct {
 	ID         string
 	Source     string
 	IfRevision *uint64
+	Channel    *string
 }
 
 // GeoIPCandidate is the minimal prepared-pair contract used by the mutation coordinator.
@@ -276,13 +278,16 @@ func (m *Manager) Run(ctx context.Context) error {
 }
 
 func (m *Manager) Observe(observation supervisor.Observation) {
+	current := m.store.Load().Core
 	m.setCoreState(state.CoreState{
 		Status:      string(observation.Status),
 		PID:         observation.PID,
 		Restarts:    observation.Restarts,
 		LastError:   observation.LastError,
 		NextRetryAt: observation.NextRetryAt,
-		Version:     m.store.Load().Core.Version,
+		Version:     current.Version,
+		Channel:     current.Channel,
+		AlphaSHA:    current.AlphaSHA,
 	})
 }
 
@@ -381,12 +386,47 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		if m.installer == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "core installer is unavailable"}
 		}
+		m.settingsMu.Lock()
+		channel := m.settings.CoreChannel
+		m.settingsMu.Unlock()
+		if channel == "" {
+			channel = "stable"
+		}
+		if operation.Channel != nil {
+			channel = *operation.Channel
+		}
+		if channel != "stable" && channel != "alpha" {
+			return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid core channel"}
+		}
 		installRequest := m.installRequest
 		installRequest.CurrentVersion = m.store.Load().Core.Version
+		installRequest.Channel = channel
+		installRequest.AlphaSHA = m.store.Load().Core.AlphaSHA
 		// setup 预检（design §4.3）：aio 脚本已预置核心时，对现有文件 -v 成功即秒过，不联网。
 		// store.Core.Version 不作判据（DetectVersion 失败时旧值残留，见 runtime.go 启动检测）。
 		if operation.Source == "setup" {
 			if version, detectErr := m.installer.DetectVersion(ctx, installRequest.BinaryPath); detectErr == nil && version != "" {
+				sidecar := filepath.Join(filepath.Dir(installRequest.BinaryPath), "core-channel")
+				m.settingsMu.Lock()
+				changed, applyErr := config.ApplyCoreChannelSidecar(&m.settings, sidecar)
+				if changed && applyErr == nil {
+					applyErr = m.persistSettings()
+				}
+				appliedChannel := m.settings.CoreChannel
+				m.settingsMu.Unlock()
+				if applyErr != nil {
+					return nil, applyErr
+				}
+				if changed {
+					_, coordErr := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+						snapshot.Core.Version = version
+						snapshot.Core.Channel = appliedChannel
+						return snapshot, nil
+					})
+					if coordErr != nil {
+						return nil, coordErr
+					}
+				}
 				return core.InstallResult{Version: version, Updated: false}, nil
 			}
 			// -v 失败（缺失/损坏）→ 落 Prepare 联网修复（失败由 Prepare 报错并提示 aio 脚本）。
@@ -411,6 +451,18 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 					return snapshot, err
 				}
 				snapshot.Core.Version = result.Version
+				snapshot.Core.Channel = channel
+				snapshot.Core.AlphaSHA = result.AlphaSHA
+				if channel == "stable" {
+					snapshot.Core.AlphaSHA = ""
+				}
+				m.settingsMu.Lock()
+				m.settings.CoreChannel = channel
+				saveErr := m.persistSettings()
+				m.settingsMu.Unlock()
+				if saveErr != nil {
+					return snapshot, saveErr
+				}
 				return snapshot, nil
 			})
 			if err != nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/app"
@@ -36,7 +37,8 @@ func main() {
 		if err := paths.EnsureDirs(); err != nil {
 			return protocol.APIError{Code: protocol.CodeDataFailure, Message: "create mihari data directories"}
 		}
-		settings, created, err := config.LoadOrCreateResult(paths.Settings)
+		sidecar := filepath.Join(paths.Bin, "core-channel")
+		settings, created, err := config.LoadOrCreateWithSidecar(paths.Settings, sidecar)
 		if err != nil {
 			return err
 		}

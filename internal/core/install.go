@@ -40,11 +40,14 @@ type InstallRequest struct {
 	ConfigPath     string
 	StagingDir     string
 	CurrentVersion string
+	Channel        string
+	AlphaSHA       string
 }
 
 type InstallResult struct {
-	Version string
-	Updated bool
+	Version  string
+	Updated  bool
+	AlphaSHA string
 }
 
 // LocalCoreInfo reports whether an existing local core binary satisfies setup
@@ -80,6 +83,7 @@ type Candidate struct {
 	path       string
 	binaryPath string
 	version    string
+	alphaSHA   string
 	updated    bool
 	cleanup    sync.Once
 }
@@ -97,7 +101,7 @@ func (c *Candidate) Updated() bool { return c.updated }
 
 func (c *Candidate) Commit() (InstallResult, error) {
 	if !c.updated {
-		return InstallResult{Version: c.version, Updated: false}, nil
+		return InstallResult{Version: c.version, Updated: false, AlphaSHA: c.alphaSHA}, nil
 	}
 	if c.path == "" {
 		return InstallResult{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo candidate is unavailable"}
@@ -109,7 +113,7 @@ func (c *Candidate) Commit() (InstallResult, error) {
 		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "replace mihomo core"}
 	}
 	c.path = ""
-	return InstallResult{Version: c.version, Updated: true}, nil
+	return InstallResult{Version: c.version, Updated: true, AlphaSHA: c.alphaSHA}, nil
 }
 
 func (c *Candidate) Cleanup() {
@@ -120,29 +124,47 @@ func (c *Candidate) Cleanup() {
 	})
 }
 
+// localReadyVersion 在二进制存在且 DetectVersion（含 ParseVersion）成功时返回版本。
+// 判据与 Manager.Install setup 预检同一路径（design §4.3）；失败则走下载修复。
+func (i Installer) localReadyVersion(ctx context.Context, binaryPath string) (string, bool) {
+	info, err := os.Stat(binaryPath)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	runner := i.Runner
+	if runner == nil {
+		runner = OSCommandRunner{}
+	}
+	version, err := DetectVersion(ctx, runner, binaryPath)
+	if err != nil || version == "" {
+		return "", false
+	}
+	return version, true
+}
+
 func (i Installer) Prepare(ctx context.Context, request InstallRequest) (PreparedCore, error) {
 	checkCtx, cancel := context.WithTimeout(ctx, i.checkTimeout())
-	release, err := i.LatestRelease(checkCtx)
+	release, err := i.LatestRelease(checkCtx, request.Channel)
 	cancel()
 	if err != nil {
 		return nil, withAIOHint(err)
 	}
-	if request.CurrentVersion == release.TagName {
-		if info, statErr := os.Stat(request.BinaryPath); statErr == nil && !info.IsDir() {
-			// 文件存在还要 -v 成功才短路；判据复用 DetectVersion（含 ParseVersion 版本格式校验）
-			// ——design §4.3，与 Manager.Install setup 预检同一判据、DRY。-v 失败 → 走下载修复。
-			runner := i.Runner
-			if runner == nil {
-				runner = OSCommandRunner{}
-			}
-			if version, vErr := DetectVersion(ctx, runner, request.BinaryPath); vErr == nil && version != "" {
-				return &Candidate{binaryPath: request.BinaryPath, version: release.TagName, updated: false}, nil
-			}
+	if request.Channel != "alpha" && request.CurrentVersion == release.TagName {
+		if version, ok := i.localReadyVersion(ctx, request.BinaryPath); ok {
+			return &Candidate{binaryPath: request.BinaryPath, version: version, updated: false}, nil
 		}
 	}
-	asset, err := SelectAsset(release, i.targetOS(), i.targetArch())
+	asset, err := SelectAsset(release, i.targetOS(), i.targetArch(), request.Channel)
 	if err != nil {
 		return nil, err
+	}
+	if request.Channel == "alpha" {
+		releaseSHA := ParseAlphaSHA(asset.Name)
+		if releaseSHA != "" && releaseSHA == request.AlphaSHA {
+			if version, ok := i.localReadyVersion(ctx, request.BinaryPath); ok {
+				return &Candidate{binaryPath: request.BinaryPath, version: version, alphaSHA: releaseSHA, updated: false}, nil
+			}
+		}
 	}
 	if asset.Size < 0 || asset.Size > maxCoreArchiveSize {
 		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo asset is too large"}
@@ -187,11 +209,15 @@ func (i Installer) Prepare(ctx context.Context, request InstallRequest) (Prepare
 	if err != nil || len(strings.TrimSpace(string(versionOutput))) == 0 {
 		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo candidate did not start"}
 	}
+	version, err := ParseVersion(string(versionOutput))
+	if err != nil {
+		return nil, err
+	}
 	if err := ValidateConfig(ctx, runner, candidatePath, request.DataDir, request.ConfigPath); err != nil {
 		return nil, err
 	}
 	keepCandidate = true
-	return &Candidate{path: candidatePath, binaryPath: request.BinaryPath, version: release.TagName, updated: true}, nil
+	return &Candidate{path: candidatePath, binaryPath: request.BinaryPath, version: version, alphaSHA: ParseAlphaSHA(asset.Name), updated: true}, nil
 }
 
 // Download 取 asset 并落盘到 destination，校验 asset.Digest 的 sha256:<hex>

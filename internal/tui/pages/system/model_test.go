@@ -650,7 +650,7 @@ func TestSystemOffersCoreInstallWhenNoVersionIsPresent(t *testing.T) {
 func TestSystemDisablesMutationsAndSetupRouteWhileDisconnected(t *testing.T) {
 	model := New(&fakeClient{}, func() string { return "system-op" })
 	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityCore, protocol.CapabilityOnboarding}}, protocol.CoreStatus{Version: "v1.19.0"})
-	for _, id := range []string{rowCoreUpdate, rowCoreRestart, rowRunSetup} {
+	for _, id := range []string{rowCoreUpdate, rowCoreRestart, rowCoreChannel, rowRunSetup} {
 		model.focusID = id
 		updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		model = updated.(*Model)
@@ -682,7 +682,7 @@ func TestSystemSuccessfulRestartReconcilesAuthoritativeCore(t *testing.T) {
 
 func TestSystemDoesNotOfferCoreMutationWithoutClientOrCapability(t *testing.T) {
 	for _, model := range []*Model{New(nil, func() string { return "system-op" }), New(&fakeClient{}, func() string { return "system-op" })} {
-		for _, id := range []string{rowCoreUpdate, rowCoreRestart} {
+		for _, id := range []string{rowCoreUpdate, rowCoreRestart, rowCoreChannel} {
 			model.focusID = id
 			updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 			model = updated.(*Model)
@@ -2004,5 +2004,132 @@ func TestSystemDaemonCoreRowsDegradeWhenDisconnected(t *testing.T) {
 	reconnected := model.View()
 	if strings.Contains(reconnected, " · "+ui.StaleLabel) || !strings.Contains(reconnected, "38;5;78") {
 		t.Fatalf("reconnected view should drop stale and restore green:\n%s", reconnected)
+	}
+}
+
+func TestSystemCoreChannelRowRendersSnapshotChannelAndVersion(t *testing.T) {
+	model := New(nil, func() string { return "op" })
+	model.SetSize(100, 40)
+	model.SetSnapshot(
+		protocol.Status{Capabilities: []string{protocol.CapabilityCore}},
+		protocol.CoreStatus{Status: "running", Version: "v1.19.0", Channel: "stable"},
+	)
+	view := model.View()
+	if !strings.Contains(view, ui.CoreChannelLabel) {
+		t.Fatalf("missing core channel label:\n%s", view)
+	}
+	if !strings.Contains(view, "stable") {
+		t.Fatalf("missing stable channel:\n%s", view)
+	}
+	if !strings.Contains(view, "v1.19.0") {
+		t.Fatalf("missing core version:\n%s", view)
+	}
+	if strings.Contains(view, "Prerelease-Alpha") {
+		t.Fatalf("must not show Prerelease-Alpha as version:\n%s", view)
+	}
+}
+
+func TestSystemCoreChannelEnterSwitchesToOtherChannel(t *testing.T) {
+	client := &fakeClient{onboarding: protocol.OnboardingStatus{Revision: 11}}
+	model := New(client, func() string { return "system-op" })
+	model.SetSnapshot(
+		protocol.Status{Revision: 11, Capabilities: []string{protocol.CapabilityCore}},
+		protocol.CoreStatus{Revision: 11, Status: "running", Version: "alpha-dd7bc4c", Channel: "alpha"},
+	)
+	model.SetMutationsEnabled(true)
+	model.focusID = rowCoreChannel
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if _, ok := updated.(*Model); !ok {
+		t.Fatalf("updated=%T", updated)
+	}
+	if command == nil || client.installCalls != 0 {
+		t.Fatalf("command=%v installCalls=%d", command != nil, client.installCalls)
+	}
+	intent, ok := command().(ui.ActionIntentMsg)
+	if !ok || intent.Action != ui.ActionSwitchCoreChannel || intent.Execute == nil {
+		t.Fatalf("intent=%#v", intent)
+	}
+	if intent.Title != ui.SwitchCoreChannelTitle || intent.Impact != ui.SwitchCoreChannelImpact || intent.Rollback != ui.SwitchCoreChannelRollback {
+		t.Fatalf("confirmation copy=%#v", intent)
+	}
+	_ = intent.Execute()
+	if client.installCalls != 1 {
+		t.Fatalf("installCalls=%d", client.installCalls)
+	}
+	if client.lastMutation.Source != "channel-switch" {
+		t.Fatalf("source=%q", client.lastMutation.Source)
+	}
+	if client.lastMutation.Channel == nil || *client.lastMutation.Channel != "stable" {
+		t.Fatalf("channel=%v", client.lastMutation.Channel)
+	}
+	if client.lastMutation.IfRevision == nil || *client.lastMutation.IfRevision != 11 {
+		t.Fatalf("mutation=%#v", client.lastMutation)
+	}
+	if client.lastMutation.OperationID != "system-op" {
+		t.Fatalf("operation=%q", client.lastMutation.OperationID)
+	}
+}
+
+func TestSystemCoreChannelEnterDoesNotReinstallSameChannel(t *testing.T) {
+	client := &fakeClient{onboarding: protocol.OnboardingStatus{Revision: 4}}
+	model := New(client, func() string { return "system-op" })
+	model.SetSnapshot(
+		protocol.Status{Revision: 4, Capabilities: []string{protocol.CapabilityCore}},
+		protocol.CoreStatus{Revision: 4, Status: "running", Version: "v1.19.0", Channel: "stable"},
+	)
+	model.SetMutationsEnabled(true)
+	model.focusID = rowCoreChannel
+
+	if cmd := model.confirmSwitchCoreChannel("stable"); cmd != nil {
+		t.Fatal("switching to the current channel must be a no-op")
+	}
+	if client.installCalls != 0 {
+		t.Fatalf("installCalls=%d", client.installCalls)
+	}
+
+	model.core.Channel = ""
+	if cmd := model.confirmSwitchCoreChannel("stable"); cmd != nil || client.installCalls != 0 {
+		t.Fatalf("empty channel is stable; installCalls=%d cmd=%v", client.installCalls, cmd != nil)
+	}
+}
+
+func TestSystemCoreChannelFailureKeepsSnapshotChannel(t *testing.T) {
+	model := New(&fakeClient{}, func() string { return "op" })
+	model.SetSnapshot(
+		protocol.Status{Capabilities: []string{protocol.CapabilityCore}},
+		protocol.CoreStatus{Status: "running", Version: "v1.19.0", Channel: "alpha"},
+	)
+	model.SetMutationsEnabled(true)
+
+	updated, _ := model.Update(ui.ActionPendingMsg{Action: ui.ActionSwitchCoreChannel})
+	model = updated.(*Model)
+	if model.pendingRow != rowCoreChannel {
+		t.Fatalf("pending row=%q", model.pendingRow)
+	}
+	if model.pendingNote != ui.CoreProgressSwitching && model.pendingNote != ui.CoreProgressUpdating {
+		t.Fatalf("pending note=%q", model.pendingNote)
+	}
+	model.rowSpinClock = time.Unix(0, 0)
+	if view := model.View(); !strings.Contains(view, model.pendingNote) {
+		t.Fatalf("missing pending chip:\n%s", view)
+	}
+
+	updated, _ = model.Update(actionResultMsg{
+		kind: actionSwitchChannel,
+		err:  protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download core asset failed"},
+	})
+	model = updated.(*Model)
+	if model.outcomeRow != rowCoreChannel || model.outcomeOK {
+		t.Fatalf("outcome row=%q ok=%v", model.outcomeRow, model.outcomeOK)
+	}
+	view := model.View()
+	if !strings.Contains(view, ui.FailedLabel) {
+		t.Fatalf("missing Failed chip:\n%s", view)
+	}
+	if !strings.Contains(view, "alpha") {
+		t.Fatalf("failed view must keep snapshot channel:\n%s", view)
+	}
+	if strings.Contains(view, "Prerelease-Alpha") {
+		t.Fatalf("must not show Prerelease-Alpha:\n%s", view)
 	}
 }

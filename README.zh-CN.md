@@ -32,6 +32,7 @@ Mihari 是一款全新的、独立的 [mihomo](https://github.com/MetaCubeX/miho
 - **Web 面板**:一键安装 / 更新 / 激活 / 回滚 zashboard 与 MetaCubeXD,置于带独立访问凭据的回环 Web 网关之后。
 - **系统代理与 TUN**:跨平台的系统代理控制与托管 TUN,均由守护进程持有并持久化。
 - **TUI 内更新 Mihari**:System 页面进入时检查 GitHub Releases,显示 `当前版本 · 最新版本 available` 或 `当前版本 · Up to date`;以管理员/root 权限启动时可替换二进制并自动进入更新后的 TUI。
+- **内核通道**:System 页面可在 mihomo 的 `stable` / `alpha` 通道之间切换。
 
 单个无 CGO 的静态二进制(< 15 MB)即包含全部功能,内置 GitHub Releases 自动更新与本地 GeoIP 解析。
 

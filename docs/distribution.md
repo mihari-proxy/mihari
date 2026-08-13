@@ -67,7 +67,26 @@ sh install-aio.sh        # Windows: powershell -File install-aio.ps1
 
 ---
 
-## 二、AList 网盘目录结构
+## 二、核心通道与 sidecar
+
+`scripts/build-all-in-one` 默认打包 **stable** 内核。需要预置 alpha 时传入 `--channel alpha`，bundler 从 GitHub 滚动 tag `Prerelease-Alpha` 选取标准资产（非 `-compatible` / `-v3` / `-goNNN` 变体）。
+
+无论 `--channel` 是 `stable` 还是 `alpha`，bundle 都会写入 sidecar `data/bin/core-channel`（UTF-8 文本）：
+
+```
+<stable|alpha>
+<stamp>
+```
+
+第 1 行为 `stable` 或 `alpha`；第 2 行为非空 stamp（通道 + 二进制指纹，例如 `stable-v1.19.29` 或 `alpha-e183c58`）。缺行、非法通道或 stamp 为空视为无效，守护进程忽略、不改 settings。
+
+`install-aio.sh` / `install-aio.ps1` 覆盖 `data/bin/mihomo` 时，若 bundle 带 sidecar 则一并覆盖到 `$MIHARI_DATA/bin/core-channel`，**仍不修改** `mihari.yaml`。守护进程在启动与 setup 快路径按 stamp 应用 sidecar：与已记录的 `core-channel-bundle` 相同则不改 `core-channel`（保护用户后来在 System 页切换的通道）；stamp 变化才把打包通道写入 settings。
+
+settings 新增可选字段 `core-channel` 与 `core-channel-bundle`（schema 仍为 `mihari.settings/v1`）。加载使用 `KnownFields(true)`：无这些字段的旧文件可由新 daemon 读取（空通道视为 `stable`）；**含这些字段的新 settings 文件无法被旧 daemon 加载**。
+
+---
+
+## 三、AList 网盘目录结构
 
 base_path 默认 `/mihari-release/mihari`（AList fs/API 路径，通过 GitHub 变量 `ALIST_BASE_PATH` 配置）：
 
@@ -115,7 +134,7 @@ release workflow 的 AList 步骤顺序保证用户永远拿不到半成品：
 
 ---
 
-## 三、版本保留策略
+## 四、版本保留策略
 
 `MIHARI_KEEP_VERSIONS`（GitHub 变量，默认 `5`）控制保留数量：
 
@@ -125,7 +144,7 @@ release workflow 的 AList 步骤顺序保证用户永远拿不到半成品：
 
 ---
 
-## 四、版本撤回（致命错误）
+## 五、版本撤回（致命错误）
 
 独立 workflow `.github/workflows/retract.yml` 手动触发，**彻底删除**坏版本：
 
@@ -143,7 +162,7 @@ release workflow 的 AList 步骤顺序保证用户永远拿不到半成品：
 
 ---
 
-## 五、CI 配置（前置依赖）
+## 六、CI 配置（前置依赖）
 
 AList 分发步骤在 release workflow 中以 `if: env.ALIST_URL != ''` 包裹——**未配置时跳过，不阻塞 GitHub 发布**。启用国内分发需配置：
 

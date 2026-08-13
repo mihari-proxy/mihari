@@ -82,7 +82,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	if info, err := os.Stat(paths.CoreBinary); err == nil && !info.IsDir() {
 		if version, err := core.DetectVersion(context.Background(), core.OSCommandRunner{}, paths.CoreBinary); err == nil {
 			snapshot := store.Load()
-			snapshot.Core = state.CoreState{Status: "stopped", Version: version}
+			snapshot.Core = state.CoreState{Status: "stopped", Version: version, Channel: settings.CoreChannel}
 			store.Store(snapshot)
 		}
 	}

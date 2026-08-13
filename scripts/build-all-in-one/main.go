@@ -40,6 +40,7 @@ type options struct {
 	ScriptsDir  string // directory holding install-aio.sh / install-aio.ps1 (scripts/install in CI)
 	Platforms   []string
 	GitHubToken string // optional; adds Authorization: Bearer when set
+	Channel     string // mihomo channel: stable (default) or alpha
 
 	// Test seams (zero-valued in production).
 	HTTPClient    *http.Client
@@ -56,11 +57,12 @@ func main() {
 	platforms := flag.String("platforms", strings.Join(defaultPlatforms, ","), "comma-separated goos/goarch targets")
 	scriptsDir := flag.String("scripts-dir", "scripts/install", "directory holding install-aio.sh / install-aio.ps1")
 	token := flag.String("github-token", os.Getenv("GITHUB_TOKEN"), "GitHub API token (default $GITHUB_TOKEN)")
+	channel := flag.String("channel", "stable", "mihomo channel: stable or alpha")
 	flag.Parse()
 
 	if err := run(options{
 		MihariDir: *mihariDir, Out: *out, ScriptsDir: *scriptsDir,
-		Platforms: splitPlatforms(*platforms), GitHubToken: *token,
+		Platforms: splitPlatforms(*platforms), GitHubToken: *token, Channel: *channel,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "build-all-in-one:", err)
 		os.Exit(1)
@@ -80,6 +82,9 @@ func run(o options) error {
 	if o.ScriptsDir == "" {
 		o.ScriptsDir = "scripts/install"
 	}
+	if o.Channel == "" {
+		o.Channel = "stable"
+	}
 	if err := os.MkdirAll(o.Out, 0o755); err != nil {
 		return fmt.Errorf("create bundles directory: %w", err)
 	}
@@ -91,7 +96,7 @@ func run(o options) error {
 	ctx := context.Background()
 
 	// Exactly one mihomo API request returns every platform asset.
-	release, err := installer.LatestRelease(ctx)
+	release, err := installer.LatestRelease(ctx, o.Channel)
 	if err != nil {
 		return fmt.Errorf("fetch mihomo release: %w", err)
 	}
@@ -126,7 +131,7 @@ func buildPlatform(ctx context.Context, installer core.Installer, release core.R
 	}
 	defer os.RemoveAll(stage)
 
-	asset, err := core.SelectAsset(release, goos, goarch)
+	asset, err := core.SelectAsset(release, goos, goarch, o.Channel)
 	if err != nil {
 		return err
 	}
@@ -149,6 +154,9 @@ func buildPlatform(ctx context.Context, installer core.Installer, release core.R
 	}
 	mihomoDest := filepath.Join(stage, "data", "bin", mihomoName)
 	if err := extractMihomo(archivePath, asset.Name, mihomoDest); err != nil {
+		return err
+	}
+	if err := writeCoreChannelSidecar(filepath.Join(stage, "data", "bin", "core-channel"), o.Channel, release, asset); err != nil {
 		return err
 	}
 	if err := os.Remove(archivePath); err != nil {
@@ -238,6 +246,7 @@ var stageWhitelist = map[string]bool{
 	"mihari": true, "mihari.exe": true,
 	"install-aio.sh": true, "install-aio.ps1": true,
 	"data/bin/mihomo": true, "data/bin/mihomo.exe": true,
+	"data/bin/core-channel":            true,
 	"data/geoip/GeoLite2-Country.mmdb": true,
 	"data/geoip/GeoLite2-ASN.mmdb":     true,
 }
@@ -256,6 +265,7 @@ func assertStage(goos string, files []string) error {
 		"mihari" + suffix,
 		script,
 		"data/bin/mihomo" + suffix,
+		"data/bin/core-channel",
 		"data/geoip/GeoLite2-Country.mmdb",
 		"data/geoip/GeoLite2-ASN.mmdb",
 	}
@@ -269,6 +279,21 @@ func assertStage(goos string, files []string) error {
 		}
 	}
 	return nil
+}
+
+func writeCoreChannelSidecar(path, channel string, release core.Release, asset core.Asset) error {
+	if channel == "" {
+		channel = "stable"
+	}
+	fingerprint := release.TagName
+	if channel == "alpha" {
+		fingerprint = core.ParseAlphaSHA(asset.Name)
+	}
+	if fingerprint == "" {
+		return fmt.Errorf("empty core-channel fingerprint for %s asset %q", channel, asset.Name)
+	}
+	content := channel + "\n" + channel + "-" + fingerprint + "\n"
+	return os.WriteFile(path, []byte(content), 0o644)
 }
 
 func extractMihomo(archivePath, assetName, dest string) error {

@@ -25,9 +25,14 @@ type Release struct {
 }
 
 // LatestRelease 取 mihomo 最新 release（bundler 复用入口，design §4.1 export 边界）。
-func (i Installer) LatestRelease(ctx context.Context) (Release, error) {
+// channel=="alpha" 走滚动 tag Prerelease-Alpha；其余（含空）走 /releases/latest。
+func (i Installer) LatestRelease(ctx context.Context, channel string) (Release, error) {
 	var release Release
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(i.apiBase(), "/")+"/repos/"+i.repository()+"/releases/latest", nil)
+	path := "/releases/latest"
+	if channel == "alpha" {
+		path = "/releases/tags/Prerelease-Alpha"
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(i.apiBase(), "/")+"/repos/"+i.repository()+path, nil)
 	if err != nil {
 		return release, protocol.APIError{Code: protocol.CodeInternal, Message: "create release request"}
 	}
@@ -55,10 +60,13 @@ func (i Installer) LatestRelease(ctx context.Context) (Release, error) {
 	return release, nil
 }
 
-func SelectAsset(release Release, goos, goarch string) (Asset, error) {
+func SelectAsset(release Release, goos, goarch, channel string) (Asset, error) {
 	extension := ".gz"
 	if goos == "windows" {
 		extension = ".zip"
+	}
+	if channel == "alpha" {
+		return selectAlphaAsset(release, goos, goarch, extension)
 	}
 	prefix := "mihomo-" + strings.ToLower(goos) + "-"
 	archToken := strings.ToLower(goarch)
@@ -88,4 +96,23 @@ func SelectAsset(release Release, goos, goarch string) (Asset, error) {
 		return Asset{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo release has no compatible asset"}
 	}
 	return best, nil
+}
+
+func selectAlphaAsset(release Release, goos, goarch, extension string) (Asset, error) {
+	prefix := "mihomo-" + strings.ToLower(goos) + "-"
+	archToken := strings.ToLower(goarch)
+	for _, asset := range release.Assets {
+		if _, ok := parseAlphaAsset(asset.Name); !ok {
+			continue
+		}
+		name := strings.ToLower(asset.Name)
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, extension) {
+			continue
+		}
+		if !strings.HasPrefix(name, prefix+archToken+"-") {
+			continue
+		}
+		return asset, nil
+	}
+	return Asset{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo release has no compatible asset"}
 }

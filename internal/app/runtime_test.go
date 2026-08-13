@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -220,6 +222,40 @@ func TestBuildRuntimeRejectsOccupiedManagedPort(t *testing.T) {
 	var apiError protocol.APIError
 	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeInvalidState || apiError.Details["setting"] != "controller-addr" {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestBuildRuntimeSetsCoreChannelFromSettingsWhenVersionDetected(t *testing.T) {
+	paths := platform.NewPaths(filepath.Join(t.TempDir(), "data"))
+	if err := os.MkdirAll(filepath.Dir(paths.CoreBinary), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFakeCoreBinary(t, paths.CoreBinary, "Mihomo Meta v1.19.0 windows amd64")
+	settings := testRuntimeSettings(t)
+	settings.ControllerSecret = strings.Repeat("e", 64)
+	settings.CoreChannel = "alpha"
+	assembly, err := BuildRuntimeWithOptions(paths, settings, "test-version", nil, nil, RuntimeBuildOptions{SettingsPath: paths.Settings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := assembly.Store.Load()
+	if snapshot.Core.Status != "stopped" || snapshot.Core.Version != "v1.19.0" || snapshot.Core.Channel != "alpha" {
+		t.Fatalf("core=%#v", snapshot.Core)
+	}
+}
+
+func writeFakeCoreBinary(t *testing.T, dest, versionOutput string) {
+	t.Helper()
+	srcDir := t.TempDir()
+	src := filepath.Join(srcDir, "main.go")
+	source := fmt.Sprintf("package main\nimport (\n\t\"fmt\"\n\t\"os\"\n)\nfunc main() {\n\tif len(os.Args) > 1 && os.Args[1] == \"-v\" {\n\t\tfmt.Print(%q)\n\t\treturn\n\t}\n\tos.Exit(1)\n}\n", versionOutput)
+	if err := os.WriteFile(src, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "build", "-o", dest, src)
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build fake core: %v\n%s", err, out)
 	}
 }
 

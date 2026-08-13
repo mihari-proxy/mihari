@@ -179,6 +179,7 @@ const (
 	PanelOpenDetail         = "Web GUI panel mount. Enter opens it in the default browser."
 	CoreSectionTitle        = "mihomo core"
 	MihomoCoreLabel         = "mihomo core"
+	CoreChannelLabel        = "Core channel"
 	UpdateCoreLabel         = "Update core"
 	UpdateMihariLabel       = "Update Mihari"
 	InstallCoreLabel        = "Install core"
@@ -240,6 +241,7 @@ const (
 	CoreProgressUpdating        = "Updating"
 	CoreProgressInstalling      = "Installing"
 	CoreProgressRestarting      = "Restarting"
+	CoreProgressSwitching       = "Switching"
 	MihariProgressChecking      = "Checking"
 	MihariProgressUpdating      = "Updating"
 	ProxyProgressEnabling       = "Enabling"
@@ -304,6 +306,9 @@ const (
 	RestartCoreTitle             = "Restart mihomo core"
 	RestartCoreImpact            = "Current proxy connections may be interrupted."
 	RestartCoreRollback          = "The supervised core will retry according to daemon policy."
+	SwitchCoreChannelTitle       = "Switch core channel"
+	SwitchCoreChannelImpact      = "The current core will be discarded and reinstalled from the selected channel, then restarted."
+	SwitchCoreChannelRollback    = "The previous valid core remains if installation fails."
 )
 
 const (
