@@ -231,10 +231,7 @@ func parseChecksumManifest(raw []byte, targetName string) ([sha256.Size]byte, er
 		if err != nil || len(decoded) != sha256.Size {
 			return [sha256.Size]byte{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid checksum manifest"}
 		}
-		name := fields[1]
-		if strings.HasPrefix(name, "*") {
-			name = name[1:]
-		}
+		name := strings.TrimPrefix(fields[1], "*")
 		if name != targetName {
 			continue
 		}
