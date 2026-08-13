@@ -44,9 +44,11 @@ func Load(path string) (Catalog, error) {
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return Catalog{}, dataError("subscription catalog must contain one document")
 	}
+	catalog.migrate()
 	if err := catalog.Normalize(); err != nil {
 		return Catalog{}, err
 	}
+	catalog.fillDefaults()
 	return catalog, nil
 }
 
@@ -69,6 +71,7 @@ func Save(path string, catalog Catalog) error {
 	if err := catalog.Normalize(); err != nil {
 		return err
 	}
+	catalog.fillDefaults()
 	content, err := yaml.Marshal(catalog)
 	if err != nil {
 		return dataError("encode subscription catalog")
@@ -110,13 +113,12 @@ func (c *Catalog) Normalize() error {
 			}
 		}
 	}
-	if index := c.Index(c.ActiveID); index < 0 || !c.Profiles[index].Enabled || c.Profiles[index].Generation == 0 {
-		c.ActiveID = ""
-		for _, profile := range c.Profiles {
-			if profile.Enabled && profile.Generation > 0 {
-				c.ActiveID = profile.ID
-				break
-			}
+	// ActiveID must point at an enabled profile with a fetched generation;
+	// otherwise clear it so fillDefaults can re-pick. Pure repair — default
+	// selection lives in fillDefaults, not here.
+	if c.ActiveID != "" {
+		if index := c.Index(c.ActiveID); index < 0 || !c.Profiles[index].Enabled || c.Profiles[index].Generation == 0 {
+			c.ActiveID = ""
 		}
 	}
 	return nil
