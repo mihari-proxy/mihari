@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -204,6 +205,34 @@ func (s Settings) Validate() error {
 		return dataError("invalid core channel")
 	}
 	return nil
+}
+
+// ApplyCoreChannelSidecar applies a packaged core-channel sidecar to settings.
+// A missing or invalid sidecar is ignored. An unchanged stamp is a no-op so a
+// later TUI channel switch is not reverted by an old sidecar file.
+func ApplyCoreChannelSidecar(settings *Settings, sidecarPath string) (bool, error) {
+	raw, err := os.ReadFile(sidecarPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	lines := strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
+	if len(lines) < 2 {
+		return false, nil
+	}
+	channel := strings.TrimSpace(lines[0])
+	stamp := strings.TrimSpace(lines[1])
+	if stamp == "" || (channel != "stable" && channel != "alpha") {
+		return false, nil
+	}
+	if settings.CoreChannelBundle == stamp {
+		return false, nil
+	}
+	settings.CoreChannel = channel
+	settings.CoreChannelBundle = stamp
+	return true, nil
 }
 
 func validateTun(tun map[string]any) error {

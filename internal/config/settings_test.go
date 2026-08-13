@@ -304,3 +304,48 @@ func TestConcurrentLoadOrCreateUsesOneControllerSecret(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyCoreChannelSidecar(t *testing.T) {
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "core-channel")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	settings := Defaults()
+	changed, err := ApplyCoreChannelSidecar(&settings, write(t, "alpha\nalpha-e183c58\n"))
+	if err != nil || !changed || settings.CoreChannel != "alpha" || settings.CoreChannelBundle != "alpha-e183c58" {
+		t.Fatalf("settings=%#v changed=%v err=%v", settings, changed, err)
+	}
+
+	changed, err = ApplyCoreChannelSidecar(&settings, write(t, "alpha\nalpha-e183c58\n"))
+	if err != nil || changed {
+		t.Fatalf("same stamp should be no-op: changed=%v err=%v", changed, err)
+	}
+
+	settings.CoreChannel = "stable" // 模拟 TUI 后来切走
+	changed, err = ApplyCoreChannelSidecar(&settings, write(t, "alpha\nalpha-e183c58\n"))
+	if err != nil || changed || settings.CoreChannel != "stable" {
+		t.Fatalf("old stamp must not revert TUI channel: %#v changed=%v", settings, changed)
+	}
+
+	changed, err = ApplyCoreChannelSidecar(&settings, write(t, "alpha\nalpha-ffffff\n"))
+	if err != nil || !changed || settings.CoreChannel != "alpha" || settings.CoreChannelBundle != "alpha-ffffff" {
+		t.Fatalf("new stamp should apply: %#v changed=%v", settings, changed)
+	}
+
+	before := settings
+	changed, err = ApplyCoreChannelSidecar(&settings, write(t, "nightly\nstamp\n"))
+	if err != nil || changed || !reflect.DeepEqual(settings, before) {
+		t.Fatalf("invalid sidecar must be ignored: %#v err=%v", settings, err)
+	}
+
+	before = settings
+	changed, err = ApplyCoreChannelSidecar(&settings, filepath.Join(t.TempDir(), "missing-core-channel"))
+	if err != nil || changed || !reflect.DeepEqual(settings, before) {
+		t.Fatalf("missing sidecar must be ignored: %#v changed=%v err=%v", settings, changed, err)
+	}
+}
