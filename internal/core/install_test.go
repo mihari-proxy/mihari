@@ -81,7 +81,8 @@ func TestInstallerDownloadsExtractsValidatesAndReplaces(t *testing.T) {
 		t.Run(target.goos+"/"+target.goarch, func(t *testing.T) {
 			binary := []byte("fake-mihomo-binary")
 			archive := target.archive(t, binary)
-			server := releaseFixture(t, target.name, archive)
+			// TagName is deliberately not a semver so Version cannot be copied from the release tag.
+			server := releaseFixtureWithTag(t, "Prerelease-Alpha", target.name, archive)
 			defer server.Close()
 
 			root := t.TempDir()
@@ -106,7 +107,7 @@ func TestInstallerDownloadsExtractsValidatesAndReplaces(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result.Version != "v1.19.0" || !result.Updated {
+			if result.Version != "v1.19.0" || !result.Updated || result.AlphaSHA != "" {
 				t.Fatalf("result=%#v", result)
 			}
 			got, err := os.ReadFile(binaryPath)
@@ -117,6 +118,46 @@ func TestInstallerDownloadsExtractsValidatesAndReplaces(t *testing.T) {
 				t.Fatal("candidate was not validated")
 			}
 		})
+	}
+}
+
+func TestInstallerDownloadsAlphaReportsParseVersionAndAlphaSHA(t *testing.T) {
+	archive := gzipFixture(t, []byte("alpha-binary"))
+	server := alphaReleaseFixture(t, "mihomo-linux-amd64-alpha-e183c58.gz", archive, nil)
+	defer server.Close()
+
+	root := t.TempDir()
+	binaryPath := filepath.Join(root, "bin", "mihomo")
+	if err := os.MkdirAll(filepath.Dir(binaryPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	installer := Installer{
+		HTTPClient: server.Client(), APIBase: server.URL, Repository: "MetaCubeX/mihomo",
+		GOOS: "linux", GOARCH: "amd64",
+		Runner: &recordingRunner{output: []byte("Mihomo Meta alpha-e183c58 linux amd64")},
+	}
+	result, err := installer.Install(context.Background(), InstallRequest{
+		BinaryPath: binaryPath,
+		DataDir:    root,
+		ConfigPath: filepath.Join(root, "config.yaml"),
+		StagingDir: filepath.Join(root, "staging"),
+		Channel:    "alpha",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Version != "alpha-e183c58" || result.AlphaSHA != "e183c58" || !result.Updated {
+		t.Fatalf("result=%#v", result)
+	}
+}
+
+func TestCandidateCommitWithoutUpdateReturnsAlphaSHA(t *testing.T) {
+	result, err := (&Candidate{version: "v1.19.0", updated: false}).Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Version != "v1.19.0" || result.Updated || result.AlphaSHA != "" {
+		t.Fatalf("result=%#v", result)
 	}
 }
 
@@ -203,6 +244,11 @@ func TestInstallerRejectsUnsafeZipMember(t *testing.T) {
 
 func releaseFixture(t *testing.T, assetName string, archive []byte) *httptest.Server {
 	t.Helper()
+	return releaseFixtureWithTag(t, "v1.19.0", assetName, archive)
+}
+
+func releaseFixtureWithTag(t *testing.T, tagName, assetName string, archive []byte) *httptest.Server {
+	t.Helper()
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
@@ -210,7 +256,7 @@ func releaseFixture(t *testing.T, assetName string, archive []byte) *httptest.Se
 			if request.Header.Get("Accept") != "application/vnd.github+json" || request.Header.Get("X-GitHub-Api-Version") == "" {
 				t.Errorf("missing GitHub API headers")
 			}
-			_ = json.NewEncoder(response).Encode(Release{TagName: "v1.19.0", Assets: []Asset{{Name: assetName, URL: server.URL + "/asset", Size: int64(len(archive))}}})
+			_ = json.NewEncoder(response).Encode(Release{TagName: tagName, Assets: []Asset{{Name: assetName, URL: server.URL + "/asset", Size: int64(len(archive))}}})
 		case "/asset":
 			_, _ = response.Write(archive)
 		default:
@@ -350,6 +396,13 @@ func TestPrepare(t *testing.T) {
 		}
 		if got, _ := os.ReadFile(binaryPath); string(got) != "existing-valid" {
 			t.Fatalf("binary changed=%q (download should not happen)", got)
+		}
+		result, err := candidate.Commit()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Updated || result.Version != "v1.19.0" || result.AlphaSHA != "" {
+			t.Fatalf("result=%#v", result)
 		}
 	})
 

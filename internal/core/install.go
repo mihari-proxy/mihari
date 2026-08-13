@@ -41,11 +41,13 @@ type InstallRequest struct {
 	StagingDir     string
 	CurrentVersion string
 	Channel        string
+	AlphaSHA       string
 }
 
 type InstallResult struct {
-	Version string
-	Updated bool
+	Version  string
+	Updated  bool
+	AlphaSHA string
 }
 
 // LocalCoreInfo reports whether an existing local core binary satisfies setup
@@ -81,6 +83,7 @@ type Candidate struct {
 	path       string
 	binaryPath string
 	version    string
+	alphaSHA   string
 	updated    bool
 	cleanup    sync.Once
 }
@@ -98,7 +101,7 @@ func (c *Candidate) Updated() bool { return c.updated }
 
 func (c *Candidate) Commit() (InstallResult, error) {
 	if !c.updated {
-		return InstallResult{Version: c.version, Updated: false}, nil
+		return InstallResult{Version: c.version, Updated: false, AlphaSHA: c.alphaSHA}, nil
 	}
 	if c.path == "" {
 		return InstallResult{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo candidate is unavailable"}
@@ -110,7 +113,7 @@ func (c *Candidate) Commit() (InstallResult, error) {
 		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "replace mihomo core"}
 	}
 	c.path = ""
-	return InstallResult{Version: c.version, Updated: true}, nil
+	return InstallResult{Version: c.version, Updated: true, AlphaSHA: c.alphaSHA}, nil
 }
 
 func (c *Candidate) Cleanup() {
@@ -137,7 +140,7 @@ func (i Installer) Prepare(ctx context.Context, request InstallRequest) (Prepare
 				runner = OSCommandRunner{}
 			}
 			if version, vErr := DetectVersion(ctx, runner, request.BinaryPath); vErr == nil && version != "" {
-				return &Candidate{binaryPath: request.BinaryPath, version: release.TagName, updated: false}, nil
+				return &Candidate{binaryPath: request.BinaryPath, version: version, updated: false}, nil
 			}
 		}
 	}
@@ -188,11 +191,15 @@ func (i Installer) Prepare(ctx context.Context, request InstallRequest) (Prepare
 	if err != nil || len(strings.TrimSpace(string(versionOutput))) == 0 {
 		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo candidate did not start"}
 	}
+	version, err := ParseVersion(string(versionOutput))
+	if err != nil {
+		return nil, err
+	}
 	if err := ValidateConfig(ctx, runner, candidatePath, request.DataDir, request.ConfigPath); err != nil {
 		return nil, err
 	}
 	keepCandidate = true
-	return &Candidate{path: candidatePath, binaryPath: request.BinaryPath, version: release.TagName, updated: true}, nil
+	return &Candidate{path: candidatePath, binaryPath: request.BinaryPath, version: version, alphaSHA: ParseAlphaSHA(asset.Name), updated: true}, nil
 }
 
 // Download 取 asset 并落盘到 destination，校验 asset.Digest 的 sha256:<hex>
