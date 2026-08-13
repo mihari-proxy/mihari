@@ -2030,43 +2030,67 @@ func TestSystemCoreChannelRowRendersSnapshotChannelAndVersion(t *testing.T) {
 }
 
 func TestSystemCoreChannelEnterSwitchesToOtherChannel(t *testing.T) {
-	client := &fakeClient{onboarding: protocol.OnboardingStatus{Revision: 11}}
-	model := New(client, func() string { return "system-op" })
-	model.SetSnapshot(
-		protocol.Status{Revision: 11, Capabilities: []string{protocol.CapabilityCore}},
-		protocol.CoreStatus{Revision: 11, Status: "running", Version: "alpha-dd7bc4c", Channel: "alpha"},
-	)
-	model.SetMutationsEnabled(true)
-	model.focusID = rowCoreChannel
-	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if _, ok := updated.(*Model); !ok {
-		t.Fatalf("updated=%T", updated)
+	tests := []struct {
+		name        string
+		core        protocol.CoreStatus
+		wantTitle   string
+		wantChannel string
+	}{
+		{
+			name:        "stable to alpha",
+			core:        protocol.CoreStatus{Revision: 11, Status: "running", Version: "v1.19.0", Channel: "stable"},
+			wantTitle:   "Switch core channel to alpha",
+			wantChannel: "alpha",
+		},
+		{
+			name:        "alpha to stable",
+			core:        protocol.CoreStatus{Revision: 11, Status: "running", Version: "alpha-dd7bc4c", Channel: "alpha"},
+			wantTitle:   "Switch core channel to stable",
+			wantChannel: "stable",
+		},
 	}
-	if command == nil || client.installCalls != 0 {
-		t.Fatalf("command=%v installCalls=%d", command != nil, client.installCalls)
-	}
-	intent, ok := command().(ui.ActionIntentMsg)
-	if !ok || intent.Action != ui.ActionSwitchCoreChannel || intent.Execute == nil {
-		t.Fatalf("intent=%#v", intent)
-	}
-	if intent.Title != ui.SwitchCoreChannelTitle || intent.Impact != ui.SwitchCoreChannelImpact || intent.Rollback != ui.SwitchCoreChannelRollback {
-		t.Fatalf("confirmation copy=%#v", intent)
-	}
-	_ = intent.Execute()
-	if client.installCalls != 1 {
-		t.Fatalf("installCalls=%d", client.installCalls)
-	}
-	if client.lastMutation.Source != "channel-switch" {
-		t.Fatalf("source=%q", client.lastMutation.Source)
-	}
-	if client.lastMutation.Channel == nil || *client.lastMutation.Channel != "stable" {
-		t.Fatalf("channel=%v", client.lastMutation.Channel)
-	}
-	if client.lastMutation.IfRevision == nil || *client.lastMutation.IfRevision != 11 {
-		t.Fatalf("mutation=%#v", client.lastMutation)
-	}
-	if client.lastMutation.OperationID != "system-op" {
-		t.Fatalf("operation=%q", client.lastMutation.OperationID)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeClient{onboarding: protocol.OnboardingStatus{Revision: 11}}
+			model := New(client, func() string { return "system-op" })
+			model.SetSnapshot(
+				protocol.Status{Revision: 11, Capabilities: []string{protocol.CapabilityCore}},
+				tt.core,
+			)
+			model.SetMutationsEnabled(true)
+			model.focusID = rowCoreChannel
+			updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			if _, ok := updated.(*Model); !ok {
+				t.Fatalf("updated=%T", updated)
+			}
+			if command == nil || client.installCalls != 0 {
+				t.Fatalf("command=%v installCalls=%d", command != nil, client.installCalls)
+			}
+			intent, ok := command().(ui.ActionIntentMsg)
+			if !ok || intent.Action != ui.ActionSwitchCoreChannel || intent.Execute == nil {
+				t.Fatalf("intent=%#v", intent)
+			}
+			if intent.Title != tt.wantTitle || intent.Impact != ui.SwitchCoreChannelImpact || intent.Rollback != ui.SwitchCoreChannelRollback {
+				t.Fatalf("confirmation copy=%#v", intent)
+			}
+			_ = intent.Execute()
+			if client.installCalls != 1 {
+				t.Fatalf("installCalls=%d", client.installCalls)
+			}
+			if client.lastMutation.Source != "channel-switch" {
+				t.Fatalf("source=%q", client.lastMutation.Source)
+			}
+			if client.lastMutation.Channel == nil || *client.lastMutation.Channel != tt.wantChannel {
+				t.Fatalf("channel=%v", client.lastMutation.Channel)
+			}
+			if client.lastMutation.IfRevision == nil || *client.lastMutation.IfRevision != 11 {
+				t.Fatalf("mutation=%#v", client.lastMutation)
+			}
+			if client.lastMutation.OperationID != "system-op" {
+				t.Fatalf("operation=%q", client.lastMutation.OperationID)
+			}
+		})
 	}
 }
 

@@ -1722,7 +1722,7 @@ func (m *Model) confirmSwitchCoreChannel(target string) tea.Cmd {
 		return ui.ActionIntentMsg{
 			Action: ui.ActionSwitchCoreChannel, Page: ui.PageSystem, Capability: protocol.CapabilityCore,
 			Key:   "system:" + string(ui.ActionSwitchCoreChannel),
-			Title: ui.SwitchCoreChannelTitle, Object: ui.MihomoCoreLabel,
+			Title: fmt.Sprintf("%s to %s", ui.SwitchCoreChannelTitle, target), Object: ui.MihomoCoreLabel,
 			Impact: ui.SwitchCoreChannelImpact, Rollback: ui.SwitchCoreChannelRollback,
 			Execute: m.runAction(actionStartMsg{
 				kind: actionSwitchChannel, operationID: operationID, revision: revision,
