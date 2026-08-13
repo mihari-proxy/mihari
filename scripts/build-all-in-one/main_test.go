@@ -166,7 +166,7 @@ func TestSidecarScriptInstallersCopyCoreChannel(t *testing.T) {
 	}
 	root := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
 	for _, name := range []string{"install-aio.sh", "install-aio.ps1"} {
-		data, err := os.ReadFile(filepath.Join(root, name))
+		data, err := os.ReadFile(filepath.Join(root, "scripts", "install", name))
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
