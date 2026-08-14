@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/netip"
 	"path/filepath"
 	"sync"
@@ -106,6 +107,9 @@ type Options struct {
 	// Optional; nil reports "unknown". Injected as a func (not *service.Manager) to keep
 	// runtime free of the service package and break the main↔daemon assembly cycle.
 	ServiceStatus func() (string, error)
+	// OnBackgroundError receives non-cancellation failures from the web gateway
+	// and owned scheduler. Optional; nil keeps the previous discard behavior.
+	OnBackgroundError func(component string, err error)
 }
 
 // WebGateway is the loopback HTTP server for panel hosting and API proxying.
@@ -116,37 +120,38 @@ type WebGateway interface {
 }
 
 type Manager struct {
-	store          *state.Store
-	coordinator    *state.Coordinator
-	installer      CoreInstaller
-	installRequest core.InstallRequest
-	supervisor     CoreSupervisor
-	controller     Controller
-	binaryExists   func() bool
-	subscriptions  *subscription.Service
-	preferences    *preferences.Service
-	settings       config.Settings
-	runtimeConfig  string
-	stagingDir     string
-	validateConfig func(context.Context, string) error
-	runScheduler   func(context.Context) error
-	geoip          GeoIPService
-	prepareGeoIP   func(context.Context) (GeoIPCandidate, error)
-	onboarding     *onboarding.Service
-	panels         PanelService
-	webGateway     WebGateway
-	webOpenToken   string
-	sysProxy       sysproxy.Backend
-	tunDetect      tundetect.Backend
-	settingsPath   string
-	serviceStatus  func() (string, error)
-	settingsMu     sync.Mutex
-	maintenance    chan struct{}
-	installed      chan struct{}
-	closing        atomic.Bool
-	running        atomic.Bool
-	operationsMu   sync.Mutex
-	operations     map[string]*operationEntry
+	store             *state.Store
+	coordinator       *state.Coordinator
+	installer         CoreInstaller
+	installRequest    core.InstallRequest
+	supervisor        CoreSupervisor
+	controller        Controller
+	binaryExists      func() bool
+	subscriptions     *subscription.Service
+	preferences       *preferences.Service
+	settings          config.Settings
+	runtimeConfig     string
+	stagingDir        string
+	validateConfig    func(context.Context, string) error
+	runScheduler      func(context.Context) error
+	geoip             GeoIPService
+	prepareGeoIP      func(context.Context) (GeoIPCandidate, error)
+	onboarding        *onboarding.Service
+	panels            PanelService
+	webGateway        WebGateway
+	webOpenToken      string
+	sysProxy          sysproxy.Backend
+	tunDetect         tundetect.Backend
+	settingsPath      string
+	serviceStatus     func() (string, error)
+	onBackgroundError func(component string, err error)
+	settingsMu        sync.Mutex
+	maintenance       chan struct{}
+	installed         chan struct{}
+	closing           atomic.Bool
+	running           atomic.Bool
+	operationsMu      sync.Mutex
+	operations        map[string]*operationEntry
 }
 
 type operationEntry struct {
@@ -177,33 +182,34 @@ func New(options Options) *Manager {
 		tunDetect = tundetect.Platform()
 	}
 	manager := &Manager{
-		store:          store,
-		coordinator:    coordinator,
-		installer:      options.Installer,
-		installRequest: options.InstallRequest,
-		supervisor:     options.Supervisor,
-		controller:     options.Controller,
-		binaryExists:   binaryExists,
-		subscriptions:  options.Subscriptions,
-		preferences:    options.Preferences,
-		settings:       options.Settings,
-		runtimeConfig:  options.RuntimeConfig,
-		stagingDir:     options.StagingDir,
-		validateConfig: options.ValidateConfig,
-		runScheduler:   options.RunScheduler,
-		geoip:          options.GeoIP,
-		prepareGeoIP:   options.PrepareGeoIP,
-		onboarding:     options.Onboarding,
-		panels:         options.Panels,
-		webGateway:     options.WebGateway,
-		webOpenToken:   options.WebOpenToken,
-		sysProxy:       sysProxy,
-		tunDetect:      tunDetect,
-		settingsPath:   options.SettingsPath,
-		serviceStatus:  options.ServiceStatus,
-		maintenance:    make(chan struct{}, 1),
-		installed:      make(chan struct{}, 1),
-		operations:     make(map[string]*operationEntry),
+		store:             store,
+		coordinator:       coordinator,
+		installer:         options.Installer,
+		installRequest:    options.InstallRequest,
+		supervisor:        options.Supervisor,
+		controller:        options.Controller,
+		binaryExists:      binaryExists,
+		subscriptions:     options.Subscriptions,
+		preferences:       options.Preferences,
+		settings:          options.Settings,
+		runtimeConfig:     options.RuntimeConfig,
+		stagingDir:        options.StagingDir,
+		validateConfig:    options.ValidateConfig,
+		runScheduler:      options.RunScheduler,
+		geoip:             options.GeoIP,
+		prepareGeoIP:      options.PrepareGeoIP,
+		onboarding:        options.Onboarding,
+		panels:            options.Panels,
+		webGateway:        options.WebGateway,
+		webOpenToken:      options.WebOpenToken,
+		sysProxy:          sysProxy,
+		tunDetect:         tunDetect,
+		settingsPath:      options.SettingsPath,
+		serviceStatus:     options.ServiceStatus,
+		onBackgroundError: options.OnBackgroundError,
+		maintenance:       make(chan struct{}, 1),
+		installed:         make(chan struct{}, 1),
+		operations:        make(map[string]*operationEntry),
 	}
 	manager.maintenance <- struct{}{}
 	if manager.subscriptions != nil {
@@ -224,7 +230,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		go func() {
 			defer close(webDone)
 			// Panel/gateway failure must not stop mihomo supervision.
-			_ = m.webGateway.Serve(ctx)
+			m.reportBackground("web-gateway", m.webGateway.Serve(ctx))
 		}()
 		defer func() { <-webDone }()
 	}
@@ -233,7 +239,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		schedulerDone := make(chan struct{})
 		go func() {
 			defer close(schedulerDone)
-			_ = m.runScheduler(schedulerCtx)
+			m.reportBackground("scheduler", m.runScheduler(schedulerCtx))
 		}()
 		defer func() {
 			cancelScheduler()
@@ -275,6 +281,16 @@ func (m *Manager) Run(ctx context.Context) error {
 		m.setCoreState(state.CoreState{Status: "degraded", LastError: "mihomo supervisor stopped"})
 	}
 	return err
+}
+
+func (m *Manager) reportBackground(component string, err error) {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return
+	}
+	if m.onBackgroundError == nil {
+		return
+	}
+	m.onBackgroundError(component, err)
 }
 
 func (m *Manager) Observe(observation supervisor.Observation) {
