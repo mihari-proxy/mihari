@@ -48,6 +48,7 @@ type Model struct {
 	focus          FocusID
 	delays         map[string]DelayState
 	pending        map[FocusID]bool
+	lastError      string
 	contentFocused bool
 	width          int
 	height         int
@@ -63,6 +64,12 @@ type selectionResultMsg struct {
 	node  string
 	err   error
 }
+
+// Err implements the shell's action-outcome contract so proxy selections are
+// classified Succeeded/Failed in the Recent operations ledger.
+func (m selectionResultMsg) Err() error { return m.err }
+
+var _ interface{ Err() error } = selectionResultMsg{}
 
 type delayResultMsg struct {
 	node  string
@@ -132,10 +139,13 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	switch typed := message.(type) {
 	case selectionResultMsg:
 		delete(m.pending, FocusID{Group: typed.group, Node: typed.node})
-		if typed.err == nil {
-			if index := m.groupIndex(typed.group); index >= 0 {
-				m.groups[index].Now = typed.node
-			}
+		if typed.err != nil {
+			m.lastError = ui.ProxySelectFailed
+			return m, nil
+		}
+		m.lastError = ""
+		if index := m.groupIndex(typed.group); index >= 0 {
+			m.groups[index].Now = typed.node
 		}
 		return m, nil
 	case delayResultMsg:
@@ -220,6 +230,9 @@ func (m *Model) View() string {
 // a bordered section; expanded node cards sit inside the parent section body.
 func (m *Model) buildContent() (lines []string, focusStart, focusEnd int) {
 	focusStart, focusEnd = -1, -1
+	if m.lastError != "" {
+		lines = append(lines, m.theme.Danger.Render(m.lastError))
+	}
 	inner := ui.FullSectionInner(m.width)
 	textW := ui.SectionTextWidth(inner)
 	for _, group := range m.groups {
@@ -377,6 +390,7 @@ func (m *Model) selectFocused() tea.Cmd {
 	if m.client == nil || m.focus.Node == "" {
 		return nil
 	}
+	m.lastError = ""
 	id := m.focus
 	m.pending[id] = true
 	operationID := m.newOperationID()

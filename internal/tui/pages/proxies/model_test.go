@@ -253,6 +253,7 @@ type fakeClient struct {
 	selectedGroup string
 	selectedNode  string
 	operationID   string
+	selectErr     error
 	delay         uint16
 	delayErr      error
 	delayCalls    map[string]int
@@ -260,6 +261,9 @@ type fakeClient struct {
 
 func (c *fakeClient) SelectProxy(_ context.Context, group string, request protocol.ProxySelectionRequest) (protocol.MutationResult, error) {
 	c.selectedGroup, c.selectedNode, c.operationID = group, request.Name, request.OperationID
+	if c.selectErr != nil {
+		return protocol.MutationResult{}, c.selectErr
+	}
 	return protocol.MutationResult{Schema: "mihari/v1", OperationID: request.OperationID}, nil
 }
 
@@ -272,6 +276,86 @@ func (c *fakeClient) DelayProxy(_ context.Context, name string, _ protocol.Delay
 		return protocol.DelayResult{}, c.delayErr
 	}
 	return protocol.DelayResult{Schema: "mihari/v1", Delays: map[string]uint16{name: c.delay}}, nil
+}
+
+func TestSelectionResultMsg_ImplementsActionOutcomeContract(t *testing.T) {
+	boom := errors.New("boom")
+	if got := (selectionResultMsg{err: boom}).Err(); got != boom {
+		t.Fatalf("Err()=%v want boom", got)
+	}
+	if got := (selectionResultMsg{}).Err(); got != nil {
+		t.Fatalf("zero-value Err()=%v want nil", got)
+	}
+}
+
+func TestModel_SelectProxyFailureShowsError(t *testing.T) {
+	client := &fakeClient{selectErr: errors.New("upstream down")}
+	model := New(client, func() string { return "op-1" })
+	model.SetSize(80, 24)
+	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{
+		Name: "GLOBAL", Now: "old", Nodes: []protocol.ProxyNode{{Name: "node-a", Type: "VLESS"}},
+	}}})
+	updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter}) // 展开组
+	updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyDown})  // 焦点到节点
+	applyProxyCmd(t, model, updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter}))
+
+	if model.groups[0].Now != "old" {
+		t.Fatalf("failed selection must not update Now, got %q", model.groups[0].Now)
+	}
+	if _, pending := model.pending[FocusID{Group: "GLOBAL", Node: "node-a"}]; pending {
+		t.Fatal("pending marker should clear after failure")
+	}
+	view := model.View()
+	if !strings.Contains(view, model.theme.Danger.Render(ui.ProxySelectFailed)) {
+		t.Fatalf("view missing failure feedback %q:\n%s", ui.ProxySelectFailed, view)
+	}
+}
+
+func TestModel_SelectProxySuccessClearsError(t *testing.T) {
+	client := &fakeClient{selectErr: errors.New("upstream down")}
+	model := New(client, func() string { return "op-1" })
+	model.SetSize(80, 24)
+	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{
+		Name: "GLOBAL", Now: "old", Nodes: []protocol.ProxyNode{{Name: "node-a", Type: "VLESS"}},
+	}}})
+	updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+	applyProxyCmd(t, model, updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter}))
+	if !strings.Contains(model.View(), ui.ProxySelectFailed) {
+		t.Fatal("failure feedback missing")
+	}
+
+	client.selectErr = nil
+	applyProxyCmd(t, model, updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter}))
+	if strings.Contains(model.View(), ui.ProxySelectFailed) {
+		t.Fatal("stale failure feedback after success")
+	}
+	if model.groups[0].Now != "node-a" {
+		t.Fatalf("Now=%q want node-a", model.groups[0].Now)
+	}
+}
+
+func TestModel_NewSelectionClearsStaleError(t *testing.T) {
+	client := &fakeClient{selectErr: errors.New("upstream down")}
+	model := New(client, func() string { return "op-1" })
+	model.SetSize(80, 24)
+	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{
+		Name: "GLOBAL", Now: "old", Nodes: []protocol.ProxyNode{{Name: "node-a", Type: "VLESS"}},
+	}}})
+	updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+	applyProxyCmd(t, model, updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter}))
+	if !strings.Contains(model.View(), ui.ProxySelectFailed) {
+		t.Fatal("failure feedback missing")
+	}
+
+	command := updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("expected selection command")
+	}
+	if strings.Contains(model.View(), ui.ProxySelectFailed) {
+		t.Fatal("stale error must clear when a new selection starts")
+	}
 }
 
 func TestView_GroupWrappedInBorderedSection(t *testing.T) {
