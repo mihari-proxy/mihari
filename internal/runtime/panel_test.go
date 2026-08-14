@@ -339,6 +339,11 @@ func TestUpdatePanelDownloadsOutsideMutationLock(t *testing.T) {
 	updateEntered := make(chan struct{})
 	releaseUpdate := make(chan struct{})
 	activateEntered := make(chan struct{})
+	// The activate hook parks until the test observed activateEntered, so
+	// activateDone cannot become ready while the select below is choosing a
+	// case. Without the handshake, both channels could be ready at once and
+	// the select might report the nil result as a failure.
+	activateProceed := make(chan struct{})
 	panels := &fakePanels{
 		update: func(ctx context.Context, _ string) error {
 			close(updateEntered)
@@ -349,9 +354,14 @@ func TestUpdatePanelDownloadsOutsideMutationLock(t *testing.T) {
 				return ctx.Err()
 			}
 		},
-		activate: func(context.Context, string) error {
+		activate: func(ctx context.Context, _ string) error {
 			close(activateEntered)
-			return nil
+			select {
+			case <-activateProceed:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		},
 	}
 	manager := newTestManager(Options{Panels: panels})
@@ -373,6 +383,7 @@ func TestUpdatePanelDownloadsOutsideMutationLock(t *testing.T) {
 	}()
 	select {
 	case <-activateEntered:
+		close(activateProceed)
 	case err := <-activateDone:
 		close(releaseUpdate)
 		t.Fatalf("activate could not enter while update download was blocked: %v", err)
