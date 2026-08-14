@@ -34,7 +34,9 @@ func railTabLabel(index int, page PageID) string {
 	return strconv.Itoa(index+1) + " " + PageLabel(page)
 }
 
-// ContentFocusable pages can suppress in-page selection chrome while the rail owns focus.
+// ContentFocusable pages have in-page keyboard targets. The rail uses this
+// to decide whether Enter may move focus into the page; pages use
+// SetContentFocused to suppress selection chrome while the rail owns focus.
 type ContentFocusable interface {
 	SetContentFocused(bool)
 }

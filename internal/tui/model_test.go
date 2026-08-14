@@ -300,6 +300,10 @@ func TestStatusBarRightStatusDualServiceAndDaemon(t *testing.T) {
 
 func TestRail_EnterOpensContentButArrowsDoNot(t *testing.T) {
 	model := NewModel()
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+	if model.active != ui.PageProxies {
+		t.Fatalf("active=%s", model.active)
+	}
 	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
 	if model.focus.Area != ui.FocusRail {
 		t.Fatalf("tab focus=%v", model.focus)
@@ -311,6 +315,24 @@ func TestRail_EnterOpensContentButArrowsDoNot(t *testing.T) {
 	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if model.focus.Area != ui.FocusContent {
 		t.Fatalf("enter focus=%v", model.focus)
+	}
+}
+
+func TestRail_EnterOnOverviewKeepsRailFocus(t *testing.T) {
+	model := NewModel()
+	if model.active != ui.PageOverview || model.focus.Area != ui.FocusRail {
+		t.Fatalf("start active=%s focus=%v", model.active, model.focus)
+	}
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if model.focus.Area != ui.FocusRail || model.active != ui.PageOverview {
+		t.Fatalf("overview enter moved focus: active=%s focus=%v", model.active, model.focus)
+	}
+	if view := model.View().Content; !strings.Contains(view, ui.FooterRail) {
+		t.Fatalf("overview enter switched footer away from rail:\n%s", view)
+	}
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+	if model.railIndex != 1 || model.active != ui.PageProxies || model.focus.Area != ui.FocusRail {
+		t.Fatalf("arrow after overview enter: railIndex=%d active=%s focus=%v", model.railIndex, model.active, model.focus)
 	}
 }
 
@@ -337,9 +359,10 @@ func TestRail_HJKLNeverNavigates(t *testing.T) {
 
 func TestContent_EscReturnsToRailButArrowsDoNot(t *testing.T) {
 	model := NewModel()
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
 	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if model.focus.Area != ui.FocusContent {
-		t.Fatalf("focus=%v", model.focus)
+	if model.active != ui.PageProxies || model.focus.Area != ui.FocusContent {
+		t.Fatalf("focus=%v active=%s", model.focus, model.active)
 	}
 	updated, command := model.Update(tea.KeyPressMsg{Code: 'h', Text: "h"})
 	model = updated.(Model)
@@ -564,9 +587,10 @@ func TestModelRoutesMihariCheckSpinnerToSystemAfterLeavingPage(t *testing.T) {
 func TestRail_DigitShortcutWorksFromContentFocus(t *testing.T) {
 	model := NewModel()
 	model.inputMode = ui.InputNavigation
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
 	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if model.focus.Area != ui.FocusContent {
-		t.Fatalf("enter focus=%v", model.focus.Area)
+	if model.active != ui.PageProxies || model.focus.Area != ui.FocusContent {
+		t.Fatalf("enter focus=%v active=%s", model.focus.Area, model.active)
 	}
 	model = updateModelKey(t, model, tea.KeyPressMsg{Code: '4', Text: "4"})
 	if model.active != ui.PageRules || model.railIndex != 3 {

@@ -725,7 +725,13 @@ func (model Model) updateRail(key string) (tea.Model, tea.Cmd) {
 	case "down":
 		model.railIndex = min(len(model.rail)-1, model.railIndex+1)
 	case "enter":
-		// Enter opens the selected page; arrow keys never cross rail ↔ content.
+		// Enter opens the selected page only when it has in-page keyboard
+		// targets. Overview and unavailable stubs do not implement
+		// ContentFocusable; parking focus there hides the rail footer and
+		// swallows arrow keys.
+		if _, ok := model.pages[model.active].(ui.ContentFocusable); !ok {
+			return model, nil
+		}
 		model.focus = ui.Focus{Area: ui.FocusContent, Page: model.active}
 		model.pages[model.active].FocusFirst()
 		if page, ok := model.pages[model.active].(interface{ Load() tea.Cmd }); ok {
