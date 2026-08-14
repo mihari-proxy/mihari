@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -8,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestDefaultSettingsUseManagedPortsAndLoopback(t *testing.T) {
@@ -272,36 +275,495 @@ func TestSettingsValidationAcceptsValidTunBlock(t *testing.T) {
 func TestConcurrentLoadOrCreateUsesOneControllerSecret(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mihari.yaml")
 	start := make(chan struct{})
-	results := make(chan Settings, 32)
-	errors := make(chan error, 32)
+	type result struct {
+		settings Settings
+		created  bool
+		err      error
+	}
+	results := make(chan result, 32)
 	var wait sync.WaitGroup
 	for range 32 {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
 			<-start
-			settings, err := LoadOrCreate(path)
-			results <- settings
-			errors <- err
+			settings, created, err := LoadOrCreateResult(path)
+			results <- result{settings: settings, created: created, err: err}
 		}()
 	}
 	close(start)
 	wait.Wait()
 	close(results)
-	close(errors)
-	for err := range errors {
-		if err != nil {
-			t.Fatal(err)
+
+	want := ""
+	createdCount := 0
+	resultCount := 0
+	for result := range results {
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		resultCount++
+		if result.created {
+			createdCount++
+		}
+		if want == "" {
+			want = result.settings.ControllerSecret
+		}
+		if result.settings.ControllerSecret != want {
+			t.Fatalf("controller secrets differ: %q and %q", want, result.settings.ControllerSecret)
 		}
 	}
-	want := ""
-	for settings := range results {
-		if want == "" {
-			want = settings.ControllerSecret
+	if resultCount != 32 || createdCount != 1 || len(want) != 64 {
+		t.Fatalf("results=%d created=%d secret length=%d, want 32, 1, 64", resultCount, createdCount, len(want))
+	}
+	loaded, err := Load(path)
+	if err != nil || loaded.ControllerSecret != want {
+		t.Fatalf("loaded=%#v err=%v, want persisted secret %q", loaded, err, want)
+	}
+}
+
+func TestWaitForSettingsOrCreationLock_ReturnsCompletedSettingsDuringConflict(t *testing.T) {
+	start := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+	now := start
+	waits := 0
+	want := Settings{
+		Schema:           "mihari.settings/v1",
+		MixedAddr:        "127.0.0.1:9190",
+		ControllerAddr:   "127.0.0.1:9090",
+		WebAddr:          "127.0.0.1:9191",
+		ControllerSecret: strings.Repeat("ab", 32),
+		CoreChannel:      "stable",
+	}
+	ops := settingsCreationOps{
+		now: func() time.Time { return now },
+		wait: func(duration time.Duration) {
+			waits++
+			now = now.Add(duration)
+		},
+		load:     func(string) (Settings, error) { return want, nil },
+		openLock: func(string) (*os.File, error) { return nil, os.ErrExist },
+		transientConflict: func(err error) bool {
+			return errors.Is(err, os.ErrExist)
+		},
+	}
+
+	settings, lock, err := waitForSettingsOrCreationLock("settings.yaml", start.Add(10*time.Second), ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(settings, want) {
+		t.Fatalf("settings=%#v, want %#v", settings, want)
+	}
+	if lock != nil {
+		t.Fatalf("lock=%v, want nil", lock)
+	}
+	if waits != 0 {
+		t.Fatalf("waits=%d, want 0", waits)
+	}
+}
+
+func TestWaitForSettingsOrCreationLock_RejectsMalformedSettingsImmediately(t *testing.T) {
+	start := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+	now := start
+	waits := 0
+	malformed := dataError("invalid settings file")
+	ops := settingsCreationOps{
+		now: func() time.Time { return now },
+		wait: func(duration time.Duration) {
+			waits++
+			now = now.Add(duration)
+		},
+		load:     func(string) (Settings, error) { return Settings{}, malformed },
+		openLock: func(string) (*os.File, error) { return nil, os.ErrExist },
+		transientConflict: func(err error) bool {
+			return errors.Is(err, os.ErrExist)
+		},
+	}
+
+	settings, lock, err := waitForSettingsOrCreationLock("settings.yaml", start.Add(10*time.Second), ops)
+	if !reflect.DeepEqual(err, malformed) {
+		t.Fatalf("err=%v, want original malformed settings error", err)
+	}
+	if !reflect.DeepEqual(settings, Settings{}) || lock != nil {
+		t.Fatalf("settings=%#v lock=%v, want zero settings and nil lock", settings, lock)
+	}
+	if waits != 0 {
+		t.Fatalf("waits=%d, want 0", waits)
+	}
+}
+
+func TestWaitForSettingsOrCreationLock_ReturnsTerminalPermissionImmediately(t *testing.T) {
+	start := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+	waits := 0
+	loads := 0
+	ops := settingsCreationOps{
+		now:  func() time.Time { return start },
+		wait: func(time.Duration) { waits++ },
+		load: func(string) (Settings, error) {
+			loads++
+			return Settings{}, os.ErrNotExist
+		},
+		openLock:          func(string) (*os.File, error) { return nil, fmt.Errorf("open lock: %w", os.ErrPermission) },
+		transientConflict: func(error) bool { return false },
+	}
+
+	settings, lock, err := waitForSettingsOrCreationLock(filepath.Join(t.TempDir(), "settings.yaml"), start.Add(10*time.Second), ops)
+	if !errors.Is(err, os.ErrPermission) || (err != nil && strings.Contains(err.Error(), "timed out")) {
+		t.Fatalf("err=%v, want terminal permission error", err)
+	}
+	if !reflect.DeepEqual(settings, Settings{}) || lock != nil {
+		t.Fatalf("settings=%#v lock=%v, want zero settings and nil lock", settings, lock)
+	}
+	if waits != 0 {
+		t.Fatalf("waits=%d, want 0", waits)
+	}
+	if loads != 1 {
+		t.Fatalf("loads=%d, want one immediate settings observation", loads)
+	}
+}
+
+func TestWaitForSettingsOrCreationLock_ReturnsCompletedSettingsDuringPermissionRace(t *testing.T) {
+	start := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+	waits := 0
+	want := Settings{
+		Schema:           "mihari.settings/v1",
+		MixedAddr:        "127.0.0.1:9190",
+		ControllerAddr:   "127.0.0.1:9090",
+		WebAddr:          "127.0.0.1:9191",
+		ControllerSecret: strings.Repeat("34", 32),
+		CoreChannel:      "stable",
+	}
+	ops := settingsCreationOps{
+		now:      func() time.Time { return start },
+		wait:     func(time.Duration) { waits++ },
+		load:     func(string) (Settings, error) { return want, nil },
+		openLock: func(string) (*os.File, error) { return nil, fmt.Errorf("open lock: %w", os.ErrPermission) },
+		transientConflict: func(error) bool {
+			return false
+		},
+	}
+
+	settings, lock, err := waitForSettingsOrCreationLock("settings.yaml", start.Add(10*time.Second), ops)
+	if err != nil || lock != nil || !reflect.DeepEqual(settings, want) {
+		t.Fatalf("settings=%#v lock=%v err=%v, want completed settings", settings, lock, err)
+	}
+	if waits != 0 {
+		t.Fatalf("waits=%d, want 0", waits)
+	}
+}
+
+func TestWaitForSettingsOrCreationLock_UsesOneDeadline(t *testing.T) {
+	start := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+	now := start
+	waits := 0
+	ops := settingsCreationOps{
+		now: func() time.Time { return now },
+		wait: func(duration time.Duration) {
+			waits++
+			now = now.Add(duration)
+		},
+		load:     func(string) (Settings, error) { return Settings{}, os.ErrNotExist },
+		openLock: func(string) (*os.File, error) { return nil, os.ErrExist },
+		transientConflict: func(err error) bool {
+			return errors.Is(err, os.ErrExist)
+		},
+	}
+
+	settings, lock, err := waitForSettingsOrCreationLock("settings.yaml", start.Add(10*time.Second), ops)
+	if err == nil || err.Error() != "timed out waiting for settings initialization" {
+		t.Fatalf("err=%v, want stable initialization timeout", err)
+	}
+	if !reflect.DeepEqual(settings, Settings{}) || lock != nil {
+		t.Fatalf("settings=%#v lock=%v, want zero settings and nil lock", settings, lock)
+	}
+	if now.Sub(start) > 10*time.Second+10*time.Millisecond {
+		t.Fatalf("elapsed=%v, want at most 10.01s", now.Sub(start))
+	}
+	if waits == 0 {
+		t.Fatal("waits=0, want retries until deadline")
+	}
+}
+
+func TestWaitForSettingsOrCreationLock_ReturnsOnlyAcquiredLock(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "settings.lock")
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = lock.Close()
+		_ = os.Remove(lockPath)
+	})
+	loadCalls := 0
+	ops := settingsCreationOps{
+		now:      time.Now,
+		wait:     time.Sleep,
+		load:     func(string) (Settings, error) { loadCalls++; return Settings{}, nil },
+		openLock: func(string) (*os.File, error) { return lock, nil },
+		transientConflict: func(error) bool {
+			return false
+		},
+	}
+
+	settings, acquired, err := waitForSettingsOrCreationLock("settings.yaml", time.Now().Add(10*time.Second), ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(settings, Settings{}) || acquired != lock {
+		t.Fatalf("settings=%#v lock=%v, want zero settings and acquired lock", settings, acquired)
+	}
+	if loadCalls != 0 {
+		t.Fatalf("load calls=%d, want 0", loadCalls)
+	}
+}
+
+func TestLoadOrCreateWithOps_RetriesTransientInitialRead(t *testing.T) {
+	valid := Settings{
+		Schema:           "mihari.settings/v1",
+		MixedAddr:        "127.0.0.1:9190",
+		ControllerAddr:   "127.0.0.1:9090",
+		WebAddr:          "127.0.0.1:9191",
+		ControllerSecret: strings.Repeat("cd", 32),
+		CoreChannel:      "stable",
+	}
+	transient := errors.New("transient settings conflict")
+
+	t.Run("transient conflict", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "settings.yaml")
+		if err := os.WriteFile(path, []byte("present"), 0o600); err != nil {
+			t.Fatal(err)
 		}
-		if settings.ControllerSecret != want {
-			t.Fatalf("controller secrets differ: %q and %q", want, settings.ControllerSecret)
+		start := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+		now := start
+		loads := 0
+		openCalls := 0
+		waits := 0
+		ops := settingsCreationOps{
+			now: func() time.Time { return now },
+			wait: func(duration time.Duration) {
+				waits++
+				now = now.Add(duration)
+			},
+			load: func(string) (Settings, error) {
+				loads++
+				if loads == 1 {
+					return Settings{}, transient
+				}
+				return valid, nil
+			},
+			openLock: func(string) (*os.File, error) {
+				openCalls++
+				return nil, os.ErrExist
+			},
+			transientConflict: func(err error) bool { return errors.Is(err, transient) },
 		}
+
+		settings, created, err := loadOrCreateWithOps(path, "", ops)
+		if err != nil || created || !reflect.DeepEqual(settings, valid) {
+			t.Fatalf("settings=%#v created=%v err=%v", settings, created, err)
+		}
+		if loads != 2 || openCalls != 1 || waits != 0 {
+			t.Fatalf("loads=%d open calls=%d waits=%d, want 2, 1, 0", loads, openCalls, waits)
+		}
+	})
+
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "permission", err: fmt.Errorf("read settings: %w", os.ErrPermission)},
+		{name: "data", err: dataError("invalid settings file")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "settings.yaml")
+			if err := os.WriteFile(path, []byte("present"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			start := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+			now := start
+			waits := 0
+			ops := settingsCreationOps{
+				now: func() time.Time { return now },
+				wait: func(duration time.Duration) {
+					waits++
+					now = now.Add(duration)
+				},
+				load:              func(string) (Settings, error) { return Settings{}, test.err },
+				openLock:          func(string) (*os.File, error) { return nil, errors.New("unexpected lock attempt") },
+				transientConflict: func(error) bool { return false },
+			}
+
+			_, _, err := loadOrCreateWithOps(path, "", ops)
+			if test.name == "permission" && !errors.Is(err, os.ErrPermission) {
+				t.Fatalf("err=%v, want permission error", err)
+			}
+			if test.name == "data" && !reflect.DeepEqual(err, test.err) {
+				t.Fatalf("err=%v, want original data error", err)
+			}
+			if waits != 0 {
+				t.Fatalf("waits=%d, want terminal initial read to fail immediately", waits)
+			}
+		})
+	}
+}
+
+func TestWaitForSettingsOrCreationLock_RetriesTransientObservedRead(t *testing.T) {
+	start := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+	now := start
+	waits := 0
+	loads := 0
+	want := Settings{
+		Schema:           "mihari.settings/v1",
+		MixedAddr:        "127.0.0.1:9190",
+		ControllerAddr:   "127.0.0.1:9090",
+		WebAddr:          "127.0.0.1:9191",
+		ControllerSecret: strings.Repeat("ef", 32),
+		CoreChannel:      "stable",
+	}
+	transient := errors.New("transient observed read")
+	ops := settingsCreationOps{
+		now: func() time.Time { return now },
+		wait: func(duration time.Duration) {
+			waits++
+			now = now.Add(duration)
+		},
+		load: func(string) (Settings, error) {
+			loads++
+			if loads == 1 {
+				return Settings{}, transient
+			}
+			return want, nil
+		},
+		openLock: func(string) (*os.File, error) { return nil, os.ErrExist },
+		transientConflict: func(err error) bool {
+			return errors.Is(err, transient)
+		},
+	}
+
+	settings, lock, err := waitForSettingsOrCreationLock("settings.yaml", start.Add(10*time.Second), ops)
+	if err != nil || lock != nil || !reflect.DeepEqual(settings, want) {
+		t.Fatalf("settings=%#v lock=%v err=%v", settings, lock, err)
+	}
+	if loads != 2 || waits != 1 {
+		t.Fatalf("loads=%d waits=%d, want 2 loads and 1 wait", loads, waits)
+	}
+}
+
+func TestLoadOrCreateWithOps_WaiterPersistsSidecarWithoutCreating(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "mihari.yaml")
+	sidecar := filepath.Join(root, "core-channel")
+	if err := os.WriteFile(sidecar, []byte("alpha\nalpha-bundle\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stable := Settings{
+		Schema:            "mihari.settings/v1",
+		MixedAddr:         "127.0.0.1:9190",
+		ControllerAddr:    "127.0.0.1:9090",
+		WebAddr:           "127.0.0.1:9191",
+		ControllerSecret:  strings.Repeat("12", 32),
+		CoreChannel:       "stable",
+		CoreChannelBundle: "stable-bundle",
+	}
+	conflictObserved := make(chan struct{}, 1)
+	start := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+	now := start
+	loads := 0
+	ops := settingsCreationOps{
+		now: func() time.Time { return now },
+		wait: func(duration time.Duration) {
+			now = now.Add(duration)
+		},
+		load: func(string) (Settings, error) {
+			loads++
+			if loads == 1 {
+				return Settings{}, os.ErrNotExist
+			}
+			select {
+			case <-conflictObserved:
+				return stable, nil
+			default:
+				t.Fatal("settings observed before lock conflict")
+				return Settings{}, errors.New("settings observed before lock conflict")
+			}
+		},
+		openLock: func(string) (*os.File, error) {
+			conflictObserved <- struct{}{}
+			return nil, os.ErrExist
+		},
+		transientConflict: func(error) bool { return false },
+	}
+
+	settings, created, err := loadOrCreateWithOps(path, sidecar, ops)
+	if err != nil || created {
+		t.Fatalf("created=%v err=%v settings=%#v", created, err, settings)
+	}
+	if settings.CoreChannel != "alpha" || settings.CoreChannelBundle != "alpha-bundle" {
+		t.Fatalf("settings=%#v, want persisted alpha sidecar", settings)
+	}
+	loaded, err := Load(path)
+	if err != nil || loaded.CoreChannel != "alpha" || loaded.CoreChannelBundle != "alpha-bundle" || loaded.ControllerSecret != stable.ControllerSecret {
+		t.Fatalf("loaded=%#v err=%v", loaded, err)
+	}
+}
+
+func TestLoadOrCreateWithOps_CreatorClosesAndRemovesLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mihari.yaml")
+	settings, created, err := loadOrCreateWithOps(path, "", defaultSettingsCreationOps())
+	if err != nil || !created || settings.ControllerSecret == "" {
+		t.Fatalf("settings=%#v created=%v err=%v", settings, created, err)
+	}
+	lockPath := path + ".lock"
+	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lock stat err=%v, want not exist", err)
+	}
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("reopen released lock: %v", err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatalf("remove reopened lock: %v", err)
+	}
+}
+
+func TestLoadOrCreateWithOps_SharesDeadlineAcrossInitialReadAndCoordination(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mihari.yaml")
+	start := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+	now := start
+	transient := errors.New("transient initial read")
+	openCalls := 0
+	loadCalls := 0
+	ops := settingsCreationOps{
+		now: func() time.Time { return now },
+		wait: func(duration time.Duration) {
+			now = now.Add(duration)
+		},
+		load: func(string) (Settings, error) {
+			loadCalls++
+			if openCalls == 0 && now.Sub(start) < 9*time.Second {
+				return Settings{}, transient
+			}
+			return Settings{}, os.ErrNotExist
+		},
+		openLock: func(string) (*os.File, error) {
+			openCalls++
+			return nil, os.ErrExist
+		},
+		transientConflict: func(err error) bool { return errors.Is(err, transient) },
+	}
+
+	_, created, err := loadOrCreateWithOps(path, "", ops)
+	if err == nil || err.Error() != "timed out waiting for settings initialization" || created {
+		t.Fatalf("created=%v err=%v, want initialization timeout", created, err)
+	}
+	if openCalls == 0 {
+		t.Fatalf("open calls=%d loads=%d, want coordination after initial reads", openCalls, loadCalls)
+	}
+	if elapsed := now.Sub(start); elapsed > 10*time.Second+10*time.Millisecond {
+		t.Fatalf("elapsed=%v, want one shared 10s deadline", elapsed)
 	}
 }
 
