@@ -64,6 +64,12 @@ type selectionResultMsg struct {
 	err   error
 }
 
+// Err implements the shell's action-outcome contract so proxy selections are
+// classified Succeeded/Failed in the Recent operations ledger.
+func (m selectionResultMsg) Err() error { return m.err }
+
+var _ interface{ Err() error } = selectionResultMsg{}
+
 type delayResultMsg struct {
 	node  string
 	delay uint16

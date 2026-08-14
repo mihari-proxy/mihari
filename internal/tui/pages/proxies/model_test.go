@@ -274,6 +274,16 @@ func (c *fakeClient) DelayProxy(_ context.Context, name string, _ protocol.Delay
 	return protocol.DelayResult{Schema: "mihari/v1", Delays: map[string]uint16{name: c.delay}}, nil
 }
 
+func TestSelectionResultMsg_ImplementsActionOutcomeContract(t *testing.T) {
+	boom := errors.New("boom")
+	if got := (selectionResultMsg{err: boom}).Err(); got != boom {
+		t.Fatalf("Err()=%v want boom", got)
+	}
+	if got := (selectionResultMsg{}).Err(); got != nil {
+		t.Fatalf("zero-value Err()=%v want nil", got)
+	}
+}
+
 func TestView_GroupWrappedInBorderedSection(t *testing.T) {
 	model := New(nil, nil)
 	model.SetSize(80, 24)
