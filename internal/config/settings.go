@@ -89,31 +89,71 @@ func LoadOrCreateWithSidecar(path, sidecar string) (Settings, bool, error) {
 }
 
 func loadOrCreate(path, sidecar string) (Settings, bool, error) {
-	settings, err := loadSettings(path)
+	return loadOrCreateWithOps(path, sidecar, defaultSettingsCreationOps())
+}
+
+type settingsCreationOps struct {
+	now               func() time.Time
+	wait              func(time.Duration)
+	load              func(string) (Settings, error)
+	openLock          func(string) (*os.File, error)
+	transientConflict func(error) bool
+}
+
+func defaultSettingsCreationOps() settingsCreationOps {
+	return settingsCreationOps{
+		now:  time.Now,
+		wait: time.Sleep,
+		load: Load,
+		openLock: func(path string) (*os.File, error) {
+			return os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		},
+		transientConflict: isSettingsConflict,
+	}
+}
+
+func loadOrCreateWithOps(path, sidecar string, ops settingsCreationOps) (Settings, bool, error) {
+	deadline := ops.now().Add(10 * time.Second)
+	settings, err := ops.load(path)
 	if err == nil {
 		return persistSidecarIfChanged(path, settings, sidecar)
 	}
-	if !errors.Is(err, os.ErrNotExist) {
+	if !errors.Is(err, os.ErrNotExist) && !ops.transientConflict(err) {
 		return Settings{}, false, err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return Settings{}, false, fmt.Errorf("create settings directory: %w", err)
 	}
-	lock, err := acquireCreationLock(path + ".lock")
+	settings, lock, err := waitForSettingsOrCreationLock(path, deadline, ops)
 	if err != nil {
 		return Settings{}, false, err
+	}
+	if lock == nil {
+		return persistSidecarIfChanged(path, settings, sidecar)
 	}
 	lockPath := lock.Name()
 	defer func() {
 		_ = lock.Close()
 		_ = os.Remove(lockPath)
 	}()
-	settings, err = loadSettings(path)
-	if err == nil {
-		return persistSidecarIfChanged(path, settings, sidecar)
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return Settings{}, false, err
+	for {
+		if !ops.now().Before(deadline) {
+			return Settings{}, false, dataError("timed out waiting for settings initialization")
+		}
+		settings, err = ops.load(path)
+		if err == nil {
+			return persistSidecarIfChanged(path, settings, sidecar)
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		if !ops.transientConflict(err) {
+			return Settings{}, false, err
+		}
+		if !ops.now().Before(deadline) {
+			return Settings{}, false, dataError("timed out waiting for settings initialization")
+		}
+		ops.wait(10 * time.Millisecond)
 	}
 	settings = Defaults()
 	var secret [32]byte
@@ -150,44 +190,30 @@ func applySidecarIfPresent(settings *Settings, sidecar string) (bool, error) {
 	return ApplyCoreChannelSidecar(settings, sidecar)
 }
 
-// loadSettings loads settings, retrying while the file exists on disk but is
-// momentarily unopenable. A concurrent writer replaces it via MoveFileEx;
-// during that window Windows reports a sharing violation that is neither
-// os.ErrNotExist nor os.ErrPermission, so existence is the reliable retry
-// signal. Genuine errors (permissions, deletion) surface immediately.
-func loadSettings(path string) (Settings, error) {
-	deadline := time.Now().Add(10 * time.Second)
+func waitForSettingsOrCreationLock(path string, deadline time.Time, ops settingsCreationOps) (Settings, *os.File, error) {
 	for {
-		settings, err := Load(path)
-		if err == nil || errors.Is(err, os.ErrNotExist) {
-			return settings, err
+		if !ops.now().Before(deadline) {
+			return Settings{}, nil, dataError("timed out waiting for settings initialization")
 		}
-		if _, statErr := os.Stat(path); statErr != nil || time.Now().After(deadline) {
-			return Settings{}, err
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-func acquireCreationLock(path string) (*os.File, error) {
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		file, err := ops.openLock(path + ".lock")
 		if err == nil {
-			return file, nil
+			return Settings{}, file, nil
 		}
-		// Windows can report a sharing violation as os.ErrPermission while the
-		// winning process still has the lock file open. Treat that transient
-		// state exactly like os.ErrExist and retry within the same deadline.
-		if !errors.Is(err, os.ErrExist) && !errors.Is(err, os.ErrPermission) {
-			if _, statError := os.Stat(path); statError != nil {
-				return nil, fmt.Errorf("create settings lock: %w", err)
-			}
+
+		settings, loadErr := ops.load(path)
+		if loadErr == nil {
+			return settings, nil, nil
 		}
-		if time.Now().After(deadline) {
-			return nil, dataError("timed out waiting for settings initialization")
+		if !errors.Is(err, os.ErrExist) && !ops.transientConflict(err) {
+			return Settings{}, nil, fmt.Errorf("create settings lock: %w", err)
 		}
-		time.Sleep(10 * time.Millisecond)
+		if !errors.Is(loadErr, os.ErrNotExist) && !ops.transientConflict(loadErr) {
+			return Settings{}, nil, loadErr
+		}
+		if !ops.now().Before(deadline) {
+			return Settings{}, nil, dataError("timed out waiting for settings initialization")
+		}
+		ops.wait(10 * time.Millisecond)
 	}
 }
 

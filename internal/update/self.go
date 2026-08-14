@@ -3,6 +3,8 @@ package update
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,9 +19,11 @@ import (
 )
 
 const (
-	maxReleaseResponseSize = 2 << 20
-	maxSelfBinarySize      = 128 << 20
-	defaultRepo            = "mihari-proxy/mihari"
+	maxReleaseResponseSize  = 2 << 20
+	maxSelfBinarySize       = 128 << 20
+	maxChecksumManifestSize = 1 << 20
+	defaultRepo             = "mihari-proxy/mihari"
+	checksumAssetName       = "SHA256SUMS.txt"
 )
 
 // Asset is a GitHub release asset.
@@ -44,6 +48,8 @@ type SelfUpdater struct {
 	GOARCH     string
 	// AfterReplace is optional; used to restart the OS service after a successful replace.
 	AfterReplace func(ctx context.Context, version string) error
+	// openCandidate is an optional test seam for candidate create/write/close failures.
+	openCandidate func(string) (io.WriteCloser, error)
 }
 
 // Result describes a self-update attempt.
@@ -123,6 +129,14 @@ func (u SelfUpdater) Update(ctx context.Context, binaryPath, currentVersion stri
 	if asset.Size < 0 || asset.Size > maxSelfBinarySize {
 		return Result{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihari asset is too large"}
 	}
+	checksumAsset, err := selectChecksumAsset(release)
+	if err != nil {
+		return Result{}, err
+	}
+	expected, err := u.fetchExpectedChecksum(ctx, checksumAsset, asset.Name)
+	if err != nil {
+		return Result{}, err
+	}
 	stagingDir := filepath.Join(filepath.Dir(binaryPath), ".mihari-update")
 	if err := os.MkdirAll(stagingDir, 0o700); err != nil {
 		return Result{}, fmt.Errorf("create self-update staging: %w", err)
@@ -130,7 +144,7 @@ func (u SelfUpdater) Update(ctx context.Context, binaryPath, currentVersion stri
 	defer os.RemoveAll(stagingDir)
 
 	candidate := filepath.Join(stagingDir, filepath.Base(binaryPath)+".new")
-	if err := u.download(ctx, asset.URL, candidate); err != nil {
+	if err := u.download(ctx, asset, expected, candidate); err != nil {
 		return Result{}, err
 	}
 	if err := os.Chmod(candidate, 0o755); err != nil {
@@ -153,34 +167,110 @@ func sameTag(current, latest string) bool {
 	return a != "" && a == b
 }
 
-// SelectSelfAsset picks a mihari binary asset for goos/goarch.
-// Expected names include mihari-windows-amd64.exe, mihari-linux-arm64, etc.
-func SelectSelfAsset(release Release, goos, goarch string) (Asset, error) {
+func selfAssetName(goos, goarch string) string {
 	goos = strings.ToLower(goos)
 	goarch = strings.ToLower(goarch)
-	wantSuffix := ""
+	name := "mihari-" + goos + "-" + goarch
 	if goos == "windows" {
-		wantSuffix = ".exe"
+		return name + ".exe"
 	}
-	prefix := "mihari-" + goos + "-" + goarch
+	return name
+}
+
+// SelectSelfAsset picks the unique mihari binary asset for goos/goarch.
+// Expected names are mihari-windows-<arch>.exe or mihari-<goos>-<arch>.
+func SelectSelfAsset(release Release, goos, goarch string) (Asset, error) {
+	want := selfAssetName(goos, goarch)
+	var found Asset
+	matches := 0
 	for _, asset := range release.Assets {
-		name := strings.ToLower(asset.Name)
-		if !strings.HasPrefix(name, prefix) {
+		if asset.Name != want {
 			continue
 		}
-		if wantSuffix != "" && !strings.HasSuffix(name, wantSuffix) {
-			continue
-		}
-		if wantSuffix == "" && strings.HasSuffix(name, ".exe") {
-			continue
-		}
-		// Prefer exact binary over archives for simplicity in Phase 6.
-		if strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".gz") {
-			continue
-		}
-		return asset, nil
+		found = asset
+		matches++
 	}
-	return Asset{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihari release has no compatible asset"}
+	if matches != 1 {
+		return Asset{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihari release has no compatible asset"}
+	}
+	return found, nil
+}
+
+func selectChecksumAsset(release Release) (Asset, error) {
+	var found Asset
+	matches := 0
+	for _, asset := range release.Assets {
+		if asset.Name != checksumAssetName {
+			continue
+		}
+		found = asset
+		matches++
+	}
+	if matches != 1 {
+		return Asset{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihari release has no unique checksum manifest"}
+	}
+	if found.Size < 0 || found.Size > maxChecksumManifestSize {
+		return Asset{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "checksum manifest is too large"}
+	}
+	return found, nil
+}
+
+func parseChecksumManifest(raw []byte, targetName string) ([sha256.Size]byte, error) {
+	var found [sha256.Size]byte
+	matches := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			return [sha256.Size]byte{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid checksum manifest"}
+		}
+		decoded, err := hex.DecodeString(fields[0])
+		if err != nil || len(decoded) != sha256.Size {
+			return [sha256.Size]byte{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid checksum manifest"}
+		}
+		name := strings.TrimPrefix(fields[1], "*")
+		if name != targetName {
+			continue
+		}
+		copy(found[:], decoded)
+		matches++
+	}
+	if matches != 1 {
+		return [sha256.Size]byte{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "checksum manifest has no unique target digest"}
+	}
+	return found, nil
+}
+
+func (u SelfUpdater) fetchExpectedChecksum(ctx context.Context, asset Asset, targetName string) ([sha256.Size]byte, error) {
+	var zero [sha256.Size]byte
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
+	if err != nil {
+		return zero, protocol.APIError{Code: protocol.CodeInternal, Message: "create checksum request"}
+	}
+	request.Header.Set("User-Agent", "mihari")
+	response, err := u.httpClient().Do(request)
+	if err != nil {
+		return zero, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download checksum manifest failed"}
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return zero, protocol.APIError{
+			Code:    protocol.CodeNetworkFailure,
+			Message: "download checksum manifest failed",
+			Details: map[string]any{"status": response.StatusCode},
+		}
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxChecksumManifestSize+1))
+	if err != nil {
+		return zero, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read checksum manifest failed"}
+	}
+	if len(raw) > maxChecksumManifestSize {
+		return zero, protocol.APIError{Code: protocol.CodeDataFailure, Message: "checksum manifest is too large"}
+	}
+	return parseChecksumManifest(raw, targetName)
 }
 
 func (u SelfUpdater) latestRelease(ctx context.Context) (Release, error) {
@@ -217,8 +307,15 @@ func (u SelfUpdater) latestRelease(ctx context.Context) (Release, error) {
 	return release, nil
 }
 
-func (u SelfUpdater) download(ctx context.Context, assetURL, destination string) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, assetURL, nil)
+func (u SelfUpdater) openCandidateFile(destination string) (io.WriteCloser, error) {
+	if u.openCandidate != nil {
+		return u.openCandidate(destination)
+	}
+	return os.OpenFile(destination, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+}
+
+func (u SelfUpdater) download(ctx context.Context, asset Asset, expected [sha256.Size]byte, destination string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
 	if err != nil {
 		return protocol.APIError{Code: protocol.CodeInternal, Message: "create mihari download request"}
 	}
@@ -230,15 +327,17 @@ func (u SelfUpdater) download(ctx context.Context, assetURL, destination string)
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		return protocol.APIError{
-			Code: protocol.CodeNetworkFailure, Message: "download mihari asset failed",
+			Code:    protocol.CodeNetworkFailure,
+			Message: "download mihari asset failed",
 			Details: map[string]any{"status": response.StatusCode},
 		}
 	}
-	file, err := os.OpenFile(destination, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	file, err := u.openCandidateFile(destination)
 	if err != nil {
 		return fmt.Errorf("create mihari candidate: %w", err)
 	}
-	written, copyErr := io.Copy(file, io.LimitReader(response.Body, maxSelfBinarySize+1))
+	hash := sha256.New()
+	written, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, maxSelfBinarySize+1))
 	closeErr := file.Close()
 	if copyErr != nil || closeErr != nil {
 		os.Remove(destination)
@@ -247,6 +346,16 @@ func (u SelfUpdater) download(ctx context.Context, assetURL, destination string)
 	if written > maxSelfBinarySize {
 		os.Remove(destination)
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihari asset is too large"}
+	}
+	if asset.Size > 0 && written != asset.Size {
+		os.Remove(destination)
+		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihari asset size mismatch"}
+	}
+	var got [sha256.Size]byte
+	copy(got[:], hash.Sum(nil))
+	if got != expected {
+		os.Remove(destination)
+		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihari asset digest mismatch"}
 	}
 	return nil
 }
