@@ -51,6 +51,29 @@ jobs:
             [ "$result" = "success" ] || { echo "unit matrix result: $result"; exit 1; }
           done
 
+  # Observe-only: never required, never in the test fan-in.
+  govulncheck:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Observe govulncheck
+        run: |
+          set +e
+          go run golang.org/x/vuln/cmd/govulncheck@latest -version | tee -a "$GITHUB_STEP_SUMMARY"
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./... | tee -a "$GITHUB_STEP_SUMMARY"
+          status=${PIPESTATUS[0]}
+          case "$status" in
+            0) result=clean ;;
+            3) result=vulns ;;
+            *) result=tool_error ;;
+          esac
+          echo "RESULT=$result" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+
   race:
     runs-on: windows-latest
     steps:
