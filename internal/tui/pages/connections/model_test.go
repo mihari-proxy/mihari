@@ -109,18 +109,19 @@ func TestModel_ColumnDropsFollowPriority(t *testing.T) {
 		ID: "one", Rule: "MATCH", RulePay: "final",
 		Metadata: protocol.ConnectionMetadata{Host: "a.test", Process: "chrome.exe", Type: "HTTPS", Network: "tcp"},
 	}}}, time.Unix(1, 0))
-	// Page width 70: host/traffic/network/rule fit (4 cols); start and process
-	// are dropped by priority.
-	model.SetSize(70, 16)
+	// Page width 80: host/traffic/network/rule fit (4 cols); start and process
+	// are dropped by priority. (traffic is a fixed 26-wide column now, so the
+	// threshold rose from 70 to 80 once its width was guaranteed.)
+	model.SetSize(80, 16)
 	view := model.View()
 	if !strings.Contains(view, "MATCH") || strings.Contains(view, "chrome.exe") {
-		t.Fatalf("70px should show rule but drop process: %s", view)
+		t.Fatalf("80px should show rule but drop process: %s", view)
 	}
-	// Page width 90: all six checked columns fit.
-	model.SetSize(90, 16)
+	// Page width 100: all six checked columns fit.
+	model.SetSize(100, 16)
 	view = model.View()
 	if !strings.Contains(view, "chrome.exe") {
-		t.Fatalf("90px should show process: %s", view)
+		t.Fatalf("100px should show process: %s", view)
 	}
 }
 
@@ -159,18 +160,38 @@ func TestView_TrafficDataColorsWhileRailFocused(t *testing.T) {
 	}}}, time.Unix(1, 0))
 	model.SetContentFocused(false)
 	view := model.View()
-	// RenderTrafficColumn always paints UL Success / DL Info with the units
-	// right-anchored; at the default 100-col layout the 19-wide column splits
-	// into slots that truncate the digits ("↑… KiB/s"), keeping markers, colors
-	// and units.
-	if !strings.Contains(view, "\x1b[38;5;78m↑") {
+	// RenderTrafficColumn paints UL Success / DL Info; the default 100-col
+	// layout gives traffic a 26-wide column (slot 12), so the full rate fits
+	// without truncating the digits — markers, colors and units all intact.
+	if !strings.Contains(view, "38;5;78") || !strings.Contains(view, "38;5;75") {
 		t.Fatalf("traffic semantic colors missing while rail-focused:\n%s", view)
 	}
-	if !strings.Contains(view, "\x1b[38;5;75m↓") {
-		t.Fatalf("download color missing while rail-focused:\n%s", view)
+	plain := stripConnANSI(view)
+	if !strings.Contains(plain, "↑1.0 KiB/s") || !strings.Contains(plain, "↓2.0 KiB/s") {
+		t.Fatalf("traffic rate not shown in full at 100 cols:\n%s", plain)
 	}
-	if !strings.Contains(view, "↑… KiB/s") || !strings.Contains(view, "↓2… KiB/s") {
-		t.Fatalf("traffic slot layout unexpected:\n%s", view)
+	if strings.Contains(plain, "↑…") || strings.Contains(plain, "↓…") {
+		t.Fatalf("traffic must not be truncated at 100 cols:\n%s", plain)
+	}
+}
+
+func TestView_TrafficColumnFullRateAt100Cols(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSize(100, 24)
+	upSpeed := int64(1610612736)   // 1.5 GiB/s
+	downSpeed := int64(1048472678) // 999.9 MiB/s
+	model.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{
+		ID: "one", UploadSpeed: upSpeed, DownloadSpeed: downSpeed,
+		Metadata: protocol.ConnectionMetadata{Host: "one.test", Network: "tcp", Type: "HTTP"},
+	}}}, time.Unix(1, 0))
+	plain := stripConnANSI(model.View())
+	for _, want := range []string{"↑" + ui.FormatRate(upSpeed), "↓" + ui.FormatRate(downSpeed)} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("missing %q in:\n%s", want, plain)
+		}
+	}
+	if strings.Contains(plain, "↑…") || strings.Contains(plain, "↓…") {
+		t.Fatalf("traffic truncated at 100 cols:\n%s", plain)
 	}
 }
 
