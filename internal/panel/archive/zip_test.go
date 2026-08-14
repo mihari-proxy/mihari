@@ -262,6 +262,48 @@ func addZipFile(t *testing.T, writer *zip.Writer, name, content string) {
 	}
 }
 
+func BenchmarkSafeName(b *testing.B) {
+	name := "dist/assets/app.js"
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if !SafeName(name) {
+			b.Fatal("expected safe")
+		}
+	}
+}
+
+func BenchmarkExtractZipNestedIndex(b *testing.B) {
+	var buf bytes.Buffer
+	writer := zip.NewWriter(&buf)
+	for name, content := range map[string]string{
+		"dist/index.html":  "<html>ok</html>",
+		"dist/assets/a.js": "console.log(1)",
+	} {
+		entry, err := writer.Create(name)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if _, err := entry.Write([]byte(content)); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		b.Fatal(err)
+	}
+	archivePath := filepath.Join(b.TempDir(), "panel.zip")
+	if err := os.WriteFile(archivePath, buf.Bytes(), 0o600); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		dest := b.TempDir()
+		if err := ExtractZip(archivePath, dest); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func FuzzSafeArchivePath(f *testing.F) {
 	seeds := []string{
 		"index.html",
