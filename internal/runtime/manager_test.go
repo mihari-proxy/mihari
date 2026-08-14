@@ -179,6 +179,76 @@ func TestManagerCancelsOwnedSchedulerWhenSupervisorStops(t *testing.T) {
 	}
 }
 
+type errorGateway struct {
+	err error
+}
+
+func (g errorGateway) Serve(context.Context) error { return g.err }
+func (errorGateway) SessionCount() int             { return 0 }
+func (errorGateway) ListenAddr() string            { return "127.0.0.1:0" }
+
+func TestManagerReportsWebGatewayError(t *testing.T) {
+	var gotComponent string
+	var gotErr error
+	manager := newTestManager(Options{
+		Supervisor: &fakeSupervisor{run: func(context.Context) error { return errors.New("stopped") }},
+		WebGateway: errorGateway{err: errors.New("listen failed")},
+		OnBackgroundError: func(component string, err error) {
+			gotComponent, gotErr = component, err
+		},
+	})
+	_ = manager.Run(context.Background())
+	if gotComponent != "web-gateway" || gotErr == nil || gotErr.Error() != "listen failed" {
+		t.Fatalf("component=%q err=%v", gotComponent, gotErr)
+	}
+}
+
+func TestManagerIgnoresWebGatewayCancellation(t *testing.T) {
+	called := false
+	manager := newTestManager(Options{
+		Supervisor:        &fakeSupervisor{run: func(context.Context) error { return errors.New("stopped") }},
+		WebGateway:        errorGateway{err: context.Canceled},
+		OnBackgroundError: func(string, error) { called = true },
+	})
+	_ = manager.Run(context.Background())
+	if called {
+		t.Fatal("cancellation reported as background error")
+	}
+}
+
+func TestManagerReportsSchedulerError(t *testing.T) {
+	var gotComponent string
+	var gotErr error
+	manager := newTestManager(Options{
+		Supervisor: &fakeSupervisor{run: func(context.Context) error { return errors.New("stopped") }},
+		RunScheduler: func(context.Context) error {
+			return errors.New("refresh failed")
+		},
+		OnBackgroundError: func(component string, err error) {
+			gotComponent, gotErr = component, err
+		},
+	})
+	_ = manager.Run(context.Background())
+	if gotComponent != "scheduler" || gotErr == nil || gotErr.Error() != "refresh failed" {
+		t.Fatalf("component=%q err=%v", gotComponent, gotErr)
+	}
+}
+
+func TestManagerIgnoresSchedulerCancellation(t *testing.T) {
+	called := false
+	manager := newTestManager(Options{
+		Supervisor: &fakeSupervisor{run: func(context.Context) error { return errors.New("stopped") }},
+		RunScheduler: func(context.Context) error {
+			return context.Canceled
+		},
+		OnBackgroundError: func(string, error) { called = true },
+	})
+	_ = manager.Run(context.Background())
+	if called {
+		t.Fatal("scheduler cancellation reported as background error")
+	}
+}
+
 type fakeGeoIPCandidate struct {
 	valid     bool
 	identity  string
