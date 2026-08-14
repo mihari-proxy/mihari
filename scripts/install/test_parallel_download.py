@@ -16,6 +16,15 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PAYLOAD = bytes(range(256)) * 8192
 
 
+def downloader_timeout(os_name=os.name):
+    # First powershell.exe + Add-Type + 4 runspaces on a cold windows-latest
+    # runner exceeded the previous 30s budget (CI run 31770214283). Later
+    # tests on the same job finished in 1-9s. Unix shells start quickly.
+    if os_name == "nt":
+        return 90
+    return 30
+
+
 class RangeServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -122,6 +131,28 @@ class ParallelDownloadTests(unittest.TestCase):
         cls.server = RangeServer()
         cls.server_thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.server_thread.start()
+        cls.warmup_windows_downloader()
+
+    @classmethod
+    def warmup_windows_downloader(cls):
+        if os.name != "nt":
+            return
+        script = SCRIPT_DIR / "install-aio-remote.ps1"
+        command = (
+            "$ErrorActionPreference='Stop'; "
+            "$env:MIHARI_INSTALL_TEST_MODE='1'; "
+            f". ([scriptblock]::Create([IO.File]::ReadAllText('{script}'))); "
+            "Add-Type -AssemblyName System.Net.Http"
+        )
+        subprocess.run(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
+            timeout=60,
+            check=False,
+        )
 
     @classmethod
     def tearDownClass(cls):
@@ -163,8 +194,12 @@ class ParallelDownloadTests(unittest.TestCase):
             stderr=subprocess.PIPE,
             text=True,
             errors="replace",
-            timeout=30,
+            timeout=downloader_timeout(),
         )
+
+    def test_windows_downloader_timeout_covers_cold_powershell_startup(self):
+        self.assertGreaterEqual(downloader_timeout("nt"), 90)
+        self.assertEqual(30, downloader_timeout("posix"))
 
     def assert_no_parts(self, destination):
         self.assertEqual([], glob.glob(str(destination) + ".parts-*"))
