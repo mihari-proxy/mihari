@@ -896,19 +896,7 @@ func TestGatewayProxiesVersionWithAuthAndRejectsUpgrade(t *testing.T) {
 	defer cancel()
 	errCh := make(chan error, 1)
 	go func() { errCh <- gateway.Serve(ctx) }()
-	// Wait until bound.
-	deadline := time.Now().Add(2 * time.Second)
-	var base string
-	for time.Now().Before(deadline) {
-		if addr := gateway.ListenAddr(); addr != "" && addr != "127.0.0.1:0" {
-			base = "http://" + addr
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if base == "" {
-		t.Fatal("gateway did not bind")
-	}
+	base := waitGatewayBase(t, gateway)
 
 	// Unauthenticated API → 401.
 	resp, err := http.Get(base + "/version")
@@ -1356,15 +1344,32 @@ func TestGatewayConfigPatchAllowlistTUN(t *testing.T) {
 	}
 }
 
+func waitListenAddr(listenAddr func() string, timeout time.Duration) string {
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if addr := listenAddr(); addr != "" && addr != "127.0.0.1:0" {
+			return addr
+		}
+		if !time.Now().Before(deadline) {
+			return ""
+		}
+		<-ticker.C
+	}
+}
+
+func TestWaitListenAddrTimesOut(t *testing.T) {
+	if got := waitListenAddr(func() string { return "127.0.0.1:0" }, 20*time.Millisecond); got != "" {
+		t.Fatalf("got=%q", got)
+	}
+}
+
 func waitGatewayBase(t *testing.T, gateway *Server) string {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if addr := gateway.ListenAddr(); addr != "" && addr != "127.0.0.1:0" {
-			return "http://" + addr
-		}
-		time.Sleep(10 * time.Millisecond)
+	addr := waitListenAddr(gateway.ListenAddr, 2*time.Second)
+	if addr == "" {
+		t.Fatal("gateway did not bind")
 	}
-	t.Fatal("gateway did not bind")
-	return ""
+	return "http://" + addr
 }
