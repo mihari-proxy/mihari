@@ -143,6 +143,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			m.lastError = ui.ProxySelectFailed
 			return m, nil
 		}
+		m.lastError = ""
 		if index := m.groupIndex(typed.group); index >= 0 {
 			m.groups[index].Now = typed.node
 		}
@@ -389,6 +390,7 @@ func (m *Model) selectFocused() tea.Cmd {
 	if m.client == nil || m.focus.Node == "" {
 		return nil
 	}
+	m.lastError = ""
 	id := m.focus
 	m.pending[id] = true
 	operationID := m.newOperationID()

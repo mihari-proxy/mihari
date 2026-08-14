@@ -311,6 +311,53 @@ func TestModel_SelectProxyFailureShowsError(t *testing.T) {
 	}
 }
 
+func TestModel_SelectProxySuccessClearsError(t *testing.T) {
+	client := &fakeClient{selectErr: errors.New("upstream down")}
+	model := New(client, func() string { return "op-1" })
+	model.SetSize(80, 24)
+	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{
+		Name: "GLOBAL", Now: "old", Nodes: []protocol.ProxyNode{{Name: "node-a", Type: "VLESS"}},
+	}}})
+	updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+	applyProxyCmd(t, model, updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter}))
+	if !strings.Contains(model.View(), ui.ProxySelectFailed) {
+		t.Fatal("failure feedback missing")
+	}
+
+	client.selectErr = nil
+	applyProxyCmd(t, model, updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter}))
+	if strings.Contains(model.View(), ui.ProxySelectFailed) {
+		t.Fatal("stale failure feedback after success")
+	}
+	if model.groups[0].Now != "node-a" {
+		t.Fatalf("Now=%q want node-a", model.groups[0].Now)
+	}
+}
+
+func TestModel_NewSelectionClearsStaleError(t *testing.T) {
+	client := &fakeClient{selectErr: errors.New("upstream down")}
+	model := New(client, func() string { return "op-1" })
+	model.SetSize(80, 24)
+	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{
+		Name: "GLOBAL", Now: "old", Nodes: []protocol.ProxyNode{{Name: "node-a", Type: "VLESS"}},
+	}}})
+	updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+	applyProxyCmd(t, model, updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter}))
+	if !strings.Contains(model.View(), ui.ProxySelectFailed) {
+		t.Fatal("failure feedback missing")
+	}
+
+	command := updateProxyKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("expected selection command")
+	}
+	if strings.Contains(model.View(), ui.ProxySelectFailed) {
+		t.Fatal("stale error must clear when a new selection starts")
+	}
+}
+
 func TestView_GroupWrappedInBorderedSection(t *testing.T) {
 	model := New(nil, nil)
 	model.SetSize(80, 24)
