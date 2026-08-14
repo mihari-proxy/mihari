@@ -55,7 +55,7 @@ Phase 1 是其他阶段的硬前置：测试与 coverage 信号不可信时，�
 | Phase | 主题 | 状态 | 详细计划 | 核心发现 |
 |---|---|---|---|---|
 | 1 | 发布风险与质量门禁 | 已验收 | [2026-08-13-code-quality-phase-1.md](2026-08-13-code-quality-phase-1.md) | AQ-01、AQ-04、AQ-05 |
-| 2 | 外部输入与网络安全 | 待一期验收后规划 | 一期完成后创建 `2026-08-13-code-quality-phase-2.md` | AQ-02、AQ-03 |
+| 2 | 外部输入与网络安全 | 实施中 | [2026-08-13-code-quality-phase-2.md](2026-08-13-code-quality-phase-2.md) | AQ-02、AQ-03 |
 | 3 | 运行时、平台与可观测性 | 待二期验收后规划 | 二期完成后创建 `2026-08-13-code-quality-phase-3.md` | 平台覆盖、后台错误回收 |
 | 4 | 可维护性与数据驱动治理 | 等待稳定基线与历史数据 | 三期完成且数据条件满足后创建 `2026-08-13-code-quality-phase-4.md` | 大文件、固定等待、性能与 coverage |
 
@@ -142,6 +142,15 @@ AQ-02、AQ-03 仍开放。一期状态列为 `已验收`，仅在本 closure com
 - 在不访问公网的测试中覆盖压缩炸弹、条目洪泛、伪造 size、阻塞 handler、deadline 和 staging 清理。
 - 引入 `govulncheck ./...` 的 CI 观察任务；先记录工具版本、数据库可用性和当前结果，再决定是否 required。
 - 以观察模式评估 `gosec`、`bodyclose`、`noctx`、`errorlint`；只把与 Mihari 边界相关且低误报的规则写入 `.golangci.yml`。
+
+### Linter 观察（2026-08-14，不启用）
+
+| 规则 | 命中 | 决策 |
+|---|---:|---|
+| bodyclose | 6 | 不启用；多为测试/已 defer Close |
+| noctx | 60 | 不启用；测试 httptest.NewRequest 噪声 |
+| errorlint | 8 | 不启用 |
+| gosec | n/a | 未纳入 golangci v2 本次 dry-run；不启用 |
 
 ### 非目标
 

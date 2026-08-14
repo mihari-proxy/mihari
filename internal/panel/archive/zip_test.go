@@ -3,10 +3,14 @@ package archive
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 func TestExtractZipAcceptsNestedRootWithIndexHTML(t *testing.T) {
@@ -98,6 +102,115 @@ func TestExtractZipRejectsSymlinkEntries(t *testing.T) {
 	if err := ExtractZip(archivePath, dest); err == nil {
 		t.Fatal("expected symlink rejection")
 	}
+}
+
+func TestExtractZipRejectsTooManyEntries(t *testing.T) {
+	files := map[string]string{
+		"index.html": "<html>ok</html>",
+		"a.txt":      "a",
+		"b.txt":      "b",
+	}
+	archivePath := writeZip(t, files)
+	dest := filepath.Join(t.TempDir(), "out")
+	err := extractZipWithLimits(archivePath, dest, extractLimits{
+		maxFile: MaxExtractedFileSize, maxTotal: MaxTotalExtractedBytes, maxEntries: 2, maxDepth: MaxArchiveDepth,
+	})
+	assertExtractRejected(t, dest, err, "panel archive has too many entries")
+}
+
+func TestExtractZipRejectsPathTooDeep(t *testing.T) {
+	name := strings.Repeat("a/", MaxArchiveDepth) + "index.html"
+	archivePath := writeZip(t, map[string]string{name: "<html>ok</html>"})
+	dest := filepath.Join(t.TempDir(), "out")
+	err := ExtractZip(archivePath, dest)
+	assertExtractRejected(t, dest, err, "panel archive path is too deep")
+}
+
+func TestExtractZipRejectsDeclaredTotalTooLarge(t *testing.T) {
+	index := []byte("<html>ok</html>")
+	limits := extractLimits{maxFile: 200, maxTotal: 150, maxEntries: 16, maxDepth: MaxArchiveDepth}
+	archivePath := writeRawZip(t, []rawZipFile{
+		{Name: "index.html", Payload: index, Uncompressed: uint64(len(index))},
+		{Name: "big.txt", Payload: []byte("tiny"), Uncompressed: 200},
+	})
+	dest := filepath.Join(t.TempDir(), "out")
+	err := extractZipWithLimits(archivePath, dest, limits)
+	assertExtractRejected(t, dest, err, "panel archive is too large")
+}
+
+func TestExtractZipRejectsActualTotalTooLarge(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), 40)
+	limits := extractLimits{maxFile: 100, maxTotal: 50, maxEntries: 16, maxDepth: MaxArchiveDepth}
+	archivePath := writeZip(t, map[string]string{
+		"index.html": string(payload),
+		"more.txt":   string(payload),
+	})
+	dest := filepath.Join(t.TempDir(), "out")
+	err := extractZipWithLimits(archivePath, dest, limits)
+	assertExtractRejected(t, dest, err, "panel archive is too large")
+}
+
+func TestExtractFileReturnsCopiedBytes(t *testing.T) {
+	payload := []byte("copied-bytes")
+	archivePath := writeZip(t, map[string]string{"index.html": string(payload)})
+	reader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	target := filepath.Join(t.TempDir(), "out.html")
+	written, err := extractFile(reader.File[0], target, MaxExtractedFileSize)
+	if err != nil || written != int64(len(payload)) {
+		t.Fatalf("written=%d err=%v", written, err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || string(got) != string(payload) {
+		t.Fatalf("got=%q err=%v", got, err)
+	}
+}
+
+func assertExtractRejected(t *testing.T, dest string, err error, wantMsg string) {
+	t.Helper()
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodeDataFailure || api.Message != wantMsg {
+		t.Fatalf("err=%v want %q", err, wantMsg)
+	}
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Fatalf("dest still exists: %v", statErr)
+	}
+}
+
+type rawZipFile struct {
+	Name         string
+	Payload      []byte
+	Uncompressed uint64
+}
+
+func writeRawZip(t *testing.T, files []rawZipFile) string {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := zip.NewWriter(&buf)
+	for _, file := range files {
+		header := &zip.FileHeader{Name: file.Name, Method: zip.Store}
+		header.UncompressedSize64 = file.Uncompressed
+		header.CompressedSize64 = uint64(len(file.Payload))
+		header.CRC32 = crc32.ChecksumIEEE(file.Payload)
+		entry, err := writer.CreateRaw(header)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write(file.Payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "raw.zip")
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestSafeArchiveName(t *testing.T) {

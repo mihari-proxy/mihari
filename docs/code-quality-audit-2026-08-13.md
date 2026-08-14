@@ -113,7 +113,7 @@
 
 **建议：** 在读取前累计 `UncompressedSize64`，同时在实际 copy 时累计真实写入量；设置总展开字节、最大 entry 数和可选目录深度上限，超限时删除整个 staging candidate。增加“许多合法小文件但总量超限”和伪造 size 元数据测试。
 
-**状态：** 仍开放。不在一期范围。
+**状态（2026-08-14）：** 本地整改完成。`ExtractZip` 增加总量 256 MiB、4096 entries、深度 16，声明与实际双累计；失败 `RemoveAll(destDir)`。
 
 ### AQ-03（中）：panel release 元数据的默认 HTTP client 没有超时
 
@@ -123,7 +123,7 @@
 
 **建议：** `release.Client` 缺省使用带明确 timeout 的私有 `http.Client`，或要求调用方显式注入；同时保持 request context 传播。增加一个阻塞 handler 的 deadline 回归测试。
 
-**状态：** 仍开放。不在一期范围。
+**状态（2026-08-14）：** 本地整改完成。`release.Client` 在 HTTPClient 为 nil 时使用 2 分钟私有 client，不再使用 `http.DefaultClient`。
 
 ### AQ-04（中）：CI 覆盖率命令可重复触发 CLI 测试失败
 
