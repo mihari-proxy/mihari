@@ -123,7 +123,7 @@ func (m *Model) layoutWidth() int {
 func (m *Model) connectionColumns() []ui.TableColumn {
 	specs := map[string]ui.TableColumn{
 		"host":        {MinWidth: 12, Flex: 3, Priority: 0},
-		"traffic":     {MinWidth: 16, MaxWidth: 24, Flex: 1, Align: ui.AlignRight, Priority: 10},
+		"traffic":     {MinWidth: 26, MaxWidth: 26, Flex: 1, Align: ui.AlignRight, Priority: 10},
 		"network":     {MinWidth: 10, Flex: 1, Priority: 9},
 		"rule":        {MinWidth: 12, Flex: 2, Priority: 8},
 		"start":       {MinWidth: 10, Flex: 1, Priority: 7},

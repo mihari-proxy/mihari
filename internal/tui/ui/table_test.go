@@ -205,6 +205,23 @@ func TestRenderTrafficColumn_NarrowSlotTruncatesDigits(t *testing.T) {
 	}
 }
 
+func TestRenderTrafficColumn_FullRateFitsAt26(t *testing.T) {
+	theme := DefaultTheme()
+	// A 26-wide column (the fixed Conns traffic width) splits into two
+	// 12-wide slots; ↑999.9 XiB/s is exactly 12 columns, so the full rate
+	// shows without truncating digits or units.
+	p := stripANSI(RenderTrafficColumn(theme, "999.9 MiB/s", "1.5 GiB/s", 26))
+	if w := lipgloss.Width(p); w != 26 {
+		t.Fatalf("width=%d %q", w, p)
+	}
+	if strings.Contains(p, "…") {
+		t.Fatalf("should not truncate at 26: %q", p)
+	}
+	if !strings.Contains(p, "↑999.9 MiB/s") || !strings.Contains(p, "↓1.5 GiB/s") {
+		t.Fatalf("full rate missing: %q", p)
+	}
+}
+
 func TestClassifyContentWidth(t *testing.T) {
 	if ClassifyContentWidth(80) != ContentCompact {
 		t.Fatal("80 should be compact")
