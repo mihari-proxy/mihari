@@ -7,11 +7,15 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
-const maxResponseSize = 2 << 20
+const (
+	maxResponseSize       = 2 << 20
+	defaultReleaseTimeout = 2 * time.Minute
+)
 
 // Asset is a GitHub release asset.
 type Asset struct {
@@ -40,11 +44,15 @@ type Client struct {
 	APIBase    string
 }
 
+func defaultHTTPClient() *http.Client {
+	return &http.Client{Timeout: defaultReleaseTimeout}
+}
+
 func (c Client) httpClient() *http.Client {
 	if c.HTTPClient != nil {
 		return c.HTTPClient
 	}
-	return http.DefaultClient
+	return defaultHTTPClient()
 }
 
 func (c Client) apiBase() string {
