@@ -330,6 +330,59 @@ func TestReconnectingFooterUnchangedWithoutError(t *testing.T) {
 	}
 }
 
+func TestReconnectingFooterAddsServiceHintAfterLateStatus(t *testing.T) {
+	model := NewModel()
+	if model.serviceLoaded {
+		t.Fatal("expected service status to be unloaded on first open")
+	}
+	model.applySessionEvent(session.Event{
+		Kind: session.EventReconnecting,
+		Err:  errors.New("open \\\\.\\pipe\\mihari-control: The system cannot find the file specified."),
+	})
+	got := model.footerGlobalSegment()
+	if !strings.Contains(got, ui.DaemonNotListening) {
+		t.Fatalf("missing sanitized reason before status: %q", got)
+	}
+	if strings.Contains(got, ui.ServiceRunningUnreachable) {
+		t.Fatalf("service hint raced ahead of status: %q", got)
+	}
+	if strings.Contains(got, `\\.\pipe\`) {
+		t.Fatalf("leaked pipe path before status: %q", got)
+	}
+
+	updated, _ := model.Update(rootServiceStatusMsg{status: service.StatusRunning})
+	model = updated.(Model)
+	got = model.footerGlobalSegment()
+	if !strings.Contains(got, ui.DaemonNotListening) {
+		t.Fatalf("missing sanitized reason after status: %q", got)
+	}
+	if !strings.Contains(got, ui.ServiceRunningUnreachable) {
+		t.Fatalf("missing late service hint: %q", got)
+	}
+	if strings.Count(got, ui.ServiceRunningUnreachable) != 1 {
+		t.Fatalf("duplicated service hint: %q", got)
+	}
+	if strings.Contains(got, `\\.\pipe\`) {
+		t.Fatalf("leaked pipe path after status: %q", got)
+	}
+
+	updated, _ = model.Update(rootServiceStatusMsg{status: service.StatusRunning})
+	model = updated.(Model)
+	if strings.Count(model.footerGlobalSegment(), ui.ServiceRunningUnreachable) != 1 {
+		t.Fatalf("duplicated after second running poll: %q", model.footerGlobalSegment())
+	}
+
+	updated, _ = model.Update(rootServiceStatusMsg{status: service.StatusStopped})
+	model = updated.(Model)
+	got = model.footerGlobalSegment()
+	if strings.Contains(got, ui.ServiceRunningUnreachable) {
+		t.Fatalf("stale service hint after stop: %q", got)
+	}
+	if !strings.Contains(got, ui.DaemonNotListening) {
+		t.Fatalf("lost sanitized reason after stop: %q", got)
+	}
+}
+
 func TestConnectedDegradedFooterShowsLastError(t *testing.T) {
 	model := NewModel()
 	model.applySessionEvent(session.Event{Kind: session.EventConnected})

@@ -299,6 +299,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			model.serviceStatus = typed.status
 		}
+		model.refreshDaemonHintForService()
 		model.syncOverview()
 		// Keep System page status line in sync with the root badge source of truth.
 		model.syncSystemServiceStatus()
@@ -1036,6 +1037,30 @@ func joinHints(parts ...string) string {
 		}
 	}
 	return strings.Join(out, " — ")
+}
+
+func stripServiceRunningUnreachable(hint string) string {
+	hint = strings.ReplaceAll(hint, " — "+ui.ServiceRunningUnreachable, "")
+	hint = strings.ReplaceAll(hint, ui.ServiceRunningUnreachable+" — ", "")
+	if hint == ui.ServiceRunningUnreachable {
+		return ""
+	}
+	return hint
+}
+
+// refreshDaemonHintForService appends or drops the running-but-unreachable
+// suffix after a late service Status() poll. EventReconnecting may have
+// snapshotted serviceLoaded=false on first open.
+func (model *Model) refreshDaemonHintForService() {
+	if model.daemonHint == "" {
+		return
+	}
+	base := stripServiceRunningUnreachable(model.daemonHint)
+	if model.serviceStatus == service.StatusRunning {
+		model.daemonHint = joinHints(base, ui.ServiceRunningUnreachable)
+		return
+	}
+	model.daemonHint = base
 }
 
 func (model Model) View() tea.View {
