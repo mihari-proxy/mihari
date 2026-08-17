@@ -2366,12 +2366,10 @@ func TestSystemAboutWorksWhileDisconnectedAndUnelevated(t *testing.T) {
 		return nil
 	})
 	model.focusID = rowGitHub
-	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		if msg := cmd(); msg != nil {
-			updated, _ = model.Update(msg)
-			model = updated.(*Model)
+			_, _ = model.Update(msg)
 		}
 	}
 	if len(opened) != 1 || opened[0] != ui.AboutGitHubURL {
@@ -2389,8 +2387,7 @@ func TestSystemAboutGitHubEnterIgnoredWhilePending(t *testing.T) {
 	})
 	model.pending = true
 	model.focusID = rowGitHub
-	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatalf("pending enter should not return cmd: %#v", cmd())
 	}
