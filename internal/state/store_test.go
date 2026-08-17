@@ -26,3 +26,11 @@ func TestStoreDeepCopiesSubscriptionSlices(t *testing.T) {
 		t.Fatalf("stored snapshot was mutated through a reader: %#v", b)
 	}
 }
+
+func TestStoreRoundTripsLastErrorAndDegradedHealth(t *testing.T) {
+	store := NewStore(Snapshot{Health: HealthDegraded, LastError: "managed port is unavailable"})
+	got := store.Load()
+	if got.Health != HealthDegraded || got.LastError != "managed port is unavailable" {
+		t.Fatalf("got=%#v", got)
+	}
+}
