@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"io"
-	"net"
 	"os"
 	"sync"
 	"time"
@@ -59,19 +58,8 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	if err := core.EnsureRuntimeConfig(paths.RuntimeConfig, settings); err != nil {
 		return nil, err
 	}
-	for _, endpoint := range []struct{ setting, address string }{
-		{"mixed-addr", settings.MixedAddr},
-		{"controller-addr", settings.ControllerAddr},
-		{"web-addr", settings.WebAddr},
-	} {
-		listener, err := net.Listen("tcp", endpoint.address)
-		if err != nil {
-			return nil, protocol.APIError{
-				Code: protocol.CodeInvalidState, Message: "managed port is unavailable",
-				Details: map[string]any{"setting": endpoint.setting, "address": endpoint.address},
-			}
-		}
-		_ = listener.Close()
+	if err := probeManagedPorts(settings, nil); err != nil {
+		return nil, err
 	}
 
 	store := state.NewStore(state.Snapshot{
