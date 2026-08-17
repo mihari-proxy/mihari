@@ -8,6 +8,19 @@
 
 ### Fixed
 
+## [v0.7.3] - 2026-08-17
+
+### Added
+
+- 托管端口被占用时，错误 details 在可获得时带上占用进程 PID 与基名（#87）。
+- runtime 装配失败但控制通道仍可 listen 时，驻留仅状态降级控制面：`GET /v1/status` 返回 `health=degraded` 与可省略的 `last_error`（#87）。
+
+### Fixed
+
+- Windows 服务在控制通道未能 listen 时不再向 SCM 报 running（#87）。
+- TUI 重连页脚展示净化后的连接失败原因；服务状态晚到时补全控制面不可达提示（#87）。
+- `mihari status` 在降级时打印 `Error:` 行（#87）。
+
 ## [v0.7.2] - 2026-08-14
 
 ### Fixed
