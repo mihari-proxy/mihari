@@ -8,6 +8,15 @@
 
 ### Fixed
 
+## [v0.7.4] - 2026-08-17
+
+### Fixed
+
+- Windows 将 Sparkle/mihomo 的 `Meta Tunnel` 网卡识别为其他 TUN，Enable 在非 force 时走 `tun_conflict` 门控（#91, #92）。
+- TUN 冲突分类按本实例内核 PID 与 live `tun.device` 扣除自身，不再按列表第一项盲删（#92）。
+- Enable 后核对 mihomo live `tun.enable`；未真正开启则回滚 Desired，并填充已有的 `last_error`（#92）。
+- regenerate/reload 成功后仍返回 PATCH 失败，避免 Desired On / Live Off（#92）。
+
 ## [v0.7.3] - 2026-08-17
 
 ### Added
