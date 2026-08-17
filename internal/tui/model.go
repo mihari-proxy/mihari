@@ -11,6 +11,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/buildinfo"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/service"
+	"github.com/mihari-proxy/mihari/internal/state"
 	connectionspage "github.com/mihari-proxy/mihari/internal/tui/pages/connections"
 	logspage "github.com/mihari-proxy/mihari/internal/tui/pages/logs"
 	"github.com/mihari-proxy/mihari/internal/tui/pages/overview"
@@ -994,6 +995,9 @@ func (model Model) footerGlobalSegment() string {
 			}
 		}
 		return ui.SpinnerLabel(model.now, label)
+	}
+	if model.connected && model.status.Health == state.HealthDegraded && model.status.LastError != "" {
+		return ui.DaemonDegradedLabel + " — " + model.status.LastError
 	}
 	label := ui.GlobalStateLabel(model.globalState)
 	if model.globalState == ui.StateStale && !model.lastObservedAt.IsZero() {

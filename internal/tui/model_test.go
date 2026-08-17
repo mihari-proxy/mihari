@@ -330,6 +330,22 @@ func TestReconnectingFooterUnchangedWithoutError(t *testing.T) {
 	}
 }
 
+func TestConnectedDegradedFooterShowsLastError(t *testing.T) {
+	model := NewModel()
+	model.applySessionEvent(session.Event{Kind: session.EventConnected})
+	model.applySessionEvent(session.Event{
+		Kind:   session.EventStatus,
+		Status: protocol.Status{Health: "degraded", LastError: "managed port mixed-addr 127.0.0.1:7890 is unavailable"},
+	})
+	got := model.footerGlobalSegment()
+	if !strings.Contains(got, ui.DaemonDegradedLabel) {
+		t.Fatalf("got=%q", got)
+	}
+	if !strings.Contains(got, "managed port mixed-addr") {
+		t.Fatalf("got=%q", got)
+	}
+}
+
 func TestRail_EnterOpensContentButArrowsDoNot(t *testing.T) {
 	model := NewModel()
 	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
