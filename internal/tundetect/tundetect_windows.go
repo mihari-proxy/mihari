@@ -4,7 +4,6 @@ package tundetect
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"unsafe"
 
@@ -28,8 +27,7 @@ func detect(ctx context.Context) (Detection, error) {
 }
 
 // enumerateWintunAdapters lists network adapters whose description or friendly
-// name marks them as wintun tunnels. Real wintun adapters (as created by
-// mihomo, WireGuard, sing-box, …) report a description containing "Wintun".
+// name marks them as Windows TUN tunnels (wintun, Meta Tunnel / mihomo, WireGuard).
 func enumerateWintunAdapters() ([]string, error) {
 	var size uint32
 	if err := windows.GetAdaptersAddresses(0, 0x20 /* GAA_FLAG_INCLUDE_FRIENDLY_NAME — fill FriendlyName for friendlier display */, 0, nil, &size); err != nil && err != windows.ERROR_BUFFER_OVERFLOW {
@@ -50,26 +48,20 @@ func enumerateWintunAdapters() ([]string, error) {
 		if !isWintun(desc, friendly) {
 			continue
 		}
-		name := friendly
-		if name == "" {
-			name = desc
-		}
-		adapters = append(adapters, name)
+		adapters = append(adapters, formatAdapterName(desc, friendly))
 	}
 	return adapters, nil
 }
 
 // isWintun reports whether an adapter's description or friendly name identifies
-// it as a wintun tunnel (case-insensitive). wintun descriptions look like
-// "Wintun Userspace Tunnel (Wintun)".
+// it as a Windows TUN tunnel (wintun, Meta Tunnel / mihomo, WireGuard).
 func isWintun(desc, friendly string) bool {
-	return strings.Contains(strings.ToLower(desc), "wintun") ||
-		strings.Contains(strings.ToLower(friendly), "wintun")
+	return isWindowsTunAdapter(desc, friendly)
 }
 
 // enumerateMihomoProcesses lists running processes whose executable name
 // contains "mihomo" (case-insensitive).
-func enumerateMihomoProcesses() ([]string, error) {
+func enumerateMihomoProcesses() ([]Process, error) {
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
 		return nil, err
@@ -80,11 +72,11 @@ func enumerateMihomoProcesses() ([]string, error) {
 	if err := windows.Process32First(snapshot, &entry); err != nil {
 		return nil, err
 	}
-	var procs []string
+	var procs []Process
 	for {
 		exe := windows.UTF16ToString(entry.ExeFile[:])
 		if strings.Contains(strings.ToLower(exe), "mihomo") {
-			procs = append(procs, fmt.Sprintf("%s (%d)", exe, entry.ProcessID))
+			procs = append(procs, Process{Name: exe, PID: int(entry.ProcessID)})
 		}
 		if err := windows.Process32Next(snapshot, &entry); err != nil {
 			if err == windows.ERROR_NO_MORE_FILES {

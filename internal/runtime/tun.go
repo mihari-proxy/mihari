@@ -96,13 +96,43 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 	}
 
 	if applyErr := m.applyTun(ctx, nextTun); applyErr != nil {
+		mapped := mapTunApplyError(applyErr)
 		m.settingsMu.Lock()
 		m.settings.Tun = previousTun
 		_ = m.persistSettings()
+		m.tunLastError = tunErrorMessage(mapped)
 		m.settingsMu.Unlock()
-		mapped := mapTunApplyError(applyErr)
 		return protocol.TunStatus{}, mapped
 	}
+
+	if enable {
+		live, ok := false, false
+		if m.controller != nil && ctx.Err() == nil {
+			if configs, cfgErr := m.controller.Configs(ctx); cfgErr == nil {
+				live, ok = liveTunEnable(configs)
+			}
+		}
+		if !(ok && live) {
+			m.settingsMu.Lock()
+			m.settings.Tun = previousTun
+			_ = m.persistSettings()
+			m.tunLastError = "TUN did not become live after apply"
+			m.settingsMu.Unlock()
+			if len(previousTun) > 0 {
+				if applyBackErr := m.applyTun(ctx, previousTun); applyBackErr != nil {
+					_ = applyBackErr // best-effort restore; first failure is still returned
+				}
+			}
+			return protocol.TunStatus{}, protocol.APIError{
+				Code:    protocol.CodeUpstreamFailure,
+				Message: "TUN did not become live after apply",
+			}
+		}
+	}
+
+	m.settingsMu.Lock()
+	m.tunLastError = ""
+	m.settingsMu.Unlock()
 
 	_, err := m.coordinator.Do(ctx, state.CommandMeta{
 		ID: op.ID, Source: op.Source, IfRevision: op.IfRevision,
@@ -138,7 +168,7 @@ func (m *Manager) applyTun(ctx context.Context, nextTun map[string]any) error {
 	}
 
 	patched := false
-	if m.controller != nil {
+	if m.controller != nil && nextTun != nil {
 		if err := m.controller.PatchConfigs(ctx, map[string]any{"tun": nextTun}); err != nil {
 			patchErr = err
 		} else {
@@ -146,11 +176,11 @@ func (m *Manager) applyTun(ctx context.Context, nextTun map[string]any) error {
 		}
 	}
 
-	if regenerated || patched {
-		return nil
-	}
 	if patchErr != nil {
 		return patchErr
+	}
+	if regenerated || patched {
+		return nil
 	}
 	if regenerateErr != nil {
 		return regenerateErr
@@ -164,6 +194,9 @@ func (m *Manager) applyTun(ctx context.Context, nextTun map[string]any) error {
 func (m *Manager) buildTunStatus(ctx context.Context, lastError string) protocol.TunStatus {
 	m.settingsMu.Lock()
 	tun := cloneTunMap(m.settings.Tun)
+	if lastError == "" {
+		lastError = m.tunLastError
+	}
 	m.settingsMu.Unlock()
 
 	status := protocol.TunStatus{
@@ -172,26 +205,23 @@ func (m *Manager) buildTunStatus(ctx context.Context, lastError string) protocol
 		DesiredEnable: tunDesiredEnable(tun),
 		Managed:       len(tun) > 0,
 		Stack:         tunStack(tun),
-		LastError:     lastError,
 	}
 	// Conflict evidence is always surfaced (even when only corroborating signal B is
 	// present) so status/CLI/TUI can display it; the enable gate keys off
 	// OtherTunInterfaces alone.
 	status.Conflict = m.detectTunConflict(ctx)
 
-	if m.controller == nil {
-		return status
+	if m.controller != nil && ctx.Err() == nil {
+		if configs, err := m.controller.Configs(ctx); err == nil {
+			if live, ok := liveTunEnable(configs); ok {
+				status.LiveEnable = &live
+			}
+		}
 	}
-	if err := ctx.Err(); err != nil {
-		return status
+	if lastError == "" && status.DesiredEnable && status.LiveEnable != nil && !*status.LiveEnable {
+		lastError = "live TUN is off"
 	}
-	configs, err := m.controller.Configs(ctx)
-	if err != nil {
-		return status
-	}
-	if live, ok := liveTunEnable(configs); ok {
-		status.LiveEnable = &live
-	}
+	status.LastError = lastError
 	return status
 }
 
@@ -249,6 +279,14 @@ func liveTunEnable(configs map[string]any) (bool, bool) {
 	return enable, true
 }
 
+func tunErrorMessage(err error) string {
+	var api protocol.APIError
+	if errors.As(err, &api) {
+		return api.Message
+	}
+	return ""
+}
+
 func mapTunApplyError(err error) error {
 	if err == nil {
 		return nil
@@ -295,19 +333,31 @@ func (m *Manager) detectTunConflict(ctx context.Context) *protocol.TunConflict {
 	if err != nil {
 		return nil
 	}
-	return tundetect.Classify(detection, m.selfTunLiveActive(ctx))
+	return tundetect.Classify(detection, m.selfFromLive(ctx))
 }
 
-// selfTunLiveActive reports whether mihomo's live tun.enable is true, so Classify
-// subtracts this daemon's own TUN adapter from the detected set.
-func (m *Manager) selfTunLiveActive(ctx context.Context) bool {
-	if m.controller == nil {
-		return false
+// selfFromLive builds the Classify identity from the running core PID and live
+// tun.enable / tun.device. Detection failures stay best-effort: a missing
+// controller or unreadable configs leave TunActive false so no adapter is
+// subtracted.
+func (m *Manager) selfFromLive(ctx context.Context) tundetect.Self {
+	self := tundetect.Self{CorePID: m.store.Load().Core.PID}
+	if m.controller == nil || ctx.Err() != nil {
+		return self
 	}
 	configs, err := m.controller.Configs(ctx)
 	if err != nil {
-		return false
+		return self
 	}
-	live, ok := liveTunEnable(configs)
-	return ok && live
+	if live, ok := liveTunEnable(configs); ok && live {
+		self.TunActive = true
+		self.TunName = liveTunDevice(configs)
+	}
+	return self
+}
+
+func liveTunDevice(configs map[string]any) string {
+	raw, _ := configs["tun"].(map[string]any)
+	device, _ := raw["device"].(string)
+	return strings.TrimSpace(device)
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -44,12 +45,12 @@ func enumerateLinuxTun() ([]string, error) {
 }
 
 // enumerateLinuxMihomo lists processes whose comm reads as mihomo.
-func enumerateLinuxMihomo() ([]string, error) {
+func enumerateLinuxMihomo() ([]Process, error) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return nil, err
 	}
-	var procs []string
+	var procs []Process
 	for _, e := range entries {
 		if !e.IsDir() || !isAllDigits(e.Name()) {
 			continue
@@ -59,9 +60,14 @@ func enumerateLinuxMihomo() ([]string, error) {
 			continue
 		}
 		name := strings.TrimSpace(string(comm))
-		if strings.Contains(strings.ToLower(name), "mihomo") {
-			procs = append(procs, name+" ("+e.Name()+")")
+		if !strings.Contains(strings.ToLower(name), "mihomo") {
+			continue
 		}
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		procs = append(procs, Process{Name: name, PID: pid})
 	}
 	return procs, nil
 }

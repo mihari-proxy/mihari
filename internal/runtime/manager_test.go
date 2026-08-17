@@ -1071,6 +1071,13 @@ type fakeController struct {
 	patchConfigs           func(context.Context, map[string]any) error
 	lastPatch              map[string]any
 	patchCalls             int
+	reloads                int
+	reloadErr              error
+}
+
+func (c *fakeController) Reload(context.Context, string, bool) error {
+	c.reloads++
+	return c.reloadErr
 }
 
 type controllerCall struct {
