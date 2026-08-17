@@ -11,6 +11,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/subscription"
 	"github.com/mihari-proxy/mihari/internal/tundetect"
 )
 
@@ -191,6 +192,137 @@ func TestEnableTunRollsBackSettingsWhenApplyFails(t *testing.T) {
 	}
 }
 
+func TestApplyTunReturnsPatchErrorEvenIfReloadSucceeded(t *testing.T) {
+	root := t.TempDir()
+	controller := &fakeController{
+		configs: map[string]any{},
+		patchConfigs: func(context.Context, map[string]any) error {
+			return protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "patch tun rejected"}
+		},
+	}
+	subs, err := subscription.Open(subscription.ServiceOptions{
+		CatalogPath: filepath.Join(root, "catalog.yaml"),
+		CacheDir:    filepath.Join(root, "cache"),
+		ProxyAddr:   "127.0.0.1:9190",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := defaultTunSettings(nil)
+	settingsPath := filepath.Join(root, "settings.yaml")
+	if err := config.Save(settingsPath, settings); err != nil {
+		t.Fatal(err)
+	}
+	manager := newTestManager(Options{
+		Controller:    controller,
+		SettingsPath:  settingsPath,
+		Settings:      settings,
+		Subscriptions: subs,
+		RuntimeConfig: filepath.Join(root, "runtime", "config.yaml"),
+		StagingDir:    filepath.Join(root, "staging"),
+	})
+	_, err = manager.EnableTun(context.Background(), Operation{ID: "tun-patch-fail", Source: "test"}, false)
+	if err == nil {
+		t.Fatal("expected patch error")
+	}
+	loaded, loadErr := config.Load(settingsPath)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if tunDesiredEnable(loaded.Tun) {
+		t.Fatalf("desired must roll back, tun=%#v", loaded.Tun)
+	}
+}
+
+func TestEnableTunRollsBackWhenLiveStaysOff(t *testing.T) {
+	controller := &fakeController{
+		configs: map[string]any{"tun": map[string]any{"enable": false, "stack": "gVisor"}},
+		patchConfigs: func(context.Context, map[string]any) error {
+			return nil
+		},
+	}
+	manager := newTunManager(t, controller, defaultTunSettings(nil))
+	_, err := manager.EnableTun(context.Background(), Operation{ID: "tun-live-off", Source: "test"}, false)
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeUpstreamFailure {
+		t.Fatalf("err=%v", err)
+	}
+	if apiError.Message != "TUN did not become live after apply" {
+		t.Fatalf("message=%q", apiError.Message)
+	}
+	loaded, err := config.Load(manager.settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tunDesiredEnable(loaded.Tun) {
+		t.Fatalf("desired rolled back? tun=%#v", loaded.Tun)
+	}
+}
+
+func TestEnableTunForceStillRequiresLive(t *testing.T) {
+	controller := &fakeController{
+		configs:      map[string]any{"tun": map[string]any{"enable": false}},
+		patchConfigs: func(context.Context, map[string]any) error { return nil },
+	}
+	manager := newTunManagerWithDetect(t, controller, defaultTunSettings(nil), &tundetect.FakeBackend{
+		Detection: tundetect.Detection{TunInterfaces: []string{"mihomo (Meta Tunnel)"}},
+	})
+	_, err := manager.EnableTun(context.Background(), Operation{ID: "tun-force-live", Source: "test"}, true)
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeUpstreamFailure {
+		t.Fatalf("force must not skip live check, err=%v", err)
+	}
+}
+
+func TestEnableTunFailsWhenConfigsUnreadableAfterApply(t *testing.T) {
+	controller := &fakeController{
+		configs:    map[string]any{},
+		configsErr: protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo controller is unavailable"},
+	}
+	// patchConfigs 默认会写 configs，但随后 Configs 返回 err
+	manager := newTunManager(t, controller, defaultTunSettings(nil))
+	_, err := manager.EnableTun(context.Background(), Operation{ID: "tun-unread", Source: "test"}, false)
+	if err == nil {
+		t.Fatal("unread live must not count as success")
+	}
+}
+
+func TestTunStatusLastErrorWhenDesiredOnLiveOff(t *testing.T) {
+	live := false
+	controller := &fakeController{configs: map[string]any{
+		"tun": map[string]any{"enable": live, "stack": "gVisor"},
+	}}
+	manager := newTunManager(t, controller, defaultTunSettings(map[string]any{
+		"enable": true, "stack": "gVisor",
+	}))
+	status, err := manager.TunStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.LastError != "live TUN is off" {
+		t.Fatalf("LastError=%q", status.LastError)
+	}
+}
+
+func TestEnableTunFailurePersistsLastErrorOnStatus(t *testing.T) {
+	controller := &fakeController{
+		configs:      map[string]any{"tun": map[string]any{"enable": false}},
+		patchConfigs: func(context.Context, map[string]any) error { return nil },
+	}
+	manager := newTunManager(t, controller, defaultTunSettings(nil))
+	_, _ = manager.EnableTun(context.Background(), Operation{ID: "tun-err", Source: "test"}, false)
+	status, err := manager.TunStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.LastError != "TUN did not become live after apply" {
+		t.Fatalf("LastError=%q", status.LastError)
+	}
+	if status.DesiredEnable {
+		t.Fatal("desired should stay off after failed enable")
+	}
+}
+
 func TestEnableTunMapsPermissionErrors(t *testing.T) {
 	controller := &fakeController{
 		patchConfigs: func(context.Context, map[string]any) error {
@@ -315,7 +447,7 @@ func TestEnableTunForceOverridesConflict(t *testing.T) {
 func TestEnableTunIgnoresOtherMihomoWithoutTun(t *testing.T) {
 	controller := &fakeController{configs: map[string]any{}}
 	manager := newTunManagerWithDetect(t, controller, defaultTunSettings(nil), &tundetect.FakeBackend{
-		Detection: tundetect.Detection{MihomoProcesses: []string{"mihomo (123)", "mihomo (456)"}},
+		Detection: tundetect.Detection{MihomoProcesses: []tundetect.Process{{Name: "mihomo", PID: 123}, {Name: "mihomo", PID: 456}}},
 	})
 
 	status, err := manager.EnableTun(context.Background(), Operation{ID: "tun-mihomo", Source: "test"}, false)
@@ -355,15 +487,19 @@ func TestDisableTunNotGatedByConflict(t *testing.T) {
 }
 
 // TestEnableTunSubtractsSelfWhenLiveActive 验证决策 3 的端到端：mihomo 自身已开 TUN
-// （live tun.enable=true）且检测到的唯一 TUN 网卡就是自身那一个时，Classify 扣除自身后
-// 无其他 TUN → enable 不被门控。覆盖 selfTunLiveActive 从 live configs 读取的链路。
+// （live tun.enable=true）且检测到的唯一 TUN 网卡就是自身那一个时，Classify 按 live
+// device 与 core PID 扣除自身后无其他 TUN → enable 不被门控。覆盖 selfFromLive。
 func TestEnableTunSubtractsSelfWhenLiveActive(t *testing.T) {
 	controller := &fakeController{configs: map[string]any{
-		"tun": map[string]any{"enable": true, "stack": "gVisor"},
+		"tun": map[string]any{"enable": true, "device": "Wintun0", "stack": "gVisor"},
 	}}
 	manager := newTunManagerWithDetect(t, controller, defaultTunSettings(nil), &tundetect.FakeBackend{
-		Detection: tundetect.Detection{TunInterfaces: []string{"Wintun0"}},
+		Detection: tundetect.Detection{
+			TunInterfaces:   []string{"Wintun0"},
+			MihomoProcesses: []tundetect.Process{{Name: "mihomo", PID: 13400}},
+		},
 	})
+	manager.store.Store(state.Snapshot{Health: "ok", Core: state.CoreState{PID: 13400}})
 
 	status, err := manager.EnableTun(context.Background(), Operation{ID: "tun-self", Source: "test"}, false)
 	if err != nil {
@@ -373,6 +509,32 @@ func TestEnableTunSubtractsSelfWhenLiveActive(t *testing.T) {
 		t.Fatalf("status=%#v", status)
 	}
 	if controller.patchCalls != 1 {
+		t.Fatalf("patchCalls=%d", controller.patchCalls)
+	}
+}
+
+// TestEnableTunKeepsForeignAdapterWhenLiveDeviceDiffers 验证按 live device 名扣除自身：
+// Sparkle 网卡排在前面时，盲删 [0] 会删错并放过 Enable；按名扣除 Meta 后必须留下
+// mihomo (Meta Tunnel) 并返回 CodeTunConflict。
+func TestEnableTunKeepsForeignAdapterWhenLiveDeviceDiffers(t *testing.T) {
+	controller := &fakeController{configs: map[string]any{
+		"tun": map[string]any{"enable": true, "device": "Meta", "stack": "gVisor"},
+	}}
+	manager := newTunManagerWithDetect(t, controller, defaultTunSettings(map[string]any{
+		"enable": true, "stack": "gVisor",
+	}), &tundetect.FakeBackend{
+		Detection: tundetect.Detection{TunInterfaces: []string{"mihomo (Meta Tunnel)", "Meta"}},
+	})
+	_, err := manager.EnableTun(context.Background(), Operation{ID: "tun-foreign", Source: "test"}, false)
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeTunConflict {
+		t.Fatalf("err=%v", err)
+	}
+	names, _ := apiError.Details["other_tun_interfaces"].([]string)
+	if len(names) != 1 || names[0] != "mihomo (Meta Tunnel)" {
+		t.Fatalf("details=%#v", apiError.Details)
+	}
+	if controller.patchCalls != 0 {
 		t.Fatalf("patchCalls=%d", controller.patchCalls)
 	}
 }

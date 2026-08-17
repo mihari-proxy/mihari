@@ -4,9 +4,9 @@
 //
 // The package only observes. Detect reports every TUN adapter and every mihomo
 // process on the system without filtering; Classify then subtracts this daemon's
-// own adapter/process using a flag supplied by the runtime layer (which knows
-// mihomo's live TUN state). Keeping detection stateless lets it stay testable
-// and free of runtime dependencies.
+// own adapter/process using a Self identity supplied by the runtime layer
+// (live tun.enable / tun.device and the supervised core PID). Keeping
+// detection stateless lets it stay testable and free of runtime dependencies.
 //
 // Platform backends implement unexported detect:
 //   - Windows: IP adapter table (wintun) + toolhelp process snapshot
@@ -19,15 +19,32 @@ package tundetect
 
 import "context"
 
+// Process is one observed mihomo process. Classify subtracts by PID and
+// formats the remainder as "name (pid)" for the protocol layer.
+type Process struct {
+	Name string
+	PID  int
+}
+
+// Self is this daemon's identity used by Classify to subtract our own
+// adapter and process from a raw Detection.
+type Self struct {
+	// TunActive is true when this daemon's mihomo has live tun.enable.
+	TunActive bool
+	// TunName is live tun.device when known; empty means unknown.
+	TunName string
+	// CorePID is the supervised mihomo PID; zero means unknown.
+	CorePID int
+}
+
 // Detection is the raw, unfiltered system observation. Neither field has this
 // daemon's own adapter/process subtracted; that happens in Classify.
 type Detection struct {
 	// TunInterfaces lists every TUN adapter friendly name on the system
 	// (Windows wintun, Linux tun, macOS utun).
 	TunInterfaces []string
-	// MihomoProcesses lists every mihomo process identifier on the system
-	// (e.g. "mihomo.exe" or "mihomo (4321)").
-	MihomoProcesses []string
+	// MihomoProcesses lists every mihomo process on the system.
+	MihomoProcesses []Process
 }
 
 // Backend is an injectable detection driver for tests and runtime wiring.
