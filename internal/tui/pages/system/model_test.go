@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/elevate"
+	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"github.com/mihari-proxy/mihari/internal/update"
@@ -72,6 +73,10 @@ type fakeClient struct {
 	openWebGUICalls int
 	lastOpenPanel   string
 	openWebGUIErr   error
+
+	updateOnboardingCalls int
+	lastOnboarding        protocol.OnboardingUpdateRequest
+	updateOnboardingErr   error
 }
 
 type fakeService struct {
@@ -114,6 +119,26 @@ func (f *fakeService) Status() (service.StatusKind, error) { return f.status, f.
 
 func (f *fakeClient) Onboarding(context.Context) (protocol.OnboardingStatus, error) {
 	f.onboardingCalls++
+	return f.onboarding, nil
+}
+
+func (f *fakeClient) UpdateOnboarding(_ context.Context, request protocol.OnboardingUpdateRequest) (protocol.OnboardingStatus, error) {
+	f.updateOnboardingCalls++
+	f.lastOnboarding = request
+	if f.updateOnboardingErr != nil {
+		return protocol.OnboardingStatus{}, f.updateOnboardingErr
+	}
+	if request.MixedAddr != nil {
+		f.onboarding.MixedAddr = *request.MixedAddr
+	}
+	if request.ControllerAddr != nil {
+		f.onboarding.ControllerAddr = *request.ControllerAddr
+	}
+	if request.WebAddr != nil {
+		f.onboarding.WebAddr = *request.WebAddr
+	}
+	f.onboarding.RestartRequired = true
+	f.onboarding.Revision++
 	return f.onboarding, nil
 }
 func (f *fakeClient) Core(context.Context) (protocol.CoreStatus, error) {
@@ -301,7 +326,7 @@ func TestSystemRendersCategorizedRowsWithoutStopDaemon(t *testing.T) {
 	updated, _ := model.Update(onboardingResultMsg{status: client.onboarding})
 	model = updated.(*Model)
 	view := model.View()
-	for _, want := range []string{"Daemon", "v0.4.0", "mihomo core", "v1.19.0", "Proxy endpoint", "127.0.0.1:9190", "Run Setup", "TUN", "Unavailable"} {
+	for _, want := range []string{"Daemon", "v0.4.0", "mihomo core", "v1.19.0", ui.PortsConfigSectionTitle, ui.MixedLabel, "127.0.0.1:9190", "Run Setup", "TUN", "Unavailable"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("missing %q in view=%s", want, view)
 		}
@@ -312,6 +337,9 @@ func TestSystemRendersCategorizedRowsWithoutStopDaemon(t *testing.T) {
 	}
 	if strings.Contains(view, "Stop Daemon") {
 		t.Fatalf("system page offered destructive self-stop: %s", view)
+	}
+	if strings.Contains(view, ui.ProxyEndpointLabel) || strings.Contains(view, ui.MihomoCoreAPILabel) {
+		t.Fatalf("daemon must not list address rows: %s", view)
 	}
 }
 
@@ -1483,8 +1511,7 @@ func TestSystemRendersPanelEndpointRowsWhenInstalled(t *testing.T) {
 	model = updated.(*Model)
 	view := model.View()
 	for _, want := range []string{
-		ui.ProxyEndpointLabel, "127.0.0.1:9190",
-		ui.MihomoCoreAPILabel, "127.0.0.1:9090",
+		ui.PortsConfigSectionTitle, ui.MixedLabel, "127.0.0.1:9190",
 		ui.ZashboardLabel, ui.MetaCubeXDLabel, "/__mihari/panels/",
 	} {
 		if !strings.Contains(view, want) {
@@ -1538,28 +1565,24 @@ func TestSystemHidesPanelRowsWithoutWebGUICapability(t *testing.T) {
 			t.Fatalf("panel row %q without web-gui capability: %s", banned, view)
 		}
 	}
-	if !strings.Contains(view, ui.ProxyEndpointLabel) || !strings.Contains(view, ui.MihomoCoreAPILabel) {
-		t.Fatalf("proxy/core endpoint rows must always render:\n%s", view)
+	if !strings.Contains(view, ui.PortsConfigSectionTitle) || !strings.Contains(view, ui.MixedLabel) {
+		t.Fatalf("ports config must always render:\n%s", view)
 	}
 }
 
 func TestSystemEndpointRowsOpenDetailPopup(t *testing.T) {
-	model := New(&fakeClient{onboarding: protocol.OnboardingStatus{MixedAddr: "127.0.0.1:9190", ControllerAddr: "127.0.0.1:9090"}}, func() string { return "system-op" })
-	model.SetSnapshot(protocol.Status{}, protocol.CoreStatus{})
-	for _, test := range []struct {
-		id         string
-		detailText string
-	}{
-		{rowProxyEndpoint, ui.ProxyEndpointDetail},
-		{rowCoreAPI, ui.MihomoCoreAPIDetail},
-	} {
-		model.focusID = test.id
-		model = updateKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
-		view := model.View()
-		if !strings.Contains(view, " details") || !strings.Contains(view, test.detailText) {
-			t.Fatalf("row=%s detail view=%s", test.id, view)
-		}
-		model = updateKey(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	// Ports rows no longer open a detail overlay; Enter starts an in-row edit.
+	model := New(&fakeClient{onboarding: protocol.OnboardingStatus{MixedAddr: "127.0.0.1:9190", ControllerAddr: "127.0.0.1:9090", WebAddr: "127.0.0.1:9191"}}, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityOnboarding}}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(true)
+	model.focusID = rowMixed
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if model.editID != rowMixed {
+		t.Fatalf("editID=%q", model.editID)
+	}
+	if cmd == nil {
+		t.Fatal("expected input-mode command")
 	}
 }
 
@@ -2248,7 +2271,7 @@ func TestSystemAboutRendersDescriptionAndGitHub(t *testing.T) {
 func TestSystemAboutRowsFollowNetworkAndKeepDaemonFocus(t *testing.T) {
 	model := New(&fakeClient{}, func() string { return "system-op" })
 	model.SetSnapshot(protocol.Status{}, protocol.CoreStatus{})
-	if model.focusID != rowDaemon {
+	if model.focusID != rowMixed {
 		t.Fatalf("default focus=%q", model.focusID)
 	}
 	rows := model.rows()
@@ -2393,5 +2416,149 @@ func TestSystemAboutGitHubEnterIgnoredWhilePending(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("browser calls=%d", calls)
+	}
+}
+
+func portsModel(t *testing.T) *Model {
+	t.Helper()
+	client := &fakeClient{onboarding: protocol.OnboardingStatus{
+		Revision: 3, MixedAddr: "127.0.0.1:9190", ControllerAddr: "127.0.0.1:9090", WebAddr: "127.0.0.1:9191",
+	}}
+	model := New(client, func() string { return "ports-op" })
+	model.SetSnapshot(protocol.Status{
+		Capabilities: []string{protocol.CapabilityOnboarding}, PID: 100,
+	}, protocol.CoreStatus{PID: 42, Status: "running"})
+	model.SetMutationsEnabled(true)
+	model.SetOnboarding(client.onboarding)
+	return model
+}
+
+func TestSystemPortsTwoColumnWhenWide(t *testing.T) {
+	model := portsModel(t)
+	model.SetSize(84, 40)
+	view := model.View()
+	if !strings.Contains(view, ui.PortsConfigSectionTitle) || !strings.Contains(view, ui.DaemonSectionTitle) {
+		t.Fatalf("view=%s", view)
+	}
+	// Half-width cards are narrower than a full 80-col section.
+	if !strings.Contains(view, "╭───"+ui.DaemonSectionTitle) && !strings.Contains(view, ui.DaemonSectionTitle) {
+		t.Fatalf("missing daemon card:\n%s", view)
+	}
+}
+
+func TestSystemPortStatusOwnedVsForeignMihomo(t *testing.T) {
+	model := portsModel(t)
+	model.listenFree = func(string) bool { return false }
+	model.lookupOccupant = func(addr string) (platform.TCPOccupant, bool) {
+		switch addr {
+		case "127.0.0.1:9190":
+			return platform.TCPOccupant{PID: 9736, Process: "mihomo.exe"}, true
+		case "127.0.0.1:9090":
+			return platform.TCPOccupant{PID: 42, Process: "mihomo.exe"}, true
+		case "127.0.0.1:9191":
+			return platform.TCPOccupant{PID: 100, Process: "mihari.exe"}, true
+		default:
+			return platform.TCPOccupant{}, false
+		}
+	}
+	updated, _ := model.Update(model.probePortHolds()())
+	model = updated.(*Model)
+	view := model.View()
+	if !strings.Contains(view, "Occupied by mihomo.exe (9736)") {
+		t.Fatalf("missing occupied mixed:\n%s", view)
+	}
+	if !strings.Contains(view, ui.PortOwned) {
+		t.Fatalf("missing owned:\n%s", view)
+	}
+	if model.portHolds[rowMixed].Kind != ui.PortHoldOccupied {
+		t.Fatalf("mixed=%#v", model.portHolds[rowMixed])
+	}
+	if model.portHolds[rowController].Kind != ui.PortHoldOwned || model.portHolds[rowWeb].Kind != ui.PortHoldOwned {
+		t.Fatalf("holds=%#v", model.portHolds)
+	}
+}
+
+func TestSystemPortMihariNameWithoutDaemonPIDIsOccupied(t *testing.T) {
+	model := portsModel(t)
+	model.status.PID = 0
+	model.listenFree = func(string) bool { return false }
+	model.lookupOccupant = func(string) (platform.TCPOccupant, bool) {
+		return platform.TCPOccupant{PID: 88, Process: "mihari.exe"}, true
+	}
+	updated, _ := model.Update(model.probePortHolds()())
+	model = updated.(*Model)
+	if model.portHolds[rowWeb].Kind != ui.PortHoldOccupied {
+		t.Fatalf("web=%#v", model.portHolds[rowWeb])
+	}
+}
+
+func TestSystemPortEditEscDoesNotWrite(t *testing.T) {
+	model := portsModel(t)
+	client := model.client.(*fakeClient)
+	model.focusID = rowController
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	model.editInput.SetValue("127.0.0.1:19090")
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = updated.(*Model)
+	if model.editID != "" {
+		t.Fatal("edit should cancel")
+	}
+	if client.updateOnboardingCalls != 0 {
+		t.Fatalf("writes=%d", client.updateOnboardingCalls)
+	}
+}
+
+func TestSystemPortEditApplySendsOnboardingPatch(t *testing.T) {
+	model := portsModel(t)
+	client := model.client.(*fakeClient)
+	model.listenFree = func(string) bool { return true }
+	model.focusID = rowController
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	model.editInput.SetValue("127.0.0.1:19090")
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if cmd == nil {
+		t.Fatal("missing apply intent")
+	}
+	var intent ui.ActionIntentMsg
+	found := false
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, item := range batch {
+			if item == nil {
+				continue
+			}
+			if got, ok := item().(ui.ActionIntentMsg); ok {
+				intent, found = got, true
+			}
+		}
+	} else if got, ok := msg.(ui.ActionIntentMsg); ok {
+		intent, found = got, true
+	}
+	if !found || intent.Action != ui.ActionApplyEndpointChange || intent.Execute == nil {
+		t.Fatalf("intent=%#v msg=%T", intent, msg)
+	}
+	if intent.Execute == nil {
+		t.Fatal("missing execute")
+	}
+	result := intent.Execute().(portsApplyResultMsg)
+	if result.err != nil || client.updateOnboardingCalls != 1 || client.lastOnboarding.Complete != nil {
+		t.Fatalf("calls=%d complete=%v err=%v", client.updateOnboardingCalls, client.lastOnboarding.Complete, result.err)
+	}
+	if client.lastOnboarding.ControllerAddr == nil || *client.lastOnboarding.ControllerAddr != "127.0.0.1:19090" {
+		t.Fatalf("request=%#v", client.lastOnboarding)
+	}
+}
+
+func TestSystemPortEditBlockedWhenDisconnected(t *testing.T) {
+	model := portsModel(t)
+	model.SetMutationsEnabled(false)
+	model.focusID = rowMixed
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if model.editID != "" || cmd != nil {
+		t.Fatalf("editID=%q cmd=%v", model.editID, cmd)
 	}
 }
