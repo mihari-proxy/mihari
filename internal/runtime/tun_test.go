@@ -287,6 +287,42 @@ func TestEnableTunFailsWhenConfigsUnreadableAfterApply(t *testing.T) {
 	}
 }
 
+func TestTunStatusLastErrorWhenDesiredOnLiveOff(t *testing.T) {
+	live := false
+	controller := &fakeController{configs: map[string]any{
+		"tun": map[string]any{"enable": live, "stack": "gVisor"},
+	}}
+	manager := newTunManager(t, controller, defaultTunSettings(map[string]any{
+		"enable": true, "stack": "gVisor",
+	}))
+	status, err := manager.TunStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.LastError != "live TUN is off" {
+		t.Fatalf("LastError=%q", status.LastError)
+	}
+}
+
+func TestEnableTunFailurePersistsLastErrorOnStatus(t *testing.T) {
+	controller := &fakeController{
+		configs:      map[string]any{"tun": map[string]any{"enable": false}},
+		patchConfigs: func(context.Context, map[string]any) error { return nil },
+	}
+	manager := newTunManager(t, controller, defaultTunSettings(nil))
+	_, _ = manager.EnableTun(context.Background(), Operation{ID: "tun-err", Source: "test"}, false)
+	status, err := manager.TunStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.LastError != "TUN did not become live after apply" {
+		t.Fatalf("LastError=%q", status.LastError)
+	}
+	if status.DesiredEnable {
+		t.Fatal("desired should stay off after failed enable")
+	}
+}
+
 func TestEnableTunMapsPermissionErrors(t *testing.T) {
 	controller := &fakeController{
 		patchConfigs: func(context.Context, map[string]any) error {
