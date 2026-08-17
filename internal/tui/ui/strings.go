@@ -197,6 +197,15 @@ const (
 	TUNLabel                = "TUN"
 	SystemProxyLabel        = "System proxy"
 
+	AboutSectionTitle      = "About"
+	AboutNameLabel         = "Mihari"
+	AboutDescriptionValue  = "A local manager for mihomo"
+	AboutDescriptionDetail = "Mihari is a standalone local manager for mihomo. CLI, TUI, and browser panels share one daemon control plane."
+	AboutGitHubLabel       = "GitHub"
+	AboutGitHubDisplay     = "github.com/mihari-proxy/mihari"
+	AboutGitHubURL         = "https://github.com/mihari-proxy/mihari"
+	AboutGitHubOpenFailed  = "Could not open GitHub"
+
 	// Row-local short-verb labels for the Network action rows. The status row
 	// above (and the Network section) already names the object, so the action
 	// row only carries the verb, mirroring coreActionLabel's Install/Update.

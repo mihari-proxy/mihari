@@ -2230,3 +2230,171 @@ func TestSystemCoreChannelFailureKeepsSnapshotChannel(t *testing.T) {
 		t.Fatalf("must not show Prerelease-Alpha:\n%s", view)
 	}
 }
+
+func TestSystemAboutRendersDescriptionAndGitHub(t *testing.T) {
+	model := New(&fakeClient{}, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{}, protocol.CoreStatus{})
+	view := model.View()
+	for _, want := range []string{ui.AboutSectionTitle, ui.AboutDescriptionValue, ui.AboutGitHubDisplay} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %q in view=%s", want, view)
+		}
+	}
+	if strings.Contains(view, ui.AboutGitHubURL) {
+		t.Fatalf("view must show host without scheme: %s", view)
+	}
+}
+
+func TestSystemAboutRowsFollowNetworkAndKeepDaemonFocus(t *testing.T) {
+	model := New(&fakeClient{}, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{}, protocol.CoreStatus{})
+	if model.focusID != rowDaemon {
+		t.Fatalf("default focus=%q", model.focusID)
+	}
+	rows := model.rows()
+	if len(rows) < 3 {
+		t.Fatalf("too few rows: %d", len(rows))
+	}
+	if rows[len(rows)-2].id != rowAbout || rows[len(rows)-2].section != ui.AboutSectionTitle {
+		t.Fatalf("expected About row before last, got %#v", rows[len(rows)-2])
+	}
+	if rows[len(rows)-1].id != rowGitHub || rows[len(rows)-1].section != ui.AboutSectionTitle {
+		t.Fatalf("expected GitHub last, got %#v", rows[len(rows)-1])
+	}
+	for i, item := range rows {
+		if item.section == ui.NetworkSectionTitle && i >= len(rows)-2 {
+			t.Fatalf("Network row after About: index=%d id=%s", i, item.id)
+		}
+	}
+}
+
+func TestSystemAboutDownFromNetworkReachesRows(t *testing.T) {
+	model := New(&fakeClient{}, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{}, protocol.CoreStatus{})
+	rows := model.rows()
+	if len(rows) < 3 {
+		t.Fatalf("too few rows: %d", len(rows))
+	}
+	model.focusID = rows[len(rows)-3].id
+	model = updateKey(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+	if model.focusID != rowAbout {
+		t.Fatalf("after down focus=%q", model.focusID)
+	}
+	model = updateKey(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+	if model.focusID != rowGitHub {
+		t.Fatalf("second down focus=%q", model.focusID)
+	}
+}
+
+func TestSystemAboutEnterShowsDescriptionDetail(t *testing.T) {
+	model := New(&fakeClient{}, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{}, protocol.CoreStatus{})
+	model.focusID = rowAbout
+	model = updateKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	view := model.View()
+	if !strings.Contains(view, "Mihari details") || !strings.Contains(view, ui.AboutDescriptionDetail) {
+		t.Fatalf("detail view=%s", view)
+	}
+	model = updateKey(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	if model.detail != nil {
+		t.Fatal("escape should close detail")
+	}
+}
+
+func TestSystemAboutGitHubEnterOpensRepository(t *testing.T) {
+	model := New(&fakeClient{}, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{}, protocol.CoreStatus{})
+	var opened []string
+	model.SetOpenBrowser(func(url string) error {
+		opened = append(opened, url)
+		return nil
+	})
+	model.focusID = rowGitHub
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			updated, _ = model.Update(msg)
+			model = updated.(*Model)
+		}
+	}
+	if len(opened) != 1 || opened[0] != ui.AboutGitHubURL {
+		t.Fatalf("opened=%v", opened)
+	}
+	view := model.View()
+	if strings.Contains(view, ui.DoneLabel) || strings.Contains(view, ui.FailedLabel) {
+		t.Fatalf("successful open must stay silent:\n%s", view)
+	}
+}
+
+func TestSystemAboutGitHubOpenFailureShowsError(t *testing.T) {
+	model := New(&fakeClient{}, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{}, protocol.CoreStatus{})
+	model.SetOpenBrowser(func(string) error { return errors.New("browser missing") })
+	model.focusID = rowGitHub
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			updated, _ = model.Update(msg)
+			model = updated.(*Model)
+		}
+	}
+	if model.lastError != ui.AboutGitHubOpenFailed {
+		t.Fatalf("lastError=%q", model.lastError)
+	}
+	if !strings.Contains(model.View(), ui.AboutGitHubOpenFailed) {
+		t.Fatalf("missing error in view=%s", model.View())
+	}
+	if strings.Contains(model.View(), "browser missing") {
+		t.Fatalf("must not leak raw error: %s", model.View())
+	}
+}
+
+func TestSystemAboutWorksWhileDisconnectedAndUnelevated(t *testing.T) {
+	withElevation(t, false)
+	model := New(&fakeClient{}, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(false)
+	view := model.View()
+	if !strings.Contains(view, ui.AboutSectionTitle) || !strings.Contains(view, ui.AboutGitHubDisplay) {
+		t.Fatalf("about missing while disconnected: %s", view)
+	}
+	var opened []string
+	model.SetOpenBrowser(func(url string) error {
+		opened = append(opened, url)
+		return nil
+	})
+	model.focusID = rowGitHub
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			updated, _ = model.Update(msg)
+			model = updated.(*Model)
+		}
+	}
+	if len(opened) != 1 || opened[0] != ui.AboutGitHubURL {
+		t.Fatalf("opened=%v", opened)
+	}
+}
+
+func TestSystemAboutGitHubEnterIgnoredWhilePending(t *testing.T) {
+	model := New(&fakeClient{}, func() string { return "system-op" })
+	model.SetSnapshot(protocol.Status{}, protocol.CoreStatus{})
+	calls := 0
+	model.SetOpenBrowser(func(string) error {
+		calls++
+		return nil
+	})
+	model.pending = true
+	model.focusID = rowGitHub
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if cmd != nil {
+		t.Fatalf("pending enter should not return cmd: %#v", cmd())
+	}
+	if calls != 0 {
+		t.Fatalf("browser calls=%d", calls)
+	}
+}
