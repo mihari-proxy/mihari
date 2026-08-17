@@ -315,7 +315,7 @@ func TestEnableTunForceOverridesConflict(t *testing.T) {
 func TestEnableTunIgnoresOtherMihomoWithoutTun(t *testing.T) {
 	controller := &fakeController{configs: map[string]any{}}
 	manager := newTunManagerWithDetect(t, controller, defaultTunSettings(nil), &tundetect.FakeBackend{
-		Detection: tundetect.Detection{MihomoProcesses: []string{"mihomo (123)", "mihomo (456)"}},
+		Detection: tundetect.Detection{MihomoProcesses: []tundetect.Process{{Name: "mihomo", PID: 123}, {Name: "mihomo", PID: 456}}},
 	})
 
 	status, err := manager.EnableTun(context.Background(), Operation{ID: "tun-mihomo", Source: "test"}, false)

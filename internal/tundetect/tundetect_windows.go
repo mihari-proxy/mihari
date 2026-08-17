@@ -4,7 +4,6 @@ package tundetect
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"unsafe"
 
@@ -62,7 +61,7 @@ func isWintun(desc, friendly string) bool {
 
 // enumerateMihomoProcesses lists running processes whose executable name
 // contains "mihomo" (case-insensitive).
-func enumerateMihomoProcesses() ([]string, error) {
+func enumerateMihomoProcesses() ([]Process, error) {
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
 		return nil, err
@@ -73,11 +72,11 @@ func enumerateMihomoProcesses() ([]string, error) {
 	if err := windows.Process32First(snapshot, &entry); err != nil {
 		return nil, err
 	}
-	var procs []string
+	var procs []Process
 	for {
 		exe := windows.UTF16ToString(entry.ExeFile[:])
 		if strings.Contains(strings.ToLower(exe), "mihomo") {
-			procs = append(procs, fmt.Sprintf("%s (%d)", exe, entry.ProcessID))
+			procs = append(procs, Process{Name: exe, PID: int(entry.ProcessID)})
 		}
 		if err := windows.Process32Next(snapshot, &entry); err != nil {
 			if err == windows.ERROR_NO_MORE_FILES {

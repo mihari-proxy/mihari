@@ -295,7 +295,7 @@ func (m *Manager) detectTunConflict(ctx context.Context) *protocol.TunConflict {
 	if err != nil {
 		return nil
 	}
-	return tundetect.Classify(detection, m.selfTunLiveActive(ctx))
+	return tundetect.Classify(detection, tundetect.Self{TunActive: m.selfTunLiveActive(ctx)})
 }
 
 // selfTunLiveActive reports whether mihomo's live tun.enable is true, so Classify
