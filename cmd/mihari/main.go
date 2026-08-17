@@ -72,7 +72,7 @@ func main() {
 	// When SCM launches ImagePath `mihari.exe daemon`, the process is non-interactive.
 	// Manager.Run registers with the service control manager; a plain daemon body never
 	// calls StartServiceCtrlDispatcher and Windows fails the start with a 30s timeout.
-	serviceManager = service.New(service.Options{Run: runDaemonBody})
+	serviceManager = service.New(service.Options{Run: runDaemonBody, Ready: ready})
 	runDaemon := func(ctx context.Context) error {
 		if !service.IsInteractive() {
 			return serviceManager.Run()
