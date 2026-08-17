@@ -44,6 +44,8 @@ const (
 	rowSystemProxyAction = "system-proxy-action"
 	rowTUN               = "tun"
 	rowTUNAction         = "tun-action"
+	rowAbout             = "about"
+	rowGitHub            = "github"
 )
 
 // Panel IDs mirrored from internal/panel/catalog.go; local constants keep the
@@ -808,6 +810,8 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, m.confirmSystemProxyToggle()
 		case rowTUNAction:
 			return m, m.confirmTunToggle()
+		case rowGitHub:
+			return m, m.openGitHub()
 		default:
 			selected := rows[index]
 			m.detail = &selected
@@ -991,7 +995,24 @@ func (m *Model) rows() []row {
 	)
 	rows = append(rows, m.serviceRows()...)
 	rows = append(rows, m.networkRows()...)
+	rows = append(rows, m.aboutRows()...)
 	return rows
+}
+
+func (m *Model) aboutRows() []row {
+	section := ui.AboutSectionTitle
+	return []row{
+		{
+			id: rowAbout, section: section,
+			label: ui.AboutNameLabel, value: ui.AboutDescriptionValue,
+			detail: ui.AboutDescriptionDetail,
+		},
+		{
+			id: rowGitHub, section: section,
+			label: ui.AboutGitHubLabel, value: ui.AboutGitHubDisplay,
+			detail: ui.AboutGitHubDisplay,
+		},
+	}
 }
 
 func (m *Model) mihariUpdateRow() row {
@@ -1694,6 +1715,19 @@ func (m *Model) openPanelBrowser(panelID string) tea.Cmd {
 			},
 		}
 	}
+}
+
+func (m *Model) openGitHub() tea.Cmd {
+	openBrowser := m.openBrowser
+	if openBrowser == nil {
+		openBrowser = platform.OpenBrowser
+	}
+	if err := openBrowser(ui.AboutGitHubURL); err != nil {
+		m.lastError = ui.AboutGitHubOpenFailed
+		return nil
+	}
+	m.lastError = ""
+	return nil
 }
 
 func (m *Model) rowIndex(id string) int {
