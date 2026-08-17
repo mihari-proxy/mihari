@@ -355,15 +355,19 @@ func TestDisableTunNotGatedByConflict(t *testing.T) {
 }
 
 // TestEnableTunSubtractsSelfWhenLiveActive 验证决策 3 的端到端：mihomo 自身已开 TUN
-// （live tun.enable=true）且检测到的唯一 TUN 网卡就是自身那一个时，Classify 扣除自身后
-// 无其他 TUN → enable 不被门控。覆盖 selfTunLiveActive 从 live configs 读取的链路。
+// （live tun.enable=true）且检测到的唯一 TUN 网卡就是自身那一个时，Classify 按 live
+// device 与 core PID 扣除自身后无其他 TUN → enable 不被门控。覆盖 selfFromLive。
 func TestEnableTunSubtractsSelfWhenLiveActive(t *testing.T) {
 	controller := &fakeController{configs: map[string]any{
-		"tun": map[string]any{"enable": true, "stack": "gVisor"},
+		"tun": map[string]any{"enable": true, "device": "Wintun0", "stack": "gVisor"},
 	}}
 	manager := newTunManagerWithDetect(t, controller, defaultTunSettings(nil), &tundetect.FakeBackend{
-		Detection: tundetect.Detection{TunInterfaces: []string{"Wintun0"}},
+		Detection: tundetect.Detection{
+			TunInterfaces:   []string{"Wintun0"},
+			MihomoProcesses: []tundetect.Process{{Name: "mihomo", PID: 13400}},
+		},
 	})
+	manager.store.Store(state.Snapshot{Health: "ok", Core: state.CoreState{PID: 13400}})
 
 	status, err := manager.EnableTun(context.Background(), Operation{ID: "tun-self", Source: "test"}, false)
 	if err != nil {
@@ -373,6 +377,32 @@ func TestEnableTunSubtractsSelfWhenLiveActive(t *testing.T) {
 		t.Fatalf("status=%#v", status)
 	}
 	if controller.patchCalls != 1 {
+		t.Fatalf("patchCalls=%d", controller.patchCalls)
+	}
+}
+
+// TestEnableTunKeepsForeignAdapterWhenLiveDeviceDiffers 验证按 live device 名扣除自身：
+// Sparkle 网卡排在前面时，盲删 [0] 会删错并放过 Enable；按名扣除 Meta 后必须留下
+// mihomo (Meta Tunnel) 并返回 CodeTunConflict。
+func TestEnableTunKeepsForeignAdapterWhenLiveDeviceDiffers(t *testing.T) {
+	controller := &fakeController{configs: map[string]any{
+		"tun": map[string]any{"enable": true, "device": "Meta", "stack": "gVisor"},
+	}}
+	manager := newTunManagerWithDetect(t, controller, defaultTunSettings(map[string]any{
+		"enable": true, "stack": "gVisor",
+	}), &tundetect.FakeBackend{
+		Detection: tundetect.Detection{TunInterfaces: []string{"mihomo (Meta Tunnel)", "Meta"}},
+	})
+	_, err := manager.EnableTun(context.Background(), Operation{ID: "tun-foreign", Source: "test"}, false)
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeTunConflict {
+		t.Fatalf("err=%v", err)
+	}
+	names, _ := apiError.Details["other_tun_interfaces"].([]string)
+	if len(names) != 1 || names[0] != "mihomo (Meta Tunnel)" {
+		t.Fatalf("details=%#v", apiError.Details)
+	}
+	if controller.patchCalls != 0 {
 		t.Fatalf("patchCalls=%d", controller.patchCalls)
 	}
 }

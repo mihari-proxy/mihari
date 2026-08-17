@@ -295,19 +295,31 @@ func (m *Manager) detectTunConflict(ctx context.Context) *protocol.TunConflict {
 	if err != nil {
 		return nil
 	}
-	return tundetect.Classify(detection, tundetect.Self{TunActive: m.selfTunLiveActive(ctx)})
+	return tundetect.Classify(detection, m.selfFromLive(ctx))
 }
 
-// selfTunLiveActive reports whether mihomo's live tun.enable is true, so Classify
-// subtracts this daemon's own TUN adapter from the detected set.
-func (m *Manager) selfTunLiveActive(ctx context.Context) bool {
-	if m.controller == nil {
-		return false
+// selfFromLive builds the Classify identity from the running core PID and live
+// tun.enable / tun.device. Detection failures stay best-effort: a missing
+// controller or unreadable configs leave TunActive false so no adapter is
+// subtracted.
+func (m *Manager) selfFromLive(ctx context.Context) tundetect.Self {
+	self := tundetect.Self{CorePID: m.store.Load().Core.PID}
+	if m.controller == nil || ctx.Err() != nil {
+		return self
 	}
 	configs, err := m.controller.Configs(ctx)
 	if err != nil {
-		return false
+		return self
 	}
-	live, ok := liveTunEnable(configs)
-	return ok && live
+	if live, ok := liveTunEnable(configs); ok && live {
+		self.TunActive = true
+		self.TunName = liveTunDevice(configs)
+	}
+	return self
+}
+
+func liveTunDevice(configs map[string]any) string {
+	raw, _ := configs["tun"].(map[string]any)
+	device, _ := raw["device"].(string)
+	return strings.TrimSpace(device)
 }
