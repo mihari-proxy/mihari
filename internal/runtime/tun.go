@@ -146,11 +146,11 @@ func (m *Manager) applyTun(ctx context.Context, nextTun map[string]any) error {
 		}
 	}
 
-	if regenerated || patched {
-		return nil
-	}
 	if patchErr != nil {
 		return patchErr
+	}
+	if regenerated || patched {
+		return nil
 	}
 	if regenerateErr != nil {
 		return regenerateErr

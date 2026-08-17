@@ -11,6 +11,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/subscription"
 	"github.com/mihari-proxy/mihari/internal/tundetect"
 )
 
@@ -188,6 +189,48 @@ func TestEnableTunRollsBackSettingsWhenApplyFails(t *testing.T) {
 	}
 	if len(loaded.Tun) != 0 {
 		t.Fatalf("persisted tun after rollback=%#v", loaded.Tun)
+	}
+}
+
+func TestApplyTunReturnsPatchErrorEvenIfReloadSucceeded(t *testing.T) {
+	root := t.TempDir()
+	controller := &fakeController{
+		configs: map[string]any{},
+		patchConfigs: func(context.Context, map[string]any) error {
+			return protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "patch tun rejected"}
+		},
+	}
+	subs, err := subscription.Open(subscription.ServiceOptions{
+		CatalogPath: filepath.Join(root, "catalog.yaml"),
+		CacheDir:    filepath.Join(root, "cache"),
+		ProxyAddr:   "127.0.0.1:9190",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := defaultTunSettings(nil)
+	settingsPath := filepath.Join(root, "settings.yaml")
+	if err := config.Save(settingsPath, settings); err != nil {
+		t.Fatal(err)
+	}
+	manager := newTestManager(Options{
+		Controller:    controller,
+		SettingsPath:  settingsPath,
+		Settings:      settings,
+		Subscriptions: subs,
+		RuntimeConfig: filepath.Join(root, "runtime", "config.yaml"),
+		StagingDir:    filepath.Join(root, "staging"),
+	})
+	_, err = manager.EnableTun(context.Background(), Operation{ID: "tun-patch-fail", Source: "test"}, false)
+	if err == nil {
+		t.Fatal("expected patch error")
+	}
+	loaded, loadErr := config.Load(settingsPath)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if tunDesiredEnable(loaded.Tun) {
+		t.Fatalf("desired must roll back, tun=%#v", loaded.Tun)
 	}
 }
 
