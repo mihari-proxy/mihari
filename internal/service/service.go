@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	kardservice "github.com/kardianos/service"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -51,6 +52,11 @@ type Options struct {
 	Arguments []string
 	// Run is required only for Run().
 	Run RunFunc
+	// Ready is closed by the daemon body when the control plane is listening.
+	// When non-nil, program.Start waits for it (or run exit / timeout) before returning.
+	Ready <-chan struct{}
+	// StartTimeout bounds how long Start waits for Ready. Zero means 15s.
+	StartTimeout time.Duration
 	// NewController builds a Controller; tests replace it.
 	NewController func(run RunFunc, executable string, arguments []string) (Controller, error)
 }
@@ -67,7 +73,11 @@ func New(opts Options) *Manager {
 		opts.Arguments = []string{"daemon"}
 	}
 	if opts.NewController == nil {
-		opts.NewController = newKardianosController
+		ready := opts.Ready
+		startTimeout := opts.StartTimeout
+		opts.NewController = func(run RunFunc, executable string, arguments []string) (Controller, error) {
+			return newKardianosController(run, executable, arguments, ready, startTimeout)
+		}
 	}
 	return &Manager{opts: opts, stageBinary: platform.StageInstalledBinary}
 }
@@ -158,7 +168,9 @@ func (m *Manager) Install() error {
 	}
 	newController := m.opts.NewController
 	if newController == nil {
-		newController = newKardianosController
+		newController = func(run RunFunc, executable string, arguments []string) (Controller, error) {
+			return newKardianosController(run, executable, arguments, nil, 0)
+		}
 	}
 	args := m.opts.Arguments
 	if len(args) == 0 {
@@ -343,10 +355,13 @@ func isNotInstalledError(err error) bool {
 }
 
 type program struct {
-	run    RunFunc
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
+	run          RunFunc
+	ready        <-chan struct{}
+	startTimeout time.Duration
+	runErr       error
+	ctx          context.Context
+	cancel       context.CancelFunc
+	done         chan struct{}
 }
 
 func (p *program) Start(s kardservice.Service) error {
@@ -356,14 +371,34 @@ func (p *program) Start(s kardservice.Service) error {
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	p.done = make(chan struct{})
 	go func() {
-		defer close(p.done)
 		if err := p.run(p.ctx); err != nil {
-			if logger, lerr := s.Logger(nil); lerr == nil {
-				_ = logger.Error(err)
+			p.runErr = err
+			if s != nil {
+				if logger, lerr := s.Logger(nil); lerr == nil {
+					_ = logger.Error(err)
+				}
 			}
 		}
+		close(p.done)
 	}()
-	return nil
+	if p.ready == nil {
+		return nil
+	}
+	timeout := p.startTimeout
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	select {
+	case <-p.ready:
+		return nil
+	case <-p.done:
+		return p.runErr
+	case <-time.After(timeout):
+		if p.cancel != nil {
+			p.cancel()
+		}
+		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "service did not become ready"}
+	}
 }
 
 func (p *program) Stop(kardservice.Service) error {
@@ -380,7 +415,7 @@ type kardianosController struct {
 	svc kardservice.Service
 }
 
-func newKardianosController(run RunFunc, executable string, arguments []string) (Controller, error) {
+func newKardianosController(run RunFunc, executable string, arguments []string, ready <-chan struct{}, startTimeout time.Duration) (Controller, error) {
 	cfg := &kardservice.Config{
 		Name:        serviceName,
 		DisplayName: serviceDisplayName,
@@ -391,7 +426,7 @@ func newKardianosController(run RunFunc, executable string, arguments []string) 
 		// fall back to systemprofile or /root home and split state from the desktop client.
 		EnvVars: installEnvVars(),
 	}
-	prog := &program{run: run}
+	prog := &program{run: run, ready: ready, startTimeout: startTimeout}
 	svc, err := kardservice.New(prog, cfg)
 	if err != nil {
 		return nil, protocol.APIError{Code: protocol.CodeInternal, Message: "create service definition"}

@@ -37,6 +37,34 @@ func TestStatus_OldJSONStillDecodes(t *testing.T) {
 	}
 }
 
+func TestStatus_LastErrorAdditiveRoundTrip(t *testing.T) {
+	want := Status{Schema: "mihari/v1", Health: "degraded", LastError: "managed port is unavailable"}
+	raw, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"last_error":"managed port is unavailable"`) {
+		t.Fatalf("raw=%s", raw)
+	}
+	var got Status
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Health != want.Health || got.LastError != want.LastError {
+		t.Fatalf("got=%#v", got)
+	}
+}
+
+func TestStatus_LastErrorOmittedWhenEmpty(t *testing.T) {
+	raw, err := json.Marshal(Status{Schema: "mihari/v1", Health: "ok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "last_error") {
+		t.Fatalf("raw=%s", raw)
+	}
+}
+
 func TestTypedStreamPayloadsUseMihomoFieldNames(t *testing.T) {
 	tests := []struct {
 		value any

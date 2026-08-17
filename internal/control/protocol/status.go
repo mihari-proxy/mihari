@@ -24,6 +24,7 @@ type Status struct {
 	DaemonVersion   string        `json:"daemon_version"`
 	Revision        uint64        `json:"revision"`
 	Health          string        `json:"health"`
+	LastError       string        `json:"last_error,omitempty"`
 	StartedAt       time.Time     `json:"started_at"`
 	Config          *ConfigStatus `json:"config,omitempty"`
 	Capabilities    []string      `json:"capabilities,omitempty"`

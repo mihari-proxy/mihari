@@ -62,6 +62,27 @@ func TestStatusHumanOutput(t *testing.T) {
 	}
 }
 
+func TestStatusHumanOutputIncludesLastError(t *testing.T) {
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	code := Execute(context.Background(), []string{"status"}, stdout, stderr, Dependencies{
+		StatusClient: fakeStatusClient{status: protocol.Status{
+			DaemonVersion: "v0.1.0",
+			Revision:      4,
+			Health:        "degraded",
+			LastError:     "managed port is unavailable",
+			StartedAt:     time.Unix(100, 0).UTC(),
+		}},
+	})
+	if code != ExitOK || stderr.Len() != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	want := "Daemon: v0.1.0\nHealth: degraded\nError: managed port is unavailable\nRevision: 4\nStarted: 1970-01-01T00:01:40Z\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout=%q want=%q", stdout.String(), want)
+	}
+}
+
 func TestDaemonUnavailableExitCodeAndJSONError(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
