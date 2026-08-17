@@ -69,6 +69,7 @@ func (s *Server) status(writer http.ResponseWriter, request *http.Request) {
 		DaemonVersion:   snapshot.Version,
 		Revision:        snapshot.Revision,
 		Health:          snapshot.Health,
+		LastError:       snapshot.LastError,
 		StartedAt:       snapshot.StartedAt,
 	}
 	if s.runtime != nil {

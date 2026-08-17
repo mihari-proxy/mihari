@@ -11,6 +11,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/buildinfo"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/service"
+	"github.com/mihari-proxy/mihari/internal/state"
 	connectionspage "github.com/mihari-proxy/mihari/internal/tui/pages/connections"
 	logspage "github.com/mihari-proxy/mihari/internal/tui/pages/logs"
 	"github.com/mihari-proxy/mihari/internal/tui/pages/overview"
@@ -64,6 +65,8 @@ type Model struct {
 	serviceCtrl   systempage.ServiceController
 	serviceStatus service.StatusKind
 	serviceLoaded bool
+	// Sanitized reconnect reason shown after the stale footer label.
+	daemonHint string
 	// Daemon network features for Overview strip (via control client when live).
 	pageCtx       context.Context
 	networkClient networkStatusClient
@@ -296,6 +299,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			model.serviceStatus = typed.status
 		}
+		model.refreshDaemonHintForService()
 		model.syncOverview()
 		// Keep System page status line in sync with the root badge source of truth.
 		model.syncSystemServiceStatus()
@@ -511,6 +515,9 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 	switch event.Kind {
 	case session.EventStatus:
 		model.status = event.Status
+		if model.connected && event.Status.Health != "degraded" {
+			model.daemonHint = ""
+		}
 		if page, ok := model.pages[ui.PageWebGUI].(*webguipage.Model); ok {
 			page.SetCapabilities(event.Status.Capabilities)
 		}
@@ -578,6 +585,9 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		model.mutationsEnabled = true
 		model.setLogsStale(false)
 		model.globalState = ui.StateReconnected
+		if model.status.Health != "degraded" {
+			model.daemonHint = ""
+		}
 		command = tea.Batch(command, model.loadNetworkStatus())
 	case session.EventReconnecting:
 		model.connected = false
@@ -585,6 +595,10 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		model.reconnecting = true
 		model.mutationsEnabled = false
 		model.globalState = ui.StateStale
+		model.daemonHint = sanitizeDaemonDialError(event.Err)
+		if model.serviceLoaded && model.serviceStatus == service.StatusRunning && event.Err != nil {
+			model.daemonHint = joinHints(model.daemonHint, ui.ServiceRunningUnreachable)
+		}
 		model.setLogsStale(true)
 		model.systemProxyOK = false
 		model.tunOK = false
@@ -983,11 +997,70 @@ func (model Model) footerGlobalSegment() string {
 		}
 		return ui.SpinnerLabel(model.now, label)
 	}
+	if model.connected && model.status.Health == state.HealthDegraded && model.status.LastError != "" {
+		return ui.DaemonDegradedLabel + " — " + model.status.LastError
+	}
 	label := ui.GlobalStateLabel(model.globalState)
 	if model.globalState == ui.StateStale && !model.lastObservedAt.IsZero() {
 		label += " · last observed " + model.lastObservedAt.Local().Format("15:04")
 	}
+	if model.globalState == ui.StateStale && model.daemonHint != "" {
+		label += " — " + model.daemonHint
+	}
 	return label
+}
+
+func sanitizeDaemonDialError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "cannot find the file"),
+		strings.Contains(msg, "no such file"),
+		strings.Contains(msg, "connect: connection refused"),
+		strings.Contains(msg, "pipe") && strings.Contains(msg, "not"):
+		return ui.DaemonNotListening
+	case strings.Contains(msg, "access is denied"),
+		strings.Contains(msg, "permission denied"):
+		return ui.DaemonConnectionDenied
+	default:
+		return ui.DaemonConnectionFailed
+	}
+}
+
+func joinHints(parts ...string) string {
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return strings.Join(out, " — ")
+}
+
+func stripServiceRunningUnreachable(hint string) string {
+	hint = strings.ReplaceAll(hint, " — "+ui.ServiceRunningUnreachable, "")
+	hint = strings.ReplaceAll(hint, ui.ServiceRunningUnreachable+" — ", "")
+	if hint == ui.ServiceRunningUnreachable {
+		return ""
+	}
+	return hint
+}
+
+// refreshDaemonHintForService appends or drops the running-but-unreachable
+// suffix after a late service Status() poll. EventReconnecting may have
+// snapshotted serviceLoaded=false on first open.
+func (model *Model) refreshDaemonHintForService() {
+	if model.daemonHint == "" {
+		return
+	}
+	base := stripServiceRunningUnreachable(model.daemonHint)
+	if model.serviceStatus == service.StatusRunning {
+		model.daemonHint = joinHints(base, ui.ServiceRunningUnreachable)
+		return
+	}
+	model.daemonHint = base
 }
 
 func (model Model) View() tea.View {

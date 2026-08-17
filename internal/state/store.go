@@ -5,11 +5,17 @@ import (
 	"time"
 )
 
+const (
+	HealthOK       = "ok"
+	HealthDegraded = "degraded"
+)
+
 type Snapshot struct {
 	Revision           uint64
 	Version            string
 	StartedAt          time.Time
 	Health             string
+	LastError          string
 	Core               CoreState
 	Config             ConfigState
 	ActiveSubscription string

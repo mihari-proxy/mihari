@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/platform"
@@ -591,6 +592,47 @@ func TestProgramStartStopCancelsRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-started
+	if err := p.Stop(nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProgramStartReturnsRunErrorBeforeReady(t *testing.T) {
+	want := errors.New("listen failed")
+	ready := make(chan struct{})
+	p := &program{run: func(context.Context) error { return want }, ready: ready, startTimeout: time.Second}
+	if err := p.Start(nil); !errors.Is(err, want) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestProgramStartSucceedsAfterReady(t *testing.T) {
+	ready := make(chan struct{})
+	started := make(chan struct{})
+	p := &program{
+		run: func(ctx context.Context) error {
+			close(ready)
+			close(started)
+			<-ctx.Done()
+			return nil
+		},
+		ready:        ready,
+		startTimeout: time.Second,
+	}
+	if err := p.Start(nil); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if err := p.Stop(nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProgramStartWithoutReadyReturnsImmediately(t *testing.T) {
+	p := &program{run: func(context.Context) error { return errors.New("later") }}
+	if err := p.Start(nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := p.Stop(nil); err != nil {
 		t.Fatal(err)
 	}

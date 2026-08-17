@@ -38,6 +38,25 @@ func TestRunStopsWhenContextIsCancelled(t *testing.T) {
 	}
 }
 
+func TestRunSignalsReadyWithoutRuntime(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Options{Endpoint: transporttest.Endpoint(t), Token: "token", Version: "dev", Ready: ready})
+	}()
+	select {
+	case <-ready:
+	case <-time.After(3 * time.Second):
+		t.Fatal("daemon did not become ready")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunStartsAndStopsInjectedRuntime(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ready := make(chan struct{})
