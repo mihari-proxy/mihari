@@ -104,6 +104,30 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 		return protocol.TunStatus{}, mapped
 	}
 
+	if enable {
+		live, ok := false, false
+		if m.controller != nil && ctx.Err() == nil {
+			if configs, cfgErr := m.controller.Configs(ctx); cfgErr == nil {
+				live, ok = liveTunEnable(configs)
+			}
+		}
+		if !(ok && live) {
+			m.settingsMu.Lock()
+			m.settings.Tun = previousTun
+			_ = m.persistSettings()
+			m.settingsMu.Unlock()
+			if len(previousTun) > 0 {
+				if applyBackErr := m.applyTun(ctx, previousTun); applyBackErr != nil {
+					_ = applyBackErr // best-effort restore; first failure is still returned
+				}
+			}
+			return protocol.TunStatus{}, protocol.APIError{
+				Code:    protocol.CodeUpstreamFailure,
+				Message: "TUN did not become live after apply",
+			}
+		}
+	}
+
 	_, err := m.coordinator.Do(ctx, state.CommandMeta{
 		ID: op.ID, Source: op.Source, IfRevision: op.IfRevision,
 	}, func(snapshot state.Snapshot) (state.Snapshot, error) {
@@ -138,7 +162,7 @@ func (m *Manager) applyTun(ctx context.Context, nextTun map[string]any) error {
 	}
 
 	patched := false
-	if m.controller != nil {
+	if m.controller != nil && nextTun != nil {
 		if err := m.controller.PatchConfigs(ctx, map[string]any{"tun": nextTun}); err != nil {
 			patchErr = err
 		} else {

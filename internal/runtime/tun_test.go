@@ -234,6 +234,59 @@ func TestApplyTunReturnsPatchErrorEvenIfReloadSucceeded(t *testing.T) {
 	}
 }
 
+func TestEnableTunRollsBackWhenLiveStaysOff(t *testing.T) {
+	controller := &fakeController{
+		configs: map[string]any{"tun": map[string]any{"enable": false, "stack": "gVisor"}},
+		patchConfigs: func(context.Context, map[string]any) error {
+			return nil
+		},
+	}
+	manager := newTunManager(t, controller, defaultTunSettings(nil))
+	_, err := manager.EnableTun(context.Background(), Operation{ID: "tun-live-off", Source: "test"}, false)
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeUpstreamFailure {
+		t.Fatalf("err=%v", err)
+	}
+	if apiError.Message != "TUN did not become live after apply" {
+		t.Fatalf("message=%q", apiError.Message)
+	}
+	loaded, err := config.Load(manager.settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tunDesiredEnable(loaded.Tun) {
+		t.Fatalf("desired rolled back? tun=%#v", loaded.Tun)
+	}
+}
+
+func TestEnableTunForceStillRequiresLive(t *testing.T) {
+	controller := &fakeController{
+		configs:      map[string]any{"tun": map[string]any{"enable": false}},
+		patchConfigs: func(context.Context, map[string]any) error { return nil },
+	}
+	manager := newTunManagerWithDetect(t, controller, defaultTunSettings(nil), &tundetect.FakeBackend{
+		Detection: tundetect.Detection{TunInterfaces: []string{"mihomo (Meta Tunnel)"}},
+	})
+	_, err := manager.EnableTun(context.Background(), Operation{ID: "tun-force-live", Source: "test"}, true)
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeUpstreamFailure {
+		t.Fatalf("force must not skip live check, err=%v", err)
+	}
+}
+
+func TestEnableTunFailsWhenConfigsUnreadableAfterApply(t *testing.T) {
+	controller := &fakeController{
+		configs:    map[string]any{},
+		configsErr: protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo controller is unavailable"},
+	}
+	// patchConfigs 默认会写 configs，但随后 Configs 返回 err
+	manager := newTunManager(t, controller, defaultTunSettings(nil))
+	_, err := manager.EnableTun(context.Background(), Operation{ID: "tun-unread", Source: "test"}, false)
+	if err == nil {
+		t.Fatal("unread live must not count as success")
+	}
+}
+
 func TestEnableTunMapsPermissionErrors(t *testing.T) {
 	controller := &fakeController{
 		patchConfigs: func(context.Context, map[string]any) error {
