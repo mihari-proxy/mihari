@@ -95,6 +95,29 @@ func TestAuthenticatedUnknownRouteReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestStatusIncludesSnapshotLastError(t *testing.T) {
+	server := New(Options{
+		Token: "test-token",
+		Store: state.NewStore(state.Snapshot{
+			Version: "dev", Health: state.HealthDegraded, LastError: "managed port is unavailable",
+		}),
+	})
+	request := httptest.NewRequest(http.MethodGet, "/v1/status", nil)
+	request.Header.Set("Authorization", "Bearer test-token")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var got protocol.Status
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Health != state.HealthDegraded || got.LastError != "managed port is unavailable" {
+		t.Fatalf("got=%#v", got)
+	}
+}
+
 func newTestServer() *Server {
 	store := state.NewStore(state.Snapshot{
 		Revision:  7,
