@@ -298,6 +298,38 @@ func TestStatusBarRightStatusDualServiceAndDaemon(t *testing.T) {
 	}
 }
 
+func TestReconnectingFooterIncludesSanitizedDialError(t *testing.T) {
+	model := NewModel()
+	model.serviceLoaded = true
+	model.serviceStatus = service.StatusRunning
+	model.applySessionEvent(session.Event{
+		Kind: session.EventReconnecting,
+		Err:  errors.New("open \\\\.\\pipe\\mihari-control: The system cannot find the file specified."),
+	})
+	got := model.footerGlobalSegment()
+	if !strings.Contains(got, ui.GlobalStateStaleLabel) {
+		t.Fatalf("missing stale label: %q", got)
+	}
+	if !strings.Contains(got, ui.DaemonNotListening) {
+		t.Fatalf("missing sanitized reason: %q", got)
+	}
+	if !strings.Contains(got, ui.ServiceRunningUnreachable) {
+		t.Fatalf("missing service hint: %q", got)
+	}
+	if strings.Contains(got, `\\.\pipe\`) {
+		t.Fatalf("leaked pipe path: %q", got)
+	}
+}
+
+func TestReconnectingFooterUnchangedWithoutError(t *testing.T) {
+	model := NewModel()
+	model.applySessionEvent(session.Event{Kind: session.EventReconnecting})
+	got := model.footerGlobalSegment()
+	if got != ui.GlobalStateStaleLabel {
+		t.Fatalf("got=%q", got)
+	}
+}
+
 func TestRail_EnterOpensContentButArrowsDoNot(t *testing.T) {
 	model := NewModel()
 	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
