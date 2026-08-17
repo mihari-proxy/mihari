@@ -30,6 +30,7 @@ func main() {
 	token, setupError := credential.LoadOrCreate(transport.DefaultCredentialPath())
 	localClient := controlclient.New(endpoint, token)
 	var serviceManager *service.Manager
+	ready := make(chan struct{})
 	runDaemonBody := func(ctx context.Context) error {
 		paths := platform.DefaultPaths()
 		if err := paths.EnsureDirs(); err != nil {
@@ -51,12 +52,19 @@ func main() {
 			},
 		})
 		if err != nil {
-			return err
+			return daemon.Run(ctx, daemon.Options{
+				Endpoint: endpoint,
+				Token:    token,
+				Version:  buildinfo.Version,
+				Ready:    ready,
+				Store:    app.NewDegradedStore(buildinfo.Version, err),
+			})
 		}
 		return daemon.Run(ctx, daemon.Options{
 			Endpoint: endpoint,
 			Token:    token,
 			Version:  buildinfo.Version,
+			Ready:    ready,
 			Store:    assembly.Store,
 			Runtime:  assembly.Manager,
 		})
