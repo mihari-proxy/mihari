@@ -20,22 +20,34 @@ jobs:
           fetch-depth: 0
 
       - name: Check DCO
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+          BASE_REF: ${{ github.base_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           # Check that all commits have Signed-off-by
           # --no-merges skips merge commits: on a pull_request the workflow runs
           # against a GitHub-generated merge commit that has no Signed-off-by.
-          if [ "${{ github.event_name }}" = "push" ]; then
-            before=${{ github.event.before }}
-            if [ "$before" = "0000000000000000000000000000000000000000" ] ||
-               ! git rev-parse --verify -q "$before^{commit}" >/dev/null 2>&1; then
-              # First push of the repository (all-zero before), or a force
-              # push that replaced the previous tip: check the whole history.
-              commits=$(git rev-list --no-merges ${{ github.sha }})
+          if [ "$EVENT_NAME" = "push" ]; then
+            if [ "$BEFORE" = "0000000000000000000000000000000000000000" ] ||
+               ! git rev-parse --verify -q "$BEFORE^{commit}" >/dev/null 2>&1; then
+              # First push of a new branch (GitHub sends all-zero before), or a
+              # force-push whose previous tip is gone. Check commits not already
+              # on the default branch. Do not walk the whole history: main
+              # contains GitHub merge commits without Signed-off-by.
+              if [ -n "$DEFAULT_BRANCH" ] &&
+                 git rev-parse --verify -q "origin/$DEFAULT_BRANCH^{commit}" >/dev/null 2>&1; then
+                commits=$(git rev-list --no-merges "origin/$DEFAULT_BRANCH".."$HEAD_SHA")
+              else
+                commits=$(git rev-list --no-merges -n 1 "$HEAD_SHA")
+              fi
             else
-              commits=$(git rev-list --no-merges "$before"..${{ github.sha }})
+              commits=$(git rev-list --no-merges "$BEFORE".."$HEAD_SHA")
             fi
           else
-            commits=$(git rev-list --no-merges origin/${{ github.base_ref }}..HEAD)
+            commits=$(git rev-list --no-merges "origin/$BASE_REF"..HEAD)
           fi
 
           for commit in $commits; do
