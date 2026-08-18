@@ -8,6 +8,12 @@
 
 ### Fixed
 
+## [v0.8.2] - 2026-08-18
+
+### Fixed
+
+- Windows TUN 冲突探测忽略 Down 状态的残留 Wintun 网卡，避免孤儿适配器显示为 Conflict（#111）。
+
 ## [v0.8.1] - 2026-08-18
 
 ### Fixed
