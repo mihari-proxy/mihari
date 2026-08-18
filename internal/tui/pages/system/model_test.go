@@ -2517,8 +2517,7 @@ func TestSystemPortEditApplySendsOnboardingPatch(t *testing.T) {
 	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(*Model)
 	model.editInput.SetValue("127.0.0.1:19090")
-	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("missing apply intent")
 	}
