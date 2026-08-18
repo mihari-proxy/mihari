@@ -2,10 +2,11 @@
 // conflict with this daemon's managed mihomo TUN: other TUN network adapters
 // (signal A) and other mihomo processes (signal B).
 //
-// The package only observes. Detect reports every TUN adapter and every mihomo
-// process on the system without filtering; Classify then subtracts this daemon's
-// own adapter/process using a Self identity supplied by the runtime layer
-// (live tun.enable / tun.device and the supervised core PID). Keeping
+// The package only observes. Detect reports TUN adapters that can currently
+// take routes (Windows: IfOperStatusUp only; leftover Down Wintun devices are
+// ignored) and every mihomo process on the system. Classify then subtracts this
+// daemon's own adapter/process using a Self identity supplied by the runtime
+// layer (live tun.enable / tun.device and the supervised core PID). Keeping
 // detection stateless lets it stay testable and free of runtime dependencies.
 //
 // Platform backends implement unexported detect:
@@ -37,11 +38,12 @@ type Self struct {
 	CorePID int
 }
 
-// Detection is the raw, unfiltered system observation. Neither field has this
-// daemon's own adapter/process subtracted; that happens in Classify.
+// Detection is the system observation after dropping adapters that cannot
+// take routes. Neither field has this daemon's own adapter/process
+// subtracted; that happens in Classify.
 type Detection struct {
-	// TunInterfaces lists every TUN adapter friendly name on the system
-	// (Windows wintun, Linux tun, macOS utun).
+	// TunInterfaces lists TUN adapters that can currently take routes
+	// (Windows wintun/Meta/WireGuard with IfOperStatusUp; Linux tun; macOS utun).
 	TunInterfaces []string
 	// MihomoProcesses lists every mihomo process on the system.
 	MihomoProcesses []Process
