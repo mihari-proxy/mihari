@@ -104,7 +104,7 @@ func TestModelRegistersCapabilityGatedWebGUIAndSystemPages(t *testing.T) {
 	}
 	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{DaemonVersion: "v0.4.0", Health: "ok", Revision: 3}})
 	model.applySessionEvent(session.Event{Kind: session.EventCore, Core: protocol.CoreStatus{Status: "running", Version: "v1.19.0"}})
-	if view := system.View(); !strings.Contains(view, "v0.4.0") || !strings.Contains(view, "v1.19.0") {
+	if view := system.View(); !strings.Contains(view, "v0.4.0") || !strings.Contains(view, "running") || !strings.Contains(view, ui.PortsConfigSectionTitle) {
 		t.Fatalf("system view=%s", view)
 	}
 }
@@ -660,7 +660,7 @@ func TestModelRoutesMihariCheckResultToSystemAfterLeavingPage(t *testing.T) {
 	}
 	updated, _ := model.Update(batch[0]())
 	model = updated.(Model)
-	if view := model.pages[ui.PageSystem].View(); !strings.Contains(view, "v0.3.1 · v0.4.0 available") {
+	if view := model.pages[ui.PageSystem].View(); !strings.Contains(view, "v0.3.1") || !strings.Contains(view, "v0.4.0") {
 		t.Fatalf("System did not receive its async result:\n%s", view)
 	}
 }
@@ -784,7 +784,7 @@ func TestNetworkStatusMsgSyncsSystemPageProxyAndTun(t *testing.T) {
 	if strings.Contains(view, ui.LoadingLabel) {
 		t.Fatalf("system Network still Loading after networkStatusMsg: %s", view)
 	}
-	for _, want := range []string{ui.SystemProxyLabel, "127.0.0.1:9190", ui.OwnedLabel, ui.TUNLabel, "system"} {
+	for _, want := range []string{ui.SystemProxyLabel, ui.TUNLabel, "Desired On", "Live On"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("missing %q in system view=%s", want, view)
 		}

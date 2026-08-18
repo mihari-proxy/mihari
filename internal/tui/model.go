@@ -343,6 +343,9 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return model, tea.Batch(command, waitSessionEvent(model.events), model.loadRootServiceStatus())
 		}
 		return model, tea.Batch(command, waitSessionEvent(model.events))
+	case systempage.RestartRequiredMsg:
+		model.modal = NewDetail(ui.RestartRequiredTitle, ui.RestartRequiredBody)
+		return model, nil
 	case setuppage.CompletedMsg:
 		model.status.SetupRequired = !typed.Status.Complete
 		model.setupObserved = true

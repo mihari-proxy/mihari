@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"testing"
 	"time"
@@ -53,6 +54,9 @@ func TestStatusReturnsStableEnvelope(t *testing.T) {
 	}
 	if got.Schema != "mihari/v1" || got.ProtocolVersion != "v1" || got.Revision != 7 || got.Health != "ok" {
 		t.Fatalf("status=%#v", got)
+	}
+	if got.PID != os.Getpid() {
+		t.Fatalf("pid=%d want %d", got.PID, os.Getpid())
 	}
 }
 

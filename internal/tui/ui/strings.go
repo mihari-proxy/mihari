@@ -206,6 +206,19 @@ const (
 	AboutGitHubURL         = "https://github.com/mihari-proxy/mihari"
 	AboutGitHubOpenFailed  = "Could not open GitHub"
 
+	PortsConfigSectionTitle = "Ports Config"
+	MixedLabel              = "Mixed"
+	ControllerPortLabel     = "Controller"
+	WebPortLabel            = "Web"
+	PortOwned               = "Owned"
+	PortAvailable           = "Available"
+	PortOccupiedByNamed     = "Occupied by %s (%d)"
+	PortOccupiedByPID       = "Occupied by PID %d"
+	PortOccupiedByOtherApp  = "Occupied by other app"
+	FooterPortsEdit         = "Type address  Enter apply  Esc cancel  ? help  q quit"
+	InvalidPortEndpoint     = "Port address is invalid"
+	PortsApplyFailed        = "Could not update ports"
+
 	// Row-local short-verb labels for the Network action rows. The status row
 	// above (and the Network section) already names the object, so the action
 	// row only carries the verb, mirroring coreActionLabel's Install/Update.
