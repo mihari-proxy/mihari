@@ -17,10 +17,10 @@ Mihari is a new, independent local manager for [mihomo](https://github.com/MetaC
 
 Specifically:
 
-- **Subscription management**: add, refresh, and switch subscription profiles, with offline switching and independent refresh intervals
+- **Subscription management**: add, refresh, and switch subscription profiles, with offline switching, independent refresh intervals, and per-profile fetch proxy
 - **Core management**: install, update, and restart the mihomo core
 - **Service supervision**: run in the background as an OS service, with crash auto-restart
-- **System proxy / TUN**: enable system proxy or TUN mode in one click
+- **System proxy / TUN**: enable system proxy or TUN; a foreign proxy or another TUN/mihomo instance requires confirmation or `--force`
 - **Web panels**: one-click install and open of the zashboard / MetaCubeXD panels
 - **Connections & rules**: live view of connections, proxy groups, and rules, with local GeoIP resolution
 
@@ -28,9 +28,10 @@ Specifically:
 
 - **One daemon, three surfaces**: CLI, TUI, and browser panels talk to the same daemon-owned control plane over a local named pipe / Unix domain socket. The control API never binds a TCP port.
 - **OS service supervision**: install as a Windows service / systemd unit / launchd agent, with crash backoff restart.
-- **Subscription profiles**: per-subscription independent caches, offline switching, per-profile refresh intervals, and validated atomic config generation with rollback.
+- **Subscription profiles**: per-subscription independent caches, offline switching, per-profile refresh intervals, per-profile fetch proxy (`direct` / `proxy` / `auto`, falling back to direct), and validated atomic config generation with rollback.
 - **Web panels**: one-click install / update / activate / rollback for zashboard and MetaCubeXD, served behind a loopback Web gateway with its own access credential.
-- **System proxy & TUN**: cross-platform system proxy control and managed TUN, both daemon-owned and persisted.
+- **System proxy & TUN**: cross-platform system proxy control and managed TUN, both daemon-owned and persisted. Enable refuses a foreign system proxy (`system_proxy_conflict`) or another TUN / mihomo instance (`tun_conflict`) unless `--force` (TUI asks for confirmation).
+- **Ports Config**: the System page can change Mixed / Controller / Web ports; occupancy shows `Owned` or `Occupied by name (pid)`. Applying a change typically requires a daemon restart.
 - **In-TUI Mihari updates**: the System page checks GitHub Releases on entry, shows `current · latest available` or `current · Up to date`, and—when Mihari was started with administrator/root privileges—replaces the binary, synchronizes and restarts an installed OS-service copy, verifies its daemon version, and automatically enters the updated TUI.
 - **Core channel**: the System page can switch the mihomo core between `stable` and `alpha`.
 
@@ -92,8 +93,8 @@ mihari sysproxy enable
 | View status | `mihari status` |
 | Core management | `mihari core status` · `mihari core restart` |
 | Proxy groups | `mihari proxy groups` · `mihari proxy select <GROUP> <PROXY>` |
-| Subscription management | `mihari sub add <NAME> <URL>` · `mihari sub use <ID>` · `mihari sub refresh <ID>` |
-| System proxy / TUN | `mihari sysproxy enable` · `mihari tun enable` |
+| Subscription management | `mihari sub add <NAME> <URL>` · `mihari sub set <ID> --proxy auto` · `mihari sub use <ID>` |
+| System proxy / TUN | `mihari sysproxy enable` · `mihari tun enable` · `mihari tun enable --force` |
 | Web panels | `mihari panel list` · `mihari panel open` |
 | Service control | `mihari service status` · `mihari service stop` |
 | Update mihari | System page `Update Mihari` · `mihari self update` |

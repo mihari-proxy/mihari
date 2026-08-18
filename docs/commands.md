@@ -73,6 +73,7 @@ mihari logs --follow
 
 ```console
 mihari sub add NAME URL
+mihari sub add NAME URL --proxy auto
 mihari sub list
 mihari sub show ID
 mihari sub refresh ID
@@ -80,10 +81,11 @@ mihari sub use ID
 mihari sub enable ID
 mihari sub disable ID
 mihari sub set ID --interval 6h --auto-refresh=true
+mihari sub set ID --proxy auto
 mihari sub remove ID --yes
 ```
 
-订阅 URL 仅存储在守护进程私有的目录中,并从 list/show 响应与常规错误中省略。每个有效配置都有独立缓存,因此 `sub use` 在无 provider 网络访问时也能工作。生成的配置总是在 `mihomo -t` 与重载之前恢复 Mihari 托管的内环回控制器、密钥与端口不变量。
+订阅 URL 仅存储在守护进程私有的目录中,并从 list/show 响应与常规错误中省略。每个有效配置都有独立缓存,因此 `sub use` 在无 provider 网络访问时也能工作。`--proxy` 为该订阅的拉取代理:`direct`(默认)、`proxy` 或 `auto`;失败回退直连。生成的配置总是在 `mihomo -t` 与重载之前恢复 Mihari 托管的内环回控制器、密钥与端口不变量。
 
 ## 系统代理与 TUN
 
@@ -94,12 +96,13 @@ mihari sysproxy enable --force
 mihari sysproxy disable
 mihari tun status
 mihari tun enable
+mihari tun enable --force
 mihari tun disable
 ```
 
 `sysproxy enable` 将桌面 HTTP/HTTPS/SOCKS 系统代理指向 Mihari 的混合端点。如果另一产品已持有代理,enable 会以 `system_proxy_conflict` 失败,除非传入 `--force`(TUI 会要求确认)。`sysproxy disable` 只清除**由 Mihari 持有**的代理;它不会关闭外部代理。在 Windows 上,当 Mihari 作为 LocalSystem 服务运行时,它写入**交互式控制台用户**的 WinINET 配置单元(`HKEY_USERS\<SID>\…`),而不是 SYSTEM 自己的 `HKCU`,因此桌面浏览器能感知到变更。
 
-`tun enable|disable` 持久化托管 TUN 块、将其注入生成的 mihomo 配置,并在可用时通过控制器实时生效。TUN 根据 OS 不同可能需要提权或安装服务。
+`tun enable|disable` 持久化托管 TUN 块、将其注入生成的 mihomo 配置,并在可用时通过控制器实时生效。开启前会检测系统上的其他 TUN 网卡与其他 mihomo 进程(忽略 Down 状态的残留适配器);冲突时以 `tun_conflict` 失败,除非传入 `--force`(TUI 会要求确认)。`--force` 只绕过冲突门控:若内核未真正开启 TUN,Desired 会回滚。TUN 根据 OS 不同可能需要提权或安装服务。没有 CLI 改口命令;Mixed / Controller / Web 端口在 TUI System 页的 Ports Config 中修改。
 
 ## Web 面板
 

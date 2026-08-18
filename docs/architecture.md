@@ -35,7 +35,8 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 - Setup 第一步用短连接 `net.Listen` 预检三个托管端口的可用性:占用端口标红(Danger)并提供一键自动切换到下一个可用端口(从 `port+1` 起搜索,上限 `+1024`,三端口保持互异);权限等未知错误不标红、不阻塞,仍由守护进程启动时兜底校验。预检以 generation 守卫拒绝迟到的探测结果。
 - 进入 core / GeoIP 步骤时,Setup 经只读 `GET /v1/core`、`GET /v1/geoip/status` 探测本地资源就绪:已就绪显示版本并提示「将直接使用、无需下载」,失败回退静态文案且绝不阻塞流程。
 - Setup 审查页汇总端口(改端口且守护进程报告需重启时标注「需重启生效」)/ core 来源与版本(本地已有/新装/安装失败)/ 订阅 / GeoIP / mihari 服务注册状态(经 `GET /v1/service/status` 拉取);跳过项如实标注。各步结果在命令闭包内回写 Model,依赖 Bubble Tea 的 cmd→channel→Update happens-before 保证。
-- System 页面通过与 `mihari service` 相同的本地服务适配器管理 OS 服务(安装/卸载/启动/停止/重启/状态);这些操作要求进程已经提权,且不经过守护进程控制协议。当守护进程通告相应能力时,System 页面显示实时的系统代理与 TUN 状态,并通过本地控制 API 切换它们(开启外部代理需要强制确认;Mihari 从不清除其他产品的代理)。
+- System 页面通过与 `mihari service` 相同的本地服务适配器管理 OS 服务(安装/卸载/启动/停止/重启/状态);这些操作要求进程已经提权,且不经过守护进程控制协议。当守护进程通告相应能力时,System 页面显示实时的系统代理与 TUN 状态,并通过本地控制 API 切换它们(开启外部代理或其他 TUN / mihomo 实例需要强制确认;Mihari 从不清除其他产品的代理)。
+- System 页面的 Ports Config 可修改 Mixed / Controller / Web 端口;占用按本实例 PID 显示 `Owned`,或 `Occupied by name (pid)` / `Available`。写入复用 onboarding 更新,应用后通常 `RestartRequired`。没有对应 CLI。
 - System 页面还在进入时以只读方式检查 Mihari 的最新 GitHub Release,并用 `当前版本 · 最新版本 available` 或 `当前版本 · Up to date` 展示结果。确认更新后,本地 updater 在控制协议之外替换 Mihari 可执行文件并尝试重启已安装服务;该写操作要求 TUI 进程已经具备管理员/root 权限,不会自动触发 UAC 或 sudo。旧 Bubble Tea 程序先退出并恢复终端,随后平台适配器从已替换的二进制自动进入新 TUI。
 - System 页面的 `Core Channel` 行可在 `stable` / `alpha` 之间切换;切换后由守护进程按新通道重装核心。版本行显示 `ParseVersion(mihomo -v)` 的身份 token,从不显示 `Prerelease-Alpha`。
 - 规则顺序从不排序;onboarding、系统、provider、订阅、面板和浏览器变更都经由守护进程变更协调器,破坏性或大范围操作需要确认。
@@ -53,6 +54,7 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 
 - 订阅 URL 仅存储在守护进程私有的目录中,并从 list/show 响应与常规错误中省略。
 - 每个有效配置都有独立缓存,因此 `sub use` 在无 provider 网络访问时也能工作。
+- 每个订阅可独立配置拉取代理(`direct` / `proxy` / `auto`);失败回退直连。
 - 生成的配置总是在 `mihomo -t` 与重载之前恢复 Mihari 托管的内环回控制器、密钥与端口不变量。
 
 ## 系统代理与 TUN
@@ -61,6 +63,7 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 - `sysproxy disable` 只清除**由 Mihari 持有**的代理;它不会关闭外部代理。
 - 在 Windows 上,当 Mihari 作为 LocalSystem 服务运行时,它写入**交互式控制台用户**的 WinINET 配置单元(`HKEY_USERS\<SID>\…`),而不是 SYSTEM 自己的 `HKCU`,因此桌面浏览器能感知到变更。
 - `tun enable|disable` 持久化托管 TUN 块、将其注入生成的 mihomo 配置,并在可用时通过控制器实时生效。TUN 根据 OS 不同可能需要提权或安装服务。
+- `tun enable` 前检测其他 TUN 网卡与其他 mihomo 进程,并按本实例内核 PID 与 live `tun.device` 扣除自身;Down 状态的残留适配器忽略。冲突时以 `tun_conflict` 失败,除非传入 `--force`(TUI 会要求确认)。`--force` 只绕过冲突门控,不绕过 live 核对:内核未真正开启则回滚 Desired。
 
 ## GeoIP
 
