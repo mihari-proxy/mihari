@@ -9,23 +9,27 @@ import (
 
 func RenderRail(theme Theme, pages []PageID, selected int, focused bool, width, height int) string {
 	// Brand lives only on the status bar; do not repeat AppName here.
+	// Item styles reuse the rail colors but drop their own padding: the
+	// container already pads 1 cell each side. Double padding plus
+	// Width() word-wrap splits "1 Overview" onto two lines at compact 14.
+	inner := max(1, width-theme.Rail.GetHorizontalPadding())
 	lines := make([]string, 0, len(pages))
 	for index, page := range pages {
 		label := "  " + railTabLabel(index, page)
+		style := theme.Rail.Padding(0, 0)
 		if index == selected {
 			label = FocusMarker + railTabLabel(index, page)
 			if focused {
 				// Keyboard focus is on the rail: strong selection highlight.
-				lines = append(lines, theme.RailSelected.Render(label))
-				continue
+				style = theme.RailSelected.Padding(0, 0)
+			} else {
+				// Content owns keyboard focus: keep a quieter "you are here" marker.
+				style = theme.RailCurrent.Padding(0, 0)
 			}
-			// Content owns keyboard focus: keep a quieter "you are here" marker.
-			lines = append(lines, theme.RailCurrent.Render(label))
-			continue
 		}
-		lines = append(lines, theme.Rail.Render(label))
+		lines = append(lines, style.Render(TruncateVisible(label, inner)))
 	}
-	return theme.Rail.Width(width).Height(height).Render(strings.Join(lines, "\n"))
+	return theme.Rail.Width(width).MaxWidth(width).Height(height).MaxHeight(height).Render(strings.Join(lines, "\n"))
 }
 
 // railTabLabel prefixes a rail entry with its 1-based shortcut digit so the rail

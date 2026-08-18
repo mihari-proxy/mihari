@@ -13,7 +13,6 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/platform"
@@ -21,8 +20,6 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"github.com/mihari-proxy/mihari/internal/update"
 )
-
-const portsWideMinWidth = 80
 
 const (
 	rowDaemon            = "daemon"
@@ -444,10 +441,6 @@ func (m *Model) layoutWidth() int {
 		return m.width
 	}
 	return 100
-}
-
-func (m *Model) twoColumn() bool {
-	return m.width >= portsWideMinWidth
 }
 
 func (m *Model) FocusFirst() {
@@ -976,27 +969,12 @@ func (m *Model) View() string {
 	if detail := m.visibleErrorDetail(); detail != "" {
 		parts = append(parts, m.theme.Danger.Render(detail))
 	}
-	sections := m.renderSections()
-	if m.twoColumn() && len(sections) > 1 {
-		parts = append(parts, sections[0])
-		rest := sections[1:]
-		for i := 0; i+1 < len(rest); i += 2 {
-			left, right := ui.EqualizeLineCount(rest[i], rest[i+1])
-			parts = append(parts, lipgloss.JoinHorizontal(lipgloss.Top, left, right))
-		}
-		if len(rest)%2 == 1 {
-			parts = append(parts, rest[len(rest)-1])
-		}
-	} else {
-		parts = append(parts, sections...)
-	}
+	parts = append(parts, m.renderSections()...)
 	return strings.Join(parts, "\n")
 }
 
 func (m *Model) renderSections() []string {
 	inner := ui.FullSectionInner(m.layoutWidth())
-	half := ui.HalfSectionInner(m.layoutWidth())
-	wide := m.twoColumn()
 	clock := m.rowSpinClock
 	if clock.IsZero() {
 		clock = time.Unix(0, 0)
@@ -1043,20 +1021,12 @@ func (m *Model) renderSections() []string {
 		sections[idx].lines = append(sections[idx].lines, labelPart+value)
 	}
 	out := make([]string, 0, len(sections))
-	for i, sec := range sections {
+	for _, sec := range sections {
 		body := strings.Join(sec.lines, "\n")
 		if body == "" {
 			body = " "
 		}
-		width := inner
-		if wide && i > 0 {
-			restCount := len(sections) - 1
-			restIndex := i - 1
-			if !(restCount%2 == 1 && restIndex == restCount-1) {
-				width = half
-			}
-		}
-		out = append(out, ui.RenderBorderedSection(m.theme, sec.title, body, width))
+		out = append(out, ui.RenderBorderedSection(m.theme, sec.title, body, inner))
 	}
 	return out
 }

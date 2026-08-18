@@ -2433,16 +2433,17 @@ func portsModel(t *testing.T) *Model {
 	return model
 }
 
-func TestSystemPortsTwoColumnWhenWide(t *testing.T) {
+func TestSystemView_StacksSectionsInSingleColumnWhenWide(t *testing.T) {
 	model := portsModel(t)
 	model.SetSize(84, 40)
 	view := model.View()
 	if !strings.Contains(view, ui.PortsConfigSectionTitle) || !strings.Contains(view, ui.DaemonSectionTitle) {
 		t.Fatalf("view=%s", view)
 	}
-	// Half-width cards are narrower than a full 80-col section.
-	if !strings.Contains(view, "╭───"+ui.DaemonSectionTitle) && !strings.Contains(view, ui.DaemonSectionTitle) {
-		t.Fatalf("missing daemon card:\n%s", view)
+	for i, line := range strings.Split(view, "\n") {
+		if strings.Count(line, "╭") > 1 {
+			t.Fatalf("line %d pairs section borders (two-column layout):\n%s\nfull:\n%s", i, line, view)
+		}
 	}
 }
 
