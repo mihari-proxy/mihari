@@ -134,6 +134,10 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/mihari ./cmd/mihari
 
 The architecture invariants, package boundaries, and contribution guidance are recorded in [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](.github/CONTRIBUTING.md). See [docs/RELEASE.md](docs/RELEASE.md) for the release process.
 
+## Community
+
+Mihari is fully open source. This project recognizes [LINUX DO](https://linux.do/) and thanks the community for supporting open-source software.
+
 ## License
 
 [GPL-3.0](LICENSE) © 2026 LeeShunEE
