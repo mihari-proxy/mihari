@@ -54,7 +54,7 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 
 - 订阅 URL 仅存储在守护进程私有的目录中,并从 list/show 响应与常规错误中省略。
 - 每个有效配置都有独立缓存,因此 `sub use` 在无 provider 网络访问时也能工作。
-- 每个订阅可独立配置拉取代理(`direct` / `proxy` / `auto`);失败回退直连。
+- 每个订阅可独立配置拉取代理(`direct` / `proxy` / `auto`);`auto` 在代理失败时回退直连。
 - 生成的配置总是在 `mihomo -t` 与重载之前恢复 Mihari 托管的内环回控制器、密钥与端口不变量。
 
 ## 系统代理与 TUN

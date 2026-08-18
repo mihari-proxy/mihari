@@ -28,7 +28,7 @@ Mihari 是一款全新的、独立的 [mihomo](https://github.com/MetaCubeX/miho
 
 - **一个守护进程,三种界面**:CLI、TUI 和浏览器面板经本地命名管道 / Unix 域套接字连接同一守护进程控制面,控制 API 从不绑定 TCP 端口。
 - **OS 服务托管**:可安装为 Windows 服务 / systemd 单元 / launchd 代理,带崩溃退避重启。
-- **订阅配置**:每个订阅独立缓存、离线切换、按配置独立的刷新间隔、按订阅的拉取代理(`direct` / `proxy` / `auto`,失败回退直连),以及经过校验的原子化配置生成与回滚。
+- **订阅配置**:每个订阅独立缓存、离线切换、按配置独立的刷新间隔、按订阅的拉取代理(`direct` / `proxy` / `auto`;`auto` 在代理失败时回退直连),以及经过校验的原子化配置生成与回滚。
 - **Web 面板**:一键安装 / 更新 / 激活 / 回滚 zashboard 与 MetaCubeXD,置于带独立访问凭据的回环 Web 网关之后。
 - **系统代理与 TUN**:跨平台的系统代理控制与托管 TUN,均由守护进程持有并持久化。若其他产品已持有系统代理(`system_proxy_conflict`),或检测到其他 TUN / mihomo 实例(`tun_conflict`),enable 会失败,除非传入 `--force`(TUI 会要求确认)。
 - **端口配置**:System 页面可修改 Mixed / Controller / Web 端口;占用显示 `Owned` 或 `Occupied by name (pid)`。应用后通常需要重启守护进程。
@@ -94,7 +94,7 @@ mihari sysproxy enable
 | 核心管理 | `mihari core status` · `mihari core restart` |
 | 代理组 | `mihari proxy groups` · `mihari proxy select <GROUP> <PROXY>` |
 | 订阅管理 | `mihari sub add <NAME> <URL>` · `mihari sub set <ID> --proxy auto` · `mihari sub use <ID>` |
-| 系统代理 / TUN | `mihari sysproxy enable` · `mihari tun enable` · `mihari tun enable --force` |
+| 系统代理 / TUN | `mihari sysproxy enable` · `mihari sysproxy enable --force` · `mihari tun enable` · `mihari tun enable --force` |
 | Web 面板 | `mihari panel list` · `mihari panel open` |
 | 服务控制 | `mihari service status` · `mihari service stop` |
 | 更新 mihari | System 页 `Update Mihari` · `mihari self update` |

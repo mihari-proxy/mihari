@@ -28,7 +28,7 @@ Specifically:
 
 - **One daemon, three surfaces**: CLI, TUI, and browser panels talk to the same daemon-owned control plane over a local named pipe / Unix domain socket. The control API never binds a TCP port.
 - **OS service supervision**: install as a Windows service / systemd unit / launchd agent, with crash backoff restart.
-- **Subscription profiles**: per-subscription independent caches, offline switching, per-profile refresh intervals, per-profile fetch proxy (`direct` / `proxy` / `auto`, falling back to direct), and validated atomic config generation with rollback.
+- **Subscription profiles**: per-subscription independent caches, offline switching, per-profile refresh intervals, per-profile fetch proxy (`direct` / `proxy` / `auto`; `auto` falls back to direct), and validated atomic config generation with rollback.
 - **Web panels**: one-click install / update / activate / rollback for zashboard and MetaCubeXD, served behind a loopback Web gateway with its own access credential.
 - **System proxy & TUN**: cross-platform system proxy control and managed TUN, both daemon-owned and persisted. Enable refuses a foreign system proxy (`system_proxy_conflict`) or another TUN / mihomo instance (`tun_conflict`) unless `--force` (TUI asks for confirmation).
 - **Ports Config**: the System page can change Mixed / Controller / Web ports; occupancy shows `Owned` or `Occupied by name (pid)`. Applying a change typically requires a daemon restart.
@@ -94,7 +94,7 @@ mihari sysproxy enable
 | Core management | `mihari core status` · `mihari core restart` |
 | Proxy groups | `mihari proxy groups` · `mihari proxy select <GROUP> <PROXY>` |
 | Subscription management | `mihari sub add <NAME> <URL>` · `mihari sub set <ID> --proxy auto` · `mihari sub use <ID>` |
-| System proxy / TUN | `mihari sysproxy enable` · `mihari tun enable` · `mihari tun enable --force` |
+| System proxy / TUN | `mihari sysproxy enable` · `mihari sysproxy enable --force` · `mihari tun enable` · `mihari tun enable --force` |
 | Web panels | `mihari panel list` · `mihari panel open` |
 | Service control | `mihari service status` · `mihari service stop` |
 | Update mihari | System page `Update Mihari` · `mihari self update` |
