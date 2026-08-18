@@ -134,6 +134,10 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/mihari ./cmd/mihari
 
 架构不变量、包边界与贡献指南见 [AGENTS.md](AGENTS.md) 与 [CONTRIBUTING.md](.github/CONTRIBUTING.md),发布流程见 [docs/RELEASE.md](docs/RELEASE.md)。
 
+## 社区
+
+本项目完整开源，认可 [LINUX DO](https://linux.do/) 社区，感谢其对开源项目的支持。
+
 ## 许可
 
 [GPL-3.0](LICENSE) © 2026 Mihar1
