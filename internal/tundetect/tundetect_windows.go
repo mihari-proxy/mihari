@@ -69,7 +69,12 @@ func enumerateMihomoProcesses() ([]Process, error) {
 	for {
 		exe := windows.UTF16ToString(entry.ExeFile[:])
 		if strings.Contains(strings.ToLower(exe), "mihomo") {
-			procs = append(procs, Process{Name: exe, PID: int(entry.ProcessID)})
+			procs = append(procs, Process{
+				Name:      exe,
+				PID:       int(entry.ProcessID),
+				ParentPID: int(entry.ParentProcessID),
+				Path:      windowsProcessPath(entry.ProcessID),
+			})
 		}
 		if err := windows.Process32Next(snapshot, &entry); err != nil {
 			if err == windows.ERROR_NO_MORE_FILES {
@@ -79,4 +84,18 @@ func enumerateMihomoProcesses() ([]Process, error) {
 		}
 	}
 	return procs, nil
+}
+
+func windowsProcessPath(pid uint32) string {
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		return ""
+	}
+	defer windows.CloseHandle(handle)
+	buf := make([]uint16, 32768)
+	size := uint32(len(buf))
+	if err := windows.QueryFullProcessImageName(handle, 0, &buf[0], &size); err != nil {
+		return ""
+	}
+	return windows.UTF16ToString(buf[:size])
 }

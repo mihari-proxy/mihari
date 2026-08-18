@@ -67,9 +67,34 @@ func enumerateLinuxMihomo() ([]Process, error) {
 		if err != nil {
 			continue
 		}
-		procs = append(procs, Process{Name: name, PID: pid})
+		procs = append(procs, Process{
+			Name:      name,
+			PID:       pid,
+			ParentPID: linuxParentPID(e.Name()),
+			Path:      linuxProcessPath(e.Name()),
+		})
 	}
 	return procs, nil
+}
+
+func linuxParentPID(pid string) int {
+	stat, err := os.ReadFile(filepath.Join("/proc", pid, "stat"))
+	if err != nil {
+		return 0
+	}
+	ppid, ok := parseLinuxStatPPID(string(stat))
+	if !ok {
+		return 0
+	}
+	return ppid
+}
+
+func linuxProcessPath(pid string) string {
+	path, err := os.Readlink(filepath.Join("/proc", pid, "exe"))
+	if err != nil {
+		return ""
+	}
+	return path
 }
 
 func isAllDigits(s string) bool {

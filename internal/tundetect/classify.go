@@ -2,6 +2,7 @@ package tundetect
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -16,11 +17,12 @@ import (
 // adapter only when mihomo's live tun.enable is true. When TunName is known,
 // the matching listed name is dropped; when it is empty, exactly one entry
 // is dropped (name unknown, so the count is conservative). Process
-// subtraction matches self.CorePID; a zero PID means identity is unknown
-// and nothing is dropped (signal B does not gate enable).
+// subtraction treats a process as self when any identity matches: CorePID,
+// controller OccupantPID, parent==DaemonPID, or managed BinaryPath. An empty
+// identity drops nothing (signal B does not gate enable).
 func Classify(d Detection, self Self) *protocol.TunConflict {
 	otherTun := subtractSelfTun(d.TunInterfaces, self)
-	otherMihomo := formatOtherProcesses(d.MihomoProcesses, self.CorePID)
+	otherMihomo := formatOtherProcesses(d.MihomoProcesses, self)
 	if len(otherTun) == 0 && len(otherMihomo) == 0 {
 		return nil
 	}
@@ -48,17 +50,40 @@ func subtractSelfTun(ifaces []string, self Self) []string {
 	return ifaces
 }
 
-func formatOtherProcesses(procs []Process, corePID int) []string {
+func formatOtherProcesses(procs []Process, self Self) []string {
 	var out []string
-	dropped := false
 	for _, p := range procs {
-		if !dropped && corePID != 0 && p.PID == corePID {
-			dropped = true
+		if isSelfProcess(p, self) {
 			continue
 		}
 		out = append(out, formatProcess(p))
 	}
 	return out
+}
+
+func isSelfProcess(p Process, self Self) bool {
+	if p.PID <= 0 {
+		return false
+	}
+	if self.CorePID != 0 && p.PID == self.CorePID {
+		return true
+	}
+	if self.OccupantPID != 0 && p.PID == self.OccupantPID {
+		return true
+	}
+	if self.DaemonPID != 0 && p.ParentPID != 0 && p.ParentPID == self.DaemonPID {
+		return true
+	}
+	return binaryPathMatch(p.Path, self.BinaryPath)
+}
+
+func binaryPathMatch(listed, want string) bool {
+	listed = strings.TrimSpace(listed)
+	want = strings.TrimSpace(want)
+	if listed == "" || want == "" {
+		return false
+	}
+	return strings.EqualFold(filepath.Clean(listed), filepath.Clean(want))
 }
 
 func formatProcess(p Process) string {

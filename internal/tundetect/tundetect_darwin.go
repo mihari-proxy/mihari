@@ -5,7 +5,6 @@ package tundetect
 import (
 	"context"
 	"os/exec"
-	"strconv"
 	"strings"
 )
 
@@ -39,27 +38,29 @@ func enumerateDarwinTun(ctx context.Context) ([]string, error) {
 	return tun, nil
 }
 
-// enumerateDarwinMihomo lists mihomo processes via "ps -eo comm=,pid=". The
-// comm column may carry a full path; the trailing field is the pid.
+// enumerateDarwinMihomo lists mihomo processes via "ps -eo comm=,pid=,ppid=".
+// The comm column may carry a full path; pid and ppid are the last two fields.
 func enumerateDarwinMihomo(ctx context.Context) ([]Process, error) {
-	out, err := exec.CommandContext(ctx, "ps", "-eo", "comm=,pid=").Output()
+	out, err := exec.CommandContext(ctx, "ps", "-eo", "comm=,pid=,ppid=").Output()
 	if err != nil {
 		return nil, err
 	}
 	var procs []Process
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
+		name, pid, ppid, ok := parseDarwinProcessLine(line)
+		if !ok {
 			continue
 		}
-		comm := fields[0]
-		pid, err := strconv.Atoi(fields[len(fields)-1])
-		if err != nil {
-			continue
-		}
-		if strings.Contains(strings.ToLower(comm), "mihomo") {
-			procs = append(procs, Process{Name: comm, PID: pid})
+		if strings.Contains(strings.ToLower(name), "mihomo") {
+			procs = append(procs, Process{Name: name, PID: pid, ParentPID: ppid, Path: darwinProcessPath(name)})
 		}
 	}
 	return procs, nil
+}
+
+func darwinProcessPath(comm string) string {
+	if strings.Contains(comm, "/") {
+		return comm
+	}
+	return ""
 }

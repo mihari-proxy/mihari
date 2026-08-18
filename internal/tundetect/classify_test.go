@@ -141,3 +141,60 @@ func TestClassify_UnknownPIDKeepsAllProcesses(t *testing.T) {
 		t.Fatalf("got=%#v", got)
 	}
 }
+
+func TestClassify_SubtractsByOccupantPIDWhenCorePIDUnknown(t *testing.T) {
+	got := Classify(Detection{
+		MihomoProcesses: []Process{{Name: "mihomo.exe", PID: 43560}},
+	}, Self{OccupantPID: 43560})
+	if got != nil {
+		t.Fatalf("got=%#v, want nil after occupant match", got)
+	}
+}
+
+func TestClassify_SubtractsByParentPIDWhenCorePIDUnknown(t *testing.T) {
+	got := Classify(Detection{
+		MihomoProcesses: []Process{{Name: "mihomo.exe", PID: 43560, ParentPID: 36560}},
+	}, Self{DaemonPID: 36560})
+	if got != nil {
+		t.Fatalf("got=%#v, want nil after parent match", got)
+	}
+}
+
+func TestClassify_SubtractsByBinaryPathWhenCorePIDUnknown(t *testing.T) {
+	got := Classify(Detection{
+		MihomoProcesses: []Process{{Name: "mihomo.exe", PID: 43560, Path: `C:\ProgramData\mihari\mihomo.exe`}},
+	}, Self{BinaryPath: `C:\ProgramData\mihari\mihomo.exe`})
+	if got != nil {
+		t.Fatalf("got=%#v, want nil after path match", got)
+	}
+}
+
+func TestClassify_BinaryPathMatchIgnoresCase(t *testing.T) {
+	got := Classify(Detection{
+		MihomoProcesses: []Process{{Name: "mihomo.exe", PID: 43560, Path: `C:\ProgramData\Mihari\mihomo.exe`}},
+	}, Self{BinaryPath: `c:\programdata\mihari\mihomo.exe`})
+	if got != nil {
+		t.Fatalf("got=%#v, want nil after case-insensitive path match", got)
+	}
+}
+
+func TestClassify_StaleCorePIDStillSubtractsByOccupant(t *testing.T) {
+	got := Classify(Detection{
+		MihomoProcesses: []Process{{Name: "mihomo.exe", PID: 43560}},
+	}, Self{CorePID: 11111, OccupantPID: 43560})
+	if got != nil {
+		t.Fatalf("got=%#v, want nil when occupant matches live pid", got)
+	}
+}
+
+func TestClassify_KeepsForeignWhenFallbacksDoNotMatch(t *testing.T) {
+	got := Classify(Detection{
+		MihomoProcesses: []Process{
+			{Name: "mihomo.exe", PID: 43560, ParentPID: 36560, Path: `C:\ProgramData\mihari\mihomo.exe`},
+			{Name: "Sparkle-mihomo.exe", PID: 99, ParentPID: 8, Path: `C:\Sparkle\mihomo.exe`},
+		},
+	}, Self{CorePID: 43560, DaemonPID: 36560, OccupantPID: 43560, BinaryPath: `C:\ProgramData\mihari\mihomo.exe`})
+	if got == nil || len(got.OtherMihomoProcesses) != 1 || got.OtherMihomoProcesses[0] != "Sparkle-mihomo.exe (99)" {
+		t.Fatalf("got=%#v", got)
+	}
+}
