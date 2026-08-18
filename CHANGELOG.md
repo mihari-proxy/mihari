@@ -8,6 +8,13 @@
 
 ### Fixed
 
+## [v0.8.1] - 2026-08-18
+
+### Fixed
+
+- TUI System 页改为始终单列，避免宽屏双列截断端口 URL 与 Network 状态（#106）。
+- TUI 侧栏 compact 宽度下 Overview 页签不再换行（#106）。
+
 ## [v0.8.0] - 2026-08-18
 
 ### Added
