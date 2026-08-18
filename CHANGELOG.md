@@ -8,6 +8,17 @@
 
 ### Fixed
 
+## [v0.8.0] - 2026-08-18
+
+### Added
+
+- TUI System 页增加 Ports Config：可改 Mixed / Controller / Web 端口；占用按 PID 显示 Owned 或 Occupied by name (pid)；宽屏双栏（#101）。
+- `GET /v1/status` 增加可选 `pid` 字段（加法，不改既有语义）（#101）。
+
+### Fixed
+
+- TUI Overview 双栏卡片不再从词中间截断 Core / Web GUI 数值（#84, #85）。
+
 ## [v0.7.5] - 2026-08-17
 
 ### Added
