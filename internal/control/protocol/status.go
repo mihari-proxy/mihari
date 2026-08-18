@@ -29,6 +29,9 @@ type Status struct {
 	Config          *ConfigStatus `json:"config,omitempty"`
 	Capabilities    []string      `json:"capabilities,omitempty"`
 	SetupRequired   bool          `json:"setup_required,omitempty"`
+	// PID is this daemon process id. Optional additive field so local clients
+	// can tell whether a TCP occupant is this instance's web gateway.
+	PID int `json:"pid,omitempty"`
 }
 
 type ConfigStatus struct {

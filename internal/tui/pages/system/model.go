@@ -11,7 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/platform"
@@ -20,6 +22,8 @@ import (
 	"github.com/mihari-proxy/mihari/internal/update"
 )
 
+const portsWideMinWidth = 80
+
 const (
 	rowDaemon            = "daemon"
 	rowCore              = "core"
@@ -27,8 +31,6 @@ const (
 	rowCoreUpdate        = "core-update"
 	rowCoreRestart       = "core-restart"
 	rowMihariUpdate      = "mihari-update"
-	rowProxyEndpoint     = "proxy-endpoint"
-	rowCoreAPI           = "core-api"
 	rowZashboard         = "zashboard"
 	rowMetaCubeXD        = "metacubexd"
 	rowRunSetup          = "run-setup"
@@ -46,6 +48,9 @@ const (
 	rowTUNAction         = "tun-action"
 	rowAbout             = "about"
 	rowGitHub            = "github"
+	rowMixed             = "port-mixed"
+	rowController        = "port-controller"
+	rowWeb               = "port-web"
 )
 
 // Panel IDs mirrored from internal/panel/catalog.go; local constants keep the
@@ -69,6 +74,7 @@ type Client interface {
 	DisableTun(context.Context, protocol.TunMutationRequest) (protocol.TunStatus, error)
 	WebGUI(context.Context) (protocol.WebGUIStatus, error)
 	OpenWebGUI(context.Context, string) (protocol.WebGUIOpenResult, error)
+	UpdateOnboarding(context.Context, protocol.OnboardingUpdateRequest) (protocol.OnboardingStatus, error)
 }
 
 // SelfUpdater is the local Mihari binary lifecycle surface used by the System page.
@@ -325,7 +331,26 @@ type Model struct {
 	width            int
 	height           int
 	theme            ui.Theme
+	editID           string
+	editInput        textinput.Model
+	portHolds        map[string]ui.PortHold
+	listenFree       func(string) bool
+	lookupOccupant   func(string) (platform.TCPOccupant, bool)
 }
+
+// RestartRequiredMsg tells the root shell to show the existing restart dialog.
+type RestartRequiredMsg struct{}
+
+type portHoldsMsg struct {
+	holds map[string]ui.PortHold
+}
+
+type portsApplyResultMsg struct {
+	status protocol.OnboardingStatus
+	err    error
+}
+
+func (m portsApplyResultMsg) Err() error { return m.err }
 
 // New constructs a System page without a service controller.
 func New(client Client, newOperationID func() string) *Model {
@@ -351,9 +376,18 @@ func NewWithContext(ctx context.Context, client Client, svc ServiceController, n
 		service:        svc,
 		openBrowser:    platform.OpenBrowser,
 		newOperationID: newOperationID,
-		focusID:        rowDaemon,
+		focusID:        rowMixed,
 		theme:          ui.DefaultTheme(),
+		portHolds:      map[string]ui.PortHold{},
 	}
+}
+
+// FooterHints returns edit-mode shortcuts while a port row is being typed.
+func (m *Model) FooterHints() string {
+	if m.editID != "" {
+		return ui.FooterPortsEdit
+	}
+	return ui.FooterSystem
 }
 
 // ApplyServiceStatus updates the OS service observation from the root shell poll
@@ -410,6 +444,10 @@ func (m *Model) layoutWidth() int {
 		return m.width
 	}
 	return 100
+}
+
+func (m *Model) twoColumn() bool {
+	return m.width >= portsWideMinWidth
 }
 
 func (m *Model) FocusFirst() {
@@ -591,7 +629,23 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			m.lastError = ""
 			m.onboarding = typed.status
 		}
+		return m, m.probePortHolds()
+	case portHoldsMsg:
+		m.portHolds = typed.holds
 		return m, nil
+	case portsApplyResultMsg:
+		m.clearRowPending()
+		if typed.err != nil {
+			m.markRowOutcome(m.focusID, false, ui.PortsApplyFailed)
+			return m, m.rowSpinCmdIfNeeded()
+		}
+		m.onboarding = typed.status
+		m.markRowOutcome(m.focusID, true, "")
+		cmds := []tea.Cmd{m.probePortHolds(), m.rowSpinCmdIfNeeded()}
+		if typed.status.RestartRequired {
+			cmds = append(cmds, func() tea.Msg { return RestartRequiredMsg{} })
+		}
+		return m, tea.Batch(cmds...)
 	case serviceStatusMsg:
 		m.serviceLoaded = true
 		m.elevated = typed.elevated
@@ -738,6 +792,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.editID != "" {
+		return m.updatePortEdit(message)
+	}
 	if !ok {
 		return m, nil
 	}
@@ -812,6 +869,8 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, m.confirmTunToggle()
 		case rowGitHub:
 			return m, m.openGitHub()
+		case rowMixed, rowController, rowWeb:
+			return m, m.beginPortEdit(m.focusID)
 		default:
 			selected := rows[index]
 			m.detail = &selected
@@ -912,17 +971,36 @@ func (m *Model) View() string {
 			m.theme.Title.Render(strings.TrimSpace(m.detail.label)+" details") + "\n\n" + m.detail.detail + "\n\n" + ui.EscCloseHint,
 		)
 	}
-	inner := ui.FullSectionInner(m.layoutWidth())
 	var parts []string
 	// Pin failure reason at the top so it is not clipped away.
 	if detail := m.visibleErrorDetail(); detail != "" {
 		parts = append(parts, m.theme.Danger.Render(detail))
 	}
+	sections := m.renderSections()
+	if m.twoColumn() && len(sections) > 1 {
+		parts = append(parts, sections[0])
+		rest := sections[1:]
+		for i := 0; i+1 < len(rest); i += 2 {
+			left, right := ui.EqualizeLineCount(rest[i], rest[i+1])
+			parts = append(parts, lipgloss.JoinHorizontal(lipgloss.Top, left, right))
+		}
+		if len(rest)%2 == 1 {
+			parts = append(parts, rest[len(rest)-1])
+		}
+	} else {
+		parts = append(parts, sections...)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (m *Model) renderSections() []string {
+	inner := ui.FullSectionInner(m.layoutWidth())
+	half := ui.HalfSectionInner(m.layoutWidth())
+	wide := m.twoColumn()
 	clock := m.rowSpinClock
 	if clock.IsZero() {
 		clock = time.Unix(0, 0)
 	}
-	// Group rows into bordered sections by item.section.
 	type sectionBuf struct {
 		title string
 		lines []string
@@ -938,15 +1016,15 @@ func (m *Model) View() string {
 		if rowFocused {
 			marker = ui.FocusMarker
 		}
-		// Lifecycle chips use absolute solid colors; apply RowFocus only to the
-		// label side so reverse video does not wash out Success/Warning/Danger fills.
 		labelPart := marker + item.label
 		value := item.value
+		if m.editID == item.id {
+			value = m.editInput.View()
+		}
 		switch {
 		case m.pending && m.pendingRow == item.id && m.pendingNote != "":
 			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, m.pendingNote))
 		case m.outcomeRow == item.id:
-			// Sticky Done/Failed until page leave or another action starts.
 			if m.outcomeOK {
 				value = ui.RenderStatusChip(m.theme, ui.StatusChipDone, ui.DoneLabel)
 			} else {
@@ -959,21 +1037,28 @@ func (m *Model) View() string {
 		if value != "" {
 			value = "  " + value
 		}
-		if rowFocused && m.contentFocused {
+		if rowFocused && m.contentFocused && m.editID == "" {
 			labelPart = ui.ApplyFocusStyle(labelPart, m.theme.RowFocus)
 		}
 		sections[idx].lines = append(sections[idx].lines, labelPart+value)
 	}
-	for _, sec := range sections {
+	out := make([]string, 0, len(sections))
+	for i, sec := range sections {
 		body := strings.Join(sec.lines, "\n")
 		if body == "" {
 			body = " "
 		}
-		// Borders are globally constant (surface border + accent title); the
-		// status meaning lives in the row values via StatusDot, not in the frame.
-		parts = append(parts, ui.RenderBorderedSection(m.theme, sec.title, body, inner))
+		width := inner
+		if wide && i > 0 {
+			restCount := len(sections) - 1
+			restIndex := i - 1
+			if !(restCount%2 == 1 && restIndex == restCount-1) {
+				width = half
+			}
+		}
+		out = append(out, ui.RenderBorderedSection(m.theme, sec.title, body, width))
 	}
-	return strings.Join(parts, "\n")
+	return out
 }
 
 func (m *Model) rows() []row {
@@ -983,8 +1068,9 @@ func (m *Model) rows() []row {
 	}
 	daemon := fmt.Sprintf("Version %s\nUptime %s\nHealth %s\nRevision %d\nConfig %s", valueOr(m.status.DaemonVersion, ui.UnknownLabel), uptime(m.status.StartedAt), valueOr(m.status.Health, ui.UnknownLabel), m.status.Revision, configState)
 	core := fmt.Sprintf("Status %s\nVersion %s\nPID %d\nRestarts %d", valueOr(m.core.Status, ui.UnknownLabel), valueOr(m.core.Version, ui.UnknownLabel), m.core.PID, m.core.Restarts)
-	rows := []row{{id: rowDaemon, section: ui.DaemonSectionTitle, label: ui.DaemonLabel, value: daemonValue(m.theme, m.status, !m.mutationsEnabled), detail: daemon}}
-	rows = append(rows, m.endpointRows()...)
+	rows := m.portRows()
+	rows = append(rows, row{id: rowDaemon, section: ui.DaemonSectionTitle, label: ui.DaemonLabel, value: daemonValue(m.theme, m.status, !m.mutationsEnabled), detail: daemon})
+	rows = append(rows, m.panelRows()...)
 	rows = append(rows, m.mihariUpdateRow())
 	rows = append(rows,
 		row{id: rowRunSetup, section: ui.DaemonSectionTitle, label: ui.RunSetupLabel, detail: ui.RunSetupDetail},
@@ -1031,25 +1117,35 @@ func (m *Model) mihariUpdateRow() row {
 	}
 }
 
-// endpointRows renders the Daemon endpoint rows: proxy and core API always,
-// then the installed Web GUI panels when the capability is present.
-func (m *Model) endpointRows() []row {
-	section := ui.DaemonSectionTitle
-	rows := []row{
-		{
-			id: rowProxyEndpoint, section: section,
-			label: padEndpointLabel(ui.ProxyEndpointLabel),
-			value: valueOr(m.onboarding.MixedAddr, ui.MissingValue), detail: ui.ProxyEndpointDetail,
-		},
-		{
-			id: rowCoreAPI, section: section,
-			label: padEndpointLabel(ui.MihomoCoreAPILabel),
-			value: valueOr(m.onboarding.ControllerAddr, ui.MissingValue), detail: ui.MihomoCoreAPIDetail,
-		},
+func (m *Model) portRows() []row {
+	return []row{
+		m.portRow(rowMixed, ui.MixedLabel, m.onboarding.MixedAddr, m.core.PID),
+		m.portRow(rowController, ui.ControllerPortLabel, m.onboarding.ControllerAddr, m.core.PID),
+		m.portRow(rowWeb, ui.WebPortLabel, m.onboarding.WebAddr, m.status.PID),
 	}
+}
+
+func (m *Model) portRow(id, label, addr string, ownerPID int) row {
+	hold := m.portHolds[id]
+	status := ui.RenderPortHold(m.theme, hold)
+	value := valueOr(addr, ui.MissingValue)
+	if status != "" {
+		value += "  " + status
+	}
+	detail := fmt.Sprintf("%s\n%s", valueOr(addr, ui.MissingValue), ui.FormatPortHoldLabel(hold))
+	if hold.PID > 0 {
+		detail += fmt.Sprintf("\nHolder PID %d", hold.PID)
+	}
+	_ = ownerPID
+	return row{id: id, section: ui.PortsConfigSectionTitle, label: padEndpointLabel(label), value: value, detail: detail}
+}
+
+// panelRows renders installed Web GUI panel rows (open browser).
+func (m *Model) panelRows() []row {
 	if !m.hasCapability(protocol.CapabilityWebGUI) {
-		return rows
+		return nil
 	}
+	var rows []row
 	webAddr := m.onboarding.WebAddr
 	if panelRow, ok := m.panelEndpointRow(panelIDZashboard, ui.ZashboardLabel, webAddr); ok {
 		rows = append(rows, panelRow)
@@ -1714,6 +1810,141 @@ func (m *Model) openPanelBrowser(panelID string) tea.Cmd {
 				return webGUIOpenResultMsg{rowID: panelID}
 			},
 		}
+	}
+}
+
+func (m *Model) probePortHolds() tea.Cmd {
+	listen := m.listenFree
+	if listen == nil {
+		listen = ui.ListenFree
+	}
+	lookup := m.lookupOccupant
+	if lookup == nil {
+		lookup = platform.LookupTCPOccupant
+	}
+	addrs := map[string]string{
+		rowMixed:      m.onboarding.MixedAddr,
+		rowController: m.onboarding.ControllerAddr,
+		rowWeb:        m.onboarding.WebAddr,
+	}
+	owners := map[string]int{
+		rowMixed:      m.core.PID,
+		rowController: m.core.PID,
+		rowWeb:        m.status.PID,
+	}
+	return func() tea.Msg {
+		holds := make(map[string]ui.PortHold, 3)
+		for id, addr := range addrs {
+			if strings.TrimSpace(addr) == "" {
+				holds[id] = ui.PortHold{Kind: ui.PortHoldUnknown}
+				continue
+			}
+			free := listen(addr)
+			var occ platform.TCPOccupant
+			if !free {
+				occ, _ = lookup(addr)
+			}
+			holds[id] = ui.ClassifyPortHold(free, occ.PID, occ.Process, owners[id])
+		}
+		return portHoldsMsg{holds: holds}
+	}
+}
+
+func (m *Model) beginPortEdit(id string) tea.Cmd {
+	if !m.mutationsEnabled || m.client == nil || !m.hasCapability(protocol.CapabilityOnboarding) {
+		return nil
+	}
+	addr := m.portAddr(id)
+	input := textinput.New()
+	input.Prompt = ""
+	input.CharLimit = 64
+	input.SetWidth(28)
+	input.SetValue(addr)
+	_ = input.Focus()
+	m.editID = id
+	m.editInput = input
+	return func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputText} }
+}
+
+func (m *Model) cancelPortEdit() tea.Cmd {
+	m.editID = ""
+	m.editInput = textinput.Model{}
+	return func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
+}
+
+func (m *Model) updatePortEdit(message tea.Msg) (ui.Page, tea.Cmd) {
+	key, ok := message.(tea.KeyPressMsg)
+	if ok {
+		switch key.String() {
+		case "esc", "up", "down":
+			return m, m.cancelPortEdit()
+		case "enter":
+			return m, m.confirmPortEdit()
+		}
+	}
+	updated, cmd := m.editInput.Update(message)
+	m.editInput = updated
+	return m, cmd
+}
+
+func (m *Model) confirmPortEdit() tea.Cmd {
+	mixed, controller, web := m.onboarding.MixedAddr, m.onboarding.ControllerAddr, m.onboarding.WebAddr
+	next := strings.TrimSpace(m.editInput.Value())
+	switch m.editID {
+	case rowMixed:
+		mixed = next
+	case rowController:
+		controller = next
+	case rowWeb:
+		web = next
+	}
+	if err := ui.ValidateManagedEndpoints(mixed, controller, web); err != nil {
+		m.lastError = ui.InvalidPortEndpoint
+		return nil
+	}
+	occupied := [3]bool{
+		m.portHolds[rowMixed].Kind == ui.PortHoldOccupied,
+		m.portHolds[rowController].Kind == ui.PortHoldOccupied,
+		m.portHolds[rowWeb].Kind == ui.PortHoldOccupied,
+	}
+	probe := m.listenFree
+	if probe == nil {
+		probe = ui.ListenFree
+	}
+	fixed := ui.FindAvailablePorts([3]string{mixed, controller, web}, occupied, probe)
+	mixed, controller, web = fixed[0], fixed[1], fixed[2]
+	if mixed == m.onboarding.MixedAddr && controller == m.onboarding.ControllerAddr && web == m.onboarding.WebAddr {
+		return m.cancelPortEdit()
+	}
+	_ = m.cancelPortEdit()
+	revision, operationID := m.onboarding.Revision, m.newOperationID()
+	request := protocol.OnboardingUpdateRequest{
+		OperationID: operationID, IfRevision: &revision,
+		MixedAddr: &mixed, ControllerAddr: &controller, WebAddr: &web,
+	}
+	return func() tea.Msg {
+		return ui.ActionIntentMsg{
+			Action: ui.ActionApplyEndpointChange, Page: ui.PageSystem, Capability: protocol.CapabilityOnboarding,
+			Key: "system:ports", Title: ui.ReplaceConfigurationTitle, Object: ui.PortsConfigSectionTitle,
+			Impact: ui.ReplaceConfigurationImpact, Rollback: ui.ReplaceConfigurationRollback,
+			Execute: func() tea.Msg {
+				status, err := m.client.UpdateOnboarding(m.ctx, request)
+				return portsApplyResultMsg{status: status, err: err}
+			},
+		}
+	}
+}
+
+func (m *Model) portAddr(id string) string {
+	switch id {
+	case rowMixed:
+		return m.onboarding.MixedAddr
+	case rowController:
+		return m.onboarding.ControllerAddr
+	case rowWeb:
+		return m.onboarding.WebAddr
+	default:
+		return ""
 	}
 }
 

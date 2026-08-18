@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
 	"sort"
 	"time"
 
@@ -71,6 +72,7 @@ func (s *Server) status(writer http.ResponseWriter, request *http.Request) {
 		Health:          snapshot.Health,
 		LastError:       snapshot.LastError,
 		StartedAt:       snapshot.StartedAt,
+		PID:             os.Getpid(),
 	}
 	if s.runtime != nil {
 		status.Capabilities = sortedUnique(s.runtime.Capabilities())
