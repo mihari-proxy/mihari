@@ -12,8 +12,13 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
-// wideMinWidth is the content width at which KPI cards switch to a 2-column grid.
-const wideMinWidth = 60
+// wideMinWidth is the content width at which KPI cards switch to a 2-column
+// grid. 80 is the smallest width whose half-card text column (35) can hold a
+// typical Core status line with IEC units. Narrower panes stack so a 2-column
+// MaxWidth clip cannot eat "MiB". The Full shell (100×28, content 84) stays
+// two-column; Web GUI's longer address line wraps instead of truncating
+// (issue #84).
+const wideMinWidth = 80
 
 // overviewLabelWidth is the label column width of the General card grid;
 // continuation lines of wrapped values (e.g. Health) indent to match it.
@@ -100,14 +105,21 @@ func (m *Model) View() string {
 	// everything stacks single-column.
 	if m.width >= wideMinWidth {
 		half := m.halfCardInner()
-		// Equalize body line counts so both cards of a row end at the same
-		// bottom border (JoinHorizontal aligns tops; card height is body-driven).
-		generalBody, coreBody := ui.EqualizeLineCount(m.renderGeneralBody(half), m.renderCoreCard(half))
+		// Wrap to the half-card text width before equalizing heights so
+		// RenderBorderedSection's MaxWidth cannot clip IEC units or
+		// "N sessions" mid-token (issue #84).
+		generalBody, coreBody := ui.EqualizeLineCount(
+			wrapSectionBody(m.renderGeneralBody(half), half),
+			wrapSectionBody(m.renderCoreCard(half), half),
+		)
 		row1 := lipgloss.JoinHorizontal(lipgloss.Top,
 			m.cardAt(ui.OverviewGeneralTitle, generalBody, half),
 			m.cardAt(ui.CoreCardTitle, coreBody, half),
 		)
-		subBody, guiBody := ui.EqualizeLineCount(subscription, webGUI)
+		subBody, guiBody := ui.EqualizeLineCount(
+			wrapSectionBody(subscription, half),
+			wrapSectionBody(webGUI, half),
+		)
 		row2 := lipgloss.JoinHorizontal(lipgloss.Top,
 			m.cardAt(ui.SubscriptionCardTitle, subBody, half),
 			m.cardAt(ui.WebGUICardTitle, guiBody, half),
@@ -393,6 +405,16 @@ func (m *Model) cardAt(title, body string, inner int) string {
 	// Title sits in the top border edge: ╭─── Name ────────╮
 	// `inner` matches the previous lipgloss content Width (padding included).
 	return ui.RenderBorderedSection(m.theme, title, body, inner)
+}
+
+// wrapSectionBody reflows body to the printable width inside a section of
+// contentWidth so later MaxWidth clipping cannot cut a token in half.
+func wrapSectionBody(body string, contentWidth int) string {
+	width := ui.SectionTextWidth(contentWidth)
+	if width <= 0 || body == "" {
+		return body
+	}
+	return lipgloss.NewStyle().Width(width).Render(body)
 }
 
 func valueOr(value, fallback string) string {

@@ -373,3 +373,92 @@ func TestOverview_NarrowLayoutStacksSingleColumn(t *testing.T) {
 		t.Fatalf("narrow layout still needs all cards: %s", view)
 	}
 }
+
+func TestOverview_MediumWidthKeepsFullCoreAndWebGUIMetrics(t *testing.T) {
+	// 74 is above the old 60-column two-column tripwire but below the
+	// half-card budget needed for Core IEC units and "N sessions" (issue #84).
+	model := New()
+	model.SetSize(74, 26)
+	mem := int64(100 << 20)
+	up := int64(136 << 20)
+	down := int64(199 << 20)
+	model.SetSnapshot(Snapshot{
+		Status: protocol.Status{Capabilities: []string{protocol.CapabilityWebGUI}},
+		Core:   protocol.CoreStatus{Status: "running", Version: "v1.19.29"},
+		Monitor: ui.MonitorSnapshot{
+			Connections:   58,
+			MemoryInUse:   mem,
+			UploadTotal:   up,
+			DownloadTotal: down,
+		},
+		WebGUI: &protocol.WebGUIStatus{
+			GatewayHealth:   "healthy",
+			GatewayAddr:     "127.0.0.1:9191",
+			ActivePanel:     "zashboard",
+			BrowserSessions: 0,
+		},
+	})
+	view := model.View()
+	for _, want := range []string{
+		ui.FormatBytes(mem),
+		"↑" + ui.FormatBytes(up),
+		"↓" + ui.FormatBytes(down),
+		"0 sessions",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("medium width truncated %q:\n%s", want, view)
+		}
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, ui.OverviewGeneralTitle) && strings.Contains(line, ui.CoreCardTitle) {
+			t.Fatalf("medium width should stack cards, not pair General/Core:\n%s", view)
+		}
+	}
+}
+
+func TestOverview_FullContentWidthKeepsWebGUISessions(t *testing.T) {
+	// 84 is the Full shell content pane (terminal 100 − rail 16). Two-column
+	// stays on, but the Web GUI address line is 40 cells and must wrap rather
+	// than MaxWidth-clip "sessions".
+	model := New()
+	model.SetSize(84, 26)
+	model.SetSnapshot(Snapshot{
+		Status: protocol.Status{Capabilities: []string{protocol.CapabilityWebGUI}},
+		Core:   protocol.CoreStatus{Status: "running", Version: "v1.19.29"},
+		Monitor: ui.MonitorSnapshot{
+			Connections:   58,
+			MemoryInUse:   100 << 20,
+			UploadTotal:   136 << 20,
+			DownloadTotal: 199 << 20,
+		},
+		WebGUI: &protocol.WebGUIStatus{
+			GatewayHealth:   "healthy",
+			GatewayAddr:     "127.0.0.1:9191",
+			ActivePanel:     "zashboard",
+			BrowserSessions: 0,
+		},
+	})
+	view := model.View()
+	for _, want := range []string{
+		ui.FormatBytes(100 << 20),
+		"↑" + ui.FormatBytes(136<<20),
+		"↓" + ui.FormatBytes(199<<20),
+		"127.0.0.1:9191",
+		"zashboard",
+		"sessions",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("full content width truncated %q:\n%s", want, view)
+		}
+	}
+	foundPair := false
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, ui.OverviewGeneralTitle) && strings.Contains(line, ui.CoreCardTitle) {
+			foundPair = true
+			break
+		}
+	}
+	if !foundPair {
+		t.Fatalf("full content width should keep the 2-column grid:\n%s", view)
+	}
+}
