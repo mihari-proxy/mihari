@@ -47,6 +47,33 @@ func TestRenderRailShowsDigitShortcuts(t *testing.T) {
 	}
 }
 
+func TestRenderRail_DoesNotWrapOverviewAtCompactWidth(t *testing.T) {
+	// Compact layout uses a 14-column rail. "1 Overview" is the longest
+	// unselected label; word-wrap at the space leaves the name on its own line.
+	const compactRailWidth = 14
+	for _, focused := range []bool{true, false} {
+		rendered := stripANSI(RenderRail(DefaultTheme(), RailPages(), 0, focused, compactRailWidth, 12))
+		if !railLineHasDigitAndLabel(rendered, "1", "Overview") {
+			t.Fatalf("Overview wrapped at compact width %d focused=%v:\n%s", compactRailWidth, focused, rendered)
+		}
+	}
+	// Unselected Overview is the screenshot case: user is on System, rail still
+	// must keep "1 Overview" on one line.
+	unselected := stripANSI(RenderRail(DefaultTheme(), RailPages(), 7, true, compactRailWidth, 12))
+	if !railLineHasDigitAndLabel(unselected, "1", "Overview") {
+		t.Fatalf("unselected Overview wrapped at compact width %d:\n%s", compactRailWidth, unselected)
+	}
+}
+
+func railLineHasDigitAndLabel(rendered, digit, label string) bool {
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.Contains(line, label) && strings.Contains(line, digit) {
+			return true
+		}
+	}
+	return false
+}
+
 func stripANSI(value string) string {
 	var builder strings.Builder
 	inEscape := false

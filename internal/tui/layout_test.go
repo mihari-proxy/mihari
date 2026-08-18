@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -53,6 +54,29 @@ func TestCalculateLayout_FullHasStatusAndNarrowRail(t *testing.T) {
 	}
 	if l.RailNavHeight != l.ContentHeight-l.MonitorHeight {
 		t.Fatalf("rail nav %d want %d", l.RailNavHeight, l.ContentHeight-l.MonitorHeight)
+	}
+}
+
+func TestCalculateLayout_CompactRailKeepsOverviewOnOneLine(t *testing.T) {
+	l := calculateLayout(72, 22)
+	if l.Class != ui.Compact {
+		t.Fatalf("class %v", l.Class)
+	}
+	rendered := ui.RenderRail(ui.DefaultTheme(), ui.RailPages(), 0, false, l.RailWidth, l.RailNavHeight)
+	plain := strings.ReplaceAll(rendered, "\x1b", "")
+	// Strip CSI leftovers roughly; the digit and label must share a line.
+	found := false
+	for _, line := range strings.Split(rendered, "\n") {
+		if !strings.Contains(line, "Overview") {
+			continue
+		}
+		found = true
+		if !strings.Contains(line, "1") {
+			t.Fatalf("Overview wrapped off its shortcut digit at rail width %d:\n%s", l.RailWidth, rendered)
+		}
+	}
+	if !found {
+		t.Fatalf("Overview missing from compact rail:\n%s", plain)
 	}
 }
 
