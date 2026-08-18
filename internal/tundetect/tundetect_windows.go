@@ -26,8 +26,8 @@ func detect(ctx context.Context) (Detection, error) {
 	return Detection{TunInterfaces: tun, MihomoProcesses: mihomo}, nil
 }
 
-// enumerateWintunAdapters lists network adapters whose description or friendly
-// name marks them as Windows TUN tunnels (wintun, Meta Tunnel / mihomo, WireGuard).
+// enumerateWintunAdapters lists Up Windows TUN tunnels (wintun, Meta Tunnel /
+// mihomo, WireGuard). Down leftover adapters cannot take routes and are omitted.
 func enumerateWintunAdapters() ([]string, error) {
 	var size uint32
 	if err := windows.GetAdaptersAddresses(0, 0x20 /* GAA_FLAG_INCLUDE_FRIENDLY_NAME — fill FriendlyName for friendlier display */, 0, nil, &size); err != nil && err != windows.ERROR_BUFFER_OVERFLOW {
@@ -41,22 +41,15 @@ func enumerateWintunAdapters() ([]string, error) {
 	if err := windows.GetAdaptersAddresses(0, 0x20 /* GAA_FLAG_INCLUDE_FRIENDLY_NAME */, 0, addr, &size); err != nil {
 		return nil, err
 	}
-	var adapters []string
+	var candidates []windowsTunCandidate
 	for a := addr; a != nil; a = a.Next {
-		desc := windows.UTF16PtrToString(a.Description)
-		friendly := windows.UTF16PtrToString(a.FriendlyName)
-		if !isWintun(desc, friendly) {
-			continue
-		}
-		adapters = append(adapters, formatAdapterName(desc, friendly))
+		candidates = append(candidates, windowsTunCandidate{
+			desc:       windows.UTF16PtrToString(a.Description),
+			friendly:   windows.UTF16PtrToString(a.FriendlyName),
+			operStatus: a.OperStatus,
+		})
 	}
-	return adapters, nil
-}
-
-// isWintun reports whether an adapter's description or friendly name identifies
-// it as a Windows TUN tunnel (wintun, Meta Tunnel / mihomo, WireGuard).
-func isWintun(desc, friendly string) bool {
-	return isWindowsTunAdapter(desc, friendly)
+	return collectWindowsTunNames(candidates), nil
 }
 
 // enumerateMihomoProcesses lists running processes whose executable name

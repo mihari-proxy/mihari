@@ -1,6 +1,9 @@
 package tundetect
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestIsWindowsTunAdapter(t *testing.T) {
 	tests := []struct {
@@ -37,5 +40,58 @@ func TestFormatAdapterName(t *testing.T) {
 	}
 	if got := formatAdapterName("Wintun Userspace Tunnel", ""); got != "Wintun Userspace Tunnel" {
 		t.Fatalf("got=%q", got)
+	}
+}
+
+func TestCollectWindowsTunNames_SkipsDownLeftover(t *testing.T) {
+	got := collectWindowsTunNames([]windowsTunCandidate{
+		{desc: "Wintun Userspace Tunnel", friendly: "本地连接", operStatus: ifOperStatusDown},
+		{desc: "Meta Tunnel", friendly: "Meta", operStatus: ifOperStatusUp},
+	})
+	want := []string{"Meta (Meta Tunnel)"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%q want=%q", got, want)
+	}
+}
+
+func TestCollectWindowsTunNames_DownOnlyIsEmpty(t *testing.T) {
+	got := collectWindowsTunNames([]windowsTunCandidate{
+		{desc: "Wintun Userspace Tunnel", friendly: "本地连接", operStatus: ifOperStatusDown},
+	})
+	if len(got) != 0 {
+		t.Fatalf("got=%q", got)
+	}
+}
+
+func TestCollectWindowsTunNames_KeepsUpCompeting(t *testing.T) {
+	got := collectWindowsTunNames([]windowsTunCandidate{
+		{desc: "Meta Tunnel", friendly: "mihomo", operStatus: ifOperStatusUp},
+	})
+	want := []string{"mihomo (Meta Tunnel)"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%q want=%q", got, want)
+	}
+}
+
+func TestIsWindowsTunUp(t *testing.T) {
+	tests := []struct {
+		name       string
+		operStatus uint32
+		want       bool
+	}{
+		{"up", ifOperStatusUp, true},
+		{"down leftover", ifOperStatusDown, false},
+		{"testing", ifOperStatusTesting, false},
+		{"unknown", ifOperStatusUnknown, false},
+		{"dormant", ifOperStatusDormant, false},
+		{"not present", ifOperStatusNotPresent, false},
+		{"lower layer down", ifOperStatusLowerLayerDown, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isWindowsTunUp(tt.operStatus); got != tt.want {
+				t.Fatalf("got=%v want=%v", got, tt.want)
+			}
+		})
 	}
 }
