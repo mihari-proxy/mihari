@@ -15,6 +15,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/geoip"
 	"github.com/mihari-proxy/mihari/internal/mihomo"
 	"github.com/mihari-proxy/mihari/internal/onboarding"
+	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/preferences"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/subscription"
@@ -100,6 +101,9 @@ type Options struct {
 	SysProxy sysproxy.Backend
 	// TunDetect is the TUN conflict detection backend. Nil installs the platform default in New.
 	TunDetect tundetect.Backend
+	// LookupTCPOccupant reports the PID listening on a host:port. Nil installs
+	// platform.LookupTCPOccupant. Tests inject a fake to avoid real socket tables.
+	LookupTCPOccupant func(string) (int, bool)
 	// SettingsPath is where config.Save writes settings after system-proxy (and related) mutations.
 	// Empty skips persistence (in-memory settings only).
 	SettingsPath string
@@ -142,6 +146,7 @@ type Manager struct {
 	webOpenToken      string
 	sysProxy          sysproxy.Backend
 	tunDetect         tundetect.Backend
+	lookupOccupant    func(string) (int, bool)
 	settingsPath      string
 	serviceStatus     func() (string, error)
 	onBackgroundError func(component string, err error)
@@ -182,6 +187,16 @@ func New(options Options) *Manager {
 	if tunDetect == nil {
 		tunDetect = tundetect.Platform()
 	}
+	lookupOccupant := options.LookupTCPOccupant
+	if lookupOccupant == nil {
+		lookupOccupant = func(addr string) (int, bool) {
+			occ, ok := platform.LookupTCPOccupant(addr)
+			if !ok {
+				return 0, false
+			}
+			return occ.PID, true
+		}
+	}
 	manager := &Manager{
 		store:             store,
 		coordinator:       coordinator,
@@ -205,6 +220,7 @@ func New(options Options) *Manager {
 		webOpenToken:      options.WebOpenToken,
 		sysProxy:          sysProxy,
 		tunDetect:         tunDetect,
+		lookupOccupant:    lookupOccupant,
 		settingsPath:      options.SettingsPath,
 		serviceStatus:     options.ServiceStatus,
 		onBackgroundError: options.OnBackgroundError,

@@ -336,14 +336,27 @@ func (m *Manager) detectTunConflict(ctx context.Context) *protocol.TunConflict {
 	return tundetect.Classify(detection, m.selfFromLive(ctx))
 }
 
-// selfFromLive builds the Classify identity from the running core PID and live
-// tun.enable / tun.device. Detection failures stay best-effort: a missing
-// controller or unreadable configs leave TunActive false so no adapter is
-// subtracted.
+// selfFromLive builds the Classify identity from the running core PID, the
+// process holding the controller address, this daemon's PID, the managed
+// core path, and live tun.enable / tun.device. Occupant lookup is
+// best-effort. A missing controller or unreadable configs leave TunActive
+// false so no adapter is subtracted.
 func (m *Manager) selfFromLive(ctx context.Context) tundetect.Self {
-	self := tundetect.Self{CorePID: m.store.Load().Core.PID}
+	self := tundetect.Self{
+		CorePID:    m.store.Load().Core.PID,
+		DaemonPID:  os.Getpid(),
+		BinaryPath: m.installRequest.BinaryPath,
+	}
 	if m.controller == nil || ctx.Err() != nil {
 		return self
+	}
+	m.settingsMu.Lock()
+	controllerAddr := m.settings.ControllerAddr
+	m.settingsMu.Unlock()
+	if m.lookupOccupant != nil && controllerAddr != "" {
+		if pid, ok := m.lookupOccupant(controllerAddr); ok && pid > 0 {
+			self.OccupantPID = pid
+		}
 	}
 	configs, err := m.controller.Configs(ctx)
 	if err != nil {

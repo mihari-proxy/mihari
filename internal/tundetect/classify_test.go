@@ -2,6 +2,7 @@ package tundetect
 
 import (
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -138,6 +139,90 @@ func TestClassify_UnknownPIDKeepsAllProcesses(t *testing.T) {
 		MihomoProcesses: []Process{{Name: "mihomo.exe", PID: 13400}},
 	}, Self{})
 	if got == nil || len(got.OtherMihomoProcesses) != 1 {
+		t.Fatalf("got=%#v", got)
+	}
+}
+
+func TestClassify_SubtractsByOccupantPIDWhenCorePIDUnknown(t *testing.T) {
+	got := Classify(Detection{
+		MihomoProcesses: []Process{{Name: "mihomo.exe", PID: 43560}},
+	}, Self{OccupantPID: 43560})
+	if got != nil {
+		t.Fatalf("got=%#v, want nil after occupant match", got)
+	}
+}
+
+func TestClassify_SubtractsByParentPIDWhenCorePIDUnknown(t *testing.T) {
+	got := Classify(Detection{
+		MihomoProcesses: []Process{{Name: "mihomo.exe", PID: 43560, ParentPID: 36560}},
+	}, Self{DaemonPID: 36560})
+	if got != nil {
+		t.Fatalf("got=%#v, want nil after parent match", got)
+	}
+}
+
+func TestClassify_SubtractsByBinaryPathWhenCorePIDUnknown(t *testing.T) {
+	got := Classify(Detection{
+		MihomoProcesses: []Process{{Name: "mihomo.exe", PID: 43560, Path: `C:\ProgramData\mihari\mihomo.exe`}},
+	}, Self{BinaryPath: `C:\ProgramData\mihari\mihomo.exe`})
+	if got != nil {
+		t.Fatalf("got=%#v, want nil after path match", got)
+	}
+}
+
+func TestClassify_BinaryPathMatchIgnoresCase(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("case-insensitive executable paths are Windows-specific")
+	}
+	got := Classify(Detection{
+		MihomoProcesses: []Process{{Name: "mihomo.exe", PID: 43560, Path: `C:\ProgramData\Mihari\mihomo.exe`}},
+	}, Self{BinaryPath: `c:\programdata\mihari\mihomo.exe`})
+	if got != nil {
+		t.Fatalf("got=%#v, want nil after case-insensitive path match", got)
+	}
+}
+
+func TestClassify_BinaryPathMatchKeepsDifferentCaseForeignProcessOnUnix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix paths are case-sensitive")
+	}
+	got := Classify(Detection{
+		MihomoProcesses: []Process{{Name: "mihomo", PID: 43560, Path: "/opt/Mihari/mihomo"}},
+	}, Self{BinaryPath: "/opt/mihari/mihomo"})
+	if got == nil || len(got.OtherMihomoProcesses) != 1 {
+		t.Fatalf("got=%#v, want differently cased foreign process retained", got)
+	}
+}
+
+func TestClassify_StaleCorePIDStillSubtractsByOccupant(t *testing.T) {
+	got := Classify(Detection{
+		MihomoProcesses: []Process{{Name: "mihomo.exe", PID: 43560}},
+	}, Self{CorePID: 11111, OccupantPID: 43560})
+	if got != nil {
+		t.Fatalf("got=%#v, want nil when occupant matches live pid", got)
+	}
+}
+
+func TestClassify_StaleCorePIDKeepsForeignAndSubtractsOccupant(t *testing.T) {
+	got := Classify(Detection{
+		MihomoProcesses: []Process{
+			{Name: "foreign-mihomo", PID: 11111, ParentPID: 999},
+			{Name: "mihomo", PID: 43560, ParentPID: 999},
+		},
+	}, Self{CorePID: 11111, OccupantPID: 43560})
+	if got == nil || len(got.OtherMihomoProcesses) != 1 || got.OtherMihomoProcesses[0] != "foreign-mihomo (11111)" {
+		t.Fatalf("got=%#v", got)
+	}
+}
+
+func TestClassify_KeepsForeignWhenFallbacksDoNotMatch(t *testing.T) {
+	got := Classify(Detection{
+		MihomoProcesses: []Process{
+			{Name: "mihomo.exe", PID: 43560, ParentPID: 36560, Path: `C:\ProgramData\mihari\mihomo.exe`},
+			{Name: "Sparkle-mihomo.exe", PID: 99, ParentPID: 8, Path: `C:\Sparkle\mihomo.exe`},
+		},
+	}, Self{CorePID: 43560, DaemonPID: 36560, OccupantPID: 43560, BinaryPath: `C:\ProgramData\mihari\mihomo.exe`})
+	if got == nil || len(got.OtherMihomoProcesses) != 1 || got.OtherMihomoProcesses[0] != "Sparkle-mihomo.exe (99)" {
 		t.Fatalf("got=%#v", got)
 	}
 }

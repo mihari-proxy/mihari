@@ -6,8 +6,9 @@
 // take routes (Windows: IfOperStatusUp only; leftover Down Wintun devices are
 // ignored) and every mihomo process on the system. Classify then subtracts this
 // daemon's own adapter/process using a Self identity supplied by the runtime
-// layer (live tun.enable / tun.device and the supervised core PID). Keeping
-// detection stateless lets it stay testable and free of runtime dependencies.
+// layer (live tun.enable / tun.device, supervised core PID, controller
+// occupant, parent PID, and managed binary path). Keeping detection
+// stateless lets it stay testable and free of runtime dependencies.
 //
 // Platform backends implement unexported detect:
 //   - Windows: IP adapter table (wintun) + toolhelp process snapshot
@@ -20,11 +21,14 @@ package tundetect
 
 import "context"
 
-// Process is one observed mihomo process. Classify subtracts by PID and
-// formats the remainder as "name (pid)" for the protocol layer.
+// Process is one observed mihomo process. Classify subtracts by identity
+// (supervised PID, controller occupant, parent PID, or managed binary path)
+// and formats the remainder as "name (pid)" for the protocol layer.
 type Process struct {
-	Name string
-	PID  int
+	Name      string
+	PID       int
+	ParentPID int
+	Path      string
 }
 
 // Self is this daemon's identity used by Classify to subtract our own
@@ -36,6 +40,12 @@ type Self struct {
 	TunName string
 	// CorePID is the supervised mihomo PID; zero means unknown.
 	CorePID int
+	// OccupantPID is the process listening on this daemon's controller address.
+	OccupantPID int
+	// DaemonPID is this daemon process; a mihomo whose parent matches is self.
+	DaemonPID int
+	// BinaryPath is the managed core executable; a matching image path is self.
+	BinaryPath string
 }
 
 // Detection is the system observation after dropping adapters that cannot
