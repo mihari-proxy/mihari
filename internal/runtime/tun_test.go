@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/subscription"
 	"github.com/mihari-proxy/mihari/internal/tundetect"
@@ -561,4 +563,170 @@ func TestEnableTunNotGatedWhenDetectionFails(t *testing.T) {
 	if status.Conflict != nil {
 		t.Fatalf("conflict=%#v; detection failure must yield nil conflict evidence", status.Conflict)
 	}
+}
+
+func TestTunStatusSubtractsSelfWhenCorePIDZeroButOccupantMatches(t *testing.T) {
+	controller := &fakeController{configs: map[string]any{}}
+	settings := defaultTunSettings(nil)
+	manager := newTestManager(Options{
+		Controller:   controller,
+		SettingsPath: persistTunSettings(t, settings),
+		Settings:     settings,
+		TunDetect: &tundetect.FakeBackend{
+			Detection: tundetect.Detection{MihomoProcesses: []tundetect.Process{{Name: "mihomo.exe", PID: 43560}}},
+		},
+		LookupTCPOccupant: func(addr string) (int, bool) {
+			if addr != settings.ControllerAddr {
+				t.Fatalf("occupant lookup addr=%q want %q", addr, settings.ControllerAddr)
+			}
+			return 43560, true
+		},
+	})
+
+	status, err := manager.TunStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Conflict != nil {
+		t.Fatalf("conflict=%#v, want nil when controller occupant is our mihomo", status.Conflict)
+	}
+}
+
+func TestTunStatusSubtractsSelfWhenCorePIDZeroButParentMatches(t *testing.T) {
+	controller := &fakeController{configs: map[string]any{}}
+	settings := defaultTunSettings(nil)
+	manager := newTestManager(Options{
+		Controller:   controller,
+		SettingsPath: persistTunSettings(t, settings),
+		Settings:     settings,
+		TunDetect: &tundetect.FakeBackend{
+			Detection: tundetect.Detection{MihomoProcesses: []tundetect.Process{
+				{Name: "mihomo.exe", PID: 43560, ParentPID: os.Getpid()},
+			}},
+		},
+	})
+
+	status, err := manager.TunStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Conflict != nil {
+		t.Fatalf("conflict=%#v, want nil when parent is this daemon", status.Conflict)
+	}
+}
+
+func TestTunStatusSubtractsSelfWhenCorePIDZeroButPathMatches(t *testing.T) {
+	controller := &fakeController{configs: map[string]any{}}
+	settings := defaultTunSettings(nil)
+	corePath := filepath.Join(t.TempDir(), "mihomo.exe")
+	manager := newTestManager(Options{
+		Controller:     controller,
+		SettingsPath:   persistTunSettings(t, settings),
+		Settings:       settings,
+		InstallRequest: core.InstallRequest{BinaryPath: corePath},
+		TunDetect: &tundetect.FakeBackend{
+			Detection: tundetect.Detection{MihomoProcesses: []tundetect.Process{
+				{Name: "mihomo.exe", PID: 43560, Path: corePath},
+			}},
+		},
+	})
+
+	status, err := manager.TunStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Conflict != nil {
+		t.Fatalf("conflict=%#v, want nil when image path is the managed core", status.Conflict)
+	}
+}
+
+func TestTunStatusStaleCorePIDUsesOccupant(t *testing.T) {
+	controller := &fakeController{configs: map[string]any{}}
+	settings := defaultTunSettings(nil)
+	manager := newTestManager(Options{
+		Controller:   controller,
+		SettingsPath: persistTunSettings(t, settings),
+		Settings:     settings,
+		TunDetect: &tundetect.FakeBackend{
+			Detection: tundetect.Detection{MihomoProcesses: []tundetect.Process{{Name: "mihomo.exe", PID: 43560}}},
+		},
+		LookupTCPOccupant: func(string) (int, bool) { return 43560, true },
+	})
+	manager.store.Store(state.Snapshot{Health: "ok", Core: state.CoreState{PID: 11111}})
+
+	status, err := manager.TunStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Conflict != nil {
+		t.Fatalf("conflict=%#v, want nil when occupant matches live pid", status.Conflict)
+	}
+}
+
+func TestTunStatusKeepsForeignMihomoWhenIdentityDoesNotMatch(t *testing.T) {
+	controller := &fakeController{configs: map[string]any{}}
+	settings := defaultTunSettings(nil)
+	manager := newTestManager(Options{
+		Controller:     controller,
+		SettingsPath:   persistTunSettings(t, settings),
+		Settings:       settings,
+		InstallRequest: core.InstallRequest{BinaryPath: filepath.Join(t.TempDir(), "mihomo.exe")},
+		TunDetect: &tundetect.FakeBackend{
+			Detection: tundetect.Detection{MihomoProcesses: []tundetect.Process{
+				{Name: "Sparkle-mihomo.exe", PID: 99, ParentPID: 8, Path: `C:\Sparkle\mihomo.exe`},
+			}},
+		},
+		LookupTCPOccupant: func(string) (int, bool) { return 43560, true },
+	})
+	manager.store.Store(state.Snapshot{Health: "ok", Core: state.CoreState{PID: 43560}})
+
+	status, err := manager.TunStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Conflict == nil || len(status.Conflict.OtherMihomoProcesses) != 1 || status.Conflict.OtherMihomoProcesses[0] != "Sparkle-mihomo.exe (99)" {
+		t.Fatalf("conflict=%#v", status.Conflict)
+	}
+}
+
+func TestSelfFromLiveSkipsOccupantLookupWithoutController(t *testing.T) {
+	calls := 0
+	manager := newTestManager(Options{
+		Settings: defaultTunSettings(nil),
+		LookupTCPOccupant: func(string) (int, bool) {
+			calls++
+			return 123, true
+		},
+	})
+	manager.controller = nil
+	manager.selfFromLive(context.Background())
+	if calls != 0 {
+		t.Fatalf("occupant lookup calls=%d, want 0 without controller", calls)
+	}
+}
+
+func TestSelfFromLiveSkipsOccupantLookupWhenContextCanceled(t *testing.T) {
+	calls := 0
+	manager := newTestManager(Options{
+		Settings: defaultTunSettings(nil),
+		LookupTCPOccupant: func(string) (int, bool) {
+			calls++
+			return 123, true
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	manager.selfFromLive(ctx)
+	if calls != 0 {
+		t.Fatalf("occupant lookup calls=%d, want 0 when context is canceled", calls)
+	}
+}
+
+func persistTunSettings(t *testing.T, settings config.Settings) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "settings.yaml")
+	if err := config.Save(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

@@ -952,6 +952,9 @@ func newTestManager(options Options) *Manager {
 	if options.TunDetect == nil {
 		options.TunDetect = &tundetect.FakeBackend{}
 	}
+	if options.LookupTCPOccupant == nil {
+		options.LookupTCPOccupant = func(string) (int, bool) { return 0, false }
+	}
 	manager := New(options)
 	manager.store = store
 	return manager
