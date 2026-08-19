@@ -3,6 +3,7 @@ package tundetect
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -65,16 +66,30 @@ func isSelfProcess(p Process, self Self) bool {
 	if p.PID <= 0 {
 		return false
 	}
-	if self.CorePID != 0 && p.PID == self.CorePID {
-		return true
-	}
 	if self.OccupantPID != 0 && p.PID == self.OccupantPID {
 		return true
 	}
 	if self.DaemonPID != 0 && p.ParentPID != 0 && p.ParentPID == self.DaemonPID {
 		return true
 	}
-	return binaryPathMatch(p.Path, self.BinaryPath)
+	if binaryPathMatch(p.Path, self.BinaryPath) {
+		return true
+	}
+	if self.CorePID == 0 || p.PID != self.CorePID {
+		return false
+	}
+	// A stored core PID may be stale and reused by a foreign process. When
+	// live identities are available, they must not contradict this process.
+	if self.OccupantPID != 0 && p.PID != self.OccupantPID {
+		return false
+	}
+	if self.DaemonPID != 0 && p.ParentPID != 0 && p.ParentPID != self.DaemonPID {
+		return false
+	}
+	if self.BinaryPath != "" && p.Path != "" && !binaryPathMatch(p.Path, self.BinaryPath) {
+		return false
+	}
+	return true
 }
 
 func binaryPathMatch(listed, want string) bool {
@@ -83,7 +98,11 @@ func binaryPathMatch(listed, want string) bool {
 	if listed == "" || want == "" {
 		return false
 	}
-	return strings.EqualFold(filepath.Clean(listed), filepath.Clean(want))
+	cleanListed, cleanWant := filepath.Clean(listed), filepath.Clean(want)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(cleanListed, cleanWant)
+	}
+	return cleanListed == cleanWant
 }
 
 func formatProcess(p Process) string {

@@ -38,10 +38,10 @@ func enumerateDarwinTun(ctx context.Context) ([]string, error) {
 	return tun, nil
 }
 
-// enumerateDarwinMihomo lists mihomo processes via "ps -eo comm=,pid=,ppid=".
-// The comm column may carry a full path; pid and ppid are the last two fields.
+// enumerateDarwinMihomo lists mihomo processes via "ps -eo pid=,ppid=,comm=".
+// PID and parent PID precede comm so command-path whitespace is preserved.
 func enumerateDarwinMihomo(ctx context.Context) ([]Process, error) {
-	out, err := exec.CommandContext(ctx, "ps", "-eo", "comm=,pid=,ppid=").Output()
+	out, err := exec.CommandContext(ctx, "ps", "-eo", "pid=,ppid=,comm=").Output()
 	if err != nil {
 		return nil, err
 	}

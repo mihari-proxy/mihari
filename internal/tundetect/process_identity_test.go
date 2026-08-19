@@ -26,8 +26,15 @@ func TestParseLinuxStatPPID_RejectsMalformed(t *testing.T) {
 }
 
 func TestParseDarwinProcessLine(t *testing.T) {
-	name, pid, ppid, ok := parseDarwinProcessLine("/usr/local/bin/mihomo 43560 36560")
+	name, pid, ppid, ok := parseDarwinProcessLine("43560 36560 /usr/local/bin/mihomo")
 	if !ok || name != "/usr/local/bin/mihomo" || pid != 43560 || ppid != 36560 {
+		t.Fatalf("name=%q pid=%d ppid=%d ok=%v", name, pid, ppid, ok)
+	}
+}
+
+func TestParseDarwinProcessLine_PreservesRepeatedWhitespaceInCommand(t *testing.T) {
+	name, pid, ppid, ok := parseDarwinProcessLine("43560 36560 /Applications/Mihari  2/mihomo")
+	if !ok || name != "/Applications/Mihari  2/mihomo" || pid != 43560 || ppid != 36560 {
 		t.Fatalf("name=%q pid=%d ppid=%d ok=%v", name, pid, ppid, ok)
 	}
 }

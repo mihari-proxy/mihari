@@ -689,6 +689,39 @@ func TestTunStatusKeepsForeignMihomoWhenIdentityDoesNotMatch(t *testing.T) {
 	}
 }
 
+func TestSelfFromLiveSkipsOccupantLookupWithoutController(t *testing.T) {
+	calls := 0
+	manager := newTestManager(Options{
+		Settings: defaultTunSettings(nil),
+		LookupTCPOccupant: func(string) (int, bool) {
+			calls++
+			return 123, true
+		},
+	})
+	manager.controller = nil
+	manager.selfFromLive(context.Background())
+	if calls != 0 {
+		t.Fatalf("occupant lookup calls=%d, want 0 without controller", calls)
+	}
+}
+
+func TestSelfFromLiveSkipsOccupantLookupWhenContextCanceled(t *testing.T) {
+	calls := 0
+	manager := newTestManager(Options{
+		Settings: defaultTunSettings(nil),
+		LookupTCPOccupant: func(string) (int, bool) {
+			calls++
+			return 123, true
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	manager.selfFromLive(ctx)
+	if calls != 0 {
+		t.Fatalf("occupant lookup calls=%d, want 0 when context is canceled", calls)
+	}
+}
+
 func persistTunSettings(t *testing.T, settings config.Settings) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "settings.yaml")

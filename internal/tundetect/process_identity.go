@@ -23,20 +23,30 @@ func parseLinuxStatPPID(stat string) (int, bool) {
 	return ppid, true
 }
 
-// parseDarwinProcessLine parses `ps -eo comm=,pid=,ppid=` output. comm may be a
-// path, so pid and ppid are the last two fields.
+// parseDarwinProcessLine parses `ps -eo pid=,ppid=,comm=` output. The command
+// remainder may be a path containing repeated whitespace.
 func parseDarwinProcessLine(line string) (name string, pid, ppid int, ok bool) {
-	fields := strings.Fields(line)
-	if len(fields) < 3 {
+	rest := strings.TrimLeft(line, " \t")
+	firstEnd := strings.IndexAny(rest, " \t")
+	if firstEnd < 0 {
 		return "", 0, 0, false
 	}
-	ppid, err := strconv.Atoi(fields[len(fields)-1])
+	pid, err := strconv.Atoi(rest[:firstEnd])
 	if err != nil {
 		return "", 0, 0, false
 	}
-	pid, err = strconv.Atoi(fields[len(fields)-2])
+	rest = strings.TrimLeft(rest[firstEnd:], " \t")
+	secondEnd := strings.IndexAny(rest, " \t")
+	if secondEnd < 0 {
+		return "", 0, 0, false
+	}
+	ppid, err = strconv.Atoi(rest[:secondEnd])
 	if err != nil {
 		return "", 0, 0, false
 	}
-	return strings.Join(fields[:len(fields)-2], " "), pid, ppid, true
+	name = strings.TrimLeft(rest[secondEnd:], " \t")
+	if name == "" {
+		return "", 0, 0, false
+	}
+	return name, pid, ppid, true
 }

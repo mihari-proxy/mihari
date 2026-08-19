@@ -347,6 +347,9 @@ func (m *Manager) selfFromLive(ctx context.Context) tundetect.Self {
 		DaemonPID:  os.Getpid(),
 		BinaryPath: m.installRequest.BinaryPath,
 	}
+	if m.controller == nil || ctx.Err() != nil {
+		return self
+	}
 	m.settingsMu.Lock()
 	controllerAddr := m.settings.ControllerAddr
 	m.settingsMu.Unlock()
@@ -354,9 +357,6 @@ func (m *Manager) selfFromLive(ctx context.Context) tundetect.Self {
 		if pid, ok := m.lookupOccupant(controllerAddr); ok && pid > 0 {
 			self.OccupantPID = pid
 		}
-	}
-	if m.controller == nil || ctx.Err() != nil {
-		return self
 	}
 	configs, err := m.controller.Configs(ctx)
 	if err != nil {

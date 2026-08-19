@@ -94,7 +94,11 @@ func linuxProcessPath(pid string) string {
 	if err != nil {
 		return ""
 	}
-	return path
+	return trimDeletedProcessPath(path)
+}
+
+func trimDeletedProcessPath(path string) string {
+	return strings.TrimSuffix(path, " (deleted)")
 }
 
 func isAllDigits(s string) bool {
