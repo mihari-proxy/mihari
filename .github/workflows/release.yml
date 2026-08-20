@@ -10,9 +10,13 @@ on:
         description: 'Release version, e.g. v0.3.0 (must match ^v[0-9]+\.[0-9]+\.[0-9]+$; enforced by the version gate)'
         required: true
         type: string
+      commit_sha:
+        description: 'Exact 40-hex main commit to release'
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   # Single source of truth for the version: explicit input on dispatch, else the
@@ -22,9 +26,59 @@ env:
   PLATFORMS: linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64,windows/arm64
 
 jobs:
+  resolve:
+    name: resolve stable source
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      should_release: ${{ steps.gate.outputs.should_release }}
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - id: gate
+        name: Guard stable version
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = push ] && printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$'; then
+            echo "should_release=false" >> "${GITHUB_OUTPUT}"
+            echo "dev tag is handled only by release-dev.yml"
+            exit 0
+          fi
+          printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::version must match the required stable format"; exit 1; }
+          echo "should_release=true" >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.should_release == 'true'
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+          fetch-depth: 0
+
+      - id: source
+        if: steps.gate.outputs.should_release == 'true'
+        name: Resolve immutable source commit
+        env:
+          INPUT_COMMIT_SHA: ${{ inputs.commit_sha }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = workflow_dispatch ]; then
+            printf '%s' "${INPUT_COMMIT_SHA}" | grep -Eq '^[0-9a-f]{40}$' \
+              || { echo "::error::commit_sha must be a 40-character lowercase hexadecimal SHA"; exit 1; }
+            SHA="$(git rev-parse HEAD)"
+            [ "${SHA}" = "${INPUT_COMMIT_SHA}" ] \
+              || { echo "::error::commit_sha does not match the checked-out main commit"; exit 1; }
+          else
+            SHA="$(git rev-parse "${GITHUB_REF}^{}")"
+          fi
+          [ "$(git rev-parse HEAD)" = "${SHA}" ] \
+            || { echo "::error::checkout did not resolve ${SHA}"; exit 1; }
+          echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
+
   build:
     name: build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: resolve
+    if: needs.resolve.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -37,6 +91,14 @@ jobs:
           - { goos: windows, goarch: arm64, ext: '.exe' }
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Verify immutable source commit
+        run: |
+          [ "$(git rev-parse HEAD)" = "${{ needs.resolve.outputs.sha }}" ] \
+            || { echo "::error::checkout did not resolve the approved source commit"; exit 1; }
 
       - uses: actions/setup-go@v7
         with:
@@ -47,8 +109,8 @@ jobs:
         # entry point. The dispatch input is UI-gated upstream; this also covers
         # tag pushes and any API-direct triggering.
         run: |
-          echo "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-            || { echo "::error::version '${VERSION}' must match ^v[0-9]+\.[0-9]+\.[0-9]+$ (no pre-release suffix)"; exit 1; }
+          printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::version must match the required stable format"; exit 1; }
 
       - name: Build
         env:
@@ -71,11 +133,21 @@ jobs:
 
   bundle:
     name: bundle all-in-one
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    needs: [resolve, build]
+    if: needs.resolve.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Verify immutable source commit
+        run: |
+          [ "$(git rev-parse HEAD)" = "${{ needs.resolve.outputs.sha }}" ] \
+            || { echo "::error::checkout did not resolve the approved source commit"; exit 1; }
 
       - uses: actions/setup-go@v7
         with:
@@ -105,9 +177,11 @@ jobs:
 
   release:
     name: publish release
-    needs: [build, bundle]
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    needs: [resolve, build, bundle]
+    if: needs.resolve.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       # Mapped at job scope so the AList steps' `if: env.ALIST_URL != ''` can see
       # them (step `if` cannot read step-level env, and secrets are unreadable in
@@ -117,14 +191,23 @@ jobs:
       ALIST_PASSWORD: ${{ secrets.ALIST_PASSWORD }}
       ALIST_BASE_PATH: ${{ vars.ALIST_BASE_PATH }}
       MIHARI_KEEP_VERSIONS: ${{ vars.MIHARI_KEEP_VERSIONS }}
+      SHA: ${{ needs.resolve.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Verify immutable source commit
+        run: |
+          [ "$(git rev-parse HEAD)" = "${SHA}" ] \
+            || { echo "::error::checkout did not resolve the approved source commit"; exit 1; }
 
       - name: Version gate (final)
         # Layer ③ (design §4.2): last-chance gate before anything is published.
         run: |
-          echo "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-            || { echo "::error::version '${VERSION}' rejected at final gate"; exit 1; }
+          printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::version rejected at final gate"; exit 1; }
 
       - name: Download artifacts
         uses: actions/download-artifact@v8
@@ -146,6 +229,7 @@ jobs:
           # Explicit tag so workflow_dispatch (on a branch) tags/publishes the
           # requested version rather than the branch name (design §4.2).
           tag_name: ${{ env.VERSION }}
+          target_commitish: ${{ env.SHA }}
           files: dist/*
           generate_release_notes: true
 
@@ -161,6 +245,8 @@ jobs:
             --version "${VERSION}" \
             --dist-dir dist \
             --repo-root . \
+            --channel stable \
+            --commit-sha "${SHA}" \
             --base-path "${ALIST_BASE_PATH:-/mihari-release/mihari}" \
             --keep-versions "${MIHARI_KEEP_VERSIONS:-5}"
 

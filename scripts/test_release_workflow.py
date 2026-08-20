@@ -8,6 +8,52 @@ import yaml
 
 
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "release-dev.yml"
+STABLE_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "release.yml"
+STABLE_RETRACT_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "retract.yml"
+
+
+def test_stable_release_and_retract_pin_the_stable_alist_channel():
+    stable_release_workflow = STABLE_WORKFLOW.read_text(encoding="utf-8")
+    stable_retract_workflow = STABLE_RETRACT_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "--channel stable" in stable_release_workflow
+    assert '--commit-sha "${SHA}"' in stable_release_workflow
+    assert "--channel stable" in stable_retract_workflow
+
+
+def test_stable_release_resolves_and_uses_the_approved_source_sha():
+    workflow = STABLE_WORKFLOW.read_text(encoding="utf-8")
+    document = yaml.safe_load(workflow)
+    resolve_steps = document["jobs"]["resolve"]["steps"]
+    checkout = next(step for step in resolve_steps if step.get("uses") == "actions/checkout@v7")
+    source = next(step["run"] for step in resolve_steps if step.get("name") == "Resolve immutable source commit")
+
+    assert 'git rev-parse "${GITHUB_REF}^{}"' in workflow
+    assert "should_release=false" in workflow
+    assert checkout["with"]["ref"] == "${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}"
+    assert "^[0-9a-f]{40}$" in source
+    assert '[ "${SHA}" = "${INPUT_COMMIT_SHA}" ]' in source
+    assert '[ "$(git rev-parse HEAD)" = "${SHA}" ]' in source
+
+    for job_name in ("build", "bundle", "release"):
+        job = document["jobs"][job_name]
+        assert "resolve" in job["needs"]
+        assert job["if"] == "needs.resolve.outputs.should_release == 'true'"
+        job_checkout = next(step for step in job["steps"] if step.get("uses") == "actions/checkout@v7")
+        assert job_checkout["with"]["ref"] == "${{ needs.resolve.outputs.sha }}"
+
+
+def test_stable_release_validates_dispatch_identity_without_interpolating_or_logging_it():
+    document = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = document["jobs"]["resolve"]["steps"]
+    guard = next(step["run"] for step in steps if step.get("name") == "Guard stable version")
+    source = next(step for step in steps if step.get("name") == "Resolve immutable source commit")
+
+    assert 'echo "${VERSION}"' not in guard
+    assert "version '${VERSION}'" not in guard
+    assert source["env"]["INPUT_COMMIT_SHA"] == "${{ inputs.commit_sha }}"
+    assert "${{ inputs.commit_sha }}" not in source["run"]
+    assert "INPUT_COMMIT_SHA" in source["run"]
 
 
 def test_release_workflow_uses_policy_instead_of_write_only_get_fields():
