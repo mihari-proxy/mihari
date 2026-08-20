@@ -53,9 +53,27 @@ def test_stable_release_resolves_and_uses_the_approved_source_sha():
     for job_name in ("build", "bundle", "release"):
         job = document["jobs"][job_name]
         assert "resolve" in job["needs"]
-        assert job["if"] == "needs.resolve.outputs.should_release == 'true'"
+        expected_condition = "needs.resolve.outputs.should_release == 'true'"
+        if job_name == "release":
+            expected_condition += (
+                " && (github.event_name == 'push' || "
+                "(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))"
+            )
+        assert job["if"] == expected_condition
         job_checkout = next(step for step in job["steps"] if step.get("uses") == "actions/checkout@v7")
         assert job_checkout["with"]["ref"] == "${{ needs.resolve.outputs.sha }}"
+
+
+def test_stable_release_secrets_job_allows_dispatch_only_from_main():
+    document = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    release = document["jobs"]["release"]
+
+    assert release["needs"] == ["resolve", "build", "bundle"]
+    assert release["if"] == (
+        "needs.resolve.outputs.should_release == 'true' && "
+        "(github.event_name == 'push' || "
+        "(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))"
+    )
 
 
 def test_stable_release_validates_dispatch_identity_without_interpolating_or_logging_it():
@@ -69,6 +87,173 @@ def test_stable_release_validates_dispatch_identity_without_interpolating_or_log
     assert source["env"]["INPUT_COMMIT_SHA"] == "${{ inputs.commit_sha }}"
     assert "${{ inputs.commit_sha }}" not in source["run"]
     assert "INPUT_COMMIT_SHA" in source["run"]
+
+
+def test_stable_tag_release_requires_a_commit_reachable_from_trusted_main_before_release():
+    document = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    resolve = document["jobs"]["resolve"]
+    source = next(step["run"] for step in resolve["steps"] if step.get("name") == "Resolve immutable source commit")
+
+    assert resolve["outputs"]["should_release"] == "${{ steps.source.outputs.should_release || steps.gate.outputs.should_release }}"
+    assert "should_resolve=false" in next(
+        step["run"] for step in resolve["steps"] if step.get("name") == "Guard stable version"
+    )
+    assert "git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main" in source
+    assert 'git merge-base --is-ancestor "${SHA}" origin/main' in source
+    assert "::error::stable tag must reference a commit reachable from main" in source
+    assert source.index('git rev-parse "${GITHUB_REF}^{}"') < source.index('git merge-base --is-ancestor "${SHA}" origin/main')
+    assert source.index('git merge-base --is-ancestor "${SHA}" origin/main') < source.index('should_release=true')
+
+
+def _git(repo, *args):
+    return subprocess.run(
+        ["git", *args],
+        capture_output=True,
+        check=True,
+        cwd=repo,
+        text=True,
+    ).stdout.strip()
+
+
+def _stable_tag_repository(tmp_path, tag_name, tag_on_main):
+    remote = tmp_path / "origin.git"
+    repository = tmp_path / "repository"
+    _git(tmp_path, "init", "--bare", str(remote))
+    _git(tmp_path, "init", str(repository))
+    _git(repository, "config", "user.name", "Workflow Test")
+    _git(repository, "config", "user.email", "workflow-test@example.invalid")
+    _git(repository, "checkout", "-b", "main")
+    (repository / "release.txt").write_text("base\n", encoding="utf-8")
+    _git(repository, "add", "release.txt")
+    _git(repository, "commit", "-m", "base")
+    base = _git(repository, "rev-parse", "HEAD")
+    _git(repository, "remote", "add", "origin", str(remote))
+    _git(repository, "push", "-u", "origin", "main")
+
+    if tag_on_main:
+        _git(repository, "tag", tag_name, base)
+        (repository / "release.txt").write_text("main tip\n", encoding="utf-8")
+        _git(repository, "commit", "-am", "advance main")
+        _git(repository, "push", "origin", "main")
+    else:
+        _git(repository, "checkout", "-b", "release-candidate", base)
+        (repository / "release.txt").write_text("off main\n", encoding="utf-8")
+        _git(repository, "commit", "-am", "off-main release candidate")
+        _git(repository, "tag", tag_name)
+
+    _git(repository, "checkout", tag_name)
+    return repository, _git(repository, "rev-parse", "HEAD")
+
+
+def _run_stable_tag_source(repository, tag_name, output_path):
+    document = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    source = next(
+        step["run"]
+        for step in document["jobs"]["resolve"]["steps"]
+        if step.get("name") == "Resolve immutable source commit"
+    )
+    return subprocess.run(
+        [_bash_for_workflow_guard(), "-c", source],
+        capture_output=True,
+        check=False,
+        cwd=repository,
+        env={
+            **os.environ,
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_OUTPUT": str(output_path),
+            "GITHUB_REF": f"refs/tags/{tag_name}",
+        },
+        text=True,
+    )
+
+
+def test_stable_tag_source_accepts_a_historical_main_ancestor(tmp_path):
+    repository, sha = _stable_tag_repository(tmp_path, "v1.2.3", tag_on_main=True)
+    output = tmp_path / "github-output"
+
+    result = _run_stable_tag_source(repository, "v1.2.3", output)
+
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8") == f"sha={sha}\nshould_release=true\n"
+
+
+def test_stable_tag_source_rejects_an_off_main_commit(tmp_path):
+    repository, _ = _stable_tag_repository(tmp_path, "v1.2.4", tag_on_main=False)
+    output = tmp_path / "github-output"
+
+    result = _run_stable_tag_source(repository, "v1.2.4", output)
+
+    assert result.returncode != 0
+    assert "::error::stable tag must reference a commit reachable from main" in result.stdout
+
+
+def test_alist_runtime_dependencies_are_pinned_after_checkout_in_both_stable_workflows():
+    release = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    retract = yaml.safe_load(STABLE_RETRACT_WORKFLOW.read_text(encoding="utf-8"))
+
+    for workflow, job_name, install_step_name in (
+        (release, "release", "Publish to AList drive"),
+        (retract, "retract", "Retract from AList drive"),
+    ):
+        steps = workflow["jobs"][job_name]["steps"]
+        checkout_index = next(index for index, step in enumerate(steps) if step.get("uses") == "actions/checkout@v7")
+        install_index = next(index for index, step in enumerate(steps) if step.get("name") == install_step_name)
+        install = steps[install_index]["run"]
+
+        assert checkout_index < install_index
+        assert "python -m pip install --disable-pip-version-check -r scripts/requirements-release.txt" in install
+        assert "pip install requests" not in install
+
+    release_checkout = next(
+        step for step in release["jobs"]["release"]["steps"] if step.get("uses") == "actions/checkout@v7"
+    )
+    assert release_checkout["with"]["ref"] == "${{ needs.resolve.outputs.sha }}"
+
+
+def test_stable_retract_validation_does_not_echo_an_invalid_dispatch_version():
+    document = yaml.safe_load(STABLE_RETRACT_WORKFLOW.read_text(encoding="utf-8"))
+    guard = next(
+        step["run"]
+        for step in document["jobs"]["retract"]["steps"]
+        if step.get("name") == "Gate (semver + confirm)"
+    )
+
+    assert 'echo "${VERSION}"' not in guard
+    assert "version '${VERSION}'" not in guard
+    assert "::error::version must match the required stable format" in guard
+
+
+def test_stable_retract_runs_secrets_only_from_a_verified_main_checkout():
+    document = yaml.safe_load(STABLE_RETRACT_WORKFLOW.read_text(encoding="utf-8"))
+    resolve = document["jobs"]["resolve"]
+    retract = document["jobs"]["retract"]
+    resolve_checkout = next(step for step in resolve["steps"] if step.get("uses") == "actions/checkout@v7")
+    retract_checkout = next(step for step in retract["steps"] if step.get("uses") == "actions/checkout@v7")
+    source_guard = next(step["run"] for step in retract["steps"] if step.get("name") == "Verify trusted source commit")
+
+    assert document["permissions"] == {"contents": "read"}
+    assert resolve["outputs"]["sha"] == "${{ steps.source.outputs.sha }}"
+    assert resolve_checkout["with"] == {"ref": "main", "fetch-depth": 0}
+    assert retract["name"] == "retract stable release"
+    assert retract["if"] == "github.ref == 'refs/heads/main' && needs.resolve.outputs.sha != ''"
+    assert retract["permissions"] == {"contents": "write"}
+    assert retract_checkout["with"] == {"ref": "${{ needs.resolve.outputs.sha }}", "fetch-depth": 0}
+    assert '[ "$(git rev-parse HEAD)" = "${SHA}" ]' in source_guard
+
+
+def test_stable_retract_never_uses_raw_version_in_display_or_prevalidation_output():
+    workflow = STABLE_RETRACT_WORKFLOW.read_text(encoding="utf-8")
+    document = yaml.safe_load(workflow)
+    guard = next(
+        step["run"]
+        for step in document["jobs"]["retract"]["steps"]
+        if step.get("name") == "Gate (semver + confirm)"
+    )
+
+    assert "name: retract ${{ inputs.version }}" not in workflow
+    assert document["jobs"]["retract"]["name"] == "retract stable release"
+    assert 'echo "${VERSION}"' not in guard
+    assert "version '${VERSION}'" not in guard
 
 
 def test_release_workflow_uses_policy_instead_of_write_only_get_fields():

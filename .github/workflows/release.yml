@@ -32,29 +32,30 @@ jobs:
     permissions:
       contents: read
     outputs:
-      should_release: ${{ steps.gate.outputs.should_release }}
+      should_release: ${{ steps.source.outputs.should_release || steps.gate.outputs.should_release }}
       sha: ${{ steps.source.outputs.sha }}
     steps:
       - id: gate
         name: Guard stable version
         run: |
           if [ "${GITHUB_EVENT_NAME}" = push ] && printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$'; then
+            echo "should_resolve=false" >> "${GITHUB_OUTPUT}"
             echo "should_release=false" >> "${GITHUB_OUTPUT}"
             echo "dev tag is handled only by release-dev.yml"
             exit 0
           fi
           printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
             || { echo "::error::version must match the required stable format"; exit 1; }
-          echo "should_release=true" >> "${GITHUB_OUTPUT}"
+          echo "should_resolve=true" >> "${GITHUB_OUTPUT}"
 
       - uses: actions/checkout@v7
-        if: steps.gate.outputs.should_release == 'true'
+        if: steps.gate.outputs.should_resolve == 'true'
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
           fetch-depth: 0
 
       - id: source
-        if: steps.gate.outputs.should_release == 'true'
+        if: steps.gate.outputs.should_resolve == 'true'
         name: Resolve immutable source commit
         env:
           INPUT_COMMIT_SHA: ${{ inputs.commit_sha }}
@@ -70,7 +71,13 @@ jobs:
           fi
           [ "$(git rev-parse HEAD)" = "${SHA}" ] \
             || { echo "::error::checkout did not resolve ${SHA}"; exit 1; }
+          if [ "${GITHUB_EVENT_NAME}" = push ]; then
+            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            git merge-base --is-ancestor "${SHA}" origin/main \
+              || { echo "::error::stable tag must reference a commit reachable from main"; exit 1; }
+          fi
           echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
+          echo "should_release=true" >> "${GITHUB_OUTPUT}"
 
   build:
     name: build ${{ matrix.goos }}/${{ matrix.goarch }}
@@ -178,7 +185,7 @@ jobs:
   release:
     name: publish release
     needs: [resolve, build, bundle]
-    if: needs.resolve.outputs.should_release == 'true'
+    if: needs.resolve.outputs.should_release == 'true' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -238,9 +245,7 @@ jobs:
         # still succeed without the §9 prerequisites. End-to-end verified later.
         if: ${{ env.ALIST_URL != '' }}
         run: |
-          # requests ships on the ubuntu runner image; install only if absent to
-          # avoid the externally-managed-environment error on newer images.
-          python -c "import requests" 2>/dev/null || pip install requests
+          python -m pip install --disable-pip-version-check -r scripts/requirements-release.txt
           python scripts/release-alist.py \
             --version "${VERSION}" \
             --dist-dir dist \

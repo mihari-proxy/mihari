@@ -17,16 +17,39 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   VERSION: ${{ inputs.version }}
   CONFIRM: ${{ inputs.confirm }}
 
 jobs:
-  retract:
-    name: retract ${{ inputs.version }}
+  resolve:
+    name: resolve trusted stable source
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - id: source
+        name: Resolve trusted main commit
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
+
+  retract:
+    name: retract stable release
+    needs: resolve
+    if: github.ref == 'refs/heads/main' && needs.resolve.outputs.sha != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       # Job-scope so the AList step's `if: env.ALIST_URL != ''` can read it
       # (secrets are unreadable in step `if`; step env isn't either). Empty when
@@ -35,15 +58,24 @@ jobs:
       ALIST_USERNAME: ${{ secrets.ALIST_USERNAME }}
       ALIST_PASSWORD: ${{ secrets.ALIST_PASSWORD }}
       ALIST_BASE_PATH: ${{ vars.ALIST_BASE_PATH }}
+      SHA: ${{ needs.resolve.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Verify trusted source commit
+        run: |
+          [ "$(git rev-parse HEAD)" = "${SHA}" ] \
+            || { echo "::error::checkout did not resolve the trusted main commit"; exit 1; }
 
       - name: Gate (semver + confirm)
         # design §4.6 step 1: pure-semver gate (same rule as §4.2) + the boolean
         # double-confirm must be true before anything destructive runs.
         run: |
-          echo "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-            || { echo "::error::version '${VERSION}' must match ^v[0-9]+\.[0-9]+\.[0-9]+$"; exit 1; }
+          printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::version must match the required stable format"; exit 1; }
           [ "${CONFIRM}" = "true" ] \
             || { echo "::error::confirm must be true to retract ${VERSION} (this permanently deletes it)"; exit 1; }
           echo "Retracting ${VERSION} (confirmed)."
@@ -54,7 +86,7 @@ jobs:
         # Conditional on ALIST_URL so retraction still works GitHub-only.
         if: ${{ env.ALIST_URL != '' }}
         run: |
-          python -c "import requests" 2>/dev/null || pip install requests
+          python -m pip install --disable-pip-version-check -r scripts/requirements-release.txt
           python scripts/retract-alist.py \
             --version "${VERSION}" \
             --channel stable \
