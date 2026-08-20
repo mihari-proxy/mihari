@@ -1,127 +1,182 @@
 #!/usr/bin/env python3
-"""AList drive retraction for a fatally-broken mihari release (design §4.6).
-
-Runs inside the retract.yml workflow (manual dispatch, double-confirm). Performs
-the AList side of the withdrawal — steps 2-4 of the design flow — while step 5
-(`gh release delete --cleanup-tag`) runs as a shell step in the workflow:
-
-  2. read index.txt to learn whether the retracted version is the current latest;
-  3. remove the AList version directory <base_path>/<version>/;
-  4. rebuild index.txt ONLY when the retracted version was latest — point it at
-     the highest remaining COMPLETE version (public direct link, sha256 read
-     from that version dir's SHA256SUMS.txt), or leave it empty if none remain.
-
-Withdrawal removes distribution channels only; already-installed users are not
-recallable (design §4.6 boundary). The AList client and shared helpers come from
-alist_client.py, shared with the publish flow.
-"""
+"""Channel-safe AList release retraction."""
 import argparse
+import hashlib
+import re
 
-from alist_client import (
-    DEFAULT_BASE_PATH,
-    PLATFORMS,
-    bundle_name,
-    connect,
-    fail,
-    info,
-    semver_key,
-)
+from alist_client import DEFAULT_BASE_PATH, PLATFORMS, bundle_name, connect, fail, info
+from alist_index import IndexMutationError, parse_latest, write_index_reliably as _write_index_reliably
+from release_policy import parse_version, validate_base_path
+
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
-def parse_latest(index_text):
-    """Extract the `latest <version>` value from an index.txt body, or None."""
-    for line in (index_text or "").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or line.startswith("//"):
-            continue
-        fields = line.split()
-        if fields and fields[0] == "latest" and len(fields) >= 2:
-            return fields[1]
-    return None
+def validate_inputs(version, channel, base_path, commit_sha):
+    try:
+        parse_version(version, channel)
+        validate_base_path(channel, base_path)
+    except ValueError as error:
+        fail(str(error))
+    if channel == "dev" and (not commit_sha or not SHA_RE.fullmatch(commit_sha)):
+        fail("dev retraction requires a 40-hex commit SHA")
 
 
-def highest_complete(alist, base_path, excluded):
-    """Highest remaining version dir that has a COMPLETE marker (and is not the
-    excluded/retracted one). None if no complete version remains — incomplete
-    dirs are skipped so index never points at a publish-interrupted residue."""
-    entries = alist.list_dir(base_path)
-    candidates = [
-        e["name"] for e in entries
-        if e.get("is_dir")
-        and e["name"] != excluded
-        and semver_key(e["name"]) is not None
-        and alist.exists(f"{base_path}/{e['name']}/COMPLETE")
-    ]
-    if not candidates:
+def verified_directory(alist, base_path, version, channel, commit_sha=None):
+    """Return sums only for a complete, identity-matching, byte-verified dir."""
+    try:
+        directory = f"{base_path}/{version}"
+        if not alist.exists(f"{directory}/COMPLETE") or alist.content(f"{directory}/COMPLETE") != f"{version}\n":
+            return None
+        metadata = alist.content(f"{directory}/BUILDINFO")
+        if metadata is None:
+            if channel != "stable":
+                return None
+        else:
+            match = re.fullmatch(r"version=([^\n]+)\ncommit=([0-9a-f]{40})\n", metadata)
+            if match is None or match.group(1) != version:
+                return None
+            commit = match.group(2)
+            if commit_sha is not None and commit != commit_sha:
+                return None
+        sums = {}
+        for line in (alist.content(f"{directory}/SHA256SUMS.txt") or "").splitlines():
+            fields = line.split(None, 1)
+            if len(fields) == 2 and re.fullmatch(r"[0-9a-f]{64}", fields[0]):
+                sums[fields[1].strip()] = fields[0]
+        expected = {bundle_name(goos, goarch) for goos, goarch in PLATFORMS}
+        if set(sums) != expected:
+            return None
+        for name, digest in sums.items():
+            remote = f"{directory}/{name}"
+            if not alist.exists(remote):
+                return None
+            actual = hashlib.sha256(alist.read_bytes(remote)).hexdigest()
+            if actual != digest:
+                return None
+        return sums
+    except Exception:
         return None
-    candidates.sort(key=semver_key, reverse=True)
-    return candidates[0]
 
 
-def rebuild_index(alist, base_path, new_latest):
-    """Rewrite index.txt to point at new_latest: latest line + one per-platform
-    public direct link + sha256 (read from that dir's SHA256SUMS.txt). Uploads
-    the new body."""
-    sums_text = alist.content(f"{base_path}/{new_latest}/SHA256SUMS.txt")
-    if sums_text is None:
-        fail(f"new-latest {new_latest} has no SHA256SUMS.txt — cannot rebuild index")
-    sums = {}
-    for line in sums_text.splitlines():
-        parts = line.split(None, 1)
-        if len(parts) == 2:
-            sums[parts[1].strip()] = parts[0].strip()
+def valid_identity(alist, base_path, version, channel, commit_sha=None):
+    """Compatibility predicate for callers that only need the validity result."""
+    return verified_directory(alist, base_path, version, channel, commit_sha) is not None
 
+
+def highest_complete(alist, base_path, excluded, channel="stable"):
+    try:
+        entries = alist.list_dir(base_path)
+    except Exception:
+        fail("unable to list release versions")
+    candidates = []
+    for entry in entries:
+        version = entry.get("name")
+        if not entry.get("is_dir") or version == excluded:
+            continue
+        try:
+            parse_version(version, channel)
+        except ValueError:
+            continue
+        if verified_directory(alist, base_path, version, channel) is not None:
+            candidates.append(version)
+    return max(candidates, key=lambda item: parse_version(item, channel)) if candidates else None
+
+
+def index_body(alist, base_path, new_latest, channel):
+    sums = verified_directory(alist, base_path, new_latest, channel)
+    if sums is None:
+        fail(f"new-latest directory cannot be byte verified: {new_latest}")
     lines = [f"latest {new_latest}"]
     for goos, goarch in PLATFORMS:
-        platform = f"{goos}-{goarch}"
         name = bundle_name(goos, goarch)
         remote = f"{base_path}/{new_latest}/{name}"
-        if not alist.exists(remote):
-            fail(f"new-latest bundle missing: {remote}")
-        public = alist.public_url(remote)
-        digest = sums.get(name)
-        if not digest:
-            fail(f"SHA256SUMS.txt in {new_latest} missing entry for {name}")
-        lines.append(f"{platform} {public} {digest}")
-    alist.upload_text("\n".join(lines) + "\n", f"{base_path}/index.txt")
-    info(f"index.txt rebuilt to point at {new_latest}")
+        try:
+            exists = alist.exists(remote)
+        except Exception:
+            fail("unable to verify replacement release bundles")
+        if name not in sums or not exists:
+            fail(f"new-latest bundle missing or unsigned: {remote}")
+        lines.append(f"{goos}-{goarch} {alist.public_url(remote)} {sums[name]}")
+    return "\n".join(lines) + "\n"
 
 
-def retract(alist, base_path, version):
-    root_index = f"{base_path}/index.txt"
-    current_latest = parse_latest(alist.content(root_index))
+def write_index_reliably(alist, path, body, previous_body, channel="stable", allow_empty=False):
+    """Adapt shared mutation errors to this workflow's established exit path."""
+    try:
+        _write_index_reliably(alist, path, body, previous_body, channel, allow_empty=allow_empty)
+    except IndexMutationError as error:
+        fail(str(error))
+    except Exception:
+        fail("unable to commit release index")
 
-    # Step 3: always remove the retracted version dir (idempotent if absent).
-    version_dir = f"{base_path}/{version}"
-    if alist.exists(version_dir):
-        info(f"removing AList version dir: {version_dir}")
+
+def read_index(alist, path):
+    """Read the index without exposing remote failures in workflow logs."""
+    try:
+        return alist.content(path)
+    except Exception:
+        fail("unable to read release index")
+
+
+def directory_exists(alist, directory):
+    """Check retraction target presence without exposing remote failures."""
+    try:
+        return alist.exists(directory)
+    except Exception:
+        fail("unable to inspect retraction target")
+
+
+def remove_target(alist, base_path, version):
+    """Remove a verified target after its distribution index is safe."""
+    try:
         alist.remove(base_path, [version])
-    else:
-        info(f"AList version dir not present (already removed?): {version_dir}")
+    except Exception:
+        fail("unable to remove retracted release directory")
 
-    # Step 4: rebuild index only when we just removed the current latest.
-    if current_latest != version:
-        info(
-            f"retracted {version} was not the current latest "
-            f"({current_latest!r}) — index.txt unchanged"
-        )
+
+def retract(alist, base_path, version, channel="stable", commit_sha=None):
+    validate_inputs(version, channel, base_path, commit_sha)
+    root_index = f"{base_path}/index.txt"
+    directory = f"{base_path}/{version}"
+    if not directory_exists(alist, directory):
+        if parse_latest(read_index(alist, root_index)) == version:
+            fail("refusing to retract a version still referenced by the index")
         return
 
-    new_latest = highest_complete(alist, base_path, excluded=version)
+    if not valid_identity(alist, base_path, version, channel, commit_sha):
+        fail("refusing to retract a directory with mismatched identity")
+
+    observed_index = read_index(alist, root_index)
+    if parse_latest(observed_index) != version:
+        if read_index(alist, root_index) != observed_index:
+            fail("refusing to remove a non-latest version after index changed")
+        remove_target(alist, base_path, version)
+        if read_index(alist, root_index) != observed_index:
+            fail("non-latest retraction changed the release index")
+        return
+
+    new_latest = highest_complete(alist, base_path, version, channel)
     if new_latest is None:
-        info("no complete version remains — setting index.txt empty")
-        alist.upload_text("", root_index)
-        return
-    rebuild_index(alist, base_path, new_latest)
+        write_index_reliably(alist, root_index, "", observed_index, channel, allow_empty=True)
+    else:
+        write_index_reliably(
+            alist,
+            root_index,
+            index_body(alist, base_path, new_latest, channel),
+            observed_index,
+            channel,
+        )
+    remove_target(alist, base_path, version)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Retract a mihari version from AList (design §4.6).")
+    parser = argparse.ArgumentParser(description="Retract a mihari version from AList.")
     parser.add_argument("--version", required=True)
+    parser.add_argument("--channel", choices=("stable", "dev"), default="stable")
     parser.add_argument("--base-path", default=DEFAULT_BASE_PATH)
+    parser.add_argument("--commit-sha")
     args = parser.parse_args()
-
-    retract(connect(), args.base_path, args.version)
+    retract(connect(), args.base_path, args.version, args.channel, args.commit_sha)
     info(f"retraction of {args.version} complete on the AList drive")
 
 
