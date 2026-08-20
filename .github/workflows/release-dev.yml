@@ -165,10 +165,12 @@ jobs:
           sha256sum * > SHA256SUMS.txt
           sha256sum mihari-all-in-one-* > AIO_SHA256SUMS.txt
 
-      - name: Read stable latest before dev mutation
+      - name: Read and validate stable latest before dev mutation
         run: |
           gh api "repos/${GITHUB_REPOSITORY}/releases/latest" > /tmp/latest-before.json 2> /tmp/latest-before.err \
             || { echo "::error::unable to read stable latest release"; exit 1; }
+          python scripts/github_release_policy.py latest \
+            --before /tmp/latest-before.json --after /tmp/latest-before.json --dev-version "${VERSION}"
 
       - name: Validate expected local asset set
         run: |
@@ -298,6 +300,35 @@ jobs:
 
       - name: Final verify prerelease and stable latest
         run: |
+          verify_final_tag_ref() {
+            set +e
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${VERSION}" > /tmp/final-tag-ref.json 2> /tmp/final-tag-ref.err
+            status=$?
+            set -e
+            [ "${status}" -eq 0 ] || { echo "::error::unable to read final release tag"; return 1; }
+            jq -e '(.object.type | type == "string") and (.object.sha | type == "string")' /tmp/final-tag-ref.json >/dev/null \
+              || { echo "::error::final release tag response is invalid"; return 1; }
+            jq -c '{type: .object.type, sha: .object.sha}' /tmp/final-tag-ref.json > /tmp/final-tag-chain.jsonl
+            tag_type="$(jq -r '.object.type' /tmp/final-tag-ref.json)"
+            tag_sha="$(jq -r '.object.sha' /tmp/final-tag-ref.json)"
+            for depth in $(seq 1 7); do
+              [ "${tag_type}" = tag ] || break
+              set +e
+              gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" > /tmp/final-tag-object.json 2> /tmp/final-tag-object.err
+              status=$?
+              set -e
+              [ "${status}" -eq 0 ] || { echo "::error::unable to peel final release tag"; return 1; }
+              jq -e '(.object.type | type == "string") and (.object.sha | type == "string")' /tmp/final-tag-object.json >/dev/null \
+                || { echo "::error::final annotated tag response is invalid"; return 1; }
+              jq -c '{type: .object.type, sha: .object.sha}' /tmp/final-tag-object.json >> /tmp/final-tag-chain.jsonl
+              tag_type="$(jq -r '.object.type' /tmp/final-tag-object.json)"
+              tag_sha="$(jq -r '.object.sha' /tmp/final-tag-object.json)"
+            done
+            [ "${tag_type}" != tag ] || { echo "::error::final release tag peel exceeds the allowed depth"; return 1; }
+            jq -s . /tmp/final-tag-chain.jsonl > /tmp/final-tag-chain.json
+            python scripts/github_release_policy.py tag-chain --chain /tmp/final-tag-chain.json --expected-sha "${SHA}"
+          }
+
           download_and_verify_assets() {
             rm -rf /tmp/final-release-assets
             mkdir -p /tmp/final-release-assets
@@ -319,6 +350,7 @@ jobs:
             --document /tmp/final-release.json --version "${VERSION}" \
             --release-name "${DEV_RELEASE_NAME}" --marker "<!-- github-release-dev -->" --mode final
           download_and_verify_assets
+          verify_final_tag_ref
           gh api "repos/${GITHUB_REPOSITORY}/releases/latest" > /tmp/latest-after.json 2> /tmp/latest-after.err \
             || { echo "::error::unable to read stable latest release after publication"; exit 1; }
           python scripts/github_release_policy.py latest \

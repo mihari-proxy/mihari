@@ -290,6 +290,54 @@ def test_release_workflow_checks_stable_latest_before_and_after_mutation():
     assert workflow.index("--mode final") < workflow.index("/tmp/latest-after.json")
 
 
+def test_release_workflow_validates_stable_latest_before_any_mutation():
+    document = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    publish_steps = document["jobs"]["publish"]["steps"]
+    before = next(
+        step["run"]
+        for step in publish_steps
+        if step.get("name") == "Read and validate stable latest before dev mutation"
+    )
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    validation = "python scripts/github_release_policy.py latest"
+    self_comparison = (
+        "--before /tmp/latest-before.json --after /tmp/latest-before.json --dev-version \"${VERSION}\""
+    )
+
+    assert "/releases/latest" in before
+    assert validation in before
+    assert self_comparison in before
+    validation_index = workflow.index(validation)
+    for mutation in (
+        'gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs"',
+        'gh api --method POST "repos/${GITHUB_REPOSITORY}/releases"',
+        'gh release upload "${VERSION}" "dist/${asset}"',
+    ):
+        assert validation_index < workflow.index(mutation)
+
+
+def test_release_workflow_revalidates_tag_after_final_asset_verification():
+    document = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    final = next(
+        step["run"]
+        for step in document["jobs"]["publish"]["steps"]
+        if step.get("name") == "Final verify prerelease and stable latest"
+    )
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    helper_start = final.index("verify_final_tag_ref()")
+    helper_end = final.index("download_and_verify_assets()")
+    helper = final[helper_start:helper_end]
+
+    assert workflow.index('gh release upload "${VERSION}" "dist/${asset}"') < workflow.index("/tmp/final-release.json")
+    assert final.index("/tmp/final-release.json") < final.rindex("download_and_verify_assets")
+    assert final.rindex("download_and_verify_assets") < final.rindex("verify_final_tag_ref")
+    assert final.rindex("verify_final_tag_ref") < final.index("/tmp/latest-after.json")
+    assert "git/ref/tags/${VERSION}" in helper
+    assert "for depth in $(seq 1 7)" in helper
+    assert "jq -c '{type: .object.type, sha: .object.sha}'" in helper
+    assert "github_release_policy.py tag-chain" in helper
+
+
 def test_release_workflow_is_github_only_and_limits_tag_peeling():
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
