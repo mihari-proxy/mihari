@@ -36,6 +36,15 @@ def test_stable_release_and_retract_pin_the_stable_alist_channel():
     assert "--channel stable" in stable_retract_workflow
 
 
+def test_stable_alist_mutations_share_a_job_level_serialization_group():
+    release = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    retract = yaml.safe_load(STABLE_RETRACT_WORKFLOW.read_text(encoding="utf-8"))
+
+    expected = {"group": "mihari-stable-alist", "cancel-in-progress": False}
+    assert release["jobs"]["release"].get("concurrency") == expected
+    assert retract["jobs"]["retract"].get("concurrency") == expected
+
+
 def test_stable_release_resolves_and_uses_the_approved_source_sha():
     workflow = STABLE_WORKFLOW.read_text(encoding="utf-8")
     document = yaml.safe_load(workflow)

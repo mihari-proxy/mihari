@@ -48,6 +48,9 @@ jobs:
     needs: resolve
     if: github.ref == 'refs/heads/main' && needs.resolve.outputs.sha != ''
     runs-on: ubuntu-latest
+    concurrency:
+      group: mihari-stable-alist
+      cancel-in-progress: false
     permissions:
       contents: write
     env:

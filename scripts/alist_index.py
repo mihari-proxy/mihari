@@ -2,6 +2,7 @@
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -9,6 +10,8 @@ _VERSION_PATTERNS = {
     "stable": re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$"),
     "dev": re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$"),
 }
+_LOCK_WAIT_TIMEOUT_SECONDS = 10
+_LOCK_WAIT_INTERVAL_SECONDS = 0.05
 
 
 class IndexMutationError(RuntimeError):
@@ -56,6 +59,21 @@ def _restore_previous(alist, path: str, previous: str | None) -> bool:
     return alist.content(path) == previous
 
 
+def _acquire_lock(lock_path: Path, channel: str) -> int:
+    deadline = time.monotonic() + _LOCK_WAIT_TIMEOUT_SECONDS
+    while True:
+        try:
+            lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError as error:
+            if time.monotonic() >= deadline:
+                raise IndexMutationError(
+                    f"channel index mutation is already in progress: {channel}"
+                ) from error
+            time.sleep(_LOCK_WAIT_INTERVAL_SECONDS)
+        else:
+            return lock_fd
+
+
 def write_index_reliably(
     alist,
     path: str,
@@ -66,28 +84,26 @@ def write_index_reliably(
 ) -> None:
     """Commit an AList index with bounded retries and verified recovery.
 
-    The current object is compared to the caller's observed value before the
-    first remote mutation, preventing a stale workflow from overwriting newer
+    The current object is compared to the caller's observed value while a
+    local lock is held, preventing a waiting workflow from overwriting newer
     channel state. This local lock only coordinates processes on one runner.
     """
     _validate(channel, body, allow_empty)
-    live_body = alist.content(path)
-    if live_body == body:
-        return
-    if live_body != expected_previous:
-        raise IndexMutationError("stale index observed before mutation")
-
     backup_root, backup_path, lock_path = _backup_paths(channel)
     backup_root.mkdir(parents=True, exist_ok=True)
-    backup_path.write_bytes((live_body or "").encode("utf-8"))
-    try:
-        lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError as error:
-        raise IndexMutationError(f"channel index mutation is already in progress: {channel}") from error
-    else:
-        os.close(lock_fd)
+    lock_fd = _acquire_lock(lock_path, channel)
 
     try:
+        os.close(lock_fd)
+        lock_fd = None
+
+        live_body = alist.content(path)
+        if live_body == body:
+            return
+        if live_body != expected_previous:
+            raise IndexMutationError("stale index observed before mutation")
+
+        backup_path.write_bytes((live_body or "").encode("utf-8"))
         for _ in range(2):
             try:
                 alist.upload_text(body, path)
@@ -105,6 +121,11 @@ def write_index_reliably(
             )
         raise IndexMutationError("index write verification failed; previous index restored")
     finally:
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except OSError:
+                pass
         try:
             lock_path.unlink()
         except FileNotFoundError:

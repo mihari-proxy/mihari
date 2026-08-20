@@ -187,6 +187,9 @@ jobs:
     needs: [resolve, build, bundle]
     if: needs.resolve.outputs.should_release == 'true' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
+    concurrency:
+      group: mihari-stable-alist
+      cancel-in-progress: false
     permissions:
       contents: write
     env:
