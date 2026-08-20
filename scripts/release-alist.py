@@ -1,84 +1,218 @@
 #!/usr/bin/env python3
-"""AList drive distribution for mihari all-in-one releases (design §4.5).
-
-Runs inside the release.yml job after the GitHub release is published:
-  1. upload the 6 platform bundles (+ per-version SHA256SUMS + COMPLETE) into an
-     immutable per-version directory (skip if COMPLETE already exists);
-  2. build index.txt (latest line + per-platform public direct link + sha256);
-  3. overwrite-upload index.txt — the publish-complete signal;
-  4. overwrite the root downloader scripts (script 3) at the drive root;
-  5. prune old versions (keep N, index-pointed always retained);
-  6. emit the version dir to GITHUB_ENV for the release-notes append step.
-
-The AList REST client and shared constants live in alist_client.py, imported by
-both this publish flow and the retract flow.
-"""
+"""Publish immutable, channel-scoped mihari AIO bundles to AList."""
 import argparse
+import hashlib
 import os
+import re
 from pathlib import Path
 
-from alist_client import (
-    AList,
-    DEFAULT_BASE_PATH,
-    DEFAULT_KEEP_VERSIONS,
-    PLATFORMS,
-    SEMVER_RE,
-    bundle_name,
-    connect,
-    fail,
-    info,
-    semver_key,
-    sha256_file,
-)
+from alist_client import DEFAULT_BASE_PATH, DEFAULT_KEEP_VERSIONS, PLATFORMS, bundle_name, connect, fail, info, sha256_file
+from alist_index import IndexMutationError, parse_latest, write_index_reliably as _write_index_reliably
+from release_policy import compare_versions, parse_version, validate_base_path
+
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SUM_LINE_RE = re.compile(r"^([0-9a-f]{64})  ([^\r\n]+)\n$")
 
 
-def upload_version_dir(alist, dist_dir, base_path, version):
-    """Steps 1-2: upload bundles + per-version SHA256SUMS + COMPLETE. Immutable —
-    skip the whole directory when COMPLETE already exists (idempotent re-run /
-    rebuild after retract)."""
-    version_dir = f"{base_path}/{version}"
-    if alist.exists(f"{version_dir}/COMPLETE"):
-        info(f"version dir {version_dir} already complete — skipping upload")
-        return version_dir
-    alist.mkdir(version_dir)
-    sums_lines = []
+class RemoteScanError(RuntimeError):
+    """Raised internally when a remote release scan cannot be completed."""
+
+
+def validate_inputs(version, channel, base_path, commit_sha):
+    try:
+        parse_version(version, channel)
+        validate_base_path(channel, base_path)
+    except ValueError as error:
+        fail(str(error))
+    if not valid_commit_sha(commit_sha):
+        fail("publishing requires a 40-lowercase-hex commit SHA")
+
+
+def buildinfo(version, commit_sha):
+    return f"version={version}\ncommit={commit_sha}\n"
+
+
+def valid_commit_sha(value):
+    return bool(value and SHA_RE.fullmatch(value))
+
+
+def local_sums(dist_dir):
+    sums = {}
     for goos, goarch in PLATFORMS:
         name = bundle_name(goos, goarch)
         local = Path(dist_dir) / name
         if not local.exists():
             fail(f"bundle artifact missing: {local}")
-        alist.upload(str(local), f"{version_dir}/{name}")
-        sums_lines.append(f"{sha256_file(local)}  {name}")
-    # Per-version aio-only checksums: retract step 4 reads this to rebuild index
-    # when the retracted version was latest (design §4.5 step 2 / §4.6 step 4).
-    alist.upload_text("\n".join(sums_lines) + "\n", f"{version_dir}/SHA256SUMS.txt")
+        sums[name] = sha256_file(local)
+    return sums
+
+
+def sums_manifest(sums):
+    """Return the canonical checksum manifest for the six release bundles."""
+    return "".join(f"{sums[name]}  {name}\n" for name in sorted(sums))
+
+
+def parse_sums(text):
+    """Parse only an exact canonical six-bundle checksum manifest."""
+    if not isinstance(text, str):
+        return None
+    result = {}
+    for line in text.splitlines(keepends=True):
+        match = SUM_LINE_RE.fullmatch(line)
+        if match is None:
+            return None
+        digest, name = match.groups()
+        if name in result:
+            return None
+        result[name] = digest
+    required = {bundle_name(goos, goarch) for goos, goarch in PLATFORMS}
+    if set(result) != required or sums_manifest(result) != text:
+        return None
+    return result
+
+
+def verify_remote_files(alist, version_dir, sums):
+    """Hash every bounded remote bundle byte stream against its remote sum."""
+    for name, digest in sums.items():
+        remote = f"{version_dir}/{name}"
+        try:
+            if not alist.exists(remote):
+                return False
+            actual = hashlib.sha256(alist.read_bytes(remote)).hexdigest()
+        except Exception:
+            return False
+        if actual != digest:
+            return False
+    return True
+
+
+def verified_directory(alist, base_path, version, channel, expected_commit=None, expected_sums=None):
+    """Return remote sums only for a completed directory with verified bytes."""
+    version_dir = f"{base_path}/{version}"
+    try:
+        if not alist.exists(f"{version_dir}/COMPLETE"):
+            return None
+        if alist.content(f"{version_dir}/COMPLETE") != f"{version}\n":
+            return None
+        remote_info = alist.content(f"{version_dir}/BUILDINFO")
+        if remote_info is None:
+            if channel != "stable" or expected_commit is not None:
+                return None
+        else:
+            match = re.fullmatch(r"version=([^\n]+)\ncommit=([0-9a-f]{40})\n", remote_info)
+            if match is None or remote_info != buildinfo(version, match.group(2)):
+                return None
+            if expected_commit is not None and match.group(2) != expected_commit:
+                return None
+        sums = parse_sums(alist.content(f"{version_dir}/SHA256SUMS.txt"))
+    except Exception:
+        return None
+    if sums is None or (expected_sums is not None and sums != expected_sums):
+        return None
+    return sums if verify_remote_files(alist, version_dir, sums) else None
+
+
+def upload_version_dir(alist, dist_dir, base_path, version, commit_sha=None, channel="stable"):
+    """Upload data then identity metadata, never replacing a completed directory."""
+    sums = local_sums(dist_dir)
+    version_dir = f"{base_path}/{version}"
+    if not valid_commit_sha(commit_sha):
+        fail("new publishing requires a 40-hex commit SHA")
+    try:
+        complete_exists = alist.exists(f"{version_dir}/COMPLETE")
+    except Exception:
+        fail("unable to inspect existing release directory")
+    if complete_exists:
+        if verified_directory(alist, base_path, version, channel, commit_sha, sums) is None:
+            fail(f"completed version dir conflicts or cannot be verified: {version_dir}")
+        info(f"version dir {version_dir} already complete and verified")
+        return version_dir
+    alist.mkdir(version_dir)
+    for goos, goarch in PLATFORMS:
+        name = bundle_name(goos, goarch)
+        alist.upload(str(Path(dist_dir) / name), f"{version_dir}/{name}")
+    alist.upload_text(sums_manifest(sums), f"{version_dir}/SHA256SUMS.txt")
+    alist.upload_text(buildinfo(version, commit_sha), f"{version_dir}/BUILDINFO")
+    if not verify_remote_files(alist, version_dir, sums):
+        fail(f"uploaded bundle bytes failed verification: {version_dir}")
     alist.upload_text(f"{version}\n", f"{version_dir}/COMPLETE")
     return version_dir
 
 
-def build_index(alist, dist_dir, base_path, version):
-    """Steps 2-3: return the index.txt body (latest line + per-platform
-    <public_url> <sha256>) plus the root index's public direct link. Public
-    links need no per-file sign, so there's no first-release placeholder dance."""
-    root_index_path = f"{base_path}/index.txt"
+def release_entries(alist, base_path, channel):
+    """List valid-version directory entries or raise a sanitized scan error."""
+    try:
+        entries = alist.list_dir(base_path)
+        if not isinstance(entries, list):
+            raise ValueError("remote directory listing is not a list")
+    except Exception as error:
+        raise RemoteScanError from error
+    versions = []
+    for entry in entries:
+        try:
+            name = entry.get("name")
+            is_dir = entry.get("is_dir")
+            if not is_dir:
+                continue
+            parse_version(name, channel)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        versions.append(name)
+    return versions
 
+
+def complete_versions(alist, base_path, channel, entries=None):
+    """Return byte-verified completed release versions from a single listing."""
+    entries = release_entries(alist, base_path, channel) if entries is None else entries
+    versions = []
+    for name in entries:
+        if verified_directory(alist, base_path, name, channel) is not None:
+            versions.append(name)
+    return versions
+
+
+def ensure_monotonic_version(alist, base_path, version, channel):
+    try:
+        indexed = parse_latest(alist.content(f"{base_path}/index.txt"))
+        candidates = complete_versions(alist, base_path, channel)
+    except Exception:
+        fail("unable to inspect release baseline")
+    if indexed:
+        try:
+            parse_version(indexed, channel)
+            candidates.append(indexed)
+        except ValueError:
+            pass
+    if candidates and compare_versions(version, max(candidates, key=lambda item: parse_version(item, channel)), channel) < 0:
+        fail("release version is lower than the channel's highest complete version")
+
+
+def build_index(alist, dist_dir, base_path, version):
     lines = [f"latest {version}"]
     for goos, goarch in PLATFORMS:
-        platform = f"{goos}-{goarch}"
         name = bundle_name(goos, goarch)
         remote = f"{base_path}/{version}/{name}"
-        if not alist.exists(remote):
+        try:
+            exists = alist.exists(remote)
+        except Exception:
+            fail("unable to inspect uploaded bundle")
+        if not exists:
             fail(f"uploaded bundle not found: {remote}")
-        public = alist.public_url(remote)
-        digest = sha256_file(Path(dist_dir) / name)
-        lines.append(f"{platform} {public} {digest}")
-    return "\n".join(lines) + "\n", alist.public_url(root_index_path)
+        lines.append(f"{goos}-{goarch} {alist.public_url(remote)} {sha256_file(Path(dist_dir) / name)}")
+    return "\n".join(lines) + "\n", alist.public_url(f"{base_path}/index.txt")
+
+
+def write_index_reliably(alist, path, body, previous_body, channel="stable"):
+    """Adapt shared mutation errors to this workflow's established exit path."""
+    try:
+        _write_index_reliably(alist, path, body, previous_body, channel)
+    except IndexMutationError as error:
+        fail(str(error))
+    except Exception:
+        fail("unable to write release index")
 
 
 def upload_root_scripts(alist, repo_root, base_path):
-    """Step 4: upload the (now static) downloader scripts to the drive root.
-    They hardcode the public INDEX_URL, so no injection is needed; they're
-    overwritten each release purely to keep the AList copy self-healing."""
     for filename in ("install-aio-remote.sh", "install-aio-remote.ps1"):
         source = Path(repo_root) / "scripts" / "install" / filename
         if not source.exists():
@@ -86,63 +220,77 @@ def upload_root_scripts(alist, repo_root, base_path):
         alist.upload_text(source.read_text(encoding="utf-8"), f"{base_path}/{filename}")
 
 
-def prune_versions(alist, base_path, version, keep):
-    """Step 5: keep the index-pointed version (not counted) + the newest keep-1
-    others; incomplete dirs (no COMPLETE) are deleted first without counting.
-    Index read failure → retry once, then skip pruning entirely (never block the
-    release on retention)."""
+def prune_versions(alist, base_path, version, keep, channel="stable"):
     try:
-        entries = alist.list_dir(base_path)
-    except Exception:
+        entries = release_entries(alist, base_path, channel)
+    except RemoteScanError:
         try:
-            entries = alist.list_dir(base_path)
-        except Exception as error:
-            info(f"index/list failed twice — skipping retention: {error}")
+            entries = release_entries(alist, base_path, channel)
+        except RemoteScanError:
+            info("unable to list release versions; skipping retention")
             return
-
-    version_dirs = [e["name"] for e in entries if e.get("is_dir") and semver_key(e["name"]) is not None]
-    incomplete = [name for name in version_dirs if not alist.exists(f"{base_path}/{name}/COMPLETE")]
+    incomplete = []
+    for name in entries:
+        try:
+            is_complete = alist.exists(f"{base_path}/{name}/COMPLETE")
+        except Exception:
+            info("unable to inspect release versions; skipping retention")
+            return
+        if not is_complete:
+            incomplete.append(name)
     for name in incomplete:
-        info(f"removing incomplete version dir: {name}")
-        alist.remove(base_path, [name])
-    version_dirs = [name for name in version_dirs if name not in incomplete and name != version]
-
-    # Keep the newest (keep-1) beyond the index-pointed version; delete the rest.
-    version_dirs.sort(key=semver_key, reverse=True)
-    survivors = set(version_dirs[: max(keep - 1, 0)])
-    for name in version_dirs:
-        if name not in survivors:
-            info(f"retention pruning old version: {name}")
+        try:
             alist.remove(base_path, [name])
+        except Exception:
+            info("unable to clean incomplete release versions; skipping retention")
+            return
+    versions = complete_versions(alist, base_path, channel, entries)
+    versions.sort(key=lambda item: parse_version(item, channel), reverse=True)
+    for old in versions[max(keep, 1):]:
+        if old != version:
+            try:
+                alist.remove(base_path, [old])
+            except Exception:
+                info("unable to prune old release versions; skipping retention")
+                return
 
 
 def emit_env(name, value):
-    gh_env = os.environ.get("GITHUB_ENV")
-    if not gh_env:
-        return
-    with open(gh_env, "a", encoding="utf-8") as handle:
-        handle.write(f"{name}={value}\n")
+    if os.environ.get("GITHUB_ENV"):
+        with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+            handle.write(f"{name}={value}\n")
+
+
+def publish(alist, args):
+    """Publish only after a final monotonic scan immediately before index write."""
+    ensure_monotonic_version(alist, args.base_path, args.version, args.channel)
+    version_dir = upload_version_dir(alist, args.dist_dir, args.base_path, args.version, args.commit_sha, args.channel)
+    ensure_monotonic_version(alist, args.base_path, args.version, args.channel)
+    try:
+        previous = alist.content(f"{args.base_path}/index.txt")
+    except Exception:
+        fail("unable to read release index")
+    index, index_url = build_index(alist, args.dist_dir, args.base_path, args.version)
+    write_index_reliably(alist, f"{args.base_path}/index.txt", index, previous, args.channel)
+    if args.channel == "stable":
+        upload_root_scripts(alist, args.repo_root, args.base_path)
+    prune_versions(alist, args.base_path, args.version, args.keep_versions, args.channel)
+    return version_dir, index_url
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Publish mihari aio bundles to AList (design §4.5).")
+    parser = argparse.ArgumentParser(description="Publish mihari aio bundles to AList.")
     parser.add_argument("--version", required=True)
-    parser.add_argument("--dist-dir", required=True, help="directory holding the 6 bundle artifacts")
-    parser.add_argument("--repo-root", required=True, help="checkout root (for script 3 sources)")
+    parser.add_argument("--dist-dir", required=True)
+    parser.add_argument("--repo-root", required=True)
+    parser.add_argument("--channel", choices=("stable", "dev"), default="stable")
     parser.add_argument("--base-path", default=DEFAULT_BASE_PATH)
     parser.add_argument("--keep-versions", type=int, default=DEFAULT_KEEP_VERSIONS)
+    parser.add_argument("--commit-sha")
     args = parser.parse_args()
-
-    if not SEMVER_RE.match(args.version):
-        fail(f"version {args.version!r} must match {SEMVER_RE.pattern}")
-
+    validate_inputs(args.version, args.channel, args.base_path, args.commit_sha)
     alist = connect()
-    version_dir = upload_version_dir(alist, args.dist_dir, args.base_path, args.version)
-    index_body, index_url = build_index(alist, args.dist_dir, args.base_path, args.version)
-    alist.upload_text(index_body, f"{args.base_path}/index.txt")
-    upload_root_scripts(alist, args.repo_root, args.base_path)
-    prune_versions(alist, args.base_path, args.version, args.keep_versions)
-
+    version_dir, index_url = publish(alist, args)
     emit_env("ALIST_VERSION_DIR", version_dir)
     info(f"published {args.version} to {args.base_path}; index at {index_url}")
 
