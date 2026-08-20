@@ -10,6 +10,21 @@ import yaml
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "release-dev.yml"
 STABLE_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "release.yml"
 STABLE_RETRACT_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "retract.yml"
+CI_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
+AGENTS = Path(__file__).resolve().parents[1] / "AGENTS.md"
+CONTRIBUTING = Path(__file__).resolve().parents[1] / ".github" / "CONTRIBUTING.md"
+RELEASE_DOCUMENT = Path(__file__).resolve().parents[1] / "docs" / "RELEASE.md"
+DISTRIBUTION_DOCUMENT = Path(__file__).resolve().parents[1] / "docs" / "distribution.md"
+
+RELEASE_SAFETY_TESTS = (
+    "scripts/test_release_policy.py "
+    "scripts/test_github_release_policy.py "
+    "scripts/test_release_workflow.py "
+    "scripts/test_alist_client.py "
+    "scripts/test_alist_index.py "
+    "scripts/test_release_alist.py "
+    "scripts/test_retract_alist.py -q"
+)
 
 
 def test_stable_release_and_retract_pin_the_stable_alist_channel():
@@ -164,3 +179,61 @@ def test_existing_release_is_preflighted_before_tag_mutation():
     tag_mutation = workflow.index("Create or verify immutable tag")
     assert preflight < tag_mutation
     assert "--mode preflight" in workflow[preflight:tag_mutation]
+
+
+def test_ci_runs_release_safety_suite_from_pinned_requirements_on_all_integration_branches():
+    document = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+
+    assert document[True]["push"]["branches"] == ["main", "dev", "master"]
+    assert set(document["jobs"]) == {
+        "lint",
+        "unit",
+        "test",
+        "govulncheck",
+        "race",
+        "vet-format",
+        "coverage",
+        "build",
+        "cross-build",
+    }
+
+    steps = document["jobs"]["unit"]["steps"]
+    install = next(step for step in steps if step.get("name") == "Install release-safety test dependencies")
+    safety = next(step for step in steps if step.get("name") == "Test release safety policies")
+
+    assert install["run"] == (
+        "python -m pip install --disable-pip-version-check "
+        "-r scripts/requirements-release-test.txt"
+    )
+    assert safety["run"] == f"python -m pytest {RELEASE_SAFETY_TESTS}"
+
+
+def test_branch_governance_keeps_feature_work_off_main_and_dev_without_promising_review_rules():
+    agents = AGENTS.read_text(encoding="utf-8")
+    contributing = CONTRIBUTING.read_text(encoding="utf-8")
+    normalized_agents = agents.replace("`", "")
+
+    assert "main 或 dev 分支上直接修改或提交" in normalized_agents
+    assert "一次性 main PR" in normalized_agents
+    assert "main 或 dev 分支创建 commit" in normalized_agents
+    assert "feat/*、fix/* ──PR──> dev ──晋级 PR──> main" in contributing
+    assert "hotfix/*（从 main） ──PR──> main" in contributing
+    assert "main ──同步 PR──> dev" in contributing
+    assert "普通 PR 使用 squash merge" in contributing
+    assert "晋级和 `main → dev` 同步使用 merge commit" in contributing
+    assert "不设定固定审核人数或 bypass 规则" in contributing
+    assert "至少等待一个审核通过" not in contributing
+
+
+def test_release_documents_describe_batch_a_as_code_prepared_and_keep_p2_alist_unavailable():
+    release = RELEASE_DOCUMENT.read_text(encoding="utf-8")
+    distribution = DISTRIBUTION_DOCUMENT.read_text(encoding="utf-8")
+
+    for document in (release, distribution):
+        assert "代码已准备，远程 dev/试发需授权" in document
+        assert "P2 AList 发布与撤回 workflow 尚不可用" in document
+        assert "publish-dev-alist.yml" not in document
+        assert "retract-dev.yml" not in document
+
+    assert "Actions 产物或 dev 版本目录" not in distribution
+    assert "/mihari-release/mihari-dev" not in distribution

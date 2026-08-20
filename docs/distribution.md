@@ -37,6 +37,8 @@ curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/insta
 
 > 命令中的网址是 AList 网盘的固定公开直链（签名已关闭），永久不变，复制即用。
 
+Batch A 中，dev 发布代码已准备，远程 dev/试发需授权。P2 AList 发布与撤回 workflow 尚不可用，因此当前没有 dev AList 根目录、版本目录或下载命令；稳定安装入口不会指向 dev。
+
 脚本3 下载器的执行流程：
 
 1. 下载根目录 `index.txt`（固定公开直链，永久有效），解析出最新版本号与本平台的整合包公开直链 + sha256；
@@ -88,12 +90,14 @@ settings 新增可选字段 `core-channel` 与 `core-channel-bundle`（schema �
 
 ## 三、AList 网盘目录结构
 
-base_path 默认 `/mihari-release/mihari`（AList fs/API 路径，通过 GitHub 变量 `ALIST_BASE_PATH` 配置）：
+stable base_path 默认 `/mihari-release/mihari`（AList fs/API 路径，通过 GitHub 变量 `ALIST_BASE_PATH` 配置）：
 
 ```
+stable（仅稳定通道）：
+
 /mihari-release/mihari/             base_path（fs/API 路径）
 ├── index.txt                       路由表（公开直链）
-├── install-aio-remote.sh / .ps1    脚本3 下载器（内含固定公开 index 直链，每次发布覆盖）
+├── install-aio-remote.sh / .ps1    稳定通道脚本3（内含稳定 index 直链）
 ├── v0.3.0/                         不可变版本目录
 │   ├── mihari-all-in-one-{linux,darwin,windows}-{amd64,arm64}.tar.gz / .zip
 │   ├── SHA256SUMS.txt              本版本 6 个整合包的 sha256
@@ -101,6 +105,8 @@ base_path 默认 `/mihari-release/mihari`（AList fs/API 路径，通过 GitHub 
 ├── v0.2.0/
 └── v0.1.0/
 ```
+
+dev 发布代码已准备，远程 dev/试发需授权。P2 AList 发布与撤回 workflow 尚不可用，故本阶段不创建或操作 dev AList 目录；稳定 `index.txt` 和 `/releases/latest` 不受 dev 准备代码影响。
 
 > **AList 拓扑 quirk（读路径 / 下载）**：**公开下载 URL** 需在 `/p` 后加 `/public` 挂载点前缀，即 `https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/…`（`alist_client.public_url` 自动处理）。
 >
