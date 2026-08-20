@@ -1,0 +1,325 @@
+name: release dev
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Dev release version, e.g. v0.3.0-dev.1'
+        required: true
+        type: string
+
+concurrency:
+  group: dev-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  VERSION: ${{ inputs.version }}
+  PLATFORMS: linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64,windows/arm64
+
+jobs:
+  resolve:
+    name: resolve dev source
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - name: Guard dev ref and version
+        run: |
+          [ "${GITHUB_REF}" = "refs/heads/dev" ] \
+            || { echo "::error::dev releases must be dispatched from refs/heads/dev"; exit 1; }
+          if [[ ! "${VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]]; then
+            echo "::error::version must match the dev prerelease format"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - id: source
+        name: Resolve immutable source commit
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          [ "${SHA}" = "${GITHUB_SHA}" ] \
+            || { echo "::error::checked-out commit ${SHA} does not equal event commit ${GITHUB_SHA}"; exit 1; }
+          echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
+
+  build:
+    name: build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: resolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64, ext: '' }
+          - { goos: linux,   goarch: arm64, ext: '' }
+          - { goos: darwin,  goarch: amd64, ext: '' }
+          - { goos: darwin,  goarch: arm64, ext: '' }
+          - { goos: windows, goarch: amd64, ext: '.exe' }
+          - { goos: windows, goarch: arm64, ext: '.exe' }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Verify immutable source commit
+        run: |
+          [ "$(git rev-parse HEAD)" = "${{ needs.resolve.outputs.sha }}" ] \
+            || { echo "::error::checkout did not resolve the approved source commit"; exit 1; }
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          OUT="mihari-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
+          go build -trimpath -ldflags "-s -w -X github.com/mihari-proxy/mihari/internal/buildinfo.Version=${VERSION}" -o "dist/${OUT}" ./cmd/mihari
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mihari-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+
+  bundle:
+    name: bundle all-in-one
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Verify immutable source commit
+        run: |
+          [ "$(git rev-parse HEAD)" = "${{ needs.resolve.outputs.sha }}" ] \
+            || { echo "::error::checkout did not resolve the approved source commit"; exit 1; }
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Build all-in-one bundles
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          go run ./scripts/build-all-in-one --mihari-dir dist --out bundles --platforms "${PLATFORMS}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aio-bundles
+          path: bundles/*
+
+  publish:
+    name: publish dev prerelease
+    needs: [resolve, build, bundle]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      SHA: ${{ needs.resolve.outputs.sha }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      DEV_RELEASE_NAME: Mihari ${{ inputs.version }} (dev)
+      DEV_RELEASE_BODY: "This is a Mihari development release.\n\n<!-- github-release-dev -->"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Verify immutable source commit
+        run: |
+          [ "$(git rev-parse HEAD)" = "${SHA}" ] \
+            || { echo "::error::checkout did not resolve the approved source commit"; exit 1; }
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist
+        run: |
+          sha256sum * > SHA256SUMS.txt
+          sha256sum mihari-all-in-one-* > AIO_SHA256SUMS.txt
+
+      - name: Read stable latest before dev mutation
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/releases/latest" > /tmp/latest-before.json 2> /tmp/latest-before.err \
+            || { echo "::error::unable to read stable latest release"; exit 1; }
+
+      - name: Validate expected local asset set
+        run: |
+          python scripts/github_release_policy.py assets > /tmp/expected-assets
+          find dist -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > /tmp/local-assets
+          cmp -s /tmp/expected-assets /tmp/local-assets \
+            || { echo "::error::local release assets do not match the fixed dev asset set"; exit 1; }
+
+      - name: Preflight existing release before tag mutation
+        run: |
+          verify_tag_ref() {
+            set +e
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${VERSION}" > /tmp/tag-ref.json 2> /tmp/tag-ref.err
+            status=$?
+            set -e
+            [ "${status}" -eq 0 ] || { echo "::error::unable to read existing release tag"; return 1; }
+            jq -e '(.object.type | type == "string") and (.object.sha | type == "string")' /tmp/tag-ref.json >/dev/null \
+              || { echo "::error::existing release tag response is invalid"; return 1; }
+            jq -c '{type: .object.type, sha: .object.sha}' /tmp/tag-ref.json > /tmp/tag-chain.jsonl
+            tag_type="$(jq -r '.object.type' /tmp/tag-ref.json)"
+            tag_sha="$(jq -r '.object.sha' /tmp/tag-ref.json)"
+            for depth in $(seq 1 7); do
+              [ "${tag_type}" = tag ] || break
+              set +e
+              gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" > /tmp/tag-object.json 2> /tmp/tag-object.err
+              status=$?
+              set -e
+              [ "${status}" -eq 0 ] || { echo "::error::unable to peel existing release tag"; return 1; }
+              jq -e '(.object.type | type == "string") and (.object.sha | type == "string")' /tmp/tag-object.json >/dev/null \
+                || { echo "::error::existing annotated tag response is invalid"; return 1; }
+              jq -c '{type: .object.type, sha: .object.sha}' /tmp/tag-object.json >> /tmp/tag-chain.jsonl
+              tag_type="$(jq -r '.object.type' /tmp/tag-object.json)"
+              tag_sha="$(jq -r '.object.sha' /tmp/tag-object.json)"
+            done
+            [ "${tag_type}" != tag ] || { echo "::error::release tag peel exceeds the allowed depth"; return 1; }
+            jq -s . /tmp/tag-chain.jsonl > /tmp/tag-chain.json
+            python scripts/github_release_policy.py tag-chain --chain /tmp/tag-chain.json --expected-sha "${SHA}"
+          }
+
+          set +e
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${VERSION}" > /tmp/preflight-release.json 2> /tmp/preflight-release.err
+          status=$?
+          set -e
+          if [ "${status}" -eq 0 ]; then
+            touch /tmp/release-exists
+            verify_tag_ref
+            python scripts/github_release_policy.py release \
+              --document /tmp/preflight-release.json --version "${VERSION}" \
+              --release-name "${DEV_RELEASE_NAME}" --marker "<!-- github-release-dev -->" --mode preflight
+            mkdir -p /tmp/release-assets
+            jq -r '.assets[].name' /tmp/preflight-release.json | LC_ALL=C sort > /tmp/existing-assets
+            while IFS= read -r asset; do
+              [ -n "${asset}" ] || continue
+              gh release download "${VERSION}" --pattern "${asset}" --dir /tmp/release-assets > /tmp/release-download.out 2> /tmp/release-download.err \
+                || { echo "::error::unable to download an existing release asset"; exit 1; }
+              expected="$(sha256sum "dist/${asset}" | awk '{print $1}')"
+              actual="$(sha256sum "/tmp/release-assets/${asset}" | awk '{print $1}')"
+              [ "${expected}" = "${actual}" ] \
+                || { echo "::error::existing release asset checksum conflicts with this build"; exit 1; }
+            done < /tmp/existing-assets
+            comm -23 /tmp/local-assets /tmp/existing-assets > /tmp/missing-assets
+          elif grep -q 'HTTP 404' /tmp/preflight-release.err; then
+            rm -f /tmp/release-exists
+            : > /tmp/existing-assets
+            cp /tmp/local-assets /tmp/missing-assets
+          else
+            echo "::error::unable to read existing release"
+            exit "${status}"
+          fi
+
+      - name: Create or verify immutable tag
+        run: |
+          verify_tag_ref() {
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${VERSION}" > /tmp/tag-ref.json 2> /tmp/tag-ref.err \
+              || { echo "::error::unable to read release tag"; return 1; }
+            jq -e '(.object.type | type == "string") and (.object.sha | type == "string")' /tmp/tag-ref.json >/dev/null \
+              || { echo "::error::release tag response is invalid"; return 1; }
+            jq -c '{type: .object.type, sha: .object.sha}' /tmp/tag-ref.json > /tmp/tag-chain.jsonl
+            tag_type="$(jq -r '.object.type' /tmp/tag-ref.json)"
+            tag_sha="$(jq -r '.object.sha' /tmp/tag-ref.json)"
+            for depth in $(seq 1 7); do
+              [ "${tag_type}" = tag ] || break
+              gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" > /tmp/tag-object.json 2> /tmp/tag-object.err \
+                || { echo "::error::unable to peel release tag"; return 1; }
+              jq -e '(.object.type | type == "string") and (.object.sha | type == "string")' /tmp/tag-object.json >/dev/null \
+                || { echo "::error::annotated tag response is invalid"; return 1; }
+              jq -c '{type: .object.type, sha: .object.sha}' /tmp/tag-object.json >> /tmp/tag-chain.jsonl
+              tag_type="$(jq -r '.object.type' /tmp/tag-object.json)"
+              tag_sha="$(jq -r '.object.sha' /tmp/tag-object.json)"
+            done
+            [ "${tag_type}" != tag ] || { echo "::error::release tag peel exceeds the allowed depth"; return 1; }
+            jq -s . /tmp/tag-chain.jsonl > /tmp/tag-chain.json
+            python scripts/github_release_policy.py tag-chain --chain /tmp/tag-chain.json --expected-sha "${SHA}"
+          }
+
+          set +e
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${VERSION}" > /tmp/tag-ref.json 2> /tmp/tag-ref.err
+          status=$?
+          set -e
+          if [ "${status}" -ne 0 ]; then
+            if ! grep -q 'HTTP 404' /tmp/tag-ref.err; then
+              echo "::error::unable to read release tag"
+              exit "${status}"
+            fi
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f "ref=refs/tags/${VERSION}" -f "sha=${SHA}" > /tmp/tag-create.json 2> /tmp/tag-create.err \
+              || { echo "::error::unable to create release tag"; exit 1; }
+          fi
+          verify_tag_ref
+
+      - name: Create prerelease and upload missing assets
+        run: |
+          if [ ! -f /tmp/release-exists ]; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" \
+              -f "tag_name=${VERSION}" \
+              -f "target_commitish=${SHA}" \
+              -f "name=${DEV_RELEASE_NAME}" \
+              -f "body=${DEV_RELEASE_BODY}" \
+              -F prerelease=true -F draft=false -F make_latest=false > /tmp/release-create.json 2> /tmp/release-create.err \
+              || { echo "::error::unable to create dev prerelease"; exit 1; }
+          fi
+          while IFS= read -r asset; do
+            [ -n "${asset}" ] || continue
+            gh release upload "${VERSION}" "dist/${asset}" > /tmp/release-upload.out 2> /tmp/release-upload.err \
+              || { echo "::error::unable to upload a missing release asset"; exit 1; }
+          done < /tmp/missing-assets
+
+      - name: Final verify prerelease and stable latest
+        run: |
+          download_and_verify_assets() {
+            rm -rf /tmp/final-release-assets
+            mkdir -p /tmp/final-release-assets
+            jq -r '.assets[].name' /tmp/final-release.json | LC_ALL=C sort > /tmp/final-assets
+            while IFS= read -r asset; do
+              [ -n "${asset}" ] || continue
+              gh release download "${VERSION}" --pattern "${asset}" --dir /tmp/final-release-assets > /tmp/final-download.out 2> /tmp/final-download.err \
+                || { echo "::error::unable to download a final release asset"; return 1; }
+              expected="$(sha256sum "dist/${asset}" | awk '{print $1}')"
+              actual="$(sha256sum "/tmp/final-release-assets/${asset}" | awk '{print $1}')"
+              [ "${expected}" = "${actual}" ] \
+                || { echo "::error::final release asset checksum mismatch"; return 1; }
+            done < /tmp/final-assets
+          }
+
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${VERSION}" > /tmp/final-release.json 2> /tmp/final-release.err \
+            || { echo "::error::unable to read final dev prerelease"; exit 1; }
+          python scripts/github_release_policy.py release \
+            --document /tmp/final-release.json --version "${VERSION}" \
+            --release-name "${DEV_RELEASE_NAME}" --marker "<!-- github-release-dev -->" --mode final
+          download_and_verify_assets
+          gh api "repos/${GITHUB_REPOSITORY}/releases/latest" > /tmp/latest-after.json 2> /tmp/latest-after.err \
+            || { echo "::error::unable to read stable latest release after publication"; exit 1; }
+          python scripts/github_release_policy.py latest \
+            --before /tmp/latest-before.json --after /tmp/latest-after.json --dev-version "${VERSION}"
