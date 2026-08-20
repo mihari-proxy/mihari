@@ -10,7 +10,111 @@ pairs so neither the publish nor the retract flow can regress.
 import importlib.util
 from pathlib import Path
 
+import pytest
+import requests
+
+import alist_client
 from alist_client import AList, PLATFORMS, bundle_name, semver_key
+
+
+def test_read_bytes_closes_response_after_success():
+    alist = AList.__new__(AList)
+
+    class Response:
+        closed = False
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, size):
+            assert size == 1024 * 1024
+            yield b"abcdef"
+
+        def close(self):
+            self.closed = True
+
+    response = Response()
+
+    class Session:
+        def get(self, url, timeout, stream):
+            assert timeout == 7
+            assert stream is True
+            return response
+
+    alist.session = Session()
+    alist.public_url = lambda path: "https://example.invalid" + path
+    assert alist.read_bytes("/x", max_bytes=6, timeout=7) == b"abcdef"
+    assert response.closed is True
+
+
+def test_read_bytes_closes_response_when_status_is_error():
+    alist = AList.__new__(AList)
+
+    class Response:
+        closed = False
+
+        def raise_for_status(self):
+            raise requests.HTTPError("remote failure")
+
+        def close(self):
+            self.closed = True
+
+    response = Response()
+    alist.session = type("Session", (), {"get": lambda *_args, **_kwargs: response})()
+    alist.public_url = lambda path: "https://example.invalid" + path
+
+    with pytest.raises(requests.HTTPError):
+        alist.read_bytes("/x")
+    assert response.closed is True
+
+
+def test_read_bytes_closes_response_when_object_exceeds_limit():
+    alist = AList.__new__(AList)
+
+    class Response:
+        closed = False
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, _size):
+            yield b"abcdef"
+
+        def close(self):
+            self.closed = True
+
+    response = Response()
+    alist.session = type("Session", (), {"get": lambda *_args, **_kwargs: response})()
+    alist.public_url = lambda path: "https://example.invalid" + path
+
+    with pytest.raises(ValueError):
+        alist.read_bytes("/x", max_bytes=5, timeout=7)
+    assert response.closed is True
+
+
+def test_content_uses_text_limit_and_strict_utf8():
+    alist = AList.__new__(AList)
+    captured = {}
+    alist.exists = lambda _path: True
+
+    def read_bytes(path, max_bytes):
+        captured["path"] = path
+        captured["max_bytes"] = max_bytes
+        return b"latest v1.2.3\n"
+
+    alist.read_bytes = read_bytes
+    assert alist.content("/index.txt") == "latest v1.2.3\n"
+    assert captured == {"path": "/index.txt", "max_bytes": alist_client.MAX_TEXT_BYTES}
+
+
+def test_content_rejects_invalid_utf8_without_body_leak():
+    alist = AList.__new__(AList)
+    alist.exists = lambda _path: True
+    alist.read_bytes = lambda _path, max_bytes: b"secret-index-body\xff"
+
+    with pytest.raises(UnicodeDecodeError) as error:
+        alist.content("/index.txt")
+    assert "secret-index-body" not in str(error.value)
 
 
 def test_platforms_unpack_as_goos_goarch_pairs():

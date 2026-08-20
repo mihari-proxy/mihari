@@ -16,6 +16,10 @@ from urllib.parse import quote
 
 import requests
 
+MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
+MAX_TEXT_BYTES = 1024 * 1024
+DOWNLOAD_TIMEOUT = 120
+
 # AList topology quirk: the fs API (list/get/put/mkdir) addresses files under
 # the root storage (paths rooted at /), so this is the *fs* base path. The /p
 # download route needs a different prefix — see AList.public_url. Verified
@@ -160,15 +164,33 @@ class AList:
     def remove(self, dir_path, names):
         self._post("/api/fs/remove", json={"dir": self._fs_path(dir_path), "names": list(names)})
 
-    def content(self, path):
+    def content(self, path: str, max_bytes: int = MAX_TEXT_BYTES) -> str | None:
         """Read a remote text file via its public proxy route. Returns None when
         the file does not exist. Used by retract to read the root index.txt and
         a version dir's SHA256SUMS.txt."""
         if not self.exists(path):
             return None
-        response = self.session.get(self.public_url(path), timeout=120)
-        response.raise_for_status()
-        return response.text
+        return self.read_bytes(path, max_bytes=max_bytes).decode("utf-8", errors="strict")
+
+    def read_bytes(
+        self, path: str, max_bytes: int = MAX_DOWNLOAD_BYTES, timeout: int = DOWNLOAD_TIMEOUT
+    ) -> bytes:
+        """Download a public object with a strict response-size limit."""
+        response = self.session.get(self.public_url(path), timeout=timeout, stream=True)
+        try:
+            response.raise_for_status()
+            chunks = []
+            total = 0
+            for chunk in response.iter_content(1024 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ValueError(f"remote object exceeds {max_bytes} bytes")
+                chunks.append(chunk)
+        finally:
+            response.close()
+        return b"".join(chunks)
 
     def public_url(self, path):
         # Turn an fs API path into a working public download URL. AList topology
