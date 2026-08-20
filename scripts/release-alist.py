@@ -86,6 +86,72 @@ def verify_remote_files(alist, version_dir, sums):
     return True
 
 
+def preflight_incomplete_directory(alist, base_path, version, sums, commit_sha):
+    """Return missing files only when an incomplete directory is safe to resume."""
+    version_dir = f"{base_path}/{version}"
+    bundle_names = {bundle_name(goos, goarch) for goos, goarch in PLATFORMS}
+    expected_metadata = {
+        "SHA256SUMS.txt": sums_manifest(sums).encode(),
+        "BUILDINFO": buildinfo(version, commit_sha).encode(),
+    }
+    expected_names = bundle_names | set(expected_metadata) | {"COMPLETE"}
+    try:
+        directory_exists = alist.exists(version_dir)
+        if not directory_exists:
+            if any(alist.exists(f"{version_dir}/{name}") for name in expected_names):
+                return None
+            return False, expected_names - {"COMPLETE"}
+        parent_entries = alist.list_dir(base_path)
+        entries = alist.list_dir(version_dir)
+        if not isinstance(parent_entries, list) or not isinstance(entries, list):
+            return None
+        parent_matches = [entry for entry in parent_entries if isinstance(entry, dict) and entry.get("name") == version]
+        if directory_exists != (len(parent_matches) == 1 and parent_matches[0].get("is_dir") is True):
+            return None
+        listed = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                return None
+            name = entry.get("name")
+            if not isinstance(name, str) or entry.get("is_dir") is not False or name in listed:
+                return None
+            listed[name] = entry
+        if set(listed) - expected_names:
+            return None
+
+        missing = set()
+        for name in expected_names:
+            remote = f"{version_dir}/{name}"
+            exists = alist.exists(remote)
+            if exists != (name in listed):
+                return None
+            if not exists:
+                missing.add(name)
+                continue
+            remote_bytes = alist.read_bytes(remote)
+            if name in bundle_names:
+                if hashlib.sha256(remote_bytes).hexdigest() != sums[name]:
+                    return None
+            elif name == "COMPLETE":
+                return None
+            elif remote_bytes != expected_metadata[name]:
+                return None
+    except Exception:
+        return None
+    return directory_exists, missing
+
+
+def verify_remote_metadata(alist, version_dir, sums, version, commit_sha):
+    """Verify that the two generated metadata files are byte-for-byte exact."""
+    try:
+        return (
+            alist.read_bytes(f"{version_dir}/SHA256SUMS.txt") == sums_manifest(sums).encode()
+            and alist.read_bytes(f"{version_dir}/BUILDINFO") == buildinfo(version, commit_sha).encode()
+        )
+    except Exception:
+        return False
+
+
 def verified_directory(alist, base_path, version, channel, expected_commit=None, expected_sums=None):
     """Return remote sums only for a completed directory with verified bytes."""
     version_dir = f"{base_path}/{version}"
@@ -127,14 +193,22 @@ def upload_version_dir(alist, dist_dir, base_path, version, commit_sha=None, cha
             fail(f"completed version dir conflicts or cannot be verified: {version_dir}")
         info(f"version dir {version_dir} already complete and verified")
         return version_dir
-    alist.mkdir(version_dir)
+    preflight = preflight_incomplete_directory(alist, base_path, version, sums, commit_sha)
+    if preflight is None:
+        fail(f"incomplete version dir conflicts or cannot be verified: {version_dir}")
+    directory_exists, missing = preflight
+    if not directory_exists:
+        alist.mkdir(version_dir)
     for goos, goarch in PLATFORMS:
         name = bundle_name(goos, goarch)
-        alist.upload(str(Path(dist_dir) / name), f"{version_dir}/{name}")
-    alist.upload_text(sums_manifest(sums), f"{version_dir}/SHA256SUMS.txt")
-    alist.upload_text(buildinfo(version, commit_sha), f"{version_dir}/BUILDINFO")
-    if not verify_remote_files(alist, version_dir, sums):
-        fail(f"uploaded bundle bytes failed verification: {version_dir}")
+        if name in missing:
+            alist.upload(str(Path(dist_dir) / name), f"{version_dir}/{name}")
+    if "SHA256SUMS.txt" in missing:
+        alist.upload_text(sums_manifest(sums), f"{version_dir}/SHA256SUMS.txt")
+    if "BUILDINFO" in missing:
+        alist.upload_text(buildinfo(version, commit_sha), f"{version_dir}/BUILDINFO")
+    if not verify_remote_files(alist, version_dir, sums) or not verify_remote_metadata(alist, version_dir, sums, version, commit_sha):
+        fail(f"uploaded release data failed verification: {version_dir}")
     alist.upload_text(f"{version}\n", f"{version_dir}/COMPLETE")
     return version_dir
 

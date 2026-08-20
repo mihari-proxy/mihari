@@ -67,13 +67,15 @@ def add_complete(fake, base, version):
     fake.dirs.add(d)
     fake.files[f"{d}/COMPLETE"] = (version + "\n").encode()
     fake.files[f"{d}/BUILDINFO"] = (f"version={version}\ncommit={'a'*40}\n").encode()
-    sums = []
+    sums = {}
     for goos, goarch in PLATFORMS:
         name = bundle_name(goos, goarch)
         payload = name.encode()
         fake.files[f"{d}/{name}"] = payload
-        sums.append(f"{hashlib.sha256(payload).hexdigest()}  {name}")
-    fake.files[f"{d}/SHA256SUMS.txt"] = ("\n".join(sums) + "\n").encode()
+        sums[name] = hashlib.sha256(payload).hexdigest()
+    fake.files[f"{d}/SHA256SUMS.txt"] = "".join(
+        f"{sums[name]}  {name}\n" for name in sorted(sums)
+    ).encode()
 
 
 def root_index(base, version):
@@ -118,6 +120,33 @@ def test_retraction_requires_exact_buildinfo_for_new_release_directories(extra):
     fake.files[path] += extra.encode()
 
     assert retract_mod.verified_directory(fake, base, version, "dev", "a" * 40) is None
+
+
+@pytest.mark.parametrize(
+    "invalid_manifest",
+    [
+        pytest.param(lambda manifest: manifest + manifest.splitlines(keepends=True)[0], id="duplicate"),
+        pytest.param(lambda manifest: manifest + "0" * 64 + "  unexpected-bundle\n", id="extra"),
+        pytest.param(lambda manifest: manifest + "not-a-checksum-line\n", id="malformed"),
+        pytest.param(lambda manifest: "".join(reversed(manifest.splitlines(keepends=True))), id="out-of-order"),
+        pytest.param(lambda manifest: manifest.rstrip("\n"), id="missing-final-newline"),
+        pytest.param(lambda manifest: manifest + "\n", id="blank-line"),
+    ],
+)
+def test_retract_refuses_noncanonical_checksum_manifest_without_mutation(invalid_manifest):
+    fake = Fake()
+    base = "/mihari-release/mihari-dev"
+    version = "v1.2.3-dev.1"
+    add_complete(fake, base, version)
+    sums_path = f"{base}/{version}/SHA256SUMS.txt"
+    fake.files[sums_path] = invalid_manifest(fake.files[sums_path].decode()).encode()
+    fake.files[f"{base}/index.txt"] = f"latest {version}\n".encode()
+
+    with pytest.raises(SystemExit):
+        retract_mod.retract(fake, base, version, "dev", "a" * 40)
+
+    assert fake.exists(f"{base}/{version}")
+    assert mutations(fake) == []
 
 
 def test_dev_retract_rebuilds_highest_remaining_complete(tmp_path, monkeypatch):

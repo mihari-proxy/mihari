@@ -156,11 +156,11 @@ release workflow 的 AList 步骤顺序保证用户永远拿不到半成品：
 
 1. `workflow_dispatch` 输入 `version`（纯 semver 闸门）+ `confirm`（布尔双保险）；
 2. 读 `index.txt` 判断撤回版本是否为当前 latest；
-3. 删除 AList 版本目录 `<base_path>/<version>/`；
-4. **仅当撤回的是 latest** 才重建 `index.txt`：latest 改为现存最高且完整（含 `COMPLETE`）的版本（sha256 从该目录的 `SHA256SUMS.txt` 读取）；无完整版本 → `index.txt` 置空；
+3. **仅当撤回的是 latest**，先排除目标目录，重建 `index.txt`：latest 改为现存最高且完整（含 `COMPLETE`）的版本（sha256 从该目录的 `SHA256SUMS.txt` 读取）；无完整版本 → `index.txt` 置空。写入后必须回读验证成功，才进入删除；
+4. 删除 AList 版本目录 `<base_path>/<version>/`；撤回非 latest 时 index 保持原始字节不变；
 5. `gh release delete <version> --yes --cleanup-tag`（删 release + 资产 + tag，允许修复后同版本号重发）。
 
-幂等：对已撤回的版本重跑不报错。
+若 latest 的替代或空 index 已验证、但目录删除失败，index 保持已切换状态，不回退；目标目录成为不再被 index 引用的遗留目录，同一撤回重跑会继续删除它。幂等：对已撤回的版本重跑不报错。
 
 ### 边界（务必知晓）
 

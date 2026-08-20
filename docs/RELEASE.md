@@ -138,7 +138,7 @@ Batch A 只完成 dev 发布代码准备，远程 dev/试发需授权。实现�
 
 1. 在 GitHub 仓库 Actions 页面运行 `retract` workflow；
 2. 填写 `version`（如 `v0.3.0`）并勾选 `confirm` 双保险；
-3. workflow 自动：删除 AList 版本目录 → 必要时重建 `index.txt` 指向现存最高完整版本 → 删除 GitHub release + 资产 + tag（`--cleanup-tag`，允许修复后同版本号重发）。
+3. workflow 自动：若撤回当前 latest，先计算并写入现存最高完整版本的替代 `index.txt`（没有其他完整版本则写空），并回读验证成功；随后删除 AList 版本目录；最后删除 GitHub release + 资产 + tag（`--cleanup-tag`，允许修复后同版本号重发）。目录删除失败时，已切换的 index 保持不回退，重跑会删除不再被 index 引用的遗留目录。
 
 > **仅移除分发渠道，已安装用户不可回收**——靠快速发布修复版（`vN+1 > vN` 自更新覆盖）自愈。详见 [分发方案 · 版本撤回](distribution.md#四版本撤回致命错误)。
 

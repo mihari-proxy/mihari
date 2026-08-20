@@ -105,6 +105,121 @@ def test_dev_upload_writes_buildinfo_before_complete_and_skips_root_scripts(tmp_
     assert all("install-aio" not in item for item in alist.uploaded)
 
 
+def incomplete_version_dir(base, version):
+    return f"{base}/{version}"
+
+
+def expected_partial_manifest(dist):
+    sums = {}
+    for goos, goarch in PLATFORMS:
+        name = bundle_name(goos, goarch)
+        sums[name] = hashlib.sha256((dist / name).read_bytes()).hexdigest()
+    return "".join(f"{sums[name]}  {name}\n" for name in sorted(sums)).encode()
+
+
+def test_incomplete_directory_conflicting_bundle_is_refused_without_mutation(tmp_path):
+    alist = FakeAList()
+    dist = make_dist(tmp_path)
+    base = "/mihari-release/mihari-dev"
+    version = "v1.2.3-dev.1"
+    directory = incomplete_version_dir(base, version)
+    conflicting_bundle = bundle_name("linux", "amd64")
+    alist.dirs.add(directory)
+    alist.files[f"{directory}/{conflicting_bundle}"] = b"conflicting bundle bytes"
+    before_files = dict(alist.files)
+    before_dirs = set(alist.dirs)
+    before_uploads = list(alist.uploaded)
+
+    with pytest.raises(SystemExit):
+        release.upload_version_dir(alist, dist, base, version, "a" * 40, "dev")
+
+    assert alist.files == before_files
+    assert alist.dirs == before_dirs
+    assert alist.uploaded == before_uploads
+
+
+@pytest.mark.parametrize(
+    "name,content",
+    [
+        ("BUILDINFO", b"version=v1.2.3-dev.1\ncommit=" + b"b" * 40 + b"\n"),
+        ("SHA256SUMS.txt", b"not-a-canonical-checksum-manifest\n"),
+    ],
+)
+def test_incomplete_directory_conflicting_identity_metadata_is_refused_before_writes(tmp_path, name, content):
+    alist = FakeAList()
+    dist = make_dist(tmp_path)
+    base = "/mihari-release/mihari-dev"
+    version = "v1.2.3-dev.1"
+    directory = incomplete_version_dir(base, version)
+    alist.dirs.add(directory)
+    alist.files[f"{directory}/{name}"] = content
+    before_files = dict(alist.files)
+    before_uploads = list(alist.uploaded)
+
+    with pytest.raises(SystemExit):
+        release.upload_version_dir(alist, dist, base, version, "a" * 40, "dev")
+
+    assert alist.files == before_files
+    assert alist.uploaded == before_uploads
+
+
+def test_incomplete_directory_recovers_identical_objects_by_uploading_only_missing_files(tmp_path):
+    alist = FakeAList()
+    dist = make_dist(tmp_path)
+    base = "/mihari-release/mihari-dev"
+    version = "v1.2.3-dev.1"
+    directory = incomplete_version_dir(base, version)
+    preserved_bundle = bundle_name("linux", "amd64")
+    alist.dirs.add(directory)
+    alist.files[f"{directory}/{preserved_bundle}"] = (dist / preserved_bundle).read_bytes()
+    alist.files[f"{directory}/SHA256SUMS.txt"] = expected_partial_manifest(dist)
+    alist.files[f"{directory}/BUILDINFO"] = b"version=v1.2.3-dev.1\ncommit=" + b"a" * 40 + b"\n"
+
+    release.upload_version_dir(alist, dist, base, version, "a" * 40, "dev")
+
+    assert f"{directory}/{preserved_bundle}" not in alist.uploaded
+    assert f"{directory}/SHA256SUMS.txt" not in alist.uploaded
+    assert f"{directory}/BUILDINFO" not in alist.uploaded
+    assert alist.uploaded[-1] == f"{directory}/COMPLETE"
+    assert set(alist.files) == {
+        f"{directory}/{bundle_name(goos, goarch)}" for goos, goarch in PLATFORMS
+    } | {f"{directory}/SHA256SUMS.txt", f"{directory}/BUILDINFO", f"{directory}/COMPLETE"}
+
+
+def test_incomplete_directory_extra_object_is_refused_without_mutation(tmp_path):
+    alist = FakeAList()
+    dist = make_dist(tmp_path)
+    base = "/mihari-release/mihari-dev"
+    version = "v1.2.3-dev.1"
+    directory = incomplete_version_dir(base, version)
+    alist.dirs.add(directory)
+    alist.files[f"{directory}/unexpected-metadata.txt"] = b"unexpected"
+    before_files = dict(alist.files)
+    before_dirs = set(alist.dirs)
+
+    with pytest.raises(SystemExit):
+        release.upload_version_dir(alist, dist, base, version, "a" * 40, "dev")
+
+    assert alist.files == before_files
+    assert alist.dirs == before_dirs
+
+
+def test_incomplete_directory_listing_error_fails_closed_without_leaking_remote_details(tmp_path, capsys):
+    alist = FakeAList()
+    dist = make_dist(tmp_path)
+    alist.dirs.add("/mihari-release/mihari-dev/v1.2.3-dev.1")
+    alist.list_dir = lambda _path: (_ for _ in ()).throw(
+        RuntimeError("https://cloud.invalid/list?token=partial-secret response-body")
+    )
+
+    with pytest.raises(SystemExit):
+        release.upload_version_dir(alist, dist, "/mihari-release/mihari-dev", "v1.2.3-dev.1", "a" * 40, "dev")
+
+    captured = capsys.readouterr()
+    assert "partial-secret" not in captured.err
+    assert "response-body" not in captured.err
+
+
 def test_existing_complete_conflict_is_refused(tmp_path):
     alist = FakeAList()
     dist = make_dist(tmp_path)

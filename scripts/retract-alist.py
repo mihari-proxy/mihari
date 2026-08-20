@@ -9,6 +9,7 @@ from alist_index import IndexMutationError, parse_latest, write_index_reliably a
 from release_policy import parse_version, validate_base_path
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SUM_LINE_RE = re.compile(r"^([0-9a-f]{64})  ([^\r\n]+)\n$")
 
 
 def validate_inputs(version, channel, base_path, commit_sha):
@@ -19,6 +20,30 @@ def validate_inputs(version, channel, base_path, commit_sha):
         fail(str(error))
     if channel == "dev" and (not commit_sha or not SHA_RE.fullmatch(commit_sha)):
         fail("dev retraction requires a 40-hex commit SHA")
+
+
+def sums_manifest(sums):
+    """Return the publisher's canonical checksum manifest format."""
+    return "".join(f"{sums[name]}  {name}\n" for name in sorted(sums))
+
+
+def parse_sums(text):
+    """Parse only an exact canonical six-bundle checksum manifest."""
+    if not isinstance(text, str):
+        return None
+    sums = {}
+    for line in text.splitlines(keepends=True):
+        match = SUM_LINE_RE.fullmatch(line)
+        if match is None:
+            return None
+        digest, name = match.groups()
+        if name in sums:
+            return None
+        sums[name] = digest
+    expected = {bundle_name(goos, goarch) for goos, goarch in PLATFORMS}
+    if set(sums) != expected or sums_manifest(sums) != text:
+        return None
+    return sums
 
 
 def verified_directory(alist, base_path, version, channel, commit_sha=None):
@@ -38,13 +63,8 @@ def verified_directory(alist, base_path, version, channel, commit_sha=None):
             commit = match.group(2)
             if commit_sha is not None and commit != commit_sha:
                 return None
-        sums = {}
-        for line in (alist.content(f"{directory}/SHA256SUMS.txt") or "").splitlines():
-            fields = line.split(None, 1)
-            if len(fields) == 2 and re.fullmatch(r"[0-9a-f]{64}", fields[0]):
-                sums[fields[1].strip()] = fields[0]
-        expected = {bundle_name(goos, goarch) for goos, goarch in PLATFORMS}
-        if set(sums) != expected:
+        sums = parse_sums(alist.content(f"{directory}/SHA256SUMS.txt"))
+        if sums is None:
             return None
         for name, digest in sums.items():
             remote = f"{directory}/{name}"
