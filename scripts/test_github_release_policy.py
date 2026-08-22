@@ -92,6 +92,27 @@ def test_preflight_accepts_matching_subset_but_rejects_extra_assets():
         )
 
 
+def test_preflight_accepts_an_explicit_empty_asset_list():
+    validate_release_document(release_fixture([]), VERSION, RELEASE_NAME, MARKER, "preflight")
+
+
+def test_preflight_rejects_a_missing_assets_field():
+    document = release_fixture([])
+    document.pop("assets")
+
+    with pytest.raises(ReleasePolicyError):
+        validate_release_document(document, VERSION, RELEASE_NAME, MARKER, "preflight")
+
+
+@pytest.mark.parametrize("assets", [None, {}, "not-a-list"])
+def test_preflight_rejects_a_non_list_assets_field(assets):
+    document = release_fixture([])
+    document["assets"] = assets
+
+    with pytest.raises(ReleasePolicyError):
+        validate_release_document(document, VERSION, RELEASE_NAME, MARKER, "preflight")
+
+
 @pytest.mark.parametrize("target_commitish", ["main", "dev", SHA, None])
 def test_release_document_treats_target_commitish_as_diagnostic(target_commitish):
     document = release_fixture(sorted(EXPECTED_DEV_ASSETS))
@@ -168,6 +189,12 @@ def test_stable_latest_accepts_a_stable_version_advance():
     validate_stable_latest(stable_fixture("v0.9.0"), stable_fixture("v0.10.0"), VERSION)
 
 
+@pytest.mark.parametrize("tag_name", ["v01.2.3", "v1.02.3", "v1.2.03"])
+def test_stable_latest_rejects_a_leading_zero_in_each_version_segment(tag_name):
+    with pytest.raises(ReleasePolicyError):
+        validate_stable_latest(stable_fixture("v0.9.0"), stable_fixture(tag_name), VERSION)
+
+
 def test_policy_cli_latest_is_self_contained_without_adjacent_release_policy(tmp_path):
     isolated_script = tmp_path / "github_release_policy.py"
     before_path = tmp_path / "before.json"
@@ -208,6 +235,34 @@ def test_policy_cli_rejects_non_string_intermediate_tag_sha_without_traceback(tm
     assert rejected.returncode == 1
     assert "Traceback" not in rejected.stderr
     assert '"sha": 1' not in rejected.stderr
+
+
+def test_policy_cli_rejects_deep_json_without_traceback_or_input_echo(tmp_path):
+    document_path = tmp_path / "deep.json"
+    sensitive_value = "sensitive-deep-json"
+    document_path.write_text(
+        "[" * 4_000 + json.dumps(sensitive_value) + "]" * 4_000,
+        encoding="utf-8",
+    )
+
+    rejected = run_policy(
+        "release",
+        "--document",
+        str(document_path),
+        "--version",
+        VERSION,
+        "--release-name",
+        RELEASE_NAME,
+        "--marker",
+        MARKER,
+        "--mode",
+        "preflight",
+    )
+
+    assert rejected.returncode == 1
+    assert "release policy validation failed: invalid JSON input" in rejected.stderr
+    assert "Traceback" not in rejected.stderr
+    assert sensitive_value not in rejected.stderr
 
 
 def test_policy_cli_validates_local_json_and_never_echoes_document_contents(tmp_path):

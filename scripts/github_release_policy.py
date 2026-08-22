@@ -32,7 +32,9 @@ EXPECTED_DEV_ASSETS: frozenset[str] = frozenset(
 
 _MAX_JSON_BYTES = 1_048_576
 _SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
-_STABLE_VERSION_PATTERN = re.compile(r"^v([0-9]+)\.([0-9]+)\.([0-9]+)$")
+_STABLE_VERSION_PATTERN = re.compile(
+    r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
+)
 
 
 class ReleasePolicyError(ValueError):
@@ -59,7 +61,7 @@ def validate_release_document(
     if not isinstance(body, str) or marker not in body:
         raise ReleasePolicyError("release marker mismatch")
 
-    assets = document.get("assets", [])
+    assets = document.get("assets")
     if not isinstance(assets, list):
         raise ReleasePolicyError("release assets are invalid or duplicated")
     names: list[str] = []
@@ -139,7 +141,7 @@ def _read_json(path_value: str) -> object:
         if len(data) > _MAX_JSON_BYTES:
             raise ReleasePolicyError("JSON input exceeds the allowed size")
         return json.loads(data.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
         raise ReleasePolicyError("invalid JSON input") from error
 
 

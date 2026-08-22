@@ -1,12 +1,13 @@
 import hashlib
 import importlib.util
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import requests
 
-from alist_client import PLATFORMS, bundle_name
+from alist_client import AList, AListError, PLATFORMS, bundle_name
 
 
 def load_module(name):
@@ -96,13 +97,12 @@ def test_stable_publish_inputs_require_a_40_lowercase_commit_sha():
     release.validate_inputs("v1.2.3", "stable", base, "a" * 40)
 
 
-def test_dev_upload_writes_buildinfo_before_complete_and_skips_root_scripts(tmp_path):
+def test_dev_upload_writes_buildinfo_before_complete(tmp_path):
     alist = FakeAList()
     dist = make_dist(tmp_path)
     path = release.upload_version_dir(alist, dist, "/mihari-release/mihari-dev", "v1.2.3-dev.1", "a" * 40, "dev")
     assert alist.uploaded[-2:] == [f"{path}/BUILDINFO", f"{path}/COMPLETE"]
     assert alist.files[f"{path}/BUILDINFO"] == b"version=v1.2.3-dev.1\ncommit=" + b"a" * 40 + b"\n"
-    assert all("install-aio" not in item for item in alist.uploaded)
 
 
 def incomplete_version_dir(base, version):
@@ -428,7 +428,9 @@ def test_lower_dev_version_is_rejected_from_highest_complete(tmp_path):
         release.ensure_monotonic_version(alist, "/mihari-release/mihari-dev", "v1.1.0-dev.1", "dev")
 
 
-def test_candidate_metadata_read_error_is_skipped_without_leaking_remote_details():
+def test_candidate_metadata_read_error_blocks_monotonic_publish_without_leaking_remote_details(
+    capsys,
+):
     alist = FakeAList()
     base = "/mihari-release/mihari-dev"
     add_verified_complete(alist, base, "v9.0.0-dev.1")
@@ -441,7 +443,19 @@ def test_candidate_metadata_read_error_is_skipped_without_leaking_remote_details
         return original_content(path)
 
     alist.content = content
-    assert release.complete_versions(alist, base, "dev") == []
+    before_files = dict(alist.files)
+    before_dirs = set(alist.dirs)
+    before_uploaded = list(alist.uploaded)
+
+    with pytest.raises(SystemExit):
+        release.ensure_monotonic_version(alist, base, "v1.0.0-dev.1", "dev")
+
+    assert alist.files == before_files
+    assert alist.dirs == before_dirs
+    assert alist.uploaded == before_uploaded
+    captured = capsys.readouterr()
+    assert "candidate-secret" not in captured.err
+    assert "body" not in captured.err
 
 
 def test_index_read_error_fails_closed_without_leaking_remote_details(capsys):
@@ -472,6 +486,67 @@ def test_candidate_list_error_fails_closed_without_leaking_remote_details(capsys
     captured = capsys.readouterr()
     assert "list-secret" not in captured.err
     assert "body" not in captured.err
+
+
+def test_monotonic_scan_includes_highest_version_from_second_listing_page():
+    alist = FakeAList()
+    base = "/mihari-release/mihari-dev"
+    lower = "v1.0.0-dev.1"
+    highest = "v9.0.0-dev.1"
+    add_verified_complete(alist, base, lower)
+    add_verified_complete(alist, base, highest)
+    first_page = [{"name": lower, "is_dir": True}] + [
+        {"name": f"notes-{index}", "is_dir": True} for index in range(199)
+    ]
+
+    class Response:
+        def __init__(self, content, page, has_more):
+            self.body = {
+                "code": 200,
+                "data": {
+                    "content": content,
+                    "total": 201,
+                    "page": page,
+                    "per_page": 200,
+                    "has_more": has_more,
+                    "pages_total": 2,
+                },
+            }
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.body
+
+    class Session:
+        def __init__(self):
+            self.responses = [
+                Response(first_page, 1, True),
+                Response([{"name": highest, "is_dir": True}], 2, False),
+            ]
+
+        def post(self, *_args, **_kwargs):
+            return self.responses.pop(0)
+
+    client = AList.__new__(AList)
+    client.base = "https://cloud.invalid"
+    client.session = Session()
+    alist.list_dir = client.list_dir
+
+    with pytest.raises(SystemExit):
+        release.ensure_monotonic_version(alist, base, "v2.0.0-dev.1", "dev")
+
+
+def test_version_shaped_entry_with_malformed_directory_flag_blocks_scan():
+    alist = FakeAList()
+    base = "/mihari-release/mihari-dev"
+    highest = "v9.0.0-dev.1"
+    add_verified_complete(alist, base, highest)
+    alist.list_dir = lambda _path: [{"name": highest, "is_dir": None}]
+
+    with pytest.raises(SystemExit):
+        release.ensure_monotonic_version(alist, base, "v1.0.0-dev.1", "dev")
 
 
 def test_dev_retention_never_removes_stable_directories():
@@ -567,7 +642,7 @@ def test_publish_rechecks_index_at_commit_point_and_preserves_newer_index(tmp_pa
     assert alist.files[f"{base}/index.txt"] == b"latest v9.0.0-dev.1\n"
 
 
-def test_write_index_reliably_restores_on_readback_failure(tmp_path, monkeypatch):
+def test_write_index_reliably_preserves_unknown_readback_for_manual_recovery(tmp_path, monkeypatch):
     alist = FakeAList()
     alist.files["/mihari-release/mihari-dev/index.txt"] = b"latest v1.0.0-dev.1\n"
     original = alist.upload_text
@@ -582,7 +657,11 @@ def test_write_index_reliably_restores_on_readback_failure(tmp_path, monkeypatch
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     with pytest.raises(SystemExit):
         release.write_index_reliably(alist, "/mihari-release/mihari-dev/index.txt", "latest v1.2.0-dev.1\n", "latest v1.0.0-dev.1\n", "dev")
-    assert alist.files["/mihari-release/mihari-dev/index.txt"] == b"latest v1.0.0-dev.1\n"
+    assert alist.files["/mihari-release/mihari-dev/index.txt"] == b"corrupt"
+    assert calls["n"] == 1
+    assert (
+        tmp_path / "mihari-index-backup" / "dev" / "index.txt"
+    ).read_bytes() == b"latest v1.0.0-dev.1\n"
 
 
 def test_write_index_fails_closed_when_competitor_changes_body_during_upload(tmp_path, monkeypatch):
@@ -599,6 +678,7 @@ def test_write_index_fails_closed_when_competitor_changes_body_during_upload(tmp
     with pytest.raises(SystemExit):
         release.write_index_reliably(alist, path, "latest v1.2.0-dev.1\n", "latest v1.0.0-dev.1\n", "dev")
     assert alist.files[path] == b"latest v9.0.0-dev.1\n"
+    assert alist.uploaded.count(path) == 1
 
 
 def test_index_writer_read_error_fails_closed_without_leaking_remote_details(capsys):
@@ -662,3 +742,42 @@ def test_index_failure_skips_stable_root_installers_and_retention(tmp_path, monk
 
     assert f"{base}/install-aio-remote.sh" not in alist.files
     assert f"{base}/v1.0.0/COMPLETE" in alist.files
+
+
+def test_main_translates_upload_client_error_without_leaking_remote_details(
+    tmp_path, monkeypatch, capsys
+):
+    class UploadFailureAList(FakeAList):
+        def upload(self, _local, _remote):
+            raise AListError(
+                "https://cloud.invalid/upload?token=upload-secret response-body"
+            )
+
+    dist = make_dist(tmp_path)
+    repo_root = tmp_path / "repo"
+    write_root_installers(repo_root)
+    monkeypatch.setattr(release, "connect", lambda: UploadFailureAList())
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "release-alist.py",
+            "--version",
+            "v1.2.3",
+            "--dist-dir",
+            str(dist),
+            "--repo-root",
+            str(repo_root),
+            "--base-path",
+            "/mihari-release/mihari",
+            "--commit-sha",
+            "a" * 40,
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        release.main()
+
+    captured = capsys.readouterr()
+    assert "upload-secret" not in captured.err
+    assert "response-body" not in captured.err

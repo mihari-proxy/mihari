@@ -23,7 +23,8 @@ RELEASE_SAFETY_TESTS = (
     "scripts/test_alist_client.py "
     "scripts/test_alist_index.py "
     "scripts/test_release_alist.py "
-    "scripts/test_retract_alist.py -q"
+    "scripts/test_retract_alist.py "
+    "scripts/test_regenerate_index.py -q"
 )
 
 
@@ -34,6 +35,10 @@ def test_stable_release_and_retract_pin_the_stable_alist_channel():
     assert "--channel stable" in stable_release_workflow
     assert '--commit-sha "${SHA}"' in stable_release_workflow
     assert "--channel stable" in stable_retract_workflow
+
+    for workflow in (stable_release_workflow, stable_retract_workflow):
+        assert "ALIST_BASE_PATH" not in workflow
+        assert "--base-path /mihari-release/mihari" in workflow
 
 
 def test_stable_alist_mutations_share_a_job_level_serialization_group():
@@ -206,10 +211,12 @@ def test_alist_runtime_dependencies_are_pinned_after_checkout_in_both_stable_wor
     ):
         steps = workflow["jobs"][job_name]["steps"]
         checkout_index = next(index for index, step in enumerate(steps) if step.get("uses") == "actions/checkout@v7")
+        setup_index = next(index for index, step in enumerate(steps) if step.get("uses") == "actions/setup-python@v7")
         install_index = next(index for index, step in enumerate(steps) if step.get("name") == install_step_name)
         install = steps[install_index]["run"]
 
-        assert checkout_index < install_index
+        assert checkout_index < setup_index < install_index
+        assert steps[setup_index]["with"] == {"python-version": "3.12"}
         assert "python -m pip install --disable-pip-version-check -r scripts/requirements-release.txt" in install
         assert "pip install requests" not in install
 
@@ -217,6 +224,78 @@ def test_alist_runtime_dependencies_are_pinned_after_checkout_in_both_stable_wor
         step for step in release["jobs"]["release"]["steps"] if step.get("uses") == "actions/checkout@v7"
     )
     assert release_checkout["with"]["ref"] == "${{ needs.resolve.outputs.sha }}"
+
+
+def test_stable_alist_failures_upload_the_runner_temp_index_backup_with_short_retention():
+    release = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    retract = yaml.safe_load(STABLE_RETRACT_WORKFLOW.read_text(encoding="utf-8"))
+
+    for workflow, job_name, mutation_name in (
+        (release, "release", "Publish to AList drive"),
+        (retract, "retract", "Retract from AList drive"),
+    ):
+        steps = workflow["jobs"][job_name]["steps"]
+        mutation_index = next(index for index, step in enumerate(steps) if step.get("name") == mutation_name)
+        mutation = steps[mutation_index]
+        backup_index = next(
+            index
+            for index, step in enumerate(steps)
+            if step.get("name") == "Upload stable index recovery backup"
+        )
+        backup = steps[backup_index]
+
+        assert mutation["id"] == "alist_mutation"
+        assert mutation_index < backup_index
+        assert backup["if"] == (
+            "env.ALIST_CONFIGURED == 'true' && "
+            "((failure() && steps.alist_mutation.outcome == 'failure') || cancelled())"
+        )
+        assert backup["uses"] == "actions/upload-artifact@v7"
+        assert backup["with"]["path"] == "${{ runner.temp }}/mihari-index-backup/stable/**"
+        assert backup["with"]["if-no-files-found"] == "ignore"
+        assert backup["with"]["retention-days"] == 3
+
+
+def test_stable_alist_secrets_are_scoped_only_to_the_mutation_step():
+    release = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    retract = yaml.safe_load(STABLE_RETRACT_WORKFLOW.read_text(encoding="utf-8"))
+    expected_secret_env = {
+        "ALIST_URL": "${{ secrets.ALIST_URL }}",
+        "ALIST_USERNAME": "${{ secrets.ALIST_USERNAME }}",
+        "ALIST_PASSWORD": "${{ secrets.ALIST_PASSWORD }}",
+    }
+
+    for workflow, job_name in ((release, "release"), (retract, "retract")):
+        job = workflow["jobs"][job_name]
+        expected_job_env = {"ALIST_CONFIGURED", "SHA"}
+        if job_name == "release":
+            expected_job_env.add("MIHARI_KEEP_VERSIONS")
+        assert set(job["env"]) == expected_job_env
+        assert job["env"]["ALIST_CONFIGURED"] == "${{ secrets.ALIST_URL != '' }}"
+        assert "ALIST_USERNAME" not in job["env"]["ALIST_CONFIGURED"]
+        assert "ALIST_PASSWORD" not in job["env"]["ALIST_CONFIGURED"]
+        for secret_name in expected_secret_env:
+            assert secret_name not in job["env"]
+
+        mutation = next(step for step in job["steps"] if step.get("id") == "alist_mutation")
+        assert mutation["env"] == expected_secret_env
+        assert mutation["if"] == "env.ALIST_CONFIGURED == 'true'"
+
+        for step in job["steps"]:
+            if step is mutation:
+                continue
+            step_text = str(step)
+            for secret_name in expected_secret_env:
+                assert f"secrets.{secret_name}" not in step_text
+
+        configured_steps = [
+            step
+            for step in job["steps"]
+            if step.get("uses") == "actions/setup-python@v7"
+            or step.get("name") == "Append offline install commands to release notes"
+        ]
+        for step in configured_steps:
+            assert step["if"] == "env.ALIST_CONFIGURED == 'true'"
 
 
 def test_stable_retract_validation_does_not_echo_an_invalid_dispatch_version():
@@ -263,6 +342,103 @@ def test_stable_retract_never_uses_raw_version_in_display_or_prevalidation_outpu
     assert document["jobs"]["retract"]["name"] == "retract stable release"
     assert 'echo "${VERSION}"' not in guard
     assert "version '${VERSION}'" not in guard
+
+
+def _run_version_gate(workflow_path, job_name, step_name, version, output_path):
+    document = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+    guard = next(
+        step["run"]
+        for step in document["jobs"][job_name]["steps"]
+        if step.get("name") == step_name
+    )
+    return subprocess.run(
+        [_bash_for_workflow_guard(), "-c", guard],
+        capture_output=True,
+        check=False,
+        env={
+            **os.environ,
+            "CONFIRM": "true",
+            "GITHUB_EVENT_NAME": "workflow_dispatch",
+            "GITHUB_OUTPUT": str(output_path),
+            "VERSION": version,
+        },
+        text=True,
+    )
+
+
+def test_stable_version_gates_validate_the_complete_canonical_value(tmp_path):
+    gates = (
+        (STABLE_WORKFLOW, "resolve", "Guard stable version"),
+        (STABLE_WORKFLOW, "build", "Version gate"),
+        (STABLE_WORKFLOW, "release", "Version gate (final)"),
+        (STABLE_RETRACT_WORKFLOW, "retract", "Gate (semver + confirm)"),
+    )
+
+    for workflow, job_name, step_name in gates:
+        for version in ("v0.0.0", "v1.2.3", "v12.34.56"):
+            accepted = _run_version_gate(workflow, job_name, step_name, version, tmp_path / "output")
+            assert accepted.returncode == 0, accepted.stderr
+
+        for invalid in (
+            "v01.2.3",
+            "v1.02.3",
+            "v1.2.03",
+            "v1.2.3\n::warning::injected-workflow-command",
+        ):
+            rejected = _run_version_gate(workflow, job_name, step_name, invalid, tmp_path / "output")
+            assert rejected.returncode != 0
+            assert "::warning::injected-workflow-command" not in rejected.stdout
+            assert "::warning::injected-workflow-command" not in rejected.stderr
+            assert invalid not in rejected.stdout
+            assert invalid not in rejected.stderr
+
+
+def test_stable_publication_verifies_the_current_remote_tag_immediately_before_and_after():
+    document = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = document["jobs"]["release"]["steps"]
+    before_index = next(
+        index for index, step in enumerate(steps) if step.get("name") == "Create or verify current stable tag"
+    )
+    publish_index = next(index for index, step in enumerate(steps) if step.get("name") == "Publish GitHub release")
+    after_index = next(
+        index for index, step in enumerate(steps) if step.get("name") == "Verify current stable tag after publication"
+    )
+    before = steps[before_index]["run"]
+    after = steps[after_index]["run"]
+
+    assert before_index + 1 == publish_index
+    assert publish_index + 1 == after_index
+    assert steps[publish_index]["id"] == "github_release"
+    assert steps[after_index]["if"] == (
+        "!cancelled() && "
+        "(steps.github_release.outcome == 'success' || steps.github_release.outcome == 'failure')"
+    )
+    assert steps[before_index]["env"] == {"GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"}
+    assert steps[after_index]["env"] == {"GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"}
+    assert 'GITHUB_EVENT_NAME' in before
+    assert 'gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs"' in before
+    assert 'ref=refs/tags/${VERSION}' in before
+    assert 'sha=${SHA}' in before
+    assert "tag-push release requires the pushed tag to still exist" in before
+    assert before.rstrip().endswith("verify_tag_ref")
+    for verification in (before, after):
+        assert "git/ref/tags/${VERSION}" in verification
+        assert "for depth in $(seq 1 7)" in verification
+        assert "jq -c '{type: .object.type, sha: .object.sha}'" in verification
+        assert "github_release_policy.py tag-chain" in verification
+        assert '--expected-sha "${SHA}"' in verification
+    assert "--method POST" not in after
+    assert "github_release_policy.py tag-chain" in steps[after_index]["run"]
+
+
+def test_stable_workflow_input_descriptions_do_not_advertise_noncanonical_versions():
+    release = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    retract = yaml.safe_load(STABLE_RETRACT_WORKFLOW.read_text(encoding="utf-8"))
+
+    for document in (release, retract):
+        description = document[True]["workflow_dispatch"]["inputs"]["version"]["description"]
+        assert "leading zeroes are rejected" in description
+        assert "^v[0-9]+" not in description
 
 
 def test_release_workflow_uses_policy_instead_of_write_only_get_fields():
@@ -396,13 +572,28 @@ def test_dev_version_guard_rejects_multiline_input_without_echoing_it():
         accepted = _run_dev_version_guard(valid_version)
         assert accepted.returncode == 0, accepted.stderr
 
-    payload = "v0.3.0-dev.1\n::warning::injected-workflow-command"
+    injected_command = "::warning::injected-workflow-command"
+    payload = f"v0.3.0-dev.1\n{injected_command}"
     rejected = _run_dev_version_guard(payload)
 
     assert rejected.returncode != 0
-    assert "::warning::" not in rejected.stdout
+    assert injected_command not in rejected.stdout
+    assert injected_command not in rejected.stderr
     assert payload not in rejected.stdout
     assert payload not in rejected.stderr
+
+
+def test_dev_version_guard_rejects_leading_zero_components():
+    for version in (
+        "v00.3.0-dev.1",
+        "v0.03.0-dev.1",
+        "v0.3.00-dev.1",
+        "v0.3.0-dev.01",
+    ):
+        rejected = _run_dev_version_guard(version)
+        assert rejected.returncode != 0
+        assert version not in rejected.stdout
+        assert version not in rejected.stderr
 
 
 def test_dev_release_identity_is_explicit_and_verified_on_reuse():
@@ -426,6 +617,7 @@ def test_existing_release_is_preflighted_before_tag_mutation():
 def test_ci_runs_release_safety_suite_from_pinned_requirements_on_all_integration_branches():
     document = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
 
+    assert document["permissions"] == {"contents": "read"}
     assert document[True]["push"]["branches"] == ["main", "dev", "master"]
     assert set(document["jobs"]) == {
         "lint",
@@ -467,15 +659,116 @@ def test_branch_governance_keeps_feature_work_off_main_and_dev_without_promising
     assert "至少等待一个审核通过" not in contributing
 
 
+def _markdown_section(document, heading):
+    start = document.index(heading)
+    next_heading = document.find("\n## ", start + len(heading))
+    if next_heading == -1:
+        return document[start:]
+    return document[start:next_heading]
+
+
+def test_release_document_top_level_table_requires_main_for_each_stable_dispatch():
+    release = RELEASE_DOCUMENT.read_text(encoding="utf-8")
+    trigger_section = _markdown_section(release, "## 工作流触发机制")
+    top_level_table = trigger_section[: trigger_section.index("各发布 workflow")]
+    release_row = next(line for line in top_level_table.splitlines() if line.startswith("| **Release**"))
+    retract_row = next(line for line in top_level_table.splitlines() if line.startswith("| **Retract**"))
+
+    assert "从 `main`" in release_row
+    assert "从 `main`" in retract_row
+
+
+def test_release_document_scopes_main_dispatch_to_stable_release_and_retract_sections():
+    release = RELEASE_DOCUMENT.read_text(encoding="utf-8")
+    stable_dispatch = _markdown_section(release, "## 手动触发发布")
+    retract = _markdown_section(release, "## 回滚发布（致命错误撤回）")
+
+    assert "必须选择 `main` 分支/ref" in stable_dispatch
+    assert "选择 `main` 分支/ref" in retract
+
+
+def test_release_document_requires_tag_ruleset_because_pre_and_post_checks_are_not_atomic():
+    release = RELEASE_DOCUMENT.read_text(encoding="utf-8")
+    stable_dispatch = _markdown_section(release, "## 手动触发发布")
+
+    assert "前后复核并非原子操作" in stable_dispatch
+    assert "stable tag-target ruleset" in stable_dispatch
+    assert "真实 stable 发布前" in stable_dispatch
+    assert "禁止更新和删除" in stable_dispatch
+    assert "另行授权" in stable_dispatch
+    assert "配置并回读" in stable_dispatch
+
+
+def test_release_document_requires_authorized_tag_ruleset_for_real_dev_release():
+    release = RELEASE_DOCUMENT.read_text(encoding="utf-8")
+    channel_overview = _markdown_section(release, "## Stable 与 Dev 发布通道")
+    dev_dispatch = _markdown_section(release, "### Dev 手动发布")
+
+    for section in (channel_overview, dev_dispatch):
+        assert "不可变" not in section
+
+    assert "校验 canonical `vX.Y.Z-dev.N` 版本身份" in channel_overview
+    assert "身份不符即拒绝且不覆盖" in channel_overview
+    assert "canonical `vX.Y.Z-dev.N` 格式" in dev_dispatch
+    assert "dev 前后复核并非原子操作" in dev_dispatch
+    assert "真实 dev 发布前" in dev_dispatch
+    assert "dev tag-target ruleset" in dev_dispatch
+    assert "另行授权" in dev_dispatch
+    assert "配置并回读" in dev_dispatch
+
+
+def test_distribution_document_explains_how_to_recover_the_uploaded_index_backup():
+    distribution = DISTRIBUTION_DOCUMENT.read_text(encoding="utf-8")
+    publication = _markdown_section(distribution, "### 发布顺序与非原子 index 窗口")
+
+    assert "事务前要求权威实时内容等于调用方观察到的原值" in publication
+    assert "只执行一次 PUT 和一次权威 readback" in publication
+    assert "回读等于目标内容：提交成功" in publication
+    assert "回读仍等于原值：以 index unchanged 失败" in publication
+    assert "必须从头重跑完整 release/retract workflow" in publication
+    assert "不在 writer 内再次 PUT" in publication
+    assert "才允许下一次写入" not in publication
+    assert "第三方值和不确定 readback 均转入人工恢复" in publication
+    assert "不得触发自动 rollback" in publication
+    assert "人工恢复" in publication
+    assert "不提供 compare-and-swap（CAS）或原子 rename" in publication
+    assert "事务前检查与单次 PUT 之间仍有竞态" in publication
+
+    assert "Stable release 与 retract workflow 共用 channel concurrency" in publication
+    assert "人工 `regenerate-index` 或 artifact 恢复前" in publication
+    assert "相关 release/retract workflow 均未运行" in publication
+    assert "整个期间，都必须禁止其他人工或自动 writer" in publication
+
+    assert "stable-index-backup-<run_id>-<attempt>" in publication
+    assert "保留 3 天" in publication
+    assert "`index.txt` 保存原始字节" in publication
+    assert "`metadata.json` 保存" in publication
+    for field in ("`existed`", "`channel`", "`path`", "`sha256`"):
+        assert field in publication
+
+    assert "下载" in publication
+    assert "恢复" in publication
+    assert "`existed=false` 表示原对象不存在" in publication
+    assert "删除该 index" in publication
+    assert "`existed=true` 且 `index.txt` 为空表示恢复为空文件" in publication
+    assert "`existed=true` 且非空则逐字节恢复其内容" in publication
+    assert "恢复后再次下载并逐字节核对" in publication
+
+
 def test_release_documents_describe_batch_a_as_code_prepared_and_keep_p2_alist_unavailable():
     release = RELEASE_DOCUMENT.read_text(encoding="utf-8")
     distribution = DISTRIBUTION_DOCUMENT.read_text(encoding="utf-8")
 
     for document in (release, distribution):
-        assert "代码已准备，远程 dev/试发需授权" in document
+        assert "dev 发布代码已准备" in document
         assert "P2 AList 发布与撤回 workflow 尚不可用" in document
         assert "publish-dev-alist.yml" not in document
         assert "retract-dev.yml" not in document
 
     assert "Actions 产物或 dev 版本目录" not in distribution
-    assert "/mihari-release/mihari-dev" not in distribution
+    assert "不创建或操作该目录" in distribution
+
+    assert "GitHub dev tag、prerelease 与 14 个 assets" in release
+    assert "仅写 GitHub" in release
+    assert "不写 AList" in release
+    assert "lightweight 或 annotated" in release

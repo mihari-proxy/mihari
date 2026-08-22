@@ -1,15 +1,13 @@
 """Safe, shared mutation of channel-specific AList release indexes."""
+import hashlib
+import json
 import os
-import re
 import tempfile
 import time
 from pathlib import Path
 
+from release_policy import parse_version
 
-_VERSION_PATTERNS = {
-    "stable": re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$"),
-    "dev": re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$"),
-}
 _LOCK_WAIT_TIMEOUT_SECONDS = 10
 _LOCK_WAIT_INTERVAL_SECONDS = 0.05
 
@@ -28,8 +26,7 @@ def parse_latest(index_text: str | None) -> str | None:
 
 
 def _validate(channel: str, body: str, allow_empty: bool) -> None:
-    version_pattern = _VERSION_PATTERNS.get(channel)
-    if version_pattern is None:
+    if channel not in {"stable", "dev"}:
         raise IndexMutationError("refusing to write an index for an unknown channel")
     if not isinstance(body, str):
         raise IndexMutationError("refusing to write a non-text index")
@@ -40,23 +37,21 @@ def _validate(channel: str, body: str, allow_empty: bool) -> None:
     latest = parse_latest(body)
     if latest is None:
         raise IndexMutationError("refusing to write an index without a latest version")
-    if version_pattern.fullmatch(latest) is None:
-        raise IndexMutationError("refusing to write an invalid channel index")
+    try:
+        parse_version(latest, channel)
+    except ValueError as error:
+        raise IndexMutationError("refusing to write an invalid channel index") from error
 
 
-def _backup_paths(channel: str) -> tuple[Path, Path, Path]:
+def _backup_paths(channel: str) -> tuple[Path, Path, Path, Path]:
     runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir()))
     backup_root = runner_temp / "mihari-index-backup" / channel
-    return backup_root, backup_root / "index.txt", backup_root / "index.lock"
-
-
-def _restore_previous(alist, path: str, previous: str | None) -> bool:
-    if previous is None:
-        base, name = path.rsplit("/", 1)
-        alist.remove(base, [name])
-        return not alist.exists(path) and alist.content(path) is None
-    alist.upload_text(previous, path)
-    return alist.content(path) == previous
+    return (
+        backup_root,
+        backup_root / "index.txt",
+        backup_root / "metadata.json",
+        backup_root / "index.lock",
+    )
 
 
 def _acquire_lock(lock_path: Path, channel: str) -> int:
@@ -82,14 +77,16 @@ def write_index_reliably(
     channel: str,
     allow_empty: bool = False,
 ) -> None:
-    """Commit an AList index with bounded retries and verified recovery.
+    """Commit an AList index with one upload and authoritative readback.
 
     The current object is compared to the caller's observed value while a
     local lock is held, preventing a waiting workflow from overwriting newer
-    channel state. This local lock only coordinates processes on one runner.
+    channel state. An ambiguous post-write state is preserved for manual
+    recovery instead of being overwritten. This local lock only coordinates
+    processes on one runner.
     """
     _validate(channel, body, allow_empty)
-    backup_root, backup_path, lock_path = _backup_paths(channel)
+    backup_root, backup_path, metadata_path, lock_path = _backup_paths(channel)
     backup_root.mkdir(parents=True, exist_ok=True)
     lock_fd = _acquire_lock(lock_path, channel)
 
@@ -103,23 +100,38 @@ def write_index_reliably(
         if live_body != expected_previous:
             raise IndexMutationError("stale index observed before mutation")
 
-        backup_path.write_bytes((live_body or "").encode("utf-8"))
-        for _ in range(2):
-            try:
-                alist.upload_text(body, path)
-                if alist.content(path) == body:
-                    return
-            except Exception:
-                continue
-        try:
-            recovered = _restore_previous(alist, path, live_body)
-        except Exception:
-            recovered = False
-        if not recovered:
-            raise IndexMutationError(
-                f"index write and recovery failed; manual recovery required using {backup_path}"
+        backup_bytes = (live_body or "").encode("utf-8")
+        backup_path.write_bytes(backup_bytes)
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "channel": channel,
+                    "existed": live_body is not None,
+                    "path": path,
+                    "sha256": hashlib.sha256(backup_bytes).hexdigest(),
+                },
+                sort_keys=True,
             )
-        raise IndexMutationError("index write verification failed; previous index restored")
+            + "\n",
+            encoding="utf-8",
+        )
+        try:
+            alist.upload_text(body, path)
+        except Exception:
+            pass
+        try:
+            observed = alist.content(path)
+        except Exception as error:
+            raise IndexMutationError(
+                f"index readback is uncertain; manual recovery required using {backup_path}"
+            ) from error
+        if observed == body:
+            return
+        if observed == live_body:
+            raise IndexMutationError("index write failed; index remained unchanged")
+        raise IndexMutationError(
+            f"stale index observed after mutation; manual recovery required using {backup_path}"
+        )
     finally:
         if lock_fd is not None:
             try:

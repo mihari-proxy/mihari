@@ -1,3 +1,5 @@
+import hashlib
+import json
 import threading
 
 import pytest
@@ -7,10 +9,9 @@ from alist_index import IndexMutationError, write_index_reliably
 
 
 class FakeAList:
-    def __init__(self, files=None, reads=None, fail_restore=False):
+    def __init__(self, files=None, reads=None):
         self.files = dict(files or {})
         self.reads = list(reads or [])
-        self.fail_restore = fail_restore
         self.calls = []
 
     def content(self, path):
@@ -23,8 +24,6 @@ class FakeAList:
 
     def upload_text(self, body, path):
         self.calls.append(("upload", path, body))
-        if self.fail_restore and body == "latest v1.0.0-dev.1\n":
-            raise OSError("restore unavailable")
         self.files[path] = body
 
     def remove(self, base, names):
@@ -167,33 +166,31 @@ def test_lock_close_error_releases_lock_without_remote_mutation(tmp_path, monkey
     assert mutations(fake) == []
 
 
-def test_failed_first_index_write_deletes_new_index_and_confirms_absence(tmp_path, monkeypatch):
+def test_failed_first_index_write_never_deletes_unknown_readback(tmp_path, monkeypatch):
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     path = index_path()
     fake = FakeAList(reads=[None, "corrupt", "corrupt"], files={})
 
-    with pytest.raises(IndexMutationError, match="previous index restored"):
+    with pytest.raises(IndexMutationError, match="manual recovery"):
         write_index_reliably(fake, path, "latest v1.2.0-dev.1\n", None, "dev")
 
-    assert path not in fake.files
-    assert ("remove", "/mihari-release/mihari-dev", ("index.txt",)) in fake.calls
-    assert ("exists", path) in fake.calls
+    assert fake.files[path] == "latest v1.2.0-dev.1\n"
+    assert [call for call in mutations(fake) if call[0] == "upload"] == [
+        ("upload", path, "latest v1.2.0-dev.1\n")
+    ]
+    assert all(call[0] != "remove" for call in mutations(fake))
     assert not lock_path(tmp_path).exists()
 
 
-def test_failed_recovery_reports_backup_path(tmp_path, monkeypatch):
+def test_unknown_readback_reports_backup_path(tmp_path, monkeypatch):
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     path = index_path()
     previous = "latest v1.0.0-dev.1\n"
-    fake = FakeAList({path: previous}, fail_restore=True)
-    original_upload = fake.upload_text
+    fake = FakeAList({path: previous})
 
     def corrupt_new_index(body, remote):
-        if body == previous:
-            original_upload(body, remote)
-        else:
-            fake.calls.append(("upload", remote, body))
-            fake.files[remote] = "corrupt"
+        fake.calls.append(("upload", remote, body))
+        fake.files[remote] = "corrupt"
 
     fake.upload_text = corrupt_new_index
 
@@ -204,7 +201,7 @@ def test_failed_recovery_reports_backup_path(tmp_path, monkeypatch):
     assert not lock_path(tmp_path).exists()
 
 
-def test_upload_failure_after_remote_mutation_restores_previous_index(tmp_path, monkeypatch):
+def test_upload_response_loss_with_desired_readback_is_success(tmp_path, monkeypatch):
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     path = index_path()
     previous = "latest v1.0.0-dev.1\n"
@@ -219,14 +216,149 @@ def test_upload_failure_after_remote_mutation_restores_previous_index(tmp_path, 
 
     fake = MutatingFailureAList({path: previous})
 
-    with pytest.raises(IndexMutationError, match="previous index restored"):
+    write_index_reliably(fake, path, desired, previous, "dev")
+
+    assert fake.files[path] == desired
+    assert [call for call in fake.calls if call == ("upload", path, desired)] == [
+        ("upload", path, desired),
+    ]
+
+
+def test_single_unchanged_readback_stops_without_retry_or_rollback(tmp_path, monkeypatch):
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    path = index_path()
+    previous = "latest v1.0.0-dev.1\n"
+    desired = "latest v1.2.0-dev.1\n"
+
+    class NoopUploadAList(FakeAList):
+        def upload_text(self, body, remote):
+            self.calls.append(("upload", remote, body))
+
+    fake = NoopUploadAList({path: previous})
+
+    with pytest.raises(IndexMutationError, match="remained unchanged"):
         write_index_reliably(fake, path, desired, previous, "dev")
 
     assert fake.files[path] == previous
-    assert [call for call in fake.calls if call == ("upload", path, desired)] == [
-        ("upload", path, desired),
-        ("upload", path, desired),
-    ]
+    assert mutations(fake) == [("upload", path, desired)]
+
+
+def test_third_party_write_after_unchanged_readback_is_never_overwritten(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    path = index_path()
+    previous = "latest v1.0.0-dev.1\n"
+    desired = "latest v1.2.0-dev.1\n"
+    third_party = "latest v9.0.0-dev.1\n"
+
+    class PostReadRaceAList(FakeAList):
+        def __init__(self):
+            super().__init__({path: previous})
+            self.read_count = 0
+
+        def upload_text(self, body, remote):
+            self.calls.append(("upload", remote, body))
+
+        def content(self, remote):
+            self.calls.append(("read", remote))
+            self.read_count += 1
+            if self.read_count == 1:
+                return previous
+            if self.read_count == 2:
+                self.files[remote] = third_party
+                return previous
+            return self.files.get(remote)
+
+    fake = PostReadRaceAList()
+
+    with pytest.raises(IndexMutationError, match="remained unchanged"):
+        write_index_reliably(fake, path, desired, previous, "dev")
+
+    assert fake.files[path] == third_party
+    assert mutations(fake) == [("upload", path, desired)]
+
+
+def test_third_party_readback_stops_before_second_upload_or_rollback(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    path = index_path()
+    previous = "latest v1.0.0-dev.1\n"
+    desired = "latest v1.2.0-dev.1\n"
+    third_party = "latest v9.0.0-dev.1\n"
+
+    class CompetingAList(FakeAList):
+        def upload_text(self, body, remote):
+            self.calls.append(("upload", remote, body))
+            self.files[remote] = third_party
+
+    fake = CompetingAList({path: previous})
+
+    with pytest.raises(IndexMutationError, match="manual recovery"):
+        write_index_reliably(fake, path, desired, previous, "dev")
+
+    assert fake.files[path] == third_party
+    assert mutations(fake) == [("upload", path, desired)]
+
+
+def test_uncertain_readback_stops_before_second_upload_or_rollback(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    path = index_path()
+    previous = "latest v1.0.0-dev.1\n"
+    desired = "latest v1.2.0-dev.1\n"
+
+    class ReadbackFailureAList(FakeAList):
+        def __init__(self):
+            super().__init__({path: previous})
+            self.read_count = 0
+
+        def content(self, remote):
+            self.calls.append(("read", remote))
+            self.read_count += 1
+            if self.read_count > 1:
+                raise OSError("readback unavailable")
+            return self.files.get(remote)
+
+        def upload_text(self, body, remote):
+            self.calls.append(("upload", remote, body))
+
+    fake = ReadbackFailureAList()
+
+    with pytest.raises(IndexMutationError, match="manual recovery"):
+        write_index_reliably(fake, path, desired, previous, "dev")
+
+    assert fake.files[path] == previous
+    assert mutations(fake) == [("upload", path, desired)]
+
+
+@pytest.mark.parametrize(
+    "existed,previous",
+    [(False, None), (True, ""), (True, "latest v1.0.0-dev.1\n")],
+)
+def test_backup_metadata_distinguishes_absent_from_empty_index(
+    tmp_path, monkeypatch, existed, previous
+):
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    path = index_path()
+    files = {path: previous} if existed else {}
+    fake = FakeAList(files)
+    desired = "latest v1.2.0-dev.1\n"
+
+    write_index_reliably(fake, path, desired, previous, "dev")
+
+    backup_root = tmp_path / "mihari-index-backup" / "dev"
+    backup_bytes = (previous or "").encode()
+    metadata = json.loads((backup_root / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata == {
+        "channel": "dev",
+        "existed": existed,
+        "path": path,
+        "sha256": hashlib.sha256(backup_bytes).hexdigest(),
+    }
+    assert (backup_root / "index.txt").read_bytes() == backup_bytes
 
 
 def test_empty_body_requires_explicit_retraction_mode(tmp_path, monkeypatch):
@@ -251,3 +383,23 @@ def test_equal_live_index_is_idempotent_without_mutation(tmp_path, monkeypatch):
 
     assert mutations(fake) == []
     assert not lock_path(tmp_path).exists()
+
+
+@pytest.mark.parametrize(
+    "channel,body",
+    [
+        ("stable", "latest v1.02.3\n"),
+        ("dev", "latest v1.2.3-dev.01\n"),
+    ],
+)
+def test_index_validation_reuses_canonical_version_policy(
+    tmp_path, monkeypatch, channel, body
+):
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    path = index_path()
+    fake = FakeAList({path: None})
+
+    with pytest.raises(IndexMutationError, match="invalid channel index"):
+        write_index_reliably(fake, path, body, None, channel)
+
+    assert mutations(fake) == []

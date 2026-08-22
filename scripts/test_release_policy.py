@@ -42,6 +42,36 @@ def test_parse_version_returns_components():
     assert parse_version("v1.2.3-dev.7", "dev") == (1, 2, 3, 7)
 
 
+@pytest.mark.parametrize(
+    "value,channel",
+    [
+        (123, "stable"),
+        (None, "dev"),
+        ("v01.2.3", "stable"),
+        ("v1.02.3", "stable"),
+        ("v1.2.03", "stable"),
+        ("v01.2.3-dev.1", "dev"),
+        ("v1.02.3-dev.1", "dev"),
+        ("v1.2.03-dev.1", "dev"),
+        ("v1.2.3-dev.01", "dev"),
+    ],
+)
+def test_parse_version_rejects_non_string_and_leading_zero_components(value, channel):
+    with pytest.raises(ValueError, match="invalid release version"):
+        parse_version(value, channel)
+
+
+@pytest.mark.parametrize(
+    "value,channel",
+    [
+        ("v0.0.0", "stable"),
+        ("v0.0.0-dev.0", "dev"),
+    ],
+)
+def test_parse_version_accepts_zero_components(value, channel):
+    parse_version(value, channel)
+
+
 def test_compare_versions_rejects_cross_channel_shapes():
     with pytest.raises(ValueError):
         compare_versions("v1.2.3", "v1.2.3-dev.1", "stable")

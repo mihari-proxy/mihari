@@ -182,6 +182,10 @@ def test_retract_missing_dev_directory_is_idempotent(tmp_path, monkeypatch):
     fake = Fake()
     retract_mod.retract(fake, "/mihari-release/mihari-dev", "v1.1.0-dev.1", "dev", "a" * 40)
 
+    assert fake.files == {}
+    assert fake.dirs == set()
+    assert mutations(fake) == []
+
 
 def test_latest_retraction_switches_verified_index_before_removing_target(tmp_path, monkeypatch):
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
@@ -271,6 +275,61 @@ def test_last_latest_retraction_commits_empty_index_before_removing_target(tmp_p
 
     assert fake.files[path] == b""
     assert fake.calls.index(("upload", path, "")) < fake.calls.index(("remove", base, (target,)))
+
+
+def test_latest_retraction_aborts_when_remaining_candidate_cannot_be_read(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    fake = Fake()
+    base = "/mihari-release/mihari-dev"
+    target = "v1.1.0-dev.1"
+    remaining = "v1.0.0-dev.1"
+    add_complete(fake, base, target)
+    add_complete(fake, base, remaining)
+    path, previous = root_index(base, target)
+    fake.files[path] = previous.encode()
+    remaining_buildinfo = f"{base}/{remaining}/BUILDINFO"
+    original_content = fake.content
+
+    def content(remote):
+        if remote == remaining_buildinfo:
+            raise RuntimeError(
+                "https://cloud.invalid/BUILDINFO?token=remaining-secret response-body"
+            )
+        return original_content(remote)
+
+    fake.content = content
+
+    with pytest.raises(SystemExit):
+        retract_mod.retract(fake, base, target, "dev", "a" * 40)
+
+    assert fake.files[path] == previous.encode()
+    assert fake.exists(f"{base}/{target}")
+    assert mutations(fake) == []
+    captured = capsys.readouterr()
+    assert "remaining-secret" not in captured.err
+    assert "response-body" not in captured.err
+
+
+def test_latest_retraction_aborts_on_malformed_directory_listing(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    fake = Fake()
+    base = "/mihari-release/mihari-dev"
+    target = "v1.1.0-dev.1"
+    add_complete(fake, base, target)
+    path, previous = root_index(base, target)
+    fake.files[path] = previous.encode()
+    fake.list_dir = lambda _path: [{"name": 123, "is_dir": True}]
+
+    with pytest.raises(SystemExit):
+        retract_mod.retract(fake, base, target, "dev", "a" * 40)
+
+    assert fake.files[path] == previous.encode()
+    assert fake.exists(f"{base}/{target}")
+    assert mutations(fake) == []
 
 
 def test_non_latest_retraction_leaves_index_bytes_unchanged(tmp_path, monkeypatch):

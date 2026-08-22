@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to retract, e.g. v0.3.0 (must match ^v[0-9]+\.[0-9]+\.[0-9]+$)'
+        description: 'Canonical stable version to retract, e.g. v0.3.0 (leading zeroes are rejected)'
         required: true
         type: string
       confirm:
@@ -54,13 +54,9 @@ jobs:
     permissions:
       contents: write
     env:
-      # Job-scope so the AList step's `if: env.ALIST_URL != ''` can read it
-      # (secrets are unreadable in step `if`; step env isn't either). Empty when
-      # unconfigured → AList step skips; the GitHub release is still deleted.
-      ALIST_URL: ${{ secrets.ALIST_URL }}
-      ALIST_USERNAME: ${{ secrets.ALIST_USERNAME }}
-      ALIST_PASSWORD: ${{ secrets.ALIST_PASSWORD }}
-      ALIST_BASE_PATH: ${{ vars.ALIST_BASE_PATH }}
+      # The URL alone enables AList retraction. Missing username/password are
+      # injected only below and make connect() fail closed instead of skipping.
+      ALIST_CONFIGURED: ${{ secrets.ALIST_URL != '' }}
       SHA: ${{ needs.resolve.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
@@ -77,23 +73,44 @@ jobs:
         # design §4.6 step 1: pure-semver gate (same rule as §4.2) + the boolean
         # double-confirm must be true before anything destructive runs.
         run: |
-          printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-            || { echo "::error::version must match the required stable format"; exit 1; }
+          if [[ ! "${VERSION}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::version must match the required stable format"
+            exit 1
+          fi
           [ "${CONFIRM}" = "true" ] \
             || { echo "::error::confirm must be true to retract ${VERSION} (this permanently deletes it)"; exit 1; }
           echo "Retracting ${VERSION} (confirmed)."
 
+      - uses: actions/setup-python@v7
+        if: env.ALIST_CONFIGURED == 'true'
+        with:
+          python-version: '3.12'
+
       - name: Retract from AList drive
+        id: alist_mutation
         # design §4.6 steps 2-4: read index, remove the version dir, rebuild
         # index.txt to point at the highest remaining complete version (or empty).
         # Conditional on ALIST_URL so retraction still works GitHub-only.
-        if: ${{ env.ALIST_URL != '' }}
+        if: env.ALIST_CONFIGURED == 'true'
+        env:
+          ALIST_URL: ${{ secrets.ALIST_URL }}
+          ALIST_USERNAME: ${{ secrets.ALIST_USERNAME }}
+          ALIST_PASSWORD: ${{ secrets.ALIST_PASSWORD }}
         run: |
           python -m pip install --disable-pip-version-check -r scripts/requirements-release.txt
           python scripts/retract-alist.py \
             --version "${VERSION}" \
             --channel stable \
-            --base-path "${ALIST_BASE_PATH:-/mihari-release/mihari}"
+            --base-path /mihari-release/mihari
+
+      - name: Upload stable index recovery backup
+        if: "env.ALIST_CONFIGURED == 'true' && ((failure() && steps.alist_mutation.outcome == 'failure') || cancelled())"
+        uses: actions/upload-artifact@v7
+        with:
+          name: stable-index-backup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mihari-index-backup/stable/**
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Delete GitHub release
         # design §4.6 step 5: release + assets + tag. --cleanup-tag lets the same

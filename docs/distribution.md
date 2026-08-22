@@ -37,7 +37,7 @@ curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/insta
 
 > 命令中的网址是 AList 网盘的固定公开直链（签名已关闭），永久不变，复制即用。
 
-Batch A 中，dev 发布代码已准备，远程 dev/试发需授权。P2 AList 发布与撤回 workflow 尚不可用，因此当前没有 dev AList 根目录、版本目录或下载命令；稳定安装入口不会指向 dev。
+Batch A 中，dev 发布代码已准备，远程 dev/试发需另行授权；获授权后的 P1 只写 GitHub dev tag、prerelease 与 14 个 assets，不写 AList。P1 试发的前置条件是 `/releases/latest` 已能返回合法的 stable GitHub Release，缺少时会在 dev mutation 前 fail closed。P2 AList 发布与撤回 workflow 尚不可用，因此当前没有 dev AList 版本目录或下载命令；稳定安装入口不会指向 dev。
 
 脚本3 下载器的执行流程：
 
@@ -90,7 +90,7 @@ settings 新增可选字段 `core-channel` 与 `core-channel-bundle`（schema �
 
 ## 三、AList 网盘目录结构
 
-stable base_path 默认 `/mihari-release/mihari`（AList fs/API 路径，通过 GitHub 变量 `ALIST_BASE_PATH` 配置）：
+AList base path 不是可配置入口：策略层将 stable 固定为 `/mihari-release/mihari`，将后续 P2 dev 通道固定为 `/mihari-release/mihari-dev`；传入其他路径会被拒绝。当前可用的 stable 目录如下：
 
 ```
 stable（仅稳定通道）：
@@ -101,12 +101,13 @@ stable（仅稳定通道）：
 ├── v0.3.0/                         不可变版本目录
 │   ├── mihari-all-in-one-{linux,darwin,windows}-{amd64,arm64}.tar.gz / .zip
 │   ├── SHA256SUMS.txt              本版本 6 个整合包的 sha256
+│   ├── BUILDINFO                   新发布版本的 version + 40 位 commit 身份
 │   └── COMPLETE                    完整标记（内部语义）
 ├── v0.2.0/
 └── v0.1.0/
 ```
 
-dev 发布代码已准备，远程 dev/试发需授权。P2 AList 发布与撤回 workflow 尚不可用，故本阶段不创建或操作 dev AList 目录；稳定 `index.txt` 和 `/releases/latest` 不受 dev 准备代码影响。
+dev 发布代码已准备，远程 dev/试发需另行授权。`/mihari-release/mihari-dev` 只是策略层为后续 P2 保留的固定路径；P2 AList 发布与撤回 workflow 尚不可用，故本阶段不创建或操作该目录。稳定 `index.txt` 和 `/releases/latest` 不受 dev 准备代码影响。
 
 > **AList 拓扑 quirk（读路径 / 下载）**：**公开下载 URL** 需在 `/p` 后加 `/public` 挂载点前缀，即 `https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/…`（`alist_client.public_url` 自动处理）。
 >
@@ -128,15 +129,27 @@ windows-arm64 <公开直链>  <sha256>
 
 每行 `<key> <rest...>`：`latest` 行的 key 后是版本号；平台行的 key 是 `<goos>-<goarch>`，后跟公开直链与 sha256。脚本3 按此解析。
 
-### 发布顺序（零失败窗口）
+### 发布顺序与非原子 index 窗口
 
 release workflow 的 AList 步骤顺序保证用户永远拿不到半成品：
 
-1. 先把整个版本目录上传完整（6 包 + SHA256SUMS.txt），**最后传 `COMPLETE`**；
-2. 已完整的目录（`COMPLETE` 存在）**整个跳过**——重跑幂等，不覆盖任何文件；
-3. **最后一行才覆盖 `index.txt`**——发布过程中用户读到的是旧 index → 下载旧版本目录，无校验失败窗口。
+1. 上传前以及 index 提交前各扫描一次通道基线：当前合法 `latest` 与所有可逐字节验证的完整目录共同决定最高版本；候选版本低于该基线时 fail closed，不允许 stable latest 回退；
+2. 先把整个版本目录上传完整（6 包 + `SHA256SUMS.txt` + `BUILDINFO`），逐字节回读验证后，**最后传 `COMPLETE`**；历史 stable 目录可没有 `BUILDINFO`，新目录必须包含它；
+3. 已有 `COMPLETE` 的目录不会直接跳过：先验证 `COMPLETE`、`BUILDINFO`（新目录）、checksum manifest 和 6 个 bundle 的远端字节；完全一致才复用且不覆盖，冲突或无法完整验证时 fail closed；
+4. **最后才覆盖 `index.txt`**——发布过程中用户读到的是旧 index，继续下载旧版本目录。
 
-唯一残留风险是 `index.txt` 单文件覆盖中断 → 用户解析失败，重试即可。
+`index.txt` 仍是单文件提交点。Shared writer 在事务前要求权威实时内容等于调用方观察到的原值并保存备份，然后只执行一次 PUT 和一次权威 readback：
+
+- 回读等于目标内容：提交成功；
+- 回读仍等于原值：以 index unchanged 失败，不在 writer 内再次 PUT，必须从头重跑完整 release/retract workflow；
+- 回读出现不同于目标和原值的第三方值：立即停止，保留可能来自并发操作的新现场；
+- 回读失败或结果不确定：立即停止，因为目标写入可能已经生效，不能猜测远端状态。
+
+第三方值和不确定 readback 均转入人工恢复，不得触发自动 rollback。AList 不提供 compare-and-swap（CAS）或原子 rename，因此事务前检查与单次 PUT 之间仍有竞态，覆盖期间也可能出现短暂解析窗口，不能声称彻底原子或零失败窗口。
+
+Stable release 与 retract workflow 共用 channel concurrency，避免这两类 Actions writer 互相并行，但它不能约束 workflow 外的管理员操作。执行人工 `regenerate-index` 或 artifact 恢复前，必须确认相关 release/retract workflow 均未运行；从读取现场、判断 metadata、写入到最终回读的整个期间，都必须禁止其他人工或自动 writer。
+
+Writer 在首次 mutation 前把原状态写入 runner 的 `stable/` 备份目录：`index.txt` 保存原始字节，`metadata.json` 保存 `existed`、`channel`、`path` 和 index 字节的 `sha256`。只要备份已经生成，release/retract workflow 在失败或取消时会将两者作为 `stable-index-backup-<run_id>-<attempt>` workflow artifact 上传并保留 3 天。人工恢复时必须从对应 run 下载 artifact，先验证 `channel=stable`、固定 `path=/mihari-release/mihari/index.txt` 及 `sha256`：`existed=false` 表示原对象不存在，应在确认没有合法并发更新后删除该 index；`existed=true` 且 `index.txt` 为空表示恢复为空文件；`existed=true` 且非空则逐字节恢复其内容。恢复后再次下载并逐字节核对；runner 本地 `$RUNNER_TEMP` 不能作为运行结束后的恢复入口。
 
 ---
 
@@ -154,7 +167,7 @@ release workflow 的 AList 步骤顺序保证用户永远拿不到半成品：
 
 独立 workflow `.github/workflows/retract.yml` 手动触发，**彻底删除**坏版本：
 
-1. `workflow_dispatch` 输入 `version`（纯 semver 闸门）+ `confirm`（布尔双保险）；
+1. 在 GitHub Actions 选择 `main` 分支/ref 后运行；`workflow_dispatch` 输入 `version`（纯 semver 闸门）+ `confirm`（布尔双保险）；
 2. 读 `index.txt` 判断撤回版本是否为当前 latest；
 3. **仅当撤回的是 latest**，先排除目标目录，重建 `index.txt`：latest 改为现存最高且完整（含 `COMPLETE`）的版本（sha256 从该目录的 `SHA256SUMS.txt` 读取）；无完整版本 → `index.txt` 置空。写入后必须回读验证成功，才进入删除；
 4. 删除 AList 版本目录 `<base_path>/<version>/`；撤回非 latest 时 index 保持原始字节不变；
@@ -170,21 +183,22 @@ release workflow 的 AList 步骤顺序保证用户永远拿不到半成品：
 
 ## 六、CI 配置（前置依赖）
 
-AList 分发步骤在 release workflow 中以 `if: env.ALIST_URL != ''` 包裹——**未配置时跳过，不阻塞 GitHub 发布**。启用国内分发需配置：
+AList 是否启用只由 `ALIST_URL` 决定：URL 缺失时，release workflow 走 GitHub-only skip，不进入 AList mutation，也不阻塞 GitHub 发布；URL 存在时必须进入 mutation。此时 `ALIST_USERNAME` 与 `ALIST_PASSWORD` 都是必需凭据，任一缺失都会由客户端 fail closed 并使 workflow 失败，不能静默跳过。启用国内分发需配置：
 
 **GitHub Secrets：**
 
 | Secret | 用途 |
 |--------|------|
-| `ALIST_URL` | AList 站点地址（如 `https://alist.example.com`） |
-| `ALIST_USERNAME` | 登录用户名 |
-| `ALIST_PASSWORD` | 登录密码 |
+| `ALIST_URL` | AList 站点地址（如 `https://alist.example.com`）；是否存在是唯一启用开关 |
+| `ALIST_USERNAME` | 登录用户名；`ALIST_URL` 存在时必填 |
+| `ALIST_PASSWORD` | 登录密码；`ALIST_URL` 存在时必填 |
 
 **GitHub Variables（可选）：**
 
 | Variable | 默认值 | 用途 |
 |----------|--------|------|
-| `ALIST_BASE_PATH` | `/mihari-release/mihari` | 网盘 base_path（fs/API 路径） |
 | `MIHARI_KEEP_VERSIONS` | `5` | 保留版本数 |
+
+Stable/dev base path 由发布策略固定，不通过 GitHub Variable 覆盖；传入与通道不匹配的路径会在任何 AList mutation 前失败。
 
 > **前置：关闭签名**。AList 存储必须关闭「签名」（per-storage Sign 关），公开直链才不会 401。

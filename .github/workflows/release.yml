@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version, e.g. v0.3.0 (must match ^v[0-9]+\.[0-9]+\.[0-9]+$; enforced by the version gate)'
+        description: 'Canonical stable version, e.g. v0.3.0 (leading zeroes are rejected)'
         required: true
         type: string
       commit_sha:
@@ -38,14 +38,16 @@ jobs:
       - id: gate
         name: Guard stable version
         run: |
-          if [ "${GITHUB_EVENT_NAME}" = push ] && printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$'; then
+          if [ "${GITHUB_EVENT_NAME}" = push ] && [[ "${VERSION}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$ ]]; then
             echo "should_resolve=false" >> "${GITHUB_OUTPUT}"
             echo "should_release=false" >> "${GITHUB_OUTPUT}"
             echo "dev tag is handled only by release-dev.yml"
             exit 0
           fi
-          printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-            || { echo "::error::version must match the required stable format"; exit 1; }
+          if [[ ! "${VERSION}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::version must match the required stable format"
+            exit 1
+          fi
           echo "should_resolve=true" >> "${GITHUB_OUTPUT}"
 
       - uses: actions/checkout@v7
@@ -116,8 +118,10 @@ jobs:
         # entry point. The dispatch input is UI-gated upstream; this also covers
         # tag pushes and any API-direct triggering.
         run: |
-          printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-            || { echo "::error::version must match the required stable format"; exit 1; }
+          if [[ ! "${VERSION}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::version must match the required stable format"
+            exit 1
+          fi
 
       - name: Build
         env:
@@ -193,13 +197,9 @@ jobs:
     permissions:
       contents: write
     env:
-      # Mapped at job scope so the AList steps' `if: env.ALIST_URL != ''` can see
-      # them (step `if` cannot read step-level env, and secrets are unreadable in
-      # `if`). Empty when unconfigured → AList steps skip, never blocking GitHub.
-      ALIST_URL: ${{ secrets.ALIST_URL }}
-      ALIST_USERNAME: ${{ secrets.ALIST_USERNAME }}
-      ALIST_PASSWORD: ${{ secrets.ALIST_PASSWORD }}
-      ALIST_BASE_PATH: ${{ vars.ALIST_BASE_PATH }}
+      # The URL alone enables AList publication. Missing username/password are
+      # injected only below and make connect() fail closed instead of skipping.
+      ALIST_CONFIGURED: ${{ secrets.ALIST_URL != '' }}
       MIHARI_KEEP_VERSIONS: ${{ vars.MIHARI_KEEP_VERSIONS }}
       SHA: ${{ needs.resolve.outputs.sha }}
     steps:
@@ -216,8 +216,10 @@ jobs:
       - name: Version gate (final)
         # Layer ③ (design §4.2): last-chance gate before anything is published.
         run: |
-          printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-            || { echo "::error::version rejected at final gate"; exit 1; }
+          if [[ ! "${VERSION}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::version rejected at final gate"
+            exit 1
+          fi
 
       - name: Download artifacts
         uses: actions/download-artifact@v8
@@ -233,7 +235,53 @@ jobs:
           sha256sum * > SHA256SUMS.txt
           sha256sum mihari-all-in-one-* > AIO_SHA256SUMS.txt
 
+      - name: Create or verify current stable tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          verify_tag_ref() {
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${VERSION}" > /tmp/stable-tag-ref.json 2> /tmp/stable-tag-ref.err \
+              || { echo "::error::unable to read current stable tag"; return 1; }
+            jq -e '(.object.type | type == "string") and (.object.sha | type == "string")' /tmp/stable-tag-ref.json >/dev/null \
+              || { echo "::error::current stable tag response is invalid"; return 1; }
+            jq -c '{type: .object.type, sha: .object.sha}' /tmp/stable-tag-ref.json > /tmp/stable-tag-chain.jsonl
+            tag_type="$(jq -r '.object.type' /tmp/stable-tag-ref.json)"
+            tag_sha="$(jq -r '.object.sha' /tmp/stable-tag-ref.json)"
+            for depth in $(seq 1 7); do
+              [ "${tag_type}" = tag ] || break
+              gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" > /tmp/stable-tag-object.json 2> /tmp/stable-tag-object.err \
+                || { echo "::error::unable to peel current stable tag"; return 1; }
+              jq -e '(.object.type | type == "string") and (.object.sha | type == "string")' /tmp/stable-tag-object.json >/dev/null \
+                || { echo "::error::current annotated stable tag response is invalid"; return 1; }
+              jq -c '{type: .object.type, sha: .object.sha}' /tmp/stable-tag-object.json >> /tmp/stable-tag-chain.jsonl
+              tag_type="$(jq -r '.object.type' /tmp/stable-tag-object.json)"
+              tag_sha="$(jq -r '.object.sha' /tmp/stable-tag-object.json)"
+            done
+            [ "${tag_type}" != tag ] || { echo "::error::stable tag peel exceeds the allowed depth"; return 1; }
+            jq -s . /tmp/stable-tag-chain.jsonl > /tmp/stable-tag-chain.json
+            python scripts/github_release_policy.py tag-chain \
+              --chain /tmp/stable-tag-chain.json --expected-sha "${SHA}"
+          }
+
+          set +e
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${VERSION}" > /tmp/stable-tag-ref.json 2> /tmp/stable-tag-ref.err
+          status=$?
+          set -e
+          if [ "${status}" -ne 0 ]; then
+            grep -q 'HTTP 404' /tmp/stable-tag-ref.err \
+              || { echo "::error::unable to determine current stable tag state"; exit 1; }
+            if [ "${GITHUB_EVENT_NAME}" != workflow_dispatch ]; then
+              echo "::error::tag-push release requires the pushed tag to still exist"
+              exit 1
+            fi
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f "ref=refs/tags/${VERSION}" -f "sha=${SHA}" > /tmp/stable-tag-create.json 2> /tmp/stable-tag-create.err \
+              || { echo "::error::unable to create stable release tag"; exit 1; }
+          fi
+          verify_tag_ref
+
       - name: Publish GitHub release
+        id: github_release
         uses: softprops/action-gh-release@v3
         with:
           # Explicit tag so workflow_dispatch (on a branch) tags/publishes the
@@ -243,10 +291,47 @@ jobs:
           files: dist/*
           generate_release_notes: true
 
+      - name: Verify current stable tag after publication
+        if: "!cancelled() && (steps.github_release.outcome == 'success' || steps.github_release.outcome == 'failure')"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${VERSION}" > /tmp/final-stable-tag-ref.json 2> /tmp/final-stable-tag-ref.err \
+            || { echo "::error::unable to read stable tag after publication"; exit 1; }
+          jq -e '(.object.type | type == "string") and (.object.sha | type == "string")' /tmp/final-stable-tag-ref.json >/dev/null \
+            || { echo "::error::stable tag response after publication is invalid"; exit 1; }
+          jq -c '{type: .object.type, sha: .object.sha}' /tmp/final-stable-tag-ref.json > /tmp/final-stable-tag-chain.jsonl
+          tag_type="$(jq -r '.object.type' /tmp/final-stable-tag-ref.json)"
+          tag_sha="$(jq -r '.object.sha' /tmp/final-stable-tag-ref.json)"
+          for depth in $(seq 1 7); do
+            [ "${tag_type}" = tag ] || break
+            gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" > /tmp/final-stable-tag-object.json 2> /tmp/final-stable-tag-object.err \
+              || { echo "::error::unable to peel stable tag after publication"; exit 1; }
+            jq -e '(.object.type | type == "string") and (.object.sha | type == "string")' /tmp/final-stable-tag-object.json >/dev/null \
+              || { echo "::error::annotated stable tag response after publication is invalid"; exit 1; }
+            jq -c '{type: .object.type, sha: .object.sha}' /tmp/final-stable-tag-object.json >> /tmp/final-stable-tag-chain.jsonl
+            tag_type="$(jq -r '.object.type' /tmp/final-stable-tag-object.json)"
+            tag_sha="$(jq -r '.object.sha' /tmp/final-stable-tag-object.json)"
+          done
+          [ "${tag_type}" != tag ] || { echo "::error::stable tag peel after publication exceeds the allowed depth"; exit 1; }
+          jq -s . /tmp/final-stable-tag-chain.jsonl > /tmp/final-stable-tag-chain.json
+          python scripts/github_release_policy.py tag-chain \
+            --chain /tmp/final-stable-tag-chain.json --expected-sha "${SHA}"
+
+      - uses: actions/setup-python@v7
+        if: env.ALIST_CONFIGURED == 'true'
+        with:
+          python-version: '3.12'
+
       - name: Publish to AList drive
+        id: alist_mutation
         # design §4.5 steps 1-6. Conditional on ALIST_URL so GitHub-only releases
         # still succeed without the §9 prerequisites. End-to-end verified later.
-        if: ${{ env.ALIST_URL != '' }}
+        if: env.ALIST_CONFIGURED == 'true'
+        env:
+          ALIST_URL: ${{ secrets.ALIST_URL }}
+          ALIST_USERNAME: ${{ secrets.ALIST_USERNAME }}
+          ALIST_PASSWORD: ${{ secrets.ALIST_PASSWORD }}
         run: |
           python -m pip install --disable-pip-version-check -r scripts/requirements-release.txt
           python scripts/release-alist.py \
@@ -255,15 +340,24 @@ jobs:
             --repo-root . \
             --channel stable \
             --commit-sha "${SHA}" \
-            --base-path "${ALIST_BASE_PATH:-/mihari-release/mihari}" \
+            --base-path /mihari-release/mihari \
             --keep-versions "${MIHARI_KEEP_VERSIONS:-5}"
+
+      - name: Upload stable index recovery backup
+        if: "env.ALIST_CONFIGURED == 'true' && ((failure() && steps.alist_mutation.outcome == 'failure') || cancelled())"
+        uses: actions/upload-artifact@v7
+        with:
+          name: stable-index-backup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mihari-index-backup/stable/**
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Append offline install commands to release notes
         # design §4.5 step 7. The install commands are fixed public direct
         # links (signing is off on the AList drive), so they never change
         # between releases — append once per release; skip if the marker is
         # already present (idempotent re-runs).
-        if: ${{ env.ALIST_URL != '' }}
+        if: env.ALIST_CONFIGURED == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

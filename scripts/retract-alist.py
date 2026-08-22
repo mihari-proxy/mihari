@@ -12,6 +12,10 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SUM_LINE_RE = re.compile(r"^([0-9a-f]{64})  ([^\r\n]+)\n$")
 
 
+class RemoteScanError(RuntimeError):
+    """Raised internally when a remote release scan is ambiguous."""
+
+
 def validate_inputs(version, channel, base_path, commit_sha):
     try:
         parse_version(version, channel)
@@ -74,8 +78,8 @@ def verified_directory(alist, base_path, version, channel, commit_sha=None):
             if actual != digest:
                 return None
         return sums
-    except Exception:
-        return None
+    except Exception as error:
+        raise RemoteScanError from error
 
 
 def valid_identity(alist, base_path, version, channel, commit_sha=None):
@@ -86,12 +90,19 @@ def valid_identity(alist, base_path, version, channel, commit_sha=None):
 def highest_complete(alist, base_path, excluded, channel="stable"):
     try:
         entries = alist.list_dir(base_path)
-    except Exception:
-        fail("unable to list release versions")
+        if not isinstance(entries, list):
+            raise ValueError("remote directory listing is not a list")
+    except Exception as error:
+        raise RemoteScanError from error
     candidates = []
     for entry in entries:
+        if not isinstance(entry, dict):
+            raise RemoteScanError
         version = entry.get("name")
-        if not entry.get("is_dir") or version == excluded:
+        is_dir = entry.get("is_dir")
+        if not isinstance(version, str) or not isinstance(is_dir, bool):
+            raise RemoteScanError
+        if not is_dir or version == excluded:
             continue
         try:
             parse_version(version, channel)
@@ -163,7 +174,11 @@ def retract(alist, base_path, version, channel="stable", commit_sha=None):
             fail("refusing to retract a version still referenced by the index")
         return
 
-    if not valid_identity(alist, base_path, version, channel, commit_sha):
+    try:
+        identity_valid = valid_identity(alist, base_path, version, channel, commit_sha)
+    except RemoteScanError:
+        fail("unable to verify retraction target identity")
+    if not identity_valid:
         fail("refusing to retract a directory with mismatched identity")
 
     observed_index = read_index(alist, root_index)
@@ -175,16 +190,19 @@ def retract(alist, base_path, version, channel="stable", commit_sha=None):
             fail("non-latest retraction changed the release index")
         return
 
-    new_latest = highest_complete(alist, base_path, version, channel)
+    try:
+        new_latest = highest_complete(alist, base_path, version, channel)
+    except RemoteScanError:
+        fail("unable to inspect remaining release versions")
     if new_latest is None:
         write_index_reliably(alist, root_index, "", observed_index, channel, allow_empty=True)
     else:
+        try:
+            replacement_body = index_body(alist, base_path, new_latest, channel)
+        except RemoteScanError:
+            fail("unable to verify replacement release directory")
         write_index_reliably(
-            alist,
-            root_index,
-            index_body(alist, base_path, new_latest, channel),
-            observed_index,
-            channel,
+            alist, root_index, replacement_body, observed_index, channel
         )
     remove_target(alist, base_path, version)
 

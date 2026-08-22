@@ -6,7 +6,7 @@ import os
 import re
 from pathlib import Path
 
-from alist_client import DEFAULT_BASE_PATH, DEFAULT_KEEP_VERSIONS, PLATFORMS, bundle_name, connect, fail, info, sha256_file
+from alist_client import AListError, DEFAULT_BASE_PATH, DEFAULT_KEEP_VERSIONS, PLATFORMS, bundle_name, connect, fail, info, sha256_file
 from alist_index import IndexMutationError, parse_latest, write_index_reliably as _write_index_reliably
 from release_policy import compare_versions, parse_version, validate_base_path
 
@@ -79,8 +79,8 @@ def verify_remote_files(alist, version_dir, sums):
             if not alist.exists(remote):
                 return False
             actual = hashlib.sha256(alist.read_bytes(remote)).hexdigest()
-        except Exception:
-            return False
+        except Exception as error:
+            raise RemoteScanError from error
         if actual != digest:
             return False
     return True
@@ -171,8 +171,8 @@ def verified_directory(alist, base_path, version, channel, expected_commit=None,
             if expected_commit is not None and match.group(2) != expected_commit:
                 return None
         sums = parse_sums(alist.content(f"{version_dir}/SHA256SUMS.txt"))
-    except Exception:
-        return None
+    except Exception as error:
+        raise RemoteScanError from error
     if sums is None or (expected_sums is not None and sums != expected_sums):
         return None
     return sums if verify_remote_files(alist, version_dir, sums) else None
@@ -189,7 +189,13 @@ def upload_version_dir(alist, dist_dir, base_path, version, commit_sha=None, cha
     except Exception:
         fail("unable to inspect existing release directory")
     if complete_exists:
-        if verified_directory(alist, base_path, version, channel, commit_sha, sums) is None:
+        try:
+            verified = verified_directory(
+                alist, base_path, version, channel, commit_sha, sums
+            )
+        except RemoteScanError:
+            fail(f"completed version dir conflicts or cannot be verified: {version_dir}")
+        if verified is None:
             fail(f"completed version dir conflicts or cannot be verified: {version_dir}")
         info(f"version dir {version_dir} already complete and verified")
         return version_dir
@@ -223,13 +229,17 @@ def release_entries(alist, base_path, channel):
         raise RemoteScanError from error
     versions = []
     for entry in entries:
+        if not isinstance(entry, dict):
+            raise RemoteScanError
+        name = entry.get("name")
+        is_dir = entry.get("is_dir")
+        if not isinstance(name, str) or not isinstance(is_dir, bool):
+            raise RemoteScanError
+        if not is_dir:
+            continue
         try:
-            name = entry.get("name")
-            is_dir = entry.get("is_dir")
-            if not is_dir:
-                continue
             parse_version(name, channel)
-        except (AttributeError, TypeError, ValueError):
+        except ValueError:
             continue
         versions.append(name)
     return versions
@@ -318,7 +328,11 @@ def prune_versions(alist, base_path, version, keep, channel="stable"):
         except Exception:
             info("unable to clean incomplete release versions; skipping retention")
             return
-    versions = complete_versions(alist, base_path, channel, entries)
+    try:
+        versions = complete_versions(alist, base_path, channel, entries)
+    except RemoteScanError:
+        info("unable to verify release versions; skipping retention")
+        return
     versions.sort(key=lambda item: parse_version(item, channel), reverse=True)
     for old in versions[max(keep, 1):]:
         if old != version:
@@ -364,7 +378,10 @@ def main():
     args = parser.parse_args()
     validate_inputs(args.version, args.channel, args.base_path, args.commit_sha)
     alist = connect()
-    version_dir, index_url = publish(alist, args)
+    try:
+        version_dir, index_url = publish(alist, args)
+    except (AListError, RemoteScanError):
+        fail("AList publish operation failed")
     emit_env("ALIST_VERSION_DIR", version_dir)
     info(f"published {args.version} to {args.base_path}; index at {index_url}")
 

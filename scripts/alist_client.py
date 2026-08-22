@@ -2,14 +2,13 @@
 
 Both scripts/release-alist.py (publish) and scripts/retract-alist.py
 (withdraw) talk to the same self-hosted AList drive via the v3 REST API
-(login / fs/get / fs/list / fs/put / fs/remove / fs/mkdir) and share the
+(login / fs/list / fs/put / fs/remove / fs/mkdir) and share the
 same notion of a version directory, bundle names, and semver ordering.
 Centralizing the client keeps the two flows consistent and avoids drifting
 two copies of the API surface.
 """
 import hashlib
 import os
-import re
 import sys
 from pathlib import Path
 from urllib.parse import quote
@@ -19,6 +18,7 @@ import requests
 MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 MAX_TEXT_BYTES = 1024 * 1024
 DOWNLOAD_TIMEOUT = 120
+LIST_PAGE_SIZE = 200
 
 # AList topology quirk: the fs API (list/get/put/mkdir) addresses files under
 # the root storage (paths rooted at /), so this is the *fs* base path. The /p
@@ -34,7 +34,10 @@ PLATFORMS = [
     ("darwin", "amd64"), ("darwin", "arm64"),
     ("windows", "amd64"), ("windows", "arm64"),
 ]
-SEMVER_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+
+
+class AListError(RuntimeError):
+    """Raised for sanitized AList transport or API failures."""
 
 
 def fail(message):
@@ -44,11 +47,6 @@ def fail(message):
 
 def info(message):
     print(f"::notice::{message}")
-
-
-def semver_key(name):
-    match = SEMVER_RE.match(name)
-    return tuple(int(x) for x in match.groups()) if match else None
 
 
 def sha256_file(path):
@@ -73,26 +71,104 @@ class AList:
         token = self._login(username, password)
         self.session.headers["Authorization"] = token
 
-    def _post(self, path, **kwargs):
-        response = self.session.post(self.base + path, timeout=120, **kwargs)
-        response.raise_for_status()
-        return response.json()
+    def _post(self, path, allowed_codes=(200,), **kwargs):
+        try:
+            response = self.session.post(self.base + path, timeout=120, **kwargs)
+            response.raise_for_status()
+            data = response.json()
+        except (requests.RequestException, ValueError) as error:
+            raise AListError("alist operation failed") from error
+        if not isinstance(data, dict) or data.get("code") not in allowed_codes:
+            raise AListError("alist operation failed")
+        return data
 
     def _login(self, username, password):
         data = self._post("/api/auth/login", json={"username": username, "password": password})
-        if data.get("code") != 200:
-            fail(f"alist login failed: {data.get('message')}")
-        return data["data"]["token"]
-
-    def get(self, path):
-        return self._post("/api/fs/get", json={"path": self._fs_path(path), "password": ""})
+        try:
+            token = data["data"]["token"]
+        except (KeyError, TypeError) as error:
+            raise AListError("alist login failed") from error
+        if not isinstance(token, str) or not token:
+            raise AListError("alist login failed")
+        return token
 
     def exists(self, path):
-        return self.get(path).get("code") == 200
+        parent, name = path.rsplit("/", 1)
+        if not name:
+            raise AListError("invalid object path")
+        return any(entry["name"] == name for entry in self.list_dir(parent or "/"))
 
     def list_dir(self, path):
-        data = self._post("/api/fs/list", json={"path": self._fs_path(path), "password": "", "page": 1, "per_page": 0, "refresh": False})
-        return data.get("data", {}).get("content") or []
+        entries = []
+        names = set()
+        expected_total = None
+        expected_pages = None
+        page = 1
+        while True:
+            data = self._post(
+                "/api/fs/list",
+                json={
+                    "path": self._fs_path(path),
+                    "password": "",
+                    "page": page,
+                    "per_page": LIST_PAGE_SIZE,
+                    "refresh": False,
+                },
+            )
+            payload = data.get("data")
+            if not isinstance(payload, dict) or "content" not in payload:
+                raise AListError("invalid directory listing")
+            content = payload["content"]
+            if content is None:
+                content = []
+            fields = (
+                payload.get("total"),
+                payload.get("page"),
+                payload.get("per_page"),
+                payload.get("has_more"),
+                payload.get("pages_total"),
+            )
+            total, response_page, per_page, has_more, pages_total = fields
+            integer_fields = (total, response_page, per_page, pages_total)
+            if (
+                not isinstance(content, list)
+                or any(not isinstance(value, int) or isinstance(value, bool) for value in integer_fields)
+                or not isinstance(has_more, bool)
+            ):
+                raise AListError("invalid directory listing")
+            expected_page_count = min(
+                LIST_PAGE_SIZE, max(total - (page - 1) * LIST_PAGE_SIZE, 0)
+            )
+            if (
+                total < 0
+                or response_page != page
+                or per_page != LIST_PAGE_SIZE
+                or pages_total != (total + LIST_PAGE_SIZE - 1) // LIST_PAGE_SIZE
+                or has_more != (page < pages_total)
+                or len(content) != expected_page_count
+            ):
+                raise AListError("invalid directory listing")
+            if expected_total is None:
+                expected_total = total
+                expected_pages = pages_total
+            elif total != expected_total or pages_total != expected_pages:
+                raise AListError("invalid directory listing")
+            for entry in content:
+                if (
+                    not isinstance(entry, dict)
+                    or not isinstance(entry.get("name"), str)
+                    or not entry["name"]
+                    or not isinstance(entry.get("is_dir"), bool)
+                    or entry["name"] in names
+                ):
+                    raise AListError("invalid directory listing")
+                names.add(entry["name"])
+                entries.append(entry)
+            if not has_more:
+                if len(entries) != total:
+                    raise AListError("invalid directory listing")
+                return entries
+            page += 1
 
     def _fs_path(self, path):
         """Convert a logical base_path path into the path the AList fs API needs.
@@ -117,48 +193,53 @@ class AList:
             return path
         return "/" + rest[sep + 1:]
 
-    def _check_write(self, response, remote_path):
+    def _check_write(self, response, _remote_path):
         """AList always answers HTTP 200 with the real status in the JSON body's
         `code` (200 = ok). raise_for_status alone swallows a write failure as a
-        silent success — surface the message instead. Defensive: only fail when a
-        `code` is present and non-200, so a non-standard success body can't
-        false-alarm."""
-        response.raise_for_status()
+        silent success. Require the documented success code and raise a sanitized
+        normal exception so callers can retry and recover transactions."""
         try:
+            response.raise_for_status()
             data = response.json()
-        except ValueError:
-            return
-        if data.get("code") not in (200, None):
-            fail(f"alist write failed for {remote_path}: {data.get('message')}")
+        except (requests.RequestException, ValueError) as error:
+            raise AListError("alist write failed") from error
+        if not isinstance(data, dict) or data.get("code") != 200:
+            raise AListError("alist write failed")
 
     def mkdir(self, path):
         self._post("/api/fs/mkdir", json={"path": self._fs_path(path)})
 
     def upload(self, local, remote_path):
-        with open(local, "rb") as handle:
+        try:
+            with open(local, "rb") as handle:
+                response = self.session.put(
+                    self.base + "/api/fs/put",
+                    headers={
+                        "File-Path": quote(self._fs_path(remote_path), safe=""),
+                        "As-Task": "false",
+                        "Content-Type": "application/octet-stream",
+                    },
+                    data=handle,
+                    timeout=900,
+                )
+        except requests.RequestException as error:
+            raise AListError("alist write failed") from error
+        self._check_write(response, remote_path)
+
+    def upload_text(self, text, remote_path):
+        try:
             response = self.session.put(
                 self.base + "/api/fs/put",
                 headers={
                     "File-Path": quote(self._fs_path(remote_path), safe=""),
                     "As-Task": "false",
-                    "Content-Type": "application/octet-stream",
+                    "Content-Type": "text/plain",
                 },
-                data=handle,
-                timeout=900,
+                data=text.encode("utf-8"),
+                timeout=120,
             )
-        self._check_write(response, remote_path)
-
-    def upload_text(self, text, remote_path):
-        response = self.session.put(
-            self.base + "/api/fs/put",
-            headers={
-                "File-Path": quote(self._fs_path(remote_path), safe=""),
-                "As-Task": "false",
-                "Content-Type": "text/plain",
-            },
-            data=text.encode("utf-8"),
-            timeout=120,
-        )
+        except requests.RequestException as error:
+            raise AListError("alist write failed") from error
         self._check_write(response, remote_path)
 
     def remove(self, dir_path, names):
@@ -176,8 +257,11 @@ class AList:
         self, path: str, max_bytes: int = MAX_DOWNLOAD_BYTES, timeout: int = DOWNLOAD_TIMEOUT
     ) -> bytes:
         """Download a public object with a strict response-size limit."""
-        response = self.session.get(self.public_url(path), timeout=timeout, stream=True)
+        response = None
         try:
+            response = self.session.get(
+                self.public_url(path), timeout=timeout, stream=True
+            )
             response.raise_for_status()
             chunks = []
             total = 0
@@ -188,8 +272,11 @@ class AList:
                 if total > max_bytes:
                     raise ValueError(f"remote object exceeds {max_bytes} bytes")
                 chunks.append(chunk)
+        except requests.RequestException as error:
+            raise AListError("alist read failed") from error
         finally:
-            response.close()
+            if response is not None:
+                response.close()
         return b"".join(chunks)
 
     def public_url(self, path):
@@ -214,4 +301,7 @@ def connect():
     password = os.environ.get("ALIST_PASSWORD")
     if not base_url or not username or not password:
         fail("ALIST_URL / ALIST_USERNAME / ALIST_PASSWORD are required")
-    return AList(base_url, username, password)
+    try:
+        return AList(base_url, username, password)
+    except AListError:
+        fail("unable to connect to AList")

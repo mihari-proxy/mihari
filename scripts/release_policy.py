@@ -4,8 +4,10 @@ import re
 
 
 _VERSION_PATTERNS = {
-    "stable": re.compile(r"^v([0-9]+)\.([0-9]+)\.([0-9]+)$"),
-    "dev": re.compile(r"^v([0-9]+)\.([0-9]+)\.([0-9]+)-dev\.([0-9]+)$"),
+    "stable": re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"),
+    "dev": re.compile(
+        r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$"
+    ),
 }
 
 _BASE_PATHS = {
@@ -20,6 +22,8 @@ def parse_version(value: str, channel: str) -> tuple[int, int, int, int | None]:
     if pattern is None:
         raise ValueError("unsupported release channel")
 
+    if not isinstance(value, str):
+        raise ValueError("invalid release version")
     match = pattern.fullmatch(value)
     if match is None:
         raise ValueError("invalid release version")
