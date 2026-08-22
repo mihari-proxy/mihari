@@ -555,7 +555,20 @@ def test_release_workflow_uses_policy_instead_of_write_only_get_fields():
     assert "github_release_policy.py release" in workflow
     assert "github_release_policy.py tag-chain" in workflow
     assert "github_release_policy.py latest" in workflow
-    assert "-F make_latest=false" in workflow
+
+
+def test_dev_release_create_uses_api_types_and_reports_api_errors():
+    document = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    create = next(
+        step["run"]
+        for step in document["jobs"]["publish"]["steps"]
+        if step.get("name") == "Create prerelease and upload missing assets"
+    )
+
+    assert "-F make_latest=false" not in create
+    assert "-F prerelease=true -F draft=false -f make_latest=false" in create
+    assert "cat /tmp/release-create.json >&2" in create
+    assert "cat /tmp/release-create.err >&2" in create
 
 
 def test_release_recovery_preflights_existing_assets_and_only_uploads_missing():

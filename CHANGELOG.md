@@ -8,6 +8,21 @@
 
 ### Fixed
 
+## [v0.9.0] - 2026-08-23
+
+### Added
+
+- 增加受保护的 `dev` 集成分支与 canonical `vX.Y.Z-dev.N` GitHub prerelease 流程：固定源 commit SHA，构建六个平台并校验精确 14 个 assets，且不改变 stable `/releases/latest`（#120）。
+
+### Changed
+
+- Stable 发布改为固定 `main` commit SHA，并加固 stable AList 发布/撤回事务、索引恢复与通道隔离（#120）。
+
+### Fixed
+
+- Windows TUN 冲突探测避免把本实例的 mihomo 进程识别为外部冲突（#114）。
+- 修复 dev prerelease Create Release 的 `make_latest` 参数类型，并在创建失败时保留 GitHub API 响应与错误输出。
+
 ## [v0.8.2] - 2026-08-18
 
 ### Fixed

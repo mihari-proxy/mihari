@@ -289,8 +289,13 @@ jobs:
               -f "target_commitish=${SHA}" \
               -f "name=${DEV_RELEASE_NAME}" \
               -f "body=${DEV_RELEASE_BODY}" \
-              -F prerelease=true -F draft=false -F make_latest=false > /tmp/release-create.json 2> /tmp/release-create.err \
-              || { echo "::error::unable to create dev prerelease"; exit 1; }
+              -F prerelease=true -F draft=false -f make_latest=false > /tmp/release-create.json 2> /tmp/release-create.err \
+              || {
+                cat /tmp/release-create.json >&2
+                cat /tmp/release-create.err >&2
+                echo "::error::unable to create dev prerelease"
+                exit 1
+              }
           fi
           while IFS= read -r asset; do
             [ -n "${asset}" ] || continue
