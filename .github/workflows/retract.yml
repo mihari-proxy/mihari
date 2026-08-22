@@ -8,67 +8,132 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to retract, e.g. v0.3.0 (must match ^v[0-9]+\.[0-9]+\.[0-9]+$)'
+        description: 'Canonical stable version to retract, e.g. v0.3.0 (leading zeroes are rejected)'
         required: true
         type: string
       confirm:
-        description: 'Type-check confirmation. The version is permanently deleted from AList and GitHub — check this ONLY after verifying the breakage.'
+        description: 'Confirm to permanently remove Release/assets and AList distribution; the canonical stable tag is retained.'
         required: true
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   VERSION: ${{ inputs.version }}
   CONFIRM: ${{ inputs.confirm }}
 
 jobs:
-  retract:
-    name: retract ${{ inputs.version }}
+  resolve:
+    name: resolve trusted stable source
     runs-on: ubuntu-latest
-    env:
-      # Job-scope so the AList step's `if: env.ALIST_URL != ''` can read it
-      # (secrets are unreadable in step `if`; step env isn't either). Empty when
-      # unconfigured → AList step skips; the GitHub release is still deleted.
-      ALIST_URL: ${{ secrets.ALIST_URL }}
-      ALIST_USERNAME: ${{ secrets.ALIST_USERNAME }}
-      ALIST_PASSWORD: ${{ secrets.ALIST_PASSWORD }}
-      ALIST_BASE_PATH: ${{ vars.ALIST_BASE_PATH }}
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - id: source
+        name: Resolve trusted main commit
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
+
+  retract:
+    name: retract stable release
+    needs: resolve
+    if: github.ref == 'refs/heads/main' && needs.resolve.outputs.sha != ''
+    runs-on: ubuntu-latest
+    concurrency:
+      group: mihari-stable-alist
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    env:
+      # The URL alone enables AList retraction. Missing username/password are
+      # injected only below and make connect() fail closed instead of skipping.
+      ALIST_CONFIGURED: ${{ secrets.ALIST_URL != '' }}
+      SHA: ${{ needs.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Verify trusted source commit
+        run: |
+          [ "$(git rev-parse HEAD)" = "${SHA}" ] \
+            || { echo "::error::checkout did not resolve the trusted main commit"; exit 1; }
 
       - name: Gate (semver + confirm)
         # design §4.6 step 1: pure-semver gate (same rule as §4.2) + the boolean
         # double-confirm must be true before anything destructive runs.
         run: |
-          echo "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-            || { echo "::error::version '${VERSION}' must match ^v[0-9]+\.[0-9]+\.[0-9]+$"; exit 1; }
+          if [[ ! "${VERSION}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::version must match the required stable format"
+            exit 1
+          fi
           [ "${CONFIRM}" = "true" ] \
-            || { echo "::error::confirm must be true to retract ${VERSION} (this permanently deletes it)"; exit 1; }
-          echo "Retracting ${VERSION} (confirmed)."
+            || { echo "::error::confirm must be true to permanently remove Release/assets and AList distribution; canonical stable tag retained"; exit 1; }
+          echo "Confirmed: permanently remove Release/assets and AList distribution for ${VERSION}; canonical stable tag retained."
+
+      - uses: actions/setup-python@v7
+        if: env.ALIST_CONFIGURED == 'true'
+        with:
+          python-version: '3.12'
 
       - name: Retract from AList drive
+        id: alist_mutation
         # design §4.6 steps 2-4: read index, remove the version dir, rebuild
         # index.txt to point at the highest remaining complete version (or empty).
         # Conditional on ALIST_URL so retraction still works GitHub-only.
-        if: ${{ env.ALIST_URL != '' }}
+        if: env.ALIST_CONFIGURED == 'true'
+        env:
+          ALIST_URL: ${{ secrets.ALIST_URL }}
+          ALIST_USERNAME: ${{ secrets.ALIST_USERNAME }}
+          ALIST_PASSWORD: ${{ secrets.ALIST_PASSWORD }}
         run: |
-          python -c "import requests" 2>/dev/null || pip install requests
+          python -m pip install --disable-pip-version-check -r scripts/requirements-release.txt
           python scripts/retract-alist.py \
             --version "${VERSION}" \
-            --base-path "${ALIST_BASE_PATH:-/mihari-release/mihari}"
+            --channel stable \
+            --base-path /mihari-release/mihari
+
+      - name: Upload stable index recovery backup
+        if: "env.ALIST_CONFIGURED == 'true' && ((failure() && steps.alist_mutation.outcome == 'failure') || (cancelled() && steps.alist_mutation.outcome == 'cancelled'))"
+        uses: actions/upload-artifact@v7
+        with:
+          name: stable-index-backup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mihari-index-backup/stable/**
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Delete GitHub release
-        # design §4.6 step 5: release + assets + tag. --cleanup-tag lets the same
-        # version number be re-cut after a fix. Idempotent: a missing release is
-        # reported, not fatal (re-run after a partial retract).
+        # design §4.6 step 5: delete the release and its assets, but retain the
+        # protected canonical stable tag. A fix must use a higher version.
+        # Idempotent: a missing release is reported, not fatal (re-run after a
+        # partial retract).
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view "${VERSION}" >/dev/null 2>&1; then
-            gh release delete "${VERSION}" --yes --cleanup-tag
-            echo "Deleted GitHub release ${VERSION} (release + assets + tag)."
+          release_lookup_error="$(mktemp)"
+          trap 'rm -f "${release_lookup_error}"' EXIT
+          set +e
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${VERSION}" \
+            >/dev/null 2>"${release_lookup_error}"
+          release_lookup_status=$?
+          set -e
+
+          if [ "${release_lookup_status}" -eq 0 ]; then
+            gh release delete "${VERSION}" --yes
+            echo "Permanently removed GitHub Release/assets for ${VERSION}; canonical stable tag retained."
+          elif grep -Eq '(^|[^0-9])HTTP 404([^0-9]|$)' "${release_lookup_error}"; then
+            echo "GitHub release ${VERSION} not found (already retracted?) — nothing to delete; canonical stable tag retained."
           else
-            echo "GitHub release ${VERSION} not found (already retracted?) — nothing to delete."
+            echo "::error::unable to determine whether the GitHub release exists"
+            exit 1
           fi
