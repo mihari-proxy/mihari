@@ -17,7 +17,7 @@
 |----------|----------|------|----------|
 | `release.yml` | `v*` tag push；从 `main` 手动 dispatch（稳定 `version` + `commit_sha`） | Stable | GitHub stable Release；`/mihari-release/mihari` 及其 stable `index.txt` |
 | `release-dev.yml` | 代码已准备，远程 dev/试发需另行授权 | Dev | 获授权并从受保护 `dev` dispatch 后，仅写 GitHub dev tag、prerelease 与 14 个 assets；不写 AList |
-| `retract.yml` | 从 `main` 手动 dispatch（稳定 `version` + `confirm`） | Stable | 仅删除 stable Release/tag 与 `/mihari-release/mihari/<version>/`，必要时重建 stable `index.txt` |
+| `retract.yml` | 从 `main` 手动 dispatch（稳定 `version` + `confirm`） | Stable | 删除 stable Release 及其 assets、保留 canonical stable tag，并删除 `/mihari-release/mihari/<version>/`；必要时重建 stable `index.txt` |
 
 Batch A 中，dev 发布代码已准备，远程 dev/试发需授权。P2 AList 发布与撤回 workflow 尚不可用，因此没有 dev AList 发布、撤回或下载命令；稳定 AList、stable `index.txt` 与 `/releases/latest` 不受 dev 准备代码影响。
 
@@ -142,17 +142,17 @@ Dev 发布还要求仓库已经存在至少一个合法的 stable GitHub Release
 
 ## 回滚发布（致命错误撤回）
 
-发现致命错误需要撤回某版本时，使用 `retract` workflow（**彻底删除**，非改指式回滚）：
+发现致命错误需要撤回某版本时，使用 `retract` workflow 永久移除其 GitHub Release、assets 与 AList 分发数据，但保留 canonical stable tag：
 
 1. 在 GitHub 仓库 Actions 页面选择 `main` 分支/ref，再运行 `retract` workflow；
 2. 填写 `version`（如 `v0.3.0`）并勾选 `confirm` 双保险；
-3. workflow 自动：若撤回当前 latest，先计算并写入现存最高完整版本的替代 `index.txt`（没有其他完整版本则写空），并回读验证成功；随后删除 AList 版本目录；最后删除 GitHub release + 资产 + tag（`--cleanup-tag`，允许修复后同版本号重发）。目录删除失败时，已切换的 index 保持不回退，重跑会删除不再被 index 引用的遗留目录。
+3. workflow 自动：若撤回当前 latest，先计算并写入现存最高完整版本的替代 `index.txt`（没有其他完整版本则写空），并回读验证成功；随后永久删除 AList 版本目录；最后永久删除 GitHub Release 及其 assets，但保留 canonical stable tag。目录删除失败时，已切换的 index 保持不回退，重跑会删除不再被 index 引用的遗留目录。
 
-Stable index writer 在事务前确认权威实时内容仍等于调用方观察到的原值，然后只执行一次 PUT 并做权威 readback：读到目标内容即成功；仍读到原值则报告 index unchanged，必须从头重跑完整 release/retract workflow；读到第三方值或无法确定回读结果时立即停止并保留远端现场，转入人工恢复，不自动 rollback。若已生成备份，失败或取消的 workflow 会上传保留 3 天的 `stable-index-backup-<run_id>-<attempt>` artifact，其中同时包含 `index.txt` 与 `metadata.json`；人工恢复必须按 metadata 的 `existed`、`channel`、`path`、`sha256` 校验并决定删除原本不存在的对象，或恢复原本为空/非空的 index 内容。
+Stable index writer 在事务前确认权威实时内容仍等于调用方观察到的原值，然后只执行一次 PUT 并做权威 readback：读到目标内容即成功；仍读到原值则报告 index unchanged，必须从头重跑完整 release/retract workflow；读到第三方值或无法确定回读结果时立即停止并保留远端现场，转入人工恢复，不自动 rollback。仅当 AList mutation 失败或在 mutation 期间取消时，workflow 才上传保留 3 天的 `stable-index-backup-<run_id>-<attempt>` artifact，其中同时包含 `index.txt` 与 `metadata.json`；AList mutation 已成功后发生下游步骤失败时不会上传该 artifact，因为远端 index 已验证提交成功，无需恢复旧 index。人工恢复必须按 metadata 的 `existed`、`channel`、`path`、`sha256` 校验并决定删除原本不存在的对象，或恢复原本为空/非空的 index 内容。
 
 AList 不提供 compare-and-swap（CAS），因此事务前检查与单次 PUT 之间仍存在竞态，不能声称彻底原子。Stable release 与 retract workflow 共用 channel concurrency，避免这两类 Actions writer 并行；执行人工 `regenerate-index` 或 artifact 恢复前，必须确认相关 workflow 均未运行，并在整个检查、写入和回读期间禁止其他人工或自动 writer。
 
-> **仅移除分发渠道，已安装用户不可回收**——靠快速发布修复版（`vN+1 > vN` 自更新覆盖）自愈。详见 [分发方案 · 版本撤回](distribution.md#四版本撤回致命错误)。
+> **仅移除分发渠道，已安装用户不可回收**——canonical stable tag 继续受 ruleset 保护，不能同版本重切；必须快速发布更高版本号的修复版（`vN+1 > vN`），由自更新覆盖坏版本。详见 [分发方案 · 版本撤回](distribution.md#五版本撤回致命错误)。
 
 > 旧的手动删标签 + 网页删 Release 方式仅删 GitHub 侧、不重建 AList index，已由 `retract` workflow 取代。
 

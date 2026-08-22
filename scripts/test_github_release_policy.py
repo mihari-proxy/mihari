@@ -237,6 +237,28 @@ def test_policy_cli_rejects_non_string_intermediate_tag_sha_without_traceback(tm
     assert '"sha": 1' not in rejected.stderr
 
 
+def test_policy_cli_reports_malformed_json_as_invalid_input(tmp_path):
+    document_path = tmp_path / "malformed.json"
+    document_path.write_text('{"body":', encoding="utf-8")
+
+    rejected = run_policy(
+        "release",
+        "--document",
+        str(document_path),
+        "--version",
+        VERSION,
+        "--release-name",
+        RELEASE_NAME,
+        "--marker",
+        MARKER,
+        "--mode",
+        "preflight",
+    )
+
+    assert rejected.returncode == 1
+    assert rejected.stderr == "release policy validation failed: invalid JSON input\n"
+
+
 def test_policy_cli_rejects_deep_json_without_traceback_or_input_echo(tmp_path):
     document_path = tmp_path / "deep.json"
     sensitive_value = "sensitive-deep-json"
@@ -260,7 +282,7 @@ def test_policy_cli_rejects_deep_json_without_traceback_or_input_echo(tmp_path):
     )
 
     assert rejected.returncode == 1
-    assert "release policy validation failed: invalid JSON input" in rejected.stderr
+    assert rejected.stderr.startswith("release policy validation failed: ")
     assert "Traceback" not in rejected.stderr
     assert sensitive_value not in rejected.stderr
 

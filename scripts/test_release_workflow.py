@@ -226,7 +226,7 @@ def test_alist_runtime_dependencies_are_pinned_after_checkout_in_both_stable_wor
     assert release_checkout["with"]["ref"] == "${{ needs.resolve.outputs.sha }}"
 
 
-def test_stable_alist_failures_upload_the_runner_temp_index_backup_with_short_retention():
+def test_stable_alist_backup_artifacts_require_mutation_failure_or_cancellation():
     release = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
     retract = yaml.safe_load(STABLE_RETRACT_WORKFLOW.read_text(encoding="utf-8"))
 
@@ -248,8 +248,11 @@ def test_stable_alist_failures_upload_the_runner_temp_index_backup_with_short_re
         assert mutation_index < backup_index
         assert backup["if"] == (
             "env.ALIST_CONFIGURED == 'true' && "
-            "((failure() && steps.alist_mutation.outcome == 'failure') || cancelled())"
+            "((failure() && steps.alist_mutation.outcome == 'failure') || "
+            "(cancelled() && steps.alist_mutation.outcome == 'cancelled'))"
         )
+        # A later job cancellation after a successful mutation must not match.
+        assert "|| cancelled())" not in backup["if"]
         assert backup["uses"] == "actions/upload-artifact@v7"
         assert backup["with"]["path"] == "${{ runner.temp }}/mihari-index-backup/stable/**"
         assert backup["with"]["if-no-files-found"] == "ignore"
@@ -327,6 +330,109 @@ def test_stable_retract_runs_secrets_only_from_a_verified_main_checkout():
     assert retract["permissions"] == {"contents": "write"}
     assert retract_checkout["with"] == {"ref": "${{ needs.resolve.outputs.sha }}", "fetch-depth": 0}
     assert '[ "$(git rev-parse HEAD)" = "${SHA}" ]' in source_guard
+
+
+def _stable_retract_release_step():
+    document = yaml.safe_load(STABLE_RETRACT_WORKFLOW.read_text(encoding="utf-8"))
+    return next(
+        step["run"]
+        for step in document["jobs"]["retract"]["steps"]
+        if step.get("name") == "Delete GitHub release"
+    )
+
+
+def _bash_path(path):
+    value = path.resolve().as_posix()
+    if os.name == "nt" and len(value) >= 3 and value[1:3] == ":/":
+        return f"/{value[0].lower()}{value[2:]}"
+    return value
+
+
+def _run_stable_retract_release_step(tmp_path, scenario):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${GH_CALL_LOG}"
+if [ "$1" = "api" ]; then
+  case "${GH_SCENARIO}" in
+    exists) exit 0 ;;
+    not_found) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
+    forbidden) echo "gh: Resource not accessible (HTTP 403)" >&2; exit 1 ;;
+  esac
+fi
+if [ "$1" = "release" ] && [ "$2" = "delete" ]; then
+  exit 0
+fi
+exit 97
+""",
+        encoding="utf-8",
+        newline="\n",
+    )
+    fake_gh.chmod(0o755)
+    call_log = tmp_path / "gh-calls.txt"
+    script = (
+        f'export PATH="{_bash_path(fake_bin)}:$PATH"\n'
+        f'export GH_CALL_LOG="{_bash_path(call_log)}"\n'
+        f'export GH_SCENARIO="{scenario}"\n'
+        f'{_stable_retract_release_step()}'
+    )
+    result = subprocess.run(
+        [_bash_for_workflow_guard(), "-e", "-o", "pipefail", "-c", script],
+        capture_output=True,
+        check=False,
+        encoding="utf-8",
+        env={
+            **os.environ,
+            "GITHUB_REPOSITORY": "mihari-proxy/mihari",
+            "VERSION": "v1.2.3",
+        },
+    )
+    calls = call_log.read_text(encoding="utf-8").splitlines()
+    return result, calls
+
+
+def test_stable_retract_deletes_an_existing_release_without_deleting_its_tag(tmp_path):
+    result, calls = _run_stable_retract_release_step(tmp_path, "exists")
+
+    assert result.returncode == 0, result.stderr
+    assert calls == [
+        "api repos/mihari-proxy/mihari/releases/tags/v1.2.3",
+        "release delete v1.2.3 --yes",
+    ]
+    assert all("--cleanup-tag" not in call for call in calls)
+
+
+def test_stable_retract_treats_only_an_explicit_release_404_as_idempotent(tmp_path):
+    result, calls = _run_stable_retract_release_step(tmp_path, "not_found")
+
+    assert result.returncode == 0, result.stderr
+    assert calls == ["api repos/mihari-proxy/mihari/releases/tags/v1.2.3"]
+
+
+def test_stable_retract_fails_closed_on_non_404_release_lookup_errors(tmp_path):
+    result, calls = _run_stable_retract_release_step(tmp_path, "forbidden")
+
+    assert result.returncode != 0
+    assert calls == ["api repos/mihari-proxy/mihari/releases/tags/v1.2.3"]
+    assert "::error::unable to determine whether the GitHub release exists" in result.stdout
+
+
+def test_stable_retract_confirmation_copy_names_permanent_removals_and_retained_tag():
+    document = yaml.safe_load(STABLE_RETRACT_WORKFLOW.read_text(encoding="utf-8"))
+    description = document[True]["workflow_dispatch"]["inputs"]["confirm"]["description"]
+    guard = next(
+        step["run"]
+        for step in document["jobs"]["retract"]["steps"]
+        if step.get("name") == "Gate (semver + confirm)"
+    )
+
+    for copy in (description, guard):
+        assert "permanently remove" in copy
+        assert "Release/assets and AList distribution" in copy
+        assert "canonical stable tag" in copy
+        assert "retained" in copy
 
 
 def test_stable_retract_never_uses_raw_version_in_display_or_prevalidation_output():
@@ -699,6 +805,22 @@ def test_release_document_requires_tag_ruleset_because_pre_and_post_checks_are_n
     assert "配置并回读" in stable_dispatch
 
 
+def test_release_documents_keep_retracted_stable_tags_and_require_a_higher_fix_version():
+    release = RELEASE_DOCUMENT.read_text(encoding="utf-8")
+    distribution = DISTRIBUTION_DOCUMENT.read_text(encoding="utf-8")
+    release_retract = _markdown_section(release, "## 回滚发布（致命错误撤回）")
+    distribution_retract = _markdown_section(distribution, "## 五、版本撤回（致命错误）")
+
+    for section in (release_retract, distribution_retract):
+        assert "永久移除" in section
+        assert "Release" in section
+        assert "AList" in section
+        assert "保留 canonical stable tag" in section
+        assert "更高版本号" in section
+        assert "同版本号重发" not in section
+        assert "--cleanup-tag" not in section
+
+
 def test_release_document_requires_authorized_tag_ruleset_for_real_dev_release():
     release = RELEASE_DOCUMENT.read_text(encoding="utf-8")
     channel_overview = _markdown_section(release, "## Stable 与 Dev 发布通道")
@@ -753,6 +875,16 @@ def test_distribution_document_explains_how_to_recover_the_uploaded_index_backup
     assert "`existed=true` 且 `index.txt` 为空表示恢复为空文件" in publication
     assert "`existed=true` 且非空则逐字节恢复其内容" in publication
     assert "恢复后再次下载并逐字节核对" in publication
+
+
+def test_distribution_document_limits_backup_artifacts_to_alist_mutation_failures_or_cancellation():
+    distribution = DISTRIBUTION_DOCUMENT.read_text(encoding="utf-8")
+    publication = _markdown_section(distribution, "### 发布顺序与非原子 index 窗口")
+
+    assert "仅当 AList mutation 失败或 mutation 期间取消" in publication
+    assert "AList mutation 已成功后" in publication
+    assert "不会上传该 artifact" in publication
+    assert "无需恢复旧 index" in publication
 
 
 def test_release_documents_describe_batch_a_as_code_prepared_and_keep_p2_alist_unavailable():

@@ -149,7 +149,7 @@ release workflow 的 AList 步骤顺序保证用户永远拿不到半成品：
 
 Stable release 与 retract workflow 共用 channel concurrency，避免这两类 Actions writer 互相并行，但它不能约束 workflow 外的管理员操作。执行人工 `regenerate-index` 或 artifact 恢复前，必须确认相关 release/retract workflow 均未运行；从读取现场、判断 metadata、写入到最终回读的整个期间，都必须禁止其他人工或自动 writer。
 
-Writer 在首次 mutation 前把原状态写入 runner 的 `stable/` 备份目录：`index.txt` 保存原始字节，`metadata.json` 保存 `existed`、`channel`、`path` 和 index 字节的 `sha256`。只要备份已经生成，release/retract workflow 在失败或取消时会将两者作为 `stable-index-backup-<run_id>-<attempt>` workflow artifact 上传并保留 3 天。人工恢复时必须从对应 run 下载 artifact，先验证 `channel=stable`、固定 `path=/mihari-release/mihari/index.txt` 及 `sha256`：`existed=false` 表示原对象不存在，应在确认没有合法并发更新后删除该 index；`existed=true` 且 `index.txt` 为空表示恢复为空文件；`existed=true` 且非空则逐字节恢复其内容。恢复后再次下载并逐字节核对；runner 本地 `$RUNNER_TEMP` 不能作为运行结束后的恢复入口。
+Writer 在首次 mutation 前把原状态写入 runner 的 `stable/` 备份目录：`index.txt` 保存原始字节，`metadata.json` 保存 `existed`、`channel`、`path` 和 index 字节的 `sha256`。仅当 AList mutation 失败或 mutation 期间取消时，release/retract workflow 才会将两者作为 `stable-index-backup-<run_id>-<attempt>` workflow artifact 上传并保留 3 天。AList mutation 已成功后若下游步骤失败，workflow 不会上传该 artifact，因为远端 index 已经验证提交成功，无需恢复旧 index。人工恢复时必须从对应 run 下载 artifact，先验证 `channel=stable`、固定 `path=/mihari-release/mihari/index.txt` 及 `sha256`：`existed=false` 表示原对象不存在，应在确认没有合法并发更新后删除该 index；`existed=true` 且 `index.txt` 为空表示恢复为空文件；`existed=true` 且非空则逐字节恢复其内容。恢复后再次下载并逐字节核对；runner 本地 `$RUNNER_TEMP` 不能作为运行结束后的恢复入口。
 
 ---
 
@@ -165,19 +165,19 @@ Writer 在首次 mutation 前把原状态写入 runner 的 `stable/` 备份目�
 
 ## 五、版本撤回（致命错误）
 
-独立 workflow `.github/workflows/retract.yml` 手动触发，**彻底删除**坏版本：
+独立 workflow `.github/workflows/retract.yml` 手动触发，永久移除坏版本的 GitHub Release、assets 与 AList 分发数据，但保留 canonical stable tag：
 
 1. 在 GitHub Actions 选择 `main` 分支/ref 后运行；`workflow_dispatch` 输入 `version`（纯 semver 闸门）+ `confirm`（布尔双保险）；
 2. 读 `index.txt` 判断撤回版本是否为当前 latest；
 3. **仅当撤回的是 latest**，先排除目标目录，重建 `index.txt`：latest 改为现存最高且完整（含 `COMPLETE`）的版本（sha256 从该目录的 `SHA256SUMS.txt` 读取）；无完整版本 → `index.txt` 置空。写入后必须回读验证成功，才进入删除；
-4. 删除 AList 版本目录 `<base_path>/<version>/`；撤回非 latest 时 index 保持原始字节不变；
-5. `gh release delete <version> --yes --cleanup-tag`（删 release + 资产 + tag，允许修复后同版本号重发）。
+4. 永久删除 AList 版本目录 `<base_path>/<version>/`；撤回非 latest 时 index 保持原始字节不变；
+5. `gh release delete <version> --yes` 永久删除 GitHub Release 及其 assets，但保留 canonical stable tag；tag 继续受 stable tag-target ruleset 保护，不为撤回配置删除 bypass。
 
 若 latest 的替代或空 index 已验证、但目录删除失败，index 保持已切换状态，不回退；目标目录成为不再被 index 引用的遗留目录，同一撤回重跑会继续删除它。幂等：对已撤回的版本重跑不报错。
 
 ### 边界（务必知晓）
 
-撤回**只移除分发渠道，已安装用户不可回收**。修复版发布前，已装用户主动 `self-update` 会先降到次高版本，再随修复版回升——最终靠**快速发布修复版**（`vN+1 > vN` 自更新覆盖坏版本）自愈。
+撤回**只移除分发渠道，已安装用户不可回收**。canonical stable tag 保留且不可同版本重切；修复必须使用更高版本号。修复版发布前，已装用户主动 `self-update` 会先降到次高版本，再随修复版回升——最终靠**快速发布修复版**（`vN+1 > vN` 自更新覆盖坏版本）自愈。
 
 ---
 

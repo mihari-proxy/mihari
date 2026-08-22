@@ -344,7 +344,7 @@ jobs:
             --keep-versions "${MIHARI_KEEP_VERSIONS:-5}"
 
       - name: Upload stable index recovery backup
-        if: "env.ALIST_CONFIGURED == 'true' && ((failure() && steps.alist_mutation.outcome == 'failure') || cancelled())"
+        if: "env.ALIST_CONFIGURED == 'true' && ((failure() && steps.alist_mutation.outcome == 'failure') || (cancelled() && steps.alist_mutation.outcome == 'cancelled'))"
         uses: actions/upload-artifact@v7
         with:
           name: stable-index-backup-${{ github.run_id }}-${{ github.run_attempt }}

@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       confirm:
-        description: 'Type-check confirmation. The version is permanently deleted from AList and GitHub — check this ONLY after verifying the breakage.'
+        description: 'Confirm to permanently remove Release/assets and AList distribution; the canonical stable tag is retained.'
         required: true
         type: boolean
 
@@ -78,8 +78,8 @@ jobs:
             exit 1
           fi
           [ "${CONFIRM}" = "true" ] \
-            || { echo "::error::confirm must be true to retract ${VERSION} (this permanently deletes it)"; exit 1; }
-          echo "Retracting ${VERSION} (confirmed)."
+            || { echo "::error::confirm must be true to permanently remove Release/assets and AList distribution; canonical stable tag retained"; exit 1; }
+          echo "Confirmed: permanently remove Release/assets and AList distribution for ${VERSION}; canonical stable tag retained."
 
       - uses: actions/setup-python@v7
         if: env.ALIST_CONFIGURED == 'true'
@@ -104,7 +104,7 @@ jobs:
             --base-path /mihari-release/mihari
 
       - name: Upload stable index recovery backup
-        if: "env.ALIST_CONFIGURED == 'true' && ((failure() && steps.alist_mutation.outcome == 'failure') || cancelled())"
+        if: "env.ALIST_CONFIGURED == 'true' && ((failure() && steps.alist_mutation.outcome == 'failure') || (cancelled() && steps.alist_mutation.outcome == 'cancelled'))"
         uses: actions/upload-artifact@v7
         with:
           name: stable-index-backup-${{ github.run_id }}-${{ github.run_attempt }}
@@ -113,15 +113,27 @@ jobs:
           retention-days: 3
 
       - name: Delete GitHub release
-        # design §4.6 step 5: release + assets + tag. --cleanup-tag lets the same
-        # version number be re-cut after a fix. Idempotent: a missing release is
-        # reported, not fatal (re-run after a partial retract).
+        # design §4.6 step 5: delete the release and its assets, but retain the
+        # protected canonical stable tag. A fix must use a higher version.
+        # Idempotent: a missing release is reported, not fatal (re-run after a
+        # partial retract).
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view "${VERSION}" >/dev/null 2>&1; then
-            gh release delete "${VERSION}" --yes --cleanup-tag
-            echo "Deleted GitHub release ${VERSION} (release + assets + tag)."
+          release_lookup_error="$(mktemp)"
+          trap 'rm -f "${release_lookup_error}"' EXIT
+          set +e
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${VERSION}" \
+            >/dev/null 2>"${release_lookup_error}"
+          release_lookup_status=$?
+          set -e
+
+          if [ "${release_lookup_status}" -eq 0 ]; then
+            gh release delete "${VERSION}" --yes
+            echo "Permanently removed GitHub Release/assets for ${VERSION}; canonical stable tag retained."
+          elif grep -Eq '(^|[^0-9])HTTP 404([^0-9]|$)' "${release_lookup_error}"; then
+            echo "GitHub release ${VERSION} not found (already retracted?) — nothing to delete; canonical stable tag retained."
           else
-            echo "GitHub release ${VERSION} not found (already retracted?) — nothing to delete."
+            echo "::error::unable to determine whether the GitHub release exists"
+            exit 1
           fi
