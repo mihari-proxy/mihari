@@ -161,6 +161,20 @@ git config user.email "you@example.com"
 
 ## Pull Request 流程
 
+### 分支与晋级策略
+
+日常开发采用以下分支流：
+
+```text
+feat/*、fix/* ──PR──> dev ──晋级 PR──> main
+hotfix/*（从 main） ──PR──> main
+main ──同步 PR──> dev
+```
+
+普通功能和修复从 `feat/*` 或 `fix/*` 分支通过 PR 合并到 `dev`，在 dev 集成验证后再通过晋级 PR 进入 `main`。紧急修复从 `main` 创建 `hotfix/*`，通过 PR 合并到 `main`，随后必须用同步 PR 将 `main` 合并回 `dev`。普通 PR 使用 squash merge；`dev → main` 晋级和 `main → dev` 同步使用 merge commit，以保留发布历史和避免重复显示已发布提交。不得直接推送 `main` 或 `dev`。
+
+在 `dev` 创建并受保护前，Issue #115 的 bootstrap 变更使用一次性 main PR；这不是直接推送或直接提交 `main` 的例外。合并后恢复上述常规流。
+
 1. **创建分支**
    ```sh
    git checkout -b feat/your-feature
@@ -182,11 +196,11 @@ git config user.email "you@example.com"
    ```sh
    git push origin feat/your-feature
    ```
-   然后在 GitHub 上创建 Pull Request，按 [PR 模板](PULL_REQUEST_TEMPLATE.md) 填写。
+   然后在 GitHub 上创建 Pull Request（目标通常为 `dev`；`hotfix/*` 目标为 `main`），按 [PR 模板](PULL_REQUEST_TEMPLATE.md) 填写。
 
 5. **等待审核**
-   - CI 检查必须通过（test / race / vet / cross-build / DCO）
-   - 至少等待一个审核通过
+    - CI 检查必须通过（test / race / vet / cross-build / DCO）
+    - 遵守仓库当时已配置的审核、状态检查与 bypass 规则；本文档不设定固定审核人数或 bypass 规则
 
 ## 目录结构
 

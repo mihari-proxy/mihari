@@ -23,6 +23,7 @@ import importlib.util
 from pathlib import Path
 
 from alist_client import DEFAULT_BASE_PATH, connect, fail, info
+from release_policy import validate_base_path
 
 
 def _load_retract():
@@ -35,6 +36,34 @@ def _load_retract():
     return module
 
 
+def regenerate_index(alist, base_path):
+    """Rebuild the fixed stable index through the shared reliable writer."""
+    try:
+        validate_base_path("stable", base_path)
+    except ValueError as error:
+        fail(str(error))
+
+    retract = _load_retract()
+    index_path = f"{base_path}/index.txt"
+    previous = retract.read_index(alist, index_path)
+    try:
+        latest = retract.highest_complete(
+            alist, base_path, excluded=None, channel="stable"
+        )
+    except retract.RemoteScanError:
+        fail("unable to inspect stable release versions")
+    if latest is None:
+        fail("no COMPLETE version dir found — nothing to rebuild index from")
+    info(f"highest complete version: {latest}")
+    try:
+        body = retract.index_body(alist, base_path, latest, "stable")
+    except retract.RemoteScanError:
+        fail("unable to verify stable release directory")
+    retract.write_index_reliably(
+        alist, index_path, body, previous, channel="stable"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Regenerate index.txt for the current AList topology."
@@ -42,14 +71,8 @@ def main():
     parser.add_argument("--base-path", default=DEFAULT_BASE_PATH)
     args = parser.parse_args()
 
-    retract = _load_retract()
     alist = connect()
-
-    latest = retract.highest_complete(alist, args.base_path, excluded=None)
-    if latest is None:
-        fail("no COMPLETE version dir found — nothing to rebuild index from")
-    info(f"highest complete version: {latest}")
-    retract.rebuild_index(alist, args.base_path, latest)
+    regenerate_index(alist, args.base_path)
     info("index.txt regenerated with current public_url() links")
 
 

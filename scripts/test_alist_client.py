@@ -10,7 +10,414 @@ pairs so neither the publish nor the retract flow can regress.
 import importlib.util
 from pathlib import Path
 
-from alist_client import AList, PLATFORMS, bundle_name, semver_key
+import pytest
+import requests
+
+import alist_client
+from alist_client import AList, PLATFORMS, bundle_name, connect
+
+
+class JSONResponse:
+    def __init__(self, body, status_error=None):
+        self.body = body
+        self.status_error = status_error
+
+    def raise_for_status(self):
+        if self.status_error is not None:
+            raise self.status_error
+
+    def json(self):
+        return self.body
+
+
+class PostSession:
+    def __init__(self, response):
+        self.response = response
+
+    def post(self, *_args, **_kwargs):
+        return self.response
+
+
+def list_response(content, total, page, per_page=200, has_more=False, pages_total=1):
+    return JSONResponse(
+        {
+            "code": 200,
+            "data": {
+                "content": content,
+                "total": total,
+                "page": page,
+                "per_page": per_page,
+                "has_more": has_more,
+                "pages_total": pages_total,
+            },
+        }
+    )
+
+
+class PagedSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def post(self, url, **kwargs):
+        self.calls.append((url, kwargs["json"]["page"], kwargs["json"]["per_page"]))
+        return self.responses.pop(0)
+
+
+def test_read_bytes_closes_response_after_success():
+    alist = AList.__new__(AList)
+
+    class Response:
+        closed = False
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, size):
+            assert size == 1024 * 1024
+            yield b"abcdef"
+
+        def close(self):
+            self.closed = True
+
+    response = Response()
+
+    class Session:
+        def get(self, url, timeout, stream):
+            assert timeout == 7
+            assert stream is True
+            return response
+
+    alist.session = Session()
+    alist.public_url = lambda path: "https://example.invalid" + path
+    assert alist.read_bytes("/x", max_bytes=6, timeout=7) == b"abcdef"
+    assert response.closed is True
+
+
+def test_read_bytes_closes_response_when_status_is_error():
+    alist = AList.__new__(AList)
+
+    class Response:
+        closed = False
+
+        def raise_for_status(self):
+            raise requests.HTTPError("remote failure")
+
+        def close(self):
+            self.closed = True
+
+    response = Response()
+    alist.session = type("Session", (), {"get": lambda *_args, **_kwargs: response})()
+    alist.public_url = lambda path: "https://example.invalid" + path
+
+    with pytest.raises(alist_client.AListError) as error:
+        alist.read_bytes("/x")
+    assert str(error.value) == "alist read failed"
+    assert response.closed is True
+
+
+def test_read_bytes_sanitizes_request_start_failure():
+    alist = AList.__new__(AList)
+
+    class Session:
+        def get(self, *_args, **_kwargs):
+            raise requests.Timeout(
+                "https://cloud.invalid/file?token=read-secret response-body"
+            )
+
+    alist.session = Session()
+    alist.public_url = lambda path: "https://example.invalid" + path
+
+    with pytest.raises(alist_client.AListError) as error:
+        alist.read_bytes("/x")
+
+    assert str(error.value) == "alist read failed"
+    assert "read-secret" not in str(error.value)
+    assert "response-body" not in str(error.value)
+
+
+def test_read_bytes_closes_response_when_object_exceeds_limit():
+    alist = AList.__new__(AList)
+
+    class Response:
+        closed = False
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, _size):
+            yield b"abcdef"
+
+        def close(self):
+            self.closed = True
+
+    response = Response()
+    alist.session = type("Session", (), {"get": lambda *_args, **_kwargs: response})()
+    alist.public_url = lambda path: "https://example.invalid" + path
+
+    with pytest.raises(ValueError):
+        alist.read_bytes("/x", max_bytes=5, timeout=7)
+    assert response.closed is True
+
+
+def test_content_uses_text_limit_and_strict_utf8():
+    alist = AList.__new__(AList)
+    captured = {}
+    alist.exists = lambda _path: True
+
+    def read_bytes(path, max_bytes):
+        captured["path"] = path
+        captured["max_bytes"] = max_bytes
+        return b"latest v1.2.3\n"
+
+    alist.read_bytes = read_bytes
+    assert alist.content("/index.txt") == "latest v1.2.3\n"
+    assert captured == {"path": "/index.txt", "max_bytes": alist_client.MAX_TEXT_BYTES}
+
+
+def test_content_rejects_invalid_utf8_without_body_leak():
+    alist = AList.__new__(AList)
+    alist.exists = lambda _path: True
+    alist.read_bytes = lambda _path, max_bytes: b"secret-index-body\xff"
+
+    with pytest.raises(UnicodeDecodeError) as error:
+        alist.content("/index.txt")
+    assert "secret-index-body" not in str(error.value)
+
+
+def test_exists_and_content_use_parent_listing_when_fs_get_reports_missing_as_500():
+    alist = AList.__new__(AList)
+    alist.base = "https://cloud.invalid"
+
+    class Session:
+        def __init__(self):
+            self.paths = []
+
+        def post(self, url, **_kwargs):
+            self.paths.append(url)
+            if url.endswith("/api/fs/get"):
+                return JSONResponse({"code": 500, "message": "object not found"})
+            return list_response([], total=0, page=1, pages_total=0)
+
+        def get(self, *_args, **_kwargs):
+            raise AssertionError("public download must not run for an absent object")
+
+    alist.session = Session()
+
+    path = "/mihari-release/mihari/index.txt"
+    assert alist.exists(path) is False
+    assert alist.content(path) is None
+    assert all(not url.endswith("/api/fs/get") for url in alist.session.paths)
+
+
+def test_list_dir_reads_every_page_and_preserves_second_page_entries():
+    first = [{"name": f"v1.0.{index}", "is_dir": True} for index in range(200)]
+    highest = {"name": "v9.0.0", "is_dir": True}
+    alist = AList.__new__(AList)
+    alist.base = "https://cloud.invalid"
+    alist.session = PagedSession(
+        [
+            list_response(first, 201, 1, has_more=True, pages_total=2),
+            list_response([highest], 201, 2, has_more=False, pages_total=2),
+        ]
+    )
+
+    entries = alist.list_dir("/mihari-release/mihari")
+
+    assert len(entries) == 201
+    assert entries[-1] == highest
+    assert [(page, per_page) for _, page, per_page in alist.session.calls] == [
+        (1, 200),
+        (2, 200),
+    ]
+
+
+@pytest.mark.parametrize(
+    "responses",
+    [
+        [list_response([], 1, 1, has_more=False, pages_total=1)],
+        [list_response([], 0, 2, has_more=False, pages_total=0)],
+        [list_response([], 0, 1, per_page=30, has_more=False, pages_total=0)],
+        [list_response([], 201, 1, has_more=False, pages_total=2)],
+        [
+            list_response(
+                [{"name": f"entry-{index}", "is_dir": False} for index in range(199)],
+                201,
+                1,
+                has_more=True,
+                pages_total=2,
+            ),
+            list_response(
+                [
+                    {"name": "entry-199", "is_dir": False},
+                    {"name": "entry-200", "is_dir": False},
+                ],
+                201,
+                2,
+                has_more=False,
+                pages_total=2,
+            ),
+        ],
+        [
+            list_response(
+                [{"name": f"entry-{index}", "is_dir": False} for index in range(200)],
+                201,
+                1,
+                has_more=True,
+                pages_total=2,
+            ),
+            list_response(
+                [{"name": "entry-0", "is_dir": False}],
+                201,
+                2,
+                has_more=False,
+                pages_total=2,
+            ),
+        ],
+    ],
+)
+def test_list_dir_rejects_pagination_ambiguity(responses):
+    alist = AList.__new__(AList)
+    alist.base = "https://cloud.invalid"
+    alist.session = PagedSession(responses)
+
+    with pytest.raises(alist_client.AListError, match="invalid directory listing"):
+        alist.list_dir("/mihari-release/mihari")
+
+
+@pytest.mark.parametrize("code", [401, 403, 500])
+def test_exists_rejects_non_success_body_without_leaking_remote_details(code):
+    alist = AList.__new__(AList)
+    alist.base = "https://cloud.invalid"
+    alist.session = PostSession(
+        JSONResponse({"code": code, "message": "https://cloud.invalid/?token=secret response-body"})
+    )
+
+    with pytest.raises(RuntimeError) as error:
+        alist.exists("/mihari-release/mihari/index.txt")
+
+    assert type(error.value).__name__ == "AListError"
+    assert "secret" not in str(error.value)
+    assert "response-body" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        lambda alist: alist.mkdir("/mihari-release/mihari/v1.2.3"),
+        lambda alist: alist.remove("/mihari-release/mihari", ["v1.2.3"]),
+    ],
+)
+def test_metadata_mutations_reject_non_success_body_as_normal_exception(operation):
+    alist = AList.__new__(AList)
+    alist.base = "https://cloud.invalid"
+    alist.session = PostSession(JSONResponse({"code": 500, "message": "sensitive backend detail"}))
+
+    with pytest.raises(RuntimeError, match="alist operation failed") as error:
+        operation(alist)
+    assert type(error.value).__name__ == "AListError"
+
+
+def test_upload_write_failure_is_a_retryable_normal_exception():
+    alist = AList.__new__(AList)
+    response = JSONResponse({"code": 500, "message": "sensitive backend detail"})
+
+    with pytest.raises(RuntimeError, match="alist write failed") as error:
+        alist._check_write(response, "/mihari-release/mihari/index.txt")
+    assert type(error.value).__name__ == "AListError"
+
+
+def test_binary_upload_transport_error_is_typed_and_sanitized(tmp_path):
+    local = tmp_path / "bundle.tar.gz"
+    local.write_bytes(b"release bytes")
+    alist = AList.__new__(AList)
+    alist.base = "https://cloud.invalid"
+
+    class Session:
+        def put(self, *_args, **_kwargs):
+            raise requests.ConnectionError(
+                "https://cloud.invalid/upload?token=binary-secret response-body"
+            )
+
+    alist.session = Session()
+
+    with pytest.raises(alist_client.AListError) as error:
+        alist.upload(local, "/mihari-release/mihari/v1.2.3/bundle.tar.gz")
+
+    assert str(error.value) == "alist write failed"
+    assert "binary-secret" not in str(error.value)
+    assert "response-body" not in str(error.value)
+
+
+def test_text_upload_transport_error_is_typed_and_sanitized():
+    alist = AList.__new__(AList)
+    alist.base = "https://cloud.invalid"
+
+    class Session:
+        def put(self, *_args, **_kwargs):
+            raise requests.Timeout(
+                "https://cloud.invalid/upload?token=text-secret response-body"
+            )
+
+    alist.session = Session()
+
+    with pytest.raises(alist_client.AListError) as error:
+        alist.upload_text(
+            "latest v1.2.3\n", "/mihari-release/mihari/index.txt"
+        )
+
+    assert str(error.value) == "alist write failed"
+    assert "text-secret" not in str(error.value)
+    assert "response-body" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"code": 200},
+        {"code": 200, "data": None},
+        {"code": 200, "data": {}},
+        {"code": 200, "data": {"content": "not-a-list"}},
+    ],
+)
+def test_list_dir_rejects_malformed_success_payload(body):
+    alist = AList.__new__(AList)
+    alist.base = "https://cloud.invalid"
+    alist.session = PostSession(JSONResponse(body))
+
+    with pytest.raises(RuntimeError, match="invalid directory listing") as error:
+        alist.list_dir("/mihari-release/mihari")
+    assert type(error.value).__name__ == "AListError"
+
+
+def test_list_dir_accepts_explicit_null_as_an_empty_directory():
+    alist = AList.__new__(AList)
+    alist.base = "https://cloud.invalid"
+    alist.session = PostSession(
+        list_response(None, total=0, page=1, pages_total=0)
+    )
+
+    assert alist.list_dir("/mihari-release/mihari") == []
+
+
+def test_connect_translates_login_failure_at_command_boundary(monkeypatch, capsys):
+    monkeypatch.setenv("ALIST_URL", "https://cloud.invalid")
+    monkeypatch.setenv("ALIST_USERNAME", "release-user")
+    monkeypatch.setenv("ALIST_PASSWORD", "not-logged")
+
+    def fail_login(*_args):
+        raise alist_client.AListError(
+            "https://cloud.invalid/login?token=login-secret response-body"
+        )
+
+    monkeypatch.setattr(alist_client, "AList", fail_login)
+
+    with pytest.raises(SystemExit):
+        connect()
+
+    captured = capsys.readouterr()
+    assert "login-secret" not in captured.err
+    assert "response-body" not in captured.err
 
 
 def test_platforms_unpack_as_goos_goarch_pairs():
@@ -35,12 +442,6 @@ def test_bundle_name_formats():
     assert bundle_name("linux", "amd64") == "mihari-all-in-one-linux-amd64.tar.gz"
     assert bundle_name("darwin", "arm64") == "mihari-all-in-one-darwin-arm64.tar.gz"
     assert bundle_name("windows", "arm64") == "mihari-all-in-one-windows-arm64.zip"
-
-
-def test_semver_key_orders_versions():
-    assert semver_key("v0.2.0") == (0, 2, 0)
-    assert semver_key("v0.10.3") == (0, 10, 3)
-    assert semver_key("not-a-version") is None
 
 
 def test_public_url_is_signless_proxy_route():
