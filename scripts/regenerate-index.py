@@ -22,8 +22,8 @@ import argparse
 import importlib.util
 from pathlib import Path
 
-from alist_client import DEFAULT_BASE_PATH, connect, fail, info
-from release_policy import validate_base_path
+from alist_client import connect, fail, info
+from release_policy import expected_base_path, validate_base_path
 
 
 def _load_retract():
@@ -36,31 +36,30 @@ def _load_retract():
     return module
 
 
-def regenerate_index(alist, base_path):
-    """Rebuild the fixed stable index through the shared reliable writer."""
+def regenerate_index(alist, base_path, channel="stable"):
+    """Rebuild the channel index through the shared reliable writer."""
     try:
-        validate_base_path("stable", base_path)
+        validate_base_path(channel, base_path)
     except ValueError as error:
         fail(str(error))
-
     retract = _load_retract()
     index_path = f"{base_path}/index.txt"
     previous = retract.read_index(alist, index_path)
     try:
         latest = retract.highest_complete(
-            alist, base_path, excluded=None, channel="stable"
+            alist, base_path, excluded=None, channel=channel
         )
     except retract.RemoteScanError:
-        fail("unable to inspect stable release versions")
+        fail("unable to inspect release versions")
     if latest is None:
         fail("no COMPLETE version dir found — nothing to rebuild index from")
     info(f"highest complete version: {latest}")
     try:
-        body = retract.index_body(alist, base_path, latest, "stable")
+        body = retract.index_body(alist, base_path, latest, channel)
     except retract.RemoteScanError:
-        fail("unable to verify stable release directory")
+        fail("unable to verify release directory")
     retract.write_index_reliably(
-        alist, index_path, body, previous, channel="stable"
+        alist, index_path, body, previous, channel=channel
     )
 
 
@@ -68,13 +67,22 @@ def main():
     parser = argparse.ArgumentParser(
         description="Regenerate index.txt for the current AList topology."
     )
-    parser.add_argument("--base-path", default=DEFAULT_BASE_PATH)
+    parser.add_argument(
+        "--channel",
+        choices=("stable", "dev"),
+        default="stable",
+        help="Index channel to rebuild (default: stable, writes /mihari-release/mihari/index.txt)",
+    )
+    parser.add_argument("--base-path", default=None)
     args = parser.parse_args()
-
+    channel = args.channel
+    base_path = args.base_path or expected_base_path(channel)
+    info(f"regenerating {channel} index at {base_path}/index.txt")
     alist = connect()
-    regenerate_index(alist, args.base_path)
+    regenerate_index(alist, base_path, channel)
     info("index.txt regenerated with current public_url() links")
 
 
 if __name__ == "__main__":
     main()
+
