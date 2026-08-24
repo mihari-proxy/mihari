@@ -724,24 +724,30 @@ func publishBundles(ctx context.Context, source, destination string, platforms [
 
 func ensureSafePublishParent(ctx context.Context, parent string) ([]string, error) {
 	var missing []string
-	for current := parent; ; current = filepath.Dir(current) {
+	current := parent
+	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		info, err := os.Lstat(current)
-		switch {
-		case err == nil:
+		if err == nil {
 			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 				return nil, errors.New("bundle destination path must not cross a link or non-directory")
 			}
-		case os.IsNotExist(err):
-			missing = append(missing, current)
-		default:
-			return nil, err
-		}
-		if filepath.Dir(current) == current {
+			// Stop at the first existing real directory. Walking to the
+			// filesystem root would reject macOS paths whose only link is a
+			// system ancestor such as /var -> /private/var.
 			break
 		}
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+		next := filepath.Dir(current)
+		if next == current {
+			return nil, errors.New("bundle destination path has no existing ancestor")
+		}
+		missing = append(missing, current)
+		current = next
 	}
 	created := make([]string, 0, len(missing))
 	for index := len(missing) - 1; index >= 0; index-- {

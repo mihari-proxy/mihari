@@ -223,9 +223,16 @@ func TestRunPublishesToResolvedOutputBelowSymlinkedAncestor(t *testing.T) {
 	}
 
 	logicalOutput := filepath.Join(linkedParent, "bundles")
-	canonicalOutput := filepath.Join(realParent, "bundles")
+	canonicalOutput, err := canonicalOverlapPath(filepath.Join(realParent, "bundles"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	redirectedParent := filepath.Join(root, "redirected")
 	if err := os.Mkdir(redirectedParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resolvedRedirected, err := canonicalOverlapPath(redirectedParent)
+	if err != nil {
 		t.Fatal(err)
 	}
 	retargeted := false
@@ -260,7 +267,7 @@ func TestRunPublishesToResolvedOutputBelowSymlinkedAncestor(t *testing.T) {
 			t.Fatalf("canonical output is missing %s: %v", platform, err)
 		}
 	}
-	if entries, err := os.ReadDir(filepath.Join(redirectedParent, "bundles")); err == nil || !os.IsNotExist(err) {
+	if entries, err := os.ReadDir(filepath.Join(resolvedRedirected, "bundles")); err == nil || !os.IsNotExist(err) {
 		t.Fatalf("retargeted ancestor received output entries %v: %v", entries, err)
 	}
 }
@@ -685,6 +692,48 @@ func TestPublishBundlesRejectsSymlinkedParent(t *testing.T) {
 		t.Fatalf("publish crossed parent link and created output: %v", err)
 	}
 	assertNoPublishResidue(t, parent)
+}
+
+func TestPublishBundlesRejectsFileAncestorOfMissingParent(t *testing.T) {
+	parent := t.TempDir()
+	source := writePublishSource(t, parent)
+	fileAncestor := filepath.Join(parent, "not-a-dir")
+	if err := os.WriteFile(fileAncestor, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(fileAncestor, "nested", "bundles")
+	if err := publishBundles(context.Background(), source, destination, releaseinputs.RequiredPlatforms(), nil, nil, nil); err == nil {
+		t.Fatal("publishBundles accepted a file as the first existing ancestor")
+	}
+	if _, err := os.Lstat(filepath.Join(fileAncestor, "nested")); !os.IsNotExist(err) {
+		t.Fatalf("missing parent was created under a file ancestor: %v", err)
+	}
+	assertNoPublishResidue(t, parent)
+}
+
+func TestPublishBundlesAllowsExistingParentBelowSymlinkedAncestor(t *testing.T) {
+	root := t.TempDir()
+	realAncestor := filepath.Join(root, "private", "real")
+	if err := os.MkdirAll(realAncestor, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkedAncestor := filepath.Join(root, "link")
+	if err := os.Symlink(realAncestor, linkedAncestor); err != nil {
+		t.Skipf("directory symlink creation is unavailable: %v", err)
+	}
+	existingParent := filepath.Join(linkedAncestor, "existing")
+	if err := os.Mkdir(existingParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source := writePublishSource(t, root)
+	destination := filepath.Join(existingParent, "bundles")
+	if err := publishBundles(context.Background(), source, destination, releaseinputs.RequiredPlatforms(), nil, nil, nil); err != nil {
+		t.Fatalf("publishBundles rejected a real parent below a symlinked ancestor: %v", err)
+	}
+	name := bundleName("linux", "amd64")
+	if _, err := os.Stat(filepath.Join(realAncestor, "existing", "bundles", name)); err != nil {
+		t.Fatalf("canonical output is missing %s: %v", name, err)
+	}
 }
 
 func TestRunCleanupFailureWarnsAfterSuccessfulCommit(t *testing.T) {
