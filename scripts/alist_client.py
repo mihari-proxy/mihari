@@ -120,6 +120,7 @@ class AList:
         while True:
             data = self._post(
                 "/api/fs/list",
+                allowed_codes=(200, 500),
                 json={
                     "path": self._fs_path(path),
                     "password": "",
@@ -128,6 +129,18 @@ class AList:
                     "refresh": False,
                 },
             )
+            if data.get("code") == 500:
+                message = data.get("message")
+                missing = (
+                    page == 1
+                    and not entries
+                    and data.get("data") is None
+                    and isinstance(message, str)
+                    and "object not found" in message.lower()
+                )
+                if not missing:
+                    raise AListError("alist operation failed")
+                return []
             payload = data.get("data")
             if not isinstance(payload, dict) or "content" not in payload:
                 raise AListError("invalid directory listing")
