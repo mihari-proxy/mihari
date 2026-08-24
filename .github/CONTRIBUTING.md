@@ -6,7 +6,7 @@
 
 ### 要求
 
-- Go 1.26 或更高版本（见 `go.mod`，CI 使用 `go-version-file` 自动选择）
+- Go 1.26.5（`go.mod` 的语言版本为 1.26.0，并用 `toolchain go1.26.5` 钉死工具链；CI 与发布 workflow 均通过 `go-version-file: go.mod` 选择该版本）
 - Git
 
 ### Fork 并 Clone
@@ -26,8 +26,18 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/mihari ./cmd/mihari
 发布构建会额外注入版本号：
 
 ```sh
-CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X github.com/mihari-proxy/mihari/internal/buildinfo.Version=<tag>" -o bin/mihari ./cmd/mihari
+CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "-s -w -X github.com/mihari-proxy/mihari/internal/buildinfo.Version=<tag>" -o bin/mihari ./cmd/mihari
 ```
+
+发布构建必须同时使用 `-buildvcs=false -trimpath`。前者避免同一 commit 在创建 tag 前后被 Go 写入不同的 VCS/module 元数据，后者去除本机构建路径；版本身份仍只由上面的 `buildinfo.Version` 注入。
+
+all-in-one 发布输入固定在仓库内的 `scripts/release-inputs.lock.json`。发布 workflow 只消费该文件，不在发版时查询 mihomo 的 latest release 或 GeoIP 的可变分支。需要更新上游输入时，维护者应在独立的 release-prep PR 中运行：
+
+```sh
+go run ./scripts/resolve-release-inputs --channel stable --out scripts/release-inputs.lock.json
+```
+
+解析器会校验并锁定精确的 mihomo release/assets 和 GeoIP commit/digests；受 GitHub API 限流影响时可通过环境变量 `GITHUB_TOKEN` 提供凭据。生成后必须审核 lock diff，并在 PR 验证通过后才合并。不要在 release workflow 中运行解析器。
 
 ### 运行测试
 
@@ -45,7 +55,7 @@ go test -race ./...
 确保代码通过 `gofmt` 检查：
 
 ```sh
-gofmt -l cmd internal
+gofmt -l .
 # 无输出表示格式正确
 ```
 
@@ -172,8 +182,6 @@ main ──同步 PR──> dev
 ```
 
 普通功能和修复从 `feat/*` 或 `fix/*` 分支通过 PR 合并到 `dev`，在 dev 集成验证后再通过晋级 PR 进入 `main`。紧急修复从 `main` 创建 `hotfix/*`，通过 PR 合并到 `main`，随后必须用同步 PR 将 `main` 合并回 `dev`。普通 PR 使用 squash merge；`dev → main` 晋级和 `main → dev` 同步使用 merge commit，以保留发布历史和避免重复显示已发布提交。不得直接推送 `main` 或 `dev`。
-
-在 `dev` 创建并受保护前，Issue #115 的 bootstrap 变更使用一次性 main PR；这不是直接推送或直接提交 `main` 的例外。合并后恢复上述常规流。
 
 1. **创建分支**
    ```sh

@@ -147,3 +147,193 @@ func TestDownloader_PropagatesContextCancellation(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestDownloader_RequiresExactlyOneChecksumSourceBeforeSideEffects(t *testing.T) {
+	requests := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests <- request.URL.Path
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	staging := filepath.Join(root, "staging")
+	downloader := Downloader{Client: server.Client(), StagingDir: staging, AllowHTTP: true}
+
+	_, err := downloader.Prepare(context.Background(), DownloadSpec{
+		URL: server.URL + "/database.mmdb", Destination: filepath.Join(root, "database.mmdb"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("err=%v", err)
+	}
+	if _, statErr := os.Stat(staging); !os.IsNotExist(statErr) {
+		t.Fatalf("staging directory created before checksum validation: %v", statErr)
+	}
+
+	_, err = downloader.Prepare(context.Background(), DownloadSpec{
+		URL:            server.URL + "/database.mmdb",
+		ChecksumURL:    server.URL + "/database.mmdb.sha256sum",
+		ExpectedSHA256: strings.Repeat("0", 64),
+		Destination:    filepath.Join(root, "database.mmdb"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("err=%v", err)
+	}
+	if _, statErr := os.Stat(staging); !os.IsNotExist(statErr) {
+		t.Fatalf("staging directory created before checksum validation: %v", statErr)
+	}
+	if len(requests) != 0 {
+		t.Fatalf("network request made before checksum source validation: %q", <-requests)
+	}
+}
+
+func TestDownloader_PreparesCandidateFromInlineChecksumWithoutSidecarRequest(t *testing.T) {
+	requests := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests <- request.URL.Path
+		_, _ = io.WriteString(writer, "abc")
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	downloader := Downloader{
+		Client: server.Client(), StagingDir: filepath.Join(root, "staging"), AllowHTTP: true,
+		Validate: func(path string) error {
+			got, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if string(got) != "abc" {
+				return errors.New("unexpected candidate contents")
+			}
+			return nil
+		},
+	}
+
+	candidate, err := downloader.Prepare(context.Background(), DownloadSpec{
+		URL:            server.URL + "/database.mmdb",
+		ExpectedSHA256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+		Destination:    filepath.Join(root, "database.mmdb"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer candidate.Cleanup()
+	if !candidate.Valid() {
+		t.Fatal("prepared candidate is invalid")
+	}
+	if len(requests) != 1 {
+		t.Fatalf("network request count=%d", len(requests))
+	}
+	if path := <-requests; path != "/database.mmdb" {
+		t.Fatalf("requested path=%q", path)
+	}
+}
+
+func TestDownloader_RejectsInvalidInlineChecksumBeforeSideEffects(t *testing.T) {
+	checksums := []struct {
+		name    string
+		value   string
+		wantErr string
+	}{
+		{name: "empty", wantErr: "exactly one"},
+		{name: "too short", value: strings.Repeat("0", 63), wantErr: "64 lowercase hexadecimal"},
+		{name: "too long", value: strings.Repeat("0", 65), wantErr: "64 lowercase hexadecimal"},
+		{name: "non-hexadecimal", value: strings.Repeat("0", 63) + "g", wantErr: "64 lowercase hexadecimal"},
+		{name: "uppercase", value: "Ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", wantErr: "64 lowercase hexadecimal"},
+	}
+	for _, checksum := range checksums {
+		t.Run(checksum.name, func(t *testing.T) {
+			requests := make(chan string, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				requests <- request.URL.Path
+				_, _ = io.WriteString(writer, "abc")
+			}))
+			defer server.Close()
+			root := t.TempDir()
+			staging := filepath.Join(root, "staging")
+			downloader := Downloader{Client: server.Client(), StagingDir: staging, AllowHTTP: true}
+
+			_, err := downloader.Prepare(context.Background(), DownloadSpec{
+				URL: server.URL + "/database.mmdb", ExpectedSHA256: checksum.value, Destination: filepath.Join(root, "database.mmdb"),
+			})
+			if err == nil || !strings.Contains(err.Error(), checksum.wantErr) {
+				t.Fatalf("err=%v", err)
+			}
+			if len(requests) != 0 {
+				t.Fatalf("network request made before checksum validation: %q", <-requests)
+			}
+			if _, statErr := os.Stat(staging); !os.IsNotExist(statErr) {
+				t.Fatalf("staging directory created before checksum validation: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestDownloader_InlineChecksumMismatchRemovesStagedCandidate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(writer, "wrong")
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	staging := filepath.Join(root, "staging")
+	downloader := Downloader{
+		Client: server.Client(), StagingDir: staging, AllowHTTP: true,
+		Validate: func(string) error {
+			t.Fatal("checksum-mismatched candidate was validated")
+			return nil
+		},
+	}
+
+	_, err := downloader.Prepare(context.Background(), DownloadSpec{
+		URL:            server.URL + "/database.mmdb",
+		ExpectedSHA256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+		Destination:    filepath.Join(root, "database.mmdb"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("err=%v", err)
+	}
+	entries, readErr := os.ReadDir(staging)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("staging entries=%v", entries)
+	}
+}
+
+func TestParseExpectedSHA256_ValidatesCanonicalDigest(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		wantErr bool
+	}{
+		{name: "empty", raw: "", wantErr: true},
+		{name: "63 characters", raw: strings.Repeat("0", 63), wantErr: true},
+		{name: "65 characters", raw: strings.Repeat("0", 65), wantErr: true},
+		{name: "uppercase", raw: strings.Repeat("A", 64), wantErr: true},
+		{name: "non-hexadecimal", raw: strings.Repeat("g", 64), wantErr: true},
+		{name: "valid", raw: strings.Repeat("0", 64)},
+	}
+	var canonicalErr error
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := parseExpectedSHA256(test.raw)
+			if test.wantErr {
+				if err == nil || err.Error() != "expected geoip SHA-256 must be 64 lowercase hexadecimal characters" {
+					t.Fatalf("err=%v", err)
+				}
+				if canonicalErr == nil {
+					canonicalErr = err
+				} else if err != canonicalErr {
+					t.Fatalf("error is not the canonical invalid-digest error: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != ([sha256.Size]byte{}) {
+				t.Fatalf("digest=%x", got)
+			}
+		})
+	}
+}

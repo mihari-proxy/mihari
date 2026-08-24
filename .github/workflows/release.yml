@@ -133,7 +133,7 @@ jobs:
           # internal/update SelectSelfAsset and the install scripts rely on the
           # fixed prefix, and it keeps the /releases/latest/download/ URL stable.
           OUT="mihari-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
-          go build -trimpath -ldflags "-s -w -X github.com/mihari-proxy/mihari/internal/buildinfo.Version=${VERSION}" -o "dist/${OUT}" ./cmd/mihari
+          go build -buildvcs=false -trimpath -ldflags "-s -w -X github.com/mihari-proxy/mihari/internal/buildinfo.Version=${VERSION}" -o "dist/${OUT}" ./cmd/mihari
           ls -la dist/
 
       - name: Upload artifact
@@ -171,12 +171,10 @@ jobs:
           merge-multiple: true
 
       - name: Build all-in-one bundles
-        # One mihomo release fetch + shared GeoIP download, then 6 platform packs
-        # (design §4.1). GITHUB_TOKEN raises the unauthenticated API rate ceiling.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Reviewed mihomo and GeoIP inputs, then 6 platform packs (design §4.1).
         run: |
           go run ./scripts/build-all-in-one \
+            --lock scripts/release-inputs.lock.json \
             --mihari-dir dist --out bundles --platforms "${PLATFORMS}"
           ls -la bundles/
 

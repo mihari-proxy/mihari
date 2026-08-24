@@ -1,9 +1,12 @@
-"""Static regression checks for GitHub dev-release recovery wiring."""
+"""Behavioral regression checks for stable and dev release workflow invariants."""
 
+import copy
 import os
 from pathlib import Path
+import shlex
 import subprocess
 
+import pytest
 import yaml
 
 
@@ -26,6 +29,313 @@ RELEASE_SAFETY_TESTS = (
     "scripts/test_retract_alist.py "
     "scripts/test_regenerate_index.py -q"
 )
+
+
+def _workflow_step(document, job_name, *, name=None, uses=None):
+    matches = [
+        step
+        for step in document["jobs"][job_name]["steps"]
+        if (name is None or step.get("name") == name)
+        and (uses is None or step.get("uses") == uses)
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _shell_invocations(run):
+    normalized = run.replace("\\\n", " ")
+    invocations = []
+    for line in normalized.splitlines():
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        invocation = []
+        for token in lexer:
+            if token and all(character in ";&|" for character in token):
+                if invocation:
+                    invocations.append(invocation)
+                    invocation = []
+                continue
+            invocation.append(token)
+        if invocation:
+            invocations.append(invocation)
+    return invocations
+
+
+def _flag_values(command, flag):
+    values = []
+    index = 0
+    while index < len(command):
+        argument = command[index]
+        if argument == flag:
+            assert index + 1 < len(command), f"{flag} requires a value"
+            values.append(command[index + 1])
+            index += 2
+            continue
+        if argument.startswith(f"{flag}="):
+            value = argument[len(flag) + 1 :]
+            assert value, f"{flag} requires a value"
+            values.append(value)
+        index += 1
+    return values
+
+
+def _linker_x_assignments(ldflags):
+    arguments = shlex.split(ldflags)
+    assignments = []
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "-X":
+            assert index + 1 < len(arguments), "-X requires an assignment"
+            assignments.append(arguments[index + 1])
+            index += 2
+            continue
+        if argument.startswith("-X="):
+            assignment = argument[len("-X=") :]
+            assert assignment, "-X requires an assignment"
+            assignments.append(assignment)
+        index += 1
+    return assignments
+
+
+def _assert_bundle_job_has_no_mutable_input_discovery(bundle_job):
+    assert "GITHUB_TOKEN" not in bundle_job.get("env", {})
+    for step in bundle_job["steps"]:
+        assert "GITHUB_TOKEN" not in step.get("env", {})
+        for command in _shell_invocations(step.get("run", "")):
+            is_lock_resolver = any(
+                "scripts/resolve-release-inputs" in argument.replace("\\", "/")
+                for argument in command
+            )
+            is_latest_api = any(
+                "/releases/latest" in argument for argument in command
+            )
+            is_implicit_latest_release = any(
+                command[index : index + 3] == ["gh", "release", "view"]
+                for index in range(len(command) - 2)
+            )
+
+            assert not is_lock_resolver, (
+                "bundle job must not invoke the input-lock resolver"
+            )
+            assert not is_latest_api, "bundle job must not query the latest-release API"
+            assert not is_implicit_latest_release, (
+                "bundle job must not resolve the latest release"
+            )
+
+
+def _assert_release_build_wiring(document):
+    build = _workflow_step(document, "build", name="Build")
+    commands = [
+        command
+        for command in _shell_invocations(build["run"])
+        if command[:2] == ["go", "build"]
+    ]
+    assert len(commands) == 1, "release build step must invoke go build exactly once"
+    command = commands[0]
+
+    buildvcs_flags = [
+        argument
+        for argument in command
+        if argument == "-buildvcs" or argument.startswith("-buildvcs=")
+    ]
+    trimpath_flags = [
+        argument
+        for argument in command
+        if argument == "-trimpath" or argument.startswith("-trimpath=")
+    ]
+    assert buildvcs_flags == ["-buildvcs=false"]
+    assert trimpath_flags == ["-trimpath"]
+
+    ldflags_values = _flag_values(command, "-ldflags")
+    assert len(ldflags_values) == 1, "release build requires exactly one -ldflags"
+    version_symbol = "github.com/mihari-proxy/mihari/internal/buildinfo.Version"
+    version_prefix = f"{version_symbol}="
+    version_values = [
+        assignment[len(version_prefix) :]
+        for assignment in _linker_x_assignments(ldflags_values[0])
+        if assignment.startswith(version_prefix)
+    ]
+    assert version_values == ["${VERSION}"]
+
+
+def _assert_release_bundle_wiring(document):
+    bundle_job = document["jobs"]["bundle"]
+    _assert_bundle_job_has_no_mutable_input_discovery(bundle_job)
+    bundle = _workflow_step(document, "bundle", name="Build all-in-one bundles")
+    commands = [
+        command
+        for command in _shell_invocations(bundle["run"])
+        if command[:3] == ["go", "run", "./scripts/build-all-in-one"]
+    ]
+    assert len(commands) == 1, "bundle step must invoke the AIO builder exactly once"
+    lock_values = _flag_values(commands[0], "--lock")
+    assert lock_values == ["scripts/release-inputs.lock.json"]
+
+
+def _assert_release_setup_go_wiring(document):
+    action = "actions/setup-go"
+    for job_name in ("build", "bundle"):
+        setup_go_steps = [
+            step
+            for step in document["jobs"][job_name]["steps"]
+            if step.get("uses") == action
+            or str(step.get("uses", "")).startswith(f"{action}@")
+        ]
+        assert len(setup_go_steps) == 1, (
+            f"{job_name} job must contain exactly one setup-go step"
+        )
+        setup_go = setup_go_steps[0]
+        assert setup_go["uses"] == "actions/setup-go@v7"
+        assert setup_go.get("with", {}).get("go-version-file") == "go.mod"
+
+
+@pytest.fixture
+def bundle_job_with_resolver_in_another_step():
+    document = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    bundle_job = copy.deepcopy(document["jobs"]["bundle"])
+    for step in bundle_job["steps"]:
+        step.get("env", {}).pop("GITHUB_TOKEN", None)
+    bundle_job["steps"].insert(
+        1,
+        {
+            "name": "Resolve inputs behind the build step",
+            "run": (
+                "go run ./scripts/resolve-release-inputs "
+                "--channel stable --out scripts/release-inputs.lock.json"
+            ),
+        },
+    )
+    return bundle_job
+
+
+def test_release_build_jobs_use_pinned_go_and_reproducible_binary_flags():
+    for workflow_path in (STABLE_WORKFLOW, WORKFLOW):
+        document = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        _assert_release_setup_go_wiring(document)
+        _assert_release_build_wiring(document)
+
+
+@pytest.mark.parametrize("mutation", ["move", "replace"])
+def test_setup_go_guard_binds_pinned_action_to_the_bundle_job(mutation):
+    document = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    bundle_steps = document["jobs"]["bundle"]["steps"]
+    setup_go = next(
+        step for step in bundle_steps if step.get("uses") == "actions/setup-go@v7"
+    )
+    if mutation == "move":
+        bundle_steps.remove(setup_go)
+        document["jobs"]["release"]["steps"].append(setup_go)
+    else:
+        setup_go["uses"] = "actions/setup-go@main"
+
+    with pytest.raises(AssertionError):
+        _assert_release_setup_go_wiring(document)
+
+
+def test_release_bundle_jobs_consume_the_reviewed_input_lock_without_resolving_latest():
+    for workflow_path in (STABLE_WORKFLOW, WORKFLOW):
+        document = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        _assert_release_bundle_wiring(document)
+
+
+def test_build_wiring_guard_rejects_later_buildvcs_override():
+    document = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    build = _workflow_step(document, "build", name="Build")
+    build["run"] = build["run"].replace(
+        "go build -buildvcs=false",
+        "go build -buildvcs=false -buildvcs=true",
+        1,
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_release_build_wiring(document)
+
+
+def test_build_wiring_guard_rejects_later_wrong_version_assignment():
+    document = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    build = _workflow_step(document, "build", name="Build")
+    canonical = "github.com/mihari-proxy/mihari/internal/buildinfo.Version=${VERSION}"
+    build["run"] = build["run"].replace(
+        canonical,
+        f"{canonical} -X github.com/mihari-proxy/mihari/internal/buildinfo.Version=v9.9.9",
+        1,
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_release_build_wiring(document)
+
+
+def test_bundle_wiring_guard_rejects_second_lock_override():
+    document = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    bundle = _workflow_step(document, "bundle", name="Build all-in-one bundles")
+    bundle["run"] = bundle["run"].replace(
+        "--lock scripts/release-inputs.lock.json",
+        "--lock scripts/release-inputs.lock.json --lock=scripts/unreviewed.lock.json",
+        1,
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_release_bundle_wiring(document)
+
+
+def test_bundle_job_guard_rejects_resolver_after_shell_separator():
+    document = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    bundle_job = document["jobs"]["bundle"]
+    bundle_job["steps"].append(
+        {
+            "name": "Hide mutable discovery after another command",
+            "run": (
+                "echo ok; go run ./scripts/resolve-release-inputs "
+                "--channel stable --out scripts/release-inputs.lock.json"
+            ),
+        }
+    )
+
+    with pytest.raises(AssertionError, match="must not invoke the input-lock resolver"):
+        _assert_bundle_job_has_no_mutable_input_discovery(bundle_job)
+
+
+def test_bundle_job_guard_rejects_gh_release_view_with_output_redirection():
+    document = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    bundle_job = document["jobs"]["bundle"]
+    bundle_job["steps"].append(
+        {
+            "name": "Hide latest release lookup behind redirection",
+            "run": "gh release view > /tmp/latest.txt",
+        }
+    )
+
+    with pytest.raises(AssertionError, match="must not resolve the latest release"):
+        _assert_bundle_job_has_no_mutable_input_discovery(bundle_job)
+
+
+def test_bundle_job_guard_detects_resolver_hidden_in_another_step(
+    bundle_job_with_resolver_in_another_step,
+):
+    with pytest.raises(AssertionError, match="must not invoke the input-lock resolver"):
+        _assert_bundle_job_has_no_mutable_input_discovery(
+            bundle_job_with_resolver_in_another_step
+        )
+
+
+def test_bundle_job_guard_allows_comments_and_messages_about_latest_releases():
+    document = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    bundle_job = copy.deepcopy(document["jobs"]["bundle"])
+    for step in bundle_job["steps"]:
+        step.get("env", {}).pop("GITHUB_TOKEN", None)
+    bundle_job["steps"].append(
+        {
+            "name": "Explain locked inputs",
+            "run": (
+                "# The latest release is resolved only during reviewed maintenance.\n"
+                'echo "The latest release inputs are already locked."'
+            ),
+        }
+    )
+
+    _assert_bundle_job_has_no_mutable_input_discovery(bundle_job)
 
 
 def test_stable_release_and_retract_pin_the_stable_alist_channel():
@@ -806,16 +1116,14 @@ def test_release_document_scopes_main_dispatch_to_stable_release_and_retract_sec
     assert "选择 `main` 分支/ref" in retract
 
 
-def test_release_document_requires_tag_ruleset_because_pre_and_post_checks_are_not_atomic():
+def test_release_document_records_active_tag_ruleset_and_non_atomic_tag_checks():
     release = RELEASE_DOCUMENT.read_text(encoding="utf-8")
     stable_dispatch = _markdown_section(release, "## 手动触发发布")
 
-    assert "前后复核并非原子操作" in stable_dispatch
-    assert "stable tag-target ruleset" in stable_dispatch
-    assert "真实 stable 发布前" in stable_dispatch
-    assert "禁止更新和删除" in stable_dispatch
-    assert "另行授权" in stable_dispatch
-    assert "配置并回读" in stable_dispatch
+    assert "该复核不是原子操作" in stable_dispatch
+    assert "已 active" in stable_dispatch
+    assert "`refs/tags/v*`" in stable_dispatch
+    assert "禁止删除、更新和 non-fast-forward" in stable_dispatch
 
 
 def test_release_documents_keep_retracted_stable_tags_and_require_a_higher_fix_version():
@@ -834,7 +1142,7 @@ def test_release_documents_keep_retracted_stable_tags_and_require_a_higher_fix_v
         assert "--cleanup-tag" not in section
 
 
-def test_release_document_requires_authorized_tag_ruleset_for_real_dev_release():
+def test_release_document_records_verified_dev_release_and_active_tag_ruleset():
     release = RELEASE_DOCUMENT.read_text(encoding="utf-8")
     channel_overview = _markdown_section(release, "## Stable 与 Dev 发布通道")
     dev_dispatch = _markdown_section(release, "### Dev 手动发布")
@@ -845,11 +1153,11 @@ def test_release_document_requires_authorized_tag_ruleset_for_real_dev_release()
     assert "校验 canonical `vX.Y.Z-dev.N` 版本身份" in channel_overview
     assert "身份不符即拒绝且不覆盖" in channel_overview
     assert "canonical `vX.Y.Z-dev.N` 格式" in dev_dispatch
-    assert "dev 前后复核并非原子操作" in dev_dispatch
-    assert "真实 dev 发布前" in dev_dispatch
-    assert "dev tag-target ruleset" in dev_dispatch
-    assert "另行授权" in dev_dispatch
-    assert "配置并回读" in dev_dispatch
+    assert "`v0.9.0-dev.2` 已" in dev_dispatch
+    assert "前后复核不是原子操作" in dev_dispatch
+    assert "已 active" in dev_dispatch
+    assert "`refs/tags/v*`" in dev_dispatch
+    assert "禁止删除、更新和 non-fast-forward" in dev_dispatch
 
 
 def test_distribution_document_explains_how_to_recover_the_uploaded_index_backup():
@@ -900,20 +1208,48 @@ def test_distribution_document_limits_backup_artifacts_to_alist_mutation_failure
     assert "无需恢复旧 index" in publication
 
 
-def test_release_documents_describe_batch_a_as_code_prepared_and_keep_p2_alist_unavailable():
+def test_release_documents_record_verified_dev_github_release_and_unavailable_dev_alist():
     release = RELEASE_DOCUMENT.read_text(encoding="utf-8")
     distribution = DISTRIBUTION_DOCUMENT.read_text(encoding="utf-8")
 
     for document in (release, distribution):
-        assert "dev 发布代码已准备" in document
-        assert "P2 AList 发布与撤回 workflow 尚不可用" in document
+        assert "v0.9.0-dev.2" in document
+        assert "dev AList 发布与 dev retract workflow" in document
         assert "publish-dev-alist.yml" not in document
         assert "retract-dev.yml" not in document
 
     assert "Actions 产物或 dev 版本目录" not in distribution
-    assert "不创建或操作该目录" in distribution
+    assert "当前不创建或操作该目录" in distribution
 
-    assert "GitHub dev tag、prerelease 与 14 个 assets" in release
-    assert "仅写 GitHub" in release
+    assert "GitHub dev tag、prerelease 与精确 14 个 assets" in release
     assert "不写 AList" in release
     assert "lightweight 或 annotated" in release
+
+
+def test_release_document_uses_main_dispatch_as_the_stable_runbook():
+    release = RELEASE_DOCUMENT.read_text(encoding="utf-8")
+    workflow_table = _markdown_section(release, "## 工作流触发机制")
+    runbook = _markdown_section(release, "## 发版流程")
+    stable_dispatch = _markdown_section(release, "## 手动触发发布")
+
+    assert "主路径：从 `main` 执行 `workflow_dispatch`" in workflow_table
+    assert "`dev → main` 晋级 PR" in runbook
+    assert "ref 选择 `main`" in runbook
+    assert "`commit_sha`" in runbook
+    assert "精确的 40 位" in runbook
+    assert "不要把本地创建并推送 tag 作为当前稳定发版操作" in runbook
+    assert "兼容入口仍接受 `v*` tag push" in stable_dispatch
+    assert "不作为当前人工 runbook" in stable_dispatch
+
+
+def test_release_documents_scope_existing_asset_preflight_to_dev():
+    release = RELEASE_DOCUMENT.read_text(encoding="utf-8")
+    reproducibility = _markdown_section(release, "## 可复现构建输入")
+    distribution = DISTRIBUTION_DOCUMENT.read_text(encoding="utf-8")
+
+    assert "仅 `release-dev.yml`" in reproducibility
+    assert "dev workflow 会在 tag/asset mutation 前 fail closed" in reproducibility
+    assert "`release.yml` 当前不提供同等的 existing-asset preflight" in reproducibility
+    assert "不要从 dev 的 fail-closed preflight 推断 stable" in reproducibility
+    assert "仅 dev release workflow" in distribution
+    assert "stable release workflow 不提供同等 preflight" in distribution
