@@ -3,7 +3,8 @@ from pathlib import Path
 
 import pytest
 import hashlib
-from alist_client import PLATFORMS, bundle_name
+from alist_client import AListError, PLATFORMS, bundle_name
+from test_alist_topology_fake import TopologyFake
 
 
 def load_module():
@@ -62,6 +63,15 @@ class Fake:
     def public_url(self, p): return "https://example.invalid" + p
 
 
+def seed_storage_root(fake, *, has_dev_channel=True):
+    # Old Fake lists "/" by first logical/fs segment. These two fs-shaped
+    # siblings make storage_root_entries see mihari [+ mihari-dev]
+    # without preloading the forbidden logical path /mihari-release.
+    fake.dirs.add("/mihari")
+    if has_dev_channel:
+        fake.dirs.add("/mihari-dev")
+
+
 def add_complete(fake, base, version):
     d = f"{base}/{version}"
     fake.dirs.add(d)
@@ -76,6 +86,24 @@ def add_complete(fake, base, version):
     fake.files[f"{d}/SHA256SUMS.txt"] = "".join(
         f"{sums[name]}  {name}\n" for name in sorted(sums)
     ).encode()
+
+
+def _add_topology_complete(fake, base, version):
+    directory = f"{base}/{version}"
+    fake.mkdir(directory)
+    fake.upload_text(f"{version}\n", f"{directory}/COMPLETE")
+    fake.upload_text(
+        f"version={version}\ncommit={'a' * 40}\n", f"{directory}/BUILDINFO"
+    )
+    sums = {}
+    for goos, goarch in PLATFORMS:
+        name = bundle_name(goos, goarch)
+        fake.upload_text(name, f"{directory}/{name}")
+        sums[name] = hashlib.sha256(name.encode()).hexdigest()
+    fake.upload_text(
+        "".join(f"{sums[name]}  {name}\n" for name in sorted(sums)),
+        f"{directory}/SHA256SUMS.txt",
+    )
 
 
 def root_index(base, version):
@@ -141,6 +169,7 @@ def test_retract_refuses_noncanonical_checksum_manifest_without_mutation(invalid
     sums_path = f"{base}/{version}/SHA256SUMS.txt"
     fake.files[sums_path] = invalid_manifest(fake.files[sums_path].decode()).encode()
     fake.files[f"{base}/index.txt"] = f"latest {version}\n".encode()
+    seed_storage_root(fake, has_dev_channel=True)
 
     with pytest.raises(SystemExit):
         retract_mod.retract(fake, base, version, "dev", "a" * 40)
@@ -158,6 +187,7 @@ def test_dev_retract_rebuilds_highest_remaining_complete(tmp_path, monkeypatch):
     fake.files[f"{base}/v1.0.0-dev.1/BUILDINFO"] = b"version=v1.0.0-dev.1\ncommit=" + b"a" * 40 + b"\n"
     fake.files[f"{base}/v1.1.0-dev.1/BUILDINFO"] = b"version=v1.1.0-dev.1\ncommit=" + b"a" * 40 + b"\n"
     fake.files[f"{base}/index.txt"] = b"latest v1.1.0-dev.1\n"
+    seed_storage_root(fake, has_dev_channel=True)
     retract_mod.retract(fake, base, "v1.1.0-dev.1", "dev", "a" * 40)
     assert fake.files[f"{base}/index.txt"].startswith(b"latest v1.0.0-dev.1\n")
 
@@ -172,6 +202,7 @@ def test_dev_retract_refuses_mismatched_identity(tmp_path, monkeypatch):
     fake = Fake()
     base = "/mihari-release/mihari-dev"
     add_complete(fake, base, "v1.1.0-dev.1")
+    seed_storage_root(fake, has_dev_channel=True)
     with pytest.raises(SystemExit):
         retract_mod.retract(fake, base, "v1.1.0-dev.1", "dev", "b" * 40)
     assert fake.exists(f"{base}/v1.1.0-dev.1")
@@ -180,11 +211,13 @@ def test_dev_retract_refuses_mismatched_identity(tmp_path, monkeypatch):
 def test_retract_missing_dev_directory_is_idempotent(tmp_path, monkeypatch):
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     fake = Fake()
+    seed_storage_root(fake, has_dev_channel=True)
     retract_mod.retract(fake, "/mihari-release/mihari-dev", "v1.1.0-dev.1", "dev", "a" * 40)
 
     assert fake.files == {}
-    assert fake.dirs == set()
     assert mutations(fake) == []
+    assert "/mihari" in fake.dirs
+    assert "/mihari-dev" in fake.dirs
 
 
 def test_latest_retraction_switches_verified_index_before_removing_target(tmp_path, monkeypatch):
@@ -197,6 +230,7 @@ def test_latest_retraction_switches_verified_index_before_removing_target(tmp_pa
     add_complete(fake, base, replacement)
     path, previous = root_index(base, target)
     fake.files[path] = previous.encode()
+    seed_storage_root(fake, has_dev_channel=True)
 
     retract_mod.retract(fake, base, target, "dev", "a" * 40)
 
@@ -216,6 +250,7 @@ def test_latest_retraction_keeps_target_when_index_commit_fails(tmp_path, monkey
     add_complete(fake, base, "v1.0.0-dev.1")
     path, previous = root_index(base, target)
     fake.files[path] = previous.encode()
+    seed_storage_root(fake, has_dev_channel=True)
 
     def fail_index_write(text, remote):
         fake.calls.append(("upload", remote, text))
@@ -243,6 +278,7 @@ def test_remove_failure_after_index_commit_preserves_new_index_and_rerun_removes
     path, _ = root_index(base, target)
     fake.files[path] = f"latest {target}\n".encode()
     fake.fail_target_remove = True
+    seed_storage_root(fake, has_dev_channel=True)
 
     with pytest.raises(SystemExit):
         retract_mod.retract(fake, base, target, "dev", "a" * 40)
@@ -270,6 +306,7 @@ def test_last_latest_retraction_commits_empty_index_before_removing_target(tmp_p
     add_complete(fake, base, target)
     path, _ = root_index(base, target)
     fake.files[path] = f"latest {target}\n".encode()
+    seed_storage_root(fake, has_dev_channel=True)
 
     retract_mod.retract(fake, base, target, "dev", "a" * 40)
 
@@ -290,6 +327,7 @@ def test_latest_retraction_aborts_when_remaining_candidate_cannot_be_read(
     path, previous = root_index(base, target)
     fake.files[path] = previous.encode()
     remaining_buildinfo = f"{base}/{remaining}/BUILDINFO"
+    seed_storage_root(fake, has_dev_channel=True)
     original_content = fake.content
 
     def content(remote):
@@ -322,7 +360,11 @@ def test_latest_retraction_aborts_on_malformed_directory_listing(
     add_complete(fake, base, target)
     path, previous = root_index(base, target)
     fake.files[path] = previous.encode()
-    fake.list_dir = lambda _path: [{"name": 123, "is_dir": True}]
+    seed_storage_root(fake, has_dev_channel=True)
+    original = fake.list_dir
+    fake.list_dir = (
+        lambda path: original(path) if path == "/" else [{"name": 123, "is_dir": True}]
+    )
 
     with pytest.raises(SystemExit):
         retract_mod.retract(fake, base, target, "dev", "a" * 40)
@@ -343,6 +385,7 @@ def test_non_latest_retraction_leaves_index_bytes_unchanged(tmp_path, monkeypatc
     path = f"{base}/index.txt"
     original = f"latest {latest}\nlinux-amd64 https://example.invalid/a deadbeef\n".encode()
     fake.files[path] = original
+    seed_storage_root(fake, has_dev_channel=True)
 
     retract_mod.retract(fake, base, target, "dev", "a" * 40)
 
@@ -359,6 +402,7 @@ def test_non_latest_retraction_fails_closed_when_index_changes_concurrently(tmp_
     path = f"{base}/index.txt"
     fake.files[path] = b"latest v1.1.0-dev.1\n"
     fake.index_reads = ["latest v1.1.0-dev.1\n", "latest v9.0.0-dev.1\n"]
+    seed_storage_root(fake, has_dev_channel=True)
 
     with pytest.raises(SystemExit):
         retract_mod.retract(fake, base, target, "dev", "a" * 40)
@@ -374,6 +418,7 @@ def test_missing_target_referenced_by_index_fails_closed(tmp_path, monkeypatch):
     target = "v1.1.0-dev.1"
     path, previous = root_index(base, target)
     fake.files[path] = previous.encode()
+    seed_storage_root(fake, has_dev_channel=True)
 
     with pytest.raises(SystemExit):
         retract_mod.retract(fake, base, target, "dev", "a" * 40)
@@ -388,8 +433,82 @@ def test_missing_target_not_referenced_by_index_is_idempotent(tmp_path, monkeypa
     target = "v1.1.0-dev.1"
     path = f"{base}/index.txt"
     fake.files[path] = b"latest v1.2.0-dev.1\n"
+    seed_storage_root(fake, has_dev_channel=True)
 
     retract_mod.retract(fake, base, target, "dev", "a" * 40)
 
     assert fake.files[path] == b"latest v1.2.0-dev.1\n"
     assert mutations(fake) == []
+
+
+def test_main_reports_noop_when_dev_channel_root_is_missing(monkeypatch, capsys):
+    fake = TopologyFake()
+    monkeypatch.setattr(retract_mod, "connect", lambda: fake)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "retract-alist.py",
+            "--version",
+            "v1.0.0-dev.1",
+            "--channel",
+            "dev",
+            "--base-path",
+            "/mihari-release/mihari-dev",
+            "--commit-sha",
+            "a" * 40,
+        ],
+    )
+    retract_mod.main()
+    text = capsys.readouterr().out
+    assert "nothing to retract" in text
+    assert "complete on the AList drive" not in text
+
+
+def test_dev_retract_noops_when_storage_root_has_mihari_but_no_dev_channel():
+    fake = TopologyFake()
+    retract_mod.retract(fake, "/mihari-release/mihari-dev", "v1.0.0-dev.1", "dev", "a" * 40)
+    assert not any(
+        op in {"remove", "upload", "upload_text", "mkdir"} for op, _, _ in fake.ops
+    )
+    assert fake.files == {}
+    assert fake.dirs == {"/", "/mihari"}
+    assert not any(fs == "/mihari-release" for _, _, fs in fake.ops)
+
+
+def test_dev_retract_fails_closed_when_storage_root_lacks_mihari():
+    fake = TopologyFake()
+    fake.dirs.discard("/mihari")
+    with pytest.raises(SystemExit):
+        retract_mod.retract(fake, "/mihari-release/mihari-dev", "v1.0.0-dev.1", "dev", "a" * 40)
+    assert not any(op in {"remove", "upload", "upload_text", "mkdir"} for op, _, _ in fake.ops)
+
+
+def test_dev_retract_fails_closed_when_storage_root_list_raises():
+    fake = TopologyFake()
+    original = fake.list_dir
+
+    def list_dir(path):
+        if path == "/":
+            raise AListError("invalid directory listing")
+        return original(path)
+
+    fake.list_dir = list_dir
+    with pytest.raises(SystemExit):
+        retract_mod.retract(fake, "/mihari-release/mihari-dev", "v1.0.0-dev.1", "dev", "a" * 40)
+    assert not any(op in {"remove", "upload", "upload_text"} for op, _, _ in fake.ops)
+
+
+def test_dev_retract_uses_existing_logic_when_channel_root_exists(tmp_path, monkeypatch):
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    fake = TopologyFake()
+    fake.dirs.add("/mihari-dev")
+    _add_topology_complete(fake, "/mihari-release/mihari-dev", "v1.0.0-dev.1")
+    _add_topology_complete(fake, "/mihari-release/mihari-dev", "v1.1.0-dev.1")
+    fake.upload_text("latest v1.1.0-dev.1\n", "/mihari-release/mihari-dev/index.txt")
+    retract_mod.retract(
+        fake, "/mihari-release/mihari-dev", "v1.1.0-dev.1", "dev", "a" * 40
+    )
+    body = fake.content("/mihari-release/mihari-dev/index.txt")
+    assert body is not None and body.startswith("latest v1.0.0-dev.1\n")
+    assert not fake.exists("/mihari-release/mihari-dev/v1.1.0-dev.1")
+    assert not any(fs == "/mihari-release" for _, _, fs in fake.ops)
