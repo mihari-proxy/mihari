@@ -400,6 +400,53 @@ def test_list_dir_accepts_explicit_null_as_an_empty_directory():
     assert alist.list_dir("/mihari-release/mihari") == []
 
 
+def current_alist_list_response(content, total):
+    return JSONResponse(
+        {
+            "code": 200,
+            "data": {
+                "content": content,
+                "header": None,
+                "provider": "local",
+                "readme": "",
+                "total": total,
+                "write": True,
+            },
+        }
+    )
+
+
+def test_list_dir_accepts_current_alist_payload_without_pagination_fields():
+    alist = AList.__new__(AList)
+    alist.base = "https://cloud.invalid"
+    alist.session = PostSession(
+        current_alist_list_response(
+            [
+                {"name": "mihari", "is_dir": True},
+            ],
+            1,
+        )
+    )
+
+    entries = alist.list_dir("/")
+
+    assert [(entry["name"], entry["is_dir"]) for entry in entries] == [("mihari", True)]
+
+
+def test_list_dir_rejects_unpaged_payload_when_total_does_not_match_content():
+    alist = AList.__new__(AList)
+    alist.base = "https://cloud.invalid"
+    alist.session = PostSession(
+        current_alist_list_response(
+            [{"name": "mihari", "is_dir": True}],
+            2,
+        )
+    )
+
+    with pytest.raises(alist_client.AListError, match="invalid directory listing"):
+        alist.list_dir("/")
+
+
 def test_connect_translates_login_failure_at_command_boundary(monkeypatch, capsys):
     monkeypatch.setenv("ALIST_URL", "https://cloud.invalid")
     monkeypatch.setenv("ALIST_USERNAME", "release-user")
