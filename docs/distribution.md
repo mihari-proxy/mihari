@@ -71,8 +71,13 @@ README 默认安装命令仍指向稳定入口。覆盖 `MIHARI_INDEX_URL` 可�
 
 ```bash
 # Linux / macOS：用稳定下载器解析 dev index
-MIHARI_INDEX_URL=https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt \
-  curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.sh | bash
+curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.sh | MIHARI_INDEX_URL=https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt bash
+```
+
+```powershell
+# Windows (PowerShell)：用稳定下载器解析 dev index
+$env:MIHARI_INDEX_URL='https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt'
+& ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1)))
 ```
 
 ---

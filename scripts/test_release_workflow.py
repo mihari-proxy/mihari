@@ -973,6 +973,48 @@ def test_dev_publish_and_retract_use_independent_alist_lock():
     assert release_dev.get("concurrency", {}).get("group") == "dev-release-${{ inputs.version }}"
 
 
+def test_dev_alist_secrets_are_scoped_only_to_the_mutation_step():
+    release = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    retract = yaml.safe_load(RETRACT_DEV_WORKFLOW.read_text(encoding="utf-8"))
+    expected_secret_env = {
+        "ALIST_URL": "${{ secrets.ALIST_URL }}",
+        "ALIST_USERNAME": "${{ secrets.ALIST_USERNAME }}",
+        "ALIST_PASSWORD": "${{ secrets.ALIST_PASSWORD }}",
+    }
+    allowed_job_env = {
+        "ALIST_CONFIGURED",
+        "SHA",
+        "GH_TOKEN",
+        "DEV_RELEASE_NAME",
+        "DEV_RELEASE_BODY",
+        "MIHARI_KEEP_VERSIONS",
+    }
+
+    for workflow, job_name in ((release, "publish"), (retract, "retract")):
+        job = workflow["jobs"][job_name]
+        assert {"ALIST_CONFIGURED", "SHA"} <= set(job["env"])
+        assert set(job["env"]) <= allowed_job_env
+        assert job["env"]["ALIST_CONFIGURED"] == "${{ secrets.ALIST_URL != '' }}"
+        assert "ALIST_USERNAME" not in job["env"]["ALIST_CONFIGURED"]
+        assert "ALIST_PASSWORD" not in job["env"]["ALIST_CONFIGURED"]
+        for secret_name in expected_secret_env:
+            assert secret_name not in job["env"]
+
+        mutation = next(step for step in job["steps"] if step.get("id") == "alist_mutation")
+        assert mutation["env"] == expected_secret_env
+        assert mutation["if"] == "env.ALIST_CONFIGURED == 'true'"
+
+        for step in job["steps"]:
+            if step is mutation:
+                continue
+            step_text = str(step)
+            assert "secrets.ALIST_USERNAME" not in step_text
+            assert "secrets.ALIST_PASSWORD" not in step_text
+            if "secrets.ALIST_URL" in step_text:
+                assert "secrets.ALIST_URL != ''" in step_text
+                assert "${{ secrets.ALIST_URL }}" not in step_text
+
+
 def test_dev_alist_mutation_uses_compare_first_exit():
     cases = (
         (WORKFLOW, "publish", "Publish to AList drive", "release-alist.py", "publish_status"),
@@ -982,6 +1024,7 @@ def test_dev_alist_mutation_uses_compare_first_exit():
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
         run = _workflow_step(document, job, name=step_name)["run"]
         assert "set +e" in run
+        assert run.index("alist_channel_guard.py snapshot") < run.index(writer)
         assert run.index(writer) < run.index("alist_channel_guard.py compare")
         compare_exit = 'if [ "${compare_status}" -ne 0 ]; then exit "${compare_status}"; fi'
         assert compare_exit in run
@@ -1024,6 +1067,9 @@ def test_dev_alist_isolation_artifacts_are_separate_from_writer_backup():
         assert isolation["with"]["path"] == "${{ runner.temp }}/mihari-index-backup/stable-isolation/**"
         assert isolation["with"]["path"] != "${{ runner.temp }}/mihari-index-backup/stable/**"
         assert "${{ runner.temp }}/mihari-index-backup/stable/**" not in text
+        for artifact in (dev_backup, isolation):
+            assert artifact["with"]["if-no-files-found"] == "ignore"
+            assert artifact["with"]["retention-days"] == 3
 
 
 def test_dev_retract_resolve_outputs_sha_and_alist_runs_before_github_delete():
@@ -1060,6 +1106,9 @@ def test_dev_release_notes_append_index_url_with_stable_root_downloaders():
     assert "<!-- aio-install-dev -->" in workflow
     assert "mihari-dev/index.txt" in workflow
     assert "mihari-release/mihari/install-aio-remote.sh" in workflow
+    assert "| MIHARI_INDEX_URL=" in workflow
+    assert "$env:MIHARI_INDEX_URL=" in workflow
+    assert "mihari-release/mihari/install-aio-remote.ps1" in workflow
 
 
 def test_dev_retract_github_delete_is_idempotent_and_retains_canonical_tag():
@@ -1379,6 +1428,10 @@ def test_release_documents_record_verified_dev_github_release_and_unavailable_de
     assert "/mihari-release/mihari/index.txt" in release
     assert "/mihari-release/mihari/index.txt" in distribution
     assert public_stable_index in distribution
+    assert "| MIHARI_INDEX_URL=" in distribution
+    assert "$env:MIHARI_INDEX_URL=" in distribution
+    assert "mihari-release/mihari/install-aio-remote.sh" in distribution
+    assert "mihari-release/mihari/install-aio-remote.ps1" in distribution
     for installer in installers:
         assert public_stable_index in installer
         assert "/mihari-release/mihari-dev/" not in installer
