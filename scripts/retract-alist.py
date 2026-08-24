@@ -4,7 +4,7 @@ import argparse
 import hashlib
 import re
 
-from alist_client import DEFAULT_BASE_PATH, PLATFORMS, bundle_name, connect, fail, info
+from alist_client import DEFAULT_BASE_PATH, PLATFORMS, bundle_name, connect, fail, info, storage_root_entries
 from alist_index import IndexMutationError, parse_latest, write_index_reliably as _write_index_reliably
 from release_policy import parse_version, validate_base_path
 
@@ -167,6 +167,13 @@ def remove_target(alist, base_path, version):
 
 def retract(alist, base_path, version, channel="stable", commit_sha=None):
     validate_inputs(version, channel, base_path, commit_sha)
+    if channel == "dev":
+        entries = storage_root_entries(alist)
+        matches = [e for e in entries if isinstance(e, dict) and e.get("name") == "mihari-dev"]
+        if not matches:
+            return
+        if len(matches) != 1 or matches[0].get("is_dir") is not True:
+            fail("channel base path is not a directory")
     root_index = f"{base_path}/index.txt"
     directory = f"{base_path}/{version}"
     if not directory_exists(alist, directory):
