@@ -1,0 +1,67 @@
+{
+  "schema": "mihari-aio-input-lock/v1",
+  "mihomo": {
+    "repository": "MetaCubeX/mihomo",
+    "channel": "stable",
+    "release_id": 371291937,
+    "tag": "v1.19.30",
+    "assets": {
+      "darwin/amd64": {
+        "asset_id": 516687197,
+        "name": "mihomo-darwin-amd64-compatible-v1.19.30.gz",
+        "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-darwin-amd64-compatible-v1.19.30.gz",
+        "size": 18300486,
+        "sha256": "6e75de0732e8afabe413ff7c235e8f16226ce136672371c60787cbf9607402c5"
+      },
+      "darwin/arm64": {
+        "asset_id": 516687188,
+        "name": "mihomo-darwin-arm64-v1.19.30.gz",
+        "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-darwin-arm64-v1.19.30.gz",
+        "size": 16805556,
+        "sha256": "2c7f3a7904fa1cee291e124123e630e7b1ebd13765dd9bf26c0a28432004d9f4"
+      },
+      "linux/amd64": {
+        "asset_id": 516687180,
+        "name": "mihomo-linux-amd64-compatible-v1.19.30.gz",
+        "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-linux-amd64-compatible-v1.19.30.gz",
+        "size": 18899951,
+        "sha256": "db214c7a2517e63c150d123178d16d102e03a241ccdae4e5e07ffbe9cf56c6f9"
+      },
+      "linux/arm64": {
+        "asset_id": 516687149,
+        "name": "mihomo-linux-arm64-v1.19.30.gz",
+        "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-linux-arm64-v1.19.30.gz",
+        "size": 16965828,
+        "sha256": "58896873736d28628f66de3677c8654fa0f180662523148e136cff4f6e890069"
+      },
+      "windows/amd64": {
+        "asset_id": 516687134,
+        "name": "mihomo-windows-amd64-compatible-v1.19.30.zip",
+        "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-windows-amd64-compatible-v1.19.30.zip",
+        "size": 18529108,
+        "sha256": "289fde5e29d37a5b3326480590d8b3551c5bf7f8737290355c19bce74d57a563"
+      },
+      "windows/arm64": {
+        "asset_id": 516687082,
+        "name": "mihomo-windows-arm64-v1.19.30.zip",
+        "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-windows-arm64-v1.19.30.zip",
+        "size": 16344535,
+        "sha256": "b37c4b0259e85b020edc4215aa4c86052e21071cf520d4800364b21b4e2fc162"
+      }
+    }
+  },
+  "geoip": {
+    "repository": "Loyalsoldier/geoip",
+    "commit": "69986b5d098c8d723a2c4d56317bc10cd5669c02",
+    "country": {
+      "name": "GeoLite2-Country.mmdb",
+      "url": "https://raw.githubusercontent.com/Loyalsoldier/geoip/69986b5d098c8d723a2c4d56317bc10cd5669c02/GeoLite2-Country.mmdb",
+      "sha256": "26a2c3c3791b36303a1c70bac18320c4e6bd40950286224a38f2756c0f7d0ca2"
+    },
+    "asn": {
+      "name": "GeoLite2-ASN.mmdb",
+      "url": "https://raw.githubusercontent.com/Loyalsoldier/geoip/69986b5d098c8d723a2c4d56317bc10cd5669c02/GeoLite2-ASN.mmdb",
+      "sha256": "82abcabdf4d0ecb34da45e4f0f9bc30bf933cfbfec446b89a2215fae5b1fdbdc"
+    }
+  }
+}

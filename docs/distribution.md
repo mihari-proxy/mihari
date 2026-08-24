@@ -37,7 +37,7 @@ curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/insta
 
 > 命令中的网址是 AList 网盘的固定公开直链（签名已关闭），永久不变，复制即用。
 
-Batch A 中，dev 发布代码已准备，远程 dev/试发需另行授权；获授权后的 P1 只写 GitHub dev tag、prerelease 与 14 个 assets，不写 AList。P1 试发的前置条件是 `/releases/latest` 已能返回合法的 stable GitHub Release，缺少时会在 dev mutation 前 fail closed。P2 AList 发布与撤回 workflow 尚不可用，因此当前没有 dev AList 版本目录或下载命令；稳定安装入口不会指向 dev。
+GitHub dev prerelease `v0.9.0-dev.2` 已发布并完成精确 14 个 assets 的公开验收，且未写 AList。dev AList 发布与 dev retract workflow 仍不可用，因此没有 dev AList 版本目录、下载命令或撤回入口；稳定安装入口不会指向 dev。
 
 脚本3 下载器的执行流程：
 
@@ -71,9 +71,28 @@ sh install-aio.sh        # Windows: powershell -File install-aio.ps1
 
 ## 二、核心通道与 sidecar
 
-`scripts/build-all-in-one` 默认打包 **stable** 内核。需要预置 alpha 时传入 `--channel alpha`，bundler 从 GitHub 滚动 tag `Prerelease-Alpha` 选取标准资产（非 `-compatible` / `-v3` / `-goNNN` 变体）。
+`scripts/build-all-in-one` 不解析滚动 tag、latest release 或 GeoIP 可变分支。它要求显式传入仓库内已审核的 `scripts/release-inputs.lock.json`，并只下载 lock 中精确记录且有 SHA-256 的六个平台 mihomo 资产和两份 GeoIP 数据。当前 checked-in lock 使用 **stable** 内核；预置通道由 lock 的 `mihomo.channel` 决定，而不是由 bundler 在发版时动态选择。
 
-无论 `--channel` 是 `stable` 还是 `alpha`，bundle 都会写入 sidecar `data/bin/core-channel`（UTF-8 文本）：
+维护者只在独立的 release-prep PR 中更新 lock：
+
+```sh
+go run ./scripts/resolve-release-inputs --channel stable --out scripts/release-inputs.lock.json
+```
+
+GitHub API 限流时可设置 `GITHUB_TOKEN` 环境变量。必须审核生成的 diff 后再合并；稳定和 dev release workflow 都只消费 lock，绝不运行解析器。实际打包命令必须显式传入 lock，例如：
+
+```sh
+go run ./scripts/build-all-in-one \
+  --lock scripts/release-inputs.lock.json \
+  --mihari-dir dist --out bundles \
+  --platforms "linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64,windows/arm64"
+```
+
+`--out` 必须是专用的受管 bundle 目录；允许使用当前工作目录下的专用子目录（例如 `./bundles`），但输出目录不得等于或包含当前工作目录，也不得等于或包含 lock 文件。它与 `--mihari-dir`、`--scripts-dir` 两个输入目录之间还必须双向不重叠：输出不能包含输入，输入也不能包含输出。目录内不得混放非 bundle 文件。bundler 在临时目录完成全部构建与校验后才整体提交输出。lock 只用于构建，不会进入 bundle，也不会作为 GitHub Release/AList 资产上传，因此固定的 14-asset 发布契约不变。
+
+Mihari 原始二进制由 Go 1.26.5 以 `-buildvcs=false -trimpath` 构建，避免同一 commit 在 tag 创建前后因 VCS/module 元数据变化而改变字节。相同 commit、版本、toolchain、lock 和仓库内脚本的重试应逐字节复现全部 14 个 assets。仅 dev release workflow 会在已有同版本 Release 时做 existing-asset checksum preflight，并在字节冲突时于 mutation 前 fail closed；stable release workflow 不提供同等 preflight，仍遵循现有 stable Action 发布与 AList 事务契约。
+
+无论 lock 中的 `mihomo.channel` 是 `stable` 还是 `alpha`，bundle 都会写入 sidecar `data/bin/core-channel`（UTF-8 文本）：
 
 ```
 <stable|alpha>
@@ -90,7 +109,7 @@ settings 新增可选字段 `core-channel` 与 `core-channel-bundle`（schema �
 
 ## 三、AList 网盘目录结构
 
-AList base path 不是可配置入口：策略层将 stable 固定为 `/mihari-release/mihari`，将后续 P2 dev 通道固定为 `/mihari-release/mihari-dev`；传入其他路径会被拒绝。当前可用的 stable 目录如下：
+AList base path 不是可配置入口：策略层将 stable 固定为 `/mihari-release/mihari`，并为尚未实现的 dev AList 通道保留 `/mihari-release/mihari-dev`；传入其他路径会被拒绝。当前可用的 stable 目录如下：
 
 ```
 stable（仅稳定通道）：
@@ -107,7 +126,7 @@ stable（仅稳定通道）：
 └── v0.1.0/
 ```
 
-dev 发布代码已准备，远程 dev/试发需另行授权。`/mihari-release/mihari-dev` 只是策略层为后续 P2 保留的固定路径；P2 AList 发布与撤回 workflow 尚不可用，故本阶段不创建或操作该目录。稳定 `index.txt` 和 `/releases/latest` 不受 dev 准备代码影响。
+`/mihari-release/mihari-dev` 只是为后续 dev 分发保留的固定策略路径。dev AList 发布与 dev retract workflow 尚不可用，当前不创建或操作该目录；已发布的 GitHub dev prerelease 不改变稳定 `index.txt` 或 `/releases/latest`。
 
 > **AList 拓扑 quirk（读路径 / 下载）**：**公开下载 URL** 需在 `/p` 后加 `/public` 挂载点前缀，即 `https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/…`（`alist_client.public_url` 自动处理）。
 >
@@ -171,7 +190,7 @@ Writer 在首次 mutation 前把原状态写入 runner 的 `stable/` 备份目�
 2. 读 `index.txt` 判断撤回版本是否为当前 latest；
 3. **仅当撤回的是 latest**，先排除目标目录，重建 `index.txt`：latest 改为现存最高且完整（含 `COMPLETE`）的版本（sha256 从该目录的 `SHA256SUMS.txt` 读取）；无完整版本 → `index.txt` 置空。写入后必须回读验证成功，才进入删除；
 4. 永久删除 AList 版本目录 `<base_path>/<version>/`；撤回非 latest 时 index 保持原始字节不变；
-5. `gh release delete <version> --yes` 永久删除 GitHub Release 及其 assets，但保留 canonical stable tag；tag 继续受 stable tag-target ruleset 保护，不为撤回配置删除 bypass。
+5. `gh release delete <version> --yes` 永久删除 GitHub Release 及其 assets，但保留 canonical stable tag；tag 继续受覆盖 `refs/tags/v*` 的 active tag ruleset 保护，不为撤回配置删除 bypass。
 
 若 latest 的替代或空 index 已验证、但目录删除失败，index 保持已切换状态，不回退；目标目录成为不再被 index 引用的遗留目录，同一撤回重跑会继续删除它。幂等：对已撤回的版本重跑不报错。
 

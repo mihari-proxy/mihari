@@ -685,6 +685,39 @@ func TestLatestReleaseExport(t *testing.T) {
 	}
 }
 
+func TestLatestReleasePreservesGitHubNumericIDs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/repos/MetaCubeX/mihomo/releases/latest" {
+			http.NotFound(response, request)
+			return
+		}
+		_, _ = response.Write([]byte(`{
+			"id": 371291937,
+			"tag_name": "v1.19.30",
+			"assets": [{
+				"id": 516687180,
+				"name": "mihomo-linux-amd64-compatible-v1.19.30.gz",
+				"browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-linux-amd64-compatible-v1.19.30.gz",
+				"size": 18899951,
+				"digest": "sha256:db214c7a2517e63c150d123178d16d102e03a241ccdae4e5e07ffbe9cf56c6f9"
+			}]
+		}`))
+	}))
+	defer server.Close()
+
+	installer := Installer{HTTPClient: server.Client(), APIBase: server.URL, Repository: "MetaCubeX/mihomo"}
+	release, err := installer.LatestRelease(context.Background(), "stable")
+	if err != nil {
+		t.Fatalf("LatestRelease: %v", err)
+	}
+	if release.ID != 371291937 {
+		t.Fatalf("release ID = %d, want 371291937", release.ID)
+	}
+	if got := release.Assets[0].ID; got != 516687180 {
+		t.Fatalf("asset ID = %d, want 516687180", got)
+	}
+}
+
 func TestLatestReleaseAlphaHitsPrereleaseTag(t *testing.T) {
 	var requested []string
 	server := alphaReleaseFixture(t, "mihomo-linux-amd64-alpha-e183c58.gz", gzipFixture(t, []byte("payload")), &requested)

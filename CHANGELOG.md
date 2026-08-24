@@ -8,7 +8,7 @@
 
 ### Fixed
 
-## [v0.9.0] - 2026-08-23
+## [v0.9.0] - 2026-08-24
 
 ### Added
 
@@ -22,6 +22,8 @@
 
 - Windows TUN 冲突探测避免把本实例的 mihomo 进程识别为外部冲突（#114）。
 - 修复 dev prerelease Create Release 的 `make_latest` 参数类型，并在创建失败时保留 GitHub API 响应与错误输出。
+- 修复同一 commit 在创建 release tag 前后因 Go VCS/module 元数据变化而产生不同二进制的问题；发布构建改用 `-buildvcs=false -trimpath`。
+- all-in-one 构建改为消费已审核的不可变 mihomo/GeoIP 输入 lock，避免发版重试期间上游 latest/ref 漂移并导致 asset checksum 冲突。
 
 ## [v0.8.2] - 2026-08-18
 
