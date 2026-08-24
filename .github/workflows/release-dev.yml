@@ -88,7 +88,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           OUT="mihari-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
-          go build -trimpath -ldflags "-s -w -X github.com/mihari-proxy/mihari/internal/buildinfo.Version=${VERSION}" -o "dist/${OUT}" ./cmd/mihari
+          go build -buildvcs=false -trimpath -ldflags "-s -w -X github.com/mihari-proxy/mihari/internal/buildinfo.Version=${VERSION}" -o "dist/${OUT}" ./cmd/mihari
 
       - uses: actions/upload-artifact@v7
         with:
@@ -122,10 +122,10 @@ jobs:
           merge-multiple: true
 
       - name: Build all-in-one bundles
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          go run ./scripts/build-all-in-one --mihari-dir dist --out bundles --platforms "${PLATFORMS}"
+          go run ./scripts/build-all-in-one \
+            --lock scripts/release-inputs.lock.json \
+            --mihari-dir dist --out bundles --platforms "${PLATFORMS}"
 
       - uses: actions/upload-artifact@v7
         with:

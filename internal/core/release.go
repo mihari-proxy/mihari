@@ -13,6 +13,7 @@ import (
 const maxReleaseResponseSize = 2 << 20
 
 type Asset struct {
+	ID     int64  `json:"id"`
 	Name   string `json:"name"`
 	URL    string `json:"browser_download_url"`
 	Size   int64  `json:"size"`
@@ -20,6 +21,7 @@ type Asset struct {
 }
 
 type Release struct {
+	ID      int64   `json:"id"`
 	TagName string  `json:"tag_name"`
 	Assets  []Asset `json:"assets"`
 }

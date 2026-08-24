@@ -147,3 +147,152 @@ func TestDownloader_PropagatesContextCancellation(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestDownloader_RequiresExactlyOneChecksumSourceBeforeSideEffects(t *testing.T) {
+	requests := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests <- request.URL.Path
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	staging := filepath.Join(root, "staging")
+	downloader := Downloader{Client: server.Client(), StagingDir: staging, AllowHTTP: true}
+
+	_, err := downloader.Prepare(context.Background(), DownloadSpec{
+		URL: server.URL + "/database.mmdb", Destination: filepath.Join(root, "database.mmdb"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("err=%v", err)
+	}
+	if _, statErr := os.Stat(staging); !os.IsNotExist(statErr) {
+		t.Fatalf("staging directory created before checksum validation: %v", statErr)
+	}
+
+	_, err = downloader.Prepare(context.Background(), DownloadSpec{
+		URL:            server.URL + "/database.mmdb",
+		ChecksumURL:    server.URL + "/database.mmdb.sha256sum",
+		ExpectedSHA256: strings.Repeat("0", 64),
+		Destination:    filepath.Join(root, "database.mmdb"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("err=%v", err)
+	}
+	if _, statErr := os.Stat(staging); !os.IsNotExist(statErr) {
+		t.Fatalf("staging directory created before checksum validation: %v", statErr)
+	}
+	if len(requests) != 0 {
+		t.Fatalf("network request made before checksum source validation: %q", <-requests)
+	}
+}
+
+func TestDownloader_PreparesCandidateFromInlineChecksumWithoutSidecarRequest(t *testing.T) {
+	requests := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests <- request.URL.Path
+		_, _ = io.WriteString(writer, "abc")
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	downloader := Downloader{
+		Client: server.Client(), StagingDir: filepath.Join(root, "staging"), AllowHTTP: true,
+		Validate: func(path string) error {
+			got, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if string(got) != "abc" {
+				return errors.New("unexpected candidate contents")
+			}
+			return nil
+		},
+	}
+
+	candidate, err := downloader.Prepare(context.Background(), DownloadSpec{
+		URL:            server.URL + "/database.mmdb",
+		ExpectedSHA256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+		Destination:    filepath.Join(root, "database.mmdb"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer candidate.Cleanup()
+	if !candidate.Valid() {
+		t.Fatal("prepared candidate is invalid")
+	}
+	if len(requests) != 1 {
+		t.Fatalf("network request count=%d", len(requests))
+	}
+	if path := <-requests; path != "/database.mmdb" {
+		t.Fatalf("requested path=%q", path)
+	}
+}
+
+func TestDownloader_RejectsMalformedInlineChecksumBeforeSideEffects(t *testing.T) {
+	checksums := []struct {
+		name  string
+		value string
+	}{
+		{name: "too short", value: strings.Repeat("0", 63)},
+		{name: "non-hexadecimal", value: strings.Repeat("0", 63) + "g"},
+		{name: "uppercase", value: "Ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+	}
+	for _, checksum := range checksums {
+		t.Run(checksum.name, func(t *testing.T) {
+			requests := make(chan string, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				requests <- request.URL.Path
+				_, _ = io.WriteString(writer, "abc")
+			}))
+			defer server.Close()
+			root := t.TempDir()
+			staging := filepath.Join(root, "staging")
+			downloader := Downloader{Client: server.Client(), StagingDir: staging, AllowHTTP: true}
+
+			_, err := downloader.Prepare(context.Background(), DownloadSpec{
+				URL: server.URL + "/database.mmdb", ExpectedSHA256: checksum.value, Destination: filepath.Join(root, "database.mmdb"),
+			})
+			if err == nil || !strings.Contains(err.Error(), "64 lowercase hexadecimal") {
+				t.Fatalf("err=%v", err)
+			}
+			if len(requests) != 0 {
+				t.Fatalf("network request made before checksum validation: %q", <-requests)
+			}
+			if _, statErr := os.Stat(staging); !os.IsNotExist(statErr) {
+				t.Fatalf("staging directory created before checksum validation: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestDownloader_InlineChecksumMismatchRemovesStagedCandidate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(writer, "wrong")
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	staging := filepath.Join(root, "staging")
+	downloader := Downloader{
+		Client: server.Client(), StagingDir: staging, AllowHTTP: true,
+		Validate: func(string) error {
+			t.Fatal("checksum-mismatched candidate was validated")
+			return nil
+		},
+	}
+
+	_, err := downloader.Prepare(context.Background(), DownloadSpec{
+		URL:            server.URL + "/database.mmdb",
+		ExpectedSHA256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+		Destination:    filepath.Join(root, "database.mmdb"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("err=%v", err)
+	}
+	entries, readErr := os.ReadDir(staging)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("staging entries=%v", entries)
+	}
+}

@@ -8,18 +8,19 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
-	"github.com/mihari-proxy/mihari/internal/core"
+	"github.com/mihari-proxy/mihari/scripts/internal/releaseinputs"
 )
 
 // fakeRunner satisfies core.CommandRunner for the host-matching `-v` smoke.
@@ -42,29 +43,9 @@ func (r *recordingRunner) Run(_ context.Context, _ string, _ ...string) ([]byte,
 }
 
 func TestBundlerProducesSixPlatformBundles(t *testing.T) {
-	api := fakeGitHubAPI(t)
-	defer api.Close()
-	geoipSrv := fakeGeoIPServer(t)
-	defer geoipSrv.Close()
-
-	mihariDir := t.TempDir()
-	writeMihariDist(t, mihariDir)
-
-	scriptsDir := t.TempDir()
-	for _, name := range []string{"install-aio.sh", "install-aio.ps1"} {
-		if err := os.WriteFile(filepath.Join(scriptsDir, name), []byte("# aio installer\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	out := t.TempDir()
-	err := run(options{
-		MihariDir: mihariDir, Out: out, ScriptsDir: scriptsDir,
-		Platforms:  []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64", "windows/arm64"},
-		HTTPClient: api.Client(), APIBase: api.URL, Repository: "MetaCubeX/mihomo",
-		GeoIPBase: geoipSrv.URL, GeoIPValidate: func(string) error { return nil },
-		Runner: fakeRunner{output: []byte("Mihomo Meta v1.19.0")},
-	})
+	fixture := newLockedFixture(t, "stable")
+	out := filepath.Join(t.TempDir(), "bundles")
+	err := run(fixture.options(out))
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -109,35 +90,15 @@ func TestBundlerProducesSixPlatformBundles(t *testing.T) {
 		if mihomo := entries["data/bin/mihomo"+suffix]; len(mihomo) == 0 {
 			t.Fatalf("%s: empty mihomo binary", platform)
 		}
-		assertCoreChannelSidecar(t, entries, "stable", "stable-v1.19.0")
+		assertCoreChannelSidecar(t, entries, "stable", "stable-v1.19.30")
 	}
+	fixture.assertOnlyLockedRequests(t)
 }
 
 func TestBundlerAlphaChannelWritesSidecar(t *testing.T) {
-	api := fakeGitHubAlphaAPI(t)
-	defer api.Close()
-	geoipSrv := fakeGeoIPServer(t)
-	defer geoipSrv.Close()
-
-	mihariDir := t.TempDir()
-	writeMihariDist(t, mihariDir)
-
-	scriptsDir := t.TempDir()
-	for _, name := range []string{"install-aio.sh", "install-aio.ps1"} {
-		if err := os.WriteFile(filepath.Join(scriptsDir, name), []byte("# aio installer\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	out := t.TempDir()
-	err := run(options{
-		MihariDir: mihariDir, Out: out, ScriptsDir: scriptsDir,
-		Channel:    "alpha",
-		Platforms:  []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64", "windows/arm64"},
-		HTTPClient: api.Client(), APIBase: api.URL, Repository: "MetaCubeX/mihomo",
-		GeoIPBase: geoipSrv.URL, GeoIPValidate: func(string) error { return nil },
-		Runner: fakeRunner{output: []byte("Mihomo Meta alpha-e183c58")},
-	})
+	fixture := newLockedFixture(t, "alpha")
+	out := filepath.Join(t.TempDir(), "bundles")
+	err := run(fixture.options(out))
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -157,6 +118,577 @@ func TestBundlerAlphaChannelWritesSidecar(t *testing.T) {
 			t.Fatalf("%s: missing data/bin/core-channel", platform)
 		}
 	}
+	fixture.assertOnlyLockedRequests(t)
+}
+
+func TestRunRequiresValidLockBeforeNetworkOrOutputMutation(t *testing.T) {
+	tests := []struct {
+		name     string
+		lockPath func(*testing.T) string
+	}{
+		{name: "missing flag", lockPath: func(*testing.T) string { return "" }},
+		{name: "missing file", lockPath: func(t *testing.T) string { return filepath.Join(t.TempDir(), "missing.json") }},
+		{name: "invalid file", lockPath: func(t *testing.T) string {
+			path := filepath.Join(t.TempDir(), "invalid.json")
+			if err := os.WriteFile(path, []byte(`{"schema":"wrong"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return path
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transport := &fixtureTransport{payloads: map[string][]byte{}}
+			out := filepath.Join(t.TempDir(), "must-not-exist")
+			err := run(options{LockPath: test.lockPath(t), Out: out, HTTPClient: &http.Client{Transport: transport}})
+			if err == nil {
+				t.Fatal("run accepted a missing or invalid release input lock")
+			}
+			if transport.requestCount() != 0 {
+				t.Fatalf("network requests = %d, want 0", transport.requestCount())
+			}
+			if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
+				t.Fatalf("output path was mutated before lock validation: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestRunRejectsPlatformOutsideLockBeforeNetwork(t *testing.T) {
+	fixture := newLockedFixture(t, "stable")
+	out := filepath.Join(t.TempDir(), "must-not-exist")
+	opts := fixture.options(out)
+	opts.Platforms = []string{"linux/riscv64"}
+	if err := run(opts); err == nil {
+		t.Fatal("run accepted a platform outside the exact lock set")
+	}
+	if fixture.transport.requestCount() != 0 {
+		t.Fatalf("network requests = %d, want 0", fixture.transport.requestCount())
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("output path was mutated before platform validation: %v", err)
+	}
+}
+
+func TestRunRejectsOutputPathOverlapBeforeNetwork(t *testing.T) {
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		out  func(*lockedFixture) string
+	}{
+		{name: "working directory", out: func(*lockedFixture) string { return "." }},
+		{name: "working directory ancestor", out: func(*lockedFixture) string { return filepath.Dir(workingDirectory) }},
+		{name: "equals lock", out: func(f *lockedFixture) string { return f.lockPath }},
+		{name: "contains lock", out: func(f *lockedFixture) string { return filepath.Dir(f.lockPath) }},
+		{name: "equals mihari input", out: func(f *lockedFixture) string { return f.mihariDir }},
+		{name: "contains mihari input", out: func(f *lockedFixture) string { return filepath.Dir(f.mihariDir) }},
+		{name: "inside mihari input", out: func(f *lockedFixture) string { return filepath.Join(f.mihariDir, "nested-output") }},
+		{name: "contains scripts input", out: func(f *lockedFixture) string { return filepath.Dir(f.scriptsDir) }},
+		{name: "inside scripts input", out: func(f *lockedFixture) string { return filepath.Join(f.scriptsDir, "nested-output") }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newLockedFixture(t, "stable")
+			out := test.out(fixture)
+			opts := fixture.options(out)
+			err := run(opts)
+			if err == nil || !strings.Contains(err.Error(), "dedicated managed bundle directory") {
+				t.Fatalf("run overlap error = %v, want fixed isolation error", err)
+			}
+			if fixture.transport.requestCount() != 0 {
+				t.Fatalf("network requests = %d, want 0", fixture.transport.requestCount())
+			}
+			for _, sensitive := range []string{out, fixture.lockPath, fixture.mihariDir, fixture.scriptsDir} {
+				if filepath.IsAbs(sensitive) && strings.Contains(err.Error(), sensitive) {
+					t.Fatalf("isolation error %q leaked absolute path %q", err, sensitive)
+				}
+			}
+		})
+	}
+}
+
+func TestRunRejectsLockedPayloadMismatchWithoutBundle(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*lockedFixture)
+	}{
+		{name: "mihomo size", mutate: func(f *lockedFixture) {
+			asset := f.lock.Mihomo.Assets["windows/arm64"]
+			asset.Size++
+			f.lock.Mihomo.Assets["windows/arm64"] = asset
+		}},
+		{name: "mihomo digest", mutate: func(f *lockedFixture) {
+			asset := f.lock.Mihomo.Assets["windows/arm64"]
+			asset.SHA256 = strings.Repeat("0", 64)
+			f.lock.Mihomo.Assets["windows/arm64"] = asset
+		}},
+		{name: "geoip digest", mutate: func(f *lockedFixture) {
+			f.lock.GeoIP.Country.SHA256 = strings.Repeat("0", 64)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newLockedFixture(t, "stable")
+			test.mutate(fixture)
+			fixture.writeLock(t)
+			out := filepath.Join(t.TempDir(), "bundles")
+			err := run(fixture.options(out))
+			if err == nil {
+				t.Fatal("run accepted payload that disagrees with the lock")
+			}
+			entries, readErr := os.ReadDir(out)
+			if readErr != nil && !os.IsNotExist(readErr) {
+				t.Fatal(readErr)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("failed build left outputs: %v", entries)
+			}
+		})
+	}
+}
+
+func TestRunProducesByteIdenticalBundlesFromSameLock(t *testing.T) {
+	fixture := newLockedFixture(t, "stable")
+	first := filepath.Join(t.TempDir(), "first")
+	second := filepath.Join(t.TempDir(), "second")
+	if err := run(fixture.options(first)); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if err := run(fixture.options(second)); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	for _, platform := range releaseinputs.RequiredPlatforms() {
+		goos, goarch, err := splitPlatform(platform)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := bundleName(goos, goarch)
+		firstBytes, err := os.ReadFile(filepath.Join(first, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		secondBytes, err := os.ReadFile(filepath.Join(second, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(firstBytes, secondBytes) {
+			t.Fatalf("%s differs across identical builds", name)
+		}
+	}
+}
+
+func TestPackStageUsesCanonicalModesIndependentOfHostPermissions(t *testing.T) {
+	for _, goos := range []string{"linux", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			firstStage := t.TempDir()
+			secondStage := t.TempDir()
+			writeCanonicalArchiveStage(t, firstStage, goos, 0o444)
+			writeCanonicalArchiveStage(t, secondStage, goos, 0o777)
+			firstOut := t.TempDir()
+			secondOut := t.TempDir()
+			if err := packStage(context.Background(), firstStage, firstOut, goos, "amd64", nil); err != nil {
+				t.Fatalf("pack first stage: %v", err)
+			}
+			if err := packStage(context.Background(), secondStage, secondOut, goos, "amd64", nil); err != nil {
+				t.Fatalf("pack second stage: %v", err)
+			}
+			name := bundleName(goos, "amd64")
+			firstBytes, err := os.ReadFile(filepath.Join(firstOut, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			secondBytes, err := os.ReadFile(filepath.Join(secondOut, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(firstBytes, secondBytes) {
+				t.Fatalf("%s archive bytes depend on host file permissions", goos)
+			}
+			modes := archiveEntryModes(t, filepath.Join(firstOut, name))
+			want := canonicalArchiveModes(goos)
+			if !reflect.DeepEqual(modes, want) {
+				t.Fatalf("%s archive modes = %v, want %v", goos, modes, want)
+			}
+		})
+	}
+}
+
+func TestPackStageHonorsCancellationBetweenChunks(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		goos string
+	}{
+		{name: "tar gzip", goos: "linux"},
+		{name: "zip", goos: "windows"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stage := t.TempDir()
+			name := "mihari"
+			if test.goos == "windows" {
+				name = "mihari.exe"
+			}
+			if err := os.WriteFile(filepath.Join(stage, name), bytes.Repeat([]byte("x"), 256<<10), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			chunks := 0
+			hook := func() {
+				chunks++
+				if chunks == 1 {
+					cancel()
+				}
+			}
+			out := t.TempDir()
+			err := packStage(ctx, stage, out, test.goos, "amd64", hook)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("packStage error = %v, want context cancellation", err)
+			}
+			if chunks == 0 {
+				t.Fatal("copy hook was not reached")
+			}
+			if _, err := os.Lstat(filepath.Join(out, bundleName(test.goos, "amd64"))); !os.IsNotExist(err) {
+				t.Fatalf("partial archive remains after cancellation: %v", err)
+			}
+		})
+	}
+}
+
+func TestRunCancellationDuringLocalCopyPreservesManagedOutput(t *testing.T) {
+	fixture := newLockedFixture(t, "stable")
+	largeMihari := filepath.Join(fixture.mihariDir, "mihari-"+runtime.GOOS+"-"+runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		largeMihari += ".exe"
+	}
+	if err := os.WriteFile(largeMihari, bytes.Repeat([]byte("m"), 256<<10), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	parent := t.TempDir()
+	destination := filepath.Join(parent, "bundles")
+	writeExistingOutput(t, destination)
+	before := snapshotTree(t, destination)
+	ctx, cancel := context.WithCancel(context.Background())
+	opts := fixture.options(destination)
+	opts.Context = ctx
+	opts.CopyChunkHook = cancel
+	err := run(opts)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("run error = %v, want context cancellation", err)
+	}
+	after := snapshotTree(t, destination)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("managed output changed after local-copy cancellation\nbefore=%v\nafter=%v", before, after)
+	}
+	assertNoPublishResidue(t, parent)
+}
+
+func TestPublishBundlesCancellationDuringStagingPreservesManagedOutput(t *testing.T) {
+	parent := t.TempDir()
+	source := writePublishSource(t, parent)
+	name := bundleName("linux", "amd64")
+	if err := os.WriteFile(filepath.Join(source, name), bytes.Repeat([]byte("b"), 256<<10), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(parent, "bundles")
+	writeExistingOutput(t, destination)
+	before := snapshotTree(t, destination)
+	ctx, cancel := context.WithCancel(context.Background())
+	err := publishBundles(ctx, source, destination, releaseinputs.RequiredPlatforms(), nil, nil, cancel)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("publishBundles error = %v, want context cancellation", err)
+	}
+	after := snapshotTree(t, destination)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("managed output changed after staging cancellation\nbefore=%v\nafter=%v", before, after)
+	}
+	assertNoPublishResidue(t, parent)
+}
+
+func TestPublishBundlesFinishesCommitAfterCancellation(t *testing.T) {
+	parent := t.TempDir()
+	source := writePublishSource(t, parent)
+	destination := filepath.Join(parent, "bundles")
+	writeExistingOutput(t, destination)
+	ctx, cancel := context.WithCancel(context.Background())
+	fault := func(operation, _ string) error {
+		if operation == "replace" {
+			cancel()
+		}
+		return nil
+	}
+	if err := publishBundles(ctx, source, destination, releaseinputs.RequiredPlatforms(), fault, nil, nil); err != nil {
+		t.Fatalf("publishBundles interrupted an active commit: %v", err)
+	}
+	name := bundleName("windows", "arm64")
+	got, err := os.ReadFile(filepath.Join(destination, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new-"+name {
+		t.Fatalf("active bundle = %q, want committed bundle", got)
+	}
+	assertNoPublishResidue(t, parent)
+}
+
+func TestPublishBundlesFailureIsAllOrNothing(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation string
+	}{
+		{name: "copy failure", operation: "copy"},
+		{name: "chmod failure", operation: "chmod"},
+		{name: "replace failure", operation: "replace"},
+	}
+	for _, test := range tests {
+		t.Run(test.name+" preserves existing output", func(t *testing.T) {
+			parent := t.TempDir()
+			source := writePublishSource(t, parent)
+			destination := filepath.Join(parent, "bundles")
+			writeExistingOutput(t, destination)
+			before := snapshotTree(t, destination)
+			fault := func(operation, path string) error {
+				if operation == test.operation && (operation == "replace" || filepath.Base(path) == bundleName("windows", "arm64")) {
+					return errors.New("injected " + operation + " failure")
+				}
+				return nil
+			}
+			if err := publishBundles(context.Background(), source, destination, releaseinputs.RequiredPlatforms(), fault, nil, nil); err == nil {
+				t.Fatalf("publishBundles accepted injected %s failure", test.operation)
+			}
+			after := snapshotTree(t, destination)
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("existing output changed after %s failure\nbefore=%v\nafter=%v", test.operation, before, after)
+			}
+			assertNoPublishResidue(t, parent)
+		})
+
+		t.Run(test.name+" leaves absent output absent", func(t *testing.T) {
+			parent := t.TempDir()
+			source := writePublishSource(t, parent)
+			createdParent := filepath.Join(parent, "new-parent")
+			destination := filepath.Join(createdParent, "bundles")
+			fault := func(operation, path string) error {
+				if operation == test.operation && (operation == "replace" || filepath.Base(path) == bundleName("windows", "arm64")) {
+					return errors.New("injected " + operation + " failure")
+				}
+				return nil
+			}
+			if err := publishBundles(context.Background(), source, destination, releaseinputs.RequiredPlatforms(), fault, nil, nil); err == nil {
+				t.Fatalf("publishBundles accepted injected %s failure", test.operation)
+			}
+			if _, err := os.Lstat(destination); !os.IsNotExist(err) {
+				t.Fatalf("destination exists after %s failure: %v", test.operation, err)
+			}
+			if _, err := os.Lstat(createdParent); !os.IsNotExist(err) {
+				t.Fatalf("new parent exists after %s failure: %v", test.operation, err)
+			}
+			assertNoPublishResidue(t, parent)
+		})
+	}
+}
+
+func TestPublishBundlesRejectsUnmanagedEntriesWithoutMutation(t *testing.T) {
+	parent := t.TempDir()
+	source := writePublishSource(t, parent)
+	destination := filepath.Join(parent, "bundles")
+	writeExistingOutput(t, destination)
+	if err := os.Mkdir(filepath.Join(destination, "notes"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, "notes", "keep.txt"), []byte("unmanaged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotTree(t, destination)
+	if err := publishBundles(context.Background(), source, destination, releaseinputs.RequiredPlatforms(), nil, nil, nil); err == nil {
+		t.Fatal("publishBundles accepted an unmanaged output entry")
+	}
+	after := snapshotTree(t, destination)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("managed output changed after rejecting unrelated entry\nbefore=%v\nafter=%v", before, after)
+	}
+	assertNoPublishResidue(t, parent)
+}
+
+func TestPublishBundlesRejectsUnsafeExistingOutput(t *testing.T) {
+	parent := t.TempDir()
+	source := writePublishSource(t, parent)
+	destination := filepath.Join(parent, "bundles")
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(parent, "outside.txt")
+	if err := os.WriteFile(target, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(destination, "unsafe-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+	before := snapshotTreeLstat(t, destination)
+	if err := publishBundles(context.Background(), source, destination, releaseinputs.RequiredPlatforms(), nil, nil, nil); err == nil {
+		t.Fatal("publishBundles accepted an existing symlink")
+	}
+	after := snapshotTreeLstat(t, destination)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("unsafe output changed\nbefore=%v\nafter=%v", before, after)
+	}
+	assertNoPublishResidue(t, parent)
+}
+
+func TestPublishBundlesRejectsNonDirectoryDestination(t *testing.T) {
+	parent := t.TempDir()
+	source := writePublishSource(t, parent)
+	destination := filepath.Join(parent, "bundles")
+	if err := os.WriteFile(destination, []byte("do not replace"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publishBundles(context.Background(), source, destination, releaseinputs.RequiredPlatforms(), nil, nil, nil); err == nil {
+		t.Fatal("publishBundles accepted a non-directory destination")
+	}
+	after, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("non-directory destination changed: got %q want %q", after, before)
+	}
+	assertNoPublishResidue(t, parent)
+}
+
+func TestPublishBundlesRejectsSymlinkedParent(t *testing.T) {
+	parent := t.TempDir()
+	source := writePublishSource(t, parent)
+	realParent := filepath.Join(parent, "real-parent")
+	if err := os.Mkdir(realParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkedParent := filepath.Join(parent, "linked-parent")
+	if err := os.Symlink(realParent, linkedParent); err != nil {
+		t.Skipf("directory symlink creation is unavailable: %v", err)
+	}
+	if err := publishBundles(context.Background(), source, filepath.Join(linkedParent, "bundles"), releaseinputs.RequiredPlatforms(), nil, nil, nil); err == nil {
+		t.Fatal("publishBundles crossed a symlinked destination parent")
+	}
+	if _, err := os.Lstat(filepath.Join(realParent, "bundles")); !os.IsNotExist(err) {
+		t.Fatalf("publish crossed parent link and created output: %v", err)
+	}
+	assertNoPublishResidue(t, parent)
+}
+
+func TestRunCleanupFailureWarnsAfterSuccessfulCommit(t *testing.T) {
+	fixture := newLockedFixture(t, "stable")
+	parent := t.TempDir()
+	destination := filepath.Join(parent, "bundles")
+	writeExistingOutput(t, destination)
+	var warnings bytes.Buffer
+	opts := fixture.options(destination)
+	opts.PublishFault = func(operation, _ string) error {
+		if operation == "cleanup" {
+			return errors.New("injected cleanup failure at " + destination)
+		}
+		return nil
+	}
+	opts.WarningSink = func(message string) {
+		warnings.WriteString(message)
+		warnings.WriteByte('\n')
+	}
+	if err := run(opts); err != nil {
+		t.Fatalf("run returned an error after commit: %v", err)
+	}
+	entries := extractBundle(t, filepath.Join(destination, bundleName("linux", "amd64")))
+	if len(entries) == 0 {
+		t.Fatal("new bundle directory is not active after cleanup failure")
+	}
+	warningLines := strings.Split(strings.TrimSpace(warnings.String()), "\n")
+	if len(warningLines) != 1 {
+		t.Fatalf("warnings = %q, want exactly one cleanup warning", warnings.String())
+	}
+	const wantWarning = "old bundle backup cleanup failed; manual cleanup may be required"
+	if warningLines[0] != wantWarning {
+		t.Fatalf("warning = %q, want fixed %q", warningLines[0], wantWarning)
+	}
+	for _, sensitive := range []string{destination, parent, filepath.Base(destination), "injected cleanup failure"} {
+		if strings.Contains(warningLines[0], sensitive) {
+			t.Fatalf("warning %q leaked path component %q", warningLines[0], sensitive)
+		}
+	}
+	backupCount := 0
+	parentEntries, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range parentEntries {
+		if strings.HasPrefix(entry.Name(), ".mihari-aio-backup-") {
+			backupCount++
+		}
+	}
+	if backupCount != 1 {
+		t.Fatalf("backup count = %d, want one retained backup after injected cleanup failure", backupCount)
+	}
+}
+
+func TestPublishBundlesCleanupFailureAllowsNoOpWarningSink(t *testing.T) {
+	parent := t.TempDir()
+	source := writePublishSource(t, parent)
+	destination := filepath.Join(parent, "bundles")
+	writeExistingOutput(t, destination)
+	fault := func(operation, _ string) error {
+		if operation == "cleanup" {
+			return errors.New("injected cleanup failure")
+		}
+		return nil
+	}
+	if err := publishBundles(context.Background(), source, destination, releaseinputs.RequiredPlatforms(), fault, nil, nil); err != nil {
+		t.Fatalf("publishBundles with no-op warning sink: %v", err)
+	}
+	name := bundleName("windows", "arm64")
+	got, err := os.ReadFile(filepath.Join(destination, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new-"+name {
+		t.Fatalf("active bundle = %q, want committed bundle", got)
+	}
+}
+
+func TestRunHonorsContextAndRejectsInsecureRedirects(t *testing.T) {
+	t.Run("canceled context", func(t *testing.T) {
+		fixture := newLockedFixture(t, "stable")
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		opts := fixture.options(filepath.Join(t.TempDir(), "out"))
+		opts.Context = ctx
+		if err := run(opts); err == nil {
+			t.Fatal("run accepted a canceled context")
+		}
+	})
+
+	t.Run("non-200 status", func(t *testing.T) {
+		fixture := newLockedFixture(t, "stable")
+		asset := fixture.lock.Mihomo.Assets["linux/amd64"]
+		fixture.transport.statuses[asset.URL] = http.StatusServiceUnavailable
+		if err := run(fixture.options(filepath.Join(t.TempDir(), "out"))); err == nil {
+			t.Fatal("run accepted a non-200 locked download")
+		}
+	})
+
+	t.Run("HTTPS downgrade redirect", func(t *testing.T) {
+		fixture := newLockedFixture(t, "stable")
+		asset := fixture.lock.Mihomo.Assets["linux/amd64"]
+		fixture.transport.redirects[asset.URL] = "http://example.invalid/core.gz"
+		if err := run(fixture.options(filepath.Join(t.TempDir(), "out"))); err == nil {
+			t.Fatal("run followed an HTTPS downgrade redirect")
+		}
+		if fixture.transport.requestsByURL()["http://example.invalid/core.gz"] != 0 {
+			t.Fatal("insecure redirect target was requested")
+		}
+	})
 }
 
 func TestSidecarScriptInstallersCopyCoreChannel(t *testing.T) {
@@ -265,106 +797,371 @@ func TestAssertStageEnforcesWhitelist(t *testing.T) {
 	}
 }
 
-func fakeGitHubAlphaAPI(t *testing.T) *httptest.Server {
-	t.Helper()
-	// Standard names first; variants must exist so a stable-style scorer
-	// that prefers -compatible / would accept -v3 is observable as a miss.
-	names := []string{
-		"mihomo-linux-amd64-compatible-alpha-e183c58.gz",
-		"mihomo-linux-amd64-v3-alpha-e183c58.gz",
-		"mihomo-linux-amd64-alpha-e183c58.gz",
-		"mihomo-linux-arm64-alpha-e183c58.gz",
-		"mihomo-darwin-amd64-compatible-alpha-e183c58.gz",
-		"mihomo-darwin-amd64-v3-alpha-e183c58.gz",
-		"mihomo-darwin-amd64-alpha-e183c58.gz",
-		"mihomo-darwin-arm64-alpha-e183c58.gz",
-		"mihomo-windows-amd64-compatible-alpha-e183c58.zip",
-		"mihomo-windows-amd64-v3-alpha-e183c58.zip",
-		"mihomo-windows-amd64-alpha-e183c58.zip",
-		"mihomo-windows-arm64-alpha-e183c58.zip",
-	}
-	archives := make(map[string][]byte, len(names))
-	for _, name := range names {
-		archives[name] = fakeMihomoArchive(t, name)
-	}
-	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		switch {
-		case request.URL.Path == "/repos/MetaCubeX/mihomo/releases/tags/Prerelease-Alpha":
-			assets := make([]core.Asset, 0, len(names))
-			for _, name := range names {
-				data := archives[name]
-				sum := sha256.Sum256(data)
-				assets = append(assets, core.Asset{
-					Name: name, URL: server.URL + "/asset/" + name,
-					Size: int64(len(data)), Digest: "sha256:" + hex.EncodeToString(sum[:]),
-				})
-			}
-			response.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(response).Encode(core.Release{TagName: "Prerelease-Alpha", Assets: assets})
-		case strings.HasPrefix(request.URL.Path, "/asset/"):
-			_, _ = response.Write(archives[strings.TrimPrefix(request.URL.Path, "/asset/")])
-		default:
-			http.NotFound(response, request)
-		}
-	}))
-	return server
+type treeSnapshotEntry struct {
+	Mode os.FileMode
+	Data string
 }
 
-func fakeGitHubAPI(t *testing.T) *httptest.Server {
-	t.Helper()
-	names := []string{
-		"mihomo-linux-amd64-compatible-v1.19.0.gz",
-		"mihomo-linux-arm64-v1.19.0.gz",
-		"mihomo-darwin-amd64-compatible-v1.19.0.gz",
-		"mihomo-darwin-arm64-v1.19.0.gz",
-		"mihomo-windows-amd64-compatible-v1.19.0.zip",
-		"mihomo-windows-arm64-v1.19.0.zip",
+func canonicalArchiveModes(goos string) map[string]os.FileMode {
+	suffix, script := "", "install-aio.sh"
+	if goos == "windows" {
+		suffix, script = ".exe", "install-aio.ps1"
 	}
-	archives := make(map[string][]byte, len(names))
-	for _, name := range names {
-		archives[name] = fakeMihomoArchive(t, name)
+	modes := map[string]os.FileMode{
+		"mihari" + suffix:                  0o755,
+		script:                             0o644,
+		"data/bin/mihomo" + suffix:         0o755,
+		"data/bin/core-channel":            0o644,
+		"data/geoip/GeoLite2-Country.mmdb": 0o644,
+		"data/geoip/GeoLite2-ASN.mmdb":     0o644,
 	}
-	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		switch {
-		case request.URL.Path == "/repos/MetaCubeX/mihomo/releases/latest":
-			assets := make([]core.Asset, 0, len(names))
-			for _, name := range names {
-				data := archives[name]
-				sum := sha256.Sum256(data)
-				assets = append(assets, core.Asset{
-					Name: name, URL: server.URL + "/asset/" + name,
-					Size: int64(len(data)), Digest: "sha256:" + hex.EncodeToString(sum[:]),
-				})
-			}
-			response.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(response).Encode(core.Release{TagName: "v1.19.0", Assets: assets})
-		case strings.HasPrefix(request.URL.Path, "/asset/"):
-			_, _ = response.Write(archives[strings.TrimPrefix(request.URL.Path, "/asset/")])
-		default:
-			http.NotFound(response, request)
-		}
-	}))
-	return server
+	if goos != "windows" {
+		modes[script] = 0o755
+	}
+	return modes
 }
 
-func fakeGeoIPServer(t *testing.T) *httptest.Server {
+func writeCanonicalArchiveStage(t *testing.T, root, goos string, hostMode os.FileMode) {
 	t.Helper()
-	files := make(map[string][]byte)
-	for _, name := range []string{"GeoLite2-Country.mmdb", "GeoLite2-ASN.mmdb"} {
-		payload := []byte("fake-" + name)
-		files[name] = payload
+	for name := range canonicalArchiveModes(goos) {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("fixture-"+name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, hostMode); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func archiveEntryModes(t *testing.T, path string) map[string]os.FileMode {
+	t.Helper()
+	result := make(map[string]os.FileMode)
+	if strings.HasSuffix(path, ".tar.gz") {
+		file, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		compressed, err := gzip.NewReader(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer compressed.Close()
+		reader := tar.NewReader(compressed)
+		for {
+			header, err := reader.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			result[header.Name] = os.FileMode(header.Mode).Perm()
+		}
+		return result
+	}
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	for _, file := range reader.File {
+		result[file.Name] = file.Mode().Perm()
+	}
+	return result
+}
+
+func writePublishSource(t *testing.T, parent string) string {
+	t.Helper()
+	source := filepath.Join(parent, "source")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, platform := range releaseinputs.RequiredPlatforms() {
+		goos, goarch, err := splitPlatform(platform)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := bundleName(goos, goarch)
+		if err := os.WriteFile(filepath.Join(source, name), []byte("new-"+name), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return source
+}
+
+func writeExistingOutput(t *testing.T, destination string) {
+	t.Helper()
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, platform := range releaseinputs.RequiredPlatforms() {
+		goos, goarch, err := splitPlatform(platform)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := bundleName(goos, goarch)
+		if err := os.WriteFile(filepath.Join(destination, name), []byte("old-"+name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func snapshotTree(t *testing.T, root string) map[string]treeSnapshotEntry {
+	t.Helper()
+	return snapshotTreeWithLinks(t, root, false)
+}
+
+func snapshotTreeLstat(t *testing.T, root string) map[string]treeSnapshotEntry {
+	t.Helper()
+	return snapshotTreeWithLinks(t, root, true)
+}
+
+func snapshotTreeWithLinks(t *testing.T, root string, allowLinks bool) map[string]treeSnapshotEntry {
+	t.Helper()
+	result := make(map[string]treeSnapshotEntry)
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		item := treeSnapshotEntry{Mode: info.Mode()}
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			if !allowLinks {
+				return errors.New("unexpected link in snapshot")
+			}
+			item.Data, err = os.Readlink(path)
+		case info.Mode().IsRegular():
+			var data []byte
+			data, err = os.ReadFile(path)
+			item.Data = string(data)
+		}
+		if err != nil {
+			return err
+		}
+		result[filepath.ToSlash(relative)] = item
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("snapshot %s: %v", root, err)
+	}
+	return result
+}
+
+func assertNoPublishResidue(t *testing.T, parent string) {
+	t.Helper()
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".mihari-aio-publish-") || strings.HasPrefix(entry.Name(), ".mihari-aio-backup-") {
+			t.Fatalf("publish transaction residue remains: %s", entry.Name())
+		}
+	}
+}
+
+type lockedFixture struct {
+	lock       releaseinputs.Lock
+	lockPath   string
+	mihariDir  string
+	scriptsDir string
+	transport  *fixtureTransport
+}
+
+func newLockedFixture(t *testing.T, channel string) *lockedFixture {
+	t.Helper()
+	const (
+		tag    = "v1.19.30"
+		commit = "69986b5d098c8d723a2c4d56317bc10cd5669c02"
+	)
+	lock := releaseinputs.Lock{
+		Schema: releaseinputs.SchemaV1,
+		Mihomo: releaseinputs.MihomoInputs{
+			Repository: "MetaCubeX/mihomo",
+			Channel:    channel,
+			ReleaseID:  1,
+			Tag:        tag,
+			Assets:     make(map[string]releaseinputs.MihomoAsset),
+		},
+		GeoIP: releaseinputs.GeoIPInputs{
+			Repository: "Loyalsoldier/geoip",
+			Commit:     commit,
+		},
+	}
+	if channel == "alpha" {
+		lock.Mihomo.Tag = "Prerelease-Alpha"
+	}
+	payloads := make(map[string][]byte)
+	for index, platform := range releaseinputs.RequiredPlatforms() {
+		extension := ".gz"
+		if strings.HasPrefix(platform, "windows/") {
+			extension = ".zip"
+		}
+		name := "mihomo-" + strings.ReplaceAll(platform, "/", "-") + "-" + lock.Mihomo.Tag + extension
+		if channel == "alpha" {
+			name = "mihomo-" + strings.ReplaceAll(platform, "/", "-") + "-alpha-e183c58" + extension
+		}
+		payload := fakeMihomoArchive(t, name)
 		sum := sha256.Sum256(payload)
-		files[name+".sha256sum"] = []byte(hex.EncodeToString(sum[:]) + "  " + name + "\n")
-	}
-	return httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if data, ok := files[strings.TrimPrefix(request.URL.Path, "/")]; ok {
-			_, _ = response.Write(data)
-			return
+		url := "https://github.com/MetaCubeX/mihomo/releases/download/" + lock.Mihomo.Tag + "/" + name
+		lock.Mihomo.Assets[platform] = releaseinputs.MihomoAsset{
+			AssetID: int64(index + 1), Name: name, URL: url,
+			Size: int64(len(payload)), SHA256: hex.EncodeToString(sum[:]),
 		}
-		http.NotFound(response, request)
-	}))
+		payloads[url] = payload
+	}
+	country := []byte("fake-GeoLite2-Country.mmdb")
+	asn := []byte("fake-GeoLite2-ASN.mmdb")
+	countrySum := sha256.Sum256(country)
+	asnSum := sha256.Sum256(asn)
+	lock.GeoIP.Country = releaseinputs.GeoIPFile{
+		Name:   "GeoLite2-Country.mmdb",
+		URL:    "https://raw.githubusercontent.com/Loyalsoldier/geoip/" + commit + "/GeoLite2-Country.mmdb",
+		SHA256: hex.EncodeToString(countrySum[:]),
+	}
+	lock.GeoIP.ASN = releaseinputs.GeoIPFile{
+		Name:   "GeoLite2-ASN.mmdb",
+		URL:    "https://raw.githubusercontent.com/Loyalsoldier/geoip/" + commit + "/GeoLite2-ASN.mmdb",
+		SHA256: hex.EncodeToString(asnSum[:]),
+	}
+	payloads[lock.GeoIP.Country.URL] = country
+	payloads[lock.GeoIP.ASN.URL] = asn
+
+	mihariDir := t.TempDir()
+	writeMihariDist(t, mihariDir)
+	scriptsDir := t.TempDir()
+	for _, name := range []string{"install-aio.sh", "install-aio.ps1"} {
+		if err := os.WriteFile(filepath.Join(scriptsDir, name), []byte("# aio installer\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixture := &lockedFixture{
+		lock:       lock,
+		lockPath:   filepath.Join(t.TempDir(), "release-inputs.lock.json"),
+		mihariDir:  mihariDir,
+		scriptsDir: scriptsDir,
+		transport: &fixtureTransport{
+			payloads:  payloads,
+			statuses:  make(map[string]int),
+			redirects: make(map[string]string),
+		},
+	}
+	fixture.writeLock(t)
+	return fixture
+}
+
+func (f *lockedFixture) writeLock(t *testing.T) {
+	t.Helper()
+	data, err := releaseinputs.Encode(f.lock)
+	if err != nil {
+		t.Fatalf("encode fixture lock: %v", err)
+	}
+	if err := os.WriteFile(f.lockPath, data, 0o600); err != nil {
+		t.Fatalf("write fixture lock: %v", err)
+	}
+}
+
+func (f *lockedFixture) options(out string) options {
+	return options{
+		LockPath: f.lockPath, MihariDir: f.mihariDir, Out: out, ScriptsDir: f.scriptsDir,
+		Platforms:     releaseinputs.RequiredPlatforms(),
+		HTTPClient:    &http.Client{Transport: f.transport},
+		GeoIPValidate: func(string) error { return nil },
+		Runner:        fakeRunner{output: []byte("Mihomo Meta v1.19.30")},
+	}
+}
+
+func (f *lockedFixture) assertOnlyLockedRequests(t *testing.T) {
+	t.Helper()
+	want := make(map[string]int, 8)
+	for _, asset := range f.lock.Mihomo.Assets {
+		want[asset.URL]++
+	}
+	want[f.lock.GeoIP.Country.URL]++
+	want[f.lock.GeoIP.ASN.URL]++
+	got := f.transport.requestsByURL()
+	if len(got) != len(want) {
+		t.Fatalf("requested URLs = %v, want exactly locked URLs %v", got, want)
+	}
+	for url, count := range want {
+		if got[url] != count {
+			t.Fatalf("request count for %s = %d, want %d (all requests: %v)", url, got[url], count, got)
+		}
+	}
+	for url := range got {
+		if strings.Contains(url, "/latest") || strings.Contains(url, "/release/") || strings.HasSuffix(url, ".sha256sum") {
+			t.Fatalf("mutable discovery request observed: %s", url)
+		}
+	}
+}
+
+type fixtureTransport struct {
+	mu        sync.Mutex
+	payloads  map[string][]byte
+	statuses  map[string]int
+	redirects map[string]string
+	requests  []string
+}
+
+func (f *fixtureTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if err := request.Context().Err(); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	f.requests = append(f.requests, request.URL.String())
+	payload, ok := f.payloads[request.URL.String()]
+	status := f.statuses[request.URL.String()]
+	redirect := f.redirects[request.URL.String()]
+	f.mu.Unlock()
+	if redirect != "" {
+		return &http.Response{
+			StatusCode: http.StatusFound,
+			Header:     http.Header{"Location": []string{redirect}},
+			Body:       io.NopCloser(strings.NewReader("redirect")),
+			Request:    request,
+		}, nil
+	}
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if !ok && status == http.StatusOK {
+		status = http.StatusNotFound
+	}
+	return &http.Response{
+		StatusCode: status,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewReader(payload)),
+		Request:    request,
+	}, nil
+}
+
+func (f *fixtureTransport) requestCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.requests)
+}
+
+func (f *fixtureTransport) requestsByURL() map[string]int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	result := make(map[string]int, len(f.requests))
+	for _, rawURL := range f.requests {
+		result[rawURL]++
+	}
+	return result
 }
 
 func fakeMihomoArchive(t *testing.T, name string) []byte {
