@@ -469,6 +469,9 @@ def test_fs_path_strips_mount_segment():
     assert alist._fs_path("/mihari-release/mihari") == "/mihari"
     # No leading segment to strip → returned unchanged (no crash on odd shapes).
     assert alist._fs_path("/mihari-release") == "/mihari-release"
+    assert alist._fs_path("/mihari-release/mihari-dev") == "/mihari-dev"
+    assert alist._fs_path("/mihari-release/mihari-dev/index.txt") == "/mihari-dev/index.txt"
+    assert alist._fs_path("/") == "/"
 
 
 def _load_release_alist():
