@@ -705,8 +705,22 @@ func TestPublishBundlesRejectsFileAncestorOfMissingParent(t *testing.T) {
 	if err := publishBundles(context.Background(), source, destination, releaseinputs.RequiredPlatforms(), nil, nil, nil); err == nil {
 		t.Fatal("publishBundles accepted a file as the first existing ancestor")
 	}
-	if _, err := os.Lstat(filepath.Join(fileAncestor, "nested")); !os.IsNotExist(err) {
-		t.Fatalf("missing parent was created under a file ancestor: %v", err)
+	info, err := os.Lstat(fileAncestor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("file ancestor mode = %v, want a regular file", info.Mode())
+	}
+	got, err := os.ReadFile(fileAncestor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "not a directory" {
+		t.Fatalf("file ancestor contents = %q, want unchanged", got)
+	}
+	if _, err := os.Lstat(filepath.Join(fileAncestor, "nested")); err == nil {
+		t.Fatal("nested parent exists under a file ancestor")
 	}
 	assertNoPublishResidue(t, parent)
 }
