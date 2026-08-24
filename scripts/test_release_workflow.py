@@ -27,7 +27,8 @@ RELEASE_SAFETY_TESTS = (
     "scripts/test_alist_index.py "
     "scripts/test_release_alist.py "
     "scripts/test_retract_alist.py "
-    "scripts/test_regenerate_index.py -q"
+    "scripts/test_regenerate_index.py "
+    "scripts/test_alist_channel_guard.py -q"
 )
 
 
