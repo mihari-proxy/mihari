@@ -116,7 +116,11 @@ func resolve(ctx context.Context, options options) error {
 
 	client := options.HTTPClient
 	if client == nil {
-		client = newHTTPClient(options.GitHubToken, options.APIBase)
+		var err error
+		client, err = newHTTPClient(options.GitHubToken, options.APIBase)
+		if err != nil {
+			return err
+		}
 	}
 	installer := core.Installer{
 		HTTPClient: client,
@@ -142,7 +146,7 @@ func resolve(ctx context.Context, options options) error {
 	}
 
 	for platform, asset := range selected {
-		digest, err := downloadDigest(ctx, client, mappedDownloadURL(asset.URL, options.DownloadBase), asset.Size, options.MaxDownloadBytes, asset.Digest, options.DownloadBase)
+		digest, err := downloadDigest(ctx, client, mappedDownloadURL(asset.URL, options.DownloadBase), asset.Size, options.MaxDownloadBytes, asset.Digest, mihomoPayload, options.DownloadBase)
 		if err != nil {
 			return fmt.Errorf("verify mihomo %s payload: %w", platform, err)
 		}
@@ -151,12 +155,12 @@ func resolve(ctx context.Context, options options) error {
 		lock.Mihomo.Assets[platform] = entry
 	}
 
-	countryDigest, err := downloadDigest(ctx, client, mappedDownloadURL(lock.GeoIP.Country.URL, options.DownloadBase), 0, options.MaxDownloadBytes, "", options.DownloadBase)
+	countryDigest, err := downloadDigest(ctx, client, mappedDownloadURL(lock.GeoIP.Country.URL, options.DownloadBase), 0, options.MaxDownloadBytes, "", geoIPPayload, options.DownloadBase)
 	if err != nil {
 		return fmt.Errorf("verify GeoIP country payload: %w", err)
 	}
 	lock.GeoIP.Country.SHA256 = countryDigest
-	asnDigest, err := downloadDigest(ctx, client, mappedDownloadURL(lock.GeoIP.ASN.URL, options.DownloadBase), 0, options.MaxDownloadBytes, "", options.DownloadBase)
+	asnDigest, err := downloadDigest(ctx, client, mappedDownloadURL(lock.GeoIP.ASN.URL, options.DownloadBase), 0, options.MaxDownloadBytes, "", geoIPPayload, options.DownloadBase)
 	if err != nil {
 		return fmt.Errorf("verify GeoIP ASN payload: %w", err)
 	}
@@ -166,7 +170,7 @@ func resolve(ctx context.Context, options options) error {
 	if err != nil {
 		return fmt.Errorf("encode resolved release inputs: %w", err)
 	}
-	if err := writeAtomic(options.Out, data); err != nil {
+	if err := writeAtomic(ctx, options.Out, data); err != nil {
 		return err
 	}
 	return nil
@@ -331,18 +335,49 @@ func preferredStableAssetName(goos, goarch, tag string) string {
 	return "mihomo-" + strings.ToLower(goos) + "-" + strings.ToLower(goarch) + variant + "-" + tag + extension
 }
 
-func downloadDigest(ctx context.Context, client *http.Client, rawURL string, expectedSize, maxBytes int64, upstreamDigest, testBase string) (string, error) {
+type payloadSource uint8
+
+const (
+	mihomoPayload payloadSource = iota + 1
+	geoIPPayload
+)
+
+func downloadDigest(ctx context.Context, client *http.Client, rawURL string, expectedSize, maxBytes int64, upstreamDigest string, source payloadSource, testBase string) (string, error) {
+	policy, err := newPayloadURLPolicy(source, testBase)
+	if err != nil {
+		return "", err
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", errors.New("create payload request")
 	}
+	if err := policy.validate(request.URL); err != nil {
+		return "", err
+	}
 	request.Header.Set("User-Agent", resolverUserAgent)
-	response, err := client.Do(request)
+	downloadClient := *client
+	baseRedirect := client.CheckRedirect
+	downloadClient.CheckRedirect = func(next *http.Request, previous []*http.Request) error {
+		if len(previous) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		if err := policy.validate(next.URL); err != nil {
+			return err
+		}
+		if baseRedirect != nil {
+			return baseRedirect(next, previous)
+		}
+		return nil
+	}
+	response, err := downloadClient.Do(request)
 	if err != nil {
 		return "", safeNetworkError{operation: "download payload", cause: err}
 	}
 	defer response.Body.Close()
-	if err := validateFinalDownloadURL(response.Request.URL, testBase); err != nil {
+	if response.Request == nil {
+		return "", errors.New("payload response URL is unavailable")
+	}
+	if err := policy.validate(response.Request.URL); err != nil {
 		return "", err
 	}
 	if response.StatusCode != http.StatusOK {
@@ -388,19 +423,52 @@ func (failure safeNetworkError) Unwrap() error {
 	return failure.cause
 }
 
-func validateFinalDownloadURL(final *url.URL, testBase string) error {
-	if final == nil || final.User != nil {
-		return errors.New("payload redirect target is not approved")
+type payloadURLPolicy struct {
+	source     payloadSource
+	testOrigin *url.URL
+}
+
+func newPayloadURLPolicy(source payloadSource, testBase string) (payloadURLPolicy, error) {
+	if source != mihomoPayload && source != geoIPPayload {
+		return payloadURLPolicy{}, errors.New("payload source is unsupported")
 	}
+	policy := payloadURLPolicy{source: source}
 	if testBase == "" {
-		if final.Scheme != "https" {
-			return errors.New("payload redirect must preserve HTTPS")
+		return policy, nil
+	}
+	base, err := url.Parse(testBase)
+	if err != nil || strings.Contains(testBase, "#") || !base.IsAbs() || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" || base.User != nil || base.Opaque != "" || base.RawQuery != "" || base.ForceQuery || base.Fragment != "" {
+		return payloadURLPolicy{}, errors.New("injected payload origin is invalid")
+	}
+	policy.testOrigin = base
+	return policy, nil
+}
+
+func (policy payloadURLPolicy) validate(candidate *url.URL) error {
+	if candidate == nil || candidate.User != nil || candidate.Opaque != "" {
+		return errors.New("payload URL is not approved")
+	}
+	if policy.testOrigin != nil {
+		if candidate.Scheme != policy.testOrigin.Scheme || candidate.Host != policy.testOrigin.Host {
+			return errors.New("payload redirect escaped the injected download origin")
 		}
 		return nil
 	}
-	base, err := url.Parse(testBase)
-	if err != nil || final.Scheme != base.Scheme || final.Host != base.Host {
-		return errors.New("payload redirect escaped the injected download origin")
+	if candidate.Scheme != "https" || candidate.Port() != "" {
+		return errors.New("payload URL must use an approved HTTPS host")
+	}
+	host := strings.ToLower(candidate.Hostname())
+	switch policy.source {
+	case geoIPPayload:
+		if host != "raw.githubusercontent.com" {
+			return errors.New("GeoIP payload URL host is not approved")
+		}
+	case mihomoPayload:
+		if host != "github.com" && host != "release-assets.githubusercontent.com" && host != "objects.githubusercontent.com" {
+			return errors.New("mihomo payload URL host is not approved")
+		}
+	default:
+		return errors.New("payload source is unsupported")
 	}
 	return nil
 }
@@ -416,13 +484,16 @@ func mappedDownloadURL(rawURL, downloadBase string) string {
 	return strings.TrimRight(downloadBase, "/") + parsed.EscapedPath()
 }
 
-func newHTTPClient(token, apiBase string) *http.Client {
+func newHTTPClient(token, apiBase string) (*http.Client, error) {
+	parsed, err := url.Parse(apiBase)
+	if err != nil || strings.Contains(apiBase, "#") || !parsed.IsAbs() || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Opaque != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return nil, errors.New("GitHub API base must be an absolute HTTPS URL without credentials, query, or fragment")
+	}
 	transport := http.DefaultTransport
 	if token != "" {
-		parsed, _ := url.Parse(apiBase)
 		transport = bearerTransport{base: transport, token: token, allowedHost: parsed.Host}
 	}
-	return &http.Client{Timeout: resolverHTTPTimeout, Transport: transport, CheckRedirect: redirectPolicy}
+	return &http.Client{Timeout: resolverHTTPTimeout, Transport: transport, CheckRedirect: redirectPolicy}, nil
 }
 
 type bearerTransport struct {

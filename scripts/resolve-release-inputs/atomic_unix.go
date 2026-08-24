@@ -13,6 +13,5 @@ func syncParentDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	defer directory.Close()
-	return directory.Sync()
+	return syncAndClose(directory)
 }

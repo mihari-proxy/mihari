@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/core"
@@ -363,7 +364,7 @@ func TestWriteAtomicReplaceFailurePreservesExistingFileAndCleansTemporary(t *tes
 		t.Fatal(err)
 	}
 	var source, target string
-	err := writeAtomicWithOps(destination, []byte("new\n"), atomicFileOps{
+	err := writeAtomicWithOps(context.Background(), destination, []byte("new\n"), atomicFileOps{
 		replace: func(candidate, output string) error {
 			source, target = candidate, output
 			return errors.New("replace denied")
@@ -393,7 +394,7 @@ func TestWriteAtomicSyncFailureIsBestEffortAfterSuccessfulReplacement(t *testing
 		t.Fatal(err)
 	}
 	syncCalled := false
-	err := writeAtomicWithOps(destination, []byte("new\n"), atomicFileOps{
+	err := writeAtomicWithOps(context.Background(), destination, []byte("new\n"), atomicFileOps{
 		replace: replaceFile,
 		syncDirectory: func(path string) error {
 			syncCalled = true
@@ -414,6 +415,68 @@ func TestWriteAtomicSyncFailureIsBestEffortAfterSuccessfulReplacement(t *testing
 		t.Fatalf("destination after sync failure = %q, %v", got, readErr)
 	}
 	assertNoLockTemporaries(t, directory)
+}
+
+func TestWriteAtomicCancellationBeforeCommitPreservesExistingFile(t *testing.T) {
+	directory := t.TempDir()
+	destination := filepath.Join(directory, "release-inputs.lock.json")
+	if err := os.WriteFile(destination, []byte("old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	replaceCalled := false
+	err := writeAtomicWithOps(ctx, destination, []byte("new\n"), atomicFileOps{
+		replace: func(string, string) error {
+			replaceCalled = true
+			return nil
+		},
+		syncDirectory: func(string) error {
+			t.Fatal("syncDirectory called without a committed replacement")
+			return nil
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("writeAtomicWithOps error = %v, want context cancellation", err)
+	}
+	if replaceCalled {
+		t.Fatal("writeAtomicWithOps called replace after cancellation")
+	}
+	got, readErr := os.ReadFile(destination)
+	if readErr != nil || string(got) != "old\n" {
+		t.Fatalf("destination after cancellation = %q, %v", got, readErr)
+	}
+	assertNoLockTemporaries(t, directory)
+}
+
+func TestSyncAndCloseJoinsBothErrors(t *testing.T) {
+	syncErr := errors.New("sync failed")
+	closeErr := errors.New("close failed")
+	resource := &syncCloseFixture{syncErr: syncErr, closeErr: closeErr}
+	err := syncAndClose(resource)
+	if !errors.Is(err, syncErr) || !errors.Is(err, closeErr) {
+		t.Fatalf("syncAndClose error = %v, want both sync and close causes", err)
+	}
+	if resource.syncCalls != 1 || resource.closeCalls != 1 {
+		t.Fatalf("calls = sync %d, close %d; want one each", resource.syncCalls, resource.closeCalls)
+	}
+}
+
+type syncCloseFixture struct {
+	syncErr    error
+	closeErr   error
+	syncCalls  int
+	closeCalls int
+}
+
+func (fixture *syncCloseFixture) Sync() error {
+	fixture.syncCalls++
+	return fixture.syncErr
+}
+
+func (fixture *syncCloseFixture) Close() error {
+	fixture.closeCalls++
+	return fixture.closeErr
 }
 
 func assertNoLockTemporaries(t *testing.T, directory string) {
@@ -442,7 +505,7 @@ func TestNetworkErrorsRedactURLsAndPreserveContextCause(t *testing.T) {
 		{
 			name: "download payload",
 			run: func(client *http.Client) error {
-				_, err := downloadDigest(context.Background(), client, "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/asset.gz", 0, 1024, "", "")
+				_, err := downloadDigest(context.Background(), client, "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/asset.gz", 0, 1024, "", mihomoPayload, "")
 				return err
 			},
 		},
@@ -497,6 +560,159 @@ func TestResolveRejectsUnapprovedAssetURLBeforeDownload(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveRejectsCrossOriginHTTPSRedirectBeforePayloadRequest(t *testing.T) {
+	var evilHits atomic.Int32
+	evil := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		evilHits.Add(1)
+		_, _ = response.Write([]byte("evil-payload"))
+	}))
+	defer evil.Close()
+	fixture := newResolverFixture(t)
+	fixture.override = func(response http.ResponseWriter, request *http.Request) bool {
+		if strings.Contains(request.URL.Path, "mihomo-darwin-amd64-compatible") {
+			http.Redirect(response, request, evil.URL+"/signed?token=secret-value", http.StatusFound)
+			return true
+		}
+		return false
+	}
+	directory := t.TempDir()
+	out := filepath.Join(directory, "release-inputs.lock.json")
+	if err := os.WriteFile(out, []byte("old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolverOptions := fixture.options(out)
+	resolverOptions.HTTPClient = evil.Client()
+	err := resolve(context.Background(), resolverOptions)
+	if err == nil {
+		t.Fatal("resolve accepted cross-origin HTTPS payload redirect")
+	}
+	for _, secret := range []string{"secret-value", evil.URL, "token="} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("redirect error leaked %q: %v", secret, err)
+		}
+	}
+	if evilHits.Load() != 0 {
+		t.Fatalf("cross-origin redirect target received %d requests, want 0", evilHits.Load())
+	}
+	got, readErr := os.ReadFile(out)
+	if readErr != nil || string(got) != "old\n" {
+		t.Fatalf("lock after rejected redirect = %q, %v", got, readErr)
+	}
+	assertNoLockTemporaries(t, directory)
+}
+
+func TestDownloadDigestRejectsUnapprovedFinalURLBeforeReadingBody(t *testing.T) {
+	body := &readTrackingBody{reader: strings.NewReader("evil-payload")}
+	finalURL, err := url.Parse("https://evil.example/signed?token=secret-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       body,
+			Request:    &http.Request{URL: finalURL},
+		}, nil
+	})}
+	_, err = downloadDigest(
+		context.Background(),
+		client,
+		"https://raw.githubusercontent.com/Loyalsoldier/geoip/0123456789abcdef0123456789abcdef01234567/GeoLite2-Country.mmdb",
+		0,
+		1024,
+		"",
+		geoIPPayload,
+		"",
+	)
+	if err == nil {
+		t.Fatal("downloadDigest accepted unapproved final URL")
+	}
+	if body.readCalls != 0 {
+		t.Fatalf("unapproved response body read %d times, want 0", body.readCalls)
+	}
+	for _, secret := range []string{"evil.example", "secret-value", "token="} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("final URL error leaked %q: %v", secret, err)
+		}
+	}
+}
+
+func TestPayloadURLPolicyProductionHostContract(t *testing.T) {
+	valid := []struct {
+		name   string
+		source payloadSource
+		rawURL string
+	}{
+		{name: "mihomo release page", source: mihomoPayload, rawURL: "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/core.gz"},
+		{name: "mihomo release assets", source: mihomoPayload, rawURL: "https://release-assets.githubusercontent.com/github-production-release-asset/123/core.gz?sig=signed"},
+		{name: "mihomo objects", source: mihomoPayload, rawURL: "https://objects.githubusercontent.com/github-production-release-asset/core.gz?sig=signed"},
+		{name: "GeoIP raw content", source: geoIPPayload, rawURL: "https://raw.githubusercontent.com/Loyalsoldier/geoip/0123456789abcdef0123456789abcdef01234567/GeoLite2-Country.mmdb"},
+	}
+	for _, test := range valid {
+		t.Run("accept/"+test.name, func(t *testing.T) {
+			policy, err := newPayloadURLPolicy(test.source, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate, err := url.Parse(test.rawURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := policy.validate(candidate); err != nil {
+				t.Fatalf("validate(%q): %v", test.rawURL, err)
+			}
+		})
+	}
+
+	invalid := []struct {
+		name   string
+		source payloadSource
+		rawURL string
+	}{
+		{name: "mihomo cannot use GeoIP host", source: mihomoPayload, rawURL: "https://raw.githubusercontent.com/MetaCubeX/mihomo/core.gz"},
+		{name: "GeoIP cannot use GitHub release host", source: geoIPPayload, rawURL: "https://github.com/Loyalsoldier/geoip/file.mmdb"},
+		{name: "evil host", source: mihomoPayload, rawURL: "https://evil.example/payload?token=secret-value"},
+		{name: "subdomain spoof", source: mihomoPayload, rawURL: "https://github.com.evil.example/payload"},
+		{name: "port", source: mihomoPayload, rawURL: "https://github.com:443/payload"},
+		{name: "HTTP", source: mihomoPayload, rawURL: "http://github.com/payload"},
+		{name: "userinfo", source: mihomoPayload, rawURL: "https://secret-user@github.com/payload"},
+		{name: "GeoIP subdomain spoof", source: geoIPPayload, rawURL: "https://raw.githubusercontent.com.evil.example/file.mmdb"},
+	}
+	for _, test := range invalid {
+		t.Run("reject/"+test.name, func(t *testing.T) {
+			policy, err := newPayloadURLPolicy(test.source, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate, err := url.Parse(test.rawURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = policy.validate(candidate)
+			if err == nil {
+				t.Fatalf("validate accepted %q", test.rawURL)
+			}
+			for _, sensitive := range []string{test.rawURL, "secret-value", "secret-user", "evil.example"} {
+				if strings.Contains(err.Error(), sensitive) {
+					t.Fatalf("policy error leaked %q: %v", sensitive, err)
+				}
+			}
+		})
+	}
+}
+
+type readTrackingBody struct {
+	reader    *strings.Reader
+	readCalls int
+}
+
+func (body *readTrackingBody) Read(destination []byte) (int, error) {
+	body.readCalls++
+	return body.reader.Read(destination)
+}
+
+func (*readTrackingBody) Close() error { return nil }
 
 func TestResolvePropagatesCanceledDownloadContextAndPreservesOutput(t *testing.T) {
 	fixture := newResolverFixture(t)
@@ -676,6 +892,57 @@ func TestBearerTransportDoesNotSendTokenToPayloadHosts(t *testing.T) {
 	}
 	if len(headers) != 2 || headers[0] != "Bearer secret-token" || headers[1] != "" {
 		t.Fatalf("authorization headers = %q, want token only for API host", headers)
+	}
+}
+
+func TestNewHTTPClientRejectsUnsafeAPIBase(t *testing.T) {
+	tests := []string{
+		"://malformed-token",
+		"/relative/api",
+		"http://api.github.com",
+		"https:///missing-host",
+		"https://user-secret@api.github.com",
+		"https://api.github.com?token=secret-value",
+		"https://api.github.com#secret-fragment",
+		"https://api.github.com#",
+	}
+	for _, rawBase := range tests {
+		t.Run(strings.ReplaceAll(rawBase, "/", "_"), func(t *testing.T) {
+			client, err := newHTTPClient("environment-secret", rawBase)
+			if err == nil || client != nil {
+				t.Fatalf("newHTTPClient(%q) = %#v, %v; want rejection", rawBase, client, err)
+			}
+			for _, secret := range []string{rawBase, "malformed-token", "user-secret", "secret-value", "secret-fragment", "environment-secret"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("API base error leaked %q: %v", secret, err)
+				}
+			}
+		})
+	}
+}
+
+func TestResolveRejectsUnsafeAPIBaseWithoutMutatingLock(t *testing.T) {
+	for _, rawBase := range []string{"://malformed-token", "/relative/api", "http://api.github.com", "https://user-secret@api.github.com", "https://api.github.com?token=secret-value"} {
+		t.Run(strings.ReplaceAll(rawBase, "/", "_"), func(t *testing.T) {
+			destination := filepath.Join(t.TempDir(), "release-inputs.lock.json")
+			if err := os.WriteFile(destination, []byte("old\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err := resolve(context.Background(), options{Out: destination, APIBase: rawBase, GitHubToken: "environment-secret"})
+			if err == nil {
+				t.Fatalf("resolve accepted unsafe API base %q", rawBase)
+			}
+			for _, secret := range []string{rawBase, "malformed-token", "user-secret", "secret-value", "environment-secret"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("resolve API base error leaked %q: %v", secret, err)
+				}
+			}
+			got, readErr := os.ReadFile(destination)
+			if readErr != nil || string(got) != "old\n" {
+				t.Fatalf("lock after unsafe API base = %q, %v", got, readErr)
+			}
+			assertNoLockTemporaries(t, filepath.Dir(destination))
+		})
 	}
 }
 

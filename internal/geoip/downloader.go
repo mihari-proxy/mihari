@@ -19,6 +19,8 @@ import (
 
 const defaultMaxDatabaseBytes int64 = 128 << 20
 
+var errInvalidExpectedSHA256 = errors.New("expected geoip SHA-256 must be 64 lowercase hexadecimal characters")
+
 // DownloadSpec identifies one database, its checksum, and its local destination.
 type DownloadSpec struct {
 	URL            string
@@ -127,16 +129,14 @@ func (d Downloader) Prepare(ctx context.Context, spec DownloadSpec) (_ *FileCand
 func parseExpectedSHA256(raw string) ([sha256.Size]byte, error) {
 	var result [sha256.Size]byte
 	if len(raw) != sha256.Size*2 {
-		return result, errors.New("expected geoip SHA-256 must be 64 lowercase hexadecimal characters")
+		return result, errInvalidExpectedSHA256
 	}
-	for _, character := range raw {
-		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
-			return result, errors.New("expected geoip SHA-256 must be 64 lowercase hexadecimal characters")
-		}
+	if raw != strings.ToLower(raw) {
+		return result, errInvalidExpectedSHA256
 	}
 	decoded, err := hex.DecodeString(raw)
 	if err != nil {
-		return result, errors.New("expected geoip SHA-256 must be 64 lowercase hexadecimal characters")
+		return result, errInvalidExpectedSHA256
 	}
 	copy(result[:], decoded)
 	return result, nil

@@ -46,7 +46,7 @@ The repository already pins the build environment through `go 1.26.0`, `toolchai
 - GeoIP repository and exact 40-hex commit;
 - Country and ASN file names, immutable raw URLs, and SHA-256 values.
 
-The six required platform keys are Linux, macOS, and Windows on amd64 and arm64. JSON is canonical and ends in one newline; it has no generated timestamp.
+The exact six required `GOOS/GOARCH` platform keys are `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`, `windows/amd64`, and `windows/arm64`. JSON is canonical and ends in one newline; it has no generated timestamp.
 
 The loader reads at most 1 MiB, requires UTF-8 JSON, rejects unknown fields and trailing JSON, validates every identifier/digest/size, enforces the exact platform set, and constrains URLs to the expected HTTPS hosts and repository/tag/commit paths. Validation happens before network requests or output mutation.
 

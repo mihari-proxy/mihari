@@ -88,7 +88,7 @@ go run ./scripts/build-all-in-one \
   --platforms "linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64,windows/arm64"
 ```
 
-`--out` 必须是专用的受管 bundle 目录，不能是当前工作目录、lock 路径或任何输入目录，也不能与这些目录互相包含；目录内不得混放非 bundle 文件。bundler 在临时目录完成全部构建与校验后才整体提交输出。lock 只用于构建，不会进入 bundle，也不会作为 GitHub Release/AList 资产上传，因此固定的 14-asset 发布契约不变。
+`--out` 必须是专用的受管 bundle 目录；允许使用当前工作目录下的专用子目录（例如 `./bundles`），但输出目录不得等于或包含当前工作目录，也不得等于或包含 lock 文件。它与 `--mihari-dir`、`--scripts-dir` 两个输入目录之间还必须双向不重叠：输出不能包含输入，输入也不能包含输出。目录内不得混放非 bundle 文件。bundler 在临时目录完成全部构建与校验后才整体提交输出。lock 只用于构建，不会进入 bundle，也不会作为 GitHub Release/AList 资产上传，因此固定的 14-asset 发布契约不变。
 
 Mihari 原始二进制由 Go 1.26.5 以 `-buildvcs=false -trimpath` 构建，避免同一 commit 在 tag 创建前后因 VCS/module 元数据变化而改变字节。相同 commit、版本、toolchain、lock 和仓库内脚本的重试应逐字节复现全部 14 个 assets。仅 dev release workflow 会在已有同版本 Release 时做 existing-asset checksum preflight，并在字节冲突时于 mutation 前 fail closed；stable release workflow 不提供同等 preflight，仍遵循现有 stable Action 发布与 AList 事务契约。
 

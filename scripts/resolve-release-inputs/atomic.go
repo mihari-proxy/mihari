@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -12,14 +13,23 @@ type atomicFileOps struct {
 	syncDirectory func(string) error
 }
 
-func writeAtomic(destination string, data []byte) error {
-	return writeAtomicWithOps(destination, data, atomicFileOps{
+type syncCloser interface {
+	Sync() error
+	Close() error
+}
+
+func syncAndClose(resource syncCloser) error {
+	return errors.Join(resource.Sync(), resource.Close())
+}
+
+func writeAtomic(ctx context.Context, destination string, data []byte) error {
+	return writeAtomicWithOps(ctx, destination, data, atomicFileOps{
 		replace:       replaceFile,
 		syncDirectory: syncParentDirectory,
 	})
 }
 
-func writeAtomicWithOps(destination string, data []byte, operations atomicFileOps) error {
+func writeAtomicWithOps(ctx context.Context, destination string, data []byte, operations atomicFileOps) error {
 	if operations.replace == nil || operations.syncDirectory == nil {
 		return errors.New("atomic release input lock operations are required")
 	}
@@ -47,6 +57,9 @@ func writeAtomicWithOps(destination string, data []byte, operations atomicFileOp
 	}
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close release input lock temporary file: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("cancel release input lock replacement: %w", err)
 	}
 	if err := operations.replace(temporaryPath, destination); err != nil {
 		return fmt.Errorf("replace release input lock: %w", err)

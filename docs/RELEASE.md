@@ -97,7 +97,7 @@ go run ./scripts/build-all-in-one \
   --mihari-dir dist --out bundles --platforms "linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64,windows/arm64"
 ```
 
-`--out` 必须是专用的受管 bundle 目录，不能是当前工作目录、lock 所在路径或任何输入目录，也不能与这些目录互相包含。bundler 会先在临时目录完成构建与校验，再提交整个输出；不要把其他文件放进该目录。
+`--out` 必须是专用的受管 bundle 目录；允许使用当前工作目录下的专用子目录（例如 `./bundles`），但不得等于或包含当前工作目录，也不得等于或包含 lock 文件。输出目录与 `--mihari-dir`、`--scripts-dir` 两个输入目录必须双向不重叠。bundler 会先在临时目录完成构建与校验，再提交整个输出；不要把其他文件放进该目录。
 
 在 commit、版本号、Go toolchain、lock 和仓库内安装脚本均相同时，重跑应产生逐字节一致的 6 个原始二进制、6 个 AIO 包和 2 个 checksum 文件。发布仍固定为下面列出的 **14 个 assets**；lock 只是构建输入，不上传到 GitHub Release 或 AList。
 

@@ -16,14 +16,14 @@
 
 **Files:**
 
-- Create: `scripts/build-all-in-one/release_lock.go`
-- Create: `scripts/build-all-in-one/release_lock_test.go`
+- Create: `scripts/internal/releaseinputs/lock.go`
+- Create: `scripts/internal/releaseinputs/lock_test.go`
 - Create: `scripts/release-inputs.lock.json`
 
 1. Write table-driven failing tests for valid decoding, size limit, unknown/trailing JSON, schema/repository/channel validation, exact six-platform membership, numeric IDs/sizes, SHA-256 values, immutable HTTPS URL shape, and exact GeoIP commit paths.
 2. Run only the new tests and confirm they fail because the loader does not exist.
 3. Implement the smallest typed schema, bounded strict decoder, canonical encoder, and semantic validator that makes the tests pass.
-4. Add the approved v1.19.30/GeoIP commit inputs to the checked-in lock and verify it loads successfully.
+4. Add the approved mihomo v1.19.30 inputs and the exact GeoIP inputs to the checked-in lock: commit `69986b5d098c8d723a2c4d56317bc10cd5669c02`, Country SHA-256 `26a2c3c3791b36303a1c70bac18320c4e6bd40950286224a38f2756c0f7d0ca2`, and ASN SHA-256 `82abcabdf4d0ecb34da45e4f0f9bc30bf933cfbfec446b89a2215fae5b1fdbdc`. Verify the resulting lock loads successfully.
 5. Run the package tests and format changed Go files.
 
 ## Task 2: Add locked-digest GeoIP downloads without changing runtime behavior
@@ -46,7 +46,7 @@
 - Modify: related `internal/core/*_test.go`
 - Create: `scripts/resolve-release-inputs/main.go`
 - Create: `scripts/resolve-release-inputs/main_test.go`
-- If sharing is necessary, move lock DTO/validation into the smallest importable package under `scripts/internal/` and update Task 1 files accordingly.
+- Use: `scripts/internal/releaseinputs` for the shared lock DTO, canonical encoder, and validation created in Task 1.
 
 1. Add failing tests for decoding GitHub numeric release/asset IDs, selecting exactly the six supported assets, resolving GeoIP `release` to a 40-hex commit, hashing every downloaded payload, canonical output, and preserving an existing lock after failure.
 2. Run focused tests and confirm the missing resolver behavior.
