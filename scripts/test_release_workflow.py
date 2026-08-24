@@ -11,6 +11,7 @@ import yaml
 
 
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "release-dev.yml"
+RETRACT_DEV_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "retract-dev.yml"
 STABLE_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "release.yml"
 STABLE_RETRACT_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "retract.yml"
 CI_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
@@ -953,14 +954,154 @@ def test_release_workflow_revalidates_tag_after_final_asset_verification():
     assert "github_release_policy.py tag-chain" in helper
 
 
-def test_release_workflow_is_github_only_and_limits_tag_peeling():
+def test_release_workflow_limits_tag_peeling():
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
-    assert "ALIST_" not in workflow
-    assert "mihari-dev" not in workflow
     assert "for depth in $(seq 1 7)" in workflow
     assert "jq -c '{type: .object.type, sha: .object.sha}'" in workflow
     assert "jq -s . /tmp/tag-chain.jsonl" in workflow
+
+
+def test_dev_publish_and_retract_use_independent_alist_lock():
+    release_dev = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    retract_dev = yaml.safe_load(RETRACT_DEV_WORKFLOW.read_text(encoding="utf-8"))
+    expected = {"group": "mihari-dev-alist", "cancel-in-progress": False}
+    assert release_dev["jobs"]["publish"].get("concurrency") == expected
+    assert retract_dev["jobs"]["retract"].get("concurrency") == expected
+    assert "mihari-stable-alist" not in WORKFLOW.read_text(encoding="utf-8")
+    assert "mihari-stable-alist" not in RETRACT_DEV_WORKFLOW.read_text(encoding="utf-8")
+    assert release_dev.get("concurrency", {}).get("group") == "dev-release-${{ inputs.version }}"
+
+
+def test_dev_alist_mutation_uses_compare_first_exit():
+    cases = (
+        (WORKFLOW, "publish", "Publish to AList drive", "release-alist.py", "publish_status"),
+        (RETRACT_DEV_WORKFLOW, "retract", "Retract from AList drive", "retract-alist.py", "retract_status"),
+    )
+    for path, job, step_name, writer, status_var in cases:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        run = _workflow_step(document, job, name=step_name)["run"]
+        assert "set +e" in run
+        assert run.index(writer) < run.index("alist_channel_guard.py compare")
+        compare_exit = 'if [ "${compare_status}" -ne 0 ]; then exit "${compare_status}"; fi'
+        assert compare_exit in run
+        assert run.index(compare_exit) < run.index(f'exit "${{{status_var}}}"')
+
+
+def test_dev_retract_peel_expected_sha_is_release_sha_not_job_sha():
+    document = yaml.safe_load(RETRACT_DEV_WORKFLOW.read_text(encoding="utf-8"))
+    peel = _workflow_step(document, "retract", name="Peel canonical tag for identity SHA")
+    run = peel["run"]
+    assert "github_release_policy.py tag-chain" in run
+    assert '--expected-sha "${RELEASE_SHA}"' in run or '--expected-sha "${tag_sha}"' in run
+    assert '--expected-sha "${SHA}"' not in run
+    mutation = _workflow_step(document, "retract", name="Retract from AList drive")
+    assert '--commit-sha "${RELEASE_SHA}"' in mutation["run"]
+    assert '--commit-sha "${SHA}"' not in mutation["run"]
+
+
+def test_dev_alist_isolation_artifacts_are_separate_from_writer_backup():
+    expected_if = (
+        "env.ALIST_CONFIGURED == 'true' && "
+        "((failure() && steps.alist_mutation.outcome == 'failure') || "
+        "(cancelled() && steps.alist_mutation.outcome == 'cancelled'))"
+    )
+    for path, job in ((WORKFLOW, "publish"), (RETRACT_DEV_WORKFLOW, "retract")):
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        steps = document["jobs"][job]["steps"]
+        dev_backup = next(
+            step for step in steps
+            if str(step.get("with", {}).get("name", "")).startswith("dev-index-backup-")
+        )
+        isolation = next(
+            step for step in steps
+            if str(step.get("with", {}).get("name", "")).startswith("stable-index-isolation-")
+        )
+        assert dev_backup["if"] == expected_if
+        assert isolation["if"] == expected_if
+        assert dev_backup["with"]["path"] == "${{ runner.temp }}/mihari-index-backup/dev/**"
+        assert isolation["with"]["path"] == "${{ runner.temp }}/mihari-index-backup/stable-isolation/**"
+        assert isolation["with"]["path"] != "${{ runner.temp }}/mihari-index-backup/stable/**"
+        assert "${{ runner.temp }}/mihari-index-backup/stable/**" not in text
+
+
+def test_dev_retract_resolve_outputs_sha_and_alist_runs_before_github_delete():
+    document = yaml.safe_load(RETRACT_DEV_WORKFLOW.read_text(encoding="utf-8"))
+    resolve = document["jobs"]["resolve"]
+    retract = document["jobs"]["retract"]
+    assert resolve["outputs"]["sha"] == "${{ steps.source.outputs.sha }}"
+    assert "refs/heads/dev" in retract["if"]
+    checkout = next(step for step in retract["steps"] if step.get("uses") == "actions/checkout@v7")
+    assert checkout["with"]["ref"] == "${{ needs.resolve.outputs.sha }}"
+    names = [step.get("name") for step in retract["steps"]]
+    assert names.index("Retract from AList drive") < names.index("Delete GitHub prerelease")
+
+
+def test_dev_alist_writers_pin_channel_base_path_and_commit_sha():
+    publish = WORKFLOW.read_text(encoding="utf-8")
+    retract = RETRACT_DEV_WORKFLOW.read_text(encoding="utf-8")
+    assert "--channel dev" in publish
+    assert "--base-path /mihari-release/mihari-dev" in publish
+    assert '--commit-sha "${SHA}"' in publish
+    assert "--channel dev" in retract
+    assert "--base-path /mihari-release/mihari-dev" in retract
+
+
+def test_dev_publish_mutates_alist_after_final_github_verify():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert workflow.index("Final verify prerelease and stable latest") < workflow.index(
+        "Publish to AList drive"
+    )
+
+
+def test_dev_release_notes_append_index_url_with_stable_root_downloaders():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "<!-- aio-install-dev -->" in workflow
+    assert "mihari-dev/index.txt" in workflow
+    assert "mihari-release/mihari/install-aio-remote.sh" in workflow
+
+
+def test_dev_retract_github_delete_is_idempotent_and_retains_canonical_tag():
+    document = yaml.safe_load(RETRACT_DEV_WORKFLOW.read_text(encoding="utf-8"))
+    delete = _workflow_step(document, "retract", name="Delete GitHub prerelease")
+    run = delete["run"]
+    assert "gh release delete" in run
+    assert "--cleanup-tag" not in run
+    assert "canonical dev tag retained" in run
+    gate = next(
+        step["run"]
+        for step in document["jobs"]["retract"]["steps"]
+        if str(step.get("name", "")).startswith("Gate")
+    )
+    assert 'echo "${VERSION}"' not in gate
+
+
+def test_alist_runtime_dependencies_are_pinned_after_checkout_in_dev_workflows():
+    release_dev = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    retract_dev = yaml.safe_load(RETRACT_DEV_WORKFLOW.read_text(encoding="utf-8"))
+    for workflow, job_name, install_step_name in (
+        (release_dev, "publish", "Publish to AList drive"),
+        (retract_dev, "retract", "Retract from AList drive"),
+    ):
+        steps = workflow["jobs"][job_name]["steps"]
+        checkout_index = next(
+            index for index, step in enumerate(steps) if step.get("uses") == "actions/checkout@v7"
+        )
+        setup_index = next(
+            index for index, step in enumerate(steps) if step.get("uses") == "actions/setup-python@v7"
+        )
+        install_index = next(
+            index for index, step in enumerate(steps) if step.get("name") == install_step_name
+        )
+        install = steps[install_index]["run"]
+        assert checkout_index < setup_index < install_index
+        assert steps[setup_index]["with"] == {"python-version": "3.12"}
+        assert (
+            "python -m pip install --disable-pip-version-check -r scripts/requirements-release.txt"
+            in install
+        )
+        assert "pip install requests" not in install
 
 
 def test_dev_version_validation_never_logs_raw_dispatch_input():
@@ -1212,18 +1353,37 @@ def test_distribution_document_limits_backup_artifacts_to_alist_mutation_failure
 def test_release_documents_record_verified_dev_github_release_and_unavailable_dev_alist():
     release = RELEASE_DOCUMENT.read_text(encoding="utf-8")
     distribution = DISTRIBUTION_DOCUMENT.read_text(encoding="utf-8")
+    repo_root = Path(__file__).resolve().parents[1]
+    installers = (
+        (repo_root / "scripts" / "install" / "install-aio-remote.sh").read_text(encoding="utf-8"),
+        (repo_root / "scripts" / "install" / "install-aio-remote.ps1").read_text(encoding="utf-8"),
+    )
+    public_dev_index = (
+        "https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt"
+    )
+    public_stable_index = (
+        "https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/index.txt"
+    )
 
     for document in (release, distribution):
         assert "v0.9.0-dev.2" in document
-        assert "dev AList 发布与 dev retract workflow" in document
+        assert "retract-dev.yml" in document
+        assert "/mihari-release/mihari-dev" in document
+        assert public_dev_index in document
+        assert "mihari-dev-alist" in document
         assert "publish-dev-alist.yml" not in document
-        assert "retract-dev.yml" not in document
 
+    assert "当前不创建或操作该目录" not in distribution
+    assert "尚未实现的 dev AList" not in distribution
     assert "Actions 产物或 dev 版本目录" not in distribution
-    assert "当前不创建或操作该目录" in distribution
+    assert "/mihari-release/mihari/index.txt" in release
+    assert "/mihari-release/mihari/index.txt" in distribution
+    assert public_stable_index in distribution
+    for installer in installers:
+        assert public_stable_index in installer
+        assert "/mihari-release/mihari-dev/" not in installer
+        assert "mihari-dev/index.txt" not in installer
 
-    assert "GitHub dev tag、prerelease 与精确 14 个 assets" in release
-    assert "不写 AList" in release
     assert "lightweight 或 annotated" in release
 
 

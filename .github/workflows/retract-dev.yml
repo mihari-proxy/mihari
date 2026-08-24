@@ -1,0 +1,196 @@
+name: retract dev
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Canonical dev version to retract, e.g. v0.3.0-dev.1 (leading zeroes are rejected)'
+        required: true
+        type: string
+      confirm:
+        description: 'Confirm to permanently remove the GitHub prerelease/assets and AList dev distribution; the canonical dev tag is retained.'
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  VERSION: ${{ inputs.version }}
+  CONFIRM: ${{ inputs.confirm }}
+
+jobs:
+  resolve:
+    name: resolve trusted dev source
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - name: Guard dev ref and version
+        run: |
+          [ "${GITHUB_REF}" = "refs/heads/dev" ] \
+            || { echo "::error::dev retraction must be dispatched from refs/heads/dev"; exit 1; }
+          if [[ ! "${VERSION}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::version must match the dev prerelease format"
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - id: source
+        name: Resolve trusted dev commit
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          [ "${SHA}" = "${GITHUB_SHA}" ] \
+            || { echo "::error::checked-out commit does not equal event commit"; exit 1; }
+          echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
+
+  retract:
+    name: retract dev release
+    needs: resolve
+    if: github.ref == 'refs/heads/dev' && needs.resolve.outputs.sha != ''
+    runs-on: ubuntu-latest
+    concurrency:
+      group: mihari-dev-alist
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    env:
+      ALIST_CONFIGURED: ${{ secrets.ALIST_URL != '' }}
+      SHA: ${{ needs.resolve.outputs.sha }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Verify trusted source commit
+        run: |
+          [ "$(git rev-parse HEAD)" = "${SHA}" ] \
+            || { echo "::error::checkout did not resolve the trusted dev commit"; exit 1; }
+
+      - name: Gate (dev semver + confirm)
+        run: |
+          if [[ ! "${VERSION}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::version must match the dev prerelease format"
+            exit 1
+          fi
+          [ "${CONFIRM}" = "true" ] \
+            || { echo "::error::confirm must be true to permanently remove prerelease/assets and AList dev distribution; canonical dev tag retained"; exit 1; }
+
+      - name: Peel canonical tag for identity SHA
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${VERSION}" > /tmp/tag-ref.json 2> /tmp/tag-ref.err \
+            || { echo "::error::unable to read release tag"; exit 1; }
+          jq -e '(.object.type | type == "string") and (.object.sha | type == "string")' /tmp/tag-ref.json >/dev/null \
+            || { echo "::error::release tag response is invalid"; exit 1; }
+          jq -c '{type: .object.type, sha: .object.sha}' /tmp/tag-ref.json > /tmp/tag-chain.jsonl
+          tag_type="$(jq -r '.object.type' /tmp/tag-ref.json)"
+          tag_sha="$(jq -r '.object.sha' /tmp/tag-ref.json)"
+          for depth in $(seq 1 7); do
+            [ "${tag_type}" = tag ] || break
+            gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" > /tmp/tag-object.json 2> /tmp/tag-object.err \
+              || { echo "::error::unable to peel release tag"; exit 1; }
+            jq -e '(.object.type | type == "string") and (.object.sha | type == "string")' /tmp/tag-object.json >/dev/null \
+              || { echo "::error::annotated tag response is invalid"; exit 1; }
+            jq -c '{type: .object.type, sha: .object.sha}' /tmp/tag-object.json >> /tmp/tag-chain.jsonl
+            tag_type="$(jq -r '.object.type' /tmp/tag-object.json)"
+            tag_sha="$(jq -r '.object.sha' /tmp/tag-object.json)"
+          done
+          [ "${tag_type}" != tag ] || { echo "::error::release tag peel exceeds the allowed depth"; exit 1; }
+          [ "${tag_type}" = commit ] || { echo "::error::release tag did not peel to a commit"; exit 1; }
+          jq -s . /tmp/tag-chain.jsonl > /tmp/tag-chain.json
+          RELEASE_SHA="${tag_sha}"
+          echo "RELEASE_SHA=${RELEASE_SHA}" >> "${GITHUB_ENV}"
+          python scripts/github_release_policy.py tag-chain \
+            --chain /tmp/tag-chain.json --expected-sha "${RELEASE_SHA}"
+
+      - name: Snapshot stable latest before mutation
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/releases/latest" > /tmp/latest-before.json 2> /tmp/latest-before.err \
+            || { echo "::error::unable to read stable latest release"; exit 1; }
+          python scripts/github_release_policy.py latest \
+            --before /tmp/latest-before.json --after /tmp/latest-before.json --dev-version "${VERSION}"
+
+      - uses: actions/setup-python@v7
+        if: env.ALIST_CONFIGURED == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Retract from AList drive
+        id: alist_mutation
+        if: env.ALIST_CONFIGURED == 'true'
+        env:
+          ALIST_URL: ${{ secrets.ALIST_URL }}
+          ALIST_USERNAME: ${{ secrets.ALIST_USERNAME }}
+          ALIST_PASSWORD: ${{ secrets.ALIST_PASSWORD }}
+        run: |
+          python -m pip install --disable-pip-version-check -r scripts/requirements-release.txt
+          python scripts/alist_channel_guard.py snapshot \
+            --path /mihari-release/mihari/index.txt \
+            --output-dir "${RUNNER_TEMP}/mihari-index-backup/stable-isolation"
+          set +e
+          python scripts/retract-alist.py \
+            --version "${VERSION}" \
+            --channel dev \
+            --base-path /mihari-release/mihari-dev \
+            --commit-sha "${RELEASE_SHA}"
+          retract_status=$?
+          python scripts/alist_channel_guard.py compare \
+            --path /mihari-release/mihari/index.txt \
+            --expected-dir "${RUNNER_TEMP}/mihari-index-backup/stable-isolation"
+          compare_status=$?
+          set -e
+          if [ "${compare_status}" -ne 0 ]; then exit "${compare_status}"; fi
+          exit "${retract_status}"
+
+      - name: Upload dev index recovery backup
+        if: "env.ALIST_CONFIGURED == 'true' && ((failure() && steps.alist_mutation.outcome == 'failure') || (cancelled() && steps.alist_mutation.outcome == 'cancelled'))"
+        uses: actions/upload-artifact@v7
+        with:
+          name: dev-index-backup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mihari-index-backup/dev/**
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload stable index isolation snapshot
+        if: "env.ALIST_CONFIGURED == 'true' && ((failure() && steps.alist_mutation.outcome == 'failure') || (cancelled() && steps.alist_mutation.outcome == 'cancelled'))"
+        uses: actions/upload-artifact@v7
+        with:
+          name: stable-index-isolation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mihari-index-backup/stable-isolation/**
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Delete GitHub prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          release_lookup_error="$(mktemp)"
+          trap 'rm -f "${release_lookup_error}"' EXIT
+          set +e
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${VERSION}" \
+            >/dev/null 2>"${release_lookup_error}"
+          release_lookup_status=$?
+          set -e
+
+          if [ "${release_lookup_status}" -eq 0 ]; then
+            gh release delete "${VERSION}" --yes
+            echo "Permanently removed GitHub prerelease/assets for ${VERSION}; canonical dev tag retained."
+          elif grep -Eq '(^|[^0-9])HTTP 404([^0-9]|$)' "${release_lookup_error}"; then
+            echo "GitHub prerelease ${VERSION} not found (already retracted?) — nothing to delete; canonical dev tag retained."
+          else
+            echo "::error::unable to determine whether the GitHub release exists"
+            exit 1
+          fi
+
+      - name: Re-verify stable latest after GitHub delete
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/releases/latest" > /tmp/latest-after.json 2> /tmp/latest-after.err \
+            || { echo "::error::unable to read stable latest release after retraction"; exit 1; }
+          python scripts/github_release_policy.py latest \
+            --before /tmp/latest-before.json --after /tmp/latest-after.json --dev-version "${VERSION}"
