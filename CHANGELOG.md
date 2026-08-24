@@ -11,6 +11,7 @@
 ### Fixed
 
 - 兼容当前 AList `/api/fs/list` 不再返回分页字段的响应，避免发版脚本拒绝合法目录 listing。
+- 把 AList 对缺失目录返回的 `object not found` 视为不存在，而不是发版检查失败。
 
 ## [v0.9.0] - 2026-08-24
 

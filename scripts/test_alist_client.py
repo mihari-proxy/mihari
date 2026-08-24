@@ -210,6 +210,43 @@ def test_exists_and_content_use_parent_listing_when_fs_get_reports_missing_as_50
     assert all(not url.endswith("/api/fs/get") for url in alist.session.paths)
 
 
+def test_exists_treats_missing_parent_directory_as_absent():
+    alist = AList.__new__(AList)
+    alist.base = "https://cloud.invalid"
+    alist.session = PostSession(
+        JSONResponse(
+            {
+                "code": 500,
+                "message": "failed get dir: object not found token=secret",
+                "data": None,
+            }
+        )
+    )
+
+    path = "/mihari-release/mihari-dev/v0.9.0-dev.5/COMPLETE"
+    assert alist.exists(path) is False
+    assert alist.content(path) is None
+
+
+def test_list_dir_rejects_non_missing_500_listing_without_leaking_details():
+    alist = AList.__new__(AList)
+    alist.base = "https://cloud.invalid"
+    alist.session = PostSession(
+        JSONResponse(
+            {
+                "code": 500,
+                "message": "internal backend token=secret",
+                "data": {"content": []},
+            }
+        )
+    )
+
+    with pytest.raises(alist_client.AListError, match="alist operation failed") as error:
+        alist.list_dir("/mihari-release/mihari-dev/v0.9.0-dev.5")
+    assert "secret" not in str(error.value)
+    assert "internal backend" not in str(error.value)
+
+
 def test_list_dir_reads_every_page_and_preserves_second_page_entries():
     first = [{"name": f"v1.0.{index}", "is_dir": True} for index in range(200)]
     highest = {"name": "v9.0.0", "is_dir": True}
