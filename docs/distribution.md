@@ -209,7 +209,7 @@ dev 发布与 `retract-dev.yml` 另有两类 artifact，同样仅在 AList mutat
 
 ## 五、版本撤回（致命错误）
 
-独立 workflow `.github/workflows/retract.yml` 手动触发，永久移除坏版本的 GitHub Release、assets 与 AList 分发数据，但保留 canonical stable tag。dev 通道使用独立的 `.github/workflows/retract-dev.yml`：只操作 `/mihari-release/mihari-dev/<version>/` 与 dev `index.txt`，删除 GitHub prerelease 及其 assets，保留 canonical `vX.Y.Z-dev.N` tag；不得触碰稳定 `index.txt`、稳定版本目录或 `/releases/latest`。
+独立 workflow `.github/workflows/retract.yml` 手动触发，永久移除坏版本的 GitHub Release、assets 与 AList 分发数据，但保留 canonical stable tag。dev 通道使用独立的 `.github/workflows/retract-dev.yml`：只操作 `/mihari-release/mihari-dev/<version>/` 与 dev `index.txt`，删除 GitHub prerelease 及其 assets，保留 canonical `vX.Y.Z-dev.N` tag；不得修改稳定 `index.txt`、稳定版本目录或 `/releases/latest`。当 AList 已配置时，dev 撤回会只读 snapshot/compare 稳定 index 做隔离检查，这不是写入。
 
 稳定撤回步骤：
 

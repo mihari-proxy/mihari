@@ -19,6 +19,13 @@ AGENTS = Path(__file__).resolve().parents[1] / "AGENTS.md"
 CONTRIBUTING = Path(__file__).resolve().parents[1] / ".github" / "CONTRIBUTING.md"
 RELEASE_DOCUMENT = Path(__file__).resolve().parents[1] / "docs" / "RELEASE.md"
 DISTRIBUTION_DOCUMENT = Path(__file__).resolve().parents[1] / "docs" / "distribution.md"
+DESIGN_DOCUMENT = (
+    Path(__file__).resolve().parents[1]
+    / "docs"
+    / "superpowers"
+    / "specs"
+    / "2026-08-24-prerelease-alist-index-design.md"
+)
 
 RELEASE_SAFETY_TESTS = (
     "scripts/test_release_policy.py "
@@ -1118,6 +1125,11 @@ def test_dev_retract_github_delete_is_idempotent_and_retains_canonical_tag():
     assert "gh release delete" in run
     assert "--cleanup-tag" not in run
     assert "canonical dev tag retained" in run
+    assert "github_release_policy.py release" in run
+    assert "--mode preflight" in run
+    assert "<!-- github-release-dev -->" in run
+    assert 'Mihari ${VERSION} (dev)' in run
+    assert '>/dev/null' not in run
     gate = next(
         step["run"]
         for step in document["jobs"]["retract"]["steps"]
@@ -1438,6 +1450,40 @@ def test_release_documents_record_verified_dev_github_release_and_unavailable_de
         assert "mihari-dev/index.txt" not in installer
 
     assert "lightweight 或 annotated" in release
+
+
+def test_release_documents_treat_historical_dev_alist_backfill_as_operator_rule():
+    release = RELEASE_DOCUMENT.read_text(encoding="utf-8")
+    trigger = _markdown_section(release, "## 工作流触发机制")
+    dev_dispatch = _markdown_section(release, "### Dev 手动发布")
+    for section in (trigger, dev_dispatch):
+        assert "人工操作规则" in section
+        assert "不会因历史 GitHub-only 版本自动拒绝" in section
+
+
+def test_release_document_dev_retract_noop_requires_confirmed_stable_root():
+    release = _markdown_section(
+        RELEASE_DOCUMENT.read_text(encoding="utf-8"), "### Dev 撤回"
+    )
+    assert "稳定目录 `mihari`" in release
+    assert "unable to inspect release root" in release
+    assert "缺少 `mihari-dev`" in release
+
+
+def test_distribution_document_says_dev_retract_must_not_modify_stable_index():
+    retract = _markdown_section(
+        DISTRIBUTION_DOCUMENT.read_text(encoding="utf-8"), "## 五、版本撤回（致命错误）"
+    )
+    assert "不得修改" in retract
+    assert "不得触碰稳定 `index.txt`" not in retract
+
+
+def test_design_document_records_isolation_false_fail_and_logical_public_url():
+    spec = DESIGN_DOCUMENT.read_text(encoding="utf-8")
+    assert "foreign channel index changed during this mutation" in spec
+    assert "重跑" in spec
+    assert "{ALIST_URL}/p/public{path}" in spec
+    assert "{ALIST_URL}/p/public{fs_path}" not in spec
 
 
 def test_release_document_uses_main_dispatch_as_the_stable_runbook():

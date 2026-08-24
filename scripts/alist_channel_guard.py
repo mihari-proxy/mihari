@@ -15,12 +15,19 @@ def _require_stable_index(path):
         fail("path is not the stable channel index")
 
 
+def _read_stable_index(alist, path):
+    try:
+        return alist.content(path)
+    except Exception:
+        fail("unable to read the stable channel index")
+
+
 def snapshot(alist, path, output_dir):
     """Read the stable index and write index.txt plus metadata.json."""
     _require_stable_index(path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    body = alist.content(path)
+    body = _read_stable_index(alist, path)
     raw = b"" if body is None else body.encode("utf-8")
     (output_dir / "index.txt").write_bytes(raw)
     (output_dir / "metadata.json").write_text(
@@ -39,12 +46,18 @@ def snapshot(alist, path, output_dir):
 
 
 def compare(alist, path, expected_dir):
-    """Fail closed if the live stable index bytes differ from the snapshot."""
+    """Fail closed if the live stable index bytes or existence differ."""
     _require_stable_index(path)
-    expected = (Path(expected_dir) / "index.txt").read_bytes()
-    live = alist.content(path)
+    expected_dir = Path(expected_dir)
+    try:
+        expected = (expected_dir / "index.txt").read_bytes()
+        metadata = json.loads((expected_dir / "metadata.json").read_text(encoding="utf-8"))
+        existed = metadata["existed"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
+        fail("unable to read isolation snapshot")
+    live = _read_stable_index(alist, path)
     live_bytes = b"" if live is None else live.encode("utf-8")
-    if live_bytes != expected:
+    if live_bytes != expected or (live is not None) != existed:
         fail("foreign channel index changed during this mutation")
 
 

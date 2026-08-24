@@ -117,7 +117,6 @@ jobs:
             --before /tmp/latest-before.json --after /tmp/latest-before.json --dev-version "${VERSION}"
 
       - uses: actions/setup-python@v7
-        if: env.ALIST_CONFIGURED == 'true'
         with:
           python-version: '3.12'
 
@@ -170,15 +169,23 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          release_lookup_json="$(mktemp)"
           release_lookup_error="$(mktemp)"
-          trap 'rm -f "${release_lookup_error}"' EXIT
+          trap 'rm -f "${release_lookup_json}" "${release_lookup_error}"' EXIT
           set +e
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${VERSION}" \
-            >/dev/null 2>"${release_lookup_error}"
+            >"${release_lookup_json}" 2>"${release_lookup_error}"
           release_lookup_status=$?
           set -e
 
           if [ "${release_lookup_status}" -eq 0 ]; then
+            python scripts/github_release_policy.py release \
+              --document "${release_lookup_json}" \
+              --version "${VERSION}" \
+              --release-name "Mihari ${VERSION} (dev)" \
+              --marker "<!-- github-release-dev -->" \
+              --mode preflight \
+              || { echo "::error::GitHub release is not a published dev prerelease"; exit 1; }
             gh release delete "${VERSION}" --yes
             echo "Permanently removed GitHub prerelease/assets for ${VERSION}; canonical dev tag retained."
           elif grep -Eq '(^|[^0-9])HTTP 404([^0-9]|$)' "${release_lookup_error}"; then

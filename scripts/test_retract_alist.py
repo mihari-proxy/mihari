@@ -441,6 +441,29 @@ def test_missing_target_not_referenced_by_index_is_idempotent(tmp_path, monkeypa
     assert mutations(fake) == []
 
 
+def test_main_reports_noop_when_dev_channel_root_is_missing(monkeypatch, capsys):
+    fake = TopologyFake()
+    monkeypatch.setattr(retract_mod, "connect", lambda: fake)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "retract-alist.py",
+            "--version",
+            "v1.0.0-dev.1",
+            "--channel",
+            "dev",
+            "--base-path",
+            "/mihari-release/mihari-dev",
+            "--commit-sha",
+            "a" * 40,
+        ],
+    )
+    retract_mod.main()
+    text = capsys.readouterr().out
+    assert "nothing to retract" in text
+    assert "complete on the AList drive" not in text
+
+
 def test_dev_retract_noops_when_storage_root_has_mihari_but_no_dev_channel():
     fake = TopologyFake()
     retract_mod.retract(fake, "/mihari-release/mihari-dev", "v1.0.0-dev.1", "dev", "a" * 40)

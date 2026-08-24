@@ -20,7 +20,7 @@
 | `retract.yml` | 从 `main` 手动 dispatch（稳定 `version` + `confirm`） | Stable | 删除 stable Release 及其 assets、保留 canonical stable tag，并删除 `/mihari-release/mihari/<version>/`；必要时重建 stable `index.txt` |
 | `retract-dev.yml` | 从受保护的 `dev` 手动 dispatch（dev `version` + `confirm`） | Dev | 删除 `/mihari-release/mihari-dev/<version>/` 与 GitHub prerelease 及其 assets、保留 canonical dev tag；必要时重建 dev `index.txt` |
 
-GitHub dev prerelease 流程已经实际发布并验收 `v0.9.0-dev.2`（精确 14 个 assets，当时 GitHub-only、不写 AList）。独立 AList 根目录 `/mihari-release/mihari-dev` 从本变更落地后的下一个 `vX.Y.Z-dev.N` 开始写入，不回溯该历史版本。稳定 AList、`/mihari-release/mihari/index.txt` 与 `/releases/latest` 不受 dev 发布影响。
+GitHub dev prerelease 流程已经实际发布并验收 `v0.9.0-dev.2`（精确 14 个 assets，当时 GitHub-only、不写 AList）。独立 AList 根目录 `/mihari-release/mihari-dev` 从本变更落地后的下一个 `vX.Y.Z-dev.N` 开始写入。不回溯 `v0.9.0-dev.2` 是首次真实 dispatch 的人工操作规则：workflow 不会因历史 GitHub-only 版本自动拒绝；空的 dev AList 根上重跑会创建通道并写入该版本。稳定 AList、`/mihari-release/mihari/index.txt` 与 `/releases/latest` 不受 dev 发布影响。
 
 远端 active tag ruleset 覆盖 `refs/tags/v*`，禁止删除、更新和 non-fast-forward；canonical stable/dev tag 一旦创建不得改写。`v*` tag push 保留为兼容触发入口，但当前稳定发版操作使用 `main` 上的 `workflow_dispatch`。
 
@@ -175,7 +175,7 @@ Get-FileHash mihari-windows-amd64.exe -Algorithm SHA256
 
 ### Dev 手动发布
 
-从 GitHub Actions 选择 `release-dev` workflow 和受保护的 `dev` ref，填写符合 canonical `vX.Y.Z-dev.N` 格式的版本（各数字段不允许前导零）。workflow 先创建或复用 GitHub dev tag、prerelease 并上传精确 14 个 assets；GitHub 最终验收成功后，若 `ALIST_URL` 存在则写入独立 AList 根目录 `/mihari-release/mihari-dev` 及其 `index.txt`。`v0.9.0-dev.2` 已按 GitHub-only 路径发布并完成公开资产验收；AList 从本变更后的新版本开始，不回溯该历史版本。
+从 GitHub Actions 选择 `release-dev` workflow 和受保护的 `dev` ref，填写符合 canonical `vX.Y.Z-dev.N` 格式的版本（各数字段不允许前导零）。workflow 先创建或复用 GitHub dev tag、prerelease 并上传精确 14 个 assets；GitHub 最终验收成功后，若 `ALIST_URL` 存在则写入独立 AList 根目录 `/mihari-release/mihari-dev` 及其 `index.txt`。`v0.9.0-dev.2` 已按 GitHub-only 路径发布并完成公开资产验收。不回溯该历史版本是首次真实 dispatch 的人工操作规则：workflow 不会因历史 GitHub-only 版本自动拒绝；空的 dev AList 根上重跑会创建通道并写入该版本。请从本变更后的下一个 `vX.Y.Z-dev.N` 开始写入 AList。
 
 AList 是否启用只由 `ALIST_URL` 决定：URL 缺失时 skip AList，GitHub prerelease 仍成功；URL 存在但 `ALIST_USERNAME` 或 `ALIST_PASSWORD` 任一缺失时，客户端 fail closed，workflow 失败。dev 发布与 `retract-dev.yml` 共用 job 级并发组 `mihari-dev-alist`。公开 dev index 为 `https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt`。dev 根目录不上传 `install-aio-remote.sh` / `.ps1`；稳定安装入口仍使用 `/mihari-release/mihari/index.txt`，不会指向 dev。
 
@@ -205,9 +205,9 @@ AList 不提供 compare-and-swap（CAS），因此事务前检查与单次 PUT �
 
 1. 在 GitHub 仓库 Actions 页面选择 `dev` 分支/ref，再运行 `retract-dev` workflow；
 2. 填写 `version`（canonical `vX.Y.Z-dev.N`）并勾选 `confirm` 双保险；
-3. workflow 自动：先操作独立 `/mihari-release/mihari-dev`（必要时重建 dev `index.txt`），再永久删除 GitHub prerelease 及其 assets，但保留 canonical dev tag。远端尚未存在 `mihari-dev` 时 AList 为 no-op，仍可删除 GitHub prerelease。
+3. workflow 自动：先操作独立 `/mihari-release/mihari-dev`（必要时重建 dev `index.txt`），再永久删除 GitHub prerelease 及其 assets，但保留 canonical dev tag。AList no-op 的前置条件是存储根 listing 已确认存在稳定目录 `mihari`：缺少或无法确认该目录时 fail closed（`unable to inspect release root`），不会继续删除 GitHub prerelease；只有已确认稳定根存在且缺少 `mihari-dev` 时才是 no-op。
 
-dev 撤回使用并发组 `mihari-dev-alist`，不得触碰稳定目录、稳定 `/mihari-release/mihari/index.txt` 或 `/releases/latest`。历史 GitHub-only 版本 `v0.9.0-dev.2` 也可用该入口撤回 GitHub prerelease。
+dev 撤回使用并发组 `mihari-dev-alist`，不得修改稳定目录、稳定 `/mihari-release/mihari/index.txt` 或 `/releases/latest`。历史 GitHub-only 版本 `v0.9.0-dev.2` 也可用该入口撤回 GitHub prerelease。
 
 ## CI/CD 检查项
 

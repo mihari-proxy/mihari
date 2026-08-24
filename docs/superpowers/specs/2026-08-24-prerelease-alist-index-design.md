@@ -100,7 +100,7 @@ _BASE_PATHS = {
 
 3. **`ALIST_URL` 是唯一启用开关；凭据缺失 fail closed。** 复制 `release.yml` 的 `ALIST_CONFIGURED: ${{ secrets.ALIST_URL != '' }}`。`connect()` 在三个变量任一为空时 `fail("ALIST_URL / ALIST_USERNAME / ALIST_PASSWORD are required")`。不得把 username/password 放进 skip 判定。
 
-4. **dev AList 使用独立并发组 `mihari-dev-alist`，禁止复用 `mihari-stable-alist`。** 稳定 release/retract 已经靠该组互斥。共享会导致稳定发版被 dev 发布堵住，或更糟：两个 writer 在不同路径上交错时仍竞争同一把锁的语义含糊。dev 只锁 dev。workflow 级 `dev-release-${{ inputs.version }}` 保留，用于同版本 GitHub 重试互斥。
+4. **dev AList 使用独立并发组 `mihari-dev-alist`，禁止复用 `mihari-stable-alist`。** 稳定 release/retract 已经靠该组互斥。共享会导致稳定发版被 dev 发布堵住，或更糟：两个 writer 在不同路径上交错时仍竞争同一把锁的语义含糊。dev 只锁 dev。workflow 级 `dev-release-${{ inputs.version }}` 保留，用于同版本 GitHub 重试互斥。副作用：稳定发版若在 dev mutation 的 snapshot→compare 窗口改写稳定 `index.txt`，dev run 会 fail closed（`foreign channel index changed during this mutation`），无法与真实隔离破坏区分。接受该误报并重跑；不把两通道合成一把锁。
 
 5. **不上传 `install-aio-remote.sh/.ps1` 到 `/mihari-release/mihari-dev/`。** `publish()` 已对 `channel == "dev"` 跳过 `upload_root_scripts`，且有回归测试。若上传当前脚本，dev 根目录的「安装器」仍会指向**稳定** index，形成静默装稳定的陷阱。#125 之前的消费钩子是 `MIHARI_INDEX_URL` + 稳定根目录上已经公开的下载器。
 
@@ -136,7 +136,7 @@ _BASE_PATHS = {
 
 **没有** `install-aio-remote.sh` / `.ps1`。
 
-公开直链（`alist_client.AList.public_url` 规则：`{ALIST_URL}/p/public{fs_path}`，无 `?sign=`）：
+公开直链（`alist_client.AList.public_url` 规则：`{ALIST_URL}/p/public{path}`（逻辑路径，含 `mihari-release` 挂载段），无 `?sign=`）：
 
 | 对象 | URL |
 |------|-----|

@@ -76,7 +76,7 @@ def main():
     parser.add_argument("--base-path", default=None)
     args = parser.parse_args()
     channel = args.channel
-    base_path = args.base_path or expected_base_path(channel)
+    base_path = expected_base_path(channel) if args.base_path is None else args.base_path
     info(f"regenerating {channel} index at {base_path}/index.txt")
     alist = connect()
     regenerate_index(alist, base_path, channel)

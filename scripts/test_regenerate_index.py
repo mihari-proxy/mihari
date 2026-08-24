@@ -139,6 +139,20 @@ def test_regenerate_index_help_names_stable_default_path(monkeypatch, capsys):
     assert "/mihari-release/mihari" in out
 
 
+def test_main_rejects_explicit_empty_base_path(monkeypatch, capsys):
+    fake = FakeAList()
+    monkeypatch.setattr(regenerate, "connect", lambda: fake)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["regenerate-index.py", "--channel", "dev", "--base-path", ""],
+    )
+    with pytest.raises(SystemExit):
+        regenerate.main()
+    err = capsys.readouterr().err
+    assert "invalid release base path" in err
+    assert fake.uploads == []
+
+
 def test_main_channel_dev_without_base_path_targets_dev_root(monkeypatch, capsys):
     captured = {}
 

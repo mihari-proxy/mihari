@@ -36,6 +36,30 @@ def test_compare_accepts_unchanged_bytes(tmp_path):
     guard.compare(GuardFake(body), STABLE_INDEX, output)
 
 
+def test_compare_rejects_missing_versus_empty_index(tmp_path, capsys):
+    output = tmp_path / "stable-isolation"
+    guard.snapshot(GuardFake(None), STABLE_INDEX, output)
+    with pytest.raises(SystemExit):
+        guard.compare(GuardFake(""), STABLE_INDEX, output)
+    err = capsys.readouterr().err
+    assert "foreign channel index changed during this mutation" in err
+
+
+class BoomFake:
+    def content(self, path):
+        assert path == STABLE_INDEX
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad")
+
+
+def test_snapshot_maps_read_failures_to_fail_closed(tmp_path, capsys):
+    output = tmp_path / "stable-isolation"
+    with pytest.raises(SystemExit):
+        guard.snapshot(BoomFake(), STABLE_INDEX, output)
+    err = capsys.readouterr().err
+    assert "unable to read the stable channel index" in err
+    assert "UnicodeDecodeError" not in err
+
+
 def test_compare_rejects_changed_index_without_logging_body(tmp_path, capsys):
     output = tmp_path / "stable-isolation"
     guard.snapshot(GuardFake("latest v1.2.3\n"), STABLE_INDEX, output)
