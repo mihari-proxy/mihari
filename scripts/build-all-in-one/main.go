@@ -91,9 +91,11 @@ func run(o options) error {
 	if o.ScriptsDir == "" {
 		o.ScriptsDir = "scripts/install"
 	}
-	if err := validateOutputIsolation(o.Out, o.LockPath, o.MihariDir, o.ScriptsDir); err != nil {
+	resolvedOutput, err := validateOutputIsolation(o.Out, o.LockPath, o.MihariDir, o.ScriptsDir)
+	if err != nil {
 		return err
 	}
+	o.Out = resolvedOutput
 	if err := validateRequestedPlatforms(o.Platforms, lock.Mihomo.Assets); err != nil {
 		return err
 	}
@@ -145,30 +147,45 @@ func run(o options) error {
 	return nil
 }
 
-func validateOutputIsolation(output, lockPath, mihariDir, scriptsDir string) error {
+func validateOutputIsolation(output, lockPath, mihariDir, scriptsDir string) (string, error) {
 	workingDirectory, err := os.Getwd()
 	if err != nil {
-		return errUnsafeBundleOutput
+		return "", errUnsafeBundleOutput
 	}
-	output, err = canonicalOverlapPath(output)
+	output, err = canonicalOutputPath(output)
 	if err != nil {
-		return errUnsafeBundleOutput
+		return "", errUnsafeBundleOutput
 	}
 	workingDirectory, err = canonicalOverlapPath(workingDirectory)
 	if err != nil || pathContains(output, workingDirectory) {
-		return errUnsafeBundleOutput
+		return "", errUnsafeBundleOutput
 	}
 	lockPath, err = canonicalOverlapPath(lockPath)
 	if err != nil || pathContains(output, lockPath) {
-		return errUnsafeBundleOutput
+		return "", errUnsafeBundleOutput
 	}
 	for _, inputDirectory := range []string{mihariDir, scriptsDir} {
 		inputDirectory, err = canonicalOverlapPath(inputDirectory)
 		if err != nil || pathContains(output, inputDirectory) || pathContains(inputDirectory, output) {
-			return errUnsafeBundleOutput
+			return "", errUnsafeBundleOutput
 		}
 	}
-	return nil
+	return output, nil
+}
+
+func canonicalOutputPath(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if info, statErr := os.Lstat(filepath.Clean(absolute)); statErr == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return "", errUnsafeBundleOutput
+		}
+	} else if !os.IsNotExist(statErr) {
+		return "", statErr
+	}
+	return canonicalOverlapPath(absolute)
 }
 
 func canonicalOverlapPath(path string) (string, error) {

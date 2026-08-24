@@ -210,6 +210,112 @@ func TestRunRejectsOutputPathOverlapBeforeNetwork(t *testing.T) {
 	}
 }
 
+func TestRunPublishesToResolvedOutputBelowSymlinkedAncestor(t *testing.T) {
+	fixture := newLockedFixture(t, "stable")
+	root := t.TempDir()
+	realParent := filepath.Join(root, "private", "var")
+	if err := os.MkdirAll(realParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkedParent := filepath.Join(root, "var")
+	if err := os.Symlink(realParent, linkedParent); err != nil {
+		t.Skipf("directory symlink creation is unavailable: %v", err)
+	}
+
+	logicalOutput := filepath.Join(linkedParent, "bundles")
+	canonicalOutput := filepath.Join(realParent, "bundles")
+	redirectedParent := filepath.Join(root, "redirected")
+	if err := os.Mkdir(redirectedParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	retargeted := false
+	opts := fixture.options(logicalOutput)
+	opts.PublishFault = func(operation, path string) error {
+		if !pathContains(canonicalOutput, path) {
+			t.Fatalf("publish path %q is outside canonical output", path)
+		}
+		if operation == "copy" && !retargeted {
+			retargeted = true
+			if err := os.Remove(linkedParent); err != nil {
+				t.Fatalf("remove output ancestor symlink: %v", err)
+			}
+			if err := os.Symlink(redirectedParent, linkedParent); err != nil {
+				t.Fatalf("retarget output ancestor symlink: %v", err)
+			}
+		}
+		return nil
+	}
+	if err := run(opts); err != nil {
+		t.Fatalf("run below symlinked ancestor: %v", err)
+	}
+	if !retargeted {
+		t.Fatal("publish did not reach the identity-change seam")
+	}
+	for _, platform := range releaseinputs.RequiredPlatforms() {
+		goos, goarch, err := splitPlatform(platform)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(canonicalOutput, bundleName(goos, goarch))); err != nil {
+			t.Fatalf("canonical output is missing %s: %v", platform, err)
+		}
+	}
+	if entries, err := os.ReadDir(filepath.Join(redirectedParent, "bundles")); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("retargeted ancestor received output entries %v: %v", entries, err)
+	}
+}
+
+func TestRunRejectsDestinationSymlinkBeforeNetwork(t *testing.T) {
+	fixture := newLockedFixture(t, "stable")
+	root := t.TempDir()
+	target := filepath.Join(root, "real-bundles")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(root, "bundles")
+	if err := os.Symlink(target, destination); err != nil {
+		t.Skipf("directory symlink creation is unavailable: %v", err)
+	}
+
+	err := run(fixture.options(destination))
+	if !errors.Is(err, errUnsafeBundleOutput) {
+		t.Fatalf("run destination symlink error = %v, want fixed isolation error", err)
+	}
+	if fixture.transport.requestCount() != 0 {
+		t.Fatalf("network requests = %d, want 0", fixture.transport.requestCount())
+	}
+	entries, readErr := os.ReadDir(target)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("destination symlink target was mutated: %v", entries)
+	}
+}
+
+func TestRunRejectsNonDirectoryDestinationBeforeNetwork(t *testing.T) {
+	fixture := newLockedFixture(t, "stable")
+	destination := filepath.Join(t.TempDir(), "bundles")
+	if err := os.WriteFile(destination, []byte("do not replace"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := run(fixture.options(destination))
+	if !errors.Is(err, errUnsafeBundleOutput) {
+		t.Fatalf("run non-directory destination error = %v, want fixed isolation error", err)
+	}
+	if fixture.transport.requestCount() != 0 {
+		t.Fatalf("network requests = %d, want 0", fixture.transport.requestCount())
+	}
+	got, readErr := os.ReadFile(destination)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != "do not replace" {
+		t.Fatalf("non-directory destination was mutated: %q", got)
+	}
+}
+
 func TestRunRejectsLockedPayloadMismatchWithoutBundle(t *testing.T) {
 	tests := []struct {
 		name   string
