@@ -469,6 +469,34 @@ def test_fs_path_strips_mount_segment():
     assert alist._fs_path("/mihari-release/mihari") == "/mihari"
     # No leading segment to strip → returned unchanged (no crash on odd shapes).
     assert alist._fs_path("/mihari-release") == "/mihari-release"
+    assert alist._fs_path("/mihari-release/mihari-dev") == "/mihari-dev"
+    assert alist._fs_path("/mihari-release/mihari-dev/index.txt") == "/mihari-dev/index.txt"
+    assert alist._fs_path("/") == "/"
+
+
+def test_list_dir_root_sends_slash_fs_path():
+    alist = AList.__new__(AList)
+    captured = {}
+
+    class Session:
+        def post(self, url, timeout=None, json=None):
+            captured["url"] = url
+            captured["json"] = json
+            return list_response(
+                content=[{"name": "mihari", "is_dir": True}],
+                total=1,
+                page=1,
+                per_page=200,
+                has_more=False,
+                pages_total=1,
+            )
+
+    alist.base = "https://cloud.example.com"
+    alist.session = Session()
+    entries = alist.list_dir("/")
+    assert captured["url"].endswith("/api/fs/list")
+    assert captured["json"]["path"] == "/"
+    assert entries == [{"name": "mihari", "is_dir": True}]
 
 
 def _load_release_alist():

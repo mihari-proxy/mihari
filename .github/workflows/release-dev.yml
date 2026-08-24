@@ -136,6 +136,9 @@ jobs:
     name: publish dev prerelease
     needs: [resolve, build, bundle]
     runs-on: ubuntu-latest
+    concurrency:
+      group: mihari-dev-alist
+      cancel-in-progress: false
     permissions:
       contents: write
     env:
@@ -143,6 +146,8 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       DEV_RELEASE_NAME: Mihari ${{ inputs.version }} (dev)
       DEV_RELEASE_BODY: "This is a Mihari development release.\n\n<!-- github-release-dev -->"
+      ALIST_CONFIGURED: ${{ secrets.ALIST_URL != '' }}
+      MIHARI_KEEP_VERSIONS: ${{ vars.MIHARI_KEEP_VERSIONS }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -360,3 +365,93 @@ jobs:
             || { echo "::error::unable to read stable latest release after publication"; exit 1; }
           python scripts/github_release_policy.py latest \
             --before /tmp/latest-before.json --after /tmp/latest-after.json --dev-version "${VERSION}"
+
+      - uses: actions/setup-python@v7
+        if: env.ALIST_CONFIGURED == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Publish to AList drive
+        id: alist_mutation
+        if: env.ALIST_CONFIGURED == 'true'
+        env:
+          ALIST_URL: ${{ secrets.ALIST_URL }}
+          ALIST_USERNAME: ${{ secrets.ALIST_USERNAME }}
+          ALIST_PASSWORD: ${{ secrets.ALIST_PASSWORD }}
+        run: |
+          python -m pip install --disable-pip-version-check -r scripts/requirements-release.txt
+          python scripts/alist_channel_guard.py snapshot \
+            --path /mihari-release/mihari/index.txt \
+            --output-dir "${RUNNER_TEMP}/mihari-index-backup/stable-isolation"
+          set +e
+          python scripts/release-alist.py \
+            --version "${VERSION}" \
+            --dist-dir dist \
+            --repo-root . \
+            --channel dev \
+            --commit-sha "${SHA}" \
+            --base-path /mihari-release/mihari-dev \
+            --keep-versions "${MIHARI_KEEP_VERSIONS:-5}"
+          publish_status=$?
+          python scripts/alist_channel_guard.py compare \
+            --path /mihari-release/mihari/index.txt \
+            --expected-dir "${RUNNER_TEMP}/mihari-index-backup/stable-isolation"
+          compare_status=$?
+          set -e
+          if [ "${compare_status}" -ne 0 ]; then exit "${compare_status}"; fi
+          exit "${publish_status}"
+
+      - name: Upload dev index recovery backup
+        if: "env.ALIST_CONFIGURED == 'true' && ((failure() && steps.alist_mutation.outcome == 'failure') || (cancelled() && steps.alist_mutation.outcome == 'cancelled'))"
+        uses: actions/upload-artifact@v7
+        with:
+          name: dev-index-backup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mihari-index-backup/dev/**
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload stable index isolation snapshot
+        if: "env.ALIST_CONFIGURED == 'true' && ((failure() && steps.alist_mutation.outcome == 'failure') || (cancelled() && steps.alist_mutation.outcome == 'cancelled'))"
+        uses: actions/upload-artifact@v7
+        with:
+          name: stable-index-isolation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mihari-index-backup/stable-isolation/**
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Re-verify stable latest after AList mutation
+        if: env.ALIST_CONFIGURED == 'true'
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/releases/latest" > /tmp/latest-after-alist.json 2> /tmp/latest-after-alist.err \
+            || { echo "::error::unable to read stable latest release after AList mutation"; exit 1; }
+          python scripts/github_release_policy.py latest \
+            --before /tmp/latest-before.json --after /tmp/latest-after-alist.json --dev-version "${VERSION}"
+
+      - name: Append prerelease AList install hook to release notes
+        if: env.ALIST_CONFIGURED == 'true'
+        run: |
+          NOTES="$(gh release view "${VERSION}" --json body -q .body)"
+          MARKER='<!-- aio-install-dev -->'
+          if printf '%s' "$NOTES" | grep -qF "$MARKER"; then
+            echo "dev aio-install section already present — skipping"
+            exit 0
+          fi
+          cat > /tmp/aio_append_dev.md <<'TEMPLATE'
+
+          <!-- aio-install-dev -->
+          ## 国内 prerelease 安装（AList，免 GitHub；覆盖 index，不改默认稳定入口）
+
+          Linux / macOS：
+
+          ```bash
+          curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.sh | MIHARI_INDEX_URL=https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt bash
+          ```
+
+          Windows (PowerShell)：
+
+          ```powershell
+          $env:MIHARI_INDEX_URL='https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt'
+          & ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1)))
+          ```
+          TEMPLATE
+          gh release edit "${VERSION}" --notes "$(printf '%s\n%s\n' "$NOTES" "$(cat /tmp/aio_append_dev.md)")"

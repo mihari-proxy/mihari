@@ -6,6 +6,8 @@
 
 ### Added
 
+- 为 prerelease 通道增加独立 AList index（`/mihari-release/mihari-dev`）与 `retract-dev` 撤回入口（#126）。
+
 ### Fixed
 
 ## [v0.9.0] - 2026-08-24

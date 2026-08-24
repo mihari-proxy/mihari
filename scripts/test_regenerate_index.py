@@ -108,3 +108,70 @@ def test_regenerate_index_rejects_noncanonical_stable_base_path_without_mutation
         regenerate.regenerate_index(fake, "/mihari-release/other")
 
     assert fake.uploads == []
+
+
+def test_regenerate_index_rebuilds_dev_index_for_highest_complete(tmp_path, monkeypatch):
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    fake = FakeAList()
+    base = "/mihari-release/mihari-dev"
+    add_complete(fake, base, "v1.2.3-dev.1")
+    add_complete(fake, base, "v1.2.3-dev.2")
+    regenerate.regenerate_index(fake, base, channel="dev")
+    body = fake.files[f"{base}/index.txt"].decode()
+    assert body.startswith("latest v1.2.3-dev.2\n")
+    assert len(body.splitlines()) == 1 + len(PLATFORMS)
+
+
+def test_regenerate_index_rejects_dev_channel_with_stable_path():
+    fake = FakeAList()
+    with pytest.raises(SystemExit):
+        regenerate.regenerate_index(fake, "/mihari-release/mihari", channel="dev")
+    assert fake.uploads == []
+
+
+def test_regenerate_index_help_names_stable_default_path(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["regenerate-index.py", "--help"])
+    with pytest.raises(SystemExit) as exc:
+        regenerate.main()
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "stable" in out
+    assert "/mihari-release/mihari" in out
+
+
+def test_main_rejects_explicit_empty_base_path(monkeypatch, capsys):
+    fake = FakeAList()
+    monkeypatch.setattr(regenerate, "connect", lambda: fake)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["regenerate-index.py", "--channel", "dev", "--base-path", ""],
+    )
+    with pytest.raises(SystemExit):
+        regenerate.main()
+    err = capsys.readouterr().err
+    assert "invalid release base path" in err
+    assert fake.uploads == []
+
+
+def test_main_channel_dev_without_base_path_targets_dev_root(monkeypatch, capsys):
+    captured = {}
+
+    def fake_connect():
+        return object()
+
+    def fake_regenerate(alist, base_path, channel="stable"):
+        captured["base_path"] = base_path
+        captured["channel"] = channel
+
+    monkeypatch.setattr(regenerate, "connect", fake_connect)
+    monkeypatch.setattr(regenerate, "regenerate_index", fake_regenerate)
+    monkeypatch.setattr("sys.argv", ["regenerate-index.py", "--channel", "dev"])
+    regenerate.main()
+    assert captured == {
+        "base_path": "/mihari-release/mihari-dev",
+        "channel": "dev",
+    }
+    logged = capsys.readouterr()
+    text = logged.out + logged.err
+    assert "regenerating dev index at /mihari-release/mihari-dev/index.txt" in text
+

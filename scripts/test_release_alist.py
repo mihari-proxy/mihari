@@ -8,6 +8,7 @@ import pytest
 import requests
 
 from alist_client import AList, AListError, PLATFORMS, bundle_name
+from test_alist_topology_fake import TopologyFake
 
 
 def load_module(name):
@@ -65,6 +66,15 @@ class FakeAList:
 
     def public_url(self, path):
         return "https://example.invalid" + path
+
+
+def seed_storage_root(fake, *, has_dev_channel=True):
+    # Old Fake lists "/" by first logical/fs segment. These two fs-shaped
+    # siblings make storage_root_entries see mihari [+ mihari-dev]
+    # without preloading the forbidden logical path /mihari-release.
+    fake.dirs.add("/mihari")
+    if has_dev_channel:
+        fake.dirs.add("/mihari-dev")
 
 
 def make_dist(tmp_path):
@@ -580,12 +590,15 @@ def test_post_index_retention_list_failure_skips_safely_without_leaking_details(
         list_calls = 0
 
         def list_dir(self, path):
+            if path == "/":
+                return super().list_dir(path)
             self.list_calls += 1
             if self.list_calls > 2:
                 raise RuntimeError("https://cloud.invalid/list?token=retention-secret body")
             return super().list_dir(path)
 
     alist = LateListFailureAList()
+    seed_storage_root(alist)
     base = "/mihari-release/mihari-dev"
     args = SimpleNamespace(
         version="v1.2.3-dev.1", dist_dir=make_dist(tmp_path), repo_root=tmp_path,
@@ -600,8 +613,123 @@ def test_post_index_retention_list_failure_skips_safely_without_leaking_details(
     assert "body" not in captured.out
 
 
+def test_publish_dev_bootstraps_missing_channel_root(tmp_path):
+    alist = TopologyFake()
+    args = SimpleNamespace(
+        version="v1.2.3-dev.1",
+        dist_dir=make_dist(tmp_path),
+        repo_root=tmp_path,
+        base_path="/mihari-release/mihari-dev",
+        commit_sha="a" * 40,
+        channel="dev",
+        keep_versions=5,
+    )
+    release.publish(alist, args)
+    assert any(
+        op == "mkdir" and logical == "/mihari-release/mihari-dev" and fs == "/mihari-dev"
+        for op, logical, fs in alist.ops
+    )
+    assert not any(fs == "/mihari-release" for _, _, fs in alist.ops)
+    index = f"{args.base_path}/index.txt"
+    assert alist.content(index) is not None
+    assert "latest v1.2.3-dev.1" in alist.content(index)
+    assert index not in alist.files
+
+
+def test_ensure_channel_root_fails_closed_without_mihari_sibling(tmp_path, capsys):
+    alist = TopologyFake()
+    alist.dirs.discard("/mihari")
+    args = SimpleNamespace(
+        version="v1.2.3-dev.1",
+        dist_dir=make_dist(tmp_path),
+        repo_root=tmp_path,
+        base_path="/mihari-release/mihari-dev",
+        commit_sha="a" * 40,
+        channel="dev",
+        keep_versions=5,
+    )
+    with pytest.raises(SystemExit):
+        release.publish(alist, args)
+    captured = capsys.readouterr()
+    assert "unable to inspect release root" in captured.err
+    assert any(op == "list_dir" and logical == "/" for op, logical, _ in alist.ops)
+    assert not any(op == "mkdir" for op, _, _ in alist.ops)
+    assert not any(fs == "/mihari-release" for _, _, fs in alist.ops)
+
+
+def test_ensure_channel_root_is_noop_when_mihari_dev_already_a_directory(tmp_path):
+    alist = TopologyFake()
+    alist.dirs.add("/mihari-dev")
+    release.ensure_channel_root(alist, "/mihari-release/mihari-dev", "dev")
+    assert not any(op == "mkdir" for op, _, _ in alist.ops)
+    args = SimpleNamespace(
+        version="v1.2.3-dev.1",
+        dist_dir=make_dist(tmp_path),
+        repo_root=tmp_path,
+        base_path="/mihari-release/mihari-dev",
+        commit_sha="a" * 40,
+        channel="dev",
+        keep_versions=5,
+    )
+    release.publish(alist, args)
+    assert not any(
+        op == "mkdir" and logical == "/mihari-release/mihari-dev"
+        for op, logical, _ in alist.ops
+    )
+    assert alist.content(f"{args.base_path}/index.txt") is not None
+    assert not any(fs == "/mihari-release" for _, _, fs in alist.ops)
+
+
+def test_ensure_channel_root_fails_when_mihari_dev_is_not_a_directory(tmp_path, capsys):
+    alist = TopologyFake()
+    alist.files["/mihari-dev"] = b"not-a-directory"
+    args = SimpleNamespace(
+        version="v1.2.3-dev.1",
+        dist_dir=make_dist(tmp_path),
+        repo_root=tmp_path,
+        base_path="/mihari-release/mihari-dev",
+        commit_sha="a" * 40,
+        channel="dev",
+        keep_versions=5,
+    )
+    with pytest.raises(SystemExit):
+        release.publish(alist, args)
+    captured = capsys.readouterr()
+    assert "channel base path is not a directory" in captured.err
+    assert not any(op == "mkdir" for op, _, _ in alist.ops)
+    assert not any(fs == "/mihari-release" for _, _, fs in alist.ops)
+
+
+def test_stable_publish_does_not_list_storage_root_or_mkdir_dev(tmp_path):
+    alist = TopologyFake()
+    repo_root = tmp_path / "repo"
+    write_root_installers(repo_root)
+    args = SimpleNamespace(
+        version="v1.2.3",
+        dist_dir=make_dist(tmp_path),
+        repo_root=repo_root,
+        base_path="/mihari-release/mihari",
+        commit_sha="a" * 40,
+        channel="stable",
+        keep_versions=5,
+    )
+    release.publish(alist, args)
+    assert not any(op == "list_dir" and logical == "/" for op, logical, _ in alist.ops)
+    assert not any(op == "mkdir" and "mihari-dev" in logical for op, logical, _ in alist.ops)
+    assert not any(fs == "/mihari-release" for _, _, fs in alist.ops)
+    assert alist.content("/mihari-release/mihari/index.txt") is not None
+    assert "/mihari-release/mihari/index.txt" not in alist.files
+
+
+def test_ensure_channel_root_skips_stable_without_listing():
+    alist = TopologyFake()
+    release.ensure_channel_root(alist, "/mihari-release/mihari", "stable")
+    assert alist.ops == []
+
+
 def test_publish_dev_never_uploads_root_installers(tmp_path):
     alist = FakeAList()
+    seed_storage_root(alist)
     repo_root = tmp_path / "repo"
     write_root_installers(repo_root)
     base = "/mihari-release/mihari-dev"
@@ -625,6 +753,7 @@ def test_dev_complete_with_empty_commit_is_not_a_monotonic_baseline():
 def test_publish_rechecks_index_at_commit_point_and_preserves_newer_index(tmp_path):
     base = "/mihari-release/mihari-dev"
     alist = FakeAList()
+    seed_storage_root(alist)
     original_content = alist.content
     calls = {"index": 0}
     def content(path):
