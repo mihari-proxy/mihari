@@ -6,7 +6,7 @@ import os
 import re
 from pathlib import Path
 
-from alist_client import AListError, DEFAULT_BASE_PATH, DEFAULT_KEEP_VERSIONS, PLATFORMS, bundle_name, connect, fail, info, sha256_file
+from alist_client import AListError, DEFAULT_BASE_PATH, DEFAULT_KEEP_VERSIONS, PLATFORMS, bundle_name, connect, fail, info, sha256_file, storage_root_entries
 from alist_index import IndexMutationError, parse_latest, write_index_reliably as _write_index_reliably
 from release_policy import compare_versions, parse_version, validate_base_path
 
@@ -349,8 +349,22 @@ def emit_env(name, value):
             handle.write(f"{name}={value}\n")
 
 
+def ensure_channel_root(alist, base_path, channel):
+    if channel != "dev":
+        return
+    entries = storage_root_entries(alist)
+    matches = [e for e in entries if isinstance(e, dict) and e.get("name") == "mihari-dev"]
+    if not matches:
+        alist.mkdir(base_path)
+        return
+    if len(matches) != 1 or matches[0].get("is_dir") is not True:
+        fail("channel base path is not a directory")
+
+
 def publish(alist, args):
     """Publish only after a final monotonic scan immediately before index write."""
+    if args.channel == "dev":
+        ensure_channel_root(alist, args.base_path, args.channel)
     ensure_monotonic_version(alist, args.base_path, args.version, args.channel)
     version_dir = upload_version_dir(alist, args.dist_dir, args.base_path, args.version, args.commit_sha, args.channel)
     ensure_monotonic_version(alist, args.base_path, args.version, args.channel)

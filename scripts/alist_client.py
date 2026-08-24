@@ -45,6 +45,19 @@ def fail(message):
     sys.exit(1)
 
 
+def storage_root_entries(alist):
+    try:
+        entries = alist.list_dir("/")
+    except Exception:
+        fail("unable to inspect release root")
+    if not isinstance(entries, list):
+        fail("unable to inspect release root")
+    mihari = [e for e in entries if isinstance(e, dict) and e.get("name") == "mihari"]
+    if len(mihari) != 1 or mihari[0].get("is_dir") is not True:
+        fail("unable to inspect release root")
+    return entries
+
+
 def info(message):
     print(f"::notice::{message}")
 
