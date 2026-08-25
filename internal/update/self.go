@@ -19,11 +19,13 @@ import (
 )
 
 const (
-	maxReleaseResponseSize  = 2 << 20
-	maxSelfBinarySize       = 128 << 20
-	maxChecksumManifestSize = 1 << 20
-	defaultRepo             = "mihari-proxy/mihari"
-	checksumAssetName       = "SHA256SUMS.txt"
+	maxReleaseResponseSize     = 2 << 20
+	maxReleaseListResponseSize = 8 << 20
+	maxDevReleasePages         = 5
+	maxSelfBinarySize          = 128 << 20
+	maxChecksumManifestSize    = 1 << 20
+	defaultRepo                = "mihari-proxy/mihari"
+	checksumAssetName          = "SHA256SUMS.txt"
 )
 
 // Asset is a GitHub release asset.
@@ -292,11 +294,158 @@ func (u SelfUpdater) fetchExpectedChecksum(ctx context.Context, asset Asset, tar
 
 func (u SelfUpdater) latestRelease(ctx context.Context, channel string) (Release, error) {
 	switch channel {
-	case ChannelMain, ChannelDev:
+	case ChannelDev:
+		return u.latestDevRelease(ctx)
+	case ChannelMain:
 		return u.latestMainRelease(ctx)
 	default:
 		return Release{}, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "mihari channel must be main or dev"}
 	}
+}
+
+func (u SelfUpdater) latestDevRelease(ctx context.Context) (Release, error) {
+	var best Release
+	found := false
+	url := u.apiBase() + "/repos/" + u.repository() + "/releases?per_page=100"
+	for page := 0; page < maxDevReleasePages; page++ {
+		releases, next, err := u.fetchReleaseListPage(ctx, url)
+		if err != nil {
+			return Release{}, err
+		}
+		for _, release := range releases {
+			if release.Draft {
+				continue
+			}
+			tag, ok := parseCanonicalTag(release.TagName)
+			if !ok || !tag.isDev {
+				continue
+			}
+			if !found {
+				best = release
+				found = true
+				continue
+			}
+			if cmp, ok := compareCanonicalTags(release.TagName, best.TagName); ok && cmp > 0 {
+				best = release
+			}
+		}
+		if next == "" {
+			break
+		}
+		url = next
+	}
+	if !found {
+		return Release{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "no canonical mihari dev release"}
+	}
+	if len(best.Assets) == 0 {
+		return u.releaseByTag(ctx, best.TagName)
+	}
+	return best, nil
+}
+
+func (u SelfUpdater) fetchReleaseListPage(ctx context.Context, pageURL string) ([]Release, string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	if err != nil {
+		return nil, "", protocol.APIError{Code: protocol.CodeInternal, Message: "create release list request"}
+	}
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	request.Header.Set("User-Agent", "mihari")
+	response, err := u.httpClient().Do(request)
+	if err != nil {
+		return nil, "", protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch mihari release list failed"}
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, "", protocol.APIError{
+			Code:    protocol.CodeNetworkFailure,
+			Message: "fetch mihari release list failed",
+			Details: map[string]any{"status": response.StatusCode},
+		}
+	}
+	next := nextReleaseLink(response.Header)
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxReleaseListResponseSize+1))
+	if err != nil {
+		return nil, "", protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read mihari release list failed"}
+	}
+	if len(raw) > maxReleaseListResponseSize {
+		return nil, "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihari release list is too large"}
+	}
+	var releases []Release
+	if err := json.Unmarshal(raw, &releases); err != nil {
+		return nil, "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mihari release list"}
+	}
+	return releases, next, nil
+}
+
+func (u SelfUpdater) releaseByTag(ctx context.Context, tag string) (Release, error) {
+	var release Release
+	url := u.apiBase() + "/repos/" + u.repository() + "/releases/tags/" + tag
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return release, protocol.APIError{Code: protocol.CodeInternal, Message: "create release tag request"}
+	}
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	request.Header.Set("User-Agent", "mihari")
+	response, err := u.httpClient().Do(request)
+	if err != nil {
+		return release, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch mihari release failed"}
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return release, protocol.APIError{
+			Code:    protocol.CodeNetworkFailure,
+			Message: "fetch mihari release failed",
+			Details: map[string]any{"status": response.StatusCode},
+		}
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxReleaseResponseSize+1))
+	if err != nil {
+		return release, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read mihari release failed"}
+	}
+	if len(raw) > maxReleaseResponseSize {
+		return release, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihari release response is too large"}
+	}
+	if err := json.Unmarshal(raw, &release); err != nil || release.TagName == "" {
+		return Release{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mihari release response"}
+	}
+	return release, nil
+}
+
+func nextReleaseLink(header http.Header) string {
+	for _, value := range header.Values("Link") {
+		for _, part := range strings.Split(value, ",") {
+			part = strings.TrimSpace(part)
+			if !strings.HasPrefix(part, "<") {
+				continue
+			}
+			end := strings.Index(part, ">")
+			if end < 0 {
+				continue
+			}
+			uri := part[1:end]
+			if linkRel(part[end+1:]) == "next" {
+				return uri
+			}
+		}
+	}
+	return ""
+}
+
+func linkRel(params string) string {
+	for _, param := range strings.Split(params, ";") {
+		param = strings.TrimSpace(param)
+		key, value, ok := strings.Cut(param, "=")
+		if !ok || strings.TrimSpace(strings.ToLower(key)) != "rel" {
+			continue
+		}
+		value = strings.Trim(strings.TrimSpace(value), `"'`)
+		if value == "next" {
+			return "next"
+		}
+	}
+	return ""
 }
 
 func (u SelfUpdater) latestMainRelease(ctx context.Context) (Release, error) {

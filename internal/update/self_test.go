@@ -1,6 +1,7 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -723,6 +724,233 @@ func TestSelfUpdaterCheckDoesNotDownloadAsset(t *testing.T) {
 	}
 }
 
+func TestSelfUpdaterCheckDevUsesReleaseListNotLatest(t *testing.T) {
+	var paths []string
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		queries = append(queries, r.URL.RawQuery)
+		if r.URL.Path == "/repos/mihari-proxy/mihari/releases" {
+			_ = json.NewEncoder(w).Encode([]Release{{TagName: "v0.9.0-dev.3", Assets: []Asset{{Name: "mihari-linux-amd64"}}}})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	result, err := (SelfUpdater{HTTPClient: server.Client(), APIBase: server.URL}).Check(context.Background(), "v0.8.2", ChannelDev)
+	if err != nil || result.Latest != "v0.9.0-dev.3" || !result.Available || result.Channel != ChannelDev {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if len(paths) != 1 || paths[0] != "/repos/mihari-proxy/mihari/releases" {
+		t.Fatalf("paths=%v", paths)
+	}
+	if !strings.Contains(queries[0], "per_page=100") {
+		t.Fatalf("query=%q", queries[0])
+	}
+	for _, path := range paths {
+		if strings.Contains(path, "/releases/latest") {
+			t.Fatalf("requested latest: %v", paths)
+		}
+	}
+}
+
+func TestSelfUpdaterCheckDevSelectsGreatestCanonicalNotArrayOrder(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/mihari-proxy/mihari/releases" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]Release{
+			{TagName: "v0.8.0-dev.99", Assets: []Asset{{Name: "old"}}},
+			{TagName: "v0.9.0"},
+			{TagName: "v0.9.0-dev"},
+			{TagName: "v0.9.0-dev.9", Draft: true},
+			{TagName: "v0.9.0-dev.3", Assets: []Asset{{Name: "mihari-linux-amd64"}}},
+		})
+	}))
+	defer server.Close()
+	result, err := (SelfUpdater{HTTPClient: server.Client(), APIBase: server.URL}).Check(context.Background(), "v0.8.2", ChannelDev)
+	if err != nil || result.Latest != "v0.9.0-dev.3" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestSelfUpdaterCheckDevFollowsNextNotLast(t *testing.T) {
+	var pages []string
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/mihari-proxy/mihari/releases" {
+			http.NotFound(w, r)
+			return
+		}
+		pages = append(pages, r.URL.Query().Get("page"))
+		switch r.URL.Query().Get("page") {
+		case "", "1":
+			w.Header().Set("Link", `<`+server.URL+`/repos/mihari-proxy/mihari/releases?page=2>; rel="next", <`+server.URL+`/repos/mihari-proxy/mihari/releases?page=9>; rel="last"`)
+			_ = json.NewEncoder(w).Encode([]Release{{TagName: "v0.9.0-dev.1", Assets: []Asset{{Name: "a"}}}})
+		case "2":
+			_ = json.NewEncoder(w).Encode([]Release{{TagName: "v0.9.0-dev.4", Assets: []Asset{{Name: "b"}}}})
+		case "9":
+			_ = json.NewEncoder(w).Encode([]Release{{TagName: "v0.9.0-dev.99", Assets: []Asset{{Name: "c"}}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	result, err := (SelfUpdater{HTTPClient: server.Client(), APIBase: server.URL}).Check(context.Background(), "v0.8.2", ChannelDev)
+	if err != nil || result.Latest != "v0.9.0-dev.4" {
+		t.Fatalf("result=%#v err=%v pages=%v", result, err, pages)
+	}
+	for _, page := range pages {
+		if page == "9" {
+			t.Fatalf("followed last: %v", pages)
+		}
+	}
+}
+
+func TestSelfUpdaterCheckDevStopsWhenOnlyLastLink(t *testing.T) {
+	var pages []string
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/mihari-proxy/mihari/releases" {
+			http.NotFound(w, r)
+			return
+		}
+		pages = append(pages, r.URL.Query().Get("page"))
+		w.Header().Set("Link", `<`+server.URL+`/repos/mihari-proxy/mihari/releases?page=9>; rel="last"`)
+		_ = json.NewEncoder(w).Encode([]Release{{TagName: "v0.9.0-dev.1", Assets: []Asset{{Name: "a"}}}})
+	}))
+	defer server.Close()
+	result, err := (SelfUpdater{HTTPClient: server.Client(), APIBase: server.URL}).Check(context.Background(), "v0.8.2", ChannelDev)
+	if err != nil || result.Latest != "v0.9.0-dev.1" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if len(pages) != 1 {
+		t.Fatalf("pages=%v", pages)
+	}
+}
+
+func TestSelfUpdaterCheckDevZeroCanonicalDoesNotFallbackLatest(t *testing.T) {
+	var latestHits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			latestHits++
+			_ = json.NewEncoder(w).Encode(Release{TagName: "v0.8.2"})
+			return
+		}
+		if r.URL.Path == "/repos/mihari-proxy/mihari/releases" {
+			_ = json.NewEncoder(w).Encode([]Release{
+				{TagName: "v0.9.0"},
+				{TagName: "v0.9.0-dev"},
+				{TagName: "v0.9.0-dev.9", Draft: true},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	_, err := (SelfUpdater{HTTPClient: server.Client(), APIBase: server.URL}).Check(context.Background(), "v0.8.2", ChannelDev)
+	var apiError protocol.APIError
+	if err == nil || !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure {
+		t.Fatalf("err=%v", err)
+	}
+	if latestHits != 0 {
+		t.Fatalf("latestHits=%d", latestHits)
+	}
+}
+
+func TestSelfUpdaterCheckDevRejectsOversizedListBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/mihari-proxy/mihari/releases" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(bytes.Repeat([]byte("x"), (8<<20)+1))
+	}))
+	defer server.Close()
+	_, err := (SelfUpdater{HTTPClient: server.Client(), APIBase: server.URL}).Check(context.Background(), "v0.8.2", ChannelDev)
+	var apiError protocol.APIError
+	if err == nil || !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestSelfUpdaterCheckDevFetchesTagWhenAssetsMissing(t *testing.T) {
+	var tagHits int
+	assets := []Asset{{Name: "mihari-linux-amd64", URL: "https://example.invalid/bin", Size: 10}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/mihari-proxy/mihari/releases":
+			_ = json.NewEncoder(w).Encode([]Release{{TagName: "v0.9.0-dev.3"}})
+		case "/repos/mihari-proxy/mihari/releases/tags/v0.9.0-dev.3":
+			tagHits++
+			_ = json.NewEncoder(w).Encode(Release{TagName: "v0.9.0-dev.3", Assets: assets})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	result, err := (SelfUpdater{HTTPClient: server.Client(), APIBase: server.URL}).Check(context.Background(), "v0.8.2", ChannelDev)
+	if err != nil || result.Latest != "v0.9.0-dev.3" || tagHits != 1 {
+		t.Fatalf("result=%#v err=%v tagHits=%d", result, err, tagHits)
+	}
+
+	tagHits = 0
+	serverComplete := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/mihari-proxy/mihari/releases":
+			_ = json.NewEncoder(w).Encode([]Release{{TagName: "v0.9.0-dev.3", Assets: assets}})
+		case "/repos/mihari-proxy/mihari/releases/tags/v0.9.0-dev.3":
+			tagHits++
+			_ = json.NewEncoder(w).Encode(Release{TagName: "v0.9.0-dev.3", Assets: assets})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer serverComplete.Close()
+	result, err = (SelfUpdater{HTTPClient: serverComplete.Client(), APIBase: serverComplete.URL}).Check(context.Background(), "v0.8.2", ChannelDev)
+	if err != nil || result.Latest != "v0.9.0-dev.3" || tagHits != 0 {
+		t.Fatalf("complete result=%#v err=%v tagHits=%d", result, err, tagHits)
+	}
+}
+
+func TestSelfUpdaterDevNextReleaseLink(t *testing.T) {
+	tests := []struct {
+		name string
+		link string
+		want string
+	}{
+		{
+			name: "next and last",
+			link: `<https://api.github.com/repos/mihari-proxy/mihari/releases?page=2>; rel="next", <https://api.github.com/repos/mihari-proxy/mihari/releases?page=9>; rel="last"`,
+			want: "https://api.github.com/repos/mihari-proxy/mihari/releases?page=2",
+		},
+		{
+			name: "only last",
+			link: `<https://api.github.com/repos/mihari-proxy/mihari/releases?page=9>; rel="last"`,
+		},
+		{
+			name: "prev and first",
+			link: `<https://api.github.com/repos/mihari-proxy/mihari/releases?page=1>; rel="prev", <https://api.github.com/repos/mihari-proxy/mihari/releases?page=1>; rel="first"`,
+		},
+		{
+			name: "empty",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			header := http.Header{}
+			if test.link != "" {
+				header.Set("Link", test.link)
+			}
+			if got := nextReleaseLink(header); got != test.want {
+				t.Fatalf("got=%q want=%q", got, test.want)
+			}
+		})
+	}
+}
+
 const oldBinaryContent = "old"
 
 type selfUpdateServerConfig struct {
@@ -794,10 +1022,14 @@ func startSelfUpdateEnv(t *testing.T, cfg selfUpdateServerConfig) *selfUpdateEnv
 	env := &selfUpdateEnv{binaryPath: binaryPath}
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/repos/mihari-proxy/mihari/releases/latest":
+		switch {
+		case r.URL.Path == "/repos/mihari-proxy/mihari/releases/latest":
 			_ = json.NewEncoder(w).Encode(Release{TagName: cfg.tag, Assets: cfg.assets(server.URL)})
-		case "/checksum", "/checksum2":
+		case r.URL.Path == "/repos/mihari-proxy/mihari/releases":
+			_ = json.NewEncoder(w).Encode([]Release{{TagName: cfg.tag, Assets: cfg.assets(server.URL)}})
+		case strings.HasPrefix(r.URL.Path, "/repos/mihari-proxy/mihari/releases/tags/"):
+			_ = json.NewEncoder(w).Encode(Release{TagName: cfg.tag, Assets: cfg.assets(server.URL)})
+		case r.URL.Path == "/checksum" || r.URL.Path == "/checksum2":
 			env.checksumReqs++
 			if cfg.onChecksum != nil {
 				cfg.onChecksum(r)
@@ -817,7 +1049,7 @@ func startSelfUpdateEnv(t *testing.T, cfg selfUpdateServerConfig) *selfUpdateEnv
 			if status == http.StatusOK {
 				_, _ = io.WriteString(w, cfg.checksumBody)
 			}
-		case "/asset":
+		case r.URL.Path == "/asset":
 			env.binaryReqs++
 			if cfg.breakBinary {
 				writeTruncatedHTTP(w)
