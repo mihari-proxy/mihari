@@ -71,7 +71,7 @@ git rev-parse origin/main
 
 1. 版本闸门校验（build / release 各一层，拒绝 `-` 预发布后缀）；
 2. 使用 Go 1.26.5 交叉编译 linux / darwin / windows（各 amd64 + arm64），以 `-buildvcs=false -trimpath` 构建并注入版本号（`-X .../buildinfo.Version=<version>`）；
-3. 只从仓库内已审核的 `scripts/release-inputs.lock.json` 读取精确 mihomo 与 GeoIP 输入，打包 6 个 all-in-one 整合包；
+3. 只从仓库内已审核的 `scripts/release/release-inputs.lock.json` 读取精确 mihomo 与 GeoIP 输入，打包 6 个 all-in-one 整合包；
 4. 生成 SHA256 校验和（全量 `SHA256SUMS.txt` + aio 专用 `AIO_SHA256SUMS.txt`）；
 5. 创建 GitHub Release 并上传全部产物；
 6. `ALIST_URL` 存在时进入 AList mutation，上传整合包到网盘版本目录、更新 `index.txt`、追加离线安装命令到 release notes；只有 `ALIST_URL` 缺失时才走 GitHub-only skip，不阻塞 GitHub 发布。URL 已存在但 `ALIST_USERNAME` 或 `ALIST_PASSWORD` 任一缺失时，客户端必须 fail closed，workflow 失败且不得静默跳过。
@@ -80,12 +80,12 @@ git rev-parse origin/main
 
 稳定和 dev 发布 workflow 都通过 `go-version-file: go.mod` 使用其中钉死的 Go 1.26.5 toolchain。Mihari 二进制同时使用 `-buildvcs=false -trimpath`：`-buildvcs=false` 防止同一 commit 在 tag 创建前后产生不同的 Go VCS/module 元数据，`-trimpath` 去除本机构建路径；用户可见版本继续由 `buildinfo.Version` 的 ldflags 注入。
 
-all-in-one 的外部输入固定在仓库内的 `scripts/release-inputs.lock.json`。lock 记录精确的 mihomo release、六个平台 asset ID/URL/大小/SHA-256，以及 GeoIP commit、不可变 URL 和 SHA-256。构建阶段只读取 lock，**不会**解析 mihomo latest release 或 GeoIP 的可变 `release` ref，也不会在 workflow 中自动更新 lock。
+all-in-one 的外部输入固定在仓库内的 `scripts/release/release-inputs.lock.json`。lock 记录精确的 mihomo release、六个平台 asset ID/URL/大小/SHA-256，以及 GeoIP commit、不可变 URL 和 SHA-256。构建阶段只读取 lock，**不会**解析 mihomo latest release 或 GeoIP 的可变 `release` ref，也不会在 workflow 中自动更新 lock。
 
 维护者只应在独立的 release-prep PR 中更新它：
 
 ```bash
-go run ./scripts/resolve-release-inputs --channel stable --out scripts/release-inputs.lock.json
+go run ./scripts/tools/resolve-release-inputs --channel stable --out scripts/release/release-inputs.lock.json
 ```
 
 若需要提高 GitHub API 限额，可设置环境变量 `GITHUB_TOKEN` 后运行同一命令。解析器会下载并验证候选输入，再以原子替换写入 lock；命令失败时旧 lock 保持不变。提交前必须人工审核 lock diff，确认 repository、channel、release/tag、六个平台资产、GeoIP commit 与摘要均符合本次发版意图。release workflow 绝不能调用该解析器。
@@ -93,8 +93,8 @@ go run ./scripts/resolve-release-inputs --channel stable --out scripts/release-i
 workflow 调用 bundler 时必须显式提供 lock：
 
 ```bash
-go run ./scripts/build-all-in-one \
-  --lock scripts/release-inputs.lock.json \
+go run ./scripts/tools/build-all-in-one \
+  --lock scripts/release/release-inputs.lock.json \
   --mihari-dir dist --out bundles --platforms "linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64,windows/arm64"
 ```
 
@@ -146,7 +146,7 @@ AIO_SHA256SUMS.txt
 
 `mihari-all-in-one-*` 是 all-in-one 整合包（mihari 二进制 + mihomo 核心 + GeoIP×2），供墙内用户离线安装，详见 [分发方案](distribution.md)。`SHA256SUMS.txt` 覆盖全部产物，`AIO_SHA256SUMS.txt` 仅覆盖 6 个整合包（AList 版本目录内同名）。
 
-以上清单是固定的 14-asset 契约。`scripts/release-inputs.lock.json` 不属于发布产物，也不会上传到 GitHub Release 或 AList。
+以上清单是固定的 14-asset 契约。`scripts/release/release-inputs.lock.json` 不属于发布产物，也不会上传到 GitHub Release 或 AList。
 
 ## 校验下载
 
@@ -219,4 +219,4 @@ dev 撤回使用并发组 `mihari-dev-alist`，不得修改稳定目录、稳定
 - [ ] [CHANGELOG.md](../CHANGELOG.md) 已更新
 - [ ] 标签版本号与 CHANGELOG.md 一致
 - [ ] `go.mod` 仍钉死 Go 1.26.5，发布构建仍使用 `-buildvcs=false -trimpath`
-- [ ] `scripts/release-inputs.lock.json` 已在 release-prep PR 中更新（如需）并审核 diff；release workflow 未动态解析 latest/ref
+- [ ] `scripts/release/release-inputs.lock.json` 已在 release-prep PR 中更新（如需）并审核 diff；release workflow 未动态解析 latest/ref

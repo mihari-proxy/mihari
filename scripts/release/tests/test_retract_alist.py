@@ -8,7 +8,7 @@ from test_alist_topology_fake import TopologyFake
 
 
 def load_module():
-    path = Path(__file__).with_name("retract-alist.py")
+    path = Path(__file__).parent.parent / "retract-alist.py"
     spec = importlib.util.spec_from_file_location("retract_alist", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

@@ -33,10 +33,10 @@ CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "-s -w -X github.com/m
 
 发布构建必须同时使用 `-buildvcs=false -trimpath`。前者避免同一 commit 在创建 tag 前后被 Go 写入不同的 VCS/module 元数据，后者去除本机构建路径；版本身份仍只由上面的 `buildinfo.Version` 注入。
 
-all-in-one 发布输入固定在仓库内的 `scripts/release-inputs.lock.json`。发布 workflow 只消费该文件，不在发版时查询 mihomo 的 latest release 或 GeoIP 的可变分支。需要更新上游输入时，维护者应在独立的 release-prep PR 中运行：
+all-in-one 发布输入固定在仓库内的 `scripts/release/release-inputs.lock.json`。发布 workflow 只消费该文件，不在发版时查询 mihomo 的 latest release 或 GeoIP 的可变分支。需要更新上游输入时，维护者应在独立的 release-prep PR 中运行：
 
 ```sh
-go run ./scripts/resolve-release-inputs --channel stable --out scripts/release-inputs.lock.json
+go run ./scripts/tools/resolve-release-inputs --channel stable --out scripts/release/release-inputs.lock.json
 ```
 
 解析器会校验并锁定精确的 mihomo release/assets 和 GeoIP commit/digests；受 GitHub API 限流影响时可通过环境变量 `GITHUB_TOKEN` 提供凭据。生成后必须审核 lock diff，并在 PR 验证通过后才合并。不要在 release workflow 中运行解析器。
