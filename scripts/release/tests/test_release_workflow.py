@@ -17,6 +17,7 @@ STABLE_RETRACT_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "wor
 CI_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "ci.yml"
 AGENTS = Path(__file__).resolve().parents[3] / "AGENTS.md"
 CONTRIBUTING = Path(__file__).resolve().parents[3] / ".github" / "CONTRIBUTING.md"
+CONTRIBUTING_ZH_CN = Path(__file__).resolve().parents[3] / ".github" / "CONTRIBUTING.zh-CN.md"
 RELEASE_DOCUMENT = Path(__file__).resolve().parents[3] / "docs" / "RELEASE.md"
 DISTRIBUTION_DOCUMENT = Path(__file__).resolve().parents[3] / "docs" / "distribution.md"
 DESIGN_DOCUMENT = (
