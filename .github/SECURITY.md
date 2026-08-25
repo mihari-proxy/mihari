@@ -1,62 +1,64 @@
 # Security Policy
 
+[English](SECURITY.md) · [简体中文](SECURITY.zh-CN.md)
+
 ## Supported Versions
 
 | Version | Supported          |
 | ------- | ------------------ |
 | latest  | ✅ |
-| < 1.0   | ❌ |
+| older   | ❌ |
 
 ## Reporting a Vulnerability
 
-**请勿在公开 Issue 中报告安全漏洞。**
+**Do not report security vulnerabilities in public Issues.**
 
-请使用 GitHub Security Advisories 私密报告：
+Please use GitHub Security Advisories for private reporting:
 
-1. 访问 [Security Advisories](https://github.com/mihari-proxy/mihari/security/advisories)
-2. 点击 "Report a vulnerability"
-3. 填写漏洞详情
+1. Visit [Security Advisories](https://github.com/mihari-proxy/mihari/security/advisories)
+2. Click "Report a vulnerability"
+3. Fill in the vulnerability details
 
-### 报告内容
+### What to Include
 
-- 漏洞描述
-- 复现步骤
-- 影响范围
-- 可能的修复建议（如有）
+- Vulnerability description
+- Steps to reproduce
+- Impact scope
+- Possible fix suggestions (if any)
 
-### 响应承诺
+### Response Commitment
 
-- **确认时间**：3 个工作日内确认收到报告
-- **评估时间**：7 个工作日内评估漏洞严重程度
-- **修复时间**：根据严重程度，尽快发布修复版本
+- **Acknowledgment**: Within 3 business days
+- **Assessment**: Within 7 business days to evaluate severity
+- **Fix**: Release a fix as soon as possible based on severity
 
-### 披露政策
+### Disclosure Policy
 
-- 未经报告者同意，不会公开披露漏洞详情
-- 修复发布后，会在 Release Notes 中致谢报告者（如愿意）
+- Vulnerability details will not be publicly disclosed without the reporter's consent
+- After a fix is released, the reporter will be acknowledged in Release Notes (if desired)
 
-## 安全模型
+## Security Model
 
-mihari 的设计目标是「本地唯一、不暴露到网络」。理解以下不变量有助于报告准确的问题：
+mihari is designed with the goal of "local-only, not exposed to the network". Understanding the following invariants helps report accurate issues:
 
-- **控制管道不绑 TCP**：本地控制 API 使用 Windows named pipe（`\\.\pipe\mihari-control`）或 Unix domain socket，永不监听 TCP 端口。
-- **控制器仅回环**：mihomo controller 只绑定 loopback，浏览器/CLI 永远拿不到 controller 地址或 secret。
-- **Web gateway 默认回环**：`web-addr` 默认 `127.0.0.1:9191`；浏览器认证使用独立于 controller secret 的 Web access credential，绝不打印到 status/日志/默认输出。
-- **未知写操作拒绝**：所有 Web 面板的 REST/WebSocket 写操作经过统一 mutation coordinator，未知写操作默认拒绝；核心升级与托管字段写入永远不直达 mihomo。
-- **不覆盖他人代理**：`sysproxy enable` 遇到他人代理默认失败（`system_proxy_conflict`），`--force` 才覆盖；`sysproxy disable` 只清除 mihari 自己的代理。
-- **订阅 URL 不外泄**：订阅 URL 只存 daemon 私有目录，list/show 响应与普通错误中不包含。
+- **Control pipe never binds TCP**: The local control API uses Windows named pipe (`\\.\pipe\mihari-control`) or Unix domain socket, never listens on a TCP port.
+- **Controller loopback-only**: mihomo controller only binds to loopback; browsers/CLI never obtain the controller address or secret.
+- **Web gateway defaults to loopback**: `web-addr` defaults to `127.0.0.1:9191`; browser authentication uses a Web access credential independent of the controller secret, never printed to status/logs/stdout.
+- **Unknown write operations rejected**: All REST/WebSocket write operations from Web panels go through a unified mutation coordinator; unknown writes are rejected by default; core upgrades and hosted field writes never reach mihomo directly.
+- **Never overwrite others' proxy**: `sysproxy enable` fails by default when another proxy is present (`system_proxy_conflict`), requires `--force` to overwrite; `sysproxy disable` only clears mihari's own proxy.
+- **Subscription URLs never leaked**: Subscription URLs are stored only in the daemon's private directory, not included in list/show responses or regular errors.
 
-## 安全建议（用户侧）
+## Security Recommendations (User-side)
 
-- 不要将数据目录（含 `control.token`、订阅 URL）提交到公开仓库或分享给别人
-- 默认仅回环访问 Web 面板；如需远程访问，配置 TLS 反向代理而不是直接暴露端口
-- `sysproxy enable` 冲突时优先排查另一个产品的代理，而不是盲目 `--force`
-- 定期更新到最新版本
+- Do not commit the data directory (containing `control.token`, subscription URLs) to public repositories or share with others
+- Access Web panel from loopback by default; for remote access, configure a TLS reverse proxy instead of exposing the port directly
+- When `sysproxy enable` conflicts, investigate the other product's proxy first instead of blindly using `--force`
+- Keep updated to the latest version
 
-## 处理范围
+## Scope
 
-以下场景**不属于**本仓库的安全漏洞范畴（请使用普通 Issues 反馈）：
+The following scenarios are **not** within the scope of security vulnerabilities in this repository (please use regular Issues for feedback):
 
-- 依赖 mihomo 自身的安全问题（请向 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 报告）
-- Web 面板（zashboard、MetaCubeXD）自身的安全问题（请向对应上游报告）
-- 需要管理员权限才能执行的本地操作被拒绝（这是设计约束：mihari 不自动提权）
+- Security issues in the mihomo dependency itself (please report to [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo))
+- Security issues in Web panels (zashboard, MetaCubeXD) themselves (please report to the respective upstreams)
+- Local operations requiring administrator privileges being denied (this is a design constraint: mihari does not auto-elevate)
