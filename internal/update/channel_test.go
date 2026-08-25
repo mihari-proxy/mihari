@@ -1,6 +1,10 @@
 package update
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestParseCanonicalTag(t *testing.T) {
 	tests := []struct {
@@ -88,5 +92,57 @@ func TestClassifyUpdate(t *testing.T) {
 				t.Fatal("both true")
 			}
 		})
+	}
+}
+
+func TestLoadChannelMissingFileDefaultsMain(t *testing.T) {
+	got, err := LoadChannel(filepath.Join(t.TempDir(), "mihari-channel"))
+	if err != nil || got != ChannelMain {
+		t.Fatalf("got=%q err=%v", got, err)
+	}
+}
+
+func TestLoadChannelRejectsInvalidLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mihari-channel")
+	if err := os.WriteFile(path, []byte("stable\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadChannel(path); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestLoadChannelIgnoresTrailingLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mihari-channel")
+	if err := os.WriteFile(path, []byte("dev\nignored\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadChannel(path)
+	if err != nil || got != ChannelDev {
+		t.Fatalf("got=%q err=%v", got, err)
+	}
+}
+
+func TestSaveChannelRoundTripAndOverwrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "mihari-channel")
+	if err := SaveChannel(path, ChannelDev); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadChannel(path)
+	if err != nil || got != ChannelDev {
+		t.Fatalf("got=%q err=%v", got, err)
+	}
+	if err := SaveChannel(path, ChannelMain); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || string(raw) != "main\n" {
+		t.Fatalf("raw=%q err=%v", raw, err)
+	}
+}
+
+func TestSaveChannelRejectsInvalid(t *testing.T) {
+	if err := SaveChannel(filepath.Join(t.TempDir(), "mihari-channel"), "stable"); err == nil {
+		t.Fatal("expected error")
 	}
 }

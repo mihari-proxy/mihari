@@ -1,10 +1,13 @@
 package update
 
 import (
+	"errors"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
@@ -106,4 +109,36 @@ func normalizeChannel(channel string) (string, error) {
 	default:
 		return "", protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "mihari channel must be main or dev"}
 	}
+}
+
+// LoadChannel reads the Mihari release channel from path.
+// A missing file defaults to ChannelMain. An invalid first line is an error.
+func LoadChannel(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return ChannelMain, nil
+	}
+	if err != nil {
+		return "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "read mihari channel"}
+	}
+	line, _, _ := strings.Cut(string(raw), "\n")
+	switch strings.TrimSpace(line) {
+	case ChannelMain, ChannelDev:
+		return strings.TrimSpace(line), nil
+	default:
+		return "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mihari channel file"}
+	}
+}
+
+// SaveChannel atomically writes channel to path. Only main and dev are accepted.
+func SaveChannel(path, channel string) error {
+	switch channel {
+	case ChannelMain, ChannelDev:
+	default:
+		return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "mihari channel must be main or dev"}
+	}
+	if err := config.AtomicWrite(path, []byte(channel+"\n"), 0o600); err != nil {
+		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "write mihari channel"}
+	}
+	return nil
 }
