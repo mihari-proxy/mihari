@@ -585,7 +585,7 @@ def test_list_dir_root_sends_slash_fs_path():
 
 def _load_release_alist():
     # release-alist.py has a hyphen in its name, so import it manually.
-    path = Path(__file__).with_name("release-alist.py")
+    path = Path(__file__).parent.parent / "release-alist.py"
     spec = importlib.util.spec_from_file_location("release_alist", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -620,7 +620,7 @@ def test_build_index_emits_public_urls_no_sign():
 
 
 def test_install_scripts_hardcode_public_index_url():
-    install_dir = Path(__file__).resolve().parent / "install"
+    install_dir = Path(__file__).resolve().parent.parent.parent / "install"
     for name in ("install-aio-remote.sh", "install-aio-remote.ps1"):
         text = (install_dir / name).read_text(encoding="utf-8")
         assert "__MIHARI_INDEX_URL__" not in text, f"{name} still has the CI placeholder"

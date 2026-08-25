@@ -20,7 +20,7 @@ VERSION = "v0.9.0-dev.1"
 RELEASE_NAME = "Mihari v0.9.0-dev.1 (dev)"
 MARKER = "<!-- mihari-dev-release -->"
 SHA = "a" * 40
-SCRIPT = Path(__file__).with_name("github_release_policy.py")
+SCRIPT = Path(__file__).parent.parent / "github_release_policy.py"
 
 
 def release_fixture(asset_names):

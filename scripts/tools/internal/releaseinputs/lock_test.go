@@ -43,7 +43,7 @@ func TestLoadReadsAndValidatesFile(t *testing.T) {
 }
 
 func TestCheckedInLockIsValidCanonicalJSON(t *testing.T) {
-	path := filepath.Join("..", "..", "release-inputs.lock.json")
+	path := filepath.Join("..", "..", "..", "release", "release-inputs.lock.json")
 	want, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read checked-in lock: %v", err)

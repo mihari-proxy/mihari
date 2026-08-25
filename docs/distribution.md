@@ -84,19 +84,19 @@ $env:MIHARI_INDEX_URL='https://cloud.xn--30q18ry71c.com/p/public/mihari-release/
 
 ## 二、核心通道与 sidecar
 
-`scripts/build-all-in-one` 不解析滚动 tag、latest release 或 GeoIP 可变分支。它要求显式传入仓库内已审核的 `scripts/release-inputs.lock.json`，并只下载 lock 中精确记录且有 SHA-256 的六个平台 mihomo 资产和两份 GeoIP 数据。当前 checked-in lock 使用 **stable** 内核；预置通道由 lock 的 `mihomo.channel` 决定，而不是由 bundler 在发版时动态选择。
+`scripts/tools/build-all-in-one` 不解析滚动 tag、latest release 或 GeoIP 可变分支。它要求显式传入仓库内已审核的 `scripts/release/release-inputs.lock.json`，并只下载 lock 中精确记录且有 SHA-256 的六个平台 mihomo 资产和两份 GeoIP 数据。当前 checked-in lock 使用 **stable** 内核；预置通道由 lock 的 `mihomo.channel` 决定，而不是由 bundler 在发版时动态选择。
 
 维护者只在独立的 release-prep PR 中更新 lock：
 
 ```sh
-go run ./scripts/resolve-release-inputs --channel stable --out scripts/release-inputs.lock.json
+go run ./scripts/tools/resolve-release-inputs --channel stable --out scripts/release/release-inputs.lock.json
 ```
 
 GitHub API 限流时可设置 `GITHUB_TOKEN` 环境变量。必须审核生成的 diff 后再合并；稳定和 dev release workflow 都只消费 lock，绝不运行解析器。实际打包命令必须显式传入 lock，例如：
 
 ```sh
-go run ./scripts/build-all-in-one \
-  --lock scripts/release-inputs.lock.json \
+go run ./scripts/tools/build-all-in-one \
+  --lock scripts/release/release-inputs.lock.json \
   --mihari-dir dist --out bundles \
   --platforms "linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64,windows/arm64"
 ```
