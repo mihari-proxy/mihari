@@ -17,6 +17,7 @@ STABLE_RETRACT_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "wor
 CI_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
 AGENTS = Path(__file__).resolve().parents[1] / "AGENTS.md"
 CONTRIBUTING = Path(__file__).resolve().parents[1] / ".github" / "CONTRIBUTING.md"
+CONTRIBUTING_ZH_CN = Path(__file__).resolve().parents[1] / ".github" / "CONTRIBUTING.zh-CN.md"
 RELEASE_DOCUMENT = Path(__file__).resolve().parents[1] / "docs" / "RELEASE.md"
 DISTRIBUTION_DOCUMENT = Path(__file__).resolve().parents[1] / "docs" / "distribution.md"
 DESIGN_DOCUMENT = (
@@ -1276,19 +1277,19 @@ def test_ci_runs_release_safety_suite_from_pinned_requirements_on_all_integratio
 
 def test_branch_governance_keeps_feature_work_off_main_and_dev_without_promising_review_rules():
     agents = AGENTS.read_text(encoding="utf-8")
-    contributing = CONTRIBUTING.read_text(encoding="utf-8")
+    contributing_zh_cn = CONTRIBUTING_ZH_CN.read_text(encoding="utf-8")
     normalized_agents = agents.replace("`", "")
 
     assert "main 或 dev 分支上直接修改或提交" in normalized_agents
     assert "一次性 main PR" in normalized_agents
     assert "main 或 dev 分支创建 commit" in normalized_agents
-    assert "feat/*、fix/* ──PR──> dev ──晋级 PR──> main" in contributing
-    assert "hotfix/*（从 main） ──PR──> main" in contributing
-    assert "main ──同步 PR──> dev" in contributing
-    assert "普通 PR 使用 squash merge" in contributing
-    assert "晋级和 `main → dev` 同步使用 merge commit" in contributing
-    assert "不设定固定审核人数或 bypass 规则" in contributing
-    assert "至少等待一个审核通过" not in contributing
+    assert "feat/*、fix/* ──PR──> dev ──晋级 PR──> main" in contributing_zh_cn
+    assert "hotfix/*（从 main） ──PR──> main" in contributing_zh_cn
+    assert "main ──同步 PR──> dev" in contributing_zh_cn
+    assert "普通 PR 使用 squash merge" in contributing_zh_cn
+    assert "晋级和 `main → dev` 同步使用 merge commit" in contributing_zh_cn
+    assert "不设定固定审核人数或 bypass 规则" in contributing_zh_cn
+    assert "至少等待一个审核通过" not in contributing_zh_cn
 
 
 def _markdown_section(document, heading):
