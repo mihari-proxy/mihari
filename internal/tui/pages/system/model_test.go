@@ -1797,6 +1797,63 @@ func TestSystemMihariVersionCheckRendersAvailable(t *testing.T) {
 	}
 }
 
+func TestSystemMihariUpdateRendersAheadState(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.9.0-dev.3", "mihari", func() bool { return true })
+	model.selfCheckGeneration = 3
+	updated, _ := model.Update(selfCheckResultMsg{
+		generation: 3,
+		result: update.CheckResult{
+			Current: "v0.9.0-dev.3", Latest: "v0.8.2", Available: false, Ahead: true, Channel: update.ChannelMain,
+		},
+	})
+	model = updated.(*Model)
+	view := model.View()
+	want := "v0.9.0-dev.3 · " + fmt.Sprintf(ui.UpdateMihariAhead, update.ChannelMain, "v0.8.2")
+	if !strings.Contains(view, want) {
+		t.Fatalf("ahead view missing %q:\n%s", want, view)
+	}
+	if strings.Contains(view, ui.FailedLabel) || strings.Contains(view, ui.UpdateMihariUpToDate) {
+		t.Fatalf("ahead must not look failed or up to date:\n%s", view)
+	}
+}
+
+func TestSystemMihariAheadEnterDoesNotOfferUpdate(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.9.0-dev.3", "mihari", func() bool { return true })
+	model.selfCheckGeneration = 3
+	updated, _ := model.Update(selfCheckResultMsg{
+		generation: 3,
+		result: update.CheckResult{
+			Current: "v0.9.0-dev.3", Latest: "v0.8.2", Available: false, Ahead: true, Channel: update.ChannelMain,
+		},
+	})
+	model = updated.(*Model)
+	model.focusID = rowMihariUpdate
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("ahead enter should recheck")
+	}
+	msg := command()
+	if intent, ok := msg.(ui.ActionIntentMsg); ok && intent.Action == ui.ActionUpdateMihari {
+		t.Fatalf("ahead offered update: %#v", intent)
+	}
+}
+
+func TestSystemMihariSkipUpdateKeepsAhead(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.9.0-dev.3", "mihari", func() bool { return true })
+	updated, _ := model.Update(selfUpdateResultMsg{
+		result: update.Result{Version: "v0.8.2", Updated: false, Ahead: true, Channel: update.ChannelMain},
+	})
+	model = updated.(*Model)
+	view := model.View()
+	want := "v0.9.0-dev.3 · " + fmt.Sprintf(ui.UpdateMihariAhead, update.ChannelMain, "v0.8.2")
+	if !strings.Contains(view, want) {
+		t.Fatalf("skip ahead view missing %q:\n%s", want, view)
+	}
+}
+
 func TestSystemMihariVersionCheckRendersUpToDate(t *testing.T) {
 	model := New(nil, nil)
 	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.3.1", "mihari", func() bool { return true })

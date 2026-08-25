@@ -644,7 +644,13 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 				m.markRowOutcome(rowMihariUpdate, false, actionErrorDetail(typed.err, ui.UpdateMihariActionFailed))
 				return m, m.rowSpinCmdIfNeeded()
 			}
-			m.selfCheckResult = update.CheckResult{Current: m.currentVersion, Latest: typed.result.Version, Available: false}
+			m.selfCheckResult = update.CheckResult{
+				Current:   m.currentVersion,
+				Latest:    typed.result.Version,
+				Available: false,
+				Ahead:     typed.result.Ahead,
+				Channel:   typed.result.Channel,
+			}
 			m.selfCheckLoaded = true
 			m.outcomeRow = ""
 			return m, m.rowSpinCmdIfNeeded()
@@ -1131,9 +1137,14 @@ func (m *Model) mihariUpdateRow() row {
 	current := valueOr(m.currentVersion, ui.UnknownLabel)
 	value := current + " · " + ui.UnavailableTitle
 	if m.selfCheckLoaded {
-		if m.selfCheckResult.Available {
-			value = current + " · " + valueOr(m.selfCheckResult.Latest, ui.UnknownLabel) + " " + ui.UpdateMihariAvailable
-		} else {
+		latest := valueOr(m.selfCheckResult.Latest, ui.UnknownLabel)
+		switch {
+		case m.selfCheckResult.Available:
+			value = current + " · " + latest + " " + ui.UpdateMihariAvailable
+		case m.selfCheckResult.Ahead:
+			channel := valueOr(m.selfCheckResult.Channel, m.currentMihariChannel())
+			value = current + " · " + fmt.Sprintf(ui.UpdateMihariAhead, channel, latest)
+		default:
 			value = current + " · " + ui.UpdateMihariUpToDate
 		}
 	}
