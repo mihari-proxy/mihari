@@ -10,17 +10,18 @@ import pytest
 import yaml
 
 
-WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "release-dev.yml"
-RETRACT_DEV_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "retract-dev.yml"
-STABLE_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "release.yml"
-STABLE_RETRACT_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "retract.yml"
-CI_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
-AGENTS = Path(__file__).resolve().parents[1] / "AGENTS.md"
-CONTRIBUTING_ZH_CN = Path(__file__).resolve().parents[1] / ".github" / "CONTRIBUTING.zh-CN.md"
-RELEASE_DOCUMENT = Path(__file__).resolve().parents[1] / "docs" / "RELEASE.md"
-DISTRIBUTION_DOCUMENT = Path(__file__).resolve().parents[1] / "docs" / "distribution.md"
+WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "release-dev.yml"
+RETRACT_DEV_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "retract-dev.yml"
+STABLE_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "release.yml"
+STABLE_RETRACT_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "retract.yml"
+CI_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "ci.yml"
+AGENTS = Path(__file__).resolve().parents[3] / "AGENTS.md"
+CONTRIBUTING = Path(__file__).resolve().parents[3] / ".github" / "CONTRIBUTING.md"
+CONTRIBUTING_ZH_CN = Path(__file__).resolve().parents[3] / ".github" / "CONTRIBUTING.zh-CN.md"
+RELEASE_DOCUMENT = Path(__file__).resolve().parents[3] / "docs" / "RELEASE.md"
+DISTRIBUTION_DOCUMENT = Path(__file__).resolve().parents[3] / "docs" / "distribution.md"
 DESIGN_DOCUMENT = (
-    Path(__file__).resolve().parents[1]
+    Path(__file__).resolve().parents[3]
     / "docs"
     / "superpowers"
     / "specs"
@@ -28,15 +29,15 @@ DESIGN_DOCUMENT = (
 )
 
 RELEASE_SAFETY_TESTS = (
-    "scripts/test_release_policy.py "
-    "scripts/test_github_release_policy.py "
-    "scripts/test_release_workflow.py "
-    "scripts/test_alist_client.py "
-    "scripts/test_alist_index.py "
-    "scripts/test_release_alist.py "
-    "scripts/test_retract_alist.py "
-    "scripts/test_regenerate_index.py "
-    "scripts/test_alist_channel_guard.py -q"
+    "scripts/release/tests/test_release_policy.py "
+    "scripts/release/tests/test_github_release_policy.py "
+    "scripts/release/tests/test_release_workflow.py "
+    "scripts/release/tests/test_alist_client.py "
+    "scripts/release/tests/test_alist_index.py "
+    "scripts/release/tests/test_release_alist.py "
+    "scripts/release/tests/test_retract_alist.py "
+    "scripts/release/tests/test_regenerate_index.py "
+    "scripts/release/tests/test_alist_channel_guard.py -q"
 )
 
 
@@ -114,7 +115,7 @@ def _assert_bundle_job_has_no_mutable_input_discovery(bundle_job):
         assert "GITHUB_TOKEN" not in step.get("env", {})
         for command in _shell_invocations(step.get("run", "")):
             is_lock_resolver = any(
-                "scripts/resolve-release-inputs" in argument.replace("\\", "/")
+                "scripts/tools/resolve-release-inputs" in argument.replace("\\", "/")
                 for argument in command
             )
             is_latest_api = any(
@@ -176,11 +177,11 @@ def _assert_release_bundle_wiring(document):
     commands = [
         command
         for command in _shell_invocations(bundle["run"])
-        if command[:3] == ["go", "run", "./scripts/build-all-in-one"]
+        if command[:3] == ["go", "run", "./scripts/tools/build-all-in-one"]
     ]
     assert len(commands) == 1, "bundle step must invoke the AIO builder exactly once"
     lock_values = _flag_values(commands[0], "--lock")
-    assert lock_values == ["scripts/release-inputs.lock.json"]
+    assert lock_values == ["scripts/release/release-inputs.lock.json"]
 
 
 def _assert_release_setup_go_wiring(document):
@@ -211,8 +212,8 @@ def bundle_job_with_resolver_in_another_step():
         {
             "name": "Resolve inputs behind the build step",
             "run": (
-                "go run ./scripts/resolve-release-inputs "
-                "--channel stable --out scripts/release-inputs.lock.json"
+                "go run ./scripts/tools/resolve-release-inputs "
+                "--channel stable --out scripts/release/release-inputs.lock.json"
             ),
         },
     )
@@ -280,7 +281,7 @@ def test_bundle_wiring_guard_rejects_second_lock_override():
     document = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
     bundle = _workflow_step(document, "bundle", name="Build all-in-one bundles")
     bundle["run"] = bundle["run"].replace(
-        "--lock scripts/release-inputs.lock.json",
+        "--lock scripts/release/release-inputs.lock.json",
         "--lock scripts/release-inputs.lock.json --lock=scripts/unreviewed.lock.json",
         1,
     )
@@ -296,8 +297,8 @@ def test_bundle_job_guard_rejects_resolver_after_shell_separator():
         {
             "name": "Hide mutable discovery after another command",
             "run": (
-                "echo ok; go run ./scripts/resolve-release-inputs "
-                "--channel stable --out scripts/release-inputs.lock.json"
+                "echo ok; go run ./scripts/tools/resolve-release-inputs "
+                "--channel stable --out scripts/release/release-inputs.lock.json"
             ),
         }
     )
@@ -536,7 +537,7 @@ def test_alist_runtime_dependencies_are_pinned_after_checkout_in_both_stable_wor
 
         assert checkout_index < setup_index < install_index
         assert steps[setup_index]["with"] == {"python-version": "3.12"}
-        assert "python -m pip install --disable-pip-version-check -r scripts/requirements-release.txt" in install
+        assert "python -m pip install --disable-pip-version-check -r scripts/release/requirements.txt" in install
         assert "pip install requests" not in install
 
     release_checkout = next(
@@ -922,7 +923,7 @@ def test_release_workflow_validates_stable_latest_before_any_mutation():
         if step.get("name") == "Read and validate stable latest before dev mutation"
     )
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    validation = "python scripts/github_release_policy.py latest"
+    validation = "python scripts/release/github_release_policy.py latest"
     self_comparison = (
         "--before /tmp/latest-before.json --after /tmp/latest-before.json --dev-version \"${VERSION}\""
     )
@@ -1159,7 +1160,7 @@ def test_alist_runtime_dependencies_are_pinned_after_checkout_in_dev_workflows()
         assert checkout_index < setup_index < install_index
         assert steps[setup_index]["with"] == {"python-version": "3.12"}
         assert (
-            "python -m pip install --disable-pip-version-check -r scripts/requirements-release.txt"
+            "python -m pip install --disable-pip-version-check -r scripts/release/requirements.txt"
             in install
         )
         assert "pip install requests" not in install
@@ -1269,7 +1270,7 @@ def test_ci_runs_release_safety_suite_from_pinned_requirements_on_all_integratio
 
     assert install["run"] == (
         "python -m pip install --disable-pip-version-check "
-        "-r scripts/requirements-release-test.txt"
+        "-r scripts/release/requirements-test.txt"
     )
     assert safety["run"] == f"python -m pytest {RELEASE_SAFETY_TESTS}"
 
@@ -1414,7 +1415,7 @@ def test_distribution_document_limits_backup_artifacts_to_alist_mutation_failure
 def test_release_documents_record_verified_dev_github_release_and_unavailable_dev_alist():
     release = RELEASE_DOCUMENT.read_text(encoding="utf-8")
     distribution = DISTRIBUTION_DOCUMENT.read_text(encoding="utf-8")
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[3]
     installers = (
         (repo_root / "scripts" / "install" / "install-aio-remote.sh").read_text(encoding="utf-8"),
         (repo_root / "scripts" / "install" / "install-aio-remote.ps1").read_text(encoding="utf-8"),

@@ -16,7 +16,7 @@ import (
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/core"
-	"github.com/mihari-proxy/mihari/scripts/internal/releaseinputs"
+	"github.com/mihari-proxy/mihari/scripts/tools/internal/releaseinputs"
 )
 
 const fixtureCommit = "0123456789abcdef0123456789abcdef01234567"

@@ -23,7 +23,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/geoip"
-	"github.com/mihari-proxy/mihari/scripts/internal/releaseinputs"
+	"github.com/mihari-proxy/mihari/scripts/tools/internal/releaseinputs"
 )
 
 var defaultPlatforms = releaseinputs.RequiredPlatforms()

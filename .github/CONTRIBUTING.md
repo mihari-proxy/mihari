@@ -33,10 +33,10 @@ CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "-s -w -X github.com/m
 
 Release builds must use both `-buildvcs=false` and `-trimpath`. The former prevents Go from writing different VCS/module metadata to the same commit before and after tag creation, while the latter removes local build paths; version identity is injected only via `buildinfo.Version` above.
 
-The all-in-one release inputs are fixed in `scripts/release-inputs.lock.json` within the repository. The release workflow only consumes this file and does not query mihomo's latest release or GeoIP's mutable branches during release. When upstream inputs need updating, maintainers should run in a separate release-prep PR:
+The all-in-one release inputs are fixed in `scripts/release/release-inputs.lock.json` within the repository. The release workflow only consumes this file and does not query mihomo's latest release or GeoIP's mutable branches during release. When upstream inputs need updating, maintainers should run in a separate release-prep PR:
 
 ```sh
-go run ./scripts/resolve-release-inputs --channel stable --out scripts/release-inputs.lock.json
+go run ./scripts/tools/resolve-release-inputs --channel stable --out scripts/release/release-inputs.lock.json
 ```
 
 The resolver validates and locks precise mihomo release/assets and GeoIP commit/digests; when affected by GitHub API rate limits, credentials can be provided via the `GITHUB_TOKEN` environment variable. After generation, the lock diff must be reviewed and only merged after PR validation passes. Do not run the resolver in the release workflow.

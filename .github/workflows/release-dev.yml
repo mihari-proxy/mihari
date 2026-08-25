@@ -123,8 +123,8 @@ jobs:
 
       - name: Build all-in-one bundles
         run: |
-          go run ./scripts/build-all-in-one \
-            --lock scripts/release-inputs.lock.json \
+          go run ./scripts/tools/build-all-in-one \
+            --lock scripts/release/release-inputs.lock.json \
             --mihari-dir dist --out bundles --platforms "${PLATFORMS}"
 
       - uses: actions/upload-artifact@v7
@@ -174,12 +174,12 @@ jobs:
         run: |
           gh api "repos/${GITHUB_REPOSITORY}/releases/latest" > /tmp/latest-before.json 2> /tmp/latest-before.err \
             || { echo "::error::unable to read stable latest release"; exit 1; }
-          python scripts/github_release_policy.py latest \
+          python scripts/release/github_release_policy.py latest \
             --before /tmp/latest-before.json --after /tmp/latest-before.json --dev-version "${VERSION}"
 
       - name: Validate expected local asset set
         run: |
-          python scripts/github_release_policy.py assets > /tmp/expected-assets
+          python scripts/release/github_release_policy.py assets > /tmp/expected-assets
           find dist -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > /tmp/local-assets
           cmp -s /tmp/expected-assets /tmp/local-assets \
             || { echo "::error::local release assets do not match the fixed dev asset set"; exit 1; }
@@ -212,7 +212,7 @@ jobs:
             done
             [ "${tag_type}" != tag ] || { echo "::error::release tag peel exceeds the allowed depth"; return 1; }
             jq -s . /tmp/tag-chain.jsonl > /tmp/tag-chain.json
-            python scripts/github_release_policy.py tag-chain --chain /tmp/tag-chain.json --expected-sha "${SHA}"
+            python scripts/release/github_release_policy.py tag-chain --chain /tmp/tag-chain.json --expected-sha "${SHA}"
           }
 
           set +e
@@ -222,7 +222,7 @@ jobs:
           if [ "${status}" -eq 0 ]; then
             touch /tmp/release-exists
             verify_tag_ref
-            python scripts/github_release_policy.py release \
+            python scripts/release/github_release_policy.py release \
               --document /tmp/preflight-release.json --version "${VERSION}" \
               --release-name "${DEV_RELEASE_NAME}" --marker "<!-- github-release-dev -->" --mode preflight
             mkdir -p /tmp/release-assets
@@ -268,7 +268,7 @@ jobs:
             done
             [ "${tag_type}" != tag ] || { echo "::error::release tag peel exceeds the allowed depth"; return 1; }
             jq -s . /tmp/tag-chain.jsonl > /tmp/tag-chain.json
-            python scripts/github_release_policy.py tag-chain --chain /tmp/tag-chain.json --expected-sha "${SHA}"
+            python scripts/release/github_release_policy.py tag-chain --chain /tmp/tag-chain.json --expected-sha "${SHA}"
           }
 
           set +e
@@ -336,7 +336,7 @@ jobs:
             done
             [ "${tag_type}" != tag ] || { echo "::error::final release tag peel exceeds the allowed depth"; return 1; }
             jq -s . /tmp/final-tag-chain.jsonl > /tmp/final-tag-chain.json
-            python scripts/github_release_policy.py tag-chain --chain /tmp/final-tag-chain.json --expected-sha "${SHA}"
+            python scripts/release/github_release_policy.py tag-chain --chain /tmp/final-tag-chain.json --expected-sha "${SHA}"
           }
 
           download_and_verify_assets() {
@@ -356,14 +356,14 @@ jobs:
 
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${VERSION}" > /tmp/final-release.json 2> /tmp/final-release.err \
             || { echo "::error::unable to read final dev prerelease"; exit 1; }
-          python scripts/github_release_policy.py release \
+          python scripts/release/github_release_policy.py release \
             --document /tmp/final-release.json --version "${VERSION}" \
             --release-name "${DEV_RELEASE_NAME}" --marker "<!-- github-release-dev -->" --mode final
           download_and_verify_assets
           verify_final_tag_ref
           gh api "repos/${GITHUB_REPOSITORY}/releases/latest" > /tmp/latest-after.json 2> /tmp/latest-after.err \
             || { echo "::error::unable to read stable latest release after publication"; exit 1; }
-          python scripts/github_release_policy.py latest \
+          python scripts/release/github_release_policy.py latest \
             --before /tmp/latest-before.json --after /tmp/latest-after.json --dev-version "${VERSION}"
 
       - uses: actions/setup-python@v7
@@ -379,12 +379,12 @@ jobs:
           ALIST_USERNAME: ${{ secrets.ALIST_USERNAME }}
           ALIST_PASSWORD: ${{ secrets.ALIST_PASSWORD }}
         run: |
-          python -m pip install --disable-pip-version-check -r scripts/requirements-release.txt
-          python scripts/alist_channel_guard.py snapshot \
+          python -m pip install --disable-pip-version-check -r scripts/release/requirements.txt
+          python scripts/release/alist_channel_guard.py snapshot \
             --path /mihari-release/mihari/index.txt \
             --output-dir "${RUNNER_TEMP}/mihari-index-backup/stable-isolation"
           set +e
-          python scripts/release-alist.py \
+          python scripts/release/release-alist.py \
             --version "${VERSION}" \
             --dist-dir dist \
             --repo-root . \
@@ -393,7 +393,7 @@ jobs:
             --base-path /mihari-release/mihari-dev \
             --keep-versions "${MIHARI_KEEP_VERSIONS:-5}"
           publish_status=$?
-          python scripts/alist_channel_guard.py compare \
+          python scripts/release/alist_channel_guard.py compare \
             --path /mihari-release/mihari/index.txt \
             --expected-dir "${RUNNER_TEMP}/mihari-index-backup/stable-isolation"
           compare_status=$?
@@ -424,7 +424,7 @@ jobs:
         run: |
           gh api "repos/${GITHUB_REPOSITORY}/releases/latest" > /tmp/latest-after-alist.json 2> /tmp/latest-after-alist.err \
             || { echo "::error::unable to read stable latest release after AList mutation"; exit 1; }
-          python scripts/github_release_policy.py latest \
+          python scripts/release/github_release_policy.py latest \
             --before /tmp/latest-before.json --after /tmp/latest-after-alist.json --dev-version "${VERSION}"
 
       - name: Append prerelease AList install hook to release notes

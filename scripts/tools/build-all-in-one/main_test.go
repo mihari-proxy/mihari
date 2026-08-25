@@ -20,7 +20,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mihari-proxy/mihari/scripts/internal/releaseinputs"
+	"github.com/mihari-proxy/mihari/scripts/tools/internal/releaseinputs"
 )
 
 // fakeRunner satisfies core.CommandRunner for the host-matching `-v` smoke.
@@ -865,7 +865,7 @@ func TestSidecarScriptInstallersCopyCoreChannel(t *testing.T) {
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
+	root := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", "..", ".."))
 	for _, name := range []string{"install-aio.sh", "install-aio.ps1"} {
 		data, err := os.ReadFile(filepath.Join(root, "scripts", "install", name))
 		if err != nil {

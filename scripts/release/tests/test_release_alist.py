@@ -12,7 +12,7 @@ from test_alist_topology_fake import TopologyFake
 
 
 def load_module(name):
-    path = Path(__file__).with_name(name + ".py")
+    path = Path(__file__).parent.parent / (name + ".py")
     spec = importlib.util.spec_from_file_location(name.replace("-", "_"), path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
