@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -27,17 +28,20 @@ type fakeSelfUpdater struct {
 	updateCalls  int
 	lastBinary   string
 	lastCurrent  string
+	lastChannel  string
 }
 
-func (f *fakeSelfUpdater) Check(context.Context, string, string) (update.CheckResult, error) {
+func (f *fakeSelfUpdater) Check(_ context.Context, _, channel string) (update.CheckResult, error) {
 	f.checkCalls++
+	f.lastChannel = channel
 	return f.checkResult, f.checkErr
 }
 
-func (f *fakeSelfUpdater) Update(_ context.Context, binaryPath, currentVersion, _ string) (update.Result, error) {
+func (f *fakeSelfUpdater) Update(_ context.Context, binaryPath, currentVersion, channel string) (update.Result, error) {
 	f.updateCalls++
 	f.lastBinary = binaryPath
 	f.lastCurrent = currentVersion
+	f.lastChannel = channel
 	return f.updateResult, f.updateErr
 }
 
@@ -2561,4 +2565,220 @@ func TestSystemPortEditBlockedWhenDisconnected(t *testing.T) {
 	if model.editID != "" || cmd != nil {
 		t.Fatalf("editID=%q cmd=%v", model.editID, cmd)
 	}
+}
+
+func TestSystemMihariChannelRowSitsAboveUpdate(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.8.2", "mihari", func() bool { return false })
+	ids := systemRowIDs(model)
+	channel := slices.Index(ids, rowMihariChannel)
+	updateRow := slices.Index(ids, rowMihariUpdate)
+	core := slices.Index(ids, rowCoreChannel)
+	if channel < 0 || updateRow < 0 || channel >= updateRow {
+		t.Fatalf("channel=%d update=%d ids=%v", channel, updateRow, ids)
+	}
+	if core >= 0 && channel > core {
+		t.Fatalf("mihari channel must stay in daemon section above core: ids=%v", ids)
+	}
+}
+
+func TestSystemMihariChannelMissingSidecarShowsMain(t *testing.T) {
+	model := New(nil, nil)
+	model.channelPath = func() (string, error) { return filepath.Join(t.TempDir(), "mihari-channel"), nil }
+	model.loadChannel = func(string) (string, error) { return update.ChannelMain, nil }
+	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.8.2", "mihari", func() bool { return false })
+	if got := channelRowValue(model); got != update.ChannelMain {
+		t.Fatalf("value=%q", got)
+	}
+	if view := model.View(); !strings.Contains(view, ui.MihariChannelLabel) || !strings.Contains(view, update.ChannelMain) {
+		t.Fatalf("view:\n%s", view)
+	}
+}
+
+func TestSystemMihariChannelEnterConfirmsSwitchWithoutElevation(t *testing.T) {
+	model, updater, saved := mihariChannelModel(t, update.ChannelMain)
+	model.focusID = rowMihariChannel
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("expected confirmation")
+	}
+	intent, ok := command().(ui.ActionIntentMsg)
+	if !ok || intent.Action != ui.ActionSwitchMihariChannel || intent.Execute == nil || intent.Capability != "" {
+		t.Fatalf("intent=%#v", intent)
+	}
+	if intent.Title != ui.SwitchMihariChannelTitle+" to "+update.ChannelDev {
+		t.Fatalf("title=%q", intent.Title)
+	}
+	if intent.Impact != ui.SwitchMihariChannelToDevImpact || intent.Rollback != ui.SwitchMihariChannelRollback {
+		t.Fatalf("copy=%#v", intent)
+	}
+
+	updated, _ := model.Update(ui.ActionPendingMsg{Page: ui.PageSystem, Action: ui.ActionSwitchMihariChannel})
+	model = updated.(*Model)
+	result := intent.Execute()
+	updated, checkCmd := model.Update(result)
+	model = updated.(*Model)
+	if saved.channel != update.ChannelDev {
+		t.Fatalf("saved=%q", saved.channel)
+	}
+	runSelfCheckCmd(t, checkCmd)
+	if updater.checkCalls != 1 || updater.lastChannel != update.ChannelDev {
+		t.Fatalf("checkCalls=%d lastChannel=%q", updater.checkCalls, updater.lastChannel)
+	}
+}
+
+func TestSystemMihariChannelSwitchDoesNotChangeCoreCopy(t *testing.T) {
+	client := &fakeClient{onboarding: protocol.OnboardingStatus{Revision: 11}}
+	model := New(client, func() string { return "system-op" })
+	model.SetSnapshot(
+		protocol.Status{Revision: 11, Capabilities: []string{protocol.CapabilityCore}},
+		protocol.CoreStatus{Revision: 11, Status: "running", Version: "v1.19.0", Channel: "stable"},
+	)
+	model.SetMutationsEnabled(true)
+	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.8.2", "mihari", func() bool { return false })
+	model.loadChannel = func(string) (string, error) { return update.ChannelMain, nil }
+	model.channelPath = func() (string, error) { return "mihari-channel", nil }
+	if got := channelRowValue(model); got != update.ChannelMain {
+		t.Fatalf("mihari channel=%q", got)
+	}
+	core := coreChannelRow(model)
+	if core.value != "stable" {
+		t.Fatalf("core channel=%q", core.value)
+	}
+	model.focusID = rowCoreChannel
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	intent := command().(ui.ActionIntentMsg)
+	if intent.Action != ui.ActionSwitchCoreChannel || intent.Impact != ui.SwitchCoreChannelImpact {
+		t.Fatalf("core intent=%#v", intent)
+	}
+}
+
+func TestSystemMihariChannelLoadFailureDoesNotCheckMain(t *testing.T) {
+	updater := &fakeSelfUpdater{}
+	model := New(nil, nil)
+	model.SetSelfUpdater(updater, "v0.8.2", "mihari", func() bool { return false })
+	model.channelPath = func() (string, error) { return "mihari-channel", nil }
+	model.loadChannel = func(string) (string, error) {
+		return "", errors.New("invalid mihari channel file")
+	}
+	if cmd := model.checkMihariVersion(); cmd != nil {
+		t.Fatal("check must not start after channel load failure")
+	}
+	if updater.checkCalls != 0 {
+		t.Fatalf("checkCalls=%d", updater.checkCalls)
+	}
+	if view := model.View(); !strings.Contains(view, ui.FailedLabel) || !strings.Contains(view, ui.MihariChannelFailed) {
+		t.Fatalf("failed channel view:\n%s", view)
+	}
+}
+
+func TestSystemMihariChannelPendingBlocksRecheck(t *testing.T) {
+	updater := &fakeSelfUpdater{}
+	model := New(nil, nil)
+	model.SetSelfUpdater(updater, "v0.8.2", "mihari", func() bool { return false })
+	model.pending = true
+	if cmd := model.checkMihariVersion(); cmd != nil || updater.checkCalls != 0 {
+		t.Fatalf("pending recheck cmd=%v calls=%d", cmd != nil, updater.checkCalls)
+	}
+}
+
+func TestSystemMihariChannelSwitchDiscardsStaleCheck(t *testing.T) {
+	model, updater, _ := mihariChannelModel(t, update.ChannelMain)
+	model.selfCheckGeneration = 4
+	model.focusID = rowMihariChannel
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	intent := command().(ui.ActionIntentMsg)
+	updated, _ := model.Update(ui.ActionPendingMsg{Page: ui.PageSystem, Action: ui.ActionSwitchMihariChannel})
+	model = updated.(*Model)
+	updated, _ = model.Update(intent.Execute())
+	model = updated.(*Model)
+	updated, _ = model.Update(selfCheckResultMsg{
+		generation: 4,
+		result:     update.CheckResult{Current: "v0.8.2", Latest: "v9.9.9", Available: true, Channel: update.ChannelMain},
+	})
+	model = updated.(*Model)
+	if model.selfCheckResult.Latest == "v9.9.9" {
+		t.Fatal("stale check overwrote post-switch generation")
+	}
+	_ = updater
+}
+
+type savedChannel struct {
+	path    string
+	channel string
+}
+
+func mihariChannelModel(t *testing.T, current string) (*Model, *fakeSelfUpdater, *savedChannel) {
+	t.Helper()
+	saved := &savedChannel{}
+	updater := &fakeSelfUpdater{}
+	model := New(nil, nil)
+	model.SetSelfUpdater(updater, "v0.8.2", "mihari", func() bool { return false })
+	model.channelPath = func() (string, error) { return "mihari-channel", nil }
+	model.loadChannel = func(string) (string, error) {
+		if saved.channel != "" {
+			return saved.channel, nil
+		}
+		return current, nil
+	}
+	model.saveChannel = func(path, channel string) error {
+		saved.path = path
+		saved.channel = channel
+		return nil
+	}
+	return model, updater, saved
+}
+
+func systemRowIDs(model *Model) []string {
+	rows := model.rows()
+	ids := make([]string, len(rows))
+	for i, item := range rows {
+		ids[i] = item.id
+	}
+	return ids
+}
+
+func channelRowValue(model *Model) string {
+	for _, item := range model.rows() {
+		if item.id == rowMihariChannel {
+			return item.value
+		}
+	}
+	return ""
+}
+
+func coreChannelRow(model *Model) row {
+	for _, item := range model.rows() {
+		if item.id == rowCoreChannel {
+			return item
+		}
+	}
+	return row{}
+}
+
+func runSelfCheckCmd(t *testing.T, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("missing recheck command")
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		if page, ok := msg.(ui.PageResultMsg); ok {
+			if _, isCheck := page.Result.(selfCheckResultMsg); isCheck {
+				return
+			}
+		}
+		t.Fatalf("recheck cmd=%T", msg)
+	}
+	for _, item := range batch {
+		inner := item()
+		page, ok := inner.(ui.PageResultMsg)
+		if ok {
+			if _, isCheck := page.Result.(selfCheckResultMsg); isCheck {
+				return
+			}
+		}
+	}
+	t.Fatal("recheck batch did not include version check")
 }

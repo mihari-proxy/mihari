@@ -273,6 +273,7 @@ const (
 	CoreProgressSwitching       = "Switching"
 	MihariProgressChecking      = "Checking"
 	MihariProgressUpdating      = "Updating"
+	MihariProgressSwitching     = "Switching"
 	ProxyProgressEnabling       = "Enabling"
 	ProxyProgressDisabling      = "Disabling"
 	TunProgressEnabling         = "Enabling"

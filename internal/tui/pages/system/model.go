@@ -27,6 +27,7 @@ const (
 	rowCoreChannel       = "core-channel"
 	rowCoreUpdate        = "core-update"
 	rowCoreRestart       = "core-restart"
+	rowMihariChannel     = "mihari-channel"
 	rowMihariUpdate      = "mihari-update"
 	rowZashboard         = "zashboard"
 	rowMetaCubeXD        = "metacubexd"
@@ -113,6 +114,11 @@ type selfCheckResultMsg struct {
 type selfUpdateResultMsg struct {
 	result update.Result
 	err    error
+}
+
+type mihariChannelResultMsg struct {
+	channel string
+	err     error
 }
 
 // Err implements the shell action-outcome contract. Once replacement commits,
@@ -296,6 +302,12 @@ type Model struct {
 	selfCheckResult     update.CheckResult
 	selfCheckLoaded     bool
 	selfCheckGeneration uint64
+	channelPath         func() (string, error)
+	loadChannel         func(string) (string, error)
+	saveChannel         func(string, string) error
+	mihariChannel       string
+	mihariChannelLoaded bool
+	mihariChannelFailed bool
 	status              protocol.Status
 	core                protocol.CoreStatus
 	onboarding          protocol.OnboardingStatus
@@ -532,17 +544,34 @@ func (m *Model) checkMihariVersion() tea.Cmd {
 	if m.selfUpdater == nil || m.pending {
 		return nil
 	}
+	path, err := m.channelFilePath()
+	if err != nil {
+		m.mihariChannelFailed = true
+		m.markRowOutcome(rowMihariChannel, false, actionErrorDetail(err, ui.MihariChannelFailed))
+		return nil
+	}
+	channel, err := m.readChannel(path)
+	if err != nil {
+		m.mihariChannelFailed = true
+		m.markRowOutcome(rowMihariChannel, false, actionErrorDetail(err, ui.MihariChannelFailed))
+		return nil
+	}
+	m.mihariChannel = channel
+	m.mihariChannelLoaded = true
+	m.mihariChannelFailed = false
 	m.selfCheckGeneration++
 	generation := m.selfCheckGeneration
 	m.pending = true
 	m.pendingRow = rowMihariUpdate
 	m.pendingNote = ui.MihariProgressChecking
-	m.outcomeRow = ""
-	m.outcomeOK = false
-	m.outcomeDetail = ""
-	m.lastError = ""
+	if m.outcomeRow == rowMihariUpdate {
+		m.outcomeRow = ""
+		m.outcomeOK = false
+		m.outcomeDetail = ""
+		m.lastError = ""
+	}
 	check := func() tea.Msg {
-		result, err := m.selfUpdater.Check(m.ctx, m.currentVersion, "")
+		result, err := m.selfUpdater.Check(m.ctx, m.currentVersion, channel)
 		return ui.PageResultMsg{
 			Page:   ui.PageSystem,
 			Result: selfCheckResultMsg{generation: generation, result: result, err: err},
@@ -597,6 +626,17 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.outcomeDetail = ""
 		m.lastError = ""
 		return m, m.rowSpinCmdIfNeeded()
+	case mihariChannelResultMsg:
+		m.clearRowPending()
+		if typed.err != nil {
+			m.markRowOutcome(rowMihariChannel, false, actionErrorDetail(typed.err, ui.MihariChannelFailed))
+			return m, m.rowSpinCmdIfNeeded()
+		}
+		m.mihariChannel = typed.channel
+		m.mihariChannelLoaded = true
+		m.mihariChannelFailed = false
+		m.markRowOutcome(rowMihariChannel, true, "")
+		return m, tea.Batch(m.checkMihariVersion(), m.rowSpinCmdIfNeeded())
 	case selfUpdateResultMsg:
 		m.clearRowPending()
 		if !typed.result.Updated {
@@ -816,6 +856,8 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, m.openPanelBrowser(panelIDZashboard)
 		case rowMetaCubeXD:
 			return m, m.openPanelBrowser(panelIDMetaCubeXD)
+		case rowMihariChannel:
+			return m, m.confirmSwitchMihariChannel()
 		case rowMihariUpdate:
 			if m.pending || m.selfUpdater == nil {
 				return m, nil
@@ -889,6 +931,7 @@ func (m *Model) updateMihari() tea.Cmd {
 	updater := m.selfUpdater
 	binaryPath := m.binaryPath
 	currentVersion := m.currentVersion
+	channel := m.currentMihariChannel()
 	isElevated := m.isElevated
 	return func() tea.Msg {
 		if isElevated == nil || !isElevated() {
@@ -897,7 +940,7 @@ func (m *Model) updateMihari() tea.Cmd {
 				Message: "administrator privileges are required; re-run Mihari from an elevated shell",
 			}}
 		}
-		result, err := updater.Update(m.ctx, binaryPath, currentVersion, "")
+		result, err := updater.Update(m.ctx, binaryPath, currentVersion, channel)
 		return selfUpdateResultMsg{result: result, err: err}
 	}
 }
@@ -1041,6 +1084,7 @@ func (m *Model) rows() []row {
 	rows := m.portRows()
 	rows = append(rows, row{id: rowDaemon, section: ui.DaemonSectionTitle, label: ui.DaemonLabel, value: daemonValue(m.theme, m.status, !m.mutationsEnabled), detail: daemon})
 	rows = append(rows, m.panelRows()...)
+	rows = append(rows, m.mihariChannelRow())
 	rows = append(rows, m.mihariUpdateRow())
 	rows = append(rows,
 		row{id: rowRunSetup, section: ui.DaemonSectionTitle, label: ui.RunSetupLabel, detail: ui.RunSetupDetail},
@@ -1068,6 +1112,18 @@ func (m *Model) aboutRows() []row {
 			label: ui.AboutGitHubLabel, value: ui.AboutGitHubDisplay,
 			detail: ui.AboutGitHubDisplay,
 		},
+	}
+}
+
+func (m *Model) mihariChannelRow() row {
+	m.ensureChannelLoaded()
+	value := update.ChannelMain
+	if m.mihariChannelLoaded && m.mihariChannel != "" {
+		value = m.mihariChannel
+	}
+	return row{
+		id: rowMihariChannel, section: ui.DaemonSectionTitle,
+		label: ui.MihariChannelLabel, value: value, detail: ui.SwitchMihariChannelTitle,
 	}
 }
 
@@ -1543,6 +1599,8 @@ func (m *Model) scheduleOutcomeFade(row string) tea.Cmd {
 
 func rowProgressForAction(action ui.Action, coreMissing bool) (rowID, note string) {
 	switch action {
+	case ui.ActionSwitchMihariChannel:
+		return rowMihariChannel, ui.MihariProgressSwitching
 	case ui.ActionUpdateMihari:
 		return rowMihariUpdate, ui.MihariProgressUpdating
 	case ui.ActionServiceInstall:
@@ -1956,6 +2014,88 @@ func (m *Model) tunRevision() uint64 {
 		return m.tun.Revision
 	}
 	return m.currentRevision()
+}
+
+func (m *Model) confirmSwitchMihariChannel() tea.Cmd {
+	target := update.ChannelDev
+	if m.currentMihariChannel() == update.ChannelDev {
+		target = update.ChannelMain
+	}
+	impact := ui.SwitchMihariChannelToDevImpact
+	if target == update.ChannelMain {
+		impact = ui.SwitchMihariChannelToMainImpact
+	}
+	return func() tea.Msg {
+		return ui.ActionIntentMsg{
+			Action: ui.ActionSwitchMihariChannel, Page: ui.PageSystem, Key: "mihari:channel",
+			Title: fmt.Sprintf("%s to %s", ui.SwitchMihariChannelTitle, target), Object: ui.MihariChannelLabel,
+			Impact: impact, Rollback: ui.SwitchMihariChannelRollback,
+			Execute: m.switchMihariChannel(target),
+		}
+	}
+}
+
+func (m *Model) switchMihariChannel(target string) tea.Cmd {
+	return func() tea.Msg {
+		path, err := m.channelFilePath()
+		if err != nil {
+			return mihariChannelResultMsg{err: err}
+		}
+		if err := m.writeChannel(path, target); err != nil {
+			return mihariChannelResultMsg{err: err}
+		}
+		return mihariChannelResultMsg{channel: target}
+	}
+}
+
+func (m *Model) currentMihariChannel() string {
+	m.ensureChannelLoaded()
+	if m.mihariChannelLoaded && m.mihariChannel != "" {
+		return m.mihariChannel
+	}
+	return update.ChannelMain
+}
+
+func (m *Model) ensureChannelLoaded() {
+	if m.mihariChannelLoaded || m.mihariChannelFailed {
+		return
+	}
+	path, err := m.channelFilePath()
+	if err != nil {
+		m.mihariChannelFailed = true
+		return
+	}
+	channel, err := m.readChannel(path)
+	if err != nil {
+		m.mihariChannelFailed = true
+		return
+	}
+	m.mihariChannel = channel
+	m.mihariChannelLoaded = true
+}
+
+func (m *Model) channelFilePath() (string, error) {
+	fn := m.channelPath
+	if fn == nil {
+		fn = platform.ChannelPath
+	}
+	return fn()
+}
+
+func (m *Model) readChannel(path string) (string, error) {
+	fn := m.loadChannel
+	if fn == nil {
+		fn = update.LoadChannel
+	}
+	return fn(path)
+}
+
+func (m *Model) writeChannel(path, channel string) error {
+	fn := m.saveChannel
+	if fn == nil {
+		fn = update.SaveChannel
+	}
+	return fn(path, channel)
 }
 
 func (m *Model) confirmSwitchCoreChannel(target string) tea.Cmd {
