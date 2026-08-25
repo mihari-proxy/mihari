@@ -9,6 +9,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/platform"
 )
 
 const (
@@ -140,5 +141,5 @@ func SaveChannel(path, channel string) error {
 	if err := config.AtomicWrite(path, []byte(channel+"\n"), 0o600); err != nil {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "write mihari channel"}
 	}
-	return nil
+	return platform.OwnChannelWrite(path)
 }
