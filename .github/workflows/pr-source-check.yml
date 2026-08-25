@@ -1,0 +1,21 @@
+name: PR Source Check
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR source branch
+        if: github.head_ref != 'dev' && !startsWith(github.head_ref, 'hotfix/')
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          echo "::error::PR to main must come from 'dev' or 'hotfix/*' branches."
+          echo "Current source branch: $HEAD_REF"
+          exit 1
