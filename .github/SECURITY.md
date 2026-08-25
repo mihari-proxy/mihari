@@ -7,7 +7,7 @@
 | Version | Supported          |
 | ------- | ------------------ |
 | latest  | ✅ |
-| < 1.0   | ❌ |
+| older   | ❌ |
 
 ## Reporting a Vulnerability
 
