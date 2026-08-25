@@ -16,7 +16,7 @@ type fakeSelfUpdater struct {
 	err    error
 }
 
-func (f *fakeSelfUpdater) Update(context.Context, string, string) (update.Result, error) {
+func (f *fakeSelfUpdater) Update(context.Context, string, string, string) (update.Result, error) {
 	f.calls++
 	return f.result, f.err
 }

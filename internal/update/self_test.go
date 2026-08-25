@@ -195,7 +195,7 @@ func TestSelfUpdateDownloadsAndReplaces(t *testing.T) {
 				checksumBody: test.manifest,
 				binaryBody:   payload,
 			})
-			result, err := env.updater.Update(context.Background(), env.binaryPath, "v1.0.0")
+			result, err := env.updater.Update(context.Background(), env.binaryPath, "v1.0.0", ChannelMain)
 			if err != nil || !result.Updated || result.Version != "v9.9.9" {
 				t.Fatalf("result=%#v err=%v", result, err)
 			}
@@ -345,7 +345,7 @@ func TestSelfUpdateRejectsInvalidChecksumManifest(t *testing.T) {
 			case "checksum non-200", "checksum read error":
 				wantCode = protocol.CodeNetworkFailure
 			}
-			_, err := env.updater.Update(context.Background(), env.binaryPath, "v1.0.0")
+			_, err := env.updater.Update(context.Background(), env.binaryPath, "v1.0.0", ChannelMain)
 			assertFailClosedUpdate(t, env, err, wantCode, true)
 		})
 	}
@@ -366,7 +366,7 @@ func TestSelfUpdateChecksumRequestUsesContextAndHeaders(t *testing.T) {
 				host = r.Host
 			},
 		})
-		result, err := env.updater.Update(context.Background(), env.binaryPath, "v1.0.0")
+		result, err := env.updater.Update(context.Background(), env.binaryPath, "v1.0.0", ChannelMain)
 		if err != nil || !result.Updated {
 			t.Fatalf("result=%#v err=%v", result, err)
 		}
@@ -389,7 +389,7 @@ func TestSelfUpdateChecksumRequestUsesContextAndHeaders(t *testing.T) {
 				<-r.Context().Done()
 			},
 		})
-		_, err := env.updater.Update(ctx, env.binaryPath, "v1.0.0")
+		_, err := env.updater.Update(ctx, env.binaryPath, "v1.0.0", ChannelMain)
 		assertFailClosedUpdate(t, env, err, protocol.CodeNetworkFailure, true)
 	})
 }
@@ -510,7 +510,7 @@ func TestSelfUpdateRejectsInvalidBinary(t *testing.T) {
 			if test.openCandidate != nil {
 				env.updater.openCandidate = test.openCandidate
 			}
-			_, err := env.updater.Update(context.Background(), env.binaryPath, "v1.0.0")
+			_, err := env.updater.Update(context.Background(), env.binaryPath, "v1.0.0", ChannelMain)
 			if test.wantErrSubstr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErrSubstr)) {
 				t.Fatalf("err=%v want substring %q", err, test.wantErrSubstr)
 			}
@@ -600,7 +600,7 @@ func TestSelfUpdateRejectsAmbiguousTargetAsset(t *testing.T) {
 				binaryBody:   payload,
 				assets:       test.assets,
 			})
-			_, err := env.updater.Update(context.Background(), env.binaryPath, "v1.0.0")
+			_, err := env.updater.Update(context.Background(), env.binaryPath, "v1.0.0", ChannelMain)
 			assertFailClosedUpdate(t, env, err, protocol.CodeDataFailure, true)
 		})
 	}
@@ -613,7 +613,7 @@ func TestSelfUpdateSkipsSameVersion(t *testing.T) {
 		checksumBody: fixtureSHA256Hex(payload) + "  mihari-linux-amd64\n",
 		binaryBody:   payload,
 	})
-	result, err := env.updater.Update(context.Background(), env.binaryPath, "v1.0.0")
+	result, err := env.updater.Update(context.Background(), env.binaryPath, "v1.0.0", ChannelMain)
 	if err != nil || result.Updated {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
@@ -629,28 +629,81 @@ func TestSelfUpdateSkipsSameVersion(t *testing.T) {
 	}
 }
 
+func TestSelfUpdateSkipsAheadVersion(t *testing.T) {
+	payload := []byte("same")
+	env := startSelfUpdateEnv(t, selfUpdateServerConfig{
+		tag:          "v0.8.2",
+		checksumBody: fixtureSHA256Hex(payload) + "  mihari-linux-amd64\n",
+		binaryBody:   payload,
+	})
+	result, err := env.updater.Update(context.Background(), env.binaryPath, "v0.9.0-dev.3", ChannelMain)
+	if err != nil || result.Updated || !result.Ahead || result.Version != "v0.8.2" || result.Channel != ChannelMain {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if env.checksumReqs != 0 || env.binaryReqs != 0 {
+		t.Fatalf("checksum=%d binary=%d, want 0", env.checksumReqs, env.binaryReqs)
+	}
+}
+
 func TestSelfUpdaterCheckReportsAvailability(t *testing.T) {
 	tests := []struct {
 		name      string
 		current   string
 		latest    string
 		available bool
+		ahead     bool
 	}{
 		{name: "new release", current: "v1.0.0", latest: "v1.1.0", available: true},
-		{name: "same release", current: "v1.0.0", latest: "v1.0.0", available: false},
+		{name: "same release", current: "v1.0.0", latest: "v1.0.0"},
+		{name: "ahead of latest", current: "v2.0.0", latest: "v1.0.0", ahead: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			var path string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				path = r.URL.Path
 				_ = json.NewEncoder(w).Encode(Release{TagName: test.latest})
 			}))
 			defer server.Close()
-
-			result, err := (SelfUpdater{HTTPClient: server.Client(), APIBase: server.URL}).Check(context.Background(), test.current)
-			if err != nil || result.Current != test.current || result.Latest != test.latest || result.Available != test.available {
+			result, err := (SelfUpdater{HTTPClient: server.Client(), APIBase: server.URL}).Check(context.Background(), test.current, ChannelMain)
+			if err != nil || result.Current != test.current || result.Latest != test.latest || result.Available != test.available || result.Ahead != test.ahead || result.Channel != ChannelMain {
 				t.Fatalf("result=%#v err=%v", result, err)
 			}
+			if path != "/repos/mihari-proxy/mihari/releases/latest" {
+				t.Fatalf("path=%q", path)
+			}
 		})
+	}
+}
+
+func TestSelfUpdaterCheckMainIgnoresHigherDevReleaseOnSameServer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/mihari-proxy/mihari/releases/latest" {
+			_ = json.NewEncoder(w).Encode(Release{TagName: "v0.8.2"})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	result, err := (SelfUpdater{HTTPClient: server.Client(), APIBase: server.URL}).Check(context.Background(), "v0.8.2", ChannelMain)
+	if err != nil || result.Available || result.Latest != "v0.8.2" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestSelfUpdaterCheckRejectsInvalidChannel(t *testing.T) {
+	var hits int
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		hits++
+	}))
+	defer server.Close()
+	_, err := (SelfUpdater{HTTPClient: server.Client(), APIBase: server.URL}).Check(context.Background(), "v0.8.2", "stable")
+	var apiError protocol.APIError
+	if err == nil || !errors.As(err, &apiError) || apiError.Code != protocol.CodeInvalidArgument {
+		t.Fatalf("err=%v", err)
+	}
+	if hits != 0 {
+		t.Fatalf("hits=%d", hits)
 	}
 }
 
@@ -661,7 +714,7 @@ func TestSelfUpdaterCheckDoesNotDownloadAsset(t *testing.T) {
 		checksumBody: fixtureSHA256Hex(payload) + "  mihari-linux-amd64\n",
 		binaryBody:   payload,
 	})
-	result, err := env.updater.Check(context.Background(), "v1.0.0")
+	result, err := env.updater.Check(context.Background(), "v1.0.0", ChannelMain)
 	if err != nil || !result.Available {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}

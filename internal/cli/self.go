@@ -14,7 +14,7 @@ import (
 
 // SelfUpdater updates the running mihari binary.
 type SelfUpdater interface {
-	Update(ctx context.Context, binaryPath, currentVersion string) (update.Result, error)
+	Update(ctx context.Context, binaryPath, currentVersion, channel string) (update.Result, error)
 }
 
 func newSelfCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
@@ -47,7 +47,7 @@ func newSelfUpdateCommand(dependencies Dependencies, options *runOptions) *cobra
 		if err != nil {
 			return protocol.APIError{Code: protocol.CodeInternal, Message: "resolve mihari executable path"}
 		}
-		result, err := dependencies.SelfUpdater.Update(command.Context(), binary, buildinfo.Version)
+		result, err := dependencies.SelfUpdater.Update(command.Context(), binary, buildinfo.Version, "")
 		if err != nil {
 			return classifyRuntimeError(err)
 		}

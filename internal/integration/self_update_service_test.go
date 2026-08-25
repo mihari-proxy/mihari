@@ -114,7 +114,7 @@ func TestSelfUpdateSynchronizesDifferentServiceBinaryAndVerifiesDaemonVersion(t 
 		GOARCH:       runtime.GOARCH,
 		AfterReplace: completion.AfterReplace,
 	}
-	result, err := updater.Update(context.Background(), tuiBinary, "v1.0.0")
+	result, err := updater.Update(context.Background(), tuiBinary, "v1.0.0", "")
 	if err != nil || !result.Updated || result.Version != "v9.9.9" {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}

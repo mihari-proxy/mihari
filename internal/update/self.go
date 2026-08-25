@@ -36,6 +36,7 @@ type Asset struct {
 // Release is a GitHub release document.
 type Release struct {
 	TagName string  `json:"tag_name"`
+	Draft   bool    `json:"draft"`
 	Assets  []Asset `json:"assets"`
 }
 
@@ -56,6 +57,8 @@ type SelfUpdater struct {
 type Result struct {
 	Version string
 	Updated bool
+	Ahead   bool
+	Channel string
 }
 
 // CheckResult describes the latest Mihari release relative to the running version.
@@ -63,6 +66,8 @@ type CheckResult struct {
 	Current   string
 	Latest    string
 	Available bool
+	Ahead     bool
+	Channel   string
 }
 
 func (u SelfUpdater) httpClient() *http.Client {
@@ -100,27 +105,39 @@ func (u SelfUpdater) targetArch() string {
 	return runtime.GOARCH
 }
 
-// Check reports whether GitHub Releases contains a different Mihari version.
-func (u SelfUpdater) Check(ctx context.Context, currentVersion string) (CheckResult, error) {
-	release, err := u.latestRelease(ctx)
+// Check reports whether GitHub Releases contains a newer Mihari version for channel.
+func (u SelfUpdater) Check(ctx context.Context, currentVersion, channel string) (CheckResult, error) {
+	ch, err := normalizeChannel(channel)
 	if err != nil {
 		return CheckResult{}, err
 	}
+	release, err := u.latestRelease(ctx, ch)
+	if err != nil {
+		return CheckResult{}, err
+	}
+	available, ahead := classifyUpdate(currentVersion, release.TagName)
 	return CheckResult{
 		Current:   currentVersion,
 		Latest:    release.TagName,
-		Available: !sameTag(currentVersion, release.TagName),
+		Available: available,
+		Ahead:     ahead,
+		Channel:   ch,
 	}, nil
 }
 
 // Update downloads the latest release when newer than currentVersion and replaces binaryPath.
-func (u SelfUpdater) Update(ctx context.Context, binaryPath, currentVersion string) (Result, error) {
-	release, err := u.latestRelease(ctx)
+func (u SelfUpdater) Update(ctx context.Context, binaryPath, currentVersion, channel string) (Result, error) {
+	ch, err := normalizeChannel(channel)
 	if err != nil {
 		return Result{}, err
 	}
-	if sameTag(currentVersion, release.TagName) {
-		return Result{Version: release.TagName, Updated: false}, nil
+	release, err := u.latestRelease(ctx, ch)
+	if err != nil {
+		return Result{}, err
+	}
+	available, ahead := classifyUpdate(currentVersion, release.TagName)
+	if !available {
+		return Result{Version: release.TagName, Updated: false, Ahead: ahead, Channel: ch}, nil
 	}
 	asset, err := SelectSelfAsset(release, u.targetOS(), u.targetArch())
 	if err != nil {
@@ -155,10 +172,10 @@ func (u SelfUpdater) Update(ctx context.Context, binaryPath, currentVersion stri
 	}
 	if u.AfterReplace != nil {
 		if err := u.AfterReplace(ctx, release.TagName); err != nil {
-			return Result{Version: release.TagName, Updated: true}, err
+			return Result{Version: release.TagName, Updated: true, Channel: ch}, err
 		}
 	}
-	return Result{Version: release.TagName, Updated: true}, nil
+	return Result{Version: release.TagName, Updated: true, Channel: ch}, nil
 }
 
 func sameTag(current, latest string) bool {
@@ -273,7 +290,16 @@ func (u SelfUpdater) fetchExpectedChecksum(ctx context.Context, asset Asset, tar
 	return parseChecksumManifest(raw, targetName)
 }
 
-func (u SelfUpdater) latestRelease(ctx context.Context) (Release, error) {
+func (u SelfUpdater) latestRelease(ctx context.Context, channel string) (Release, error) {
+	switch channel {
+	case ChannelMain, ChannelDev:
+		return u.latestMainRelease(ctx)
+	default:
+		return Release{}, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "mihari channel must be main or dev"}
+	}
+}
+
+func (u SelfUpdater) latestMainRelease(ctx context.Context) (Release, error) {
 	var release Release
 	url := u.apiBase() + "/repos/" + u.repository() + "/releases/latest"
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

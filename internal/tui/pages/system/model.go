@@ -76,8 +76,8 @@ type Client interface {
 
 // SelfUpdater is the local Mihari binary lifecycle surface used by the System page.
 type SelfUpdater interface {
-	Check(context.Context, string) (update.CheckResult, error)
-	Update(context.Context, string, string) (update.Result, error)
+	Check(context.Context, string, string) (update.CheckResult, error)
+	Update(context.Context, string, string, string) (update.Result, error)
 }
 
 // ServiceController is the local OS service manager surface (not daemon IPC).
@@ -542,7 +542,7 @@ func (m *Model) checkMihariVersion() tea.Cmd {
 	m.outcomeDetail = ""
 	m.lastError = ""
 	check := func() tea.Msg {
-		result, err := m.selfUpdater.Check(m.ctx, m.currentVersion)
+		result, err := m.selfUpdater.Check(m.ctx, m.currentVersion, "")
 		return ui.PageResultMsg{
 			Page:   ui.PageSystem,
 			Result: selfCheckResultMsg{generation: generation, result: result, err: err},
@@ -897,7 +897,7 @@ func (m *Model) updateMihari() tea.Cmd {
 				Message: "administrator privileges are required; re-run Mihari from an elevated shell",
 			}}
 		}
-		result, err := updater.Update(m.ctx, binaryPath, currentVersion)
+		result, err := updater.Update(m.ctx, binaryPath, currentVersion, "")
 		return selfUpdateResultMsg{result: result, err: err}
 	}
 }

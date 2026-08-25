@@ -29,12 +29,12 @@ type fakeSelfUpdater struct {
 	lastCurrent  string
 }
 
-func (f *fakeSelfUpdater) Check(context.Context, string) (update.CheckResult, error) {
+func (f *fakeSelfUpdater) Check(context.Context, string, string) (update.CheckResult, error) {
 	f.checkCalls++
 	return f.checkResult, f.checkErr
 }
 
-func (f *fakeSelfUpdater) Update(_ context.Context, binaryPath, currentVersion string) (update.Result, error) {
+func (f *fakeSelfUpdater) Update(_ context.Context, binaryPath, currentVersion, _ string) (update.Result, error) {
 	f.updateCalls++
 	f.lastBinary = binaryPath
 	f.lastCurrent = currentVersion
