@@ -23,8 +23,9 @@ func ChannelDataRoot() (string, error) {
 	return channelDataRootPlatform()
 }
 
-// OwnChannelWrite chowns the sidecar and newly created parent directories to the
-// SUDO_USER owner when Unix euid is 0. It is a no-op on Windows.
-func OwnChannelWrite(path string) error {
-	return ownChannelWrite(path)
+// OwnChannelWrite chowns the sidecar to the SUDO_USER owner when Unix euid is 0.
+// newParent chowns the immediate data-root directory only when this write created it.
+// It is a no-op on Windows.
+func OwnChannelWrite(path string, newParent bool) error {
+	return ownChannelWrite(path, newParent)
 }

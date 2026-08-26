@@ -2652,6 +2652,16 @@ func TestSystemMihariChannelMissingSidecarShowsMain(t *testing.T) {
 	}
 }
 
+func TestSystemMihariChannelResultReportsErr(t *testing.T) {
+	err := errors.New("write mihari channel")
+	if got := (mihariChannelResultMsg{err: err}).Err(); got != err {
+		t.Fatalf("got=%v", got)
+	}
+	if (mihariChannelResultMsg{channel: update.ChannelDev}).Err() != nil {
+		t.Fatal("nil error must be success")
+	}
+}
+
 func TestSystemMihariChannelEnterConfirmsSwitchWithoutElevation(t *testing.T) {
 	model, updater, saved := mihariChannelModel(t, update.ChannelMain)
 	model.focusID = rowMihariChannel

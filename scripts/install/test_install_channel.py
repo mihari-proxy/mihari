@@ -353,6 +353,33 @@ def test_script1_ps1_env_channel_without_flag(tmp_path: Path, github_server: Git
 def test_script1_ps1_rejects_invalid_channel(tmp_path: Path):
     result = run_install_ps1(tmp_path, ["-Channel", "stable"], {})
     assert result.returncode != 0
+    upper = run_install_ps1(tmp_path, ["-Channel", "DEV"], {})
+    assert upper.returncode != 0
+
+
+def test_unix_install_scripts_validate_sudo_user_before_eval():
+    for path in (INSTALL_SH, INSTALL_AIO_SH):
+        text = path.read_text(encoding="utf-8")
+        assert '*[!A-Za-z0-9._-]*' in text, path.name
+
+
+def test_ps1_channel_and_tag_matches_are_case_sensitive():
+    for path in (INSTALL_PS1, INSTALL_AIO_PS1, INSTALL_AIO_REMOTE_PS1):
+        text = path.read_text(encoding="utf-8")
+        assert "-cnotin" in text, path.name
+    for path in (INSTALL_PS1, INSTALL_AIO_REMOTE_PS1):
+        text = path.read_text(encoding="utf-8")
+        assert "-cmatch" in text, path.name
+
+
+def test_script1_ps1_writes_sidecar_after_binary_commit():
+    text = INSTALL_PS1.read_text(encoding="utf-8")
+    block = text[text.index("Invoke-WebRequest -Uri $url -OutFile $tmp") :]
+    assert block.index("Start-Service -Name mihari") < block.index("Write-MihariChannel $channel")
+    assert block.rindex("Move-Item -LiteralPath $tmp -Destination $dest -Force") < block.rindex(
+        "Write-MihariChannel $channel"
+    )
+    assert '"draft"\\s*:\\s*true' in text
 
 
 INSTALL_AIO_SH = SCRIPT_DIR / "install-aio.sh"

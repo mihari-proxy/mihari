@@ -19,6 +19,6 @@ func channelDataRootPlatform() (string, error) {
 	return filepath.Join(home, ".mihari"), nil
 }
 
-func ownChannelWrite(string) error {
+func ownChannelWrite(string, bool) error {
 	return nil
 }

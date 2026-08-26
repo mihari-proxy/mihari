@@ -81,6 +81,7 @@ func TestClassifyUpdate(t *testing.T) {
 		{name: "dev ahead of main", current: "v0.9.0-dev.3", latest: "v0.8.2", available: false, ahead: true},
 		{name: "stable ahead of same-series dev", current: "v0.9.0", latest: "v0.9.0-dev.3", available: false, ahead: true},
 		{name: "dirty current is available not ahead", current: "dev", latest: "v0.8.2", available: true, ahead: false},
+		{name: "unprefixed current dev is ahead of main", current: "0.9.0-dev.3", latest: "v0.8.2", available: false, ahead: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

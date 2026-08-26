@@ -121,6 +121,10 @@ type mihariChannelResultMsg struct {
 	err     error
 }
 
+func (m mihariChannelResultMsg) Err() error { return m.err }
+
+var _ interface{ Err() error } = mihariChannelResultMsg{}
+
 // Err implements the shell action-outcome contract. Once replacement commits,
 // a service restart error is a warning and must not classify the update as failed.
 func (m selfUpdateResultMsg) Err() error {

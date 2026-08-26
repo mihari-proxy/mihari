@@ -21,7 +21,7 @@ $ErrorActionPreference = 'Stop'
 $stableIndexUrl = 'https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/index.txt'
 $devIndexUrl = 'https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt'
 if (-not $Channel -and $env:MIHARI_CHANNEL) { $Channel = $env:MIHARI_CHANNEL }
-if ($Channel -and $Channel -notin @('main', 'dev')) { throw 'mihari channel must be main or dev' }
+if ($Channel -and $Channel -cnotin @('main', 'dev')) { throw 'mihari channel must be main or dev' }
 if ($env:MIHARI_INDEX_URL) {
   $indexUrl = $env:MIHARI_INDEX_URL
 } elseif ($Channel -eq 'dev') {
@@ -205,10 +205,10 @@ function Show-InstallPlan {
 }
 
 function Test-CanonicalStable([string]$tag) {
-  return [bool]($tag -match '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')
+  return [bool]($tag -cmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')
 }
 function Test-CanonicalDev([string]$tag) {
-  return [bool]($tag -match '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$')
+  return [bool]($tag -cmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$')
 }
 function Write-RemoteTestState {
   $workdir = Join-Path $env:USERPROFILE 'Downloads\mihari-aio'

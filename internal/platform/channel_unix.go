@@ -76,7 +76,7 @@ func channelDataRootPlatform() (string, error) {
 	return filepath.Join(home, ".mihari"), nil
 }
 
-func ownChannelWrite(path string) error {
+func ownChannelWrite(path string, newParent bool) error {
 	if effectiveUID() != 0 {
 		return nil
 	}
@@ -93,7 +93,7 @@ func ownChannelWrite(path string) error {
 	}
 
 	parent := filepath.Dir(path)
-	if parent != "." && parent != string(filepath.Separator) && parent != info.Home {
+	if newParent && parent != "." && parent != string(filepath.Separator) && parent != info.Home {
 		st, err := lstatPath(parent)
 		if err == nil {
 			stat, ok := st.Sys().(*syscall.Stat_t)

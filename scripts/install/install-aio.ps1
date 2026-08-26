@@ -23,7 +23,7 @@ function Fail($m) { Write-Host "error: $m" -ForegroundColor Red; throw $m }
 
 if (-not $BundleDir) { $BundleDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path } }
 if (-not $Channel -and $env:MIHARI_CHANNEL) { $Channel = $env:MIHARI_CHANNEL }
-if ($Channel -and $Channel -notin @('main', 'dev')) { Fail 'mihari channel must be main or dev' }
+if ($Channel -and $Channel -cnotin @('main', 'dev')) { Fail 'mihari channel must be main or dev' }
 # Invoke-MihariService runs a `mihari service ...` step, elevating via UAC when
 # the current session is not admin (service control needs elevation on Windows).
 function Invoke-MihariService([string[]]$ServiceArgs) {

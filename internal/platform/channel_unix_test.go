@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"testing"
 )
@@ -27,9 +26,6 @@ func TestChannelPathUsesSudoUserHome(t *testing.T) {
 	got, err := ChannelPath()
 	if err != nil || got != filepath.Join(home, ".mihari", "mihari-channel") {
 		t.Fatalf("got=%q err=%v", got, err)
-	}
-	if strings.Contains(got, string(filepath.Separator)+"home"+string(filepath.Separator)+"alice") && home != filepath.Join("/home", "alice") {
-		t.Fatal("raw SUDO_USER joined under /home")
 	}
 	if DefaultDataRoot() == filepath.Join(home, ".mihari") {
 		t.Fatal("DefaultDataRoot unexpectedly followed SUDO_USER")
@@ -128,7 +124,7 @@ func TestOwnChannelWriteChownsNewDirsAndFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("dev\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := OwnChannelWrite(path); err != nil {
+	if err := OwnChannelWrite(path, true); err != nil {
 		t.Fatal(err)
 	}
 	if !containsPath(got, dataRoot) || got[len(got)-1] != path {
@@ -151,7 +147,7 @@ func TestOwnChannelWriteSkipsExistingDataRoot(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		return uidInfo{FileInfo: info, uid: 99}, nil
+		return uidInfo{FileInfo: info, uid: 0}, nil
 	}
 	var got []string
 	chownPath = func(name string, uid, gid int) error {
@@ -164,7 +160,7 @@ func TestOwnChannelWriteSkipsExistingDataRoot(t *testing.T) {
 	if err := os.WriteFile(path, []byte("dev\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := OwnChannelWrite(path); err != nil {
+	if err := OwnChannelWrite(path, false); err != nil {
 		t.Fatal(err)
 	}
 	dataRoot := filepath.Join(home, ".mihari")
@@ -206,7 +202,7 @@ func TestOwnChannelWriteDoesNotChownAboveDataRoot(t *testing.T) {
 	if err := os.WriteFile(path, []byte("dev\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := OwnChannelWrite(path); err != nil {
+	if err := OwnChannelWrite(path, true); err != nil {
 		t.Fatal(err)
 	}
 	if containsPath(got, outer) {

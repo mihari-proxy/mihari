@@ -36,7 +36,6 @@ func TestNewPathsBuildsRuntimeLayout(t *testing.T) {
 		"web active":      filepath.Join(root, "web", "active.json"),
 		"web credential":  filepath.Join(root, "web", "credential"),
 		"panel staging":   filepath.Join(root, "staging", "panels"),
-		"mihari channel":  filepath.Join(root, "mihari-channel"),
 	}
 	gots := map[string]string{
 		"root":            paths.Root,
@@ -60,7 +59,6 @@ func TestNewPathsBuildsRuntimeLayout(t *testing.T) {
 		"web active":      paths.WebActive,
 		"web credential":  paths.WebCredential,
 		"panel staging":   paths.PanelStaging,
-		"mihari channel":  paths.MihariChannel,
 	}
 	for name, want := range wants {
 		if got := gots[name]; got != want {

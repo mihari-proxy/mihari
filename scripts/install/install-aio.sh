@@ -78,6 +78,9 @@ channel_data_root() {
     return
   fi
   if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    case "$SUDO_USER" in
+      *[!A-Za-z0-9._-]*|'') err "resolve sudo user home" ;;
+    esac
     home=""
     if command -v getent >/dev/null 2>&1; then
       home="$(getent passwd "$SUDO_USER" | cut -d: -f6 || true)"
@@ -109,9 +112,9 @@ write_mihari_channel() {
     uid="$(id -u "$SUDO_USER")"
     gid="$(id -g "$SUDO_USER")"
     if [ "$created" -eq 1 ]; then
-      chown "$uid:$gid" "$root" || true
+      chown "$uid:$gid" "$root"
     fi
-    chown "$uid:$gid" "$root/mihari-channel" || true
+    chown "$uid:$gid" "$root/mihari-channel"
   fi
 }
 

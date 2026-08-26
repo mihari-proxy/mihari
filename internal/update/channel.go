@@ -3,6 +3,7 @@ package update
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -85,10 +86,17 @@ func classifyUpdate(current, latest string) (available, ahead bool) {
 	if sameTag(current, latest) {
 		return false, false
 	}
-	if _, ok := parseCanonicalTag(strings.TrimSpace(current)); !ok {
-		return true, false
+	normalized := strings.TrimSpace(current)
+	if _, ok := parseCanonicalTag(normalized); !ok {
+		if normalized == "" || strings.HasPrefix(strings.ToLower(normalized), "v") {
+			return true, false
+		}
+		normalized = "v" + normalized
+		if _, ok := parseCanonicalTag(normalized); !ok {
+			return true, false
+		}
 	}
-	cmp, ok := compareCanonicalTags(latest, current)
+	cmp, ok := compareCanonicalTags(latest, normalized)
 	if !ok {
 		return true, false
 	}
@@ -138,8 +146,11 @@ func SaveChannel(path, channel string) error {
 	default:
 		return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "mihari channel must be main or dev"}
 	}
+	parent := filepath.Dir(path)
+	_, statErr := os.Lstat(parent)
+	newParent := errors.Is(statErr, os.ErrNotExist)
 	if err := config.AtomicWrite(path, []byte(channel+"\n"), 0o600); err != nil {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "write mihari channel"}
 	}
-	return platform.OwnChannelWrite(path)
+	return platform.OwnChannelWrite(path, newParent)
 }

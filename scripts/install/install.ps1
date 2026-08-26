@@ -37,7 +37,7 @@ if ($explicit -eq 0 -and $env:MIHARI_CHANNEL) {
   $channel = $env:MIHARI_CHANNEL
   $explicit = 1
 }
-if ($channel -and $channel -notin @('main', 'dev')) {
+if ($channel -and $channel -cnotin @('main', 'dev')) {
   Fail 'mihari channel must be main or dev'
 }
 
@@ -46,14 +46,14 @@ $binDir = if ($env:MIHARI_BIN) { $env:MIHARI_BIN } else { Join-Path $env:LOCALAP
 $githubApi = if ($env:MIHARI_GITHUB_API) { $env:MIHARI_GITHUB_API.TrimEnd('/') } else { 'https://api.github.com' }
 
 function Test-CanonicalDev([string]$tag) {
-  return [bool]($tag -match '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$')
+  return [bool]($tag -cmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$')
 }
 
 function Parse-Canonical([string]$tag) {
-  if ($tag -match '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$') {
+  if ($tag -cmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$') {
     return @{ Major = [int]$Matches[1]; Minor = [int]$Matches[2]; Patch = [int]$Matches[3]; Dev = [int]$Matches[4]; IsDev = $true }
   }
-  if ($tag -match '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+  if ($tag -cmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
     return @{ Major = [int]$Matches[1]; Minor = [int]$Matches[2]; Patch = [int]$Matches[3]; Dev = 0; IsDev = $false }
   }
   return $null
@@ -119,12 +119,17 @@ function Resolve-DevTag {
       if ($rel.draft) { continue }
       $tag = [string]$rel.tag_name
       if (-not $tag) { $tag = [string]$rel.tagName }
+      if ($tag -match ' ') { continue }
       if (-not (Test-CanonicalDev $tag)) { continue }
       if (-not $best -or (Compare-Canonical $tag $best) -gt 0) { $best = $tag }
     }
     if (-not $best) {
-      foreach ($match in [regex]::Matches([string]$body, '"tag_name"\s*:\s*"([^"]*)"')) {
-        $tag = $match.Groups[1].Value
+      foreach ($obj in [regex]::Matches([string]$body, '\{[^{}]*\}')) {
+        $chunk = $obj.Value
+        if ($chunk -match '"draft"\s*:\s*true') { continue }
+        $tagMatch = [regex]::Match($chunk, '"tag_name"\s*:\s*"([^"]*)"')
+        if (-not $tagMatch.Success) { continue }
+        $tag = $tagMatch.Groups[1].Value
         if (-not (Test-CanonicalDev $tag)) { continue }
         if (-not $best -or (Compare-Canonical $tag $best) -gt 0) { $best = $tag }
       }
@@ -202,7 +207,6 @@ $tmp = Join-Path $binDir ("mihari.exe.new-" + [Guid]::NewGuid().ToString('N'))
 Info "Downloading $asset from $repo..."
 try {
   Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
-  if ($explicit -eq 1) { Write-MihariChannel $channel }
 
   # Add install dir to the user PATH if missing.
   $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -225,12 +229,14 @@ try {
       Info "Elevating to restart the Windows service..."
       Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile', '-Command', $swap
     }
+    if ($explicit -eq 1) { Write-MihariChannel $channel }
     Write-Host "`n[OK] Updated. Manage with: mihari status | mihari sub add <url>" -ForegroundColor Green
     return
   }
 
   # Not running (fresh install, or service stopped): just put the exe in place.
   Move-Item -LiteralPath $tmp -Destination $dest -Force
+  if ($explicit -eq 1) { Write-MihariChannel $channel }
 } catch {
   if (Test-Path $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
   throw

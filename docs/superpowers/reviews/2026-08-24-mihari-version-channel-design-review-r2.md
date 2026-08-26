@@ -1,5 +1,7 @@
 # Design Document Review: Mihari 版本通道 main/dev (round 2)
 
+Status: superseded historical record of an earlier round. The approved design is 第三版 in `docs/superpowers/specs/2026-08-24-mihari-version-channel-design.md`; do not treat the open items below as current blockers.
+
 Reviewed: `docs/superpowers/specs/2026-08-24-mihari-version-channel-design.md`
 Worktree: `.worktrees/issue-125-mihari-channel`
 HEAD: `cd180e3` (`feat/125-mihari-version-channel`), matches `origin/dev`; `origin/main` is `9eb47d9` (diverged). Uncommitted files are the design plus the round-1 review.

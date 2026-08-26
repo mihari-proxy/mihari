@@ -29,7 +29,6 @@ type Paths struct {
 	WebActive           string
 	WebCredential       string
 	PanelStaging        string
-	MihariChannel       string
 }
 
 // NewPaths builds the standard layout under root.
@@ -60,7 +59,6 @@ func NewPaths(root string) Paths {
 		WebActive:           filepath.Join(root, "web", "active.json"),
 		WebCredential:       filepath.Join(root, "web", "credential"),
 		PanelStaging:        filepath.Join(root, "staging", "panels"),
-		MihariChannel:       filepath.Join(root, "mihari-channel"),
 	}
 }
 
