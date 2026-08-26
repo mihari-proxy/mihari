@@ -264,7 +264,18 @@ def test_script1_sh_rejects_unknown_and_invalid_before_download(tmp_path: Path, 
     assert invalid.returncode != 0
     extra = run_install_sh(tmp_path, ["leftover"], {"MIHARI_GITHUB_API": api})
     assert extra.returncode != 0
+    empty = run_install_sh(tmp_path, ["--channel", ""], {"MIHARI_GITHUB_API": api})
+    assert empty.returncode != 0
     assert github_server.snapshot()[0] == []
+
+
+@requires_sh
+def test_unix_install_scripts_chown_new_channel_root():
+    for path in (INSTALL_SH, INSTALL_AIO_SH):
+        text = path.read_text(encoding="utf-8")
+        assert '[ -d "$root" ] || created=1' in text, path.name
+        assert 'chown "$uid:$gid" "$root"' in text, path.name
+        assert 'chown "$uid:$gid" "$root/mihari-channel"' in text, path.name
 
 
 @requires_sh

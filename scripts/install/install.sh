@@ -24,6 +24,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --channel)
       [ $# -ge 2 ] || err "missing --channel value"
+      [ -n "$2" ] || err "missing --channel value"
       CHANNEL="$2"
       CHANNEL_EXPLICIT=1
       shift 2
@@ -212,6 +213,8 @@ channel_data_root() {
 write_channel() {
   channel="$1"
   root="$(channel_data_root)"
+  created=0
+  [ -d "$root" ] || created=1
   mkdir -p "$root"
   tmp="$(mktemp "$root/.mihari-channel.tmp.XXXXXX")"
   printf '%s\n' "$channel" >"$tmp"
@@ -220,6 +223,9 @@ write_channel() {
   if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
     uid="$(id -u "$SUDO_USER")"
     gid="$(id -g "$SUDO_USER")"
+    if [ "$created" -eq 1 ]; then
+      chown "$uid:$gid" "$root" || true
+    fi
     chown "$uid:$gid" "$root/mihari-channel" || true
   fi
 }

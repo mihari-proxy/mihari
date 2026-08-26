@@ -21,6 +21,7 @@ var (
 	lookupUserHome = lookupUserHomeOS
 	effectiveUID   = os.Geteuid
 	chownPath      = os.Chown
+	lstatPath      = os.Lstat
 )
 
 func lookupUserHomeOS(username string) (userHome, error) {
@@ -91,30 +92,16 @@ func ownChannelWrite(path string) error {
 		return err
 	}
 
-	var parents []string
-	dir := filepath.Dir(path)
-	for dir != "." && dir != string(filepath.Separator) {
-		if dir == info.Home {
-			break
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		st, err := os.Lstat(dir)
-		if err != nil {
-			break
-		}
-		stat, ok := st.Sys().(*syscall.Stat_t)
-		if !ok || int(stat.Uid) != effectiveUID() {
-			break
-		}
-		parents = append(parents, dir)
-		dir = parent
-	}
-	for i := len(parents) - 1; i >= 0; i-- {
-		if err := chownPath(parents[i], info.UID, info.GID); err != nil {
-			return fmt.Errorf("chown mihari channel parent: %w", err)
+	parent := filepath.Dir(path)
+	if parent != "." && parent != string(filepath.Separator) && parent != info.Home {
+		st, err := lstatPath(parent)
+		if err == nil {
+			stat, ok := st.Sys().(*syscall.Stat_t)
+			if ok && int(stat.Uid) == effectiveUID() {
+				if err := chownPath(parent, info.UID, info.GID); err != nil {
+					return fmt.Errorf("chown mihari channel parent: %w", err)
+				}
+			}
 		}
 	}
 	if err := chownPath(path, info.UID, info.GID); err != nil {

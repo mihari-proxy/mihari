@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -86,14 +87,33 @@ func TestChannelPathHonorsMihariData(t *testing.T) {
 	}
 }
 
+type uidInfo struct {
+	os.FileInfo
+	uid uint32
+}
+
+func (u uidInfo) Sys() any {
+	return &syscall.Stat_t{Uid: u.uid}
+}
+
 func TestOwnChannelWriteChownsNewDirsAndFile(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, ".mihari", "mihari-channel")
+	dataRoot := filepath.Dir(path)
 	t.Setenv("SUDO_USER", "alice")
-	origLookup, origUID, origChown := lookupUserHome, effectiveUID, chownPath
-	t.Cleanup(func() { lookupUserHome, effectiveUID, chownPath = origLookup, origUID, origChown })
+	origLookup, origUID, origChown, origLstat := lookupUserHome, effectiveUID, chownPath, lstatPath
+	t.Cleanup(func() {
+		lookupUserHome, effectiveUID, chownPath, lstatPath = origLookup, origUID, origChown, origLstat
+	})
 	lookupUserHome = func(string) (userHome, error) { return userHome{Home: home, UID: 42, GID: 42}, nil }
 	effectiveUID = func() int { return 0 }
+	lstatPath = func(name string) (os.FileInfo, error) {
+		info, err := os.Lstat(name)
+		if err != nil {
+			return nil, err
+		}
+		return uidInfo{FileInfo: info, uid: 0}, nil
+	}
 	var got []string
 	chownPath = func(name string, uid, gid int) error {
 		if uid != 42 || gid != 42 {
@@ -102,7 +122,7 @@ func TestOwnChannelWriteChownsNewDirsAndFile(t *testing.T) {
 		got = append(got, name)
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := os.MkdirAll(dataRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte("dev\n"), 0o600); err != nil {
@@ -111,7 +131,7 @@ func TestOwnChannelWriteChownsNewDirsAndFile(t *testing.T) {
 	if err := OwnChannelWrite(path); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) == 0 || got[len(got)-1] != path {
+	if !containsPath(got, dataRoot) || got[len(got)-1] != path {
 		t.Fatalf("chowned=%v", got)
 	}
 }
@@ -120,10 +140,19 @@ func TestOwnChannelWriteSkipsExistingDataRoot(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, ".mihari", "mihari-channel")
 	t.Setenv("SUDO_USER", "alice")
-	origLookup, origUID, origChown := lookupUserHome, effectiveUID, chownPath
-	t.Cleanup(func() { lookupUserHome, effectiveUID, chownPath = origLookup, origUID, origChown })
+	origLookup, origUID, origChown, origLstat := lookupUserHome, effectiveUID, chownPath, lstatPath
+	t.Cleanup(func() {
+		lookupUserHome, effectiveUID, chownPath, lstatPath = origLookup, origUID, origChown, origLstat
+	})
 	lookupUserHome = func(string) (userHome, error) { return userHome{Home: home, UID: 42, GID: 42}, nil }
 	effectiveUID = func() int { return 0 }
+	lstatPath = func(name string) (os.FileInfo, error) {
+		info, err := os.Lstat(name)
+		if err != nil {
+			return nil, err
+		}
+		return uidInfo{FileInfo: info, uid: 99}, nil
+	}
 	var got []string
 	chownPath = func(name string, uid, gid int) error {
 		got = append(got, name)
@@ -143,6 +172,47 @@ func TestOwnChannelWriteSkipsExistingDataRoot(t *testing.T) {
 		t.Fatalf("existing data root chowned: %v", got)
 	}
 	if len(got) == 0 || got[len(got)-1] != path {
+		t.Fatalf("chowned=%v", got)
+	}
+}
+
+func TestOwnChannelWriteDoesNotChownAboveDataRoot(t *testing.T) {
+	home := t.TempDir()
+	outer := t.TempDir()
+	dataRoot := filepath.Join(outer, "data")
+	path := filepath.Join(dataRoot, "mihari-channel")
+	t.Setenv("SUDO_USER", "alice")
+	origLookup, origUID, origChown, origLstat := lookupUserHome, effectiveUID, chownPath, lstatPath
+	t.Cleanup(func() {
+		lookupUserHome, effectiveUID, chownPath, lstatPath = origLookup, origUID, origChown, origLstat
+	})
+	lookupUserHome = func(string) (userHome, error) { return userHome{Home: home, UID: 42, GID: 42}, nil }
+	effectiveUID = func() int { return 0 }
+	lstatPath = func(name string) (os.FileInfo, error) {
+		info, err := os.Lstat(name)
+		if err != nil {
+			return nil, err
+		}
+		return uidInfo{FileInfo: info, uid: 0}, nil
+	}
+	var got []string
+	chownPath = func(name string, uid, gid int) error {
+		got = append(got, name)
+		return nil
+	}
+	if err := os.MkdirAll(dataRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("dev\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := OwnChannelWrite(path); err != nil {
+		t.Fatal(err)
+	}
+	if containsPath(got, outer) {
+		t.Fatalf("chowned ancestor outside data root: %v", got)
+	}
+	if !containsPath(got, dataRoot) || !containsPath(got, path) {
 		t.Fatalf("chowned=%v", got)
 	}
 }
