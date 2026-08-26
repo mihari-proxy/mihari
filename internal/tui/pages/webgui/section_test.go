@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
@@ -50,16 +51,28 @@ func TestView_WebGUISectionEndsWithCacheRefreshHint(t *testing.T) {
 	if hint == "" || !strings.Contains(hint, "Ctrl+Shift+R") {
 		t.Fatalf("WebGUICacheRefreshHint is empty or missing Ctrl+Shift+R: %q", hint)
 	}
+	for _, zh := range []string{"白屏", "强制刷新", "如果"} {
+		if strings.Contains(hint, zh) {
+			t.Fatalf("hint should be English, found %q in %q", zh, hint)
+		}
+	}
 
-	t.Run("wide fits one styled line before panel cards", func(t *testing.T) {
+	t.Run("wide fits one plain body line before panel cards", func(t *testing.T) {
 		model := New(nil, []string{protocol.CapabilityWebGUI})
 		model.SetStatus(sampleStatus())
 		model.SetSize(100, 28)
 		view := model.View()
 		assertHintBeforePanel(t, view, hint)
-		wantStyle := ui.RenderWarningCallout(ui.DefaultTheme(), hint, 0)
-		if !strings.Contains(view, wantStyle) {
-			t.Fatalf("hint should be orange text on a white background\nwant style=%q\nview=%s", wantStyle, view)
+		if !strings.Contains(view, hint) {
+			t.Fatalf("hint should appear as plain body text:\n%s", view)
+		}
+		warning := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(ui.DefaultTheme().ColorWarning).
+			Background(lipgloss.Color("15")).
+			Render(hint)
+		if strings.Contains(view, warning) {
+			t.Fatalf("hint should match other body text, not warning callout chrome\nview=%s", view)
 		}
 	})
 
@@ -72,7 +85,7 @@ func TestView_WebGUISectionEndsWithCacheRefreshHint(t *testing.T) {
 			t.Fatalf("narrow view should wrap the hint, not keep it contiguous:\n%s", view)
 		}
 		assertHintBeforePanel(t, view, "Ctrl+Shift+R")
-		for _, want := range []string{"白屏", "强制刷新"} {
+		for _, want := range []string{"blank", "missing"} {
 			if !strings.Contains(view, want) {
 				t.Fatalf("wrapped hint dropped %q:\n%s", want, view)
 			}

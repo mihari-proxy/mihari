@@ -142,7 +142,7 @@ const (
 	WebGUILifecycleUnavailable = "Web GUI lifecycle is not available in this build."
 	// WebGUICacheRefreshHint is shown as the last line of the Web GUI summary
 	// section: some panels cache the previous page and skip token/query injection.
-	WebGUICacheRefreshHint = "如果 Web GUI 打开后白屏或参数没有自动带入，使用 Ctrl+Shift+R 强制刷新缓存可以缓解该问题。"
+	WebGUICacheRefreshHint = "If the Web GUI is blank or query parameters are missing, hard-refresh with Ctrl+Shift+R."
 	ActivePanelLabel       = "Default panel"
 	OpenBrowserHint        = "Open selected: o"
 	InstallPanelTitle      = "Install panel"
