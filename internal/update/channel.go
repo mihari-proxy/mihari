@@ -87,14 +87,20 @@ func classifyUpdate(current, latest string) (available, ahead bool) {
 		return false, false
 	}
 	normalized := strings.TrimSpace(current)
-	if _, ok := parseCanonicalTag(normalized); !ok {
+	currentTag, ok := parseCanonicalTag(normalized)
+	if !ok {
 		if normalized == "" || strings.HasPrefix(strings.ToLower(normalized), "v") {
 			return true, false
 		}
 		normalized = "v" + normalized
-		if _, ok := parseCanonicalTag(normalized); !ok {
+		currentTag, ok = parseCanonicalTag(normalized)
+		if !ok {
 			return true, false
 		}
+	}
+	latestTag, latestOK := parseCanonicalTag(latest)
+	if currentTag.isDev && latestOK && !latestTag.isDev {
+		return true, false
 	}
 	cmp, ok := compareCanonicalTags(latest, normalized)
 	if !ok {
