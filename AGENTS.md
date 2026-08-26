@@ -5,6 +5,7 @@
 - 本文件适用于整个仓库。子目录若新增 `AGENTS.md`，以离目标文件最近的规则为补充或覆盖。
 - 开始任何开发之前先阅读 `.github/CONTRIBUTING.md`；修改代码前再阅读 `README.md`、相关包代码与测试；涉及架构边界时同时阅读 `docs/superpowers/specs/2026-08-03-mihari-architecture-design.md`。
 - 禁止在 `main` 或 `dev` 分支上直接修改或提交。任何变更都必须在独立分支中完成，验证通过并经用户确认后再通过 PR 合并。
+- 指向 `dev` 的功能 PR 不得修改 `CHANGELOG.md`。CHANGELOG 只由正式发版的 `chore/release-*` PR 收口，或随 `main → dev` 同步回来。
 - `dev` 创建并受保护前，Issue #115 的 bootstrap 变更仅可通过一次性 main PR 落地；该例外不允许直接修改或提交 `main`。
 - 保留用户已有的未提交修改，不覆盖、不清理、不顺手重构无关代码。
 - 只做当前任务要求的变更。发现邻近问题时记录并说明，除非它直接阻塞当前任务，否则不要扩大范围。
@@ -170,6 +171,7 @@ $env:GOOS = 'darwin';  $env:GOARCH = 'arm64'; go build -o bin/mihari-darwin-arm6
 - 平台代码与构建标签配对，通用代码可在三个目标 OS 编译，且保持 CGO-free。
 - 修改过的 Go 文件已格式化，相关测试、race 检查和 vet 已按风险执行。
 - README、命令帮助或架构文档在用户可见行为变化时同步更新。
+- 指向 `dev` 的功能 PR 未修改 `CHANGELOG.md`（仅 `chore/release-*`、`main → dev` 同步，或恢复成与 `main` 一致时例外）。
 - `git diff` 中不含无关文件、临时产物或对用户既有修改的覆盖。
 
 ## 9. Commit 规范
