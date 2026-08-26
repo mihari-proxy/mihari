@@ -343,7 +343,7 @@ const (
 	SwitchCoreChannelRollback       = "The previous valid core remains if installation fails."
 	SwitchMihariChannelTitle        = "Switch Mihari channel"
 	SwitchMihariChannelToDevImpact  = "This TUI will track prerelease builds, which may be unstable. The running binary is not replaced now. If the current build is the same series or a newer official release, the next check may show ahead."
-	SwitchMihariChannelToMainImpact = "This TUI will track the official latest release. The running binary is not replaced now. If the current build is a canonical prerelease, the next check may show ahead."
+	SwitchMihariChannelToMainImpact = "This TUI will track the official latest release. The running binary is not replaced now. If the current build is a canonical prerelease, the next check will offer the official latest."
 	SwitchMihariChannelRollback     = "The running binary is not changed."
 )
 

@@ -637,12 +637,29 @@ func TestSelfUpdateSkipsAheadVersion(t *testing.T) {
 		checksumBody: fixtureSHA256Hex(payload) + "  mihari-linux-amd64\n",
 		binaryBody:   payload,
 	})
-	result, err := env.updater.Update(context.Background(), env.binaryPath, "v0.9.0-dev.3", ChannelMain)
+	result, err := env.updater.Update(context.Background(), env.binaryPath, "v0.9.0", ChannelMain)
 	if err != nil || result.Updated || !result.Ahead || result.Version != "v0.8.2" || result.Channel != ChannelMain {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
 	if env.checksumReqs != 0 || env.binaryReqs != 0 {
 		t.Fatalf("checksum=%d binary=%d, want 0", env.checksumReqs, env.binaryReqs)
+	}
+}
+
+func TestSelfUpdateInstallsOfficialWhenCurrentIsPrerelease(t *testing.T) {
+	payload := []byte("official-binary")
+	env := startSelfUpdateEnv(t, selfUpdateServerConfig{
+		tag:          "v0.8.2",
+		checksumBody: fixtureSHA256Hex(payload) + "  mihari-linux-amd64\n",
+		binaryBody:   payload,
+	})
+	result, err := env.updater.Update(context.Background(), env.binaryPath, "v0.9.0-dev.8", ChannelMain)
+	if err != nil || !result.Updated || result.Ahead || result.Version != "v0.8.2" || result.Channel != ChannelMain {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	got, readErr := os.ReadFile(env.binaryPath)
+	if readErr != nil || string(got) != string(payload) {
+		t.Fatalf("binary=%q err=%v", got, readErr)
 	}
 }
 
@@ -657,6 +674,7 @@ func TestSelfUpdaterCheckReportsAvailability(t *testing.T) {
 		{name: "new release", current: "v1.0.0", latest: "v1.1.0", available: true},
 		{name: "same release", current: "v1.0.0", latest: "v1.0.0"},
 		{name: "ahead of latest", current: "v2.0.0", latest: "v1.0.0", ahead: true},
+		{name: "prerelease current on main", current: "v0.9.0-dev.8", latest: "v0.8.2", available: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
