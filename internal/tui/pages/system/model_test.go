@@ -1799,17 +1799,17 @@ func TestSystemMihariVersionCheckRendersAvailable(t *testing.T) {
 
 func TestSystemMihariUpdateRendersAheadState(t *testing.T) {
 	model := New(nil, nil)
-	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.9.0-dev.3", "mihari", func() bool { return true })
+	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.9.0", "mihari", func() bool { return true })
 	model.selfCheckGeneration = 3
 	updated, _ := model.Update(selfCheckResultMsg{
 		generation: 3,
 		result: update.CheckResult{
-			Current: "v0.9.0-dev.3", Latest: "v0.8.2", Available: false, Ahead: true, Channel: update.ChannelMain,
+			Current: "v0.9.0", Latest: "v0.8.2", Available: false, Ahead: true, Channel: update.ChannelMain,
 		},
 	})
 	model = updated.(*Model)
 	view := model.View()
-	want := "v0.9.0-dev.3 · " + fmt.Sprintf(ui.UpdateMihariAhead, update.ChannelMain, "v0.8.2")
+	want := "v0.9.0 · " + fmt.Sprintf(ui.UpdateMihariAhead, update.ChannelMain, "v0.8.2")
 	if !strings.Contains(view, want) {
 		t.Fatalf("ahead view missing %q:\n%s", want, view)
 	}
@@ -1820,12 +1820,12 @@ func TestSystemMihariUpdateRendersAheadState(t *testing.T) {
 
 func TestSystemMihariAheadEnterDoesNotOfferUpdate(t *testing.T) {
 	model := New(nil, nil)
-	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.9.0-dev.3", "mihari", func() bool { return true })
+	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.9.0", "mihari", func() bool { return true })
 	model.selfCheckGeneration = 3
 	updated, _ := model.Update(selfCheckResultMsg{
 		generation: 3,
 		result: update.CheckResult{
-			Current: "v0.9.0-dev.3", Latest: "v0.8.2", Available: false, Ahead: true, Channel: update.ChannelMain,
+			Current: "v0.9.0", Latest: "v0.8.2", Available: false, Ahead: true, Channel: update.ChannelMain,
 		},
 	})
 	model = updated.(*Model)
@@ -1842,15 +1842,73 @@ func TestSystemMihariAheadEnterDoesNotOfferUpdate(t *testing.T) {
 
 func TestSystemMihariSkipUpdateKeepsAhead(t *testing.T) {
 	model := New(nil, nil)
-	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.9.0-dev.3", "mihari", func() bool { return true })
+	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.9.0", "mihari", func() bool { return true })
 	updated, _ := model.Update(selfUpdateResultMsg{
 		result: update.Result{Version: "v0.8.2", Updated: false, Ahead: true, Channel: update.ChannelMain},
 	})
 	model = updated.(*Model)
 	view := model.View()
-	want := "v0.9.0-dev.3 · " + fmt.Sprintf(ui.UpdateMihariAhead, update.ChannelMain, "v0.8.2")
+	want := "v0.9.0 · " + fmt.Sprintf(ui.UpdateMihariAhead, update.ChannelMain, "v0.8.2")
 	if !strings.Contains(view, want) {
 		t.Fatalf("skip ahead view missing %q:\n%s", want, view)
+	}
+}
+
+func TestSystemMihariPrereleaseOnMainOffersOfficialUpdate(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.9.0-dev.8", "mihari", func() bool { return true })
+	model.selfCheckGeneration = 3
+	updated, _ := model.Update(selfCheckResultMsg{
+		generation: 3,
+		result: update.CheckResult{
+			Current: "v0.9.0-dev.8", Latest: "v0.8.2", Available: true, Ahead: false, Channel: update.ChannelMain,
+		},
+	})
+	model = updated.(*Model)
+	view := model.View()
+	if !strings.Contains(view, "v0.9.0-dev.8 · v0.8.2 "+ui.UpdateMihariAvailable) {
+		t.Fatalf("available view:\n%s", view)
+	}
+	if strings.Contains(view, fmt.Sprintf(ui.UpdateMihariAhead, update.ChannelMain, "v0.8.2")) {
+		t.Fatalf("prerelease on main must not render ahead:\n%s", view)
+	}
+	model.focusID = rowMihariUpdate
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("available prerelease did not offer confirmation")
+	}
+	intent, ok := command().(ui.ActionIntentMsg)
+	if !ok || intent.Action != ui.ActionUpdateMihari || !strings.Contains(intent.Object, "v0.9.0-dev.8") || !strings.Contains(intent.Object, "v0.8.2") {
+		t.Fatalf("intent=%#v", intent)
+	}
+}
+
+func TestSystemMihariOfficialOnDevOffersPrereleaseUpdate(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.8.2", "mihari", func() bool { return true })
+	model.selfCheckGeneration = 3
+	updated, _ := model.Update(selfCheckResultMsg{
+		generation: 3,
+		result: update.CheckResult{
+			Current: "v0.8.2", Latest: "v0.9.0-dev.8", Available: true, Ahead: false, Channel: update.ChannelDev,
+		},
+	})
+	model = updated.(*Model)
+	view := model.View()
+	if !strings.Contains(view, "v0.8.2 · v0.9.0-dev.8 "+ui.UpdateMihariAvailable) {
+		t.Fatalf("available view:\n%s", view)
+	}
+	if strings.Contains(view, fmt.Sprintf(ui.UpdateMihariAhead, update.ChannelDev, "v0.9.0-dev.8")) {
+		t.Fatalf("official on dev must not render ahead:\n%s", view)
+	}
+	model.focusID = rowMihariUpdate
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("available official did not offer confirmation")
+	}
+	intent, ok := command().(ui.ActionIntentMsg)
+	if !ok || intent.Action != ui.ActionUpdateMihari || !strings.Contains(intent.Object, "v0.8.2") || !strings.Contains(intent.Object, "v0.9.0-dev.8") {
+		t.Fatalf("intent=%#v", intent)
 	}
 }
 
@@ -2689,6 +2747,38 @@ func TestSystemMihariChannelEnterConfirmsSwitchWithoutElevation(t *testing.T) {
 	}
 	runSelfCheckCmd(t, checkCmd)
 	if updater.checkCalls != 1 || updater.lastChannel != update.ChannelDev {
+		t.Fatalf("checkCalls=%d lastChannel=%q", updater.checkCalls, updater.lastChannel)
+	}
+}
+
+func TestSystemMihariChannelEnterSwitchesDevToMain(t *testing.T) {
+	model, updater, saved := mihariChannelModel(t, update.ChannelDev)
+	model.SetSelfUpdater(updater, "v0.9.0-dev.8", "mihari", func() bool { return false })
+	model.focusID = rowMihariChannel
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("expected confirmation")
+	}
+	intent, ok := command().(ui.ActionIntentMsg)
+	if !ok || intent.Action != ui.ActionSwitchMihariChannel || intent.Execute == nil || intent.Capability != "" {
+		t.Fatalf("intent=%#v", intent)
+	}
+	if intent.Title != ui.SwitchMihariChannelTitle+" to "+update.ChannelMain {
+		t.Fatalf("title=%q", intent.Title)
+	}
+	if intent.Impact != ui.SwitchMihariChannelToMainImpact || intent.Rollback != ui.SwitchMihariChannelRollback {
+		t.Fatalf("copy=%#v", intent)
+	}
+
+	updated, _ := model.Update(ui.ActionPendingMsg{Page: ui.PageSystem, Action: ui.ActionSwitchMihariChannel})
+	model = updated.(*Model)
+	result := intent.Execute()
+	_, checkCmd := model.Update(result)
+	if saved.channel != update.ChannelMain {
+		t.Fatalf("saved=%q", saved.channel)
+	}
+	runSelfCheckCmd(t, checkCmd)
+	if updater.checkCalls != 1 || updater.lastChannel != update.ChannelMain {
 		t.Fatalf("checkCalls=%d lastChannel=%q", updater.checkCalls, updater.lastChannel)
 	}
 }
