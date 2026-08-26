@@ -316,3 +316,136 @@ def test_script1_ps1_env_channel_without_flag(tmp_path: Path, github_server: Git
 def test_script1_ps1_rejects_invalid_channel(tmp_path: Path):
     result = run_install_ps1(tmp_path, ["-Channel", "stable"], {})
     assert result.returncode != 0
+
+
+INSTALL_AIO_SH = SCRIPT_DIR / "install-aio.sh"
+INSTALL_AIO_PS1 = SCRIPT_DIR / "install-aio.ps1"
+
+
+def make_aio_bundle(root: Path, windows: bool) -> Path:
+    bundle = root / "bundle"
+    bin_name = "mihari.exe" if windows else "mihari"
+    core_name = "mihomo.exe" if windows else "mihomo"
+    (bundle / "data" / "bin").mkdir(parents=True)
+    (bundle / "data" / "geoip").mkdir(parents=True)
+    (bundle / bin_name).write_bytes(b"mihari-bin")
+    (bundle / "data" / "bin" / core_name).write_bytes(b"mihomo-bin")
+    (bundle / "data" / "bin" / "core-channel").write_text("stable\n", encoding="utf-8")
+    (bundle / "data" / "geoip" / "GeoLite2-Country.mmdb").write_bytes(b"country")
+    (bundle / "data" / "geoip" / "GeoLite2-ASN.mmdb").write_bytes(b"asn")
+    return bundle
+
+
+def run_install_aio_sh(tmp_path: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+    shell = posix_shell()
+    assert shell is not None
+    env = os.environ.copy()
+    env.pop("MIHARI_CHANNEL", None)
+    env["MIHARI_INSTALL_TEST_MODE"] = "1"
+    env["MIHARI_BIN"] = str(tmp_path / "bin")
+    env["MIHARI_DATA"] = str(tmp_path / "data")
+    env["HOME"] = str(tmp_path / "home")
+    sh_args = [Path(arg).as_posix() if ":\\" in arg or arg.startswith("\\\\") else arg for arg in args]
+    return subprocess.run(
+        [shell, Path(INSTALL_AIO_SH).as_posix(), *sh_args],
+        cwd=str(SCRIPT_DIR),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        errors="replace",
+        timeout=30,
+    )
+
+
+def run_install_aio_ps1(tmp_path: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+    exe = powershell()
+    assert exe is not None
+    env = os.environ.copy()
+    env.pop("MIHARI_CHANNEL", None)
+    env["MIHARI_INSTALL_TEST_MODE"] = "1"
+    env["MIHARI_BIN"] = str(tmp_path / "bin")
+    env["MIHARI_DATA"] = str(tmp_path / "data")
+    ps_path = str(INSTALL_AIO_PS1).replace("\\", "/")
+    pieces = []
+    i = 0
+    while i < len(args):
+        token = args[i]
+        if token.startswith("-") and i + 1 < len(args) and not args[i + 1].startswith("-"):
+            pieces.append(token)
+            pieces.append("'{0}'".format(args[i + 1].replace("'", "''")))
+            i += 2
+            continue
+        pieces.append("'{0}'".format(token.replace("'", "''")))
+        i += 1
+    invoke = " ".join(pieces)
+    command = (
+        "$ErrorActionPreference='Stop'; "
+        f"$code = [IO.File]::ReadAllText('{ps_path}', [Text.Encoding]::UTF8); "
+        f"& ([scriptblock]::Create($code)) {invoke}"
+    )
+    return subprocess.run(
+        [exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+        cwd=str(SCRIPT_DIR),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        errors="replace",
+        timeout=60,
+    )
+
+
+@requires_sh
+def test_script2_sh_channel_dev_does_not_use_flag_as_bundle_dir(tmp_path: Path):
+    bundle = make_aio_bundle(tmp_path, windows=False)
+    for args in (["--channel", "dev", str(bundle)], ["--channel=dev", str(bundle)], [str(bundle), "--channel", "dev"]):
+        sidecar = tmp_path / "data" / "mihari-channel"
+        if sidecar.exists():
+            sidecar.unlink()
+        result = run_install_aio_sh(tmp_path, args)
+        assert result.returncode == 0, result.stderr + " args=" + str(args)
+        assert sidecar.read_text(encoding="utf-8") == "dev\n"
+        assert (tmp_path / "data" / "bin" / "core-channel").read_text(encoding="utf-8") == "stable\n"
+
+
+@requires_sh
+def test_script2_sh_unspecified_does_not_write_or_delete(tmp_path: Path):
+    bundle = make_aio_bundle(tmp_path, windows=False)
+    data = tmp_path / "data"
+    data.mkdir()
+    sidecar = data / "mihari-channel"
+    sidecar.write_text("main\n", encoding="utf-8")
+    yaml_path = data / "mihari.yaml"
+    yaml_path.write_text("keep: true\n", encoding="utf-8")
+    result = run_install_aio_sh(tmp_path, [str(bundle)])
+    assert result.returncode == 0, result.stderr
+    assert sidecar.read_text(encoding="utf-8") == "main\n"
+    assert yaml_path.read_text(encoding="utf-8") == "keep: true\n"
+
+
+@requires_ps
+def test_script2_ps1_channel_writes_sidecar_keeps_core_channel(tmp_path: Path):
+    bundle = make_aio_bundle(tmp_path, windows=True)
+    data = tmp_path / "data"
+    data.mkdir()
+    yaml_path = data / "mihari.yaml"
+    yaml_path.write_text("keep: true\n", encoding="utf-8")
+    result = run_install_aio_ps1(tmp_path, ["-BundleDir", str(bundle), "-Channel", "dev"])
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert (data / "mihari-channel").read_text(encoding="utf-8") == "dev\n"
+    assert (data / "bin" / "core-channel").read_text(encoding="utf-8") == "stable\n"
+    assert yaml_path.read_text(encoding="utf-8") == "keep: true\n"
+
+
+@requires_ps
+def test_script2_ps1_unspecified_leaves_sidecar(tmp_path: Path):
+    bundle = make_aio_bundle(tmp_path, windows=True)
+    data = tmp_path / "data"
+    data.mkdir()
+    sidecar = data / "mihari-channel"
+    sidecar.write_text("main\n", encoding="utf-8")
+    result = run_install_aio_ps1(tmp_path, ["-BundleDir", str(bundle)])
+    assert result.returncode == 0, result.stderr
+    assert sidecar.read_text(encoding="utf-8") == "main\n"
+

@@ -15,13 +15,15 @@
 # Environment overrides:
 #   $env:MIHARI_BIN    mihari binary install dir (default %LOCALAPPDATA%\Programs\mihari)
 #   $env:MIHARI_DATA   data root (default %USERPROFILE%\.mihari)
-param([string]$BundleDir = $PSScriptRoot)
+param([string]$BundleDir, [string]$Channel)
 $ErrorActionPreference = 'Stop'
-
-if (-not $BundleDir) { $BundleDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path } }
 
 function Info($m) { Write-Host "* $m" -ForegroundColor Cyan }
 function Fail($m) { Write-Host "error: $m" -ForegroundColor Red; throw $m }
+
+if (-not $BundleDir) { $BundleDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path } }
+if (-not $Channel -and $env:MIHARI_CHANNEL) { $Channel = $env:MIHARI_CHANNEL }
+if ($Channel -and $Channel -notin @('main', 'dev')) { Fail 'mihari channel must be main or dev' }
 # Invoke-MihariService runs a `mihari service ...` step, elevating via UAC when
 # the current session is not admin (service control needs elevation on Windows).
 function Invoke-MihariService([string[]]$ServiceArgs) {
@@ -50,24 +52,27 @@ $isAdmin = ([Security.Principal.WindowsPrincipal] `
   [Security.Principal.WindowsIdentity]::GetCurrent()
   ).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
 
-# A running service / foreground process holds an open handle on mihari.exe and
-# the MMDBs — stop both before overwriting (mirrors install.ps1's svcRunning
-# branch and adds the foreground-daemon lock the aio overlay introduces).
-$svc = Get-Service -Name 'mihari' -ErrorAction SilentlyContinue
-$svcRunning = $svc -and $svc.Status -eq 'Running'
-$proc = Get-Process -Name 'mihari' -ErrorAction SilentlyContinue
-$stopSteps = @()
-if ($svcRunning) { $stopSteps += 'Stop-Service -Name mihari -Force' }
-if ($proc) { $stopSteps += 'Stop-Process -Name mihari -Force -ErrorAction SilentlyContinue' }
-if ($stopSteps.Count -gt 0) {
-  Info '检测到运行中的 mihari，停止以释放文件锁…'
-  $stopCmd = $stopSteps -join '; '
-  if ($isAdmin) {
-    Invoke-Expression $stopCmd
-  } else {
-    Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile', '-Command', $stopCmd
+$svc = $null
+if ($env:MIHARI_INSTALL_TEST_MODE -ne '1') {
+  # A running service / foreground process holds an open handle on mihari.exe and
+  # the MMDBs — stop both before overwriting (mirrors install.ps1's svcRunning
+  # branch and adds the foreground-daemon lock the aio overlay introduces).
+  $svc = Get-Service -Name 'mihari' -ErrorAction SilentlyContinue
+  $svcRunning = $svc -and $svc.Status -eq 'Running'
+  $proc = Get-Process -Name 'mihari' -ErrorAction SilentlyContinue
+  $stopSteps = @()
+  if ($svcRunning) { $stopSteps += 'Stop-Service -Name mihari -Force' }
+  if ($proc) { $stopSteps += 'Stop-Process -Name mihari -Force -ErrorAction SilentlyContinue' }
+  if ($stopSteps.Count -gt 0) {
+    Info '检测到运行中的 mihari，停止以释放文件锁…'
+    $stopCmd = $stopSteps -join '; '
+    if ($isAdmin) {
+      Invoke-Expression $stopCmd
+    } else {
+      Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile', '-Command', $stopCmd
+    }
+    Start-Sleep -Seconds 1
   }
-  Start-Sleep -Seconds 1
 }
 
 # 1. mihari binary -> binDir.
@@ -75,11 +80,13 @@ Info "安装 mihari 到 $dest"
 Copy-Item -LiteralPath $mihariSrc -Destination $dest -Force
 
 # Add install dir to the user PATH if missing (mirrors install.ps1).
-$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-if ($userPath -and $userPath -notlike "*$binDir*") {
-  Info "将 $binDir 加入 PATH"
-  [Environment]::SetEnvironmentVariable('Path', "$userPath;$binDir", 'User')
-  $env:Path = "$env:Path;$binDir"
+if ($env:MIHARI_INSTALL_TEST_MODE -ne '1') {
+  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+  if ($userPath -and $userPath -notlike "*$binDir*") {
+    Info "将 $binDir 加入 PATH"
+    [Environment]::SetEnvironmentVariable('Path', "$userPath;$binDir", 'User')
+    $env:Path = "$env:Path;$binDir"
+  }
 }
 
 # 2. Data overlay -> MIHARI_DATA (bundle authoritative for core + GeoIP; user
@@ -94,6 +101,17 @@ if (Test-Path -LiteralPath $sidecarSrc) {
 }
 Copy-Item -LiteralPath (Join-Path $BundleDir 'data\geoip\GeoLite2-Country.mmdb') -Destination (Join-Path $dataDir 'geoip\GeoLite2-Country.mmdb') -Force
 Copy-Item -LiteralPath (Join-Path $BundleDir 'data\geoip\GeoLite2-ASN.mmdb') -Destination (Join-Path $dataDir 'geoip\GeoLite2-ASN.mmdb') -Force
+
+if ($Channel) {
+  $channelRoot = if ($env:MIHARI_DATA) { $env:MIHARI_DATA } else { Join-Path $env:USERPROFILE '.mihari' }
+  New-Item -ItemType Directory -Force -Path $channelRoot | Out-Null
+  $channelPath = Join-Path $channelRoot 'mihari-channel'
+  $channelTmp = Join-Path $channelRoot ('.mihari-channel.tmp-' + [Guid]::NewGuid().ToString('N'))
+  [IO.File]::WriteAllText($channelTmp, ($Channel + "`n"))
+  Move-Item -LiteralPath $channelTmp -Destination $channelPath -Force
+}
+
+if ($env:MIHARI_INSTALL_TEST_MODE -eq '1') { return }
 
 # 3. Service: reinstall when registered (re-stages the service copy from the
 #    freshly installed PATH binary, closing the "service vs PATH" version drift),
