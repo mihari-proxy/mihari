@@ -46,7 +46,7 @@ jobs:
       - name: Test release safety policies
         env:
           PYTHONPATH: ${{ github.workspace }}/scripts/release
-        run: python -m pytest scripts/release/tests/test_release_policy.py scripts/release/tests/test_github_release_policy.py scripts/release/tests/test_release_workflow.py scripts/release/tests/test_alist_client.py scripts/release/tests/test_alist_index.py scripts/release/tests/test_release_alist.py scripts/release/tests/test_retract_alist.py scripts/release/tests/test_regenerate_index.py scripts/release/tests/test_alist_channel_guard.py -q
+        run: python -m pytest scripts/release/tests/test_release_policy.py scripts/release/tests/test_github_release_policy.py scripts/release/tests/test_changelog_policy.py scripts/release/tests/test_release_workflow.py scripts/release/tests/test_alist_client.py scripts/release/tests/test_alist_index.py scripts/release/tests/test_release_alist.py scripts/release/tests/test_retract_alist.py scripts/release/tests/test_regenerate_index.py scripts/release/tests/test_alist_channel_guard.py -q
       - name: Test
         run: go test -count=1 ./...
 

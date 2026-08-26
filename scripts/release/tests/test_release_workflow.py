@@ -31,6 +31,7 @@ DESIGN_DOCUMENT = (
 RELEASE_SAFETY_TESTS = (
     "scripts/release/tests/test_release_policy.py "
     "scripts/release/tests/test_github_release_policy.py "
+    "scripts/release/tests/test_changelog_policy.py "
     "scripts/release/tests/test_release_workflow.py "
     "scripts/release/tests/test_alist_client.py "
     "scripts/release/tests/test_alist_index.py "
@@ -1502,6 +1503,68 @@ def test_release_document_uses_main_dispatch_as_the_stable_runbook():
     assert "不要把本地创建并推送 tag 作为当前稳定发版操作" in runbook
     assert "兼容入口仍接受 `v*` tag push" in stable_dispatch
     assert "不作为当前人工 runbook" in stable_dispatch
+
+
+def test_stable_release_validates_changelog_before_build_and_publish():
+    workflow = STABLE_WORKFLOW.read_text(encoding="utf-8")
+    document = yaml.safe_load(workflow)
+    resolve_steps = document["jobs"]["resolve"]["steps"]
+    release_steps = document["jobs"]["release"]["steps"]
+
+    resolve_source = next(
+        index for index, step in enumerate(resolve_steps) if step.get("name") == "Resolve immutable source commit"
+    )
+    resolve_changelog = next(
+        index for index, step in enumerate(resolve_steps) if step.get("name") == "Validate stable changelog"
+    )
+    release_gate = next(
+        index for index, step in enumerate(release_steps) if step.get("name") == "Version gate (final)"
+    )
+    release_changelog = next(
+        index for index, step in enumerate(release_steps) if step.get("name") == "Validate stable changelog"
+    )
+    release_tag = next(
+        index
+        for index, step in enumerate(release_steps)
+        if step.get("name") == "Create or verify current stable tag"
+    )
+
+    assert resolve_source < resolve_changelog
+    assert release_gate < release_changelog < release_tag
+    assert resolve_steps[resolve_changelog]["if"] == "steps.gate.outputs.should_resolve == 'true'"
+    for step in (resolve_steps[resolve_changelog], release_steps[release_changelog]):
+        run = step["run"]
+        assert "scripts/release/changelog_policy.py" in run
+        assert "--changelog CHANGELOG.md" in run
+        assert '--version "${VERSION}"' in run
+        assert "echo" not in run
+        assert "${VERSION}" not in run.replace('"${VERSION}"', "")
+
+
+def test_dev_release_does_not_require_changelog_gate():
+    dev_release = WORKFLOW.read_text(encoding="utf-8")
+    retract_dev = RETRACT_DEV_WORKFLOW.read_text(encoding="utf-8")
+    retract_stable = STABLE_RETRACT_WORKFLOW.read_text(encoding="utf-8")
+
+    for document in (dev_release, retract_dev, retract_stable):
+        assert "changelog_policy.py" not in document
+        assert "Validate stable changelog" not in document
+
+
+def test_release_document_requires_changelog_gate_for_stable_only():
+    release = RELEASE_DOCUMENT.read_text(encoding="utf-8")
+    runbook = _markdown_section(release, "## 发版流程")
+    stable_dispatch = _markdown_section(release, "## 手动触发发布")
+    checklist = _markdown_section(release, "## CI/CD 检查项")
+    dev_dispatch = stable_dispatch[stable_dispatch.index("### Dev 手动发布") :]
+
+    assert "CHANGELOG" in runbook
+    assert "Unreleased" in runbook
+    assert "fail closed" in runbook.lower() or "fail-closed" in runbook.lower() or "fail closed" in checklist.lower()
+    assert "`release.yml`" in checklist or "release.yml" in checklist
+    assert "CHANGELOG" in checklist
+    assert "dev" in dev_dispatch.lower()
+    assert "不要求" in dev_dispatch or "不必" in dev_dispatch or "不校验 CHANGELOG" in dev_dispatch
 
 
 def test_release_documents_scope_existing_asset_preflight_to_dev():

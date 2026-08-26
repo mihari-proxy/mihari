@@ -9,6 +9,10 @@
 - 增加 Mihari 应用通道 main/dev（安装脚本、CLI、TUI；#125）。
 - 为 prerelease 通道增加独立 AList index（`/mihari-release/mihari-dev`）与 `retract-dev` 撤回入口（#126）。
 
+### Changed
+
+- 正式版 `release.yml` 在构建与发布前校验 CHANGELOG 已收口到目标版本节；dev 预发布不校验。
+
 ### Fixed
 
 - 兼容当前 AList `/api/fs/list` 不再返回分页字段的响应，避免发版脚本拒绝合法目录 listing。

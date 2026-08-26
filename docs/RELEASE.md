@@ -50,7 +50,7 @@ git pull origin main
 
 ### 3. 记录精确 main commit
 
-确认 CHANGELOG 与 release input lock 已随晋级 PR 进入 `main`，记录远端 `main` 当前精确的 40 位小写 commit SHA：
+确认 CHANGELOG 与 release input lock 已随晋级 PR 进入 `main`。CHANGELOG 必须把 `[Unreleased]` 收口为 `## [vX.Y.Z] - YYYY-MM-DD`：该节至少一条条目，且是 Unreleased 后的第一个版本节；Unreleased 下不得再留 bullet。`release.yml` 会在构建前和发布前读取同一 SHA 上的 `CHANGELOG.md`，不满足则 fail closed。记录远端 `main` 当前精确的 40 位小写 commit SHA：
 
 ```bash
 git rev-parse origin/main
@@ -175,6 +175,8 @@ Get-FileHash mihari-windows-amd64.exe -Algorithm SHA256
 
 ### Dev 手动发布
 
+`release-dev.yml` 不校验 CHANGELOG。预发布把用户可见条目继续记在 `[Unreleased]`，正式版晋级前再收口。
+
 从 GitHub Actions 选择 `release-dev` workflow 和受保护的 `dev` ref，填写符合 canonical `vX.Y.Z-dev.N` 格式的版本（各数字段不允许前导零）。workflow 先创建或复用 GitHub dev tag、prerelease 并上传精确 14 个 assets；GitHub 最终验收成功后，若 `ALIST_URL` 存在则写入独立 AList 根目录 `/mihari-release/mihari-dev` 及其 `index.txt`。`v0.9.0-dev.2` 已按 GitHub-only 路径发布并完成公开资产验收。不回溯该历史版本是首次真实 dispatch 的人工操作规则：workflow 不会因历史 GitHub-only 版本自动拒绝；空的 dev AList 根上重跑会创建通道并写入该版本。请从本变更后的下一个 `vX.Y.Z-dev.N` 开始写入 AList。
 
 AList 是否启用只由 `ALIST_URL` 决定：URL 缺失时 skip AList，GitHub prerelease 仍成功；URL 存在但 `ALIST_USERNAME` 或 `ALIST_PASSWORD` 任一缺失时，客户端 fail closed，workflow 失败。dev 发布与 `retract-dev.yml` 共用 job 级并发组 `mihari-dev-alist`。公开 dev index 为 `https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt`。dev 根目录不上传 `install-aio-remote.sh` / `.ps1`；稳定安装入口仍使用 `/mihari-release/mihari/index.txt`，不会指向 dev。
@@ -216,7 +218,7 @@ dev 撤回使用并发组 `mihari-dev-alist`，不得修改稳定目录、稳定
 - [ ] 所有测试通过 (`go test -race ./...`)
 - [ ] 代码格式正确 (`gofmt -l .`)
 - [ ] 静态分析通过 (`go vet ./...`)
-- [ ] [CHANGELOG.md](../CHANGELOG.md) 已更新
-- [ ] 标签版本号与 CHANGELOG.md 一致
+- [ ] [CHANGELOG.md](../CHANGELOG.md) 已将 `[Unreleased]` 收口到目标版本节，且 Unreleased 无残留条目；`release.yml` 会 fail closed 校验
+- [ ] 标签版本号与 CHANGELOG.md 中的版本节一致
 - [ ] `go.mod` 仍钉死 Go 1.26.5，发布构建仍使用 `-buildvcs=false -trimpath`
 - [ ] `scripts/release/release-inputs.lock.json` 已在 release-prep PR 中更新（如需）并审核 diff；release workflow 未动态解析 latest/ref
