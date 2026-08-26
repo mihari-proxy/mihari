@@ -45,6 +45,19 @@ def fail(message):
     sys.exit(1)
 
 
+def storage_root_entries(alist):
+    try:
+        entries = alist.list_dir("/")
+    except Exception:
+        fail("unable to inspect release root")
+    if not isinstance(entries, list):
+        fail("unable to inspect release root")
+    mihari = [e for e in entries if isinstance(e, dict) and e.get("name") == "mihari"]
+    if len(mihari) != 1 or mihari[0].get("is_dir") is not True:
+        fail("unable to inspect release root")
+    return entries
+
+
 def info(message):
     print(f"::notice::{message}")
 
@@ -107,6 +120,7 @@ class AList:
         while True:
             data = self._post(
                 "/api/fs/list",
+                allowed_codes=(200, 500),
                 json={
                     "path": self._fs_path(path),
                     "password": "",
@@ -115,44 +129,66 @@ class AList:
                     "refresh": False,
                 },
             )
+            if data.get("code") == 500:
+                message = data.get("message")
+                missing = (
+                    page == 1
+                    and not entries
+                    and data.get("data") is None
+                    and isinstance(message, str)
+                    and "object not found" in message.lower()
+                )
+                if not missing:
+                    raise AListError("alist operation failed")
+                return []
             payload = data.get("data")
             if not isinstance(payload, dict) or "content" not in payload:
                 raise AListError("invalid directory listing")
             content = payload["content"]
             if content is None:
                 content = []
-            fields = (
-                payload.get("total"),
-                payload.get("page"),
-                payload.get("per_page"),
-                payload.get("has_more"),
-                payload.get("pages_total"),
-            )
-            total, response_page, per_page, has_more, pages_total = fields
-            integer_fields = (total, response_page, per_page, pages_total)
-            if (
-                not isinstance(content, list)
-                or any(not isinstance(value, int) or isinstance(value, bool) for value in integer_fields)
-                or not isinstance(has_more, bool)
-            ):
-                raise AListError("invalid directory listing")
-            expected_page_count = min(
-                LIST_PAGE_SIZE, max(total - (page - 1) * LIST_PAGE_SIZE, 0)
-            )
-            if (
-                total < 0
-                or response_page != page
-                or per_page != LIST_PAGE_SIZE
-                or pages_total != (total + LIST_PAGE_SIZE - 1) // LIST_PAGE_SIZE
-                or has_more != (page < pages_total)
-                or len(content) != expected_page_count
-            ):
-                raise AListError("invalid directory listing")
-            if expected_total is None:
-                expected_total = total
-                expected_pages = pages_total
-            elif total != expected_total or pages_total != expected_pages:
-                raise AListError("invalid directory listing")
+            total = payload.get("total")
+            response_page = payload.get("page")
+            per_page = payload.get("per_page")
+            has_more = payload.get("has_more")
+            pages_total = payload.get("pages_total")
+            pagination = (response_page, per_page, has_more, pages_total)
+            unpaged = all(value is None for value in pagination)
+            if unpaged:
+                if (
+                    not isinstance(content, list)
+                    or not isinstance(total, int)
+                    or isinstance(total, bool)
+                    or total < 0
+                    or page != 1
+                ):
+                    raise AListError("invalid directory listing")
+                has_more = False
+            else:
+                integer_fields = (total, response_page, per_page, pages_total)
+                if (
+                    not isinstance(content, list)
+                    or any(not isinstance(value, int) or isinstance(value, bool) for value in integer_fields)
+                    or not isinstance(has_more, bool)
+                ):
+                    raise AListError("invalid directory listing")
+                expected_page_count = min(
+                    LIST_PAGE_SIZE, max(total - (page - 1) * LIST_PAGE_SIZE, 0)
+                )
+                if (
+                    total < 0
+                    or response_page != page
+                    or per_page != LIST_PAGE_SIZE
+                    or pages_total != (total + LIST_PAGE_SIZE - 1) // LIST_PAGE_SIZE
+                    or has_more != (page < pages_total)
+                    or len(content) != expected_page_count
+                ):
+                    raise AListError("invalid directory listing")
+                if expected_total is None:
+                    expected_total = total
+                    expected_pages = pages_total
+                elif total != expected_total or pages_total != expected_pages:
+                    raise AListError("invalid directory listing")
             for entry in content:
                 if (
                     not isinstance(entry, dict)

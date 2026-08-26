@@ -88,7 +88,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           OUT="mihari-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
-          go build -trimpath -ldflags "-s -w -X github.com/mihari-proxy/mihari/internal/buildinfo.Version=${VERSION}" -o "dist/${OUT}" ./cmd/mihari
+          go build -buildvcs=false -trimpath -ldflags "-s -w -X github.com/mihari-proxy/mihari/internal/buildinfo.Version=${VERSION}" -o "dist/${OUT}" ./cmd/mihari
 
       - uses: actions/upload-artifact@v7
         with:
@@ -122,10 +122,10 @@ jobs:
           merge-multiple: true
 
       - name: Build all-in-one bundles
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          go run ./scripts/build-all-in-one --mihari-dir dist --out bundles --platforms "${PLATFORMS}"
+          go run ./scripts/tools/build-all-in-one \
+            --lock scripts/release/release-inputs.lock.json \
+            --mihari-dir dist --out bundles --platforms "${PLATFORMS}"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -136,6 +136,9 @@ jobs:
     name: publish dev prerelease
     needs: [resolve, build, bundle]
     runs-on: ubuntu-latest
+    concurrency:
+      group: mihari-dev-alist
+      cancel-in-progress: false
     permissions:
       contents: write
     env:
@@ -143,6 +146,8 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       DEV_RELEASE_NAME: Mihari ${{ inputs.version }} (dev)
       DEV_RELEASE_BODY: "This is a Mihari development release.\n\n<!-- github-release-dev -->"
+      ALIST_CONFIGURED: ${{ secrets.ALIST_URL != '' }}
+      MIHARI_KEEP_VERSIONS: ${{ vars.MIHARI_KEEP_VERSIONS }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -169,12 +174,12 @@ jobs:
         run: |
           gh api "repos/${GITHUB_REPOSITORY}/releases/latest" > /tmp/latest-before.json 2> /tmp/latest-before.err \
             || { echo "::error::unable to read stable latest release"; exit 1; }
-          python scripts/github_release_policy.py latest \
+          python scripts/release/github_release_policy.py latest \
             --before /tmp/latest-before.json --after /tmp/latest-before.json --dev-version "${VERSION}"
 
       - name: Validate expected local asset set
         run: |
-          python scripts/github_release_policy.py assets > /tmp/expected-assets
+          python scripts/release/github_release_policy.py assets > /tmp/expected-assets
           find dist -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > /tmp/local-assets
           cmp -s /tmp/expected-assets /tmp/local-assets \
             || { echo "::error::local release assets do not match the fixed dev asset set"; exit 1; }
@@ -207,7 +212,7 @@ jobs:
             done
             [ "${tag_type}" != tag ] || { echo "::error::release tag peel exceeds the allowed depth"; return 1; }
             jq -s . /tmp/tag-chain.jsonl > /tmp/tag-chain.json
-            python scripts/github_release_policy.py tag-chain --chain /tmp/tag-chain.json --expected-sha "${SHA}"
+            python scripts/release/github_release_policy.py tag-chain --chain /tmp/tag-chain.json --expected-sha "${SHA}"
           }
 
           set +e
@@ -217,7 +222,7 @@ jobs:
           if [ "${status}" -eq 0 ]; then
             touch /tmp/release-exists
             verify_tag_ref
-            python scripts/github_release_policy.py release \
+            python scripts/release/github_release_policy.py release \
               --document /tmp/preflight-release.json --version "${VERSION}" \
               --release-name "${DEV_RELEASE_NAME}" --marker "<!-- github-release-dev -->" --mode preflight
             mkdir -p /tmp/release-assets
@@ -263,7 +268,7 @@ jobs:
             done
             [ "${tag_type}" != tag ] || { echo "::error::release tag peel exceeds the allowed depth"; return 1; }
             jq -s . /tmp/tag-chain.jsonl > /tmp/tag-chain.json
-            python scripts/github_release_policy.py tag-chain --chain /tmp/tag-chain.json --expected-sha "${SHA}"
+            python scripts/release/github_release_policy.py tag-chain --chain /tmp/tag-chain.json --expected-sha "${SHA}"
           }
 
           set +e
@@ -289,8 +294,13 @@ jobs:
               -f "target_commitish=${SHA}" \
               -f "name=${DEV_RELEASE_NAME}" \
               -f "body=${DEV_RELEASE_BODY}" \
-              -F prerelease=true -F draft=false -F make_latest=false > /tmp/release-create.json 2> /tmp/release-create.err \
-              || { echo "::error::unable to create dev prerelease"; exit 1; }
+              -F prerelease=true -F draft=false -f make_latest=false > /tmp/release-create.json 2> /tmp/release-create.err \
+              || {
+                cat /tmp/release-create.json >&2
+                cat /tmp/release-create.err >&2
+                echo "::error::unable to create dev prerelease"
+                exit 1
+              }
           fi
           while IFS= read -r asset; do
             [ -n "${asset}" ] || continue
@@ -326,7 +336,7 @@ jobs:
             done
             [ "${tag_type}" != tag ] || { echo "::error::final release tag peel exceeds the allowed depth"; return 1; }
             jq -s . /tmp/final-tag-chain.jsonl > /tmp/final-tag-chain.json
-            python scripts/github_release_policy.py tag-chain --chain /tmp/final-tag-chain.json --expected-sha "${SHA}"
+            python scripts/release/github_release_policy.py tag-chain --chain /tmp/final-tag-chain.json --expected-sha "${SHA}"
           }
 
           download_and_verify_assets() {
@@ -346,12 +356,102 @@ jobs:
 
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${VERSION}" > /tmp/final-release.json 2> /tmp/final-release.err \
             || { echo "::error::unable to read final dev prerelease"; exit 1; }
-          python scripts/github_release_policy.py release \
+          python scripts/release/github_release_policy.py release \
             --document /tmp/final-release.json --version "${VERSION}" \
             --release-name "${DEV_RELEASE_NAME}" --marker "<!-- github-release-dev -->" --mode final
           download_and_verify_assets
           verify_final_tag_ref
           gh api "repos/${GITHUB_REPOSITORY}/releases/latest" > /tmp/latest-after.json 2> /tmp/latest-after.err \
             || { echo "::error::unable to read stable latest release after publication"; exit 1; }
-          python scripts/github_release_policy.py latest \
+          python scripts/release/github_release_policy.py latest \
             --before /tmp/latest-before.json --after /tmp/latest-after.json --dev-version "${VERSION}"
+
+      - uses: actions/setup-python@v7
+        if: env.ALIST_CONFIGURED == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Publish to AList drive
+        id: alist_mutation
+        if: env.ALIST_CONFIGURED == 'true'
+        env:
+          ALIST_URL: ${{ secrets.ALIST_URL }}
+          ALIST_USERNAME: ${{ secrets.ALIST_USERNAME }}
+          ALIST_PASSWORD: ${{ secrets.ALIST_PASSWORD }}
+        run: |
+          python -m pip install --disable-pip-version-check -r scripts/release/requirements.txt
+          python scripts/release/alist_channel_guard.py snapshot \
+            --path /mihari-release/mihari/index.txt \
+            --output-dir "${RUNNER_TEMP}/mihari-index-backup/stable-isolation"
+          set +e
+          python scripts/release/release-alist.py \
+            --version "${VERSION}" \
+            --dist-dir dist \
+            --repo-root . \
+            --channel dev \
+            --commit-sha "${SHA}" \
+            --base-path /mihari-release/mihari-dev \
+            --keep-versions "${MIHARI_KEEP_VERSIONS:-5}"
+          publish_status=$?
+          python scripts/release/alist_channel_guard.py compare \
+            --path /mihari-release/mihari/index.txt \
+            --expected-dir "${RUNNER_TEMP}/mihari-index-backup/stable-isolation"
+          compare_status=$?
+          set -e
+          if [ "${compare_status}" -ne 0 ]; then exit "${compare_status}"; fi
+          exit "${publish_status}"
+
+      - name: Upload dev index recovery backup
+        if: "env.ALIST_CONFIGURED == 'true' && ((failure() && steps.alist_mutation.outcome == 'failure') || (cancelled() && steps.alist_mutation.outcome == 'cancelled'))"
+        uses: actions/upload-artifact@v7
+        with:
+          name: dev-index-backup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mihari-index-backup/dev/**
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload stable index isolation snapshot
+        if: "env.ALIST_CONFIGURED == 'true' && ((failure() && steps.alist_mutation.outcome == 'failure') || (cancelled() && steps.alist_mutation.outcome == 'cancelled'))"
+        uses: actions/upload-artifact@v7
+        with:
+          name: stable-index-isolation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mihari-index-backup/stable-isolation/**
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Re-verify stable latest after AList mutation
+        if: env.ALIST_CONFIGURED == 'true'
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/releases/latest" > /tmp/latest-after-alist.json 2> /tmp/latest-after-alist.err \
+            || { echo "::error::unable to read stable latest release after AList mutation"; exit 1; }
+          python scripts/release/github_release_policy.py latest \
+            --before /tmp/latest-before.json --after /tmp/latest-after-alist.json --dev-version "${VERSION}"
+
+      - name: Append prerelease AList install hook to release notes
+        if: env.ALIST_CONFIGURED == 'true'
+        run: |
+          NOTES="$(gh release view "${VERSION}" --json body -q .body)"
+          MARKER='<!-- aio-install-dev -->'
+          if printf '%s' "$NOTES" | grep -qF "$MARKER"; then
+            echo "dev aio-install section already present — skipping"
+            exit 0
+          fi
+          cat > /tmp/aio_append_dev.md <<'TEMPLATE'
+
+          <!-- aio-install-dev -->
+          ## 国内 prerelease 安装（AList，免 GitHub；覆盖 index，不改默认稳定入口）
+
+          Linux / macOS：
+
+          ```bash
+          curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.sh | MIHARI_INDEX_URL=https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt bash
+          ```
+
+          Windows (PowerShell)：
+
+          ```powershell
+          $env:MIHARI_INDEX_URL='https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt'
+          & ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1)))
+          ```
+          TEMPLATE
+          gh release edit "${VERSION}" --notes "$(printf '%s\n%s\n' "$NOTES" "$(cat /tmp/aio_append_dev.md)")"

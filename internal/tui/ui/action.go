@@ -12,6 +12,7 @@ const (
 	ActionRestartCore             Action = "restart-core"
 	ActionUpdateCore              Action = "update-core"
 	ActionSwitchCoreChannel       Action = "switch-core-channel"
+	ActionSwitchMihariChannel     Action = "switch-mihari-channel"
 	ActionUpdateMihari            Action = "update-mihari"
 	ActionApplyEndpointChange     Action = "apply-endpoint-change"
 	ActionSelectProxy             Action = "select-proxy"

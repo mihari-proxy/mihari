@@ -17,6 +17,7 @@
 - [ ] `go vet ./...` 通过
 - [ ] `gofmt -l cmd internal` 无输出
 - [ ] 提交包含 `Signed-off-by`（DCO 签名）
+- [ ] 未修改 `CHANGELOG.md`（`chore/release-*` 正式发版收口，或恢复成与 `main` 一致除外）
 - [ ] 若修改了 `internal/control/protocol` 的契约、CLI 输出/退出码或跨平台行为，已在 PR 描述中说明影响
 
 ## 相关 Issues

@@ -37,7 +37,7 @@ curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/insta
 
 > 命令中的网址是 AList 网盘的固定公开直链（签名已关闭），永久不变，复制即用。
 
-Batch A 中，dev 发布代码已准备，远程 dev/试发需另行授权；获授权后的 P1 只写 GitHub dev tag、prerelease 与 14 个 assets，不写 AList。P1 试发的前置条件是 `/releases/latest` 已能返回合法的 stable GitHub Release，缺少时会在 dev mutation 前 fail closed。P2 AList 发布与撤回 workflow 尚不可用，因此当前没有 dev AList 版本目录或下载命令；稳定安装入口不会指向 dev。
+GitHub dev prerelease `v0.9.0-dev.2` 已发布并完成精确 14 个 assets 的公开验收，当时未写 AList。独立 dev AList 根目录为 `/mihari-release/mihari-dev`，公开 index 为 `https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt`；稳定安装入口仍读取 `/mihari-release/mihari/index.txt`，不会指向 dev。历史 `v0.9.0-dev.2` 不回溯到 AList。
 
 脚本3 下载器的执行流程：
 
@@ -64,16 +64,47 @@ sh install-aio.sh        # Windows: powershell -File install-aio.ps1
 |------|--------|------|
 | `MIHARI_BIN` | `/usr/local/bin`（Linux/macOS）<br>`%LOCALAPPDATA%\Programs\mihari`（Windows） | mihari 二进制安装目录 |
 | `MIHARI_DATA` | `$HOME/.mihari`（Linux/macOS）<br>`%USERPROFILE%\.mihari`（Windows） | 数据根目录（核心 + GeoIP 落地处） |
-| `MIHARI_INDEX_URL` | 公开直链（见脚本默认值） | index.txt 公开直链（脚本3） |
+| `MIHARI_INDEX_URL` | 公开直链（见脚本默认值） | index.txt 公开直链（脚本3）；默认仍是稳定 `/mihari-release/mihari/index.txt` |
 | `MIHARI_BUNDLE_URL` | 空 | 显式指定整合包 URL，**跳过 index 与 sha256 校验**（信任自担） |
+
+脚本 3 `--channel` 选择默认 index：缺省/`main` 读稳定 `…/mihari/index.txt`，`--channel dev` 读公开 `…/mihari-dev/index.txt`。`MIHARI_INDEX_URL` 仍可覆盖（即使同时传 `--channel dev`）。下载器本身仍从稳定根目录获取（dev 根不放置 `install-aio-remote.sh` / `.ps1`）。操作者仍可用 `$env:MIHARI_INDEX_URL=` 或 Unix 管道前缀 `| MIHARI_INDEX_URL=` 指向任意 index。
+
+```bash
+# Linux / macOS：稳定下载器 + --channel 选择默认 index
+curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.sh | bash -s -- --channel dev
+```
+
+```powershell
+# Windows (PowerShell)：稳定下载器 + -Channel 选择默认 index
+& ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1))) -Channel dev
+```
 
 ---
 
 ## 二、核心通道与 sidecar
 
-`scripts/build-all-in-one` 默认打包 **stable** 内核。需要预置 alpha 时传入 `--channel alpha`，bundler 从 GitHub 滚动 tag `Prerelease-Alpha` 选取标准资产（非 `-compatible` / `-v3` / `-goNNN` 变体）。
+`scripts/tools/build-all-in-one` 不解析滚动 tag、latest release 或 GeoIP 可变分支。它要求显式传入仓库内已审核的 `scripts/release/release-inputs.lock.json`，并只下载 lock 中精确记录且有 SHA-256 的六个平台 mihomo 资产和两份 GeoIP 数据。当前 checked-in lock 使用 **stable** 内核；预置通道由 lock 的 `mihomo.channel` 决定，而不是由 bundler 在发版时动态选择。
 
-无论 `--channel` 是 `stable` 还是 `alpha`，bundle 都会写入 sidecar `data/bin/core-channel`（UTF-8 文本）：
+维护者只在正式发版的人工 PR `chore/release-*` 中更新 lock（与收口 CHANGELOG 同一类 PR；不是 workflow 提交）：
+
+```sh
+go run ./scripts/tools/resolve-release-inputs --channel stable --out scripts/release/release-inputs.lock.json
+```
+
+GitHub API 限流时可设置 `GITHUB_TOKEN` 环境变量。必须审核生成的 diff 后再合并；稳定和 dev release workflow 都只消费 lock，绝不运行解析器。实际打包命令必须显式传入 lock，例如：
+
+```sh
+go run ./scripts/tools/build-all-in-one \
+  --lock scripts/release/release-inputs.lock.json \
+  --mihari-dir dist --out bundles \
+  --platforms "linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64,windows/arm64"
+```
+
+`--out` 必须是专用的受管 bundle 目录；允许使用当前工作目录下的专用子目录（例如 `./bundles`），但输出目录不得等于或包含当前工作目录，也不得等于或包含 lock 文件。它与 `--mihari-dir`、`--scripts-dir` 两个输入目录之间还必须双向不重叠：输出不能包含输入，输入也不能包含输出。目录内不得混放非 bundle 文件。bundler 在临时目录完成全部构建与校验后才整体提交输出。lock 只用于构建，不会进入 bundle，也不会作为 GitHub Release/AList 资产上传，因此固定的 14-asset 发布契约不变。
+
+Mihari 原始二进制由 Go 1.26.5 以 `-buildvcs=false -trimpath` 构建，避免同一 commit 在 tag 创建前后因 VCS/module 元数据变化而改变字节。相同 commit、版本、toolchain、lock 和仓库内脚本的重试应逐字节复现全部 14 个 assets。仅 dev release workflow 会在已有同版本 Release 时做 existing-asset checksum preflight，并在字节冲突时于 mutation 前 fail closed；stable release workflow 不提供同等 preflight，仍遵循现有 stable Action 发布与 AList 事务契约。
+
+无论 lock 中的 `mihomo.channel` 是 `stable` 还是 `alpha`，bundle 都会写入 sidecar `data/bin/core-channel`（UTF-8 文本）：
 
 ```
 <stable|alpha>
@@ -90,7 +121,7 @@ settings 新增可选字段 `core-channel` 与 `core-channel-bundle`（schema �
 
 ## 三、AList 网盘目录结构
 
-AList base path 不是可配置入口：策略层将 stable 固定为 `/mihari-release/mihari`，将后续 P2 dev 通道固定为 `/mihari-release/mihari-dev`；传入其他路径会被拒绝。当前可用的 stable 目录如下：
+AList base path 不是可配置入口：策略层将 stable 固定为 `/mihari-release/mihari`，将 dev 固定为 `/mihari-release/mihari-dev`；传入其他路径会被拒绝。
 
 ```
 stable（仅稳定通道）：
@@ -105,9 +136,19 @@ stable（仅稳定通道）：
 │   └── COMPLETE                    完整标记（内部语义）
 ├── v0.2.0/
 └── v0.1.0/
+
+dev（仅预发布通道；无安装器）：
+
+/mihari-release/mihari-dev/         base_path（fs/API 路径）
+├── index.txt                       路由表；latest 只能是 vX.Y.Z-dev.N
+└── vX.Y.Z-dev.N/                   不可变版本目录（无 install-aio-remote.*）
+    ├── mihari-all-in-one-{linux,darwin,windows}-{amd64,arm64}.tar.gz / .zip
+    ├── SHA256SUMS.txt
+    ├── BUILDINFO
+    └── COMPLETE
 ```
 
-dev 发布代码已准备，远程 dev/试发需另行授权。`/mihari-release/mihari-dev` 只是策略层为后续 P2 保留的固定路径；P2 AList 发布与撤回 workflow 尚不可用，故本阶段不创建或操作该目录。稳定 `index.txt` 和 `/releases/latest` 不受 dev 准备代码影响。
+稳定公开 index：`https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/index.txt`。公开 dev index：`https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt`。dev 根不放置 `install-aio-remote.sh` / `.ps1`。已发布的 GitHub dev prerelease 与后续 dev AList 写入均不改变稳定 `index.txt` 或 `/releases/latest`。
 
 > **AList 拓扑 quirk（读路径 / 下载）**：**公开下载 URL** 需在 `/p` 后加 `/public` 挂载点前缀，即 `https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/…`（`alist_client.public_url` 自动处理）。
 >
@@ -147,9 +188,11 @@ release workflow 的 AList 步骤顺序保证用户永远拿不到半成品：
 
 第三方值和不确定 readback 均转入人工恢复，不得触发自动 rollback。AList 不提供 compare-and-swap（CAS）或原子 rename，因此事务前检查与单次 PUT 之间仍有竞态，覆盖期间也可能出现短暂解析窗口，不能声称彻底原子或零失败窗口。
 
-Stable release 与 retract workflow 共用 channel concurrency，避免这两类 Actions writer 互相并行，但它不能约束 workflow 外的管理员操作。执行人工 `regenerate-index` 或 artifact 恢复前，必须确认相关 release/retract workflow 均未运行；从读取现场、判断 metadata、写入到最终回读的整个期间，都必须禁止其他人工或自动 writer。
+Stable release 与 retract workflow 共用 channel concurrency（`mihari-stable-alist`），避免这两类 Actions writer 互相并行；dev 发布与 `retract-dev.yml` 使用独立并发组 `mihari-dev-alist`，不得复用稳定锁。它们不能约束 workflow 外的管理员操作。执行人工 `regenerate-index` 或 artifact 恢复前，必须确认相关 release/retract workflow 均未运行，且两条并发组都空闲；从读取现场、判断 metadata、写入到最终回读的整个期间，都必须禁止其他人工或自动 writer。`regenerate-index.py` 默认 `--channel stable`，写入 `/mihari-release/mihari/index.txt`；修复 dev index 必须显式 `--channel dev`。
 
-Writer 在首次 mutation 前把原状态写入 runner 的 `stable/` 备份目录：`index.txt` 保存原始字节，`metadata.json` 保存 `existed`、`channel`、`path` 和 index 字节的 `sha256`。仅当 AList mutation 失败或 mutation 期间取消时，release/retract workflow 才会将两者作为 `stable-index-backup-<run_id>-<attempt>` workflow artifact 上传并保留 3 天。AList mutation 已成功后若下游步骤失败，workflow 不会上传该 artifact，因为远端 index 已经验证提交成功，无需恢复旧 index。人工恢复时必须从对应 run 下载 artifact，先验证 `channel=stable`、固定 `path=/mihari-release/mihari/index.txt` 及 `sha256`：`existed=false` 表示原对象不存在，应在确认没有合法并发更新后删除该 index；`existed=true` 且 `index.txt` 为空表示恢复为空文件；`existed=true` 且非空则逐字节恢复其内容。恢复后再次下载并逐字节核对；runner 本地 `$RUNNER_TEMP` 不能作为运行结束后的恢复入口。
+Writer 在首次 mutation 前把原状态写入 runner 的通道备份目录：`index.txt` 保存原始字节，`metadata.json` 保存 `existed`、`channel`、`path` 和 index 字节的 `sha256`。仅当 AList mutation 失败或 mutation 期间取消时，release/retract workflow 才会将两者作为 `stable-index-backup-<run_id>-<attempt>` workflow artifact 上传并保留 3 天。AList mutation 已成功后若下游步骤失败，workflow 不会上传该 artifact，因为远端 index 已经验证提交成功，无需恢复旧 index。人工恢复时必须从对应 run 下载 artifact，先验证 `channel=stable`、固定 `path=/mihari-release/mihari/index.txt` 及 `sha256`：`existed=false` 表示原对象不存在，应在确认没有合法并发更新后删除该 index；`existed=true` 且 `index.txt` 为空表示恢复为空文件；`existed=true` 且非空则逐字节恢复其内容。恢复后再次下载并逐字节核对；runner 本地 `$RUNNER_TEMP` 不能作为运行结束后的恢复入口。
+
+dev 发布与 `retract-dev.yml` 另有两类 artifact，同样仅在 AList mutation 失败或 mutation 期间取消时上传并保留 3 天：`dev-index-backup-<run_id>-<attempt>` 的 metadata 为 `channel=dev` 且 `path=/mihari-release/mihari-dev/index.txt`；隔离失败另有 `stable-index-isolation-<run_id>-<attempt>`（`channel=stable` / `path=/mihari-release/mihari/index.txt`）。两类 artifact 不得交叉恢复：禁止用 dev backup 写稳定 index，也禁止用 isolation snapshot 写 dev index。恢复稳定 index 的唯一允许来源是 `stable-index-isolation-*` 或稳定通道自己的 `stable-index-backup-*`。
 
 ---
 
@@ -165,13 +208,15 @@ Writer 在首次 mutation 前把原状态写入 runner 的 `stable/` 备份目�
 
 ## 五、版本撤回（致命错误）
 
-独立 workflow `.github/workflows/retract.yml` 手动触发，永久移除坏版本的 GitHub Release、assets 与 AList 分发数据，但保留 canonical stable tag：
+独立 workflow `.github/workflows/retract.yml` 手动触发，永久移除坏版本的 GitHub Release、assets 与 AList 分发数据，但保留 canonical stable tag。dev 通道使用独立的 `.github/workflows/retract-dev.yml`：只操作 `/mihari-release/mihari-dev/<version>/` 与 dev `index.txt`，删除 GitHub prerelease 及其 assets，保留 canonical `vX.Y.Z-dev.N` tag；不得修改稳定 `index.txt`、稳定版本目录或 `/releases/latest`。当 AList 已配置时，dev 撤回会只读 snapshot/compare 稳定 index 做隔离检查，这不是写入。
+
+稳定撤回步骤：
 
 1. 在 GitHub Actions 选择 `main` 分支/ref 后运行；`workflow_dispatch` 输入 `version`（纯 semver 闸门）+ `confirm`（布尔双保险）；
 2. 读 `index.txt` 判断撤回版本是否为当前 latest；
 3. **仅当撤回的是 latest**，先排除目标目录，重建 `index.txt`：latest 改为现存最高且完整（含 `COMPLETE`）的版本（sha256 从该目录的 `SHA256SUMS.txt` 读取）；无完整版本 → `index.txt` 置空。写入后必须回读验证成功，才进入删除；
 4. 永久删除 AList 版本目录 `<base_path>/<version>/`；撤回非 latest 时 index 保持原始字节不变；
-5. `gh release delete <version> --yes` 永久删除 GitHub Release 及其 assets，但保留 canonical stable tag；tag 继续受 stable tag-target ruleset 保护，不为撤回配置删除 bypass。
+5. `gh release delete <version> --yes` 永久删除 GitHub Release 及其 assets，但保留 canonical stable tag；tag 继续受覆盖 `refs/tags/v*` 的 active tag ruleset 保护，不为撤回配置删除 bypass。
 
 若 latest 的替代或空 index 已验证、但目录删除失败，index 保持已切换状态，不回退；目标目录成为不再被 index 引用的遗留目录，同一撤回重跑会继续删除它。幂等：对已撤回的版本重跑不报错。
 

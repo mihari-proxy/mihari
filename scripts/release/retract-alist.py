@@ -4,7 +4,7 @@ import argparse
 import hashlib
 import re
 
-from alist_client import DEFAULT_BASE_PATH, PLATFORMS, bundle_name, connect, fail, info
+from alist_client import DEFAULT_BASE_PATH, PLATFORMS, bundle_name, connect, fail, info, storage_root_entries
 from alist_index import IndexMutationError, parse_latest, write_index_reliably as _write_index_reliably
 from release_policy import parse_version, validate_base_path
 
@@ -167,12 +167,19 @@ def remove_target(alist, base_path, version):
 
 def retract(alist, base_path, version, channel="stable", commit_sha=None):
     validate_inputs(version, channel, base_path, commit_sha)
+    if channel == "dev":
+        entries = storage_root_entries(alist)
+        matches = [e for e in entries if isinstance(e, dict) and e.get("name") == "mihari-dev"]
+        if not matches:
+            return False
+        if len(matches) != 1 or matches[0].get("is_dir") is not True:
+            fail("channel base path is not a directory")
     root_index = f"{base_path}/index.txt"
     directory = f"{base_path}/{version}"
     if not directory_exists(alist, directory):
         if parse_latest(read_index(alist, root_index)) == version:
             fail("refusing to retract a version still referenced by the index")
-        return
+        return False
 
     try:
         identity_valid = valid_identity(alist, base_path, version, channel, commit_sha)
@@ -188,7 +195,7 @@ def retract(alist, base_path, version, channel="stable", commit_sha=None):
         remove_target(alist, base_path, version)
         if read_index(alist, root_index) != observed_index:
             fail("non-latest retraction changed the release index")
-        return
+        return True
 
     try:
         new_latest = highest_complete(alist, base_path, version, channel)
@@ -205,6 +212,7 @@ def retract(alist, base_path, version, channel="stable", commit_sha=None):
             alist, root_index, replacement_body, observed_index, channel
         )
     remove_target(alist, base_path, version)
+    return True
 
 
 def main():
@@ -214,8 +222,11 @@ def main():
     parser.add_argument("--base-path", default=DEFAULT_BASE_PATH)
     parser.add_argument("--commit-sha")
     args = parser.parse_args()
-    retract(connect(), args.base_path, args.version, args.channel, args.commit_sha)
-    info(f"retraction of {args.version} complete on the AList drive")
+    mutated = retract(connect(), args.base_path, args.version, args.channel, args.commit_sha)
+    if mutated:
+        info(f"retraction of {args.version} complete on the AList drive")
+        return
+    info(f"nothing to retract for {args.version} on the AList drive")
 
 
 if __name__ == "__main__":

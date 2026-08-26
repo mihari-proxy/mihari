@@ -1,3 +1,7 @@
+## 免责声明：本项目仅供 Go TUI 工具的学习与交流。这是一个非营利开源项目，现在及未来均不接受任何赞助或捐赠。
+
+## 本应用目前处于非正式开发阶段，bug 多是普遍的。
+
 # Mihari
 
 [English](README.md) · [简体中文](README.zh-CN.md)
@@ -41,6 +45,8 @@ Mihari 是一款全新的、独立的 [mihomo](https://github.com/MetaCubeX/miho
 
 **安装**
 
+**main release 通道**（GitHub）
+
 ```sh
 # Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/main/scripts/install/install.sh | bash
@@ -51,11 +57,26 @@ curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/main/scripts/in
 irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/scripts/install/install.ps1 | iex
 ```
 
+**dev release 通道**（GitHub）
+
+```sh
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/dev/scripts/install/install.sh | bash -s -- --channel dev
+```
+
+```powershell
+# Windows (PowerShell)
+$env:MIHARI_CHANNEL = 'dev'
+irm https://raw.githubusercontent.com/mihari-proxy/mihari/dev/scripts/install/install.ps1 | iex
+```
+
 或从 [Releases 页面](https://github.com/mihari-proxy/mihari/releases) 下载对应平台的二进制。
 
 **国内 / 无 GitHub 访问（离线）**
 
-整合包（mihari 二进制 + mihomo 核心 + GeoIP,含 sha256 校验）镜像在自建 AList 网盘上,安装全程不触碰 GitHub。各平台一条固定命令,复制即用:
+整合包（mihari 二进制 + mihomo 核心 + GeoIP,含 sha256 校验）镜像在自建 AList 网盘上,安装全程不触碰 GitHub。下载器始终从稳定 AList 根目录获取。
+
+**main release 通道**（AList / 离线）
 
 ```sh
 # Linux / macOS
@@ -65,6 +86,18 @@ curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/insta
 ```powershell
 # Windows (PowerShell)
 & ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1)))
+```
+
+**dev release 通道**（AList / 离线）
+
+```sh
+# Linux / macOS
+curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.sh | bash -s -- --channel dev
+```
+
+```powershell
+# Windows (PowerShell)
+& ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1))) -Channel dev
 ```
 
 离线分发设计见 [docs/distribution.md](docs/distribution.md)。

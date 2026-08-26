@@ -19,11 +19,14 @@ import (
 
 const defaultMaxDatabaseBytes int64 = 128 << 20
 
+var errInvalidExpectedSHA256 = errors.New("expected geoip SHA-256 must be 64 lowercase hexadecimal characters")
+
 // DownloadSpec identifies one database, its checksum, and its local destination.
 type DownloadSpec struct {
-	URL         string
-	ChecksumURL string
-	Destination string
+	URL            string
+	ChecksumURL    string
+	ExpectedSHA256 string
+	Destination    string
 }
 
 // Downloader prepares bounded, checksum-verified MMDB candidates.
@@ -49,8 +52,21 @@ func (d Downloader) Prepare(ctx context.Context, spec DownloadSpec) (_ *FileCand
 	if err := validateDownloadURL(spec.URL, d.AllowHTTP); err != nil {
 		return nil, err
 	}
-	if err := validateDownloadURL(spec.ChecksumURL, d.AllowHTTP); err != nil {
-		return nil, err
+	if (spec.ChecksumURL == "") == (spec.ExpectedSHA256 == "") {
+		return nil, errors.New("exactly one geoip checksum source is required")
+	}
+	var want [sha256.Size]byte
+	if spec.ChecksumURL != "" {
+		if err := validateDownloadURL(spec.ChecksumURL, d.AllowHTTP); err != nil {
+			return nil, err
+		}
+	}
+	if spec.ExpectedSHA256 != "" {
+		var err error
+		want, err = parseExpectedSHA256(spec.ExpectedSHA256)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if spec.Destination == "" || d.StagingDir == "" {
 		return nil, errors.New("geoip download paths are required")
@@ -59,9 +75,12 @@ func (d Downloader) Prepare(ctx context.Context, spec DownloadSpec) (_ *FileCand
 	if client == nil {
 		client = &http.Client{Timeout: 2 * time.Minute}
 	}
-	want, err := downloadChecksum(ctx, client, spec.ChecksumURL, d.AllowHTTP)
-	if err != nil {
-		return nil, err
+	if spec.ChecksumURL != "" {
+		var err error
+		want, err = downloadChecksum(ctx, client, spec.ChecksumURL, d.AllowHTTP)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := os.MkdirAll(d.StagingDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create geoip staging directory: %w", err)
@@ -105,6 +124,22 @@ func (d Downloader) Prepare(ctx context.Context, spec DownloadSpec) (_ *FileCand
 		return nil, fmt.Errorf("validate geoip candidate: %w", err)
 	}
 	return &FileCandidate{staged: staged, destination: spec.Destination, digest: got}, nil
+}
+
+func parseExpectedSHA256(raw string) ([sha256.Size]byte, error) {
+	var result [sha256.Size]byte
+	if len(raw) != sha256.Size*2 {
+		return result, errInvalidExpectedSHA256
+	}
+	if raw != strings.ToLower(raw) {
+		return result, errInvalidExpectedSHA256
+	}
+	decoded, err := hex.DecodeString(raw)
+	if err != nil {
+		return result, errInvalidExpectedSHA256
+	}
+	copy(result[:], decoded)
+	return result, nil
 }
 
 func validateDownloadURL(raw string, allowHTTP bool) error {

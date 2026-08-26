@@ -210,6 +210,43 @@ def test_exists_and_content_use_parent_listing_when_fs_get_reports_missing_as_50
     assert all(not url.endswith("/api/fs/get") for url in alist.session.paths)
 
 
+def test_exists_treats_missing_parent_directory_as_absent():
+    alist = AList.__new__(AList)
+    alist.base = "https://cloud.invalid"
+    alist.session = PostSession(
+        JSONResponse(
+            {
+                "code": 500,
+                "message": "failed get dir: object not found token=secret",
+                "data": None,
+            }
+        )
+    )
+
+    path = "/mihari-release/mihari-dev/v0.9.0-dev.5/COMPLETE"
+    assert alist.exists(path) is False
+    assert alist.content(path) is None
+
+
+def test_list_dir_rejects_non_missing_500_listing_without_leaking_details():
+    alist = AList.__new__(AList)
+    alist.base = "https://cloud.invalid"
+    alist.session = PostSession(
+        JSONResponse(
+            {
+                "code": 500,
+                "message": "internal backend token=secret",
+                "data": {"content": []},
+            }
+        )
+    )
+
+    with pytest.raises(alist_client.AListError, match="alist operation failed") as error:
+        alist.list_dir("/mihari-release/mihari-dev/v0.9.0-dev.5")
+    assert "secret" not in str(error.value)
+    assert "internal backend" not in str(error.value)
+
+
 def test_list_dir_reads_every_page_and_preserves_second_page_entries():
     first = [{"name": f"v1.0.{index}", "is_dir": True} for index in range(200)]
     highest = {"name": "v9.0.0", "is_dir": True}
@@ -400,6 +437,53 @@ def test_list_dir_accepts_explicit_null_as_an_empty_directory():
     assert alist.list_dir("/mihari-release/mihari") == []
 
 
+def current_alist_list_response(content, total):
+    return JSONResponse(
+        {
+            "code": 200,
+            "data": {
+                "content": content,
+                "header": None,
+                "provider": "local",
+                "readme": "",
+                "total": total,
+                "write": True,
+            },
+        }
+    )
+
+
+def test_list_dir_accepts_current_alist_payload_without_pagination_fields():
+    alist = AList.__new__(AList)
+    alist.base = "https://cloud.invalid"
+    alist.session = PostSession(
+        current_alist_list_response(
+            [
+                {"name": "mihari", "is_dir": True},
+            ],
+            1,
+        )
+    )
+
+    entries = alist.list_dir("/")
+
+    assert [(entry["name"], entry["is_dir"]) for entry in entries] == [("mihari", True)]
+
+
+def test_list_dir_rejects_unpaged_payload_when_total_does_not_match_content():
+    alist = AList.__new__(AList)
+    alist.base = "https://cloud.invalid"
+    alist.session = PostSession(
+        current_alist_list_response(
+            [{"name": "mihari", "is_dir": True}],
+            2,
+        )
+    )
+
+    with pytest.raises(alist_client.AListError, match="invalid directory listing"):
+        alist.list_dir("/")
+
+
 def test_connect_translates_login_failure_at_command_boundary(monkeypatch, capsys):
     monkeypatch.setenv("ALIST_URL", "https://cloud.invalid")
     monkeypatch.setenv("ALIST_USERNAME", "release-user")
@@ -469,11 +553,39 @@ def test_fs_path_strips_mount_segment():
     assert alist._fs_path("/mihari-release/mihari") == "/mihari"
     # No leading segment to strip → returned unchanged (no crash on odd shapes).
     assert alist._fs_path("/mihari-release") == "/mihari-release"
+    assert alist._fs_path("/mihari-release/mihari-dev") == "/mihari-dev"
+    assert alist._fs_path("/mihari-release/mihari-dev/index.txt") == "/mihari-dev/index.txt"
+    assert alist._fs_path("/") == "/"
+
+
+def test_list_dir_root_sends_slash_fs_path():
+    alist = AList.__new__(AList)
+    captured = {}
+
+    class Session:
+        def post(self, url, timeout=None, json=None):
+            captured["url"] = url
+            captured["json"] = json
+            return list_response(
+                content=[{"name": "mihari", "is_dir": True}],
+                total=1,
+                page=1,
+                per_page=200,
+                has_more=False,
+                pages_total=1,
+            )
+
+    alist.base = "https://cloud.example.com"
+    alist.session = Session()
+    entries = alist.list_dir("/")
+    assert captured["url"].endswith("/api/fs/list")
+    assert captured["json"]["path"] == "/"
+    assert entries == [{"name": "mihari", "is_dir": True}]
 
 
 def _load_release_alist():
     # release-alist.py has a hyphen in its name, so import it manually.
-    path = Path(__file__).with_name("release-alist.py")
+    path = Path(__file__).parent.parent / "release-alist.py"
     spec = importlib.util.spec_from_file_location("release_alist", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -508,7 +620,7 @@ def test_build_index_emits_public_urls_no_sign():
 
 
 def test_install_scripts_hardcode_public_index_url():
-    install_dir = Path(__file__).resolve().parent / "install"
+    install_dir = Path(__file__).resolve().parent.parent.parent / "install"
     for name in ("install-aio-remote.sh", "install-aio-remote.ps1"):
         text = (install_dir / name).read_text(encoding="utf-8")
         assert "__MIHARI_INDEX_URL__" not in text, f"{name} still has the CI placeholder"

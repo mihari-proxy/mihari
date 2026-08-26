@@ -1,3 +1,7 @@
+## Disclaimer: This project is for learning and exchanging ideas about Go TUI tools. It is a non-profit open-source project and does not accept sponsorships or donations, now or in the future.
+
+## This application is currently in informal development; bugs are common.
+
 # Mihari
 
 [English](README.md) · [简体中文](README.zh-CN.md)
@@ -41,6 +45,8 @@ A single CGO-free static binary (< 15 MB) contains everything, with built-in Git
 
 **Install**
 
+**main release channel** (GitHub)
+
 ```sh
 # Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/main/scripts/install/install.sh | bash
@@ -51,11 +57,26 @@ curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/main/scripts/in
 irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/scripts/install/install.ps1 | iex
 ```
 
+**dev release channel** (GitHub)
+
+```sh
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/dev/scripts/install/install.sh | bash -s -- --channel dev
+```
+
+```powershell
+# Windows (PowerShell)
+$env:MIHARI_CHANNEL = 'dev'
+irm https://raw.githubusercontent.com/mihari-proxy/mihari/dev/scripts/install/install.ps1 | iex
+```
+
 Or download the binary for your platform from the [Releases page](https://github.com/mihari-proxy/mihari/releases).
 
 **China / no GitHub access (offline)**
 
-An all-in-one bundle (mihari binary + mihomo core + GeoIP, sha256-verified) is mirrored on a self-hosted AList drive, so installs never touch GitHub. One fixed command per platform — copy and run:
+An all-in-one bundle (mihari binary + mihomo core + GeoIP, sha256-verified) is mirrored on a self-hosted AList drive, so installs never touch GitHub. The downloader is always taken from the stable AList root.
+
+**main release channel** (AList / offline)
 
 ```sh
 # Linux / macOS
@@ -65,6 +86,18 @@ curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/insta
 ```powershell
 # Windows (PowerShell)
 & ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1)))
+```
+
+**dev release channel** (AList / offline)
+
+```sh
+# Linux / macOS
+curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.sh | bash -s -- --channel dev
+```
+
+```powershell
+# Windows (PowerShell)
+& ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1))) -Channel dev
 ```
 
 See [docs/distribution.md](docs/distribution.md) for the offline distribution design.

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -368,12 +369,12 @@ func (m *Model) View() string {
 		return ui.RenderBorderedSection(m.theme, ui.WebGUITitle, body, inner)
 	}
 	active := valueOr(m.status.ActivePanel, ui.MissingValue)
-	// Two summary lines (design W1): health+addr, then Active panel + sessions.
-	// OpenBrowserHint moved out — the footer already declares the o key.
+	// Summary lines: health+addr, Active panel + sessions, then a cache-refresh
+	// hint in the same body style. OpenBrowserHint stays in the footer (the o key).
 	textW := ui.SectionTextWidth(inner)
 	line1 := ui.TruncateVisible(valueOr(m.status.GatewayHealth, ui.UnknownLabel)+"  "+valueOr(m.status.GatewayAddr, ui.MissingValue), textW)
 	line2 := ui.TruncateVisible(fmt.Sprintf("%s %s  ·  %s %d", ui.ActivePanelLabel, active, ui.BrowserSessionsLabel, m.status.BrowserSessions), textW)
-	header := line1 + "\n" + line2
+	header := line1 + "\n" + line2 + "\n" + wrapPlain(ui.WebGUICacheRefreshHint, textW)
 	var parts []string
 	parts = append(parts, ui.RenderBorderedSection(m.theme, ui.WebGUITitle, header, inner))
 
@@ -439,6 +440,13 @@ func valueOr(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func wrapPlain(text string, width int) string {
+	if width < 1 || lipgloss.Width(text) <= width {
+		return text
+	}
+	return lipgloss.NewStyle().Width(width).Render(text)
 }
 
 func randomOperationID() string {

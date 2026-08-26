@@ -59,6 +59,21 @@ func TestSelfUpdatePolicyIsConfirmedAndDaemonIndependent(t *testing.T) {
 	}
 }
 
+func TestMihariChannelPolicyIsConfirmedAndDaemonIndependent(t *testing.T) {
+	if !knownAction(SwitchMihariChannel) {
+		t.Fatal("mihari channel switch must be registered")
+	}
+	if !RequiresConfirmation(SwitchMihariChannel) {
+		t.Fatal("mihari channel switch must require confirmation")
+	}
+	if RequiresDaemon(SwitchMihariChannel) {
+		t.Fatal("mihari channel switch must work without a daemon connection")
+	}
+	if SwitchMihariChannel == SwitchCoreChannel {
+		t.Fatal("mihari channel must not reuse the core channel action")
+	}
+}
+
 func TestRevisionConflictPolicyIsPageLocalPathA(t *testing.T) {
 	// Path A: pages show a local conflict toast and reload; Root does not need
 	// to force globalState=StateRevisionConflict for correct UX.

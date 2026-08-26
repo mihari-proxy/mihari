@@ -38,11 +38,15 @@ jobs:
         with:
           python-version: "3.x"
       - name: Install release-safety test dependencies
-        run: python -m pip install --disable-pip-version-check -r scripts/requirements-release-test.txt
+        run: python -m pip install --disable-pip-version-check -r scripts/release/requirements-test.txt
       - name: Test AIO parallel downloader
         run: python scripts/install/test_parallel_download.py -v
+      - name: Test install channel resolution
+        run: python -m pytest scripts/install/test_install_channel.py -q
       - name: Test release safety policies
-        run: python -m pytest scripts/test_release_policy.py scripts/test_github_release_policy.py scripts/test_release_workflow.py scripts/test_alist_client.py scripts/test_alist_index.py scripts/test_release_alist.py scripts/test_retract_alist.py scripts/test_regenerate_index.py -q
+        env:
+          PYTHONPATH: ${{ github.workspace }}/scripts/release
+        run: python -m pytest scripts/release/tests/test_release_policy.py scripts/release/tests/test_github_release_policy.py scripts/release/tests/test_changelog_policy.py scripts/release/tests/test_changelog_branch_policy.py scripts/release/tests/test_release_workflow.py scripts/release/tests/test_alist_client.py scripts/release/tests/test_alist_index.py scripts/release/tests/test_release_alist.py scripts/release/tests/test_retract_alist.py scripts/release/tests/test_regenerate_index.py scripts/release/tests/test_alist_channel_guard.py -q
       - name: Test
         run: go test -count=1 ./...
 
@@ -117,8 +121,8 @@ jobs:
         run: |
           profile="$RUNNER_TEMP/mihari-coverage.out"
           go test -count=1 -covermode=atomic -coverpkg=./... -coverprofile="$profile" ./...
-          go test -count=1 ./scripts/coverage-gate
-          go run ./scripts/coverage-gate report -profile "$profile" | tee -a "$GITHUB_STEP_SUMMARY"
+          go test -count=1 ./scripts/tools/coverage-gate
+          go run ./scripts/tools/coverage-gate report -profile "$profile" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Upload coverage profile
         if: always()
         uses: actions/upload-artifact@v4
