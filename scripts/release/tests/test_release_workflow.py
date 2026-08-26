@@ -1447,8 +1447,9 @@ def test_release_documents_record_verified_dev_github_release_and_unavailable_de
     assert "mihari-release/mihari/install-aio-remote.ps1" in distribution
     for installer in installers:
         assert public_stable_index in installer
-        assert "/mihari-release/mihari-dev/" not in installer
-        assert "mihari-dev/index.txt" not in installer
+        assert public_dev_index in installer
+        assert "mihari-dev/install-aio-remote.sh" not in installer
+        assert "mihari-dev/install-aio-remote.ps1" not in installer
 
     assert "lightweight 或 annotated" in release
 

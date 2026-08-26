@@ -12,6 +12,7 @@ const (
 	RestartCore             = ui.ActionRestartCore
 	UpdateCore              = ui.ActionUpdateCore
 	SwitchCoreChannel       = ui.ActionSwitchCoreChannel
+	SwitchMihariChannel     = ui.ActionSwitchMihariChannel
 	UpdateMihari            = ui.ActionUpdateMihari
 	ApplyEndpointChange     = ui.ActionApplyEndpointChange
 	SelectProxy             = ui.ActionSelectProxy
@@ -41,7 +42,7 @@ const (
 
 func RequiresConfirmation(action Action) bool {
 	switch action {
-	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, SwitchCoreChannel, UpdateMihari, ApplyEndpointChange,
+	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, SwitchCoreChannel, SwitchMihariChannel, UpdateMihari, ApplyEndpointChange,
 		UninstallPanel, ReinstallPanel,
 		ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart,
 		EnableSystemProxy, ForceSystemProxy, DisableSystemProxy, EnableTun, ForceTun, DisableTun:
@@ -55,7 +56,7 @@ func RequiresConfirmation(action Action) bool {
 // OS service control talks to the local service manager and works while disconnected.
 func RequiresDaemon(action Action) bool {
 	switch action {
-	case ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart, UpdateMihari:
+	case ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart, UpdateMihari, SwitchMihariChannel:
 		return false
 	default:
 		return true
@@ -64,7 +65,7 @@ func RequiresDaemon(action Action) bool {
 
 func knownAction(action Action) bool {
 	switch action {
-	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, SwitchCoreChannel, UpdateMihari, ApplyEndpointChange,
+	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, SwitchCoreChannel, SwitchMihariChannel, UpdateMihari, ApplyEndpointChange,
 		SelectProxy, CloseConnection, RefreshSubscription, UpdateProvider,
 		InstallPanel, UpdatePanel, ActivatePanel, OpenWebGUI, UninstallPanel, ReinstallPanel,
 		ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart,

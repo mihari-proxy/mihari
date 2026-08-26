@@ -11,14 +11,24 @@
 # Environment overrides:
 #   $env:MIHARI_INDEX_URL   index.txt public direct link (default: the fixed public URL below)
 #   $env:MIHARI_BUNDLE_URL  explicit bundle URL (skips index + sha256)
-param([switch]$Yes)
+param([switch]$Yes, [string]$Channel)
 $ErrorActionPreference = 'Stop'
 
-# Fixed public direct link to the root index.txt. mihari distribution is fully
-# public (signing disabled on the AList drive), so this URL is stable and
-# identical across releases — copy-paste, never hand-edit. The release workflow
-# uploads index.txt to this exact path each publish.
-$indexUrl = if ($env:MIHARI_INDEX_URL) { $env:MIHARI_INDEX_URL } else { 'https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/index.txt' }
+# Fixed public direct links. mihari distribution is fully public (signing
+# disabled on the AList drive), so these URLs are stable and identical across
+# releases — copy-paste, never hand-edit. The downloader itself is always taken
+# from the stable root; --channel dev only selects the dev index.
+$stableIndexUrl = 'https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/index.txt'
+$devIndexUrl = 'https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt'
+if (-not $Channel -and $env:MIHARI_CHANNEL) { $Channel = $env:MIHARI_CHANNEL }
+if ($Channel -and $Channel -cnotin @('main', 'dev')) { throw 'mihari channel must be main or dev' }
+if ($env:MIHARI_INDEX_URL) {
+  $indexUrl = $env:MIHARI_INDEX_URL
+} elseif ($Channel -eq 'dev') {
+  $indexUrl = $devIndexUrl
+} else {
+  $indexUrl = $stableIndexUrl
+}
 $bundleUrl = $env:MIHARI_BUNDLE_URL
 
 # PS 5.1's irm decodes UTF-8 bytes from the signless octet-stream response as
@@ -194,9 +204,39 @@ function Show-InstallPlan {
   Write-Host ''
 }
 
+function Test-CanonicalStable([string]$tag) {
+  return [bool]($tag -cmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')
+}
+function Test-CanonicalDev([string]$tag) {
+  return [bool]($tag -cmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$')
+}
+function Write-RemoteTestState {
+  $workdir = Join-Path $env:USERPROFILE 'Downloads\mihari-aio'
+  if ($Channel) {
+    $handoff = "& ([scriptblock]::Create((Get-Content -Raw '$workdir\install-aio.ps1'))) -Channel $Channel -BundleDir $workdir"
+  } else {
+    $handoff = "& ([scriptblock]::Create((Get-Content -Raw '$workdir\install-aio.ps1'))) -BundleDir $workdir"
+  }
+  Write-Output "CHANNEL=$Channel"
+  Write-Output ("EXPLICIT=" + $(if ($Channel) { '1' } else { '0' }))
+  Write-Output "INDEX_URL=$indexUrl"
+  Write-Output "HANDOFF=$handoff"
+  Write-Output "LATEST=$latest"
+}
+
 # Tests dot-source this standalone script to exercise the real downloader
 # against a local HTTP server without running the installation flow.
-if ($env:MIHARI_INSTALL_TEST_MODE -eq '1') { return }
+if ($env:MIHARI_INSTALL_TEST_MODE -eq '1') {
+  $sourced = ($MyInvocation.InvocationName -eq '.' -or $MyInvocation.Line -match '^\s*\.')
+  if ($sourced) { return }
+  $latest = ''
+  if (-not $bundleUrl -and $env:MIHARI_INDEX_URL) {
+    # Fall through to index fetch for latest-shape tests.
+  } else {
+    Write-RemoteTestState
+    return
+  }
+}
 
 # Detect platform (mirrors install.ps1).
 $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
@@ -228,7 +268,21 @@ if (-not $resolvedUrl) {
     elseif ($fields[0] -eq $platform) { $resolvedUrl = $fields[1]; $wantSum = $fields[2] }
   }
   if (-not $latest) { Fail "尚未发布完成：index 无 latest 版本（可能正在发布或已撤回）。" }
-  if (-not $resolvedUrl) { Fail "index 未包含本平台 $platform 的包。" }
+  if ($env:MIHARI_INSTALL_TEST_MODE -ne '1') {
+    if (-not $resolvedUrl) { Fail "index 未包含本平台 $platform 的包。" }
+  }
+  if ($Channel) {
+    if ($Channel -eq 'dev') {
+      if (-not (Test-CanonicalDev $latest)) { Fail 'dev index latest must be vX.Y.Z-dev.N' }
+    } elseif (-not (Test-CanonicalStable $latest)) {
+      Fail 'main index latest must be vX.Y.Z'
+    }
+  }
+}
+
+if ($env:MIHARI_INSTALL_TEST_MODE -eq '1') {
+  Write-RemoteTestState
+  return
 }
 
 # Version judgment: PATH mihari only, local (no daemon). Single source of truth
@@ -284,4 +338,8 @@ Remove-Item -LiteralPath $tmpArchive -Force
 # the Web; the bundle dir is injected via -BundleDir (design 4.4 step 5).
 $localInstaller = Join-Path $workdir 'install-aio.ps1'
 if (-not (Test-Path -LiteralPath $localInstaller)) { Fail '包内缺少 install-aio.ps1。' }
-& ([scriptblock]::Create([IO.File]::ReadAllText($localInstaller))) -BundleDir $workdir
+if ($Channel) {
+  & ([scriptblock]::Create([IO.File]::ReadAllText($localInstaller))) -Channel $Channel -BundleDir $workdir
+} else {
+  & ([scriptblock]::Create([IO.File]::ReadAllText($localInstaller))) -BundleDir $workdir
+}

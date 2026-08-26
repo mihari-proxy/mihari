@@ -11,21 +11,60 @@
 # Environment overrides:
 #   MIHARI_INDEX_URL   index.txt public direct link (default: the fixed public URL below)
 #   MIHARI_BUNDLE_URL  explicit bundle URL (skips index + sha256 — trust borne by user)
+#   MIHARI_CHANNEL     main|dev when --channel is omitted
 set -eu
 
-# Fixed public direct link to the root index.txt. mihari distribution is fully
-# public (signing disabled on the AList drive), so this URL is stable and
-# identical across releases — copy-paste, never hand-edit. The release workflow
-# uploads index.txt to this exact path each publish.
-INDEX_URL="${MIHARI_INDEX_URL:-https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/index.txt}"
+STABLE_INDEX_URL="https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/index.txt"
+DEV_INDEX_URL="https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt"
 BUNDLE_URL="${MIHARI_BUNDLE_URL:-}"
 YES=0
-for arg in "$@"; do
-  case "$arg" in
-    --yes|-y) YES=1 ;;
-    *) ;;
+CHANNEL=""
+CHANNEL_EXPLICIT=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --yes|-y)
+      YES=1
+      shift
+      ;;
+    --channel)
+      [ $# -ge 2 ] || { printf '\033[1;31merror:\033[0m missing --channel value\n' >&2; exit 1; }
+      CHANNEL="$2"
+      CHANNEL_EXPLICIT=1
+      shift 2
+      ;;
+    --channel=*)
+      CHANNEL="${1#--channel=}"
+      CHANNEL_EXPLICIT=1
+      [ -n "$CHANNEL" ] || { printf '\033[1;31merror:\033[0m missing --channel value\n' >&2; exit 1; }
+      shift
+      ;;
+    -*)
+      printf '\033[1;31merror:\033[0m unknown flag: %s\n' "$1" >&2
+      exit 1
+      ;;
+    *)
+      printf '\033[1;31merror:\033[0m unexpected argument: %s\n' "$1" >&2
+      exit 1
+      ;;
   esac
 done
+if [ "$CHANNEL_EXPLICIT" -eq 0 ] && [ -n "${MIHARI_CHANNEL:-}" ]; then
+  CHANNEL="$MIHARI_CHANNEL"
+  CHANNEL_EXPLICIT=1
+fi
+if [ -n "$CHANNEL" ]; then
+  case "$CHANNEL" in
+    main|dev) ;;
+    *) printf '\033[1;31merror:\033[0m mihari channel must be main or dev\n' >&2; exit 1 ;;
+  esac
+fi
+if [ -n "${MIHARI_INDEX_URL:-}" ]; then
+  INDEX_URL="$MIHARI_INDEX_URL"
+elif [ "$CHANNEL" = "dev" ]; then
+  INDEX_URL="$DEV_INDEX_URL"
+else
+  INDEX_URL="$STABLE_INDEX_URL"
+fi
 
 info() { printf '\033[1;34m•\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -185,9 +224,46 @@ checksum() {
   fi
 }
 
+print_remote_test_state() {
+  workdir="${HOME}/Downloads/mihari-aio"
+  if [ "$CHANNEL_EXPLICIT" -eq 1 ]; then
+    handoff="sh \"${workdir}/install-aio.sh\" --channel \"${CHANNEL}\" \"${workdir}\""
+  else
+    handoff="sh \"${workdir}/install-aio.sh\" \"${workdir}\""
+  fi
+  printf 'CHANNEL=%s\n' "$CHANNEL"
+  printf 'EXPLICIT=%s\n' "$CHANNEL_EXPLICIT"
+  printf 'INDEX_URL=%s\n' "$INDEX_URL"
+  printf 'HANDOFF=%s\n' "$handoff"
+  printf 'LATEST=%s\n' "${latest:-}"
+}
+
+is_canonical_stable() {
+  printf '%s' "$1" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+}
+
+is_canonical_dev() {
+  printf '%s' "$1" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$'
+}
+
 # Tests source this standalone script to exercise the real downloader against
 # a local HTTP server without running the installation flow.
-[ "${MIHARI_INSTALL_TEST_MODE:-}" = "1" ] && return 0
+if [ "${MIHARI_INSTALL_TEST_MODE:-}" = "1" ]; then
+  case "$0" in
+    *install-aio-remote.sh)
+      if [ -z "$BUNDLE_URL" ] && [ -n "${MIHARI_INDEX_URL:-}" ]; then
+        :
+      else
+        latest=""
+        print_remote_test_state
+        exit 0
+      fi
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+fi
 
 # Resolve bundle URL + expected sha256 + latest version.
 latest=""
@@ -216,7 +292,21 @@ else
 $index
 EOF
   [ -n "$latest" ] || err "尚未发布完成：index 无 latest 版本（可能正在发布或已撤回）。"
-  [ -n "$bundle_url" ] || err "index 未包含本平台 $platform 的包。"
+  if [ "${MIHARI_INSTALL_TEST_MODE:-}" != "1" ]; then
+    [ -n "$bundle_url" ] || err "index 未包含本平台 $platform 的包。"
+  fi
+  if [ "$CHANNEL_EXPLICIT" -eq 1 ]; then
+    if [ "$CHANNEL" = "dev" ]; then
+      is_canonical_dev "$latest" || err "dev index latest must be vX.Y.Z-dev.N"
+    else
+      is_canonical_stable "$latest" || err "main index latest must be vX.Y.Z"
+    fi
+  fi
+fi
+
+if [ "${MIHARI_INSTALL_TEST_MODE:-}" = "1" ]; then
+  print_remote_test_state
+  exit 0
 fi
 
 # Version judgment: PATH mihari only, local (no daemon). Single source of truth
@@ -261,4 +351,8 @@ rm -f "$archive"
 # Hand off to the local installer inside the bundle (script 2), passing the
 # bundle dir so it locates mihari + data/ without relying on the caller's path.
 [ -f "${workdir}/install-aio.sh" ] || err "包内缺少 install-aio.sh。"
-sh "${workdir}/install-aio.sh" "$workdir"
+if [ "$CHANNEL_EXPLICIT" -eq 1 ]; then
+  sh "${workdir}/install-aio.sh" --channel "$CHANNEL" "$workdir"
+else
+  sh "${workdir}/install-aio.sh" "$workdir"
+fi
