@@ -120,7 +120,7 @@ def parse_test_output(text: str) -> dict[str, str]:
     for line in text.splitlines():
         if "=" in line:
             key, value = line.split("=", 1)
-            if key in {"CHANNEL", "EXPLICIT", "URL"}:
+            if key in {"CHANNEL", "EXPLICIT", "URL", "INDEX_URL", "HANDOFF", "LATEST"}:
                 got[key] = value
     return got
 
@@ -448,4 +448,157 @@ def test_script2_ps1_unspecified_leaves_sidecar(tmp_path: Path):
     result = run_install_aio_ps1(tmp_path, ["-BundleDir", str(bundle)])
     assert result.returncode == 0, result.stderr
     assert sidecar.read_text(encoding="utf-8") == "main\n"
+
+
+INSTALL_AIO_REMOTE_SH = SCRIPT_DIR / "install-aio-remote.sh"
+INSTALL_AIO_REMOTE_PS1 = SCRIPT_DIR / "install-aio-remote.ps1"
+PUBLIC_STABLE_INDEX = "https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/index.txt"
+PUBLIC_DEV_INDEX = "https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt"
+
+
+class IndexServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, body: bytes):
+        super().__init__(("127.0.0.1", 0), IndexHandler)
+        self.body = body
+        self.paths: list[str] = []
+        self.lock = threading.Lock()
+
+
+class IndexHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, _format, *args):
+        return
+
+    def do_GET(self):
+        with self.server.lock:
+            self.server.paths.append(self.path)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(self.server.body)))
+        self.end_headers()
+        self.wfile.write(self.server.body)
+
+
+def run_remote_sh(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    shell = posix_shell()
+    assert shell is not None
+    command_env = os.environ.copy()
+    command_env.pop("MIHARI_CHANNEL", None)
+    command_env.pop("MIHARI_INDEX_URL", None)
+    command_env.pop("MIHARI_BUNDLE_URL", None)
+    command_env.update(env)
+    command_env["MIHARI_INSTALL_TEST_MODE"] = "1"
+    return subprocess.run(
+        [shell, Path(INSTALL_AIO_REMOTE_SH).as_posix(), *args],
+        cwd=str(SCRIPT_DIR),
+        env=command_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        errors="replace",
+        timeout=30,
+    )
+
+
+def run_remote_ps1(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    exe = powershell()
+    assert exe is not None
+    command_env = os.environ.copy()
+    command_env.pop("MIHARI_CHANNEL", None)
+    command_env.pop("MIHARI_INDEX_URL", None)
+    command_env.pop("MIHARI_BUNDLE_URL", None)
+    command_env.update(env)
+    command_env["MIHARI_INSTALL_TEST_MODE"] = "1"
+    ps_path = str(INSTALL_AIO_REMOTE_PS1).replace("\\", "/")
+    pieces = []
+    i = 0
+    while i < len(args):
+        token = args[i]
+        if token.startswith("-") and i + 1 < len(args) and not args[i + 1].startswith("-"):
+            pieces.append(token)
+            pieces.append("'{0}'".format(args[i + 1].replace("'", "''")))
+            i += 2
+            continue
+        pieces.append(token if token.startswith("-") else "'{0}'".format(token.replace("'", "''")))
+        i += 1
+    invoke = " ".join(pieces)
+    command = (
+        "$ErrorActionPreference='Stop'; "
+        f"$code = [IO.File]::ReadAllText('{ps_path}', [Text.Encoding]::UTF8); "
+        f"& ([scriptblock]::Create($code)) {invoke}"
+    )
+    return subprocess.run(
+        [exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+        env=command_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        errors="replace",
+        timeout=60,
+    )
+
+
+@requires_sh
+def test_script3_sh_default_index_is_stable():
+    result = run_remote_sh([], {})
+    assert result.returncode == 0, result.stderr
+    got = parse_test_output(result.stdout)
+    assert got.get("INDEX_URL") == PUBLIC_STABLE_INDEX
+    assert PUBLIC_DEV_INDEX not in result.stdout
+    assert '--channel' not in got.get("HANDOFF", "")
+
+
+@requires_sh
+def test_script3_sh_channel_dev_uses_dev_index_and_handoff():
+    result = run_remote_sh(["--channel", "dev"], {})
+    assert result.returncode == 0, result.stderr + result.stdout
+    got = parse_test_output(result.stdout)
+    assert got.get("INDEX_URL") == PUBLIC_DEV_INDEX
+    assert PUBLIC_STABLE_INDEX not in got.get("INDEX_URL", "")
+    assert '--channel "dev"' in got.get("HANDOFF", "") or "--channel dev" in got.get("HANDOFF", "")
+
+
+@requires_sh
+def test_script3_sh_dev_rejects_stable_latest_without_bundle_download(tmp_path: Path):
+    server = IndexServer(b"latest v0.8.2\nlinux-amd64 http://127.0.0.1/bundle deadbeef\n")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}/index.txt"
+        result = run_remote_sh(["--yes", "--channel", "dev"], {"MIHARI_INDEX_URL": url})
+        assert result.returncode != 0, result.stdout
+        assert server.paths.count("/index.txt") >= 1
+        assert not any("bundle" in path for path in server.paths)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@requires_sh
+def test_script3_sh_unknown_flag_fails_before_fetch():
+    result = run_remote_sh(["--nope"], {"MIHARI_INDEX_URL": "http://127.0.0.1:1/index.txt"})
+    assert result.returncode != 0
+
+
+@requires_ps
+def test_script3_ps1_channel_dev_uses_dev_index_and_handoff():
+    result = run_remote_ps1(["-Channel", "dev"], {})
+    assert result.returncode == 0, result.stderr + result.stdout
+    got = parse_test_output(result.stdout)
+    assert got.get("INDEX_URL") == PUBLIC_DEV_INDEX
+    assert "-Channel" in got.get("HANDOFF", "")
+
+
+@requires_ps
+def test_script3_ps1_default_index_is_stable():
+    result = run_remote_ps1([], {})
+    assert result.returncode == 0, result.stderr
+    got = parse_test_output(result.stdout)
+    assert got.get("INDEX_URL") == PUBLIC_STABLE_INDEX
+    assert "-Channel" not in got.get("HANDOFF", "")
+
 
