@@ -77,8 +77,8 @@ func TestClassifyUpdate(t *testing.T) {
 		ahead     bool
 	}{
 		{name: "same tag strips v", current: "0.8.2", latest: "v0.8.2", available: false, ahead: false},
-		{name: "newer latest", current: "v0.8.2", latest: "v0.9.0-dev.3", available: true, ahead: false},
-		{name: "prerelease current offers official latest", current: "v0.9.0-dev.8", latest: "v0.8.2", available: true, ahead: false},
+		{name: "dev to main offers official latest", current: "v0.9.0-dev.8", latest: "v0.8.2", available: true, ahead: false},
+		{name: "main to dev offers prerelease latest", current: "v0.8.2", latest: "v0.9.0-dev.8", available: true, ahead: false},
 		{name: "unprefixed prerelease current offers official latest", current: "0.9.0-dev.3", latest: "v0.8.2", available: true, ahead: false},
 		{name: "newer official ahead of older official", current: "v0.9.0", latest: "v0.8.2", available: false, ahead: true},
 		{name: "stable ahead of same-series dev", current: "v0.9.0", latest: "v0.9.0-dev.3", available: false, ahead: true},

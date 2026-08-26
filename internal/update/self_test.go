@@ -663,6 +663,23 @@ func TestSelfUpdateInstallsOfficialWhenCurrentIsPrerelease(t *testing.T) {
 	}
 }
 
+func TestSelfUpdateInstallsPrereleaseWhenCurrentIsOfficial(t *testing.T) {
+	payload := []byte("prerelease-binary")
+	env := startSelfUpdateEnv(t, selfUpdateServerConfig{
+		tag:          "v0.9.0-dev.8",
+		checksumBody: fixtureSHA256Hex(payload) + "  mihari-linux-amd64\n",
+		binaryBody:   payload,
+	})
+	result, err := env.updater.Update(context.Background(), env.binaryPath, "v0.8.2", ChannelDev)
+	if err != nil || !result.Updated || result.Ahead || result.Version != "v0.9.0-dev.8" || result.Channel != ChannelDev {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	got, readErr := os.ReadFile(env.binaryPath)
+	if readErr != nil || string(got) != string(payload) {
+		t.Fatalf("binary=%q err=%v", got, readErr)
+	}
+}
+
 func TestSelfUpdaterCheckReportsAvailability(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -690,6 +707,53 @@ func TestSelfUpdaterCheckReportsAvailability(t *testing.T) {
 			}
 			if path != "/repos/mihari-proxy/mihari/releases/latest" {
 				t.Fatalf("path=%q", path)
+			}
+		})
+	}
+}
+
+func TestSelfUpdaterCheckCrossChannelAvailability(t *testing.T) {
+	tests := []struct {
+		name     string
+		current  string
+		latest   string
+		channel  string
+		wantPath string
+	}{
+		{
+			name:     "dev to main",
+			current:  "v0.9.0-dev.8",
+			latest:   "v0.8.2",
+			channel:  ChannelMain,
+			wantPath: "/repos/mihari-proxy/mihari/releases/latest",
+		},
+		{
+			name:     "main to dev",
+			current:  "v0.8.2",
+			latest:   "v0.9.0-dev.8",
+			channel:  ChannelDev,
+			wantPath: "/repos/mihari-proxy/mihari/releases",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var path string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				path = r.URL.Path
+				release := Release{TagName: test.latest, Assets: []Asset{{Name: "mihari-linux-amd64"}}}
+				if test.channel == ChannelDev {
+					_ = json.NewEncoder(w).Encode([]Release{release})
+					return
+				}
+				_ = json.NewEncoder(w).Encode(release)
+			}))
+			defer server.Close()
+			result, err := (SelfUpdater{HTTPClient: server.Client(), APIBase: server.URL}).Check(context.Background(), test.current, test.channel)
+			if err != nil || result.Current != test.current || result.Latest != test.latest || !result.Available || result.Ahead || result.Channel != test.channel {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+			if path != test.wantPath {
+				t.Fatalf("path=%q want=%q", path, test.wantPath)
 			}
 		})
 	}
