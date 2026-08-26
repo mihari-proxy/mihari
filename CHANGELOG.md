@@ -6,6 +6,7 @@
 
 ### Added
 
+- 增加 Mihari 应用通道 main/dev（安装脚本、CLI、TUI；#125）。
 - 为 prerelease 通道增加独立 AList index（`/mihari-release/mihari-dev`）与 `retract-dev` 撤回入口（#126）。
 
 ### Fixed

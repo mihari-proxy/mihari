@@ -67,17 +67,16 @@ sh install-aio.sh        # Windows: powershell -File install-aio.ps1
 | `MIHARI_INDEX_URL` | 公开直链（见脚本默认值） | index.txt 公开直链（脚本3）；默认仍是稳定 `/mihari-release/mihari/index.txt` |
 | `MIHARI_BUNDLE_URL` | 空 | 显式指定整合包 URL，**跳过 index 与 sha256 校验**（信任自担） |
 
-README 默认安装命令仍指向稳定入口。覆盖 `MIHARI_INDEX_URL` 可解析 dev index，下载器本身仍从稳定根目录获取（dev 根不放置 `install-aio-remote.sh` / `.ps1`）：
+脚本 3 `--channel` 选择默认 index：缺省/`main` 读稳定 `…/mihari/index.txt`，`--channel dev` 读公开 `…/mihari-dev/index.txt`。`MIHARI_INDEX_URL` 仍可覆盖（即使同时传 `--channel dev`）。下载器本身仍从稳定根目录获取（dev 根不放置 `install-aio-remote.sh` / `.ps1`）。操作者仍可用 `$env:MIHARI_INDEX_URL=` 指向任意 index。
 
 ```bash
-# Linux / macOS：用稳定下载器解析 dev index
-curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.sh | MIHARI_INDEX_URL=https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt bash
+# Linux / macOS：稳定下载器 + --channel 选择默认 index
+curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.sh | bash -s -- --channel dev
 ```
 
 ```powershell
-# Windows (PowerShell)：用稳定下载器解析 dev index
-$env:MIHARI_INDEX_URL='https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt'
-& ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1)))
+# Windows (PowerShell)：稳定下载器 + -Channel 选择默认 index
+& ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1))) -Channel dev
 ```
 
 ---
