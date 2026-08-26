@@ -1598,6 +1598,10 @@ def test_release_document_requires_changelog_gate_for_stable_only():
     assert "不要求" in dev_dispatch or "不必" in dev_dispatch or "不校验 CHANGELOG" in dev_dispatch
     assert "不得修改" in release
     assert "chore/release-" in release
+    assert "### 1. 人手收口 CHANGELOG" in runbook
+    assert "人工 PR" in runbook
+    assert "不会修改 `CHANGELOG.md`" in runbook
+    assert "不会创建 `chore/release" in runbook
 
 
 def test_release_documents_scope_existing_asset_preflight_to_dev():
