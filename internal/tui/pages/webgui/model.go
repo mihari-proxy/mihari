@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -374,7 +373,7 @@ func (m *Model) View() string {
 	textW := ui.SectionTextWidth(inner)
 	line1 := ui.TruncateVisible(valueOr(m.status.GatewayHealth, ui.UnknownLabel)+"  "+valueOr(m.status.GatewayAddr, ui.MissingValue), textW)
 	line2 := ui.TruncateVisible(fmt.Sprintf("%s %s  ·  %s %d", ui.ActivePanelLabel, active, ui.BrowserSessionsLabel, m.status.BrowserSessions), textW)
-	header := line1 + "\n" + line2 + "\n" + renderCacheRefreshHint(m.theme, textW)
+	header := line1 + "\n" + line2 + "\n" + ui.RenderWarningCallout(m.theme, ui.WebGUICacheRefreshHint, textW)
 	var parts []string
 	parts = append(parts, ui.RenderBorderedSection(m.theme, ui.WebGUITitle, header, inner))
 
@@ -433,22 +432,6 @@ func boolState(label string, enabled bool) string {
 		state = ui.OnLabel
 	}
 	return label + " " + state
-}
-
-func renderCacheRefreshHint(theme ui.Theme, width int) string {
-	style := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(theme.ColorWarning).
-		Background(lipgloss.Color("15"))
-	text := ui.WebGUICacheRefreshHint
-	if width < 1 || lipgloss.Width(text) <= width {
-		return style.Render(text)
-	}
-	var lines []string
-	for _, line := range strings.Split(lipgloss.NewStyle().Width(width).Render(text), "\n") {
-		lines = append(lines, style.Render(line))
-	}
-	return strings.Join(lines, "\n")
 }
 
 func valueOr(value, fallback string) string {
