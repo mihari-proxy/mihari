@@ -2,6 +2,8 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
+> **免责声明**：本项目仅供 Go TUI 工具的学习与交流。这是一个非营利开源项目，现在及未来均不接受任何赞助或捐赠。
+
 [![license](https://img.shields.io/github/license/mihari-proxy/mihari)](LICENSE)
 [![ci](https://img.shields.io/github/actions/workflow/status/mihari-proxy/mihari/ci.yml?branch=main)](https://github.com/mihari-proxy/mihari/actions)
 [![go version](https://img.shields.io/github/go-mod/go-version/mihari-proxy/mihari)](go.mod)
