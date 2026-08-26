@@ -25,11 +25,11 @@ type rootSelfUpdater struct {
 	result update.CheckResult
 }
 
-func (f rootSelfUpdater) Check(context.Context, string) (update.CheckResult, error) {
+func (f rootSelfUpdater) Check(context.Context, string, string) (update.CheckResult, error) {
 	return f.result, nil
 }
 
-func (rootSelfUpdater) Update(context.Context, string, string) (update.Result, error) {
+func (rootSelfUpdater) Update(context.Context, string, string, string) (update.Result, error) {
 	return update.Result{}, nil
 }
 

@@ -1,17 +1,155 @@
 # mihari one-line installer for Windows (PowerShell).
 #   irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/scripts/install/install.ps1 | iex
+# File invocation reads -Channel from $args. irm | iex uses $env:MIHARI_CHANNEL.
 #
 # Environment overrides:
 #   $env:MIHARI_REPO        owner/repo (default mihari-proxy/mihari)
 #   $env:MIHARI_BIN         install dir (default %LOCALAPPDATA%\Programs\mihari)
-#   $env:MIHARI_VERSION     release tag to install (default: latest)
+#   $env:MIHARI_VERSION     release tag to install (default: channel latest)
+#   $env:MIHARI_CHANNEL     main|dev when -Channel is omitted
 #   $env:MIHARI_NO_INSTALL  set to 1 to download only
 $ErrorActionPreference = 'Stop'
 
+function Info($m) { Write-Host "* $m" -ForegroundColor Cyan }
+function Fail($m) { Write-Host "error: $m" -ForegroundColor Red; throw $m }
+
+$channel = ''
+$explicit = 0
+$i = 0
+while ($i -lt $args.Count) {
+  $token = [string]$args[$i]
+  if ($token -match '^(?i)-channel:(.+)$') {
+    $channel = $Matches[1]
+    $explicit = 1
+    $i++
+    continue
+  }
+  if ($token -match '^(?i)-channel$') {
+    if ($i + 1 -ge $args.Count) { Fail 'missing -Channel value' }
+    $channel = [string]$args[$i + 1]
+    $explicit = 1
+    $i += 2
+    continue
+  }
+  Fail "unknown argument: $token"
+}
+if ($explicit -eq 0 -and $env:MIHARI_CHANNEL) {
+  $channel = $env:MIHARI_CHANNEL
+  $explicit = 1
+}
+if ($channel -and $channel -cnotin @('main', 'dev')) {
+  Fail 'mihari channel must be main or dev'
+}
+
 $repo = if ($env:MIHARI_REPO) { $env:MIHARI_REPO } else { 'mihari-proxy/mihari' }
 $binDir = if ($env:MIHARI_BIN) { $env:MIHARI_BIN } else { Join-Path $env:LOCALAPPDATA 'Programs\mihari' }
+$githubApi = if ($env:MIHARI_GITHUB_API) { $env:MIHARI_GITHUB_API.TrimEnd('/') } else { 'https://api.github.com' }
 
-function Info($m) { Write-Host "* $m" -ForegroundColor Cyan }
+function Test-CanonicalDev([string]$tag) {
+  return [bool]($tag -cmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$')
+}
+
+function Parse-Canonical([string]$tag) {
+  if ($tag -cmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$') {
+    return @{ Major = [int]$Matches[1]; Minor = [int]$Matches[2]; Patch = [int]$Matches[3]; Dev = [int]$Matches[4]; IsDev = $true }
+  }
+  if ($tag -cmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+    return @{ Major = [int]$Matches[1]; Minor = [int]$Matches[2]; Patch = [int]$Matches[3]; Dev = 0; IsDev = $false }
+  }
+  return $null
+}
+
+function Compare-Canonical([string]$left, [string]$right) {
+  $a = Parse-Canonical $left
+  $b = Parse-Canonical $right
+  if (-not $a -or -not $b) { return 0 }
+  if ($a.Major -ne $b.Major) { return [Math]::Sign($a.Major - $b.Major) }
+  if ($a.Minor -ne $b.Minor) { return [Math]::Sign($a.Minor - $b.Minor) }
+  if ($a.Patch -ne $b.Patch) { return [Math]::Sign($a.Patch - $b.Patch) }
+  if ($a.IsDev -ne $b.IsDev) { if ($a.IsDev) { return -1 } else { return 1 } }
+  if ($a.IsDev) { return [Math]::Sign($a.Dev - $b.Dev) }
+  return 0
+}
+
+function Get-NextReleaseLink($headers) {
+  $values = @()
+  foreach ($key in @('Link', 'link')) {
+    if ($headers[$key]) { $values += $headers[$key] }
+  }
+  foreach ($value in $values) {
+    foreach ($part in (([string]$value) -split ',')) {
+      if ($part -match 'rel\s*=\s*"next"' -and $part -match '<([^>]+)>') {
+        return $Matches[1]
+      }
+    }
+  }
+  return $null
+}
+
+function Resolve-DevTag {
+  $url = "$githubApi/repos/$repo/releases?per_page=100"
+  $best = $null
+  for ($page = 0; $page -lt 5; $page++) {
+    try {
+      $req = [Net.HttpWebRequest]::Create($url)
+      $req.Method = 'GET'
+      $req.UserAgent = 'mihari'
+      $req.Accept = 'application/vnd.github+json'
+      $req.KeepAlive = $false
+      $req.ServicePoint.Expect100Continue = $false
+      $resp = $req.GetResponse()
+    } catch {
+      Fail 'failed to list GitHub Releases; set MIHARI_VERSION=vX.Y.Z-dev.N'
+    }
+    try {
+      $headers = @{}
+      foreach ($name in $resp.Headers.AllKeys) { $headers[$name] = $resp.Headers[$name] }
+      $reader = New-Object IO.StreamReader($resp.GetResponseStream())
+      $body = $reader.ReadToEnd()
+      $reader.Close()
+      if ([Text.Encoding]::UTF8.GetByteCount($body) -gt 8MB) {
+        Fail 'mihari release list is too large; set MIHARI_VERSION=vX.Y.Z-dev.N'
+      }
+    } finally {
+      if ($resp) { $resp.Close() }
+    }
+    $releases = @()
+    try { $releases = @($body | ConvertFrom-Json) } catch { $releases = @() }
+    foreach ($rel in $releases) {
+      if ($rel.draft) { continue }
+      $tag = [string]$rel.tag_name
+      if (-not $tag) { $tag = [string]$rel.tagName }
+      if ($tag -match ' ') { continue }
+      if (-not (Test-CanonicalDev $tag)) { continue }
+      if (-not $best -or (Compare-Canonical $tag $best) -gt 0) { $best = $tag }
+    }
+    if (-not $best) {
+      foreach ($obj in [regex]::Matches([string]$body, '\{[^{}]*\}')) {
+        $chunk = $obj.Value
+        if ($chunk -match '"draft"\s*:\s*true') { continue }
+        $tagMatch = [regex]::Match($chunk, '"tag_name"\s*:\s*"([^"]*)"')
+        if (-not $tagMatch.Success) { continue }
+        $tag = $tagMatch.Groups[1].Value
+        if (-not (Test-CanonicalDev $tag)) { continue }
+        if (-not $best -or (Compare-Canonical $tag $best) -gt 0) { $best = $tag }
+      }
+    }
+    $next = Get-NextReleaseLink $headers
+    if (-not $next) { break }
+    $url = $next
+  }
+  if (-not $best) { Fail 'no canonical mihari dev release; set MIHARI_VERSION=vX.Y.Z-dev.N' }
+  return $best
+}
+
+function Write-MihariChannel([string]$name) {
+  $root = if ($env:MIHARI_DATA) { $env:MIHARI_DATA } else { Join-Path $env:USERPROFILE '.mihari' }
+  New-Item -ItemType Directory -Force -Path $root | Out-Null
+  $path = Join-Path $root 'mihari-channel'
+  $tmp = Join-Path $root ('.mihari-channel.tmp-' + [Guid]::NewGuid().ToString('N'))
+  [IO.File]::WriteAllText($tmp, ($name + "`n"))
+  Move-Item -LiteralPath $tmp -Destination $path -Force
+}
 
 # Detect architecture.
 $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
@@ -25,9 +163,21 @@ $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
 $asset = "mihari-windows-$arch.exe"
 if ($env:MIHARI_VERSION) {
   $url = "https://github.com/$repo/releases/download/$($env:MIHARI_VERSION)/$asset"
+} elseif ($channel -eq 'dev') {
+  $tag = Resolve-DevTag
+  $url = "https://github.com/$repo/releases/download/$tag/$asset"
 } else {
   $url = "https://github.com/$repo/releases/latest/download/$asset"
 }
+
+if ($env:MIHARI_INSTALL_TEST_MODE -eq '1') {
+  if ($explicit -eq 1) { Write-MihariChannel $channel }
+  Write-Output "CHANNEL=$channel"
+  Write-Output "EXPLICIT=$explicit"
+  Write-Output "URL=$url"
+  return
+}
+
 $dest = Join-Path $binDir 'mihari.exe'
 
 New-Item -ItemType Directory -Force -Path $binDir | Out-Null
@@ -79,12 +229,14 @@ try {
       Info "Elevating to restart the Windows service..."
       Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile', '-Command', $swap
     }
+    if ($explicit -eq 1) { Write-MihariChannel $channel }
     Write-Host "`n[OK] Updated. Manage with: mihari status | mihari sub add <url>" -ForegroundColor Green
     return
   }
 
   # Not running (fresh install, or service stopped): just put the exe in place.
   Move-Item -LiteralPath $tmp -Destination $dest -Force
+  if ($explicit -eq 1) { Write-MihariChannel $channel }
 } catch {
   if (Test-Path $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
   throw

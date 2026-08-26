@@ -17,10 +17,51 @@
 #   MIHARI_DATA   data root (default ~/.mihari)
 set -eu
 
-bundle_dir="${1:-$(cd "$(dirname "$0")" && pwd)}"
+CHANNEL=""
+CHANNEL_EXPLICIT=0
+bundle_dir=""
 
 info() { printf '\033[1;34m•\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --channel)
+      [ $# -ge 2 ] || err "missing --channel value"
+      [ -n "$2" ] || err "missing --channel value"
+      CHANNEL="$2"
+      CHANNEL_EXPLICIT=1
+      shift 2
+      ;;
+    --channel=*)
+      CHANNEL="${1#--channel=}"
+      CHANNEL_EXPLICIT=1
+      [ -n "$CHANNEL" ] || err "missing --channel value"
+      shift
+      ;;
+    -*)
+      err "unknown flag: $1"
+      ;;
+    *)
+      [ -z "$bundle_dir" ] || err "unexpected extra argument: $1"
+      bundle_dir="$1"
+      shift
+      ;;
+  esac
+done
+if [ -z "$bundle_dir" ]; then
+  bundle_dir="$(cd "$(dirname "$0")" && pwd)"
+fi
+if [ "$CHANNEL_EXPLICIT" -eq 0 ] && [ -n "${MIHARI_CHANNEL:-}" ]; then
+  CHANNEL="$MIHARI_CHANNEL"
+  CHANNEL_EXPLICIT=1
+fi
+if [ -n "$CHANNEL" ]; then
+  case "$CHANNEL" in
+    main|dev) ;;
+    *) err "mihari channel must be main or dev" ;;
+  esac
+fi
 
 [ -f "$bundle_dir/mihari" ] || err "all-in-one bundle not found at $bundle_dir (expected the mihari binary)"
 [ -f "$bundle_dir/data/bin/mihomo" ] || err "bundled mihomo core missing at $bundle_dir/data/bin/mihomo"
@@ -31,9 +72,55 @@ BIN_DIR="${MIHARI_BIN:-/usr/local/bin}"
 DATA_DIR="${MIHARI_DATA:-$HOME/.mihari}"
 mihari_bin="${BIN_DIR}/mihari"
 
+channel_data_root() {
+  if [ -n "${MIHARI_DATA:-}" ]; then
+    printf '%s\n' "$MIHARI_DATA"
+    return
+  fi
+  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    case "$SUDO_USER" in
+      *[!A-Za-z0-9._-]*|'') err "resolve sudo user home" ;;
+    esac
+    home=""
+    if command -v getent >/dev/null 2>&1; then
+      home="$(getent passwd "$SUDO_USER" | cut -d: -f6 || true)"
+    fi
+    if [ -z "$home" ]; then
+      home="$(eval echo "~$SUDO_USER")"
+    fi
+    case "$home" in
+      /*) ;;
+      *) err "resolve mihari channel data root: home is not absolute" ;;
+    esac
+    printf '%s\n' "$home/.mihari"
+    return
+  fi
+  printf '%s\n' "${HOME}/.mihari"
+}
+
+write_mihari_channel() {
+  channel="$1"
+  root="$(channel_data_root)"
+  created=0
+  [ -d "$root" ] || created=1
+  mkdir -p "$root"
+  tmp="$(mktemp "$root/.mihari-channel.tmp.XXXXXX")"
+  printf '%s\n' "$channel" >"$tmp"
+  chmod 0600 "$tmp"
+  mv -f "$tmp" "$root/mihari-channel"
+  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    uid="$(id -u "$SUDO_USER")"
+    gid="$(id -g "$SUDO_USER")"
+    if [ "$created" -eq 1 ]; then
+      chown "$uid:$gid" "$root"
+    fi
+    chown "$uid:$gid" "$root/mihari-channel"
+  fi
+}
+
 # Elevate for writes to the system binary dir when needed (mirrors install.sh).
 SUDO=""
-if [ ! -w "$BIN_DIR" ] 2>/dev/null; then
+if [ "${MIHARI_INSTALL_TEST_MODE:-}" != "1" ] && [ ! -w "$BIN_DIR" ] 2>/dev/null; then
   if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
     SUDO="sudo"
   fi
@@ -43,17 +130,19 @@ fi
 # `service stop` covers the registered-service case (and survives a systemd
 # restart policy); pkill covers a foreground daemon. This symmetric handling is
 # the gap install.sh leaves open (design §4.4).
-if [ -x "$mihari_bin" ]; then
-  $SUDO "$mihari_bin" service stop >/dev/null 2>&1 || true
-fi
-if command -v pgrep >/dev/null 2>&1 && pgrep -x mihari >/dev/null 2>&1; then
-  info "检测到运行中的 mihari，停止以释放文件锁…"
-  pkill -x mihari >/dev/null 2>&1 || true
-  tries=0
-  while [ "$tries" -lt 5 ] && pgrep -x mihari >/dev/null 2>&1; do
-    tries=$((tries + 1))
-    sleep 1
-  done
+if [ "${MIHARI_INSTALL_TEST_MODE:-}" != "1" ]; then
+  if [ -x "$mihari_bin" ]; then
+    $SUDO "$mihari_bin" service stop >/dev/null 2>&1 || true
+  fi
+  if command -v pgrep >/dev/null 2>&1 && pgrep -x mihari >/dev/null 2>&1; then
+    info "检测到运行中的 mihari，停止以释放文件锁…"
+    pkill -x mihari >/dev/null 2>&1 || true
+    tries=0
+    while [ "$tries" -lt 5 ] && pgrep -x mihari >/dev/null 2>&1; do
+      tries=$((tries + 1))
+      sleep 1
+    done
+  fi
 fi
 
 # 1. mihari binary -> BIN_DIR.
@@ -71,6 +160,14 @@ if [ -f "$bundle_dir/data/bin/core-channel" ]; then
 fi
 install -m 0644 "$bundle_dir/data/geoip/GeoLite2-Country.mmdb" "$DATA_DIR/geoip/GeoLite2-Country.mmdb"
 install -m 0644 "$bundle_dir/data/geoip/GeoLite2-ASN.mmdb" "$DATA_DIR/geoip/GeoLite2-ASN.mmdb"
+
+if [ "$CHANNEL_EXPLICIT" -eq 1 ]; then
+  write_mihari_channel "$CHANNEL"
+fi
+
+if [ "${MIHARI_INSTALL_TEST_MODE:-}" = "1" ]; then
+  exit 0
+fi
 
 # 3. Service: reinstall when registered (re-stages the service copy from the
 #    freshly installed PATH binary, closing the "service vs PATH" version drift),
