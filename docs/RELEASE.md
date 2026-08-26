@@ -37,7 +37,7 @@ Dev 发布固定 `refs/heads/dev` 来源并校验 canonical `vX.Y.Z-dev.N` 版�
 
 ### 1. 通过晋级 PR 合并到 main
 
-将已经通过 dev 集成验证的 release-prep 变更通过 `dev → main` 晋级 PR 合并；不要直接推送或提交 `main`。
+功能 PR 合进 `dev` 时不得修改 `CHANGELOG.md`。正式发版前从 `dev` 拉 `chore/release-vX.Y.Z`，只在该 PR 里把 CHANGELOG 收口，合进 `dev` 后再走 `dev → main` 晋级 PR；不要直接推送或提交 `main`。
 
 ```bash
 git checkout main
@@ -50,7 +50,7 @@ git pull origin main
 
 ### 3. 记录精确 main commit
 
-确认 CHANGELOG 与 release input lock 已随晋级 PR 进入 `main`。CHANGELOG 必须把 `[Unreleased]` 收口为 `## [vX.Y.Z] - YYYY-MM-DD`：该节至少一条条目，且是 Unreleased 后的第一个版本节；Unreleased 下不得再留 bullet。`release.yml` 会在构建前和发布前读取同一 SHA 上的 `CHANGELOG.md`，不满足则 fail closed。记录远端 `main` 当前精确的 40 位小写 commit SHA：
+确认 CHANGELOG 与 release input lock 已随 `chore/release-*` 与晋级 PR 进入 `main`。CHANGELOG 必须把 `[Unreleased]` 收口为 `## [vX.Y.Z] - YYYY-MM-DD`：该节至少一条条目，且是 Unreleased 后的第一个版本节；Unreleased 下不得再留 bullet。`release.yml` 会在构建前和发布前读取同一 SHA 上的 `CHANGELOG.md`，不满足则 fail closed。记录远端 `main` 当前精确的 40 位小写 commit SHA：
 
 ```bash
 git rev-parse origin/main
@@ -175,7 +175,7 @@ Get-FileHash mihari-windows-amd64.exe -Algorithm SHA256
 
 ### Dev 手动发布
 
-`release-dev.yml` 不校验 CHANGELOG。预发布把用户可见条目继续记在 `[Unreleased]`，正式版晋级前再收口。
+`release-dev.yml` 不校验 CHANGELOG。指向 `dev` 的功能 PR 不得修改 `CHANGELOG.md`；CHANGELOG 只在正式发版的 `chore/release-*` 中收口。
 
 从 GitHub Actions 选择 `release-dev` workflow 和受保护的 `dev` ref，填写符合 canonical `vX.Y.Z-dev.N` 格式的版本（各数字段不允许前导零）。workflow 先创建或复用 GitHub dev tag、prerelease 并上传精确 14 个 assets；GitHub 最终验收成功后，若 `ALIST_URL` 存在则写入独立 AList 根目录 `/mihari-release/mihari-dev` 及其 `index.txt`。`v0.9.0-dev.2` 已按 GitHub-only 路径发布并完成公开资产验收。不回溯该历史版本是首次真实 dispatch 的人工操作规则：workflow 不会因历史 GitHub-only 版本自动拒绝；空的 dev AList 根上重跑会创建通道并写入该版本。请从本变更后的下一个 `vX.Y.Z-dev.N` 开始写入 AList。
 

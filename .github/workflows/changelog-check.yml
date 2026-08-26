@@ -1,0 +1,48 @@
+name: changelog check
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [dev]
+
+jobs:
+  check:
+    name: Validate changelog ownership
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Fetch main for changelog comparison
+        run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Validate changelog ownership
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if git diff --quiet "origin/${BASE_REF}...HEAD" -- CHANGELOG.md; then
+            CHANGELOG_CHANGED=false
+          else
+            status=$?
+            [ "${status}" -eq 1 ] || { echo "::error::unable to diff CHANGELOG.md against the PR base"; exit "${status}"; }
+            CHANGELOG_CHANGED=true
+          fi
+          if git diff --quiet origin/main HEAD -- CHANGELOG.md; then
+            HEAD_MATCHES_MAIN=true
+          else
+            status=$?
+            [ "${status}" -eq 1 ] || { echo "::error::unable to compare CHANGELOG.md with main"; exit "${status}"; }
+            HEAD_MATCHES_MAIN=false
+          fi
+          python scripts/release/changelog_branch_policy.py \
+            --head-ref "${HEAD_REF}" \
+            --changelog-changed "${CHANGELOG_CHANGED}" \
+            --head-matches-main "${HEAD_MATCHES_MAIN}"

@@ -185,6 +185,8 @@ main ──sync PR──> dev
 
 Regular features and fixes are merged from `feat/*` or `fix/*` branches via PR into `dev`, then promoted to `main` via a promotion PR after integration verification in dev. Emergency fixes are created from `main` as `hotfix/*`, merged via PR into `main`, and then a sync PR must merge `main` back to `dev`. Regular PRs use squash merge; `dev → main` promotions and `main → dev` syncs use merge commits to preserve release history and avoid re-displaying already-released commits. Do not push directly to `main` or `dev`.
 
+Feature PRs targeting `dev` must not modify `CHANGELOG.md`. The changelog is written only by official `chore/release-*` release-prep PRs (closing entries into `## [vX.Y.Z]`) or copied back by a `main → dev` sync. CI rejects other `CHANGELOG.md` edits; restoring the file so it matches `main` is allowed.
+
 Before `dev` was created and protected, Issue #115's bootstrap changes used a one-time main PR; this is not an exception to direct push or direct commit to `main`. After merging, the normal flow above was restored.
 
 1. **Create a branch**

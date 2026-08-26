@@ -15,6 +15,9 @@ RETRACT_DEV_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workfl
 STABLE_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "release.yml"
 STABLE_RETRACT_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "retract.yml"
 CI_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "ci.yml"
+CHANGELOG_CHECK_WORKFLOW = (
+    Path(__file__).resolve().parents[3] / ".github" / "workflows" / "changelog-check.yml"
+)
 AGENTS = Path(__file__).resolve().parents[3] / "AGENTS.md"
 CONTRIBUTING = Path(__file__).resolve().parents[3] / ".github" / "CONTRIBUTING.md"
 CONTRIBUTING_ZH_CN = Path(__file__).resolve().parents[3] / ".github" / "CONTRIBUTING.zh-CN.md"
@@ -32,6 +35,7 @@ RELEASE_SAFETY_TESTS = (
     "scripts/release/tests/test_release_policy.py "
     "scripts/release/tests/test_github_release_policy.py "
     "scripts/release/tests/test_changelog_policy.py "
+    "scripts/release/tests/test_changelog_branch_policy.py "
     "scripts/release/tests/test_release_workflow.py "
     "scripts/release/tests/test_alist_client.py "
     "scripts/release/tests/test_alist_index.py "
@@ -1281,9 +1285,12 @@ def test_branch_governance_keeps_feature_work_off_main_and_dev_without_promising
     contributing_zh_cn = CONTRIBUTING_ZH_CN.read_text(encoding="utf-8")
     normalized_agents = agents.replace("`", "")
 
+    assert "功能 PR 不得修改 CHANGELOG.md" in normalized_agents
     assert "main 或 dev 分支上直接修改或提交" in normalized_agents
     assert "一次性 main PR" in normalized_agents
     assert "main 或 dev 分支创建 commit" in normalized_agents
+    assert "指向 `dev` 的功能 PR 不得修改 `CHANGELOG.md`" in contributing_zh_cn
+    assert "chore/release-*" in contributing_zh_cn
     assert "feat/*、fix/* ──PR──> dev ──晋级 PR──> main" in contributing_zh_cn
     assert "hotfix/*（从 main） ──PR──> main" in contributing_zh_cn
     assert "main ──同步 PR──> dev" in contributing_zh_cn
@@ -1541,6 +1548,23 @@ def test_stable_release_validates_changelog_before_build_and_publish():
         assert "${VERSION}" not in run.replace('"${VERSION}"', "")
 
 
+def test_changelog_check_workflow_gates_feature_prs_into_dev():
+    workflow = CHANGELOG_CHECK_WORKFLOW.read_text(encoding="utf-8")
+    document = yaml.safe_load(workflow)
+    job = document["jobs"]["check"]
+    policy = next(step for step in job["steps"] if step.get("name") == "Validate changelog ownership")
+
+    assert document[True]["pull_request"]["branches"] == ["dev"]
+    assert document["permissions"] == {"contents": "read"}
+    assert "changelog_branch_policy.py" in policy["run"]
+    assert policy["env"]["HEAD_REF"] == "${{ github.head_ref }}"
+    assert "${{ github.head_ref }}" not in policy["run"]
+    assert 'echo "${HEAD_REF}"' not in policy["run"]
+    assert "--head-ref \"${HEAD_REF}\"" in policy["run"] or '--head-ref "${HEAD_REF}"' in policy["run"]
+    assert "origin/main" in workflow
+    assert "CHANGELOG.md" in workflow
+
+
 def test_dev_release_does_not_require_changelog_gate():
     dev_release = WORKFLOW.read_text(encoding="utf-8")
     retract_dev = RETRACT_DEV_WORKFLOW.read_text(encoding="utf-8")
@@ -1565,6 +1589,8 @@ def test_release_document_requires_changelog_gate_for_stable_only():
     assert "CHANGELOG" in checklist
     assert "dev" in dev_dispatch.lower()
     assert "不要求" in dev_dispatch or "不必" in dev_dispatch or "不校验 CHANGELOG" in dev_dispatch
+    assert "不得修改" in release
+    assert "chore/release-" in release
 
 
 def test_release_documents_scope_existing_asset_preflight_to_dev():

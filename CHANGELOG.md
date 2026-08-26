@@ -6,34 +6,7 @@
 
 ### Added
 
-- 增加 Mihari 应用通道 main/dev（安装脚本、CLI、TUI；#125）。
-- 为 prerelease 通道增加独立 AList index（`/mihari-release/mihari-dev`）与 `retract-dev` 撤回入口（#126）。
-
-### Changed
-
-- 正式版 `release.yml` 在构建与发布前校验 CHANGELOG 已收口到目标版本节；dev 预发布不校验。
-
 ### Fixed
-
-- 兼容当前 AList `/api/fs/list` 不再返回分页字段的响应，避免发版脚本拒绝合法目录 listing。
-- 把 AList 对缺失目录返回的 `object not found` 视为不存在，而不是发版检查失败。
-
-## [v0.9.0] - 2026-08-24
-
-### Added
-
-- 增加受保护的 `dev` 集成分支与 canonical `vX.Y.Z-dev.N` GitHub prerelease 流程：固定源 commit SHA，构建六个平台并校验精确 14 个 assets，且不改变 stable `/releases/latest`（#120）。
-
-### Changed
-
-- Stable 发布改为固定 `main` commit SHA，并加固 stable AList 发布/撤回事务、索引恢复与通道隔离（#120）。
-
-### Fixed
-
-- Windows TUN 冲突探测避免把本实例的 mihomo 进程识别为外部冲突（#114）。
-- 修复 dev prerelease Create Release 的 `make_latest` 参数类型，并在创建失败时保留 GitHub API 响应与错误输出。
-- 修复同一 commit 在创建 release tag 前后因 Go VCS/module 元数据变化而产生不同二进制的问题；发布构建改用 `-buildvcs=false -trimpath`。
-- all-in-one 构建改为消费已审核的不可变 mihomo/GeoIP 输入 lock，避免发版重试期间上游 latest/ref 漂移并导致 asset checksum 冲突。
 
 ## [v0.8.2] - 2026-08-18
 

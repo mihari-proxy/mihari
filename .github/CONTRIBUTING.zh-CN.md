@@ -185,6 +185,8 @@ main ──同步 PR──> dev
 
 普通功能和修复从 `feat/*` 或 `fix/*` 分支通过 PR 合并到 `dev`，在 dev 集成验证后再通过晋级 PR 进入 `main`。紧急修复从 `main` 创建 `hotfix/*`，通过 PR 合并到 `main`，随后必须用同步 PR 将 `main` 合并回 `dev`。普通 PR 使用 squash merge；`dev → main` 晋级和 `main → dev` 同步使用 merge commit，以保留发布历史和避免重复显示已发布提交。不得直接推送 `main` 或 `dev`。
 
+指向 `dev` 的功能 PR 不得修改 `CHANGELOG.md`。CHANGELOG 只由正式发版的 `chore/release-*` PR 写入（把条目收口到 `## [vX.Y.Z]`），或随 `main → dev` 同步回到 `dev`。CI 会拒绝其它对 `CHANGELOG.md` 的改动；若只是把 `dev` 上的文件恢复成与 `main` 一致，则允许。
+
 在 `dev` 创建并受保护前，Issue #115 的 bootstrap 变更使用一次性 main PR；这不是直接推送或直接提交 `main` 的例外。合并后恢复上述常规流。
 
 1. **创建分支**
