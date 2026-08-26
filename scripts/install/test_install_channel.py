@@ -21,6 +21,22 @@ COMPACT_RELEASES = (
     '{"tag_name":"v0.9.0-dev"},{"tag_name":"v0.9.0-dev.1","draft":true},'
     f'{{"tag_name":"{CANONICAL_DEV}"}}]'
 )
+# GitHub list JSON nests author/assets objects. PS 5.1 ConvertFrom-Json flattens
+# arrays, and a \{[^{}]*\} fallback only matches those inner objects.
+NESTED_GITHUB_RELEASES = json.dumps(
+    [
+        {"tag_name": "v0.8.0-dev.99", "draft": False, "assets": [{"name": "x"}]},
+        {"tag_name": "v0.9.0", "draft": False, "author": {"login": "bot"}},
+        {"tag_name": "v0.9.0-dev", "draft": False},
+        {"tag_name": "v0.9.0-dev.1", "draft": True, "assets": [{"name": "y"}]},
+        {
+            "tag_name": CANONICAL_DEV,
+            "draft": False,
+            "assets": [{"name": "mihari-windows-amd64.exe", "id": 1}],
+        },
+    ],
+    separators=(",", ":"),
+)
 
 
 def posix_shell() -> str | None:
@@ -337,6 +353,16 @@ def test_script1_ps1_channel_args_and_env(tmp_path: Path, github_server: GitHubL
     got = parse_test_output(colon.stdout)
     assert got.get("CHANNEL") == "main"
     assert "/releases/latest/download/" in got.get("URL", "")
+
+
+@requires_ps
+def test_script1_ps1_nested_github_json_picks_canonical_dev(tmp_path: Path, github_server: GitHubListServer):
+    github_server.default_body = NESTED_GITHUB_RELEASES.encode()
+    api = f"http://127.0.0.1:{github_server.server_address[1]}"
+    result = run_install_ps1(tmp_path, ["-Channel", "dev"], {"MIHARI_GITHUB_API": api})
+    assert result.returncode == 0, result.stderr + result.stdout
+    got = parse_test_output(result.stdout)
+    assert f"/releases/download/{CANONICAL_DEV}/mihari-windows-" in got.get("URL", "")
 
 
 @requires_ps

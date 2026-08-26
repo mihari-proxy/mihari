@@ -114,7 +114,14 @@ function Resolve-DevTag {
       if ($resp) { $resp.Close() }
     }
     $releases = @()
-    try { $releases = @($body | ConvertFrom-Json) } catch { $releases = @() }
+    try {
+      # PS 5.1 flattens a top-level JSON array into one object. Wrapping
+      # preserves per-release tag_name / draft on nested GitHub payloads.
+      $parsed = ConvertFrom-Json -InputObject ('{"items":' + $body + '}')
+      if ($null -ne $parsed.items) { $releases = @($parsed.items) }
+    } catch {
+      try { $releases = @($body | ConvertFrom-Json) } catch { $releases = @() }
+    }
     foreach ($rel in $releases) {
       if ($rel.draft) { continue }
       $tag = [string]$rel.tag_name
@@ -124,12 +131,13 @@ function Resolve-DevTag {
       if (-not $best -or (Compare-Canonical $tag $best) -gt 0) { $best = $tag }
     }
     if (-not $best) {
-      foreach ($obj in [regex]::Matches([string]$body, '\{[^{}]*\}')) {
-        $chunk = $obj.Value
-        if ($chunk -match '"draft"\s*:\s*true') { continue }
-        $tagMatch = [regex]::Match($chunk, '"tag_name"\s*:\s*"([^"]*)"')
-        if (-not $tagMatch.Success) { continue }
-        $tag = $tagMatch.Groups[1].Value
+      $tagHits = [regex]::Matches([string]$body, '"tag_name"\s*:\s*"([^"]*)"')
+      for ($i = 0; $i -lt $tagHits.Count; $i++) {
+        $tag = $tagHits[$i].Groups[1].Value
+        $start = $tagHits[$i].Index
+        $end = if ($i + 1 -lt $tagHits.Count) { $tagHits[$i + 1].Index } else { $body.Length }
+        $slice = $body.Substring($start, $end - $start)
+        if ($slice -match '"draft"\s*:\s*true') { continue }
         if (-not (Test-CanonicalDev $tag)) { continue }
         if (-not $best -or (Compare-Canonical $tag $best) -gt 0) { $best = $tag }
       }
