@@ -171,6 +171,7 @@ $env:GOOS = 'darwin';  $env:GOARCH = 'arm64'; go build -o bin/mihari-darwin-arm6
 - 平台代码与构建标签配对，通用代码可在三个目标 OS 编译，且保持 CGO-free。
 - 修改过的 Go 文件已格式化，相关测试、race 检查和 vet 已按风险执行。
 - README、命令帮助或架构文档在用户可见行为变化时同步更新。
+- 指向 `dev` 的功能 PR 未修改 `CHANGELOG.md`（仅 `chore/release-*`、`main → dev` 同步，或恢复成与 `main` 一致时例外）。
 - `git diff` 中不含无关文件、临时产物或对用户既有修改的覆盖。
 
 ## 9. Commit 规范

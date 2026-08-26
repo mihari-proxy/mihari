@@ -21,6 +21,7 @@ CHANGELOG_CHECK_WORKFLOW = (
 AGENTS = Path(__file__).resolve().parents[3] / "AGENTS.md"
 CONTRIBUTING = Path(__file__).resolve().parents[3] / ".github" / "CONTRIBUTING.md"
 CONTRIBUTING_ZH_CN = Path(__file__).resolve().parents[3] / ".github" / "CONTRIBUTING.zh-CN.md"
+PR_TEMPLATE = Path(__file__).resolve().parents[3] / ".github" / "PULL_REQUEST_TEMPLATE.md"
 RELEASE_DOCUMENT = Path(__file__).resolve().parents[3] / "docs" / "RELEASE.md"
 DISTRIBUTION_DOCUMENT = Path(__file__).resolve().parents[3] / "docs" / "distribution.md"
 DESIGN_DOCUMENT = (
@@ -1282,10 +1283,16 @@ def test_ci_runs_release_safety_suite_from_pinned_requirements_on_all_integratio
 
 def test_branch_governance_keeps_feature_work_off_main_and_dev_without_promising_review_rules():
     agents = AGENTS.read_text(encoding="utf-8")
+    contributing = CONTRIBUTING.read_text(encoding="utf-8")
     contributing_zh_cn = CONTRIBUTING_ZH_CN.read_text(encoding="utf-8")
+    pr_template = PR_TEMPLATE.read_text(encoding="utf-8")
     normalized_agents = agents.replace("`", "")
 
     assert "功能 PR 不得修改 CHANGELOG.md" in normalized_agents
+    assert "CHANGELOG.md" in agents[agents.index("## 8. 变更检查清单") : agents.index("## 9. Commit 规范")]
+    assert "must not modify `CHANGELOG.md`" in contributing
+    assert "CHANGELOG.md" in pr_template
+    assert "chore/release-" in pr_template
     assert "main 或 dev 分支上直接修改或提交" in normalized_agents
     assert "一次性 main PR" in normalized_agents
     assert "main 或 dev 分支创建 commit" in normalized_agents
