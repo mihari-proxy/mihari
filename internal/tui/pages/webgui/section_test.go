@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
@@ -42,5 +43,38 @@ func TestView_SectionsAndNoTokenLeak(t *testing.T) {
 	lower := strings.ToLower(view)
 	if strings.Contains(lower, "token=") || strings.Contains(lower, "open_url") {
 		t.Fatalf("token/url leaked:\n%s", view)
+	}
+}
+
+func TestView_WebGUISectionEndsWithCacheRefreshHint(t *testing.T) {
+	model := New(nil, []string{protocol.CapabilityWebGUI})
+	model.SetStatus(sampleStatus())
+	model.SetSize(100, 28)
+	view := model.View()
+
+	hint := ui.WebGUICacheRefreshHint
+	if hint == "" {
+		t.Fatal("WebGUICacheRefreshHint must not be empty")
+	}
+	if !strings.Contains(hint, "Ctrl+Shift+R") {
+		t.Fatalf("hint should mention Ctrl+Shift+R: %q", hint)
+	}
+	if !strings.Contains(view, hint) {
+		t.Fatalf("Web GUI section missing cache refresh hint:\n%s", view)
+	}
+
+	panelIdx := strings.Index(view, "Zashboard")
+	hintIdx := strings.Index(view, hint)
+	if panelIdx < 0 || hintIdx < 0 || hintIdx > panelIdx {
+		t.Fatalf("hint should be the last line of the Web GUI section, before panel cards (hint=%d panel=%d)", hintIdx, panelIdx)
+	}
+
+	wantStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(ui.DefaultTheme().ColorWarning).
+		Background(lipgloss.Color("15")).
+		Render(hint)
+	if !strings.Contains(view, wantStyle) {
+		t.Fatalf("hint should be orange text on a white background\nwant style=%q\nview=%s", wantStyle, view)
 	}
 }
