@@ -8,6 +8,25 @@
 
 ### Fixed
 
+## [v0.9.0] - 2026-08-26
+
+### Added
+
+- 建立 `dev` 集成分支与 canonical `vX.Y.Z-dev.N` GitHub prerelease：固定源 commit，发布精确 14 个 assets，且不改写稳定 `/releases/latest`（#115, #120）。
+- 增加 Mihari 应用通道 `main` / `dev`：安装脚本、CLI `self channel`、TUI System 页可跟踪正式版或预发布；`dev` 安装与自更新解析 canonical prerelease，默认 `main` 行为不变（#125, #137）。
+- 预发布通道使用独立 AList index；离线安装 `--channel dev` 读取 `/mihari-release/mihari-dev/index.txt`，稳定 index 与默认安装入口不变（#126, #128）。
+- TUI Web GUI 摘要区增加强制刷新缓存提示（`Ctrl+Shift+R`）；文案为英文且无特殊着色（#144, #145）。
+
+### Changed
+
+- all-in-one 发版只消费仓库内已审核的 `release-inputs.lock.json`，并以 `-buildvcs=false -trimpath` 构建，相同输入可逐字节复现（#124）。
+
+### Fixed
+
+- TUN 冲突探测在 Core PID 缺失或过期时，仍按控制器口占用、父进程与核心映像路径扣除本实例 mihomo，避免把自身识别为外部冲突（#114）。
+- Windows PowerShell 5.1 下 GitHub 在线安装能正确解析 Releases 列表并选出 canonical `vX.Y.Z-dev.N`（#139）。
+- 从 `dev` 切回 `main` 时，当前二进制新于正式 latest 显示为 `ahead`，不再误报可更新（#141）。
+
 ## [v0.8.2] - 2026-08-18
 
 ### Fixed
