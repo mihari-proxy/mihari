@@ -91,7 +91,7 @@ git rev-parse origin/main
 
 all-in-one 的外部输入固定在仓库内的 `scripts/release/release-inputs.lock.json`。lock 记录精确的 mihomo release、六个平台 asset ID/URL/大小/SHA-256，以及 GeoIP commit、不可变 URL 和 SHA-256。构建阶段只读取 lock，**不会**解析 mihomo latest release 或 GeoIP 的可变 `release` ref，也不会在 workflow 中自动更新 lock。
 
-维护者只应在独立的 release-prep PR 中更新它：
+维护者只应在人工 PR `chore/release-*` 中更新它（与收口 CHANGELOG 同一类 PR；release workflow 不会提交 lock）：
 
 ```bash
 go run ./scripts/tools/resolve-release-inputs --channel stable --out scripts/release/release-inputs.lock.json
@@ -230,4 +230,4 @@ dev 撤回使用并发组 `mihari-dev-alist`，不得修改稳定目录、稳定
 - [ ] [CHANGELOG.md](../CHANGELOG.md) 已将 `[Unreleased]` 收口到目标版本节，且 Unreleased 无残留条目；`release.yml` 会 fail closed 校验
 - [ ] 标签版本号与 CHANGELOG.md 中的版本节一致
 - [ ] `go.mod` 仍钉死 Go 1.26.5，发布构建仍使用 `-buildvcs=false -trimpath`
-- [ ] `scripts/release/release-inputs.lock.json` 已在 release-prep PR 中更新（如需）并审核 diff；release workflow 未动态解析 latest/ref
+- [ ] `scripts/release/release-inputs.lock.json` 已在人工 `chore/release-*` PR 中更新（如需）并审核 diff；release workflow 未动态解析 latest/ref，也不会提交 lock

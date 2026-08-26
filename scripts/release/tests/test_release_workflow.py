@@ -1291,6 +1291,8 @@ def test_branch_governance_keeps_feature_work_off_main_and_dev_without_promising
     assert "功能 PR 不得修改 CHANGELOG.md" in normalized_agents
     assert "CHANGELOG.md" in agents[agents.index("## 8. 变更检查清单") : agents.index("## 9. Commit 规范")]
     assert "must not modify `CHANGELOG.md`" in contributing
+    assert "do not modify or commit `CHANGELOG.md`" in contributing
+    assert "不会修改或提交 `CHANGELOG.md`" in contributing_zh_cn
     assert "CHANGELOG.md" in pr_template
     assert "chore/release-" in pr_template
     assert "main 或 dev 分支上直接修改或提交" in normalized_agents

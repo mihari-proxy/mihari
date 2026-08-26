@@ -85,7 +85,7 @@ curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/insta
 
 `scripts/tools/build-all-in-one` 不解析滚动 tag、latest release 或 GeoIP 可变分支。它要求显式传入仓库内已审核的 `scripts/release/release-inputs.lock.json`，并只下载 lock 中精确记录且有 SHA-256 的六个平台 mihomo 资产和两份 GeoIP 数据。当前 checked-in lock 使用 **stable** 内核；预置通道由 lock 的 `mihomo.channel` 决定，而不是由 bundler 在发版时动态选择。
 
-维护者只在独立的 release-prep PR 中更新 lock：
+维护者只在正式发版的人工 PR `chore/release-*` 中更新 lock（与收口 CHANGELOG 同一类 PR；不是 workflow 提交）：
 
 ```sh
 go run ./scripts/tools/resolve-release-inputs --channel stable --out scripts/release/release-inputs.lock.json

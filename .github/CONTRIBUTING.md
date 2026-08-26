@@ -33,7 +33,7 @@ CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "-s -w -X github.com/m
 
 Release builds must use both `-buildvcs=false` and `-trimpath`. The former prevents Go from writing different VCS/module metadata to the same commit before and after tag creation, while the latter removes local build paths; version identity is injected only via `buildinfo.Version` above.
 
-The all-in-one release inputs are fixed in `scripts/release/release-inputs.lock.json` within the repository. The release workflow only consumes this file and does not query mihomo's latest release or GeoIP's mutable branches during release. When upstream inputs need updating, maintainers should run in a separate release-prep PR:
+The all-in-one release inputs are fixed in `scripts/release/release-inputs.lock.json` within the repository. The release workflow only consumes this file and does not query mihomo's latest release or GeoIP's mutable branches during release. When upstream inputs need updating, maintainers should run it in the official human `chore/release-*` PR (the same PR that closes `CHANGELOG.md`):
 
 ```sh
 go run ./scripts/tools/resolve-release-inputs --channel stable --out scripts/release/release-inputs.lock.json
@@ -185,7 +185,7 @@ main ──sync PR──> dev
 
 Regular features and fixes are merged from `feat/*` or `fix/*` branches via PR into `dev`, then promoted to `main` via a promotion PR after integration verification in dev. Emergency fixes are created from `main` as `hotfix/*`, merged via PR into `main`, and then a sync PR must merge `main` back to `dev`. Regular PRs use squash merge; `dev → main` promotions and `main → dev` syncs use merge commits to preserve release history and avoid re-displaying already-released commits. Do not push directly to `main` or `dev`.
 
-Feature PRs targeting `dev` must not modify `CHANGELOG.md`. The changelog is written only by official `chore/release-*` release-prep PRs (closing entries into `## [vX.Y.Z]`) or copied back by a `main → dev` sync. CI rejects other `CHANGELOG.md` edits; restoring the file so it matches `main` is allowed.
+Feature PRs targeting `dev` must not modify `CHANGELOG.md`. The changelog is written only by a human `chore/release-*` PR (closing entries into `## [vX.Y.Z]`) or copied back by a `main → dev` sync. `release.yml` / `release-dev.yml` do not modify or commit `CHANGELOG.md`. CI rejects other `CHANGELOG.md` edits; restoring the file so it matches `main` is allowed.
 
 Before `dev` was created and protected, Issue #115's bootstrap changes used a one-time main PR; this is not an exception to direct push or direct commit to `main`. After merging, the normal flow above was restored.
 
