@@ -125,6 +125,19 @@ def parse_test_output(text: str) -> dict[str, str]:
     return got
 
 
+def apply_ps_compat_env(command_env: dict[str, str], home: Path | None = None) -> None:
+    # Unix pwsh (ubuntu/macos CI) has no LOCALAPPDATA/USERPROFILE/PROCESSOR_ARCHITECTURE.
+    if home is None:
+        existing = command_env.get("USERPROFILE") or command_env.get("HOME") or os.path.expanduser("~") or "."
+        home = Path(existing)
+    if not command_env.get("USERPROFILE"):
+        command_env["USERPROFILE"] = str(home)
+    if not command_env.get("LOCALAPPDATA"):
+        command_env["LOCALAPPDATA"] = str(home / "AppData" / "Local")
+    if not command_env.get("PROCESSOR_ARCHITECTURE"):
+        command_env["PROCESSOR_ARCHITECTURE"] = "AMD64"
+
+
 def run_install_sh(tmp_path: Path, args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     shell = posix_shell()
     assert shell is not None
@@ -154,6 +167,7 @@ def run_install_ps1(tmp_path: Path, args: list[str], env: dict[str, str]) -> sub
     command_env.update(env)
     command_env["MIHARI_INSTALL_TEST_MODE"] = "1"
     command_env["MIHARI_DATA"] = str(tmp_path)
+    apply_ps_compat_env(command_env, tmp_path / "home")
     ps_path = str(INSTALL_PS1).replace("\\", "/")
     args_literal = ", ".join("'{0}'".format(arg.replace("'", "''")) for arg in args)
     wrapper = tmp_path / "run-install.ps1"
@@ -286,6 +300,18 @@ def test_script1_ps1_default_url_is_latest(tmp_path: Path):
 
 
 @requires_ps
+def test_script1_ps1_without_windows_profile_env(tmp_path: Path):
+    result = run_install_ps1(
+        tmp_path,
+        [],
+        {"LOCALAPPDATA": "", "USERPROFILE": "", "PROCESSOR_ARCHITECTURE": ""},
+    )
+    assert result.returncode == 0, result.stderr
+    got = parse_test_output(result.stdout)
+    assert "/releases/latest/download/mihari-windows-" in got.get("URL", "")
+
+
+@requires_ps
 def test_script1_ps1_channel_args_and_env(tmp_path: Path, github_server: GitHubListServer):
     api = f"http://127.0.0.1:{github_server.server_address[1]}"
     result = run_install_ps1(tmp_path, ["-Channel", "dev"], {"MIHARI_GITHUB_API": api})
@@ -366,6 +392,7 @@ def run_install_aio_ps1(tmp_path: Path, args: list[str]) -> subprocess.Completed
     env["MIHARI_INSTALL_TEST_MODE"] = "1"
     env["MIHARI_BIN"] = str(tmp_path / "bin")
     env["MIHARI_DATA"] = str(tmp_path / "data")
+    apply_ps_compat_env(env, tmp_path / "home")
     ps_path = str(INSTALL_AIO_PS1).replace("\\", "/")
     pieces = []
     i = 0
@@ -512,6 +539,7 @@ def run_remote_ps1(args: list[str], env: dict[str, str]) -> subprocess.Completed
     command_env.pop("MIHARI_BUNDLE_URL", None)
     command_env.update(env)
     command_env["MIHARI_INSTALL_TEST_MODE"] = "1"
+    apply_ps_compat_env(command_env)
     ps_path = str(INSTALL_AIO_REMOTE_PS1).replace("\\", "/")
     pieces = []
     i = 0

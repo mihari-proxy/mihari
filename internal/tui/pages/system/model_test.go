@@ -2673,8 +2673,7 @@ func TestSystemMihariChannelEnterConfirmsSwitchWithoutElevation(t *testing.T) {
 	updated, _ := model.Update(ui.ActionPendingMsg{Page: ui.PageSystem, Action: ui.ActionSwitchMihariChannel})
 	model = updated.(*Model)
 	result := intent.Execute()
-	updated, checkCmd := model.Update(result)
-	model = updated.(*Model)
+	_, checkCmd := model.Update(result)
 	if saved.channel != update.ChannelDev {
 		t.Fatalf("saved=%q", saved.channel)
 	}

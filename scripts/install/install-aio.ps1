@@ -48,9 +48,12 @@ $dest = Join-Path $binDir 'mihari.exe'
 
 New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 
-$isAdmin = ([Security.Principal.WindowsPrincipal] `
-  [Security.Principal.WindowsIdentity]::GetCurrent()
-  ).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
+$isAdmin = $false
+if ($env:MIHARI_INSTALL_TEST_MODE -ne '1') {
+  $isAdmin = ([Security.Principal.WindowsPrincipal] `
+    [Security.Principal.WindowsIdentity]::GetCurrent()
+    ).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
+}
 
 $svc = $null
 if ($env:MIHARI_INSTALL_TEST_MODE -ne '1') {
