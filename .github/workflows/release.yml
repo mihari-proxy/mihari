@@ -81,6 +81,13 @@ jobs:
           echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
           echo "should_release=true" >> "${GITHUB_OUTPUT}"
 
+      - name: Validate stable changelog
+        if: steps.gate.outputs.should_resolve == 'true'
+        run: |
+          python scripts/release/changelog_policy.py \
+            --changelog CHANGELOG.md \
+            --version "${VERSION}"
+
   build:
     name: build ${{ matrix.goos }}/${{ matrix.goarch }}
     needs: resolve
@@ -218,6 +225,12 @@ jobs:
             echo "::error::version rejected at final gate"
             exit 1
           fi
+
+      - name: Validate stable changelog
+        run: |
+          python scripts/release/changelog_policy.py \
+            --changelog CHANGELOG.md \
+            --version "${VERSION}"
 
       - name: Download artifacts
         uses: actions/download-artifact@v8

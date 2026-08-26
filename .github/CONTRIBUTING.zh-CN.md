@@ -33,7 +33,7 @@ CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "-s -w -X github.com/m
 
 发布构建必须同时使用 `-buildvcs=false -trimpath`。前者避免同一 commit 在创建 tag 前后被 Go 写入不同的 VCS/module 元数据，后者去除本机构建路径；版本身份仍只由上面的 `buildinfo.Version` 注入。
 
-all-in-one 发布输入固定在仓库内的 `scripts/release/release-inputs.lock.json`。发布 workflow 只消费该文件，不在发版时查询 mihomo 的 latest release 或 GeoIP 的可变分支。需要更新上游输入时，维护者应在独立的 release-prep PR 中运行：
+all-in-one 发布输入固定在仓库内的 `scripts/release/release-inputs.lock.json`。发布 workflow 只消费该文件，不在发版时查询 mihomo 的 latest release 或 GeoIP 的可变分支。需要更新上游输入时，维护者应在正式发版的人工 PR `chore/release-*` 中运行（与收口 `CHANGELOG.md` 同一类 PR）：
 
 ```sh
 go run ./scripts/tools/resolve-release-inputs --channel stable --out scripts/release/release-inputs.lock.json
@@ -184,6 +184,8 @@ main ──同步 PR──> dev
 ```
 
 普通功能和修复从 `feat/*` 或 `fix/*` 分支通过 PR 合并到 `dev`，在 dev 集成验证后再通过晋级 PR 进入 `main`。紧急修复从 `main` 创建 `hotfix/*`，通过 PR 合并到 `main`，随后必须用同步 PR 将 `main` 合并回 `dev`。普通 PR 使用 squash merge；`dev → main` 晋级和 `main → dev` 同步使用 merge commit，以保留发布历史和避免重复显示已发布提交。不得直接推送 `main` 或 `dev`。
+
+指向 `dev` 的功能 PR 不得修改 `CHANGELOG.md`。CHANGELOG 只由人工 PR `chore/release-*` 写入（把条目收口到 `## [vX.Y.Z]`），或随 `main → dev` 同步回到 `dev`。`release.yml` / `release-dev.yml` 不会修改或提交 `CHANGELOG.md`。CI 会拒绝其它对 `CHANGELOG.md` 的改动；若只是把 `dev` 上的文件恢复成与 `main` 一致，则允许。
 
 在 `dev` 创建并受保护前，Issue #115 的 bootstrap 变更使用一次性 main PR；这不是直接推送或直接提交 `main` 的例外。合并后恢复上述常规流。
 

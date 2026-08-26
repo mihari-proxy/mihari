@@ -7,7 +7,7 @@
 | 工作流 | 触发条件 | 运行内容 |
 |--------|----------|----------|
 | **CI** | 推送到 `main`、`dev`、`master` 分支<br>Pull Request | ✅ 代码格式检查 (`gofmt`)<br>✅ 静态分析 (`go vet`)<br>✅ 单元测试 (`go test ./...` + `-race`)<br>✅ 交叉编译验证（6 平台） |
-| **Release** | 主路径：从 `main` 执行 `workflow_dispatch`（必填 `version` + `commit_sha`）<br>兼容入口：推送 `v*` 标签 | ✅ 版本闸门（拒绝 `-` 预发布后缀）<br>✅ 6 平台构建 + 版本号注入<br>✅ 打包 6 个 all-in-one 整合包<br>✅ 生成 SHA256 校验和（全量 + aio 专用）<br>✅ 创建 GitHub Release<br>✅ `ALIST_URL` 存在时上传整合包到 AList 网盘 |
+| **Release** | 主路径：从 `main` 执行 `workflow_dispatch`（必填 `version` + `commit_sha`）<br>兼容入口：推送 `v*` 标签 | ✅ 校验仓库内已收口的 CHANGELOG（不改文件、不创建 commit）<br>✅ 版本闸门（拒绝 `-` 预发布后缀）<br>✅ 6 平台构建 + 版本号注入<br>✅ 打包 6 个 all-in-one 整合包<br>✅ 生成 SHA256 校验和（全量 + aio 专用）<br>✅ 创建 GitHub Release<br>✅ `ALIST_URL` 存在时上传整合包到 AList 网盘 |
 | **Retract** | 从 `main` 执行 `workflow_dispatch`（必填 `version` + `confirm`） | ✅ 彻底撤回致命错误版本（GitHub release + AList 目录 + index 重建） |
 | **DCO** | 推送到任何分支<br>Pull Request | ✅ 校验每个提交的 `Signed-off-by` 签名 |
 
@@ -35,28 +35,36 @@ Dev 发布固定 `refs/heads/dev` 来源并校验 canonical `vX.Y.Z-dev.N` 版�
 
 ## 发版流程
 
-### 1. 通过晋级 PR 合并到 main
+`release.yml` **不会修改 `CHANGELOG.md`，也不会创建 `chore/release-*` commit**。它只读取晋级后那个精确 SHA 上已经存在的 changelog，校验通过才打 tag、构建和上传。GitHub Release 页面的 What's Changed 由 `generate_release_notes` 生成，不会回写仓库。
 
-将已经通过 dev 集成验证的 release-prep 变更通过 `dev → main` 晋级 PR 合并；不要直接推送或提交 `main`。
+功能 PR 合进 `dev` 时不得修改 `CHANGELOG.md`。
+
+### 1. 人手收口 CHANGELOG
+
+这是人工 PR，不是 workflow 产物。从 `dev` 拉分支 `chore/release-vX.Y.Z`，把 `[Unreleased]` 收口为 `## [vX.Y.Z] - YYYY-MM-DD`：该节至少一条条目，且是 Unreleased 后的第一个版本节；Unreleased 下不得再留 bullet。按需在同一 PR 里审核并更新 `scripts/release/release-inputs.lock.json`。将这个 PR 合进 `dev`。
+
+### 2. 通过晋级 PR 合并到 main
+
+将已经通过 `dev` 集成验证、且包含上一步 CHANGELOG 收口的提交，通过 `dev → main` 晋级 PR 合并；不要直接推送或提交 `main`。
 
 ```bash
 git checkout main
 git pull origin main
 ```
 
-### 2. 验证 CI 通过
+### 3. 验证 CI 通过
 
-推送代码到 `main` 后，CI 工作流会自动运行。在 GitHub Actions 页面确认所有检查通过后再继续。
+推送到 `main` 后，CI 工作流会自动运行。在 GitHub Actions 页面确认所有检查通过后再继续。
 
-### 3. 记录精确 main commit
+### 4. 记录精确 main commit
 
-确认 CHANGELOG 与 release input lock 已随晋级 PR 进入 `main`，记录远端 `main` 当前精确的 40 位小写 commit SHA：
+确认 CHANGELOG 与 release input lock 已随 `chore/release-*` 与晋级 PR 进入 `main`。`release.yml` 会在构建前和发布前读取同一 SHA 上的 `CHANGELOG.md`，不满足则 fail closed。记录远端 `main` 当前精确的 40 位小写 commit SHA：
 
 ```bash
 git rev-parse origin/main
 ```
 
-### 4. 从 GitHub Actions 触发 stable release
+### 5. 从 GitHub Actions 触发 stable release
 
 在 GitHub Actions 选择 `release` workflow，ref 选择 `main`，执行 `workflow_dispatch`：
 
@@ -65,16 +73,17 @@ git rev-parse origin/main
 
 `release.yml` 会自行创建或验证 canonical stable tag。不要把本地创建并推送 tag 作为当前稳定发版操作。
 
-### 5. 自动发布与验收
+### 6. 自动发布与验收
 
 手动 dispatch 后，GitHub Actions Release 工作流会自动：
 
-1. 版本闸门校验（build / release 各一层，拒绝 `-` 预发布后缀）；
-2. 使用 Go 1.26.5 交叉编译 linux / darwin / windows（各 amd64 + arm64），以 `-buildvcs=false -trimpath` 构建并注入版本号（`-X .../buildinfo.Version=<version>`）；
-3. 只从仓库内已审核的 `scripts/release/release-inputs.lock.json` 读取精确 mihomo 与 GeoIP 输入，打包 6 个 all-in-one 整合包；
-4. 生成 SHA256 校验和（全量 `SHA256SUMS.txt` + aio 专用 `AIO_SHA256SUMS.txt`）；
-5. 创建 GitHub Release 并上传全部产物；
-6. `ALIST_URL` 存在时进入 AList mutation，上传整合包到网盘版本目录、更新 `index.txt`、追加离线安装命令到 release notes；只有 `ALIST_URL` 缺失时才走 GitHub-only skip，不阻塞 GitHub 发布。URL 已存在但 `ALIST_USERNAME` 或 `ALIST_PASSWORD` 任一缺失时，客户端必须 fail closed，workflow 失败且不得静默跳过。
+1. 校验仓库内 CHANGELOG 已收口到本次 `version`（只读，不改文件、不创建 commit）；
+2. 版本闸门校验（build / release 各一层，拒绝 `-` 预发布后缀）；
+3. 使用 Go 1.26.5 交叉编译 linux / darwin / windows（各 amd64 + arm64），以 `-buildvcs=false -trimpath` 构建并注入版本号（`-X .../buildinfo.Version=<version>`）；
+4. 只从仓库内已审核的 `scripts/release/release-inputs.lock.json` 读取精确 mihomo 与 GeoIP 输入，打包 6 个 all-in-one 整合包；
+5. 生成 SHA256 校验和（全量 `SHA256SUMS.txt` + aio 专用 `AIO_SHA256SUMS.txt`）；
+6. 创建 GitHub Release 并上传全部产物；
+7. `ALIST_URL` 存在时进入 AList mutation，上传整合包到网盘版本目录、更新 `index.txt`、追加离线安装命令到 release notes；只有 `ALIST_URL` 缺失时才走 GitHub-only skip，不阻塞 GitHub 发布。URL 已存在但 `ALIST_USERNAME` 或 `ALIST_PASSWORD` 任一缺失时，客户端必须 fail closed，workflow 失败且不得静默跳过。
 
 ## 可复现构建输入
 
@@ -82,7 +91,7 @@ git rev-parse origin/main
 
 all-in-one 的外部输入固定在仓库内的 `scripts/release/release-inputs.lock.json`。lock 记录精确的 mihomo release、六个平台 asset ID/URL/大小/SHA-256，以及 GeoIP commit、不可变 URL 和 SHA-256。构建阶段只读取 lock，**不会**解析 mihomo latest release 或 GeoIP 的可变 `release` ref，也不会在 workflow 中自动更新 lock。
 
-维护者只应在独立的 release-prep PR 中更新它：
+维护者只应在人工 PR `chore/release-*` 中更新它（与收口 CHANGELOG 同一类 PR；release workflow 不会提交 lock）：
 
 ```bash
 go run ./scripts/tools/resolve-release-inputs --channel stable --out scripts/release/release-inputs.lock.json
@@ -167,13 +176,15 @@ Get-FileHash mihari-windows-amd64.exe -Algorithm SHA256
 - `version`：如 `v0.3.0`，必须匹配上述 canonical stable 格式，不接受前导零或预发布后缀；
 - `commit_sha`：必填的 **40 位十六进制**提交 SHA。workflow 会将该 SHA 与 checkout 后的源代码核对，身份不一致时 fail closed。
 
-这是当前稳定发版的主路径：release-prep 先经 `dev → main` 晋级 PR，随后以 `main` ref、canonical `version` 和精确 40 位 `main` `commit_sha` dispatch。workflow 会核对 checkout 后的 `main` 与输入 SHA，身份不一致即 fail closed。稳定发布和 AList 写入均须通过 CI、版本闸门及维护者审批；审批前不得执行生产分发写操作。
+这是当前稳定发版的主路径：先用人工 PR `chore/release-vX.Y.Z` 收口 CHANGELOG 并合进 `dev`，再经 `dev → main` 晋级 PR，随后以 `main` ref、canonical `version` 和精确 40 位 `main` `commit_sha` dispatch。`release.yml` 不会修改 `CHANGELOG.md`、不会创建 `chore/release-*` commit。workflow 会核对 checkout 后的 `main` 与输入 SHA，身份不一致即 fail closed。稳定发布和 AList 写入均须通过 CI、版本闸门及维护者审批；审批前不得执行生产分发写操作。
 
 兼容入口仍接受 `v*` tag push：它会将 lightweight 或 annotated tag 最终 peel 到 commit，并要求该 commit 可从可信 `main` 到达。它用于兼容既有自动化，不作为当前人工 runbook。无论入口为何，workflow 都在发布前后重新读取并 peel stable tag；该复核不是原子操作，因此还依赖已 active、覆盖 `refs/tags/v*` 的 tag ruleset 禁止删除、更新和 non-fast-forward。
 
 > **为什么必填 version**：`workflow_dispatch` 从分支触发时 `GITHUB_REF_NAME` 是分支名而非版本号。显式输入统一全链路取值（build 注入的版本号、Release 的 `tag_name`、AList 版本目录名），避免二进制版本号被污染。版本闸门在 build / release 两个 job 各校验一次。
 
 ### Dev 手动发布
+
+`release-dev.yml` 不校验 CHANGELOG，也不会改 `CHANGELOG.md`。指向 `dev` 的功能 PR 不得修改 `CHANGELOG.md`；CHANGELOG 只由人工 PR `chore/release-*` 在正式发版前收口。
 
 从 GitHub Actions 选择 `release-dev` workflow 和受保护的 `dev` ref，填写符合 canonical `vX.Y.Z-dev.N` 格式的版本（各数字段不允许前导零）。workflow 先创建或复用 GitHub dev tag、prerelease 并上传精确 14 个 assets；GitHub 最终验收成功后，若 `ALIST_URL` 存在则写入独立 AList 根目录 `/mihari-release/mihari-dev` 及其 `index.txt`。`v0.9.0-dev.2` 已按 GitHub-only 路径发布并完成公开资产验收。不回溯该历史版本是首次真实 dispatch 的人工操作规则：workflow 不会因历史 GitHub-only 版本自动拒绝；空的 dev AList 根上重跑会创建通道并写入该版本。请从本变更后的下一个 `vX.Y.Z-dev.N` 开始写入 AList。
 
@@ -216,7 +227,7 @@ dev 撤回使用并发组 `mihari-dev-alist`，不得修改稳定目录、稳定
 - [ ] 所有测试通过 (`go test -race ./...`)
 - [ ] 代码格式正确 (`gofmt -l .`)
 - [ ] 静态分析通过 (`go vet ./...`)
-- [ ] [CHANGELOG.md](../CHANGELOG.md) 已更新
-- [ ] 标签版本号与 CHANGELOG.md 一致
+- [ ] [CHANGELOG.md](../CHANGELOG.md) 已将 `[Unreleased]` 收口到目标版本节，且 Unreleased 无残留条目；`release.yml` 会 fail closed 校验
+- [ ] 标签版本号与 CHANGELOG.md 中的版本节一致
 - [ ] `go.mod` 仍钉死 Go 1.26.5，发布构建仍使用 `-buildvcs=false -trimpath`
-- [ ] `scripts/release/release-inputs.lock.json` 已在 release-prep PR 中更新（如需）并审核 diff；release workflow 未动态解析 latest/ref
+- [ ] `scripts/release/release-inputs.lock.json` 已在人工 `chore/release-*` PR 中更新（如需）并审核 diff；release workflow 未动态解析 latest/ref，也不会提交 lock
