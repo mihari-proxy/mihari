@@ -29,6 +29,86 @@ func TestHelpDialogOpensFromRailAndContentAndClosesOnEsc(t *testing.T) {
 	}
 }
 
+func TestHelpDialog_ShowsCurrentPageFirst(t *testing.T) {
+	model := NewModel()
+	model.width, model.height = 80, 24
+	model.active = ui.PageProxies
+	model.railIndex = 1
+	model.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageProxies}
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: '?', Text: "?"})
+	content := model.View().Content
+	if model.modal == nil || !strings.Contains(content, ui.HelpTitle) {
+		t.Fatalf("help did not open: %s", content)
+	}
+	if !strings.Contains(content, ui.PageLabel(ui.PageProxies)) {
+		t.Fatalf("title missing current page:\n%s", content)
+	}
+	thisPage := strings.Index(content, "This page · "+ui.PageLabel(ui.PageProxies))
+	global := strings.Index(content, "Global:")
+	if global < 0 || thisPage < 0 || global > thisPage {
+		t.Fatalf("current page should follow Global in the visible help:\n%s", content)
+	}
+	body := ui.RenderHelp(ui.PageProxies, "")
+	if !strings.Contains(body, "This page · "+ui.PageLabel(ui.PageProxies)) {
+		t.Fatalf("full help body missing current page:\n%s", body)
+	}
+	if strings.Contains(body, ui.PageLabel(ui.PageSubscriptions)+":") {
+		t.Fatalf("proxies help listed subscriptions:\n%s", body)
+	}
+	if strings.Contains(content, "Subscriptions: a add") {
+		t.Fatal("stale HelpBody still rendered")
+	}
+}
+
+func TestHelpDialog_SearchModeSectionComesFirst(t *testing.T) {
+	model := NewModel()
+	model.width, model.height = 80, 24
+	model.resizePages()
+	model.active = ui.PageConnections
+	model.railIndex = 2
+	model.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageConnections}
+	page, ok := model.pages[ui.PageConnections].(*connectionspage.Model)
+	if !ok {
+		t.Fatal("connections page missing")
+	}
+	page.SetContentFocused(true)
+	page.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	updated, cmd := model.Update(ui.OpenHelpMsg{})
+	model = updated.(Model)
+	_ = cmd
+	content := model.View().Content
+	if !strings.Contains(content, "This mode · Search") {
+		t.Fatalf("visible help missing search mode:\n%s", content)
+	}
+	body := ui.RenderHelp(ui.PageConnections, ui.ModeSearch)
+	mode := strings.Index(body, "This mode · Search")
+	pageIdx := strings.Index(body, "This page · "+ui.PageLabel(ui.PageConnections))
+	if mode < 0 || pageIdx < 0 || mode > pageIdx {
+		t.Fatalf("search mode should precede page:\n%s", body)
+	}
+}
+
+func TestHelpDialog_DoesNotOpenInTextInput(t *testing.T) {
+	model := NewModel()
+	model.inputMode = ui.InputText
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: '?', Text: "?"})
+	if model.modal != nil {
+		t.Fatal("? opened help during text input")
+	}
+}
+
+func TestHelpDialog_OpensFromSetupOnNonTextStep(t *testing.T) {
+	model := NewModel()
+	model.width, model.height = 80, 24
+	model.active = ui.PageSetup
+	model.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageSetup}
+	updated, _ := model.Update(ui.OpenHelpMsg{})
+	model = updated.(Model)
+	if model.modal == nil || !strings.Contains(model.View().Content, ui.HelpTitle) {
+		t.Fatal("OpenHelpMsg did not open help")
+	}
+}
+
 func TestQuitIsReachableOutsideTextEntry(t *testing.T) {
 	model := NewModel()
 	updated, command := model.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})

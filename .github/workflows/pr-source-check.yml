@@ -5,17 +5,20 @@ permissions:
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
   check-source:
     runs-on: ubuntu-latest
     steps:
       - name: Check PR source branch
-        if: github.head_ref != 'dev' && !startsWith(github.head_ref, 'hotfix/')
+        if: github.base_ref == 'main' && github.head_ref != 'dev' && !startsWith(github.head_ref, 'hotfix/')
         env:
           HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           echo "::error::PR to main must come from 'dev' or 'hotfix/*' branches."
+          echo "PRs from main may target dev (sync)."
           echo "Current source branch: $HEAD_REF"
+          echo "Current base branch: $BASE_REF"
           exit 1

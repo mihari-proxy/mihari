@@ -298,6 +298,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	if key.String() == "q" && m.step != stepEndpoints && m.step != stepSubscription {
 		return m, tea.Quit
 	}
+	if key.String() == "?" && m.step != stepEndpoints && m.step != stepSubscription {
+		return m, func() tea.Msg { return ui.OpenHelpMsg{} }
+	}
 	switch m.step {
 	case stepEndpoints:
 		return m.updateEndpoints(message, key)

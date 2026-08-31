@@ -1,8 +1,8 @@
-## 免责声明：本项目仅供 Go TUI 工具的学习与交流。这是一个非营利开源项目，现在及未来均不接受任何赞助或捐赠。
+> 免责声明：本项目仅供 Go TUI 工具的学习与交流。这是一个非营利开源项目，现在及未来均不接受任何赞助或捐赠。
+>
+> 本应用目前处于非正式开发阶段，bug 多是普遍的。
 
-## 本应用目前处于非正式开发阶段，bug 多是普遍的。
-
-# Mihari
+# Mihari — Mihomo / Clash 的 CLI 与 TUI 管理器
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
@@ -11,7 +11,11 @@
 [![go version](https://img.shields.io/github/go-mod/go-version/mihari-proxy/mihari)](go.mod)
 [![release](https://img.shields.io/github/v/release/mihari-proxy/mihari)](https://github.com/mihari-proxy/mihari/releases)
 
-Mihari 是一款全新的、独立的 [mihomo](https://github.com/MetaCubeX/mihomo) 本地管理器。它平等地支持 Windows、Linux 和 macOS,围绕由 CLI、TUI 和浏览器面板共享的单一守护进程控制面进行设计。
+[官网](https://mihari-proxy.github.io/mihari/zh/) · [Releases](https://github.com/mihari-proxy/mihari/releases)
+
+Mihari 是面向 Windows、Linux 和 macOS 的跨平台 [mihomo](https://github.com/MetaCubeX/mihomo)（Clash Meta）管理器。它提供 CLI、终端界面（TUI）、订阅管理、系统代理、TUN 模式、mihomo 核心管理与 Web 面板。
+
+它是 Clash Party、Sparkle 等图形化 Mihomo / Clash 客户端的开源终端替代，CLI、TUI 与浏览器面板共享同一个守护进程控制面。
 
 ![Overview](assets/overview.png)
 

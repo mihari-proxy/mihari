@@ -15,8 +15,12 @@ RETRACT_DEV_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workfl
 STABLE_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "release.yml"
 STABLE_RETRACT_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "retract.yml"
 CI_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "ci.yml"
+PAGES_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "pages.yml"
 CHANGELOG_CHECK_WORKFLOW = (
     Path(__file__).resolve().parents[3] / ".github" / "workflows" / "changelog-check.yml"
+)
+PR_SOURCE_CHECK_WORKFLOW = (
+    Path(__file__).resolve().parents[3] / ".github" / "workflows" / "pr-source-check.yml"
 )
 AGENTS = Path(__file__).resolve().parents[3] / "AGENTS.md"
 CONTRIBUTING = Path(__file__).resolve().parents[3] / ".github" / "CONTRIBUTING.md"
@@ -1272,13 +1276,49 @@ def test_ci_runs_release_safety_suite_from_pinned_requirements_on_all_integratio
 
     steps = document["jobs"]["unit"]["steps"]
     install = next(step for step in steps if step.get("name") == "Install release-safety test dependencies")
+    site = next(step for step in steps if step.get("name") == "Test site SEO invariants")
     safety = next(step for step in steps if step.get("name") == "Test release safety policies")
 
     assert install["run"] == (
         "python -m pip install --disable-pip-version-check "
         "-r scripts/release/requirements-test.txt"
     )
+    assert site["run"] == "python -m pytest scripts/site/test_site.py -q"
     assert safety["run"] == f"python -m pytest {RELEASE_SAFETY_TESTS}"
+
+
+def test_pages_workflow_publishes_site_from_main_only():
+    document = yaml.safe_load(PAGES_WORKFLOW.read_text(encoding="utf-8"))
+    triggers = document[True]
+    assert triggers["push"]["branches"] == ["main"]
+    assert "site/**" in triggers["push"]["paths"]
+    assert "site/**" in triggers["pull_request"]["paths"]
+    assert document["permissions"]["contents"] == "read"
+    assert document["permissions"]["pages"] == "write"
+    assert document["permissions"]["id-token"] == "write"
+
+    setup = next(
+        step
+        for step in document["jobs"]["build"]["steps"]
+        if str(step.get("uses", "")).startswith("actions/configure-pages@")
+    )
+    assert "enablement" not in setup.get("with", {})
+
+    upload = next(
+        step
+        for step in document["jobs"]["build"]["steps"]
+        if str(step.get("uses", "")).startswith("actions/upload-pages-artifact@")
+    )
+    assert upload["with"]["path"] == "site"
+
+    deploy = document["jobs"]["deploy"]
+    assert "github.event_name == 'push'" in deploy["if"]
+    assert "github.ref == 'refs/heads/main'" in deploy["if"]
+    assert deploy["environment"]["name"] == "github-pages"
+    assert any(
+        str(step.get("uses", "")).startswith("actions/deploy-pages@")
+        for step in deploy["steps"]
+    )
 
 
 def test_branch_governance_keeps_feature_work_off_main_and_dev_without_promising_review_rules():
@@ -1572,6 +1612,24 @@ def test_changelog_check_workflow_gates_feature_prs_into_dev():
     assert "--head-ref \"${HEAD_REF}\"" in policy["run"] or '--head-ref "${HEAD_REF}"' in policy["run"]
     assert "origin/main" in workflow
     assert "CHANGELOG.md" in workflow
+
+
+def test_pr_source_check_allows_main_to_dev_sync_and_restricts_main_intake():
+    document = yaml.safe_load(PR_SOURCE_CHECK_WORKFLOW.read_text(encoding="utf-8"))
+    assert document[True]["pull_request"]["branches"] == ["main", "dev"]
+    assert document["permissions"] == {"contents": "read"}
+
+    step = document["jobs"]["check-source"]["steps"][0]
+    condition = " ".join(str(step.get("if", "")).split())
+    assert "github.base_ref == 'main'" in condition
+    assert "github.head_ref != 'dev'" in condition
+    assert "hotfix/" in condition
+    assert "github.head_ref != 'main'" not in condition
+
+    run = step["run"]
+    assert "PR to main must come from 'dev' or 'hotfix/*'" in run
+    assert "${{ github.head_ref }}" not in run
+    assert step["env"]["HEAD_REF"] == "${{ github.head_ref }}"
 
 
 def test_dev_release_does_not_require_changelog_gate():

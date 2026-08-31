@@ -128,18 +128,22 @@ func (m *Model) ID() ui.PageID { return ui.PageConnections }
 // SetContentFocused reports whether the root shell has given keyboard focus to this page.
 func (m *Model) SetContentFocused(focused bool) { m.contentFocused = focused }
 
-// FooterHints returns contextual shortcuts for the root shell footer.
-func (m *Model) FooterHints() string {
+func (m *Model) HelpMode() string {
 	switch {
 	case m.detail != nil:
-		return ui.FooterDetailMode
+		return ui.ModeDetail
 	case m.columnsOpen:
-		return ui.FooterColumnsMode
+		return ui.ModeColumns
 	case m.searching:
-		return ui.FooterSearchMode
+		return ui.ModeSearch
 	default:
-		return ui.FooterConnections
+		return ""
 	}
+}
+
+// FooterHints returns contextual shortcuts for the root shell footer.
+func (m *Model) FooterHints() string {
+	return ui.RenderFooter(m.ID(), m.HelpMode(), ui.FooterOpt{})
 }
 
 func (m *Model) SetSize(width, height int) { m.width, m.height = width, height }

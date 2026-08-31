@@ -50,28 +50,14 @@ type FooterHintProvider interface {
 	FooterHints() string
 }
 
+// HelpModeProvider reports the current overlay/input mode for keyboard help.
+type HelpModeProvider interface {
+	HelpMode() string
+}
+
 // PageFooterHints returns the contextual footer line for a page while content is focused.
 func PageFooterHints(id PageID) string {
-	switch id {
-	case PageOverview:
-		return FooterOverview
-	case PageProxies:
-		return FooterProxies
-	case PageConnections:
-		return FooterConnections
-	case PageRules:
-		return FooterRules
-	case PageLogs:
-		return FooterLogs
-	case PageSubscriptions:
-		return FooterSubscriptions
-	case PageWebGUI:
-		return FooterWebGUI
-	case PageSystem:
-		return FooterSystem
-	default:
-		return FooterContent
-	}
+	return RenderFooter(id, "", FooterOpt{})
 }
 
 type UnavailablePage struct {

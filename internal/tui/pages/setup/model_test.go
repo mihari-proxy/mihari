@@ -99,6 +99,54 @@ func (f *fakeClient) ServiceStatus(context.Context) (protocol.ServiceStatus, err
 	return f.serviceStatus, f.serviceErr
 }
 
+func TestModel_QuestionMarkOpensHelpOnNonTextStep(t *testing.T) {
+	model := loadedModel(&fakeClient{status: defaultStatus(false)})
+	model.step = stepCore
+	updated, command := model.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
+	if command == nil {
+		t.Fatal("expected OpenHelpMsg command")
+	}
+	if _, ok := command().(ui.OpenHelpMsg); !ok {
+		t.Fatalf("got %T", command())
+	}
+	if updated.(*Model).step != stepCore {
+		t.Fatal("? should not change setup step")
+	}
+}
+
+func TestModel_QuestionMarkStaysInEndpointField(t *testing.T) {
+	model := loadedModel(&fakeClient{status: defaultStatus(false)})
+	model.inputs[0].SetValue("")
+	model.focusEndpoint(0)
+	updated, command := model.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
+	model = updated.(*Model)
+	if command != nil {
+		if _, ok := command().(ui.OpenHelpMsg); ok {
+			t.Fatal("typed ? in endpoints opened help")
+		}
+	}
+	if !strings.Contains(model.inputs[0].Value(), "?") {
+		t.Fatalf("endpoint should accept ?, got %q", model.inputs[0].Value())
+	}
+}
+
+func TestModel_QuestionMarkStaysInSubscriptionField(t *testing.T) {
+	model := loadedModel(&fakeClient{status: defaultStatus(false)})
+	model.step = stepSubscription
+	model.subscriptionInputs = subscriptionInputs()
+	model.focusSubscription(1)
+	updated, command := model.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
+	model = updated.(*Model)
+	if command != nil {
+		if _, ok := command().(ui.OpenHelpMsg); ok {
+			t.Fatal("typed ? in subscription URL opened help")
+		}
+	}
+	if !strings.Contains(model.subscriptionInputs[1].Value(), "?") {
+		t.Fatalf("subscription URL should accept ?, got %q", model.subscriptionInputs[1].Value())
+	}
+}
+
 func TestSetupFormUsesTabOnlyToMoveBetweenEndpointFields(t *testing.T) {
 	model := loadedModel(&fakeClient{status: defaultStatus(false)})
 	if model.focusedField != 0 {
