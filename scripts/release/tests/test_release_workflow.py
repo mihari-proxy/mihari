@@ -1299,7 +1299,7 @@ def test_pages_workflow_publishes_site_from_main_only():
         for step in document["jobs"]["build"]["steps"]
         if str(step.get("uses", "")).startswith("actions/configure-pages@")
     )
-    assert setup.get("with", {}).get("enablement") is True
+    assert "enablement" not in setup.get("with", {})
 
     upload = next(
         step
