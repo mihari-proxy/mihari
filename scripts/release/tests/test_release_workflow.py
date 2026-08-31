@@ -1321,6 +1321,19 @@ def test_pages_workflow_publishes_site_from_main_only():
     )
 
 
+def test_pages_workflow_allows_manual_deploy_from_main():
+    document = yaml.safe_load(PAGES_WORKFLOW.read_text(encoding="utf-8"))
+    triggers = document[True]
+    assert "workflow_dispatch" in triggers
+    assert triggers["push"]["branches"] == ["main"]
+
+    deploy = document["jobs"]["deploy"]
+    assert deploy["if"] == (
+        "github.ref == 'refs/heads/main' && "
+        "(github.event_name == 'push' || github.event_name == 'workflow_dispatch')"
+    )
+
+
 def test_branch_governance_keeps_feature_work_off_main_and_dev_without_promising_review_rules():
     agents = AGENTS.read_text(encoding="utf-8")
     contributing = CONTRIBUTING.read_text(encoding="utf-8")
