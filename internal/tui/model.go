@@ -450,6 +450,8 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.modal = NewConfirmation(typed.Title, typed.Object, typed.Impact, typed.Rollback)
 		model.confirmationCmd = typed.OnConfirm
 		return model, nil
+	case ui.OpenHelpMsg:
+		return model.openHelp()
 	}
 
 	key, isKey := message.(tea.KeyPressMsg)
@@ -480,9 +482,8 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model.dispatchPage(message)
 	}
 	name := key.String()
-	if name == "?" {
-		model.modal = NewDetail(ui.HelpTitle, ui.HelpBody)
-		return model, nil
+	if name == "?" && model.inputMode != ui.InputText {
+		return model.openHelp()
 	}
 	if name == "q" && model.inputMode != ui.InputText {
 		return model, tea.Quit
@@ -505,6 +506,15 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model.updateRail(name)
 	}
 	return model.dispatchPage(message)
+}
+
+func (model Model) openHelp() (Model, tea.Cmd) {
+	mode := ""
+	if page, ok := model.pages[model.active].(ui.HelpModeProvider); ok {
+		mode = page.HelpMode()
+	}
+	model.modal = NewHelp(ui.HelpTitle+" · "+ui.PageLabel(model.active), ui.RenderHelp(model.active, mode))
+	return model, nil
 }
 
 func (model *Model) applySessionEvent(event session.Event) tea.Cmd {

@@ -492,16 +492,20 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	return m, nil
 }
 
-// FooterHints returns contextual shortcuts for the root shell footer.
-func (m *Model) FooterHints() string {
+func (m *Model) HelpMode() string {
 	switch {
 	case m.form != nil:
-		return ui.FormHelp
+		return ui.ModeForm
 	case m.detail != nil:
-		return ui.DetailCloseHelp + "  ? help  q quit"
+		return ui.ModeDetail
 	default:
-		return ui.FooterSubscriptions
+		return ""
 	}
+}
+
+// FooterHints returns contextual shortcuts for the root shell footer.
+func (m *Model) FooterHints() string {
+	return ui.RenderFooter(m.ID(), m.HelpMode(), ui.FooterOpt{})
 }
 
 // subscriptionColumns is the checked table definition (design S1 table):

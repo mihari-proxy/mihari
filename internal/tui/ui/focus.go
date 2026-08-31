@@ -36,6 +36,9 @@ type FocusRailMsg struct{}
 
 type InputModeMsg struct{ Mode InputMode }
 
+// OpenHelpMsg asks the root shell to open the keyboard help overlay.
+type OpenHelpMsg struct{}
+
 type RouteRequestMsg struct{ Page PageID }
 
 type CoreObservedMsg struct{ Core protocol.CoreStatus }

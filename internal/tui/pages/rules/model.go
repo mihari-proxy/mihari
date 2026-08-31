@@ -112,16 +112,20 @@ func New(client Client, newOperationID func() string) *Model {
 // SetContentFocused reports whether the root shell has given keyboard focus to this page.
 func (m *Model) SetContentFocused(focused bool) { m.contentFocused = focused }
 
-// FooterHints returns contextual shortcuts for the root shell footer.
-func (m *Model) FooterHints() string {
+func (m *Model) HelpMode() string {
 	switch {
 	case m.detail != nil:
-		return ui.FooterDetailMode
+		return ui.ModeDetail
 	case m.searching:
-		return ui.FooterSearchMode
+		return ui.ModeSearch
 	default:
-		return ui.FooterRules
+		return ""
 	}
+}
+
+// FooterHints returns contextual shortcuts for the root shell footer.
+func (m *Model) FooterHints() string {
+	return ui.RenderFooter(m.ID(), m.HelpMode(), ui.FooterOpt{})
 }
 
 func (m *Model) ID() ui.PageID { return ui.PageRules }

@@ -116,10 +116,7 @@ func (m *Model) SetStatus(status protocol.WebGUIStatus) {
 
 // FooterHints returns contextual shortcuts for the root shell footer.
 func (m *Model) FooterHints() string {
-	if !m.available {
-		return ui.FooterWebGUI
-	}
-	return ui.FooterWebGUIActions
+	return ui.RenderFooter(m.ID(), "", ui.FooterOpt{WebGUIAvailable: m.available})
 }
 
 func (m *Model) Load() tea.Cmd {
