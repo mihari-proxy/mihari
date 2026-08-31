@@ -21,6 +21,7 @@ func TestRenderHelp_ShowsOnlyGlobalAndCurrentPage(t *testing.T) {
 		t.Fatalf("proxies keys missing:\n%s", body)
 	}
 	for _, forbidden := range []string{
+		PageLabel(PageOverview) + ":",
 		PageLabel(PageConnections) + ":",
 		PageLabel(PageRules) + ":",
 		PageLabel(PageSubscriptions) + ":",

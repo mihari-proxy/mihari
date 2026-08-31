@@ -245,8 +245,8 @@ var (
 	SetupFooter         = RenderFooter(PageSetup, "", FooterOpt{})
 )
 
-// RenderHelp builds the scrollable help body for the active page and overlay mode.
-// Sections are ordered Global, optional current mode, then current page only.
+// RenderHelp builds the scrollable help body ordered as Global, optional current
+// mode, then current page only.
 func RenderHelp(active PageID, mode string) string {
 	cat := Catalog()
 	var b strings.Builder
