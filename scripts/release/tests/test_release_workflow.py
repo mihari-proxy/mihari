@@ -1273,12 +1273,14 @@ def test_ci_runs_release_safety_suite_from_pinned_requirements_on_all_integratio
 
     steps = document["jobs"]["unit"]["steps"]
     install = next(step for step in steps if step.get("name") == "Install release-safety test dependencies")
+    site = next(step for step in steps if step.get("name") == "Test site SEO invariants")
     safety = next(step for step in steps if step.get("name") == "Test release safety policies")
 
     assert install["run"] == (
         "python -m pip install --disable-pip-version-check "
         "-r scripts/release/requirements-test.txt"
     )
+    assert site["run"] == "python -m pytest scripts/site/test_site.py -q"
     assert safety["run"] == f"python -m pytest {RELEASE_SAFETY_TESTS}"
 
 
