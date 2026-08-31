@@ -6,28 +6,43 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 )
 
-func TestTruncateDisplay_ASCIIAndCJKStayWithinBudget(t *testing.T) {
+func TestTruncateDisplay_ShortInputUnchanged(t *testing.T) {
 	if got := TruncateDisplay("abcdef", 10); got != "abcdef" {
-		t.Fatalf("short ASCII=%q", got)
+		t.Fatalf("got=%q", got)
 	}
-	got := TruncateDisplay("abcdefghij", 6)
-	if lipgloss.Width(got) > 6 {
-		t.Fatalf("ASCII width=%d got=%q", lipgloss.Width(got), got)
-	}
-	if !containsEllipsis(got) {
-		t.Fatalf("ASCII truncated without ellipsis: %q", got)
-	}
+}
 
-	cjk := "系统代理系统代理"
-	got = TruncateDisplay(cjk, 7)
-	if lipgloss.Width(got) > 7 {
-		t.Fatalf("CJK width=%d got=%q", lipgloss.Width(got), got)
+func TestTruncateDisplay_NonPositiveWidthEmpty(t *testing.T) {
+	if got := TruncateDisplay("abc", 0); got != "" {
+		t.Fatalf("got=%q", got)
 	}
-	if lipgloss.Width(cjk) <= 7 {
-		t.Fatal("fixture too short to exercise CJK truncation")
+	if got := TruncateDisplay("abc", -1); got != "" {
+		t.Fatalf("got=%q", got)
 	}
-	if TruncateDisplay("abc", 0) != "" {
-		t.Fatal("max<=0 should be empty")
+}
+
+func TestTruncateDisplay_TruncatesWithinBudget(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		max   int
+	}{
+		{name: "ascii", value: "abcdefghij", max: 6},
+		{name: "cjk", value: "系统代理系统代理", max: 7},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if lipgloss.Width(test.value) <= test.max {
+				t.Fatal("fixture too short to truncate")
+			}
+			got := TruncateDisplay(test.value, test.max)
+			if lipgloss.Width(got) > test.max {
+				t.Fatalf("width=%d got=%q", lipgloss.Width(got), got)
+			}
+			if !containsEllipsis(got) {
+				t.Fatalf("missing ellipsis: %q", got)
+			}
+		})
 	}
 }
 

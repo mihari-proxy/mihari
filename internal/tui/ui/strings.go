@@ -213,15 +213,22 @@ const (
 	EnableSystemProxyLabel      = "Enable"
 	DisableSystemProxyLabel     = "Disable"
 	ForceEnableSystemProxyLabel = "Force enable"
-	LedgerCleared               = "cleared"
-	LedgerOverwroteForeign      = "overwrote foreign"
-	LedgerOverwroteForeignFmt   = "overwrote foreign → %s"
-	LedgerForeignProxyInUse     = "foreign proxy in use"
-	LedgerOtherTunInUseFmt      = "other TUN in use (%s)"
-	LedgerOtherTunInUse         = "other TUN in use"
-	EnableTunLabel              = "Enable"
-	DisableTunLabel             = "Disable"
-	ForceEnableTunLabel         = "Force enable"
+	// LedgerCleared is the Disable system-proxy success detail.
+	LedgerCleared = "cleared"
+	// LedgerOverwroteForeign is Force-enable success when no server is known.
+	LedgerOverwroteForeign = "overwrote foreign"
+	// LedgerOverwroteForeignFmt is Force-enable success with the written server.
+	LedgerOverwroteForeignFmt = "overwrote foreign → %s"
+	// LedgerForeignProxyInUse is the SysProxy conflict / not-owned failure detail.
+	LedgerForeignProxyInUse = "foreign proxy in use"
+	// LedgerOtherTunInUseFmt is TUN conflict failure with an interface short name.
+	LedgerOtherTunInUseFmt = "other TUN in use (%s)"
+	// LedgerOtherTunInUse is TUN conflict failure with no interface name.
+	LedgerOtherTunInUse = "other TUN in use"
+	EnableTunLabel      = "Enable"
+	DisableTunLabel     = "Disable"
+	// ForceEnableTunLabel is the TUN force-enable verb on the Recent operations ledger.
+	ForceEnableTunLabel = "Force enable"
 
 	SystemServiceLabel        = "System service"
 	SystemServiceSectionTitle = "System service"
