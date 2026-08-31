@@ -69,6 +69,18 @@ func TestNewOperationRecord_SystemProxySuccess(t *testing.T) {
 	}
 }
 
+func TestNewOperationRecord_ForceEnableWithoutServerUsesFixedLabel(t *testing.T) {
+	got := newOperationRecord(ui.ActionIntentMsg{
+		Action: ui.ActionForceSystemProxy, Object: ui.SystemProxyLabel,
+	}, fakeProxyOutcome{}, time.Unix(1, 0))
+	if got.Detail != ui.LedgerOverwroteForeign {
+		t.Fatalf("detail=%q want %q", got.Detail, ui.LedgerOverwroteForeign)
+	}
+	if strings.Contains(got.Detail, "→") {
+		t.Fatalf("dangling arrow: %q", got.Detail)
+	}
+}
+
 func TestNewOperationRecord_SystemProxyFailure(t *testing.T) {
 	at := time.Unix(1, 0)
 	tests := []struct {
@@ -164,7 +176,7 @@ func TestNewOperationRecord_TunSuccess(t *testing.T) {
 		wantD  string
 	}{
 		{"enable", ui.ActionEnableTun, on, ui.EnableTunLabel, "gVisor · " + live},
-		{"force", ui.ActionForceTun, on, ui.ForceEnableSystemProxyLabel, "gVisor · " + live},
+		{"force", ui.ActionForceTun, on, ui.ForceEnableTunLabel, "gVisor · " + live},
 		{"disable", ui.ActionDisableTun, off, ui.DisableTunLabel, dead},
 	}
 	for _, test := range tests {

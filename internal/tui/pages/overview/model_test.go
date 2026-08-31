@@ -578,6 +578,20 @@ func TestFormatOperationLine_VeryNarrowDropsTimeKeepsActionState(t *testing.T) {
 	}
 }
 
+func TestFormatOperationLine_CJKObjectStaysWithinWidth(t *testing.T) {
+	line := formatOperationLine(ui.DefaultTheme(), ui.OperationRecord{
+		Object: "系统代理系统代理系统代理",
+		Action: ui.EnableSystemProxyLabel,
+		State:  ui.SucceededLabel,
+	}, 22)
+	if lipgloss.Width(line) > 22 {
+		t.Fatalf("CJK line width=%d > 22: %q", lipgloss.Width(line), stripANSI(line))
+	}
+	if !strings.Contains(stripANSI(line), ui.EnableSystemProxyLabel) || !strings.Contains(stripANSI(line), ui.SucceededLabel) {
+		t.Fatalf("missing action/state: %q", stripANSI(line))
+	}
+}
+
 func TestFormatOperationLine_FailureDetailAfterState(t *testing.T) {
 	at := time.Date(2026, 8, 31, 14, 40, 3, 0, time.Local)
 	line := formatOperationLine(ui.DefaultTheme(), ui.OperationRecord{

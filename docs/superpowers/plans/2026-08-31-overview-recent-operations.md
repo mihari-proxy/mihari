@@ -177,8 +177,6 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
-type resultErr interface{ Err() error }
-
 type proxyOutcome interface {
 	Err() error
 	ProxyStatus() protocol.SystemProxyStatus
@@ -207,12 +205,18 @@ func newOperationRecord(intent ui.ActionIntentMsg, result tea.Msg, at time.Time)
 
 func ledgerAction(action ui.Action) string {
 	switch action {
-	case ui.ActionEnableSystemProxy, ui.ActionEnableTun:
+	case ui.ActionEnableSystemProxy:
 		return ui.EnableSystemProxyLabel
-	case ui.ActionDisableSystemProxy, ui.ActionDisableTun:
+	case ui.ActionEnableTun:
+		return ui.EnableTunLabel
+	case ui.ActionDisableSystemProxy:
 		return ui.DisableSystemProxyLabel
-	case ui.ActionForceSystemProxy, ui.ActionForceTun:
+	case ui.ActionDisableTun:
+		return ui.DisableTunLabel
+	case ui.ActionForceSystemProxy:
 		return ui.ForceEnableSystemProxyLabel
+	case ui.ActionForceTun:
+		return ui.ForceEnableTunLabel
 	default:
 		return ""
 	}
@@ -253,7 +257,7 @@ func proxySuccessDetail(action ui.Action, status protocol.SystemProxyStatus) str
 		return ui.LedgerCleared
 	case ui.ActionForceSystemProxy:
 		if server == "" {
-			return strings.TrimSpace(fmt.Sprintf(ui.LedgerOverwroteForeignFmt, ""))
+			return ui.LedgerOverwroteForeign
 		}
 		return fmt.Sprintf(ui.LedgerOverwroteForeignFmt, server)
 	default:
@@ -570,38 +574,15 @@ func tunFailureDetail(result tea.Msg, status protocol.TunStatus) string {
 }
 
 func tunConflictDetail(details map[string]any) string {
-	names := detailStrings(details, "other_tun_interfaces")
+	names := ui.DetailStrings(details, "other_tun_interfaces")
 	if len(names) == 0 || strings.TrimSpace(names[0]) == "" {
 		return ui.LedgerOtherTunInUse
 	}
 	return fmt.Sprintf(ui.LedgerOtherTunInUseFmt, strings.TrimSpace(names[0]))
 }
-
-func detailStrings(details map[string]any, key string) []string {
-	if details == nil {
-		return nil
-	}
-	value, ok := details[key]
-	if !ok || value == nil {
-		return nil
-	}
-	switch slice := value.(type) {
-	case []string:
-		return slice
-	case []any:
-		out := make([]string, 0, len(slice))
-		for _, item := range slice {
-			if text, ok := item.(string); ok {
-				out = append(out, text)
-			}
-		}
-		return out
-	}
-	return nil
-}
 ```
 
-`detailStrings` 与 System 页同名私有函数行为一致（兼容 `[]string` / `[]any`）。不要 import system 包。
+用 `ui.DetailStrings` 解析 `other_tun_interfaces`（兼容 `[]string` / `[]any`）。System 页通过同名薄封装调用，不要再复制一份。
 
 - [ ] **Step 4: 跑测试确认通过**
 
@@ -951,7 +932,7 @@ Expected: Narrow 测试 FAIL（长 Detail 仍在，或时间被裁掉）。
 
 - [ ] **Step 3: 按预算选择左侧变体再右对齐**
 
-把 `formatOperationLine` 改成：先构造候选左侧（有/无 Detail），用 `fits(left, width, withTime)` 判断 `lipgloss.Width(left)+1+8 <= width`（时钟 8  rune：`15:04:05`）。不 fit 就去掉 Detail；仍不 fit 就去掉时间；再不行截 Object（`truncateRunes` 风格，留 Action · State）。
+把 `formatOperationLine` 改成：先构造候选左侧（有/无 Detail），用 `fits(left, width, withTime)` 判断 `lipgloss.Width(left)+1+8 <= width`（时钟 8 列：`15:04:05`）。不 fit 就去掉 Detail；仍不 fit 就去掉时间；再不行用 `ui.TruncateDisplay` 按显示宽度截 Object（CJK 双宽），留 Action · State。
 
 不要把整行丢给 `MaxWidth`。
 

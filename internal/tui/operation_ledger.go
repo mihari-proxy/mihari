@@ -39,12 +39,18 @@ func newOperationRecord(intent ui.ActionIntentMsg, result tea.Msg, at time.Time)
 
 func ledgerAction(action ui.Action) string {
 	switch action {
-	case ui.ActionEnableSystemProxy, ui.ActionEnableTun:
+	case ui.ActionEnableSystemProxy:
 		return ui.EnableSystemProxyLabel
-	case ui.ActionDisableSystemProxy, ui.ActionDisableTun:
+	case ui.ActionEnableTun:
+		return ui.EnableTunLabel
+	case ui.ActionDisableSystemProxy:
 		return ui.DisableSystemProxyLabel
-	case ui.ActionForceSystemProxy, ui.ActionForceTun:
+	case ui.ActionDisableTun:
+		return ui.DisableTunLabel
+	case ui.ActionForceSystemProxy:
 		return ui.ForceEnableSystemProxyLabel
+	case ui.ActionForceTun:
+		return ui.ForceEnableTunLabel
 	default:
 		return ""
 	}
@@ -85,7 +91,7 @@ func proxySuccessDetail(action ui.Action, status protocol.SystemProxyStatus) str
 		return ui.LedgerCleared
 	case ui.ActionForceSystemProxy:
 		if server == "" {
-			return strings.TrimSpace(fmt.Sprintf(ui.LedgerOverwroteForeignFmt, ""))
+			return ui.LedgerOverwroteForeign
 		}
 		return fmt.Sprintf(ui.LedgerOverwroteForeignFmt, server)
 	default:
@@ -132,7 +138,7 @@ func mappedAPIErrorDetail(result tea.Msg) string {
 }
 
 func tunConflictDetail(details map[string]any) string {
-	names := detailStrings(details, "other_tun_interfaces")
+	names := ui.DetailStrings(details, "other_tun_interfaces")
 	if len(names) == 0 || strings.TrimSpace(names[0]) == "" {
 		return ui.LedgerOtherTunInUse
 	}
@@ -162,27 +168,4 @@ func tunFailureDetail(result tea.Msg, status protocol.TunStatus) string {
 		return text
 	}
 	return ui.TunActionFailed
-}
-
-func detailStrings(details map[string]any, key string) []string {
-	if details == nil {
-		return nil
-	}
-	value, ok := details[key]
-	if !ok || value == nil {
-		return nil
-	}
-	switch slice := value.(type) {
-	case []string:
-		return slice
-	case []any:
-		out := make([]string, 0, len(slice))
-		for _, item := range slice {
-			if text, ok := item.(string); ok {
-				out = append(out, text)
-			}
-		}
-		return out
-	}
-	return nil
 }

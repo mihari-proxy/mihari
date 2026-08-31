@@ -488,18 +488,7 @@ func truncateOperationObject(object, action, styledState string, width int) stri
 	if budget <= 0 || object == "" {
 		return tail
 	}
-	return truncateRunes(object, budget) + sep + tail
-}
-
-func truncateRunes(value string, max int) string {
-	runes := []rune(value)
-	if max <= 0 || len(runes) <= max {
-		return value
-	}
-	if max == 1 {
-		return "…"
-	}
-	return string(runes[:max-1]) + "…"
+	return ui.TruncateDisplay(object, budget) + sep + tail
 }
 
 func padRightTime(left string, at time.Time, width int) string {

@@ -1091,7 +1091,7 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 			} else {
 				value = ui.RenderStatusChip(m.theme, ui.StatusChipFailed, ui.FailedLabel)
 				if m.outcomeDetail != "" {
-					value += "  " + m.theme.Danger.Render(truncateRunes(m.outcomeDetail, 48))
+					value += "  " + m.theme.Danger.Render(ui.TruncateDisplay(m.outcomeDetail, 48))
 				}
 			}
 		}
@@ -1611,17 +1611,6 @@ func (m *Model) ensureFocusVisible() {
 	lines, focusStart, focusEnd := m.buildSectionContent()
 	avail := m.height - len(m.errorChromeLines())
 	m.scrollY = ui.EnsureLineVisible(m.scrollY, avail, len(lines), focusStart, focusEnd)
-}
-
-func truncateRunes(value string, max int) string {
-	runes := []rune(value)
-	if max <= 0 || len(runes) <= max {
-		return value
-	}
-	if max == 1 {
-		return "…"
-	}
-	return string(runes[:max-1]) + "…"
 }
 
 func serviceRowForKind(kind serviceActionKind) string {
@@ -2533,31 +2522,8 @@ func tunConflictLabel(conflict *protocol.TunConflict) string {
 	return ""
 }
 
-// detailStrings 从 error Details 取 []string 字段（对称 detailString 的单串版本）。
-// 兼容两种来源：进程内构造的 APIError（[]string）与经 HTTP/JSON 解码的 APIError
-// （JSON 数组解码为 []any）。后者正是后置 CodeTunConflict 路径——若只接受 []string，
-// force 确认的 Impact 会丢失接口证据。
 func detailStrings(details map[string]any, key string) []string {
-	if details == nil {
-		return nil
-	}
-	value, ok := details[key]
-	if !ok || value == nil {
-		return nil
-	}
-	switch slice := value.(type) {
-	case []string:
-		return slice
-	case []any:
-		out := make([]string, 0, len(slice))
-		for _, item := range slice {
-			if text, ok := item.(string); ok {
-				out = append(out, text)
-			}
-		}
-		return out
-	}
-	return nil
+	return ui.DetailStrings(details, key)
 }
 
 func detailString(details map[string]any, key string) string {
