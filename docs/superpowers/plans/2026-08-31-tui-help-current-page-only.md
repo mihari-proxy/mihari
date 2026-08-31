@@ -130,7 +130,7 @@ Expected: `TestRenderHelp_ShowsOnlyGlobalAndCurrentPage` FAIL，正文仍含 `Co
 	}
 ```
 
-`RailPages()` 若因此不再被本文件使用，不要为了「还能用上」而保留循环；未使用则让编译器报错后只删调用、不要删 `RailPages` 本身。
+`RailPages()` 若因此不再被本文件使用，不要为了「还能用上」而保留循环；只删循环调用即可，不要删 `RailPages` 本身（它仍被 model.go / layout_test.go / render_test.go / render_rail_test.go 使用）。
 
 前序 spec `docs/superpowers/specs/2026-08-31-tui-help-page-design.md` §6 排序规则改为：
 

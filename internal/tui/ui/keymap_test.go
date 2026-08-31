@@ -50,6 +50,22 @@ func TestRenderHelp_CurrentModeComesAfterGlobal(t *testing.T) {
 	}
 }
 
+func TestRenderHelp_SetupPageKeepsSetupKeys(t *testing.T) {
+	body := RenderHelp(PageSetup, "")
+	if !strings.Contains(body, "This page · "+PageLabel(PageSetup)) {
+		t.Fatalf("missing setup page:\n%s", body)
+	}
+	if !strings.Contains(body, "continue") {
+		t.Fatalf("setup Enter continue missing:\n%s", body)
+	}
+	if !strings.Contains(body, "skip GeoIP") {
+		t.Fatalf("setup skip GeoIP missing:\n%s", body)
+	}
+	if strings.Contains(body, PageLabel(PageSubscriptions)+":") {
+		t.Fatalf("setup help leaked subscriptions:\n%s", body)
+	}
+}
+
 func TestRenderHelp_SameKeyKeepsPageSpecificActions(t *testing.T) {
 	conn := RenderHelp(PageConnections, "")
 	subs := RenderHelp(PageSubscriptions, "")

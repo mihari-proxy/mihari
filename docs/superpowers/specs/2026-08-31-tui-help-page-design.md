@@ -27,7 +27,7 @@ TUI 页脚把 `? help` 当作受保护提示：窄终端优先保留 `?` / `q`�
 - **每一行都是「按键 + 作用」**：左列 Display、右列 Label，两者同时出现。不允许只有键没有说明，也不允许把不同页的作用糊成一句。
 - **同一物理键可以在不同页/模式下有不同作用**，帮助必须按页（和 mode）分开列出，互不覆盖。例如 `p` 在 Connections/Logs 是 pause，在 Subscriptions 是 cycle proxy；`u` 在 Subscriptions 是 activate，在 Rules 是 update provider，在 Web GUI 是 update panel。
 - 覆盖所有当前生效的快捷键：全局 + 各 rail 页 + Setup / 表单 / 确认框 / 搜索 / 详情 / 列选择 / 端口编辑。只写真正绑了的键。
-- 打开时先展示全局键和当前页键；若当前处于某种模式（搜索、表单等），该模式紧跟全局之后。其余页分组列在后面，每组都带页名。
+- 打开时先展示全局键和当前页键；若当前处于某种模式（搜索、表单等），该模式紧跟全局之后。不输出其它 rail 页、未激活 mode、非当前 Setup。
 - 最低 72×22 下正文必须能用 `↑/↓` 翻完，不能被 `Modal` 裁掉。关闭仍用 `Esc`。
 - 帮助正文和底栏 hint **从同一份按键表生成**。底栏仍是单行短提示（窄屏 `FitFooter` 照旧丢中间、留 `?`/`q`）；`?` 仍是按页完整「键 + 作用」。视觉布局与现有 `Footer*` 字符串字节级相同。
 - `?` 仍可从 rail 和内容区打开；Setup 在非文本步骤也能打开。
@@ -339,16 +339,9 @@ This page · Connections:
   p       pause or resume
   Enter   open details or activate a control
   ...
-
-Subscriptions:
-  p       cycle proxy mode
-  u       activate
-  ...
-
-Web GUI:
-  u       update
-  ...
 ```
+
+其它页的同键（Subscriptions `p` cycle proxy、Web GUI `u` update）不出现在这一份正文里；分别打开对应页的帮助查看。
 
 硬规则：
 
@@ -479,9 +472,9 @@ Web GUI 传入 `FooterOpt{WebGUIAvailable: m.available}`。`PageFooterHints` 对
 
 1. **Catalog 完整性**：`Catalog()` 非空；每个 `ScopePage` 的 `Page` 是已知 `PageID`；每个非空 `Keys` 元素是非空字符串。
 2. **页脚 SSOT**：`TestRenderFooter_MatchesCurrentLayout` 表驱动，§5.3 每一行 `RenderFooter` / `RenderRailFooter` 的返回值必须与锁死字符串相等。`FooterProxies` 等导出名字等于对应 `RenderFooter` 结果。Catalog 里每个非空 `Footer` 必须出现在对应 recipe 的生成串里；生成串里每个中间 token 必须能在 catalog 找到（`? help` / `q quit` / `Esc back` 来自 Global/chrome 绑定）。
-3. **帮助覆盖 catalog**：`RenderHelp` 对每个 rail 页各渲染一次，输出必须包含该页所有 `Display` 与对应 `Label`；`RenderHelp(PageProxies, "")` 中 `This page · Proxies` 出现在 `Subscriptions:` 之前。
+3. **帮助覆盖 catalog**：`RenderHelp` 对每个 rail 页各渲染一次；每次输出必须包含该页所有 `Display` 与对应 `Label`，且不得含其它页节标题。`RenderHelp(PageProxies, "")` 含 `This page · Proxies`，不含 `Subscriptions:`。
 4. **当前 mode 优先**：`RenderHelp(PageConnections, ModeSearch)` 中 `This mode · Search` 出现在 `This page · Connections` 之前、`Global:` 之后。
-5. **同键异义**：`RenderHelp(PageConnections, "")` 的 Connections 节含 `p` + `pause`，不得含 `cycle proxy`；同一份正文的 Subscriptions 节含 `p` + `cycle proxy`。`u` 在 Subscriptions / Rules / Web GUI 三节中分别是 activate / update the focused provider / update，不得互相覆盖。每一行都能用正则 `^\s+\S.+\s{2,}\S` 拆出键和说明。
+5. **同键异义**：分次渲染。`RenderHelp(PageConnections, "")` 含 `p` + `pause`，不得含 `cycle proxy`，也不得含 `Subscriptions:`。`RenderHelp(PageSubscriptions, "")` 含 `p` + `cycle proxy`。`RenderHelp(PageRules, "")` 的 `u` 是 update the focused provider；`RenderHelp(PageWebGUI, "")` 的 `u` 是 update，不得含 `activate`。每一行都能用正则 `^\s+\S.+\s{2,}\S` 拆出键和说明。
 6. **源码漂移**：每个非空 `Keys` 值必须作为带引号字面量出现在绑定所属文件。映射：
    - Global：`internal/tui/model.go`（`tab` 允许出现在 `internal/tui/modal.go`）
    - 各 Page：对应 `internal/tui/pages/<pkg>/model.go`（Connections 的 `ModeDetail` 额外键在 `detail.go`；Web GUI 的 `j`/`k` 在 `model.go`）

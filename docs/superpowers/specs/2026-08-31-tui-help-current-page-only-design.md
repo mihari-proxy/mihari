@@ -33,7 +33,7 @@ Catalog 仍然需要覆盖所有页（底栏 SSOT、同键异义），但**帮�
 
 ## 4. 行为
 
-`RenderHelp(active, mode)` 删除两段循环：
+`RenderHelp(active, mode)` 删除以下段落：
 
 - `for _, id := range RailPages()` 写其它页
 - `for _, m := range []string{ModeSearch, …}` 写未激活 mode
@@ -53,6 +53,7 @@ Catalog 仍然需要覆盖所有页（底栏 SSOT、同键异义），但**帮�
 - `RenderHelp(PageConnections, ModeSearch)` 仍是 Global < This mode · Search < This page · Conns，且不含 `Rules:`。
 - 同键：分三次 `RenderHelp` 断言 Connections / Subscriptions / Rules 的 `p`/`u` Label。
 - Shell：`?` 在 Proxies 打开后可见 `This page · Proxies`，不可见其它页节标题。
+- `RenderHelp(PageSetup, "")` 含 Setup 的 `continue` / `skip GeoIP`，不含其它页节标题。
 - 底栏 golden / `TestRenderFooter_MatchesCurrentLayout` 不变。
 
 ## 6. 文档
