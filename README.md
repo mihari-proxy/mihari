@@ -1,8 +1,8 @@
-## Disclaimer: This project is for learning and exchanging ideas about Go TUI tools. It is a non-profit open-source project and does not accept sponsorships or donations, now or in the future.
+> Disclaimer: This project is for learning and exchanging ideas about Go TUI tools. It is a non-profit open-source project and does not accept sponsorships or donations, now or in the future.
+>
+> This application is currently in informal development; bugs are common.
 
-## This application is currently in informal development; bugs are common.
-
-# Mihari
+# Mihari — Mihomo / Clash CLI & TUI Manager
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
@@ -11,7 +11,11 @@
 [![go version](https://img.shields.io/github/go-mod/go-version/mihari-proxy/mihari)](go.mod)
 [![release](https://img.shields.io/github/v/release/mihari-proxy/mihari)](https://github.com/mihari-proxy/mihari/releases)
 
-Mihari is a new, independent local manager for [mihomo](https://github.com/MetaCubeX/mihomo). It targets Windows, Linux, and macOS equally and is designed around a single daemon-owned control plane shared by the CLI, TUI, and browser panels.
+[Website](https://mihari-proxy.github.io/mihari/) · [Releases](https://github.com/mihari-proxy/mihari/releases)
+
+Mihari is a cross-platform [mihomo](https://github.com/MetaCubeX/mihomo) (Clash Meta) manager for Windows, Linux, and macOS. It provides a CLI, terminal UI (TUI), subscription management, system proxy, TUN mode, mihomo core management, and web panels.
+
+An open-source terminal alternative to graphical Mihomo / Clash clients such as Clash Party and Sparkle. CLI, TUI, and browser panels share one daemon-owned control plane.
 
 ![Overview](assets/overview.png)
 

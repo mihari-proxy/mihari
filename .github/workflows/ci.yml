@@ -39,6 +39,8 @@ jobs:
           python-version: "3.x"
       - name: Install release-safety test dependencies
         run: python -m pip install --disable-pip-version-check -r scripts/release/requirements-test.txt
+      - name: Test site SEO invariants
+        run: python -m pytest scripts/site/test_site.py -q
       - name: Test AIO parallel downloader
         run: python scripts/install/test_parallel_download.py -v
       - name: Test install channel resolution
