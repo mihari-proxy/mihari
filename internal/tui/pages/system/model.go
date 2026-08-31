@@ -395,12 +395,16 @@ func NewWithContext(ctx context.Context, client Client, svc ServiceController, n
 	}
 }
 
+func (m *Model) HelpMode() string {
+	if m.editID != "" {
+		return ui.ModePortsEdit
+	}
+	return ""
+}
+
 // FooterHints returns edit-mode shortcuts while a port row is being typed.
 func (m *Model) FooterHints() string {
-	if m.editID != "" {
-		return ui.FooterPortsEdit
-	}
-	return ui.FooterSystem
+	return ui.RenderFooter(m.ID(), m.HelpMode(), ui.FooterOpt{})
 }
 
 // ApplyServiceStatus updates the OS service observation from the root shell poll

@@ -11,7 +11,6 @@ const (
 	NoActiveSubscriptionLabel      = "No active subscription"
 	NoSubscriptionsConfiguredLabel = "None configured"
 	HelpTitle                      = "Keyboard help"
-	HelpBody                       = "Navigation: ↑/↓ select a page on the rail, Enter opens the page, Esc returns to the rail. Arrow keys only navigate inside the open page.\nTab is reserved for forms and dialogs. Press q to quit.\n\nSubscriptions: a add, e edit, Space enable/disable, p cycle proxy mode, r refresh, Ctrl+R refresh all, u activate, d delete, Enter details."
 	GlobalStatePendingLabel        = "Working…"
 	GlobalStateStaleLabel          = "Daemon disconnected — actions paused"
 	GlobalStateCapabilityLostLabel = "Action unavailable in this build"
