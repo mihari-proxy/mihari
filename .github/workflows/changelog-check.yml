@@ -10,6 +10,7 @@ on:
 jobs:
   check:
     name: Validate changelog ownership
+    timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
