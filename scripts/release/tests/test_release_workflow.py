@@ -19,6 +19,9 @@ PAGES_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" /
 CHANGELOG_CHECK_WORKFLOW = (
     Path(__file__).resolve().parents[3] / ".github" / "workflows" / "changelog-check.yml"
 )
+PR_SOURCE_CHECK_WORKFLOW = (
+    Path(__file__).resolve().parents[3] / ".github" / "workflows" / "pr-source-check.yml"
+)
 AGENTS = Path(__file__).resolve().parents[3] / "AGENTS.md"
 CONTRIBUTING = Path(__file__).resolve().parents[3] / ".github" / "CONTRIBUTING.md"
 CONTRIBUTING_ZH_CN = Path(__file__).resolve().parents[3] / ".github" / "CONTRIBUTING.zh-CN.md"
@@ -1609,6 +1612,24 @@ def test_changelog_check_workflow_gates_feature_prs_into_dev():
     assert "--head-ref \"${HEAD_REF}\"" in policy["run"] or '--head-ref "${HEAD_REF}"' in policy["run"]
     assert "origin/main" in workflow
     assert "CHANGELOG.md" in workflow
+
+
+def test_pr_source_check_allows_main_to_dev_sync_and_restricts_main_intake():
+    document = yaml.safe_load(PR_SOURCE_CHECK_WORKFLOW.read_text(encoding="utf-8"))
+    assert document[True]["pull_request"]["branches"] == ["main", "dev"]
+    assert document["permissions"] == {"contents": "read"}
+
+    step = document["jobs"]["check-source"]["steps"][0]
+    condition = " ".join(str(step.get("if", "")).split())
+    assert "github.base_ref == 'main'" in condition
+    assert "github.head_ref != 'dev'" in condition
+    assert "hotfix/" in condition
+    assert "github.head_ref != 'main'" not in condition
+
+    run = step["run"]
+    assert "PR to main must come from 'dev' or 'hotfix/*'" in run
+    assert "${{ github.head_ref }}" not in run
+    assert step["env"]["HEAD_REF"] == "${{ github.head_ref }}"
 
 
 def test_dev_release_does_not_require_changelog_gate():
