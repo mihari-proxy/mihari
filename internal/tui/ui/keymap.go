@@ -246,7 +246,7 @@ var (
 )
 
 // RenderHelp builds the scrollable help body for the active page and overlay mode.
-// Sections are ordered Global, current mode, current page, remaining pages, then other modes.
+// Sections are ordered Global, optional current mode, then current page only.
 func RenderHelp(active PageID, mode string) string {
 	cat := Catalog()
 	var b strings.Builder
@@ -296,28 +296,6 @@ func RenderHelp(active PageID, mode string) string {
 		return x.Scope == ScopePage && x.Page == active && x.Mode == ""
 	}))
 
-	for _, id := range RailPages() {
-		if id == active {
-			continue
-		}
-		write(PageLabel(id), filter(cat, func(x KeyBinding) bool {
-			return x.Scope == ScopePage && x.Page == id && x.Mode == ""
-		}))
-	}
-
-	for _, m := range []string{ModeSearch, ModeDetail, ModeColumns, ModeForm, ModePortsEdit, ModeConfirm} {
-		if m == mode {
-			continue
-		}
-		write(modeTitle(m), filter(cat, func(x KeyBinding) bool {
-			return x.Scope == ScopeMode && x.Mode == m
-		}))
-	}
-	if active != PageSetup {
-		write(PageLabel(PageSetup), filter(cat, func(x KeyBinding) bool {
-			return x.Page == PageSetup && x.Mode == ""
-		}))
-	}
 	return strings.TrimRight(b.String(), "\n")
 }
 

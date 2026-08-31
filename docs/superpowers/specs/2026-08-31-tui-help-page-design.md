@@ -360,11 +360,9 @@ Web GUI:
 排序规则：
 
 1. `Global:` 永远第一。
-2. 若 `mode != ""` 且 `mode != ModeSetup`，紧接着 `This mode · <ModeLabel>:`。该节只含 `Mode == mode` 且 `Page == "" || Page == active` 的绑定。
+2. 若 `mode != ""` 且 `mode != ModeSetup`，`This mode · <ModeLabel>:`。该节只含 `Mode == mode` 且 `Page == "" || Page == active` 的绑定。
 3. `This page · <PageLabel(active)>:`。Setup 也走这一条。只含 `ScopePage && Page == active && Mode == ""`。
-4. 其余 `ui.RailPages()` 顺序，跳过 `active`。Overview 即使动作很少也保留一节。
-5. 未作为当前 mode 展示过的 mode 节：Search、Detail、Columns、Form、Ports edit、Confirm。
-6. 若 `active != PageSetup`，最后是 `Setup:`。
+4. 停止。不输出其它页、未激活 mode、非当前 Setup。
 
 左列 `Display` 对齐到该节最长 Display 的宽度（至少 8）。
 

@@ -49,9 +49,11 @@ func TestHelpDialog_ShowsCurrentPageFirst(t *testing.T) {
 		t.Fatalf("current page should follow Global in the visible help:\n%s", content)
 	}
 	body := ui.RenderHelp(ui.PageProxies, "")
-	subs := strings.Index(body, ui.PageLabel(ui.PageSubscriptions)+":")
-	if thisPage := strings.Index(body, "This page · "+ui.PageLabel(ui.PageProxies)); thisPage < 0 || subs < 0 || thisPage > subs {
-		t.Fatalf("full help body current page not first:\n%s", body)
+	if !strings.Contains(body, "This page · "+ui.PageLabel(ui.PageProxies)) {
+		t.Fatalf("full help body missing current page:\n%s", body)
+	}
+	if strings.Contains(body, ui.PageLabel(ui.PageSubscriptions)+":") {
+		t.Fatalf("proxies help listed subscriptions:\n%s", body)
 	}
 	if strings.Contains(content, "Subscriptions: a add") {
 		t.Fatal("stale HelpBody still rendered")

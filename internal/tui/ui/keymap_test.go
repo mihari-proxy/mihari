@@ -9,18 +9,31 @@ import (
 	"unicode"
 )
 
-func TestRenderHelp_CurrentPageComesBeforeOtherPages(t *testing.T) {
+func TestRenderHelp_ShowsOnlyGlobalAndCurrentPage(t *testing.T) {
 	body := RenderHelp(PageProxies, "")
-	thisPage := strings.Index(body, "This page · "+PageLabel(PageProxies))
-	subs := strings.Index(body, PageLabel(PageSubscriptions)+":")
-	if thisPage < 0 || !strings.Contains(body, "Global:") {
-		t.Fatalf("missing Global or current page:\n%s", body)
+	if !strings.Contains(body, "Global:") {
+		t.Fatalf("missing Global:\n%s", body)
 	}
-	if subs < 0 || thisPage > subs {
-		t.Fatalf("current page must precede Subscriptions:\n%s", body)
+	if !strings.Contains(body, "This page · "+PageLabel(PageProxies)) {
+		t.Fatalf("missing current page:\n%s", body)
 	}
 	if !strings.Contains(body, "Ctrl+T") || !strings.Contains(body, "test all") {
 		t.Fatalf("proxies keys missing:\n%s", body)
+	}
+	for _, forbidden := range []string{
+		PageLabel(PageConnections) + ":",
+		PageLabel(PageRules) + ":",
+		PageLabel(PageSubscriptions) + ":",
+		PageLabel(PageLogs) + ":",
+		PageLabel(PageWebGUI) + ":",
+		PageLabel(PageSystem) + ":",
+		PageLabel(PageSetup) + ":",
+		"Search:",
+		"Confirm:",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("help leaked other section %q:\n%s", forbidden, body)
+		}
 	}
 }
 
@@ -32,68 +45,34 @@ func TestRenderHelp_CurrentModeComesAfterGlobal(t *testing.T) {
 	if global < 0 || mode < 0 || page < 0 || !(global < mode && mode < page) {
 		t.Fatalf("order Global < Search < Connections:\n%s", body)
 	}
+	if strings.Contains(body, PageLabel(PageRules)+":") {
+		t.Fatalf("search-mode help leaked Rules:\n%s", body)
+	}
 }
 
 func TestRenderHelp_SameKeyKeepsPageSpecificActions(t *testing.T) {
-	body := RenderHelp(PageConnections, "")
-	conn := helpSection(t, body, "This page · "+PageLabel(PageConnections)+":")
-	subs := helpSection(t, body, PageLabel(PageSubscriptions)+":")
-	rules := helpSection(t, body, PageLabel(PageRules)+":")
-	web := helpSection(t, body, PageLabel(PageWebGUI)+":")
-	if !strings.Contains(conn, "p") || !strings.Contains(conn, "pause") {
-		t.Fatalf("connections missing p/pause:\n%s", conn)
+	conn := RenderHelp(PageConnections, "")
+	subs := RenderHelp(PageSubscriptions, "")
+	rules := RenderHelp(PageRules, "")
+	web := RenderHelp(PageWebGUI, "")
+	if !strings.Contains(conn, "pause") || strings.Contains(conn, "cycle proxy") {
+		t.Fatalf("connections p:\n%s", conn)
 	}
-	if strings.Contains(conn, "cycle proxy") {
-		t.Fatalf("subscriptions action leaked into connections:\n%s", conn)
+	if !strings.Contains(subs, "cycle proxy") || strings.Contains(subs, "pause or resume") {
+		t.Fatalf("subscriptions p:\n%s", subs)
 	}
-	if !strings.Contains(subs, "p") || !strings.Contains(subs, "cycle proxy") {
-		t.Fatalf("subscriptions missing p/cycle proxy:\n%s", subs)
+	if !strings.Contains(subs, "activate") || strings.Contains(subs, "update the focused provider") {
+		t.Fatalf("subscriptions u:\n%s", subs)
 	}
-	if !strings.Contains(subs, "u") || !strings.Contains(subs, "activate") {
-		t.Fatalf("subscriptions missing u/activate:\n%s", subs)
+	if !strings.Contains(rules, "update the focused provider") {
+		t.Fatalf("rules u:\n%s", rules)
 	}
-	if strings.Contains(subs, "update the focused provider") {
-		t.Fatalf("rules action leaked into subscriptions:\n%s", subs)
+	if !strings.Contains(strings.ToLower(web), "update") || strings.Contains(web, "activate") {
+		t.Fatalf("web gui u:\n%s", web)
 	}
-	if !strings.Contains(rules, "u") || !strings.Contains(rules, "update the focused provider") {
-		t.Fatalf("rules missing u/update provider:\n%s", rules)
+	if strings.Contains(conn, PageLabel(PageSubscriptions)+":") {
+		t.Fatalf("connections help listed subscriptions:\n%s", conn)
 	}
-	if !strings.Contains(web, "u") || !strings.Contains(strings.ToLower(web), "update") {
-		t.Fatalf("web gui missing u/update:\n%s", web)
-	}
-	if strings.Contains(web, "activate") {
-		t.Fatalf("subscriptions activate leaked into web gui:\n%s", web)
-	}
-	for _, line := range strings.Split(body, "\n") {
-		trim := strings.TrimSpace(line)
-		if trim == "" || strings.HasSuffix(trim, ":") {
-			continue
-		}
-		if !strings.Contains(line, "  ") {
-			t.Fatalf("help row is not key+action: %q", line)
-		}
-	}
-}
-
-func helpSection(t *testing.T, body, header string) string {
-	t.Helper()
-	start := strings.Index(body, header)
-	if start < 0 {
-		t.Fatalf("missing section %q in:\n%s", header, body)
-	}
-	rest := body[start:]
-	lines := strings.Split(rest, "\n")
-	var b strings.Builder
-	b.WriteString(lines[0])
-	b.WriteByte('\n')
-	for _, line := range lines[1:] {
-		if line != "" && !strings.HasPrefix(line, " ") && strings.HasSuffix(line, ":") {
-			break
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
-	}
-	return b.String()
 }
 
 func TestCatalog_FooterTokensHaveBindings(t *testing.T) {
