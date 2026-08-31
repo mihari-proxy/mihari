@@ -1,5 +1,6 @@
 name: DCO
 
+# Job id `check` is a required status on main and dev.
 on:
   pull_request:
   # Only run on branch pushes. Tag pushes have a zero SHA for event.before, which
@@ -13,6 +14,7 @@ permissions:
 
 jobs:
   check:
+    timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
