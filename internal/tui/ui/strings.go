@@ -370,7 +370,6 @@ const (
 	SetupReviewServiceUnknown       = "未知"
 	SetupReviewServiceNotRegistered = "未注册为开机自启"
 	SetupCompleteHelp               = "Enter complete setup  Esc back"
-	SetupFooter                     = "Tab fields  Enter continue  Esc back  Ctrl+C quit"
 	ReplaceConfigurationTitle       = "Replace effective configuration"
 	ReplaceConfigurationImpact      = "Endpoint changes are saved by the daemon and require a restart."
 	ReplaceConfigurationRollback    = "The previous settings remain recoverable only until the new settings are accepted."

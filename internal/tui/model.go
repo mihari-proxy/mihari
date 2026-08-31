@@ -482,7 +482,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model.dispatchPage(message)
 	}
 	name := key.String()
-	if name == "?" {
+	if name == "?" && model.inputMode != ui.InputText {
 		return model.openHelp()
 	}
 	if name == "q" && model.inputMode != ui.InputText {

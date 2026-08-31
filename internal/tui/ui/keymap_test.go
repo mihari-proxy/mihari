@@ -182,6 +182,7 @@ func TestCatalog_KeysAppearInHandlerSource(t *testing.T) {
 				filepath.Join(tuiDir, "pages", "connections", "model.go"),
 				filepath.Join(tuiDir, "pages", "rules", "model.go"),
 				filepath.Join(tuiDir, "pages", "logs", "model.go"),
+				filepath.Join(uiDir, "textfield.go"),
 			}
 		case b.Mode == ModeDetail:
 			return []string{
@@ -225,13 +226,11 @@ func TestCatalog_KeysAppearInHandlerSource(t *testing.T) {
 }
 
 func sourceHasKey(src, key string) bool {
-	if strings.Contains(src, `"`+key+`"`) {
+	quoted := `"` + key + `"`
+	if strings.Contains(src, "case "+quoted) || strings.Contains(src, ", "+quoted) || strings.Contains(src, "== "+quoted) {
 		return true
 	}
-	if len(key) == 1 && unicode.IsDigit(rune(key[0])) && strings.Contains(src, "railDigit") {
-		return true
-	}
-	if len(key) == 1 && strings.Contains(src, `'`+key+`'`) {
+	if len(key) == 1 && unicode.IsDigit(rune(key[0])) && strings.Contains(src, "func railDigit") {
 		return true
 	}
 	return false
@@ -262,7 +261,8 @@ func TestRenderFooter_MatchesCurrentLayout(t *testing.T) {
 		{"webgui-off", RenderFooter(PageWebGUI, "", FooterOpt{}), "Esc back  ? help  q quit"},
 		{"webgui-on", RenderFooter(PageWebGUI, "", FooterOpt{WebGUIAvailable: true}), "Esc back  ↑/↓ panel  Space set default  o open  i install  u update  r reinstall  x uninstall  b rollback  ? help  q quit"},
 		{"system", RenderFooter(PageSystem, "", FooterOpt{}), "Esc back  Enter activate  ? help  q quit"},
-		{"search", RenderFooter(PageConnections, ModeSearch, FooterOpt{}), "Type to filter  ←/→ cursor  ↑/↓ leave  Esc done  ? help  q quit"},
+		{"search", RenderFooter(PageConnections, ModeSearch, FooterOpt{}), "Type to filter  ←/→ cursor  ↑/↓ leave  Esc done"},
+		{"setup", RenderFooter(PageSetup, "", FooterOpt{}), "Tab fields  Enter continue  Esc back  Ctrl+C quit"},
 		{"detail", RenderFooter(PageConnections, ModeDetail, FooterOpt{}), "Enter/Esc close  ? help  q quit"},
 		{"columns", RenderFooter(PageConnections, ModeColumns, FooterOpt{}), "↑/↓ column  Space toggle  Enter save  Esc cancel  ? help  q quit"},
 		{"form", RenderFooter(PageSubscriptions, ModeForm, FooterOpt{}), "Tab/Shift+Tab fields  Enter next/save  Esc cancel"},
@@ -281,5 +281,8 @@ func TestRenderFooter_MatchesCurrentLayout(t *testing.T) {
 	}
 	if FooterRail != "↑/↓ page  Enter open  ? help  q quit" {
 		t.Fatalf("FooterRail=%q", FooterRail)
+	}
+	if SetupFooter != "Tab fields  Enter continue  Esc back  Ctrl+C quit" {
+		t.Fatalf("SetupFooter=%q", SetupFooter)
 	}
 }

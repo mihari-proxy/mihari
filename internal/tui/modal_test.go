@@ -39,7 +39,7 @@ func TestDetailModalEscapeCloses(t *testing.T) {
 func TestHelpModal_ScrollsInsideCompactTerminal(t *testing.T) {
 	lines := make([]string, 0, 40)
 	for i := 0; i < 40; i++ {
-		lines = append(lines, fmt.Sprintf("line-%02d extra text to force wrapping checks", i))
+		lines = append(lines, fmt.Sprintf("line-%02d extra text to force scrolling", i))
 	}
 	modal := NewHelp("Keyboard help", strings.Join(lines, "\n"))
 	view := modal.View(72, 22)
@@ -66,6 +66,16 @@ func TestHelpModal_ScrollsInsideCompactTerminal(t *testing.T) {
 	}
 	if modal.Update(tea.KeyPressMsg{Code: tea.KeyEscape}) != ModalClose {
 		t.Fatal("esc should close help")
+	}
+}
+
+func TestHelpModal_ClampsWideBodyToTerminalWidth(t *testing.T) {
+	modal := NewHelp("Keyboard help", strings.Repeat("wrapping-check ", 24))
+	view := modal.View(72, 22)
+	for _, line := range strings.Split(view, "\n") {
+		if w := lipgloss.Width(line); w > 72 {
+			t.Fatalf("help line width %d > 72: %q", w, line)
+		}
 	}
 }
 

@@ -71,12 +71,27 @@ func TestHelpDialog_SearchModeSectionComesFirst(t *testing.T) {
 	}
 	page.SetContentFocused(true)
 	page.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
-	model = updateModelKey(t, model, tea.KeyPressMsg{Code: '?', Text: "?"})
+	updated, cmd := model.Update(ui.OpenHelpMsg{})
+	model = updated.(Model)
+	_ = cmd
 	content := model.View().Content
-	mode := strings.Index(content, "This mode · Search")
-	pageIdx := strings.Index(content, "This page · "+ui.PageLabel(ui.PageConnections))
+	if !strings.Contains(content, "This mode · Search") {
+		t.Fatalf("visible help missing search mode:\n%s", content)
+	}
+	body := ui.RenderHelp(ui.PageConnections, ui.ModeSearch)
+	mode := strings.Index(body, "This mode · Search")
+	pageIdx := strings.Index(body, "This page · "+ui.PageLabel(ui.PageConnections))
 	if mode < 0 || pageIdx < 0 || mode > pageIdx {
-		t.Fatalf("search mode should precede page:\n%s", content)
+		t.Fatalf("search mode should precede page:\n%s", body)
+	}
+}
+
+func TestHelpDialog_DoesNotOpenInTextInput(t *testing.T) {
+	model := NewModel()
+	model.inputMode = ui.InputText
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: '?', Text: "?"})
+	if model.modal != nil {
+		t.Fatal("? opened help during text input")
 	}
 }
 

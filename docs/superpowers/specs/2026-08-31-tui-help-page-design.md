@@ -304,7 +304,8 @@ Setup 文本步骤（endpoints / subscription）里 `?` 仍是字符，不能抢
 | `RenderFooter(WebGUI, "", Available:false)` | `Esc back  ? help  q quit` |
 | `RenderFooter(WebGUI, "", Available:true)` | `Esc back  ↑/↓ panel  Space set default  o open  i install  u update  r reinstall  x uninstall  b rollback  ? help  q quit` |
 | `RenderFooter(System, "")` | `Esc back  Enter activate  ? help  q quit` |
-| `RenderFooter(_, ModeSearch)` | `Type to filter  ←/→ cursor  ↑/↓ leave  Esc done  ? help  q quit` |
+| `RenderFooter(_, ModeSearch)` | `Type to filter  ←/→ cursor  ↑/↓ leave  Esc done`（不含 `?`/`q`：输入态下它们进搜索框） |
+| `RenderFooter(Setup, "")` | `Tab fields  Enter continue  Esc back  Ctrl+C quit` |
 | `RenderFooter(_, ModeDetail)` | `Enter/Esc close  ? help  q quit` |
 | `RenderFooter(_, ModeColumns)` | `↑/↓ column  Space toggle  Enter save  Esc cancel  ? help  q quit` |
 | `RenderFooter(_, ModeForm)` | `Tab/Shift+Tab fields  Enter next/save  Esc cancel`（**不含** `?`/`q`） |
@@ -314,7 +315,7 @@ Setup 文本步骤（endpoints / subscription）里 `?` 仍是字符，不能抢
 
 各页 `Footer` 短文案与帮助 `Label` 可以不同（底栏 `u use` / 帮助 `activate`），这是同一条绑定上的两个字段，不是两张表。
 
-`strings.go` 里现有 `Footer*` / `FormHelp` 改为由 `RenderFooter` 赋值的 `var`（或保留同名别名），这样 `hints != ui.FooterSearchMode` 等测试不用改断言对象。禁止再手写一份平行的 footer 字符串。
+`strings.go` 里现有 `Footer*` / `FormHelp` / `SetupFooter` 改为由 `RenderFooter` 赋值的 `var`（或保留同名别名），这样 `hints != ui.FooterSearchMode` 等测试不用改断言对象。禁止再手写一份平行的 footer 字符串。
 
 ## 6. 帮助正文
 
@@ -418,7 +419,7 @@ if name == "?" {
 改为：
 
 1. 若已有 modal，行为不变。
-2. 若 `name == "?"` 且 `active != PageSetup`：打开 `NewHelp(HelpTitle+" · "+PageLabel(active), RenderHelp(active, helpMode(page)))`。仍在 `InputText` 下抢 `?`（搜索/订阅表单现状，页脚仍写 `? help`）。
+2. 若 `name == "?"` 且 `active != PageSetup` 且 `inputMode != InputText`：打开 `NewHelp(HelpTitle+" · "+PageLabel(active), RenderHelp(active, helpMode(page)))`。文本输入（搜索、订阅表单、端口编辑）里 `?` 是字符，与 `q` 一致。
 3. Setup 继续 `dispatchPage`。非文本步骤里 Setup 对 `?` 返回 `ui.OpenHelpMsg{}`；文本步骤把 `?` 交给 textinput。
 4. Shell 处理 `OpenHelpMsg` 与按 `?` 相同。
 

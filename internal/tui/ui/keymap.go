@@ -49,7 +49,7 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"up", "down"}, Display: "↑/↓", Label: "select a rail page", Footer: "↑/↓ page", Scope: ScopeGlobal},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "open the selected page from the rail", Footer: "Enter open", Scope: ScopeGlobal},
 		{Keys: []string{"esc"}, Display: "Esc", Label: "return to the rail, close a dialog, or step back in Setup", Footer: "Esc back", Scope: ScopeGlobal},
-		{Keys: []string{"tab"}, Display: "Tab", Label: "reserved for forms and dialogs", Scope: ScopeGlobal},
+		{Keys: []string{"tab"}, Display: "Tab", Label: "move between form fields, dialog buttons, and page controls", Scope: ScopeGlobal},
 
 		{Keys: []string{"esc"}, Display: "Esc", Label: "return to the rail", Scope: ScopePage, Page: PageOverview},
 
@@ -63,18 +63,22 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"p"}, Display: "p", Label: "pause or resume", Footer: "p pause", Scope: ScopePage, Page: PageConnections},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "open details or activate a control", Footer: "Enter details", Scope: ScopePage, Page: PageConnections},
 		{Keys: []string{"ctrl+x"}, Display: "Ctrl+X", Label: "close all active connections", Scope: ScopePage, Page: PageConnections},
+		{Keys: []string{"tab"}, Display: "Tab", Label: "move between controls", Scope: ScopePage, Page: PageConnections},
+		{Keys: []string{"up", "down", "left", "right"}, Display: "↑/↓/←/→", Label: "move", Scope: ScopePage, Page: PageConnections},
 
 		{Keys: []string{"/"}, Display: "/", Label: "search", Footer: "/ search", Scope: ScopePage, Page: PageRules},
 		{Keys: []string{"r"}, Display: "r", Label: "reload", Footer: "r reload", Scope: ScopePage, Page: PageRules},
 		{Keys: []string{"u"}, Display: "u", Label: "update the focused provider", Footer: "u update", Scope: ScopePage, Page: PageRules},
 		{Keys: []string{"ctrl+u"}, Display: "Ctrl+U", Label: "update all providers", Footer: "Ctrl+U update all", Scope: ScopePage, Page: PageRules},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "open details or activate a control", Footer: "Enter details", Scope: ScopePage, Page: PageRules},
+		{Keys: []string{"up", "down", "left", "right"}, Display: "↑/↓/←/→", Label: "move", Scope: ScopePage, Page: PageRules},
 
 		{Keys: []string{"/"}, Display: "/", Label: "search", Footer: "/ search", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"p"}, Display: "p", Label: "pause or resume", Footer: "p pause", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"w"}, Display: "w", Label: "wrap", Footer: "w wrap", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"G"}, Display: "G", Label: "jump to newest", Footer: "G newest", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "open details or activate a control", Footer: "Enter details", Scope: ScopePage, Page: PageLogs},
+		{Keys: []string{"up", "down", "left", "right"}, Display: "↑/↓/←/→", Label: "move", Scope: ScopePage, Page: PageLogs},
 
 		{Keys: []string{"enter"}, Display: "Enter", Label: "details", Footer: "Enter details", Scope: ScopePage, Page: PageSubscriptions},
 		{Keys: []string{"a"}, Display: "a", Label: "add", Footer: "a add", Scope: ScopePage, Page: PageSubscriptions},
@@ -85,6 +89,7 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"ctrl+r"}, Display: "Ctrl+R", Label: "refresh all", Footer: "Ctrl+R refresh all", Scope: ScopePage, Page: PageSubscriptions},
 		{Keys: []string{"u"}, Display: "u", Label: "activate", Footer: "u use", Scope: ScopePage, Page: PageSubscriptions},
 		{Keys: []string{"d"}, Display: "d", Label: "delete", Footer: "d delete", Scope: ScopePage, Page: PageSubscriptions},
+		{Keys: []string{"up", "down"}, Display: "↑/↓", Label: "move", Scope: ScopePage, Page: PageSubscriptions},
 
 		{Keys: []string{"up", "down", "k", "j"}, Display: "↑/↓", Label: "select a panel", Footer: "↑/↓ panel", Scope: ScopePage, Page: PageWebGUI},
 		{Keys: []string{"space"}, Display: "Space", Label: "set default", Footer: "Space set default", Scope: ScopePage, Page: PageWebGUI},
@@ -124,9 +129,11 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"enter"}, Display: "Enter", Label: "activate the selected button", Scope: ScopeMode, Mode: ModeConfirm},
 		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel", Scope: ScopeMode, Mode: ModeConfirm},
 
-		{Keys: []string{"tab", "shift+tab"}, Display: "Tab / Shift+Tab", Label: "move between fields", Scope: ScopePage, Page: PageSetup},
-		{Keys: []string{"enter"}, Display: "Enter", Label: "continue", Scope: ScopePage, Page: PageSetup},
-		{Keys: []string{"esc"}, Display: "Esc", Label: "previous step, or cancel on the first step", Scope: ScopePage, Page: PageSetup},
+		{Keys: []string{"tab", "shift+tab"}, Display: "Tab / Shift+Tab", Label: "move between fields", Footer: "Tab fields", Scope: ScopePage, Page: PageSetup},
+		{Keys: []string{"enter"}, Display: "Enter", Label: "continue", Footer: "Enter continue", Scope: ScopePage, Page: PageSetup},
+		{Keys: []string{"esc"}, Display: "Esc", Label: "previous step, or cancel on the first step", Footer: "Esc back", Scope: ScopePage, Page: PageSetup},
+		{Keys: []string{"ctrl+c"}, Display: "Ctrl+C", Label: "quit always", Footer: "Ctrl+C quit", Scope: ScopePage, Page: PageSetup},
+		{Keys: []string{"s"}, Display: "s", Label: "skip GeoIP", Scope: ScopePage, Page: PageSetup},
 		{Keys: []string{"q"}, Display: "q", Label: "quit on non-text steps", Scope: ScopePage, Page: PageSetup},
 		{Keys: []string{"?"}, Display: "?", Label: "this help on non-text steps", Scope: ScopePage, Page: PageSetup},
 	}
@@ -165,7 +172,12 @@ func RenderRailFooter() string {
 func RenderFooter(page PageID, mode string, opt FooterOpt) string {
 	helpQuit := []string{"? help", "q quit"}
 	switch mode {
-	case ModeSearch, ModeDetail, ModeColumns, ModePortsEdit:
+	case ModeSearch:
+		tokens := footerTokens(func(b KeyBinding) bool {
+			return b.Mode == mode && (b.Page == "" || b.Page == page)
+		})
+		return joinFooter(tokens)
+	case ModeDetail, ModeColumns, ModePortsEdit:
 		tokens := footerTokens(func(b KeyBinding) bool {
 			return b.Mode == mode && (b.Page == "" || b.Page == page)
 		})
@@ -173,6 +185,11 @@ func RenderFooter(page PageID, mode string, opt FooterOpt) string {
 	case ModeForm:
 		return joinFooter(footerTokens(func(b KeyBinding) bool { return b.Mode == ModeForm }))
 	default:
+		if page == PageSetup {
+			return joinFooter(footerTokens(func(b KeyBinding) bool {
+				return b.Scope == ScopePage && b.Page == PageSetup && b.Footer != ""
+			}))
+		}
 		if page == PageWebGUI && !opt.WebGUIAvailable {
 			return joinFooter(append([]string{"Esc back"}, helpQuit...))
 		}
@@ -200,6 +217,7 @@ var (
 	FooterColumnsMode   = RenderFooter(PageConnections, ModeColumns, FooterOpt{})
 	FooterPortsEdit     = RenderFooter(PageSystem, ModePortsEdit, FooterOpt{})
 	FormHelp            = RenderFooter(PageSubscriptions, ModeForm, FooterOpt{})
+	SetupFooter         = RenderFooter(PageSetup, "", FooterOpt{})
 )
 
 func RenderHelp(active PageID, mode string) string {
