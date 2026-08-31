@@ -30,6 +30,8 @@ type MonitorSnapshot struct {
 type OperationRecord struct {
 	ID     string
 	Object string
+	Action string
+	Detail string
 	State  string
 	At     time.Time
 }

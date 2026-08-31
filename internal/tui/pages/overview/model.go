@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
@@ -83,9 +84,9 @@ func (m *Model) View() string {
 	if len(m.snapshot.Operations) > 0 {
 		lines := make([]string, 0, min(5, len(m.snapshot.Operations)))
 		start := max(0, len(m.snapshot.Operations)-5)
+		width := ui.SectionTextWidth(m.fullCardInner())
 		for _, operation := range m.snapshot.Operations[start:] {
-			state := ui.ToneStyle(m.theme, ui.ClassifyStatusTone(operation.State)).Render(operation.State)
-			lines = append(lines, fmt.Sprintf("%s · %s", valueOr(operation.Object, operation.ID), state))
+			lines = append(lines, formatOperationLine(m.theme, operation, width))
 		}
 		operations = strings.Join(lines, "\n")
 	}
@@ -422,4 +423,96 @@ func valueOr(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// operationClockWidth is the display width of "15:04:05".
+const operationClockWidth = 8
+
+func formatOperationLine(theme ui.Theme, operation ui.OperationRecord, width int) string {
+	state := ui.ToneStyle(theme, ui.ClassifyStatusTone(operation.State)).Render(operation.State)
+	object := valueOr(operation.Object, operation.ID)
+	withTime := !operation.At.IsZero()
+
+	left := composeOperationLeft(object, operation.Action, operation.Detail, operation.State, state)
+	if width <= 0 {
+		return padRightTime(left, operation.At, width)
+	}
+	if withTime && operationLineFits(left, width, true) {
+		return padRightTime(left, operation.At, width)
+	}
+	if !withTime && operationLineFits(left, width, false) {
+		return left
+	}
+
+	// Drop Detail first so Action, State, Object, and time can remain.
+	if operation.Detail != "" {
+		left = composeOperationLeft(object, operation.Action, "", operation.State, state)
+		if withTime && operationLineFits(left, width, true) {
+			return padRightTime(left, operation.At, width)
+		}
+	}
+	if operationLineFits(left, width, false) {
+		return left
+	}
+	return truncateOperationObject(object, operation.Action, state, width)
+}
+
+func composeOperationLeft(object, action, detail, stateLabel, styledState string) string {
+	if action == "" {
+		return object + " · " + styledState
+	}
+	if detail == "" {
+		return object + " · " + action + " · " + styledState
+	}
+	if stateLabel == ui.FailedLabel {
+		return object + " · " + action + " · " + styledState + " · " + detail
+	}
+	return object + " · " + action + " · " + detail + " · " + styledState
+}
+
+func operationLineFits(left string, width int, withTime bool) bool {
+	need := lipgloss.Width(left)
+	if withTime {
+		need += 1 + operationClockWidth
+	}
+	return need <= width
+}
+
+func truncateOperationObject(object, action, styledState string, width int) string {
+	tail := styledState
+	if action != "" {
+		tail = action + " · " + styledState
+	}
+	sep := " · "
+	budget := width - lipgloss.Width(tail) - lipgloss.Width(sep)
+	if budget <= 0 || object == "" {
+		return tail
+	}
+	return truncateRunes(object, budget) + sep + tail
+}
+
+func truncateRunes(value string, max int) string {
+	runes := []rune(value)
+	if max <= 0 || len(runes) <= max {
+		return value
+	}
+	if max == 1 {
+		return "…"
+	}
+	return string(runes[:max-1]) + "…"
+}
+
+func padRightTime(left string, at time.Time, width int) string {
+	if width <= 0 {
+		return left
+	}
+	if at.IsZero() {
+		return left
+	}
+	clock := at.Local().Format("15:04:05")
+	gap := width - lipgloss.Width(left) - lipgloss.Width(clock)
+	if gap < 1 {
+		return left
+	}
+	return left + strings.Repeat(" ", gap) + clock
 }

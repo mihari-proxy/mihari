@@ -213,6 +213,11 @@ const (
 	EnableSystemProxyLabel      = "Enable"
 	DisableSystemProxyLabel     = "Disable"
 	ForceEnableSystemProxyLabel = "Force enable"
+	LedgerCleared               = "cleared"
+	LedgerOverwroteForeignFmt   = "overwrote foreign → %s"
+	LedgerForeignProxyInUse     = "foreign proxy in use"
+	LedgerOtherTunInUseFmt      = "other TUN in use (%s)"
+	LedgerOtherTunInUse         = "other TUN in use"
 	EnableTunLabel              = "Enable"
 	DisableTunLabel             = "Disable"
 

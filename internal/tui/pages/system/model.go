@@ -169,6 +169,8 @@ type systemProxyActionResultMsg struct {
 // are classified Succeeded/Failed in the Recent operations ledger.
 func (m systemProxyActionResultMsg) Err() error { return m.err }
 
+func (m systemProxyActionResultMsg) ProxyStatus() protocol.SystemProxyStatus { return m.status }
+
 var _ interface{ Err() error } = systemProxyActionResultMsg{}
 
 type tunStatusMsg struct {
@@ -203,6 +205,8 @@ type tunActionResultMsg struct {
 // Err implements the shell's action-outcome contract so TUN actions are
 // classified Succeeded/Failed in the Recent operations ledger.
 func (m tunActionResultMsg) Err() error { return m.err }
+
+func (m tunActionResultMsg) TunStatus() protocol.TunStatus { return m.status }
 
 var _ interface{ Err() error } = tunActionResultMsg{}
 
