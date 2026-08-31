@@ -61,6 +61,19 @@ func TestRenderHelp_CurrentModeComesAfterGlobal(t *testing.T) {
 	}
 }
 
+func TestRenderHelp_ConfirmModeShowsThisMode(t *testing.T) {
+	body := RenderHelp(PageConnections, ModeConfirm)
+	if !strings.Contains(body, "This mode · Confirm") {
+		t.Fatalf("missing confirm mode:\n%s", body)
+	}
+	if !strings.Contains(body, "toggle Confirm / Cancel") {
+		t.Fatalf("confirm keys missing:\n%s", body)
+	}
+	if strings.Contains(body, "This mode · Search") {
+		t.Fatalf("confirm-mode help leaked Search:\n%s", body)
+	}
+}
+
 func TestRenderHelp_SetupPageKeepsSetupKeys(t *testing.T) {
 	body := RenderHelp(PageSetup, "")
 	if !strings.Contains(body, "This page · "+PageLabel(PageSetup)) {
@@ -99,6 +112,22 @@ func TestRenderHelp_SameKeyKeepsPageSpecificActions(t *testing.T) {
 	}
 	if strings.Contains(conn, PageLabel(PageSubscriptions)+":") {
 		t.Fatalf("connections help listed subscriptions:\n%s", conn)
+	}
+	for name, body := range map[string]string{"conn": conn, "subs": subs, "rules": rules, "web": web} {
+		assertHelpRowsHaveKeyAndLabel(t, name, body)
+	}
+}
+
+func assertHelpRowsHaveKeyAndLabel(t *testing.T, name, body string) {
+	t.Helper()
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.HasPrefix(line, "  ") {
+			continue
+		}
+		display, label, ok := strings.Cut(strings.TrimLeft(line, " "), "  ")
+		if !ok || strings.TrimSpace(display) == "" || strings.TrimSpace(label) == "" {
+			t.Fatalf("%s help row missing Display + two spaces + Label: %q\n%s", name, line, body)
+		}
 	}
 }
 

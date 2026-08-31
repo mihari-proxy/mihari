@@ -18,7 +18,7 @@ Catalog 仍然需要覆盖所有页（底栏 SSOT、同键异义），但**帮�
 按 `?` 时帮助只包含：
 
 1. **Global:** 始终（`1–8`、`?`、`q`、`Ctrl+C`、rail 导航等）
-2. **This mode · …:** 仅当当前确实处于某叠加态（搜索、详情、列选择、表单、端口编辑）。这是当前页上下文，不是「其它页的百科」。
+2. **This mode · …:** 仅当当前确实处于某叠加态（搜索、详情、列选择、表单、端口编辑、确认框）。这是当前页上下文，不是「其它页的百科」。
 3. **This page · \<当前页名\>:** 当前页默认态绑定
 
 不再输出：其它 rail 页节、未激活的 mode 节、非当前页的 Setup 节。
@@ -51,6 +51,7 @@ Catalog 仍然需要覆盖所有页（底栏 SSOT、同键异义），但**帮�
 
 - `RenderHelp(PageProxies, "")` 含 `Global:`、`This page · Proxies`、`Ctrl+T`；**不含** `Conns:`、`Rules:`、`Subs:`、`Logs:`、`Web GUI:`、`Setup:`、`Search:`、`Confirm:`。
 - `RenderHelp(PageConnections, ModeSearch)` 仍是 Global < This mode · Search < This page · Conns，且不含 `Rules:`。
+- `RenderHelp(PageConnections, ModeConfirm)` 含 `This mode · Confirm` 与确认框键，不含 `This mode · Search`。
 - 同键：分三次 `RenderHelp` 断言 Connections / Subscriptions / Rules 的 `p`/`u` Label。
 - Shell：`?` 在 Proxies 打开后可见 `This page · Proxies`，不可见其它页节标题。
 - `RenderHelp(PageSetup, "")` 含 Setup 的 `continue` / `skip GeoIP`，不含其它页节标题。

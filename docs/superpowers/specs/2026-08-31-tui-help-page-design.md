@@ -390,7 +390,7 @@ func NewHelp(title, body string) *Modal
 - `scroll` clamp 到合法窗口
 - 居中 `lipgloss.Place`
 
-72×22 下整段帮助一定高于视口，因此必须出现 `▾`，`down` 必须改变可见首行。
+正文超出视口时出现 `▾`，`down` 必须改变可见首行。按页过滤后 Overview / System 等短正文可以整页放下，不强制滚动。滚动测试用合成 40+ 行正文，不依赖真实 catalog 长度。
 
 ## 8. Shell 接线
 
