@@ -15,6 +15,7 @@ RETRACT_DEV_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workfl
 STABLE_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "release.yml"
 STABLE_RETRACT_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "retract.yml"
 CI_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "ci.yml"
+PAGES_WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "pages.yml"
 CHANGELOG_CHECK_WORKFLOW = (
     Path(__file__).resolve().parents[3] / ".github" / "workflows" / "changelog-check.yml"
 )
@@ -1279,6 +1280,33 @@ def test_ci_runs_release_safety_suite_from_pinned_requirements_on_all_integratio
         "-r scripts/release/requirements-test.txt"
     )
     assert safety["run"] == f"python -m pytest {RELEASE_SAFETY_TESTS}"
+
+
+def test_pages_workflow_publishes_site_from_main_only():
+    document = yaml.safe_load(PAGES_WORKFLOW.read_text(encoding="utf-8"))
+    triggers = document[True]
+    assert triggers["push"]["branches"] == ["main"]
+    assert "site/**" in triggers["push"]["paths"]
+    assert "site/**" in triggers["pull_request"]["paths"]
+    assert document["permissions"]["contents"] == "read"
+    assert document["permissions"]["pages"] == "write"
+    assert document["permissions"]["id-token"] == "write"
+
+    upload = next(
+        step
+        for step in document["jobs"]["build"]["steps"]
+        if str(step.get("uses", "")).startswith("actions/upload-pages-artifact@")
+    )
+    assert upload["with"]["path"] == "site"
+
+    deploy = document["jobs"]["deploy"]
+    assert "github.event_name == 'push'" in deploy["if"]
+    assert "github.ref == 'refs/heads/main'" in deploy["if"]
+    assert deploy["environment"]["name"] == "github-pages"
+    assert any(
+        str(step.get("uses", "")).startswith("actions/deploy-pages@")
+        for step in deploy["steps"]
+    )
 
 
 def test_branch_governance_keeps_feature_work_off_main_and_dev_without_promising_review_rules():
