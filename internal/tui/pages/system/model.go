@@ -13,6 +13,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/platform"
@@ -343,6 +344,7 @@ type Model struct {
 	contentFocused   bool
 	width            int
 	height           int
+	scrollY          int // top visible section line; excludes error chrome
 	theme            ui.Theme
 	editID           string
 	editInput        textinput.Model
@@ -413,6 +415,7 @@ func (m *Model) ApplyServiceStatus(status service.StatusKind, loaded bool) {
 	if loaded {
 		m.serviceStatus = status
 	}
+	m.ensureFocusVisible()
 }
 
 // SetServiceController injects or replaces the OS service controller.
@@ -443,6 +446,7 @@ func (m *Model) SetSelfUpdater(updater SelfUpdater, currentVersion, binaryPath s
 func (m *Model) SetWebGUI(status protocol.WebGUIStatus) {
 	m.webGUI = status
 	m.webGUILoaded = true
+	m.ensureFocusVisible()
 }
 
 func (m *Model) ID() ui.PageID { return ui.PageSystem }
@@ -450,7 +454,10 @@ func (m *Model) ID() ui.PageID { return ui.PageSystem }
 // SetContentFocused reports whether the root shell has given keyboard focus to this page.
 func (m *Model) SetContentFocused(focused bool) { m.contentFocused = focused }
 
-func (m *Model) SetSize(width, height int) { m.width, m.height = width, height }
+func (m *Model) SetSize(width, height int) {
+	m.width, m.height = width, height
+	m.ensureFocusVisible()
+}
 
 func (m *Model) layoutWidth() int {
 	if m.width > 0 {
@@ -463,10 +470,12 @@ func (m *Model) FocusFirst() {
 	if m.rowIndex(m.focusID) < 0 {
 		m.focusID = rowDaemon
 	}
+	m.ensureFocusVisible()
 }
 
 func (m *Model) SetSnapshot(status protocol.Status, core protocol.CoreStatus) {
 	m.status, m.core = status, core
+	m.ensureFocusVisible()
 }
 
 func (m *Model) SetOnboarding(status protocol.OnboardingStatus) { m.onboarding = status }
@@ -613,6 +622,12 @@ func (m *Model) loadWebGUI() tea.Cmd {
 }
 
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
+	defer func() {
+		if m.detail != nil {
+			return
+		}
+		m.ensureFocusVisible()
+	}()
 	switch typed := message.(type) {
 	case selfCheckResultMsg:
 		if typed.generation != m.selfCheckGeneration {
@@ -1017,29 +1032,36 @@ func (m *Model) View() string {
 			m.theme.Title.Render(strings.TrimSpace(m.detail.label)+" details") + "\n\n" + m.detail.detail + "\n\n" + ui.EscCloseHint,
 		)
 	}
-	var parts []string
-	// Pin failure reason at the top so it is not clipped away.
-	if detail := m.visibleErrorDetail(); detail != "" {
-		parts = append(parts, m.theme.Danger.Render(detail))
+	errorLines := m.errorChromeLines()
+	sectionLines, _, _ := m.buildSectionContent()
+	if m.height <= 0 {
+		return strings.Join(append(append([]string{}, errorLines...), sectionLines...), "\n")
 	}
-	parts = append(parts, m.renderSections()...)
-	return strings.Join(parts, "\n")
+	if len(errorLines) >= m.height {
+		return strings.Join(errorLines[:m.height], "\n")
+	}
+	avail := m.height - len(errorLines)
+	return strings.Join(append(errorLines, ui.SliceLines(sectionLines, m.scrollY, avail)...), "\n")
 }
 
-func (m *Model) renderSections() []string {
+func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int) {
+	focusStart, focusEnd = -1, -1
 	inner := ui.FullSectionInner(m.layoutWidth())
 	clock := m.rowSpinClock
 	if clock.IsZero() {
 		clock = time.Unix(0, 0)
 	}
 	type sectionBuf struct {
-		title string
-		lines []string
+		title        string
+		body         []string
+		focusIndex   int
+		focusIsFirst bool
+		focusLines   int
 	}
 	var sections []sectionBuf
 	for _, item := range m.rows() {
 		if len(sections) == 0 || sections[len(sections)-1].title != item.section {
-			sections = append(sections, sectionBuf{title: item.section})
+			sections = append(sections, sectionBuf{title: item.section, focusIndex: -1})
 		}
 		idx := len(sections) - 1
 		marker := "  "
@@ -1071,17 +1093,35 @@ func (m *Model) renderSections() []string {
 		if rowFocused && m.contentFocused && m.editID == "" {
 			labelPart = ui.ApplyFocusStyle(labelPart, m.theme.RowFocus)
 		}
-		sections[idx].lines = append(sections[idx].lines, labelPart+value)
+		rowLines := strings.Split(labelPart+value, "\n")
+		if item.id == m.focusID {
+			sections[idx].focusIndex = len(sections[idx].body)
+			sections[idx].focusIsFirst = sections[idx].focusIndex == 0
+			sections[idx].focusLines = len(rowLines)
+		}
+		sections[idx].body = append(sections[idx].body, rowLines...)
 	}
-	out := make([]string, 0, len(sections))
 	for _, sec := range sections {
-		body := strings.Join(sec.lines, "\n")
+		body := strings.Join(sec.body, "\n")
 		if body == "" {
 			body = " "
 		}
-		out = append(out, ui.RenderBorderedSection(m.theme, sec.title, body, inner))
+		section := ui.RenderBorderedSection(m.theme, sec.title, body, inner)
+		sectionLines := strings.Split(section, "\n")
+		sectionBase := len(lines)
+		lines = append(lines, sectionLines...)
+		if sec.focusIndex >= 0 {
+			bodyOffset := sectionBase + 1
+			if sec.focusIsFirst {
+				focusStart = sectionBase
+				focusEnd = bodyOffset + sec.focusLines
+			} else {
+				focusStart = bodyOffset + sec.focusIndex
+				focusEnd = focusStart + sec.focusLines
+			}
+		}
 	}
-	return out
+	return lines, focusStart, focusEnd
 }
 
 func (m *Model) rows() []row {
@@ -1513,6 +1553,7 @@ func (m *Model) outcomeRowID(fallback string) string {
 }
 
 func (m *Model) markRowOutcome(rowID string, ok bool, detail string) {
+	defer m.ensureFocusVisible()
 	if rowID == "" {
 		return
 	}
@@ -1540,6 +1581,28 @@ func (m *Model) visibleErrorDetail() string {
 		return m.outcomeDetail
 	}
 	return strings.TrimSpace(m.lastError)
+}
+
+func (m *Model) errorChromeLines() []string {
+	detail := strings.TrimSpace(m.visibleErrorDetail())
+	if detail == "" {
+		return nil
+	}
+	detail = strings.ReplaceAll(detail, "\n", " ")
+	rendered := m.theme.Danger.Render(detail)
+	if m.width > 0 {
+		rendered = lipgloss.NewStyle().MaxWidth(max(1, m.width-2)).Render(rendered)
+	}
+	if i := strings.Index(rendered, "\n"); i >= 0 {
+		rendered = rendered[:i]
+	}
+	return []string{rendered}
+}
+
+func (m *Model) ensureFocusVisible() {
+	lines, focusStart, focusEnd := m.buildSectionContent()
+	avail := m.height - len(m.errorChromeLines())
+	m.scrollY = ui.EnsureLineVisible(m.scrollY, avail, len(lines), focusStart, focusEnd)
 }
 
 func truncateRunes(value string, max int) string {
