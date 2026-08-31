@@ -1093,7 +1093,7 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 			} else {
 				value = ui.RenderStatusChip(m.theme, ui.StatusChipFailed, ui.FailedLabel)
 				if m.outcomeDetail != "" {
-					value += "  " + m.theme.Danger.Render(ui.TruncateDisplay(m.outcomeDetail, 48))
+					value += "  " + m.theme.Danger.Render(ui.TruncateVisible(m.outcomeDetail, 48))
 				}
 			}
 		}

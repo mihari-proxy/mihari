@@ -488,7 +488,7 @@ func truncateOperationObject(object, action, styledState string, width int) stri
 	if budget <= 0 || object == "" {
 		return tail
 	}
-	return ui.TruncateDisplay(object, budget) + sep + tail
+	return ui.TruncateVisible(object, budget) + sep + tail
 }
 
 func padRightTime(left string, at time.Time, width int) string {

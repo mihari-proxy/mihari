@@ -44,7 +44,7 @@
 
 **Interfaces:**
 - Consumes: `ui.ActionIntentMsg`、`protocol.SystemProxyStatus`、现有 `ui.ActionEnableSystemProxy` 等常量
-- Produces: `newOperationRecord(intent ui.ActionIntentMsg, result tea.Msg, at time.Time) ui.OperationRecord`；`OperationRecord.Action` / `Detail`；常量 `LedgerCleared`、`LedgerOverwroteForeignFmt`
+- Produces: `newOperationRecord(intent ui.ActionIntentMsg, result tea.Msg, at time.Time) ui.OperationRecord`；`OperationRecord.Action` / `Detail`；常量 `LedgerCleared`、`LedgerOverwroteForeign`、`LedgerOverwroteForeignFmt`、`ForceEnableTunLabel`
 
 - [ ] **Step 1: 给 `OperationRecord` 加字段，并加文案常量**
 
@@ -65,10 +65,12 @@ type OperationRecord struct {
 
 ```go
 	LedgerCleared             = "cleared"
+	LedgerOverwroteForeign    = "overwrote foreign"
 	LedgerOverwroteForeignFmt = "overwrote foreign → %s"
 	LedgerForeignProxyInUse   = "foreign proxy in use"
 	LedgerOtherTunInUseFmt    = "other TUN in use (%s)"
 	LedgerOtherTunInUse       = "other TUN in use"
+	ForceEnableTunLabel       = "Force enable"
 ```
 
 这一步是加法，现有复合字面量仍然编译。
@@ -488,7 +490,7 @@ func TestNewOperationRecord_TunSuccess(t *testing.T) {
 		wantD  string
 	}{
 		{"enable", ui.ActionEnableTun, on, ui.EnableTunLabel, "gVisor · " + live},
-		{"force", ui.ActionForceTun, on, ui.ForceEnableSystemProxyLabel, "gVisor · " + live},
+		{"force", ui.ActionForceTun, on, ui.ForceEnableTunLabel, "gVisor · " + live},
 		{"disable", ui.ActionDisableTun, off, ui.DisableTunLabel, dead},
 	}
 	for _, test := range tests {
@@ -932,7 +934,7 @@ Expected: Narrow 测试 FAIL（长 Detail 仍在，或时间被裁掉）。
 
 - [ ] **Step 3: 按预算选择左侧变体再右对齐**
 
-把 `formatOperationLine` 改成：先构造候选左侧（有/无 Detail），用 `fits(left, width, withTime)` 判断 `lipgloss.Width(left)+1+8 <= width`（时钟 8 列：`15:04:05`）。不 fit 就去掉 Detail；仍不 fit 就去掉时间；再不行用 `ui.TruncateDisplay` 按显示宽度截 Object（CJK 双宽），留 Action · State。
+把 `formatOperationLine` 改成：先构造候选左侧（有/无 Detail），用 `fits(left, width, withTime)` 判断 `lipgloss.Width(left)+1+8 <= width`（时钟 8 列：`15:04:05`）。不 fit 就去掉 Detail；仍不 fit 就去掉时间；再不行用已有的 `ui.TruncateVisible` 按显示宽度截 Object（CJK 双宽、保留 ANSI），留 Action · State。
 
 不要把整行丢给 `MaxWidth`。
 
