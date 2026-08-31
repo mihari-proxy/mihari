@@ -1,10 +1,13 @@
 package overview
 
 import (
+	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -30,6 +33,30 @@ func TestOverview_RendersAuthoritativeCardsAndSessionOperations(t *testing.T) {
 	}
 	if strings.Contains(view, "Phase 5") {
 		t.Fatalf("overview must not mention Phase 5: %s", view)
+	}
+}
+
+func TestOverview_RecentOperationsShowsActionDetailAndTime(t *testing.T) {
+	at := time.Date(2026, 8, 31, 14, 32, 1, 0, time.Local)
+	model := New()
+	model.SetSize(100, 30)
+	model.SetSnapshot(Snapshot{
+		Operations: []ui.OperationRecord{{
+			Object: ui.SystemProxyLabel,
+			Action: ui.EnableSystemProxyLabel,
+			Detail: "127.0.0.1:7890 · " + ui.PortOwned,
+			State:  ui.SucceededLabel,
+			At:     at,
+		}},
+	})
+	view := model.View()
+	for _, want := range []string{
+		ui.RecentOperationsTitle, ui.SystemProxyLabel, ui.EnableSystemProxyLabel,
+		"127.0.0.1:7890", ui.PortOwned, ui.SucceededLabel, at.Local().Format("15:04:05"),
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %q:\n%s", want, view)
+		}
 	}
 }
 
@@ -461,4 +488,149 @@ func TestOverview_FullContentWidthKeepsWebGUISessions(t *testing.T) {
 	if !foundPair {
 		t.Fatalf("full content width should keep the 2-column grid:\n%s", view)
 	}
+}
+
+func TestFormatOperationLine_SystemProxyWideKeepsDetailAndTime(t *testing.T) {
+	at := time.Date(2026, 8, 31, 14, 32, 1, 0, time.Local)
+	line := formatOperationLine(ui.DefaultTheme(), ui.OperationRecord{
+		Object: ui.SystemProxyLabel,
+		Action: ui.EnableSystemProxyLabel,
+		Detail: "127.0.0.1:7890 · " + ui.PortOwned,
+		State:  ui.SucceededLabel,
+		At:     at,
+	}, 80)
+	plain := stripANSI(line)
+	if !strings.Contains(plain, ui.EnableSystemProxyLabel) || !strings.Contains(plain, "127.0.0.1:7890") || !strings.Contains(plain, ui.SucceededLabel) {
+		t.Fatalf("line=%q", plain)
+	}
+	clock := at.Local().Format("15:04:05")
+	if !strings.HasSuffix(strings.TrimRight(plain, " "), clock) {
+		t.Fatalf("time not right-aligned: %q", plain)
+	}
+	if lipgloss.Width(line) != 80 {
+		t.Fatalf("width=%d want 80 line=%q", lipgloss.Width(line), plain)
+	}
+}
+
+func TestFormatOperationLine_UnrelatedKeepsObjectStateAndTime(t *testing.T) {
+	at := time.Date(2026, 8, 31, 14, 12, 44, 0, time.Local)
+	line := formatOperationLine(ui.DefaultTheme(), ui.OperationRecord{
+		Object: "mihomo", State: ui.SucceededLabel, At: at,
+	}, 60)
+	plain := stripANSI(line)
+	if !strings.Contains(plain, "mihomo") || !strings.Contains(plain, ui.SucceededLabel) {
+		t.Fatalf("line=%q", plain)
+	}
+	if strings.Contains(plain, " ·  · ") {
+		t.Fatalf("empty action inserted: %q", plain)
+	}
+	if !strings.HasSuffix(strings.TrimRight(plain, " "), at.Local().Format("15:04:05")) {
+		t.Fatalf("time=%q", plain)
+	}
+}
+
+func TestFormatOperationLine_ZeroAtOmitsClock(t *testing.T) {
+	line := formatOperationLine(ui.DefaultTheme(), ui.OperationRecord{
+		Object: "mihomo", State: ui.SucceededLabel,
+	}, 40)
+	plain := stripANSI(line)
+	if strings.Contains(plain, ":") && looksLikeClock(plain) {
+		t.Fatalf("unexpected clock: %q", plain)
+	}
+}
+
+func TestFormatOperationLine_NarrowDropsDetailKeepsActionStateTime(t *testing.T) {
+	at := time.Date(2026, 8, 31, 14, 32, 1, 0, time.Local)
+	line := formatOperationLine(ui.DefaultTheme(), ui.OperationRecord{
+		Object: ui.SystemProxyLabel,
+		Action: ui.EnableSystemProxyLabel,
+		Detail: "127.0.0.1:7890 · " + ui.PortOwned,
+		State:  ui.SucceededLabel,
+		At:     at,
+	}, 42)
+	plain := stripANSI(line)
+	if !strings.Contains(plain, ui.EnableSystemProxyLabel) || !strings.Contains(plain, ui.SucceededLabel) {
+		t.Fatalf("missing action/state: %q", plain)
+	}
+	if strings.Contains(plain, "127.0.0.1:7890") {
+		t.Fatalf("detail should drop first: %q", plain)
+	}
+	if !strings.Contains(plain, at.Local().Format("15:04:05")) {
+		t.Fatalf("time should remain after dropping detail: %q", plain)
+	}
+}
+
+func TestFormatOperationLine_VeryNarrowDropsTimeKeepsActionState(t *testing.T) {
+	at := time.Date(2026, 8, 31, 14, 32, 1, 0, time.Local)
+	line := formatOperationLine(ui.DefaultTheme(), ui.OperationRecord{
+		Object: ui.SystemProxyLabel,
+		Action: ui.ForceEnableSystemProxyLabel,
+		Detail: "overwrote foreign → 127.0.0.1:7890",
+		State:  ui.SucceededLabel,
+		At:     at,
+	}, 28)
+	plain := stripANSI(line)
+	if !strings.Contains(plain, ui.ForceEnableSystemProxyLabel) || !strings.Contains(plain, ui.SucceededLabel) {
+		t.Fatalf("missing action/state: %q", plain)
+	}
+	if strings.Contains(plain, at.Local().Format("15:04:05")) {
+		t.Fatalf("time should drop before action: %q", plain)
+	}
+}
+
+func TestFormatOperationLine_CJKObjectStaysWithinWidth(t *testing.T) {
+	line := formatOperationLine(ui.DefaultTheme(), ui.OperationRecord{
+		Object: "系统代理系统代理系统代理",
+		Action: ui.EnableSystemProxyLabel,
+		State:  ui.SucceededLabel,
+	}, 22)
+	if lipgloss.Width(line) > 22 {
+		t.Fatalf("CJK line width=%d > 22: %q", lipgloss.Width(line), stripANSI(line))
+	}
+	if !strings.Contains(stripANSI(line), ui.EnableSystemProxyLabel) || !strings.Contains(stripANSI(line), ui.SucceededLabel) {
+		t.Fatalf("missing action/state: %q", stripANSI(line))
+	}
+}
+
+func TestFormatOperationLine_FailureDetailAfterState(t *testing.T) {
+	at := time.Date(2026, 8, 31, 14, 40, 3, 0, time.Local)
+	line := formatOperationLine(ui.DefaultTheme(), ui.OperationRecord{
+		Object: ui.TUNLabel,
+		Action: ui.EnableTunLabel,
+		Detail: fmt.Sprintf(ui.LedgerOtherTunInUseFmt, "Meta Tunnel"),
+		State:  ui.FailedLabel,
+		At:     at,
+	}, 80)
+	plain := stripANSI(line)
+	enableAt := strings.Index(plain, ui.EnableTunLabel)
+	failedAt := strings.Index(plain, ui.FailedLabel)
+	reasonAt := strings.Index(plain, "Meta Tunnel")
+	if enableAt < 0 || failedAt < enableAt || reasonAt < failedAt {
+		t.Fatalf("want Object · Action · Failed · reason, got %q", plain)
+	}
+}
+
+func stripANSI(value string) string {
+	var b strings.Builder
+	esc := false
+	for _, r := range value {
+		if r == 0x1b {
+			esc = true
+			continue
+		}
+		if esc {
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				esc = false
+			}
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+var clockPattern = regexp.MustCompile(`\d{2}:\d{2}:\d{2}`)
+
+func looksLikeClock(plain string) bool {
+	return clockPattern.MatchString(plain)
 }

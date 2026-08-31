@@ -848,6 +848,9 @@ func TestActionCompletedRecordsOperations(t *testing.T) {
 		if record.At.IsZero() {
 			t.Fatalf("record.At zero: %+v", record)
 		}
+		if record.Action != "" || record.Detail != "" {
+			t.Fatalf("unrelated action must not set Action/Detail: %+v", record)
+		}
 	}
 
 	// Success: a nil-error outcome result is recorded as Succeeded.
@@ -881,6 +884,30 @@ func TestActionCompletedRecordsOperations(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("overview view missing %q: %s", want, view)
 		}
+	}
+}
+
+func TestActionCompletedRecordsSystemProxyLedger(t *testing.T) {
+	model := NewModel()
+	updated, _ := model.Update(actionCompletedMsg{
+		Intent: ui.ActionIntentMsg{
+			Action: ui.ActionEnableSystemProxy, Key: "system:enable-system-proxy",
+			Object: ui.SystemProxyLabel,
+		},
+		Result: fakeProxyOutcome{status: protocol.SystemProxyStatus{
+			Observed: protocol.SystemProxyObserved{Server: "127.0.0.1:7890", Owned: true},
+		}},
+	})
+	model = updated.(Model)
+	if len(model.operations) != 1 {
+		t.Fatalf("operations=%v", model.operations)
+	}
+	record := model.operations[0]
+	if record.Action != ui.EnableSystemProxyLabel || !strings.Contains(record.Detail, "127.0.0.1:7890") || record.State != ui.SucceededLabel {
+		t.Fatalf("record=%+v", record)
+	}
+	if record.At.IsZero() {
+		t.Fatal("At zero")
 	}
 }
 

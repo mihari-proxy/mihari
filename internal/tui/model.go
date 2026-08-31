@@ -683,17 +683,7 @@ func (model *Model) setLogsStale(stale bool) {
 // ledger. A result reporting no error — including nil and results that do not
 // implement Err() — is recorded as Succeeded; an error is recorded as Failed.
 func (model *Model) recordActionOutcome(intent ui.ActionIntentMsg, result tea.Msg) {
-	state := ui.SucceededLabel
-	if res, ok := result.(resultErr); ok && res.Err() != nil {
-		state = ui.FailedLabel
-	}
-	object := intent.Object
-	if object == "" {
-		object = intent.Title
-	}
-	model.recordOperation(ui.OperationRecord{
-		ID: intent.Key, Object: object, State: state, At: time.Now(),
-	})
+	model.recordOperation(newOperationRecord(intent, result, time.Now()))
 }
 
 func (model *Model) recordOperation(operation ui.OperationRecord) {

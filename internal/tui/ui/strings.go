@@ -210,11 +210,30 @@ const (
 	// Row-local short-verb labels for the Network action rows. The status row
 	// above (and the Network section) already names the object, so the action
 	// row only carries the verb, mirroring coreActionLabel's Install/Update.
-	EnableSystemProxyLabel      = "Enable"
-	DisableSystemProxyLabel     = "Disable"
+	// EnableSystemProxyLabel is the system-proxy enable verb.
+	EnableSystemProxyLabel = "Enable"
+	// DisableSystemProxyLabel is the system-proxy disable verb.
+	DisableSystemProxyLabel = "Disable"
+	// ForceEnableSystemProxyLabel is the system-proxy force-enable verb.
 	ForceEnableSystemProxyLabel = "Force enable"
-	EnableTunLabel              = "Enable"
-	DisableTunLabel             = "Disable"
+	// LedgerCleared is the Disable system-proxy success detail.
+	LedgerCleared = "cleared"
+	// LedgerOverwroteForeign is Force-enable success when no server is known.
+	LedgerOverwroteForeign = "overwrote foreign"
+	// LedgerOverwroteForeignFmt is Force-enable success with the written server.
+	LedgerOverwroteForeignFmt = "overwrote foreign → %s"
+	// LedgerForeignProxyInUse is the SysProxy conflict / not-owned failure detail.
+	LedgerForeignProxyInUse = "foreign proxy in use"
+	// LedgerOtherTunInUseFmt is TUN conflict failure with an interface short name.
+	LedgerOtherTunInUseFmt = "other TUN in use (%s)"
+	// LedgerOtherTunInUse is TUN conflict failure with no interface name.
+	LedgerOtherTunInUse = "other TUN in use"
+	// EnableTunLabel is the TUN enable verb.
+	EnableTunLabel = "Enable"
+	// DisableTunLabel is the TUN disable verb.
+	DisableTunLabel = "Disable"
+	// ForceEnableTunLabel is the TUN force-enable verb on the Recent operations ledger.
+	ForceEnableTunLabel = "Force enable"
 
 	SystemServiceLabel        = "System service"
 	SystemServiceSectionTitle = "System service"
