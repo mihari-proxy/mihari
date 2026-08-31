@@ -1294,6 +1294,13 @@ def test_pages_workflow_publishes_site_from_main_only():
     assert document["permissions"]["pages"] == "write"
     assert document["permissions"]["id-token"] == "write"
 
+    setup = next(
+        step
+        for step in document["jobs"]["build"]["steps"]
+        if str(step.get("uses", "")).startswith("actions/configure-pages@")
+    )
+    assert setup.get("with", {}).get("enablement") is True
+
     upload = next(
         step
         for step in document["jobs"]["build"]["steps"]
