@@ -317,7 +317,7 @@ func TestRenderFooter_MatchesCurrentLayout(t *testing.T) {
 		{"webgui-off", RenderFooter(PageWebGUI, "", FooterOpt{}), "Esc back  ? help  q quit"},
 		{"webgui-on", RenderFooter(PageWebGUI, "", FooterOpt{WebGUIAvailable: true}), "Esc back  ↑/↓ panel  Space set default  o open  i install  u update  r reinstall  x uninstall  b rollback  ? help  q quit"},
 		{"system", RenderFooter(PageSystem, "", FooterOpt{}), "Esc back  Enter activate  ? help  q quit"},
-		{"search", RenderFooter(PageConnections, ModeSearch, FooterOpt{}), "Type to filter  ←/→ cursor  ↑/↓ leave  Esc done  ? help  q quit"},
+		{"search", RenderFooter(PageConnections, ModeSearch, FooterOpt{}), "Type to filter  ←/→ cursor  ↑/↓ leave  Esc done"},
 		{"detail", RenderFooter(PageConnections, ModeDetail, FooterOpt{}), "Enter/Esc close  ? help  q quit"},
 		{"columns", RenderFooter(PageConnections, ModeColumns, FooterOpt{}), "↑/↓ column  Space toggle  Enter save  Esc cancel  ? help  q quit"},
 		{"form", RenderFooter(PageSubscriptions, ModeForm, FooterOpt{}), "Tab/Shift+Tab fields  Enter next/save  Esc cancel"},
@@ -508,13 +508,18 @@ func RenderRailFooter() string {
 	tokens := footerTokens(func(b KeyBinding) bool {
 		return b.Scope == ScopeGlobal && (b.Footer == "↑/↓ page" || b.Footer == "Enter open")
 	})
-	return joinFooter(append(tokens, "? help", "q quit"))
+	return joinFooter(append(tokens, globalFooterToken("?"), globalFooterToken("q")))
 }
 
 func RenderFooter(page PageID, mode string, opt FooterOpt) string {
-	helpQuit := []string{"? help", "q quit"}
+	helpQuit := []string{globalFooterToken("?"), globalFooterToken("q")}
 	switch mode {
-	case ModeSearch, ModeDetail, ModeColumns, ModePortsEdit:
+	case ModeSearch:
+		tokens := footerTokens(func(b KeyBinding) bool {
+			return b.Mode == mode && (b.Page == "" || b.Page == page)
+		})
+		return joinFooter(tokens)
+	case ModeDetail, ModeColumns, ModePortsEdit:
 		tokens := footerTokens(func(b KeyBinding) bool {
 			return b.Mode == mode && (b.Page == "" || b.Page == page)
 		})
@@ -523,12 +528,12 @@ func RenderFooter(page PageID, mode string, opt FooterOpt) string {
 		return joinFooter(footerTokens(func(b KeyBinding) bool { return b.Mode == ModeForm }))
 	default:
 		if page == PageWebGUI && !opt.WebGUIAvailable {
-			return joinFooter(append([]string{"Esc back"}, helpQuit...))
+			return joinFooter(append([]string{globalFooterToken("Esc")}, helpQuit...))
 		}
 		tokens := footerTokens(func(b KeyBinding) bool {
 			return b.Scope == ScopePage && b.Page == page && b.Mode == ""
 		})
-		return joinFooter(append(append([]string{"Esc back"}, tokens...), helpQuit...))
+		return joinFooter(append(append([]string{globalFooterToken("Esc")}, tokens...), helpQuit...))
 	}
 }
 

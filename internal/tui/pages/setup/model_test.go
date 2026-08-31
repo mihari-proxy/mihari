@@ -130,6 +130,23 @@ func TestModel_QuestionMarkStaysInEndpointField(t *testing.T) {
 	}
 }
 
+func TestModel_QuestionMarkStaysInSubscriptionField(t *testing.T) {
+	model := loadedModel(&fakeClient{status: defaultStatus(false)})
+	model.step = stepSubscription
+	model.subscriptionInputs = subscriptionInputs()
+	model.focusSubscription(1)
+	updated, command := model.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
+	model = updated.(*Model)
+	if command != nil {
+		if _, ok := command().(ui.OpenHelpMsg); ok {
+			t.Fatal("typed ? in subscription URL opened help")
+		}
+	}
+	if !strings.Contains(model.subscriptionInputs[1].Value(), "?") {
+		t.Fatalf("subscription URL should accept ?, got %q", model.subscriptionInputs[1].Value())
+	}
+}
+
 func TestSetupFormUsesTabOnlyToMoveBetweenEndpointFields(t *testing.T) {
 	model := loadedModel(&fakeClient{status: defaultStatus(false)})
 	if model.focusedField != 0 {

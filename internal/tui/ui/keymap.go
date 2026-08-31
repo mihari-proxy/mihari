@@ -5,15 +5,20 @@ import (
 	"unicode/utf8"
 )
 
+// KeyScope is the catalog grouping for a shortcut: global, per-page, or overlay mode.
 type KeyScope uint8
 
 const (
+	// ScopeGlobal is a shell-wide shortcut (rail jump, help, quit).
 	ScopeGlobal KeyScope = iota
+	// ScopePage is a shortcut handled by one rail or Setup page.
 	ScopePage
+	// ScopeMode is a shortcut for an overlay such as search, form, or confirmation.
 	ScopeMode
 )
 
 const (
+	// ModeSearch is the in-page filter field on Connections, Rules, and Logs.
 	ModeSearch    = "search"
 	ModeDetail    = "detail"
 	ModeColumns   = "columns"
@@ -40,6 +45,8 @@ type FooterOpt struct {
 	WebGUIAvailable bool
 }
 
+// Catalog returns every currently bound shortcut. Identity is (Scope, Page, Mode, Keys);
+// the same physical key may appear more than once with different labels.
 func Catalog() []KeyBinding {
 	return []KeyBinding{
 		{Keys: []string{"1", "2", "3", "4", "5", "6", "7", "8"}, Display: "1–8", Label: "jump to a rail page outside text input", Scope: ScopeGlobal},
@@ -162,15 +169,33 @@ func joinFooter(parts []string) string {
 	return strings.Join(clean, "  ")
 }
 
+func globalFooterToken(display string) string {
+	for _, b := range Catalog() {
+		if b.Scope == ScopeGlobal && b.Display == display {
+			return b.Footer
+		}
+	}
+	return ""
+}
+
+func helpQuitTokens() []string {
+	return []string{globalFooterToken("?"), globalFooterToken("q")}
+}
+
+// RenderRailFooter builds the one-line shortcut hint shown while the rail has focus.
 func RenderRailFooter() string {
 	tokens := footerTokens(func(b KeyBinding) bool {
 		return b.Scope == ScopeGlobal && (b.Footer == "↑/↓ page" || b.Footer == "Enter open")
 	})
-	return joinFooter(append(tokens, "? help", "q quit"))
+	return joinFooter(append(tokens, helpQuitTokens()...))
 }
 
+// RenderFooter builds the one-line shortcut hint for a page and overlay mode.
+// Empty mode is the page default. FooterOpt selects state-dependent recipes such
+// as Web GUI availability.
 func RenderFooter(page PageID, mode string, opt FooterOpt) string {
-	helpQuit := []string{"? help", "q quit"}
+	helpQuit := helpQuitTokens()
+	escBack := globalFooterToken("Esc")
 	switch mode {
 	case ModeSearch:
 		tokens := footerTokens(func(b KeyBinding) bool {
@@ -191,12 +216,12 @@ func RenderFooter(page PageID, mode string, opt FooterOpt) string {
 			}))
 		}
 		if page == PageWebGUI && !opt.WebGUIAvailable {
-			return joinFooter(append([]string{"Esc back"}, helpQuit...))
+			return joinFooter(append([]string{escBack}, helpQuit...))
 		}
 		tokens := footerTokens(func(b KeyBinding) bool {
 			return b.Scope == ScopePage && b.Page == page && b.Mode == ""
 		})
-		return joinFooter(append(append([]string{"Esc back"}, tokens...), helpQuit...))
+		return joinFooter(append(append([]string{escBack}, tokens...), helpQuit...))
 	}
 }
 
@@ -220,6 +245,8 @@ var (
 	SetupFooter         = RenderFooter(PageSetup, "", FooterOpt{})
 )
 
+// RenderHelp builds the scrollable help body for the active page and overlay mode.
+// Sections are ordered Global, current mode, current page, remaining pages, then other modes.
 func RenderHelp(active PageID, mode string) string {
 	cat := Catalog()
 	var b strings.Builder
