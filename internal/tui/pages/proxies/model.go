@@ -217,12 +217,7 @@ func (m *Model) View() string {
 		return ui.RenderBorderedSection(m.theme, ui.ProxiesSectionTitle, body, inner)
 	}
 	lines, _, _ := m.buildContent()
-	if m.height > 0 && len(lines) > m.height {
-		start := min(max(0, m.scrollY), max(0, len(lines)-m.height))
-		end := min(len(lines), start+m.height)
-		lines = lines[start:end]
-	}
-	return strings.Join(lines, "\n")
+	return strings.Join(ui.SliceLines(lines, m.scrollY, m.height), "\n")
 }
 
 // buildContent renders the full page as terminal lines and reports the inclusive
@@ -315,28 +310,7 @@ func (m *Model) ensureFocusVisible() {
 		return
 	}
 	lines, focusStart, focusEnd := m.buildContent()
-	if focusStart < 0 || focusEnd <= focusStart {
-		m.scrollY = min(m.scrollY, max(0, len(lines)-m.height))
-		if m.scrollY < 0 {
-			m.scrollY = 0
-		}
-		return
-	}
-	viewH := m.height
-	// Prefer keeping the whole focus block visible; if taller than the viewport,
-	// pin the top of the focused block.
-	if focusEnd-focusStart >= viewH {
-		m.scrollY = focusStart
-	} else {
-		if focusStart < m.scrollY {
-			m.scrollY = focusStart
-		}
-		if focusEnd > m.scrollY+viewH {
-			m.scrollY = focusEnd - viewH
-		}
-	}
-	maxScroll := max(0, len(lines)-viewH)
-	m.scrollY = min(max(0, m.scrollY), maxScroll)
+	m.scrollY = ui.EnsureLineVisible(m.scrollY, m.height, len(lines), focusStart, focusEnd)
 }
 
 func (m *Model) renderNode(group protocol.ProxyGroup, node protocol.ProxyNode, width int) string {
