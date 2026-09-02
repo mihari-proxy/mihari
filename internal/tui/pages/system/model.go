@@ -33,6 +33,7 @@ const (
 	rowZashboard         = "zashboard"
 	rowMetaCubeXD        = "metacubexd"
 	rowRunSetup          = "run-setup"
+	rowResetData         = "reset-data"
 	rowServiceStatus     = "service-status"
 	rowServiceHint       = "service-hint"
 	rowServiceInstall    = "service-install"
@@ -74,6 +75,7 @@ type Client interface {
 	WebGUI(context.Context) (protocol.WebGUIStatus, error)
 	OpenWebGUI(context.Context, string) (protocol.WebGUIOpenResult, error)
 	UpdateOnboarding(context.Context, protocol.OnboardingUpdateRequest) (protocol.OnboardingStatus, error)
+	ResetUserData(context.Context, protocol.MutationRequest) (protocol.DataResetResult, error)
 }
 
 // SelfUpdater is the local Mihari binary lifecycle surface used by the System page.
@@ -372,6 +374,13 @@ type portsApplyResultMsg struct {
 }
 
 func (m portsApplyResultMsg) Err() error { return m.err }
+
+type dataResetResultMsg struct {
+	result protocol.DataResetResult
+	err    error
+}
+
+func (m dataResetResultMsg) Err() error { return m.err }
 
 // New constructs a System page without a service controller.
 func New(client Client, newOperationID func() string) *Model {
@@ -851,6 +860,8 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m.handleSystemProxyActionResult(typed)
 	case tunActionResultMsg:
 		return m.handleTunActionResult(typed)
+	case dataResetResultMsg:
+		return m.handleDataResetResult(typed)
 	}
 
 	key, ok := message.(tea.KeyPressMsg)
@@ -906,6 +917,11 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 				return m, nil
 			}
 			return m, func() tea.Msg { return ui.RouteRequestMsg{Page: ui.PageSetup} }
+		case rowResetData:
+			if m.client == nil || !m.mutationsEnabled || !m.hasCapability(protocol.CapabilityOnboarding) {
+				return m, nil
+			}
+			return m, m.confirmResetUserData()
 		case rowCoreChannel:
 			if m.client == nil || !m.mutationsEnabled || !m.hasCapability(protocol.CapabilityCore) {
 				return m, nil
@@ -952,14 +968,61 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 func (m *Model) confirmMihariUpdate() tea.Cmd {
 	current := valueOr(m.currentVersion, ui.UnknownLabel)
 	latest := valueOr(m.selfCheckResult.Latest, ui.UnknownLabel)
+	title, impact, rollback := ui.UpdateMihariTitle, ui.UpdateMihariImpact, ui.UpdateMihariRollback
+	if update.IsDowngrade(m.currentVersion, m.selfCheckResult.Latest) {
+		title, impact, rollback = ui.DowngradeMihariTitle, ui.DowngradeMihariImpact, ui.DowngradeMihariRollback
+	}
 	return func() tea.Msg {
 		return ui.ActionIntentMsg{
 			Action: ui.ActionUpdateMihari, Page: ui.PageSystem, Key: "mihari:update",
-			Title: ui.UpdateMihariTitle, Object: fmt.Sprintf("Mihari %s → %s", current, latest),
-			Impact: ui.UpdateMihariImpact, Rollback: ui.UpdateMihariRollback,
+			Title: title, Object: fmt.Sprintf("Mihari %s → %s", current, latest),
+			Impact: impact, Rollback: rollback,
 			Execute: m.updateMihari(),
 		}
 	}
+}
+
+func (m *Model) confirmResetUserData() tea.Cmd {
+	revision, operationID := m.currentRevision(), m.newOperationID()
+	return func() tea.Msg {
+		return ui.ActionIntentMsg{
+			Action: ui.ActionResetUserData, Page: ui.PageSystem, Capability: protocol.CapabilityOnboarding,
+			Key:   "system:" + string(ui.ActionResetUserData),
+			Title: ui.ResetUserDataTitle, Object: ui.ResetUserDataLabel,
+			Impact: ui.ResetUserDataImpact, Rollback: ui.ResetUserDataRollback,
+			Execute: m.resetUserData(operationID, revision),
+		}
+	}
+}
+
+func (m *Model) resetUserData(operationID string, revision uint64) tea.Cmd {
+	return func() tea.Msg {
+		result, err := m.client.ResetUserData(m.ctx, protocol.MutationRequest{
+			OperationID: operationID, IfRevision: &revision, Source: "control",
+		})
+		return dataResetResultMsg{result: result, err: err}
+	}
+}
+
+func (m *Model) handleDataResetResult(typed dataResetResultMsg) (ui.Page, tea.Cmd) {
+	rowID := m.outcomeRowID(rowResetData)
+	m.clearRowPending()
+	if typed.err != nil {
+		var apiError protocol.APIError
+		if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
+			m.markRowOutcome(rowID, false, ui.SystemChangedMessage)
+			return m, tea.Batch(m.refresh(), m.rowSpinCmdIfNeeded())
+		}
+		m.markRowOutcome(rowID, false, actionErrorDetail(typed.err, ui.ResetUserDataFailed))
+		return m, m.rowSpinCmdIfNeeded()
+	}
+	m.markRowOutcome(rowID, true, "")
+	m.onboarding.Complete = false
+	return m, tea.Batch(
+		func() tea.Msg { return ui.RouteRequestMsg{Page: ui.PageSetup} },
+		func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: typed.result.Revision} },
+		m.rowSpinCmdIfNeeded(),
+	)
 }
 
 func (m *Model) updateMihari() tea.Cmd {
@@ -1148,6 +1211,7 @@ func (m *Model) rows() []row {
 	rows = append(rows, m.mihariUpdateRow())
 	rows = append(rows,
 		row{id: rowRunSetup, section: ui.DaemonSectionTitle, label: ui.RunSetupLabel, detail: ui.RunSetupDetail},
+		row{id: rowResetData, section: ui.DaemonSectionTitle, label: ui.ResetUserDataLabel, detail: ui.ResetUserDataDetail},
 		row{id: rowCore, section: ui.CoreSectionTitle, label: ui.MihomoCoreLabel, value: coreValue(m.theme, m.core, !m.mutationsEnabled), detail: core},
 		row{id: rowCoreChannel, section: ui.CoreSectionTitle, label: ui.CoreChannelLabel, value: coreChannelName(m.core.Channel), detail: ui.SwitchCoreChannelImpact},
 		row{id: rowCoreUpdate, section: ui.CoreSectionTitle, label: m.coreActionLabel(), value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.UpdateCoreImpact},
@@ -1202,9 +1266,13 @@ func (m *Model) mihariUpdateRow() row {
 			value = current + " · " + ui.UpdateMihariUpToDate
 		}
 	}
+	detail := ui.UpdateMihariImpact
+	if m.selfCheckLoaded && m.selfCheckResult.Available && update.IsDowngrade(m.currentVersion, m.selfCheckResult.Latest) {
+		detail = ui.DowngradeMihariImpact
+	}
 	return row{
 		id: rowMihariUpdate, section: ui.DaemonSectionTitle,
-		label: ui.UpdateMihariLabel, value: value, detail: ui.UpdateMihariImpact,
+		label: ui.UpdateMihariLabel, value: value, detail: detail,
 	}
 }
 
@@ -1709,6 +1777,8 @@ func rowProgressForAction(action ui.Action, coreMissing bool) (rowID, note strin
 		return rowTUNAction, ui.TunProgressEnabling
 	case ui.ActionDisableTun:
 		return rowTUNAction, ui.TunProgressDisabling
+	case ui.ActionResetUserData:
+		return rowResetData, ui.ResetUserDataProgress
 	default:
 		return "", ""
 	}

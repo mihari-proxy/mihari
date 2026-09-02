@@ -104,6 +104,9 @@ type Options struct {
 	// LookupTCPOccupant reports the PID listening on a host:port. Nil installs
 	// platform.LookupTCPOccupant. Tests inject a fake to avoid real socket tables.
 	LookupTCPOccupant func(string) (int, bool)
+	// Paths is the on-disk layout used by destructive maintenance mutations.
+	// Zero value skips path-based file cleanup.
+	Paths platform.Paths
 	// SettingsPath is where config.Save writes settings after system-proxy (and related) mutations.
 	// Empty skips persistence (in-memory settings only).
 	SettingsPath string
@@ -147,6 +150,7 @@ type Manager struct {
 	sysProxy          sysproxy.Backend
 	tunDetect         tundetect.Backend
 	lookupOccupant    func(string) (int, bool)
+	paths             platform.Paths
 	settingsPath      string
 	serviceStatus     func() (string, error)
 	onBackgroundError func(component string, err error)
@@ -221,6 +225,7 @@ func New(options Options) *Manager {
 		sysProxy:          sysProxy,
 		tunDetect:         tunDetect,
 		lookupOccupant:    lookupOccupant,
+		paths:             options.Paths,
 		settingsPath:      options.SettingsPath,
 		serviceStatus:     options.ServiceStatus,
 		onBackgroundError: options.OnBackgroundError,

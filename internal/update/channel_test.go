@@ -98,6 +98,30 @@ func TestClassifyUpdate(t *testing.T) {
 	}
 }
 
+func TestIsDowngrade(t *testing.T) {
+	tests := []struct {
+		name    string
+		current string
+		target  string
+		want    bool
+	}{
+		{name: "prerelease to older official", current: "v0.9.0-dev.8", target: "v0.8.2", want: true},
+		{name: "newer official to older official", current: "v0.9.0", target: "v0.8.2", want: true},
+		{name: "unprefixed current", current: "0.9.0-dev.3", target: "v0.8.2", want: true},
+		{name: "official to newer prerelease", current: "v0.8.2", target: "v0.9.0-dev.8", want: false},
+		{name: "same tag", current: "v0.8.2", target: "v0.8.2", want: false},
+		{name: "unknown current is not a downgrade", current: "dev", target: "v0.8.2", want: false},
+		{name: "empty current is not a downgrade", current: "", target: "v0.8.2", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := IsDowngrade(test.current, test.target); got != test.want {
+				t.Fatalf("IsDowngrade(%q,%q)=%v want=%v", test.current, test.target, got, test.want)
+			}
+		})
+	}
+}
+
 func TestLoadChannelMissingFileDefaultsMain(t *testing.T) {
 	got, err := LoadChannel(filepath.Join(t.TempDir(), "mihari-channel"))
 	if err != nil || got != ChannelMain {

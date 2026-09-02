@@ -76,6 +76,14 @@ func Open(options Options) (*Service, error) {
 	return &Service{statePath: options.StatePath, settingsPath: options.SettingsPath, state: state, settings: options.Settings}, nil
 }
 
+// ReplaceSettings updates the in-memory settings snapshot after an external
+// settings rewrite. It does not persist.
+func (s *Service) ReplaceSettings(settings config.Settings) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.settings = settings
+}
+
 func (s *Service) Status() Status {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

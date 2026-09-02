@@ -38,6 +38,7 @@ const (
 	ActionEnableTun               Action = "enable-tun"
 	ActionDisableTun              Action = "disable-tun"
 	ActionForceTun                Action = "force-tun"
+	ActionResetUserData           Action = "reset-user-data"
 )
 
 // RelaunchRequestMsg asks the root shell to exit and enter the replacement TUI.

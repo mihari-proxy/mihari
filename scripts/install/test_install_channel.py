@@ -136,7 +136,7 @@ def parse_test_output(text: str) -> dict[str, str]:
     for line in text.splitlines():
         if "=" in line:
             key, value = line.split("=", 1)
-            if key in {"CHANNEL", "EXPLICIT", "URL", "INDEX_URL", "HANDOFF", "LATEST"}:
+            if key in {"CHANNEL", "EXPLICIT", "URL", "INDEX_URL", "HANDOFF", "LATEST", "TARGET_TAG", "INSTALLED", "DOWNGRADE"}:
                 got[key] = value
     return got
 
@@ -259,6 +259,38 @@ def test_script1_sh_follows_next_not_last(tmp_path: Path, github_server: GitHubL
 
 
 @requires_sh
+def test_script1_sh_reports_downgrade_for_older_pin(tmp_path: Path):
+    result = run_install_sh(
+        tmp_path,
+        [],
+        {
+            "MIHARI_VERSION": "v0.8.2",
+            "MIHARI_TEST_INSTALLED_VERSION": "v0.9.0-dev.8",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    got = parse_test_output(result.stdout)
+    assert got.get("TARGET_TAG") == "v0.8.2"
+    assert got.get("INSTALLED") == "v0.9.0-dev.8"
+    assert got.get("DOWNGRADE") == "1"
+
+
+@requires_sh
+def test_script1_sh_newer_pin_is_not_downgrade(tmp_path: Path):
+    result = run_install_sh(
+        tmp_path,
+        [],
+        {
+            "MIHARI_VERSION": "v0.9.0",
+            "MIHARI_TEST_INSTALLED_VERSION": "v0.8.2",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    got = parse_test_output(result.stdout)
+    assert got.get("DOWNGRADE") == "0"
+
+
+@requires_sh
 def test_script1_sh_pinned_version_wins_and_does_not_write(tmp_path: Path):
     sidecar = tmp_path / "mihari-channel"
     sidecar.write_text("main\n", encoding="utf-8")
@@ -312,6 +344,23 @@ def test_script1_sh_dev_failure_does_not_fallback_latest(tmp_path: Path, github_
 def test_script1_ps1_has_no_param_block():
     text = INSTALL_PS1.read_text(encoding="utf-8")
     assert "param(" not in text
+
+
+@requires_ps
+def test_script1_ps1_reports_downgrade_for_older_pin(tmp_path: Path):
+    result = run_install_ps1(
+        tmp_path,
+        [],
+        {
+            "MIHARI_VERSION": "v0.8.2",
+            "MIHARI_TEST_INSTALLED_VERSION": "v0.9.0-dev.8",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    got = parse_test_output(result.stdout)
+    assert got.get("TARGET_TAG") == "v0.8.2"
+    assert got.get("INSTALLED") == "v0.9.0-dev.8"
+    assert got.get("DOWNGRADE") == "1"
 
 
 @requires_ps
@@ -426,7 +475,9 @@ def make_aio_bundle(root: Path, windows: bool) -> Path:
     return bundle
 
 
-def run_install_aio_sh(tmp_path: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+def run_install_aio_sh(
+    tmp_path: Path, args: list[str], extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     shell = posix_shell()
     assert shell is not None
     env = os.environ.copy()
@@ -435,6 +486,8 @@ def run_install_aio_sh(tmp_path: Path, args: list[str]) -> subprocess.CompletedP
     env["MIHARI_BIN"] = str(tmp_path / "bin")
     env["MIHARI_DATA"] = str(tmp_path / "data")
     env["HOME"] = str(tmp_path / "home")
+    if extra_env:
+        env.update(extra_env)
     sh_args = [Path(arg).as_posix() if ":\\" in arg or arg.startswith("\\\\") else arg for arg in args]
     return subprocess.run(
         [shell, Path(INSTALL_AIO_SH).as_posix(), *sh_args],
@@ -448,7 +501,9 @@ def run_install_aio_sh(tmp_path: Path, args: list[str]) -> subprocess.CompletedP
     )
 
 
-def run_install_aio_ps1(tmp_path: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+def run_install_aio_ps1(
+    tmp_path: Path, args: list[str], extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     exe = powershell()
     assert exe is not None
     env = os.environ.copy()
@@ -457,6 +512,8 @@ def run_install_aio_ps1(tmp_path: Path, args: list[str]) -> subprocess.Completed
     env["MIHARI_BIN"] = str(tmp_path / "bin")
     env["MIHARI_DATA"] = str(tmp_path / "data")
     apply_ps_compat_env(env, tmp_path / "home")
+    if extra_env:
+        env.update(extra_env)
     ps_path = str(INSTALL_AIO_PS1).replace("\\", "/")
     pieces = []
     i = 0
@@ -501,6 +558,24 @@ def test_script2_sh_channel_dev_does_not_use_flag_as_bundle_dir(tmp_path: Path):
 
 
 @requires_sh
+def test_script2_sh_reports_downgrade_for_older_bundle(tmp_path: Path):
+    bundle = make_aio_bundle(tmp_path, windows=False)
+    result = run_install_aio_sh(
+        tmp_path,
+        [str(bundle)],
+        {
+            "MIHARI_TEST_INSTALLED_VERSION": "v0.9.0-dev.8",
+            "MIHARI_TEST_TARGET_VERSION": "v0.8.2",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    got = parse_test_output(result.stdout)
+    assert got.get("TARGET_TAG") == "v0.8.2"
+    assert got.get("INSTALLED") == "v0.9.0-dev.8"
+    assert got.get("DOWNGRADE") == "1"
+
+
+@requires_sh
 def test_script2_sh_unspecified_does_not_write_or_delete(tmp_path: Path):
     bundle = make_aio_bundle(tmp_path, windows=False)
     data = tmp_path / "data"
@@ -527,6 +602,24 @@ def test_script2_ps1_channel_writes_sidecar_keeps_core_channel(tmp_path: Path):
     assert (data / "mihari-channel").read_text(encoding="utf-8") == "dev\n"
     assert (data / "bin" / "core-channel").read_text(encoding="utf-8") == "stable\n"
     assert yaml_path.read_text(encoding="utf-8") == "keep: true\n"
+
+
+@requires_ps
+def test_script2_ps1_reports_downgrade_for_older_bundle(tmp_path: Path):
+    bundle = make_aio_bundle(tmp_path, windows=True)
+    result = run_install_aio_ps1(
+        tmp_path,
+        ["-BundleDir", str(bundle)],
+        {
+            "MIHARI_TEST_INSTALLED_VERSION": "v0.9.0-dev.8",
+            "MIHARI_TEST_TARGET_VERSION": "v0.8.2",
+        },
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    got = parse_test_output(result.stdout)
+    assert got.get("TARGET_TAG") == "v0.8.2"
+    assert got.get("INSTALLED") == "v0.9.0-dev.8"
+    assert got.get("DOWNGRADE") == "1"
 
 
 @requires_ps

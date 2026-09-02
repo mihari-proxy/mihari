@@ -246,6 +246,42 @@ is_canonical_dev() {
   printf '%s' "$1" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$'
 }
 
+looks_like_tag() {
+  is_canonical_stable "$1" || is_canonical_dev "$1" || printf '%s' "$1" | grep -Eq '^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-dev\.(0|[1-9][0-9]*))?$'
+}
+
+tag_cmp() {
+  left="$1"
+  right="$2"
+  lbody="${left#v}"
+  rbody="${right#v}"
+  lmaj="${lbody%%.*}"; lbody="${lbody#*.}"
+  lmin="${lbody%%.*}"; lbody="${lbody#*.}"
+  rmaj="${rbody%%.*}"; rbody="${rbody#*.}"
+  rmin="${rbody%%.*}"; rbody="${rbody#*.}"
+  lisdev=0
+  risdev=0
+  case "$lbody" in
+    *-dev.*) lpat="${lbody%%-dev.*}"; ldev="${lbody#*-dev.}"; lisdev=1 ;;
+    *) lpat="$lbody"; ldev=0 ;;
+  esac
+  case "$rbody" in
+    *-dev.*) rpat="${rbody%%-dev.*}"; rdev="${rbody#*-dev.}"; risdev=1 ;;
+    *) rpat="$rbody"; rdev=0 ;;
+  esac
+  if [ "$lmaj" -ne "$rmaj" ]; then [ "$lmaj" -gt "$rmaj" ] && echo 1 || echo -1; return; fi
+  if [ "$lmin" -ne "$rmin" ]; then [ "$lmin" -gt "$rmin" ] && echo 1 || echo -1; return; fi
+  if [ "$lpat" -ne "$rpat" ]; then [ "$lpat" -gt "$rpat" ] && echo 1 || echo -1; return; fi
+  if [ "$lisdev" -ne "$risdev" ]; then
+    [ "$lisdev" -eq 1 ] && echo -1 || echo 1
+    return
+  fi
+  if [ "$lisdev" -eq 1 ]; then
+    if [ "$ldev" -ne "$rdev" ]; then [ "$ldev" -gt "$rdev" ] && echo 1 || echo -1; return; fi
+  fi
+  echo 0
+}
+
 # Tests source this standalone script to exercise the real downloader against
 # a local HTTP server without running the installation flow.
 if [ "${MIHARI_INSTALL_TEST_MODE:-}" = "1" ]; then
@@ -328,6 +364,11 @@ elif [ -z "$current" ]; then
 elif [ -n "$latest" ] && [ "$current" = "$latest" ]; then
   info "已是最新版本 ($current)。"
   confirm "  重新安装（用于修复）？" || { info "已取消。"; exit 0; }
+elif looks_like_tag "$current" && looks_like_tag "$latest" && [ "$(tag_cmp "$current" "$latest")" = "1" ]; then
+  info "Installing older Mihari ${latest} over ${current}."
+  info "Settings, subscriptions, and generated files from the current version may be unsupported, fail to load, or look like they disappeared."
+  info "Downgrade is not a supported config migration and does not roll disk state back."
+  confirm "  Continue with downgrade?" || { info "已取消。"; exit 0; }
 else
   info "当前已安装 $current${latest:+，最新版本为 $latest}。"
   confirm "  安装？" || { info "已取消。"; exit 0; }

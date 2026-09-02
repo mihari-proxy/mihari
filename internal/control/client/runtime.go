@@ -179,6 +179,13 @@ func (c *Client) UpdateOnboarding(ctx context.Context, request protocol.Onboardi
 	return result, err
 }
 
+// ResetUserData asks the daemon to clear user data and return to first-run setup.
+func (c *Client) ResetUserData(ctx context.Context, request protocol.MutationRequest) (protocol.DataResetResult, error) {
+	var result protocol.DataResetResult
+	err := c.doRuntime(ctx, http.MethodPost, "/v1/data/reset", request, &result)
+	return result, err
+}
+
 func (c *Client) TUIPreferences(ctx context.Context) (protocol.TUIPreferences, error) {
 	var result protocol.TUIPreferences
 	err := c.doRuntime(ctx, http.MethodGet, "/v1/preferences/tui", nil, &result)

@@ -24,6 +24,42 @@ bundle_dir=""
 info() { printf '\033[1;34m•\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
+looks_like_tag() {
+  printf '%s' "$1" | grep -Eq '^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-dev\.(0|[1-9][0-9]*))?$'
+}
+
+tag_cmp() {
+  left="$1"
+  right="$2"
+  lbody="${left#v}"
+  rbody="${right#v}"
+  lmaj="${lbody%%.*}"; lbody="${lbody#*.}"
+  lmin="${lbody%%.*}"; lbody="${lbody#*.}"
+  rmaj="${rbody%%.*}"; rbody="${rbody#*.}"
+  rmin="${rbody%%.*}"; rbody="${rbody#*.}"
+  lisdev=0
+  risdev=0
+  case "$lbody" in
+    *-dev.*) lpat="${lbody%%-dev.*}"; ldev="${lbody#*-dev.}"; lisdev=1 ;;
+    *) lpat="$lbody"; ldev=0 ;;
+  esac
+  case "$rbody" in
+    *-dev.*) rpat="${rbody%%-dev.*}"; rdev="${rbody#*-dev.}"; risdev=1 ;;
+    *) rpat="$rbody"; rdev=0 ;;
+  esac
+  if [ "$lmaj" -ne "$rmaj" ]; then [ "$lmaj" -gt "$rmaj" ] && echo 1 || echo -1; return; fi
+  if [ "$lmin" -ne "$rmin" ]; then [ "$lmin" -gt "$rmin" ] && echo 1 || echo -1; return; fi
+  if [ "$lpat" -ne "$rpat" ]; then [ "$lpat" -gt "$rpat" ] && echo 1 || echo -1; return; fi
+  if [ "$lisdev" -ne "$risdev" ]; then
+    [ "$lisdev" -eq 1 ] && echo -1 || echo 1
+    return
+  fi
+  if [ "$lisdev" -eq 1 ]; then
+    if [ "$ldev" -ne "$rdev" ]; then [ "$ldev" -gt "$rdev" ] && echo 1 || echo -1; return; fi
+  fi
+  echo 0
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --channel)
@@ -145,6 +181,41 @@ if [ "${MIHARI_INSTALL_TEST_MODE:-}" != "1" ]; then
   fi
 fi
 
+installed="${MIHARI_TEST_INSTALLED_VERSION:-}"
+target_tag="${MIHARI_TEST_TARGET_VERSION:-}"
+if [ -z "$installed" ] && [ "${MIHARI_INSTALL_TEST_MODE:-}" != "1" ] && [ -x "$mihari_bin" ]; then
+  installed="$("$mihari_bin" self version 2>/dev/null | tr -d '\r' | head -n 1 || true)"
+fi
+if [ -z "$target_tag" ] && [ "${MIHARI_INSTALL_TEST_MODE:-}" != "1" ] && [ -f "$bundle_dir/mihari" ]; then
+  target_tag="$("$bundle_dir/mihari" self version 2>/dev/null | tr -d '\r' | head -n 1 || true)"
+fi
+downgrade=0
+if looks_like_tag "$installed" && looks_like_tag "$target_tag"; then
+  if [ "$(tag_cmp "$installed" "$target_tag")" = "1" ]; then
+    downgrade=1
+  fi
+fi
+if [ "${MIHARI_INSTALL_TEST_MODE:-}" = "1" ]; then
+  :
+elif [ "$downgrade" = "1" ]; then
+  info "Installing older Mihari ${target_tag} over ${installed}."
+  info "Settings, subscriptions, and generated files from the current version may be unsupported, fail to load, or look like they disappeared."
+  info "Downgrade is not a supported config migration and does not roll disk state back."
+  if [ "${MIHARI_YES:-0}" != "1" ]; then
+    printf 'Continue with downgrade? [y/N] '
+    reply=""
+    if [ -t 0 ]; then
+      read reply || err "cancelled"
+    else
+      read reply </dev/tty 2>/dev/null || err "downgrade requires confirmation; rerun with MIHARI_YES=1"
+    fi
+    case "$reply" in
+      y|Y|yes|YES) ;;
+      *) err "cancelled" ;;
+    esac
+  fi
+fi
+
 # 1. mihari binary -> BIN_DIR.
 $SUDO mkdir -p "$BIN_DIR"
 info "安装 mihari 到 $mihari_bin"
@@ -166,6 +237,9 @@ if [ "$CHANNEL_EXPLICIT" -eq 1 ]; then
 fi
 
 if [ "${MIHARI_INSTALL_TEST_MODE:-}" = "1" ]; then
+  printf 'TARGET_TAG=%s\n' "$target_tag"
+  printf 'INSTALLED=%s\n' "$installed"
+  printf 'DOWNGRADE=%s\n' "$downgrade"
   exit 0
 fi
 

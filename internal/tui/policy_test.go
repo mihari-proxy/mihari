@@ -59,6 +59,18 @@ func TestSelfUpdatePolicyIsConfirmedAndDaemonIndependent(t *testing.T) {
 	}
 }
 
+func TestResetUserDataPolicyRequiresConfirmationAndDaemon(t *testing.T) {
+	if !knownAction(ResetUserData) {
+		t.Fatal("reset user data must be registered")
+	}
+	if !RequiresConfirmation(ResetUserData) {
+		t.Fatal("reset user data must require confirmation")
+	}
+	if !RequiresDaemon(ResetUserData) {
+		t.Fatal("reset user data must require a daemon connection")
+	}
+}
+
 func TestMihariChannelPolicyIsConfirmedAndDaemonIndependent(t *testing.T) {
 	if !knownAction(SwitchMihariChannel) {
 		t.Fatal("mihari channel switch must be registered")

@@ -84,6 +84,12 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 				_, err := client.LookupGeoIP(ctx, protocol.GeoIPLookupRequest{Addresses: []string{"1.1.1.1"}})
 				return err
 			}},
+		{"data reset", http.MethodPost, "/v1/data/reset", `{"operation_id":"reset-1","if_revision":4}`, `{"schema":"mihari/v1","operation_id":"reset-1","revision":5,"setup_required":true}`,
+			func(ctx context.Context, client *Client) error {
+				revision := uint64(4)
+				_, err := client.ResetUserData(ctx, protocol.MutationRequest{OperationID: "reset-1", IfRevision: &revision})
+				return err
+			}},
 		{"geoip update", http.MethodPost, "/v1/geoip/update", `{"operation_id":"geoip-1","if_revision":1}`, `{"schema":"mihari/v1","operation_id":"geoip-1","revision":2,"status":{"schema":"mihari/v1","revision":2,"country":{"available":true},"asn":{"available":true}}}`,
 			func(ctx context.Context, client *Client) error {
 				revision := uint64(1)

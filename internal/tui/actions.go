@@ -38,6 +38,7 @@ const (
 	EnableTun               = ui.ActionEnableTun
 	DisableTun              = ui.ActionDisableTun
 	ForceTun                = ui.ActionForceTun
+	ResetUserData           = ui.ActionResetUserData
 )
 
 func RequiresConfirmation(action Action) bool {
@@ -45,7 +46,7 @@ func RequiresConfirmation(action Action) bool {
 	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, SwitchCoreChannel, SwitchMihariChannel, UpdateMihari, ApplyEndpointChange,
 		UninstallPanel, ReinstallPanel,
 		ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart,
-		EnableSystemProxy, ForceSystemProxy, DisableSystemProxy, EnableTun, ForceTun, DisableTun:
+		EnableSystemProxy, ForceSystemProxy, DisableSystemProxy, EnableTun, ForceTun, DisableTun, ResetUserData:
 		return true
 	default:
 		return false
@@ -69,7 +70,7 @@ func knownAction(action Action) bool {
 		SelectProxy, CloseConnection, RefreshSubscription, UpdateProvider,
 		InstallPanel, UpdatePanel, ActivatePanel, OpenWebGUI, UninstallPanel, ReinstallPanel,
 		ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart,
-		EnableSystemProxy, ForceSystemProxy, DisableSystemProxy, EnableTun, ForceTun, DisableTun:
+		EnableSystemProxy, ForceSystemProxy, DisableSystemProxy, EnableTun, ForceTun, DisableTun, ResetUserData:
 		return true
 	default:
 		return false
