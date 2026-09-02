@@ -76,6 +76,7 @@ func (s *Server) runtimeRoutes(mux *http.ServeMux) {
 	s.systemProxyRoutes(mux)
 	s.tunRoutes(mux)
 	s.onboardingRoutes(mux)
+	s.dataRoutes(mux)
 	s.webGUIRoutes(mux)
 	s.serviceRoutes(mux)
 }

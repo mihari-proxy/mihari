@@ -182,6 +182,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		WebGateway:    webGateway,
 		WebOpenToken:  webCredential,
 		Settings:      settings,
+		Paths:         paths,
 		SettingsPath:  settingsPath,
 		ServiceStatus: options.ServiceStatus,
 		SysProxy:      sysproxy.Platform(),

@@ -31,13 +31,14 @@ mihari service uninstall
 mihari daemon
 ```
 
-更新 mihari 二进制本身(同样需要提权)。通道查看与切换不提权；`self update` 先读取数据根下的 `mihari-channel` sidecar（缺文件视为 `main`）：
+更新 mihari 二进制本身(同样需要提权)。通道查看与切换不提权；`self update` 先读取数据根下的 `mihari-channel` sidecar（缺文件视为 `main`）。若目标版本低于当前版本，必须加 `--yes` 确认降级风险（旧二进制可能无法加载当前配置）：
 
 ```console
 mihari self version
 mihari self channel
 mihari self channel [main|dev]
 mihari self update
+mihari self update --yes
 ```
 
 ## 状态查询

@@ -21,6 +21,28 @@ $ErrorActionPreference = 'Stop'
 function Info($m) { Write-Host "* $m" -ForegroundColor Cyan }
 function Fail($m) { Write-Host "error: $m" -ForegroundColor Red; throw $m }
 
+function Parse-Canonical([string]$tag) {
+  if ($tag -cmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$') {
+    return @{ Major = [int]$Matches[1]; Minor = [int]$Matches[2]; Patch = [int]$Matches[3]; Dev = [int]$Matches[4]; IsDev = $true }
+  }
+  if ($tag -cmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+    return @{ Major = [int]$Matches[1]; Minor = [int]$Matches[2]; Patch = [int]$Matches[3]; Dev = 0; IsDev = $false }
+  }
+  return $null
+}
+
+function Compare-Canonical([string]$left, [string]$right) {
+  $a = Parse-Canonical $left
+  $b = Parse-Canonical $right
+  if (-not $a -or -not $b) { return 0 }
+  if ($a.Major -ne $b.Major) { return [Math]::Sign($a.Major - $b.Major) }
+  if ($a.Minor -ne $b.Minor) { return [Math]::Sign($a.Minor - $b.Minor) }
+  if ($a.Patch -ne $b.Patch) { return [Math]::Sign($a.Patch - $b.Patch) }
+  if ($a.IsDev -ne $b.IsDev) { if ($a.IsDev) { return -1 } else { return 1 } }
+  if ($a.IsDev) { return [Math]::Sign($a.Dev - $b.Dev) }
+  return 0
+}
+
 if (-not $BundleDir) { $BundleDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path } }
 if (-not $Channel -and $env:MIHARI_CHANNEL) { $Channel = $env:MIHARI_CHANNEL }
 if ($Channel -and $Channel -cnotin @('main', 'dev')) { Fail 'mihari channel must be main or dev' }
@@ -78,6 +100,35 @@ if ($env:MIHARI_INSTALL_TEST_MODE -ne '1') {
   }
 }
 
+$installed = [string]$env:MIHARI_TEST_INSTALLED_VERSION
+$targetTag = [string]$env:MIHARI_TEST_TARGET_VERSION
+if (-not $installed -and $env:MIHARI_INSTALL_TEST_MODE -ne '1' -and (Test-Path -LiteralPath $dest)) {
+  try { $installed = [string](& $dest self version 2>$null) } catch { $installed = '' }
+}
+if (-not $targetTag -and $env:MIHARI_INSTALL_TEST_MODE -ne '1' -and (Test-Path -LiteralPath $mihariSrc)) {
+  try { $targetTag = [string](& $mihariSrc self version 2>$null) } catch { $targetTag = '' }
+}
+$downgrade = 0
+$installedTag = $installed
+$compareTag = $targetTag
+if ($installedTag -and $installedTag -notmatch '^v') { $installedTag = 'v' + $installedTag }
+if ($compareTag -and $compareTag -notmatch '^v') { $compareTag = 'v' + $compareTag }
+if ($installedTag -and $compareTag -and (Compare-Canonical $installedTag $compareTag) -gt 0) {
+  $downgrade = 1
+}
+if ($env:MIHARI_INSTALL_TEST_MODE -ne '1' -and $downgrade -eq 1) {
+  Write-Host "* Installing older Mihari $targetTag over $installed." -ForegroundColor Yellow
+  Write-Host "* Settings, subscriptions, and generated files from the current version may be unsupported, fail to load, or look like they disappeared." -ForegroundColor Yellow
+  Write-Host "* Downgrade is not a supported config migration and does not roll disk state back." -ForegroundColor Yellow
+  if ($env:MIHARI_YES -ne '1') {
+    $ans = Read-Host "  Continue with downgrade? [y/N]"
+    if (-not $ans -or $ans -notmatch '^[Yy]') {
+      Info "Cancelled, no changes made."
+      return
+    }
+  }
+}
+
 # 1. mihari binary -> binDir.
 Info "安装 mihari 到 $dest"
 Copy-Item -LiteralPath $mihariSrc -Destination $dest -Force
@@ -114,7 +165,12 @@ if ($Channel) {
   Move-Item -LiteralPath $channelTmp -Destination $channelPath -Force
 }
 
-if ($env:MIHARI_INSTALL_TEST_MODE -eq '1') { return }
+if ($env:MIHARI_INSTALL_TEST_MODE -eq '1') {
+  Write-Output "TARGET_TAG=$targetTag"
+  Write-Output "INSTALLED=$installed"
+  Write-Output "DOWNGRADE=$downgrade"
+  return
+}
 
 # 3. Service: reinstall when registered (re-stages the service copy from the
 #    freshly installed PATH binary, closing the "service vs PATH" version drift),

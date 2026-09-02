@@ -81,6 +81,11 @@ type fakeClient struct {
 	updateOnboardingCalls int
 	lastOnboarding        protocol.OnboardingUpdateRequest
 	updateOnboardingErr   error
+
+	resetCalls  int
+	lastReset   protocol.MutationRequest
+	resetResult protocol.DataResetResult
+	resetErr    error
 }
 
 type fakeService struct {
@@ -268,6 +273,22 @@ func (f *fakeClient) OpenWebGUI(_ context.Context, panelID string) (protocol.Web
 	}, nil
 }
 
+func (f *fakeClient) ResetUserData(_ context.Context, request protocol.MutationRequest) (protocol.DataResetResult, error) {
+	f.resetCalls++
+	f.lastReset = request
+	if f.resetErr != nil {
+		return protocol.DataResetResult{}, f.resetErr
+	}
+	if f.resetResult.Schema != "" {
+		return f.resetResult, nil
+	}
+	f.onboarding.Complete = false
+	f.onboarding.Revision++
+	return protocol.DataResetResult{
+		Schema: "mihari/v1", OperationID: request.OperationID, Revision: f.onboarding.Revision, SetupRequired: true,
+	}, nil
+}
+
 func withElevation(t *testing.T, elevated bool) {
 	t.Helper()
 	prev := elevate.Check
@@ -330,7 +351,7 @@ func TestSystemRendersCategorizedRowsWithoutStopDaemon(t *testing.T) {
 	updated, _ := model.Update(onboardingResultMsg{status: client.onboarding})
 	model = updated.(*Model)
 	view := model.View()
-	for _, want := range []string{"Daemon", "v0.4.0", "mihomo core", "v1.19.0", ui.PortsConfigSectionTitle, ui.MixedLabel, "127.0.0.1:9190", "Run Setup", "TUN", "Unavailable"} {
+	for _, want := range []string{"Daemon", "v0.4.0", "mihomo core", "v1.19.0", ui.PortsConfigSectionTitle, ui.MixedLabel, "127.0.0.1:9190", "Run Setup", ui.ResetUserDataLabel, "TUN", "Unavailable"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("missing %q in view=%s", want, view)
 		}
@@ -630,6 +651,53 @@ func TestSystemEnterInspectsRowsAndRoutesSetupToStandaloneSetup(t *testing.T) {
 	message, ok := command().(ui.RouteRequestMsg)
 	if !ok || message.Page != ui.PageSetup {
 		t.Fatalf("row=run-setup message=%T %#v", command(), command())
+	}
+}
+
+func TestSystemResetUserDataRequiresConfirmationAndRoutesToSetup(t *testing.T) {
+	client := &fakeClient{onboarding: protocol.OnboardingStatus{Revision: 9, Complete: true}}
+	model := New(client, func() string { return "reset-op" })
+	model.SetSnapshot(protocol.Status{Revision: 9, Capabilities: []string{protocol.CapabilityOnboarding}}, protocol.CoreStatus{Status: "running"})
+	model.SetMutationsEnabled(true)
+	model.focusID = rowResetData
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("reset row missing confirmation")
+	}
+	intent, ok := command().(ui.ActionIntentMsg)
+	if !ok || intent.Action != ui.ActionResetUserData || intent.Title != ui.ResetUserDataTitle || !strings.Contains(intent.Impact, "cannot be undone") {
+		t.Fatalf("intent=%#v", intent)
+	}
+	result := intent.Execute()
+	msg, ok := result.(dataResetResultMsg)
+	if !ok || msg.err != nil || !msg.result.SetupRequired || client.resetCalls != 1 {
+		t.Fatalf("result=%#v calls=%d", result, client.resetCalls)
+	}
+	updated, follow := model.Update(msg)
+	model = updated.(*Model)
+	if model.onboarding.Complete {
+		t.Fatal("onboarding should be incomplete after reset")
+	}
+	if follow == nil {
+		t.Fatal("success should route to setup")
+	}
+	foundRoute := false
+	followMsg := follow()
+	if route, ok := followMsg.(ui.RouteRequestMsg); ok && route.Page == ui.PageSetup {
+		foundRoute = true
+	}
+	if batch, ok := followMsg.(tea.BatchMsg); ok {
+		for _, item := range batch {
+			if item == nil {
+				continue
+			}
+			if route, ok := item().(ui.RouteRequestMsg); ok && route.Page == ui.PageSetup {
+				foundRoute = true
+			}
+		}
+	}
+	if !foundRoute {
+		t.Fatalf("expected setup route after reset, got %T %#v", followMsg, followMsg)
 	}
 }
 
@@ -1881,6 +1949,9 @@ func TestSystemMihariPrereleaseOnMainOffersOfficialUpdate(t *testing.T) {
 	if !ok || intent.Action != ui.ActionUpdateMihari || !strings.Contains(intent.Object, "v0.9.0-dev.8") || !strings.Contains(intent.Object, "v0.8.2") {
 		t.Fatalf("intent=%#v", intent)
 	}
+	if intent.Title != ui.DowngradeMihariTitle || intent.Impact != ui.DowngradeMihariImpact || intent.Rollback != ui.DowngradeMihariRollback {
+		t.Fatalf("downgrade confirm copy=%#v", intent)
+	}
 }
 
 func TestSystemMihariOfficialOnDevOffersPrereleaseUpdate(t *testing.T) {
@@ -1909,6 +1980,9 @@ func TestSystemMihariOfficialOnDevOffersPrereleaseUpdate(t *testing.T) {
 	intent, ok := command().(ui.ActionIntentMsg)
 	if !ok || intent.Action != ui.ActionUpdateMihari || !strings.Contains(intent.Object, "v0.8.2") || !strings.Contains(intent.Object, "v0.9.0-dev.8") {
 		t.Fatalf("intent=%#v", intent)
+	}
+	if intent.Title != ui.UpdateMihariTitle || intent.Impact != ui.UpdateMihariImpact {
+		t.Fatalf("upgrade confirm copy=%#v", intent)
 	}
 }
 

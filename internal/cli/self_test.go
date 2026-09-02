@@ -14,9 +14,21 @@ import (
 
 type fakeSelfUpdater struct {
 	calls       int
+	checkCalls  int
 	lastChannel string
+	check       update.CheckResult
+	checkErr    error
 	result      update.Result
 	err         error
+}
+
+func (f *fakeSelfUpdater) Check(_ context.Context, currentVersion, channel string) (update.CheckResult, error) {
+	f.checkCalls++
+	f.lastChannel = channel
+	if f.check.Current == "" && f.check.Latest == "" && !f.check.Available && !f.check.Ahead {
+		return update.CheckResult{Current: currentVersion, Latest: f.result.Version, Channel: channel}, f.checkErr
+	}
+	return f.check, f.checkErr
 }
 
 func (f *fakeSelfUpdater) Update(_ context.Context, _, _, channel string) (update.Result, error) {
@@ -138,6 +150,43 @@ func TestSelfUpdateWhenElevated(t *testing.T) {
 	exit := Execute(context.Background(), []string{"self", "update", "--json"}, stdout, &bytes.Buffer{}, Dependencies{SelfUpdater: fake})
 	if exit != ExitOK || fake.calls != 1 || !strings.Contains(stdout.String(), `"updated":true`) {
 		t.Fatalf("exit=%d stdout=%q calls=%d", exit, stdout, fake.calls)
+	}
+}
+
+func TestSelfUpdateDowngradeRequiresYes(t *testing.T) {
+	prev := elevate.Check
+	t.Cleanup(func() { elevate.Check = prev })
+	elevate.Check = func() bool { return true }
+	fake := &fakeSelfUpdater{
+		check: update.CheckResult{
+			Current: "v0.9.0-dev.8", Latest: "v0.8.2", Available: true, Channel: update.ChannelMain,
+		},
+		result: update.Result{Version: "v0.8.2", Updated: true, Channel: update.ChannelMain},
+	}
+	stderr := &bytes.Buffer{}
+	exit := Execute(context.Background(), []string{"self", "update"}, &bytes.Buffer{}, stderr, Dependencies{SelfUpdater: fake})
+	if exit != ExitUsage || fake.calls != 0 {
+		t.Fatalf("exit=%d calls=%d stderr=%q", exit, fake.calls, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--yes") || !strings.Contains(stderr.String(), "older") {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+}
+
+func TestSelfUpdateDowngradeWithYesProceeds(t *testing.T) {
+	prev := elevate.Check
+	t.Cleanup(func() { elevate.Check = prev })
+	elevate.Check = func() bool { return true }
+	fake := &fakeSelfUpdater{
+		check: update.CheckResult{
+			Current: "v0.9.0-dev.8", Latest: "v0.8.2", Available: true, Channel: update.ChannelMain,
+		},
+		result: update.Result{Version: "v0.8.2", Updated: true, Channel: update.ChannelMain},
+	}
+	stdout := &bytes.Buffer{}
+	exit := Execute(context.Background(), []string{"self", "update", "--yes", "--json"}, stdout, &bytes.Buffer{}, Dependencies{SelfUpdater: fake})
+	if exit != ExitOK || fake.calls != 1 || !strings.Contains(stdout.String(), `"updated":true`) {
+		t.Fatalf("exit=%d stdout=%q calls=%d", exit, stdout.String(), fake.calls)
 	}
 }
 

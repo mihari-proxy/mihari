@@ -169,13 +169,31 @@ $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
 # Asset names carry no version (mihari-<os>-<arch>[.exe]), so the stable
 # /releases/latest/download/ path works for the default case.
 $asset = "mihari-windows-$arch.exe"
+$targetTag = [string]$env:MIHARI_VERSION
 if ($env:MIHARI_VERSION) {
   $url = "https://github.com/$repo/releases/download/$($env:MIHARI_VERSION)/$asset"
 } elseif ($channel -eq 'dev') {
-  $tag = Resolve-DevTag
-  $url = "https://github.com/$repo/releases/download/$tag/$asset"
+  $targetTag = Resolve-DevTag
+  $url = "https://github.com/$repo/releases/download/$targetTag/$asset"
 } else {
   $url = "https://github.com/$repo/releases/latest/download/$asset"
+}
+
+$installed = [string]$env:MIHARI_TEST_INSTALLED_VERSION
+if (-not $installed -and $env:MIHARI_INSTALL_TEST_MODE -ne '1') {
+  $existing = Join-Path $binDir 'mihari.exe'
+  if (Test-Path -LiteralPath $existing) {
+    try { $installed = [string](& $existing self version 2>$null) } catch { $installed = '' }
+  }
+}
+
+$downgrade = 0
+$installedTag = $installed
+$compareTag = $targetTag
+if ($installedTag -and $installedTag -notmatch '^v') { $installedTag = 'v' + $installedTag }
+if ($compareTag -and $compareTag -notmatch '^v') { $compareTag = 'v' + $compareTag }
+if ($installedTag -and $compareTag -and (Compare-Canonical $installedTag $compareTag) -gt 0) {
+  $downgrade = 1
 }
 
 if ($env:MIHARI_INSTALL_TEST_MODE -eq '1') {
@@ -183,7 +201,23 @@ if ($env:MIHARI_INSTALL_TEST_MODE -eq '1') {
   Write-Output "CHANNEL=$channel"
   Write-Output "EXPLICIT=$explicit"
   Write-Output "URL=$url"
+  Write-Output "TARGET_TAG=$targetTag"
+  Write-Output "INSTALLED=$installed"
+  Write-Output "DOWNGRADE=$downgrade"
   return
+}
+
+if ($downgrade -eq 1) {
+  Write-Host "* Installing older Mihari $targetTag over $installed." -ForegroundColor Yellow
+  Write-Host "* Settings, subscriptions, and generated files from the current version may be unsupported, fail to load, or look like they disappeared." -ForegroundColor Yellow
+  Write-Host "* Downgrade is not a supported config migration and does not roll disk state back." -ForegroundColor Yellow
+  if ($env:MIHARI_YES -ne '1') {
+    $ans = Read-Host "  Continue with downgrade? [y/N]"
+    if (-not $ans -or $ans -notmatch '^[Yy]') {
+      Info "Cancelled, no changes made."
+      return
+    }
+  }
 }
 
 $dest = Join-Path $binDir 'mihari.exe'

@@ -82,6 +82,27 @@ func sign(n int) int {
 	return 0
 }
 
+// IsDowngrade reports whether target is a strictly older canonical Mihari tag
+// than current. Unparseable tags are not treated as downgrades.
+func IsDowngrade(current, target string) bool {
+	cmp, ok := compareCanonicalTags(canonicalVersion(current), canonicalVersion(target))
+	return ok && cmp > 0
+}
+
+func canonicalVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return version
+	}
+	if _, ok := parseCanonicalTag(version); ok {
+		return version
+	}
+	if strings.HasPrefix(strings.ToLower(version), "v") {
+		return version
+	}
+	return "v" + version
+}
+
 func classifyUpdate(current, latest string) (available, ahead bool) {
 	if sameTag(current, latest) {
 		return false, false

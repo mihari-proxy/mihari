@@ -233,14 +233,33 @@ write_channel() {
   fi
 }
 
+looks_like_tag() {
+  printf '%s' "$1" | grep -Eq '^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-dev\.(0|[1-9][0-9]*))?$'
+}
+
 asset="mihari-${os}-${arch}"
+target_tag="${MIHARI_VERSION:-}"
 if [ -n "${MIHARI_VERSION:-}" ]; then
   url="https://github.com/${REPO}/releases/download/${MIHARI_VERSION}/${asset}"
 elif [ "$CHANNEL" = "dev" ]; then
-  tag="$(resolve_dev_tag)"
-  url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
+  target_tag="$(resolve_dev_tag)"
+  url="https://github.com/${REPO}/releases/download/${target_tag}/${asset}"
 else
   url="https://github.com/${REPO}/releases/latest/download/${asset}"
+fi
+
+installed=""
+if [ -n "${MIHARI_TEST_INSTALLED_VERSION:-}" ]; then
+  installed="${MIHARI_TEST_INSTALLED_VERSION}"
+elif [ "${MIHARI_INSTALL_TEST_MODE:-}" != "1" ] && [ -x "${BIN_DIR}/mihari" ]; then
+  installed="$("${BIN_DIR}/mihari" self version 2>/dev/null | tr -d '\r' | head -n 1 || true)"
+fi
+
+downgrade=0
+if looks_like_tag "$installed" && looks_like_tag "$target_tag"; then
+  if [ "$(tag_cmp "$installed" "$target_tag")" = "1" ]; then
+    downgrade=1
+  fi
 fi
 
 if [ "${MIHARI_INSTALL_TEST_MODE:-}" = "1" ]; then
@@ -250,7 +269,29 @@ if [ "${MIHARI_INSTALL_TEST_MODE:-}" = "1" ]; then
   printf 'CHANNEL=%s\n' "$CHANNEL"
   printf 'EXPLICIT=%s\n' "$CHANNEL_EXPLICIT"
   printf 'URL=%s\n' "$url"
+  printf 'TARGET_TAG=%s\n' "$target_tag"
+  printf 'INSTALLED=%s\n' "$installed"
+  printf 'DOWNGRADE=%s\n' "$downgrade"
   exit 0
+fi
+
+if [ "$downgrade" = "1" ]; then
+  info "Installing older Mihari ${target_tag} over ${installed}."
+  info "Settings, subscriptions, and generated files from the current version may be unsupported, fail to load, or look like they disappeared."
+  info "Downgrade is not a supported config migration and does not roll disk state back."
+  if [ "${MIHARI_YES:-0}" != "1" ]; then
+    printf 'Continue with downgrade? [y/N] '
+    reply=""
+    if [ -t 0 ]; then
+      read reply || err "cancelled"
+    else
+      read reply </dev/tty 2>/dev/null || err "downgrade requires confirmation; rerun with MIHARI_YES=1"
+    fi
+    case "$reply" in
+      y|Y|yes|YES) ;;
+      *) err "cancelled" ;;
+    esac
+  fi
 fi
 
 # Elevate for writes to system dirs when needed.

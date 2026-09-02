@@ -210,6 +210,26 @@ function Test-CanonicalStable([string]$tag) {
 function Test-CanonicalDev([string]$tag) {
   return [bool]($tag -cmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$')
 }
+function Parse-Canonical([string]$tag) {
+  if ($tag -cmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev\.(0|[1-9][0-9]*)$') {
+    return @{ Major = [int]$Matches[1]; Minor = [int]$Matches[2]; Patch = [int]$Matches[3]; Dev = [int]$Matches[4]; IsDev = $true }
+  }
+  if ($tag -cmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+    return @{ Major = [int]$Matches[1]; Minor = [int]$Matches[2]; Patch = [int]$Matches[3]; Dev = 0; IsDev = $false }
+  }
+  return $null
+}
+function Compare-Canonical([string]$left, [string]$right) {
+  $a = Parse-Canonical $left
+  $b = Parse-Canonical $right
+  if (-not $a -or -not $b) { return 0 }
+  if ($a.Major -ne $b.Major) { return [Math]::Sign($a.Major - $b.Major) }
+  if ($a.Minor -ne $b.Minor) { return [Math]::Sign($a.Minor - $b.Minor) }
+  if ($a.Patch -ne $b.Patch) { return [Math]::Sign($a.Patch - $b.Patch) }
+  if ($a.IsDev -ne $b.IsDev) { if ($a.IsDev) { return -1 } else { return 1 } }
+  if ($a.IsDev) { return [Math]::Sign($a.Dev - $b.Dev) }
+  return 0
+}
 function Write-RemoteTestState {
   $workdir = Join-Path $env:USERPROFILE 'Downloads\mihari-aio'
   if ($Channel) {
@@ -305,6 +325,10 @@ if (-not $haveMihari) {
   Info '检测到 mihari 但版本未知（二进制可能损坏），将重新安装修复。'
 } elseif ($latest -and $current -eq $latest) {
   Info "已是最新版本 ($current)，将重新安装（用于修复）。"
+} elseif ($current -and $latest -and (Compare-Canonical $current $latest) -gt 0) {
+  Info "Installing older Mihari $latest over $current."
+  Info "Settings, subscriptions, and generated files from the current version may be unsupported, fail to load, or look like they disappeared."
+  Info "Downgrade is not a supported config migration and does not roll disk state back."
 } else {
   Info ("当前已安装 $current" + $(if ($latest) { "，最新版本为 $latest，将升级。" }))
 }
