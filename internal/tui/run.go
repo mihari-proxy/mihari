@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
@@ -54,34 +55,106 @@ func (r *LoggingResources) Available() bool {
 
 // Close releases the runtime before the shared data-root capability. It is safe to call repeatedly.
 func (r *LoggingResources) Close() error {
+	return r.closeWithSession(nil)
+}
+
+func (r *LoggingResources) closeWithSession(closeSession func()) error {
 	if r == nil {
+		if closeSession != nil {
+			closeSession()
+		}
 		return nil
 	}
 	r.closeOnce.Do(func() {
-		var errs []error
+		var runtimeCloser io.Closer
 		if r.Runtime != nil {
-			errs = append(errs, r.Runtime.Close())
+			runtimeCloser = r.Runtime
 		}
+		var privateFSCloser io.Closer
 		if r.PrivateFS != nil {
-			errs = append(errs, r.PrivateFS.Close())
+			privateFSCloser = r.PrivateFS
 		}
-		r.closeErr = errors.Join(errs...)
+		r.closeErr = closeTUILifecycle(closeSession, runtimeCloser, privateFSCloser)
 	})
 	return r.closeErr
+}
+
+func closeTUILifecycle(closeSession func(), runtime io.Closer, privateFS io.Closer) error {
+	if closeSession != nil {
+		closeSession()
+	}
+	var errs []error
+	for _, closer := range []io.Closer{runtime, privateFS} {
+		if closer != nil {
+			errs = append(errs, closer.Close())
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // LoggingFactory opens TUI-local file logging using the Run context.
 type LoggingFactory func(context.Context) (LoggingResources, error)
 
+type tuiLoggingFailureKind uint8
+
+const (
+	tuiLoggingBootstrapFailure tuiLoggingFailureKind = iota
+	tuiLoggingCleanupFailure
+	tuiLoggingFailureWindow = time.Second
+)
+
+// tuiLoggingFailureReporter emits rate-limited, stable local logging warnings.
+// It intentionally never includes the underlying error because it may contain
+// sensitive data or an absolute local path.
+type tuiLoggingFailureReporter struct {
+	out      io.Writer
+	redactor *logging.Redactor
+	now      func() time.Time
+
+	mu   sync.Mutex
+	last map[tuiLoggingFailureKind]time.Time
+}
+
+func newTUILoggingFailureReporter(out io.Writer, redactor *logging.Redactor, now func() time.Time) *tuiLoggingFailureReporter {
+	if now == nil {
+		now = time.Now
+	}
+	return &tuiLoggingFailureReporter{out: out, redactor: redactor, now: now, last: make(map[tuiLoggingFailureKind]time.Time)}
+}
+
+func (r *tuiLoggingFailureReporter) report(kind tuiLoggingFailureKind, err error) {
+	if r == nil || r.out == nil || err == nil {
+		return
+	}
+	now := r.now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if previous, ok := r.last[kind]; ok && now.Sub(previous) < tuiLoggingFailureWindow {
+		return
+	}
+	r.last[kind] = now
+	message := "TUI file logging is unavailable"
+	if kind == tuiLoggingCleanupFailure {
+		message = "TUI file logging cleanup failed"
+	}
+	if r.redactor != nil {
+		message = r.redactor.String(message)
+	}
+	_, _ = fmt.Fprintf(r.out, "Warning: %s\n", message)
+}
+
 // Run starts the full-screen Mihari terminal interface and blocks until it exits.
 func Run(ctx context.Context, options Options) error {
 	resources := LoggingResources{}
+	var openErr error
 	if options.OpenLogging != nil {
 		opened, err := options.OpenLogging(ctx)
 		resources = opened
-		if err != nil {
-			reportTUILoggingBootstrapFailure(options.ErrorOutput, resources.Redactor)
-		}
+		openErr = err
+	}
+	reporter := newTUILoggingFailureReporter(options.ErrorOutput, resources.Redactor, nil)
+	if openErr != nil {
+		reporter.report(tuiLoggingBootstrapFailure, openErr)
 	}
 	health := resources.Health
 	if health == nil {
@@ -91,13 +164,13 @@ func Run(ctx context.Context, options Options) error {
 		resources.Runtime.Logger().Info("tui started")
 	}
 
-	model := NewModel()
 	var controlSession *session.Session
+	var events <-chan session.Event
 	if options.Client != nil {
 		controlSession = session.New(options.Client, session.Options{})
-		model = newModelWithClientContext(ctx, controlSession.Start(ctx), options.Client)
+		events = controlSession.Start(ctx)
 	}
-	model.SetLoggingHealth(health)
+	model := newRunModel(ctx, options.Client, events, health)
 	if options.Service != nil {
 		model.SetServiceController(options.Service)
 	}
@@ -113,17 +186,27 @@ func Run(ctx context.Context, options Options) error {
 	var closeErr error
 	cleanup := func(tea.Model) error {
 		closeOnce.Do(func() {
-			if controlSession != nil {
-				controlSession.Close()
-			}
-			closeErr = resources.Close()
+			closeErr = resources.closeWithSession(func() {
+				if controlSession != nil {
+					controlSession.Close()
+				}
+			})
 			if closeErr != nil {
-				reportTUILoggingCleanupFailure(options.ErrorOutput, resources.Redactor, closeErr)
+				reporter.report(tuiLoggingCleanupFailure, closeErr)
 			}
 		})
 		return closeErr
 	}
 	return finishRun(final, err, options.Output, options.Relaunch, cleanup)
+}
+
+func newRunModel(ctx context.Context, client *controlclient.Client, events <-chan session.Event, health LocalLoggingHealth) Model {
+	model := NewModel()
+	if client != nil {
+		model = newModelWithClientContext(ctx, events, client)
+	}
+	model.SetLoggingHealth(health)
+	return model
 }
 
 func finishRun(final tea.Model, runErr error, warningWriter io.Writer, relaunch func() error, cleanup func(tea.Model) error) error {
@@ -160,28 +243,6 @@ func finishRun(final tea.Model, runErr error, warningWriter io.Writer, relaunch 
 		return errors.Join(cleanupErr, warningErr, fmt.Errorf("relaunch updated Mihari: %w", err))
 	}
 	return cleanupErr
-}
-
-func reportTUILoggingBootstrapFailure(out io.Writer, redactor *logging.Redactor) {
-	if out == nil {
-		return
-	}
-	message := "TUI file logging is unavailable"
-	if redactor != nil {
-		message = redactor.String(message)
-	}
-	_, _ = fmt.Fprintf(out, "Warning: %s\n", message)
-}
-
-func reportTUILoggingCleanupFailure(out io.Writer, redactor *logging.Redactor, err error) {
-	if out == nil || err == nil {
-		return
-	}
-	message := err.Error()
-	if redactor != nil {
-		message = redactor.String(message)
-	}
-	_, _ = fmt.Fprintf(out, "Warning: TUI file logging cleanup failed: %s\n", message)
 }
 
 // loadingModel is a minimal AltScreen sample used by run_test.go only.

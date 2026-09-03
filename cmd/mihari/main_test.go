@@ -100,6 +100,30 @@ func TestOpenTUILogging_CanceledContextRetainsPartialResources(t *testing.T) {
 	}
 }
 
+func TestOpenTUILogging_EnsureDirFailureRetainsPartialResources(t *testing.T) {
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resources, err := openTUILogging(context.Background(), paths, "tui-control-token", fs)
+	if err == nil {
+		t.Fatal("closed PrivateFS did not report EnsureDir failure")
+	}
+	if resources.PrivateFS != fs || resources.Redactor == nil || resources.Runtime != nil {
+		t.Fatalf("resources=%+v", resources)
+	}
+	if resources.Health == nil || resources.Health.Available() {
+		t.Fatal("EnsureDir failure health was not unavailable")
+	}
+	if closeErr := resources.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+}
+
 func TestInteractiveTerminal_RejectsRedirectedStreams(t *testing.T) {
 	input, err := os.CreateTemp(t.TempDir(), "input")
 	if err != nil {

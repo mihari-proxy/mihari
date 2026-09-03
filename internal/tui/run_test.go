@@ -5,11 +5,15 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
 )
@@ -183,6 +187,33 @@ func TestRunFactoryClosesPartialResourcesLogging(t *testing.T) {
 	}
 }
 
+func TestRunNilPrivateFSContinuesWithoutCreatingDataRootLogging(t *testing.T) {
+	paths, err := platform.NewPaths(filepath.Join(t.TempDir(), "data")).Absolute()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var warnings bytes.Buffer
+	called := false
+	err = Run(context.Background(), Options{
+		OpenLogging: func(context.Context) (LoggingResources, error) {
+			called = true
+			return LoggingResources{Redactor: logging.NewRedactor("tui-bootstrap-token")}, errors.New("private fs unavailable")
+		},
+		ErrorOutput: &warnings,
+		Input:       strings.NewReader("q"),
+		Output:      io.Discard,
+	})
+	if err != nil || !called {
+		t.Fatalf("Run error=%v factory called=%v", err, called)
+	}
+	if _, statErr := os.Stat(paths.Root); !os.IsNotExist(statErr) {
+		t.Fatalf("nil PrivateFS created data root: %v", statErr)
+	}
+	if got, want := warnings.String(), "Warning: TUI file logging is unavailable\n"; got != want {
+		t.Fatalf("warnings=%q want=%q", got, want)
+	}
+}
+
 func TestLoggingResourcesCloseClosesRuntimeBeforePrivateFSAndIsIdempotent(t *testing.T) {
 	paths, err := platform.NewPaths(filepath.Join(t.TempDir(), "data")).Absolute()
 	if err != nil {
@@ -217,6 +248,103 @@ func TestModelSetLoggingHealthKeepsFactoryHealth(t *testing.T) {
 	if model.loggingHealth == nil || !model.loggingHealth.Available() {
 		t.Fatal("model did not retain logging health")
 	}
+}
+
+func TestTUILoggingBootstrapFailureIsRateLimited(t *testing.T) {
+	var warnings bytes.Buffer
+	now := time.Unix(1, 0)
+	reporter := newTUILoggingFailureReporter(&warnings, nil, func() time.Time { return now })
+	reporter.report(tuiLoggingBootstrapFailure, errors.New("open failed"))
+	reporter.report(tuiLoggingBootstrapFailure, errors.New("open failed"))
+	if got, want := warnings.String(), "Warning: TUI file logging is unavailable\n"; got != want {
+		t.Fatalf("warnings=%q want=%q", got, want)
+	}
+	now = now.Add(tuiLoggingFailureWindow)
+	reporter.report(tuiLoggingBootstrapFailure, errors.New("open failed"))
+	if got, want := warnings.String(), "Warning: TUI file logging is unavailable\nWarning: TUI file logging is unavailable\n"; got != want {
+		t.Fatalf("warnings after window=%q want=%q", got, want)
+	}
+}
+
+func TestTUILoggingCleanupFailureNeverLeaksDetails(t *testing.T) {
+	path := filepath.Join("C:", "Users", "operator", "secret-data")
+	for _, redactor := range []*logging.Redactor{nil, logging.NewRedactor("tui-bootstrap-token")} {
+		var warnings bytes.Buffer
+		reporter := newTUILoggingFailureReporter(&warnings, redactor, nil)
+		reporter.report(tuiLoggingCleanupFailure, errors.New("close "+path+" token=tui-bootstrap-token"))
+		if got, want := warnings.String(), "Warning: TUI file logging cleanup failed\n"; got != want {
+			t.Fatalf("warnings=%q want=%q", got, want)
+		}
+	}
+}
+
+func TestFinishRunClosesLifecycleExactlyOnceInEveryExitPath(t *testing.T) {
+	programErr := errors.New("bubble tea failed")
+	for _, test := range []struct {
+		name           string
+		final          tea.Model
+		runErr         error
+		wantCloseErr   error
+		wantRelaunches int
+	}{
+		{name: "normal exit", final: NewModel()},
+		{name: "bubble tea error", final: NewModel(), runErr: programErr, wantCloseErr: programErr},
+		{name: "relaunch", final: requestedRelaunchModel(), wantRelaunches: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var order []string
+			runtime := &orderedCloser{name: "runtime", order: &order}
+			fs := &orderedCloser{name: "fs", order: &order}
+			cleanup := func(tea.Model) error {
+				return closeTUILifecycle(func() { order = append(order, "session") }, runtime, fs)
+			}
+			relaunches := 0
+			err := finishRun(test.final, test.runErr, io.Discard, func() error {
+				relaunches++
+				order = append(order, "relaunch")
+				if !slices.Equal(order, []string{"session", "runtime", "fs", "relaunch"}) {
+					t.Fatalf("relaunch order=%q", order)
+				}
+				return nil
+			}, cleanup)
+			if !errors.Is(err, test.wantCloseErr) || relaunches != test.wantRelaunches {
+				t.Fatalf("err=%v relaunches=%d", err, relaunches)
+			}
+			if want := []string{"session", "runtime", "fs"}; !slices.Equal(order[:3], want) {
+				t.Fatalf("close order=%q want=%q", order, want)
+			}
+			if runtime.calls != 1 || fs.calls != 1 {
+				t.Fatalf("runtime=%d fs=%d", runtime.calls, fs.calls)
+			}
+		})
+	}
+}
+
+func TestNewRunModelInjectsHealthAfterClientModelReplacement(t *testing.T) {
+	health := testLoggingHealth{available: true}
+	client := controlclient.New("unused", "")
+	model := newRunModel(context.Background(), client, nil, health)
+	if model.loggingHealth == nil || !model.loggingHealth.Available() {
+		t.Fatal("final client model lost logging health")
+	}
+}
+
+func requestedRelaunchModel() Model {
+	model := NewModel()
+	model.relaunchRequested = true
+	return model
+}
+
+type orderedCloser struct {
+	name  string
+	order *[]string
+	calls int
+}
+
+func (c *orderedCloser) Close() error {
+	c.calls++
+	*c.order = append(*c.order, c.name)
+	return nil
 }
 
 type testLoggingHealth struct{ available bool }
