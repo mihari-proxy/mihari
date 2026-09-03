@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,7 +16,11 @@ type Paths struct {
 	RuntimeConfig       string
 	Settings            string
 	Onboarding          string
-	Log                 string
+	LogDir              string
+	DaemonLog           string
+	TUILog              string
+	MihomoLog           string
+	LogExportDir        string
 	Staging             string
 	Subscriptions       string
 	SubscriptionCatalog string
@@ -45,7 +50,11 @@ func NewPaths(root string) Paths {
 		RuntimeConfig:       filepath.Join(root, "runtime", "config.yaml"),
 		Settings:            filepath.Join(root, "mihari.yaml"),
 		Onboarding:          filepath.Join(root, "onboarding.json"),
-		Log:                 filepath.Join(root, "logs", "mihari.log"),
+		LogDir:              filepath.Join(root, "logs"),
+		DaemonLog:           filepath.Join(root, "logs", "mihari-daemon.log"),
+		TUILog:              filepath.Join(root, "logs", "mihari-tui.log"),
+		MihomoLog:           filepath.Join(root, "logs", "mihomo.log"),
+		LogExportDir:        filepath.Join(root, "logs-export"),
 		Staging:             filepath.Join(root, "staging"),
 		Subscriptions:       filepath.Join(root, "subscriptions"),
 		SubscriptionCatalog: filepath.Join(root, "subscriptions", "catalog.yaml"),
@@ -60,6 +69,19 @@ func NewPaths(root string) Paths {
 		WebCredential:       filepath.Join(root, "web", "credential"),
 		PanelStaging:        filepath.Join(root, "staging", "panels"),
 	}
+}
+
+// Absolute resolves Root with filepath.Abs/Clean and rebuilds every derived field
+// via NewPaths. It does not EvalSymlinks; callers that need a trusted data-root
+// identity must open NewPrivateFS on the absolute Root before EnsureDirs or
+// default token IO. --help/--version must not call Absolute. TUI may continue
+// after NewPrivateFS failure; daemon must not continue directory IO after failure.
+func (p Paths) Absolute() (Paths, error) {
+	absRoot, err := filepath.Abs(p.Root)
+	if err != nil {
+		return Paths{}, fmt.Errorf("resolve absolute data root: %w", err)
+	}
+	return NewPaths(filepath.Clean(absRoot)), nil
 }
 
 // DefaultDataRoot returns MIHARI_DATA when set, otherwise the platform default
@@ -99,9 +121,14 @@ func defaultDataRoot() string {
 }
 
 // EnsureDirs creates the durable directories under this layout.
+// It may pre-create LogDir with MkdirAll but does not harden permissions or
+// reject intermediate symlinks, and it does not create LogExportDir. Callers
+// that need a local data root must establish NewPrivateFS(absolutePaths.Root)
+// before EnsureDirs or default token IO; EnsureDirs is not the root create or
+// harden entrypoint.
 func (p Paths) EnsureDirs() error {
 	for _, path := range []string{
-		p.Root, p.Bin, filepath.Dir(p.RuntimeConfig), filepath.Dir(p.Log), p.Staging,
+		p.Root, p.Bin, filepath.Dir(p.RuntimeConfig), p.LogDir, p.Staging,
 		p.Subscriptions, p.SubscriptionCache, p.SubscriptionStaging,
 		filepath.Dir(p.TUIPreferences), filepath.Dir(p.GeoIPCountry), p.GeoIPStaging,
 		p.WebRoot, p.PanelStaging,

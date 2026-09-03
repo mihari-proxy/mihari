@@ -28,7 +28,8 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 
 ## TUI
 
-- TUI 只通过 `internal/control/client` 经原生 IPC 控制面与本地守护进程通信。它从不打开 mihomo 控制器、从不接收控制器密钥、也从不自己执行持久化写入。
+- TUI 只通过 `internal/control/client` 经原生 IPC 控制面与本地守护进程通信。它从不打开 mihomo 控制器、从不接收控制器密钥。
+- TUI 对数据根的唯一直接写入例外是经 `internal/logging` 追加/轮转固定的 `mihari-tui.log*` 序列;不得写 `mihari.yaml`、订阅、token、面板或其他业务状态。日志配置变更仍只走 daemon 控制面。
 - 搜索与表单字段中的括号粘贴和 Ctrl+V 使用纯 Go 实现的 `github.com/atotto/clipboard` 辅助库;Mihari 本身从不把密钥写入剪贴板。
 - 页面:独立的首次运行 Setup 路由、Overview、可展开的 Proxies、带本地 GeoIP 详情的活动/已关闭 Connections、Rules/Providers、有界的结构化 Logs 流、订阅管理表单、分类的 System 页面,以及驱动面板安装/更新/激活/打开/回滚的 Web GUI 页面(在守护进程通告 `web-gui` 能力之后)。
 - Setup 安装核心、可添加初始订阅、准备本地 GeoIP 数据,并请求守护进程持久化校验过的本地端点。
@@ -75,6 +76,9 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 
 - 每次安装保持**一个数据根目录**(可用 `MIHARI_DATA` 覆盖):Windows 默认 `%USERPROFILE%\.mihari`,macOS/Linux 默认 `$HOME/.mihari`。
 - 几乎所有内容都位于该根目录下:设置、控制令牌(`control.token`)、运行时配置、核心二进制、订阅、GeoIP、面板资产、日志与暂存。
+- 文件日志布局:`logs/mihari-daemon.log`、`logs/mihari-tui.log`、`logs/mihomo.log`;默认导出目录为 `logs-export/`(首次默认导出时创建,不由 `EnsureDirs` 预创建)。
+- 日志与默认导出目录经 `PrivateFS` 创建/加固:Unix `0700` 目录/`0600` 文件;Windows 受保护 DACL 只授予数据根 owner 与 LocalSystem。跨进程协调使用相邻 `*.lock` 文件;打开 `logs/` 及文件后每一跳 no-follow,拒绝中间与最终的 symlink/reparse/junction。
+- 需要本地数据根的选定命令必须先 `Paths.Absolute()`,再 `NewPrivateFS(absolutePaths.Root)`,然后才允许 `EnsureDirs`、默认 in-root token 或 Settings IO。`EnsureDirs` 可预创建 `logs/` 但不是 root 创建/加固入口。`--help`/`--version` 不得调用该路径。`NewPrivateFS` 失败时 TUI 可继续运行;daemon 不得在失败后继续目录 IO。
 - `service install` 将**绝对**的 `MIHARI_DATA=<data root>` 写入 OS 服务环境,使 LocalSystem/root 服务与安装它的用户共享同一棵树(而非 `systemprofile` 或 `/root`)。
 - `service uninstall` 只移除 OS 注册并**保留**数据根目录。请手动删除数据目录(或未来的 `--purge`)以清除残留文件。`%AppData%\mihari` 或 `%ProgramData%\mihari` 下的旧树不会自动迁移或删除。
 
