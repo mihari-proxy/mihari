@@ -46,6 +46,31 @@ func TestInteractiveTerminal_RejectsRedirectedStreams(t *testing.T) {
 	}
 }
 
+func TestRelaunchWithLocalRootCleanup_ClosesPrivateFSBeforeRelaunch(t *testing.T) {
+	resetProcessLocalRootForTest(t)
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localRootCached = processLocalRoot{Paths: paths, FS: fs}
+
+	called := false
+	err = relaunchWithLocalRootCleanup(func() error {
+		called = true
+		if err := fs.EnsureDir(paths.LogDir); err == nil {
+			t.Fatal("PrivateFS remained open when relaunch began")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("relaunch callback was not called")
+	}
+}
+
 func TestDaemonLoggingResources_CloseOrderJoinsErrors(t *testing.T) {
 	var order []string
 	resources := &daemonLoggingResources{

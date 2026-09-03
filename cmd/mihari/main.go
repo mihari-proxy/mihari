@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -141,7 +142,9 @@ func main() {
 				BinaryPath:     executable,
 				Elevated:       elevate.IsElevated,
 				Relaunch: func() error {
-					return platform.Relaunch(executable, tuiRelaunchArgs(executable), os.Environ())
+					return relaunchWithLocalRootCleanup(func() error {
+						return platform.Relaunch(executable, tuiRelaunchArgs(executable), os.Environ())
+					})
 				},
 				Input:  os.Stdin,
 				Output: os.Stdout,
@@ -156,6 +159,13 @@ func main() {
 
 func tuiRelaunchArgs(binary string) []string {
 	return []string{binary}
+}
+
+func relaunchWithLocalRootCleanup(relaunch func() error) error {
+	if err := closeCachedLocalRoot(); err != nil {
+		return fmt.Errorf("close Mihari data root before relaunch: %w", err)
+	}
+	return relaunch()
 }
 
 func isInteractiveTerminal(input, output *os.File) bool {
