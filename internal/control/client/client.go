@@ -40,6 +40,14 @@ func NewHTTP(baseURL, token string, httpClient *http.Client) *Client {
 	}
 }
 
+// SetToken replaces the Bearer token. An empty token is a no-op.
+func (c *Client) SetToken(token string) {
+	if token == "" {
+		return
+	}
+	c.token = token
+}
+
 func (c *Client) Status(ctx context.Context) (protocol.Status, error) {
 	var status protocol.Status
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/status", nil)
