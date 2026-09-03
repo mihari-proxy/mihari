@@ -264,17 +264,27 @@ func (fs *PrivateFS) createTempLocked(dir, pattern string) (*os.File, string, er
 	return nil, "", fmt.Errorf("create temp: exhausted names")
 }
 
+func canonicalChildDir(name string) (string, bool) {
+	switch {
+	case strings.EqualFold(name, privateLogDirName):
+		return privateLogDirName, true
+	case strings.EqualFold(name, privateExportDirName):
+		return privateExportDirName, true
+	}
+	return "", false
+}
+
 func (fs *PrivateFS) readDirLocked(dir string) ([]FileEntry, error) {
 	parent, err := fs.dirHandle(dir)
 	if err != nil {
 		return nil, err
 	}
-	dup, err := dupHandle(parent)
+	list, err := openListingHandle(parent)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open dir listing %s: %w", dir, err)
 	}
-	defer windows.CloseHandle(dup)
-	ents, err := readWindowsDirents(dup)
+	defer windows.CloseHandle(list)
+	ents, err := readWindowsDirents(list)
 	if err != nil {
 		return nil, err
 	}
@@ -514,6 +524,28 @@ func openNTPath(path string, access, disposition, options, attr uint32, sd *wind
 	err = windows.NtCreateFile(&h, access, &oa, &iosb, nil, attr, privateShare, disposition, options, 0, 0)
 	runtime.KeepAlive(name)
 	runtime.KeepAlive(sd)
+	if err != nil {
+		return 0, err
+	}
+	_ = windows.SetHandleInformation(h, windows.HANDLE_FLAG_INHERIT, 0)
+	return h, nil
+}
+
+func openListingHandle(parent windows.Handle) (windows.Handle, error) {
+	// NT rejects "." as an object name. An empty name with RootDirectory
+	// reopens the same directory as a new FILE_OBJECT (independent enumeration).
+	var empty windows.NTUnicodeString
+	access := uint32(windows.FILE_LIST_DIRECTORY | windows.SYNCHRONIZE | windows.FILE_READ_ATTRIBUTES)
+	oa := windows.OBJECT_ATTRIBUTES{
+		RootDirectory: parent,
+		ObjectName:    &empty,
+		Attributes:    windows.OBJ_CASE_INSENSITIVE,
+	}
+	oa.Length = uint32(unsafe.Sizeof(oa))
+	var h windows.Handle
+	var iosb windows.IO_STATUS_BLOCK
+	err := windows.NtCreateFile(&h, access, &oa, &iosb, nil, windows.FILE_ATTRIBUTE_DIRECTORY, privateShare, windows.FILE_OPEN,
+		windows.FILE_DIRECTORY_FILE|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT, 0, 0)
 	if err != nil {
 		return 0, err
 	}

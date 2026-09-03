@@ -2,9 +2,11 @@ package platform
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -302,6 +304,58 @@ func TestPrivateFS_RenameRequiresSameDirectory(t *testing.T) {
 	}
 	if !containsFile(entries, filepath.Base(paths.DaemonLog)+".1") {
 		t.Fatal("renamed file missing")
+	}
+}
+
+func TestPrivateFS_ConcurrentReadDirSeesCompleteUniqueNames(t *testing.T) {
+	fs, paths := openTestPrivateFS(t)
+	if err := fs.EnsureDir(paths.LogDir); err != nil {
+		t.Fatal(err)
+	}
+	const n = 64
+	want := make(map[string]struct{}, n)
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("entry-%02d.log", i)
+		want[name] = struct{}{}
+		if err := writeLog(fs, filepath.Join(paths.LogDir, name), "x"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const workers = 8
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			entries, err := fs.ReadDir(paths.LogDir)
+			if err != nil {
+				errs <- err
+				return
+			}
+			got := make(map[string]int, len(entries))
+			for _, entry := range entries {
+				got[entry.Name]++
+			}
+			if len(got) != n {
+				errs <- fmt.Errorf("unique names=%d want=%d", len(got), n)
+				return
+			}
+			for name := range want {
+				if got[name] != 1 {
+					errs <- fmt.Errorf("%s count=%d", name, got[name])
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
 	}
 }
 

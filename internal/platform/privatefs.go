@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -285,20 +284,6 @@ func (fs *PrivateFS) resolveFile(path string) (dir, name string, err error) {
 		return "", "", fmt.Errorf("private fs file must be a child of logs or logs-export")
 	}
 	return canon, name, nil
-}
-
-func canonicalChildDir(name string) (string, bool) {
-	switch {
-	case name == privateLogDirName:
-		return privateLogDirName, true
-	case name == privateExportDirName:
-		return privateExportDirName, true
-	case runtime.GOOS == "windows" && strings.EqualFold(name, privateLogDirName):
-		return privateLogDirName, true
-	case runtime.GOOS == "windows" && strings.EqualFold(name, privateExportDirName):
-		return privateExportDirName, true
-	}
-	return "", false
 }
 
 func isSingleSegment(name string) bool {

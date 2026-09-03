@@ -242,20 +242,27 @@ func (fs *PrivateFS) createTempLocked(dir, pattern string) (*os.File, string, er
 	return nil, "", fmt.Errorf("create temp: exhausted names")
 }
 
+func canonicalChildDir(name string) (string, bool) {
+	switch name {
+	case privateLogDirName:
+		return privateLogDirName, true
+	case privateExportDirName:
+		return privateExportDirName, true
+	}
+	return "", false
+}
+
 func (fs *PrivateFS) readDirLocked(dir string) ([]FileEntry, error) {
 	dirfd, err := fs.dirFD(dir)
 	if err != nil {
 		return nil, err
 	}
-	dup, err := dupCLOEXEC(dirfd)
+	listfd, err := unix.Openat(dirfd, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open dir listing %s: %w", dir, err)
 	}
-	defer unix.Close(dup)
-	if _, err := unix.Seek(dup, 0, 0); err != nil {
-		return nil, err
-	}
-	names, err := readUnixDirNames(dup)
+	defer unix.Close(listfd)
+	names, err := readUnixDirNames(listfd)
 	if err != nil {
 		return nil, err
 	}
