@@ -15,12 +15,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/cli"
 	"github.com/mihari-proxy/mihari/internal/config"
 	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	transporttest "github.com/mihari-proxy/mihari/internal/control/transport/testutil"
+	"github.com/mihari-proxy/mihari/internal/daemon"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
+	"github.com/mihari-proxy/mihari/internal/tui"
 )
 
 func TestTUIRelaunchArgsStartsDefaultTUI(t *testing.T) {
@@ -95,6 +99,86 @@ func TestDaemonLoggingResources_CloseOrderJoinsErrors(t *testing.T) {
 	}
 }
 
+func TestRunDaemonWith_ClosesResourcesOnceForEveryExit(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		openError string
+		buildErr  error
+		runErr    error
+		wantOrder []string
+	}{
+		{name: "normal", wantOrder: []string{"run", "stdout", "stderr", "mihomo", "daemon", "fs"}},
+		{name: "degraded", buildErr: errors.New("build failed"), wantOrder: []string{"run", "stdout", "stderr", "mihomo", "daemon", "fs"}},
+		{name: "build runtime failure", buildErr: errors.New("build failed"), runErr: errors.New("daemon failed"), wantOrder: []string{"run", "stdout", "stderr", "mihomo", "daemon", "fs"}},
+		{name: "daemon logging open failure", openError: "daemon", wantOrder: []string{"fs"}},
+		{name: "mihomo logging open failure", openError: "mihomo", wantOrder: []string{"daemon", "fs"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resetDaemonRunSeamsForTest(t)
+			paths := absoluteTempPaths(t)
+			fs, err := platform.NewPrivateFS(paths.Root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = fs.Close() })
+			var order []string
+			closers := map[string]*countingCloser{
+				"stdout": {name: "stdout", order: &order},
+				"stderr": {name: "stderr", order: &order},
+				"mihomo": {name: "mihomo", order: &order},
+				"daemon": {name: "daemon", order: &order},
+				"fs":     {name: "fs", order: &order},
+			}
+			newDaemonResources = func(io.Closer) *daemonLoggingResources {
+				return &daemonLoggingResources{PrivateFS: closers["fs"]}
+			}
+			openDaemonRuntime = func(_ context.Context, options logging.RuntimeOptions) (daemonLoggingRuntime, error) {
+				if options.Component == test.openError {
+					return daemonLoggingRuntime{}, errors.New("open " + options.Component)
+				}
+				return daemonLoggingRuntime{
+					Closer: closers[options.Component],
+					Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+				}, nil
+			}
+			newDaemonCapture = func(_ *slog.Logger, _ slog.Level, stream string) logging.LineCaptureWriter {
+				return &countingCapture{countingCloser: closers[stream]}
+			}
+			buildDaemonRuntime = func(platform.Paths, config.Settings, string, io.Writer, io.Writer, app.RuntimeBuildOptions) (*app.RuntimeAssembly, error) {
+				if test.buildErr != nil {
+					return nil, test.buildErr
+				}
+				return &app.RuntimeAssembly{}, nil
+			}
+			runDaemon = func(context.Context, daemon.Options) error {
+				order = append(order, "run")
+				return test.runErr
+			}
+
+			err = runDaemonWith(context.Background(), daemonRunDeps{Paths: paths, PrivateFS: fs, Token: "token", Version: "test"})
+			if test.openError != "" {
+				if err == nil || !strings.Contains(err.Error(), "open "+test.openError) {
+					t.Fatalf("err=%v want open %s failure", err, test.openError)
+				}
+			} else if !errors.Is(err, test.runErr) {
+				t.Fatalf("err=%v want=%v", err, test.runErr)
+			}
+			if !slices.Equal(order, test.wantOrder) {
+				t.Fatalf("close order=%q want=%q", order, test.wantOrder)
+			}
+			for name, closer := range closers {
+				wantCalls := 0
+				if slices.Contains(test.wantOrder, name) {
+					wantCalls = 1
+				}
+				if closer.calls != wantCalls {
+					t.Fatalf("%s close calls=%d want=%d", name, closer.calls, wantCalls)
+				}
+			}
+		})
+	}
+}
+
 func TestRunDaemon_LoggingOpensBeforeBuildRuntime(t *testing.T) {
 	paths := absoluteTempPaths(t)
 	fs, err := platform.NewPrivateFS(paths.Root)
@@ -116,6 +200,7 @@ func TestRunDaemon_LoggingOpensBeforeBuildRuntime(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ready := make(chan struct{})
+	endpoint := transporttest.Endpoint(t)
 	done := make(chan error, 1)
 	go func() {
 		done <- runDaemonWith(ctx, daemonRunDeps{
@@ -123,7 +208,7 @@ func TestRunDaemon_LoggingOpensBeforeBuildRuntime(t *testing.T) {
 			PrivateFS: fs,
 			Token:     token,
 			Version:   "test",
-			Endpoint:  transporttest.Endpoint(t),
+			Endpoint:  endpoint,
 			Ready:     ready,
 		})
 	}()
@@ -172,6 +257,7 @@ func TestRunDaemon_CatalogLoadFailureStillOpensLogger(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ready := make(chan struct{})
+	endpoint := transporttest.Endpoint(t)
 	done := make(chan error, 1)
 	go func() {
 		done <- runDaemonWith(ctx, daemonRunDeps{
@@ -179,7 +265,7 @@ func TestRunDaemon_CatalogLoadFailureStillOpensLogger(t *testing.T) {
 			PrivateFS: fs,
 			Token:     "catalog-fail-token",
 			Version:   "test",
-			Endpoint:  transporttest.Endpoint(t),
+			Endpoint:  endpoint,
 			Ready:     ready,
 		})
 	}()
@@ -460,6 +546,112 @@ func TestPrepareLocalRoot_StatusUsesLoadedToken(t *testing.T) {
 	}
 }
 
+func TestPrepareLocalRoot_ExplicitCredentialTokenPropagatesToClientDaemonAndTUI(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		credential func(t *testing.T, cwd string) string
+	}{
+		{
+			name: "relative credential",
+			credential: func(_ *testing.T, _ string) string {
+				return filepath.Join("credentials", "control.token")
+			},
+		},
+		{
+			name: "absolute credential",
+			credential: func(t *testing.T, _ string) string {
+				return filepath.Join(t.TempDir(), "control.token")
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resetProcessLocalRootForTest(t)
+			cwd := t.TempDir()
+			t.Chdir(cwd)
+			t.Setenv("MIHARI_DATA", "data")
+			configuredCredential := test.credential(t, cwd)
+			t.Setenv("MIHARI_CONTROL_CREDENTIAL", configuredCredential)
+
+			root, err := prepareLocalRoot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantCredential, err := filepath.Abs(configuredCredential)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if root.Token == "" {
+				t.Fatal("explicit credential did not produce a token")
+			}
+			if root.Paths.Root != filepath.Join(cwd, "data") {
+				t.Fatalf("data root=%q", root.Paths.Root)
+			}
+			if filepath.Clean(wantCredential) == root.Paths.ControlToken {
+				t.Fatal("explicit credential unexpectedly used default control token path")
+			}
+			if raw, readErr := os.ReadFile(wantCredential); readErr != nil || strings.TrimSpace(string(raw)) != root.Token {
+				t.Fatalf("credential=%q read=%v token=%q", wantCredential, readErr, root.Token)
+			}
+
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if got := request.Header.Get("Authorization"); got != "Bearer "+root.Token {
+					t.Fatalf("client bearer=%q", got)
+				}
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = writer.Write([]byte(`{"schema":"mihari/v1","protocol_version":"v1","daemon_version":"dev","revision":1,"health":"ok","started_at":"1970-01-01T00:01:40Z"}`))
+			}))
+			t.Cleanup(server.Close)
+			localClient := controlclient.NewHTTP(server.URL, "", server.Client())
+			if err := prepareLocalRootForClient(localClient)(); err != nil {
+				t.Fatal(err)
+			}
+			tuiOptions := tui.Options{Client: localClient}
+			if tuiOptions.Client != localClient {
+				t.Fatal("TUI did not receive the prepared local client")
+			}
+			if _, err := tuiOptions.Client.Status(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+
+			settings, holder := occupiedControllerSettings(t, strings.Repeat("e", 64))
+			t.Cleanup(func() { _ = holder.Close() })
+			writeSettings(t, root.Paths, settings)
+			afterDaemonLoggingOpen = func(logger *slog.Logger) {
+				logger.Info("prepared credential " + root.Token)
+			}
+			t.Cleanup(func() { afterDaemonLoggingOpen = nil })
+
+			ctx, cancel := context.WithCancel(context.Background())
+			ready := make(chan struct{})
+			endpoint := transporttest.Endpoint(t)
+			done := make(chan error, 1)
+			go func() {
+				done <- runDaemonWith(ctx, daemonRunDeps{
+					Paths: root.Paths, PrivateFS: root.FS, Token: root.Token,
+					Version: "test", Endpoint: endpoint, Ready: ready,
+				})
+			}()
+			t.Cleanup(func() {
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("runDaemonWith did not stop")
+				}
+			})
+			select {
+			case <-ready:
+			case <-time.After(5 * time.Second):
+				t.Fatal("degraded daemon did not become ready")
+			}
+			logged := readFileString(t, root.Paths.DaemonLog)
+			if strings.Contains(logged, root.Token) || !strings.Contains(logged, "***") {
+				t.Fatalf("daemon log did not redact explicit credential: %s", logged)
+			}
+		})
+	}
+}
+
 func TestPrepareLocalRoot_InteractiveRunTUIWithNilPrivateFS(t *testing.T) {
 	resetProcessLocalRootForTest(t)
 	rootDir := filepath.Join(t.TempDir(), "data")
@@ -503,6 +695,24 @@ func (c orderCloser) Close() error {
 	return c.err
 }
 
+type countingCloser struct {
+	name  string
+	order *[]string
+	calls int
+}
+
+func (c *countingCloser) Close() error {
+	c.calls++
+	*c.order = append(*c.order, c.name)
+	return nil
+}
+
+type countingCapture struct{ *countingCloser }
+
+func (c *countingCapture) Write(value []byte) (int, error) { return len(value), nil }
+
+func (c *countingCapture) Flush() error { return nil }
+
 func resetProcessLocalRootForTest(t *testing.T) {
 	t.Helper()
 	resetProcessLocalRoot()
@@ -511,6 +721,22 @@ func resetProcessLocalRootForTest(t *testing.T) {
 			_ = localRootCached.FS.Close()
 		}
 		resetProcessLocalRoot()
+	})
+}
+
+func resetDaemonRunSeamsForTest(t *testing.T) {
+	t.Helper()
+	originalResources := newDaemonResources
+	originalOpen := openDaemonRuntime
+	originalCapture := newDaemonCapture
+	originalBuild := buildDaemonRuntime
+	originalRun := runDaemon
+	t.Cleanup(func() {
+		newDaemonResources = originalResources
+		openDaemonRuntime = originalOpen
+		newDaemonCapture = originalCapture
+		buildDaemonRuntime = originalBuild
+		runDaemon = originalRun
 	})
 }
 

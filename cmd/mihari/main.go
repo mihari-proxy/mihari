@@ -69,6 +69,27 @@ type daemonLoggingResources struct {
 	PrivateFS     io.Closer
 }
 
+type daemonLoggingRuntime struct {
+	Closer io.Closer
+	Logger *slog.Logger
+}
+
+var (
+	newDaemonResources = func(privateFS io.Closer) *daemonLoggingResources {
+		return &daemonLoggingResources{PrivateFS: privateFS}
+	}
+	openDaemonRuntime = func(ctx context.Context, options logging.RuntimeOptions) (daemonLoggingRuntime, error) {
+		runtime, err := logging.Open(ctx, options)
+		if err != nil {
+			return daemonLoggingRuntime{}, err
+		}
+		return daemonLoggingRuntime{Closer: runtime, Logger: runtime.Logger()}, nil
+	}
+	newDaemonCapture   = logging.NewLineCaptureWriter
+	buildDaemonRuntime = app.BuildRuntimeWithOptions
+	runDaemon          = daemon.Run
+)
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -122,14 +143,7 @@ func main() {
 		SelfUpdater:        selfUpdater,
 		OpenBrowser:        platform.OpenBrowser,
 		Interactive:        isInteractiveTerminal(os.Stdin, os.Stdout),
-		PrepareLocalRoot: func() error {
-			root, err := prepareLocalRoot()
-			if err != nil {
-				return err
-			}
-			localClient.SetToken(root.Token)
-			return nil
-		},
+		PrepareLocalRoot:   prepareLocalRootForClient(localClient),
 		RunTUI: func(ctx context.Context) error {
 			if executableError != nil {
 				return protocol.APIError{Code: protocol.CodeInternal, Message: "resolve Mihari executable path"}
@@ -159,6 +173,17 @@ func main() {
 
 func tuiRelaunchArgs(binary string) []string {
 	return []string{binary}
+}
+
+func prepareLocalRootForClient(localClient *controlclient.Client) func() error {
+	return func() error {
+		root, err := prepareLocalRoot()
+		if err != nil {
+			return err
+		}
+		localClient.SetToken(root.Token)
+		return nil
+	}
 }
 
 func relaunchWithLocalRootCleanup(relaunch func() error) error {
@@ -286,7 +311,7 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	if deps.PrivateFS == nil {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "create mihari data directories"}
 	}
-	resources := &daemonLoggingResources{PrivateFS: deps.PrivateFS}
+	resources := newDaemonResources(deps.PrivateFS)
 	var closeOnce sync.Once
 	closeResources := func() error {
 		var closeErr error
@@ -316,7 +341,7 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	reporter := logging.NewFailureReporter(os.Stderr, redactor, nil)
 	cfg := logging.DefaultConfig()
 
-	daemonRT, err := logging.Open(ctx, logging.RuntimeOptions{
+	daemonRT, err := openDaemonRuntime(ctx, logging.RuntimeOptions{
 		BasePath:  deps.Paths.DaemonLog,
 		Component: "daemon",
 		Config:    cfg,
@@ -327,9 +352,9 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	if err != nil {
 		return err
 	}
-	resources.DaemonRuntime = daemonRT
+	resources.DaemonRuntime = daemonRT.Closer
 
-	mihomoRT, err := logging.Open(ctx, logging.RuntimeOptions{
+	mihomoRT, err := openDaemonRuntime(ctx, logging.RuntimeOptions{
 		BasePath:  deps.Paths.MihomoLog,
 		Component: "mihomo",
 		Config:    cfg,
@@ -340,17 +365,17 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	if err != nil {
 		return err
 	}
-	resources.MihomoRuntime = mihomoRT
+	resources.MihomoRuntime = mihomoRT.Closer
 
-	stdoutCapture := logging.NewLineCaptureWriter(mihomoRT.Logger(), slog.LevelInfo, "stdout")
-	stderrCapture := logging.NewLineCaptureWriter(mihomoRT.Logger(), slog.LevelWarn, "stderr")
+	stdoutCapture := newDaemonCapture(mihomoRT.Logger, slog.LevelInfo, "stdout")
+	stderrCapture := newDaemonCapture(mihomoRT.Logger, slog.LevelWarn, "stderr")
 	resources.StdoutCapture = stdoutCapture
 	resources.StderrCapture = stderrCapture
 	if afterDaemonLoggingOpen != nil {
-		afterDaemonLoggingOpen(daemonRT.Logger())
+		afterDaemonLoggingOpen(daemonRT.Logger)
 	}
 
-	assembly, err := app.BuildRuntimeWithOptions(deps.Paths, settings, deps.Version, io.Discard, io.Discard, app.RuntimeBuildOptions{
+	assembly, err := buildDaemonRuntime(deps.Paths, settings, deps.Version, io.Discard, io.Discard, app.RuntimeBuildOptions{
 		InitialSetupRequired: created,
 		SettingsPath:         deps.Paths.Settings,
 		ServiceStatus:        deps.ServiceStatus,
@@ -360,11 +385,11 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 			if bgErr == nil {
 				return
 			}
-			daemonRT.Logger().Error(bgErr.Error(), slog.String("component", component))
+			daemonRT.Logger.Error(bgErr.Error(), slog.String("component", component))
 		},
 	})
 	if err != nil {
-		return daemon.Run(ctx, daemon.Options{
+		return runDaemon(ctx, daemon.Options{
 			Endpoint: deps.Endpoint,
 			Token:    deps.Token,
 			Version:  deps.Version,
@@ -372,7 +397,7 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 			Store:    app.NewDegradedStore(deps.Version, err),
 		})
 	}
-	return daemon.Run(ctx, daemon.Options{
+	return runDaemon(ctx, daemon.Options{
 		Endpoint: deps.Endpoint,
 		Token:    deps.Token,
 		Version:  deps.Version,
