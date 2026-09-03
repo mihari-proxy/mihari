@@ -148,6 +148,10 @@ func main() {
 			if executableError != nil {
 				return protocol.APIError{Code: protocol.CodeInternal, Message: "resolve Mihari executable path"}
 			}
+			root, err := prepareLocalRoot()
+			if err != nil {
+				return err
+			}
 			return tui.Run(ctx, tui.Options{
 				Client:         localClient,
 				Service:        serviceManager,
@@ -160,8 +164,12 @@ func main() {
 						return platform.Relaunch(executable, tuiRelaunchArgs(executable), os.Environ())
 					})
 				},
-				Input:  os.Stdin,
-				Output: os.Stdout,
+				Input:       os.Stdin,
+				Output:      os.Stdout,
+				ErrorOutput: os.Stderr,
+				OpenLogging: func(ctx context.Context) (tui.LoggingResources, error) {
+					return openTUILogging(ctx, root.Paths, root.Token, root.FS)
+				},
 			})
 		},
 		RunDaemon: runDaemon,
@@ -169,6 +177,32 @@ func main() {
 	code := cli.Execute(ctx, os.Args[1:], os.Stdout, os.Stderr, dependencies)
 	_ = closeCachedLocalRoot()
 	os.Exit(code)
+}
+
+func openTUILogging(ctx context.Context, paths platform.Paths, token string, fs *platform.PrivateFS) (tui.LoggingResources, error) {
+	resources := tui.LoggingResources{PrivateFS: fs}
+	resources.Health = &resources
+	if fs == nil {
+		resources.Redactor = logging.NewRedactor(token)
+		return resources, errors.New("TUI logging private fs is unavailable")
+	}
+	if err := fs.EnsureDir(paths.LogDir); err != nil {
+		resources.Redactor = logging.NewRedactor(token)
+		return resources, err
+	}
+	resources.Redactor = logging.NewRedactor(token)
+	runtime, err := logging.Open(ctx, logging.RuntimeOptions{
+		BasePath:  paths.TUILog,
+		Component: "tui",
+		Config:    logging.BootstrapConfig(),
+		PrivateFS: fs,
+		Redactor:  resources.Redactor,
+	})
+	if err != nil {
+		return resources, err
+	}
+	resources.Runtime = runtime
+	return resources, nil
 }
 
 func tuiRelaunchArgs(binary string) []string {

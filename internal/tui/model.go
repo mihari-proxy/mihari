@@ -74,6 +74,7 @@ type Model struct {
 	systemProxyOK bool
 	tunStatus     protocol.TunStatus
 	tunOK         bool
+	loggingHealth LocalLoggingHealth
 }
 
 // networkStatusClient is the minimal control surface for Overview network KPIs.
@@ -231,6 +232,14 @@ func (model *Model) SetServiceController(ctrl systempage.ServiceController) {
 	if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
 		page.SetServiceController(ctrl)
 	}
+}
+
+// SetLoggingHealth injects the local TUI logging availability observed during bootstrap.
+func (model *Model) SetLoggingHealth(health LocalLoggingHealth) {
+	if model == nil {
+		return
+	}
+	model.loggingHealth = health
 }
 
 func (model Model) loadRootServiceStatus() tea.Cmd {

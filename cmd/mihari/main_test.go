@@ -34,6 +34,72 @@ func TestTUIRelaunchArgsStartsDefaultTUI(t *testing.T) {
 	}
 }
 
+func TestOpenTUILogging_UsesInjectedPaths(t *testing.T) {
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources, err := openTUILogging(context.Background(), paths, "tui-control-token", fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resources.PrivateFS != fs || resources.Redactor == nil || resources.Runtime == nil {
+		t.Fatalf("resources=%+v", resources)
+	}
+	if resources.Health == nil || !resources.Health.Available() {
+		t.Fatal("healthy TUI logger did not report available")
+	}
+	if got := resources.Runtime.Config(); got != logging.BootstrapConfig() {
+		t.Fatalf("bootstrap config=%+v want=%+v", got, logging.BootstrapConfig())
+	}
+	resources.Runtime.Logger().Debug("TUI startup token=tui-control-token")
+	if err := resources.Close(); err != nil {
+		t.Fatal(err)
+	}
+	logged := readFileString(t, paths.TUILog)
+	if strings.Contains(logged, "tui-control-token") || !strings.Contains(logged, "***") {
+		t.Fatalf("TUI log was not redacted: %s", logged)
+	}
+}
+
+func TestOpenTUILogging_NilPrivateFSDoesNotCreateRoot(t *testing.T) {
+	paths := absoluteTempPaths(t)
+	resources, err := openTUILogging(context.Background(), paths, "tui-control-token", nil)
+	if err == nil {
+		t.Fatal("nil PrivateFS did not report bootstrap failure")
+	}
+	if resources.PrivateFS != nil || resources.Redactor == nil {
+		t.Fatalf("resources=%+v", resources)
+	}
+	if resources.Health == nil || resources.Health.Available() {
+		t.Fatal("unavailable logger health was not retained")
+	}
+	if _, statErr := os.Stat(paths.Root); !os.IsNotExist(statErr) {
+		t.Fatalf("nil PrivateFS created data root: %v", statErr)
+	}
+}
+
+func TestOpenTUILogging_CanceledContextRetainsPartialResources(t *testing.T) {
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	resources, err := openTUILogging(ctx, paths, "tui-control-token", fs)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v want context cancellation", err)
+	}
+	if resources.PrivateFS != fs || resources.Redactor == nil || resources.Runtime != nil {
+		t.Fatalf("resources=%+v", resources)
+	}
+	if closeErr := resources.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+}
+
 func TestInteractiveTerminal_RejectsRedirectedStreams(t *testing.T) {
 	input, err := os.CreateTemp(t.TempDir(), "input")
 	if err != nil {
@@ -374,6 +440,16 @@ func TestPrepareLocalRoot_RelativeDataRoot(t *testing.T) {
 	if root.Paths.DaemonLog != filepath.Join(wantRoot, "logs", "mihari-daemon.log") {
 		t.Fatalf("daemon log=%q", root.Paths.DaemonLog)
 	}
+	resources, err := openTUILogging(context.Background(), root.Paths, root.Token, root.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resources.PrivateFS != root.FS || resources.Runtime == nil {
+		t.Fatalf("resources=%+v", resources)
+	}
+	if err := resources.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPrepareLocalRoot_UnsetDataUsesHome(t *testing.T) {
@@ -483,6 +559,28 @@ func TestPrepareLocalRoot_ExplicitOutOfRootCredentialCreatesAfterFSFailure(t *te
 	}
 	if _, statErr := os.Stat(rootDir); !os.IsNotExist(statErr) {
 		t.Fatalf("data root created: %v", statErr)
+	}
+}
+
+func TestPrepareLocalRoot_ExplicitOutOfRootCredentialCreatesTUILog(t *testing.T) {
+	resetProcessLocalRootForTest(t)
+	rootDir := filepath.Join(t.TempDir(), "data")
+	credentialPath := filepath.Join(t.TempDir(), "credentials", "control.token")
+	t.Setenv("MIHARI_DATA", rootDir)
+	t.Setenv("MIHARI_CONTROL_CREDENTIAL", credentialPath)
+	root, err := prepareLocalRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources, err := openTUILogging(context.Background(), root.Paths, root.Token, root.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(root.Paths.TUILog); err != nil {
+		t.Fatalf("TUI log=%q: %v", root.Paths.TUILog, err)
+	}
+	if err := resources.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
