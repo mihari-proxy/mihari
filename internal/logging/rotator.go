@@ -19,6 +19,10 @@ import (
 // and before directory enumeration. Tests use it for deterministic pauses.
 var testAfterExclusiveLock func()
 
+// testBeforeRemove is invoked after the exclusive lock is held and immediately
+// before archive Remove. Tests use it to prove maintenance ignores cancel.
+var testBeforeRemove func()
+
 // RotatorOptions opens a process-safe rotating JSONL writer.
 type RotatorOptions struct {
 	BasePath  string
@@ -160,8 +164,16 @@ func (w *RotatingWriter) Write(p []byte) (int, error) {
 // maintenance; the swapped config is kept. After the lock is held, ReadDir and
 // Remove are not canceled.
 func (w *RotatingWriter) Apply(ctx context.Context, cfg Config) {
+	w.swapConfig(cfg)
+	w.convergeArchives(ctx)
+}
+
+func (w *RotatingWriter) swapConfig(cfg Config) {
 	copied := cfg
 	w.cfg.Store(&copied)
+}
+
+func (w *RotatingWriter) convergeArchives(ctx context.Context) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed || w.lock == nil {
@@ -278,6 +290,9 @@ func (w *RotatingWriter) convergeLocked() error {
 		if !entry.Mode.IsRegular() {
 			w.report(FailureCleanup, fmt.Errorf("skip non-regular archive suffix %d", n))
 			continue
+		}
+		if hook := testBeforeRemove; hook != nil {
+			hook()
 		}
 		if err := w.fs.Remove(w.child(entry.Name)); err != nil {
 			w.report(FailureCleanup, err)
