@@ -74,8 +74,11 @@ func NewPaths(root string) Paths {
 // Absolute resolves Root with filepath.Abs/Clean and rebuilds every derived field
 // via NewPaths. It does not EvalSymlinks; callers that need a trusted data-root
 // identity must open NewPrivateFS on the absolute Root before EnsureDirs or
-// default token IO. --help/--version must not call Absolute. TUI may continue
-// after NewPrivateFS failure; daemon must not continue directory IO after failure.
+// default token IO. --help/--version must not call Absolute. root/LocalSystem
+// missing-root failures fail closed with zero directory IO and must not be
+// written into CLI SetupError; TUI may continue with PrivateFS=nil, daemon must
+// not continue directory IO. Callers reuse one process-level PrivateFS and must
+// not call NewPrivateFS again after EnsureDirs/Settings.
 func (p Paths) Absolute() (Paths, error) {
 	absRoot, err := filepath.Abs(p.Root)
 	if err != nil {
@@ -125,7 +128,8 @@ func defaultDataRoot() string {
 // reject intermediate symlinks, and it does not create LogExportDir. Callers
 // that need a local data root must establish NewPrivateFS(absolutePaths.Root)
 // before EnsureDirs or default token IO; EnsureDirs is not the root create or
-// harden entrypoint.
+// harden entrypoint. The process-level PrivateFS from that call is reused by
+// daemon/TUI; do not call NewPrivateFS again after EnsureDirs/Settings.
 func (p Paths) EnsureDirs() error {
 	for _, path := range []string{
 		p.Root, p.Bin, filepath.Dir(p.RuntimeConfig), p.LogDir, p.Staging,
