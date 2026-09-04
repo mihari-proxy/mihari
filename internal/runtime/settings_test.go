@@ -80,33 +80,34 @@ func TestManagerSettings_SaveCandidateOutcomes(t *testing.T) {
 		}
 	})
 
-	t.Run("committed warning publishes and reports stable warning", func(t *testing.T) {
-		var reports atomic.Int64
-		var component, message string
-		manager := newTestManager(Options{
-			Settings: config.Defaults(), SettingsPath: "settings.yaml",
-			SaveSettings: func(string, config.Settings) (config.CommitResult, error) {
-				return config.CommitResult{Committed: true, Warning: errors.New("C:\\sensitive\\path")}, nil
-			},
-			OnBackgroundError: func(gotComponent string, err error) {
-				reports.Add(1)
-				component, message = gotComponent, err.Error()
-			},
-		})
-		candidate, err := manager.updateSettings(func(next *config.Settings) error {
-			next.WebAddr = "127.0.0.1:9999"
-			return nil
-		})
-		if err != nil || !candidate.changed {
-			t.Fatalf("candidate=%#v err=%v", candidate, err)
-		}
-		if got := manager.settingsSnapshot().WebAddr; got != "127.0.0.1:9999" {
-			t.Fatalf("published web address=%q", got)
-		}
-		if reports.Load() != 1 || component != "settings" || message != "parent directory sync failed after commit" {
-			t.Fatalf("warning report count=%d component=%q message=%q", reports.Load(), component, message)
-		}
+}
+
+func TestManagerSettings_PostCommitWarning(t *testing.T) {
+	var reports atomic.Int64
+	var component, message string
+	manager := newTestManager(Options{
+		Settings: config.Defaults(), SettingsPath: "settings.yaml",
+		SaveSettings: func(string, config.Settings) (config.CommitResult, error) {
+			return config.CommitResult{Committed: true, Warning: errors.New("C:\\sensitive\\path")}, nil
+		},
+		OnBackgroundError: func(gotComponent string, err error) {
+			reports.Add(1)
+			component, message = gotComponent, err.Error()
+		},
 	})
+	candidate, err := manager.updateSettings(func(next *config.Settings) error {
+		next.WebAddr = "127.0.0.1:9999"
+		return nil
+	})
+	if err != nil || !candidate.changed {
+		t.Fatalf("candidate=%#v err=%v", candidate, err)
+	}
+	if got := manager.settingsSnapshot().WebAddr; got != "127.0.0.1:9999" {
+		t.Fatalf("published web address=%q", got)
+	}
+	if reports.Load() != 1 || component != "settings" || message != "parent directory sync failed after commit" {
+		t.Fatalf("warning report count=%d component=%q message=%q", reports.Load(), component, message)
+	}
 }
 
 func TestManagerSettings_SaveDoesNotHoldSettingsMutex(t *testing.T) {
