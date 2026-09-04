@@ -711,6 +711,14 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		return m, m.rowSpinCmdIfNeeded()
 	case loggingUpdateResultMsg:
+		if typed.epoch != m.loggingEpoch {
+			if m.pending && typed.epoch == m.loggingPendingEpoch && typed.rowID == m.pendingRow {
+				m.clearRowPending()
+				m.loggingPendingEpoch = 0
+				m.loggingReloading = false
+			}
+			return m, m.rowSpinCmdIfNeeded()
+		}
 		if !m.pending || typed.epoch != m.loggingPendingEpoch || typed.rowID != m.pendingRow {
 			return m, nil
 		}
@@ -726,6 +734,14 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.markRowOutcome(typed.rowID, false, ui.LoggingUpdateFailed)
 		return m, m.rowSpinCmdIfNeeded()
 	case loggingReloadResultMsg:
+		if typed.epoch != m.loggingEpoch {
+			if m.pending && typed.epoch == m.loggingPendingEpoch && typed.rowID == m.pendingRow {
+				m.clearRowPending()
+				m.loggingPendingEpoch = 0
+				m.loggingReloading = false
+			}
+			return m, m.rowSpinCmdIfNeeded()
+		}
 		if !m.pending || typed.epoch != m.loggingPendingEpoch || typed.rowID != m.pendingRow {
 			return m, nil
 		}
@@ -1183,10 +1199,9 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 		}
 		labelPart := marker + item.label
 		value := item.value
-		if m.editID == item.id {
-			value = m.editInput.View()
-		}
 		switch {
+		case m.editID == item.id:
+			value = m.editInput.View()
 		case m.pending && m.pendingRow == item.id && m.pendingNote != "":
 			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, m.pendingNote))
 		case m.outcomeRow == item.id:
@@ -2123,6 +2138,7 @@ func (m *Model) beginLoggingEdit(id string) tea.Cmd {
 	if !m.loggingMutationAvailable() {
 		return nil
 	}
+	m.clearLoggingOutcome(id)
 	input := textinput.New()
 	input.Prompt = ""
 	input.CharLimit = 128
@@ -2148,9 +2164,23 @@ func (m *Model) updateLoggingEdit(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, m.confirmLoggingEdit()
 		}
 	}
+	before := m.editInput.Value()
 	updated, cmd := m.editInput.Update(message)
 	m.editInput = updated
+	if m.editInput.Value() != before {
+		m.clearLoggingOutcome(m.editID)
+	}
 	return m, cmd
+}
+
+func (m *Model) clearLoggingOutcome(rowID string) {
+	if m.outcomeRow != rowID {
+		return
+	}
+	m.outcomeRow = ""
+	m.outcomeOK = false
+	m.outcomeDetail = ""
+	m.lastError = ""
 }
 
 func (m *Model) cancelLoggingEdit() tea.Cmd {

@@ -228,10 +228,98 @@ func TestModel_LoggingNumericEditRejectsInvalidValuesWithoutPatch(t *testing.T) 
 			if model.editID != tc.rowID || model.lastError != tc.want {
 				t.Fatalf("editID=%q error=%q want %q", model.editID, model.lastError, tc.want)
 			}
-			if !strings.Contains(model.View(), ui.FailedLabel) || !strings.Contains(model.View(), tc.want) {
-				t.Fatalf("missing stable validation failure:\n%s", model.View())
+			view := model.View()
+			if !strings.Contains(view, tc.want) || !strings.Contains(view, model.editInput.View()) || strings.Contains(view, ui.FailedLabel) {
+				t.Fatalf("validation did not preserve the visible input:\n%s", view)
 			}
 		})
+	}
+}
+
+func TestModel_LoggingNumericValidationKeepsInputVisibleWhileCorrecting(t *testing.T) {
+	cases := []struct {
+		name      string
+		rowID     string
+		invalid   string
+		corrected string
+		backspace int
+		typeAfter *tea.KeyPressMsg
+		wantError string
+		wantValue int64
+	}{
+		{
+			name: "parse error", rowID: rowLogMaxFiles, invalid: "x", corrected: "5", backspace: 1,
+			typeAfter: &tea.KeyPressMsg{Code: '5', Text: "5"},
+			wantError: ui.LoggingMaxFilesInvalid, wantValue: 5,
+		},
+		{
+			name: "range error", rowID: rowLogMaxSize, invalid: "101", corrected: "1", backspace: 2,
+			wantError: ui.LoggingMaxSizeInvalid, wantValue: 1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			model, client := loggingModel("info", 4)
+			model.focusID = tc.rowID
+			updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			model = updated.(*Model)
+			model.editInput.SetValue(tc.invalid)
+
+			updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			model = updated.(*Model)
+			if command != nil || client.updateLoggingCalls != 0 {
+				t.Fatalf("invalid value produced command/PATCH: command=%v calls=%d", command != nil, client.updateLoggingCalls)
+			}
+			view := model.View()
+			if model.editInput.Value() != tc.invalid || !strings.Contains(view, model.editInput.View()) || !strings.Contains(view, tc.wantError) || strings.Contains(view, ui.FailedLabel) {
+				t.Fatalf("validation must keep input visible without Failed chip:\n%s", view)
+			}
+
+			for range tc.backspace {
+				updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+				model = updated.(*Model)
+			}
+			if tc.typeAfter != nil {
+				updated, _ = model.Update(*tc.typeAfter)
+				model = updated.(*Model)
+			}
+			if got := model.editInput.Value(); got != tc.corrected {
+				t.Fatalf("corrected input=%q want %q", got, tc.corrected)
+			}
+			if model.outcomeRow != "" || model.lastError != "" || !strings.Contains(model.View(), model.editInput.View()) {
+				t.Fatalf("typing left sticky validation: outcome=%q error=%q view=\n%s", model.outcomeRow, model.lastError, model.View())
+			}
+
+			_, command = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			_ = loggingObservedFromCommand(t, command)
+			if client.updateLoggingCalls != 1 {
+				t.Fatalf("PATCH calls=%d", client.updateLoggingCalls)
+			}
+			if tc.rowID == rowLogMaxSize && (client.lastLogging.MaxSizeMB == nil || *client.lastLogging.MaxSizeMB != tc.wantValue) {
+				t.Fatalf("request=%+v", client.lastLogging)
+			}
+			if tc.rowID == rowLogMaxFiles && (client.lastLogging.MaxFiles == nil || *client.lastLogging.MaxFiles != tc.wantValue) {
+				t.Fatalf("request=%+v", client.lastLogging)
+			}
+		})
+	}
+}
+
+func TestModel_LoggingNumericEditReopenClearsValidationOutcome(t *testing.T) {
+	model, _ := loggingModel("info", 4)
+	model.focusID = rowLogMaxSize
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	model.editInput.SetValue("101")
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = updated.(*Model)
+
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if model.editID != rowLogMaxSize || model.editInput.Value() != "10" || model.outcomeRow != "" || model.lastError != "" || !strings.Contains(model.View(), model.editInput.View()) {
+		t.Fatalf("reopen retained validation: edit=%q outcome=%q error=%q view=\n%s", model.editID, model.outcomeRow, model.lastError, model.View())
 	}
 }
 
@@ -428,6 +516,61 @@ func TestModel_LoggingStaleResultsClearMatchingPendingWithoutRollback(t *testing
 		}
 		if client.updateLoggingCalls != 1 || client.loggingCalls != 1 {
 			t.Fatalf("PATCH calls=%d GET calls=%d", client.updateLoggingCalls, client.loggingCalls)
+		}
+	})
+}
+
+func TestModel_LoggingOldEpochErrorsOnlyClearMatchingPending(t *testing.T) {
+	current := protocol.LoggingStatus{
+		Schema: "mihari/v1", Revision: 12, Level: "error", MaxSizeMB: 80,
+		MaxFiles: 9, Dir: `C:\new`,
+	}
+
+	t.Run("PATCH error", func(t *testing.T) {
+		model, client := loggingModel("info", 5)
+		client.updateLoggingErr = errors.New(`write C:\Users\alice\.mihari\mihari.yaml: access denied`)
+		model.focusID = rowLogLevel
+		_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		result := firstSystemPageResult(t, command)
+		model.ApplyLoggingSync(ui.LoggingSyncMsg{Epoch: 8, Status: current, Available: true})
+
+		updated, followup := model.Update(result)
+		model = updated.(*Model)
+		if followup != nil || model.pending || model.outcomeRow != "" || model.lastError != "" || model.logging != current {
+			t.Fatalf("followup=%v pending=%v outcome=%q error=%q logging=%+v", followup != nil, model.pending, model.outcomeRow, model.lastError, model.logging)
+		}
+	})
+
+	t.Run("PATCH conflict", func(t *testing.T) {
+		model, client := loggingModel("info", 5)
+		client.updateLoggingErr = protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "conflict"}
+		model.focusID = rowLogLevel
+		_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		result := firstSystemPageResult(t, command)
+		model.ApplyLoggingSync(ui.LoggingSyncMsg{Epoch: 8, Status: current, Available: true})
+
+		updated, followup := model.Update(result)
+		model = updated.(*Model)
+		if followup != nil || client.loggingCalls != 0 || model.pending || model.outcomeRow != "" || model.lastError != "" || model.logging != current {
+			t.Fatalf("followup=%v GET calls=%d pending=%v outcome=%q error=%q logging=%+v", followup != nil, client.loggingCalls, model.pending, model.outcomeRow, model.lastError, model.logging)
+		}
+	})
+
+	t.Run("reload error", func(t *testing.T) {
+		model, client := loggingModel("info", 5)
+		client.updateLoggingErr = protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "conflict"}
+		client.loggingErr = errors.New(`/private/alice/mihari.yaml: access denied`)
+		model.focusID = rowLogLevel
+		_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		updated, reload := model.Update(firstSystemPageResult(t, command))
+		model = updated.(*Model)
+		reloadResult := firstSystemPageResult(t, reload)
+		model.ApplyLoggingSync(ui.LoggingSyncMsg{Epoch: 8, Status: current, Available: true})
+
+		updated, followup := model.Update(reloadResult)
+		model = updated.(*Model)
+		if followup != nil || client.loggingCalls != 1 || model.pending || model.outcomeRow != "" || model.lastError != "" || model.logging != current {
+			t.Fatalf("followup=%v GET calls=%d pending=%v outcome=%q error=%q logging=%+v", followup != nil, client.loggingCalls, model.pending, model.outcomeRow, model.lastError, model.logging)
 		}
 	})
 }
