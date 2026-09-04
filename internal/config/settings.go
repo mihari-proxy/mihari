@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -98,24 +99,55 @@ func (s Settings) Clone() Settings {
 }
 
 func cloneYAMLValue(value any) any {
-	switch value := value.(type) {
-	case map[string]any:
-		clone := make(map[string]any, len(value))
-		for key, nested := range value {
-			clone[key] = cloneYAMLValue(nested)
+	if value == nil {
+		return nil
+	}
+	return cloneYAMLReflect(reflect.ValueOf(value)).Interface()
+}
+
+func cloneYAMLReflect(value reflect.Value) reflect.Value {
+	if !value.IsValid() {
+		return value
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		clone := reflect.New(value.Type()).Elem()
+		clone.Set(cloneYAMLReflect(value.Elem()))
+		return clone
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		clone := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iterator := value.MapRange()
+		for iterator.Next() {
+			clone.SetMapIndex(cloneYAMLReflect(iterator.Key()), cloneYAMLReflect(iterator.Value()))
 		}
 		return clone
-	case map[any]any:
-		clone := make(map[any]any, len(value))
-		for key, nested := range value {
-			clone[key] = cloneYAMLValue(nested)
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		clone := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for index := range value.Len() {
+			clone.Index(index).Set(cloneYAMLReflect(value.Index(index)))
 		}
 		return clone
-	case []any:
-		clone := make([]any, len(value))
-		for index, nested := range value {
-			clone[index] = cloneYAMLValue(nested)
+	case reflect.Array:
+		clone := reflect.New(value.Type()).Elem()
+		for index := range value.Len() {
+			clone.Index(index).Set(cloneYAMLReflect(value.Index(index)))
 		}
+		return clone
+	case reflect.Pointer:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		clone := reflect.New(value.Type().Elem())
+		clone.Elem().Set(cloneYAMLReflect(value.Elem()))
 		return clone
 	default:
 		return value

@@ -250,6 +250,34 @@ func TestSettingsLogging_CloneDoesNotShareNestedTunOrLogging(t *testing.T) {
 	}
 }
 
+func TestSettingsCloneDoesNotShareTypedYAMLComposites(t *testing.T) {
+	settings := Defaults()
+	settings.Tun = map[string]any{
+		"nameserver": []string{"https://dns.example/dns-query"},
+		"providers": map[string][]string{
+			"fallback": {"1.1.1.1"},
+		},
+		"rules": []map[string][]string{
+			{"domains": {"example.com"}},
+		},
+	}
+
+	clone := settings.Clone()
+	clone.Tun["nameserver"].([]string)[0] = "https://changed.example/dns-query"
+	clone.Tun["providers"].(map[string][]string)["fallback"][0] = "8.8.8.8"
+	clone.Tun["rules"].([]map[string][]string)[0]["domains"][0] = "changed.example"
+
+	if got := settings.Tun["nameserver"].([]string)[0]; got != "https://dns.example/dns-query" {
+		t.Fatalf("original typed slice value=%q", got)
+	}
+	if got := settings.Tun["providers"].(map[string][]string)["fallback"][0]; got != "1.1.1.1" {
+		t.Fatalf("original typed map slice value=%q", got)
+	}
+	if got := settings.Tun["rules"].([]map[string][]string)[0]["domains"][0]; got != "example.com" {
+		t.Fatalf("original nested typed composite value=%q", got)
+	}
+}
+
 func TestSettingsValidationRejectsUnsafeOrConflictingAddresses(t *testing.T) {
 	tests := []struct {
 		name   string
