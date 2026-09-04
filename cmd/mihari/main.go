@@ -180,29 +180,24 @@ func main() {
 }
 
 func openTUILogging(ctx context.Context, paths platform.Paths, token string, fs *platform.PrivateFS) (tui.LoggingResources, error) {
-	resources := tui.LoggingResources{PrivateFS: fs}
-	resources.Health = &resources
+	redactor := logging.NewRedactor(token)
 	if fs == nil {
-		resources.Redactor = logging.NewRedactor(token)
-		return resources, errors.New("TUI logging private fs is unavailable")
+		return tui.NewLoggingResources(nil, redactor, nil), errors.New("TUI logging private fs is unavailable")
 	}
 	if err := fs.EnsureDir(paths.LogDir); err != nil {
-		resources.Redactor = logging.NewRedactor(token)
-		return resources, err
+		return tui.NewLoggingResources(nil, redactor, fs), err
 	}
-	resources.Redactor = logging.NewRedactor(token)
 	runtime, err := logging.Open(ctx, logging.RuntimeOptions{
 		BasePath:  paths.TUILog,
 		Component: "tui",
 		Config:    logging.BootstrapConfig(),
 		PrivateFS: fs,
-		Redactor:  resources.Redactor,
+		Redactor:  redactor,
 	})
 	if err != nil {
-		return resources, err
+		return tui.NewLoggingResources(nil, redactor, fs), err
 	}
-	resources.Runtime = runtime
-	return resources, nil
+	return tui.NewLoggingResources(runtime, redactor, fs), nil
 }
 
 func tuiRelaunchArgs(binary string) []string {

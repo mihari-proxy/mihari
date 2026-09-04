@@ -241,6 +241,40 @@ func TestLoggingResourcesCloseClosesRuntimeBeforePrivateFSAndIsIdempotent(t *tes
 	}
 }
 
+func TestLoggingResourcesCopiesShareCloseState(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		runtime          io.Closer
+		privateFS        io.Closer
+		wantRuntimeClose int
+		wantPrivateClose int
+	}{
+		{name: "zero resources"},
+		{name: "partial runtime", runtime: &countingCloser{}, wantRuntimeClose: 1},
+		{name: "partial private fs", privateFS: &countingCloser{}, wantPrivateClose: 1},
+		{name: "runtime and private fs", runtime: &countingCloser{}, privateFS: &countingCloser{}, wantRuntimeClose: 1, wantPrivateClose: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resources := LoggingResources{closeState: newLoggingResourcesCloseState(test.runtime, test.privateFS)}
+			copied := resources
+
+			if err := resources.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := copied.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			if closer, ok := test.runtime.(*countingCloser); ok && closer.calls != test.wantRuntimeClose {
+				t.Fatalf("runtime close calls=%d want=%d", closer.calls, test.wantRuntimeClose)
+			}
+			if closer, ok := test.privateFS.(*countingCloser); ok && closer.calls != test.wantPrivateClose {
+				t.Fatalf("private fs close calls=%d want=%d", closer.calls, test.wantPrivateClose)
+			}
+		})
+	}
+}
+
 func TestModelSetLoggingHealthKeepsFactoryHealth(t *testing.T) {
 	health := testLoggingHealth{available: true}
 	model := NewModel()
@@ -339,6 +373,13 @@ type orderedCloser struct {
 	name  string
 	order *[]string
 	calls int
+}
+
+type countingCloser struct{ calls int }
+
+func (c *countingCloser) Close() error {
+	c.calls++
+	return nil
 }
 
 func (c *orderedCloser) Close() error {

@@ -44,8 +44,46 @@ type LoggingResources struct {
 	PrivateFS *platform.PrivateFS
 	Health    LocalLoggingHealth
 
-	closeOnce sync.Once
-	closeErr  error
+	closeState *loggingResourcesCloseState
+}
+
+type loggingResourcesCloseState struct {
+	once      sync.Once
+	err       error
+	runtime   io.Closer
+	privateFS io.Closer
+}
+
+type loggingResourcesHealth struct {
+	runtime *logging.Runtime
+}
+
+// NewLoggingResources creates TUI logging resources whose close state and
+// health remain shared when the value is copied by a LoggingFactory caller.
+func NewLoggingResources(runtime *logging.Runtime, redactor *logging.Redactor, privateFS *platform.PrivateFS) LoggingResources {
+	var runtimeCloser io.Closer
+	if runtime != nil {
+		runtimeCloser = runtime
+	}
+	var privateFSCloser io.Closer
+	if privateFS != nil {
+		privateFSCloser = privateFS
+	}
+	return LoggingResources{
+		Runtime:    runtime,
+		Redactor:   redactor,
+		PrivateFS:  privateFS,
+		Health:     &loggingResourcesHealth{runtime: runtime},
+		closeState: newLoggingResourcesCloseState(runtimeCloser, privateFSCloser),
+	}
+}
+
+func newLoggingResourcesCloseState(runtime io.Closer, privateFS io.Closer) *loggingResourcesCloseState {
+	return &loggingResourcesCloseState{runtime: runtime, privateFS: privateFS}
+}
+
+func (h *loggingResourcesHealth) Available() bool {
+	return h != nil && h.runtime != nil
 }
 
 // Available reports whether the TUI file logging runtime opened successfully.
@@ -65,7 +103,8 @@ func (r *LoggingResources) closeWithSession(closeSession func()) error {
 		}
 		return nil
 	}
-	r.closeOnce.Do(func() {
+	state := r.closeState
+	if state == nil {
 		var runtimeCloser io.Closer
 		if r.Runtime != nil {
 			runtimeCloser = r.Runtime
@@ -74,9 +113,12 @@ func (r *LoggingResources) closeWithSession(closeSession func()) error {
 		if r.PrivateFS != nil {
 			privateFSCloser = r.PrivateFS
 		}
-		r.closeErr = closeTUILifecycle(closeSession, runtimeCloser, privateFSCloser)
+		state = newLoggingResourcesCloseState(runtimeCloser, privateFSCloser)
+	}
+	state.once.Do(func() {
+		state.err = closeTUILifecycle(closeSession, state.runtime, state.privateFS)
 	})
-	return r.closeErr
+	return state.err
 }
 
 func closeTUILifecycle(closeSession func(), runtime io.Closer, privateFS io.Closer) error {

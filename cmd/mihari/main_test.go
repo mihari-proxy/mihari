@@ -50,11 +50,18 @@ func TestOpenTUILogging_UsesInjectedPaths(t *testing.T) {
 	if resources.Health == nil || !resources.Health.Available() {
 		t.Fatal("healthy TUI logger did not report available")
 	}
+	if _, isResourcePointer := resources.Health.(*tui.LoggingResources); isResourcePointer {
+		t.Fatal("healthy TUI logger health points at a returned-value copy")
+	}
 	if got := resources.Runtime.Config(); got != logging.BootstrapConfig() {
 		t.Fatalf("bootstrap config=%+v want=%+v", got, logging.BootstrapConfig())
 	}
 	resources.Runtime.Logger().Debug("TUI startup token=tui-control-token")
+	copyOfResources := resources
 	if err := resources.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyOfResources.Close(); err != nil {
 		t.Fatal(err)
 	}
 	logged := readFileString(t, paths.TUILog)
