@@ -330,17 +330,6 @@ func loadOrCreateWithOpsOutcome(path, sidecar string, ops settingsCreationOps) (
 	return settings, true, result, nil
 }
 
-func persistSidecarIfChanged(path string, settings Settings, sidecar string) (Settings, bool, error) {
-	settings, created, result, err := persistSidecarIfChangedOutcome(path, settings, sidecar, SaveWithCommit)
-	if err != nil {
-		return Settings{}, false, err
-	}
-	if result.Warning != nil {
-		return settings, created, result.Warning
-	}
-	return settings, created, nil
-}
-
 func persistSidecarIfChangedOutcome(path string, settings Settings, sidecar string, save func(string, Settings) (CommitResult, error)) (Settings, bool, CommitResult, error) {
 	changed, err := applySidecarIfPresent(&settings, sidecar)
 	if err != nil {
