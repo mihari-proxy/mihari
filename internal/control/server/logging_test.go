@@ -18,6 +18,7 @@ func TestLoggingEndpointRejectsInvalidRequests(t *testing.T) {
 		name string
 		body string
 	}{
+		{"empty body", ``},
 		{"empty operation ID", `{"level":"debug"}`},
 		{"empty patch", `{"operation_id":"logging-1"}`},
 		{"null only patch", `{"operation_id":"logging-1","level":null,"max_size_mb":null,"max_files":null}`},
@@ -31,6 +32,7 @@ func TestLoggingEndpointRejectsInvalidRequests(t *testing.T) {
 		{"max size too large", `{"operation_id":"logging-1","max_size_mb":101}`},
 		{"max files too small", `{"operation_id":"logging-1","max_files":0}`},
 		{"max files too large", `{"operation_id":"logging-1","max_files":11}`},
+		{"trailing JSON", `{"operation_id":"logging-1","level":"debug"} {"level":"warn"}`},
 	}
 
 	for _, test := range tests {
@@ -57,10 +59,18 @@ func TestLoggingEndpointMapsRuntimeErrors(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			server := newLoggingServer(&loggingTestRuntime{fakeRuntime: &fakeRuntime{}, updateErr: test.err})
-			recorder := httptest.NewRecorder()
-			server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodPatch, "/v1/logging", bytes.NewBufferString(`{"operation_id":"logging-1","level":"debug"}`)))
-			assertLoggingError(t, recorder, test.want, test.code)
+			t.Run("get", func(t *testing.T) {
+				server := newLoggingServer(&loggingTestRuntime{fakeRuntime: &fakeRuntime{}, loggingErr: test.err})
+				recorder := httptest.NewRecorder()
+				server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodGet, "/v1/logging", nil))
+				assertLoggingError(t, recorder, test.want, test.code)
+			})
+			t.Run("patch", func(t *testing.T) {
+				server := newLoggingServer(&loggingTestRuntime{fakeRuntime: &fakeRuntime{}, updateErr: test.err})
+				recorder := httptest.NewRecorder()
+				server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodPatch, "/v1/logging", bytes.NewBufferString(`{"operation_id":"logging-1","level":"debug"}`)))
+				assertLoggingError(t, recorder, test.want, test.code)
+			})
 		})
 	}
 }
@@ -96,13 +106,15 @@ func TestLoggingEndpointsReturnFullUnwrappedStatus(t *testing.T) {
 			if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err == nil && envelope.Error.Code != "" {
 				t.Fatalf("success response used error envelope: %s", recorder.Body.String())
 			}
+			if test.method == http.MethodPatch {
+				if runtime.operation.ID != "logging-1" || runtime.operation.Source != "control" || runtime.operation.IfRevision == nil || *runtime.operation.IfRevision != revision {
+					t.Fatalf("operation=%#v", runtime.operation)
+				}
+				if runtime.update.Level == nil || *runtime.update.Level != "debug" || runtime.update.MaxSizeMB == nil || *runtime.update.MaxSizeMB != 20 || runtime.update.MaxFiles == nil || *runtime.update.MaxFiles != 5 {
+					t.Fatalf("update=%#v", runtime.update)
+				}
+			}
 		})
-	}
-	if runtime.operation.ID != "logging-1" || runtime.operation.Source != "control" || runtime.operation.IfRevision == nil || *runtime.operation.IfRevision != revision {
-		t.Fatalf("operation=%#v", runtime.operation)
-	}
-	if runtime.update.Level == nil || *runtime.update.Level != "debug" || runtime.update.MaxSizeMB == nil || *runtime.update.MaxSizeMB != 20 || runtime.update.MaxFiles == nil || *runtime.update.MaxFiles != 5 {
-		t.Fatalf("update=%#v", runtime.update)
 	}
 }
 

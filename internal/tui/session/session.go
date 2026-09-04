@@ -21,6 +21,7 @@ const (
 	EventRules         EventKind = "rules"
 	EventRuleProviders EventKind = "rule-providers"
 	EventWebGUI        EventKind = "web-gui"
+	// EventLogging carries an epoch-tagged daemon Logging snapshot.
 	EventLogging       EventKind = "logging"
 	EventTraffic       EventKind = "traffic"
 	EventMemory        EventKind = "memory"

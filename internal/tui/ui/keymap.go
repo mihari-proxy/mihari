@@ -19,11 +19,12 @@ const (
 
 const (
 	// ModeSearch is the in-page filter field on Connections, Rules, and Logs.
-	ModeSearch      = "search"
-	ModeDetail      = "detail"
-	ModeColumns     = "columns"
-	ModeForm        = "form"
-	ModePortsEdit   = "ports-edit"
+	ModeSearch    = "search"
+	ModeDetail    = "detail"
+	ModeColumns   = "columns"
+	ModeForm      = "form"
+	ModePortsEdit = "ports-edit"
+	// ModeLoggingEdit identifies numeric Logging settings text input.
 	ModeLoggingEdit = "logging-edit"
 	ModeConfirm     = "confirm"
 	ModeSetup       = "setup"

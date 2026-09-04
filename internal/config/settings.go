@@ -20,9 +20,12 @@ import (
 const maxSettingsSize = 1 << 20
 
 const (
-	DefaultLogLevel           = "info"
+	// DefaultLogLevel is the persisted logging level used without an override.
+	DefaultLogLevel = "info"
+	// DefaultLogMaxSizeMB is the active log rotation limit in MiB used without an override.
 	DefaultLogMaxSizeMB int64 = 10
-	DefaultLogMaxFiles  int64 = 3
+	// DefaultLogMaxFiles is the retained file count used without an override.
+	DefaultLogMaxFiles int64 = 3
 )
 
 // LoggingSettings controls the level and retention limits for Mihari file logs.

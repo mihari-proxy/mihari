@@ -46,6 +46,29 @@ func TestConfigFromFields_ConvertsValidatedFields(t *testing.T) {
 	}
 }
 
+func TestConfigFromFields_AcceptsInclusiveBoundaries(t *testing.T) {
+	tests := []struct {
+		name      string
+		maxSizeMB int64
+		maxFiles  int64
+		want      Config
+	}{
+		{name: "minimum", maxSizeMB: 1, maxFiles: 1, want: Config{Level: slog.LevelInfo, MaxSizeBytes: 1 << 20, MaxFiles: 1}},
+		{name: "maximum", maxSizeMB: 100, maxFiles: 10, want: Config{Level: slog.LevelInfo, MaxSizeBytes: 100 << 20, MaxFiles: 10}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := ConfigFromFields("info", test.maxSizeMB, test.maxFiles)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("ConfigFromFields()=%+v want %+v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestConfigFromFields_RejectsOutOfRangeLimits(t *testing.T) {
 	tests := []struct {
 		name      string
