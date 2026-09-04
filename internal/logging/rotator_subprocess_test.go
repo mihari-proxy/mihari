@@ -33,19 +33,47 @@ type rotatorRecord struct {
 	Seq    int    `json:"seq"`
 }
 
-func TestRotatingWriter_TwoProcessesNoTornRecords(t *testing.T) {
+func TestRotatingWriter_TwoProcessesPreserveAllSequencesAndRotate(t *testing.T) {
 	fs, paths := openTestLogFS(t)
 	base := paths.TUILog
-	cfg := Config{Level: slog.LevelInfo, MaxSizeBytes: 512, MaxFiles: 10}
+	// 16 files of 16 KiB preserve all 4,000 small test records while the
+	// 16 KiB active-file limit still requires several rotations.
+	cfg := Config{Level: slog.LevelInfo, MaxSizeBytes: 16 << 10, MaxFiles: 16}
 
-	a := startRotatorChild(t, paths.Root, base, "write", "A", cfg, 2000)
-	b := startRotatorChild(t, paths.Root, base, "write", "B", cfg, 2000)
+	a := startRotatorChild(t, paths.Root, base, "write-pause", "A", cfg, 2000)
+	if !a.sc.Scan() || a.sc.Text() != "opened" {
+		t.Fatalf("writer A did not open: %q stderr=%s", a.sc.Text(), a.errBuf.String())
+	}
+	b := startRotatorChild(t, paths.Root, base, "write-pause", "B", cfg, 2000)
+	if !b.sc.Scan() || b.sc.Text() != "opened" {
+		t.Fatalf("writer B did not open: %q stderr=%s", b.sc.Text(), b.errBuf.String())
+	}
+	if _, err := io.WriteString(a.stdin, "go\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(b.stdin, "go\n"); err != nil {
+		t.Fatal(err)
+	}
 	waitChildExit(t, a)
 	waitChildExit(t, b)
+
+	files := collectLogFiles(t, fs, paths.LogDir, filepath.Base(base))
+	rotations := 0
+	for name := range files {
+		if _, ok := archiveSuffix(filepath.Base(base), name); ok {
+			rotations++
+		}
+	}
+	if rotations < 2 {
+		t.Fatalf("archive files=%d, want evidence of multiple rotations", rotations)
+	}
 
 	lines := readAllJSONL(t, fs, paths.LogDir, filepath.Base(base))
 	if len(lines) == 0 {
 		t.Fatal("merged logs are empty")
+	}
+	if got, want := len(lines), 4000; got != want {
+		t.Fatalf("merged record count=%d want=%d", got, want)
 	}
 	seen := make(map[string]map[int]struct{})
 	for i, line := range lines {
@@ -56,6 +84,9 @@ func TestRotatingWriter_TwoProcessesNoTornRecords(t *testing.T) {
 		if rec.Writer == "" || rec.Seq < 1 {
 			t.Fatalf("line %d missing writer/seq: %+v", i, rec)
 		}
+		if rec.Writer != "A" && rec.Writer != "B" {
+			t.Fatalf("line %d has unexpected writer %q", i, rec.Writer)
+		}
 		if seen[rec.Writer] == nil {
 			seen[rec.Writer] = make(map[int]struct{})
 		}
@@ -63,6 +94,16 @@ func TestRotatingWriter_TwoProcessesNoTornRecords(t *testing.T) {
 			t.Fatalf("duplicate %s seq=%d", rec.Writer, rec.Seq)
 		}
 		seen[rec.Writer][rec.Seq] = struct{}{}
+	}
+	for _, writer := range []string{"A", "B"} {
+		if got, want := len(seen[writer]), 2000; got != want {
+			t.Fatalf("writer %s record count=%d want=%d", writer, got, want)
+		}
+		for seq := 1; seq <= 2000; seq++ {
+			if _, ok := seen[writer][seq]; !ok {
+				t.Fatalf("writer %s missing seq=%d", writer, seq)
+			}
+		}
 	}
 }
 
@@ -255,13 +296,21 @@ func runRotatorChild() int {
 		}
 		fmt.Println("wrote2")
 		return 0
-	default:
+	case "write", "write-pause":
 		w, err := OpenRotatingWriter(context.Background(), RotatorOptions{BasePath: base, Config: cfg, PrivateFS: fs, WriteWait: 30 * time.Second})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "child Open: %v\n", err)
 			return 1
 		}
 		defer func() { _ = w.Close() }()
+		if mode == "write-pause" {
+			fmt.Println("opened")
+			sc := bufio.NewScanner(os.Stdin)
+			if !sc.Scan() {
+				fmt.Fprintf(os.Stderr, "child write-pause stdin: %v\n", sc.Err())
+				return 1
+			}
+		}
 		for i := 1; i <= count; i++ {
 			if err := writeRotatorRecord(w, writer, i); err != nil {
 				fmt.Fprintf(os.Stderr, "child write %d: %v\n", i, err)
@@ -269,6 +318,9 @@ func runRotatorChild() int {
 			}
 		}
 		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "unknown child mode %q\n", mode)
+		return 1
 	}
 }
 

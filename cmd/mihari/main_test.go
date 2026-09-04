@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -40,7 +41,7 @@ func TestOpenTUILogging_UsesInjectedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resources, err := openTUILogging(context.Background(), paths, "tui-control-token", fs)
+	resources, err := openTUILogging(context.Background(), paths, "tui-control-token", fs, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,9 +71,48 @@ func TestOpenTUILogging_UsesInjectedPaths(t *testing.T) {
 	}
 }
 
+func TestOpenTUILogging_RuntimeFailuresAreReported(t *testing.T) {
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var errorOutput bytes.Buffer
+	resources, err := openTUILogging(context.Background(), paths, "tui-control-token", fs, &errorOutput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resources.Close() })
+	held, err := platform.OpenAdvisoryLock(fs, paths.TUILog+".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = held.Close() })
+	if err := held.Lock(context.Background(), platform.LockExclusive); err != nil {
+		t.Fatal(err)
+	}
+
+	for range 2 {
+		resources.Runtime.Logger().Info("runtime write failed",
+			slog.String("token", "tui-control-token"),
+			slog.String("path", paths.TUILog),
+		)
+	}
+	if err := held.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	warnings := errorOutput.String()
+	if got, want := warnings, "logging: dropped: lock wait exceeded\n"; got != want {
+		t.Fatalf("runtime warnings=%q want=%q", got, want)
+	}
+	if strings.Contains(warnings, "tui-control-token") || strings.Contains(warnings, paths.Root) || strings.Contains(warnings, paths.TUILog) {
+		t.Fatalf("runtime warning leaked secret or path: %q", warnings)
+	}
+}
+
 func TestOpenTUILogging_NilPrivateFSDoesNotCreateRoot(t *testing.T) {
 	paths := absoluteTempPaths(t)
-	resources, err := openTUILogging(context.Background(), paths, "tui-control-token", nil)
+	resources, err := openTUILogging(context.Background(), paths, "tui-control-token", nil, io.Discard)
 	if err == nil {
 		t.Fatal("nil PrivateFS did not report bootstrap failure")
 	}
@@ -95,7 +135,7 @@ func TestOpenTUILogging_CanceledContextRetainsPartialResources(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	resources, err := openTUILogging(ctx, paths, "tui-control-token", fs)
+	resources, err := openTUILogging(ctx, paths, "tui-control-token", fs, io.Discard)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v want context cancellation", err)
 	}
@@ -116,7 +156,7 @@ func TestOpenTUILogging_EnsureDirFailureRetainsPartialResources(t *testing.T) {
 	if err := fs.Close(); err != nil {
 		t.Fatal(err)
 	}
-	resources, err := openTUILogging(context.Background(), paths, "tui-control-token", fs)
+	resources, err := openTUILogging(context.Background(), paths, "tui-control-token", fs, io.Discard)
 	if err == nil {
 		t.Fatal("closed PrivateFS did not report EnsureDir failure")
 	}
@@ -471,7 +511,7 @@ func TestPrepareLocalRoot_RelativeDataRoot(t *testing.T) {
 	if root.Paths.DaemonLog != filepath.Join(wantRoot, "logs", "mihari-daemon.log") {
 		t.Fatalf("daemon log=%q", root.Paths.DaemonLog)
 	}
-	resources, err := openTUILogging(context.Background(), root.Paths, root.Token, root.FS)
+	resources, err := openTUILogging(context.Background(), root.Paths, root.Token, root.FS, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -603,7 +643,7 @@ func TestPrepareLocalRoot_ExplicitOutOfRootCredentialCreatesTUILog(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resources, err := openTUILogging(context.Background(), root.Paths, root.Token, root.FS)
+	resources, err := openTUILogging(context.Background(), root.Paths, root.Token, root.FS, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}

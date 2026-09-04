@@ -168,7 +168,7 @@ func main() {
 				Output:      os.Stdout,
 				ErrorOutput: os.Stderr,
 				OpenLogging: func(ctx context.Context) (tui.LoggingResources, error) {
-					return openTUILogging(ctx, root.Paths, root.Token, root.FS)
+					return openTUILogging(ctx, root.Paths, root.Token, root.FS, os.Stderr)
 				},
 			})
 		},
@@ -179,7 +179,7 @@ func main() {
 	os.Exit(code)
 }
 
-func openTUILogging(ctx context.Context, paths platform.Paths, token string, fs *platform.PrivateFS) (tui.LoggingResources, error) {
+func openTUILogging(ctx context.Context, paths platform.Paths, token string, fs *platform.PrivateFS, errorOutput io.Writer) (tui.LoggingResources, error) {
 	redactor := logging.NewRedactor(token)
 	if fs == nil {
 		return tui.NewLoggingResources(nil, redactor, nil), errors.New("TUI logging private fs is unavailable")
@@ -193,6 +193,7 @@ func openTUILogging(ctx context.Context, paths platform.Paths, token string, fs 
 		Config:    logging.BootstrapConfig(),
 		PrivateFS: fs,
 		Redactor:  redactor,
+		Reporter:  logging.NewFailureReporter(errorOutput, redactor, nil),
 	})
 	if err != nil {
 		return tui.NewLoggingResources(nil, redactor, fs), err

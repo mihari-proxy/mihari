@@ -3,6 +3,7 @@ package logging
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -338,6 +339,95 @@ func TestRotatingWriter_OpenCancelClosesResources(t *testing.T) {
 	}
 }
 
+func TestRotatingWriter_OpenBackgroundContextHasHardLockCap(t *testing.T) {
+	fs, paths := openTestLogFS(t)
+	held, err := platform.OpenAdvisoryLock(fs, paths.TUILog+".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = held.Close() })
+	if err := held.Lock(context.Background(), platform.LockExclusive); err != nil {
+		t.Fatal(err)
+	}
+
+	type openResult struct {
+		writer  *RotatingWriter
+		err     error
+		elapsed time.Duration
+	}
+	result := make(chan openResult, 1)
+	started := time.Now()
+	go func() {
+		writer, openErr := OpenRotatingWriter(context.Background(), RotatorOptions{
+			BasePath:  paths.TUILog,
+			Config:    Config{Level: slog.LevelInfo, MaxSizeBytes: 1024, MaxFiles: 3},
+			PrivateFS: fs,
+			WriteWait: 5 * time.Second,
+		})
+		result <- openResult{writer: writer, err: openErr, elapsed: time.Since(started)}
+	}()
+
+	select {
+	case got := <-result:
+		if got.writer != nil {
+			_ = got.writer.Close()
+		}
+		if !errors.Is(got.err, context.DeadlineExceeded) {
+			t.Fatalf("Open error=%v, want deadline exceeded", got.err)
+		}
+		if got.elapsed < 150*time.Millisecond || got.elapsed > 1500*time.Millisecond {
+			t.Fatalf("Open elapsed=%v, want approximately the 250ms hard cap", got.elapsed)
+		}
+	case <-time.After(2 * time.Second):
+		if err := held.Unlock(); err != nil {
+			t.Fatal(err)
+		}
+		got := <-result
+		if got.writer != nil {
+			_ = got.writer.Close()
+		}
+		t.Fatalf("Open remained blocked past the 250ms hard cap; returned after %v with error %v", got.elapsed, got.err)
+	}
+}
+
+func TestRotatingWriter_OpenCancelsLockContextBeforeMaintenance(t *testing.T) {
+	fs, paths := openTestLogFS(t)
+	lock := &contextCaptureLock{}
+	lockContextCanceled := false
+	maintenanceStarted := false
+	t.Cleanup(func() { testAfterExclusiveLock = nil })
+	testAfterExclusiveLock = func() {
+		maintenanceStarted = true
+		select {
+		case <-lock.lockContext.Done():
+			lockContextCanceled = true
+		default:
+		}
+	}
+
+	w, err := OpenRotatingWriter(context.Background(), RotatorOptions{
+		BasePath:  paths.TUILog,
+		Config:    Config{Level: slog.LevelInfo, MaxSizeBytes: 1024, MaxFiles: 3},
+		PrivateFS: fs,
+		OpenLock: func(*platform.PrivateFS, string) (platform.AdvisoryLock, error) {
+			return lock, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	if !maintenanceStarted {
+		t.Fatal("Open did not start post-lock maintenance")
+	}
+	if !lockContextCanceled {
+		t.Fatal("Open kept the lock-acquisition context alive during local maintenance")
+	}
+	if _, err := os.Stat(paths.TUILog); err != nil {
+		t.Fatalf("post-lock maintenance did not create base log: %v", err)
+	}
+}
+
 func TestRotatingWriter_ApplySwapsConfigBeforeLockWait(t *testing.T) {
 	w, _, paths := openTestRotator(t, Config{Level: slog.LevelInfo, MaxSizeBytes: 1000, MaxFiles: 3})
 	rec := bytes.Repeat([]byte("a"), 40)
@@ -488,6 +578,18 @@ type closeSpyLock struct {
 	platform.AdvisoryLock
 	closed atomic.Bool
 }
+
+type contextCaptureLock struct {
+	lockContext context.Context
+}
+
+func (l *contextCaptureLock) Lock(ctx context.Context, _ platform.LockMode) error {
+	l.lockContext = ctx
+	return nil
+}
+
+func (*contextCaptureLock) Unlock() error { return nil }
+func (*contextCaptureLock) Close() error  { return nil }
 
 func (s *closeSpyLock) Close() error {
 	s.closed.Store(true)

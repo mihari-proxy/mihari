@@ -91,9 +91,13 @@ func (r *Redactor) String(value string) string {
 	return out
 }
 
-// ReplaceAttr recursively redacts slog attributes. Sensitive keys replace the whole value
-// with ***; strings, errors, and LogValuer results run through String.
+// ReplaceAttr recursively redacts slog attributes. Sensitive keys and sensitive
+// ancestor groups replace values with ***; strings, errors, and LogValuer
+// results run through String.
 func (r *Redactor) ReplaceAttr(groups []string, attr slog.Attr) slog.Attr {
+	if isSensitiveKey(attr.Key) || hasSensitiveGroup(groups) {
+		return slog.String(attr.Key, redactedExact)
+	}
 	attr.Value = attr.Value.Resolve()
 	switch attr.Value.Kind() {
 	case slog.KindGroup:
@@ -106,10 +110,6 @@ func (r *Redactor) ReplaceAttr(groups []string, attr slog.Attr) slog.Attr {
 		return slog.Attr{Key: attr.Key, Value: slog.GroupValue(redacted...)}
 	}
 
-	if isSensitiveKey(attr.Key) {
-		return slog.String(attr.Key, redactedExact)
-	}
-
 	switch attr.Value.Kind() {
 	case slog.KindString:
 		return slog.String(attr.Key, r.String(attr.Value.String()))
@@ -119,6 +119,15 @@ func (r *Redactor) ReplaceAttr(groups []string, attr slog.Attr) slog.Attr {
 		}
 	}
 	return attr
+}
+
+func hasSensitiveGroup(groups []string) bool {
+	for _, group := range groups {
+		if isSensitiveKey(group) {
+			return true
+		}
+	}
+	return false
 }
 
 func isSensitiveKey(key string) bool {

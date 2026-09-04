@@ -10,6 +10,18 @@ import (
 	"time"
 )
 
+type sensitiveGroupLogValuer struct {
+	value  string
+	nested string
+}
+
+func (v sensitiveGroupLogValuer) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("value", v.value),
+		slog.Group("detail", slog.String("note", v.nested)),
+	)
+}
+
 func TestJSONHandler_FormatAndComponent(t *testing.T) {
 	fixed := time.Date(2026, 9, 2, 23, 41, 8, 123456789, time.FixedZone("CST", 8*3600))
 	redactor := NewRedactor(testWebCredential)
@@ -84,5 +96,65 @@ func TestJSONHandler_LevelVarFilters(t *testing.T) {
 	}
 	if !handler.Enabled(context.Background(), slog.LevelError) {
 		t.Fatal("error must be enabled when level=warn")
+	}
+}
+
+func TestJSONHandler_SensitiveParentGroupsRedactEveryLeaf(t *testing.T) {
+	tests := []struct {
+		name   string
+		parent string
+		attr   slog.Attr
+	}{
+		{
+			name:   "group",
+			parent: "token",
+			attr: slog.Group("token",
+				slog.String("value", "hunter-two"),
+				slog.Group("detail", slog.String("note", "nested-hunter-two")),
+			),
+		},
+		{
+			name:   "group LogValuer",
+			parent: "credential",
+			attr: slog.Any("credential", sensitiveGroupLogValuer{
+				value:  "valuer-hunter-two",
+				nested: "valuer-nested-hunter-two",
+			}),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			level := &slog.LevelVar{}
+			level.Set(slog.LevelDebug)
+			handler := NewJSONHandler(&buf, level, "tui", NewRedactor())
+			record := slog.NewRecord(time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC), slog.LevelInfo, "group test", 0)
+			record.AddAttrs(test.attr)
+			if err := handler.Handle(context.Background(), record); err != nil {
+				t.Fatalf("Handle: %v", err)
+			}
+
+			encoded := buf.String()
+			assertNotContains(t, encoded, "hunter-two", "nested-hunter-two", "valuer-hunter-two", "valuer-nested-hunter-two")
+			var payload map[string]any
+			if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &payload); err != nil {
+				t.Fatalf("decode JSON: %v in %q", err, encoded)
+			}
+			group, ok := payload[test.parent].(map[string]any)
+			if !ok {
+				t.Fatalf("%s group = %#v, want JSON object", test.parent, payload[test.parent])
+			}
+			if got := group["value"]; got != "***" {
+				t.Fatalf("%s.value = %#v, want ***", test.parent, got)
+			}
+			detail, ok := group["detail"].(map[string]any)
+			if !ok {
+				t.Fatalf("%s.detail = %#v, want JSON object", test.parent, group["detail"])
+			}
+			if got := detail["note"]; got != "***" {
+				t.Fatalf("%s.detail.note = %#v, want ***", test.parent, got)
+			}
+		})
 	}
 }

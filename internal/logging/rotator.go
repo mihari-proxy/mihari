@@ -48,8 +48,8 @@ type RotatingWriter struct {
 }
 
 // OpenRotatingWriter creates the lock, converges archives, and creates the base file.
-// The caller context bounds only the initial lock wait. On failure, acquired
-// resources are closed.
+// The initial lock wait uses the earlier of the caller deadline and the hard
+// write-wait bound. On failure, acquired resources are closed.
 func OpenRotatingWriter(ctx context.Context, opts RotatorOptions) (*RotatingWriter, error) {
 	if opts.PrivateFS == nil {
 		return nil, fmt.Errorf("rotator private fs is required")
@@ -82,7 +82,10 @@ func OpenRotatingWriter(ctx context.Context, opts RotatorOptions) (*RotatingWrit
 	}
 	cfg := opts.Config
 	w.cfg.Store(&cfg)
-	if err := w.lock.Lock(ctx, platform.LockExclusive); err != nil {
+	lockCtx, cancelLock := context.WithTimeout(ctx, writeWaitBound)
+	err = w.lock.Lock(lockCtx, platform.LockExclusive)
+	cancelLock()
+	if err != nil {
 		_ = lock.Close()
 		w.lock = nil
 		return nil, err
