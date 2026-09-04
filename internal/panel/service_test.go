@@ -223,6 +223,133 @@ func TestServicePrepareUpdateDoesNotPromoteUntilCommit(t *testing.T) {
 	}
 }
 
+func TestServicePrepareInstallDoesNotPromoteUntilCommit(t *testing.T) {
+	paths, server, _, _ := panelFixture(t)
+	defer server.Close()
+	service, err := Open(ServiceOptions{
+		WebRoot: paths.WebRoot, WebActive: paths.WebActive, StagingDir: paths.PanelStaging,
+		HTTPClient: server.Client(), AllowHTTP: true,
+		Adapters: []Adapter{
+			fixtureAdapter{id: IDZashboard, name: "Zashboard", build: "v1.0.0", asset: server.URL + "/v1.zip"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prepared, err := service.PrepareInstall(context.Background(), IDZashboard, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Cleanup()
+	if !prepared.Valid() {
+		t.Fatal("prepared install candidate is not valid")
+	}
+	buildDir := filepath.Join(paths.WebRoot, IDZashboard, "v1.0.0")
+	if _, err := os.Stat(buildDir); !os.IsNotExist(err) {
+		t.Fatalf("prepared install promoted before commit: %v", err)
+	}
+	if err := prepared.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(buildDir, "index.html")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServicePreparedInstallNoOpsWhenSameBuildBecomesReadyBeforeCommit(t *testing.T) {
+	paths, server, _, _ := panelFixture(t)
+	defer server.Close()
+	service, err := Open(ServiceOptions{
+		WebRoot: paths.WebRoot, WebActive: paths.WebActive, StagingDir: paths.PanelStaging,
+		HTTPClient: server.Client(), AllowHTTP: true,
+		Adapters: []Adapter{
+			fixtureAdapter{id: IDZashboard, name: "Zashboard", build: "v1.0.0", asset: server.URL + "/v1.zip"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := service.PrepareInstall(context.Background(), IDZashboard, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate, err := service.PrepareInstall(context.Background(), IDZashboard, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := first.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(paths.WebRoot, IDZashboard, "v1.0.0", "local-marker")
+	if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := duplicate.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if content, err := os.ReadFile(marker); err != nil || string(content) != "keep" {
+		t.Fatalf("duplicate install replaced ready build: content=%q err=%v", content, err)
+	}
+	first.Cleanup()
+	duplicate.Cleanup()
+	entries, err := os.ReadDir(paths.PanelStaging)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("staging entries after duplicate install cleanup=%v", entries)
+	}
+}
+
+func TestServicePreparedUpdateNoOpsWhenSameBuildBecomesReadyBeforeCommit(t *testing.T) {
+	paths, server, _, _ := panelFixture(t)
+	t.Cleanup(server.Close)
+	service, err := Open(ServiceOptions{
+		WebRoot: paths.WebRoot, WebActive: paths.WebActive, StagingDir: paths.PanelStaging,
+		HTTPClient: server.Client(), AllowHTTP: true,
+		Adapters: []Adapter{
+			fixtureAdapter{id: IDZashboard, name: "Zashboard", build: "v2.0.0", asset: server.URL + "/v2.zip"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := service.PrepareUpdate(context.Background(), IDZashboard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate, err := service.PrepareUpdate(context.Background(), IDZashboard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(paths.WebRoot, IDZashboard, "v2.0.0", "local-marker")
+	if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := duplicate.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if content, err := os.ReadFile(marker); err != nil || string(content) != "keep" {
+		t.Fatalf("duplicate update replaced ready build: content=%q err=%v", content, err)
+	}
+	first.Cleanup()
+	duplicate.Cleanup()
+	entries, err := os.ReadDir(paths.PanelStaging)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("staging entries after duplicate update cleanup=%v", entries)
+	}
+}
+
 func TestServicePreparedUpdateCleanupRemovesStagingCandidate(t *testing.T) {
 	paths, server, _, _ := panelFixture(t)
 	defer server.Close()

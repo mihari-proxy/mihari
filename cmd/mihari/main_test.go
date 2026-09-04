@@ -376,6 +376,245 @@ func TestRunDaemon_LoggingOpensBeforeBuildRuntime(t *testing.T) {
 	}
 }
 
+func TestRunDaemon_EffectiveLoggingOnRestart(t *testing.T) {
+	resetDaemonRunSeamsForTest(t)
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, holder := occupiedControllerSettings(t, strings.Repeat("a", 64))
+	if err := holder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	settings.SetLogging(config.LoggingSettings{Level: "debug", MaxSizeMB: 20, MaxFiles: 5})
+	writeSettings(t, paths, settings)
+
+	var daemonLogger *slog.Logger
+	afterDaemonLoggingOpen = func(logger *slog.Logger) {
+		daemonLogger = logger
+		logger.Debug("custom logging is active")
+	}
+	t.Cleanup(func() { afterDaemonLoggingOpen = nil })
+	productionBuild := buildDaemonRuntime
+	var assembly *app.RuntimeAssembly
+	var loggingGroup *logging.Group
+	buildDaemonRuntime = func(paths platform.Paths, settings config.Settings, version string, stdout, stderr io.Writer, options app.RuntimeBuildOptions) (*app.RuntimeAssembly, error) {
+		loggingGroup, _ = options.Logging.(*logging.Group)
+		built, buildErr := productionBuild(paths, settings, version, stdout, stderr, options)
+		if buildErr == nil {
+			assembly = built
+		}
+		return built, buildErr
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ready := make(chan struct{})
+	endpoint := transporttest.Endpoint(t)
+	done := make(chan error, 1)
+	go func() {
+		done <- runDaemonWith(ctx, daemonRunDeps{
+			Paths: paths, PrivateFS: fs, Token: "control-token", Version: "test",
+			Endpoint: endpoint, Ready: ready,
+		})
+	}()
+	stopped := false
+	t.Cleanup(func() {
+		cancel()
+		if stopped {
+			return
+		}
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("runDaemonWith did not stop")
+		}
+	})
+	select {
+	case <-ready:
+	case runErr := <-done:
+		stopped = true
+		t.Fatalf("daemon stopped before Ready: %v", runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("daemon did not become ready")
+	}
+
+	want := logging.Config{Level: slog.LevelDebug, MaxSizeBytes: 20 << 20, MaxFiles: 5}
+	if loggingGroup == nil || loggingGroup.Config() != want || loggingGroup.Dir() != paths.LogDir {
+		t.Fatalf("logging group=%#v", loggingGroup)
+	}
+	if assembly == nil || assembly.Manager == nil {
+		t.Fatal("daemon assembly did not remain available after Ready")
+	}
+	status, err := assembly.Manager.LoggingStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Level != "debug" || status.MaxSizeMB != 20 || status.MaxFiles != 5 || status.Dir != paths.LogDir {
+		t.Fatalf("live logging status=%#v", status)
+	}
+	if daemonLogger == nil {
+		t.Fatal("daemon logger did not remain available after Ready")
+	}
+	lines := strings.Split(strings.TrimSpace(readFileString(t, paths.DaemonLog)), "\n")
+	if len(lines) == 0 || !strings.Contains(lines[0], `"level":"DEBUG"`) || !strings.Contains(lines[0], `"msg":"custom logging is active"`) {
+		t.Fatalf("first daemon JSONL record=%q", lines)
+	}
+	cancel()
+	select {
+	case runErr := <-done:
+		stopped = true
+		if runErr != nil {
+			t.Fatal(runErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runDaemonWith did not stop after cancellation")
+	}
+}
+
+func TestRunDaemon_BootstrapSettingsWarning(t *testing.T) {
+	for _, created := range []bool{true, false} {
+		t.Run(map[bool]string{true: "first create", false: "existing settings"}[created], func(t *testing.T) {
+			resetDaemonRunSeamsForTest(t)
+			paths := absoluteTempPaths(t)
+			fs, err := platform.NewPrivateFS(paths.Root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			settings, holder := occupiedControllerSettings(t, strings.Repeat("b", 64))
+			if err := holder.Close(); err != nil {
+				t.Fatal(err)
+			}
+			settings.SetLogging(config.LoggingSettings{Level: "debug", MaxSizeMB: 20, MaxFiles: 5})
+
+			deps := daemonRunDeps{
+				Paths: paths, PrivateFS: fs, Token: "bootstrap-control-token", Version: "test",
+				LoadSettings: func(string, string) (config.Settings, bool, config.CommitResult, error) {
+					return settings, created, config.CommitResult{
+						Committed: true,
+						Warning:   errors.New(`sync C:\sensitive\mihari.yaml parent`),
+					}, nil
+				},
+			}
+
+			productionBuild := buildDaemonRuntime
+			var initial protocol.LoggingStatus
+			buildDaemonRuntime = func(paths platform.Paths, settings config.Settings, version string, stdout, stderr io.Writer, options app.RuntimeBuildOptions) (*app.RuntimeAssembly, error) {
+				assembly, buildErr := productionBuild(paths, settings, version, stdout, stderr, options)
+				if buildErr != nil {
+					return nil, buildErr
+				}
+				initial, buildErr = assembly.Manager.LoggingStatus(context.Background())
+				return assembly, buildErr
+			}
+			var runCalled bool
+			runDaemon = func(context.Context, daemon.Options) error {
+				runCalled = true
+				return nil
+			}
+
+			if err := runDaemonWith(context.Background(), deps); err != nil {
+				t.Fatal(err)
+			}
+			if !runCalled {
+				t.Fatal("post-commit bootstrap warning stopped daemon startup")
+			}
+			if initial.Level != "debug" || initial.MaxSizeMB != 20 || initial.MaxFiles != 5 {
+				t.Fatalf("Manager initial logging status=%#v", initial)
+			}
+			logged := readFileString(t, paths.DaemonLog)
+			if !strings.Contains(logged, `"component":"settings"`) || !strings.Contains(logged, "parent directory sync failed after commit") {
+				t.Fatalf("bootstrap warning was not logged with stable fields: %s", logged)
+			}
+			if strings.Contains(logged, "sensitive") || strings.Contains(logged, paths.Settings) {
+				t.Fatalf("bootstrap warning leaked underlying path: %s", logged)
+			}
+		})
+	}
+}
+
+func TestRunDaemon_BootstrapSettingsPreCommitFailureStopsBeforeLogging(t *testing.T) {
+	resetDaemonRunSeamsForTest(t)
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sensitiveToken := "subscription-token-that-must-not-leak"
+	preCommit := errors.New("replace " + paths.Settings + " using token=" + sensitiveToken)
+	var openCalls, buildCalls, runCalls int
+	openDaemonRuntime = func(context.Context, logging.RuntimeOptions) (daemonLoggingRuntime, error) {
+		openCalls++
+		return daemonLoggingRuntime{}, nil
+	}
+	buildDaemonRuntime = func(platform.Paths, config.Settings, string, io.Writer, io.Writer, app.RuntimeBuildOptions) (*app.RuntimeAssembly, error) {
+		buildCalls++
+		return &app.RuntimeAssembly{}, nil
+	}
+	runDaemon = func(context.Context, daemon.Options) error {
+		runCalls++
+		return nil
+	}
+	err = runDaemonWith(context.Background(), daemonRunDeps{
+		Paths: paths, PrivateFS: fs, Token: "control-token", Version: "test",
+		LoadSettings: func(string, string) (config.Settings, bool, config.CommitResult, error) {
+			return config.Settings{}, false, config.CommitResult{}, preCommit
+		},
+	})
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) {
+		t.Fatalf("err type=%T want protocol.APIError", err)
+	}
+	if apiError.Code != protocol.CodeDataFailure || apiError.Message != "load settings" {
+		t.Fatalf("API error=%#v", apiError)
+	}
+	for _, sensitive := range []string{paths.Root, paths.Settings, sensitiveToken} {
+		if strings.Contains(err.Error(), sensitive) || strings.Contains(apiError.Message, sensitive) {
+			t.Fatalf("service-visible error leaked %q: err=%q message=%q", sensitive, err, apiError.Message)
+		}
+	}
+	if openCalls != 0 || buildCalls != 0 || runCalls != 0 {
+		t.Fatalf("open=%d build=%d run=%d", openCalls, buildCalls, runCalls)
+	}
+}
+
+func TestRunDaemon_RefreshSecretsKeepsBaseSecrets(t *testing.T) {
+	resetDaemonRunSeamsForTest(t)
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlToken := "base-control-credential-value"
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("c", 64)
+	writeSettings(t, paths, settings)
+	newURL := "https://provider.example/sub?credential=new-secret"
+	var daemonLogger *slog.Logger
+	afterDaemonLoggingOpen = func(logger *slog.Logger) { daemonLogger = logger }
+	t.Cleanup(func() { afterDaemonLoggingOpen = nil })
+	buildDaemonRuntime = func(_ platform.Paths, _ config.Settings, _ string, _, _ io.Writer, options app.RuntimeBuildOptions) (*app.RuntimeAssembly, error) {
+		if options.RefreshLogSecrets == nil {
+			t.Fatal("daemon assembly did not receive secret refresh callback")
+		}
+		options.RefreshLogSecrets([]string{newURL})
+		daemonLogger.Info("base " + controlToken + " catalog " + newURL)
+		return &app.RuntimeAssembly{}, nil
+	}
+	runDaemon = func(context.Context, daemon.Options) error { return nil }
+
+	if err := runDaemonWith(context.Background(), daemonRunDeps{Paths: paths, PrivateFS: fs, Token: controlToken, Version: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	logged := readFileString(t, paths.DaemonLog)
+	if strings.Contains(logged, controlToken) || strings.Contains(logged, newURL) {
+		t.Fatalf("refreshed exact snapshot leaked a base secret or catalog URL: %s", logged)
+	}
+	if !strings.Contains(logged, "base *** catalog ***") {
+		t.Fatalf("refreshed redaction output=%s", logged)
+	}
+}
+
 func TestRunDaemon_CatalogLoadFailureStillOpensLogger(t *testing.T) {
 	paths := absoluteTempPaths(t)
 	fs, err := platform.NewPrivateFS(paths.Root)
@@ -441,7 +680,8 @@ func TestCollectLogSecretsReadsExistingBusinessSecrets(t *testing.T) {
 	}
 	writeCatalog(t, paths, catalogURL)
 
-	got := collectLogSecrets(paths, "control-token", settings)
+	baseSecrets := collectBaseLogSecrets(paths, "control-token", settings)
+	got := append(append([]string{}, baseSecrets...), collectCatalogLogSecrets(paths)...)
 	want := []string{"control-token", "controller-secret", webCredential, catalogURL}
 	if !slices.Equal(got, want) {
 		t.Fatalf("secrets=%q want=%q", got, want)

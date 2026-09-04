@@ -291,10 +291,10 @@ func TestLoggingResourcesCopiesShareCloseState(t *testing.T) {
 	}
 }
 
-func TestModelSetLoggingHealthKeepsFactoryHealth(t *testing.T) {
+func TestModelSetLocalLoggingHealthKeepsFactoryHealth(t *testing.T) {
 	health := testLoggingHealth{available: true}
 	model := NewModel()
-	model.SetLoggingHealth(health)
+	model.SetLocalLoggingHealth(health)
 	if model.loggingHealth == nil || !model.loggingHealth.Available() {
 		t.Fatal("model did not retain logging health")
 	}
@@ -346,13 +346,18 @@ func TestFinishRunClosesLifecycleExactlyOnceInEveryExitPath(t *testing.T) {
 			runtime := &orderedCloser{name: "runtime", order: &order}
 			fs := &orderedCloser{name: "fs", order: &order}
 			cleanup := func(tea.Model) error {
-				return closeTUILifecycle(func() { order = append(order, "session") }, runtime, fs)
+				return closeTUILifecycle(
+					func() { order = append(order, "session") },
+					func() { order = append(order, "applier") },
+					runtime,
+					fs,
+				)
 			}
 			relaunches := 0
 			err := finishRun(test.final, test.runErr, io.Discard, func() error {
 				relaunches++
 				order = append(order, "relaunch")
-				if !slices.Equal(order, []string{"session", "runtime", "fs", "relaunch"}) {
+				if !slices.Equal(order, []string{"session", "applier", "runtime", "fs", "relaunch"}) {
 					t.Fatalf("relaunch order=%q", order)
 				}
 				return nil
@@ -360,7 +365,7 @@ func TestFinishRunClosesLifecycleExactlyOnceInEveryExitPath(t *testing.T) {
 			if !errors.Is(err, test.wantCloseErr) || relaunches != test.wantRelaunches {
 				t.Fatalf("err=%v relaunches=%d", err, relaunches)
 			}
-			if want := []string{"session", "runtime", "fs"}; !slices.Equal(order[:3], want) {
+			if want := []string{"session", "applier", "runtime", "fs"}; !slices.Equal(order[:4], want) {
 				t.Fatalf("close order=%q want=%q", order, want)
 			}
 			if runtime.calls != 1 || fs.calls != 1 {
@@ -370,13 +375,56 @@ func TestFinishRunClosesLifecycleExactlyOnceInEveryExitPath(t *testing.T) {
 	}
 }
 
+func TestCloseTUILifecycleWaitsForLoggingWorkerBeforeResources(t *testing.T) {
+	local := &cancelAwareLocalLogging{started: make(chan struct{}), done: make(chan struct{})}
+	applier := newLoggingApplier(context.Background(), local)
+	if !applier.Submit(logging.BootstrapConfig()) {
+		t.Fatal("Submit rejected")
+	}
+	select {
+	case <-local.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Apply did not start")
+	}
+	var order []string
+	runtime := &workerAwareCloser{name: "runtime", workerDone: local.done, order: &order, t: t}
+	fs := &workerAwareCloser{name: "fs", workerDone: local.done, order: &order, t: t}
+	err := closeTUILifecycle(
+		func() { order = append(order, "session") },
+		applier.CloseAndWait,
+		runtime,
+		fs,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"session", "runtime", "fs"}; !slices.Equal(order, want) {
+		t.Fatalf("order=%q want=%q", order, want)
+	}
+}
+
 func TestNewRunModelInjectsHealthAfterClientModelReplacement(t *testing.T) {
 	health := testLoggingHealth{available: true}
+	applier := &recordingLoggingApplier{}
 	client := controlclient.New("unused", "")
-	model := newRunModel(context.Background(), client, nil, health)
+	model := newRunModel(context.Background(), client, nil, health, applier)
 	if model.loggingHealth == nil || !model.loggingHealth.Available() {
 		t.Fatal("final client model lost logging health")
 	}
+	if model.loggingApply != applier {
+		t.Fatal("final client model lost logging applier")
+	}
+	if got := applier.last(); got != logging.BootstrapConfig() {
+		t.Fatalf("initial local config=%+v want bootstrap", got)
+	}
+}
+
+func TestNewRunLoggingApplierHandlesTypedNilRuntime(t *testing.T) {
+	applier := newRunLoggingApplier(context.Background(), nil)
+	if !applier.Submit(logging.BootstrapConfig()) {
+		t.Fatal("typed-nil runtime applier rejected Submit")
+	}
+	applier.CloseAndWait()
 }
 
 func requestedRelaunchModel() Model {
@@ -389,6 +437,35 @@ type orderedCloser struct {
 	name  string
 	order *[]string
 	calls int
+}
+
+type cancelAwareLocalLogging struct {
+	started chan struct{}
+	done    chan struct{}
+}
+
+func (l *cancelAwareLocalLogging) Apply(ctx context.Context, _ logging.Config) {
+	close(l.started)
+	<-ctx.Done()
+	close(l.done)
+}
+
+type workerAwareCloser struct {
+	name       string
+	workerDone <-chan struct{}
+	order      *[]string
+	t          *testing.T
+}
+
+func (c *workerAwareCloser) Close() error {
+	c.t.Helper()
+	select {
+	case <-c.workerDone:
+	default:
+		c.t.Fatal("resource closed before logging worker exited")
+	}
+	*c.order = append(*c.order, c.name)
+	return nil
 }
 
 type countingCloser struct{ calls int }

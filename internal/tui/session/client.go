@@ -8,6 +8,7 @@ import (
 
 type Client interface {
 	Status(context.Context) (protocol.Status, error)
+	Logging(context.Context) (protocol.LoggingStatus, error)
 	Core(context.Context) (protocol.CoreStatus, error)
 	Subscriptions(context.Context) (protocol.SubscriptionList, error)
 	ProxyGroups(context.Context) (protocol.ProxyGroups, error)

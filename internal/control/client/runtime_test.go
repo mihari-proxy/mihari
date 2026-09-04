@@ -90,6 +90,22 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 				_, err := client.UpdateGeoIP(ctx, protocol.MutationRequest{OperationID: "geoip-1", IfRevision: &revision})
 				return err
 			}},
+		{"logging", http.MethodGet, "/v1/logging", "", `{"schema":"mihari/v1","revision":7,"level":"debug","max_size_mb":20,"max_files":5,"dir":"C:/logs"}`,
+			func(ctx context.Context, client *Client) error {
+				_, err := client.Logging(ctx)
+				return err
+			}},
+		{"update logging", http.MethodPatch, "/v1/logging", `{"operation_id":"logging-1","if_revision":7,"level":"debug","max_size_mb":20,"max_files":5}`, `{"schema":"mihari/v1","revision":8,"level":"debug","max_size_mb":20,"max_files":5,"dir":"C:/logs"}`,
+			func(ctx context.Context, client *Client) error {
+				revision := uint64(7)
+				level := "debug"
+				maxSizeMB := int64(20)
+				maxFiles := int64(5)
+				_, err := client.UpdateLogging(ctx, protocol.LoggingUpdateRequest{
+					OperationID: "logging-1", IfRevision: &revision, Level: &level, MaxSizeMB: &maxSizeMB, MaxFiles: &maxFiles,
+				})
+				return err
+			}},
 		{"system proxy", http.MethodGet, "/v1/system-proxy", "", `{"schema":"mihari/v1","revision":5,"desired":true,"target":"127.0.0.1:9190","observed":{"enabled":true,"server":"127.0.0.1:9190","owned":true,"foreign":false}}`,
 			func(ctx context.Context, client *Client) error { _, err := client.SystemProxy(ctx); return err }},
 		{"system proxy enable", http.MethodPost, "/v1/system-proxy/enable", `{"operation_id":"sysproxy-1","if_revision":5,"force":true}`, `{"schema":"mihari/v1","revision":6,"desired":true,"target":"127.0.0.1:9190","observed":{"enabled":true,"server":"127.0.0.1:9190","owned":true,"foreign":false}}`,

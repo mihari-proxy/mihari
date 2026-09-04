@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/service"
 	connectionspage "github.com/mihari-proxy/mihari/internal/tui/pages/connections"
 	rulespage "github.com/mihari-proxy/mihari/internal/tui/pages/rules"
@@ -764,6 +765,7 @@ func TestNetworkStatusMsgSyncsSystemPageProxyAndTun(t *testing.T) {
 		Capabilities: []string{protocol.CapabilitySystemProxy, protocol.CapabilityTUN},
 	}})
 	system := model.pages[ui.PageSystem].(*systempage.Model)
+	system.SetSize(80, 80)
 	if view := system.View(); !strings.Contains(view, ui.LoadingLabel) {
 		t.Fatalf("expected Loading before networkStatusMsg, view=%s", view)
 	}
@@ -930,4 +932,296 @@ func TestApplySessionEvent_RecordsLastObservedAt(t *testing.T) {
 	if !model.lastObservedAt.Equal(before) {
 		t.Fatalf("reconnecting must not change lastObservedAt: %v", model.lastObservedAt)
 	}
+}
+
+func TestModel_LoggingAcceptsFirstEpochAndRevisionZero(t *testing.T) {
+	model := NewModel()
+	applier := &recordingLoggingApplier{}
+	model.SetLoggingApplier(applier)
+	model.SetLocalLoggingHealth(testLoggingHealth{available: false})
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 0, Capabilities: []string{protocol.CapabilityLogging},
+	}})
+	status := protocol.LoggingStatus{Schema: "mihari/v1", Revision: 0, Level: "warn", MaxSizeMB: 9, MaxFiles: 4, Dir: `C:\logs`}
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: status})
+
+	if model.loggingEpoch != 1 || !model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 0 {
+		t.Fatalf("epoch=%d loaded=%v revision=%v", model.loggingEpoch, model.loggingLoaded, model.loggingRevision)
+	}
+	want := loggingConfigForTest(t, "warn", 9, 4)
+	if got := applier.last(); got != want {
+		t.Fatalf("applied=%+v want %+v", got, want)
+	}
+}
+
+func TestModel_LoggingRevisionChangeUsesBootstrapWithoutAdvancingEpoch(t *testing.T) {
+	model := NewModel()
+	applier := &recordingLoggingApplier{}
+	model.SetLoggingApplier(applier)
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 10, Capabilities: []string{protocol.CapabilityLogging},
+	}})
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: protocol.LoggingStatus{
+		Revision: 10, Level: "info", MaxSizeMB: 10, MaxFiles: 3,
+	}})
+	applier.reset()
+
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 11, Capabilities: []string{protocol.CapabilityLogging},
+	}})
+	if model.loggingEpoch != 1 || model.loggingLoaded {
+		t.Fatalf("epoch=%d loaded=%v", model.loggingEpoch, model.loggingLoaded)
+	}
+	if got := applier.last(); got != logging.BootstrapConfig() {
+		t.Fatalf("revision reset applied=%+v want bootstrap", got)
+	}
+	if model.loggingRevision == nil || *model.loggingRevision != 11 {
+		t.Fatalf("revision floor=%v want 11", model.loggingRevision)
+	}
+}
+
+func TestModel_LoggingRevisionResetRejectsOldEventAndPageObservationUntilFloor(t *testing.T) {
+	model := NewModel()
+	applier := &recordingLoggingApplier{}
+	page := &loggingResultRecordingPage{}
+	model.pages[ui.PageSystem] = page
+	model.SetLoggingApplier(applier)
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: protocol.LoggingStatus{
+		Revision: 10, Level: "info", MaxSizeMB: 10, MaxFiles: 3,
+	}})
+
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 11, Capabilities: []string{protocol.CapabilityLogging},
+	}})
+	if model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 11 {
+		t.Fatalf("reset state loaded=%v floor=%v want unloaded floor 11", model.loggingLoaded, model.loggingRevision)
+	}
+	applyCount, syncCount := applier.count(), page.synced
+
+	stale := protocol.LoggingStatus{Revision: 10, Level: "error", MaxSizeMB: 40, MaxFiles: 8}
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: stale})
+	updated, _ := model.Update(ui.PageResultMsg{
+		Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: 1, Status: stale},
+	})
+	model = updated.(Model)
+	if page.received != 1 {
+		t.Fatalf("stale page results routed=%d want 1", page.received)
+	}
+	if model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 11 {
+		t.Fatalf("stale observation changed root: loaded=%v floor=%v", model.loggingLoaded, model.loggingRevision)
+	}
+	if applier.count() != applyCount || page.synced != syncCount {
+		t.Fatalf("stale observation changed consumers: applies=%d want %d syncs=%d want %d", applier.count(), applyCount, page.synced, syncCount)
+	}
+
+	current := protocol.LoggingStatus{Revision: 11, Level: "warn", MaxSizeMB: 20, MaxFiles: 5}
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: current})
+	if !model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 11 || model.loggingStatus != current {
+		t.Fatalf("current observation not accepted: loaded=%v revision=%v status=%+v", model.loggingLoaded, model.loggingRevision, model.loggingStatus)
+	}
+	if applier.count() != applyCount+1 || page.synced != syncCount+1 {
+		t.Fatalf("current observation consumer updates: applies=%d syncs=%d", applier.count(), page.synced)
+	}
+}
+
+func TestModel_LoggingStaleObservationsStillRouteWithoutChangingRoot(t *testing.T) {
+	model := NewModel()
+	applier := &recordingLoggingApplier{}
+	model.SetLoggingApplier(applier)
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: protocol.LoggingStatus{
+		Revision: 10, Level: "info", MaxSizeMB: 10, MaxFiles: 3,
+	}})
+	model.applySessionEvent(session.Event{Kind: session.EventReconnecting, Epoch: 2})
+	current := protocol.LoggingStatus{Revision: 12, Level: "error", MaxSizeMB: 30, MaxFiles: 7}
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 2, Logging: current})
+
+	page := &loggingResultRecordingPage{}
+	model.pages[ui.PageSystem] = page
+	before := applier.count()
+	for _, stale := range []ui.LoggingObservedMsg{
+		{Epoch: 1, Status: protocol.LoggingStatus{Revision: 13, Level: "debug", MaxSizeMB: 100, MaxFiles: 10}},
+		{Epoch: 2, Status: protocol.LoggingStatus{Revision: 11, Level: "warn", MaxSizeMB: 5, MaxFiles: 2}},
+	} {
+		updated, _ := model.Update(ui.PageResultMsg{Page: ui.PageSystem, Result: stale})
+		model = updated.(Model)
+	}
+	if page.received != 2 {
+		t.Fatalf("stale page results routed=%d want 2", page.received)
+	}
+	if model.loggingEpoch != 2 || !model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 12 {
+		t.Fatalf("root changed to stale observation: epoch=%d loaded=%v revision=%v", model.loggingEpoch, model.loggingLoaded, model.loggingRevision)
+	}
+	if got := applier.count(); got != before {
+		t.Fatalf("stale observations submitted %d configs", got-before)
+	}
+}
+
+func TestModel_LoggingCapabilityLossFollowsSessionEpochAndResets(t *testing.T) {
+	model := NewModel()
+	applier := &recordingLoggingApplier{}
+	model.SetLoggingApplier(applier)
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 4, Capabilities: []string{protocol.CapabilityLogging},
+	}})
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: protocol.LoggingStatus{
+		Revision: 4, Level: "warn", MaxSizeMB: 12, MaxFiles: 6,
+	}})
+	applier.reset()
+
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 2, Status: protocol.Status{Revision: 4}})
+	if model.loggingEpoch != 2 || model.loggingLoaded || model.loggingRevision != nil {
+		t.Fatalf("epoch=%d loaded=%v revision=%v", model.loggingEpoch, model.loggingLoaded, model.loggingRevision)
+	}
+	if got := applier.last(); got != logging.BootstrapConfig() {
+		t.Fatalf("capability loss applied=%+v want bootstrap", got)
+	}
+	if got := applier.count(); got != 1 {
+		t.Fatalf("capability loss submitted bootstrap %d times", got)
+	}
+}
+
+func TestModel_LoggingObservationSendsSynchronizedStateToSystem(t *testing.T) {
+	model := NewModel()
+	page := &loggingResultRecordingPage{}
+	model.pages[ui.PageSystem] = page
+	status := protocol.LoggingStatus{Revision: 0, Level: "debug", MaxSizeMB: 100, MaxFiles: 10}
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: status})
+	if page.synced != 1 || page.lastSync.Epoch != 1 || !page.lastSync.Available || page.lastSync.Status != status {
+		t.Fatalf("sync count=%d message=%+v", page.synced, page.lastSync)
+	}
+	model.SetLocalLoggingHealth(testLoggingHealth{available: true})
+	if page.synced != 2 || !page.lastSync.Available || page.lastSync.Status != status {
+		t.Fatalf("health refresh lost synchronized status: count=%d message=%+v", page.synced, page.lastSync)
+	}
+}
+
+func TestModel_LoggingPageObservationAdvancesGlobalRevision(t *testing.T) {
+	model := NewModel()
+	page := &loggingResultRecordingPage{}
+	model.pages[ui.PageSystem] = page
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 5, Capabilities: []string{protocol.CapabilityLogging},
+	}})
+	before := protocol.LoggingStatus{Revision: 5, Level: "info", MaxSizeMB: 10, MaxFiles: 3, Dir: `C:\logs`}
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: before})
+	page.synced = 0
+
+	after := before
+	after.Revision = 6
+	updated, _ := model.Update(ui.PageResultMsg{
+		Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: 1, Status: after},
+	})
+	model = updated.(Model)
+	if model.status.Revision != 6 || model.loggingRevision == nil || *model.loggingRevision != 6 {
+		t.Fatalf("global=%d logging=%v", model.status.Revision, model.loggingRevision)
+	}
+	if page.synced != 1 || page.lastSync.Status != after {
+		t.Fatalf("syncs=%d last=%+v", page.synced, page.lastSync)
+	}
+}
+
+func TestModel_StatusDoesNotRegressWithinEpochButAcceptsNewEpoch(t *testing.T) {
+	model := NewModel()
+	applier := &recordingLoggingApplier{}
+	model.SetLoggingApplier(applier)
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 5, DaemonVersion: "current", Health: "ok", Capabilities: []string{protocol.CapabilityLogging},
+	}})
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: protocol.LoggingStatus{
+		Revision: 5, Level: "info", MaxSizeMB: 10, MaxFiles: 3,
+	}})
+	updated, _ := model.Update(ui.PageResultMsg{
+		Page: ui.PageSystem,
+		Result: ui.LoggingObservedMsg{Epoch: 1, Status: protocol.LoggingStatus{
+			Revision: 6, Level: "warn", MaxSizeMB: 20, MaxFiles: 5,
+		}},
+	})
+	model = updated.(Model)
+	applyCount := applier.count()
+
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 5, DaemonVersion: "stale", Health: "degraded", LastError: "stale status",
+		SetupRequired: true,
+	}})
+	if model.status.Revision != 6 || model.status.DaemonVersion != "current" || model.status.Health != "ok" || model.status.SetupRequired {
+		t.Fatalf("same-epoch stale status replaced current state: %+v", model.status)
+	}
+	if !model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 6 || model.loggingStatus.Level != "warn" {
+		t.Fatalf("same-epoch stale status reset logging state: loaded=%v revision=%v status=%+v", model.loggingLoaded, model.loggingRevision, model.loggingStatus)
+	}
+	if applier.count() != applyCount {
+		t.Fatalf("same-epoch stale status applied %d logging configs", applier.count()-applyCount)
+	}
+
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 2, Status: protocol.Status{
+		Revision: 1, DaemonVersion: "restarted", Health: "ok",
+	}})
+	if model.status.Revision != 1 || model.status.DaemonVersion != "restarted" {
+		t.Fatalf("new-epoch status was not accepted: %+v", model.status)
+	}
+	if model.loggingEpoch != 2 || model.loggingLoaded || model.loggingRevision != nil {
+		t.Fatalf("new epoch did not reset logging state: epoch=%d loaded=%v revision=%v", model.loggingEpoch, model.loggingLoaded, model.loggingRevision)
+	}
+}
+
+func TestModel_LoggingUnavailableSyncLeavesRootTextInputMode(t *testing.T) {
+	model := NewModel()
+	page := &loggingResultRecordingPage{helpMode: ui.ModeLoggingEdit}
+	model.pages[ui.PageSystem] = page
+	model.active = ui.PageSystem
+	model.inputMode = ui.InputText
+
+	model.syncSystemLoggingStatus(protocol.LoggingStatus{}, false)
+	if model.inputMode != ui.InputNavigation {
+		t.Fatalf("input mode=%v want navigation", model.inputMode)
+	}
+}
+
+type recordingLoggingApplier struct {
+	configs []logging.Config
+	closed  bool
+}
+
+func (a *recordingLoggingApplier) Submit(cfg logging.Config) bool {
+	if a.closed {
+		return false
+	}
+	a.configs = append(a.configs, cfg)
+	return true
+}
+
+func (a *recordingLoggingApplier) CloseAndWait() { a.closed = true }
+
+func (a *recordingLoggingApplier) last() logging.Config {
+	if len(a.configs) == 0 {
+		return logging.Config{}
+	}
+	return a.configs[len(a.configs)-1]
+}
+
+func (a *recordingLoggingApplier) count() int { return len(a.configs) }
+
+func (a *recordingLoggingApplier) reset() { a.configs = nil }
+
+type loggingResultRecordingPage struct {
+	received int
+	synced   int
+	lastSync ui.LoggingSyncMsg
+	helpMode string
+}
+
+func (p *loggingResultRecordingPage) ID() ui.PageID    { return ui.PageSystem }
+func (p *loggingResultRecordingPage) SetSize(int, int) {}
+func (p *loggingResultRecordingPage) FocusFirst()      {}
+func (p *loggingResultRecordingPage) View() string     { return "" }
+func (p *loggingResultRecordingPage) HelpMode() string { return p.helpMode }
+func (p *loggingResultRecordingPage) Update(message tea.Msg) (ui.Page, tea.Cmd) {
+	switch typed := message.(type) {
+	case ui.LoggingObservedMsg:
+		p.received++
+	case ui.LoggingSyncMsg:
+		p.synced++
+		p.lastSync = typed
+	}
+	return p, nil
 }

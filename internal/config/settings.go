@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -18,16 +19,142 @@ import (
 
 const maxSettingsSize = 1 << 20
 
+const (
+	// DefaultLogLevel is the persisted logging level used without an override.
+	DefaultLogLevel = "info"
+	// DefaultLogMaxSizeMB is the active log rotation limit in MiB used without an override.
+	DefaultLogMaxSizeMB int64 = 10
+	// DefaultLogMaxFiles is the retained file count used without an override.
+	DefaultLogMaxFiles int64 = 3
+)
+
+// LoggingSettings controls the level and retention limits for Mihari file logs.
+type LoggingSettings struct {
+	Level     string `yaml:"level"`
+	MaxSizeMB int64  `yaml:"max-size-mb"`
+	MaxFiles  int64  `yaml:"max-files"`
+}
+
 type Settings struct {
-	Schema             string         `yaml:"schema"`
-	MixedAddr          string         `yaml:"mixed-addr"`
-	ControllerAddr     string         `yaml:"controller-addr"`
-	WebAddr            string         `yaml:"web-addr"`
-	ControllerSecret   string         `yaml:"controller-secret"`
-	SystemProxyDesired bool           `yaml:"system-proxy-desired,omitempty"`
-	Tun                map[string]any `yaml:"tun,omitempty"` // managed block; empty = unmanaged
-	CoreChannel        string         `yaml:"core-channel,omitempty"`
-	CoreChannelBundle  string         `yaml:"core-channel-bundle,omitempty"`
+	Schema             string           `yaml:"schema"`
+	MixedAddr          string           `yaml:"mixed-addr"`
+	ControllerAddr     string           `yaml:"controller-addr"`
+	WebAddr            string           `yaml:"web-addr"`
+	ControllerSecret   string           `yaml:"controller-secret"`
+	SystemProxyDesired bool             `yaml:"system-proxy-desired,omitempty"`
+	Tun                map[string]any   `yaml:"tun,omitempty"` // managed block; empty = unmanaged
+	CoreChannel        string           `yaml:"core-channel,omitempty"`
+	CoreChannelBundle  string           `yaml:"core-channel-bundle,omitempty"`
+	Logging            *LoggingSettings `yaml:"log,omitempty"`
+}
+
+// DefaultLoggingSettings returns the logging configuration used when no override is persisted.
+func DefaultLoggingSettings() LoggingSettings {
+	return LoggingSettings{
+		Level:     DefaultLogLevel,
+		MaxSizeMB: DefaultLogMaxSizeMB,
+		MaxFiles:  DefaultLogMaxFiles,
+	}
+}
+
+// EffectiveLogging returns logging settings with omitted and zero-valued fields defaulted.
+func (s Settings) EffectiveLogging() LoggingSettings {
+	effective := DefaultLoggingSettings()
+	if s.Logging == nil {
+		return effective
+	}
+	if s.Logging.Level != "" {
+		effective.Level = s.Logging.Level
+	}
+	if s.Logging.MaxSizeMB != 0 {
+		effective.MaxSizeMB = s.Logging.MaxSizeMB
+	}
+	if s.Logging.MaxFiles != 0 {
+		effective.MaxFiles = s.Logging.MaxFiles
+	}
+	return effective
+}
+
+// SetLogging stores a complete non-default logging override or removes the default override.
+func (s *Settings) SetLogging(logging LoggingSettings) {
+	if logging == DefaultLoggingSettings() {
+		s.Logging = nil
+		return
+	}
+	copy := logging
+	s.Logging = &copy
+}
+
+// Clone returns a copy of Settings that does not share mutable YAML values.
+func (s Settings) Clone() Settings {
+	clone := s
+	if s.Logging != nil {
+		logging := *s.Logging
+		clone.Logging = &logging
+	}
+	if s.Tun != nil {
+		clone.Tun = make(map[string]any, len(s.Tun))
+		for key, value := range s.Tun {
+			clone.Tun[key] = cloneYAMLValue(value)
+		}
+	}
+	return clone
+}
+
+func cloneYAMLValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	return cloneYAMLReflect(reflect.ValueOf(value)).Interface()
+}
+
+func cloneYAMLReflect(value reflect.Value) reflect.Value {
+	if !value.IsValid() {
+		return value
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		clone := reflect.New(value.Type()).Elem()
+		clone.Set(cloneYAMLReflect(value.Elem()))
+		return clone
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		clone := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iterator := value.MapRange()
+		for iterator.Next() {
+			clone.SetMapIndex(cloneYAMLReflect(iterator.Key()), cloneYAMLReflect(iterator.Value()))
+		}
+		return clone
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		clone := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for index := range value.Len() {
+			clone.Index(index).Set(cloneYAMLReflect(value.Index(index)))
+		}
+		return clone
+	case reflect.Array:
+		clone := reflect.New(value.Type()).Elem()
+		for index := range value.Len() {
+			clone.Index(index).Set(cloneYAMLReflect(value.Index(index)))
+		}
+		return clone
+	case reflect.Pointer:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		clone := reflect.New(value.Type().Elem())
+		clone.Elem().Set(cloneYAMLReflect(value.Elem()))
+		return clone
+	default:
+		return value
+	}
 }
 
 func Defaults() Settings {
@@ -85,17 +212,37 @@ func LoadOrCreateResult(path string) (Settings, bool, error) {
 // core-channel sidecar. On first create the sidecar is applied before the first
 // Save so the file is never written as a stable-only default and then rewritten.
 func LoadOrCreateWithSidecar(path, sidecar string) (Settings, bool, error) {
-	return loadOrCreate(path, sidecar)
+	settings, created, result, err := LoadOrCreateWithSidecarOutcome(path, sidecar)
+	if err != nil {
+		return Settings{}, false, err
+	}
+	if result.Warning != nil {
+		return settings, created, result.Warning
+	}
+	return settings, created, nil
+}
+
+// LoadOrCreateWithSidecarOutcome loads or creates settings and reports the outcome of any write.
+func LoadOrCreateWithSidecarOutcome(path, sidecar string) (settings Settings, created bool, result CommitResult, err error) {
+	return loadOrCreateWithOpsOutcome(path, sidecar, defaultSettingsCreationOps())
 }
 
 func loadOrCreate(path, sidecar string) (Settings, bool, error) {
-	return loadOrCreateWithOps(path, sidecar, defaultSettingsCreationOps())
+	settings, created, result, err := loadOrCreateWithOpsOutcome(path, sidecar, defaultSettingsCreationOps())
+	if err != nil {
+		return Settings{}, false, err
+	}
+	if result.Warning != nil {
+		return settings, created, result.Warning
+	}
+	return settings, created, nil
 }
 
 type settingsCreationOps struct {
 	now               func() time.Time
 	wait              func(time.Duration)
 	load              func(string) (Settings, error)
+	save              func(string, Settings) (CommitResult, error)
 	openLock          func(string) (*os.File, error)
 	transientConflict func(error) bool
 }
@@ -105,6 +252,7 @@ func defaultSettingsCreationOps() settingsCreationOps {
 		now:  time.Now,
 		wait: time.Sleep,
 		load: Load,
+		save: SaveWithCommit,
 		openLock: func(path string) (*os.File, error) {
 			return os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		},
@@ -113,23 +261,37 @@ func defaultSettingsCreationOps() settingsCreationOps {
 }
 
 func loadOrCreateWithOps(path, sidecar string, ops settingsCreationOps) (Settings, bool, error) {
-	deadline := ops.now().Add(10 * time.Second)
-	settings, err := ops.load(path)
-	if err == nil {
-		return persistSidecarIfChanged(path, settings, sidecar)
-	}
-	if !errors.Is(err, os.ErrNotExist) && !ops.transientConflict(err) {
-		return Settings{}, false, err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return Settings{}, false, fmt.Errorf("create settings directory: %w", err)
-	}
-	settings, lock, err := waitForSettingsOrCreationLock(path, deadline, ops)
+	settings, created, result, err := loadOrCreateWithOpsOutcome(path, sidecar, ops)
 	if err != nil {
 		return Settings{}, false, err
 	}
+	if result.Warning != nil {
+		return settings, created, result.Warning
+	}
+	return settings, created, nil
+}
+
+func loadOrCreateWithOpsOutcome(path, sidecar string, ops settingsCreationOps) (Settings, bool, CommitResult, error) {
+	if ops.save == nil {
+		ops.save = SaveWithCommit
+	}
+	deadline := ops.now().Add(10 * time.Second)
+	settings, err := ops.load(path)
+	if err == nil {
+		return persistSidecarIfChangedOutcome(path, settings, sidecar, ops.save)
+	}
+	if !errors.Is(err, os.ErrNotExist) && !ops.transientConflict(err) {
+		return Settings{}, false, CommitResult{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return Settings{}, false, CommitResult{}, fmt.Errorf("create settings directory: %w", err)
+	}
+	settings, lock, err := waitForSettingsOrCreationLock(path, deadline, ops)
+	if err != nil {
+		return Settings{}, false, CommitResult{}, err
+	}
 	if lock == nil {
-		return persistSidecarIfChanged(path, settings, sidecar)
+		return persistSidecarIfChangedOutcome(path, settings, sidecar, ops.save)
 	}
 	lockPath := lock.Name()
 	defer func() {
@@ -138,49 +300,52 @@ func loadOrCreateWithOps(path, sidecar string, ops settingsCreationOps) (Setting
 	}()
 	for {
 		if !ops.now().Before(deadline) {
-			return Settings{}, false, dataError("timed out waiting for settings initialization")
+			return Settings{}, false, CommitResult{}, dataError("timed out waiting for settings initialization")
 		}
 		settings, err = ops.load(path)
 		if err == nil {
-			return persistSidecarIfChanged(path, settings, sidecar)
+			return persistSidecarIfChangedOutcome(path, settings, sidecar, ops.save)
 		}
 		if errors.Is(err, os.ErrNotExist) {
 			break
 		}
 		if !ops.transientConflict(err) {
-			return Settings{}, false, err
+			return Settings{}, false, CommitResult{}, err
 		}
 		if !ops.now().Before(deadline) {
-			return Settings{}, false, dataError("timed out waiting for settings initialization")
+			return Settings{}, false, CommitResult{}, dataError("timed out waiting for settings initialization")
 		}
 		ops.wait(10 * time.Millisecond)
 	}
 	settings = Defaults()
 	var secret [32]byte
 	if _, err := rand.Read(secret[:]); err != nil {
-		return Settings{}, false, fmt.Errorf("generate controller secret: %w", err)
+		return Settings{}, false, CommitResult{}, fmt.Errorf("generate controller secret: %w", err)
 	}
 	settings.ControllerSecret = hex.EncodeToString(secret[:])
 	if _, err := applySidecarIfPresent(&settings, sidecar); err != nil {
-		return Settings{}, false, err
+		return Settings{}, false, CommitResult{}, err
 	}
-	if err := Save(path, settings); err != nil {
-		return Settings{}, false, err
+	result, err := ops.save(path, settings)
+	if err != nil {
+		return Settings{}, false, result, err
 	}
-	return settings, true, nil
+	return settings, true, result, nil
 }
 
-func persistSidecarIfChanged(path string, settings Settings, sidecar string) (Settings, bool, error) {
+func persistSidecarIfChangedOutcome(path string, settings Settings, sidecar string, save func(string, Settings) (CommitResult, error)) (Settings, bool, CommitResult, error) {
 	changed, err := applySidecarIfPresent(&settings, sidecar)
 	if err != nil {
-		return Settings{}, false, err
+		return Settings{}, false, CommitResult{}, err
 	}
 	if changed {
-		if err := Save(path, settings); err != nil {
-			return Settings{}, false, err
+		result, err := save(path, settings)
+		if err != nil {
+			return Settings{}, false, result, err
 		}
+		return settings, false, result, nil
 	}
-	return settings, false, nil
+	return settings, false, CommitResult{}, nil
 }
 
 func applySidecarIfPresent(settings *Settings, sidecar string) (bool, error) {
@@ -218,17 +383,28 @@ func waitForSettingsOrCreationLock(path string, deadline time.Time, ops settings
 }
 
 func Save(path string, settings Settings) error {
-	if err := settings.Validate(); err != nil {
+	result, err := SaveWithCommit(path, settings)
+	if err != nil {
 		return err
 	}
+	return result.Warning
+}
+
+// SaveWithCommit validates and canonically persists settings without modifying its argument.
+func SaveWithCommit(path string, settings Settings) (CommitResult, error) {
+	if err := settings.Validate(); err != nil {
+		return CommitResult{}, err
+	}
 	if settings.ControllerSecret == "" {
-		return dataError("controller secret is required")
+		return CommitResult{}, dataError("controller secret is required")
 	}
-	content, err := yaml.Marshal(settings)
+	canonical := settings.Clone()
+	canonical.SetLogging(settings.EffectiveLogging())
+	content, err := yaml.Marshal(canonical)
 	if err != nil {
-		return fmt.Errorf("encode settings: %w", err)
+		return CommitResult{}, fmt.Errorf("encode settings: %w", err)
 	}
-	return AtomicWrite(path, content, 0o600)
+	return AtomicWriteWithCommit(path, content, 0o600)
 }
 
 func (s Settings) Validate() error {
@@ -258,6 +434,18 @@ func (s Settings) Validate() error {
 	}
 	if err := validateTun(s.Tun); err != nil {
 		return err
+	}
+	logging := s.EffectiveLogging()
+	switch logging.Level {
+	case "debug", "info", "warn", "error":
+	default:
+		return dataError("invalid log level")
+	}
+	if logging.MaxSizeMB < 1 || logging.MaxSizeMB > 100 {
+		return dataError("log max size must be between 1 and 100 MiB")
+	}
+	if logging.MaxFiles < 1 || logging.MaxFiles > 10 {
+		return dataError("log max files must be between 1 and 10")
 	}
 	switch s.CoreChannel {
 	case "", "stable", "alpha":

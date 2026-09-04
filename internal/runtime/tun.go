@@ -4,20 +4,24 @@ import (
 	"context"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 
+	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/tundetect"
+	"go.yaml.in/yaml/v3"
 )
 
 const defaultTunStack = "gVisor"
 
 // TunStatus returns desired managed TUN intent plus live observation from mihomo when available.
 func (m *Manager) TunStatus(ctx context.Context) (protocol.TunStatus, error) {
-	if err := ctx.Err(); err != nil {
+	if err := m.lockMaintenance(ctx); err != nil {
 		return protocol.TunStatus{}, err
 	}
+	defer m.unlock()
 	return m.buildTunStatus(ctx, ""), nil
 }
 
@@ -46,11 +50,26 @@ func (m *Manager) DisableTun(ctx context.Context, op Operation) (protocol.TunSta
 }
 
 func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, force bool) (protocol.TunStatus, error) {
+	if err := m.lockMutation(ctx); err != nil {
+		return protocol.TunStatus{}, err
+	}
+	defer m.unlock()
+	if err := ctx.Err(); err != nil {
+		return protocol.TunStatus{}, err
+	}
+	if err := m.checkIfRevision(op.IfRevision); err != nil {
+		return protocol.TunStatus{}, err
+	}
+
 	// Enable is gated when other TUN adapters are detected (signal A), mirroring the
 	// system-proxy foreign gate. Disable is intentionally NOT gated: tearing down this
 	// daemon's own mihomo tun block is non-destructive to other actors' TUN adapters.
+	conflict := m.detectTunConflict(ctx)
+	if err := ctx.Err(); err != nil {
+		return protocol.TunStatus{}, err
+	}
 	if enable && !force {
-		if conflict := m.detectTunConflict(ctx); conflict != nil && len(conflict.OtherTunInterfaces) > 0 {
+		if conflict != nil && len(conflict.OtherTunInterfaces) > 0 {
 			return protocol.TunStatus{}, protocol.APIError{
 				Code:    protocol.CodeTunConflict,
 				Message: "other TUN adapters detected; routing conflict or loop risk",
@@ -61,80 +80,49 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 			}
 		}
 	}
-	if err := m.lock(ctx); err != nil {
-		return protocol.TunStatus{}, err
-	}
-	defer m.unlock()
-	if err := m.checkOpen(); err != nil {
-		return protocol.TunStatus{}, err
-	}
-	if op.IfRevision != nil {
-		current := m.store.Load().Revision
-		if *op.IfRevision != current {
-			return protocol.TunStatus{}, protocol.APIError{
-				Code:    protocol.CodeRevisionConflict,
-				Message: "state revision changed",
-				Details: map[string]any{
-					"expected_revision": *op.IfRevision,
-					"current_revision":  current,
-				},
-			}
-		}
-	}
 
-	m.settingsMu.Lock()
-	previousTun := cloneTunMap(m.settings.Tun)
-	nextTun := buildManagedTun(enable, m.settings.Tun)
-	m.settings.Tun = cloneTunMap(nextTun)
-	saveErr := m.persistSettings()
-	m.settingsMu.Unlock()
-	if saveErr != nil {
-		m.settingsMu.Lock()
-		m.settings.Tun = previousTun
-		m.settingsMu.Unlock()
-		return protocol.TunStatus{}, saveErr
+	candidate, err := m.updateSettings(func(settings *config.Settings) error {
+		settings.Tun = buildManagedTun(enable, settings.Tun)
+		return nil
+	})
+	if err != nil {
+		return protocol.TunStatus{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, err, false, nil)
+	}
+	nextTun := cloneTunMap(candidate.after.Tun)
+	liveBefore := m.captureTunLive(ctx)
+	if err := ctx.Err(); err != nil {
+		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, err, false, nil)
 	}
 
 	if applyErr := m.applyTun(ctx, nextTun); applyErr != nil {
 		mapped := mapTunApplyError(applyErr)
-		m.settingsMu.Lock()
-		m.settings.Tun = previousTun
-		_ = m.persistSettings()
-		m.tunLastError = tunErrorMessage(mapped)
-		m.settingsMu.Unlock()
-		return protocol.TunStatus{}, mapped
+		m.setTunLastError(tunErrorMessage(mapped))
+		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, mapped, true, liveBefore)
 	}
 
-	if enable {
-		live, ok := false, false
-		if m.controller != nil && ctx.Err() == nil {
-			if configs, cfgErr := m.controller.Configs(ctx); cfgErr == nil {
-				live, ok = liveTunEnable(configs)
-			}
-		}
-		if !(ok && live) {
-			m.settingsMu.Lock()
-			m.settings.Tun = previousTun
-			_ = m.persistSettings()
-			m.tunLastError = "TUN did not become live after apply"
-			m.settingsMu.Unlock()
-			if len(previousTun) > 0 {
-				if applyBackErr := m.applyTun(ctx, previousTun); applyBackErr != nil {
-					_ = applyBackErr // best-effort restore; first failure is still returned
-				}
-			}
-			return protocol.TunStatus{}, protocol.APIError{
-				Code:    protocol.CodeUpstreamFailure,
-				Message: "TUN did not become live after apply",
-			}
+	live, ok := false, false
+	if m.controller != nil && ctx.Err() == nil {
+		if configs, cfgErr := m.controller.Configs(ctx); cfgErr == nil {
+			live, ok = liveTunEnable(configs)
 		}
 	}
+	if !ok || live != enable {
+		message := "TUN did not become live after apply"
+		if !enable {
+			message = "TUN did not become disabled after apply"
+		}
+		mapped := protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: message}
+		m.setTunLastError(mapped.Message)
+		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, mapped, true, liveBefore)
+	}
+	liveEnable := &live
 
-	m.settingsMu.Lock()
-	m.tunLastError = ""
-	m.settingsMu.Unlock()
+	m.setTunLastError("")
 
-	_, err := m.coordinator.Do(ctx, state.CommandMeta{
+	_, err = m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{
 		ID: op.ID, Source: op.Source, IfRevision: op.IfRevision,
 	}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 		return snapshot, nil
@@ -143,7 +131,57 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 		// Apply already succeeded; keep desired state and surface the revision error.
 		return protocol.TunStatus{}, err
 	}
-	return m.buildTunStatus(ctx, ""), nil
+	return buildTunStatusFromObservation(candidate.after, m.store.Load().Revision, conflict, liveEnable, ""), nil
+}
+
+func (m *Manager) compensateTun(ctx context.Context, op Operation, candidate settingsCandidate, cause error, restoreLive bool, liveBefore map[string]any) error {
+	_, rollbackErr := m.restoreSettings(candidate.before)
+	var liveRestoreErr error
+	if restoreLive {
+		if liveBefore == nil {
+			liveRestoreErr = errors.New("TUN live state before apply is unavailable")
+		} else {
+			liveRestoreErr = m.restoreTunLive(ctx, liveBefore)
+		}
+	}
+	if rollbackErr == nil && liveRestoreErr == nil {
+		return cause
+	}
+	_, err := m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{
+		ID: op.ID, Source: op.Source, IfRevision: op.IfRevision,
+	}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		degradedErr := m.enterMutationDegraded(&snapshot)
+		return snapshot, degradedErr
+	})
+	return err
+}
+
+func (m *Manager) restoreTunLive(ctx context.Context, target map[string]any) error {
+	if err := m.applyTun(ctx, target); err != nil {
+		return err
+	}
+	if m.controller == nil {
+		return errors.New("TUN live restore is unconfirmed")
+	}
+	configs, err := m.controller.Configs(ctx)
+	if err != nil {
+		return err
+	}
+	observed, err := normalizedLiveTun(configs)
+	if err != nil {
+		return errors.New("TUN live restore is unconfirmed")
+	}
+	normalizedTarget, err := normalizeTunBlock(target)
+	if err != nil || !reflect.DeepEqual(observed, normalizedTarget) {
+		return errors.New("TUN live restore is unconfirmed")
+	}
+	return nil
+}
+
+func (m *Manager) setTunLastError(message string) {
+	m.settingsMu.Lock()
+	m.tunLastError = message
+	m.settingsMu.Unlock()
 }
 
 // applyTun prefers regenerating the runtime config (generator injects managed tun) and
@@ -151,10 +189,12 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 func (m *Manager) applyTun(ctx context.Context, nextTun map[string]any) error {
 	var regenerateErr, patchErr error
 	regenerated := false
+	settings := m.settingsSnapshot()
+	settings.Tun = cloneTunMap(nextTun)
 
 	if m.subscriptions != nil && m.runtimeConfig != "" && m.stagingDir != "" {
 		catalog := m.subscriptions.Snapshot()
-		candidate, err := m.prepareCatalogConfig(ctx, catalog)
+		candidate, err := m.prepareCatalogConfigWithSettings(ctx, catalog, settings)
 		if err != nil {
 			regenerateErr = err
 		} else {
@@ -191,32 +231,54 @@ func (m *Manager) applyTun(ctx context.Context, nextTun map[string]any) error {
 	}
 }
 
+func (m *Manager) captureTunLive(ctx context.Context) map[string]any {
+	if m.controller == nil || ctx.Err() != nil {
+		return nil
+	}
+	configs, err := m.controller.Configs(ctx)
+	if err != nil {
+		return nil
+	}
+	normalized, err := normalizedLiveTun(configs)
+	if err != nil {
+		return nil
+	}
+	return normalized
+}
+
 func (m *Manager) buildTunStatus(ctx context.Context, lastError string) protocol.TunStatus {
+	settings := m.settingsSnapshot()
 	m.settingsMu.Lock()
-	tun := cloneTunMap(m.settings.Tun)
 	if lastError == "" {
 		lastError = m.tunLastError
 	}
 	m.settingsMu.Unlock()
-
-	status := protocol.TunStatus{
-		Schema:        "mihari/v1",
-		Revision:      m.store.Load().Revision,
-		DesiredEnable: tunDesiredEnable(tun),
-		Managed:       len(tun) > 0,
-		Stack:         tunStack(tun),
-	}
 	// Conflict evidence is always surfaced (even when only corroborating signal B is
 	// present) so status/CLI/TUI can display it; the enable gate keys off
 	// OtherTunInterfaces alone.
-	status.Conflict = m.detectTunConflict(ctx)
+	conflict := m.detectTunConflict(ctx)
 
+	var liveEnable *bool
 	if m.controller != nil && ctx.Err() == nil {
 		if configs, err := m.controller.Configs(ctx); err == nil {
 			if live, ok := liveTunEnable(configs); ok {
-				status.LiveEnable = &live
+				liveEnable = &live
 			}
 		}
+	}
+	return buildTunStatusFromObservation(settings, m.store.Load().Revision, conflict, liveEnable, lastError)
+}
+
+func buildTunStatusFromObservation(settings config.Settings, revision uint64, conflict *protocol.TunConflict, liveEnable *bool, lastError string) protocol.TunStatus {
+	tun := cloneTunMap(settings.Tun)
+	status := protocol.TunStatus{
+		Schema:        "mihari/v1",
+		Revision:      revision,
+		DesiredEnable: tunDesiredEnable(tun),
+		Managed:       len(tun) > 0,
+		Stack:         tunStack(tun),
+		LiveEnable:    liveEnable,
+		Conflict:      conflict,
 	}
 	if lastError == "" && status.DesiredEnable && status.LiveEnable != nil && !*status.LiveEnable {
 		lastError = "live TUN is off"
@@ -240,11 +302,30 @@ func cloneTunMap(in map[string]any) map[string]any {
 	if in == nil {
 		return nil
 	}
-	out := make(map[string]any, len(in))
-	for k, v := range in {
-		out[k] = v
+	return (config.Settings{Tun: in}).Clone().Tun
+}
+
+func normalizedLiveTun(configs map[string]any) (map[string]any, error) {
+	tun, ok := configs["tun"].(map[string]any)
+	if !ok {
+		return nil, errors.New("TUN live block is unavailable")
 	}
-	return out
+	if _, ok := tun["enable"].(bool); !ok {
+		return nil, errors.New("TUN live enable is unavailable")
+	}
+	return normalizeTunBlock(tun)
+}
+
+func normalizeTunBlock(tun map[string]any) (map[string]any, error) {
+	content, err := yaml.Marshal(tun)
+	if err != nil {
+		return nil, errors.New("normalize TUN block")
+	}
+	var normalized map[string]any
+	if err := yaml.Unmarshal(content, &normalized); err != nil {
+		return nil, errors.New("normalize TUN block")
+	}
+	return normalized, nil
 }
 
 func tunDesiredEnable(tun map[string]any) bool {
@@ -350,9 +431,7 @@ func (m *Manager) selfFromLive(ctx context.Context) tundetect.Self {
 	if m.controller == nil || ctx.Err() != nil {
 		return self
 	}
-	m.settingsMu.Lock()
-	controllerAddr := m.settings.ControllerAddr
-	m.settingsMu.Unlock()
+	controllerAddr := m.settingsSnapshot().ControllerAddr
 	if m.lookupOccupant != nil && controllerAddr != "" {
 		if pid, ok := m.lookupOccupant(controllerAddr); ok && pid > 0 {
 			self.OccupantPID = pid

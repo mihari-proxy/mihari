@@ -19,6 +19,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/logging"
+	"github.com/mihari-proxy/mihari/internal/onboarding"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 )
@@ -210,6 +211,29 @@ func TestBuildRuntimeWithOptionsMarksNewInstallationSetupRequired(t *testing.T) 
 	status, err := assembly.Manager.OnboardingStatus(context.Background())
 	if err != nil || status.Status.Complete {
 		t.Fatalf("status=%#v err=%v", status, err)
+	}
+}
+
+func TestBuildRuntimeWithOptionsReportsOnboardingPersistenceWarning(t *testing.T) {
+	paths := platform.NewPaths(filepath.Join(t.TempDir(), "data"))
+	settings := testRuntimeSettings(t)
+	settings.ControllerSecret = strings.Repeat("d", 64)
+	var component, message string
+	assembly, err := BuildRuntimeWithOptions(paths, settings, "test-version", nil, nil, RuntimeBuildOptions{
+		InitialSetupRequired: true,
+		SettingsPath:         paths.Settings,
+		SaveOnboardingState: func(string, onboarding.State) (config.CommitResult, error) {
+			return config.CommitResult{Committed: true, Warning: errors.New("C:\\sensitive\\onboarding.json")}, nil
+		},
+		OnBackgroundError: func(gotComponent string, err error) {
+			component, message = gotComponent, err.Error()
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assembly == nil || component != "onboarding" || message != "onboarding parent directory sync failed after commit" {
+		t.Fatalf("assembly=%#v component=%q message=%q", assembly, component, message)
 	}
 }
 

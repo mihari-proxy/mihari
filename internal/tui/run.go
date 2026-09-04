@@ -93,13 +93,20 @@ func (r *LoggingResources) Available() bool {
 
 // Close releases the runtime before the shared data-root capability. It is safe to call repeatedly.
 func (r *LoggingResources) Close() error {
-	return r.closeWithSession(nil)
+	return r.closeWithLifecycle(nil, nil)
 }
 
 func (r *LoggingResources) closeWithSession(closeSession func()) error {
+	return r.closeWithLifecycle(closeSession, nil)
+}
+
+func (r *LoggingResources) closeWithLifecycle(closeSession, closeApplier func()) error {
 	if r == nil {
 		if closeSession != nil {
 			closeSession()
+		}
+		if closeApplier != nil {
+			closeApplier()
 		}
 		return nil
 	}
@@ -117,14 +124,17 @@ func (r *LoggingResources) closeWithSession(closeSession func()) error {
 		r.closeState = state
 	}
 	state.once.Do(func() {
-		state.err = closeTUILifecycle(closeSession, state.runtime, state.privateFS)
+		state.err = closeTUILifecycle(closeSession, closeApplier, state.runtime, state.privateFS)
 	})
 	return state.err
 }
 
-func closeTUILifecycle(closeSession func(), runtime io.Closer, privateFS io.Closer) error {
+func closeTUILifecycle(closeSession, closeApplier func(), runtime io.Closer, privateFS io.Closer) error {
 	if closeSession != nil {
 		closeSession()
+	}
+	if closeApplier != nil {
+		closeApplier()
 	}
 	var errs []error
 	for _, closer := range []io.Closer{runtime, privateFS} {
@@ -206,6 +216,7 @@ func Run(ctx context.Context, options Options) error {
 	if resources.Runtime != nil && resources.Runtime.Logger() != nil {
 		resources.Runtime.Logger().Info("tui started")
 	}
+	applier := newRunLoggingApplier(ctx, resources.Runtime)
 
 	var controlSession *session.Session
 	var events <-chan session.Event
@@ -213,7 +224,7 @@ func Run(ctx context.Context, options Options) error {
 		controlSession = session.New(options.Client, session.Options{})
 		events = controlSession.Start(ctx)
 	}
-	model := newRunModel(ctx, options.Client, events, health)
+	model := newRunModel(ctx, options.Client, events, health, applier)
 	if options.Service != nil {
 		model.SetServiceController(options.Service)
 	}
@@ -229,11 +240,14 @@ func Run(ctx context.Context, options Options) error {
 	var closeErr error
 	cleanup := func(tea.Model) error {
 		closeOnce.Do(func() {
-			closeErr = resources.closeWithSession(func() {
-				if controlSession != nil {
-					controlSession.Close()
-				}
-			})
+			closeErr = resources.closeWithLifecycle(
+				func() {
+					if controlSession != nil {
+						controlSession.Close()
+					}
+				},
+				applier.CloseAndWait,
+			)
 			if closeErr != nil {
 				reporter.report(tuiLoggingCleanupFailure, closeErr)
 			}
@@ -243,12 +257,20 @@ func Run(ctx context.Context, options Options) error {
 	return finishRun(final, err, options.Output, options.Relaunch, cleanup)
 }
 
-func newRunModel(ctx context.Context, client *controlclient.Client, events <-chan session.Event, health LocalLoggingHealth) Model {
+func newRunLoggingApplier(ctx context.Context, runtime *logging.Runtime) loggingApplier {
+	if runtime == nil {
+		return newLoggingApplier(ctx, nil)
+	}
+	return newLoggingApplier(ctx, runtime)
+}
+
+func newRunModel(ctx context.Context, client *controlclient.Client, events <-chan session.Event, health LocalLoggingHealth, applier loggingApplier) Model {
 	model := NewModel()
 	if client != nil {
 		model = newModelWithClientContext(ctx, events, client)
 	}
-	model.SetLoggingHealth(health)
+	model.SetLoggingApplier(applier)
+	model.SetLocalLoggingHealth(health)
 	return model
 }
 

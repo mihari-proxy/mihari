@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,21 +28,27 @@ import (
 )
 
 func TestUpdateOnboardingRejectsStaleRevisionBeforePersistingEndpoints(t *testing.T) {
-	directory := t.TempDir()
-	settingsPath := filepath.Join(directory, "settings.json")
 	settings := config.Defaults()
 	settings.ControllerSecret = strings.Repeat("a", 64)
-	if err := config.Save(settingsPath, settings); err != nil {
-		t.Fatal(err)
-	}
+	var stateSaves, settingsSaves atomic.Int64
 	service, err := onboarding.Open(onboarding.Options{
-		StatePath: filepath.Join(directory, "onboarding.json"), SettingsPath: settingsPath,
-		Settings: settings, InitialSetupRequired: true,
+		StatePath: filepath.Join(t.TempDir(), "onboarding.json"), InitialSetupRequired: true,
+		SaveState: func(string, onboarding.State) (config.CommitResult, error) {
+			stateSaves.Add(1)
+			return config.CommitResult{Committed: true}, nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := newTestManager(Options{Onboarding: service})
+	stateSaves.Store(0)
+	manager := newTestManager(Options{
+		Onboarding: service, Settings: settings, SettingsPath: "settings.yaml",
+		SaveSettings: func(string, config.Settings) (config.CommitResult, error) {
+			settingsSaves.Add(1)
+			return config.CommitResult{Committed: true}, nil
+		},
+	})
 	manager.store.Store(state.Snapshot{Revision: 3})
 	webAddr := "127.0.0.1:9292"
 	stale := uint64(2)
@@ -50,8 +57,11 @@ func TestUpdateOnboardingRejectsStaleRevisionBeforePersistingEndpoints(t *testin
 	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeRevisionConflict {
 		t.Fatalf("err=%v", err)
 	}
-	if got := service.Status().WebAddr; got != settings.WebAddr {
-		t.Fatalf("stale update persisted web address=%q", got)
+	if settingsSaves.Load() != 0 || stateSaves.Load() != 0 {
+		t.Fatalf("stale update writes: settings=%d state=%d", settingsSaves.Load(), stateSaves.Load())
+	}
+	if got := manager.settingsSnapshot().WebAddr; got != settings.WebAddr {
+		t.Fatalf("stale update published web address=%q", got)
 	}
 
 	current := uint64(3)
@@ -61,6 +71,294 @@ func TestUpdateOnboardingRejectsStaleRevisionBeforePersistingEndpoints(t *testin
 	}
 	if status.Status.WebAddr != webAddr || !status.Status.RestartRequired || status.Revision != 4 || manager.Snapshot().Revision != 4 {
 		t.Fatalf("status=%#v revision=%d", status, manager.Snapshot().Revision)
+	}
+	if settingsSaves.Load() != 1 || stateSaves.Load() != 0 {
+		t.Fatalf("endpoint-only writes: settings=%d state=%d", settingsSaves.Load(), stateSaves.Load())
+	}
+}
+
+func TestOnboarding_InvalidEndpointRejectsBeforePersistence(t *testing.T) {
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("a", 64)
+	var stateSaves, settingsSaves atomic.Int64
+	service, err := onboarding.Open(onboarding.Options{
+		StatePath: filepath.Join(t.TempDir(), "onboarding.json"),
+		SaveState: func(string, onboarding.State) (config.CommitResult, error) {
+			stateSaves.Add(1)
+			return config.CommitResult{Committed: true}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateSaves.Store(0)
+	manager := newTestManager(Options{
+		Onboarding: service, Settings: settings, SettingsPath: "settings.yaml",
+		SaveSettings: func(string, config.Settings) (config.CommitResult, error) {
+			settingsSaves.Add(1)
+			return config.CommitResult{Committed: true}, nil
+		},
+	})
+	invalid := "0.0.0.0:9090"
+	if _, err := manager.UpdateOnboarding(context.Background(), Operation{ID: "setup-invalid-endpoint", Source: "test"}, onboarding.Update{ControllerAddr: &invalid}); err == nil {
+		t.Fatal("non-loopback controller was accepted")
+	}
+	if settingsSaves.Load() != 0 || stateSaves.Load() != 0 || manager.settingsSnapshot().ControllerAddr != settings.ControllerAddr {
+		t.Fatalf("writes: settings=%d state=%d current=%q", settingsSaves.Load(), stateSaves.Load(), manager.settingsSnapshot().ControllerAddr)
+	}
+}
+
+func TestOnboarding_SettingsAndStateCommitBeforePublish(t *testing.T) {
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("a", 64)
+	settings.SetLogging(config.LoggingSettings{Level: "debug", MaxSizeMB: 20, MaxFiles: 5})
+	beforeWeb := settings.WebAddr
+	webAddr, complete := "127.0.0.1:9292", true
+	var manager *Manager
+	var order []string
+	var stateCalls int
+	var warnings []string
+	service, err := onboarding.Open(onboarding.Options{
+		StatePath: filepath.Join(t.TempDir(), "onboarding.json"), InitialSetupRequired: true,
+		SaveState: func(_ string, saved onboarding.State) (config.CommitResult, error) {
+			stateCalls++
+			if stateCalls == 1 {
+				return config.CommitResult{Committed: true}, nil
+			}
+			order = append(order, "state")
+			if got := manager.settingsSnapshot().WebAddr; got != beforeWeb {
+				t.Fatalf("settings published before state commit: %q", got)
+			}
+			if !saved.Complete {
+				t.Fatalf("saved state=%#v", saved)
+			}
+			return config.CommitResult{Committed: true, Warning: errors.New("C:\\sensitive\\onboarding.json")}, nil
+		},
+		OnPersistenceWarning: func(err error) { warnings = append(warnings, err.Error()) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var savedSettings config.Settings
+	manager = newTestManager(Options{
+		Onboarding: service, Settings: settings, SettingsPath: "settings.yaml",
+		SaveSettings: func(_ string, saved config.Settings) (config.CommitResult, error) {
+			order = append(order, "settings")
+			if got := manager.settingsSnapshot().WebAddr; got != beforeWeb {
+				t.Fatalf("settings published during candidate save: %q", got)
+			}
+			savedSettings = saved.Clone()
+			return config.CommitResult{Committed: true}, nil
+		},
+	})
+
+	got, err := manager.UpdateOnboarding(context.Background(), Operation{ID: "setup-ordered", Source: "test"}, onboarding.Update{
+		Complete: &complete, WebAddr: &webAddr,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(order, []string{"settings", "state"}) {
+		t.Fatalf("commit order=%v", order)
+	}
+	if savedSettings.WebAddr != webAddr || savedSettings.EffectiveLogging() != settings.EffectiveLogging() {
+		t.Fatalf("saved settings=%#v", savedSettings)
+	}
+	if got.Status.WebAddr != webAddr || !got.Status.Complete || !got.Status.RestartRequired || got.Revision != 1 {
+		t.Fatalf("status=%#v", got)
+	}
+	if current := manager.settingsSnapshot(); current.WebAddr != webAddr || current.EffectiveLogging() != settings.EffectiveLogging() {
+		t.Fatalf("published settings=%#v", current)
+	}
+	if len(warnings) != 1 || warnings[0] != "onboarding parent directory sync failed after commit" {
+		t.Fatalf("warnings=%v", warnings)
+	}
+}
+
+func TestOnboarding_StatePreCommitFailureRollsBackSettingsBeforePublish(t *testing.T) {
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("a", 64)
+	disk := settings.Clone()
+	webAddr, complete := "127.0.0.1:9292", true
+	var stateCalls int
+	service, err := onboarding.Open(onboarding.Options{
+		StatePath: filepath.Join(t.TempDir(), "onboarding.json"), InitialSetupRequired: true,
+		SaveState: func(string, onboarding.State) (config.CommitResult, error) {
+			stateCalls++
+			if stateCalls == 1 {
+				return config.CommitResult{Committed: true}, nil
+			}
+			return config.CommitResult{}, errors.New("replace C:\\sensitive\\onboarding.json")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved []string
+	var warnings []string
+	manager := newTestManager(Options{
+		Onboarding: service, Settings: settings, SettingsPath: "settings.yaml",
+		SaveSettings: func(_ string, candidate config.Settings) (config.CommitResult, error) {
+			disk = candidate.Clone()
+			saved = append(saved, candidate.WebAddr)
+			if len(saved) == 2 {
+				return config.CommitResult{Committed: true, Warning: errors.New("C:\\sensitive\\settings.yaml")}, nil
+			}
+			return config.CommitResult{Committed: true}, nil
+		},
+		OnBackgroundError: func(component string, err error) {
+			warnings = append(warnings, component+":"+err.Error())
+		},
+	})
+
+	_, err = manager.UpdateOnboarding(context.Background(), Operation{ID: "setup-state-fail", Source: "test"}, onboarding.Update{
+		Complete: &complete, WebAddr: &webAddr,
+	})
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "persist settings" || strings.Contains(err.Error(), "sensitive") {
+		t.Fatalf("err=%v api=%#v", err, apiError)
+	}
+	if !reflect.DeepEqual(saved, []string{webAddr, settings.WebAddr}) {
+		t.Fatalf("settings saves=%v", saved)
+	}
+	if disk.WebAddr != settings.WebAddr || manager.settingsSnapshot().WebAddr != settings.WebAddr {
+		t.Fatalf("disk=%q memory=%q want before=%q", disk.WebAddr, manager.settingsSnapshot().WebAddr, settings.WebAddr)
+	}
+	if !reflect.DeepEqual(warnings, []string{"settings:parent directory sync failed after commit"}) {
+		t.Fatalf("warnings=%v", warnings)
+	}
+	status, statusErr := manager.OnboardingStatus(context.Background())
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if status.Status.Complete || status.Status.RestartRequired || status.Revision != 0 || manager.Snapshot().Health != "ok" {
+		t.Fatalf("status=%#v snapshot=%#v", status, manager.Snapshot())
+	}
+}
+
+func TestOnboarding_CompensationFailureCommitsDegraded(t *testing.T) {
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("a", 64)
+	disk := settings.Clone()
+	webAddr, complete := "127.0.0.1:9292", true
+	var stateCalls int
+	service, err := onboarding.Open(onboarding.Options{
+		StatePath: filepath.Join(t.TempDir(), "onboarding.json"), InitialSetupRequired: true,
+		SaveState: func(string, onboarding.State) (config.CommitResult, error) {
+			stateCalls++
+			if stateCalls == 1 {
+				return config.CommitResult{Committed: true}, nil
+			}
+			return config.CommitResult{}, errors.New("state replace failed")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settingsSaves int
+	manager := newTestManager(Options{
+		Onboarding: service, Settings: settings, SettingsPath: "settings.yaml",
+		SaveSettings: func(_ string, candidate config.Settings) (config.CommitResult, error) {
+			settingsSaves++
+			if settingsSaves == 2 {
+				return config.CommitResult{}, errors.New("settings rollback failed")
+			}
+			disk = candidate.Clone()
+			return config.CommitResult{Committed: true}, nil
+		},
+	})
+
+	_, err = manager.UpdateOnboarding(context.Background(), Operation{ID: "setup-compensation-fail", Source: "test"}, onboarding.Update{
+		Complete: &complete, WebAddr: &webAddr,
+	})
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "mutation compensation failed" {
+		t.Fatalf("err=%v api=%#v", err, apiError)
+	}
+	if disk.WebAddr != webAddr || manager.settingsSnapshot().WebAddr != webAddr {
+		t.Fatalf("disk=%q memory=%q want after=%q", disk.WebAddr, manager.settingsSnapshot().WebAddr, webAddr)
+	}
+	status, statusErr := manager.OnboardingStatus(context.Background())
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if status.Status.Complete || !status.Status.RestartRequired || status.Status.WebAddr != webAddr {
+		t.Fatalf("status=%#v", status)
+	}
+	snapshot := manager.Snapshot()
+	if snapshot.Revision != 1 || snapshot.Health != "degraded" || snapshot.LastError != "mutation compensation failed; restart required" {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+
+	nextWeb := "127.0.0.1:9393"
+	_, err = manager.UpdateOnboarding(context.Background(), Operation{ID: "setup-after-degraded", Source: "test"}, onboarding.Update{WebAddr: &nextWeb})
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeInvalidState || settingsSaves != 2 {
+		t.Fatalf("later err=%v api=%#v saves=%d", err, apiError, settingsSaves)
+	}
+}
+
+func TestOnboarding_CommittedSettingsIgnoresLateCancellation(t *testing.T) {
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("a", 64)
+	webAddr, complete := "127.0.0.1:9292", true
+	ctx, cancel := context.WithCancel(context.Background())
+	var settingsSaves, stateCalls int
+	service, err := onboarding.Open(onboarding.Options{
+		StatePath: filepath.Join(t.TempDir(), "onboarding.json"), InitialSetupRequired: true,
+		SaveState: func(string, onboarding.State) (config.CommitResult, error) {
+			stateCalls++
+			return config.CommitResult{Committed: true}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateCalls = 0
+	manager := newTestManager(Options{
+		Onboarding: service, Settings: settings, SettingsPath: "settings.yaml",
+		SaveSettings: func(string, config.Settings) (config.CommitResult, error) {
+			settingsSaves++
+			cancel()
+			return config.CommitResult{Committed: true}, nil
+		},
+	})
+	operation := Operation{ID: "setup-cancelled-after-commit", Source: "test"}
+	wantUpdate := onboarding.Update{Complete: &complete, WebAddr: &webAddr}
+	got, err := manager.UpdateOnboarding(ctx, operation, wantUpdate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Revision != 1 || !got.Status.Complete || got.Status.WebAddr != webAddr || settingsSaves != 1 || stateCalls != 1 {
+		t.Fatalf("status=%#v settings saves=%d state saves=%d", got, settingsSaves, stateCalls)
+	}
+	retry, err := manager.UpdateOnboarding(context.Background(), operation, wantUpdate)
+	if err != nil || !reflect.DeepEqual(retry, got) || settingsSaves != 1 || stateCalls != 1 {
+		t.Fatalf("retry=%#v err=%v settings saves=%d state saves=%d", retry, err, settingsSaves, stateCalls)
+	}
+}
+
+func TestOnboardingStatus_ComposesEndpointsFromManagerSettings(t *testing.T) {
+	service, err := onboarding.Open(onboarding.Options{
+		StatePath: filepath.Join(t.TempDir(), "onboarding.json"),
+		SaveState: func(string, onboarding.State) (config.CommitResult, error) {
+			return config.CommitResult{Committed: true}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := config.Defaults()
+	settings.MixedAddr = "127.0.0.1:19190"
+	settings.ControllerAddr = "127.0.0.1:19090"
+	settings.WebAddr = "127.0.0.1:19191"
+	manager := newTestManager(Options{Onboarding: service, Settings: settings})
+
+	got, err := manager.OnboardingStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Status.Complete || got.Status.MixedAddr != settings.MixedAddr || got.Status.ControllerAddr != settings.ControllerAddr || got.Status.WebAddr != settings.WebAddr {
+		t.Fatalf("status=%#v", got)
 	}
 }
 
@@ -322,7 +620,7 @@ func TestInstallCommitAndRestartCannotOverlap(t *testing.T) {
 	}
 }
 
-func TestRuntimeMutationWaitsForRestart(t *testing.T) {
+func TestRuntimeMutationDoesNotWaitForSupervisorRestart(t *testing.T) {
 	restartEntered := make(chan struct{})
 	releaseRestart := make(chan struct{})
 	selectEntered := make(chan struct{}, 1)
@@ -347,23 +645,15 @@ func TestRuntimeMutationWaitsForRestart(t *testing.T) {
 		selectDone <- manager.SelectProxy(mutationCtx, Operation{ID: "select", Source: "test"}, "GLOBAL", "DIRECT")
 	}()
 	select {
-	case <-mutationCtx.observed:
-	case <-time.After(3 * time.Second):
-		t.Fatal("proxy selection did not wait on the maintenance gate")
-	}
-	select {
 	case <-selectEntered:
-		t.Fatal("proxy selection overlapped restart")
-	default:
+	case <-time.After(3 * time.Second):
+		close(releaseRestart)
+		<-restartDone
+		t.Fatal("proxy selection remained blocked while supervisor restart was in progress")
 	}
 	close(releaseRestart)
 	if err := <-restartDone; err != nil {
 		t.Fatal(err)
-	}
-	select {
-	case <-selectEntered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("proxy selection did not enter controller after restart")
 	}
 	if err := <-selectDone; err != nil {
 		t.Fatal(err)
@@ -454,7 +744,62 @@ func TestControllerMutationsCommitRevisionAndPropagateErrors(t *testing.T) {
 	}
 }
 
-func TestControllerMutationsRunControllerIOOutsideCoordinatorLock(t *testing.T) {
+func TestControllerMutationsSettleAfterSuccessfulCallCancelsRequest(t *testing.T) {
+	tests := []struct {
+		name   string
+		kind   string
+		invoke func(context.Context, *Manager, Operation) error
+	}{
+		{
+			name: "select proxy",
+			kind: "select",
+			invoke: func(ctx context.Context, manager *Manager, operation Operation) error {
+				return manager.SelectProxy(ctx, operation, "GLOBAL", "DIRECT")
+			},
+		},
+		{
+			name: "close connection",
+			kind: "close",
+			invoke: func(ctx context.Context, manager *Manager, operation Operation) error {
+				return manager.CloseConnection(ctx, operation, "connection-1")
+			},
+		},
+		{
+			name: "close all connections",
+			kind: "close-all",
+			invoke: func(ctx context.Context, manager *Manager, operation Operation) error {
+				return manager.CloseAllConnections(ctx, operation)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			controller := &fakeController{afterCall: cancel}
+			manager := newTestManager(Options{Controller: controller})
+			operation := Operation{ID: "cancel-after-success", Source: "test"}
+
+			if err := test.invoke(ctx, manager, operation); err != nil {
+				t.Fatalf("first call: %v", err)
+			}
+			if revision := manager.Snapshot().Revision; revision != 1 {
+				t.Fatalf("revision after first call=%d want=1", revision)
+			}
+			if err := test.invoke(context.Background(), manager, operation); err != nil {
+				t.Fatalf("cached retry: %v", err)
+			}
+			if calls := controller.callsFor(test.kind); len(calls) != 1 {
+				t.Fatalf("%s calls=%d want=1", test.kind, len(calls))
+			}
+			if controller.callsFor(test.kind)[0].ctx != ctx {
+				t.Fatal("controller call did not receive the original request context")
+			}
+		})
+	}
+}
+
+func TestControllerMutationsSettleAfterConcurrentCoordinatorRevision(t *testing.T) {
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
 	controller := &fakeController{entered: entered, release: release}
@@ -498,12 +843,11 @@ func TestControllerMutationsRunControllerIOOutsideCoordinatorLock(t *testing.T) 
 
 	close(release)
 	err := <-mutationDone
-	var apiError protocol.APIError
-	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeRevisionConflict {
-		t.Fatalf("err=%v want revision conflict", err)
+	if err != nil {
+		t.Fatalf("controller mutation: %v", err)
 	}
-	if revision := manager.Snapshot().Revision; revision != 1 {
-		t.Fatalf("revision=%d want=1", revision)
+	if revision := manager.Snapshot().Revision; revision != 2 {
+		t.Fatalf("revision=%d want=2", revision)
 	}
 }
 
@@ -763,6 +1107,73 @@ func TestInstallDoesNotPersistChannelWhenPrepareFails(t *testing.T) {
 	}
 }
 
+func TestInstall_CoreCommitThenSettingsSaveFailureRecordsIdentityAndDegrades(t *testing.T) {
+	settings, settingsPath := persistedChannelSettings(t, "stable")
+	var commits atomic.Int64
+	var saves atomic.Int64
+	var restarts atomic.Int64
+	manager := newTestManager(Options{
+		Installer: &fakeInstaller{candidate: &fakeCandidate{
+			version:  "v1.20.0",
+			alphaSHA: "alpha-new",
+			commit: func() (core.InstallResult, error) {
+				commits.Add(1)
+				return core.InstallResult{Version: "v1.20.0", Updated: true, AlphaSHA: "alpha-new"}, nil
+			},
+		}},
+		Supervisor: &fakeSupervisor{restart: func(context.Context) error {
+			restarts.Add(1)
+			return nil
+		}},
+		Settings: settings, SettingsPath: settingsPath,
+		SaveSettings: func(string, config.Settings) (config.CommitResult, error) {
+			saves.Add(1)
+			return config.CommitResult{}, errors.New(`replace failed at C:\secret\mihari.yaml`)
+		},
+	})
+	before := state.Snapshot{Revision: 9, Health: "ok"}
+	before.Core.Version = "v1.19.0"
+	before.Core.Channel = "stable"
+	manager.store.Store(before)
+	alpha := "alpha"
+	op := Operation{ID: "commit-then-settings-fail", Source: "test", Channel: &alpha}
+
+	_, err := manager.Install(context.Background(), op)
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "mutation compensation failed" || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("err=%v want sanitized committed data failure", err)
+	}
+	if commits.Load() != 1 || saves.Load() != 1 {
+		t.Fatalf("commits=%d saves=%d want 1/1", commits.Load(), saves.Load())
+	}
+	if got := manager.settingsSnapshot(); !reflect.DeepEqual(got, settings) {
+		t.Fatalf("memory settings changed: core channel=%q", got.CoreChannel)
+	}
+	loaded, loadErr := config.Load(settingsPath)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if !reflect.DeepEqual(loaded, settings) {
+		t.Fatalf("disk settings changed: core channel=%q", loaded.CoreChannel)
+	}
+	snapshot := manager.Snapshot()
+	if snapshot.Revision != 10 || snapshot.Health != "degraded" || snapshot.LastError != "mutation compensation failed; restart required" {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+	if snapshot.Core.Version != "v1.20.0" || snapshot.Core.Channel != "alpha" || snapshot.Core.AlphaSHA != "alpha-new" {
+		t.Fatalf("committed core identity=%#v", snapshot.Core)
+	}
+	if nextErr := manager.Restart(context.Background(), Operation{ID: "after-core-degraded", Source: "test"}); !errors.As(nextErr, &apiError) || apiError.Code != protocol.CodeInvalidState || restarts.Load() != 0 {
+		t.Fatalf("next mutation err=%v restarts=%d", nextErr, restarts.Load())
+	}
+	if _, retryErr := manager.Install(context.Background(), op); retryErr == nil || retryErr.Error() != err.Error() {
+		t.Fatalf("retry err=%v want cached %v", retryErr, err)
+	}
+	if commits.Load() != 1 || saves.Load() != 1 || manager.Snapshot().Revision != 10 {
+		t.Fatalf("retry repeated settlement: commits=%d saves=%d revision=%d", commits.Load(), saves.Load(), manager.Snapshot().Revision)
+	}
+}
+
 func TestInstallCommitPersistsChannelAndClearsAlphaSHAOnStable(t *testing.T) {
 	installer := &fakeInstaller{candidate: &fakeCandidate{
 		version:  "v1.19.0",
@@ -806,6 +1217,149 @@ func TestInstallCommitPersistsChannelAndClearsAlphaSHAOnStable(t *testing.T) {
 	}
 }
 
+func TestInstallCoreChannelPreservesIndependentSettings(t *testing.T) {
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("a", 64)
+	settings.Tun = map[string]any{
+		"enable": false,
+		"stack":  "system",
+		"dns":    map[string]any{"nameserver": []any{"1.1.1.1"}},
+	}
+	settings.SetLogging(config.LoggingSettings{Level: "debug", MaxSizeMB: 20, MaxFiles: 5})
+
+	var saved []config.Settings
+	manager := newTestManager(Options{
+		Installer:    &fakeInstaller{candidate: &fakeCandidate{version: "v1.19.0", alphaSHA: "e183c58"}},
+		Supervisor:   &fakeSupervisor{},
+		Settings:     settings,
+		SettingsPath: "settings.yaml",
+		SaveSettings: func(_ string, candidate config.Settings) (config.CommitResult, error) {
+			saved = append(saved, candidate.Clone())
+			return config.CommitResult{Committed: true}, nil
+		},
+	})
+	alpha := "alpha"
+	if _, err := manager.Install(context.Background(), Operation{ID: "channel-settings", Source: "test", Channel: &alpha}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(saved) != 1 {
+		t.Fatalf("settings saves=%d want=1", len(saved))
+	}
+	for label, got := range map[string]config.Settings{
+		"saved":     saved[0],
+		"published": manager.settingsSnapshot(),
+	} {
+		if got.CoreChannel != "alpha" {
+			t.Fatalf("%s core channel=%q want alpha", label, got.CoreChannel)
+		}
+		if !reflect.DeepEqual(got.Tun, settings.Tun) {
+			t.Fatalf("%s tun=%#v want %#v", label, got.Tun, settings.Tun)
+		}
+		if effective := got.EffectiveLogging(); effective != settings.EffectiveLogging() {
+			t.Fatalf("%s logging=%#v want %#v", label, effective, settings.EffectiveLogging())
+		}
+	}
+}
+
+func TestInstallSetupSidecarRejectsStaleRevisionBeforeSettings(t *testing.T) {
+	binDir := t.TempDir()
+	binaryPath := filepath.Join(binDir, "mihomo")
+	if err := os.WriteFile(binaryPath, []byte("placeholder"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "core-channel"), []byte("alpha\nalpha-e183c58\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("a", 64)
+	settings.Tun = map[string]any{"enable": false, "stack": "system"}
+	settings.SetLogging(config.LoggingSettings{Level: "debug", MaxSizeMB: 20, MaxFiles: 5})
+	var saves atomic.Int64
+	installer := &fakeInstaller{detectVersion: func(context.Context, string) (string, error) {
+		return "v1.18.0", nil
+	}}
+	manager := newTestManager(Options{
+		Installer:    installer,
+		Settings:     settings,
+		SettingsPath: "settings.yaml",
+		SaveSettings: func(string, config.Settings) (config.CommitResult, error) {
+			saves.Add(1)
+			return config.CommitResult{Committed: true}, nil
+		},
+	})
+	manager.installRequest.BinaryPath = binaryPath
+	manager.store.Store(state.Snapshot{Revision: 3, Health: "ok"})
+	stale := uint64(2)
+
+	_, err := manager.Install(context.Background(), Operation{
+		ID: "setup-sidecar-stale", Source: "setup", IfRevision: &stale,
+	})
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeRevisionConflict {
+		t.Fatalf("err=%v want revision conflict", err)
+	}
+	if saves.Load() != 0 {
+		t.Fatalf("settings saves=%d want=0 before stale revision is rejected", saves.Load())
+	}
+	got := manager.settingsSnapshot()
+	if got.CoreChannel != "stable" || got.CoreChannelBundle != "" {
+		t.Fatalf("stale sidecar published channel=%q bundle=%q", got.CoreChannel, got.CoreChannelBundle)
+	}
+	if !reflect.DeepEqual(got.Tun, settings.Tun) || got.EffectiveLogging() != settings.EffectiveLogging() {
+		t.Fatalf("stale sidecar changed independent settings: %#v", got)
+	}
+	if revision := manager.Snapshot().Revision; revision != 3 {
+		t.Fatalf("revision=%d want=3", revision)
+	}
+}
+
+func TestInstallReleasesGateBeforeSupervisorRestartSettings(t *testing.T) {
+	restartEntered := make(chan struct{})
+	releaseRestart := make(chan struct{})
+	selectEntered := make(chan struct{}, 1)
+	manager := newTestManager(Options{
+		Installer: &fakeInstaller{candidate: &fakeCandidate{version: "v1.19.0"}},
+		Supervisor: &fakeSupervisor{restart: func(context.Context) error {
+			close(restartEntered)
+			<-releaseRestart
+			return nil
+		}},
+		Controller: &fakeController{entered: selectEntered},
+	})
+	manager.running.Store(true)
+	installDone := make(chan error, 1)
+	go func() {
+		_, err := manager.Install(context.Background(), Operation{ID: "install-restart", Source: "test"})
+		installDone <- err
+	}()
+	select {
+	case <-restartEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("install did not enter supervisor restart")
+	}
+
+	selectDone := make(chan error, 1)
+	go func() {
+		selectDone <- manager.SelectProxy(context.Background(), Operation{ID: "during-install-restart", Source: "test"}, "GLOBAL", "DIRECT")
+	}()
+	select {
+	case <-selectEntered:
+	case <-time.After(3 * time.Second):
+		close(releaseRestart)
+		<-installDone
+		t.Fatal("runtime mutation remained blocked while install waited for supervisor restart")
+	}
+	close(releaseRestart)
+	if err := <-installDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-selectDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestObservePreservesCoreChannelAndAlphaSHA(t *testing.T) {
 	installer := &fakeInstaller{candidate: &fakeCandidate{
 		version:  "v1.19.0",
@@ -829,6 +1383,92 @@ func TestObservePreservesCoreChannelAndAlphaSHA(t *testing.T) {
 	if core.Version != "v1.19.0" || core.Channel != "alpha" || core.AlphaSHA != "e183c58" {
 		t.Fatalf("observe wiped identity: %#v", core)
 	}
+}
+
+func TestObserveWaitingForInstallPreservesCommittedCoreIdentity(t *testing.T) {
+	commitEntered := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	installer := &fakeInstaller{candidate: &fakeCandidate{
+		version:  "v1.20.0",
+		alphaSHA: "alpha-new",
+		commit: func() (core.InstallResult, error) {
+			close(commitEntered)
+			<-releaseCommit
+			return core.InstallResult{Version: "v1.20.0", Updated: true, AlphaSHA: "alpha-new"}, nil
+		},
+	}}
+	settings, settingsPath := persistedChannelSettings(t, "stable")
+	manager := newTestManager(Options{
+		Installer: installer, Settings: settings, SettingsPath: settingsPath, Supervisor: &fakeSupervisor{},
+	})
+	before := manager.store.Load()
+	before.Core.Version = "v1.19.0"
+	before.Core.Channel = "stable"
+	manager.store.Store(before)
+
+	alpha := "alpha"
+	installDone := make(chan error, 1)
+	go func() {
+		_, err := manager.Install(context.Background(), Operation{ID: "identity-install", Source: "test", Channel: &alpha})
+		installDone <- err
+	}()
+	select {
+	case <-commitEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("install did not enter candidate commit")
+	}
+
+	observeDone := make(chan struct{})
+	go func() {
+		manager.Observe(supervisor.Observation{Status: supervisor.StatusRunning, PID: 4242, Restarts: 2})
+		close(observeDone)
+	}()
+	waitForRuntimeStack(t, "(*Manager).Observe", "(*Manager).lockMaintenance")
+	close(releaseCommit)
+	if err := <-installDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-observeDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("observation did not finish after install")
+	}
+
+	got := manager.store.Load().Core
+	if got.Status != string(supervisor.StatusRunning) || got.PID != 4242 || got.Restarts != 2 {
+		t.Fatalf("observation dynamic fields=%#v", got)
+	}
+	if got.Version != "v1.20.0" || got.Channel != "alpha" || got.AlphaSHA != "alpha-new" {
+		t.Fatalf("delayed observation overwrote committed identity: %#v", got)
+	}
+}
+
+func waitForRuntimeStack(t *testing.T, frames ...string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		var stack string
+		for size := 1 << 16; ; size *= 2 {
+			buffer := make([]byte, size)
+			n := goruntime.Stack(buffer, true)
+			if n < len(buffer) {
+				stack = string(buffer[:n])
+				break
+			}
+		}
+		matched := true
+		for _, frame := range frames {
+			if !strings.Contains(stack, frame) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("runtime stack did not contain frames %q", frames)
 }
 
 func TestInstallRejectsNightlyChannelBeforePrepare(t *testing.T) {
@@ -1068,8 +1708,10 @@ type fakeController struct {
 	selectProxyErr         error
 	closeConnectionErr     error
 	closeAllConnectionsErr error
+	afterCall              func()
 	updateRuleProvider     func(context.Context, string) error
 	configs                map[string]any
+	configsFunc            func(context.Context) (map[string]any, error)
 	configsErr             error
 	patchConfigs           func(context.Context, map[string]any) error
 	lastPatch              map[string]any
@@ -1098,6 +1740,9 @@ func (c *fakeController) recordCall(kind string, ctx context.Context, args ...st
 	}
 	if c.release != nil {
 		<-c.release
+	}
+	if c.afterCall != nil {
+		c.afterCall()
 	}
 }
 
@@ -1162,7 +1807,10 @@ func (c *fakeController) UpdateRuleProvider(ctx context.Context, name string) er
 	return nil
 }
 
-func (c *fakeController) Configs(context.Context) (map[string]any, error) {
+func (c *fakeController) Configs(ctx context.Context) (map[string]any, error) {
+	if c.configsFunc != nil {
+		return c.configsFunc(ctx)
+	}
 	if c.configsErr != nil {
 		return nil, c.configsErr
 	}

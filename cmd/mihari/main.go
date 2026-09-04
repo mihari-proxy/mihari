@@ -59,6 +59,7 @@ type daemonRunDeps struct {
 	Endpoint      string
 	Ready         chan<- struct{}
 	ServiceStatus func() (string, error)
+	LoadSettings  func(path, sidecar string) (config.Settings, bool, config.CommitResult, error)
 }
 
 type daemonLoggingResources struct {
@@ -70,8 +71,9 @@ type daemonLoggingResources struct {
 }
 
 type daemonLoggingRuntime struct {
-	Closer io.Closer
-	Logger *slog.Logger
+	Closer  io.Closer
+	Logger  *slog.Logger
+	Runtime *logging.Runtime
 }
 
 var (
@@ -83,7 +85,7 @@ var (
 		if err != nil {
 			return daemonLoggingRuntime{}, err
 		}
-		return daemonLoggingRuntime{Closer: runtime, Logger: runtime.Logger()}, nil
+		return daemonLoggingRuntime{Closer: runtime, Logger: runtime.Logger(), Runtime: runtime}, nil
 	}
 	newDaemonCapture   = logging.NewLineCaptureWriter
 	buildDaemonRuntime = app.BuildRuntimeWithOptions
@@ -358,18 +360,27 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "create mihari data directories"}
 	}
 	sidecar := filepath.Join(deps.Paths.Bin, "core-channel")
-	settings, created, err := config.LoadOrCreateWithSidecar(deps.Paths.Settings, sidecar)
+	loadSettings := deps.LoadSettings
+	if loadSettings == nil {
+		loadSettings = config.LoadOrCreateWithSidecarOutcome
+	}
+	settings, created, settingsCommit, err := loadSettings(deps.Paths.Settings, sidecar)
 	if err != nil {
-		return err
+		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "load settings"}
 	}
 	if err := deps.PrivateFS.EnsureDir(deps.Paths.LogDir); err != nil {
 		return err
 	}
 
 	redactor := logging.NewRedactor()
-	redactor.ReplaceExact(collectLogSecrets(deps.Paths, deps.Token, settings))
+	baseSecrets := collectBaseLogSecrets(deps.Paths, deps.Token, settings)
+	catalogURLs := collectCatalogLogSecrets(deps.Paths)
+	redactor.ReplaceExact(append(append([]string{}, baseSecrets...), catalogURLs...))
 	reporter := logging.NewFailureReporter(os.Stderr, redactor, nil)
-	cfg := logging.DefaultConfig()
+	cfg, err := daemonLoggingConfig(settings)
+	if err != nil {
+		return err
+	}
 
 	daemonRT, err := openDaemonRuntime(ctx, logging.RuntimeOptions{
 		BasePath:  deps.Paths.DaemonLog,
@@ -404,19 +415,28 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	if afterDaemonLoggingOpen != nil {
 		afterDaemonLoggingOpen(daemonRT.Logger)
 	}
+	loggingGroup := logging.NewGroup(deps.Paths.LogDir, cfg, daemonRT.Runtime, mihomoRT.Runtime)
+	reportBackground := func(component string, bgErr error) {
+		if bgErr == nil {
+			return
+		}
+		daemonRT.Logger.Error(bgErr.Error(), slog.String("component", component))
+	}
+	if settingsCommit.Committed && settingsCommit.Warning != nil {
+		reportBackground("settings", errors.New("parent directory sync failed after commit"))
+	}
 
 	assembly, err := buildDaemonRuntime(deps.Paths, settings, deps.Version, io.Discard, io.Discard, app.RuntimeBuildOptions{
 		InitialSetupRequired: created,
 		SettingsPath:         deps.Paths.Settings,
 		ServiceStatus:        deps.ServiceStatus,
-		MihomoStdout:         stdoutCapture,
-		MihomoStderr:         stderrCapture,
-		OnBackgroundError: func(component string, bgErr error) {
-			if bgErr == nil {
-				return
-			}
-			daemonRT.Logger.Error(bgErr.Error(), slog.String("component", component))
+		Logging:              loggingGroup,
+		RefreshLogSecrets: func(catalogURLs []string) {
+			redactor.ReplaceExact(append(append([]string{}, baseSecrets...), catalogURLs...))
 		},
+		MihomoStdout:      stdoutCapture,
+		MihomoStderr:      stderrCapture,
+		OnBackgroundError: reportBackground,
 	})
 	if err != nil {
 		return runDaemon(ctx, daemon.Options{
@@ -437,7 +457,16 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	})
 }
 
-func collectLogSecrets(paths platform.Paths, token string, settings config.Settings) []string {
+func daemonLoggingConfig(settings config.Settings) (logging.Config, error) {
+	effective := settings.EffectiveLogging()
+	cfg, err := logging.ConfigFromFields(effective.Level, effective.MaxSizeMB, effective.MaxFiles)
+	if err != nil {
+		return logging.Config{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid logging configuration"}
+	}
+	return cfg, nil
+}
+
+func collectBaseLogSecrets(paths platform.Paths, token string, settings config.Settings) []string {
 	secrets := make([]string, 0, 8)
 	if token != "" {
 		secrets = append(secrets, token)
@@ -448,6 +477,11 @@ func collectLogSecrets(paths platform.Paths, token string, settings config.Setti
 	if cred, err := panel.LoadOrCreateCredential(paths.WebCredential); err == nil && cred != "" {
 		secrets = append(secrets, cred)
 	}
+	return secrets
+}
+
+func collectCatalogLogSecrets(paths platform.Paths) []string {
+	secrets := make([]string, 0, 8)
 	catalog, err := subscription.LoadOrCreate(paths.SubscriptionCatalog)
 	if err != nil {
 		return secrets

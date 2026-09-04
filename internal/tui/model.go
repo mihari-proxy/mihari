@@ -10,6 +10,7 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/buildinfo"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/state"
 	connectionspage "github.com/mihari-proxy/mihari/internal/tui/pages/connections"
@@ -42,6 +43,8 @@ type Model struct {
 	reconnecting      bool
 	mutationsEnabled  bool
 	status            protocol.Status
+	statusEpoch       uint64
+	statusEpochKnown  bool
 	traffic           protocol.TrafficSample
 	memory            protocol.MemorySample
 	connections       protocol.ConnectionList
@@ -68,13 +71,18 @@ type Model struct {
 	// Sanitized reconnect reason shown after the stale footer label.
 	daemonHint string
 	// Daemon network features for Overview strip (via control client when live).
-	pageCtx       context.Context
-	networkClient networkStatusClient
-	systemProxy   protocol.SystemProxyStatus
-	systemProxyOK bool
-	tunStatus     protocol.TunStatus
-	tunOK         bool
-	loggingHealth LocalLoggingHealth
+	pageCtx         context.Context
+	networkClient   networkStatusClient
+	systemProxy     protocol.SystemProxyStatus
+	systemProxyOK   bool
+	tunStatus       protocol.TunStatus
+	tunOK           bool
+	loggingHealth   LocalLoggingHealth
+	loggingApply    loggingApplier
+	loggingEpoch    uint64
+	loggingRevision *uint64
+	loggingLoaded   bool
+	loggingStatus   protocol.LoggingStatus
 }
 
 // networkStatusClient is the minimal control surface for Overview network KPIs.
@@ -155,6 +163,7 @@ func newModelWithPageClients(proxyClient proxypage.Client, connectionsClient con
 		focus: ui.Focus{Area: ui.FocusRail, Page: active},
 		width: 100, height: 28, theme: ui.DefaultTheme(), monitor: NewMonitor(),
 		pendingActions: make(map[string]ui.Action),
+		loggingEpoch:   1,
 	}
 	model.resizePages()
 	return model
@@ -234,12 +243,29 @@ func (model *Model) SetServiceController(ctrl systempage.ServiceController) {
 	}
 }
 
-// SetLoggingHealth injects the local TUI logging availability observed during bootstrap.
-func (model *Model) SetLoggingHealth(health LocalLoggingHealth) {
+// SetLoggingApplier injects the Run-owned local writer applier.
+func (model *Model) SetLoggingApplier(applier loggingApplier) {
+	if model == nil {
+		return
+	}
+	model.loggingApply = applier
+	if applier != nil {
+		applier.Submit(logging.BootstrapConfig())
+	}
+}
+
+// SetLocalLoggingHealth injects local TUI writer availability observed during bootstrap.
+func (model *Model) SetLocalLoggingHealth(health LocalLoggingHealth) {
 	if model == nil {
 		return
 	}
 	model.loggingHealth = health
+	model.syncSystemLoggingStatus(model.loggingStatus, model.loggingLoaded)
+}
+
+// SetLoggingHealth is retained for callers built against the PR 1 bootstrap API.
+func (model *Model) SetLoggingHealth(health LocalLoggingHealth) {
+	model.SetLocalLoggingHealth(health)
 }
 
 func (model Model) loadRootServiceStatus() tea.Cmd {
@@ -293,7 +319,13 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.Result == nil {
 			return model, nil
 		}
+		if observed, ok := typed.Result.(ui.LoggingObservedMsg); ok {
+			model.observeLogging(observed.Epoch, observed.Status)
+		}
 		return model.dispatchPageTo(typed.Page, typed.Result)
+	case ui.LoggingObservedMsg:
+		model.observeLogging(typed.Epoch, typed.Status)
+		return model.dispatchPageTo(ui.PageSystem, typed)
 	case servicePollTickMsg:
 		return model, tea.Batch(model.loadRootServiceStatus(), model.scheduleServicePoll())
 	case rootServiceStatusMsg:
@@ -332,6 +364,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model, nil
 	case sessionEventMsg:
 		if !typed.Open {
+			model.resetLogging(model.loggingEpoch)
 			model.connected = false
 			model.stale = true
 			model.reconnecting = false
@@ -536,6 +569,29 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 	}
 	switch event.Kind {
 	case session.EventStatus:
+		statusEpochAdvanced := !model.statusEpochKnown || event.Epoch > model.statusEpoch
+		if model.statusEpochKnown && (event.Epoch < model.statusEpoch || (!statusEpochAdvanced && event.Status.Revision < model.status.Revision)) {
+			break
+		}
+		model.statusEpoch = event.Epoch
+		model.statusEpochKnown = true
+		currentLoggingCapability := slices.Contains(event.Status.Capabilities, protocol.CapabilityLogging)
+		loggingEpochAdvanced := event.Epoch > model.loggingEpoch
+		if loggingEpochAdvanced {
+			model.resetLogging(event.Epoch)
+		}
+		if event.Epoch == model.loggingEpoch {
+			switch {
+			case !currentLoggingCapability && !loggingEpochAdvanced && model.loggingLoaded:
+				model.resetLogging(event.Epoch)
+			case currentLoggingCapability && model.loggingRevision != nil && event.Status.Revision > *model.loggingRevision:
+				if model.loggingLoaded {
+					model.resetLogging(event.Epoch)
+				}
+				revision := event.Status.Revision
+				model.loggingRevision = &revision
+			}
+		}
 		model.status = event.Status
 		if model.connected && event.Status.Health != "degraded" {
 			model.daemonHint = ""
@@ -596,6 +652,8 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 	case session.EventWebGUI:
 		webGUI := event.WebGUI
 		model.webGUI = &webGUI
+	case session.EventLogging:
+		model.observeLogging(event.Epoch, event.Logging)
 	case session.EventLog:
 		if page, ok := model.pages[ui.PageLogs].(*logspage.Model); ok {
 			page.Observe(event.Log, event.ObservedAt)
@@ -612,6 +670,9 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		}
 		command = tea.Batch(command, model.loadNetworkStatus())
 	case session.EventReconnecting:
+		if event.Epoch > model.loggingEpoch {
+			model.resetLogging(event.Epoch)
+		}
 		model.connected = false
 		model.stale = true
 		model.reconnecting = true
@@ -647,6 +708,77 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 	model.syncSystem()
 	model.syncOverview()
 	return command
+}
+
+func (model *Model) resetLogging(epoch uint64) {
+	if model == nil || epoch < model.loggingEpoch {
+		return
+	}
+	if epoch > model.loggingEpoch {
+		model.loggingRevision = nil
+	}
+	model.loggingEpoch = epoch
+	model.loggingLoaded = false
+	model.loggingStatus = protocol.LoggingStatus{}
+	if model.loggingApply != nil {
+		model.loggingApply.Submit(logging.BootstrapConfig())
+	}
+	model.syncSystemLogging()
+}
+
+func (model *Model) observeLogging(epoch uint64, status protocol.LoggingStatus) bool {
+	if model == nil || epoch != model.loggingEpoch {
+		return false
+	}
+	if model.loggingRevision != nil && status.Revision < *model.loggingRevision {
+		return false
+	}
+	cfg, err := logging.ConfigFromFields(status.Level, status.MaxSizeMB, status.MaxFiles)
+	if err != nil {
+		return false
+	}
+	revision := status.Revision
+	model.loggingRevision = &revision
+	model.loggingLoaded = true
+	model.loggingStatus = status
+	if status.Revision > model.status.Revision {
+		model.status.Revision = status.Revision
+		model.syncSystem()
+		model.syncOverview()
+	}
+	if model.loggingApply != nil {
+		model.loggingApply.Submit(cfg)
+	}
+	model.syncSystemLoggingStatus(status, true)
+	return true
+}
+
+func (model *Model) syncSystemLogging() {
+	model.syncSystemLoggingStatus(protocol.LoggingStatus{}, false)
+}
+
+func (model *Model) syncSystemLoggingStatus(status protocol.LoggingStatus, available bool) {
+	page := model.pages[ui.PageSystem]
+	if page == nil {
+		return
+	}
+	leavingLoggingEdit := false
+	if !available && model.active == ui.PageSystem && model.inputMode == ui.InputText {
+		if provider, ok := page.(ui.HelpModeProvider); ok {
+			leavingLoggingEdit = provider.HelpMode() == ui.ModeLoggingEdit
+		}
+	}
+	updated, _ := page.Update(ui.LoggingSyncMsg{Epoch: model.loggingEpoch, Status: status, Available: available})
+	model.pages[ui.PageSystem] = updated
+	if leavingLoggingEdit {
+		model.inputMode = ui.InputNavigation
+	}
+	system, ok := updated.(*systempage.Model)
+	if !ok {
+		return
+	}
+	localAvailable := model.loggingHealth != nil && model.loggingHealth.Available()
+	system.SetLocalLoggingAvailable(localAvailable)
 }
 
 func (model Model) loadNetworkStatus() tea.Cmd {

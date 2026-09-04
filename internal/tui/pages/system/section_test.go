@@ -1,12 +1,45 @@
 package system
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
+
+func TestRows_LoggingSectionFollowsPortsAndIsUnavailableOffline(t *testing.T) {
+	model := New(nil, func() string { return "op" })
+	rows := model.rows()
+	ids := make([]string, len(rows))
+	for index, item := range rows {
+		ids[index] = item.id
+	}
+
+	portsEnd := slices.Index(ids, "port-web")
+	daemon := slices.Index(ids, "daemon")
+	if portsEnd < 0 || daemon < 0 {
+		t.Fatalf("missing boundary rows: %v", ids)
+	}
+	want := []string{"log-level", "log-max-size", "log-max-files", "log-directory"}
+	if got := ids[portsEnd+1 : daemon]; !slices.Equal(got, want) {
+		t.Fatalf("logging rows between ports and daemon = %v, want %v", got, want)
+	}
+	for _, item := range rows[portsEnd+1 : daemon] {
+		if item.section != "Logging" || item.value != ui.UnavailableTitle {
+			t.Fatalf("offline logging row = %#v", item)
+		}
+	}
+
+	view := model.View()
+	if !strings.Contains(view, "Logging") {
+		t.Fatalf("missing Logging section:\n%s", view)
+	}
+	if strings.Contains(view, "Export") {
+		t.Fatalf("Task 9 must not render Export:\n%s", view)
+	}
+}
 
 func TestView_SectionGroups(t *testing.T) {
 	model := New(nil, func() string { return "op" })

@@ -55,7 +55,11 @@ mihari status --json
 
 守护进程与捕获的 mihomo 日志默认级别为 `info`，每个活跃文件达到 10 MiB 时轮转，最多保留三份文件（活跃文件与最多两份归档）。TUI 启动时使用 bootstrap 配置：`debug`、100 MiB、10 份文件，以便在守护进程设置可用前也能记录日志；在后续控制面同步前保持该 bootstrap 配置。mihomo stdout 捕获为 `INFO`，stderr 捕获为 `WARN`；这只描述 Mihari 的捕获级别，不表示 mihomo 行内消息的实际严重程度。
 
-日志脱敏是尽力而为，所有日志仍须按敏感资料处理，分享前应检查内容。本版本没有日志配置 UI，也不提供日志导出命令或界面。
+TUI 的 System 页面提供 Logging 区，可修改由守护进程持有的级别、单文件最大大小和保留数量；变更通过稳定的本地控制端点 `GET /v1/logging` 与 `PATCH /v1/logging` 完成。它们不是 CLI 命令，因此没有 `mihari logging` 或其他日志配置子命令；本版本也不提供日志导出命令或界面。
+
+旧版二进制以 `KnownFields(true)` 严格解码 `mihari.yaml`，不能读取非默认的 `log:` 块。降级前应在 System → Logging 恢复 `info` / 10 MiB / 3 份文件，使该块自动移除；也可以先备份设置文件后手动删除 `log:`。
+
+日志脱敏是尽力而为，所有日志仍须按敏感资料处理，分享前应检查内容。
 
 ## 核心与代理管理
 

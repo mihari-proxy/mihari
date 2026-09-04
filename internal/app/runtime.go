@@ -40,8 +40,11 @@ type RuntimeBuildOptions struct {
 	InitialSetupRequired bool
 	SettingsPath         string
 	ServiceStatus        func() (string, error)
+	Logging              runtimeapi.LoggingRuntime
+	RefreshLogSecrets    func(catalogURLs []string)
 	MihomoStdout         io.Writer
 	MihomoStderr         io.Writer
+	SaveOnboardingState  func(string, onboarding.State) (config.CommitResult, error)
 	OnBackgroundError    func(component string, err error)
 }
 
@@ -111,8 +114,15 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	if settingsPath == "" {
 		settingsPath = paths.Settings
 	}
+	var onboardingWarning func(error)
+	if options.OnBackgroundError != nil {
+		onboardingWarning = func(err error) { options.OnBackgroundError("onboarding", err) }
+	}
 	onboardingService, err := onboarding.Open(onboarding.Options{
-		StatePath: paths.Onboarding, SettingsPath: settingsPath, Settings: settings, InitialSetupRequired: options.InitialSetupRequired,
+		StatePath:            paths.Onboarding,
+		InitialSetupRequired: options.InitialSetupRequired,
+		SaveState:            options.SaveOnboardingState,
+		OnPersistenceWarning: onboardingWarning,
 	})
 	if err != nil {
 		return nil, err
@@ -196,6 +206,8 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 			return geoIPService.PrepareUpdate(ctx)
 		},
 		Onboarding:        onboardingService,
+		Logging:           options.Logging,
+		RefreshLogSecrets: options.RefreshLogSecrets,
 		Panels:            panelService,
 		WebGateway:        webGateway,
 		WebOpenToken:      webCredential,

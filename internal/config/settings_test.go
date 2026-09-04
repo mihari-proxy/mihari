@@ -29,6 +29,255 @@ func TestDefaultSettingsUseManagedPortsAndLoopback(t *testing.T) {
 	}
 }
 
+func TestSettingsLogging_LoadDefaultsAndNormalizesYAML(t *testing.T) {
+	// This catches a missing defaulting path for an omitted, partial, or zero-valued log block.
+	tests := []struct {
+		name string
+		log  string
+		want LoggingSettings
+	}{
+		{name: "omitted", want: LoggingSettings{Level: "info", MaxSizeMB: 10, MaxFiles: 3}},
+		{name: "empty block", log: "log: {}\n", want: LoggingSettings{Level: "info", MaxSizeMB: 10, MaxFiles: 3}},
+		{name: "partial block", log: "log:\n  level: debug\n", want: LoggingSettings{Level: "debug", MaxSizeMB: 10, MaxFiles: 3}},
+		{name: "explicit zero limits", log: "log:\n  level: warn\n  max-size-mb: 0\n  max-files: 0\n", want: LoggingSettings{Level: "warn", MaxSizeMB: 10, MaxFiles: 3}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "settings.yaml")
+			content := "schema: mihari.settings/v1\nmixed-addr: 127.0.0.1:9190\ncontroller-addr: 127.0.0.1:9090\nweb-addr: 127.0.0.1:9191\ncontroller-secret: " + strings.Repeat("ab", 32) + "\n" + test.log
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			settings, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := settings.EffectiveLogging(); got != test.want {
+				t.Fatalf("effective logging=%#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSettingsLogging_LoadAcceptsAllowedLevelsAndRejectsInvalidLimits(t *testing.T) {
+	// This catches an incomplete validation range or a level validator that accepts unsupported values.
+	for _, level := range []string{"debug", "info", "warn", "error"} {
+		t.Run("allows "+level, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "settings.yaml")
+			content := "schema: mihari.settings/v1\nmixed-addr: 127.0.0.1:9190\ncontroller-addr: 127.0.0.1:9090\nweb-addr: 127.0.0.1:9191\ncontroller-secret: " + strings.Repeat("ab", 32) + "\nlog:\n  level: " + level + "\n"
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+		})
+	}
+
+	for name, log := range map[string]string{
+		"level": "  level: trace\n",
+		"size":  "  max-size-mb: 101\n",
+		"files": "  max-files: 11\n",
+	} {
+		t.Run("rejects invalid "+name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "settings.yaml")
+			content := "schema: mihari.settings/v1\nmixed-addr: 127.0.0.1:9190\ncontroller-addr: 127.0.0.1:9090\nweb-addr: 127.0.0.1:9191\ncontroller-secret: " + strings.Repeat("ab", 32) + "\nlog:\n" + log
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatal("Load() error = nil, want invalid logging configuration error")
+			}
+		})
+	}
+}
+
+func TestSettingsLogging_SaveCanonicalizesAndOmitsDefaults(t *testing.T) {
+	// This catches persistence that serializes a partial non-default block or retains a default log block.
+	path := filepath.Join(t.TempDir(), "settings.yaml")
+	settings := Defaults()
+	settings.ControllerSecret = strings.Repeat("ab", 32)
+	settings.Logging = &LoggingSettings{Level: "debug"}
+
+	result, err := SaveWithCommit(path, settings)
+	if err != nil || !result.Committed || result.Warning != nil {
+		t.Fatalf("SaveWithCommit() result=%#v err=%v", result, err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"log:", "level: debug", "max-size-mb: 10", "max-files: 3"} {
+		if !strings.Contains(string(raw), field) {
+			t.Fatalf("saved settings missing %q: %s", field, raw)
+		}
+	}
+	if settings.Logging.MaxSizeMB != 0 || settings.Logging.MaxFiles != 0 {
+		t.Fatalf("SaveWithCommit mutated settings=%#v", settings)
+	}
+
+	settings.SetLogging(LoggingSettings{Level: "debug", MaxSizeMB: 15, MaxFiles: 5})
+	if _, err := SaveWithCommit(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := loaded.EffectiveLogging(), (LoggingSettings{Level: "debug", MaxSizeMB: 15, MaxFiles: 5}); got != want {
+		t.Fatalf("loaded logging=%#v, want %#v", got, want)
+	}
+
+	settings.SetLogging(DefaultLoggingSettings())
+	if _, err := SaveWithCommit(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "log:") {
+		t.Fatalf("default logging was serialized: %s", raw)
+	}
+}
+
+func TestSettingsLogging_LoadOrCreateOutcomeDistinguishesCommitAndNoWrite(t *testing.T) {
+	// This catches bootstrap callers being unable to distinguish a pre-commit error from a post-commit warning.
+	valid := Defaults()
+	valid.ControllerSecret = strings.Repeat("ab", 32)
+	warning := errors.New("sync parent directory")
+
+	t.Run("initial creation fails before commit", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "settings.yaml")
+		ops := defaultSettingsCreationOps()
+		ops.save = func(string, Settings) (CommitResult, error) {
+			return CommitResult{}, errors.New("replace failed")
+		}
+		_, created, result, err := loadOrCreateWithOpsOutcome(path, "", ops)
+		if err == nil || created || result.Committed {
+			t.Fatalf("created=%v result=%#v err=%v, want pre-commit failure", created, result, err)
+		}
+	})
+
+	t.Run("initial creation warns after commit", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "settings.yaml")
+		ops := defaultSettingsCreationOps()
+		ops.save = func(string, Settings) (CommitResult, error) {
+			return CommitResult{Committed: true, Warning: warning}, nil
+		}
+		settings, created, result, err := loadOrCreateWithOpsOutcome(path, "", ops)
+		if err != nil || !created || !result.Committed || !errors.Is(result.Warning, warning) {
+			t.Fatalf("settings=%#v created=%v result=%#v err=%v", settings, created, result, err)
+		}
+		if settings.ControllerSecret == "" {
+			t.Fatal("created settings must contain a controller secret")
+		}
+	})
+
+	t.Run("sidecar update fails before commit", func(t *testing.T) {
+		root := t.TempDir()
+		sidecar := filepath.Join(root, "core-channel")
+		if err := os.WriteFile(sidecar, []byte("alpha\nalpha-build\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ops := defaultSettingsCreationOps()
+		ops.load = func(string) (Settings, error) { return valid, nil }
+		ops.save = func(string, Settings) (CommitResult, error) {
+			return CommitResult{}, errors.New("replace failed")
+		}
+		_, created, result, err := loadOrCreateWithOpsOutcome(filepath.Join(root, "settings.yaml"), sidecar, ops)
+		if err == nil || created || result.Committed {
+			t.Fatalf("created=%v result=%#v err=%v, want pre-commit failure", created, result, err)
+		}
+	})
+
+	t.Run("sidecar update warns after commit", func(t *testing.T) {
+		root := t.TempDir()
+		path := filepath.Join(root, "settings.yaml")
+		sidecar := filepath.Join(root, "core-channel")
+		if err := os.WriteFile(sidecar, []byte("alpha\nalpha-build\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ops := defaultSettingsCreationOps()
+		ops.load = func(string) (Settings, error) { return valid, nil }
+		ops.save = func(string, Settings) (CommitResult, error) {
+			return CommitResult{Committed: true, Warning: warning}, nil
+		}
+		settings, created, result, err := loadOrCreateWithOpsOutcome(path, sidecar, ops)
+		if err != nil || created || !result.Committed || !errors.Is(result.Warning, warning) {
+			t.Fatalf("settings=%#v created=%v result=%#v err=%v", settings, created, result, err)
+		}
+		if settings.CoreChannel != "alpha" || settings.CoreChannelBundle != "alpha-build" {
+			t.Fatalf("settings=%#v, want applied sidecar", settings)
+		}
+	})
+
+	t.Run("existing unchanged settings has no outcome", func(t *testing.T) {
+		ops := defaultSettingsCreationOps()
+		ops.load = func(string) (Settings, error) { return valid, nil }
+		ops.save = func(string, Settings) (CommitResult, error) {
+			t.Fatal("SaveWithCommit must not run for unchanged settings")
+			return CommitResult{}, nil
+		}
+		settings, created, result, err := loadOrCreateWithOpsOutcome(filepath.Join(t.TempDir(), "settings.yaml"), "", ops)
+		if err != nil || created || result != (CommitResult{}) || !reflect.DeepEqual(settings, valid) {
+			t.Fatalf("settings=%#v created=%v result=%#v err=%v", settings, created, result, err)
+		}
+	})
+}
+
+func TestSettingsLogging_CloneDoesNotShareNestedTunOrLogging(t *testing.T) {
+	// This catches a candidate mutation leaking through nested YAML values before it is persisted.
+	settings := Defaults()
+	settings.Tun = map[string]any{
+		"dns": map[string]any{
+			"nameserver": []any{"a"},
+		},
+	}
+	settings.Logging = &LoggingSettings{Level: "debug", MaxSizeMB: 20, MaxFiles: 4}
+
+	clone := settings.Clone()
+	clone.Tun["dns"].(map[string]any)["nameserver"].([]any)[0] = "b"
+	clone.Logging.Level = "error"
+
+	if got := settings.Tun["dns"].(map[string]any)["nameserver"].([]any)[0]; got != "a" {
+		t.Fatalf("original nested nameserver=%#v, want a", got)
+	}
+	if settings.Logging.Level != "debug" {
+		t.Fatalf("original logging level=%q, want debug", settings.Logging.Level)
+	}
+}
+
+func TestSettingsCloneDoesNotShareTypedYAMLComposites(t *testing.T) {
+	settings := Defaults()
+	settings.Tun = map[string]any{
+		"nameserver": []string{"https://dns.example/dns-query"},
+		"providers": map[string][]string{
+			"fallback": {"1.1.1.1"},
+		},
+		"rules": []map[string][]string{
+			{"domains": {"example.com"}},
+		},
+	}
+
+	clone := settings.Clone()
+	clone.Tun["nameserver"].([]string)[0] = "https://changed.example/dns-query"
+	clone.Tun["providers"].(map[string][]string)["fallback"][0] = "8.8.8.8"
+	clone.Tun["rules"].([]map[string][]string)[0]["domains"][0] = "changed.example"
+
+	if got := settings.Tun["nameserver"].([]string)[0]; got != "https://dns.example/dns-query" {
+		t.Fatalf("original typed slice value=%q", got)
+	}
+	if got := settings.Tun["providers"].(map[string][]string)["fallback"][0]; got != "1.1.1.1" {
+		t.Fatalf("original typed map slice value=%q", got)
+	}
+	if got := settings.Tun["rules"].([]map[string][]string)[0]["domains"][0]; got != "example.com" {
+		t.Fatalf("original nested typed composite value=%q", got)
+	}
+}
+
 func TestSettingsValidationRejectsUnsafeOrConflictingAddresses(t *testing.T) {
 	tests := []struct {
 		name   string

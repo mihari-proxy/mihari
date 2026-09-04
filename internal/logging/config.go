@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"regexp"
@@ -38,6 +39,41 @@ func DefaultConfig() Config {
 // BootstrapConfig is the conservative TUI bootstrap: debug, 100 MiB, 10 files.
 func BootstrapConfig() Config {
 	return Config{Level: slog.LevelDebug, MaxSizeBytes: bootstrapMaxSize, MaxFiles: bootstrapMaxFiles}
+}
+
+// ParseLevel converts a persisted logging level to its slog level.
+func ParseLevel(level string) (slog.Level, error) {
+	switch level {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("unsupported logging level %q", level)
+	}
+}
+
+// ConfigFromFields validates persisted/API fields and converts MiB to bytes.
+func ConfigFromFields(level string, maxSizeMB, maxFiles int64) (Config, error) {
+	parsed, err := ParseLevel(level)
+	if err != nil {
+		return Config{}, err
+	}
+	if maxSizeMB < 1 || maxSizeMB > 100 {
+		return Config{}, fmt.Errorf("logging max size must be between 1 and 100 MiB")
+	}
+	if maxFiles < 1 || maxFiles > 10 {
+		return Config{}, fmt.Errorf("logging max files must be between 1 and 10")
+	}
+	return Config{
+		Level:        parsed,
+		MaxSizeBytes: maxSizeMB * 1024 * 1024,
+		MaxFiles:     int(maxFiles),
+	}, nil
 }
 
 // FailureClass is a stable, rate-limited stderr category.
