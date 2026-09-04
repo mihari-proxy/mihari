@@ -127,42 +127,43 @@ type WebGateway interface {
 }
 
 type Manager struct {
-	store             *state.Store
-	coordinator       *state.Coordinator
-	installer         CoreInstaller
-	installRequest    core.InstallRequest
-	supervisor        CoreSupervisor
-	controller        Controller
-	binaryExists      func() bool
-	subscriptions     *subscription.Service
-	preferences       *preferences.Service
-	settings          config.Settings
-	runtimeConfig     string
-	stagingDir        string
-	validateConfig    func(context.Context, string) error
-	runScheduler      func(context.Context) error
-	geoip             GeoIPService
-	prepareGeoIP      func(context.Context) (GeoIPCandidate, error)
-	onboarding        *onboarding.Service
-	panels            PanelService
-	webGateway        WebGateway
-	webOpenToken      string
-	sysProxy          sysproxy.Backend
-	tunDetect         tundetect.Backend
-	lookupOccupant    func(string) (int, bool)
-	settingsPath      string
-	saveSettings      func(string, config.Settings) (config.CommitResult, error)
-	serviceStatus     func() (string, error)
-	onBackgroundError func(component string, err error)
-	settingsMu        sync.RWMutex
-	tunLastError      string
-	maintenance       chan struct{}
-	installed         chan struct{}
-	closing           atomic.Bool
-	mutationDegraded  atomic.Bool
-	running           atomic.Bool
-	operationsMu      sync.Mutex
-	operations        map[string]*operationEntry
+	store                     *state.Store
+	coordinator               *state.Coordinator
+	installer                 CoreInstaller
+	installRequest            core.InstallRequest
+	supervisor                CoreSupervisor
+	controller                Controller
+	binaryExists              func() bool
+	subscriptions             *subscription.Service
+	preferences               *preferences.Service
+	settings                  config.Settings
+	runtimeConfig             string
+	stagingDir                string
+	validateConfig            func(context.Context, string) error
+	runScheduler              func(context.Context) error
+	geoip                     GeoIPService
+	prepareGeoIP              func(context.Context) (GeoIPCandidate, error)
+	onboarding                *onboarding.Service
+	onboardingRestartRequired bool
+	panels                    PanelService
+	webGateway                WebGateway
+	webOpenToken              string
+	sysProxy                  sysproxy.Backend
+	tunDetect                 tundetect.Backend
+	lookupOccupant            func(string) (int, bool)
+	settingsPath              string
+	saveSettings              func(string, config.Settings) (config.CommitResult, error)
+	serviceStatus             func() (string, error)
+	onBackgroundError         func(component string, err error)
+	settingsMu                sync.RWMutex
+	tunLastError              string
+	maintenance               chan struct{}
+	installed                 chan struct{}
+	closing                   atomic.Bool
+	mutationDegraded          atomic.Bool
+	running                   atomic.Bool
+	operationsMu              sync.Mutex
+	operations                map[string]*operationEntry
 }
 
 type operationEntry struct {

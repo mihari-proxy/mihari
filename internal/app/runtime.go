@@ -42,6 +42,7 @@ type RuntimeBuildOptions struct {
 	ServiceStatus        func() (string, error)
 	MihomoStdout         io.Writer
 	MihomoStderr         io.Writer
+	SaveOnboardingState  func(string, onboarding.State) (config.CommitResult, error)
 	OnBackgroundError    func(component string, err error)
 }
 
@@ -111,8 +112,15 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	if settingsPath == "" {
 		settingsPath = paths.Settings
 	}
+	var onboardingWarning func(error)
+	if options.OnBackgroundError != nil {
+		onboardingWarning = func(err error) { options.OnBackgroundError("onboarding", err) }
+	}
 	onboardingService, err := onboarding.Open(onboarding.Options{
-		StatePath: paths.Onboarding, SettingsPath: settingsPath, Settings: settings, InitialSetupRequired: options.InitialSetupRequired,
+		StatePath:            paths.Onboarding,
+		InitialSetupRequired: options.InitialSetupRequired,
+		SaveState:            options.SaveOnboardingState,
+		OnPersistenceWarning: onboardingWarning,
 	})
 	if err != nil {
 		return nil, err
