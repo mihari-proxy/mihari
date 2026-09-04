@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/subscription"
 	"github.com/mihari-proxy/mihari/internal/tundetect"
+	"go.yaml.in/yaml/v3"
 )
 
 func TestTunStatusUnmanagedByDefault(t *testing.T) {
@@ -468,6 +470,147 @@ func TestEnableTunConfirmationFailureRestoresUnmanagedLiveState(t *testing.T) {
 		t.Fatalf("settings rollback did not restore unmanaged before: %#v", manager.settingsSnapshot().Tun)
 	}
 	if snapshot := manager.Snapshot(); snapshot.Revision != 0 || snapshot.Health != "ok" {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+}
+
+func TestEnableTunRollbackRestoresActiveSubscriptionLiveTarget(t *testing.T) {
+	beforeTun := map[string]any{
+		"enable":     true,
+		"stack":      "system",
+		"device":     "subscription-tun",
+		"auto-route": true,
+		"dns-hijack": []any{"any:53"},
+	}
+	controller := &tunRuntimeController{}
+	manager, runtimePath := activeSubscriptionTunManager(t, controller, beforeTun)
+	confirmationFailed := false
+	controller.patchConfigs = func(_ context.Context, patch map[string]any) error {
+		controller.configs["tun"] = cloneTunMap(patch["tun"].(map[string]any))
+		return nil
+	}
+	controller.configsFunc = func(context.Context) (map[string]any, error) {
+		if controller.patchCalls == 1 && !confirmationFailed {
+			confirmationFailed = true
+			return nil, errors.New("live confirmation failed")
+		}
+		return controller.configs, nil
+	}
+
+	_, err := manager.EnableTun(context.Background(), Operation{ID: "restore-subscription-live", Source: "test"}, false)
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeUpstreamFailure || apiError.Message != "TUN did not become live after apply" {
+		t.Fatalf("err=%v want stable live confirmation failure", err)
+	}
+	requireLiveTun(t, controller.configs, beforeTun)
+	requireRuntimeTun(t, runtimePath, beforeTun)
+	if err := controller.Reload(context.Background(), runtimePath, true); err != nil {
+		t.Fatal(err)
+	}
+	requireLiveTun(t, controller.configs, beforeTun)
+	if len(manager.settingsSnapshot().Tun) != 0 {
+		t.Fatalf("settings rollback did not restore unmanaged before: %#v", manager.settingsSnapshot().Tun)
+	}
+	if snapshot := manager.Snapshot(); snapshot.Revision != 0 || snapshot.Health != "ok" {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+}
+
+func TestEnableTunCanceledConfirmationRestoresActiveSubscriptionLiveTarget(t *testing.T) {
+	beforeTun := map[string]any{
+		"enable":     true,
+		"stack":      "system",
+		"device":     "subscription-tun",
+		"auto-route": true,
+		"dns-hijack": []any{"any:53"},
+	}
+	controller := &tunRuntimeController{}
+	manager, runtimePath := activeSubscriptionTunManager(t, controller, beforeTun)
+	controller.patchConfigs = func(_ context.Context, patch map[string]any) error {
+		controller.configs["tun"] = cloneTunMap(patch["tun"].(map[string]any))
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	confirmationEntered := make(chan struct{})
+	var confirmation sync.Once
+	controller.configsFunc = func(ctx context.Context) (map[string]any, error) {
+		if controller.patchCalls == 1 {
+			confirmation.Do(func() { close(confirmationEntered) })
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		if controller.patchCalls > 1 && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return controller.configs, nil
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := manager.EnableTun(ctx, Operation{ID: "cancel-restore-subscription-live", Source: "test"}, false)
+		done <- err
+	}()
+	select {
+	case <-confirmationEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("live confirmation did not begin")
+	}
+	if got := controller.configs["tun"].(map[string]any); reflect.DeepEqual(got, beforeTun) {
+		t.Fatalf("test did not observe candidate live transition: %#v", got)
+	}
+	cancel()
+	err := <-done
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "mutation compensation failed" {
+		t.Fatalf("err=%v want stable compensation failure", err)
+	}
+	requireLiveTun(t, controller.configs, beforeTun)
+	requireRuntimeTun(t, runtimePath, beforeTun)
+	if err := controller.Reload(context.Background(), runtimePath, true); err != nil {
+		t.Fatal(err)
+	}
+	requireLiveTun(t, controller.configs, beforeTun)
+	if len(manager.settingsSnapshot().Tun) != 0 {
+		t.Fatalf("settings rollback did not restore unmanaged before: %#v", manager.settingsSnapshot().Tun)
+	}
+	if snapshot := manager.Snapshot(); snapshot.Revision != 1 || snapshot.Health != "degraded" || snapshot.LastError != "mutation compensation failed; restart required" {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+}
+
+func TestEnableTunRollbackWithoutPreLiveSnapshotDegrades(t *testing.T) {
+	controller := &fakeController{configs: map[string]any{
+		"tun": map[string]any{"enable": false, "stack": "gVisor"},
+	}}
+	confirmationFailed := false
+	controller.patchConfigs = func(_ context.Context, patch map[string]any) error {
+		controller.configs["tun"] = cloneTunMap(patch["tun"].(map[string]any))
+		return nil
+	}
+	controller.configsFunc = func(context.Context) (map[string]any, error) {
+		if controller.patchCalls == 0 {
+			return nil, errors.New("pre-live configs unavailable")
+		}
+		if controller.patchCalls == 1 && !confirmationFailed {
+			confirmationFailed = true
+			return nil, errors.New("post-apply confirmation failed")
+		}
+		return controller.configs, nil
+	}
+	manager := newTunManager(t, controller, defaultTunSettings(nil))
+
+	_, err := manager.EnableTun(context.Background(), Operation{ID: "missing-pre-live", Source: "test"}, false)
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "mutation compensation failed" {
+		t.Fatalf("err=%v want stable compensation failure", err)
+	}
+	if controller.patchCalls != 1 {
+		t.Fatalf("patchCalls=%d want no guessed live restore without a before snapshot", controller.patchCalls)
+	}
+	if len(manager.settingsSnapshot().Tun) != 0 {
+		t.Fatalf("settings rollback did not restore unmanaged before: %#v", manager.settingsSnapshot().Tun)
+	}
+	if snapshot := manager.Snapshot(); snapshot.Revision != 1 || snapshot.Health != "degraded" || snapshot.LastError != "mutation compensation failed; restart required" {
 		t.Fatalf("snapshot=%#v", snapshot)
 	}
 }
@@ -1191,4 +1334,111 @@ func persistTunSettings(t *testing.T, settings config.Settings) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+type tunRuntimeController struct {
+	fakeController
+}
+
+func (c *tunRuntimeController) Reload(_ context.Context, path string, _ bool) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var document map[string]any
+	if err := yaml.Unmarshal(content, &document); err != nil {
+		return err
+	}
+	tun, ok := document["tun"].(map[string]any)
+	if !ok {
+		return errors.New("runtime config does not contain a TUN block")
+	}
+	c.reloads++
+	if c.configs == nil {
+		c.configs = make(map[string]any)
+	}
+	c.configs["tun"] = cloneTunMap(tun)
+	return nil
+}
+
+func activeSubscriptionTunManager(t *testing.T, controller *tunRuntimeController, tun map[string]any) (*Manager, string) {
+	t.Helper()
+	root := t.TempDir()
+	cacheDir := filepath.Join(root, "subscriptions", "cache")
+	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	profileID := strings.Repeat("a", 32)
+	catalog := subscription.Defaults()
+	catalog.ActiveID = profileID
+	catalog.Profiles = []subscription.Profile{{
+		ID: profileID, Name: "active", URL: "https://example.invalid/subscription", Enabled: true, Generation: 1,
+	}}
+	catalogPath := filepath.Join(root, "subscriptions", "catalog.yaml")
+	if err := subscription.Save(catalogPath, catalog); err != nil {
+		t.Fatal(err)
+	}
+	document := subscription.Document{
+		"proxies": []any{map[string]any{"name": "DIRECT", "type": "direct"}},
+		"tun":     cloneTunMap(tun),
+	}
+	cacheContent, err := yaml.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, profileID+".yaml"), cacheContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service, err := subscription.Open(subscription.ServiceOptions{
+		CatalogPath: catalogPath,
+		CacheDir:    cacheDir,
+		ProxyAddr:   "127.0.0.1:9190",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := defaultTunSettings(nil)
+	settingsPath := filepath.Join(root, "settings.yaml")
+	if err := config.Save(settingsPath, settings); err != nil {
+		t.Fatal(err)
+	}
+	runtimeContent, err := subscription.Generate(document, nil, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimePath := filepath.Join(root, "runtime", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(runtimePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runtimePath, runtimeContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	controller.configs = map[string]any{"tun": cloneTunMap(tun)}
+	manager := newTestManager(Options{
+		Controller: controller, Settings: settings, SettingsPath: settingsPath,
+		Subscriptions: service, RuntimeConfig: runtimePath, StagingDir: filepath.Join(root, "staging"),
+		ValidateConfig: func(context.Context, string) error { return nil },
+	})
+	return manager, runtimePath
+}
+
+func requireRuntimeTun(t *testing.T, path string, want map[string]any) {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := yaml.Unmarshal(content, &document); err != nil {
+		t.Fatal(err)
+	}
+	requireLiveTun(t, document, want)
+}
+
+func requireLiveTun(t *testing.T, configs map[string]any, want map[string]any) {
+	t.Helper()
+	got, ok := configs["tun"].(map[string]any)
+	if !ok || !reflect.DeepEqual(got, want) {
+		t.Fatalf("tun=%#v want %#v", got, want)
+	}
 }

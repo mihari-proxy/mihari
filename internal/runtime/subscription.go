@@ -342,8 +342,12 @@ func (m *Manager) mutateSubscription(ctx context.Context, prefix string, operati
 }
 
 func (m *Manager) prepareCatalogConfig(ctx context.Context, catalog subscription.Catalog) (configCandidate, error) {
+	return m.prepareCatalogConfigWithSettings(ctx, catalog, m.settingsSnapshot())
+}
+
+func (m *Manager) prepareCatalogConfigWithSettings(ctx context.Context, catalog subscription.Catalog, settings config.Settings) (configCandidate, error) {
 	if catalog.ActiveID == "" {
-		content, err := core.BootstrapConfig(m.settingsSnapshot())
+		content, err := core.BootstrapConfig(settings)
 		if err != nil {
 			return configCandidate{}, err
 		}
@@ -353,11 +357,15 @@ func (m *Manager) prepareCatalogConfig(ctx context.Context, catalog subscription
 	if err != nil {
 		return configCandidate{}, err
 	}
-	return m.prepareConfig(ctx, document)
+	return m.prepareConfigWithSettings(ctx, document, settings)
 }
 
 func (m *Manager) prepareConfig(ctx context.Context, document subscription.Document) (configCandidate, error) {
-	content, err := subscription.Generate(document, nil, m.settingsSnapshot())
+	return m.prepareConfigWithSettings(ctx, document, m.settingsSnapshot())
+}
+
+func (m *Manager) prepareConfigWithSettings(ctx context.Context, document subscription.Document, settings config.Settings) (configCandidate, error) {
+	content, err := subscription.Generate(document, nil, settings)
 	if err != nil {
 		return configCandidate{}, err
 	}

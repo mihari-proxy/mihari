@@ -87,14 +87,18 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 		return protocol.TunStatus{}, err
 	}
 	if err := ctx.Err(); err != nil {
-		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, err, false)
+		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, err, false, nil)
 	}
 	nextTun := cloneTunMap(candidate.after.Tun)
+	liveBefore := m.captureTunLive(ctx)
+	if err := ctx.Err(); err != nil {
+		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, err, false, nil)
+	}
 
 	if applyErr := m.applyTun(ctx, nextTun); applyErr != nil {
 		mapped := mapTunApplyError(applyErr)
 		m.setTunLastError(tunErrorMessage(mapped))
-		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, mapped, true)
+		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, mapped, true, liveBefore)
 	}
 
 	live, ok := false, false
@@ -110,7 +114,7 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 		}
 		mapped := protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: message}
 		m.setTunLastError(mapped.Message)
-		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, mapped, true)
+		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, mapped, true, liveBefore)
 	}
 	liveEnable := &live
 
@@ -128,11 +132,15 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 	return buildTunStatusFromObservation(candidate.after, m.store.Load().Revision, conflict, liveEnable, ""), nil
 }
 
-func (m *Manager) compensateTun(ctx context.Context, op Operation, candidate settingsCandidate, cause error, restoreLive bool) error {
+func (m *Manager) compensateTun(ctx context.Context, op Operation, candidate settingsCandidate, cause error, restoreLive bool, liveBefore map[string]any) error {
 	_, rollbackErr := m.restoreSettings(candidate.before)
 	var liveRestoreErr error
 	if restoreLive {
-		liveRestoreErr = m.restoreTunLive(ctx, candidate.before.Tun, candidate.after.Tun)
+		if liveBefore == nil {
+			liveRestoreErr = errors.New("TUN live state before apply is unavailable")
+		} else {
+			liveRestoreErr = m.restoreTunLive(ctx, liveBefore)
+		}
 	}
 	if rollbackErr == nil && liveRestoreErr == nil {
 		return cause
@@ -146,11 +154,7 @@ func (m *Manager) compensateTun(ctx context.Context, op Operation, candidate set
 	return err
 }
 
-func (m *Manager) restoreTunLive(ctx context.Context, before, applied map[string]any) error {
-	target := cloneTunMap(before)
-	if len(target) == 0 {
-		target = buildManagedTun(false, applied)
-	}
+func (m *Manager) restoreTunLive(ctx context.Context, target map[string]any) error {
 	if err := m.applyTun(ctx, target); err != nil {
 		return err
 	}
@@ -162,7 +166,7 @@ func (m *Manager) restoreTunLive(ctx context.Context, before, applied map[string
 		return err
 	}
 	live, ok := liveTunEnable(configs)
-	if !ok || live != tunDesiredEnable(before) {
+	if !ok || live != tunDesiredEnable(target) {
 		return errors.New("TUN live restore is unconfirmed")
 	}
 	return nil
@@ -179,10 +183,12 @@ func (m *Manager) setTunLastError(message string) {
 func (m *Manager) applyTun(ctx context.Context, nextTun map[string]any) error {
 	var regenerateErr, patchErr error
 	regenerated := false
+	settings := m.settingsSnapshot()
+	settings.Tun = cloneTunMap(nextTun)
 
 	if m.subscriptions != nil && m.runtimeConfig != "" && m.stagingDir != "" {
 		catalog := m.subscriptions.Snapshot()
-		candidate, err := m.prepareCatalogConfig(ctx, catalog)
+		candidate, err := m.prepareCatalogConfigWithSettings(ctx, catalog, settings)
 		if err != nil {
 			regenerateErr = err
 		} else {
@@ -217,6 +223,24 @@ func (m *Manager) applyTun(ctx context.Context, nextTun map[string]any) error {
 		Code:    protocol.CodeInvalidState,
 		Message: "mihomo controller is unavailable",
 	}
+}
+
+func (m *Manager) captureTunLive(ctx context.Context) map[string]any {
+	if m.controller == nil || ctx.Err() != nil {
+		return nil
+	}
+	configs, err := m.controller.Configs(ctx)
+	if err != nil {
+		return nil
+	}
+	tun, ok := configs["tun"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	if _, ok := tun["enable"].(bool); !ok {
+		return nil
+	}
+	return cloneTunMap(tun)
 }
 
 func (m *Manager) buildTunStatus(ctx context.Context, lastError string) protocol.TunStatus {
