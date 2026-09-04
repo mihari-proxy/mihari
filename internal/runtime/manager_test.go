@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -964,6 +965,86 @@ func TestObservePreservesCoreChannelAndAlphaSHA(t *testing.T) {
 	if core.Version != "v1.19.0" || core.Channel != "alpha" || core.AlphaSHA != "e183c58" {
 		t.Fatalf("observe wiped identity: %#v", core)
 	}
+}
+
+func TestObserveWaitingForInstallPreservesCommittedCoreIdentity(t *testing.T) {
+	commitEntered := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	installer := &fakeInstaller{candidate: &fakeCandidate{
+		version:  "v1.20.0",
+		alphaSHA: "alpha-new",
+		commit: func() (core.InstallResult, error) {
+			close(commitEntered)
+			<-releaseCommit
+			return core.InstallResult{Version: "v1.20.0", Updated: true, AlphaSHA: "alpha-new"}, nil
+		},
+	}}
+	settings, settingsPath := persistedChannelSettings(t, "stable")
+	manager := newTestManager(Options{
+		Installer: installer, Settings: settings, SettingsPath: settingsPath, Supervisor: &fakeSupervisor{},
+	})
+	before := manager.store.Load()
+	before.Core.Version = "v1.19.0"
+	before.Core.Channel = "stable"
+	manager.store.Store(before)
+
+	alpha := "alpha"
+	installDone := make(chan error, 1)
+	go func() {
+		_, err := manager.Install(context.Background(), Operation{ID: "identity-install", Source: "test", Channel: &alpha})
+		installDone <- err
+	}()
+	select {
+	case <-commitEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("install did not enter candidate commit")
+	}
+
+	observeDone := make(chan struct{})
+	go func() {
+		manager.Observe(supervisor.Observation{Status: supervisor.StatusRunning, PID: 4242, Restarts: 2})
+		close(observeDone)
+	}()
+	waitForRuntimeStack(t, "(*Manager).Observe", "(*Manager).lockMaintenance")
+	close(releaseCommit)
+	if err := <-installDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-observeDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("observation did not finish after install")
+	}
+
+	got := manager.store.Load().Core
+	if got.Status != string(supervisor.StatusRunning) || got.PID != 4242 || got.Restarts != 2 {
+		t.Fatalf("observation dynamic fields=%#v", got)
+	}
+	if got.Version != "v1.20.0" || got.Channel != "alpha" || got.AlphaSHA != "alpha-new" {
+		t.Fatalf("delayed observation overwrote committed identity: %#v", got)
+	}
+}
+
+func waitForRuntimeStack(t *testing.T, frames ...string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		buffer := make([]byte, 1<<16)
+		n := goruntime.Stack(buffer, true)
+		stack := string(buffer[:n])
+		matched := true
+		for _, frame := range frames {
+			if !strings.Contains(stack, frame) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return
+		}
+		goruntime.Gosched()
+	}
+	t.Fatalf("runtime stack did not contain frames %q", frames)
 }
 
 func TestInstallRejectsNightlyChannelBeforePrepare(t *testing.T) {

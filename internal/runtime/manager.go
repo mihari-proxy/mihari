@@ -325,8 +325,12 @@ func (m *Manager) reportBackground(component string, err error) {
 }
 
 func (m *Manager) Observe(observation supervisor.Observation) {
+	if m.lockMaintenance(context.Background()) != nil {
+		return
+	}
+	defer m.unlock()
 	current := m.store.Load().Core
-	m.setCoreState(state.CoreState{
+	m.setCoreStateLocked(state.CoreState{
 		Status:      string(observation.Status),
 		PID:         observation.PID,
 		Restarts:    observation.Restarts,
@@ -746,6 +750,10 @@ func (m *Manager) setCoreState(coreState state.CoreState) {
 		return
 	}
 	defer m.unlock()
+	m.setCoreStateLocked(coreState)
+}
+
+func (m *Manager) setCoreStateLocked(coreState state.CoreState) {
 	_, _ = m.updateStateLocked(context.Background(), state.CommandMeta{Source: "runtime"}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 		snapshot.Core = coreState
 		return snapshot, nil

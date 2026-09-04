@@ -97,30 +97,22 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, mapped, true)
 	}
 
-	var liveEnable *bool
-	if enable {
-		live, ok := false, false
-		if m.controller != nil && ctx.Err() == nil {
-			if configs, cfgErr := m.controller.Configs(ctx); cfgErr == nil {
-				live, ok = liveTunEnable(configs)
-			}
-		}
-		if !(ok && live) {
-			mapped := protocol.APIError{
-				Code:    protocol.CodeUpstreamFailure,
-				Message: "TUN did not become live after apply",
-			}
-			m.setTunLastError(mapped.Message)
-			return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, mapped, true)
-		}
-		liveEnable = &live
-	} else if m.controller != nil && ctx.Err() == nil {
+	live, ok := false, false
+	if m.controller != nil && ctx.Err() == nil {
 		if configs, cfgErr := m.controller.Configs(ctx); cfgErr == nil {
-			if live, ok := liveTunEnable(configs); ok {
-				liveEnable = &live
-			}
+			live, ok = liveTunEnable(configs)
 		}
 	}
+	if !ok || live != enable {
+		message := "TUN did not become live after apply"
+		if !enable {
+			message = "TUN did not become disabled after apply"
+		}
+		mapped := protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: message}
+		m.setTunLastError(mapped.Message)
+		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, mapped, true)
+	}
+	liveEnable := &live
 
 	m.setTunLastError("")
 
@@ -139,8 +131,8 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 func (m *Manager) compensateTun(ctx context.Context, op Operation, candidate settingsCandidate, cause error, restoreLive bool) error {
 	_, rollbackErr := m.restoreSettings(candidate.before)
 	var liveRestoreErr error
-	if restoreLive && len(candidate.before.Tun) > 0 {
-		liveRestoreErr = m.applyTun(ctx, cloneTunMap(candidate.before.Tun))
+	if restoreLive {
+		liveRestoreErr = m.restoreTunLive(ctx, candidate.before.Tun, candidate.after.Tun)
 	}
 	if rollbackErr == nil && liveRestoreErr == nil {
 		return cause
@@ -152,6 +144,28 @@ func (m *Manager) compensateTun(ctx context.Context, op Operation, candidate set
 		return snapshot, degradedErr
 	})
 	return err
+}
+
+func (m *Manager) restoreTunLive(ctx context.Context, before, applied map[string]any) error {
+	target := cloneTunMap(before)
+	if len(target) == 0 {
+		target = buildManagedTun(false, applied)
+	}
+	if err := m.applyTun(ctx, target); err != nil {
+		return err
+	}
+	if m.controller == nil {
+		return errors.New("TUN live restore is unconfirmed")
+	}
+	configs, err := m.controller.Configs(ctx)
+	if err != nil {
+		return err
+	}
+	live, ok := liveTunEnable(configs)
+	if !ok || live != tunDesiredEnable(before) {
+		return errors.New("TUN live restore is unconfirmed")
+	}
+	return nil
 }
 
 func (m *Manager) setTunLastError(message string) {
