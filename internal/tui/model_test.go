@@ -1120,6 +1120,50 @@ func TestModel_LoggingPageObservationAdvancesGlobalRevision(t *testing.T) {
 	}
 }
 
+func TestModel_StatusDoesNotRegressWithinEpochButAcceptsNewEpoch(t *testing.T) {
+	model := NewModel()
+	applier := &recordingLoggingApplier{}
+	model.SetLoggingApplier(applier)
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 5, DaemonVersion: "current", Health: "ok", Capabilities: []string{protocol.CapabilityLogging},
+	}})
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: protocol.LoggingStatus{
+		Revision: 5, Level: "info", MaxSizeMB: 10, MaxFiles: 3,
+	}})
+	updated, _ := model.Update(ui.PageResultMsg{
+		Page: ui.PageSystem,
+		Result: ui.LoggingObservedMsg{Epoch: 1, Status: protocol.LoggingStatus{
+			Revision: 6, Level: "warn", MaxSizeMB: 20, MaxFiles: 5,
+		}},
+	})
+	model = updated.(Model)
+	applyCount := applier.count()
+
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 5, DaemonVersion: "stale", Health: "degraded", LastError: "stale status",
+		SetupRequired: true,
+	}})
+	if model.status.Revision != 6 || model.status.DaemonVersion != "current" || model.status.Health != "ok" || model.status.SetupRequired {
+		t.Fatalf("same-epoch stale status replaced current state: %+v", model.status)
+	}
+	if !model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 6 || model.loggingStatus.Level != "warn" {
+		t.Fatalf("same-epoch stale status reset logging state: loaded=%v revision=%v status=%+v", model.loggingLoaded, model.loggingRevision, model.loggingStatus)
+	}
+	if applier.count() != applyCount {
+		t.Fatalf("same-epoch stale status applied %d logging configs", applier.count()-applyCount)
+	}
+
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 2, Status: protocol.Status{
+		Revision: 1, DaemonVersion: "restarted", Health: "ok",
+	}})
+	if model.status.Revision != 1 || model.status.DaemonVersion != "restarted" {
+		t.Fatalf("new-epoch status was not accepted: %+v", model.status)
+	}
+	if model.loggingEpoch != 2 || model.loggingLoaded || model.loggingRevision != nil {
+		t.Fatalf("new epoch did not reset logging state: epoch=%d loaded=%v revision=%v", model.loggingEpoch, model.loggingLoaded, model.loggingRevision)
+	}
+}
+
 func TestModel_LoggingUnavailableSyncLeavesRootTextInputMode(t *testing.T) {
 	model := NewModel()
 	page := &loggingResultRecordingPage{helpMode: ui.ModeLoggingEdit}

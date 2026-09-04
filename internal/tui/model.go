@@ -43,6 +43,8 @@ type Model struct {
 	reconnecting      bool
 	mutationsEnabled  bool
 	status            protocol.Status
+	statusEpoch       uint64
+	statusEpochKnown  bool
 	traffic           protocol.TrafficSample
 	memory            protocol.MemorySample
 	connections       protocol.ConnectionList
@@ -567,14 +569,20 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 	}
 	switch event.Kind {
 	case session.EventStatus:
+		statusEpochAdvanced := !model.statusEpochKnown || event.Epoch > model.statusEpoch
+		if model.statusEpochKnown && (event.Epoch < model.statusEpoch || (!statusEpochAdvanced && event.Status.Revision < model.status.Revision)) {
+			break
+		}
+		model.statusEpoch = event.Epoch
+		model.statusEpochKnown = true
 		currentLoggingCapability := slices.Contains(event.Status.Capabilities, protocol.CapabilityLogging)
-		epochAdvanced := event.Epoch > model.loggingEpoch
-		if epochAdvanced {
+		loggingEpochAdvanced := event.Epoch > model.loggingEpoch
+		if loggingEpochAdvanced {
 			model.resetLogging(event.Epoch)
 		}
 		if event.Epoch == model.loggingEpoch {
 			switch {
-			case !currentLoggingCapability && !epochAdvanced && model.loggingLoaded:
+			case !currentLoggingCapability && !loggingEpochAdvanced && model.loggingLoaded:
 				model.resetLogging(event.Epoch)
 			case currentLoggingCapability && model.loggingRevision != nil && event.Status.Revision > *model.loggingRevision:
 				if model.loggingLoaded {
