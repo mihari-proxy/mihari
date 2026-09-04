@@ -552,7 +552,8 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 						ID: operation.ID, Source: operation.Source,
 					}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 						snapshot = applyCommittedIdentity(snapshot)
-						return snapshot, m.enterMutationDegraded(&snapshot)
+						degradedErr := m.enterMutationDegraded(&snapshot)
+						return snapshot, degradedErr
 					})
 					return settlementErr
 				}
