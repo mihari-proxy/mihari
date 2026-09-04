@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -272,6 +273,86 @@ func TestPublishDir_WindowsPostPublishFailureIsWarning(t *testing.T) {
 	}
 }
 
+func TestPublishWorkspace_WindowsReparseInspectionFailureCleansCreatedDirectory(t *testing.T) {
+	d, err := OpenPublishDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	inspectionErr := errors.New("injected attribute query failure")
+	originalInspect := publishWindowsCreatedHandleAttributesFn
+	t.Cleanup(func() { publishWindowsCreatedHandleAttributesFn = originalInspect })
+	publishWindowsCreatedHandleAttributesFn = func(windows.Handle) (uint32, error) { return 0, inspectionErr }
+	if w, err := d.CreateWorkspace(); !errors.Is(err, inspectionErr) {
+		if w != nil {
+			_ = w.Close()
+		}
+		t.Fatalf("CreateWorkspace error=%v want inspection error", err)
+	}
+	entries, err := os.ReadDir(d.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("created workspace was not cleaned: %v", entries)
+	}
+}
+
+func TestPublishWorkspace_WindowsReparseInspectionFailureCleansCreatedTemp(t *testing.T) {
+	d, err := OpenPublishDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	w, err := d.CreateWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	inspectionErr := errors.New("injected attribute query failure")
+	originalInspect := publishWindowsCreatedHandleAttributesFn
+	t.Cleanup(func() { publishWindowsCreatedHandleAttributesFn = originalInspect })
+	publishWindowsCreatedHandleAttributesFn = func(windows.Handle) (uint32, error) { return 0, inspectionErr }
+	if f, _, err := w.CreateTemp("inspect-*"); !errors.Is(err, inspectionErr) {
+		if f != nil {
+			_ = f.Close()
+		}
+		t.Fatalf("CreateTemp error=%v want inspection error", err)
+	}
+	empty, err := windowsDirectoryEmpty(w.plat.handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !empty {
+		t.Fatal("created temp was not cleaned")
+	}
+}
+
+func TestPublishWorkspace_WindowsReparseInspectionFailureJoinsCleanupError(t *testing.T) {
+	d, err := OpenPublishDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	inspectionErr := errors.New("injected attribute query failure")
+	cleanupErr := errors.New("injected cleanup failure")
+	originalInspect := publishWindowsCreatedHandleAttributesFn
+	originalDelete := publishWindowsDeleteCreatedFn
+	t.Cleanup(func() {
+		publishWindowsCreatedHandleAttributesFn = originalInspect
+		publishWindowsDeleteCreatedFn = originalDelete
+	})
+	publishWindowsCreatedHandleAttributesFn = func(windows.Handle) (uint32, error) { return 0, inspectionErr }
+	publishWindowsDeleteCreatedFn = func(windows.Handle) error { return cleanupErr }
+	w, err := d.CreateWorkspace()
+	if w != nil {
+		_ = w.Close()
+	}
+	if !errors.Is(err, inspectionErr) || !errors.Is(err, cleanupErr) {
+		t.Fatalf("CreateWorkspace error=%v want joined inspection and cleanup errors", err)
+	}
+}
+
 func makeDirectoryLink(t *testing.T, link, target string) {
 	t.Helper()
 	createJunction(t, link, target)
@@ -289,6 +370,16 @@ func moveWorkspaceOutside(t *testing.T, w *PublishWorkspace, _, outside string) 
 		t.Fatal(err)
 	}
 	return filepath.Join(outside, movedName)
+}
+
+func replaceWorkspaceEntry(t *testing.T, w *PublishWorkspace, parent, moved string) {
+	t.Helper()
+	if err := renameHandle(w.plat.handle, w.owner.plat.handle, filepath.Base(moved), windows.FILE_RENAME_POSIX_SEMANTICS); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(parent, w.name), 0o700); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func equalFoldPath(a, b string) bool { return strings.EqualFold(filepath.Clean(a), filepath.Clean(b)) }

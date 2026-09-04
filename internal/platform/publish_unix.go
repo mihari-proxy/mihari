@@ -14,16 +14,23 @@ import (
 var (
 	publishUnixPostLinkUnlinkFn = unix.Unlinkat
 	publishUnixFsyncFn          = unix.Fsync
+	publishUnixFchownFn         = unix.Fchown
 )
 
 type publishDirState struct {
-	fd int
-	id fileIdentity
+	fd       int
+	id       fileIdentity
+	setOwner bool
+	uid      int
+	gid      int
 }
 
 type publishWorkspaceState struct {
-	fd int
-	id fileIdentity
+	fd       int
+	id       fileIdentity
+	setOwner bool
+	uid      int
+	gid      int
 }
 
 func openPublishDir(path string) (*PublishDir, error) {
@@ -156,7 +163,16 @@ func (d *PublishDir) createWorkspaceLocked() (*PublishWorkspace, error) {
 			_ = unix.Unlinkat(d.plat.fd, name, unix.AT_REMOVEDIR)
 			return nil, fmt.Errorf("harden publish workspace: %w", err)
 		}
-		return &PublishWorkspace{owner: d, name: name, plat: publishWorkspaceState{fd: fd, id: identFromStat(&st)}}, nil
+		if d.plat.setOwner && effectiveUID() == 0 {
+			if err := publishUnixFchownFn(fd, d.plat.uid, d.plat.gid); err != nil {
+				_ = unix.Close(fd)
+				_ = unix.Unlinkat(d.plat.fd, name, unix.AT_REMOVEDIR)
+				return nil, fmt.Errorf("set publish workspace owner: %w", err)
+			}
+		}
+		return &PublishWorkspace{owner: d, name: name, plat: publishWorkspaceState{
+			fd: fd, id: identFromStat(&st), setOwner: d.plat.setOwner, uid: d.plat.uid, gid: d.plat.gid,
+		}}, nil
 	}
 	return nil, fmt.Errorf("create publish workspace: exhausted names")
 }
@@ -178,6 +194,13 @@ func (w *PublishWorkspace) createTempLocked(pattern string) (*os.File, string, e
 			_ = unix.Close(fd)
 			_ = unix.Unlinkat(w.plat.fd, name, 0)
 			return nil, "", fmt.Errorf("harden publish temp: %w", err)
+		}
+		if w.plat.setOwner && effectiveUID() == 0 {
+			if err := publishUnixFchownFn(fd, w.plat.uid, w.plat.gid); err != nil {
+				_ = unix.Close(fd)
+				_ = unix.Unlinkat(w.plat.fd, name, 0)
+				return nil, "", fmt.Errorf("set publish temp owner: %w", err)
+			}
 		}
 		return os.NewFile(uintptr(fd), name), name, nil
 	}
@@ -243,13 +266,33 @@ func (w *PublishWorkspace) closePlatformLocked(owner *PublishDir) error {
 			cleanupErr = err
 		} else if name == "" {
 			cleanupErr = fmt.Errorf("publish workspace cleanup: workspace moved outside parent")
-		} else if err := unix.Unlinkat(owner.plat.fd, name, unix.AT_REMOVEDIR); err != nil {
-			cleanupErr = fmt.Errorf("remove publish workspace: %w", err)
+		} else {
+			publishWorkspaceCleanupCheckpoint()
+			verifiedName, verifyErr := findUnixEntryByIdentity(owner.plat.fd, w.plat.id)
+			if verifyErr != nil {
+				cleanupErr = verifyErr
+			} else if verifiedName != name {
+				cleanupErr = fmt.Errorf("publish workspace cleanup: workspace identity changed before deletion")
+			} else if safe, safeErr := unixParentHasPrivateMutationBoundary(owner.plat.fd); safeErr != nil {
+				cleanupErr = safeErr
+			} else if !safe {
+				cleanupErr = fmt.Errorf("publish workspace cleanup: parent permits untrusted entry replacement")
+			} else if err := unix.Unlinkat(owner.plat.fd, name, unix.AT_REMOVEDIR); err != nil {
+				cleanupErr = fmt.Errorf("remove publish workspace: %w", err)
+			}
 		}
 	}
 	closeErr := unix.Close(w.plat.fd)
 	w.plat.fd = -1
 	return errors.Join(cleanupErr, closeErr)
+}
+
+func unixParentHasPrivateMutationBoundary(parentFD int) (bool, error) {
+	var st unix.Stat_t
+	if err := unix.Fstat(parentFD, &st); err != nil {
+		return false, fmt.Errorf("stat publish parent permissions: %w", err)
+	}
+	return st.Mode&0o022 == 0, nil
 }
 
 func (d *PublishDir) closePlatformLocked() error {

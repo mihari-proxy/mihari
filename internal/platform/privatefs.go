@@ -199,6 +199,9 @@ func (fs *PrivateFS) OpenPublishDir(path string) (*PublishDir, error) {
 	if err != nil {
 		return nil, err
 	}
+	if name != privateExportDirName {
+		return nil, fmt.Errorf("private fs publish directory must be logs-export")
+	}
 	return fs.openPublishDirLocked(name)
 }
 

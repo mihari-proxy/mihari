@@ -322,6 +322,9 @@ func (fs *PrivateFS) openPublishDirLocked(name string) (*PublishDir, error) {
 		_ = unix.Close(dup)
 		return nil, err
 	}
+	d.plat.setOwner = true
+	d.plat.uid = fs.plat.uid
+	d.plat.gid = fs.plat.gid
 	return d, nil
 }
 

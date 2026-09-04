@@ -96,6 +96,55 @@ func TestPublishDir_CloseIsIdempotentAndPathRemainsReadable(t *testing.T) {
 	}
 }
 
+func TestPublishCapabilities_ClosedErrorPrecedesInvalidArguments(t *testing.T) {
+	d, err := OpenPublishDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := d.CreateWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	workspaceOps := []struct {
+		name string
+		call func() error
+	}{
+		{name: "CreateTemp invalid", call: func() error { _, _, err := w.CreateTemp("../bad"); return err }},
+		{name: "Remove invalid", call: func() error { return w.Remove("../bad") }},
+		{name: "Publish with closed workspace", call: func() error { return d.PublishNoReplace(w, "../bad", "../bad", nil) }},
+	}
+	for _, op := range workspaceOps {
+		t.Run(op.name, func(t *testing.T) {
+			if err := op.call(); !errors.Is(err, os.ErrClosed) {
+				t.Fatalf("error=%v want os.ErrClosed", err)
+			}
+		})
+	}
+
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dirOps := []struct {
+		name string
+		call func() error
+	}{
+		{name: "Exists invalid", call: func() error { _, err := d.Exists("../bad"); return err }},
+		{name: "IsWithin nil", call: func() error { _, err := d.IsWithin(nil); return err }},
+		{name: "CreateWorkspace", call: func() error { _, err := d.CreateWorkspace(); return err }},
+		{name: "Publish nil invalid", call: func() error { return d.PublishNoReplace(nil, "../bad", "../bad", nil) }},
+	}
+	for _, op := range dirOps {
+		t.Run(op.name, func(t *testing.T) {
+			if err := op.call(); !errors.Is(err, os.ErrClosed) {
+				t.Fatalf("error=%v want os.ErrClosed", err)
+			}
+		})
+	}
+}
+
 func TestPublishWorkspace_CloseMovedOutsideParentReturnsWarning(t *testing.T) {
 	base := t.TempDir()
 	parent := filepath.Join(base, "parent")
@@ -123,6 +172,79 @@ func TestPublishWorkspace_CloseMovedOutsideParentReturnsWarning(t *testing.T) {
 		t.Fatalf("second Close=%v", err)
 	}
 	if info, err := os.Stat(moved); err != nil || !info.IsDir() {
+		t.Fatalf("moved workspace was touched: info=%v err=%v", info, err)
+	}
+}
+
+func TestPublishWorkspace_CloseFailsClosedWhenEntryChangesAfterIdentityCheck(t *testing.T) {
+	base := t.TempDir()
+	parent := filepath.Join(base, "parent")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	d, err := OpenPublishDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	w, err := d.CreateWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalPath := filepath.Join(parent, w.name)
+	movedPath := filepath.Join(parent, w.name+"-moved-during-close")
+	originalCheckpoint := publishWorkspaceCleanupCheckpoint
+	t.Cleanup(func() { publishWorkspaceCleanupCheckpoint = originalCheckpoint })
+	publishWorkspaceCleanupCheckpoint = func() {
+		replaceWorkspaceEntry(t, w, parent, movedPath)
+	}
+
+	if err := w.Close(); err == nil {
+		t.Fatal("expected fail-closed cleanup warning")
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("second Close=%v", err)
+	}
+	for _, path := range []string{originalPath, movedPath} {
+		if info, err := os.Stat(path); err != nil || !info.IsDir() {
+			t.Fatalf("cleanup touched %s: info=%v err=%v", path, info, err)
+		}
+	}
+}
+
+func TestPublishWorkspace_CloseFailsClosedWhenMovedOutsideAfterIdentityCheck(t *testing.T) {
+	base := t.TempDir()
+	parent := filepath.Join(base, "parent")
+	outside := filepath.Join(base, "outside")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	d, err := OpenPublishDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	w, err := d.CreateWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var movedPath string
+	originalCheckpoint := publishWorkspaceCleanupCheckpoint
+	t.Cleanup(func() { publishWorkspaceCleanupCheckpoint = originalCheckpoint })
+	publishWorkspaceCleanupCheckpoint = func() {
+		movedPath = moveWorkspaceOutside(t, w, parent, outside)
+	}
+
+	if err := w.Close(); err == nil {
+		t.Fatal("expected fail-closed cleanup warning")
+	}
+	if movedPath == "" {
+		t.Fatal("cleanup checkpoint did not run")
+	}
+	if info, err := os.Stat(movedPath); err != nil || !info.IsDir() {
 		t.Fatalf("moved workspace was touched: info=%v err=%v", info, err)
 	}
 }
@@ -208,8 +330,12 @@ func TestPublishDir_PublishNoReplace(t *testing.T) {
 	}
 
 	first := create("complete payload")
-	if err := d.PublishNoReplace(w, first, "result.zip", nil); err != nil {
+	var warnings []error
+	if err := d.PublishNoReplace(w, first, "result.zip", func(err error) { warnings = append(warnings, err) }); err != nil {
 		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("normal publish warnings=%v want none", warnings)
 	}
 	got, err := os.ReadFile(filepath.Join(parent, "result.zip"))
 	if err != nil {
@@ -413,6 +539,17 @@ func TestDirectoryContainment_UsesHeldIdentities(t *testing.T) {
 	}
 	if _, err := defaultDir.IsWithin(logIdentity); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("IsWithin after Close: %v", err)
+	}
+}
+
+func TestPrivateFSOpenPublishDir_RejectsLogDirectory(t *testing.T) {
+	fs, paths := openTestPrivateFS(t)
+	if err := fs.EnsureDir(paths.LogDir); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := fs.OpenPublishDir(paths.LogDir); err == nil {
+		_ = d.Close()
+		t.Fatal("PrivateFS.OpenPublishDir accepted logs instead of only logs-export")
 	}
 }
 

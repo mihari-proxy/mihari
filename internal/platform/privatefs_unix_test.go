@@ -458,6 +458,177 @@ func TestPublishWorkspace_UnixPrivateModes(t *testing.T) {
 	assertMode(t, filepath.Join(parent, w.name, name), 0o600)
 }
 
+func TestPublishWorkspace_UnixCloseFailsClosedWhenParentIsMutableByOthers(t *testing.T) {
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	d, err := OpenPublishDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	w, err := d.CreateWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspacePath := filepath.Join(parent, w.name)
+
+	if err := w.Close(); err == nil || !strings.Contains(err.Error(), "parent permits untrusted entry replacement") {
+		t.Fatalf("Close error=%v want fail-closed mutable-parent warning", err)
+	}
+	if info, err := os.Stat(workspacePath); err != nil || !info.IsDir() {
+		t.Fatalf("workspace was removed despite mutable parent: info=%v err=%v", info, err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("second Close error=%v", err)
+	}
+}
+
+func TestPrivateFSPublishDir_UnixPropagatesDataRootOwner(t *testing.T) {
+	originalUID := effectiveUID
+	originalChown := publishUnixFchownFn
+	t.Cleanup(func() {
+		effectiveUID = originalUID
+		publishUnixFchownFn = originalChown
+	})
+	root := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fs, err := NewPrivateFS(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fs.Close() })
+	paths := NewPaths(root)
+	if err := fs.EnsureDir(paths.LogExportDir); err != nil {
+		t.Fatal(err)
+	}
+	effectiveUID = func() int { return 0 }
+	fs.plat.uid = 4242
+	fs.plat.gid = 4343
+	type ownerCall struct{ uid, gid int }
+	var calls []ownerCall
+	publishUnixFchownFn = func(_ int, uid, gid int) error {
+		calls = append(calls, ownerCall{uid: uid, gid: gid})
+		return nil
+	}
+
+	d, err := fs.OpenPublishDir(paths.LogExportDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	w, err := d.CreateWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	f, name, err := w.CreateTemp("owner-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertMode(t, filepath.Join(paths.LogExportDir, w.name, name), 0o600)
+	if err := w.Remove(name); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("fchown calls=%v want workspace and temp", calls)
+	}
+	for _, call := range calls {
+		if call.uid != 4242 || call.gid != 4343 {
+			t.Fatalf("fchown owner=%d:%d want 4242:4343", call.uid, call.gid)
+		}
+	}
+	assertMode(t, filepath.Join(paths.LogExportDir, w.name), os.ModeDir|0o700)
+
+	before := len(calls)
+	externalDir, err := OpenPublishDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer externalDir.Close()
+	externalWorkspace, err := externalDir.CreateWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer externalWorkspace.Close()
+	externalTemp, externalName, err := externalWorkspace.CreateTemp("external-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := externalTemp.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := externalWorkspace.Remove(externalName); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != before {
+		t.Fatalf("external publish inherited data-root owner: calls=%v", calls[before:])
+	}
+}
+
+func TestPrivateFSPublishDir_UnixRootCreatesDataOwnerObjects(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to verify real fchown ownership")
+	}
+	const ownerUID, ownerGID = 4242, 4343
+	root := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(root, ownerUID, ownerGID); err != nil {
+		t.Fatal(err)
+	}
+	fs, err := NewPrivateFS(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fs.Close()
+	paths := NewPaths(root)
+	if err := fs.EnsureDir(paths.LogExportDir); err != nil {
+		t.Fatal(err)
+	}
+	d, err := fs.OpenPublishDir(paths.LogExportDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	w, err := d.CreateWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	f, name, err := w.CreateTemp("owner-real-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for path, wantMode := range map[string]os.FileMode{
+		filepath.Join(paths.LogExportDir, w.name):       os.ModeDir | 0o700,
+		filepath.Join(paths.LogExportDir, w.name, name): 0o600,
+	} {
+		var stat syscall.Stat_t
+		if err := syscall.Stat(path, &stat); err != nil {
+			t.Fatal(err)
+		}
+		if int(stat.Uid) != ownerUID || int(stat.Gid) != ownerGID {
+			t.Fatalf("owner of %s=%d:%d want %d:%d", path, stat.Uid, stat.Gid, ownerUID, ownerGID)
+		}
+		assertMode(t, path, wantMode)
+	}
+	if err := w.Remove(name); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPublishDir_UnixPostPublishFailureIsWarning(t *testing.T) {
 	parent := t.TempDir()
 	d, err := OpenPublishDir(parent)
@@ -514,6 +685,17 @@ func moveWorkspaceOutside(t *testing.T, w *PublishWorkspace, parent, outside str
 		t.Fatal(err)
 	}
 	return moved
+}
+
+func replaceWorkspaceEntry(t *testing.T, w *PublishWorkspace, parent, moved string) {
+	t.Helper()
+	original := filepath.Join(parent, w.name)
+	if err := os.Rename(original, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(original, 0o700); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func equalFoldPath(a, b string) bool { return a == b }

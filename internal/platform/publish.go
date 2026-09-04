@@ -13,6 +13,8 @@ import (
 // held publish directory.
 var ErrPublishDirectoryChanged = errors.New("publish directory changed")
 
+var publishWorkspaceCleanupCheckpoint = func() {}
+
 // PublishDir is a closeable capability over a held output directory.
 type PublishDir struct {
 	mu     sync.Mutex
@@ -47,13 +49,13 @@ func (d *PublishDir) Path() string { return d.path }
 // Exists reports whether name exists in the held directory without following
 // the directory's visible path.
 func (d *PublishDir) Exists(name string) (bool, error) {
-	if !isSingleSegment(name) {
-		return false, fmt.Errorf("publish target must be a basename")
-	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closed {
 		return false, errPrivateFSClosed
+	}
+	if !isSingleSegment(name) {
+		return false, fmt.Errorf("publish target must be a basename")
 	}
 	return d.existsLocked(name)
 }
@@ -61,13 +63,13 @@ func (d *PublishDir) Exists(name string) (bool, error) {
 // IsWithin reports whether the held publish directory is the held ancestor or
 // one of its descendants.
 func (d *PublishDir) IsWithin(ancestor *DirectoryIdentity) (bool, error) {
-	if ancestor == nil {
-		return false, fmt.Errorf("publish ancestor is nil")
-	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closed {
 		return false, errPrivateFSClosed
+	}
+	if ancestor == nil {
+		return false, fmt.Errorf("publish ancestor is nil")
 	}
 	ancestor.mu.Lock()
 	defer ancestor.mu.Unlock()
@@ -90,26 +92,26 @@ func (d *PublishDir) CreateWorkspace() (*PublishWorkspace, error) {
 // CreateTemp creates a private, exclusive temporary file relative to the held
 // workspace and returns its single-segment basename.
 func (w *PublishWorkspace) CreateTemp(pattern string) (*os.File, string, error) {
-	if !validTempPattern(pattern) {
-		return nil, "", fmt.Errorf("publish temp pattern must be a basename")
-	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
 		return nil, "", errPrivateFSClosed
+	}
+	if !validTempPattern(pattern) {
+		return nil, "", fmt.Errorf("publish temp pattern must be a basename")
 	}
 	return w.createTempLocked(pattern)
 }
 
 // Remove removes a non-reparse file relative to the held workspace.
 func (w *PublishWorkspace) Remove(name string) error {
-	if !isSingleSegment(name) {
-		return fmt.Errorf("publish temp must be a basename")
-	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
 		return errPrivateFSClosed
+	}
+	if !isSingleSegment(name) {
+		return fmt.Errorf("publish temp must be a basename")
 	}
 	return w.removeLocked(name)
 }
@@ -118,21 +120,21 @@ func (w *PublishWorkspace) Remove(name string) error {
 // never replaces targetName. Once the target exists, later cleanup or sync
 // failures are delivered to onWarning and success remains committed.
 func (d *PublishDir) PublishNoReplace(workspace *PublishWorkspace, tempName, targetName string, onWarning func(error)) error {
-	if !isSingleSegment(tempName) || !isSingleSegment(targetName) {
-		return fmt.Errorf("publish names must be basenames")
-	}
-	if workspace == nil {
-		return fmt.Errorf("publish workspace is nil")
-	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closed {
 		return errPrivateFSClosed
 	}
+	if workspace == nil {
+		return fmt.Errorf("publish workspace is nil")
+	}
 	workspace.mu.Lock()
 	defer workspace.mu.Unlock()
 	if workspace.closed {
 		return errPrivateFSClosed
+	}
+	if !isSingleSegment(tempName) || !isSingleSegment(targetName) {
+		return fmt.Errorf("publish names must be basenames")
 	}
 	if workspace.owner != d {
 		return fmt.Errorf("publish workspace belongs to a different directory")

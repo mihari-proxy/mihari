@@ -21,7 +21,11 @@ const (
 		windows.FILE_TRAVERSE | windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE
 )
 
-var publishWindowsPostRenameFlushFn = windows.FlushFileBuffers
+var (
+	publishWindowsPostRenameFlushFn         = windows.FlushFileBuffers
+	publishWindowsCreatedHandleAttributesFn = handleAttributes
+	publishWindowsDeleteCreatedFn           = markWindowsHandleForDeletion
+)
 
 type publishDirState struct {
 	handle windows.Handle
@@ -149,9 +153,8 @@ func (d *PublishDir) createWorkspaceLocked() (*PublishWorkspace, error) {
 			}
 			return nil, fmt.Errorf("create publish workspace: %w", err)
 		}
-		if err := rejectReparse(h, name); err != nil {
-			_ = windows.CloseHandle(h)
-			return nil, err
+		if err := rejectCreatedWindowsReparse(h, name); err != nil {
+			return nil, errors.Join(err, cleanupCreatedWindowsHandle(h))
 		}
 		if err := hardenHandle(h, sddl); err != nil {
 			_ = markWindowsHandleForDeletion(h)
@@ -193,9 +196,8 @@ func (w *PublishWorkspace) createTempLocked(pattern string) (*os.File, string, e
 			}
 			return nil, "", fmt.Errorf("create publish temp: %w", err)
 		}
-		if err := rejectReparse(h, name); err != nil {
-			_ = windows.CloseHandle(h)
-			return nil, "", err
+		if err := rejectCreatedWindowsReparse(h, name); err != nil {
+			return nil, "", errors.Join(err, cleanupCreatedWindowsHandle(h))
 		}
 		if err := hardenHandle(h, sddl); err != nil {
 			_ = markWindowsHandleForDeletion(h)
@@ -237,7 +239,7 @@ func (d *PublishDir) publishNoReplaceLocked(w *PublishWorkspace, tempName, targe
 	if closeErr != nil {
 		return fmt.Errorf("verify publish directory: %w", closeErr)
 	}
-	h, err := openRelative(w.plat.handle, tempName, windows.DELETE|windows.FILE_GENERIC_READ|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
+	h, err := openRelative(w.plat.handle, tempName, windows.DELETE|windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
 		windows.FILE_OPEN, windows.FILE_NON_DIRECTORY_FILE|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT, 0, nil)
 	if err != nil {
 		return fmt.Errorf("open publish temp: %w", err)
@@ -270,17 +272,28 @@ func (w *PublishWorkspace) closePlatformLocked(owner *PublishDir) error {
 	if owner == nil || owner.closed || owner.plat.handle == 0 {
 		cleanupErr = fmt.Errorf("publish workspace cleanup: parent is closed")
 	} else {
-		found, err := windowsParentContainsIdentity(owner.plat.handle, w.plat.id)
+		name, err := windowsFindEntryByIdentity(owner.plat.handle, w.plat.id)
 		if err != nil {
 			cleanupErr = err
-		} else if !found {
+		} else if name == "" {
 			cleanupErr = fmt.Errorf("publish workspace cleanup: workspace moved outside parent")
-		} else if empty, err := windowsDirectoryEmpty(w.plat.handle); err != nil {
-			cleanupErr = err
-		} else if !empty {
-			cleanupErr = fmt.Errorf("remove publish workspace: directory not empty")
-		} else if err := markWindowsHandleForDeletion(w.plat.handle); err != nil {
-			cleanupErr = fmt.Errorf("remove publish workspace: %w", err)
+		} else {
+			publishWorkspaceCleanupCheckpoint()
+			verifiedName, verifyErr := windowsFindEntryByIdentity(owner.plat.handle, w.plat.id)
+			if verifyErr != nil {
+				cleanupErr = verifyErr
+			} else if !strings.EqualFold(verifiedName, name) {
+				cleanupErr = fmt.Errorf("publish workspace cleanup: workspace identity changed before deletion")
+			} else if empty, emptyErr := windowsDirectoryEmpty(w.plat.handle); emptyErr != nil {
+				cleanupErr = emptyErr
+			} else if !empty {
+				cleanupErr = fmt.Errorf("remove publish workspace: directory not empty")
+			} else if markErr := markWindowsHandleDeletePending(w.plat.handle, true); markErr != nil {
+				cleanupErr = fmt.Errorf("remove publish workspace: %w", markErr)
+			} else if contained, containErr := windowsWorkspaceStillInParent(owner.plat.handle, w.plat.handle, name); containErr != nil || !contained {
+				clearErr := markWindowsHandleDeletePending(w.plat.handle, false)
+				cleanupErr = errors.Join(fmt.Errorf("publish workspace cleanup: workspace moved outside parent"), containErr, clearErr)
+			}
 		}
 	}
 	closeErr := windows.CloseHandle(w.plat.handle)
@@ -337,15 +350,15 @@ func finalPathFromHandle(h windows.Handle) (string, error) {
 	}
 }
 
-func windowsParentContainsIdentity(parent windows.Handle, want fileIdentity) (bool, error) {
+func windowsFindEntryByIdentity(parent windows.Handle, want fileIdentity) (string, error) {
 	list, err := openListingHandle(parent)
 	if err != nil {
-		return false, fmt.Errorf("list publish parent: %w", err)
+		return "", fmt.Errorf("list publish parent: %w", err)
 	}
 	defer windows.CloseHandle(list)
 	entries, err := readWindowsDirents(list)
 	if err != nil {
-		return false, fmt.Errorf("list publish parent: %w", err)
+		return "", fmt.Errorf("list publish parent: %w", err)
 	}
 	for _, entry := range entries {
 		h, err := openRelative(parent, entry.name, windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE, windows.FILE_OPEN,
@@ -360,10 +373,22 @@ func windowsParentContainsIdentity(parent windows.Handle, want fileIdentity) (bo
 		id, idErr := identityFromHandle(h)
 		_ = windows.CloseHandle(h)
 		if attrErr == nil && idErr == nil && attr&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 && id == want {
-			return true, nil
+			return entry.name, nil
 		}
 	}
-	return false, nil
+	return "", nil
+}
+
+func windowsWorkspaceStillInParent(parent, workspace windows.Handle, name string) (bool, error) {
+	parentPath, err := finalPathFromHandle(parent)
+	if err != nil {
+		return false, err
+	}
+	workspacePath, err := finalPathFromHandle(workspace)
+	if err != nil {
+		return false, err
+	}
+	return strings.EqualFold(filepath.Dir(workspacePath), parentPath) && strings.EqualFold(filepath.Base(workspacePath), name), nil
 }
 
 func windowsDirectoryEmpty(h windows.Handle) (bool, error) {
@@ -385,4 +410,38 @@ func markWindowsHandleForDeletion(h windows.Handle) error {
 	err := windows.NtSetInformationFile(h, &iosb, (*byte)(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)), windows.FileDispositionInformationEx)
 	runtime.KeepAlive(&info)
 	return err
+}
+
+func markWindowsHandleDeletePending(h windows.Handle, delete bool) error {
+	var info byte
+	if delete {
+		info = 1
+	}
+	var iosb windows.IO_STATUS_BLOCK
+	err := windows.NtSetInformationFile(h, &iosb, &info, 1, windows.FileDispositionInformation)
+	runtime.KeepAlive(&info)
+	return err
+}
+
+func rejectCreatedWindowsReparse(h windows.Handle, name string) error {
+	attr, err := publishWindowsCreatedHandleAttributesFn(h)
+	if err != nil {
+		return fmt.Errorf("inspect newly created %s: %w", name, err)
+	}
+	if attr&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return fmt.Errorf("%s: reparse point or junction is not allowed", name)
+	}
+	return nil
+}
+
+func cleanupCreatedWindowsHandle(h windows.Handle) error {
+	deleteErr := publishWindowsDeleteCreatedFn(h)
+	closeErr := windows.CloseHandle(h)
+	if deleteErr != nil {
+		deleteErr = fmt.Errorf("delete rejected created object: %w", deleteErr)
+	}
+	if closeErr != nil {
+		closeErr = fmt.Errorf("close rejected created object: %w", closeErr)
+	}
+	return errors.Join(deleteErr, closeErr)
 }
