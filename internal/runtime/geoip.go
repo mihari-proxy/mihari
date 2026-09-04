@@ -67,7 +67,7 @@ func (m *Manager) UpdateGeoIP(ctx context.Context, operation Operation) (geoip.S
 			return nil, err
 		}
 		defer candidate.Cleanup()
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
@@ -77,7 +77,7 @@ func (m *Manager) UpdateGeoIP(ctx context.Context, operation Operation) (geoip.S
 		if candidate.Identity() == "" || !candidate.Valid() {
 			return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "geoip update candidate changed before commit"}
 		}
-		_, err = m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		_, err = m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			if !candidate.Valid() {
 				return snapshot, protocol.APIError{Code: protocol.CodeDataFailure, Message: "geoip update candidate changed before commit"}
 			}

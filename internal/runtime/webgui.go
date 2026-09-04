@@ -80,7 +80,7 @@ func (m *Manager) OpenWebGUI(_ context.Context, panelID string) (string, string,
 	}
 	addr := m.WebListenAddr()
 	if addr == "" {
-		addr = m.settings.WebAddr
+		addr = m.settingsSnapshot().WebAddr
 	}
 	if !strings.Contains(addr, "://") {
 		addr = "http://" + addr

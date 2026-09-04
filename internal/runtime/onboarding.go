@@ -12,7 +12,7 @@ func (m *Manager) OnboardingStatus(ctx context.Context) (onboarding.Snapshot, er
 	if m.onboarding == nil {
 		return onboarding.Snapshot{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "onboarding service is unavailable"}
 	}
-	if err := m.lock(ctx); err != nil {
+	if err := m.lockMaintenance(ctx); err != nil {
 		return onboarding.Snapshot{}, err
 	}
 	defer m.unlock()
@@ -24,12 +24,12 @@ func (m *Manager) UpdateOnboarding(ctx context.Context, operation Operation, upd
 		if m.onboarding == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "onboarding service is unavailable"}
 		}
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
 		var updated onboarding.Status
-		committed, err := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		committed, err := m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			var updateErr error
 			updated, updateErr = m.onboarding.Update(update)
 			return snapshot, updateErr

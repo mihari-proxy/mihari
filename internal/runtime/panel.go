@@ -49,14 +49,14 @@ func (m *Manager) InstallPanel(ctx context.Context, operation Operation, panelID
 		if err := m.panels.Install(ctx, panelID, pinBuild); err != nil {
 			return nil, err
 		}
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
 		if err := m.checkOpen(); err != nil {
 			return nil, err
 		}
-		_, err := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		_, err := m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			// Install already committed on disk; revision publication only.
 			return snapshot, nil
 		})
@@ -80,7 +80,7 @@ func (m *Manager) UpdatePanel(ctx context.Context, operation Operation, panelID 
 		}
 		defer candidate.Cleanup()
 		identity := candidate.Identity()
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
@@ -90,7 +90,7 @@ func (m *Manager) UpdatePanel(ctx context.Context, operation Operation, panelID 
 		if identity == "" || candidate.Identity() != identity || !candidate.Valid() {
 			return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "panel update candidate changed before commit"}
 		}
-		_, err = m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		_, err = m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			if candidate.Identity() != identity || !candidate.Valid() {
 				return snapshot, protocol.APIError{Code: protocol.CodeDataFailure, Message: "panel update candidate changed before commit"}
 			}
@@ -110,14 +110,14 @@ func (m *Manager) ActivatePanel(ctx context.Context, operation Operation, panelI
 		if m.panels == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "panel service is unavailable"}
 		}
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
 		if err := m.checkOpen(); err != nil {
 			return nil, err
 		}
-		_, err := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		_, err := m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			if err := m.panels.Activate(ctx, panelID); err != nil {
 				return snapshot, err
 			}
@@ -134,14 +134,14 @@ func (m *Manager) RollbackPanel(ctx context.Context, operation Operation, panelI
 		if m.panels == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "panel service is unavailable"}
 		}
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
 		if err := m.checkOpen(); err != nil {
 			return nil, err
 		}
-		_, err := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		_, err := m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			if err := m.panels.Rollback(ctx, panelID); err != nil {
 				return snapshot, err
 			}
@@ -158,14 +158,14 @@ func (m *Manager) UninstallPanel(ctx context.Context, operation Operation, panel
 		if m.panels == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "panel service is unavailable"}
 		}
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
 		if err := m.checkOpen(); err != nil {
 			return nil, err
 		}
-		_, err := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		_, err := m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			if err := m.panels.Uninstall(ctx, panelID); err != nil {
 				return snapshot, err
 			}
@@ -192,7 +192,7 @@ func (m *Manager) ReinstallPanel(ctx context.Context, operation Operation, panel
 		}
 		defer candidate.Cleanup()
 		identity := candidate.Identity()
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
@@ -202,7 +202,7 @@ func (m *Manager) ReinstallPanel(ctx context.Context, operation Operation, panel
 		if identity == "" || candidate.Identity() != identity || !candidate.Valid() {
 			return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "panel reinstall candidate changed before commit"}
 		}
-		_, err = m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		_, err = m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			if candidate.Identity() != identity || !candidate.Valid() {
 				return snapshot, protocol.APIError{Code: protocol.CodeDataFailure, Message: "panel reinstall candidate changed before commit"}
 			}

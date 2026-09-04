@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/netip"
 
-	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/sysproxy"
@@ -62,7 +61,7 @@ func (m *Manager) EnableSystemProxy(ctx context.Context, op Operation, force boo
 				},
 			}
 		}
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
@@ -89,7 +88,7 @@ func (m *Manager) EnableSystemProxy(ctx context.Context, op Operation, force boo
 				Message: "enable system proxy",
 			}
 		}
-		_, err = m.coordinator.Do(ctx, state.CommandMeta{
+		_, err = m.updateStateLocked(ctx, state.CommandMeta{
 			ID: op.ID, Source: op.Source, IfRevision: op.IfRevision,
 		}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			m.settingsMu.Lock()
@@ -138,7 +137,7 @@ func (m *Manager) DisableSystemProxy(ctx context.Context, op Operation) (protoco
 				},
 			}
 		}
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
@@ -166,7 +165,7 @@ func (m *Manager) DisableSystemProxy(ctx context.Context, op Operation) (protoco
 				}
 			}
 		}
-		_, err = m.coordinator.Do(ctx, state.CommandMeta{
+		_, err = m.updateStateLocked(ctx, state.CommandMeta{
 			ID: op.ID, Source: op.Source, IfRevision: op.IfRevision,
 		}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			m.settingsMu.Lock()
@@ -234,28 +233,15 @@ func (m *Manager) ClearOwnedSystemProxy(ctx context.Context) error {
 }
 
 func (m *Manager) systemProxySettings() (desired bool, mixed string) {
-	m.settingsMu.Lock()
-	defer m.settingsMu.Unlock()
-	return m.settings.SystemProxyDesired, m.settings.MixedAddr
-}
-
-func (m *Manager) persistSettings() error {
-	if m.settingsPath == "" {
-		return nil
-	}
-	if err := config.Save(m.settingsPath, m.settings); err != nil {
-		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "persist settings"}
-	}
-	return nil
+	settings := m.settingsSnapshot()
+	return settings.SystemProxyDesired, settings.MixedAddr
 }
 
 func (m *Manager) systemProxyStatusLocked(ctx context.Context) (protocol.SystemProxyStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return protocol.SystemProxyStatus{}, err
 	}
-	m.settingsMu.Lock()
-	desired, mixed := m.settings.SystemProxyDesired, m.settings.MixedAddr
-	m.settingsMu.Unlock()
+	desired, mixed := m.systemProxySettings()
 	target, _, _, err := resolveSystemProxyTarget(mixed)
 	if err != nil {
 		return protocol.SystemProxyStatus{}, err

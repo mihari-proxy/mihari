@@ -107,6 +107,9 @@ type Options struct {
 	// SettingsPath is where config.Save writes settings after system-proxy (and related) mutations.
 	// Empty skips persistence (in-memory settings only).
 	SettingsPath string
+	// SaveSettings persists an independently prepared settings candidate.
+	// Nil uses config.SaveWithCommit.
+	SaveSettings func(string, config.Settings) (config.CommitResult, error)
 	// ServiceStatus reports the OS service registration state for onboarding review.
 	// Optional; nil reports "unknown". Injected as a func (not *service.Manager) to keep
 	// runtime free of the service package and break the main↔daemon assembly cycle.
@@ -148,13 +151,15 @@ type Manager struct {
 	tunDetect         tundetect.Backend
 	lookupOccupant    func(string) (int, bool)
 	settingsPath      string
+	saveSettings      func(string, config.Settings) (config.CommitResult, error)
 	serviceStatus     func() (string, error)
 	onBackgroundError func(component string, err error)
-	settingsMu        sync.Mutex
+	settingsMu        sync.RWMutex
 	tunLastError      string
 	maintenance       chan struct{}
 	installed         chan struct{}
 	closing           atomic.Bool
+	mutationDegraded  atomic.Bool
 	running           atomic.Bool
 	operationsMu      sync.Mutex
 	operations        map[string]*operationEntry
@@ -197,6 +202,14 @@ func New(options Options) *Manager {
 			return occ.PID, true
 		}
 	}
+	saveSettings := options.SaveSettings
+	if saveSettings == nil {
+		saveSettings = config.SaveWithCommit
+	}
+	settings := options.Settings.Clone()
+	if settings.Schema == "" {
+		settings = config.Defaults()
+	}
 	manager := &Manager{
 		store:             store,
 		coordinator:       coordinator,
@@ -207,7 +220,7 @@ func New(options Options) *Manager {
 		binaryExists:      binaryExists,
 		subscriptions:     options.Subscriptions,
 		preferences:       options.Preferences,
-		settings:          options.Settings,
+		settings:          settings,
 		runtimeConfig:     options.RuntimeConfig,
 		stagingDir:        options.StagingDir,
 		validateConfig:    options.ValidateConfig,
@@ -222,6 +235,7 @@ func New(options Options) *Manager {
 		tunDetect:         tunDetect,
 		lookupOccupant:    lookupOccupant,
 		settingsPath:      options.SettingsPath,
+		saveSettings:      saveSettings,
 		serviceStatus:     options.ServiceStatus,
 		onBackgroundError: options.OnBackgroundError,
 		maintenance:       make(chan struct{}, 1),
@@ -336,13 +350,14 @@ func (m *Manager) BrowserSessions() int {
 
 // WebListenAddr returns the bound Web gateway address when available.
 func (m *Manager) WebListenAddr() string {
+	settings := m.settingsSnapshot()
 	if m.webGateway == nil {
-		return m.settings.WebAddr
+		return settings.WebAddr
 	}
 	if addr := m.webGateway.ListenAddr(); addr != "" {
 		return addr
 	}
-	return m.settings.WebAddr
+	return settings.WebAddr
 }
 
 func (m *Manager) Proxies(ctx context.Context) (mihomo.Proxies, error) {
@@ -392,11 +407,11 @@ func (m *Manager) UpdateRuleProvider(ctx context.Context, operation Operation, n
 		if m.controller == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
 		}
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
-		_, err := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		_, err := m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			if updateErr := m.controller.UpdateRuleProvider(ctx, name); updateErr != nil {
 				return snapshot, updateErr
 			}
@@ -419,9 +434,7 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		if m.installer == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "core installer is unavailable"}
 		}
-		m.settingsMu.Lock()
-		channel := m.settings.CoreChannel
-		m.settingsMu.Unlock()
+		channel := m.settingsSnapshot().CoreChannel
 		if channel == "" {
 			channel = "stable"
 		}
@@ -440,18 +453,22 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		if operation.Source == "setup" {
 			if version, detectErr := m.installer.DetectVersion(ctx, installRequest.BinaryPath); detectErr == nil && version != "" {
 				sidecar := filepath.Join(filepath.Dir(installRequest.BinaryPath), "core-channel")
-				m.settingsMu.Lock()
-				changed, applyErr := config.ApplyCoreChannelSidecar(&m.settings, sidecar)
+				before := m.settingsSnapshot()
+				after := before.Clone()
+				changed, applyErr := config.ApplyCoreChannelSidecar(&after, sidecar)
 				if changed && applyErr == nil {
-					applyErr = m.persistSettings()
+					candidate := settingsCandidate{before: before, after: after, changed: true}
+					_, applyErr = m.saveSettingsCandidate(candidate)
+					if applyErr == nil {
+						m.publishSettings(candidate)
+					}
 				}
-				appliedChannel := m.settings.CoreChannel
-				m.settingsMu.Unlock()
+				appliedChannel := after.CoreChannel
 				if applyErr != nil {
 					return nil, applyErr
 				}
 				if changed {
-					_, coordErr := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+					_, coordErr := m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 						snapshot.Core.Version = version
 						snapshot.Core.Channel = appliedChannel
 						return snapshot, nil
@@ -469,7 +486,7 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 			return nil, err
 		}
 		defer candidate.Cleanup()
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
@@ -478,7 +495,7 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		}
 		var result core.InstallResult
 		if candidate.Updated() {
-			_, err = m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+			_, err = m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 				result, err = candidate.Commit()
 				if err != nil {
 					return snapshot, err
@@ -489,10 +506,10 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 				if channel == "stable" {
 					snapshot.Core.AlphaSHA = ""
 				}
-				m.settingsMu.Lock()
-				m.settings.CoreChannel = channel
-				saveErr := m.persistSettings()
-				m.settingsMu.Unlock()
+				_, saveErr := m.updateSettings(func(settings *config.Settings) error {
+					settings.CoreChannel = channel
+					return nil
+				})
 				if saveErr != nil {
 					return snapshot, saveErr
 				}
@@ -627,7 +644,7 @@ func (m *Manager) withControllerMutation(ctx context.Context, operation Operatio
 		if err := mutation(); err != nil {
 			return err
 		}
-		_, err := m.coordinator.Do(ctx, state.CommandMeta{
+		_, err := m.updateStateLocked(ctx, state.CommandMeta{
 			ID:         operation.ID,
 			Source:     operation.Source,
 			IfRevision: operation.IfRevision,
@@ -639,7 +656,7 @@ func (m *Manager) withControllerMutation(ctx context.Context, operation Operatio
 }
 
 func (m *Manager) withMaintenance(ctx context.Context, operation func() error) error {
-	if err := m.lock(ctx); err != nil {
+	if err := m.lockMutation(ctx); err != nil {
 		return err
 	}
 	defer m.unlock()
@@ -647,15 +664,6 @@ func (m *Manager) withMaintenance(ctx context.Context, operation func() error) e
 		return err
 	}
 	return operation()
-}
-
-func (m *Manager) lock(ctx context.Context) error {
-	select {
-	case <-m.maintenance:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 func (m *Manager) unlock() { m.maintenance <- struct{}{} }
@@ -710,7 +718,11 @@ func (m *Manager) doOperation(ctx context.Context, key string, execute func() (a
 }
 
 func (m *Manager) setCoreState(coreState state.CoreState) {
-	_, _ = m.coordinator.Do(context.Background(), state.CommandMeta{Source: "runtime"}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+	if m.lockMaintenance(context.Background()) != nil {
+		return
+	}
+	defer m.unlock()
+	_, _ = m.updateStateLocked(context.Background(), state.CommandMeta{Source: "runtime"}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 		snapshot.Core = coreState
 		return snapshot, nil
 	})

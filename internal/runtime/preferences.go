@@ -21,12 +21,12 @@ func (m *Manager) UpdateTUIPreferences(ctx context.Context, operation Operation,
 		if m.preferences == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "TUI preferences are unavailable"}
 		}
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
 		var updated preferences.Preferences
-		_, err := m.coordinator.Do(ctx, state.CommandMeta{
+		_, err := m.updateStateLocked(ctx, state.CommandMeta{
 			ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision,
 		}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			var updateErr error

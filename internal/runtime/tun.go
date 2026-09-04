@@ -61,7 +61,7 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 			}
 		}
 	}
-	if err := m.lock(ctx); err != nil {
+	if err := m.lockMutation(ctx); err != nil {
 		return protocol.TunStatus{}, err
 	}
 	defer m.unlock()
@@ -134,7 +134,7 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 	m.tunLastError = ""
 	m.settingsMu.Unlock()
 
-	_, err := m.coordinator.Do(ctx, state.CommandMeta{
+	_, err := m.updateStateLocked(ctx, state.CommandMeta{
 		ID: op.ID, Source: op.Source, IfRevision: op.IfRevision,
 	}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 		return snapshot, nil
@@ -192,8 +192,9 @@ func (m *Manager) applyTun(ctx context.Context, nextTun map[string]any) error {
 }
 
 func (m *Manager) buildTunStatus(ctx context.Context, lastError string) protocol.TunStatus {
+	settings := m.settingsSnapshot()
+	tun := cloneTunMap(settings.Tun)
 	m.settingsMu.Lock()
-	tun := cloneTunMap(m.settings.Tun)
 	if lastError == "" {
 		lastError = m.tunLastError
 	}
@@ -350,9 +351,7 @@ func (m *Manager) selfFromLive(ctx context.Context) tundetect.Self {
 	if m.controller == nil || ctx.Err() != nil {
 		return self
 	}
-	m.settingsMu.Lock()
-	controllerAddr := m.settings.ControllerAddr
-	m.settingsMu.Unlock()
+	controllerAddr := m.settingsSnapshot().ControllerAddr
 	if m.lookupOccupant != nil && controllerAddr != "" {
 		if pid, ok := m.lookupOccupant(controllerAddr); ok && pid > 0 {
 			self.OccupantPID = pid
