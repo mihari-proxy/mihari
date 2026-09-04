@@ -214,7 +214,7 @@ func TestRunNilPrivateFSContinuesWithoutCreatingDataRootLogging(t *testing.T) {
 	}
 }
 
-func TestLoggingResourcesCloseClosesRuntimeBeforePrivateFSAndIsIdempotent(t *testing.T) {
+func TestLoggingResourcesCloseReleasesPrivateFSIdempotently(t *testing.T) {
 	paths, err := platform.NewPaths(filepath.Join(t.TempDir(), "data")).Absolute()
 	if err != nil {
 		t.Fatal(err)
@@ -238,6 +238,22 @@ func TestLoggingResourcesCloseClosesRuntimeBeforePrivateFSAndIsIdempotent(t *tes
 	}
 	if err := fs.EnsureDir(paths.LogDir); err == nil {
 		t.Fatal("PrivateFS remains open after resources Close")
+	}
+}
+
+func TestLoggingResourcesFallbackCloseStateIsPersistent(t *testing.T) {
+	resources := &LoggingResources{}
+	closeSessionCalls := 0
+	closeSession := func() { closeSessionCalls++ }
+
+	if err := resources.closeWithSession(closeSession); err != nil {
+		t.Fatal(err)
+	}
+	if err := resources.closeWithSession(closeSession); err != nil {
+		t.Fatal(err)
+	}
+	if closeSessionCalls != 1 {
+		t.Fatalf("session close calls=%d want=1", closeSessionCalls)
 	}
 }
 

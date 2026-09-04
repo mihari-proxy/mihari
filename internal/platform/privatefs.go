@@ -55,7 +55,12 @@ func NewPrivateFS(dataRoot string) (*PrivateFS, error) {
 	if dataRoot == "" || !filepath.IsAbs(dataRoot) {
 		return nil, fmt.Errorf("private fs data root must be absolute")
 	}
-	fs := &PrivateFS{root: filepath.Clean(dataRoot)}
+	root := filepath.Clean(dataRoot)
+	volume := filepath.VolumeName(root)
+	if root == volume || root == volume+string(filepath.Separator) {
+		return nil, fmt.Errorf("private fs data root must not be a filesystem root")
+	}
+	fs := &PrivateFS{root: root}
 	if err := fs.openRoot(); err != nil {
 		return nil, err
 	}

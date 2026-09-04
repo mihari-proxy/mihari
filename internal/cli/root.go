@@ -171,5 +171,13 @@ func skipPrepareLocalRoot(cmd *cobra.Command) bool {
 		return true
 	}
 	parent := cmd.Parent()
-	return cmd.Name() == "version" && parent != nil && parent.Name() == "self"
+	if parent == nil || parent.Name() != "self" {
+		return false
+	}
+	switch cmd.Name() {
+	case "version", "channel":
+		return true
+	default:
+		return false
+	}
 }

@@ -3,13 +3,29 @@
 package platform
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
+
+func TestPrivateFS_UnixRejectsFilesystemRootBeforeHardening(t *testing.T) {
+	fs, err := NewPrivateFS(string(filepath.Separator))
+	if fs != nil {
+		_ = fs.Close()
+	}
+	if err == nil {
+		t.Fatal("expected filesystem root to be rejected")
+	}
+	if !strings.Contains(err.Error(), "filesystem root") {
+		t.Fatalf("error=%q want filesystem-root validation", err)
+	}
+}
 
 func TestPrivateFS_UnixPermissions(t *testing.T) {
 	fs, paths := openTestPrivateFS(t)
@@ -82,22 +98,22 @@ func TestPrivateFS_UnixRootOwnerFromDataRootFD(t *testing.T) {
 	t.Cleanup(func() {
 		effectiveUID, fstatFn, fchownatFn = origUID, origFstat, origFchownat
 	})
-	t.Setenv("HOME", "/root")
-	t.Setenv("SUDO_USER", "attacker")
 	effectiveUID = func() int { return 0 }
 
 	root := filepath.Join(t.TempDir(), "data")
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	var rootFDs []int
+	var fstatFDs []int
 	fstatFn = func(fd int, st *unix.Stat_t) error {
 		if err := unix.Fstat(fd, st); err != nil {
 			return err
 		}
-		rootFDs = append(rootFDs, fd)
-		st.Uid = 42
-		st.Gid = 43
+		fstatFDs = append(fstatFDs, fd)
+		if len(fstatFDs) == 1 {
+			st.Uid = 42
+			st.Gid = 43
+		}
 		return nil
 	}
 	var chowns []string
@@ -108,9 +124,6 @@ func TestPrivateFS_UnixRootOwnerFromDataRootFD(t *testing.T) {
 		if flags&unix.AT_SYMLINK_NOFOLLOW == 0 {
 			t.Fatal("expected AT_SYMLINK_NOFOLLOW")
 		}
-		if path == "/root" || filepath.Base(path) == "root" {
-			t.Fatalf("fchownat used path %q", path)
-		}
 		chowns = append(chowns, path)
 		return nil
 	}
@@ -120,8 +133,11 @@ func TestPrivateFS_UnixRootOwnerFromDataRootFD(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = fs.Close() })
-	if len(rootFDs) == 0 {
-		t.Fatal("expected fstat of data root fd")
+	if len(fstatFDs) != 1 || fstatFDs[0] != fs.plat.rootFD {
+		t.Fatalf("fstat fds=%v want only root fd %d during construction", fstatFDs, fs.plat.rootFD)
+	}
+	if fs.plat.uid != 42 || fs.plat.gid != 43 {
+		t.Fatalf("owner=%d:%d want 42:43", fs.plat.uid, fs.plat.gid)
 	}
 	paths := NewPaths(root)
 	if err := fs.EnsureDir(paths.LogDir); err != nil {
@@ -255,6 +271,146 @@ func TestPrivateFS_UnixFileSymlinkDoesNotAppendYAML(t *testing.T) {
 	}
 	if string(got) != "keep-yaml" {
 		t.Fatalf("yaml mutated: %q", got)
+	}
+}
+
+func TestPrivateFS_UnixOpenAppendRejectsFIFOWithoutBlockingOrHardening(t *testing.T) {
+	fs, paths := openTestPrivateFS(t)
+	if err := fs.EnsureDir(paths.LogDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mkfifo(paths.DaemonLog, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(paths.DaemonLog, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		file *os.File
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		f, err := fs.OpenAppend(paths.DaemonLog)
+		done <- result{file: f, err: err}
+	}()
+
+	var got result
+	select {
+	case got = <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Error("OpenAppend blocked while opening a FIFO")
+		reader, err := unix.Open(paths.DaemonLog, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+		if err != nil {
+			t.Fatalf("open FIFO reader to release blocked OpenAppend: %v", err)
+		}
+		got = <-done
+		if err := unix.Close(reader); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got.file != nil {
+		_ = got.file.Close()
+	}
+	if got.err == nil {
+		t.Fatal("expected FIFO append to be rejected")
+	}
+	info, err := os.Lstat(paths.DaemonLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o640 {
+		t.Fatalf("FIFO permissions=%v want=0640", got)
+	}
+}
+
+func TestPrivateFS_UnixRenameDoesNotReplaceExistingDestination(t *testing.T) {
+	fs, paths := openTestPrivateFS(t)
+	if err := fs.EnsureDir(paths.LogDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeLog(fs, paths.DaemonLog, "source"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeLog(fs, paths.TUILog, "destination"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := fs.Rename(paths.DaemonLog, paths.TUILog)
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("rename error=%v want os.ErrExist", err)
+	}
+	for path, want := range map[string]string{
+		paths.DaemonLog: "source",
+		paths.TUILog:    "destination",
+	} {
+		got, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if string(got) != want {
+			t.Fatalf("%s=%q want=%q", filepath.Base(path), got, want)
+		}
+	}
+}
+
+func TestPrivateFS_UnixRenameUsesAtomicNoReplacePrimitive(t *testing.T) {
+	fs, paths := openTestPrivateFS(t)
+	if err := fs.EnsureDir(paths.LogDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeLog(fs, paths.DaemonLog, "source"); err != nil {
+		t.Fatal(err)
+	}
+
+	original := renameatNoReplaceFn
+	t.Cleanup(func() { renameatNoReplaceFn = original })
+	called := false
+	renameatNoReplaceFn = func(dirfd int, oldName, newName string) error {
+		called = true
+		if dirfd != fs.plat.dirs[privateLogDirName] || oldName != filepath.Base(paths.DaemonLog) || newName != filepath.Base(paths.TUILog) {
+			t.Fatalf("rename args=(%d,%q,%q)", dirfd, oldName, newName)
+		}
+		return unix.EEXIST
+	}
+
+	err := fs.Rename(paths.DaemonLog, paths.TUILog)
+	if !called {
+		t.Fatal("atomic no-replace primitive was not called")
+	}
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("rename error=%v want os.ErrExist", err)
+	}
+	if got, readErr := os.ReadFile(paths.DaemonLog); readErr != nil || string(got) != "source" {
+		t.Fatalf("source after failed rename=%q err=%v", got, readErr)
+	}
+	if _, statErr := os.Lstat(paths.TUILog); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("destination after failed rename: %v", statErr)
+	}
+}
+
+func TestModeFromStatPreservesUnixFileTypes(t *testing.T) {
+	tests := []struct {
+		name string
+		mode uint32
+		want os.FileMode
+	}{
+		{name: "regular", mode: unix.S_IFREG | 0o640, want: 0},
+		{name: "directory", mode: unix.S_IFDIR | 0o750, want: os.ModeDir},
+		{name: "symlink", mode: unix.S_IFLNK | 0o777, want: os.ModeSymlink},
+		{name: "fifo", mode: unix.S_IFIFO | 0o600, want: os.ModeNamedPipe},
+		{name: "socket", mode: unix.S_IFSOCK | 0o600, want: os.ModeSocket},
+		{name: "block device", mode: unix.S_IFBLK | 0o600, want: os.ModeDevice},
+		{name: "character device", mode: unix.S_IFCHR | 0o600, want: os.ModeDevice | os.ModeCharDevice},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := modeFromUnixMode(tt.mode)
+			if got.Type() != tt.want {
+				t.Fatalf("type=%v want=%v", got.Type(), tt.want)
+			}
+		})
 	}
 }
 

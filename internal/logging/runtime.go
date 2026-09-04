@@ -105,6 +105,7 @@ func (r *Runtime) convergeArchives(ctx context.Context) {
 
 // Group applies one config to multiple runtimes (daemon and mihomo).
 type Group struct {
+	applyMu sync.Mutex
 	mu      sync.Mutex
 	dir     string
 	cfg     Config
@@ -121,6 +122,16 @@ func NewGroup(dir string, config Config, targets ...*Runtime) *Group {
 // Apply swaps config on every target, then converges archives one by one.
 // It must not call Runtime.Apply per target.
 func (g *Group) Apply(ctx context.Context, cfg Config) {
+	g.apply(ctx, cfg, nil)
+}
+
+func (g *Group) apply(ctx context.Context, cfg Config, beforeLock func()) {
+	if beforeLock != nil {
+		beforeLock()
+	}
+	g.applyMu.Lock()
+	defer g.applyMu.Unlock()
+
 	g.mu.Lock()
 	g.cfg = cfg
 	targets := g.targets

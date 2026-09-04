@@ -15,10 +15,12 @@ const (
 )
 
 var (
-	urlPattern         = regexp.MustCompile(`(?i)\b(?:https?|wss?)://[^\s"'<>\\]+`)
-	authSchemePattern  = regexp.MustCompile(`(?i)\b(bearer|basic)\s+[^\s]+`)
-	namedSecretPattern = regexp.MustCompile(`(?i)\b(token|secret|password|authorization|credential|api-key)\s*([:=])\s*[^\s&;,"']+`)
-	hex64Pattern       = regexp.MustCompile(`(?i)\b[0-9a-f]{64}\b`)
+	urlPattern          = regexp.MustCompile(`(?i)\b(?:https?|wss?)://[^\s"'<>\\]+`)
+	authSchemePattern   = regexp.MustCompile(`(?i)\b(bearer|basic)\s+[^\s]+`)
+	cookiePattern       = regexp.MustCompile(`(?i)\b(cookie)\s*([:=])\s*[^\r\n]+`)
+	quotedSecretPattern = regexp.MustCompile(`(?i)\b(token|secret|password|authorization|credential|api[-_]key)\s*([:=])\s*(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')`)
+	namedSecretPattern  = regexp.MustCompile(`(?i)\b(token|secret|password|authorization|credential|api[-_]key)\s*([:=])\s*[^\s&;,"']+`)
+	hex64Pattern        = regexp.MustCompile(`(?i)\b[0-9a-f]{64}\b`)
 
 	sensitiveKeys = map[string]struct{}{
 		"secret":        {},
@@ -86,6 +88,8 @@ func (r *Redactor) String(value string) string {
 		}
 		return parts[0] + " " + redactedExact
 	})
+	out = cookiePattern.ReplaceAllString(out, "${1}${2}"+redactedExact)
+	out = quotedSecretPattern.ReplaceAllString(out, "${1}${2}"+redactedExact)
 	out = namedSecretPattern.ReplaceAllString(out, "${1}${2}"+redactedExact)
 	out = hex64Pattern.ReplaceAllString(out, redactedExact)
 	return out

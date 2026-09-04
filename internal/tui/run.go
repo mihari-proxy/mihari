@@ -114,6 +114,7 @@ func (r *LoggingResources) closeWithSession(closeSession func()) error {
 			privateFSCloser = r.PrivateFS
 		}
 		state = newLoggingResourcesCloseState(runtimeCloser, privateFSCloser)
+		r.closeState = state
 	}
 	state.once.Do(func() {
 		state.err = closeTUILifecycle(closeSession, state.runtime, state.privateFS)

@@ -166,30 +166,6 @@ func TestEnsureDirsCreatesDurableLayout(t *testing.T) {
 	}
 }
 
-func TestNewPathsLoggingLayout(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "mihari-data")
-	paths := NewPaths(root)
-	want := map[string]string{
-		"LogDir":       filepath.Join(root, "logs"),
-		"DaemonLog":    filepath.Join(root, "logs", "mihari-daemon.log"),
-		"TUILog":       filepath.Join(root, "logs", "mihari-tui.log"),
-		"MihomoLog":    filepath.Join(root, "logs", "mihomo.log"),
-		"LogExportDir": filepath.Join(root, "logs-export"),
-	}
-	gots := map[string]string{
-		"LogDir":       paths.LogDir,
-		"DaemonLog":    paths.DaemonLog,
-		"TUILog":       paths.TUILog,
-		"MihomoLog":    paths.MihomoLog,
-		"LogExportDir": paths.LogExportDir,
-	}
-	for name, wantPath := range want {
-		if got := gots[name]; got != wantPath {
-			t.Errorf("%s=%q want=%q", name, got, wantPath)
-		}
-	}
-}
-
 func TestEnsureDirsLoggingLayout(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "ensure-logging")
 	paths := NewPaths(root)

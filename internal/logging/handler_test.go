@@ -99,7 +99,7 @@ func TestJSONHandler_LevelVarFilters(t *testing.T) {
 	}
 }
 
-func TestJSONHandler_SensitiveParentGroupsRedactEveryLeaf(t *testing.T) {
+func TestJSONHandler_SensitiveParentGroupsReplaceWholeValue(t *testing.T) {
 	tests := []struct {
 		name   string
 		parent string
@@ -141,20 +141,76 @@ func TestJSONHandler_SensitiveParentGroupsRedactEveryLeaf(t *testing.T) {
 			if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &payload); err != nil {
 				t.Fatalf("decode JSON: %v in %q", err, encoded)
 			}
-			group, ok := payload[test.parent].(map[string]any)
-			if !ok {
-				t.Fatalf("%s group = %#v, want JSON object", test.parent, payload[test.parent])
-			}
-			if got := group["value"]; got != "***" {
-				t.Fatalf("%s.value = %#v, want ***", test.parent, got)
-			}
-			detail, ok := group["detail"].(map[string]any)
-			if !ok {
-				t.Fatalf("%s.detail = %#v, want JSON object", test.parent, group["detail"])
-			}
-			if got := detail["note"]; got != "***" {
-				t.Fatalf("%s.detail.note = %#v, want ***", test.parent, got)
+			if got := payload[test.parent]; got != "***" {
+				t.Fatalf("%s = %#v, want whole sensitive value replaced with ***", test.parent, got)
 			}
 		})
+	}
+}
+
+func TestJSONHandler_ComponentOverrideEmitsOneKey(t *testing.T) {
+	tests := []struct {
+		name        string
+		log         func(*slog.Logger)
+		want        string
+		wantRequest bool
+	}{
+		{name: "record attr", log: func(logger *slog.Logger) { logger.Info("component test", "component", "record-override") }, want: "record-override"},
+		{name: "With attr", log: func(logger *slog.Logger) { logger.With("component", "with-override").Info("component test") }, want: "with-override"},
+		{name: "record inline group", log: func(logger *slog.Logger) {
+			logger.Info("component test", slog.Group("", slog.String("component", "record-inline"), slog.String("request", "kept")))
+		}, want: "record-inline", wantRequest: true},
+		{name: "With inline group", log: func(logger *slog.Logger) {
+			logger.With(slog.Group("", slog.String("component", "with-inline"), slog.String("request", "kept"))).Info("component test")
+		}, want: "with-inline", wantRequest: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			level := &slog.LevelVar{}
+			level.Set(slog.LevelDebug)
+			logger := slog.New(NewJSONHandler(&buf, level, "daemon", NewRedactor()))
+
+			test.log(logger)
+
+			encoded := buf.String()
+			if got := strings.Count(encoded, `"component":`); got != 1 {
+				t.Fatalf("component key count = %d, want 1 in %s", got, encoded)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &payload); err != nil {
+				t.Fatalf("decode JSON: %v in %q", err, encoded)
+			}
+			if got := payload["component"]; got != test.want {
+				t.Fatalf("component = %#v, want %s", got, test.want)
+			}
+			if test.wantRequest && payload["request"] != "kept" {
+				t.Fatalf("request = %#v, want kept", payload["request"])
+			}
+		})
+	}
+}
+
+func TestJSONHandler_WithGroupKeepsComponentAtTopLevel(t *testing.T) {
+	var buf bytes.Buffer
+	level := &slog.LevelVar{}
+	level.Set(slog.LevelDebug)
+	logger := slog.New(NewJSONHandler(&buf, level, "daemon", NewRedactor())).WithGroup("request")
+
+	logger.Info("grouped", "method", "GET")
+
+	var payload map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &payload); err != nil {
+		t.Fatalf("decode JSON: %v in %q", err, buf.String())
+	}
+	if got := payload["component"]; got != "daemon" {
+		t.Fatalf("top-level component = %#v, want daemon", got)
+	}
+	group, ok := payload["request"].(map[string]any)
+	if !ok || group["method"] != "GET" {
+		t.Fatalf("request group = %#v, want grouped method", payload["request"])
+	}
+	if _, nested := group["component"]; nested {
+		t.Fatalf("component was nested inside request: %#v", group)
 	}
 }

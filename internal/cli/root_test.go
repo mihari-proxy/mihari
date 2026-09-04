@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/elevate"
+	"github.com/mihari-proxy/mihari/internal/update"
 )
 
 func TestPrepareLocalRootSkippedForHelpCommand(t *testing.T) {
@@ -63,6 +65,42 @@ func TestPrepareLocalRootSkippedForSelfVersion(t *testing.T) {
 	}
 }
 
+func TestPrepareLocalRootSkippedForSelfChannel(t *testing.T) {
+	previousElevationCheck := elevate.Check
+	t.Cleanup(func() { elevate.Check = previousElevationCheck })
+	elevate.Check = func() bool { return true }
+
+	t.Setenv("MIHARI_DATA", t.TempDir())
+	called := 0
+	code := Execute(context.Background(), []string{"self", "channel"}, io.Discard, io.Discard, Dependencies{
+		PrepareLocalRoot: func() error {
+			called++
+			return errors.New("prepare should not run")
+		},
+	})
+	if code != ExitOK || called != 0 {
+		t.Fatalf("code=%d called=%d", code, called)
+	}
+}
+
+func TestPrepareLocalRootRunsForSelfUpdate(t *testing.T) {
+	previousElevationCheck := elevate.Check
+	t.Cleanup(func() { elevate.Check = previousElevationCheck })
+	elevate.Check = func() bool { return true }
+
+	called := 0
+	code := Execute(context.Background(), []string{"self", "update"}, io.Discard, io.Discard, Dependencies{
+		SelfUpdater: &fakeSelfUpdater{result: update.Result{Version: "v1.0.0", Channel: "main"}},
+		PrepareLocalRoot: func() error {
+			called++
+			return nil
+		},
+	})
+	if code != ExitOK || called != 1 {
+		t.Fatalf("code=%d called=%d", code, called)
+	}
+}
+
 func TestPrepareLocalRootRunsForStatus(t *testing.T) {
 	called := 0
 	code := Execute(context.Background(), []string{"status"}, io.Discard, io.Discard, Dependencies{
@@ -81,7 +119,7 @@ func TestPrepareLocalRootRunsForStatus(t *testing.T) {
 	}
 }
 
-func TestPrepareLocalRootFailureUsesDataExitCode(t *testing.T) {
+func TestPrepareLocalRootFailurePreservesAPIError(t *testing.T) {
 	stderr := &bytes.Buffer{}
 	code := Execute(context.Background(), []string{"status", "--json"}, io.Discard, stderr, Dependencies{
 		PrepareLocalRoot: func() error {
@@ -91,6 +129,9 @@ func TestPrepareLocalRootFailureUsesDataExitCode(t *testing.T) {
 	})
 	if code != ExitData {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if got, want := stderr.String(), "{\"schema\":\"mihari.error/v1\",\"error\":{\"code\":\"data_failure\",\"message\":\"resolve Mihari data root\"}}\n"; got != want {
+		t.Fatalf("stderr=%q want=%q", got, want)
 	}
 }
 

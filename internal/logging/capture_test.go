@@ -9,7 +9,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
 func TestLineCaptureWriter_MultipleLinesOneWrite(t *testing.T) {
@@ -132,8 +131,8 @@ func TestLineCaptureWriter_TruncatesOver16KiB(t *testing.T) {
 	assertCapture(t, recs[1], "INFO", "next", "stdout", false, false)
 }
 
-func TestLineCaptureWriter_BufferNeverExceedsCap(t *testing.T) {
-	w, _ := newTestCapture(t, slog.LevelInfo, "stdout")
+func TestLineCaptureWriter_BufferNeverExceedsExactCap(t *testing.T) {
+	w, output := newTestCapture(t, slog.LevelInfo, "stdout")
 	impl := w.(*lineCaptureWriter)
 	lead := bytes.Repeat([]byte("x"), MaxCaptureLineBytes-1)
 	rune3 := []byte("世")
@@ -145,12 +144,20 @@ func TestLineCaptureWriter_BufferNeverExceedsCap(t *testing.T) {
 	impl.mu.Lock()
 	n := len(impl.buf)
 	impl.mu.Unlock()
-	if n > MaxCaptureLineBytes+utf8.UTFMax {
-		t.Fatalf("buf len=%d exceeds MaxCaptureLineBytes+utf8.UTFMax", n)
+	if n > MaxCaptureLineBytes {
+		t.Fatalf("buf len=%d exceeds MaxCaptureLineBytes", n)
 	}
 	if n < MaxCaptureLineBytes {
 		t.Fatalf("buf len=%d, want at least %d", n, MaxCaptureLineBytes)
 	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	recs := parseCaptureJSONL(t, output.String())
+	if len(recs) != 1 {
+		t.Fatalf("records=%d, want 1", len(recs))
+	}
+	assertCapture(t, recs[0], "INFO", strings.Repeat("x", MaxCaptureLineBytes-1)+"\uFFFD", "stdout", true, true)
 }
 
 func TestLineCaptureWriter_FlushPartialThenWrite(t *testing.T) {

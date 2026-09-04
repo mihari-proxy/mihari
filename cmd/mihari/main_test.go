@@ -427,6 +427,27 @@ func TestRunDaemon_CatalogLoadFailureStillOpensLogger(t *testing.T) {
 	}
 }
 
+func TestCollectLogSecretsReadsExistingBusinessSecrets(t *testing.T) {
+	paths := absoluteTempPaths(t)
+	settings := config.Defaults()
+	settings.ControllerSecret = "controller-secret"
+	webCredential := strings.Repeat("f", 64)
+	catalogURL := "https://provider.example/sub?token=catalog-secret"
+	if err := os.MkdirAll(filepath.Dir(paths.WebCredential), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.WebCredential, []byte(webCredential+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeCatalog(t, paths, catalogURL)
+
+	got := collectLogSecrets(paths, "control-token", settings)
+	want := []string{"control-token", "controller-secret", webCredential, catalogURL}
+	if !slices.Equal(got, want) {
+		t.Fatalf("secrets=%q want=%q", got, want)
+	}
+}
+
 func TestRunDaemon_NilPrivateFSReturnsDataFailure(t *testing.T) {
 	paths := platform.NewPaths(filepath.Join(t.TempDir(), "data"))
 	err := runDaemonWith(context.Background(), daemonRunDeps{
@@ -715,7 +736,7 @@ func TestPrepareLocalRoot_StatusUsesLoadedToken(t *testing.T) {
 	}
 }
 
-func TestPrepareLocalRoot_ExplicitCredentialTokenPropagatesToClientDaemonAndTUI(t *testing.T) {
+func TestPrepareLocalRoot_ExplicitCredentialTokenPropagatesToClientAndDaemon(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		credential func(t *testing.T, cwd string) string
@@ -774,11 +795,7 @@ func TestPrepareLocalRoot_ExplicitCredentialTokenPropagatesToClientDaemonAndTUI(
 			if err := prepareLocalRootForClient(localClient)(); err != nil {
 				t.Fatal(err)
 			}
-			tuiOptions := tui.Options{Client: localClient}
-			if tuiOptions.Client != localClient {
-				t.Fatal("TUI did not receive the prepared local client")
-			}
-			if _, err := tuiOptions.Client.Status(context.Background()); err != nil {
+			if _, err := localClient.Status(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 

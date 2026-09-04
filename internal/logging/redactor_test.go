@@ -126,6 +126,26 @@ func TestRedactor_GenericURLAndAuthAndHex(t *testing.T) {
 			want:  "cfg password:***",
 		},
 		{
+			name:  "snake case api key",
+			input: "cfg api_key=leaked-api-key-value",
+			want:  "cfg api_key=***",
+		},
+		{
+			name:  "quoted token",
+			input: `cfg token="leaked token value"`,
+			want:  "cfg token=***",
+		},
+		{
+			name:  "quoted token with escape",
+			input: `cfg token="leaked \"nested\" value"`,
+			want:  "cfg token=***",
+		},
+		{
+			name:  "cookie header",
+			input: "request Cookie: session=leaked-cookie-value; preference=also-secret",
+			want:  "request Cookie:***",
+		},
+		{
 			name:  "64 hex",
 			input: "secret=" + hex64,
 			want:  "secret=***",
@@ -142,7 +162,7 @@ func TestRedactor_GenericURLAndAuthAndHex(t *testing.T) {
 			if got != test.want {
 				t.Fatalf("String() = %q, want %q", got, test.want)
 			}
-			assertNotContains(t, got, "example.test", "super-bearer-token-value", "dXNlcjpwYXNz", "leaked-token-value", "leaked-password-value", hex64)
+			assertNotContains(t, got, "example.test", "super-bearer-token-value", "dXNlcjpwYXNz", "leaked-token-value", "leaked-password-value", "leaked-api-key-value", "leaked token value", "leaked-cookie-value", "also-secret", hex64)
 		})
 	}
 }
@@ -229,14 +249,9 @@ func TestRedactor_TaxonomyNotCollapsed(t *testing.T) {
 	if !strings.Contains(got, "[REDACTED_URL]") {
 		t.Fatalf("url must use [REDACTED_URL]: %q", got)
 	}
-	if strings.Contains(got, "[REDACTED]") && !strings.Contains(got, "[REDACTED_URL]") {
-		t.Fatalf("must not collapse taxonomy to [REDACTED]: %q", got)
-	}
-	if strings.Count(got, "[REDACTED]") != strings.Count(got, "[REDACTED_URL]") {
-		// bare [REDACTED] without _URL is forbidden
-		if strings.Contains(strings.ReplaceAll(got, "[REDACTED_URL]", ""), "[REDACTED]") {
-			t.Fatalf("bare [REDACTED] present: %q", got)
-		}
+	withoutURLMarker := strings.ReplaceAll(got, "[REDACTED_URL]", "")
+	if strings.Contains(withoutURLMarker, "[REDACTED]") {
+		t.Fatalf("bare [REDACTED] present: %q", got)
 	}
 }
 

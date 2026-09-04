@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -62,7 +63,7 @@ type failureReporter struct {
 	last     map[FailureClass]time.Time
 }
 
-var pathTokenPattern = regexp.MustCompile(`(?:[A-Za-z]:)?(?:[\\/][^\s\\/:*?"<>|]+)+`)
+var pathTokenPattern = regexp.MustCompile(`(?:[A-Za-z]:)?(?:[\\/][^\\/:*?"<>|\r\n]+)+`)
 
 // NewFailureReporter writes rate-limited, redacted failure lines without full paths.
 func NewFailureReporter(out io.Writer, redactor *Redactor, now func() time.Time) FailureReporter {
@@ -91,6 +92,7 @@ func (r *failureReporter) Report(class FailureClass, err error) {
 		msg = r.redactor.String(msg)
 	}
 	msg = pathTokenPattern.ReplaceAllString(msg, "[path]")
+	msg = strings.NewReplacer("\r", " ", "\n", " ").Replace(msg)
 	line := "logging: " + string(class)
 	if msg != "" {
 		line += ": " + msg

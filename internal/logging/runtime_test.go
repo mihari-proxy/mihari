@@ -263,6 +263,89 @@ func TestGroup_ApplySwapsAllTargetsBeforeConverge(t *testing.T) {
 	}
 }
 
+func TestGroup_ApplySerializesConcurrentCalls(t *testing.T) {
+	fs, paths := openTestLogFS(t)
+	initial := Config{Level: slog.LevelInfo, MaxSizeBytes: 1024, MaxFiles: 3}
+	blocked := make(chan struct{})
+	first, err := Open(context.Background(), RuntimeOptions{
+		BasePath:  paths.DaemonLog,
+		Component: "daemon",
+		Config:    initial,
+		PrivateFS: fs,
+		OpenLock: func(fs *platform.PrivateFS, path string) (platform.AdvisoryLock, error) {
+			inner, err := platform.OpenAdvisoryLock(fs, path)
+			if err != nil {
+				return nil, err
+			}
+			return &blockAfterOpenLock{AdvisoryLock: inner, blocked: blocked}, nil
+		},
+		Redactor: NewRedactor(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+	second := openTestRuntime(t, fs, paths.MihomoLog, "mihomo", initial)
+	g := NewGroup(paths.LogDir, initial, first, second)
+
+	firstCfg := Config{Level: slog.LevelWarn, MaxSizeBytes: 512, MaxFiles: 2}
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	defer cancelFirst()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		g.Apply(firstCtx, firstCfg)
+	}()
+	select {
+	case <-blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first Apply did not reach archive maintenance")
+	}
+
+	secondCfg := Config{Level: slog.LevelError, MaxSizeBytes: 256, MaxFiles: 1}
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	cancelSecond()
+	secondEntered := make(chan struct{})
+	secondDone := make(chan struct{})
+	go func() {
+		defer close(secondDone)
+		g.apply(secondCtx, secondCfg, func() { close(secondEntered) })
+	}()
+	select {
+	case <-secondEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second Apply did not reach the serialization gate")
+	}
+	if got := g.Config(); got == secondCfg {
+		t.Fatal("second Apply became observable while the first Apply was still running")
+	}
+	select {
+	case <-secondDone:
+		t.Fatal("second Apply overlapped the first Apply")
+	default:
+	}
+
+	cancelFirst()
+	select {
+	case <-firstDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first Apply did not return after cancel")
+	}
+	select {
+	case <-secondDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("queued Apply did not return")
+	}
+	if got := g.Config(); got != secondCfg {
+		t.Fatalf("Group.Config()=%+v, want final %+v", got, secondCfg)
+	}
+	for name, target := range map[string]*Runtime{"daemon": first, "mihomo": second} {
+		if got := target.Config(); got != secondCfg {
+			t.Fatalf("%s config=%+v, want final %+v", name, got, secondCfg)
+		}
+	}
+}
+
 type blockAfterOpenLock struct {
 	platform.AdvisoryLock
 	armed   atomic.Bool

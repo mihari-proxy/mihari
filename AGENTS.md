@@ -19,7 +19,7 @@ Mihari 是面向 Windows、Linux 和 macOS 的 mihomo 本地管理器。它使�
 
 - daemon 是持久化状态与 mihomo 生命周期的唯一所有者和写入者。
 - CLI、TUI 及其他本地客户端只通过 `internal/control/client` 和版本化本地控制协议访问 daemon，不直接修改 daemon 管理的业务文件。
-- **窄例外**：TUI 仅可通过 `internal/logging` 向固定 `mihari-tui.log*` 序列追加/轮转；不得扩展为 settings、订阅、token、面板或其他业务状态写入。settings 与业务状态仍只有 daemon/Manager 可写。
+- **窄例外**：TUI 仅可通过 `internal/logging` 确保共享日志目录存在，并向固定 `mihari-tui.log*` 序列追加/轮转；不得扩展为 settings、订阅、token、面板或其他业务状态写入。settings 与业务状态仍只有 daemon/Manager 可写。
 - 本地控制 API 使用 Windows named pipe 或 Unix domain socket，不得退化为 TCP 监听。
 - mihomo controller 仅绑定 loopback；浏览器不得获得 controller 地址或 secret。
 - 所有 Web 面板的 REST、WebSocket 与写操作必须经过 Mihari Web gateway 和统一 mutation coordinator；未知写操作默认拒绝。

@@ -257,7 +257,7 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 	}
 	streamURL.Path = strings.TrimRight(streamURL.Path, "/") + "/v1/streams/" + url.PathEscape(kind)
 	header := http.Header{}
-	header.Set("Authorization", "Bearer "+c.token)
+	header.Set("Authorization", "Bearer "+c.bearerToken())
 	connection, response, err := websocket.Dial(ctx, streamURL.String(), &websocket.DialOptions{HTTPClient: c.http, HTTPHeader: header})
 	if err != nil {
 		if ctx.Err() != nil {
@@ -304,7 +304,7 @@ func (c *Client) doRuntime(ctx context.Context, method, path string, input, outp
 	if err != nil {
 		return protocol.APIError{Code: protocol.CodeInternal, Message: "create control request"}
 	}
-	request.Header.Set("Authorization", "Bearer "+c.token)
+	request.Header.Set("Authorization", "Bearer "+c.bearerToken())
 	if input != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}

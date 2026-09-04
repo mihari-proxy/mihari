@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	fstatFn    = unix.Fstat
-	fchownatFn = unix.Fchownat
+	fstatFn             = unix.Fstat
+	fchownatFn          = unix.Fchownat
+	renameatNoReplaceFn = renameatNoReplace
 )
 
 type privateFSState struct {
@@ -160,17 +161,9 @@ func (fs *PrivateFS) openAppendLocked(dir, name string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	fd, err := unix.Openat(dirfd, name, unix.O_WRONLY|unix.O_APPEND|unix.O_CREAT|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+	fd, err := unix.Openat(dirfd, name, unix.O_WRONLY|unix.O_APPEND|unix.O_CREAT|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open append %s: %w", name, err)
-	}
-	if err := unix.Fchmod(fd, 0o600); err != nil {
-		_ = unix.Close(fd)
-		return nil, fmt.Errorf("chmod %s: %w", name, err)
-	}
-	if err := fs.chownat(dirfd, name); err != nil {
-		_ = unix.Close(fd)
-		return nil, err
 	}
 	var st unix.Stat_t
 	if err := fstatFn(fd, &st); err != nil {
@@ -180,6 +173,18 @@ func (fs *PrivateFS) openAppendLocked(dir, name string) (*os.File, error) {
 	if st.Mode&unix.S_IFMT != unix.S_IFREG {
 		_ = unix.Close(fd)
 		return nil, fmt.Errorf("%s is not a regular file", name)
+	}
+	if err := unix.SetNonblock(fd, false); err != nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("clear nonblocking mode for %s: %w", name, err)
+	}
+	if err := unix.Fchmod(fd, 0o600); err != nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("chmod %s: %w", name, err)
+	}
+	if err := fs.chownat(dirfd, name); err != nil {
+		_ = unix.Close(fd)
+		return nil, err
 	}
 	return os.NewFile(uintptr(fd), name), nil
 }
@@ -307,16 +312,14 @@ func (fs *PrivateFS) renameLocked(dir, oldName, newName string, replace bool) er
 	if err != nil {
 		return err
 	}
-	if !replace {
-		var st unix.Stat_t
-		if err := unix.Fstatat(dirfd, newName, &st, unix.AT_SYMLINK_NOFOLLOW); err == nil {
-			return fmt.Errorf("rename %s: %w", newName, os.ErrExist)
-		} else if !isUnixNotExist(err) {
-			return err
-		}
+	var renameErr error
+	if replace {
+		renameErr = unix.Renameat(dirfd, oldName, dirfd, newName)
+	} else {
+		renameErr = renameatNoReplaceFn(dirfd, oldName, newName)
 	}
-	if err := unix.Renameat(dirfd, oldName, dirfd, newName); err != nil {
-		return fmt.Errorf("rename %s: %w", oldName, err)
+	if renameErr != nil {
+		return fmt.Errorf("rename %s: %w", oldName, renameErr)
 	}
 	return nil
 }
@@ -379,12 +382,27 @@ func identFromStat(st *unix.Stat_t) fileIdentity {
 }
 
 func modeFromStat(st *unix.Stat_t) os.FileMode {
-	mode := os.FileMode(st.Mode & 0o777)
-	switch st.Mode & unix.S_IFMT {
+	return modeFromUnixMode(uint32(st.Mode))
+}
+
+func modeFromUnixMode(statMode uint32) os.FileMode {
+	mode := os.FileMode(statMode & 0o777)
+	switch statMode & unix.S_IFMT {
 	case unix.S_IFDIR:
 		mode |= os.ModeDir
 	case unix.S_IFLNK:
 		mode |= os.ModeSymlink
+	case unix.S_IFIFO:
+		mode |= os.ModeNamedPipe
+	case unix.S_IFSOCK:
+		mode |= os.ModeSocket
+	case unix.S_IFBLK:
+		mode |= os.ModeDevice
+	case unix.S_IFCHR:
+		mode |= os.ModeDevice | os.ModeCharDevice
+	case unix.S_IFREG:
+	default:
+		mode |= os.ModeIrregular
 	}
 	return mode
 }

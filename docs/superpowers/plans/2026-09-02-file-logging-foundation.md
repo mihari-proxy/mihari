@@ -467,7 +467,7 @@ Expected: FAIL，缺少 writer。
 
 - [ ] **Step 2: 最小实现 capture**
 
-每次 `Write` 返回原输入 `len(p), nil`，即使日志 level 过滤或底层 JSONL 落盘失败也不误导子进程；失败只计入 logging 失败计数。只有 Close 后返回 `os.ErrClosed`。非法 UTF-8 替换为 U+FFFD 且 JSON 带 `invalid_utf8=true`。`Flush` 写出半行但不关闭。缓冲区永不超 `MaxCaptureLineBytes+utf8.UTFMax`。capture 必须可在多次子进程生命周期中继续 `Write`。测试：Close 前连续两次「写半行→Flush→再写」都成功；「写半行 → 子进程 Wait/Flush → 再 Start 写一行」得到两条独立 JSONL，不得粘成一行。
+每次 `Write` 返回原输入 `len(p), nil`，即使日志 level 过滤或底层 JSONL 落盘失败也不误导子进程；失败只计入 logging 失败计数。只有 Close 后返回 `os.ErrClosed`。非法 UTF-8（包括恰好在 16 KiB 边界被截断的 rune）替换为 U+FFFD 且 JSON 带 `invalid_utf8=true`。`Flush` 写出半行但不关闭。缓冲区永不超 `MaxCaptureLineBytes`。capture 必须可在多次子进程生命周期中继续 `Write`。测试：Close 前连续两次「写半行→Flush→再写」都成功；「写半行 → 子进程 Wait/Flush → 再 Start 写一行」得到两条独立 JSONL，不得粘成一行。
 
 - [ ] **Step 3: 写 Runtime/Group Red 并实现生命周期**
 

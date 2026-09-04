@@ -37,7 +37,7 @@ func NewLineCaptureWriter(logger *slog.Logger, level slog.Level, stream string) 
 		logger: logger,
 		level:  level,
 		stream: stream,
-		buf:    make([]byte, 0, MaxCaptureLineBytes+utf8.UTFMax),
+		buf:    make([]byte, 0, MaxCaptureLineBytes),
 	}
 }
 
@@ -161,44 +161,7 @@ func appendCapped(buf, chunk []byte) ([]byte, bool) {
 		return append(buf, chunk...), false
 	}
 	buf = append(buf, chunk[:room]...)
-	rest := chunk[room:]
-	for len(rest) > 0 && len(buf) < MaxCaptureLineBytes+utf8.UTFMax && incompleteTrailing(buf) {
-		buf = append(buf, rest[0])
-		rest = rest[1:]
-	}
 	return buf, true
-}
-
-func incompleteTrailing(p []byte) bool {
-	if len(p) == 0 {
-		return false
-	}
-	i := len(p) - 1
-	for i > 0 && !utf8.RuneStart(p[i]) && len(p)-i < utf8.UTFMax {
-		i--
-	}
-	if !utf8.RuneStart(p[i]) {
-		return false
-	}
-	need := utf8LeadSize(p[i])
-	return need > len(p)-i
-}
-
-func utf8LeadSize(b byte) int {
-	switch {
-	case b < 0x80:
-		return 1
-	case b < 0xC0:
-		return 1
-	case b < 0xE0:
-		return 2
-	case b < 0xF0:
-		return 3
-	case b < 0xF8:
-		return 4
-	default:
-		return 1
-	}
 }
 
 func sanitizeUTF8(b []byte) (string, bool) {

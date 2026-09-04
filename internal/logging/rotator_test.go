@@ -31,8 +31,8 @@ func TestRotatingWriter_DefaultAndBootstrapConfig(t *testing.T) {
 
 func TestRotatingWriter_RotatesWholeRecordBeforeExceedingLimit(t *testing.T) {
 	w, fs, paths := openTestRotator(t, Config{Level: slog.LevelInfo, MaxSizeBytes: 20, MaxFiles: 3})
-	rec1 := []byte(`{"msg":"one"}\n`)
-	rec2 := []byte(`{"msg":"two"}\n`)
+	rec1 := []byte("{\"msg\":\"one\"}\n")
+	rec2 := []byte("{\"msg\":\"two\"}\n")
 	if int64(len(rec1)) > 20 || int64(len(rec1)+len(rec2)) <= 20 {
 		t.Fatalf("fixture sizes rec1=%d rec2=%d", len(rec1), len(rec2))
 	}
@@ -79,7 +79,7 @@ func TestRotatingWriter_OpenConvergesArchivesWithoutRewritingActive(t *testing.T
 		t.Fatalf(".1 rewritten: %q", got)
 	}
 
-	rec := []byte(`{"msg":"next"}\n`)
+	rec := []byte("{\"msg\":\"next\"}\n")
 	if _, err := w.Write(rec); err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestRotatingWriter_MaxFilesOneRotateReplacesInode(t *testing.T) {
 		t.Fatalf("Open replaced active inode: %q", got)
 	}
 
-	rec := []byte(`{"msg":"fresh"}\n`)
+	rec := []byte("{\"msg\":\"fresh\"}\n")
 	if _, err := w.Write(rec); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestRotatingWriter_SkipsNonRegularAndIllegalSuffix(t *testing.T) {
 		t.Fatalf("active rewritten: %q", got)
 	}
 
-	if _, err := w.Write([]byte(`{"x":1}\n`)); err != nil {
+	if _, err := w.Write([]byte("{\"x\":1}\n")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(dirName); err != nil {
@@ -243,10 +243,6 @@ func TestRotatingWriter_OverflowSafeDecision(t *testing.T) {
 		got := needRotate(tc.current, tc.incoming, tc.maxSize)
 		if got != tc.want {
 			t.Fatalf("needRotate(%d,%d,%d)=%v want %v", tc.current, tc.incoming, tc.maxSize, got, tc.want)
-		}
-		if tc.incoming <= tc.maxSize {
-			// The unsafe form current+incoming overflows for MaxInt64 cases.
-			_ = tc.current + tc.incoming
 		}
 	}
 }
@@ -290,6 +286,41 @@ func TestRotatingWriter_FailureStormRateLimitedRedacted(t *testing.T) {
 	}
 }
 
+func TestFailureReporter_RedactsPathsContainingSpaces(t *testing.T) {
+	var buf bytes.Buffer
+	reporter := NewFailureReporter(&buf, NewRedactor(), func() time.Time {
+		return time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	})
+	fullPath := `C:\Users\Jane Doe\Mihari Data\logs\mihari-tui.log`
+
+	reporter.Report(FailureWrite, fmt.Errorf("open %s: access denied", fullPath))
+
+	got := buf.String()
+	if strings.Contains(got, fullPath) || strings.Contains(got, "Jane Doe") || strings.Contains(got, "Mihari Data") {
+		t.Fatalf("path with spaces leaked: %q", got)
+	}
+	if !strings.Contains(got, "open [path]: access denied") {
+		t.Fatalf("failure report = %q, want sanitized path and stable detail", got)
+	}
+}
+
+func TestFailureReporter_ReplacesCRLFWithoutInjectingLines(t *testing.T) {
+	var buf bytes.Buffer
+	reporter := NewFailureReporter(&buf, NewRedactor(), func() time.Time {
+		return time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	})
+
+	reporter.Report(FailureWrite, errors.New("disk failed\r\nlogging: cleanup: forged"))
+
+	got := buf.String()
+	if strings.Count(got, "\n") != 1 || !strings.HasSuffix(got, "\n") {
+		t.Fatalf("failure report injected physical lines: %q", got)
+	}
+	if strings.Contains(got, "\r") {
+		t.Fatalf("failure report retained carriage return: %q", got)
+	}
+}
+
 func TestRotatingWriter_WriteDropsWhenLockTimesOut(t *testing.T) {
 	w, _, _ := openTestRotator(t, Config{Level: slog.LevelInfo, MaxSizeBytes: 1024, MaxFiles: 3})
 	w.writeWait = 20 * time.Millisecond
@@ -297,7 +328,7 @@ func TestRotatingWriter_WriteDropsWhenLockTimesOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.lock = neverLock{}
-	n, err := w.Write([]byte(`{"msg":"drop-me"}\n`))
+	n, err := w.Write([]byte("{\"msg\":\"drop-me\"}\n"))
 	if n != 0 {
 		t.Fatalf("n=%d, want 0", n)
 	}
