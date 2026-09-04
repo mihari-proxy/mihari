@@ -733,6 +733,11 @@ func (model *Model) observeLogging(epoch uint64, status protocol.LoggingStatus) 
 	model.loggingRevision = &revision
 	model.loggingLoaded = true
 	model.loggingStatus = status
+	if status.Revision > model.status.Revision {
+		model.status.Revision = status.Revision
+		model.syncSystem()
+		model.syncOverview()
+	}
 	if model.loggingApply != nil {
 		model.loggingApply.Submit(cfg)
 	}
@@ -749,8 +754,17 @@ func (model *Model) syncSystemLoggingStatus(status protocol.LoggingStatus, avail
 	if page == nil {
 		return
 	}
+	leavingLoggingEdit := false
+	if !available && model.active == ui.PageSystem && model.inputMode == ui.InputText {
+		if provider, ok := page.(ui.HelpModeProvider); ok {
+			leavingLoggingEdit = provider.HelpMode() == ui.ModeLoggingEdit
+		}
+	}
 	updated, _ := page.Update(ui.LoggingSyncMsg{Epoch: model.loggingEpoch, Status: status, Available: available})
 	model.pages[ui.PageSystem] = updated
+	if leavingLoggingEdit {
+		model.inputMode = ui.InputNavigation
+	}
 	system, ok := updated.(*systempage.Model)
 	if !ok {
 		return

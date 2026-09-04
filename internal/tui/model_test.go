@@ -765,6 +765,7 @@ func TestNetworkStatusMsgSyncsSystemPageProxyAndTun(t *testing.T) {
 		Capabilities: []string{protocol.CapabilitySystemProxy, protocol.CapabilityTUN},
 	}})
 	system := model.pages[ui.PageSystem].(*systempage.Model)
+	system.SetSize(80, 80)
 	if view := system.View(); !strings.Contains(view, ui.LoadingLabel) {
 		t.Fatalf("expected Loading before networkStatusMsg, view=%s", view)
 	}
@@ -1094,6 +1095,44 @@ func TestModel_LoggingObservationSendsSynchronizedStateToSystem(t *testing.T) {
 	}
 }
 
+func TestModel_LoggingPageObservationAdvancesGlobalRevision(t *testing.T) {
+	model := NewModel()
+	page := &loggingResultRecordingPage{}
+	model.pages[ui.PageSystem] = page
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 5, Capabilities: []string{protocol.CapabilityLogging},
+	}})
+	before := protocol.LoggingStatus{Revision: 5, Level: "info", MaxSizeMB: 10, MaxFiles: 3, Dir: `C:\logs`}
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: before})
+	page.synced = 0
+
+	after := before
+	after.Revision = 6
+	updated, _ := model.Update(ui.PageResultMsg{
+		Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: 1, Status: after},
+	})
+	model = updated.(Model)
+	if model.status.Revision != 6 || model.loggingRevision == nil || *model.loggingRevision != 6 {
+		t.Fatalf("global=%d logging=%v", model.status.Revision, model.loggingRevision)
+	}
+	if page.synced != 1 || page.lastSync.Status != after {
+		t.Fatalf("syncs=%d last=%+v", page.synced, page.lastSync)
+	}
+}
+
+func TestModel_LoggingUnavailableSyncLeavesRootTextInputMode(t *testing.T) {
+	model := NewModel()
+	page := &loggingResultRecordingPage{helpMode: ui.ModeLoggingEdit}
+	model.pages[ui.PageSystem] = page
+	model.active = ui.PageSystem
+	model.inputMode = ui.InputText
+
+	model.syncSystemLoggingStatus(protocol.LoggingStatus{}, false)
+	if model.inputMode != ui.InputNavigation {
+		t.Fatalf("input mode=%v want navigation", model.inputMode)
+	}
+}
+
 type recordingLoggingApplier struct {
 	configs []logging.Config
 	closed  bool
@@ -1124,12 +1163,14 @@ type loggingResultRecordingPage struct {
 	received int
 	synced   int
 	lastSync ui.LoggingSyncMsg
+	helpMode string
 }
 
 func (p *loggingResultRecordingPage) ID() ui.PageID    { return ui.PageSystem }
 func (p *loggingResultRecordingPage) SetSize(int, int) {}
 func (p *loggingResultRecordingPage) FocusFirst()      {}
 func (p *loggingResultRecordingPage) View() string     { return "" }
+func (p *loggingResultRecordingPage) HelpMode() string { return p.helpMode }
 func (p *loggingResultRecordingPage) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	switch typed := message.(type) {
 	case ui.LoggingObservedMsg:

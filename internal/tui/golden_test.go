@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	systempage "github.com/mihari-proxy/mihari/internal/tui/pages/system"
 	"github.com/mihari-proxy/mihari/internal/tui/session"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
@@ -54,8 +55,12 @@ func goldenModel(t *testing.T, page ui.PageID, width, height int) Model {
 
 func assertGolden(t *testing.T, name string, model Model) {
 	t.Helper()
+	assertGoldenContent(t, name, normalizeRender(model.View().Content))
+}
+
+func assertGoldenContent(t *testing.T, name, got string) {
+	t.Helper()
 	path := filepath.Join("testdata", name+".golden")
-	got := normalizeRender(model.View().Content)
 	if *updateGolden {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
@@ -72,6 +77,14 @@ func assertGolden(t *testing.T, name string, model Model) {
 	if string(want) != got {
 		t.Fatalf("golden %s changed (run -update if intentional)\n--- want ---\n%s\n--- got ---\n%s", path, want, got)
 	}
+}
+
+func trimRenderPadding(view string) string {
+	lines := strings.Split(view, "\n")
+	for index := range lines {
+		lines[index] = strings.TrimRight(lines[index], " ")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func fullCapabilities() []string {
@@ -167,6 +180,34 @@ func TestGoldenLogsCompact(t *testing.T) {
 		model.applySessionEvent(session.Event{Kind: session.EventLog, ObservedAt: base.Add(time.Duration(index) * time.Second), Log: entry})
 	}
 	assertGolden(t, "compact/logs", model)
+}
+
+func TestGoldenSystemLoggingFull(t *testing.T) {
+	freezeUTC(t)
+	t.Setenv("MIHARI_DATA", t.TempDir())
+	model := goldenModel(t, ui.PageSystem, 100, 40)
+	model.applySessionEvent(session.Event{Kind: session.EventConnected})
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Schema: "mihari/v1", Revision: 7, Health: "ok", DaemonVersion: "v0.9.0",
+		Capabilities: []string{protocol.CapabilityCore, protocol.CapabilityOnboarding, protocol.CapabilityLogging},
+	}})
+	model.applySessionEvent(session.Event{Kind: session.EventCore, Core: protocol.CoreStatus{
+		Schema: "mihari/v1", Revision: 7, Status: "running", Version: "v1.19.12", Channel: "stable", PID: 4242,
+	}})
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: protocol.LoggingStatus{
+		Schema: "mihari/v1", Revision: 7, Level: "warn", MaxSizeMB: 25, MaxFiles: 6, Dir: `C:\Users\alice\.mihari\logs`,
+	}})
+	page := model.pages[ui.PageSystem].(*systempage.Model)
+	page.SetOnboarding(protocol.OnboardingStatus{
+		Revision: 7, MixedAddr: "127.0.0.1:7890", ControllerAddr: "127.0.0.1:9090", WebAddr: "127.0.0.1:9191",
+	})
+	page.SetLocalLoggingAvailable(false)
+	page.FocusFirst()
+	view := normalizeRender(model.View().Content)
+	if strings.Contains(view, "Export") {
+		t.Fatalf("Task 9 golden must not contain Export:\n%s", view)
+	}
+	assertGoldenContent(t, "full/system-logging", trimRenderPadding(view))
 }
 
 func TestGoldenWebGUIUnavailable(t *testing.T) {

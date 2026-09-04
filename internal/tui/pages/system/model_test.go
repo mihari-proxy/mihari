@@ -48,6 +48,390 @@ func TestModel_LoggingSyncStoresRootAcceptedStatus(t *testing.T) {
 	}
 }
 
+func TestModel_LoggingRowsShowDaemonStateAndLocalWriterHealth(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client, func() string { return "logging-op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityLogging}}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(true)
+	status := protocol.LoggingStatus{
+		Schema: "mihari/v1", Revision: 0, Level: "debug", MaxSizeMB: 100,
+		MaxFiles: 10, Dir: `C:\Users\alice\.mihari\logs`,
+	}
+	model.ApplyLoggingSync(ui.LoggingSyncMsg{Epoch: 3, Status: status, Available: true})
+	model.SetLocalLoggingAvailable(false)
+
+	want := map[string]string{
+		rowLogLevel:     "debug",
+		rowLogMaxSize:   "100 MiB",
+		rowLogMaxFiles:  "10",
+		rowLogDirectory: status.Dir,
+	}
+	for id, value := range want {
+		if got := systemRowByID(model, id).value; got != value {
+			t.Fatalf("row %s value=%q want %q", id, got, value)
+		}
+	}
+	view := model.View()
+	if !strings.Contains(view, "Local file log unavailable") {
+		t.Fatalf("missing local writer health marker:\n%s", view)
+	}
+	model.focusID = rowLogLevel
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("local writer failure disabled daemon logging update")
+	}
+
+}
+
+func TestModel_LoggingRowsIgnoreEnterWhenUnavailable(t *testing.T) {
+	client := &fakeClient{}
+	model := New(client, func() string { return "logging-op" })
+	model.SetSnapshot(protocol.Status{}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(false)
+	for _, id := range []string{rowLogLevel, rowLogMaxSize, rowLogMaxFiles, rowLogDirectory} {
+		model.focusID = id
+		updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		model = updated.(*Model)
+		if command != nil || model.editID != "" {
+			t.Fatalf("offline row %s produced command/edit", id)
+		}
+	}
+	if client.updateLoggingCalls != 0 {
+		t.Fatalf("offline logging PATCH calls=%d", client.updateLoggingCalls)
+	}
+}
+
+func TestModel_LoggingUnavailableSyncCancelsNumericEdit(t *testing.T) {
+	model, client := loggingModel("info", 4)
+	model.focusID = rowLogMaxSize
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	model.editInput.SetValue("25")
+	updated, command := model.Update(ui.LoggingSyncMsg{Epoch: 8, Available: false})
+	model = updated.(*Model)
+	if model.editID != "" || command == nil {
+		t.Fatalf("editID=%q command=%v", model.editID, command != nil)
+	}
+	for _, id := range []string{rowLogLevel, rowLogMaxSize, rowLogMaxFiles, rowLogDirectory} {
+		if got := systemRowByID(model, id).value; got != ui.UnavailableTitle {
+			t.Fatalf("row %s=%q", id, got)
+		}
+	}
+	_, apply := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if apply != nil || client.updateLoggingCalls != 0 {
+		t.Fatalf("offline edit submitted: command=%v calls=%d", apply != nil, client.updateLoggingCalls)
+	}
+}
+
+func TestModel_LoggingLevelEnterCyclesAndPatchesRevisionZero(t *testing.T) {
+	cases := []struct {
+		level string
+		want  string
+	}{
+		{level: "debug", want: "info"},
+		{level: "info", want: "warn"},
+		{level: "warn", want: "error"},
+		{level: "error", want: "debug"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.level, func(t *testing.T) {
+			model, client := loggingModel(tc.level, 0)
+			model.focusID = rowLogLevel
+			_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			observed := loggingObservedFromCommand(t, command)
+			if observed.Epoch != 7 || observed.Status.Level != tc.want {
+				t.Fatalf("observed=%+v want epoch 7 level %q", observed, tc.want)
+			}
+			request := client.lastLogging
+			if client.updateLoggingCalls != 1 || request.Level == nil || *request.Level != tc.want {
+				t.Fatalf("calls=%d request=%+v", client.updateLoggingCalls, request)
+			}
+			if request.IfRevision == nil || *request.IfRevision != 0 {
+				t.Fatalf("if_revision=%v want explicit 0", request.IfRevision)
+			}
+			if request.OperationID != "logging-op" || request.MaxSizeMB != nil || request.MaxFiles != nil {
+				t.Fatalf("request=%+v", request)
+			}
+		})
+	}
+}
+
+func TestModel_LoggingNumericEditAppliesStrictInt64(t *testing.T) {
+	cases := []struct {
+		name      string
+		rowID     string
+		value     string
+		wantSize  int64
+		wantFiles int64
+	}{
+		{name: "size", rowID: rowLogMaxSize, value: "42", wantSize: 42},
+		{name: "files", rowID: rowLogMaxFiles, value: "8", wantFiles: 8},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			model, client := loggingModel("info", 12)
+			model.focusID = tc.rowID
+			updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			model = updated.(*Model)
+			if model.editID != tc.rowID || model.HelpMode() != "logging-edit" {
+				t.Fatalf("editID=%q help=%q", model.editID, model.HelpMode())
+			}
+			model.editInput.SetValue(tc.value)
+			_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			_ = loggingObservedFromCommand(t, command)
+			request := client.lastLogging
+			if request.IfRevision == nil || *request.IfRevision != 12 {
+				t.Fatalf("if_revision=%v", request.IfRevision)
+			}
+			switch tc.rowID {
+			case rowLogMaxSize:
+				if request.MaxSizeMB == nil || *request.MaxSizeMB != tc.wantSize || request.MaxFiles != nil {
+					t.Fatalf("request=%+v", request)
+				}
+			case rowLogMaxFiles:
+				if request.MaxFiles == nil || *request.MaxFiles != tc.wantFiles || request.MaxSizeMB != nil {
+					t.Fatalf("request=%+v", request)
+				}
+			}
+		})
+	}
+}
+
+func TestModel_LoggingNumericEditRejectsInvalidValuesWithoutPatch(t *testing.T) {
+	cases := []struct {
+		name  string
+		rowID string
+		value string
+		want  string
+	}{
+		{name: "size too long", rowID: rowLogMaxSize, value: strings.Repeat("9", 128), want: "Max file size must be an integer from 1 to 100 MiB"},
+		{name: "size non numeric", rowID: rowLogMaxSize, value: "ten", want: "Max file size must be an integer from 1 to 100 MiB"},
+		{name: "size zero", rowID: rowLogMaxSize, value: "0", want: "Max file size must be an integer from 1 to 100 MiB"},
+		{name: "size high", rowID: rowLogMaxSize, value: "101", want: "Max file size must be an integer from 1 to 100 MiB"},
+		{name: "files zero", rowID: rowLogMaxFiles, value: "0", want: "Files to keep must be an integer from 1 to 10"},
+		{name: "files high", rowID: rowLogMaxFiles, value: "11", want: "Files to keep must be an integer from 1 to 10"},
+		{name: "files non numeric", rowID: rowLogMaxFiles, value: "three", want: "Files to keep must be an integer from 1 to 10"},
+		{name: "files too long", rowID: rowLogMaxFiles, value: strings.Repeat("9", 128), want: "Files to keep must be an integer from 1 to 10"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			model, client := loggingModel("info", 4)
+			model.focusID = tc.rowID
+			updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			model = updated.(*Model)
+			model.editInput.SetValue(tc.value)
+			updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			model = updated.(*Model)
+			if command != nil || client.updateLoggingCalls != 0 {
+				t.Fatalf("invalid value produced command/PATCH: command=%v calls=%d", command != nil, client.updateLoggingCalls)
+			}
+			if model.editID != tc.rowID || model.lastError != tc.want {
+				t.Fatalf("editID=%q error=%q want %q", model.editID, model.lastError, tc.want)
+			}
+			if !strings.Contains(model.View(), ui.FailedLabel) || !strings.Contains(model.View(), tc.want) {
+				t.Fatalf("missing stable validation failure:\n%s", model.View())
+			}
+		})
+	}
+}
+
+func TestModel_LoggingNumericEditEscapeCancelsWithoutPatch(t *testing.T) {
+	model, client := loggingModel("info", 4)
+	model.focusID = rowLogMaxSize
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	model.editInput.SetValue("25")
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = updated.(*Model)
+	if model.editID != "" || client.updateLoggingCalls != 0 {
+		t.Fatalf("editID=%q PATCH calls=%d", model.editID, client.updateLoggingCalls)
+	}
+	if command == nil {
+		t.Fatal("escape must publish navigation input mode")
+	}
+}
+
+func TestModel_LoggingPatchPublishesOnlyCompleteResponseWithRequestEpoch(t *testing.T) {
+	model, client := loggingModel("info", 5)
+	response := protocol.LoggingStatus{
+		Schema: "mihari/v1", Revision: 6, Level: "debug", MaxSizeMB: 77,
+		MaxFiles: 9, Dir: `D:\shared\logs`,
+	}
+	client.updateLoggingResult = &response
+	model.focusID = rowLogLevel
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	observed := loggingObservedFromCommand(t, command)
+	if observed.Epoch != 7 || observed.Status != response {
+		t.Fatalf("observed=%+v want epoch 7 full response %+v", observed, response)
+	}
+	if model.logging != client.logging {
+		t.Fatalf("page adopted PATCH before root gate: got %+v want %+v", model.logging, client.logging)
+	}
+}
+
+func TestModel_LoggingObservationRejectedByRootDoesNotShowSuccess(t *testing.T) {
+	model, client := loggingModel("info", 5)
+	invalid := protocol.LoggingStatus{Schema: "mihari/v1", Revision: 6, Level: "verbose", MaxSizeMB: 10, MaxFiles: 3, Dir: `C:\logs`}
+	client.updateLoggingResult = &invalid
+	model.focusID = rowLogLevel
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	observed := loggingObservedFromCommand(t, command)
+	updated, _ := model.Update(observed)
+	model = updated.(*Model)
+	if model.pending || model.outcomeRow != "" || model.logging.Level != "info" || model.logging.Revision != 5 {
+		t.Fatalf("pending=%v outcome=%q logging=%+v", model.pending, model.outcomeRow, model.logging)
+	}
+}
+
+func TestModel_LoggingNoOpResponseUpdatesRevisionAndClearsPending(t *testing.T) {
+	model, client := loggingModel("info", 5)
+	response := client.logging
+	response.Revision = 6
+	client.updateLoggingResult = &response
+	model.focusID = rowLogMaxSize
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	model.editInput.SetValue("10")
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	observed := loggingObservedFromCommand(t, command)
+	if !model.pending {
+		t.Fatal("PATCH must remain pending until root routes the observation")
+	}
+	model.ApplyLoggingSync(ui.LoggingSyncMsg{Epoch: observed.Epoch, Status: observed.Status, Available: true})
+	updated, _ = model.Update(observed)
+	model = updated.(*Model)
+	if model.pending || model.logging.Revision != 6 || model.outcomeRow != rowLogMaxSize || !model.outcomeOK {
+		t.Fatalf("pending=%v logging=%+v outcome=%q ok=%v", model.pending, model.logging, model.outcomeRow, model.outcomeOK)
+	}
+}
+
+func TestModel_LoggingRevisionConflictReloadsSameEpochWithoutReplay(t *testing.T) {
+	model, client := loggingModel("info", 5)
+	client.updateLoggingErr = protocol.APIError{Code: protocol.CodeRevisionConflict, Message: `conflict at C:\secret\mihari.yaml`}
+	client.logging = protocol.LoggingStatus{
+		Schema: "mihari/v1", Revision: 9, Level: "error", MaxSizeMB: 33,
+		MaxFiles: 7, Dir: `C:\logs`,
+	}
+	model.focusID = rowLogLevel
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	result := firstSystemPageResult(t, command)
+	updated, reload := model.Update(result)
+	model = updated.(*Model)
+	if reload == nil {
+		t.Fatal("revision conflict did not start Logging GET")
+	}
+	observed := loggingObservedFromCommand(t, reload)
+	if observed.Epoch != 7 || observed.Status != client.logging {
+		t.Fatalf("reload observed=%+v", observed)
+	}
+	if client.updateLoggingCalls != 1 || client.loggingCalls != 1 {
+		t.Fatalf("PATCH calls=%d GET calls=%d", client.updateLoggingCalls, client.loggingCalls)
+	}
+	if model.logging.Level != "info" {
+		t.Fatalf("conflict adopted state before root gate: %+v", model.logging)
+	}
+}
+
+func TestModel_LoggingPatchFailureIsStableAndRedacted(t *testing.T) {
+	model, client := loggingModel("info", 5)
+	client.updateLoggingErr = errors.New(`write C:\Users\alice\.mihari\mihari.yaml: access denied token=sekret`)
+	model.focusID = rowLogLevel
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	result := firstSystemPageResult(t, command)
+	updated, followup := model.Update(result)
+	model = updated.(*Model)
+	if followup != nil || model.pending {
+		t.Fatalf("failure followup=%v pending=%v", followup != nil, model.pending)
+	}
+	view := model.View()
+	if !strings.Contains(view, ui.FailedLabel) || !strings.Contains(view, "Could not update logging settings") {
+		t.Fatalf("missing stable failure:\n%s", view)
+	}
+	for _, secret := range []string{"alice", "mihari.yaml", "sekret", "access denied"} {
+		if strings.Contains(view, secret) || strings.Contains(model.lastError, secret) {
+			t.Fatalf("failure leaked %q:\n%s", secret, view)
+		}
+	}
+}
+
+func TestModel_LoggingConflictReloadFailureIsStableAndRedacted(t *testing.T) {
+	model, client := loggingModel("info", 5)
+	client.updateLoggingErr = protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "conflict"}
+	client.loggingErr = errors.New(`/private/alice/mihari.yaml token=sekret`)
+	model.focusID = rowLogLevel
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, reload := model.Update(firstSystemPageResult(t, command))
+	model = updated.(*Model)
+	updated, followup := model.Update(firstSystemPageResult(t, reload))
+	model = updated.(*Model)
+	if followup != nil || model.pending {
+		t.Fatalf("reload failure followup=%v pending=%v", followup != nil, model.pending)
+	}
+	view := model.View()
+	if !strings.Contains(view, ui.FailedLabel) || !strings.Contains(view, "Could not reload logging settings") {
+		t.Fatalf("missing stable reload failure:\n%s", view)
+	}
+	for _, secret := range []string{"alice", "mihari.yaml", "sekret"} {
+		if strings.Contains(view, secret) {
+			t.Fatalf("reload failure leaked %q:\n%s", secret, view)
+		}
+	}
+}
+
+func TestModel_LoggingStaleResultsClearMatchingPendingWithoutRollback(t *testing.T) {
+	t.Run("old epoch", func(t *testing.T) {
+		model, client := loggingModel("info", 5)
+		response := protocol.LoggingStatus{Schema: "mihari/v1", Revision: 6, Level: "warn", MaxSizeMB: 20, MaxFiles: 4, Dir: `C:\old`}
+		client.updateLoggingResult = &response
+		model.focusID = rowLogLevel
+		_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		observed := loggingObservedFromCommand(t, command)
+		current := protocol.LoggingStatus{Schema: "mihari/v1", Revision: 12, Level: "error", MaxSizeMB: 80, MaxFiles: 9, Dir: `C:\new`}
+		model.ApplyLoggingSync(ui.LoggingSyncMsg{Epoch: 8, Status: current, Available: true})
+		updated, _ := model.Update(observed)
+		model = updated.(*Model)
+		if model.pending || model.logging != current || model.outcomeRow != "" {
+			t.Fatalf("pending=%v logging=%+v outcome=%q", model.pending, model.logging, model.outcomeRow)
+		}
+	})
+
+	t.Run("older revision", func(t *testing.T) {
+		model, client := loggingModel("error", 12)
+		response := protocol.LoggingStatus{Schema: "mihari/v1", Revision: 11, Level: "warn", MaxSizeMB: 20, MaxFiles: 4, Dir: `C:\old`}
+		client.updateLoggingResult = &response
+		model.focusID = rowLogLevel
+		_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		observed := loggingObservedFromCommand(t, command)
+		current := model.logging
+		updated, _ := model.Update(observed)
+		model = updated.(*Model)
+		if model.pending || model.logging != current || model.outcomeRow != "" {
+			t.Fatalf("pending=%v logging=%+v outcome=%q", model.pending, model.logging, model.outcomeRow)
+		}
+	})
+
+	t.Run("conflict reload from old epoch", func(t *testing.T) {
+		model, client := loggingModel("info", 5)
+		client.updateLoggingErr = protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "conflict"}
+		client.logging = protocol.LoggingStatus{Schema: "mihari/v1", Revision: 6, Level: "warn", MaxSizeMB: 20, MaxFiles: 4, Dir: `C:\old`}
+		model.focusID = rowLogLevel
+		_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		updated, reload := model.Update(firstSystemPageResult(t, command))
+		model = updated.(*Model)
+		current := protocol.LoggingStatus{Schema: "mihari/v1", Revision: 12, Level: "error", MaxSizeMB: 80, MaxFiles: 9, Dir: `C:\new`}
+		model.ApplyLoggingSync(ui.LoggingSyncMsg{Epoch: 8, Status: current, Available: true})
+		observed := loggingObservedFromCommand(t, reload)
+		updated, _ = model.Update(observed)
+		model = updated.(*Model)
+		if model.pending || model.logging != current || model.outcomeRow != "" {
+			t.Fatalf("pending=%v logging=%+v outcome=%q", model.pending, model.logging, model.outcomeRow)
+		}
+		if client.updateLoggingCalls != 1 || client.loggingCalls != 1 {
+			t.Fatalf("PATCH calls=%d GET calls=%d", client.updateLoggingCalls, client.loggingCalls)
+		}
+	})
+}
+
 func (f *fakeSelfUpdater) Check(_ context.Context, _, channel string) (update.CheckResult, error) {
 	f.checkCalls++
 	f.lastChannel = channel
@@ -98,6 +482,14 @@ type fakeClient struct {
 	updateOnboardingCalls int
 	lastOnboarding        protocol.OnboardingUpdateRequest
 	updateOnboardingErr   error
+
+	logging             protocol.LoggingStatus
+	loggingCalls        int
+	updateLoggingCalls  int
+	lastLogging         protocol.LoggingUpdateRequest
+	loggingErr          error
+	updateLoggingErr    error
+	updateLoggingResult *protocol.LoggingStatus
 }
 
 type fakeService struct {
@@ -161,6 +553,34 @@ func (f *fakeClient) UpdateOnboarding(_ context.Context, request protocol.Onboar
 	f.onboarding.RestartRequired = true
 	f.onboarding.Revision++
 	return f.onboarding, nil
+}
+func (f *fakeClient) Logging(context.Context) (protocol.LoggingStatus, error) {
+	f.loggingCalls++
+	if f.loggingErr != nil {
+		return protocol.LoggingStatus{}, f.loggingErr
+	}
+	return f.logging, nil
+}
+func (f *fakeClient) UpdateLogging(_ context.Context, request protocol.LoggingUpdateRequest) (protocol.LoggingStatus, error) {
+	f.updateLoggingCalls++
+	f.lastLogging = request
+	if f.updateLoggingErr != nil {
+		return protocol.LoggingStatus{}, f.updateLoggingErr
+	}
+	if f.updateLoggingResult != nil {
+		return *f.updateLoggingResult, nil
+	}
+	if request.Level != nil {
+		f.logging.Level = *request.Level
+	}
+	if request.MaxSizeMB != nil {
+		f.logging.MaxSizeMB = *request.MaxSizeMB
+	}
+	if request.MaxFiles != nil {
+		f.logging.MaxFiles = *request.MaxFiles
+	}
+	f.logging.Revision++
+	return f.logging, nil
 }
 func (f *fakeClient) Core(context.Context) (protocol.CoreStatus, error) {
 	f.coreCalls++
@@ -2909,6 +3329,96 @@ func systemRowIDs(model *Model) []string {
 		ids[i] = item.id
 	}
 	return ids
+}
+
+func systemRowByID(model *Model, id string) row {
+	for _, item := range model.rows() {
+		if item.id == id {
+			return item
+		}
+	}
+	return row{}
+}
+
+func loggingModel(level string, revision uint64) (*Model, *fakeClient) {
+	client := &fakeClient{logging: protocol.LoggingStatus{
+		Schema: "mihari/v1", Revision: revision, Level: level,
+		MaxSizeMB: 10, MaxFiles: 3, Dir: `C:\logs`,
+	}}
+	model := New(client, func() string { return "logging-op" })
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityLogging}}, protocol.CoreStatus{})
+	model.SetMutationsEnabled(true)
+	model.ApplyLoggingSync(ui.LoggingSyncMsg{Epoch: 7, Status: client.logging, Available: true})
+	model.SetLocalLoggingAvailable(true)
+	return model, client
+}
+
+func loggingObservedFromCommand(t *testing.T, command tea.Cmd) ui.LoggingObservedMsg {
+	t.Helper()
+	if command == nil {
+		t.Fatal("missing logging command")
+	}
+	var visit func(tea.Msg) (ui.LoggingObservedMsg, bool)
+	visit = func(message tea.Msg) (ui.LoggingObservedMsg, bool) {
+		switch typed := message.(type) {
+		case ui.LoggingObservedMsg:
+			return typed, true
+		case ui.PageResultMsg:
+			observed, ok := typed.Result.(ui.LoggingObservedMsg)
+			return observed, ok
+		case tea.BatchMsg:
+			for _, item := range typed {
+				if item == nil {
+					continue
+				}
+				if observed, ok := visit(item()); ok {
+					return observed, true
+				}
+			}
+		}
+		return ui.LoggingObservedMsg{}, false
+	}
+	if observed, ok := visit(command()); ok {
+		return observed
+	}
+	t.Fatal("command did not produce LoggingObservedMsg")
+	return ui.LoggingObservedMsg{}
+}
+
+func firstSystemPageResult(t *testing.T, command tea.Cmd) tea.Msg {
+	t.Helper()
+	if command == nil {
+		t.Fatal("missing command")
+	}
+	var visit func(tea.Msg) (tea.Msg, bool)
+	visit = func(message tea.Msg) (tea.Msg, bool) {
+		switch typed := message.(type) {
+		case ui.PageResultMsg:
+			if typed.Page == ui.PageSystem {
+				switch typed.Result.(type) {
+				case startRowSpinMsg, rowSpinTickMsg:
+					return nil, false
+				default:
+					return typed.Result, true
+				}
+			}
+		case tea.BatchMsg:
+			for _, item := range typed {
+				if item == nil {
+					continue
+				}
+				if result, ok := visit(item()); ok {
+					return result, true
+				}
+			}
+		}
+		return nil, false
+	}
+	if result, ok := visit(command()); ok {
+		return result
+	}
+	t.Fatal("command did not produce a System result")
+	return nil
 }
 
 func channelRowValue(model *Model) string {

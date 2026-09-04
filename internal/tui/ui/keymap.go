@@ -19,13 +19,14 @@ const (
 
 const (
 	// ModeSearch is the in-page filter field on Connections, Rules, and Logs.
-	ModeSearch    = "search"
-	ModeDetail    = "detail"
-	ModeColumns   = "columns"
-	ModeForm      = "form"
-	ModePortsEdit = "ports-edit"
-	ModeConfirm   = "confirm"
-	ModeSetup     = "setup"
+	ModeSearch      = "search"
+	ModeDetail      = "detail"
+	ModeColumns     = "columns"
+	ModeForm        = "form"
+	ModePortsEdit   = "ports-edit"
+	ModeLoggingEdit = "logging-edit"
+	ModeConfirm     = "confirm"
+	ModeSetup       = "setup"
 )
 
 // KeyBinding is one shortcut in a page or mode. Identity is (Scope, Page, Mode, Keys),
@@ -132,6 +133,10 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"enter"}, Display: "Enter", Label: "apply", Footer: "Enter apply", Scope: ScopeMode, Mode: ModePortsEdit},
 		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel", Footer: "Esc cancel", Scope: ScopeMode, Mode: ModePortsEdit},
 
+		{Display: "type", Label: "edit the value", Footer: "Type value", Scope: ScopeMode, Mode: ModeLoggingEdit},
+		{Keys: []string{"enter"}, Display: "Enter", Label: "apply", Footer: "Enter apply", Scope: ScopeMode, Mode: ModeLoggingEdit},
+		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel", Footer: "Esc cancel", Scope: ScopeMode, Mode: ModeLoggingEdit},
+
 		{Keys: []string{"tab", "shift+tab", "left", "right"}, Display: "Tab / ←/→", Label: "toggle Confirm / Cancel", Scope: ScopeMode, Mode: ModeConfirm},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "activate the selected button", Scope: ScopeMode, Mode: ModeConfirm},
 		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel", Scope: ScopeMode, Mode: ModeConfirm},
@@ -209,6 +214,8 @@ func RenderFooter(page PageID, mode string, opt FooterOpt) string {
 		return joinFooter(append(tokens, helpQuit...))
 	case ModeForm:
 		return joinFooter(footerTokens(func(b KeyBinding) bool { return b.Mode == ModeForm }))
+	case ModeLoggingEdit:
+		return joinFooter(footerTokens(func(b KeyBinding) bool { return b.Mode == ModeLoggingEdit }))
 	default:
 		if page == PageSetup {
 			return joinFooter(footerTokens(func(b KeyBinding) bool {
@@ -241,6 +248,7 @@ var (
 	FooterDetailMode    = RenderFooter(PageConnections, ModeDetail, FooterOpt{})
 	FooterColumnsMode   = RenderFooter(PageConnections, ModeColumns, FooterOpt{})
 	FooterPortsEdit     = RenderFooter(PageSystem, ModePortsEdit, FooterOpt{})
+	FooterLoggingEdit   = RenderFooter(PageSystem, ModeLoggingEdit, FooterOpt{})
 	FormHelp            = RenderFooter(PageSubscriptions, ModeForm, FooterOpt{})
 	SetupFooter         = RenderFooter(PageSetup, "", FooterOpt{})
 )
@@ -311,6 +319,8 @@ func modeTitle(mode string) string {
 		return "Form"
 	case ModePortsEdit:
 		return "Ports edit"
+	case ModeLoggingEdit:
+		return "Logging edit"
 	case ModeConfirm:
 		return "Confirm"
 	case ModeSetup:

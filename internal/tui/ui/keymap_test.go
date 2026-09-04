@@ -236,6 +236,8 @@ func TestCatalog_KeysAppearInHandlerSource(t *testing.T) {
 			}
 		case b.Mode == ModePortsEdit:
 			return []string{filepath.Join(tuiDir, "pages", "system", "model.go")}
+		case b.Mode == ModeLoggingEdit:
+			return []string{filepath.Join(tuiDir, "pages", "system", "model.go")}
 		default:
 			return nil
 		}
@@ -302,6 +304,7 @@ func TestRenderFooter_MatchesCurrentLayout(t *testing.T) {
 		{"columns", RenderFooter(PageConnections, ModeColumns, FooterOpt{}), "↑/↓ column  Space toggle  Enter save  Esc cancel  ? help  q quit"},
 		{"form", RenderFooter(PageSubscriptions, ModeForm, FooterOpt{}), "Tab/Shift+Tab fields  Enter next/save  Esc cancel"},
 		{"ports", RenderFooter(PageSystem, ModePortsEdit, FooterOpt{}), "Type address  Enter apply  Esc cancel  ? help  q quit"},
+		{"logging", RenderFooter(PageSystem, ModeLoggingEdit, FooterOpt{}), "Type value  Enter apply  Esc cancel"},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {
@@ -319,5 +322,15 @@ func TestRenderFooter_MatchesCurrentLayout(t *testing.T) {
 	}
 	if SetupFooter != "Tab fields  Enter continue  Esc back  Ctrl+C quit" {
 		t.Fatalf("SetupFooter=%q", SetupFooter)
+	}
+}
+
+func TestRenderHelp_LoggingEditUsesValueCopyNotAddressCopy(t *testing.T) {
+	body := RenderHelp(PageSystem, ModeLoggingEdit)
+	if !strings.Contains(body, "This mode · Logging edit") || !strings.Contains(body, "edit the value") {
+		t.Fatalf("logging edit help missing:\n%s", body)
+	}
+	if strings.Contains(body, "edit the address") {
+		t.Fatalf("logging help reused Ports copy:\n%s", body)
 	}
 }
