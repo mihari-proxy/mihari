@@ -10,12 +10,13 @@ import (
 )
 
 type lockPlatform struct {
+	mode       LockMode
 	overlapped windows.Overlapped
 }
 
 func (l *advisoryLock) tryLock() (busy bool, err error) {
 	flags := uint32(windows.LOCKFILE_FAIL_IMMEDIATELY)
-	if l.mode != LockShared {
+	if l.plat.mode != LockShared {
 		flags |= windows.LOCKFILE_EXCLUSIVE_LOCK
 	}
 	err = windows.LockFileEx(windows.Handle(l.file.Fd()), flags, 0, 1, 0, &l.plat.overlapped)

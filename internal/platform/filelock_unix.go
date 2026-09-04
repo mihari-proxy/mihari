@@ -9,11 +9,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type lockPlatform struct{}
+type lockPlatform struct {
+	mode LockMode
+}
 
 func (l *advisoryLock) tryLock() (busy bool, err error) {
 	how := unix.LOCK_NB
-	switch l.mode {
+	switch l.plat.mode {
 	case LockShared:
 		how |= unix.LOCK_SH
 	default:

@@ -49,7 +49,6 @@ type advisoryLock struct {
 	file   *os.File
 	closed bool
 	held   bool
-	mode   LockMode
 	plat   lockPlatform
 }
 
@@ -69,7 +68,7 @@ func (l *advisoryLock) Lock(ctx context.Context, mode LockMode) error {
 		if l.closed || l.file == nil {
 			return false, fmt.Errorf("advisory lock: %w", os.ErrClosed)
 		}
-		l.mode = mode
+		l.plat.mode = mode
 		busy, err = l.tryLock()
 		if err != nil {
 			return false, err
