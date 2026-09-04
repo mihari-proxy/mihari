@@ -164,7 +164,7 @@ func (m *Manager) compensateSystemProxy(ctx context.Context, op Operation, candi
 
 func (m *Manager) restoreSystemProxy(observed sysproxy.State) error {
 	if !observed.Enabled {
-		return m.sysProxy.Disable()
+		return errors.New("restore disabled system proxy state cannot be proven")
 	}
 	host, portText, err := net.SplitHostPort(observed.Server)
 	if err != nil || host == "" || portText == "" {

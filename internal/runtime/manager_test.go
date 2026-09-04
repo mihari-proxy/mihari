@@ -1107,6 +1107,73 @@ func TestInstallDoesNotPersistChannelWhenPrepareFails(t *testing.T) {
 	}
 }
 
+func TestInstall_CoreCommitThenSettingsSaveFailureRecordsIdentityAndDegrades(t *testing.T) {
+	settings, settingsPath := persistedChannelSettings(t, "stable")
+	var commits atomic.Int64
+	var saves atomic.Int64
+	var restarts atomic.Int64
+	manager := newTestManager(Options{
+		Installer: &fakeInstaller{candidate: &fakeCandidate{
+			version:  "v1.20.0",
+			alphaSHA: "alpha-new",
+			commit: func() (core.InstallResult, error) {
+				commits.Add(1)
+				return core.InstallResult{Version: "v1.20.0", Updated: true, AlphaSHA: "alpha-new"}, nil
+			},
+		}},
+		Supervisor: &fakeSupervisor{restart: func(context.Context) error {
+			restarts.Add(1)
+			return nil
+		}},
+		Settings: settings, SettingsPath: settingsPath,
+		SaveSettings: func(string, config.Settings) (config.CommitResult, error) {
+			saves.Add(1)
+			return config.CommitResult{}, errors.New(`replace failed at C:\secret\mihari.yaml`)
+		},
+	})
+	before := state.Snapshot{Revision: 9, Health: "ok"}
+	before.Core.Version = "v1.19.0"
+	before.Core.Channel = "stable"
+	manager.store.Store(before)
+	alpha := "alpha"
+	op := Operation{ID: "commit-then-settings-fail", Source: "test", Channel: &alpha}
+
+	_, err := manager.Install(context.Background(), op)
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "mutation compensation failed" || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("err=%v want sanitized committed data failure", err)
+	}
+	if commits.Load() != 1 || saves.Load() != 1 {
+		t.Fatalf("commits=%d saves=%d want 1/1", commits.Load(), saves.Load())
+	}
+	if got := manager.settingsSnapshot(); !reflect.DeepEqual(got, settings) {
+		t.Fatalf("memory settings changed: core channel=%q", got.CoreChannel)
+	}
+	loaded, loadErr := config.Load(settingsPath)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if !reflect.DeepEqual(loaded, settings) {
+		t.Fatalf("disk settings changed: core channel=%q", loaded.CoreChannel)
+	}
+	snapshot := manager.Snapshot()
+	if snapshot.Revision != 10 || snapshot.Health != "degraded" || snapshot.LastError != "mutation compensation failed; restart required" {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+	if snapshot.Core.Version != "v1.20.0" || snapshot.Core.Channel != "alpha" || snapshot.Core.AlphaSHA != "alpha-new" {
+		t.Fatalf("committed core identity=%#v", snapshot.Core)
+	}
+	if nextErr := manager.Restart(context.Background(), Operation{ID: "after-core-degraded", Source: "test"}); !errors.As(nextErr, &apiError) || apiError.Code != protocol.CodeInvalidState || restarts.Load() != 0 {
+		t.Fatalf("next mutation err=%v restarts=%d", nextErr, restarts.Load())
+	}
+	if _, retryErr := manager.Install(context.Background(), op); retryErr == nil || retryErr.Error() != err.Error() {
+		t.Fatalf("retry err=%v want cached %v", retryErr, err)
+	}
+	if commits.Load() != 1 || saves.Load() != 1 || manager.Snapshot().Revision != 10 {
+		t.Fatalf("retry repeated settlement: commits=%d saves=%d revision=%d", commits.Load(), saves.Load(), manager.Snapshot().Revision)
+	}
+}
+
 func TestInstallCommitPersistsChannelAndClearsAlphaSHAOnStable(t *testing.T) {
 	installer := &fakeInstaller{candidate: &fakeCandidate{
 		version:  "v1.19.0",
@@ -1380,9 +1447,15 @@ func waitForRuntimeStack(t *testing.T, frames ...string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		buffer := make([]byte, 1<<16)
-		n := goruntime.Stack(buffer, true)
-		stack := string(buffer[:n])
+		var stack string
+		for size := 1 << 16; ; size *= 2 {
+			buffer := make([]byte, size)
+			n := goruntime.Stack(buffer, true)
+			if n < len(buffer) {
+				stack = string(buffer[:n])
+				break
+			}
+		}
 		matched := true
 		for _, frame := range frames {
 			if !strings.Contains(stack, frame) {
@@ -1393,7 +1466,7 @@ func waitForRuntimeStack(t *testing.T, frames ...string) {
 		if matched {
 			return
 		}
-		goruntime.Gosched()
+		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("runtime stack did not contain frames %q", frames)
 }

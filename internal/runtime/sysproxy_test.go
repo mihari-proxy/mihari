@@ -289,7 +289,6 @@ func TestSystemProxyCommittedWarningPublishesBeforeOSApplySettings(t *testing.T)
 	events := make([]string, 0, 4)
 	backend := &hookSysProxyBackend{state: sysproxy.State{Enabled: false}}
 	backend.onGet = func() { events = append(events, "get") }
-	backend.onEnable = func() { events = append(events, "enable") }
 	settings := defaultSysProxySettings(false)
 	warnings := 0
 	manager := newTestManager(Options{
@@ -328,38 +327,57 @@ func TestSystemProxyCommittedWarningPublishesBeforeOSApplySettings(t *testing.T)
 	}
 }
 
-func TestSystemProxyApplyFailureRestoresCommittedBeforeSettings(t *testing.T) {
+func TestSystemProxyApplyFailureWithUnprovableDisabledSnapshotDegrades(t *testing.T) {
 	backend := &hookSysProxyBackend{
 		state:                  sysproxy.State{Enabled: false},
-		enableErr:              errors.New("enable failed"),
+		enableErr:              errors.New(`enable failed at C:\secret\proxy`),
 		enableStateBeforeError: true,
 	}
 	settings := defaultSysProxySettings(false)
 	var saved []bool
+	var restarts int
 	manager := newTestManager(Options{
 		SysProxy: backend, Settings: settings, SettingsPath: "settings.yaml",
+		Supervisor: &fakeSupervisor{restart: func(context.Context) error {
+			restarts++
+			return nil
+		}},
 		SaveSettings: func(_ string, candidate config.Settings) (config.CommitResult, error) {
 			saved = append(saved, candidate.SystemProxyDesired)
 			return config.CommitResult{Committed: true}, nil
 		},
 	})
 
-	_, err := manager.EnableSystemProxy(context.Background(), Operation{ID: "apply-fail", Source: "test"}, false)
+	op := Operation{ID: "apply-fail", Source: "test"}
+	_, err := manager.EnableSystemProxy(context.Background(), op, false)
 	var apiError protocol.APIError
-	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeUpstreamFailure {
-		t.Fatalf("err=%v want upstream failure", err)
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "mutation compensation failed" || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("err=%v want sanitized compensation failure", err)
 	}
 	if !reflect.DeepEqual(saved, []bool{true, false}) {
 		t.Fatalf("saved desired sequence=%v want [true false]", saved)
 	}
-	if backend.enableCalls != 1 || backend.disableCalls != 1 || backend.state.Enabled {
+	if backend.enableCalls != 1 || backend.disableCalls != 0 || !backend.state.Enabled {
 		t.Fatalf("enable=%d disable=%d state=%#v", backend.enableCalls, backend.disableCalls, backend.state)
 	}
 	if manager.settingsSnapshot().SystemProxyDesired {
 		t.Fatal("committed rollback did not publish before settings")
 	}
-	if snapshot := manager.Snapshot(); snapshot.Revision != 0 || snapshot.Health != "ok" {
+	if snapshot := manager.Snapshot(); snapshot.Revision != 1 || snapshot.Health != "degraded" || snapshot.LastError != "mutation compensation failed; restart required" {
 		t.Fatalf("snapshot=%#v", snapshot)
+	}
+	if _, retryErr := manager.EnableSystemProxy(context.Background(), op, false); retryErr == nil || retryErr.Error() != err.Error() {
+		t.Fatalf("retry err=%v want cached %v", retryErr, err)
+	}
+	if !reflect.DeepEqual(saved, []bool{true, false}) || backend.enableCalls != 1 || backend.disableCalls != 0 || manager.Snapshot().Revision != 1 {
+		t.Fatalf("retry repeated side effects: saved=%v enable=%d disable=%d revision=%d", saved, backend.enableCalls, backend.disableCalls, manager.Snapshot().Revision)
+	}
+	if nextErr := manager.Restart(context.Background(), Operation{ID: "after-degraded", Source: "test"}); !errors.As(nextErr, &apiError) || apiError.Code != protocol.CodeInvalidState || restarts != 0 {
+		t.Fatalf("next mutation err=%v restarts=%d", nextErr, restarts)
+	}
+	status, statusErr := manager.SystemProxyStatus(context.Background())
+	if statusErr != nil || status.Revision != 1 || status.Desired || !status.Observed.Enabled {
+		t.Fatalf("read-only status=%#v err=%v", status, statusErr)
 	}
 }
 
@@ -430,8 +448,8 @@ func TestSystemProxyRollbackPreCommitFailureCommitsDegradedSettings(t *testing.T
 	if snapshot.Revision != 1 || snapshot.Health != "degraded" || snapshot.LastError != "mutation compensation failed; restart required" {
 		t.Fatalf("snapshot=%#v", snapshot)
 	}
-	if backend.state.Enabled {
-		t.Fatalf("live state was not restored: %#v", backend.state)
+	if !backend.state.Enabled || backend.disableCalls != 0 {
+		t.Fatalf("unprovable prior state was destructively restored: state=%#v disable=%d", backend.state, backend.disableCalls)
 	}
 	_, nextErr := manager.DisableSystemProxy(context.Background(), Operation{ID: "after-degraded", Source: "test"})
 	var nextAPIError protocol.APIError
@@ -445,10 +463,10 @@ func TestSystemProxyRollbackPreCommitFailureCommitsDegradedSettings(t *testing.T
 }
 
 func TestSystemProxyLiveRestoreFailureCommitsDegradedSettings(t *testing.T) {
+	target := sysproxy.NormalizeServer("127.0.0.1", 9190)
 	backend := &hookSysProxyBackend{
-		state:                  sysproxy.State{Enabled: false},
+		state:                  sysproxy.State{Enabled: true, Server: target},
 		enableErr:              errors.New("enable failed"),
-		disableErr:             errors.New("restore failed"),
 		enableStateBeforeError: true,
 	}
 	settings := defaultSysProxySettings(false)
@@ -469,6 +487,9 @@ func TestSystemProxyLiveRestoreFailureCommitsDegradedSettings(t *testing.T) {
 	}
 	if snapshot := manager.Snapshot(); snapshot.Revision != 1 || snapshot.Health != "degraded" {
 		t.Fatalf("snapshot=%#v", snapshot)
+	}
+	if backend.enableCalls != 2 || backend.disableCalls != 0 {
+		t.Fatalf("enable=%d disable=%d want 2/0", backend.enableCalls, backend.disableCalls)
 	}
 }
 

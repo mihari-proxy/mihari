@@ -67,7 +67,7 @@ func (m *Manager) UpdateLogging(ctx context.Context, operation Operation, update
 			return nil
 		})
 		if err != nil {
-			return nil, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid logging configuration"}
+			return nil, err
 		}
 		beforeLogging := candidate.before.EffectiveLogging()
 		afterLogging := candidate.after.EffectiveLogging()

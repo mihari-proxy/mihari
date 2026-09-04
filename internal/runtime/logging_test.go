@@ -164,6 +164,26 @@ func TestLogging_UpdateRejectsInvalidDomainValuesBeforeSideEffects(t *testing.T)
 	}
 }
 
+func TestLogging_UpdatePreservesFullSettingsValidationFailure(t *testing.T) {
+	settings := config.Defaults()
+	settings.MixedAddr = "invalid-endpoint"
+	var saves atomic.Int64
+	runtime := &recordingLoggingRuntime{}
+	manager := newTestManager(Options{
+		Settings: settings, Logging: runtime, SettingsPath: "settings.yaml",
+		SaveSettings: func(string, config.Settings) (config.CommitResult, error) {
+			saves.Add(1)
+			return config.CommitResult{Committed: true}, nil
+		},
+	})
+
+	_, err := manager.UpdateLogging(context.Background(), Operation{ID: "logging-invalid-settings", Source: "test"}, LoggingUpdate{Level: stringPointer("debug")})
+	assertLoggingAPIError(t, err, protocol.CodeDataFailure)
+	if saves.Load() != 0 || runtime.applyCalls != 0 || manager.Snapshot().Revision != 0 {
+		t.Fatalf("saves=%d apply=%d revision=%d", saves.Load(), runtime.applyCalls, manager.Snapshot().Revision)
+	}
+}
+
 func TestLogging_UpdateCommitsSavePublishApplyRevisionInOrder(t *testing.T) {
 	var manager *Manager
 	var order []string

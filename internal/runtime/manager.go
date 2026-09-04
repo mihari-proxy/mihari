@@ -535,22 +535,31 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 				return err
 			}
 			if candidateUpdated {
-				if _, err := m.updateSettings(func(settings *config.Settings) error {
-					settings.CoreChannel = channel
-					return nil
-				}); err != nil {
-					return err
-				}
-				_, err = m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{
-					ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision,
-				}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+				applyCommittedIdentity := func(snapshot state.Snapshot) state.Snapshot {
 					snapshot.Core.Version = result.Version
 					snapshot.Core.Channel = channel
 					snapshot.Core.AlphaSHA = result.AlphaSHA
 					if channel == "stable" {
 						snapshot.Core.AlphaSHA = ""
 					}
-					return snapshot, nil
+					return snapshot
+				}
+				if _, err := m.updateSettings(func(settings *config.Settings) error {
+					settings.CoreChannel = channel
+					return nil
+				}); err != nil {
+					_, settlementErr := m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{
+						ID: operation.ID, Source: operation.Source,
+					}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+						snapshot = applyCommittedIdentity(snapshot)
+						return snapshot, m.enterMutationDegraded(&snapshot)
+					})
+					return settlementErr
+				}
+				_, err = m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{
+					ID: operation.ID, Source: operation.Source,
+				}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+					return applyCommittedIdentity(snapshot), nil
 				})
 			}
 			return err
