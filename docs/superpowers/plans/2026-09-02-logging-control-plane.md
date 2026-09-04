@@ -765,7 +765,7 @@ Expected: 六目标成功；无 `CHANGELOG.md`、无 CLI 新命令、无 export 
 - [ ] **Step 5: Commit 文档（仅得到授权时）**
 
 ```powershell
-git add README.md docs/commands.md docs/architecture.md docs/superpowers/plans/2026-09-02-logging-control-plane.md
+git add README.md README.zh-CN.md docs/commands.md docs/architecture.md docs/superpowers/plans/2026-09-02-logging-control-plane.md
 git commit -s -m "docs: 记录 Logging 配置与降级边界"
 ```
 
