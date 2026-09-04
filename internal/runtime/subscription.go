@@ -10,6 +10,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/subscription"
+	"go.yaml.in/yaml/v3"
 )
 
 type AddSubscriptionInput struct {
@@ -350,6 +351,17 @@ func (m *Manager) prepareCatalogConfigWithSettings(ctx context.Context, catalog 
 		content, err := core.BootstrapConfig(settings)
 		if err != nil {
 			return configCandidate{}, err
+		}
+		if len(settings.Tun) > 0 {
+			var document map[string]any
+			if err := yaml.Unmarshal(content, &document); err != nil {
+				return configCandidate{}, protocol.APIError{Code: protocol.CodeInternal, Message: "decode bootstrap configuration"}
+			}
+			document["tun"] = settings.Tun
+			content, err = yaml.Marshal(document)
+			if err != nil {
+				return configCandidate{}, protocol.APIError{Code: protocol.CodeInternal, Message: "encode bootstrap TUN configuration"}
+			}
 		}
 		return m.prepareContent(ctx, content)
 	}

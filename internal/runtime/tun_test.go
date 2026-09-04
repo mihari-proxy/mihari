@@ -578,6 +578,104 @@ func TestEnableTunCanceledConfirmationRestoresActiveSubscriptionLiveTarget(t *te
 	}
 }
 
+func TestEnableTunRollbackRestoresNoActiveSubscriptionRuntimeTarget(t *testing.T) {
+	beforeTun := map[string]any{
+		"enable":     true,
+		"stack":      "system",
+		"device":     "bootstrap-tun",
+		"auto-route": true,
+		"dns-hijack": []any{"any:53"},
+	}
+	controller := &tunRuntimeController{}
+	manager, runtimePath := inactiveSubscriptionTunManager(t, controller, beforeTun)
+	confirmationFailed := false
+	controller.patchConfigs = func(_ context.Context, patch map[string]any) error {
+		controller.configs["tun"] = cloneTunMap(patch["tun"].(map[string]any))
+		return nil
+	}
+	controller.configsFunc = func(context.Context) (map[string]any, error) {
+		if controller.patchCalls == 1 && !confirmationFailed {
+			confirmationFailed = true
+			return nil, errors.New("live confirmation failed")
+		}
+		return controller.configs, nil
+	}
+
+	_, err := manager.EnableTun(context.Background(), Operation{ID: "restore-bootstrap-live", Source: "test"}, false)
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeUpstreamFailure || apiError.Message != "TUN did not become live after apply" {
+		t.Fatalf("err=%v want stable live confirmation failure", err)
+	}
+	requireLiveTun(t, controller.configs, beforeTun)
+	requireRuntimeTun(t, runtimePath, beforeTun)
+	if err := controller.Reload(context.Background(), runtimePath, true); err != nil {
+		t.Fatal(err)
+	}
+	requireLiveTun(t, controller.configs, beforeTun)
+	if len(manager.settingsSnapshot().Tun) != 0 {
+		t.Fatalf("settings rollback did not restore unmanaged before: %#v", manager.settingsSnapshot().Tun)
+	}
+	if snapshot := manager.Snapshot(); snapshot.Revision != 0 || snapshot.Health != "ok" {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+}
+
+func TestEnableTunCanceledConfirmationRestoresNoActiveSubscriptionRuntimeTarget(t *testing.T) {
+	beforeTun := map[string]any{
+		"enable":     true,
+		"stack":      "system",
+		"device":     "bootstrap-tun",
+		"auto-route": true,
+		"dns-hijack": []any{"any:53"},
+	}
+	controller := &tunRuntimeController{}
+	manager, runtimePath := inactiveSubscriptionTunManager(t, controller, beforeTun)
+	controller.patchConfigs = func(_ context.Context, patch map[string]any) error {
+		controller.configs["tun"] = cloneTunMap(patch["tun"].(map[string]any))
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	confirmationEntered := make(chan struct{})
+	var confirmation sync.Once
+	controller.configsFunc = func(ctx context.Context) (map[string]any, error) {
+		if controller.patchCalls == 1 {
+			confirmation.Do(func() { close(confirmationEntered) })
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		if controller.patchCalls > 1 && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return controller.configs, nil
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := manager.EnableTun(ctx, Operation{ID: "cancel-restore-bootstrap-live", Source: "test"}, false)
+		done <- err
+	}()
+	select {
+	case <-confirmationEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("live confirmation did not begin")
+	}
+	cancel()
+	err := <-done
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "mutation compensation failed" {
+		t.Fatalf("err=%v want stable compensation failure", err)
+	}
+	requireLiveTun(t, controller.configs, beforeTun)
+	requireRuntimeTun(t, runtimePath, beforeTun)
+	if err := controller.Reload(context.Background(), runtimePath, true); err != nil {
+		t.Fatal(err)
+	}
+	requireLiveTun(t, controller.configs, beforeTun)
+	if snapshot := manager.Snapshot(); snapshot.Revision != 1 || snapshot.Health != "degraded" {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+}
+
 func TestEnableTunRollbackWithoutPreLiveSnapshotDegrades(t *testing.T) {
 	controller := &fakeController{configs: map[string]any{
 		"tun": map[string]any{"enable": false, "stack": "gVisor"},
@@ -609,6 +707,49 @@ func TestEnableTunRollbackWithoutPreLiveSnapshotDegrades(t *testing.T) {
 	}
 	if len(manager.settingsSnapshot().Tun) != 0 {
 		t.Fatalf("settings rollback did not restore unmanaged before: %#v", manager.settingsSnapshot().Tun)
+	}
+	if snapshot := manager.Snapshot(); snapshot.Revision != 1 || snapshot.Health != "degraded" || snapshot.LastError != "mutation compensation failed; restart required" {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+}
+
+func TestEnableTunRestoreRejectsSameEnableWithDifferentLiveBlock(t *testing.T) {
+	beforeTun := map[string]any{
+		"enable":     true,
+		"stack":      "system",
+		"device":     "before-tun",
+		"auto-route": true,
+		"dns-hijack": []any{"any:53"},
+	}
+	controller := &fakeController{configs: map[string]any{"tun": cloneTunMap(beforeTun)}}
+	confirmationFailed := false
+	controller.patchConfigs = func(_ context.Context, patch map[string]any) error {
+		if controller.patchCalls == 1 {
+			controller.configs["tun"] = cloneTunMap(patch["tun"].(map[string]any))
+			return nil
+		}
+		controller.configs["tun"] = map[string]any{
+			"enable":     true,
+			"stack":      "gVisor",
+			"device":     "wrong-tun",
+			"auto-route": false,
+			"dns-hijack": []any{"tcp://any:53"},
+		}
+		return nil
+	}
+	controller.configsFunc = func(context.Context) (map[string]any, error) {
+		if controller.patchCalls == 1 && !confirmationFailed {
+			confirmationFailed = true
+			return nil, errors.New("post-apply confirmation failed")
+		}
+		return controller.configs, nil
+	}
+	manager := newTunManager(t, controller, defaultTunSettings(nil))
+
+	_, err := manager.EnableTun(context.Background(), Operation{ID: "restore-block-mismatch", Source: "test"}, false)
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "mutation compensation failed" {
+		t.Fatalf("err=%v want stable compensation failure", err)
 	}
 	if snapshot := manager.Snapshot(); snapshot.Revision != 1 || snapshot.Health != "degraded" || snapshot.LastError != "mutation compensation failed; restart required" {
 		t.Fatalf("snapshot=%#v", snapshot)
@@ -1351,7 +1492,9 @@ func (c *tunRuntimeController) Reload(_ context.Context, path string, _ bool) er
 	}
 	tun, ok := document["tun"].(map[string]any)
 	if !ok {
-		return errors.New("runtime config does not contain a TUN block")
+		delete(c.configs, "tun")
+		c.reloads++
+		return nil
 	}
 	c.reloads++
 	if c.configs == nil {
@@ -1359,6 +1502,51 @@ func (c *tunRuntimeController) Reload(_ context.Context, path string, _ bool) er
 	}
 	c.configs["tun"] = cloneTunMap(tun)
 	return nil
+}
+
+func inactiveSubscriptionTunManager(t *testing.T, controller *tunRuntimeController, tun map[string]any) (*Manager, string) {
+	t.Helper()
+	root := t.TempDir()
+	service, err := subscription.Open(subscription.ServiceOptions{
+		CatalogPath: filepath.Join(root, "subscriptions", "catalog.yaml"),
+		CacheDir:    filepath.Join(root, "subscriptions", "cache"),
+		ProxyAddr:   "127.0.0.1:9190",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := defaultTunSettings(nil)
+	settingsPath := filepath.Join(root, "settings.yaml")
+	if err := config.Save(settingsPath, settings); err != nil {
+		t.Fatal(err)
+	}
+	runtimeContent, err := core.BootstrapConfig(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := yaml.Unmarshal(runtimeContent, &document); err != nil {
+		t.Fatal(err)
+	}
+	document["tun"] = cloneTunMap(tun)
+	runtimeContent, err = yaml.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimePath := filepath.Join(root, "runtime", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(runtimePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runtimePath, runtimeContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	controller.configs = map[string]any{"tun": cloneTunMap(tun)}
+	manager := newTestManager(Options{
+		Controller: controller, Settings: settings, SettingsPath: settingsPath,
+		Subscriptions: service, RuntimeConfig: runtimePath, StagingDir: filepath.Join(root, "staging"),
+		ValidateConfig: func(context.Context, string) error { return nil },
+	})
+	return manager, runtimePath
 }
 
 func activeSubscriptionTunManager(t *testing.T, controller *tunRuntimeController, tun map[string]any) (*Manager, string) {

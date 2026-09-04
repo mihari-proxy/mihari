@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/tundetect"
+	"go.yaml.in/yaml/v3"
 )
 
 const defaultTunStack = "gVisor"
@@ -165,8 +167,12 @@ func (m *Manager) restoreTunLive(ctx context.Context, target map[string]any) err
 	if err != nil {
 		return err
 	}
-	live, ok := liveTunEnable(configs)
-	if !ok || live != tunDesiredEnable(target) {
+	observed, err := normalizedLiveTun(configs)
+	if err != nil {
+		return errors.New("TUN live restore is unconfirmed")
+	}
+	normalizedTarget, err := normalizeTunBlock(target)
+	if err != nil || !reflect.DeepEqual(observed, normalizedTarget) {
 		return errors.New("TUN live restore is unconfirmed")
 	}
 	return nil
@@ -233,14 +239,11 @@ func (m *Manager) captureTunLive(ctx context.Context) map[string]any {
 	if err != nil {
 		return nil
 	}
-	tun, ok := configs["tun"].(map[string]any)
-	if !ok {
+	normalized, err := normalizedLiveTun(configs)
+	if err != nil {
 		return nil
 	}
-	if _, ok := tun["enable"].(bool); !ok {
-		return nil
-	}
-	return cloneTunMap(tun)
+	return normalized
 }
 
 func (m *Manager) buildTunStatus(ctx context.Context, lastError string) protocol.TunStatus {
@@ -299,11 +302,30 @@ func cloneTunMap(in map[string]any) map[string]any {
 	if in == nil {
 		return nil
 	}
-	out := make(map[string]any, len(in))
-	for k, v := range in {
-		out[k] = v
+	return (config.Settings{Tun: in}).Clone().Tun
+}
+
+func normalizedLiveTun(configs map[string]any) (map[string]any, error) {
+	tun, ok := configs["tun"].(map[string]any)
+	if !ok {
+		return nil, errors.New("TUN live block is unavailable")
 	}
-	return out
+	if _, ok := tun["enable"].(bool); !ok {
+		return nil, errors.New("TUN live enable is unavailable")
+	}
+	return normalizeTunBlock(tun)
+}
+
+func normalizeTunBlock(tun map[string]any) (map[string]any, error) {
+	content, err := yaml.Marshal(tun)
+	if err != nil {
+		return nil, errors.New("normalize TUN block")
+	}
+	var normalized map[string]any
+	if err := yaml.Unmarshal(content, &normalized); err != nil {
+		return nil, errors.New("normalize TUN block")
+	}
+	return normalized, nil
 }
 
 func tunDesiredEnable(tun map[string]any) bool {
