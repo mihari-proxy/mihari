@@ -166,9 +166,11 @@ Mihari writes newline-delimited JSON (JSONL) to three files under the data root:
 | TUI (shared by all TUI instances) | `logs/mihari-tui.log` |
 | Captured mihomo output | `logs/mihomo.log` |
 
-Daemon and captured-mihomo file logs use the default `info` level, rotate each active file at 10 MiB, and retain three files (the active file plus up to two archives). The TUI starts with its bootstrap configuration—`debug`, 100 MiB, and 10 files—so it can log before daemon settings are available; it remains on this bootstrap configuration until a later control-plane synchronization. Captured mihomo stdout is recorded as `INFO` and stderr as `WARN`; these capture levels do not infer the severity encoded in mihomo's own message text.
+Daemon and captured-mihomo file logs use the default `info` level, rotate each active file at 10 MiB, and retain three files (the active file plus up to two archives). The TUI starts with its bootstrap configuration—`debug`, 100 MiB, and 10 files—so it can log before daemon settings are available; it remains on this bootstrap configuration until a later control-plane synchronization. The TUI System page can change the daemon-owned level, maximum file size, and retained-file count; changes take effect without a daemon restart. Captured mihomo stdout is recorded as `INFO` and stderr as `WARN`; these capture levels do not infer the severity encoded in mihomo's own message text.
 
-Redaction is best effort only. Treat all log files as sensitive material and share them only after reviewing their contents. This release does not yet provide a logging configuration UI or log export.
+`GET /v1/logging` and `PATCH /v1/logging` are stable v1 local-control endpoints used by the TUI. They are not CLI commands, and this release does not provide log export.
+
+Older binaries decode `mihari.yaml` with `KnownFields(true)` and cannot read a custom `log:` block. Before downgrading, use System → Logging to restore `info` / 10 MiB / 3 files, which removes that block automatically; alternatively, back up the settings file and remove `log:` manually. Redaction is best effort only. Treat all log files as sensitive material and share them only after reviewing their contents.
 
 ## Development
 
