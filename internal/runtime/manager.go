@@ -452,30 +452,47 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		// store.Core.Version 不作判据（DetectVersion 失败时旧值残留，见 runtime.go 启动检测）。
 		if operation.Source == "setup" {
 			if version, detectErr := m.installer.DetectVersion(ctx, installRequest.BinaryPath); detectErr == nil && version != "" {
-				sidecar := filepath.Join(filepath.Dir(installRequest.BinaryPath), "core-channel")
-				before := m.settingsSnapshot()
-				after := before.Clone()
-				changed, applyErr := config.ApplyCoreChannelSidecar(&after, sidecar)
-				if changed && applyErr == nil {
-					candidate := settingsCandidate{before: before, after: after, changed: true}
-					_, applyErr = m.saveSettingsCandidate(candidate)
-					if applyErr == nil {
-						m.publishSettings(candidate)
+				err := func() error {
+					if err := m.lockMutation(ctx); err != nil {
+						return err
 					}
-				}
-				appliedChannel := after.CoreChannel
-				if applyErr != nil {
-					return nil, applyErr
-				}
-				if changed {
-					_, coordErr := m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+					defer m.unlock()
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					if err := m.checkIfRevision(operation.IfRevision); err != nil {
+						return err
+					}
+
+					sidecar := filepath.Join(filepath.Dir(installRequest.BinaryPath), "core-channel")
+					candidate, err := m.prepareSettings(func(settings *config.Settings) error {
+						_, applyErr := config.ApplyCoreChannelSidecar(settings, sidecar)
+						return applyErr
+					})
+					if err != nil {
+						return err
+					}
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					if !candidate.changed {
+						return nil
+					}
+					if _, err := m.saveSettingsCandidate(candidate); err != nil {
+						return err
+					}
+					m.publishSettings(candidate)
+					_, err = m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{
+						ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision,
+					}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 						snapshot.Core.Version = version
-						snapshot.Core.Channel = appliedChannel
+						snapshot.Core.Channel = candidate.after.CoreChannel
 						return snapshot, nil
 					})
-					if coordErr != nil {
-						return nil, coordErr
-					}
+					return err
+				}()
+				if err != nil {
+					return nil, err
 				}
 				return core.InstallResult{Version: version, Updated: false}, nil
 			}
@@ -486,43 +503,46 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 			return nil, err
 		}
 		defer candidate.Cleanup()
-		if err := m.lockMutation(ctx); err != nil {
-			return nil, err
-		}
-		defer m.unlock()
-		if err := m.checkOpen(); err != nil {
-			return nil, err
-		}
 		var result core.InstallResult
-		if candidate.Updated() {
-			_, err = m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
-				result, err = candidate.Commit()
-				if err != nil {
-					return snapshot, err
-				}
-				snapshot.Core.Version = result.Version
-				snapshot.Core.Channel = channel
-				snapshot.Core.AlphaSHA = result.AlphaSHA
-				if channel == "stable" {
-					snapshot.Core.AlphaSHA = ""
-				}
-				_, saveErr := m.updateSettings(func(settings *config.Settings) error {
-					settings.CoreChannel = channel
-					return nil
-				})
-				if saveErr != nil {
-					return snapshot, saveErr
-				}
-				return snapshot, nil
-			})
-			if err != nil {
-				return nil, err
+		if err := func() error {
+			if err := m.lockMutation(ctx); err != nil {
+				return err
 			}
-		} else {
+			defer m.unlock()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := m.checkIfRevision(operation.IfRevision); err != nil {
+				return err
+			}
+
+			candidateUpdated := candidate.Updated()
 			result, err = candidate.Commit()
 			if err != nil {
-				return nil, err
+				return err
 			}
+			if candidateUpdated {
+				if _, err := m.updateSettings(func(settings *config.Settings) error {
+					settings.CoreChannel = channel
+					return nil
+				}); err != nil {
+					return err
+				}
+				_, err = m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{
+					ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision,
+				}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+					snapshot.Core.Version = result.Version
+					snapshot.Core.Channel = channel
+					snapshot.Core.AlphaSHA = result.AlphaSHA
+					if channel == "stable" {
+						snapshot.Core.AlphaSHA = ""
+					}
+					return snapshot, nil
+				})
+			}
+			return err
+		}(); err != nil {
+			return nil, err
 		}
 		if !result.Updated {
 			return result, nil
@@ -579,7 +599,11 @@ func (m *Manager) Restart(ctx context.Context, operation Operation) error {
 		if m.supervisor == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo is not running"}
 		}
-		if err := m.withMaintenance(ctx, func() error { return m.supervisor.Restart(ctx) }); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
+			return nil, err
+		}
+		m.unlock()
+		if err := m.supervisor.Restart(ctx); err != nil {
 			return nil, err
 		}
 		return struct{}{}, nil

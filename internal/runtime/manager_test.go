@@ -322,7 +322,7 @@ func TestInstallCommitAndRestartCannotOverlap(t *testing.T) {
 	}
 }
 
-func TestRuntimeMutationWaitsForRestart(t *testing.T) {
+func TestRuntimeMutationDoesNotWaitForSupervisorRestart(t *testing.T) {
 	restartEntered := make(chan struct{})
 	releaseRestart := make(chan struct{})
 	selectEntered := make(chan struct{}, 1)
@@ -347,23 +347,15 @@ func TestRuntimeMutationWaitsForRestart(t *testing.T) {
 		selectDone <- manager.SelectProxy(mutationCtx, Operation{ID: "select", Source: "test"}, "GLOBAL", "DIRECT")
 	}()
 	select {
-	case <-mutationCtx.observed:
-	case <-time.After(3 * time.Second):
-		t.Fatal("proxy selection did not wait on the maintenance gate")
-	}
-	select {
 	case <-selectEntered:
-		t.Fatal("proxy selection overlapped restart")
-	default:
+	case <-time.After(3 * time.Second):
+		close(releaseRestart)
+		<-restartDone
+		t.Fatal("proxy selection remained blocked while supervisor restart was in progress")
 	}
 	close(releaseRestart)
 	if err := <-restartDone; err != nil {
 		t.Fatal(err)
-	}
-	select {
-	case <-selectEntered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("proxy selection did not enter controller after restart")
 	}
 	if err := <-selectDone; err != nil {
 		t.Fatal(err)
@@ -806,6 +798,149 @@ func TestInstallCommitPersistsChannelAndClearsAlphaSHAOnStable(t *testing.T) {
 	}
 }
 
+func TestInstallCoreChannelPreservesIndependentSettings(t *testing.T) {
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("a", 64)
+	settings.Tun = map[string]any{
+		"enable": false,
+		"stack":  "system",
+		"dns":    map[string]any{"nameserver": []any{"1.1.1.1"}},
+	}
+	settings.SetLogging(config.LoggingSettings{Level: "debug", MaxSizeMB: 20, MaxFiles: 5})
+
+	var saved []config.Settings
+	manager := newTestManager(Options{
+		Installer:    &fakeInstaller{candidate: &fakeCandidate{version: "v1.19.0", alphaSHA: "e183c58"}},
+		Supervisor:   &fakeSupervisor{},
+		Settings:     settings,
+		SettingsPath: "settings.yaml",
+		SaveSettings: func(_ string, candidate config.Settings) (config.CommitResult, error) {
+			saved = append(saved, candidate.Clone())
+			return config.CommitResult{Committed: true}, nil
+		},
+	})
+	alpha := "alpha"
+	if _, err := manager.Install(context.Background(), Operation{ID: "channel-settings", Source: "test", Channel: &alpha}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(saved) != 1 {
+		t.Fatalf("settings saves=%d want=1", len(saved))
+	}
+	for label, got := range map[string]config.Settings{
+		"saved":     saved[0],
+		"published": manager.settingsSnapshot(),
+	} {
+		if got.CoreChannel != "alpha" {
+			t.Fatalf("%s core channel=%q want alpha", label, got.CoreChannel)
+		}
+		if !reflect.DeepEqual(got.Tun, settings.Tun) {
+			t.Fatalf("%s tun=%#v want %#v", label, got.Tun, settings.Tun)
+		}
+		if effective := got.EffectiveLogging(); effective != settings.EffectiveLogging() {
+			t.Fatalf("%s logging=%#v want %#v", label, effective, settings.EffectiveLogging())
+		}
+	}
+}
+
+func TestInstallSetupSidecarRejectsStaleRevisionBeforeSettings(t *testing.T) {
+	binDir := t.TempDir()
+	binaryPath := filepath.Join(binDir, "mihomo")
+	if err := os.WriteFile(binaryPath, []byte("placeholder"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "core-channel"), []byte("alpha\nalpha-e183c58\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("a", 64)
+	settings.Tun = map[string]any{"enable": false, "stack": "system"}
+	settings.SetLogging(config.LoggingSettings{Level: "debug", MaxSizeMB: 20, MaxFiles: 5})
+	var saves atomic.Int64
+	installer := &fakeInstaller{detectVersion: func(context.Context, string) (string, error) {
+		return "v1.18.0", nil
+	}}
+	manager := newTestManager(Options{
+		Installer:    installer,
+		Settings:     settings,
+		SettingsPath: "settings.yaml",
+		SaveSettings: func(string, config.Settings) (config.CommitResult, error) {
+			saves.Add(1)
+			return config.CommitResult{Committed: true}, nil
+		},
+	})
+	manager.installRequest.BinaryPath = binaryPath
+	manager.store.Store(state.Snapshot{Revision: 3, Health: "ok"})
+	stale := uint64(2)
+
+	_, err := manager.Install(context.Background(), Operation{
+		ID: "setup-sidecar-stale", Source: "setup", IfRevision: &stale,
+	})
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeRevisionConflict {
+		t.Fatalf("err=%v want revision conflict", err)
+	}
+	if saves.Load() != 0 {
+		t.Fatalf("settings saves=%d want=0 before stale revision is rejected", saves.Load())
+	}
+	got := manager.settingsSnapshot()
+	if got.CoreChannel != "stable" || got.CoreChannelBundle != "" {
+		t.Fatalf("stale sidecar published channel=%q bundle=%q", got.CoreChannel, got.CoreChannelBundle)
+	}
+	if !reflect.DeepEqual(got.Tun, settings.Tun) || got.EffectiveLogging() != settings.EffectiveLogging() {
+		t.Fatalf("stale sidecar changed independent settings: %#v", got)
+	}
+	if revision := manager.Snapshot().Revision; revision != 3 {
+		t.Fatalf("revision=%d want=3", revision)
+	}
+}
+
+func TestInstallReleasesGateBeforeSupervisorRestartSettings(t *testing.T) {
+	restartEntered := make(chan struct{})
+	releaseRestart := make(chan struct{})
+	selectEntered := make(chan struct{}, 1)
+	manager := newTestManager(Options{
+		Installer: &fakeInstaller{candidate: &fakeCandidate{version: "v1.19.0"}},
+		Supervisor: &fakeSupervisor{restart: func(context.Context) error {
+			close(restartEntered)
+			<-releaseRestart
+			return nil
+		}},
+		Controller: &fakeController{entered: selectEntered},
+	})
+	manager.running.Store(true)
+	installDone := make(chan error, 1)
+	go func() {
+		_, err := manager.Install(context.Background(), Operation{ID: "install-restart", Source: "test"})
+		installDone <- err
+	}()
+	select {
+	case <-restartEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("install did not enter supervisor restart")
+	}
+
+	selectDone := make(chan error, 1)
+	go func() {
+		selectDone <- manager.SelectProxy(context.Background(), Operation{ID: "during-install-restart", Source: "test"}, "GLOBAL", "DIRECT")
+	}()
+	select {
+	case <-selectEntered:
+	case <-time.After(3 * time.Second):
+		close(releaseRestart)
+		<-installDone
+		t.Fatal("runtime mutation remained blocked while install waited for supervisor restart")
+	}
+	close(releaseRestart)
+	if err := <-installDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-selectDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestObservePreservesCoreChannelAndAlphaSHA(t *testing.T) {
 	installer := &fakeInstaller{candidate: &fakeCandidate{
 		version:  "v1.19.0",
@@ -1070,6 +1205,7 @@ type fakeController struct {
 	closeAllConnectionsErr error
 	updateRuleProvider     func(context.Context, string) error
 	configs                map[string]any
+	configsFunc            func(context.Context) (map[string]any, error)
 	configsErr             error
 	patchConfigs           func(context.Context, map[string]any) error
 	lastPatch              map[string]any
@@ -1162,7 +1298,10 @@ func (c *fakeController) UpdateRuleProvider(ctx context.Context, name string) er
 	return nil
 }
 
-func (c *fakeController) Configs(context.Context) (map[string]any, error) {
+func (c *fakeController) Configs(ctx context.Context) (map[string]any, error) {
+	if c.configsFunc != nil {
+		return c.configsFunc(ctx)
+	}
 	if c.configsErr != nil {
 		return nil, c.configsErr
 	}

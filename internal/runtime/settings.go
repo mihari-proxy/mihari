@@ -135,8 +135,3 @@ func (m *Manager) lockMutation(ctx context.Context) error {
 func (m *Manager) updateStateLocked(ctx context.Context, meta state.CommandMeta, update func(state.Snapshot) (state.Snapshot, error)) (state.Snapshot, error) {
 	return m.coordinator.Do(ctx, meta, update)
 }
-
-func (m *Manager) persistSettings() error {
-	_, err := m.saveSettingsCandidate(settingsCandidate{after: m.settings.Clone(), changed: true})
-	return err
-}
