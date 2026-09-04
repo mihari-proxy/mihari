@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"golang.org/x/sys/unix"
 )
@@ -305,6 +306,23 @@ func (fs *PrivateFS) openDirIdentityLocked(name string) (*DirectoryIdentity, err
 		return nil, err
 	}
 	return &DirectoryIdentity{plat: dirIdentityState{fd: dup, id: identFromStat(&st)}}, nil
+}
+
+func (fs *PrivateFS) openPublishDirLocked(name string) (*PublishDir, error) {
+	fd, err := fs.dirFD(name)
+	if err != nil {
+		return nil, err
+	}
+	dup, err := dupCLOEXEC(fd)
+	if err != nil {
+		return nil, err
+	}
+	d, err := publishDirFromFD(dup, filepath.Join(fs.root, name))
+	if err != nil {
+		_ = unix.Close(dup)
+		return nil, err
+	}
+	return d, nil
 }
 
 func (fs *PrivateFS) renameLocked(dir, oldName, newName string, replace bool) error {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -204,6 +205,93 @@ func TestPrivateFS_WindowsCloseReleasesHandles(t *testing.T) {
 		t.Fatal("logs handle still open after Close")
 	}
 }
+
+func TestPublishWorkspace_WindowsProtectedDACL(t *testing.T) {
+	parent := t.TempDir()
+	d, err := OpenPublishDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	w, err := d.CreateWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	workspacePath := filepath.Join(parent, w.name)
+	assertOwnerSystemDACL(t, workspacePath, true)
+	f, name, err := w.CreateTemp("private-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertOwnerSystemDACL(t, filepath.Join(workspacePath, name), false)
+	if err := w.Remove(name); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPublishDir_WindowsPostPublishFailureIsWarning(t *testing.T) {
+	parent := t.TempDir()
+	d, err := OpenPublishDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	w, err := d.CreateWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	f, name, err := w.CreateTemp("warn-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte("published")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	original := publishWindowsPostRenameFlushFn
+	t.Cleanup(func() { publishWindowsPostRenameFlushFn = original })
+	publishWindowsPostRenameFlushFn = func(windows.Handle) error { return windows.ERROR_WRITE_FAULT }
+	var warnings []error
+	err = d.PublishNoReplace(w, name, "result.zip", func(err error) { warnings = append(warnings, err) })
+	publishWindowsPostRenameFlushFn = original
+	if err != nil {
+		t.Fatalf("published target reported failure: %v", err)
+	}
+	if len(warnings) == 0 {
+		t.Fatal("expected post-publish warning")
+	}
+	if got, err := os.ReadFile(filepath.Join(parent, "result.zip")); err != nil || string(got) != "published" {
+		t.Fatalf("target=%q err=%v", got, err)
+	}
+}
+
+func makeDirectoryLink(t *testing.T, link, target string) {
+	t.Helper()
+	createJunction(t, link, target)
+}
+
+func moveWorkspaceOutside(t *testing.T, w *PublishWorkspace, _, outside string) string {
+	t.Helper()
+	d, err := OpenPublishDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	const movedName = "moved-workspace"
+	if err := renameHandle(w.plat.handle, d.plat.handle, movedName, windows.FILE_RENAME_POSIX_SEMANTICS); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(outside, movedName)
+}
+
+func equalFoldPath(a, b string) bool { return strings.EqualFold(filepath.Clean(a), filepath.Clean(b)) }
 
 func assertOwnerSystemDACL(t *testing.T, path string, directory bool) {
 	t.Helper()

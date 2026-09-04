@@ -330,6 +330,23 @@ func (fs *PrivateFS) openDirIdentityLocked(name string) (*DirectoryIdentity, err
 	return &DirectoryIdentity{plat: dirIdentityState{handle: dup, id: id}}, nil
 }
 
+func (fs *PrivateFS) openPublishDirLocked(name string) (*PublishDir, error) {
+	h, err := fs.dirHandle(name)
+	if err != nil {
+		return nil, err
+	}
+	dup, err := dupHandle(h)
+	if err != nil {
+		return nil, err
+	}
+	d, err := publishDirFromHandle(dup)
+	if err != nil {
+		_ = windows.CloseHandle(dup)
+		return nil, err
+	}
+	return d, nil
+}
+
 func (fs *PrivateFS) renameLocked(dir, oldName, newName string, replace bool) error {
 	parent, err := fs.dirHandle(dir)
 	if err != nil {

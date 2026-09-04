@@ -432,6 +432,92 @@ func TestPrivateFS_UnixCloseReleasesFDs(t *testing.T) {
 	}
 }
 
+func TestPublishWorkspace_UnixPrivateModes(t *testing.T) {
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	d, err := OpenPublishDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	w, err := d.CreateWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	assertMode(t, filepath.Join(parent, w.name), os.ModeDir|0o700)
+	f, name, err := w.CreateTemp("private-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertMode(t, filepath.Join(parent, w.name, name), 0o600)
+}
+
+func TestPublishDir_UnixPostPublishFailureIsWarning(t *testing.T) {
+	parent := t.TempDir()
+	d, err := OpenPublishDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	w, err := d.CreateWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	f, name, err := w.CreateTemp("warn-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte("published")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	original := publishUnixPostLinkUnlinkFn
+	t.Cleanup(func() { publishUnixPostLinkUnlinkFn = original })
+	publishUnixPostLinkUnlinkFn = func(int, string, int) error { return unix.EIO }
+	var warnings []error
+	err = d.PublishNoReplace(w, name, "result.zip", func(err error) { warnings = append(warnings, err) })
+	publishUnixPostLinkUnlinkFn = original
+	if err != nil {
+		t.Fatalf("published target reported failure: %v", err)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings=%v", warnings)
+	}
+	if got, err := os.ReadFile(filepath.Join(parent, "result.zip")); err != nil || string(got) != "published" {
+		t.Fatalf("target=%q err=%v", got, err)
+	}
+	if err := w.Remove(name); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func makeDirectoryLink(t *testing.T, link, target string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func moveWorkspaceOutside(t *testing.T, w *PublishWorkspace, parent, outside string) string {
+	t.Helper()
+	moved := filepath.Join(outside, "moved-workspace")
+	if err := os.Rename(filepath.Join(parent, w.name), moved); err != nil {
+		t.Fatal(err)
+	}
+	return moved
+}
+
+func equalFoldPath(a, b string) bool { return a == b }
+
 func assertMode(t *testing.T, path string, want os.FileMode) {
 	t.Helper()
 	info, err := os.Lstat(path)
