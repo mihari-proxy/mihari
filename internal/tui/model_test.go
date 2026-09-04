@@ -974,8 +974,52 @@ func TestModel_LoggingRevisionChangeUsesBootstrapWithoutAdvancingEpoch(t *testin
 	if got := applier.last(); got != logging.BootstrapConfig() {
 		t.Fatalf("revision reset applied=%+v want bootstrap", got)
 	}
-	if model.loggingRevision == nil || *model.loggingRevision != 10 {
-		t.Fatalf("revision gate was cleared on same epoch: %v", model.loggingRevision)
+	if model.loggingRevision == nil || *model.loggingRevision != 11 {
+		t.Fatalf("revision floor=%v want 11", model.loggingRevision)
+	}
+}
+
+func TestModel_LoggingRevisionResetRejectsOldEventAndPageObservationUntilFloor(t *testing.T) {
+	model := NewModel()
+	applier := &recordingLoggingApplier{}
+	page := &loggingResultRecordingPage{}
+	model.pages[ui.PageSystem] = page
+	model.SetLoggingApplier(applier)
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: protocol.LoggingStatus{
+		Revision: 10, Level: "info", MaxSizeMB: 10, MaxFiles: 3,
+	}})
+
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 11, Capabilities: []string{protocol.CapabilityLogging},
+	}})
+	if model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 11 {
+		t.Fatalf("reset state loaded=%v floor=%v want unloaded floor 11", model.loggingLoaded, model.loggingRevision)
+	}
+	applyCount, syncCount := applier.count(), page.synced
+
+	stale := protocol.LoggingStatus{Revision: 10, Level: "error", MaxSizeMB: 40, MaxFiles: 8}
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: stale})
+	updated, _ := model.Update(ui.PageResultMsg{
+		Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: 1, Status: stale},
+	})
+	model = updated.(Model)
+	if page.received != 1 {
+		t.Fatalf("stale page results routed=%d want 1", page.received)
+	}
+	if model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 11 {
+		t.Fatalf("stale observation changed root: loaded=%v floor=%v", model.loggingLoaded, model.loggingRevision)
+	}
+	if applier.count() != applyCount || page.synced != syncCount {
+		t.Fatalf("stale observation changed consumers: applies=%d want %d syncs=%d want %d", applier.count(), applyCount, page.synced, syncCount)
+	}
+
+	current := protocol.LoggingStatus{Revision: 11, Level: "warn", MaxSizeMB: 20, MaxFiles: 5}
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: current})
+	if !model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 11 || model.loggingStatus != current {
+		t.Fatalf("current observation not accepted: loaded=%v revision=%v status=%+v", model.loggingLoaded, model.loggingRevision, model.loggingStatus)
+	}
+	if applier.count() != applyCount+1 || page.synced != syncCount+1 {
+		t.Fatalf("current observation consumer updates: applies=%d syncs=%d", applier.count(), page.synced)
 	}
 }
 

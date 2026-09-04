@@ -576,8 +576,12 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 			switch {
 			case !currentLoggingCapability && !epochAdvanced && model.loggingLoaded:
 				model.resetLogging(event.Epoch)
-			case currentLoggingCapability && model.loggingLoaded && model.loggingRevision != nil && event.Status.Revision > *model.loggingRevision:
-				model.resetLogging(event.Epoch)
+			case currentLoggingCapability && model.loggingRevision != nil && event.Status.Revision > *model.loggingRevision:
+				if model.loggingLoaded {
+					model.resetLogging(event.Epoch)
+				}
+				revision := event.Status.Revision
+				model.loggingRevision = &revision
 			}
 		}
 		model.status = event.Status

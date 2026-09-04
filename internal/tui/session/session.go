@@ -283,15 +283,15 @@ func (s *Session) pollLogging(ctx context.Context, status protocol.Status) {
 	if s.loggingRevision != nil && *s.loggingRevision >= status.Revision {
 		return
 	}
+	requestEpoch := s.loggingEpoch
 	observed, err := s.client.Logging(ctx)
 	if err != nil {
 		return
 	}
-	epoch := s.loggingEpoch
-	if !putOrdered(ctx, s.control, Event{Kind: EventLogging, Logging: observed, Epoch: epoch}) {
+	if !putOrdered(ctx, s.control, Event{Kind: EventLogging, Logging: observed, Epoch: requestEpoch}) {
 		return
 	}
-	if epoch == s.loggingEpoch {
+	if requestEpoch == s.loggingEpoch {
 		revision := observed.Revision
 		s.loggingRevision = &revision
 	}

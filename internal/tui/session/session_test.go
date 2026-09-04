@@ -325,6 +325,47 @@ func TestSession_LoggingReconnectAdvancesEpochAndRefetches(t *testing.T) {
 	}
 }
 
+func TestSession_LoggingInFlightEpochAdvanceKeepsRequestEpochUnsynchronized(t *testing.T) {
+	base := newFakeClient()
+	base.logging = protocol.LoggingStatus{Schema: "mihari/v1", Revision: 10, Level: "info", MaxSizeMB: 10, MaxFiles: 3}
+	client := &blockingLoggingClient{
+		fakeClient: base,
+		started:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	s := New(client, Options{})
+	status := protocol.Status{Schema: "mihari/v1", Revision: 10, Capabilities: []string{protocol.CapabilityLogging}}
+	done := make(chan error, 1)
+	go func() { done <- s.pollStatus(context.Background(), status) }()
+
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Logging RPC did not start")
+	}
+	if !s.putReconnecting(context.Background(), 1, errors.New("transport reset")) {
+		t.Fatal("reconnecting event was not queued")
+	}
+	close(client.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	statusEvent, reconnectingEvent, loggingEvent := <-s.control, <-s.control, <-s.control
+	if statusEvent.Kind != EventStatus || statusEvent.Epoch != 1 {
+		t.Fatalf("status event=%+v", statusEvent)
+	}
+	if reconnectingEvent.Kind != EventReconnecting || reconnectingEvent.Epoch != 2 {
+		t.Fatalf("reconnecting event=%+v", reconnectingEvent)
+	}
+	if loggingEvent.Kind != EventLogging || loggingEvent.Epoch != 1 {
+		t.Fatalf("old request logging event=%+v want epoch 1", loggingEvent)
+	}
+	if s.loggingEpoch != 2 || s.loggingRevision != nil {
+		t.Fatalf("session epoch=%d revision=%v want epoch 2 unsynchronized", s.loggingEpoch, s.loggingRevision)
+	}
+}
+
 func TestSession_LoggingCapabilityTransitionsResynchronize(t *testing.T) {
 	fake := newFakeClient()
 	fake.logging = protocol.LoggingStatus{Schema: "mihari/v1", Revision: 9, Level: "warn", MaxSizeMB: 12, MaxFiles: 6}
@@ -504,6 +545,22 @@ type fakeClient struct {
 	core              protocol.CoreStatus
 	logging           protocol.LoggingStatus
 	preferences       protocol.TUIPreferences
+}
+
+type blockingLoggingClient struct {
+	*fakeClient
+	started chan struct{}
+	release chan struct{}
+}
+
+func (c *blockingLoggingClient) Logging(ctx context.Context) (protocol.LoggingStatus, error) {
+	close(c.started)
+	select {
+	case <-c.release:
+	case <-ctx.Done():
+		return protocol.LoggingStatus{}, ctx.Err()
+	}
+	return c.fakeClient.Logging(ctx)
 }
 
 func newFakeClient() *fakeClient {
