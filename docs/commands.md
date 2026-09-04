@@ -49,6 +49,14 @@ mihari status
 mihari status --json
 ```
 
+## 文件日志
+
+守护进程、TUI 与捕获的 mihomo 输出会分别以 JSONL 写入数据根目录下的 `logs/mihari-daemon.log`、`logs/mihari-tui.log` 与 `logs/mihomo.log`。多个 TUI 实例共享 `mihari-tui.log`，写入与轮转会跨进程协调。
+
+守护进程与捕获的 mihomo 日志默认级别为 `info`，每个活跃文件达到 10 MiB 时轮转，最多保留三份文件（活跃文件与最多两份归档）。TUI 启动时使用 bootstrap 配置：`debug`、100 MiB、10 份文件，以便在守护进程设置可用前也能记录日志；在后续控制面同步前保持该 bootstrap 配置。mihomo stdout 捕获为 `INFO`，stderr 捕获为 `WARN`；这只描述 Mihari 的捕获级别，不表示 mihomo 行内消息的实际严重程度。
+
+日志脱敏是尽力而为，所有日志仍须按敏感资料处理，分享前应检查内容。本版本没有日志配置 UI，也不提供日志导出命令或界面。
+
 ## 核心与代理管理
 
 通过守护进程管理和检查 mihomo:

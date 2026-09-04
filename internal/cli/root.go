@@ -56,6 +56,8 @@ type Dependencies struct {
 	Interactive        bool
 	NewOperationID     func() string
 	SetupError         error
+	// PrepareLocalRoot runs once before selected commands. Nil skips data-root IO.
+	PrepareLocalRoot func() error
 }
 
 type runOptions struct {
@@ -99,7 +101,19 @@ func newRoot(dependencies Dependencies, options *runOptions) *cobra.Command {
 			}
 			return dependencies.RunTUI(command.Context())
 		},
-		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if !skipPrepareLocalRoot(cmd) && dependencies.PrepareLocalRoot != nil {
+				if err := dependencies.PrepareLocalRoot(); err != nil {
+					var apiError protocol.APIError
+					if errors.As(err, &apiError) {
+						if apiError.Code == "" {
+							apiError.Code = protocol.CodeDataFailure
+						}
+						return apiError
+					}
+					return protocol.APIError{Code: protocol.CodeDataFailure, Message: "local control setup failed"}
+				}
+			}
 			if dependencies.SetupError == nil {
 				return nil
 			}
@@ -150,4 +164,20 @@ func wantsJSON(args []string) bool {
 
 func invalidArgument(message string) error {
 	return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: message}
+}
+
+func skipPrepareLocalRoot(cmd *cobra.Command) bool {
+	if cmd.Name() == "help" {
+		return true
+	}
+	parent := cmd.Parent()
+	if parent == nil || parent.Name() != "self" {
+		return false
+	}
+	switch cmd.Name() {
+	case "version", "channel":
+		return true
+	default:
+		return false
+	}
 }

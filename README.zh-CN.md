@@ -156,6 +156,20 @@ mihari sysproxy enable
 
 设置、控制令牌、运行时配置、核心二进制、订阅、GeoIP、面板资产、日志与暂存都在数据根目录下。
 
+## 文件日志
+
+Mihari 会在数据根目录下写入三个 JSONL（每行一个 JSON 对象）文件：
+
+| 来源 | 路径 |
+| --- | --- |
+| Mihari 守护进程 | `logs/mihari-daemon.log` |
+| TUI（所有 TUI 实例共享） | `logs/mihari-tui.log` |
+| 捕获的 mihomo 输出 | `logs/mihomo.log` |
+
+守护进程与捕获的 mihomo 文件日志默认级别为 `info`，每个活跃文件到 10 MiB 时轮转，并保留三份文件（活跃文件加最多两份归档）。TUI 启动时使用 bootstrap 配置——级别 `debug`、100 MiB、10 份文件——以便在守护进程设置可用前也能记录日志；在后续控制面同步前会保持该 bootstrap 配置。捕获的 mihomo stdout 记为 `INFO`，stderr 记为 `WARN`；这些捕获级别不代表 mihomo 行内文本本身的严重程度。
+
+脱敏仅为尽力而为，仍应将所有日志文件按敏感资料处理，并在分享前审阅内容。本版本尚未提供日志配置 UI 或日志导出。
+
 ## 开发
 
 ```console

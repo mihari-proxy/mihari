@@ -30,15 +30,19 @@ import (
 )
 
 type RuntimeAssembly struct {
-	Manager *runtimeapi.Manager
-	Store   *state.Store
-	Web     *web.Server
+	Manager       *runtimeapi.Manager
+	Store         *state.Store
+	Web           *web.Server
+	mihomoStarter supervisor.CommandStarter
 }
 
 type RuntimeBuildOptions struct {
 	InitialSetupRequired bool
 	SettingsPath         string
 	ServiceStatus        func() (string, error)
+	MihomoStdout         io.Writer
+	MihomoStderr         io.Writer
+	OnBackgroundError    func(component string, err error)
 }
 
 func BuildRuntime(paths platform.Paths, settings config.Settings, daemonVersion string, stdout, stderr io.Writer) (*RuntimeAssembly, error) {
@@ -140,15 +144,29 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	if err != nil {
 		return nil, err
 	}
+	starterStdout, starterStderr := stdout, stderr
+	if options.MihomoStdout != nil {
+		starterStdout = options.MihomoStdout
+	}
+	if options.MihomoStderr != nil {
+		starterStderr = options.MihomoStderr
+	}
+	if starterStdout == nil {
+		starterStdout = io.Discard
+	}
+	if starterStderr == nil {
+		starterStderr = io.Discard
+	}
+	mihomoStarter := supervisor.CommandStarter{
+		BinaryPath: paths.CoreBinary,
+		DataDir:    paths.Root,
+		ConfigPath: paths.RuntimeConfig,
+		Stdout:     starterStdout,
+		Stderr:     starterStderr,
+	}
 	var manager *runtimeapi.Manager
 	coreSupervisor := supervisor.New(supervisor.Options{
-		Starter: supervisor.CommandStarter{
-			BinaryPath: paths.CoreBinary,
-			DataDir:    paths.Root,
-			ConfigPath: paths.RuntimeConfig,
-			Stdout:     stdout,
-			Stderr:     stderr,
-		},
+		Starter: mihomoStarter,
 		Health: func(ctx context.Context) error {
 			_, err := controller.Version(ctx)
 			return err
@@ -177,17 +195,18 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		PrepareGeoIP: func(ctx context.Context) (runtimeapi.GeoIPCandidate, error) {
 			return geoIPService.PrepareUpdate(ctx)
 		},
-		Onboarding:    onboardingService,
-		Panels:        panelService,
-		WebGateway:    webGateway,
-		WebOpenToken:  webCredential,
-		Settings:      settings,
-		SettingsPath:  settingsPath,
-		ServiceStatus: options.ServiceStatus,
-		SysProxy:      sysproxy.Platform(),
-		TunDetect:     tundetect.Platform(),
-		RuntimeConfig: paths.RuntimeConfig,
-		StagingDir:    paths.SubscriptionStaging,
+		Onboarding:        onboardingService,
+		Panels:            panelService,
+		WebGateway:        webGateway,
+		WebOpenToken:      webCredential,
+		Settings:          settings,
+		SettingsPath:      settingsPath,
+		ServiceStatus:     options.ServiceStatus,
+		OnBackgroundError: options.OnBackgroundError,
+		SysProxy:          sysproxy.Platform(),
+		TunDetect:         tundetect.Platform(),
+		RuntimeConfig:     paths.RuntimeConfig,
+		StagingDir:        paths.SubscriptionStaging,
 		ValidateConfig: func(ctx context.Context, candidatePath string) error {
 			return core.ValidateConfig(ctx, core.OSCommandRunner{}, paths.CoreBinary, paths.Root, candidatePath)
 		},
@@ -230,7 +249,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		},
 	})
 	webGateway.Mutator = webMutator{manager: manager}
-	return &RuntimeAssembly{Manager: manager, Store: store, Web: webGateway}, nil
+	return &RuntimeAssembly{Manager: manager, Store: store, Web: webGateway, mihomoStarter: mihomoStarter}, nil
 }
 
 type webMutationRuntime interface {
