@@ -13,11 +13,15 @@ func TestAtomicWriteKeepsPreviousFileWhenReplaceFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	replaceError := errors.New("replace failed")
-	err := writeAtomic(path, []byte("new"), 0o600, func(_, _ string) error {
-		return replaceError
+	result, err := writeAtomic(path, []byte("new"), 0o600, atomicWriteOps{
+		replace: func(_, _ string) error { return replaceError },
+		syncDir: syncDirectory,
 	})
 	if !errors.Is(err, replaceError) {
 		t.Fatalf("err=%v", err)
+	}
+	if result.Committed {
+		t.Fatalf("result=%#v, want uncommitted", result)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -32,6 +36,34 @@ func TestAtomicWriteKeepsPreviousFileWhenReplaceFails(t *testing.T) {
 	}
 	if len(matches) != 0 {
 		t.Fatalf("temporary files remain: %v", matches)
+	}
+}
+
+func TestAtomicWriteWithCommitReportsDirectorySyncFailureAfterReplacement(t *testing.T) {
+	// This catches treating a durability warning after replace as an uncommitted write.
+	path := filepath.Join(t.TempDir(), "settings.yaml")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	syncError := errors.New("sync directory failed")
+	result, err := writeAtomic(path, []byte("new"), 0o600, atomicWriteOps{
+		replace: replaceFile,
+		syncDir: func(string) error {
+			return syncError
+		},
+	})
+	if err != nil {
+		t.Fatalf("writeAtomic() error = %v", err)
+	}
+	if !result.Committed || !errors.Is(result.Warning, syncError) {
+		t.Fatalf("result=%#v, want committed directory sync warning", result)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "new" {
+		t.Fatalf("active file=%q, want new content", raw)
 	}
 }
 
