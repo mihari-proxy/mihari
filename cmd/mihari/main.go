@@ -366,7 +366,7 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	}
 	settings, created, settingsCommit, err := loadSettings(deps.Paths.Settings, sidecar)
 	if err != nil {
-		return err
+		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "load settings"}
 	}
 	if err := deps.PrivateFS.EnsureDir(deps.Paths.LogDir); err != nil {
 		return err

@@ -89,10 +89,11 @@ func TestLogging_ConcurrentGETWaitsForSaveBeforePublish(t *testing.T) {
 		readDone <- status
 		readErr <- err
 	}()
+	waitForRuntimeStack(t, "(*Manager).LoggingStatus", "(*Manager).lockMaintenance")
 	select {
 	case status := <-readDone:
 		t.Fatalf("GET observed mutation while Save was pending: %#v", status)
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 	close(releaseSave)
 	if err := <-updateDone; err != nil {
@@ -354,10 +355,11 @@ func TestLogging_ConcurrentGETWaitsForCompleteCommittedMutation(t *testing.T) {
 		read <- status
 		readErr <- err
 	}()
+	waitForRuntimeStack(t, "(*Manager).LoggingStatus", "(*Manager).lockMaintenance")
 	select {
 	case status := <-read:
 		t.Fatalf("GET observed in-progress mutation: %#v", status)
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 	close(releaseApply)
 	if err := <-updateErr; err != nil {

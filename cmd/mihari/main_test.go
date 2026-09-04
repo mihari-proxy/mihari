@@ -383,31 +383,90 @@ func TestRunDaemon_EffectiveLoggingOnRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings := config.Defaults()
-	settings.ControllerSecret = strings.Repeat("a", 64)
+	settings, holder := occupiedControllerSettings(t, strings.Repeat("a", 64))
+	if err := holder.Close(); err != nil {
+		t.Fatal(err)
+	}
 	settings.SetLogging(config.LoggingSettings{Level: "debug", MaxSizeMB: 20, MaxFiles: 5})
 	writeSettings(t, paths, settings)
 
-	afterDaemonLoggingOpen = func(logger *slog.Logger) { logger.Debug("custom logging is active") }
+	var daemonLogger *slog.Logger
+	afterDaemonLoggingOpen = func(logger *slog.Logger) { daemonLogger = logger }
 	t.Cleanup(func() { afterDaemonLoggingOpen = nil })
-	buildDaemonRuntime = func(_ platform.Paths, _ config.Settings, _ string, _, _ io.Writer, options app.RuntimeBuildOptions) (*app.RuntimeAssembly, error) {
-		if options.Logging == nil {
-			t.Fatal("daemon assembly did not receive a Logging runtime group")
+	productionBuild := buildDaemonRuntime
+	var assembly *app.RuntimeAssembly
+	var loggingGroup *logging.Group
+	buildDaemonRuntime = func(paths platform.Paths, settings config.Settings, version string, stdout, stderr io.Writer, options app.RuntimeBuildOptions) (*app.RuntimeAssembly, error) {
+		loggingGroup, _ = options.Logging.(*logging.Group)
+		built, buildErr := productionBuild(paths, settings, version, stdout, stderr, options)
+		if buildErr == nil {
+			assembly = built
 		}
-		want := logging.Config{Level: slog.LevelDebug, MaxSizeBytes: 20 << 20, MaxFiles: 5}
-		if options.Logging.Config() != want || options.Logging.Dir() != paths.LogDir {
-			t.Fatalf("logging group config=%#v dir=%q", options.Logging.Config(), options.Logging.Dir())
-		}
-		return &app.RuntimeAssembly{}, nil
+		return built, buildErr
 	}
-	runDaemon = func(context.Context, daemon.Options) error { return nil }
 
-	if err := runDaemonWith(context.Background(), daemonRunDeps{Paths: paths, PrivateFS: fs, Token: "control-token", Version: "test"}); err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	ready := make(chan struct{})
+	endpoint := transporttest.Endpoint(t)
+	done := make(chan error, 1)
+	go func() {
+		done <- runDaemonWith(ctx, daemonRunDeps{
+			Paths: paths, PrivateFS: fs, Token: "control-token", Version: "test",
+			Endpoint: endpoint, Ready: ready,
+		})
+	}()
+	stopped := false
+	t.Cleanup(func() {
+		cancel()
+		if stopped {
+			return
+		}
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("runDaemonWith did not stop")
+		}
+	})
+	select {
+	case <-ready:
+	case runErr := <-done:
+		stopped = true
+		t.Fatalf("daemon stopped before Ready: %v", runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("daemon did not become ready")
+	}
+
+	want := logging.Config{Level: slog.LevelDebug, MaxSizeBytes: 20 << 20, MaxFiles: 5}
+	if loggingGroup == nil || loggingGroup.Config() != want || loggingGroup.Dir() != paths.LogDir {
+		t.Fatalf("logging group=%#v", loggingGroup)
+	}
+	if assembly == nil || assembly.Manager == nil {
+		t.Fatal("daemon assembly did not remain available after Ready")
+	}
+	status, err := assembly.Manager.LoggingStatus(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if status.Level != "debug" || status.MaxSizeMB != 20 || status.MaxFiles != 5 || status.Dir != paths.LogDir {
+		t.Fatalf("live logging status=%#v", status)
+	}
+	if daemonLogger == nil {
+		t.Fatal("daemon logger did not remain available after Ready")
+	}
+	daemonLogger.Debug("custom logging is active")
+	cancel()
+	select {
+	case runErr := <-done:
+		stopped = true
+		if runErr != nil {
+			t.Fatal(runErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runDaemonWith did not stop after cancellation")
+	}
 	lines := strings.Split(strings.TrimSpace(readFileString(t, paths.DaemonLog)), "\n")
-	if len(lines) == 0 || !strings.Contains(lines[0], `"level":"DEBUG"`) || !strings.Contains(lines[0], `"msg":"custom logging is active"`) {
-		t.Fatalf("first daemon JSONL record=%q", lines)
+	if len(lines) == 0 || !strings.Contains(lines[len(lines)-1], `"level":"DEBUG"`) || !strings.Contains(lines[len(lines)-1], `"msg":"custom logging is active"`) {
+		t.Fatalf("last daemon JSONL record=%q", lines)
 	}
 }
 
@@ -479,7 +538,8 @@ func TestRunDaemon_BootstrapSettingsPreCommitFailureStopsBeforeLogging(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	preCommit := errors.New("settings replace failed")
+	sensitiveToken := "subscription-token-that-must-not-leak"
+	preCommit := errors.New("replace " + paths.Settings + " using token=" + sensitiveToken)
 	var openCalls, buildCalls, runCalls int
 	openDaemonRuntime = func(context.Context, logging.RuntimeOptions) (daemonLoggingRuntime, error) {
 		openCalls++
@@ -499,8 +559,17 @@ func TestRunDaemon_BootstrapSettingsPreCommitFailureStopsBeforeLogging(t *testin
 			return config.Settings{}, false, config.CommitResult{}, preCommit
 		},
 	})
-	if !errors.Is(err, preCommit) {
-		t.Fatalf("err=%v want=%v", err, preCommit)
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) {
+		t.Fatalf("err type=%T want protocol.APIError", err)
+	}
+	if apiError.Code != protocol.CodeDataFailure || apiError.Message != "load settings" {
+		t.Fatalf("API error=%#v", apiError)
+	}
+	for _, sensitive := range []string{paths.Root, paths.Settings, sensitiveToken} {
+		if strings.Contains(err.Error(), sensitive) || strings.Contains(apiError.Message, sensitive) {
+			t.Fatalf("service-visible error leaked %q: err=%q message=%q", sensitive, err, apiError.Message)
+		}
 	}
 	if openCalls != 0 || buildCalls != 0 || runCalls != 0 {
 		t.Fatalf("open=%d build=%d run=%d", openCalls, buildCalls, runCalls)
