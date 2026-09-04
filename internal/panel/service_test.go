@@ -223,6 +223,40 @@ func TestServicePrepareUpdateDoesNotPromoteUntilCommit(t *testing.T) {
 	}
 }
 
+func TestServicePrepareInstallDoesNotPromoteUntilCommit(t *testing.T) {
+	paths, server, _, _ := panelFixture(t)
+	defer server.Close()
+	service, err := Open(ServiceOptions{
+		WebRoot: paths.WebRoot, WebActive: paths.WebActive, StagingDir: paths.PanelStaging,
+		HTTPClient: server.Client(), AllowHTTP: true,
+		Adapters: []Adapter{
+			fixtureAdapter{id: IDZashboard, name: "Zashboard", build: "v1.0.0", asset: server.URL + "/v1.zip"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prepared, err := service.PrepareInstall(context.Background(), IDZashboard, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Cleanup()
+	if !prepared.Valid() {
+		t.Fatal("prepared install candidate is not valid")
+	}
+	buildDir := filepath.Join(paths.WebRoot, IDZashboard, "v1.0.0")
+	if _, err := os.Stat(buildDir); !os.IsNotExist(err) {
+		t.Fatalf("prepared install promoted before commit: %v", err)
+	}
+	if err := prepared.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(buildDir, "index.html")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestServicePreparedUpdateCleanupRemovesStagingCandidate(t *testing.T) {
 	paths, server, _, _ := panelFixture(t)
 	defer server.Close()

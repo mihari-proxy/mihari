@@ -205,28 +205,39 @@ func (s *Service) List() []PanelInfo {
 	return out
 }
 
-// Install downloads and extracts a panel build outside any caller commit section.
-// pinBuild selects a specific already-resolved asset only when the adapter's ResolveLatest
-// is replaced by a test adapter; for production adapters, pinBuild when non-empty must match
-// the resolved build id after ResolveLatest (download URL still comes from the adapter).
+// Install prepares and commits a panel build for callers outside the runtime coordinator.
+// Runtime callers use PrepareInstall so its mutation gate remains authoritative.
 func (s *Service) Install(ctx context.Context, panelID, pinBuild string) error {
-	adapter, err := s.adapter(panelID)
+	prepared, err := s.PrepareInstall(ctx, panelID, pinBuild)
 	if err != nil {
 		return err
 	}
+	defer prepared.Cleanup()
+	return prepared.Commit()
+}
+
+// PrepareInstall downloads and validates a panel build without changing the installed tree.
+// pinBuild selects a specific already-resolved asset only when the adapter's ResolveLatest
+// is replaced by a test adapter; for production adapters, pinBuild when non-empty must match
+// the resolved build id after ResolveLatest (download URL still comes from the adapter).
+func (s *Service) PrepareInstall(ctx context.Context, panelID, pinBuild string) (PreparedMutation, error) {
+	adapter, err := s.adapter(panelID)
+	if err != nil {
+		return nil, err
+	}
 	build, assetURL, err := adapter.ResolveLatest(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if pinBuild != "" && pinBuild != build {
 		// Allow pin to force build id only when the adapter returned that identity;
 		// production adapters resolve identity and URL together.
-		return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "pinned panel build does not match resolved build"}
+		return nil, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "pinned panel build does not match resolved build"}
 	}
 	if build == "" || assetURL == "" {
-		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "panel adapter returned empty build"}
+		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "panel adapter returned empty build"}
 	}
-	return s.installBuild(ctx, panelID, build, assetURL)
+	return s.prepareBuild(ctx, panelID, build, assetURL, false)
 }
 
 // Update installs the latest build when it differs from the current installed build for panelID.
@@ -413,30 +424,6 @@ func (s *Service) PrepareReinstall(ctx context.Context, panelID string) (Prepare
 		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "panel adapter returned empty build"}
 	}
 	return s.prepareBuild(ctx, panelID, build, assetURL, true)
-}
-
-func (s *Service) installBuild(ctx context.Context, panelID, build, assetURL string) error {
-	if err := validateDownloadURL(assetURL, s.allowHTTP); err != nil {
-		return err
-	}
-	// Download + extract outside the service mutex so activate/rollback can run concurrently.
-	zipPath, err := s.download(ctx, panelID, build, assetURL)
-	if err != nil {
-		return err
-	}
-	defer os.Remove(zipPath)
-
-	// Promote under the mutex so incomplete trees are never activated mid-rename.
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.buildReadyLocked(panelID, build) {
-		return nil
-	}
-	_, err = InstallFromZip(InstallRequest{
-		PanelID: panelID, Build: build, Archive: zipPath,
-		StagingDir: s.stagingDir, WebRoot: s.webRoot,
-	})
-	return err
 }
 
 func (s *Service) prepareBuild(ctx context.Context, panelID, build, assetURL string, reinstall bool) (PreparedMutation, error) {
