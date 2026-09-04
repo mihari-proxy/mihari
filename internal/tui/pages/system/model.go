@@ -694,6 +694,11 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		wasLoggingEdit := m.editID == rowLogMaxSize || m.editID == rowLogMaxFiles
 		m.ApplyLoggingSync(typed)
 		if !typed.Available {
+			if m.pending && isLoggingRow(m.pendingRow) {
+				m.clearRowPending()
+				m.loggingPendingEpoch = 0
+				m.loggingReloading = false
+			}
 			if isLoggingRow(m.outcomeRow) {
 				m.clearLoggingOutcome(m.outcomeRow)
 			}
@@ -1300,7 +1305,7 @@ func (m *Model) loggingRows() []row {
 		{id: rowLogLevel, section: ui.LoggingSectionTitle, label: ui.LoggingLevelLabel, value: level},
 		{id: rowLogMaxSize, section: ui.LoggingSectionTitle, label: ui.LoggingMaxSizeLabel, value: maxSize},
 		{id: rowLogMaxFiles, section: ui.LoggingSectionTitle, label: ui.LoggingMaxFilesLabel, value: maxFiles},
-		{id: rowLogDirectory, section: ui.LoggingSectionTitle, label: ui.LoggingDirectoryLabel, value: directory},
+		{id: rowLogDirectory, section: ui.LoggingSectionTitle, label: ui.LoggingDirectoryLabel, value: directory, detail: directory},
 	}
 }
 

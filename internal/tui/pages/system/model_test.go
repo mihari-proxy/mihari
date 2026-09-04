@@ -42,9 +42,13 @@ func TestModel_LoggingSyncStoresRootAcceptedStatus(t *testing.T) {
 	if model.loggingEpoch != 1 || !model.loggingAvailable || model.logging != status {
 		t.Fatalf("epoch=%d available=%v logging=%+v", model.loggingEpoch, model.loggingAvailable, model.logging)
 	}
+	model.SetLocalLoggingAvailable(true)
+	if !model.localLoggingAvailable {
+		t.Fatal("local logging health true state was not stored")
+	}
 	model.SetLocalLoggingAvailable(false)
 	if model.localLoggingAvailable {
-		t.Fatal("local logging health was not stored")
+		t.Fatal("local logging health false state was not stored")
 	}
 }
 
@@ -81,6 +85,22 @@ func TestModel_LoggingRowsShowDaemonStateAndLocalWriterHealth(t *testing.T) {
 		t.Fatal("local writer failure disabled daemon logging update")
 	}
 
+}
+
+func TestModel_LoggingDirectoryEnterShowsPathDetail(t *testing.T) {
+	model, _ := loggingModel("info", 4)
+	model.focusID = rowLogDirectory
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if command != nil {
+		t.Fatal("directory detail unexpectedly returned a command")
+	}
+	if model.detail == nil || model.detail.detail != model.logging.Dir {
+		t.Fatalf("directory detail=%v", model.detail)
+	}
+	if view := model.View(); !strings.Contains(view, model.logging.Dir) {
+		t.Fatal("directory detail modal omitted the logging path")
+	}
 }
 
 func TestModel_LoggingRowsIgnoreEnterWhenUnavailable(t *testing.T) {
@@ -120,6 +140,49 @@ func TestModel_LoggingUnavailableSyncCancelsNumericEdit(t *testing.T) {
 	_, apply := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if apply != nil || client.updateLoggingCalls != 0 {
 		t.Fatalf("offline edit submitted: command=%v calls=%d", apply != nil, client.updateLoggingCalls)
+	}
+}
+
+func TestModel_LoggingUnavailableSyncClearsPendingAndIgnoresLateResults(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*fakeClient)
+	}{
+		{name: "success"},
+		{name: "failure", configure: func(client *fakeClient) {
+			client.updateLoggingErr = errors.New("late logging failure")
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			model, client := loggingModel("info", 4)
+			if test.configure != nil {
+				test.configure(client)
+			}
+			model.focusID = rowLogLevel
+			_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			late := firstSystemPageResult(t, command)
+			if !model.pending || model.pendingRow != rowLogLevel || model.loggingPendingEpoch != 7 {
+				t.Fatalf("pending=%v row=%q epoch=%d", model.pending, model.pendingRow, model.loggingPendingEpoch)
+			}
+
+			updated, _ := model.Update(ui.LoggingSyncMsg{Epoch: 7, Available: false})
+			model = updated.(*Model)
+			if model.pending || model.pendingRow != "" || model.loggingPendingEpoch != 0 || model.loggingReloading {
+				t.Fatalf("unavailable pending=%v row=%q epoch=%d reloading=%v", model.pending, model.pendingRow, model.loggingPendingEpoch, model.loggingReloading)
+			}
+			for _, id := range []string{rowLogLevel, rowLogMaxSize, rowLogMaxFiles, rowLogDirectory} {
+				if got := systemRowByID(model, id).value; got != ui.UnavailableTitle {
+					t.Fatalf("row %s=%q want Unavailable", id, got)
+				}
+			}
+
+			updated, followup := model.Update(late)
+			model = updated.(*Model)
+			if followup != nil || model.loggingAvailable || model.logging != (protocol.LoggingStatus{}) || model.pending || model.outcomeRow != "" || model.outcomeDetail != "" || model.lastError != "" {
+				t.Fatalf("late result restored state: followup=%v available=%v pending=%v outcome=%q", followup != nil, model.loggingAvailable, model.pending, model.outcomeRow)
+			}
+		})
 	}
 }
 
