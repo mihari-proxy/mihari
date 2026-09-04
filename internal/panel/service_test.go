@@ -257,6 +257,46 @@ func TestServicePrepareInstallDoesNotPromoteUntilCommit(t *testing.T) {
 	}
 }
 
+func TestServicePreparedInstallNoOpsWhenSameBuildBecomesReadyBeforeCommit(t *testing.T) {
+	paths, server, _, _ := panelFixture(t)
+	defer server.Close()
+	service, err := Open(ServiceOptions{
+		WebRoot: paths.WebRoot, WebActive: paths.WebActive, StagingDir: paths.PanelStaging,
+		HTTPClient: server.Client(), AllowHTTP: true,
+		Adapters: []Adapter{
+			fixtureAdapter{id: IDZashboard, name: "Zashboard", build: "v1.0.0", asset: server.URL + "/v1.zip"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := service.PrepareInstall(context.Background(), IDZashboard, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Cleanup()
+	duplicate, err := service.PrepareInstall(context.Background(), IDZashboard, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer duplicate.Cleanup()
+
+	if err := first.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(paths.WebRoot, IDZashboard, "v1.0.0", "local-marker")
+	if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := duplicate.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if content, err := os.ReadFile(marker); err != nil || string(content) != "keep" {
+		t.Fatalf("duplicate install replaced ready build: content=%q err=%v", content, err)
+	}
+}
+
 func TestServicePreparedUpdateCleanupRemovesStagingCandidate(t *testing.T) {
 	paths, server, _, _ := panelFixture(t)
 	defer server.Close()
