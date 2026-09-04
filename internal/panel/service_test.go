@@ -306,7 +306,7 @@ func TestServicePreparedInstallNoOpsWhenSameBuildBecomesReadyBeforeCommit(t *tes
 
 func TestServicePreparedUpdateNoOpsWhenSameBuildBecomesReadyBeforeCommit(t *testing.T) {
 	paths, server, _, _ := panelFixture(t)
-	defer server.Close()
+	t.Cleanup(server.Close)
 	service, err := Open(ServiceOptions{
 		WebRoot: paths.WebRoot, WebActive: paths.WebActive, StagingDir: paths.PanelStaging,
 		HTTPClient: server.Client(), AllowHTTP: true,

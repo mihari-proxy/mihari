@@ -249,9 +249,10 @@ var (
 	FooterDetailMode    = RenderFooter(PageConnections, ModeDetail, FooterOpt{})
 	FooterColumnsMode   = RenderFooter(PageConnections, ModeColumns, FooterOpt{})
 	FooterPortsEdit     = RenderFooter(PageSystem, ModePortsEdit, FooterOpt{})
-	FooterLoggingEdit   = RenderFooter(PageSystem, ModeLoggingEdit, FooterOpt{})
-	FormHelp            = RenderFooter(PageSubscriptions, ModeForm, FooterOpt{})
-	SetupFooter         = RenderFooter(PageSetup, "", FooterOpt{})
+	// FooterLoggingEdit is the footer rendered while editing numeric Logging settings.
+	FooterLoggingEdit = RenderFooter(PageSystem, ModeLoggingEdit, FooterOpt{})
+	FormHelp          = RenderFooter(PageSubscriptions, ModeForm, FooterOpt{})
+	SetupFooter       = RenderFooter(PageSetup, "", FooterOpt{})
 )
 
 // RenderHelp builds the scrollable help body ordered as Global, optional current

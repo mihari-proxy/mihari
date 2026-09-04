@@ -333,7 +333,9 @@ func TestLogging_RefreshSecretsKeepsToken(t *testing.T) {
 
 func TestSubscriptionSetRestoreFailureRefreshesSecretsAndDegrades(t *testing.T) {
 	manager, service, _, serverURL := subscriptionManager(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		_, _ = writer.Write([]byte("proxies: []\nrules: [MATCH,DIRECT]\n"))
+		if _, err := writer.Write([]byte("proxies: []\nrules: [MATCH,DIRECT]\n")); err != nil {
+			t.Errorf("write fixture response: %v", err)
+		}
 	}))
 	oldURL := serverURL + "?token=old-subscription-secret"
 	added, err := manager.AddSubscription(context.Background(), Operation{ID: "restore-fail-add", Source: "test"}, AddSubscriptionInput{Name: "Main", URL: oldURL})

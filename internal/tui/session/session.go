@@ -44,13 +44,15 @@ type Event struct {
 	Rules         protocol.RuleList
 	RuleProviders protocol.RuleProviderList
 	WebGUI        protocol.WebGUIStatus
-	Logging       protocol.LoggingStatus
-	Traffic       protocol.TrafficSample
-	Memory        protocol.MemorySample
-	Log           protocol.LogEntry
-	Connections   protocol.ConnectionList
-	Epoch         uint64 // logging synchronization epoch produced only by Session
-	Err           error
+	// Logging contains the daemon logging status associated with the event.
+	Logging     protocol.LoggingStatus
+	Traffic     protocol.TrafficSample
+	Memory      protocol.MemorySample
+	Log         protocol.LogEntry
+	Connections protocol.ConnectionList
+	// Epoch is the logging synchronization epoch produced only by Session.
+	Epoch uint64
+	Err   error
 }
 
 type Options struct {
