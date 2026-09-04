@@ -170,7 +170,10 @@ func TestPrivateFS_OpenReadCheckedIdentityMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	ident := identityOf(t, entries, filepath.Base(paths.DaemonLog))
-	if err := fs.Remove(paths.DaemonLog); err != nil {
+	// Keep the old inode allocated under another directory entry. Some Unix
+	// filesystems immediately reuse an unlinked inode, which would make this
+	// identity-mismatch fixture nondeterministic.
+	if err := fs.Rename(paths.DaemonLog, paths.TUILog); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeLog(fs, paths.DaemonLog, "second\n"); err != nil {

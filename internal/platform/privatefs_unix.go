@@ -261,7 +261,11 @@ func (fs *PrivateFS) readDirLocked(dir string) ([]FileEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open dir listing %s: %w", dir, err)
 	}
-	defer unix.Close(listfd)
+	defer func() {
+		// The listing result has already been read; a close failure cannot be
+		// recovered here and is safe to ignore during descriptor cleanup.
+		_ = unix.Close(listfd)
+	}()
 	names, err := readUnixDirNames(listfd)
 	if err != nil {
 		return nil, err

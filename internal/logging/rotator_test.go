@@ -309,6 +309,24 @@ func TestRotatingWriter_WriteDropsWhenLockTimesOut(t *testing.T) {
 	}
 }
 
+func TestRotatingWriter_WriteReturnsUnlockFailure(t *testing.T) {
+	w, _, _ := openTestRotator(t, Config{Level: slog.LevelInfo, MaxSizeBytes: 1024, MaxFiles: 3})
+	if err := w.lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("release test lock")
+	w.lock = &unlockErrorLock{err: wantErr}
+	record := []byte("{\"msg\":\"written\"}\n")
+
+	n, err := w.Write(record)
+	if n != len(record) {
+		t.Fatalf("Write n=%d, want %d", n, len(record))
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Write error=%v, want unlock error", err)
+	}
+}
+
 func TestRotatingWriter_OpenCancelClosesResources(t *testing.T) {
 	fs, paths := openTestLogFS(t)
 	var spy *closeSpyLock
@@ -464,6 +482,23 @@ func TestRotatingWriter_ApplyCleanupIgnoresCancelAfterLock(t *testing.T) {
 	}
 }
 
+func TestRotatingWriter_ApplyReportsUnlockFailure(t *testing.T) {
+	w, _, _ := openTestRotator(t, Config{Level: slog.LevelInfo, MaxSizeBytes: 1024, MaxFiles: 3})
+	if err := w.lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	w.lock = &unlockErrorLock{err: errors.New("release test lock")}
+	var output bytes.Buffer
+	w.reporter = NewFailureReporter(&output, nil, func() time.Time {
+		return time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	})
+
+	w.Apply(context.Background(), Config{Level: slog.LevelInfo, MaxSizeBytes: 1024, MaxFiles: 3})
+	if got := output.String(); !strings.Contains(got, "logging: cleanup: release test lock") {
+		t.Fatalf("failure report=%q, want unlock failure", got)
+	}
+}
+
 func openTestRotator(t *testing.T, cfg Config) (*RotatingWriter, *platform.PrivateFS, platform.Paths) {
 	t.Helper()
 	fs, paths := openTestLogFS(t)
@@ -582,6 +617,14 @@ type closeSpyLock struct {
 type contextCaptureLock struct {
 	lockContext context.Context
 }
+
+type unlockErrorLock struct {
+	err error
+}
+
+func (*unlockErrorLock) Lock(context.Context, platform.LockMode) error { return nil }
+func (l *unlockErrorLock) Unlock() error                               { return l.err }
+func (*unlockErrorLock) Close() error                                  { return nil }
 
 func (l *contextCaptureLock) Lock(ctx context.Context, _ platform.LockMode) error {
 	l.lockContext = ctx

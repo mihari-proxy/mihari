@@ -113,7 +113,7 @@ func OpenRotatingWriter(ctx context.Context, opts RotatorOptions) (*RotatingWrit
 // Write appends one complete JSONL record. It takes the process mutex, then an
 // exclusive advisory lock (WriteWait, default 250ms). After the lock it opens
 // and Stats the base file. A lock wait failure drops the whole record.
-func (w *RotatingWriter) Write(p []byte) (int, error) {
+func (w *RotatingWriter) Write(p []byte) (n int, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
@@ -126,7 +126,12 @@ func (w *RotatingWriter) Write(p []byte) (int, error) {
 		w.report(FailureDropped, errors.New("lock wait exceeded"))
 		return 0, err
 	}
-	defer w.lock.Unlock()
+	defer func() {
+		if unlockErr := w.lock.Unlock(); unlockErr != nil {
+			w.report(FailureWrite, unlockErr)
+			err = errors.Join(err, unlockErr)
+		}
+	}()
 	if hook := testAfterExclusiveLock; hook != nil {
 		hook()
 	}
@@ -153,7 +158,7 @@ func (w *RotatingWriter) Write(p []byte) (int, error) {
 			}
 		}
 	}
-	n, err := w.file.Write(p)
+	n, err = w.file.Write(p)
 	closeErr := w.closeFile()
 	if err != nil {
 		w.report(FailureWrite, err)
@@ -191,7 +196,11 @@ func (w *RotatingWriter) convergeArchives(ctx context.Context) {
 		w.report(FailureCleanup, errors.New("lock wait exceeded"))
 		return
 	}
-	defer w.lock.Unlock()
+	defer func() {
+		if err := w.lock.Unlock(); err != nil {
+			w.report(FailureCleanup, err)
+		}
+	}()
 	if hook := testAfterExclusiveLock; hook != nil {
 		hook()
 	}
