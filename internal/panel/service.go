@@ -505,7 +505,7 @@ func (p *preparedPanelMutation) Commit() error {
 	}
 	p.service.mu.Lock()
 	defer p.service.mu.Unlock()
-	if p.mode == preparedMutationInstall && p.service.buildReadyLocked(p.panelID, p.build) {
+	if p.mode != preparedMutationReinstall && p.service.buildReadyLocked(p.panelID, p.build) {
 		p.committed = true
 		return nil
 	}

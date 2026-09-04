@@ -225,7 +225,9 @@ func (m *Manager) RemoveSubscription(ctx context.Context, operation Operation, i
 			if before.ActiveID == id {
 				candidate, prepareErr := m.prepareCatalogConfig(ctx, after)
 				if prepareErr != nil {
-					_ = m.subscriptions.Restore(before)
+					if restoreErr := m.subscriptions.Restore(before); restoreErr != nil {
+						return snapshot, degradedConfigError()
+					}
 					return snapshot, prepareErr
 				}
 				defer os.Remove(candidate.path)
@@ -240,11 +242,11 @@ func (m *Manager) RemoveSubscription(ctx context.Context, operation Operation, i
 			m.syncSubscriptionState(&snapshot, after)
 			return snapshot, nil
 		})
+		m.refreshSubscriptionLogSecrets()
 		if err != nil {
 			m.markConfigDegraded(ctx, err)
 			return nil, err
 		}
-		m.refreshSubscriptionLogSecrets()
 		_ = os.Remove(m.subscriptions.CachePath(id))
 		return struct{}{}, nil
 	})
@@ -317,7 +319,9 @@ func (m *Manager) mutateSubscription(ctx context.Context, prefix string, operati
 			if before.ActiveID != after.ActiveID {
 				candidate, prepareErr := m.prepareCatalogConfig(ctx, after)
 				if prepareErr != nil {
-					_ = m.subscriptions.Restore(before)
+					if restoreErr := m.subscriptions.Restore(before); restoreErr != nil {
+						return snapshot, degradedConfigError()
+					}
 					return snapshot, prepareErr
 				}
 				defer os.Remove(candidate.path)
@@ -332,11 +336,11 @@ func (m *Manager) mutateSubscription(ctx context.Context, prefix string, operati
 			m.syncSubscriptionState(&snapshot, after)
 			return snapshot, nil
 		})
+		m.refreshSubscriptionLogSecrets()
 		if err != nil {
 			m.markConfigDegraded(ctx, err)
 			return nil, err
 		}
-		m.refreshSubscriptionLogSecrets()
 		return findPublicProfile(m.subscriptions.Snapshot().Public(), id)
 	})
 	if err != nil {

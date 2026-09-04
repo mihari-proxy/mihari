@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -298,10 +299,10 @@ func TestLogging_RefreshSecretsKeepsToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(snapshots) != 1 || !reflect.DeepEqual(snapshots[0], []string{firstURL}) {
-		t.Fatalf("snapshots after add=%q", snapshots)
+		t.Fatalf("secret snapshots after add: count=%d", len(snapshots))
 	}
 	if got := redactor.String("control=" + controlToken); got != "control=***" {
-		t.Fatalf("control token lost after add refresh: %q", got)
+		t.Fatal("control token lost after add refresh")
 	}
 
 	secondURL := url + "?token=second-subscription-secret"
@@ -309,19 +310,87 @@ func TestLogging_RefreshSecretsKeepsToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(snapshots) != 2 || !reflect.DeepEqual(snapshots[1], []string{secondURL}) {
-		t.Fatalf("snapshots after set=%q", snapshots)
+		t.Fatalf("secret snapshots after set: count=%d", len(snapshots))
 	}
 	if got := redactor.String("control=" + controlToken); got != "control=***" {
-		t.Fatalf("control token lost after set refresh: %q", got)
+		t.Fatal("control token lost after set refresh")
 	}
 
 	if err := manager.RemoveSubscription(context.Background(), Operation{ID: "logging-remove", Source: "test"}, added.ID); err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshots) != 3 || len(snapshots[2]) != 0 {
-		t.Fatalf("snapshots after remove=%q", snapshots)
+	finalURLs := -1
+	if len(snapshots) > 0 {
+		finalURLs = len(snapshots[len(snapshots)-1])
+	}
+	if len(snapshots) != 3 || finalURLs != 0 {
+		t.Fatalf("secret snapshots after remove: count=%d final_urls=%d", len(snapshots), finalURLs)
 	}
 	if got := redactor.String("control=" + controlToken); got != "control=***" {
-		t.Fatalf("control token lost after remove refresh: %q", got)
+		t.Fatal("control token lost after remove refresh")
+	}
+}
+
+func TestSubscriptionSetRestoreFailureRefreshesSecretsAndDegrades(t *testing.T) {
+	manager, service, _, serverURL := subscriptionManager(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte("proxies: []\nrules: [MATCH,DIRECT]\n"))
+	}))
+	oldURL := serverURL + "?token=old-subscription-secret"
+	added, err := manager.AddSubscription(context.Background(), Operation{ID: "restore-fail-add", Source: "test"}, AddSubscriptionInput{Name: "Main", URL: oldURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRevision := manager.Snapshot().Revision
+	controlToken := "control-token-that-must-remain-redacted"
+	redactor := logging.NewRedactor()
+	var snapshots [][]string
+	manager.refreshLogSecrets = func(catalogURLs []string) {
+		copiedURLs := append([]string(nil), catalogURLs...)
+		snapshots = append(snapshots, copiedURLs)
+		redactor.ReplaceExact(append([]string{controlToken}, catalogURLs...))
+	}
+	manager.refreshSubscriptionLogSecrets()
+	if len(snapshots) != 1 || len(snapshots[0]) != 1 || snapshots[0][0] != oldURL {
+		t.Fatalf("initial secret snapshot count=%d", len(snapshots))
+	}
+	snapshots = nil
+
+	catalogPath := filepath.Join(filepath.Dir(filepath.Dir(service.CachePath(added.ID))), "catalog.yaml")
+	manager.validateConfig = func(context.Context, string) error {
+		if err := os.Remove(catalogPath); err != nil {
+			return err
+		}
+		if err := os.Mkdir(catalogPath, 0o700); err != nil {
+			return err
+		}
+		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "reject generated configuration"}
+	}
+	newURL := serverURL + "?token=new-subscription-secret"
+	op := Operation{ID: "restore-fail-set", Source: "test"}
+	_, err = manager.SetSubscription(context.Background(), op, added.ID, SetSubscriptionInput{URL: &newURL})
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "subscription state rollback failed" {
+		t.Fatalf("err code=%q message=%q", apiError.Code, apiError.Message)
+	}
+	if strings.Contains(err.Error(), "subscription-secret") || strings.Contains(err.Error(), "token=") {
+		t.Fatal("restore failure exposed a subscription secret")
+	}
+	current := service.Snapshot()
+	index := current.Index(added.ID)
+	if index < 0 || current.Profiles[index].URL != newURL {
+		t.Fatal("failed restore did not leave the actual catalog mutation observable")
+	}
+	if len(snapshots) != 1 || len(snapshots[0]) != 1 || snapshots[0][0] != newURL {
+		t.Fatalf("refreshed secret snapshot count=%d", len(snapshots))
+	}
+	if got := redactor.String("request=" + newURL); got != "request=***" {
+		t.Fatal("new subscription URL was not redacted")
+	}
+	snapshot := manager.Snapshot()
+	if snapshot.Revision != beforeRevision+1 || snapshot.Health != "degraded" || snapshot.Config.Status != "degraded" || snapshot.Config.LastError != "generated configuration rollback could not be confirmed" {
+		t.Fatalf("revision=%d health=%q config_status=%q config_error=%q", snapshot.Revision, snapshot.Health, snapshot.Config.Status, snapshot.Config.LastError)
+	}
+	if strings.Contains(snapshot.LastError, "subscription-secret") || strings.Contains(snapshot.Config.LastError, "subscription-secret") {
+		t.Fatal("degraded state exposed a subscription secret")
 	}
 }
