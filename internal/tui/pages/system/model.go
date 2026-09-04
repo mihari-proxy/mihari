@@ -694,6 +694,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		wasLoggingEdit := m.editID == rowLogMaxSize || m.editID == rowLogMaxFiles
 		m.ApplyLoggingSync(typed)
 		if !typed.Available && wasLoggingEdit {
+			m.clearLoggingOutcome(m.editID)
 			return m, m.cancelLoggingEdit()
 		}
 		return m, nil
@@ -2177,10 +2178,13 @@ func (m *Model) clearLoggingOutcome(rowID string) {
 	if m.outcomeRow != rowID {
 		return
 	}
+	detail := m.outcomeDetail
 	m.outcomeRow = ""
 	m.outcomeOK = false
 	m.outcomeDetail = ""
-	m.lastError = ""
+	if m.lastError == detail {
+		m.lastError = ""
+	}
 }
 
 func (m *Model) cancelLoggingEdit() tea.Cmd {

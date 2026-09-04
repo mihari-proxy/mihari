@@ -123,6 +123,42 @@ func TestModel_LoggingUnavailableSyncCancelsNumericEdit(t *testing.T) {
 	}
 }
 
+func TestModel_LoggingUnavailableSyncClearsNumericValidationOutcome(t *testing.T) {
+	model, _ := loggingModel("info", 4)
+	model.focusID = rowLogMaxSize
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	model.editInput.SetValue("101")
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if model.outcomeRow != rowLogMaxSize || model.outcomeDetail != ui.LoggingMaxSizeInvalid {
+		t.Fatalf("validation outcome row=%q detail=%q", model.outcomeRow, model.outcomeDetail)
+	}
+
+	updated, command := model.Update(ui.LoggingSyncMsg{Epoch: 7, Available: false})
+	model = updated.(*Model)
+	if command == nil || model.editID != "" || model.outcomeRow != "" || model.outcomeDetail != "" || model.lastError != "" {
+		t.Fatalf("unavailable sync command=%v edit=%q outcome=%q detail=%q error=%q", command != nil, model.editID, model.outcomeRow, model.outcomeDetail, model.lastError)
+	}
+	for _, id := range []string{rowLogLevel, rowLogMaxSize, rowLogMaxFiles, rowLogDirectory} {
+		if got := systemRowByID(model, id).value; got != ui.UnavailableTitle {
+			t.Fatalf("row %s=%q want Unavailable", id, got)
+		}
+	}
+	view := model.View()
+	if strings.Contains(view, ui.FailedLabel) || strings.Contains(view, ui.LoggingMaxSizeInvalid) {
+		t.Fatalf("unavailable view retained validation outcome:\n%s", view)
+	}
+
+	available := protocol.LoggingStatus{Schema: "mihari/v1", Revision: 5, Level: "warn", MaxSizeMB: 20, MaxFiles: 4, Dir: `C:\logs`}
+	updated, _ = model.Update(ui.LoggingSyncMsg{Epoch: 7, Status: available, Available: true})
+	model = updated.(*Model)
+	view = model.View()
+	if model.outcomeRow != "" || model.lastError != "" || strings.Contains(view, ui.FailedLabel) || strings.Contains(view, ui.LoggingMaxSizeInvalid) {
+		t.Fatalf("available view revived validation outcome: outcome=%q error=%q\n%s", model.outcomeRow, model.lastError, view)
+	}
+}
+
 func TestModel_LoggingLevelEnterCyclesAndPatchesRevisionZero(t *testing.T) {
 	cases := []struct {
 		level string
@@ -321,6 +357,49 @@ func TestModel_LoggingNumericEditReopenClearsValidationOutcome(t *testing.T) {
 	if model.editID != rowLogMaxSize || model.editInput.Value() != "10" || model.outcomeRow != "" || model.lastError != "" || !strings.Contains(model.View(), model.editInput.View()) {
 		t.Fatalf("reopen retained validation: edit=%q outcome=%q error=%q view=\n%s", model.editID, model.outcomeRow, model.lastError, model.View())
 	}
+}
+
+func TestModel_LoggingValidationCleanupPreservesNewerPageError(t *testing.T) {
+	newValidatedModel := func(t *testing.T) *Model {
+		t.Helper()
+		model, _ := loggingModel("info", 4)
+		model.focusID = rowLogMaxSize
+		updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		model = updated.(*Model)
+		model.editInput.SetValue("101")
+		updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		model = updated.(*Model)
+		if model.outcomeRow != rowLogMaxSize || model.outcomeDetail != ui.LoggingMaxSizeInvalid {
+			t.Fatalf("validation outcome row=%q detail=%q", model.outcomeRow, model.outcomeDetail)
+		}
+		model.lastError = ui.InvalidPortEndpoint
+		return model
+	}
+
+	assertPreserved := func(t *testing.T, model *Model) {
+		t.Helper()
+		view := model.View()
+		if model.outcomeRow != "" || model.outcomeDetail != "" || model.lastError != ui.InvalidPortEndpoint {
+			t.Fatalf("outcome=%q detail=%q error=%q", model.outcomeRow, model.outcomeDetail, model.lastError)
+		}
+		if !strings.Contains(view, ui.InvalidPortEndpoint) || strings.Contains(view, ui.LoggingMaxSizeInvalid) || strings.Contains(view, ui.FailedLabel) || !strings.Contains(view, model.editInput.View()) {
+			t.Fatalf("newer page error/input not preserved:\n%s", view)
+		}
+	}
+
+	t.Run("typing", func(t *testing.T) {
+		model := newValidatedModel(t)
+		updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+		assertPreserved(t, updated.(*Model))
+	})
+
+	t.Run("reopen", func(t *testing.T) {
+		model := newValidatedModel(t)
+		updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+		model = updated.(*Model)
+		updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		assertPreserved(t, updated.(*Model))
+	})
 }
 
 func TestModel_LoggingNumericEditEscapeCancelsWithoutPatch(t *testing.T) {
