@@ -459,25 +459,11 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 
 func daemonLoggingConfig(settings config.Settings) (logging.Config, error) {
 	effective := settings.EffectiveLogging()
-	var level slog.Level
-	switch effective.Level {
-	case "debug":
-		level = slog.LevelDebug
-	case "info":
-		level = slog.LevelInfo
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	default:
+	cfg, err := logging.ConfigFromFields(effective.Level, effective.MaxSizeMB, effective.MaxFiles)
+	if err != nil {
 		return logging.Config{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid logging configuration"}
 	}
-	if effective.MaxSizeMB < 1 || effective.MaxSizeMB > 100 || effective.MaxFiles < 1 || effective.MaxFiles > 10 {
-		return logging.Config{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid logging configuration"}
-	}
-	return logging.Config{
-		Level: level, MaxSizeBytes: effective.MaxSizeMB * 1024 * 1024, MaxFiles: int(effective.MaxFiles),
-	}, nil
+	return cfg, nil
 }
 
 func collectBaseLogSecrets(paths platform.Paths, token string, settings config.Settings) []string {

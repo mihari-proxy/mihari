@@ -31,6 +31,23 @@ type fakeSelfUpdater struct {
 	lastChannel  string
 }
 
+func TestModel_LoggingSyncStoresRootAcceptedStatus(t *testing.T) {
+	model := New(nil, nil)
+	status := protocol.LoggingStatus{Schema: "mihari/v1", Revision: 0, Level: "debug", MaxSizeMB: 100, MaxFiles: 10, Dir: `C:\logs`}
+	updated, command := model.Update(ui.LoggingSyncMsg{Epoch: 1, Status: status, Available: true})
+	model = updated.(*Model)
+	if command != nil {
+		t.Fatal("LoggingSyncMsg unexpectedly returned a command")
+	}
+	if model.loggingEpoch != 1 || !model.loggingAvailable || model.logging != status {
+		t.Fatalf("epoch=%d available=%v logging=%+v", model.loggingEpoch, model.loggingAvailable, model.logging)
+	}
+	model.SetLocalLoggingAvailable(false)
+	if model.localLoggingAvailable {
+		t.Fatal("local logging health was not stored")
+	}
+}
+
 func (f *fakeSelfUpdater) Check(_ context.Context, _, channel string) (update.CheckResult, error) {
 	f.checkCalls++
 	f.lastChannel = channel

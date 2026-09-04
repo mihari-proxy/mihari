@@ -329,14 +329,20 @@ type Model struct {
 	webGUI              protocol.WebGUIStatus
 	webGUILoaded        bool
 	webGUIErr           bool
-	serviceStatus       service.StatusKind
-	serviceLoaded       bool
-	elevated            bool
-	focusID             string
-	detail              *row
-	pending             bool
-	pendingRow          string // row id showing in-row braille progress
-	pendingNote         string // short status text next to the row (e.g. Installing)
+
+	logging               protocol.LoggingStatus
+	loggingEpoch          uint64
+	loggingAvailable      bool
+	localLoggingAvailable bool
+
+	serviceStatus service.StatusKind
+	serviceLoaded bool
+	elevated      bool
+	focusID       string
+	detail        *row
+	pending       bool
+	pendingRow    string // row id showing in-row braille progress
+	pendingNote   string // short status text next to the row (e.g. Installing)
 	// Sticky outcome after an action finishes (cleared on page leave or re-run).
 	outcomeRow       string
 	outcomeOK        bool   // true=Done (green), false=Failed (red)
@@ -457,6 +463,27 @@ func (m *Model) SetWebGUI(status protocol.WebGUIStatus) {
 	m.webGUI = status
 	m.webGUILoaded = true
 	m.ensureFocusVisible()
+}
+
+// ApplyLoggingSync stores root-gated daemon logging state.
+func (m *Model) ApplyLoggingSync(message ui.LoggingSyncMsg) {
+	if m == nil {
+		return
+	}
+	m.loggingEpoch = message.Epoch
+	m.loggingAvailable = message.Available
+	if message.Available {
+		m.logging = message.Status
+	} else {
+		m.logging = protocol.LoggingStatus{}
+	}
+}
+
+// SetLocalLoggingAvailable stores whether this TUI's local file writer opened.
+func (m *Model) SetLocalLoggingAvailable(available bool) {
+	if m != nil {
+		m.localLoggingAvailable = available
+	}
 }
 
 func (m *Model) ID() ui.PageID { return ui.PageSystem }
@@ -639,6 +666,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.ensureFocusVisible()
 	}()
 	switch typed := message.(type) {
+	case ui.LoggingSyncMsg:
+		m.ApplyLoggingSync(typed)
+		return m, nil
 	case selfCheckResultMsg:
 		if typed.generation != m.selfCheckGeneration {
 			return m, nil

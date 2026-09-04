@@ -21,6 +21,7 @@ const (
 	EventRules         EventKind = "rules"
 	EventRuleProviders EventKind = "rule-providers"
 	EventWebGUI        EventKind = "web-gui"
+	EventLogging       EventKind = "logging"
 	EventTraffic       EventKind = "traffic"
 	EventMemory        EventKind = "memory"
 	EventLog           EventKind = "log"
@@ -42,10 +43,12 @@ type Event struct {
 	Rules         protocol.RuleList
 	RuleProviders protocol.RuleProviderList
 	WebGUI        protocol.WebGUIStatus
+	Logging       protocol.LoggingStatus
 	Traffic       protocol.TrafficSample
 	Memory        protocol.MemorySample
 	Log           protocol.LogEntry
 	Connections   protocol.ConnectionList
+	Epoch         uint64 // logging synchronization epoch produced only by Session
 	Err           error
 }
 
@@ -72,6 +75,11 @@ type Session struct {
 	ordered chan Event
 	traffic chan Event
 	memory  chan Event
+
+	loggingEpoch           uint64
+	loggingRevision        *uint64
+	loggingCapability      bool
+	loggingCapabilityKnown bool
 }
 
 func New(client Client, options Options) *Session {
@@ -92,6 +100,7 @@ func New(client Client, options Options) *Session {
 		done: make(chan struct{}), events: make(chan Event, options.EventBufferSize),
 		control: make(chan Event, 16), ordered: make(chan Event, options.OrderedQueueSize),
 		traffic: make(chan Event, 1), memory: make(chan Event, 1),
+		loggingEpoch: 1,
 	}
 }
 
@@ -144,19 +153,16 @@ func (s *Session) supervise(ctx context.Context) {
 		status, err := s.client.Status(ctx)
 		if err != nil {
 			attempt++
-			if !putOrdered(ctx, s.control, Event{Kind: EventReconnecting, Attempt: attempt, Err: err}) || !waitBackoff(ctx, s.options.Backoff(attempt)) {
+			if !s.putReconnecting(ctx, attempt, err) || !waitBackoff(ctx, s.options.Backoff(attempt)) {
 				return
 			}
 			continue
 		}
 		attempt = 0
-		if !putOrdered(ctx, s.control, Event{Kind: EventStatus, Status: status}) {
-			return
-		}
 		// Status is the daemon transport health boundary. Capability snapshots
 		// backed by mihomo may fail while its controller starts or restarts; keep
 		// the daemon connected and retry those snapshots during supervision.
-		_ = s.poll(ctx, status)
+		_ = s.pollStatus(ctx, status)
 		if !putOrdered(ctx, s.control, Event{Kind: EventConnected}) {
 			return
 		}
@@ -165,7 +171,7 @@ func (s *Session) supervise(ctx context.Context) {
 				return
 			}
 			attempt++
-			if !putOrdered(ctx, s.control, Event{Kind: EventReconnecting, Attempt: attempt, Err: err}) || !waitBackoff(ctx, s.options.Backoff(attempt)) {
+			if !s.putReconnecting(ctx, attempt, err) || !waitBackoff(ctx, s.options.Backoff(attempt)) {
 				return
 			}
 		}
@@ -176,6 +182,12 @@ func (s *Session) supervise(ctx context.Context) {
 // as ordered events. It returns the first error so callers can retain the last
 // observed snapshot and retry without changing daemon transport state.
 func (s *Session) poll(ctx context.Context, status protocol.Status) error {
+	err := s.pollSnapshots(ctx, status)
+	s.pollLogging(ctx, status)
+	return err
+}
+
+func (s *Session) pollSnapshots(ctx context.Context, status protocol.Status) error {
 	if slices.Contains(status.Capabilities, protocol.CapabilityCore) {
 		coreStatus, err := s.client.Core(ctx)
 		if err != nil {
@@ -242,6 +254,57 @@ func (s *Session) poll(ctx context.Context, status protocol.Status) error {
 	return nil
 }
 
+func (s *Session) pollStatus(ctx context.Context, status protocol.Status) error {
+	if !s.putStatus(ctx, status) {
+		return ctx.Err()
+	}
+	return s.poll(ctx, status)
+}
+
+func (s *Session) putStatus(ctx context.Context, status protocol.Status) bool {
+	s.observeLoggingCapability(status)
+	return putOrdered(ctx, s.control, Event{Kind: EventStatus, Status: status, Epoch: s.loggingEpoch})
+}
+
+func (s *Session) observeLoggingCapability(status protocol.Status) {
+	present := slices.Contains(status.Capabilities, protocol.CapabilityLogging)
+	if s.loggingCapabilityKnown && s.loggingCapability && !present {
+		s.loggingEpoch++
+		s.loggingRevision = nil
+	}
+	s.loggingCapability = present
+	s.loggingCapabilityKnown = true
+}
+
+func (s *Session) pollLogging(ctx context.Context, status protocol.Status) {
+	if !s.loggingCapability {
+		return
+	}
+	if s.loggingRevision != nil && *s.loggingRevision >= status.Revision {
+		return
+	}
+	observed, err := s.client.Logging(ctx)
+	if err != nil {
+		return
+	}
+	epoch := s.loggingEpoch
+	if !putOrdered(ctx, s.control, Event{Kind: EventLogging, Logging: observed, Epoch: epoch}) {
+		return
+	}
+	if epoch == s.loggingEpoch {
+		revision := observed.Revision
+		s.loggingRevision = &revision
+	}
+}
+
+func (s *Session) putReconnecting(ctx context.Context, attempt int, err error) bool {
+	s.loggingEpoch++
+	s.loggingRevision = nil
+	s.loggingCapability = false
+	s.loggingCapabilityKnown = false
+	return putOrdered(ctx, s.control, Event{Kind: EventReconnecting, Attempt: attempt, Epoch: s.loggingEpoch, Err: err})
+}
+
 // superviseStreams keeps the push streams resident for the whole daemon
 // session while re-polling state snapshots on PollInterval. A controller
 // stream may end while mihomo restarts even though the daemon's local control
@@ -282,7 +345,7 @@ func (s *Session) superviseStreams(ctx context.Context) error {
 			if statusErr != nil {
 				return errors.Join(err, statusErr)
 			}
-			if !putOrdered(streamCtx, s.control, Event{Kind: EventStatus, Status: status}) {
+			if !s.putStatus(streamCtx, status) {
 				return streamCtx.Err()
 			}
 			streamAttempt++
@@ -300,13 +363,10 @@ func (s *Session) superviseStreams(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			if !putOrdered(streamCtx, s.control, Event{Kind: EventStatus, Status: status}) {
-				return streamCtx.Err()
-			}
 			// Status is the daemon transport health boundary. A snapshot error
 			// after it succeeds may only mean the restarted controller is not
 			// ready yet and must not mark the daemon stale.
-			_ = s.poll(streamCtx, status)
+			_ = s.pollStatus(streamCtx, status)
 		}
 	}
 }

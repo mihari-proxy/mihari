@@ -247,6 +247,166 @@ func TestSession_LoadsTUIPreferencesBeforeConnected(t *testing.T) {
 	waitForEvent(t, events, EventConnected)
 }
 
+func TestSession_LoggingInitialFetchAndSameRevisionDeduplicates(t *testing.T) {
+	fake := newFakeClient()
+	fake.logging = protocol.LoggingStatus{Schema: "mihari/v1", Revision: 0, Level: "info", MaxSizeMB: 10, MaxFiles: 3}
+	s := New(fake, Options{})
+	status := protocol.Status{Schema: "mihari/v1", Revision: 0, Capabilities: []string{protocol.CapabilityLogging}}
+
+	if err := s.pollStatus(context.Background(), status); err != nil {
+		t.Fatal(err)
+	}
+	first := <-s.control
+	second := <-s.control
+	if first.Kind != EventStatus || second.Kind != EventLogging {
+		t.Fatalf("event order=%s,%s want status,logging", first.Kind, second.Kind)
+	}
+	if first.Epoch != 1 || second.Epoch != 1 || second.Logging.Revision != 0 {
+		t.Fatalf("status=%+v logging=%+v", first, second)
+	}
+
+	if err := s.pollStatus(context.Background(), status); err != nil {
+		t.Fatal(err)
+	}
+	if event := <-s.control; event.Kind != EventStatus {
+		t.Fatalf("same revision event=%s want status", event.Kind)
+	}
+	select {
+	case event := <-s.control:
+		t.Fatalf("same revision unexpectedly emitted %s", event.Kind)
+	default:
+	}
+	if got := fake.loggingCallCount(); got != 1 {
+		t.Fatalf("logging calls=%d want 1", got)
+	}
+}
+
+func TestSession_LoggingRevisionChangeKeepsEpochAndOrdersStatusFirst(t *testing.T) {
+	fake := newFakeClient()
+	fake.logging = protocol.LoggingStatus{Schema: "mihari/v1", Revision: 6, Level: "info", MaxSizeMB: 10, MaxFiles: 3}
+	s := New(fake, Options{})
+	initial := protocol.Status{Schema: "mihari/v1", Revision: 6, Capabilities: []string{protocol.CapabilityLogging}}
+	if err := s.pollStatus(context.Background(), initial); err != nil {
+		t.Fatal(err)
+	}
+	<-s.control
+	<-s.control
+
+	fake.setLogging(protocol.LoggingStatus{Schema: "mihari/v1", Revision: 7, Level: "debug", MaxSizeMB: 20, MaxFiles: 5})
+	changed := initial
+	changed.Revision = 7
+	if err := s.pollStatus(context.Background(), changed); err != nil {
+		t.Fatal(err)
+	}
+	statusEvent := <-s.control
+	loggingEvent := <-s.control
+	if statusEvent.Kind != EventStatus || loggingEvent.Kind != EventLogging {
+		t.Fatalf("event order=%s,%s", statusEvent.Kind, loggingEvent.Kind)
+	}
+	if statusEvent.Epoch != 1 || loggingEvent.Epoch != 1 {
+		t.Fatalf("revision change advanced epoch: status=%d logging=%d", statusEvent.Epoch, loggingEvent.Epoch)
+	}
+}
+
+func TestSession_LoggingReconnectAdvancesEpochAndRefetches(t *testing.T) {
+	fake := newFakeClient()
+	fake.statusFailures = 1
+	fake.status = protocol.Status{Schema: "mihari/v1", Revision: 3, Capabilities: []string{protocol.CapabilityLogging}}
+	fake.logging = protocol.LoggingStatus{Schema: "mihari/v1", Revision: 3, Level: "info", MaxSizeMB: 10, MaxFiles: 3}
+	s := New(fake, Options{Backoff: func(int) time.Duration { return 0 }})
+	events := s.Start(context.Background())
+	defer s.Close()
+
+	reconnecting := waitForEvent(t, events, EventReconnecting)
+	statusEvent := waitForEvent(t, events, EventStatus)
+	loggingEvent := waitForEvent(t, events, EventLogging)
+	if reconnecting.Epoch != 2 || statusEvent.Epoch != 2 || loggingEvent.Epoch != 2 {
+		t.Fatalf("epochs reconnect=%d status=%d logging=%d", reconnecting.Epoch, statusEvent.Epoch, loggingEvent.Epoch)
+	}
+}
+
+func TestSession_LoggingCapabilityTransitionsResynchronize(t *testing.T) {
+	fake := newFakeClient()
+	fake.logging = protocol.LoggingStatus{Schema: "mihari/v1", Revision: 9, Level: "warn", MaxSizeMB: 12, MaxFiles: 6}
+	s := New(fake, Options{})
+	absent := protocol.Status{Schema: "mihari/v1", Revision: 9}
+	present := absent
+	present.Capabilities = []string{protocol.CapabilityLogging}
+
+	if err := s.pollStatus(context.Background(), absent); err != nil {
+		t.Fatal(err)
+	}
+	if event := <-s.control; event.Kind != EventStatus || event.Epoch != 1 {
+		t.Fatalf("initial absent event=%+v", event)
+	}
+	if err := s.pollStatus(context.Background(), present); err != nil {
+		t.Fatal(err)
+	}
+	if event := <-s.control; event.Kind != EventStatus || event.Epoch != 1 {
+		t.Fatalf("appearance status=%+v", event)
+	}
+	if event := <-s.control; event.Kind != EventLogging || event.Epoch != 1 {
+		t.Fatalf("appearance logging=%+v", event)
+	}
+	if err := s.pollStatus(context.Background(), absent); err != nil {
+		t.Fatal(err)
+	}
+	if event := <-s.control; event.Kind != EventStatus || event.Epoch != 2 {
+		t.Fatalf("disappearance status=%+v", event)
+	}
+	if err := s.pollStatus(context.Background(), present); err != nil {
+		t.Fatal(err)
+	}
+	if event := <-s.control; event.Kind != EventStatus || event.Epoch != 2 {
+		t.Fatalf("reappearance status=%+v", event)
+	}
+	if event := <-s.control; event.Kind != EventLogging || event.Epoch != 2 {
+		t.Fatalf("reappearance logging=%+v", event)
+	}
+	if got := fake.loggingCallCount(); got != 2 {
+		t.Fatalf("logging calls=%d want 2", got)
+	}
+}
+
+func TestSession_LoggingFailureRetriesWithoutShortCircuitingSnapshots(t *testing.T) {
+	fake := newFakeClient()
+	fake.loggingFailures = 1
+	fake.logging = protocol.LoggingStatus{Schema: "mihari/v1", Revision: 4, Level: "info", MaxSizeMB: 10, MaxFiles: 3}
+	s := New(fake, Options{})
+	status := protocol.Status{Schema: "mihari/v1", Revision: 4, Capabilities: []string{protocol.CapabilityCore, protocol.CapabilityLogging}}
+
+	if err := s.pollStatus(context.Background(), status); err != nil {
+		t.Fatalf("logging failure escaped poll: %v", err)
+	}
+	if first, second := <-s.control, <-s.control; first.Kind != EventStatus || second.Kind != EventCore {
+		t.Fatalf("events=%s,%s want status,core", first.Kind, second.Kind)
+	}
+	if err := s.pollStatus(context.Background(), status); err != nil {
+		t.Fatal(err)
+	}
+	if first, second, third := <-s.control, <-s.control, <-s.control; first.Kind != EventStatus || second.Kind != EventCore || third.Kind != EventLogging {
+		t.Fatalf("retry events=%s,%s,%s", first.Kind, second.Kind, third.Kind)
+	}
+	if got := fake.loggingCallCount(); got != 2 {
+		t.Fatalf("logging calls=%d want 2", got)
+	}
+}
+
+func TestSession_CoreFailureDoesNotSkipLogging(t *testing.T) {
+	fake := newFakeClient()
+	fake.coreFailures = 1
+	fake.logging = protocol.LoggingStatus{Schema: "mihari/v1", Revision: 5, Level: "error", MaxSizeMB: 8, MaxFiles: 2}
+	s := New(fake, Options{})
+	status := protocol.Status{Schema: "mihari/v1", Revision: 5, Capabilities: []string{protocol.CapabilityCore, protocol.CapabilityLogging}}
+
+	if err := s.pollStatus(context.Background(), status); err == nil {
+		t.Fatal("core failure was not reported")
+	}
+	if first, second := <-s.control, <-s.control; first.Kind != EventStatus || second.Kind != EventLogging {
+		t.Fatalf("events=%s,%s want status,logging", first.Kind, second.Kind)
+	}
+}
+
 func TestPutLatestCoalescesTraffic(t *testing.T) {
 	slot := make(chan Event, 1)
 	ctx := context.Background()
@@ -333,6 +493,8 @@ type fakeClient struct {
 	statusCalls       int
 	coreFailures      int
 	coreCalls         int
+	loggingFailures   int
+	loggingCalls      int
 	streamCalls       map[string]int
 	started           chan string
 	streamBreak       chan struct{}
@@ -340,6 +502,7 @@ type fakeClient struct {
 	emitOnReconnect   bool
 	status            protocol.Status
 	core              protocol.CoreStatus
+	logging           protocol.LoggingStatus
 	preferences       protocol.TUIPreferences
 }
 
@@ -378,6 +541,17 @@ func (f *fakeClient) Core(context.Context) (protocol.CoreStatus, error) {
 		return f.core, nil
 	}
 	return protocol.CoreStatus{Schema: "mihari/v1", Status: "running"}, nil
+}
+
+func (f *fakeClient) Logging(context.Context) (protocol.LoggingStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.loggingCalls++
+	if f.loggingFailures > 0 {
+		f.loggingFailures--
+		return protocol.LoggingStatus{}, errors.New("logging unavailable")
+	}
+	return f.logging, nil
 }
 
 func (f *fakeClient) Subscriptions(context.Context) (protocol.SubscriptionList, error) {
@@ -458,6 +632,18 @@ func (f *fakeClient) statusCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.statusCalls
+}
+
+func (f *fakeClient) loggingCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.loggingCalls
+}
+
+func (f *fakeClient) setLogging(status protocol.LoggingStatus) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.logging = status
 }
 
 func (f *fakeClient) setCoreChannel(channel string) {

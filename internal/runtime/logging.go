@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"log/slog"
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -123,34 +122,19 @@ func validateLoggingUpdate(operation Operation, update LoggingUpdate) error {
 }
 
 func validLoggingLevel(level string) bool {
-	switch level {
-	case "debug", "info", "warn", "error":
-		return true
-	default:
-		return false
-	}
+	_, err := logging.ParseLevel(level)
+	return err == nil
 }
 
 func loggingConfig(settings config.LoggingSettings) (logging.Config, error) {
-	var level slog.Level
-	switch settings.Level {
-	case "debug":
-		level = slog.LevelDebug
-	case "info":
-		level = slog.LevelInfo
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	default:
+	if _, err := logging.ParseLevel(settings.Level); err != nil {
 		return logging.Config{}, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid logging level"}
 	}
-	if settings.MaxSizeMB < 1 || settings.MaxSizeMB > 100 || settings.MaxFiles < 1 || settings.MaxFiles > 10 {
+	cfg, err := logging.ConfigFromFields(settings.Level, settings.MaxSizeMB, settings.MaxFiles)
+	if err != nil {
 		return logging.Config{}, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid logging limits"}
 	}
-	return logging.Config{
-		Level: level, MaxSizeBytes: settings.MaxSizeMB * 1024 * 1024, MaxFiles: int(settings.MaxFiles),
-	}, nil
+	return cfg, nil
 }
 
 func (m *Manager) loggingStatusLocked(settings config.LoggingSettings, revision uint64) protocol.LoggingStatus {
