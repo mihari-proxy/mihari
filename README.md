@@ -166,7 +166,7 @@ Mihari writes newline-delimited JSON (JSONL) to three files under the data root:
 | TUI (shared by all TUI instances) | `logs/mihari-tui.log` |
 | Captured mihomo output | `logs/mihomo.log` |
 
-The default file-log level is `info`, each active file rotates at 10 MiB, and three files (the active file plus up to two archives) are retained. Captured mihomo stdout is recorded as `INFO` and stderr as `WARN`; these capture levels do not infer the severity encoded in mihomo's own message text.
+Daemon and captured-mihomo file logs use the default `info` level, rotate each active file at 10 MiB, and retain three files (the active file plus up to two archives). The TUI starts with its bootstrap configuration—`debug`, 100 MiB, and 10 files—so it can log before daemon settings are available; it remains on this bootstrap configuration until a later control-plane synchronization. Captured mihomo stdout is recorded as `INFO` and stderr as `WARN`; these capture levels do not infer the severity encoded in mihomo's own message text.
 
 Redaction is best effort only. Treat all log files as sensitive material and share them only after reviewing their contents. This release does not yet provide a logging configuration UI or log export.
 
