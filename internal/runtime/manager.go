@@ -681,10 +681,9 @@ func (m *Manager) withControllerMutation(ctx context.Context, operation Operatio
 		if err := mutation(); err != nil {
 			return err
 		}
-		_, err := m.updateStateLocked(ctx, state.CommandMeta{
-			ID:         operation.ID,
-			Source:     operation.Source,
-			IfRevision: operation.IfRevision,
+		_, err := m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{
+			ID:     operation.ID,
+			Source: operation.Source,
 		}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			return snapshot, nil
 		})

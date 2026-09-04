@@ -744,7 +744,62 @@ func TestControllerMutationsCommitRevisionAndPropagateErrors(t *testing.T) {
 	}
 }
 
-func TestControllerMutationsRunControllerIOOutsideCoordinatorLock(t *testing.T) {
+func TestControllerMutationsSettleAfterSuccessfulCallCancelsRequest(t *testing.T) {
+	tests := []struct {
+		name   string
+		kind   string
+		invoke func(context.Context, *Manager, Operation) error
+	}{
+		{
+			name: "select proxy",
+			kind: "select",
+			invoke: func(ctx context.Context, manager *Manager, operation Operation) error {
+				return manager.SelectProxy(ctx, operation, "GLOBAL", "DIRECT")
+			},
+		},
+		{
+			name: "close connection",
+			kind: "close",
+			invoke: func(ctx context.Context, manager *Manager, operation Operation) error {
+				return manager.CloseConnection(ctx, operation, "connection-1")
+			},
+		},
+		{
+			name: "close all connections",
+			kind: "close-all",
+			invoke: func(ctx context.Context, manager *Manager, operation Operation) error {
+				return manager.CloseAllConnections(ctx, operation)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			controller := &fakeController{afterCall: cancel}
+			manager := newTestManager(Options{Controller: controller})
+			operation := Operation{ID: "cancel-after-success", Source: "test"}
+
+			if err := test.invoke(ctx, manager, operation); err != nil {
+				t.Fatalf("first call: %v", err)
+			}
+			if revision := manager.Snapshot().Revision; revision != 1 {
+				t.Fatalf("revision after first call=%d want=1", revision)
+			}
+			if err := test.invoke(context.Background(), manager, operation); err != nil {
+				t.Fatalf("cached retry: %v", err)
+			}
+			if calls := controller.callsFor(test.kind); len(calls) != 1 {
+				t.Fatalf("%s calls=%d want=1", test.kind, len(calls))
+			}
+			if controller.callsFor(test.kind)[0].ctx != ctx {
+				t.Fatal("controller call did not receive the original request context")
+			}
+		})
+	}
+}
+
+func TestControllerMutationsSettleAfterConcurrentCoordinatorRevision(t *testing.T) {
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
 	controller := &fakeController{entered: entered, release: release}
@@ -788,12 +843,11 @@ func TestControllerMutationsRunControllerIOOutsideCoordinatorLock(t *testing.T) 
 
 	close(release)
 	err := <-mutationDone
-	var apiError protocol.APIError
-	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeRevisionConflict {
-		t.Fatalf("err=%v want revision conflict", err)
+	if err != nil {
+		t.Fatalf("controller mutation: %v", err)
 	}
-	if revision := manager.Snapshot().Revision; revision != 1 {
-		t.Fatalf("revision=%d want=1", revision)
+	if revision := manager.Snapshot().Revision; revision != 2 {
+		t.Fatalf("revision=%d want=2", revision)
 	}
 }
 
@@ -1581,6 +1635,7 @@ type fakeController struct {
 	selectProxyErr         error
 	closeConnectionErr     error
 	closeAllConnectionsErr error
+	afterCall              func()
 	updateRuleProvider     func(context.Context, string) error
 	configs                map[string]any
 	configsFunc            func(context.Context) (map[string]any, error)
@@ -1612,6 +1667,9 @@ func (c *fakeController) recordCall(kind string, ctx context.Context, args ...st
 	}
 	if c.release != nil {
 		<-c.release
+	}
+	if c.afterCall != nil {
+		c.afterCall()
 	}
 }
 
