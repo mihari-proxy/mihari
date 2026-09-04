@@ -156,6 +156,20 @@ All release binaries are CGO-free.
 
 Settings, control token, runtime config, core binary, subscriptions, GeoIP, panel assets, logs, and staging all live under the data root.
 
+## File logs
+
+Mihari writes newline-delimited JSON (JSONL) to three files under the data root:
+
+| Source | Path |
+| --- | --- |
+| Mihari daemon | `logs/mihari-daemon.log` |
+| TUI (shared by all TUI instances) | `logs/mihari-tui.log` |
+| Captured mihomo output | `logs/mihomo.log` |
+
+The default file-log level is `info`, each active file rotates at 10 MiB, and three files (the active file plus up to two archives) are retained. Captured mihomo stdout is recorded as `INFO` and stderr as `WARN`; these capture levels do not infer the severity encoded in mihomo's own message text.
+
+Redaction is best effort only. Treat all log files as sensitive material and share them only after reviewing their contents. This release does not yet provide a logging configuration UI or log export.
+
 ## Development
 
 ```console
