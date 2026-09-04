@@ -125,6 +125,20 @@ func (c *Client) UpdateGeoIP(ctx context.Context, request protocol.MutationReque
 	return result, err
 }
 
+// Logging returns the daemon-owned effective file logging configuration.
+func (c *Client) Logging(ctx context.Context) (protocol.LoggingStatus, error) {
+	var result protocol.LoggingStatus
+	err := c.doRuntime(ctx, http.MethodGet, "/v1/logging", nil, &result)
+	return result, err
+}
+
+// UpdateLogging applies a partial daemon-owned file logging configuration update.
+func (c *Client) UpdateLogging(ctx context.Context, request protocol.LoggingUpdateRequest) (protocol.LoggingStatus, error) {
+	var result protocol.LoggingStatus
+	err := c.doRuntime(ctx, http.MethodPatch, "/v1/logging", request, &result)
+	return result, err
+}
+
 // SystemProxy returns desired intent and live OS system-proxy observation.
 func (c *Client) SystemProxy(ctx context.Context) (protocol.SystemProxyStatus, error) {
 	var result protocol.SystemProxyStatus
