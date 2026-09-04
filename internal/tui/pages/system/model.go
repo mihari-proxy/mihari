@@ -693,9 +693,13 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	case ui.LoggingSyncMsg:
 		wasLoggingEdit := m.editID == rowLogMaxSize || m.editID == rowLogMaxFiles
 		m.ApplyLoggingSync(typed)
-		if !typed.Available && wasLoggingEdit {
-			m.clearLoggingOutcome(m.editID)
-			return m, m.cancelLoggingEdit()
+		if !typed.Available {
+			if isLoggingRow(m.outcomeRow) {
+				m.clearLoggingOutcome(m.outcomeRow)
+			}
+			if wasLoggingEdit {
+				return m, m.cancelLoggingEdit()
+			}
 		}
 		return m, nil
 	case ui.LoggingObservedMsg:
@@ -2184,6 +2188,15 @@ func (m *Model) clearLoggingOutcome(rowID string) {
 	m.outcomeDetail = ""
 	if m.lastError == detail {
 		m.lastError = ""
+	}
+}
+
+func isLoggingRow(rowID string) bool {
+	switch rowID {
+	case rowLogLevel, rowLogMaxSize, rowLogMaxFiles, rowLogDirectory:
+		return true
+	default:
+		return false
 	}
 }
 

@@ -159,6 +159,116 @@ func TestModel_LoggingUnavailableSyncClearsNumericValidationOutcome(t *testing.T
 	}
 }
 
+func TestModel_LoggingUnavailableSyncClearsValidationOutcomeAfterEditCancelled(t *testing.T) {
+	model, _ := loggingModel("info", 4)
+	model.focusID = rowLogMaxSize
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	model.editInput.SetValue("101")
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = updated.(*Model)
+	if model.editID != "" || model.outcomeRow != rowLogMaxSize || model.outcomeDetail != ui.LoggingMaxSizeInvalid {
+		t.Fatalf("cancelled validation edit=%q outcome=%q detail=%q", model.editID, model.outcomeRow, model.outcomeDetail)
+	}
+
+	updated, _ = model.Update(ui.LoggingSyncMsg{Epoch: 8, Available: false})
+	model = updated.(*Model)
+	assertLoggingUnavailableWithoutOutcome(t, model, ui.LoggingMaxSizeInvalid)
+
+	available := protocol.LoggingStatus{Schema: "mihari/v1", Revision: 5, Level: "warn", MaxSizeMB: 20, MaxFiles: 4, Dir: `C:\logs`}
+	updated, _ = model.Update(ui.LoggingSyncMsg{Epoch: 8, Status: available, Available: true})
+	model = updated.(*Model)
+	view := model.View()
+	if model.outcomeRow != "" || model.lastError != "" || strings.Contains(view, ui.FailedLabel) || strings.Contains(view, ui.LoggingMaxSizeInvalid) {
+		t.Fatalf("available view revived cancelled validation: outcome=%q error=%q\n%s", model.outcomeRow, model.lastError, view)
+	}
+}
+
+func TestModel_LoggingUnavailableSyncClearsLevelPatchFailure(t *testing.T) {
+	model, client := loggingModel("info", 4)
+	client.updateLoggingErr = errors.New("logging write failed")
+	model.focusID = rowLogLevel
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, _ := model.Update(firstSystemPageResult(t, command))
+	model = updated.(*Model)
+	if model.outcomeRow != rowLogLevel || model.outcomeDetail != ui.LoggingUpdateFailed {
+		t.Fatalf("PATCH outcome=%q detail=%q", model.outcomeRow, model.outcomeDetail)
+	}
+
+	updated, _ = model.Update(ui.LoggingSyncMsg{Epoch: 8, Available: false})
+	model = updated.(*Model)
+	assertLoggingUnavailableWithoutOutcome(t, model, ui.LoggingUpdateFailed)
+
+	available := protocol.LoggingStatus{Schema: "mihari/v1", Revision: 5, Level: "error", MaxSizeMB: 20, MaxFiles: 4, Dir: `C:\logs`}
+	updated, _ = model.Update(ui.LoggingSyncMsg{Epoch: 8, Status: available, Available: true})
+	model = updated.(*Model)
+	view := model.View()
+	if model.outcomeRow != "" || model.lastError != "" || strings.Contains(view, ui.FailedLabel) || strings.Contains(view, ui.LoggingUpdateFailed) {
+		t.Fatalf("available view revived PATCH failure: outcome=%q error=%q\n%s", model.outcomeRow, model.lastError, view)
+	}
+}
+
+func TestModel_LoggingUnavailableSyncClearsEveryLoggingRowOutcome(t *testing.T) {
+	for _, rowID := range []string{rowLogLevel, rowLogMaxSize, rowLogMaxFiles, rowLogDirectory} {
+		t.Run(rowID, func(t *testing.T) {
+			model, _ := loggingModel("info", 4)
+			model.markRowOutcome(rowID, false, "old logging failure")
+			updated, _ := model.Update(ui.LoggingSyncMsg{Epoch: 8, Available: false})
+			assertLoggingUnavailableWithoutOutcome(t, updated.(*Model), "old logging failure")
+		})
+	}
+}
+
+func TestModel_LoggingUnavailableSyncPreservesUnrelatedOutcomeAndError(t *testing.T) {
+	cases := []struct {
+		name   string
+		rowID  string
+		detail string
+	}{
+		{name: "ports", rowID: rowMixed, detail: ui.PortsApplyFailed},
+		{name: "service", rowID: rowServiceStatus, detail: ui.ServiceActionFailed},
+		{name: "onboarding", rowID: rowRunSetup, detail: "onboarding failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			model, _ := loggingModel("info", 4)
+			model.markRowOutcome(tc.rowID, false, tc.detail)
+			updated, _ := model.Update(ui.LoggingSyncMsg{Epoch: 8, Available: false})
+			model = updated.(*Model)
+			if model.outcomeRow != tc.rowID || model.outcomeDetail != tc.detail || model.lastError != tc.detail {
+				t.Fatalf("outcome=%q detail=%q error=%q", model.outcomeRow, model.outcomeDetail, model.lastError)
+			}
+			for _, id := range []string{rowLogLevel, rowLogMaxSize, rowLogMaxFiles, rowLogDirectory} {
+				if got := systemRowByID(model, id).value; got != ui.UnavailableTitle {
+					t.Fatalf("logging row %s=%q want Unavailable", id, got)
+				}
+			}
+			view := model.View()
+			if !strings.Contains(view, ui.FailedLabel) || !strings.Contains(view, tc.detail) {
+				t.Fatalf("unrelated outcome disappeared:\n%s", view)
+			}
+		})
+	}
+}
+
+func assertLoggingUnavailableWithoutOutcome(t *testing.T, model *Model, oldDetail string) {
+	t.Helper()
+	if model.outcomeRow != "" || model.outcomeDetail != "" || model.lastError != "" {
+		t.Fatalf("outcome=%q detail=%q error=%q", model.outcomeRow, model.outcomeDetail, model.lastError)
+	}
+	for _, id := range []string{rowLogLevel, rowLogMaxSize, rowLogMaxFiles, rowLogDirectory} {
+		if got := systemRowByID(model, id).value; got != ui.UnavailableTitle {
+			t.Fatalf("logging row %s=%q want Unavailable", id, got)
+		}
+	}
+	view := model.View()
+	if strings.Contains(view, ui.FailedLabel) || strings.Contains(view, oldDetail) {
+		t.Fatalf("unavailable view retained Logging outcome:\n%s", view)
+	}
+}
+
 func TestModel_LoggingLevelEnterCyclesAndPatchesRevisionZero(t *testing.T) {
 	cases := []struct {
 		level string
