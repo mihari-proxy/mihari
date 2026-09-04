@@ -391,7 +391,10 @@ func TestRunDaemon_EffectiveLoggingOnRestart(t *testing.T) {
 	writeSettings(t, paths, settings)
 
 	var daemonLogger *slog.Logger
-	afterDaemonLoggingOpen = func(logger *slog.Logger) { daemonLogger = logger }
+	afterDaemonLoggingOpen = func(logger *slog.Logger) {
+		daemonLogger = logger
+		logger.Debug("custom logging is active")
+	}
 	t.Cleanup(func() { afterDaemonLoggingOpen = nil })
 	productionBuild := buildDaemonRuntime
 	var assembly *app.RuntimeAssembly
@@ -453,7 +456,10 @@ func TestRunDaemon_EffectiveLoggingOnRestart(t *testing.T) {
 	if daemonLogger == nil {
 		t.Fatal("daemon logger did not remain available after Ready")
 	}
-	daemonLogger.Debug("custom logging is active")
+	lines := strings.Split(strings.TrimSpace(readFileString(t, paths.DaemonLog)), "\n")
+	if len(lines) == 0 || !strings.Contains(lines[0], `"level":"DEBUG"`) || !strings.Contains(lines[0], `"msg":"custom logging is active"`) {
+		t.Fatalf("first daemon JSONL record=%q", lines)
+	}
 	cancel()
 	select {
 	case runErr := <-done:
@@ -463,10 +469,6 @@ func TestRunDaemon_EffectiveLoggingOnRestart(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("runDaemonWith did not stop after cancellation")
-	}
-	lines := strings.Split(strings.TrimSpace(readFileString(t, paths.DaemonLog)), "\n")
-	if len(lines) == 0 || !strings.Contains(lines[len(lines)-1], `"level":"DEBUG"`) || !strings.Contains(lines[len(lines)-1], `"msg":"custom logging is active"`) {
-		t.Fatalf("last daemon JSONL record=%q", lines)
 	}
 }
 
