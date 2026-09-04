@@ -40,6 +40,8 @@ type RuntimeBuildOptions struct {
 	InitialSetupRequired bool
 	SettingsPath         string
 	ServiceStatus        func() (string, error)
+	Logging              runtimeapi.LoggingRuntime
+	RefreshLogSecrets    func(catalogURLs []string)
 	MihomoStdout         io.Writer
 	MihomoStderr         io.Writer
 	SaveOnboardingState  func(string, onboarding.State) (config.CommitResult, error)
@@ -204,6 +206,8 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 			return geoIPService.PrepareUpdate(ctx)
 		},
 		Onboarding:        onboardingService,
+		Logging:           options.Logging,
+		RefreshLogSecrets: options.RefreshLogSecrets,
 		Panels:            panelService,
 		WebGateway:        webGateway,
 		WebOpenToken:      webCredential,

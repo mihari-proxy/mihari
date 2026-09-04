@@ -91,7 +91,11 @@ type Options struct {
 	GeoIP          GeoIPService
 	PrepareGeoIP   func(context.Context) (GeoIPCandidate, error)
 	Onboarding     *onboarding.Service
-	Panels         PanelService
+	// Logging applies daemon-owned file logging settings at runtime.
+	Logging LoggingRuntime
+	// RefreshLogSecrets replaces the exact subscription URL redaction snapshot.
+	RefreshLogSecrets func(catalogURLs []string)
+	Panels            PanelService
 	// WebGateway is the optional loopback browser gateway. Failures do not stop the core supervisor.
 	WebGateway WebGateway
 	// WebOpenToken is the Web access credential used only to mint open-browser URLs for local clients.
@@ -145,6 +149,8 @@ type Manager struct {
 	prepareGeoIP              func(context.Context) (GeoIPCandidate, error)
 	onboarding                *onboarding.Service
 	onboardingRestartRequired bool
+	logging                   LoggingRuntime
+	refreshLogSecrets         func(catalogURLs []string)
 	panels                    PanelService
 	webGateway                WebGateway
 	webOpenToken              string
@@ -229,6 +235,8 @@ func New(options Options) *Manager {
 		geoip:             options.GeoIP,
 		prepareGeoIP:      options.PrepareGeoIP,
 		onboarding:        options.Onboarding,
+		logging:           options.Logging,
+		refreshLogSecrets: options.RefreshLogSecrets,
 		panels:            options.Panels,
 		webGateway:        options.WebGateway,
 		webOpenToken:      options.WebOpenToken,

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/subscription"
 )
 
@@ -273,5 +275,53 @@ func TestSubscriptionSetUpdatesProxyMode(t *testing.T) {
 	}
 	if updated.ProxyMode != subscription.ProxyModeProxy {
 		t.Fatalf("ProxyMode=%q want %q", updated.ProxyMode, subscription.ProxyModeProxy)
+	}
+}
+
+func TestLogging_RefreshSecretsKeepsToken(t *testing.T) {
+	manager, _, _, url := subscriptionManager(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte("proxies: []\nrules: [MATCH,DIRECT]\n"))
+	}))
+	controlToken := "control-token-that-must-remain-redacted"
+	baseSecrets := []string{controlToken}
+	redactor := logging.NewRedactor()
+	var snapshots [][]string
+	manager.refreshLogSecrets = func(catalogURLs []string) {
+		copiedURLs := append([]string{}, catalogURLs...)
+		snapshots = append(snapshots, copiedURLs)
+		redactor.ReplaceExact(append(append([]string{}, baseSecrets...), catalogURLs...))
+	}
+
+	firstURL := url + "?token=first-subscription-secret"
+	added, err := manager.AddSubscription(context.Background(), Operation{ID: "logging-add", Source: "test"}, AddSubscriptionInput{Name: "Main", URL: firstURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 1 || !reflect.DeepEqual(snapshots[0], []string{firstURL}) {
+		t.Fatalf("snapshots after add=%q", snapshots)
+	}
+	if got := redactor.String("control=" + controlToken); got != "control=***" {
+		t.Fatalf("control token lost after add refresh: %q", got)
+	}
+
+	secondURL := url + "?token=second-subscription-secret"
+	if _, err := manager.SetSubscription(context.Background(), Operation{ID: "logging-set", Source: "test"}, added.ID, SetSubscriptionInput{URL: &secondURL}); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 2 || !reflect.DeepEqual(snapshots[1], []string{secondURL}) {
+		t.Fatalf("snapshots after set=%q", snapshots)
+	}
+	if got := redactor.String("control=" + controlToken); got != "control=***" {
+		t.Fatalf("control token lost after set refresh: %q", got)
+	}
+
+	if err := manager.RemoveSubscription(context.Background(), Operation{ID: "logging-remove", Source: "test"}, added.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 3 || len(snapshots[2]) != 0 {
+		t.Fatalf("snapshots after remove=%q", snapshots)
+	}
+	if got := redactor.String("control=" + controlToken); got != "control=***" {
+		t.Fatalf("control token lost after remove refresh: %q", got)
 	}
 }

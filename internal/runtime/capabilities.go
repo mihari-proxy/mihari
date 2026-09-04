@@ -21,6 +21,9 @@ func (m *Manager) Capabilities() []string {
 	if m.onboarding != nil {
 		capabilities = append(capabilities, protocol.CapabilityOnboarding)
 	}
+	if m.logging != nil {
+		capabilities = append(capabilities, protocol.CapabilityLogging)
+	}
 	if m.webGateway != nil && m.panels != nil {
 		capabilities = append(capabilities, protocol.CapabilityWebGUI)
 	}

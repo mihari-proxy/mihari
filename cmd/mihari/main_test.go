@@ -376,6 +376,174 @@ func TestRunDaemon_LoggingOpensBeforeBuildRuntime(t *testing.T) {
 	}
 }
 
+func TestRunDaemon_EffectiveLoggingOnRestart(t *testing.T) {
+	resetDaemonRunSeamsForTest(t)
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("a", 64)
+	settings.SetLogging(config.LoggingSettings{Level: "debug", MaxSizeMB: 20, MaxFiles: 5})
+	writeSettings(t, paths, settings)
+
+	afterDaemonLoggingOpen = func(logger *slog.Logger) { logger.Debug("custom logging is active") }
+	t.Cleanup(func() { afterDaemonLoggingOpen = nil })
+	buildDaemonRuntime = func(_ platform.Paths, _ config.Settings, _ string, _, _ io.Writer, options app.RuntimeBuildOptions) (*app.RuntimeAssembly, error) {
+		if options.Logging == nil {
+			t.Fatal("daemon assembly did not receive a Logging runtime group")
+		}
+		want := logging.Config{Level: slog.LevelDebug, MaxSizeBytes: 20 << 20, MaxFiles: 5}
+		if options.Logging.Config() != want || options.Logging.Dir() != paths.LogDir {
+			t.Fatalf("logging group config=%#v dir=%q", options.Logging.Config(), options.Logging.Dir())
+		}
+		return &app.RuntimeAssembly{}, nil
+	}
+	runDaemon = func(context.Context, daemon.Options) error { return nil }
+
+	if err := runDaemonWith(context.Background(), daemonRunDeps{Paths: paths, PrivateFS: fs, Token: "control-token", Version: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(readFileString(t, paths.DaemonLog)), "\n")
+	if len(lines) == 0 || !strings.Contains(lines[0], `"level":"DEBUG"`) || !strings.Contains(lines[0], `"msg":"custom logging is active"`) {
+		t.Fatalf("first daemon JSONL record=%q", lines)
+	}
+}
+
+func TestRunDaemon_BootstrapSettingsWarning(t *testing.T) {
+	for _, created := range []bool{true, false} {
+		t.Run(map[bool]string{true: "first create", false: "existing settings"}[created], func(t *testing.T) {
+			resetDaemonRunSeamsForTest(t)
+			paths := absoluteTempPaths(t)
+			fs, err := platform.NewPrivateFS(paths.Root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			settings, holder := occupiedControllerSettings(t, strings.Repeat("b", 64))
+			if err := holder.Close(); err != nil {
+				t.Fatal(err)
+			}
+			settings.SetLogging(config.LoggingSettings{Level: "debug", MaxSizeMB: 20, MaxFiles: 5})
+
+			deps := daemonRunDeps{
+				Paths: paths, PrivateFS: fs, Token: "bootstrap-control-token", Version: "test",
+				LoadSettings: func(string, string) (config.Settings, bool, config.CommitResult, error) {
+					return settings, created, config.CommitResult{
+						Committed: true,
+						Warning:   errors.New(`sync C:\sensitive\mihari.yaml parent`),
+					}, nil
+				},
+			}
+
+			productionBuild := buildDaemonRuntime
+			var initial protocol.LoggingStatus
+			buildDaemonRuntime = func(paths platform.Paths, settings config.Settings, version string, stdout, stderr io.Writer, options app.RuntimeBuildOptions) (*app.RuntimeAssembly, error) {
+				assembly, buildErr := productionBuild(paths, settings, version, stdout, stderr, options)
+				if buildErr != nil {
+					return nil, buildErr
+				}
+				initial, buildErr = assembly.Manager.LoggingStatus(context.Background())
+				return assembly, buildErr
+			}
+			var runCalled bool
+			runDaemon = func(context.Context, daemon.Options) error {
+				runCalled = true
+				return nil
+			}
+
+			if err := runDaemonWith(context.Background(), deps); err != nil {
+				t.Fatal(err)
+			}
+			if !runCalled {
+				t.Fatal("post-commit bootstrap warning stopped daemon startup")
+			}
+			if initial.Level != "debug" || initial.MaxSizeMB != 20 || initial.MaxFiles != 5 {
+				t.Fatalf("Manager initial logging status=%#v", initial)
+			}
+			logged := readFileString(t, paths.DaemonLog)
+			if !strings.Contains(logged, `"component":"settings"`) || !strings.Contains(logged, "parent directory sync failed after commit") {
+				t.Fatalf("bootstrap warning was not logged with stable fields: %s", logged)
+			}
+			if strings.Contains(logged, "sensitive") || strings.Contains(logged, paths.Settings) {
+				t.Fatalf("bootstrap warning leaked underlying path: %s", logged)
+			}
+		})
+	}
+}
+
+func TestRunDaemon_BootstrapSettingsPreCommitFailureStopsBeforeLogging(t *testing.T) {
+	resetDaemonRunSeamsForTest(t)
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preCommit := errors.New("settings replace failed")
+	var openCalls, buildCalls, runCalls int
+	openDaemonRuntime = func(context.Context, logging.RuntimeOptions) (daemonLoggingRuntime, error) {
+		openCalls++
+		return daemonLoggingRuntime{}, nil
+	}
+	buildDaemonRuntime = func(platform.Paths, config.Settings, string, io.Writer, io.Writer, app.RuntimeBuildOptions) (*app.RuntimeAssembly, error) {
+		buildCalls++
+		return &app.RuntimeAssembly{}, nil
+	}
+	runDaemon = func(context.Context, daemon.Options) error {
+		runCalls++
+		return nil
+	}
+	err = runDaemonWith(context.Background(), daemonRunDeps{
+		Paths: paths, PrivateFS: fs, Token: "control-token", Version: "test",
+		LoadSettings: func(string, string) (config.Settings, bool, config.CommitResult, error) {
+			return config.Settings{}, false, config.CommitResult{}, preCommit
+		},
+	})
+	if !errors.Is(err, preCommit) {
+		t.Fatalf("err=%v want=%v", err, preCommit)
+	}
+	if openCalls != 0 || buildCalls != 0 || runCalls != 0 {
+		t.Fatalf("open=%d build=%d run=%d", openCalls, buildCalls, runCalls)
+	}
+}
+
+func TestRunDaemon_RefreshSecretsKeepsBaseSecrets(t *testing.T) {
+	resetDaemonRunSeamsForTest(t)
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlToken := "base-control-credential-value"
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("c", 64)
+	writeSettings(t, paths, settings)
+	newURL := "https://provider.example/sub?credential=new-secret"
+	var daemonLogger *slog.Logger
+	afterDaemonLoggingOpen = func(logger *slog.Logger) { daemonLogger = logger }
+	t.Cleanup(func() { afterDaemonLoggingOpen = nil })
+	buildDaemonRuntime = func(_ platform.Paths, _ config.Settings, _ string, _, _ io.Writer, options app.RuntimeBuildOptions) (*app.RuntimeAssembly, error) {
+		if options.RefreshLogSecrets == nil {
+			t.Fatal("daemon assembly did not receive secret refresh callback")
+		}
+		options.RefreshLogSecrets([]string{newURL})
+		daemonLogger.Info("base " + controlToken + " catalog " + newURL)
+		return &app.RuntimeAssembly{}, nil
+	}
+	runDaemon = func(context.Context, daemon.Options) error { return nil }
+
+	if err := runDaemonWith(context.Background(), daemonRunDeps{Paths: paths, PrivateFS: fs, Token: controlToken, Version: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	logged := readFileString(t, paths.DaemonLog)
+	if strings.Contains(logged, controlToken) || strings.Contains(logged, newURL) {
+		t.Fatalf("refreshed exact snapshot leaked a base secret or catalog URL: %s", logged)
+	}
+	if !strings.Contains(logged, "base *** catalog ***") {
+		t.Fatalf("refreshed redaction output=%s", logged)
+	}
+}
+
 func TestRunDaemon_CatalogLoadFailureStillOpensLogger(t *testing.T) {
 	paths := absoluteTempPaths(t)
 	fs, err := platform.NewPrivateFS(paths.Root)
@@ -441,7 +609,8 @@ func TestCollectLogSecretsReadsExistingBusinessSecrets(t *testing.T) {
 	}
 	writeCatalog(t, paths, catalogURL)
 
-	got := collectLogSecrets(paths, "control-token", settings)
+	baseSecrets := collectBaseLogSecrets(paths, "control-token", settings)
+	got := append(append([]string{}, baseSecrets...), collectCatalogLogSecrets(paths)...)
 	want := []string{"control-token", "controller-secret", webCredential, catalogURL}
 	if !slices.Equal(got, want) {
 		t.Fatalf("secrets=%q want=%q", got, want)

@@ -67,6 +67,7 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 		if err != nil {
 			return nil, err
 		}
+		m.refreshSubscriptionLogSecrets()
 		catalog := m.subscriptions.Snapshot().Public()
 		for _, profile := range catalog.Profiles {
 			if profile.ID == added.ID {
@@ -243,6 +244,7 @@ func (m *Manager) RemoveSubscription(ctx context.Context, operation Operation, i
 			m.markConfigDegraded(ctx, err)
 			return nil, err
 		}
+		m.refreshSubscriptionLogSecrets()
 		_ = os.Remove(m.subscriptions.CachePath(id))
 		return struct{}{}, nil
 	})
@@ -334,12 +336,27 @@ func (m *Manager) mutateSubscription(ctx context.Context, prefix string, operati
 			m.markConfigDegraded(ctx, err)
 			return nil, err
 		}
+		m.refreshSubscriptionLogSecrets()
 		return findPublicProfile(m.subscriptions.Snapshot().Public(), id)
 	})
 	if err != nil {
 		return subscription.PublicProfile{}, err
 	}
 	return result.(subscription.PublicProfile), nil
+}
+
+func (m *Manager) refreshSubscriptionLogSecrets() {
+	if m.refreshLogSecrets == nil || m.subscriptions == nil {
+		return
+	}
+	catalog := m.subscriptions.Snapshot()
+	urls := make([]string, 0, len(catalog.Profiles))
+	for _, profile := range catalog.Profiles {
+		if profile.URL != "" {
+			urls = append(urls, profile.URL)
+		}
+	}
+	m.refreshLogSecrets(urls)
 }
 
 func (m *Manager) prepareCatalogConfig(ctx context.Context, catalog subscription.Catalog) (configCandidate, error) {
