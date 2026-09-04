@@ -5,13 +5,16 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/geoip"
 	"github.com/mihari-proxy/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/sysproxy"
 )
 
 func TestManagerSettings_NewClonesCallerOwnedMutableValues(t *testing.T) {
@@ -256,4 +259,142 @@ func TestManagerSettings_DegradedMutationRejectsQueuedOperationButAllowsObservat
 	if _, err := manager.Proxies(context.Background()); err != nil {
 		t.Fatalf("read-only operation blocked while degraded: %v", err)
 	}
+}
+
+func TestManagerStatusMethodsWaitForMaintenance(t *testing.T) {
+	sysProxyEntered := make(chan struct{})
+	sysProxyManager := newTestManager(Options{
+		SysProxy: &maintenanceProbeSysProxy{entered: sysProxyEntered},
+	})
+	tunEntered := make(chan struct{})
+	tunManager := newTestManager(Options{
+		Controller: &maintenanceProbeController{fakeController: &fakeController{}, entered: tunEntered},
+	})
+	webGUIEntered := make(chan struct{})
+	webGUIManager := newTestManager(Options{
+		Panels:     &fakePanels{},
+		WebGateway: &maintenanceProbeGateway{entered: webGUIEntered},
+	})
+	geoIPEntered := make(chan struct{})
+	var geoIPOnce sync.Once
+	geoIPManager := newTestManager(Options{
+		GeoIP: &fakeGeoIPService{statusFunc: func() geoip.Status {
+			geoIPOnce.Do(func() { close(geoIPEntered) })
+			return geoip.Status{}
+		}},
+	})
+
+	tests := []struct {
+		name    string
+		manager *Manager
+		entered <-chan struct{}
+		status  func(context.Context) error
+	}{
+		{
+			name:    "system proxy",
+			manager: sysProxyManager,
+			entered: sysProxyEntered,
+			status: func(ctx context.Context) error {
+				_, err := sysProxyManager.SystemProxyStatus(ctx)
+				return err
+			},
+		},
+		{
+			name:    "tun",
+			manager: tunManager,
+			entered: tunEntered,
+			status: func(ctx context.Context) error {
+				_, err := tunManager.TunStatus(ctx)
+				return err
+			},
+		},
+		{
+			name:    "web gui",
+			manager: webGUIManager,
+			entered: webGUIEntered,
+			status: func(ctx context.Context) error {
+				_, err := webGUIManager.WebGUIStatus(ctx)
+				return err
+			},
+		},
+		{
+			name:    "geoip",
+			manager: geoIPManager,
+			entered: geoIPEntered,
+			status: func(ctx context.Context) error {
+				_, err := geoIPManager.GeoIPStatus(ctx)
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.manager.lockMaintenance(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+
+			done := make(chan error, 1)
+			go func() { done <- tt.status(context.Background()) }()
+
+			select {
+			case <-tt.entered:
+				tt.manager.unlock()
+				t.Fatalf("status reached its dependency while maintenance was held")
+			case err := <-done:
+				tt.manager.unlock()
+				t.Fatalf("status returned while maintenance was held: %v", err)
+			case <-time.After(100 * time.Millisecond):
+			}
+
+			tt.manager.unlock()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("status did not resume after maintenance was released")
+			}
+		})
+	}
+}
+
+type maintenanceProbeSysProxy struct {
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (p *maintenanceProbeSysProxy) Get() (sysproxy.State, error) {
+	p.once.Do(func() { close(p.entered) })
+	return sysproxy.State{}, nil
+}
+
+func (*maintenanceProbeSysProxy) Enable(string, int) error { return nil }
+
+func (*maintenanceProbeSysProxy) Disable() error { return nil }
+
+type maintenanceProbeController struct {
+	*fakeController
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (p *maintenanceProbeController) Configs(context.Context) (map[string]any, error) {
+	p.once.Do(func() { close(p.entered) })
+	return map[string]any{}, nil
+}
+
+type maintenanceProbeGateway struct {
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (*maintenanceProbeGateway) Serve(context.Context) error { return nil }
+
+func (*maintenanceProbeGateway) SessionCount() int { return 0 }
+
+func (p *maintenanceProbeGateway) ListenAddr() string {
+	p.once.Do(func() { close(p.entered) })
+	return "127.0.0.1:9191"
 }

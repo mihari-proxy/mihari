@@ -10,7 +10,11 @@ import (
 )
 
 // WebGUIStatus returns a secret-free gateway and panel status for local clients.
-func (m *Manager) WebGUIStatus(context.Context) (protocol.WebGUIStatus, error) {
+func (m *Manager) WebGUIStatus(ctx context.Context) (protocol.WebGUIStatus, error) {
+	if err := m.lockMaintenance(ctx); err != nil {
+		return protocol.WebGUIStatus{}, err
+	}
+	defer m.unlock()
 	if m.webGateway == nil || m.panels == nil {
 		return protocol.WebGUIStatus{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "web gui is unavailable"}
 	}

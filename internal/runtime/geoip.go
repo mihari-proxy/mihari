@@ -11,7 +11,11 @@ import (
 )
 
 // GeoIPStatus returns the current redacted database health.
-func (m *Manager) GeoIPStatus(context.Context) (geoip.Status, error) {
+func (m *Manager) GeoIPStatus(ctx context.Context) (geoip.Status, error) {
+	if err := m.lockMaintenance(ctx); err != nil {
+		return geoip.Status{}, err
+	}
+	defer m.unlock()
 	if m.geoip == nil {
 		return geoip.Status{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "geoip service is unavailable"}
 	}

@@ -15,9 +15,10 @@ const defaultTunStack = "gVisor"
 
 // TunStatus returns desired managed TUN intent plus live observation from mihomo when available.
 func (m *Manager) TunStatus(ctx context.Context) (protocol.TunStatus, error) {
-	if err := ctx.Err(); err != nil {
+	if err := m.lockMaintenance(ctx); err != nil {
 		return protocol.TunStatus{}, err
 	}
+	defer m.unlock()
 	return m.buildTunStatus(ctx, ""), nil
 }
 

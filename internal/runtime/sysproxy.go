@@ -12,27 +12,16 @@ import (
 
 // SystemProxyStatus returns desired intent plus live OS observation.
 func (m *Manager) SystemProxyStatus(ctx context.Context) (protocol.SystemProxyStatus, error) {
-	if err := ctx.Err(); err != nil {
+	if err := m.lockMaintenance(ctx); err != nil {
 		return protocol.SystemProxyStatus{}, err
 	}
+	defer m.unlock()
 	if m.sysProxy == nil {
 		return protocol.SystemProxyStatus{}, protocol.APIError{
 			Code: protocol.CodeInvalidState, Message: "system proxy backend is unavailable",
 		}
 	}
-	desired, mixed := m.systemProxySettings()
-	target, _, _, err := resolveSystemProxyTarget(mixed)
-	if err != nil {
-		return protocol.SystemProxyStatus{}, err
-	}
-	observed, err := m.sysProxy.Get()
-	if err != nil {
-		return protocol.SystemProxyStatus{}, protocol.APIError{
-			Code:    protocol.CodeUpstreamFailure,
-			Message: "read system proxy state",
-		}
-	}
-	return m.buildSystemProxyStatus(desired, target, observed, ""), nil
+	return m.systemProxyStatusLocked(ctx)
 }
 
 // EnableSystemProxy turns on the OS system proxy for the mixed endpoint.
