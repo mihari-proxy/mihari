@@ -103,6 +103,22 @@ func TestModel_LoggingDirectoryEnterShowsPathDetail(t *testing.T) {
 	}
 }
 
+func TestModel_ExportLogsAvailableWithoutDaemonLogging(t *testing.T) {
+	model := New(nil, nil)
+	model.focusID = rowLogExport
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("export logs row did not return a command")
+	}
+	if _, ok := cmd().(ui.OpenExportLogsMsg); !ok {
+		t.Fatalf("command message=%T", cmd())
+	}
+	rows := model.rows()
+	if model.rowIndex(rowLogExport) != model.rowIndex(rowLogDirectory)+1 || rows[model.rowIndex(rowLogExport)].label != ui.ExportLogsLabel {
+		t.Fatal("export row is not directly after Directory")
+	}
+}
+
 func TestModel_LoggingRowsIgnoreEnterWhenUnavailable(t *testing.T) {
 	client := &fakeClient{}
 	model := New(client, func() string { return "logging-op" })

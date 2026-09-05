@@ -22,11 +22,11 @@ func TestRows_LoggingSectionFollowsPortsAndIsUnavailableOffline(t *testing.T) {
 	if portsEnd < 0 || daemon < 0 {
 		t.Fatalf("missing boundary rows: %v", ids)
 	}
-	want := []string{"log-level", "log-max-size", "log-max-files", "log-directory"}
+	want := []string{"log-level", "log-max-size", "log-max-files", "log-directory", "log-export"}
 	if got := ids[portsEnd+1 : daemon]; !slices.Equal(got, want) {
 		t.Fatalf("logging rows between ports and daemon = %v, want %v", got, want)
 	}
-	for _, item := range rows[portsEnd+1 : daemon] {
+	for _, item := range rows[portsEnd+1 : daemon-1] {
 		if item.section != "Logging" || item.value != ui.UnavailableTitle {
 			t.Fatalf("offline logging row = %#v", item)
 		}
@@ -36,8 +36,8 @@ func TestRows_LoggingSectionFollowsPortsAndIsUnavailableOffline(t *testing.T) {
 	if !strings.Contains(view, "Logging") {
 		t.Fatalf("missing Logging section:\n%s", view)
 	}
-	if strings.Contains(view, "Export") {
-		t.Fatalf("Task 9 must not render Export:\n%s", view)
+	if !strings.Contains(view, ui.ExportLogsLabel) {
+		t.Fatalf("missing export entry point:\n%s", view)
 	}
 }
 

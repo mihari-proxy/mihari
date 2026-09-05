@@ -333,6 +333,9 @@ func (fs *PrivateFS) openDirIdentityLocked(name string) (*DirectoryIdentity, err
 func (fs *PrivateFS) openPublishDirLocked(name string) (*PublishDir, error) {
 	h, err := fs.dirHandle(name)
 	if err != nil {
+		if isWindowsNotFound(err) {
+			return nil, os.ErrNotExist
+		}
 		return nil, err
 	}
 	dup, err := dupHandle(h)

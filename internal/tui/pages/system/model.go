@@ -55,6 +55,7 @@ const (
 	rowLogMaxSize        = "log-max-size"
 	rowLogMaxFiles       = "log-max-files"
 	rowLogDirectory      = "log-directory"
+	rowLogExport         = "log-export"
 )
 
 // Panel IDs mirrored from internal/panel/catalog.go; local constants keep the
@@ -1069,6 +1070,8 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, m.cycleLoggingLevel()
 		case rowLogMaxSize, rowLogMaxFiles:
 			return m, m.beginLoggingEdit(m.focusID)
+		case rowLogExport:
+			return m, func() tea.Msg { return ui.OpenExportLogsMsg{} }
 		default:
 			selected := rows[index]
 			m.detail = &selected
@@ -1306,6 +1309,7 @@ func (m *Model) loggingRows() []row {
 		{id: rowLogMaxSize, section: ui.LoggingSectionTitle, label: ui.LoggingMaxSizeLabel, value: maxSize},
 		{id: rowLogMaxFiles, section: ui.LoggingSectionTitle, label: ui.LoggingMaxFilesLabel, value: maxFiles},
 		{id: rowLogDirectory, section: ui.LoggingSectionTitle, label: ui.LoggingDirectoryLabel, value: directory, detail: directory},
+		{id: rowLogExport, section: ui.LoggingSectionTitle, label: ui.ExportLogsLabel},
 	}
 }
 
@@ -2198,7 +2202,7 @@ func (m *Model) clearLoggingOutcome(rowID string) {
 
 func isLoggingRow(rowID string) bool {
 	switch rowID {
-	case rowLogLevel, rowLogMaxSize, rowLogMaxFiles, rowLogDirectory:
+	case rowLogLevel, rowLogMaxSize, rowLogMaxFiles, rowLogDirectory, rowLogExport:
 		return true
 	default:
 		return false

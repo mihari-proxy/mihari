@@ -103,15 +103,12 @@ func TestView_ShortHeightKeepsFocusedLoggingRowVisible(t *testing.T) {
 	}})
 	model.SetLocalLoggingAvailable(false)
 	model.SetSize(80, 11)
-	model.focusID = rowLogDirectory
+	model.focusID = rowLogExport
 	model.ensureFocusVisible()
 
 	view := model.View()
-	if !strings.Contains(view, ui.LoggingSectionTitle) || !strings.Contains(view, ui.LoggingDirectoryLabel) {
+	if !strings.Contains(view, ui.LoggingSectionTitle) || !strings.Contains(view, ui.ExportLogsLabel) {
 		t.Fatalf("focused Logging row not visible:\n%s", view)
-	}
-	if !strings.Contains(view, ui.LocalFileLogUnavailable) {
-		t.Fatalf("local writer health marker not visible:\n%s", view)
 	}
 	if viewLineCount(view) > 11 {
 		t.Fatalf("view lines=%d exceed 11\n%s", viewLineCount(view), view)

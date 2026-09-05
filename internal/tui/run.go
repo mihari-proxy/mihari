@@ -19,17 +19,18 @@ import (
 
 // Options contains the control client and terminal streams used by the TUI.
 type Options struct {
-	Client         *controlclient.Client
-	Service        systempage.ServiceController
-	SelfUpdater    systempage.SelfUpdater
-	CurrentVersion string
-	BinaryPath     string
-	Elevated       func() bool
-	Relaunch       func() error
-	Input          io.Reader
-	Output         io.Writer
-	OpenLogging    LoggingFactory
-	ErrorOutput    io.Writer
+	Client          *controlclient.Client
+	Service         systempage.ServiceController
+	SelfUpdater     systempage.SelfUpdater
+	CurrentVersion  string
+	BinaryPath      string
+	Elevated        func() bool
+	Relaunch        func() error
+	Input           io.Reader
+	Output          io.Writer
+	OpenLogging     LoggingFactory
+	BuildExportLogs func(LoggingResources) ui.ExportLogsOptions
+	ErrorOutput     io.Writer
 }
 
 // LocalLoggingHealth reports whether the local TUI file logger is available.
@@ -229,6 +230,13 @@ func Run(ctx context.Context, options Options) error {
 		model.SetServiceController(options.Service)
 	}
 	model.SetSelfUpdater(options.SelfUpdater, options.CurrentVersion, options.BinaryPath, options.Elevated)
+	var exportLogs *ui.ExportLogsModel
+	if options.BuildExportLogs != nil {
+		exportOptions := options.BuildExportLogs(resources)
+		exportOptions.Context = ctx
+		exportLogs = ui.NewExportLogsModel(exportOptions)
+		model.exportLogs = exportLogs
+	}
 	program := tea.NewProgram(
 		model,
 		tea.WithContext(ctx),
@@ -246,7 +254,12 @@ func Run(ctx context.Context, options Options) error {
 						controlSession.Close()
 					}
 				},
-				applier.CloseAndWait,
+				func() {
+					if exportLogs != nil {
+						exportLogs.CancelAndWait()
+					}
+					applier.CloseAndWait()
+				},
 			)
 			if closeErr != nil {
 				reporter.report(tuiLoggingCleanupFailure, closeErr)

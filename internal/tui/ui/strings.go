@@ -2,6 +2,8 @@ package ui
 
 const (
 	ExportLogsTitle      = "Export Logs"
+	ExportLogsLabel      = "Export logs"
+	ExportLabel          = "Export"
 	ExportNowLabel       = "Now"
 	ExportRangeLabel     = "Range"
 	ExportFromLabel      = "From"

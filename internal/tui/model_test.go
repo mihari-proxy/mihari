@@ -1210,6 +1210,24 @@ type loggingResultRecordingPage struct {
 	helpMode string
 }
 
+func TestModel_ExportOverlayOpensAndPreservesRootRouting(t *testing.T) {
+	model := NewModel()
+	model.exportLogs = ui.NewExportLogsModel(ui.ExportLogsOptions{Now: func() time.Time { return time.Unix(1, 0) }})
+	updated, _ := model.Update(ui.OpenExportLogsMsg{})
+	model = updated.(Model)
+	if model.exportLogs.Closed() {
+		t.Fatal("export overlay did not open")
+	}
+	updated, _ = model.Update(ui.RuntimeRevisionMsg{Revision: 9})
+	model = updated.(Model)
+	if model.status.Revision != 9 {
+		t.Fatalf("revision=%d", model.status.Revision)
+	}
+	if !strings.Contains(model.View().Content, ui.ExportLogsTitle) {
+		t.Fatal("open export overlay was not rendered")
+	}
+}
+
 func (p *loggingResultRecordingPage) ID() ui.PageID    { return ui.PageSystem }
 func (p *loggingResultRecordingPage) SetSize(int, int) {}
 func (p *loggingResultRecordingPage) FocusFirst()      {}

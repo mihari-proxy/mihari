@@ -26,6 +26,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/tui"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
 func TestTUIRelaunchArgsStartsDefaultTUI(t *testing.T) {
@@ -124,6 +125,35 @@ func TestOpenTUILogging_NilPrivateFSDoesNotCreateRoot(t *testing.T) {
 	}
 	if _, statErr := os.Stat(paths.Root); !os.IsNotExist(statErr) {
 		t.Fatalf("nil PrivateFS created data root: %v", statErr)
+	}
+}
+
+func TestBuildExportLogs_NilPrivateFSUsesStableError(t *testing.T) {
+	paths := absoluteTempPaths(t)
+	options := buildExportLogs(paths)(tui.NewLoggingResources(nil, logging.NewRedactor("secret"), nil))
+	_, err := options.Export(context.Background(), logging.ExportRequest{})
+	if !errors.Is(err, ui.ErrLocalLogStorageUnavailable) || err.Error() != "Local log storage unavailable" {
+		t.Fatalf("error=%v", err)
+	}
+	if _, statErr := os.Stat(paths.Root); !os.IsNotExist(statErr) {
+		t.Fatalf("factory accessed missing data root: %v", statErr)
+	}
+}
+
+func TestBuildExportLogs_DefaultExistsDoesNotCreateDirectory(t *testing.T) {
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fs.Close() })
+	options := buildExportLogs(paths)(tui.NewLoggingResources(nil, logging.NewRedactor(), fs))
+	exists, err := options.Exists(paths.LogExportDir, "archive.zip")
+	if err != nil || exists {
+		t.Fatalf("exists=%v err=%v", exists, err)
+	}
+	if _, statErr := os.Stat(paths.LogExportDir); !os.IsNotExist(statErr) {
+		t.Fatalf("Exists created export directory: %v", statErr)
 	}
 }
 

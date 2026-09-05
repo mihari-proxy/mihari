@@ -83,6 +83,7 @@ type Model struct {
 	loggingRevision *uint64
 	loggingLoaded   bool
 	loggingStatus   protocol.LoggingStatus
+	exportLogs      *ui.ExportLogsModel
 }
 
 // networkStatusClient is the minimal control surface for Overview network KPIs.
@@ -310,6 +311,11 @@ func (model *Model) syncSystemNetworkStatus() {
 }
 
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	if model.exportLogs != nil {
+		if command, consumed := model.exportLogs.Update(message); consumed {
+			return model, command
+		}
+	}
 	switch typed := message.(type) {
 	case ui.RelaunchRequestMsg:
 		model.relaunchRequested = true
@@ -1214,7 +1220,9 @@ func (model Model) View() tea.View {
 		content := status + "\n" +
 			model.theme.Content.Width(model.width).Height(max(1, model.height-2)).Render(body) + "\n" +
 			model.theme.Footer.Width(model.width).Render(ui.SetupFooter)
-		if model.modal != nil {
+		if model.exportLogs != nil && !model.exportLogs.Closed() {
+			content = model.exportLogs.View(model.width, model.height)
+		} else if model.modal != nil {
 			content = model.modal.View(model.width, model.height)
 		}
 		view := tea.NewView(content)
@@ -1259,7 +1267,9 @@ func (model Model) View() tea.View {
 		footer = ui.FitFooter(footer, model.footerGlobalSegment(), max(1, model.width-2))
 		content = status + "\n" + strings.TrimRight(main, "\n") + "\n" + model.theme.Footer.Width(model.width).MaxWidth(model.width).Render(footer)
 	}
-	if model.modal != nil {
+	if model.exportLogs != nil && !model.exportLogs.Closed() {
+		content = model.exportLogs.View(model.width, model.height)
+	} else if model.modal != nil {
 		content = model.modal.View(model.width, model.height)
 	}
 	view := tea.NewView(content)
