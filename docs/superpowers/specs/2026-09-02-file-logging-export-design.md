@@ -4,9 +4,11 @@
 
 状态：已批准，准备实施
 
-目标分支：`feat/file-logging-export`
+PR 3 工作分支：`feat/log-export-ui`
 
-工作目录：`.worktrees/feat-file-logging-export`
+PR 3 合并目标分支：`dev`
+
+PR 3 工作目录：`.worktrees/feat-log-export-ui`
 
 ## 1. 背景
 
@@ -139,7 +141,7 @@ mihomo stdout 是任意文本（引号、等号、空格）。JSONL 把净化后
 权限语义：
 
 - Unix：`LogDir`/默认 `LogExportDir` 为 0700；日志、lock file、临时导出与最终 zip 为 0600。对象归数据根 owner UID/GID 所有；root daemon 创建时必须按数据根 owner 修正 ownership，使桌面用户可读写，而 root 仍可执行服务职责。打开 dataRoot 允许跟随用户配置的最后一跳；之后从该目录 fd 对 `LogDir` 及文件逐段 `openat(..., O_NOFOLLOW)` 并 `fstat`，禁止对完整路径一次 `Open`/`O_NOFOLLOW`。无法安全确定或设置 owner 时不创建宽权限替代物。
-- Windows：不能把 0600/0700 当作 ACL。创建或打开时应用受保护 DACL，只授予数据根所有者 SID 和 LocalSystem 必要访问；不授予 `Everyone`、`Users` 或匿名主体。目录 ACE 继承到日志与 lock file。TUI 导出到数据根外时授予当前交互用户及 LocalSystem，且不放宽父目录 ACL。打开 dataRoot 允许跟随用户配置的最后一跳；之后每一跳相对打开必须带 `FILE_FLAG_OPEN_REPARSE_POINT`（或等价 `NtCreateFile`），看到 reparse/junction 立即失败，禁止先跟随再检查。日志、lock、temp、快照打开一律 `FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE`。
+- Windows：不能把 0600/0700 当作 ACL。创建或打开时应用受保护 DACL，只授予数据根所有者 SID 和 LocalSystem 必要访问；不授予 `Everyone`、`Users` 或匿名主体。目录 ACE 继承到日志与 lock file。TUI 导出到数据根外时授予当前交互用户及 LocalSystem，且不放宽父目录 ACL。打开 dataRoot 允许跟随用户配置的最后一跳；之后每一跳相对打开必须带 `FILE_FLAG_OPEN_REPARSE_POINT`（或等价 `NtCreateFile`），看到 reparse/junction 立即失败，禁止先跟随再检查。日志、lock、temp、快照打开使用 `FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE`；导出 workspace directory handle 是明确例外：创建时请求 `DELETE`，只 share read/write，整个生命周期不 share delete（见 5.9.1）。
 - Windows 服务使用安装时固定的数据根；以 LocalSystem 创建日志时，从既有数据根的 owner SID 识别桌面数据所有者。无法可靠确定 owner 或无法加固 ACL 时，不创建一个宽权限文件。
 - daemon 无法安全准备 `LogDir` 或日志文件时启动失败；TUI 日志初始化失败则降级到净化后的 stderr，并保持 TUI/导出错误可见。
 
@@ -382,7 +384,7 @@ TUI 调用 `internal/logging.Export(ctx, request)`；库不依赖 daemon。算�
 4. 快照锁保证不会截在一条由 Mihari writer 正在写的 JSONL 中间。锁释放后的 rotate 不改变已打开句柄指向的文件 identity；Windows 使用显式 delete-sharing open。某一来源的顺序是最旧 archive → … → `.1` → 活跃文件。不同来源不宣称共享同一纳秒级快照。
 5. 逐物理行使用启用 `UseNumber` 的 `json.Decoder` 解码到 `map[string]any`，避免二次编码把大整数先转成 `float64` 而损失精度。首次 Decode 必须得到 object，随后第二次 Decode 必须得到 `io.EOF`；数组、标量、同一行的第二个 JSON 值或任意尾随 token 都是一个 invalid record。单行解析上限为 1 MiB；超过上限时有界丢弃到下一个换行并计入 `skipped_invalid`，不得无界分配。缺 `time`、时间无效或 JSON 损坏同样计入 `skipped_invalid`，不写 zip。保留文件顺序和文件内记录顺序，不根据 wall clock 重新排序，避免系统时钟回拨改变因果顺序。
 6. 每个有效对象在导出边界再次递归脱敏，然后重新 `json.Marshal` 为一行；不保留原始 JSON 字节或字段顺序。窗内记录写到该来源唯一的 zip entry。某来源没有命中则省略 entry。
-7. 在枚举来源、读取批次、解析行、写 zip 和发布前检查 `ctx.Err()`。取消或失败关闭所有快照/zip/temp 句柄、删除 workspace 内临时文件，并按 `PublishWorkspace`→`PublishDir`→LogDir `DirectoryIdentity` 的所有权顺序关闭；成功发布后同样关闭所有派生目录 capability。若外部主体已把 workspace directory entry 移出 held parent，清理只能关闭 held handle并报告净化后的 warning；不得追随路径寻找或删除不再能按 identity 证明的对象，也不得因此触碰替换对象或把已发布结果改报失败。
+7. 在枚举来源、读取批次、解析行、写 zip 和发布前检查 `ctx.Err()`。成功、取消或失败均关闭所有快照/zip/temp 句柄，尝试清理 workspace 内临时文件，再按 `PublishWorkspace`→`PublishDir`→LogDir `DirectoryIdentity` 的所有权顺序关闭。目录项清理严格遵守 5.9.1 的 Unix 信任前提与 Windows guard；降级或 IO 失败通过净化 warning 报告，不追删路径、不触碰 replacement、不改报已提交结果。
 
 zip 固定布局：
 
@@ -419,12 +421,24 @@ zip entry 名是常量，不使用用户路径。`manifest.json`：
 原子发布：
 
 - 目标解析阶段打开并持有真实父目录 handle；默认目录从 `PrivateFS` 的已验证子目录 handle 派生，自定义目录只跟随用户选择的父路径这一次，确认是目录并记录 canonical absolute path/identity，之后不修改其 mode/ACL；
-- 从该 `PublishDir` handle 创建不可预测名称的私有 `PublishWorkspace` 子目录，Unix mode 0700，Windows protected DACL 只含当前交互用户与 LocalSystem；即使自定义 parent 允许其它主体改名目录项，也不能进入 workspace 或替换其中 source basename。相对 workspace 创建随机 temp/spool basename并应用 0600/受限 DACL；使用标准库 `archive/zip` Deflate 写入；所有 workspace remove 与 parent exists 也只接受单段 basename；
+- 从该 `PublishDir` handle 创建不可预测名称的私有 `PublishWorkspace` 子目录，Unix mode 0700，Windows protected DACL 只含当前交互用户与 LocalSystem；非受信主体即使可在 Unix 自定义 parent 改名目录项，也不能进入 workspace 或替换其中 source basename；同 UID/管理员属于 5.9.1 的受信边界。Windows workspace 从创建起禁止 delete sharing。相对 workspace 创建随机 temp/spool basename并应用 0600/受限 DACL；使用标准库 `archive/zip` Deflate 写入；所有 workspace remove 与 parent exists 也只接受单段 basename；
 - 完成所有 entry 和 manifest 后依次关闭 zip writer、sync 临时文件；每次提交尝试先用仍持有的 LogDir `DirectoryIdentity` 重新执行 `PublishDir.IsWithin`，确认目标目录仍在真实 LogDir 外，再调用 handle-relative `PublishNoReplace(workspace, tempName, targetName)`；检查失败、结果为 inside 或检查期间 identity 不稳定均 fail closed。Unix 从 workspace dirfd `linkat` 到 parent dirfd 后 unlink source，Windows 对从 workspace handle 相对打开的 temp handle 调 `NtSetInformationFile` 并把 parent handle设为 RootDirectory，不得退回路径型 `os.Link`/`MoveFileEx`；必要时 sync 两个目录 handle；
 - 自定义目标在校验后被别的进程抢先创建时返回 `already exists`，不得覆盖；默认目标发生竞争时复用同一 held `PublishDir`、workspace 和已关闭 temp，直接以 no-replace publish 依次尝试下一个编号后缀，每次重试前检查 context，防止先查后用竞态。只有发布成功后才把实际 basename/canonical path 写入 `ExportResult.Path`；suffix 的 `int64` 递增溢出返回稳定失败；
 - 校验后原父路径被 rename 或替换为 symlink/junction 时，写入仍只落到已打开的目录 identity，绝不跟随替换路径；实现可以在 publish 前比较一次可见路径 identity 并选择安全失败，但不能把完整路径重新解析作为提交依据；
 - publish 是成功的不可逆点。publish 前取消必须无目标文件；publish 已成功后即使 context 随后取消也返回成功路径；
-- 任意 publish 前失败都删除仍能从 held workspace 访问的文件，并在 held parent 内按 identity 删除私有 workspace，随后关闭 workspace、PublishDir 与 LogDir identity 三个目录 capability；若外部主体已将 workspace entry 移出 held parent，则只关闭 handle并报警，禁止路径追删。publish 后的 cleanup/sync 失败只报警，不能把已发布 target 报成失败。不得先创建一个空目标再慢慢写 zip。
+- 任意 publish 前失败都尝试删除仍能从 held workspace 访问的文件，再依 5.9.1 清理私有目录项并关闭 workspace、PublishDir 与 LogDir identity；Unix 不可信 namespace、move-out 与 IO 失败遵守该节 warning/残留边界。publish 后的 cleanup/sync 失败只报警，不能把已发布 target 报成失败。不得先创建一个空目标再慢慢写 zip。
+
+#### 5.9.1 workspace 清理的信任边界（2026-09-05 已批准修订）
+
+此节统一约束成功、取消、失败及创建后检查失败的清理，不改变 no-replace 发布、权限、协议或依赖。Unix 的 `unlinkat(parentFD, basename, AT_REMOVEDIR)` 没有 expected-identity 参数；held fd 和 advisory lock 均不能排斥非协作 namespace writer。重复 identity 检查不等于原子条件删除。
+
+- 受信主体固定为当前有效 UID、默认导出时已验证的数据根 owner UID，以及可绕过权限的本机 root/管理员；自定义目录的任意 owner 或组成员不会因“拥有父目录”而自动受信。同 UID 进程属于受信主体；本设计不防御其恶意并发改名、权限修改或访问日志。Windows 同样信任交互用户与 LocalSystem/管理员。受信主体须不在最后验证到删除期间主动破坏已验证的 namespace/权限前提。
+- Unix 打开 held parent 时，在数据根 owner 上下文确定后评估一次 namespace mutation authority，并在最终 identity 检查/删除前重新评估 owner、mode、sticky 与实际有效 ACL。初始与最终评估均可信，且非受信主体不能替换 workspace entry，才允许按名删除；初始不可信或查询失败，即使后来权限收紧，仍清理内容、关闭句柄并以 warning 保留空私有目录。普通 owner 管理目录在非受信 group/other 无写权限且 ACL 无额外授予时正常清理。sticky parent 还要求 workspace owner 受信，且系统 sticky 规则及 ACL 确实阻止所有非受信主体删除/替换该 entry；`01777` 本身不充分，非受信 parent owner 仍可删除，必须拒绝清理目录项。
+- Unix ACL（包括平台或文件系统扩展的 delete/delete-child 权限）必须被检查或能证明不存在；不得只看 `mode & 022`，不得把未知 ACL 当作无 ACL。若现有无 CGO 能力无法证明某文件系统的有效授权语义，保守判为不可信。无 sticky 的 `0777`/`0770` 或 ACL 允许非受信主体改名/替换时走此降级；owner 受信的 `01777` 在有效权限可证明时正常清理。清理前权限变宽、owner/ACL 改变或查询失败须重新判定并 fail closed，不 chmod/chown 父目录，不添加 ACL 或新依赖。
+- 两平台都先经 held workspace 清理仍可访问的 temp/spool；不靠可见路径定位内容。Unix 只有上述证明成立时，才在 held parent 中按 identity 查当前 basename，重查 identity/empty 后删除该空目录；同 parent 内已完成的受信改名仍可清理。原 basename 的 replacement 不可删除。workspace 已移出 held parent，或 parent 权限不可证明安全时，不调用按名目录删除，关闭所有持有句柄并返回净化 cleanup warning；禁止扫描其它目录或沿旧路径追删。
+- Unix 降级时，若内容清理成功，允许留下不可预测名称、0700 的空私有目录，不含日志、spool、zip temp、凭据或元数据。若内容删除、枚举、权限检查或其他 IO 本身失败，只能保证尝试所有后续清理并关闭句柄；warning 必须反映清理不完整，不能声称空 orphan 或零残留。不会自动按路径重试遗留对象。
+- Windows workspace 从原子创建成功起持有请求 `DELETE`、不含 `FILE_SHARE_DELETE` 的不继承目录 handle，直至关闭；不得先以 share-delete 创建再补 guard。parent、日志、temp 与 snapshot 仍按各自原共享规则打开。外部独立 handle 的 workspace rename/delete 必须被 mandatory share compatibility 拒绝，但不妨碍 child IO/temp publish。清理须在同一 guard 仍有效时证明 held identity、当前 parent containment 和 empty，然后在同一 handle 设置 delete disposition 并关闭；验证失败不得设置 disposition。不得先置 delete-pending 再依赖清除状态的可失败 rollback。同一受信 held handle 若已把 workspace 移到 parent 外，仍只关闭/warn，不删移出的目录。
+- 发布提交点仍是 Unix 成功 link / Windows 成功 no-replace rename。提交前 failure/cancel 不创建本次 target；竞争者已创建的 target 保留。所有 cleanup 错误保留主要错误并报告净化 warning；提交后 sync、unlink-source 或 Close 失败仅 warning，返回成功路径且不删已发布 target。无 IO 故障且安全前提成立时要求正常完整清理；不承诺对抗权限变更、恶意受信主体、进程崩溃或文件系统故障的无条件零残留。
 
 zip 只含重新编码且再次脱敏的日志与 manifest，不含 `mihari.yaml`、token、订阅或 lock file。
 
@@ -444,7 +458,7 @@ zip 只含重新编码且再次脱敏的日志与 manifest，不含 `mihari.yaml
 
 mihomo 捕获行在进入 JSON `msg` 前也执行通用文本规则；不得把它作为“无法解析所以不脱敏”的例外。通用规则无法判定节点名、目标域名、IP、流量元数据是否属于用户敏感业务信息，因此 UI 成功态和 manifest 提醒用户发送前自查；这不放宽 Mihari 已知凭据必须遮蔽的要求。
 
-导出边界对历史 JSON 对象再次递归检查敏感 key 和字符串并重新编码，防止旧版本日志或漏网调用点被直接打包。`redacted` 只统计发生过替换的记录数，不把原值、匹配规则或 secret hash 写进 manifest。
+导出边界对历史 JSON 对象再次递归检查敏感 key 和字符串并重新编码，防止旧版本日志或漏网调用点被直接打包。若成员的键本身经 `Redactor.String` 会改变（例如包含已知凭据或 URL），省略该成员并标记本条记录已脱敏；不重命名键，避免与其它敏感键或普通 `***` / `[REDACTED_URL]` 键碰撞。保留安全兄弟成员并继续递归，时间和数值保持原语义，不修改原对象，也不计入 `skipped_invalid`。`redacted` 只统计发生过替换或敏感键成员省略的记录数，不把原值、匹配规则或 secret hash 写进 manifest。
 
 stderr fallback 和 UI/protocol 错误同样先经 redactor；底层路径、URL 或 credential 不得因失败路径反向泄露。
 
@@ -463,7 +477,7 @@ stderr fallback 和 UI/protocol 错误同样先经 redactor；底层路径、URL
 | Settings 补偿写在 commit 前失败 | 内存对齐已提交磁盘、revision +1、health degraded、后续 mutation 返回 `invalid_state`，当前请求返回稳定 `data_failure`；只读与 Export 保持可用 |
 | 源快照中有 symlink/非普通文件 | 不跟随；该源导出失败并显示净化错误 |
 | 导出无命中、路径非法、目标存在、写入或发布失败 | 不留下目标 zip；对话框保留参数并显示错误 |
-| 导出取消 | 回收 runner、快照句柄、workspace 与 temp；回到表单显示 cancelled |
+| 导出取消 | 回收 runner/句柄，按 5.9.1 尝试清理 workspace/temp，降级或失败报 warning；回到表单显示 cancelled |
 | clipboard 失败 | 路径仍可见，不影响已经成功的导出 |
 
 ### 5.12 测试
@@ -479,7 +493,7 @@ stderr fallback 和 UI/protocol 错误同样先经 redactor；底层路径、URL
 - **协议**：GET/PATCH 精确 JSON round-trip；revision 包含在两种响应；空/null PATCH；未知字段；整数类型/溢出/范围；显式 revision 0；冲突 details；data failure=422；degraded capability；相同新值 revision +1；相同 operation ID 重试不重复提交。
 - **TUI 配置**：离线 bootstrap 为 debug/100/10 且不删除合法 archive；离线显示 unavailable；GET/PATCH 应用完整响应；revision 0 仍发送；冲突 reload；连接 epoch 不同或 revision 较旧的迟到响应不回退 root/System/applier；另一个 TUI 改变全局 revision 后经 session poll 进入保守策略并重新同步；数字输入超长安全拒绝。
 - **导出快照**：archive 数字顺序从旧到新；枚举 `FileIdentity` 与打开 handle identity 不匹配时 fail closed；快照后 append 不进入结果；快照后并发 rotate/max-files=1 replacement 无重复、漏读或 inode 清空；`UseNumber` 保留大整数；数组/标量/第二 JSON 值/尾随 token、超 1 MiB 和其它无效 JSON 有界跳过并计数；All/Last 24h/Between；保留文件因果顺序；三个来源无命中不发布。
-- **导出发布**：用保持到提交结束的 trusted LogDir `DirectoryIdentity` 拒绝相同/后代目录及 symlink data-root 绕过，并在每次 publish 尝试紧邻提交前重新检查 containment；拒绝相对/非 zip/既有目标和不存在的自定义父目录；workspace 为 0700/protected-DACL 且来源 basename 不可由 parent writer 替换；默认目录/编号创建；取消和各阶段注入失败清理 workspace/temp 且不发布目标（外部主体将 workspace 移出 held parent 时允许留下不可寻址的私有 orphan 并报告 warning，禁止路径追删）；默认 publish 抢占后在同一 held Dir/workspace 重试并返回实际路径，自定义目标不重试；校验后替换父路径也不能改变已打开的发布目录 identity；最终 zip 权限与固定 entry；manifest 字段。
+- **导出发布**：用保持到提交结束的 trusted LogDir `DirectoryIdentity` 拒绝相同/后代目录及 symlink data-root 绕过，并在每次 publish 尝试紧邻提交前重新检查 containment；拒绝相对/非 zip/既有目标和不存在的自定义父目录；workspace 为 0700/protected-DACL 且来源 basename 不可由非受信 parent writer 替换；默认目录/编号创建；取消和各阶段注入失败按 5.9.1 清理且不发布本次目标；覆盖可信 owner/ACL 无额外授权、可信 owner 的 sticky、非可信 owner 的 sticky、0777/0770、ACL-only 授权、ACL 查询失败及清理前权限变化；Unix 降级在内容清理成功时仅空私有 orphan+warning，IO 失败必须报告可能的内容残留；覆盖同 parent 已完成的受信改名、replacement 和 move-out；Windows 用独立外部 handle 验证 rename/delete 被拒绝，guard 下验证后才 disposition，并覆盖验证失败无 disposition；默认 publish 抢占后在同一 held Dir/workspace 重试并返回实际路径，自定义目标不重试；校验后替换父路径也不能改变已打开的发布目录 identity；最终 zip 权限与固定 entry；manifest 字段。
 - **TUI 导出**：打开时显示 Now、提交时再取 Now 算时间窗；Pending 防重复；Esc cancellation；成功绝对路径；clipboard 失败仍保留路径；Logs 页 `e` 与 System 共用对话框；搜索/详情态 `e` 不打开；Run 持有稳定 model/runner且重开 generation 不复用，在 `Update` 已登记 runner 但 Cmd 尚未入队时取消仍能 `CancelAndWait`；result channel 先完成、`done` 后关闭；root 在 typed switch 前把每条消息交给 overlay；paste/clipboard 在文本焦点下被 overlay 消费；未知消息含 LoggingSync/Observed 默认不消费；默认路径 Open 时目录缺失不建目录，提交 `AutoNumber=true`；overlay View 优先于 Setup/其它 modal；overlay 期间 action/page result 仍走原页面路由并清除 pending；golden 按 Controls/System 布局更新。
 - **装配/生命周期**：相对 `MIHARI_DATA` 在选定命令 PersistentPreRun 绝对化；`--help`/`--version` 零数据根 IO；在任何 EnsureDirs/默认 token/Settings IO 前建立进程级 PrivateFS，root/LocalSystem 缺根零 IO fail closed；该失败不写入 CLI SetupError；TUI 收到 nil fs 仍运行，daemon 见到 nil fs 零 Settings IO 后失败；health/`exportLogs` 在 `newModelWithClientContext` 替换之后注入；Settings 加载后创建 daemon logger；`OnBackgroundError` 接入；CommandStarter stdout/stderr 进入 mihomo.log；先关闭 capture 后关闭 logger；TUI applier/Export runner 可取消并等待；TUI/daemon 所有 file/lock/directory/workspace handle 关闭且 `PrivateFS.Close` 幂等。
 - **跨平台构建**：保持 `CGO_ENABLED=0`，至少检查 Windows/Linux/macOS 的 amd64/arm64 受影响目标；平台文件与 build tag 配对。

@@ -3,12 +3,15 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/service"
@@ -1208,6 +1211,192 @@ type loggingResultRecordingPage struct {
 	synced   int
 	lastSync ui.LoggingSyncMsg
 	helpMode string
+}
+
+func TestModel_ExportOverlayOpensAndPreservesRootRouting(t *testing.T) {
+	model := NewModel()
+	model.exportLogs = ui.NewExportLogsModel(ui.ExportLogsOptions{Now: func() time.Time { return time.Unix(1, 0) }})
+	updated, _ := model.Update(ui.OpenExportLogsMsg{})
+	model = updated.(Model)
+	if model.exportLogs.Closed() {
+		t.Fatal("export overlay did not open")
+	}
+	updated, _ = model.Update(ui.RuntimeRevisionMsg{Revision: 9})
+	model = updated.(Model)
+	if model.status.Revision != 9 {
+		t.Fatalf("revision=%d", model.status.Revision)
+	}
+	if !strings.Contains(model.View().Content, ui.ExportLogsTitle) {
+		t.Fatal("open export overlay was not rendered")
+	}
+}
+
+func TestModel_ExportOverlayApprovedQuitBypassesQueuedModal(t *testing.T) {
+	for _, key := range []tea.KeyPressMsg{{Code: 'q', Text: "q"}, {Code: 'c', Mod: tea.ModCtrl}} {
+		model := NewModel()
+		model.exportLogs = ui.NewExportLogsModel(ui.ExportLogsOptions{Now: func() time.Time { return time.Unix(1, 0) }})
+		model.exportLogs.Open()
+		model.modal = NewConfirmation("queued", "object", "impact", "rollback")
+		queued := model.modal
+		updated, cmd := model.Update(key)
+		model = updated.(Model)
+		if cmd == nil || cmd() != tea.Quit() {
+			t.Fatalf("key=%q did not quit", key.String())
+		}
+		if model.modal != queued || model.exportLogs.Closed() {
+			t.Fatalf("key=%q mutated queued modal or overlay", key.String())
+		}
+	}
+}
+
+func TestModel_ExportOverlayViewPrecedesSetupAndQueuedModalThenRestoresShell(t *testing.T) {
+	model := NewModel()
+	model.active = ui.PageSetup
+	model.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageSetup}
+	model.modal = NewDetail("queued detail", "hidden body")
+	model.exportLogs = ui.NewExportLogsModel(ui.ExportLogsOptions{Now: func() time.Time { return time.Unix(1, 0) }})
+	model.exportLogs.Open()
+	view := model.View()
+	if !view.AltScreen || view.WindowTitle != ui.AppName || !strings.Contains(view.Content, ui.ExportLogsTitle) || strings.Contains(view.Content, "hidden body") {
+		t.Fatalf("overlay view flags/content: alt=%v title=%q content=%q", view.AltScreen, view.WindowTitle, view.Content)
+	}
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	model = updated.(Model)
+	if model.active != ui.PageSetup || model.focus != (ui.Focus{Area: ui.FocusContent, Page: ui.PageSetup}) || model.modal == nil {
+		t.Fatalf("shell state changed after overlay close: active=%s focus=%+v modal=%v", model.active, model.focus, model.modal)
+	}
+	if restored := model.View().Content; !strings.Contains(restored, "hidden body") {
+		t.Fatalf("queued modal not restored: %q", restored)
+	}
+}
+
+func TestModel_PendingExportPreservesAsyncRootAndTargetPageRouting(t *testing.T) {
+	started := make(chan struct{})
+	model := NewModel()
+	page := &allMessageRecordingPage{id: ui.PageSystem}
+	model.pages[ui.PageSystem] = page
+	model.exportLogs = ui.NewExportLogsModel(ui.ExportLogsOptions{
+		Now: func() time.Time { return time.Unix(1, 0) }, DefaultDir: t.TempDir(),
+		Export: func(ctx context.Context, _ logging.ExportRequest) (logging.ExportResult, error) {
+			close(started)
+			<-ctx.Done()
+			return logging.ExportResult{}, ctx.Err()
+		},
+	})
+	t.Cleanup(model.exportLogs.CancelAndWait)
+	model.exportLogs.Open()
+	model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if cmd, consumed := model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd == nil || !consumed {
+		t.Fatal("export did not enter pending state")
+	}
+	<-started
+
+	updated, _ := model.Update(ui.LoggingObservedMsg{Epoch: 1, Status: protocol.LoggingStatus{Revision: 7, Level: "warn", MaxSizeMB: 10, MaxFiles: 3}})
+	model = updated.(Model)
+	marker := asyncMarkerMsg{}
+	updated, _ = model.Update(ui.PageResultMsg{Page: ui.PageSystem, Result: marker})
+	model = updated.(Model)
+	model.pendingActions["owned"] = ui.ActionRestartCore
+	updated, _ = model.Update(actionCompletedMsg{Intent: ui.ActionIntentMsg{Key: "owned", Page: ui.PageSystem}, Result: marker})
+	model = updated.(Model)
+	if model.loggingRevision == nil || *model.loggingRevision != 7 || len(model.pendingActions) != 0 {
+		t.Fatalf("logging revision=%v pending=%v", model.loggingRevision, model.pendingActions)
+	}
+	if page.count(ui.LoggingObservedMsg{}) != 1 || page.count(marker) != 2 {
+		t.Fatalf("routed messages=%v", page.messages)
+	}
+}
+
+func TestModel_PendingExportRoutesRealSystemActionCompletion(t *testing.T) {
+	// Channel persistence is the only real action executed here, and its data
+	// root is isolated before constructing/rendering the page (which reads it).
+	dataRoot := t.TempDir()
+	t.Setenv("MIHARI_DATA", dataRoot)
+	started := make(chan struct{})
+	model := NewModel()
+	realPage := systempage.New(nil, func() string { return "op" })
+	realPage.SetSelfUpdater(rootSelfUpdater{}, "v1.0.0", t.TempDir()+"/mihari", func() bool { return true })
+	realPage.SetOpenBrowser(func(string) error { t.Fatal("test attempted browser IO"); return nil })
+	realPage.SetSize(180, 100)
+	model.pages[ui.PageSystem] = realPage
+
+	var intent ui.ActionIntentMsg
+	found := false
+	for steps := 0; steps < 64; steps++ {
+		if strings.Contains(ansi.Strip(realPage.View()), ui.FocusMarker+ui.MihariChannelLabel) {
+			_, cmd := realPage.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			if cmd == nil {
+				t.Fatal("channel row did not provide intent")
+			}
+			request, ok := cmd().(ui.ActionIntentMsg)
+			if !ok || request.Action != ui.ActionSwitchMihariChannel {
+				t.Fatal("selected row was not channel action")
+			}
+			intent, found = request, true
+			break
+		}
+		page, _ := realPage.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		realPage = page.(*systempage.Model)
+	}
+	if !found {
+		t.Fatal("real System source page did not expose its Mihari channel action")
+	}
+	model.pages[ui.PageSystem] = realPage
+
+	updated, _ := model.executeAction(intent)
+	model = updated.(Model)
+	if !strings.Contains(model.pages[ui.PageSystem].View(), ui.MihariProgressSwitching) {
+		t.Fatal("real System source page did not enter action-pending state")
+	}
+	model.exportLogs = ui.NewExportLogsModel(ui.ExportLogsOptions{
+		Now: func() time.Time { return time.Unix(1, 0) }, DefaultDir: t.TempDir(),
+		Export: func(ctx context.Context, _ logging.ExportRequest) (logging.ExportResult, error) {
+			close(started)
+			<-ctx.Done()
+			return logging.ExportResult{}, ctx.Err()
+		},
+	})
+	t.Cleanup(model.exportLogs.CancelAndWait)
+	model.exportLogs.Open()
+	model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if cmd, consumed := model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd == nil || !consumed {
+		t.Fatal("export did not enter pending state")
+	}
+	<-started
+
+	completion := actionCompletedMsg{Intent: intent, Result: intent.Execute()}
+	updated, _ = model.Update(completion)
+	model = updated.(Model)
+	if len(model.pendingActions) != 0 || strings.Contains(model.pages[ui.PageSystem].View(), ui.MihariProgressSwitching) {
+		t.Fatalf("real System completion did not clear root/source pending state: root=%v view=%q", model.pendingActions, model.pages[ui.PageSystem].View())
+	}
+	channel, err := update.LoadChannel(filepath.Join(dataRoot, "mihari-channel"))
+	if err != nil || channel != update.ChannelDev || !strings.Contains(model.pages[ui.PageSystem].View(), ui.DoneLabel) {
+		t.Fatalf("real System channel completion was not applied: channel=%q err=%v", channel, err)
+	}
+}
+
+type allMessageRecordingPage struct {
+	id       ui.PageID
+	messages []tea.Msg
+}
+
+func (p *allMessageRecordingPage) ID() ui.PageID    { return p.id }
+func (p *allMessageRecordingPage) SetSize(int, int) {}
+func (p *allMessageRecordingPage) FocusFirst()      {}
+func (p *allMessageRecordingPage) View() string     { return "" }
+func (p *allMessageRecordingPage) Update(msg tea.Msg) (ui.Page, tea.Cmd) {
+	p.messages = append(p.messages, msg)
+	return p, nil
+}
+func (p *allMessageRecordingPage) count(sample tea.Msg) int {
+	n := 0
+	for _, msg := range p.messages {
+		if fmt.Sprintf("%T", msg) == fmt.Sprintf("%T", sample) {
+			n++
+		}
+	}
+	return n
 }
 
 func (p *loggingResultRecordingPage) ID() ui.PageID    { return ui.PageSystem }

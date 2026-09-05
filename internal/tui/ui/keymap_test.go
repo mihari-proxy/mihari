@@ -238,6 +238,8 @@ func TestCatalog_KeysAppearInHandlerSource(t *testing.T) {
 			return []string{filepath.Join(tuiDir, "pages", "system", "model.go")}
 		case b.Mode == ModeLoggingEdit:
 			return []string{filepath.Join(tuiDir, "pages", "system", "model.go")}
+		case b.Mode == ModeExportLogs:
+			return []string{filepath.Join(uiDir, "exportlogs.go")}
 		default:
 			return nil
 		}
@@ -293,7 +295,7 @@ func TestRenderFooter_MatchesCurrentLayout(t *testing.T) {
 		{"proxies", RenderFooter(PageProxies, "", FooterOpt{}), "Esc back  Enter expand  t test  Ctrl+T test all  ? help  q quit"},
 		{"connections", RenderFooter(PageConnections, "", FooterOpt{}), "Esc back  / search  x close  p pause  Enter details  ? help  q quit"},
 		{"rules", RenderFooter(PageRules, "", FooterOpt{}), "Esc back  / search  r reload  u update  Ctrl+U update all  Enter details  ? help  q quit"},
-		{"logs", RenderFooter(PageLogs, "", FooterOpt{}), "Esc back  / search  p pause  w wrap  G newest  Enter details  ? help  q quit"},
+		{"logs", RenderFooter(PageLogs, "", FooterOpt{}), "Esc back  / search  p pause  w wrap  G newest  e export  Enter details  ? help  q quit"},
 		{"subscriptions", RenderFooter(PageSubscriptions, "", FooterOpt{}), "Esc back  Enter details  a add  e edit  Space toggle  p proxy  r refresh  Ctrl+R refresh all  u use  d delete  ? help  q quit"},
 		{"webgui-off", RenderFooter(PageWebGUI, "", FooterOpt{}), "Esc back  ? help  q quit"},
 		{"webgui-on", RenderFooter(PageWebGUI, "", FooterOpt{WebGUIAvailable: true}), "Esc back  ↑/↓ panel  Space set default  o open  i install  u update  r reinstall  x uninstall  b rollback  ? help  q quit"},

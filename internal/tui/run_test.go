@@ -16,6 +16,7 @@ import (
 	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
 func TestFinishRunRelaunchesOnlyWhenRequested(t *testing.T) {
@@ -419,12 +420,132 @@ func TestNewRunModelInjectsHealthAfterClientModelReplacement(t *testing.T) {
 	}
 }
 
+func TestAttachRunExportLogsBuildsOnceOnFinalClientModelWithProgramContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	resources := NewLoggingResources(nil, logging.NewRedactor("token"), nil)
+	model := newRunModel(ctx, controlclient.New("unused", ""), nil, &resources, newRunLoggingApplier(ctx, nil))
+	calls := 0
+	observedCancel := make(chan struct{})
+	exportLogs := attachRunExportLogs(ctx, &model, resources, func(got LoggingResources) ui.ExportLogsOptions {
+		calls++
+		if got.Redactor != resources.Redactor {
+			t.Fatal("factory did not receive opened resources")
+		}
+		return ui.ExportLogsOptions{Context: context.Background(), DefaultDir: t.TempDir(), Export: func(got context.Context, _ logging.ExportRequest) (logging.ExportResult, error) {
+			<-got.Done()
+			close(observedCancel)
+			return logging.ExportResult{}, got.Err()
+		}}
+	})
+	if calls != 1 || exportLogs == nil || model.exportLogs != exportLogs {
+		t.Fatalf("calls=%d export=%p root=%p", calls, exportLogs, model.exportLogs)
+	}
+	t.Cleanup(exportLogs.CancelAndWait)
+	if exportLogs.Closed() == false {
+		t.Fatal("new export overlay must start closed")
+	}
+	exportLogs.Open()
+	exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if waiter, consumed := exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); waiter == nil || !consumed {
+		t.Fatal("attached exporter did not submit")
+	}
+	cancel()
+	select {
+	case <-observedCancel:
+	case <-time.After(time.Second):
+		t.Fatal("exporter did not independently receive the Program context cancellation")
+	}
+}
+
 func TestNewRunLoggingApplierHandlesTypedNilRuntime(t *testing.T) {
 	applier := newRunLoggingApplier(context.Background(), nil)
 	if !applier.Submit(logging.BootstrapConfig()) {
 		t.Fatal("typed-nil runtime applier rejected Submit")
 	}
 	applier.CloseAndWait()
+}
+
+func TestRunCleanupOwnsExportBeforeApplierAndResourcesWhenWaiterCmdIsUnexecuted(t *testing.T) {
+	started := make(chan struct{})
+	exportDone := make(chan struct{})
+	exportModel := ui.NewExportLogsModel(ui.ExportLogsOptions{
+		Context: context.Background(), Now: func() time.Time { return time.Unix(1, 0) }, DefaultDir: t.TempDir(),
+		Export: func(ctx context.Context, _ logging.ExportRequest) (logging.ExportResult, error) {
+			close(started)
+			<-ctx.Done()
+			close(exportDone)
+			return logging.ExportResult{}, ctx.Err()
+		},
+	})
+	exportModel.Open()
+	exportModel.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	waiter, consumed := exportModel.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if waiter == nil || !consumed {
+		t.Fatal("submit did not synchronously own export")
+	}
+	<-started
+
+	var order []string
+	resources := NewLoggingResources(nil, nil, nil)
+	resources.closeState = newLoggingResourcesCloseState(
+		&workerAwareCloser{name: "runtime", workerDone: exportDone, order: &order, t: t},
+		&workerAwareCloser{name: "fs", workerDone: exportDone, order: &order, t: t},
+	)
+	applier := &orderedLoggingApplier{order: &order, workerDone: exportDone, t: t}
+	cleanup := newRunCleanup(&resources, func() { order = append(order, "session") }, exportModel, applier, nil)
+	if err := cleanup(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanup(loadingModel{}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"session", "applier", "runtime", "fs"}; !slices.Equal(order, want) {
+		t.Fatalf("order=%q want=%q", order, want)
+	}
+	// The result channel is buffered: a waiter first scheduled after cleanup still completes.
+	if message := waiter(); message == nil {
+		t.Fatal("late waiter returned nil")
+	}
+}
+
+func TestFinishRunAlwaysInvokesStableCleanupForNilUnexpectedAndErrors(t *testing.T) {
+	runErr := errors.New("program failed")
+	for _, test := range []struct {
+		name  string
+		final tea.Model
+		err   error
+	}{
+		{name: "nil final", final: nil},
+		{name: "unexpected final", final: loadingModel{}},
+		{name: "program error", final: nil, err: runErr},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			err := finishRun(test.final, test.err, io.Discard, nil, func(tea.Model) error { calls++; return nil })
+			if calls != 1 || !errors.Is(err, test.err) {
+				t.Fatalf("cleanup calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}
+
+type orderedLoggingApplier struct {
+	order      *[]string
+	workerDone <-chan struct{}
+	t          *testing.T
+}
+
+func (a *orderedLoggingApplier) Submit(logging.Config) bool { return true }
+func (a *orderedLoggingApplier) CloseAndWait() {
+	if a.workerDone != nil {
+		select {
+		case <-a.workerDone:
+		default:
+			a.t.Fatal("applier closed before exporter finished")
+		}
+	}
+	*a.order = append(*a.order, "applier")
 }
 
 func requestedRelaunchModel() Model {

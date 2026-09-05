@@ -9,6 +9,7 @@
  › 8 System      │   Max file size  25 MiB                                                        │
                  │   Files to keep  6                                                             │
                  │   Directory  C:\Users\alice\.mihari\logs                                       │
+                 │   Export logs                                                                  │
                  │ Local file log unavailable                                                     │
                  ╰────────────────────────────────────────────────────────────────────────────────╯
                  ╭───Daemon───────────────────────────────────────────────────────────────────────╮
@@ -33,7 +34,6 @@
                  │   Mihari  A local manager for mihomo                                           │
                  │   GitHub  github.com/mihari-proxy/mihari                                       │
                  ╰────────────────────────────────────────────────────────────────────────────────╯
-
 
 
 

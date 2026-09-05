@@ -26,8 +26,10 @@ const (
 	ModePortsEdit = "ports-edit"
 	// ModeLoggingEdit identifies numeric Logging settings text input.
 	ModeLoggingEdit = "logging-edit"
-	ModeConfirm     = "confirm"
-	ModeSetup       = "setup"
+	// ModeExportLogs identifies the shared log export overlay.
+	ModeExportLogs = "export-logs"
+	ModeConfirm    = "confirm"
+	ModeSetup      = "setup"
 )
 
 // KeyBinding is one shortcut in a page or mode. Identity is (Scope, Page, Mode, Keys),
@@ -86,6 +88,7 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"p"}, Display: "p", Label: "pause or resume", Footer: "p pause", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"w"}, Display: "w", Label: "wrap", Footer: "w wrap", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"G"}, Display: "G", Label: "jump to newest", Footer: "G newest", Scope: ScopePage, Page: PageLogs},
+		{Keys: []string{"e"}, Display: "e", Label: "export logs", Footer: "e export", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "open details or activate a control", Footer: "Enter details", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"up", "down", "left", "right"}, Display: "↑/↓/←/→", Label: "move", Scope: ScopePage, Page: PageLogs},
 
@@ -137,6 +140,10 @@ func Catalog() []KeyBinding {
 		{Display: "type", Label: "edit the value", Footer: "Type value", Scope: ScopeMode, Mode: ModeLoggingEdit},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "apply", Footer: "Enter apply", Scope: ScopeMode, Mode: ModeLoggingEdit},
 		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel", Footer: "Esc cancel", Scope: ScopeMode, Mode: ModeLoggingEdit},
+
+		{Keys: []string{"tab", "shift+tab"}, Display: "Tab / Shift+Tab", Label: "move between export fields", Footer: "Tab/Shift+Tab fields", Scope: ScopeMode, Mode: ModeExportLogs},
+		{Keys: []string{"enter"}, Display: "Enter", Label: "export or copy the completed path", Footer: "Enter export", Scope: ScopeMode, Mode: ModeExportLogs},
+		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel or close", Footer: "Esc cancel", Scope: ScopeMode, Mode: ModeExportLogs},
 
 		{Keys: []string{"tab", "shift+tab", "left", "right"}, Display: "Tab / ←/→", Label: "toggle Confirm / Cancel", Scope: ScopeMode, Mode: ModeConfirm},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "activate the selected button", Scope: ScopeMode, Mode: ModeConfirm},
@@ -217,6 +224,8 @@ func RenderFooter(page PageID, mode string, opt FooterOpt) string {
 		return joinFooter(footerTokens(func(b KeyBinding) bool { return b.Mode == ModeForm }))
 	case ModeLoggingEdit:
 		return joinFooter(footerTokens(func(b KeyBinding) bool { return b.Mode == ModeLoggingEdit }))
+	case ModeExportLogs:
+		return joinFooter(footerTokens(func(b KeyBinding) bool { return b.Mode == ModeExportLogs }))
 	default:
 		if page == PageSetup {
 			return joinFooter(footerTokens(func(b KeyBinding) bool {
@@ -323,6 +332,8 @@ func modeTitle(mode string) string {
 		return "Ports edit"
 	case ModeLoggingEdit:
 		return "Logging edit"
+	case ModeExportLogs:
+		return "Export logs"
 	case ModeConfirm:
 		return "Confirm"
 	case ModeSetup:

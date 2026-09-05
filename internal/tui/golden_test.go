@@ -204,9 +204,6 @@ func TestGoldenSystemLoggingFull(t *testing.T) {
 	page.SetLocalLoggingAvailable(false)
 	page.FocusFirst()
 	view := normalizeRender(model.View().Content)
-	if strings.Contains(view, "Export") {
-		t.Fatalf("Task 9 golden must not contain Export:\n%s", view)
-	}
 	assertGoldenContent(t, "full/system-logging", trimRenderPadding(view))
 }
 

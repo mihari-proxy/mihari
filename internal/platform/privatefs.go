@@ -187,6 +187,24 @@ func (fs *PrivateFS) OpenDirIdentity(path string) (*DirectoryIdentity, error) {
 	return fs.openDirIdentityLocked(name)
 }
 
+// OpenPublishDir opens one of PrivateFS's verified child directories as a
+// held publish capability.
+func (fs *PrivateFS) OpenPublishDir(path string) (*PublishDir, error) {
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+	if fs.closed {
+		return nil, errPrivateFSClosed
+	}
+	name, err := fs.resolveDir(path)
+	if err != nil {
+		return nil, err
+	}
+	if name != privateExportDirName {
+		return nil, fmt.Errorf("private fs publish directory must be logs-export")
+	}
+	return fs.openPublishDirLocked(name)
+}
+
 // Rename renames a file within the same verified logs/ or logs-export/ directory.
 func (fs *PrivateFS) Rename(oldpath, newpath string) error {
 	fs.mu.RLock()

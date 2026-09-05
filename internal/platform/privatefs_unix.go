@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"golang.org/x/sys/unix"
 )
@@ -305,6 +306,27 @@ func (fs *PrivateFS) openDirIdentityLocked(name string) (*DirectoryIdentity, err
 		return nil, err
 	}
 	return &DirectoryIdentity{plat: dirIdentityState{fd: dup, id: identFromStat(&st)}}, nil
+}
+
+func (fs *PrivateFS) openPublishDirLocked(name string) (*PublishDir, error) {
+	fd, err := fs.dirFD(name)
+	if err != nil {
+		return nil, err
+	}
+	dup, err := dupCLOEXEC(fd)
+	if err != nil {
+		return nil, fmt.Errorf("duplicate private publish directory: %w", err)
+	}
+	d, err := publishDirFromFD(dup, filepath.Join(fs.root, name))
+	if err != nil {
+		_ = unix.Close(dup)
+		return nil, err
+	}
+	d.plat.setOwner = true
+	d.plat.uid = fs.plat.uid
+	d.plat.gid = fs.plat.gid
+	d.assessInitialNamespace()
+	return d, nil
 }
 
 func (fs *PrivateFS) renameLocked(dir, oldName, newName string, replace bool) error {

@@ -45,7 +45,7 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 - Setup 审查页汇总端口(改端口且守护进程报告需重启时标注「需重启生效」)/ core 来源与版本(本地已有/新装/安装失败)/ 订阅 / GeoIP / mihari 服务注册状态(经 `GET /v1/service/status` 拉取);跳过项如实标注。各步结果在命令闭包内回写 Model,依赖 Bubble Tea 的 cmd→channel→Update happens-before 保证。
 - System 页面通过与 `mihari service` 相同的本地服务适配器管理 OS 服务(安装/卸载/启动/停止/重启/状态);这些操作要求进程已经提权,且不经过守护进程控制协议。当守护进程通告相应能力时,System 页面显示实时的系统代理与 TUN 状态,并通过本地控制 API 切换它们(开启外部代理或其他 TUN / mihomo 实例需要强制确认;Mihari 从不清除其他产品的代理)。
 - System 页面的 Ports Config 可修改 Mixed / Controller / Web 端口;占用按本实例 PID 显示 `Owned`,或 `Occupied by name (pid)` / `Available`。写入复用 onboarding 更新,应用后通常 `RestartRequired`。没有对应 CLI。
-- System 页面的 Logging 区可修改 daemon-owned 的 level、最大文件大小与保留数量；更新经稳定的 `/v1/logging` 控制协议热应用，不需要 daemon restart。PR 2 不提供日志导出入口。
+- System 页面的 Logging 区可修改 daemon-owned 的 level、最大文件大小与保留数量；更新经稳定的 `/v1/logging` 控制协议热应用，不需要 daemon restart。Logs 页的 `e` 与 System → Logging 的 **Export logs** 打开同一个本地导出对话框；导出不增加 control API 或 CLI 命令。
 - System 页面还在进入时以只读方式检查 Mihari 的最新 GitHub Release,并用 `当前版本 · 最新版本 available`、`当前版本 · Up to date` 或 `ahead of <channel> <latest>` 展示结果。确认更新后,本地 updater 在控制协议之外替换 Mihari 可执行文件并尝试重启已安装服务;该写操作要求 TUI 进程已经具备管理员/root 权限,不会自动触发 UAC 或 sudo。旧 Bubble Tea 程序先退出并恢复终端,随后平台适配器从已替换的二进制自动进入新 TUI。
 - Mihari 应用通道 `main`/`dev` 与 mihomo Core 通道 `stable`/`alpha` 分开：应用通道写在数据根的 `mihari-channel` sidecar，不进 `mihari.yaml` / `/v1`；AIO `--channel` 只写该 sidecar；CLI/TUI 自更新仍走 GitHub Releases。
 - System 页面的 `Core Channel` 行可在 `stable` / `alpha` 之间切换;切换后由守护进程按新通道重装核心。版本行显示 `ParseVersion(mihomo -v)` 的身份 token,从不显示 `Prerelease-Alpha`。
@@ -84,8 +84,10 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 
 - 每次安装保持**一个数据根目录**(可用 `MIHARI_DATA` 覆盖):Windows 默认 `%USERPROFILE%\.mihari`,macOS/Linux 默认 `$HOME/.mihari`。
 - 几乎所有内容都位于该根目录下:设置、控制令牌(`control.token`)、运行时配置、核心二进制、订阅、GeoIP、面板资产、日志与暂存。
-- 文件日志布局:`logs/mihari-daemon.log`、`logs/mihari-tui.log`、`logs/mihomo.log`。`logs-export/` 是受保护的预留目录能力，PR 2 尚未提供日志导出入口。
+- 文件日志布局:`logs/mihari-daemon.log`、`logs/mihari-tui.log`、`logs/mihomo.log`。TUI 在本地对各来源取得有界快照，按时间窗过滤并递归二次脱敏后，把固定 entry 与 `manifest.json` 原子发布到 `logs-export/` 或用户选择的既有目录；不读取 settings、token、订阅、runtime config 或 lock file，也不覆盖已有目标。
 - 日志与默认导出目录经 `PrivateFS` 创建/加固:Unix `0700` 目录/`0600` 文件;Windows 受保护 DACL 只授予数据根 owner 与 LocalSystem。跨进程协调使用相邻 `*.lock` 文件;打开 `logs/` 及文件后每一跳 no-follow,拒绝中间与最终的 symlink/reparse/junction。
+- 导出从校验目标到提交结束一直持有真实父目录 identity，并只用目录句柄内的 basename 创建 workspace 和发布；生成期间外部替换可见父路径会安全失败，不会跟随到替代目录。成功发布后父目录若被外部再次改名，先前显示的绝对路径可能失效。
+- Unix workspace 清理只在能证明父目录 namespace 由同 UID、数据根 owner 或本机 root/管理员等受信主体控制时按名删除；不可信共享父目录在内容清理成功时允许留下空的 0700 私有 workspace，清理 IO 失败则只能报告可能有内容残留。Windows 从创建起持有不 share-delete 的 workspace guard，直至验证并清理完成。
 - 需要本地数据根的选定命令必须先 `Paths.Absolute()`,再 `NewPrivateFS(absolutePaths.Root)`,然后才允许 `EnsureDirs`、默认 in-root token 或 Settings IO。`EnsureDirs` 可预创建 `logs/` 但不是 root 创建/加固入口。`--help`/`--version` 不得调用该路径。root/LocalSystem 遇到缺失 data root 必须零目录 IO fail closed,不得创建仅 root/System 可用的替代根。该 `NewPrivateFS` 失败不得写入 CLI `SetupError`(避免拦截 TUI);TUI 可继续运行并接管 `PrivateFS=nil`,daemon 不得在失败后继续目录/Settings IO。daemon 与 TUI 复用并接管这一个进程级 `PrivateFS` capability,不得在 `EnsureDirs`/Settings 之后再次调用 `NewPrivateFS`。
 - `service install` 将**绝对**的 `MIHARI_DATA=<data root>` 写入 OS 服务环境,使 LocalSystem/root 服务与安装它的用户共享同一棵树(而非 `systemprofile` 或 `/root`)。
 - `service uninstall` 只移除 OS 注册并**保留**数据根目录。请手动删除数据目录(或未来的 `--purge`)以清除残留文件。`%AppData%\mihari` 或 `%ProgramData%\mihari` 下的旧树不会自动迁移或删除。

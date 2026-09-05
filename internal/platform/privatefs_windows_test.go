@@ -3,9 +3,12 @@
 package platform
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -20,9 +23,9 @@ func TestPrivateFS_WindowsProtectedDACL(t *testing.T) {
 	if err := writeLog(fs, paths.DaemonLog, "x"); err != nil {
 		t.Fatal(err)
 	}
-	assertOwnerSystemDACL(t, paths.Root, true)
-	assertOwnerSystemDACL(t, paths.LogDir, true)
-	assertOwnerSystemDACL(t, paths.DaemonLog, false)
+	assertPrincipalSystemDACL(t, paths.Root, fs.plat.owner, true)
+	assertPrincipalSystemDACL(t, paths.LogDir, fs.plat.owner, true)
+	assertPrincipalSystemDACL(t, paths.DaemonLog, fs.plat.owner, false)
 }
 
 func TestPrivateFS_WindowsChildFileDACL(t *testing.T) {
@@ -33,7 +36,7 @@ func TestPrivateFS_WindowsChildFileDACL(t *testing.T) {
 	if err := writeLog(fs, paths.TUILog, "child"); err != nil {
 		t.Fatal(err)
 	}
-	assertOwnerSystemDACL(t, paths.TUILog, false)
+	assertPrincipalSystemDACL(t, paths.TUILog, fs.plat.owner, false)
 }
 
 func TestPrivateFS_WindowsTightenWideDACL(t *testing.T) {
@@ -47,7 +50,7 @@ func TestPrivateFS_WindowsTightenWideDACL(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = fs.Close() })
-	assertOwnerSystemDACL(t, root, true)
+	assertPrincipalSystemDACL(t, root, fs.plat.owner, true)
 	logs := filepath.Join(root, "logs")
 	if err := os.Mkdir(logs, 0o777); err != nil {
 		t.Fatal(err)
@@ -56,7 +59,7 @@ func TestPrivateFS_WindowsTightenWideDACL(t *testing.T) {
 	if err := fs.EnsureDir(logs); err != nil {
 		t.Fatal(err)
 	}
-	assertOwnerSystemDACL(t, logs, true)
+	assertPrincipalSystemDACL(t, logs, fs.plat.owner, true)
 }
 
 func TestPrivateFS_WindowsRefuseCreateRootAsLocalSystem(t *testing.T) {
@@ -205,15 +208,217 @@ func TestPrivateFS_WindowsCloseReleasesHandles(t *testing.T) {
 	}
 }
 
-func assertOwnerSystemDACL(t *testing.T, path string, directory bool) {
-	t.Helper()
-	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+func TestPublishWorkspace_WindowsProtectedDACL(t *testing.T) {
+	parent := t.TempDir()
+	d, err := OpenPublishDir(parent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner, _, err := sd.Owner()
-	if err != nil || owner == nil {
-		t.Fatalf("owner: %v", err)
+	t.Cleanup(func() { _ = d.Close() })
+	w, err := d.CreateWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	user, err := currentUserSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspacePath := filepath.Join(parent, w.name)
+	assertPrincipalSystemDACL(t, workspacePath, user, true)
+	f, name, err := w.CreateTemp("private-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertPrincipalSystemDACL(t, filepath.Join(workspacePath, name), user, false)
+	if err := w.Remove(name); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCheckPrincipalSystemDACL_DistinguishesOwnerFromProcessPrincipal(t *testing.T) {
+	networkService, err := windows.CreateWellKnownSid(windows.WinNetworkServiceSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localService, err := windows.CreateWellKnownSid(windows.WinLocalServiceSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;NS)(A;;FA;;;SY)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkPrincipalSystemDACL(dacl, networkService, false); err != nil {
+		t.Fatalf("matching principal rejected: %v", err)
+	}
+	if err := checkPrincipalSystemDACL(dacl, localService, false); err == nil {
+		t.Fatal("different expected principal accepted")
+	}
+}
+
+func TestPublishDir_WindowsPostPublishFailureIsWarning(t *testing.T) {
+	parent := t.TempDir()
+	d, err := OpenPublishDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	w, err := d.CreateWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	f, name, err := w.CreateTemp("warn-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte("published")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	original := publishWindowsPostRenameFlushFn
+	t.Cleanup(func() { publishWindowsPostRenameFlushFn = original })
+	publishWindowsPostRenameFlushFn = func(windows.Handle) error { return windows.ERROR_WRITE_FAULT }
+	var warnings []error
+	err = d.PublishNoReplace(w, name, "result.zip", func(err error) { warnings = append(warnings, err) })
+	publishWindowsPostRenameFlushFn = original
+	if err != nil {
+		t.Fatalf("published target reported failure: %v", err)
+	}
+	if len(warnings) == 0 {
+		t.Fatal("expected post-publish warning")
+	}
+	if got, err := os.ReadFile(filepath.Join(parent, "result.zip")); err != nil || string(got) != "published" {
+		t.Fatalf("target=%q err=%v", got, err)
+	}
+}
+
+func TestPublishWorkspace_WindowsReparseInspectionFailureCleansCreatedDirectory(t *testing.T) {
+	d, err := OpenPublishDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupPublishDir(t, d)
+	inspectionErr := errors.New("injected attribute query failure")
+	originalInspect := publishWindowsCreatedHandleAttributesFn
+	t.Cleanup(func() { publishWindowsCreatedHandleAttributesFn = originalInspect })
+	publishWindowsCreatedHandleAttributesFn = func(windows.Handle) (uint32, error) { return 0, inspectionErr }
+	if w, err := d.CreateWorkspace(); !errors.Is(err, inspectionErr) {
+		if w != nil {
+			_ = w.Close()
+		}
+		t.Fatalf("CreateWorkspace error=%v want inspection error", err)
+	}
+	entries, err := os.ReadDir(d.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("created workspace was not cleaned: %v", entries)
+	}
+}
+
+func TestPublishWorkspace_WindowsReparseInspectionFailureCleansCreatedTemp(t *testing.T) {
+	d, err := OpenPublishDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupPublishDir(t, d)
+	w, err := d.CreateWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupPublishWorkspace(t, w)
+	inspectionErr := errors.New("injected attribute query failure")
+	originalInspect := publishWindowsCreatedHandleAttributesFn
+	t.Cleanup(func() { publishWindowsCreatedHandleAttributesFn = originalInspect })
+	publishWindowsCreatedHandleAttributesFn = func(windows.Handle) (uint32, error) { return 0, inspectionErr }
+	if f, _, err := w.CreateTemp("inspect-*"); !errors.Is(err, inspectionErr) {
+		if f != nil {
+			_ = f.Close()
+		}
+		t.Fatalf("CreateTemp error=%v want inspection error", err)
+	}
+	empty, err := windowsDirectoryEmpty(w.plat.handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !empty {
+		t.Fatal("created temp was not cleaned")
+	}
+}
+
+func TestPublishWorkspace_WindowsReparseInspectionFailureJoinsCleanupError(t *testing.T) {
+	d, err := OpenPublishDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupPublishDir(t, d)
+	inspectionErr := errors.New("injected attribute query failure")
+	cleanupErr := errors.New("injected cleanup failure")
+	originalInspect := publishWindowsCreatedHandleAttributesFn
+	originalDelete := publishWindowsDeleteCreatedFn
+	t.Cleanup(func() {
+		publishWindowsCreatedHandleAttributesFn = originalInspect
+		publishWindowsDeleteCreatedFn = originalDelete
+	})
+	publishWindowsCreatedHandleAttributesFn = func(windows.Handle) (uint32, error) { return 0, inspectionErr }
+	publishWindowsDeleteCreatedFn = func(windows.Handle) error { return cleanupErr }
+	w, err := d.CreateWorkspace()
+	if w != nil {
+		_ = w.Close()
+	}
+	if !errors.Is(err, inspectionErr) || !errors.Is(err, cleanupErr) {
+		t.Fatalf("CreateWorkspace error=%v want joined inspection and cleanup errors", err)
+	}
+}
+
+func makeDirectoryLink(t *testing.T, link, target string) {
+	t.Helper()
+	createJunction(t, link, target)
+}
+
+func moveWorkspaceOutside(t *testing.T, w *PublishWorkspace, _, outside string) string {
+	t.Helper()
+	d, err := OpenPublishDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupPublishDir(t, d)
+	const movedName = "moved-workspace"
+	if err := renameHandle(w.plat.handle, d.plat.handle, movedName, windows.FILE_RENAME_POSIX_SEMANTICS); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(outside, movedName)
+}
+
+func replaceWorkspaceEntry(t *testing.T, w *PublishWorkspace, parent, moved string) {
+	t.Helper()
+	if err := renameHandle(w.plat.handle, w.owner.plat.handle, filepath.Base(moved), windows.FILE_RENAME_POSIX_SEMANTICS); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(parent, w.name), 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func equalFoldPath(a, b string) bool { return strings.EqualFold(filepath.Clean(a), filepath.Clean(b)) }
+
+func assertPrincipalSystemDACL(t *testing.T, path string, principal *windows.SID, directory bool) {
+	t.Helper()
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
 	}
 	dacl, _, err := sd.DACL()
 	if err != nil {
@@ -222,51 +427,58 @@ func assertOwnerSystemDACL(t *testing.T, path string, directory bool) {
 	if dacl == nil {
 		t.Fatal("empty DACL is fully permissive")
 	}
+	if err := checkPrincipalSystemDACL(dacl, principal, directory); err != nil {
+		t.Fatalf("%s %v", path, err)
+	}
+}
+
+func checkPrincipalSystemDACL(dacl *windows.ACL, principal *windows.SID, directory bool) error {
 	world, err := windows.CreateWellKnownSid(windows.WinWorldSid)
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
 	users, err := windows.CreateWellKnownSid(windows.WinBuiltinUsersSid)
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
 	anon, err := windows.CreateWellKnownSid(windows.WinAnonymousSid)
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
 	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
-	var sawOwner, sawSystem bool
+	var sawPrincipal, sawSystem bool
 	for i := uint16(0); i < dacl.AceCount; i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(dacl, uint32(i), &ace); err != nil {
-			t.Fatal(err)
+			return err
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
 		if sid.Equals(world) || sid.Equals(users) || sid.Equals(anon) {
-			t.Fatalf("%s DACL grants %s", path, sid)
+			return errors.New("DACL grants a broad principal")
 		}
-		if sid.Equals(owner) {
-			sawOwner = true
+		if sid.Equals(principal) {
+			sawPrincipal = true
 		}
 		if sid.Equals(system) {
 			sawSystem = true
 		}
-		if !sid.Equals(owner) && !sid.Equals(system) {
-			t.Fatalf("%s unexpected SID %s", path, sid)
+		if !sid.Equals(principal) && !sid.Equals(system) {
+			return fmt.Errorf("unexpected SID %s", sid)
 		}
 	}
-	if owner.Equals(system) {
+	if principal.Equals(system) {
 		if !sawSystem {
-			t.Fatalf("%s missing SYSTEM ACE", path)
+			return errors.New("missing SYSTEM ACE")
 		}
-		return
+		return nil
 	}
-	if !sawOwner || !sawSystem {
-		t.Fatalf("%s DACL owner=%v system=%v dir=%v", path, sawOwner, sawSystem, directory)
+	if !sawPrincipal || !sawSystem {
+		return fmt.Errorf("DACL principal=%v system=%v dir=%v", sawPrincipal, sawSystem, directory)
 	}
+	return nil
 }
 
 func setWideDACL(t *testing.T, path string) {

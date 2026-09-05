@@ -1,11 +1,59 @@
 package logging
 
 import (
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
 	"testing"
 )
+
+func TestRedactorValue_RecursesWithoutMutationAndPreservesNumbers(t *testing.T) {
+	hex := testControllerHex
+	original := map[string]any{
+		"token": "plain-secret",
+		"items": []any{
+			map[string]any{"url": "visit https://example.test/private?q=token", "count": json.Number("9007199254740993")},
+			"Authorization: Bearer hidden-value",
+			hex,
+		},
+	}
+	redacted, changed := NewRedactor().Value(original)
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+	got := redacted.(map[string]any)
+	if got["token"] != redactedExact {
+		t.Fatalf("token = %#v", got["token"])
+	}
+	items := got["items"].([]any)
+	nested := items[0].(map[string]any)
+	if nested["url"] != "visit [REDACTED_URL]" || nested["count"] != json.Number("9007199254740993") {
+		t.Fatalf("nested = %#v", nested)
+	}
+	if strings.Contains(items[1].(string), "hidden-value") || items[2] != redactedExact {
+		t.Fatalf("items not redacted: %#v", items)
+	}
+	if original["token"] != "plain-secret" || original["items"].([]any)[1] != "Authorization: Bearer hidden-value" {
+		t.Fatalf("original mutated: %#v", original)
+	}
+}
+
+func TestRedactorValue_ReportsOneRecordChange(t *testing.T) {
+	value := map[string]any{"a": "https://one.test/x", "nested": []any{"https://two.test/y", map[string]any{"password": "secret"}}}
+	_, changed := NewRedactor().Value(value)
+	if !changed {
+		t.Fatal("changed = false")
+	}
+	clean := map[string]any{"count": json.Number("7"), "ok": true, "nil": nil}
+	got, changed := NewRedactor().Value(clean)
+	if changed {
+		t.Fatalf("clean value reported changed: %#v", got)
+	}
+	if got.(map[string]any)["count"] != json.Number("7") {
+		t.Fatalf("json.Number changed: %#v", got)
+	}
+}
 
 const (
 	testControlToken    = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"

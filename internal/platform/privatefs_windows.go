@@ -330,6 +330,26 @@ func (fs *PrivateFS) openDirIdentityLocked(name string) (*DirectoryIdentity, err
 	return &DirectoryIdentity{plat: dirIdentityState{handle: dup, id: id}}, nil
 }
 
+func (fs *PrivateFS) openPublishDirLocked(name string) (*PublishDir, error) {
+	h, err := fs.dirHandle(name)
+	if err != nil {
+		if isWindowsNotFound(err) {
+			return nil, os.ErrNotExist
+		}
+		return nil, err
+	}
+	dup, err := dupHandle(h)
+	if err != nil {
+		return nil, err
+	}
+	d, err := publishDirFromHandle(dup)
+	if err != nil {
+		_ = windows.CloseHandle(dup)
+		return nil, err
+	}
+	return d, nil
+}
+
 func (fs *PrivateFS) renameLocked(dir, oldName, newName string, replace bool) error {
 	parent, err := fs.dirHandle(dir)
 	if err != nil {
@@ -554,6 +574,10 @@ func openListingHandle(parent windows.Handle) (windows.Handle, error) {
 }
 
 func openRelative(parent windows.Handle, name string, access, disposition, options, attr uint32, sd *windows.SECURITY_DESCRIPTOR) (windows.Handle, error) {
+	return openRelativeWithShare(parent, name, access, disposition, options, attr, sd, privateShare)
+}
+
+func openRelativeWithShare(parent windows.Handle, name string, access, disposition, options, attr uint32, sd *windows.SECURITY_DESCRIPTOR, share uint32) (windows.Handle, error) {
 	ntName, err := windows.NewNTUnicodeString(name)
 	if err != nil {
 		return 0, err
@@ -567,7 +591,7 @@ func openRelative(parent windows.Handle, name string, access, disposition, optio
 	oa.Length = uint32(unsafe.Sizeof(oa))
 	var h windows.Handle
 	var iosb windows.IO_STATUS_BLOCK
-	err = windows.NtCreateFile(&h, access, &oa, &iosb, nil, attr, privateShare, disposition, options, 0, 0)
+	err = windows.NtCreateFile(&h, access, &oa, &iosb, nil, attr, share, disposition, options, 0, 0)
 	runtime.KeepAlive(ntName)
 	runtime.KeepAlive(sd)
 	if err != nil {
@@ -690,10 +714,7 @@ func parseFullDirInfo(buf []byte) []windowsDirent {
 	const nameOffset = 68
 	var ents []windowsDirent
 	off := 0
-	for {
-		if off+nameOffset > len(buf) {
-			break
-		}
+	for off+nameOffset <= len(buf) {
 		next := binary.LittleEndian.Uint32(buf[off:])
 		attr := binary.LittleEndian.Uint32(buf[off+56:])
 		nameLen := int(binary.LittleEndian.Uint32(buf[off+60:]))

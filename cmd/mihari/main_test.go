@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/cli"
 	"github.com/mihari-proxy/mihari/internal/config"
@@ -26,6 +28,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/tui"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
 func TestTUIRelaunchArgsStartsDefaultTUI(t *testing.T) {
@@ -124,6 +127,152 @@ func TestOpenTUILogging_NilPrivateFSDoesNotCreateRoot(t *testing.T) {
 	}
 	if _, statErr := os.Stat(paths.Root); !os.IsNotExist(statErr) {
 		t.Fatalf("nil PrivateFS created data root: %v", statErr)
+	}
+}
+
+func TestBuildExportLogs_NilPrivateFSUsesStableError(t *testing.T) {
+	paths := absoluteTempPaths(t)
+	options := buildExportLogs(paths)(tui.NewLoggingResources(nil, logging.NewRedactor("secret"), nil))
+	_, err := options.Export(context.Background(), logging.ExportRequest{})
+	if !errors.Is(err, ui.ErrLocalLogStorageUnavailable) || err.Error() != "local log storage unavailable" {
+		t.Fatalf("error=%v", err)
+	}
+	if _, statErr := os.Stat(paths.Root); !os.IsNotExist(statErr) {
+		t.Fatalf("factory accessed missing data root: %v", statErr)
+	}
+}
+
+func TestBuildExportLogs_DefaultExistsDoesNotCreateDirectory(t *testing.T) {
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fs.Close() })
+	options := buildExportLogs(paths)(tui.NewLoggingResources(nil, logging.NewRedactor(), fs))
+	exists, err := options.Exists(paths.LogExportDir, "archive.zip")
+	if err != nil || exists {
+		t.Fatalf("exists=%v err=%v", exists, err)
+	}
+	if _, statErr := os.Stat(paths.LogExportDir); !os.IsNotExist(statErr) {
+		t.Fatalf("Exists created export directory: %v", statErr)
+	}
+}
+
+func TestBuildExportLogs_PartialLoggerResourcesExportAndOwnPrivateFS(t *testing.T) {
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fs.Close() })
+	if err := fs.EnsureDir(paths.LogDir); err != nil {
+		t.Fatal(err)
+	}
+	file, err := fs.OpenAppend(paths.DaemonLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	if _, err := io.WriteString(file, `{"time":"2026-09-05T00:00:00Z","level":"INFO","msg":"token=partial-secret"}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resources := tui.NewLoggingResources(nil, logging.NewRedactor("partial-secret"), fs)
+	t.Cleanup(func() { _ = resources.Close() })
+	options := buildExportLogs(paths)(resources)
+	result, err := options.Export(context.Background(), logging.ExportRequest{Now: time.Date(2026, 9, 5, 12, 0, 0, 0, time.Local), Range: logging.ExportRange{Kind: logging.RangeAll}, AutoNumber: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := zip.OpenReader(result.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := archive.Close(); err != nil {
+			t.Errorf("close export archive: %v", err)
+		}
+	})
+	if len(archive.File) == 0 {
+		t.Fatal("export archive has no entries")
+	}
+	var content []byte
+	for _, archived := range archive.File {
+		entry, openErr := archived.Open()
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		part, readErr := io.ReadAll(entry)
+		closeErr := entry.Close()
+		if readErr != nil || closeErr != nil {
+			t.Fatal(errors.Join(readErr, closeErr))
+		}
+		content = append(content, part...)
+	}
+	if strings.Contains(string(content), "partial-secret") || !strings.Contains(string(content), "***") {
+		t.Fatalf("archive was not redacted: %s", content)
+	}
+	if err := fs.EnsureDir(paths.LogDir); err != nil {
+		t.Fatalf("export closed shared PrivateFS: %v", err)
+	}
+	if err := resources.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.EnsureDir(paths.LogDir); err == nil {
+		t.Fatal("LoggingResources.Close did not close PrivateFS")
+	}
+}
+
+func TestOpenLoggingErrorResourcesComposeThroughFactoryAndDialogSubmission(t *testing.T) {
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fs.Close() })
+	if err := fs.EnsureDir(paths.LogDir); err != nil {
+		t.Fatal(err)
+	}
+	file, err := fs.OpenAppend(paths.DaemonLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	if _, err := io.WriteString(file, `{"time":"2026-09-05T00:00:00Z","level":"INFO","msg":"partial-dialog-secret"}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	openCtx, cancelOpen := context.WithCancel(context.Background())
+	cancelOpen()
+	resources, openErr := openTUILogging(openCtx, paths, "partial-dialog-secret", fs, io.Discard)
+	if !errors.Is(openErr, context.Canceled) || resources.Runtime != nil || resources.PrivateFS != fs || resources.Redactor == nil {
+		t.Fatalf("partial resources=%+v error=%v", resources, openErr)
+	}
+	t.Cleanup(func() { _ = resources.Close() })
+	options := buildExportLogs(paths)(resources)
+	options.Context = context.Background()
+	options.Now = func() time.Time { return time.Date(2026, 9, 5, 12, 0, 0, 0, time.Local) }
+	dialog := ui.NewExportLogsModel(options)
+	t.Cleanup(dialog.CancelAndWait)
+	if cmd, consumed := dialog.Update(ui.OpenExportLogsMsg{}); cmd != nil || !consumed {
+		t.Fatal("dialog did not open")
+	}
+	dialog.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	waiter, consumed := dialog.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if waiter == nil || !consumed {
+		t.Fatal("dialog did not submit partial resources export")
+	}
+	if _, consumed := dialog.Update(waiter()); !consumed {
+		t.Fatal("dialog did not consume export result")
+	}
+	view := dialog.View(100, 30)
+	if !strings.Contains(view, ui.ExportComplete) || strings.Contains(view, "partial-dialog-secret") {
+		t.Fatalf("dialog result=%s", view)
 	}
 }
 

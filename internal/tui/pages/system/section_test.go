@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
@@ -22,11 +24,11 @@ func TestRows_LoggingSectionFollowsPortsAndIsUnavailableOffline(t *testing.T) {
 	if portsEnd < 0 || daemon < 0 {
 		t.Fatalf("missing boundary rows: %v", ids)
 	}
-	want := []string{"log-level", "log-max-size", "log-max-files", "log-directory"}
+	want := []string{"log-level", "log-max-size", "log-max-files", "log-directory", "log-export"}
 	if got := ids[portsEnd+1 : daemon]; !slices.Equal(got, want) {
 		t.Fatalf("logging rows between ports and daemon = %v, want %v", got, want)
 	}
-	for _, item := range rows[portsEnd+1 : daemon] {
+	for _, item := range rows[portsEnd+1 : daemon-1] {
 		if item.section != "Logging" || item.value != ui.UnavailableTitle {
 			t.Fatalf("offline logging row = %#v", item)
 		}
@@ -36,8 +38,32 @@ func TestRows_LoggingSectionFollowsPortsAndIsUnavailableOffline(t *testing.T) {
 	if !strings.Contains(view, "Logging") {
 		t.Fatalf("missing Logging section:\n%s", view)
 	}
-	if strings.Contains(view, "Export") {
-		t.Fatalf("Task 9 must not render Export:\n%s", view)
+	if !strings.Contains(view, ui.ExportLogsLabel) {
+		t.Fatalf("missing export entry point:\n%s", view)
+	}
+}
+
+func TestView_ShortHeightNavigationReachesVisibleExportLogs(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSize(80, 10)
+	model.FocusFirst()
+	for attempts := 0; model.focusID != rowLogExport && attempts < len(model.rows()); attempts++ {
+		page, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		model = page.(*Model)
+	}
+	if model.focusID != rowLogExport {
+		t.Fatalf("export row was not reachable after %d navigation steps", len(model.rows()))
+	}
+	view := model.View()
+	if !strings.Contains(view, ui.ExportLogsLabel) || !strings.Contains(view, "›") {
+		t.Fatalf("focused export row is not visible:\n%s", view)
+	}
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("offline export row did not open")
+	}
+	if _, ok := cmd().(ui.OpenExportLogsMsg); !ok {
+		t.Fatalf("message=%T", cmd())
 	}
 }
 

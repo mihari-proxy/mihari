@@ -95,6 +95,48 @@ func (r *Redactor) String(value string) string {
 	return out
 }
 
+// Value recursively redacts decoded JSON values without modifying the input.
+// The changed result is record-scoped: it reports whether any nested value was
+// replaced or sensitive-key member omitted, regardless of the replacement count.
+func (r *Redactor) Value(value any) (redacted any, changed bool) {
+	switch value := value.(type) {
+	case map[string]any:
+		result := make(map[string]any, len(value))
+		for key, child := range value {
+			// Omit sensitive-key members rather than renaming them: replacement
+			// keys can collide with each other or with ordinary retained siblings.
+			if r.String(key) != key {
+				changed = true
+				continue
+			}
+			if isSensitiveKey(key) {
+				result[key] = redactedExact
+				if child != redactedExact {
+					changed = true
+				}
+				continue
+			}
+			var childChanged bool
+			result[key], childChanged = r.Value(child)
+			changed = changed || childChanged
+		}
+		return result, changed
+	case []any:
+		result := make([]any, len(value))
+		for i, child := range value {
+			var childChanged bool
+			result[i], childChanged = r.Value(child)
+			changed = changed || childChanged
+		}
+		return result, changed
+	case string:
+		result := r.String(value)
+		return result, result != value
+	default:
+		return value, false
+	}
+}
+
 // ReplaceAttr recursively redacts slog attributes. Sensitive keys and sensitive
 // ancestor groups replace values with ***; strings, errors, and LogValuer
 // results run through String.

@@ -132,6 +132,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if key.String() == "e" {
+		return m, func() tea.Msg { return ui.OpenExportLogsMsg{} }
+	}
 	switch key.String() {
 	case "esc":
 		return m, func() tea.Msg { return ui.FocusRailMsg{} }
@@ -156,7 +159,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, nil
 	case "right":
 		if m.focus == focusControl {
-			m.controlIndex = min(2, m.controlIndex+1)
+			m.controlIndex = min(3, m.controlIndex+1)
 		}
 		return m, nil
 	case "up":
@@ -201,6 +204,7 @@ func (m *Model) View() string {
 		fmt.Sprintf("%s: %s", ui.LevelLabel, ui.StyleLogLevel(m.theme, level)),
 		fmt.Sprintf("%s: %s", ui.WrapLabel, ui.StatusDot(m.theme, ui.ClassifyStatusTone(onOff(m.wrap)), onOff(m.wrap))),
 		fmt.Sprintf("%s: %s", ui.PauseLabel, ui.StatusDot(m.theme, ui.ClassifyStatusTone(onOff(m.buffer.Paused())), onOff(m.buffer.Paused()))),
+		ui.ExportLabel,
 	}, m.controlIndex, controlFocused, "  ")
 	var status []string
 	if unread := m.Unread(); unread > 0 {
@@ -377,6 +381,8 @@ func (m *Model) activateControl() tea.Cmd {
 		m.wrap = !m.wrap
 	case 2:
 		m.togglePause()
+	case 3:
+		return func() tea.Msg { return ui.OpenExportLogsMsg{} }
 	}
 	return nil
 }

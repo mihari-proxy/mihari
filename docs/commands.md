@@ -55,11 +55,17 @@ mihari status --json
 
 守护进程与捕获的 mihomo 日志默认级别为 `info`，每个活跃文件达到 10 MiB 时轮转，最多保留三份文件（活跃文件与最多两份归档）。TUI 启动时使用 bootstrap 配置：`debug`、100 MiB、10 份文件，以便在守护进程设置可用前也能记录日志；在后续控制面同步前保持该 bootstrap 配置。mihomo stdout 捕获为 `INFO`，stderr 捕获为 `WARN`；这只描述 Mihari 的捕获级别，不表示 mihomo 行内消息的实际严重程度。
 
-TUI 的 System 页面提供 Logging 区，可修改由守护进程持有的级别、单文件最大大小和保留数量；变更通过稳定的本地控制端点 `GET /v1/logging` 与 `PATCH /v1/logging` 完成。它们不是 CLI 命令，因此没有 `mihari logging` 或其他日志配置子命令；本版本也不提供日志导出命令或界面。
+TUI 的 System 页面提供 Logging 区，可修改由守护进程持有的级别、单文件最大大小和保留数量；变更通过稳定的本地控制端点 `GET /v1/logging` 与 `PATCH /v1/logging` 完成。它们不是 CLI 命令，因此没有 `mihari logging` 或日志导出子命令。
+
+日志导出只在 TUI 中提供：Logs 页按 `e`，或在 System → Logging 选择 **Export logs**。可选最近 24 小时、最近 60 分钟、本地时间区间或全部记录。默认目录是数据根下的 `logs-export/`；自定义目标必须是既有目录内的绝对 `.zip` 路径。导出永不覆盖已有文件，默认重名时自动编号。
+
+zip 固定使用 `manifest.json`、`daemon/mihari-daemon.log`、`tui/mihari-tui.log`、`mihomo/mihomo.log` 这些 entry，某来源无匹配记录时省略对应日志 entry。每条记录会递归二次脱敏并重新编码。自动遮蔽不保证移除节点名、目标域名/IP 或流量元数据，发送前必须自查这些内容。
+
+Unix 自定义目标的同 UID 进程和本机 root/管理员属于受信主体。不可信共享父目录下，若内容已清理，仍可能留下空的 0700 私有 workspace；若清理 IO 失败，界面会报告可能存在内容残留。导出持有目标父目录 identity，生成期间替换父路径会安全失败而不会跟随；发布后外部再次改名目标目录，可能使已显示路径失效。
 
 旧版二进制以 `KnownFields(true)` 严格解码 `mihari.yaml`，不能读取非默认的 `log:` 块。降级前应在 System → Logging 恢复 `info` / 10 MiB / 3 份文件，使该块自动移除；也可以先备份设置文件后手动删除 `log:`。
 
-日志脱敏是尽力而为，所有日志仍须按敏感资料处理，分享前应检查内容。
+日志脱敏是尽力而为，所有日志与导出包仍须按敏感资料处理。
 
 ## 核心与代理管理
 

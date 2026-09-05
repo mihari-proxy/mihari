@@ -28,6 +28,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/subscription"
 	"github.com/mihari-proxy/mihari/internal/tui"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"github.com/mihari-proxy/mihari/internal/update"
 )
 
@@ -172,6 +173,7 @@ func main() {
 				OpenLogging: func(ctx context.Context) (tui.LoggingResources, error) {
 					return openTUILogging(ctx, root.Paths, root.Token, root.FS, os.Stderr)
 				},
+				BuildExportLogs: buildExportLogs(root.Paths),
 			})
 		},
 		RunDaemon: runDaemon,
@@ -179,6 +181,46 @@ func main() {
 	code := cli.Execute(ctx, os.Args[1:], os.Stdout, os.Stderr, dependencies)
 	_ = closeCachedLocalRoot()
 	os.Exit(code)
+}
+
+var exportLogsFn = logging.Export
+
+func buildExportLogs(paths platform.Paths) func(tui.LoggingResources) ui.ExportLogsOptions {
+	return func(resources tui.LoggingResources) ui.ExportLogsOptions {
+		exists := func(dir, name string) (bool, error) {
+			if resources.PrivateFS == nil || filepath.Clean(dir) != filepath.Clean(paths.LogExportDir) {
+				return false, nil
+			}
+			publishDir, err := resources.PrivateFS.OpenPublishDir(paths.LogExportDir)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return false, nil
+				}
+				return false, err
+			}
+			exists, probeErr := publishDir.Exists(name)
+			closeErr := publishDir.Close()
+			return exists, errors.Join(probeErr, closeErr)
+		}
+		export := func(ctx context.Context, request logging.ExportRequest) (logging.ExportResult, error) {
+			if resources.PrivateFS == nil {
+				return logging.ExportResult{}, ui.ErrLocalLogStorageUnavailable
+			}
+			request.Paths = logging.ExportPaths{LogDir: paths.LogDir, ExportDir: paths.LogExportDir, DaemonLog: paths.DaemonLog, TUILog: paths.TUILog, MihomoLog: paths.MihomoLog}
+			request.PrivateFS = resources.PrivateFS
+			request.Redactor = resources.Redactor
+			if resources.Runtime != nil {
+				request.EnterRecordMutex = func(basePath string) func() {
+					if filepath.Clean(basePath) == filepath.Clean(paths.TUILog) {
+						return resources.Runtime.EnterRecordMutex()
+					}
+					return func() {}
+				}
+			}
+			return exportLogsFn(ctx, request)
+		}
+		return ui.ExportLogsOptions{DefaultDir: paths.LogExportDir, Exists: exists, Export: export}
+	}
 }
 
 func openTUILogging(ctx context.Context, paths platform.Paths, token string, fs *platform.PrivateFS, errorOutput io.Writer) (tui.LoggingResources, error) {

@@ -154,3 +154,7 @@ func clampCursor(value string, cursor int) int {
 	}
 	return cursor
 }
+
+// TextCursorEnd returns the rune offset immediately after a field's content.
+// It keeps form models from mixing byte offsets with EditTextField's rune offsets.
+func TextCursorEnd(value string) int { return utf8.RuneCountInString(value) }

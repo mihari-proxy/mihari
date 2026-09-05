@@ -103,6 +103,22 @@ func TestModel_LoggingDirectoryEnterShowsPathDetail(t *testing.T) {
 	}
 }
 
+func TestModel_ExportLogsAvailableWithoutDaemonLogging(t *testing.T) {
+	model := New(nil, nil)
+	model.focusID = rowLogExport
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("export logs row did not return a command")
+	}
+	if _, ok := cmd().(ui.OpenExportLogsMsg); !ok {
+		t.Fatalf("command message=%T", cmd())
+	}
+	rows := model.rows()
+	if model.rowIndex(rowLogExport) != model.rowIndex(rowLogDirectory)+1 || rows[model.rowIndex(rowLogExport)].label != ui.ExportLogsLabel {
+		t.Fatal("export row is not directly after Directory")
+	}
+}
+
 func TestModel_LoggingRowsIgnoreEnterWhenUnavailable(t *testing.T) {
 	client := &fakeClient{}
 	model := New(client, func() string { return "logging-op" })
@@ -3618,14 +3634,17 @@ func TestSystemMihariChannelEnterSwitchesDevToMain(t *testing.T) {
 func TestSystemMihariChannelSwitchDoesNotChangeCoreCopy(t *testing.T) {
 	client := &fakeClient{onboarding: protocol.OnboardingStatus{Revision: 11}}
 	model := New(client, func() string { return "system-op" })
+	// Snapshot setup renders rows and can load the channel before updater setup.
+	// Install the isolated read boundary before either operation.
+	channelPath := filepath.Join(t.TempDir(), "mihari-channel")
+	model.loadChannel = func(string) (string, error) { return update.ChannelMain, nil }
+	model.channelPath = func() (string, error) { return channelPath, nil }
 	model.SetSnapshot(
 		protocol.Status{Revision: 11, Capabilities: []string{protocol.CapabilityCore}},
 		protocol.CoreStatus{Revision: 11, Status: "running", Version: "v1.19.0", Channel: "stable"},
 	)
 	model.SetMutationsEnabled(true)
 	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.8.2", "mihari", func() bool { return false })
-	model.loadChannel = func(string) (string, error) { return update.ChannelMain, nil }
-	model.channelPath = func() (string, error) { return "mihari-channel", nil }
 	if got := channelRowValue(model); got != update.ChannelMain {
 		t.Fatalf("mihari channel=%q", got)
 	}
