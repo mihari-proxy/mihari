@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -9,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 )
 
 const (
@@ -24,11 +24,9 @@ var errPrivateFSClosed = fmt.Errorf("private fs: %w", os.ErrClosed)
 
 // PrivateFS is a closeable capability over a verified data-root directory.
 type PrivateFS struct {
-	mu     sync.RWMutex
-	dirsMu sync.Mutex
-	closed bool
-	root   string
-	plat   privateFSState
+	capabilityLifetime
+	root string
+	plat privateFSState
 }
 
 // FileIdentity is an opaque platform identity for a directory entry or open handle.
@@ -38,9 +36,8 @@ type FileIdentity struct {
 
 // DirectoryIdentity is a closeable capability over a held directory handle.
 type DirectoryIdentity struct {
-	mu     sync.Mutex
-	closed bool
-	plat   dirIdentityState
+	capabilityLifetime
+	plat dirIdentityState
 }
 
 // FileEntry is a no-follow directory listing record.
@@ -67,13 +64,14 @@ func NewPrivateFS(dataRoot string) (*PrivateFS, error) {
 	return fs, nil
 }
 
-// EnsureDir creates or hardens logs/ or logs-export/ relative to the held root.
+// EnsureDir creates or verifies logs/ or logs-export/ relative to the held root.
+// Legacy path-based adapters may also repair their private access policy.
 func (fs *PrivateFS) EnsureDir(path string) error {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-	if fs.closed {
-		return errPrivateFSClosed
+	finish, beginErr := fs.begin(context.Background())
+	if beginErr != nil {
+		return beginErr
 	}
+	defer finish()
 	name, err := fs.resolveDir(path)
 	if err != nil {
 		return err
@@ -83,11 +81,11 @@ func (fs *PrivateFS) EnsureDir(path string) error {
 
 // OpenAppend opens a log or export file for append-create, no-follow.
 func (fs *PrivateFS) OpenAppend(path string) (*os.File, error) {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-	if fs.closed {
-		return nil, errPrivateFSClosed
+	finish, beginErr := fs.begin(context.Background())
+	if beginErr != nil {
+		return nil, beginErr
 	}
+	defer finish()
 	dir, name, err := fs.resolveFile(path)
 	if err != nil {
 		return nil, err
@@ -98,11 +96,11 @@ func (fs *PrivateFS) OpenAppend(path string) (*os.File, error) {
 // RepairAccessChecked restores an existing file's private access policy after
 // verifying its identity. It never creates or rewrites file content.
 func (fs *PrivateFS) RepairAccessChecked(path string, expected FileIdentity) error {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-	if fs.closed {
-		return errPrivateFSClosed
+	finish, beginErr := fs.begin(context.Background())
+	if beginErr != nil {
+		return beginErr
 	}
+	defer finish()
 	dir, name, err := fs.resolveFile(path)
 	if err != nil {
 		return err
@@ -112,11 +110,11 @@ func (fs *PrivateFS) RepairAccessChecked(path string, expected FileIdentity) err
 
 // OpenReadChecked opens a file no-follow and requires the handle identity to match.
 func (fs *PrivateFS) OpenReadChecked(path string, expected FileIdentity) (*os.File, error) {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-	if fs.closed {
-		return nil, errPrivateFSClosed
+	finish, beginErr := fs.begin(context.Background())
+	if beginErr != nil {
+		return nil, beginErr
 	}
+	defer finish()
 	dir, name, err := fs.resolveFile(path)
 	if err != nil {
 		return nil, err
@@ -126,11 +124,11 @@ func (fs *PrivateFS) OpenReadChecked(path string, expected FileIdentity) (*os.Fi
 
 // CreateTemp creates an exclusive temporary file in logs/ or logs-export/.
 func (fs *PrivateFS) CreateTemp(dir, pattern string) (*os.File, error) {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-	if fs.closed {
-		return nil, errPrivateFSClosed
+	finish, beginErr := fs.begin(context.Background())
+	if beginErr != nil {
+		return nil, beginErr
 	}
+	defer finish()
 	name, err := fs.resolveDir(dir)
 	if err != nil {
 		return nil, err
@@ -141,11 +139,11 @@ func (fs *PrivateFS) CreateTemp(dir, pattern string) (*os.File, error) {
 
 // ReplaceEmpty replaces path with a new empty inode. The caller must close its write handle first.
 func (fs *PrivateFS) ReplaceEmpty(path string) error {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-	if fs.closed {
-		return errPrivateFSClosed
+	finish, beginErr := fs.begin(context.Background())
+	if beginErr != nil {
+		return beginErr
 	}
+	defer finish()
 	dir, name, err := fs.resolveFile(path)
 	if err != nil {
 		return err
@@ -176,11 +174,11 @@ func (fs *PrivateFS) ReplaceEmpty(path string) error {
 
 // ReadDir lists no-follow entries of logs/ or logs-export/.
 func (fs *PrivateFS) ReadDir(path string) ([]FileEntry, error) {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-	if fs.closed {
-		return nil, errPrivateFSClosed
+	finish, beginErr := fs.begin(context.Background())
+	if beginErr != nil {
+		return nil, beginErr
 	}
+	defer finish()
 	name, err := fs.resolveDir(path)
 	if err != nil {
 		return nil, err
@@ -190,11 +188,11 @@ func (fs *PrivateFS) ReadDir(path string) ([]FileEntry, error) {
 
 // OpenDirIdentity duplicates a held logs/ or logs-export/ directory capability.
 func (fs *PrivateFS) OpenDirIdentity(path string) (*DirectoryIdentity, error) {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-	if fs.closed {
-		return nil, errPrivateFSClosed
+	finish, beginErr := fs.begin(context.Background())
+	if beginErr != nil {
+		return nil, beginErr
 	}
+	defer finish()
 	name, err := fs.resolveDir(path)
 	if err != nil {
 		return nil, err
@@ -205,11 +203,11 @@ func (fs *PrivateFS) OpenDirIdentity(path string) (*DirectoryIdentity, error) {
 // OpenPublishDir opens one of PrivateFS's verified child directories as a
 // held publish capability.
 func (fs *PrivateFS) OpenPublishDir(path string) (*PublishDir, error) {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-	if fs.closed {
-		return nil, errPrivateFSClosed
+	finish, beginErr := fs.begin(context.Background())
+	if beginErr != nil {
+		return nil, beginErr
 	}
+	defer finish()
 	name, err := fs.resolveDir(path)
 	if err != nil {
 		return nil, err
@@ -222,11 +220,11 @@ func (fs *PrivateFS) OpenPublishDir(path string) (*PublishDir, error) {
 
 // Rename renames a file within the same verified logs/ or logs-export/ directory.
 func (fs *PrivateFS) Rename(oldpath, newpath string) error {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-	if fs.closed {
-		return errPrivateFSClosed
+	finish, beginErr := fs.begin(context.Background())
+	if beginErr != nil {
+		return beginErr
 	}
+	defer finish()
 	oldDir, oldName, err := fs.resolveFile(oldpath)
 	if err != nil {
 		return err
@@ -243,11 +241,11 @@ func (fs *PrivateFS) Rename(oldpath, newpath string) error {
 
 // Remove unlinks a file in logs/ or logs-export/.
 func (fs *PrivateFS) Remove(path string) error {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-	if fs.closed {
-		return errPrivateFSClosed
+	finish, beginErr := fs.begin(context.Background())
+	if beginErr != nil {
+		return beginErr
 	}
+	defer finish()
 	dir, name, err := fs.resolveFile(path)
 	if err != nil {
 		return err
@@ -256,15 +254,7 @@ func (fs *PrivateFS) Remove(path string) error {
 }
 
 // Close releases held directory handles. Repeat calls return nil.
-func (fs *PrivateFS) Close() error {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-	if fs.closed {
-		return nil
-	}
-	fs.closed = true
-	return fs.closePlatform()
-}
+func (fs *PrivateFS) Close() error { return fs.closeWith(fs.closePlatform) }
 
 func (fs *PrivateFS) resolve(path string) (parent, name string, err error) {
 	if path == "" {

@@ -25,6 +25,7 @@ var (
 )
 
 type publishDirState struct {
+	trusted                 *TrustedRoot
 	fd                      int
 	id                      fileIdentity
 	setOwner                bool
@@ -35,12 +36,14 @@ type publishDirState struct {
 }
 
 type publishWorkspaceState struct {
-	fd       int
-	id       fileIdentity
-	setOwner bool
-	uid      int
-	gid      int
-	created  map[string]struct{}
+	trusted    *TrustedRoot
+	identities map[string]FileIdentity
+	fd         int
+	id         fileIdentity
+	setOwner   bool
+	uid        int
+	gid        int
+	created    map[string]struct{}
 }
 
 func openPublishDir(path string) (*PublishDir, error) {
@@ -97,6 +100,11 @@ func (d *PublishDir) assessInitialNamespace() {
 }
 
 func (d *PublishDir) existsLocked(name string) (bool, error) {
+	if d.plat.trusted != nil {
+		if err := d.plat.trusted.verify(); err != nil {
+			return false, err
+		}
+	}
 	var st unix.Stat_t
 	err := unix.Fstatat(d.plat.fd, name, &st, unix.AT_SYMLINK_NOFOLLOW)
 	if errors.Is(err, unix.ENOENT) {
@@ -109,6 +117,17 @@ func (d *PublishDir) existsLocked(name string) (bool, error) {
 }
 
 func (d *PublishDir) isWithinLocked(ancestor *DirectoryIdentity) (bool, error) {
+	if d.plat.trusted != nil {
+		if err := d.plat.trusted.verify(); err != nil {
+			return false, err
+		}
+		for _, l := range d.plat.trusted.chain {
+			if l.node.id == ancestor.plat.id {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
 	current, err := dupCLOEXEC(d.plat.fd)
 	if err != nil {
 		return false, fmt.Errorf("duplicate publish directory: %w", err)
@@ -149,6 +168,9 @@ func (d *PublishDir) isWithinLocked(ancestor *DirectoryIdentity) (bool, error) {
 }
 
 func (d *PublishDir) createWorkspaceLocked() (*PublishWorkspace, error) {
+	if d.plat.trusted != nil {
+		return d.trustedWorkspace()
+	}
 	for i := 0; i < 100; i++ {
 		name, err := randomTempName(".mihari-export-*")
 		if err != nil {
@@ -210,6 +232,9 @@ func (d *PublishDir) validateUnixWorkspace(fd int, st *unix.Stat_t) error {
 }
 
 func (w *PublishWorkspace) createTempLocked(pattern string) (*os.File, string, error) {
+	if w.plat.trusted != nil {
+		return w.trustedTemp(pattern)
+	}
 	for i := 0; i < 100; i++ {
 		name, err := randomTempName(pattern)
 		if err != nil {
@@ -241,6 +266,13 @@ func (w *PublishWorkspace) createTempLocked(pattern string) (*os.File, string, e
 }
 
 func (w *PublishWorkspace) removeLocked(name string) error {
+	if w.plat.trusted != nil {
+		id, ok := w.plat.identities[name]
+		if !ok {
+			return os.ErrInvalid
+		}
+		return trustedRemove(w.plat.trusted, name, &id)
+	}
 	if _, owned := w.plat.created[name]; !owned {
 		return fmt.Errorf("remove publish temp: name not created by workspace")
 	}
@@ -258,6 +290,9 @@ func (w *PublishWorkspace) removeLocked(name string) error {
 }
 
 func (d *PublishDir) publishNoReplaceLocked(w *PublishWorkspace, tempName, targetName string, warn func(error)) error {
+	if d.plat.trusted != nil {
+		return d.trustedPublish(w, tempName, targetName, warn)
+	}
 	checkFD, err := unix.Open(d.path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		if errors.Is(err, unix.ENOENT) {
@@ -300,12 +335,15 @@ func (d *PublishDir) publishNoReplaceLocked(w *PublishWorkspace, tempName, targe
 }
 
 func (w *PublishWorkspace) closePlatformLocked(owner *PublishDir) error {
+	if w.plat.trusted != nil {
+		return w.closeTrustedWorkspace(owner)
+	}
 	if w.plat.fd < 0 {
 		return nil
 	}
 	contentErr := w.clearContentsLocked()
 	var cleanupErr error
-	if owner == nil || owner.closed || owner.plat.fd < 0 {
+	if owner == nil || owner.plat.fd < 0 {
 		cleanupErr = fmt.Errorf("publish workspace cleanup: parent is closed")
 	} else if !owner.plat.initialNamespaceTrusted {
 		cleanupErr = errors.Join(fmt.Errorf("publish workspace cleanup: parent permits untrusted entry replacement at acquisition"), owner.plat.initialNamespaceErr)
@@ -394,6 +432,10 @@ func (w *PublishWorkspace) clearContentsLocked() error {
 }
 
 func (d *PublishDir) closePlatformLocked() error {
+	if d.plat.trusted != nil {
+		d.plat.fd = -1
+		return d.plat.trusted.Close()
+	}
 	if d.plat.fd < 0 {
 		return nil
 	}

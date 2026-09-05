@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -117,14 +118,12 @@ func (fs *PrivateFS) openRoot() error {
 
 func (fs *PrivateFS) closePlatform() error {
 	var errs []error
-	fs.dirsMu.Lock()
 	for name, h := range fs.plat.dirs {
 		if h != 0 {
 			errs = append(errs, windows.CloseHandle(h))
 		}
 		delete(fs.plat.dirs, name)
 	}
-	fs.dirsMu.Unlock()
 	if fs.plat.root != 0 {
 		errs = append(errs, windows.CloseHandle(fs.plat.root))
 		fs.plat.root = 0
@@ -151,28 +150,22 @@ func (fs *PrivateFS) ensureDirLocked(name string) error {
 		_ = windows.CloseHandle(h)
 		return fmt.Errorf("harden dir %s: %w", name, err)
 	}
-	fs.dirsMu.Lock()
 	if old, ok := fs.plat.dirs[name]; ok {
-		fs.dirsMu.Unlock()
 		_ = windows.CloseHandle(h)
 		_ = old
 		return nil
 	}
 	fs.plat.dirs[name] = h
-	fs.dirsMu.Unlock()
 	return nil
 }
 
 func (fs *PrivateFS) dirHandle(name string) (windows.Handle, error) {
-	fs.dirsMu.Lock()
 	if h, ok := fs.plat.dirs[name]; ok {
-		fs.dirsMu.Unlock()
 		if err := fs.hardenPrivateHandle(h, true); err != nil {
 			return 0, err
 		}
 		return h, nil
 	}
-	fs.dirsMu.Unlock()
 	h, err := openRelative(fs.plat.root, name, dirAccess, windows.FILE_OPEN,
 		windows.FILE_DIRECTORY_FILE|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT,
 		windows.FILE_ATTRIBUTE_DIRECTORY, nil)
@@ -183,9 +176,7 @@ func (fs *PrivateFS) dirHandle(name string) (windows.Handle, error) {
 		_ = windows.CloseHandle(h)
 		return 0, err
 	}
-	fs.dirsMu.Lock()
 	if old, ok := fs.plat.dirs[name]; ok {
-		fs.dirsMu.Unlock()
 		_ = windows.CloseHandle(h)
 		if err := fs.hardenPrivateHandle(old, true); err != nil {
 			return 0, err
@@ -193,7 +184,6 @@ func (fs *PrivateFS) dirHandle(name string) (windows.Handle, error) {
 		return old, nil
 	}
 	fs.plat.dirs[name] = h
-	fs.dirsMu.Unlock()
 	if err := fs.hardenPrivateHandle(h, true); err != nil {
 		return 0, err
 	}
@@ -456,26 +446,22 @@ func (fs *PrivateFS) removeLocked(dir, name string) error {
 
 // Close releases the duplicated directory handle. Repeat calls return nil.
 func (d *DirectoryIdentity) Close() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closed {
+	return d.closeWith(func() error {
+		if d.plat.handle != 0 {
+			err := windows.CloseHandle(d.plat.handle)
+			d.plat.handle = 0
+			return err
+		}
 		return nil
-	}
-	d.closed = true
-	if d.plat.handle != 0 {
-		err := windows.CloseHandle(d.plat.handle)
-		d.plat.handle = 0
-		return err
-	}
-	return nil
+	})
 }
 
 func (d *DirectoryIdentity) identity() (FileIdentity, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closed {
-		return FileIdentity{}, errPrivateFSClosed
+	finish, err := d.begin(context.Background())
+	if err != nil {
+		return FileIdentity{}, err
 	}
+	defer finish()
 	return FileIdentity{plat: d.plat.id}, nil
 }
 

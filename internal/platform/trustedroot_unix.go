@@ -56,17 +56,18 @@ type trustedAlias struct {
 // TrustedRoot owns a directory descriptor and its verified namespace ancestry.
 // A zero value is closed and cannot authorize IO. Do not copy after first use.
 type TrustedRoot struct {
-	mu        sync.Mutex
-	backend   trustedBackend
-	chain     []trustedLink
-	aliases   []trustedAlias
-	policy    RootPolicy
-	path      string // display/path matching only; never reopened for IO
-	closed    bool
-	operation chan struct{}
-	closing   chan struct{}
-	closeDone chan struct{}
-	closeErr  error
+	mu         sync.Mutex
+	backend    trustedBackend
+	chain      []trustedLink
+	aliases    []trustedAlias
+	policy     RootPolicy
+	parentOnly bool   // existing external parent: exact captured mode, never repaired
+	path       string // display/path matching only; never reopened for IO
+	closed     bool
+	operation  chan struct{}
+	closing    chan struct{}
+	closeDone  chan struct{}
+	closeErr   error
 }
 
 // OpenTrustedRoot opens a directory without following application symlinks.
@@ -128,10 +129,23 @@ func (r *TrustedRoot) OpenDir(ctx context.Context, name string, p RootPolicy) (_
 }
 
 func openTrustedRoot(ctx context.Context, path string, policy RootPolicy, b trustedBackend) (_ *TrustedRoot, err error) {
-	if !strings.HasPrefix(path, "/") || path == "/" || !validRootPolicy(policy) {
+	return openTrustedRootKind(ctx, path, policy, b, false)
+}
+
+// openTrustedParent acquires an existing creation parent without imposing an
+// application-directory mode or granting permission to create or repair it.
+func openTrustedParent(ctx context.Context, path string, owner uint32) (*TrustedRoot, error) {
+	return openTrustedRootKind(ctx, path, RootPolicy{Owner: owner, Mode: 0755}, nativeTrustedBackend{}, true)
+}
+
+func openTrustedRootKind(ctx context.Context, path string, policy RootPolicy, b trustedBackend, parentOnly bool) (_ *TrustedRoot, err error) {
+	if !strings.HasPrefix(path, "/") || (path == "/" && !parentOnly) || !validRootPolicy(policy) {
 		return nil, fmt.Errorf("invalid trusted root: %w", os.ErrInvalid)
 	}
 	parts := strings.Split(path[1:], "/")
+	if path == "/" {
+		parts = nil
+	}
 	for _, name := range parts {
 		if !trustedComponent(name) {
 			return nil, fmt.Errorf("invalid trusted component: %w", os.ErrInvalid)
@@ -140,7 +154,7 @@ func openTrustedRoot(ctx context.Context, path string, policy RootPolicy, b trus
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	r := &TrustedRoot{backend: b, policy: policy, path: path}
+	r := &TrustedRoot{backend: b, policy: policy, path: path, parentOnly: parentOnly}
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, r.Close())
@@ -150,12 +164,12 @@ func openTrustedRoot(ctx context.Context, path string, policy RootPolicy, b trus
 	if err != nil {
 		return nil, err
 	}
-	r.chain = append(r.chain, trustedLink{fd: fd})
+	r.chain = append(r.chain, trustedLink{fd: fd, application: parentOnly && len(parts) == 0})
 	r.chain[0].node, err = b.stat(fd)
 	if err != nil {
 		return nil, err
 	}
-	if err = r.checkLink(0, false); err != nil {
+	if err = r.checkLink(0, parentOnly && len(parts) == 0); err != nil {
 		return nil, err
 	}
 	for i := 0; i < len(parts); i++ {
@@ -229,7 +243,7 @@ func (r *TrustedRoot) checkLink(i int, application bool) error {
 	if n.mode&0022 != 0 {
 		return denied("writable directory ancestor", nil)
 	}
-	if application && (n.uid != r.policy.Owner || n.mode&07777 != r.policy.Mode) {
+	if application && (n.uid != r.policy.Owner || (!r.parentOnly && n.mode&07777 != r.policy.Mode) || (r.parentOnly && n.mode&07000 != 0)) {
 		return denied("application directory permissions", nil)
 	}
 	if err := r.backend.checkFS(l.fd); err != nil {

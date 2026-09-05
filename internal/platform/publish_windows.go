@@ -275,7 +275,7 @@ func (w *PublishWorkspace) closePlatformLocked(owner *PublishDir) error {
 	}
 	contentErr := w.clearContentsLocked()
 	var cleanupErr error
-	if owner == nil || owner.closed || owner.plat.handle == 0 {
+	if owner == nil || owner.plat.handle == 0 {
 		cleanupErr = fmt.Errorf("publish workspace cleanup: parent is closed")
 	} else {
 		name, err := windowsFindEntryByIdentity(owner.plat.handle, w.plat.id)
