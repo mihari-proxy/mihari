@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/atotto/clipboard"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/platform"
@@ -50,6 +52,11 @@ const (
 	rowMixed             = "port-mixed"
 	rowController        = "port-controller"
 	rowWeb               = "port-web"
+	rowLogLevel          = "log-level"
+	rowLogMaxSize        = "log-max-size"
+	rowLogMaxFiles       = "log-max-files"
+	rowLogDirectory      = "log-directory"
+	rowLogExport         = "log-export"
 )
 
 // Panel IDs mirrored from internal/panel/catalog.go; local constants keep the
@@ -74,6 +81,8 @@ type Client interface {
 	WebGUI(context.Context) (protocol.WebGUIStatus, error)
 	OpenWebGUI(context.Context, string) (protocol.WebGUIOpenResult, error)
 	UpdateOnboarding(context.Context, protocol.OnboardingUpdateRequest) (protocol.OnboardingStatus, error)
+	Logging(context.Context) (protocol.LoggingStatus, error)
+	UpdateLogging(context.Context, protocol.LoggingUpdateRequest) (protocol.LoggingStatus, error)
 }
 
 // SelfUpdater is the local Mihari binary lifecycle surface used by the System page.
@@ -301,6 +310,7 @@ var _ interface{ Err() error } = actionResultMsg{}
 
 // Model is the System page.
 type Model struct {
+	writeClipboard      func(string) error
 	ctx                 context.Context
 	client              Client
 	service             ServiceController
@@ -329,14 +339,22 @@ type Model struct {
 	webGUI              protocol.WebGUIStatus
 	webGUILoaded        bool
 	webGUIErr           bool
-	serviceStatus       service.StatusKind
-	serviceLoaded       bool
-	elevated            bool
-	focusID             string
-	detail              *row
-	pending             bool
-	pendingRow          string // row id showing in-row braille progress
-	pendingNote         string // short status text next to the row (e.g. Installing)
+
+	logging               protocol.LoggingStatus
+	loggingEpoch          uint64
+	loggingAvailable      bool
+	localLoggingAvailable bool
+	loggingPendingEpoch   uint64
+	loggingReloading      bool
+
+	serviceStatus service.StatusKind
+	serviceLoaded bool
+	elevated      bool
+	focusID       string
+	detail        *row
+	pending       bool
+	pendingRow    string // row id showing in-row braille progress
+	pendingNote   string // short status text next to the row (e.g. Installing)
 	// Sticky outcome after an action finishes (cleared on page leave or re-run).
 	outcomeRow       string
 	outcomeOK        bool   // true=Done (green), false=Failed (red)
@@ -369,6 +387,18 @@ type portHoldsMsg struct {
 type portsApplyResultMsg struct {
 	status protocol.OnboardingStatus
 	err    error
+}
+
+type loggingUpdateResultMsg struct {
+	epoch uint64
+	rowID string
+	err   error
+}
+
+type loggingReloadResultMsg struct {
+	epoch uint64
+	rowID string
+	err   error
 }
 
 func (m portsApplyResultMsg) Err() error { return m.err }
@@ -405,6 +435,9 @@ func NewWithContext(ctx context.Context, client Client, svc ServiceController, n
 
 func (m *Model) HelpMode() string {
 	if m.editID != "" {
+		if m.editID == rowLogMaxSize || m.editID == rowLogMaxFiles {
+			return ui.ModeLoggingEdit
+		}
 		return ui.ModePortsEdit
 	}
 	return ""
@@ -412,6 +445,9 @@ func (m *Model) HelpMode() string {
 
 // FooterHints returns edit-mode shortcuts while a port row is being typed.
 func (m *Model) FooterHints() string {
+	if m.loggingAvailable && m.focusID == rowLogDirectory && m.editID == "" && m.detail == nil {
+		return "↑/↓ navigate  Enter copy directory  Esc back  ? help  q quit"
+	}
 	return ui.RenderFooter(m.ID(), m.HelpMode(), ui.FooterOpt{})
 }
 
@@ -457,6 +493,27 @@ func (m *Model) SetWebGUI(status protocol.WebGUIStatus) {
 	m.webGUI = status
 	m.webGUILoaded = true
 	m.ensureFocusVisible()
+}
+
+// ApplyLoggingSync stores root-gated daemon logging state.
+func (m *Model) ApplyLoggingSync(message ui.LoggingSyncMsg) {
+	if m == nil {
+		return
+	}
+	m.loggingEpoch = message.Epoch
+	m.loggingAvailable = message.Available
+	if message.Available {
+		m.logging = message.Status
+	} else {
+		m.logging = protocol.LoggingStatus{}
+	}
+}
+
+// SetLocalLoggingAvailable stores whether this TUI's local file writer opened.
+func (m *Model) SetLocalLoggingAvailable(available bool) {
+	if m != nil {
+		m.localLoggingAvailable = available
+	}
 }
 
 func (m *Model) ID() ui.PageID { return ui.PageSystem }
@@ -639,6 +696,77 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.ensureFocusVisible()
 	}()
 	switch typed := message.(type) {
+	case ui.LoggingSyncMsg:
+		wasLoggingEdit := m.editID == rowLogMaxSize || m.editID == rowLogMaxFiles
+		m.ApplyLoggingSync(typed)
+		if !typed.Available {
+			if m.pending && isLoggingRow(m.pendingRow) {
+				m.clearRowPending()
+				m.loggingPendingEpoch = 0
+				m.loggingReloading = false
+			}
+			if isLoggingRow(m.outcomeRow) {
+				m.clearLoggingOutcome(m.outcomeRow)
+			}
+			if wasLoggingEdit {
+				return m, m.cancelLoggingEdit()
+			}
+		}
+		return m, nil
+	case ui.LoggingObservedMsg:
+		if m.pending && typed.Epoch == m.loggingPendingEpoch {
+			rowID := m.pendingRow
+			current := typed.Epoch == m.loggingEpoch && m.loggingAvailable && typed.Status == m.logging
+			reloading := m.loggingReloading
+			m.clearRowPending()
+			m.loggingPendingEpoch = 0
+			m.loggingReloading = false
+			if current && !reloading {
+				m.markRowOutcome(rowID, true, "")
+				return m, m.scheduleOutcomeFade(rowID)
+			}
+		}
+		return m, m.rowSpinCmdIfNeeded()
+	case loggingUpdateResultMsg:
+		if typed.epoch != m.loggingEpoch {
+			if m.pending && typed.epoch == m.loggingPendingEpoch && typed.rowID == m.pendingRow {
+				m.clearRowPending()
+				m.loggingPendingEpoch = 0
+				m.loggingReloading = false
+			}
+			return m, m.rowSpinCmdIfNeeded()
+		}
+		if !m.pending || typed.epoch != m.loggingPendingEpoch || typed.rowID != m.pendingRow {
+			return m, nil
+		}
+		var apiError protocol.APIError
+		if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
+			m.loggingReloading = true
+			m.pendingNote = ui.LoggingProgressReloading
+			return m, tea.Batch(m.reloadLogging(typed.epoch, typed.rowID), m.rowSpinCmdIfNeeded())
+		}
+		m.clearRowPending()
+		m.loggingPendingEpoch = 0
+		m.loggingReloading = false
+		m.markRowOutcome(typed.rowID, false, ui.LoggingUpdateFailed)
+		return m, m.rowSpinCmdIfNeeded()
+	case loggingReloadResultMsg:
+		if typed.epoch != m.loggingEpoch {
+			if m.pending && typed.epoch == m.loggingPendingEpoch && typed.rowID == m.pendingRow {
+				m.clearRowPending()
+				m.loggingPendingEpoch = 0
+				m.loggingReloading = false
+			}
+			return m, m.rowSpinCmdIfNeeded()
+		}
+		if !m.pending || typed.epoch != m.loggingPendingEpoch || typed.rowID != m.pendingRow {
+			return m, nil
+		}
+		m.clearRowPending()
+		m.loggingPendingEpoch = 0
+		m.loggingReloading = false
+		m.markRowOutcome(typed.rowID, false, ui.LoggingReloadFailed)
+		return m, m.rowSpinCmdIfNeeded()
 	case selfCheckResultMsg:
 		if typed.generation != m.selfCheckGeneration {
 			return m, nil
@@ -861,6 +989,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, nil
 	}
 	if m.editID != "" {
+		if m.editID == rowLogMaxSize || m.editID == rowLogMaxFiles {
+			return m.updateLoggingEdit(message)
+		}
 		return m.updatePortEdit(message)
 	}
 	if !ok {
@@ -941,6 +1072,26 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, m.openGitHub()
 		case rowMixed, rowController, rowWeb:
 			return m, m.beginPortEdit(m.focusID)
+		case rowLogLevel:
+			return m, m.cycleLoggingLevel()
+		case rowLogMaxSize, rowLogMaxFiles:
+			return m, m.beginLoggingEdit(m.focusID)
+		case rowLogExport:
+			return m, func() tea.Msg { return ui.OpenExportLogsMsg{} }
+		case rowLogDirectory:
+			if !m.loggingAvailable {
+				return m, nil
+			}
+			write := m.writeClipboard
+			if write == nil {
+				write = clipboard.WriteAll
+			}
+			if err := write(m.logging.Dir); err != nil {
+				m.markRowOutcome(rowLogDirectory, false, ui.ExportCopyFailed)
+				return m, nil
+			}
+			m.markRowOutcome(rowLogDirectory, true, "")
+			return m, m.scheduleOutcomeFade(rowLogDirectory)
 		default:
 			selected := rows[index]
 			m.detail = &selected
@@ -1081,10 +1232,9 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 		}
 		labelPart := marker + item.label
 		value := item.value
-		if m.editID == item.id {
-			value = m.editInput.View()
-		}
 		switch {
+		case m.editID == item.id:
+			value = m.editInput.View()
 		case m.pending && m.pendingRow == item.id && m.pendingNote != "":
 			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, m.pendingNote))
 		case m.outcomeRow == item.id:
@@ -1096,6 +1246,9 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 					value += "  " + m.theme.Danger.Render(ui.TruncateVisible(m.outcomeDetail, 48))
 				}
 			}
+		}
+		if isLoggingRow(item.id) && m.editID != item.id && ((m.pending && m.pendingRow == item.id && m.pendingNote != "") || m.outcomeRow == item.id) {
+			value = item.value + "  " + value
 		}
 		if value != "" {
 			value = "  " + value
@@ -1112,6 +1265,9 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 		sections[idx].body = append(sections[idx].body, rowLines...)
 	}
 	for _, sec := range sections {
+		if sec.title == ui.LoggingSectionTitle && m.loggingAvailable && !m.localLoggingAvailable {
+			sec.body = append(sec.body, m.theme.Danger.Render(ui.LocalFileLogUnavailable))
+		}
 		body := strings.Join(sec.body, "\n")
 		if body == "" {
 			body = " "
@@ -1155,8 +1311,29 @@ func (m *Model) rows() []row {
 	)
 	rows = append(rows, m.serviceRows()...)
 	rows = append(rows, m.networkRows()...)
+	rows = append(rows, m.loggingRows()...)
 	rows = append(rows, m.aboutRows()...)
 	return rows
+}
+
+func (m *Model) loggingRows() []row {
+	level := ui.UnavailableTitle
+	maxSize := ui.UnavailableTitle
+	maxFiles := ui.UnavailableTitle
+	directory := ui.UnavailableTitle
+	if m.loggingAvailable {
+		level = m.logging.Level
+		maxSize = fmt.Sprintf("%d MiB", m.logging.MaxSizeMB)
+		maxFiles = fmt.Sprintf("%d", m.logging.MaxFiles)
+		directory = m.logging.Dir
+	}
+	return []row{
+		{id: rowLogLevel, section: ui.LoggingSectionTitle, label: ui.LoggingLevelLabel, value: level},
+		{id: rowLogMaxSize, section: ui.LoggingSectionTitle, label: ui.LoggingMaxSizeLabel, value: maxSize},
+		{id: rowLogMaxFiles, section: ui.LoggingSectionTitle, label: ui.LoggingMaxFilesLabel, value: maxFiles},
+		{id: rowLogDirectory, section: ui.LoggingSectionTitle, label: ui.LoggingDirectoryLabel, value: directory, detail: directory},
+		{id: rowLogExport, section: ui.LoggingSectionTitle, label: ui.ExportLogsLabel},
+	}
 }
 
 func (m *Model) aboutRows() []row {
@@ -1969,6 +2146,155 @@ func (m *Model) beginPortEdit(id string) tea.Cmd {
 	m.editID = id
 	m.editInput = input
 	return func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputText} }
+}
+
+func (m *Model) loggingMutationAvailable() bool {
+	return m.client != nil && m.mutationsEnabled && m.loggingAvailable && m.hasCapability(protocol.CapabilityLogging)
+}
+
+func (m *Model) cycleLoggingLevel() tea.Cmd {
+	if !m.loggingMutationAvailable() {
+		return nil
+	}
+	next := "debug"
+	switch m.logging.Level {
+	case "debug":
+		next = "info"
+	case "info":
+		next = "warn"
+	case "warn":
+		next = "error"
+	}
+	request := protocol.LoggingUpdateRequest{
+		OperationID: m.newOperationID(), IfRevision: loggingRevisionPointer(m.logging.Revision), Level: &next,
+	}
+	return m.startLoggingUpdate(rowLogLevel, request)
+}
+
+func (m *Model) beginLoggingEdit(id string) tea.Cmd {
+	if !m.loggingMutationAvailable() {
+		return nil
+	}
+	m.clearLoggingOutcome(id)
+	input := textinput.New()
+	input.Prompt = ""
+	input.CharLimit = 128
+	input.SetWidth(20)
+	if id == rowLogMaxSize {
+		input.SetValue(strconv.FormatInt(m.logging.MaxSizeMB, 10))
+	} else {
+		input.SetValue(strconv.FormatInt(m.logging.MaxFiles, 10))
+	}
+	_ = input.Focus()
+	m.editID = id
+	m.editInput = input
+	return func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputText} }
+}
+
+func (m *Model) updateLoggingEdit(message tea.Msg) (ui.Page, tea.Cmd) {
+	key, ok := message.(tea.KeyPressMsg)
+	if ok {
+		switch key.String() {
+		case "esc":
+			return m, m.cancelLoggingEdit()
+		case "enter":
+			return m, m.confirmLoggingEdit()
+		}
+	}
+	before := m.editInput.Value()
+	updated, cmd := m.editInput.Update(message)
+	m.editInput = updated
+	if m.editInput.Value() != before {
+		m.clearLoggingOutcome(m.editID)
+	}
+	return m, cmd
+}
+
+func (m *Model) clearLoggingOutcome(rowID string) {
+	if m.outcomeRow != rowID {
+		return
+	}
+	detail := m.outcomeDetail
+	m.outcomeRow = ""
+	m.outcomeOK = false
+	m.outcomeDetail = ""
+	if m.lastError == detail {
+		m.lastError = ""
+	}
+}
+
+func isLoggingRow(rowID string) bool {
+	switch rowID {
+	case rowLogLevel, rowLogMaxSize, rowLogMaxFiles, rowLogDirectory, rowLogExport:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *Model) cancelLoggingEdit() tea.Cmd {
+	m.editID = ""
+	m.editInput = textinput.Model{}
+	return func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
+}
+
+func (m *Model) confirmLoggingEdit() tea.Cmd {
+	rowID := m.editID
+	value, err := strconv.ParseInt(strings.TrimSpace(m.editInput.Value()), 10, 64)
+	request := protocol.LoggingUpdateRequest{
+		OperationID: m.newOperationID(), IfRevision: loggingRevisionPointer(m.logging.Revision),
+	}
+	switch rowID {
+	case rowLogMaxSize:
+		if err != nil || value < 1 || value > 100 {
+			m.markRowOutcome(rowID, false, ui.LoggingMaxSizeInvalid)
+			return nil
+		}
+		request.MaxSizeMB = &value
+	case rowLogMaxFiles:
+		if err != nil || value < 1 || value > 10 {
+			m.markRowOutcome(rowID, false, ui.LoggingMaxFilesInvalid)
+			return nil
+		}
+		request.MaxFiles = &value
+	default:
+		return nil
+	}
+	cancel := m.cancelLoggingEdit()
+	return tea.Batch(cancel, m.startLoggingUpdate(rowID, request))
+}
+
+func (m *Model) startLoggingUpdate(rowID string, request protocol.LoggingUpdateRequest) tea.Cmd {
+	if !m.loggingMutationAvailable() || m.pending {
+		return nil
+	}
+	epoch := m.loggingEpoch
+	m.pending = true
+	m.pendingRow = rowID
+	m.pendingNote = ui.LoggingProgressApplying
+	m.loggingPendingEpoch = epoch
+	update := func() tea.Msg {
+		status, err := m.client.UpdateLogging(m.ctx, request)
+		if err != nil {
+			return ui.PageResultMsg{Page: ui.PageSystem, Result: loggingUpdateResultMsg{epoch: epoch, rowID: rowID, err: err}}
+		}
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: epoch, Status: status}}
+	}
+	return tea.Batch(update, m.rowSpinCmdIfNeeded())
+}
+
+func (m *Model) reloadLogging(epoch uint64, rowID string) tea.Cmd {
+	return func() tea.Msg {
+		status, err := m.client.Logging(m.ctx)
+		if err != nil {
+			return ui.PageResultMsg{Page: ui.PageSystem, Result: loggingReloadResultMsg{epoch: epoch, rowID: rowID, err: err}}
+		}
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: epoch, Status: status}}
+	}
+}
+
+func loggingRevisionPointer(revision uint64) *uint64 {
+	return &revision
 }
 
 func (m *Model) cancelPortEdit() tea.Cmd {

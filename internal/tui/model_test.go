@@ -3,13 +3,17 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/service"
 	connectionspage "github.com/mihari-proxy/mihari/internal/tui/pages/connections"
 	rulespage "github.com/mihari-proxy/mihari/internal/tui/pages/rules"
@@ -764,6 +768,7 @@ func TestNetworkStatusMsgSyncsSystemPageProxyAndTun(t *testing.T) {
 		Capabilities: []string{protocol.CapabilitySystemProxy, protocol.CapabilityTUN},
 	}})
 	system := model.pages[ui.PageSystem].(*systempage.Model)
+	system.SetSize(80, 80)
 	if view := system.View(); !strings.Contains(view, ui.LoadingLabel) {
 		t.Fatalf("expected Loading before networkStatusMsg, view=%s", view)
 	}
@@ -930,4 +935,482 @@ func TestApplySessionEvent_RecordsLastObservedAt(t *testing.T) {
 	if !model.lastObservedAt.Equal(before) {
 		t.Fatalf("reconnecting must not change lastObservedAt: %v", model.lastObservedAt)
 	}
+}
+
+func TestModel_LoggingAcceptsFirstEpochAndRevisionZero(t *testing.T) {
+	model := NewModel()
+	applier := &recordingLoggingApplier{}
+	model.SetLoggingApplier(applier)
+	model.SetLocalLoggingHealth(testLoggingHealth{available: false})
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 0, Capabilities: []string{protocol.CapabilityLogging},
+	}})
+	status := protocol.LoggingStatus{Schema: "mihari/v1", Revision: 0, Level: "warn", MaxSizeMB: 9, MaxFiles: 4, Dir: `C:\logs`}
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: status})
+
+	if model.loggingEpoch != 1 || !model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 0 {
+		t.Fatalf("epoch=%d loaded=%v revision=%v", model.loggingEpoch, model.loggingLoaded, model.loggingRevision)
+	}
+	want := loggingConfigForTest(t, "warn", 9, 4)
+	if got := applier.last(); got != want {
+		t.Fatalf("applied=%+v want %+v", got, want)
+	}
+}
+
+func TestModel_LoggingRevisionChangeUsesBootstrapWithoutAdvancingEpoch(t *testing.T) {
+	model := NewModel()
+	applier := &recordingLoggingApplier{}
+	model.SetLoggingApplier(applier)
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 10, Capabilities: []string{protocol.CapabilityLogging},
+	}})
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: protocol.LoggingStatus{
+		Revision: 10, Level: "info", MaxSizeMB: 10, MaxFiles: 3,
+	}})
+	applier.reset()
+
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 11, Capabilities: []string{protocol.CapabilityLogging},
+	}})
+	if model.loggingEpoch != 1 || model.loggingLoaded {
+		t.Fatalf("epoch=%d loaded=%v", model.loggingEpoch, model.loggingLoaded)
+	}
+	if got := applier.last(); got != logging.BootstrapConfig() {
+		t.Fatalf("revision reset applied=%+v want bootstrap", got)
+	}
+	if model.loggingRevision == nil || *model.loggingRevision != 11 {
+		t.Fatalf("revision floor=%v want 11", model.loggingRevision)
+	}
+}
+
+func TestModel_LoggingRevisionResetRejectsOldEventAndPageObservationUntilFloor(t *testing.T) {
+	model := NewModel()
+	applier := &recordingLoggingApplier{}
+	page := &loggingResultRecordingPage{}
+	model.pages[ui.PageSystem] = page
+	model.SetLoggingApplier(applier)
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: protocol.LoggingStatus{
+		Revision: 10, Level: "info", MaxSizeMB: 10, MaxFiles: 3,
+	}})
+
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 11, Capabilities: []string{protocol.CapabilityLogging},
+	}})
+	if model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 11 {
+		t.Fatalf("reset state loaded=%v floor=%v want unloaded floor 11", model.loggingLoaded, model.loggingRevision)
+	}
+	applyCount, syncCount := applier.count(), page.synced
+
+	stale := protocol.LoggingStatus{Revision: 10, Level: "error", MaxSizeMB: 40, MaxFiles: 8}
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: stale})
+	updated, _ := model.Update(ui.PageResultMsg{
+		Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: 1, Status: stale},
+	})
+	model = updated.(Model)
+	if page.received != 1 {
+		t.Fatalf("stale page results routed=%d want 1", page.received)
+	}
+	if model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 11 {
+		t.Fatalf("stale observation changed root: loaded=%v floor=%v", model.loggingLoaded, model.loggingRevision)
+	}
+	if applier.count() != applyCount || page.synced != syncCount {
+		t.Fatalf("stale observation changed consumers: applies=%d want %d syncs=%d want %d", applier.count(), applyCount, page.synced, syncCount)
+	}
+
+	current := protocol.LoggingStatus{Revision: 11, Level: "warn", MaxSizeMB: 20, MaxFiles: 5}
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: current})
+	if !model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 11 || model.loggingStatus != current {
+		t.Fatalf("current observation not accepted: loaded=%v revision=%v status=%+v", model.loggingLoaded, model.loggingRevision, model.loggingStatus)
+	}
+	if applier.count() != applyCount+1 || page.synced != syncCount+1 {
+		t.Fatalf("current observation consumer updates: applies=%d syncs=%d", applier.count(), page.synced)
+	}
+}
+
+func TestModel_LoggingStaleObservationsStillRouteWithoutChangingRoot(t *testing.T) {
+	model := NewModel()
+	applier := &recordingLoggingApplier{}
+	model.SetLoggingApplier(applier)
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: protocol.LoggingStatus{
+		Revision: 10, Level: "info", MaxSizeMB: 10, MaxFiles: 3,
+	}})
+	model.applySessionEvent(session.Event{Kind: session.EventReconnecting, Epoch: 2})
+	current := protocol.LoggingStatus{Revision: 12, Level: "error", MaxSizeMB: 30, MaxFiles: 7}
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 2, Logging: current})
+
+	page := &loggingResultRecordingPage{}
+	model.pages[ui.PageSystem] = page
+	before := applier.count()
+	for _, stale := range []ui.LoggingObservedMsg{
+		{Epoch: 1, Status: protocol.LoggingStatus{Revision: 13, Level: "debug", MaxSizeMB: 100, MaxFiles: 10}},
+		{Epoch: 2, Status: protocol.LoggingStatus{Revision: 11, Level: "warn", MaxSizeMB: 5, MaxFiles: 2}},
+	} {
+		updated, _ := model.Update(ui.PageResultMsg{Page: ui.PageSystem, Result: stale})
+		model = updated.(Model)
+	}
+	if page.received != 2 {
+		t.Fatalf("stale page results routed=%d want 2", page.received)
+	}
+	if model.loggingEpoch != 2 || !model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 12 {
+		t.Fatalf("root changed to stale observation: epoch=%d loaded=%v revision=%v", model.loggingEpoch, model.loggingLoaded, model.loggingRevision)
+	}
+	if got := applier.count(); got != before {
+		t.Fatalf("stale observations submitted %d configs", got-before)
+	}
+}
+
+func TestModel_LoggingCapabilityLossFollowsSessionEpochAndResets(t *testing.T) {
+	model := NewModel()
+	applier := &recordingLoggingApplier{}
+	model.SetLoggingApplier(applier)
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 4, Capabilities: []string{protocol.CapabilityLogging},
+	}})
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: protocol.LoggingStatus{
+		Revision: 4, Level: "warn", MaxSizeMB: 12, MaxFiles: 6,
+	}})
+	applier.reset()
+
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 2, Status: protocol.Status{Revision: 4}})
+	if model.loggingEpoch != 2 || model.loggingLoaded || model.loggingRevision != nil {
+		t.Fatalf("epoch=%d loaded=%v revision=%v", model.loggingEpoch, model.loggingLoaded, model.loggingRevision)
+	}
+	if got := applier.last(); got != logging.BootstrapConfig() {
+		t.Fatalf("capability loss applied=%+v want bootstrap", got)
+	}
+	if got := applier.count(); got != 1 {
+		t.Fatalf("capability loss submitted bootstrap %d times", got)
+	}
+}
+
+func TestModel_LoggingObservationSendsSynchronizedStateToSystem(t *testing.T) {
+	model := NewModel()
+	page := &loggingResultRecordingPage{}
+	model.pages[ui.PageSystem] = page
+	status := protocol.LoggingStatus{Revision: 0, Level: "debug", MaxSizeMB: 100, MaxFiles: 10}
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: status})
+	if page.synced != 1 || page.lastSync.Epoch != 1 || !page.lastSync.Available || page.lastSync.Status != status {
+		t.Fatalf("sync count=%d message=%+v", page.synced, page.lastSync)
+	}
+	model.SetLocalLoggingHealth(testLoggingHealth{available: true})
+	if page.synced != 2 || !page.lastSync.Available || page.lastSync.Status != status {
+		t.Fatalf("health refresh lost synchronized status: count=%d message=%+v", page.synced, page.lastSync)
+	}
+}
+
+func TestModel_LoggingPageObservationAdvancesGlobalRevision(t *testing.T) {
+	model := NewModel()
+	page := &loggingResultRecordingPage{}
+	model.pages[ui.PageSystem] = page
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 5, Capabilities: []string{protocol.CapabilityLogging},
+	}})
+	before := protocol.LoggingStatus{Revision: 5, Level: "info", MaxSizeMB: 10, MaxFiles: 3, Dir: `C:\logs`}
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: before})
+	page.synced = 0
+
+	after := before
+	after.Revision = 6
+	updated, _ := model.Update(ui.PageResultMsg{
+		Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: 1, Status: after},
+	})
+	model = updated.(Model)
+	if model.status.Revision != 6 || model.loggingRevision == nil || *model.loggingRevision != 6 {
+		t.Fatalf("global=%d logging=%v", model.status.Revision, model.loggingRevision)
+	}
+	if page.synced != 1 || page.lastSync.Status != after {
+		t.Fatalf("syncs=%d last=%+v", page.synced, page.lastSync)
+	}
+}
+
+func TestModel_StatusDoesNotRegressWithinEpochButAcceptsNewEpoch(t *testing.T) {
+	model := NewModel()
+	applier := &recordingLoggingApplier{}
+	model.SetLoggingApplier(applier)
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 5, DaemonVersion: "current", Health: "ok", Capabilities: []string{protocol.CapabilityLogging},
+	}})
+	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: protocol.LoggingStatus{
+		Revision: 5, Level: "info", MaxSizeMB: 10, MaxFiles: 3,
+	}})
+	updated, _ := model.Update(ui.PageResultMsg{
+		Page: ui.PageSystem,
+		Result: ui.LoggingObservedMsg{Epoch: 1, Status: protocol.LoggingStatus{
+			Revision: 6, Level: "warn", MaxSizeMB: 20, MaxFiles: 5,
+		}},
+	})
+	model = updated.(Model)
+	applyCount := applier.count()
+
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{
+		Revision: 5, DaemonVersion: "stale", Health: "degraded", LastError: "stale status",
+		SetupRequired: true,
+	}})
+	if model.status.Revision != 6 || model.status.DaemonVersion != "current" || model.status.Health != "ok" || model.status.SetupRequired {
+		t.Fatalf("same-epoch stale status replaced current state: %+v", model.status)
+	}
+	if !model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 6 || model.loggingStatus.Level != "warn" {
+		t.Fatalf("same-epoch stale status reset logging state: loaded=%v revision=%v status=%+v", model.loggingLoaded, model.loggingRevision, model.loggingStatus)
+	}
+	if applier.count() != applyCount {
+		t.Fatalf("same-epoch stale status applied %d logging configs", applier.count()-applyCount)
+	}
+
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 2, Status: protocol.Status{
+		Revision: 1, DaemonVersion: "restarted", Health: "ok",
+	}})
+	if model.status.Revision != 1 || model.status.DaemonVersion != "restarted" {
+		t.Fatalf("new-epoch status was not accepted: %+v", model.status)
+	}
+	if model.loggingEpoch != 2 || model.loggingLoaded || model.loggingRevision != nil {
+		t.Fatalf("new epoch did not reset logging state: epoch=%d loaded=%v revision=%v", model.loggingEpoch, model.loggingLoaded, model.loggingRevision)
+	}
+}
+
+func TestModel_LoggingUnavailableSyncLeavesRootTextInputMode(t *testing.T) {
+	model := NewModel()
+	page := &loggingResultRecordingPage{helpMode: ui.ModeLoggingEdit}
+	model.pages[ui.PageSystem] = page
+	model.active = ui.PageSystem
+	model.inputMode = ui.InputText
+
+	model.syncSystemLoggingStatus(protocol.LoggingStatus{}, false)
+	if model.inputMode != ui.InputNavigation {
+		t.Fatalf("input mode=%v want navigation", model.inputMode)
+	}
+}
+
+type recordingLoggingApplier struct {
+	configs []logging.Config
+	closed  bool
+}
+
+func (a *recordingLoggingApplier) Submit(cfg logging.Config) bool {
+	if a.closed {
+		return false
+	}
+	a.configs = append(a.configs, cfg)
+	return true
+}
+
+func (a *recordingLoggingApplier) CloseAndWait() { a.closed = true }
+
+func (a *recordingLoggingApplier) last() logging.Config {
+	if len(a.configs) == 0 {
+		return logging.Config{}
+	}
+	return a.configs[len(a.configs)-1]
+}
+
+func (a *recordingLoggingApplier) count() int { return len(a.configs) }
+
+func (a *recordingLoggingApplier) reset() { a.configs = nil }
+
+type loggingResultRecordingPage struct {
+	received int
+	synced   int
+	lastSync ui.LoggingSyncMsg
+	helpMode string
+}
+
+func TestModel_ExportOverlayOpensAndPreservesRootRouting(t *testing.T) {
+	model := NewModel()
+	model.exportLogs = ui.NewExportLogsModel(ui.ExportLogsOptions{Now: func() time.Time { return time.Unix(1, 0) }})
+	updated, _ := model.Update(ui.OpenExportLogsMsg{})
+	model = updated.(Model)
+	if model.exportLogs.Closed() {
+		t.Fatal("export overlay did not open")
+	}
+	updated, _ = model.Update(ui.RuntimeRevisionMsg{Revision: 9})
+	model = updated.(Model)
+	if model.status.Revision != 9 {
+		t.Fatalf("revision=%d", model.status.Revision)
+	}
+	if !strings.Contains(model.View().Content, ui.ExportLogsTitle) {
+		t.Fatal("open export overlay was not rendered")
+	}
+}
+
+func TestModel_ExportOverlayApprovedQuitBypassesQueuedModal(t *testing.T) {
+	for _, key := range []tea.KeyPressMsg{{Code: 'q', Text: "q"}, {Code: 'c', Mod: tea.ModCtrl}} {
+		model := NewModel()
+		model.exportLogs = ui.NewExportLogsModel(ui.ExportLogsOptions{Now: func() time.Time { return time.Unix(1, 0) }})
+		model.exportLogs.Open()
+		model.modal = NewConfirmation("queued", "object", "impact", "rollback")
+		queued := model.modal
+		updated, cmd := model.Update(key)
+		model = updated.(Model)
+		if cmd == nil || cmd() != tea.Quit() {
+			t.Fatalf("key=%q did not quit", key.String())
+		}
+		if model.modal != queued || model.exportLogs.Closed() {
+			t.Fatalf("key=%q mutated queued modal or overlay", key.String())
+		}
+	}
+}
+
+func TestModel_ExportOverlayViewPrecedesSetupAndQueuedModalThenRestoresShell(t *testing.T) {
+	model := NewModel()
+	model.active = ui.PageSetup
+	model.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageSetup}
+	model.modal = NewDetail("queued detail", "hidden body")
+	model.exportLogs = ui.NewExportLogsModel(ui.ExportLogsOptions{Now: func() time.Time { return time.Unix(1, 0) }})
+	model.exportLogs.Open()
+	view := model.View()
+	if !view.AltScreen || view.WindowTitle != ui.AppName || !strings.Contains(view.Content, ui.ExportLogsTitle) || strings.Contains(view.Content, "hidden body") {
+		t.Fatalf("overlay view flags/content: alt=%v title=%q content=%q", view.AltScreen, view.WindowTitle, view.Content)
+	}
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	model = updated.(Model)
+	if model.active != ui.PageSetup || model.focus != (ui.Focus{Area: ui.FocusContent, Page: ui.PageSetup}) || model.modal == nil {
+		t.Fatalf("shell state changed after overlay close: active=%s focus=%+v modal=%v", model.active, model.focus, model.modal)
+	}
+	if restored := model.View().Content; !strings.Contains(restored, "hidden body") {
+		t.Fatalf("queued modal not restored: %q", restored)
+	}
+}
+
+func TestModel_PendingExportPreservesAsyncRootAndTargetPageRouting(t *testing.T) {
+	started := make(chan struct{})
+	model := NewModel()
+	page := &allMessageRecordingPage{id: ui.PageSystem}
+	model.pages[ui.PageSystem] = page
+	model.exportLogs = ui.NewExportLogsModel(ui.ExportLogsOptions{
+		Now: func() time.Time { return time.Unix(1, 0) }, DefaultDir: t.TempDir(),
+		Export: func(ctx context.Context, _ logging.ExportRequest) (logging.ExportResult, error) {
+			close(started)
+			<-ctx.Done()
+			return logging.ExportResult{}, ctx.Err()
+		},
+	})
+	t.Cleanup(model.exportLogs.CancelAndWait)
+	model.exportLogs.Open()
+	model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if cmd, consumed := model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd == nil || !consumed {
+		t.Fatal("export did not enter pending state")
+	}
+	<-started
+
+	updated, _ := model.Update(ui.LoggingObservedMsg{Epoch: 1, Status: protocol.LoggingStatus{Revision: 7, Level: "warn", MaxSizeMB: 10, MaxFiles: 3}})
+	model = updated.(Model)
+	marker := asyncMarkerMsg{}
+	updated, _ = model.Update(ui.PageResultMsg{Page: ui.PageSystem, Result: marker})
+	model = updated.(Model)
+	model.pendingActions["owned"] = ui.ActionRestartCore
+	updated, _ = model.Update(actionCompletedMsg{Intent: ui.ActionIntentMsg{Key: "owned", Page: ui.PageSystem}, Result: marker})
+	model = updated.(Model)
+	if model.loggingRevision == nil || *model.loggingRevision != 7 || len(model.pendingActions) != 0 {
+		t.Fatalf("logging revision=%v pending=%v", model.loggingRevision, model.pendingActions)
+	}
+	if page.count(ui.LoggingObservedMsg{}) != 1 || page.count(marker) != 2 {
+		t.Fatalf("routed messages=%v", page.messages)
+	}
+}
+
+func TestModel_PendingExportRoutesRealSystemActionCompletion(t *testing.T) {
+	// Channel persistence is the only real action executed here, and its data
+	// root is isolated before constructing/rendering the page (which reads it).
+	dataRoot := t.TempDir()
+	t.Setenv("MIHARI_DATA", dataRoot)
+	started := make(chan struct{})
+	model := NewModel()
+	realPage := systempage.New(nil, func() string { return "op" })
+	realPage.SetSelfUpdater(rootSelfUpdater{}, "v1.0.0", t.TempDir()+"/mihari", func() bool { return true })
+	realPage.SetOpenBrowser(func(string) error { t.Fatal("test attempted browser IO"); return nil })
+	realPage.SetSize(180, 100)
+	model.pages[ui.PageSystem] = realPage
+
+	var intent ui.ActionIntentMsg
+	found := false
+	for steps := 0; steps < 64; steps++ {
+		if strings.Contains(ansi.Strip(realPage.View()), ui.FocusMarker+ui.MihariChannelLabel) {
+			_, cmd := realPage.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			if cmd == nil {
+				t.Fatal("channel row did not provide intent")
+			}
+			request, ok := cmd().(ui.ActionIntentMsg)
+			if !ok || request.Action != ui.ActionSwitchMihariChannel {
+				t.Fatal("selected row was not channel action")
+			}
+			intent, found = request, true
+			break
+		}
+		page, _ := realPage.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		realPage = page.(*systempage.Model)
+	}
+	if !found {
+		t.Fatal("real System source page did not expose its Mihari channel action")
+	}
+	model.pages[ui.PageSystem] = realPage
+
+	updated, _ := model.executeAction(intent)
+	model = updated.(Model)
+	if !strings.Contains(model.pages[ui.PageSystem].View(), ui.MihariProgressSwitching) {
+		t.Fatal("real System source page did not enter action-pending state")
+	}
+	model.exportLogs = ui.NewExportLogsModel(ui.ExportLogsOptions{
+		Now: func() time.Time { return time.Unix(1, 0) }, DefaultDir: t.TempDir(),
+		Export: func(ctx context.Context, _ logging.ExportRequest) (logging.ExportResult, error) {
+			close(started)
+			<-ctx.Done()
+			return logging.ExportResult{}, ctx.Err()
+		},
+	})
+	t.Cleanup(model.exportLogs.CancelAndWait)
+	model.exportLogs.Open()
+	model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if cmd, consumed := model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd == nil || !consumed {
+		t.Fatal("export did not enter pending state")
+	}
+	<-started
+
+	completion := actionCompletedMsg{Intent: intent, Result: intent.Execute()}
+	updated, _ = model.Update(completion)
+	model = updated.(Model)
+	if len(model.pendingActions) != 0 || strings.Contains(model.pages[ui.PageSystem].View(), ui.MihariProgressSwitching) {
+		t.Fatalf("real System completion did not clear root/source pending state: root=%v view=%q", model.pendingActions, model.pages[ui.PageSystem].View())
+	}
+	channel, err := update.LoadChannel(filepath.Join(dataRoot, "mihari-channel"))
+	if err != nil || channel != update.ChannelDev || !strings.Contains(model.pages[ui.PageSystem].View(), ui.DoneLabel) {
+		t.Fatalf("real System channel completion was not applied: channel=%q err=%v", channel, err)
+	}
+}
+
+type allMessageRecordingPage struct {
+	id       ui.PageID
+	messages []tea.Msg
+}
+
+func (p *allMessageRecordingPage) ID() ui.PageID    { return p.id }
+func (p *allMessageRecordingPage) SetSize(int, int) {}
+func (p *allMessageRecordingPage) FocusFirst()      {}
+func (p *allMessageRecordingPage) View() string     { return "" }
+func (p *allMessageRecordingPage) Update(msg tea.Msg) (ui.Page, tea.Cmd) {
+	p.messages = append(p.messages, msg)
+	return p, nil
+}
+func (p *allMessageRecordingPage) count(sample tea.Msg) int {
+	n := 0
+	for _, msg := range p.messages {
+		if fmt.Sprintf("%T", msg) == fmt.Sprintf("%T", sample) {
+			n++
+		}
+	}
+	return n
+}
+
+func (p *loggingResultRecordingPage) ID() ui.PageID    { return ui.PageSystem }
+func (p *loggingResultRecordingPage) SetSize(int, int) {}
+func (p *loggingResultRecordingPage) FocusFirst()      {}
+func (p *loggingResultRecordingPage) View() string     { return "" }
+func (p *loggingResultRecordingPage) HelpMode() string { return p.helpMode }
+func (p *loggingResultRecordingPage) Update(message tea.Msg) (ui.Page, tea.Cmd) {
+	switch typed := message.(type) {
+	case ui.LoggingObservedMsg:
+		p.received++
+	case ui.LoggingSyncMsg:
+		p.synced++
+		p.lastSync = typed
+	}
+	return p, nil
 }

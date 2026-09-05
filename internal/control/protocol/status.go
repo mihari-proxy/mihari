@@ -8,6 +8,7 @@ const (
 	CapabilityConnections   = "connections"
 	CapabilityRules         = "rules"
 	CapabilityLogs          = "logs"
+	CapabilityLogging       = "logging"
 	CapabilitySubscriptions = "subscriptions"
 	CapabilityRuleProviders = "rule-providers"
 	CapabilityGeoIP         = "geoip"

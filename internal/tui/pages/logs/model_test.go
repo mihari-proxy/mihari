@@ -28,6 +28,42 @@ func TestModel_ScrollingUpDisablesFollowAndGReturnsToNewest(t *testing.T) {
 	}
 }
 
+func TestModel_ExportEntryPoints(t *testing.T) {
+	model := New(10)
+	model.controlIndex = 3
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Export control did not return a command")
+	}
+	if _, ok := cmd().(ui.OpenExportLogsMsg); !ok {
+		t.Fatalf("command message=%T", cmd())
+	}
+	model.focus = focusRow
+	_, cmd = model.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	if cmd == nil {
+		t.Fatal("navigation shortcut did not open export")
+	}
+	for _, tt := range []struct {
+		name    string
+		prepare func(*Model)
+	}{
+		{"searching", func(m *Model) { m.searching = true }},
+		{"search focus", func(m *Model) { m.focus = focusSearch }},
+		{"detail", func(m *Model) { m.focus = focusRow; m.detail = &detailState{} }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := New(10)
+			tt.prepare(candidate)
+			_, command := candidate.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+			if command != nil {
+				if _, opened := command().(ui.OpenExportLogsMsg); opened {
+					t.Fatal("suppressed shortcut opened export")
+				}
+			}
+		})
+	}
+}
+
 func TestModel_PauseFreezesRenderedSnapshotAndResumeShowsNewest(t *testing.T) {
 	model := New(10)
 	model.Append(logAt("before", "info", 1))

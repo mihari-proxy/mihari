@@ -18,11 +18,16 @@ const (
 	maxStateSize = 64 << 10
 )
 
+// State is the onboarding-owned persistent state.
+type State struct {
+	Complete bool
+}
+
 type Options struct {
 	StatePath            string
-	SettingsPath         string
-	Settings             config.Settings
 	InitialSetupRequired bool
+	SaveState            func(string, State) (config.CommitResult, error)
+	OnPersistenceWarning func(error)
 }
 
 type Status struct {
@@ -52,111 +57,103 @@ type persistedState struct {
 }
 
 type Service struct {
-	mu              sync.RWMutex
-	statePath       string
-	settingsPath    string
-	state           persistedState
-	settings        config.Settings
-	restartRequired bool
+	mu                   sync.RWMutex
+	statePath            string
+	state                State
+	saveState            func(string, State) (config.CommitResult, error)
+	onPersistenceWarning func(error)
 }
 
 func Open(options Options) (*Service, error) {
-	if err := options.Settings.Validate(); err != nil {
-		return nil, err
+	saver := options.SaveState
+	if saver == nil {
+		saver = saveState
 	}
 	state, err := loadState(options.StatePath)
 	if errors.Is(err, os.ErrNotExist) {
-		state = persistedState{Schema: stateSchema, Complete: !options.InitialSetupRequired}
-		if err := saveState(options.StatePath, state); err != nil {
-			return nil, err
+		state = State{Complete: !options.InitialSetupRequired}
+		result, saveErr := saver(options.StatePath, state)
+		if saveErr != nil {
+			return nil, saveErr
 		}
+		if !result.Committed {
+			return nil, dataError("persist onboarding state")
+		}
+		reportPersistenceWarning(options.OnPersistenceWarning, result.Warning)
 	} else if err != nil {
 		return nil, err
 	}
-	return &Service{statePath: options.StatePath, settingsPath: options.SettingsPath, state: state, settings: options.Settings}, nil
+	return &Service{
+		statePath:            options.StatePath,
+		state:                state,
+		saveState:            saver,
+		onPersistenceWarning: options.OnPersistenceWarning,
+	}, nil
 }
 
-func (s *Service) Status() Status {
+// State returns a snapshot of the onboarding-owned state.
+func (s *Service) State() State {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.statusLocked()
+	return s.state
 }
 
-func (s *Service) Update(update Update) (Status, error) {
+// Update persists and publishes a completion-state update.
+func (s *Service) Update(complete *bool) (State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	nextSettings := s.settings
-	if update.MixedAddr != nil {
-		nextSettings.MixedAddr = *update.MixedAddr
+	if complete == nil || *complete == s.state.Complete {
+		return s.state, nil
 	}
-	if update.ControllerAddr != nil {
-		nextSettings.ControllerAddr = *update.ControllerAddr
+	next := State{Complete: *complete}
+	result, err := s.saveState(s.statePath, next)
+	if err != nil {
+		return State{}, err
 	}
-	if update.WebAddr != nil {
-		nextSettings.WebAddr = *update.WebAddr
+	if !result.Committed {
+		return State{}, dataError("persist onboarding state")
 	}
-	if err := nextSettings.Validate(); err != nil {
-		return Status{}, err
-	}
-	nextState := s.state
-	if update.Complete != nil {
-		nextState.Complete = *update.Complete
-	}
-	endpointChanged := nextSettings.MixedAddr != s.settings.MixedAddr || nextSettings.ControllerAddr != s.settings.ControllerAddr || nextSettings.WebAddr != s.settings.WebAddr
-	if endpointChanged {
-		if err := config.Save(s.settingsPath, nextSettings); err != nil {
-			return Status{}, err
-		}
-	}
-	if nextState != s.state {
-		if err := saveState(s.statePath, nextState); err != nil {
-			if endpointChanged {
-				if rollbackErr := config.Save(s.settingsPath, s.settings); rollbackErr != nil {
-					return Status{}, dataError("persist onboarding state failed and settings rollback failed")
-				}
-			}
-			return Status{}, err
-		}
-	}
-	s.settings, s.state = nextSettings, nextState
-	s.restartRequired = s.restartRequired || endpointChanged
-	return s.statusLocked(), nil
+	s.state = next
+	reportPersistenceWarning(s.onPersistenceWarning, result.Warning)
+	return s.state, nil
 }
 
-func (s *Service) statusLocked() Status {
-	return Status{Complete: s.state.Complete, MixedAddr: s.settings.MixedAddr, ControllerAddr: s.settings.ControllerAddr, WebAddr: s.settings.WebAddr, RestartRequired: s.restartRequired}
+func reportPersistenceWarning(report func(error), warning error) {
+	if warning != nil && report != nil {
+		report(errors.New("onboarding parent directory sync failed after commit"))
+	}
 }
 
-func loadState(path string) (persistedState, error) {
+func loadState(path string) (State, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return persistedState{}, err
+		return State{}, err
 	}
 	if len(raw) > maxStateSize {
-		return persistedState{}, dataError("onboarding state is too large")
+		return State{}, dataError("onboarding state is too large")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	var state persistedState
-	if err := decoder.Decode(&state); err != nil {
-		return persistedState{}, dataError("invalid onboarding state")
+	var persisted persistedState
+	if err := decoder.Decode(&persisted); err != nil {
+		return State{}, dataError("invalid onboarding state")
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return persistedState{}, dataError("onboarding state must contain one document")
+		return State{}, dataError("onboarding state must contain one document")
 	}
-	if state.Schema != stateSchema {
-		return persistedState{}, dataError("unsupported onboarding state schema")
+	if persisted.Schema != stateSchema {
+		return State{}, dataError("unsupported onboarding state schema")
 	}
-	return state, nil
+	return State{Complete: persisted.Complete}, nil
 }
 
-func saveState(path string, state persistedState) error {
-	raw, err := json.Marshal(state)
+func saveState(path string, state State) (config.CommitResult, error) {
+	raw, err := json.Marshal(persistedState{Schema: stateSchema, Complete: state.Complete})
 	if err != nil {
-		return fmt.Errorf("encode onboarding state: %w", err)
+		return config.CommitResult{}, fmt.Errorf("encode onboarding state: %w", err)
 	}
-	return config.AtomicWrite(path, append(raw, '\n'), 0o600)
+	return config.AtomicWriteWithCommit(path, append(raw, '\n'), 0o600)
 }
 
 func dataError(message string) error {

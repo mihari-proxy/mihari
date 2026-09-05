@@ -125,6 +125,20 @@ func (c *Client) UpdateGeoIP(ctx context.Context, request protocol.MutationReque
 	return result, err
 }
 
+// Logging returns the daemon-owned effective file logging configuration.
+func (c *Client) Logging(ctx context.Context) (protocol.LoggingStatus, error) {
+	var result protocol.LoggingStatus
+	err := c.doRuntime(ctx, http.MethodGet, "/v1/logging", nil, &result)
+	return result, err
+}
+
+// UpdateLogging applies a partial daemon-owned file logging configuration update.
+func (c *Client) UpdateLogging(ctx context.Context, request protocol.LoggingUpdateRequest) (protocol.LoggingStatus, error) {
+	var result protocol.LoggingStatus
+	err := c.doRuntime(ctx, http.MethodPatch, "/v1/logging", request, &result)
+	return result, err
+}
+
 // SystemProxy returns desired intent and live OS system-proxy observation.
 func (c *Client) SystemProxy(ctx context.Context) (protocol.SystemProxyStatus, error) {
 	var result protocol.SystemProxyStatus
@@ -257,7 +271,7 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 	}
 	streamURL.Path = strings.TrimRight(streamURL.Path, "/") + "/v1/streams/" + url.PathEscape(kind)
 	header := http.Header{}
-	header.Set("Authorization", "Bearer "+c.token)
+	header.Set("Authorization", "Bearer "+c.bearerToken())
 	connection, response, err := websocket.Dial(ctx, streamURL.String(), &websocket.DialOptions{HTTPClient: c.http, HTTPHeader: header})
 	if err != nil {
 		if ctx.Err() != nil {
@@ -304,7 +318,7 @@ func (c *Client) doRuntime(ctx context.Context, method, path string, input, outp
 	if err != nil {
 		return protocol.APIError{Code: protocol.CodeInternal, Message: "create control request"}
 	}
-	request.Header.Set("Authorization", "Bearer "+c.token)
+	request.Header.Set("Authorization", "Bearer "+c.bearerToken())
 	if input != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}

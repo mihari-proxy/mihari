@@ -236,6 +236,10 @@ func TestCatalog_KeysAppearInHandlerSource(t *testing.T) {
 			}
 		case b.Mode == ModePortsEdit:
 			return []string{filepath.Join(tuiDir, "pages", "system", "model.go")}
+		case b.Mode == ModeLoggingEdit:
+			return []string{filepath.Join(tuiDir, "pages", "system", "model.go")}
+		case b.Mode == ModeExportLogs:
+			return []string{filepath.Join(uiDir, "exportlogs.go")}
 		default:
 			return nil
 		}
@@ -291,7 +295,7 @@ func TestRenderFooter_MatchesCurrentLayout(t *testing.T) {
 		{"proxies", RenderFooter(PageProxies, "", FooterOpt{}), "Esc back  Enter expand  t test  Ctrl+T test all  ? help  q quit"},
 		{"connections", RenderFooter(PageConnections, "", FooterOpt{}), "Esc back  / search  x close  p pause  Enter details  ? help  q quit"},
 		{"rules", RenderFooter(PageRules, "", FooterOpt{}), "Esc back  / search  r reload  u update  Ctrl+U update all  Enter details  ? help  q quit"},
-		{"logs", RenderFooter(PageLogs, "", FooterOpt{}), "Esc back  / search  p pause  w wrap  G newest  Enter details  ? help  q quit"},
+		{"logs", RenderFooter(PageLogs, "", FooterOpt{}), "Esc back  / search  p pause  w wrap  G newest  e export  Enter details  ? help  q quit"},
 		{"subscriptions", RenderFooter(PageSubscriptions, "", FooterOpt{}), "Esc back  Enter details  a add  e edit  Space toggle  p proxy  r refresh  Ctrl+R refresh all  u use  d delete  ? help  q quit"},
 		{"webgui-off", RenderFooter(PageWebGUI, "", FooterOpt{}), "Esc back  ? help  q quit"},
 		{"webgui-on", RenderFooter(PageWebGUI, "", FooterOpt{WebGUIAvailable: true}), "Esc back  ↑/↓ panel  Space set default  o open  i install  u update  r reinstall  x uninstall  b rollback  ? help  q quit"},
@@ -302,6 +306,7 @@ func TestRenderFooter_MatchesCurrentLayout(t *testing.T) {
 		{"columns", RenderFooter(PageConnections, ModeColumns, FooterOpt{}), "↑/↓ column  Space toggle  Enter save  Esc cancel  ? help  q quit"},
 		{"form", RenderFooter(PageSubscriptions, ModeForm, FooterOpt{}), "Tab/Shift+Tab fields  Enter next/save  Esc cancel"},
 		{"ports", RenderFooter(PageSystem, ModePortsEdit, FooterOpt{}), "Type address  Enter apply  Esc cancel  ? help  q quit"},
+		{"logging", RenderFooter(PageSystem, ModeLoggingEdit, FooterOpt{}), "Type value  Enter apply  Esc cancel"},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {
@@ -319,5 +324,15 @@ func TestRenderFooter_MatchesCurrentLayout(t *testing.T) {
 	}
 	if SetupFooter != "Tab fields  Enter continue  Esc back  Ctrl+C quit" {
 		t.Fatalf("SetupFooter=%q", SetupFooter)
+	}
+}
+
+func TestRenderHelp_LoggingEditUsesValueCopyNotAddressCopy(t *testing.T) {
+	body := RenderHelp(PageSystem, ModeLoggingEdit)
+	if !strings.Contains(body, "This mode · Logging edit") || !strings.Contains(body, "edit the value") {
+		t.Fatalf("logging edit help missing:\n%s", body)
+	}
+	if strings.Contains(body, "edit the address") {
+		t.Fatalf("logging help reused Ports copy:\n%s", body)
 	}
 }

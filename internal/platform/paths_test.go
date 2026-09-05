@@ -22,7 +22,11 @@ func TestNewPathsBuildsRuntimeLayout(t *testing.T) {
 		"runtime config":  filepath.Join(root, "runtime", "config.yaml"),
 		"settings":        filepath.Join(root, "mihari.yaml"),
 		"onboarding":      filepath.Join(root, "onboarding.json"),
-		"log":             filepath.Join(root, "logs", "mihari.log"),
+		"log dir":         filepath.Join(root, "logs"),
+		"daemon log":      filepath.Join(root, "logs", "mihari-daemon.log"),
+		"tui log":         filepath.Join(root, "logs", "mihari-tui.log"),
+		"mihomo log":      filepath.Join(root, "logs", "mihomo.log"),
+		"log export dir":  filepath.Join(root, "logs-export"),
 		"staging":         filepath.Join(root, "staging"),
 		"subscriptions":   filepath.Join(root, "subscriptions"),
 		"catalog":         filepath.Join(root, "subscriptions", "catalog.yaml"),
@@ -45,7 +49,11 @@ func TestNewPathsBuildsRuntimeLayout(t *testing.T) {
 		"runtime config":  paths.RuntimeConfig,
 		"settings":        paths.Settings,
 		"onboarding":      paths.Onboarding,
-		"log":             paths.Log,
+		"log dir":         paths.LogDir,
+		"daemon log":      paths.DaemonLog,
+		"tui log":         paths.TUILog,
+		"mihomo log":      paths.MihomoLog,
+		"log export dir":  paths.LogExportDir,
 		"staging":         paths.Staging,
 		"subscriptions":   paths.Subscriptions,
 		"catalog":         paths.SubscriptionCatalog,
@@ -137,7 +145,7 @@ func TestEnsureDirsCreatesDurableLayout(t *testing.T) {
 		paths.Root,
 		paths.Bin,
 		filepath.Dir(paths.RuntimeConfig),
-		filepath.Dir(paths.Log),
+		paths.LogDir,
 		paths.Staging,
 		paths.Subscriptions,
 		paths.SubscriptionCache,
@@ -155,5 +163,84 @@ func TestEnsureDirsCreatesDurableLayout(t *testing.T) {
 		if !info.IsDir() {
 			t.Fatalf("%s is not a directory", path)
 		}
+	}
+}
+
+func TestEnsureDirsLoggingLayout(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "ensure-logging")
+	paths := NewPaths(root)
+	if err := paths.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(paths.LogDir)
+	if err != nil {
+		t.Fatalf("LogDir missing: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("LogDir %q is not a directory", paths.LogDir)
+	}
+	if _, err := os.Stat(paths.LogExportDir); !os.IsNotExist(err) {
+		t.Fatalf("LogExportDir %q should be absent, err=%v", paths.LogExportDir, err)
+	}
+}
+
+func TestPathsAbsoluteRebuildsDerivedFields(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	relative := NewPaths(filepath.Join(".", "relative-data"))
+	abs, err := relative.Absolute()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(abs.Root) {
+		t.Fatalf("Root=%q want absolute", abs.Root)
+	}
+	wantRoot, err := filepath.Abs(filepath.Join(".", "relative-data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoot = filepath.Clean(wantRoot)
+	if abs.Root != wantRoot {
+		t.Fatalf("Root=%q want=%q", abs.Root, wantRoot)
+	}
+	want := map[string]string{
+		"LogDir":       filepath.Join(wantRoot, "logs"),
+		"DaemonLog":    filepath.Join(wantRoot, "logs", "mihari-daemon.log"),
+		"TUILog":       filepath.Join(wantRoot, "logs", "mihari-tui.log"),
+		"MihomoLog":    filepath.Join(wantRoot, "logs", "mihomo.log"),
+		"LogExportDir": filepath.Join(wantRoot, "logs-export"),
+	}
+	gots := map[string]string{
+		"LogDir":       abs.LogDir,
+		"DaemonLog":    abs.DaemonLog,
+		"TUILog":       abs.TUILog,
+		"MihomoLog":    abs.MihomoLog,
+		"LogExportDir": abs.LogExportDir,
+	}
+	for name, wantPath := range want {
+		if got := gots[name]; got != wantPath {
+			t.Errorf("%s=%q want=%q", name, got, wantPath)
+		}
+	}
+	if relative.Root == abs.Root {
+		t.Fatalf("Absolute mutated original Root: %q", relative.Root)
+	}
+	if relative.LogDir == abs.LogDir {
+		t.Fatalf("Absolute mutated original LogDir: %q", relative.LogDir)
+	}
+
+	absoluteRoot := filepath.Join(t.TempDir(), "abs-data")
+	original := NewPaths(absoluteRoot)
+	roundTrip, err := original.Absolute()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAbs := NewPaths(filepath.Clean(absoluteRoot))
+	if roundTrip != wantAbs {
+		t.Fatalf("absolute round-trip=%#v want=%#v", roundTrip, wantAbs)
+	}
+	if original.Root != absoluteRoot {
+		t.Fatalf("Absolute mutated absolute original Root: got=%q want=%q", original.Root, absoluteRoot)
 	}
 }

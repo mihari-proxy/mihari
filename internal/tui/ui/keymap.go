@@ -24,8 +24,12 @@ const (
 	ModeColumns   = "columns"
 	ModeForm      = "form"
 	ModePortsEdit = "ports-edit"
-	ModeConfirm   = "confirm"
-	ModeSetup     = "setup"
+	// ModeLoggingEdit identifies numeric Logging settings text input.
+	ModeLoggingEdit = "logging-edit"
+	// ModeExportLogs identifies the shared log export overlay.
+	ModeExportLogs = "export-logs"
+	ModeConfirm    = "confirm"
+	ModeSetup      = "setup"
 )
 
 // KeyBinding is one shortcut in a page or mode. Identity is (Scope, Page, Mode, Keys),
@@ -84,6 +88,7 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"p"}, Display: "p", Label: "pause or resume", Footer: "p pause", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"w"}, Display: "w", Label: "wrap", Footer: "w wrap", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"G"}, Display: "G", Label: "jump to newest", Footer: "G newest", Scope: ScopePage, Page: PageLogs},
+		{Keys: []string{"e"}, Display: "e", Label: "export logs", Footer: "e export", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "open details or activate a control", Footer: "Enter details", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"up", "down", "left", "right"}, Display: "↑/↓/←/→", Label: "move", Scope: ScopePage, Page: PageLogs},
 
@@ -131,6 +136,14 @@ func Catalog() []KeyBinding {
 		{Display: "type", Label: "edit the address", Footer: "Type address", Scope: ScopeMode, Mode: ModePortsEdit},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "apply", Footer: "Enter apply", Scope: ScopeMode, Mode: ModePortsEdit},
 		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel", Footer: "Esc cancel", Scope: ScopeMode, Mode: ModePortsEdit},
+
+		{Display: "type", Label: "edit the value", Footer: "Type value", Scope: ScopeMode, Mode: ModeLoggingEdit},
+		{Keys: []string{"enter"}, Display: "Enter", Label: "apply", Footer: "Enter apply", Scope: ScopeMode, Mode: ModeLoggingEdit},
+		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel", Footer: "Esc cancel", Scope: ScopeMode, Mode: ModeLoggingEdit},
+
+		{Keys: []string{"up", "down", "tab", "shift+tab"}, Display: "↑/↓ / Tab", Label: "select a field; while editing Range, change mode", Footer: "↑/↓ fields", Scope: ScopeMode, Mode: ModeExportLogs},
+		{Keys: []string{"enter"}, Display: "Enter", Label: "edit or apply a field; activate Export to export", Footer: "Enter edit", Scope: ScopeMode, Mode: ModeExportLogs},
+		{Keys: []string{"esc"}, Display: "Esc", Label: "confirm discarding an edit, cancel export, or close", Footer: "Esc cancel", Scope: ScopeMode, Mode: ModeExportLogs},
 
 		{Keys: []string{"tab", "shift+tab", "left", "right"}, Display: "Tab / ←/→", Label: "toggle Confirm / Cancel", Scope: ScopeMode, Mode: ModeConfirm},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "activate the selected button", Scope: ScopeMode, Mode: ModeConfirm},
@@ -209,6 +222,10 @@ func RenderFooter(page PageID, mode string, opt FooterOpt) string {
 		return joinFooter(append(tokens, helpQuit...))
 	case ModeForm:
 		return joinFooter(footerTokens(func(b KeyBinding) bool { return b.Mode == ModeForm }))
+	case ModeLoggingEdit:
+		return joinFooter(footerTokens(func(b KeyBinding) bool { return b.Mode == ModeLoggingEdit }))
+	case ModeExportLogs:
+		return joinFooter(footerTokens(func(b KeyBinding) bool { return b.Mode == ModeExportLogs }))
 	default:
 		if page == PageSetup {
 			return joinFooter(footerTokens(func(b KeyBinding) bool {
@@ -241,8 +258,10 @@ var (
 	FooterDetailMode    = RenderFooter(PageConnections, ModeDetail, FooterOpt{})
 	FooterColumnsMode   = RenderFooter(PageConnections, ModeColumns, FooterOpt{})
 	FooterPortsEdit     = RenderFooter(PageSystem, ModePortsEdit, FooterOpt{})
-	FormHelp            = RenderFooter(PageSubscriptions, ModeForm, FooterOpt{})
-	SetupFooter         = RenderFooter(PageSetup, "", FooterOpt{})
+	// FooterLoggingEdit is the footer rendered while editing numeric Logging settings.
+	FooterLoggingEdit = RenderFooter(PageSystem, ModeLoggingEdit, FooterOpt{})
+	FormHelp          = RenderFooter(PageSubscriptions, ModeForm, FooterOpt{})
+	SetupFooter       = RenderFooter(PageSetup, "", FooterOpt{})
 )
 
 // RenderHelp builds the scrollable help body ordered as Global, optional current
@@ -311,6 +330,10 @@ func modeTitle(mode string) string {
 		return "Form"
 	case ModePortsEdit:
 		return "Ports edit"
+	case ModeLoggingEdit:
+		return "Logging edit"
+	case ModeExportLogs:
+		return "Export logs"
 	case ModeConfirm:
 		return "Confirm"
 	case ModeSetup:

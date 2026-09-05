@@ -156,6 +156,30 @@ mihari sysproxy enable
 
 设置、控制令牌、运行时配置、核心二进制、订阅、GeoIP、面板资产、日志与暂存都在数据根目录下。
 
+## 文件日志
+
+Mihari 会在数据根目录下写入三个 JSONL（每行一个 JSON 对象）文件：
+
+| 来源 | 路径 |
+| --- | --- |
+| Mihari 守护进程 | `logs/mihari-daemon.log` |
+| TUI（所有 TUI 实例共享） | `logs/mihari-tui.log` |
+| 捕获的 mihomo 输出 | `logs/mihomo.log` |
+
+守护进程与捕获的 mihomo 文件日志默认级别为 `info`，每个活跃文件到 10 MiB 时轮转，并保留三份文件（活跃文件加最多两份归档）。TUI 启动时使用 bootstrap 配置——级别 `debug`、100 MiB、10 份文件——以便在守护进程设置可用前也能记录日志；在后续控制面同步前会保持该 bootstrap 配置。TUI 的 System 页面可修改由守护进程持有的级别、单文件最大大小和保留数量，变更无需重启守护进程。捕获的 mihomo stdout 记为 `INFO`，stderr 记为 `WARN`；这些捕获级别不代表 mihomo 行内文本本身的严重程度。
+
+`GET /v1/logging` 与 `PATCH /v1/logging` 是供 TUI 使用的稳定 v1 本地控制端点，并非 CLI 命令。日志导出仅在 TUI 提供：可在 Logs 页按 `e`，或在 System → Logging 选择 **Export logs**。对话框支持最近 24 小时、最近 60 分钟、本地时间区间和全部记录。默认输出到 `logs-export/`；已有 zip 永不覆盖，自定义目标必须是既有目录中的绝对 `.zip` 路径。没有 CLI 日志导出命令。
+
+Logging 位于 Network 下方、About 上方。**Logging Dir** 为只读路径，选中后按 Enter 复制。Export Logs 中的 **Current Time** 每秒刷新；↑/↓ 选择字段，Enter 进入编辑或应用修改，编辑时 Esc 弹窗确认放弃。Range 编辑支持方向键及 Tab/Shift+Tab 切换模式，自定义区间在行末提示 `Use YYYY-MM-DD HH:MM format`。选中 **Export** 后按 Enter 开始导出。
+
+Windows 私有日志授权给具体的数据用户及 LocalSystem，兼容提权进程创建、owner 为 Administrators 的数据目录；写入器启动时会修复 daemon、TUI、mihomo 的现有日志、保留归档及锁文件的 ACL，不改动内容。运行中的服务创建或加固文件时会重新读取根目录权限策略，避免轮转后恢复旧权限。如果旧版本已经移除了普通用户访问权限，需要更新后的程序以管理员权限运行一次完成修复。TUI 内的提权更新流程会以该权限进入新 TUI；手动替换二进制的用户可能需要首次以管理员权限启动。
+
+zip 固定包含 `manifest.json`，以及有内容时才出现的 `daemon/mihari-daemon.log`、`tui/mihari-tui.log`、`mihomo/mihomo.log`。记录会重新解析、筛选、递归二次脱敏并编码，不会原样复制 JSONL。若对象成员的键本身含已识别凭据或 URL，该成员会被省略，安全的兄弟字段仍保留。已知凭据和 URL 会被遮蔽，但节点名、目标域名/IP 与流量元数据仍可能保留；发送前请逐项自查。
+
+导出全程持有已打开的目标父目录 identity，生成期间父路径被替换时不会跟随被替换后的路径。Unix 清理以同 UID 与本机 root/管理员为受信主体；若自定义父目录初始为不可信共享目录，即使导出期间收紧权限，内容清理成功后仍可能留下空的私有 workspace，清理 IO 失败则会报告可能存在内容残留。发布成功后若目标目录又被外部改名，界面显示的绝对路径也可能失效。
+
+旧版二进制使用 `KnownFields(true)` 解码 `mihari.yaml`，无法读取自定义 `log:` 块。降级前，请在 System → Logging 恢复 `info` / 10 MiB / 3 份文件，使该块自动移除；或先备份设置文件，再手动删除 `log:`。脱敏仅为尽力而为，仍应将所有日志文件按敏感资料处理，并在分享前审阅内容。
+
 ## 开发
 
 ```console

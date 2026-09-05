@@ -91,7 +91,11 @@ type Options struct {
 	GeoIP          GeoIPService
 	PrepareGeoIP   func(context.Context) (GeoIPCandidate, error)
 	Onboarding     *onboarding.Service
-	Panels         PanelService
+	// Logging applies daemon-owned file logging settings at runtime.
+	Logging LoggingRuntime
+	// RefreshLogSecrets replaces the exact subscription URL redaction snapshot.
+	RefreshLogSecrets func(catalogURLs []string)
+	Panels            PanelService
 	// WebGateway is the optional loopback browser gateway. Failures do not stop the core supervisor.
 	WebGateway WebGateway
 	// WebOpenToken is the Web access credential used only to mint open-browser URLs for local clients.
@@ -107,6 +111,9 @@ type Options struct {
 	// SettingsPath is where config.Save writes settings after system-proxy (and related) mutations.
 	// Empty skips persistence (in-memory settings only).
 	SettingsPath string
+	// SaveSettings persists an independently prepared settings candidate.
+	// Nil uses config.SaveWithCommit.
+	SaveSettings func(string, config.Settings) (config.CommitResult, error)
 	// ServiceStatus reports the OS service registration state for onboarding review.
 	// Optional; nil reports "unknown". Injected as a func (not *service.Manager) to keep
 	// runtime free of the service package and break the main↔daemon assembly cycle.
@@ -124,40 +131,45 @@ type WebGateway interface {
 }
 
 type Manager struct {
-	store             *state.Store
-	coordinator       *state.Coordinator
-	installer         CoreInstaller
-	installRequest    core.InstallRequest
-	supervisor        CoreSupervisor
-	controller        Controller
-	binaryExists      func() bool
-	subscriptions     *subscription.Service
-	preferences       *preferences.Service
-	settings          config.Settings
-	runtimeConfig     string
-	stagingDir        string
-	validateConfig    func(context.Context, string) error
-	runScheduler      func(context.Context) error
-	geoip             GeoIPService
-	prepareGeoIP      func(context.Context) (GeoIPCandidate, error)
-	onboarding        *onboarding.Service
-	panels            PanelService
-	webGateway        WebGateway
-	webOpenToken      string
-	sysProxy          sysproxy.Backend
-	tunDetect         tundetect.Backend
-	lookupOccupant    func(string) (int, bool)
-	settingsPath      string
-	serviceStatus     func() (string, error)
-	onBackgroundError func(component string, err error)
-	settingsMu        sync.Mutex
-	tunLastError      string
-	maintenance       chan struct{}
-	installed         chan struct{}
-	closing           atomic.Bool
-	running           atomic.Bool
-	operationsMu      sync.Mutex
-	operations        map[string]*operationEntry
+	store                     *state.Store
+	coordinator               *state.Coordinator
+	installer                 CoreInstaller
+	installRequest            core.InstallRequest
+	supervisor                CoreSupervisor
+	controller                Controller
+	binaryExists              func() bool
+	subscriptions             *subscription.Service
+	preferences               *preferences.Service
+	settings                  config.Settings
+	runtimeConfig             string
+	stagingDir                string
+	validateConfig            func(context.Context, string) error
+	runScheduler              func(context.Context) error
+	geoip                     GeoIPService
+	prepareGeoIP              func(context.Context) (GeoIPCandidate, error)
+	onboarding                *onboarding.Service
+	onboardingRestartRequired bool
+	logging                   LoggingRuntime
+	refreshLogSecrets         func(catalogURLs []string)
+	panels                    PanelService
+	webGateway                WebGateway
+	webOpenToken              string
+	sysProxy                  sysproxy.Backend
+	tunDetect                 tundetect.Backend
+	lookupOccupant            func(string) (int, bool)
+	settingsPath              string
+	saveSettings              func(string, config.Settings) (config.CommitResult, error)
+	serviceStatus             func() (string, error)
+	onBackgroundError         func(component string, err error)
+	settingsMu                sync.RWMutex
+	tunLastError              string
+	maintenance               chan struct{}
+	installed                 chan struct{}
+	closing                   atomic.Bool
+	mutationDegraded          atomic.Bool
+	running                   atomic.Bool
+	operationsMu              sync.Mutex
+	operations                map[string]*operationEntry
 }
 
 type operationEntry struct {
@@ -197,6 +209,14 @@ func New(options Options) *Manager {
 			return occ.PID, true
 		}
 	}
+	saveSettings := options.SaveSettings
+	if saveSettings == nil {
+		saveSettings = config.SaveWithCommit
+	}
+	settings := options.Settings.Clone()
+	if settings.Schema == "" {
+		settings = config.Defaults()
+	}
 	manager := &Manager{
 		store:             store,
 		coordinator:       coordinator,
@@ -207,7 +227,7 @@ func New(options Options) *Manager {
 		binaryExists:      binaryExists,
 		subscriptions:     options.Subscriptions,
 		preferences:       options.Preferences,
-		settings:          options.Settings,
+		settings:          settings,
 		runtimeConfig:     options.RuntimeConfig,
 		stagingDir:        options.StagingDir,
 		validateConfig:    options.ValidateConfig,
@@ -215,6 +235,8 @@ func New(options Options) *Manager {
 		geoip:             options.GeoIP,
 		prepareGeoIP:      options.PrepareGeoIP,
 		onboarding:        options.Onboarding,
+		logging:           options.Logging,
+		refreshLogSecrets: options.RefreshLogSecrets,
 		panels:            options.Panels,
 		webGateway:        options.WebGateway,
 		webOpenToken:      options.WebOpenToken,
@@ -222,6 +244,7 @@ func New(options Options) *Manager {
 		tunDetect:         tunDetect,
 		lookupOccupant:    lookupOccupant,
 		settingsPath:      options.SettingsPath,
+		saveSettings:      saveSettings,
 		serviceStatus:     options.ServiceStatus,
 		onBackgroundError: options.OnBackgroundError,
 		maintenance:       make(chan struct{}, 1),
@@ -311,8 +334,12 @@ func (m *Manager) reportBackground(component string, err error) {
 }
 
 func (m *Manager) Observe(observation supervisor.Observation) {
+	if m.lockMaintenance(context.Background()) != nil {
+		return
+	}
+	defer m.unlock()
 	current := m.store.Load().Core
-	m.setCoreState(state.CoreState{
+	m.setCoreStateLocked(state.CoreState{
 		Status:      string(observation.Status),
 		PID:         observation.PID,
 		Restarts:    observation.Restarts,
@@ -336,13 +363,14 @@ func (m *Manager) BrowserSessions() int {
 
 // WebListenAddr returns the bound Web gateway address when available.
 func (m *Manager) WebListenAddr() string {
+	settings := m.settingsSnapshot()
 	if m.webGateway == nil {
-		return m.settings.WebAddr
+		return settings.WebAddr
 	}
 	if addr := m.webGateway.ListenAddr(); addr != "" {
 		return addr
 	}
-	return m.settings.WebAddr
+	return settings.WebAddr
 }
 
 func (m *Manager) Proxies(ctx context.Context) (mihomo.Proxies, error) {
@@ -392,11 +420,11 @@ func (m *Manager) UpdateRuleProvider(ctx context.Context, operation Operation, n
 		if m.controller == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
 		}
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
-		_, err := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		_, err := m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			if updateErr := m.controller.UpdateRuleProvider(ctx, name); updateErr != nil {
 				return snapshot, updateErr
 			}
@@ -419,9 +447,7 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		if m.installer == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "core installer is unavailable"}
 		}
-		m.settingsMu.Lock()
-		channel := m.settings.CoreChannel
-		m.settingsMu.Unlock()
+		channel := m.settingsSnapshot().CoreChannel
 		if channel == "" {
 			channel = "stable"
 		}
@@ -439,26 +465,47 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		// store.Core.Version 不作判据（DetectVersion 失败时旧值残留，见 runtime.go 启动检测）。
 		if operation.Source == "setup" {
 			if version, detectErr := m.installer.DetectVersion(ctx, installRequest.BinaryPath); detectErr == nil && version != "" {
-				sidecar := filepath.Join(filepath.Dir(installRequest.BinaryPath), "core-channel")
-				m.settingsMu.Lock()
-				changed, applyErr := config.ApplyCoreChannelSidecar(&m.settings, sidecar)
-				if changed && applyErr == nil {
-					applyErr = m.persistSettings()
-				}
-				appliedChannel := m.settings.CoreChannel
-				m.settingsMu.Unlock()
-				if applyErr != nil {
-					return nil, applyErr
-				}
-				if changed {
-					_, coordErr := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+				err := func() error {
+					if err := m.lockMutation(ctx); err != nil {
+						return err
+					}
+					defer m.unlock()
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					if err := m.checkIfRevision(operation.IfRevision); err != nil {
+						return err
+					}
+
+					sidecar := filepath.Join(filepath.Dir(installRequest.BinaryPath), "core-channel")
+					candidate, err := m.prepareSettings(func(settings *config.Settings) error {
+						_, applyErr := config.ApplyCoreChannelSidecar(settings, sidecar)
+						return applyErr
+					})
+					if err != nil {
+						return err
+					}
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					if !candidate.changed {
+						return nil
+					}
+					if _, err := m.saveSettingsCandidate(candidate); err != nil {
+						return err
+					}
+					m.publishSettings(candidate)
+					_, err = m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{
+						ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision,
+					}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 						snapshot.Core.Version = version
-						snapshot.Core.Channel = appliedChannel
+						snapshot.Core.Channel = candidate.after.CoreChannel
 						return snapshot, nil
 					})
-					if coordErr != nil {
-						return nil, coordErr
-					}
+					return err
+				}()
+				if err != nil {
+					return nil, err
 				}
 				return core.InstallResult{Version: version, Updated: false}, nil
 			}
@@ -469,43 +516,56 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 			return nil, err
 		}
 		defer candidate.Cleanup()
-		if err := m.lock(ctx); err != nil {
-			return nil, err
-		}
-		defer m.unlock()
-		if err := m.checkOpen(); err != nil {
-			return nil, err
-		}
 		var result core.InstallResult
-		if candidate.Updated() {
-			_, err = m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
-				result, err = candidate.Commit()
-				if err != nil {
-					return snapshot, err
-				}
-				snapshot.Core.Version = result.Version
-				snapshot.Core.Channel = channel
-				snapshot.Core.AlphaSHA = result.AlphaSHA
-				if channel == "stable" {
-					snapshot.Core.AlphaSHA = ""
-				}
-				m.settingsMu.Lock()
-				m.settings.CoreChannel = channel
-				saveErr := m.persistSettings()
-				m.settingsMu.Unlock()
-				if saveErr != nil {
-					return snapshot, saveErr
-				}
-				return snapshot, nil
-			})
-			if err != nil {
-				return nil, err
+		if err := func() error {
+			if err := m.lockMutation(ctx); err != nil {
+				return err
 			}
-		} else {
+			defer m.unlock()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := m.checkIfRevision(operation.IfRevision); err != nil {
+				return err
+			}
+
+			candidateUpdated := candidate.Updated()
 			result, err = candidate.Commit()
 			if err != nil {
-				return nil, err
+				return err
 			}
+			if candidateUpdated {
+				applyCommittedIdentity := func(snapshot state.Snapshot) state.Snapshot {
+					snapshot.Core.Version = result.Version
+					snapshot.Core.Channel = channel
+					snapshot.Core.AlphaSHA = result.AlphaSHA
+					if channel == "stable" {
+						snapshot.Core.AlphaSHA = ""
+					}
+					return snapshot
+				}
+				if _, err := m.updateSettings(func(settings *config.Settings) error {
+					settings.CoreChannel = channel
+					return nil
+				}); err != nil {
+					_, settlementErr := m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{
+						ID: operation.ID, Source: operation.Source,
+					}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+						snapshot = applyCommittedIdentity(snapshot)
+						degradedErr := m.enterMutationDegraded(&snapshot)
+						return snapshot, degradedErr
+					})
+					return settlementErr
+				}
+				_, err = m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{
+					ID: operation.ID, Source: operation.Source,
+				}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+					return applyCommittedIdentity(snapshot), nil
+				})
+			}
+			return err
+		}(); err != nil {
+			return nil, err
 		}
 		if !result.Updated {
 			return result, nil
@@ -562,7 +622,11 @@ func (m *Manager) Restart(ctx context.Context, operation Operation) error {
 		if m.supervisor == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo is not running"}
 		}
-		if err := m.withMaintenance(ctx, func() error { return m.supervisor.Restart(ctx) }); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
+			return nil, err
+		}
+		m.unlock()
+		if err := m.supervisor.Restart(ctx); err != nil {
 			return nil, err
 		}
 		return struct{}{}, nil
@@ -627,10 +691,9 @@ func (m *Manager) withControllerMutation(ctx context.Context, operation Operatio
 		if err := mutation(); err != nil {
 			return err
 		}
-		_, err := m.coordinator.Do(ctx, state.CommandMeta{
-			ID:         operation.ID,
-			Source:     operation.Source,
-			IfRevision: operation.IfRevision,
+		_, err := m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{
+			ID:     operation.ID,
+			Source: operation.Source,
 		}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			return snapshot, nil
 		})
@@ -639,7 +702,7 @@ func (m *Manager) withControllerMutation(ctx context.Context, operation Operatio
 }
 
 func (m *Manager) withMaintenance(ctx context.Context, operation func() error) error {
-	if err := m.lock(ctx); err != nil {
+	if err := m.lockMutation(ctx); err != nil {
 		return err
 	}
 	defer m.unlock()
@@ -647,15 +710,6 @@ func (m *Manager) withMaintenance(ctx context.Context, operation func() error) e
 		return err
 	}
 	return operation()
-}
-
-func (m *Manager) lock(ctx context.Context) error {
-	select {
-	case <-m.maintenance:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 func (m *Manager) unlock() { m.maintenance <- struct{}{} }
@@ -710,7 +764,15 @@ func (m *Manager) doOperation(ctx context.Context, key string, execute func() (a
 }
 
 func (m *Manager) setCoreState(coreState state.CoreState) {
-	_, _ = m.coordinator.Do(context.Background(), state.CommandMeta{Source: "runtime"}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+	if m.lockMaintenance(context.Background()) != nil {
+		return
+	}
+	defer m.unlock()
+	m.setCoreStateLocked(coreState)
+}
+
+func (m *Manager) setCoreStateLocked(coreState state.CoreState) {
+	_, _ = m.updateStateLocked(context.Background(), state.CommandMeta{Source: "runtime"}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 		snapshot.Core = coreState
 		return snapshot, nil
 	})

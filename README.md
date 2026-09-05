@@ -156,6 +156,30 @@ All release binaries are CGO-free.
 
 Settings, control token, runtime config, core binary, subscriptions, GeoIP, panel assets, logs, and staging all live under the data root.
 
+## File logs
+
+Mihari writes newline-delimited JSON (JSONL) to three files under the data root:
+
+| Source | Path |
+| --- | --- |
+| Mihari daemon | `logs/mihari-daemon.log` |
+| TUI (shared by all TUI instances) | `logs/mihari-tui.log` |
+| Captured mihomo output | `logs/mihomo.log` |
+
+Daemon and captured-mihomo file logs use the default `info` level, rotate each active file at 10 MiB, and retain three files (the active file plus up to two archives). The TUI starts with its bootstrap configuration—`debug`, 100 MiB, and 10 files—so it can log before daemon settings are available; it remains on this bootstrap configuration until a later control-plane synchronization. The TUI System page can change the daemon-owned level, maximum file size, and retained-file count; changes take effect without a daemon restart. Captured mihomo stdout is recorded as `INFO` and stderr as `WARN`; these capture levels do not infer the severity encoded in mihomo's own message text.
+
+`GET /v1/logging` and `PATCH /v1/logging` are stable v1 local-control endpoints used by the TUI. They are not CLI commands. Log export is TUI-only: press `e` on the Logs page, or select **Export logs** under System → Logging. The dialog supports the last 24 hours, last 60 minutes, a local-time interval, or all records. Its default destination is `logs-export/`; an existing archive is never overwritten, and a custom destination must be an absolute `.zip` path in an existing directory. There is no CLI log-export command.
+
+Logging appears between Network and About. **Logging Dir** is read-only: select it and press Enter to copy the path. In Export Logs, **Current Time** refreshes every second. Use ↑/↓ to select a field, Enter to edit or apply, and Esc to confirm discarding the current edit. While editing Range, arrows or Tab/Shift+Tab cycle modes; a custom interval displays `Use YYYY-MM-DD HH:MM format`. Select **Export** and press Enter to start.
+
+On Windows, private logs grant the individual data user and LocalSystem access, including when an elevated process created an Administrators-owned data directory. Writer startup repairs existing daemon, TUI and mihomo logs, retained archives and lock files without changing their contents. Running services refresh the root permission policy when creating or hardening files, preserving the repaired user access after rotation. If an older version removed ordinary-user access, the updated application must run once with administrator privileges to repair it. The elevated in-TUI update flow starts the new TUI with those privileges; users who replace the binary manually may need an elevated first start.
+
+An archive contains `manifest.json` plus only the non-empty fixed entries `daemon/mihari-daemon.log`, `tui/mihari-tui.log`, and `mihomo/mihomo.log`. Records are parsed, filtered, recursively redacted a second time, and re-encoded rather than copied as raw JSONL. Object members whose keys contain recognized credentials or URLs are omitted; ordinary sibling fields are preserved. Known credentials and URLs are removed, but node names, destination domains/IP addresses, and traffic metadata may remain—inspect those fields before sending an archive.
+
+Export keeps the opened destination-directory identity for the entire operation and will not follow a path replaced while the archive is being generated. On Unix, cleanup assumes the same UID and local root/administrators are trusted. An untrusted shared parent can therefore leave an empty private workspace after its contents were removed, even if its permissions were tightened during export; a cleanup I/O failure reports that content may remain. A destination directory renamed externally after successful publication can also make the displayed absolute path stale.
+
+Older binaries decode `mihari.yaml` with `KnownFields(true)` and cannot read a custom `log:` block. Before downgrading, use System → Logging to restore `info` / 10 MiB / 3 files, which removes that block automatically; alternatively, back up the settings file and remove `log:` manually. Redaction is best effort only. Treat all log files as sensitive material and share them only after reviewing their contents.
+
 ## Development
 
 ```console

@@ -10,6 +10,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/subscription"
+	"go.yaml.in/yaml/v3"
 )
 
 type AddSubscriptionInput struct {
@@ -49,12 +50,12 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
 		}
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
 		var added subscription.Profile
-		_, err := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		_, err := m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			var addErr error
 			added, addErr = m.subscriptions.Add(input.Name, input.URL, input.ProxyMode)
 			if addErr != nil {
@@ -66,6 +67,7 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 		if err != nil {
 			return nil, err
 		}
+		m.refreshSubscriptionLogSecrets()
 		catalog := m.subscriptions.Snapshot().Public()
 		for _, profile := range catalog.Profiles {
 			if profile.ID == added.ID {
@@ -107,11 +109,11 @@ func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, 
 			return nil, err
 		}
 		defer os.Remove(candidate.path)
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
-		_, err = m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		_, err = m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			receipt, commitErr := m.subscriptions.CommitRefresh(prepared)
 			if commitErr != nil {
 				return snapshot, commitErr
@@ -160,11 +162,11 @@ func (m *Manager) UseSubscription(ctx context.Context, operation Operation, id s
 			return nil, err
 		}
 		defer os.Remove(candidate.path)
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
-		_, err = m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		_, err = m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			current := m.subscriptions.Snapshot()
 			currentIndex := current.Index(id)
 			if currentIndex < 0 || current.Profiles[currentIndex].Version != capturedVersion {
@@ -204,11 +206,11 @@ func (m *Manager) RemoveSubscription(ctx context.Context, operation Operation, i
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
 		}
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
-		_, err := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		_, err := m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			before, after, mutateErr := m.subscriptions.Mutate(func(next *subscription.Catalog) error {
 				index := next.Index(id)
 				if index < 0 {
@@ -223,7 +225,9 @@ func (m *Manager) RemoveSubscription(ctx context.Context, operation Operation, i
 			if before.ActiveID == id {
 				candidate, prepareErr := m.prepareCatalogConfig(ctx, after)
 				if prepareErr != nil {
-					_ = m.subscriptions.Restore(before)
+					if restoreErr := m.subscriptions.Restore(before); restoreErr != nil {
+						return snapshot, degradedConfigError()
+					}
 					return snapshot, prepareErr
 				}
 				defer os.Remove(candidate.path)
@@ -238,6 +242,7 @@ func (m *Manager) RemoveSubscription(ctx context.Context, operation Operation, i
 			m.syncSubscriptionState(&snapshot, after)
 			return snapshot, nil
 		})
+		m.refreshSubscriptionLogSecrets()
 		if err != nil {
 			m.markConfigDegraded(ctx, err)
 			return nil, err
@@ -296,11 +301,11 @@ func (m *Manager) mutateSubscription(ctx context.Context, prefix string, operati
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
 		}
-		if err := m.lock(ctx); err != nil {
+		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
-		_, err := m.coordinator.Do(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		_, err := m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			before, after, mutateErr := m.subscriptions.Mutate(func(next *subscription.Catalog) error {
 				index := next.Index(id)
 				if index < 0 {
@@ -314,7 +319,9 @@ func (m *Manager) mutateSubscription(ctx context.Context, prefix string, operati
 			if before.ActiveID != after.ActiveID {
 				candidate, prepareErr := m.prepareCatalogConfig(ctx, after)
 				if prepareErr != nil {
-					_ = m.subscriptions.Restore(before)
+					if restoreErr := m.subscriptions.Restore(before); restoreErr != nil {
+						return snapshot, degradedConfigError()
+					}
 					return snapshot, prepareErr
 				}
 				defer os.Remove(candidate.path)
@@ -329,6 +336,7 @@ func (m *Manager) mutateSubscription(ctx context.Context, prefix string, operati
 			m.syncSubscriptionState(&snapshot, after)
 			return snapshot, nil
 		})
+		m.refreshSubscriptionLogSecrets()
 		if err != nil {
 			m.markConfigDegraded(ctx, err)
 			return nil, err
@@ -341,11 +349,40 @@ func (m *Manager) mutateSubscription(ctx context.Context, prefix string, operati
 	return result.(subscription.PublicProfile), nil
 }
 
+func (m *Manager) refreshSubscriptionLogSecrets() {
+	if m.refreshLogSecrets == nil || m.subscriptions == nil {
+		return
+	}
+	catalog := m.subscriptions.Snapshot()
+	urls := make([]string, 0, len(catalog.Profiles))
+	for _, profile := range catalog.Profiles {
+		if profile.URL != "" {
+			urls = append(urls, profile.URL)
+		}
+	}
+	m.refreshLogSecrets(urls)
+}
+
 func (m *Manager) prepareCatalogConfig(ctx context.Context, catalog subscription.Catalog) (configCandidate, error) {
+	return m.prepareCatalogConfigWithSettings(ctx, catalog, m.settingsSnapshot())
+}
+
+func (m *Manager) prepareCatalogConfigWithSettings(ctx context.Context, catalog subscription.Catalog, settings config.Settings) (configCandidate, error) {
 	if catalog.ActiveID == "" {
-		content, err := core.BootstrapConfig(m.settings)
+		content, err := core.BootstrapConfig(settings)
 		if err != nil {
 			return configCandidate{}, err
+		}
+		if len(settings.Tun) > 0 {
+			var document map[string]any
+			if err := yaml.Unmarshal(content, &document); err != nil {
+				return configCandidate{}, protocol.APIError{Code: protocol.CodeInternal, Message: "decode bootstrap configuration"}
+			}
+			document["tun"] = settings.Tun
+			content, err = yaml.Marshal(document)
+			if err != nil {
+				return configCandidate{}, protocol.APIError{Code: protocol.CodeInternal, Message: "encode bootstrap TUN configuration"}
+			}
 		}
 		return m.prepareContent(ctx, content)
 	}
@@ -353,11 +390,15 @@ func (m *Manager) prepareCatalogConfig(ctx context.Context, catalog subscription
 	if err != nil {
 		return configCandidate{}, err
 	}
-	return m.prepareConfig(ctx, document)
+	return m.prepareConfigWithSettings(ctx, document, settings)
 }
 
 func (m *Manager) prepareConfig(ctx context.Context, document subscription.Document) (configCandidate, error) {
-	content, err := subscription.Generate(document, nil, m.settings)
+	return m.prepareConfigWithSettings(ctx, document, m.settingsSnapshot())
+}
+
+func (m *Manager) prepareConfigWithSettings(ctx context.Context, document subscription.Document, settings config.Settings) (configCandidate, error) {
+	content, err := subscription.Generate(document, nil, settings)
 	if err != nil {
 		return configCandidate{}, err
 	}
@@ -477,7 +518,7 @@ func (m *Manager) markConfigDegraded(ctx context.Context, err error) {
 	if !errors.As(err, &apiError) || apiError.Details == nil || apiError.Details["degraded"] != true {
 		return
 	}
-	_, _ = m.coordinator.Do(ctx, state.CommandMeta{Source: "runtime"}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+	_, _ = m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{Source: "runtime"}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 		snapshot.Health = "degraded"
 		snapshot.Config = state.ConfigState{
 			Status: "degraded", DesiredRevision: snapshot.Revision + 1,

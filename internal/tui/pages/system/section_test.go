@@ -1,12 +1,71 @@
 package system
 
 import (
+	"slices"
 	"strings"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
+
+func TestRows_LoggingSectionPrecedesAboutAndIsUnavailableOffline(t *testing.T) {
+	model := New(nil, func() string { return "op" })
+	rows := model.rows()
+	ids := make([]string, len(rows))
+	for index, item := range rows {
+		ids[index] = item.id
+	}
+
+	loggingStart := slices.Index(ids, rowLogLevel)
+	about := slices.Index(ids, rowAbout)
+	if loggingStart < 0 || about < 0 {
+		t.Fatalf("missing boundary rows: %v", ids)
+	}
+	want := []string{"log-level", "log-max-size", "log-max-files", "log-directory", "log-export"}
+	if got := ids[loggingStart:about]; !slices.Equal(got, want) {
+		t.Fatalf("logging rows before About = %v, want %v", got, want)
+	}
+	for _, item := range rows[loggingStart : about-1] {
+		if item.section != "Logging" || item.value != ui.UnavailableTitle {
+			t.Fatalf("offline logging row = %#v", item)
+		}
+	}
+
+	view := model.View()
+	if !strings.Contains(view, "Logging") {
+		t.Fatalf("missing Logging section:\n%s", view)
+	}
+	if !strings.Contains(view, ui.ExportLogsLabel) {
+		t.Fatalf("missing export entry point:\n%s", view)
+	}
+}
+
+func TestView_ShortHeightNavigationReachesVisibleExportLogs(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSize(80, 10)
+	model.FocusFirst()
+	for attempts := 0; model.focusID != rowLogExport && attempts < len(model.rows()); attempts++ {
+		page, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		model = page.(*Model)
+	}
+	if model.focusID != rowLogExport {
+		t.Fatalf("export row was not reachable after %d navigation steps", len(model.rows()))
+	}
+	view := model.View()
+	if !strings.Contains(view, ui.ExportLogsLabel) || !strings.Contains(view, "›") {
+		t.Fatalf("focused export row is not visible:\n%s", view)
+	}
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("offline export row did not open")
+	}
+	if _, ok := cmd().(ui.OpenExportLogsMsg); !ok {
+		t.Fatalf("message=%T", cmd())
+	}
+}
 
 func TestView_SectionGroups(t *testing.T) {
 	model := New(nil, func() string { return "op" })

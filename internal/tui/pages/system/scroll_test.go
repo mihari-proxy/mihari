@@ -96,6 +96,25 @@ func TestView_ShortHeightKeepsFocusedRowVisible(t *testing.T) {
 	}
 }
 
+func TestView_ShortHeightKeepsFocusedLoggingRowVisible(t *testing.T) {
+	model := aboutFixture(t)
+	model.ApplyLoggingSync(ui.LoggingSyncMsg{Epoch: 2, Available: true, Status: protocol.LoggingStatus{
+		Revision: 3, Level: "warn", MaxSizeMB: 25, MaxFiles: 6, Dir: `C:\logs`,
+	}})
+	model.SetLocalLoggingAvailable(false)
+	model.SetSize(80, 11)
+	model.focusID = rowLogExport
+	model.ensureFocusVisible()
+
+	view := model.View()
+	if !strings.Contains(view, ui.LoggingSectionTitle) || !strings.Contains(view, ui.ExportLogsLabel) {
+		t.Fatalf("focused Logging row not visible:\n%s", view)
+	}
+	if viewLineCount(view) > 11 {
+		t.Fatalf("view lines=%d exceed 11\n%s", viewLineCount(view), view)
+	}
+}
+
 func TestView_ErrorDetailPinnedWhileScrolled(t *testing.T) {
 	model := aboutFixture(t)
 	model.SetSize(80, 12)

@@ -1,6 +1,7 @@
 package onboarding
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,109 +9,155 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 )
 
-func TestOpen_MigratesNewAndExistingInstallations(t *testing.T) {
+func TestOpen_InitializesAndLoadsOnlyOnboardingState(t *testing.T) {
 	tests := []struct {
 		name            string
 		initialRequired bool
 		wantComplete    bool
 	}{
-		{"new installation", true, false},
-		{"existing installation", false, true},
+		{name: "new installation", initialRequired: true, wantComplete: false},
+		{name: "existing installation", initialRequired: false, wantComplete: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
-			service, err := Open(Options{StatePath: filepath.Join(dir, "onboarding.json"), SettingsPath: filepath.Join(dir, "mihari.yaml"), Settings: testSettings(), InitialSetupRequired: test.initialRequired})
+			path := filepath.Join(dir, "onboarding.json")
+			service, err := Open(Options{StatePath: path, InitialSetupRequired: test.initialRequired})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if service.Status().Complete != test.wantComplete {
-				t.Fatalf("status=%#v", service.Status())
+			if got := service.State().Complete; got != test.wantComplete {
+				t.Fatalf("complete=%v want=%v", got, test.wantComplete)
 			}
-			if _, err := os.Stat(filepath.Join(dir, "onboarding.json")); err != nil {
+			entries, err := os.ReadDir(dir)
+			if err != nil {
 				t.Fatal(err)
+			}
+			if len(entries) != 1 || entries[0].Name() != "onboarding.json" {
+				t.Fatalf("created entries=%v want only onboarding.json", entries)
+			}
+			if _, err := service.Update(boolPointer(!test.wantComplete)); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := Open(Options{StatePath: path, InitialSetupRequired: test.initialRequired})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := reopened.State().Complete; got == test.wantComplete {
+				t.Fatalf("reopened complete=%v want=%v", got, !test.wantComplete)
 			}
 		})
 	}
 }
 
-func TestOpen_ExplicitStateIsAuthoritative(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "onboarding.json")
-	first, err := Open(Options{StatePath: path, SettingsPath: filepath.Join(dir, "mihari.yaml"), Settings: testSettings(), InitialSetupRequired: true})
+func TestUpdate_NilIsNoOp(t *testing.T) {
+	var saves int
+	service, err := Open(Options{
+		StatePath: filepath.Join(t.TempDir(), "onboarding.json"),
+		SaveState: func(string, State) (config.CommitResult, error) {
+			saves++
+			return config.CommitResult{Committed: true}, nil
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := first.Update(Update{Complete: boolPointer(true)}); err != nil {
+	if saves != 1 {
+		t.Fatalf("open saves=%d want=1", saves)
+	}
+	before := service.State()
+
+	got, err := service.Update(nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := Open(Options{StatePath: path, SettingsPath: filepath.Join(dir, "mihari.yaml"), Settings: testSettings(), InitialSetupRequired: true})
-	if err != nil || !second.Status().Complete {
-		t.Fatalf("status=%#v err=%v", second.Status(), err)
+	if got != before || saves != 1 {
+		t.Fatalf("state=%#v before=%#v saves=%d want unchanged", got, before, saves)
 	}
 }
 
-func TestUpdate_ValidatesEndpointsPreservesSecretAndReportsRestart(t *testing.T) {
-	dir := t.TempDir()
-	settingsPath := filepath.Join(dir, "mihari.yaml")
-	settings := testSettings()
-	if err := config.Save(settingsPath, settings); err != nil {
-		t.Fatal(err)
-	}
-	service, err := Open(Options{StatePath: filepath.Join(dir, "onboarding.json"), SettingsPath: settingsPath, Settings: settings})
+func TestUpdate_PersistsTrueAndFalse(t *testing.T) {
+	var saved []State
+	service, err := Open(Options{
+		StatePath:            filepath.Join(t.TempDir(), "onboarding.json"),
+		InitialSetupRequired: true,
+		SaveState: func(_ string, state State) (config.CommitResult, error) {
+			saved = append(saved, state)
+			return config.CommitResult{Committed: true}, nil
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	controller, web := "127.0.0.1:19090", "127.0.0.1:19191"
-	status, err := service.Update(Update{ControllerAddr: &controller, WebAddr: &web})
-	if err != nil || !status.RestartRequired {
-		t.Fatalf("status=%#v err=%v", status, err)
+	for _, complete := range []bool{true, false} {
+		got, err := service.Update(&complete)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Complete != complete || service.State().Complete != complete {
+			t.Fatalf("state=%#v service=%#v want complete=%v", got, service.State(), complete)
+		}
 	}
-	persisted, err := config.Load(settingsPath)
-	if err != nil || persisted.ControllerSecret != settings.ControllerSecret || persisted.ControllerAddr != controller || persisted.WebAddr != web {
-		t.Fatalf("settings=%#v err=%v", persisted, err)
-	}
-	invalid := "0.0.0.0:9090"
-	if _, err := service.Update(Update{ControllerAddr: &invalid}); err == nil {
-		t.Fatal("non-loopback controller was accepted")
+	if len(saved) != 3 || saved[0].Complete || !saved[1].Complete || saved[2].Complete {
+		t.Fatalf("saved states=%#v", saved)
 	}
 }
 
-func TestUpdate_RollsBackSettingsWhenCompletionStateCannotCommit(t *testing.T) {
-	dir := t.TempDir()
-	settingsPath := filepath.Join(dir, "mihari.yaml")
-	statePath := filepath.Join(dir, "onboarding.json")
-	settings := testSettings()
-	if err := config.Save(settingsPath, settings); err != nil {
-		t.Fatal(err)
-	}
-	service, err := Open(Options{StatePath: statePath, SettingsPath: settingsPath, Settings: settings, InitialSetupRequired: true})
+func TestUpdate_PreCommitFailureKeepsMemory(t *testing.T) {
+	replaceErr := errors.New("replace failed at C:\\sensitive\\onboarding.json")
+	var calls int
+	service, err := Open(Options{
+		StatePath:            filepath.Join(t.TempDir(), "onboarding.json"),
+		InitialSetupRequired: true,
+		SaveState: func(_ string, _ State) (config.CommitResult, error) {
+			calls++
+			if calls == 1 {
+				return config.CommitResult{Committed: true}, nil
+			}
+			return config.CommitResult{}, replaceErr
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(statePath); err != nil {
-		t.Fatal(err)
+	complete := true
+	if _, err := service.Update(&complete); !errors.Is(err, replaceErr) {
+		t.Fatalf("err=%v want replace failure", err)
 	}
-	if err := os.Mkdir(statePath, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	web, complete := "127.0.0.1:9292", true
-	if _, err := service.Update(Update{WebAddr: &web, Complete: &complete}); err == nil {
-		t.Fatal("update succeeded despite an uncommittable onboarding state")
-	}
-	persisted, err := config.Load(settingsPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if persisted.WebAddr != settings.WebAddr || service.Status().Complete || service.Status().RestartRequired {
-		t.Fatalf("settings=%#v status=%#v", persisted, service.Status())
+	if got := service.State(); got.Complete {
+		t.Fatalf("pre-commit failure published state=%#v", got)
 	}
 }
 
-func testSettings() config.Settings {
-	settings := config.Defaults()
-	settings.ControllerSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	return settings
+func TestUpdate_PostCommitWarningPublishesAndReportsStableWarning(t *testing.T) {
+	var calls int
+	var warnings []error
+	service, err := Open(Options{
+		StatePath:            filepath.Join(t.TempDir(), "onboarding.json"),
+		InitialSetupRequired: true,
+		SaveState: func(_ string, _ State) (config.CommitResult, error) {
+			calls++
+			if calls == 1 {
+				return config.CommitResult{Committed: true}, nil
+			}
+			return config.CommitResult{Committed: true, Warning: errors.New("C:\\sensitive\\onboarding.json")}, nil
+		},
+		OnPersistenceWarning: func(err error) { warnings = append(warnings, err) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	complete := true
+	got, err := service.Update(&complete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Complete || !service.State().Complete {
+		t.Fatalf("committed warning did not publish state: got=%#v service=%#v", got, service.State())
+	}
+	if len(warnings) != 1 || warnings[0].Error() != "onboarding parent directory sync failed after commit" {
+		t.Fatalf("warnings=%v", warnings)
+	}
 }
 
 func boolPointer(value bool) *bool { return &value }

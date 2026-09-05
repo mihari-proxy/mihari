@@ -1,19 +1,25 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
+	"github.com/mihari-proxy/mihari/internal/onboarding"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 )
@@ -208,6 +214,29 @@ func TestBuildRuntimeWithOptionsMarksNewInstallationSetupRequired(t *testing.T) 
 	}
 }
 
+func TestBuildRuntimeWithOptionsReportsOnboardingPersistenceWarning(t *testing.T) {
+	paths := platform.NewPaths(filepath.Join(t.TempDir(), "data"))
+	settings := testRuntimeSettings(t)
+	settings.ControllerSecret = strings.Repeat("d", 64)
+	var component, message string
+	assembly, err := BuildRuntimeWithOptions(paths, settings, "test-version", nil, nil, RuntimeBuildOptions{
+		InitialSetupRequired: true,
+		SettingsPath:         paths.Settings,
+		SaveOnboardingState: func(string, onboarding.State) (config.CommitResult, error) {
+			return config.CommitResult{Committed: true, Warning: errors.New("C:\\sensitive\\onboarding.json")}, nil
+		},
+		OnBackgroundError: func(gotComponent string, err error) {
+			component, message = gotComponent, err.Error()
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assembly == nil || component != "onboarding" || message != "onboarding parent directory sync failed after commit" {
+		t.Fatalf("assembly=%#v component=%q message=%q", assembly, component, message)
+	}
+}
+
 func TestBuildRuntimeRejectsOccupiedManagedPort(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -296,4 +325,88 @@ func testRuntimeSettings(t *testing.T) config.Settings {
 	settings.ControllerAddr = addresses[1]
 	settings.WebAddr = addresses[2]
 	return settings
+}
+
+func TestBuildRuntime_UsesOptionWritersCapture(t *testing.T) {
+	paths := platform.NewPaths(filepath.Join(t.TempDir(), "data"))
+	settings := testRuntimeSettings(t)
+	settings.ControllerSecret = strings.Repeat("a", 64)
+	captureOut := &bytes.Buffer{}
+	captureErr := &bytes.Buffer{}
+	positionalOut := &bytes.Buffer{}
+	positionalErr := &bytes.Buffer{}
+	assembly, err := BuildRuntimeWithOptions(paths, settings, "test-version", positionalOut, positionalErr, RuntimeBuildOptions{
+		SettingsPath: paths.Settings,
+		MihomoStdout: captureOut,
+		MihomoStderr: captureErr,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assembly.mihomoStarter.Stdout != captureOut {
+		t.Fatalf("starter stdout=%T want capture buffer", assembly.mihomoStarter.Stdout)
+	}
+	if assembly.mihomoStarter.Stderr != captureErr {
+		t.Fatalf("starter stderr=%T want capture buffer", assembly.mihomoStarter.Stderr)
+	}
+	if assembly.mihomoStarter.Stdout == positionalOut || assembly.mihomoStarter.Stderr == positionalErr {
+		t.Fatal("positional stdout/stderr entered CommandStarter")
+	}
+}
+
+func TestBuildRuntime_LogsRedactedBackground(t *testing.T) {
+	paths := platform.NewPaths(filepath.Join(t.TempDir(), "data"))
+	settings := testRuntimeSettings(t)
+	settings.ControllerSecret = strings.Repeat("b", 64)
+	secret := "background-secret-value"
+	redactor := logging.NewRedactor(secret)
+	var buf bytes.Buffer
+	level := &slog.LevelVar{}
+	logger := slog.New(logging.NewJSONHandler(&buf, level, "daemon", redactor))
+	reported := make(chan struct{})
+	var once sync.Once
+	var gotComponent string
+	assembly, err := BuildRuntimeWithOptions(paths, settings, "test-version", nil, nil, RuntimeBuildOptions{
+		SettingsPath: paths.Settings,
+		OnBackgroundError: func(component string, err error) {
+			gotComponent = component
+			logger.Error("background "+secret+": "+err.Error(), slog.String("component", component))
+			once.Do(func() { close(reported) })
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder, err := net.Listen("tcp", settings.WebAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = holder.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- assembly.Manager.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("manager did not stop")
+		}
+	})
+	select {
+	case <-reported:
+	case <-time.After(5 * time.Second):
+		t.Fatal("manager background error was not reported")
+	}
+	if gotComponent != "web-gateway" {
+		t.Fatalf("component=%q", gotComponent)
+	}
+	logged := buf.String()
+	if strings.Contains(logged, secret) {
+		t.Fatalf("secret leaked into daemon logger: %s", logged)
+	}
+	if !strings.Contains(logged, "***") || !strings.Contains(logged, "web-gateway") {
+		t.Fatalf("logger=%s", logged)
+	}
 }

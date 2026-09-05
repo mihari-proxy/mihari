@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -16,6 +17,7 @@ import (
 
 type Client struct {
 	baseURL string
+	tokenMu sync.RWMutex
 	token   string
 	http    *http.Client
 }
@@ -40,13 +42,29 @@ func NewHTTP(baseURL, token string, httpClient *http.Client) *Client {
 	}
 }
 
+// SetToken replaces the Bearer token. An empty token is a no-op.
+func (c *Client) SetToken(token string) {
+	if token == "" {
+		return
+	}
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	c.token = token
+}
+
+func (c *Client) bearerToken() string {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	return c.token
+}
+
 func (c *Client) Status(ctx context.Context) (protocol.Status, error) {
 	var status protocol.Status
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/status", nil)
 	if err != nil {
 		return status, err
 	}
-	request.Header.Set("Authorization", "Bearer "+c.token)
+	request.Header.Set("Authorization", "Bearer "+c.bearerToken())
 
 	response, err := c.http.Do(request)
 	if err != nil {

@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -38,7 +39,18 @@ type processChild struct{ command *exec.Cmd }
 
 func (c *processChild) PID() int { return c.command.Process.Pid }
 
-func (c *processChild) Wait() error { return c.command.Wait() }
+func (c *processChild) Wait() error {
+	waitErr := c.command.Wait()
+	return errors.Join(waitErr, flushCapture(c.command.Stdout), flushCapture(c.command.Stderr))
+}
+
+func flushCapture(w io.Writer) error {
+	flusher, ok := w.(interface{ Flush() error })
+	if !ok {
+		return nil
+	}
+	return flusher.Flush()
+}
 
 func (c *processChild) Terminate() error { return terminateChild(c.command) }
 
