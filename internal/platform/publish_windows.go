@@ -25,6 +25,9 @@ var (
 	publishWindowsPostRenameFlushFn         = windows.FlushFileBuffers
 	publishWindowsCreatedHandleAttributesFn = handleAttributes
 	publishWindowsDeleteCreatedFn           = markWindowsHandleForDeletion
+	publishWindowsCleanupReadFn             = readWindowsDirents
+	publishWindowsCleanupCloseFn            = windows.CloseHandle
+	publishWindowsCleanupDispositionFn      = markWindowsHandleDeletePending
 )
 
 type publishDirState struct {
@@ -144,9 +147,9 @@ func (d *PublishDir) createWorkspaceLocked() (*PublishWorkspace, error) {
 		if err != nil {
 			return nil, err
 		}
-		h, err := openRelative(d.plat.handle, name, access, windows.FILE_CREATE,
+		h, err := openRelativeWithShare(d.plat.handle, name, access, windows.FILE_CREATE,
 			windows.FILE_DIRECTORY_FILE|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT,
-			windows.FILE_ATTRIBUTE_DIRECTORY, sd)
+			windows.FILE_ATTRIBUTE_DIRECTORY, sd, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE)
 		if err != nil {
 			if isWindowsExist(err) {
 				continue
@@ -157,15 +160,11 @@ func (d *PublishDir) createWorkspaceLocked() (*PublishWorkspace, error) {
 			return nil, errors.Join(err, cleanupCreatedWindowsHandle(h))
 		}
 		if err := hardenHandle(h, sddl); err != nil {
-			_ = markWindowsHandleForDeletion(h)
-			_ = windows.CloseHandle(h)
-			return nil, fmt.Errorf("harden publish workspace: %w", err)
+			return nil, errors.Join(fmt.Errorf("harden publish workspace: %w", err), cleanupCreatedWindowsHandle(h))
 		}
 		id, err := identityFromHandle(h)
 		if err != nil {
-			_ = markWindowsHandleForDeletion(h)
-			_ = windows.CloseHandle(h)
-			return nil, err
+			return nil, errors.Join(err, cleanupCreatedWindowsHandle(h))
 		}
 		return &PublishWorkspace{owner: d, name: name, plat: publishWorkspaceState{handle: h, id: id}}, nil
 	}
@@ -268,6 +267,7 @@ func (w *PublishWorkspace) closePlatformLocked(owner *PublishDir) error {
 	if w.plat.handle == 0 {
 		return nil
 	}
+	contentErr := w.clearContentsLocked()
 	var cleanupErr error
 	if owner == nil || owner.closed || owner.plat.handle == 0 {
 		cleanupErr = fmt.Errorf("publish workspace cleanup: parent is closed")
@@ -288,17 +288,32 @@ func (w *PublishWorkspace) closePlatformLocked(owner *PublishDir) error {
 				cleanupErr = emptyErr
 			} else if !empty {
 				cleanupErr = fmt.Errorf("remove publish workspace: directory not empty")
-			} else if markErr := markWindowsHandleDeletePending(w.plat.handle, true); markErr != nil {
-				cleanupErr = fmt.Errorf("remove publish workspace: %w", markErr)
 			} else if contained, containErr := windowsWorkspaceStillInParent(owner.plat.handle, w.plat.handle, name); containErr != nil || !contained {
-				clearErr := markWindowsHandleDeletePending(w.plat.handle, false)
-				cleanupErr = errors.Join(fmt.Errorf("publish workspace cleanup: workspace moved outside parent"), containErr, clearErr)
+				cleanupErr = errors.Join(fmt.Errorf("publish workspace cleanup: workspace moved outside parent"), containErr)
+			} else if contentErr == nil {
+				cleanupErr = publishWindowsCleanupDispositionFn(w.plat.handle, true)
 			}
 		}
 	}
-	closeErr := windows.CloseHandle(w.plat.handle)
+	closeErr := publishWindowsCleanupCloseFn(w.plat.handle)
 	w.plat.handle = 0
-	return errors.Join(cleanupErr, closeErr)
+	return errors.Join(contentErr, cleanupErr, closeErr)
+}
+
+func (w *PublishWorkspace) clearContentsLocked() error {
+	list, err := openListingHandle(w.plat.handle)
+	if err != nil {
+		return fmt.Errorf("workspace content cleanup incomplete: %w", err)
+	}
+	entries, readErr := publishWindowsCleanupReadFn(list)
+	result := errors.Join(readErr, windows.CloseHandle(list))
+	for _, entry := range entries {
+		result = errors.Join(result, w.removeLocked(entry.name))
+	}
+	if result != nil {
+		return fmt.Errorf("workspace content cleanup incomplete: %w", result)
+	}
+	return nil
 }
 
 func (d *PublishDir) closePlatformLocked() error {

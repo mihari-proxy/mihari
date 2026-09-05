@@ -571,6 +571,10 @@ func openListingHandle(parent windows.Handle) (windows.Handle, error) {
 }
 
 func openRelative(parent windows.Handle, name string, access, disposition, options, attr uint32, sd *windows.SECURITY_DESCRIPTOR) (windows.Handle, error) {
+	return openRelativeWithShare(parent, name, access, disposition, options, attr, sd, privateShare)
+}
+
+func openRelativeWithShare(parent windows.Handle, name string, access, disposition, options, attr uint32, sd *windows.SECURITY_DESCRIPTOR, share uint32) (windows.Handle, error) {
 	ntName, err := windows.NewNTUnicodeString(name)
 	if err != nil {
 		return 0, err
@@ -584,7 +588,7 @@ func openRelative(parent windows.Handle, name string, access, disposition, optio
 	oa.Length = uint32(unsafe.Sizeof(oa))
 	var h windows.Handle
 	var iosb windows.IO_STATUS_BLOCK
-	err = windows.NtCreateFile(&h, access, &oa, &iosb, nil, attr, privateShare, disposition, options, 0, 0)
+	err = windows.NtCreateFile(&h, access, &oa, &iosb, nil, attr, share, disposition, options, 0, 0)
 	runtime.KeepAlive(ntName)
 	runtime.KeepAlive(sd)
 	if err != nil {

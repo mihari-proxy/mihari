@@ -263,12 +263,8 @@ func TestPublishWorkspace_OperationsStayAnchoredAfterEntryReplacement(t *testing
 	original := filepath.Join(parent, w.name)
 	movedName := w.name + "-moved"
 	moved := filepath.Join(parent, movedName)
-	if err := os.Rename(original, moved); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(original, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	// This completed rename is by the trusted owner, not an external competitor.
+	replaceWorkspaceEntry(t, w, parent, moved)
 	f, name, err := w.CreateTemp("payload-*")
 	if err != nil {
 		t.Fatal(err)

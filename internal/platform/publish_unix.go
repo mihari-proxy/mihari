@@ -15,14 +15,19 @@ var (
 	publishUnixPostLinkUnlinkFn = unix.Unlinkat
 	publishUnixFsyncFn          = unix.Fsync
 	publishUnixFchownFn         = unix.Fchown
+	publishUnixACLBoundaryFn    = unixACLHasNoAdditionalAuthority
+	publishUnixCleanupUnlinkFn  = unix.Unlinkat
+	publishUnixCleanupReadFn    = readUnixDirNames
+	publishUnixCleanupCloseFn   = unix.Close
 )
 
 type publishDirState struct {
-	fd       int
-	id       fileIdentity
-	setOwner bool
-	uid      int
-	gid      int
+	fd                      int
+	id                      fileIdentity
+	setOwner                bool
+	uid                     int
+	gid                     int
+	initialNamespaceTrusted bool
 }
 
 type publishWorkspaceState struct {
@@ -75,7 +80,9 @@ func publishDirFromFD(fd int, visiblePath string) (*PublishDir, error) {
 	if identFromStat(&check) != id {
 		return nil, ErrPublishDirectoryChanged
 	}
-	return &PublishDir{path: filepath.Clean(canonical), plat: publishDirState{fd: fd, id: id}}, nil
+	d := &PublishDir{path: filepath.Clean(canonical), plat: publishDirState{fd: fd, id: id}}
+	d.plat.initialNamespaceTrusted, _ = d.unixParentHasPrivateMutationBoundary(-1)
+	return d, nil
 }
 
 func (d *PublishDir) existsLocked(name string) (bool, error) {
@@ -144,35 +151,28 @@ func (d *PublishDir) createWorkspaceLocked() (*PublishWorkspace, error) {
 		}
 		fd, err := unix.Openat(d.plat.fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		if err != nil {
-			_ = unix.Unlinkat(d.plat.fd, name, unix.AT_REMOVEDIR)
-			return nil, fmt.Errorf("open publish workspace: %w", err)
+			// No held identity exists, so deletion by this name cannot be proved safe.
+			return nil, errors.Join(fmt.Errorf("open publish workspace: %w", err), fmt.Errorf("workspace cleanup incomplete: created identity unavailable"))
 		}
 		var st unix.Stat_t
 		if err := unix.Fstat(fd, &st); err != nil {
-			_ = unix.Close(fd)
-			_ = unix.Unlinkat(d.plat.fd, name, unix.AT_REMOVEDIR)
-			return nil, fmt.Errorf("stat publish workspace: %w", err)
+			return nil, errors.Join(fmt.Errorf("stat publish workspace: %w", err), fmt.Errorf("workspace cleanup incomplete: created identity unavailable"), unix.Close(fd))
 		}
 		if st.Mode&unix.S_IFMT != unix.S_IFDIR {
-			_ = unix.Close(fd)
-			_ = unix.Unlinkat(d.plat.fd, name, unix.AT_REMOVEDIR)
-			return nil, fmt.Errorf("publish workspace is not a directory")
+			return nil, errors.Join(fmt.Errorf("publish workspace is not a directory"), unix.Close(fd))
 		}
+		w := &PublishWorkspace{owner: d, name: name, plat: publishWorkspaceState{
+			fd: fd, id: identFromStat(&st), setOwner: d.plat.setOwner, uid: d.plat.uid, gid: d.plat.gid,
+		}}
 		if err := unix.Fchmod(fd, 0o700); err != nil {
-			_ = unix.Close(fd)
-			_ = unix.Unlinkat(d.plat.fd, name, unix.AT_REMOVEDIR)
-			return nil, fmt.Errorf("harden publish workspace: %w", err)
+			return nil, errors.Join(fmt.Errorf("harden publish workspace: %w", err), w.closePlatformLocked(d))
 		}
 		if d.plat.setOwner && effectiveUID() == 0 {
 			if err := publishUnixFchownFn(fd, d.plat.uid, d.plat.gid); err != nil {
-				_ = unix.Close(fd)
-				_ = unix.Unlinkat(d.plat.fd, name, unix.AT_REMOVEDIR)
-				return nil, fmt.Errorf("set publish workspace owner: %w", err)
+				return nil, errors.Join(fmt.Errorf("set publish workspace owner: %w", err), w.closePlatformLocked(d))
 			}
 		}
-		return &PublishWorkspace{owner: d, name: name, plat: publishWorkspaceState{
-			fd: fd, id: identFromStat(&st), setOwner: d.plat.setOwner, uid: d.plat.uid, gid: d.plat.gid,
-		}}, nil
+		return w, nil
 	}
 	return nil, fmt.Errorf("create publish workspace: exhausted names")
 }
@@ -257,6 +257,7 @@ func (w *PublishWorkspace) closePlatformLocked(owner *PublishDir) error {
 	if w.plat.fd < 0 {
 		return nil
 	}
+	contentErr := w.clearContentsLocked()
 	var cleanupErr error
 	if owner == nil || owner.closed || owner.plat.fd < 0 {
 		cleanupErr = fmt.Errorf("publish workspace cleanup: parent is closed")
@@ -273,26 +274,66 @@ func (w *PublishWorkspace) closePlatformLocked(owner *PublishDir) error {
 				cleanupErr = verifyErr
 			} else if verifiedName != name {
 				cleanupErr = fmt.Errorf("publish workspace cleanup: workspace identity changed before deletion")
-			} else if safe, safeErr := unixParentHasPrivateMutationBoundary(owner.plat.fd); safeErr != nil {
+			} else if safe, safeErr := owner.unixParentHasPrivateMutationBoundary(w.plat.fd); safeErr != nil {
 				cleanupErr = safeErr
 			} else if !safe {
 				cleanupErr = fmt.Errorf("publish workspace cleanup: parent permits untrusted entry replacement")
-			} else if err := unix.Unlinkat(owner.plat.fd, name, unix.AT_REMOVEDIR); err != nil {
+			} else if contentErr != nil {
+				cleanupErr = fmt.Errorf("publish workspace cleanup: contents were not fully cleaned")
+			} else if err := publishUnixCleanupUnlinkFn(owner.plat.fd, name, unix.AT_REMOVEDIR); err != nil {
 				cleanupErr = fmt.Errorf("remove publish workspace: %w", err)
 			}
 		}
 	}
-	closeErr := unix.Close(w.plat.fd)
+	closeErr := publishUnixCleanupCloseFn(w.plat.fd)
 	w.plat.fd = -1
-	return errors.Join(cleanupErr, closeErr)
+	return errors.Join(contentErr, cleanupErr, closeErr)
 }
 
-func unixParentHasPrivateMutationBoundary(parentFD int) (bool, error) {
+func (d *PublishDir) unixParentHasPrivateMutationBoundary(workspaceFD int) (bool, error) {
 	var st unix.Stat_t
-	if err := unix.Fstat(parentFD, &st); err != nil {
+	if err := unix.Fstat(d.plat.fd, &st); err != nil {
 		return false, fmt.Errorf("stat publish parent permissions: %w", err)
 	}
-	return st.Mode&0o022 == 0, nil
+	trustedOwner := func(uid uint32) bool {
+		return uid == 0 || int(uid) == effectiveUID() || (d.plat.setOwner && int(uid) == d.plat.uid)
+	}
+	if !trustedOwner(st.Uid) {
+		return false, nil
+	}
+	if safe, err := publishUnixACLBoundaryFn(d.plat.fd); err != nil || !safe {
+		return false, err
+	}
+	if workspaceFD >= 0 {
+		var workspace unix.Stat_t
+		if err := unix.Fstat(workspaceFD, &workspace); err != nil {
+			return false, fmt.Errorf("stat workspace owner: %w", err)
+		}
+		if !trustedOwner(workspace.Uid) {
+			return false, nil
+		}
+		// Darwin ACLs can authorize DELETE on the child independently of the parent.
+		if safe, err := publishUnixACLBoundaryFn(workspaceFD); err != nil || !safe {
+			return false, err
+		}
+	}
+	return st.Mode&unix.S_ISVTX != 0 || st.Mode&0o022 == 0, nil
+}
+
+func (w *PublishWorkspace) clearContentsLocked() error {
+	list, err := unix.Openat(w.plat.fd, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("workspace content cleanup incomplete: %w", err)
+	}
+	names, readErr := publishUnixCleanupReadFn(list)
+	result := errors.Join(readErr, unix.Close(list))
+	for _, name := range names {
+		result = errors.Join(result, w.removeLocked(name))
+	}
+	if result != nil {
+		return fmt.Errorf("workspace content cleanup incomplete: %w", result)
+	}
+	return nil
 }
 
 func (d *PublishDir) closePlatformLocked() error {

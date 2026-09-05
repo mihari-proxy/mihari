@@ -142,8 +142,9 @@ func (d *PublishDir) PublishNoReplace(workspace *PublishWorkspace, tempName, tar
 	return d.publishNoReplaceLocked(workspace, tempName, targetName, warningSink(onWarning))
 }
 
-// Close removes an empty workspace only when its current parent entry still
-// has the held identity, then releases its handle. Repeated calls return nil.
+// Close cleans held workspace contents and removes the directory only when its
+// namespace is proved safe. All handles are closed even if cleanup fails.
+// Repeated calls return nil.
 func (w *PublishWorkspace) Close() error {
 	if w.owner == nil {
 		w.mu.Lock()

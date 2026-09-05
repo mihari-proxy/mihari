@@ -325,6 +325,7 @@ func (fs *PrivateFS) openPublishDirLocked(name string) (*PublishDir, error) {
 	d.plat.setOwner = true
 	d.plat.uid = fs.plat.uid
 	d.plat.gid = fs.plat.gid
+	d.plat.initialNamespaceTrusted, _ = d.unixParentHasPrivateMutationBoundary(-1)
 	return d, nil
 }
 
