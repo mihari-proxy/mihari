@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ func TestExport_ZipLayoutManifestAndRedaction(t *testing.T) {
 		`{"time":"2026-09-02T13:00:00Z","seq":2}`,
 		`{broken}`,
 	}, "\n"))
+	writeExportFixture(t, fs, paths.TUILog, `{"time":"2026-09-02T09:00:00Z","msg":"outside"}`)
 	writeExportFixture(t, fs, paths.MihomoLog, `{"time":"2026-09-02T11:00:00Z","msg":"ok"}`)
 	now := time.Date(2026, 9, 2, 23, 41, 8, 0, time.FixedZone("UTC+8", 8*60*60))
 	out := filepath.Join(t.TempDir(), "chosen.zip")
@@ -42,7 +44,9 @@ func TestExport_ZipLayoutManifestAndRedaction(t *testing.T) {
 	}
 	defer r.Close()
 	got := map[string]string{}
+	var order []string
 	for _, f := range r.File {
+		order = append(order, f.Name)
 		if f.Method != zip.Deflate {
 			t.Fatalf("%s method=%d want Deflate", f.Name, f.Method)
 		}
@@ -63,18 +67,38 @@ func TestExport_ZipLayoutManifestAndRedaction(t *testing.T) {
 	if len(got) != 3 || got[exportManifestEntry] == "" || got[exportDaemonEntry] == "" || got[exportMihomoEntry] == "" {
 		t.Fatalf("entries=%v", got)
 	}
+	if strings.Join(order, ",") != "manifest.json,daemon/mihari-daemon.log,mihomo/mihomo.log" {
+		t.Fatalf("entry order=%v", order)
+	}
 	if _, ok := got[exportTUIEntry]; ok {
 		t.Fatal("empty TUI source must be omitted")
 	}
 	if strings.Contains(got[exportDaemonEntry], "secret") || !strings.HasSuffix(got[exportDaemonEntry], "\n") {
 		t.Fatalf("daemon=%q", got[exportDaemonEntry])
 	}
-	var manifest exportManifest
-	if err := json.Unmarshal([]byte(got[exportManifestEntry]), &manifest); err != nil {
+	if got[exportDaemonEntry] != `{"seq":1,"time":"2026-09-02T10:30:00Z","token":"***"}`+"\n" {
+		t.Fatalf("daemon JSONL=%q", got[exportDaemonEntry])
+	}
+	if got[exportMihomoEntry] != `{"msg":"ok","time":"2026-09-02T11:00:00Z"}`+"\n" {
+		t.Fatalf("mihomo JSONL=%q", got[exportMihomoEntry])
+	}
+	var manifest map[string]any
+	decoder := json.NewDecoder(strings.NewReader(got[exportManifestEntry]))
+	decoder.UseNumber()
+	if err := decoder.Decode(&manifest); err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest.Files) != 2 || manifest.Files[0].Name != exportDaemonEntry || manifest.Files[0].Lines != 1 || manifest.Files[0].SkippedInvalid != 1 || manifest.Files[0].Redacted != 1 || manifest.Files[1].Name != exportMihomoEntry {
-		t.Fatalf("manifest=%+v", manifest)
+	expected := map[string]any{
+		"schema": "mihari-logs-export/v1", "exported_at": "2026-09-02T23:41:08+08:00", "timezone": "+08:00",
+		"range": map[string]any{"kind": "between", "from": "2026-09-02T10:00:00Z", "to": "2026-09-02T12:00:00Z"},
+		"files": []any{
+			map[string]any{"name": exportDaemonEntry, "lines": json.Number("1"), "skipped_invalid": json.Number("1"), "redacted": json.Number("1"), "sources": []any{"mihari-daemon.log"}},
+			map[string]any{"name": exportMihomoEntry, "lines": json.Number("1"), "skipped_invalid": json.Number("0"), "redacted": json.Number("0"), "sources": []any{"mihomo.log"}},
+		},
+		"notes": []any{exportReviewNote},
+	}
+	if !reflect.DeepEqual(manifest, expected) {
+		t.Fatalf("manifest=%#v want %#v", manifest, expected)
 	}
 	if strings.Contains(got[exportManifestEntry], paths.LogDir) || strings.Contains(got[exportManifestEntry], ".lock") {
 		t.Fatalf("manifest leaked path: %s", got[exportManifestEntry])
@@ -114,6 +138,94 @@ func TestExportWithOps_FailureBeforePublishLeavesNoTarget(t *testing.T) {
 				t.Fatalf("target exists/error=%v", statErr)
 			}
 		})
+	}
+}
+
+func TestExportWithOps_PublicErrorsAreStableAndClassified(t *testing.T) {
+	fs, paths := openExportTestFS(t)
+	writeExportFixture(t, fs, paths.DaemonLog, `{"time":"2026-09-02T10:00:00Z"}`)
+	sensitive := errors.New(`open C:\Users\secret\token-value.log: api-key=very-secret`)
+	out := filepath.Join(t.TempDir(), "failed.zip")
+	_, err := exportWithOps(context.Background(), ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: out, Paths: paths, PrivateFS: fs}, exportOps{Checkpoint: func(stage exportStage) error {
+		if stage == stageBeforePublish {
+			return sensitive
+		}
+		return nil
+	}})
+	if !errors.Is(err, sensitive) {
+		t.Fatalf("classification lost: %v", err)
+	}
+	if err.Error() != "log export failed" {
+		t.Fatalf("public error leaked cause: %q", err)
+	}
+}
+
+func TestExportWithOps_CancellationBeforePublishCleansResources(t *testing.T) {
+	for _, stage := range []exportStage{stageEnumerate, stageReadBatch, stageDecodeLine, stageWriteSpool, stageWriteZip, stageBeforeZipClose, stageBeforeSync, stageBeforePublish} {
+		t.Run(fmt.Sprint(stage), func(t *testing.T) {
+			fs, paths := openExportTestFS(t)
+			writeExportFixture(t, fs, paths.DaemonLog, `{"time":"2026-09-02T10:00:00Z"}`)
+			parent := filepath.Join(t.TempDir(), "publish")
+			if err := os.Mkdir(parent, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			out := filepath.Join(parent, "cancelled.zip")
+			ctx, cancel := context.WithCancel(context.Background())
+			_, err := exportWithOps(ctx, ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: out, Paths: paths, PrivateFS: fs}, exportOps{Checkpoint: func(got exportStage) error {
+				if got == stage {
+					cancel()
+				}
+				return nil
+			}})
+			if !errors.Is(err, context.Canceled) || err.Error() != "log export cancelled" {
+				t.Fatalf("error=%q", err)
+			}
+			entries, readErr := os.ReadDir(parent)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("resources remain: %v", entries)
+			}
+			if err := os.Remove(parent); err != nil {
+				t.Fatalf("publish directory still held: %v", err)
+			}
+		})
+	}
+}
+
+func TestExportWithOps_CancellationDuringMultiChunkZipCopyReturnsPromptly(t *testing.T) {
+	fs, paths := openExportTestFS(t)
+	line := `{"time":"2026-09-02T10:00:00Z","msg":"` + strings.Repeat("x", 4096) + `"}`
+	writeExportFixture(t, fs, paths.DaemonLog, strings.Repeat(line+"\n", 40))
+	parent := filepath.Join(t.TempDir(), "publish")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	chunks := 0
+	start := time.Now()
+	_, err := exportWithOps(ctx, ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: filepath.Join(parent, "cancelled.zip"), Paths: paths, PrivateFS: fs}, exportOps{Checkpoint: func(stage exportStage) error {
+		if stage == stageWriteZip {
+			chunks++
+			if chunks == 2 {
+				cancel()
+			}
+		}
+		return nil
+	}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v", err)
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("cancellation took %v", time.Since(start))
+	}
+	entries, readErr := os.ReadDir(parent)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("resources remain: %v", entries)
 	}
 }
 
@@ -172,21 +284,40 @@ func TestExportWithOps_PublishCollisionPolicy(t *testing.T) {
 	writeExportFixture(t, fs, paths.DaemonLog, `{"time":"2026-09-02T10:00:00Z"}`)
 	t.Run("custom", func(t *testing.T) {
 		out := filepath.Join(t.TempDir(), "chosen.zip")
-		_, err := exportWithOps(context.Background(), ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: out, Paths: paths, PrivateFS: fs}, exportOps{Publish: func(*platform.PublishDir, *platform.PublishWorkspace, string, string, func(error)) error {
-			return os.ErrExist
+		competitor := []byte("competitor-must-survive")
+		_, err := exportWithOps(context.Background(), ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: out, Paths: paths, PrivateFS: fs}, exportOps{Publish: func(d *platform.PublishDir, w *platform.PublishWorkspace, temp, target string, warning func(error)) error {
+			if err := os.WriteFile(out, competitor, 0o600); err != nil {
+				return err
+			}
+			return d.PublishNoReplace(w, temp, target, warning)
 		}})
 		if !errors.Is(err, ErrExportTargetExists) {
 			t.Fatalf("error=%v", err)
+		}
+		got, readErr := os.ReadFile(out)
+		if readErr != nil || string(got) != string(competitor) {
+			t.Fatalf("competitor=%q error=%v", got, readErr)
 		}
 	})
 	t.Run("automatic retries same archive", func(t *testing.T) {
 		calls := 0
 		var names []string
+		var firstDir *platform.PublishDir
+		var firstWorkspace *platform.PublishWorkspace
+		var firstTemp string
 		ops := exportOps{Publish: func(d *platform.PublishDir, w *platform.PublishWorkspace, temp, target string, warning func(error)) error {
 			calls++
 			names = append(names, target)
+			if calls == 1 {
+				firstDir, firstWorkspace, firstTemp = d, w, temp
+			} else if d != firstDir || w != firstWorkspace || temp != firstTemp {
+				t.Error("collision retry replaced held capabilities or archive temp")
+			}
 			if calls < 3 {
-				return os.ErrExist
+				if err := os.WriteFile(filepath.Join(d.Path(), target), []byte(fmt.Sprintf("competitor-%d", calls)), 0o600); err != nil {
+					return err
+				}
+				return d.PublishNoReplace(w, temp, target, warning)
 			}
 			return d.PublishNoReplace(w, temp, target, warning)
 		}}
@@ -198,7 +329,76 @@ func TestExportWithOps_PublishCollisionPolicy(t *testing.T) {
 		if calls != 3 || !strings.HasSuffix(result.Path, "-2.zip") || names[2] != filepath.Base(result.Path) {
 			t.Fatalf("calls=%d names=%v result=%+v", calls, names, result)
 		}
+		for i := 0; i < 2; i++ {
+			got, err := os.ReadFile(filepath.Join(paths.ExportDir, names[i]))
+			if err != nil || string(got) != fmt.Sprintf("competitor-%d", i+1) {
+				t.Fatalf("competitor %d=%q error=%v", i, got, err)
+			}
+		}
 	})
+}
+
+func TestExportWithOps_VisibleParentReplacementDoesNotRedirectPublish(t *testing.T) {
+	fs, paths := openExportTestFS(t)
+	writeExportFixture(t, fs, paths.DaemonLog, `{"time":"2026-09-02T10:00:00Z"}`)
+	base := t.TempDir()
+	parent, held := filepath.Join(base, "publish"), filepath.Join(base, "held")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := exportWithOps(context.Background(), ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: filepath.Join(parent, "result.zip"), Paths: paths, PrivateFS: fs}, exportOps{Checkpoint: func(stage exportStage) error {
+		if stage != stageBeforePublish {
+			return nil
+		}
+		if err := os.Rename(parent, held); err != nil {
+			t.Skipf("platform guard prevented parent replacement: %v", err)
+		}
+		return os.Mkdir(parent, 0o700)
+	}})
+	if !errors.Is(err, platform.ErrPublishDirectoryChanged) {
+		t.Fatalf("error=%v", err)
+	}
+	for _, path := range []string{filepath.Join(parent, "result.zip"), filepath.Join(held, "result.zip")} {
+		if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("unexpected target %s: %v", path, statErr)
+		}
+	}
+	entries, readErr := os.ReadDir(held)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("held resources=%v error=%v", entries, readErr)
+	}
+}
+
+func TestExportWithOps_FreshContainmentCheckBlocksMovedPublishDir(t *testing.T) {
+	fs, paths := openExportTestFS(t)
+	writeExportFixture(t, fs, paths.DaemonLog, `{"time":"2026-09-02T10:00:00Z"}`)
+	parent := filepath.Join(t.TempDir(), "publish")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(paths.LogDir, "moved-publish")
+	publishCalled := false
+	_, err := exportWithOps(context.Background(), ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: filepath.Join(parent, "result.zip"), Paths: paths, PrivateFS: fs}, exportOps{
+		Checkpoint: func(stage exportStage) error {
+			if stage == stageBeforePublish {
+				if renameErr := os.Rename(parent, moved); renameErr != nil {
+					t.Skipf("platform guard prevented containment move: %v", renameErr)
+				}
+			}
+			return nil
+		},
+		Publish: func(*platform.PublishDir, *platform.PublishWorkspace, string, string, func(error)) error {
+			publishCalled = true
+			return nil
+		},
+	})
+	if !errors.Is(err, ErrExportTargetChanged) || publishCalled {
+		t.Fatalf("error=%v publishCalled=%v", err, publishCalled)
+	}
+	entries, readErr := os.ReadDir(moved)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("moved resources=%v error=%v", entries, readErr)
+	}
 }
 
 func TestExportWithOps_CloseSyncAndPublishErrorsDoNotPublish(t *testing.T) {
@@ -226,6 +426,33 @@ func TestExportWithOps_CloseSyncAndPublishErrorsDoNotPublish(t *testing.T) {
 		})
 	}
 }
+
+func TestExportWithOps_SecondaryZipCloseErrorIsClassifiedButSanitized(t *testing.T) {
+	fs, paths := openExportTestFS(t)
+	writeExportFixture(t, fs, paths.DaemonLog, `{"time":"2026-09-02T10:00:00Z"}`)
+	primary := errors.New(`create header C:\private\token.json`)
+	secondary := errors.New(`close C:\private\secret.zip`)
+	warnings := []error{}
+	_, err := exportWithOps(context.Background(), ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: filepath.Join(t.TempDir(), "failed.zip"), Paths: paths, PrivateFS: fs, OnWarning: func(err error) { warnings = append(warnings, err) }}, exportOps{NewZipWriter: func(io.Writer) zipWriter {
+		return failingCreateZipWriter{primary: primary, secondary: secondary}
+	}})
+	if !errors.Is(err, primary) || !errors.Is(err, secondary) {
+		t.Fatalf("secondary classification lost: %v", err)
+	}
+	if err.Error() != "log export failed" {
+		t.Fatalf("error leaked sensitive cause: %q", err)
+	}
+	if len(warnings) != 1 || warnings[0].Error() != "log export cleanup incomplete" {
+		t.Fatalf("warnings=%v", warnings)
+	}
+}
+
+type failingCreateZipWriter struct{ primary, secondary error }
+
+func (w failingCreateZipWriter) CreateHeader(*zip.FileHeader) (io.Writer, error) {
+	return nil, w.primary
+}
+func (w failingCreateZipWriter) Close() error { return w.secondary }
 
 type failingCloseZipWriter struct{ *zip.Writer }
 

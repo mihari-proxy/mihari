@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -56,11 +55,11 @@ func exportWithOps(ctx context.Context, request ExportRequest, ops exportOps) (_
 	ctx, request, ops = exportDefaults(ctx, request, ops)
 	exportRange, err := normalizeExportRange(request.Now, request.Range)
 	if err != nil {
-		return ExportResult{}, err
+		return ExportResult{}, stableExportError(err)
 	}
 	target, err := resolveExportTarget(request)
 	if err != nil {
-		return ExportResult{}, err
+		return ExportResult{}, stableExportError(err)
 	}
 	workspace, err := target.Dir.CreateWorkspace()
 	if err != nil {
@@ -95,6 +94,9 @@ func exportWithOps(ctx context.Context, request ExportRequest, ops exportOps) (_
 				retErr = errors.Join(retErr, cleanup)
 			}
 		}
+		if retErr != nil {
+			retErr = stableExportError(retErr)
+		}
 	}()
 
 	sources := []struct{ path, entry, publicBase string }{
@@ -112,8 +114,7 @@ func exportWithOps(ctx context.Context, request ExportRequest, ops exportOps) (_
 		}
 		spool, name, err := workspace.CreateTemp("spool-*")
 		if err != nil {
-			_ = closeSnapshots(handles)
-			return ExportResult{}, exportPipelineError(err)
+			return ExportResult{}, exportPipelineError(joinCleanupError(err, closeSnapshots(handles), request.OnWarning))
 		}
 		item := exportSpool{name: name, file: spool, data: exportFile{Name: source.entry}}
 		spools = append(spools, item)
@@ -127,8 +128,7 @@ func exportWithOps(ctx context.Context, request ExportRequest, ops exportOps) (_
 			current.data.Redacted += part.Redacted
 			current.data.Sources = append(current.data.Sources, fixedSourceName(source.path, source.publicBase, handle.name))
 			if partErr != nil {
-				_ = closeSnapshots(handles)
-				return ExportResult{}, exportPipelineError(partErr)
+				return ExportResult{}, exportPipelineError(joinCleanupError(partErr, closeSnapshots(handles), request.OnWarning))
 			}
 		}
 		if err := closeSnapshots(handles); err != nil {
@@ -163,13 +163,11 @@ func exportWithOps(ctx context.Context, request ExportRequest, ops exportOps) (_
 		err = json.NewEncoder(manifestWriter).Encode(newExportManifest(request.Now, exportRange, files))
 	}
 	if err != nil {
-		_ = zw.Close()
-		return ExportResult{}, exportPipelineError(err)
+		return ExportResult{}, exportPipelineError(joinCleanupError(err, zw.Close(), request.OnWarning))
 	}
 	for i := range spools {
 		if _, err := spools[i].file.Seek(0, io.SeekStart); err != nil {
-			_ = zw.Close()
-			return ExportResult{}, exportPipelineError(err)
+			return ExportResult{}, exportPipelineError(joinCleanupError(err, zw.Close(), request.OnWarning))
 		}
 		writer, err := createDeflatedEntry(zw, spools[i].data.Name)
 		if err == nil {
@@ -178,13 +176,11 @@ func exportWithOps(ctx context.Context, request ExportRequest, ops exportOps) (_
 		closeErr := spools[i].file.Close()
 		spools[i].file = nil
 		if err = errors.Join(err, closeErr); err != nil {
-			_ = zw.Close()
-			return ExportResult{}, exportPipelineError(err)
+			return ExportResult{}, exportPipelineError(joinCleanupError(err, zw.Close(), request.OnWarning))
 		}
 	}
 	if err := runCheckpoint(ctx, ops, stageBeforeZipClose); err != nil {
-		_ = zw.Close()
-		return ExportResult{}, exportPipelineError(err)
+		return ExportResult{}, exportPipelineError(joinCleanupError(err, zw.Close(), request.OnWarning))
 	}
 	if err := zw.Close(); err != nil {
 		return ExportResult{}, exportPipelineError(err)
@@ -301,7 +297,44 @@ func warnExport(warning func(error)) {
 	}
 }
 
-func exportPipelineError(err error) error { return fmt.Errorf("log export failed: %w", err) }
+func joinCleanupError(primary, cleanup error, warning func(error)) error {
+	if cleanup != nil {
+		warnExport(warning)
+	}
+	return errors.Join(primary, cleanup)
+}
+
+type publicExportError struct{ cause error }
+
+func (e publicExportError) Error() string {
+	switch {
+	case errors.Is(e.cause, context.Canceled), errors.Is(e.cause, context.DeadlineExceeded):
+		return "log export cancelled"
+	case errors.Is(e.cause, ErrInvalidExportRequest):
+		return ErrInvalidExportRequest.Error()
+	case errors.Is(e.cause, ErrExportTargetExists):
+		return ErrExportTargetExists.Error()
+	case errors.Is(e.cause, ErrExportTargetChanged):
+		return ErrExportTargetChanged.Error()
+	case errors.Is(e.cause, ErrNoLogLines):
+		return ErrNoLogLines.Error()
+	case errors.Is(e.cause, platform.ErrPublishDirectoryChanged):
+		return platform.ErrPublishDirectoryChanged.Error()
+	default:
+		return "log export failed"
+	}
+}
+
+func (e publicExportError) Unwrap() error { return e.cause }
+
+func stableExportError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return publicExportError{cause: err}
+}
+
+func exportPipelineError(err error) error { return stableExportError(err) }
 
 func fixedSourceName(configuredPath, publicBase, snapshotName string) string {
 	configuredBase := filepath.Base(configuredPath)
