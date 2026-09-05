@@ -212,6 +212,9 @@ func (w *PublishWorkspace) removeLocked(name string) error {
 	h, err := openRelative(w.plat.handle, name, windows.DELETE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE, windows.FILE_OPEN,
 		windows.FILE_NON_DIRECTORY_FILE|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT, 0, nil)
 	if err != nil {
+		if isWindowsNotFound(err) {
+			return fmt.Errorf("remove publish temp: %w", os.ErrNotExist)
+		}
 		return fmt.Errorf("remove publish temp: %w", err)
 	}
 	defer windows.CloseHandle(h)
