@@ -5,11 +5,54 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
+
+type statusHintError struct{ cause error }
+
+func (e statusHintError) Error() string { return e.cause.Error() + "; " + e.Hint() }
+func (e statusHintError) Unwrap() error { return e.cause }
+func (e statusHintError) Hint() string {
+	return "if the control credential was changed, restart the service"
+}
+
+func TestStatus_PreservesCategoriesAndAuthenticationHint(t *testing.T) {
+	for _, tc := range []struct {
+		code protocol.ErrorCode
+		exit int
+	}{{protocol.CodeDaemonUnavailable, 3}, {protocol.CodePermissionDenied, 5}, {protocol.CodeDataFailure, 9}, {protocol.CodeInvalidArgument, 2}, {protocol.CodeInvalidState, 4}} {
+		for _, isJSON := range []bool{false, true} {
+			stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+			args := []string{"status"}
+			if isJSON {
+				args = append(args, "--json")
+			}
+			api := protocol.APIError{Code: tc.code, Message: "operation failed", Details: map[string]any{"scope": "control"}}
+			var err error = api
+			if tc.code == protocol.CodePermissionDenied {
+				err = statusHintError{api}
+			}
+			if exit := Execute(context.Background(), args, stdout, stderr, Dependencies{StatusClient: fakeStatusClient{err: err}}); exit != tc.exit {
+				t.Fatalf("code %s exit=%d", tc.code, exit)
+			}
+			if isJSON {
+				var envelope protocol.ErrorEnvelope
+				if e := json.Unmarshal(stderr.Bytes(), &envelope); e != nil {
+					t.Fatal(e)
+				}
+				if envelope.Error.Code != tc.code || envelope.Error.Message != api.Message || envelope.Error.Details["scope"] != "control" || strings.Contains(stderr.String(), "restart") {
+					t.Fatal("JSON error changed")
+				}
+			} else if tc.code == protocol.CodePermissionDenied && !strings.Contains(stderr.String(), "restart the service") {
+				t.Fatal("text authentication hint was discarded")
+			}
+		}
+	}
+}
 
 type fakeStatusClient struct {
 	status protocol.Status

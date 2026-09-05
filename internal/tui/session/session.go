@@ -337,16 +337,15 @@ func (s *Session) superviseStreams(ctx context.Context) error {
 			return nil
 		case <-streamHealthy:
 			streamAttempt = 0
-		case err := <-streamErr:
+		case <-streamErr:
 			if ctx.Err() != nil {
 				return nil
 			}
-			if err == nil {
-				err = errors.New("control streams ended")
-			}
 			status, statusErr := s.client.Status(streamCtx)
 			if statusErr != nil {
-				return errors.Join(err, statusErr)
+				// The fresh health probe owns the reconnect diagnosis. Keeping
+				// a stale stream error first would hide credential/path failures.
+				return statusErr
 			}
 			if !s.putStatus(streamCtx, status) {
 				return streamCtx.Err()

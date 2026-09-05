@@ -5,8 +5,48 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 )
+
+func TestRedactor_CredentialHistorySurvivesReplacement(t *testing.T) {
+	r := NewRedactor("ordinary-secret")
+	r.RetainCredential(testControllerHex)
+	r.RetainCredential(testControlToken)
+	r.ReplaceExact([]string{"new-configured-secret"})
+	for _, value := range []string{testControllerHex, testControlToken} {
+		if r.String("prefix"+value+"suffix") != "prefix***suffix" {
+			t.Fatal("embedded used credential was not retained")
+		}
+	}
+	if r.String("ordinary-secret") != "ordinary-secret" {
+		t.Fatal("ordinary replacement semantics changed")
+	}
+	if r.String("new-configured-secret") != "***" {
+		t.Fatal("new configured secret missing")
+	}
+}
+
+func TestRedactor_ConcurrentCredentialAndSnapshotUpdates(t *testing.T) {
+	r := NewRedactor()
+	var wg sync.WaitGroup
+	for _, value := range []string{testControllerHex, testControlToken} {
+		wg.Go(func() {
+			for range 100 {
+				r.RetainCredential(value)
+				r.ReplaceExact([]string{"ordinary-secret"})
+				_ = r.String("prefix" + value + "suffix")
+			}
+		})
+	}
+	wg.Wait()
+	r.ReplaceExact(nil)
+	for _, value := range []string{testControllerHex, testControlToken} {
+		if r.String("prefix"+value+"suffix") != "prefix***suffix" {
+			t.Fatal("concurrent history update was lost")
+		}
+	}
+}
 
 func TestRedactorValue_RecursesWithoutMutationAndPreservesNumbers(t *testing.T) {
 	hex := testControllerHex

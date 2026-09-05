@@ -81,6 +81,10 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, depen
 		_ = json.NewEncoder(stderr).Encode(protocol.NewError(apiError.Code, apiError.Message, apiError.Details))
 	} else {
 		_, _ = fmt.Fprintf(stderr, "Error: %s\n", apiError.Message)
+		var diagnostic interface{ Hint() string }
+		if errors.As(err, &diagnostic) {
+			_, _ = fmt.Fprintln(stderr, diagnostic.Hint())
+		}
 	}
 	return exitCode(apiError)
 }

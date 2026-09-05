@@ -271,16 +271,20 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 	}
 	streamURL.Path = strings.TrimRight(streamURL.Path, "/") + "/v1/streams/" + url.PathEscape(kind)
 	header := http.Header{}
-	header.Set("Authorization", "Bearer "+c.bearerToken())
-	connection, response, err := websocket.Dial(ctx, streamURL.String(), &websocket.DialOptions{HTTPClient: c.http, HTTPHeader: header})
+	token, err := c.requestToken(ctx)
+	if err != nil {
+		return err
+	}
+	header.Set("Authorization", "Bearer "+token)
+	connection, response, err := websocket.Dial(ctx, streamURL.String(), &websocket.DialOptions{HTTPClient: c.requestHTTP(), HTTPHeader: header})
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil
 		}
 		if response != nil {
-			return decodeRuntimeHTTPError(response)
+			return c.responseError(response)
 		}
-		return protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "daemon is unavailable"}
+		return c.localError(err)
 	}
 	defer connection.CloseNow()
 	connection.SetReadLimit(maxControlStreamSize)
@@ -318,21 +322,35 @@ func (c *Client) doRuntime(ctx context.Context, method, path string, input, outp
 	if err != nil {
 		return protocol.APIError{Code: protocol.CodeInternal, Message: "create control request"}
 	}
-	request.Header.Set("Authorization", "Bearer "+c.bearerToken())
+	token, err := c.requestToken(ctx)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
 	if input != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	response, err := c.http.Do(request)
+	if c.provider != nil && method != http.MethodGet && method != http.MethodHead {
+		// Go's transport may replay a zero-byte failed write on a reused
+		// connection when GetBody is available, even for POST. An empty body
+		// also needs a non-replayable reader to prevent that retry branch.
+		request.GetBody = nil
+		if request.Body == nil || request.Body == http.NoBody {
+			request.Body = io.NopCloser(strings.NewReader(""))
+			request.ContentLength = -1
+		}
+	}
+	response, err := c.requestHTTP().Do(request)
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "daemon is unavailable"}
+		return c.localError(err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return decodeRuntimeHTTPError(response)
+		return c.responseError(response)
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxControlResponseSize+1))
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "read control response failed"}
+		return c.localError(err)
 	}
 	if len(raw) > maxControlResponseSize {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "control response is too large"}

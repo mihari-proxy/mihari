@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -39,7 +40,28 @@ type redactionRules struct {
 
 // Redactor applies immutable exact-secret and generic redaction rules to log text and attrs.
 type Redactor struct {
-	rules atomic.Pointer[redactionRules]
+	rules       atomic.Pointer[redactionRules]
+	mu          sync.Mutex
+	configured  []string
+	credentials map[string]struct{}
+}
+
+// RetainCredential keeps a successfully loaded control credential redacted for
+// this redactor's lifetime, including after configured secrets are replaced.
+func (r *Redactor) RetainCredential(value string) {
+	if len(value) < minExactLen {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.credentials[value]; exists {
+		return
+	}
+	if r.credentials == nil {
+		r.credentials = make(map[string]struct{})
+	}
+	r.credentials[value] = struct{}{}
+	r.publishRules()
 }
 
 // NewRedactor builds a redactor and registers optional exact secrets.
@@ -52,6 +74,18 @@ func NewRedactor(exact ...string) *Redactor {
 // ReplaceExact replaces the exact-secret snapshot. Empty and too-short values are dropped;
 // remaining values are copied and sorted longest-first. Generic regexes are package-level.
 func (r *Redactor) ReplaceExact(values []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.configured = append([]string(nil), values...)
+	r.publishRules()
+}
+
+// publishRules requires mu; readers continue using an immutable atomic snapshot.
+func (r *Redactor) publishRules() {
+	values := append([]string(nil), r.configured...)
+	for value := range r.credentials {
+		values = append(values, value)
+	}
 	exact := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {

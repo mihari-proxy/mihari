@@ -10,6 +10,32 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
+type categoryClient struct {
+	*fakeClient
+	err error
+}
+
+func (c categoryClient) Status(context.Context) (protocol.Status, error) {
+	return protocol.Status{}, c.err
+}
+func (c categoryClient) Stream(context.Context, string, func(protocol.StreamEvent) error) error {
+	return protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "old stream disconnected"}
+}
+
+func TestSession_StatusCategoryTakesPrecedenceOverOldStream(t *testing.T) {
+	for _, code := range []protocol.ErrorCode{protocol.CodePermissionDenied, protocol.CodeDataFailure, protocol.CodeInvalidArgument, protocol.CodeInvalidState} {
+		api := protocol.APIError{Code: code, Message: "current status failed"}
+		s := New(categoryClient{newFakeClient(), api}, Options{PollInterval: time.Hour})
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		err := s.superviseStreams(ctx)
+		cancel()
+		var got protocol.APIError
+		if !errors.As(err, &got) || got.Code != code {
+			t.Fatalf("current category %s replaced by stale stream error: %v", code, err)
+		}
+	}
+}
+
 func TestSession_OneUpstreamPerStreamAndStopsAllGoroutines(t *testing.T) {
 	fake := newFakeClient()
 	session := New(fake, Options{Backoff: func(int) time.Duration { return 0 }})
