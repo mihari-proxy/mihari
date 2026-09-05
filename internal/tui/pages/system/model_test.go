@@ -3634,14 +3634,17 @@ func TestSystemMihariChannelEnterSwitchesDevToMain(t *testing.T) {
 func TestSystemMihariChannelSwitchDoesNotChangeCoreCopy(t *testing.T) {
 	client := &fakeClient{onboarding: protocol.OnboardingStatus{Revision: 11}}
 	model := New(client, func() string { return "system-op" })
+	// Snapshot setup renders rows and can load the channel before updater setup.
+	// Install the isolated read boundary before either operation.
+	channelPath := filepath.Join(t.TempDir(), "mihari-channel")
+	model.loadChannel = func(string) (string, error) { return update.ChannelMain, nil }
+	model.channelPath = func() (string, error) { return channelPath, nil }
 	model.SetSnapshot(
 		protocol.Status{Revision: 11, Capabilities: []string{protocol.CapabilityCore}},
 		protocol.CoreStatus{Revision: 11, Status: "running", Version: "v1.19.0", Channel: "stable"},
 	)
 	model.SetMutationsEnabled(true)
 	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.8.2", "mihari", func() bool { return false })
-	model.loadChannel = func(string) (string, error) { return update.ChannelMain, nil }
-	model.channelPath = func() (string, error) { return "mihari-channel", nil }
 	if got := channelRowValue(model); got != update.ChannelMain {
 		t.Fatalf("mihari channel=%q", got)
 	}

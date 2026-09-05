@@ -31,20 +31,31 @@ func TestSnapshotSource_SubprocessWriterRotatesWhileRepeatedSnapshotsStayBounded
 
 			lastWritten := 0
 			for iteration := 0; iteration < 8; iteration++ {
-				lastWritten = child.write(t, 4)
-				handles, err := snapshotSource(context.Background(), fs, paths.TUILog, nil, nil, nil)
-				if err != nil {
-					t.Fatalf("snapshot %d: %v", iteration, err)
-				}
-				if len(handles) == 0 {
-					t.Fatalf("snapshot %d returned no handles", iteration)
-				}
-				frozenMax := lastWritten
-				lastWritten = child.write(t, 8)
-				assertFrozenJSONLSnapshot(t, iteration, handles, frozenMax)
-				if err := closeSnapshots(handles); err != nil {
-					t.Fatalf("close snapshot %d: %v", iteration, err)
-				}
+				func() {
+					lastWritten = child.write(t, 4)
+					handles, err := snapshotSource(context.Background(), fs, paths.TUILog, nil, nil, nil)
+					if err != nil {
+						t.Fatalf("snapshot %d: %v", iteration, err)
+					}
+					defer func() {
+						if handles != nil {
+							if err := closeSnapshots(handles); err != nil {
+								t.Errorf("deferred close snapshot %d: %v", iteration, err)
+							}
+						}
+					}()
+					if len(handles) == 0 {
+						t.Fatalf("snapshot %d returned no handles", iteration)
+					}
+					frozenMax := lastWritten
+					lastWritten = child.write(t, 8)
+					assertFrozenJSONLSnapshot(t, iteration, handles, frozenMax)
+					closeErr := closeSnapshots(handles)
+					handles = nil
+					if err := closeErr; err != nil {
+						t.Fatalf("close snapshot %d: %v", iteration, err)
+					}
+				}()
 			}
 		})
 	}
