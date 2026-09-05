@@ -464,5 +464,8 @@ func cleanupCreatedWindowsHandle(h windows.Handle) error {
 	if closeErr != nil {
 		closeErr = fmt.Errorf("close rejected created object: %w", closeErr)
 	}
-	return errors.Join(deleteErr, closeErr)
+	if cleanupErr := errors.Join(deleteErr, closeErr); cleanupErr != nil {
+		return errors.Join(ErrPublishCleanupIncomplete, cleanupErr)
+	}
+	return nil
 }

@@ -98,7 +98,9 @@ func exportWithOps(ctx context.Context, request ExportRequest, ops exportOps) (_
 			}
 		}
 		cleanup = errors.Join(cleanup, ops.CloseWorkspace(workspace), ops.ClosePublishDir(target.Dir), ops.CloseLogDir(target.LogDir))
-		if cleanup != nil {
+		// A rejected temp can fail its first cleanup, then be removed by this
+		// final pass. Preserve its warning even when the retry recovered fully.
+		if cleanup != nil || errors.Is(retErr, platform.ErrPublishCleanupIncomplete) {
 			warnExport(request.OnWarning)
 			if !published && retErr != nil {
 				retErr = errors.Join(retErr, cleanup)

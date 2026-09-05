@@ -13,6 +13,10 @@ import (
 // held publish directory.
 var ErrPublishDirectoryChanged = errors.New("publish directory changed")
 
+// ErrPublishCleanupIncomplete marks a failed cleanup attempt, even when a later
+// held-workspace cleanup succeeds. Callers should report their sanitized warning.
+var ErrPublishCleanupIncomplete = errors.New("publish cleanup incomplete")
+
 var publishWorkspaceCleanupCheckpoint = func() {}
 
 // PublishDir is a closeable capability over a held output directory.
