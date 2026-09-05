@@ -75,17 +75,12 @@ var (
 	ErrExportTargetChanged  = errors.New("export target changed")
 	ErrNoLogLines           = errors.New("no log lines in selected range")
 
-	errExportPipelineUnavailable  = errors.New("log export pipeline is not implemented")
 	errExportTargetSuffixOverflow = errors.New("export target suffix overflow")
 )
 
-// Export validates dependency defaults before handing the request to the
-// export pipeline. The pipeline is completed by the export orchestration task.
-func Export(_ context.Context, request ExportRequest) (ExportResult, error) {
-	if request.OpenLock == nil {
-		request.OpenLock = platform.OpenAdvisoryLock
-	}
-	return ExportResult{}, errExportPipelineUnavailable
+// Export creates a redacted archive and atomically publishes it.
+func Export(ctx context.Context, request ExportRequest) (ExportResult, error) {
+	return exportWithOps(ctx, request, exportOps{})
 }
 
 func normalizeExportRange(now time.Time, exportRange ExportRange) (ExportRange, error) {

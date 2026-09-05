@@ -99,6 +99,10 @@ func (r *boundedLineReader) Next(ctx context.Context) ([]byte, bool, error) {
 }
 
 func exportJSON(ctx context.Context, source io.Reader, destination io.Writer, exportRange ExportRange, redactor *Redactor) (exportFile, error) {
+	return exportJSONWithCheckpoints(ctx, source, destination, exportRange, redactor, nil)
+}
+
+func exportJSONWithCheckpoints(ctx context.Context, source io.Reader, destination io.Writer, exportRange ExportRange, redactor *Redactor, checkpoint func(exportStage) error) (exportFile, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -108,6 +112,11 @@ func exportJSON(ctx context.Context, source io.Reader, destination io.Writer, ex
 	reader := newBoundedLineReader(source)
 	var stats exportFile
 	for {
+		if checkpoint != nil {
+			if err := checkpoint(stageReadBatch); err != nil {
+				return stats, err
+			}
+		}
 		line, present, err := reader.Next(ctx)
 		if errors.Is(err, io.EOF) {
 			return stats, nil
@@ -122,10 +131,14 @@ func exportJSON(ctx context.Context, source io.Reader, destination io.Writer, ex
 		if !present {
 			continue
 		}
+		if checkpoint != nil {
+			if err := checkpoint(stageDecodeLine); err != nil {
+				return stats, err
+			}
+		}
 		if err := ctx.Err(); err != nil {
 			return stats, err
 		}
-
 		record, recordTime, valid := decodeExportRecord(line)
 		if !valid {
 			stats.SkippedInvalid++
@@ -142,6 +155,11 @@ func exportJSON(ctx context.Context, source io.Reader, destination io.Writer, ex
 		}
 		if err := ctx.Err(); err != nil {
 			return stats, err
+		}
+		if checkpoint != nil {
+			if err := checkpoint(stageWriteSpool); err != nil {
+				return stats, err
+			}
 		}
 		if _, err := destination.Write(append(encoded, '\n')); err != nil {
 			return stats, fmt.Errorf("write export log: %w", err)
