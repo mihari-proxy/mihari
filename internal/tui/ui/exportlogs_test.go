@@ -282,6 +282,7 @@ func TestExportLogsModel_ReopenKeepsGenerationMonotonicAcrossSuccesses(t *testin
 			t.Fatalf("generation=%d previous=%d", generation, previous)
 		}
 		m.Update(cmd())
+		m.CancelAndWait()
 		if !strings.Contains(m.View(100, 30), fmt.Sprintf(`C:\export-%d.zip`, wantCall)) {
 			t.Fatalf("submission %d success missing", wantCall)
 		}
