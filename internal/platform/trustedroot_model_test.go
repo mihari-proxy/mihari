@@ -202,7 +202,7 @@ func TestTrustedRoot_RejectsUntrustedAuthority(t *testing.T) {
 			}
 			r, err := openTrustedRoot(context.Background(), "/var/lib/mihari", RootPolicy{Mode: 0700}, b)
 			if r != nil {
-				_ = r.Close()
+				assertTestClose(t, r.Close)
 				t.Fatal("accepted untrusted authority")
 			}
 			if !errors.Is(err, os.ErrPermission) || errors.Is(err, ErrUnsafeComponent) {
@@ -218,7 +218,7 @@ func TestTrustedRoot_RejectsInvalidPathBeforeIO(t *testing.T) {
 			b := newTrustedModel()
 			r, err := openTrustedRoot(context.Background(), path, RootPolicy{Mode: 0700}, b)
 			if r != nil {
-				_ = r.Close()
+				assertTestClose(t, r.Close)
 			}
 			if err == nil || len(b.closed) != 0 {
 				t.Fatalf("invalid path reached IO: %v", err)
@@ -246,7 +246,7 @@ func TestTrustedRoot_RejectsChangedComponent(t *testing.T) {
 			b.nodes[index] = n
 			r, err := openTrustedRoot(context.Background(), "/var/lib/mihari", RootPolicy{Mode: 0700}, b)
 			if r != nil {
-				_ = r.Close()
+				assertTestClose(t, r.Close)
 				t.Fatal("accepted changed symlink component")
 			}
 			if !errors.Is(err, ErrUnsafeComponent) {
