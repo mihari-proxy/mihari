@@ -95,6 +95,21 @@ func (fs *PrivateFS) OpenAppend(path string) (*os.File, error) {
 	return fs.openAppendLocked(dir, name)
 }
 
+// RepairAccessChecked restores an existing file's private access policy after
+// verifying its identity. It never creates or rewrites file content.
+func (fs *PrivateFS) RepairAccessChecked(path string, expected FileIdentity) error {
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+	if fs.closed {
+		return errPrivateFSClosed
+	}
+	dir, name, err := fs.resolveFile(path)
+	if err != nil {
+		return err
+	}
+	return fs.repairAccessCheckedLocked(dir, name, expected)
+}
+
 // OpenReadChecked opens a file no-follow and requires the handle identity to match.
 func (fs *PrivateFS) OpenReadChecked(path string, expected FileIdentity) (*os.File, error) {
 	fs.mu.RLock()

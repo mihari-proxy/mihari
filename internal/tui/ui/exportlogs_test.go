@@ -49,15 +49,17 @@ func TestExportLogsModel_OpenDefaultsAndNavigation(t *testing.T) {
 		t.Fatalf("probes=%v", got)
 	}
 
-	// Range is initially focused and Enter cycles all choices.
+	// Enter starts editing; Tab cycles modes.
+	m.Update(key(tea.KeyEnter, ""))
 	for _, want := range []string{"Last 60 minutes", "Between", "All", "Last 24 hours"} {
-		_, consumed := m.Update(key(tea.KeyEnter, ""))
+		_, consumed := m.Update(key(tea.KeyTab, ""))
 		if !consumed || !strings.Contains(m.View(100, 30), want) {
 			t.Fatalf("range did not cycle to %q", want)
 		}
 	}
 	// Entering Between initializes its two local-time fields.
-	m.Update(key(tea.KeyEnter, ""))
+	m.Update(key(tea.KeyTab, ""))
+	m.Update(key(tea.KeyTab, ""))
 	m.Update(key(tea.KeyEnter, ""))
 	between := m.View(100, 30)
 	if !strings.Contains(between, "2026-09-01 23:41") || !strings.Contains(between, "2026-09-02 23:41") {
@@ -78,6 +80,7 @@ func TestExportLogsModel_OpenDefaultsAndNavigation(t *testing.T) {
 	if _, ok := m.Update(key(tea.KeyTab, "")); !ok || m.focus != exportFocusOutput {
 		t.Fatalf("third tab focus=%v want Output", m.focus)
 	}
+	m.Update(key(tea.KeyTab, "")) // Export button
 	if _, ok := m.Update(key(tea.KeyTab, "")); !ok || m.focus != exportFocusRange {
 		t.Fatalf("tab wrap focus=%v want Range", m.focus)
 	}
@@ -88,12 +91,14 @@ func TestExportLogsModel_OpenDefaultsAndNavigation(t *testing.T) {
 		t.Fatalf("shift+tab focus=%v want Range", m.focus)
 	}
 	m.Update(key(tea.KeyTab, ""))
+	m.Update(key(tea.KeyEnter, ""))
 	if _, ok := m.Update(tea.PasteMsg{Content: "chosen.zip"}); !ok {
 		t.Fatal("focused paste not consumed")
 	}
 	if _, ok := m.Update(struct{ X int }{1}); ok {
 		t.Fatal("unknown message consumed")
 	}
+	m.Update(key(tea.KeyEnter, "")) // apply field
 	if _, ok := m.Update(key(tea.KeyEsc, "")); !ok || !m.Closed() {
 		t.Fatal("esc did not close editable dialog")
 	}
@@ -124,6 +129,7 @@ func TestExportLogsModel_SubmitRecomputesDefaultAndRange(t *testing.T) {
 	if cmd != nil || !consumed {
 		t.Fatal("tab")
 	}
+	m.Update(key(tea.KeyDown, "")) // Export button
 	cmd, consumed = m.Update(key(tea.KeyEnter, ""))
 	if !consumed || cmd == nil || !m.Pending() {
 		t.Fatal("submit did not start synchronously")
@@ -151,10 +157,9 @@ func TestExportLogsModel_CustomBetweenValidationAndRequest(t *testing.T) {
 		return logging.ExportResult{Path: out}, nil
 	}})
 	m.Open()
-	m.Update(key(tea.KeyEnter, ""))
-	m.Update(key(tea.KeyEnter, "")) // Between
+	m.rangeKind = logging.RangeBetween
 	// Focus From, replace internals to exercise strict parser and retained parameters.
-	m.focus = exportFocusFrom
+	m.focus = exportFocusSubmit
 	m.from = "2026-09-03 00:00"
 	m.to = "2026-09-02 23:59"
 	m.output = out
@@ -188,7 +193,7 @@ func TestExportLogsModel_BetweenRejectsMalformedAndNoncanonicalTimes(t *testing.
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m.Open()
-			m.rangeKind, m.focus, m.from, m.to = logging.RangeBetween, exportFocusFrom, tc.from, tc.to
+			m.rangeKind, m.focus, m.from, m.to = logging.RangeBetween, exportFocusSubmit, tc.from, tc.to
 			if cmd, consumed := m.Update(key(tea.KeyEnter, "")); !consumed || cmd != nil {
 				t.Fatalf("submit=(%v,%v)", cmd, consumed)
 			}
@@ -209,7 +214,7 @@ func TestExportLogsModel_PendingCancelAndStaleResult(t *testing.T) {
 		return logging.ExportResult{}, ctx.Err()
 	}})
 	m.Open()
-	m.Update(key(tea.KeyTab, ""))
+	m.focus = exportFocusSubmit
 	cmd, _ := m.Update(key(tea.KeyEnter, ""))
 	<-started
 	before := m.output
@@ -272,7 +277,7 @@ func TestExportLogsModel_ReopenKeepsGenerationMonotonicAcrossSuccesses(t *testin
 	var previous uint64
 	for wantCall := 1; wantCall <= 2; wantCall++ {
 		m.Open()
-		m.Update(key(tea.KeyTab, ""))
+		m.focus = exportFocusSubmit
 		cmd, _ := m.Update(key(tea.KeyEnter, ""))
 		if cmd == nil {
 			t.Fatalf("submission %d missing command", wantCall)
@@ -303,7 +308,7 @@ func TestExportLogsModel_CancelAndWaitBeforeCommandRuns(t *testing.T) {
 		return logging.ExportResult{}, ctx.Err()
 	}})
 	m.Open()
-	m.Update(key(tea.KeyTab, ""))
+	m.focus = exportFocusSubmit
 	cmd, _ := m.Update(key(tea.KeyEnter, ""))
 	if cmd == nil {
 		t.Fatal("missing waiter command")
@@ -422,6 +427,7 @@ func TestExportLogsModel_QuitKeysAreNotConsumedOutsideText(t *testing.T) {
 		}
 	}
 	m.focus = exportFocusOutput
+	m.Update(key(tea.KeyEnter, ""))
 	if _, consumed := m.Update(key('q', "q")); !consumed || !strings.Contains(m.output, "q") {
 		t.Fatal("text q not edited")
 	}

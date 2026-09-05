@@ -87,19 +87,17 @@ func TestModel_LoggingRowsShowDaemonStateAndLocalWriterHealth(t *testing.T) {
 
 }
 
-func TestModel_LoggingDirectoryEnterShowsPathDetail(t *testing.T) {
+func TestModel_LoggingDirectoryEnterCopiesPath(t *testing.T) {
 	model, _ := loggingModel("info", 4)
 	model.focusID = rowLogDirectory
-	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
-	if command != nil {
-		t.Fatal("directory detail unexpectedly returned a command")
+	var copied string
+	model.writeClipboard = func(s string) error { copied = s; return nil }
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if copied != model.logging.Dir || model.detail != nil || cmd == nil {
+		t.Fatal("directory must copy and show transient feedback")
 	}
-	if model.detail == nil || model.detail.detail != model.logging.Dir {
-		t.Fatalf("directory detail=%v", model.detail)
-	}
-	if view := model.View(); !strings.Contains(view, model.logging.Dir) {
-		t.Fatal("directory detail modal omitted the logging path")
+	if systemRowByID(model, rowLogDirectory).label != "Logging Dir" {
+		t.Fatal("wrong directory label")
 	}
 }
 

@@ -446,7 +446,7 @@ func TestAttachRunExportLogsBuildsOnceOnFinalClientModelWithProgramContext(t *te
 		t.Fatal("new export overlay must start closed")
 	}
 	exportLogs.Open()
-	exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if waiter, consumed := exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); waiter == nil || !consumed {
 		t.Fatal("attached exporter did not submit")
 	}
@@ -479,7 +479,7 @@ func TestRunCleanupOwnsExportBeforeApplierAndResourcesWhenWaiterCmdIsUnexecuted(
 		},
 	})
 	exportModel.Open()
-	exportModel.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	exportModel.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	waiter, consumed := exportModel.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if waiter == nil || !consumed {
 		t.Fatal("submit did not synchronously own export")

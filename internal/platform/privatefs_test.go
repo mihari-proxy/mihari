@@ -187,6 +187,9 @@ func TestPrivateFS_OpenReadCheckedIdentityMismatch(t *testing.T) {
 	if !errors.Is(err, ErrIdentityMismatch) {
 		t.Fatalf("err=%v want ErrIdentityMismatch", err)
 	}
+	if err := fs.RepairAccessChecked(paths.DaemonLog, ident); !errors.Is(err, ErrIdentityMismatch) {
+		t.Fatalf("repair must reject replaced identity: %v", err)
+	}
 }
 
 func TestPrivateFS_ReplaceEmptyKeepsOldHandleReadable(t *testing.T) {
@@ -262,6 +265,7 @@ func TestPrivateFS_CloseIdempotentAndBlocksOps(t *testing.T) {
 		fn   func() error
 	}{
 		{"EnsureDir", func() error { return fs.EnsureDir(paths.LogDir) }},
+		{"RepairAccessChecked", func() error { return fs.RepairAccessChecked(paths.DaemonLog, ident) }},
 		{"OpenAppend", func() error { _, err := fs.OpenAppend(paths.DaemonLog); return err }},
 		{"OpenReadChecked", func() error { _, err := fs.OpenReadChecked(paths.DaemonLog, ident); return err }},
 		{"CreateTemp", func() error { _, err := fs.CreateTemp(paths.LogDir, "tmp-*"); return err }},

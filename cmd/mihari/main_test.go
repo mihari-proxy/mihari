@@ -259,10 +259,10 @@ func TestOpenLoggingErrorResourcesComposeThroughFactoryAndDialogSubmission(t *te
 	options.Now = func() time.Time { return time.Date(2026, 9, 5, 12, 0, 0, 0, time.Local) }
 	dialog := ui.NewExportLogsModel(options)
 	t.Cleanup(dialog.CancelAndWait)
-	if cmd, consumed := dialog.Update(ui.OpenExportLogsMsg{}); cmd != nil || !consumed {
+	if cmd, consumed := dialog.Update(ui.OpenExportLogsMsg{}); cmd == nil || !consumed {
 		t.Fatal("dialog did not open")
 	}
-	dialog.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	dialog.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	waiter, consumed := dialog.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if waiter == nil || !consumed {
 		t.Fatal("dialog did not submit partial resources export")

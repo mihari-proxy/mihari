@@ -126,21 +126,33 @@ const (
 	exportFocusFrom
 	exportFocusTo
 	exportFocusOutput
+	exportFocusSubmit
 )
 
 // ExportLogsModel is the reusable shared log export dialog.
 type ExportLogsModel struct {
-	options                         ExportLogsOptions
-	runner                          *exportRunner
-	closed, pending                 bool
-	generation                      uint64
-	openedAt                        time.Time
-	rangeKind                       logging.RangeKind
-	from, to, output, defaultOutput string
-	focus                           exportFocus
-	cursors                         map[exportFocus]int
-	resultPath, message             string
-	warning                         bool
+	options                               ExportLogsOptions
+	runner                                *exportRunner
+	closed, pending                       bool
+	generation                            uint64
+	openedAt                              time.Time
+	rangeKind                             logging.RangeKind
+	from, to, output, defaultOutput       string
+	focus                                 exportFocus
+	cursors                               map[exportFocus]int
+	resultPath, message                   string
+	warning                               bool
+	editing, discardOpen, discardSelected bool
+	editValue                             string
+	editRange                             logging.RangeKind
+	clockGeneration                       uint64
+}
+
+type exportClockMsg struct{ generation uint64 }
+
+func (m *ExportLogsModel) clockCmd() tea.Cmd {
+	gen := m.clockGeneration
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return exportClockMsg{gen} })
 }
 
 // NewExportLogsModel creates an initially closed dialog without an idle goroutine.
@@ -172,13 +184,24 @@ func (m *ExportLogsModel) Open() {
 	m.cursors = map[exportFocus]int{exportFocusFrom: TextCursorEnd(m.from), exportFocusTo: TextCursorEnd(m.to), exportFocusOutput: TextCursorEnd(m.output)}
 	m.resultPath, m.message, m.closed = "", "", false
 	m.warning = false
+	m.editing, m.discardOpen, m.discardSelected = false, false, false
+	m.clockGeneration++
 }
 
 // Update handles dialog-owned input and returns whether the root must stop routing it.
 func (m *ExportLogsModel) Update(message tea.Msg) (tea.Cmd, bool) {
 	if _, ok := message.(OpenExportLogsMsg); ok {
+		if m.pending {
+			return nil, true
+		}
 		m.Open()
-		return nil, true
+		return m.clockCmd(), true
+	}
+	if tick, ok := message.(exportClockMsg); ok {
+		if m.closed || tick.generation != m.clockGeneration {
+			return nil, true
+		}
+		return m.clockCmd(), true
 	}
 	if m.closed {
 		return nil, false
@@ -237,33 +260,73 @@ func (m *ExportLogsModel) Update(message tea.Msg) (tea.Cmd, bool) {
 		}
 		return nil, false
 	}
+	if m.discardOpen {
+		if isKey {
+			switch key.String() {
+			case "esc":
+				m.discardOpen = false
+			case "left", "right", "up", "down", "tab", "shift+tab":
+				m.discardSelected = !m.discardSelected
+			case "enter":
+				m.discardOpen = false
+				if m.discardSelected {
+					m.rangeKind = m.editRange
+					m.setFocusedValue(m.editValue)
+					m.editing = false
+				}
+			}
+		}
+		return nil, isKey || IsTextEditMsg(message)
+	}
+	if m.editing {
+		if isKey {
+			switch key.String() {
+			case "esc":
+				m.discardOpen, m.discardSelected = true, false
+				return nil, true
+			case "enter":
+				m.editing, m.message = false, ""
+				return nil, true
+			}
+			if m.focus == exportFocusRange {
+				switch key.String() {
+				case "down", "right", "tab":
+					m.cycleRange()
+				case "up", "left", "shift+tab":
+					for i := 0; i < 3; i++ {
+						m.cycleRange()
+					}
+				}
+				return nil, true
+			}
+		}
+		if m.textFocused() && IsTextEditMsg(message) {
+			return m.editFocused(message), true
+		}
+		return nil, isKey
+	}
 	if isKey {
 		switch key.String() {
 		case "esc":
 			m.closed = true
 			return nil, true
 		case "q":
-			if !m.textFocused() {
-				return nil, false
-			}
-		case "tab":
+			return nil, false
+		case "tab", "down":
 			m.moveFocus(1)
 			return nil, true
-		case "shift+tab":
+		case "shift+tab", "up":
 			m.moveFocus(-1)
 			return nil, true
 		case "enter":
-			if m.focus == exportFocusRange {
-				m.cycleRange()
-				return nil, true
+			if m.focus == exportFocusSubmit {
+				return m.submit(), true
 			}
-			return m.submit(), true
+			m.editing, m.editValue, m.editRange = true, m.focusedValue(), m.rangeKind
+			return nil, true
 		}
 	}
-	if m.textFocused() && IsTextEditMsg(message) {
-		return m.editFocused(message), true
-	}
-	if isKey {
+	if isKey || IsTextEditMsg(message) {
 		return nil, true
 	}
 	return nil, false
@@ -344,9 +407,9 @@ func (m *ExportLogsModel) cycleRange() {
 }
 func (m *ExportLogsModel) editableFocuses() []exportFocus {
 	if m.rangeKind == logging.RangeBetween {
-		return []exportFocus{exportFocusRange, exportFocusFrom, exportFocusTo, exportFocusOutput}
+		return []exportFocus{exportFocusRange, exportFocusFrom, exportFocusTo, exportFocusOutput, exportFocusSubmit}
 	}
-	return []exportFocus{exportFocusRange, exportFocusOutput}
+	return []exportFocus{exportFocusRange, exportFocusOutput, exportFocusSubmit}
 }
 func (m *ExportLogsModel) moveFocus(delta int) {
 	fields := m.editableFocuses()
@@ -359,7 +422,31 @@ func (m *ExportLogsModel) moveFocus(delta int) {
 	}
 	m.focus = fields[(index+delta+len(fields))%len(fields)]
 }
-func (m *ExportLogsModel) textFocused() bool { return m.focus != exportFocusRange }
+func (m *ExportLogsModel) textFocused() bool {
+	return m.focus == exportFocusFrom || m.focus == exportFocusTo || m.focus == exportFocusOutput
+}
+func (m *ExportLogsModel) focusedValue() string {
+	switch m.focus {
+	case exportFocusFrom:
+		return m.from
+	case exportFocusTo:
+		return m.to
+	case exportFocusOutput:
+		return m.output
+	}
+	return ""
+}
+func (m *ExportLogsModel) setFocusedValue(value string) {
+	switch m.focus {
+	case exportFocusFrom:
+		m.from = value
+	case exportFocusTo:
+		m.to = value
+	case exportFocusOutput:
+		m.output = value
+	}
+	m.cursors[m.focus] = TextCursorEnd(value)
+}
 func (m *ExportLogsModel) editFocused(message tea.Msg) tea.Cmd {
 	value := ""
 	switch m.focus {
@@ -389,6 +476,14 @@ func (m *ExportLogsModel) View(width, height int) string {
 		return ""
 	}
 	theme := DefaultTheme()
+	if m.discardOpen {
+		discard, keep := theme.Button, theme.ButtonActive
+		if m.discardSelected {
+			discard, keep = keep, discard
+		}
+		body := theme.Title.Render("Discard changes?") + "\n\nDiscard changes to this field?\n\n" + discard.Render("Discard") + "  " + keep.Render("Keep editing") + "\n\n←/→ or Tab select  Enter confirm  Esc keep editing"
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, theme.Dialog.Width(min(76, max(36, width-4))).Render(body))
+	}
 	if m.resultPath != "" {
 		body := theme.Title.Render(ExportComplete) + "\n" + m.resultPath
 		body += "\n\nReview before sharing: node names, domains/IPs, and traffic metadata may remain."
@@ -405,14 +500,21 @@ func (m *ExportLogsModel) View(width, height int) string {
 		marker := "  "
 		if m.focus == field && !m.pending {
 			marker = FocusMarker
+			if m.editing {
+				value = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("15")).Render(value)
+			}
+		}
+		if field == exportFocusRange && m.rangeKind == logging.RangeBetween {
+			value += "  " + theme.Muted.Render("Use YYYY-MM-DD HH:MM format")
 		}
 		return marker + label + "  " + value
 	}
-	lines := []string{theme.Title.Render(ExportLogsTitle), "", "  " + ExportNowLabel + "  " + m.openedAt.Format("2006-01-02 15:04:05 -07:00"), line(exportFocusRange, ExportRangeLabel, exportRangeLabel(m.rangeKind))}
+	lines := []string{theme.Title.Render(ExportLogsTitle), "", "  " + ExportNowLabel + "  " + m.options.Now().Format("2006-01-02 15:04:05 -07:00"), line(exportFocusRange, ExportRangeLabel, exportRangeLabel(m.rangeKind))}
 	if m.rangeKind == logging.RangeBetween {
 		lines = append(lines, line(exportFocusFrom, ExportFromLabel, m.from), line(exportFocusTo, ExportToLabel, m.to))
 	}
 	lines = append(lines, line(exportFocusOutput, ExportOutputLabel, m.output))
+	lines = append(lines, "", line(exportFocusSubmit, ExportLabel, ""))
 	if m.pending {
 		lines = append(lines, "", ExportPending)
 	}
@@ -422,7 +524,18 @@ func (m *ExportLogsModel) View(width, height int) string {
 	if m.warning {
 		lines = append(lines, "", exportWarningNotice)
 	}
-	lines = append(lines, "", RenderFooter("", ModeExportLogs, FooterOpt{}))
+	help := ExportFormHelp
+	switch {
+	case m.pending:
+		help = "Esc cancel export"
+	case m.editing && m.focus == exportFocusRange:
+		help = "↑/↓/←/→ or Tab mode  Enter apply  Esc discard"
+	case m.editing:
+		help = "Enter apply  Esc discard"
+	case m.focus == exportFocusSubmit:
+		help = "↑/↓ fields  Enter export  Esc cancel"
+	}
+	lines = append(lines, "", help)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, theme.Dialog.Width(min(84, max(36, width-4))).Render(strings.Join(lines, "\n")))
 }
 

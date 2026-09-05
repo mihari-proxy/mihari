@@ -14,6 +14,7 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 - 控制面新增只读端点 `GET /v1/service/status`,返回 mihari 自身的 OS 服务注册状态(`running`/`stopped`/`not_installed`/`unknown`);`GET /v1/core` 增加可选 `localReady`/`localVersion` 字段反映本地 core 就绪。两者均为向后兼容增量,不改变现有协议字段、onboarding `Complete` 契约或持久化格式。
 - `/v1` 的 `CoreStatus`、`CoreInstallResult` 增加可选 `channel`;`MutationRequest` 增加可选 `channel` 以显式指定本次安装通道。均为向后兼容增量。
 - `GET /v1/logging` 与 `PATCH /v1/logging` 是稳定的 v1 本地控制协议：前者返回完整 Logging 状态，后者在 revision 预检后更新级别、单文件大小或保留数量。它们供 TUI 使用，不增加 CLI 命令。
+- Windows 私有日志的授权主体优先为数据根的个人 owner SID。owner 为 Administrators 时，从既有 DACL 的显式个人用户 full-control ACE 解析主体，再写入个人用户与 LocalSystem 的受保护 DACL，避免未提权用户失去读取权限；多个用户、deny ACE 或无法解析的授权主体均拒绝猜测。旧 ACL 已丢失个人授权时，仅成功以 WRITE_DAC 打开数据根的交互进程可补回自身 SID，LocalSystem 不猜测桌面用户。日志写入器持有自身序列锁后，修复三个固定日志序列的当前文件、归档和锁文件，通过 no-follow handle 核对文件 identity，不改内容；其他序列轮转导致 identity 变化时有界重试。SYSTEM 尚不能确定用户时仅保留受保护的旧 BA/SYSTEM 根权限，不回写根目录。子项创建及加固重新读取根策略，并在应用后复查，避免服务缓存或并发迁移覆盖个人授权。
 - daemon 装配失败但控制通道可 listen 时驻留降级控制面,`GET /v1/status` 的 `health` 为 `degraded`,并带可省略 `last_error`。
 - OS 服务 `Start` 等待控制通道 Ready;listen 失败则向 SCM 返回错误,不得保持假 running。
 - 托管端口预检失败时 details 可含占用 PID 与进程基名;不自动杀进程。
@@ -85,7 +86,7 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 - 每次安装保持**一个数据根目录**(可用 `MIHARI_DATA` 覆盖):Windows 默认 `%USERPROFILE%\.mihari`,macOS/Linux 默认 `$HOME/.mihari`。
 - 几乎所有内容都位于该根目录下:设置、控制令牌(`control.token`)、运行时配置、核心二进制、订阅、GeoIP、面板资产、日志与暂存。
 - 文件日志布局:`logs/mihari-daemon.log`、`logs/mihari-tui.log`、`logs/mihomo.log`。TUI 在本地对各来源取得有界快照，按时间窗过滤并递归二次脱敏后，把固定 entry 与 `manifest.json` 原子发布到 `logs-export/` 或用户选择的既有目录；不读取 settings、token、订阅、runtime config 或 lock file，也不覆盖已有目标。
-- 日志与默认导出目录经 `PrivateFS` 创建/加固:Unix `0700` 目录/`0600` 文件;Windows 受保护 DACL 只授予数据根 owner 与 LocalSystem。跨进程协调使用相邻 `*.lock` 文件;打开 `logs/` 及文件后每一跳 no-follow,拒绝中间与最终的 symlink/reparse/junction。
+- 日志与默认导出目录经 `PrivateFS` 创建/加固:Unix `0700` 目录/`0600` 文件;Windows 受保护 DACL 授予解析出的个人数据用户与 LocalSystem（尚未迁移的旧 SYSTEM 启动暂保留 BA/SYSTEM）。跨进程协调使用相邻 `*.lock` 文件;打开 `logs/` 及文件后每一跳 no-follow,拒绝中间与最终的 symlink/reparse/junction。
 - 导出从校验目标到提交结束一直持有真实父目录 identity，并只用目录句柄内的 basename 创建 workspace 和发布；生成期间外部替换可见父路径会安全失败，不会跟随到替代目录。成功发布后父目录若被外部再次改名，先前显示的绝对路径可能失效。
 - Unix workspace 清理只在能证明父目录 namespace 由同 UID、数据根 owner 或本机 root/管理员等受信主体控制时按名删除；不可信共享父目录在内容清理成功时允许留下空的 0700 私有 workspace，清理 IO 失败则只能报告可能有内容残留。Windows 从创建起持有不 share-delete 的 workspace guard，直至验证并清理完成。
 - 需要本地数据根的选定命令必须先 `Paths.Absolute()`,再 `NewPrivateFS(absolutePaths.Root)`,然后才允许 `EnsureDirs`、默认 in-root token 或 Settings IO。`EnsureDirs` 可预创建 `logs/` 但不是 root 创建/加固入口。`--help`/`--version` 不得调用该路径。root/LocalSystem 遇到缺失 data root 必须零目录 IO fail closed,不得创建仅 root/System 可用的替代根。该 `NewPrivateFS` 失败不得写入 CLI `SetupError`(避免拦截 TUI);TUI 可继续运行并接管 `PrivateFS=nil`,daemon 不得在失败后继续目录/Settings IO。daemon 与 TUI 复用并接管这一个进程级 `PrivateFS` capability,不得在 `EnsureDirs`/Settings 之后再次调用 `NewPrivateFS`。
