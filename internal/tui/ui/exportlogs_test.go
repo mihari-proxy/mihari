@@ -432,3 +432,44 @@ func TestExportLogsModel_QuitKeysAreNotConsumedOutsideText(t *testing.T) {
 		t.Fatal("text q not edited")
 	}
 }
+
+func TestExportLogsModel_CopyShowsSuccessBelowHelp(t *testing.T) {
+	const notice = "Log file path copied!"
+	var copied string
+	var copyErr error
+	m := NewExportLogsModel(ExportLogsOptions{Now: exportTestNow, DefaultDir: t.TempDir(), WriteClipboard: func(path string) error { copied = path; return copyErr }})
+	m.Open()
+	m.pending = true
+	m.Update(exportResultMsg{Generation: m.generation, Result: logging.ExportResult{Path: "C:/logs/export.zip"}})
+	if strings.Contains(m.View(120, 30), notice) {
+		t.Fatal("copy notice shown before copying")
+	}
+	m.Update(key(tea.KeyEnter, ""))
+	view := m.View(120, 30)
+	if copied != "C:/logs/export.zip" || !strings.Contains(view, DefaultTheme().Success.Render(notice)) {
+		t.Fatalf("copy feedback missing: %s", view)
+	}
+	if strings.Index(view, notice) < strings.Index(view, ExportSuccessHelp) {
+		t.Fatal("notice must be below help")
+	}
+	// Presentation follows the copy outcome even if the message wording changes.
+	m.message = "Copied to clipboard"
+	if !strings.Contains(m.View(120, 30), DefaultTheme().Success.Render(m.message)) {
+		t.Fatal("success style depends on message text")
+	}
+	copyErr = errors.New("clipboard unavailable")
+	m.Update(key(tea.KeyEnter, ""))
+	view = m.View(120, 30)
+	if strings.Contains(view, notice) || !strings.Contains(view, ExportCopyFailed) {
+		t.Fatal("failed retry retained success feedback")
+	}
+	copyErr = nil
+	m.Update(key(tea.KeyEnter, ""))
+	if !strings.Contains(m.View(120, 30), notice) {
+		t.Fatal("successful retry did not clear failure")
+	}
+	m.Open()
+	if strings.Contains(m.View(120, 30), notice) {
+		t.Fatal("reopened dialog retained copy feedback")
+	}
+}
