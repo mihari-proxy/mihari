@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -294,6 +295,35 @@ func TestResolveLayout_WindowsDriveRootRemainsAbsolute(t *testing.T) {
 	}
 	if got.Data.Root != `D:\` || got.BaseDir != `D:\` {
 		t.Fatalf("drive root was not preserved: %+v", got)
+	}
+}
+
+func TestResolveLayout_WindowsRootMatchesNativeClean(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{name: "bare UNC share", data: `\\server\share`, want: `\\server\share`},
+		{name: "rooted UNC share", data: `\\server\share\`, want: `\\server\share\`},
+		{name: "drive root", data: `C:\`, want: `C:\`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if runtime.GOOS == "windows" {
+				if native := filepath.Clean(tt.data); native != tt.want {
+					t.Fatalf("native filepath.Clean(%q)=%q want=%q", tt.data, native, tt.want)
+				}
+			}
+			defaults := LayoutDefaults{OS: "windows", BaseDir: `D:\base`, InstallRoot: `C:\Program Files\Mihari`}
+			got, err := ResolveLayout(LayoutInput{CWD: `D:\work`, Data: tt.data}, defaults)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Data.Root != tt.want || got.BaseDir != tt.want {
+				t.Fatalf("root=%q base=%q want native clean=%q", got.Data.Root, got.BaseDir, tt.want)
+			}
+		})
 	}
 }
 

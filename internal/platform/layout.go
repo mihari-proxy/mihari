@@ -226,7 +226,7 @@ func targetClean(osName, value string) string {
 		return pathpkg.Clean(value)
 	}
 	value = strings.ReplaceAll(value, "/", `\`)
-	if root, tail, ok := splitWindowsRoot(value); ok {
+	if root, tail, rooted, ok := splitWindowsRoot(value); ok {
 		parts := make([]string, 0, strings.Count(tail, `\`)+1)
 		for _, part := range strings.Split(tail, `\`) {
 			switch part {
@@ -241,40 +241,44 @@ func targetClean(osName, value string) string {
 			}
 		}
 		if len(parts) == 0 {
-			return root + `\`
+			if rooted {
+				return root + `\`
+			}
+			return root
 		}
 		return root + `\` + strings.Join(parts, `\`)
 	}
 	return strings.ReplaceAll(pathpkg.Clean(strings.ReplaceAll(value, `\`, "/")), "/", `\`)
 }
 
-func splitWindowsRoot(value string) (root, tail string, ok bool) {
+func splitWindowsRoot(value string) (root, tail string, rooted, ok bool) {
 	if len(value) >= 3 && isASCIILetter(value[0]) && value[1] == ':' && value[2] == '\\' {
-		return value[:2], strings.TrimLeft(value[3:], `\`), true
+		return value[:2], strings.TrimLeft(value[3:], `\`), true, true
 	}
 	if !strings.HasPrefix(value, `\\`) {
-		return "", "", false
+		return "", "", false, false
 	}
 	rest := strings.TrimLeft(value, `\`)
 	serverEnd := strings.IndexByte(rest, '\\')
 	if serverEnd <= 0 {
-		return "", "", false
+		return "", "", false, false
 	}
 	server := rest[:serverEnd]
 	rest = strings.TrimLeft(rest[serverEnd+1:], `\`)
 	if rest == "" {
-		return "", "", false
+		return "", "", false, false
 	}
 	shareEnd := strings.IndexByte(rest, '\\')
 	share := rest
 	if shareEnd >= 0 {
+		rooted = true
 		share = rest[:shareEnd]
 		tail = strings.TrimLeft(rest[shareEnd+1:], `\`)
 	}
 	if share == "" {
-		return "", "", false
+		return "", "", false, false
 	}
-	return `\\` + server + `\` + share, tail, true
+	return `\\` + server + `\` + share, tail, rooted, true
 }
 
 func targetIsAbs(osName, value string) bool {
@@ -282,7 +286,7 @@ func targetIsAbs(osName, value string) bool {
 		return pathpkg.IsAbs(value)
 	}
 	value = strings.ReplaceAll(value, "/", `\`)
-	_, _, ok := splitWindowsRoot(value)
+	_, _, _, ok := splitWindowsRoot(value)
 	return ok
 }
 
