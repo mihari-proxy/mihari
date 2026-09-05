@@ -70,21 +70,15 @@ func discoveryFDACL(target int, strict bool, owner uint32) (err error) {
 			if e := unix.Fstatat(fds[i], name, &st, unix.AT_SYMLINK_NOFOLLOW); e != nil {
 				return e
 			}
-			if !sameDiscoveryStat(st, nodes[i]) {
-				return ErrIdentityMismatch
-			}
 			if e := unix.Fstatfs(fds[i+1], &fs); e != nil {
 				return e
-			}
-			if fs.Type != unix.PROC_SUPER_MAGIC {
-				return os.ErrPermission
 			}
 			id, e := linuxMountID(fds[i+1])
 			if e != nil {
 				return e
 			}
-			if id != mountID {
-				return ErrIdentityMismatch
+			if e := checkDiscoveryProcDirectory(st, nodes[i], fs, id, mountID); e != nil {
+				return e
 			}
 		}
 		var held, followed unix.Stat_t
@@ -92,7 +86,7 @@ func discoveryFDACL(target int, strict bool, owner uint32) (err error) {
 		if e := unix.Fstatat(fd, strconv.Itoa(target), &reference, unix.AT_SYMLINK_NOFOLLOW); e != nil {
 			return e
 		}
-		if reference.Mode&unix.S_IFMT != unix.S_IFLNK || reference.Uid != uint32(os.Geteuid()) || reference.Nlink != 1 || reference.Dev != nodes[len(nodes)-1].Dev {
+		if !validDiscoveryFDReference(reference, nodes[len(nodes)-1].Dev, uint32(os.Geteuid())) {
 			return os.ErrPermission
 		}
 		if e := unix.Fstat(target, &held); e != nil {
@@ -136,4 +130,29 @@ func discoveryFDACL(target int, strict bool, owner uint32) (err error) {
 
 func sameDiscoveryStat(a, b unix.Stat_t) bool {
 	return a.Dev == b.Dev && a.Ino == b.Ino && a.Mode == b.Mode && a.Uid == b.Uid && a.Gid == b.Gid && a.Nlink == b.Nlink
+}
+
+func checkDiscoveryProcDirectory(st, original unix.Stat_t, fs unix.Statfs_t, mountID, originalMountID uint64) error {
+	if st.Mode&unix.S_IFMT != unix.S_IFDIR || original.Mode&unix.S_IFMT != unix.S_IFDIR || st.Nlink == 0 || original.Nlink == 0 {
+		return ErrIdentityMismatch
+	}
+	// Proc directory link counts are live namespace metadata: creating or
+	// reaping a process changes /proc's count without replacing the directory.
+	// Ignore only that count, only for still-linked proc directories. Target
+	// objects and the kernel fd-reference symlink retain their link checks.
+	st.Nlink = original.Nlink
+	if !sameDiscoveryStat(st, original) {
+		return ErrIdentityMismatch
+	}
+	if fs.Type != unix.PROC_SUPER_MAGIC {
+		return os.ErrPermission
+	}
+	if mountID != originalMountID {
+		return ErrIdentityMismatch
+	}
+	return nil
+}
+
+func validDiscoveryFDReference(st unix.Stat_t, procDevice uint64, owner uint32) bool {
+	return st.Mode&unix.S_IFMT == unix.S_IFLNK && st.Uid == owner && st.Nlink == 1 && st.Dev == procDevice
 }
