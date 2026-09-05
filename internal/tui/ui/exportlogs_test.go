@@ -68,6 +68,26 @@ func TestExportLogsModel_OpenDefaultsAndNavigation(t *testing.T) {
 			t.Fatal("tab not consumed")
 		}
 	}
+	m.focus = exportFocusRange
+	if _, ok := m.Update(key(tea.KeyTab, "")); !ok || m.focus != exportFocusFrom {
+		t.Fatalf("tab focus=%v want From", m.focus)
+	}
+	if _, ok := m.Update(key(tea.KeyTab, "")); !ok || m.focus != exportFocusTo {
+		t.Fatalf("second tab focus=%v want To", m.focus)
+	}
+	if _, ok := m.Update(key(tea.KeyTab, "")); !ok || m.focus != exportFocusOutput {
+		t.Fatalf("third tab focus=%v want Output", m.focus)
+	}
+	if _, ok := m.Update(key(tea.KeyTab, "")); !ok || m.focus != exportFocusRange {
+		t.Fatalf("tab wrap focus=%v want Range", m.focus)
+	}
+	if _, ok := m.Update(key(tea.KeyTab, "")); !ok || m.focus != exportFocusFrom {
+		t.Fatalf("tab focus=%v want From", m.focus)
+	}
+	if _, ok := m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}); !ok || m.focus != exportFocusRange {
+		t.Fatalf("shift+tab focus=%v want Range", m.focus)
+	}
+	m.Update(key(tea.KeyTab, ""))
 	if _, ok := m.Update(tea.PasteMsg{Content: "chosen.zip"}); !ok {
 		t.Fatal("focused paste not consumed")
 	}
@@ -154,6 +174,31 @@ func TestExportLogsModel_CustomBetweenValidationAndRequest(t *testing.T) {
 	m.Update(cmd())
 }
 
+func TestExportLogsModel_BetweenRejectsMalformedAndNoncanonicalTimes(t *testing.T) {
+	m := NewExportLogsModel(ExportLogsOptions{Now: exportTestNow, DefaultDir: t.TempDir()})
+	cases := []struct {
+		name string
+		from string
+		to   string
+	}{
+		{name: "malformed", from: "not-a-time", to: "2026-09-02 23:41"},
+		{name: "noncanonical", from: "2026-9-2 3:04", to: "2026-09-02 23:41"},
+		{name: "seconds", from: "2026-09-02 03:04:05", to: "2026-09-02 23:41"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m.Open()
+			m.rangeKind, m.focus, m.from, m.to = logging.RangeBetween, exportFocusFrom, tc.from, tc.to
+			if cmd, consumed := m.Update(key(tea.KeyEnter, "")); !consumed || cmd != nil {
+				t.Fatalf("submit=(%v,%v)", cmd, consumed)
+			}
+			if !strings.Contains(m.View(100, 30), ExportTimeInvalid) || m.from != tc.from || m.to != tc.to {
+				t.Fatalf("invalid input changed or error absent: from=%q to=%q", m.from, m.to)
+			}
+		})
+	}
+}
+
 func TestExportLogsModel_PendingCancelAndStaleResult(t *testing.T) {
 	started := make(chan struct{})
 	exited := make(chan struct{})
@@ -188,6 +233,63 @@ func TestExportLogsModel_PendingCancelAndStaleResult(t *testing.T) {
 	m.Update(cmd())
 	if m.Pending() || !strings.Contains(m.View(100, 30), "Export cancelled") {
 		t.Fatal("cancel result not shown")
+	}
+}
+
+func TestExportLogsModel_CancelRequestDoesNotHidePublishedSuccess(t *testing.T) {
+	out := `C:\published.zip`
+	var copied string
+	m := NewExportLogsModel(ExportLogsOptions{
+		Now: exportTestNow, DefaultDir: t.TempDir(),
+		WriteClipboard: func(path string) error { copied = path; return nil },
+	})
+	m.Open()
+	m.pending, m.generation = true, 7
+	m.Update(key(tea.KeyEsc, ""))
+	if !m.Pending() {
+		t.Fatal("Esc must leave the model pending until result delivery")
+	}
+	m.Update(exportResultMsg{Generation: 7, Result: logging.ExportResult{Path: out}})
+	view := m.View(100, 30)
+	if m.Pending() || !strings.Contains(view, ExportComplete) || !strings.Contains(view, out) || strings.Contains(view, ExportCancelled) {
+		t.Fatalf("successful published result was hidden:\n%s", view)
+	}
+	m.Update(key(tea.KeyEnter, ""))
+	if copied != out {
+		t.Fatalf("copied=%q want %q", copied, out)
+	}
+}
+
+func TestExportLogsModel_ReopenKeepsGenerationMonotonicAcrossSuccesses(t *testing.T) {
+	call := 0
+	m := NewExportLogsModel(ExportLogsOptions{
+		Now: exportTestNow, DefaultDir: t.TempDir(),
+		Export: func(context.Context, logging.ExportRequest) (logging.ExportResult, error) {
+			call++
+			return logging.ExportResult{Path: fmt.Sprintf(`C:\export-%d.zip`, call)}, nil
+		},
+	})
+	var previous uint64
+	for wantCall := 1; wantCall <= 2; wantCall++ {
+		m.Open()
+		m.Update(key(tea.KeyTab, ""))
+		cmd, _ := m.Update(key(tea.KeyEnter, ""))
+		if cmd == nil {
+			t.Fatalf("submission %d missing command", wantCall)
+		}
+		generation := m.generation
+		if generation <= previous {
+			t.Fatalf("generation=%d previous=%d", generation, previous)
+		}
+		m.Update(cmd())
+		if !strings.Contains(m.View(100, 30), fmt.Sprintf(`C:\export-%d.zip`, wantCall)) {
+			t.Fatalf("submission %d success missing", wantCall)
+		}
+		m.Update(key(tea.KeyEsc, ""))
+		if !m.Closed() {
+			t.Fatalf("submission %d did not close", wantCall)
+		}
+		previous = generation
 	}
 }
 

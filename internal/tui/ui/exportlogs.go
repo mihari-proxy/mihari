@@ -119,7 +119,7 @@ const (
 type ExportLogsModel struct {
 	options                         ExportLogsOptions
 	runner                          *exportRunner
-	closed, pending, cancelAsked    bool
+	closed, pending                 bool
 	generation                      uint64
 	openedAt                        time.Time
 	rangeKind                       logging.RangeKind
@@ -156,7 +156,7 @@ func (m *ExportLogsModel) Open() {
 	m.output = m.defaultOutput
 	m.focus = exportFocusRange
 	m.cursors = map[exportFocus]int{exportFocusFrom: TextCursorEnd(m.from), exportFocusTo: TextCursorEnd(m.to), exportFocusOutput: TextCursorEnd(m.output)}
-	m.resultPath, m.message, m.cancelAsked, m.closed = "", "", false, false
+	m.resultPath, m.message, m.closed = "", "", false
 }
 
 // Update handles dialog-owned input and returns whether the root must stop routing it.
@@ -173,9 +173,8 @@ func (m *ExportLogsModel) Update(message tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		m.pending = false
-		if m.cancelAsked || errors.Is(result.Err, context.Canceled) {
+		if errors.Is(result.Err, context.Canceled) {
 			m.message = ExportCancelled
-			m.cancelAsked = false
 			return nil, true
 		}
 		if result.Err != nil {
@@ -212,7 +211,6 @@ func (m *ExportLogsModel) Update(message tea.Msg) (tea.Cmd, bool) {
 	}
 	if m.pending {
 		if isKey && key.String() == "esc" {
-			m.cancelAsked = true
 			m.runner.Cancel()
 		}
 		if isKey || IsTextEditMsg(message) {
@@ -290,7 +288,7 @@ func (m *ExportLogsModel) submit() tea.Cmd {
 		m.message = ExportBusy
 		return nil
 	}
-	m.pending, m.cancelAsked, m.message = true, false, ""
+	m.pending, m.message = true, ""
 	return func() tea.Msg { return <-results }
 }
 
