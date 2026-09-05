@@ -540,19 +540,61 @@ func (w *failingCloseZipWriter) Close() error { _ = w.Writer.Close(); return err
 
 func assertSameExportFile(t *testing.T, got, want string) {
 	t.Helper()
+	if err := checkCanonicalExportFile(got, want); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func checkCanonicalExportFile(got, want string) (result error) {
 	if !filepath.IsAbs(got) {
-		t.Fatalf("export path is not absolute: %q", got)
+		return fmt.Errorf("export path is not absolute: %q", got)
+	}
+	parent, err := platform.OpenPublishDir(filepath.Dir(want))
+	if err != nil {
+		return fmt.Errorf("open requested export parent: %w", err)
+	}
+	defer func() { result = errors.Join(result, parent.Close()) }()
+	expected := filepath.Join(parent.Path(), filepath.Base(want))
+	if got != expected {
+		return fmt.Errorf("export result path %q want canonical path %q", got, expected)
 	}
 	gotInfo, err := os.Stat(got)
 	if err != nil {
-		t.Fatalf("stat export result %q: %v", got, err)
+		return fmt.Errorf("stat export result %q: %w", got, err)
 	}
 	wantInfo, err := os.Stat(want)
 	if err != nil {
-		t.Fatalf("stat requested export %q: %v", want, err)
+		return fmt.Errorf("stat requested export %q: %w", want, err)
 	}
 	if !os.SameFile(gotInfo, wantInfo) {
-		t.Fatalf("export result %q is not requested file %q", got, want)
+		return fmt.Errorf("export result %q is not requested file %q", got, want)
+	}
+	return nil
+}
+
+func TestCheckCanonicalExportFile_RejectsDifferentHardlinkName(t *testing.T) {
+	dir := t.TempDir()
+	want := filepath.Join(dir, "requested.zip")
+	if err := os.WriteFile(want, []byte("archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(dir, "alias.zip")
+	if err := os.Link(want, alias); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	wantInfo, err := os.Stat(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasInfo, err := os.Stat(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(wantInfo, aliasInfo) {
+		t.Fatal("test hard link does not share file identity")
+	}
+	if err := checkCanonicalExportFile(alias, want); err == nil {
+		t.Fatal("different hard-link pathname accepted as canonical result")
 	}
 }
 
