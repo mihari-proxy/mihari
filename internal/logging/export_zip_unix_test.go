@@ -48,6 +48,42 @@ func TestExportWithOps_UnixWorkspaceReplacementCleansHeldOriginalOnly(t *testing
 	}
 }
 
+func TestExportWithOps_UnixVisibleParentSymlinkCannotRedirectPublish(t *testing.T) {
+	fs, paths := openExportTestFS(t)
+	writeExportFixture(t, fs, paths.DaemonLog, `{"time":"2026-09-02T10:00:00Z"}`)
+	base := t.TempDir()
+	visible := filepath.Join(base, "publish")
+	held := filepath.Join(base, "held")
+	external := filepath.Join(base, "external")
+	mustMkdir(t, visible)
+	mustMkdir(t, external)
+	_, err := exportWithOps(context.Background(), ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: filepath.Join(visible, "result.zip"), Paths: paths, PrivateFS: fs}, exportOps{Checkpoint: func(stage exportStage) error {
+		if stage != stageBeforePublish {
+			return nil
+		}
+		if err := os.Rename(visible, held); err != nil {
+			t.Fatal(err)
+		}
+		return os.Symlink(external, visible)
+	}})
+	if !errors.Is(err, platform.ErrPublishDirectoryChanged) {
+		t.Fatalf("error=%v", err)
+	}
+	for _, path := range []string{filepath.Join(external, "result.zip"), filepath.Join(held, "result.zip")} {
+		if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("redirected write %s: %v", path, statErr)
+		}
+	}
+	entries, readErr := os.ReadDir(external)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("external entries=%v error=%v", entries, readErr)
+	}
+	heldEntries, readErr := os.ReadDir(held)
+	if readErr != nil || len(heldEntries) != 0 {
+		t.Fatalf("held residue=%v error=%v", heldEntries, readErr)
+	}
+}
+
 func TestExportWithOps_UnixMovedWorkspaceAggregatesCleanupAndSanitizes(t *testing.T) {
 	fs, paths := openExportTestFS(t)
 	writeExportFixture(t, fs, paths.DaemonLog, `{"time":"2026-09-02T10:00:00Z"}`)

@@ -39,10 +39,16 @@ type zipWriter interface {
 }
 
 type exportOps struct {
-	Checkpoint   func(exportStage) error
-	NewZipWriter func(io.Writer) zipWriter
-	Sync         func(*os.File) error
-	Publish      func(*platform.PublishDir, *platform.PublishWorkspace, string, string, func(error)) error
+	Checkpoint      func(exportStage) error
+	NewZipWriter    func(io.Writer) zipWriter
+	Sync            func(*os.File) error
+	Publish         func(*platform.PublishDir, *platform.PublishWorkspace, string, string, func(error)) error
+	Observe         func(*exportTarget, *platform.PublishWorkspace)
+	Snapshots       func([]snapshotHandle)
+	Remove          func(*platform.PublishWorkspace, string) error
+	CloseWorkspace  func(*platform.PublishWorkspace) error
+	ClosePublishDir func(*platform.PublishDir) error
+	CloseLogDir     func(*platform.DirectoryIdentity) error
 }
 
 type exportSpool struct {
@@ -66,6 +72,7 @@ func exportWithOps(ctx context.Context, request ExportRequest, ops exportOps) (_
 		closeExportTargetWithWarning(target, request.OnWarning)
 		return ExportResult{}, exportPipelineError(err)
 	}
+	ops.Observe(target, workspace)
 	var spools []exportSpool
 	var zipFile *os.File
 	var zipName string
@@ -79,15 +86,15 @@ func exportWithOps(ctx context.Context, request ExportRequest, ops exportOps) (_
 			if spools[i].file != nil {
 				cleanup = errors.Join(cleanup, spools[i].file.Close())
 			}
-			cleanup = errors.Join(cleanup, workspace.Remove(spools[i].name))
+			cleanup = errors.Join(cleanup, ops.Remove(workspace, spools[i].name))
 		}
 		if zipName != "" {
-			removeErr := workspace.Remove(zipName)
+			removeErr := ops.Remove(workspace, zipName)
 			if !errors.Is(removeErr, os.ErrNotExist) {
 				cleanup = errors.Join(cleanup, removeErr)
 			}
 		}
-		cleanup = errors.Join(cleanup, workspace.Close(), target.Dir.Close(), target.LogDir.Close())
+		cleanup = errors.Join(cleanup, ops.CloseWorkspace(workspace), ops.ClosePublishDir(target.Dir), ops.CloseLogDir(target.LogDir))
 		if cleanup != nil {
 			warnExport(request.OnWarning)
 			if !published && retErr != nil {
@@ -112,6 +119,7 @@ func exportWithOps(ctx context.Context, request ExportRequest, ops exportOps) (_
 		if err != nil {
 			return ExportResult{}, exportPipelineError(err)
 		}
+		ops.Snapshots(handles)
 		spool, name, err := workspace.CreateTemp("spool-*")
 		if err != nil {
 			return ExportResult{}, exportPipelineError(joinCleanupError(err, closeSnapshots(handles), request.OnWarning))
@@ -246,6 +254,24 @@ func exportDefaults(ctx context.Context, request ExportRequest, ops exportOps) (
 		ops.Publish = func(d *platform.PublishDir, w *platform.PublishWorkspace, temp, target string, warning func(error)) error {
 			return d.PublishNoReplace(w, temp, target, warning)
 		}
+	}
+	if ops.Observe == nil {
+		ops.Observe = func(*exportTarget, *platform.PublishWorkspace) {}
+	}
+	if ops.Snapshots == nil {
+		ops.Snapshots = func([]snapshotHandle) {}
+	}
+	if ops.Remove == nil {
+		ops.Remove = func(w *platform.PublishWorkspace, name string) error { return w.Remove(name) }
+	}
+	if ops.CloseWorkspace == nil {
+		ops.CloseWorkspace = func(w *platform.PublishWorkspace) error { return w.Close() }
+	}
+	if ops.ClosePublishDir == nil {
+		ops.ClosePublishDir = func(d *platform.PublishDir) error { return d.Close() }
+	}
+	if ops.CloseLogDir == nil {
+		ops.CloseLogDir = func(d *platform.DirectoryIdentity) error { return d.Close() }
 	}
 	return ctx, request, ops
 }

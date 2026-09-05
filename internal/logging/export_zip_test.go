@@ -171,12 +171,22 @@ func TestExportWithOps_CancellationBeforePublishCleansResources(t *testing.T) {
 			}
 			out := filepath.Join(parent, "cancelled.zip")
 			ctx, cancel := context.WithCancel(context.Background())
+			var observedTarget *exportTarget
+			var observedWorkspace *platform.PublishWorkspace
+			var snapshots []*os.File
+			logDirCloses := 0
 			_, err := exportWithOps(ctx, ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: out, Paths: paths, PrivateFS: fs}, exportOps{Checkpoint: func(got exportStage) error {
 				if got == stage {
 					cancel()
 				}
 				return nil
-			}})
+			}, Observe: func(target *exportTarget, workspace *platform.PublishWorkspace) {
+				observedTarget, observedWorkspace = target, workspace
+			}, Snapshots: func(handles []snapshotHandle) {
+				for _, handle := range handles {
+					snapshots = append(snapshots, handle.file)
+				}
+			}, CloseLogDir: func(dir *platform.DirectoryIdentity) error { logDirCloses++; return dir.Close() }})
 			if !errors.Is(err, context.Canceled) || err.Error() != "log export cancelled" {
 				t.Fatalf("error=%q", err)
 			}
@@ -190,7 +200,78 @@ func TestExportWithOps_CancellationBeforePublishCleansResources(t *testing.T) {
 			if err := os.Remove(parent); err != nil {
 				t.Fatalf("publish directory still held: %v", err)
 			}
+			if observedTarget == nil || observedWorkspace == nil || logDirCloses != 1 {
+				t.Fatalf("ownership observations target=%p workspace=%p log closes=%d", observedTarget, observedWorkspace, logDirCloses)
+			}
+			if _, _, closeErr := observedWorkspace.CreateTemp("closed-*"); !errors.Is(closeErr, os.ErrClosed) {
+				t.Fatalf("workspace remains open: %v", closeErr)
+			}
+			if _, closeErr := observedTarget.Dir.Exists("closed.zip"); !errors.Is(closeErr, os.ErrClosed) {
+				t.Fatalf("PublishDir remains open: %v", closeErr)
+			}
+			for _, snapshot := range snapshots {
+				if _, statErr := snapshot.Stat(); statErr == nil {
+					t.Fatalf("snapshot remains open: %v", statErr)
+				}
+			}
 		})
+	}
+}
+
+func TestExportWithOps_CleanupFailureContinuesAndClosesCapabilities(t *testing.T) {
+	fs, paths := openExportTestFS(t)
+	writeExportFixture(t, fs, paths.DaemonLog, `{"time":"2026-09-02T10:00:00Z"}`)
+	parent := filepath.Join(t.TempDir(), "publish")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	primary := errors.New("primary C:\\secret\\token.log")
+	cleanup := errors.New("remove C:\\secret\\spool.tmp")
+	var workspace *platform.PublishWorkspace
+	var target *exportTarget
+	var order []string
+	var warnings []error
+	removeCalls := 0
+	_, err := exportWithOps(context.Background(), ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: filepath.Join(parent, "failed.zip"), Paths: paths, PrivateFS: fs, OnWarning: func(err error) { warnings = append(warnings, err) }}, exportOps{
+		Checkpoint: func(stage exportStage) error {
+			if stage == stageBeforePublish {
+				return primary
+			}
+			return nil
+		},
+		Observe: func(gotTarget *exportTarget, gotWorkspace *platform.PublishWorkspace) {
+			target, workspace = gotTarget, gotWorkspace
+		},
+		Remove: func(w *platform.PublishWorkspace, name string) error {
+			removeCalls++
+			order = append(order, "remove")
+			if removeCalls == 1 {
+				return cleanup
+			}
+			return w.Remove(name)
+		},
+		CloseWorkspace:  func(w *platform.PublishWorkspace) error { order = append(order, "workspace"); return w.Close() },
+		ClosePublishDir: func(d *platform.PublishDir) error { order = append(order, "publish-dir"); return d.Close() },
+		CloseLogDir:     func(d *platform.DirectoryIdentity) error { order = append(order, "log-dir"); return d.Close() },
+	})
+	if !errors.Is(err, primary) || !errors.Is(err, cleanup) || err.Error() != "log export failed" {
+		t.Fatalf("error=%q primary=%v cleanup=%v", err, errors.Is(err, primary), errors.Is(err, cleanup))
+	}
+	if strings.Join(order[len(order)-3:], ",") != "workspace,publish-dir,log-dir" || removeCalls < 2 {
+		t.Fatalf("cleanup order=%v removeCalls=%d", order, removeCalls)
+	}
+	if len(warnings) != 1 || warnings[0].Error() != "log export cleanup incomplete" {
+		t.Fatalf("warnings=%v", warnings)
+	}
+	if _, _, closeErr := workspace.CreateTemp("closed-*"); !errors.Is(closeErr, os.ErrClosed) {
+		t.Fatalf("workspace open: %v", closeErr)
+	}
+	if _, closeErr := target.Dir.Exists("closed.zip"); !errors.Is(closeErr, os.ErrClosed) {
+		t.Fatalf("publish dir open: %v", closeErr)
+	}
+	entries, readErr := os.ReadDir(parent)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("residue=%v error=%v", entries, readErr)
 	}
 }
 
