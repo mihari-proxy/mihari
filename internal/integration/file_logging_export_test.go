@@ -70,20 +70,24 @@ func TestFileLoggingExport_TwoTUIWritersRotateWhileExporterSnapshots(t *testing.
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var counts [2]atomic.Int64
+	requests := [2]chan chan int64{make(chan chan int64), make(chan chan int64)}
 	var group sync.WaitGroup
 	for id, runtime := range writers {
 		id, runtime := id, runtime
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			for seq := int64(1); ; seq++ {
+			var seq int64
+			for {
 				select {
 				case <-ctx.Done():
 					return
-				default:
+				case reply := <-requests[id]:
+					seq++
+					runtime.Logger().Info("concurrent export record", "writer", id, "seq", seq, "padding", strings.Repeat("p", 256))
+					counts[id].Store(seq)
+					reply <- seq
 				}
-				runtime.Logger().Info("concurrent export record", "writer", id, "seq", seq, "padding", strings.Repeat("p", 256))
-				counts[id].Store(seq)
 			}
 		}()
 	}
@@ -92,19 +96,15 @@ func TestFileLoggingExport_TwoTUIWritersRotateWhileExporterSnapshots(t *testing.
 		group.Wait()
 	})
 
-	seedDeadline := time.After(10 * time.Second)
-	for counts[0].Load() < 100 || counts[1].Load() < 100 {
-		select {
-		case <-seedDeadline:
-			t.Fatal("timed out seeding both TUI writers")
-		default:
-			time.Sleep(time.Millisecond)
-		}
-	}
+	writeRounds(t, requests, 100)
 	before := [2]int64{counts[0].Load(), counts[1].Load()}
 	exportCtx, cancelExport := context.WithCancel(context.Background())
-	exportAtBarrier := make(chan struct{})
-	allowExport := make(chan struct{})
+	tuiSnapshotStarting := make(chan struct{})
+	allowSnapshotStart := make(chan struct{})
+	tuiSnapshotFixed := make(chan struct{})
+	postSnapshotReached := make(chan struct{})
+	allowPostSnapshot := make(chan struct{})
+	var snapshotCeiling [2]int64
 	exportDone := make(chan struct{})
 	var result logging.ExportResult
 	var exportErr error
@@ -113,13 +113,33 @@ func TestFileLoggingExport_TwoTUIWritersRotateWhileExporterSnapshots(t *testing.
 		result, exportErr = logging.Export(exportCtx, logging.ExportRequest{
 			Now: time.Date(2026, 9, 5, 12, 0, 0, 0, time.Local), Range: logging.ExportRange{Kind: logging.RangeAll}, AutoNumber: true,
 			Paths:     logging.ExportPaths{LogDir: paths.LogDir, ExportDir: paths.LogExportDir, DaemonLog: paths.DaemonLog, TUILog: paths.TUILog, MihomoLog: paths.MihomoLog},
-			PrivateFS: fs, Redactor: logging.NewRedactor(), EnterRecordMutex: func(string) func() { return writers[0].EnterRecordMutex() },
+			PrivateFS: fs, Redactor: logging.NewRedactor(), EnterRecordMutex: func(basePath string) func() {
+				if basePath != paths.TUILog {
+					return func() {}
+				}
+				close(tuiSnapshotStarting)
+				select {
+				case <-allowSnapshotStart:
+				case <-exportCtx.Done():
+					return func() {}
+				}
+				return writers[0].EnterRecordMutex()
+			},
 			OpenLock: func(lockFS *platform.PrivateFS, basePath string) (platform.AdvisoryLock, error) {
 				lock, err := platform.OpenAdvisoryLock(lockFS, basePath)
-				if err != nil || basePath != paths.DaemonLog+".lock" {
+				if err != nil {
 					return lock, err
 				}
-				return &exportBarrierLock{AdvisoryLock: lock, reached: exportAtBarrier, allow: allowExport}, nil
+				switch basePath {
+				case paths.TUILog + ".lock":
+					return &exportSnapshotBoundaryLock{
+						AdvisoryLock: lock, fixed: tuiSnapshotFixed, counts: &counts, ceiling: &snapshotCeiling,
+					}, nil
+				case paths.MihomoLog + ".lock":
+					return &exportLockBarrier{AdvisoryLock: lock, reached: postSnapshotReached, allow: allowPostSnapshot}, nil
+				default:
+					return lock, nil
+				}
 			},
 		})
 	}()
@@ -127,38 +147,39 @@ func TestFileLoggingExport_TwoTUIWritersRotateWhileExporterSnapshots(t *testing.
 		cancelExport()
 		<-exportDone
 	})
+	var releaseStart, releasePost sync.Once
+	releaseSnapshotStart := func() { releaseStart.Do(func() { close(allowSnapshotStart) }) }
+	releasePostSnapshot := func() { releasePost.Do(func() { close(allowPostSnapshot) }) }
+	releaseAllBarriers := func() {
+		releaseSnapshotStart()
+		releasePostSnapshot()
+	}
+	t.Cleanup(releaseAllBarriers)
 
 	select {
-	case <-exportAtBarrier:
+	case <-tuiSnapshotStarting:
 	case <-time.After(10 * time.Second):
-		t.Fatal("exporter did not reach the deterministic source-lock barrier")
+		t.Fatal("exporter did not reach the deterministic TUI snapshot-start barrier")
 	}
-	deadline := time.After(10 * time.Second)
-	for {
-		// Each encoded record is over 256 bytes and MaxSizeBytes is 8 KiB.
-		// While the real exporter is held at the barrier, both writers advance
-		// and their combined bytes necessarily cross a rotation boundary.
-		firstDelta := counts[0].Load() - before[0]
-		secondDelta := counts[1].Load() - before[1]
-		advanced := firstDelta > 0 && secondDelta > 0 && firstDelta+secondDelta > 40
-		if advanced {
-			select {
-			case <-exportDone:
-				t.Fatal("export completed before both real TUI writers rotated during it")
-			default:
-			}
-			break
-		}
-		select {
-		case <-exportDone:
-			t.Fatal("export completed before concurrent rotation was observed")
-		case <-deadline:
-			t.Fatal("timed out waiting for both TUI writers to rotate during export")
-		default:
-			time.Sleep(time.Millisecond)
-		}
+	// Forty rounds are over 16 KiB across the two writers, so real rotation is
+	// unavoidable while Export is waiting to begin the TUI snapshot.
+	writeRounds(t, requests, 40)
+	releaseSnapshotStart()
+	select {
+	case <-tuiSnapshotFixed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("exporter did not fix the TUI handle sizes")
 	}
-	close(allowExport)
+	select {
+	case <-postSnapshotReached:
+	case <-time.After(10 * time.Second):
+		t.Fatal("exporter did not reach the post-TUI-snapshot barrier")
+	}
+	// Reaching the next source proves snapshotSource returned and released both
+	// the real advisory lock and the first writer's record mutex. These appends
+	// are therefore strictly outside the fixed TUI handles.
+	writeRounds(t, requests, 5)
+	releasePostSnapshot()
 
 	<-exportDone
 	cancel()
@@ -181,17 +202,54 @@ func TestFileLoggingExport_TwoTUIWritersRotateWhileExporterSnapshots(t *testing.
 	if !rotated {
 		t.Fatal("two TUI writers advanced across rotation thresholds but no real archive remained")
 	}
-	assertExportedTUILines(t, result.Path)
+	assertExportedTUILines(t, result.Path, before, snapshotCeiling)
 }
 
-type exportBarrierLock struct {
+func writeRounds(t *testing.T, requests [2]chan chan int64, rounds int) {
+	t.Helper()
+	for range rounds {
+		replies := [2]chan int64{make(chan int64, 1), make(chan int64, 1)}
+		for writer := range requests {
+			select {
+			case requests[writer] <- replies[writer]:
+			case <-time.After(10 * time.Second):
+				t.Fatalf("writer %d did not accept a bounded write request", writer)
+			}
+		}
+		for writer := range replies {
+			select {
+			case <-replies[writer]:
+			case <-time.After(10 * time.Second):
+				t.Fatalf("writer %d did not acknowledge a bounded write request", writer)
+			}
+		}
+	}
+}
+
+type exportSnapshotBoundaryLock struct {
+	platform.AdvisoryLock
+	fixed   chan<- struct{}
+	counts  *[2]atomic.Int64
+	ceiling *[2]int64
+}
+
+func (l *exportSnapshotBoundaryLock) Unlock() error {
+	for writer := range l.counts {
+		l.ceiling[writer] = l.counts[writer].Load()
+	}
+	err := l.AdvisoryLock.Unlock()
+	close(l.fixed)
+	return err
+}
+
+type exportLockBarrier struct {
 	platform.AdvisoryLock
 	reached chan<- struct{}
 	allow   <-chan struct{}
 	once    sync.Once
 }
 
-func (l *exportBarrierLock) Lock(ctx context.Context, mode platform.LockMode) error {
+func (l *exportLockBarrier) Lock(ctx context.Context, mode platform.LockMode) error {
 	l.once.Do(func() { close(l.reached) })
 	select {
 	case <-l.allow:
@@ -201,7 +259,7 @@ func (l *exportBarrierLock) Lock(ctx context.Context, mode platform.LockMode) er
 	}
 }
 
-func assertExportedTUILines(t *testing.T, archivePath string) {
+func assertExportedTUILines(t *testing.T, archivePath string, before, ceiling [2]int64) {
 	t.Helper()
 	archive, err := zip.OpenReader(archivePath)
 	if err != nil {
@@ -213,7 +271,7 @@ func assertExportedTUILines(t *testing.T, archivePath string) {
 		}
 	})
 	seen := make(map[string]struct{})
-	lines := 0
+	postBefore := [2]bool{}
 	for _, item := range archive.File {
 		if item.Name != "tui/mihari-tui.log" {
 			continue
@@ -238,7 +296,17 @@ func assertExportedTUILines(t *testing.T, archivePath string) {
 				t.Fatalf("exported duplicate TUI record %s", key)
 			}
 			seen[key] = struct{}{}
-			lines++
+			if record.Writer < 0 || record.Writer >= len(postBefore) {
+				_ = entry.Close()
+				t.Fatalf("exported unexpected writer id %d", record.Writer)
+			}
+			if record.Seq > ceiling[record.Writer] {
+				_ = entry.Close()
+				t.Fatalf("exported writer %d post-snapshot seq=%d above fixed ceiling=%d", record.Writer, record.Seq, ceiling[record.Writer])
+			}
+			if record.Seq > before[record.Writer] {
+				postBefore[record.Writer] = true
+			}
 		}
 		scanErr := scanner.Err()
 		closeErr := entry.Close()
@@ -246,7 +314,9 @@ func assertExportedTUILines(t *testing.T, archivePath string) {
 			t.Fatal(fmt.Errorf("read exported TUI entry: %w", errors.Join(scanErr, closeErr)))
 		}
 	}
-	if lines == 0 {
-		t.Fatal("archive omitted all concurrent TUI records")
+	for writer, included := range postBefore {
+		if !included {
+			t.Fatalf("archive omitted writer %d records produced after pre-snapshot high-water mark %d", writer, before[writer])
+		}
 	}
 }
