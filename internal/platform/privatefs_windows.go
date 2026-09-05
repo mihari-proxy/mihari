@@ -28,6 +28,11 @@ var privateRootSecurity = func(h windows.Handle) (*windows.SECURITY_DESCRIPTOR, 
 }
 var privateHardenHandle = hardenHandle
 
+var privateAccountKind = func(sid *windows.SID) (uint32, error) {
+	_, _, kind, err := sid.LookupAccount("")
+	return kind, err
+}
+
 type privateFSState struct {
 	root  windows.Handle
 	dirs  map[string]windows.Handle
@@ -525,7 +530,13 @@ func privateDataPrincipal(sd *windows.SECURITY_DESCRIPTOR) (*windows.SID, error)
 			continue
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		_, _, kind, lookupErr := sid.LookupAccount("")
+		// LookupAccount reports SYSTEM as SidTypeUser when called by SYSTEM,
+		// but as SidTypeWellKnownGroup for an interactive caller. It is never
+		// the individual data user, regardless of that context-sensitive result.
+		if sid.String() == "S-1-5-18" {
+			continue
+		}
+		kind, lookupErr := privateAccountKind(sid)
 		if lookupErr != nil {
 			return nil, fmt.Errorf("resolve private data principal: %w", lookupErr)
 		}
