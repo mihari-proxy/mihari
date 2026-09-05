@@ -238,6 +238,8 @@ func TestCatalog_KeysAppearInHandlerSource(t *testing.T) {
 			return []string{filepath.Join(tuiDir, "pages", "system", "model.go")}
 		case b.Mode == ModeLoggingEdit:
 			return []string{filepath.Join(tuiDir, "pages", "system", "model.go")}
+		case b.Mode == ModeExportLogs:
+			return []string{filepath.Join(uiDir, "exportlogs.go")}
 		default:
 			return nil
 		}
