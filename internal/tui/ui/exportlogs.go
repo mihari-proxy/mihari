@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -35,6 +36,7 @@ type exportResultMsg struct {
 	Generation uint64
 	Result     logging.ExportResult
 	Err        error
+	Warning    bool
 }
 
 type exportRunner struct {
@@ -70,12 +72,16 @@ func (r *exportRunner) Start(generation uint64, request logging.ExportRequest) (
 	r.running, r.cancel, r.done = true, cancel, done
 	go func() {
 		message := exportResultMsg{Generation: generation}
+		var warned atomic.Bool
+		// Keep raw errors on the worker boundary. Only a fixed notice crosses to UI.
+		request.OnWarning = func(error) { warned.Store(true) }
 		defer func() {
 			if recover() != nil {
 				message.Result = logging.ExportResult{}
 				message.Err = errExportPanicked
 			}
 			cancel()
+			message.Warning = warned.Load()
 			result <- message
 			close(result)
 			r.mu.Lock()
@@ -130,6 +136,7 @@ type ExportLogsModel struct {
 	focus                           exportFocus
 	cursors                         map[exportFocus]int
 	resultPath, message             string
+	warning                         bool
 }
 
 // NewExportLogsModel creates an initially closed dialog without an idle goroutine.
@@ -160,6 +167,7 @@ func (m *ExportLogsModel) Open() {
 	m.focus = exportFocusRange
 	m.cursors = map[exportFocus]int{exportFocusFrom: TextCursorEnd(m.from), exportFocusTo: TextCursorEnd(m.to), exportFocusOutput: TextCursorEnd(m.output)}
 	m.resultPath, m.message, m.closed = "", "", false
+	m.warning = false
 }
 
 // Update handles dialog-owned input and returns whether the root must stop routing it.
@@ -176,6 +184,7 @@ func (m *ExportLogsModel) Update(message tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		m.pending = false
+		m.warning = result.Warning
 		if errors.Is(result.Err, context.Canceled) {
 			m.message = ExportCancelled
 			return nil, true
@@ -245,8 +254,7 @@ func (m *ExportLogsModel) Update(message tea.Msg) (tea.Cmd, bool) {
 		}
 	}
 	if m.textFocused() && IsTextEditMsg(message) {
-		m.editFocused(message)
-		return nil, true
+		return m.editFocused(message), true
 	}
 	if isKey {
 		return nil, true
@@ -292,6 +300,7 @@ func (m *ExportLogsModel) submit() tea.Cmd {
 		return nil
 	}
 	m.pending, m.message = true, ""
+	m.warning = false
 	return func() tea.Msg { return <-results }
 }
 
@@ -340,7 +349,7 @@ func (m *ExportLogsModel) moveFocus(delta int) {
 	m.focus = fields[(index+delta+len(fields))%len(fields)]
 }
 func (m *ExportLogsModel) textFocused() bool { return m.focus != exportFocusRange }
-func (m *ExportLogsModel) editFocused(message tea.Msg) {
+func (m *ExportLogsModel) editFocused(message tea.Msg) tea.Cmd {
 	value := ""
 	switch m.focus {
 	case exportFocusFrom:
@@ -350,7 +359,7 @@ func (m *ExportLogsModel) editFocused(message tea.Msg) {
 	case exportFocusOutput:
 		value = m.output
 	}
-	value, cursor, _, _ := EditTextField(value, m.cursors[m.focus], message, 4096)
+	value, cursor, _, cmd := EditTextField(value, m.cursors[m.focus], message, 4096)
 	m.cursors[m.focus] = cursor
 	switch m.focus {
 	case exportFocusFrom:
@@ -360,6 +369,7 @@ func (m *ExportLogsModel) editFocused(message tea.Msg) {
 	case exportFocusOutput:
 		m.output = value
 	}
+	return cmd
 }
 
 // View renders the dialog centered in the supplied terminal dimensions.
@@ -370,6 +380,10 @@ func (m *ExportLogsModel) View(width, height int) string {
 	theme := DefaultTheme()
 	if m.resultPath != "" {
 		body := theme.Title.Render(ExportComplete) + "\n" + m.resultPath
+		body += "\n\nReview before sharing: node names, domains/IPs, and traffic metadata may remain."
+		if m.warning {
+			body += "\n\n" + exportWarningNotice
+		}
 		if m.message != "" {
 			body += "\n" + theme.Danger.Render(m.message)
 		}
@@ -393,6 +407,9 @@ func (m *ExportLogsModel) View(width, height int) string {
 	}
 	if m.message != "" {
 		lines = append(lines, "", theme.Danger.Render(m.message))
+	}
+	if m.warning {
+		lines = append(lines, "", exportWarningNotice)
 	}
 	lines = append(lines, "", RenderFooter("", ModeExportLogs, FooterOpt{}))
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, theme.Dialog.Width(min(84, max(36, width-4))).Render(strings.Join(lines, "\n")))
@@ -444,5 +461,7 @@ func exportErrorMessage(err error) string {
 }
 
 const exportTimeLayout = "2006-01-02 15:04"
+
+const exportWarningNotice = "Export cleanup or durability could not be confirmed.\nTemporary export data may remain."
 
 var errExportPanicked = errors.New("log export failed")

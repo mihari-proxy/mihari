@@ -183,6 +183,8 @@ func main() {
 	os.Exit(code)
 }
 
+var exportLogsFn = logging.Export
+
 func buildExportLogs(paths platform.Paths) func(tui.LoggingResources) ui.ExportLogsOptions {
 	return func(resources tui.LoggingResources) ui.ExportLogsOptions {
 		exists := func(dir, name string) (bool, error) {
@@ -215,7 +217,7 @@ func buildExportLogs(paths platform.Paths) func(tui.LoggingResources) ui.ExportL
 					return func() {}
 				}
 			}
-			return logging.Export(ctx, request)
+			return exportLogsFn(ctx, request)
 		}
 		return ui.ExportLogsOptions{DefaultDir: paths.LogExportDir, Exists: exists, Export: export}
 	}
