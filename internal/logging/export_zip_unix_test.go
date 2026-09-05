@@ -129,10 +129,15 @@ func TestExportWithOps_UnixPostCommitUntrustedCleanupWarnsButSucceeds(t *testing
 		}
 		return os.Chmod(parent, 0o777)
 	}})
-	defer os.Chmod(parent, 0o700)
-	if err != nil || result.Path != filepath.Join(parent, "result.zip") {
+	t.Cleanup(func() {
+		if err := os.Chmod(parent, 0o700); err != nil {
+			t.Errorf("restore parent permissions: %v", err)
+		}
+	})
+	if err != nil {
 		t.Fatalf("result=%+v error=%v", result, err)
 	}
+	assertSameExportFile(t, result.Path, filepath.Join(parent, "result.zip"))
 	if len(warnings) == 0 {
 		t.Fatal("missing sanitized cleanup warning")
 	}

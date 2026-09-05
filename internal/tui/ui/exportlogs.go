@@ -19,8 +19,8 @@ import (
 // OpenExportLogsMsg asks the root model to open the shared log export dialog.
 type OpenExportLogsMsg struct{}
 
-// ErrLocalLogStorageUnavailable is the stable user-facing local capability error.
-var ErrLocalLogStorageUnavailable = errors.New("Local log storage unavailable")
+// ErrLocalLogStorageUnavailable classifies the unavailable local capability.
+var ErrLocalLogStorageUnavailable = errors.New("local log storage unavailable")
 
 // ExportLogsOptions supplies the local exporter and side-effect boundaries.
 type ExportLogsOptions struct {
@@ -446,7 +446,7 @@ func exportRangeLabel(kind logging.RangeKind) string {
 func exportErrorMessage(err error) string {
 	switch {
 	case errors.Is(err, ErrLocalLogStorageUnavailable):
-		return ErrLocalLogStorageUnavailable.Error()
+		return "Local log storage unavailable"
 	case errors.Is(err, context.Canceled):
 		return ExportCancelled
 	case errors.Is(err, logging.ErrNoLogLines):

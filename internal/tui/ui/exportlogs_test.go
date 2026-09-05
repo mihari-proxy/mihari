@@ -334,7 +334,8 @@ func TestExportLogsModel_CancelAndWaitBeforeCommandRuns(t *testing.T) {
 func TestExportRunner_RejectsConcurrentStartAndRecoversPanic(t *testing.T) {
 	release := make(chan struct{})
 	var calls atomic.Int32
-	r := newExportRunner(nil, func(context.Context, logging.ExportRequest) (logging.ExportResult, error) {
+	var nilParent context.Context
+	r := newExportRunner(nilParent, func(context.Context, logging.ExportRequest) (logging.ExportResult, error) {
 		if calls.Add(1) == 1 {
 			<-release
 			panic("secret panic")
@@ -362,6 +363,12 @@ func TestExportRunner_RejectsConcurrentStartAndRecoversPanic(t *testing.T) {
 		t.Fatalf("second=%+v", msg)
 	}
 	r.CancelAndWait()
+}
+
+func TestExportErrorMessage_LocalStoragePreservesDisplayText(t *testing.T) {
+	if got := exportErrorMessage(ErrLocalLogStorageUnavailable); got != "Local log storage unavailable" {
+		t.Fatalf("message=%q", got)
+	}
 }
 
 func TestExportLogsModel_SuccessCopyAndSanitizedErrors(t *testing.T) {

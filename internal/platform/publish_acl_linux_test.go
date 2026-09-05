@@ -16,7 +16,7 @@ func TestPublishWorkspace_LinuxAccessACLChangeLeavesEmptyOrphan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)

@@ -35,9 +35,7 @@ func TestExport_ZipLayoutManifestAndRedaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
-	if result.Path != out {
-		t.Fatalf("Path=%q want %q", result.Path, out)
-	}
+	assertSameExportFile(t, result.Path, out)
 	r, err := zip.OpenReader(out)
 	if err != nil {
 		t.Fatal(err)
@@ -355,9 +353,10 @@ func TestExportWithOps_PostPublishCancellationReturnsSuccess(t *testing.T) {
 		cancel()
 		return err
 	}})
-	if err != nil || result.Path != out {
+	if err != nil {
 		t.Fatalf("result=%+v error=%v", result, err)
 	}
+	assertSameExportFile(t, result.Path, out)
 }
 
 func TestExportWithOps_PublishCollisionPolicy(t *testing.T) {
@@ -538,6 +537,24 @@ func (w failingCreateZipWriter) Close() error { return w.secondary }
 type failingCloseZipWriter struct{ *zip.Writer }
 
 func (w *failingCloseZipWriter) Close() error { _ = w.Writer.Close(); return errors.New("close") }
+
+func assertSameExportFile(t *testing.T, got, want string) {
+	t.Helper()
+	if !filepath.IsAbs(got) {
+		t.Fatalf("export path is not absolute: %q", got)
+	}
+	gotInfo, err := os.Stat(got)
+	if err != nil {
+		t.Fatalf("stat export result %q: %v", got, err)
+	}
+	wantInfo, err := os.Stat(want)
+	if err != nil {
+		t.Fatalf("stat requested export %q: %v", want, err)
+	}
+	if !os.SameFile(gotInfo, wantInfo) {
+		t.Fatalf("export result %q is not requested file %q", got, want)
+	}
+}
 
 func writeExportFixture(t *testing.T, fs interface {
 	OpenAppend(string) (*os.File, error)

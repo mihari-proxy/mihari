@@ -186,7 +186,7 @@ func TestPublishWorkspace_CloseFailsClosedWhenEntryChangesAfterIdentityCheck(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
@@ -226,7 +226,7 @@ func TestPublishWorkspace_CloseFailsClosedWhenMovedOutsideAfterIdentityCheck(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
@@ -372,7 +372,7 @@ func TestPublishDir_ExistsIncludesSymlinkOrJunction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	makeDirectoryLink(t, filepath.Join(parent, "occupied.zip"), target)
 	exists, err := d.Exists("occupied.zip")
 	if err != nil {
@@ -388,17 +388,17 @@ func TestPublishDir_RejectsWorkspaceFromAnotherDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d1.Close()
+	cleanupPublishDir(t, d1)
 	d2, err := OpenPublishDir(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d2.Close()
+	cleanupPublishDir(t, d2)
 	w, err := d1.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	cleanupPublishWorkspace(t, w)
 	if err := d2.PublishNoReplace(w, "temp.zip", "target.zip", nil); err == nil {
 		t.Fatal("accepted workspace owned by another publish directory")
 	}
@@ -512,7 +512,7 @@ func TestDirectoryContainment_UsesHeldIdentities(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Close()
+			cleanupPublishDir(t, d)
 			got, err := d.IsWithin(logIdentity)
 			if err != nil {
 				t.Fatal(err)
@@ -551,4 +551,22 @@ func TestPrivateFSOpenPublishDir_RejectsLogDirectory(t *testing.T) {
 
 func sameCanonicalPath(a, b string) bool {
 	return equalFoldPath(filepath.Clean(a), filepath.Clean(b))
+}
+
+func cleanupPublishDir(t *testing.T, d *PublishDir) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := d.Close(); err != nil {
+			t.Errorf("close publish directory: %v", err)
+		}
+	})
+}
+
+func cleanupPublishWorkspace(t *testing.T, w *PublishWorkspace) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := w.Close(); err != nil {
+			t.Errorf("close publish workspace: %v", err)
+		}
+	})
 }

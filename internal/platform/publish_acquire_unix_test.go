@@ -51,7 +51,7 @@ func TestPublishWorkspace_DifferentUIDAcquisitionSubstitution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	original := publishUnixWorkspaceOpenFn
 	defer func() { publishUnixWorkspaceOpenFn = original }()
 	var substituted string
@@ -94,7 +94,7 @@ func TestPublishWorkspace_AcquisitionRejectsUnprovedPrivateBoundary(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Close()
+			cleanupPublishDir(t, d)
 			original, acl := publishUnixWorkspaceOpenFn, publishUnixACLBoundaryFn
 			defer func() { publishUnixWorkspaceOpenFn, publishUnixACLBoundaryFn = original, acl }()
 			publishUnixWorkspaceOpenFn = func(fd int, name string, flags int, perm uint32) (int, error) {
@@ -150,7 +150,7 @@ func TestPublishWorkspace_AcquisitionRejectsSubstitutedDirectory(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Close()
+			cleanupPublishDir(t, d)
 			original := publishUnixWorkspaceOpenFn
 			defer func() { publishUnixWorkspaceOpenFn = original }()
 			var substituted string
@@ -192,7 +192,7 @@ func TestPublishWorkspace_CleanupOnlyRemovesCreatedNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)

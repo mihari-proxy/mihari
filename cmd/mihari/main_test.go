@@ -134,7 +134,7 @@ func TestBuildExportLogs_NilPrivateFSUsesStableError(t *testing.T) {
 	paths := absoluteTempPaths(t)
 	options := buildExportLogs(paths)(tui.NewLoggingResources(nil, logging.NewRedactor("secret"), nil))
 	_, err := options.Export(context.Background(), logging.ExportRequest{})
-	if !errors.Is(err, ui.ErrLocalLogStorageUnavailable) || err.Error() != "Local log storage unavailable" {
+	if !errors.Is(err, ui.ErrLocalLogStorageUnavailable) || err.Error() != "local log storage unavailable" {
 		t.Fatalf("error=%v", err)
 	}
 	if _, statErr := os.Stat(paths.Root); !os.IsNotExist(statErr) {

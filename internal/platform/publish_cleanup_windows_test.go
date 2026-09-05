@@ -16,7 +16,7 @@ func TestPublishWorkspace_WindowsGuardExistsDuringCreationInspection(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	original := publishWindowsCreatedHandleAttributesFn
 	defer func() { publishWindowsCreatedHandleAttributesFn = original }()
 	publishWindowsCreatedHandleAttributesFn = func(h windows.Handle) (uint32, error) {
@@ -54,12 +54,12 @@ func TestPublishWorkspace_WindowsExternalRenameDeleteBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	cleanupPublishWorkspace(t, w)
 	path := filepath.Join(d.Path(), w.name)
 	if err := os.Rename(path, path+"-moved"); !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
 		t.Errorf("rename error=%v", err)
@@ -87,7 +87,7 @@ func TestPublishWorkspace_WindowsMovedBeforeValidationNeverSetsDisposition(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +113,7 @@ func TestPublishWorkspace_WindowsReadAndCloseFailuresPreserved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)

@@ -73,14 +73,16 @@ func publishDirFromFD(fd int, visiblePath string) (*PublishDir, error) {
 	if err != nil {
 		return nil, fmt.Errorf("verify publish directory: %w", err)
 	}
-	defer unix.Close(checkFD)
 	var check unix.Stat_t
 	if err := unix.Fstat(checkFD, &check); err != nil {
-		return nil, fmt.Errorf("verify publish directory identity: %w", err)
+		return nil, errors.Join(fmt.Errorf("verify publish directory identity: %w", err), unix.Close(checkFD))
 	}
 	id := identFromStat(&st)
 	if identFromStat(&check) != id {
-		return nil, ErrPublishDirectoryChanged
+		return nil, errors.Join(ErrPublishDirectoryChanged, unix.Close(checkFD))
+	}
+	if err := unix.Close(checkFD); err != nil {
+		return nil, fmt.Errorf("close publish directory verification handle: %w", err)
 	}
 	d := &PublishDir{path: filepath.Clean(canonical), plat: publishDirState{fd: fd, id: id}}
 	d.plat.initialNamespaceTrusted, _ = d.unixParentHasPrivateMutationBoundary(-1)
@@ -386,10 +388,10 @@ func findUnixEntryByIdentity(parentFD int, want fileIdentity) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("list publish parent: %w", err)
 	}
-	defer unix.Close(listFD)
-	names, err := readUnixDirNames(listFD)
-	if err != nil {
-		return "", fmt.Errorf("list publish parent: %w", err)
+	names, readErr := readUnixDirNames(listFD)
+	closeErr := unix.Close(listFD)
+	if readErr != nil || closeErr != nil {
+		return "", fmt.Errorf("list publish parent: %w", errors.Join(readErr, closeErr))
 	}
 	for _, name := range names {
 		var st unix.Stat_t

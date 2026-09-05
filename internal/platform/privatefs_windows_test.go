@@ -278,7 +278,7 @@ func TestPublishWorkspace_WindowsReparseInspectionFailureCleansCreatedDirectory(
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	inspectionErr := errors.New("injected attribute query failure")
 	originalInspect := publishWindowsCreatedHandleAttributesFn
 	t.Cleanup(func() { publishWindowsCreatedHandleAttributesFn = originalInspect })
@@ -303,12 +303,12 @@ func TestPublishWorkspace_WindowsReparseInspectionFailureCleansCreatedTemp(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	cleanupPublishWorkspace(t, w)
 	inspectionErr := errors.New("injected attribute query failure")
 	originalInspect := publishWindowsCreatedHandleAttributesFn
 	t.Cleanup(func() { publishWindowsCreatedHandleAttributesFn = originalInspect })
@@ -333,7 +333,7 @@ func TestPublishWorkspace_WindowsReparseInspectionFailureJoinsCleanupError(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	inspectionErr := errors.New("injected attribute query failure")
 	cleanupErr := errors.New("injected cleanup failure")
 	originalInspect := publishWindowsCreatedHandleAttributesFn
@@ -364,7 +364,7 @@ func moveWorkspaceOutside(t *testing.T, w *PublishWorkspace, _, outside string) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	const movedName = "moved-workspace"
 	if err := renameHandle(w.plat.handle, d.plat.handle, movedName, windows.FILE_RENAME_POSIX_SEMANTICS); err != nil {
 		t.Fatal(err)
@@ -390,10 +390,6 @@ func assertOwnerSystemDACL(t *testing.T, path string, directory bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner, _, err := sd.Owner()
-	if err != nil || owner == nil {
-		t.Fatalf("owner: %v", err)
-	}
 	dacl, _, err := sd.DACL()
 	if err != nil {
 		t.Fatal(err)
@@ -417,7 +413,11 @@ func assertOwnerSystemDACL(t *testing.T, path string, directory bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var sawOwner, sawSystem bool
+	user, err := currentUserSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawUser, sawSystem bool
 	for i := uint16(0); i < dacl.AceCount; i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(dacl, uint32(i), &ace); err != nil {
@@ -427,24 +427,24 @@ func assertOwnerSystemDACL(t *testing.T, path string, directory bool) {
 		if sid.Equals(world) || sid.Equals(users) || sid.Equals(anon) {
 			t.Fatalf("%s DACL grants %s", path, sid)
 		}
-		if sid.Equals(owner) {
-			sawOwner = true
+		if sid.Equals(user) {
+			sawUser = true
 		}
 		if sid.Equals(system) {
 			sawSystem = true
 		}
-		if !sid.Equals(owner) && !sid.Equals(system) {
+		if !sid.Equals(user) && !sid.Equals(system) {
 			t.Fatalf("%s unexpected SID %s", path, sid)
 		}
 	}
-	if owner.Equals(system) {
+	if user.Equals(system) {
 		if !sawSystem {
 			t.Fatalf("%s missing SYSTEM ACE", path)
 		}
 		return
 	}
-	if !sawOwner || !sawSystem {
-		t.Fatalf("%s DACL owner=%v system=%v dir=%v", path, sawOwner, sawSystem, directory)
+	if !sawUser || !sawSystem {
+		t.Fatalf("%s DACL user=%v system=%v dir=%v", path, sawUser, sawSystem, directory)
 	}
 }
 

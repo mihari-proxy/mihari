@@ -21,7 +21,7 @@ func TestPublishWorkspace_UnixTrustedStickyParentCleans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func TestPublishWorkspace_UnixUntrustedOwnerStickyLeavesEmptyOrphan(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func TestPublishWorkspace_UnixPermissionsRecheckedAtCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +102,7 @@ func TestPublishWorkspace_UnixACLRecheckedBeforeDirectoryRemoval(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Close()
+			cleanupPublishDir(t, d)
 			w, err := d.CreateWorkspace()
 			if err != nil {
 				t.Fatal(err)
@@ -134,7 +134,7 @@ func TestPublishWorkspace_UnixUntrustedParentReplacementNeverUnlinksDirectory(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +163,7 @@ func TestPublishWorkspace_UnixReadAndCloseFailuresPreserved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +194,7 @@ func TestPublishWorkspace_UnixOwnerChangeRechecked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)

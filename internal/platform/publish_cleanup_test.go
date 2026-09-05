@@ -12,7 +12,7 @@ func TestPublishWorkspace_CloseCleansHeldContents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func TestPublishWorkspace_ContentRemovalFailureStillCleansOtherFiles(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)

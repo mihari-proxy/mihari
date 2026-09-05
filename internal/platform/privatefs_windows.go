@@ -714,10 +714,7 @@ func parseFullDirInfo(buf []byte) []windowsDirent {
 	const nameOffset = 68
 	var ents []windowsDirent
 	off := 0
-	for {
-		if off+nameOffset > len(buf) {
-			break
-		}
+	for off+nameOffset <= len(buf) {
 		next := binary.LittleEndian.Uint32(buf[off:])
 		attr := binary.LittleEndian.Uint32(buf[off+56:])
 		nameLen := int(binary.LittleEndian.Uint32(buf[off+60:]))

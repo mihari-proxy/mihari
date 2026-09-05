@@ -467,7 +467,7 @@ func TestPublishWorkspace_UnixCloseFailsClosedWhenParentIsMutableByOthers(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
@@ -519,12 +519,12 @@ func TestPrivateFSPublishDir_UnixPropagatesDataRootOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	cleanupWorkspaceAfterSyntheticOwnerTest(t, w)
 	f, name, err := w.CreateTemp("owner-*")
 	if err != nil {
 		t.Fatal(err)
@@ -551,12 +551,12 @@ func TestPrivateFSPublishDir_UnixPropagatesDataRootOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer externalDir.Close()
+	cleanupPublishDir(t, externalDir)
 	externalWorkspace, err := externalDir.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer externalWorkspace.Close()
+	cleanupWorkspaceAfterSyntheticOwnerTest(t, externalWorkspace)
 	externalTemp, externalName, err := externalWorkspace.CreateTemp("external-*")
 	if err != nil {
 		t.Fatal(err)
@@ -570,6 +570,18 @@ func TestPrivateFSPublishDir_UnixPropagatesDataRootOwner(t *testing.T) {
 	if len(calls) != before {
 		t.Fatalf("external publish inherited data-root owner: calls=%v", calls[before:])
 	}
+}
+
+func cleanupWorkspaceAfterSyntheticOwnerTest(t *testing.T, w *PublishWorkspace) {
+	t.Helper()
+	t.Cleanup(func() {
+		err := w.Close()
+		// This test replaces fchown with a recorder, so the on-disk owner may
+		// intentionally disagree with the synthetic trusted owner at cleanup.
+		if err != nil && !strings.Contains(err.Error(), "parent permits untrusted entry replacement") {
+			t.Errorf("close publish workspace after synthetic owner test: %v", err)
+		}
+	})
 }
 
 func TestPrivateFSPublishDir_UnixRootCreatesDataOwnerObjects(t *testing.T) {
@@ -588,7 +600,11 @@ func TestPrivateFSPublishDir_UnixRootCreatesDataOwnerObjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer fs.Close()
+	t.Cleanup(func() {
+		if err := fs.Close(); err != nil {
+			t.Errorf("close private filesystem: %v", err)
+		}
+	})
 	paths := NewPaths(root)
 	if err := fs.EnsureDir(paths.LogExportDir); err != nil {
 		t.Fatal(err)
@@ -597,12 +613,12 @@ func TestPrivateFSPublishDir_UnixRootCreatesDataOwnerObjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	cleanupPublishWorkspace(t, w)
 	f, name, err := w.CreateTemp("owner-real-*")
 	if err != nil {
 		t.Fatal(err)
