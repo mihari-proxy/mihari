@@ -15,6 +15,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/atotto/clipboard"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/platform"
@@ -309,6 +310,7 @@ var _ interface{ Err() error } = actionResultMsg{}
 
 // Model is the System page.
 type Model struct {
+	writeClipboard      func(string) error
 	ctx                 context.Context
 	client              Client
 	service             ServiceController
@@ -443,6 +445,9 @@ func (m *Model) HelpMode() string {
 
 // FooterHints returns edit-mode shortcuts while a port row is being typed.
 func (m *Model) FooterHints() string {
+	if m.loggingAvailable && m.focusID == rowLogDirectory && m.editID == "" && m.detail == nil {
+		return "↑/↓ navigate  Enter copy directory  Esc back  ? help  q quit"
+	}
 	return ui.RenderFooter(m.ID(), m.HelpMode(), ui.FooterOpt{})
 }
 
@@ -718,6 +723,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			m.loggingReloading = false
 			if current && !reloading {
 				m.markRowOutcome(rowID, true, "")
+				return m, m.scheduleOutcomeFade(rowID)
 			}
 		}
 		return m, m.rowSpinCmdIfNeeded()
@@ -1072,6 +1078,20 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, m.beginLoggingEdit(m.focusID)
 		case rowLogExport:
 			return m, func() tea.Msg { return ui.OpenExportLogsMsg{} }
+		case rowLogDirectory:
+			if !m.loggingAvailable {
+				return m, nil
+			}
+			write := m.writeClipboard
+			if write == nil {
+				write = clipboard.WriteAll
+			}
+			if err := write(m.logging.Dir); err != nil {
+				m.markRowOutcome(rowLogDirectory, false, ui.ExportCopyFailed)
+				return m, nil
+			}
+			m.markRowOutcome(rowLogDirectory, true, "")
+			return m, m.scheduleOutcomeFade(rowLogDirectory)
 		default:
 			selected := rows[index]
 			m.detail = &selected
@@ -1227,6 +1247,9 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 				}
 			}
 		}
+		if isLoggingRow(item.id) && m.editID != item.id && ((m.pending && m.pendingRow == item.id && m.pendingNote != "") || m.outcomeRow == item.id) {
+			value = item.value + "  " + value
+		}
 		if value != "" {
 			value = "  " + value
 		}
@@ -1275,7 +1298,6 @@ func (m *Model) rows() []row {
 	daemon := fmt.Sprintf("Version %s\nUptime %s\nHealth %s\nRevision %d\nConfig %s", valueOr(m.status.DaemonVersion, ui.UnknownLabel), uptime(m.status.StartedAt), valueOr(m.status.Health, ui.UnknownLabel), m.status.Revision, configState)
 	core := fmt.Sprintf("Status %s\nVersion %s\nPID %d\nRestarts %d", valueOr(m.core.Status, ui.UnknownLabel), valueOr(m.core.Version, ui.UnknownLabel), m.core.PID, m.core.Restarts)
 	rows := m.portRows()
-	rows = append(rows, m.loggingRows()...)
 	rows = append(rows, row{id: rowDaemon, section: ui.DaemonSectionTitle, label: ui.DaemonLabel, value: daemonValue(m.theme, m.status, !m.mutationsEnabled), detail: daemon})
 	rows = append(rows, m.panelRows()...)
 	rows = append(rows, m.mihariChannelRow())
@@ -1289,6 +1311,7 @@ func (m *Model) rows() []row {
 	)
 	rows = append(rows, m.serviceRows()...)
 	rows = append(rows, m.networkRows()...)
+	rows = append(rows, m.loggingRows()...)
 	rows = append(rows, m.aboutRows()...)
 	return rows
 }

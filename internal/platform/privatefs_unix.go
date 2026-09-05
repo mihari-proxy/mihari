@@ -11,6 +11,16 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func (fs *PrivateFS) repairAccessCheckedLocked(dir, name string, expected FileIdentity) error {
+	// Unix ownership is already established by the private writer. This repair
+	// targets legacy Windows ACLs; still verify the listed object on every OS.
+	f, err := fs.openReadCheckedLocked(dir, name, expected)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
 var (
 	fstatFn             = unix.Fstat
 	fchownatFn          = unix.Fchownat

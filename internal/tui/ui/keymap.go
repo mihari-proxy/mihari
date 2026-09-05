@@ -141,9 +141,9 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"enter"}, Display: "Enter", Label: "apply", Footer: "Enter apply", Scope: ScopeMode, Mode: ModeLoggingEdit},
 		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel", Footer: "Esc cancel", Scope: ScopeMode, Mode: ModeLoggingEdit},
 
-		{Keys: []string{"tab", "shift+tab"}, Display: "Tab / Shift+Tab", Label: "move between export fields", Footer: "Tab/Shift+Tab fields", Scope: ScopeMode, Mode: ModeExportLogs},
-		{Keys: []string{"enter"}, Display: "Enter", Label: "export or copy the completed path", Footer: "Enter export", Scope: ScopeMode, Mode: ModeExportLogs},
-		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel or close", Footer: "Esc cancel", Scope: ScopeMode, Mode: ModeExportLogs},
+		{Keys: []string{"up", "down", "tab", "shift+tab"}, Display: "↑/↓ / Tab", Label: "select a field; while editing Range, change mode", Footer: "↑/↓ fields", Scope: ScopeMode, Mode: ModeExportLogs},
+		{Keys: []string{"enter"}, Display: "Enter", Label: "edit or apply a field; activate Export to export", Footer: "Enter edit", Scope: ScopeMode, Mode: ModeExportLogs},
+		{Keys: []string{"esc"}, Display: "Esc", Label: "confirm discarding an edit, cancel export, or close", Footer: "Esc cancel", Scope: ScopeMode, Mode: ModeExportLogs},
 
 		{Keys: []string{"tab", "shift+tab", "left", "right"}, Display: "Tab / ←/→", Label: "toggle Confirm / Cancel", Scope: ScopeMode, Mode: ModeConfirm},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "activate the selected button", Scope: ScopeMode, Mode: ModeConfirm},

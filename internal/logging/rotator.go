@@ -93,7 +93,10 @@ func OpenRotatingWriter(ctx context.Context, opts RotatorOptions) (*RotatingWrit
 	if hook := testAfterExclusiveLock; hook != nil {
 		hook()
 	}
-	err = w.convergeLocked()
+	err = repairExistingLogAccess(ctx, opts.PrivateFS, filepath.Dir(opts.BasePath))
+	if err == nil {
+		err = w.convergeLocked()
+	}
 	if err == nil {
 		var f *os.File
 		f, err = w.fs.OpenAppend(w.basePath)
@@ -296,11 +299,17 @@ func (w *RotatingWriter) convergeLocked() error {
 	}
 	for _, entry := range entries {
 		n, ok := archiveSuffix(base, entry.Name)
-		if !ok || n < maxFiles {
+		if !ok {
 			continue
 		}
 		if !entry.Mode.IsRegular() {
 			w.report(FailureCleanup, fmt.Errorf("skip non-regular archive suffix %d", n))
+			continue
+		}
+		if n < maxFiles {
+			if err := w.fs.RepairAccessChecked(w.child(entry.Name), entry.Identity); err != nil {
+				w.report(FailureCleanup, err)
+			}
 			continue
 		}
 		if hook := testBeforeRemove; hook != nil {

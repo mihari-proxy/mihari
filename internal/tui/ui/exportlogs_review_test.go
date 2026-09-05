@@ -14,6 +14,7 @@ func TestExportLogsModel_ClipboardShortcutRequestsAndConsumesPaste(t *testing.T)
 		m := NewExportLogsModel(ExportLogsOptions{})
 		m.Open()
 		m.rangeKind, m.focus = logging.RangeBetween, focus
+		m.Update(key(tea.KeyEnter, ""))
 		cmd, consumed := m.Update(tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl})
 		if cmd == nil || !consumed {
 			t.Fatalf("focus %v swallowed clipboard command", focus)
@@ -33,7 +34,7 @@ func TestExportLogsModel_SuccessRemindsReviewBeforeSharing(t *testing.T) {
 	}})
 	t.Cleanup(m.CancelAndWait)
 	m.Open()
-	m.focus = exportFocusOutput
+	m.focus = exportFocusSubmit
 	cmd, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m.Update(cmd())
 	view := m.View(120, 35)

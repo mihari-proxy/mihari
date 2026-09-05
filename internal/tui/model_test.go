@@ -1285,7 +1285,7 @@ func TestModel_PendingExportPreservesAsyncRootAndTargetPageRouting(t *testing.T)
 	})
 	t.Cleanup(model.exportLogs.CancelAndWait)
 	model.exportLogs.Open()
-	model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if cmd, consumed := model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd == nil || !consumed {
 		t.Fatal("export did not enter pending state")
 	}
@@ -1358,7 +1358,7 @@ func TestModel_PendingExportRoutesRealSystemActionCompletion(t *testing.T) {
 	})
 	t.Cleanup(model.exportLogs.CancelAndWait)
 	model.exportLogs.Open()
-	model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if cmd, consumed := model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd == nil || !consumed {
 		t.Fatal("export did not enter pending state")
 	}

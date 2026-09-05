@@ -11,7 +11,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
-func TestRows_LoggingSectionFollowsPortsAndIsUnavailableOffline(t *testing.T) {
+func TestRows_LoggingSectionPrecedesAboutAndIsUnavailableOffline(t *testing.T) {
 	model := New(nil, func() string { return "op" })
 	rows := model.rows()
 	ids := make([]string, len(rows))
@@ -19,16 +19,16 @@ func TestRows_LoggingSectionFollowsPortsAndIsUnavailableOffline(t *testing.T) {
 		ids[index] = item.id
 	}
 
-	portsEnd := slices.Index(ids, "port-web")
-	daemon := slices.Index(ids, "daemon")
-	if portsEnd < 0 || daemon < 0 {
+	loggingStart := slices.Index(ids, rowLogLevel)
+	about := slices.Index(ids, rowAbout)
+	if loggingStart < 0 || about < 0 {
 		t.Fatalf("missing boundary rows: %v", ids)
 	}
 	want := []string{"log-level", "log-max-size", "log-max-files", "log-directory", "log-export"}
-	if got := ids[portsEnd+1 : daemon]; !slices.Equal(got, want) {
-		t.Fatalf("logging rows between ports and daemon = %v, want %v", got, want)
+	if got := ids[loggingStart:about]; !slices.Equal(got, want) {
+		t.Fatalf("logging rows before About = %v, want %v", got, want)
 	}
-	for _, item := range rows[portsEnd+1 : daemon-1] {
+	for _, item := range rows[loggingStart : about-1] {
 		if item.section != "Logging" || item.value != ui.UnavailableTitle {
 			t.Fatalf("offline logging row = %#v", item)
 		}

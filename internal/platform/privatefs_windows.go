@@ -18,9 +18,15 @@ const (
 	privateShare                 = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE
 	dirAccess                    = windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE | windows.FILE_GENERIC_EXECUTE | windows.WRITE_DAC
 	fileRenameInformationExClass = 65
+	privateFileAllAccess         = 0x001f01ff // FILE_ALL_ACCESS (WinNT.h).
 )
 
 var processIsLocalSystem = currentProcessIsLocalSystem
+
+var privateRootSecurity = func(h windows.Handle) (*windows.SECURITY_DESCRIPTOR, error) {
+	return windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+}
+var privateHardenHandle = hardenHandle
 
 type privateFSState struct {
 	root  windows.Handle
@@ -86,9 +92,18 @@ func (fs *PrivateFS) openRoot() error {
 		_ = windows.CloseHandle(h)
 		return err
 	}
-	if err := hardenHandle(h, fs.dirSDDL()); err != nil {
+	// A SYSTEM process that cannot identify the individual user must not
+	// overwrite a concurrent interactive repair with its legacy BA fallback.
+	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
 		_ = windows.CloseHandle(h)
-		return fmt.Errorf("harden private data root: %w", err)
+		return err
+	}
+	if !fs.plat.owner.Equals(admins) {
+		if err := hardenHandle(h, fs.dirSDDL()); err != nil {
+			_ = windows.CloseHandle(h)
+			return fmt.Errorf("harden private data root: %w", err)
+		}
 	}
 	fs.plat.root = h
 	fs.plat.dirs = make(map[string]windows.Handle)
@@ -113,7 +128,7 @@ func (fs *PrivateFS) closePlatform() error {
 }
 
 func (fs *PrivateFS) ensureDirLocked(name string) error {
-	sd, err := windows.SecurityDescriptorFromString(fs.dirSDDL())
+	sd, err := fs.privateDescriptor(true)
 	if err != nil {
 		return err
 	}
@@ -127,7 +142,7 @@ func (fs *PrivateFS) ensureDirLocked(name string) error {
 		_ = windows.CloseHandle(h)
 		return err
 	}
-	if err := hardenHandle(h, fs.dirSDDL()); err != nil {
+	if err := fs.hardenPrivateHandle(h, true); err != nil {
 		_ = windows.CloseHandle(h)
 		return fmt.Errorf("harden dir %s: %w", name, err)
 	}
@@ -147,6 +162,9 @@ func (fs *PrivateFS) dirHandle(name string) (windows.Handle, error) {
 	fs.dirsMu.Lock()
 	if h, ok := fs.plat.dirs[name]; ok {
 		fs.dirsMu.Unlock()
+		if err := fs.hardenPrivateHandle(h, true); err != nil {
+			return 0, err
+		}
 		return h, nil
 	}
 	fs.dirsMu.Unlock()
@@ -164,10 +182,16 @@ func (fs *PrivateFS) dirHandle(name string) (windows.Handle, error) {
 	if old, ok := fs.plat.dirs[name]; ok {
 		fs.dirsMu.Unlock()
 		_ = windows.CloseHandle(h)
+		if err := fs.hardenPrivateHandle(old, true); err != nil {
+			return 0, err
+		}
 		return old, nil
 	}
 	fs.plat.dirs[name] = h
 	fs.dirsMu.Unlock()
+	if err := fs.hardenPrivateHandle(h, true); err != nil {
+		return 0, err
+	}
 	return h, nil
 }
 
@@ -176,7 +200,7 @@ func (fs *PrivateFS) openAppendLocked(dir, name string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	sd, err := windows.SecurityDescriptorFromString(fs.fileSDDL())
+	sd, err := fs.privateDescriptor(false)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +215,7 @@ func (fs *PrivateFS) openAppendLocked(dir, name string) (*os.File, error) {
 		_ = windows.CloseHandle(h)
 		return nil, err
 	}
-	if err := hardenHandle(h, fs.fileSDDL()); err != nil {
+	if err := fs.hardenPrivateHandle(h, false); err != nil {
 		_ = windows.CloseHandle(h)
 		return nil, fmt.Errorf("harden %s: %w", name, err)
 	}
@@ -226,12 +250,38 @@ func (fs *PrivateFS) openReadCheckedLocked(dir, name string, expected FileIdenti
 	return os.NewFile(uintptr(h), name), nil
 }
 
+func (fs *PrivateFS) repairAccessCheckedLocked(dir, name string, expected FileIdentity) (err error) {
+	parent, err := fs.dirHandle(dir)
+	if err != nil {
+		return err
+	}
+	h, err := openRelative(parent, name, windows.FILE_READ_ATTRIBUTES|windows.READ_CONTROL|windows.WRITE_DAC|windows.SYNCHRONIZE, windows.FILE_OPEN, windows.FILE_NON_DIRECTORY_FILE|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT, 0, nil)
+	if err != nil {
+		if isWindowsNotFound(err) {
+			return fmt.Errorf("open file for access repair: %w", os.ErrNotExist)
+		}
+		return fmt.Errorf("open file for access repair: %w", err)
+	}
+	defer func() { err = errors.Join(err, windows.CloseHandle(h)) }()
+	if err := rejectReparse(h, name); err != nil {
+		return err
+	}
+	id, err := identityFromHandle(h)
+	if err != nil {
+		return err
+	}
+	if (FileIdentity{plat: id}) != expected {
+		return ErrIdentityMismatch
+	}
+	return fs.hardenPrivateHandle(h, false)
+}
+
 func (fs *PrivateFS) createTempLocked(dir, pattern string) (*os.File, string, error) {
 	parent, err := fs.dirHandle(dir)
 	if err != nil {
 		return nil, "", err
 	}
-	sd, err := windows.SecurityDescriptorFromString(fs.fileSDDL())
+	sd, err := fs.privateDescriptor(false)
 	if err != nil {
 		return nil, "", err
 	}
@@ -254,7 +304,7 @@ func (fs *PrivateFS) createTempLocked(dir, pattern string) (*os.File, string, er
 			_ = windows.CloseHandle(h)
 			return nil, "", err
 		}
-		if err := hardenHandle(h, fs.fileSDDL()); err != nil {
+		if err := fs.hardenPrivateHandle(h, false); err != nil {
 			_ = windows.CloseHandle(h)
 			_ = fs.removeLocked(dir, name)
 			return nil, "", err
@@ -293,6 +343,9 @@ func (fs *PrivateFS) readDirLocked(dir string) ([]FileEntry, error) {
 		h, err := openRelative(parent, ent.name, windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE, windows.FILE_OPEN,
 			windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT, 0, nil)
 		if err != nil {
+			if isWindowsNotFound(err) {
+				continue
+			}
 			return nil, fmt.Errorf("stat %s: %w", ent.name, err)
 		}
 		id, err := identityFromHandle(h)
@@ -422,11 +475,11 @@ func (d *DirectoryIdentity) identity() (FileIdentity, error) {
 }
 
 func (fs *PrivateFS) loadOwner(h windows.Handle) error {
-	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	sd, err := privateRootSecurity(h)
 	if err != nil {
 		return fmt.Errorf("query data root owner: %w", err)
 	}
-	owner, _, err := sd.Owner()
+	owner, err := privateDataPrincipal(sd)
 	if err != nil || owner == nil {
 		return fmt.Errorf("query data root owner: %w", err)
 	}
@@ -438,30 +491,154 @@ func (fs *PrivateFS) loadOwner(h windows.Handle) error {
 	return nil
 }
 
-func (fs *PrivateFS) ownerIsSystem() bool {
-	if fs.plat.owner == nil {
-		return false
+func privateDataPrincipal(sd *windows.SECURITY_DESCRIPTOR) (*windows.SID, error) {
+	owner, _, err := sd.Owner()
+	if err != nil || owner == nil {
+		return nil, fmt.Errorf("read private data owner: %w", err)
 	}
-	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
 	if err != nil {
+		return nil, err
+	}
+	if !owner.Equals(admins) {
+		return owner.Copy()
+	}
+	// Elevated processes can create a directory owned by Administrators rather
+	// than their user SID. Recover the individual principal from its existing
+	// explicit full-control ACE, so a later LocalSystem service chooses the same
+	// user. Never carry broad group ACEs into private log files.
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil {
+		return nil, fmt.Errorf("private data root requires a DACL")
+	}
+	var principal *windows.SID
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			return nil, err
+		}
+		// Never flatten object/callback or deny restrictions into an unconditional grant.
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			return nil, fmt.Errorf("unsupported private data root ACE type %d", ace.Header.AceType)
+		}
+		if ace.Header.AceFlags&(windows.INHERITED_ACE|windows.INHERIT_ONLY_ACE) != 0 || ace.Mask&privateFileAllAccess != privateFileAllAccess {
+			continue
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		_, _, kind, lookupErr := sid.LookupAccount("")
+		if lookupErr != nil {
+			return nil, fmt.Errorf("resolve private data principal: %w", lookupErr)
+		}
+		if kind != windows.SidTypeUser {
+			continue
+		}
+		if principal != nil && !principal.Equals(sid) {
+			return nil, fmt.Errorf("ambiguous private data root users")
+		}
+		principal, err = sid.Copy()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if principal != nil {
+		return principal, nil
+	}
+	// Legacy versions may already have removed the user ACE. An interactive
+	// process that successfully opened the root with WRITE_DAC may repair it.
+	// LocalSystem cannot infer an interactive user and keeps the existing owner.
+	isSystem, err := processIsLocalSystem()
+	if err != nil {
+		return nil, err
+	}
+	if isSystem {
+		if !legacyAdminRootDACL(sd, dacl, admins) {
+			return nil, fmt.Errorf("unresolved private data root has unsafe permissions")
+		}
+		return owner.Copy()
+	}
+	return currentUserSID()
+}
+
+// Only the exact protected legacy trust boundary can be left untouched.
+func legacyAdminRootDACL(sd *windows.SECURITY_DESCRIPTOR, dacl *windows.ACL, admins *windows.SID) bool {
+	control, _, err := sd.Control()
+	if err != nil || control&windows.SE_DACL_PROTECTED == 0 {
 		return false
 	}
-	return fs.plat.owner.Equals(system)
+	var sawAdmin, sawSystem bool
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if windows.GetAce(dacl, i, &ace) != nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			return false
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		switch {
+		case sid.Equals(admins):
+			sawAdmin = true
+		case sid.String() == "S-1-5-18":
+			sawSystem = true
+		default:
+			return false
+		}
+	}
+	return sawAdmin && sawSystem
 }
 
-func (fs *PrivateFS) dirSDDL() string {
-	if fs.ownerIsSystem() {
-		return "D:P(A;OICI;FA;;;SY)"
+func (fs *PrivateFS) currentPrivateSDDL(directory bool) (string, error) {
+	sd, err := privateRootSecurity(fs.plat.root)
+	if err != nil {
+		return "", fmt.Errorf("read current private root policy: %w", err)
 	}
-	return "D:P(A;OICI;FA;;;" + fs.plat.owner.String() + ")(A;OICI;FA;;;SY)"
+	principal, err := privateDataPrincipal(sd)
+	if err != nil {
+		return "", err
+	}
+	return principalSDDL(principal, directory), nil
 }
 
-func (fs *PrivateFS) fileSDDL() string {
-	if fs.ownerIsSystem() {
-		return "D:P(A;;FA;;;SY)"
+func (fs *PrivateFS) privateDescriptor(directory bool) (*windows.SECURITY_DESCRIPTOR, error) {
+	sddl, err := fs.currentPrivateSDDL(directory)
+	if err != nil {
+		return nil, err
 	}
-	return "D:P(A;;FA;;;" + fs.plat.owner.String() + ")(A;;FA;;;SY)"
+	return windows.SecurityDescriptorFromString(sddl)
 }
+
+func (fs *PrivateFS) hardenPrivateHandle(h windows.Handle, directory bool) error {
+	// Recheck after applying: a service can have sampled BA immediately before
+	// interactive startup grants the user. Repair that same held object again.
+	for attempt := 0; attempt < 3; attempt++ {
+		before, err := fs.currentPrivateSDDL(directory)
+		if err != nil {
+			return err
+		}
+		if err := privateHardenHandle(h, before); err != nil {
+			return err
+		}
+		after, err := fs.currentPrivateSDDL(directory)
+		if err != nil {
+			return err
+		}
+		if before == after {
+			return nil
+		}
+	}
+	return fmt.Errorf("private root policy changed repeatedly during access repair")
+}
+
+func principalSDDL(principal *windows.SID, directory bool) string {
+	inherit := ""
+	if directory {
+		inherit = "OICI"
+	}
+	// Duplicating SYSTEM here is harmless but avoid it for the canonical policy.
+	if principal.String() == "S-1-5-18" {
+		return "D:P(A;" + inherit + ";FA;;;SY)"
+	}
+	return "D:P(A;" + inherit + ";FA;;;" + principal.String() + ")(A;" + inherit + ";FA;;;SY)"
+}
+
+func (fs *PrivateFS) dirSDDL() string { return principalSDDL(fs.plat.owner, true) }
 
 func currentProcessIsLocalSystem() (bool, error) {
 	sid, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
