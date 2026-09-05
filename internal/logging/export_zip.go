@@ -69,6 +69,9 @@ func exportWithOps(ctx context.Context, request ExportRequest, ops exportOps) (_
 	}
 	workspace, err := target.Dir.CreateWorkspace()
 	if err != nil {
+		// Acquisition can fail after mkdir without a safely owned workspace.
+		// Report possible residual data while preserving the primary failure.
+		warnExport(request.OnWarning)
 		closeExportTargetWithWarning(target, request.OnWarning)
 		return ExportResult{}, exportPipelineError(err)
 	}

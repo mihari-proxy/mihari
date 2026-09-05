@@ -12,6 +12,7 @@ import (
 )
 
 var (
+	publishUnixWorkspaceOpenFn  = unix.Openat
 	publishUnixPostLinkUnlinkFn = unix.Unlinkat
 	publishUnixFsyncFn          = unix.Fsync
 	publishUnixFchownFn         = unix.Fchown
@@ -36,6 +37,7 @@ type publishWorkspaceState struct {
 	setOwner bool
 	uid      int
 	gid      int
+	created  map[string]struct{}
 }
 
 func openPublishDir(path string) (*PublishDir, error) {
@@ -149,7 +151,7 @@ func (d *PublishDir) createWorkspaceLocked() (*PublishWorkspace, error) {
 			}
 			return nil, fmt.Errorf("create publish workspace: %w", err)
 		}
-		fd, err := unix.Openat(d.plat.fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		fd, err := publishUnixWorkspaceOpenFn(d.plat.fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		if err != nil {
 			// No held identity exists, so deletion by this name cannot be proved safe.
 			return nil, errors.Join(fmt.Errorf("open publish workspace: %w", err), fmt.Errorf("workspace cleanup incomplete: created identity unavailable"))
@@ -158,11 +160,16 @@ func (d *PublishDir) createWorkspaceLocked() (*PublishWorkspace, error) {
 		if err := unix.Fstat(fd, &st); err != nil {
 			return nil, errors.Join(fmt.Errorf("stat publish workspace: %w", err), fmt.Errorf("workspace cleanup incomplete: created identity unavailable"), unix.Close(fd))
 		}
-		if st.Mode&unix.S_IFMT != unix.S_IFDIR {
-			return nil, errors.Join(fmt.Errorf("publish workspace is not a directory"), unix.Close(fd))
+		// mkdir/open is not atomic in an untrusted parent. Prove the held
+		// object is safe before adopting it or changing permissions. A different
+		// UID can rename a trusted user's sibling here but cannot mutate an
+		// empty, private, trusted-owner directory after this proof.
+		if err := d.validateUnixWorkspace(fd, &st); err != nil {
+			return nil, errors.Join(err, fmt.Errorf("workspace cleanup incomplete: acquisition not trusted"), unix.Close(fd))
 		}
 		w := &PublishWorkspace{owner: d, name: name, plat: publishWorkspaceState{
 			fd: fd, id: identFromStat(&st), setOwner: d.plat.setOwner, uid: d.plat.uid, gid: d.plat.gid,
+			created: make(map[string]struct{}),
 		}}
 		if err := unix.Fchmod(fd, 0o700); err != nil {
 			return nil, errors.Join(fmt.Errorf("harden publish workspace: %w", err), w.closePlatformLocked(d))
@@ -175,6 +182,22 @@ func (d *PublishDir) createWorkspaceLocked() (*PublishWorkspace, error) {
 		return w, nil
 	}
 	return nil, fmt.Errorf("create publish workspace: exhausted names")
+}
+
+func (d *PublishDir) validateUnixWorkspace(fd int, st *unix.Stat_t) error {
+	trustedOwner := st.Uid == 0 || int(st.Uid) == os.Geteuid() || (d.plat.setOwner && int(st.Uid) == d.plat.uid)
+	if st.Mode&unix.S_IFMT != unix.S_IFDIR || !trustedOwner || st.Mode&0o7777 != 0o700 {
+		return fmt.Errorf("publish workspace acquisition: owner or private permissions unproved")
+	}
+	safe, err := publishUnixACLBoundaryFn(fd)
+	if err != nil || !safe {
+		return errors.Join(fmt.Errorf("publish workspace acquisition: private ACL unproved"), err)
+	}
+	names, err := readUnixDirNames(fd)
+	if err != nil || len(names) != 0 {
+		return errors.Join(fmt.Errorf("publish workspace acquisition: empty directory unproved"), err)
+	}
+	return nil
 }
 
 func (w *PublishWorkspace) createTempLocked(pattern string) (*os.File, string, error) {
@@ -190,6 +213,7 @@ func (w *PublishWorkspace) createTempLocked(pattern string) (*os.File, string, e
 			}
 			return nil, "", fmt.Errorf("create publish temp: %w", err)
 		}
+		w.plat.created[name] = struct{}{}
 		if err := unix.Fchmod(fd, 0o600); err != nil {
 			_ = unix.Close(fd)
 			_ = unix.Unlinkat(w.plat.fd, name, 0)
@@ -208,6 +232,9 @@ func (w *PublishWorkspace) createTempLocked(pattern string) (*os.File, string, e
 }
 
 func (w *PublishWorkspace) removeLocked(name string) error {
+	if _, owned := w.plat.created[name]; !owned {
+		return fmt.Errorf("remove publish temp: name not created by workspace")
+	}
 	var st unix.Stat_t
 	if err := unix.Fstatat(w.plat.fd, name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		return fmt.Errorf("remove publish temp: %w", err)
@@ -321,14 +348,23 @@ func (d *PublishDir) unixParentHasPrivateMutationBoundary(workspaceFD int) (bool
 }
 
 func (w *PublishWorkspace) clearContentsLocked() error {
+	var result error
+	// Never adopt arbitrary directory entries as cleanup targets, even after
+	// successful acquisition. Missing created files were already published or
+	// removed; all other failures remain warnings and do not stop cleanup.
+	for name := range w.plat.created {
+		if err := w.removeLocked(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			result = errors.Join(result, err)
+		}
+	}
 	list, err := unix.Openat(w.plat.fd, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return fmt.Errorf("workspace content cleanup incomplete: %w", err)
+		return fmt.Errorf("workspace content cleanup incomplete: %w", errors.Join(result, err))
 	}
 	names, readErr := publishUnixCleanupReadFn(list)
-	result := errors.Join(readErr, unix.Close(list))
-	for _, name := range names {
-		result = errors.Join(result, w.removeLocked(name))
+	result = errors.Join(result, readErr, unix.Close(list))
+	if len(names) != 0 {
+		result = errors.Join(result, fmt.Errorf("workspace contains remaining entries"))
 	}
 	if result != nil {
 		return fmt.Errorf("workspace content cleanup incomplete: %w", result)
