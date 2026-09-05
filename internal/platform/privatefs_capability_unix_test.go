@@ -5,8 +5,11 @@ package platform
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 
@@ -407,4 +410,234 @@ func privateTempCapability(t *testing.T) (*TrustedRoot, string) {
 	r.chain[0].node = n
 	r.path = path
 	return r, path
+}
+
+// Only the targeted child changes process-global umask. Its anchor is created
+// before the change; ordinary tests and concurrent child processes are isolated.
+func runPrivateUmaskSubprocess(t *testing.T, check func(*TrustedRoot, string)) {
+	t.Helper()
+	if os.Getenv("MIHARI_TEST_PRIVATE_UMASK") == t.Name() {
+		r, path := privateTempCapability(t)
+		previous := unix.Umask(0200)
+		defer unix.Umask(previous)
+		check(r, path)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "MIHARI_TEST_PRIVATE_UMASK="+t.Name())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("umask child: %v\n%s", err, out)
+	}
+}
+
+func assertCreatedMode(t *testing.T, path string, want os.FileMode) os.FileInfo {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != want {
+		t.Errorf("created %s mode=%04o, want%04o", filepath.Base(path), info.Mode().Perm(), want)
+	}
+	return info
+}
+
+func TestPrivateFSCapability_RestrictiveUmask(t *testing.T) {
+	runPrivateUmaskSubprocess(t, func(r *TrustedRoot, path string) {
+		fs, err := NewPrivateFSFromRoot(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer fs.Close()
+		for _, dir := range []string{"logs", "logs-export"} {
+			if err := fs.EnsureDir(dir); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Run("append", func(t *testing.T) {
+			p := filepath.Join(path, "logs", "new.log")
+			f, err := fs.OpenAppend(p)
+			if err != nil {
+				t.Fatalf("create append under umask0200: %v", err)
+			}
+			if _, err := f.WriteString("entry"); err != nil {
+				f.Close()
+				t.Fatal(err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatal(err)
+			}
+			assertCreatedMode(t, p, 0600)
+		})
+		t.Run("temp", func(t *testing.T) {
+			f, err := fs.CreateTemp("logs", "private-*")
+			if err != nil {
+				t.Fatal(err)
+			}
+			name := f.Name()
+			if err := f.Close(); err != nil {
+				t.Fatal(err)
+			}
+			assertCreatedMode(t, filepath.Join(path, "logs", name), 0600)
+		})
+		t.Run("published", func(t *testing.T) {
+			d, err := fs.OpenPublishDir("logs-export")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			w, err := d.CreateWorkspace()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer w.Close()
+			f, name, err := w.CreateTemp("archive-*")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.WriteString("archive"); err != nil {
+				f.Close()
+				t.Fatal(err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatal(err)
+			}
+			assertCreatedMode(t, filepath.Join(path, "logs-export", w.name, name), 0600)
+			if err := d.PublishNoReplace(w, name, "archive.zip", nil); err != nil {
+				t.Fatal(err)
+			}
+			assertCreatedMode(t, filepath.Join(path, "logs-export", "archive.zip"), 0600)
+		})
+		t.Run("existing files", func(t *testing.T) {
+			for _, mode := range []os.FileMode{0400, 0644} {
+				p := filepath.Join(path, "logs", fmt.Sprintf("existing-%o.log", mode))
+				if err := os.WriteFile(p, []byte("preserve"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(p, mode); err != nil {
+					t.Fatal(err)
+				}
+				f, err := fs.OpenAppend(p)
+				if f != nil {
+					f.Close()
+				}
+				if !errors.Is(err, os.ErrPermission) {
+					t.Fatalf("unsafe existing append accepted: %v", err)
+				}
+				assertCreatedMode(t, p, mode)
+				data, err := os.ReadFile(p)
+				if err != nil || string(data) != "preserve" {
+					t.Fatalf("existing file modified: %q %v", data, err)
+				}
+			}
+		})
+	})
+}
+
+type privateInitializationBackend struct {
+	nativeTrustedBackend
+	reason  string
+	created bool
+	name    string
+}
+
+func (b *privateInitializationBackend) openFile(parent int, name string, flags int, mode uint32) (int, error) {
+	fd, err := b.nativeTrustedBackend.openFile(parent, name, flags, mode)
+	if err == nil && flags&unix.O_EXCL != 0 {
+		b.created = true
+		b.name = name
+	}
+	return fd, err
+}
+
+func (b *privateInitializationBackend) stat(fd int) (trustedNode, error) {
+	n, err := b.nativeTrustedBackend.stat(fd)
+	if b.created && n.mode&unix.S_IFMT == unix.S_IFREG {
+		switch b.reason {
+		case "type":
+			n.mode = n.mode&^unix.S_IFMT | unix.S_IFIFO
+		case "owner":
+			n.uid++
+		case "links":
+			n.links = 2
+		}
+	}
+	return n, err
+}
+
+func (b *privateInitializationBackend) statAt(parent int, name string) (trustedNode, error) {
+	n, err := b.nativeTrustedBackend.statAt(parent, name)
+	if b.created && b.reason == "name" && name == b.name {
+		n.id.ino++
+	}
+	return n, err
+}
+
+func (b *privateInitializationBackend) checkACL(fd int, strict bool, owner uint32) error {
+	n, err := b.nativeTrustedBackend.stat(fd)
+	if err != nil {
+		return err
+	}
+	if b.created && ((b.reason == "ACL" && n.mode&unix.S_IFMT == unix.S_IFREG) || (b.reason == "parent ACL" && n.mode&unix.S_IFMT == unix.S_IFDIR)) {
+		return os.ErrPermission
+	}
+	return b.nativeTrustedBackend.checkACL(fd, strict, owner)
+}
+
+func TestPrivateFSCapability_InitializationValidationBeforeModeChange(t *testing.T) {
+	runPrivateUmaskSubprocess(t, func(r *TrustedRoot, path string) {
+		b := &privateInitializationBackend{}
+		r.backend = b
+		fs, err := NewPrivateFSFromRoot(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer fs.Close()
+		if err := fs.EnsureDir("logs"); err != nil {
+			t.Fatal(err)
+		}
+		for _, route := range []string{"lock", "append", "temp"} {
+			for _, reason := range []string{"type", "owner", "links", "ACL", "name", "parent ACL"} {
+				t.Run(route+"/"+reason, func(t *testing.T) {
+					b.created = false
+					b.reason = reason
+					name := "new-" + route + "-" + reason
+					var err error
+					parent := path
+					switch route {
+					case "lock":
+						var lock *rootLock
+						lock, err = acquireRootLock(context.Background(), fs.plat.trusted, name)
+						if lock != nil {
+							lock.close()
+						}
+					case "append":
+						parent = filepath.Join(path, "logs")
+						var f *os.File
+						f, err = fs.OpenAppend(filepath.Join(parent, name))
+						if f != nil {
+							f.Close()
+						}
+					case "temp":
+						parent = filepath.Join(path, "logs")
+						var f *os.File
+						f, err = fs.CreateTemp("logs", "untrusted-*")
+						if f != nil {
+							f.Close()
+						}
+					}
+					if err == nil {
+						t.Fatal("untrusted created inode accepted")
+					}
+					if !b.created {
+						t.Fatal("failure occurred before exclusive file creation")
+					}
+					assertCreatedMode(t, filepath.Join(parent, b.name), 0400)
+				})
+			}
+		}
+	})
 }

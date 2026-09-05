@@ -484,6 +484,12 @@ func acquireRootLock(ctx context.Context, root *TrustedRoot, name string) (_ *ro
 	if err != nil {
 		return nil, err
 	}
+	if created {
+		n, err = initializePrivateFile(root, fd, name)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if n.mode&07777 != 0600 {
 		return nil, denied("lock permissions", nil)
 	}

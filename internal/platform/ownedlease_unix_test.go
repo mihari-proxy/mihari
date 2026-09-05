@@ -579,3 +579,49 @@ func TestOwnedLease_BinaryParentOnly(t *testing.T) {
 		t.Fatalf("binary domain missing: %v", err)
 	}
 }
+
+func TestOwnedLease_RestrictiveUmask(t *testing.T) {
+	runPrivateUmaskSubprocess(t, func(r *TrustedRoot, path string) {
+		lock, err := acquireRootLock(context.Background(), r, "daemon.lock")
+		if err != nil {
+			t.Fatalf("create lock under umask0200: %v", err)
+		}
+		before := assertCreatedMode(t, filepath.Join(path, "daemon.lock"), 0600)
+		if err := lock.close(); err != nil {
+			t.Fatal(err)
+		}
+		after := assertCreatedMode(t, filepath.Join(path, "daemon.lock"), 0600)
+		if !os.SameFile(before, after) {
+			t.Fatal("released lock inode changed")
+		}
+		lock, err = acquireRootLock(context.Background(), r, "daemon.lock")
+		if err != nil {
+			t.Fatalf("reopen initialized lock: %v", err)
+		}
+		if err := lock.close(); err != nil {
+			t.Fatal(err)
+		}
+		for _, mode := range []os.FileMode{0400, 0644} {
+			name := fmt.Sprintf("existing-%o.lock", mode)
+			p := filepath.Join(path, name)
+			if err := os.WriteFile(p, []byte("preserve"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(p, mode); err != nil {
+				t.Fatal(err)
+			}
+			lock, err := acquireRootLock(context.Background(), r, name)
+			if lock != nil {
+				lock.close()
+			}
+			if !errors.Is(err, os.ErrPermission) {
+				t.Fatalf("unsafe existing lock accepted: %v", err)
+			}
+			assertCreatedMode(t, p, mode)
+			data, err := os.ReadFile(p)
+			if err != nil || string(data) != "preserve" {
+				t.Fatalf("existing lock modified: %q %v", data, err)
+			}
+		}
+	})
+}

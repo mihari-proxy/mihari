@@ -69,8 +69,10 @@ func (fs *PrivateFS) trustedOpen(dir, name string, flags int, create bool) (_ *o
 	}
 	flags |= unix.O_NOFOLLOW | unix.O_CLOEXEC | unix.O_NONBLOCK
 	fd := -1
+	created := false
 	if create {
 		fd, err = r.backend.openFile(parent, name, flags|unix.O_CREAT|unix.O_EXCL, 0600)
+		created = err == nil
 	}
 	if !create || errors.Is(err, unix.EEXIST) {
 		fd, err = r.backend.openFile(parent, name, flags, 0)
@@ -86,6 +88,12 @@ func (fs *PrivateFS) trustedOpen(dir, name string, flags int, create bool) (_ *o
 	n, err := r.checkFile(fd, 0600)
 	if err != nil {
 		return nil, err
+	}
+	if created {
+		n, err = initializePrivateFile(r, fd, name)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if n.mode&07777 != 0600 {
 		return nil, denied("private file mode", nil)
@@ -122,13 +130,7 @@ func trustedCreateTemp(r *TrustedRoot, pattern string) (_ *os.File, _ string, er
 		if e != nil {
 			return nil, "", e
 		}
-		n, e := r.checkFile(fd, 0600)
-		if e == nil {
-			e = r.checkFileName(parent, name, n)
-		}
-		if e == nil {
-			e = r.verify()
-		}
+		_, e = initializePrivateFile(r, fd, name)
 		if e == nil {
 			e = unix.SetNonblock(fd, false)
 		}
@@ -138,6 +140,45 @@ func trustedCreateTemp(r *TrustedRoot, pattern string) (_ *os.File, _ string, er
 		return os.NewFile(uintptr(fd), name), name, nil
 	}
 	return nil, "", os.ErrExist
+}
+
+// initializePrivateFile is only for an inode this operation created with EXCL.
+// Umask may remove owner bits; it must never cause an existing inode to be
+// chmodded into trust. Prove the inode and namespace before changing its mode.
+func initializePrivateFile(r *TrustedRoot, fd int, name string) (trustedNode, error) {
+	initial, err := r.checkFile(fd, 0600)
+	if err != nil {
+		return trustedNode{}, err
+	}
+	parent := r.chain[len(r.chain)-1].fd
+	if err = r.verify(); err != nil {
+		return trustedNode{}, err
+	}
+	if err = r.backend.checkACL(parent, true, r.policy.Owner); err != nil {
+		return trustedNode{}, denied("creation parent ACL", err)
+	}
+	if err = r.checkFileName(parent, name, initial); err != nil {
+		return trustedNode{}, err
+	}
+	if err = unix.Fchmod(fd, 0600); err != nil {
+		return trustedNode{}, err
+	}
+	final, err := r.checkFile(fd, 0600)
+	if err != nil {
+		return trustedNode{}, err
+	}
+	expected := initial
+	expected.mode = expected.mode&^07777 | 0600
+	if final != expected {
+		return trustedNode{}, denied("created file mode or identity changed", ErrIdentityMismatch)
+	}
+	if err = r.checkFileName(parent, name, final); err != nil {
+		return trustedNode{}, err
+	}
+	if err = r.verify(); err != nil {
+		return trustedNode{}, err
+	}
+	return final, nil
 }
 
 func trustedRemove(r *TrustedRoot, name string, expected *FileIdentity) error {
