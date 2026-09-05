@@ -236,7 +236,7 @@ func (m *ExportLogsModel) Update(message tea.Msg) (tea.Cmd, bool) {
 			if m.options.WriteClipboard(m.resultPath) != nil {
 				m.message = ExportCopyFailed
 			} else {
-				m.message = ""
+				m.message = ExportPathCopied
 			}
 			return nil, true
 		case "esc":
@@ -492,10 +492,14 @@ func (m *ExportLogsModel) View(width, height int) string {
 		if m.warning {
 			body += "\n\n" + exportWarningNotice
 		}
-		if m.message != "" {
-			body += "\n" + theme.Danger.Render(m.message)
-		}
 		body += "\n\n" + ExportSuccessHelp
+		if m.message != "" {
+			style := theme.Danger
+			if m.message == ExportPathCopied {
+				style = theme.Success
+			}
+			body += "\n\n" + style.Render(m.message)
+		}
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, theme.Dialog.Width(min(84, max(36, width-4))).Render(body))
 	}
 	line := func(field exportFocus, label, value string) string {
