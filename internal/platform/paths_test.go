@@ -244,3 +244,17 @@ func TestPathsAbsoluteRebuildsDerivedFields(t *testing.T) {
 		t.Fatalf("Absolute mutated absolute original Root: got=%q want=%q", original.Root, absoluteRoot)
 	}
 }
+
+func TestPathsAbsolute_PreservesLegacySingleRoot(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	got, err := NewPaths("portable").Absolute()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoot := filepath.Join(cwd, "portable")
+	if got.Root != wantRoot || got.ControlToken != filepath.Join(wantRoot, "control.token") || got.TUILog != filepath.Join(wantRoot, "logs", "mihari-tui.log") {
+		t.Fatalf("Absolute changed legacy single-root layout: %+v", got)
+	}
+}
