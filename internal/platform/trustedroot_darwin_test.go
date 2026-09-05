@@ -14,7 +14,7 @@ func TestTrustedRoot_DarwinFDACLRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(fd)
+	defer assertTestClose(t, func() error { return unix.Close(fd) })
 	b := nativeTrustedBackend{}
 	before, err := b.stat(fd)
 	if err != nil {

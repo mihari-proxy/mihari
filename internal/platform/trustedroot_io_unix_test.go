@@ -28,7 +28,9 @@ func trustedTempCapability(t *testing.T) (*TrustedRoot, string) {
 	b := nativeTrustedBackend{}
 	n, err := b.stat(fd)
 	if err != nil {
-		unix.Close(fd)
+		if closeErr := unix.Close(fd); closeErr != nil {
+			t.Errorf("close failed trusted-root fixture: %v", closeErr)
+		}
 		t.Fatal(err)
 	}
 	r := &TrustedRoot{backend: b, policy: RootPolicy{Owner: uint32(os.Geteuid()), Mode: 0700}, chain: []trustedLink{{fd: fd, node: n, application: true}}}
@@ -127,7 +129,7 @@ func TestTrustedRoot_ChildCreationRetainsIndependentCapability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("positive child creation: %v", err)
 	}
-	defer child.Close()
+	defer assertTestClose(t, child.Close)
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +148,7 @@ func TestTrustedRoot_ChildRejectsReplacedParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("positive child: %v", err)
 	}
-	defer child.Close()
+	defer assertTestClose(t, child.Close)
 	if err := os.Rename(filepath.Join(path, "child"), filepath.Join(path, "old")); err != nil {
 		t.Fatal(err)
 	}

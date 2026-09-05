@@ -16,7 +16,7 @@ func TestTrustedRoot_LinuxDescriptorPrimitives(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(fd)
+	defer assertTestClose(t, func() error { return unix.Close(fd) })
 	b := nativeTrustedBackend{}
 	if err := b.checkFS(fd); err != nil {
 		t.Fatalf("positive filesystem: %v", err)
@@ -31,7 +31,7 @@ func TestTrustedRoot_LinuxDescriptorPrimitives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("positive nofollow open: %v", err)
 	}
-	defer unix.Close(child)
+	defer assertTestClose(t, func() error { return unix.Close(child) })
 	n, err := b.stat(child)
 	if err != nil || n.mode&0777 != 0700 {
 		t.Fatalf("positive mode: %+v %v", n, err)
@@ -41,7 +41,7 @@ func TestTrustedRoot_LinuxDescriptorPrimitives(t *testing.T) {
 	}
 	got, err := b.openDir(fd, "link", true)
 	if got >= 0 {
-		unix.Close(got)
+		assertTestClose(t, func() error { return unix.Close(got) })
 	}
 	if !errors.Is(err, ErrUnsafeComponent) {
 		t.Fatalf("symlink: %v", err)
@@ -103,7 +103,7 @@ func TestTrustedRoot_LinuxNativeMountID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(fd)
+	defer assertTestClose(t, func() error { return unix.Close(fd) })
 	id, err := linuxMountID(fd)
 	if err != nil || id == 0 {
 		t.Fatalf("native mount identity: %d %v", id, err)
@@ -128,13 +128,11 @@ func (b *inheritedACLBackend) openFile(parent int, name string, flags int, mode 
 	fd, err := b.nativeTrustedBackend.openFile(parent, name, flags, mode)
 	if err == nil && flags&unix.O_CREAT != 0 {
 		if err = unix.Fsetxattr(fd, "system.posix_acl_access", posixACLFixture(5, 0), 0); err != nil {
-			unix.Close(fd)
-			return -1, err
+			return -1, errors.Join(err, unix.Close(fd))
 		}
 		b.observed, err = dupCLOEXEC(fd)
 		if err != nil {
-			unix.Close(fd)
-			return -1, err
+			return -1, errors.Join(err, unix.Close(fd))
 		}
 	}
 	return fd, err
@@ -153,7 +151,7 @@ func TestCreationParent_UnexpectedInheritedACLReceivesNoBytes(t *testing.T) {
 	if b.observed < 0 {
 		t.Fatal("did not reach newly created inode")
 	}
-	defer unix.Close(b.observed)
+	defer assertTestClose(t, func() error { return unix.Close(b.observed) })
 	var st unix.Stat_t
 	if err := unix.Fstat(b.observed, &st); err != nil {
 		t.Fatal(err)
@@ -192,7 +190,7 @@ func TestCreationParent_LinuxDefaultAndAccessACL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(fd)
+	defer assertTestClose(t, func() error { return unix.Close(fd) })
 	b := nativeTrustedBackend{}
 	owner := uint32(os.Geteuid())
 	if err := b.checkACL(fd, true, owner); err != nil {

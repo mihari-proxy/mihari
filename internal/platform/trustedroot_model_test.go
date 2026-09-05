@@ -111,7 +111,7 @@ func TestTrustedRoot_ModelDarwinAliasTraversal(t *testing.T) {
 			if err != nil {
 				t.Fatalf("positive alias traversal: %v", err)
 			}
-			defer r.Close()
+			defer assertTestClose(t, r.Close)
 			b.alias = "/private/" + name
 			if err := r.verify(); !errors.Is(err, ErrIdentityMismatch) {
 				t.Fatalf("changed alias target not detected: %v", err)
@@ -127,7 +127,7 @@ func TestCreationParent_TrustedRootCreateFinalOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("positive create: %v", err)
 	}
-	defer r.Close()
+	defer assertTestClose(t, r.Close)
 	if b.created != 1 {
 		t.Fatal("did not exclusively create final component")
 	}
@@ -141,7 +141,7 @@ func TestCreationParent_ChangedOwnerNeverRepaired(t *testing.T) {
 	b.nodes[3] = n
 	r, err := openTrustedRoot(context.Background(), "/var/lib/mihari", RootPolicy{Mode: 0700, AllowCreate: true}, b)
 	if r != nil {
-		r.Close()
+		assertTestClose(t, r.Close)
 		t.Fatal("accepted substituted owner")
 	}
 	if err == nil || b.prepared != 0 {
@@ -156,13 +156,13 @@ func TestCreationParent_TraversalACLDoesNotAuthorizeCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("positive existing-root traversal: %v", err)
 	}
-	r.Close()
+	assertTestClose(t, r.Close)
 	b = newTrustedModel()
 	b.strictACL = true
 	b.missing = true
 	r, err = openTrustedRoot(context.Background(), "/var/lib/mihari", RootPolicy{Mode: 0700, AllowCreate: true}, b)
 	if r != nil {
-		r.Close()
+		assertTestClose(t, r.Close)
 		t.Fatal("created below ACL parent")
 	}
 	if err == nil || b.created != 0 {

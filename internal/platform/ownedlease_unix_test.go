@@ -7,13 +7,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"golang.org/x/sys/unix"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestOwnedLease_PersistentLockContendsAndReleases(t *testing.T) {
@@ -22,14 +24,14 @@ func TestOwnedLease_PersistentLockContendsAndReleases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire valid lock: %v", err)
 	}
-	t.Cleanup(func() { l.close() })
+	t.Cleanup(func() { assertTestClose(t, l.close) })
 	before, err := os.Stat(filepath.Join(path, "daemon.lock"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	other, err := acquireRootLock(context.Background(), r, "daemon.lock")
 	if other != nil {
-		other.close()
+		assertTestClose(t, other.close)
 	}
 	if !errors.Is(err, ErrLeaseConflict) {
 		t.Fatalf("missing contention: %v", err)
@@ -48,7 +50,7 @@ func TestOwnedLease_PersistentLockContendsAndReleases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lock not released: %v", err)
 	}
-	other.close()
+	assertTestClose(t, other.close)
 }
 
 type leaseCasefoldBackend struct{ nativeTrustedBackend }
@@ -85,15 +87,14 @@ func TestOwnedLease_FreeDefaultAliasRejectedByParentIdentity(t *testing.T) {
 		b := leasePrivilegedCasefold{}
 		n, err := b.stat(fd)
 		if err != nil {
-			b.close(fd)
-			return nil, err
+			return nil, errors.Join(err, b.close(fd))
 		}
 		return &TrustedRoot{backend: b, policy: policy, path: path, parentOnly: parent, chain: []trustedLink{{fd: fd, node: n, application: true}}}, nil
 	}
 	layout := ResolvedLayout{Mode: PrivateMode, BaseDir: p, Data: NewPaths(p), ControlEndpoint: filepath.Join(e, "Control.sock")}
 	l, err := acquireDaemonLease(context.Background(), layout, 0, defaults, open)
 	if l != nil {
-		l.Close()
+		assertTestClose(t, l.Close)
 	}
 	if !errors.Is(err, os.ErrInvalid) {
 		t.Fatalf("free default alias accepted: %v", err)
@@ -105,12 +106,12 @@ func TestOwnedLease_FreeDefaultAliasRejectedByParentIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Close()
+	defer assertTestClose(t, r.Close)
 	lock, err := acquireRootLock(context.Background(), r, "daemon.lock")
 	if err != nil {
 		t.Fatalf("failed alias acquisition leaked data lock: %v", err)
 	}
-	lock.close()
+	assertTestClose(t, lock.close)
 }
 func (b leaseCasefoldBackend) statAt(fd int, name string) (trustedNode, error) {
 	return b.nativeTrustedBackend.statAt(fd, strings.ToLower(name))
@@ -130,13 +131,13 @@ func TestOwnedLease_EquivalentBasenamesContend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer first.Close()
+	defer assertTestClose(t, first.Close)
 	layout.BaseDir = d2
 	layout.Data = NewPaths(d2)
 	layout.ControlEndpoint = filepath.Join(e, "control.sock")
 	second, err := acquireDaemonLease(context.Background(), layout, uint32(os.Geteuid()), platformLayoutDefaults(""), open)
 	if second != nil {
-		second.Close()
+		assertTestClose(t, second.Close)
 	}
 	if !errors.Is(err, ErrLeaseConflict) {
 		t.Fatalf("equivalent socket names split lock domain: %v", err)
@@ -146,7 +147,7 @@ func TestOwnedLease_EquivalentBasenamesContend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("different endpoint in same parent blocked: %v", err)
 	}
-	second.Close()
+	assertTestClose(t, second.Close)
 }
 
 func TestOwnedLease_FreeDefaultEndpointRejectedBeforeIO(t *testing.T) {
@@ -203,8 +204,7 @@ func TestOwnedLease_RootServiceInstallOrder(t *testing.T) {
 		b := leasePrivilegedModel{}
 		n, err := b.stat(fd)
 		if err != nil {
-			b.close(fd)
-			return nil, err
+			return nil, errors.Join(err, b.close(fd))
 		}
 		return &TrustedRoot{backend: b, policy: policy, path: path, chain: []trustedLink{{fd: fd, node: n, application: true}}}, nil
 	}
@@ -212,7 +212,7 @@ func TestOwnedLease_RootServiceInstallOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
+	defer assertTestClose(t, l.Close)
 	if len(calls) != 2 || calls[0] != base || calls[1] != p {
 		t.Fatalf("service acquisition order %v", calls)
 	}
@@ -226,9 +226,9 @@ func TestOwnedLease_RootServiceInstallOrder(t *testing.T) {
 		}
 		other, err := acquireRootLock(context.Background(), r, "install.lock")
 		if other != nil {
-			other.close()
+			assertTestClose(t, other.close)
 		}
-		r.Close()
+		assertTestClose(t, r.Close)
 		if !errors.Is(err, ErrLeaseConflict) {
 			t.Fatalf("missing install domain: %v", err)
 		}
@@ -288,7 +288,7 @@ func TestOwnedLease_BorrowHoldsOwnerAndChecksAfterCallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
+	defer assertTestClose(t, l.Close)
 	err = l.WithEndpoint(context.Background(), layout, func(string) error { return os.Rename(filepath.Join(p, "daemon.lock"), filepath.Join(p, "moved.lock")) })
 	if err == nil {
 		t.Fatal("post-callback lock replacement accepted")
@@ -304,7 +304,7 @@ func TestOwnedLease_ExistingParentModePolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("safe existing parent: %v", err)
 	}
-	r.Close()
+	assertTestClose(t, r.Close)
 	if b.prepared != 0 || b.created != 0 || b.nodes[3].mode != unix.S_IFDIR|0750 {
 		t.Fatal("existing parent repaired")
 	}
@@ -329,7 +329,7 @@ func TestOwnedLease_EndpointBelowDataRejectsNestedMount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer parent.Close()
+	defer assertTestClose(t, parent.Close)
 	anchor := &TrustedRoot{chain: append([]trustedLink(nil), parent.chain[:3]...)}
 	if err := verifyEndpointMountBoundary(anchor, parent); !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("endpoint below anchor crossed mount: %v", err)
@@ -349,7 +349,7 @@ func TestOwnedLease_PrivateMaintenanceScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("private maintenance lease: %v", err)
 	}
-	defer l.Close()
+	defer assertTestClose(t, l.Close)
 	if err := l.Validate(context.Background(), layout, false); err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +358,7 @@ func TestOwnedLease_PrivateMaintenanceScope(t *testing.T) {
 	}
 	second, err := acquireInstallLease(context.Background(), layout, uint32(os.Geteuid()), platformLayoutDefaults(""), leaseFixtureOpen)
 	if second != nil {
-		second.Close()
+		assertTestClose(t, second.Close)
 	}
 	if !errors.Is(err, ErrLeaseConflict) {
 		t.Fatalf("install contention missing: %v", err)
@@ -376,7 +376,9 @@ func TestOwnedLease_SubprocessExitReleases(t *testing.T) {
 			t.Fatal(err)
 		}
 		fmt.Println("held")
-		bufio.NewReader(os.Stdin).ReadString('\n')
+		if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil && !errors.Is(err, io.EOF) {
+			t.Fatal(err)
+		}
 		// Deliberately exit without closing the lease: the kernel must release it.
 		os.Exit(0)
 	}
@@ -399,9 +401,15 @@ func TestOwnedLease_SubprocessExitReleases(t *testing.T) {
 	waited := false
 	t.Cleanup(func() {
 		cancel()
-		in.Close()
+		if err := in.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+			t.Errorf("close child stdin: %v", err)
+		}
 		if !waited {
-			cmd.Wait()
+			// Cancellation is the cleanup fallback after an earlier test failure, so
+			// a non-nil process result is expected while Wait still reaps the child.
+			if err := cmd.Wait(); err != nil && !errors.Is(ctx.Err(), context.Canceled) {
+				t.Errorf("wait for child: %v", err)
+			}
 		}
 	})
 	line, err := bufio.NewReader(out).ReadString('\n')
@@ -412,10 +420,10 @@ func TestOwnedLease_SubprocessExitReleases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Close()
+	defer assertTestClose(t, r.Close)
 	l, err := acquireRootLock(ctx, r, "daemon.lock")
 	if l != nil {
-		l.close()
+		assertTestClose(t, l.close)
 	}
 	if !errors.Is(err, ErrLeaseConflict) {
 		t.Fatalf("child did not hold lock: %v", err)
@@ -432,7 +440,7 @@ func TestOwnedLease_SubprocessExitReleases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("process exit did not release: %v", err)
 	}
-	l.close()
+	assertTestClose(t, l.close)
 }
 
 // Only the acquisition boundary is replaced: all held-fd, ACL, mode, identity,
@@ -445,13 +453,11 @@ func leaseFixtureOpen(ctx context.Context, path string, p RootPolicy, parent boo
 	b := nativeTrustedBackend{}
 	n, err := b.stat(fd)
 	if err != nil {
-		unix.Close(fd)
-		return nil, err
+		return nil, errors.Join(err, unix.Close(fd))
 	}
 	r := &TrustedRoot{backend: b, policy: p, path: path, parentOnly: parent, chain: []trustedLink{{fd: fd, node: n, application: true}}}
 	if err := r.checkLink(0, true); err != nil {
-		r.Close()
-		return nil, err
+		return nil, errors.Join(err, r.Close())
 	}
 	return r, nil
 }
@@ -466,7 +472,7 @@ func TestOwnedLease_DaemonDomains(t *testing.T) {
 	if err != nil {
 		t.Fatalf("valid daemon lease: %v", err)
 	}
-	defer first.Close()
+	defer assertTestClose(t, first.Close)
 	for _, domain := range []string{"same data different endpoint", "different data same endpoint"} {
 		t.Run(domain, func(t *testing.T) {
 			other := layout
@@ -478,7 +484,7 @@ func TestOwnedLease_DaemonDomains(t *testing.T) {
 			}
 			second, err := acquireDaemonLease(ctx, other, uid, defaults, leaseFixtureOpen)
 			if second != nil {
-				second.Close()
+				assertTestClose(t, second.Close)
 			}
 			if !errors.Is(err, ErrLeaseConflict) {
 				t.Fatalf("domain did not contend: %v", err)
@@ -493,7 +499,7 @@ func TestOwnedLease_DaemonDomains(t *testing.T) {
 	if err != nil {
 		t.Fatalf("independent domains blocked or partial lock leaked: %v", err)
 	}
-	second.Close()
+	assertTestClose(t, second.Close)
 	view := first.Borrow()
 	if err := view.Validate(ctx, layout); err != nil {
 		t.Fatal(err)
@@ -516,7 +522,7 @@ func TestOwnedLease_ExternalParent0750Preserved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("safe external parent rejected: %v", err)
 	}
-	l.Close()
+	assertTestClose(t, l.Close)
 	n, err := os.Stat(e)
 	if err != nil || n.Mode().Perm() != 0750 {
 		t.Fatalf("parent modified: %v %v", n, err)
@@ -529,7 +535,7 @@ func TestOwnedLease_RejectsReplacedName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.close()
+	defer assertTestClose(t, l.close)
 	if err := os.Rename(filepath.Join(path, "daemon.lock"), filepath.Join(path, "old.lock")); err != nil {
 		t.Fatal(err)
 	}
@@ -543,11 +549,46 @@ func TestOwnedLease_RejectsReplacedName(t *testing.T) {
 
 func leaseTempDir(t *testing.T) string {
 	t.Helper()
-	path := t.TempDir()
+	// This held-fd fixture deliberately bypasses absolute-root ancestry checks.
+	// Keep its literal path short enough for Darwin's Unix socket limit even
+	// when the test runner's TMPDIR contains long test-name components.
+	path, err := os.MkdirTemp("/tmp", "mh-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(path); err != nil {
+			t.Errorf("remove short lease fixture: %v", err)
+		}
+	})
 	if err := os.Chmod(path, 0700); err != nil {
 		t.Fatal(err)
 	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0700 {
+		t.Fatalf("short lease fixture mode: %v %v", info, err)
+	}
+	if endpoint := filepath.Join(path, "control.sock"); len(endpoint) > 103 {
+		t.Fatalf("short lease fixture endpoint is %d bytes; Darwin limit is 103", len(endpoint))
+	}
 	return path
+}
+
+func TestOwnedLease_LongTMPDIRUsesShortFixture(t *testing.T) {
+	longTMP := filepath.Join(t.TempDir(), strings.Repeat("long-", 20))
+	if err := os.Mkdir(longTMP, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if len(filepath.Join(longTMP, "TestOwnedLease_DaemonDomains123", "001", "control.sock")) <= platformLayoutDefaults("").SocketLimit {
+		t.Fatal("long TMPDIR fixture does not exceed the supported Unix socket limit")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestOwnedLease_DaemonDomains$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "TMPDIR="+longTMP)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("daemon-domain fixture under long TMPDIR: %v\n%s", err, out)
+	}
 }
 
 func TestOwnedLease_BinaryParentOnly(t *testing.T) {
@@ -564,7 +605,7 @@ func TestOwnedLease_BinaryParentOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("binary lease: %v", err)
 	}
-	defer l.Close()
+	defer assertTestClose(t, l.Close)
 	if calls != 1 {
 		t.Fatalf("acquisitions %d", calls)
 	}
@@ -573,7 +614,7 @@ func TestOwnedLease_BinaryParentOnly(t *testing.T) {
 	}
 	second, err := acquireBinaryLease(context.Background(), p, uint32(os.Geteuid()), open)
 	if second != nil {
-		second.Close()
+		assertTestClose(t, second.Close)
 	}
 	if !errors.Is(err, ErrLeaseConflict) {
 		t.Fatalf("binary domain missing: %v", err)
@@ -612,7 +653,7 @@ func TestOwnedLease_RestrictiveUmask(t *testing.T) {
 			}
 			lock, err := acquireRootLock(context.Background(), r, name)
 			if lock != nil {
-				lock.close()
+				assertTestClose(t, lock.close)
 			}
 			if !errors.Is(err, os.ErrPermission) {
 				t.Fatalf("unsafe existing lock accepted: %v", err)

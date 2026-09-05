@@ -22,7 +22,7 @@ func TestPrivateFSCapability_TransferClosesWholeChainOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { r.Close() })
+	t.Cleanup(func() { assertTestClose(t, r.Close) })
 	fs, err := NewPrivateFSFromRoot(r)
 	if err != nil {
 		t.Fatalf("transfer valid root: %v", err)
@@ -66,7 +66,7 @@ func TestPrivateFSCapability_ChildRejectionDoesNotRepair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer fs.Close()
+	defer assertTestClose(t, fs.Close)
 	child := filepath.Join(path, "logs")
 	if err := os.Mkdir(child, 0755); err != nil {
 		t.Fatal(err)
@@ -87,7 +87,7 @@ func TestPrivateFSCapability_AppendRejectsWideFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer fs.Close()
+	defer assertTestClose(t, fs.Close)
 	if err := fs.EnsureDir("logs"); err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestPrivateFSCapability_RejectsUnsafeReadsAndMutations(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer fs.Close()
+			defer assertTestClose(t, fs.Close)
 			if err := fs.EnsureDir("logs"); err != nil {
 				t.Fatal(err)
 			}
@@ -159,7 +159,7 @@ func TestPrivateFSCapability_PublishRetainsAncestry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer fs.Close()
+	defer assertTestClose(t, fs.Close)
 	if err := fs.EnsureDir("logs-export"); err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestPrivateFSCapability_PublishRetainsAncestry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer assertTestClose(t, d.Close)
 	if err := fs.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestPrivateFSCapability_PublishRetainsAncestry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer assertTestClose(t, w.Close)
 	f, name, err := w.CreateTemp("export-*")
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +199,7 @@ func TestPrivateFSCapability_PublishRetainsAncestry(t *testing.T) {
 	}
 	w, err = d.CreateWorkspace()
 	if w != nil {
-		w.Close()
+		assertTestClose(t, w.Close)
 	}
 	if !errors.Is(err, ErrIdentityMismatch) {
 		t.Fatalf("publish accepted replaced ancestor: %v", err)
@@ -284,7 +284,7 @@ func TestPrivateFSCapability_ReplaceRechecksDestination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer fs.Close()
+	defer assertTestClose(t, fs.Close)
 	if err := fs.EnsureDir("logs"); err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestPrivateFSCapability_PublishRejectsAuthorityChangesAndPreservesReplaceme
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer fs.Close()
+			defer assertTestClose(t, fs.Close)
 			if err := fs.EnsureDir("logs-export"); err != nil {
 				t.Fatal(err)
 			}
@@ -345,12 +345,12 @@ func TestPrivateFSCapability_PublishRejectsAuthorityChangesAndPreservesReplaceme
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Close()
+			defer assertTestClose(t, d.Close)
 			w, err := d.CreateWorkspace()
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer w.Close()
+			defer assertTestClose(t, w.Close)
 			f, name, err := w.CreateTemp("archive-*")
 			if err != nil {
 				t.Fatal(err)
@@ -451,7 +451,7 @@ func TestPrivateFSCapability_RestrictiveUmask(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer fs.Close()
+		defer assertTestClose(t, fs.Close)
 		for _, dir := range []string{"logs", "logs-export"} {
 			if err := fs.EnsureDir(dir); err != nil {
 				t.Fatal(err)
@@ -488,12 +488,12 @@ func TestPrivateFSCapability_RestrictiveUmask(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Close()
+			defer assertTestClose(t, d.Close)
 			w, err := d.CreateWorkspace()
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer w.Close()
+			defer assertTestClose(t, w.Close)
 			f, name, err := w.CreateTemp("archive-*")
 			if err != nil {
 				t.Fatal(err)
@@ -595,7 +595,7 @@ func TestPrivateFSCapability_InitializationValidationBeforeModeChange(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer fs.Close()
+		defer assertTestClose(t, fs.Close)
 		if err := fs.EnsureDir("logs"); err != nil {
 			t.Fatal(err)
 		}
@@ -612,7 +612,7 @@ func TestPrivateFSCapability_InitializationValidationBeforeModeChange(t *testing
 						var lock *rootLock
 						lock, err = acquireRootLock(context.Background(), fs.plat.trusted, name)
 						if lock != nil {
-							lock.close()
+							assertTestClose(t, lock.close)
 						}
 					case "append":
 						parent = filepath.Join(path, "logs")
