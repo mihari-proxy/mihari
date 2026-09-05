@@ -315,6 +315,11 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if command, consumed := model.exportLogs.Update(message); consumed {
 			return model, command
 		}
+		if !model.exportLogs.Closed() {
+			if key, ok := message.(tea.KeyPressMsg); ok && (key.String() == "q" || key.String() == "ctrl+c") {
+				return model, tea.Quit
+			}
+		}
 	}
 	switch typed := message.(type) {
 	case ui.RelaunchRequestMsg:

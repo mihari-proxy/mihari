@@ -196,8 +196,9 @@ func buildExportLogs(paths platform.Paths) func(tui.LoggingResources) ui.ExportL
 				}
 				return false, err
 			}
-			defer publishDir.Close()
-			return publishDir.Exists(name)
+			exists, probeErr := publishDir.Exists(name)
+			closeErr := publishDir.Close()
+			return exists, errors.Join(probeErr, closeErr)
 		}
 		export := func(ctx context.Context, request logging.ExportRequest) (logging.ExportResult, error) {
 			if resources.PrivateFS == nil {

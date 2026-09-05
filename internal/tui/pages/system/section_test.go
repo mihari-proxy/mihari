@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
@@ -38,6 +40,27 @@ func TestRows_LoggingSectionFollowsPortsAndIsUnavailableOffline(t *testing.T) {
 	}
 	if !strings.Contains(view, ui.ExportLogsLabel) {
 		t.Fatalf("missing export entry point:\n%s", view)
+	}
+}
+
+func TestView_ShortHeightNavigationReachesVisibleExportLogs(t *testing.T) {
+	model := New(nil, nil)
+	model.SetSize(80, 10)
+	model.FocusFirst()
+	for model.focusID != rowLogExport {
+		page, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		model = page.(*Model)
+	}
+	view := model.View()
+	if !strings.Contains(view, ui.ExportLogsLabel) || !strings.Contains(view, "›") {
+		t.Fatalf("focused export row is not visible:\n%s", view)
+	}
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("offline export row did not open")
+	}
+	if _, ok := cmd().(ui.OpenExportLogsMsg); !ok {
+		t.Fatalf("message=%T", cmd())
 	}
 }
 

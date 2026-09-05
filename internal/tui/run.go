@@ -230,13 +230,7 @@ func Run(ctx context.Context, options Options) error {
 		model.SetServiceController(options.Service)
 	}
 	model.SetSelfUpdater(options.SelfUpdater, options.CurrentVersion, options.BinaryPath, options.Elevated)
-	var exportLogs *ui.ExportLogsModel
-	if options.BuildExportLogs != nil {
-		exportOptions := options.BuildExportLogs(resources)
-		exportOptions.Context = ctx
-		exportLogs = ui.NewExportLogsModel(exportOptions)
-		model.exportLogs = exportLogs
-	}
+	exportLogs := attachRunExportLogs(ctx, &model, resources, options.BuildExportLogs)
 	program := tea.NewProgram(
 		model,
 		tea.WithContext(ctx),
@@ -244,30 +238,44 @@ func Run(ctx context.Context, options Options) error {
 		tea.WithOutput(options.Output),
 	)
 	final, err := program.Run()
-	var closeOnce sync.Once
+	cleanup := newRunCleanup(&resources, func() {
+		if controlSession != nil {
+			controlSession.Close()
+		}
+	}, exportLogs, applier, reporter)
+	return finishRun(final, err, options.Output, options.Relaunch, cleanup)
+}
+
+func attachRunExportLogs(ctx context.Context, model *Model, resources LoggingResources, build func(LoggingResources) ui.ExportLogsOptions) *ui.ExportLogsModel {
+	if model == nil || build == nil {
+		return nil
+	}
+	options := build(resources)
+	options.Context = ctx
+	exportLogs := ui.NewExportLogsModel(options)
+	model.exportLogs = exportLogs
+	return exportLogs
+}
+
+func newRunCleanup(resources *LoggingResources, closeSession func(), exportLogs *ui.ExportLogsModel, applier loggingApplier, reporter *tuiLoggingFailureReporter) func(tea.Model) error {
+	var once sync.Once
 	var closeErr error
-	cleanup := func(tea.Model) error {
-		closeOnce.Do(func() {
-			closeErr = resources.closeWithLifecycle(
-				func() {
-					if controlSession != nil {
-						controlSession.Close()
-					}
-				},
-				func() {
-					if exportLogs != nil {
-						exportLogs.CancelAndWait()
-					}
+	return func(tea.Model) error {
+		once.Do(func() {
+			closeErr = resources.closeWithLifecycle(closeSession, func() {
+				if exportLogs != nil {
+					exportLogs.CancelAndWait()
+				}
+				if applier != nil {
 					applier.CloseAndWait()
-				},
-			)
-			if closeErr != nil {
+				}
+			})
+			if reporter != nil && closeErr != nil {
 				reporter.report(tuiLoggingCleanupFailure, closeErr)
 			}
 		})
 		return closeErr
 	}
-	return finishRun(final, err, options.Output, options.Relaunch, cleanup)
 }
 
 func newRunLoggingApplier(ctx context.Context, runtime *logging.Runtime) loggingApplier {

@@ -48,6 +48,23 @@ func TestModel_ExportEntryPoints(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("searching shortcut opened export")
 	}
+	model.searching = false
+	model.focus = focusSearch
+	_, cmd = model.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	if cmd != nil {
+		if _, opened := cmd().(ui.OpenExportLogsMsg); !opened {
+			cmd = nil
+		}
+	}
+	if cmd != nil {
+		t.Fatal("search focus shortcut opened export")
+	}
+	model.focus = focusRow
+	model.detail = &detailState{}
+	_, cmd = model.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	if cmd != nil {
+		t.Fatal("detail shortcut opened export")
+	}
 }
 
 func TestModel_PauseFreezesRenderedSnapshotAndResumeShowsNewest(t *testing.T) {

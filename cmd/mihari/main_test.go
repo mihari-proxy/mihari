@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"errors"
@@ -154,6 +155,66 @@ func TestBuildExportLogs_DefaultExistsDoesNotCreateDirectory(t *testing.T) {
 	}
 	if _, statErr := os.Stat(paths.LogExportDir); !os.IsNotExist(statErr) {
 		t.Fatalf("Exists created export directory: %v", statErr)
+	}
+}
+
+func TestBuildExportLogs_PartialLoggerResourcesExportAndOwnPrivateFS(t *testing.T) {
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.EnsureDir(paths.LogDir); err != nil {
+		t.Fatal(err)
+	}
+	file, err := fs.OpenAppend(paths.DaemonLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(file, `{"time":"2026-09-05T00:00:00Z","level":"INFO","msg":"token=partial-secret"}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resources := tui.NewLoggingResources(nil, logging.NewRedactor("partial-secret"), fs)
+	options := buildExportLogs(paths)(resources)
+	result, err := options.Export(context.Background(), logging.ExportRequest{Now: time.Date(2026, 9, 5, 12, 0, 0, 0, time.Local), Range: logging.ExportRange{Kind: logging.RangeAll}, AutoNumber: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := zip.OpenReader(result.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	if len(archive.File) == 0 {
+		t.Fatal("export archive has no entries")
+	}
+	var content []byte
+	for _, archived := range archive.File {
+		entry, openErr := archived.Open()
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		part, readErr := io.ReadAll(entry)
+		_ = entry.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		content = append(content, part...)
+	}
+	if strings.Contains(string(content), "partial-secret") || !strings.Contains(string(content), "***") {
+		t.Fatalf("archive was not redacted: %s", content)
+	}
+	if err := fs.EnsureDir(paths.LogDir); err != nil {
+		t.Fatalf("export closed shared PrivateFS: %v", err)
+	}
+	if err := resources.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.EnsureDir(paths.LogDir); err == nil {
+		t.Fatal("LoggingResources.Close did not close PrivateFS")
 	}
 }
 

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -1226,6 +1227,105 @@ func TestModel_ExportOverlayOpensAndPreservesRootRouting(t *testing.T) {
 	if !strings.Contains(model.View().Content, ui.ExportLogsTitle) {
 		t.Fatal("open export overlay was not rendered")
 	}
+}
+
+func TestModel_ExportOverlayApprovedQuitBypassesQueuedModal(t *testing.T) {
+	for _, key := range []tea.KeyPressMsg{{Code: 'q', Text: "q"}, {Code: 'c', Mod: tea.ModCtrl}} {
+		model := NewModel()
+		model.exportLogs = ui.NewExportLogsModel(ui.ExportLogsOptions{Now: func() time.Time { return time.Unix(1, 0) }})
+		model.exportLogs.Open()
+		model.modal = NewConfirmation("queued", "object", "impact", "rollback")
+		queued := model.modal
+		updated, cmd := model.Update(key)
+		model = updated.(Model)
+		if cmd == nil || cmd() != tea.Quit() {
+			t.Fatalf("key=%q did not quit", key.String())
+		}
+		if model.modal != queued || model.exportLogs.Closed() {
+			t.Fatalf("key=%q mutated queued modal or overlay", key.String())
+		}
+	}
+}
+
+func TestModel_ExportOverlayViewPrecedesSetupAndQueuedModalThenRestoresShell(t *testing.T) {
+	model := NewModel()
+	model.active = ui.PageSetup
+	model.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageSetup}
+	model.modal = NewDetail("queued detail", "hidden body")
+	model.exportLogs = ui.NewExportLogsModel(ui.ExportLogsOptions{Now: func() time.Time { return time.Unix(1, 0) }})
+	model.exportLogs.Open()
+	view := model.View()
+	if !view.AltScreen || view.WindowTitle != ui.AppName || !strings.Contains(view.Content, ui.ExportLogsTitle) || strings.Contains(view.Content, "hidden body") {
+		t.Fatalf("overlay view flags/content: alt=%v title=%q content=%q", view.AltScreen, view.WindowTitle, view.Content)
+	}
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	model = updated.(Model)
+	if model.active != ui.PageSetup || model.focus != (ui.Focus{Area: ui.FocusContent, Page: ui.PageSetup}) || model.modal == nil {
+		t.Fatalf("shell state changed after overlay close: active=%s focus=%+v modal=%v", model.active, model.focus, model.modal)
+	}
+	if restored := model.View().Content; !strings.Contains(restored, "hidden body") {
+		t.Fatalf("queued modal not restored: %q", restored)
+	}
+}
+
+func TestModel_PendingExportPreservesAsyncRootAndTargetPageRouting(t *testing.T) {
+	started := make(chan struct{})
+	model := NewModel()
+	page := &allMessageRecordingPage{id: ui.PageSystem}
+	model.pages[ui.PageSystem] = page
+	model.exportLogs = ui.NewExportLogsModel(ui.ExportLogsOptions{
+		Now: func() time.Time { return time.Unix(1, 0) }, DefaultDir: t.TempDir(),
+		Export: func(ctx context.Context, _ logging.ExportRequest) (logging.ExportResult, error) {
+			close(started)
+			<-ctx.Done()
+			return logging.ExportResult{}, ctx.Err()
+		},
+	})
+	model.exportLogs.Open()
+	model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if cmd, consumed := model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd == nil || !consumed {
+		t.Fatal("export did not enter pending state")
+	}
+	<-started
+
+	updated, _ := model.Update(ui.LoggingObservedMsg{Epoch: 1, Status: protocol.LoggingStatus{Revision: 7, Level: "warn", MaxSizeMB: 10, MaxFiles: 3}})
+	model = updated.(Model)
+	marker := asyncMarkerMsg{}
+	updated, _ = model.Update(ui.PageResultMsg{Page: ui.PageSystem, Result: marker})
+	model = updated.(Model)
+	model.pendingActions["owned"] = ui.ActionRestartCore
+	updated, _ = model.Update(actionCompletedMsg{Intent: ui.ActionIntentMsg{Key: "owned", Page: ui.PageSystem}, Result: marker})
+	model = updated.(Model)
+	if model.loggingRevision == nil || *model.loggingRevision != 7 || len(model.pendingActions) != 0 {
+		t.Fatalf("logging revision=%v pending=%v", model.loggingRevision, model.pendingActions)
+	}
+	if page.count(ui.LoggingObservedMsg{}) != 1 || page.count(marker) != 2 {
+		t.Fatalf("routed messages=%v", page.messages)
+	}
+	model.exportLogs.CancelAndWait()
+}
+
+type allMessageRecordingPage struct {
+	id       ui.PageID
+	messages []tea.Msg
+}
+
+func (p *allMessageRecordingPage) ID() ui.PageID    { return p.id }
+func (p *allMessageRecordingPage) SetSize(int, int) {}
+func (p *allMessageRecordingPage) FocusFirst()      {}
+func (p *allMessageRecordingPage) View() string     { return "" }
+func (p *allMessageRecordingPage) Update(msg tea.Msg) (ui.Page, tea.Cmd) {
+	p.messages = append(p.messages, msg)
+	return p, nil
+}
+func (p *allMessageRecordingPage) count(sample tea.Msg) int {
+	n := 0
+	for _, msg := range p.messages {
+		if fmt.Sprintf("%T", msg) == fmt.Sprintf("%T", sample) {
+			n++
+		}
+	}
+	return n
 }
 
 func (p *loggingResultRecordingPage) ID() ui.PageID    { return ui.PageSystem }
