@@ -555,7 +555,7 @@ func TestPrivateFSPublishDir_UnixPropagatesDataRootOwner(t *testing.T) {
 	assertMode(t, filepath.Join(paths.LogExportDir, w.name), os.ModeDir|0o700)
 
 	before := len(calls)
-	externalDir, err := OpenPublishDir(t.TempDir())
+	externalDir, err := OpenPublishDir(privatePublishParent(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -654,7 +654,7 @@ func TestPrivateFSPublishDir_UnixRootCreatesDataOwnerObjects(t *testing.T) {
 }
 
 func TestPublishDir_UnixPostPublishFailureIsWarning(t *testing.T) {
-	parent := t.TempDir()
+	parent := privatePublishParent(t)
 	d, err := OpenPublishDir(parent)
 	if err != nil {
 		t.Fatal(err)

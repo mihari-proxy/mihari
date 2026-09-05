@@ -75,7 +75,7 @@ func TestPublishWorkspace_UnixUntrustedOwnerStickyLeavesEmptyOrphan(t *testing.T
 }
 
 func TestPublishWorkspace_UnixPermissionsRecheckedAtCleanup(t *testing.T) {
-	d, err := OpenPublishDir(t.TempDir())
+	d, err := OpenPublishDir(privatePublishParent(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestPublishWorkspace_UnixPermissionsRecheckedAtCleanup(t *testing.T) {
 func TestPublishWorkspace_UnixACLRecheckedBeforeDirectoryRemoval(t *testing.T) {
 	for _, queryErr := range []error{nil, unix.EIO} {
 		t.Run(fmt.Sprint(queryErr), func(t *testing.T) {
-			d, err := OpenPublishDir(t.TempDir())
+			d, err := OpenPublishDir(privatePublishParent(t))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -130,7 +130,7 @@ func TestPublishWorkspace_UnixACLRecheckedBeforeDirectoryRemoval(t *testing.T) {
 }
 
 func TestPublishWorkspace_UnixUntrustedParentReplacementNeverUnlinksDirectory(t *testing.T) {
-	d, err := OpenPublishDir(t.TempDir())
+	d, err := OpenPublishDir(privatePublishParent(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,10 +146,17 @@ func TestPublishWorkspace_UnixUntrustedParentReplacementNeverUnlinksDirectory(t 
 	defer func() {
 		publishWorkspaceCleanupCheckpoint, publishUnixCleanupUnlinkFn = originalCheckpoint, originalUnlink
 	}()
-	publishWorkspaceCleanupCheckpoint = func() { replaceWorkspaceEntry(t, w, d.Path(), filepath.Join(d.Path(), "moved")) }
+	checkpointReached := false
+	publishWorkspaceCleanupCheckpoint = func() {
+		checkpointReached = true
+		replaceWorkspaceEntry(t, w, d.Path(), filepath.Join(d.Path(), "moved"))
+	}
 	publishUnixCleanupUnlinkFn = func(int, string, int) error { t.Error("unsafe namespace reached directory unlink"); return nil }
 	if err := w.Close(); err == nil {
 		t.Fatal("expected cleanup warning")
+	}
+	if !checkpointReached {
+		t.Fatal("replacement checkpoint was not reached")
 	}
 	for _, name := range []string{w.name, "moved"} {
 		if _, err := os.Stat(filepath.Join(d.Path(), name)); err != nil {
@@ -159,7 +166,7 @@ func TestPublishWorkspace_UnixUntrustedParentReplacementNeverUnlinksDirectory(t 
 }
 
 func TestPublishWorkspace_UnixReadAndCloseFailuresPreserved(t *testing.T) {
-	d, err := OpenPublishDir(t.TempDir())
+	d, err := OpenPublishDir(privatePublishParent(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +197,7 @@ func TestPublishWorkspace_UnixOwnerChangeRechecked(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("requires isolated chown")
 	}
-	d, err := OpenPublishDir(t.TempDir())
+	d, err := OpenPublishDir(privatePublishParent(t))
 	if err != nil {
 		t.Fatal(err)
 	}

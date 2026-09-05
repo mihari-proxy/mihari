@@ -8,7 +8,7 @@ import (
 )
 
 func TestPublishWorkspace_CloseCleansHeldContents(t *testing.T) {
-	d, err := OpenPublishDir(t.TempDir())
+	d, err := OpenPublishDir(privatePublishParent(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestPublishWorkspace_CloseCleansHeldContents(t *testing.T) {
 }
 
 func TestPublishWorkspace_ContentRemovalFailureStillCleansOtherFiles(t *testing.T) {
-	d, err := OpenPublishDir(t.TempDir())
+	d, err := OpenPublishDir(privatePublishParent(t))
 	if err != nil {
 		t.Fatal(err)
 	}

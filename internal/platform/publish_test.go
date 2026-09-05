@@ -9,7 +9,7 @@ import (
 )
 
 func TestPublishDir_RejectsInvalidBasenames(t *testing.T) {
-	d, err := OpenPublishDir(t.TempDir())
+	d, err := OpenPublishDir(privatePublishParent(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestPublishDir_RejectsInvalidBasenames(t *testing.T) {
 }
 
 func TestPublishDir_CloseIsIdempotentAndPathRemainsReadable(t *testing.T) {
-	root := t.TempDir()
+	root := privatePublishParent(t)
 	d, err := OpenPublishDir(root)
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +97,7 @@ func TestPublishDir_CloseIsIdempotentAndPathRemainsReadable(t *testing.T) {
 }
 
 func TestPublishCapabilities_ClosedErrorPrecedesInvalidArguments(t *testing.T) {
-	d, err := OpenPublishDir(t.TempDir())
+	d, err := OpenPublishDir(privatePublishParent(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestPublishWorkspace_CloseFailsClosedWhenMovedOutsideAfterIdentityCheck(t *
 }
 
 func TestPublishWorkspace_OperationsStayAnchoredAfterEntryReplacement(t *testing.T) {
-	parent := t.TempDir()
+	parent := privatePublishParent(t)
 	d, err := OpenPublishDir(parent)
 	if err != nil {
 		t.Fatal(err)
@@ -296,7 +296,7 @@ func TestPublishWorkspace_OperationsStayAnchoredAfterEntryReplacement(t *testing
 }
 
 func TestPublishDir_PublishNoReplace(t *testing.T) {
-	parent := t.TempDir()
+	parent := privatePublishParent(t)
 	d, err := OpenPublishDir(parent)
 	if err != nil {
 		t.Fatal(err)
@@ -384,12 +384,12 @@ func TestPublishDir_ExistsIncludesSymlinkOrJunction(t *testing.T) {
 }
 
 func TestPublishDir_RejectsWorkspaceFromAnotherDirectory(t *testing.T) {
-	d1, err := OpenPublishDir(t.TempDir())
+	d1, err := OpenPublishDir(privatePublishParent(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	cleanupPublishDir(t, d1)
-	d2, err := OpenPublishDir(t.TempDir())
+	d2, err := OpenPublishDir(privatePublishParent(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,6 +551,17 @@ func TestPrivateFSOpenPublishDir_RejectsLogDirectory(t *testing.T) {
 
 func sameCanonicalPath(a, b string) bool {
 	return equalFoldPath(filepath.Clean(a), filepath.Clean(b))
+}
+
+// privatePublishParent makes trusted acquisition independent of the caller's
+// umask. Deliberately shared/sticky-parent tests set their own permissions.
+func privatePublishParent(t *testing.T) string {
+	t.Helper()
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return parent
 }
 
 func cleanupPublishDir(t *testing.T, d *PublishDir) {

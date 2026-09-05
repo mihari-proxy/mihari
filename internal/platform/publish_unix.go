@@ -20,6 +20,8 @@ var (
 	publishUnixCleanupUnlinkFn  = unix.Unlinkat
 	publishUnixCleanupReadFn    = readUnixDirNames
 	publishUnixCleanupCloseFn   = unix.Close
+	publishUnixVerifyStatFn     = unix.Fstat
+	publishUnixVerifyCloseFn    = unix.Close
 )
 
 type publishDirState struct {
@@ -264,10 +266,17 @@ func (d *PublishDir) publishNoReplaceLocked(w *PublishWorkspace, tempName, targe
 		return fmt.Errorf("verify publish directory: %w", err)
 	}
 	var st unix.Stat_t
-	statErr := unix.Fstat(checkFD, &st)
-	closeErr := unix.Close(checkFD)
+	statErr := publishUnixVerifyStatFn(checkFD, &st)
+	closeErr := publishUnixVerifyCloseFn(checkFD)
 	if statErr != nil || identFromStat(&st) != d.plat.id {
-		return fmt.Errorf("%w", ErrPublishDirectoryChanged)
+		verifyErr := ErrPublishDirectoryChanged
+		if statErr != nil {
+			verifyErr = errors.Join(verifyErr, fmt.Errorf("stat publish directory verification: %w", statErr))
+		}
+		if closeErr != nil {
+			verifyErr = errors.Join(verifyErr, fmt.Errorf("close publish directory verification: %w", closeErr))
+		}
+		return verifyErr
 	}
 	if closeErr != nil {
 		return fmt.Errorf("verify publish directory: %w", closeErr)

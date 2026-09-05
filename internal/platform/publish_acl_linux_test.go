@@ -12,7 +12,7 @@ import (
 )
 
 func TestPublishWorkspace_LinuxAccessACLChangeLeavesEmptyOrphan(t *testing.T) {
-	d, err := OpenPublishDir(t.TempDir())
+	d, err := OpenPublishDir(privatePublishParent(t))
 	if err != nil {
 		t.Fatal(err)
 	}

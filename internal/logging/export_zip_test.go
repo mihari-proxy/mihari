@@ -509,11 +509,15 @@ func TestExportWithOps_CloseSyncAndPublishErrorsDoNotPublish(t *testing.T) {
 
 func TestExportWithOps_SecondaryZipCloseErrorIsClassifiedButSanitized(t *testing.T) {
 	fs, paths := openExportTestFS(t)
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	writeExportFixture(t, fs, paths.DaemonLog, `{"time":"2026-09-02T10:00:00Z"}`)
 	primary := errors.New(`create header C:\private\token.json`)
 	secondary := errors.New(`close C:\private\secret.zip`)
 	warnings := []error{}
-	_, err := exportWithOps(context.Background(), ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: filepath.Join(t.TempDir(), "failed.zip"), Paths: paths, PrivateFS: fs, OnWarning: func(err error) { warnings = append(warnings, err) }}, exportOps{NewZipWriter: func(io.Writer) zipWriter {
+	_, err := exportWithOps(context.Background(), ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: filepath.Join(parent, "failed.zip"), Paths: paths, PrivateFS: fs, OnWarning: func(err error) { warnings = append(warnings, err) }}, exportOps{NewZipWriter: func(io.Writer) zipWriter {
 		return failingCreateZipWriter{primary: primary, secondary: secondary}
 	}})
 	if !errors.Is(err, primary) || !errors.Is(err, secondary) {

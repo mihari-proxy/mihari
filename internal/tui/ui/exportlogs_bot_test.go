@@ -17,7 +17,7 @@ func TestExportLogsModel_DefaultPreviewBoundsProbes(t *testing.T) {
 			calls := 0
 			m := NewExportLogsModel(ExportLogsOptions{DefaultDir: t.TempDir(), Exists: func(string, string) (bool, error) {
 				calls++
-				if calls > 16 {
+				if calls > 8 {
 					t.Fatal("preview blocks UI with unbounded existence probes")
 				}
 				if fail {
@@ -31,6 +31,9 @@ func TestExportLogsModel_DefaultPreviewBoundsProbes(t *testing.T) {
 			}
 			if fail && calls != 1 {
 				t.Fatalf("retried failed preview %d times", calls)
+			}
+			if !fail && calls != 8 {
+				t.Fatalf("occupied preview made %d probes, want 8", calls)
 			}
 		})
 	}

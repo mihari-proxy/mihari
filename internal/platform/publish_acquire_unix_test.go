@@ -90,7 +90,7 @@ func TestPublishWorkspace_AcquisitionRejectsUnprovedPrivateBoundary(t *testing.T
 			if scenario == "untrusted-owner" && os.Geteuid() != 0 {
 				t.Skip("requires isolated chown")
 			}
-			d, err := OpenPublishDir(t.TempDir())
+			d, err := OpenPublishDir(privatePublishParent(t))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -187,7 +187,7 @@ func TestPublishWorkspace_AcquisitionRejectsSubstitutedDirectory(t *testing.T) {
 }
 
 func TestPublishWorkspace_CleanupOnlyRemovesCreatedNames(t *testing.T) {
-	parent := t.TempDir()
+	parent := privatePublishParent(t)
 	d, err := OpenPublishDir(parent)
 	if err != nil {
 		t.Fatal(err)
