@@ -4,6 +4,7 @@ package platform
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,9 +23,9 @@ func TestPrivateFS_WindowsProtectedDACL(t *testing.T) {
 	if err := writeLog(fs, paths.DaemonLog, "x"); err != nil {
 		t.Fatal(err)
 	}
-	assertOwnerSystemDACL(t, paths.Root, true)
-	assertOwnerSystemDACL(t, paths.LogDir, true)
-	assertOwnerSystemDACL(t, paths.DaemonLog, false)
+	assertPrincipalSystemDACL(t, paths.Root, fs.plat.owner, true)
+	assertPrincipalSystemDACL(t, paths.LogDir, fs.plat.owner, true)
+	assertPrincipalSystemDACL(t, paths.DaemonLog, fs.plat.owner, false)
 }
 
 func TestPrivateFS_WindowsChildFileDACL(t *testing.T) {
@@ -35,7 +36,7 @@ func TestPrivateFS_WindowsChildFileDACL(t *testing.T) {
 	if err := writeLog(fs, paths.TUILog, "child"); err != nil {
 		t.Fatal(err)
 	}
-	assertOwnerSystemDACL(t, paths.TUILog, false)
+	assertPrincipalSystemDACL(t, paths.TUILog, fs.plat.owner, false)
 }
 
 func TestPrivateFS_WindowsTightenWideDACL(t *testing.T) {
@@ -49,7 +50,7 @@ func TestPrivateFS_WindowsTightenWideDACL(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = fs.Close() })
-	assertOwnerSystemDACL(t, root, true)
+	assertPrincipalSystemDACL(t, root, fs.plat.owner, true)
 	logs := filepath.Join(root, "logs")
 	if err := os.Mkdir(logs, 0o777); err != nil {
 		t.Fatal(err)
@@ -58,7 +59,7 @@ func TestPrivateFS_WindowsTightenWideDACL(t *testing.T) {
 	if err := fs.EnsureDir(logs); err != nil {
 		t.Fatal(err)
 	}
-	assertOwnerSystemDACL(t, logs, true)
+	assertPrincipalSystemDACL(t, logs, fs.plat.owner, true)
 }
 
 func TestPrivateFS_WindowsRefuseCreateRootAsLocalSystem(t *testing.T) {
@@ -219,8 +220,12 @@ func TestPublishWorkspace_WindowsProtectedDACL(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = w.Close() })
+	user, err := currentUserSID()
+	if err != nil {
+		t.Fatal(err)
+	}
 	workspacePath := filepath.Join(parent, w.name)
-	assertOwnerSystemDACL(t, workspacePath, true)
+	assertPrincipalSystemDACL(t, workspacePath, user, true)
 	f, name, err := w.CreateTemp("private-*")
 	if err != nil {
 		t.Fatal(err)
@@ -228,9 +233,34 @@ func TestPublishWorkspace_WindowsProtectedDACL(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	assertOwnerSystemDACL(t, filepath.Join(workspacePath, name), false)
+	assertPrincipalSystemDACL(t, filepath.Join(workspacePath, name), user, false)
 	if err := w.Remove(name); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCheckPrincipalSystemDACL_DistinguishesOwnerFromProcessPrincipal(t *testing.T) {
+	networkService, err := windows.CreateWellKnownSid(windows.WinNetworkServiceSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localService, err := windows.CreateWellKnownSid(windows.WinLocalServiceSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;NS)(A;;FA;;;SY)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkPrincipalSystemDACL(dacl, networkService, false); err != nil {
+		t.Fatalf("matching principal rejected: %v", err)
+	}
+	if err := checkPrincipalSystemDACL(dacl, localService, false); err == nil {
+		t.Fatal("different expected principal accepted")
 	}
 }
 
@@ -384,9 +414,9 @@ func replaceWorkspaceEntry(t *testing.T, w *PublishWorkspace, parent, moved stri
 
 func equalFoldPath(a, b string) bool { return strings.EqualFold(filepath.Clean(a), filepath.Clean(b)) }
 
-func assertOwnerSystemDACL(t *testing.T, path string, directory bool) {
+func assertPrincipalSystemDACL(t *testing.T, path string, principal *windows.SID, directory bool) {
 	t.Helper()
-	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,55 +427,58 @@ func assertOwnerSystemDACL(t *testing.T, path string, directory bool) {
 	if dacl == nil {
 		t.Fatal("empty DACL is fully permissive")
 	}
+	if err := checkPrincipalSystemDACL(dacl, principal, directory); err != nil {
+		t.Fatalf("%s %v", path, err)
+	}
+}
+
+func checkPrincipalSystemDACL(dacl *windows.ACL, principal *windows.SID, directory bool) error {
 	world, err := windows.CreateWellKnownSid(windows.WinWorldSid)
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
 	users, err := windows.CreateWellKnownSid(windows.WinBuiltinUsersSid)
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
 	anon, err := windows.CreateWellKnownSid(windows.WinAnonymousSid)
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
 	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
-	user, err := currentUserSID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var sawUser, sawSystem bool
+	var sawPrincipal, sawSystem bool
 	for i := uint16(0); i < dacl.AceCount; i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(dacl, uint32(i), &ace); err != nil {
-			t.Fatal(err)
+			return err
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
 		if sid.Equals(world) || sid.Equals(users) || sid.Equals(anon) {
-			t.Fatalf("%s DACL grants %s", path, sid)
+			return errors.New("DACL grants a broad principal")
 		}
-		if sid.Equals(user) {
-			sawUser = true
+		if sid.Equals(principal) {
+			sawPrincipal = true
 		}
 		if sid.Equals(system) {
 			sawSystem = true
 		}
-		if !sid.Equals(user) && !sid.Equals(system) {
-			t.Fatalf("%s unexpected SID %s", path, sid)
+		if !sid.Equals(principal) && !sid.Equals(system) {
+			return fmt.Errorf("unexpected SID %s", sid)
 		}
 	}
-	if user.Equals(system) {
+	if principal.Equals(system) {
 		if !sawSystem {
-			t.Fatalf("%s missing SYSTEM ACE", path)
+			return errors.New("missing SYSTEM ACE")
 		}
-		return
+		return nil
 	}
-	if !sawUser || !sawSystem {
-		t.Fatalf("%s DACL user=%v system=%v dir=%v", path, sawUser, sawSystem, directory)
+	if !sawPrincipal || !sawSystem {
+		return fmt.Errorf("DACL principal=%v system=%v dir=%v", sawPrincipal, sawSystem, directory)
 	}
+	return nil
 }
 
 func setWideDACL(t *testing.T, path string) {
