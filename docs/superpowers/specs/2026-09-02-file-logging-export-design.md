@@ -4,7 +4,9 @@
 
 状态：已批准，准备实施
 
-PR 3 目标分支：`feat/log-export-ui`
+PR 3 工作分支：`feat/log-export-ui`
+
+PR 3 合并目标分支：`dev`
 
 PR 3 工作目录：`.worktrees/feat-log-export-ui`
 
@@ -431,7 +433,7 @@ zip entry 名是常量，不使用用户路径。`manifest.json`：
 此节统一约束成功、取消、失败及创建后检查失败的清理，不改变 no-replace 发布、权限、协议或依赖。Unix 的 `unlinkat(parentFD, basename, AT_REMOVEDIR)` 没有 expected-identity 参数；held fd 和 advisory lock 均不能排斥非协作 namespace writer。重复 identity 检查不等于原子条件删除。
 
 - 受信主体固定为当前有效 UID、默认导出时已验证的数据根 owner UID，以及可绕过权限的本机 root/管理员；自定义目录的任意 owner 或组成员不会因“拥有父目录”而自动受信。同 UID 进程属于受信主体；本设计不防御其恶意并发改名、权限修改或访问日志。Windows 同样信任交互用户与 LocalSystem/管理员。受信主体须不在最后验证到删除期间主动破坏已验证的 namespace/权限前提。
-- Unix 打开 held parent 时评估 namespace mutation authority，并在最终 identity 检查/删除前重新评估 owner、mode、sticky 与实际有效 ACL。只有能证明 parent owner 受信，且非受信主体不能替换 workspace entry，才允许按名删除。普通 owner 管理目录在非受信 group/other 无写权限且 ACL 无额外授予时正常清理。sticky parent 还要求 workspace owner 受信，且系统 sticky 规则及 ACL 确实阻止所有非受信主体删除/替换该 entry；`01777` 本身不充分，非受信 parent owner 仍可删除，必须拒绝清理目录项。
+- Unix 打开 held parent 时，在数据根 owner 上下文确定后评估一次 namespace mutation authority，并在最终 identity 检查/删除前重新评估 owner、mode、sticky 与实际有效 ACL。初始与最终评估均可信，且非受信主体不能替换 workspace entry，才允许按名删除；初始不可信或查询失败，即使后来权限收紧，仍清理内容、关闭句柄并以 warning 保留空私有目录。普通 owner 管理目录在非受信 group/other 无写权限且 ACL 无额外授予时正常清理。sticky parent 还要求 workspace owner 受信，且系统 sticky 规则及 ACL 确实阻止所有非受信主体删除/替换该 entry；`01777` 本身不充分，非受信 parent owner 仍可删除，必须拒绝清理目录项。
 - Unix ACL（包括平台或文件系统扩展的 delete/delete-child 权限）必须被检查或能证明不存在；不得只看 `mode & 022`，不得把未知 ACL 当作无 ACL。若现有无 CGO 能力无法证明某文件系统的有效授权语义，保守判为不可信。无 sticky 的 `0777`/`0770` 或 ACL 允许非受信主体改名/替换时走此降级；owner 受信的 `01777` 在有效权限可证明时正常清理。清理前权限变宽、owner/ACL 改变或查询失败须重新判定并 fail closed，不 chmod/chown 父目录，不添加 ACL 或新依赖。
 - 两平台都先经 held workspace 清理仍可访问的 temp/spool；不靠可见路径定位内容。Unix 只有上述证明成立时，才在 held parent 中按 identity 查当前 basename，重查 identity/empty 后删除该空目录；同 parent 内已完成的受信改名仍可清理。原 basename 的 replacement 不可删除。workspace 已移出 held parent，或 parent 权限不可证明安全时，不调用按名目录删除，关闭所有持有句柄并返回净化 cleanup warning；禁止扫描其它目录或沿旧路径追删。
 - Unix 降级时，若内容清理成功，允许留下不可预测名称、0700 的空私有目录，不含日志、spool、zip temp、凭据或元数据。若内容删除、枚举、权限检查或其他 IO 本身失败，只能保证尝试所有后续清理并关闭句柄；warning 必须反映清理不完整，不能声称空 orphan 或零残留。不会自动按路径重试遗留对象。
@@ -456,7 +458,7 @@ zip 只含重新编码且再次脱敏的日志与 manifest，不含 `mihari.yaml
 
 mihomo 捕获行在进入 JSON `msg` 前也执行通用文本规则；不得把它作为“无法解析所以不脱敏”的例外。通用规则无法判定节点名、目标域名、IP、流量元数据是否属于用户敏感业务信息，因此 UI 成功态和 manifest 提醒用户发送前自查；这不放宽 Mihari 已知凭据必须遮蔽的要求。
 
-导出边界对历史 JSON 对象再次递归检查敏感 key 和字符串并重新编码，防止旧版本日志或漏网调用点被直接打包。`redacted` 只统计发生过替换的记录数，不把原值、匹配规则或 secret hash 写进 manifest。
+导出边界对历史 JSON 对象再次递归检查敏感 key 和字符串并重新编码，防止旧版本日志或漏网调用点被直接打包。若成员的键本身经 `Redactor.String` 会改变（例如包含已知凭据或 URL），省略该成员并标记本条记录已脱敏；不重命名键，避免与其它敏感键或普通 `***` / `[REDACTED_URL]` 键碰撞。保留安全兄弟成员并继续递归，时间和数值保持原语义，不修改原对象，也不计入 `skipped_invalid`。`redacted` 只统计发生过替换或敏感键成员省略的记录数，不把原值、匹配规则或 secret hash 写进 manifest。
 
 stderr fallback 和 UI/protocol 错误同样先经 redactor；底层路径、URL 或 credential 不得因失败路径反向泄露。
 

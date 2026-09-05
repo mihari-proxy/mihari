@@ -43,27 +43,24 @@ func TestModel_ExportEntryPoints(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("navigation shortcut did not open export")
 	}
-	model.searching = true
-	_, cmd = model.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
-	if cmd != nil {
-		t.Fatal("searching shortcut opened export")
-	}
-	model.searching = false
-	model.focus = focusSearch
-	_, cmd = model.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
-	if cmd != nil {
-		if _, opened := cmd().(ui.OpenExportLogsMsg); !opened {
-			cmd = nil
-		}
-	}
-	if cmd != nil {
-		t.Fatal("search focus shortcut opened export")
-	}
-	model.focus = focusRow
-	model.detail = &detailState{}
-	_, cmd = model.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
-	if cmd != nil {
-		t.Fatal("detail shortcut opened export")
+	for _, tt := range []struct {
+		name    string
+		prepare func(*Model)
+	}{
+		{"searching", func(m *Model) { m.searching = true }},
+		{"search focus", func(m *Model) { m.focus = focusSearch }},
+		{"detail", func(m *Model) { m.focus = focusRow; m.detail = &detailState{} }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := New(10)
+			tt.prepare(candidate)
+			_, command := candidate.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+			if command != nil {
+				if _, opened := command().(ui.OpenExportLogsMsg); opened {
+					t.Fatal("suppressed shortcut opened export")
+				}
+			}
+		})
 	}
 }
 

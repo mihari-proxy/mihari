@@ -76,22 +76,23 @@ func TestExportTarget_RejectsInvalidDestination(t *testing.T) {
 	}
 
 	tests := []struct {
-		name string
-		path string
+		name    string
+		path    string
+		wantErr error
 	}{
-		{"relative", "export.zip"},
-		{"wrong extension", filepath.Join(outside, "export.tar")},
-		{"missing parent", filepath.Join(outside, "missing", "export.zip")},
-		{"parent is file", filepath.Join(notDir, "export.zip")},
-		{"existing target", existing},
+		{"relative", "export.zip", ErrInvalidExportRequest},
+		{"wrong extension", filepath.Join(outside, "export.tar"), ErrInvalidExportRequest},
+		{"missing parent", filepath.Join(outside, "missing", "export.zip"), ErrInvalidExportRequest},
+		{"parent is file", filepath.Join(notDir, "export.zip"), ErrInvalidExportRequest},
+		{"existing target", existing, ErrExportTargetExists},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if target, err := resolveExportTarget(ExportRequest{Now: time.Now(), OutputPath: tt.path, Paths: paths, PrivateFS: fs}); !errors.Is(err, ErrInvalidExportRequest) && !errors.Is(err, ErrExportTargetExists) {
+			if target, err := resolveExportTarget(ExportRequest{Now: time.Now(), OutputPath: tt.path, Paths: paths, PrivateFS: fs}); !errors.Is(err, tt.wantErr) {
 				if target != nil {
 					closeExportTarget(target)
 				}
-				t.Fatalf("resolveExportTarget error=%v, want stable validation error", err)
+				t.Fatalf("resolveExportTarget error=%v, want %v", err, tt.wantErr)
 			}
 		})
 	}

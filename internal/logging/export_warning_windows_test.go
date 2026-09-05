@@ -21,7 +21,11 @@ func TestExport_WindowsSuccessfulArchiveHasNoWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer archive.Close()
+	t.Cleanup(func() {
+		if err := archive.Close(); err != nil {
+			t.Errorf("close exported archive: %v", err)
+		}
+	})
 	if len(archive.File) != 2 {
 		t.Fatalf("entries=%d", len(archive.File))
 	}

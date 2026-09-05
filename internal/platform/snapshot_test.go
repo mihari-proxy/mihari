@@ -25,7 +25,11 @@ func TestOpenSnapshot_AllowsAppendRenameAndDeleteThroughOtherHandles(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = snapshot.Close() })
+	t.Cleanup(func() {
+		if err := snapshot.Close(); err != nil {
+			t.Errorf("close snapshot: %v", err)
+		}
+	})
 
 	appendHandle, err := fs.OpenAppend(paths.DaemonLog)
 	if err != nil {

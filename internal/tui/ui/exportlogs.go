@@ -60,6 +60,7 @@ func newExportRunner(parent context.Context, export func(context.Context, loggin
 	return &exportRunner{parent: parent, export: export}
 }
 
+// Start registers and starts one owned worker before returning its result channel.
 func (r *exportRunner) Start(generation uint64, request logging.ExportRequest) (<-chan exportResultMsg, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -94,6 +95,7 @@ func (r *exportRunner) Start(generation uint64, request logging.ExportRequest) (
 	return result, true
 }
 
+// Cancel requests cancellation without blocking the UI loop.
 func (r *exportRunner) Cancel() {
 	r.mu.Lock()
 	cancel := r.cancel
@@ -102,6 +104,8 @@ func (r *exportRunner) Cancel() {
 		cancel()
 	}
 }
+
+// CancelAndWait waits until the active worker has released its resources.
 func (r *exportRunner) CancelAndWait() {
 	r.mu.Lock()
 	cancel, done, running := r.cancel, r.done, r.running
@@ -185,7 +189,7 @@ func (m *ExportLogsModel) Update(message tea.Msg) (tea.Cmd, bool) {
 		}
 		m.pending = false
 		m.warning = result.Warning
-		if errors.Is(result.Err, context.Canceled) {
+		if errors.Is(result.Err, context.Canceled) || errors.Is(result.Err, context.DeadlineExceeded) {
 			m.message = ExportCancelled
 			return nil, true
 		}
@@ -222,6 +226,9 @@ func (m *ExportLogsModel) Update(message tea.Msg) (tea.Cmd, bool) {
 		}
 	}
 	if m.pending {
+		if isKey && key.String() == "q" && !m.textFocused() {
+			return nil, false
+		}
 		if isKey && key.String() == "esc" {
 			m.runner.Cancel()
 		}
@@ -308,9 +315,13 @@ func (m *ExportLogsModel) defaultPath(now time.Time) string {
 	base := "mihari-logs-" + now.Format("20060102-150405-0700")
 	name := base + ".zip"
 	if m.options.Exists != nil {
-		for suffix := 0; ; suffix++ {
+		// This is only a UI preview. Keep synchronous work bounded; Export
+		// authoritatively checks/auto-numbers the target before publishing.
+		const maxPreviewProbes = 8
+		for suffix := 0; suffix < maxPreviewProbes; suffix++ {
 			exists, err := m.options.Exists(m.options.DefaultDir, name)
 			if err != nil || !exists {
+				// A failed probe leaves a candidate, not permission to overwrite.
 				break
 			}
 			name = fmt.Sprintf("%s-%d.zip", base, suffix+1)

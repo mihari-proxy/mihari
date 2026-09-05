@@ -63,7 +63,7 @@ func exportWithOps(ctx context.Context, request ExportRequest, ops exportOps) (_
 	if err != nil {
 		return ExportResult{}, stableExportError(err)
 	}
-	target, err := resolveExportTarget(request)
+	target, err := resolveExportTargetWithOps(request, ops)
 	if err != nil {
 		return ExportResult{}, stableExportError(err)
 	}
@@ -214,7 +214,10 @@ func exportWithOps(ctx context.Context, request ExportRequest, ops exportOps) (_
 			return ExportResult{}, exportPipelineError(err)
 		}
 		inside, err := target.Dir.IsWithin(target.LogDir)
-		if err != nil || inside {
+		if err != nil {
+			return ExportResult{}, exportPipelineError(errors.Join(ErrExportTargetChanged, err))
+		}
+		if inside {
 			return ExportResult{}, ErrExportTargetChanged
 		}
 		err = ops.Publish(target.Dir, workspace, zipName, target.Name, func(error) { warnExport(request.OnWarning) })
@@ -335,6 +338,7 @@ func joinCleanupError(primary, cleanup error, warning func(error)) error {
 
 type publicExportError struct{ cause error }
 
+// Error exposes a stable message without paths or other underlying details.
 func (e publicExportError) Error() string {
 	switch {
 	case errors.Is(e.cause, context.Canceled), errors.Is(e.cause, context.DeadlineExceeded):
@@ -354,6 +358,7 @@ func (e publicExportError) Error() string {
 	}
 }
 
+// Unwrap retains the original classification and cleanup causes.
 func (e publicExportError) Unwrap() error { return e.cause }
 
 func stableExportError(err error) error {

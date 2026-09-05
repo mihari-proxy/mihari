@@ -28,6 +28,7 @@ var (
 	publishWindowsCleanupReadFn             = readWindowsDirents
 	publishWindowsCleanupCloseFn            = windows.CloseHandle
 	publishWindowsCleanupDispositionFn      = markWindowsHandleDeletePending
+	publishWindowsHardenTempFn              = hardenHandle
 )
 
 type publishDirState struct {
@@ -198,17 +199,15 @@ func (w *PublishWorkspace) createTempLocked(pattern string) (*os.File, string, e
 		if err := rejectCreatedWindowsReparse(h, name); err != nil {
 			return nil, "", errors.Join(err, cleanupCreatedWindowsHandle(h))
 		}
-		if err := hardenHandle(h, sddl); err != nil {
-			_ = markWindowsHandleForDeletion(h)
-			_ = windows.CloseHandle(h)
-			return nil, "", fmt.Errorf("harden publish temp: %w", err)
+		if err := publishWindowsHardenTempFn(h, sddl); err != nil {
+			return nil, "", errors.Join(fmt.Errorf("harden publish temp: %w", err), cleanupCreatedWindowsHandle(h))
 		}
 		return os.NewFile(uintptr(h), name), name, nil
 	}
 	return nil, "", fmt.Errorf("create publish temp: exhausted names")
 }
 
-func (w *PublishWorkspace) removeLocked(name string) error {
+func (w *PublishWorkspace) removeLocked(name string) (retErr error) {
 	h, err := openRelative(w.plat.handle, name, windows.DELETE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE, windows.FILE_OPEN,
 		windows.FILE_NON_DIRECTORY_FILE|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT, 0, nil)
 	if err != nil {
@@ -217,7 +216,11 @@ func (w *PublishWorkspace) removeLocked(name string) error {
 		}
 		return fmt.Errorf("remove publish temp: %w", err)
 	}
-	defer windows.CloseHandle(h)
+	defer func() {
+		if err := publishWindowsCleanupCloseFn(h); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("close removed publish temp: %w", err))
+		}
+	}()
 	if err := rejectReparse(h, name); err != nil {
 		return err
 	}
@@ -454,7 +457,7 @@ func rejectCreatedWindowsReparse(h windows.Handle, name string) error {
 
 func cleanupCreatedWindowsHandle(h windows.Handle) error {
 	deleteErr := publishWindowsDeleteCreatedFn(h)
-	closeErr := windows.CloseHandle(h)
+	closeErr := publishWindowsCleanupCloseFn(h)
 	if deleteErr != nil {
 		deleteErr = fmt.Errorf("delete rejected created object: %w", deleteErr)
 	}

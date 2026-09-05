@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/service"
@@ -1306,31 +1308,35 @@ func TestModel_PendingExportPreservesAsyncRootAndTargetPageRouting(t *testing.T)
 }
 
 func TestModel_PendingExportRoutesRealSystemActionCompletion(t *testing.T) {
+	// Channel persistence is the only real action executed here, and its data
+	// root is isolated before constructing/rendering the page (which reads it).
+	dataRoot := t.TempDir()
+	t.Setenv("MIHARI_DATA", dataRoot)
 	started := make(chan struct{})
 	model := NewModel()
 	realPage := systempage.New(nil, func() string { return "op" })
 	realPage.SetSelfUpdater(rootSelfUpdater{}, "v1.0.0", t.TempDir()+"/mihari", func() bool { return true })
+	realPage.SetOpenBrowser(func(string) error { t.Fatal("test attempted browser IO"); return nil })
+	realPage.SetSize(180, 100)
 	model.pages[ui.PageSystem] = realPage
 
 	var intent ui.ActionIntentMsg
 	found := false
-	for steps := 0; steps < 64 && !found; steps++ {
-		candidate := systempage.New(nil, func() string { return "op" })
-		candidate.SetSelfUpdater(rootSelfUpdater{}, "v1.0.0", t.TempDir()+"/mihari", func() bool { return true })
-		candidate.FocusFirst()
-		for range steps {
-			page, _ := candidate.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-			candidate = page.(*systempage.Model)
+	for steps := 0; steps < 64; steps++ {
+		if strings.Contains(ansi.Strip(realPage.View()), ui.FocusMarker+ui.MihariChannelLabel) {
+			_, cmd := realPage.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			if cmd == nil {
+				t.Fatal("channel row did not provide intent")
+			}
+			request, ok := cmd().(ui.ActionIntentMsg)
+			if !ok || request.Action != ui.ActionSwitchMihariChannel {
+				t.Fatal("selected row was not channel action")
+			}
+			intent, found = request, true
+			break
 		}
-		_, cmd := candidate.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-		if cmd == nil {
-			continue
-		}
-		message := cmd()
-		request, ok := message.(ui.ActionIntentMsg)
-		if ok && request.Action == ui.ActionSwitchMihariChannel {
-			intent, realPage, found = request, candidate, true
-		}
+		page, _ := realPage.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		realPage = page.(*systempage.Model)
 	}
 	if !found {
 		t.Fatal("real System source page did not expose its Mihari channel action")
@@ -1363,6 +1369,10 @@ func TestModel_PendingExportRoutesRealSystemActionCompletion(t *testing.T) {
 	model = updated.(Model)
 	if len(model.pendingActions) != 0 || strings.Contains(model.pages[ui.PageSystem].View(), ui.MihariProgressSwitching) {
 		t.Fatalf("real System completion did not clear root/source pending state: root=%v view=%q", model.pendingActions, model.pages[ui.PageSystem].View())
+	}
+	channel, err := update.LoadChannel(filepath.Join(dataRoot, "mihari-channel"))
+	if err != nil || channel != update.ChannelDev || !strings.Contains(model.pages[ui.PageSystem].View(), ui.DoneLabel) {
+		t.Fatalf("real System channel completion was not applied: channel=%q err=%v", channel, err)
 	}
 }
 

@@ -163,7 +163,7 @@ func TestSnapshotSource_ClosesEarlierHandlesWhenLaterIdentityChanges(t *testing.
 		t.Fatal("first handle was not opened")
 	}
 	if _, statErr := first.Stat(); statErr == nil {
-		t.Fatalf("earlier handle stat error=%v, want closed", statErr)
+		t.Fatal("earlier snapshot handle remained open")
 	}
 }
 
@@ -214,7 +214,7 @@ func TestCloseSnapshots_ClosesEveryHandle(t *testing.T) {
 	}
 	for _, handle := range handles {
 		if _, err := handle.file.Stat(); err == nil {
-			t.Fatalf("Stat error=%v want closed", err)
+			t.Fatal("snapshot handle remained open")
 		}
 	}
 }

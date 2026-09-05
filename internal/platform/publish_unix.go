@@ -29,6 +29,7 @@ type publishDirState struct {
 	uid                     int
 	gid                     int
 	initialNamespaceTrusted bool
+	initialNamespaceErr     error
 }
 
 type publishWorkspaceState struct {
@@ -50,6 +51,7 @@ func openPublishDir(path string) (*PublishDir, error) {
 		_ = unix.Close(fd)
 		return nil, err
 	}
+	d.assessInitialNamespace()
 	return d, nil
 }
 
@@ -85,8 +87,11 @@ func publishDirFromFD(fd int, visiblePath string) (*PublishDir, error) {
 		return nil, fmt.Errorf("close publish directory verification handle: %w", err)
 	}
 	d := &PublishDir{path: filepath.Clean(canonical), plat: publishDirState{fd: fd, id: id}}
-	d.plat.initialNamespaceTrusted, _ = d.unixParentHasPrivateMutationBoundary(-1)
 	return d, nil
+}
+
+func (d *PublishDir) assessInitialNamespace() {
+	d.plat.initialNamespaceTrusted, d.plat.initialNamespaceErr = d.unixParentHasPrivateMutationBoundary(-1)
 }
 
 func (d *PublishDir) existsLocked(name string) (bool, error) {
@@ -253,7 +258,10 @@ func (w *PublishWorkspace) removeLocked(name string) error {
 func (d *PublishDir) publishNoReplaceLocked(w *PublishWorkspace, tempName, targetName string, warn func(error)) error {
 	checkFD, err := unix.Open(d.path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return fmt.Errorf("%w", ErrPublishDirectoryChanged)
+		if errors.Is(err, unix.ENOENT) {
+			return errors.Join(ErrPublishDirectoryChanged, err)
+		}
+		return fmt.Errorf("verify publish directory: %w", err)
 	}
 	var st unix.Stat_t
 	statErr := unix.Fstat(checkFD, &st)
@@ -290,6 +298,8 @@ func (w *PublishWorkspace) closePlatformLocked(owner *PublishDir) error {
 	var cleanupErr error
 	if owner == nil || owner.closed || owner.plat.fd < 0 {
 		cleanupErr = fmt.Errorf("publish workspace cleanup: parent is closed")
+	} else if !owner.plat.initialNamespaceTrusted {
+		cleanupErr = errors.Join(fmt.Errorf("publish workspace cleanup: parent permits untrusted entry replacement at acquisition"), owner.plat.initialNamespaceErr)
 	} else {
 		name, err := findUnixEntryByIdentity(owner.plat.fd, w.plat.id)
 		if err != nil {

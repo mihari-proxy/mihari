@@ -170,9 +170,9 @@ Mihari 会在数据根目录下写入三个 JSONL（每行一个 JSON 对象）�
 
 `GET /v1/logging` 与 `PATCH /v1/logging` 是供 TUI 使用的稳定 v1 本地控制端点，并非 CLI 命令。日志导出仅在 TUI 提供：可在 Logs 页按 `e`，或在 System → Logging 选择 **Export logs**。对话框支持最近 24 小时、最近 60 分钟、本地时间区间和全部记录。默认输出到 `logs-export/`；已有 zip 永不覆盖，自定义目标必须是既有目录中的绝对 `.zip` 路径。没有 CLI 日志导出命令。
 
-zip 固定包含 `manifest.json`，以及有内容时才出现的 `daemon/mihari-daemon.log`、`tui/mihari-tui.log`、`mihomo/mihomo.log`。记录会重新解析、筛选、递归二次脱敏并编码，不会原样复制 JSONL。已知凭据和 URL 会被遮蔽，但节点名、目标域名/IP 与流量元数据仍可能保留；发送前请逐项自查。
+zip 固定包含 `manifest.json`，以及有内容时才出现的 `daemon/mihari-daemon.log`、`tui/mihari-tui.log`、`mihomo/mihomo.log`。记录会重新解析、筛选、递归二次脱敏并编码，不会原样复制 JSONL。若对象成员的键本身含已识别凭据或 URL，该成员会被省略，安全的兄弟字段仍保留。已知凭据和 URL 会被遮蔽，但节点名、目标域名/IP 与流量元数据仍可能保留；发送前请逐项自查。
 
-导出全程持有已打开的目标父目录 identity，生成期间父路径被替换时不会跟随。Unix 清理以同 UID 与本机 root/管理员为受信主体；若自定义父目录为不可信共享目录，内容清理成功后仍可能留下空的私有 workspace，清理 IO 失败则会报告可能存在内容残留。发布成功后若目标目录又被外部改名，界面显示的绝对路径也可能失效。
+导出全程持有已打开的目标父目录 identity，生成期间父路径被替换时不会跟随被替换后的路径。Unix 清理以同 UID 与本机 root/管理员为受信主体；若自定义父目录初始为不可信共享目录，即使导出期间收紧权限，内容清理成功后仍可能留下空的私有 workspace，清理 IO 失败则会报告可能存在内容残留。发布成功后若目标目录又被外部改名，界面显示的绝对路径也可能失效。
 
 旧版二进制使用 `KnownFields(true)` 解码 `mihari.yaml`，无法读取自定义 `log:` 块。降级前，请在 System → Logging 恢复 `info` / 10 MiB / 3 份文件，使该块自动移除；或先备份设置文件，再手动删除 `log:`。脱敏仅为尽力而为，仍应将所有日志文件按敏感资料处理，并在分享前审阅内容。
 

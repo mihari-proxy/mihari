@@ -17,10 +17,14 @@ import (
 type RangeKind string
 
 const (
-	RangeLast24Hours   RangeKind = "last_24h"
+	// RangeLast24Hours selects the 24 hours ending at export time.
+	RangeLast24Hours RangeKind = "last_24h"
+	// RangeLast60Minutes selects the 60 minutes ending at export time.
 	RangeLast60Minutes RangeKind = "last_60m"
-	RangeBetween       RangeKind = "between"
-	RangeAll           RangeKind = "all"
+	// RangeBetween selects an explicit closed time interval.
+	RangeBetween RangeKind = "between"
+	// RangeAll selects every valid timestamped record.
+	RangeAll RangeKind = "all"
 )
 
 // ExportRange describes the requested closed time window.
@@ -70,10 +74,14 @@ type exportTarget struct {
 }
 
 var (
+	// ErrInvalidExportRequest identifies an unsupported range or destination.
 	ErrInvalidExportRequest = errors.New("invalid export request")
-	ErrExportTargetExists   = errors.New("export target already exists")
-	ErrExportTargetChanged  = errors.New("export target changed")
-	ErrNoLogLines           = errors.New("no log lines in selected range")
+	// ErrExportTargetExists identifies a destination that must not be overwritten.
+	ErrExportTargetExists = errors.New("export target already exists")
+	// ErrExportTargetChanged identifies failed destination identity or containment checks.
+	ErrExportTargetChanged = errors.New("export target changed")
+	// ErrNoLogLines reports that no valid records matched the selected range.
+	ErrNoLogLines = errors.New("no log lines in selected range")
 
 	errExportTargetSuffixOverflow = errors.New("export target suffix overflow")
 )
@@ -103,7 +111,12 @@ func normalizeExportRange(now time.Time, exportRange ExportRange) (ExportRange, 
 	}
 }
 
-func resolveExportTarget(request ExportRequest) (_ *exportTarget, retErr error) {
+func resolveExportTarget(request ExportRequest) (*exportTarget, error) {
+	_, _, ops := exportDefaults(context.Background(), request, exportOps{})
+	return resolveExportTargetWithOps(request, ops)
+}
+
+func resolveExportTargetWithOps(request ExportRequest, ops exportOps) (_ *exportTarget, retErr error) {
 	if request.PrivateFS == nil {
 		return nil, fmt.Errorf("%w: private log storage is unavailable", ErrInvalidExportRequest)
 	}
@@ -126,7 +139,9 @@ func resolveExportTarget(request ExportRequest) (_ *exportTarget, retErr error) 
 	}
 	defer func() {
 		if retErr != nil {
-			_ = logDir.Close()
+			if err := ops.CloseLogDir(logDir); err != nil {
+				retErr = joinCleanupError(retErr, fmt.Errorf("close export source directory: %w", err), request.OnWarning)
+			}
 		}
 	}()
 
@@ -143,7 +158,9 @@ func resolveExportTarget(request ExportRequest) (_ *exportTarget, retErr error) 
 	}
 	defer func() {
 		if retErr != nil {
-			_ = dir.Close()
+			if err := ops.ClosePublishDir(dir); err != nil {
+				retErr = joinCleanupError(retErr, fmt.Errorf("close export target directory: %w", err), request.OnWarning)
+			}
 		}
 	}()
 
@@ -203,6 +220,7 @@ func exportTargetParts(request ExportRequest) (name, parent, base string, err er
 	return name, filepath.Dir(abs), strings.TrimSuffix(name, filepath.Ext(name)), nil
 }
 
+// Advance selects the next automatically numbered candidate without filesystem IO.
 func (t *exportTarget) Advance() error {
 	if t == nil || !t.AutoNumber || t.Base == "" {
 		return ErrInvalidExportRequest

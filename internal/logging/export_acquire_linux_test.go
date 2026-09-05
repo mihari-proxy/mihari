@@ -30,6 +30,9 @@ func TestExport_UnprovedWorkspaceAcquisitionReportsWarning(t *testing.T) {
 		binary.LittleEndian.PutUint32(acl[offset+4:], entry.id)
 	}
 	if err := unix.Setxattr(parent, "system.posix_acl_default", acl, 0); err != nil {
+		if errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.ENOTSUP) {
+			t.Skip("filesystem does not support POSIX ACL xattrs")
+		}
 		t.Fatal(err)
 	}
 	out := filepath.Join(parent, "result.zip")

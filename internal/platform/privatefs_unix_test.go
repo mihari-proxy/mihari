@@ -441,12 +441,16 @@ func TestPublishWorkspace_UnixPrivateModes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = d.Close() })
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = w.Close() })
+	t.Cleanup(func() {
+		if err := w.Close(); err == nil || !strings.Contains(err.Error(), "parent permits untrusted entry replacement") {
+			t.Errorf("expected degraded mutable-parent cleanup: %v", err)
+		}
+	})
 	assertMode(t, filepath.Join(parent, w.name), os.ModeDir|0o700)
 	f, name, err := w.CreateTemp("private-*")
 	if err != nil {
@@ -500,7 +504,11 @@ func TestPrivateFSPublishDir_UnixPropagatesDataRootOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = fs.Close() })
+	t.Cleanup(func() {
+		if err := fs.Close(); err != nil {
+			t.Errorf("close private filesystem: %v", err)
+		}
+	})
 	paths := NewPaths(root)
 	if err := fs.EnsureDir(paths.LogExportDir); err != nil {
 		t.Fatal(err)
@@ -651,12 +659,12 @@ func TestPublishDir_UnixPostPublishFailureIsWarning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = d.Close() })
+	cleanupPublishDir(t, d)
 	w, err := d.CreateWorkspace()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = w.Close() })
+	cleanupPublishWorkspace(t, w)
 	f, name, err := w.CreateTemp("warn-*")
 	if err != nil {
 		t.Fatal(err)

@@ -97,12 +97,18 @@ func (r *Redactor) String(value string) string {
 
 // Value recursively redacts decoded JSON values without modifying the input.
 // The changed result is record-scoped: it reports whether any nested value was
-// replaced, regardless of how many replacements occurred.
+// replaced or sensitive-key member omitted, regardless of the replacement count.
 func (r *Redactor) Value(value any) (redacted any, changed bool) {
 	switch value := value.(type) {
 	case map[string]any:
 		result := make(map[string]any, len(value))
 		for key, child := range value {
+			// Omit sensitive-key members rather than renaming them: replacement
+			// keys can collide with each other or with ordinary retained siblings.
+			if r.String(key) != key {
+				changed = true
+				continue
+			}
 			if isSensitiveKey(key) {
 				result[key] = redactedExact
 				if child != redactedExact {

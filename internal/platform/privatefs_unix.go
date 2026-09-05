@@ -315,7 +315,7 @@ func (fs *PrivateFS) openPublishDirLocked(name string) (*PublishDir, error) {
 	}
 	dup, err := dupCLOEXEC(fd)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("duplicate private publish directory: %w", err)
 	}
 	d, err := publishDirFromFD(dup, filepath.Join(fs.root, name))
 	if err != nil {
@@ -325,7 +325,7 @@ func (fs *PrivateFS) openPublishDirLocked(name string) (*PublishDir, error) {
 	d.plat.setOwner = true
 	d.plat.uid = fs.plat.uid
 	d.plat.gid = fs.plat.gid
-	d.plat.initialNamespaceTrusted, _ = d.unixParentHasPrivateMutationBoundary(-1)
+	d.assessInitialNamespace()
 	return d, nil
 }
 

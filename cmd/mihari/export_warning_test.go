@@ -66,11 +66,13 @@ func TestBuildExportLogs_DialogPreservesOutcomeAndSanitizedWarning(t *testing.T)
 			cmd, _ := dialog.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 			dialog.Update(cmd())
 			view := dialog.View(200, 40)
+			compact := strings.Join(strings.Fields(ansi.Strip(view)), "")
+			compact = strings.NewReplacer("│", "", "\r", "", "\n", "").Replace(compact)
 			if !strings.Contains(view, "Temporary export data may remain") {
 				t.Errorf("warning not visible: %s", view)
 			}
 			for _, secret := range []string{"warning-secret", "private-failure-secret", "/private/path"} {
-				if strings.Contains(view, secret) {
+				if strings.Contains(compact, secret) {
 					t.Error("raw warning/error leaked")
 				}
 			}
@@ -78,8 +80,6 @@ func TestBuildExportLogs_DialogPreservesOutcomeAndSanitizedWarning(t *testing.T)
 			if !strings.Contains(view, want) {
 				t.Errorf("primary outcome lost: %s", view)
 			}
-			compact := strings.Join(strings.Fields(ansi.Strip(view)), "")
-			compact = strings.NewReplacer("│", "", "\r", "", "\n", "").Replace(compact)
 			if outcome == "success" && (path == "" || !strings.Contains(compact, filepath.Base(path))) {
 				t.Error("published path lost")
 			}
