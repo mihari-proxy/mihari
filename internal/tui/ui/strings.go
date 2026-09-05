@@ -17,7 +17,7 @@ const (
 	ExportComplete       = "Export complete"
 	ExportCancelled      = "Export cancelled"
 	ExportCopyFailed     = "Could not copy path"
-	ExportPathCopied     = "Log File Directory Copied！"
+	ExportPathCopied     = "Log file path copied!"
 	ExportNoLogLines     = "No log lines in the selected range"
 	ExportTargetInvalid  = "Invalid export destination"
 	ExportTargetExists   = "Export file already exists"

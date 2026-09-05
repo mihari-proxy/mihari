@@ -142,6 +142,7 @@ type ExportLogsModel struct {
 	cursors                               map[exportFocus]int
 	resultPath, message                   string
 	warning                               bool
+	copySucceeded                         bool
 	editing, discardOpen, discardSelected bool
 	editValue                             string
 	editRange                             logging.RangeKind
@@ -184,6 +185,7 @@ func (m *ExportLogsModel) Open() {
 	m.cursors = map[exportFocus]int{exportFocusFrom: TextCursorEnd(m.from), exportFocusTo: TextCursorEnd(m.to), exportFocusOutput: TextCursorEnd(m.output)}
 	m.resultPath, m.message, m.closed = "", "", false
 	m.warning = false
+	m.copySucceeded = false
 	m.editing, m.discardOpen, m.discardSelected = false, false, false
 	m.clockGeneration++
 }
@@ -233,7 +235,8 @@ func (m *ExportLogsModel) Update(message tea.Msg) (tea.Cmd, bool) {
 		}
 		switch key.String() {
 		case "enter":
-			if m.options.WriteClipboard(m.resultPath) != nil {
+			m.copySucceeded = m.options.WriteClipboard(m.resultPath) == nil
+			if !m.copySucceeded {
 				m.message = ExportCopyFailed
 			} else {
 				m.message = ExportPathCopied
@@ -373,6 +376,7 @@ func (m *ExportLogsModel) submit() tea.Cmd {
 	}
 	m.pending, m.message = true, ""
 	m.warning = false
+	m.copySucceeded = false
 	return func() tea.Msg { return <-results }
 }
 
@@ -495,7 +499,7 @@ func (m *ExportLogsModel) View(width, height int) string {
 		body += "\n\n" + ExportSuccessHelp
 		if m.message != "" {
 			style := theme.Danger
-			if m.message == ExportPathCopied {
+			if m.copySucceeded {
 				style = theme.Success
 			}
 			body += "\n\n" + style.Render(m.message)

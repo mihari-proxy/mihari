@@ -434,7 +434,7 @@ func TestExportLogsModel_QuitKeysAreNotConsumedOutsideText(t *testing.T) {
 }
 
 func TestExportLogsModel_CopyShowsSuccessBelowHelp(t *testing.T) {
-	const notice = "Log File Directory Copied！"
+	const notice = "Log file path copied!"
 	var copied string
 	var copyErr error
 	m := NewExportLogsModel(ExportLogsOptions{Now: exportTestNow, DefaultDir: t.TempDir(), WriteClipboard: func(path string) error { copied = path; return copyErr }})
@@ -451,6 +451,11 @@ func TestExportLogsModel_CopyShowsSuccessBelowHelp(t *testing.T) {
 	}
 	if strings.Index(view, notice) < strings.Index(view, ExportSuccessHelp) {
 		t.Fatal("notice must be below help")
+	}
+	// Presentation follows the copy outcome even if the message wording changes.
+	m.message = "Copied to clipboard"
+	if !strings.Contains(m.View(120, 30), DefaultTheme().Success.Render(m.message)) {
+		t.Fatal("success style depends on message text")
 	}
 	copyErr = errors.New("clipboard unavailable")
 	m.Update(key(tea.KeyEnter, ""))
