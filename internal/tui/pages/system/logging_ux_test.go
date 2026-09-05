@@ -48,3 +48,11 @@ func TestLogging_OutcomePreservesValue(t *testing.T) {
 		}
 	}
 }
+
+func TestLogging_OfflineDirectoryDoesNotAdvertiseCopy(t *testing.T) {
+	m := New(nil, nil)
+	m.focusID = rowLogDirectory
+	if strings.Contains(m.FooterHints(), "copy directory") {
+		t.Fatal("offline directory advertises unavailable action")
+	}
+}

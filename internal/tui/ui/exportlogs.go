@@ -198,7 +198,7 @@ func (m *ExportLogsModel) Update(message tea.Msg) (tea.Cmd, bool) {
 		return m.clockCmd(), true
 	}
 	if tick, ok := message.(exportClockMsg); ok {
-		if m.closed || tick.generation != m.clockGeneration {
+		if m.closed || m.resultPath != "" || tick.generation != m.clockGeneration {
 			return nil, true
 		}
 		return m.clockCmd(), true
@@ -290,6 +290,8 @@ func (m *ExportLogsModel) Update(message tea.Msg) (tea.Cmd, bool) {
 			}
 			if m.focus == exportFocusRange {
 				switch key.String() {
+				case "q":
+					return nil, false
 				case "down", "right", "tab":
 					m.cycleRange()
 				case "up", "left", "shift+tab":

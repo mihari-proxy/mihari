@@ -19,16 +19,16 @@ func TestRows_LoggingSectionPrecedesAboutAndIsUnavailableOffline(t *testing.T) {
 		ids[index] = item.id
 	}
 
-	portsEnd := slices.Index(ids, "log-level") - 1
-	daemon := slices.Index(ids, "about")
-	if portsEnd < 0 || daemon < 0 {
+	loggingStart := slices.Index(ids, rowLogLevel)
+	about := slices.Index(ids, rowAbout)
+	if loggingStart < 0 || about < 0 {
 		t.Fatalf("missing boundary rows: %v", ids)
 	}
 	want := []string{"log-level", "log-max-size", "log-max-files", "log-directory", "log-export"}
-	if got := ids[portsEnd+1 : daemon]; !slices.Equal(got, want) {
+	if got := ids[loggingStart:about]; !slices.Equal(got, want) {
 		t.Fatalf("logging rows before About = %v, want %v", got, want)
 	}
-	for _, item := range rows[portsEnd+1 : daemon-1] {
+	for _, item := range rows[loggingStart : about-1] {
 		if item.section != "Logging" || item.value != ui.UnavailableTitle {
 			t.Fatalf("offline logging row = %#v", item)
 		}

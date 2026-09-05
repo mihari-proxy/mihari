@@ -517,10 +517,11 @@ func privateDataPrincipal(sd *windows.SECURITY_DESCRIPTOR) (*windows.SID, error)
 		if err := windows.GetAce(dacl, i, &ace); err != nil {
 			return nil, err
 		}
-		if ace.Header.AceType == windows.ACCESS_DENIED_ACE_TYPE {
-			return nil, fmt.Errorf("ambiguous private data root deny ACE")
+		// Never flatten object/callback or deny restrictions into an unconditional grant.
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			return nil, fmt.Errorf("unsupported private data root ACE type %d", ace.Header.AceType)
 		}
-		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags&(windows.INHERITED_ACE|windows.INHERIT_ONLY_ACE) != 0 || ace.Mask&privateFileAllAccess != privateFileAllAccess {
+		if ace.Header.AceFlags&(windows.INHERITED_ACE|windows.INHERIT_ONLY_ACE) != 0 || ace.Mask&privateFileAllAccess != privateFileAllAccess {
 			continue
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))

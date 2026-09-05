@@ -106,3 +106,20 @@ func TestExportLogs_ClockStopsAndIgnoresOldDialog(t *testing.T) {
 		t.Fatal("pending reopen duplicated clock")
 	}
 }
+
+func TestExportLogs_RangeEditingAllowsGlobalQuit(t *testing.T) {
+	m := NewExportLogsModel(ExportLogsOptions{Now: exportTestNow})
+	m.Open()
+	m.Update(key(tea.KeyEnter, ""))
+	if _, consumed := m.Update(key('q', "q")); consumed {
+		t.Fatal("range editing swallowed global quit")
+	}
+}
+func TestExportLogs_CompletedResultStopsClock(t *testing.T) {
+	m := NewExportLogsModel(ExportLogsOptions{Now: exportTestNow})
+	m.Open()
+	m.resultPath = "export.zip"
+	if cmd, _ := m.Update(exportClockMsg{m.clockGeneration}); cmd != nil {
+		t.Fatal("completed result kept clock running")
+	}
+}

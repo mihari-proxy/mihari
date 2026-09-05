@@ -445,7 +445,7 @@ func (m *Model) HelpMode() string {
 
 // FooterHints returns edit-mode shortcuts while a port row is being typed.
 func (m *Model) FooterHints() string {
-	if m.focusID == rowLogDirectory && m.editID == "" && m.detail == nil {
+	if m.loggingAvailable && m.focusID == rowLogDirectory && m.editID == "" && m.detail == nil {
 		return "↑/↓ navigate  Enter copy directory  Esc back  ? help  q quit"
 	}
 	return ui.RenderFooter(m.ID(), m.HelpMode(), ui.FooterOpt{})

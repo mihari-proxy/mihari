@@ -45,7 +45,9 @@ func repairExistingLogAccess(ctx context.Context, fs logAccessFS, dir string) er
 					changed = true
 					continue
 				}
-				return err
+				// Fail closed: a namespace with unresolved ACLs must not be reported
+				// as safely migrated. Earlier repairs remain applied; no content is lost.
+				return fmt.Errorf("repair log access for %s: %w", entry.Name, err)
 			}
 		}
 		if !changed {

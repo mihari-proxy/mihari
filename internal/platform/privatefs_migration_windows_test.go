@@ -82,6 +82,8 @@ func TestPrivateFS_MigrationRestoresReadForNonAdminToken(t *testing.T) {
 	}
 }
 
+// Kept in this test package (and duplicated in integration) so native token
+// helpers never become production platform APIs or introduce package cycles.
 // This token cannot satisfy an Administrators allow ACE, even on elevated CI.
 func nonAdminReaderToken(t *testing.T) windows.Token {
 	t.Helper()

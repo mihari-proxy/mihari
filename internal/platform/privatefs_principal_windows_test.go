@@ -78,3 +78,29 @@ func TestPrivateDataPrincipal_SystemDoesNotLeaveBroadRootUnhardened(t *testing.T
 		t.Fatal("unresolved SYSTEM accepted broad root without hardening")
 	}
 }
+
+func TestPrivateDataPrincipal_AllDenyVariantsRejected(t *testing.T) {
+	user, err := currentUserSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []byte{windows.ACCESS_DENIED_ACE_TYPE, 0x6, 0xA, 0xC} {
+		sd, err := windows.SecurityDescriptorFromString("O:BAD:P(D;;GR;;;" + user.String() + ")(A;;FA;;;" + user.String() + ")(A;;FA;;;SY)")
+		if err != nil {
+			t.Fatal(err)
+		}
+		acl, _, err := sd.DACL()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(acl, 0, &ace); err != nil {
+			t.Fatal(err)
+		}
+		// Only the common ACE header is inspected; never apply this synthetic ACL.
+		ace.Header.AceType = kind
+		if _, err := privateDataPrincipal(sd); err == nil {
+			t.Errorf("deny ACE type %d accepted", kind)
+		}
+	}
+}
