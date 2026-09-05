@@ -59,6 +59,57 @@ func TestResolveLayout_SystemDefaults(t *testing.T) {
 	}
 }
 
+func TestResolveLayout_UnusableUserLogsDoNotLoseMachineLayout(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      LayoutInput
+		defaults   LayoutDefaults
+		wantClient string
+	}{
+		{
+			name:       "invalid XDG falls back to trusted home",
+			input:      LayoutInput{CWD: "/", XDGState: "/state\x00user", EUID: 1000},
+			defaults:   linuxTestDefaults("/users/account"),
+			wantClient: "/users/account/.local/state/mihari",
+		},
+		{
+			name:     "missing Linux candidates use memory diagnostics",
+			input:    LayoutInput{CWD: "/", XDGState: "relative-state", EUID: 1000},
+			defaults: linuxTestDefaults(""),
+		},
+		{
+			name:     "relative trusted home uses memory diagnostics",
+			input:    LayoutInput{CWD: "/", EUID: 1000},
+			defaults: linuxTestDefaults("relative-home"),
+		},
+		{
+			name:     "missing Darwin home uses memory diagnostics",
+			input:    LayoutInput{CWD: "/", EUID: 501},
+			defaults: darwinTestDefaults(""),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ResolveLayout(tt.input, tt.defaults)
+			if err != nil {
+				t.Fatalf("optional client logs blocked machine layout: %v", err)
+			}
+			if got.Mode != SystemMode || got.Data.Root == "" || got.ControlEndpoint == "" || got.CredentialPath == "" {
+				t.Fatalf("machine layout was lost: %+v", got)
+			}
+			if tt.wantClient != "" {
+				if got.ClientLogs.Root != tt.wantClient {
+					t.Fatalf("ClientLogs.Root=%q want=%q", got.ClientLogs.Root, tt.wantClient)
+				}
+				return
+			}
+			if got.ClientLogs != (Paths{}) {
+				t.Fatalf("unavailable user logs=%+v want zero Paths", got.ClientLogs)
+			}
+		})
+	}
+}
+
 func TestResolveLayout_PrivateOverridesAreAnchoredOnce(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -243,6 +294,29 @@ func TestResolveLayout_WindowsDriveRootRemainsAbsolute(t *testing.T) {
 	}
 	if got.Data.Root != `D:\` || got.BaseDir != `D:\` {
 		t.Fatalf("drive root was not preserved: %+v", got)
+	}
+}
+
+func TestResolveLayout_WindowsTraversalClampsAtVolumeRoot(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     string
+		wantRoot string
+	}{
+		{name: "drive root", data: `C:\..\portable`, wantRoot: `C:\portable`},
+		{name: "UNC share root", data: `\\server\share\..\portable`, wantRoot: `\\server\share\portable`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defaults := LayoutDefaults{OS: "windows", BaseDir: `D:\base`, InstallRoot: `C:\Program Files\Mihari`}
+			got, err := ResolveLayout(LayoutInput{CWD: `D:\work`, Data: tt.data}, defaults)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Data.Root != tt.wantRoot || got.BaseDir != tt.wantRoot {
+				t.Fatalf("root=%q base=%q want=%q", got.Data.Root, got.BaseDir, tt.wantRoot)
+			}
+		})
 	}
 }
 

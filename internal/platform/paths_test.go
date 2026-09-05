@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -72,6 +73,21 @@ func TestNewPathsBuildsRuntimeLayout(t *testing.T) {
 		if got := gots[name]; got != want {
 			t.Errorf("%s=%q want=%q", name, got, want)
 		}
+	}
+}
+
+func TestBuildPaths_UsesInjectedJoinAndCoreName(t *testing.T) {
+	join := func(elements ...string) string {
+		return strings.Join(elements, "|")
+	}
+	got := buildPaths("root", join, "target-core")
+	if got.Root != "root" ||
+		got.ControlToken != "root|control.token" ||
+		got.CoreBinary != "root|bin|target-core" ||
+		got.RuntimeConfig != "root|runtime|config.yaml" ||
+		got.SubscriptionCatalog != "root|subscriptions|catalog.yaml" ||
+		got.PanelStaging != "root|staging|panels" {
+		t.Fatalf("injected builder mapping=%+v", got)
 	}
 }
 

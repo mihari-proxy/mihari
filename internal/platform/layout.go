@@ -48,7 +48,7 @@ type ResolvedLayout struct {
 	CredentialPath  string
 	ChannelPath     string
 	InstallRoot     string
-	ClientLogs      Paths
+	ClientLogs      Paths // zero value means diagnostics must remain in memory
 }
 
 // ResolveLayout resolves process-captured inputs without filesystem access.
@@ -97,10 +97,7 @@ func ResolveLayout(input LayoutInput, defaults LayoutDefaults) (ResolvedLayout, 
 	}
 
 	if mode == SystemMode {
-		clientRoot, err = systemClientRoot(input, defaults)
-		if err != nil {
-			return ResolvedLayout{}, err
-		}
+		clientRoot = systemClientRoot(input, defaults)
 	}
 
 	endpoint := input.Endpoint
@@ -136,7 +133,10 @@ func ResolveLayout(input LayoutInput, defaults LayoutDefaults) (ResolvedLayout, 
 	}
 
 	data := newTargetPaths(defaults.OS, dataRoot)
-	clientLogs := newTargetPaths(defaults.OS, clientRoot)
+	clientLogs := Paths{}
+	if clientRoot != "" {
+		clientLogs = newTargetPaths(defaults.OS, clientRoot)
+	}
 	return ResolvedLayout{
 		Mode:            mode,
 		BaseDir:         baseDir,
@@ -149,23 +149,20 @@ func ResolveLayout(input LayoutInput, defaults LayoutDefaults) (ResolvedLayout, 
 	}, nil
 }
 
-func systemClientRoot(input LayoutInput, defaults LayoutDefaults) (string, error) {
+func systemClientRoot(input LayoutInput, defaults LayoutDefaults) string {
 	if defaults.OS == "linux" && input.EUID != 0 && input.XDGState != "" {
-		if strings.IndexByte(input.XDGState, 0) >= 0 {
-			return "", fmt.Errorf("invalid argument: XDG state path contains NUL")
-		}
-		if targetIsAbs(defaults.OS, input.XDGState) {
-			return targetJoin(defaults.OS, targetClean(defaults.OS, input.XDGState), "mihari"), nil
+		if strings.IndexByte(input.XDGState, 0) < 0 && targetIsAbs(defaults.OS, input.XDGState) {
+			return targetJoin(defaults.OS, targetClean(defaults.OS, input.XDGState), "mihari")
 		}
 	}
-	home, err := absoluteLayoutPath(defaults.OS, "trusted home", defaults.TrustedHome, "")
-	if err != nil {
-		return "", err
+	if defaults.TrustedHome == "" || strings.IndexByte(defaults.TrustedHome, 0) >= 0 || !targetIsAbs(defaults.OS, defaults.TrustedHome) {
+		return ""
 	}
+	home := targetClean(defaults.OS, defaults.TrustedHome)
 	if defaults.OS == "linux" {
-		return targetJoin(defaults.OS, home, ".local", "state", "mihari"), nil
+		return targetJoin(defaults.OS, home, ".local", "state", "mihari")
 	}
-	return targetJoin(defaults.OS, home, "Library", "Logs", "mihari"), nil
+	return targetJoin(defaults.OS, home, "Library", "Logs", "mihari")
 }
 
 func absoluteLayoutPath(osName, name, value, cwd string) (string, error) {
@@ -229,28 +226,55 @@ func targetClean(osName, value string) string {
 		return pathpkg.Clean(value)
 	}
 	value = strings.ReplaceAll(value, "/", `\`)
-	if strings.HasPrefix(value, `\\.\`) || strings.HasPrefix(value, `\\?\`) {
-		prefix := value[:4]
-		tail := cleanWindowsTail(value[4:])
-		return prefix + tail
+	if root, tail, ok := splitWindowsRoot(value); ok {
+		parts := make([]string, 0, strings.Count(tail, `\`)+1)
+		for _, part := range strings.Split(tail, `\`) {
+			switch part {
+			case "", ".":
+				continue
+			case "..":
+				if len(parts) > 0 {
+					parts = parts[:len(parts)-1]
+				}
+			default:
+				parts = append(parts, part)
+			}
+		}
+		if len(parts) == 0 {
+			return root + `\`
+		}
+		return root + `\` + strings.Join(parts, `\`)
 	}
-	if strings.HasPrefix(value, `\\`) {
-		return `\\` + cleanWindowsTail(strings.TrimLeft(value, `\`))
-	}
-	wasDriveAbsolute := len(value) >= 3 && value[1] == ':' && value[2] == '\\'
-	cleaned := strings.ReplaceAll(pathpkg.Clean(strings.ReplaceAll(value, `\`, "/")), "/", `\`)
-	if wasDriveAbsolute && len(cleaned) == 2 && cleaned[1] == ':' {
-		return cleaned + `\`
-	}
-	return cleaned
+	return strings.ReplaceAll(pathpkg.Clean(strings.ReplaceAll(value, `\`, "/")), "/", `\`)
 }
 
-func cleanWindowsTail(value string) string {
-	cleaned := pathpkg.Clean(strings.ReplaceAll(value, `\`, "/"))
-	if cleaned == "." {
-		return ""
+func splitWindowsRoot(value string) (root, tail string, ok bool) {
+	if len(value) >= 3 && isASCIILetter(value[0]) && value[1] == ':' && value[2] == '\\' {
+		return value[:2], strings.TrimLeft(value[3:], `\`), true
 	}
-	return strings.ReplaceAll(cleaned, "/", `\`)
+	if !strings.HasPrefix(value, `\\`) {
+		return "", "", false
+	}
+	rest := strings.TrimLeft(value, `\`)
+	serverEnd := strings.IndexByte(rest, '\\')
+	if serverEnd <= 0 {
+		return "", "", false
+	}
+	server := rest[:serverEnd]
+	rest = strings.TrimLeft(rest[serverEnd+1:], `\`)
+	if rest == "" {
+		return "", "", false
+	}
+	shareEnd := strings.IndexByte(rest, '\\')
+	share := rest
+	if shareEnd >= 0 {
+		share = rest[:shareEnd]
+		tail = strings.TrimLeft(rest[shareEnd+1:], `\`)
+	}
+	if share == "" {
+		return "", "", false
+	}
+	return `\\` + server + `\` + share, tail, true
 }
 
 func targetIsAbs(osName, value string) bool {
@@ -258,10 +282,12 @@ func targetIsAbs(osName, value string) bool {
 		return pathpkg.IsAbs(value)
 	}
 	value = strings.ReplaceAll(value, "/", `\`)
-	if strings.HasPrefix(value, `\\`) {
-		return true
-	}
-	return len(value) >= 3 && ((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= 'a' && value[0] <= 'z')) && value[1] == ':' && value[2] == '\\'
+	_, _, ok := splitWindowsRoot(value)
+	return ok
+}
+
+func isASCIILetter(value byte) bool {
+	return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z')
 }
 
 func newTargetPaths(osName, root string) Paths {
@@ -272,31 +298,7 @@ func newTargetPaths(osName, root string) Paths {
 	if osName == "windows" {
 		coreName += ".exe"
 	}
-	return Paths{
-		Root:                root,
-		ControlToken:        targetJoin(osName, root, "control.token"),
-		Bin:                 targetJoin(osName, root, "bin"),
-		CoreBinary:          targetJoin(osName, root, "bin", coreName),
-		RuntimeConfig:       targetJoin(osName, root, "runtime", "config.yaml"),
-		Settings:            targetJoin(osName, root, "mihari.yaml"),
-		Onboarding:          targetJoin(osName, root, "onboarding.json"),
-		LogDir:              targetJoin(osName, root, "logs"),
-		DaemonLog:           targetJoin(osName, root, "logs", "mihari-daemon.log"),
-		TUILog:              targetJoin(osName, root, "logs", "mihari-tui.log"),
-		MihomoLog:           targetJoin(osName, root, "logs", "mihomo.log"),
-		LogExportDir:        targetJoin(osName, root, "logs-export"),
-		Staging:             targetJoin(osName, root, "staging"),
-		Subscriptions:       targetJoin(osName, root, "subscriptions"),
-		SubscriptionCatalog: targetJoin(osName, root, "subscriptions", "catalog.yaml"),
-		SubscriptionCache:   targetJoin(osName, root, "subscriptions", "cache"),
-		SubscriptionStaging: targetJoin(osName, root, "staging", "subscriptions"),
-		TUIPreferences:      targetJoin(osName, root, "preferences", "tui.json"),
-		GeoIPCountry:        targetJoin(osName, root, "geoip", "GeoLite2-Country.mmdb"),
-		GeoIPASN:            targetJoin(osName, root, "geoip", "GeoLite2-ASN.mmdb"),
-		GeoIPStaging:        targetJoin(osName, root, "staging", "geoip"),
-		WebRoot:             targetJoin(osName, root, "web"),
-		WebActive:           targetJoin(osName, root, "web", "active.json"),
-		WebCredential:       targetJoin(osName, root, "web", "credential"),
-		PanelStaging:        targetJoin(osName, root, "staging", "panels"),
-	}
+	return buildPaths(root, func(elements ...string) string {
+		return targetJoin(osName, elements...)
+	}, coreName)
 }
