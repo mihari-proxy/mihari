@@ -385,3 +385,14 @@ func linuxTestDefaults(home string) LayoutDefaults {
 func darwinTestDefaults(home string) LayoutDefaults {
 	return LayoutDefaults{OS: "darwin", BaseDir: "/Library/Application Support/mihari", InstallRoot: "/usr/local/lib/mihari", TrustedHome: home, SocketLimit: 103}
 }
+
+func TestResolvedLayout_LocatorRetainsSelectedBase(t *testing.T) {
+	layout := ResolvedLayout{Mode: PrivateMode, BaseDir: "/selected/private", ControlEndpoint: "/external/e", CredentialPath: "/other/c"}
+	got, err := layout.Locator(1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BaseDir != "/selected/private" {
+		t.Fatalf("lost selected anchor: %q", got.BaseDir)
+	}
+}

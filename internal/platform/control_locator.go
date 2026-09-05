@@ -5,6 +5,7 @@ import "fmt"
 // ControlLocator identifies the local control endpoint and credential owner.
 type ControlLocator struct {
 	Mode          LayoutMode
+	BaseDir       string
 	Endpoint      string
 	Credential    string
 	ExpectedOwner uint32
@@ -27,6 +28,7 @@ func (l ResolvedLayout) Locator(euid uint32) (ControlLocator, error) {
 	}
 	return ControlLocator{
 		Mode:          l.Mode,
+		BaseDir:       l.BaseDir,
 		Endpoint:      l.ControlEndpoint,
 		Credential:    l.CredentialPath,
 		ExpectedOwner: expectedOwner,
