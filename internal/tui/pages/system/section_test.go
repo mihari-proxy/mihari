@@ -47,9 +47,12 @@ func TestView_ShortHeightNavigationReachesVisibleExportLogs(t *testing.T) {
 	model := New(nil, nil)
 	model.SetSize(80, 10)
 	model.FocusFirst()
-	for model.focusID != rowLogExport {
+	for attempts := 0; model.focusID != rowLogExport && attempts < len(model.rows()); attempts++ {
 		page, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 		model = page.(*Model)
+	}
+	if model.focusID != rowLogExport {
+		t.Fatalf("export row was not reachable after %d navigation steps", len(model.rows()))
 	}
 	view := model.View()
 	if !strings.Contains(view, ui.ExportLogsLabel) || !strings.Contains(view, "›") {

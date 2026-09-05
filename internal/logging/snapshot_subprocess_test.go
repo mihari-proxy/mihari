@@ -27,7 +27,7 @@ func TestSnapshotSource_SubprocessWriterRotatesWhileRepeatedSnapshotsStayBounded
 		t.Run(fmt.Sprintf("max-files-%d", maxFiles), func(t *testing.T) {
 			fs, paths := openExportTestFS(t)
 			child := startSnapshotWriterChild(t, filepath.Dir(paths.LogDir), paths.TUILog, maxFiles)
-			defer child.stop(t)
+			t.Cleanup(func() { child.stop(t) })
 
 			lastWritten := 0
 			for iteration := 0; iteration < 8; iteration++ {

@@ -1281,6 +1281,7 @@ func TestModel_PendingExportPreservesAsyncRootAndTargetPageRouting(t *testing.T)
 			return logging.ExportResult{}, ctx.Err()
 		},
 	})
+	t.Cleanup(model.exportLogs.CancelAndWait)
 	model.exportLogs.Open()
 	model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if cmd, consumed := model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd == nil || !consumed {
@@ -1302,7 +1303,67 @@ func TestModel_PendingExportPreservesAsyncRootAndTargetPageRouting(t *testing.T)
 	if page.count(ui.LoggingObservedMsg{}) != 1 || page.count(marker) != 2 {
 		t.Fatalf("routed messages=%v", page.messages)
 	}
-	model.exportLogs.CancelAndWait()
+}
+
+func TestModel_PendingExportRoutesRealSystemActionCompletion(t *testing.T) {
+	started := make(chan struct{})
+	model := NewModel()
+	realPage := systempage.New(nil, func() string { return "op" })
+	realPage.SetSelfUpdater(rootSelfUpdater{}, "v1.0.0", t.TempDir()+"/mihari", func() bool { return true })
+	model.pages[ui.PageSystem] = realPage
+
+	var intent ui.ActionIntentMsg
+	found := false
+	for steps := 0; steps < 64 && !found; steps++ {
+		candidate := systempage.New(nil, func() string { return "op" })
+		candidate.SetSelfUpdater(rootSelfUpdater{}, "v1.0.0", t.TempDir()+"/mihari", func() bool { return true })
+		candidate.FocusFirst()
+		for range steps {
+			page, _ := candidate.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+			candidate = page.(*systempage.Model)
+		}
+		_, cmd := candidate.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		if cmd == nil {
+			continue
+		}
+		message := cmd()
+		request, ok := message.(ui.ActionIntentMsg)
+		if ok && request.Action == ui.ActionSwitchMihariChannel {
+			intent, realPage, found = request, candidate, true
+		}
+	}
+	if !found {
+		t.Fatal("real System source page did not expose its Mihari channel action")
+	}
+	model.pages[ui.PageSystem] = realPage
+
+	updated, _ := model.executeAction(intent)
+	model = updated.(Model)
+	if !strings.Contains(model.pages[ui.PageSystem].View(), ui.MihariProgressSwitching) {
+		t.Fatal("real System source page did not enter action-pending state")
+	}
+	model.exportLogs = ui.NewExportLogsModel(ui.ExportLogsOptions{
+		Now: func() time.Time { return time.Unix(1, 0) }, DefaultDir: t.TempDir(),
+		Export: func(ctx context.Context, _ logging.ExportRequest) (logging.ExportResult, error) {
+			close(started)
+			<-ctx.Done()
+			return logging.ExportResult{}, ctx.Err()
+		},
+	})
+	t.Cleanup(model.exportLogs.CancelAndWait)
+	model.exportLogs.Open()
+	model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if cmd, consumed := model.exportLogs.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd == nil || !consumed {
+		t.Fatal("export did not enter pending state")
+	}
+	<-started
+
+	completion := actionCompletedMsg{Intent: intent, Result: intent.Execute()}
+	updated, _ = model.Update(completion)
+	model = updated.(Model)
+	if len(model.pendingActions) != 0 || strings.Contains(model.pages[ui.PageSystem].View(), ui.MihariProgressSwitching) {
+		t.Fatalf("real System completion did not clear root/source pending state: root=%v view=%q", model.pendingActions, model.pages[ui.PageSystem].View())
+	}
 }
 
 type allMessageRecordingPage struct {

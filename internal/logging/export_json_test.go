@@ -47,8 +47,11 @@ func TestExportJSON_BoundedPhysicalLines(t *testing.T) {
 				break
 			}
 		}
-		if cap(reader.line) > MaxExportRecordBytes+exportReadBufferBytes {
-			t.Fatalf("line capacity = %d, want <= %d", cap(reader.line), MaxExportRecordBytes+exportReadBufferBytes)
+		if cap(reader.line) > MaxExportRecordBytes+1 {
+			t.Fatalf("retained line capacity = %d, want <= %d", cap(reader.line), MaxExportRecordBytes+1)
+		}
+		if reader.reader.Size() != exportReadBufferBytes {
+			t.Fatalf("reader buffer size = %d, want %d", reader.reader.Size(), exportReadBufferBytes)
 		}
 	})
 

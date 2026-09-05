@@ -165,6 +165,7 @@ func TestBuildExportLogs_PartialLoggerResourcesExportAndOwnPrivateFS(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = fs.Close() })
 	if err := fs.EnsureDir(paths.LogDir); err != nil {
 		t.Fatal(err)
 	}
@@ -172,6 +173,7 @@ func TestBuildExportLogs_PartialLoggerResourcesExportAndOwnPrivateFS(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = file.Close() })
 	if _, err := io.WriteString(file, `{"time":"2026-09-05T00:00:00Z","level":"INFO","msg":"token=partial-secret"}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -179,6 +181,7 @@ func TestBuildExportLogs_PartialLoggerResourcesExportAndOwnPrivateFS(t *testing.
 		t.Fatal(err)
 	}
 	resources := tui.NewLoggingResources(nil, logging.NewRedactor("partial-secret"), fs)
+	t.Cleanup(func() { _ = resources.Close() })
 	options := buildExportLogs(paths)(resources)
 	result, err := options.Export(context.Background(), logging.ExportRequest{Now: time.Date(2026, 9, 5, 12, 0, 0, 0, time.Local), Range: logging.ExportRange{Kind: logging.RangeAll}, AutoNumber: true})
 	if err != nil {
@@ -188,7 +191,11 @@ func TestBuildExportLogs_PartialLoggerResourcesExportAndOwnPrivateFS(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer archive.Close()
+	t.Cleanup(func() {
+		if err := archive.Close(); err != nil {
+			t.Errorf("close export archive: %v", err)
+		}
+	})
 	if len(archive.File) == 0 {
 		t.Fatal("export archive has no entries")
 	}
@@ -199,9 +206,9 @@ func TestBuildExportLogs_PartialLoggerResourcesExportAndOwnPrivateFS(t *testing.
 			t.Fatal(openErr)
 		}
 		part, readErr := io.ReadAll(entry)
-		_ = entry.Close()
-		if readErr != nil {
-			t.Fatal(readErr)
+		closeErr := entry.Close()
+		if readErr != nil || closeErr != nil {
+			t.Fatal(errors.Join(readErr, closeErr))
 		}
 		content = append(content, part...)
 	}
