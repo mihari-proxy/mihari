@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/cli"
 	"github.com/mihari-proxy/mihari/internal/config"
@@ -215,6 +216,56 @@ func TestBuildExportLogs_PartialLoggerResourcesExportAndOwnPrivateFS(t *testing.
 	}
 	if err := fs.EnsureDir(paths.LogDir); err == nil {
 		t.Fatal("LoggingResources.Close did not close PrivateFS")
+	}
+}
+
+func TestOpenLoggingErrorResourcesComposeThroughFactoryAndDialogSubmission(t *testing.T) {
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fs.Close() })
+	if err := fs.EnsureDir(paths.LogDir); err != nil {
+		t.Fatal(err)
+	}
+	file, err := fs.OpenAppend(paths.DaemonLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	if _, err := io.WriteString(file, `{"time":"2026-09-05T00:00:00Z","level":"INFO","msg":"partial-dialog-secret"}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	openCtx, cancelOpen := context.WithCancel(context.Background())
+	cancelOpen()
+	resources, openErr := openTUILogging(openCtx, paths, "partial-dialog-secret", fs, io.Discard)
+	if !errors.Is(openErr, context.Canceled) || resources.Runtime != nil || resources.PrivateFS != fs || resources.Redactor == nil {
+		t.Fatalf("partial resources=%+v error=%v", resources, openErr)
+	}
+	t.Cleanup(func() { _ = resources.Close() })
+	options := buildExportLogs(paths)(resources)
+	options.Context = context.Background()
+	options.Now = func() time.Time { return time.Date(2026, 9, 5, 12, 0, 0, 0, time.Local) }
+	dialog := ui.NewExportLogsModel(options)
+	t.Cleanup(dialog.CancelAndWait)
+	if cmd, consumed := dialog.Update(ui.OpenExportLogsMsg{}); cmd != nil || !consumed {
+		t.Fatal("dialog did not open")
+	}
+	dialog.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	waiter, consumed := dialog.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if waiter == nil || !consumed {
+		t.Fatal("dialog did not submit partial resources export")
+	}
+	if _, consumed := dialog.Update(waiter()); !consumed {
+		t.Fatal("dialog did not consume export result")
+	}
+	view := dialog.View(100, 30)
+	if !strings.Contains(view, ui.ExportComplete) || strings.Contains(view, "partial-dialog-secret") {
+		t.Fatalf("dialog result=%s", view)
 	}
 }
 

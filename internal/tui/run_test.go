@@ -422,7 +422,7 @@ func TestNewRunModelInjectsHealthAfterClientModelReplacement(t *testing.T) {
 
 func TestAttachRunExportLogsBuildsOnceOnFinalClientModelWithProgramContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Cleanup(cancel)
 	resources := NewLoggingResources(nil, logging.NewRedactor("token"), nil)
 	model := newRunModel(ctx, controlclient.New("unused", ""), nil, &resources, newRunLoggingApplier(ctx, nil))
 	calls := 0
@@ -441,6 +441,7 @@ func TestAttachRunExportLogsBuildsOnceOnFinalClientModelWithProgramContext(t *te
 	if calls != 1 || exportLogs == nil || model.exportLogs != exportLogs {
 		t.Fatalf("calls=%d export=%p root=%p", calls, exportLogs, model.exportLogs)
 	}
+	t.Cleanup(exportLogs.CancelAndWait)
 	if exportLogs.Closed() == false {
 		t.Fatal("new export overlay must start closed")
 	}
@@ -450,11 +451,10 @@ func TestAttachRunExportLogsBuildsOnceOnFinalClientModelWithProgramContext(t *te
 		t.Fatal("attached exporter did not submit")
 	}
 	cancel()
-	exportLogs.CancelAndWait()
 	select {
 	case <-observedCancel:
-	default:
-		t.Fatal("exporter did not receive the Program context cancellation")
+	case <-time.After(time.Second):
+		t.Fatal("exporter did not independently receive the Program context cancellation")
 	}
 }
 
@@ -492,9 +492,12 @@ func TestRunCleanupOwnsExportBeforeApplierAndResourcesWhenWaiterCmdIsUnexecuted(
 		&workerAwareCloser{name: "runtime", workerDone: exportDone, order: &order, t: t},
 		&workerAwareCloser{name: "fs", workerDone: exportDone, order: &order, t: t},
 	)
-	applier := &orderedLoggingApplier{order: &order}
+	applier := &orderedLoggingApplier{order: &order, workerDone: exportDone, t: t}
 	cleanup := newRunCleanup(&resources, func() { order = append(order, "session") }, exportModel, applier, nil)
 	if err := cleanup(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanup(loadingModel{}); err != nil {
 		t.Fatal(err)
 	}
 	if want := []string{"session", "applier", "runtime", "fs"}; !slices.Equal(order, want) {
@@ -527,10 +530,23 @@ func TestFinishRunAlwaysInvokesStableCleanupForNilUnexpectedAndErrors(t *testing
 	}
 }
 
-type orderedLoggingApplier struct{ order *[]string }
+type orderedLoggingApplier struct {
+	order      *[]string
+	workerDone <-chan struct{}
+	t          *testing.T
+}
 
 func (a *orderedLoggingApplier) Submit(logging.Config) bool { return true }
-func (a *orderedLoggingApplier) CloseAndWait()              { *a.order = append(*a.order, "applier") }
+func (a *orderedLoggingApplier) CloseAndWait() {
+	if a.workerDone != nil {
+		select {
+		case <-a.workerDone:
+		default:
+			a.t.Fatal("applier closed before exporter finished")
+		}
+	}
+	*a.order = append(*a.order, "applier")
+}
 
 func requestedRelaunchModel() Model {
 	model := NewModel()
