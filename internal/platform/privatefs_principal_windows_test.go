@@ -84,6 +84,9 @@ func TestPrivateDataPrincipal_AllDenyVariantsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// WinNT.h: ACCESS_DENIED_OBJECT_ACE_TYPE (0x6),
+	// ACCESS_DENIED_CALLBACK_ACE_TYPE (0xA), ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE (0xC).
+	// These constants are not exported by the pinned x/sys/windows version.
 	for _, kind := range []byte{windows.ACCESS_DENIED_ACE_TYPE, 0x6, 0xA, 0xC} {
 		sd, err := windows.SecurityDescriptorFromString("O:BAD:P(D;;GR;;;" + user.String() + ")(A;;FA;;;" + user.String() + ")(A;;FA;;;SY)")
 		if err != nil {
