@@ -1,0 +1,144 @@
+# Source-supported fixture candidates only; never executed by mihomo.
+# Public dummy credentials, TEST-NET destination. Not a deployment config.
+proxies:
+- name: fixture-ss
+  type: ss
+  server: 192.0.2.1
+  port: 443
+  cipher: aes-128-gcm
+  password: fixture-password
+- name: fixture-ssr
+  type: ssr
+  server: 192.0.2.1
+  port: 443
+  cipher: aes-128-cfb
+  password: fixture-password
+  obfs: plain
+  protocol: origin
+- name: fixture-socks5
+  type: socks5
+  server: 192.0.2.1
+  port: 443
+- name: fixture-http
+  type: http
+  server: 192.0.2.1
+  port: 443
+- name: fixture-vmess
+  type: vmess
+  server: 192.0.2.1
+  port: 443
+  uuid: 11111111-1111-4111-8111-111111111111
+  alterId: 0
+  cipher: auto
+- name: fixture-vless
+  type: vless
+  server: 192.0.2.1
+  port: 443
+  uuid: 11111111-1111-4111-8111-111111111111
+- name: fixture-snell
+  type: snell
+  server: 192.0.2.1
+  port: 443
+  psk: fixture-password
+- name: fixture-trojan
+  type: trojan
+  server: 192.0.2.1
+  port: 443
+  password: fixture-password
+- name: fixture-hysteria
+  type: hysteria
+  server: 192.0.2.1
+  port: 443
+  up: 10 Mbps
+  down: 20 Mbps
+- name: fixture-hysteria2
+  type: hysteria2
+  server: 192.0.2.1
+  port: 443
+  password: fixture-password
+- name: fixture-wireguard
+  type: wireguard
+  server: 192.0.2.1
+  port: 443
+  ip: 10.0.0.2
+  private-key: AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=
+  public-key: WGmv9FBUlzLLqu1eXfmzCm2jHLDldCutWtShp2jxpns=
+- name: fixture-tuic
+  type: tuic
+  server: 192.0.2.1
+  port: 443
+  uuid: 11111111-1111-4111-8111-111111111111
+  password: fixture-password
+- name: fixture-shadowquic
+  type: shadowquic
+  server: 192.0.2.1
+  port: 443
+  username: fixture-user
+  password: fixture-password
+- name: fixture-gost-relay
+  type: gost-relay
+  server: 192.0.2.1
+  port: 443
+- name: fixture-direct
+  type: direct
+- name: fixture-dns
+  type: dns
+- name: fixture-reject
+  type: reject
+- name: fixture-rematch
+  type: rematch
+  target-rematch-name: ''
+- name: fixture-ssh
+  type: ssh
+  server: 192.0.2.1
+  port: 443
+  username: fixture-user
+  password: fixture-password
+- name: fixture-mieru
+  type: mieru
+  server: 192.0.2.1
+  port: 443
+  transport: TCP
+  username: fixture-user
+  password: fixture-password
+- name: fixture-anytls
+  type: anytls
+  server: 192.0.2.1
+  port: 443
+  password: fixture-password
+- name: fixture-sudoku
+  type: sudoku
+  server: 192.0.2.1
+  port: 443
+  key: fixture-key
+- name: fixture-masque
+  type: masque
+  server: 192.0.2.1
+  port: 443
+  ip: 10.0.0.2
+  private-key: MHcCAQEEIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABoAoGCCqGSM49AwEHoUQDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==
+  public-key: MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfPJ7GI0DT36KUjgDBLUaw8CJaeJ38hs1pgtI/EdmmXgHd1UQ247QQCk9msafdDDbun2t5jzpgimeBLedInhz0Q==
+- name: fixture-trusttunnel
+  type: trusttunnel
+  server: 192.0.2.1
+  port: 443
+  username: fixture-user
+  password: fixture-password
+- name: fixture-openvpn
+  type: openvpn
+  server: 192.0.2.1
+  port: 443
+  ca: |
+    -----BEGIN CERTIFICATE-----
+    MIIBQzCB6qADAgECAgEBMAoGCCqGSM49BAMCMCExHzAdBgNVBAMMFm1paGFyaS1m
+    aXh0dXJlLmludmFsaWQwHhcNMjAwMTAxMDAwMDAwWhcNNDAwMTAxMDAwMDAwWjAh
+    MR8wHQYDVQQDDBZtaWhhcmktZml4dHVyZS5pbnZhbGlkMFkwEwYHKoZIzj0CAQYI
+    KoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpZP40Li
+    /hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9aMTMBEwDwYDVR0TAQH/BAUwAwEB
+    /zAKBggqhkjOPQQDAgNIADBFAiAJpDh/+o1pcZPJ2RrJ88v6OskA+h6VVYBFaio9
+    e6vrggIhALJFxmOvM2GIoIliN5c7W6U39pKfBCnSouIfw5G3bDhE
+    -----END CERTIFICATE-----
+  username: fixture-user
+  password: fixture-password
+rules:
+- MATCH,DIRECT
