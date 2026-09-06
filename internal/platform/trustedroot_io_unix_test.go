@@ -351,3 +351,59 @@ func TestTrustedRoot_MoveAndRemoveRequireObservedIdentity(t *testing.T) {
 		t.Fatal("stale cleanup removed replacement")
 	}
 }
+
+func TestTrustedRoot_ReadNamesUsesHeldDirectory(t *testing.T) {
+	r, _ := trustedTempCapability(t)
+	if err := r.WriteFile(context.Background(), "owned", []byte("bytes"), 0600, nil); err != nil {
+		t.Fatal(err)
+	}
+	names, err := r.ReadNames(context.Background())
+	if err != nil || len(names) != 1 || names[0] != "owned" {
+		t.Fatalf("held directory names: %v %v", names, err)
+	}
+}
+
+func TestTrustedRoot_RemoveEmptyDirKeepsNonemptyChild(t *testing.T) {
+	r, _ := trustedTempCapability(t)
+	ctx := context.Background()
+	child, err := r.OpenDir(ctx, "stage", RootPolicy{Owner: uint32(os.Geteuid()), Mode: 0700, AllowCreate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = child.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.RemoveEmptyDir(ctx, "stage"); err != nil {
+		t.Fatal(err)
+	}
+	names, err := r.ReadNames(ctx)
+	if err != nil || len(names) != 0 {
+		t.Fatalf("empty owned directory retained: %v %v", names, err)
+	}
+}
+
+func TestTrustedRoot_DirectoryCleanupRejectsNonemptyAndCancellation(t *testing.T) {
+	r, _ := trustedTempCapability(t)
+	ctx := context.Background()
+	child, err := r.OpenDir(ctx, "retained", RootPolicy{Owner: uint32(os.Geteuid()), Mode: 0700, AllowCreate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = child.WriteFile(ctx, "resource", []byte("old"), 0600, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = child.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.RemoveEmptyDir(ctx, "retained"); err == nil {
+		t.Fatal("nonempty child removed")
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err = r.ReadNames(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled enumeration: %v", err)
+	}
+	if err = r.RemoveEmptyDir(canceled, "retained"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled removal: %v", err)
+	}
+}

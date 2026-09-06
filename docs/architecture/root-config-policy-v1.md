@@ -196,3 +196,13 @@ SOCKS5 的 [认证序列化](https://github.com/MetaCubeX/mihomo/blob/ac017cdd24
 表述为表示检查的数值界不保证物理内存可分配、eager core -t 构造成本、peer 反馈算术或全运行时鲁棒性。已知 Hysteria2 UDP 重试、低容量 fragment count、MKCP congestion wrap、Mekya/XHTTP eager 分配、WireGuard workers/AWG junk 批量分配、复合规则重复递归等限制保留在对应段落。测试不访问公网、不运行真实 mihomo；后续受限核心校验和部署事务不能被本策略单元测试替代。
 
 MASQUE [active resolver](https://github.com/MetaCubeX/mihomo/blob/ac017cdd246ce8bd547653d927e7bf77d7ee73d5/adapter/outbound/masque.go#L252) 与 OpenVPN [resolver initialization](https://github.com/MetaCubeX/mihomo/blob/ac017cdd246ce8bd547653d927e7bf77d7ee73d5/adapter/outbound/openvpn.go#L350) 均纳入同一 Build/Inspect 能力闭包，包括被 provider filter 排除的已声明节点。普通 UDP/system 与注入 adapter 下的裸 selector 保持原语义；此校验不执行隧道或 DNS 请求。
+
+## 受管资源准备与 provider WAL（T08 内部检查点）
+
+`NewResourcePreparer` 依次执行 Inspect、受管 provider 下载/授权私有对象复用、包含 provider 内容的 Geo 闭包检查、可信 Geo 内容认证和最终 Build。源 bytes 和最终资源分别进入随机私有 staging；输出的 provider 身份沿用 T06。候选 `SourceResourceID` 只能命中同一 store 从 daemon 当前合法配置构造的封闭 `ResourceGraph`，不能凭 ID 语法或任意 bytes map 取得授权。`PreparedResources.Recheck` 复查来源、旧目标及候选 inode/hash；Manager 仍须在 mutation 内复查订阅身份、generation 与 configGeneration。
+
+Geo 来源由编译目录固定：Country/ASN 保留 release-inputs.lock 的 Loyalsoldier commit `69986b5d098c8d723a2c4d56317bc10cd5669c02` 与原 SHA256；GeoIP/GeoSite DAT 使用 MetaCubeX/meta-rules-dat commit `b3a0635a5ff10e63d300a050aa38edf7f138ef2f`，精确大小分别 17,120,329 / 4,242,906 bytes，SHA256 分别 `4149e607530f91da697bad4696f8c59f0a475af38e69405e4124438c9886c721` / `7104fc19469298564947d42c320a1d5442416f1f72648bf516314d719594338c`。DAT snapshot 可能失去上游可用性；新下载失败须保留旧部署，不能回退 mutable latest。固定摘要是所选数据身份，不能表述为上游构建证明；T06 的结构和 selector 校验仍执行。
+
+Unix `NewProviderStore` 只借用 root0700 的 TrustedRoot；每次操作重新检查根、持有目录和文件身份，以0600私有文件、同步和身份绑定的原子替换实现 IO。`mihari.provider-commit/v1` 固定在 `staging/providers/commit.json`，包含完整 provider 身份、旧/新/备份对象摘要与 boot 身份、私有事务 marker、prepared/intent/done 和恢复 intent/done。prepared 先于备份，intent 先于替换，done 晚于成功 reload 与新文件复查；未完成提交恢复旧资源，durable done 保留新资源，未知身份保留 journal 并失败关闭。相同 boot 要求 inode 身份一致；跨 boot 仅在重新验证私有根/事务 marker 后按精确摘要解释。启动恢复最后清理拥有 marker 的私有候选，未知对象不被猜测删除。
+
+此检查点提供资源准备、单 provider 事务和恢复基础，尚未接入默认运行入口。固定 H 的 Geo/多资源交换、停止核心后的批量 WAL/激活与完整回滚、Manager 入口/调度/退出以及离线启动装配仍由后续 T08 检查点完成；不得逐个提交 Geo 文件代替该激活事务。Store 恢复必须在任何 worker、核心恢复或执行之前完成；活跃事务内部使用自己的恢复路径，不能调用会清扫其他候选的启动 Recover。root 原生构造与完整 store IO 正例只在显式隔离 CI、可信 TMPDIR 中运行，普通平台测试或交叉编译不能替代这一验收。
