@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -496,5 +497,137 @@ func waitDone(t *testing.T, done <-chan error) error {
 	case <-time.After(3 * time.Second):
 		t.Fatal("supervisor did not stop")
 		return nil
+	}
+}
+
+func TestSupervisor_MaintainStopsAndJoinsBeforeWork(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	child := &maintenanceChild{done: make(chan struct{}), joined: make(chan struct{})}
+	started := make(chan struct{}, 2)
+	s := New(Options{Starter: maintenanceStarter{child: child, started: started}})
+	finished := make(chan error, 1)
+	go func() { finished <- s.Run(ctx) }()
+	<-started
+	e := s.Maintain(ctx, func() error {
+		select {
+		case <-child.joined:
+			return nil
+		default:
+			return errors.New("commit ran before child join")
+		}
+	})
+	cancel()
+	<-finished
+	if e != nil {
+		t.Fatal(e)
+	}
+}
+
+type maintenanceChild struct {
+	terminateErr error
+	done, joined chan struct{}
+	once         sync.Once
+}
+
+func (c *maintenanceChild) PID() int    { return 1234 }
+func (c *maintenanceChild) Wait() error { <-c.done; c.once.Do(func() { close(c.joined) }); return nil }
+func (c *maintenanceChild) Terminate() error {
+	select {
+	case <-c.done:
+	default:
+		close(c.done)
+	}
+	return c.terminateErr
+}
+func (c *maintenanceChild) Kill() error { return c.Terminate() }
+
+type maintenanceStarter struct {
+	child   *maintenanceChild
+	started chan struct{}
+}
+
+func (s maintenanceStarter) Start() (Child, error) {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	return s.child, nil
+}
+
+func TestSupervisor_MaintainIdleDoesNotStart(t *testing.T) {
+	started := make(chan struct{}, 1)
+	s := New(Options{Starter: maintenanceStarter{started: started}})
+	called := 0
+	if e := s.Maintain(context.Background(), func() error { called++; return nil }); e != nil {
+		t.Fatal(e)
+	}
+	if called != 1 || len(started) != 0 {
+		t.Fatal("idle maintenance started core")
+	}
+}
+func TestSupervisor_MaintainCancellationWaitsForOwnedWork(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	child := &maintenanceChild{done: make(chan struct{}), joined: make(chan struct{})}
+	started := make(chan struct{}, 2)
+	s := New(Options{Starter: maintenanceStarter{child: child, started: started}})
+	finished := make(chan error, 1)
+	go func() { finished <- s.Run(ctx) }()
+	<-started
+	maintenanceCtx, cancelMaintenance := context.WithCancel(context.Background())
+	entered, release := make(chan struct{}), make(chan struct{})
+	result := make(chan error, 1)
+	go func() { result <- s.Maintain(maintenanceCtx, func() error { close(entered); <-release; return nil }) }()
+	<-entered
+	cancelMaintenance()
+	select {
+	case <-result:
+		t.Fatal("cancel detached active transaction")
+	default:
+	}
+	close(release)
+	if e := <-result; e != nil {
+		t.Fatal(e)
+	}
+	cancel()
+	<-finished
+}
+func TestSupervisor_MaintainDegradedNeverRestarts(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	child := &maintenanceChild{done: make(chan struct{}), joined: make(chan struct{})}
+	started := make(chan struct{}, 2)
+	s := New(Options{Starter: maintenanceStarter{child: child, started: started}})
+	finished := make(chan error, 1)
+	go func() { finished <- s.Run(ctx) }()
+	<-started
+	e := s.Maintain(ctx, func() error {
+		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "pair recovery failed", Details: map[string]any{"degraded": true}}
+	})
+	if e == nil {
+		t.Fatal("recovery failure hidden")
+	}
+	cancel()
+	<-finished
+	if len(started) != 0 {
+		t.Fatal("core restarted after failed recovery")
+	}
+}
+func TestSupervisor_MaintainStopErrorDoesNotCommit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	child := &maintenanceChild{done: make(chan struct{}), joined: make(chan struct{}), terminateErr: errors.New("stop failed")}
+	started := make(chan struct{}, 2)
+	s := New(Options{Starter: maintenanceStarter{child: child, started: started}})
+	finished := make(chan error, 1)
+	go func() { finished <- s.Run(ctx) }()
+	<-started
+	commits := 0
+	e := s.Maintain(ctx, func() error { commits++; return nil })
+	cancel()
+	<-finished
+	if e == nil || commits != 0 || len(started) != 0 {
+		t.Fatal("stop failure committed or restarted")
 	}
 }

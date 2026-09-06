@@ -58,7 +58,16 @@ type Options struct {
 	StopTimeout    time.Duration
 }
 
+type maintenanceRequest struct {
+	work     func() error
+	response chan error
+}
 type Supervisor struct {
+	maintain  chan maintenanceRequest
+	startGate chan struct{}
+	runDone   atomic.Pointer[chan struct{}]
+	blocked   atomic.Bool
+
 	options Options
 	restart chan chan error
 	active  atomic.Bool
@@ -89,7 +98,9 @@ func New(options Options) *Supervisor {
 	if options.StopTimeout <= 0 {
 		options.StopTimeout = 5 * time.Second
 	}
-	return &Supervisor{options: options, restart: make(chan chan error)}
+	s := &Supervisor{options: options, restart: make(chan chan error), maintain: make(chan maintenanceRequest), startGate: make(chan struct{}, 1)}
+	s.startGate <- struct{}{}
+	return s
 }
 
 func (s *Supervisor) Run(ctx context.Context) error {
@@ -99,7 +110,9 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	if !s.active.CompareAndSwap(false, true) {
 		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo supervisor is already running"}
 	}
-	defer s.active.Store(false)
+	runDone := make(chan struct{})
+	s.runDone.Store(&runDone)
+	defer func() { s.active.Store(false); close(runDone) }()
 
 	backoff := NewBackoff(s.options.MinimumBackoff, s.options.MaximumBackoff)
 	var restarts uint64
@@ -109,7 +122,22 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			return nil
 		}
 		startedAt := s.options.Now()
+		if s.blocked.Load() {
+			select {
+			case <-ctx.Done():
+				return nil
+			case request := <-s.maintain:
+				request.response <- protocol.APIError{Code: protocol.CodeInvalidState, Message: "core recovery required"}
+				continue
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-s.startGate:
+		}
 		child, err := s.options.Starter.Start()
+		s.startGate <- struct{}{}
 		if err == nil {
 			s.observe(Observation{Status: StatusStarting, PID: child.PID(), Restarts: restarts})
 			var explicit bool
@@ -160,7 +188,8 @@ func (s *Supervisor) Restart(ctx context.Context) error {
 
 func (s *Supervisor) runChild(parent context.Context, child Child, restarts uint64) (error, bool) {
 	done := make(chan error, 1)
-	go func() { done <- child.Wait() }()
+	joined := make(chan struct{})
+	go func() { defer close(joined); done <- child.Wait() }()
 	monitorCtx, cancelMonitor := context.WithCancel(parent)
 	healthFailure := make(chan error, 1)
 	monitorDone := make(chan struct{})
@@ -178,6 +207,25 @@ func (s *Supervisor) runChild(parent context.Context, child Child, restarts uint
 		err := s.stopChild(child, done)
 		finishMonitor()
 		return err, false
+	case request := <-s.maintain:
+		err := s.stopChild(child, done)
+		stopFailed := err != nil
+		finishMonitor()
+		if err != nil {
+			s.blocked.Store(true)
+		} else {
+			err = request.work()
+			if maintenanceDegraded(err) {
+				s.blocked.Store(true)
+			}
+		}
+		request.response <- err
+		// A failed OS stop does not detach the still-owned Wait goroutine.
+		// No new process or transaction runs before that child actually exits.
+		if stopFailed {
+			<-joined
+		}
+		return err, true
 	case response := <-s.restart:
 		err := s.stopChild(child, done)
 		finishMonitor()
@@ -258,6 +306,13 @@ func (s *Supervisor) waitBackoff(ctx context.Context, delay time.Duration) error
 	select {
 	case err := <-done:
 		return err
+	case request := <-s.maintain:
+		err := request.work()
+		if maintenanceDegraded(err) {
+			s.blocked.Store(true)
+		}
+		request.response <- err
+		return nil
 	case response := <-s.restart:
 		response <- nil
 		return nil
@@ -283,4 +338,49 @@ func (realWaiter) Wait(ctx context.Context, duration time.Duration) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// Maintain runs work only while the owned child and monitor are stopped. Work
+// must not call supervisor methods. Once accepted, cancellation does not detach
+// work: the caller waits until commit/recovery has converged. Idle maintenance
+// preserves the stopped state and never starts a process.
+func (s *Supervisor) Maintain(ctx context.Context, work func() error) error {
+	if work == nil {
+		return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "maintenance callback missing"}
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.startGate:
+	}
+	if !s.active.Load() {
+		defer func() { s.startGate <- struct{}{} }()
+		if e := ctx.Err(); e != nil {
+			return e
+		}
+		err := work()
+		if maintenanceDegraded(err) {
+			s.blocked.Store(true)
+		}
+		return err
+	}
+	done := s.runDone.Load()
+	s.startGate <- struct{}{}
+	if done == nil {
+		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "supervisor is starting"}
+	}
+	request := maintenanceRequest{work: work, response: make(chan error, 1)}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-*done:
+		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "supervisor stopped"}
+	case s.maintain <- request:
+	}
+	// The event loop owns the callback now; never return before it converges.
+	return <-request.response
+}
+func maintenanceDegraded(err error) bool {
+	var api protocol.APIError
+	return errors.As(err, &api) && api.Details["degraded"] == true
 }

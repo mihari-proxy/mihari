@@ -2,6 +2,7 @@ package platform
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strconv"
@@ -183,4 +184,12 @@ func linuxProcMountID(target int) (_ uint64, err error) {
 		return 0, err
 	}
 	return parseTrustedMountID(b)
+}
+
+func trustedMountKey(fd int) (string, error) {
+	id, e := linuxMountID(fd)
+	if e != nil {
+		return "", e
+	}
+	return fmt.Sprintf("%x", id), nil
 }

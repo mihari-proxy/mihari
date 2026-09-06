@@ -303,3 +303,51 @@ func TestTrustedRoot_CloseWaitsForOwnerAndRejectsQueuedWork(t *testing.T) {
 		t.Fatal("mutation after closure")
 	}
 }
+
+func TestTrustedRoot_MoveAndRemoveRequireObservedIdentity(t *testing.T) {
+	r, path := trustedTempCapability(t)
+	ctx := context.Background()
+	source, e := r.OpenDir(ctx, "source", RootPolicy{Owner: uint32(os.Geteuid()), Mode: 0700, AllowCreate: true})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer func() { _ = source.Close() }()
+	target, e := r.OpenDir(ctx, "target", RootPolicy{Owner: uint32(os.Geteuid()), Mode: 0700, AllowCreate: true})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer func() { _ = target.Close() }()
+	if e = source.WriteFile(ctx, "candidate", []byte("trusted binary"), 0700, nil); e != nil {
+		t.Fatal(e)
+	}
+	f, id, e := source.OpenFile(ctx, "candidate", 0700)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = f.Close(); e != nil {
+		t.Fatal(e)
+	}
+	if e = source.MoveFileTo(ctx, "candidate", id, target, "binary", 0700, nil); e != nil {
+		t.Fatal(e)
+	}
+	f, moved, e := target.OpenFile(ctx, "binary", 0700)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = f.Close(); e != nil {
+		t.Fatal(e)
+	}
+	if id != moved {
+		t.Fatal("publication changed candidate inode")
+	}
+	if e = target.WriteFile(ctx, "binary", []byte("replacement"), 0700, &moved); e != nil {
+		t.Fatal(e)
+	}
+	if e = target.RemoveFile(ctx, "binary", 0700, moved); !errors.Is(e, ErrIdentityMismatch) {
+		t.Fatal("stale cleanup accepted")
+	}
+	bytes, e := os.ReadFile(filepath.Join(path, "target", "binary"))
+	if e != nil || string(bytes) != "replacement" {
+		t.Fatal("stale cleanup removed replacement")
+	}
+}

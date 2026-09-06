@@ -198,8 +198,8 @@ func (m *Manager) applyTun(ctx context.Context, nextTun map[string]any) error {
 		if err != nil {
 			regenerateErr = err
 		} else {
-			defer os.Remove(candidate.path)
-			if err := m.commitRuntimeConfig(ctx, candidate.content); err != nil {
+			defer candidate.cleanup()
+			if err := m.commitRuntimeConfig(ctx, candidate); err != nil {
 				regenerateErr = err
 			} else {
 				regenerated = true

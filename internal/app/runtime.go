@@ -37,6 +37,11 @@ type RuntimeAssembly struct {
 }
 
 type RuntimeBuildOptions struct {
+	// TrustedCore and RootConfigInput are enabled together by the Unix assembly.
+	// Default dispatch remains legacy until the final system-mode activation.
+	TrustedCore     *core.TrustedExecution
+	RootConfigInput func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error)
+
 	InitialSetupRequired bool
 	SettingsPath         string
 	ServiceStatus        func() (string, error)
@@ -59,10 +64,34 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	if stderr == nil {
 		stderr = io.Discard
 	}
+	if options.TrustedCore != nil {
+		if err := options.TrustedCore.CheckPaths(paths.Root, paths.CoreBinary, paths.RuntimeConfig); err != nil {
+			return nil, err
+		}
+	}
 	if err := paths.EnsureDirs(); err != nil {
 		return nil, err
 	}
-	if err := core.EnsureRuntimeConfig(paths.RuntimeConfig, settings); err != nil {
+	installer := core.Installer{}
+	if options.TrustedCore != nil {
+		if options.RootConfigInput == nil {
+			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "root configuration context unavailable"}
+		}
+		if err := core.RecoverProvenance(context.Background(), options.TrustedCore.Provenance()); err != nil {
+			return nil, err
+		}
+		if _, err := options.TrustedCore.InstalledAvailable(context.Background()); err != nil {
+			return nil, err
+		}
+		input, err := options.RootConfigInput(context.Background(), nil, settings)
+		if err != nil {
+			return nil, err
+		}
+		if err = options.TrustedCore.InitializeConfig(context.Background(), settings, input); err != nil {
+			return nil, err
+		}
+		installer = options.TrustedCore.Installer()
+	} else if err := core.EnsureRuntimeConfig(paths.RuntimeConfig, settings); err != nil {
 		return nil, err
 	}
 	if err := probeManagedPorts(settings, nil); err != nil {
@@ -75,7 +104,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		Health:    "ok",
 	})
 	if info, err := os.Stat(paths.CoreBinary); err == nil && !info.IsDir() {
-		if version, err := core.DetectVersion(context.Background(), core.OSCommandRunner{}, paths.CoreBinary); err == nil {
+		if version, err := installer.DetectVersion(context.Background(), paths.CoreBinary); err == nil {
 			snapshot := store.Load()
 			snapshot.Core = state.CoreState{Status: "stopped", Version: version, Channel: settings.CoreChannel}
 			store.Store(snapshot)
@@ -174,6 +203,9 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		Stdout:     starterStdout,
 		Stderr:     starterStderr,
 	}
+	if options.TrustedCore != nil {
+		mihomoStarter.CommandFactory = options.TrustedCore.RunCommand
+	}
 	var manager *runtimeapi.Manager
 	coreSupervisor := supervisor.New(supervisor.Options{
 		Starter: mihomoStarter,
@@ -188,9 +220,11 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		},
 	})
 	manager = runtimeapi.New(runtimeapi.Options{
-		Store:       store,
-		Coordinator: coordinator,
-		Installer:   core.Installer{},
+		Store:           store,
+		Coordinator:     coordinator,
+		Installer:       installer,
+		TrustedCore:     options.TrustedCore,
+		RootConfigInput: options.RootConfigInput,
 		InstallRequest: core.InstallRequest{
 			BinaryPath: paths.CoreBinary,
 			DataDir:    paths.Root,
@@ -220,6 +254,9 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		RuntimeConfig:     paths.RuntimeConfig,
 		StagingDir:        paths.SubscriptionStaging,
 		ValidateConfig: func(ctx context.Context, candidatePath string) error {
+			if options.TrustedCore != nil {
+				return protocol.APIError{Code: protocol.CodeInvalidState, Message: "root config requires a generated capability"}
+			}
 			return core.ValidateConfig(ctx, core.OSCommandRunner{}, paths.CoreBinary, paths.Root, candidatePath)
 		},
 		RunScheduler: func(ctx context.Context) error {
@@ -256,6 +293,10 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 			return nil
 		},
 		BinaryExists: func() bool {
+			if options.TrustedCore != nil {
+				ready, err := options.TrustedCore.InstalledAvailable(context.Background())
+				return err == nil && ready
+			}
 			info, err := os.Stat(paths.CoreBinary)
 			return err == nil && !info.IsDir()
 		},

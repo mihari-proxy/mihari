@@ -25,6 +25,11 @@ const (
 )
 
 type Installer struct {
+	// Provenance selects the trusted root route; nil preserves legacy platforms.
+	Provenance      ProvenanceStore
+	GeneratedConfig func(context.Context) (*ConfigCapability, error)
+	Executor        VerifiedExecutor
+
 	HTTPClient   *http.Client
 	APIBase      string
 	Repository   string
@@ -72,6 +77,15 @@ func (i Installer) Install(ctx context.Context, request InstallRequest) (Install
 // 复用，避免在 runtime.Manager 里另持 Runner；判据复用 DetectVersion（含 ParseVersion 版本
 // 格式校验），与 Prepare 的同版本短路同一判据、DRY（design §4.3 实现位置）。
 func (i Installer) DetectVersion(ctx context.Context, binaryPath string) (string, error) {
+	if i.Provenance != nil {
+		v, e := OpenInstalledCore(ctx, i.Provenance)
+		if e != nil {
+			return "", e
+		}
+		defer func() { _ = v.Close() }() // Read-only capability: no pending writes; closure cannot change the operation result.
+		return DetectVerifiedVersion(ctx, v, i.Executor)
+	}
+
 	runner := i.Runner
 	if runner == nil {
 		runner = OSCommandRunner{}
@@ -80,6 +94,8 @@ func (i Installer) DetectVersion(ctx context.Context, binaryPath string) (string
 }
 
 type Candidate struct {
+	trusted *trustedCandidate
+
 	path       string
 	binaryPath string
 	version    string
@@ -100,6 +116,10 @@ func (c *Candidate) Version() string { return c.version }
 func (c *Candidate) Updated() bool { return c.updated }
 
 func (c *Candidate) Commit() (InstallResult, error) {
+	if c.trusted != nil {
+		return c.commitTrusted()
+	}
+
 	if !c.updated {
 		return InstallResult{Version: c.version, Updated: false, AlphaSHA: c.alphaSHA}, nil
 	}
@@ -117,6 +137,11 @@ func (c *Candidate) Commit() (InstallResult, error) {
 }
 
 func (c *Candidate) Cleanup() {
+	if c.trusted != nil {
+		c.cleanupTrusted()
+		return
+	}
+
 	c.cleanup.Do(func() {
 		if c.path != "" {
 			_ = os.Remove(c.path)
@@ -127,6 +152,11 @@ func (c *Candidate) Cleanup() {
 // localReadyVersion 在二进制存在且 DetectVersion（含 ParseVersion）成功时返回版本。
 // 判据与 Manager.Install setup 预检同一路径（design §4.3）；失败则走下载修复。
 func (i Installer) localReadyVersion(ctx context.Context, binaryPath string) (string, bool) {
+	if i.Provenance != nil {
+		v, e := i.DetectVersion(ctx, binaryPath)
+		return v, e == nil && v != ""
+	}
+
 	info, err := os.Stat(binaryPath)
 	if err != nil || info.IsDir() {
 		return "", false
@@ -143,6 +173,10 @@ func (i Installer) localReadyVersion(ctx context.Context, binaryPath string) (st
 }
 
 func (i Installer) Prepare(ctx context.Context, request InstallRequest) (PreparedCore, error) {
+	if i.Provenance != nil {
+		return i.prepareTrusted(ctx, request)
+	}
+
 	checkCtx, cancel := context.WithTimeout(ctx, i.checkTimeout())
 	release, err := i.LatestRelease(checkCtx, request.Channel)
 	cancel()

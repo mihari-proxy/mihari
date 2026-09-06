@@ -74,6 +74,9 @@ type GeoIPService interface {
 }
 
 type Options struct {
+	TrustedCore     *core.TrustedExecution
+	RootConfigInput func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error)
+
 	Store          *state.Store
 	Coordinator    *state.Coordinator
 	Installer      CoreInstaller
@@ -131,6 +134,9 @@ type WebGateway interface {
 }
 
 type Manager struct {
+	trustedCore     *core.TrustedExecution
+	rootConfigInput func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error)
+
 	store                     *state.Store
 	coordinator               *state.Coordinator
 	installer                 CoreInstaller
@@ -167,6 +173,7 @@ type Manager struct {
 	installed                 chan struct{}
 	closing                   atomic.Bool
 	mutationDegraded          atomic.Bool
+	stopCoreOnUnlock          atomic.Bool
 	running                   atomic.Bool
 	operationsMu              sync.Mutex
 	operations                map[string]*operationEntry
@@ -218,6 +225,9 @@ func New(options Options) *Manager {
 		settings = config.Defaults()
 	}
 	manager := &Manager{
+		trustedCore:     options.TrustedCore,
+		rootConfigInput: options.RootConfigInput,
+
 		store:             store,
 		coordinator:       coordinator,
 		installer:         options.Installer,
@@ -517,7 +527,7 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		}
 		defer candidate.Cleanup()
 		var result core.InstallResult
-		if err := func() error {
+		commitWork := func() error {
 			if err := m.lockMutation(ctx); err != nil {
 				return err
 			}
@@ -564,13 +574,25 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 				})
 			}
 			return err
-		}(); err != nil {
+		}
+		if m.trustedCore != nil {
+			maintenance, ok := m.supervisor.(interface {
+				Maintain(context.Context, func() error) error
+			})
+			if !ok {
+				return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "trusted core maintenance unavailable"}
+			}
+			err = maintenance.Maintain(ctx, commitWork)
+		} else {
+			err = commitWork()
+		}
+		if err != nil {
 			return nil, err
 		}
 		if !result.Updated {
 			return result, nil
 		}
-		if m.running.Load() {
+		if m.running.Load() && m.trustedCore == nil {
 			if err := m.supervisor.Restart(ctx); err != nil {
 				return nil, err
 			}
@@ -712,7 +734,20 @@ func (m *Manager) withMaintenance(ctx context.Context, operation func() error) e
 	return operation()
 }
 
-func (m *Manager) unlock() { m.maintenance <- struct{}{} }
+func (m *Manager) unlock() {
+	stop := m.stopCoreOnUnlock.Swap(false)
+	m.maintenance <- struct{}{}
+	if stop {
+		if maintenance, ok := m.supervisor.(interface {
+			Maintain(context.Context, func() error) error
+		}); ok {
+			err := maintenance.Maintain(context.Background(), func() error {
+				return protocol.APIError{Code: protocol.CodeDataFailure, Message: "configuration recovery required", Details: map[string]any{"degraded": true}}
+			})
+			m.reportBackground("core-recovery", err)
+		}
+	}
+}
 
 func (m *Manager) checkOpen() error {
 	if m.closing.Load() {

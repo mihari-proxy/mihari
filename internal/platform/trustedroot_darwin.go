@@ -2,6 +2,7 @@ package platform
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"runtime"
 	"unsafe"
@@ -94,4 +95,12 @@ func (b nativeTrustedBackend) openFile(fd int, name string, flags int, mode uint
 		return -1, errors.Join(err, unix.Close(child))
 	}
 	return child, nil
+}
+
+func trustedMountKey(fd int) (string, error) {
+	var fs unix.Statfs_t
+	if e := unix.Fstatfs(fd, &fs); e != nil {
+		return "", e
+	}
+	return fmt.Sprintf("%x", fs.Fsid), nil
 }

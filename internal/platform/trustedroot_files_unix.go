@@ -5,6 +5,7 @@ package platform
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 
@@ -236,4 +237,139 @@ func (r *TrustedRoot) checkDestination(parent int, name string, mode uint32, exp
 		checkErr = r.checkFileName(parent, name, n)
 	}
 	return errors.Join(checkErr, r.backend.close(fd))
+}
+
+// Snapshot returns freshly verified display/identity metadata, not a writable
+// descriptor or authority setter. Ownership stays with the root capability.
+func (r *TrustedRoot) Snapshot(ctx context.Context) (path, identity string, owner, mode uint32, err error) {
+	finish, err := r.begin(ctx)
+	if err != nil {
+		return "", "", 0, 0, err
+	}
+	defer finish()
+	if err = r.verify(); err != nil {
+		return "", "", 0, 0, err
+	}
+	n := r.chain[len(r.chain)-1].node
+	mount, e := trustedMountKey(r.chain[len(r.chain)-1].fd)
+	if e != nil {
+		return "", "", 0, 0, e
+	}
+	return r.path, fmt.Sprintf("%x:%x@%s", n.id.dev, n.id.ino, mount), n.uid, n.mode & 07777, nil
+}
+
+// Key returns an opaque observation suitable for a same-boot journal identity.
+// It cannot be parsed back into a FileIdentity authorization.
+func (id FileIdentity) Key() string { return fmt.Sprintf("%x:%x", id.plat.dev, id.plat.ino) }
+
+// Sync makes the held directory durable after checking its namespace.
+func (r *TrustedRoot) Sync(ctx context.Context) error {
+	finish, e := r.begin(ctx)
+	if e != nil {
+		return e
+	}
+	defer finish()
+	if e = r.verify(); e != nil {
+		return e
+	}
+	return r.backend.sync(r.chain[len(r.chain)-1].fd)
+}
+
+// RemoveFile unlinks only the exact previously opened regular inode.
+func (r *TrustedRoot) RemoveFile(ctx context.Context, name string, mode uint32, expected FileIdentity) error {
+	finish, e := r.begin(ctx)
+	if e != nil {
+		return e
+	}
+	defer finish()
+	if !trustedComponent(name) || !trustedFileMode(mode) {
+		return os.ErrInvalid
+	}
+	if e = r.verify(); e != nil {
+		return e
+	}
+	parent := r.chain[len(r.chain)-1].fd
+	if e = r.backend.checkACL(parent, true, r.policy.Owner); e != nil {
+		return e
+	}
+	if e = r.checkDestination(parent, name, mode, &expected); e != nil {
+		return e
+	}
+	if e = unix.Unlinkat(parent, name, 0); e != nil {
+		return e
+	}
+	return r.backend.sync(parent)
+}
+
+// MoveFileTo publishes a held source inode into a separately held directory.
+// Both roots remain owned by the caller; expected=nil requires absence. Callers
+// serialize cross-directory moves under their lifecycle/transaction lease.
+func (r *TrustedRoot) MoveFileTo(ctx context.Context, name string, id FileIdentity, to *TrustedRoot, target string, mode uint32, expected *FileIdentity) error {
+	if r == to {
+		return os.ErrInvalid
+	}
+	finish, e := r.begin(ctx)
+	if e != nil {
+		return e
+	}
+	defer finish()
+	finishTo, e := to.begin(ctx)
+	if e != nil {
+		return e
+	}
+	defer finishTo()
+	if !trustedComponent(name) || !trustedComponent(target) || !trustedFileMode(mode) || r.policy.Owner != to.policy.Owner {
+		return os.ErrInvalid
+	}
+	if e = r.verify(); e != nil {
+		return e
+	}
+	if e = to.verify(); e != nil {
+		return e
+	}
+	sourceParent := r.chain[len(r.chain)-1].fd
+	targetParent := to.chain[len(to.chain)-1].fd
+	if e = r.backend.checkACL(sourceParent, true, r.policy.Owner); e != nil {
+		return e
+	}
+	if e = to.backend.checkACL(targetParent, true, to.policy.Owner); e != nil {
+		return e
+	}
+	if e = r.checkDestination(sourceParent, name, mode, &id); e != nil {
+		return e
+	}
+	if e = to.checkDestination(targetParent, target, mode, expected); e != nil {
+		return e
+	}
+	fd, e := r.backend.openFile(sourceParent, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if e != nil {
+		return e
+	}
+	defer func() { _ = r.backend.close(fd) }() // Read-only source handle; both directory sync results are reported below.
+	n, e := r.checkFile(fd, mode)
+	if e != nil {
+		return e
+	}
+	if n.id != id.plat {
+		return ErrIdentityMismatch
+	}
+	if n.mode&07777 != mode {
+		return os.ErrPermission
+	}
+	n, e = r.checkFile(fd, mode)
+	if e != nil {
+		return e
+	}
+	if e = r.checkFileName(sourceParent, name, n); e != nil {
+		return e
+	}
+	if expected == nil {
+		e = renameatBetweenNoReplace(sourceParent, name, targetParent, target)
+	} else {
+		e = unix.Renameat(sourceParent, name, targetParent, target)
+	}
+	if e != nil {
+		return e
+	}
+	return errors.Join(r.backend.sync(sourceParent), to.backend.sync(targetParent))
 }

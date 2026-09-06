@@ -103,3 +103,11 @@ func ValidateConfig(ctx context.Context, runner CommandRunner, binaryPath, dataD
 	}
 	return nil
 }
+
+// ValidateVerifiedConfig preserves the selected candidate identity and hash.
+func ValidateVerifiedConfig(ctx context.Context, v *VerifiedCore, c *ConfigCapability, x VerifiedExecutor) error {
+	if _, e := executeVerified(ctx, v, CoreValidate, c, x); e != nil {
+		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo configuration validation failed"}
+	}
+	return nil
+}

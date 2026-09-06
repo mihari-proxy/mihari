@@ -2,7 +2,10 @@ package supervisor
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"github.com/mihari-proxy/mihari/internal/core"
 	"io"
 	"log/slog"
 	"os"
@@ -94,4 +97,36 @@ func parseHelperJSONL(t *testing.T, raw string) []map[string]any {
 		out = append(out, rec)
 	}
 	return out
+}
+
+func TestCommandStarter_TrustedFactoryRejectsBeforeStart(t *testing.T) {
+	calls := 0
+	s := CommandStarter{BinaryPath: "must-never-execute", CommandFactory: func(context.Context) (core.CoreCommand, func() error, error) {
+		calls++
+		return core.CoreCommand{}, nil, errors.New("invalid provenance")
+	}}
+	if child, e := s.Start(); e == nil || child != nil || calls != 1 {
+		t.Fatal("invalid factory reached child start")
+	}
+}
+func TestCommandStarter_TrustedEnvironmentAndSelectedConfig(t *testing.T) {
+	t.Setenv("LD_PRELOAD", "hostile")
+	t.Setenv("DYLD_INSERT_LIBRARIES", "hostile")
+	t.Setenv("SAFE_PATHS", "/")
+	closed := 0
+	s := CommandStarter{BinaryPath: "legacy-must-not-run", CommandFactory: func(context.Context) (core.CoreCommand, func() error, error) {
+		return core.CoreCommand{Binary: "/private/bin/mihomo", Home: "/private/runtime/core-home", Config: "/private/runtime/config.yaml", Args: []string{"-d", "/private/runtime/core-home", "-f", "/private/runtime/config.yaml"}, Env: []string{"PATH=/usr/bin:/bin", "LANG=C"}}, func() error { closed++; return nil }, nil
+	}}
+	command, release, e := s.command(context.Background())
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer func() {
+		if closeErr := release(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
+	if command.Path != "/private/bin/mihomo" || command.Dir != "/private/runtime/core-home" || len(command.Env) != 2 || command.Args[4] != "/private/runtime/config.yaml" || closed != 0 {
+		t.Fatal("factory command identity/environment changed")
+	}
 }
