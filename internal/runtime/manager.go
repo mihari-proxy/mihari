@@ -168,6 +168,7 @@ type Manager struct {
 	serviceStatus             func() (string, error)
 	onBackgroundError         func(component string, err error)
 	settingsMu                sync.RWMutex
+	configGeneration          uint64
 	tunLastError              string
 	maintenance               chan struct{}
 	installed                 chan struct{}

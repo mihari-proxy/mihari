@@ -18,6 +18,7 @@ type memoryDisk struct {
 	next  int
 }
 type memoryStore struct {
+	root        string
 	denyReceipt bool
 	gate        executionGate
 	disk        *memoryDisk
@@ -168,7 +169,12 @@ func TestProvenancePair_RecoversEveryDurableBoundary(t *testing.T) {
 	}
 }
 
-func (s *memoryStore) location() string { return "/private/data" }
+func (s *memoryStore) location() string {
+	if s.root != "" {
+		return s.root
+	}
+	return "/private/data"
+}
 func (s *memoryStore) open(ctx context.Context, r ProvenanceRole, tx string) (verifiedFile, error) {
 	o, e := s.Inspect(ctx, r, tx)
 	if e != nil {
@@ -177,7 +183,7 @@ func (s *memoryStore) open(ctx context.Context, r ProvenanceRole, tx string) (ve
 	if !o.Present {
 		return nil, os.ErrNotExist
 	}
-	return &memoryVerifiedFile{s: s, role: r, tx: tx, observed: o, path: "/private/data/" + objectKey(r, tx)}, nil
+	return &memoryVerifiedFile{s: s, role: r, tx: tx, observed: o, path: s.location() + "/" + objectKey(r, tx)}, nil
 }
 
 type memoryVerifiedFile struct {

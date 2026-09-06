@@ -60,6 +60,7 @@ func (m *Manager) publishSettings(candidate settingsCandidate) {
 	}
 	m.settingsMu.Lock()
 	m.settings = candidate.after.Clone()
+	m.configGeneration++
 	m.settingsMu.Unlock()
 }
 
@@ -134,4 +135,17 @@ func (m *Manager) lockMutation(ctx context.Context) error {
 
 func (m *Manager) updateStateLocked(ctx context.Context, meta state.CommandMeta, update func(state.Snapshot) (state.Snapshot, error)) (state.Snapshot, error) {
 	return m.coordinator.Do(ctx, meta, update)
+}
+
+// configInputs captures settings and their generation together. Successful config
+// publication also advances this generation; unrelated health observations do not.
+func (m *Manager) configInputs() (config.Settings, uint64) {
+	m.settingsMu.RLock()
+	defer m.settingsMu.RUnlock()
+	return m.settings.Clone(), m.configGeneration
+}
+func (m *Manager) currentConfigGeneration() uint64 {
+	m.settingsMu.RLock()
+	defer m.settingsMu.RUnlock()
+	return m.configGeneration
 }

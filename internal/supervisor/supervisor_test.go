@@ -631,3 +631,48 @@ func TestSupervisor_MaintainStopErrorDoesNotCommit(t *testing.T) {
 		t.Fatal("stop failure committed or restarted")
 	}
 }
+
+type gateObservedContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *gateObservedContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+func TestSupervisor_IdleDegradedMaintenanceWinsPendingRun(t *testing.T) {
+	base, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &gateObservedContext{Context: base, waiting: make(chan struct{})}
+	child := &maintenanceChild{done: make(chan struct{}), joined: make(chan struct{})}
+	started := make(chan struct{}, 2)
+	s := New(Options{Starter: maintenanceStarter{child: child, started: started}})
+	entered, release := make(chan struct{}), make(chan struct{})
+	maintenance := make(chan error, 1)
+	go func() {
+		maintenance <- s.Maintain(base, func() error {
+			close(entered)
+			<-release
+			return protocol.APIError{Code: protocol.CodeDataFailure, Details: map[string]any{"degraded": true}}
+		})
+	}()
+	<-entered
+	finished := make(chan error, 1)
+	go func() { finished <- s.Run(ctx) }()
+	<-ctx.waiting // Run has evaluated the select while idle maintenance owns startGate.
+	close(release)
+	if err := <-maintenance; err == nil {
+		t.Fatal("missing degraded error")
+	}
+	// Synchronize with Run's event loop before cancellation, so zero Start is meaningful.
+	_ = s.Maintain(base, func() error { return nil })
+	cancel()
+	if err := waitDone(t, finished); err != nil {
+		t.Fatal(err)
+	}
+	if len(started) != 0 {
+		t.Fatal("pending Run started after idle recovery degraded")
+	}
+}

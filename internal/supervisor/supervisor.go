@@ -136,6 +136,11 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			return nil
 		case <-s.startGate:
 		}
+		// Idle maintenance may have degraded while Run waited for this gate.
+		if ctx.Err() != nil || s.blocked.Load() {
+			s.startGate <- struct{}{}
+			continue
+		}
 		child, err := s.options.Starter.Start()
 		s.startGate <- struct{}{}
 		if err == nil {

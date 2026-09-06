@@ -99,6 +99,11 @@ func (t *TrustedExecution) PrepareGenerated(ctx context.Context, output subscrip
 // Publish verifies the selected candidate again and atomically writes those same bytes.
 // Manager invokes this only after its mutation/revision check, then reloads.
 func (t *TrustedExecution) Publish(ctx context.Context, g *GeneratedConfig, expected [32]byte) (*ConfigCapability, error) {
+	release, e := t.store.coreStore().execution().acquire(ctx)
+	if e != nil {
+		return nil, e
+	}
+	defer release()
 	if g == nil || g.owner != t || g.hash != expected || sha256.Sum256(g.content) != expected {
 		return nil, dataFailure("generated configuration changed before commit")
 	}
@@ -134,6 +139,8 @@ func (t *TrustedExecution) Publish(ctx context.Context, g *GeneratedConfig, expe
 	}
 	return nil, e
 }
+
+// publishContent requires execution ownership; compensation must not reacquire it.
 func (t *TrustedExecution) publishContent(ctx context.Context, b []byte) (*ConfigCapability, error) {
 	cap, e := t.files.write(ctx, b)
 	if e != nil {
@@ -168,6 +175,11 @@ func (t *TrustedExecution) PreviousConfig(ctx context.Context) ([]byte, error) {
 
 // RestoreConfig reinstalls bytes captured through PreviousConfig, then rebinds.
 func (t *TrustedExecution) RestoreConfig(ctx context.Context, previous []byte) (*ConfigCapability, error) {
+	release, e := t.store.coreStore().execution().acquire(ctx)
+	if e != nil {
+		return nil, e
+	}
+	defer release()
 	return t.publishContent(ctx, previous)
 }
 
@@ -240,7 +252,7 @@ func (t *TrustedExecution) InitializeConfig(ctx context.Context, settings config
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return e
 	}
-	committed, e := t.publishContent(ctx, output.YAML)
+	committed, e := t.RestoreConfig(ctx, output.YAML)
 	if e != nil {
 		return e
 	}

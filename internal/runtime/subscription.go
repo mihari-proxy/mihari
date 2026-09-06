@@ -31,8 +31,10 @@ type SetSubscriptionInput struct {
 }
 
 type configCandidate struct {
-	generated *core.GeneratedConfig
-	hash      [32]byte
+	generation      uint64
+	generationBound bool
+	generated       *core.GeneratedConfig
+	hash            [32]byte
 
 	path    string
 	content []byte
@@ -368,13 +370,14 @@ func (m *Manager) refreshSubscriptionLogSecrets() {
 }
 
 func (m *Manager) prepareCatalogConfig(ctx context.Context, catalog subscription.Catalog) (configCandidate, error) {
-	return m.prepareCatalogConfigWithSettings(ctx, catalog, m.settingsSnapshot())
+	settings, generation := m.configInputs()
+	return m.prepareCatalogConfigWithSettings(ctx, catalog, settings, generation)
 }
 
-func (m *Manager) prepareCatalogConfigWithSettings(ctx context.Context, catalog subscription.Catalog, settings config.Settings) (configCandidate, error) {
+func (m *Manager) prepareCatalogConfigWithSettings(ctx context.Context, catalog subscription.Catalog, settings config.Settings, generation uint64) (configCandidate, error) {
 	if catalog.ActiveID == "" {
 		if m.trustedCore != nil {
-			return m.prepareConfigWithSettings(ctx, subscription.Document{"proxies": []any{}, "proxy-groups": []any{}, "rules": []any{"MATCH,DIRECT"}}, settings)
+			return m.prepareConfigWithSettings(ctx, subscription.Document{"proxies": []any{}, "proxy-groups": []any{}, "rules": []any{"MATCH,DIRECT"}}, settings, generation)
 		}
 		content, err := core.BootstrapConfig(settings)
 		if err != nil {
@@ -397,14 +400,15 @@ func (m *Manager) prepareCatalogConfigWithSettings(ctx context.Context, catalog 
 	if err != nil {
 		return configCandidate{}, err
 	}
-	return m.prepareConfigWithSettings(ctx, document, settings)
+	return m.prepareConfigWithSettings(ctx, document, settings, generation)
 }
 
 func (m *Manager) prepareConfig(ctx context.Context, document subscription.Document) (configCandidate, error) {
-	return m.prepareConfigWithSettings(ctx, document, m.settingsSnapshot())
+	settings, generation := m.configInputs()
+	return m.prepareConfigWithSettings(ctx, document, settings, generation)
 }
 
-func (m *Manager) prepareConfigWithSettings(ctx context.Context, document subscription.Document, settings config.Settings) (configCandidate, error) {
+func (m *Manager) prepareConfigWithSettings(ctx context.Context, document subscription.Document, settings config.Settings, generation uint64) (configCandidate, error) {
 	if m.trustedCore != nil {
 		if m.rootConfigInput == nil {
 			return configCandidate{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "root configuration context unavailable"}
@@ -422,7 +426,9 @@ func (m *Manager) prepareConfigWithSettings(ctx context.Context, document subscr
 		if e != nil {
 			return configCandidate{}, e
 		}
-		return m.prepareContent(ctx, output.YAML)
+		candidate, err := m.prepareContent(ctx, output.YAML)
+		candidate.generation, candidate.generationBound = generation, true
+		return candidate, err
 	}
 
 	content, err := subscription.Generate(document, nil, settings)
@@ -590,6 +596,11 @@ func (c configCandidate) cleanup() {
 	}
 }
 func (m *Manager) commitTrustedRuntimeConfig(ctx context.Context, candidate configCandidate) error {
+	// This internal generation is independent of optional client preconditions
+	// and is captured atomically with settings. Publication owns mutation.
+	if !candidate.generationBound || candidate.generation != m.currentConfigGeneration() {
+		return protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "configuration inputs changed during generation"}
+	}
 	if sha256.Sum256(candidate.content) != candidate.hash {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "validated configuration changed before publication"}
 	}
@@ -611,6 +622,9 @@ func (m *Manager) commitTrustedRuntimeConfig(ctx context.Context, candidate conf
 		e = reloader.Reload(ctx, path, true)
 	}
 	if e == nil {
+		m.settingsMu.Lock()
+		m.configGeneration++
+		m.settingsMu.Unlock()
 		return nil
 	}
 	rollbackCtx := context.WithoutCancel(ctx)

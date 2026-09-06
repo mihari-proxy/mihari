@@ -8,14 +8,16 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/subscription"
 	"os"
+	"sync"
 	"testing"
 )
 
 type memoryConfigs struct {
-	s           *memoryStore
-	sequence    int
-	writes      int
-	failWriteAt int
+	s             *memoryStore
+	sequence      int
+	writes        int
+	failWriteAt   int
+	failWriteFrom int
 }
 
 func (f *memoryConfigs) prepare(ctx context.Context, b []byte) (*ConfigCapability, error) {
@@ -35,7 +37,7 @@ func (f *memoryConfigs) write(ctx context.Context, b []byte) (*ConfigCapability,
 	if e := f.s.Save(ctx, ProvenanceRole("runtime_config"), "", b); e != nil {
 		return nil, e
 	}
-	if f.writes == f.failWriteAt {
+	if f.writes == f.failWriteAt || f.failWriteFrom > 0 && f.writes >= f.failWriteFrom {
 		return nil, errors.New("sync failed after replacement")
 	}
 	return f.bind(ctx, sha256.Sum256(b))
@@ -162,4 +164,120 @@ func TestTrustedRuntime_PublicationFailureRestoresPreviousHash(t *testing.T) {
 	if e = cap.Close(); e != nil {
 		t.Fatal(e)
 	}
+}
+
+type blockedConfigExecutor struct{ entered, release chan struct{} }
+
+func (x blockedConfigExecutor) Execute(context.Context, CoreCommand) ([]byte, error) {
+	close(x.entered)
+	<-x.release
+	return nil, nil
+}
+func TestTrustedRuntime_PublicationWaitsForExecution(t *testing.T) {
+	for _, purpose := range []string{"start", "candidate-validation"} {
+		t.Run(purpose, func(t *testing.T) {
+			ctx := context.Background()
+			s := newMemoryStore()
+			seedInstalledReceipt(t, s, "trusted")
+			files := &memoryConfigs{s: s}
+			trusted := &TrustedExecution{store: s, files: files, executor: &recordedExecutor{}}
+			old, e := trusted.publishContent(ctx, []byte("old"))
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer func() { _ = old.Close() }()
+			candidate, e := trusted.PrepareGenerated(ctx, subscription.PolicyOutput{YAML: []byte("new")})
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer func() { _ = candidate.Close() }()
+			var release func()
+			if purpose == "start" {
+				_, done, e := trusted.RunCommand(ctx)
+				if e != nil {
+					t.Fatal(e)
+				}
+				release = func() {
+					if e := done(); e != nil {
+						t.Error(e)
+					}
+				}
+			} else {
+				prepared := stageFixture(t, trusted.Installer())
+				defer prepared.Cleanup()
+				v, e := prepared.Verified(ctx)
+				if e != nil {
+					t.Fatal(e)
+				}
+				defer func() { _ = v.Close() }()
+				x := blockedConfigExecutor{make(chan struct{}), make(chan struct{})}
+				done := make(chan error, 1)
+				go func() { done <- ValidateVerifiedConfig(ctx, v, old, x) }()
+				<-x.entered
+				release = func() {
+					close(x.release)
+					if e := <-done; e != nil {
+						t.Error(e)
+					}
+				}
+			}
+			for _, operation := range []string{"publish", "restore"} {
+				blocked, cancel := context.WithCancel(ctx)
+				observed := &publicationContext{Context: blocked, waiting: make(chan struct{})}
+				result := make(chan error, 1)
+				go func() {
+					var cap *ConfigCapability
+					var err error
+					if operation == "publish" {
+						cap, err = trusted.Publish(observed, candidate, candidate.Hash())
+					} else {
+						cap, err = trusted.RestoreConfig(observed, []byte("rollback"))
+					}
+					if cap != nil {
+						err = errors.Join(err, cap.Close())
+					}
+					result <- err
+				}()
+				select {
+				case err := <-result:
+					cancel()
+					release()
+					t.Fatalf("%s completed during execution ownership: %v", operation, err)
+				case <-observed.waiting:
+					cancel()
+					if err := <-result; !errors.Is(err, context.Canceled) {
+						release()
+						t.Fatalf("%s did not wait at execution gate: %v", operation, err)
+					}
+				}
+				if files.writes != 1 {
+					release()
+					t.Fatal("configuration changed while execution owned path")
+				}
+			}
+			var cap *ConfigCapability
+			release()
+			cap, e = trusted.Publish(ctx, candidate, candidate.Hash())
+			if e != nil {
+				t.Fatal(e)
+			}
+			if e = cap.Close(); e != nil {
+				t.Fatal(e)
+			}
+			if files.writes != 2 {
+				t.Fatal("publication did not resume after release")
+			}
+		})
+	}
+}
+
+type publicationContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *publicationContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
 }
