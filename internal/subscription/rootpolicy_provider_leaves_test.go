@@ -242,7 +242,7 @@ func TestRootPolicy_ProviderOverlayMaterializedAndNameOnlyRetained(t *testing.T)
 func TestRootPolicy_ProviderNameOnlyChildBoundaries(t *testing.T) {
 	for _, field := range []string{"pattern", "target"} {
 		for _, bad := range []string{"1", "null"} {
-			name := "{pattern: '(?<=node)1', target: '$0-new'}"
+			var name string
 			if field == "pattern" {
 				name = "{pattern: " + bad + ", target: '$0-new'}"
 			} else {

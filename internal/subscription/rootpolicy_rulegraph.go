@@ -61,34 +61,5 @@ func validateSubruleGraph(ctx context.Context, root policyValue, os string) erro
 			pending = append(pending, locatedRule{child, item.field})
 		}
 	}
-	type frame struct{ node, next int }
-	colors := make([]uint8, len(edges))
-	for start := range edges {
-		if colors[start] != 0 {
-			continue
-		}
-		colors[start] = 1
-		stack := []frame{{node: start}}
-		for len(stack) > 0 {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			current := &stack[len(stack)-1]
-			if current.next == len(edges[current.node]) {
-				colors[current.node] = 2
-				stack = stack[:len(stack)-1]
-				continue
-			}
-			target := edges[current.node][current.next]
-			current.next++
-			if colors[target] == 1 {
-				return policyFailure("sub-rules.[entry][]")
-			}
-			if colors[target] == 0 {
-				colors[target] = 1
-				stack = append(stack, frame{node: target})
-			}
-		}
-	}
-	return nil
+	return validatePolicyAcyclic(ctx, edges, "sub-rules.[entry][]")
 }

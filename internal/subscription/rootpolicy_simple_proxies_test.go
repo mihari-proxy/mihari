@@ -54,3 +54,21 @@ func TestRootPolicy_SimpleProxyCredentialFraming(t *testing.T) {
 		}
 	}
 }
+
+func TestRootPolicy_GostForwardMuxFields(t *testing.T) {
+	for _, field := range []string{"forward", "mux"} {
+		t.Run(field, func(t *testing.T) {
+			for _, value := range []string{"true", "false"} {
+				t.Run(value, func(t *testing.T) {
+					out, err := NewRootConfigPolicy().Build(context.Background(), baselineProxyInput(t, "gost-relay", field+": "+value+"\n"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					assertPolicyProxyLeaf(t, out.YAML, []string{field}, value)
+				})
+			}
+			_, err := NewRootConfigPolicy().Build(context.Background(), baselineProxyInput(t, "gost-relay", field+": 'true'\n"))
+			assertPolicyDataFailure(t, err, "proxies[]."+field)
+		})
+	}
+}

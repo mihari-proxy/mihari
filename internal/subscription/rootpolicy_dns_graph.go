@@ -45,7 +45,7 @@ func validatePolicyDNSProxyReferences(ctx context.Context, root policyValue, gra
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if object.kind != "wireguard" {
+		if object.kind != "wireguard" && object.kind != "masque" && object.kind != "openvpn" {
 			continue
 		}
 		remote, _ := object.value.get("remote-dns-resolve")
@@ -53,7 +53,7 @@ func validatePolicyDNSProxyReferences(ctx context.Context, root policyValue, gra
 			continue
 		}
 		servers, _ := object.value.get("dns")
-		// The active WG constructor supplies itself as ProxyAdapter, so bare
+		// These active outbound consumers supply themselves as ProxyAdapter, so bare
 		// selectors cannot create a new proxy edge. The Tailscale DNS client
 		// ignores that adapter and still requires its named registered resolver.
 		if err := check(servers, "proxies[].dns[]"); err != nil {

@@ -8,6 +8,17 @@ import (
 )
 
 func TestRootPolicy_WireGuardActiveDNSReferences(t *testing.T) {
+	testPolicyOutboundDNSReferences(t, "wireguard")
+}
+
+func TestRootPolicy_MasqueOpenVPNActiveDNSReferences(t *testing.T) {
+	for _, kind := range []string{"masque", "openvpn"} {
+		t.Run(kind, func(t *testing.T) { testPolicyOutboundDNSReferences(t, kind) })
+	}
+}
+
+func testPolicyOutboundDNSReferences(t *testing.T, kind string) {
+	t.Helper()
 	for _, scope := range []string{"root", "provider", "filtered-provider"} {
 		for _, tc := range []struct {
 			name, extra string
@@ -23,7 +34,7 @@ func TestRootPolicy_WireGuardActiveDNSReferences(t *testing.T) {
 			{"adapter overrides bare selector", "remote-dns-resolve: true\ndns: ['udp://192.0.2.1#nonexistent']", true},
 		} {
 			t.Run(scope+"/"+tc.name, func(t *testing.T) {
-				input := baselineProxyInput(t, "wireguard", tc.extra+"\n")
+				input := baselineProxyInput(t, kind, tc.extra+"\n")
 				if scope != "root" {
 					var original map[string]any
 					if err := yaml.Unmarshal(input.YAML, &original); err != nil {
@@ -41,20 +52,22 @@ func TestRootPolicy_WireGuardActiveDNSReferences(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				for _, inspect := range []bool{false, true} {
-					var err error
-					if inspect {
-						_, err = NewRootConfigPolicy().Inspect(context.Background(), input)
-					} else {
-						_, err = NewRootConfigPolicy().Build(context.Background(), input)
-					}
-					if tc.valid {
-						if err != nil {
-							t.Fatalf("valid active/inactive WG resolver rejected: %v", err)
+				for _, method := range []string{"Build", "Inspect"} {
+					t.Run(method, func(t *testing.T) {
+						var err error
+						if method == "Inspect" {
+							_, err = NewRootConfigPolicy().Inspect(context.Background(), input)
+						} else {
+							_, err = NewRootConfigPolicy().Build(context.Background(), input)
 						}
-					} else {
-						assertPolicyDataFailure(t, err, "proxies[].dns[].outbound")
-					}
+						if tc.valid {
+							if err != nil {
+								t.Fatalf("valid active/inactive outbound resolver rejected: %v", err)
+							}
+						} else {
+							assertPolicyDataFailure(t, err, "proxies[].dns[].outbound")
+						}
+					})
 				}
 			})
 		}

@@ -108,9 +108,9 @@ Country/ASN 沿用既有锁定资产。初版 DAT 来源固定 MetaCubeX artifac
 
 四种代理组共同字段与协议分派在 [outboundgroup/parser.go](https://github.com/MetaCubeX/mihomo/blob/ac017cdd246ce8bd547653d927e7bf77d7ee73d5/adapter/outboundgroup/parser.go#L25)。interval 是秒、timeout 是毫秒，见 [healthcheck.go](https://github.com/MetaCubeX/mihomo/blob/ac017cdd246ce8bd547653d927e7bf77d7ee73d5/adapter/provider/healthcheck.go#L210)。expected-status 使用 [ranges.go](https://github.com/MetaCubeX/mihomo/blob/ac017cdd246ce8bd547653d927e7bf77d7ee73d5/common/utils/ranges.go)，保留逗号/斜杠、反向范围、空值与星号，限制原生 28 段并拒绝窄整数截断。selector.default-selected、url-test.tolerance、load-balance.strategy 只能属于对应分支。
 
-### Additional pinned network consumers under implementation
+### Additional implemented pinned network consumers
 
-The following entries record source-specific decisions; the registry is still incomplete and is not activated.
+The following entries record delivered implementation decisions and indexed registry evidence. Independent review gates and default activation remain pending.
 
 - Hysteria v1: [adapter precedence and rate/window defaults](https://github.com/MetaCubeX/mihomo/blob/ac017cdd246ce8bd547653d927e7bf77d7ee73d5/adapter/outbound/hysteria.go#L192). Policy materializes the effective protocol and removes obfs-protocol. Effective faketcp is rejected because its Linux transport calls iptables Exists/Append on OUTPUT; udp/wechat-video remain. Native Speed runs before positive speed aliases; negative bandwidth aliases are rejected and positive signed multiplication is checked. Both window defaults inspect ReceiveWindow==0, so an explicit dormant stream window is preserved. Local rate checks do not bound peer ServerHello.RecvBPS or all runtime congestion arithmetic.
 - Hysteria2: [exact sing-quic client](https://github.com/metacubex/sing-quic/blob/38b0e9295f51d1e96e7564b1d804c2e3a56c8610/hysteria2/client.go) uses active Gecko0 defaults512/1200 and1<=min<=max<=2048, initial QUIC windows require62-bit representation while maximum windows are natively clamped. Realm is an injected HTTP/STUN/NAT client, with no arbitrary local server or filename. Server URL is HTTP(S), token/password HTTP values, nested TLS credentials inline-validated even inactive. Port-list range syntax follows the pinned parser including slash/comma/brackets/reversal but rejects narrowing overflow; maximum28 ranges is native, not an invented limit. Handshake nonpositive timeout follows caller context; signed seconds are checked before conversion. BBR fallback is always reachable; local sendrate bounds only its local signed conversion.
@@ -183,7 +183,7 @@ proxy payload 使用闭合 YAML 文档和统一节点 schema。rule payload 支�
 
 Geo 独立于 provider 预算：每资产最多 128 MiB，四个唯一 kind 累计最多 512 MiB，checked 累加，不提前分配总量。provider 仍保持每源 16 MiB、总 256 MiB、最多 256 项；输入与生成资源都需限界，不能借转换放大逃过检查。额外保留 Geo ID 也须真实验证，未知 kind/ID 拒绝。SHA256 来自实际输出 bytes，只是摘要，不构成来源认证。
 
-DNS fragment 裸 selector 保留已解码精确字符串，包括引用已注册 NUL 名字的情况；未命中 proxy 时保留原生 interface fallback，不强加不存在的必须引用规则。`ts`/`tailscale` 则依实际 resolver 能力检查。WireGuard remote-dns-resolve 且 dns 非空时，对所有 root/provider 节点做该能力检查；注入 adapter 后普通裸 selector 不制造额外 proxy 边。固定 OS resolver/hosts/CA 读取获准，任意 DHCP interface listener、文件路径或调用者环境选择没有因此获准。
+DNS fragment 裸 selector 保留已解码精确字符串，包括引用已注册 NUL 名字的情况；未命中 proxy 时保留原生 interface fallback，不强加不存在的必须引用规则。`ts`/`tailscale` 则依实际 resolver 能力检查。WireGuard、MASQUE、OpenVPN remote-dns-resolve 且 dns 非空时，对所有 root/provider 节点做该能力检查；注入 adapter 后普通裸 selector 不制造额外 proxy 边。固定 OS resolver/hosts/CA 读取获准，任意 DHCP interface listener、文件路径或调用者环境选择没有因此获准。
 
 ## 认证编码与证据阅读方式
 
@@ -194,3 +194,5 @@ SOCKS5 的 [认证序列化](https://github.com/MetaCubeX/mihomo/blob/ac017cdd24
 共享机制只证明其实际范围。例如 Gost forward/mux 的声明与消费者分别是目标地址选择和固定 smux 客户端，bool 类型通过同一 decoder；不能把共享 bool fixture 称为实际运行 Gost 链路。所有协议的构造 baseline 只验证真正供给的字段及 fresh 输出，不执行核心构造或握手。明确的兼容成本包括严格 YAML tags/null、空 netip 文本不自动变零值、uint32 routing-mark 域、规范化碰撞拒绝、有限 protobuf 未知字段拒绝，以及原生忽略垃圾的若干 grammar 规范化。
 
 表述为表示检查的数值界不保证物理内存可分配、eager core -t 构造成本、peer 反馈算术或全运行时鲁棒性。已知 Hysteria2 UDP 重试、低容量 fragment count、MKCP congestion wrap、Mekya/XHTTP eager 分配、WireGuard workers/AWG junk 批量分配、复合规则重复递归等限制保留在对应段落。测试不访问公网、不运行真实 mihomo；后续受限核心校验和部署事务不能被本策略单元测试替代。
+
+MASQUE [active resolver](https://github.com/MetaCubeX/mihomo/blob/ac017cdd246ce8bd547653d927e7bf77d7ee73d5/adapter/outbound/masque.go#L252) 与 OpenVPN [resolver initialization](https://github.com/MetaCubeX/mihomo/blob/ac017cdd246ce8bd547653d927e7bf77d7ee73d5/adapter/outbound/openvpn.go#L350) 均纳入同一 Build/Inspect 能力闭包，包括被 provider filter 排除的已声明节点。普通 UDP/system 与注入 adapter 下的裸 selector 保持原语义；此校验不执行隧道或 DNS 请求。

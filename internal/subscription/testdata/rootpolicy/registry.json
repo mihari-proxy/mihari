@@ -61559,15 +61559,15 @@
       },
       "fixtures": [
         {
-          "file": "internal/subscription/rootpolicy_decode_test.go",
-          "test": "TestRootPolicy_TypedTreeRejectsStructuralAmbiguity",
-          "scope": "shared closed-schema duplicate/alias/customtag/unknown/shape and safe-error mechanism, not a per-leaf runtime check"
-        },
-        {
-          "file": "internal/subscription/rootpolicy_decode_test.go",
-          "test": "TestRootPolicy_TypedTreeScalarBoundaries",
-          "subtest": "bool",
-          "scope": "shared strict scalar decoding mechanism only; protocol-specific semantic limits remain in named fixtures/validator"
+          "file": "internal/subscription/rootpolicy_simple_proxies_test.go",
+          "test": "TestRootPolicy_GostForwardMuxFields",
+          "subtest": "forward",
+          "positive_values": [
+            "true",
+            "false"
+          ],
+          "negative_value": "'true'",
+          "assertion": "Build valid Gost baseline; exact typed fresh field values for true/false; PolicyError CodeDataFailure and exact safe field proxies[].forward"
         }
       ],
       "shared_mechanism_fixtures": [
@@ -61584,7 +61584,7 @@
         }
       ],
       "compatibility": "Evidence scopes are explicit: containing/compound controls are not independent exact leaf assertions; shared decode tests prove shared machinery. Protocol source branches, active/default/no-op cases and representation/runtime limitations are part of the policy document and named existing implementation/test functions. No native core or handshake was executed.",
-      "fixture_scope_limit": "Only shared typed primitive/closed-object evidence is claimed here; protocol declaration/consumer and compiled binding establish application. No synthetic per-field runtime or fresh-output assertion is invented."
+      "fixture_scope_limit": "Exact policy binding/output/type rejection; no native Gost exchange or runtime forwarding/multiplexing claim."
     },
     {
       "path": "proxies[][type=gost-relay].mux",
@@ -61629,15 +61629,15 @@
       },
       "fixtures": [
         {
-          "file": "internal/subscription/rootpolicy_decode_test.go",
-          "test": "TestRootPolicy_TypedTreeRejectsStructuralAmbiguity",
-          "scope": "shared closed-schema duplicate/alias/customtag/unknown/shape and safe-error mechanism, not a per-leaf runtime check"
-        },
-        {
-          "file": "internal/subscription/rootpolicy_decode_test.go",
-          "test": "TestRootPolicy_TypedTreeScalarBoundaries",
-          "subtest": "bool",
-          "scope": "shared strict scalar decoding mechanism only; protocol-specific semantic limits remain in named fixtures/validator"
+          "file": "internal/subscription/rootpolicy_simple_proxies_test.go",
+          "test": "TestRootPolicy_GostForwardMuxFields",
+          "subtest": "mux",
+          "positive_values": [
+            "true",
+            "false"
+          ],
+          "negative_value": "'true'",
+          "assertion": "Build valid Gost baseline; exact typed fresh field values for true/false; PolicyError CodeDataFailure and exact safe field proxies[].mux"
         }
       ],
       "shared_mechanism_fixtures": [
@@ -61654,7 +61654,7 @@
         }
       ],
       "compatibility": "Evidence scopes are explicit: containing/compound controls are not independent exact leaf assertions; shared decode tests prove shared machinery. Protocol source branches, active/default/no-op cases and representation/runtime limitations are part of the policy document and named existing implementation/test functions. No native core or handshake was executed.",
-      "fixture_scope_limit": "Only shared typed primitive/closed-object evidence is claimed here; protocol declaration/consumer and compiled binding establish application. No synthetic per-field runtime or fresh-output assertion is invented."
+      "fixture_scope_limit": "Exact policy binding/output/type rejection; no native Gost exchange or runtime forwarding/multiplexing claim."
     },
     {
       "path": "proxies[][type=gost-relay].name-cert-verify",
@@ -68791,6 +68791,11 @@
           "file": "internal/subscription/rootpolicy_masque_test.go",
           "test": "TestRootPolicy_MasqueFields",
           "evidence_scope": "Existing protocol test containing this registered key; consult its actual input/branch/assertion. Not upgraded to independent leaf output/error proof."
+        },
+        {
+          "file": "internal/subscription/rootpolicy_dns_graph_test.go",
+          "test": "TestRootPolicy_MasqueOpenVPNActiveDNSReferences",
+          "scope": "Build/Inspect root, inline provider and filtered member: active missing/wrong-capability resolver exact safe rejection; inactive, empty, UDP, system and bare-selector controls."
         }
       ],
       "shared_mechanism_fixtures": [
@@ -68800,7 +68805,11 @@
           "scope": "shared closed-schema duplicate/alias/customtag/unknown/shape and safe-error mechanism, not a per-leaf runtime check"
         }
       ],
-      "compatibility": "Evidence scopes are explicit: containing/compound controls are not independent exact leaf assertions; shared decode tests prove shared machinery. Protocol source branches, active/default/no-op cases and representation/runtime limitations are part of the policy document and named existing implementation/test functions. No native core or handshake was executed."
+      "compatibility": "Evidence scopes are explicit: containing/compound controls are not independent exact leaf assertions; shared decode tests prove shared machinery. Protocol source branches, active/default/no-op cases and representation/runtime limitations are part of the policy document and named existing implementation/test functions. No native core or handshake was executed.",
+      "resource_validator": {
+        "file": "internal/subscription/rootpolicy_dns_graph.go",
+        "symbol": "validatePolicyDNSProxyReferences"
+      }
     },
     {
       "path": "proxies[][type=masque].handshake-timeout",
@@ -69815,6 +69824,11 @@
           "file": "internal/subscription/rootpolicy_masque_test.go",
           "test": "TestRootPolicy_MasqueFields",
           "evidence_scope": "Existing protocol test containing this registered key; consult its actual input/branch/assertion. Not upgraded to independent leaf output/error proof."
+        },
+        {
+          "file": "internal/subscription/rootpolicy_dns_graph_test.go",
+          "test": "TestRootPolicy_MasqueOpenVPNActiveDNSReferences",
+          "scope": "Build/Inspect root, inline provider and filtered member: active missing/wrong-capability resolver exact safe rejection; inactive, empty, UDP, system and bare-selector controls."
         }
       ],
       "shared_mechanism_fixtures": [
@@ -69830,7 +69844,11 @@
           "scope": "shared strict scalar decoding mechanism only; protocol-specific semantic limits remain in named fixtures/validator"
         }
       ],
-      "compatibility": "Evidence scopes are explicit: containing/compound controls are not independent exact leaf assertions; shared decode tests prove shared machinery. Protocol source branches, active/default/no-op cases and representation/runtime limitations are part of the policy document and named existing implementation/test functions. No native core or handshake was executed."
+      "compatibility": "Evidence scopes are explicit: containing/compound controls are not independent exact leaf assertions; shared decode tests prove shared machinery. Protocol source branches, active/default/no-op cases and representation/runtime limitations are part of the policy document and named existing implementation/test functions. No native core or handshake was executed.",
+      "resource_validator": {
+        "file": "internal/subscription/rootpolicy_dns_graph.go",
+        "symbol": "validatePolicyDNSProxyReferences"
+      }
     },
     {
       "path": "proxies[][type=masque].server",
@@ -71650,6 +71668,11 @@
           "file": "internal/subscription/rootpolicy_openvpn_test.go",
           "test": "TestRootPolicy_OpenVPNFields",
           "evidence_scope": "Existing protocol test containing this registered key; consult its actual input/branch/assertion. Not upgraded to independent leaf output/error proof."
+        },
+        {
+          "file": "internal/subscription/rootpolicy_dns_graph_test.go",
+          "test": "TestRootPolicy_MasqueOpenVPNActiveDNSReferences",
+          "scope": "Build/Inspect root, inline provider and filtered member: active missing/wrong-capability resolver exact safe rejection; inactive, empty, UDP, system and bare-selector controls."
         }
       ],
       "shared_mechanism_fixtures": [
@@ -71659,7 +71682,11 @@
           "scope": "shared closed-schema duplicate/alias/customtag/unknown/shape and safe-error mechanism, not a per-leaf runtime check"
         }
       ],
-      "compatibility": "Evidence scopes are explicit: containing/compound controls are not independent exact leaf assertions; shared decode tests prove shared machinery. Protocol source branches, active/default/no-op cases and representation/runtime limitations are part of the policy document and named existing implementation/test functions. No native core or handshake was executed."
+      "compatibility": "Evidence scopes are explicit: containing/compound controls are not independent exact leaf assertions; shared decode tests prove shared machinery. Protocol source branches, active/default/no-op cases and representation/runtime limitations are part of the policy document and named existing implementation/test functions. No native core or handshake was executed.",
+      "resource_validator": {
+        "file": "internal/subscription/rootpolicy_dns_graph.go",
+        "symbol": "validatePolicyDNSProxyReferences"
+      }
     },
     {
       "path": "proxies[][type=openvpn].handshake-timeout",
@@ -72704,6 +72731,11 @@
           "file": "internal/subscription/rootpolicy_openvpn_test.go",
           "test": "TestRootPolicy_OpenVPNFields",
           "evidence_scope": "Existing protocol test containing this registered key; consult its actual input/branch/assertion. Not upgraded to independent leaf output/error proof."
+        },
+        {
+          "file": "internal/subscription/rootpolicy_dns_graph_test.go",
+          "test": "TestRootPolicy_MasqueOpenVPNActiveDNSReferences",
+          "scope": "Build/Inspect root, inline provider and filtered member: active missing/wrong-capability resolver exact safe rejection; inactive, empty, UDP, system and bare-selector controls."
         }
       ],
       "shared_mechanism_fixtures": [
@@ -72719,7 +72751,11 @@
           "scope": "shared strict scalar decoding mechanism only; protocol-specific semantic limits remain in named fixtures/validator"
         }
       ],
-      "compatibility": "Evidence scopes are explicit: containing/compound controls are not independent exact leaf assertions; shared decode tests prove shared machinery. Protocol source branches, active/default/no-op cases and representation/runtime limitations are part of the policy document and named existing implementation/test functions. No native core or handshake was executed."
+      "compatibility": "Evidence scopes are explicit: containing/compound controls are not independent exact leaf assertions; shared decode tests prove shared machinery. Protocol source branches, active/default/no-op cases and representation/runtime limitations are part of the policy document and named existing implementation/test functions. No native core or handshake was executed.",
+      "resource_validator": {
+        "file": "internal/subscription/rootpolicy_dns_graph.go",
+        "symbol": "validatePolicyDNSProxyReferences"
+      }
     },
     {
       "path": "proxies[][type=openvpn].server",
@@ -127343,12 +127379,12 @@
     "TestRootPolicy_WireGuardActiveDNSReferences": {
       "file": "internal/subscription/rootpolicy_dns_graph_test.go",
       "line": 10,
-      "source_sha256": "981ade609e94ace0a6defa4920d0e6582287af9123f997c9406d0d7690fe0c45",
+      "source_sha256": "0c465e52d78adecc7b6a797b07385b8a1af5dc97d2699471509ff110d65fb8fb",
       "assertion_scope": "Read the named existing test body. A table row supplies actual inputs, not an assertion that every consumer ran. Exact helper, presence, error parity and compound assertions remain distinct."
     },
     "TestRootPolicy_DNSResourceReferences": {
       "file": "internal/subscription/rootpolicy_dns_graph_test.go",
-      "line": 82,
+      "line": 95,
       "source_sha256": "53a611057205aa1640b1ba1e2b47c502059c5b637b65ddb2a386887886a5b17d",
       "assertion_scope": "Read the named existing test body. A table row supplies actual inputs, not an assertion that every consumer ran. Exact helper, presence, error parity and compound assertions remain distinct."
     },
@@ -127613,12 +127649,12 @@
     "TestRootPolicy_ProviderSourceAndHealthFields": {
       "file": "internal/subscription/rootpolicy_provider_test.go",
       "line": 9,
-      "source_sha256": "725e30762c45d792adcf6b31dd8547c7a21bd99f64dfec87380e4740b08aa469",
+      "source_sha256": "99aa5f9aea488fb1007f88e9378c5faf301479c06cc783b4ae7f61af4fbcf4ab",
       "assertion_scope": "Read the named existing test body. A table row supplies actual inputs, not an assertion that every consumer ran. Exact helper, presence, error parity and compound assertions remain distinct."
     },
     "TestRootPolicy_ProviderFilteredOutNodesStillValidated": {
       "file": "internal/subscription/rootpolicy_provider_test.go",
-      "line": 113,
+      "line": 114,
       "source_sha256": "742c913525ad3610edfd5a11b62d34aad844b672174d7b45e6d3a0834dd787c3",
       "assertion_scope": "Read the named existing test body. A table row supplies actual inputs, not an assertion that every consumer ran. Exact helper, presence, error parity and compound assertions remain distinct."
     },
@@ -127733,7 +127769,7 @@
     "TestRootPolicy_SimpleProxyCredentialFraming": {
       "file": "internal/subscription/rootpolicy_simple_proxies_test.go",
       "line": 10,
-      "source_sha256": "3c7e1ba40c17f008a334e99b721e4fb31fd07805f52c206419f4ff14be732875",
+      "source_sha256": "d991604164fa850328e0f45ccf0e496280567fffced9d4034d657022647bf49f",
       "assertion_scope": "Read the named existing test body. A table row supplies actual inputs, not an assertion that every consumer ran. Exact helper, presence, error parity and compound assertions remain distinct."
     },
     "TestRootPolicy_SnellFields": {
@@ -127957,6 +127993,18 @@
       "line": 117,
       "source_sha256": "336da6dafda41b2d6abb303cca187df2f728fa545343cdc2e27f7ab4ec48f298",
       "assertion_scope": "Read the named existing test body. A table row supplies actual inputs, not an assertion that every consumer ran. Exact helper, presence, error parity and compound assertions remain distinct."
+    },
+    "TestRootPolicy_MasqueOpenVPNActiveDNSReferences": {
+      "assertion_scope": "Exact assertions in the named test and shared helper; no native network/core execution.",
+      "file": "internal/subscription/rootpolicy_dns_graph_test.go",
+      "line": 14,
+      "source_sha256": "02d5de238d6c1536bea1492bf5aa9b56ccb6a7066d98b5d2c17aab1f240dc8bd"
+    },
+    "TestRootPolicy_GostForwardMuxFields": {
+      "assertion_scope": "Exact assertions in the named test and shared helper; no native network/core execution.",
+      "file": "internal/subscription/rootpolicy_simple_proxies_test.go",
+      "line": 58,
+      "source_sha256": "b26c81d7897b66c01f0dd8d9fbcd591ff55b26e192fb24156c92cf848d68e712"
     }
   },
   "declaration_index": [
@@ -148010,10 +148058,7 @@
     "source_provider_payload_schema": "proxy-providers.[entry].payload[] uses same root proxy schema and effective overlays; canonicalized to proxies[] in shape accounting",
     "pending_fixture_mapping_paths": [],
     "note": "Accounting demonstrates explicit coverage, not that source matching/table existence proves all behavior. Per-record assertion scopes and final review remain authoritative.",
-    "shared_mechanism_only_paths": [
-      "proxies[][type=gost-relay].forward",
-      "proxies[][type=gost-relay].mux"
-    ],
+    "shared_mechanism_only_paths": [],
     "verification": "Every declaration binding resolves; every primary validator and named fixture resolves to a current Go function. Final independent security review remains separate."
   }
 }

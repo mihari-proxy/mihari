@@ -56,11 +56,11 @@ func validSSHPrivateKey(value, passphrase string) bool {
 	}
 	der := block.Bytes
 	if strings.Contains(block.Headers["Proc-Type"], "ENCRYPTED") {
-		if passphrase == "" || !x509.IsEncryptedPEMBlock(block) || block.Type == "PRIVATE KEY" {
+		if passphrase == "" || !x509.IsEncryptedPEMBlock(block) || block.Type == "PRIVATE KEY" { //nolint:staticcheck // SA1019: approved caller-supplied inline legacy PEM compatibility; the format is unauthenticated.
 			return false
 		}
 		var err error
-		der, err = x509.DecryptPEMBlock(block, []byte(passphrase))
+		der, err = x509.DecryptPEMBlock(block, []byte(passphrase)) //nolint:staticcheck // SA1019: decode unauthenticated inline legacy PEM only; never generate ciphertext or select files.
 		if err != nil {
 			return false
 		}

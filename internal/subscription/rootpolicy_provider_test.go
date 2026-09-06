@@ -46,9 +46,10 @@ func TestRootPolicy_ProviderSourceAndHealthFields(t *testing.T) {
 			}
 			_, err = decodeProviderTestValue(t, base+tc.field+": "+tc.negative, proxyProviderDefinitionSchema())
 			field := "proxy-providers.[entry]." + tc.field
-			if tc.field == "health-check" {
+			switch tc.field {
+			case "health-check":
 				field += "." + map[string]string{"health enable": "enable", "health URL": "url", "health interval": "interval", "health timeout": "timeout", "health lazy": "lazy", "health status": "expected-status"}[tc.name]
-			} else if tc.field == "header" {
+			case "header":
 				field += ".[entry][]"
 			}
 			assertPolicyDataFailure(t, err, field)
