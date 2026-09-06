@@ -126,12 +126,18 @@ func (m *Manager) lockMutation(ctx context.Context) error {
 	if err := m.lockMaintenance(ctx); err != nil {
 		return err
 	}
+	if m.resourceActivation != nil {
+		m.releaseMutation()
+		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "resource activation is in progress"}
+	}
 	if m.mutationDegraded.Load() {
 		m.unlock()
 		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "mutation compensation failed; restart required"}
 	}
 	return nil
 }
+
+func (m *Manager) releaseMutation() { m.maintenance <- struct{}{} }
 
 func (m *Manager) updateStateLocked(ctx context.Context, meta state.CommandMeta, update func(state.Snapshot) (state.Snapshot, error)) (state.Snapshot, error) {
 	return m.coordinator.Do(ctx, meta, update)

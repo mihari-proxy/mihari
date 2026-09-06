@@ -37,12 +37,13 @@ type resourceSource struct {
 
 // PreparedResources owns unpublished private candidates and their complete policy result.
 type PreparedResources struct {
-	store     *ProviderStore
-	input     PolicyInput
-	output    PolicyOutput
-	providers []*PreparedProvider
-	geo       []*PreparedProvider
-	sources   map[string]resourceSource
+	store         *ProviderStore
+	input         PolicyInput
+	output        PolicyOutput
+	providers     []*PreparedProvider
+	geo           []*PreparedProvider
+	configuration *PreparedProvider
+	sources       map[string]resourceSource
 }
 
 // SnapshotResources validates current daemon-owned cached definitions and their
@@ -275,6 +276,11 @@ func (p *ResourcePreparer) Prepare(ctx context.Context, input PolicyInput, mode 
 	}
 	result.input = input
 	result.output = output
+	result.configuration, err = p.store.prepareBytes(ctx, ProviderSpec{}, "", "runtime/config.yaml", output.YAML)
+	if err != nil {
+		return result, err
+	}
+	result.configuration.configuration = true
 	return result, nil
 }
 
@@ -321,6 +327,15 @@ func (p *PreparedResources) PolicyInput() PolicyInput {
 	return input
 }
 
+// Identity returns the immutable subscription identity without copying the
+// potentially large prepared resource byte graph.
+func (p *PreparedResources) Identity() (string, uint64) {
+	if p == nil {
+		return "", 0
+	}
+	return p.input.SubscriptionID, p.input.Generation
+}
+
 // Recheck verifies all authorized source objects and privately staged targets.
 // Manager must also recheck active ID/generation/configGeneration under mutation.
 func (p *PreparedResources) Recheck(ctx context.Context) error {
@@ -343,6 +358,9 @@ func (p *PreparedResources) Recheck(ctx context.Context) error {
 			}
 		}
 	}
+	if p.configuration != nil {
+		return p.configuration.recheck(ctx)
+	}
 	return nil
 }
 
@@ -358,5 +376,6 @@ func (p *PreparedResources) Close(ctx context.Context) error {
 			err = errors.Join(err, candidate.Close(ctx))
 		}
 	}
+	err = errors.Join(err, p.configuration.Close(ctx))
 	return err
 }

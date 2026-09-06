@@ -17,6 +17,8 @@ type unixProviderFiles struct {
 	path, identity, boot string
 }
 
+func (f *unixProviderFiles) storeBinding() (string, string) { return f.path, f.identity }
+
 // NewProviderStore borrows a root-owned private D capability. The daemon or
 // installer retains its lifecycle lease and D until all resource users close.
 // Recover must finish before any core recovery, validation or execution.
@@ -70,7 +72,17 @@ func (f *unixProviderFiles) parent(ctx context.Context, path string, create bool
 }
 
 func providerAllowedPath(path string) bool {
-	if path == providerJournalPath {
+	if path == providerJournalPath || path == resourceJournalPath {
+		return true
+	}
+	configPath := path
+	if at := strings.Index(configPath, ".old-"); at >= 0 {
+		if !profileIDPattern.MatchString(configPath[at+5:]) {
+			return false
+		}
+		configPath = configPath[:at]
+	}
+	if configPath == "runtime/config.yaml" {
 		return true
 	}
 	parts := strings.Split(path, "/")
@@ -102,7 +114,14 @@ func providerAllowedPath(path string) bool {
 	}
 	for _, kind := range []GeoResourceKind{GeoCountryMMDB, GeoASNMMDB, GeoIPDAT, GeoSiteDAT} {
 		name, err := GeoResourcePath(kind)
-		if err == nil && path == "runtime/core-home/"+name {
+		base := path
+		if at := strings.Index(base, ".old-"); at >= 0 {
+			if !profileIDPattern.MatchString(base[at+5:]) {
+				return false
+			}
+			base = base[:at]
+		}
+		if err == nil && base == "runtime/core-home/"+name {
 			return true
 		}
 	}
@@ -263,7 +282,7 @@ func (f *unixProviderFiles) transactions(ctx context.Context) (result []string, 
 		return nil, err
 	}
 	for _, name := range names {
-		if name == "commit.json" {
+		if name == "commit.json" || name == "activation.json" {
 			continue
 		}
 		if !profileIDPattern.MatchString(name) {

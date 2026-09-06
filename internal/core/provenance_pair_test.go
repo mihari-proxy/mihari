@@ -175,6 +175,8 @@ func (s *memoryStore) location() string {
 	}
 	return "/private/data"
 }
+
+func (s *memoryStore) bindingIdentity() string { return "root-1" }
 func (s *memoryStore) open(ctx context.Context, r ProvenanceRole, tx string) (verifiedFile, error) {
 	o, e := s.Inspect(ctx, r, tx)
 	if e != nil {

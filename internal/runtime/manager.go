@@ -171,6 +171,7 @@ type Manager struct {
 	configGeneration          uint64
 	tunLastError              string
 	maintenance               chan struct{}
+	resourceActivation        *resourceActivationOwner
 	installed                 chan struct{}
 	closing                   atomic.Bool
 	mutationDegraded          atomic.Bool
@@ -458,6 +459,9 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		if m.installer == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "core installer is unavailable"}
 		}
+		if err := m.preflightResourceActivation(ctx); err != nil {
+			return nil, err
+		}
 		channel := m.settingsSnapshot().CoreChannel
 		if channel == "" {
 			channel = "stable"
@@ -737,7 +741,7 @@ func (m *Manager) withMaintenance(ctx context.Context, operation func() error) e
 
 func (m *Manager) unlock() {
 	stop := m.stopCoreOnUnlock.Swap(false)
-	m.maintenance <- struct{}{}
+	m.releaseMutation()
 	if stop {
 		if maintenance, ok := m.supervisor.(interface {
 			Maintain(context.Context, func() error) error

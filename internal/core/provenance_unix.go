@@ -37,6 +37,7 @@ func NewProvenanceStore(ctx context.Context, data *platform.TrustedRoot) (Proven
 }
 func (s *unixProvenanceStore) coreStore() storeBackend { return s }
 func (s *unixProvenanceStore) location() string        { return s.path }
+func (s *unixProvenanceStore) bindingIdentity() string { return s.identity }
 func (s *unixProvenanceStore) check(ctx context.Context) error {
 	p, id, owner, mode, e := s.data.Snapshot(ctx)
 	if e != nil {

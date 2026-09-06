@@ -39,6 +39,11 @@ func executeVerified(ctx context.Context, v *VerifiedCore, p CorePurpose, c *Con
 		return nil, e
 	}
 	defer release()
+	return executeVerifiedOwned(ctx, v, p, c, x)
+}
+
+// executeVerifiedOwned requires the caller to retain the store execution gate.
+func executeVerifiedOwned(ctx context.Context, v *VerifiedCore, p CorePurpose, c *ConfigCapability, x VerifiedExecutor) ([]byte, error) {
 	command, e := v.Command(ctx, p, c)
 	if e != nil {
 		return nil, e

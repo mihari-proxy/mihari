@@ -102,13 +102,14 @@ func TestProviderCommit_EveryDurableCrashBoundaryRecovers(t *testing.T) {
 }
 
 type memoryProviderFiles struct {
-	objects     map[string][]byte
-	identities  map[string]string
-	sequence    int
-	mutations   int
-	crashAt     int
-	doneDurable bool
-	boot        string
+	objects             map[string][]byte
+	identities          map[string]string
+	sequence            int
+	mutations           int
+	crashAt             int
+	doneDurable         bool
+	resourceDoneDurable bool
+	boot                string
 }
 
 func (m *memoryProviderFiles) checkpoint() {
@@ -121,6 +122,7 @@ func (m *memoryProviderFiles) checkpoint() {
 func newMemoryProviderFiles() *memoryProviderFiles {
 	return &memoryProviderFiles{objects: map[string][]byte{}, identities: map[string]string{}, boot: "boot-1"}
 }
+func (m *memoryProviderFiles) storeBinding() (string, string) { return "/private/data", "root-1" }
 func (m *memoryProviderFiles) inspect(_ context.Context, path string) (providerObject, error) {
 	b, ok := m.objects[path]
 	if !ok {
@@ -148,6 +150,9 @@ func (m *memoryProviderFiles) write(ctx context.Context, path string, b []byte, 
 	m.identities[path] = fmt.Sprint(m.sequence)
 	if path == providerJournalPath && bytes.Contains(b, []byte(`"phase":"done"`)) {
 		m.doneDurable = true
+	}
+	if path == resourceJournalPath && bytes.Contains(b, []byte(`"done":true`)) {
+		m.resourceDoneDurable = true
 	}
 	m.checkpoint()
 	return nil

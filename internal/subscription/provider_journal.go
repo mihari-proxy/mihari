@@ -23,6 +23,7 @@ type providerObject struct {
 }
 
 type providerFiles interface {
+	storeBinding() (path, identity string)
 	inspect(context.Context, string) (providerObject, error)
 	read(context.Context, string, int64) ([]byte, error)
 	write(context.Context, string, []byte, providerObject) error
@@ -62,6 +63,7 @@ type PreparedProvider struct {
 	marker         providerObject
 	closed         bool
 	geo            GeoResourceKind
+	configuration  bool
 }
 
 func providerDigest(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
@@ -83,6 +85,9 @@ func (p *PreparedProvider) Commit(ctx context.Context, reload func(context.Conte
 	defer release()
 	if p.closed {
 		return dataError("provider candidate closed")
+	}
+	if err := p.store.noPending(ctx); err != nil {
+		return err
 	}
 	if pending, e := fs.inspect(ctx, providerJournalPath); e != nil {
 		return e
@@ -305,6 +310,9 @@ func (s *ProviderStore) prepareBytes(ctx context.Context, spec ProviderSpec, geo
 }
 
 func (p *PreparedProvider) targetPath() (string, error) {
+	if p.configuration {
+		return "runtime/config.yaml", nil
+	}
 	if p.geo != "" {
 		name, err := GeoResourcePath(p.geo)
 		return "runtime/core-home/" + name, err
@@ -352,6 +360,9 @@ func (p *PreparedProvider) Close(ctx context.Context) error {
 	if p.closed {
 		return nil
 	}
+	if err := p.store.noPending(ctx); err != nil {
+		return err
+	}
 	journal, err := p.store.files.inspect(ctx, providerJournalPath)
 	if err != nil {
 		return err
@@ -386,6 +397,9 @@ func (s *ProviderStore) Recover(ctx context.Context) error {
 		return err
 	}
 	defer release()
+	if err = s.recoverResources(ctx); err != nil {
+		return err
+	}
 	if err = s.recover(ctx); err != nil {
 		return err
 	}
@@ -655,6 +669,18 @@ func uniqueProviderJSON(d *json.Decoder, depth int) error {
 func providerJSONShape(b []byte, t reflect.Type) error {
 	if bytes.Equal(bytes.TrimSpace(b), []byte("null")) {
 		return os.ErrInvalid
+	}
+	if t.Kind() == reflect.Slice {
+		var items []json.RawMessage
+		if err := json.Unmarshal(b, &items); err != nil {
+			return err
+		}
+		for _, item := range items {
+			if err := providerJSONShape(item, t.Elem()); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	if t.Kind() != reflect.Struct {
 		return nil
