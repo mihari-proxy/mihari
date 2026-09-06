@@ -223,15 +223,16 @@ func (t *TrustedExecution) RunCommand(ctx context.Context) (CoreCommand, func() 
 // them. Missing configuration uses a policy-generated bootstrap. Provider/Geo
 // resources are supplied by the resource preparation owner before this call.
 func (t *TrustedExecution) InitializeConfig(ctx context.Context, settings config.Settings, input subscription.PolicyInput) error {
-	b, e := t.files.read(ctx)
-	missing := errors.Is(e, os.ErrNotExist)
-	if e != nil && !missing {
-		return e
+	if len(input.YAML) == 0 {
+		b, e := t.files.read(ctx)
+		if e != nil && !errors.Is(e, os.ErrNotExist) {
+			return e
+		}
+		if errors.Is(e, os.ErrNotExist) {
+			b = []byte("proxies: []\nproxy-groups: []\nrules:\n  - MATCH,DIRECT\n")
+		}
+		input.YAML = b
 	}
-	if missing {
-		b = []byte("proxies: []\nproxy-groups: []\nrules:\n  - MATCH,DIRECT\n")
-	}
-	input.YAML = b
 	input.Settings = settings
 	output, e := subscription.GenerateWithPolicy(ctx, input, subscription.NewRootConfigPolicy())
 	if e != nil {

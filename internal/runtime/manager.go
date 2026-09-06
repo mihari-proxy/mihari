@@ -76,6 +76,7 @@ type GeoIPService interface {
 type Options struct {
 	TrustedCore     *core.TrustedExecution
 	RootConfigInput func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error)
+	Resources       *subscription.ResourcePreparer
 
 	Store          *state.Store
 	Coordinator    *state.Coordinator
@@ -134,8 +135,9 @@ type WebGateway interface {
 }
 
 type Manager struct {
-	trustedCore     *core.TrustedExecution
-	rootConfigInput func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error)
+	trustedCore       *core.TrustedExecution
+	rootConfigInput   func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error)
+	providerResources providerResourceRuntime
 
 	store                     *state.Store
 	coordinator               *state.Coordinator
@@ -227,8 +229,9 @@ func New(options Options) *Manager {
 		settings = config.Defaults()
 	}
 	manager := &Manager{
-		trustedCore:     options.TrustedCore,
-		rootConfigInput: options.RootConfigInput,
+		trustedCore:       options.TrustedCore,
+		rootConfigInput:   options.RootConfigInput,
+		providerResources: newProviderResourceRuntime(options.Resources, options.TrustedCore),
 
 		store:             store,
 		coordinator:       coordinator,
@@ -428,23 +431,7 @@ func (m *Manager) RuleProviders(ctx context.Context) (mihomo.RuleProviders, erro
 }
 
 func (m *Manager) UpdateRuleProvider(ctx context.Context, operation Operation, name string) error {
-	_, err := m.doOperation(ctx, "rule-provider:"+operation.ID, func() (any, error) {
-		if m.controller == nil {
-			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
-		}
-		if err := m.lockMutation(ctx); err != nil {
-			return nil, err
-		}
-		defer m.unlock()
-		_, err := m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
-			if updateErr := m.controller.UpdateRuleProvider(ctx, name); updateErr != nil {
-				return snapshot, updateErr
-			}
-			return snapshot, nil
-		})
-		return struct{}{}, err
-	})
-	return err
+	return m.RefreshProvider(ctx, operation, name)
 }
 
 func (m *Manager) Stream(ctx context.Context, kind mihomo.StreamKind, receive func(json.RawMessage) error) error {

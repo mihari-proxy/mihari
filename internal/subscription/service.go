@@ -46,8 +46,9 @@ type PreparedRefresh struct {
 	document       Document
 }
 
-func (p PreparedRefresh) ProfileID() string  { return p.profileID }
-func (p PreparedRefresh) Document() Document { return p.document }
+func (p PreparedRefresh) ProfileID() string        { return p.profileID }
+func (p PreparedRefresh) Document() Document       { return p.document }
+func (p PreparedRefresh) AdvancesGeneration() bool { return !p.result.NotModified }
 
 type Receipt struct {
 	Before      Catalog

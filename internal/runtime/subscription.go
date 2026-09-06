@@ -102,6 +102,9 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 }
 
 func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, id string) (subscription.PublicProfile, error) {
+	if m.providerResources != nil {
+		return m.refreshSubscriptionManaged(ctx, operation, id)
+	}
 	result, err := m.doOperation(ctx, "sub-refresh:"+operation.ID, func() (any, error) {
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
@@ -149,6 +152,9 @@ func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, 
 }
 
 func (m *Manager) UseSubscription(ctx context.Context, operation Operation, id string) (subscription.PublicProfile, error) {
+	if m.providerResources != nil {
+		return m.useSubscriptionManaged(ctx, operation, id)
+	}
 	result, err := m.doOperation(ctx, "sub-use:"+operation.ID, func() (any, error) {
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()

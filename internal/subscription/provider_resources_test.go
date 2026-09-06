@@ -2,8 +2,11 @@ package subscription
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 type providerDownloadFunc func(context.Context, ProviderSpec, string) ([]byte, error)
@@ -118,5 +121,186 @@ func TestResourcePreparation_RejectsUnknownGeoTrustEvenIfStructurallyValid(t *te
 	p := NewResourcePreparer(s, nil, geoDownloadFunc(func(context.Context, GeoResourceKind, string) ([]byte, error) { return geoSiteFixture(), nil }))
 	if _, err := p.Prepare(context.Background(), input, ProxyModeDirect, nil); err == nil {
 		t.Fatal("unapproved valid DAT accepted")
+	}
+}
+
+func TestResourcePreparation_OfflineUsesOnlyCurrentAuthorizedFiles(t *testing.T) {
+	ctx := context.Background()
+	input := rootPolicyInput()
+	input.YAML = []byte("rule-providers:\n  domains: {type: http, behavior: domain, url: 'https://example.test/rules'}\nrules: ['RULE-SET,domains,DIRECT']\n")
+	policy := NewRootConfigPolicy()
+	requirements, err := policy.Inspect(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := newMemoryProviderFiles()
+	store := &ProviderStore{files: fs}
+	target, err := providerTarget(requirements.Providers[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = fs.write(ctx, target, []byte("payload: ['example.test']\n"), providerObject{}); err != nil {
+		t.Fatal(err)
+	}
+	graph, err := store.SnapshotResources(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparer := NewResourcePreparer(store, providerDownloadFunc(func(context.Context, ProviderSpec, string) ([]byte, error) {
+		t.Fatal("offline preparation attempted a download")
+		return nil, nil
+	}), nil)
+	hydrated, err := preparer.OfflineInput(ctx, input, graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hydrated.Resources) != 1 {
+		t.Fatalf("offline resources=%d", len(hydrated.Resources))
+	}
+	prepared, err := preparer.PrepareOffline(ctx, input, graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close(ctx) }()
+	if gotID, gotGeneration := prepared.Identity(); gotID != input.SubscriptionID || gotGeneration != input.Generation {
+		t.Fatalf("identity=(%q,%d)", gotID, gotGeneration)
+	}
+	if err = prepared.Recheck(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResourcePreparation_OfflineRejectsChangedAuthorizedGeoObject(t *testing.T) {
+	ctx := context.Background()
+	input := rootPolicyInput()
+	input.YAML = []byte("rules: ['GEOSITE,CN,DIRECT']\n")
+	fs := newMemoryProviderFiles()
+	store := &ProviderStore{files: fs}
+	name, err := GeoResourcePath(GeoSiteDAT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "runtime/core-home/" + name
+	if err = fs.write(ctx, path, geoSiteFixture(), providerObject{}); err != nil {
+		t.Fatal(err)
+	}
+	source, _, err := store.captureResource(ctx, path, maxGeoResourceBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := GeoResourceID(GeoSiteDAT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := &ResourceGraph{store: store, sources: map[string]resourceSource{id: source}}
+	old, _ := fs.inspect(ctx, path)
+	if err = fs.write(ctx, path, geoSiteFixture(), old); err != nil {
+		t.Fatal(err)
+	}
+	preparer := NewResourcePreparer(store, nil, nil)
+	preparer.catalog = func(GeoResourceKind) (geoArtifact, error) {
+		return geoArtifact{hash: providerDigest(geoSiteFixture()), size: int64(len(geoSiteFixture()))}, nil
+	}
+	if _, err = preparer.OfflineInput(ctx, input, graph); err == nil {
+		t.Fatal("changed Geo object accepted by sealed resource graph")
+	}
+}
+
+func TestResourcePreparation_RefreshesOneProviderAndRevalidatesWholeConfig(t *testing.T) {
+	ctx := context.Background()
+	input := rootPolicyInput()
+	input.YAML = []byte("rule-providers:\n  selected: {type: http, behavior: domain, url: 'https://example.test/selected'}\n  retained: {type: http, behavior: domain, url: 'https://example.test/retained'}\nrules: ['RULE-SET,selected,DIRECT', 'RULE-SET,retained,DIRECT']\n")
+	requirements, err := NewRootConfigPolicy().Inspect(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := newMemoryProviderFiles()
+	store := &ProviderStore{files: fs}
+	for _, spec := range requirements.Providers {
+		target, targetErr := providerTarget(spec)
+		if targetErr != nil {
+			t.Fatal(targetErr)
+		}
+		if err = fs.write(ctx, target, []byte("payload: ['old.example']\n"), providerObject{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	graph, err := store.SnapshotResources(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var downloaded []string
+	preparer := NewResourcePreparer(store, providerDownloadFunc(func(_ context.Context, spec ProviderSpec, _ string) ([]byte, error) {
+		downloaded = append(downloaded, spec.Name)
+		return []byte("payload: ['new.example']\n"), nil
+	}), nil)
+	prepared, err := preparer.PrepareProviderRefresh(ctx, input, ProxyModeDirect, graph, "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close(ctx) }()
+	if len(downloaded) != 1 || downloaded[0] != "selected" {
+		t.Fatalf("downloaded=%v", downloaded)
+	}
+	if err = prepared.Recheck(ctx); err != nil {
+		t.Fatal(err)
+	}
+	reloads := 0
+	if err = prepared.Commit(ctx, func(context.Context) error { reloads++; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if reloads != 1 {
+		t.Fatalf("reloads=%d", reloads)
+	}
+}
+
+func TestResourcePreparation_ProviderRefreshRejectsUnknownNameAndChangedRetainedFile(t *testing.T) {
+	ctx := context.Background()
+	input := rootPolicyInput()
+	input.YAML = []byte("rule-providers:\n  selected: {type: http, behavior: domain, url: 'https://example.test/selected'}\n  retained: {type: http, behavior: domain, url: 'https://example.test/retained'}\nrules: ['RULE-SET,selected,DIRECT', 'RULE-SET,retained,DIRECT']\n")
+	requirements, err := NewRootConfigPolicy().Inspect(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := newMemoryProviderFiles()
+	store := &ProviderStore{files: fs}
+	for _, spec := range requirements.Providers {
+		target, _ := providerTarget(spec)
+		if err = fs.write(ctx, target, []byte("payload: ['old.example']\n"), providerObject{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	graph, err := store.SnapshotResources(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparer := NewResourcePreparer(store, providerDownloadFunc(func(context.Context, ProviderSpec, string) ([]byte, error) {
+		return []byte("payload: ['new.example']\n"), nil
+	}), nil)
+	if _, err = preparer.PrepareProviderRefresh(ctx, input, ProxyModeDirect, graph, "missing"); err == nil {
+		t.Fatal("unknown provider accepted")
+	} else {
+		var api protocol.APIError
+		if !errors.As(err, &api) || api.Code != protocol.CodeInvalidArgument {
+			t.Fatalf("unknown provider error=%v", err)
+		}
+	}
+	prepared, err := preparer.PrepareProviderRefresh(ctx, input, ProxyModeDirect, graph, "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close(ctx) }()
+	for _, spec := range requirements.Providers {
+		if spec.Name != "retained" {
+			continue
+		}
+		target, _ := providerTarget(spec)
+		old, _ := fs.inspect(ctx, target)
+		if err = fs.write(ctx, target, []byte("payload: ['old.example']\n"), old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = prepared.Recheck(ctx); err == nil {
+		t.Fatal("changed retained provider file accepted")
 	}
 }

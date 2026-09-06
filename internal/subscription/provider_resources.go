@@ -3,6 +3,8 @@ package subscription
 import (
 	"context"
 	"errors"
+
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 // ResourcePreparer closes the provider and Geo graph before producing config.
@@ -22,6 +24,22 @@ type GeoDownloader interface {
 // NewResourcePreparer creates the managed resource boundary. Callers retain store lifetime.
 func NewResourcePreparer(store *ProviderStore, providers ProviderDownloader, geo GeoDownloader) *ResourcePreparer {
 	return &ResourcePreparer{store: store, providers: providers, geo: geo, catalog: trustedGeoArtifact}
+}
+
+// Recover converges provider and whole-resource journals before any core IO.
+func (p *ResourcePreparer) Recover(ctx context.Context) error {
+	if p == nil || p.store == nil {
+		return dataError("resource preparer unavailable")
+	}
+	return p.store.Recover(ctx)
+}
+
+// SnapshotResources seals the daemon-owned current cached graph.
+func (p *ResourcePreparer) SnapshotResources(ctx context.Context, input PolicyInput) (*ResourceGraph, error) {
+	if p == nil || p.store == nil {
+		return nil, dataError("resource preparer unavailable")
+	}
+	return p.store.SnapshotResources(ctx, input)
 }
 
 // ResourceGraph is an immutable authorization snapshot of the current private resource graph.
@@ -44,6 +62,272 @@ type PreparedResources struct {
 	geo           []*PreparedProvider
 	configuration *PreparedProvider
 	sources       map[string]resourceSource
+}
+
+// PreparedProviderRefresh owns one unpublished provider candidate after the
+// complete current configuration and every retained resource were validated.
+type PreparedProviderRefresh struct {
+	candidate *PreparedProvider
+}
+
+// PrepareOffline reconstructs a complete resource candidate from the sealed
+// current cache without performing network IO.
+func (p *ResourcePreparer) OfflineInput(ctx context.Context, input PolicyInput, graph *ResourceGraph) (PolicyInput, error) {
+	if p == nil || p.store == nil || graph == nil || graph.store != p.store {
+		return PolicyInput{}, dataError("authorized offline resource graph unavailable")
+	}
+	if len(input.Resources) != 0 {
+		return PolicyInput{}, dataError("resource bytes require managed preparation")
+	}
+	input.YAML = append([]byte(nil), input.YAML...)
+	input.Settings = input.Settings.Clone()
+	input.Resources = make(map[string][]byte)
+	requirements, err := NewRootConfigPolicy().Inspect(ctx, input)
+	if err != nil {
+		return PolicyInput{}, err
+	}
+	var budget policyProviderBudget
+	for _, spec := range requirements.Providers {
+		key, _, b, err := p.currentProvider(ctx, graph, spec)
+		if err != nil {
+			return PolicyInput{}, err
+		}
+		if err = budget.source(int64(len(b))); err != nil {
+			return PolicyInput{}, err
+		}
+		input.Resources[key] = b
+	}
+	if err = p.currentGeo(ctx, graph, input.Resources, make(map[string]resourceSource), requirements.Geo); err != nil {
+		return PolicyInput{}, err
+	}
+	if _, err = NewRootConfigPolicy().Build(ctx, input); err != nil {
+		return PolicyInput{}, err
+	}
+	return input, nil
+}
+
+func (p *ResourcePreparer) PrepareOffline(ctx context.Context, input PolicyInput, graph *ResourceGraph) (*PreparedResources, error) {
+	if p == nil || p.store == nil || graph == nil || graph.store != p.store {
+		return nil, dataError("authorized offline resource graph unavailable")
+	}
+	if len(input.Resources) != 0 {
+		return nil, dataError("resource bytes require managed preparation")
+	}
+	hydrated, err := p.OfflineInput(ctx, input, graph)
+	if err != nil {
+		return nil, err
+	}
+	input = hydrated
+	sources := make(map[string]resourceSource)
+	requirements, err := NewRootConfigPolicy().Inspect(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	for _, spec := range requirements.Providers {
+		_, source, _, err := p.currentProvider(ctx, graph, spec)
+		if err != nil {
+			return nil, err
+		}
+		sources[source.path] = source
+	}
+	if err = p.currentGeo(ctx, graph, make(map[string][]byte), sources, requirements.Geo); err != nil {
+		return nil, err
+	}
+	return p.stageComplete(ctx, input, sources)
+}
+
+// PrepareProviderRefresh refreshes one registered rule provider while using
+// the sealed graph for every retained provider and Geo resource.
+func (p *ResourcePreparer) PrepareProviderRefresh(ctx context.Context, input PolicyInput, mode string, graph *ResourceGraph, name string) (*PreparedProviderRefresh, error) {
+	return p.PrepareProvider(ctx, input, mode, graph, "rule", name)
+}
+
+// PrepareProvider prepares one proxy or rule provider while validating the
+// complete retained resource graph.
+func (p *ResourcePreparer) PrepareProvider(ctx context.Context, input PolicyInput, mode string, graph *ResourceGraph, kind, name string) (*PreparedProviderRefresh, error) {
+	if p == nil || p.store == nil || graph == nil || graph.store != p.store {
+		return nil, dataError("authorized provider resource graph unavailable")
+	}
+	if len(input.Resources) != 0 {
+		return nil, dataError("resource bytes require managed preparation")
+	}
+	input.YAML = append([]byte(nil), input.YAML...)
+	input.Settings = input.Settings.Clone()
+	input.Resources = make(map[string][]byte)
+	requirements, err := NewRootConfigPolicy().Inspect(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	selected := -1
+	for i := range requirements.Providers {
+		if requirements.Providers[i].Kind == kind && requirements.Providers[i].Name == name {
+			if selected >= 0 {
+				return nil, dataError("duplicate rule provider name")
+			}
+			selected = i
+		}
+	}
+	if selected < 0 {
+		return nil, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "provider is not managed"}
+	}
+	sources := make(map[string]resourceSource)
+	var budget policyProviderBudget
+	for i, spec := range requirements.Providers {
+		key := spec.ResourceID
+		var b []byte
+		if i == selected && spec.URL != "" {
+			if p.providers == nil {
+				return nil, dataError("provider downloader unavailable")
+			}
+			b, err = p.providers.Download(ctx, spec, mode)
+		} else {
+			var source resourceSource
+			key, source, b, err = p.currentProvider(ctx, graph, spec)
+			if err == nil {
+				sources[source.path] = source
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+		if err = budget.source(int64(len(b))); err != nil {
+			return nil, err
+		}
+		input.Resources[key] = b
+	}
+	if err = p.currentGeo(ctx, graph, input.Resources, sources, requirements.Geo); err != nil {
+		return nil, err
+	}
+	output, err := NewRootConfigPolicy().Build(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	var selectedSpec *ProviderSpec
+	for i := range output.Providers {
+		if output.Providers[i].Kind == kind && output.Providers[i].Name == name {
+			selectedSpec = &output.Providers[i]
+			break
+		}
+	}
+	if selectedSpec == nil {
+		return nil, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "provider is not managed"}
+	}
+	candidate, err := p.store.Prepare(ctx, *selectedSpec)
+	if err != nil {
+		return nil, err
+	}
+	candidate.required = sources
+	return &PreparedProviderRefresh{candidate: candidate}, nil
+}
+
+func (p *PreparedProviderRefresh) Recheck(ctx context.Context) error {
+	if p == nil || p.candidate == nil {
+		return dataError("provider refresh preparation is unavailable")
+	}
+	return p.candidate.recheck(ctx)
+}
+
+func (p *PreparedProviderRefresh) Commit(ctx context.Context, reload func(context.Context) error) error {
+	if p == nil || p.candidate == nil {
+		return dataError("provider refresh preparation is unavailable")
+	}
+	return p.candidate.Commit(ctx, reload)
+}
+
+func (p *PreparedProviderRefresh) Close(ctx context.Context) error {
+	if p == nil || p.candidate == nil {
+		return nil
+	}
+	return p.candidate.Close(ctx)
+}
+
+func (p *ResourcePreparer) currentProvider(ctx context.Context, graph *ResourceGraph, spec ProviderSpec) (string, resourceSource, []byte, error) {
+	authorized, ok := graph.sources[spec.ResourceID]
+	if !ok {
+		return "", resourceSource{}, nil, dataError("required provider cache is unavailable")
+	}
+	source, b, err := p.store.captureResource(ctx, authorized.path, maxDocumentBytes)
+	if err != nil {
+		return "", resourceSource{}, nil, err
+	}
+	if source != authorized {
+		return "", resourceSource{}, nil, providerConflict()
+	}
+	key := spec.ResourceID
+	if spec.SourceResourceID != "" {
+		key = spec.SourceResourceID
+	}
+	return key, source, b, nil
+}
+
+func (p *ResourcePreparer) currentGeo(ctx context.Context, graph *ResourceGraph, resources map[string][]byte, sources map[string]resourceSource, kinds []GeoResourceKind) error {
+	var budget policyGeoBudget
+	for _, kind := range kinds {
+		name, err := GeoResourcePath(kind)
+		if err != nil {
+			return err
+		}
+		path := "runtime/core-home/" + name
+		id, err := GeoResourceID(kind)
+		if err != nil {
+			return err
+		}
+		authorized, ok := graph.sources[id]
+		if !ok {
+			return dataError("required Geo resource cache is unavailable")
+		}
+		source, b, err := p.store.captureResource(ctx, path, maxGeoResourceBytes)
+		if err != nil {
+			return err
+		}
+		if source != authorized {
+			return providerConflict()
+		}
+		artifact, err := p.catalog(kind)
+		if err != nil || !artifact.matches(b) {
+			return dataError("untrusted Geo resource")
+		}
+		if err = budget.add(int64(len(b))); err != nil {
+			return err
+		}
+		resources[id] = b
+		sources[id] = source
+	}
+	return nil
+}
+
+func (p *ResourcePreparer) stageComplete(ctx context.Context, input PolicyInput, sources map[string]resourceSource) (result *PreparedResources, err error) {
+	output, err := NewRootConfigPolicy().Build(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	result = &PreparedResources{store: p.store, input: input, output: output, sources: sources}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, result.Close(context.WithoutCancel(ctx)))
+			result = nil
+		}
+	}()
+	for _, spec := range output.Providers {
+		staged, e := p.store.Prepare(ctx, spec)
+		if e != nil {
+			return result, e
+		}
+		result.providers = append(result.providers, staged)
+	}
+	for _, geo := range output.Geo {
+		staged, e := p.store.prepareGeo(ctx, geo)
+		if e != nil {
+			return result, e
+		}
+		result.geo = append(result.geo, staged)
+	}
+	result.configuration, err = p.store.prepareBytes(ctx, ProviderSpec{}, "", "runtime/config.yaml", output.YAML)
+	if err != nil {
+		return result, err
+	}
+	result.configuration.configuration = true
+	return result, nil
 }
 
 // SnapshotResources validates current daemon-owned cached definitions and their
@@ -86,7 +370,7 @@ func (s *ProviderStore) SnapshotResources(ctx context.Context, current PolicyInp
 		if err != nil {
 			return nil, err
 		}
-		_, b, err := s.captureResource(ctx, "runtime/core-home/"+name, maxGeoResourceBytes)
+		source, b, err := s.captureResource(ctx, "runtime/core-home/"+name, maxGeoResourceBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -99,6 +383,7 @@ func (s *ProviderStore) SnapshotResources(ctx context.Context, current PolicyInp
 			return nil, err
 		}
 		current.Resources[id] = b
+		graph.sources[id] = source
 	}
 	if _, err = NewRootConfigPolicy().Build(ctx, current); err != nil {
 		return nil, err

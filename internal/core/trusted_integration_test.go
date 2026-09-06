@@ -24,6 +24,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/supervisor"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -452,8 +453,9 @@ func TestRootAssembly_RecoversBeforeAnyExecutor(t *testing.T) {
 		t.Fatal(e)
 	}
 	var purposes []string
+	resourcesRecovered := false
 	f.Execute = func(_ context.Context, c core.CoreCommand) ([]byte, error) {
-		if f.Pending() {
+		if f.Pending() || !resourcesRecovered {
 			return nil, errors.New("executor ran before WAL recovery")
 		}
 		purposes = append(purposes, c.Args[0])
@@ -477,7 +479,13 @@ func TestRootAssembly_RecoversBeforeAnyExecutor(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	assembly, e := app.BuildRuntimeWithOptions(paths, settings, "test", nil, nil, app.RuntimeBuildOptions{TrustedCore: f.Trusted, RootConfigInput: func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error) {
+	assembly, e := app.BuildRuntimeWithOptions(paths, settings, "test", nil, nil, app.RuntimeBuildOptions{TrustedCore: f.Trusted, Resources: startupResourcesProbe{recover: func() error {
+		if !f.Pending() {
+			t.Fatal("core recovery ran before provider recovery")
+		}
+		resourcesRecovered = true
+		return nil
+	}}, RootConfigInput: func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error) {
 		return core.FixturePolicyInput(), nil
 	}})
 	if e != nil {
@@ -486,4 +494,73 @@ func TestRootAssembly_RecoversBeforeAnyExecutor(t *testing.T) {
 	if f.Pending() || len(purposes) != 2 || purposes[0] != "-t" || purposes[1] != "-v" || assembly.Store.Load().Core.Version != "v1.19.30" {
 		t.Fatalf("root assembly did not recover/validate/probe in order: %v", purposes)
 	}
+}
+
+func TestRootAssembly_ActiveSubscriptionFailsClosedBeforeCoreValidationWhenOfflineResourcesAreMissing(t *testing.T) {
+	root := t.TempDir()
+	f := core.NewTestTrustedFixture(t, root)
+	paths := platform.NewPaths(root)
+	paths.CoreBinary = filepath.Join(paths.Bin, "mihomo")
+	id := "0123456789abcdef0123456789abcdef"
+	if err := paths.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	if err := subscription.Save(paths.SubscriptionCatalog, subscription.Catalog{
+		Schema: subscription.CatalogSchema, GlobalInterval: "12h", ActiveID: id,
+		Profiles: []subscription.Profile{{ID: id, Name: "active", URL: "https://example.test/sub", Enabled: true, Generation: 7}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(paths.SubscriptionCache, id+".yaml"), []byte("proxies: []\nrules: ['MATCH,DIRECT']\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var executions atomic.Int32
+	f.Execute = func(context.Context, core.CoreCommand) ([]byte, error) {
+		executions.Add(1)
+		return []byte("Mihomo v1.19.30"), nil
+	}
+	missing := errors.New("required provider cache is unavailable")
+	resources := startupResourcesProbe{
+		recover: func() error { return nil },
+		snapshot: func(input subscription.PolicyInput) (*subscription.ResourceGraph, error) {
+			if input.SubscriptionID != id || input.Generation != 7 {
+				t.Fatalf("startup identity=(%q,%d)", input.SubscriptionID, input.Generation)
+			}
+			return &subscription.ResourceGraph{}, nil
+		},
+		offline: func(subscription.PolicyInput, *subscription.ResourceGraph) (subscription.PolicyInput, error) {
+			return subscription.PolicyInput{}, missing
+		},
+	}
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("a", 64)
+	_, err := app.BuildRuntimeWithOptions(paths, settings, "test", nil, nil, app.RuntimeBuildOptions{
+		TrustedCore: f.Trusted, Resources: resources,
+		RootConfigInput: func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error) {
+			return core.FixturePolicyInput(), nil
+		},
+	})
+	if !errors.Is(err, missing) || executions.Load() != 0 {
+		t.Fatalf("err=%v executions=%d", err, executions.Load())
+	}
+}
+
+type startupResourcesProbe struct {
+	recover  func() error
+	snapshot func(subscription.PolicyInput) (*subscription.ResourceGraph, error)
+	offline  func(subscription.PolicyInput, *subscription.ResourceGraph) (subscription.PolicyInput, error)
+}
+
+func (p startupResourcesProbe) Recover(context.Context) error { return p.recover() }
+func (p startupResourcesProbe) SnapshotResources(_ context.Context, input subscription.PolicyInput) (*subscription.ResourceGraph, error) {
+	if p.snapshot != nil {
+		return p.snapshot(input)
+	}
+	return nil, errors.New("unexpected resource snapshot")
+}
+func (p startupResourcesProbe) OfflineInput(_ context.Context, input subscription.PolicyInput, graph *subscription.ResourceGraph) (subscription.PolicyInput, error) {
+	if p.offline != nil {
+		return p.offline(input, graph)
+	}
+	return subscription.PolicyInput{}, errors.New("unexpected offline input")
 }

@@ -64,6 +64,7 @@ type PreparedProvider struct {
 	closed         bool
 	geo            GeoResourceKind
 	configuration  bool
+	required       map[string]resourceSource
 }
 
 func providerDigest(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
@@ -115,6 +116,9 @@ func (p *PreparedProvider) Commit(ctx context.Context, reload func(context.Conte
 	}
 	if marker != p.marker {
 		return providerConflict()
+	}
+	if err = p.checkRequiredLocked(ctx); err != nil {
+		return err
 	}
 	backupPath := target + ".old-" + p.transaction
 	failPreparation := func(cause error) error {
@@ -341,6 +345,19 @@ func (p *PreparedProvider) recheck(ctx context.Context) error {
 			return err
 		}
 		if got != want {
+			return providerConflict()
+		}
+	}
+	return p.checkRequiredLocked(ctx)
+}
+
+func (p *PreparedProvider) checkRequiredLocked(ctx context.Context) error {
+	for path, source := range p.required {
+		got, err := p.store.files.inspect(ctx, path)
+		if err != nil {
+			return err
+		}
+		if got != source.object {
 			return providerConflict()
 		}
 	}

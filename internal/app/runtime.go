@@ -27,6 +27,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/sysproxy"
 	"github.com/mihari-proxy/mihari/internal/tundetect"
 	"github.com/mihari-proxy/mihari/internal/web"
+	"go.yaml.in/yaml/v3"
 )
 
 type RuntimeAssembly struct {
@@ -41,6 +42,7 @@ type RuntimeBuildOptions struct {
 	// Default dispatch remains legacy until the final system-mode activation.
 	TrustedCore     *core.TrustedExecution
 	RootConfigInput func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error)
+	Resources       StartupResources
 
 	InitialSetupRequired bool
 	SettingsPath         string
@@ -51,6 +53,14 @@ type RuntimeBuildOptions struct {
 	MihomoStderr         io.Writer
 	SaveOnboardingState  func(string, onboarding.State) (config.CommitResult, error)
 	OnBackgroundError    func(component string, err error)
+}
+
+// StartupResources recovers provider/resource WALs and reconstructs the
+// authoritative offline resource graph before mihomo validation or start.
+type StartupResources interface {
+	Recover(context.Context) error
+	SnapshotResources(context.Context, subscription.PolicyInput) (*subscription.ResourceGraph, error)
+	OfflineInput(context.Context, subscription.PolicyInput, *subscription.ResourceGraph) (subscription.PolicyInput, error)
 }
 
 func BuildRuntime(paths platform.Paths, settings config.Settings, daemonVersion string, stdout, stderr io.Writer) (*RuntimeAssembly, error) {
@@ -72,19 +82,32 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	if err := paths.EnsureDirs(); err != nil {
 		return nil, err
 	}
+	subscriptions, err := subscription.Open(subscription.ServiceOptions{
+		CatalogPath: paths.SubscriptionCatalog,
+		CacheDir:    paths.SubscriptionCache,
+		ProxyAddr:   settings.MixedAddr,
+	})
+	if err != nil {
+		return nil, err
+	}
 	installer := core.Installer{}
 	if options.TrustedCore != nil {
 		if options.RootConfigInput == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "root configuration context unavailable"}
 		}
+		if options.Resources != nil {
+			if err := options.Resources.Recover(context.Background()); err != nil {
+				return nil, err
+			}
+		}
 		if err := core.RecoverProvenance(context.Background(), options.TrustedCore.Provenance()); err != nil {
 			return nil, err
 		}
-		if _, err := options.TrustedCore.InstalledAvailable(context.Background()); err != nil {
+		input, err := startupPolicyInput(context.Background(), options, subscriptions, settings)
+		if err != nil {
 			return nil, err
 		}
-		input, err := options.RootConfigInput(context.Background(), nil, settings)
-		if err != nil {
+		if _, err := options.TrustedCore.InstalledAvailable(context.Background()); err != nil {
 			return nil, err
 		}
 		if err = options.TrustedCore.InitializeConfig(context.Background(), settings, input); err != nil {
@@ -112,14 +135,6 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	}
 	coordinator := state.NewCoordinator(store)
 	controller := mihomo.NewClient("http://"+settings.ControllerAddr, settings.ControllerSecret, nil)
-	subscriptions, err := subscription.Open(subscription.ServiceOptions{
-		CatalogPath: paths.SubscriptionCatalog,
-		CacheDir:    paths.SubscriptionCache,
-		ProxyAddr:   settings.MixedAddr,
-	})
-	if err != nil {
-		return nil, err
-	}
 	// A persisted active subscription already had its generated config installed
 	// into the runtime config file; without this the status API would report
 	// "Not applied" after every daemon restart until the next subscription op.
@@ -225,6 +240,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		Installer:       installer,
 		TrustedCore:     options.TrustedCore,
 		RootConfigInput: options.RootConfigInput,
+		Resources:       concreteResourcePreparer(options.Resources),
 		InstallRequest: core.InstallRequest{
 			BinaryPath: paths.CoreBinary,
 			DataDir:    paths.Root,
@@ -261,7 +277,11 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		},
 		RunScheduler: func(ctx context.Context) error {
 			var schedulers sync.WaitGroup
-			schedulers.Add(2)
+			workers := 2
+			if concreteResourcePreparer(options.Resources) != nil {
+				workers++
+			}
+			schedulers.Add(workers)
 			go func() {
 				defer schedulers.Done()
 				scheduler := subscription.NewScheduler(subscription.SchedulerOptions{
@@ -288,6 +308,12 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 				}
 				_ = scheduler.Run(ctx)
 			}()
+			if concreteResourcePreparer(options.Resources) != nil {
+				go func() {
+					defer schedulers.Done()
+					_ = manager.RunProviderScheduler(ctx)
+				}()
+			}
 			<-ctx.Done()
 			schedulers.Wait()
 			return nil
@@ -303,6 +329,54 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	})
 	webGateway.Mutator = webMutator{manager: manager}
 	return &RuntimeAssembly{Manager: manager, Store: store, Web: webGateway, mihomoStarter: mihomoStarter}, nil
+}
+
+func concreteResourcePreparer(resources StartupResources) *subscription.ResourcePreparer {
+	preparer, _ := resources.(*subscription.ResourcePreparer)
+	return preparer
+}
+
+func startupPolicyInput(ctx context.Context, options RuntimeBuildOptions, subscriptions *subscription.Service, settings config.Settings) (subscription.PolicyInput, error) {
+	catalog := subscriptions.Snapshot()
+	if catalog.ActiveID == "" {
+		input, err := options.RootConfigInput(ctx, nil, settings)
+		if err != nil {
+			return subscription.PolicyInput{}, err
+		}
+		input.YAML = []byte("proxies: []\nproxy-groups: []\nrules:\n  - MATCH,DIRECT\n")
+		input.Settings = settings
+		input.Resources = nil
+		return input, nil
+	}
+	index := catalog.Index(catalog.ActiveID)
+	if index < 0 || catalog.Profiles[index].Generation == 0 {
+		return subscription.PolicyInput{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "active subscription cache is unavailable"}
+	}
+	profile := catalog.Profiles[index]
+	if options.Resources == nil {
+		return subscription.PolicyInput{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "managed active resources are unavailable"}
+	}
+	_, document, err := subscriptions.ReadCache(profile.ID)
+	if err != nil {
+		return subscription.PolicyInput{}, err
+	}
+	input, err := options.RootConfigInput(ctx, document, settings)
+	if err != nil {
+		return subscription.PolicyInput{}, err
+	}
+	input.YAML, err = yaml.Marshal(document)
+	if err != nil {
+		return subscription.PolicyInput{}, err
+	}
+	input.SubscriptionID = profile.ID
+	input.Generation = profile.Generation
+	input.Settings = settings
+	input.Resources = nil
+	graph, err := options.Resources.SnapshotResources(ctx, input)
+	if err != nil {
+		return subscription.PolicyInput{}, err
+	}
+	return options.Resources.OfflineInput(ctx, input, graph)
 }
 
 type webMutationRuntime interface {

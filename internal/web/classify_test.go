@@ -55,7 +55,14 @@ func TestClassifyUpgradeStreams(t *testing.T) {
 }
 
 func TestClassifyDefaultDenyUnknownWrites(t *testing.T) {
-	if got := Classify(http.MethodPost, "/proxies/foo/bar"); got != ActionRejectUnknown {
-		t.Fatalf("got=%v", got)
+	for _, request := range []struct{ method, path string }{
+		{http.MethodPost, "/proxies/foo/bar"},
+		{http.MethodPut, "/providers/proxies/remote"},
+		{http.MethodPut, "/providers/rules/remote"},
+		{http.MethodPost, "/configs/geo"},
+	} {
+		if got := Classify(request.method, request.path); got != ActionRejectUnknown {
+			t.Fatalf("Classify(%s %s)=%v", request.method, request.path, got)
+		}
 	}
 }

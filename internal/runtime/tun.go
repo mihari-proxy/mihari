@@ -50,6 +50,9 @@ func (m *Manager) DisableTun(ctx context.Context, op Operation) (protocol.TunSta
 }
 
 func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, force bool) (protocol.TunStatus, error) {
+	if m.providerResources != nil {
+		return m.mutateTunManaged(ctx, op, enable, force)
+	}
 	if err := m.lockMutation(ctx); err != nil {
 		return protocol.TunStatus{}, err
 	}
