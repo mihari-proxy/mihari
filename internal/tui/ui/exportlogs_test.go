@@ -473,3 +473,90 @@ func TestExportLogsModel_CopyShowsSuccessBelowHelp(t *testing.T) {
 		t.Fatal("reopened dialog retained copy feedback")
 	}
 }
+
+func TestExportLogsModel_DefaultDoesNotDegradeWhenMachineUnavailable(t *testing.T) {
+	called := false
+	m := NewExportLogsModel(ExportLogsOptions{
+		Now:              exportTestNow,
+		DefaultDir:       t.TempDir(),
+		SourcesPrompt:    true,
+		MachineAvailable: func() bool { return false },
+		ExportScoped: func(context.Context, logging.ExportRequest, string) (logging.ExportResult, error) {
+			called = true
+			return logging.ExportResult{}, nil
+		},
+	})
+	m.Open()
+	view := m.View(140, 40)
+	if !strings.Contains(view, ExportSourcesMachineAndUser) {
+		t.Fatalf("default sources must stay full export:\n%s", view)
+	}
+	m.focus = exportFocusSubmit
+	cmd, consumed := m.Update(key(tea.KeyEnter, ""))
+	if !consumed || cmd != nil || called || m.Pending() {
+		t.Fatal("default export silently degraded")
+	}
+	if !strings.Contains(m.View(140, 40), ExportMachineUnavailable) {
+		t.Fatal("missing explicit TUI-only instruction")
+	}
+}
+
+func TestExportLogsModel_ExplicitTUIOnlyWhenOffline(t *testing.T) {
+	var gotScope string
+	requests := make(chan logging.ExportRequest, 1)
+	m := NewExportLogsModel(ExportLogsOptions{
+		Now:              exportTestNow,
+		DefaultDir:       t.TempDir(),
+		SourcesPrompt:    true,
+		MachineAvailable: func() bool { return false },
+		ExportScoped: func(_ context.Context, request logging.ExportRequest, scope string) (logging.ExportResult, error) {
+			gotScope = scope
+			requests <- request
+			return logging.ExportResult{Path: filepath.Join(t.TempDir(), "tui-only.zip")}, nil
+		},
+	})
+	m.Open()
+	m.scope = logging.ExportScopeCurrentUserOnly
+	m.focus = exportFocusSubmit
+	cmd, consumed := m.Update(key(tea.KeyEnter, ""))
+	if !consumed || cmd == nil || !m.Pending() {
+		t.Fatal("explicit TUI-only did not start")
+	}
+	req := <-requests
+	m.Update(cmd())
+	if gotScope != logging.ExportScopeCurrentUserOnly {
+		t.Fatalf("scope=%q", gotScope)
+	}
+	if req.Range.Kind != logging.RangeLast24Hours {
+		t.Fatalf("range=%+v", req.Range)
+	}
+}
+
+func TestExportLogsModel_OnlineFullExportUsesSameWindow(t *testing.T) {
+	now := exportTestNow()
+	var got logging.ExportRequest
+	var scope string
+	m := NewExportLogsModel(ExportLogsOptions{
+		Now:              func() time.Time { return now },
+		DefaultDir:       t.TempDir(),
+		SourcesPrompt:    true,
+		MachineAvailable: func() bool { return true },
+		ExportScoped: func(_ context.Context, request logging.ExportRequest, gotScope string) (logging.ExportResult, error) {
+			got, scope = request, gotScope
+			return logging.ExportResult{Path: filepath.Join(t.TempDir(), "full.zip")}, nil
+		},
+	})
+	m.Open()
+	m.focus = exportFocusSubmit
+	cmd, _ := m.Update(key(tea.KeyEnter, ""))
+	if cmd == nil {
+		t.Fatal("online full export did not start")
+	}
+	m.Update(cmd())
+	if scope != logging.ExportScopeMachineAndCurrentUser {
+		t.Fatalf("scope=%q", scope)
+	}
+	if got.Range.Kind != logging.RangeLast24Hours || !got.Range.To.Equal(now.UTC()) || !got.Range.From.Equal(now.Add(-24*time.Hour).UTC()) {
+		t.Fatalf("window=%+v now=%v", got.Range, now)
+	}
+}

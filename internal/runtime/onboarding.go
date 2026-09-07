@@ -99,6 +99,7 @@ type onboardingResourceChange struct {
 	beforeState   onboarding.State
 	beforeRestart bool
 	applied       bool
+	durable       *onboarding.PreparedUpdate
 }
 
 func (c *onboardingResourceChange) ApplyLocked() error {
@@ -144,7 +145,7 @@ func (m *Manager) updateOnboardingManaged(ctx context.Context, operation Operati
 		if err != nil {
 			return nil, err
 		}
-		plan, generation, err := m.prepareManagedCurrent(ctx, candidate.after)
+		plan, _, err := m.prepareManagedCurrent(ctx, candidate.after)
 		if err != nil {
 			return nil, err
 		}
@@ -153,7 +154,7 @@ func (m *Manager) updateOnboardingManaged(ctx context.Context, operation Operati
 			manager: m, candidate: candidate, update: update,
 			beforeState: m.onboarding.State(), beforeRestart: m.onboardingRestartRequired,
 		}
-		if err = m.activateManagedPlan(ctx, operation, generation, plan, change); err != nil {
+		if err = m.activateManagedPlan(ctx, operation, candidate.generation, plan, change); err != nil {
 			m.markConfigDegraded(ctx, err)
 			return nil, err
 		}

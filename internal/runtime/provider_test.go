@@ -43,7 +43,7 @@ func (f *fakeProviderResources) Prepare(_ context.Context, input subscription.Po
 	f.batchCalls.Add(1)
 	f.batchInput = input
 	if f.batch == nil {
-		return nil, errors.New("unexpected batch preparation")
+		return &fakePreparedResources{id: input.SubscriptionID, gen: input.Generation}, nil
 	}
 	if prepared, ok := f.batch.(*fakePreparedResources); ok && prepared.id == "" {
 		prepared.id, prepared.gen = input.SubscriptionID, input.Generation
@@ -256,6 +256,70 @@ func TestAddSubscription_ManagedResourcesBuildsAndActivatesFirstGeneration(t *te
 	}
 	if profile.Generation != 1 || service.Snapshot().ActiveID != profile.ID || resources.batchInput.SubscriptionID != profile.ID || resources.batchInput.Generation != 1 {
 		t.Fatalf("profile=%#v catalog=%#v input=(%q,%d)", profile, service.Snapshot(), resources.batchInput.SubscriptionID, resources.batchInput.Generation)
+	}
+}
+
+func TestAddSubscription_ManagedInactiveProfileAcquiresGenerationWithoutSwitchingActive(t *testing.T) {
+	m, service, _, first := rootProviderManager(t)
+	tx := &fakeResourceTransaction{validateStarted: make(chan struct{}), validateRelease: make(chan struct{})}
+	close(tx.validateRelease)
+	batch := &fakePreparedResources{tx: tx}
+	m.providerResources = &fakeProviderResources{batch: batch}
+	m.supervisor = &activationSupervisor{}
+	second, err := m.AddSubscription(context.Background(), Operation{ID: "second", Source: "test"}, AddSubscriptionInput{Name: "second", URL: service.Snapshot().Profiles[0].URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Generation == 0 {
+		t.Fatal("inactive managed refresh left generation=0")
+	}
+	if service.Snapshot().ActiveID != first.ID {
+		t.Fatalf("inactive refresh switched active to %q", service.Snapshot().ActiveID)
+	}
+	used, err := m.UseSubscription(context.Background(), Operation{ID: "use-second", Source: "test"}, second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if used.ID != second.ID || service.Snapshot().ActiveID != second.ID {
+		t.Fatalf("use after inactive refresh failed: used=%#v active=%q", used, service.Snapshot().ActiveID)
+	}
+}
+
+func TestEnableTun_ManagedStaleSettingsKeepCapturedGeneration(t *testing.T) {
+	ctx := context.Background()
+	m, _, _, profile := rootProviderManager(t)
+	candidate, err := m.prepareSettings(func(settings *config.Settings) error {
+		settings.Tun = buildManagedTun(true, settings.Tun)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m.lockMutation(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.updateSettings(func(settings *config.Settings) error {
+		settings.WebAddr = "127.0.0.1:9998"
+		return nil
+	})
+	m.unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := &fakeResourceTransaction{validateStarted: make(chan struct{}), validateRelease: make(chan struct{})}
+	close(tx.validateRelease)
+	m.providerResources = &fakeProviderResources{batch: &fakePreparedResources{id: profile.ID, gen: profile.Generation, tx: tx}}
+	m.supervisor = &activationSupervisor{}
+	plan, generation, err := m.prepareManagedCurrent(ctx, candidate.after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = m.activateManagedPlan(ctx, Operation{ID: "stale-tun", Source: "test"}, generation, plan, &settingsResourceChange{manager: m, candidate: candidate})
+	if err == nil && m.settingsSnapshot().WebAddr != "127.0.0.1:9998" {
+		t.Fatalf("stale TUN candidate accepted with generation %d; overwrote concurrent WebAddr with %q", generation, m.settingsSnapshot().WebAddr)
+	}
+	if m.settingsSnapshot().WebAddr != "127.0.0.1:9998" {
+		t.Fatalf("concurrent WebAddr lost: %q", m.settingsSnapshot().WebAddr)
 	}
 }
 

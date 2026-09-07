@@ -54,6 +54,29 @@ func supportedCore(ctx context.Context, goos, arch, tag, channel string) (suppor
 	return supportedAsset{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "unsupported mihomo core policy"}
 }
 
+// VerifyCompiledAssetDigest checks a digest against the compiled Unix core table.
+// Callers must obtain the digest from an independent TLS checksum or a root-only
+// offline manifest; a user-supplied request hash is not the trust root.
+func VerifyCompiledAssetDigest(ctx context.Context, goos, arch, tag, channel, digestHex string) error {
+	a, err := supportedCore(ctx, goos, arch, tag, channel)
+	if err != nil {
+		return err
+	}
+	if digestHex != a.AssetSHA256 {
+		return dataFailure("mihomo compiled asset hash mismatch")
+	}
+	return nil
+}
+
+// CompiledAssetDigest returns the compiled SHA-256 for one supported Unix core.
+func CompiledAssetDigest(ctx context.Context, goos, arch, tag, channel string) (string, error) {
+	a, err := supportedCore(ctx, goos, arch, tag, channel)
+	if err != nil {
+		return "", err
+	}
+	return a.AssetSHA256, nil
+}
+
 const provenanceSchema = "mihari.core-provenance/v1"
 
 // ProvenanceReceipt records a binary derived from an immutable supported asset.

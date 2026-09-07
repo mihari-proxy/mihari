@@ -14,6 +14,7 @@ import (
 const (
 	exportReadBufferBytes = 32 << 10
 	exportReviewNote      = "mihomo level is Mihari capture classification; core-emitted node names and traffic metadata may remain"
+	exportManifestV2      = "mihari-logs-export/v2"
 )
 
 var errExportLineTooLong = errors.New("export log line exceeds limit")
@@ -32,13 +33,21 @@ type manifestRange struct {
 	To   string `json:"to,omitempty"`
 }
 
+type exportSourceStatus struct {
+	Daemon string `json:"daemon"`
+	Mihomo string `json:"mihomo"`
+	TUI    string `json:"tui"`
+}
+
 type exportManifest struct {
-	Schema     string        `json:"schema"`
-	ExportedAt string        `json:"exported_at"`
-	Timezone   string        `json:"timezone"`
-	Range      manifestRange `json:"range"`
-	Files      []exportFile  `json:"files"`
-	Notes      []string      `json:"notes"`
+	Schema       string              `json:"schema"`
+	ExportedAt   string              `json:"exported_at"`
+	Timezone     string              `json:"timezone"`
+	Range        manifestRange       `json:"range"`
+	Files        []exportFile        `json:"files"`
+	Notes        []string            `json:"notes"`
+	Scope        string              `json:"scope,omitempty"`
+	SourceStatus *exportSourceStatus `json:"source_status,omitempty"`
 }
 
 type boundedLineReader struct {
@@ -207,4 +216,15 @@ func newExportManifest(now time.Time, exportRange ExportRange, files []exportFil
 		Files:      files,
 		Notes:      []string{exportReviewNote},
 	}
+}
+
+func newExportManifestV2(now time.Time, exportRange ExportRange, files []exportFile, scope string, status exportSourceStatus, notes []string) exportManifest {
+	manifest := newExportManifest(now, exportRange, files)
+	manifest.Schema = exportManifestV2
+	manifest.Scope = scope
+	manifest.SourceStatus = &status
+	if notes != nil {
+		manifest.Notes = notes
+	}
+	return manifest
 }

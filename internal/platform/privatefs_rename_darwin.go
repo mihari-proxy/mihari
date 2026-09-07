@@ -11,3 +11,7 @@ func renameatNoReplace(dirfd int, oldName, newName string) error {
 func renameatBetweenNoReplace(oldFD int, oldName string, newFD int, newName string) error {
 	return unix.RenameatxNp(oldFD, oldName, newFD, newName, unix.RENAME_EXCL)
 }
+
+func renameatExchange(oldFD int, oldName string, newFD int, newName string) error {
+	return unix.RenameatxNp(oldFD, oldName, newFD, newName, unix.RENAME_SWAP)
+}

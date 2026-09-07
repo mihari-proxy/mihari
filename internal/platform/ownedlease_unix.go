@@ -115,6 +115,36 @@ func nativeLeaseRoot(ctx context.Context, path string, p RootPolicy, parent bool
 func AcquireInstallLease(ctx context.Context, layout ResolvedLayout) (*OwnedInstallLease, error) {
 	return acquireInstallLease(ctx, layout, uint32(os.Geteuid()), platformLayoutDefaults(""), nativeLeaseRoot)
 }
+
+// AcquirePrivateBootstrapLease locks only P for a root foreground instance.
+// This capability cannot authorize named system-service operations.
+func AcquirePrivateBootstrapLease(ctx context.Context, layout ResolvedLayout) (_ *OwnedInstallLease, err error) {
+	owner := uint32(os.Geteuid())
+	if owner != 0 || layout.Mode != PrivateMode {
+		return nil, os.ErrPermission
+	}
+	if err = validateLeaseLayout(layout, owner, platformLayoutDefaults("")); err != nil {
+		return nil, err
+	}
+	s := &leaseState{layout: layout, owner: owner}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, s.close())
+		}
+	}()
+	root, err := OpenTrustedRoot(ctx, layout.BaseDir, RootPolicy{Owner: owner, Mode: 0700, AllowCreate: true})
+	if err != nil {
+		return nil, err
+	}
+	s.roots = append(s.roots, root)
+	if err = s.addLock(ctx, root, "install.lock"); err != nil {
+		return nil, err
+	}
+	if err = s.validate(layout); err != nil {
+		return nil, err
+	}
+	return &OwnedInstallLease{state: s}, nil
+}
 func acquireInstallLease(ctx context.Context, layout ResolvedLayout, owner uint32, defaults LayoutDefaults, open leaseRootOpener) (_ *OwnedInstallLease, err error) {
 	if err = validateLeaseLayout(layout, owner, defaults); err != nil {
 		return nil, err

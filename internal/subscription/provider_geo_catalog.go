@@ -14,6 +14,18 @@ func (a geoArtifact) matches(b []byte) bool {
 // These fixed identities were approved from the retained artifact catalog.
 // Country/ASN preserve the existing release lock. DAT orphan commits may become
 // unavailable; failure retains old resources and never selects a mutable fallback.
+// VerifyGeoDigest checks a digest against the compiled Geo artifact catalog.
+func VerifyGeoDigest(kind GeoResourceKind, digest string) error {
+	a, err := trustedGeoArtifact(kind)
+	if err != nil {
+		return err
+	}
+	if a.hash != digest {
+		return dataError("untrusted Geo artifact")
+	}
+	return nil
+}
+
 func trustedGeoArtifact(kind GeoResourceKind) (geoArtifact, error) {
 	switch kind {
 	case GeoCountryMMDB:

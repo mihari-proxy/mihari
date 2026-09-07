@@ -4,7 +4,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type nativeDiscoveryBackend struct{}
+type nativeDiscoveryBackend struct{ smallFile bool }
 
 func (nativeDiscoveryBackend) directory(p discoveryRef, name string) (discoveryRef, error) {
 	fd, err := unix.Openat(p.fd, name, unix.O_PATH|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
@@ -52,5 +52,5 @@ func (b nativeDiscoveryBackend) read(p discoveryRef, name string, m discoveryMet
 	if err != nil {
 		return nil, componentOpenError(err)
 	}
-	return readDiscoveryFD(fd, m, func(fd int) (discoveryMetadata, error) { return b.inspect(discoveryRef{fd: fd}, true, m.node.uid) })
+	return readDiscoverySizedFD(fd, m, b.smallFile, func(fd int) (discoveryMetadata, error) { return b.inspect(discoveryRef{fd: fd}, true, m.node.uid) })
 }

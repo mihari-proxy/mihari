@@ -1,20 +1,7 @@
 #!/usr/bin/env sh
-# mihari all-in-one LOCAL installer (script 2). Offline: lays down the mihari
-# binary + bundled mihomo core + GeoIP from <bundle_dir> with zero network.
-#   sh install-aio.sh [bundle_dir]      (bundle_dir defaults to this script's dir)
-#
-# Bundle layout (produced by scripts/build-all-in-one):
-#   mihari                 -> $BIN_DIR/mihari
-#   data/bin/mihomo        -> $MIHARI_DATA/bin/mihomo         (overwrite)
-#   data/bin/core-channel  -> $MIHARI_DATA/bin/core-channel   (overwrite if present)
-#   data/geoip/*.mmdb      -> $MIHARI_DATA/geoip/*.mmdb       (overwrite)
-#
-# Never touches: mihari.yaml, subscriptions/, control.token, onboarding.json,
-# logs/, web/ (user-private config and panel state stay intact).
-#
-# Environment overrides:
-#   MIHARI_BIN    mihari binary install dir (default /usr/local/bin)
-#   MIHARI_DATA   data root (default ~/.mihari)
+# Local AIO install: pass the original .tar.gz release artifact. MIHARI_VERSION
+# selects its fixed release tag; offline use requires an existing trusted root
+# apply binary and root-preplaced install-trust resources. No bundle script runs.
 set -eu
 
 CHANNEL=""
@@ -63,129 +50,129 @@ if [ -n "$CHANNEL" ]; then
   esac
 fi
 
-[ -f "$bundle_dir/mihari" ] || err "all-in-one bundle not found at $bundle_dir (expected the mihari binary)"
-[ -f "$bundle_dir/data/bin/mihomo" ] || err "bundled mihomo core missing at $bundle_dir/data/bin/mihomo"
-[ -f "$bundle_dir/data/geoip/GeoLite2-Country.mmdb" ] || err "bundled GeoIP Country missing at $bundle_dir/data/geoip"
-[ -f "$bundle_dir/data/geoip/GeoLite2-ASN.mmdb" ] || err "bundled GeoIP ASN missing at $bundle_dir/data/geoip"
 
-BIN_DIR="${MIHARI_BIN:-/usr/local/bin}"
-DATA_DIR="${MIHARI_DATA:-$HOME/.mihari}"
-mihari_bin="${BIN_DIR}/mihari"
-
-channel_data_root() {
-  if [ -n "${MIHARI_DATA:-}" ]; then
-    printf '%s\n' "$MIHARI_DATA"
-    return
+# BEGIN ROOT APPLY
+# Generated from root-apply.sh.in; edit the template and run generate_root_apply.py.
+# The privileged shell is fixed code; caller values travel only as positional
+# arguments. The first executed mihari is a checked root installation or a
+# fixed official release verified inside this root-exclusive staging directory.
+root_apply() {
+  elevate=""
+  if [ "$(id -u)" -ne 0 ]; then
+    [ -x /usr/bin/sudo ] || err "installation requires root or /usr/bin/sudo"
+    elevate=/usr/bin/sudo
   fi
-  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
-    case "$SUDO_USER" in
-      *[!A-Za-z0-9._-]*|'') err "resolve sudo user home" ;;
-    esac
-    home=""
-    if command -v getent >/dev/null 2>&1; then
-      home="$(getent passwd "$SUDO_USER" | cut -d: -f6 || true)"
-    fi
-    if [ -z "$home" ]; then
-      home="$(eval echo "~$SUDO_USER")"
-    fi
-    case "$home" in
-      /*) ;;
-      *) err "resolve mihari channel data root: home is not absolute" ;;
-    esac
-    printf '%s\n' "$home/.mihari"
-    return
-  fi
-  printf '%s\n' "${HOME}/.mihari"
+  $elevate /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/sh -s -- "$1" "$2" "$3" "$4" "${MIHARI_SOURCE:-}" "${MIHARI_DATA:-}" "${MIHARI_ENDPOINT:-}" "${MIHARI_CREDENTIAL:-}" "${MIHARI_INSTALL_ROOT:-}" "${MIHARI_BIN:-/usr/local/bin}/mihari" <<'MIHARI_ROOT_APPLY'
+set -eu
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+unset ENV BASH_ENV CDPATH
+[ "$(id -u)" -eq 0 ] || exit 1
+umask 077
+fail() { printf '%s\n' "$1" >&2; exit 1; }
+tag=$1; channel=$2; candidate=$3; bundle=$4; source=$5; data=$6; endpoint=$7; credential=$8; install_root=$9; shift 9; path_binary=$1
+stage=$(mktemp -d /var/tmp/mihari-install.XXXXXXXX)
+cleanup() { rm -f "$stage/entry" "$stage/candidate" "$stage/checksums" "$stage/latest" "$stage/request.json"; rmdir "$stage"; }
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+root_fetch() {
+  [ -x /usr/bin/curl ] || fail "trusted bootstrap requires /usr/bin/curl"
+  /usr/bin/curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 120 --max-filesize 268435456 "$1" -o "$2"
 }
-
-write_mihari_channel() {
-  channel="$1"
-  root="$(channel_data_root)"
-  created=0
-  [ -d "$root" ] || created=1
-  mkdir -p "$root"
-  tmp="$(mktemp "$root/.mihari-channel.tmp.XXXXXX")"
-  printf '%s\n' "$channel" >"$tmp"
-  chmod 0600 "$tmp"
-  mv -f "$tmp" "$root/mihari-channel"
-  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
-    uid="$(id -u "$SUDO_USER")"
-    gid="$(id -g "$SUDO_USER")"
-    if [ "$created" -eq 1 ]; then
-      chown "$uid:$gid" "$root"
-    fi
-    chown "$uid:$gid" "$root/mihari-channel"
-  fi
+checksum() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+  else shasum -a 256 "$1" | cut -d' ' -f1; fi
 }
-
-# Elevate for writes to the system binary dir when needed (mirrors install.sh).
-SUDO=""
-if [ "${MIHARI_INSTALL_TEST_MODE:-}" != "1" ] && [ ! -w "$BIN_DIR" ] 2>/dev/null; then
-  if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
-    SUDO="sudo"
-  fi
+case "$(uname -s)" in Linux) os=linux;; Darwin) os=darwin;; *) fail "unsupported OS";; esac
+case "$(uname -m)" in x86_64|amd64) arch=amd64;; aarch64|arm64) arch=arm64;; *) fail "unsupported architecture";; esac
+if [ -z "$tag" ]; then
+  [ "$channel" = main ] || fail "set MIHARI_VERSION to a fixed dev tag"
+  root_fetch https://api.github.com/repos/mihari-proxy/mihari/releases/latest "$stage/latest"
+  [ "$(wc -c < "$stage/latest")" -le 1048576 ] || fail "release metadata exceeds limit"
+  tag=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$stage/latest")
 fi
-
-# Stop anything holding file locks on the binary / MMDBs before overwriting.
-# `service stop` covers the registered-service case (and survives a systemd
-# restart policy); pkill covers a foreground daemon. This symmetric handling is
-# the gap install.sh leaves open (design §4.4).
-if [ "${MIHARI_INSTALL_TEST_MODE:-}" != "1" ]; then
-  if [ -x "$mihari_bin" ]; then
-    $SUDO "$mihari_bin" service stop >/dev/null 2>&1 || true
-  fi
-  if command -v pgrep >/dev/null 2>&1 && pgrep -x mihari >/dev/null 2>&1; then
-    info "检测到运行中的 mihari，停止以释放文件锁…"
-    pkill -x mihari >/dev/null 2>&1 || true
-    tries=0
-    while [ "$tries" -lt 5 ] && pgrep -x mihari >/dev/null 2>&1; do
-      tries=$((tries + 1))
-      sleep 1
-    done
-  fi
+printf '%s\n' "$tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-dev\.(0|[1-9][0-9]*))?$' || fail "invalid fixed release tag"
+case "$tag:$channel" in *-dev.*:dev) :;; *-dev.*:*) fail "release channel mismatch";; *:main) :;; *) fail "release channel mismatch";; esac
+trusted_entry() {
+  entry_path=$1
+  [ -f "$entry_path" ] && [ ! -L "$entry_path" ] || return 1
+  if [ "$os" = linux ]; then links=$(stat -c %h "$entry_path"); else links=$(stat -f %l "$entry_path"); fi
+  [ "$links" = 1 ] || return 1
+  while [ "$entry_path" != / ]; do
+    [ ! -L "$entry_path" ] || return 1
+    if [ "$os" = linux ]; then
+      owner=$(stat -c %u "$entry_path") || return 1
+      mode=$(stat -c %a "$entry_path") || return 1
+    else
+      owner=$(stat -f %u "$entry_path") || return 1
+      mode=$(stat -f %Lp "$entry_path") || return 1
+      [ -z "$(ls -lde "$entry_path" | sed -n '2p')" ] || return 1
+    fi
+    [ "$owner" = 0 ] && [ "$((0$mode & 022))" -eq 0 ] || return 1
+    entry_path=$(dirname "$entry_path")
+  done
+}
+entry=/usr/local/lib/mihari/mihari
+if ! trusted_entry "$entry"; then entry=""; fi
+if [ -n "$entry" ] && ! "$entry" service apply --help >/dev/null 2>&1; then entry=""; fi
+# An offline install uses a previously trusted root apply binary plus the Go
+# constructor's root-owned install-trust manifest and hash-named resources.
+if [ -z "$entry" ] || [ -z "$candidate" ]; then
+  asset="mihari-$os-$arch"
+  release="https://github.com/mihari-proxy/mihari/releases/download/$tag"
+  root_fetch "$release/SHA256SUMS.txt" "$stage/checksums"
+  [ "$(wc -c < "$stage/checksums")" -le 1048576 ] || fail "checksum manifest exceeds limit"
+  expected=$(awk -v asset="$asset" '$2==asset || $2=="*"asset {print $1}' "$stage/checksums")
+  printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$' || fail "missing unique official binary checksum"
+  root_fetch "$release/$asset" "$stage/entry"
+  [ "$(checksum "$stage/entry")" = "$expected" ] || fail "official binary checksum mismatch"
+  chmod 0700 "$stage/entry"
+  [ -n "$entry" ] || entry="$stage/entry"
+  [ -n "$candidate" ] || candidate="$stage/entry"
 fi
-
-# 1. mihari binary -> BIN_DIR.
-$SUDO mkdir -p "$BIN_DIR"
-info "安装 mihari 到 $mihari_bin"
-$SUDO install -m 0755 "$bundle_dir/mihari" "$mihari_bin"
-
-# 2. Data overlay -> MIHARI_DATA (bundle is authoritative for core + GeoIP;
-#    user config / panel state below is never touched).
-mkdir -p "$DATA_DIR/bin" "$DATA_DIR/geoip"
-info "覆盖 mihomo 核心与 GeoIP 到 $DATA_DIR"
-install -m 0755 "$bundle_dir/data/bin/mihomo" "$DATA_DIR/bin/mihomo"
-if [ -f "$bundle_dir/data/bin/core-channel" ]; then
-  install -m 0644 "$bundle_dir/data/bin/core-channel" "$DATA_DIR/bin/core-channel"
-fi
-install -m 0644 "$bundle_dir/data/geoip/GeoLite2-Country.mmdb" "$DATA_DIR/geoip/GeoLite2-Country.mmdb"
-install -m 0644 "$bundle_dir/data/geoip/GeoLite2-ASN.mmdb" "$DATA_DIR/geoip/GeoLite2-ASN.mmdb"
-
-if [ "$CHANNEL_EXPLICIT" -eq 1 ]; then
-  write_mihari_channel "$CHANNEL"
-fi
+# BEGIN REQUEST JSON
+json_string() {
+  case "$1" in *'
+'*) fail "newline in request value";; esac
+  printf '%s' "$1" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null && fail "control character in request value"
+  printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+}
+json_field() { [ -n "$2" ] || return 0; printf ',"%s":' "$1"; json_string "$2"; }
+write_request() {
+  printf '{"schema":"mihari.install-request/v1","operation":"install","binary":'
+  json_string "$candidate"
+  json_field channel "$channel"
+  if [ -n "$data" ]; then json_field layout private; json_field data "$data"; else json_field layout system; fi
+  json_field source "$source"
+  json_field endpoint "$endpoint"
+  json_field credential "$credential"
+  json_field install_root "$install_root"
+  json_field path_binary "$path_binary"
+  json_field release_tag "$tag"
+  if [ -n "$bundle" ]; then json_field bundle "$bundle"; json_field bundle_sha256 "$(checksum "$bundle")"; fi
+  printf '}\n'
+}
+# END REQUEST JSON
+write_request > "$stage/request.json"
+"$entry" service apply --request "$stage/request.json" --json
+MIHARI_ROOT_APPLY
+}
+# END ROOT APPLY
 
 if [ "${MIHARI_INSTALL_TEST_MODE:-}" = "1" ]; then
+  printf 'CHANNEL=%s\nEXPLICIT=%s\n' "$CHANNEL" "$CHANNEL_EXPLICIT"
   exit 0
 fi
-
-# 3. Service: reinstall when registered (re-stages the service copy from the
-#    freshly installed PATH binary, closing the "service vs PATH" version drift),
-#    install when fresh. Service control needs root; elevate the step (mirrors
-#    install.sh). service status returns "not_installed" for a fresh machine with
-#    no elevation, so the branch is reliable; any ambiguity falls through to the
-#    fresh-install path whose install/start is the safe default.
-status="$($SUDO "$mihari_bin" service status 2>/dev/null || true)"
-case "$status" in
-  running|stopped)
-    info "已注册服务，执行 service reinstall 同步新版本…"
-    $SUDO "$mihari_bin" service reinstall
-    ;;
-  *)
-    info "注册并启动服务…"
-    $SUDO "$mihari_bin" service install
-    $SUDO "$mihari_bin" service start
-    ;;
-esac
-
-printf '\n\033[1;32m✅ aio 版安装完成！请重启终端，然后运行 mihari 开始使用。\033[0m\n'
+[ -f "$bundle_dir" ] || err "pass the original AIO .tar.gz archive"
+archive=$(cd "$(dirname "$bundle_dir")" && printf '%s/%s' "$(pwd -P)" "$(basename "$bundle_dir")")
+[ -n "${MIHARI_VERSION:-}" ] || err "set MIHARI_VERSION to the archive's fixed release tag"
+if [ "${MIHARI_NO_INSTALL:-0}" = "1" ]; then info "Archive retained at $archive"; exit 0; fi
+umask 077
+candidate_dir=$(mktemp -d)
+trap 'rm -f "$candidate_dir/mihari"; rmdir "$candidate_dir"' EXIT
+trap 'exit 1' HUP INT TERM
+# Extract only inert binary bytes; the privileged Go use case verifies the whole
+# original archive and all typed resources before publication.
+tar -xOzf "$archive" mihari | head -c 268435457 > "$candidate_dir/mihari"
+[ "$(wc -c < "$candidate_dir/mihari")" -le 268435456 ] || err "binary exceeds limit"
+root_apply "$MIHARI_VERSION" "${CHANNEL:-main}" "$candidate_dir/mihari" "$archive"

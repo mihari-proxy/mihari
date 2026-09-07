@@ -125,6 +125,12 @@ type Options struct {
 	// OnBackgroundError receives non-cancellation failures from the web gateway
 	// and owned scheduler. Optional; nil keeps the previous discard behavior.
 	OnBackgroundError func(component string, err error)
+	// ValidationMode is the no-business install-validation daemon. It refuses
+	// mutation, background refresh, and core start.
+	ValidationMode bool
+	// ActivationPhase is the durable install journal phase. Empty means no Unix
+	// install journal (Windows / non-root private / already complete).
+	ActivationPhase string
 }
 
 // WebGateway is the loopback HTTP server for panel hosting and API proxying.
@@ -169,8 +175,11 @@ type Manager struct {
 	saveSettings              func(string, config.Settings) (config.CommitResult, error)
 	serviceStatus             func() (string, error)
 	onBackgroundError         func(component string, err error)
+	validationMode            bool
+	activationPhase           string
 	settingsMu                sync.RWMutex
 	configGeneration          uint64
+	settingsCaptureGeneration uint64
 	tunLastError              string
 	maintenance               chan struct{}
 	resourceActivation        *resourceActivationOwner
@@ -262,6 +271,8 @@ func New(options Options) *Manager {
 		saveSettings:      saveSettings,
 		serviceStatus:     options.ServiceStatus,
 		onBackgroundError: options.OnBackgroundError,
+		validationMode:    options.ValidationMode,
+		activationPhase:   options.ActivationPhase,
 		maintenance:       make(chan struct{}, 1),
 		installed:         make(chan struct{}, 1),
 		operations:        make(map[string]*operationEntry),
@@ -277,6 +288,13 @@ func New(options Options) *Manager {
 
 func (m *Manager) Run(ctx context.Context) error {
 	defer m.closing.Store(true)
+	if m.validationMode {
+		<-ctx.Done()
+		return nil
+	}
+	if !m.businessMutationAllowed() {
+		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "install activation is required"}
+	}
 	if closer, ok := m.geoip.(interface{ Close() error }); ok {
 		defer func() { _ = closer.Close() }()
 	}

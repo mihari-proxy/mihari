@@ -304,3 +304,150 @@ func TestResourcePreparation_ProviderRefreshRejectsUnknownNameAndChangedRetained
 		t.Fatal("changed retained provider file accepted")
 	}
 }
+
+func TestResourcePreparation_SelectedHTTPProviderRecheckRejectsStaleDownloadAfterNewerCommit(t *testing.T) {
+	ctx := context.Background()
+	input := rootPolicyInput()
+	input.YAML = []byte("rule-providers:\n  source: {type: http, behavior: domain, url: 'https://example.test/rules'}\nrules: ['RULE-SET,source,DIRECT']\n")
+	fs := newMemoryProviderFiles()
+	store := &ProviderStore{files: fs}
+	req, err := NewRootConfigPolicy().Inspect(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := req.Providers[0]
+	spec.Inline = []byte("payload: ['old.test']\n")
+	initial, err := store.Prepare(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = initial.Commit(ctx, func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	graph, err := store.SnapshotResources(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparer := NewResourcePreparer(store, providerDownloadFunc(func(context.Context, ProviderSpec, string) ([]byte, error) {
+		newer := spec
+		newer.Inline = []byte("payload: ['newer.test']\n")
+		prepared, e := store.Prepare(ctx, newer)
+		if e != nil {
+			return nil, e
+		}
+		if e = prepared.Commit(ctx, func(context.Context) error { return nil }); e != nil {
+			return nil, e
+		}
+		return []byte("payload: ['stale.test']\n"), nil
+	}), nil)
+	prepared, err := preparer.PrepareProvider(ctx, input, ProxyModeDirect, graph, "rule", "source")
+	if err != nil {
+		t.Fatalf("prepare selected provider: %v", err)
+	}
+	defer func() { _ = prepared.Close(ctx) }()
+	if err = prepared.Recheck(ctx); err == nil {
+		t.Fatal("selected provider changed after graph snapshot during download, but stale candidate Recheck succeeds")
+	}
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodeRevisionConflict {
+		t.Fatalf("stale selected provider recheck error=%v", err)
+	}
+}
+
+func TestResourcePreparation_OfflineReinspectsHydratedProvidersForGeoClosure(t *testing.T) {
+	ctx := context.Background()
+	input := rootPolicyInput()
+	input.YAML = []byte("rule-providers:\n  source: {type: http, behavior: classical, url: 'https://example.test/rules'}\nrules: ['RULE-SET,source,DIRECT']\n")
+	fs := newMemoryProviderFiles()
+	store := &ProviderStore{files: fs}
+	req, err := NewRootConfigPolicy().Inspect(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := req.Providers[0]
+	target, err := providerTarget(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = fs.write(ctx, target, []byte("payload: ['GEOSITE,CN']\n"), providerObject{}); err != nil {
+		t.Fatal(err)
+	}
+	geoName, err := GeoResourcePath(GeoSiteDAT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	geoPath := "runtime/core-home/" + geoName
+	if err = fs.write(ctx, geoPath, geoSiteFixture(), providerObject{}); err != nil {
+		t.Fatal(err)
+	}
+	providerSource, _, err := store.captureResource(ctx, target, maxDocumentBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	geoSource, _, err := store.captureResource(ctx, geoPath, maxGeoResourceBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	geoID, err := GeoResourceID(GeoSiteDAT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := &ResourceGraph{store: store, sources: map[string]resourceSource{spec.ResourceID: providerSource, geoID: geoSource}}
+	preparer := NewResourcePreparer(store, nil, nil)
+	preparer.catalog = func(GeoResourceKind) (geoArtifact, error) {
+		return geoArtifact{hash: providerDigest(geoSiteFixture()), size: int64(len(geoSiteFixture()))}, nil
+	}
+	if _, err = preparer.OfflineInput(ctx, input, graph); err != nil {
+		t.Fatalf("complete valid offline provider+Geo graph rejected: %v", err)
+	}
+}
+
+func TestResourcePreparation_InactiveCommitPersistsMissingHydratedGeo(t *testing.T) {
+	ctx := context.Background()
+	input := rootPolicyInput()
+	input.YAML = []byte("rule-providers:\n  source: {type: http, behavior: classical, url: 'https://example.test/rules'}\nrules: ['RULE-SET,source,DIRECT']\n")
+	fs := newMemoryProviderFiles()
+	store := &ProviderStore{files: fs}
+	preparer := NewResourcePreparer(store, providerDownloadFunc(func(context.Context, ProviderSpec, string) ([]byte, error) {
+		return []byte("payload: ['GEOSITE,CN']\n"), nil
+	}), geoDownloadFunc(func(_ context.Context, kind GeoResourceKind, _ string) ([]byte, error) {
+		if kind != GeoSiteDAT {
+			t.Fatalf("downloaded Geo kind=%q", kind)
+		}
+		return geoSiteFixture(), nil
+	}))
+	preparer.catalog = func(GeoResourceKind) (geoArtifact, error) {
+		return geoArtifact{hash: providerDigest(geoSiteFixture()), size: int64(len(geoSiteFixture()))}, nil
+	}
+	prepared, err := preparer.Prepare(ctx, input, ProxyModeDirect, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close(ctx) }()
+	geoName, err := GeoResourcePath(GeoSiteDAT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	geoPath := "runtime/core-home/" + geoName
+	if _, ok := fs.objects[geoPath]; ok {
+		t.Fatal("Geo published before inactive persist")
+	}
+	if _, ok := fs.objects["runtime/config.yaml"]; ok {
+		t.Fatal("live configuration published before inactive persist")
+	}
+	if err = prepared.CommitCachedOutputs(ctx); err != nil {
+		t.Fatalf("inactive persist of hydrated Geo kind: %v", err)
+	}
+	if got := fs.objects[geoPath]; string(got) != string(geoSiteFixture()) {
+		t.Fatal("missing Geo kind required after provider hydration was not persisted")
+	}
+	if _, ok := fs.objects["runtime/config.yaml"]; ok {
+		t.Fatal("inactive persist published live configuration")
+	}
+	if err = store.Recover(ctx); err != nil {
+		t.Fatalf("recover after Geo persist: %v", err)
+	}
+	if got := fs.objects[geoPath]; string(got) != string(geoSiteFixture()) {
+		t.Fatal("recovery dropped persisted Geo")
+	}
+}

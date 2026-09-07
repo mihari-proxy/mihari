@@ -124,6 +124,7 @@ type subscriptionRefreshChange struct {
 	wantGen  uint64
 	receipt  subscription.Receipt
 	applied  bool
+	durable  *subscription.CatalogActivation
 }
 
 type subscriptionUseChange struct {
@@ -132,6 +133,7 @@ type subscriptionUseChange struct {
 	before  subscription.Catalog
 	after   subscription.Catalog
 	applied bool
+	durable *subscription.CatalogActivation
 }
 
 type settingsResourceChange struct {
@@ -176,6 +178,10 @@ func (c *subscriptionUseChange) ApplyLocked() error {
 	return nil
 }
 func (c *subscriptionUseChange) RestoreLocked() error {
+	if c.durable != nil {
+		c.durable.Cancel()
+		return nil
+	}
 	if !c.applied {
 		return nil
 	}
@@ -205,6 +211,10 @@ func (c *subscriptionRefreshChange) ApplyLocked() error {
 	return nil
 }
 func (c *subscriptionRefreshChange) RestoreLocked() error {
+	if c.durable != nil {
+		c.durable.Cancel()
+		return nil
+	}
 	if !c.applied {
 		return nil
 	}
@@ -230,9 +240,7 @@ func (m *Manager) refreshSubscriptionManaged(ctx context.Context, operation Oper
 			return nil, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "subscription not found"}
 		}
 		profile := catalog.Profiles[index]
-		if catalog.ActiveID != "" && catalog.ActiveID != id {
-			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "only the active subscription can refresh managed resources"}
-		}
+		active := catalog.ActiveID == "" || catalog.ActiveID == id
 		var graph resourceGraph
 		var err error
 		if profile.Generation > 0 {
@@ -266,6 +274,13 @@ func (m *Manager) refreshSubscriptionManaged(ctx context.Context, operation Oper
 			return nil, err
 		}
 		defer func() { _ = plan.Close(context.WithoutCancel(ctx)) }()
+		if !active {
+			if err = m.commitInactiveManagedRefresh(ctx, operation, prepared, plan, nextGeneration); err != nil {
+				return nil, err
+			}
+			m.refreshSubscriptionLogSecrets()
+			return findPublicProfile(m.subscriptions.Snapshot().Public(), id)
+		}
 		change := &subscriptionRefreshChange{manager: m, prepared: prepared, wantID: id, wantGen: nextGeneration}
 		if err = m.activateManagedPlan(ctx, operation, configGeneration, plan, change); err != nil {
 			m.markConfigDegraded(ctx, err)
@@ -322,8 +337,51 @@ func (m *Manager) useSubscriptionManaged(ctx context.Context, operation Operatio
 	return result.(subscription.PublicProfile), nil
 }
 
+func (m *Manager) commitInactiveManagedRefresh(ctx context.Context, operation Operation, prepared subscription.PreparedRefresh, plan preparedResourcePlan, wantGen uint64) error {
+	if err := persistInactiveResourcePlan(ctx, plan); err != nil {
+		return err
+	}
+	if err := m.lockMutation(ctx); err != nil {
+		return err
+	}
+	defer m.unlock()
+	if err := m.checkIfRevision(operation.IfRevision); err != nil {
+		return err
+	}
+	_, err := m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		receipt, commitErr := m.subscriptions.CommitRefresh(prepared)
+		if commitErr != nil {
+			return snapshot, commitErr
+		}
+		index := receipt.After.Index(prepared.ProfileID())
+		if index < 0 || receipt.After.Profiles[index].Generation != wantGen {
+			if rollbackErr := m.subscriptions.Rollback(receipt); rollbackErr != nil {
+				return snapshot, degradedConfigError()
+			}
+			return snapshot, protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "subscription generation changed during activation"}
+		}
+		if receipt.After.ActiveID == prepared.ProfileID() {
+			if rollbackErr := m.subscriptions.Rollback(receipt); rollbackErr != nil {
+				return snapshot, degradedConfigError()
+			}
+			return snapshot, protocol.APIError{Code: protocol.CodeInvalidState, Message: "inactive refresh must not change the active subscription"}
+		}
+		m.syncSubscriptionState(&snapshot, receipt.After)
+		return snapshot, nil
+	})
+	return err
+}
+
+func persistInactiveResourcePlan(ctx context.Context, plan preparedResourcePlan) error {
+	trusted, ok := plan.(*trustedPreparedResourcePlan)
+	if !ok || trusted.prepared == nil {
+		return nil
+	}
+	return trusted.prepared.CommitCachedOutputs(ctx)
+}
+
 func (m *Manager) prepareManagedCurrent(ctx context.Context, settings config.Settings) (preparedResourcePlan, uint64, error) {
-	_, generation := m.configInputs()
+	generation := m.capturedSettingsGeneration()
 	catalog := m.subscriptions.Snapshot()
 	if catalog.ActiveID == "" {
 		document := subscription.Document{"proxies": []any{}, "proxy-groups": []any{}, "rules": []any{"MATCH,DIRECT"}}
@@ -370,13 +428,13 @@ func (m *Manager) mutateTunManaged(ctx context.Context, op Operation, enable, fo
 	if err != nil {
 		return protocol.TunStatus{}, err
 	}
-	plan, generation, err := m.prepareManagedCurrent(ctx, candidate.after)
+	plan, _, err := m.prepareManagedCurrent(ctx, candidate.after)
 	if err != nil {
 		return protocol.TunStatus{}, err
 	}
 	defer func() { _ = plan.Close(context.WithoutCancel(ctx)) }()
 	change := &settingsResourceChange{manager: m, candidate: candidate}
-	if err = m.activateManagedPlan(ctx, op, generation, plan, change); err != nil {
+	if err = m.activateManagedPlan(ctx, op, candidate.generation, plan, change); err != nil {
 		m.setTunLastError(tunErrorMessage(err))
 		m.markConfigDegraded(ctx, err)
 		return protocol.TunStatus{}, err

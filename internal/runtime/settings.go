@@ -11,9 +11,10 @@ import (
 )
 
 type settingsCandidate struct {
-	before  config.Settings
-	after   config.Settings
-	changed bool
+	before     config.Settings
+	after      config.Settings
+	changed    bool
+	generation uint64
 }
 
 func (m *Manager) settingsSnapshot() config.Settings {
@@ -23,7 +24,7 @@ func (m *Manager) settingsSnapshot() config.Settings {
 }
 
 func (m *Manager) prepareSettings(update func(*config.Settings) error) (settingsCandidate, error) {
-	before := m.settingsSnapshot()
+	before, generation := m.configInputs()
 	after := before.Clone()
 	if err := update(&after); err != nil {
 		return settingsCandidate{}, err
@@ -31,7 +32,10 @@ func (m *Manager) prepareSettings(update func(*config.Settings) error) (settings
 	if err := after.Validate(); err != nil {
 		return settingsCandidate{}, err
 	}
-	return settingsCandidate{before: before, after: after, changed: !reflect.DeepEqual(before, after)}, nil
+	m.settingsMu.Lock()
+	m.settingsCaptureGeneration = generation
+	m.settingsMu.Unlock()
+	return settingsCandidate{before: before, after: after, changed: !reflect.DeepEqual(before, after), generation: generation}, nil
 }
 
 func (m *Manager) saveSettingsCandidate(candidate settingsCandidate) (config.CommitResult, error) {
@@ -126,6 +130,10 @@ func (m *Manager) lockMutation(ctx context.Context) error {
 	if err := m.lockMaintenance(ctx); err != nil {
 		return err
 	}
+	if !m.businessMutationAllowed() {
+		m.unlock()
+		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "install activation is required"}
+	}
 	if m.resourceActivation != nil {
 		m.releaseMutation()
 		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "resource activation is in progress"}
@@ -135,6 +143,18 @@ func (m *Manager) lockMutation(ctx context.Context) error {
 		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "mutation compensation failed; restart required"}
 	}
 	return nil
+}
+
+func (m *Manager) businessMutationAllowed() bool {
+	if m.validationMode {
+		return false
+	}
+	switch m.activationPhase {
+	case "", "activation_committed", "complete":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Manager) releaseMutation() { m.maintenance <- struct{}{} }
@@ -154,4 +174,10 @@ func (m *Manager) currentConfigGeneration() uint64 {
 	m.settingsMu.RLock()
 	defer m.settingsMu.RUnlock()
 	return m.configGeneration
+}
+
+func (m *Manager) capturedSettingsGeneration() uint64 {
+	m.settingsMu.RLock()
+	defer m.settingsMu.RUnlock()
+	return m.settingsCaptureGeneration
 }

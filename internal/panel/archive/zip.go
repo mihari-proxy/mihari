@@ -3,6 +3,7 @@ package archive
 
 import (
 	"archive/zip"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -26,17 +27,28 @@ const (
 )
 
 type extractLimits struct {
-	maxFile    uint64
-	maxTotal   uint64
-	maxEntries int
-	maxDepth   int
+	maxFile      uint64
+	maxTotal     uint64
+	maxEntries   int
+	maxDepth     int
+	requireIndex bool
 }
 
 var defaultExtractLimits = extractLimits{
-	maxFile:    MaxExtractedFileSize,
-	maxTotal:   MaxTotalExtractedBytes,
-	maxEntries: MaxArchiveEntries,
-	maxDepth:   MaxArchiveDepth,
+	maxFile:      MaxExtractedFileSize,
+	maxTotal:     MaxTotalExtractedBytes,
+	maxEntries:   MaxArchiveEntries,
+	maxDepth:     MaxArchiveDepth,
+	requireIndex: true,
+}
+
+// Limits is the shared zip extract budget used by panel installs and install bundles.
+type Limits struct {
+	MaxFile      uint64
+	MaxTotal     uint64
+	MaxEntries   int
+	MaxDepth     int
+	RequireIndex bool
 }
 
 // SafeName reports whether a zip entry name is relative and free of path traversal.
@@ -68,78 +80,133 @@ func ExtractZip(archivePath, destDir string) error {
 	return extractZipWithLimits(archivePath, destDir, defaultExtractLimits)
 }
 
+// ExtractZipLimited extracts with caller-supplied budgets. It reuses the same
+// path, symlink, device, and duplicate policy as ExtractZip.
+func ExtractZipLimited(archivePath, destDir string, limits Limits) error {
+	return extractZipWithLimits(archivePath, destDir, limits.internal())
+}
+
+// ExtractZipBytes extracts through mkdir/write callbacks so callers can stay on a TrustedRoot fd.
+func ExtractZipBytes(data []byte, limits Limits, mkdir func(string) error, write func(string, []byte) error) error {
+	if int64(len(data)) < 0 {
+		return dataFailure("invalid panel archive")
+	}
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return dataFailure("invalid panel archive")
+	}
+	return extractZipFiles(reader.File, limits.internal(), mkdir, write)
+}
+
+func (l Limits) internal() extractLimits {
+	return extractLimits{
+		maxFile: l.MaxFile, maxTotal: l.MaxTotal, maxEntries: l.MaxEntries,
+		maxDepth: l.MaxDepth, requireIndex: l.RequireIndex,
+	}
+}
+
 func extractZipWithLimits(archivePath, destDir string, limits extractLimits) error {
 	reader, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return dataFailure("invalid panel archive")
 	}
 	defer reader.Close()
-
-	if limits.maxEntries > 0 && len(reader.File) > limits.maxEntries {
-		return dataFailure("panel archive has too many entries")
-	}
 	if err := os.MkdirAll(destDir, 0o700); err != nil {
 		return fmt.Errorf("create panel extract directory: %w", err)
 	}
+	err = extractZipFiles(reader.File, limits, func(name string) error {
+		return os.MkdirAll(filepath.Join(destDir, filepath.FromSlash(name)), 0o700)
+	}, func(name string, body []byte) error {
+		path := filepath.Join(destDir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(path, body, 0o600)
+	})
+	if err != nil {
+		_ = os.RemoveAll(destDir)
+	}
+	return err
+}
 
+func extractZipFiles(files []*zip.File, limits extractLimits, mkdir func(string) error, write func(string, []byte) error) error {
+	if limits.maxEntries > 0 && len(files) > limits.maxEntries {
+		return dataFailure("panel archive has too many entries")
+	}
 	var foundIndex bool
 	var declaredTotal, actualTotal uint64
-	fail := func(err error) error {
-		_ = os.RemoveAll(destDir)
-		return err
-	}
-	for _, file := range reader.File {
+	seen := make(map[string]bool, len(files))
+	for _, file := range files {
 		if !SafeName(file.Name) {
-			return fail(dataFailure("unsafe path in panel archive"))
+			return dataFailure("unsafe path in panel archive")
 		}
+		cleaned := filepath.ToSlash(filepath.Clean(filepath.FromSlash(strings.ReplaceAll(file.Name, "\\", "/"))))
+		if seen[cleaned] {
+			return dataFailure("duplicate path in panel archive")
+		}
+		seen[cleaned] = true
 		mode := file.Mode()
-		if mode&os.ModeSymlink != 0 {
-			return fail(dataFailure("symlink in panel archive"))
+		if mode&os.ModeSymlink != 0 || mode&os.ModeType == os.ModeSymlink {
+			return dataFailure("symlink in panel archive")
 		}
-		// Some archives mark links via ModeType without ModeSymlink bit on all platforms.
-		if mode&os.ModeType == os.ModeSymlink {
-			return fail(dataFailure("symlink in panel archive"))
+		if mode&os.ModeDevice != 0 || mode&os.ModeCharDevice != 0 || mode&os.ModeNamedPipe != 0 || mode&os.ModeSocket != 0 {
+			return dataFailure("device in panel archive")
 		}
 		if archivePathDepth(file.Name) > limits.maxDepth {
-			return fail(dataFailure("panel archive path is too deep"))
-		}
-
-		target, err := resolveTarget(destDir, file.Name)
-		if err != nil {
-			return fail(err)
+			return dataFailure("panel archive path is too deep")
 		}
 		if file.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o700); err != nil {
-				return fail(fmt.Errorf("create panel directory: %w", err))
+			if mkdir != nil {
+				if err := mkdir(cleaned); err != nil {
+					return fmt.Errorf("create panel directory: %w", err)
+				}
 			}
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-			return fail(fmt.Errorf("create panel parent directory: %w", err))
-		}
 		if file.UncompressedSize64 > limits.maxFile {
-			return fail(dataFailure("panel archive file is too large"))
+			return dataFailure("panel archive file is too large")
 		}
 		if declaredTotal+file.UncompressedSize64 < declaredTotal || declaredTotal+file.UncompressedSize64 > limits.maxTotal {
-			return fail(dataFailure("panel archive is too large"))
+			return dataFailure("panel archive is too large")
 		}
 		declaredTotal += file.UncompressedSize64
-		written, err := extractFile(file, target, limits.maxFile)
+		body, err := readZipFile(file, limits.maxFile)
 		if err != nil {
-			return fail(err)
+			return err
 		}
-		if actualTotal+uint64(written) < actualTotal || actualTotal+uint64(written) > limits.maxTotal {
-			return fail(dataFailure("panel archive is too large"))
+		if actualTotal+uint64(len(body)) < actualTotal || actualTotal+uint64(len(body)) > limits.maxTotal {
+			return dataFailure("panel archive is too large")
 		}
-		actualTotal += uint64(written)
+		actualTotal += uint64(len(body))
+		if write != nil {
+			if err := write(cleaned, body); err != nil {
+				return err
+			}
+		}
 		if strings.EqualFold(filepath.Base(file.Name), "index.html") {
 			foundIndex = true
 		}
 	}
-	if !foundIndex {
-		return fail(dataFailure("panel archive is missing index.html"))
+	if limits.requireIndex && !foundIndex {
+		return dataFailure("panel archive is missing index.html")
 	}
 	return nil
+}
+
+func readZipFile(file *zip.File, maxFile uint64) ([]byte, error) {
+	source, err := file.Open()
+	if err != nil {
+		return nil, dataFailure("open panel archive entry")
+	}
+	defer source.Close()
+	body, err := io.ReadAll(io.LimitReader(source, int64(maxFile)+1))
+	if err != nil {
+		return nil, dataFailure("extract panel archive entry")
+	}
+	if uint64(len(body)) > maxFile {
+		return nil, dataFailure("panel archive file is too large")
+	}
+	return body, nil
 }
 
 func archivePathDepth(name string) int {

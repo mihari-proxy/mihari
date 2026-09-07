@@ -4,97 +4,78 @@ package platform
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"syscall"
 	"testing"
 )
 
 func securityTrustedParent(t *testing.T) string {
 	t.Helper()
+	defaults := SystemLayoutDefaults()
 	parent := os.Getenv("MIHARI_SECURITY_ROOT")
-	if parent == "" || !filepath.IsAbs(parent) || os.Geteuid() != 0 {
-		t.Fatal("isolated root security runner required")
+	if os.Geteuid() != 0 || defaults.BaseDir != filepath.Join(parent, "system") {
+		t.Fatal("validated isolated root required")
 	}
 	return parent
 }
 
-func TestTrustedRoot_RejectsOnlyChangedSymlink(t *testing.T) {
-	parent := securityTrustedParent(t)
-	target := filepath.Join(parent, "rootpolicy-positive")
-	if err := os.Mkdir(target, 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.Remove(target); err != nil {
-			t.Error(err)
-		}
-	})
-	policy := RootPolicy{Owner: 0, Mode: 0700}
-	root, err := OpenTrustedRoot(context.Background(), target, policy)
+func TestSecurityTrustedRootPositive(t *testing.T) {
+	securityTrustedParent(t)
+	root, err := OpenTrustedRoot(context.Background(), SystemLayoutDefaults().BaseDir, RootPolicy{Mode: 0711, AllowCreate: true})
 	if err != nil {
-		t.Fatalf("positive control failed: %v", err)
-	}
-	if err := root.Close(); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(parent, "rootpolicy-link")
-	if err := os.Symlink(target, link); err != nil {
+	defer assertTestClose(t, root.Close)
+	path, id, owner, mode, err := root.Snapshot(context.Background())
+	if err != nil || path != SystemLayoutDefaults().BaseDir || id == "" || owner != 0 || mode != 0711 {
+		t.Fatalf("native root snapshot: %s %v", id, err)
+	}
+	data, err := root.OpenDir(context.Background(), "data", RootPolicy{Mode: 0700, AllowCreate: true})
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if err := os.Remove(link); err != nil {
-			t.Error(err)
-		}
-	})
-	got, err := OpenTrustedRoot(context.Background(), link, policy)
-	if got != nil {
-		got.Close()
-		t.Fatal("accepted application symlink")
+	if err := data.Close(); err != nil {
+		t.Fatal(err)
 	}
-	if !errors.Is(err, ErrUnsafeComponent) {
-		t.Fatalf("wrong rejection stage: %v", err)
+	node := root.chain[len(root.chain)-1].node
+	raw, err := json.Marshal(map[string]any{"uid": owner, "mode": mode, "dev": node.id.dev, "ino": node.id.ino, "mount": id})
+	if err != nil {
+		t.Fatal(err)
 	}
-	info, err := os.Stat(target)
-	if err != nil || info.Mode().Perm() != 0700 {
-		t.Fatal("target modified")
-	}
+	t.Logf("security_root=%s", raw)
 }
 
-func TestTrustedRoot_TwoUIDsPublicReadPrivateDenied(t *testing.T) {
+func TestSecurityDirectoryIdentity(t *testing.T) {
 	parent := securityTrustedParent(t)
-	target := filepath.Join(parent, "rootpolicy-two-uids")
-	r, err := OpenTrustedRoot(context.Background(), target, RootPolicy{Mode: 0711, AllowCreate: true})
+	path := filepath.Join(parent, "identity-attack")
+	root, err := OpenTrustedRoot(context.Background(), path, RootPolicy{Mode: 0700, AllowCreate: true})
 	if err != nil {
-		t.Fatalf("positive root: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := r.Close(); err != nil {
-			t.Error(err)
-		}
-		for _, name := range []string{"public", "private"} {
-			if err := os.Remove(filepath.Join(target, name)); err != nil {
-				t.Error(err)
-			}
-		}
-		if err := os.Remove(target); err != nil {
-			t.Error(err)
-		}
-	})
-	if err := r.WriteFile(context.Background(), "public", []byte("public"), 0644, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.WriteFile(context.Background(), "private", []byte("private"), 0600, nil); err != nil {
+	defer assertTestClose(t, root.Close)
+	_, before, _, _, err := root.Snapshot(context.Background())
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, uid := range []uint32{4242, 4343} {
-		cmd := exec.Command("/bin/sh", "-c", `test -r "$1/public" && ! test -r "$1/private"`, "mihari-permission-check", target)
-		cmd.Env = []string{}
-		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: uid, NoSetGroups: true}}
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("uid %d read boundary: %v %s", uid, err, out)
-		}
+	if err := os.Rename(path, path+"-retained"); err != nil {
+		t.Fatal(err)
 	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, err := root.Snapshot(context.Background()); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("replaced identity accepted: %v", err)
+	}
+	replacement, err := OpenTrustedRoot(context.Background(), path, RootPolicy{Mode: 0700})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer assertTestClose(t, replacement.Close)
+	_, after, _, _, err := replacement.Snapshot(context.Background())
+	if err != nil || before == after {
+		t.Fatal("replacement identity not distinguished")
+	}
+	t.Logf("security_identity before=%s after=%s", before, after)
 }

@@ -1,6 +1,6 @@
 package platform
 
-func platformLayoutDefaults(trustedHome string) LayoutDefaults {
+func nativeLayoutDefaults(trustedHome string) LayoutDefaults {
 	return LayoutDefaults{
 		OS:          "darwin",
 		BaseDir:     "/Library/Application Support/mihari",
@@ -9,3 +9,5 @@ func platformLayoutDefaults(trustedHome string) LayoutDefaults {
 		SocketLimit: 103,
 	}
 }
+
+func nativeRootHome() string { return "/var/root" }

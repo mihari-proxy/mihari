@@ -61,6 +61,7 @@ type PreparedResources struct {
 	providers     []*PreparedProvider
 	geo           []*PreparedProvider
 	configuration *PreparedProvider
+	state         []*PreparedProvider
 	sources       map[string]resourceSource
 }
 
@@ -96,6 +97,10 @@ func (p *ResourcePreparer) OfflineInput(ctx context.Context, input PolicyInput, 
 			return PolicyInput{}, err
 		}
 		input.Resources[key] = b
+	}
+	requirements, err = NewRootConfigPolicy().Inspect(ctx, input)
+	if err != nil {
+		return PolicyInput{}, err
 	}
 	if err = p.currentGeo(ctx, graph, input.Resources, make(map[string]resourceSource), requirements.Geo); err != nil {
 		return PolicyInput{}, err
@@ -171,11 +176,17 @@ func (p *ResourcePreparer) PrepareProvider(ctx context.Context, input PolicyInpu
 		return nil, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "provider is not managed"}
 	}
 	sources := make(map[string]resourceSource)
+	var selectedSealed resourceSource
+	var selectedSealedOK bool
 	var budget policyProviderBudget
 	for i, spec := range requirements.Providers {
 		key := spec.ResourceID
 		var b []byte
 		if i == selected && spec.URL != "" {
+			if authorized, ok := graph.sources[spec.ResourceID]; ok {
+				sources[authorized.path] = authorized
+				selectedSealed, selectedSealedOK = authorized, true
+			}
 			if p.providers == nil {
 				return nil, dataError("provider downloader unavailable")
 			}
@@ -194,6 +205,10 @@ func (p *ResourcePreparer) PrepareProvider(ctx context.Context, input PolicyInpu
 			return nil, err
 		}
 		input.Resources[key] = b
+	}
+	requirements, err = NewRootConfigPolicy().Inspect(ctx, input)
+	if err != nil {
+		return nil, err
 	}
 	if err = p.currentGeo(ctx, graph, input.Resources, sources, requirements.Geo); err != nil {
 		return nil, err
@@ -215,6 +230,9 @@ func (p *ResourcePreparer) PrepareProvider(ctx context.Context, input PolicyInpu
 	candidate, err := p.store.Prepare(ctx, *selectedSpec)
 	if err != nil {
 		return nil, err
+	}
+	if selectedSealedOK {
+		candidate.old = selectedSealed.object
 	}
 	candidate.required = sources
 	return &PreparedProviderRefresh{candidate: candidate}, nil
@@ -291,7 +309,92 @@ func (p *ResourcePreparer) currentGeo(ctx context.Context, graph *ResourceGraph,
 			return err
 		}
 		resources[id] = b
-		sources[id] = source
+		sources[source.path] = source
+	}
+	return nil
+}
+
+// CommitCachedOutputs publishes identity-specific provider files and missing
+// Geo objects without replacing the live runtime configuration.
+func (p *PreparedResources) CommitCachedOutputs(ctx context.Context) error {
+	if p == nil {
+		return dataError("resource candidate unavailable")
+	}
+	for _, candidate := range p.providers {
+		if err := candidate.Commit(ctx, func(context.Context) error { return nil }); err != nil {
+			return err
+		}
+	}
+	return p.commitMissingGeo(ctx)
+}
+
+func (p *PreparedResources) commitMissingGeo(ctx context.Context) error {
+	if p.store == nil {
+		return dataError("resource candidate unavailable")
+	}
+	var missing []*PreparedProvider
+	for _, candidate := range p.geo {
+		if candidate == nil || candidate.old.Present {
+			continue
+		}
+		if candidate.geo == "" {
+			return dataError("invalid Geo candidate")
+		}
+		missing = append(missing, candidate)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	s := p.store
+	release, err := s.acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if err = s.noPending(ctx); err != nil {
+		return err
+	}
+	activation := &ResourceActivation{prepared: p, journal: resourceJournal{Schema: "mihari.resource-activation/v1"}}
+	for _, candidate := range missing {
+		if candidate.closed {
+			return dataError("resource candidate closed")
+		}
+		entry := resourceEntry{Transaction: candidate.transaction, Geo: candidate.geo, Old: candidate.old, New: candidate.candidate, Marker: candidate.marker}
+		target, targetErr := entry.target()
+		if targetErr != nil {
+			return targetErr
+		}
+		for path, want := range map[string]providerObject{target: entry.Old, entry.candidatePath(): entry.New, entry.markerPath(): entry.Marker, entry.backupPath(): {}} {
+			got, inspectErr := s.files.inspect(ctx, path)
+			if inspectErr != nil {
+				return inspectErr
+			}
+			if got != want {
+				return providerConflict()
+			}
+		}
+		activation.journal.Entries = append(activation.journal.Entries, entry)
+	}
+	if err = s.saveResourceJournal(ctx, activation.journal); err != nil {
+		return err
+	}
+	for i := range activation.journal.Entries {
+		if err = activation.swap(ctx, i); err != nil {
+			if recoverErr := s.recoverResources(context.WithoutCancel(ctx)); recoverErr != nil {
+				return providerDegraded()
+			}
+			return err
+		}
+	}
+	activation.journal.Done = true
+	if err = s.saveResourceJournal(ctx, activation.journal); err != nil {
+		return providerDegraded()
+	}
+	if err = s.recoverResources(context.WithoutCancel(ctx)); err != nil {
+		return providerDegraded()
+	}
+	for _, candidate := range missing {
+		candidate.closed = true
 	}
 	return nil
 }
@@ -636,7 +739,7 @@ func (p *PreparedResources) Recheck(ctx context.Context) error {
 			return providerConflict()
 		}
 	}
-	for _, set := range [][]*PreparedProvider{p.providers, p.geo} {
+	for _, set := range [][]*PreparedProvider{p.providers, p.geo, p.state} {
 		for _, candidate := range set {
 			if err := candidate.recheck(ctx); err != nil {
 				return err
@@ -656,7 +759,7 @@ func (p *PreparedResources) Close(ctx context.Context) error {
 		return nil
 	}
 	var err error
-	for _, set := range [][]*PreparedProvider{p.providers, p.geo} {
+	for _, set := range [][]*PreparedProvider{p.providers, p.geo, p.state} {
 		for _, candidate := range set {
 			err = errors.Join(err, candidate.Close(ctx))
 		}

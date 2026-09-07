@@ -138,6 +138,9 @@ func TestExportJSON_ManifestValues(t *testing.T) {
 	if all.Schema != "mihari-logs-export/v1" || all.ExportedAt != "2026-09-02T23:41:08.123456789+08:00" || all.Timezone != "+08:00" {
 		t.Fatalf("manifest = %+v", all)
 	}
+	if strings.Contains(string(encoded), `"scope"`) || strings.Contains(string(encoded), `"source_status"`) {
+		t.Fatalf("v1 manifest grew v2 fields: %s", encoded)
+	}
 	if len(all.Notes) != 1 || all.Notes[0] != exportReviewNote {
 		t.Fatalf("notes = %#v", all.Notes)
 	}

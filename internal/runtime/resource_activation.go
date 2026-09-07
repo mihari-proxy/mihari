@@ -35,6 +35,12 @@ type resourceStateChange interface {
 	UpdateSnapshot(*state.Snapshot)
 }
 
+type durableResourceStateChange interface {
+	PrepareLocked(context.Context, *subscription.PreparedResources) error
+	RecheckLocked() error
+	PublishLocked()
+}
+
 // activatePreparedResources is the fixed-H transaction seam consumed by the
 // root entrypoints added in the next checkpoint. Preparation and Build happen
 // before this call and therefore outside Manager mutation ownership.
@@ -90,6 +96,7 @@ func (t *trustedResourceTransaction) Publish(ctx context.Context) error {
 func (t *trustedResourceTransaction) Finish(ctx context.Context) error {
 	return t.activation.Finish(ctx)
 }
+func (t *trustedResourceTransaction) Committed() bool { return t.activation.Committed() }
 func (t *trustedResourceTransaction) Restore(ctx context.Context) error {
 	capability, err := t.execution.Restore(ctx, t.activation)
 	if capability != nil {
@@ -125,11 +132,26 @@ func (m *Manager) activateResourcePlanWithState(ctx context.Context, operation O
 			err = protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "configuration inputs changed during activation"}
 		}
 		activationGeneration := m.currentConfigGeneration()
+		var durable durableResourceStateChange
+		if trusted, ok := tx.(*trustedResourceTransaction); ok && change != nil && err == nil {
+			var supported bool
+			durable, supported = change.(durableResourceStateChange)
+			if !supported {
+				err = resourceActivationDegraded()
+			} else {
+				err = durable.PrepareLocked(ctx, trusted.prepared)
+			}
+		}
 		if err == nil {
 			err = tx.Activate(ctx)
 		}
 		if err != nil {
-			if change != nil {
+			var api protocol.APIError
+			uncertain := errors.As(err, &api) && api.Details["degraded"] == true
+			if uncertain {
+				m.mutationDegraded.Store(true)
+			}
+			if change != nil && !uncertain {
 				if restoreErr := change.RestoreLocked(); restoreErr != nil {
 					m.mutationDegraded.Store(true)
 					err = resourceActivationDegraded()
@@ -156,17 +178,38 @@ func (m *Manager) activateResourcePlanWithState(ctx context.Context, operation O
 		if err == nil {
 			err = tx.Publish(ctx)
 		}
-		if err == nil && change != nil {
+		if err == nil && durable != nil {
+			err = durable.RecheckLocked()
+			// Settings/onboarding keep the current active subscription. Catalog
+			// changes validate their proposed identity while staging instead.
+			if err == nil {
+				switch change.(type) {
+				case *settingsResourceChange, *onboardingResourceChange:
+					err = m.checkResourceActivation(activationGeneration, plan)
+				}
+			}
+			if err == nil {
+				err = tx.(*trustedResourceTransaction).activation.PublishState(ctx)
+			}
+		} else if err == nil && change != nil {
 			err = change.ApplyLocked()
 		}
-		if err == nil {
+		if err == nil && durable == nil {
 			err = m.checkResourceActivation(m.currentConfigGeneration(), plan)
 		}
 		if err == nil {
 			err = tx.Finish(ctx)
 		}
-		if err != nil {
+		committed := err == nil
+		if outcome, ok := tx.(interface{ Committed() bool }); ok {
+			committed = outcome.Committed()
+		}
+		if err != nil && !committed {
 			return m.rollbackResourceActivationState(ctx, owner, tx, change, err, true)
+		}
+		completionErr := err
+		if durable != nil {
+			durable.PublishLocked()
 		}
 		if change != nil {
 			_, err = m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{ID: operation.ID, Source: operation.Source}, func(snapshot state.Snapshot) (state.Snapshot, error) {
@@ -185,8 +228,11 @@ func (m *Manager) activateResourcePlanWithState(ctx context.Context, operation O
 		m.configGeneration++
 		m.settingsMu.Unlock()
 		m.resourceActivation = nil
+		if completionErr != nil {
+			m.mutationDegraded.Store(true)
+		}
 		m.releaseMutation()
-		return nil
+		return completionErr
 	})
 }
 

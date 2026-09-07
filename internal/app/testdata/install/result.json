@@ -1,0 +1,7 @@
+{
+  "schema": "mihari.install-result/v1",
+  "changed": true,
+  "service_status": "running",
+  "transaction_id": "0123456789abcdef0123456789abcdef",
+  "source_retained": true
+}

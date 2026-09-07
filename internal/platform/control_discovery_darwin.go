@@ -9,7 +9,7 @@ import (
 
 // macOS12: retain the readable root and validate every protected relative
 // prefix before it can be used by a later lookup. No O_SEARCH assumption.
-type nativeDiscoveryBackend struct{}
+type nativeDiscoveryBackend struct{ smallFile bool }
 
 func (b nativeDiscoveryBackend) directory(p discoveryRef, name string) (discoveryRef, error) {
 	return b.child(p, name)
@@ -136,7 +136,7 @@ func (b nativeDiscoveryBackend) read(p discoveryRef, name string, m discoveryMet
 	if err != nil {
 		return nil, componentOpenError(err)
 	}
-	return readDiscoveryFD(fd, m, func(fd int) (discoveryMetadata, error) {
+	return readDiscoverySizedFD(fd, m, b.smallFile, func(fd int) (discoveryMetadata, error) {
 		var st unix.Stat_t
 		var fs unix.Statfs_t
 		if err := unix.Fstat(fd, &st); err != nil {

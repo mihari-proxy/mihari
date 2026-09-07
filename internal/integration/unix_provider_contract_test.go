@@ -70,7 +70,11 @@ func TestUnixProviderContract_PreservesIdentityAndCachesGenerationConflict(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer data.Close()
+	defer func() {
+		if err := data.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	providerStore, err := subscription.NewProviderStore(ctx, data)
 	if err != nil {
 		t.Fatal(err)

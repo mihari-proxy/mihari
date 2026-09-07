@@ -186,52 +186,114 @@ resolve_dev_tag() {
   printf '%s\n' "$best"
 }
 
-channel_data_root() {
-  if [ -n "${MIHARI_DATA:-}" ]; then
-    printf '%s\n' "$MIHARI_DATA"
-    return
-  fi
-  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
-    case "$SUDO_USER" in
-      *[!A-Za-z0-9._-]*|'') err "resolve sudo user home" ;;
-    esac
-    home=""
-    if command -v getent >/dev/null 2>&1; then
-      home="$(getent passwd "$SUDO_USER" | cut -d: -f6 || true)"
-    fi
-    if [ -z "$home" ]; then
-      home="$(eval echo "~$SUDO_USER")"
-    fi
-    case "$home" in
-      /*) ;;
-      *) err "resolve mihari channel data root: home is not absolute" ;;
-    esac
-    [ -n "$home" ] || err "resolve sudo user home"
-    printf '%s\n' "$home/.mihari"
-    return
-  fi
-  printf '%s\n' "${HOME}/.mihari"
-}
 
-write_channel() {
-  channel="$1"
-  root="$(channel_data_root)"
-  created=0
-  [ -d "$root" ] || created=1
-  mkdir -p "$root"
-  tmp="$(mktemp "$root/.mihari-channel.tmp.XXXXXX")"
-  printf '%s\n' "$channel" >"$tmp"
-  chmod 0600 "$tmp"
-  mv -f "$tmp" "$root/mihari-channel"
-  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
-    uid="$(id -u "$SUDO_USER")"
-    gid="$(id -g "$SUDO_USER")"
-    if [ "$created" -eq 1 ]; then
-      chown "$uid:$gid" "$root"
-    fi
-    chown "$uid:$gid" "$root/mihari-channel"
+# BEGIN ROOT APPLY
+# Generated from root-apply.sh.in; edit the template and run generate_root_apply.py.
+# The privileged shell is fixed code; caller values travel only as positional
+# arguments. The first executed mihari is a checked root installation or a
+# fixed official release verified inside this root-exclusive staging directory.
+root_apply() {
+  elevate=""
+  if [ "$(id -u)" -ne 0 ]; then
+    [ -x /usr/bin/sudo ] || err "installation requires root or /usr/bin/sudo"
+    elevate=/usr/bin/sudo
   fi
+  $elevate /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/sh -s -- "$1" "$2" "$3" "$4" "${MIHARI_SOURCE:-}" "${MIHARI_DATA:-}" "${MIHARI_ENDPOINT:-}" "${MIHARI_CREDENTIAL:-}" "${MIHARI_INSTALL_ROOT:-}" "${MIHARI_BIN:-/usr/local/bin}/mihari" <<'MIHARI_ROOT_APPLY'
+set -eu
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+unset ENV BASH_ENV CDPATH
+[ "$(id -u)" -eq 0 ] || exit 1
+umask 077
+fail() { printf '%s\n' "$1" >&2; exit 1; }
+tag=$1; channel=$2; candidate=$3; bundle=$4; source=$5; data=$6; endpoint=$7; credential=$8; install_root=$9; shift 9; path_binary=$1
+stage=$(mktemp -d /var/tmp/mihari-install.XXXXXXXX)
+cleanup() { rm -f "$stage/entry" "$stage/candidate" "$stage/checksums" "$stage/latest" "$stage/request.json"; rmdir "$stage"; }
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+root_fetch() {
+  [ -x /usr/bin/curl ] || fail "trusted bootstrap requires /usr/bin/curl"
+  /usr/bin/curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 120 --max-filesize 268435456 "$1" -o "$2"
 }
+checksum() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+  else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+case "$(uname -s)" in Linux) os=linux;; Darwin) os=darwin;; *) fail "unsupported OS";; esac
+case "$(uname -m)" in x86_64|amd64) arch=amd64;; aarch64|arm64) arch=arm64;; *) fail "unsupported architecture";; esac
+if [ -z "$tag" ]; then
+  [ "$channel" = main ] || fail "set MIHARI_VERSION to a fixed dev tag"
+  root_fetch https://api.github.com/repos/mihari-proxy/mihari/releases/latest "$stage/latest"
+  [ "$(wc -c < "$stage/latest")" -le 1048576 ] || fail "release metadata exceeds limit"
+  tag=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$stage/latest")
+fi
+printf '%s\n' "$tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-dev\.(0|[1-9][0-9]*))?$' || fail "invalid fixed release tag"
+case "$tag:$channel" in *-dev.*:dev) :;; *-dev.*:*) fail "release channel mismatch";; *:main) :;; *) fail "release channel mismatch";; esac
+trusted_entry() {
+  entry_path=$1
+  [ -f "$entry_path" ] && [ ! -L "$entry_path" ] || return 1
+  if [ "$os" = linux ]; then links=$(stat -c %h "$entry_path"); else links=$(stat -f %l "$entry_path"); fi
+  [ "$links" = 1 ] || return 1
+  while [ "$entry_path" != / ]; do
+    [ ! -L "$entry_path" ] || return 1
+    if [ "$os" = linux ]; then
+      owner=$(stat -c %u "$entry_path") || return 1
+      mode=$(stat -c %a "$entry_path") || return 1
+    else
+      owner=$(stat -f %u "$entry_path") || return 1
+      mode=$(stat -f %Lp "$entry_path") || return 1
+      [ -z "$(ls -lde "$entry_path" | sed -n '2p')" ] || return 1
+    fi
+    [ "$owner" = 0 ] && [ "$((0$mode & 022))" -eq 0 ] || return 1
+    entry_path=$(dirname "$entry_path")
+  done
+}
+entry=/usr/local/lib/mihari/mihari
+if ! trusted_entry "$entry"; then entry=""; fi
+if [ -n "$entry" ] && ! "$entry" service apply --help >/dev/null 2>&1; then entry=""; fi
+# An offline install uses a previously trusted root apply binary plus the Go
+# constructor's root-owned install-trust manifest and hash-named resources.
+if [ -z "$entry" ] || [ -z "$candidate" ]; then
+  asset="mihari-$os-$arch"
+  release="https://github.com/mihari-proxy/mihari/releases/download/$tag"
+  root_fetch "$release/SHA256SUMS.txt" "$stage/checksums"
+  [ "$(wc -c < "$stage/checksums")" -le 1048576 ] || fail "checksum manifest exceeds limit"
+  expected=$(awk -v asset="$asset" '$2==asset || $2=="*"asset {print $1}' "$stage/checksums")
+  printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$' || fail "missing unique official binary checksum"
+  root_fetch "$release/$asset" "$stage/entry"
+  [ "$(checksum "$stage/entry")" = "$expected" ] || fail "official binary checksum mismatch"
+  chmod 0700 "$stage/entry"
+  [ -n "$entry" ] || entry="$stage/entry"
+  [ -n "$candidate" ] || candidate="$stage/entry"
+fi
+# BEGIN REQUEST JSON
+json_string() {
+  case "$1" in *'
+'*) fail "newline in request value";; esac
+  printf '%s' "$1" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null && fail "control character in request value"
+  printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+}
+json_field() { [ -n "$2" ] || return 0; printf ',"%s":' "$1"; json_string "$2"; }
+write_request() {
+  printf '{"schema":"mihari.install-request/v1","operation":"install","binary":'
+  json_string "$candidate"
+  json_field channel "$channel"
+  if [ -n "$data" ]; then json_field layout private; json_field data "$data"; else json_field layout system; fi
+  json_field source "$source"
+  json_field endpoint "$endpoint"
+  json_field credential "$credential"
+  json_field install_root "$install_root"
+  json_field path_binary "$path_binary"
+  json_field release_tag "$tag"
+  if [ -n "$bundle" ]; then json_field bundle "$bundle"; json_field bundle_sha256 "$(checksum "$bundle")"; fi
+  printf '}\n'
+}
+# END REQUEST JSON
+write_request > "$stage/request.json"
+"$entry" service apply --request "$stage/request.json" --json
+MIHARI_ROOT_APPLY
+}
+# END ROOT APPLY
 
 asset="mihari-${os}-${arch}"
 if [ -n "${MIHARI_VERSION:-}" ]; then
@@ -244,52 +306,21 @@ else
 fi
 
 if [ "${MIHARI_INSTALL_TEST_MODE:-}" = "1" ]; then
-  if [ "$CHANNEL_EXPLICIT" -eq 1 ]; then
-    write_channel "$CHANNEL"
-  fi
   printf 'CHANNEL=%s\n' "$CHANNEL"
   printf 'EXPLICIT=%s\n' "$CHANNEL_EXPLICIT"
   printf 'URL=%s\n' "$url"
   exit 0
 fi
 
-# Elevate for writes to system dirs when needed.
-SUDO=""
-if [ ! -w "$BIN_DIR" ] 2>/dev/null; then
-  if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
-    SUDO="sudo"
-  fi
-fi
-
-tmp="$(mktemp)"
-info "Downloading ${asset} from ${REPO}…"
-dl "$url" "$tmp" || err "download failed: $url"
-
-info "Installing to ${BIN_DIR}/mihari"
-$SUDO mkdir -p "$BIN_DIR"
-$SUDO install -m 0755 "$tmp" "${BIN_DIR}/mihari"
-rm -f "$tmp"
-
-if [ "$CHANNEL_EXPLICIT" -eq 1 ]; then
-  write_channel "$CHANNEL"
-fi
 
 if [ "${MIHARI_NO_INSTALL:-0}" = "1" ]; then
-  info "Downloaded. Run: mihari daemon (or: mihari service install && mihari service start)"
+  output_dir="${MIHARI_DOWNLOAD_DIR:-.}"
+  mkdir -p "$output_dir"
+  umask 077
+  dl "$url" "$output_dir/$asset" || err "download failed"
+  info "Downloaded $output_dir/$asset"
   exit 0
 fi
-
-# OS service registration needs root/system-level permissions on most setups.
-if [ "$(id -u)" -ne 0 ]; then
-  info "Registering the OS service requires root; elevating…"
-  if ! command -v sudo >/dev/null 2>&1; then
-    err "service install needs root; rerun as root or set MIHARI_NO_INSTALL=1"
-  fi
-  $SUDO "${BIN_DIR}/mihari" service install
-  $SUDO "${BIN_DIR}/mihari" service start
-else
-  "${BIN_DIR}/mihari" service install
-  "${BIN_DIR}/mihari" service start
-fi
-
-printf '\n\033[1;32m✓ Done.\033[0m Manage with: mihari status | mihari sub add <url>\n'
+# Repo/API overrides select only unprivileged download artifacts. Root bootstrap
+# independently resolves and verifies the official fixed-tag binary.
+root_apply "${MIHARI_VERSION:-${tag:-}}" "${CHANNEL:-main}" "" ""

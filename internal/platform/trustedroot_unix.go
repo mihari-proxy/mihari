@@ -512,3 +512,9 @@ func componentOpenError(err error) error {
 	}
 	return err
 }
+
+// OpenTrustedParent opens an existing owner-controlled creation parent. It
+// preserves its mode and verifies ancestry, filesystem and creation ACLs.
+func OpenTrustedParent(ctx context.Context, path string, owner uint32) (*TrustedRoot, error) {
+	return openTrustedParent(ctx, path, owner)
+}

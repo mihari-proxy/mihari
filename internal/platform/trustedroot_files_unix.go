@@ -301,67 +301,73 @@ func (r *TrustedRoot) RemoveFile(ctx context.Context, name string, mode uint32, 
 	return r.backend.sync(parent)
 }
 
-// MoveFileTo publishes a held source inode into a separately held directory.
+// MoveFileTo publishes a held source inode into a held directory, including a
+// same-parent backup using the same capability.
 // Both roots remain owned by the caller; expected=nil requires absence. Callers
 // serialize cross-directory moves under their lifecycle/transaction lease.
 func (r *TrustedRoot) MoveFileTo(ctx context.Context, name string, id FileIdentity, to *TrustedRoot, target string, mode uint32, expected *FileIdentity) error {
-	if r == to {
-		return os.ErrInvalid
-	}
+	_, err := r.MoveFileToPublished(ctx, name, id, to, target, mode, expected)
+	return err
+}
+
+// MoveFileToPublished reports the single rename commit even if parent sync fails.
+func (r *TrustedRoot) MoveFileToPublished(ctx context.Context, name string, id FileIdentity, to *TrustedRoot, target string, mode uint32, expected *FileIdentity) (published bool, err error) {
 	finish, e := r.begin(ctx)
 	if e != nil {
-		return e
+		return false, e
 	}
 	defer finish()
-	finishTo, e := to.begin(ctx)
-	if e != nil {
-		return e
+	if r != to {
+		finishTo, err := to.begin(ctx)
+		if err != nil {
+			return false, err
+		}
+		defer finishTo()
 	}
-	defer finishTo()
 	if !trustedComponent(name) || !trustedComponent(target) || !trustedFileMode(mode) || r.policy.Owner != to.policy.Owner {
-		return os.ErrInvalid
+		return false, os.ErrInvalid
 	}
 	if e = r.verify(); e != nil {
-		return e
+		return false, e
 	}
 	if e = to.verify(); e != nil {
-		return e
+		return false, e
 	}
 	sourceParent := r.chain[len(r.chain)-1].fd
 	targetParent := to.chain[len(to.chain)-1].fd
 	if e = r.backend.checkACL(sourceParent, true, r.policy.Owner); e != nil {
-		return e
+		return false, e
 	}
 	if e = to.backend.checkACL(targetParent, true, to.policy.Owner); e != nil {
-		return e
+		return false, e
 	}
 	if e = r.checkDestination(sourceParent, name, mode, &id); e != nil {
-		return e
+		return false, e
 	}
 	if e = to.checkDestination(targetParent, target, mode, expected); e != nil {
-		return e
+		return false, e
 	}
 	fd, e := r.backend.openFile(sourceParent, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if e != nil {
-		return e
+		return false, e
 	}
 	defer func() { _ = r.backend.close(fd) }() // Read-only source handle; both directory sync results are reported below.
 	n, e := r.checkFile(fd, mode)
 	if e != nil {
-		return e
+		return false, e
 	}
 	if n.id != id.plat {
-		return ErrIdentityMismatch
+		return false, ErrIdentityMismatch
 	}
 	if n.mode&07777 != mode {
-		return os.ErrPermission
+		return false, os.ErrPermission
 	}
 	n, e = r.checkFile(fd, mode)
 	if e != nil {
-		return e
+		return false, e
 	}
 	if e = r.checkFileName(sourceParent, name, n); e != nil {
-		return e
+		return false, e
 	}
 	if expected == nil {
 		e = renameatBetweenNoReplace(sourceParent, name, targetParent, target)
@@ -369,7 +375,7 @@ func (r *TrustedRoot) MoveFileTo(ctx context.Context, name string, id FileIdenti
 		e = unix.Renameat(sourceParent, name, targetParent, target)
 	}
 	if e != nil {
-		return e
+		return false, e
 	}
-	return errors.Join(r.backend.sync(sourceParent), to.backend.sync(targetParent))
+	return true, errors.Join(r.backend.sync(sourceParent), to.backend.sync(targetParent))
 }

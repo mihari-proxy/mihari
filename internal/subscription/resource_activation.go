@@ -17,24 +17,25 @@ import (
 const resourceJournalPath = "staging/providers/activation.json"
 
 type resourceEntry struct {
-	Transaction    string          `json:"transaction"`
-	SubscriptionID string          `json:"subscription_id"`
-	Generation     uint64          `json:"generation"`
-	Kind           string          `json:"kind"`
-	Name           string          `json:"name"`
-	Resource       string          `json:"resource"`
-	Format         string          `json:"format"`
-	Geo            GeoResourceKind `json:"geo"`
-	Configuration  bool            `json:"configuration"`
-	Old            providerObject  `json:"old"`
-	New            providerObject  `json:"new"`
-	Marker         providerObject  `json:"marker"`
-	BackupIntent   bool            `json:"backup_intent"`
-	BackupDone     bool            `json:"backup_done"`
-	SwapIntent     bool            `json:"swap_intent"`
-	SwapDone       bool            `json:"swap_done"`
-	RestoreIntent  bool            `json:"restore_intent"`
-	RestoreDone    bool            `json:"restore_done"`
+	Transaction    string            `json:"transaction"`
+	SubscriptionID string            `json:"subscription_id"`
+	Generation     uint64            `json:"generation"`
+	Kind           string            `json:"kind"`
+	Name           string            `json:"name"`
+	Resource       string            `json:"resource"`
+	Format         string            `json:"format"`
+	Geo            GeoResourceKind   `json:"geo"`
+	Configuration  bool              `json:"configuration"`
+	StateRole      resourceStateRole `json:"state_role"`
+	Old            providerObject    `json:"old"`
+	New            providerObject    `json:"new"`
+	Marker         providerObject    `json:"marker"`
+	BackupIntent   bool              `json:"backup_intent"`
+	BackupDone     bool              `json:"backup_done"`
+	SwapIntent     bool              `json:"swap_intent"`
+	SwapDone       bool              `json:"swap_done"`
+	RestoreIntent  bool              `json:"restore_intent"`
+	RestoreDone    bool              `json:"restore_done"`
 }
 type resourceJournal struct {
 	Schema  string          `json:"schema"`
@@ -51,6 +52,7 @@ type ResourceActivation struct {
 	storePath     string
 	storeIdentity string
 	settled       bool
+	committed     bool
 }
 
 // StoreBinding identifies the sealed data root that owns this activation. It
@@ -63,6 +65,12 @@ func (a *ResourceActivation) StoreBinding() (string, string, error) {
 }
 
 func (e resourceEntry) target() (string, error) {
+	if e.StateRole != "" {
+		if e.Configuration || e.Geo != "" || e.Generation != 0 || e.Kind != "" || e.Name != "" || e.Resource != "" || e.Format != "" {
+			return "", dataError("invalid activation state identity")
+		}
+		return stateTarget(e.StateRole, e.SubscriptionID)
+	}
 	if e.Configuration {
 		if e.Geo != "" || e.SubscriptionID != "" || e.Generation != 0 || e.Kind != "" || e.Name != "" || e.Resource != "" || e.Format != "" {
 			return "", dataError("invalid configuration activation identity")
@@ -198,13 +206,13 @@ func (p *PreparedResources) Activate(ctx context.Context) (*ResourceActivation, 
 	}
 	a := &ResourceActivation{prepared: p, storePath: storePath, storeIdentity: storeIdentity, journal: resourceJournal{Schema: "mihari.resource-activation/v1", Entries: []resourceEntry{}}}
 	seen := map[string]bool{}
-	for _, group := range [][]*PreparedProvider{p.providers, p.geo, []*PreparedProvider{p.configuration}} {
+	for _, group := range [][]*PreparedProvider{p.providers, p.geo, []*PreparedProvider{p.configuration}, p.state} {
 		for _, c := range group {
 			if c.closed {
 				return nil, dataError("resource candidate closed")
 			}
 			spec := c.spec
-			e := resourceEntry{Transaction: c.transaction, SubscriptionID: spec.SubscriptionID, Generation: spec.Generation, Kind: spec.Kind, Name: spec.Name, Resource: spec.ResourceID, Format: spec.Format, Geo: c.geo, Configuration: c.configuration, Old: c.old, New: c.candidate, Marker: c.marker}
+			e := resourceEntry{Transaction: c.transaction, SubscriptionID: spec.SubscriptionID, Generation: spec.Generation, Kind: spec.Kind, Name: spec.Name, Resource: spec.ResourceID, Format: spec.Format, Geo: c.geo, Configuration: c.configuration, StateRole: c.stateRole, Old: c.old, New: c.candidate, Marker: c.marker}
 			path, e2 := e.target()
 			if e2 != nil {
 				return nil, e2
@@ -232,7 +240,7 @@ func (p *PreparedResources) Activate(ctx context.Context) (*ResourceActivation, 
 	// inode to a same-parent backup avoids copying large Geo bytes under mutation.
 	if err = s.saveResourceJournal(ctx, a.journal); err == nil {
 		for i := range a.journal.Entries {
-			if a.journal.Entries[i].Configuration {
+			if a.journal.Entries[i].Configuration || a.journal.Entries[i].StateRole != "" {
 				continue
 			}
 			if err = a.swap(ctx, i); err != nil {
@@ -384,14 +392,60 @@ func (a *ResourceActivation) Finish(ctx context.Context) error {
 	a.journal.Done = true
 	if len(a.journal.Entries) > 0 {
 		if err = s.saveResourceJournal(ctx, a.journal); err != nil {
+			// A write may have replaced the journal before reporting a sync or
+			// close error. Never roll back a visible done record.
+			if observed, readErr := s.loadResourceJournal(context.WithoutCancel(ctx)); readErr == nil {
+				a.committed = observed.Done
+				a.journal.Done = observed.Done
+			}
 			return providerDegraded()
 		}
+		a.committed = true
 		if err = s.recoverResources(context.WithoutCancel(ctx)); err != nil {
 			return providerDegraded()
 		}
 	}
 	a.settled = true
 	return nil
+}
+
+// Committed reports irreversible new-set authority, including cleanup failures.
+func (a *ResourceActivation) Committed() bool { return a != nil && a.committed }
+
+// PublishState swaps only the sealed daemon state participants, after the
+// generated configuration has been validated and published. Memory publication
+// must wait for Finish and its durable done authority.
+func (a *ResourceActivation) PublishState(ctx context.Context) error {
+	if a == nil || a.prepared == nil {
+		return dataError("resource activation unavailable")
+	}
+	s := a.prepared.store
+	release, err := s.acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if a.settled {
+		return dataError("resource activation settled")
+	}
+	if err = a.recheck(ctx); err != nil {
+		return err
+	}
+	_, configuration, err := a.configEntry()
+	if err != nil {
+		return err
+	}
+	if !configuration.SwapDone {
+		return dataError("activation configuration is unpublished")
+	}
+	for i, entry := range a.journal.Entries {
+		if entry.StateRole != "" && !entry.SwapDone {
+			if err = a.swap(ctx, i); err != nil {
+				return err
+			}
+		}
+	}
+	return a.recheck(ctx)
 }
 
 // Restore ignores caller cancellation once rollback ownership is accepted.
@@ -425,7 +479,7 @@ func (s *ProviderStore) loadResourceJournal(ctx context.Context) (resourceJourna
 	if err != nil {
 		return j, err
 	}
-	if err = providerJSONShape(b, reflect.TypeOf(j)); err != nil {
+	if err = resourceJournalShape(b); err != nil {
 		return j, dataError("invalid resource journal shape")
 	}
 	d := json.NewDecoder(bytes.NewReader(b))
@@ -440,13 +494,20 @@ func (s *ProviderStore) loadResourceJournal(ctx context.Context) (resourceJourna
 	if err = d.Decode(&j); err != nil {
 		return j, dataError("invalid resource journal")
 	}
-	if j.Schema != "mihari.resource-activation/v1" || len(j.Entries) == 0 || len(j.Entries) > 261 {
+	if j.Schema != "mihari.resource-activation/v1" || len(j.Entries) == 0 || len(j.Entries) > 265 {
 		return j, dataError("invalid resource journal")
 	}
 	paths := map[string]bool{}
 	identities := map[string]bool{}
 	configurations := 0
+	roles := map[resourceStateRole]bool{}
 	for _, e := range j.Entries {
+		if e.StateRole != "" {
+			if roles[e.StateRole] {
+				return j, dataError("duplicate activation state role")
+			}
+			roles[e.StateRole] = true
+		}
 		if e.Configuration {
 			configurations++
 		}
@@ -476,9 +537,48 @@ func (s *ProviderStore) loadResourceJournal(ctx context.Context) (resourceJourna
 		}
 	}
 	if configurations != 1 {
-		return j, dataError("invalid resource activation configuration")
+		if configurations != 0 {
+			return j, dataError("invalid resource activation configuration")
+		}
+		for _, e := range j.Entries {
+			if e.Geo == "" || e.Configuration || e.StateRole != "" {
+				return j, dataError("invalid resource activation configuration")
+			}
+		}
 	}
 	return j, nil
+}
+
+func resourceJournalShape(b []byte) error {
+	// Existing v1 journals predate the finite state_role field. Only its
+	// omission means the legacy resource-only role; null/unknown fields and
+	// all other omissions still fail the exact shape validator.
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(b, &members); err != nil {
+		return err
+	}
+	var entries []map[string]json.RawMessage
+	if err := json.Unmarshal(members["entries"], &entries); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry == nil {
+			return os.ErrInvalid
+		}
+		if _, exists := entry["state_role"]; !exists {
+			entry["state_role"] = json.RawMessage(`""`)
+		}
+	}
+	encoded, err := json.Marshal(entries)
+	if err != nil {
+		return err
+	}
+	members["entries"] = encoded
+	encoded, err = json.Marshal(members)
+	if err != nil {
+		return err
+	}
+	return providerJSONShape(encoded, reflect.TypeOf(resourceJournal{}))
 }
 func (s *ProviderStore) recoverResources(ctx context.Context) error {
 	j, err := s.loadResourceJournal(ctx)

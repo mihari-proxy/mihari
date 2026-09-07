@@ -1,0 +1,121 @@
+"""Strict evidence and lifecycle policy; this module performs no host operations."""
+import json
+
+PREFIX = "github.com/mihari-proxy/mihari/"
+COMMON = {
+    "internal/platform": ["TestSecurityTrustedRootPositive", "TestSecurityCreationACL", "TestSecurityDirectoryIdentity"],
+    "internal/control/transport": ["TestSecurityPeerOwner"],
+    "internal/integration": ["TestSecurityTwoUIDControl", "TestSecurityPrivateDataDenied", "TestSecurityOtherUserLogsDenied"],
+}
+SUPPLEMENTAL = {
+    "internal/app": [
+        "TestNativeInstallEffects_FilePublicationAndActualBackup",
+        "TestNativeInstallEffects_PrivatePublicationRetainsLockIdentity",
+        "TestNativeInstallSession_PrivateMetadataBindsRecoveryAuthority",
+        "TestNativeBinaryStageCleanup_CrashAndIdentityMismatch",
+        "TestNativeInstallBoundary_LifecycleRetainsDataAuthority",
+        "TestNativeInstallBoundary_AbsentPathMigrationStagesBothBinaries",
+        "TestNativeInstallBoundary_ServiceIdentityRecovery",
+        "TestNativeInstallBoundary_SourceRecoveryRetriesAfterRestore",
+        "TestUnixLocalOperation_CancellationRemainsCancellation",
+        "TestUnixLocalOperation_PreservesClassifiedErrorAndCause",
+        "TestSecurityPrivateServiceActivation", "TestSecurityNativeCrashMatrix", "TestSecurityValidationProcess",
+    ],
+    "internal/service": ["TestNativeDefinitionStore_RestoresOriginalBytesAndMode"],
+    "internal/platform": [
+        "TestReadOnlySource_UserWritableAncestry",
+        "TestReadOnlySource_RejectsLinksAndAnchorReplacement",
+        "TestReadOnlySource_RejectsDescendantReplacementDuringRead",
+        "TestTrustedRoot_ServiceExchangeCommittedOnSyncFailure",
+    ],
+    "cmd/mihari": ["TestUnixSecurity_FullAssembly", "TestProcess_SIGTERMJoinsCleanup", "TestProcess_SetupPreservesClassifiedError", "TestUnixProcess_LocalFailureExitContracts"],
+}
+
+
+def required(target_os, supplemental=False):
+    if target_os not in ("linux", "darwin"):
+        raise ValueError("unsupported security OS")
+    result = [(PREFIX+p, n) for p, names in COMMON.items() for n in names]
+    result.append((PREFIX+"internal/platform", "TestSecurityBindMountDenied" if target_os == "linux" else "TestSecurityDarwinACLABI"))
+    if supplemental:
+        result.extend((PREFIX+p, n) for p, names in SUPPLEMENTAL.items() for n in names)
+    return result
+
+
+def verify(events, target_os, uids, go_status=0, supplemental=False):
+    keys = required(target_os, supplemental)
+    terminals = {key: [] for key in keys}
+    starts = {key: 0 for key in keys}
+    errors, children, roots, assembly = [], [], [], []
+    local_rows = {}
+    for event in events:
+        key = (event.get("Package"), event.get("Test"))
+        action = event.get("Action")
+        if key in terminals:
+            if action in ("pass", "fail", "skip"):
+                terminals[key].append(action)
+            if action == "run":
+                starts[key] += 1
+        if action == "fail":
+            errors.append("Go failure")
+        if key[0] == PREFIX+"cmd/mihari" and isinstance(key[1], str) and key[1].startswith("TestUnixProcess_LocalFailureExitContracts/"):
+            if action in ("pass", "fail", "skip"):
+                local_rows.setdefault(key[1], []).append(action)
+        if action != "output":
+            continue
+        for label, collection, permitted in [
+            ("security_child=", children, (PREFIX+"internal/integration", "TestSecurityTwoUIDControl")),
+            ("security_root=", roots, (PREFIX+"internal/platform", "TestSecurityTrustedRootPositive")),
+            ("unix_assembly_result=", assembly, (PREFIX+"cmd/mihari", "TestUnixSecurity_FullAssembly")),
+        ]:
+            output = event.get("Output", "")
+            if key == permitted and label in output:
+                try:
+                    collection.append(json.loads(output.split(label, 1)[1].strip()))
+                except (ValueError, TypeError):
+                    errors.append("invalid evidence record")
+    checks = {package+":"+name: "pass" if terminals[(package, name)] == ["pass"] and starts[(package, name)] == 1 else "fail" for package, name in keys}
+    if any(value != "pass" for value in checks.values()):
+        errors.append("missing, duplicate, skipped or failed required test")
+    if go_status != 0:
+        errors.append("Go process exited unsuccessfully")
+    if len(uids) != 2 or len(set(uids)) != 2 or any(type(uid) is not int or uid <= 0 for uid in uids):
+        errors.append("invalid user identities")
+    if len(children) != 2 or sorted(p.get("euid", 0) for p in children) != sorted(uids) or any(type(p.get("gid")) is not int or not all(p.get(k) is True for k in ("authenticated", "private_denied", "other_denied", "own_log")) for p in children):
+        errors.append("missing actual two-user authentication and denial proof")
+    if len(roots) != 1 or any(p.get("uid") != 0 or p.get("mode") != 0o711 or not all(type(p.get(k)) is int and p[k] > 0 for k in ("dev", "ino")) or not isinstance(p.get("mount"), str) or not p["mount"] for p in roots):
+        errors.append("missing native root identity proof")
+    if supplemental:
+        expected_rows = {"TestUnixProcess_LocalFailureExitContracts/"+name for name in ("invalid-layout", "daemon-lock", "channel-lock", "unsafe-channel-root", "channel-IO")}
+        if set(local_rows) != expected_rows or any(v != ["pass"] for v in local_rows.values()):
+            errors.append("local process matrix requires five non-skipped rows")
+        if len(assembly) != 2 or sorted(p.get("EUID", 0) for p in assembly) != sorted(uids) or any(not all(p.get(k) is True for k in ("Authenticated", "SettingsDenied", "OtherUserDenied", "V2Export")) for p in assembly):
+            errors.append("missing full assembly two-user proof")
+    return {"passed": not errors, "checks": checks, "errors": sorted(set(errors))}
+
+
+def finish(host, report, status):
+    if status:
+        report["failures"].append("test-or-signal")
+    try:
+        host.archive()
+    except Exception:
+        report["failures"].append("archive")
+        report["cleanup"]["archive"] = "fail"
+        report["exit_status"] = 1
+        report["passed"] = False
+        return report
+    report["cleanup"]["archive"] = "pass"
+    for stage in ("processes", "mounts", "accounts", "anchor"):
+        try:
+            host.cleanup(stage)
+            report["cleanup"][stage] = "pass"
+        except Exception:
+            report["cleanup"][stage] = "fail"
+            report["failures"].append(stage)
+            # A live process/mount/account makes recursive anchor removal unsafe.
+            break
+    report["failures"] = sorted(set(report["failures"]))
+    report["exit_status"] = int(bool(report["failures"]))
+    report["passed"] = report.get("passed", False) and not report["exit_status"]
+    return report

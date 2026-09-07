@@ -5,8 +5,6 @@ package platform
 import (
 	"encoding/binary"
 	"fmt"
-	"runtime"
-	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -25,17 +23,10 @@ func unixACLHasNoAdditionalAuthority(fd int) (bool, error) {
 	// an empty reference when no ACL is attached. Any nonempty ACL (including
 	// DELETE/DELETE_CHILD grants) remains conservatively unproved.
 	// ABI: xnu/bsd/sys/attr.h and xnu/bsd/vfs/vfs_attrlist.c.
-	attrs := struct {
-		Count                           uint16
-		Reserved                        uint16
-		Common, Volume, Dir, File, Fork uint32
-	}{Count: 5, Common: unix.ATTR_CMN_EXTENDED_SECURITY}
+	attrs := unix.Attrlist{Bitmapcount: 5, Commonattr: unix.ATTR_CMN_EXTENDED_SECURITY}
 	var buf [4096]byte
-	_, _, errno := unix.Syscall6(unix.SYS_FGETATTRLIST, uintptr(fd), uintptr(unsafe.Pointer(&attrs)), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), 0, 0)
-	runtime.KeepAlive(&attrs)
-	runtime.KeepAlive(&buf)
-	if errno != 0 {
-		return false, fmt.Errorf("query publish access ACL: %w", errno)
+	if err := darwinFDAttributes(fd, &attrs, buf[:], 0); err != nil {
+		return false, fmt.Errorf("query publish access ACL: %w", err)
 	}
 	length := binary.NativeEndian.Uint32(buf[:4])
 	if length < 12 || length > uint32(len(buf)) {

@@ -13,10 +13,13 @@ import (
 )
 
 type discoveryModel struct {
-	nodes   map[string]discoveryMetadata
-	closed  int
-	denied  string
-	visited []string
+	nodes    map[string]discoveryMetadata
+	closed   int
+	acquired map[int]string
+	closes   map[int]int
+	nextFD   int
+	denied   string
+	visited  []string
 }
 
 func (b *discoveryModel) directory(p discoveryRef, name string) (discoveryRef, error) {
@@ -24,7 +27,7 @@ func (b *discoveryModel) directory(p discoveryRef, name string) (discoveryRef, e
 }
 
 func newDiscoveryModel() *discoveryModel {
-	b := &discoveryModel{nodes: map[string]discoveryMetadata{}}
+	b := &discoveryModel{nodes: map[string]discoveryMetadata{}, acquired: map[int]string{}, closes: map[int]int{}}
 	for i, p := range []string{"/", "/var", "/var/lib", "/var/lib/mihari"} {
 		mode := uint32(0755)
 		if i == 3 {
@@ -36,10 +39,10 @@ func newDiscoveryModel() *discoveryModel {
 	return b
 }
 func (b *discoveryModel) root() (discoveryRef, error) {
-	return discoveryRef{tail: "/", owned: true}, nil
+	return b.acquire("/"), nil
 }
 func (b *discoveryModel) child(p discoveryRef, n string) (discoveryRef, error) {
-	return discoveryRef{tail: strings.TrimSuffix(p.tail, "/") + "/" + n, owned: true}, nil
+	return b.acquire(strings.TrimSuffix(p.tail, "/") + "/" + n), nil
 }
 func (b *discoveryModel) inspect(r discoveryRef, strict bool, owner uint32) (discoveryMetadata, error) {
 	b.visited = append(b.visited, r.tail)
@@ -60,7 +63,23 @@ func (b *discoveryModel) name(p discoveryRef, n string) (trustedNode, error) {
 	return m.node, nil
 }
 func (b *discoveryModel) alias(discoveryRef, string) (string, error) { return "", ErrUnsafeComponent }
-func (b *discoveryModel) close(discoveryRef) error                   { b.closed++; return nil }
+func (b *discoveryModel) close(r discoveryRef) error                 { b.closed++; b.closes[r.fd]++; return nil }
+func (b *discoveryModel) acquire(path string) discoveryRef {
+	b.nextFD++
+	b.acquired[b.nextFD] = path
+	return discoveryRef{fd: b.nextFD, tail: path, owned: true}
+}
+func (b *discoveryModel) assertAllClosedOnce(t *testing.T) {
+	t.Helper()
+	if len(b.acquired) == 0 || len(b.acquired) != len(b.closes) {
+		t.Fatalf("acquired=%v closed=%v", b.acquired, b.closes)
+	}
+	for fd, path := range b.acquired {
+		if b.closes[fd] != 1 {
+			t.Fatalf("reference %d %s closed %d times", fd, path, b.closes[fd])
+		}
+	}
+}
 func (b *discoveryModel) read(discoveryRef, string, discoveryMetadata) ([]byte, error) {
 	return []byte(strings.Repeat("a", 64)), nil
 }
@@ -77,9 +96,10 @@ func TestControlDiscovery_ProtectedChain(t *testing.T) {
 	if err = d.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if b.closed == 0 {
-		t.Fatal("reader handles leaked")
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
 	}
+	b.assertAllClosedOnce(t)
 }
 func TestControlDiscovery_DoesNotDescendUnsafePrefix(t *testing.T) {
 	b := newDiscoveryModel()
@@ -89,6 +109,7 @@ func TestControlDiscovery_DoesNotDescendUnsafePrefix(t *testing.T) {
 	if !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("unsafe ancestor accepted: %v", err)
 	}
+	b.assertAllClosedOnce(t)
 	for _, p := range b.visited {
 		if p == "/var/lib" {
 			t.Fatal("descended unsafe prefix")

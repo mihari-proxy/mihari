@@ -64,6 +64,7 @@ type PreparedProvider struct {
 	closed         bool
 	geo            GeoResourceKind
 	configuration  bool
+	stateRole      resourceStateRole
 	required       map[string]resourceSource
 }
 
@@ -314,6 +315,9 @@ func (s *ProviderStore) prepareBytes(ctx context.Context, spec ProviderSpec, geo
 }
 
 func (p *PreparedProvider) targetPath() (string, error) {
+	if p.stateRole != "" {
+		return stateTarget(p.stateRole, p.spec.SubscriptionID)
+	}
 	if p.configuration {
 		return "runtime/config.yaml", nil
 	}

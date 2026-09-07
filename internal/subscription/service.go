@@ -37,6 +37,7 @@ type Service struct {
 	downloader  Fetcher
 	now         func() time.Time
 	catalog     Catalog
+	activation  *CatalogActivation
 }
 
 type PreparedRefresh struct {
@@ -111,6 +112,9 @@ func (s *Service) Add(name, rawURL, proxyMode string) (Profile, error) {
 func (s *Service) Mutate(mutate func(*Catalog) error) (Catalog, Catalog, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.activation != nil {
+		return Catalog{}, Catalog{}, catalogActivationBusy()
+	}
 	before := s.catalog.Clone()
 	after := before.Clone()
 	if err := mutate(&after); err != nil {
@@ -180,6 +184,9 @@ func (s *Service) noteRefreshError(id string, cause error) error {
 func (s *Service) CommitRefresh(prepared PreparedRefresh) (Receipt, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.activation != nil {
+		return Receipt{}, catalogActivationBusy()
+	}
 	index := s.catalog.Index(prepared.profileID)
 	if index < 0 || s.catalog.Profiles[index].Version != prepared.profileVersion {
 		return Receipt{}, protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "subscription changed while refresh was in progress"}
@@ -229,6 +236,9 @@ func (s *Service) CommitRefresh(prepared PreparedRefresh) (Receipt, error) {
 func (s *Service) Rollback(receipt Receipt) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.activation != nil {
+		return catalogActivationBusy()
+	}
 	if err := s.restoreCache(receipt.cachePath, receipt.cacheBefore, receipt.hadCache, receipt.wroteCache); err != nil {
 		return err
 	}
@@ -242,6 +252,9 @@ func (s *Service) Rollback(receipt Receipt) error {
 func (s *Service) Restore(catalog Catalog) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.activation != nil {
+		return catalogActivationBusy()
+	}
 	if err := Save(s.catalogPath, catalog); err != nil {
 		return err
 	}

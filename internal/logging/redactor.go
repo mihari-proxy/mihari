@@ -44,6 +44,7 @@ type Redactor struct {
 	mu          sync.Mutex
 	configured  []string
 	credentials map[string]struct{}
+	snapshots   map[*Redactor]struct{}
 }
 
 // RetainCredential keeps a successfully loaded control credential redacted for
@@ -102,6 +103,39 @@ func (r *Redactor) publishRules() {
 		return len(exact[i]) > len(exact[j])
 	})
 	r.rules.Store(&redactionRules{exact: exact})
+	// Active snapshots retain every update, including secrets replaced again
+	// before their next record is read. Followers are private leaf redactors.
+	for snapshot := range r.snapshots {
+		prior := snapshot.rules.Load()
+		values := append([]string(nil), exact...)
+		if prior != nil {
+			values = append(values, prior.exact...)
+		}
+		snapshot.ReplaceExact(values)
+	}
+}
+
+// snapshot retains initial and subsequent exact secrets until release. The
+// caller owns release; no goroutine or process-lifetime secret history is added.
+func (r *Redactor) snapshot() (*Redactor, func()) {
+	retained := NewRedactor()
+	if r == nil {
+		return retained, func() {}
+	}
+	r.mu.Lock()
+	if rules := r.rules.Load(); rules != nil {
+		retained.ReplaceExact(rules.exact)
+	}
+	if r.snapshots == nil {
+		r.snapshots = make(map[*Redactor]struct{})
+	}
+	r.snapshots[retained] = struct{}{}
+	r.mu.Unlock()
+	return retained, func() {
+		r.mu.Lock()
+		delete(r.snapshots, retained)
+		r.mu.Unlock()
+	}
 }
 
 // String redacts a free-form text value using the current rules snapshot.

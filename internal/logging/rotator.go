@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -35,7 +34,7 @@ type RotatorOptions struct {
 
 // RotatingWriter appends full JSONL records with overflow-safe rotation.
 type RotatingWriter struct {
-	mu        sync.Mutex
+	mu        recordMutex
 	cfg       atomic.Pointer[Config]
 	dropped   atomic.Uint64
 	fs        *platform.PrivateFS

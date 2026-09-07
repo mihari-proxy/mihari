@@ -1193,6 +1193,8 @@ func (a *recordingLoggingApplier) Submit(cfg logging.Config) bool {
 	return true
 }
 
+func (a *recordingLoggingApplier) Cancel() { a.closed = true }
+
 func (a *recordingLoggingApplier) CloseAndWait() { a.closed = true }
 
 func (a *recordingLoggingApplier) last() logging.Config {

@@ -13,6 +13,7 @@ type localLogging interface {
 
 type loggingApplier interface {
 	Submit(logging.Config) bool
+	Cancel()
 	CloseAndWait()
 }
 
@@ -59,7 +60,7 @@ func (a *ownedLoggingApplier) Submit(cfg logging.Config) bool {
 	return true
 }
 
-func (a *ownedLoggingApplier) CloseAndWait() {
+func (a *ownedLoggingApplier) Cancel() {
 	if a == nil {
 		return
 	}
@@ -69,6 +70,13 @@ func (a *ownedLoggingApplier) CloseAndWait() {
 		a.cancel()
 		a.mu.Unlock()
 	})
+}
+
+func (a *ownedLoggingApplier) CloseAndWait() {
+	if a == nil {
+		return
+	}
+	a.Cancel()
 	<-a.done
 }
 

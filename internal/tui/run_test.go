@@ -493,7 +493,7 @@ func TestRunCleanupOwnsExportBeforeApplierAndResourcesWhenWaiterCmdIsUnexecuted(
 		&workerAwareCloser{name: "fs", workerDone: exportDone, order: &order, t: t},
 	)
 	applier := &orderedLoggingApplier{order: &order, workerDone: exportDone, t: t}
-	cleanup := newRunCleanup(&resources, func() { order = append(order, "session") }, exportModel, applier, nil)
+	cleanup := newRunCleanup(&resources, func() {}, func() { order = append(order, "session") }, exportModel, applier, nil)
 	if err := cleanup(nil); err != nil {
 		t.Fatal(err)
 	}
@@ -506,6 +506,93 @@ func TestRunCleanupOwnsExportBeforeApplierAndResourcesWhenWaiterCmdIsUnexecuted(
 	// The result channel is buffered: a waiter first scheduled after cleanup still completes.
 	if message := waiter(); message == nil {
 		t.Fatal("late waiter returned nil")
+	}
+}
+
+func TestRunShutdown_LifecycleOrder(t *testing.T) {
+	var order []string
+	observe := func(name string) { order = append(order, name) }
+	err := finishRun(requestedRelaunchModel(), nil, io.Discard, func() error {
+		order = append(order, "relaunch")
+		if !slices.Equal(order, []string{"cancel-export", "close-response", "wait-workers", "close-logging", "close-user-fs", "relaunch"}) {
+			t.Fatalf("relaunch order=%q", order)
+		}
+		return nil
+	}, func(tea.Model) error {
+		return executeRunShutdown(runShutdownHooks{
+			CancelExport:  func() {},
+			CloseResponse: func() {},
+			WaitWorkers:   func() {},
+			Logging:       &countingCloser{},
+			UserFS:        &countingCloser{},
+		}, observe)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"cancel-export", "close-response", "wait-workers", "close-logging", "close-user-fs", "relaunch"}
+	if !slices.Equal(order, want) {
+		t.Fatalf("order=%q want=%q", order, want)
+	}
+}
+
+func TestRunCleanup_NetworkTerminateDoesNotDropDiskWorkers(t *testing.T) {
+	started := make(chan struct{})
+	diskReleased := make(chan struct{})
+	diskDone := make(chan struct{})
+	responseStarted := make(chan struct{})
+	exportModel := ui.NewExportLogsModel(ui.ExportLogsOptions{
+		Context: context.Background(), Now: func() time.Time { return time.Unix(1, 0) }, DefaultDir: t.TempDir(),
+		CloseResponse: func() {
+			close(responseStarted)
+			time.Sleep(150 * time.Millisecond)
+		},
+		Export: func(ctx context.Context, _ logging.ExportRequest) (logging.ExportResult, error) {
+			close(started)
+			<-ctx.Done()
+			<-diskReleased
+			close(diskDone)
+			return logging.ExportResult{}, ctx.Err()
+		},
+	})
+	exportModel.Open()
+	exportModel.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if waiter, consumed := exportModel.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); waiter == nil || !consumed {
+		t.Fatal("submit did not synchronously own export")
+	}
+	<-started
+
+	var order []string
+	resources := NewLoggingResources(nil, nil, nil)
+	resources.closeState = newLoggingResourcesCloseState(
+		&workerAwareCloser{name: "close-logging", workerDone: diskDone, order: &order, t: t},
+		&workerAwareCloser{name: "close-user-fs", workerDone: diskDone, order: &order, t: t},
+	)
+	done := make(chan error, 1)
+	go func() {
+		done <- newRunCleanup(&resources, nil, nil, exportModel, &orderedLoggingApplier{order: &order, workerDone: diskDone, t: t}, nil)(nil)
+	}()
+	select {
+	case <-responseStarted:
+	case <-time.After(time.Second):
+		t.Fatal("close-response did not start")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("cleanup returned before disk worker finished: %v", err)
+	case <-time.After(60 * time.Millisecond):
+	}
+	close(diskReleased)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cleanup did not wait for disk worker after network timeout")
+	}
+	if want := []string{"applier", "close-logging", "close-user-fs"}; !slices.Equal(order, want) {
+		t.Fatalf("order=%q want=%q", order, want)
 	}
 }
 
@@ -537,6 +624,7 @@ type orderedLoggingApplier struct {
 }
 
 func (a *orderedLoggingApplier) Submit(logging.Config) bool { return true }
+func (a *orderedLoggingApplier) Cancel()                    {}
 func (a *orderedLoggingApplier) CloseAndWait() {
 	if a.workerDone != nil {
 		select {

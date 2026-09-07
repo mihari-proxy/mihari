@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -31,6 +33,7 @@ import (
 )
 
 type RuntimeAssembly struct {
+	SetupRequired bool
 	Manager       *runtimeapi.Manager
 	Store         *state.Store
 	Web           *web.Server
@@ -39,7 +42,7 @@ type RuntimeAssembly struct {
 
 type RuntimeBuildOptions struct {
 	// TrustedCore and RootConfigInput are enabled together by the Unix assembly.
-	// Default dispatch remains legacy until the final system-mode activation.
+	// Root Unix modes supply the trusted core, input policy and resources together.
 	TrustedCore     *core.TrustedExecution
 	RootConfigInput func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error)
 	Resources       StartupResources
@@ -53,6 +56,9 @@ type RuntimeBuildOptions struct {
 	MihomoStderr         io.Writer
 	SaveOnboardingState  func(string, onboarding.State) (config.CommitResult, error)
 	OnBackgroundError    func(component string, err error)
+	ValidationMode       bool
+	ValidationCore       core.ProvenanceStore
+	ActivationPhase      string
 }
 
 // StartupResources recovers provider/resource WALs and reconstructs the
@@ -74,6 +80,12 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	if stderr == nil {
 		stderr = io.Discard
 	}
+	if options.ValidationMode {
+		return buildValidationRuntime(paths, settings, daemonVersion, options)
+	}
+	if options.ActivationPhase != "" && options.ActivationPhase != InstallPhaseActivationCommitted && options.ActivationPhase != InstallPhaseComplete {
+		return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "install activation is required"}
+	}
 	if options.TrustedCore != nil {
 		if err := options.TrustedCore.CheckPaths(paths.Root, paths.CoreBinary, paths.RuntimeConfig); err != nil {
 			return nil, err
@@ -81,6 +93,23 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	}
 	if err := paths.EnsureDirs(); err != nil {
 		return nil, err
+	}
+	// Recover before opening catalog/onboarding or constructing any settings
+	// consumer. The caller may have loaded settings before this recovery.
+	if options.TrustedCore != nil && options.Resources != nil {
+		if recovery, ok := options.Resources.(interface {
+			RecoverState(context.Context) (*config.Settings, error)
+		}); ok {
+			recovered, err := recovery.RecoverState(context.Background())
+			if err != nil {
+				return nil, err
+			}
+			if recovered != nil {
+				settings = recovered.Clone()
+			}
+		} else if err := options.Resources.Recover(context.Background()); err != nil {
+			return nil, err
+		}
 	}
 	subscriptions, err := subscription.Open(subscription.ServiceOptions{
 		CatalogPath: paths.SubscriptionCatalog,
@@ -94,11 +123,6 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	if options.TrustedCore != nil {
 		if options.RootConfigInput == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "root configuration context unavailable"}
-		}
-		if options.Resources != nil {
-			if err := options.Resources.Recover(context.Background()); err != nil {
-				return nil, err
-			}
 		}
 		if err := core.RecoverProvenance(context.Background(), options.TrustedCore.Provenance()); err != nil {
 			return nil, err
@@ -235,6 +259,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		},
 	})
 	manager = runtimeapi.New(runtimeapi.Options{
+		ActivationPhase: options.ActivationPhase,
 		Store:           store,
 		Coordinator:     coordinator,
 		Installer:       installer,
@@ -329,6 +354,119 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	})
 	webGateway.Mutator = webMutator{manager: manager}
 	return &RuntimeAssembly{Manager: manager, Store: store, Web: webGateway, mihomoStarter: mihomoStarter}, nil
+}
+
+func buildValidationRuntime(paths platform.Paths, settings config.Settings, daemonVersion string, options RuntimeBuildOptions) (*RuntimeAssembly, error) {
+	return BuildValidationRuntime(context.Background(), paths, settings, daemonVersion, options)
+}
+
+// BuildValidationRuntime reads existing business objects without initializing
+// or recovering them, and propagates the private child lifetime cancellation.
+func BuildValidationRuntime(ctx context.Context, paths platform.Paths, settings config.Settings, daemonVersion string, options RuntimeBuildOptions) (*RuntimeAssembly, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	setupRequired := options.InitialSetupRequired
+	onboardingState, err := onboarding.Load(paths.Onboarding)
+	if errors.Is(err, os.ErrNotExist) {
+		setupRequired = true
+	} else if err != nil {
+		return nil, err
+	} else {
+		setupRequired = setupRequired || !onboardingState.Complete
+	}
+	info, err := os.Stat(paths.CoreBinary)
+	if errors.Is(err, os.ErrNotExist) {
+		setupRequired = true
+	} else if err != nil {
+		return nil, err
+	} else if !info.Mode().IsRegular() {
+		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid installed core"}
+	}
+	if options.ValidationCore != nil {
+		binary, err := options.ValidationCore.Inspect(ctx, core.InstalledBinary, "")
+		if err != nil {
+			return nil, err
+		}
+		receipt, err := options.ValidationCore.Inspect(ctx, core.InstalledReceipt, "")
+		if err != nil {
+			return nil, err
+		}
+		if binary.Present != receipt.Present {
+			return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "incomplete installed core provenance pair"}
+		}
+		if binary.Present {
+			verified, err := core.OpenInstalledCore(ctx, options.ValidationCore)
+			if err != nil {
+				return nil, err
+			}
+			if err := verified.Close(); err != nil {
+				return nil, err
+			}
+		} else {
+			setupRequired = true
+		}
+	}
+	catalog, err := subscription.Load(paths.SubscriptionCatalog)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	for _, profile := range catalog.Profiles {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if profile.Generation == 0 {
+			continue
+		}
+		file, err := os.Open(filepath.Join(paths.SubscriptionCache, profile.ID+".yaml"))
+		if err != nil {
+			return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription cache is unavailable"}
+		}
+		raw, readErr := io.ReadAll(io.LimitReader(validationContextReader{ctx: ctx, reader: file}, (16<<20)+1))
+		if err = errors.Join(readErr, file.Close()); err != nil {
+			return nil, err
+		}
+		document, err := subscription.ParseDocument(raw)
+		if err != nil {
+			return nil, err
+		}
+		if options.RootConfigInput != nil {
+			input, err := options.RootConfigInput(ctx, document, settings)
+			if err != nil {
+				return nil, err
+			}
+			input.YAML, input.Settings, input.SubscriptionID, input.Generation = raw, settings, profile.ID, profile.Generation
+			if options.Resources != nil {
+				graph, err := options.Resources.SnapshotResources(ctx, input)
+				if err != nil {
+					return nil, err
+				}
+				input, err = options.Resources.OfflineInput(ctx, input, graph)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if _, err = subscription.NewRootConfigPolicy().Build(ctx, input); err != nil {
+				return nil, err
+			}
+		}
+	}
+	store := state.NewStore(state.Snapshot{
+		Version:   daemonVersion,
+		StartedAt: time.Now().UTC(),
+		Health:    "ok",
+	})
+	manager := runtimeapi.New(runtimeapi.Options{
+		Store:             store,
+		Settings:          settings,
+		SettingsPath:      options.SettingsPath,
+		Logging:           options.Logging,
+		ServiceStatus:     options.ServiceStatus,
+		OnBackgroundError: options.OnBackgroundError,
+		ValidationMode:    true,
+		ActivationPhase:   options.ActivationPhase,
+	})
+	return &RuntimeAssembly{Manager: manager, Store: store, SetupRequired: setupRequired}, nil
 }
 
 func concreteResourcePreparer(resources StartupResources) *subscription.ResourcePreparer {
@@ -449,4 +587,19 @@ func newWebOperationID() string {
 		return time.Now().UTC().Format("20060102T150405.000000000")
 	}
 	return hex.EncodeToString(value[:])
+}
+
+type validationContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r validationContextReader) Read(b []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if len(b) > 32768 {
+		b = b[:32768]
+	}
+	return r.reader.Read(b)
 }

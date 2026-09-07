@@ -231,7 +231,7 @@ def test_script1_sh_channel_flag_and_equals(tmp_path: Path, github_server: GitHu
         assert got.get("CHANNEL") == "dev"
         assert got.get("EXPLICIT") == "1"
         assert f"/releases/download/{CANONICAL_DEV}/mihari-linux-amd64" in got.get("URL", "")
-        assert (tmp_path / "mihari-channel").read_text(encoding="utf-8") == "dev\n"
+        assert not (tmp_path / "mihari-channel").exists()
         paths, queries = github_server.snapshot()
         assert any(path.endswith("/releases") for path in paths)
         assert any("per_page=100" in query for query in queries)
@@ -286,12 +286,16 @@ def test_script1_sh_rejects_unknown_and_invalid_before_download(tmp_path: Path, 
 
 
 @requires_sh
-def test_unix_install_scripts_chown_new_channel_root():
-    for path in (INSTALL_SH, INSTALL_AIO_SH):
+def test_unix_install_scripts_delegate_without_user_tree_mutation():
+    for path in (INSTALL_SH, INSTALL_AIO_SH, INSTALL_AIO_REMOTE_SH):
         text = path.read_text(encoding="utf-8")
-        assert '[ -d "$root" ] || created=1' in text, path.name
-        assert 'chown "$uid:$gid" "$root"' in text, path.name
-        assert 'chown "$uid:$gid" "$root/mihari-channel"' in text, path.name
+        assert "SUDO_USER" not in text, path.name
+        assert "pkill" not in text, path.name
+        assert "service apply --request" in text, path.name
+        assert "mihari.install-request/v1" in text, path.name
+        assert "https://github.com/mihari-proxy/mihari/releases/download/" in text, path.name
+        assert "mihari-install.XXXXXXXX" in text, path.name
+        assert 'sh "${workdir}/install-aio.sh"' not in text, path.name
 
 
 @requires_sh
@@ -383,10 +387,11 @@ def test_script1_ps1_rejects_invalid_channel(tmp_path: Path):
     assert upper.returncode != 0
 
 
-def test_unix_install_scripts_validate_sudo_user_before_eval():
+def test_unix_install_scripts_do_not_evaluate_user_home():
     for path in (INSTALL_SH, INSTALL_AIO_SH):
         text = path.read_text(encoding="utf-8")
-        assert '*[!A-Za-z0-9._-]*' in text, path.name
+        assert 'eval ' not in text, path.name
+        assert 'SUDO_USER' not in text, path.name
 
 
 def test_ps1_channel_and_tag_matches_are_case_sensitive():
@@ -496,8 +501,8 @@ def test_script2_sh_channel_dev_does_not_use_flag_as_bundle_dir(tmp_path: Path):
             sidecar.unlink()
         result = run_install_aio_sh(tmp_path, args)
         assert result.returncode == 0, result.stderr + " args=" + str(args)
-        assert sidecar.read_text(encoding="utf-8") == "dev\n"
-        assert (tmp_path / "data" / "bin" / "core-channel").read_text(encoding="utf-8") == "stable\n"
+        assert not sidecar.exists()
+        assert not (tmp_path / "data" / "bin").exists()
 
 
 @requires_sh
@@ -650,7 +655,8 @@ def test_script3_sh_channel_dev_uses_dev_index_and_handoff():
     got = parse_test_output(result.stdout)
     assert got.get("INDEX_URL") == PUBLIC_DEV_INDEX
     assert PUBLIC_STABLE_INDEX not in got.get("INDEX_URL", "")
-    assert '--channel "dev"' in got.get("HANDOFF", "") or "--channel dev" in got.get("HANDOFF", "")
+    assert got.get("HANDOFF") == "service apply --request <root-private-json>"
+    assert got.get("CHANNEL") == "dev"
 
 
 @requires_sh
@@ -694,3 +700,28 @@ def test_script3_ps1_default_index_is_stable():
     assert "-Channel" not in got.get("HANDOFF", "")
 
 
+
+
+@requires_sh
+@pytest.mark.parametrize("script", [INSTALL_SH, INSTALL_AIO_SH, INSTALL_AIO_REMOTE_SH])
+def test_unix_request_json_preserves_typed_values_without_shell_execution(tmp_path: Path, script: Path):
+    text = script.read_text(encoding="utf-8")
+    assert "# BEGIN REQUEST JSON" in text
+    helper = text.split("# BEGIN REQUEST JSON\n", 1)[1].split("# END REQUEST JSON", 1)[0]
+    probe = tmp_path / "request.sh"
+    probe.write_text("set -eu\nfail() { exit 9; }\n" + helper + "\ncandidate=$1; channel=dev; tag=v1.2.3-dev.4; data=$2; source=$3; endpoint=''; credential=''; install_root=''; path_binary='/usr/local/bin/mihari'; bundle=''; write_request\n", encoding="utf-8")
+    candidate = '/user/release "quoted"/mihari$(false)'
+    result = subprocess.run([posix_shell(), str(probe), candidate, '/srv/private space', '/home/legacy\\data'], text=True, capture_output=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    request = json.loads(result.stdout)
+    assert request["binary"] == candidate
+    assert request["data"] == '/srv/private space'
+    assert request["source"] == '/home/legacy\\data'
+    assert request["schema"] == "mihari.install-request/v1"
+    assert request["layout"] == "private"
+    assert "credential" not in request
+    result = subprocess.run([posix_shell(), str(probe), '/tmp/binary', '', ''], text=True, capture_output=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    request = json.loads(result.stdout)
+    assert request["layout"] == "system"
+    assert "data" not in request

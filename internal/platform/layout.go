@@ -306,3 +306,7 @@ func newTargetPaths(osName, root string) Paths {
 		return targetJoin(osName, elements...)
 	}, coreName)
 }
+
+// SystemLayoutDefaults returns the current platform's fixed machine defaults.
+// It performs no IO and does not select a process mode.
+func SystemLayoutDefaults() LayoutDefaults { return platformLayoutDefaults("") }

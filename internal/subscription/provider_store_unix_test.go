@@ -33,6 +33,27 @@ func TestProviderStore_IsolatedRootIO(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Root-level state parents borrow D. Backup/restore must neither reject a
+	// same-parent move nor close the daemon's lifetime capability.
+	for _, target := range []string{"mihari.yaml", "onboarding.json"} {
+		if err = s.files.write(ctx, target, []byte("sealed state"), providerObject{}); err != nil {
+			t.Fatal(err)
+		}
+		old, inspectErr := s.files.inspect(ctx, target)
+		if inspectErr != nil {
+			t.Fatal(inspectErr)
+		}
+		backup := target + ".old-0123456789abcdef0123456789abcdef"
+		if err = s.files.move(ctx, target, old, backup, providerObject{}); err != nil {
+			t.Fatal(err)
+		}
+		if err = s.files.move(ctx, backup, old, target, providerObject{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, _, _, err = root.Snapshot(ctx); err != nil {
+			t.Fatal("borrowed root closed by state IO")
+		}
+	}
 	input := rootPolicyInput()
 	input.YAML = []byte("rule-providers:\n  rules: {type: inline, behavior: domain, payload: ['example.test']}\nrules: ['RULE-SET,rules,DIRECT']\n")
 	output, err := NewRootConfigPolicy().Build(ctx, input)
@@ -86,6 +107,19 @@ func TestProviderStore_AllowedPathsExcludeOtherBusinessData(t *testing.T) {
 	for _, path := range []string{"control.token", "settings.yaml", "runtime/../control.token", "runtime/core-home/Country.mmdb.old", "staging/providers/commit.json/child"} {
 		if providerAllowedPath(path) {
 			t.Fatal("unregistered resource path accepted")
+		}
+	}
+}
+
+func TestProviderStore_AllowedPathsIncludeOnlyFiniteActivationState(t *testing.T) {
+	for _, path := range []string{"mihari.yaml", "onboarding.json", "subscriptions/catalog.yaml", "subscriptions/cache/0123456789abcdef0123456789abcdef.yaml"} {
+		if !providerAllowedPath(path) || !providerAllowedPath(path+".old-0123456789abcdef0123456789abcdef") {
+			t.Fatal("registered activation state path rejected")
+		}
+	}
+	for _, path := range []string{"mihari.yaml/child", "mihari.yaml.old-bad", "subscriptions/cache/not-an-id.yaml", "subscriptions/cache/../../control.token", "subscriptions/catalog.json", "onboarding.json/child"} {
+		if providerAllowedPath(path) {
+			t.Fatal("unregistered state path accepted")
 		}
 	}
 }

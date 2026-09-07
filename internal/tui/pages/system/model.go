@@ -25,38 +25,40 @@ import (
 )
 
 const (
-	rowDaemon            = "daemon"
-	rowCore              = "core"
-	rowCoreChannel       = "core-channel"
-	rowCoreUpdate        = "core-update"
-	rowCoreRestart       = "core-restart"
-	rowMihariChannel     = "mihari-channel"
-	rowMihariUpdate      = "mihari-update"
-	rowZashboard         = "zashboard"
-	rowMetaCubeXD        = "metacubexd"
-	rowRunSetup          = "run-setup"
-	rowServiceStatus     = "service-status"
-	rowServiceHint       = "service-hint"
-	rowServiceInstall    = "service-install"
-	rowServiceUninstall  = "service-uninstall"
-	rowServiceReinstall  = "service-reinstall"
-	rowServiceStart      = "service-start"
-	rowServiceStop       = "service-stop"
-	rowServiceRestart    = "service-restart"
-	rowSystemProxy       = "system-proxy"
-	rowSystemProxyAction = "system-proxy-action"
-	rowTUN               = "tun"
-	rowTUNAction         = "tun-action"
-	rowAbout             = "about"
-	rowGitHub            = "github"
-	rowMixed             = "port-mixed"
-	rowController        = "port-controller"
-	rowWeb               = "port-web"
-	rowLogLevel          = "log-level"
-	rowLogMaxSize        = "log-max-size"
-	rowLogMaxFiles       = "log-max-files"
-	rowLogDirectory      = "log-directory"
-	rowLogExport         = "log-export"
+	rowDaemon             = "daemon"
+	rowCore               = "core"
+	rowCoreChannel        = "core-channel"
+	rowCoreUpdate         = "core-update"
+	rowCoreRestart        = "core-restart"
+	rowMihariChannel      = "mihari-channel"
+	rowMihariUpdate       = "mihari-update"
+	rowZashboard          = "zashboard"
+	rowMetaCubeXD         = "metacubexd"
+	rowRunSetup           = "run-setup"
+	rowServiceStatus      = "service-status"
+	rowServiceHint        = "service-hint"
+	rowServiceInstall     = "service-install"
+	rowServiceUninstall   = "service-uninstall"
+	rowServiceReinstall   = "service-reinstall"
+	rowServiceStart       = "service-start"
+	rowServiceStop        = "service-stop"
+	rowServiceRestart     = "service-restart"
+	rowSystemProxy        = "system-proxy"
+	rowSystemProxyAction  = "system-proxy-action"
+	rowTUN                = "tun"
+	rowTUNAction          = "tun-action"
+	rowAbout              = "about"
+	rowGitHub             = "github"
+	rowMixed              = "port-mixed"
+	rowController         = "port-controller"
+	rowWeb                = "port-web"
+	rowLogLevel           = "log-level"
+	rowLogMaxSize         = "log-max-size"
+	rowLogMaxFiles        = "log-max-files"
+	rowLogDirectory       = "log-directory"
+	rowLogUserDirectory   = "log-user-directory"
+	rowLogExportDirectory = "log-export-directory"
+	rowLogExport          = "log-export"
 )
 
 // Panel IDs mirrored from internal/panel/catalog.go; local constants keep the
@@ -91,6 +93,14 @@ type SelfUpdater interface {
 	Update(context.Context, string, string, string) (update.Result, error)
 }
 
+// PreparedSelfUpdater prepares inert bytes while Run owns download lifetime.
+// Only Run invokes ApplyPrepared, after closing all TUI resources.
+type PreparedSelfUpdater interface {
+	SelfUpdater
+	Prepare(context.Context, string, string, string) (update.PreparedUpdate, error)
+	ApplyPrepared(context.Context, update.PreparedUpdate) (update.Result, error)
+}
+
 // ServiceController is the local OS service manager surface (not daemon IPC).
 type ServiceController interface {
 	Install() error
@@ -122,8 +132,9 @@ type selfCheckResultMsg struct {
 }
 
 type selfUpdateResultMsg struct {
-	result update.Result
-	err    error
+	prepared *update.PreparedUpdate
+	result   update.Result
+	err      error
 }
 
 type mihariChannelResultMsg struct {
@@ -325,6 +336,7 @@ type Model struct {
 	selfCheckGeneration uint64
 	channelPath         func() (string, error)
 	loadChannel         func(string) (string, error)
+	selfUpdateChannel   func(context.Context) (string, error)
 	saveChannel         func(string, string) error
 	mihariChannel       string
 	mihariChannelLoaded bool
@@ -346,6 +358,9 @@ type Model struct {
 	localLoggingAvailable bool
 	loggingPendingEpoch   uint64
 	loggingReloading      bool
+	splitLogging          bool
+	clientLogDir          string
+	exportLogDir          string
 
 	serviceStatus service.StatusKind
 	serviceLoaded bool
@@ -445,7 +460,7 @@ func (m *Model) HelpMode() string {
 
 // FooterHints returns edit-mode shortcuts while a port row is being typed.
 func (m *Model) FooterHints() string {
-	if m.loggingAvailable && m.focusID == rowLogDirectory && m.editID == "" && m.detail == nil {
+	if m.directoryCopyAvailable(m.focusID) && m.editID == "" && m.detail == nil {
 		return "↑/↓ navigate  Enter copy directory  Esc back  ? help  q quit"
 	}
 	return ui.RenderFooter(m.ID(), m.HelpMode(), ui.FooterOpt{})
@@ -488,6 +503,13 @@ func (m *Model) SetSelfUpdater(updater SelfUpdater, currentVersion, binaryPath s
 	}
 }
 
+// SetSelfUpdateChannel supplies platform discovery without legacy data-root IO.
+func (m *Model) SetSelfUpdateChannel(read func(context.Context) (string, error)) {
+	m.selfUpdateChannel = read
+	m.mihariChannelLoaded = false
+	m.mihariChannelFailed = false
+}
+
 // SetWebGUI injects Web GUI status (tests and optional external refresh).
 func (m *Model) SetWebGUI(status protocol.WebGUIStatus) {
 	m.webGUI = status
@@ -514,6 +536,43 @@ func (m *Model) SetLocalLoggingAvailable(available bool) {
 	if m != nil {
 		m.localLoggingAvailable = available
 	}
+}
+
+// SetLoggingLayout enables Unix split log-directory display. LoggingStatus.Dir
+// remains the machine directory. Empty user/export paths render as unavailable.
+func (m *Model) SetLoggingLayout(split bool, userDir, exportDir string) {
+	if m == nil {
+		return
+	}
+	m.splitLogging = split
+	m.clientLogDir = userDir
+	m.exportLogDir = exportDir
+}
+
+func (m *Model) directoryCopyAvailable(rowID string) bool {
+	switch rowID {
+	case rowLogDirectory:
+		return m.loggingAvailable && m.logging.Dir != ""
+	case rowLogUserDirectory:
+		return m.splitLogging && m.clientLogDir != ""
+	case rowLogExportDirectory:
+		return m.splitLogging && m.exportLogDir != ""
+	default:
+		return false
+	}
+}
+
+func (m *Model) copyDirectoryRow(rowID, path string) tea.Cmd {
+	write := m.writeClipboard
+	if write == nil {
+		write = clipboard.WriteAll
+	}
+	if err := write(path); err != nil {
+		m.markRowOutcome(rowID, false, ui.ExportCopyFailed)
+		return nil
+	}
+	m.markRowOutcome(rowID, true, "")
+	return m.scheduleOutcomeFade(rowID)
 }
 
 func (m *Model) ID() ui.PageID { return ui.PageSystem }
@@ -796,6 +855,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, tea.Batch(m.checkMihariVersion(), m.rowSpinCmdIfNeeded())
 	case selfUpdateResultMsg:
 		m.clearRowPending()
+		if typed.prepared != nil && typed.err == nil && typed.prepared.Available {
+			return m, func() tea.Msg { return ui.RelaunchRequestMsg{Prepared: typed.prepared} }
+		}
 		if !typed.result.Updated {
 			if typed.err != nil {
 				m.markRowOutcome(rowMihariUpdate, false, actionErrorDetail(typed.err, ui.UpdateMihariActionFailed))
@@ -1079,19 +1141,20 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		case rowLogExport:
 			return m, func() tea.Msg { return ui.OpenExportLogsMsg{} }
 		case rowLogDirectory:
-			if !m.loggingAvailable {
+			if !m.directoryCopyAvailable(rowLogDirectory) {
 				return m, nil
 			}
-			write := m.writeClipboard
-			if write == nil {
-				write = clipboard.WriteAll
-			}
-			if err := write(m.logging.Dir); err != nil {
-				m.markRowOutcome(rowLogDirectory, false, ui.ExportCopyFailed)
+			return m, m.copyDirectoryRow(rowLogDirectory, m.logging.Dir)
+		case rowLogUserDirectory:
+			if !m.directoryCopyAvailable(rowLogUserDirectory) {
 				return m, nil
 			}
-			m.markRowOutcome(rowLogDirectory, true, "")
-			return m, m.scheduleOutcomeFade(rowLogDirectory)
+			return m, m.copyDirectoryRow(rowLogUserDirectory, m.clientLogDir)
+		case rowLogExportDirectory:
+			if !m.directoryCopyAvailable(rowLogExportDirectory) {
+				return m, nil
+			}
+			return m, m.copyDirectoryRow(rowLogExportDirectory, m.exportLogDir)
 		default:
 			selected := rows[index]
 			m.detail = &selected
@@ -1125,6 +1188,10 @@ func (m *Model) updateMihari() tea.Cmd {
 				Code:    protocol.CodePermissionDenied,
 				Message: "administrator privileges are required; re-run Mihari from an elevated shell",
 			}}
+		}
+		if preparer, ok := updater.(PreparedSelfUpdater); ok {
+			prepared, err := preparer.Prepare(m.ctx, binaryPath, currentVersion, channel)
+			return selfUpdateResultMsg{prepared: &prepared, result: update.Result{Version: prepared.Version, Channel: prepared.Channel, Ahead: prepared.Ahead}, err: err}
 		}
 		result, err := updater.Update(m.ctx, binaryPath, currentVersion, channel)
 		return selfUpdateResultMsg{result: result, err: err}
@@ -1327,13 +1394,32 @@ func (m *Model) loggingRows() []row {
 		maxFiles = fmt.Sprintf("%d", m.logging.MaxFiles)
 		directory = m.logging.Dir
 	}
-	return []row{
+	rows := []row{
 		{id: rowLogLevel, section: ui.LoggingSectionTitle, label: ui.LoggingLevelLabel, value: level},
 		{id: rowLogMaxSize, section: ui.LoggingSectionTitle, label: ui.LoggingMaxSizeLabel, value: maxSize},
 		{id: rowLogMaxFiles, section: ui.LoggingSectionTitle, label: ui.LoggingMaxFilesLabel, value: maxFiles},
-		{id: rowLogDirectory, section: ui.LoggingSectionTitle, label: ui.LoggingDirectoryLabel, value: directory, detail: directory},
-		{id: rowLogExport, section: ui.LoggingSectionTitle, label: ui.ExportLogsLabel},
 	}
+	if m.splitLogging {
+		userDir := ui.UnavailableTitle
+		if m.clientLogDir != "" {
+			userDir = m.clientLogDir
+		}
+		exportDir := ui.UnavailableTitle
+		if m.exportLogDir != "" {
+			exportDir = m.exportLogDir
+		}
+		rows = append(rows,
+			row{id: rowLogDirectory, section: ui.LoggingSectionTitle, label: ui.LoggingMachineDirectoryLabel, value: directory, detail: directory},
+			row{id: rowLogUserDirectory, section: ui.LoggingSectionTitle, label: ui.LoggingUserDirectoryLabel, value: userDir, detail: userDir},
+			row{id: rowLogExportDirectory, section: ui.LoggingSectionTitle, label: ui.LoggingExportDirectoryLabel, value: exportDir, detail: exportDir},
+			row{id: rowLogExport, section: ui.LoggingSectionTitle, label: ui.ExportLogsLabel},
+		)
+		return rows
+	}
+	return append(rows,
+		row{id: rowLogDirectory, section: ui.LoggingSectionTitle, label: ui.LoggingDirectoryLabel, value: directory, detail: directory},
+		row{id: rowLogExport, section: ui.LoggingSectionTitle, label: ui.ExportLogsLabel},
+	)
 }
 
 func (m *Model) aboutRows() []row {
@@ -2225,7 +2311,7 @@ func (m *Model) clearLoggingOutcome(rowID string) {
 
 func isLoggingRow(rowID string) bool {
 	switch rowID {
-	case rowLogLevel, rowLogMaxSize, rowLogMaxFiles, rowLogDirectory, rowLogExport:
+	case rowLogLevel, rowLogMaxSize, rowLogMaxFiles, rowLogDirectory, rowLogUserDirectory, rowLogExportDirectory, rowLogExport:
 		return true
 	default:
 		return false
@@ -2461,6 +2547,16 @@ func (m *Model) currentMihariChannel() string {
 
 func (m *Model) ensureChannelLoaded() {
 	if m.mihariChannelLoaded || m.mihariChannelFailed {
+		return
+	}
+	if m.selfUpdateChannel != nil {
+		channel, err := m.selfUpdateChannel(m.ctx)
+		if err != nil {
+			m.mihariChannelFailed = true
+			return
+		}
+		m.mihariChannel = channel
+		m.mihariChannelLoaded = true
 		return
 	}
 	path, err := m.channelFilePath()

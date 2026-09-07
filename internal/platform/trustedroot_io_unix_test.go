@@ -407,3 +407,64 @@ func TestTrustedRoot_DirectoryCleanupRejectsNonemptyAndCancellation(t *testing.T
 		t.Fatalf("canceled removal: %v", err)
 	}
 }
+
+type serviceExchangeSyncFailure struct {
+	trustedBackend
+	failure error
+}
+
+func (b serviceExchangeSyncFailure) sync(int) error { return b.failure }
+func TestTrustedRoot_ServiceExchangeCommittedOnSyncFailure(t *testing.T) {
+	root, _ := trustedTempCapability(t)
+	ctx := context.Background()
+	if err := root.WriteServiceEntry(ctx, "unit", []byte("original unit"), "", 0644, ServiceEntry{}); err != nil {
+		t.Fatal(err)
+	}
+	stage, err := root.OpenDir(ctx, "stage", RootPolicy{Owner: uint32(os.Geteuid()), Mode: 0700, AllowCreate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := stage.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := stage.WriteServiceEntry(ctx, "candidate", nil, "/dev/null", 0644, ServiceEntry{}); err != nil {
+		t.Fatal(err)
+	}
+	original, err := root.ReadServiceEntry(ctx, "unit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := stage.ReadServiceEntry(ctx, "candidate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("fixture parent sync failed")
+	backend := stage.backend
+	stage.backend = serviceExchangeSyncFailure{trustedBackend: backend, failure: failure}
+	published, err := stage.ExchangeServiceEntryWith(ctx, "candidate", candidate, root, "unit", original)
+	if !published || !errors.Is(err, failure) {
+		t.Fatalf("exchange publication=%v err=%v", published, err)
+	}
+	live, err := root.ReadServiceEntry(ctx, "unit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, err := stage.ReadServiceEntry(ctx, "candidate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live.Key() != candidate.Key() || retained.Key() != original.Key() {
+		t.Fatal("exchange did not preserve both recorded inodes")
+	}
+	stage.backend = backend
+	published, err = stage.ExchangeServiceEntryWith(ctx, "candidate", retained, root, "unit", live)
+	if !published || err != nil {
+		t.Fatal("cannot restore retained original", published, err)
+	}
+	restored, err := root.ReadServiceEntry(ctx, "unit")
+	if err != nil || restored.Key() != original.Key() {
+		t.Fatal("restoration lost original identity", err)
+	}
+}

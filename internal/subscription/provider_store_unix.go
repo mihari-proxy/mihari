@@ -82,8 +82,12 @@ func providerAllowedPath(path string) bool {
 		}
 		configPath = configPath[:at]
 	}
-	if configPath == "runtime/config.yaml" {
+	if configPath == "runtime/config.yaml" || configPath == "mihari.yaml" || configPath == "subscriptions/catalog.yaml" || configPath == "onboarding.json" {
 		return true
+	}
+	if strings.HasPrefix(configPath, "subscriptions/cache/") {
+		id := strings.TrimSuffix(strings.TrimPrefix(configPath, "subscriptions/cache/"), ".yaml")
+		return profileIDPattern.MatchString(id) && configPath == "subscriptions/cache/"+id+".yaml"
 	}
 	parts := strings.Split(path, "/")
 	if len(parts) == 4 && parts[0] == "staging" && parts[1] == "providers" && profileIDPattern.MatchString(parts[2]) {
@@ -160,7 +164,7 @@ func (f *unixProviderFiles) read(ctx context.Context, path string, limit int64) 
 	if err != nil {
 		return nil, err
 	}
-	defer func() { err = errors.Join(err, p.Close()) }()
+	defer func() { err = errors.Join(err, f.closeParent(p)) }()
 	file, _, err := p.OpenFile(ctx, n, 0600)
 	if err != nil {
 		return nil, err
@@ -176,7 +180,7 @@ func (f *unixProviderFiles) inspect(ctx context.Context, path string) (object pr
 	if err != nil {
 		return object, err
 	}
-	defer func() { err = errors.Join(err, p.Close()) }()
+	defer func() { err = errors.Join(err, f.closeParent(p)) }()
 	file, id, err := p.OpenFile(ctx, n, 0600)
 	if errors.Is(err, os.ErrNotExist) {
 		return object, nil
@@ -218,7 +222,7 @@ func (f *unixProviderFiles) write(ctx context.Context, path string, b []byte, wa
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, p.Close()) }()
+	defer func() { err = errors.Join(err, f.closeParent(p)) }()
 	id, err := f.expected(ctx, p, n, want)
 	if err != nil {
 		return err
@@ -233,7 +237,7 @@ func (f *unixProviderFiles) remove(ctx context.Context, path string, want provid
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, p.Close()) }()
+	defer func() { err = errors.Join(err, f.closeParent(p)) }()
 	id, err := f.expected(ctx, p, n, want)
 	if err != nil {
 		return err
@@ -248,12 +252,12 @@ func (f *unixProviderFiles) move(ctx context.Context, from string, source provid
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, p.Close()) }()
+	defer func() { err = errors.Join(err, f.closeParent(p)) }()
 	q, m, err := f.parent(ctx, to, true)
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, q.Close()) }()
+	defer func() { err = errors.Join(err, f.closeParent(q)) }()
 	sid, err := f.expected(ctx, p, n, source)
 	if err != nil {
 		return err
@@ -276,7 +280,7 @@ func (f *unixProviderFiles) transactions(ctx context.Context) (result []string, 
 	if err != nil {
 		return nil, err
 	}
-	defer func() { err = errors.Join(err, p.Close()) }()
+	defer func() { err = errors.Join(err, f.closeParent(p)) }()
 	names, err := p.ReadNames(ctx)
 	if err != nil {
 		return nil, err
@@ -301,10 +305,18 @@ func (f *unixProviderFiles) removeTransaction(ctx context.Context, tx string) (e
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, p.Close()) }()
+	defer func() { err = errors.Join(err, f.closeParent(p)) }()
 	err = p.RemoveEmptyDir(ctx, tx)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	return err
+}
+
+// The data-root capability is borrowed; root-level state entries must not close it.
+func (f *unixProviderFiles) closeParent(parent *platform.TrustedRoot) error {
+	if parent == f.data {
+		return nil
+	}
+	return parent.Close()
 }

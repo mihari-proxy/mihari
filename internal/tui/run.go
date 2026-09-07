@@ -19,18 +19,21 @@ import (
 
 // Options contains the control client and terminal streams used by the TUI.
 type Options struct {
-	Client          *controlclient.Client
-	Service         systempage.ServiceController
-	SelfUpdater     systempage.SelfUpdater
-	CurrentVersion  string
-	BinaryPath      string
-	Elevated        func() bool
-	Relaunch        func() error
-	Input           io.Reader
-	Output          io.Writer
-	OpenLogging     LoggingFactory
-	BuildExportLogs func(LoggingResources) ui.ExportLogsOptions
-	ErrorOutput     io.Writer
+	SplitLogging              bool
+	UserLogDir, UserExportDir string
+	Client                    *controlclient.Client
+	Service                   systempage.ServiceController
+	SelfUpdater               systempage.SelfUpdater
+	SelfUpdateChannel         func(context.Context) (string, error)
+	CurrentVersion            string
+	BinaryPath                string
+	Elevated                  func() bool
+	Relaunch                  func() error
+	Input                     io.Reader
+	Output                    io.Writer
+	OpenLogging               LoggingFactory
+	BuildExportLogs           func(LoggingResources) ui.ExportLogsOptions
+	ErrorOutput               io.Writer
 }
 
 // LocalLoggingHealth reports whether the local TUI file logger is available.
@@ -198,13 +201,27 @@ func (r *tuiLoggingFailureReporter) report(kind tuiLoggingFailureKind, err error
 }
 
 // Run starts the full-screen Mihari terminal interface and blocks until it exits.
-func Run(ctx context.Context, options Options) error {
+func Run(ctx context.Context, options Options) (resultErr error) {
+	var preparedWorker *runPreparedUpdater
+	if updater, ok := options.SelfUpdater.(systempage.PreparedSelfUpdater); ok {
+		preparedWorker = newRunPreparedUpdater(updater)
+		options.SelfUpdater = preparedWorker
+		defer func() { resultErr = errors.Join(resultErr, preparedWorker.close()) }()
+	}
 	resources := LoggingResources{}
 	var openErr error
 	if options.OpenLogging != nil {
 		opened, err := options.OpenLogging(ctx)
 		resources = opened
 		openErr = err
+	}
+	if resources.Redactor == nil {
+		resources.Redactor = logging.NewRedactor()
+	}
+	if options.Client != nil {
+		if err := options.Client.SetRedactor(resources.Redactor); err != nil {
+			return errors.Join(err, resources.Close())
+		}
 	}
 	reporter := newTUILoggingFailureReporter(options.ErrorOutput, resources.Redactor, nil)
 	if openErr != nil {
@@ -221,15 +238,26 @@ func Run(ctx context.Context, options Options) error {
 
 	var controlSession *session.Session
 	var events <-chan session.Event
+	cancelSession := func() {}
 	if options.Client != nil {
+		sessionCtx, cancel := context.WithCancel(ctx)
+		cancelSession = cancel
 		controlSession = session.New(options.Client, session.Options{})
-		events = controlSession.Start(ctx)
+		events = controlSession.Start(sessionCtx)
 	}
 	model := newRunModel(ctx, options.Client, events, health, applier)
+	if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
+		userDir, exportDir := options.UserLogDir, options.UserExportDir
+		if options.SplitLogging && resources.PrivateFS == nil {
+			userDir, exportDir = "", ""
+		}
+		page.SetLoggingLayout(options.SplitLogging, userDir, exportDir)
+	}
 	if options.Service != nil {
 		model.SetServiceController(options.Service)
 	}
 	model.SetSelfUpdater(options.SelfUpdater, options.CurrentVersion, options.BinaryPath, options.Elevated)
+	model.SetSelfUpdateChannel(options.SelfUpdateChannel)
 	exportLogs := attachRunExportLogs(ctx, &model, resources, options.BuildExportLogs)
 	program := tea.NewProgram(
 		model,
@@ -238,11 +266,16 @@ func Run(ctx context.Context, options Options) error {
 		tea.WithOutput(options.Output),
 	)
 	final, err := program.Run()
-	cleanup := newRunCleanup(&resources, func() {
+	cleanup := newRunCleanup(&resources, cancelSession, func() {
 		if controlSession != nil {
 			controlSession.Close()
 		}
 	}, exportLogs, applier, reporter)
+	if preparedWorker != nil {
+		closeResources := cleanup
+		cleanup = func(final tea.Model) error { preparedWorker.shutdown(); return closeResources(final) }
+		return finishPreparedRun(ctx, final, err, options.Output, options.Relaunch, cleanup, preparedWorker.ApplyPrepared)
+	}
 	return finishRun(final, err, options.Output, options.Relaunch, cleanup)
 }
 
@@ -257,19 +290,140 @@ func attachRunExportLogs(ctx context.Context, model *Model, resources LoggingRes
 	return exportLogs
 }
 
-func newRunCleanup(resources *LoggingResources, closeSession func(), exportLogs *ui.ExportLogsModel, applier loggingApplier, reporter *tuiLoggingFailureReporter) func(tea.Model) error {
+type runShutdownHooks struct {
+	CancelExport  func()
+	CloseResponse func()
+	WaitWorkers   func()
+	Logging       io.Closer
+	UserFS        io.Closer
+}
+
+func executeRunShutdown(hooks runShutdownHooks, observe func(string)) error {
+	if observe == nil {
+		observe = func(string) {}
+	}
+	observe("cancel-export")
+	if hooks.CancelExport != nil {
+		hooks.CancelExport()
+	}
+	observe("close-response")
+	if hooks.CloseResponse != nil {
+		hooks.CloseResponse()
+	}
+	observe("wait-workers")
+	if hooks.WaitWorkers != nil {
+		hooks.WaitWorkers()
+	}
+	var errs []error
+	observe("close-logging")
+	if hooks.Logging != nil {
+		errs = append(errs, hooks.Logging.Close())
+	}
+	observe("close-user-fs")
+	if hooks.UserFS != nil {
+		errs = append(errs, hooks.UserFS.Close())
+	}
+	return errors.Join(errs...)
+}
+
+func closeResponseAndJoin(closeResponse func()) {
+	if closeResponse == nil {
+		return
+	}
+	// Closing the response terminates transport IO. Its owner must finish before
+	// workers, logging and the retained filesystem capability can be released.
+	closeResponse()
+}
+
+func newRunCleanup(resources *LoggingResources, cancelSession, closeSession func(), exportLogs *ui.ExportLogsModel, applier loggingApplier, reporter *tuiLoggingFailureReporter) func(tea.Model) error {
 	var once sync.Once
 	var closeErr error
 	return func(tea.Model) error {
 		once.Do(func() {
-			closeErr = resources.closeWithLifecycle(closeSession, func() {
-				if exportLogs != nil {
-					exportLogs.CancelAndWait()
+			var runtimeCloser, fsCloser io.Closer
+			if resources != nil {
+				state := resources.closeState
+				if state == nil {
+					if resources.Runtime != nil {
+						runtimeCloser = resources.Runtime
+					}
+					if resources.PrivateFS != nil {
+						fsCloser = resources.PrivateFS
+					}
+					state = newLoggingResourcesCloseState(runtimeCloser, fsCloser)
+					resources.closeState = state
+				} else {
+					runtimeCloser, fsCloser = state.runtime, state.privateFS
 				}
-				if applier != nil {
-					applier.CloseAndWait()
-				}
-			})
+				state.once.Do(func() {
+					state.err = executeRunShutdown(runShutdownHooks{
+						CancelExport: func() {
+							if exportLogs != nil {
+								exportLogs.Cancel()
+							}
+							if cancelSession != nil {
+								cancelSession()
+							}
+							if applier != nil {
+								applier.Cancel()
+							}
+						},
+						CloseResponse: func() {
+							closeResponseAndJoin(func() {
+								if exportLogs != nil {
+									exportLogs.CloseResponse()
+								}
+							})
+						},
+						WaitWorkers: func() {
+							if exportLogs != nil {
+								exportLogs.Wait()
+							}
+							if closeSession != nil {
+								closeSession()
+							}
+							if applier != nil {
+								applier.CloseAndWait()
+							}
+						},
+						Logging: runtimeCloser,
+						UserFS:  fsCloser,
+					}, nil)
+				})
+				closeErr = state.err
+			} else {
+				closeErr = executeRunShutdown(runShutdownHooks{
+					CancelExport: func() {
+						if exportLogs != nil {
+							exportLogs.Cancel()
+						}
+						if cancelSession != nil {
+							cancelSession()
+						}
+						if applier != nil {
+							applier.Cancel()
+						}
+					},
+					CloseResponse: func() {
+						closeResponseAndJoin(func() {
+							if exportLogs != nil {
+								exportLogs.CloseResponse()
+							}
+						})
+					},
+					WaitWorkers: func() {
+						if exportLogs != nil {
+							exportLogs.Wait()
+						}
+						if closeSession != nil {
+							closeSession()
+						}
+						if applier != nil {
+							applier.CloseAndWait()
+						}
+					},
+				}, nil)
+			}
 			if reporter != nil && closeErr != nil {
 				reporter.report(tuiLoggingCleanupFailure, closeErr)
 			}

@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"runtime"
-	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -38,21 +36,14 @@ func (nativeTrustedBackend) checkACL(fd int, strict bool, _ uint32) error {
 	attrs := unix.Attrlist{Bitmapcount: 5, Commonattr: unix.ATTR_CMN_EXTENDED_SECURITY}
 	var buf [4096]byte
 	// XNU fgetattrlist ABI, FSOPT_REPORT_FULLSIZE prevents accepting truncation.
-	_, _, errno := unix.Syscall6(unix.SYS_FGETATTRLIST, uintptr(fd), uintptr(unsafe.Pointer(&attrs)), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), 4, 0)
-	runtime.KeepAlive(&attrs)
-	runtime.KeepAlive(&buf)
-	if errno != 0 {
-		return errno
+	if err := darwinFDAttributes(fd, &attrs, buf[:], unix.FSOPT_REPORT_FULLSIZE); err != nil {
+		return err
 	}
 	return trustedDarwinACL(buf[:], strict)
 }
 func clearTrustedDirectoryACL(fd int) error {
-	// KAUTH_UID_NONE/GID_NONE preserve ownership. xsecurity=1 removes ACL;
-	// xsecurity=0 would leave it unchanged. mode=-1 preserves mode.
-	const none = uint32(0xffffffff - 100)
-	_, _, errno := unix.Syscall6(unix.SYS_FCHMOD_EXTENDED, uintptr(fd), uintptr(none), uintptr(none), ^uintptr(0), 1, 0)
-	if errno != 0 {
-		return errno
+	if err := darwinRemoveFDACL(fd); err != nil {
+		return err
 	}
 	return (nativeTrustedBackend{}).checkACL(fd, true, 0)
 }

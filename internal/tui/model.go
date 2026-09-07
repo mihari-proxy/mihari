@@ -24,6 +24,7 @@ import (
 	webguipage "github.com/mihari-proxy/mihari/internal/tui/pages/webgui"
 	"github.com/mihari-proxy/mihari/internal/tui/session"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
+	"github.com/mihari-proxy/mihari/internal/update"
 )
 
 type Model struct {
@@ -61,6 +62,7 @@ type Model struct {
 	lastObservedAt    time.Time // last daemon stream sample; shown in stale footer
 	relaunchRequested bool
 	relaunchWarning   string
+	preparedUpdate    *update.PreparedUpdate
 	now               time.Time // spinner clock; advanced only while work is pending
 	spinning          bool      // true while a spinner tick loop is scheduled
 	spinGen           uint64    // generation so only the latest tick loop may reschedule
@@ -183,6 +185,16 @@ func (model *Model) SetSelfUpdater(updater systempage.SelfUpdater, currentVersio
 	}
 	if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
 		page.SetSelfUpdater(updater, currentVersion, binaryPath, elevated)
+	}
+}
+
+// SetSelfUpdateChannel supplies the selected platform's read-only discovery.
+func (model *Model) SetSelfUpdateChannel(read func(context.Context) (string, error)) {
+	if model == nil {
+		return
+	}
+	if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
+		page.SetSelfUpdateChannel(read)
 	}
 }
 
@@ -325,6 +337,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case ui.RelaunchRequestMsg:
 		model.relaunchRequested = true
 		model.relaunchWarning = typed.Warning
+		model.preparedUpdate = typed.Prepared
 		return model, tea.Quit
 	case ui.PageResultMsg:
 		if typed.Result == nil {

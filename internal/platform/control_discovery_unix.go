@@ -402,7 +402,7 @@ func ReadControlCredential(ctx context.Context, locator ControlLocator) ([]byte,
 	return data, nil
 }
 
-func readDiscoveryFD(fd int, expected discoveryMetadata, inspect func(int) (discoveryMetadata, error)) (_ []byte, err error) {
+func readDiscoverySizedFD(fd int, expected discoveryMetadata, small bool, inspect func(int) (discoveryMetadata, error)) (_ []byte, err error) {
 	f := os.NewFile(uintptr(fd), "control credential")
 	defer func() { err = errors.Join(err, f.Close()) }()
 	m, err := inspect(fd)
@@ -415,7 +415,7 @@ func readDiscoveryFD(fd int, expected discoveryMetadata, inspect func(int) (disc
 	if m.node.mode&unix.S_IFMT != unix.S_IFREG || m.node.links != 1 {
 		return nil, os.ErrPermission
 	}
-	if m.size != 64 && m.size != 65 {
+	if (!small && m.size != 64 && m.size != 65) || (small && (m.size < 1 || m.size > 32)) {
 		return nil, ErrControlData
 	}
 	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
@@ -440,4 +440,27 @@ func readDiscoveryFD(fd int, expected discoveryMetadata, inspect func(int) (disc
 		return nil, ErrIdentityMismatch
 	}
 	return b, nil
+}
+
+// ReadInstallChannel reads only the selected root-owned channel sidecar through
+// the same search-only, no-follow namespace proof as control discovery. It never
+// opens B for directory listing and does not create application paths.
+func ReadInstallChannel(ctx context.Context, layout ResolvedLayout) ([]byte, error) {
+	locator := ControlLocator{Mode: layout.Mode, BaseDir: layout.BaseDir, Endpoint: layout.ControlEndpoint, Credential: filepath.Join(layout.BaseDir, "mihari-channel"), ExpectedOwner: 0}
+	if layout.Mode == PrivateMode {
+		locator.ExpectedOwner = uint32(os.Geteuid())
+	}
+	backend := nativeDiscoveryBackend{smallFile: true}
+	d, err := openControlDiscovery(ctx, locator, locator.Credential, uint32(os.Geteuid()), platformLayoutDefaults(""), backend)
+	if err != nil {
+		return nil, err
+	}
+	chain := d.chains[len(d.chains)-1]
+	last := chain[len(chain)-1]
+	raw, err := backend.read(chain[len(chain)-2].ref, last.name, last.metadata)
+	err = errors.Join(err, d.verify(ctx), d.Close())
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
 }

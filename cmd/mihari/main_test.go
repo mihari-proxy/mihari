@@ -815,6 +815,25 @@ func TestRunDaemon_CatalogLoadFailureStillOpensLogger(t *testing.T) {
 	}
 }
 
+func TestCollectLogSecrets_ValidationDoesNotCreateWebCredential(t *testing.T) {
+	paths := absoluteTempPaths(t)
+	settings := config.Defaults()
+	got := collectBaseLogSecretsMode(paths, "control-token", settings, true)
+	if _, err := os.Stat(paths.WebCredential); !os.IsNotExist(err) {
+		t.Fatalf("validation secrets created web credential: %v", err)
+	}
+	if _, err := os.Stat(paths.SubscriptionCatalog); !os.IsNotExist(err) {
+		t.Fatalf("validation secrets created catalog: %v", err)
+	}
+	if !slices.Equal(got, []string{"control-token"}) {
+		t.Fatalf("secrets=%q", got)
+	}
+	catalogURLs := collectCatalogLogSecretsMode(paths, true)
+	if len(catalogURLs) != 0 {
+		t.Fatalf("catalog secrets=%q", catalogURLs)
+	}
+}
+
 func TestCollectLogSecretsReadsExistingBusinessSecrets(t *testing.T) {
 	paths := absoluteTempPaths(t)
 	settings := config.Defaults()

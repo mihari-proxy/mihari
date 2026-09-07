@@ -99,6 +99,11 @@ mihari's architectural invariants are recorded in `AGENTS.md` in the repository 
 
 Before changing these boundaries, please explain the impact in an Issue/PR first.
 
+
+The narrow Unix write exceptions are a root installer's locked, stopped transaction for business-file migration and installation resources, and app-owned atomic maintenance of the fixed channel sidecar under the selected install.lock with pending-transaction refusal. TUI logging writes only its current UID's U logs and exports; Windows/explicit private P retain their layout. This grants no arbitrary CLI/TUI business-file writes. See [Unix layout and recovery](../docs/unix-layout.md).
+
+Ordinary CI runs unit/race/vet on all three OSes; six CGO0 builds are separate from race. `python -m pytest scripts/test/test_unix_layout_security.py -q` performs no real account/mount operations. The independent `unix-layout-security` result is a mandatory pre-merge acceptance result even before branch protection names it. Root/two-UID native tests run only on ephemeral hosted VMs, never workstations or persistent self-hosted root runners.
+
 ## Commit Guidelines
 
 ### Commit Message Format

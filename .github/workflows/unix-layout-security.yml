@@ -1,0 +1,124 @@
+name: unix-layout-security
+
+on:
+  pull_request:
+  push:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: native security (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - name: Compile native tests without root
+        id: compile
+        shell: bash
+        env:
+          GOTOOLCHAIN: local
+          GOENV: 'off'
+        run: python scripts/test/prepare-unix-security.py --out "$RUNNER_TEMP/mihari-security-build"
+      - name: Publish deterministic preparation recovery route
+        id: route
+        shell: bash
+        env:
+          FIXED_PYTHON: ${{ steps.compile.outputs.python }}
+        run: |
+          run_id="$($FIXED_PYTHON -c 'import secrets; print(secrets.token_hex(6))')"
+          if [ "$RUNNER_OS" = Linux ]; then
+            root="/var/lib/mihari-security-$run_id"
+            results="/var/lib/mihari-security-results-$run_id"
+          else
+            root="/Library/MihariSecurity-$run_id"
+            results="/Library/MihariSecurityResults-$run_id"
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "root=$root" >> "$GITHUB_OUTPUT"
+          echo "results=$results" >> "$GITHUB_OUTPUT"
+      - name: Prepare independently marked fixture and result roots
+        id: fixture
+        shell: bash
+        env:
+          PYTHON: ${{ steps.compile.outputs.python }}
+          RUN_ID: ${{ steps.route.outputs.run_id }}
+        run: |
+          sudo env CI=true GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted MIHARI_ISOLATED_SECURITY_CI=1 \
+            "$PYTHON" scripts/test/unix_security_host.py prepare --run-id "$RUN_ID" \
+            --build "$RUNNER_TEMP/mihari-security-build" --outputs "$GITHUB_OUTPUT"
+      - name: Execute guarded native matrix offline
+        shell: bash
+        env:
+          SECURITY_ROOT: ${{ steps.route.outputs.root }}
+          SECURITY_RESULTS: ${{ steps.route.outputs.results }}
+          UID_A: ${{ steps.fixture.outputs.uid_a }}
+          UID_B: ${{ steps.fixture.outputs.uid_b }}
+          FIXED_GO: ${{ steps.compile.outputs.go }}
+          FIXED_PYTHON: ${{ steps.compile.outputs.python }}
+        run: |
+          native=(bash scripts/test/unix-layout-security.sh --root "$SECURITY_ROOT" --uid-a "$UID_A" --uid-b "$UID_B" --report "$SECURITY_RESULTS/result.json")
+          if [ "$RUNNER_OS" = Linux ]; then
+            native=(unshare --mount --fork --propagation private "${native[@]}")
+          fi
+          sudo env CI=true GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted MIHARI_ISOLATED_SECURITY_CI=1 \
+            MIHARI_SECURITY_GO="$FIXED_GO" MIHARI_SECURITY_PYTHON="$FIXED_PYTHON" \
+            GOTOOLCHAIN=local GOENV=off GOPROXY=off GOSUMDB=off "${native[@]}"
+      - name: Always retry identity-checked recovery
+        if: always() && steps.route.outputs.root != ''
+        shell: bash
+        env:
+          SECURITY_ROOT: ${{ steps.route.outputs.root }}
+          SECURITY_RESULTS: ${{ steps.route.outputs.results }}
+          FIXED_PYTHON: ${{ steps.compile.outputs.python }}
+        run: |
+          sudo env CI=true GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted MIHARI_ISOLATED_SECURITY_CI=1 \
+            "$FIXED_PYTHON" scripts/test/unix_security_host.py recover \
+            --root "$SECURITY_ROOT" --report "$SECURITY_RESULTS/result.json"
+      - name: Upload sanitized summary only
+        id: artifact
+        if: always() && steps.route.outputs.results != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: unix-security-${{ runner.os }}
+          path: ${{ steps.route.outputs.results }}/result.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove results after artifact step
+        if: always() && steps.artifact.outcome == 'success'
+        shell: bash
+        env:
+          SECURITY_ROOT: ${{ steps.route.outputs.root }}
+          SECURITY_RESULTS: ${{ steps.route.outputs.results }}
+          FIXED_PYTHON: ${{ steps.compile.outputs.python }}
+        run: |
+          sudo env CI=true GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted MIHARI_ISOLATED_SECURITY_CI=1 \
+            "$FIXED_PYTHON" scripts/test/unix_security_host.py clean-results \
+            --root "$SECURITY_ROOT" --report "$SECURITY_RESULTS/result.json"
+
+  unix-layout-security:
+    name: unix-layout-security
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    if: always()
+    needs: native
+    steps:
+      - name: Require both native jobs
+        env:
+          NATIVE_RESULT: ${{ needs.native.result }}
+        run: test "$NATIVE_RESULT" = success
