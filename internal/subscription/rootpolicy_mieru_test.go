@@ -105,7 +105,7 @@ func TestRootPolicy_MieruProxyFields(t *testing.T) {
 			t.Fatalf("valid Mieru range rejected: %v", err)
 		}
 	}
-	for _, ports := range []string{"0-65535", "1-65536", "443-1", "443-444 trailing", "1-"} {
+	for _, ports := range []string{"0-65535", "1-65536", "443-1", "443-444 trailing", "1-", "+1-2", "1-+2", "１-2", "1-２"} {
 		if _, err := NewRootConfigPolicy().Build(context.Background(), simpleProxyInput("mieru", withoutPort+"    port-range: '"+ports+"'\n")); err == nil {
 			t.Fatal("invalid Mieru range accepted")
 		}
