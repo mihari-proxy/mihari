@@ -17,6 +17,7 @@ func TestListenIPMatches_UnspecifiedQuery(t *testing.T) {
 		{"::1", "::", true},
 		{"::1", "0.0.0.0", false},
 		{"127.0.0.1", "::", true},
+		{"::", "0.0.0.0", true},
 		{"0.0.0.0", "127.0.0.1", true},
 		{"::", "127.0.0.1", true},
 		{"127.0.0.1", "192.0.2.1", false},

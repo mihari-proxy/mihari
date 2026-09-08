@@ -35,7 +35,9 @@ func listenIPMatches(local, query net.IP) bool {
 	}
 	if query.IsUnspecified() {
 		// An IPv6 wildcard query uses Go's dual-stack wildcard listener.
-		return query.To4() == nil || local.To4() != nil
+		// Address tables omit IPV6_V6ONLY, so an IPv6 wildcard remains a
+		// possible holder for an IPv4 query, as for concrete IPv4 addresses.
+		return query.To4() == nil || local.To4() != nil || local.IsUnspecified()
 	}
 	if local.IsUnspecified() {
 		return local.To4() == nil || query.To4() != nil
