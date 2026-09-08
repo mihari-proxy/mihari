@@ -198,6 +198,58 @@ func (r *ReadOnlySource) Snapshot(ctx context.Context) (string, string, error) {
 	}
 	return r.path, fmt.Sprintf("%x:%x@%s", n.id.dev, n.id.ino, mount), nil
 }
+
+// OverlapsTrustedRoot compares the retained source and target ancestry after
+// revalidating both namespaces. Device/inode identity deliberately ignores mount
+// IDs, so alternate bind-mount names cannot hide a shared source/target tree.
+func (r *ReadOnlySource) OverlapsTrustedRoot(ctx context.Context, target *TrustedRoot) (bool, error) {
+	return r.compareTrustedRoot(ctx, target, true)
+}
+
+// ContainsTrustedRoot checks whether target is the source itself or below it.
+// This allows checking an absent migration target's retained creation parent
+// without rejecting an unrelated source below that same parent.
+func (r *ReadOnlySource) ContainsTrustedRoot(ctx context.Context, target *TrustedRoot) (bool, error) {
+	return r.compareTrustedRoot(ctx, target, false)
+}
+
+func (r *ReadOnlySource) compareTrustedRoot(ctx context.Context, target *TrustedRoot, checkTargetContainsSource bool) (bool, error) {
+	if r == nil || target == nil {
+		return false, os.ErrClosed
+	}
+	done, err := r.begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer done()
+	finish, err := target.begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer finish()
+	if err := r.verify(); err != nil {
+		return false, err
+	}
+	if err := target.verify(); err != nil {
+		return false, err
+	}
+	sourceID := r.chain[len(r.chain)-1].node.id
+	targetID := target.chain[len(target.chain)-1].node.id
+	if checkTargetContainsSource {
+		for _, link := range r.chain {
+			if link.node.id == targetID {
+				return true, nil
+			}
+		}
+	}
+	for _, link := range target.chain {
+		if link.node.id == sourceID {
+			return true, nil
+		}
+	}
+	return false, ctx.Err()
+}
+
 func (r *ReadOnlySource) directory(ctx context.Context, rel string) (_ int, _ func() error, err error) {
 	if err := r.verify(); err != nil {
 		return -1, nil, err

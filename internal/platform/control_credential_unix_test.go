@@ -110,6 +110,55 @@ func TestControlCredential_RejectsUnsafeExistingAndInvalidScopes(t *testing.T) {
 	}
 }
 
+func TestControlCredential_ValidatesReadAndCreateFormat(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw string
+		valid     bool
+	}{
+		{"hex", strings.Repeat("aB09", 16), true},
+		{"optional newline", strings.Repeat("a", 64) + "\n", true},
+		{"nonhex", strings.Repeat("z", 64), false},
+		{"bad suffix", strings.Repeat("a", 64) + "x", false},
+		{"short", strings.Repeat("a", 63), false},
+		{"CRLF", strings.Repeat("a", 64) + "\r\n", false},
+		{"leading newline", "\n" + strings.Repeat("a", 64), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, layout := credentialLeaseFixture(t, false)
+			err := l.Borrow().WithCredential(context.Background(), layout, func(c *ControlCredentialFile) error {
+				err := c.Create(context.Background(), []byte(tc.raw))
+				if tc.valid {
+					if err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					if !errors.Is(err, ErrControlData) {
+						t.Fatalf("malformed credential creation accepted: %v", err)
+					}
+					if _, err := os.Lstat(layout.CredentialPath); !errors.Is(err, os.ErrNotExist) {
+						t.Fatalf("invalid credential published: %v", err)
+					}
+					if err := os.WriteFile(layout.CredentialPath, []byte(tc.raw), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				raw, err := c.Read(context.Background())
+				if tc.valid {
+					if err != nil || string(raw) != tc.raw {
+						t.Fatalf("valid credential read failed: %v", err)
+					}
+				} else if !errors.Is(err, ErrControlData) || raw != nil {
+					t.Fatalf("malformed credential read accepted: %v", err)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 type credentialBlockingSync struct {
 	nativeTrustedBackend
 	entered, release        chan struct{}

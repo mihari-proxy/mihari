@@ -12,6 +12,10 @@ import (
 // its private P from a verified private backup. It never reacquires B or releases
 // an earlier P; all added locks remain owned by this same outer lease.
 func (l *OwnedInstallLease) BindInstallLayout(ctx context.Context, layout ResolvedLayout) error {
+	return l.bindInstallLayout(ctx, layout, platformLayoutDefaults(""), nativeLeaseRoot)
+}
+
+func (l *OwnedInstallLease) bindInstallLayout(ctx context.Context, layout ResolvedLayout, defaults LayoutDefaults, open leaseRootOpener) (err error) {
 	if l == nil || l.state == nil {
 		return os.ErrClosed
 	}
@@ -27,9 +31,23 @@ func (l *OwnedInstallLease) BindInstallLayout(ctx context.Context, layout Resolv
 	if err := s.validate(s.layout); err != nil {
 		return err
 	}
-	if err := validateLeaseLayout(layout, 0, platformLayoutDefaults("")); err != nil {
+	if err := validateLeaseLayout(layout, 0, defaults); err != nil {
 		return err
 	}
+	previous := s.layout
+	rootCount, lockCount := len(s.roots), len(s.locks)
+	defer func() {
+		if err == nil {
+			return
+		}
+		for i := len(s.locks) - 1; i >= lockCount; i-- {
+			err = errors.Join(err, s.locks[i].close())
+		}
+		for i := len(s.roots) - 1; i >= rootCount; i-- {
+			err = errors.Join(err, s.roots[i].Close())
+		}
+		s.locks, s.roots, s.layout = s.locks[:lockCount], s.roots[:rootCount], previous
+	}()
 	if layout.Mode == PrivateMode {
 		already := false
 		for _, root := range s.roots {
@@ -42,7 +60,7 @@ func (l *OwnedInstallLease) BindInstallLayout(ctx context.Context, layout Resolv
 			}
 		}
 		if !already {
-			private, err := OpenTrustedRoot(ctx, layout.BaseDir, RootPolicy{Owner: 0, Mode: 0700})
+			private, err := open(ctx, layout.BaseDir, RootPolicy{Owner: 0, Mode: 0700}, false)
 			if err != nil {
 				return err
 			}

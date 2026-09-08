@@ -118,6 +118,9 @@ func (a *LaunchdAdapter) ObserveAction(ctx context.Context, action DefinitionAct
 		if err != nil {
 			return "", err
 		}
+		if err := requireZeroExit(result); err != nil {
+			return "", err
+		}
 		disabled, err := parsePrintDisabled(result.Stdout, a.paths.Label)
 		if err != nil {
 			return "", err

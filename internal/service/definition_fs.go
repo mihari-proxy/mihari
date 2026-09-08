@@ -11,11 +11,16 @@ import (
 	"strings"
 )
 
-type osDefinitionStore struct{}
+type osDefinitionStore struct{ systemdUnitFile string }
 
 // NewUnixDefinitionStore constructs the retained-capability native service store.
 // It performs no IO; each operation verifies and owns its parent capability.
 func NewUnixDefinitionStore() DefinitionStore { return osDefinitionStore{} }
+
+func (s osDefinitionStore) withSystemdPaths(paths SystemdPaths) DefinitionStore {
+	s.systemdUnitFile = paths.UnitFile
+	return s
+}
 
 func (osDefinitionStore) Read(ctx context.Context, name string) (file DefinitionFile, err error) {
 	parent, err := platform.OpenTrustedParent(ctx, path.Dir(name), 0)
@@ -58,10 +63,17 @@ func (osDefinitionStore) Write(ctx context.Context, file DefinitionFile) (err er
 	if err != nil {
 		return err
 	}
+	// file.Identity belongs to the saved snapshot, which need not be the live
+	// inode after installation or masking. Retain the live observation for the
+	// atomic replacement; the transaction owns recorded-version validation.
 	return parent.WriteServiceEntry(ctx, path.Base(file.Path), file.Bytes, "", file.Mode, old)
 }
-func (osDefinitionStore) Mask(ctx context.Context, name, target string) (err error) {
-	if target != defaultDevNull && target != defaultSystemdUnitFile {
+func (s osDefinitionStore) Mask(ctx context.Context, name, target string) (err error) {
+	unitFile := s.systemdUnitFile
+	if unitFile == "" {
+		unitFile = defaultSystemdUnitFile
+	}
+	if !unixAbs(target) || path.Clean(target) != target || (target != defaultDevNull && target != unitFile) {
 		return os.ErrPermission
 	}
 	parent, err := platform.OpenTrustedParent(ctx, path.Dir(name), 0)

@@ -156,7 +156,7 @@ func TestSystemdInspect_FourStates(t *testing.T) {
 			if got.Running != state.running || got.Enabled != state.enabled {
 				t.Fatalf("running=%v enabled=%v got running=%v enabled=%v status=%s", state.running, state.enabled, got.Running, got.Enabled, got.Status)
 			}
-			if got.Binary != "/usr/local/lib/mihari/mihari" || len(got.Args) != 1 || got.Args[0] != "daemon" {
+			if got.Binary != "/usr/local/lib/mihari/mihari" || strings.Join(got.Args, " ") != "daemon --system-service" {
 				t.Fatalf("exec %+v %v", got.Binary, got.Args)
 			}
 			if got.Status != definitionStatus(true, state.running) {
@@ -502,11 +502,26 @@ func TestSystemdInspect_TrustedSnapshotParses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.Binary != "/usr/local/lib/mihari/mihari" || strings.Join(parsed.Args, " ") != "daemon" {
+	if parsed.Binary != "/usr/local/lib/mihari/mihari" || strings.Join(parsed.Args, " ") != "daemon --system-service" {
 		t.Fatalf("parsed %+v", parsed)
 	}
 	if _, err := parseSystemdUnit(loadDefinitionTestdata(t, "10-mihari.conf")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSystemdInspect_MaskedUnitRetainsRemovalSnapshot(t *testing.T) {
+	h := newSystemdHarness(t, false, false, trustedUnitFile(t))
+	h.show = systemdMaskedShow()
+	if err := h.files.Mask(context.Background(), defaultSystemdUnitFile, defaultDevNull); err != nil {
+		t.Fatal(err)
+	}
+	def, err := h.adapter.InspectDefinition(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !def.Masked || len(def.Links) != 1 || def.Links[0].Path != defaultSystemdUnitFile || def.Links[0].Target != defaultDevNull {
+		t.Fatalf("masked unit missing from definition removal snapshot: %+v", def)
 	}
 }
 

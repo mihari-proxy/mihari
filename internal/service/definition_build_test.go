@@ -1,10 +1,22 @@
 package service
 
 import (
+	"bytes"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"strings"
 	"testing"
 )
+
+func TestBuildUnixDefinition_MatchesTrustedSystemdSnapshot(t *testing.T) {
+	layout := platform.ResolvedLayout{Mode: platform.SystemMode, InstallRoot: "/usr/local/lib/mihari", ControlEndpoint: "/var/lib/mihari/control.sock", CredentialPath: "/var/lib/mihari/control.token"}
+	def, err := BuildUnixDefinition(layout, "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(def.Files[0].Bytes, trustedUnitFile(t).Bytes) {
+		t.Fatal("trusted systemd snapshot differs from the installed definition")
+	}
+}
 
 func TestBuildUnixDefinition_FixedLayoutAndFullFiles(t *testing.T) {
 	for _, goos := range []string{"linux", "darwin"} {

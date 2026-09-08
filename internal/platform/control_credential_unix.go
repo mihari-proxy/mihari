@@ -4,6 +4,7 @@ package platform
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -101,7 +102,7 @@ func (c *ControlCredentialFile) Read(ctx context.Context) (_ []byte, err error) 
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(raw)) != info.Size() {
+	if int64(len(raw)) != info.Size() || !validControlCredential(raw) {
 		return nil, ErrControlData
 	}
 	n, err := c.parent.checkFile(int(f.Fd()), c.mode)
@@ -131,11 +132,26 @@ func (c *ControlCredentialFile) Create(ctx context.Context, raw []byte) error {
 		return err
 	}
 	defer finish()
+	if !validControlCredential(raw) {
+		return ErrControlData
+	}
 	if err = c.verify(); err != nil {
 		return err
 	}
 	err = c.parent.WriteFile(ctx, c.name, raw, c.mode, nil)
 	return errors.Join(err, c.verify(), ctx.Err())
+}
+
+func validControlCredential(raw []byte) bool {
+	if len(raw) == 65 && raw[64] == '\n' {
+		raw = raw[:64]
+	}
+	if len(raw) != 64 {
+		return false
+	}
+	var decoded [32]byte
+	_, err := hex.Decode(decoded[:], raw)
+	return err == nil
 }
 
 func (c *ControlCredentialFile) verify() error {

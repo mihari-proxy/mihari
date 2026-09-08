@@ -299,6 +299,46 @@ func TestListenOwned_FailedPostcheckClosesOnce(t *testing.T) {
 		t.Fatalf("cleanup scope count=%d, want bind+cleanup", scope.calls)
 	}
 }
+
+func TestListenOwned_FailedInitialIdentityPreservesPathAndAllowsRecovery(t *testing.T) {
+	for _, replace := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unverified socket", true: "replacement socket"}[replace], func(t *testing.T) {
+			layout, scope := ownedFixture(t)
+			calls := 0
+			var before os.FileInfo
+			l, err := listenOwnedWithIdentity(context.Background(), layout, scope, probeSocket, func(endpoint string, owner uint32) (socketNode, error) {
+				calls++
+				if calls != 2 {
+					return socketIdentity(endpoint, owner)
+				}
+				if replace {
+					if err := os.Remove(endpoint); err != nil {
+						t.Fatal(err)
+					}
+					staleFixture(t, endpoint)
+				}
+				var err error
+				before, err = os.Lstat(endpoint)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return socketNode{}, os.ErrPermission
+			})
+			if l != nil || !errors.Is(err, os.ErrPermission) {
+				t.Fatalf("unproved listener returned: %v", err)
+			}
+			after, err := os.Lstat(scope.endpoint)
+			if err != nil || !os.SameFile(before, after) {
+				t.Fatalf("unknown socket identity was removed: %v", err)
+			}
+			l, err = listenOwned(context.Background(), layout, scope, probeSocket)
+			if err != nil {
+				t.Fatalf("closed unverified socket blocked recovery: %v", err)
+			}
+			assertTransportClose(t, l.Close)
+		})
+	}
+}
 func TestListenOwned_RejectsNonSocketAndAbsentLease(t *testing.T) {
 	layout, scope := ownedFixture(t)
 	if err := os.WriteFile(scope.endpoint, []byte("preserve"), 0600); err != nil {

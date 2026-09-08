@@ -33,11 +33,12 @@ func listenIPMatches(local, query net.IP) bool {
 	if local.Equal(query) {
 		return true
 	}
-	if !local.IsUnspecified() {
-		return false
+	if query.IsUnspecified() {
+		// An IPv6 wildcard query uses Go's dual-stack wildcard listener.
+		return query.To4() == nil || local.To4() != nil
 	}
-	if local.To4() != nil {
-		return query.To4() != nil
+	if local.IsUnspecified() {
+		return local.To4() == nil || query.To4() != nil
 	}
-	return true
+	return false
 }

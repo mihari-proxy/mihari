@@ -28,6 +28,10 @@ func ListenOwned(ctx context.Context, layout platform.ResolvedLayout, lease *pla
 }
 
 func listenOwned(ctx context.Context, layout platform.ResolvedLayout, scope endpointScope, probe socketProbe) (net.Listener, error) {
+	return listenOwnedWithIdentity(ctx, layout, scope, probe, socketIdentity)
+}
+
+func listenOwnedWithIdentity(ctx context.Context, layout platform.ResolvedLayout, scope endpointScope, probe socketProbe, identity func(string, uint32) (socketNode, error)) (net.Listener, error) {
 	var listener *ownedUnixListener
 	err := scope.WithEndpoint(ctx, layout, func(endpoint string) error {
 		owner := uint32(os.Geteuid())
@@ -38,7 +42,7 @@ func listenOwned(ctx context.Context, layout platform.ResolvedLayout, scope endp
 		} else if layout.Mode != platform.PrivateMode {
 			return os.ErrInvalid
 		}
-		old, err := socketIdentity(endpoint, owner)
+		old, err := identity(endpoint, owner)
 		if err == nil {
 			probeCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 			probeErr := probe(probeCtx, endpoint)
@@ -64,8 +68,11 @@ func listenOwned(ctx context.Context, layout platform.ResolvedLayout, scope endp
 		}
 		l.SetUnlinkOnClose(false)
 		listener = &ownedUnixListener{UnixListener: l, scope: scope, layout: layout, owner: owner}
-		n, err := socketIdentity(endpoint, owner)
+		n, err := identity(endpoint, owner)
 		if err != nil {
+			// No pathname identity was proved, so Close must preserve it. A
+			// later attempt can reclaim this closed socket after ECONNREFUSED.
+			// A socket descriptor's inode is not the pathname inode on Linux.
 			return err
 		}
 		listener.node, listener.hasIdentity = n, true
@@ -76,7 +83,7 @@ func listenOwned(ctx context.Context, layout platform.ResolvedLayout, scope endp
 		if err := os.Chmod(endpoint, mode); err != nil {
 			return err
 		}
-		after, err := socketIdentity(endpoint, owner)
+		after, err := identity(endpoint, owner)
 		if err != nil {
 			return err
 		}

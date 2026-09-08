@@ -8,6 +8,13 @@ import (
 	"testing"
 )
 
+func TestDiscoveryDarwin_AttributeMaskMatchesSDK(t *testing.T) {
+	const common = unix.ATTR_CMN_RETURNED_ATTRS | unix.ATTR_CMN_DEVID | unix.ATTR_CMN_OBJTYPE | unix.ATTR_CMN_OWNERID | unix.ATTR_CMN_GRPID | unix.ATTR_CMN_ACCESSMASK | unix.ATTR_CMN_EXTENDED_SECURITY | unix.ATTR_CMN_FILEID
+	if discoveryDarwinCommon != common {
+		t.Fatalf("discovery attributes diverged from Darwin SDK: common=%#x realfsid=%#x", discoveryDarwinCommon, discoveryDarwinRealFSID)
+	}
+}
+
 func TestDiscoveryDarwin_SearchOnlyTail(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("ordinary UID search-only fixture")

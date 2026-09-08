@@ -36,6 +36,20 @@ func acquireChannelLease(ctx context.Context, layout ResolvedLayout, owner uint3
 		return nil, err
 	}
 	s.roots = append(s.roots, root)
+	if layout.Mode == PrivateMode && owner == 0 {
+		// Only inspect existing B; private channel maintenance must never create
+		// or lock it. Retain the identity proof until this lease is released.
+		system, openErr := open(ctx, defaults.BaseDir, RootPolicy{Owner: 0, Mode: 0755}, true)
+		if openErr != nil && !errors.Is(openErr, os.ErrNotExist) {
+			return nil, openErr
+		}
+		if openErr == nil {
+			s.roots = append(s.roots, system)
+			if rootsOverlap(root, system) {
+				return nil, os.ErrInvalid
+			}
+		}
+	}
 	if err = s.addLock(ctx, root, "install.lock"); err != nil {
 		return nil, err
 	}

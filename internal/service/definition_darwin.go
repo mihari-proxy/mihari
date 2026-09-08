@@ -86,7 +86,11 @@ func (t darwinProcessTree) Lookup(ctx context.Context, id ProcessIdentity) (bool
 }
 
 func (t darwinProcessTree) SignalIdentity(ctx context.Context, id ProcessIdentity, signal string) error {
-	alive, err := t.Lookup(ctx, id)
+	return signalDarwinIdentity(ctx, id, signal, t.Lookup, unix.Kill)
+}
+
+func signalDarwinIdentity(ctx context.Context, id ProcessIdentity, signal string, lookup func(context.Context, ProcessIdentity) (bool, error), kill func(int, unix.Signal) error) error {
+	alive, err := lookup(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -97,7 +101,11 @@ func (t darwinProcessTree) SignalIdentity(ctx context.Context, id ProcessIdentit
 	if err != nil {
 		return err
 	}
-	return unix.Kill(id.PID, syssig)
+	err = kill(id.PID, syssig)
+	if errors.Is(err, unix.ESRCH) {
+		return nil
+	}
+	return err
 }
 
 func darwinSignal(signal string) (unix.Signal, error) {

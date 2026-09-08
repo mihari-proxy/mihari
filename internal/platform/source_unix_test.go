@@ -4,10 +4,59 @@ package platform
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestReadOnlySource_OverlapsTrustedRoot(t *testing.T) {
+	anchor, dir := trustedTempCapability(t)
+	dir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	child, err := anchor.OpenDir(ctx, "child", RootPolicy{Owner: uint32(os.Geteuid()), Mode: 0700, AllowCreate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { assertTestClose(t, child.Close) })
+	for _, tc := range []struct {
+		name, source   string
+		target         *TrustedRoot
+		want, contains bool
+	}{
+		{"same inode", dir, anchor, true, true},
+		{"source contains target", dir, child, true, true},
+		{"target contains source", filepath.Join(dir, "child"), anchor, true, false},
+		{"separate trees", t.TempDir(), child, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path, err := filepath.EvalSymlinks(tc.source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			source, err := OpenReadOnlySource(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer assertTestClose(t, source.Close)
+			got, err := source.OverlapsTrustedRoot(ctx, tc.target)
+			if err != nil || got != tc.want {
+				t.Fatalf("overlap=%v want=%v err=%v", got, tc.want, err)
+			}
+			contains, err := source.ContainsTrustedRoot(ctx, tc.target)
+			if err != nil || contains != tc.contains {
+				t.Fatalf("contains=%v want=%v err=%v", contains, tc.contains, err)
+			}
+			assertTestClose(t, source.Close)
+			if _, err := source.OverlapsTrustedRoot(ctx, tc.target); !errors.Is(err, os.ErrClosed) {
+				t.Fatalf("closed source accepted: %v", err)
+			}
+		})
+	}
+}
 
 func TestReadOnlySource_UserWritableAncestry(t *testing.T) {
 	parent, err := filepath.EvalSymlinks(t.TempDir())

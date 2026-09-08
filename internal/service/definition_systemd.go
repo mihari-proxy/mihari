@@ -67,6 +67,11 @@ func newSystemdAdapter(cfg systemdConfig) *SystemdAdapter {
 	if cfg.Paths.Systemctl == "" {
 		cfg.Paths = DefaultSystemdPaths()
 	}
+	if configured, ok := cfg.Files.(interface {
+		withSystemdPaths(SystemdPaths) DefinitionStore
+	}); ok {
+		cfg.Files = configured.withSystemdPaths(cfg.Paths)
+	}
 	return &SystemdAdapter{
 		runner: cfg.Runner,
 		files:  cfg.Files,
@@ -176,6 +181,9 @@ func (a *SystemdAdapter) definitionFromShow(ctx context.Context, props map[strin
 		Running: running,
 		Enabled: unitFileState == "enabled" && !masked,
 		Status:  definitionStatus(true, running),
+	}
+	if !unitMissing && unit.Kind == "mask" {
+		def.Links = append(def.Links, DefinitionLink{Identity: unit.Identity, Path: a.paths.UnitFile, Target: a.paths.DevNull, Owner: unit.Owner, Mode: unit.Mode})
 	}
 	if !unitMissing && unit.Kind != "mask" {
 		parsed, err := parseSystemdUnitFile(unit.Bytes)

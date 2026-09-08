@@ -71,6 +71,8 @@ type Definition struct {
 
 // DefinitionFile is one unit, drop-in, mask, or plist object.
 type DefinitionFile struct {
+	// Identity records the saved inode. Restoration may replace a later unit
+	// or mask; transaction recovery validates its recorded publication versions.
 	Identity string
 	Path     string
 	Bytes    []byte

@@ -4,10 +4,31 @@ package service
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestNativeDefinitionStore_UsesConfiguredEnableTarget(t *testing.T) {
+	paths := DefaultSystemdPaths()
+	paths.UnitFile = "/fixture/systemd/mihari.service"
+	paths.WantsLink = "/fixture/systemd/multi-user.target.wants/mihari.service"
+	adapter := NewSystemdAdapterWithConfig(SystemdConfig{Files: NewUnixDefinitionStore(), Paths: paths})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// Cancellation at trusted-parent acquisition proves that the configured
+	// target passed the allowlist, without accessing any host service path.
+	if err := adapter.files.Mask(ctx, paths.WantsLink, paths.UnitFile); !errors.Is(err, context.Canceled) {
+		t.Fatalf("configured target rejected before parent acquisition: %v", err)
+	}
+	if err := adapter.files.Mask(ctx, paths.WantsLink, "/unconfigured/mihari.service"); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("unconfigured target was allowed: %v", err)
+	}
+	if err := adapter.files.Mask(ctx, paths.UnitFile, defaultDevNull); !errors.Is(err, context.Canceled) {
+		t.Fatalf("fixed mask target rejected: %v", err)
+	}
+}
 
 func TestNativeDefinitionStore_RestoresOriginalBytesAndMode(t *testing.T) {
 	if os.Getenv("MIHARI_NATIVE_INSTALL_TEST") != "1" || os.Geteuid() != 0 {
