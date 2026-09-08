@@ -157,7 +157,16 @@ func TestSecurityLaunchdBootoutDrainsSharedProcessGroup(t *testing.T) {
 	// The helper lifetime is one minute. This shorter proof cannot pass merely
 	// because the intentionally TERM-resistant descendants reached their bound.
 	if err := waitBootoutGroupGone(proof, group); err != nil {
-		t.Fatal("bootout left members in the shared process group", err)
+		// The hosted report preserves source coordinates, not process output.
+		// Separate fixed failure sites retain the useful error classification.
+		switch {
+		case errors.Is(err, unix.EPERM):
+			t.Fatal("bootout group observation was denied")
+		case errors.Is(err, context.DeadlineExceeded):
+			t.Fatal("bootout group exit proof timed out")
+		default:
+			t.Fatal("bootout group exit proof failed")
+		}
 	}
 	if err := bootoutJobAbsent(ctx, f.label); err != nil {
 		t.Fatal("bootout left the fixture job loaded", err)

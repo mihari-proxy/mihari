@@ -22,6 +22,7 @@ import (
 
 const sharedGroupHelperEnv = "MIHARI_SHARED_GROUP_HELPER"
 const sharedGroupDirEnv = "MIHARI_SHARED_GROUP_FIXTURE"
+const sharedGroupDrainedFile = "shared-group-drained"
 
 func init() {
 	role := os.Getenv(sharedGroupHelperEnv)
@@ -43,9 +44,10 @@ func TestDarwinSharedChild_DescendantsAndSignalOwnership(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			dir := t.TempDir()
 			var output bytes.Buffer
 			command := exec.Command(executable)
-			command.Env = sharedGroupHelperEnvironment(mode, t.TempDir())
+			command.Env = sharedGroupHelperEnvironment(mode, dir)
 			command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			command.Stdout, command.Stderr = &output, &output
 			if err := command.Start(); err != nil {
@@ -56,10 +58,13 @@ func TestDarwinSharedChild_DescendantsAndSignalOwnership(t *testing.T) {
 			exited := make(chan error, 1)
 			go func() { exited <- platform.DarwinWaitChildExit(command.Process.Pid) }()
 			observed := false
+			groupDrained := false
 			t.Cleanup(func() {
-				killErr := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-				if killErr != nil && !errors.Is(killErr, syscall.ESRCH) {
-					t.Error(killErr)
+				if !groupDrained {
+					killErr := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+					if killErr != nil && !errors.Is(killErr, syscall.ESRCH) {
+						t.Error(killErr)
+					}
 				}
 				if !observed {
 					if err := <-exited; err != nil {
@@ -76,6 +81,11 @@ func TestDarwinSharedChild_DescendantsAndSignalOwnership(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				drained, err := os.ReadFile(filepath.Join(dir, sharedGroupDrainedFile))
+				if err != nil || string(drained) != "drained" {
+					t.Fatalf("shared group drain proof: %q: %v", drained, err)
+				}
+				groupDrained = true
 			case <-time.After(20 * time.Second):
 				t.Fatal("shared group helper did not exit")
 			}
@@ -193,7 +203,11 @@ func runSharedGroupHelper(role, dir string) error {
 	} else if err := owned.WaitDescendants(ctx); err != nil {
 		return err
 	}
-	return child.Kill() // An already reaped core cannot receive another signal.
+	// An already reaped core cannot receive another signal.
+	if err := child.Kill(); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, sharedGroupDrainedFile), []byte("drained"), 0600)
 }
 
 func sharedGroupWaitFile(ctx context.Context, name string) error {

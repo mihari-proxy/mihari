@@ -25,6 +25,23 @@ type securityNativeManager struct {
 	dropins                   []string
 }
 
+type securityNativeTree struct{ nativeBoundaryTree }
+
+func (securityNativeTree) BootIdentity(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return installBootIdentity()
+}
+
+func (tree securityNativeTree) Identify(ctx context.Context, pid int) (service.ProcessIdentity, error) {
+	boot, err := tree.BootIdentity(ctx)
+	if err != nil {
+		return service.ProcessIdentity{}, err
+	}
+	return securityNativeProcessIdentity(boot, pid, 100, 0), nil
+}
+
 func (m *securityNativeManager) Run(ctx context.Context, argv []string) (service.CommandResult, error) {
 	if runtime.GOOS == "linux" {
 		if len(argv) < 3 {
@@ -92,7 +109,7 @@ func (m *securityNativeManager) Run(ctx context.Context, argv []string) (service
 }
 func (m *securityNativeManager) adapter(hook service.ActionHook) service.RecoveryAdapter {
 	if runtime.GOOS == "darwin" {
-		return service.NewSecurityLaunchdAdapter(m, m.files, nativeBoundaryTree{}, hook, m.launchd)
+		return service.NewSecurityLaunchdAdapter(m, m.files, securityNativeTree{}, hook, m.launchd)
 	}
 	return service.NewSystemdAdapterWithConfig(service.SystemdConfig{Runner: m, Files: m.files, Paths: m.paths, Tree: nativeBoundaryTree{}, Hook: hook})
 }
