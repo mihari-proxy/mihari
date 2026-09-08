@@ -156,6 +156,22 @@ func TestLaunchdInspect_MissingPlistAndJobIsNotInstalled(t *testing.T) {
 	}
 }
 
+func TestLaunchdInspect_RejectsSymlinkPlist(t *testing.T) {
+	for _, target := range []string{defaultDevNull, "/other/mihari.plist"} {
+		h := newLaunchdHarness(t, false, false, true)
+		h.files.links[defaultPlistPath] = target
+		delete(h.files.files, defaultPlistPath)
+		if _, err := h.adapter.InspectDefinition(context.Background()); err == nil {
+			t.Fatal("symlink plist was accepted as empty regular bytes")
+		} else {
+			requireInvalidState(t, err)
+		}
+		if len(h.hook.kinds) != 0 {
+			t.Fatal("unsupported definition caused mutation")
+		}
+	}
+}
+
 func TestLaunchdDisableAutostartAndStop_PersistentDisableThenBootout(t *testing.T) {
 	for _, state := range definitionStates {
 		t.Run(stateName(state.running, state.enabled), func(t *testing.T) {

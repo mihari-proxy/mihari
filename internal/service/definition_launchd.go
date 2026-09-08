@@ -80,6 +80,9 @@ func (a *LaunchdAdapter) InspectDefinition(ctx context.Context) (Definition, err
 	if plistErr != nil && !plistMissing {
 		return Definition{}, invalidServiceState("service status is unknown")
 	}
+	if !plistMissing && (plist.Kind == "link" || plist.Kind == "mask") {
+		return Definition{}, invalidServiceState("service definition is unsupported")
+	}
 
 	printOut, err := runAbsolute(ctx, a.runner, []string{a.paths.Launchctl, "print", a.jobTarget()})
 	if err != nil {

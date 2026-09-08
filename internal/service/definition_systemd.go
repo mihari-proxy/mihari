@@ -140,7 +140,7 @@ func (a *SystemdAdapter) definitionFromShow(ctx context.Context, props map[strin
 		if err == nil && target != a.paths.DevNull {
 			return Definition{}, invalidServiceState("service status is unknown")
 		}
-		if fragment != defaultDevNull && fragment != a.paths.UnitFile {
+		if fragment != a.paths.DevNull && fragment != a.paths.UnitFile {
 			return Definition{}, invalidServiceState("service status is unknown")
 		}
 	} else if fragment != a.paths.UnitFile {
@@ -206,7 +206,7 @@ func (a *SystemdAdapter) definitionFromShow(ctx context.Context, props map[strin
 	}
 	for _, dropinPath := range dropins {
 		file, err := a.files.Read(ctx, dropinPath)
-		if err != nil {
+		if err != nil || file.Kind == "link" || file.Kind == "mask" {
 			return Definition{}, invalidServiceState("service definition is unsupported")
 		}
 		parsed, err := parseSystemdUnitFile(file.Bytes)

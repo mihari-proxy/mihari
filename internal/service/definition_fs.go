@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-type osDefinitionStore struct{ systemdUnitFile string }
+type osDefinitionStore struct{ systemdUnitFile, systemdDevNull string }
 
 // NewUnixDefinitionStore constructs the retained-capability native service store.
 // It performs no IO; each operation verifies and owns its parent capability.
@@ -19,10 +19,11 @@ func NewUnixDefinitionStore() DefinitionStore { return osDefinitionStore{} }
 
 func (s osDefinitionStore) withSystemdPaths(paths SystemdPaths) DefinitionStore {
 	s.systemdUnitFile = paths.UnitFile
+	s.systemdDevNull = paths.DevNull
 	return s
 }
 
-func (osDefinitionStore) Read(ctx context.Context, name string) (file DefinitionFile, err error) {
+func (s osDefinitionStore) Read(ctx context.Context, name string) (file DefinitionFile, err error) {
 	parent, err := platform.OpenTrustedParent(ctx, path.Dir(name), 0)
 	if err != nil {
 		return file, err
@@ -36,8 +37,12 @@ func (osDefinitionStore) Read(ctx context.Context, name string) (file Definition
 		return file, os.ErrNotExist
 	}
 	file = DefinitionFile{Path: name, Bytes: entry.Bytes, Owner: entry.Owner, Mode: entry.Mode, Identity: entry.Key()}
+	devNull := s.systemdDevNull
+	if devNull == "" {
+		devNull = defaultDevNull
+	}
 	switch {
-	case entry.Link == defaultDevNull:
+	case entry.Link == devNull:
 		file.Kind = "mask"
 	case entry.Link != "":
 		file.Kind = "link"
@@ -69,7 +74,7 @@ func (osDefinitionStore) Write(ctx context.Context, file DefinitionFile) (err er
 	return parent.WriteServiceEntry(ctx, path.Base(file.Path), file.Bytes, "", file.Mode, old)
 }
 func (s osDefinitionStore) Mask(ctx context.Context, name, target string) (err error) {
-	if !allowedDefinitionLink(s.systemdUnitFile, target) {
+	if !allowedDefinitionLink(s.systemdUnitFile, s.systemdDevNull, target) {
 		return os.ErrPermission
 	}
 	parent, err := platform.OpenTrustedParent(ctx, path.Dir(name), 0)
@@ -108,7 +113,7 @@ func (s osDefinitionStore) ReadLink(ctx context.Context, name string) (link stri
 	if !entry.Present {
 		return "", os.ErrNotExist
 	}
-	return checkedDefinitionLink(s.systemdUnitFile, entry.Link)
+	return checkedDefinitionLink(s.systemdUnitFile, s.systemdDevNull, entry.Link)
 }
 func (osDefinitionStore) List(ctx context.Context, dir string) (names []string, err error) {
 	parent, err := platform.OpenTrustedParent(ctx, dir, 0)

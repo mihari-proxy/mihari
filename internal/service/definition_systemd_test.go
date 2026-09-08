@@ -106,6 +106,23 @@ func systemdMaskedShow() string {
 	}, "\n") + "\n"
 }
 
+func TestSystemdInspect_RejectsSymlinkDropins(t *testing.T) {
+	for _, target := range []string{defaultDevNull, "/other/config.conf"} {
+		dropin := trustedDropinFile(t)
+		h := newSystemdHarness(t, false, false, trustedUnitFile(t), dropin)
+		h.files.links[dropin.Path] = target
+		delete(h.files.files, dropin.Path)
+		if _, err := h.adapter.InspectDefinition(context.Background()); err == nil {
+			t.Fatal("symlink drop-in was accepted as empty regular bytes")
+		} else {
+			requireInvalidState(t, err)
+		}
+		if len(h.hook.kinds) != 0 {
+			t.Fatal("unsupported definition caused mutation")
+		}
+	}
+}
+
 func (h *systemdHarness) installSystemdHandlers() {
 	h.runner.handle(func(argv []string) bool {
 		return argvHasPrefix(argv, []string{defaultSystemctl, "--system", "show"})

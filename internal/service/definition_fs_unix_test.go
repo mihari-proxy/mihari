@@ -15,6 +15,7 @@ func TestNativeDefinitionStore_UsesConfiguredEnableTarget(t *testing.T) {
 	paths := DefaultSystemdPaths()
 	paths.UnitFile = "/fixture/systemd/mihari.service"
 	paths.WantsLink = "/fixture/systemd/multi-user.target.wants/mihari.service"
+	paths.DevNull = "/fixture/dev-null"
 	adapter := NewSystemdAdapterWithConfig(SystemdConfig{Files: NewUnixDefinitionStore(), Paths: paths})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -26,8 +27,8 @@ func TestNativeDefinitionStore_UsesConfiguredEnableTarget(t *testing.T) {
 	if err := adapter.files.Mask(ctx, paths.WantsLink, "/unconfigured/mihari.service"); !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("unconfigured target was allowed: %v", err)
 	}
-	if err := adapter.files.Mask(ctx, paths.UnitFile, defaultDevNull); !errors.Is(err, context.Canceled) {
-		t.Fatalf("fixed mask target rejected: %v", err)
+	if err := adapter.files.Mask(ctx, paths.UnitFile, paths.DevNull); !errors.Is(err, context.Canceled) {
+		t.Fatalf("configured mask target rejected: %v", err)
 	}
 }
 
@@ -93,8 +94,9 @@ func TestNativeDefinitionStore_ReadLinkRejectsUnrestorableTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	configured := filepath.Join(root, "mihari.service")
-	store := osDefinitionStore{systemdUnitFile: configured}
-	for n, target := range []string{configured, defaultDevNull, "/unconfigured/mihari.service"} {
+	mask := filepath.Join(root, "dev-null")
+	store := osDefinitionStore{systemdUnitFile: configured, systemdDevNull: mask}
+	for n, target := range []string{configured, mask, "/unconfigured/mihari.service"} {
 		name := filepath.Join(root, fmt.Sprintf("enable-%d", n))
 		if err := os.Symlink(target, name); err != nil {
 			t.Fatal(err)
@@ -106,6 +108,12 @@ func TestNativeDefinitionStore_ReadLinkRejectsUnrestorableTarget(t *testing.T) {
 			}
 		} else if err != nil || got != target {
 			t.Fatalf("restorable target rejected: %q %v", got, err)
+		}
+		if n == 1 {
+			file, err := store.Read(context.Background(), name)
+			if err != nil || file.Kind != "mask" {
+				t.Fatalf("configured mask not recognized: %q %v", file.Kind, err)
+			}
 		}
 	}
 }

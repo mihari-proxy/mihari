@@ -5,19 +5,22 @@ import (
 	"path"
 )
 
-func checkedDefinitionLink(unitFile, target string) (string, error) {
+func checkedDefinitionLink(unitFile, devNull, target string) (string, error) {
 	if target == "" {
 		return "", os.ErrInvalid
 	}
-	if !allowedDefinitionLink(unitFile, target) {
+	if !allowedDefinitionLink(unitFile, devNull, target) {
 		return "", os.ErrPermission
 	}
 	return target, nil
 }
 
-func allowedDefinitionLink(unitFile, target string) bool {
+func allowedDefinitionLink(unitFile, devNull, target string) bool {
 	if unitFile == "" {
 		unitFile = defaultSystemdUnitFile
 	}
-	return unixAbs(target) && path.Clean(target) == target && (target == defaultDevNull || target == unitFile)
+	if devNull == "" {
+		devNull = defaultDevNull
+	}
+	return unixAbs(target) && path.Clean(target) == target && (target == devNull || target == unitFile)
 }
