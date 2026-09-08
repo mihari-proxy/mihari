@@ -51,10 +51,37 @@ func TestLaunchdStop_RejectsMissingGroupAuthority(t *testing.T) {
 		if err := h.adapter.DisableAutostartAndStop(context.Background()); err == nil {
 			t.Fatal("legacy instance without process-group proof authorized bootout")
 		}
+		if h.disabled {
+			t.Fatal("service policy changed before process-group authority was proven")
+		}
+		if len(h.hook.kinds) != 0 {
+			t.Fatalf("service actions were journaled before authority proof: %v", h.hook.kinds)
+		}
 		for _, call := range h.runner.calls {
+			if containsArg(call, "disable") {
+				t.Fatal("service disable was attempted without process-group authority")
+			}
 			if containsArg(call, "bootout") {
 				t.Fatal("legacy service was bootouted")
 			}
+		}
+	}
+}
+
+func TestLaunchdStopAuthority_RestoreStartUnknownGroupDoesNotMutatePolicy(t *testing.T) {
+	h := newLaunchdHarness(t, true, true, true)
+	// Recovery after a durable restore-start intent deliberately clears the
+	// previous process generation while retaining the same-boot boundary.
+	h.adapter.BindStopAuthority(Definition{Status: StatusRunning}, "boot-test")
+	if err := h.adapter.DisableAutostartAndStop(context.Background()); err == nil {
+		t.Fatal("unknown restored process group authorized service mutation")
+	}
+	if h.disabled || len(h.hook.kinds) != 0 {
+		t.Fatalf("unknown restored group changed policy: disabled=%v actions=%v", h.disabled, h.hook.kinds)
+	}
+	for _, call := range h.runner.calls {
+		if containsArg(call, "disable") || containsArg(call, "bootout") {
+			t.Fatalf("unknown restored group reached mutation command: %v", call)
 		}
 	}
 }

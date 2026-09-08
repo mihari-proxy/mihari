@@ -185,6 +185,9 @@ func (a *LaunchdAdapter) DisableAutostartAndStop(ctx context.Context) error {
 	if def.Status == StatusNotInstalled {
 		return a.WaitOwnedTreeExit(ctx)
 	}
+	if _, _, err := a.checkStopAuthority(ctx); err != nil {
+		return err
+	}
 	err = applyAction(ctx, a.hook, DefinitionAction{
 		Kind:       DefinitionActionDisabled,
 		TargetRole: "definition",
