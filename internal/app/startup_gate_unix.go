@@ -59,7 +59,7 @@ func inspectUnixActivation(ctx context.Context, layout platform.ResolvedLayout, 
 	if err != nil {
 		return phase, true, err
 	}
-	if service {
+	if service || os.Geteuid() == 0 {
 		binary, binaryErr := os.Executable()
 		if binaryErr != nil {
 			return "", true, binaryErr
@@ -69,7 +69,7 @@ func inspectUnixActivation(ctx context.Context, layout platform.ResolvedLayout, 
 			return "", true, hashErr
 		}
 		if hash != journal.CandidateHash {
-			return "", true, installBusy("service binary does not match activation")
+			return "", true, installBusy("daemon binary does not match activation")
 		}
 	}
 	return phase, true, nil

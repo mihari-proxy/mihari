@@ -77,6 +77,9 @@ func (b ForegroundBootstrap) Start(ctx context.Context) (resultErr error) {
 		if j.Mode != mode || j.TargetPath != x.Artifacts.Target || j.DataRoot != x.Artifacts.DataRoot || j.InstallPath != x.Artifacts.Install || j.EndpointPath != x.Artifacts.Endpoint || j.CredentialPath != x.Artifacts.Credential {
 			return installBusy("install recovery required")
 		}
+		if j.CandidateHash != x.Artifacts.CandidateHash {
+			return installBusy("foreground binary does not match activation")
+		}
 		if err := release(); err != nil {
 			return err
 		}

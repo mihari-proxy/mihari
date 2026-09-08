@@ -57,7 +57,7 @@ func TestUnixBootstrap_PreparesRealAuthorityBeforeWAL(t *testing.T) {
 }
 
 func TestUnixBootstrap_RejectsCompletedJournalForDifferentLayout(t *testing.T) {
-	for _, field := range []string{"mode", "target", "data", "install", "endpoint", "credential"} {
+	for _, field := range []string{"mode", "target", "data", "install", "endpoint", "credential", "binary"} {
 		t.Run(field, func(t *testing.T) {
 			h := newInstallHarness(t, InstallDataCreate)
 			if _, err := h.tx.Apply(context.Background(), h.req); err != nil {
@@ -76,6 +76,8 @@ func TestUnixBootstrap_RejectsCompletedJournalForDifferentLayout(t *testing.T) {
 				h.tx.Artifacts.Endpoint += "-other"
 			case "credential":
 				h.tx.Artifacts.Credential += "-other"
+			case "binary":
+				h.tx.Artifacts.CandidateHash = sha256Hex("different running binary")
 			}
 			ran := false
 			err := (ForegroundBootstrap{Root: true, Transaction: h.tx, Run: func(context.Context, string) error { ran = true; return nil }}).Start(context.Background())

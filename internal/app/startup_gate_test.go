@@ -102,3 +102,14 @@ func TestUnixStartup_ActivationRejectsDifferentInstance(t *testing.T) {
 		})
 	}
 }
+
+func TestUnixStartup_SourceAuthorityCannotActivateDaemon(t *testing.T) {
+	j := mustDecodeJournal(t)
+	layout := platform.ResolvedLayout{Mode: platform.LayoutMode(j.Mode), Data: platform.Paths{Root: j.DataRoot}, InstallRoot: j.InstallPath, ControlEndpoint: j.EndpointPath, CredentialPath: j.CredentialPath}
+	for _, phase := range []string{InstallPhaseActivationCommitted, InstallPhaseComplete} {
+		j.Phase, j.RecoveryAuthority = phase, InstallAuthoritySource
+		if _, err := startupJournalPhase(j, layout); err == nil {
+			t.Fatalf("production startup accepted source authority at %s", phase)
+		}
+	}
+}

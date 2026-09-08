@@ -137,6 +137,17 @@ func TestSecurityPrivateServiceActivation(t *testing.T) {
 	// carries an unrelated/pending service transaction. It does not bootstrap.
 	local := journal
 	local.Phase = InstallPhaseComplete
+	local.CandidateHash = strings.Repeat("e", 64)
+	encoded, err = EncodeJournal(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSecurityActivationJournal(t, ctx, private, encoded)
+	priorCalls := calls
+	if err := RunUnixStartup(ctx, layout, func(context.Context) (bool, error) { t.Fatal("activated P tried to bootstrap"); return false, nil }, run); err == nil || calls != priorCalls {
+		t.Fatal("foreground startup accepted a different executable hash")
+	}
+	local.CandidateHash = hash
 	encoded, err = EncodeJournal(local)
 	if err != nil {
 		t.Fatal(err)
