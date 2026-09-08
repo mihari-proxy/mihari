@@ -92,7 +92,7 @@ func (model *Model) updateInstallation(message tea.Msg) (tea.Cmd, bool) {
 			u.scroll += 8
 		case "pgup":
 			u.scroll = max(0, u.scroll-8)
-		case "esc", "ctrl+c", "q":
+		case "esc", "q":
 			u.dismiss()
 			return nil, true
 		case "up", "left", "shift+tab":
@@ -251,7 +251,7 @@ func finishInstallationRun(ctx context.Context, final tea.Model, runErr error, o
 		}
 		return err
 	}
-	if outcome.Schema != app.InstallationOutcomeSchema || !outcome.InstallationComplete || outcome.StartFailed || outcome.ServiceState != app.InstallServiceRunning && outcome.ServiceState != app.InstallServiceStopped {
+	if outcome.Schema != app.InstallationOutcomeSchema || !outcome.InstallationComplete || outcome.StartFailed || (outcome.ServiceState != app.InstallServiceRunning && outcome.ServiceState != app.InstallServiceStopped) {
 		return errors.New("installation result is invalid")
 	}
 	if out != nil {
