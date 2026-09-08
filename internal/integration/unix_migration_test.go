@@ -14,7 +14,7 @@ import (
 
 func TestUnixMigration_TrustedRootPrepare(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := migrationTrustedTempDir(t)
 	source := filepath.Join(root, "source")
 	staging := filepath.Join(root, "staging")
 	target := filepath.Join(root, "target")
@@ -70,7 +70,7 @@ func TestUnixMigration_TrustedRootPrepare(t *testing.T) {
 }
 
 func TestUnixMigration_NestedSourceTargetRejected(t *testing.T) {
-	root := t.TempDir()
+	root := migrationTrustedTempDir(t)
 	source := filepath.Join(root, "source")
 	if err := os.MkdirAll(filepath.Join(source, "child"), 0o700); err != nil {
 		t.Fatal(err)
@@ -85,6 +85,32 @@ func TestUnixMigration_NestedSourceTargetRejected(t *testing.T) {
 	if err := app.ProbeUnixMigrationRoot(ctx, source, uint32(os.Geteuid())); err != nil {
 		t.Fatalf("unix capability: %v", err)
 	}
+}
+
+func migrationTrustedTempDir(t *testing.T) string {
+	t.Helper()
+	// Trusted roots reject writable ancestors. The disposable checkout fixture
+	// exercises that policy without weakening it for a shared temporary path.
+	root, err := os.MkdirTemp(".", "mihari-migration-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	root, err = filepath.Abs(root)
+	if err == nil {
+		root, err = filepath.EvalSymlinks(root)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
 }
 
 func mustWrite(t *testing.T, path string, data []byte) {

@@ -82,9 +82,7 @@ func TestOpenMachineSnapshot_FixturePublishesManifestV2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Path != out {
-		t.Fatalf("path=%q want %q", result.Path, out)
-	}
+	assertSnapshotExportIdentity(t, result.Path, out)
 	got := readExportZip(t, out)
 	if _, ok := got["manifest.json"]; !ok {
 		t.Fatalf("entries=%v", keys(got))
@@ -222,9 +220,7 @@ func TestOpenMachineSnapshot_DoesNotReuseClientHTTPTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("independent stream client reused the 10s/50ms HTTP timeout: %v", err)
 	}
-	if result.Path != out {
-		t.Fatalf("path=%q", result.Path)
-	}
+	assertSnapshotExportIdentity(t, result.Path, out)
 	select {
 	case <-started:
 	default:
@@ -528,6 +524,15 @@ func decodeManifest(t *testing.T, raw string) map[string]any {
 		t.Fatal(err)
 	}
 	return manifest
+}
+
+func assertSnapshotExportIdentity(t *testing.T, actual, expected string) {
+	t.Helper()
+	got, gotErr := os.Stat(actual)
+	want, wantErr := os.Stat(expected)
+	if gotErr != nil || wantErr != nil || !os.SameFile(got, want) {
+		t.Fatalf("published path does not identify requested export: %v / %v", gotErr, wantErr)
+	}
 }
 
 func keys(m map[string]string) []string {

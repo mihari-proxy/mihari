@@ -10,7 +10,7 @@ import (
 )
 
 func TestCaptureLayout_PrivateCapturesInstallOverride(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "portable")
+	root := filepath.Join(leaseTempDir(t), "portable")
 	t.Setenv("MIHARI_DATA", root)
 	t.Setenv("MIHARI_INSTALL_ROOT", "relative-install")
 	t.Setenv("MIHARI_CONTROL_ENDPOINT", filepath.Join(filepath.Dir(root), "external.sock"))

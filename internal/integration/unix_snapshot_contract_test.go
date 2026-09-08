@@ -67,8 +67,10 @@ func TestUnixSnapshotContract_LayoutClientAssembleFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Path != out {
-		t.Fatalf("path=%q", result.Path)
+	actual, statErr := os.Stat(result.Path)
+	expected, wantErr := os.Stat(out)
+	if statErr != nil || wantErr != nil || !os.SameFile(actual, expected) {
+		t.Fatalf("published path does not identify requested export: %v / %v", statErr, wantErr)
 	}
 	raw := readZipManifest(t, out)
 	var manifest map[string]any
@@ -147,7 +149,15 @@ func TestUnixSnapshotContract_FakeCompleteAndEarlyEOFNeverPublish(t *testing.T) 
 
 func unixSnapshotLayout(t *testing.T) (platform.ResolvedLayout, platform.ControlLocator) {
 	t.Helper()
-	root := t.TempDir()
+	root, err := os.MkdirTemp("/tmp", "mihari-snapshot-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Error(err)
+		}
+	})
 	home := filepath.Join(root, "home")
 	data := filepath.Join(root, "private")
 	defaults := platform.LayoutDefaults{OS: runtime.GOOS, BaseDir: "/var/lib/mihari", InstallRoot: "/usr/local/lib/mihari", TrustedHome: home, SocketLimit: 107}

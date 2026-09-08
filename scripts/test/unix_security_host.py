@@ -434,9 +434,11 @@ class Host:
         # Independent ledger exists before mutation; archive a synced immutable
         # copy before the anchor can be removed. Raw events are never uploaded.
         atomic_json(self.results/"cleanup-archive.json", self.ledger)
-        if (self.root/"events.jsonl").exists():
-            data = (self.root/"events.jsonl").read_bytes()
-            destination = self.results/"events.jsonl"
+        for name in ("events.jsonl", "launcher.stderr"):
+            if not (self.root/name).exists():
+                continue
+            data = (self.root/name).read_bytes()
+            destination = self.results/name
             fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
             with os.fdopen(fd, "wb") as stream:
                 stream.write(data)
@@ -481,7 +483,7 @@ class Host:
                     raise PermissionError("mount target identity changed")
                 if identity(target) != entry["mount_identity"]:
                     raise PermissionError("mount cleanup did not restore target")
-            output = subprocess.check_output(["/sbin/mount"], text=True)
+            output = subprocess.check_output(["/bin/mount" if sys.platform == "linux" else "/sbin/mount"], text=True)
             if str(self.root)+"/" in output:
                 raise OSError("fixture mount remains visible")
         elif stage == "accounts":
@@ -572,8 +574,9 @@ def run_tests(args):
         if sys.platform == "linux":
             require_private_namespace()
             environment["MIHARI_SECURITY_MOUNT_NAMESPACE"] = "isolated"
-        with open(host.root/"events.jsonl", "xb", buffering=0) as events:
+        with open(host.root/"events.jsonl", "xb", buffering=0) as events, open(host.root/"launcher.stderr", "xb", buffering=0) as diagnostics:
             os.chmod(host.root/"events.jsonl", 0o600)
+            os.chmod(host.root/"launcher.stderr", 0o600)
             # Full assembly owns fresh B, then retain its completed fixture under
             # an identity-checked new name. No deletion/marker edit is involved.
             phases = [("cmd/mihari", ["TestUnixSecurity_FullAssembly"], False)]
@@ -595,6 +598,8 @@ def run_tests(args):
                     child_env.pop("MIHARI_SECURITY_ROOT")
                     child_env.pop("MIHARI_ISOLATED_SECURITY_CI")
                     child_env["TMPDIR"] = str(host.root/"users"/"a")
+                    user_root = host.root/"users"/"a"
+                    child_env.update(GOCACHE=str(user_root/"go-cache"), GOMODCACHE=str(user_root/"go-modules"), GOPATH=str(user_root/"go-path"), TEST_TELEMETRY_DIR=str(user_root/"telemetry"))
                     credential = {"user": owner["uid"], "group": owner["gid"], "extra_groups": []}
                 command = [str(go), "tool", "test2json", "-t", "-p", PREFIX+package, str(binary), "-test.v=test2json", "-test.count=1", "-test.timeout="+str(max(1,min(400,int(deadline-time.monotonic()))))+"s", "-test.run=^("+"|".join(names)+")$"]
                 intent = {"package": PREFIX+package, "nonce": str(time.monotonic_ns())}
@@ -603,7 +608,7 @@ def run_tests(args):
                 gate_read, gate_write = os.pipe()
                 supervisor = [os.environ["MIHARI_SECURITY_PYTHON"], str(host.root/"shared"/"supervisor.py"), str(gate_read), "--owner="+intent["nonce"], *command]
                 try:
-                    active = subprocess.Popen(supervisor, cwd=str(host.root/"shared") if ordinary else str(Path(args.source)/package), env=child_env, stdout=events, stderr=events, start_new_session=True, pass_fds=(gate_read,), **credential)
+                    active = subprocess.Popen(supervisor, cwd=str(host.root/"shared") if ordinary else str(Path(args.source)/package), env=child_env, stdout=events, stderr=diagnostics, start_new_session=True, pass_fds=(gate_read,), **credential)
                     intent.update(pid=active.pid, identity=process_identity(active.pid))
                     host.save()  # supervisor cannot spawn a test until this sync
                     os.write(gate_write,b"G")
@@ -623,6 +628,7 @@ def run_tests(args):
                         base.rename(host.root/"assembly-system")
                         sync_dir(host.root)
             os.fsync(events.fileno())
+            os.fsync(diagnostics.fileno())
         with open(host.root/"events.jsonl", encoding="utf-8") as stream:
             parsed = [json.loads(line) for line in stream if line.strip()]
         verdict = verify(parsed, sys.platform, run["uids"], status, supplemental=True)

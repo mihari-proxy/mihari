@@ -13,7 +13,7 @@ import (
 
 func TestUnixMigration_TrustedCapStatIdentityAndMtime(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := migrationTrustedTempDir(t)
 	if err := os.WriteFile(filepath.Join(root, "payload.txt"), []byte("same-bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -45,4 +45,30 @@ func TestUnixMigration_TrustedCapStatIdentityAndMtime(t *testing.T) {
 	if err == nil || apiCode(err) != protocol.CodeRevisionConflict {
 		t.Fatalf("inode/mtime rewrite: want revision_conflict, got %v", err)
 	}
+}
+
+func migrationTrustedTempDir(t *testing.T) string {
+	t.Helper()
+	// The capability rejects writable ancestors such as /tmp. Keep this
+	// disposable fixture in the checkout and make its application mode exact.
+	root, err := os.MkdirTemp(".", "mihari-migration-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	root, err = filepath.Abs(root)
+	if err == nil {
+		root, err = filepath.EvalSymlinks(root)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
 }

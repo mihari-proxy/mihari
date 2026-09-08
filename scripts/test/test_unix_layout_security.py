@@ -90,6 +90,23 @@ def test_cleanup_preserves_test_and_term_failures(initial):
     assert host.archive_exists and not host.anchor_exists
 
 
+def test_linux_cleanup_uses_available_mount_inventory_command(tmp_path, monkeypatch):
+    import types
+    import unix_security_host as host_module
+    host = object.__new__(host_module.Host)
+    host.root = tmp_path/"anchor"
+    host.results = tmp_path/"results"
+    host.ledger = {"mounts": []}
+    monkeypatch.setattr(host_module, "load_run", lambda *args, **kwargs: {})
+    monkeypatch.setattr(host_module, "sys", types.SimpleNamespace(platform="linux"))
+    def inventory(command, **kwargs):
+        if command != ["/bin/mount"]:
+            raise FileNotFoundError(command[0])
+        return "fixture-free mount inventory\n"
+    monkeypatch.setattr(host_module.subprocess, "check_output", inventory)
+    host.cleanup("mounts")
+
+
 @pytest.mark.parametrize("failure", ["processes", "mounts", "accounts", "anchor", "archive"])
 def test_failure_survives_always_retry(failure):
     host = FakeHost(failure)
@@ -149,6 +166,11 @@ def test_real_runner_wrapper_preserves_every_failure(tmp_path, monkeypatch, fail
     class Process:
         pid=123
         def __init__(self,argv,**kwargs):
+            kwargs["stderr"].write(b"launcher diagnostic outside the test event protocol\n")
+            if "user" in kwargs:
+                user_root = root/"users"/"a"
+                for name in ("GOCACHE", "GOMODCACHE", "GOPATH", "TEST_TELEMETRY_DIR"):
+                    assert Path(kwargs["env"][name]).is_relative_to(user_root), name+" is not writable by the ordinary test UID"
             package=argv[argv.index("-p")+1]
             pattern=next(x for x in argv if x.startswith("-test.run="))
             names=pattern.split("^(" if "^(" in pattern else "^",1)[1].removesuffix(")$").split("|")

@@ -43,8 +43,10 @@ func TestAssemble_FixtureSourcesPublishManifestV2(t *testing.T) {
 	if !finished {
 		t.Fatal("set finish was not called before publish")
 	}
-	if result.Path != out {
-		t.Fatalf("path=%q", result.Path)
+	actual, statErr := os.Stat(result.Path)
+	expected, wantErr := os.Stat(out)
+	if statErr != nil || wantErr != nil || !os.SameFile(actual, expected) {
+		t.Fatalf("published path does not identify requested export: %v / %v", statErr, wantErr)
 	}
 	got := readAssembleZip(t, out)
 	if _, ok := got[exportMihomoEntry]; ok {

@@ -12,7 +12,15 @@ import (
 )
 
 func TestUnixInstaller_TrustUsesCapturedInstallRoot(t *testing.T) {
-	root := t.TempDir()
+	root, err := os.MkdirTemp("/tmp", "mihari-layout-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Error(err)
+		}
+	})
 	t.Setenv("MIHARI_DATA", filepath.Join(root, "private"))
 	t.Setenv("MIHARI_INSTALL_ROOT", filepath.Join(root, "selected-install"))
 	layout, _, err := platform.CaptureLayout(context.Background())

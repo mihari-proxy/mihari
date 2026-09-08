@@ -110,9 +110,12 @@ def finish(host, report, status):
         try:
             host.cleanup(stage)
             report["cleanup"][stage] = "pass"
-        except Exception:
+        except Exception as error:
             report["cleanup"][stage] = "fail"
             report["failures"].append(stage)
+            # Exception classes/errno are safe diagnostics; messages and raw
+            # test output can contain fixture paths or credentials.
+            report.setdefault("cleanup_errors", {})[stage] = {"type": type(error).__name__, "errno": getattr(error, "errno", None)}
             # A live process/mount/account makes recursive anchor removal unsafe.
             break
     report["failures"] = sorted(set(report["failures"]))
