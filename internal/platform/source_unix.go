@@ -4,8 +4,6 @@ package platform
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -354,6 +352,17 @@ func (r *ReadOnlySource) ListNames(ctx context.Context, rel string) (names []str
 // Read observes one regular, single-link file and reads it with a strict bound.
 // Metadata is checked again after IO so concurrent rewrites cannot become a snapshot.
 func (r *ReadOnlySource) Read(ctx context.Context, rel string, limit int64) (entry SourceEntry, raw []byte, err error) {
+	return r.read(ctx, rel, limit, true)
+}
+
+// Stat observes metadata and hashes a bounded file without retaining its bytes.
+// It applies the same namespace, identity and mutation checks as Read.
+func (r *ReadOnlySource) Stat(ctx context.Context, rel string, limit int64) (SourceEntry, error) {
+	entry, _, err := r.read(ctx, rel, limit, false)
+	return entry, err
+}
+
+func (r *ReadOnlySource) read(ctx context.Context, rel string, limit int64, retain bool) (entry SourceEntry, raw []byte, err error) {
 	done, err := r.begin(ctx)
 	if err != nil {
 		return entry, nil, err
@@ -435,11 +444,11 @@ func (r *ReadOnlySource) Read(ctx context.Context, rel string, limit int64) (ent
 	if entry.Size > limit {
 		return entry, nil, os.ErrInvalid
 	}
-	raw, err = io.ReadAll(io.LimitReader(&sourceContextReader{ctx: ctx, r: f}, limit+1))
+	raw, size, hash, err := readSourceContent(ctx, f, limit, retain)
 	if err != nil {
 		return entry, nil, err
 	}
-	if int64(len(raw)) != entry.Size {
+	if size != entry.Size {
 		return entry, nil, ErrIdentityMismatch
 	}
 	after, err := f.Stat()
@@ -454,8 +463,7 @@ func (r *ReadOnlySource) Read(ctx context.Context, rel string, limit int64) (ent
 	if now != named || after.Size() != entry.Size || mt != entry.Mtime || ct != entry.Ctime {
 		return entry, nil, ErrIdentityMismatch
 	}
-	sum := sha256.Sum256(raw)
-	entry.SHA256 = hex.EncodeToString(sum[:])
+	entry.SHA256 = hash
 	return entry, raw, r.verify()
 }
 
@@ -477,16 +485,4 @@ func (r *ReadOnlySource) Close() error {
 		err = errors.Join(err, r.backend.close(r.chain[i].fd))
 	}
 	return err
-}
-
-type sourceContextReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (r *sourceContextReader) Read(p []byte) (int, error) {
-	if err := r.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return r.r.Read(p)
 }

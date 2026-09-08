@@ -27,6 +27,19 @@ func TestReadOnlyMigrationSource_OversizeHasMigrationClassification(t *testing.T
 	if _, err := source.ReadFile(context.Background(), "resource", 3); !errors.Is(err, errMigrationOversize) {
 		t.Fatalf("oversized resource classification: %v", err)
 	}
+	large, err := os.OpenFile(filepath.Join(root, "oversized-binary"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(large.Truncate(migrationBinaryMax+1), large.Close()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Stat(context.Background(), "oversized-binary"); !errors.Is(err, errMigrationOversize) {
+		t.Fatalf("oversized metadata classification: %v", err)
+	}
+	if _, err := source.List(context.Background(), "."); !errors.Is(err, errMigrationOversize) {
+		t.Fatalf("oversized listing classification: %v", err)
+	}
 }
 
 func TestMigrationCapabilities_SameDirectoryHasMatchingIdentity(t *testing.T) {

@@ -53,7 +53,7 @@ func (c *readOnlyMigrationCap) List(ctx context.Context, rel string) ([]migratio
 	return out, nil
 }
 func (c *readOnlyMigrationCap) Stat(ctx context.Context, rel string) (migrationEntry, error) {
-	entry, _, err := c.source.Read(ctx, rel, migrationBinaryMax)
+	entry, err := c.source.Stat(ctx, rel, migrationBinaryMax)
 	if err != nil {
 		if errors.Is(err, os.ErrInvalid) && entry.Kind == "file" && entry.Size > migrationBinaryMax {
 			return migrationEntry{}, errMigrationOversize
