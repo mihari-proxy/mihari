@@ -118,6 +118,16 @@ func (i Installer) prepareTrusted(ctx context.Context, request InstallRequest) (
 	if e != nil {
 		return nil, e
 	}
+	if request.CurrentVersion == a.Tag {
+		// The recorded version alone is not authority. Recheck the installed
+		// receipt, bytes and version before treating this install as a no-op.
+		if version, ready := i.localReadyVersion(ctx, request.BinaryPath); ready && version == a.Tag {
+			return &Candidate{version: version}, nil
+		}
+		if e := ctx.Err(); e != nil {
+			return nil, e
+		}
+	}
 	if i.GeneratedConfig == nil {
 		return nil, dataFailure("generated configuration capability unavailable")
 	}

@@ -24,6 +24,13 @@ type VerifiedExecutor interface {
 // OSVerifiedExecutor explicitly assigns the allowlisted environment.
 type OSVerifiedExecutor struct{}
 
+// verifiedExecutionError retains the operating-system error class without
+// exposing executor output, paths, or configuration values in its message.
+type verifiedExecutionError struct{ cause error }
+
+func (e verifiedExecutionError) Error() string { return "execute verified mihomo command failed" }
+func (e verifiedExecutionError) Unwrap() error { return e.cause }
+
 func (OSVerifiedExecutor) Execute(ctx context.Context, c CoreCommand) ([]byte, error) {
 	command := exec.CommandContext(ctx, c.Binary, c.Args...)
 	command.Env = append([]string(nil), c.Env...)
@@ -51,5 +58,9 @@ func executeVerifiedOwned(ctx context.Context, v *VerifiedCore, p CorePurpose, c
 	if x == nil {
 		x = OSVerifiedExecutor{}
 	}
-	return x.Execute(ctx, command)
+	output, err := x.Execute(ctx, command)
+	if err != nil {
+		return output, verifiedExecutionError{cause: err}
+	}
+	return output, nil
 }

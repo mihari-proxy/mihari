@@ -374,3 +374,50 @@ func TestTrustedPrepare_BadCompressedHashNeverStagesOrExecutes(t *testing.T) {
 		})
 	}
 }
+
+func TestTrustedPrepare_SameVersionUsesVerifiedLocalCoreOffline(t *testing.T) {
+	for _, channel := range []string{"", "stable"} {
+		t.Run(channel, func(t *testing.T) {
+			s, installer, executor := trustedFixture(t)
+			seedInstalledReceipt(t, s, "installed trusted binary")
+			before := mustInspect(t, s, InstalledBinary, "")
+			installer.GOOS, installer.GOARCH = "linux", "amd64"
+			installer.GeneratedConfig = nil // No new config is needed for a no-op.
+			requests := 0
+			installer.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				requests++
+				return nil, errors.New("offline")
+			})}
+			candidate, err := installer.Prepare(context.Background(), InstallRequest{CurrentVersion: "v1.19.30", Channel: channel})
+			if err != nil {
+				t.Fatalf("verified same-version install failed offline: %v", err)
+			}
+			defer candidate.Cleanup()
+			result, err := candidate.Commit()
+			if err != nil || candidate.Updated() || result.Updated || result.Version != "v1.19.30" || requests != 0 {
+				t.Fatalf("same-version install was not a local no-op: result=%+v requests=%d err=%v", result, requests, err)
+			}
+			if len(executor.commands) != 1 || executor.commands[0].Args[0] != "-v" || mustInspect(t, s, InstalledBinary, "") != before {
+				t.Fatal("same-version fast path failed to verify or changed installed binary")
+			}
+		})
+	}
+}
+
+func TestTrustedPrepare_SameVersionWithInvalidPairStillAttemptsRepair(t *testing.T) {
+	s, installer, executor := trustedFixture(t)
+	seedInstalledReceipt(t, s, "installed trusted binary")
+	if err := s.Save(context.Background(), InstalledBinary, "", []byte("tampered")); err != nil {
+		t.Fatal(err)
+	}
+	installer.GOOS, installer.GOARCH = "linux", "amd64"
+	requests := 0
+	installer.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return nil, errors.New("offline")
+	})}
+	candidate, err := installer.Prepare(context.Background(), InstallRequest{CurrentVersion: "v1.19.30", Channel: "stable"})
+	if err == nil || candidate != nil || requests != 1 || len(executor.commands) != 0 {
+		t.Fatalf("tampered core was accepted or executed: requests=%d commands=%d err=%v", requests, len(executor.commands), err)
+	}
+}
