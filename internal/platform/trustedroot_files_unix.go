@@ -57,41 +57,48 @@ func (r *TrustedRoot) OpenFile(ctx context.Context, name string, maxMode uint32)
 // WriteFile atomically publishes bytes through an exclusive 0600 temporary
 // inode. A nil expected identity requests no-replace publication; a non-nil
 // identity authorizes replacement of exactly that previously observed inode.
-func (r *TrustedRoot) WriteFile(ctx context.Context, name string, data []byte, mode uint32, expected *FileIdentity) (err error) {
+func (r *TrustedRoot) WriteFile(ctx context.Context, name string, data []byte, mode uint32, expected *FileIdentity) error {
+	_, err := r.WriteFileWithIdentity(ctx, name, data, mode, expected)
+	return err
+}
+
+// WriteFileWithIdentity also reports the published inode when a later sync or
+// descriptor-close operation fails. A nil identity means no publication occurred.
+func (r *TrustedRoot) WriteFileWithIdentity(ctx context.Context, name string, data []byte, mode uint32, expected *FileIdentity) (identity *FileIdentity, err error) {
 	finish, err := r.begin(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer finish()
 	if !trustedComponent(name) || !trustedFileMode(mode) {
-		return os.ErrInvalid
+		return nil, os.ErrInvalid
 	}
 	if err = ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	if err = r.verify(); err != nil {
-		return err
+		return nil, err
 	}
 	parent := r.chain[len(r.chain)-1].fd
 	if err = r.backend.checkACL(parent, true, r.policy.Owner); err != nil {
-		return denied("creation parent ACL", err)
+		return nil, denied("creation parent ACL", err)
 	}
 	if err = r.checkDestination(parent, name, mode, expected); err != nil {
-		return err
+		return nil, err
 	}
 	temp, err := randomTempName(".mihari-*")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	fd, err := r.backend.openFile(parent, temp, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0600)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	f := os.NewFile(uintptr(fd), temp)
 	defer func() { err = errors.Join(err, f.Close()) }()
 	initial, err := r.backend.stat(fd)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	published := false
 	defer func() {
@@ -116,55 +123,55 @@ func (r *TrustedRoot) WriteFile(ctx context.Context, name string, data []byte, m
 	}()
 	n, err := r.checkFile(fd, 0600)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err = r.checkFileName(parent, temp, n); err != nil {
-		return err
+		return nil, err
 	}
 	if err = unix.SetNonblock(fd, false); err != nil {
-		return err
+		return nil, err
 	}
 	if err = ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	if written, e := f.Write(data); e != nil {
-		return e
+		return nil, e
 	} else if written != len(data) {
-		return io.ErrShortWrite
+		return nil, io.ErrShortWrite
 	}
 	if err = f.Sync(); err != nil {
-		return err
+		return nil, err
 	}
 	if _, err = r.checkFile(fd, 0600); err != nil {
-		return err
+		return nil, err
 	}
 	if err = unix.Fchmod(fd, mode); err != nil {
-		return err
+		return nil, err
 	}
 	n, err = r.checkFile(fd, mode)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if n.mode&07777 != mode {
-		return denied("published file mode", nil)
+		return nil, denied("published file mode", nil)
 	}
 	if err = f.Sync(); err != nil {
-		return err
+		return nil, err
 	}
 	if err = ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	if err = r.verify(); err != nil {
-		return err
+		return nil, err
 	}
 	if err = r.backend.checkACL(parent, true, r.policy.Owner); err != nil {
-		return denied("publication parent ACL", err)
+		return nil, denied("publication parent ACL", err)
 	}
 	if err = r.checkFileName(parent, temp, n); err != nil {
-		return err
+		return nil, err
 	}
 	if err = r.checkDestination(parent, name, mode, expected); err != nil {
-		return err
+		return nil, err
 	}
 	if expected == nil {
 		err = renameatNoReplace(parent, temp, name)
@@ -172,11 +179,12 @@ func (r *TrustedRoot) WriteFile(ctx context.Context, name string, data []byte, m
 		err = unix.Renameat(parent, temp, parent, name)
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	published = true
+	identity = &FileIdentity{plat: n.id}
 	// A sync failure here means publication happened but durability is unproved.
-	return r.backend.sync(parent)
+	return identity, r.backend.sync(parent)
 }
 
 func trustedFileMode(mode uint32) bool {

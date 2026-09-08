@@ -41,22 +41,19 @@ func (f *unixConfigFiles) prepare(ctx context.Context, b []byte) (*ConfigCapabil
 	if e != nil {
 		return nil, e
 	}
-	if e = p.WriteFile(ctx, n, b, 0600, nil); e != nil {
-		return nil, errors.Join(e, p.Close())
-	}
-	// Retain the published inode and its parent until binding succeeds. Cleanup
-	// must remain possible when binding observes cancellation after publication.
+	// Publication can precede a sync failure. Keep its exact identity and parent
+	// available for cleanup even when the operation has already been canceled.
 	cleanupCtx := context.WithoutCancel(ctx)
-	file, identity, e := p.OpenFile(cleanupCtx, n, 0600)
+	identity, e := p.WriteFileWithIdentity(ctx, n, b, 0600, nil)
 	if e != nil {
+		if identity != nil {
+			e = errors.Join(e, p.RemoveFile(cleanupCtx, n, 0600, *identity))
+		}
 		return nil, errors.Join(e, p.Close())
 	}
 	configuration, e := BindGeneratedConfig(ctx, f.data, relative, sha256.Sum256(b))
 	if e != nil {
-		return nil, errors.Join(e, p.RemoveFile(cleanupCtx, n, 0600, identity), file.Close(), p.Close())
-	}
-	if e = file.Close(); e != nil {
-		return nil, errors.Join(e, p.RemoveFile(cleanupCtx, n, 0600, identity), configuration.Close(), p.Close())
+		return nil, errors.Join(e, p.RemoveFile(cleanupCtx, n, 0600, *identity), p.Close())
 	}
 	if e = p.Close(); e != nil {
 		return nil, errors.Join(e, f.remove(cleanupCtx, configuration), configuration.Close())
