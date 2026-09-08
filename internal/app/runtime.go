@@ -482,6 +482,10 @@ func startupPolicyInput(ctx context.Context, options RuntimeBuildOptions, subscr
 			return subscription.PolicyInput{}, err
 		}
 		input.YAML = []byte("proxies: []\nproxy-groups: []\nrules:\n  - MATCH,DIRECT\n")
+		// This compiled, resource-free bootstrap has its own policy identity.
+		// It does not create a profile or advance any persisted generation.
+		input.SubscriptionID = "00000000000000000000000000000000"
+		input.Generation = 1
 		input.Settings = settings
 		input.Resources = nil
 		return input, nil
