@@ -563,6 +563,9 @@ func TestSetupReviewShowsRestartRequiredWhenEndpointsChanged(t *testing.T) {
 	model.inputs[0].SetValue("127.0.0.1:9290")
 	model.status.RestartRequired = true
 	model.step = stepReview
+	if got, want := model.restartSuffix(), "  (restart required)"; got != want {
+		t.Fatalf("restart suffix=%q want=%q", got, want)
+	}
 	if !strings.Contains(model.View(), ui.SetupReviewRestartRequired) {
 		t.Fatalf("restart hint missing:\n%s", model.View())
 	}

@@ -202,17 +202,28 @@ func (r *tuiLoggingFailureReporter) report(kind tuiLoggingFailureKind, err error
 	_, _ = fmt.Fprintf(r.out, "Warning: %s\n", message)
 }
 
+func inspectInstallationWithOfflineFallback(
+	ctx context.Context,
+	daemon, offline func(context.Context) (protocol.InstallationStatus, error),
+) (protocol.InstallationStatus, error) {
+	status, err := daemon(ctx)
+	if err == nil || offline == nil {
+		return status, err
+	}
+	var apiErr protocol.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != protocol.CodeDaemonUnavailable {
+		return status, err
+	}
+	return offline(ctx)
+}
+
 // Run starts the full-screen Mihari terminal interface and blocks until it exits.
 func Run(ctx context.Context, options Options) (resultErr error) {
 	actions := options.Installation
 	if options.Client != nil {
 		offline := actions.Inspect
 		actions.Inspect = func(ctx context.Context) (protocol.InstallationStatus, error) {
-			status, err := options.Client.GetInstallationStatus(ctx)
-			if err == nil || offline == nil {
-				return status, err
-			}
-			return offline(ctx)
+			return inspectInstallationWithOfflineFallback(ctx, options.Client.GetInstallationStatus, offline)
 		}
 	}
 	if actions.Elevated == nil {

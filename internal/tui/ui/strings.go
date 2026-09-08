@@ -431,7 +431,7 @@ const (
 	SetupReviewGeoIPReady           = "Country ✓  ASN ✓"
 	SetupReviewGeoIPSkipped         = "Skipped"
 	SetupReviewGeoIPFailed          = "Update failed"
-	SetupReviewRestartRequired      = " (restart required)"
+	SetupReviewRestartRequired      = "(restart required)"
 	SetupReviewServiceUnknown       = "Unknown"
 	SetupReviewServiceNotRegistered = "Not registered for startup"
 	SetupCompleteHelp               = "Enter complete setup  Esc back"

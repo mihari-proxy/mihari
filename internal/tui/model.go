@@ -326,6 +326,9 @@ func (model *Model) syncSystemNetworkStatus() {
 }
 
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := message.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" {
+		return model, tea.Quit
+	}
 	if command, consumed := model.updateInstallation(message); consumed {
 		return model, command
 	}

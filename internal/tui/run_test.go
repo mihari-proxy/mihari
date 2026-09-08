@@ -14,6 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -146,6 +147,30 @@ func TestLoadingModel_QuitKeysStopProgram(t *testing.T) {
 		if message := command(); message != tea.Quit() {
 			t.Fatalf("key=%q message=%#v", key.String(), message)
 		}
+	}
+}
+
+func TestInstallationInspector_OfflineFallbackRequiresDaemonUnavailable(t *testing.T) {
+	permissionErr := protocol.APIError{Code: protocol.CodePermissionDenied, Message: "denied"}
+	offlineCalls := 0
+	offline := func(context.Context) (protocol.InstallationStatus, error) {
+		offlineCalls++
+		return protocol.InstallationStatus{Schema: "mihari.install-status/v1", Kind: "interrupted", ServiceState: "unknown"}, nil
+	}
+
+	status, err := inspectInstallationWithOfflineFallback(context.Background(), func(context.Context) (protocol.InstallationStatus, error) {
+		return protocol.InstallationStatus{}, permissionErr
+	}, offline)
+	var apiErr protocol.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != permissionErr.Code || apiErr.Message != permissionErr.Message || offlineCalls != 0 || status.Kind != "" {
+		t.Fatalf("non-availability error fell back: status=%+v err=%v offline calls=%d", status, err, offlineCalls)
+	}
+
+	status, err = inspectInstallationWithOfflineFallback(context.Background(), func(context.Context) (protocol.InstallationStatus, error) {
+		return protocol.InstallationStatus{}, protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "offline"}
+	}, offline)
+	if err != nil || offlineCalls != 1 || status.Kind != "interrupted" {
+		t.Fatalf("daemon unavailability did not fall back: status=%+v err=%v offline calls=%d", status, err, offlineCalls)
 	}
 }
 

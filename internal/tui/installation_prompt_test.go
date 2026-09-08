@@ -17,6 +17,24 @@ import (
 
 func installationKey(code rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: code} }
 
+func TestInstallationPrompt_CtrlCUsesGlobalQuit(t *testing.T) {
+	model := NewModel()
+	model.setInstallationActions(InstallationActions{})
+	model.updateInstallation(installationStatusMsg{status: protocol.InstallationStatus{Schema: "mihari.install-status/v1", Kind: "interrupted", ServiceState: "unknown"}})
+	if !model.installation.visible {
+		t.Fatal("installation prompt did not open")
+	}
+
+	updated, command := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	got := updated.(Model)
+	if command == nil || command() != tea.Quit() {
+		t.Fatal("Ctrl+C did not use the global quit command")
+	}
+	if !got.installation.visible {
+		t.Fatal("global Ctrl+C dismissed the installation prompt before quitting")
+	}
+}
+
 func TestInstallationPrompt_OnlyConfirmedInterruptedAndOnce(t *testing.T) {
 	for _, kind := range []string{"interrupted", "in_progress", "unknown", "permission_required", "installed"} {
 		t.Run(kind, func(t *testing.T) {
@@ -26,6 +44,9 @@ func TestInstallationPrompt_OnlyConfirmedInterruptedAndOnce(t *testing.T) {
 			model.updateInstallation(message)
 			if model.installation.visible != (kind == "interrupted") {
 				t.Fatalf("kind %s visible %v", kind, model.installation.visible)
+			}
+			if kind != "interrupted" {
+				return
 			}
 			model.updateInstallation(installationKey(tea.KeyEscape))
 			model.updateInstallation(message)
