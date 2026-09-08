@@ -68,20 +68,20 @@ func (s *nativeInstallSession) prepareLifecycle(ctx context.Context, operation s
 }
 
 func (s *nativeInstallSession) lifecycleCandidateHash(operation string, old service.Definition) (string, error) {
-	if !old.Masked {
-		raw, err := readHostFile(old.Binary, migrationBinaryMax)
-		if err != nil {
-			return "", err
-		}
-		return sha256HexBytes(raw), nil
-	}
-	// A mask has no ExecStart to hash. Stop/uninstall do not execute a binary;
+	// Stop/uninstall do not execute a binary or require a readable ExecStart;
 	// retain only the completed target authority loaded for this exact instance.
 	j := s.tx.journal
-	if (operation != "stop" && operation != "uninstall") || j.Phase != InstallPhaseComplete || j.RecoveryAuthority != InstallAuthorityTarget || j.TransactionID == "" || j.TransactionID != s.state.TransactionID || s.state.Layout != s.layout || j.Mode != string(s.layout.Mode) || j.TargetPath != s.layout.Data.Root || j.DataRoot != s.layout.Data.Root || j.InstallPath != s.layout.InstallRoot || j.EndpointPath != s.layout.ControlEndpoint || j.CredentialPath != s.layout.CredentialPath || !validSHA256(j.CandidateHash) {
+	if (operation == "stop" || operation == "uninstall") && j.Phase == InstallPhaseComplete && j.RecoveryAuthority == InstallAuthorityTarget && j.TransactionID != "" && j.TransactionID == s.state.TransactionID && s.state.Layout == s.layout && j.Mode == string(s.layout.Mode) && j.TargetPath == s.layout.Data.Root && j.DataRoot == s.layout.Data.Root && j.InstallPath == s.layout.InstallRoot && j.EndpointPath == s.layout.ControlEndpoint && j.CredentialPath == s.layout.CredentialPath && validSHA256(j.CandidateHash) {
+		return j.CandidateHash, nil
+	}
+	if old.Masked {
 		return "", unknownInstallState()
 	}
-	return j.CandidateHash, nil
+	raw, err := readHostFile(old.Binary, migrationBinaryMax)
+	if err != nil {
+		return "", err
+	}
+	return sha256HexBytes(raw), nil
 }
 
 func (s *nativeInstallSession) runLifecycle(ctx context.Context, operation string) error {

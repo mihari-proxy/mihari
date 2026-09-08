@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/platform"
@@ -140,8 +141,49 @@ func (s *nativeInstallSession) bindState(backup ServiceBackup) {
 	s.tx.AfterDataCommitted = s.acquireDataLease
 	if !s.state.Foreground {
 		s.tx.BeforeRollback = s.prepareRollback
+	} else if backup.Ref == "transactions/"+s.state.TransactionID+"/unit-bootstrap" {
+		s.tx.BeforeRollback = s.cleanupBootstrapCandidate
+	} else {
+		s.tx.BeforeRollback = nil
 	}
 }
+
+// cleanupBootstrapCandidate covers the durable final backup / journal switch
+// crash window. Only unpublished data from this exact bootstrap may be removed;
+// the final backup cannot supply a different layout or any executable effects.
+func (s *nativeInstallSession) cleanupBootstrapCandidate(ctx context.Context) error {
+	ref := "transactions/" + s.state.TransactionID + "/unit"
+	object, err := s.tx.Store.files.inspect(ctx, ref)
+	if err != nil || !object.Present {
+		return err
+	}
+	raw, err := s.tx.Store.files.read(ctx, ref, MaxInstallJournalBytes)
+	if err != nil {
+		return err
+	}
+	if sha256HexBytes(raw) != object.SHA256 {
+		return unknownInstallState()
+	}
+	var final nativeInstallState
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&final); err != nil {
+		return invalidInstallJournal()
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return invalidInstallJournal()
+	}
+	if final.DataStage != filepath.Join(filepath.Dir(s.layout.Data.Root), ".mihari-data-"+s.state.TransactionID) || final.DataIdentity == "" {
+		return unknownInstallState()
+	}
+	initial := final
+	initial.DataStage, initial.DataIdentity, initial.DataParts = s.state.DataStage, s.state.DataIdentity, s.state.DataParts
+	if !reflect.DeepEqual(initial, s.state) {
+		return unknownInstallState()
+	}
+	return (&nativeInstallEffects{state: final, transaction: s.tx}).cleanupUnpublishedBootstrapStage(ctx)
+}
+
 func (s *nativeInstallSession) saveState(ctx context.Context) error {
 	return s.saveStateAt(ctx, "unit")
 }

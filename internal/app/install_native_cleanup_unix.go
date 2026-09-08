@@ -152,7 +152,15 @@ func (e *nativeInstallEffects) cleanupPublishedDataStage(ctx context.Context) (e
 	return parent.RemoveEmptyDir(ctx, filepath.Base(e.state.DataStage))
 }
 
-func (e *nativeInstallEffects) cleanupUnpublishedDataStage(ctx context.Context) (err error) {
+func (e *nativeInstallEffects) cleanupUnpublishedDataStage(ctx context.Context) error {
+	return e.cleanupUnpublishedStage(ctx, false)
+}
+
+func (e *nativeInstallEffects) cleanupUnpublishedBootstrapStage(ctx context.Context) error {
+	return e.cleanupUnpublishedStage(ctx, true)
+}
+
+func (e *nativeInstallEffects) cleanupUnpublishedStage(ctx context.Context, bootstrap bool) (err error) {
 	if filepath.Dir(e.state.DataStage) != filepath.Dir(e.state.Layout.Data.Root) || filepath.Base(e.state.DataStage) != ".mihari-data-"+e.state.TransactionID {
 		return unknownInstallState()
 	}
@@ -173,13 +181,103 @@ func (e *nativeInstallEffects) cleanupUnpublishedDataStage(ctx context.Context) 
 	if err != nil {
 		return err
 	}
-	if id != e.state.DataIdentity {
-		return unknownInstallState()
+	if bootstrap {
+		err = e.cleanupBootstrapDataContents(ctx, stage, id)
+	} else {
+		err = e.cleanupUnpublishedDataContents(ctx, stage, id)
 	}
-	if err := removeNativeStageContents(ctx, stage); err != nil {
+	if err != nil {
 		return err
 	}
 	return parent.RemoveEmptyDir(ctx, filepath.Base(e.state.DataStage))
+}
+
+func (e *nativeInstallEffects) cleanupUnpublishedDataContents(ctx context.Context, stage *platform.TrustedRoot, id string) error {
+	if id != e.state.DataIdentity {
+		return unknownInstallState()
+	}
+	return removeNativeStageContents(ctx, stage)
+}
+
+// Foreground staging has only an empty daemon lock and the transaction marker.
+// A different boot relies on the verified private transaction metadata and this
+// exhaustive content check. Empty remnants are only removed as empty directories;
+// unknown files never gain recursive deletion authority from a changed boot.
+func (e *nativeInstallEffects) cleanupBootstrapDataContents(ctx context.Context, stage *platform.TrustedRoot, id string) (err error) {
+	currentBoot := e.transaction.Artifacts.BootID
+	if e.state.BootID == "" || currentBoot == "" || !e.sameBootIdentity(e.state.DataIdentity, id) {
+		return unknownInstallState()
+	}
+	names, err := stage.ReadNames(ctx)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		if name != "daemon.lock" && name != "locks" {
+			return unknownInstallState()
+		}
+	}
+	daemonHash, daemonID, err := nativeFileObservation(ctx, stage, "daemon.lock", 0600)
+	if err != nil {
+		return err
+	}
+	if daemonHash != "absent" && daemonHash != sha256Hex("") {
+		return unknownInstallState()
+	}
+	_, actual, owner, _, err := stage.Snapshot(ctx)
+	if err != nil {
+		return err
+	}
+	if actual != id {
+		return unknownInstallState()
+	}
+	locks, err := stage.OpenDir(ctx, "locks", platform.RootPolicy{Owner: owner, Mode: 0700})
+	if errors.Is(err, os.ErrNotExist) && len(names) == 0 {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, locks.Close()) }()
+	lockNames, err := locks.ReadNames(ctx)
+	if err != nil {
+		return err
+	}
+	for _, name := range lockNames {
+		if name != "install-data-id" {
+			return unknownInstallState()
+		}
+	}
+	markerHash, markerID, err := nativeFileObservation(ctx, locks, "install-data-id", 0600)
+	if err != nil {
+		return err
+	}
+	if markerHash != sha256Hex(e.state.TransactionID) && (markerHash != "absent" || daemonHash != "absent") {
+		return unknownInstallState()
+	}
+	// This order preserves the stage marker until only empty directories remain.
+	for _, file := range []struct {
+		root                 *platform.TrustedRoot
+		name, hash, identity string
+	}{{stage, "daemon.lock", daemonHash, daemonID}, {locks, "install-data-id", markerHash, markerID}} {
+		if file.hash == "absent" {
+			continue
+		}
+		held, identity, err := file.root.OpenFile(ctx, file.name, 0600)
+		if err != nil {
+			return err
+		}
+		if err := held.Close(); err != nil {
+			return err
+		}
+		if identity.Key() != file.identity {
+			return unknownInstallState()
+		}
+		if err := file.root.RemoveFile(ctx, file.name, 0600, identity); err != nil {
+			return err
+		}
+	}
+	return stage.RemoveEmptyDir(ctx, "locks")
 }
 
 // This deletion capability is used only after proving a privately created
