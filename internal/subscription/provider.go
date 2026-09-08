@@ -81,7 +81,7 @@ func downloadProvider(ctx context.Context, client *http.Client, spec ProviderSpe
 	}
 	content, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {
-		return nil, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read provider response"}
+		return nil, networkFailureError{cause: err}
 	}
 	if int64(len(content)) > limit {
 		return nil, dataError("provider source exceeds size limit")

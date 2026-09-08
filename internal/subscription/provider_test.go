@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -18,6 +19,75 @@ type providerRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f providerRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
+}
+
+type providerResponseBody struct {
+	read  func([]byte) (int, error)
+	close func() error
+}
+
+func (b providerResponseBody) Read(p []byte) (int, error) { return b.read(p) }
+func (b providerResponseBody) Close() error               { return b.close() }
+
+func TestProviderDownloader_BodyFailuresRespectAutoFallback(t *testing.T) {
+	for _, scenario := range []string{"attempt timeout", "connection reset", "caller deadline"} {
+		t.Run(scenario, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx := context.Background()
+				if scenario == "caller deadline" {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithTimeout(ctx, 15*time.Second)
+					defer cancel()
+				}
+				proxyCalls, directCalls, closed := 0, 0, 0
+				d := &Downloader{
+					proxy: &http.Client{Transport: providerRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+						proxyCalls++
+						partial := true
+						body := providerResponseBody{
+							read: func(p []byte) (int, error) {
+								if partial {
+									partial = false
+									return copy(p, "partial proxy body"), nil
+								}
+								if scenario == "connection reset" {
+									return 0, syscall.ECONNRESET
+								}
+								<-r.Context().Done()
+								return 0, r.Context().Err()
+							},
+							close: func() error { closed++; return nil },
+						}
+						return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header)}, nil
+					})},
+					direct: &http.Client{Transport: providerRoundTripFunc(func(*http.Request) (*http.Response, error) {
+						directCalls++
+						if closed != 1 {
+							t.Fatal("direct fallback started before closing failed proxy body")
+						}
+						return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("complete direct body")), Header: make(http.Header)}, nil
+					})},
+				}
+				start := time.Now()
+				got, err := d.Download(ctx, ProviderSpec{URL: "https://provider.test/source"}, ProxyModeAuto)
+				if proxyCalls != 1 || closed != 1 {
+					t.Fatalf("proxy response lifecycle: requests=%d closes=%d", proxyCalls, closed)
+				}
+				if scenario == "caller deadline" {
+					if !errors.Is(err, context.DeadlineExceeded) || len(got) != 0 || directCalls != 0 {
+						t.Fatalf("caller deadline ignored: direct=%d err=%v", directCalls, err)
+					}
+					return
+				}
+				if err != nil || string(got) != "complete direct body" || directCalls != 1 {
+					t.Fatalf("failed body prevented fallback: direct=%d err=%v", directCalls, err)
+				}
+				if scenario == "attempt timeout" && time.Since(start) != 30*time.Second {
+					t.Fatal("body read did not obey the attempt deadline")
+				}
+			})
+		})
+	}
 }
 
 func TestProviderDownloader_AutoFallsBackAfterAttemptTimeout(t *testing.T) {
