@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -20,6 +21,32 @@ type configExecutorFunc func(context.Context, CoreCommand) ([]byte, error)
 
 func (f configExecutorFunc) Execute(ctx context.Context, command CoreCommand) ([]byte, error) {
 	return f(ctx, command)
+}
+
+func TestValidationRejectedExitHelper(t *testing.T) {
+	if os.Getenv("MIHARI_TEST_VALIDATION_REJECTION") != "1" {
+		return
+	}
+	os.Exit(23)
+}
+
+func rejectedValidationExit(t *testing.T) *exec.ExitError {
+	t.Helper()
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, binary, "-test.run=^TestValidationRejectedExitHelper$")
+	command.Env = append(os.Environ(), "MIHARI_TEST_VALIDATION_REJECTION=1")
+	err = command.Run()
+	var exited *exec.ExitError
+	if !errors.As(err, &exited) || !exited.Exited() || exited.ExitCode() != 23 {
+		t.Fatalf("normal validation rejection fixture failed: %v", err)
+	}
+	exited.Stderr = []byte("controller-secret-value")
+	return exited
 }
 
 func TestValidateVerifiedConfig_PreservesFailureClasses(t *testing.T) {
@@ -64,7 +91,7 @@ func TestValidateVerifiedConfig_PreservesFailureClasses(t *testing.T) {
 				want = os.ErrPermission
 				wantCalls = 1
 			case "rejected config":
-				executionErr = &exec.ExitError{Stderr: []byte("controller-secret-value")}
+				executionErr = rejectedValidationExit(t)
 				wantAPIMessage = "mihomo configuration validation failed"
 				wantCalls = 1
 			}

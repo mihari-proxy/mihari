@@ -112,9 +112,9 @@ func ValidateVerifiedConfig(ctx context.Context, v *VerifiedCore, c *ConfigCapab
 			return err
 		}
 		var exited *exec.ExitError
-		if errors.As(e, &exited) {
+		if errors.As(e, &exited) && exited.ProcessState != nil && exited.Exited() {
 			// A rejected config can echo secrets in stdout/stderr. Keep this
-			// response generic; capability and startup errors retain their class.
+			// response generic; capability, startup and signal errors retain their class.
 			return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo configuration validation failed"}
 		}
 		return e
