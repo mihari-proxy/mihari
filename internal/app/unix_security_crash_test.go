@@ -417,7 +417,7 @@ func assertSecurityRecoveryRefusal(t *testing.T, fixture *securityNativeInstall,
 	if before.BootID == "" || before.BootID != session.tx.Artifacts.BootID {
 		t.Fatal("expected refusal fixture is not in the recorded boot")
 	}
-	wantJournal, err := os.ReadFile(filepath.Join(fixture.layout.BaseDir, installJournalFileName))
+	wantJournal, err := session.tx.Store.files.read(ctx, installJournalFileName, MaxInstallJournalBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +432,7 @@ func assertSecurityRecoveryRefusal(t *testing.T, fixture *securityNativeInstall,
 		if !errors.As(err, &apiErr) || apiErr.Code != protocol.CodeInvalidState || apiErr.Message != "service process group identity is unknown" {
 			t.Fatalf("ambiguous service generation error=%v", err)
 		}
-		afterJournal, err := os.ReadFile(filepath.Join(fixture.layout.BaseDir, installJournalFileName))
+		afterJournal, err := session.tx.Store.files.read(ctx, installJournalFileName, MaxInstallJournalBytes)
 		if err != nil {
 			t.Fatal(err)
 		}
