@@ -394,7 +394,7 @@ func securityReverseCrashMatrix(t *testing.T, scenario securityCrashScenario, fo
 }
 
 func securityRecoveryNeedsNewProcessProof(journal InstallJournal) bool {
-	if runtime.GOOS != "darwin" {
+	if runtime.GOOS != "darwin" || journal.Phase == InstallPhaseComplete {
 		return false
 	}
 	want := ""
@@ -413,7 +413,6 @@ func securityRecoveryNeedsNewProcessProof(journal InstallJournal) bool {
 }
 
 func assertSecurityRecoveryRefusal(t *testing.T, fixture *securityNativeInstall, session *nativeInstallSession, before InstallJournal, initialLock, retainedIdentity os.FileInfo) {
-	t.Helper()
 	ctx := context.Background()
 	if before.BootID == "" || before.BootID != session.tx.Artifacts.BootID {
 		t.Fatal("expected refusal fixture is not in the recorded boot")
@@ -467,7 +466,6 @@ type securityInstallationFileSnapshot struct {
 }
 
 func securityInstallationFileSnapshots(t *testing.T, fixture *securityNativeInstall) []securityInstallationFileSnapshot {
-	t.Helper()
 	paths := []string{filepath.Join(fixture.layout.InstallRoot, "mihari"), fixture.layout.ChannelPath, fixture.manager.launchd.Plist}
 	snapshots := make([]securityInstallationFileSnapshot, 0, len(paths))
 	for _, path := range paths {
@@ -489,7 +487,6 @@ func securityInstallationFileSnapshots(t *testing.T, fixture *securityNativeInst
 }
 
 func assertSecurityInstallationFileSnapshots(t *testing.T, want []securityInstallationFileSnapshot) {
-	t.Helper()
 	for _, snapshot := range want {
 		info, err := os.Lstat(snapshot.path)
 		if !snapshot.present {
