@@ -251,8 +251,8 @@ func finishInstallationRun(ctx context.Context, final tea.Model, runErr error, o
 		}
 		return err
 	}
-	if !outcome.InstallationComplete || outcome.StartFailed {
-		return errors.New("installation did not complete")
+	if outcome.Schema != app.InstallationOutcomeSchema || !outcome.InstallationComplete || outcome.StartFailed || outcome.ServiceState != app.InstallServiceRunning && outcome.ServiceState != app.InstallServiceStopped {
+		return errors.New("installation result is invalid")
 	}
 	if out != nil {
 		_, err = fmt.Fprintln(out, "Reinstallation completed.")

@@ -83,7 +83,7 @@ func TestInstallationPrepared_CleanupBeforeExecuteAndFailurePreventsWrite(t *tes
 			return nil
 		}, func(context.Context, app.InstallationExecuteRequest) (app.InstallationOutcome, error) {
 			order = append(order, "execute")
-			return app.InstallationOutcome{InstallationComplete: true}, nil
+			return app.InstallationOutcome{Schema: app.InstallationOutcomeSchema, InstallationComplete: true, ServiceState: app.InstallServiceStopped}, nil
 		})
 		want := []string{"cleanup", "execute"}
 		if failed {
@@ -197,5 +197,27 @@ func TestInstallationPrepared_CandidateCloseFailurePreventsExecution(t *testing.
 	})
 	if !errors.Is(err, closeErr) || !reflect.DeepEqual(order, []string{"candidates", "resources"}) {
 		t.Fatalf("cleanup order=%v err=%v", order, err)
+	}
+}
+
+func TestInstallationPrepared_InvalidOutcomeCannotReportSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		outcome app.InstallationOutcome
+	}{
+		{name: "malformed schema", outcome: app.InstallationOutcome{Schema: "mihari.install-outcome/v2", InstallationComplete: true, ServiceState: app.InstallServiceStopped}},
+		{name: "unknown service", outcome: app.InstallationOutcome{Schema: app.InstallationOutcomeSchema, InstallationComplete: true, ServiceState: app.InstallServiceUnknown}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			executeCalls := 0
+			err := finishInstallationRun(context.Background(), Model{preparedInstallation: &app.InstallationExecuteRequest{}}, nil, &out, nil, func(context.Context, app.InstallationExecuteRequest) (app.InstallationOutcome, error) {
+				executeCalls++
+				return tc.outcome, nil
+			})
+			if err == nil || executeCalls != 1 || strings.Contains(out.String(), "Reinstallation completed.") {
+				t.Fatalf("invalid outcome reported success: calls=%d output=%q error=%v", executeCalls, out.String(), err)
+			}
+		})
 	}
 }
