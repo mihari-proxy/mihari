@@ -1,5 +1,6 @@
 """Strict evidence and lifecycle policy; this module performs no host operations."""
 import json
+import re
 
 PREFIX = "github.com/mihari-proxy/mihari/"
 COMMON = {
@@ -8,6 +9,7 @@ COMMON = {
     "internal/integration": ["TestSecurityTwoUIDControl", "TestSecurityPrivateDataDenied", "TestSecurityOtherUserLogsDenied"],
 }
 SUPPLEMENTAL = {
+    "internal/core": ["TestSecurityConfigStage_BindCancellationRemovesWrittenFile"],
     "internal/app": [
         "TestNativeInstallEffects_FilePublicationAndActualBackup",
         "TestNativeInstallEffects_PrivatePublicationRetainsLockIdentity",
@@ -17,6 +19,12 @@ SUPPLEMENTAL = {
         "TestNativeInstallBoundary_AbsentPathMigrationStagesBothBinaries",
         "TestNativeInstallBoundary_ServiceIdentityRecovery",
         "TestNativeInstallBoundary_SourceRecoveryRetriesAfterRestore",
+        "TestNativeInstallBoundary_UninstallAlreadyMaskedUnit",
+        "TestNativeInstallState_ForegroundDataPreparationKeepsAuthority",
+        "TestNativeInstallSource_RejectsOverlapBeforeStaging",
+        "TestNativeInstallState_BootstrapBackupSurvivesPreparationCrash",
+        "TestNativeInstallState_CreateIdentityCoversWholeTreeAndParts",
+        "TestReadOnlyMigrationSource_OversizeHasMigrationClassification",
         "TestUnixLocalOperation_CancellationRemainsCancellation",
         "TestUnixLocalOperation_PreservesClassifiedErrorAndCause",
         "TestSecurityPrivateServiceActivation", "TestSecurityNativeCrashMatrix", "TestSecurityValidationProcess",
@@ -47,6 +55,7 @@ def verify(events, target_os, uids, go_status=0, supplemental=False):
     terminals = {key: [] for key in keys}
     starts = {key: 0 for key in keys}
     errors, children, roots, assembly = [], [], [], []
+    failure_locations = set()
     local_rows = {}
     for event in events:
         key = (event.get("Package"), event.get("Test"))
@@ -63,6 +72,11 @@ def verify(events, target_os, uids, go_status=0, supplemental=False):
                 local_rows.setdefault(key[1], []).append(action)
         if action != "output":
             continue
+        # Publish source coordinates only, never raw test/child output.
+        parent_test = key[1].split("/", 1)[0] if isinstance(key[1], str) else ""
+        if (key[0], parent_test) in terminals:
+            for match in re.finditer(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]{0,100}_test\.go):([0-9]{1,6}):", event.get("Output", "")):
+                failure_locations.add(key[0]+":"+parent_test+":"+match[1]+":"+match[2])
         for label, collection, permitted in [
             ("security_child=", children, (PREFIX+"internal/integration", "TestSecurityTwoUIDControl")),
             ("security_root=", roots, (PREFIX+"internal/platform", "TestSecurityTrustedRootPositive")),
@@ -91,7 +105,7 @@ def verify(events, target_os, uids, go_status=0, supplemental=False):
             errors.append("local process matrix requires five non-skipped rows")
         if len(assembly) != 2 or sorted(p.get("EUID", 0) for p in assembly) != sorted(uids) or any(not all(p.get(k) is True for k in ("Authenticated", "SettingsDenied", "OtherUserDenied", "V2Export")) for p in assembly):
             errors.append("missing full assembly two-user proof")
-    return {"passed": not errors, "checks": checks, "errors": sorted(set(errors))}
+    return {"passed": not errors, "checks": checks, "errors": sorted(set(errors)), "source_locations": sorted(failure_locations)}
 
 
 def finish(host, report, status):
@@ -116,6 +130,16 @@ def finish(host, report, status):
             # Exception classes/errno are safe diagnostics; messages and raw
             # test output can contain fixture paths or credentials.
             report.setdefault("cleanup_errors", {})[stage] = {"type": type(error).__name__, "errno": getattr(error, "errno", None)}
+            known_reasons = {
+                "directory-services account identity changed": "directory-account-identity",
+                "account identity changed": "account-identity",
+                "account cleanup incomplete": "account-still-present",
+                "fixture mount remains visible": "mount-still-present",
+                "mount target identity changed": "mount-target-identity",
+                "mount source identity changed": "mount-source-identity",
+            }
+            if str(error) in known_reasons:
+                report["cleanup_errors"][stage]["reason"] = known_reasons[str(error)]
             # A live process/mount/account makes recursive anchor removal unsafe.
             break
     report["failures"] = sorted(set(report["failures"]))

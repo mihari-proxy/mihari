@@ -63,8 +63,7 @@ func securityControl(t *testing.T, evidence bool) {
 			t.Error(err)
 		}
 	}()
-	anchor := os.Getenv("MIHARI_SECURITY_ROOT")
-	users := [2]string{filepath.Join(anchor, "users", "a"), filepath.Join(anchor, "users", "b")}
+	users := securitytest.UserRoots(t)
 	for index := range uids {
 		result := securitytest.Run(t, ctx, "TestSecurityControlChild", uids[index], gids[index], securitytest.Input{Defaults: platform.SystemLayoutDefaults(), Layout: layout, Own: users[index], Other: users[1-index]})
 		if !result.Authenticated || !result.PrivateDenied || !result.OtherDenied || !result.OwnLog {

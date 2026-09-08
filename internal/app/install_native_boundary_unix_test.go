@@ -214,6 +214,31 @@ func TestNativeInstallBoundary_LifecycleRetainsDataAuthority(t *testing.T) {
 	}
 
 }
+
+func TestNativeInstallBoundary_UninstallAlreadyMaskedUnit(t *testing.T) {
+	ctx, s, manager, _ := nativeBoundarySession(t)
+	req := InstallRequest{Schema: InstallRequestSchema, Operation: InstallOperationInstall, Channel: InstallChannelMain, Layout: InstallLayoutPrivate, Data: s.layout.Data.Root}
+	nativeBoundaryApply(t, ctx, s, req, service.Definition{Status: service.StatusNotInstalled}, &nativeReleaseInputs{binary: []byte("verified candidate"), resources: map[string][]byte{}})
+	if err := manager.files.Mask(ctx, manager.paths.UnitFile, "/dev/null"); err != nil {
+		t.Fatal(err)
+	}
+	old, err := s.tx.Service.InspectDefinition(ctx)
+	if err != nil || !old.Masked {
+		t.Fatalf("masked fixture: masked=%v err=%v", old.Masked, err)
+	}
+	if err := s.prepareLifecycle(ctx, "uninstall", old); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.tx.lifecycleActions(ctx, "uninstall"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(manager.paths.UnitFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("uninstall retained managed mask: %v", err)
+	}
+	if _, err := os.Stat(s.layout.Data.Root); err != nil {
+		t.Fatalf("uninstall removed retained data: %v", err)
+	}
+}
 func TestNativeInstallBoundary_AbsentPathMigrationStagesBothBinaries(t *testing.T) {
 	ctx, s, _, _ := nativeBoundarySession(t)
 	fx := newMigrationFixture(t)

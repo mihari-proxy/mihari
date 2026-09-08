@@ -30,6 +30,15 @@ def test_complete_native_evidence_passes():
     result = security.verify(valid_events(), "linux", [51731, 51739])
     assert result["passed"], result
 
+
+def test_native_failure_coordinates_do_not_publish_test_output():
+    events = valid_events()
+    events.append({"Action": "output", "Package": PREFIX+"internal/platform", "Test": "TestSecurityCreationACL", "Output": "    unix_security_test.go:42: secret=must-remain-private /private/path\n"})
+    result = security.verify(events, "linux", [51731, 51739])
+    assert result["source_locations"] == [PREFIX+"internal/platform:TestSecurityCreationACL:unix_security_test.go:42"]
+    assert "must-remain-private" not in json.dumps(result)
+    assert "/private/path" not in json.dumps(result)
+
 import copy
 import pytest
 
@@ -168,7 +177,7 @@ def test_real_runner_wrapper_preserves_every_failure(tmp_path, monkeypatch, fail
         def __init__(self,argv,**kwargs):
             kwargs["stderr"].write(b"launcher diagnostic outside the test event protocol\n")
             if "user" in kwargs:
-                user_root = root/"users"/"a"
+                user_root = results/"users"/"a"
                 for name in ("GOCACHE", "GOMODCACHE", "GOPATH", "TEST_TELEMETRY_DIR"):
                     assert Path(kwargs["env"][name]).is_relative_to(user_root), name+" is not writable by the ordinary test UID"
             package=argv[argv.index("-p")+1]

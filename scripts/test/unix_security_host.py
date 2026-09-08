@@ -374,7 +374,7 @@ def prepare_resources(args,root,results,run,ledger,manifest):
                 owned_prepare_command(["/usr/bin/dscl", ".", "-create", record, *fields], root, results, ledger)
         if account(name) != entry:
             raise PermissionError("created account identity mismatch")
-    for name, mode in [("tmp", 0o700), ("users", 0o711), ("install", 0o755), ("go-cache",0o700), ("go-modules",0o700), ("go-path",0o700), ("telemetry",0o755)]:
+    for name, mode in [("tmp", 0o700), ("install", 0o755), ("go-cache",0o700), ("go-modules",0o700), ("go-path",0o700), ("telemetry",0o755)]:
         ledger["intents"].append({"kind": "directory", "path": str(root/name)})
         atomic_json(results/"cleanup-ledger.json", ledger)
         (root/name).mkdir(mode=mode)
@@ -384,8 +384,14 @@ def prepare_resources(args,root,results,run,ledger,manifest):
         stream.write("off\n");stream.flush();os.fsync(stream.fileno())
     os.chmod(root/"telemetry"/"mode",0o644)
     sync_dir(root/"telemetry")
+    # User log capabilities open their entire ancestry read-only. Their private
+    # homes therefore live under the independently marked 0755 results root,
+    # outside the deliberately search-only 0711 machine anchor.
+    ledger["intents"].append({"kind":"directory","path":str(results/"users")})
+    atomic_json(results/"cleanup-ledger.json",ledger)
+    (results/"users").mkdir(mode=0o755)
     for label, owner in zip(("a", "b"), ledger["accounts"]):
-        user_root = root/"users"/label
+        user_root = results/"users"/label
         ledger["intents"].append({"kind":"user-directory","path":str(user_root),"uid":owner["uid"],"gid":owner["gid"]})
         atomic_json(results/"cleanup-ledger.json",ledger)
         user_root.mkdir(mode=0o700)
@@ -580,7 +586,7 @@ def run_tests(args):
             # Full assembly owns fresh B, then retain its completed fixture under
             # an identity-checked new name. No deletion/marker edit is involved.
             phases = [("cmd/mihari", ["TestUnixSecurity_FullAssembly"], False)]
-            for package in ["internal/platform", "internal/control/transport", "internal/integration", "internal/app", "internal/service"]:
+            for package in ["internal/platform", "internal/control/transport", "internal/integration", "internal/app", "internal/service", "internal/core"]:
                 names = list(COMMON.get(package, []))+list(SUPPLEMENTAL.get(package, []))
                 if package == "internal/platform":
                     names.append("TestSecurityBindMountDenied" if sys.platform == "linux" else "TestSecurityDarwinACLABI")
@@ -597,8 +603,8 @@ def run_tests(args):
                     owner = run["accounts"][0]
                     child_env.pop("MIHARI_SECURITY_ROOT")
                     child_env.pop("MIHARI_ISOLATED_SECURITY_CI")
-                    child_env["TMPDIR"] = str(host.root/"users"/"a")
-                    user_root = host.root/"users"/"a"
+                    user_root = host.results/"users"/"a"
+                    child_env["TMPDIR"] = str(user_root)
                     child_env.update(GOCACHE=str(user_root/"go-cache"), GOMODCACHE=str(user_root/"go-modules"), GOPATH=str(user_root/"go-path"), TEST_TELEMETRY_DIR=str(user_root/"telemetry"))
                     credential = {"user": owner["uid"], "group": owner["gid"], "extra_groups": []}
                 command = [str(go), "tool", "test2json", "-t", "-p", PREFIX+package, str(binary), "-test.v=test2json", "-test.count=1", "-test.timeout="+str(max(1,min(400,int(deadline-time.monotonic()))))+"s", "-test.run=^("+"|".join(names)+")$"]

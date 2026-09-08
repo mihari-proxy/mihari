@@ -80,9 +80,7 @@ func TestSecurityPrivateServiceActivation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := base.WriteFile(ctx, installJournalFileName, encoded, 0600, nil); err != nil {
-				t.Fatal(err)
-			}
+			writeSecurityActivationJournal(t, ctx, base, encoded)
 			if err := RunUnixSystemService(ctx, layout, run); err == nil || calls != 0 {
 				t.Fatal("invalid activation invoked business callback")
 			}
@@ -95,9 +93,7 @@ func TestSecurityPrivateServiceActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := base.WriteFile(ctx, installJournalFileName, encoded, 0600, nil); err != nil {
-		t.Fatal(err)
-	}
+	writeSecurityActivationJournal(t, ctx, base, encoded)
 	lease, err := platform.AcquireInstallLease(ctx, layout)
 	if err != nil {
 		t.Fatal(err)
@@ -145,9 +141,7 @@ func TestSecurityPrivateServiceActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := private.WriteFile(ctx, installJournalFileName, encoded, 0600, nil); err != nil {
-		t.Fatal(err)
-	}
+	writeSecurityActivationJournal(t, ctx, private, encoded)
 	pending := journal
 	pending.Phase = InstallPhasePrepared
 	pending.RecoveryAuthority = InstallAuthoritySource
@@ -155,9 +149,7 @@ func TestSecurityPrivateServiceActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := base.WriteFile(ctx, installJournalFileName, encoded, 0600, nil); err != nil {
-		t.Fatal(err)
-	}
+	writeSecurityActivationJournal(t, ctx, base, encoded)
 	if err := RunUnixStartup(ctx, layout, func(context.Context) (bool, error) { t.Fatal("unmarked P inspected service"); return false, nil }, run); err != nil {
 		t.Fatal(err)
 	}
@@ -177,13 +169,28 @@ func TestSecurityPrivateServiceActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := base.WriteFile(ctx, installJournalFileName, encoded, 0600, nil); err != nil {
-		t.Fatal(err)
-	}
+	writeSecurityActivationJournal(t, ctx, base, encoded)
 	if err := installer.SetChannel(ctx, "dev"); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := installer.QueryChannel(ctx); err != nil || got != "dev" {
 		t.Fatal("unrelated B channel positive failed", err)
+	}
+}
+
+func writeSecurityActivationJournal(t *testing.T, ctx context.Context, root *platform.TrustedRoot, raw []byte) {
+	t.Helper()
+	var expected *platform.FileIdentity
+	file, identity, err := root.OpenFile(ctx, installJournalFileName, 0600)
+	if err == nil {
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		expected = &identity
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if err := root.WriteFile(ctx, installJournalFileName, raw, 0600, expected); err != nil {
+		t.Fatal(err)
 	}
 }

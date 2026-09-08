@@ -4,6 +4,7 @@ package platform
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -121,8 +122,17 @@ func TestSecurityCreationACL(t *testing.T) {
 		if err := positive.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if err := unix.Fsetxattr(fd, name, posixACLFixture(5, 5), 0); err != nil {
+		// An access ACL also writes the POSIX group/other mode bits. Preserve
+		// 0700 so the negative control exercises the attached-ACL rejection,
+		// and removing the fixture restores the retained root's authority.
+		acl := posixACLFixture(5, 0)
+		binary.LittleEndian.PutUint16(acl[38:], 0) // ACL_OTHER permissions.
+		if err := unix.Fsetxattr(fd, name, acl, 0); err != nil {
 			t.Fatal(err)
+		}
+		var aclStat unix.Stat_t
+		if err := unix.Fstat(fd, &aclStat); err != nil || aclStat.Mode&07777 != 0700 {
+			t.Fatalf("ACL fixture changed directory mode: %04o %v", aclStat.Mode&07777, err)
 		}
 		bad, err := root.OpenDir(context.Background(), "denied", RootPolicy{Mode: 0700, AllowCreate: true})
 		if bad != nil {

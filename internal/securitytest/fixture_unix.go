@@ -70,6 +70,26 @@ func Parent(t *testing.T) (platform.ResolvedLayout, [2]uint32, [2]uint32) {
 	return layout, uids, gids
 }
 
+// UserRoots returns fixture U paths under the independently marked, readable
+// result tree. The machine anchor remains search-only for ordinary users.
+func UserRoots(t *testing.T) [2]string {
+	t.Helper()
+	// Loading the tagged defaults verifies both independently recorded roots.
+	_ = platform.SystemLayoutDefaults()
+	results := os.Getenv("MIHARI_SECURITY_RESULTS")
+	if os.Geteuid() != 0 || !filepath.IsAbs(results) || filepath.Clean(results) != results {
+		t.Fatal("validated results root required")
+	}
+	root, err := platform.OpenTrustedRoot(context.Background(), results, platform.RootPolicy{Owner: 0, Mode: 0755})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return [2]string{filepath.Join(results, "users", "a"), filepath.Join(results, "users", "b")}
+}
+
 // Run executes a joined child with empty supplementary groups and bounded pipes.
 func Run(t *testing.T, ctx context.Context, name string, uid, gid uint32, input Input) Result {
 	t.Helper()
@@ -123,7 +143,7 @@ func Run(t *testing.T, ctx context.Context, name string, uid, gid uint32, input 
 	}{"mihari.unix-security-defaults/v1", input.Defaults}
 	writeErr := json.NewEncoder(write).Encode(envelope)
 	if err := errors.Join(writeErr, write.Close(), cmd.Wait()); err != nil {
-		t.Fatalf("native helper: %v; %s", err, stderr.String())
+		t.Fatalf("native helper: %v\n%s", err, ChildFailureSites(output.Bytes()))
 	}
 	var result Result
 	if err := json.Unmarshal(output.Bytes(), &result); err != nil {

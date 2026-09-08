@@ -179,12 +179,13 @@ func TestUnixSecurity_FullAssembly(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	users := [2]string{filepath.Join(anchor, "assembly-user-a"), filepath.Join(anchor, "assembly-user-b")}
+	users := securitytest.UserRoots(t)
 	for n, path := range users {
-		if err := os.Mkdir(path, 0700); err != nil {
+		userRoot, err := platform.OpenTrustedRoot(ctx, path, platform.RootPolicy{Owner: uids[n], Mode: 0700})
+		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Chown(path, int(uids[n]), int(gids[n])); err != nil {
+		if err := userRoot.Close(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -279,7 +280,7 @@ func runAssemblyChild(t *testing.T, ctx context.Context, binary string, uid, gid
 	_, writeErr := defaultsWrite.Write(mustAssemblyJSON(t, envelope))
 	closeErr := defaultsWrite.Close()
 	if err := errors.Join(writeErr, closeErr, cmd.Wait()); err != nil {
-		t.Fatalf("fixture child failed: %v stderr=%s", err, stderr.String())
+		t.Fatalf("fixture child failed: %v\n%s", err, securitytest.ChildFailureSites(output.Bytes()))
 	}
 	if output.Len() > 64<<10 {
 		t.Fatal("child result exceeded limit")
