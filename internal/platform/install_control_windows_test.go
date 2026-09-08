@@ -31,6 +31,32 @@ func TestInstallControl_WindowsReadOnlyDoesNotCreate(t *testing.T) {
 	}
 }
 
+func TestInstallControl_WindowsPreCanceledInitializationDoesNotReachFilesystem(t *testing.T) {
+	root := t.TempDir()
+	fixture := installControlWindowsTestDeps(root)
+	knownFolderCalls := 0
+	fixture.deps.knownFolderPath = func() (string, error) {
+		knownFolderCalls++
+		return root, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	control, publication, err := initializeWindowsInstallControl(ctx, []byte(`{"state":"complete"}`), fixture.deps)
+	if control != nil {
+		_ = control.Close()
+	}
+	if !errors.Is(err, context.Canceled) || publication.Published || publication.Durable {
+		t.Fatalf("control=%v publication=%+v err=%v", control, publication, err)
+	}
+	if knownFolderCalls != 0 {
+		t.Fatalf("pre-canceled initialization resolved ProgramData %d times", knownFolderCalls)
+	}
+	entries, readErr := os.ReadDir(root)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("pre-canceled initialization created entries=%v err=%v", entries, readErr)
+	}
+}
+
 func TestInstallControl_WindowsInitializationPublishesFixedCompleteDirectory(t *testing.T) {
 	root := t.TempDir()
 	fixture := installControlWindowsTestDeps(root)

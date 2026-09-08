@@ -5,10 +5,23 @@ package platform
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"sync"
 	"testing"
 )
+
+func TestWindowsProcessIdentity_NativeLimitedQueryAccessReadsCurrentToken(t *testing.T) {
+	process, err := OpenWindowsProcessIdentity(context.Background(), uint32(os.Getpid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer assertInstallTestClose(t, process.Close)
+	identity := process.Identity()
+	if identity.PID != uint32(os.Getpid()) || identity.CreationFiletime == 0 || identity.ImagePath == "" || identity.SID == "" {
+		t.Fatalf("incomplete native process identity=%+v", identity)
+	}
+}
 
 func TestWindowsRuntimeJob_OwnerIdentityConcurrentClose(t *testing.T) {
 	job, err := createWindowsRuntimeJob(context.Background(), "0123456789abcdef0123456789abcdef", newFakeWindowsRuntimeJobBackend())

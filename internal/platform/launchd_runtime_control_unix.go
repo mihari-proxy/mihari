@@ -75,7 +75,7 @@ func openUnixLaunchdRuntimeControlAt(ctx context.Context, base *TrustedRoot) (_ 
 	return newLaunchdRuntimeControl(p), nil
 }
 
-func initializeUnixLaunchdRuntimeControlAt(ctx context.Context, base *TrustedRoot, initial []byte, validate func(context.Context) error) (_ *LaunchdRuntimeControl, publication InstallPublication, err error) {
+func initializeUnixLaunchdRuntimeControlAt(ctx context.Context, base *TrustedRoot, initial []byte, validate func(context.Context) error) (control *LaunchdRuntimeControl, publication InstallPublication, err error) {
 	if base == nil {
 		return nil, publication, os.ErrInvalid
 	}
@@ -120,6 +120,10 @@ func initializeUnixLaunchdRuntimeControlAt(ctx context.Context, base *TrustedRoo
 		} else {
 			err = errors.Join(err, cleanupLaunchdRuntimeUnixTemp(base, temp, tempName))
 		}
+		if err != nil && control != nil {
+			err = errors.Join(err, control.Close())
+			control = nil
+		}
 	}()
 	for _, item := range []struct {
 		name string
@@ -140,11 +144,19 @@ func initializeUnixLaunchdRuntimeControlAt(ctx context.Context, base *TrustedRoo
 			return nil, publication, err
 		}
 	}
+	initializationGate, err := acquireInstallControlUnixLock(ctx, temp, launchdRuntimeLockName)
+	if err != nil {
+		return nil, publication, err
+	}
+	defer func() {
+		err = errors.Join(err, initializationGate.close())
+	}()
 	published, err = base.MoveDirTo(ctx, tempName, temp, base, launchdRuntimeDirName)
 	publication.Published = published
 	if err != nil && !published && errors.Is(err, unix.EEXIST) {
 		err = nil
-		control, openErr := openUnixLaunchdRuntimeControlAt(ctx, base)
+		var openErr error
+		control, openErr = openUnixLaunchdRuntimeControlAt(ctx, base)
 		return control, publication, openErr
 	}
 	if err != nil {
@@ -155,7 +167,7 @@ func initializeUnixLaunchdRuntimeControlAt(ctx context.Context, base *TrustedRoo
 			return nil, publication, err
 		}
 	}
-	control, err := openUnixLaunchdRuntimeControlAt(ctx, base)
+	control, err = openUnixLaunchdRuntimeControlAt(ctx, base)
 	if err != nil {
 		return nil, publication, err
 	}
@@ -189,9 +201,6 @@ func cleanupLaunchdRuntimeUnixTemp(base, temp *TrustedRoot, tempName string) err
 		errs = append(errs, file.Close(), temp.RemoveFile(context.Background(), name, 0600, id))
 	}
 	errs = append(errs, temp.Close())
-	if joined := errors.Join(errs...); joined != nil {
-		return joined
-	}
 	if err := base.RemoveEmptyDir(context.Background(), tempName); err != nil && !errors.Is(err, unix.ENOENT) {
 		errs = append(errs, err)
 	}

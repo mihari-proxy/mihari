@@ -58,8 +58,8 @@ func TestWindowsBootSessionEnsure_CreatesOneProtectedVolatileChild(t *testing.T)
 	if backend.createdChild != id || !backend.createdChildVolatile || !backend.createdChildProtected {
 		t.Fatalf("child name=%q volatile=%v protected=%v", backend.createdChild, backend.createdChildVolatile, backend.createdChildProtected)
 	}
-	if !backend.used64BitView {
-		t.Fatal("boot-session registry did not use the 64-bit HKLM view")
+	if got, want := backend.events, []string{"open-or-create-parent", "verify-parent", "list-children", "create-volatile-child", "close-child", "list-children", "close-parent"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ensure operations=%v want %v", got, want)
 	}
 }
 
@@ -146,7 +146,6 @@ type fakeWindowsBootRegistry struct {
 	missingParent         bool
 	verifyParentErr       error
 	childCollision        bool
-	used64BitView         bool
 	createdChild          string
 	createdChildVolatile  bool
 	createdChildProtected bool
@@ -157,13 +156,11 @@ func (f *fakeWindowsBootRegistry) openParentRead(context.Context) (windowsRegist
 	if f.missingParent {
 		return 0, errWindowsBootRegistryNotFound
 	}
-	f.used64BitView = true
 	return 31, nil
 }
 
 func (f *fakeWindowsBootRegistry) openOrCreateProtectedParent(context.Context) (windowsRegistryHandle, error) {
 	f.events = append(f.events, "open-or-create-parent")
-	f.used64BitView = true
 	return 31, nil
 }
 

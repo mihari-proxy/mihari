@@ -135,6 +135,57 @@ func TestLaunchdRuntimeControl_UnixInitializationRaceUsesPublishedGate(t *testin
 	}
 }
 
+func TestLaunchdRuntimeControl_UnixInitializationHoldsPublishedGateThroughValidation(t *testing.T) {
+	ctx := context.Background()
+	base := installControlUnixTestRoot(t)
+	validationEntered := make(chan struct{})
+	releaseValidation := make(chan struct{})
+	validationCalls := 0
+	validate := func(context.Context) error {
+		validationCalls++
+		if validationCalls == 3 {
+			close(validationEntered)
+			<-releaseValidation
+		}
+		return nil
+	}
+	type result struct {
+		control *LaunchdRuntimeControl
+		err     error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		control, _, err := initializeUnixLaunchdRuntimeControlAt(ctx, base, []byte(`{"generation":null}`), validate)
+		resultCh <- result{control: control, err: err}
+	}()
+	<-validationEntered
+
+	concurrent, err := openUnixLaunchdRuntimeControlAt(ctx, base)
+	if err != nil {
+		close(releaseValidation)
+		t.Fatal(err)
+	}
+	gate, lockErr := concurrent.LockStartup(ctx)
+	if gate != nil {
+		defer assertInstallTestClose(t, gate.Close)
+	}
+	if err = concurrent.Close(); err != nil {
+		close(releaseValidation)
+		t.Fatal(err)
+	}
+	close(releaseValidation)
+	initialized := <-resultCh
+	if initialized.control != nil {
+		defer assertInstallTestClose(t, initialized.control.Close)
+	}
+	if initialized.err != nil {
+		t.Fatalf("initialize error=%v", initialized.err)
+	}
+	if !errors.Is(lockErr, ErrInstallControlBusy) {
+		t.Fatalf("startup gate during post-publication validation error=%v", lockErr)
+	}
+}
+
 func TestLaunchdRuntimeControl_UnixGateSurvivesControlClose(t *testing.T) {
 	ctx := context.Background()
 	base := installControlUnixTestRoot(t)
@@ -206,6 +257,35 @@ func TestLaunchdRuntimeControl_UnixLeaseLossBeforeRenameCleansStaging(t *testing
 	names, readErr := base.ReadNames(ctx)
 	if readErr != nil || len(names) != 0 {
 		t.Fatalf("lost lease left names=%v err=%v", names, readErr)
+	}
+}
+
+func TestLaunchdRuntimeControl_UnixCleanupRemovesEmptyStagingAfterCloseError(t *testing.T) {
+	ctx := context.Background()
+	base := installControlUnixTestRoot(t)
+	closeErr := errors.New("injected staging close failure")
+	nativeBackend := base.backend
+	base.backend = &launchdRuntimeCloseErrorBackend{trustedBackend: nativeBackend, err: closeErr}
+	deniedErr := errors.New("injected lease lost before rename")
+	validationCalls := 0
+	validate := func(context.Context) error {
+		validationCalls++
+		if validationCalls == 2 {
+			return deniedErr
+		}
+		return nil
+	}
+	control, publication, err := initializeUnixLaunchdRuntimeControlAt(ctx, base, []byte(`{"generation":null}`), validate)
+	base.backend = nativeBackend
+	if control != nil {
+		_ = control.Close()
+	}
+	if !errors.Is(err, deniedErr) || !errors.Is(err, closeErr) || publication.Published {
+		t.Fatalf("publication=%+v error=%v", publication, err)
+	}
+	names, readErr := base.ReadNames(ctx)
+	if readErr != nil || len(names) != 0 {
+		t.Fatalf("failed cleanup left staging names=%v err=%v", names, readErr)
 	}
 }
 
@@ -285,4 +365,13 @@ func TestLaunchdRuntimeControl_UnixRejectsStateNameReplacementAndStaleDigest(t *
 	if _, err = control.PublishState(ctx, digest, []byte(`{"generation":"next"}`)); !errors.Is(err, ErrInstallStateChanged) {
 		t.Fatalf("replacement PublishState error=%v", err)
 	}
+}
+
+type launchdRuntimeCloseErrorBackend struct {
+	trustedBackend
+	err error
+}
+
+func (b *launchdRuntimeCloseErrorBackend) close(fd int) error {
+	return errors.Join(b.trustedBackend.close(fd), b.err)
 }

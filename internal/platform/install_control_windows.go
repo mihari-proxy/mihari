@@ -181,6 +181,9 @@ func initializeWindowsInstallControl(ctx context.Context, initial []byte, deps i
 	if err = validateInstallControlWindowsDeps(deps); err != nil {
 		return nil, publication, err
 	}
+	if err = ctx.Err(); err != nil {
+		return nil, publication, err
+	}
 	programDataPath, err := deps.knownFolderPath()
 	if err != nil {
 		return nil, publication, fmt.Errorf("resolve ProgramData known folder: %w", err)
