@@ -96,3 +96,12 @@ func TestUnixBootstrap_RootPrivateRequiresActivation(t *testing.T) {
 		t.Fatalf("root private bypassed journal: %+v %v", got, err)
 	}
 }
+
+func TestUnixBootstrap_SourceAuthorityNeverStartsDaemon(t *testing.T) {
+	for _, phase := range []string{app.InstallPhaseActivationCommitted, app.InstallPhaseComplete} {
+		got, err := DecideForegroundBootstrap(app.InstallJournal{Phase: phase, RecoveryAuthority: app.InstallAuthoritySource}, true, false, true, true)
+		if err != nil || got.AllowDaemon || !got.RecoverRequired || got.TargetAuthority {
+			t.Fatalf("source authority at %s: decision=%+v err=%v", phase, got, err)
+		}
+	}
+}

@@ -80,11 +80,8 @@ func openTrustedMigrationRoot(ctx context.Context, path string, owner uint32, cr
 		return nil, err
 	}
 	cap := &trustedCap{root: root, path: display, owner: owner, create: create}
-	parts := strings.Split(identity, ":")
-	if len(parts) >= 2 {
-		cap.dev, cap.ino = parts[0], parts[1]
-	}
-	cap.mount = identity
+	cap.dev, cap.ino = splitIdentity(identity)
+	_, cap.mount, _ = strings.Cut(identity, "@")
 	return cap, nil
 }
 

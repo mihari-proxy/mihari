@@ -96,9 +96,10 @@ func prepareMigration(ctx context.Context, opts migrationOptions) (*preparedMigr
 		return fail(migrateInvalid("source and target must not nest"))
 	}
 	if opts.Target != nil {
-		sDev, sIno, sMnt := opts.Source.Identity()
-		tDev, tIno, tMnt := opts.Target.Identity()
-		if sDev != "" && sDev == tDev && sIno == tIno && sMnt == tMnt {
+		sDev, sIno, _ := opts.Source.Identity()
+		tDev, tIno, _ := opts.Target.Identity()
+		// A bind mount changes the mount ID without changing the underlying tree.
+		if sDev != "" && sDev == tDev && sIno == tIno {
 			return fail(migrateInvalid("source and target must not nest"))
 		}
 		populated, err := targetHasBusiness(ctx, opts.Target)

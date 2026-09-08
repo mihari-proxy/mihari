@@ -54,9 +54,12 @@ func DecideForegroundBootstrap(journal app.InstallJournal, present, sourcePresen
 		}
 		switch journal.Phase {
 		case app.InstallPhaseActivationCommitted, app.InstallPhaseComplete:
+			if journal.RecoveryAuthority != app.InstallAuthorityTarget {
+				return BootstrapDecision{RecoverRequired: true, ActivationPhase: journal.Phase}, nil
+			}
 			return BootstrapDecision{
 				AllowDaemon:     true,
-				TargetAuthority: journal.RecoveryAuthority == app.InstallAuthorityTarget || journal.Phase == app.InstallPhaseComplete,
+				TargetAuthority: true,
 				ActivationPhase: journal.Phase,
 			}, nil
 		default:

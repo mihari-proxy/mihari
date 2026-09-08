@@ -79,7 +79,7 @@ func RunUnixForeground(ctx context.Context, layout platform.ResolvedLayout, disc
 		}
 		return root.Close()
 	}
-	prepare := func(ctx context.Context, id string) error {
+	initialize := func(ctx context.Context, id string) error {
 		original := x.Artifacts
 		session.state = nativeInstallState{Foreground: true, TransactionID: id, BootID: boot, Layout: layout, DataAction: InstallDataCreate, DataHash: sha256Hex(id), OldDefinition: service.Definition{Status: service.StatusNotInstalled}, TargetDefinition: service.Definition{Status: service.StatusNotInstalled}}
 		root, err := platform.OpenTrustedRoot(ctx, layout.Data.Root, platform.RootPolicy{Owner: 0, Mode: 0700})
@@ -103,10 +103,18 @@ func RunUnixForeground(ctx context.Context, layout platform.ResolvedLayout, disc
 				}
 			}
 		}
+		if err := session.saveStateAt(ctx, "unit-bootstrap"); err != nil {
+			return err
+		}
+		x.Artifacts.CandidateHash = original.CandidateHash
+		return nil
+	}
+	prepare := func(ctx context.Context, id string) error {
+		original := x.Artifacts
 		if err := session.prepareData(ctx, InstallRequest{}, &nativeReleaseInputs{}); err != nil {
 			return err
 		}
-		if exists {
+		if session.state.TargetObject.Present {
 			if err := session.prepareDataParts(ctx); err != nil {
 				return err
 			}
@@ -118,5 +126,5 @@ func RunUnixForeground(ctx context.Context, layout platform.ResolvedLayout, disc
 		x.Artifacts.BackupHash = x.preparedAuthority.ServiceBackup.SHA256
 		return nil
 	}
-	return (ForegroundBootstrap{Root: true, Transaction: x, DiscoverSource: discover, CreateData: create, PrepareJournal: prepare, Run: run}).Start(ctx)
+	return (ForegroundBootstrap{Root: true, Transaction: x, DiscoverSource: discover, CreateData: create, InitializeJournal: initialize, PrepareJournal: prepare, Run: run}).Start(ctx)
 }

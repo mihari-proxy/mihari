@@ -18,6 +18,9 @@ import (
 )
 
 func (s *nativeInstallSession) prepare(ctx context.Context, req InstallRequest, old service.Definition, inputs *nativeReleaseInputs, start bool) (err error) {
+	if err := rejectNativeMigrationOverlap(ctx, inputs.source, s.layout.Data.Root); err != nil {
+		return err
+	}
 	retained := false
 	if old.Status == service.StatusNotInstalled {
 		retained, err = s.hasRetainedData(ctx)
@@ -162,6 +165,53 @@ func (s *nativeInstallSession) prepare(ctx context.Context, req InstallRequest, 
 		s.tx.prepared.art = art
 	}
 	s.tx.StartAfterInstall = start
+	return nil
+}
+
+func rejectNativeMigrationOverlap(ctx context.Context, source migrationCapability, target string) (err error) {
+	if source == nil {
+		return nil
+	}
+	cap, ok := source.(*readOnlyMigrationCap)
+	if !ok {
+		return migrateInvalid("migration source capability is unavailable")
+	}
+	root, err := platform.OpenTrustedRoot(ctx, target, platform.RootPolicy{Owner: 0, Mode: 0700})
+	if errors.Is(err, os.ErrNotExist) {
+		// Walk only existing trusted ancestors. A nonexistent target cannot
+		// contain the source, but its parent may be inside a source alias.
+		parent := filepath.Dir(target)
+		for {
+			root, err = platform.OpenTrustedParent(ctx, parent, 0)
+			if !errors.Is(err, os.ErrNotExist) || parent == filepath.Dir(parent) {
+				break
+			}
+			parent = filepath.Dir(parent)
+		}
+		if err != nil {
+			return err
+		}
+		defer func() { err = errors.Join(err, root.Close()) }()
+		overlaps, err := cap.source.ContainsTrustedRoot(ctx, root)
+		if err != nil {
+			return err
+		}
+		if overlaps {
+			return migrateInvalid("source and target must not nest")
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, root.Close()) }()
+	overlaps, err := cap.source.OverlapsTrustedRoot(ctx, root)
+	if err != nil {
+		return err
+	}
+	if overlaps {
+		return migrateInvalid("source and target must not nest")
+	}
 	return nil
 }
 func targetServicePolicy(operation string, enabled, running, start bool) (bool, bool) {

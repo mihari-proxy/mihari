@@ -34,3 +34,20 @@ func TestInstallTrust_OfflinePanelContainsVerifiedArchiveBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestInstallTrust_CompiledHashesAuthorizeEveryArtifactGroup(t *testing.T) {
+	original := compiledInstallTrustJSON
+	t.Cleanup(func() { compiledInstallTrustJSON = original })
+	hash := sha256Hex("trusted artifact")
+	raw, err := json.Marshal(compiledInstallTrustFile{Core: []string{hash}, Geo: []string{hash}, Binaries: []string{hash}, Bundles: []string{hash}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiledInstallTrustJSON = raw
+	trust := compiledInstallerTrust()
+	for name, hashes := range map[string]map[string]struct{}{"core": trust.core, "geo": trust.geo, "binary": trust.binary, "bundle": trust.bundle} {
+		if _, ok := hashes[hash]; !ok {
+			t.Errorf("compiled %s authority was discarded", name)
+		}
+	}
+}

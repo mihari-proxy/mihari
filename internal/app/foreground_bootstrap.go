@@ -13,8 +13,11 @@ type ForegroundBootstrap struct {
 	// DiscoverSource must inspect legacy service/source state before CreateData.
 	DiscoverSource func(context.Context) (bool, error)
 	CreateData     func(context.Context) error
-	PrepareJournal func(context.Context, string) error
-	Run            func(context.Context, string) error
+	// InitializeJournal prepares only immutable recovery metadata. Staging must
+	// wait for PrepareJournal, after this metadata has a durable journal.
+	InitializeJournal func(context.Context, string) error
+	PrepareJournal    func(context.Context, string) error
+	Run               func(context.Context, string) error
 }
 
 // Start validates and activates a greenfield root instance, then enters its
@@ -67,6 +70,13 @@ func (b ForegroundBootstrap) Start(ctx context.Context) (resultErr error) {
 		if j.RecoveryAuthority != InstallAuthorityTarget || (j.Phase != InstallPhaseActivationCommitted && j.Phase != InstallPhaseComplete) {
 			return installBusy("install recovery required")
 		}
+		mode := InstallLayoutSystem
+		if x.Private {
+			mode = InstallLayoutPrivate
+		}
+		if j.Mode != mode || j.TargetPath != x.Artifacts.Target || j.DataRoot != x.Artifacts.DataRoot || j.InstallPath != x.Artifacts.Install || j.EndpointPath != x.Artifacts.Endpoint || j.CredentialPath != x.Artifacts.Credential {
+			return installBusy("install recovery required")
+		}
 		if err := release(); err != nil {
 			return err
 		}
@@ -92,20 +102,38 @@ func (b ForegroundBootstrap) Start(ctx context.Context) (resultErr error) {
 		layout = InstallLayoutPrivate
 	}
 	request := InstallRequest{Operation: InstallOperationInstall, Layout: layout}
+	if b.InitializeJournal != nil {
+		if err := b.InitializeJournal(ctx, id); err != nil {
+			return err
+		}
+	}
+	saveJournal := func() error {
+		art := x.preparedArtifacts(request)
+		j, err := x.buildJournal(request, id, marker, art)
+		if err != nil {
+			return err
+		}
+		durable, err := x.Store.Save(ctx, j)
+		if err != nil {
+			return err
+		}
+		if !durable.Durable {
+			return installBusy("install journal is not durable")
+		}
+		x.journal = j
+		return nil
+	}
+	if err := saveJournal(); err != nil {
+		return err
+	}
 	if b.PrepareJournal != nil {
 		if err := b.PrepareJournal(ctx, id); err != nil {
 			return err
 		}
+		if err := saveJournal(); err != nil {
+			return err
+		}
 	}
-	art := x.preparedArtifacts(request)
-	j, err := x.buildJournal(request, id, marker, art)
-	if err != nil {
-		return err
-	}
-	if _, err := x.Store.Save(ctx, j); err != nil {
-		return err
-	}
-	x.journal = j
 	if publisher, ok := x.Effects.(interface {
 		PublishDataLocked(context.Context, *InstallTransaction) error
 	}); ok {

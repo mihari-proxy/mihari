@@ -81,8 +81,9 @@ func (s *nativeInstallSession) loadState(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	ref := "transactions/" + journal.TransactionID + "/unit"
-	if journal.ServiceBackup.Ref != ref {
+	ref := journal.ServiceBackup.Ref
+	transactionRef := "transactions/" + journal.TransactionID + "/"
+	if ref != transactionRef+"unit" && ref != transactionRef+"unit-bootstrap" {
 		return false, unknownInstallState()
 	}
 	object, err := s.tx.Store.files.inspect(ctx, ref)
@@ -109,6 +110,9 @@ func (s *nativeInstallSession) loadState(ctx context.Context) (bool, error) {
 		return false, invalidInstallJournal()
 	}
 	if state.TransactionID != journal.TransactionID || state.Layout.Data.Root != journal.DataRoot || state.Layout.InstallRoot != journal.InstallPath || state.Layout.ControlEndpoint != journal.EndpointPath || state.Layout.CredentialPath != journal.CredentialPath || state.DataAction != journal.DataAction {
+		return false, unknownInstallState()
+	}
+	if ref == transactionRef+"unit-bootstrap" && (!state.Foreground || state.DataStage != "" || len(state.Files) != 0 || len(state.ServiceFiles) != 0 || len(state.DataParts) != 0 || len(journal.Actions) != 0 || journal.RecoveryAuthority != InstallAuthoritySource) {
 		return false, unknownInstallState()
 	}
 	// A private transaction still holds the global lease, but cannot borrow an
@@ -139,6 +143,13 @@ func (s *nativeInstallSession) bindState(backup ServiceBackup) {
 	}
 }
 func (s *nativeInstallSession) saveState(ctx context.Context) error {
+	return s.saveStateAt(ctx, "unit")
+}
+
+func (s *nativeInstallSession) saveStateAt(ctx context.Context, name string) error {
+	if name != "unit" && name != "unit-bootstrap" {
+		return invalidInstallJournal()
+	}
 	marker, err := s.tx.Store.CreateTransactionMarker(ctx, s.state.TransactionID)
 	if err != nil {
 		return err
@@ -151,7 +162,7 @@ func (s *nativeInstallSession) saveState(ctx context.Context) error {
 	if len(raw) > MaxInstallJournalBytes {
 		return invalidInstallJournal()
 	}
-	ref := "transactions/" + s.state.TransactionID + "/unit"
+	ref := "transactions/" + s.state.TransactionID + "/" + name
 	dur, err := s.tx.Store.files.write(ctx, ref, raw, JournalObject{})
 	if err != nil {
 		return err

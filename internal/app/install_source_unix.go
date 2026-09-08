@@ -55,6 +55,9 @@ func (c *readOnlyMigrationCap) List(ctx context.Context, rel string) ([]migratio
 func (c *readOnlyMigrationCap) Stat(ctx context.Context, rel string) (migrationEntry, error) {
 	entry, _, err := c.source.Read(ctx, rel, migrationBinaryMax)
 	if err != nil {
+		if errors.Is(err, os.ErrInvalid) && entry.Kind == "file" && entry.Size > migrationBinaryMax {
+			return migrationEntry{}, errMigrationOversize
+		}
 		return migrationEntry{}, err
 	}
 	dev, ino := splitIdentity(entry.Identity)
@@ -66,6 +69,9 @@ func (c *readOnlyMigrationCap) Stat(ctx context.Context, rel string) (migrationE
 func (c *readOnlyMigrationCap) ReadFile(ctx context.Context, rel string, max int64) ([]byte, error) {
 	entry, raw, err := c.source.Read(ctx, rel, max)
 	if err != nil {
+		if errors.Is(err, os.ErrInvalid) && entry.Kind == "file" && entry.Size > max {
+			return nil, errMigrationOversize
+		}
 		return nil, err
 	}
 	if entry.Kind != "file" {

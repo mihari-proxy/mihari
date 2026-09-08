@@ -212,7 +212,7 @@ func installJournalPathAllowed(path string) bool {
 		return false
 	}
 	switch parts[2] {
-	case "transaction-id", "unit", "ready.json", "validation-launch.json":
+	case "transaction-id", "unit", "unit-bootstrap", "ready.json", "validation-launch.json":
 		return true
 	default:
 		return false

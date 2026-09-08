@@ -55,3 +55,53 @@ func TestUnixBootstrap_PreparesRealAuthorityBeforeWAL(t *testing.T) {
 		t.Fatalf("missing authority preparation: prepared=%v err=%v", prepared, err)
 	}
 }
+
+func TestUnixBootstrap_RejectsCompletedJournalForDifferentLayout(t *testing.T) {
+	for _, field := range []string{"mode", "target", "data", "install", "endpoint", "credential"} {
+		t.Run(field, func(t *testing.T) {
+			h := newInstallHarness(t, InstallDataCreate)
+			if _, err := h.tx.Apply(context.Background(), h.req); err != nil {
+				t.Fatal(err)
+			}
+			switch field {
+			case "mode":
+				h.tx.Private = !h.tx.Private
+			case "target":
+				h.tx.Artifacts.Target += "-other"
+			case "data":
+				h.tx.Artifacts.DataRoot += "-other"
+			case "install":
+				h.tx.Artifacts.Install += "-other"
+			case "endpoint":
+				h.tx.Artifacts.Endpoint += "-other"
+			case "credential":
+				h.tx.Artifacts.Credential += "-other"
+			}
+			ran := false
+			err := (ForegroundBootstrap{Root: true, Transaction: h.tx, Run: func(context.Context, string) error { ran = true; return nil }}).Start(context.Background())
+			if err == nil || ran {
+				t.Fatalf("mismatched %s journal started daemon: ran=%v err=%v", field, ran, err)
+			}
+		})
+	}
+}
+
+func TestUnixBootstrap_PersistsRecoveryBeforePreparingData(t *testing.T) {
+	h := newInstallHarness(t, InstallDataCreate)
+	h.tx.Service, h.tx.Effects = nil, nil
+	prepared := false
+	b := ForegroundBootstrap{Root: true, Transaction: h.tx, DiscoverSource: func(context.Context) (bool, error) { return false, nil },
+		PrepareJournal: func(ctx context.Context, _ string) error {
+			_, err := h.tx.Store.Load(ctx)
+			prepared = err == nil
+			return nil
+		},
+		CreateData: func(context.Context) error { return nil }, Run: func(context.Context, string) error { return nil },
+	}
+	if err := b.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !prepared {
+		t.Fatal("data preparation began without a durable recovery journal")
+	}
+}

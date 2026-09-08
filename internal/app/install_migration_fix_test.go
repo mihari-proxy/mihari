@@ -25,6 +25,22 @@ func TestUnixMigration_IdentityAliasIsNested(t *testing.T) {
 	}
 }
 
+func TestUnixMigration_BindAliasIdentityIsNested(t *testing.T) {
+	fx := newMigrationFixture(t)
+	alias := openDirCap(filepath.Join(t.TempDir(), "bind-target"))
+	if err := os.MkdirAll(alias.dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias.dev, alias.ino, _ = fx.source.Identity()
+	alias.mount = "other-mount"
+	opts := fx.options()
+	opts.Target = alias
+	_, err := prepareMigration(context.Background(), opts)
+	if err == nil || apiCode(err) != protocol.CodeInvalidArgument {
+		t.Fatalf("bind alias: %v", err)
+	}
+}
+
 func TestUnixMigration_UnknownTargetDIsInvalidState(t *testing.T) {
 	fx := newMigrationFixture(t)
 	if err := os.WriteFile(fx.target.osPath("mihari.yaml"), []byte("unknown-data"), 0o600); err != nil {

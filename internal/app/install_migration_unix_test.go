@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
@@ -14,7 +15,7 @@ import (
 func TestUnixMigration_TrustedCapStatIdentityAndMtime(t *testing.T) {
 	ctx := context.Background()
 	root := migrationTrustedTempDir(t)
-	if err := os.WriteFile(filepath.Join(root, "payload.txt"), []byte("same-bytes"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "mihari.yaml"), []byte("same-bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cap, err := openTrustedMigrationRoot(ctx, root, uint32(os.Geteuid()), false)
@@ -26,19 +27,23 @@ func TestUnixMigration_TrustedCapStatIdentityAndMtime(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	entry, err := cap.Stat(ctx, "payload.txt")
+	entry, err := cap.Stat(ctx, "mihari.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if entry.Dev == "" || entry.Ino == "" || entry.Mtime == 0 || entry.Ctime == 0 {
 		t.Fatalf("trustedCap.Stat missing identity/times: %+v", entry)
 	}
-	obs := map[string]sourceObservation{"payload.txt": rememberObservation("payload.txt", entry.Hash, entry)}
+	obs := map[string]sourceObservation{"mihari.yaml": rememberObservation("mihari.yaml", entry.Hash, entry)}
 	if err := verifyStationary(ctx, cap, obs); err != nil {
 		t.Fatalf("stable identity should pass: %v", err)
 	}
-	path := filepath.Join(root, "payload.txt")
+	path := filepath.Join(root, "mihari.yaml")
 	if err := os.WriteFile(path, []byte("same-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	changed := time.Unix(0, entry.Mtime).Add(time.Second)
+	if err := os.Chtimes(path, changed, changed); err != nil {
 		t.Fatal(err)
 	}
 	err = verifyStationary(ctx, cap, obs)

@@ -31,6 +31,12 @@ func compiledInstallerTrust() migrationTrust {
 	if err := json.Unmarshal(compiledInstallTrustJSON, &file); err != nil {
 		return trust
 	}
+	for _, hash := range file.Core {
+		trust.core[hash] = struct{}{}
+	}
+	for _, hash := range file.Geo {
+		trust.geo[hash] = struct{}{}
+	}
 	for _, hash := range file.Binaries {
 		trust.binary[hash] = struct{}{}
 	}
