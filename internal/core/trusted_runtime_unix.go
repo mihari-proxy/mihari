@@ -41,12 +41,27 @@ func (f *unixConfigFiles) prepare(ctx context.Context, b []byte) (*ConfigCapabil
 	if e != nil {
 		return nil, e
 	}
-	e = p.WriteFile(ctx, n, b, 0600, nil)
-	e = errors.Join(e, p.Close())
-	if e != nil {
-		return nil, e
+	if e = p.WriteFile(ctx, n, b, 0600, nil); e != nil {
+		return nil, errors.Join(e, p.Close())
 	}
-	return BindGeneratedConfig(ctx, f.data, relative, sha256.Sum256(b))
+	// Retain the published inode and its parent until binding succeeds. Cleanup
+	// must remain possible when binding observes cancellation after publication.
+	cleanupCtx := context.WithoutCancel(ctx)
+	file, identity, e := p.OpenFile(cleanupCtx, n, 0600)
+	if e != nil {
+		return nil, errors.Join(e, p.Close())
+	}
+	configuration, e := BindGeneratedConfig(ctx, f.data, relative, sha256.Sum256(b))
+	if e != nil {
+		return nil, errors.Join(e, p.RemoveFile(cleanupCtx, n, 0600, identity), file.Close(), p.Close())
+	}
+	if e = file.Close(); e != nil {
+		return nil, errors.Join(e, p.RemoveFile(cleanupCtx, n, 0600, identity), configuration.Close(), p.Close())
+	}
+	if e = p.Close(); e != nil {
+		return nil, errors.Join(e, f.remove(cleanupCtx, configuration), configuration.Close())
+	}
+	return configuration, nil
 }
 func (f *unixConfigFiles) read(ctx context.Context) (b []byte, err error) {
 	p, n, e := openCoreParent(ctx, f.data, "runtime/config.yaml", false)
