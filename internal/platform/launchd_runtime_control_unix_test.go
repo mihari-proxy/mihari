@@ -263,25 +263,38 @@ func TestLaunchdRuntimeControl_UnixLeaseLossBeforeRenameCleansStaging(t *testing
 func TestLaunchdRuntimeControl_UnixCleanupRemovesEmptyStagingAfterCloseError(t *testing.T) {
 	ctx := context.Background()
 	base := installControlUnixTestRoot(t)
-	closeErr := errors.New("injected staging close failure")
-	nativeBackend := base.backend
-	base.backend = &launchdRuntimeCloseErrorBackend{trustedBackend: nativeBackend, err: closeErr}
-	deniedErr := errors.New("injected lease lost before rename")
-	validationCalls := 0
-	validate := func(context.Context) error {
-		validationCalls++
-		if validationCalls == 2 {
-			return deniedErr
+	tempName := ".launchd-runtime-cleanup-close-error"
+	temp, err := base.OpenDir(ctx, tempName, RootPolicy{Owner: base.policy.Owner, Mode: 0700, AllowCreate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupFinished := false
+	t.Cleanup(func() {
+		if !cleanupFinished {
+			_ = temp.Close()
 		}
-		return nil
+	})
+	for _, item := range []struct {
+		name string
+		body []byte
+	}{
+		{name: launchdRuntimeLockName},
+		{name: launchdRuntimeStateName, body: []byte(`{"generation":null}`)},
+	} {
+		if err := temp.WriteFile(ctx, item.name, item.body, 0600, nil); err != nil {
+			t.Fatal(err)
+		}
 	}
-	control, publication, err := initializeUnixLaunchdRuntimeControlAt(ctx, base, []byte(`{"generation":null}`), validate)
-	base.backend = nativeBackend
-	if control != nil {
-		_ = control.Close()
+	closeErr := errors.New("injected staging close failure")
+	failingDescriptors := make(map[int]bool, len(temp.chain))
+	for _, link := range temp.chain {
+		failingDescriptors[link.fd] = true
 	}
-	if !errors.Is(err, deniedErr) || !errors.Is(err, closeErr) || publication.Published {
-		t.Fatalf("publication=%+v error=%v", publication, err)
+	temp.backend = &launchdRuntimeCloseErrorBackend{trustedBackend: temp.backend, err: closeErr, failingDescriptors: failingDescriptors}
+	err = cleanupLaunchdRuntimeUnixTemp(base, temp, tempName)
+	cleanupFinished = true
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("cleanup error=%v", err)
 	}
 	names, readErr := base.ReadNames(ctx)
 	if readErr != nil || len(names) != 0 {
@@ -369,9 +382,14 @@ func TestLaunchdRuntimeControl_UnixRejectsStateNameReplacementAndStaleDigest(t *
 
 type launchdRuntimeCloseErrorBackend struct {
 	trustedBackend
-	err error
+	err                error
+	failingDescriptors map[int]bool
 }
 
 func (b *launchdRuntimeCloseErrorBackend) close(fd int) error {
-	return errors.Join(b.trustedBackend.close(fd), b.err)
+	err := b.trustedBackend.close(fd)
+	if b.failingDescriptors[fd] {
+		return errors.Join(err, b.err)
+	}
+	return err
 }
