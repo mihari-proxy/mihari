@@ -47,7 +47,14 @@ func TestBuildUnixDefinition_SystemServiceMarker(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Join(def.Args, " ") != "daemon --system-service" {
+		want := "daemon --system-service"
+		if goos == "darwin" {
+			want += " --launchd-process-group"
+			if !strings.Contains(string(def.Files[0].Bytes), "<key>AbandonProcessGroup</key><false/>") {
+				t.Fatal("launchd definition does not retain process-group cleanup")
+			}
+		}
+		if strings.Join(def.Args, " ") != want {
 			t.Fatalf("%s missing explicit service gate: %v", goos, def.Args)
 		}
 		var parsed parsedExec
@@ -56,7 +63,7 @@ func TestBuildUnixDefinition_SystemServiceMarker(t *testing.T) {
 		} else {
 			parsed, err = parseLaunchdPlist(def.Files[0].Bytes)
 		}
-		if err != nil || strings.Join(parsed.Args, " ") != "daemon --system-service" {
+		if err != nil || strings.Join(parsed.Args, " ") != want {
 			t.Fatalf("%s service marker roundtrip: %v %v", goos, parsed.Args, err)
 		}
 	}
@@ -71,6 +78,39 @@ func TestServiceArguments_ExactLegacyOrMarked(t *testing.T) {
 	for _, args := range [][]string{{"daemon", "--other"}, {"daemon", "--system-service", "--system-service"}, {"self"}, {"daemon", "--system-service=true"}} {
 		if err := rejectStrangeExec(append([]string{"/opt/mihari/mihari"}, args...)); err == nil {
 			t.Fatalf("unexpected service argv accepted: %v", args)
+		}
+	}
+}
+
+func TestServiceArguments_LaunchdMarkerIsPlatformSpecific(t *testing.T) {
+	valid := []string{"/opt/mihari/mihari", "daemon", "--system-service", "--launchd-process-group"}
+	if err := rejectStrangeLaunchdExec(valid); err != nil {
+		t.Fatal(err)
+	}
+	if err := rejectStrangeExec(valid); err == nil {
+		t.Fatal("systemd accepted Darwin-only process mode")
+	}
+	for _, args := range [][]string{
+		{"/opt/mihari/mihari", "daemon", "--launchd-process-group"},
+		{"/opt/mihari/mihari", "daemon", "--system-service", "--launchd-process-group=false"},
+		{"/opt/mihari/mihari", "daemon", "--launchd-process-group", "--system-service"},
+		{"/opt/mihari/mihari", "daemon", "--system-service", "--launchd-process-group", "--launchd-process-group"},
+	} {
+		if err := rejectStrangeLaunchdExec(args); err == nil {
+			t.Fatal("noncanonical shared service arguments accepted")
+		}
+	}
+}
+
+func TestLaunchdPlist_SharedGroupRequiresCleanup(t *testing.T) {
+	def, err := BuildUnixDefinition(platform.ResolvedLayout{Mode: platform.SystemMode, InstallRoot: "/opt/mihari"}, "darwin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, replacement := range []string{"", "<key>AbandonProcessGroup</key><true/>", "<key>AbandonProcessGroup</key><string>false</string>"} {
+		raw := strings.Replace(string(def.Files[0].Bytes), "<key>AbandonProcessGroup</key><false/>", replacement, 1)
+		if _, err := parseLaunchdPlist([]byte(raw)); err == nil {
+			t.Fatal("shared service without explicit group cleanup accepted")
 		}
 	}
 }

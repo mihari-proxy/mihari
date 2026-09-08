@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"github.com/mihari-proxy/mihari/internal/app"
 	"slices"
 	"strings"
 	"time"
@@ -28,44 +29,46 @@ import (
 )
 
 type Model struct {
-	pages             map[ui.PageID]ui.Page
-	rail              []ui.PageID
-	railIndex         int
-	active            ui.PageID
-	focus             ui.Focus
-	inputMode         ui.InputMode
-	modal             *Modal
-	width             int
-	height            int
-	theme             ui.Theme
-	events            <-chan session.Event
-	connected         bool
-	stale             bool
-	reconnecting      bool
-	mutationsEnabled  bool
-	status            protocol.Status
-	statusEpoch       uint64
-	statusEpochKnown  bool
-	traffic           protocol.TrafficSample
-	memory            protocol.MemorySample
-	connections       protocol.ConnectionList
-	core              protocol.CoreStatus
-	subscriptions     protocol.SubscriptionList
-	webGUI            *protocol.WebGUIStatus
-	monitor           MonitorModel
-	operations        []ui.OperationRecord
-	confirmationCmd   tea.Cmd
-	setupObserved     bool
-	setupReturn       ui.PageID
-	pendingActions    map[string]ui.Action
-	globalState       ui.GlobalState
-	lastObservedAt    time.Time // last daemon stream sample; shown in stale footer
-	relaunchRequested bool
-	relaunchWarning   string
-	preparedUpdate    *update.PreparedUpdate
-	now               time.Time // spinner clock; advanced only while work is pending
-	spinning          bool      // true while a spinner tick loop is scheduled
-	spinGen           uint64    // generation so only the latest tick loop may reschedule
+	pages                map[ui.PageID]ui.Page
+	rail                 []ui.PageID
+	railIndex            int
+	active               ui.PageID
+	focus                ui.Focus
+	inputMode            ui.InputMode
+	modal                *Modal
+	width                int
+	height               int
+	theme                ui.Theme
+	events               <-chan session.Event
+	connected            bool
+	stale                bool
+	reconnecting         bool
+	mutationsEnabled     bool
+	status               protocol.Status
+	statusEpoch          uint64
+	statusEpochKnown     bool
+	traffic              protocol.TrafficSample
+	memory               protocol.MemorySample
+	connections          protocol.ConnectionList
+	core                 protocol.CoreStatus
+	subscriptions        protocol.SubscriptionList
+	webGUI               *protocol.WebGUIStatus
+	monitor              MonitorModel
+	operations           []ui.OperationRecord
+	confirmationCmd      tea.Cmd
+	setupObserved        bool
+	setupReturn          ui.PageID
+	pendingActions       map[string]ui.Action
+	globalState          ui.GlobalState
+	lastObservedAt       time.Time // last daemon stream sample; shown in stale footer
+	relaunchRequested    bool
+	relaunchWarning      string
+	preparedUpdate       *update.PreparedUpdate
+	installation         *installationUI
+	preparedInstallation *app.InstallationExecuteRequest
+	now                  time.Time // spinner clock; advanced only while work is pending
+	spinning             bool      // true while a spinner tick loop is scheduled
+	spinGen              uint64    // generation so only the latest tick loop may reschedule
 	// OS service observation for top-right status badge (local, not daemon IPC).
 	serviceCtrl   systempage.ServiceController
 	serviceStatus service.StatusKind
@@ -235,7 +238,7 @@ const servicePollInterval = 2 * time.Second
 type servicePollTickMsg struct{}
 
 func (model Model) Init() tea.Cmd {
-	return tea.Batch(waitSessionEvent(model.events), model.loadRootServiceStatus(), model.scheduleServicePoll())
+	return tea.Batch(waitSessionEvent(model.events), model.loadRootServiceStatus(), model.scheduleServicePoll(), model.inspectInstallation())
 }
 
 func (model Model) scheduleServicePoll() tea.Cmd {
@@ -323,6 +326,9 @@ func (model *Model) syncSystemNetworkStatus() {
 }
 
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	if command, consumed := model.updateInstallation(message); consumed {
+		return model, command
+	}
 	if model.exportLogs != nil {
 		if command, consumed := model.exportLogs.Update(message); consumed {
 			return model, command
@@ -1232,6 +1238,12 @@ func (model *Model) refreshDaemonHintForService() {
 }
 
 func (model Model) View() tea.View {
+	if model.installation != nil && model.installation.visible {
+		view := tea.NewView(model.installation.view(model.width, model.height))
+		view.AltScreen = true
+		view.WindowTitle = ui.AppName
+		return view
+	}
 	if model.active == ui.PageSetup {
 		body := model.pages[ui.PageSetup].View()
 		status := ui.RenderStatusBar(model.theme, model.statusBarData(), model.width, true)

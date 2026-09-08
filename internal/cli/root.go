@@ -43,27 +43,31 @@ type SubscriptionClient interface {
 }
 
 type Dependencies struct {
-	ChannelQuery           func(context.Context) (string, error)
-	ChannelSet             func(context.Context, string) error
-	StatusClient           StatusClient
-	RuntimeClient          RuntimeClient
-	SubscriptionClient     SubscriptionClient
-	PanelClient            PanelClient
-	SystemProxyClient      SystemProxyClient
-	TunClient              TunClient
-	ServiceController      ServiceController
-	ServiceApply           func(context.Context, app.InstallRequest) (app.InstallResult, error)
-	ServiceAction          func(context.Context, string) error
-	SelfUpdater            SelfUpdater
-	SelfUpdateChannel      func(context.Context) (string, error)
-	OpenBrowser            func(url string) error
-	RunDaemon              func(context.Context) error
-	RunSystemServiceDaemon func(context.Context) error
-	RunInstallValidation   func(context.Context, string) error
-	RunTUI                 func(context.Context) error
-	Interactive            bool
-	NewOperationID         func() string
-	SetupError             error
+	ChannelQuery            func(context.Context) (string, error)
+	ChannelSet              func(context.Context, string) error
+	StatusClient            StatusClient
+	RuntimeClient           RuntimeClient
+	SubscriptionClient      SubscriptionClient
+	PanelClient             PanelClient
+	SystemProxyClient       SystemProxyClient
+	TunClient               TunClient
+	ServiceController       ServiceController
+	ServiceApply            func(context.Context, app.InstallRequest) (app.InstallResult, error)
+	ServiceAction           func(context.Context, string) error
+	InstallationInspect     func(context.Context) (app.InstallationStatus, error)
+	InstallationPlan        func(context.Context, app.InstallationPlanRequest) (app.InstallationPlan, error)
+	InstallationExecute     func(context.Context, app.InstallationExecuteRequest) (app.InstallationOutcome, error)
+	SelfUpdater             SelfUpdater
+	SelfUpdateChannel       func(context.Context) (string, error)
+	OpenBrowser             func(url string) error
+	RunDaemon               func(context.Context) error
+	RunSystemServiceDaemon  func(context.Context) error
+	RunLaunchdServiceDaemon func(context.Context) error
+	RunInstallValidation    func(context.Context, string) error
+	RunTUI                  func(context.Context) error
+	Interactive             bool
+	NewOperationID          func() string
+	SetupError              error
 	// PrepareLocalRoot runs once before selected commands. Nil skips data-root IO.
 	PrepareLocalRoot func() error
 }
@@ -190,6 +194,12 @@ func skipPrepareLocalRoot(cmd *cobra.Command) bool {
 		return true
 	}
 	parent := cmd.Parent()
+	if parent != nil && parent.Name() == "service" {
+		switch cmd.Name() {
+		case "install-status", "install-plan", "repair", "fresh":
+			return true
+		}
+	}
 	if parent == nil || parent.Name() != "self" {
 		return false
 	}

@@ -48,21 +48,22 @@ type processLocalRoot struct {
 }
 
 type daemonRunDeps struct {
-	PrepareRuntime  func(context.Context, config.Settings) (app.RuntimeBuildOptions, error)
-	MachineSnapshot bool
-	Paths           platform.Paths
-	PrivateFS       *platform.PrivateFS
-	Token           string
-	Version         string
-	Endpoint        string
-	Ready           chan<- struct{}
-	ServiceStatus   func() (string, error)
-	LoadSettings    func(path, sidecar string) (config.Settings, bool, config.CommitResult, error)
-	ValidationMode  bool
-	ValidationReady func(bool) error
-	Listen          func(context.Context) (net.Listener, error)
-	RuntimeOptions  app.RuntimeBuildOptions
-	ActivationPhase string
+	PrepareRuntime    func(context.Context, config.Settings) (app.RuntimeBuildOptions, error)
+	MachineSnapshot   bool
+	Paths             platform.Paths
+	PrivateFS         *platform.PrivateFS
+	Token             string
+	Version           string
+	Endpoint          string
+	Ready             chan<- struct{}
+	ServiceStatus     func() (string, error)
+	LoadSettings      func(path, sidecar string) (config.Settings, bool, config.CommitResult, error)
+	ValidationMode    bool
+	ValidationReady   func(bool) error
+	Listen            func(context.Context) (net.Listener, error)
+	RuntimeOptions    app.RuntimeBuildOptions
+	ActivationPhase   string
+	ShareProcessGroup bool
 }
 
 type daemonLoggingResources struct {
@@ -597,6 +598,7 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	options.MihomoStdout, options.MihomoStderr = stdoutCapture, stderrCapture
 	options.OnBackgroundError = reportBackground
 	options.ValidationMode, options.ActivationPhase = deps.ValidationMode, deps.ActivationPhase
+	options.ShareProcessGroup = deps.ShareProcessGroup
 	var snapshot logging.MachineSnapshotSource
 	if deps.MachineSnapshot && daemonRT.Runtime != nil && mihomoRT.Runtime != nil {
 		snapshot = logging.NewMachineSnapshotSource(logging.MachineSnapshotOptions{PrivateFS: deps.PrivateFS, Paths: logging.ExportPaths{LogDir: deps.Paths.LogDir, DaemonLog: deps.Paths.DaemonLog, MihomoLog: deps.Paths.MihomoLog}, Redactor: redactor, EnterRecordMutex: func(ctx context.Context, path string) (func(), error) {

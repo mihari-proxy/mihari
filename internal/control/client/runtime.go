@@ -313,6 +313,10 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 }
 
 func (c *Client) doRuntime(ctx context.Context, method, path string, input, output any) error {
+	return c.doRuntimeLimit(ctx, method, path, input, output, maxControlResponseSize)
+}
+
+func (c *Client) doRuntimeLimit(ctx context.Context, method, path string, input, output any, responseLimit int64) error {
 	var body io.Reader
 	if input != nil {
 		raw, err := json.Marshal(input)
@@ -351,11 +355,11 @@ func (c *Client) doRuntime(ctx context.Context, method, path string, input, outp
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return c.responseError(response)
 	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, maxControlResponseSize+1))
+	raw, err := io.ReadAll(io.LimitReader(response.Body, responseLimit+1))
 	if err != nil {
 		return c.localError(err)
 	}
-	if len(raw) > maxControlResponseSize {
+	if int64(len(raw)) > responseLimit {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "control response is too large"}
 	}
 	if err := json.Unmarshal(raw, output); err != nil {

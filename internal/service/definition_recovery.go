@@ -100,7 +100,19 @@ func (a *LaunchdAdapter) ObserveAction(ctx context.Context, action DefinitionAct
 		return action.OldState, nil
 	}
 	switch action.Kind {
-	case DefinitionActionStart, DefinitionActionStop:
+	case DefinitionActionStop:
+		_, loaded, err := a.checkStopAuthority(ctx)
+		if err != nil {
+			return "", err
+		}
+		if loaded {
+			return "loaded", nil
+		}
+		if err := a.WaitOwnedTreeExit(ctx); err != nil {
+			return "", err
+		}
+		return "unloaded", nil
+	case DefinitionActionStart:
 		result, err := runAbsolute(ctx, a.runner, []string{a.paths.Launchctl, "print", a.jobTarget()})
 		if err != nil {
 			return "", err
@@ -141,7 +153,10 @@ func (a *LaunchdAdapter) ReplayAction(ctx context.Context, action DefinitionActi
 	case DefinitionActionReload:
 		return nil
 	case DefinitionActionStop:
-		return a.bootout(ctx)
+		if err := a.bootout(ctx); err != nil {
+			return err
+		}
+		return a.WaitOwnedTreeExit(ctx)
 	case DefinitionActionStart:
 		args = []string{a.paths.Launchctl, "bootstrap", a.paths.Domain, a.paths.Plist}
 	case DefinitionActionEnable, DefinitionActionDisable, DefinitionActionDisabled:

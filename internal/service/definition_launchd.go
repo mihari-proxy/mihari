@@ -36,13 +36,22 @@ type launchdConfig struct {
 
 // LaunchdAdapter inspects and mutates the system LaunchDaemon.
 type LaunchdAdapter struct {
-	runner CommandRunner
-	files  DefinitionStore
-	tree   ProcessTree
-	clock  Clock
-	hook   ActionHook
-	paths  LaunchdPaths
-	last   Definition
+	runner        CommandRunner
+	files         DefinitionStore
+	tree          ProcessTree
+	clock         Clock
+	hook          ActionHook
+	paths         LaunchdPaths
+	last          Definition
+	stopAuthority *Definition
+	stopBoot      string
+}
+
+// BindStopAuthority retains the private backup's process identity independently
+// of later service-manager observations. It performs no external mutation.
+func (a *LaunchdAdapter) BindStopAuthority(def Definition, boot string) {
+	copy := cloneDefinition(def)
+	a.stopAuthority, a.stopBoot = &copy, boot
 }
 
 func newLaunchdAdapter(cfg launchdConfig) *LaunchdAdapter {
@@ -94,6 +103,10 @@ func (a *LaunchdAdapter) InspectDefinition(ctx context.Context) (Definition, err
 	}
 	if plistMissing && !loaded {
 		def := Definition{Status: StatusNotInstalled}
+		def.Process, err = a.stoppedProcessSnapshot(ctx)
+		if err != nil {
+			return Definition{}, err
+		}
 		a.last = def
 		return def, nil
 	}
@@ -128,7 +141,10 @@ func (a *LaunchdAdapter) InspectDefinition(ctx context.Context) (Definition, err
 	if !loaded {
 		def.Running = false
 		def.Status = StatusStopped
-		def.Process = ProcessIdentity{}
+		def.Process, err = a.stoppedProcessSnapshot(ctx)
+		if err != nil {
+			return Definition{}, err
+		}
 	} else if pid > 0 {
 		id, err := a.identifyPID(ctx, pid)
 		if err != nil {
@@ -167,7 +183,7 @@ func (a *LaunchdAdapter) DisableAutostartAndStop(ctx context.Context) error {
 		return err
 	}
 	if def.Status == StatusNotInstalled {
-		return nil
+		return a.WaitOwnedTreeExit(ctx)
 	}
 	err = applyAction(ctx, a.hook, DefinitionAction{
 		Kind:       DefinitionActionDisabled,
@@ -201,6 +217,9 @@ func (a *LaunchdAdapter) DisableAutostartAndStop(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if _, _, err := a.checkStopAuthority(ctx); err != nil {
+		return err
+	}
 	return applyAction(ctx, a.hook, DefinitionAction{
 		Kind:       DefinitionActionStop,
 		TargetRole: "definition",
@@ -212,6 +231,13 @@ func (a *LaunchdAdapter) DisableAutostartAndStop(ctx context.Context) error {
 }
 
 func (a *LaunchdAdapter) bootout(ctx context.Context) error {
+	_, loaded, err := a.checkStopAuthority(ctx)
+	if err != nil {
+		return err
+	}
+	if !loaded {
+		return a.WaitOwnedTreeExit(ctx)
+	}
 	result, err := runAbsolute(ctx, a.runner, []string{a.paths.Launchctl, "bootout", a.jobTarget()})
 	if err != nil {
 		return err
@@ -227,56 +253,149 @@ func (a *LaunchdAdapter) bootout(ctx context.Context) error {
 }
 
 func (a *LaunchdAdapter) WaitOwnedTreeExit(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
+	id, _, err := a.checkStopAuthority(ctx)
+	if err != nil || id.PID == 0 {
 		return err
 	}
-	if incompleteProcessIdentity(a.last.Process) {
-		return invalidServiceState("service process identity is unknown")
-	}
-	id := a.last.Process
-	if a.tree == nil {
-		return invalidServiceState("service process identity is unknown")
-	}
-	alive, err := a.tree.Lookup(ctx, id)
-	if err != nil {
+	return a.waitProcessGroupExit(ctx, id)
+}
+
+// WaitRecordedTreeExit checks the private backup's old group before replaying
+// target effects. A newly running target does not change the old group proof.
+func (a *LaunchdAdapter) WaitRecordedTreeExit(ctx context.Context) error {
+	id, err := a.retainedStopIdentity(ctx)
+	if err != nil || id.PID == 0 {
 		return err
 	}
-	if !alive {
-		return nil
-	}
-	if err := a.tree.SignalIdentity(ctx, id, "TERM"); err != nil {
-		return err
-	}
-	if err := waitUntil(ctx, a.clock, termWait, func(ctx context.Context) (bool, error) {
-		alive, err := a.tree.Lookup(ctx, id)
-		return !alive, err
+	return a.waitProcessGroupExit(ctx, id)
+}
+
+func (a *LaunchdAdapter) waitProcessGroupExit(ctx context.Context, id ProcessIdentity) error {
+	if err := waitUntil(ctx, a.clock, stopWait, func(ctx context.Context) (bool, error) {
+		return a.tree.Empty(ctx, id.Group)
 	}); err != nil {
 		return err
 	}
-	alive, err = a.tree.Lookup(ctx, id)
+	empty, err := a.tree.Empty(ctx, id.Group)
 	if err != nil {
 		return err
 	}
-	if !alive {
-		return nil
-	}
-	if err := a.tree.SignalIdentity(ctx, id, "KILL"); err != nil {
-		return err
-	}
-	if err := waitUntil(ctx, a.clock, killWait, func(ctx context.Context) (bool, error) {
-		alive, err := a.tree.Lookup(ctx, id)
-		return !alive, err
-	}); err != nil {
-		return err
-	}
-	alive, err = a.tree.Lookup(ctx, id)
-	if err != nil {
-		return err
-	}
-	if alive {
+	if !empty {
 		return invalidServiceState("managed process tree did not exit")
 	}
 	return nil
+}
+
+func (a *LaunchdAdapter) stoppedProcessSnapshot(ctx context.Context) (ProcessIdentity, error) {
+	// Retain a known same-boot group even when the plist/job disappears. A
+	// later transaction must never persist a stale previous-boot PID as new.
+	id := a.last.Process
+	if a.stopAuthority != nil && a.stopAuthority.Process.Group != "" {
+		id = a.stopAuthority.Process
+	}
+	if id.Group == "" {
+		if a.stopAuthority != nil && a.stopAuthority.Status != StatusNotInstalled {
+			if _, err := a.retainedStopIdentity(ctx); err != nil {
+				return ProcessIdentity{}, err
+			}
+		}
+		return ProcessIdentity{}, nil
+	}
+	if err := validateDarwinGroup(id); err != nil {
+		return ProcessIdentity{}, err
+	}
+	bootSource, ok := a.tree.(interface {
+		BootIdentity(context.Context) (string, error)
+	})
+	if !ok {
+		return ProcessIdentity{}, invalidServiceState("service process boot is unknown")
+	}
+	boot, err := bootSource.BootIdentity(ctx)
+	if err != nil {
+		return ProcessIdentity{}, err
+	}
+	if boot == "" {
+		return ProcessIdentity{}, invalidServiceState("service process boot is unknown")
+	}
+	if boot != id.BootID {
+		return ProcessIdentity{}, nil
+	}
+	return id, nil
+}
+
+func (a *LaunchdAdapter) retainedStopIdentity(ctx context.Context) (ProcessIdentity, error) {
+	if err := ctx.Err(); err != nil {
+		return ProcessIdentity{}, err
+	}
+	def, recordedBoot := a.last, a.last.Process.BootID
+	if a.stopAuthority != nil {
+		def, recordedBoot = *a.stopAuthority, a.stopBoot
+	}
+	if def.Status == StatusNotInstalled && def.Process == (ProcessIdentity{}) {
+		return ProcessIdentity{}, nil
+	}
+	bootSource, ok := a.tree.(interface {
+		BootIdentity(context.Context) (string, error)
+	})
+	if !ok {
+		return ProcessIdentity{}, invalidServiceState("service process boot is unknown")
+	}
+	boot, err := bootSource.BootIdentity(ctx)
+	if err != nil {
+		return ProcessIdentity{}, err
+	}
+	if boot == "" || recordedBoot == "" {
+		return ProcessIdentity{}, invalidServiceState("service process boot is unknown")
+	}
+	if def.Process.PID != 0 && def.Process.BootID != recordedBoot {
+		return ProcessIdentity{}, invalidServiceState("service process boot changed")
+	}
+	if def.Process.Group != "" {
+		if err := validateDarwinGroup(def.Process); err != nil {
+			return ProcessIdentity{}, err
+		}
+		if def.Process.BootID != recordedBoot {
+			return ProcessIdentity{}, invalidServiceState("service process boot changed")
+		}
+	}
+	if boot != recordedBoot {
+		return ProcessIdentity{}, nil
+	}
+	if err := validateDarwinGroup(def.Process); err != nil {
+		return ProcessIdentity{}, err
+	}
+	return def.Process, nil
+}
+
+func (a *LaunchdAdapter) checkStopAuthority(ctx context.Context) (ProcessIdentity, bool, error) {
+	id, err := a.retainedStopIdentity(ctx)
+	if err != nil {
+		return ProcessIdentity{}, false, err
+	}
+	result, err := runAbsolute(ctx, a.runner, []string{a.paths.Launchctl, "print", a.jobTarget()})
+	if err != nil {
+		return ProcessIdentity{}, false, err
+	}
+	loaded, running, pid, err := parseLaunchdPrint(result, a.jobTarget())
+	if err != nil {
+		return ProcessIdentity{}, false, err
+	}
+	if running && pid <= 0 {
+		return ProcessIdentity{}, false, invalidServiceState("service process identity is unknown")
+	}
+	if pid > 0 {
+		current, err := a.identifyPID(ctx, pid)
+		if err != nil {
+			return ProcessIdentity{}, false, err
+		}
+		if err := validateDarwinGroup(current); err != nil {
+			return ProcessIdentity{}, false, err
+		}
+		if !sameLaunchdProcess(id, current) || id.Group != current.Group {
+			return ProcessIdentity{}, false, invalidServiceState("service process identity changed")
+		}
+	}
+	return id, loaded, nil
 }
 
 func (a *LaunchdAdapter) WriteDefinition(ctx context.Context, def Definition) error {

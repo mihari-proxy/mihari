@@ -28,7 +28,7 @@ func newLaunchdHarness(t *testing.T, running, enabled bool, installPlist bool) *
 		}
 	}
 	hook := &recordingHook{}
-	tree := &fakeTree{alive: running, empty: !running}
+	tree := &fakeTree{alive: running, empty: !running, identity: fixtureLaunchdIdentity()}
 	clock := &fakeClock{now: time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)}
 	runner := &fakeRunner{}
 	h := &launchdHarness{
@@ -52,6 +52,8 @@ func newLaunchdHarness(t *testing.T, running, enabled bool, installPlist bool) *
 	h.installLaunchdHandlers()
 	return h
 }
+
+func (t *fakeTree) BootIdentity(context.Context) (string, error) { return "boot-test", nil }
 
 func (h *launchdHarness) installLaunchdHandlers() {
 	h.runner.handle(func(argv []string) bool {
@@ -178,6 +180,7 @@ func TestLaunchdDisableAutostartAndStop_PersistentDisableThenBootout(t *testing.
 			h := newLaunchdHarness(t, state.running, state.enabled, true)
 			if !state.running {
 				h.loaded = false
+				h.adapter.BindStopAuthority(Definition{Status: StatusRunning, Process: fixtureLaunchdIdentity()}, "boot-test")
 			}
 			if err := h.adapter.DisableAutostartAndStop(context.Background()); err != nil {
 				t.Fatal(err)
@@ -201,7 +204,7 @@ func TestLaunchdDisableAutostartAndStop_PersistentDisableThenBootout(t *testing.
 					bootoutAt = i
 				}
 			}
-			if disableAt < 0 || printAt < 0 || bootoutAt < 0 || !(disableAt < printAt && printAt < bootoutAt) {
+			if disableAt < 0 || printAt < 0 || !(disableAt < printAt) || (state.running && (bootoutAt < 0 || printAt >= bootoutAt)) {
 				t.Fatalf("want disable, verify, bootout; calls=%v", h.runner.calls)
 			}
 			if !containsKind(h.hook.kinds, DefinitionActionDisabled) || !containsKind(h.hook.kinds, DefinitionActionStop) {
@@ -295,20 +298,17 @@ func TestLaunchdWaitOwnedTreeExit_IncompleteIdentityInvalidState(t *testing.T) {
 	}
 }
 
-func TestLaunchdWaitOwnedTreeExit_UsesIdentityNotNakedPID(t *testing.T) {
+func TestLaunchdWaitOwnedTreeExit_UsesGroupAbsenceWithoutSignals(t *testing.T) {
 	h := newLaunchdHarness(t, true, true, true)
 	if _, err := h.adapter.InspectDefinition(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	h.tree.alive = true
-	h.tree.emptyAfter = 2
+	h.tree.empty = true
 	if err := h.adapter.WaitOwnedTreeExit(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if h.tree.signalLookups == 0 || h.tree.lookups == 0 {
-		t.Fatal("did not re-check launchd identity")
-	}
-	if len(h.tree.signals) != 2 || h.tree.signals[0] != "TERM" || h.tree.signals[1] != "KILL" {
+	if len(h.tree.signals) != 0 {
 		t.Fatalf("signals=%v", h.tree.signals)
 	}
 }

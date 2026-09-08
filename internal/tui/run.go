@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	systempage "github.com/mihari-proxy/mihari/internal/tui/pages/system"
@@ -19,6 +20,7 @@ import (
 
 // Options contains the control client and terminal streams used by the TUI.
 type Options struct {
+	Installation              InstallationActions
 	SplitLogging              bool
 	UserLogDir, UserExportDir string
 	Client                    *controlclient.Client
@@ -202,6 +204,25 @@ func (r *tuiLoggingFailureReporter) report(kind tuiLoggingFailureKind, err error
 
 // Run starts the full-screen Mihari terminal interface and blocks until it exits.
 func Run(ctx context.Context, options Options) (resultErr error) {
+	actions := options.Installation
+	if options.Client != nil {
+		offline := actions.Inspect
+		actions.Inspect = func(ctx context.Context) (protocol.InstallationStatus, error) {
+			status, err := options.Client.GetInstallationStatus(ctx)
+			if err == nil || offline == nil {
+				return status, err
+			}
+			return offline(ctx)
+		}
+	}
+	if actions.Elevated == nil {
+		actions.Elevated = options.Elevated
+	}
+	if actions.Binary == "" {
+		actions.Binary = options.BinaryPath
+	}
+	installationWorker, actions := newInstallationWorker(actions)
+	defer installationWorker.shutdown()
 	var preparedWorker *runPreparedUpdater
 	if updater, ok := options.SelfUpdater.(systempage.PreparedSelfUpdater); ok {
 		preparedWorker = newRunPreparedUpdater(updater)
@@ -246,6 +267,7 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 		events = controlSession.Start(sessionCtx)
 	}
 	model := newRunModel(ctx, options.Client, events, health, applier)
+	model.setInstallationActions(actions)
 	if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
 		userDir, exportDir := options.UserLogDir, options.UserExportDir
 		if options.SplitLogging && resources.PrivateFS == nil {
@@ -271,9 +293,25 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 			controlSession.Close()
 		}
 	}, exportLogs, applier, reporter)
+	closeResources := cleanup
+	cleanup = func(final tea.Model) error { installationWorker.shutdown(); return closeResources(final) }
 	if preparedWorker != nil {
 		closeResources := cleanup
 		cleanup = func(final tea.Model) error { preparedWorker.shutdown(); return closeResources(final) }
+	}
+	if finalModel, ok := final.(Model); ok && finalModel.preparedInstallation != nil {
+		if preparedWorker != nil {
+			cleanup = installationCleanup(preparedWorker.close, cleanup)
+		}
+		return finishInstallationRun(ctx, final, err, options.Output, cleanup, actions.Execute)
+	}
+	if finalModel, ok := final.(*Model); ok && finalModel != nil && finalModel.preparedInstallation != nil {
+		if preparedWorker != nil {
+			cleanup = installationCleanup(preparedWorker.close, cleanup)
+		}
+		return finishInstallationRun(ctx, final, err, options.Output, cleanup, actions.Execute)
+	}
+	if preparedWorker != nil {
 		return finishPreparedRun(ctx, final, err, options.Output, options.Relaunch, cleanup, preparedWorker.ApplyPrepared)
 	}
 	return finishRun(final, err, options.Output, options.Relaunch, cleanup)

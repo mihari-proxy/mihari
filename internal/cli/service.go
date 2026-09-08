@@ -30,6 +30,7 @@ func newServiceCommand(dependencies Dependencies, options *runOptions) *cobra.Co
 	root.AddCommand(newServiceActionCommand("stop", "Stop the Mihari OS service", dependencies, options, true, func(c ServiceController) error { return c.Stop() }))
 	root.AddCommand(newServiceActionCommand("restart", "Restart the Mihari OS service", dependencies, options, true, func(c ServiceController) error { return c.Restart() }))
 	root.AddCommand(newServiceStatusCommand(dependencies, options))
+	addInstallationCommands(root, dependencies, options)
 	if dependencies.ServiceApply != nil {
 		root.AddCommand(newServiceApplyCommand(dependencies, options, os.Geteuid))
 	}

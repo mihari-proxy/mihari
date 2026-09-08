@@ -126,8 +126,11 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				return nil
+			case response := <-s.restart:
+				response <- coreRecoveryRequired()
+				continue
 			case request := <-s.maintain:
-				request.response <- protocol.APIError{Code: protocol.CodeInvalidState, Message: "core recovery required"}
+				request.response <- coreRecoveryRequired()
 				continue
 			}
 		}
@@ -156,6 +159,9 @@ func (s *Supervisor) Run(ctx context.Context) error {
 				continue
 			}
 		}
+		if s.blocked.Load() {
+			continue
+		}
 		if s.options.Now().Sub(startedAt) >= s.options.StableAfter {
 			backoff.Reset()
 		}
@@ -174,6 +180,9 @@ func (s *Supervisor) Run(ctx context.Context) error {
 }
 
 func (s *Supervisor) Restart(ctx context.Context) error {
+	if s.blocked.Load() {
+		return coreRecoveryRequired()
+	}
 	if !s.active.Load() {
 		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo supervisor is not running"}
 	}
@@ -238,7 +247,7 @@ func (s *Supervisor) runChild(parent context.Context, child Child, restarts uint
 		return err, true
 	case err := <-done:
 		finishMonitor()
-		return err, false
+		return errors.Join(err, s.waitDescendants(child)), false
 	case err := <-healthFailure:
 		stopError := s.stopChild(child, done)
 		finishMonitor()
@@ -284,23 +293,45 @@ func (s *Supervisor) monitor(ctx context.Context, pid int, restarts uint64, fail
 	}
 }
 
-func (s *Supervisor) stopChild(child Child, done <-chan error) error {
+func (s *Supervisor) stopChild(child Child, done <-chan error) (resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			s.blocked.Store(true)
+		}
+	}()
 	terminateError := child.Terminate()
 	timer := time.NewTimer(s.options.StopTimeout)
 	defer timer.Stop()
 	select {
 	case <-done:
-		if terminateError != nil {
-			return terminateError
-		}
-		return nil
+		return errors.Join(terminateError, s.waitDescendants(child))
 	case <-timer.C:
 		if err := child.Kill(); err != nil {
 			return err
 		}
 		<-done
+		return s.waitDescendants(child)
+	}
+}
+
+func coreRecoveryRequired() error {
+	return protocol.APIError{Code: protocol.CodeInvalidState, Message: "core recovery required"}
+}
+
+func (s *Supervisor) waitDescendants(child Child) error {
+	waiter, ok := child.(interface{ WaitDescendants(context.Context) error })
+	if !ok {
 		return nil
 	}
+	// Cleanup remains owned even when the daemon's parent context was canceled.
+	ctx, cancel := context.WithTimeout(context.Background(), s.options.StopTimeout)
+	defer cancel()
+	if err := waiter.WaitDescendants(ctx); err != nil {
+		s.blocked.Store(true)
+		s.observe(Observation{Status: StatusDegraded, LastError: "managed core descendants did not exit"})
+		return errors.Join(coreRecoveryRequired(), err)
+	}
+	return nil
 }
 
 func (s *Supervisor) waitBackoff(ctx context.Context, delay time.Duration) error {
@@ -357,6 +388,10 @@ func (s *Supervisor) Maintain(ctx context.Context, work func() error) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-s.startGate:
+	}
+	if s.blocked.Load() {
+		s.startGate <- struct{}{}
+		return coreRecoveryRequired()
 	}
 	if !s.active.Load() {
 		defer func() { s.startGate <- struct{}{} }()

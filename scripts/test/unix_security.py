@@ -9,6 +9,11 @@ COMMON = {
     "internal/integration": ["TestSecurityTwoUIDControl", "TestSecurityPrivateDataDenied", "TestSecurityOtherUserLogsDenied"],
 }
 SUPPLEMENTAL = {
+    "internal/supervisor": [
+        "TestSupervisor_DescendantFailureBlocksMaintenanceAndRestart",
+        "TestSupervisor_UnexpectedExitChecksDescendantsBeforeIdleMaintenance",
+        "TestSupervisor_MaintenanceWaitsForDescendantsAfterLeaderExit",
+    ],
     "internal/core": ["TestSecurityConfigStage_BindCancellationRemovesWrittenFile"],
     "internal/app": [
         "TestNativeInstallEffects_FilePublicationAndActualBackup",
@@ -26,6 +31,11 @@ SUPPLEMENTAL = {
         "TestNativeInstallState_BootstrapBackupSurvivesPreparationCrash",
         "TestNativeInstallState_BootstrapRollbackRemovesUnreferencedCandidate",
         "TestNativeInstallState_CreateIdentityCoversWholeTreeAndParts",
+        "TestNativeLaunchdRecovery_RetainsUnloadedGroupFromBackup",
+        "TestNativeInstallState_RejectsBackupBootMismatch",
+        "TestInstallRollforward_RequiresRecordedGroupExitBeforeEffects",
+        "TestInstallRollforward_RebindsAfterSameSessionBootstrapIntent",
+        "TestRecoveryStopAuthority_DoesNotReuseOldGroupForLaterGeneration",
         "TestReadOnlyMigrationSource_OversizeHasMigrationClassification",
         "TestUnixLocalOperation_CancellationRemainsCancellation",
         "TestUnixLocalOperation_PreservesClassifiedErrorAndCause",
@@ -48,6 +58,20 @@ SUPPLEMENTAL = {
     "cmd/mihari": ["TestUnixSecurity_FullAssembly", "TestProcess_SIGTERMJoinsCleanup", "TestProcess_SetupPreservesClassifiedError", "TestUnixProcess_LocalFailureExitContracts"],
 }
 
+DARWIN_SUPPLEMENTAL = {
+    "internal/platform": [
+        "TestDarwinGroupHasPeers_IsolatedProcesses",
+        "TestDarwinWaitChildExit_PreservesZombieAndIgnoresStop",
+    ],
+    "internal/supervisor": ["TestDarwinSharedChild_DescendantsAndSignalOwnership"],
+    "internal/service": ["TestDarwinLaunchdIdentity_ActualArgumentsAndGroup"],
+    "internal/integration": [
+        "TestSecurityLaunchdBootoutDrainsSharedProcessGroup",
+        "TestSecurityLaunchdCleanupRejectsUnpublishedProcessGroup",
+        "TestSecurityLaunchdCleanupPropagatesGroupProof",
+    ],
+}
+
 
 def required(target_os, supplemental=False):
     if target_os not in ("linux", "darwin"):
@@ -56,6 +80,8 @@ def required(target_os, supplemental=False):
     result.append((PREFIX+"internal/platform", "TestSecurityBindMountDenied" if target_os == "linux" else "TestSecurityDarwinACLABI"))
     if supplemental:
         result.extend((PREFIX+p, n) for p, names in SUPPLEMENTAL.items() for n in names)
+        if target_os == "darwin":
+            result.extend((PREFIX+p, n) for p, names in DARWIN_SUPPLEMENTAL.items() for n in names)
     return result
 
 

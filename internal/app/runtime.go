@@ -50,6 +50,7 @@ type RuntimeBuildOptions struct {
 	InitialSetupRequired bool
 	SettingsPath         string
 	ServiceStatus        func() (string, error)
+	InstallationInspect  func(context.Context) (InstallationStatus, error)
 	Logging              runtimeapi.LoggingRuntime
 	RefreshLogSecrets    func(catalogURLs []string)
 	MihomoStdout         io.Writer
@@ -59,6 +60,8 @@ type RuntimeBuildOptions struct {
 	ValidationMode       bool
 	ValidationCore       core.ProvenanceStore
 	ActivationPhase      string
+	// ShareProcessGroup is enabled only by the installed launchd service assembly.
+	ShareProcessGroup bool
 }
 
 // StartupResources recovers provider/resource WALs and reconstructs the
@@ -236,11 +239,12 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		starterStderr = io.Discard
 	}
 	mihomoStarter := supervisor.CommandStarter{
-		BinaryPath: paths.CoreBinary,
-		DataDir:    paths.Root,
-		ConfigPath: paths.RuntimeConfig,
-		Stdout:     starterStdout,
-		Stderr:     starterStderr,
+		ShareProcessGroup: options.ShareProcessGroup,
+		BinaryPath:        paths.CoreBinary,
+		DataDir:           paths.Root,
+		ConfigPath:        paths.RuntimeConfig,
+		Stdout:            starterStdout,
+		Stderr:            starterStderr,
 	}
 	if options.TrustedCore != nil {
 		mihomoStarter.CommandFactory = options.TrustedCore.RunCommand
@@ -280,20 +284,21 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		PrepareGeoIP: func(ctx context.Context) (runtimeapi.GeoIPCandidate, error) {
 			return geoIPService.PrepareUpdate(ctx)
 		},
-		Onboarding:        onboardingService,
-		Logging:           options.Logging,
-		RefreshLogSecrets: options.RefreshLogSecrets,
-		Panels:            panelService,
-		WebGateway:        webGateway,
-		WebOpenToken:      webCredential,
-		Settings:          settings,
-		SettingsPath:      settingsPath,
-		ServiceStatus:     options.ServiceStatus,
-		OnBackgroundError: options.OnBackgroundError,
-		SysProxy:          sysproxy.Platform(),
-		TunDetect:         tundetect.Platform(),
-		RuntimeConfig:     paths.RuntimeConfig,
-		StagingDir:        paths.SubscriptionStaging,
+		Onboarding:         onboardingService,
+		Logging:            options.Logging,
+		RefreshLogSecrets:  options.RefreshLogSecrets,
+		Panels:             panelService,
+		WebGateway:         webGateway,
+		WebOpenToken:       webCredential,
+		Settings:           settings,
+		SettingsPath:       settingsPath,
+		ServiceStatus:      options.ServiceStatus,
+		InstallationStatus: installationStatusReader(options.InstallationInspect),
+		OnBackgroundError:  options.OnBackgroundError,
+		SysProxy:           sysproxy.Platform(),
+		TunDetect:          tundetect.Platform(),
+		RuntimeConfig:      paths.RuntimeConfig,
+		StagingDir:         paths.SubscriptionStaging,
 		ValidateConfig: func(ctx context.Context, candidatePath string) error {
 			if options.TrustedCore != nil {
 				return protocol.APIError{Code: protocol.CodeInvalidState, Message: "root config requires a generated capability"}
@@ -457,14 +462,15 @@ func BuildValidationRuntime(ctx context.Context, paths platform.Paths, settings 
 		Health:    "ok",
 	})
 	manager := runtimeapi.New(runtimeapi.Options{
-		Store:             store,
-		Settings:          settings,
-		SettingsPath:      options.SettingsPath,
-		Logging:           options.Logging,
-		ServiceStatus:     options.ServiceStatus,
-		OnBackgroundError: options.OnBackgroundError,
-		ValidationMode:    true,
-		ActivationPhase:   options.ActivationPhase,
+		Store:              store,
+		Settings:           settings,
+		SettingsPath:       options.SettingsPath,
+		Logging:            options.Logging,
+		ServiceStatus:      options.ServiceStatus,
+		InstallationStatus: installationStatusReader(options.InstallationInspect),
+		OnBackgroundError:  options.OnBackgroundError,
+		ValidationMode:     true,
+		ActivationPhase:    options.ActivationPhase,
 	})
 	return &RuntimeAssembly{Manager: manager, Store: store, SetupRequired: setupRequired}, nil
 }

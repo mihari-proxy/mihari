@@ -18,7 +18,7 @@ import sys
 import time
 import secrets
 
-from unix_security import PREFIX, COMMON, SUPPLEMENTAL, finish, verify
+from unix_security import PREFIX, COMMON, SUPPLEMENTAL, DARWIN_SUPPLEMENTAL, finish, verify
 
 MARKER = ".mihari-security-owner.json"
 SCHEMA = "mihari.unix-security-owner/v1"
@@ -424,6 +424,75 @@ def prepare_resources(args,root,results,run,ledger,manifest):
 
 
 
+def cleanup_launchd_jobs(root, run_id):
+    """Recover only this isolated run's durably recorded launchd fixtures."""
+    if not re.fullmatch(r"[a-f0-9]{12}", run_id):
+        raise PermissionError("invalid launchd fixture run")
+    directory = root/"launchd-jobs"
+    try:
+        os.lstat(directory)
+    except FileNotFoundError:
+        return
+    trusted_chain(directory)
+    observed = identity(directory)
+    if observed["uid"] != 0 or observed["mode"] != 0o700:
+        raise PermissionError("invalid launchd fixture directory")
+    for path in sorted(directory.iterdir()):
+        if not re.fullmatch(r"[a-f0-9]{16}\.json", path.name):
+            raise PermissionError("unknown launchd fixture record")
+        nonce = path.stem
+        label = "com.mihari.security."+run_id+".shared-group."+nonce
+        plist = str(root/("launchd-bootout-"+nonce)/"job.plist")
+        def read_record():
+            record = read_private(path)
+            if (not isinstance(record, dict) or set(record) != {"schema", "label", "plist", "pgid"}
+                    or record["schema"] != "mihari.security-launchd-job/v1"
+                    or record["label"] != label or record["plist"] != plist
+                    or type(record["pgid"]) is not int
+                    or record["pgid"] not in (0,) and not 1 < record["pgid"] <= 2147483647):
+                raise PermissionError("invalid launchd fixture record")
+            return record
+        def launchctl(*args):
+            return subprocess.run(["/bin/launchctl", *args, "system/"+label],
+                                  capture_output=True, check=False, timeout=8,
+                                  env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"}).returncode
+        def absent():
+            status = launchctl("print")
+            if status not in (0, 113):
+                raise OSError("cannot inspect isolated launchd job")
+            return status == 113
+        before = read_record()
+        if not absent():
+            # A concurrent natural exit can make bootout fail. Its return value
+            # is never the absence proof; the bounded print check below is.
+            launchctl("bootout")
+            deadline = time.monotonic()+10
+            while not absent():
+                if time.monotonic() >= deadline:
+                    raise OSError("isolated launchd job remains loaded")
+                time.sleep(0.1)
+        # The helper publishes its PGID before starting descendants. Re-read
+        # after unload to cover a publication racing the first record read.
+        after = read_record()
+        if before["pgid"] and after["pgid"] != before["pgid"]:
+            raise PermissionError("launchd fixture group identity changed")
+        if not after["pgid"]:
+            # print-not-found does not join a helper that may still publish.
+            # Keep the anchor for a later retry, even if bootstrap itself failed.
+            raise OSError("isolated launchd group was not published")
+        deadline = time.monotonic()+10
+        while True:
+            try:
+                os.killpg(after["pgid"], 0)
+            except ProcessLookupError:
+                break
+            # Never signal a historical group; unknown or reused groups
+            # retain the marked anchor and fail cleanup.
+            if time.monotonic() >= deadline:
+                raise OSError("isolated launchd group remains")
+            time.sleep(0.1)
+
+
 class Host:
     def __init__(self, run):
         self.run = run
@@ -477,6 +546,8 @@ class Host:
                     time.sleep(0.1)
                 else:
                     raise OSError("owned process did not terminate")
+            if sys.platform == "darwin":
+                cleanup_launchd_jobs(self.root, self.run["run_id"])
         elif stage == "mounts":
             # Linux bind mounts live exclusively in a verified private namespace.
             # The owning process is joined first; namespace destruction removes
@@ -596,8 +667,10 @@ def run_tests(args):
             # Full assembly owns fresh B, then retain its completed fixture under
             # an identity-checked new name. No deletion/marker edit is involved.
             phases = [("cmd/mihari", ["TestUnixSecurity_FullAssembly"], False)]
-            for package in ["internal/platform", "internal/control/transport", "internal/integration", "internal/app", "internal/service", "internal/core"]:
+            for package in ["internal/platform", "internal/control/transport", "internal/integration", "internal/app", "internal/service", "internal/core", "internal/supervisor"]:
                 names = list(COMMON.get(package, []))+list(SUPPLEMENTAL.get(package, []))
+                if sys.platform == "darwin":
+                    names.extend(DARWIN_SUPPLEMENTAL.get(package, []))
                 if package == "internal/platform":
                     names.append("TestSecurityBindMountDenied" if sys.platform == "linux" else "TestSecurityDarwinACLABI")
                 phases.append((package, names, False))

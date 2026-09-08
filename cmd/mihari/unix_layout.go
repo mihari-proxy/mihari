@@ -88,20 +88,22 @@ func executeProcess(ctx context.Context, args []string, stdout, stderr io.Writer
 				return runUnixDaemon(ctx, layout, uid, phase, installer)
 			})
 		}
-		deps.RunSystemServiceDaemon = func(ctx context.Context) error {
+		runSystemService := func(ctx context.Context, shareProcessGroup bool) error {
 			return app.RunUnixSystemService(ctx, layout, func(ctx context.Context, phase string) error {
-				return runUnixDaemonWithGate(ctx, layout, uid, phase, installer, app.InspectUnixServiceActivation)
+				return runUnixDaemonWithGate(ctx, layout, uid, phase, installer, app.InspectUnixServiceActivation, shareProcessGroup)
 			})
 		}
+		deps.RunSystemServiceDaemon = func(ctx context.Context) error { return runSystemService(ctx, false) }
+		deps.RunLaunchdServiceDaemon = launchdServiceDaemon(runSystemService)
 		return deps, nil
 	})
 }
 
 func runUnixDaemon(ctx context.Context, layout platform.ResolvedLayout, uid uint32, phase string, installer *app.UnixInstaller) error {
-	return runUnixDaemonWithGate(ctx, layout, uid, phase, installer, app.InspectUnixActivation)
+	return runUnixDaemonWithGate(ctx, layout, uid, phase, installer, app.InspectUnixActivation, false)
 }
 
-func runUnixDaemonWithGate(ctx context.Context, layout platform.ResolvedLayout, uid uint32, phase string, installer *app.UnixInstaller, inspect func(context.Context, platform.ResolvedLayout) (string, bool, error)) (resultErr error) {
+func runUnixDaemonWithGate(ctx context.Context, layout platform.ResolvedLayout, uid uint32, phase string, installer *app.UnixInstaller, inspect func(context.Context, platform.ResolvedLayout) (string, bool, error), shareProcessGroup bool) (resultErr error) {
 	// Foreground/activation gate has completed before this first data-creating
 	// capability. Security failures return directly, never through degraded mode.
 	lease, err := platform.AcquireDaemonLease(ctx, layout)
@@ -152,7 +154,7 @@ func runUnixDaemonWithGate(ctx context.Context, layout platform.ResolvedLayout, 
 	if err != nil {
 		return errors.Join(err, logRoot.Close())
 	}
-	deps := daemonRunDeps{Paths: layout.Data, PrivateFS: fs, Token: token, Version: buildinfo.Version, Endpoint: layout.ControlEndpoint, ActivationPhase: phase, MachineSnapshot: layout.Mode == platform.SystemMode, ServiceStatus: func() (string, error) { s, e := installer.Status(); return string(s), e }, Listen: func(ctx context.Context) (net.Listener, error) { return transport.ListenOwned(ctx, layout, lease) }}
+	deps := daemonRunDeps{Paths: layout.Data, PrivateFS: fs, Token: token, Version: buildinfo.Version, Endpoint: layout.ControlEndpoint, ActivationPhase: phase, ShareProcessGroup: shareProcessGroup, MachineSnapshot: layout.Mode == platform.SystemMode, ServiceStatus: func() (string, error) { s, e := installer.Status(); return string(s), e }, Listen: func(ctx context.Context) (net.Listener, error) { return transport.ListenOwned(ctx, layout, lease) }}
 	if uid == 0 {
 		deps.PrepareRuntime = func(ctx context.Context, settings config.Settings) (app.RuntimeBuildOptions, error) {
 			trusted, err := core.NewTrustedExecution(ctx, data, nil)

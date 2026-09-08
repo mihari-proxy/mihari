@@ -35,18 +35,19 @@ func BuildUnixDefinition(layout platform.ResolvedLayout, goos string) (Definitio
 		}
 		body.WriteString("Restart=on-failure\nKillMode=control-group\n\n[Install]\nWantedBy=multi-user.target\n")
 	case "darwin":
+		def.Args = append(def.Args, "--launchd-process-group")
 		file.Path, file.Kind = defaultPlistPath, "plist"
 		escape := func(value string) string {
 			var b bytes.Buffer
 			_ = xml.EscapeText(&b, []byte(value))
 			return b.String()
 		} // bytes.Buffer cannot fail.
-		body.WriteString(`<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>Label</key><string>mihari</string><key>ProgramArguments</key><array><string>` + escape(def.Binary) + `</string><string>daemon</string><string>--system-service</string></array><key>EnvironmentVariables</key><dict>`)
+		body.WriteString(`<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>Label</key><string>mihari</string><key>ProgramArguments</key><array><string>` + escape(def.Binary) + `</string><string>daemon</string><string>--system-service</string><string>--launchd-process-group</string></array><key>EnvironmentVariables</key><dict>`)
 		for _, env := range def.Env {
 			key, value, _ := strings.Cut(env, "=")
 			body.WriteString("<key>" + escape(key) + "</key><string>" + escape(value) + "</string>")
 		}
-		body.WriteString("</dict><key>RunAtLoad</key><true/><key>KeepAlive</key><true/></dict></plist>")
+		body.WriteString("</dict><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>AbandonProcessGroup</key><false/></dict></plist>")
 	default:
 		return Definition{}, invalidServiceState("unsupported service manager")
 	}

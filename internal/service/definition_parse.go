@@ -216,6 +216,13 @@ func rejectStrangeExec(argv []string) error {
 	return nil
 }
 
+func rejectStrangeLaunchdExec(argv []string) error {
+	if len(argv) == 4 && argv[3] == "--launchd-process-group" {
+		return rejectStrangeExec(argv[:3])
+	}
+	return rejectStrangeExec(argv)
+}
+
 func parseSystemdShow(raw []byte) (map[string]string, error) {
 	out := make(map[string]string, 8)
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
@@ -270,8 +277,15 @@ func parseLaunchdPlist(raw []byte) (parsedExec, error) {
 			argv[0] = prog
 		}
 	}
-	if err := rejectStrangeExec(argv); err != nil {
+	if err := rejectStrangeLaunchdExec(argv); err != nil {
 		return parsedExec{}, err
+	}
+	if value, present := values["AbandonProcessGroup"]; present {
+		if abandon, ok := value.(bool); !ok || abandon {
+			return parsedExec{}, invalidServiceState("service definition is unsupported")
+		}
+	} else if len(argv) == 4 {
+		return parsedExec{}, invalidServiceState("service definition is unsupported")
 	}
 	var env []string
 	if vars, ok := values["EnvironmentVariables"].(map[string]any); ok {

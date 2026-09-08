@@ -7,6 +7,42 @@ import (
 	"github.com/mihari-proxy/mihari/internal/service"
 )
 
+func recoveryStopAuthority(journal InstallJournal, old, target service.Definition, recordedBoot, currentBoot string) (service.Definition, string) {
+	final := old
+	if journal.RecoveryAuthority == InstallAuthorityTarget {
+		final = target
+	}
+	// The backup describes the generation before stop. A completed installed
+	// state, or a possibly executed bootstrap, cannot prove a later vanished
+	// generation exited. Keep it explicitly unknown in the current boot.
+	unknown := journal.Phase == InstallPhaseComplete && final.Status != service.StatusNotInstalled
+	for _, action := range journal.Actions {
+		if journal.RecoveryAuthority == InstallAuthorityTarget && action.Kind == JournalActionStart || journal.RecoveryAuthority == InstallAuthoritySource && action.Kind == JournalActionRestoreStart {
+			unknown = true
+		}
+	}
+	if unknown {
+		final.Process = service.ProcessIdentity{}
+		if final.Status == service.StatusNotInstalled {
+			final.Status = service.StatusUnknown
+		}
+		return final, currentBoot
+	}
+	return old, recordedBoot
+}
+
+func (x *InstallTransaction) bindRecoveryStopAuthority() {
+	if x.preparedAuthority == nil {
+		return
+	}
+	if binder, ok := x.Service.(interface {
+		BindStopAuthority(service.Definition, string)
+	}); ok {
+		def, boot := recoveryStopAuthority(x.journal, x.preparedAuthority.OldDefinition, x.preparedAuthority.TargetDefinition, x.journal.BootID, x.Artifacts.BootID)
+		binder.BindStopAuthority(def, boot)
+	}
+}
+
 // RecoverLocked restores a durable journal under a borrowed install lease.
 func (x *InstallTransaction) RecoverLocked(ctx context.Context, lease InstallLease) error {
 	if err := ctx.Err(); err != nil {
@@ -67,6 +103,7 @@ func CheckDaemonInstallJournal(journal InstallJournal) error {
 }
 
 func (x *InstallTransaction) rollback(ctx context.Context) error {
+	x.bindRecoveryStopAuthority()
 	if x.serviceEffects != nil {
 		x.recoveringSource = true
 		defer func() { x.recoveringSource = false }()
@@ -136,6 +173,12 @@ func (x *InstallTransaction) rollback(ctx context.Context) error {
 }
 
 func (x *InstallTransaction) rollforward(ctx context.Context) error {
+	x.bindRecoveryStopAuthority()
+	if verifier, ok := x.Service.(interface{ WaitRecordedTreeExit(context.Context) error }); ok {
+		if err := verifier.WaitRecordedTreeExit(ctx); err != nil {
+			return err
+		}
+	}
 	actions := append([]JournalAction(nil), x.journal.Actions...)
 	for _, action := range actions {
 		if err := x.finishAction(ctx, action); err != nil {

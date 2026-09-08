@@ -110,7 +110,7 @@ func (s *nativeInstallSession) loadState(ctx context.Context) (bool, error) {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return false, invalidInstallJournal()
 	}
-	if state.TransactionID != journal.TransactionID || state.Layout.Data.Root != journal.DataRoot || state.Layout.InstallRoot != journal.InstallPath || state.Layout.ControlEndpoint != journal.EndpointPath || state.Layout.CredentialPath != journal.CredentialPath || state.DataAction != journal.DataAction {
+	if state.TransactionID != journal.TransactionID || state.BootID != journal.BootID || state.Layout.Data.Root != journal.DataRoot || state.Layout.InstallRoot != journal.InstallPath || state.Layout.ControlEndpoint != journal.EndpointPath || state.Layout.CredentialPath != journal.CredentialPath || state.DataAction != journal.DataAction {
 		return false, unknownInstallState()
 	}
 	if ref == transactionRef+"unit-bootstrap" && (!state.Foreground || state.DataStage != "" || len(state.Files) != 0 || len(state.ServiceFiles) != 0 || len(state.DataParts) != 0 || len(journal.Actions) != 0 || journal.RecoveryAuthority != InstallAuthoritySource) {
@@ -125,6 +125,7 @@ func (s *nativeInstallSession) loadState(ctx context.Context) (bool, error) {
 		s.layout = state.Layout
 	}
 	s.state = state
+	s.tx.journal = journal
 	s.bindState(journal.ServiceBackup)
 	return true, nil
 }
@@ -133,6 +134,15 @@ func (s *nativeInstallSession) bindState(backup ServiceBackup) {
 	s.tx.Artifacts = InstallArtifacts{BootID: currentBoot, DataAction: s.state.DataAction, Source: s.state.Source, Target: s.state.Layout.Data.Root, DataRoot: s.state.Layout.Data.Root, Install: s.state.Layout.InstallRoot, Endpoint: s.state.Layout.ControlEndpoint, Credential: s.state.Layout.CredentialPath, OldRunning: s.state.OldDefinition.Running, OldEnabled: s.state.OldDefinition.Enabled, TargetRunning: s.state.TargetDefinition.Running, TargetEnabled: s.state.TargetDefinition.Enabled}
 	s.tx.preparedAuthority = &installPreparedAuthority{Source: s.state.SourceObject, Target: s.state.TargetObject, Install: s.state.InstallObject, ServiceBackup: backup, OldDefinition: s.state.OldDefinition, TargetDefinition: s.state.TargetDefinition}
 	if !s.state.Foreground {
+		if binder, ok := s.tx.Service.(interface {
+			BindStopAuthority(service.Definition, string)
+		}); ok {
+			def, boot := s.state.OldDefinition, s.state.BootID
+			if s.tx.journal.TransactionID == s.state.TransactionID {
+				def, boot = recoveryStopAuthority(s.tx.journal, def, s.state.TargetDefinition, boot, currentBoot)
+			}
+			binder.BindStopAuthority(def, boot)
+		}
 		s.tx.serviceEffects = &installServiceEffects{files: &nativeServiceFiles{objects: s.state.ServiceFiles, recordedBoot: s.state.BootID, currentBoot: currentBoot}, adapter: s.tx.Service.(service.RecoveryAdapter), old: s.state.OldDefinition, target: s.state.TargetDefinition}
 	} else {
 		s.tx.serviceEffects = nil

@@ -31,6 +31,19 @@ def test_complete_native_evidence_passes():
     assert result["passed"], result
 
 
+def test_darwin_requires_real_shared_group_and_launchd_evidence():
+    required = set(security.required("darwin", supplemental=True))
+    for package, name in [
+        ("internal/platform", "TestDarwinGroupHasPeers_IsolatedProcesses"),
+        ("internal/platform", "TestDarwinWaitChildExit_PreservesZombieAndIgnoresStop"),
+        ("internal/supervisor", "TestDarwinSharedChild_DescendantsAndSignalOwnership"),
+        ("internal/service", "TestDarwinLaunchdIdentity_ActualArgumentsAndGroup"),
+        ("internal/integration", "TestSecurityLaunchdBootoutDrainsSharedProcessGroup"),
+    ]:
+        assert (PREFIX+package, name) in required
+        assert (PREFIX+package, name) not in security.required("linux", supplemental=True)
+
+
 def test_native_failure_coordinates_do_not_publish_test_output():
     events = valid_events()
     events.append({"Action": "output", "Package": PREFIX+"internal/platform", "Test": "TestSecurityCreationACL", "Output": "    unix_security_test.go:42: secret=must-remain-private /private/path\n"})
@@ -124,6 +137,79 @@ def test_linux_cleanup_uses_available_mount_inventory_command(tmp_path, monkeypa
         return "fixture-free mount inventory\n"
     monkeypatch.setattr(host_module.subprocess, "check_output", inventory)
     host.cleanup("mounts")
+
+
+@pytest.mark.parametrize("case", ["gone", "published-during-bootout", "unpublished", "live-group", "query-error", "foreign-label", "foreign-plist", "invalid-pgid"])
+def test_darwin_always_cleanup_joins_recorded_launchd_group(tmp_path, monkeypatch, case):
+    import types
+    import unix_security_host as module
+    root = tmp_path/"anchor"
+    jobs = root/"launchd-jobs"
+    jobs.mkdir(parents=True)
+    nonce, run_id = "1234567890abcdef", "0123456789ab"
+    record_path = jobs/(nonce+".json")
+    label = "com.mihari.security."+run_id+".shared-group."+nonce
+    record = {"schema": "mihari.security-launchd-job/v1", "label": label,
+              "plist": str(root/("launchd-bootout-"+nonce)/"job.plist"), "pgid": 4321}
+    if case in ("published-during-bootout", "unpublished"):
+        record["pgid"] = 0
+    elif case == "foreign-label":
+        record["label"] = "com.mihari.daemon"
+    elif case == "foreign-plist":
+        record["plist"] = "/Library/LaunchDaemons/com.mihari.daemon.plist"
+    elif case == "invalid-pgid":
+        record["pgid"] = True
+    record_path.write_text(json.dumps(record))
+    host = object.__new__(module.Host)
+    host.root, host.results = root, tmp_path/"results"
+    host.run, host.ledger = {"run_id": run_id}, {"processes": []}
+    monkeypatch.setattr(module, "load_run", lambda *args, **kwargs: host.run)
+    monkeypatch.setattr(module, "sys", types.SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(module, "trusted_chain", lambda path: None)
+    monkeypatch.setattr(module, "identity", lambda path: {"uid": 0, "mode": 0o700})
+    monkeypatch.setattr(module, "read_private", lambda path: json.loads(Path(path).read_text()))
+    monkeypatch.setattr(module.time, "sleep", lambda duration: None)
+    ticks = iter(range(1000))
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(ticks))
+    commands, groups = [], []
+    loaded = True
+    def command(argv, **kwargs):
+        nonlocal loaded
+        commands.append(argv)
+        assert argv[0] == "/bin/launchctl" and argv[-1] == "system/"+label
+        if argv[1] == "print":
+            return types.SimpleNamespace(returncode=5 if case == "query-error" else (0 if loaded else 113))
+        assert argv[1] == "bootout"
+        loaded = False
+        if case == "published-during-bootout":
+            record["pgid"] = 4321
+            record_path.write_text(json.dumps(record))
+        return types.SimpleNamespace(returncode=0)
+    def probe(pgid, sig):
+        groups.append((pgid, sig))
+        assert pgid == 4321 and sig == 0
+        if case != "live-group":
+            raise ProcessLookupError()
+    monkeypatch.setattr(module.subprocess, "run", command)
+    monkeypatch.setattr(module.os, "killpg", probe, raising=False)
+    if case in ("gone", "published-during-bootout"):
+        host.cleanup("processes")
+        assert groups == [(4321, 0)]
+        assert any(argv[1] == "bootout" for argv in commands)
+        assert record_path.exists()  # always recovery remains repeatable
+    else:
+        with pytest.raises(OSError):
+            host.cleanup("processes")
+        if case in ("foreign-label", "foreign-plist", "invalid-pgid"):
+            assert commands == [] and groups == []
+        if case == "query-error":
+            assert len(commands) == 1 and groups == []
+        if case == "unpublished":
+            assert groups == [] and record_path.exists()
+            record["pgid"] = 4321  # a late publisher is visible on always retry
+            record_path.write_text(json.dumps(record))
+            host.cleanup("processes")
+            assert groups == [(4321, 0)]
 
 
 @pytest.mark.parametrize("failure", ["processes", "mounts", "accounts", "anchor", "archive"])

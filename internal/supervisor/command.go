@@ -10,6 +10,8 @@ import (
 )
 
 type CommandStarter struct {
+	// ShareProcessGroup keeps a launchd service's core in the daemon's group.
+	ShareProcessGroup bool
 	// CommandFactory binds installed provenance and committed config for root mode.
 	// The returned release closes capabilities after Start, including failure.
 	CommandFactory func(context.Context) (core.CoreCommand, func() error, error)
@@ -29,7 +31,9 @@ func (s CommandStarter) Start() (Child, error) {
 	defer func() { _ = release() }() // Read-only verification handles; a started child remains owned even if descriptor cleanup reports an error.
 	command.Stdout = s.Stdout
 	command.Stderr = s.Stderr
-	prepareChild(command)
+	if err := prepareChildMode(command, s.ShareProcessGroup); err != nil {
+		return nil, err
+	}
 	if err := command.Start(); err != nil {
 		return nil, fmt.Errorf("start mihomo: %w", err)
 	}
@@ -38,7 +42,7 @@ func (s CommandStarter) Start() (Child, error) {
 		_ = command.Wait()
 		return nil, fmt.Errorf("track mihomo child: %w", err)
 	}
-	return &processChild{command: command}, nil
+	return startedChild(command, s.ShareProcessGroup), nil
 }
 
 func commandArguments(dataDir, configPath string) []string {

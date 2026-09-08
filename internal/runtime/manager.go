@@ -122,6 +122,8 @@ type Options struct {
 	// Optional; nil reports "unknown". Injected as a func (not *service.Manager) to keep
 	// runtime free of the service package and break the main↔daemon assembly cycle.
 	ServiceStatus func() (string, error)
+	// InstallationStatus is a read-only app inspector; nil reports unknown.
+	InstallationStatus func(context.Context) (protocol.InstallationStatus, error)
 	// OnBackgroundError receives non-cancellation failures from the web gateway
 	// and owned scheduler. Optional; nil keeps the previous discard behavior.
 	OnBackgroundError func(component string, err error)
@@ -174,6 +176,7 @@ type Manager struct {
 	settingsPath              string
 	saveSettings              func(string, config.Settings) (config.CommitResult, error)
 	serviceStatus             func() (string, error)
+	installationStatus        func(context.Context) (protocol.InstallationStatus, error)
 	onBackgroundError         func(component string, err error)
 	validationMode            bool
 	activationPhase           string
@@ -242,40 +245,41 @@ func New(options Options) *Manager {
 		rootConfigInput:   options.RootConfigInput,
 		providerResources: newProviderResourceRuntime(options.Resources, options.TrustedCore),
 
-		store:             store,
-		coordinator:       coordinator,
-		installer:         options.Installer,
-		installRequest:    options.InstallRequest,
-		supervisor:        options.Supervisor,
-		controller:        options.Controller,
-		binaryExists:      binaryExists,
-		subscriptions:     options.Subscriptions,
-		preferences:       options.Preferences,
-		settings:          settings,
-		runtimeConfig:     options.RuntimeConfig,
-		stagingDir:        options.StagingDir,
-		validateConfig:    options.ValidateConfig,
-		runScheduler:      options.RunScheduler,
-		geoip:             options.GeoIP,
-		prepareGeoIP:      options.PrepareGeoIP,
-		onboarding:        options.Onboarding,
-		logging:           options.Logging,
-		refreshLogSecrets: options.RefreshLogSecrets,
-		panels:            options.Panels,
-		webGateway:        options.WebGateway,
-		webOpenToken:      options.WebOpenToken,
-		sysProxy:          sysProxy,
-		tunDetect:         tunDetect,
-		lookupOccupant:    lookupOccupant,
-		settingsPath:      options.SettingsPath,
-		saveSettings:      saveSettings,
-		serviceStatus:     options.ServiceStatus,
-		onBackgroundError: options.OnBackgroundError,
-		validationMode:    options.ValidationMode,
-		activationPhase:   options.ActivationPhase,
-		maintenance:       make(chan struct{}, 1),
-		installed:         make(chan struct{}, 1),
-		operations:        make(map[string]*operationEntry),
+		store:              store,
+		coordinator:        coordinator,
+		installer:          options.Installer,
+		installRequest:     options.InstallRequest,
+		supervisor:         options.Supervisor,
+		controller:         options.Controller,
+		binaryExists:       binaryExists,
+		subscriptions:      options.Subscriptions,
+		preferences:        options.Preferences,
+		settings:           settings,
+		runtimeConfig:      options.RuntimeConfig,
+		stagingDir:         options.StagingDir,
+		validateConfig:     options.ValidateConfig,
+		runScheduler:       options.RunScheduler,
+		geoip:              options.GeoIP,
+		prepareGeoIP:       options.PrepareGeoIP,
+		onboarding:         options.Onboarding,
+		logging:            options.Logging,
+		refreshLogSecrets:  options.RefreshLogSecrets,
+		panels:             options.Panels,
+		webGateway:         options.WebGateway,
+		webOpenToken:       options.WebOpenToken,
+		sysProxy:           sysProxy,
+		tunDetect:          tunDetect,
+		lookupOccupant:     lookupOccupant,
+		settingsPath:       options.SettingsPath,
+		saveSettings:       saveSettings,
+		serviceStatus:      options.ServiceStatus,
+		installationStatus: options.InstallationStatus,
+		onBackgroundError:  options.OnBackgroundError,
+		validationMode:     options.ValidationMode,
+		activationPhase:    options.ActivationPhase,
+		maintenance:        make(chan struct{}, 1),
+		installed:          make(chan struct{}, 1),
+		operations:         make(map[string]*operationEntry),
 	}
 	manager.maintenance <- struct{}{}
 	if manager.subscriptions != nil {
