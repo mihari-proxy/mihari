@@ -43,6 +43,19 @@ func TestUnixStartup_ActivationMatchesInstallRoot(t *testing.T) {
 	}
 }
 
+func TestUnixStartup_ActivationRejectsDifferentTargetPath(t *testing.T) {
+	journal := mustDecodeJournal(t)
+	layout := platform.ResolvedLayout{Mode: platform.LayoutMode(journal.Mode), Data: platform.Paths{Root: journal.DataRoot}, ControlEndpoint: journal.EndpointPath, CredentialPath: journal.CredentialPath, InstallRoot: journal.InstallPath}
+	journal.RecoveryAuthority = InstallAuthorityTarget
+	journal.TargetPath += "-other"
+	for _, phase := range []string{InstallPhaseActivationCommitted, InstallPhaseComplete} {
+		journal.Phase = phase
+		if _, err := startupJournalPhase(journal, layout); err == nil {
+			t.Fatalf("activation accepted a different target path at %s", phase)
+		}
+	}
+}
+
 func TestUnixStartup_PrivateServiceScopeAndForegroundIsolation(t *testing.T) {
 	layout := platform.ResolvedLayout{Mode: platform.PrivateMode, BaseDir: "/portable", Data: platform.Paths{Root: "/portable"}}
 	defaults := platform.LayoutDefaults{BaseDir: "/system"}

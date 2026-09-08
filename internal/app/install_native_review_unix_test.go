@@ -22,7 +22,7 @@ func TestNativeInstallState_ForegroundDataPreparationKeepsAuthority(t *testing.T
 	if err := s.prepareData(ctx, InstallRequest{}, &nativeReleaseInputs{}); err != nil {
 		t.Fatal(err)
 	}
-	if !s.state.Foreground || s.state.DataAction != InstallDataCreate || s.state.DataHash != sha256Hex(testTxnID) || s.state.DataIdentity == "" {
+	if !s.state.Foreground || s.state.TransactionID != testTxnID || s.state.DataAction != InstallDataCreate || s.state.DataHash != sha256Hex(testTxnID) || s.state.DataIdentity == "" {
 		t.Fatal("preparing data discarded foreground transaction authority")
 	}
 	if err := s.saveState(ctx); err != nil {
@@ -30,6 +30,29 @@ func TestNativeInstallState_ForegroundDataPreparationKeepsAuthority(t *testing.T
 	}
 	if s.tx.serviceEffects != nil {
 		t.Fatal("foreground state required a service adapter")
+	}
+	if s.tx.preparedAuthority.ServiceBackup.Ref != "transactions/"+testTxnID+"/unit" || s.tx.newTransactionID() != testTxnID {
+		t.Fatal("native preparation changed the foreground transaction identity")
+	}
+	stageMarker, err := os.ReadFile(filepath.Join(s.state.DataStage, "locks", "install-data-id"))
+	if err != nil || string(stageMarker) != testTxnID {
+		t.Fatalf("foreground candidate marker lost transaction identity: %v", err)
+	}
+	marker, err := s.tx.Store.CreateTransactionMarker(ctx, testTxnID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := InstallRequest{Operation: InstallOperationInstall, Layout: InstallLayoutSystem}
+	journal, err := s.tx.buildJournal(req, testTxnID, marker, s.tx.preparedArtifacts(req))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.tx.Store.Save(ctx, journal); err != nil {
+		t.Fatal(err)
+	}
+	restored := &nativeInstallSession{layout: layout, tx: &InstallTransaction{Store: s.tx.Store, Artifacts: InstallArtifacts{BootID: testBootID}}}
+	if present, err := restored.loadState(ctx); err != nil || !present || restored.state.TransactionID != journal.TransactionID {
+		t.Fatalf("prepared foreground metadata cannot reload against its journal: present=%v err=%v", present, err)
 	}
 }
 

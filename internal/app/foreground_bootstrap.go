@@ -52,7 +52,7 @@ func (b ForegroundBootstrap) Start(ctx context.Context) (resultErr error) {
 	if err := lease.Validate(ctx); err != nil {
 		return err
 	}
-	if x.Store == nil {
+	if x.Store == nil || x.Store.files == nil {
 		return invalidInstallJournal()
 	}
 	object, err := x.Store.files.inspect(ctx, installJournalFileName)

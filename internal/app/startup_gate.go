@@ -20,7 +20,7 @@ func startupJournalPhase(j InstallJournal, layout platform.ResolvedLayout) (stri
 	if err := CheckDaemonInstallJournal(j); err != nil {
 		return "", err
 	}
-	if j.RecoveryAuthority != InstallAuthorityTarget || (j.Phase != InstallPhaseActivationCommitted && j.Phase != InstallPhaseComplete) || j.Mode != string(layout.Mode) || j.DataRoot != layout.Data.Root || j.InstallPath != layout.InstallRoot || j.EndpointPath != layout.ControlEndpoint || j.CredentialPath != layout.CredentialPath {
+	if j.RecoveryAuthority != InstallAuthorityTarget || (j.Phase != InstallPhaseActivationCommitted && j.Phase != InstallPhaseComplete) || j.Mode != string(layout.Mode) || j.TargetPath != layout.Data.Root || j.DataRoot != layout.Data.Root || j.InstallPath != layout.InstallRoot || j.EndpointPath != layout.ControlEndpoint || j.CredentialPath != layout.CredentialPath {
 		return "", installBusy("install activation does not match this instance")
 	}
 	return j.Phase, nil

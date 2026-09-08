@@ -56,6 +56,20 @@ func TestUnixBootstrap_PreparesRealAuthorityBeforeWAL(t *testing.T) {
 	}
 }
 
+func TestUnixBootstrap_RejectsUninitializedJournalStore(t *testing.T) {
+	for _, store := range []*InstallJournalStore{nil, {}} {
+		h := newInstallHarness(t, InstallDataCreate)
+		h.tx.Store = store
+		bootstrap := ForegroundBootstrap{Root: true, Transaction: h.tx, Run: func(context.Context, string) error {
+			t.Fatal("invalid journal store entered daemon startup")
+			return nil
+		}}
+		if err := bootstrap.Start(context.Background()); err == nil {
+			t.Fatal("invalid journal store accepted")
+		}
+	}
+}
+
 func TestUnixBootstrap_RejectsCompletedJournalForDifferentLayout(t *testing.T) {
 	for _, field := range []string{"mode", "target", "data", "install", "endpoint", "credential", "binary"} {
 		t.Run(field, func(t *testing.T) {
