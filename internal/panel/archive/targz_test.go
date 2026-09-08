@@ -4,8 +4,50 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"testing"
 )
+
+func TestTarGzip_DirectoryPayloadCannotBypassDecompressionLimit(t *testing.T) {
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	payload := make([]byte, 2<<20)
+	if err := tw.WriteHeader(&tar.Header{Name: "directory", Size: int64(len(payload)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Construct an adversarial header that declares a data section for a
+	// directory. archive/tar.Writer correctly refuses to write such a section.
+	data := raw.Bytes()
+	data[156] = tar.TypeDir
+	copy(data[148:156], "        ")
+	var checksum int
+	for _, b := range data[:512] {
+		checksum += int(b)
+	}
+	copy(data[148:156], fmt.Sprintf("%06o\x00 ", checksum))
+	var compressed bytes.Buffer
+	gz := gzip.NewWriter(&compressed)
+	if _, err := gz.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	written := false
+	err := ExtractTarGzipBytes(compressed.Bytes(), Limits{MaxFile: 16, MaxTotal: 32, MaxEntries: 10, MaxDepth: 16}, nil, func(string, []byte) error {
+		written = true
+		return nil
+	})
+	if err == nil || written {
+		t.Fatal("oversized directory payload bypassed bounded decompression")
+	}
+}
 
 func TestTarGzip_ActualReleaseLayoutAndUnsafeEntries(t *testing.T) {
 	for _, tc := range []struct {

@@ -41,8 +41,8 @@ func (p *PreparedUpdate) Recheck() error {
 // CheckPrevious verifies the service snapshot against the exact disk object
 // captured by the activation owner before staging its replacement.
 func (p *PreparedUpdate) CheckPrevious(raw []byte) error {
-	var previous persistedState
-	if err := json.Unmarshal(raw, &previous); err != nil || previous.Schema != stateSchema || previous.Complete != p.before.Complete {
+	previous, err := decodeState(raw)
+	if err != nil || previous != p.before {
 		return dataError("onboarding changed during activation")
 	}
 	return nil

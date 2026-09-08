@@ -129,6 +129,10 @@ func loadState(path string) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
+	return decodeState(raw)
+}
+
+func decodeState(raw []byte) (State, error) {
 	if len(raw) > maxStateSize {
 		return State{}, dataError("onboarding state is too large")
 	}

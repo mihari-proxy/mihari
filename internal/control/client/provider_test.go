@@ -26,6 +26,22 @@ type sequenceProvider struct {
 	err   error
 }
 
+func TestProvider_StreamCredentialCancellationEndsNormally(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	provider := &sequenceProvider{err: context.Canceled}
+	c := NewHTTPWithCredentialProvider("http://mihari", provider, &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("canceled credential lookup must not dial")
+		return nil, errors.New("unexpected dial")
+	})})
+	if err := c.Stream(ctx, "logs", func(protocol.StreamEvent) error {
+		t.Fatal("canceled stream delivered an event")
+		return nil
+	}); err != nil {
+		t.Fatalf("stream cancellation should terminate normally: %v", err)
+	}
+}
+
 type failNextWriteConn struct {
 	net.Conn
 	fail *atomic.Bool

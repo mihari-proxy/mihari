@@ -273,6 +273,9 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 	header := http.Header{}
 	token, err := c.requestToken(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return err
 	}
 	header.Set("Authorization", "Bearer "+token)

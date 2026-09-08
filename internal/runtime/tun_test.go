@@ -269,6 +269,24 @@ func TestEnableTunRejectsStaleRevision(t *testing.T) {
 	}
 }
 
+func TestEnableTun_ManagedRevisionPrecedesAdapterConflict(t *testing.T) {
+	controller := &fakeController{configs: map[string]any{}}
+	manager := newTunManagerWithDetect(t, controller, defaultTunSettings(nil), &tundetect.FakeBackend{
+		Detection: tundetect.Detection{TunInterfaces: []string{"foreign-tun"}},
+	})
+	manager.providerResources = &fakeProviderResources{}
+	manager.store.Store(state.Snapshot{Revision: 5, Health: "ok"})
+	stale := uint64(4)
+	_, err := manager.EnableTun(context.Background(), Operation{ID: "managed-stale", Source: "test", IfRevision: &stale}, false)
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodeRevisionConflict {
+		t.Fatalf("stale managed TUN must reject its precondition first: %v", err)
+	}
+	if controller.patchCalls != 0 || len(manager.settingsSnapshot().Tun) != 0 {
+		t.Fatal("stale managed TUN mutated configuration")
+	}
+}
+
 func TestTunPreCommitFailureSkipsControllerApplySettings(t *testing.T) {
 	controller := &fakeController{configs: map[string]any{}}
 	settings := defaultTunSettings(nil)

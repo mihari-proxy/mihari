@@ -29,7 +29,7 @@ func (c *settingsResourceChange) PublishLocked() { c.manager.publishSettings(c.c
 func (c *subscriptionUseChange) PrepareLocked(ctx context.Context, p *subscription.PreparedResources) error {
 	id, generation := p.Identity()
 	if id != c.id {
-		return resourceActivationDegraded()
+		return protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "subscription changed during resource preparation"}
 	}
 	var err error
 	c.durable, err = c.manager.subscriptions.StageUse(ctx, p, id, generation)
@@ -41,7 +41,7 @@ func (c *subscriptionUseChange) PublishLocked()       { c.after = c.durable.Publ
 func (c *subscriptionRefreshChange) PrepareLocked(ctx context.Context, p *subscription.PreparedResources) error {
 	id, generation := p.Identity()
 	if id != c.wantID || generation != c.wantGen {
-		return resourceActivationDegraded()
+		return protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "subscription changed during resource preparation"}
 	}
 	var err error
 	c.durable, err = c.manager.subscriptions.StageRefresh(ctx, p, c.prepared, id, generation)

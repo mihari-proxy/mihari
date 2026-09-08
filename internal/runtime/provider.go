@@ -414,10 +414,18 @@ func (m *Manager) prepareManagedCurrent(ctx context.Context, settings config.Set
 }
 
 func (m *Manager) mutateTunManaged(ctx context.Context, op Operation, enable, force bool) (protocol.TunStatus, error) {
-	if err := ctx.Err(); err != nil {
+	if err := m.lockMutation(ctx); err != nil {
+		return protocol.TunStatus{}, err
+	}
+	err := m.checkIfRevision(op.IfRevision)
+	m.unlock()
+	if err != nil {
 		return protocol.TunStatus{}, err
 	}
 	conflict := m.detectTunConflict(ctx)
+	if err := ctx.Err(); err != nil {
+		return protocol.TunStatus{}, err
+	}
 	if enable && !force && conflict != nil && len(conflict.OtherTunInterfaces) > 0 {
 		return protocol.TunStatus{}, protocol.APIError{Code: protocol.CodeTunConflict, Message: "other TUN adapters detected; routing conflict or loop risk", Details: map[string]any{"other_tun_interfaces": conflict.OtherTunInterfaces, "other_mihomo_processes": conflict.OtherMihomoProcesses}}
 	}
