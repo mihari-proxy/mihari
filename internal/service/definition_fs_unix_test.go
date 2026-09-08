@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -80,5 +81,31 @@ func TestNativeDefinitionStore_RestoresOriginalBytesAndMode(t *testing.T) {
 	}
 	if len(names) != 1 {
 		t.Fatal("private publication temporaries leaked")
+	}
+}
+
+func TestNativeDefinitionStore_ReadLinkRejectsUnrestorableTarget(t *testing.T) {
+	if os.Getenv("MIHARI_NATIVE_INSTALL_TEST") != "1" || os.Geteuid() != 0 {
+		t.Skip("isolated native root fixture is not enabled")
+	}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured := filepath.Join(root, "mihari.service")
+	store := osDefinitionStore{systemdUnitFile: configured}
+	for n, target := range []string{configured, defaultDevNull, "/unconfigured/mihari.service"} {
+		name := filepath.Join(root, fmt.Sprintf("enable-%d", n))
+		if err := os.Symlink(target, name); err != nil {
+			t.Fatal(err)
+		}
+		got, err := store.ReadLink(context.Background(), name)
+		if n == 2 {
+			if !errors.Is(err, os.ErrPermission) || got != "" {
+				t.Fatalf("unrestorable target accepted: %q %v", got, err)
+			}
+		} else if err != nil || got != target {
+			t.Fatalf("restorable target rejected: %q %v", got, err)
+		}
 	}
 }

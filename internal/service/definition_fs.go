@@ -69,11 +69,7 @@ func (osDefinitionStore) Write(ctx context.Context, file DefinitionFile) (err er
 	return parent.WriteServiceEntry(ctx, path.Base(file.Path), file.Bytes, "", file.Mode, old)
 }
 func (s osDefinitionStore) Mask(ctx context.Context, name, target string) (err error) {
-	unitFile := s.systemdUnitFile
-	if unitFile == "" {
-		unitFile = defaultSystemdUnitFile
-	}
-	if !unixAbs(target) || path.Clean(target) != target || (target != defaultDevNull && target != unitFile) {
+	if !allowedDefinitionLink(s.systemdUnitFile, target) {
 		return os.ErrPermission
 	}
 	parent, err := platform.OpenTrustedParent(ctx, path.Dir(name), 0)
@@ -99,7 +95,7 @@ func (osDefinitionStore) Remove(ctx context.Context, name string) (err error) {
 	}
 	return parent.RemoveServiceEntry(ctx, path.Base(name), old)
 }
-func (osDefinitionStore) ReadLink(ctx context.Context, name string) (link string, err error) {
+func (s osDefinitionStore) ReadLink(ctx context.Context, name string) (link string, err error) {
 	parent, err := platform.OpenTrustedParent(ctx, path.Dir(name), 0)
 	if err != nil {
 		return "", err
@@ -112,10 +108,7 @@ func (osDefinitionStore) ReadLink(ctx context.Context, name string) (link string
 	if !entry.Present {
 		return "", os.ErrNotExist
 	}
-	if entry.Link == "" {
-		return "", os.ErrInvalid
-	}
-	return entry.Link, nil
+	return checkedDefinitionLink(s.systemdUnitFile, entry.Link)
 }
 func (osDefinitionStore) List(ctx context.Context, dir string) (names []string, err error) {
 	parent, err := platform.OpenTrustedParent(ctx, dir, 0)
