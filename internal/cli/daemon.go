@@ -21,7 +21,7 @@ func newDaemonCommand(dependencies Dependencies) *cobra.Command {
 				return invalidArgument("service and validation startup modes are mutually exclusive")
 			}
 			if command.Flags().Changed("launchd-process-group") {
-				if !launchdProcessGroup || !systemService || command.Flags().Changed("install-validation") || dependencies.RunLaunchdServiceDaemon == nil {
+				if !launchdProcessGroup || !systemService || dependencies.RunLaunchdServiceDaemon == nil {
 					return invalidArgument("launchd process group requires the installed launchd service")
 				}
 				return dependencies.RunLaunchdServiceDaemon(command.Context())
