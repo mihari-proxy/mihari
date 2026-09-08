@@ -24,8 +24,6 @@ func (d *Downloader) Download(ctx context.Context, spec ProviderSpec, mode strin
 	return d.downloadManaged(ctx, spec, mode, limit)
 }
 func (d *Downloader) downloadManaged(ctx context.Context, spec ProviderSpec, mode string, limit int64) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
 	if mode != ProxyModeDirect && mode != ProxyModeProxy && mode != ProxyModeAuto {
 		return nil, dataError("invalid provider transport")
 	}
@@ -36,6 +34,8 @@ func (d *Downloader) downloadManaged(ctx context.Context, spec ProviderSpec, mod
 	var last error
 	for _, selected := range order {
 		client := *selected
+		// Each attempt gets its own deadline; a proxy timeout must leave the
+		// caller's context live for auto mode's direct fallback.
 		client.Timeout = 30 * time.Second
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			if len(via) > 5 {

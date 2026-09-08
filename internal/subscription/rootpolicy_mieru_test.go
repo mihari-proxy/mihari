@@ -1,11 +1,41 @@
 package subscription
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"strings"
 	"testing"
 )
+
+func TestRootPolicy_MieruPatternBoundsRepeatedNonceFields(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		count int
+		valid bool
+	}{
+		{"at decoded field budget", 65536, true},
+		{"over decoded field budget", 65537, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Nonce field 5 may be an empty hex string. Tiny legal frames must
+			// not expand into an unbounded number of typed value allocations.
+			nonce := bytes.Repeat([]byte{0x2a, 0}, tc.count)
+			pattern := binary.AppendUvarint([]byte{0x22}, uint64(len(nonce)))
+			pattern = append(pattern, nonce...)
+			encoded := base64.StdEncoding.EncodeToString(pattern)
+			got, err := validateMieruPattern(context.Background(), encoded)
+			if tc.valid {
+				if err != nil || got != encoded {
+					t.Fatalf("bounded repeated nonce values changed: %v", err)
+				}
+			} else if err == nil || got != "" {
+				t.Fatal("tiny repeated nonce frames bypassed decoded field budget")
+			}
+		})
+	}
+}
 
 func TestRootPolicy_MieruNameRequiredByConsumer(t *testing.T) {
 	for _, provider := range []bool{false, true} {

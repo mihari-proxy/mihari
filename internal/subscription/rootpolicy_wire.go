@@ -22,6 +22,9 @@ const (
 type policyWireSpec struct {
 	kind     policyWireKind
 	repeated bool
+	// maxCount bounds decoded repetition where tiny frames can amplify memory.
+	// Zero leaves the count governed by the enclosing resource's byte budget.
+	maxCount int
 	oneof    uint8
 	min, max int64
 	maxUint  uint64
@@ -41,7 +44,7 @@ type policyWireValue struct {
 // decodePolicyWire handles only the finite schemas used by Geo and Mieru.
 func decodePolicyWire(ctx context.Context, input []byte, schema map[uint32]policyWireSpec, field string) ([]policyWireValue, error) {
 	var values []policyWireValue
-	seen, oneofs := make(map[uint32]bool), make(map[uint8]bool)
+	seen, oneofs := make(map[uint32]int), make(map[uint8]bool)
 	for len(input) != 0 {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -53,10 +56,10 @@ func decodePolicyWire(ctx context.Context, input []byte, schema map[uint32]polic
 		input = input[n:]
 		number := uint32(tag >> 3)
 		spec, ok := schema[number]
-		if !ok || (seen[number] && !spec.repeated) || (spec.oneof != 0 && oneofs[spec.oneof]) {
+		if !ok || (seen[number] != 0 && !spec.repeated) || (spec.maxCount > 0 && seen[number] >= spec.maxCount) || (spec.oneof != 0 && oneofs[spec.oneof]) {
 			return nil, policyFailure(field)
 		}
-		seen[number] = true
+		seen[number]++
 		if spec.oneof != 0 {
 			oneofs[spec.oneof] = true
 		}

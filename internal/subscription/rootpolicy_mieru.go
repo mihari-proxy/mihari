@@ -113,7 +113,9 @@ func mieruPatternWireSchema() map[uint32]policyWireSpec {
 		4: {kind: wireMessage, message: map[uint32]policyWireSpec{
 			1: {kind: wireUnsigned, maxUint: 3}, 2: {kind: wireBool},
 			3: {kind: wireInt32, min: 0, max: 12}, 4: {kind: wireInt32, min: 0, max: 12},
-			5: {kind: wireString, repeated: true},
+			// This is the pattern's only repeated field. Bound its typed nodes
+			// before allocation independently of the 16 MiB encoded byte limit.
+			5: {kind: wireString, repeated: true, maxCount: 1 << 16},
 		}},
 		5: {kind: wireMessage, message: map[uint32]policyWireSpec{
 			1: {kind: wireInt32, min: 0, max: 255}, 2: {kind: wireInt32, min: 0, max: 255},

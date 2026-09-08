@@ -2,12 +2,75 @@ package subscription
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 )
+
+type providerRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f providerRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func TestProviderDownloader_AutoFallsBackAfterAttemptTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		proxyCalls, directCalls := 0, 0
+		d := &Downloader{
+			proxy: &http.Client{Transport: providerRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				proxyCalls++
+				<-r.Context().Done()
+				return nil, r.Context().Err()
+			})},
+			direct: &http.Client{Transport: providerRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				directCalls++
+				// synctest advances this clock without a wall-clock delay.
+				time.Sleep(time.Second)
+				if err := r.Context().Err(); err != nil {
+					return nil, err
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("provider")), Header: make(http.Header)}, nil
+			})},
+		}
+		start := time.Now()
+		got, err := d.Download(context.Background(), ProviderSpec{URL: "https://provider.test/source"}, ProxyModeAuto)
+		if err != nil || string(got) != "provider" || proxyCalls != 1 || directCalls != 1 {
+			t.Fatalf("proxy timeout prevented direct fallback: content=%q proxy=%d direct=%d err=%v", got, proxyCalls, directCalls, err)
+		}
+		if elapsed := time.Since(start); elapsed != 31*time.Second {
+			t.Fatalf("attempt deadline was not enforced: %v", elapsed)
+		}
+	})
+}
+
+func TestProviderDownloader_CallerDeadlineStopsAutoFallback(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		directCalls := 0
+		d := &Downloader{
+			proxy: &http.Client{Transport: providerRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				<-r.Context().Done()
+				return nil, r.Context().Err()
+			})},
+			direct: &http.Client{Transport: providerRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				directCalls++
+				return nil, errors.New("unexpected direct attempt")
+			})},
+		}
+		got, err := d.Download(ctx, ProviderSpec{URL: "https://provider.test/source"}, ProxyModeAuto)
+		if !errors.Is(err, context.DeadlineExceeded) || len(got) != 0 || directCalls != 0 {
+			t.Fatalf("caller cancellation ignored: direct=%d err=%v", directCalls, err)
+		}
+	})
+}
 
 func TestProviderDownloader_ConsumesTypedHeadersAndSourceLimit(t *testing.T) {
 	var headers []string
