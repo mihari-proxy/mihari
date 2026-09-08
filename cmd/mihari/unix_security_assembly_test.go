@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -89,6 +90,7 @@ func TestUnixSecurity_FullAssembly(t *testing.T) {
 	// Ports are fixture-owned random loopback candidates; no host service or
 	// actual core/subscription is used by this assembly test.
 	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("c", 64) // Isolated fixture value, never a host credential.
 	slots := []*string{&settings.MixedAddr, &settings.ControllerAddr, &settings.WebAddr}
 	for _, slot := range slots {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")

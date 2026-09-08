@@ -56,6 +56,7 @@ def verify(events, target_os, uids, go_status=0, supplemental=False):
     starts = {key: 0 for key in keys}
     errors, children, roots, assembly = [], [], [], []
     failure_locations = set()
+    crash_failures = set()
     local_rows = {}
     for event in events:
         key = (event.get("Package"), event.get("Test"))
@@ -67,6 +68,10 @@ def verify(events, target_os, uids, go_status=0, supplemental=False):
                 starts[key] += 1
         if action == "fail":
             errors.append("Go failure")
+            if key[0] == PREFIX+"internal/app" and isinstance(key[1], str):
+                case = re.fullmatch(r"TestSecurityNativeCrashMatrix/(fresh-system|fresh-private|migration-path|aio-resources-path|update-running-enabled|update-running-disabled|update-stopped-enabled|update-stopped-disabled)/(reverse-recovery/)?([0-9]{2,3})-[a-z-]+-(before-intent|after-intent|after-effect|after-done)", key[1])
+                if case:
+                    crash_failures.add(case[1]+("/reverse/" if case[2] else "/forward/")+case[3]+"/"+case[4])
         if key[0] == PREFIX+"cmd/mihari" and isinstance(key[1], str) and key[1].startswith("TestUnixProcess_LocalFailureExitContracts/"):
             if action in ("pass", "fail", "skip"):
                 local_rows.setdefault(key[1], []).append(action)
@@ -105,7 +110,7 @@ def verify(events, target_os, uids, go_status=0, supplemental=False):
             errors.append("local process matrix requires five non-skipped rows")
         if len(assembly) != 2 or sorted(p.get("EUID", 0) for p in assembly) != sorted(uids) or any(not all(p.get(k) is True for k in ("Authenticated", "SettingsDenied", "OtherUserDenied", "V2Export")) for p in assembly):
             errors.append("missing full assembly two-user proof")
-    return {"passed": not errors, "checks": checks, "errors": sorted(set(errors)), "source_locations": sorted(failure_locations)}
+    return {"passed": not errors, "checks": checks, "errors": sorted(set(errors)), "source_locations": sorted(failure_locations), "crash_failures": sorted(crash_failures)}
 
 
 def finish(host, report, status):

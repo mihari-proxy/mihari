@@ -148,6 +148,13 @@ def account(name):
         return None
 
 
+def darwin_account_present(name):
+    # Query the local directory node, not getpwnam's potentially stale cache.
+    # A failed query is never evidence that a record was deleted.
+    found = subprocess.run(["/usr/bin/dscl", ".", "-list", "/Users"], capture_output=True, text=True, check=True)
+    return name in found.stdout.splitlines()
+
+
 def free_uids():
     import pwd
     used = {entry.pw_uid for entry in pwd.getpwall()}
@@ -501,9 +508,11 @@ class Host:
                         if actual is None:
                             continue  # preparation never attempted this account
                         raise PermissionError("unattempted account unexpectedly exists")
+                    if actual is not None and actual != entry:
+                        raise OSError("account identity changed")
+                    if not darwin_account_present(entry["name"]):
+                        continue  # an earlier cleanup already removed this record
                     found = subprocess.run(["/usr/bin/dscl", ".", "-read", "/Users/"+entry["name"], "GeneratedUID"],capture_output=True,text=True,check=False)
-                    if found.returncode and actual is None:
-                        continue
                     if found.returncode or found.stdout.strip() != "GeneratedUID: "+intent["generated_uid"]:
                         raise OSError("directory-services account identity changed")
                 elif actual is None:
@@ -514,7 +523,8 @@ class Host:
                     subprocess.run(["/usr/sbin/userdel", entry["name"]], check=True)
                 else:
                     subprocess.run(["/usr/bin/dscl", ".", "-delete", "/Users/"+entry["name"]], check=True)
-                if account(entry["name"]) is not None:
+                remains = darwin_account_present(entry["name"]) if sys.platform == "darwin" else account(entry["name"]) is not None
+                if remains:
                     raise OSError("account cleanup incomplete")
         elif stage == "anchor" and self.root.exists():
             if identity(self.root) != self.run["root_identity"]:

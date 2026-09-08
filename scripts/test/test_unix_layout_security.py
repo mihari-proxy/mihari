@@ -39,6 +39,16 @@ def test_native_failure_coordinates_do_not_publish_test_output():
     assert "must-remain-private" not in json.dumps(result)
     assert "/private/path" not in json.dumps(result)
 
+
+def test_native_crash_failure_exports_only_allowlisted_case_coordinates():
+    events = valid_events()
+    for name in ("TestSecurityNativeCrashMatrix/fresh-system/reverse-recovery/03-service-remove-after-effect",
+                 "TestSecurityNativeCrashMatrix/secret-token/reverse-recovery/03-service-remove-after-effect"):
+        events.append({"Action": "fail", "Package": PREFIX+"internal/app", "Test": name})
+    result = security.verify(events, "linux", [51731, 51739])
+    assert result["crash_failures"] == ["fresh-system/reverse/03/after-effect"]
+    assert "secret-token" not in json.dumps(result)
+
 import copy
 import pytest
 
@@ -454,3 +464,39 @@ def test_workflow_routes_recovery_before_privileged_preparation():
     text=workflow.read_text()
     assert text.index("id: route")<text.index("id: fixture")
     assert "steps.route.outputs.results" in text and "steps.fixture.outputs.results" not in text
+
+
+@pytest.mark.parametrize("case", ["deleted", "retry", "still-present", "query-failure", "replaced"])
+def test_darwin_account_cleanup_checks_directory_record_not_cached_lookup(tmp_path, monkeypatch, case):
+    import types
+    import unix_security_host as host
+    entry = {"name": "mh0123456789ab0", "uid": 51731, "gid": 20}
+    instance = host.Host.__new__(host.Host)
+    instance.root, instance.results = tmp_path/"anchor", tmp_path/"results"
+    instance.ledger = {"accounts": [entry], "intents": [{"kind": "directory-account", "name": entry["name"], "generated_uid": "OWNED-GUID"}]}
+    monkeypatch.setattr(host, "load_run", lambda *a, **kw: {})
+    monkeypatch.setattr(host, "sys", types.SimpleNamespace(platform="darwin"))
+    # getpwnam can retain the deleted record; Directory Service is authoritative.
+    monkeypatch.setattr(host, "account", lambda name: entry.copy())
+    present = case != "retry"
+    deleted = []
+    def command(args, **kwargs):
+        nonlocal present
+        assert args[:2] == ["/usr/bin/dscl", "."]
+        if args[2:] == ["-list", "/Users"]:
+            if case == "query-failure":
+                raise host.subprocess.CalledProcessError(1, args)
+            return types.SimpleNamespace(returncode=0, stdout="root\n"+(entry["name"]+"\n" if present else ""))
+        if args[2:] == ["-read", "/Users/"+entry["name"], "GeneratedUID"]:
+            return types.SimpleNamespace(returncode=0 if present else 1, stdout="GeneratedUID: "+("OTHER-GUID" if case == "replaced" else "OWNED-GUID"))
+        assert args[2:] == ["-delete", "/Users/"+entry["name"]]
+        deleted.append(entry["name"])
+        present = case == "still-present"
+        return types.SimpleNamespace(returncode=0, stdout="")
+    monkeypatch.setattr(host.subprocess, "run", command)
+    if case in ("still-present", "query-failure", "replaced"):
+        with pytest.raises((OSError, host.subprocess.CalledProcessError)):
+            instance.cleanup("accounts")
+    else:
+        instance.cleanup("accounts")
+    assert deleted == ([entry["name"]] if case in ("deleted", "still-present") else [])
