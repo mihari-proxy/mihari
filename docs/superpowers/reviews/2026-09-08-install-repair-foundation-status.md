@@ -16,6 +16,8 @@ The fresh preview is restricted to the eleven approved managed names. Native enf
 
 Native execution adapters and complete installation entrypoint assembly are pending. The new CLI/TUI actions are available only when their callbacks are supplied; production native callbacks are not yet connected. Windows runtime registration and the full service-start/stop handoff are not complete.
 
+Before any source enumeration or candidate staging, native `InstallationBackend.Prepare` must retain filesystem capabilities and reject aliased source/target ancestor or descendant overlap and credential/reset overlap. `Revalidate` must repeat that proof under the execution lock. The app's lexical and exact-identity checks are additional validation only: the plan DTO does not encode filesystem ancestry. This remains a release-blocking native adapter acceptance item; the foundation does not implement or claim that proof.
+
 Existing installer, self-update and script entrypoints have not all switched to the new transaction model. Legacy automatic recovery paths still exist. The approved requirement to remove implicit recovery is therefore not yet delivered. Tasks 4–6 must be assembled and validated as one release unit before this feature is released.
 
 ## Local validation before the first foundation push

@@ -22,6 +22,9 @@ type InstallationPublication = platform.InstallPublication
 
 // InstallationBackend prepares a verified candidate without taking the
 // installation operation lock.
+// Prepare must use retained native filesystem capabilities to reject aliased
+// source/target overlap and credential/reset overlap before enumeration or staging.
+// The manager's later DTO checks cannot establish filesystem ancestry.
 type InstallationBackend interface {
 	Prepare(context.Context, InstallationPlanRequest) (InstallationPrepared, error)
 }
@@ -47,6 +50,7 @@ type InstallationLockedPreparation struct {
 
 // InstallationExecutionSession owns the installation operation lock.
 type InstallationExecutionSession interface {
+	// Revalidate repeats native scope and ancestry checks under the held lock.
 	Revalidate(context.Context) (InstallationLockedPreparation, error)
 	ArchiveState(context.Context, string) error
 	PublishState(context.Context, string, []byte) (InstallationPublication, error)
