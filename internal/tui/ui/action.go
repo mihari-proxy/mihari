@@ -1,5 +1,7 @@
 package ui
 
+import "github.com/mihari-proxy/mihari/internal/update"
+
 import tea "charm.land/bubbletea/v2"
 
 type Action string
@@ -43,7 +45,8 @@ const (
 // RelaunchRequestMsg asks the root shell to exit and enter the replacement TUI.
 // Warning must already be sanitized for display after terminal restoration.
 type RelaunchRequestMsg struct {
-	Warning string
+	Prepared *update.PreparedUpdate
+	Warning  string
 }
 
 // PageResultMsg routes asynchronous page-owned work back to its originating page.

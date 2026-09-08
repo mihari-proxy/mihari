@@ -101,6 +101,56 @@ func TestModel_LoggingDirectoryEnterCopiesPath(t *testing.T) {
 	}
 }
 
+func TestModel_WindowsSingleDirectoryUnchanged(t *testing.T) {
+	model, _ := loggingModel("info", 4)
+	if systemRowByID(model, rowLogDirectory).label != ui.LoggingDirectoryLabel {
+		t.Fatal("windows single-directory label changed")
+	}
+	if systemRowByID(model, rowLogUserDirectory).id != "" || systemRowByID(model, rowLogExportDirectory).id != "" {
+		t.Fatal("windows must not show split logging directories")
+	}
+	if model.rowIndex(rowLogExport) != model.rowIndex(rowLogDirectory)+1 {
+		t.Fatal("export row must follow the single logging directory")
+	}
+}
+
+func TestModel_SplitLoggingDirectoriesKeepMachineDir(t *testing.T) {
+	model, _ := loggingModel("info", 4)
+	machine := model.logging.Dir
+	userDir := `/home/a/.local/state/mihari/logs`
+	exportDir := `/home/a/.local/state/mihari/logs-export`
+	model.SetLoggingLayout(true, userDir, exportDir)
+	if systemRowByID(model, rowLogDirectory).value != machine || systemRowByID(model, rowLogDirectory).label != ui.LoggingMachineDirectoryLabel {
+		t.Fatalf("machine directory=%+v want dir %q", systemRowByID(model, rowLogDirectory), machine)
+	}
+	if systemRowByID(model, rowLogUserDirectory).value != userDir || systemRowByID(model, rowLogUserDirectory).label != ui.LoggingUserDirectoryLabel {
+		t.Fatalf("user directory=%+v", systemRowByID(model, rowLogUserDirectory))
+	}
+	if systemRowByID(model, rowLogExportDirectory).value != exportDir || systemRowByID(model, rowLogExportDirectory).label != ui.LoggingExportDirectoryLabel {
+		t.Fatalf("export directory=%+v", systemRowByID(model, rowLogExportDirectory))
+	}
+	if model.rowIndex(rowLogExport) != model.rowIndex(rowLogExportDirectory)+1 {
+		t.Fatal("export row must follow the default export directory")
+	}
+}
+
+func TestModel_SplitLoggingUnavailableUserTreeIsMemoryOnlyDisplay(t *testing.T) {
+	model, _ := loggingModel("info", 4)
+	machine := model.logging.Dir
+	model.SetLoggingLayout(true, "", "")
+	model.SetLocalLoggingAvailable(false)
+	if systemRowByID(model, rowLogDirectory).value != machine {
+		t.Fatal("LoggingStatus.dir must remain the machine directory")
+	}
+	if systemRowByID(model, rowLogUserDirectory).value != ui.UnavailableTitle || systemRowByID(model, rowLogExportDirectory).value != ui.UnavailableTitle {
+		t.Fatal("unavailable user tree must not invent log paths")
+	}
+	view := model.View()
+	if !strings.Contains(view, ui.LocalFileLogUnavailable) {
+		t.Fatalf("missing in-memory diagnostics marker:\n%s", view)
+	}
+}
+
 func TestModel_ExportLogsAvailableWithoutDaemonLogging(t *testing.T) {
 	model := New(nil, nil)
 	model.focusID = rowLogExport
@@ -3876,4 +3926,17 @@ func runSelfCheckCmd(t *testing.T, cmd tea.Cmd) {
 		}
 	}
 	t.Fatal("recheck batch did not include version check")
+}
+
+func TestSelfUpdateChannel_UsesInjectedDiscoveryBeforeLegacyPath(t *testing.T) {
+	m := New(nil, nil)
+	called := false
+	m.selfUpdateChannel = func(context.Context) (string, error) { called = true; return update.ChannelDev, nil }
+	m.channelPath = func() (string, error) {
+		t.Fatal("legacy channel path accessed before injected service discovery")
+		return "", nil
+	}
+	if got := m.currentMihariChannel(); got != update.ChannelDev || !called {
+		t.Fatalf("channel=%q discovered=%v", got, called)
+	}
 }

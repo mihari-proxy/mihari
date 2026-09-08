@@ -36,39 +36,45 @@ type Paths struct {
 	PanelStaging        string
 }
 
+type pathsJoinFunc func(...string) string
+
+func buildPaths(root string, join pathsJoinFunc, coreName string) Paths {
+	return Paths{
+		Root:                root,
+		ControlToken:        join(root, "control.token"),
+		Bin:                 join(root, "bin"),
+		CoreBinary:          join(root, "bin", coreName),
+		RuntimeConfig:       join(root, "runtime", "config.yaml"),
+		Settings:            join(root, "mihari.yaml"),
+		Onboarding:          join(root, "onboarding.json"),
+		LogDir:              join(root, "logs"),
+		DaemonLog:           join(root, "logs", "mihari-daemon.log"),
+		TUILog:              join(root, "logs", "mihari-tui.log"),
+		MihomoLog:           join(root, "logs", "mihomo.log"),
+		LogExportDir:        join(root, "logs-export"),
+		Staging:             join(root, "staging"),
+		Subscriptions:       join(root, "subscriptions"),
+		SubscriptionCatalog: join(root, "subscriptions", "catalog.yaml"),
+		SubscriptionCache:   join(root, "subscriptions", "cache"),
+		SubscriptionStaging: join(root, "staging", "subscriptions"),
+		TUIPreferences:      join(root, "preferences", "tui.json"),
+		GeoIPCountry:        join(root, "geoip", "GeoLite2-Country.mmdb"),
+		GeoIPASN:            join(root, "geoip", "GeoLite2-ASN.mmdb"),
+		GeoIPStaging:        join(root, "staging", "geoip"),
+		WebRoot:             join(root, "web"),
+		WebActive:           join(root, "web", "active.json"),
+		WebCredential:       join(root, "web", "credential"),
+		PanelStaging:        join(root, "staging", "panels"),
+	}
+}
+
 // NewPaths builds the standard layout under root.
 func NewPaths(root string) Paths {
 	coreName := "mihomo"
 	if runtime.GOOS == "windows" {
 		coreName += ".exe"
 	}
-	return Paths{
-		Root:                root,
-		ControlToken:        filepath.Join(root, "control.token"),
-		Bin:                 filepath.Join(root, "bin"),
-		CoreBinary:          filepath.Join(root, "bin", coreName),
-		RuntimeConfig:       filepath.Join(root, "runtime", "config.yaml"),
-		Settings:            filepath.Join(root, "mihari.yaml"),
-		Onboarding:          filepath.Join(root, "onboarding.json"),
-		LogDir:              filepath.Join(root, "logs"),
-		DaemonLog:           filepath.Join(root, "logs", "mihari-daemon.log"),
-		TUILog:              filepath.Join(root, "logs", "mihari-tui.log"),
-		MihomoLog:           filepath.Join(root, "logs", "mihomo.log"),
-		LogExportDir:        filepath.Join(root, "logs-export"),
-		Staging:             filepath.Join(root, "staging"),
-		Subscriptions:       filepath.Join(root, "subscriptions"),
-		SubscriptionCatalog: filepath.Join(root, "subscriptions", "catalog.yaml"),
-		SubscriptionCache:   filepath.Join(root, "subscriptions", "cache"),
-		SubscriptionStaging: filepath.Join(root, "staging", "subscriptions"),
-		TUIPreferences:      filepath.Join(root, "preferences", "tui.json"),
-		GeoIPCountry:        filepath.Join(root, "geoip", "GeoLite2-Country.mmdb"),
-		GeoIPASN:            filepath.Join(root, "geoip", "GeoLite2-ASN.mmdb"),
-		GeoIPStaging:        filepath.Join(root, "staging", "geoip"),
-		WebRoot:             filepath.Join(root, "web"),
-		WebActive:           filepath.Join(root, "web", "active.json"),
-		WebCredential:       filepath.Join(root, "web", "credential"),
-		PanelStaging:        filepath.Join(root, "staging", "panels"),
-	}
+	return buildPaths(root, filepath.Join, coreName)
 }
 
 // Absolute resolves Root with filepath.Abs/Clean and rebuilds every derived field

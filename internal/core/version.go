@@ -66,3 +66,12 @@ func isHex(s string) bool {
 	}
 	return true
 }
+
+// DetectVerifiedVersion verifies the pair/candidate again immediately before -v.
+func DetectVerifiedVersion(ctx context.Context, v *VerifiedCore, x VerifiedExecutor) (string, error) {
+	b, e := executeVerified(ctx, v, CoreVersion, nil, x)
+	if e != nil {
+		return "", e
+	}
+	return ParseVersion(string(b))
+}

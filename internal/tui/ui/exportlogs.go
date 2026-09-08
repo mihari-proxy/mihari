@@ -22,14 +22,21 @@ type OpenExportLogsMsg struct{}
 // ErrLocalLogStorageUnavailable classifies the unavailable local capability.
 var ErrLocalLogStorageUnavailable = errors.New("local log storage unavailable")
 
+// ErrMachineLogsUnavailable means a full export cannot silently fall back to TUI-only.
+var ErrMachineLogsUnavailable = errors.New("machine logs unavailable")
+
 // ExportLogsOptions supplies the local exporter and side-effect boundaries.
 type ExportLogsOptions struct {
-	Context        context.Context
-	Now            func() time.Time
-	DefaultDir     string
-	Exists         func(dir, name string) (bool, error)
-	Export         func(context.Context, logging.ExportRequest) (logging.ExportResult, error)
-	WriteClipboard func(string) error
+	Context          context.Context
+	Now              func() time.Time
+	DefaultDir       string
+	Exists           func(dir, name string) (bool, error)
+	Export           func(context.Context, logging.ExportRequest) (logging.ExportResult, error)
+	ExportScoped     func(context.Context, logging.ExportRequest, string) (logging.ExportResult, error)
+	CloseResponse    func()
+	MachineAvailable func() bool
+	SourcesPrompt    bool
+	WriteClipboard   func(string) error
 }
 
 type exportResultMsg struct {
@@ -62,10 +69,17 @@ func newExportRunner(parent context.Context, export func(context.Context, loggin
 
 // Start registers and starts one owned worker before returning its result channel.
 func (r *exportRunner) Start(generation uint64, request logging.ExportRequest) (<-chan exportResultMsg, bool) {
+	return r.startExport(generation, request, r.export)
+}
+
+func (r *exportRunner) startExport(generation uint64, request logging.ExportRequest, exportFn func(context.Context, logging.ExportRequest) (logging.ExportResult, error)) (<-chan exportResultMsg, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.running {
 		return nil, false
+	}
+	if exportFn == nil {
+		exportFn = r.export
 	}
 	ctx, cancel := context.WithCancel(r.parent)
 	result := make(chan exportResultMsg, 1)
@@ -90,7 +104,7 @@ func (r *exportRunner) Start(generation uint64, request logging.ExportRequest) (
 			close(done)
 			r.mu.Unlock()
 		}()
-		message.Result, message.Err = r.export(ctx, request)
+		message.Result, message.Err = exportFn(ctx, request)
 	}()
 	return result, true
 }
@@ -105,24 +119,28 @@ func (r *exportRunner) Cancel() {
 	}
 }
 
-// CancelAndWait waits until the active worker has released its resources.
-func (r *exportRunner) CancelAndWait() {
+// Wait joins the active worker without cancelling it.
+func (r *exportRunner) Wait() {
 	r.mu.Lock()
-	cancel, done, running := r.cancel, r.done, r.running
+	done, running := r.done, r.running
 	r.mu.Unlock()
 	if !running || done == nil {
 		return
 	}
-	if cancel != nil {
-		cancel()
-	}
 	<-done
+}
+
+// CancelAndWait waits until the active worker has released its resources.
+func (r *exportRunner) CancelAndWait() {
+	r.Cancel()
+	r.Wait()
 }
 
 type exportFocus uint8
 
 const (
 	exportFocusRange exportFocus = iota
+	exportFocusSources
 	exportFocusFrom
 	exportFocusTo
 	exportFocusOutput
@@ -137,6 +155,7 @@ type ExportLogsModel struct {
 	generation                            uint64
 	openedAt                              time.Time
 	rangeKind                             logging.RangeKind
+	scope                                 string
 	from, to, output, defaultOutput       string
 	focus                                 exportFocus
 	cursors                               map[exportFocus]int
@@ -177,6 +196,7 @@ func (m *ExportLogsModel) Open() {
 	}
 	m.openedAt = m.options.Now()
 	m.rangeKind = logging.RangeLast24Hours
+	m.scope = logging.ExportScopeMachineAndCurrentUser
 	m.from = m.openedAt.Add(-24 * time.Hour).Format(exportTimeLayout)
 	m.to = m.openedAt.Format(exportTimeLayout)
 	m.defaultOutput = m.defaultPath(m.openedAt)
@@ -304,6 +324,15 @@ func (m *ExportLogsModel) Update(message tea.Msg) (tea.Cmd, bool) {
 				}
 				return nil, true
 			}
+			if m.focus == exportFocusSources {
+				switch key.String() {
+				case "q":
+					return nil, false
+				case "down", "right", "tab", "up", "left", "shift+tab":
+					m.cycleScope()
+				}
+				return nil, true
+			}
 		}
 		if m.textFocused() && IsTextEditMsg(message) {
 			return m.editFocused(message), true
@@ -339,6 +368,11 @@ func (m *ExportLogsModel) Update(message tea.Msg) (tea.Cmd, bool) {
 
 func (m *ExportLogsModel) submit() tea.Cmd {
 	now := m.options.Now()
+	scope := m.exportScope()
+	if m.options.SourcesPrompt && scope == logging.ExportScopeMachineAndCurrentUser && !m.machineAvailable() {
+		m.message = ExportMachineUnavailable
+		return nil
+	}
 	exportRange := logging.ExportRange{Kind: m.rangeKind}
 	switch m.rangeKind {
 	case logging.RangeLast24Hours:
@@ -369,7 +403,13 @@ func (m *ExportLogsModel) submit() tea.Cmd {
 		request.OutputPath = strings.TrimSpace(m.output)
 	}
 	m.generation++
-	results, ok := m.runner.Start(m.generation, request)
+	exportFn := m.options.Export
+	if m.options.ExportScoped != nil {
+		exportFn = func(ctx context.Context, req logging.ExportRequest) (logging.ExportResult, error) {
+			return m.options.ExportScoped(ctx, req, scope)
+		}
+	}
+	results, ok := m.runner.startExport(m.generation, request, exportFn)
 	if !ok {
 		m.message = ExportBusy
 		return nil
@@ -411,11 +451,35 @@ func (m *ExportLogsModel) cycleRange() {
 		m.rangeKind = logging.RangeLast24Hours
 	}
 }
-func (m *ExportLogsModel) editableFocuses() []exportFocus {
-	if m.rangeKind == logging.RangeBetween {
-		return []exportFocus{exportFocusRange, exportFocusFrom, exportFocusTo, exportFocusOutput, exportFocusSubmit}
+
+func (m *ExportLogsModel) cycleScope() {
+	if m.scope == logging.ExportScopeCurrentUserOnly {
+		m.scope = logging.ExportScopeMachineAndCurrentUser
+		return
 	}
-	return []exportFocus{exportFocusRange, exportFocusOutput, exportFocusSubmit}
+	m.scope = logging.ExportScopeCurrentUserOnly
+}
+
+func (m *ExportLogsModel) exportScope() string {
+	if m.scope == logging.ExportScopeCurrentUserOnly {
+		return logging.ExportScopeCurrentUserOnly
+	}
+	return logging.ExportScopeMachineAndCurrentUser
+}
+
+func (m *ExportLogsModel) machineAvailable() bool {
+	return m.options.MachineAvailable != nil && m.options.MachineAvailable()
+}
+
+func (m *ExportLogsModel) editableFocuses() []exportFocus {
+	fields := []exportFocus{exportFocusRange}
+	if m.options.SourcesPrompt {
+		fields = append(fields, exportFocusSources)
+	}
+	if m.rangeKind == logging.RangeBetween {
+		fields = append(fields, exportFocusFrom, exportFocusTo)
+	}
+	return append(fields, exportFocusOutput, exportFocusSubmit)
 }
 func (m *ExportLogsModel) moveFocus(delta int) {
 	fields := m.editableFocuses()
@@ -520,6 +584,9 @@ func (m *ExportLogsModel) View(width, height int) string {
 		return marker + label + "  " + value
 	}
 	lines := []string{theme.Title.Render(ExportLogsTitle), "", "  " + ExportNowLabel + "  " + m.options.Now().Format("2006-01-02 15:04:05 -07:00"), line(exportFocusRange, ExportRangeLabel, exportRangeLabel(m.rangeKind))}
+	if m.options.SourcesPrompt {
+		lines = append(lines, line(exportFocusSources, ExportSourcesLabel, exportScopeLabel(m.exportScope())))
+	}
 	if m.rangeKind == logging.RangeBetween {
 		lines = append(lines, line(exportFocusFrom, ExportFromLabel, m.from), line(exportFocusTo, ExportToLabel, m.to))
 	}
@@ -540,6 +607,8 @@ func (m *ExportLogsModel) View(width, height int) string {
 		help = "Esc cancel export"
 	case m.editing && m.focus == exportFocusRange:
 		help = "↑/↓/←/→ or Tab mode  Enter apply  Esc discard"
+	case m.editing && m.focus == exportFocusSources:
+		help = "↑/↓/←/→ or Tab sources  Enter apply  Esc discard"
 	case m.editing:
 		help = "Enter apply  Esc discard"
 	case m.focus == exportFocusSubmit:
@@ -555,8 +624,34 @@ func (m *ExportLogsModel) Closed() bool { return m.closed }
 // Pending reports whether the current generation has not delivered its result.
 func (m *ExportLogsModel) Pending() bool { return m.pending }
 
-// CancelAndWait cancels and joins the runner's current generation.
-func (m *ExportLogsModel) CancelAndWait() { m.runner.CancelAndWait() }
+// Cancel requests export cancellation without waiting.
+func (m *ExportLogsModel) Cancel() {
+	if m != nil && m.runner != nil {
+		m.runner.Cancel()
+	}
+}
+
+// CloseResponse force-closes an owned export HTTP response or stream.
+func (m *ExportLogsModel) CloseResponse() {
+	if m == nil || m.options.CloseResponse == nil {
+		return
+	}
+	m.options.CloseResponse()
+}
+
+// Wait joins the runner's current generation without cancelling it.
+func (m *ExportLogsModel) Wait() {
+	if m != nil && m.runner != nil {
+		m.runner.Wait()
+	}
+}
+
+// CancelAndWait cancels, force-closes the network stream, and joins the runner.
+func (m *ExportLogsModel) CancelAndWait() {
+	m.Cancel()
+	m.CloseResponse()
+	m.Wait()
+}
 
 func parseExportTime(value string, location *time.Location) (time.Time, error) {
 	parsed, err := time.ParseInLocation(exportTimeLayout, value, location)
@@ -565,6 +660,13 @@ func parseExportTime(value string, location *time.Location) (time.Time, error) {
 	}
 	return parsed, nil
 }
+func exportScopeLabel(scope string) string {
+	if scope == logging.ExportScopeCurrentUserOnly {
+		return ExportSourcesCurrentUserOnly
+	}
+	return ExportSourcesMachineAndUser
+}
+
 func exportRangeLabel(kind logging.RangeKind) string {
 	switch kind {
 	case logging.RangeLast60Minutes:
@@ -581,6 +683,8 @@ func exportErrorMessage(err error) string {
 	switch {
 	case errors.Is(err, ErrLocalLogStorageUnavailable):
 		return "Local log storage unavailable"
+	case errors.Is(err, ErrMachineLogsUnavailable):
+		return ExportMachineUnavailable
 	case errors.Is(err, context.Canceled):
 		return ExportCancelled
 	case errors.Is(err, logging.ErrNoLogLines):

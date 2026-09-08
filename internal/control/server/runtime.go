@@ -79,6 +79,7 @@ func (s *Server) runtimeRoutes(mux *http.ServeMux) {
 	s.loggingRoutes(mux)
 	s.webGUIRoutes(mux)
 	s.serviceRoutes(mux)
+	s.installationRoutes(mux)
 }
 
 func (s *Server) coreStatus(writer http.ResponseWriter, request *http.Request) {
@@ -409,6 +410,9 @@ func (s *Server) stream(writer http.ResponseWriter, request *http.Request) {
 		}
 		return connection.Write(request.Context(), websocket.MessageText, event)
 	})
+	if request.Context().Err() != nil {
+		return
+	}
 	if err == nil {
 		_ = connection.Close(websocket.StatusNormalClosure, "stream complete")
 		return

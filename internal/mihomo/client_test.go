@@ -128,6 +128,12 @@ func TestClientRuntimeRequests(t *testing.T) {
 			},
 		},
 		{
+			name: "update escaped proxy provider", method: http.MethodPut, path: "/providers/proxies/AI%2FSearch", statusCode: http.StatusNoContent,
+			invoke: func(ctx context.Context, client *Client) error {
+				return client.UpdateProxyProvider(ctx, "AI/Search")
+			},
+		},
+		{
 			name: "reload", method: http.MethodPut, path: "/configs", query: url.Values{"force": {"true"}}, body: `{"path":"C:\\managed\\config.yaml"}`,
 			invoke: func(ctx context.Context, client *Client) error {
 				return client.Reload(ctx, `C:\managed\config.yaml`, true)

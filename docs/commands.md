@@ -23,7 +23,7 @@ mihari service uninstall
 
 执行 `service install` + `start` 后,关闭 TUI 或普通控制台**不会**停止 Mihari;只有 `service stop`、卸载或操作系统才能停止它。同样的控制也在 TUI 的 **System** 页面中提供(变更操作需要提权 shell)。
 
-更新二进制后,用 `service reinstall` 从当前二进制重新注册服务(升级路径),然后 `service restart` 使其生效。
+Unix 的 install/reinstall/update/start/stop/uninstall 走统一安装用例，未完成事务须显式恢复；Windows 保持原服务行为。Unix 自动化入口为 `mihari service apply --request /absolute/request.json`（严格版本化 JSON，请求文件 root0600）；operation=recover 用于恢复，不会隐式导入旧树。卸载保留数据与旧日志。
 
 守护进程本身可手动在前台运行(OS 服务与 TUI 的 System 页面使用同一入口);正常使用无需手动执行,且前台运行时关闭终端会停止守护进程:
 
@@ -31,7 +31,7 @@ mihari service uninstall
 mihari daemon
 ```
 
-更新 mihari 二进制本身(同样需要提权)。通道查看与切换不提权；`self update` 先读取数据根下的 `mihari-channel` sidecar（缺文件视为 `main`）：
+更新 mihari 二进制本身需要提权。`self channel` 查询选定 Unix B/P sidecar（缺失为 main）；系统通道写入需要 root，私有 P 需要实际 owner，持 install.lock 并拒绝相关未完成事务。`self update` 先检查服务；没有服务时使用编译通道、只更新 binary，不为选择下载访问 B。已有服务通过统一停机安装事务更新。Windows 保留原行为：
 
 ```console
 mihari self version
@@ -51,15 +51,15 @@ mihari status --json
 
 ## 文件日志
 
-守护进程、TUI 与捕获的 mihomo 输出会分别以 JSONL 写入数据根目录下的 `logs/mihari-daemon.log`、`logs/mihari-tui.log` 与 `logs/mihomo.log`。多个 TUI 实例共享 `mihari-tui.log`，写入与轮转会跨进程协调。
+Unix daemon/mihomo 日志位于 D/logs，本用户 TUI 日志位于 U/logs；当前 UID 的 TUI 实例共享固定序列。Windows/显式私有 P 保留单根。具体路径和 root 安全兼容约束见 [Unix 布局与恢复](unix-layout.md)。
 
 守护进程与捕获的 mihomo 日志默认级别为 `info`，每个活跃文件达到 10 MiB 时轮转，最多保留三份文件（活跃文件与最多两份归档）。TUI 启动时使用 bootstrap 配置：`debug`、100 MiB、10 份文件，以便在守护进程设置可用前也能记录日志；在后续控制面同步前保持该 bootstrap 配置。mihomo stdout 捕获为 `INFO`，stderr 捕获为 `WARN`；这只描述 Mihari 的捕获级别，不表示 mihomo 行内消息的实际严重程度。
 
 TUI 的 System 页面提供 Logging 区，可修改由守护进程持有的级别、单文件最大大小和保留数量；变更通过稳定的本地控制端点 `GET /v1/logging` 与 `PATCH /v1/logging` 完成。它们不是 CLI 命令，因此没有 `mihari logging` 或日志导出子命令。
 
-日志导出只在 TUI 中提供：Logs 页按 `e`，或在 System → Logging 选择 **Export logs**。可选最近 24 小时、最近 60 分钟、本地时间区间或全部记录。默认目录是数据根下的 `logs-export/`；自定义目标必须是既有目录内的绝对 `.zip` 路径。导出永不覆盖已有文件，默认重名时自动编号。
+日志导出只在 TUI 中提供：Logs 页按 `e`，或在 System → Logging 选择 **Export logs**。可选最近 24 小时、最近 60 分钟、本地时间区间或全部记录。Unix 默认目录是本用户的 `U/logs-export/`（Windows/私有 P 保留原目录）；自定义目标必须是既有目录内的绝对 `.zip` 路径。导出永不覆盖已有文件，默认重名时自动编号。
 
-zip 固定使用 `manifest.json`、`daemon/mihari-daemon.log`、`tui/mihari-tui.log`、`mihomo/mihomo.log` 这些 entry，某来源无匹配记录时省略对应日志 entry。每条记录会递归二次脱敏并重新编码。自动遮蔽不保证移除节点名、目标域名/IP 或流量元数据，发送前必须自查这些内容。
+Unix 系统导出使用 mihari-logs-export/v2，组合认证机器快照与本用户日志，离线必须明确选择仅本用户日志；Windows/显式私有 P 保持本地 v1。zip 固定使用 `manifest.json`、`daemon/mihari-daemon.log`、`tui/mihari-tui.log`、`mihomo/mihomo.log` 这些 entry，某来源无匹配记录时省略对应日志 entry。每条记录会递归二次脱敏并重新编码。自动遮蔽不保证移除节点名、目标域名/IP 或流量元数据，发送前必须自查这些内容。
 
 Unix 自定义目标的同 UID 进程和本机 root/管理员属于受信主体。不可信共享父目录下，若内容已清理，仍可能留下空的 0700 私有 workspace；若清理 IO 失败，界面会报告可能存在内容残留。导出持有目标父目录 identity，生成期间替换父路径会安全失败而不会跟随；发布后外部再次改名目标目录，可能使已显示路径失效。
 

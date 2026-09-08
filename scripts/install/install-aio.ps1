@@ -30,7 +30,7 @@ function Invoke-MihariService([string[]]$ServiceArgs) {
   if ($isAdmin) {
     & $dest @ServiceArgs
   } else {
-    Info ("提权执行: mihari " + ($ServiceArgs -join ' '))
+    Info ("Running with administrator privileges: mihari " + ($ServiceArgs -join ' '))
     Start-Process -FilePath $dest -ArgumentList $ServiceArgs -Verb RunAs -Wait
   }
 }
@@ -67,7 +67,7 @@ if ($env:MIHARI_INSTALL_TEST_MODE -ne '1') {
   if ($svcRunning) { $stopSteps += 'Stop-Service -Name mihari -Force' }
   if ($proc) { $stopSteps += 'Stop-Process -Name mihari -Force -ErrorAction SilentlyContinue' }
   if ($stopSteps.Count -gt 0) {
-    Info '检测到运行中的 mihari，停止以释放文件锁…'
+    Info 'A running mihari instance was detected. Stopping it to release file locks…'
     $stopCmd = $stopSteps -join '; '
     if ($isAdmin) {
       Invoke-Expression $stopCmd
@@ -79,14 +79,14 @@ if ($env:MIHARI_INSTALL_TEST_MODE -ne '1') {
 }
 
 # 1. mihari binary -> binDir.
-Info "安装 mihari 到 $dest"
+Info "Installing mihari to $dest"
 Copy-Item -LiteralPath $mihariSrc -Destination $dest -Force
 
 # Add install dir to the user PATH if missing (mirrors install.ps1).
 if ($env:MIHARI_INSTALL_TEST_MODE -ne '1') {
   $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
   if ($userPath -and $userPath -notlike "*$binDir*") {
-    Info "将 $binDir 加入 PATH"
+    Info "Adding $binDir to PATH"
     [Environment]::SetEnvironmentVariable('Path', "$userPath;$binDir", 'User')
     $env:Path = "$env:Path;$binDir"
   }
@@ -96,7 +96,7 @@ if ($env:MIHARI_INSTALL_TEST_MODE -ne '1') {
 #    config / panel state below is never touched).
 New-Item -ItemType Directory -Force -Path (Join-Path $dataDir 'bin') | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $dataDir 'geoip') | Out-Null
-Info "覆盖 mihomo 核心与 GeoIP 到 $dataDir"
+Info "Replacing the mihomo core and GeoIP files in $dataDir"
 Copy-Item -LiteralPath $mihomoSrc -Destination (Join-Path $dataDir 'bin\mihomo.exe') -Force
 $sidecarSrc = Join-Path $BundleDir 'data\bin\core-channel'
 if (Test-Path -LiteralPath $sidecarSrc) {
@@ -120,12 +120,12 @@ if ($env:MIHARI_INSTALL_TEST_MODE -eq '1') { return }
 #    freshly installed PATH binary, closing the "service vs PATH" version drift),
 #    install when fresh. Service control needs elevation (Invoke-MihariService).
 if ($svc) {
-  Info '已注册服务，执行 service reinstall 同步新版本…'
+  Info 'The service is registered. Running service reinstall to apply the new version…'
   Invoke-MihariService 'service', 'reinstall'
 } else {
-  Info '注册并启动服务…'
+  Info 'Registering and starting the service…'
   Invoke-MihariService 'service', 'install'
   Invoke-MihariService 'service', 'start'
 }
 
-Write-Host "`n✅ aio 版安装完成！请重启终端，然后运行 mihari 开始使用。" -ForegroundColor Green
+Write-Host "`nAll-in-one installation completed. Restart your terminal, then run mihari to get started." -ForegroundColor Green

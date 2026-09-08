@@ -148,33 +148,35 @@ All release binaries are CGO-free.
 
 ## Data paths
 
-| Platform | Data root (`MIHARI_DATA` overrides) | Default control endpoint |
-|----------|-----------|------------------|
-| Windows | `%USERPROFILE%\.mihari` | `\\.\pipe\mihari-control` (named pipe; no file) |
-| Linux | `$HOME/.mihari` | `$XDG_RUNTIME_DIR/mihari/control.sock`, else `$DATA/control.sock` |
-| macOS | `$HOME/.mihari` | `$DATA/control.sock` |
+| Platform | Default machine entry B | Business data D | Current-user diagnostics U |
+| --- | --- | --- | --- |
+| Windows | `%USERPROFILE%\.mihari` | Same root | Same root |
+| Linux | `/var/lib/mihari` | `B/data` | Absolute `XDG_STATE_HOME/mihari`, otherwise trusted home `.local/state/mihari` |
+| macOS | `/Library/Application Support/mihari` | `B/data` | Trusted home `Library/Logs/mihari` |
 
-Settings, control token, runtime config, core binary, subscriptions, GeoIP, panel assets, logs, and staging all live under the data root.
+Unix E/C/channel are `B/control.sock`, `B/control.token`, and `B/mihari-channel`; I defaults to `/usr/local/lib/mihari`. B is root0711, D root0700, C/channel root0644, and E root0666. Every local user can authenticate to manage the same proxy and obtain controlled machine diagnostics without sudo; users cannot directly read D or another user's U. Windows retains `\\.\pipe\mihari-control`.
+
+Explicit `MIHARI_DATA=P` retains the private single-root P layout and 0700/0600 permissions, never P/data; it cannot overlap default B/D. Root ignores HOME/SUDO_USER/XDG, and shared discovery does not use XDG_RUNTIME_DIR. Root installation/migration uses stopped, validated, atomic transactions and repeatable recovery, preserving the old tree and logs. Root configuration accepts only the built-in trusted v1.19.30 core and supported typed fields/providers; unknown cores, fields and MRS are rejected. Windows and nonroot private P retain compatibility. See [Unix layout and recovery](docs/unix-layout.md) for overrides, I/filesystem requirements, stopped credential rotation and recovery entrypoints.
 
 ## File logs
 
-Mihari writes newline-delimited JSON (JSONL) to three files under the data root:
+Unix machine logs live in D and current-user TUI logs in U. Windows/explicit private P retain one root. Logs use newline-delimited JSON (JSONL):
 
 | Source | Path |
 | --- | --- |
-| Mihari daemon | `logs/mihari-daemon.log` |
-| TUI (shared by all TUI instances) | `logs/mihari-tui.log` |
-| Captured mihomo output | `logs/mihomo.log` |
+| Mihari daemon | `D/logs/mihari-daemon.log` |
+| TUI (shared by this UID’s instances) | `U/logs/mihari-tui.log` |
+| Captured mihomo output | `D/logs/mihomo.log` |
 
 Daemon and captured-mihomo file logs use the default `info` level, rotate each active file at 10 MiB, and retain three files (the active file plus up to two archives). The TUI starts with its bootstrap configuration—`debug`, 100 MiB, and 10 files—so it can log before daemon settings are available; it remains on this bootstrap configuration until a later control-plane synchronization. The TUI System page can change the daemon-owned level, maximum file size, and retained-file count; changes take effect without a daemon restart. Captured mihomo stdout is recorded as `INFO` and stderr as `WARN`; these capture levels do not infer the severity encoded in mihomo's own message text.
 
-`GET /v1/logging` and `PATCH /v1/logging` are stable v1 local-control endpoints used by the TUI. They are not CLI commands. Log export is TUI-only: press `e` on the Logs page, or select **Export logs** under System → Logging. The dialog supports the last 24 hours, last 60 minutes, a local-time interval, or all records. Its default destination is `logs-export/`; an existing archive is never overwritten, and a custom destination must be an absolute `.zip` path in an existing directory. There is no CLI log-export command.
+`GET /v1/logging` and `PATCH /v1/logging` are stable v1 local-control endpoints used by the TUI. They are not CLI commands. Log export is TUI-only: press `e` on the Logs page, or select **Export logs** under System → Logging. The dialog supports the last 24 hours, last 60 minutes, a local-time interval, or all records. Its default destination is `U/logs-export/`; an existing archive is never overwritten, and a custom destination must be an absolute `.zip` path in an existing directory. There is no CLI log-export command.
 
-Logging appears between Network and About. **Logging Dir** is read-only: select it and press Enter to copy the path. In Export Logs, **Current Time** refreshes every second. Use ↑/↓ to select a field, Enter to edit or apply, and Esc to confirm discarding the current edit. While editing Range, arrows or Tab/Shift+Tab cycle modes; a custom interval displays `Use YYYY-MM-DD HH:MM format`. Select **Export** and press Enter to start.
+Logging appears between Network and About. Unix shows separate machine and current-user log directories. Windows retains its single read-only **Logging Dir**: select it and press Enter to copy the path. In Export Logs, **Current Time** refreshes every second. Use ↑/↓ to select a field, Enter to edit or apply, and Esc to confirm discarding the current edit. While editing Range, arrows or Tab/Shift+Tab cycle modes; a custom interval displays `Use YYYY-MM-DD HH:MM format`. Select **Export** and press Enter to start.
 
 On Windows, private logs grant the individual data user and LocalSystem access, including when an elevated process created an Administrators-owned data directory. Writer startup repairs existing daemon, TUI and mihomo logs, retained archives and lock files without changing their contents. Running services refresh the root permission policy when creating or hardening files, preserving the repaired user access after rotation. If an older version removed ordinary-user access, the updated application must run once with administrator privileges to repair it. The elevated in-TUI update flow starts the new TUI with those privileges; users who replace the binary manually may need an elevated first start.
 
-An archive contains `manifest.json` plus only the non-empty fixed entries `daemon/mihari-daemon.log`, `tui/mihari-tui.log`, and `mihomo/mihomo.log`. Records are parsed, filtered, recursively redacted a second time, and re-encoded rather than copied as raw JSONL. Object members whose keys contain recognized credentials or URLs are omitted; ordinary sibling fields are preserved. Known credentials and URLs are removed, but node names, destination domains/IP addresses, and traffic metadata may remain—inspect those fields before sending an archive.
+System Unix exports use `mihari-logs-export/v2`, combining authenticated machine snapshots with current-user logs. Offline export requires explicitly choosing current-user logs only. Windows/explicit private P retain local v1. An archive contains `manifest.json` plus only the non-empty fixed entries `daemon/mihari-daemon.log`, `tui/mihari-tui.log`, and `mihomo/mihomo.log`. Records are parsed, filtered, recursively redacted a second time, and re-encoded rather than copied as raw JSONL. Object members whose keys contain recognized credentials or URLs are omitted; ordinary sibling fields are preserved. Known credentials and URLs are removed, but node names, destination domains/IP addresses, and traffic metadata may remain—inspect those fields before sending an archive.
 
 Export keeps the opened destination-directory identity for the entire operation and will not follow a path replaced while the archive is being generated. On Unix, cleanup assumes the same UID and local root/administrators are trusted. An untrusted shared parent can therefore leave an empty private workspace after its contents were removed, even if its permissions were tightened during export; a cleanup I/O failure reports that content may remain. A destination directory renamed externally after successful publication can also make the displayed absolute path stale.
 

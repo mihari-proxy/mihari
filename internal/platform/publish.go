@@ -1,12 +1,12 @@
 package platform
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 )
 
 // ErrPublishDirectoryChanged reports that the visible path no longer names the
@@ -21,19 +21,17 @@ var publishWorkspaceCleanupCheckpoint = func() {}
 
 // PublishDir is a closeable capability over a held output directory.
 type PublishDir struct {
-	mu     sync.Mutex
-	closed bool
-	path   string
-	plat   publishDirState
+	capabilityLifetime
+	path string
+	plat publishDirState
 }
 
 // PublishWorkspace is a private child directory held by identity.
 type PublishWorkspace struct {
-	mu     sync.Mutex
-	closed bool
-	owner  *PublishDir
-	name   string
-	plat   publishWorkspaceState
+	capabilityLifetime
+	owner *PublishDir
+	name  string
+	plat  publishWorkspaceState
 }
 
 // OpenPublishDir opens an existing absolute directory. The selected path may
@@ -53,11 +51,11 @@ func (d *PublishDir) Path() string { return d.path }
 // Exists reports whether name exists in the held directory without following
 // the directory's visible path.
 func (d *PublishDir) Exists(name string) (bool, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closed {
-		return false, errPrivateFSClosed
+	finish, err := d.begin(context.Background())
+	if err != nil {
+		return false, err
 	}
+	defer finish()
 	if !isSingleSegment(name) {
 		return false, fmt.Errorf("publish target must be a basename")
 	}
@@ -67,40 +65,40 @@ func (d *PublishDir) Exists(name string) (bool, error) {
 // IsWithin reports whether the held publish directory is the held ancestor or
 // one of its descendants.
 func (d *PublishDir) IsWithin(ancestor *DirectoryIdentity) (bool, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closed {
-		return false, errPrivateFSClosed
+	finish, err := d.begin(context.Background())
+	if err != nil {
+		return false, err
 	}
+	defer finish()
 	if ancestor == nil {
 		return false, fmt.Errorf("publish ancestor is nil")
 	}
-	ancestor.mu.Lock()
-	defer ancestor.mu.Unlock()
-	if ancestor.closed {
-		return false, errPrivateFSClosed
+	finishAncestor, err := ancestor.begin(context.Background())
+	if err != nil {
+		return false, err
 	}
+	defer finishAncestor()
 	return d.isWithinLocked(ancestor)
 }
 
 // CreateWorkspace creates and holds a private child directory.
 func (d *PublishDir) CreateWorkspace() (*PublishWorkspace, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closed {
-		return nil, errPrivateFSClosed
+	finish, err := d.begin(context.Background())
+	if err != nil {
+		return nil, err
 	}
+	defer finish()
 	return d.createWorkspaceLocked()
 }
 
 // CreateTemp creates a private, exclusive temporary file relative to the held
 // workspace and returns its single-segment basename.
 func (w *PublishWorkspace) CreateTemp(pattern string) (*os.File, string, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.closed {
-		return nil, "", errPrivateFSClosed
+	finish, err := w.begin(context.Background())
+	if err != nil {
+		return nil, "", err
 	}
+	defer finish()
 	if !validTempPattern(pattern) {
 		return nil, "", fmt.Errorf("publish temp pattern must be a basename")
 	}
@@ -109,11 +107,11 @@ func (w *PublishWorkspace) CreateTemp(pattern string) (*os.File, string, error) 
 
 // Remove removes a non-reparse file relative to the held workspace.
 func (w *PublishWorkspace) Remove(name string) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.closed {
-		return errPrivateFSClosed
+	finish, err := w.begin(context.Background())
+	if err != nil {
+		return err
 	}
+	defer finish()
 	if !isSingleSegment(name) {
 		return fmt.Errorf("publish temp must be a basename")
 	}
@@ -124,19 +122,19 @@ func (w *PublishWorkspace) Remove(name string) error {
 // never replaces targetName. Once the target exists, later cleanup or sync
 // failures are delivered to onWarning and success remains committed.
 func (d *PublishDir) PublishNoReplace(workspace *PublishWorkspace, tempName, targetName string, onWarning func(error)) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closed {
-		return errPrivateFSClosed
+	finish, err := d.begin(context.Background())
+	if err != nil {
+		return err
 	}
+	defer finish()
 	if workspace == nil {
 		return fmt.Errorf("publish workspace is nil")
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
-	if workspace.closed {
-		return errPrivateFSClosed
+	finishWorkspace, err := workspace.begin(context.Background())
+	if err != nil {
+		return err
 	}
+	defer finishWorkspace()
 	if !isSingleSegment(tempName) || !isSingleSegment(targetName) {
 		return fmt.Errorf("publish names must be basenames")
 	}
@@ -151,35 +149,18 @@ func (d *PublishDir) PublishNoReplace(workspace *PublishWorkspace, tempName, tar
 // Repeated calls return nil.
 func (w *PublishWorkspace) Close() error {
 	if w.owner == nil {
-		w.mu.Lock()
-		defer w.mu.Unlock()
-		if w.closed {
-			return nil
-		}
-		w.closed = true
-		return w.closePlatformLocked(nil)
+		return w.closeWith(func() error { return w.closePlatformLocked(nil) })
 	}
-	w.owner.mu.Lock()
-	defer w.owner.mu.Unlock()
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.closed {
-		return nil
+	finish, err := w.owner.begin(context.Background())
+	if err != nil {
+		return w.closeWith(func() error { return w.closePlatformLocked(nil) })
 	}
-	w.closed = true
-	return w.closePlatformLocked(w.owner)
+	defer finish()
+	return w.closeWith(func() error { return w.closePlatformLocked(w.owner) })
 }
 
 // Close releases the held publish directory. Repeated calls return nil.
-func (d *PublishDir) Close() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closed {
-		return nil
-	}
-	d.closed = true
-	return d.closePlatformLocked()
-}
+func (d *PublishDir) Close() error { return d.closeWith(d.closePlatformLocked) }
 
 func validTempPattern(pattern string) bool {
 	if pattern == "" {

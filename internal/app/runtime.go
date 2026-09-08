@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -27,9 +29,11 @@ import (
 	"github.com/mihari-proxy/mihari/internal/sysproxy"
 	"github.com/mihari-proxy/mihari/internal/tundetect"
 	"github.com/mihari-proxy/mihari/internal/web"
+	"go.yaml.in/yaml/v3"
 )
 
 type RuntimeAssembly struct {
+	SetupRequired bool
 	Manager       *runtimeapi.Manager
 	Store         *state.Store
 	Web           *web.Server
@@ -37,15 +41,35 @@ type RuntimeAssembly struct {
 }
 
 type RuntimeBuildOptions struct {
+	// TrustedCore and RootConfigInput are enabled together by the Unix assembly.
+	// Root Unix modes supply the trusted core, input policy and resources together.
+	TrustedCore     *core.TrustedExecution
+	RootConfigInput func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error)
+	Resources       StartupResources
+
 	InitialSetupRequired bool
 	SettingsPath         string
 	ServiceStatus        func() (string, error)
+	InstallationInspect  func(context.Context) (InstallationStatus, error)
 	Logging              runtimeapi.LoggingRuntime
 	RefreshLogSecrets    func(catalogURLs []string)
 	MihomoStdout         io.Writer
 	MihomoStderr         io.Writer
 	SaveOnboardingState  func(string, onboarding.State) (config.CommitResult, error)
 	OnBackgroundError    func(component string, err error)
+	ValidationMode       bool
+	ValidationCore       core.ProvenanceStore
+	ActivationPhase      string
+	// ShareProcessGroup is enabled only by the installed launchd service assembly.
+	ShareProcessGroup bool
+}
+
+// StartupResources recovers provider/resource WALs and reconstructs the
+// authoritative offline resource graph before mihomo validation or start.
+type StartupResources interface {
+	Recover(context.Context) error
+	SnapshotResources(context.Context, subscription.PolicyInput) (*subscription.ResourceGraph, error)
+	OfflineInput(context.Context, subscription.PolicyInput, *subscription.ResourceGraph) (subscription.PolicyInput, error)
 }
 
 func BuildRuntime(paths platform.Paths, settings config.Settings, daemonVersion string, stdout, stderr io.Writer) (*RuntimeAssembly, error) {
@@ -59,10 +83,65 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	if stderr == nil {
 		stderr = io.Discard
 	}
+	if options.ValidationMode {
+		return buildValidationRuntime(paths, settings, daemonVersion, options)
+	}
+	if options.ActivationPhase != "" && options.ActivationPhase != InstallPhaseActivationCommitted && options.ActivationPhase != InstallPhaseComplete {
+		return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "install activation is required"}
+	}
+	if options.TrustedCore != nil {
+		if err := options.TrustedCore.CheckPaths(paths.Root, paths.CoreBinary, paths.RuntimeConfig); err != nil {
+			return nil, err
+		}
+	}
 	if err := paths.EnsureDirs(); err != nil {
 		return nil, err
 	}
-	if err := core.EnsureRuntimeConfig(paths.RuntimeConfig, settings); err != nil {
+	// Recover before opening catalog/onboarding or constructing any settings
+	// consumer. The caller may have loaded settings before this recovery.
+	if options.TrustedCore != nil && options.Resources != nil {
+		if recovery, ok := options.Resources.(interface {
+			RecoverState(context.Context) (*config.Settings, error)
+		}); ok {
+			recovered, err := recovery.RecoverState(context.Background())
+			if err != nil {
+				return nil, err
+			}
+			if recovered != nil {
+				settings = recovered.Clone()
+			}
+		} else if err := options.Resources.Recover(context.Background()); err != nil {
+			return nil, err
+		}
+	}
+	subscriptions, err := subscription.Open(subscription.ServiceOptions{
+		CatalogPath: paths.SubscriptionCatalog,
+		CacheDir:    paths.SubscriptionCache,
+		ProxyAddr:   settings.MixedAddr,
+	})
+	if err != nil {
+		return nil, err
+	}
+	installer := core.Installer{}
+	if options.TrustedCore != nil {
+		if options.RootConfigInput == nil {
+			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "root configuration context unavailable"}
+		}
+		if err := core.RecoverProvenance(context.Background(), options.TrustedCore.Provenance()); err != nil {
+			return nil, err
+		}
+		input, err := startupPolicyInput(context.Background(), options, subscriptions, settings)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := options.TrustedCore.InstalledAvailable(context.Background()); err != nil {
+			return nil, err
+		}
+		if err = options.TrustedCore.InitializeConfig(context.Background(), settings, input); err != nil {
+			return nil, err
+		}
+		installer = options.TrustedCore.Installer()
+	} else if err := core.EnsureRuntimeConfig(paths.RuntimeConfig, settings); err != nil {
 		return nil, err
 	}
 	if err := probeManagedPorts(settings, nil); err != nil {
@@ -75,7 +154,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		Health:    "ok",
 	})
 	if info, err := os.Stat(paths.CoreBinary); err == nil && !info.IsDir() {
-		if version, err := core.DetectVersion(context.Background(), core.OSCommandRunner{}, paths.CoreBinary); err == nil {
+		if version, err := installer.DetectVersion(context.Background(), paths.CoreBinary); err == nil {
 			snapshot := store.Load()
 			snapshot.Core = state.CoreState{Status: "stopped", Version: version, Channel: settings.CoreChannel}
 			store.Store(snapshot)
@@ -83,14 +162,6 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	}
 	coordinator := state.NewCoordinator(store)
 	controller := mihomo.NewClient("http://"+settings.ControllerAddr, settings.ControllerSecret, nil)
-	subscriptions, err := subscription.Open(subscription.ServiceOptions{
-		CatalogPath: paths.SubscriptionCatalog,
-		CacheDir:    paths.SubscriptionCache,
-		ProxyAddr:   settings.MixedAddr,
-	})
-	if err != nil {
-		return nil, err
-	}
 	// A persisted active subscription already had its generated config installed
 	// into the runtime config file; without this the status API would report
 	// "Not applied" after every daemon restart until the next subscription op.
@@ -168,11 +239,15 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		starterStderr = io.Discard
 	}
 	mihomoStarter := supervisor.CommandStarter{
-		BinaryPath: paths.CoreBinary,
-		DataDir:    paths.Root,
-		ConfigPath: paths.RuntimeConfig,
-		Stdout:     starterStdout,
-		Stderr:     starterStderr,
+		ShareProcessGroup: options.ShareProcessGroup,
+		BinaryPath:        paths.CoreBinary,
+		DataDir:           paths.Root,
+		ConfigPath:        paths.RuntimeConfig,
+		Stdout:            starterStdout,
+		Stderr:            starterStderr,
+	}
+	if options.TrustedCore != nil {
+		mihomoStarter.CommandFactory = options.TrustedCore.RunCommand
 	}
 	var manager *runtimeapi.Manager
 	coreSupervisor := supervisor.New(supervisor.Options{
@@ -188,9 +263,13 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		},
 	})
 	manager = runtimeapi.New(runtimeapi.Options{
-		Store:       store,
-		Coordinator: coordinator,
-		Installer:   core.Installer{},
+		ActivationPhase: options.ActivationPhase,
+		Store:           store,
+		Coordinator:     coordinator,
+		Installer:       installer,
+		TrustedCore:     options.TrustedCore,
+		RootConfigInput: options.RootConfigInput,
+		Resources:       concreteResourcePreparer(options.Resources),
 		InstallRequest: core.InstallRequest{
 			BinaryPath: paths.CoreBinary,
 			DataDir:    paths.Root,
@@ -205,26 +284,34 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		PrepareGeoIP: func(ctx context.Context) (runtimeapi.GeoIPCandidate, error) {
 			return geoIPService.PrepareUpdate(ctx)
 		},
-		Onboarding:        onboardingService,
-		Logging:           options.Logging,
-		RefreshLogSecrets: options.RefreshLogSecrets,
-		Panels:            panelService,
-		WebGateway:        webGateway,
-		WebOpenToken:      webCredential,
-		Settings:          settings,
-		SettingsPath:      settingsPath,
-		ServiceStatus:     options.ServiceStatus,
-		OnBackgroundError: options.OnBackgroundError,
-		SysProxy:          sysproxy.Platform(),
-		TunDetect:         tundetect.Platform(),
-		RuntimeConfig:     paths.RuntimeConfig,
-		StagingDir:        paths.SubscriptionStaging,
+		Onboarding:         onboardingService,
+		Logging:            options.Logging,
+		RefreshLogSecrets:  options.RefreshLogSecrets,
+		Panels:             panelService,
+		WebGateway:         webGateway,
+		WebOpenToken:       webCredential,
+		Settings:           settings,
+		SettingsPath:       settingsPath,
+		ServiceStatus:      options.ServiceStatus,
+		InstallationStatus: installationStatusReader(options.InstallationInspect),
+		OnBackgroundError:  options.OnBackgroundError,
+		SysProxy:           sysproxy.Platform(),
+		TunDetect:          tundetect.Platform(),
+		RuntimeConfig:      paths.RuntimeConfig,
+		StagingDir:         paths.SubscriptionStaging,
 		ValidateConfig: func(ctx context.Context, candidatePath string) error {
+			if options.TrustedCore != nil {
+				return protocol.APIError{Code: protocol.CodeInvalidState, Message: "root config requires a generated capability"}
+			}
 			return core.ValidateConfig(ctx, core.OSCommandRunner{}, paths.CoreBinary, paths.Root, candidatePath)
 		},
 		RunScheduler: func(ctx context.Context) error {
 			var schedulers sync.WaitGroup
-			schedulers.Add(2)
+			workers := 2
+			if concreteResourcePreparer(options.Resources) != nil {
+				workers++
+			}
+			schedulers.Add(workers)
 			go func() {
 				defer schedulers.Done()
 				scheduler := subscription.NewScheduler(subscription.SchedulerOptions{
@@ -251,17 +338,193 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 				}
 				_ = scheduler.Run(ctx)
 			}()
+			if concreteResourcePreparer(options.Resources) != nil {
+				go func() {
+					defer schedulers.Done()
+					_ = manager.RunProviderScheduler(ctx)
+				}()
+			}
 			<-ctx.Done()
 			schedulers.Wait()
 			return nil
 		},
 		BinaryExists: func() bool {
+			if options.TrustedCore != nil {
+				ready, err := options.TrustedCore.InstalledAvailable(context.Background())
+				return err == nil && ready
+			}
 			info, err := os.Stat(paths.CoreBinary)
 			return err == nil && !info.IsDir()
 		},
 	})
 	webGateway.Mutator = webMutator{manager: manager}
 	return &RuntimeAssembly{Manager: manager, Store: store, Web: webGateway, mihomoStarter: mihomoStarter}, nil
+}
+
+func buildValidationRuntime(paths platform.Paths, settings config.Settings, daemonVersion string, options RuntimeBuildOptions) (*RuntimeAssembly, error) {
+	return BuildValidationRuntime(context.Background(), paths, settings, daemonVersion, options)
+}
+
+// BuildValidationRuntime reads existing business objects without initializing
+// or recovering them, and propagates the private child lifetime cancellation.
+func BuildValidationRuntime(ctx context.Context, paths platform.Paths, settings config.Settings, daemonVersion string, options RuntimeBuildOptions) (*RuntimeAssembly, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	setupRequired := options.InitialSetupRequired
+	onboardingState, err := onboarding.Load(paths.Onboarding)
+	if errors.Is(err, os.ErrNotExist) {
+		setupRequired = true
+	} else if err != nil {
+		return nil, err
+	} else {
+		setupRequired = setupRequired || !onboardingState.Complete
+	}
+	info, err := os.Stat(paths.CoreBinary)
+	if errors.Is(err, os.ErrNotExist) {
+		setupRequired = true
+	} else if err != nil {
+		return nil, err
+	} else if !info.Mode().IsRegular() {
+		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid installed core"}
+	}
+	if options.ValidationCore != nil {
+		binary, err := options.ValidationCore.Inspect(ctx, core.InstalledBinary, "")
+		if err != nil {
+			return nil, err
+		}
+		receipt, err := options.ValidationCore.Inspect(ctx, core.InstalledReceipt, "")
+		if err != nil {
+			return nil, err
+		}
+		if binary.Present != receipt.Present {
+			return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "incomplete installed core provenance pair"}
+		}
+		if binary.Present {
+			verified, err := core.OpenInstalledCore(ctx, options.ValidationCore)
+			if err != nil {
+				return nil, err
+			}
+			if err := verified.Close(); err != nil {
+				return nil, err
+			}
+		} else {
+			setupRequired = true
+		}
+	}
+	catalog, err := subscription.Load(paths.SubscriptionCatalog)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	for _, profile := range catalog.Profiles {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if profile.Generation == 0 {
+			continue
+		}
+		file, err := os.Open(filepath.Join(paths.SubscriptionCache, profile.ID+".yaml"))
+		if err != nil {
+			return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription cache is unavailable"}
+		}
+		raw, readErr := io.ReadAll(io.LimitReader(validationContextReader{ctx: ctx, reader: file}, (16<<20)+1))
+		if err = errors.Join(readErr, file.Close()); err != nil {
+			return nil, err
+		}
+		document, err := subscription.ParseDocument(raw)
+		if err != nil {
+			return nil, err
+		}
+		if options.RootConfigInput != nil {
+			input, err := options.RootConfigInput(ctx, document, settings)
+			if err != nil {
+				return nil, err
+			}
+			input.YAML, input.Settings, input.SubscriptionID, input.Generation = raw, settings, profile.ID, profile.Generation
+			if options.Resources != nil {
+				graph, err := options.Resources.SnapshotResources(ctx, input)
+				if err != nil {
+					return nil, err
+				}
+				input, err = options.Resources.OfflineInput(ctx, input, graph)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if _, err = subscription.NewRootConfigPolicy().Build(ctx, input); err != nil {
+				return nil, err
+			}
+		}
+	}
+	store := state.NewStore(state.Snapshot{
+		Version:   daemonVersion,
+		StartedAt: time.Now().UTC(),
+		Health:    "ok",
+	})
+	manager := runtimeapi.New(runtimeapi.Options{
+		Store:              store,
+		Settings:           settings,
+		SettingsPath:       options.SettingsPath,
+		Logging:            options.Logging,
+		ServiceStatus:      options.ServiceStatus,
+		InstallationStatus: installationStatusReader(options.InstallationInspect),
+		OnBackgroundError:  options.OnBackgroundError,
+		ValidationMode:     true,
+		ActivationPhase:    options.ActivationPhase,
+	})
+	return &RuntimeAssembly{Manager: manager, Store: store, SetupRequired: setupRequired}, nil
+}
+
+func concreteResourcePreparer(resources StartupResources) *subscription.ResourcePreparer {
+	preparer, _ := resources.(*subscription.ResourcePreparer)
+	return preparer
+}
+
+func startupPolicyInput(ctx context.Context, options RuntimeBuildOptions, subscriptions *subscription.Service, settings config.Settings) (subscription.PolicyInput, error) {
+	catalog := subscriptions.Snapshot()
+	if catalog.ActiveID == "" {
+		input, err := options.RootConfigInput(ctx, nil, settings)
+		if err != nil {
+			return subscription.PolicyInput{}, err
+		}
+		input.YAML = []byte("proxies: []\nproxy-groups: []\nrules:\n  - MATCH,DIRECT\n")
+		// This compiled, resource-free bootstrap has its own policy identity.
+		// It does not create a profile or advance any persisted generation.
+		input.SubscriptionID = "00000000000000000000000000000000"
+		input.Generation = 1
+		input.Settings = settings
+		input.Resources = nil
+		return input, nil
+	}
+	index := catalog.Index(catalog.ActiveID)
+	if index < 0 || catalog.Profiles[index].Generation == 0 {
+		return subscription.PolicyInput{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "active subscription cache is unavailable"}
+	}
+	profile := catalog.Profiles[index]
+	if options.Resources == nil {
+		return subscription.PolicyInput{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "managed active resources are unavailable"}
+	}
+	_, document, err := subscriptions.ReadCache(profile.ID)
+	if err != nil {
+		return subscription.PolicyInput{}, err
+	}
+	input, err := options.RootConfigInput(ctx, document, settings)
+	if err != nil {
+		return subscription.PolicyInput{}, err
+	}
+	input.YAML, err = yaml.Marshal(document)
+	if err != nil {
+		return subscription.PolicyInput{}, err
+	}
+	input.SubscriptionID = profile.ID
+	input.Generation = profile.Generation
+	input.Settings = settings
+	input.Resources = nil
+	graph, err := options.Resources.SnapshotResources(ctx, input)
+	if err != nil {
+		return subscription.PolicyInput{}, err
+	}
+	return options.Resources.OfflineInput(ctx, input, graph)
 }
 
 type webMutationRuntime interface {
@@ -334,4 +597,19 @@ func newWebOperationID() string {
 		return time.Now().UTC().Format("20060102T150405.000000000")
 	}
 	return hex.EncodeToString(value[:])
+}
+
+type validationContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r validationContextReader) Read(b []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if len(b) > 32768 {
+		b = b[:32768]
+	}
+	return r.reader.Read(b)
 }

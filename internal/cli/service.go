@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/elevate"
@@ -29,6 +30,10 @@ func newServiceCommand(dependencies Dependencies, options *runOptions) *cobra.Co
 	root.AddCommand(newServiceActionCommand("stop", "Stop the Mihari OS service", dependencies, options, true, func(c ServiceController) error { return c.Stop() }))
 	root.AddCommand(newServiceActionCommand("restart", "Restart the Mihari OS service", dependencies, options, true, func(c ServiceController) error { return c.Restart() }))
 	root.AddCommand(newServiceStatusCommand(dependencies, options))
+	addInstallationCommands(root, dependencies, options)
+	if dependencies.ServiceApply != nil {
+		root.AddCommand(newServiceApplyCommand(dependencies, options, os.Geteuid))
+	}
 	return root
 }
 
@@ -46,11 +51,17 @@ func newServiceActionCommand(use, short string, dependencies Dependencies, optio
 				return err
 			}
 		}
-		controller, err := serviceController(dependencies)
-		if err != nil {
-			return err
+		var err error
+		if dependencies.ServiceAction != nil {
+			err = dependencies.ServiceAction(command.Context(), use)
+		} else {
+			var controller ServiceController
+			controller, err = serviceController(dependencies)
+			if err == nil {
+				err = action(controller)
+			}
 		}
-		if err := action(controller); err != nil {
+		if err != nil {
 			return classifyRuntimeError(err)
 		}
 		if options.json {

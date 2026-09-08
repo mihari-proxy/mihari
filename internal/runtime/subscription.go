@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"os"
 
@@ -30,6 +31,11 @@ type SetSubscriptionInput struct {
 }
 
 type configCandidate struct {
+	generation      uint64
+	generationBound bool
+	generated       *core.GeneratedConfig
+	hash            [32]byte
+
 	path    string
 	content []byte
 }
@@ -96,6 +102,9 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 }
 
 func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, id string) (subscription.PublicProfile, error) {
+	if m.providerResources != nil {
+		return m.refreshSubscriptionManaged(ctx, operation, id)
+	}
 	result, err := m.doOperation(ctx, "sub-refresh:"+operation.ID, func() (any, error) {
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
@@ -108,7 +117,7 @@ func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, 
 		if err != nil {
 			return nil, err
 		}
-		defer os.Remove(candidate.path)
+		defer candidate.cleanup()
 		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
@@ -119,7 +128,7 @@ func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, 
 				return snapshot, commitErr
 			}
 			if receipt.After.ActiveID == id {
-				if applyErr := m.commitRuntimeConfig(ctx, candidate.content); applyErr != nil {
+				if applyErr := m.commitRuntimeConfig(ctx, candidate); applyErr != nil {
 					if rollbackErr := m.subscriptions.Rollback(receipt); rollbackErr != nil {
 						return snapshot, degradedConfigError()
 					}
@@ -143,6 +152,9 @@ func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, 
 }
 
 func (m *Manager) UseSubscription(ctx context.Context, operation Operation, id string) (subscription.PublicProfile, error) {
+	if m.providerResources != nil {
+		return m.useSubscriptionManaged(ctx, operation, id)
+	}
 	result, err := m.doOperation(ctx, "sub-use:"+operation.ID, func() (any, error) {
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
@@ -161,7 +173,7 @@ func (m *Manager) UseSubscription(ctx context.Context, operation Operation, id s
 		if err != nil {
 			return nil, err
 		}
-		defer os.Remove(candidate.path)
+		defer candidate.cleanup()
 		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
@@ -179,7 +191,7 @@ func (m *Manager) UseSubscription(ctx context.Context, operation Operation, id s
 			if mutateErr != nil {
 				return snapshot, mutateErr
 			}
-			if applyErr := m.commitRuntimeConfig(ctx, candidate.content); applyErr != nil {
+			if applyErr := m.commitRuntimeConfig(ctx, candidate); applyErr != nil {
 				if restoreErr := m.subscriptions.Restore(before); restoreErr != nil {
 					return snapshot, degradedConfigError()
 				}
@@ -230,8 +242,8 @@ func (m *Manager) RemoveSubscription(ctx context.Context, operation Operation, i
 					}
 					return snapshot, prepareErr
 				}
-				defer os.Remove(candidate.path)
-				if applyErr := m.commitRuntimeConfig(ctx, candidate.content); applyErr != nil {
+				defer candidate.cleanup()
+				if applyErr := m.commitRuntimeConfig(ctx, candidate); applyErr != nil {
 					if restoreErr := m.subscriptions.Restore(before); restoreErr != nil {
 						return snapshot, degradedConfigError()
 					}
@@ -324,8 +336,8 @@ func (m *Manager) mutateSubscription(ctx context.Context, prefix string, operati
 					}
 					return snapshot, prepareErr
 				}
-				defer os.Remove(candidate.path)
-				if applyErr := m.commitRuntimeConfig(ctx, candidate.content); applyErr != nil {
+				defer candidate.cleanup()
+				if applyErr := m.commitRuntimeConfig(ctx, candidate); applyErr != nil {
 					if restoreErr := m.subscriptions.Restore(before); restoreErr != nil {
 						return snapshot, degradedConfigError()
 					}
@@ -364,11 +376,15 @@ func (m *Manager) refreshSubscriptionLogSecrets() {
 }
 
 func (m *Manager) prepareCatalogConfig(ctx context.Context, catalog subscription.Catalog) (configCandidate, error) {
-	return m.prepareCatalogConfigWithSettings(ctx, catalog, m.settingsSnapshot())
+	settings, generation := m.configInputs()
+	return m.prepareCatalogConfigWithSettings(ctx, catalog, settings, generation)
 }
 
-func (m *Manager) prepareCatalogConfigWithSettings(ctx context.Context, catalog subscription.Catalog, settings config.Settings) (configCandidate, error) {
+func (m *Manager) prepareCatalogConfigWithSettings(ctx context.Context, catalog subscription.Catalog, settings config.Settings, generation uint64) (configCandidate, error) {
 	if catalog.ActiveID == "" {
+		if m.trustedCore != nil {
+			return m.prepareConfigWithSettings(ctx, subscription.Document{"proxies": []any{}, "proxy-groups": []any{}, "rules": []any{"MATCH,DIRECT"}}, settings, generation)
+		}
 		content, err := core.BootstrapConfig(settings)
 		if err != nil {
 			return configCandidate{}, err
@@ -390,14 +406,37 @@ func (m *Manager) prepareCatalogConfigWithSettings(ctx context.Context, catalog 
 	if err != nil {
 		return configCandidate{}, err
 	}
-	return m.prepareConfigWithSettings(ctx, document, settings)
+	return m.prepareConfigWithSettings(ctx, document, settings, generation)
 }
 
 func (m *Manager) prepareConfig(ctx context.Context, document subscription.Document) (configCandidate, error) {
-	return m.prepareConfigWithSettings(ctx, document, m.settingsSnapshot())
+	settings, generation := m.configInputs()
+	return m.prepareConfigWithSettings(ctx, document, settings, generation)
 }
 
-func (m *Manager) prepareConfigWithSettings(ctx context.Context, document subscription.Document, settings config.Settings) (configCandidate, error) {
+func (m *Manager) prepareConfigWithSettings(ctx context.Context, document subscription.Document, settings config.Settings, generation uint64) (configCandidate, error) {
+	if m.trustedCore != nil {
+		if m.rootConfigInput == nil {
+			return configCandidate{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "root configuration context unavailable"}
+		}
+		input, e := m.rootConfigInput(ctx, document, settings)
+		if e != nil {
+			return configCandidate{}, e
+		}
+		input.YAML, e = yaml.Marshal(document)
+		if e != nil {
+			return configCandidate{}, e
+		}
+		input.Settings = settings
+		output, e := subscription.GenerateWithPolicy(ctx, input, subscription.NewRootConfigPolicy())
+		if e != nil {
+			return configCandidate{}, e
+		}
+		candidate, err := m.prepareContent(ctx, output.YAML)
+		candidate.generation, candidate.generationBound = generation, true
+		return candidate, err
+	}
+
 	content, err := subscription.Generate(document, nil, settings)
 	if err != nil {
 		return configCandidate{}, err
@@ -406,6 +445,20 @@ func (m *Manager) prepareConfigWithSettings(ctx context.Context, document subscr
 }
 
 func (m *Manager) prepareContent(ctx context.Context, content []byte) (configCandidate, error) {
+	hash := sha256.Sum256(content)
+	if m.trustedCore != nil {
+		generated, e := m.trustedCore.PrepareGenerated(ctx, subscription.PolicyOutput{YAML: content})
+		if e != nil {
+			return configCandidate{}, e
+		}
+		path, e := generated.Path(ctx)
+		if e != nil {
+			_ = generated.Close()
+			return configCandidate{}, e
+		}
+		return configCandidate{path: path, content: append([]byte(nil), content...), hash: hash, generated: generated}, nil
+	}
+
 	if err := os.MkdirAll(m.stagingDir, 0o700); err != nil {
 		return configCandidate{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create subscription staging directory"}
 	}
@@ -444,10 +497,15 @@ func (m *Manager) prepareContent(ctx context.Context, content []byte) (configCan
 			return configCandidate{}, validateErr
 		}
 	}
-	return configCandidate{path: path, content: content}, nil
+	return configCandidate{path: path, content: content, hash: hash}, nil
 }
 
-func (m *Manager) commitRuntimeConfig(ctx context.Context, content []byte) error {
+func (m *Manager) commitRuntimeConfig(ctx context.Context, candidate configCandidate) error {
+	if m.trustedCore != nil {
+		return m.commitTrustedRuntimeConfig(ctx, candidate)
+	}
+	content := candidate.content
+
 	previous, err := os.ReadFile(m.runtimeConfig)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "read previous runtime configuration"}
@@ -518,6 +576,10 @@ func (m *Manager) markConfigDegraded(ctx context.Context, err error) {
 	if !errors.As(err, &apiError) || apiError.Details == nil || apiError.Details["degraded"] != true {
 		return
 	}
+	if m.trustedCore != nil {
+		m.mutationDegraded.Store(true)
+		m.stopCoreOnUnlock.Store(true)
+	}
 	_, _ = m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{Source: "runtime"}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 		snapshot.Health = "degraded"
 		snapshot.Config = state.ConfigState{
@@ -530,4 +592,61 @@ func (m *Manager) markConfigDegraded(ctx context.Context, err error) {
 
 func degradedConfigError() error {
 	return protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription state rollback failed", Details: map[string]any{"degraded": true}}
+}
+
+func (c configCandidate) cleanup() {
+	if c.generated != nil {
+		_ = c.generated.Close()
+	} else if c.path != "" {
+		_ = os.Remove(c.path)
+	}
+}
+func (m *Manager) commitTrustedRuntimeConfig(ctx context.Context, candidate configCandidate) error {
+	// This internal generation is independent of optional client preconditions
+	// and is captured atomically with settings. Publication owns mutation.
+	if !candidate.generationBound || candidate.generation != m.currentConfigGeneration() {
+		return protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "configuration inputs changed during generation"}
+	}
+	if sha256.Sum256(candidate.content) != candidate.hash {
+		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "validated configuration changed before publication"}
+	}
+	previous, e := m.trustedCore.PreviousConfig(ctx)
+	if e != nil {
+		return e
+	}
+	reloader, ok := m.controller.(configReloader)
+	if !ok {
+		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo reload is unavailable"}
+	}
+	cap, e := m.trustedCore.Publish(ctx, candidate.generated, candidate.hash)
+	if e != nil {
+		return e
+	}
+	defer func() { _ = cap.Close() }() // Read-only capability: no pending writes; closure cannot change the operation result.
+	path, e := cap.Path(ctx)
+	if e == nil {
+		e = reloader.Reload(ctx, path, true)
+	}
+	if e == nil {
+		m.settingsMu.Lock()
+		m.configGeneration++
+		m.settingsMu.Unlock()
+		return nil
+	}
+	rollbackCtx := context.WithoutCancel(ctx)
+	old, restoreErr := m.trustedCore.RestoreConfig(rollbackCtx, previous)
+	var reloadErr error
+	if restoreErr == nil {
+		defer func() { _ = old.Close() }() // Read-only capability: no pending writes; closure cannot change the operation result.
+		oldPath, pathErr := old.Path(rollbackCtx)
+		if pathErr != nil {
+			restoreErr = pathErr
+		} else {
+			reloadErr = reloader.Reload(rollbackCtx, oldPath, true)
+		}
+	}
+	if restoreErr != nil || reloadErr != nil {
+		return protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo reload failed and rollback could not be confirmed", Details: map[string]any{"degraded": true}}
+	}
+	return protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo rejected generated configuration; previous configuration restored"}
 }

@@ -463,7 +463,7 @@ func (m *Model) View() string {
 			"Core         "+m.coreSummary(),
 			"Subscription "+m.subscriptionSummary(),
 			"GeoIP        "+m.geoipSummary(),
-			"服务         "+m.serviceSummary(),
+			"Service      "+m.serviceSummary(),
 			"", ui.SetupCompleteHelp)
 	}
 	if m.loading {

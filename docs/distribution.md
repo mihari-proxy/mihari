@@ -63,9 +63,10 @@ sh install-aio.sh        # Windows: powershell -File install-aio.ps1
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `MIHARI_BIN` | `/usr/local/bin`（Linux/macOS）<br>`%LOCALAPPDATA%\Programs\mihari`（Windows） | mihari 二进制安装目录 |
-| `MIHARI_DATA` | `$HOME/.mihari`（Linux/macOS）<br>`%USERPROFILE%\.mihari`（Windows） | 数据根目录（核心 + GeoIP 落地处） |
+| `MIHARI_DATA` | Unix 默认不设置；Windows `%USERPROFILE%\.mihari` | 显式 Unix P 保持私有单根；默认业务 D 为系统 B/data |
+| `MIHARI_INSTALL_ROOT` | `/usr/local/lib/mihari`（Unix） | root0755 安装根 I；自定义 I 同样校验祖先安全 |
 | `MIHARI_INDEX_URL` | 公开直链（见脚本默认值） | index.txt 公开直链（脚本3）；默认仍是稳定 `/mihari-release/mihari/index.txt` |
-| `MIHARI_BUNDLE_URL` | 空 | 显式指定整合包 URL，**跳过 index 与 sha256 校验**（信任自担） |
+| `MIHARI_BUNDLE_URL` | 空 | 显式指定整合包 URL，跳过下载器 index；Unix root apply 仍须受信清单校验，不能以此绕过执行信任 |
 
 脚本 3 `--channel` 选择默认 index：缺省/`main` 读稳定 `…/mihari/index.txt`，`--channel dev` 读公开 `…/mihari-dev/index.txt`。`MIHARI_INDEX_URL` 仍可覆盖（即使同时传 `--channel dev`）。下载器本身仍从稳定根目录获取（dev 根不放置 `install-aio-remote.sh` / `.ps1`）。操作者仍可用 `$env:MIHARI_INDEX_URL=` 或 Unix 管道前缀 `| MIHARI_INDEX_URL=` 指向任意 index。
 
@@ -80,6 +81,15 @@ curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/insta
 ```
 
 ---
+
+
+## Unix root 安装与离线信任
+
+Linux B=/var/lib/mihari，macOS B=/Library/Application Support/mihari；D=B/data，E/C/channel 位于 B，I 默认 /usr/local/lib/mihari。普通用户共享代理管理权限，TUI 日志位于独立 U。root installer 不依赖 HOME/SUDO_USER，不修复不安全的 /usr/local 等祖先；可明确指定安全 MIHARI_INSTALL_ROOT。详情见 [Unix 布局与恢复](unix-layout.md)。
+
+离线 root 信任必须由管理员预先在 `<解析后的 I>/install-trust/manifest.json` 配置，目录、清单与所引用资源均须符合既有 root/no-follow/只读规则。自定义 I 使用自己的 install-trust；bundle 相邻 checksum、请求中 hash 或旧用户树不能作为执行信任源。初始 root 核心策略只允许内置 v1.19.30 的四个 Unix hash，未知核心/provider 格式/字段/MRS 拒绝，可能与旧订阅和 alpha bundle 不兼容；非 root P 与 Windows 仍保持兼容。
+
+安装事务停机后迁移必要数据，保留旧树及日志；activation 前可恢复 source，之后只修复 target。未完成事务通过 `service apply --request` 的 recover 请求恢复，普通启动不做隐式迁移。独立 native CI 不操作真实主机服务、用户数据、订阅或 core，不能作为生产环境迁移已验证的声明。
 
 ## 二、核心通道与 sidecar
 
@@ -113,7 +123,7 @@ Mihari 原始二进制由 Go 1.26.5 以 `-buildvcs=false -trimpath` 构建，避
 
 第 1 行为 `stable` 或 `alpha`；第 2 行为非空 stamp（通道 + 二进制指纹，例如 `stable-v1.19.29` 或 `alpha-e183c58`）。缺行、非法通道或 stamp 为空视为无效，守护进程忽略、不改 settings。
 
-`install-aio.sh` / `install-aio.ps1` 覆盖 `data/bin/mihomo` 时，若 bundle 带 sidecar 则一并覆盖到 `$MIHARI_DATA/bin/core-channel`，**仍不修改** `mihari.yaml`。守护进程在启动与 setup 快路径按 stamp 应用 sidecar：与已记录的 `core-channel-bundle` 相同则不改 `core-channel`（保护用户后来在 System 页切换的通道）；stamp 变化才把打包通道写入 settings。
+Windows `install-aio.ps1` 保持原 overlay/sidecar 行为。Unix root 安装器将 bundle 交给统一 app apply，经过可信核心/typed 配置校验及停机事务后发布 D，不直接 overlay 现有业务树；新通道由同一事务提交。守护进程在启动与 setup 快路径按 stamp 应用 sidecar：与已记录的 `core-channel-bundle` 相同则不改 `core-channel`（保护用户后来在 System 页切换的通道）；stamp 变化才把打包通道写入 settings。
 
 settings 新增可选字段 `core-channel` 与 `core-channel-bundle`（schema 仍为 `mihari.settings/v1`）。加载使用 `KnownFields(true)`：无这些字段的旧文件可由新 daemon 读取（空通道视为 `stable`）；**含这些字段的新 settings 文件无法被旧 daemon 加载**。
 

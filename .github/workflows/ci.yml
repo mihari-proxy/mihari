@@ -46,6 +46,8 @@ jobs:
         run: python scripts/install/test_parallel_download.py -v
       - name: Test install channel resolution
         run: python -m pytest scripts/install/test_install_channel.py -q
+      - name: Test isolated security runner without privileges
+        run: python -m pytest scripts/test/test_unix_layout_security.py -q
       - name: Test release safety policies
         env:
           PYTHONPATH: ${{ github.workspace }}/scripts/release
@@ -89,7 +91,11 @@ jobs:
           exit 0
 
   race:
-    runs-on: windows-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -99,7 +105,11 @@ jobs:
         run: go test -count=1 -race ./...
 
   vet-format:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -108,6 +118,7 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Format
+        shell: bash
         run: test -z "$(gofmt -l .)"
 
   # Observe-only coverage: reports total/critical packages; does not fail on percentage.

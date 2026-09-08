@@ -1,0 +1,5 @@
+{"schema":"mihari.machine-log-stream/v1","type":"header","snapshot_id":"00000000000000000000000000000001","to":"2026-09-05T00:00:00Z","sources":["daemon","mihomo"]}
+{"schema":"mihari.machine-log-stream/v1","type":"record","source":"daemon","payload_b64":"eyJ0aW1lIjoiMjAyNi0wOS0wNVQwMDowMDowMFoiLCJtc2ciOiLoioLngrkiLCJuIjoxZTB9","redacted":false}
+{"schema":"mihari.machine-log-stream/v1","type":"source_end","source":"daemon","lines":1,"skipped_invalid":0,"redacted":0,"sources":["mihari-daemon.log"],"sha256":"1625f1821f85ab2dc68c7da55c4fbe769637b7752174c7d5be8a83cd8d388a48","bytes":55}
+{"schema":"mihari.machine-log-stream/v1","type":"source_end","source":"mihomo","lines":0,"skipped_invalid":0,"redacted":0,"sources":[],"sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","bytes":0}
+{"schema":"mihari.machine-log-stream/v1","type":"complete","snapshot_id":"00000000000000000000000000000001","source_count":2,"total_bytes":55}

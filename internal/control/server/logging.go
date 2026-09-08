@@ -16,6 +16,7 @@ type loggingAPI interface {
 func (s *Server) loggingRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/logging", s.loggingStatus)
 	mux.HandleFunc("PATCH /v1/logging", s.updateLogging)
+	mux.HandleFunc("POST /v1/logging/snapshot", s.loggingSnapshot)
 }
 
 func (s *Server) loggingRuntime(writer http.ResponseWriter) (loggingAPI, bool) {

@@ -72,9 +72,9 @@ function Download-SingleFileWithProgress($url, $dest) {
         $read += $n
         if ($total -gt 0) {
           $pct = [int]($read * 100 / $total)
-          Write-Progress -Activity (FixEncoding '下载 mihari 安装包') -Status (FixEncoding ('已下载 {0:N1} / {1:N1} MB' -f ($read/1MB), ($total/1MB))) -PercentComplete $pct
+          Write-Progress -Activity (FixEncoding 'Downloading the mihari package') -Status (FixEncoding ('Downloaded {0:N1} / {1:N1} MB' -f ($read/1MB), ($total/1MB))) -PercentComplete $pct
         } else {
-          Write-Progress -Activity (FixEncoding '下载 mihari 安装包') -Status (FixEncoding ('已下载 {0:N1} MB' -f ($read/1MB)))
+          Write-Progress -Activity (FixEncoding 'Downloading the mihari package') -Status (FixEncoding ('Downloaded {0:N1} MB' -f ($read/1MB)))
         }
       }
     } finally { $outStream.Dispose() }
@@ -82,7 +82,7 @@ function Download-SingleFileWithProgress($url, $dest) {
     if ($resp) { $resp.Dispose() }
     $client.Dispose()
   }
-  Write-Progress -Activity (FixEncoding '下载 mihari 安装包') -Completed
+  Write-Progress -Activity (FixEncoding 'Downloading the mihari package') -Completed
 }
 
 # Return the remote length only when a bytes=0-0 probe proves strict Range
@@ -164,7 +164,7 @@ function Download-FileWithProgress($url, $dest) {
     while (($workers | Where-Object { -not $_.Handle.IsCompleted }).Count -gt 0) {
       $read = [long](($workers | ForEach-Object { if (Test-Path -LiteralPath $_.Path) { (Get-Item -LiteralPath $_.Path).Length } else { 0 } } | Measure-Object -Sum).Sum)
       $pct = [int]($read * 100 / $total)
-      Write-Progress -Activity (FixEncoding '下载 mihari 安装包') -Status (FixEncoding ('已下载 {0:N1} / {1:N1} MB' -f ($read/1MB), ($total/1MB))) -PercentComplete $pct
+      Write-Progress -Activity (FixEncoding 'Downloading the mihari package') -Status (FixEncoding ('Downloaded {0:N1} / {1:N1} MB' -f ($read/1MB), ($total/1MB))) -PercentComplete $pct
       Start-Sleep -Milliseconds 100
     }
     foreach ($worker in $workers) { $worker.PowerShell.EndInvoke($worker.Handle) | Out-Null }
@@ -184,7 +184,7 @@ function Download-FileWithProgress($url, $dest) {
     foreach ($worker in $workers) { $worker.PowerShell.Dispose() }
     $pool.Dispose()
     Remove-Item -LiteralPath $partsDir -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Progress -Activity (FixEncoding '下载 mihari 安装包') -Completed
+    Write-Progress -Activity (FixEncoding 'Downloading the mihari package') -Completed
   }
 }
 # Print a short install plan + what's affected, then confirm. Runs once before the
@@ -192,15 +192,15 @@ function Download-FileWithProgress($url, $dest) {
 function Show-InstallPlan {
   $binHint = if ($env:MIHARI_BIN) { $env:MIHARI_BIN } else { Join-Path $env:LOCALAPPDATA 'Programs\mihari' }
   $dataHint = if ($env:MIHARI_DATA) { $env:MIHARI_DATA } else { Join-Path $env:USERPROFILE '.mihari' }
-  $ver = if ($latest) { $latest } else { '(未知)' }
+  $ver = if ($latest) { $latest } else { '(unknown)' }
   Write-Host ''
-  Write-Host (FixEncoding "即将安装 mihari $ver") -ForegroundColor Yellow
-  Write-Host (FixEncoding "  平台     : $platform")
-  Write-Host (FixEncoding "  下载来源 : $resolvedUrl")
-  Write-Host (FixEncoding "  二进制   : $binHint")
-  Write-Host (FixEncoding "  数据目录 : $dataHint")
-  Write-Host (FixEncoding "  操作     : 注册系统服务 (需 UAC 提权)")
-  Write-Host (FixEncoding "  不影响   : mihari.yaml / 订阅 / 面板状态 等用户配置")
+  Write-Host (FixEncoding "Ready to install mihari $ver") -ForegroundColor Yellow
+  Write-Host (FixEncoding "  Platform : $platform")
+  Write-Host (FixEncoding "  Source   : $resolvedUrl")
+  Write-Host (FixEncoding "  Binary   : $binHint")
+  Write-Host (FixEncoding "  Data     : $dataHint")
+  Write-Host (FixEncoding "  Action   : Register the system service (requires UAC elevation)")
+  Write-Host (FixEncoding "  Preserve : mihari.yaml, subscriptions, panel state, and other user settings")
   Write-Host ''
 }
 
@@ -259,7 +259,7 @@ if (-not $resolvedUrl) {
     # Decode to UTF-8 text so parsing works on any PS version / content-type.
     if ($resp.Content -is [byte[]]) { $index = [System.Text.Encoding]::UTF8.GetString($resp.Content) } else { $index = $resp.Content }
   } catch { $index = '' }
-  if (-not $index) { Fail "尚未发布完成：无法获取 index（请稍后重试，或检查网络/网盘可用性）。" }
+  if (-not $index) { Fail "The release index is unavailable. Try again later or check network and storage availability." }
   foreach ($line in ($index -split "`n")) {
     $line = $line.Trim()
     if (-not $line -or $line.StartsWith('#') -or $line.StartsWith('//')) { continue }
@@ -267,9 +267,9 @@ if (-not $resolvedUrl) {
     if ($fields[0] -eq 'latest') { $latest = $fields[1] }
     elseif ($fields[0] -eq $platform) { $resolvedUrl = $fields[1]; $wantSum = $fields[2] }
   }
-  if (-not $latest) { Fail "尚未发布完成：index 无 latest 版本（可能正在发布或已撤回）。" }
+  if (-not $latest) { Fail "The index has no latest release. Publication may be in progress or the release may have been withdrawn." }
   if ($env:MIHARI_INSTALL_TEST_MODE -ne '1') {
-    if (-not $resolvedUrl) { Fail "index 未包含本平台 $platform 的包。" }
+    if (-not $resolvedUrl) { Fail "The index has no package for $platform." }
   }
   if ($Channel) {
     if ($Channel -eq 'dev') {
@@ -300,19 +300,19 @@ if ($mihariCmd) {
 }
 
 if (-not $haveMihari) {
-  Info ("未检测到 mihari，将安装最新版" + $(if ($latest) { " ($latest)" }))
+  Info ("No mihari installation was found. Installing the latest version" + $(if ($latest) { " ($latest)" }))
 } elseif (-not $current) {
-  Info '检测到 mihari 但版本未知（二进制可能损坏），将重新安装修复。'
+  Info 'Mihari was found, but its version is unknown. The executable may be damaged; reinstalling to repair it.'
 } elseif ($latest -and $current -eq $latest) {
-  Info "已是最新版本 ($current)，将重新安装（用于修复）。"
+  Info "The latest version ($current) is already installed. Reinstalling to repair it."
 } else {
-  Info ("当前已安装 $current" + $(if ($latest) { "，最新版本为 $latest，将升级。" }))
+  Info ("Currently installed: $current" + $(if ($latest) { "; latest version: $latest. Upgrading." }))
 }
 
 # Install plan + confirm before the (large) download. -Yes skips it.
 if (-not $Yes) {
   Show-InstallPlan
-  if (-not (Confirm '确认开始安装？')) { Info '已取消。'; exit 0 }
+  if (-not (Confirm 'Start installation?')) { Info 'Canceled.'; exit 0 }
 }
 
 # Download to a temp file (outside the work dir) so the work dir can be fully
@@ -321,14 +321,14 @@ if (-not $Yes) {
 $workdir = Join-Path $env:USERPROFILE 'Downloads\mihari-aio'
 New-Item -ItemType Directory -Force -Path $workdir | Out-Null
 $tmpArchive = Join-Path ([IO.Path]::GetTempPath()) ("mihari-aio-" + ([guid]::NewGuid().ToString('N')) + ".zip")
-Info "下载 $resolvedUrl …"
+Info "Downloading $resolvedUrl …"
 Download-FileWithProgress -url $resolvedUrl -dest $tmpArchive
 if ($wantSum) {
   $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $tmpArchive).Hash.ToLower()
-  if ($got -ne $wantSum.ToLower()) { Remove-Item -LiteralPath $tmpArchive -Force; Fail "sha256 校验失败：期望 $wantSum，实际 $got。" }
-  Info 'sha256 校验通过。'
+  if ($got -ne $wantSum.ToLower()) { Remove-Item -LiteralPath $tmpArchive -Force; Fail "SHA-256 verification failed: expected $wantSum, got $got." }
+  Info 'SHA-256 verification passed.'
 }
-Info "解压到 $workdir …"
+Info "Extracting to $workdir …"
 if (Test-Path -LiteralPath $workdir) { Get-ChildItem -LiteralPath $workdir | Remove-Item -Recurse -Force }
 Expand-Archive -LiteralPath $tmpArchive -DestinationPath $workdir -Force
 Remove-Item -LiteralPath $tmpArchive -Force
@@ -337,7 +337,7 @@ Remove-Item -LiteralPath $tmpArchive -Force
 # that reads the file content as a string — bypassing ExecutionPolicy and Mark of
 # the Web; the bundle dir is injected via -BundleDir (design 4.4 step 5).
 $localInstaller = Join-Path $workdir 'install-aio.ps1'
-if (-not (Test-Path -LiteralPath $localInstaller)) { Fail '包内缺少 install-aio.ps1。' }
+if (-not (Test-Path -LiteralPath $localInstaller)) { Fail 'The package is missing install-aio.ps1.' }
 if ($Channel) {
   & ([scriptblock]::Create([IO.File]::ReadAllText($localInstaller))) -Channel $Channel -BundleDir $workdir
 } else {

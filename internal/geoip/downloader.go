@@ -221,6 +221,24 @@ func validateMMDB(path string) error {
 	return reader.Verify()
 }
 
+// ValidateMMDBFile verifies a MaxMind database with the downloader's validator.
+func ValidateMMDBFile(path string) error {
+	return validateMMDB(path)
+}
+
+// MatchSHA256 reports whether data matches an expected lowercase hex digest.
+func MatchSHA256(data []byte, expected string) error {
+	want, err := parseExpectedSHA256(expected)
+	if err != nil {
+		return err
+	}
+	got := sha256.Sum256(data)
+	if got != want {
+		return errors.New("geoip candidate checksum mismatch")
+	}
+	return nil
+}
+
 // Commit activates the candidate while retaining the previous file.
 func (c *FileCandidate) Commit() error {
 	if c == nil || c.staged == "" || c.destination == "" {

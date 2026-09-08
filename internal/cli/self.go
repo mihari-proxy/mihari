@@ -21,17 +21,36 @@ type SelfUpdater interface {
 func newSelfCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
 	root := &cobra.Command{Use: "self", Short: "Manage the mihari binary"}
 	root.AddCommand(newSelfVersionCommand(options))
-	root.AddCommand(newSelfChannelCommand(options))
+	root.AddCommand(newSelfChannelCommand(dependencies, options))
 	root.AddCommand(newSelfUpdateCommand(dependencies, options))
 	return root
 }
 
-func newSelfChannelCommand(options *runOptions) *cobra.Command {
+func newSelfChannelCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:   "channel [main|dev]",
 		Short: "Show or set the Mihari release channel",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
+			if dependencies.ChannelQuery != nil {
+				if len(args) == 1 {
+					if dependencies.ChannelSet == nil {
+						return protocol.APIError{Code: protocol.CodeInvalidState, Message: "channel maintenance unavailable"}
+					}
+					if err := dependencies.ChannelSet(command.Context(), args[0]); err != nil {
+						return err
+					}
+				}
+				channel, err := dependencies.ChannelQuery(command.Context())
+				if err != nil {
+					return err
+				}
+				if options.json {
+					return renderJSON(command.OutOrStdout(), map[string]any{"schema": "mihari/v1", "channel": channel})
+				}
+				_, err = fmt.Fprintln(command.OutOrStdout(), channel)
+				return err
+			}
 			path, err := platform.ChannelPath()
 			if err != nil {
 				return protocol.APIError{Code: protocol.CodeDataFailure, Message: "resolve mihari channel path"}
@@ -77,11 +96,16 @@ func newSelfUpdateCommand(dependencies Dependencies, options *runOptions) *cobra
 		if err != nil {
 			return protocol.APIError{Code: protocol.CodeInternal, Message: "resolve mihari executable path"}
 		}
-		path, err := platform.ChannelPath()
-		if err != nil {
-			return protocol.APIError{Code: protocol.CodeDataFailure, Message: "resolve mihari channel path"}
+		channel := ""
+		if dependencies.SelfUpdateChannel != nil {
+			channel, err = dependencies.SelfUpdateChannel(command.Context())
+		} else {
+			path, pathErr := platform.ChannelPath()
+			if pathErr != nil {
+				return protocol.APIError{Code: protocol.CodeDataFailure, Message: "resolve mihari channel path"}
+			}
+			channel, err = update.LoadChannel(path)
 		}
-		channel, err := update.LoadChannel(path)
 		if err != nil {
 			return err
 		}

@@ -99,6 +99,11 @@ mihari 的架构不变量记录在仓库根目录的 `AGENTS.md`。核心几点�
 
 改动这些边界前，请先在 Issue/PR 中说明影响。
 
+
+Unix 的窄写入例外：root installer 在持锁停机事务中迁移业务文件并管理安装资源；app 可在选定 install.lock 下原子维护固定应用通道 sidecar，并拒绝相关未完成事务。TUI 仅经 logging 写当前 UID 的 U 日志及导出（Windows/显式私有 P 保留原布局）。不授予任意 CLI/TUI 业务文件写权限。详见 [Unix 布局与恢复](../docs/unix-layout.md)。
+
+普通 CI 在三种 OS 运行 unit/race/vet；六目标 CGO0 构建独立于 race。`python -m pytest scripts/test/test_unix_layout_security.py -q` 不执行真实账户/mount 操作。独立 `unix-layout-security` 必须作为合并前验收结果，即使 branch protection 尚未命名它；只在一次性 hosted VM 运行 root/双 UID 原生测试。不得在工作站或持久 self-hosted root runner 执行安全脚本。
+
 ## 提交规范
 
 ### 提交信息格式

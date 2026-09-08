@@ -1,0 +1,118 @@
+{
+  "schema": "mihari.install-transaction/v1",
+  "transaction_id": "0123456789abcdef0123456789abcdef",
+  "operation": "install",
+  "phase": "prepared",
+  "mode": "system",
+  "source_path": "/home/user/.mihari",
+  "target_path": "/var/lib/mihari/data",
+  "install_path": "/usr/local/lib/mihari",
+  "endpoint_path": "/var/lib/mihari/control.sock",
+  "credential_path": "/var/lib/mihari/control.token",
+  "data_root": "/var/lib/mihari/data",
+  "boot_id": "11111111-1111-1111-1111-111111111111",
+  "source_identity": {
+    "present": true,
+    "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "dev": "8",
+    "ino": "1001",
+    "mount_id": "42",
+    "boot_id": "11111111-1111-1111-1111-111111111111",
+    "marker": "0123456789abcdef0123456789abcdef",
+    "identity": "8:1001"
+  },
+  "target_identity": {
+    "present": false,
+    "sha256": "",
+    "dev": "",
+    "ino": "",
+    "mount_id": "",
+    "boot_id": "",
+    "marker": "",
+    "identity": ""
+  },
+  "install_identity": {
+    "present": true,
+    "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "dev": "8",
+    "ino": "2002",
+    "mount_id": "42",
+    "boot_id": "11111111-1111-1111-1111-111111111111",
+    "marker": "0123456789abcdef0123456789abcdef",
+    "identity": "8:2002"
+  },
+  "endpoint_identity": {
+    "present": false,
+    "sha256": "",
+    "dev": "",
+    "ino": "",
+    "mount_id": "",
+    "boot_id": "",
+    "marker": "",
+    "identity": ""
+  },
+  "credential_identity": {
+    "present": false,
+    "sha256": "",
+    "dev": "",
+    "ino": "",
+    "mount_id": "",
+    "boot_id": "",
+    "marker": "",
+    "identity": ""
+  },
+  "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "backup_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "data_action": "create",
+  "service_backup": {
+    "ref": "transactions/0123456789abcdef0123456789abcdef/unit",
+    "sha256": "b215c13d7d4b329ab609b8261e27318e6ea407d26f605d8b0d8c1cc1e570b0a8",
+    "identity": "8:3003"
+  },
+  "old_running": true,
+  "old_enabled": true,
+  "recovery_authority": "source",
+  "created_at": "2026-09-05T00:00:00Z",
+  "transaction_marker": {
+    "present": true,
+    "sha256": "3eb1bd439947eb762998e566ccc2e099c791118b2f40579cc4f7da2b5061b7f9",
+    "dev": "8",
+    "ino": "4004",
+    "mount_id": "42",
+    "boot_id": "11111111-1111-1111-1111-111111111111",
+    "marker": "0123456789abcdef0123456789abcdef",
+    "identity": "8:4004"
+  },
+  "actions": [
+    {
+      "seq": 1,
+      "kind": "mask",
+      "target_role": "definition",
+      "old_state": "unmasked",
+      "backup_ref": "transactions/0123456789abcdef0123456789abcdef/unit",
+      "new_state": "masked",
+      "candidate_ref": "",
+      "status": "done"
+    },
+    {
+      "seq": 2,
+      "kind": "stop",
+      "target_role": "definition",
+      "old_state": "running",
+      "backup_ref": "",
+      "new_state": "stopped",
+      "candidate_ref": "",
+      "status": "done"
+    },
+    {
+      "seq": 3,
+      "kind": "restore_stop",
+      "target_role": "definition",
+      "old_state": "stopped",
+      "backup_ref": "",
+      "new_state": "running",
+      "candidate_ref": "",
+      "status": "intent"
+    }
+  ]
+}

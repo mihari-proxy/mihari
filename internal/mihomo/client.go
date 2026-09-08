@@ -100,6 +100,11 @@ func (c *Client) UpdateRuleProvider(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodPut, "/providers/rules/"+url.PathEscape(name), nil, nil, nil)
 }
 
+// UpdateProxyProvider asks mihomo to reload one managed local proxy provider.
+func (c *Client) UpdateProxyProvider(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodPut, "/providers/proxies/"+url.PathEscape(name), nil, nil, nil)
+}
+
 func (c *Client) Reload(ctx context.Context, path string, force bool) error {
 	query := url.Values{}
 	query.Set("force", strconv.FormatBool(force))

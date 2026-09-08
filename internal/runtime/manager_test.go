@@ -1581,6 +1581,40 @@ func TestManagerLocalCoreReflectsDetectVersion(t *testing.T) {
 	}
 }
 
+func TestActivation_ManagerMutationGate(t *testing.T) {
+	cases := []struct {
+		phase      string
+		validation bool
+		allowed    bool
+	}{
+		{phase: "prepared", allowed: false},
+		{phase: "definition_committed", allowed: false},
+		{phase: "activation_committed", allowed: true},
+		{phase: "complete", allowed: true},
+		{phase: "", allowed: true},
+		{phase: "complete", validation: true, allowed: false},
+	}
+	for _, test := range cases {
+		manager := newTestManager(Options{ActivationPhase: test.phase, ValidationMode: test.validation})
+		err := manager.lockMutation(context.Background())
+		if test.allowed {
+			if err != nil {
+				t.Fatalf("phase=%q validation=%v: %v", test.phase, test.validation, err)
+			}
+			manager.unlock()
+			continue
+		}
+		if err == nil {
+			manager.unlock()
+			t.Fatalf("phase=%q validation=%v allowed mutation", test.phase, test.validation)
+		}
+		var api protocol.APIError
+		if !errors.As(err, &api) || api.Code != protocol.CodeInvalidState {
+			t.Fatalf("phase=%q err=%v", test.phase, err)
+		}
+	}
+}
+
 func newTestManager(options Options) *Manager {
 	store := state.NewStore(state.Snapshot{Health: "ok"})
 	options.Store = store

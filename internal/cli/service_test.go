@@ -68,3 +68,24 @@ func TestServiceReinstallWhenElevated(t *testing.T) {
 		t.Fatalf("exit=%d reinstalls=%d stdout=%q", exit, fake.reinstalls, stdout)
 	}
 }
+
+func TestServiceAction_ForwardsCommandContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	called := false
+	deps := Dependencies{ServiceAction: func(got context.Context, op string) error {
+		called = true
+		if op != "stop" || got.Err() != context.Canceled {
+			t.Fatal("lost lifecycle operation/context")
+		}
+		return nil
+	}}
+	cmd := newServiceActionCommand("stop", "", deps, &runOptions{}, false, func(ServiceController) error { t.Fatal("legacy service action"); return nil })
+	cmd.SetContext(ctx)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("transactional service callback not called")
+	}
+}

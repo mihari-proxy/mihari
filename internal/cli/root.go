@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/spf13/cobra"
 )
@@ -42,20 +43,31 @@ type SubscriptionClient interface {
 }
 
 type Dependencies struct {
-	StatusClient       StatusClient
-	RuntimeClient      RuntimeClient
-	SubscriptionClient SubscriptionClient
-	PanelClient        PanelClient
-	SystemProxyClient  SystemProxyClient
-	TunClient          TunClient
-	ServiceController  ServiceController
-	SelfUpdater        SelfUpdater
-	OpenBrowser        func(url string) error
-	RunDaemon          func(context.Context) error
-	RunTUI             func(context.Context) error
-	Interactive        bool
-	NewOperationID     func() string
-	SetupError         error
+	ChannelQuery            func(context.Context) (string, error)
+	ChannelSet              func(context.Context, string) error
+	StatusClient            StatusClient
+	RuntimeClient           RuntimeClient
+	SubscriptionClient      SubscriptionClient
+	PanelClient             PanelClient
+	SystemProxyClient       SystemProxyClient
+	TunClient               TunClient
+	ServiceController       ServiceController
+	ServiceApply            func(context.Context, app.InstallRequest) (app.InstallResult, error)
+	ServiceAction           func(context.Context, string) error
+	InstallationInspect     func(context.Context) (app.InstallationStatus, error)
+	InstallationPlan        func(context.Context, app.InstallationPlanRequest) (app.InstallationPlan, error)
+	InstallationExecute     func(context.Context, app.InstallationExecuteRequest) (app.InstallationOutcome, error)
+	SelfUpdater             SelfUpdater
+	SelfUpdateChannel       func(context.Context) (string, error)
+	OpenBrowser             func(url string) error
+	RunDaemon               func(context.Context) error
+	RunSystemServiceDaemon  func(context.Context) error
+	RunLaunchdServiceDaemon func(context.Context) error
+	RunInstallValidation    func(context.Context, string) error
+	RunTUI                  func(context.Context) error
+	Interactive             bool
+	NewOperationID          func() string
+	SetupError              error
 	// PrepareLocalRoot runs once before selected commands. Nil skips data-root IO.
 	PrepareLocalRoot func() error
 }
@@ -81,6 +93,10 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, depen
 		_ = json.NewEncoder(stderr).Encode(protocol.NewError(apiError.Code, apiError.Message, apiError.Details))
 	} else {
 		_, _ = fmt.Fprintf(stderr, "Error: %s\n", apiError.Message)
+		var diagnostic interface{ Hint() string }
+		if errors.As(err, &diagnostic) {
+			_, _ = fmt.Fprintln(stderr, diagnostic.Hint())
+		}
 	}
 	return exitCode(apiError)
 }
@@ -102,7 +118,7 @@ func newRoot(dependencies Dependencies, options *runOptions) *cobra.Command {
 			return dependencies.RunTUI(command.Context())
 		},
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			if !skipPrepareLocalRoot(cmd) && dependencies.PrepareLocalRoot != nil {
+			if !skipPrepareLocalRoot(cmd) && !skipTransactionalRoot(cmd, dependencies) && dependencies.PrepareLocalRoot != nil {
 				if err := dependencies.PrepareLocalRoot(); err != nil {
 					var apiError protocol.APIError
 					if errors.As(err, &apiError) {
@@ -116,6 +132,10 @@ func newRoot(dependencies Dependencies, options *runOptions) *cobra.Command {
 			}
 			if dependencies.SetupError == nil {
 				return nil
+			}
+			var apiError protocol.APIError
+			if errors.As(dependencies.SetupError, &apiError) && apiError.Code != "" {
+				return dependencies.SetupError
 			}
 			return protocol.APIError{Code: protocol.CodeDataFailure, Message: "local control setup failed"}
 		},
@@ -167,10 +187,19 @@ func invalidArgument(message string) error {
 }
 
 func skipPrepareLocalRoot(cmd *cobra.Command) bool {
+	if cmd.Name() == "daemon" && cmd.Flags().Changed("install-validation") {
+		return true
+	}
 	if cmd.Name() == "help" {
 		return true
 	}
 	parent := cmd.Parent()
+	if parent != nil && parent.Name() == "service" {
+		switch cmd.Name() {
+		case "install-status", "install-plan", "repair", "fresh":
+			return true
+		}
+	}
 	if parent == nil || parent.Name() != "self" {
 		return false
 	}
@@ -180,4 +209,15 @@ func skipPrepareLocalRoot(cmd *cobra.Command) bool {
 	default:
 		return false
 	}
+}
+
+func skipTransactionalRoot(cmd *cobra.Command, deps Dependencies) bool {
+	parent := cmd.Parent()
+	if parent == nil {
+		return false
+	}
+	if parent.Name() == "service" && (deps.ServiceApply != nil || deps.ServiceAction != nil) {
+		return true
+	}
+	return parent.Name() == "self" && cmd.Name() == "update" && deps.SelfUpdateChannel != nil
 }

@@ -1,0 +1,42 @@
+[
+  {
+    "os": "darwin",
+    "arch": "amd64",
+    "tag": "v1.19.30",
+    "channel": "stable",
+    "asset": "mihomo-darwin-amd64-compatible-v1.19.30.gz",
+    "asset_sha256": "6e75de0732e8afabe413ff7c235e8f16226ce136672371c60787cbf9607402c5",
+    "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-darwin-amd64-compatible-v1.19.30.gz",
+    "size": 18300486
+  },
+  {
+    "os": "darwin",
+    "arch": "arm64",
+    "tag": "v1.19.30",
+    "channel": "stable",
+    "asset": "mihomo-darwin-arm64-v1.19.30.gz",
+    "asset_sha256": "2c7f3a7904fa1cee291e124123e630e7b1ebd13765dd9bf26c0a28432004d9f4",
+    "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-darwin-arm64-v1.19.30.gz",
+    "size": 16805556
+  },
+  {
+    "os": "linux",
+    "arch": "amd64",
+    "tag": "v1.19.30",
+    "channel": "stable",
+    "asset": "mihomo-linux-amd64-compatible-v1.19.30.gz",
+    "asset_sha256": "db214c7a2517e63c150d123178d16d102e03a241ccdae4e5e07ffbe9cf56c6f9",
+    "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-linux-amd64-compatible-v1.19.30.gz",
+    "size": 18899951
+  },
+  {
+    "os": "linux",
+    "arch": "arm64",
+    "tag": "v1.19.30",
+    "channel": "stable",
+    "asset": "mihomo-linux-arm64-v1.19.30.gz",
+    "asset_sha256": "58896873736d28628f66de3677c8654fa0f180662523148e136cff4f6e890069",
+    "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-linux-arm64-v1.19.30.gz",
+    "size": 16965828
+  }
+]

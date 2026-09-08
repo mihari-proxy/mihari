@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -72,6 +73,21 @@ func TestNewPathsBuildsRuntimeLayout(t *testing.T) {
 		if got := gots[name]; got != want {
 			t.Errorf("%s=%q want=%q", name, got, want)
 		}
+	}
+}
+
+func TestBuildPaths_UsesInjectedJoinAndCoreName(t *testing.T) {
+	join := func(elements ...string) string {
+		return strings.Join(elements, "|")
+	}
+	got := buildPaths("root", join, "target-core")
+	if got.Root != "root" ||
+		got.ControlToken != "root|control.token" ||
+		got.CoreBinary != "root|bin|target-core" ||
+		got.RuntimeConfig != "root|runtime|config.yaml" ||
+		got.SubscriptionCatalog != "root|subscriptions|catalog.yaml" ||
+		got.PanelStaging != "root|staging|panels" {
+		t.Fatalf("injected builder mapping=%+v", got)
 	}
 }
 
@@ -242,5 +258,19 @@ func TestPathsAbsoluteRebuildsDerivedFields(t *testing.T) {
 	}
 	if original.Root != absoluteRoot {
 		t.Fatalf("Absolute mutated absolute original Root: got=%q want=%q", original.Root, absoluteRoot)
+	}
+}
+
+func TestPathsAbsolute_PreservesLegacySingleRoot(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	got, err := NewPaths("portable").Absolute()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoot := filepath.Join(cwd, "portable")
+	if got.Root != wantRoot || got.ControlToken != filepath.Join(wantRoot, "control.token") || got.TUILog != filepath.Join(wantRoot, "logs", "mihari-tui.log") {
+		t.Fatalf("Absolute changed legacy single-root layout: %+v", got)
 	}
 }

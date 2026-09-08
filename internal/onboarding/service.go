@@ -129,6 +129,10 @@ func loadState(path string) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
+	return decodeState(raw)
+}
+
+func decodeState(raw []byte) (State, error) {
 	if len(raw) > maxStateSize {
 		return State{}, dataError("onboarding state is too large")
 	}
@@ -147,6 +151,9 @@ func loadState(path string) (State, error) {
 	}
 	return State{Complete: persisted.Complete}, nil
 }
+
+// Load reads existing onboarding state without creating or repairing it.
+func Load(path string) (State, error) { return loadState(path) }
 
 func saveState(path string, state State) (config.CommitResult, error) {
 	raw, err := json.Marshal(persistedState{Schema: stateSchema, Complete: state.Complete})

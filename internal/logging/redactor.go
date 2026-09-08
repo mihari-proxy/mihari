@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -39,7 +40,29 @@ type redactionRules struct {
 
 // Redactor applies immutable exact-secret and generic redaction rules to log text and attrs.
 type Redactor struct {
-	rules atomic.Pointer[redactionRules]
+	rules       atomic.Pointer[redactionRules]
+	mu          sync.Mutex
+	configured  []string
+	credentials map[string]struct{}
+	snapshots   map[*Redactor]struct{}
+}
+
+// RetainCredential keeps a successfully loaded control credential redacted for
+// this redactor's lifetime, including after configured secrets are replaced.
+func (r *Redactor) RetainCredential(value string) {
+	if len(value) < minExactLen {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.credentials[value]; exists {
+		return
+	}
+	if r.credentials == nil {
+		r.credentials = make(map[string]struct{})
+	}
+	r.credentials[value] = struct{}{}
+	r.publishRules()
 }
 
 // NewRedactor builds a redactor and registers optional exact secrets.
@@ -52,6 +75,18 @@ func NewRedactor(exact ...string) *Redactor {
 // ReplaceExact replaces the exact-secret snapshot. Empty and too-short values are dropped;
 // remaining values are copied and sorted longest-first. Generic regexes are package-level.
 func (r *Redactor) ReplaceExact(values []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.configured = append([]string(nil), values...)
+	r.publishRules()
+}
+
+// publishRules requires mu; readers continue using an immutable atomic snapshot.
+func (r *Redactor) publishRules() {
+	values := append([]string(nil), r.configured...)
+	for value := range r.credentials {
+		values = append(values, value)
+	}
 	exact := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
@@ -68,6 +103,39 @@ func (r *Redactor) ReplaceExact(values []string) {
 		return len(exact[i]) > len(exact[j])
 	})
 	r.rules.Store(&redactionRules{exact: exact})
+	// Active snapshots retain every update, including secrets replaced again
+	// before their next record is read. Followers are private leaf redactors.
+	for snapshot := range r.snapshots {
+		prior := snapshot.rules.Load()
+		values := append([]string(nil), exact...)
+		if prior != nil {
+			values = append(values, prior.exact...)
+		}
+		snapshot.ReplaceExact(values)
+	}
+}
+
+// snapshot retains initial and subsequent exact secrets until release. The
+// caller owns release; no goroutine or process-lifetime secret history is added.
+func (r *Redactor) snapshot() (*Redactor, func()) {
+	retained := NewRedactor()
+	if r == nil {
+		return retained, func() {}
+	}
+	r.mu.Lock()
+	if rules := r.rules.Load(); rules != nil {
+		retained.ReplaceExact(rules.exact)
+	}
+	if r.snapshots == nil {
+		r.snapshots = make(map[*Redactor]struct{})
+	}
+	r.snapshots[retained] = struct{}{}
+	r.mu.Unlock()
+	return retained, func() {
+		r.mu.Lock()
+		delete(r.snapshots, retained)
+		r.mu.Unlock()
+	}
 }
 
 // String redacts a free-form text value using the current rules snapshot.
