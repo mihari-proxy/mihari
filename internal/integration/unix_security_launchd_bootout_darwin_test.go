@@ -202,11 +202,17 @@ func TestSecurityLaunchdBootoutRequiresSharedProcessGroupExit(t *testing.T) {
 	proof, stop := context.WithTimeout(ctx, 30*time.Second)
 	defer stop()
 	// The overall 45-second limit remains below the helpers' natural lifetime.
+	// A racing process observation may be temporarily unknown. Retry without
+	// granting absence, and retain the cause if the bounded wait cannot prove it.
+	var lastObservationErr error
 	if err := bootoutWait(proof, func() (bool, error) {
 		empty, err := service.LaunchdRuntimeGroupEmpty(proof, identity)
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			lastObservationErr = err
+		}
 		return empty && err == nil, nil
 	}); err != nil {
-		t.Fatal("released shared group never obtained native absence proof", err)
+		t.Fatal("released shared group never obtained native absence proof", errors.Join(err, lastObservationErr))
 	}
 }
 

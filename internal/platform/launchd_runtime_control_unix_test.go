@@ -8,6 +8,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -136,18 +137,30 @@ func TestLaunchdRuntimeControl_UnixInitializationRaceUsesPublishedGate(t *testin
 }
 
 func TestLaunchdRuntimeControl_UnixInitializationHoldsPublishedGateThroughValidation(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	base := installControlUnixTestRoot(t)
 	validationEntered := make(chan struct{})
 	releaseValidation := make(chan struct{})
-	validationCalls := 0
-	validate := func(context.Context) error {
-		validationCalls++
-		if validationCalls == 3 {
-			close(validationEntered)
-			<-releaseValidation
+	var validationOnce sync.Once
+	validate := func(ctx context.Context) error {
+		published, err := base.OpenDir(ctx, launchdRuntimeDirName, RootPolicy{Owner: base.policy.Owner, Mode: 0700})
+		if errors.Is(err, unix.ENOENT) {
+			return nil
 		}
-		return nil
+		if err != nil {
+			return err
+		}
+		if err := published.Close(); err != nil {
+			return err
+		}
+		validationOnce.Do(func() { close(validationEntered) })
+		select {
+		case <-releaseValidation:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	type result struct {
 		control *LaunchdRuntimeControl
@@ -158,11 +171,39 @@ func TestLaunchdRuntimeControl_UnixInitializationHoldsPublishedGateThroughValida
 		control, _, err := initializeUnixLaunchdRuntimeControlAt(ctx, base, []byte(`{"generation":null}`), validate)
 		resultCh <- result{control: control, err: err}
 	}()
-	<-validationEntered
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseValidation) }) }
+	joined := false
+	t.Cleanup(func() {
+		release()
+		if joined {
+			return
+		}
+		watchdog, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		select {
+		case initialized := <-resultCh:
+			if initialized.control != nil {
+				assertInstallTestClose(t, initialized.control.Close)
+			}
+		case <-watchdog.Done():
+			t.Error("launchd runtime initializer did not exit after validation release")
+		}
+	})
+	select {
+	case <-validationEntered:
+	case initialized := <-resultCh:
+		joined = true
+		if initialized.control != nil {
+			defer assertInstallTestClose(t, initialized.control.Close)
+		}
+		t.Fatalf("initializer returned before post-publication validation: %v", initialized.err)
+	case <-ctx.Done():
+		t.Fatal("initializer did not reach post-publication validation", ctx.Err())
+	}
 
 	concurrent, err := openUnixLaunchdRuntimeControlAt(ctx, base)
 	if err != nil {
-		close(releaseValidation)
 		t.Fatal(err)
 	}
 	gate, lockErr := concurrent.LockStartup(ctx)
@@ -170,11 +211,16 @@ func TestLaunchdRuntimeControl_UnixInitializationHoldsPublishedGateThroughValida
 		defer assertInstallTestClose(t, gate.Close)
 	}
 	if err = concurrent.Close(); err != nil {
-		close(releaseValidation)
 		t.Fatal(err)
 	}
-	close(releaseValidation)
-	initialized := <-resultCh
+	release()
+	var initialized result
+	select {
+	case initialized = <-resultCh:
+		joined = true
+	case <-ctx.Done():
+		t.Fatal("initializer did not exit after validation release", ctx.Err())
+	}
 	if initialized.control != nil {
 		defer assertInstallTestClose(t, initialized.control.Close)
 	}

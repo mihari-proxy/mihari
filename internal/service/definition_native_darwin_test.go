@@ -3,6 +3,7 @@ package service
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,55 @@ import (
 	"syscall"
 	"testing"
 )
+
+type darwinGroupTestProcess struct {
+	input                 io.WriteCloser
+	wait                  func() error
+	started, closed, done bool
+}
+
+type darwinGroupTestWriteCloser struct {
+	calls int
+	err   error
+}
+
+func (*darwinGroupTestWriteCloser) Write(body []byte) (int, error) { return len(body), nil }
+func (c *darwinGroupTestWriteCloser) Close() error {
+	c.calls++
+	return c.err
+}
+
+func (p *darwinGroupTestProcess) closeAndWait() error {
+	var err error
+	if p.input != nil && !p.closed {
+		p.closed = true
+		err = errors.Join(err, p.input.Close())
+	}
+	if p.started && !p.done {
+		p.done = true
+		err = errors.Join(err, p.wait())
+	}
+	return err
+}
+
+func TestDarwinGroupTestProcess_CloseAndWaitOwnsEachOperationOnce(t *testing.T) {
+	closeErr, waitErr := errors.New("close fixture"), errors.New("wait fixture")
+	input := &darwinGroupTestWriteCloser{err: closeErr}
+	waits := 0
+	process := &darwinGroupTestProcess{input: input, started: true, wait: func() error {
+		waits++
+		return waitErr
+	}}
+	if err := process.closeAndWait(); !errors.Is(err, closeErr) || !errors.Is(err, waitErr) {
+		t.Fatalf("closeAndWait error=%v", err)
+	}
+	if err := process.closeAndWait(); err != nil {
+		t.Fatalf("second closeAndWait repeated an operation: %v", err)
+	}
+	if input.calls != 1 || waits != 1 {
+		t.Fatalf("close calls=%d wait calls=%d", input.calls, waits)
+	}
+}
 
 func TestMain(m *testing.M) {
 	if os.Getenv("MIHARI_SERVICE_GROUP_HELPER") == "1" && len(os.Args) >= 3 && os.Args[1] == "daemon" && os.Args[2] == "--system-service" {
@@ -47,24 +97,23 @@ func TestDarwinLaunchdIdentity_ActualArgumentsAndGroup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			process := &darwinGroupTestProcess{input: input, wait: cmd.Wait}
+			t.Cleanup(func() {
+				if err := process.closeAndWait(); err != nil {
+					t.Error(err)
+				}
+			})
 			output, err := cmd.StdoutPipe()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := cmd.Start(); err != nil {
-				t.Fatal(err)
+			startErr := cmd.Start()
+			if startErr != nil {
+				// os/exec.Cmd.Start closes parentIOPipes on every failed start.
+				process.closed = true
+				t.Fatal(startErr)
 			}
-			joined := false
-			t.Cleanup(func() {
-				if !joined {
-					if err := input.Close(); err != nil {
-						t.Error(err)
-					}
-					if err := cmd.Wait(); err != nil {
-						t.Error(err)
-					}
-				}
-			})
+			process.started = true
 			if line, err := bufio.NewReader(output).ReadString('\n'); err != nil || line != "ready\n" {
 				t.Fatal("native helper did not become ready")
 			}
@@ -82,56 +131,46 @@ func TestDarwinLaunchdIdentity_ActualArgumentsAndGroup(t *testing.T) {
 				}
 			}
 			var member *exec.Cmd
-			var memberInput io.WriteCloser
-			memberJoined := true
+			var memberProcess *darwinGroupTestProcess
 			if id.Group != "" {
 				member = exec.Command(exe, "daemon", "--system-service")
 				member.Env = append(os.Environ(), "MIHARI_SERVICE_GROUP_HELPER=1")
 				member.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: cmd.Process.Pid}
-				memberInput, err = member.StdinPipe()
+				memberInput, err := member.StdinPipe()
 				if err != nil {
 					t.Fatal(err)
 				}
+				memberProcess = &darwinGroupTestProcess{input: memberInput, wait: member.Wait}
+				t.Cleanup(func() {
+					if err := memberProcess.closeAndWait(); err != nil {
+						t.Error(err)
+					}
+				})
 				memberOutput, err := member.StdoutPipe()
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := member.Start(); err != nil {
-					t.Fatal(err)
+				startErr := member.Start()
+				if startErr != nil {
+					// os/exec.Cmd.Start closes parentIOPipes on every failed start.
+					memberProcess.closed = true
+					t.Fatal(startErr)
 				}
-				memberJoined = false
-				t.Cleanup(func() {
-					if !memberJoined {
-						if err := memberInput.Close(); err != nil {
-							t.Error(err)
-						}
-						if err := member.Wait(); err != nil {
-							t.Error(err)
-						}
-					}
-				})
+				memberProcess.started = true
 				if line, err := bufio.NewReader(memberOutput).ReadString('\n'); err != nil || line != "ready\n" {
 					t.Fatal("native group member did not become ready")
 				}
 			}
-			if err := input.Close(); err != nil {
+			if err := process.closeAndWait(); err != nil {
 				t.Fatal(err)
 			}
-			if err := cmd.Wait(); err != nil {
-				t.Fatal(err)
-			}
-			joined = true
 			if id.Group != "" {
 				if empty, err := tree.Empty(context.Background(), id.Group); err != nil || empty {
 					t.Fatal("leader exit incorrectly proved the shared group empty", err)
 				}
-				if err := memberInput.Close(); err != nil {
+				if err := memberProcess.closeAndWait(); err != nil {
 					t.Fatal(err)
 				}
-				if err := member.Wait(); err != nil {
-					t.Fatal(err)
-				}
-				memberJoined = true
 				if empty, err := tree.Empty(context.Background(), id.Group); err != nil || !empty {
 					t.Fatal("exited shared group did not disappear", err)
 				}
