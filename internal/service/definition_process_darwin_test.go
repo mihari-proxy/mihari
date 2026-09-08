@@ -43,3 +43,21 @@ func TestDarwinSignalIdentity_ExitAfterLookupIsStopped(t *testing.T) {
 		})
 	}
 }
+
+func TestDarwinSignalIdentity_ReusedPIDDoesNotReceiveSignal(t *testing.T) {
+	id := ProcessIdentity{PID: 42, BootID: "boot", StartUnix: 123, StartUsec: 456}
+	lookup := func(ctx context.Context, expected ProcessIdentity) (bool, error) {
+		return lookupProcessIdentity(ctx, expected, func(context.Context, int) (ProcessIdentity, error) {
+			observed := id
+			observed.StartUsec++
+			return observed, nil
+		})
+	}
+	err := signalDarwinIdentity(context.Background(), id, "TERM", lookup, func(int, unix.Signal) error {
+		t.Fatal("signaled a reused PID")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("identity mismatch did not retain the stop barrier")
+	}
+}

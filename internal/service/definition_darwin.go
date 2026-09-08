@@ -66,23 +66,7 @@ func darwinBootID() (string, error) {
 }
 
 func (t darwinProcessTree) Lookup(ctx context.Context, id ProcessIdentity) (bool, error) {
-	if id.PID <= 0 {
-		return false, nil
-	}
-	if incompleteProcessIdentity(id) {
-		return false, invalidServiceState("service process identity is unknown")
-	}
-	got, err := t.Identify(ctx, id.PID)
-	if err != nil {
-		return false, err
-	}
-	if got.PID == 0 {
-		return false, nil
-	}
-	if got.BootID != id.BootID || got.StartUnix != id.StartUnix || got.StartUsec != id.StartUsec {
-		return false, nil
-	}
-	return true, nil
+	return lookupProcessIdentity(ctx, id, t.Identify)
 }
 
 func (t darwinProcessTree) SignalIdentity(ctx context.Context, id ProcessIdentity, signal string) error {
