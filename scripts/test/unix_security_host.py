@@ -424,6 +424,22 @@ def prepare_resources(args,root,results,run,ledger,manifest):
 
 
 
+def release_launchd_descendants(directory):
+    """Release only the validated fixture's private, non-signaling barrier."""
+    trusted_chain(directory)
+    observed = identity(directory)
+    if observed["uid"] != 0 or observed["mode"] != 0o700:
+        raise PermissionError("invalid launchd fixture directory")
+    barrier = directory/"release-descendants"
+    try:
+        current = read_private(barrier)
+    except FileNotFoundError:
+        atomic_json(barrier, "release")
+        return
+    if current != "release":
+        raise PermissionError("invalid launchd fixture release")
+
+
 def cleanup_launchd_jobs(root, run_id):
     """Recover only this isolated run's durably recorded launchd fixtures."""
     if not re.fullmatch(r"[a-f0-9]{12}", run_id):
@@ -480,6 +496,9 @@ def cleanup_launchd_jobs(root, run_id):
             # print-not-found does not join a helper that may still publish.
             # Keep the anchor for a later retry, even if bootstrap itself failed.
             raise OSError("isolated launchd group was not published")
+        # The Go test may die before its own t.Cleanup. Release the exact
+        # private helper barrier before waiting; never signal a historic PGID.
+        release_launchd_descendants(Path(after["plist"]).parent)
         deadline = time.monotonic()+10
         while True:
             try:

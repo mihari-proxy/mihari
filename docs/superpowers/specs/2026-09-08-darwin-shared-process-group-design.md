@@ -18,6 +18,8 @@
 
 已有 ProcessIdentity.Group 保存有界规范 token，绑定 boot/PID/start。安装器 bootout 后用 unix.Kill(-pgid,0) 的 POSIX 语义检查整个组，仅 ESRCH 成功；未知、复用、仍有成员或超时拒绝数据修改。跨 boot 不探测/信号旧 PGID；实际主进程身份丢失后不向历史组补发信号。
 
+2026-09-08 hosted 原生验证确认：即使 AbandonProcessGroup=false，bootout 返回成功且 daemon 退出后，拒绝 TERM 的核心后代仍可能超过 30 秒存活。因此本设计不依赖 launchd 自动清除全部后代；组退出未获证明时，安装必须失败关闭。原生测试直接调用生产身份/组观察能力，确认残留不能获准，再通过仅属于测试夹具的退出控制释放后代并核实整组消失。该控制不作为产品杀进程权限，也不把辅助进程自然到期当作 bootout 的退出证明。
+
 native session.bindState 将备份的旧 Definition/BootID 绑定到 adapter 的独立内存字段，不能被 Inspect unloaded 擦除。Disable、Stop Observe/Replay 和恢复均采用该依据。备份后看到不同 live daemon、旧实际 argv 无标记、同 boot 旧日志缺少组依据均不授权 bootout/迁移，保留恢复文件。
 
 不新增 journal JSON 字段、控制协议、TCP 或依赖。CGO_ENABLED=0。新隐藏参数和现有 Group 字段的新 Darwin 值用于用户批准的同组行为。

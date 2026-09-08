@@ -66,7 +66,7 @@ DARWIN_SUPPLEMENTAL = {
     "internal/supervisor": ["TestDarwinSharedChild_DescendantsAndSignalOwnership"],
     "internal/service": ["TestDarwinLaunchdIdentity_ActualArgumentsAndGroup"],
     "internal/integration": [
-        "TestSecurityLaunchdBootoutDrainsSharedProcessGroup",
+        "TestSecurityLaunchdBootoutRequiresSharedProcessGroupExit",
         "TestSecurityLaunchdCleanupRejectsUnpublishedProcessGroup",
         "TestSecurityLaunchdCleanupPropagatesGroupProof",
     ],

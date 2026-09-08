@@ -38,7 +38,7 @@ def test_darwin_requires_real_shared_group_and_launchd_evidence():
         ("internal/platform", "TestDarwinWaitChildExit_PreservesZombieAndIgnoresStop"),
         ("internal/supervisor", "TestDarwinSharedChild_DescendantsAndSignalOwnership"),
         ("internal/service", "TestDarwinLaunchdIdentity_ActualArgumentsAndGroup"),
-        ("internal/integration", "TestSecurityLaunchdBootoutDrainsSharedProcessGroup"),
+        ("internal/integration", "TestSecurityLaunchdBootoutRequiresSharedProcessGroupExit"),
     ]:
         assert (PREFIX+package, name) in required
         assert (PREFIX+package, name) not in security.required("linux", supplemental=True)
@@ -190,7 +190,12 @@ def test_darwin_always_cleanup_joins_recorded_launchd_group(tmp_path, monkeypatc
     monkeypatch.setattr(module.time, "sleep", lambda duration: None)
     ticks = iter(range(1000))
     monkeypatch.setattr(module.time, "monotonic", lambda: next(ticks))
-    commands, groups = [], []
+    commands, groups, releases = [], [], []
+    expected_directory = root/("launchd-bootout-"+nonce)
+    def release(directory):
+        assert directory == expected_directory
+        releases.append(directory)
+    monkeypatch.setattr(module, "release_launchd_descendants", release, raising=False)
     loaded = True
     def command(argv, **kwargs):
         nonlocal loaded
@@ -205,6 +210,7 @@ def test_darwin_always_cleanup_joins_recorded_launchd_group(tmp_path, monkeypatc
             record_path.write_text(json.dumps(record))
         return types.SimpleNamespace(returncode=0)
     def probe(pgid, sig):
+        assert releases == [expected_directory]
         groups.append((pgid, sig))
         assert pgid == 4321 and sig == 0
         if case != "live-group":
@@ -220,7 +226,7 @@ def test_darwin_always_cleanup_joins_recorded_launchd_group(tmp_path, monkeypatc
         with pytest.raises(OSError):
             host.cleanup("processes")
         if case in ("foreign-label", "foreign-plist", "invalid-pgid"):
-            assert commands == [] and groups == []
+            assert commands == [] and groups == [] and releases == []
         if case == "query-error":
             assert len(commands) == 1 and groups == []
         if case == "unpublished":
@@ -229,6 +235,30 @@ def test_darwin_always_cleanup_joins_recorded_launchd_group(tmp_path, monkeypatc
             record_path.write_text(json.dumps(record))
             host.cleanup("processes")
             assert groups == [(4321, 0)]
+
+
+@pytest.mark.parametrize("existing", [None, "release", "unexpected"])
+def test_launchd_descendant_release_is_private_and_idempotent(tmp_path, monkeypatch, existing):
+    import unix_security_host as module
+    calls = []
+    monkeypatch.setattr(module, "trusted_chain", lambda path: calls.append(("trust", path)))
+    monkeypatch.setattr(module, "identity", lambda path: {"uid": 0, "mode": 0o700})
+    def read(path):
+        calls.append(("read", path))
+        if existing is None:
+            raise FileNotFoundError()
+        return existing
+    monkeypatch.setattr(module, "read_private", read)
+    monkeypatch.setattr(module, "atomic_json", lambda path, value: calls.append(("write", path, value)))
+    if existing == "unexpected":
+        with pytest.raises(PermissionError):
+            module.release_launchd_descendants(tmp_path)
+    else:
+        module.release_launchd_descendants(tmp_path)
+    expected = [("trust", tmp_path), ("read", tmp_path/"release-descendants")]
+    if existing is None:
+        expected.append(("write", tmp_path/"release-descendants", "release"))
+    assert calls == expected
 
 
 @pytest.mark.parametrize("failure", ["processes", "mounts", "accounts", "anchor", "archive"])

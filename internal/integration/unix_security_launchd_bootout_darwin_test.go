@@ -24,6 +24,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/securitytest"
+	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/supervisor"
 	"golang.org/x/sys/unix"
 )
@@ -51,7 +52,7 @@ func init() {
 	}
 }
 
-func TestSecurityLaunchdBootoutDrainsSharedProcessGroup(t *testing.T) {
+func TestSecurityLaunchdBootoutRequiresSharedProcessGroupExit(t *testing.T) {
 	securitytest.Parent(t)
 	root := os.Getenv("MIHARI_SECURITY_ROOT")
 	var random [8]byte
@@ -86,6 +87,10 @@ func TestSecurityLaunchdBootoutDrainsSharedProcessGroup(t *testing.T) {
 		defer cancel()
 		if _, err := validatedBootoutFixture(dir); err != nil {
 			t.Error(err)
+			return
+		}
+		if err := releaseBootoutDescendants(f.dir); err != nil {
+			t.Error("fixture descendant release failed", err)
 			return
 		}
 		_ = bootoutLaunchctl(ctx, "bootout", "system/"+f.label)
@@ -149,41 +154,59 @@ func TestSecurityLaunchdBootoutDrainsSharedProcessGroup(t *testing.T) {
 	if err != nil || record.PGID != group {
 		t.Fatal("durable fixture process group disagrees", err)
 	}
+	identity, err := service.InspectLaunchdRuntimeProcess(ctx, processes[0].PID)
+	if err != nil {
+		t.Fatal("native shared-group identity failed", err)
+	}
+	if empty, err := service.LaunchdRuntimeGroupEmpty(ctx, identity); err != nil || empty {
+		t.Fatal("native observer accepted a live shared group", err)
+	}
 	if err := bootoutLaunchctl(ctx, "bootout", "system/"+f.label); err != nil {
 		t.Fatal("fixture bootout failed", err)
 	}
-	// Match the production service adapter's 30-second stop observation.
-	proof, stop := context.WithTimeout(ctx, 30*time.Second)
-	defer stop()
-	// The helper lifetime is one minute. This shorter proof cannot pass merely
-	// because the intentionally TERM-resistant descendants reached their bound.
-	if err := waitBootoutGroupGone(proof, group); err != nil {
-		// The hosted report preserves source coordinates, not process output.
-		// Separate fixed failure sites retain the useful error classification.
-		switch {
-		case errors.Is(err, unix.EPERM):
-			t.Fatal("bootout group observation was denied")
-		case errors.Is(err, context.DeadlineExceeded):
-			inGroup := func(process bootoutProcess) bool {
-				pgid, lookupErr := unix.Getpgid(process.PID)
-				return lookupErr == nil && pgid == group
-			}
-			if inGroup(processes[0]) {
-				t.Fatal("bootout left the recorded daemon in the group")
-			}
-			if inGroup(processes[1]) {
-				t.Fatal("bootout left the recorded core in the group")
-			}
-			if inGroup(processes[2]) {
-				t.Fatal("bootout left the recorded grandchild in the group")
-			}
-			t.Fatal("bootout group exit proof timed out")
-		default:
-			t.Fatal("bootout group exit proof failed")
-		}
-	}
 	if err := bootoutJobAbsent(ctx, f.label); err != nil {
 		t.Fatal("bootout left the fixture job loaded", err)
+	}
+	if err := bootoutWait(ctx, func() (bool, error) {
+		_, err := unix.Getpgid(processes[0].PID)
+		if errors.Is(err, unix.ESRCH) {
+			return true, nil
+		}
+		return false, err
+	}); err != nil {
+		t.Fatal("fixture daemon did not exit", err)
+	}
+	// bootout is not an absence proof: current launchd may leave TERM-resistant
+	// descendants alive. The production observer must not certify such a group.
+	empty, observeErr := service.LaunchdRuntimeGroupEmpty(ctx, identity)
+	for _, process := range processes[1:] {
+		pgid, err := unix.Getpgid(process.PID)
+		if errors.Is(err, unix.ESRCH) {
+			continue
+		}
+		if err != nil || pgid != group {
+			t.Fatal("retained descendant group identity is unknown")
+		}
+		if empty {
+			t.Fatal("native observer accepted a group with a retained descendant")
+		}
+	}
+	if empty && observeErr != nil {
+		t.Fatal("native observer returned contradictory absence proof")
+	}
+	// Only the test-owned barrier releases the stubborn helpers; the installer
+	// gains no authority to signal a historical PID or process group.
+	if err := releaseBootoutDescendants(f.dir); err != nil {
+		t.Fatal(err)
+	}
+	proof, stop := context.WithTimeout(ctx, 30*time.Second)
+	defer stop()
+	// The overall 45-second limit remains below the helpers' natural lifetime.
+	if err := bootoutWait(proof, func() (bool, error) {
+		empty, err := service.LaunchdRuntimeGroupEmpty(proof, identity)
+		return empty && err == nil, nil
+	}); err != nil {
+		t.Fatal("released shared group never obtained native absence proof", err)
 	}
 }
 
@@ -236,7 +259,7 @@ func bootoutPlist(f bootoutFixture) []byte {
 		return out.String()
 	}
 	var out strings.Builder
-	fmt.Fprintf(&out, `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>Label</key><string>%s</string><key>ProgramArguments</key><array><string>%s</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><false/><key>AbandonProcessGroup</key><false/><key>ExitTimeOut</key><integer>2</integer><key>EnvironmentVariables</key><dict>`, quoted(f.label), quoted(f.binary))
+	fmt.Fprintf(&out, `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>Label</key><string>%s</string><key>ProgramArguments</key><array><string>%s</string><string>daemon</string><string>--system-service</string><string>--launchd-process-group</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><false/><key>AbandonProcessGroup</key><false/><key>ExitTimeOut</key><integer>2</integer><key>EnvironmentVariables</key><dict>`, quoted(f.label), quoted(f.binary))
 	for _, entry := range bootoutEnvironment(f, "daemon") {
 		key, value, _ := strings.Cut(entry, "=")
 		fmt.Fprintf(&out, "<key>%s</key><string>%s</string>", quoted(key), quoted(value))
@@ -379,8 +402,7 @@ func runBootoutHelper(role string) error {
 		if err := ready(); err != nil {
 			return err
 		}
-		<-ctx.Done()
-		return nil
+		return waitBootoutDescendantRelease(ctx, f.dir)
 	case "core":
 		signal.Ignore(unix.SIGTERM)
 		grandchild := exec.Command(f.binary)
@@ -393,11 +415,14 @@ func runBootoutHelper(role string) error {
 		if err := ready(); err != nil {
 			return err
 		}
+		if err := waitBootoutDescendantRelease(ctx, f.dir); err != nil {
+			return err
+		}
 		select {
 		case err := <-done:
 			return err
 		case <-ctx.Done():
-			return nil
+			return ctx.Err()
 		}
 	case "daemon":
 		if unix.Getpgrp() != os.Getpid() {
@@ -421,7 +446,7 @@ func runBootoutHelper(role string) error {
 		}
 		done := make(chan error, 1)
 		go func() { done <- child.Wait() }()
-		// Deliberately leave TERM-resistant descendants for launchd to collect.
+		// Deliberately leave TERM-resistant descendants for the group proof.
 		// This helper process exits immediately after returning from init.
 		select {
 		case <-stop:
@@ -434,4 +459,28 @@ func runBootoutHelper(role string) error {
 	default:
 		return os.ErrInvalid
 	}
+}
+
+func waitBootoutDescendantRelease(ctx context.Context, dir string) error {
+	return bootoutWait(ctx, func() (bool, error) {
+		raw, err := os.ReadFile(filepath.Join(dir, "release-descendants"))
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return err == nil && string(raw) == "\"release\"\n", err
+	})
+}
+
+func releaseBootoutDescendants(dir string) error {
+	raw, err := os.ReadFile(filepath.Join(dir, "release-descendants"))
+	if err == nil {
+		if string(raw) != "\"release\"\n" {
+			return os.ErrPermission
+		}
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return writeBootoutFile(dir, "release-descendants", []byte("\"release\"\n"))
 }
