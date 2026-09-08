@@ -181,3 +181,68 @@ func TestProviderDownloader_AllowsFiveRedirectsAndRejectsSix(t *testing.T) {
 		t.Fatalf("six redirects accepted: %q, %v", got, err)
 	}
 }
+
+func TestProviderDownloader_RedirectHeadersStayAtSource(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		locations []string
+		keep      []bool
+	}{
+		{"same origin", []string{"https://provider.test/next", "/done"}, []bool{true, true, true}},
+		{"default port", []string{"https://provider.test:443/next", "/done"}, []bool{true, true, true}},
+		{"other host then relative", []string{"https://cdn.test/next", "/done"}, []bool{true, false, false}},
+		{"other port", []string{"https://provider.test:8443/next", "/done"}, []bool{true, false, false}},
+		{"return to source", []string{"https://cdn.test/next", "https://provider.test/done"}, []bool{true, false, false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			d := &Downloader{direct: &http.Client{Transport: providerRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				at := calls
+				calls++
+				if at >= len(tc.keep) {
+					t.Fatal("unexpected redirect request")
+				}
+				for _, name := range []string{"X-Provider-Token", "Authorization"} {
+					if (r.Header.Get(name) != "") != tc.keep[at] {
+						t.Errorf("configured header presence differs at hop %d", at)
+					}
+				}
+				response := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok")), Header: make(http.Header)}
+				if at < len(tc.locations) {
+					response.StatusCode = http.StatusFound
+					response.Header.Set("Location", tc.locations[at])
+				}
+				return response, nil
+			})}}
+			spec := ProviderSpec{URL: "https://provider.test/start", Header: map[string][]string{"X-Provider-Token": {"fixture"}, "Authorization": {"fixture"}}}
+			got, err := d.Download(context.Background(), spec, ProxyModeDirect)
+			if err != nil || string(got) != "ok" || calls != len(tc.keep) {
+				t.Fatalf("redirect result: calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}
+
+func TestProviderDownloader_UsesConfiguredHostAtSourceOnly(t *testing.T) {
+	var hosts []string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hosts = append(hosts, r.Host)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hosts = append(hosts, r.Host)
+		if r.URL.Path == "/start" {
+			http.Redirect(w, r, "/next", http.StatusFound)
+			return
+		}
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer source.Close()
+	d := NewDownloader(DownloaderOptions{})
+	got, err := d.Download(context.Background(), ProviderSpec{URL: source.URL + "/start", Header: map[string][]string{"hOsT": {"provider.virtual.test"}}}, ProxyModeDirect)
+	want := []string{"provider.virtual.test", "provider.virtual.test", strings.TrimPrefix(target.URL, "http://")}
+	if err != nil || string(got) != "ok" || !reflect.DeepEqual(hosts, want) {
+		t.Fatalf("configured Host routing: hosts=%v err=%v", hosts, err)
+	}
+}

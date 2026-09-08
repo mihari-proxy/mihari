@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -37,12 +39,29 @@ func (d *Downloader) downloadManaged(ctx context.Context, spec ProviderSpec, mod
 		// Each attempt gets its own deadline; a proxy timeout must leave the
 		// caller's context live for auto mode's direct fallback.
 		client.Timeout = 30 * time.Second
+		headersStripped := false
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			if len(via) > 5 {
 				return errors.New("provider redirect limit")
 			}
 			if len(via) > 0 && via[len(via)-1].URL.Scheme == "https" && req.URL.Scheme != "https" {
 				return errors.New("provider redirect downgrade")
+			}
+			if len(via) > 0 {
+				initial := via[0]
+				if !sameProviderOrigin(req.URL, initial.URL) {
+					headersStripped = true
+				}
+				if headersStripped {
+					// net/http copies the initial headers for each hop. Once the
+					// source origin is left, keep its configured headers removed.
+					for name := range spec.Header {
+						req.Header.Del(name)
+					}
+					req.Host = ""
+				} else {
+					req.Host = initial.Host
+				}
 			}
 			return nil
 		}
@@ -61,6 +80,19 @@ func (d *Downloader) downloadManaged(ctx context.Context, spec ProviderSpec, mod
 	return nil, toAPIError(last)
 }
 
+func sameProviderOrigin(a, b *url.URL) bool {
+	port := func(u *url.URL) string {
+		if explicit := u.Port(); explicit != "" {
+			return explicit
+		}
+		if u.Scheme == "https" {
+			return "443"
+		}
+		return "80"
+	}
+	return a.Scheme == b.Scheme && strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
+}
+
 func downloadProvider(ctx context.Context, client *http.Client, spec ProviderSpec, limit int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, spec.URL, nil)
 	if err != nil || (req.URL.Scheme != "http" && req.URL.Scheme != "https") || req.URL.Host == "" {
@@ -71,6 +103,10 @@ func downloadProvider(ctx context.Context, client *http.Client, spec ProviderSpe
 			req.Header.Add(name, value)
 		}
 	}
+	if host := req.Header.Get("Host"); host != "" {
+		req.Host = host
+	}
+	req.Header.Del("Host")
 	response, err := client.Do(req)
 	if err != nil {
 		return nil, networkFailureError{cause: err}

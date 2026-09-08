@@ -95,7 +95,8 @@ func redirectPolicy(request *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// networkFailureError marks a transport or provider response-body failure.
+// networkFailureError marks transport failures and managed-provider body failures.
+// Fetch wraps transport failures only; Download also wraps provider body failures.
 // It is the only error isFallbackable recognizes for auto-mode retry.
 // Fetch converts it back to a protocol.APIError before returning to callers.
 type networkFailureError struct{ cause error }
