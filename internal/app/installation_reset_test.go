@@ -62,6 +62,16 @@ func TestInstallationReset_RejectsCredentialAndMigrationOverlap(t *testing.T) {
 	}
 }
 
+func TestInstallationReset_RejectsSourceWithTargetIdentity(t *testing.T) {
+	root := t.TempDir()
+	identity := InstallationIdentity{BootID: "boot-a", Key: "same-root", Marker: "same-marker"}
+	manifest := InstallationManifest{DataRoot: root, DataIdentity: &identity, Credential: filepath.Join(root, "control.token")}
+	source := &InstallationSourceScope{DataRoot: filepath.Join(filepath.Dir(root), "lexical-alias"), DataIdentity: identity}
+	if _, _, err := installationDataEntries(InstallationModeFresh, manifest, source, nil); err == nil {
+		t.Fatal("accepted a migration source with the target root identity")
+	}
+}
+
 func TestInstallationReset_RejectsNonChildObservation(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{".", "..", "../other", "logs/child", "logs\\child", "", "a\x00b"} {

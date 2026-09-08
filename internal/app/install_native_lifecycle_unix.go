@@ -101,6 +101,11 @@ func (s *nativeInstallSession) runLifecycle(ctx context.Context, operation strin
 	if err := s.prepareLifecycle(ctx, operation, old); err != nil {
 		return err
 	}
+	if binder, ok := s.tx.Service.(interface {
+		BindStopAuthority(service.Definition, string)
+	}); ok {
+		binder.BindStopAuthority(old, s.tx.Artifacts.BootID)
+	}
 	if err := s.tx.lifecycleActions(ctx, operation); err != nil {
 		return errors.Join(err, s.tx.RecoverLocked(context.WithoutCancel(ctx), s))
 	}

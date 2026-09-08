@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -79,6 +80,22 @@ func TestInstallationReset_FreshDeletesOnlyBoundManagedEntries(t *testing.T) {
 
 func TestInstallationRepair_AfterInterruptedFreshDoesNotRestoreDeletedData(t *testing.T) {
 	h := newInstallationManagerHarness(t, InstallationModeFresh)
+	h.input.Instance.SourceScope = &InstallationSourceScope{
+		DataRoot:       filepath.Join(filepath.Dir(h.target.DataRoot), "migration-source"),
+		DataIdentity:   InstallationIdentity{BootID: "boot-a", Key: "source-key", Marker: "source-marker"},
+		Selection:      "explicit_request",
+		EvidenceSHA256: fmt.Sprintf("%064x", 1),
+	}
+	current, err := DecodeInstallationState(bytes.NewReader(h.raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.SourceScope = cloneInstallationSourceScope(h.input.Instance.SourceScope)
+	h.raw, err = EncodeInstallationState(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.input.Instance.RecordSHA256 = fmt.Sprintf("%x", sha256.Sum256(h.raw))
 	deletedPath := filepath.Join(h.target.DataRoot, "mihari.yaml")
 	unknownPath := filepath.Join(h.target.DataRoot, "unknown.data")
 	writeInstallationFixture(t, deletedPath, "old config")
@@ -121,7 +138,7 @@ func TestInstallationRepair_AfterInterruptedFreshDoesNotRestoreDeletedData(t *te
 		t.Fatalf("repair changed unknown data: %q %v", raw, err)
 	}
 	latest := h.publishedStates[len(h.publishedStates)-2]
-	if latest.Base == nil || latest.Base.Binary.Version != "old" || latest.SourceScope != interrupted.SourceScope {
+	if latest.Base == nil || latest.Base.Binary.Version != "old" || !reflect.DeepEqual(latest.SourceScope, interrupted.SourceScope) {
 		t.Fatalf("repeat repair did not keep flat base/source: %+v", latest)
 	}
 }

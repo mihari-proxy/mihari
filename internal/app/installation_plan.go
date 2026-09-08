@@ -170,10 +170,11 @@ func validateInstallationPlanInput(input VerifiedInstallationPlanInput) error {
 	seen := map[string]bool{}
 	for _, entries := range [][]InstallationEntry{input.Preserve, input.Delete} {
 		for _, entry := range entries {
-			if !validInstallationEntry(entry) || seen[entry.Path] {
+			key := installationPathKey(entry.Path)
+			if !validInstallationEntry(entry) || seen[key] {
 				return invalidInstallationPlan()
 			}
-			seen[entry.Path] = true
+			seen[key] = true
 		}
 	}
 	return nil

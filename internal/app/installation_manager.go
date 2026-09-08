@@ -296,7 +296,7 @@ func (m *InstallationManager) Execute(ctx context.Context, request InstallationE
 	if err != nil {
 		return InstallationOutcome{}, installationStartFailure(id)
 	}
-	if !validInstallationServiceState(serviceState) || serviceState == InstallServiceUnknown {
+	if !validInstallationServiceState(serviceState) || serviceState == InstallServiceUnknown || serviceState == InstallServiceNotInstalled {
 		return InstallationOutcome{}, installationStartFailure(id)
 	}
 	return InstallationOutcome{Schema: InstallationOutcomeSchema, InstallationComplete: true, ServiceState: serviceState, ID: id}, nil
@@ -362,6 +362,12 @@ func validInstallationManagerScope(input VerifiedInstallationPlanInput, target I
 	}
 	if input.Mode == InstallationModeRepair {
 		return len(input.Delete) == 0
+	}
+	if input.Instance.SourceScope != nil {
+		sourceIdentity := input.Instance.SourceScope.DataIdentity
+		if target.DataIdentity != nil && sourceIdentity == *target.DataIdentity || target.DataParentIdentity != nil && sourceIdentity == target.DataParentIdentity.Identity {
+			return false
+		}
 	}
 	if input.Instance.SourceScope != nil && installationPathsOverlap(target.DataRoot, input.Instance.SourceScope.DataRoot) {
 		return false

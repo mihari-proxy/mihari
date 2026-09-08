@@ -81,6 +81,39 @@ func TestDarwinLaunchdIdentity_ActualArgumentsAndGroup(t *testing.T) {
 					t.Fatal("live group reported absent", err)
 				}
 			}
+			var member *exec.Cmd
+			var memberInput io.WriteCloser
+			memberJoined := true
+			if id.Group != "" {
+				member = exec.Command(exe, "daemon", "--system-service")
+				member.Env = append(os.Environ(), "MIHARI_SERVICE_GROUP_HELPER=1")
+				member.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: cmd.Process.Pid}
+				memberInput, err = member.StdinPipe()
+				if err != nil {
+					t.Fatal(err)
+				}
+				memberOutput, err := member.StdoutPipe()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := member.Start(); err != nil {
+					t.Fatal(err)
+				}
+				memberJoined = false
+				t.Cleanup(func() {
+					if !memberJoined {
+						if err := memberInput.Close(); err != nil {
+							t.Error(err)
+						}
+						if err := member.Wait(); err != nil {
+							t.Error(err)
+						}
+					}
+				})
+				if line, err := bufio.NewReader(memberOutput).ReadString('\n'); err != nil || line != "ready\n" {
+					t.Fatal("native group member did not become ready")
+				}
+			}
 			if err := input.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -89,8 +122,18 @@ func TestDarwinLaunchdIdentity_ActualArgumentsAndGroup(t *testing.T) {
 			}
 			joined = true
 			if id.Group != "" {
+				if empty, err := tree.Empty(context.Background(), id.Group); err != nil || empty {
+					t.Fatal("leader exit incorrectly proved the shared group empty", err)
+				}
+				if err := memberInput.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if err := member.Wait(); err != nil {
+					t.Fatal(err)
+				}
+				memberJoined = true
 				if empty, err := tree.Empty(context.Background(), id.Group); err != nil || !empty {
-					t.Fatal("exited helper group did not disappear", err)
+					t.Fatal("exited shared group did not disappear", err)
 				}
 			}
 		})

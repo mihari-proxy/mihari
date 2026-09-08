@@ -3,13 +3,16 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/securitytest"
 	"github.com/mihari-proxy/mihari/internal/service"
@@ -151,6 +154,13 @@ func securityNativeCrashScenario(t *testing.T, scenario securityCrashScenario) {
 					t.Fatal("native state reopen", err)
 				}
 				recovered.tx.Validation = harnessValidationChild(recovered.tx.Artifacts)
+				if securityRecoveryNeedsNewProcessProof(persisted) {
+					assertSecurityRecoveryRefusal(t, fixture, recovered, persisted, initialLock, retainedIdentity)
+					if err := recovered.Close(); err != nil {
+						t.Fatal(err)
+					}
+					return
+				}
 				if err := recovered.tx.RecoverLocked(ctx, recovered); err != nil {
 					t.Fatal("native first recovery", err)
 				}
@@ -327,6 +337,17 @@ func securityReverseCrashMatrix(t *testing.T, scenario securityCrashScenario, fo
 					t.Fatal(err)
 				}
 				reopened.tx.Validation = harnessValidationChild(reopened.tx.Artifacts)
+				persisted, err := reopened.tx.Store.Load(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if securityRecoveryNeedsNewProcessProof(persisted) {
+					assertSecurityRecoveryRefusal(t, f, reopened, persisted, initialLock, retainedIdentity)
+					if err := reopened.Close(); err != nil {
+						t.Fatal(err)
+					}
+					return
+				}
 				if err := reopened.tx.RecoverLocked(ctx, reopened); err != nil {
 					t.Fatal("reverse resume", err)
 				}
@@ -370,4 +391,137 @@ func securityReverseCrashMatrix(t *testing.T, scenario securityCrashScenario, fo
 			})
 		}
 	}
+}
+
+func securityRecoveryNeedsNewProcessProof(journal InstallJournal) bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	want := ""
+	switch journal.RecoveryAuthority {
+	case InstallAuthorityTarget:
+		want = JournalActionStart
+	case InstallAuthoritySource:
+		want = JournalActionRestoreStart
+	}
+	for _, action := range journal.Actions {
+		if want != "" && action.Kind == want && (action.Status == JournalActionIntent || action.Status == JournalActionDone) {
+			return true
+		}
+	}
+	return false
+}
+
+func assertSecurityRecoveryRefusal(t *testing.T, fixture *securityNativeInstall, session *nativeInstallSession, before InstallJournal, initialLock, retainedIdentity os.FileInfo) {
+	t.Helper()
+	ctx := context.Background()
+	if before.BootID == "" || before.BootID != session.tx.Artifacts.BootID {
+		t.Fatal("expected refusal fixture is not in the recorded boot")
+	}
+	wantJournal, err := os.ReadFile(filepath.Join(fixture.layout.BaseDir, installJournalFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantService, err := securityServiceSnapshot(ctx, fixture.manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFiles := securityInstallationFileSnapshots(t, fixture)
+	for attempt := 0; attempt < 2; attempt++ {
+		err := session.tx.RecoverLocked(ctx, session)
+		var apiErr protocol.APIError
+		if !errors.As(err, &apiErr) || apiErr.Code != protocol.CodeInvalidState || apiErr.Message != "service process group identity is unknown" {
+			t.Fatalf("ambiguous service generation error=%v", err)
+		}
+		afterJournal, err := os.ReadFile(filepath.Join(fixture.layout.BaseDir, installJournalFileName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(afterJournal, wantJournal) {
+			t.Fatal("refused recovery changed durable journal bytes")
+		}
+		gotService, err := securityServiceSnapshot(ctx, fixture.manager)
+		if err != nil || gotService != wantService {
+			t.Fatal("refused recovery changed service or definition", err)
+		}
+		assertSecurityInstallationFileSnapshots(t, wantFiles)
+	}
+	currentLock, err := os.Stat(filepath.Join(fixture.layout.BaseDir, "install.lock"))
+	if err != nil || !os.SameFile(initialLock, currentLock) {
+		t.Fatal("refused recovery replaced permanent lock", err)
+	}
+	if retainedIdentity != nil {
+		currentData, err := os.Stat(fixture.layout.Data.Root)
+		if err != nil || !os.SameFile(retainedIdentity, currentData) {
+			t.Fatal("refused recovery replaced retained D", err)
+		}
+	}
+	fixture.assertSource(t)
+}
+
+type securityInstallationFileSnapshot struct {
+	path    string
+	present bool
+	info    os.FileInfo
+	body    []byte
+}
+
+func securityInstallationFileSnapshots(t *testing.T, fixture *securityNativeInstall) []securityInstallationFileSnapshot {
+	t.Helper()
+	paths := []string{filepath.Join(fixture.layout.InstallRoot, "mihari"), fixture.layout.ChannelPath, fixture.manager.launchd.Plist}
+	snapshots := make([]securityInstallationFileSnapshot, 0, len(paths))
+	for _, path := range paths {
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			snapshots = append(snapshots, securityInstallationFileSnapshot{path: path})
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshots = append(snapshots, securityInstallationFileSnapshot{path: path, present: true, info: info, body: body})
+	}
+	return snapshots
+}
+
+func assertSecurityInstallationFileSnapshots(t *testing.T, want []securityInstallationFileSnapshot) {
+	t.Helper()
+	for _, snapshot := range want {
+		info, err := os.Lstat(snapshot.path)
+		if !snapshot.present {
+			if !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("refused recovery created %s: %v", snapshot.path, err)
+			}
+			continue
+		}
+		if err != nil || !os.SameFile(snapshot.info, info) {
+			t.Fatalf("refused recovery replaced %s: %v", snapshot.path, err)
+		}
+		body, err := os.ReadFile(snapshot.path)
+		if err != nil || !bytes.Equal(body, snapshot.body) {
+			t.Fatalf("refused recovery changed %s: %v", snapshot.path, err)
+		}
+	}
+}
+
+func securityServiceSnapshot(ctx context.Context, manager *securityNativeManager) (string, error) {
+	file, err := manager.files.Read(ctx, manager.launchd.Plist)
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Sprintf("%t/%t/%t/absent", manager.running, manager.loaded, manager.disabled), nil
+	}
+	if err != nil {
+		return "", err
+	}
+	link := ""
+	if file.Kind == "link" || file.Kind == "mask" {
+		link, err = manager.files.ReadLink(ctx, manager.launchd.Plist)
+		if err != nil {
+			return "", err
+		}
+	}
+	return fmt.Sprintf("%t/%t/%t/%s", manager.running, manager.loaded, manager.disabled, service.DefinitionFileState(file, link)), nil
 }

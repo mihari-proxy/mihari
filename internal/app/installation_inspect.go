@@ -83,9 +83,17 @@ func (m *InstallationManager) Inspect(ctx context.Context) (InstallationStatus, 
 	legacy := false
 	validSnapshot := true
 	switch {
+	case first.OperationLocked:
+		status.Kind = InstallationKindInProgress
+		status.Reason = InstallationReasonInstalling
+		if first.Present && len(first.State) != 0 {
+			if state, decodeErr := DecodeInstallationState(bytes.NewReader(first.State)); decodeErr == nil {
+				status.ID = state.ID
+			}
+		}
 	case first.Present && (len(first.State) == 0 || first.Legacy != nil):
 		validSnapshot = false
-	case !first.Present && (len(first.State) != 0 || first.OperationLocked):
+	case !first.Present && len(first.State) != 0:
 		validSnapshot = false
 	case first.Present:
 		state, decodeErr := DecodeInstallationState(bytes.NewReader(first.State))
@@ -94,10 +102,7 @@ func (m *InstallationManager) Inspect(ctx context.Context) (InstallationStatus, 
 			break
 		}
 		status.ID = state.ID
-		if first.OperationLocked {
-			status.Kind = InstallationKindInProgress
-			status.Reason = InstallationReasonInstalling
-		} else if state.State == InstallationStateApplying {
+		if state.State == InstallationStateApplying {
 			status.Kind = InstallationKindInterrupted
 			status.Reason = InstallationReasonOperationInterrupted
 		} else if state.Target.Installed {

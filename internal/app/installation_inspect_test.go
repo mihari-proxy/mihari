@@ -31,6 +31,8 @@ func TestInstallationInspect_ClassifiesStableSnapshots(t *testing.T) {
 		wantReason string
 	}{
 		{name: "applying locked", snapshot: InstallationSnapshot{Present: true, OperationLocked: true, State: applying}, service: InstallationServiceObservation{State: InstallServiceStopped}, wantKind: InstallationKindInProgress, wantState: InstallServiceStopped, wantReason: "installing"},
+		{name: "locked while record is unavailable", snapshot: InstallationSnapshot{Present: true, OperationLocked: true}, service: InstallationServiceObservation{State: InstallServiceStopped}, wantKind: InstallationKindInProgress, wantState: InstallServiceStopped, wantReason: "installing"},
+		{name: "locked before first record", snapshot: InstallationSnapshot{OperationLocked: true}, service: InstallationServiceObservation{State: InstallServiceStopped}, wantKind: InstallationKindInProgress, wantState: InstallServiceStopped, wantReason: "installing"},
 		{name: "applying unlocked", snapshot: InstallationSnapshot{Present: true, State: applying}, service: InstallationServiceObservation{State: InstallServiceStopped}, wantKind: InstallationKindInterrupted, wantState: InstallServiceStopped, wantReason: "operation_interrupted"},
 		{name: "complete stopped despite prior run policy", snapshot: InstallationSnapshot{Present: true, State: complete}, resource: InstallationResourceObservation{Matches: true}, service: InstallationServiceObservation{State: InstallServiceStopped, Enabled: true}, wantKind: InstallationKindInstalled, wantState: InstallServiceStopped},
 		{name: "complete running ready", snapshot: InstallationSnapshot{Present: true, State: complete}, resource: InstallationResourceObservation{Matches: true}, service: InstallationServiceObservation{State: InstallServiceRunning, Enabled: true, Ready: true}, wantKind: InstallationKindInstalled, wantState: InstallServiceRunning},
@@ -54,7 +56,7 @@ func TestInstallationInspect_ClassifiesStableSnapshots(t *testing.T) {
 			if status.Schema != InstallationStatusSchema || status.Kind != tc.wantKind || status.ServiceState != tc.wantState || status.Reason != tc.wantReason || status.StartFailed {
 				t.Fatalf("status=%+v", status)
 			}
-			if tc.snapshot.Present && status.ID != "0123456789abcdef0123456789abcdef" {
+			if tc.snapshot.Present && len(tc.snapshot.State) != 0 && status.ID != "0123456789abcdef0123456789abcdef" {
 				t.Fatalf("id=%q", status.ID)
 			}
 			observer.assertReadOnly(t)

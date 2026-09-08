@@ -85,12 +85,11 @@ func TestInstallationPlan_DigestBindsEveryAuthorizedFact(t *testing.T) {
 	})
 }
 
-func TestInstallationPlan_ExcludesLiveHealthAndQueryTime(t *testing.T) {
+func TestInstallationPlan_StableDigestForSameVerifiedFacts(t *testing.T) {
 	first, err := BindInstallationPlan(testVerifiedInstallationPlanInput())
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Live Ready state and query time are deliberately absent from verified plan facts.
 	second, err := BindInstallationPlan(testVerifiedInstallationPlanInput())
 	if err != nil {
 		t.Fatal(err)

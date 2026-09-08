@@ -52,6 +52,15 @@ func newSecurityScenario(t *testing.T, scenario securityCrashScenario) *security
 		f.manager.running = scenario.running
 		f.manager.loaded = scenario.running
 		f.manager.disabled = !scenario.enabled
+		if runtime.GOOS == "darwin" && !scenario.running {
+			boot, err := installBootIdentity()
+			if err != nil {
+				t.Fatal(err)
+			}
+			authority := service.Definition{Status: service.StatusStopped, Process: securityNativeProcessIdentity(boot, 123, 100, 0)}
+			f.manager.stopAuthority = &authority
+			f.manager.stopBoot = boot
+		}
 		// An update must actually publish a changed, still-parseable definition
 		// on launchd too (it does not temporarily replace a plist with a mask).
 		f.definition.Files[0].Bytes = append(append([]byte(nil), f.definition.Files[0].Bytes...), '\n')

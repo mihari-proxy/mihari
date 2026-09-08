@@ -121,9 +121,10 @@ func TestInstallationState_ValidatesInstalledAndMissingRootRules(t *testing.T) {
 			s.Target.InstallRoot = ""
 		}},
 		{name: "parent evidence points elsewhere", mutate: func(s *InstallationState) {
+			s.Base = nil
 			s.Target.DataIdentity = nil
 			s.Target.DataParentIdentity = testDataParentIdentity()
-			s.Target.DataRoot = `C:\Mihari\other`
+			s.Target.DataRoot = `/var/lib/mihari/other`
 		}},
 		{name: "relative endpoint", mutate: func(s *InstallationState) { s.Target.Endpoint = "mihari-control" }},
 	}

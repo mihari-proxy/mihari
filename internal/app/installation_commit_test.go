@@ -227,7 +227,7 @@ func TestInstallationCommit_ReadyFailureKeepsCompleteAndReturnsStandardError(t *
 }
 
 func TestInstallationCommit_InvalidServiceResultReportsCompletedStartFailure(t *testing.T) {
-	for _, serviceState := range []string{InstallServiceUnknown, "invalid"} {
+	for _, serviceState := range []string{InstallServiceNotInstalled, InstallServiceUnknown, "invalid"} {
 		t.Run(serviceState, func(t *testing.T) {
 			h := newInstallationManagerHarness(t, InstallationModeRepair)
 			h.startState = serviceState

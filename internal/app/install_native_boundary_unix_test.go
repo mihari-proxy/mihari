@@ -71,6 +71,24 @@ func (nativeBoundaryTree) Identify(_ context.Context, pid int) (service.ProcessI
 	return service.ProcessIdentity{PID: pid, BootID: "fixture-boot", StartUnix: 100}, nil
 }
 
+type lifecycleBindingAdapter struct {
+	service.RecoveryAdapter
+	bound service.Definition
+	boot  string
+}
+
+func (a *lifecycleBindingAdapter) BindStopAuthority(def service.Definition, boot string) {
+	a.bound = def
+	a.boot = boot
+}
+
+func (a *lifecycleBindingAdapter) DisableAutostartAndStop(ctx context.Context) error {
+	if a.boot == "" || a.bound.Status == service.StatusUnknown {
+		return errors.New("current service authority was not rebound")
+	}
+	return a.RecoveryAdapter.DisableAutostartAndStop(ctx)
+}
+
 func nativeBoundarySession(t *testing.T) (context.Context, *nativeInstallSession, *nativeBoundaryManager, service.Definition) {
 	t.Helper()
 	ctx, root := nativeInstallFixture(t)
@@ -213,6 +231,21 @@ func TestNativeInstallBoundary_LifecycleRetainsDataAuthority(t *testing.T) {
 		t.Fatal("replacement data root accepted")
 	}
 
+}
+
+func TestNativeInstallBoundary_LifecycleRebindsFreshServiceAuthority(t *testing.T) {
+	ctx, s, _, _ := nativeBoundarySession(t)
+	req := InstallRequest{Schema: InstallRequestSchema, Operation: InstallOperationInstall, Channel: InstallChannelMain, Layout: InstallLayoutPrivate, Data: s.layout.Data.Root}
+	nativeBoundaryApply(t, ctx, s, req, service.Definition{Status: service.StatusNotInstalled}, &nativeReleaseInputs{binary: []byte("verified candidate"), resources: map[string][]byte{}})
+
+	adapter := &lifecycleBindingAdapter{RecoveryAdapter: s.tx.Service.(service.RecoveryAdapter)}
+	s.tx.Service = adapter
+	if err := s.runLifecycle(ctx, "stop"); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.boot != s.tx.Artifacts.BootID || adapter.bound.Status == service.StatusUnknown {
+		t.Fatalf("bound authority=%+v boot=%q", adapter.bound, adapter.boot)
+	}
 }
 
 func TestNativeInstallBoundary_UninstallAlreadyMaskedUnit(t *testing.T) {

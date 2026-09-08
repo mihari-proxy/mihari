@@ -18,8 +18,10 @@ func installationDataEntries(mode string, manifest InstallationManifest, source 
 	if mode != InstallationModeRepair && mode != InstallationModeFresh || !validAbsPath(manifest.DataRoot) || !validInstallationPath(manifest.DataRoot) || !validAbsPath(manifest.Credential) || !validInstallationPath(manifest.Credential) {
 		return nil, nil, invalidInstallationPlan()
 	}
-	if mode == InstallationModeFresh && source != nil && installationPathsOverlap(manifest.DataRoot, source.DataRoot) {
-		return nil, nil, invalidInstallationPlan()
+	if mode == InstallationModeFresh && source != nil {
+		if installationPathsOverlap(manifest.DataRoot, source.DataRoot) || manifest.DataIdentity != nil && source.DataIdentity == *manifest.DataIdentity || manifest.DataParentIdentity != nil && source.DataIdentity == manifest.DataParentIdentity.Identity {
+			return nil, nil, invalidInstallationPlan()
+		}
 	}
 	preserve = make([]InstallationEntry, 0, len(children)+1)
 	remove = make([]InstallationEntry, 0, len(installationResetEntries))
@@ -68,11 +70,12 @@ func installationDataEntries(mode string, manifest InstallationManifest, source 
 }
 
 func installationSamePath(a, b string) bool {
-	rel, err := filepath.Rel(a, b)
+	rel, err := filepath.Rel(installationPathKey(a), installationPathKey(b))
 	return err == nil && rel == "."
 }
 
 func installationPathsOverlap(a, b string) bool {
+	a, b = installationPathKey(a), installationPathKey(b)
 	inside := func(parent, child string) bool {
 		rel, err := filepath.Rel(parent, child)
 		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)

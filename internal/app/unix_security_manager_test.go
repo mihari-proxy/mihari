@@ -23,6 +23,8 @@ type securityNativeManager struct {
 	running, loaded, disabled bool
 	verbs                     []string
 	dropins                   []string
+	stopAuthority             *service.Definition
+	stopBoot                  string
 }
 
 type securityNativeTree struct{ nativeBoundaryTree }
@@ -109,7 +111,11 @@ func (m *securityNativeManager) Run(ctx context.Context, argv []string) (service
 }
 func (m *securityNativeManager) adapter(hook service.ActionHook) service.RecoveryAdapter {
 	if runtime.GOOS == "darwin" {
-		return service.NewSecurityLaunchdAdapter(m, m.files, securityNativeTree{}, hook, m.launchd)
+		adapter := service.NewSecurityLaunchdAdapter(m, m.files, securityNativeTree{}, hook, m.launchd)
+		if m.stopAuthority != nil {
+			adapter.BindStopAuthority(*m.stopAuthority, m.stopBoot)
+		}
+		return adapter
 	}
 	return service.NewSystemdAdapterWithConfig(service.SystemdConfig{Runner: m, Files: m.files, Paths: m.paths, Tree: nativeBoundaryTree{}, Hook: hook})
 }
