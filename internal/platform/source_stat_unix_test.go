@@ -8,7 +8,59 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
+
+type sourceGrowAfterStat struct {
+	trustedBackend
+	grow func()
+}
+
+func (b *sourceGrowAfterStat) stat(fd int) (trustedNode, error) {
+	node, err := b.trustedBackend.stat(fd)
+	if err == nil && node.mode&unix.S_IFMT == unix.S_IFREG && b.grow != nil {
+		grow := b.grow
+		b.grow = nil
+		grow()
+	}
+	return node, err
+}
+
+func TestReadOnlySource_GrowthPastReadBoundIsOversize(t *testing.T) {
+	for _, retain := range []bool{false, true} {
+		t.Run(map[bool]string{false: "stat", true: "read"}[retain], func(t *testing.T) {
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(root, "candidate")
+			if err := os.WriteFile(file, []byte("1234"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			source, err := OpenReadOnlySource(context.Background(), root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { assertTestClose(t, source.Close) })
+			source.backend = &sourceGrowAfterStat{trustedBackend: source.backend, grow: func() {
+				if err := os.WriteFile(file, []byte("12345678"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}}
+			var entry SourceEntry
+			var raw []byte
+			if retain {
+				entry, raw, err = source.Read(context.Background(), "candidate", 5)
+			} else {
+				entry, err = source.Stat(context.Background(), "candidate", 5)
+			}
+			if !errors.Is(err, os.ErrInvalid) || entry.Kind != "file" || entry.Size != 6 || raw != nil || entry.SHA256 != "" {
+				t.Fatalf("growth lost oversize classification: size=%d err=%v", entry.Size, err)
+			}
+		})
+	}
+}
 
 func TestReadOnlySource_StatRetainsIdentityAndBounds(t *testing.T) {
 	root, err := filepath.EvalSymlinks(t.TempDir())

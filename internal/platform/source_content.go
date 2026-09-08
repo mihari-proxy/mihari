@@ -17,7 +17,7 @@ func readSourceContent(ctx context.Context, reader io.Reader, limit int64, retai
 	}
 	size, err := io.Copy(output, io.LimitReader(&sourceContextReader{ctx: ctx, r: reader}, limit+1))
 	if err != nil {
-		return nil, 0, "", err
+		return nil, size, "", err
 	}
 	return raw.Bytes(), size, hex.EncodeToString(hash.Sum(nil)), nil
 }

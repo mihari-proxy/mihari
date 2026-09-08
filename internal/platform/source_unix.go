@@ -445,6 +445,10 @@ func (r *ReadOnlySource) read(ctx context.Context, rel string, limit int64, reta
 		return entry, nil, os.ErrInvalid
 	}
 	raw, size, hash, err := readSourceContent(ctx, f, limit, retain)
+	if size > limit {
+		entry.Size = size
+		return entry, nil, errors.Join(os.ErrInvalid, err)
+	}
 	if err != nil {
 		return entry, nil, err
 	}

@@ -16,6 +16,23 @@ type boundedSourceReader struct {
 	afterRead func()
 }
 
+type failingSourceChunk struct {
+	data    []byte
+	failure error
+}
+
+func (r failingSourceChunk) Read(p []byte) (int, error) { return copy(p, r.data), r.failure }
+
+func TestSourceContent_ReadFailureRetainsObservedSize(t *testing.T) {
+	failure := errors.New("fixture source read failure")
+	for _, retain := range []bool{false, true} {
+		raw, size, hash, err := readSourceContent(context.Background(), failingSourceChunk{[]byte("12345"), failure}, 4, retain)
+		if !errors.Is(err, failure) || size != 5 || raw != nil || hash != "" {
+			t.Fatalf("failed bounded read lost size or exposed incomplete content: size=%d err=%v", size, err)
+		}
+	}
+}
+
 func (r *boundedSourceReader) Read(p []byte) (int, error) {
 	if len(p) > 32<<10 {
 		return 0, errors.New("source hashing requested an unbounded chunk")
