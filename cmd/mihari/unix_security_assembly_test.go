@@ -6,6 +6,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -121,6 +123,16 @@ func TestUnixSecurity_FullAssembly(t *testing.T) {
 	journal.EndpointPath = layout.ControlEndpoint
 	journal.CredentialPath = layout.CredentialPath
 	journal.Actions = nil
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binaryBytes, err := os.ReadFile(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binaryHash := sha256.Sum256(binaryBytes)
+	journal.CandidateHash = hex.EncodeToString(binaryHash[:])
 	encoded, err := app.EncodeJournal(journal)
 	if err != nil {
 		t.Fatal(err)
@@ -137,10 +149,6 @@ func TestUnixSecurity_FullAssembly(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	binary, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
 	installer, err := app.NewUnixInstaller(layout, binary, "test")
 	if err != nil {
 		t.Fatal(err)
@@ -344,7 +352,7 @@ func TestUnixSecurity_AssemblyChild(t *testing.T) {
 		_ = other.Close()
 	}
 	resources.Runtime.Logger().Info("current user assembly fixture")
-	exported, err := exportAssembledLogs(context.Background(), logging.ExportRequest{Range: logging.ExportRange{Kind: logging.RangeAll}, Now: time.Now().UTC()}, assembledExportOptions{Scope: logging.ExportScopeMachineAndCurrentUser, UserLogs: input.Layout.ClientLogs, Resources: resources, OpenMachineSnapshot: client.OpenMachineSnapshot})
+	exported, err := exportAssembledLogs(context.Background(), logging.ExportRequest{Range: logging.ExportRange{Kind: logging.RangeAll}, Now: time.Now().UTC(), AutoNumber: true}, assembledExportOptions{Scope: logging.ExportScopeMachineAndCurrentUser, UserLogs: input.Layout.ClientLogs, Resources: resources, OpenMachineSnapshot: client.OpenMachineSnapshot})
 	if err != nil {
 		_ = resources.Close()
 		t.Fatal(err)
