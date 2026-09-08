@@ -122,6 +122,25 @@ def test_cleanup_preserves_test_and_term_failures(initial):
     assert host.archive_exists and not host.anchor_exists
 
 
+@pytest.mark.parametrize("message,reason", [
+    ("cannot inspect isolated launchd job", "launchd-job-query"),
+    ("isolated launchd job remains loaded", "launchd-job-still-loaded"),
+    ("isolated launchd group was not published", "launchd-group-unpublished"),
+    ("isolated launchd group remains", "launchd-group-still-present"),
+])
+def test_launchd_cleanup_failure_has_safe_reason(message, reason):
+    class FailedLaunchdHost(FakeHost):
+        def cleanup(self, stage):
+            self.calls.append(stage)
+            raise OSError(message)
+    host = FailedLaunchdHost()
+    result = security.finish(host, {"failures": [], "cleanup": {}}, 0)
+    assert result["cleanup_errors"]["processes"].get("reason") == reason
+    assert host.calls == ["archive", "processes"]
+    assert result["exit_status"] == 1 and host.anchor_exists
+    assert message not in json.dumps(result)
+
+
 def test_linux_cleanup_uses_available_mount_inventory_command(tmp_path, monkeypatch):
     import types
     import unix_security_host as host_module

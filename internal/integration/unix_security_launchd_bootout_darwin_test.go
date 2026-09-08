@@ -67,7 +67,7 @@ func TestSecurityLaunchdBootoutDrainsSharedProcessGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	if err := bootoutJobAbsent(ctx, f.label); err != nil {
 		t.Fatal("fixture label already exists or cannot be inspected", err)
@@ -152,7 +152,8 @@ func TestSecurityLaunchdBootoutDrainsSharedProcessGroup(t *testing.T) {
 	if err := bootoutLaunchctl(ctx, "bootout", "system/"+f.label); err != nil {
 		t.Fatal("fixture bootout failed", err)
 	}
-	proof, stop := context.WithTimeout(ctx, 10*time.Second)
+	// Match the production service adapter's 30-second stop observation.
+	proof, stop := context.WithTimeout(ctx, 30*time.Second)
 	defer stop()
 	// The helper lifetime is one minute. This shorter proof cannot pass merely
 	// because the intentionally TERM-resistant descendants reached their bound.
@@ -163,6 +164,19 @@ func TestSecurityLaunchdBootoutDrainsSharedProcessGroup(t *testing.T) {
 		case errors.Is(err, unix.EPERM):
 			t.Fatal("bootout group observation was denied")
 		case errors.Is(err, context.DeadlineExceeded):
+			inGroup := func(process bootoutProcess) bool {
+				pgid, lookupErr := unix.Getpgid(process.PID)
+				return lookupErr == nil && pgid == group
+			}
+			if inGroup(processes[0]) {
+				t.Fatal("bootout left the recorded daemon in the group")
+			}
+			if inGroup(processes[1]) {
+				t.Fatal("bootout left the recorded core in the group")
+			}
+			if inGroup(processes[2]) {
+				t.Fatal("bootout left the recorded grandchild in the group")
+			}
 			t.Fatal("bootout group exit proof timed out")
 		default:
 			t.Fatal("bootout group exit proof failed")

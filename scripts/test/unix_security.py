@@ -177,6 +177,10 @@ def finish(host, report, status):
                 "fixture mount remains visible": "mount-still-present",
                 "mount target identity changed": "mount-target-identity",
                 "mount source identity changed": "mount-source-identity",
+                "cannot inspect isolated launchd job": "launchd-job-query",
+                "isolated launchd job remains loaded": "launchd-job-still-loaded",
+                "isolated launchd group was not published": "launchd-group-unpublished",
+                "isolated launchd group remains": "launchd-group-still-present",
             }
             if str(error) in known_reasons:
                 report["cleanup_errors"][stage]["reason"] = known_reasons[str(error)]

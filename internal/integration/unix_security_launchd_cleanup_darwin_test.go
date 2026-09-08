@@ -9,6 +9,8 @@ import (
 	"testing"
 )
 
+// confirmBootoutCleanup protects this hosted test fixture's teardown. These
+// tests validate the harness contract, not a production repair implementation.
 func confirmBootoutCleanup(ctx context.Context, pgid int, wait func(context.Context, int) error) error {
 	// A zero intent can still have a live writer publishing its group after
 	// bootout. Keep the ledger for a later recovery pass instead of certifying it.

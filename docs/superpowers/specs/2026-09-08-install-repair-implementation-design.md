@@ -42,7 +42,9 @@ Manifest 字段：`installed` 布尔、`data_root`/`install_root`/`endpoint`/`cr
 
 定义 hash 来自受支持服务定义的规范内容，包括 argv、固定数据/端点绑定与服务账号，不含瞬时 PID/running；环境只允许既有定义白名单，不序列化 secret。enabled 单独作为期望服务策略，实际开关不进入定义 hash，避免临时启用使正常启动被自己的完整性检查拒绝。Unix data_identity 复用现有同 boot identity/跨 boot 私有 marker 语义；Windows 使用受保护根 handle 的 identity 和个人主体 SID 校验，不能把旧 inode/文件 ID 单独当作跨 boot 授权。无法校验旧根时拒绝修复/删除，不对用户目录自动改变 owner。
 
-首次安装且 D 尚不存在时，applying 的 data_identity 允许 null，但须额外以 `data_parent_identity` 绑定最近可信存在父目录和未创建的相对路径；没有该绑定不能创建。建立根后、写业务内容前，持锁更新同一 applying 的根 identity 并同步。complete 且 installed=true 不允许空 data_identity。修复已有实例禁止将无法确认的旧根降级成“尚未创建”，确认摘要同样绑定根不存在这一条件。
+Manifest 还必须显式包含 `data_parent_identity`，类型为 null 或 `{path,identity,relative}`；它是 `target`/`base` 内的 Manifest 字段，不是 state.json 的另一个顶层字段。`path` 是最近可信存在父目录的规范绝对路径，`identity` 使用上述身份结构，`relative` 是从该父目录到尚未创建的数据根的规范相对路径。
+
+首次安装且 D 尚不存在时，applying 的 target.data_identity 允许 null，但 target.data_parent_identity 必填；没有该绑定不能创建。建立根后、写业务内容前，持锁更新同一 applying 的根 identity，将 data_parent_identity 置 null 并同步。complete 且 installed=true 不允许空 data_identity。修复已有实例禁止将无法确认的旧根降级成“尚未创建”，确认摘要同样绑定根不存在这一条件。
 
 同目录临时文件写入、文件同步、身份约束原子替换、父目录/平台等价持久化成功后，才确认记录提交。`Published` 与 `Durable` 分开处理。daemon 接受 complete 前，须通过 held file/parent 能力确认该匹配版本的持久性：完成必要同步并重读版本；失败拒绝入场。它不修改记录内容、不写 complete、不取得安装操作锁。这样不能仅凭 rename 后可见、尚未同步的 complete 运行，然后断电回到 applying。Windows 原生持久化保证必须用受支持实现及故障注入核实，不以跨编译替代。
 
