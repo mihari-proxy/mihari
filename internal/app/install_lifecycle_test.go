@@ -104,3 +104,62 @@ func TestInstallLifecycle_JournaledServiceEffectsPreserveData(t *testing.T) {
 		})
 	}
 }
+
+func TestInstallLifecycle_MaskedStopPreservesMaskThroughRecovery(t *testing.T) {
+	for _, scenario := range []string{"stop", "activation-recovery", "activation-recovery-missing-mask"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := context.Background()
+			h := newInstallHarness(t, InstallDataRetain)
+			paths := service.DefaultSystemdPaths()
+			store := &barrierStore{files: map[string]service.DefinitionFile{}, links: map[string]string{paths.UnitFile: paths.DevNull, paths.WantsLink: paths.UnitFile}}
+			adapter := service.NewSystemdAdapterWithConfig(service.SystemdConfig{Runner: barrierRunner{store}, Files: store, Hook: h.tx.journaledHook})
+			old, err := adapter.InspectDefinition(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := old
+			target.Enabled, target.Running = false, false
+			h.tx.Service = adapter
+			h.tx.preparedAuthority = &installPreparedAuthority{OldDefinition: old, TargetDefinition: target}
+			h.tx.serviceEffects = &installServiceEffects{adapter: adapter, old: old, target: target}
+			marker, err := h.tx.Store.CreateTransactionMarker(ctx, testTxnID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The fixture journal supplies its existing validated backup fields.
+			authority := h.tx.preparedAuthority
+			h.tx.preparedAuthority = nil
+			h.tx.journal, err = h.tx.buildJournal(h.req, testTxnID, marker, h.art)
+			h.tx.preparedAuthority = authority
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.tx.Store.Save(ctx, h.tx.journal); err != nil {
+				t.Fatal(err)
+			}
+			if scenario != "stop" {
+				if err := h.tx.activate(ctx); err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "activation-recovery-missing-mask" {
+					delete(store.links, paths.UnitFile)
+				}
+				err = h.tx.RecoverLocked(ctx, &fakeInstallLease{held: true, global: true})
+			} else {
+				err = h.tx.lifecycleActions(ctx, "stop")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if store.links[paths.UnitFile] != paths.DevNull {
+				t.Fatal("masked stop/recovery removed the retained unit mask")
+			}
+			if _, ok := store.links[paths.WantsLink]; ok {
+				t.Fatal("masked stop retained an enabled autostart link")
+			}
+			if h.tx.journal.Phase != InstallPhaseComplete || h.tx.journal.RecoveryAuthority != InstallAuthorityTarget {
+				t.Fatal("masked stop did not complete target authority")
+			}
+		})
+	}
+}

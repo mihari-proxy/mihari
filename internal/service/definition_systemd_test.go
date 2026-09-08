@@ -550,6 +550,20 @@ func TestSystemdDisableAutostartAndStop_PreservesExistingMaskBarrier(t *testing.
 	}
 }
 
+func TestSystemdWriteDefinition_ReconstructsMaskedTarget(t *testing.T) {
+	h := newSystemdHarness(t, false, false, trustedUnitFile(t))
+	if err := h.files.Remove(context.Background(), defaultSystemdUnitFile); err != nil {
+		t.Fatal(err)
+	}
+	def := Definition{Status: StatusStopped, Masked: true, Links: []DefinitionLink{{Path: defaultSystemdUnitFile, Target: defaultDevNull}}}
+	if err := h.adapter.WriteDefinition(context.Background(), def); err != nil {
+		t.Fatal(err)
+	}
+	if !h.files.masked(defaultSystemdUnitFile) {
+		t.Fatal("masked target definition was not reconstructed")
+	}
+}
+
 func TestSystemdPaths_NotRuntime(t *testing.T) {
 	paths := DefaultSystemdPaths()
 	if strings.Contains(paths.UnitFile, "/run/") || !strings.HasPrefix(paths.UnitFile, "/etc/") {

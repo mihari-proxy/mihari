@@ -239,6 +239,58 @@ func TestNativeInstallBoundary_UninstallAlreadyMaskedUnit(t *testing.T) {
 		t.Fatalf("uninstall removed retained data: %v", err)
 	}
 }
+
+func TestNativeInstallBoundary_StopAlreadyMaskedUnitRecovery(t *testing.T) {
+	for _, scenario := range []string{"stop", "activation-recovery"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, s, manager, _ := nativeBoundarySession(t)
+			req := InstallRequest{Schema: InstallRequestSchema, Operation: InstallOperationInstall, Channel: InstallChannelMain, Layout: InstallLayoutPrivate, Data: s.layout.Data.Root}
+			nativeBoundaryApply(t, ctx, s, req, service.Definition{Status: service.StatusNotInstalled}, &nativeReleaseInputs{binary: []byte("verified candidate"), resources: map[string][]byte{}})
+			if err := manager.files.Mask(ctx, manager.paths.UnitFile, "/dev/null"); err != nil {
+				t.Fatal(err)
+			}
+			old, err := s.tx.Service.InspectDefinition(ctx)
+			if err != nil || !old.Masked {
+				t.Fatalf("masked fixture: masked=%v err=%v", old.Masked, err)
+			}
+			if err := s.prepareLifecycle(ctx, "stop", old); err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "stop" {
+				err = s.tx.lifecycleActions(ctx, "stop")
+			} else {
+				err = s.tx.activate(ctx)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Recover from disk through a fresh native session, including a repeat
+			// after completion, while the platform manager remains a fixture fake.
+			for attempt := 0; attempt < 2; attempt++ {
+				tx := &InstallTransaction{Store: s.tx.Store, Artifacts: InstallArtifacts{BootID: "fixture-boot"}}
+				tx.Service = service.NewSystemdAdapterWithConfig(service.SystemdConfig{Runner: manager, Files: manager.files, Paths: manager.paths, Tree: nativeBoundaryTree{}, Hook: tx.journaledHook})
+				restored := &nativeInstallSession{layout: s.layout, tx: tx}
+				if present, err := restored.loadState(ctx); err != nil || !present {
+					t.Fatalf("masked stop recovery metadata: present=%v err=%v", present, err)
+				}
+				if err := tx.RecoverLocked(ctx, &fakeInstallLease{held: true, global: true}); err != nil {
+					t.Fatal(err)
+				}
+				if link, err := os.Readlink(manager.paths.UnitFile); err != nil || link != "/dev/null" {
+					t.Fatalf("masked stop recovery lost actual mask: link=%q err=%v", link, err)
+				}
+				journal, err := tx.Store.Load(ctx)
+				if err != nil || journal.Phase != InstallPhaseComplete || journal.RecoveryAuthority != InstallAuthorityTarget {
+					t.Fatalf("masked stop recovery incomplete: phase=%s authority=%s err=%v", journal.Phase, journal.RecoveryAuthority, err)
+				}
+			}
+			if _, err := os.Stat(s.layout.Data.Root); err != nil {
+				t.Fatalf("masked stop removed retained data: %v", err)
+			}
+		})
+	}
+}
+
 func TestNativeInstallBoundary_AbsentPathMigrationStagesBothBinaries(t *testing.T) {
 	ctx, s, _, _ := nativeBoundarySession(t)
 	fx := newMigrationFixture(t)

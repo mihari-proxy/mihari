@@ -408,7 +408,14 @@ func (a *SystemdAdapter) WriteDefinition(ctx context.Context, def Definition) er
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := a.writeFiles(ctx, def.Files); err != nil {
+	if def.Masked {
+		if err := applyAction(ctx, a.hook, DefinitionAction{
+			Kind: DefinitionActionMask, Path: a.paths.UnitFile, Link: a.paths.DevNull,
+			TargetRole: "definition", OldState: "unmasked", NewState: "masked",
+		}, func(ctx context.Context) error { return a.files.Mask(ctx, a.paths.UnitFile, a.paths.DevNull) }); err != nil {
+			return err
+		}
+	} else if err := a.writeFiles(ctx, def.Files); err != nil {
 		return err
 	}
 	if def.Enabled {

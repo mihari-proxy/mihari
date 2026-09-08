@@ -54,8 +54,8 @@ func (x *InstallTransaction) removeObsoleteDefinitions(ctx context.Context) erro
 	for _, file := range target.Files {
 		keep[file.Path] = true
 	}
-	if target.Enabled {
-		for _, link := range target.Links {
+	for _, link := range target.Links {
+		if target.Enabled || (target.Masked && link.Target == "/dev/null") {
 			keep[link.Path] = true
 		}
 	}
