@@ -394,7 +394,7 @@ func (i Installer) checkTimeout() time.Duration {
 func withAIOHint(err error) error {
 	var apiError protocol.APIError
 	if errors.As(err, &apiError) && apiError.Code == protocol.CodeNetworkFailure {
-		apiError.Message += "；若处于无网/受限网络环境，请使用 all-in-one 安装脚本（install-aio-remote.sh / .ps1）离线安装"
+		apiError.Message += "; for offline or restricted networks, use the all-in-one installer (install-aio-remote.sh / .ps1)"
 		return apiError
 	}
 	return err

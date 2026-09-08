@@ -201,10 +201,10 @@ $svc = Get-Service -Name 'mihari' -ErrorAction SilentlyContinue
 $svcRunning = $svc -and $svc.Status -eq 'Running'
 
 if ($svcRunning) {
-  Write-Host "* 检测到 mihari 服务正在运行。" -ForegroundColor Yellow
-  $ans = Read-Host "  停止服务、更新 exe 并重启？[Y/n]"
+  Write-Host "* The mihari service is running." -ForegroundColor Yellow
+  $ans = Read-Host "  Stop the service, update the executable, and restart? [Y/n]"
   if ($ans -and $ans -notmatch '^[Yy]') {
-    Info "已取消，未做任何更改。"
+    Info "Canceled. No changes were made."
     return
   }
 }

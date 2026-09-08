@@ -269,7 +269,7 @@ else
   # index.txt line format: "<key> <rest...>". key="latest" → <version>;
   # key="<goos>-<goarch>" → <public_url> <sha256>.
   index="$(fetch "$INDEX_URL" 2>/dev/null || true)"
-  [ -n "$index" ] || err "尚未发布完成：无法获取 index（请稍后重试，或检查网络/网盘可用性）。"
+  [ -n "$index" ] || err "The release index is unavailable. Try again later or check network and storage availability."
   # Heredoc (not a pipe) so parsed values survive outside the loop's subshell.
   while IFS= read -r line; do
     [ -z "$line" ] && continue
@@ -285,9 +285,9 @@ else
   done <<EOF
 $index
 EOF
-  [ -n "$latest" ] || err "尚未发布完成：index 无 latest 版本（可能正在发布或已撤回）。"
+  [ -n "$latest" ] || err "The index has no latest release. Publication may be in progress or the release may have been withdrawn."
   if [ "${MIHARI_INSTALL_TEST_MODE:-}" != "1" ]; then
-    [ -n "$bundle_url" ] || err "index 未包含本平台 $platform 的包。"
+    [ -n "$bundle_url" ] || err "The index has no package for $platform."
   fi
   if [ "$CHANNEL_EXPLICIT" -eq 1 ]; then
     if [ "$CHANNEL" = "dev" ]; then
