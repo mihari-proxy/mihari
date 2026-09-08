@@ -525,6 +525,31 @@ func TestSystemdInspect_MaskedUnitRetainsRemovalSnapshot(t *testing.T) {
 	}
 }
 
+func TestSystemdDisableAutostartAndStop_PreservesExistingMaskBarrier(t *testing.T) {
+	h := newSystemdHarness(t, false, true, trustedUnitFile(t))
+	h.show = systemdMaskedShow()
+	if err := h.files.Mask(context.Background(), defaultSystemdUnitFile, defaultDevNull); err != nil {
+		t.Fatal(err)
+	}
+	h.adapter.hook = func(ctx context.Context, action DefinitionAction, apply func(context.Context) error) error {
+		if err := apply(ctx); err != nil {
+			return err
+		}
+		if !h.files.masked(defaultSystemdUnitFile) {
+			t.Fatalf("existing mask barrier removed during %s", action.Kind)
+		}
+		return nil
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := h.adapter.DisableAutostartAndStop(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if _, present := h.files.links[DefaultSystemdPaths().WantsLink]; present {
+			t.Fatal("autostart link was not disabled")
+		}
+	}
+}
+
 func TestSystemdPaths_NotRuntime(t *testing.T) {
 	paths := DefaultSystemdPaths()
 	if strings.Contains(paths.UnitFile, "/run/") || !strings.HasPrefix(paths.UnitFile, "/etc/") {

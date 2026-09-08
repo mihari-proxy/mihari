@@ -295,6 +295,11 @@ func (a *SystemdAdapter) DisableAutostartAndStop(ctx context.Context) error {
 		return nil
 	}
 	for _, link := range def.Links {
+		// The unit mask is retained in the snapshot for uninstall/rollback, but
+		// it is the stop barrier, not an autostart link to disable.
+		if link.Path == a.paths.UnitFile && link.Target == a.paths.DevNull {
+			continue
+		}
 		link := link
 		err := applyAction(ctx, a.hook, DefinitionAction{
 			Kind:       DefinitionActionDisable,

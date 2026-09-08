@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/platform"
+	"github.com/mihari-proxy/mihari/internal/service"
 )
 
 func TestNativeInstallState_ForegroundDataPreparationKeepsAuthority(t *testing.T) {
@@ -125,5 +126,52 @@ func TestNativeInstallState_CreateIdentityCoversWholeTreeAndParts(t *testing.T) 
 		if retainedDataMatches(expected, marker, actual, sha256Hex(testTxnID), testBootID) {
 			t.Fatal("replacement directory accepted")
 		}
+	}
+}
+
+func TestNativeInstallLifecycle_MaskedHashRequiresMatchingCompletedAuthority(t *testing.T) {
+	layout := platform.ResolvedLayout{Mode: platform.SystemMode, Data: platform.Paths{Root: "/var/lib/mihari/data"}, InstallRoot: "/usr/local/lib/mihari", ControlEndpoint: "/var/lib/mihari/control.sock", CredentialPath: "/var/lib/mihari/control.token"}
+	journal := InstallJournal{TransactionID: testTxnID, Phase: InstallPhaseComplete, RecoveryAuthority: InstallAuthorityTarget, Mode: InstallLayoutSystem, TargetPath: layout.Data.Root, DataRoot: layout.Data.Root, InstallPath: layout.InstallRoot, EndpointPath: layout.ControlEndpoint, CredentialPath: layout.CredentialPath, CandidateHash: sha256Hex("verified binary")}
+	old := service.Definition{Masked: true}
+	for _, operation := range []string{"stop", "uninstall"} {
+		s := nativeInstallSession{layout: layout, state: nativeInstallState{TransactionID: testTxnID, Layout: layout}, tx: &InstallTransaction{journal: journal}}
+		if hash, err := s.lifecycleCandidateHash(operation, old); err != nil || hash != journal.CandidateHash {
+			t.Fatalf("completed masked %s authority: hash=%q err=%v", operation, hash, err)
+		}
+	}
+	for _, field := range []string{"transaction", "state-layout", "phase", "authority", "mode", "target", "data", "install", "endpoint", "credential", "hash", "start", "restart"} {
+		t.Run(field, func(t *testing.T) {
+			s := nativeInstallSession{layout: layout, state: nativeInstallState{TransactionID: testTxnID, Layout: layout}, tx: &InstallTransaction{journal: journal}}
+			operation := "uninstall"
+			switch field {
+			case "transaction":
+				s.tx.journal.TransactionID = "other"
+			case "state-layout":
+				s.state.Layout.InstallRoot += "-other"
+			case "phase":
+				s.tx.journal.Phase = InstallPhasePrepared
+			case "authority":
+				s.tx.journal.RecoveryAuthority = InstallAuthoritySource
+			case "mode":
+				s.tx.journal.Mode = InstallLayoutPrivate
+			case "target":
+				s.tx.journal.TargetPath += "-other"
+			case "data":
+				s.tx.journal.DataRoot += "-other"
+			case "install":
+				s.tx.journal.InstallPath += "-other"
+			case "endpoint":
+				s.tx.journal.EndpointPath += "-other"
+			case "credential":
+				s.tx.journal.CredentialPath += "-other"
+			case "hash":
+				s.tx.journal.CandidateHash = "unverified"
+			default:
+				operation = field
+			}
+			if _, err := s.lifecycleCandidateHash(operation, old); err == nil {
+				t.Fatalf("masked lifecycle borrowed invalid %s authority", field)
+			}
+		})
 	}
 }

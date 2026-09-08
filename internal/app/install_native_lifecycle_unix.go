@@ -22,7 +22,7 @@ func (s *nativeInstallSession) prepareLifecycle(ctx context.Context, operation s
 	default:
 		return invalidInstallRequest()
 	}
-	raw, err := readHostFile(old.Binary, migrationBinaryMax)
+	candidateHash, err := s.lifecycleCandidateHash(operation, old)
 	if err != nil {
 		return err
 	}
@@ -46,7 +46,7 @@ func (s *nativeInstallSession) prepareLifecycle(ctx context.Context, operation s
 	if err := s.saveState(ctx); err != nil {
 		return err
 	}
-	s.tx.Artifacts.CandidateHash = sha256HexBytes(raw)
+	s.tx.Artifacts.CandidateHash = candidateHash
 	marker, err := s.tx.Store.CreateTransactionMarker(ctx, id)
 	if err != nil {
 		return err
@@ -65,6 +65,23 @@ func (s *nativeInstallSession) prepareLifecycle(ctx context.Context, operation s
 	}
 	s.tx.journal = journal
 	return nil
+}
+
+func (s *nativeInstallSession) lifecycleCandidateHash(operation string, old service.Definition) (string, error) {
+	if !old.Masked {
+		raw, err := readHostFile(old.Binary, migrationBinaryMax)
+		if err != nil {
+			return "", err
+		}
+		return sha256HexBytes(raw), nil
+	}
+	// A mask has no ExecStart to hash. Stop/uninstall do not execute a binary;
+	// retain only the completed target authority loaded for this exact instance.
+	j := s.tx.journal
+	if (operation != "stop" && operation != "uninstall") || j.Phase != InstallPhaseComplete || j.RecoveryAuthority != InstallAuthorityTarget || j.TransactionID == "" || j.TransactionID != s.state.TransactionID || s.state.Layout != s.layout || j.Mode != string(s.layout.Mode) || j.TargetPath != s.layout.Data.Root || j.DataRoot != s.layout.Data.Root || j.InstallPath != s.layout.InstallRoot || j.EndpointPath != s.layout.ControlEndpoint || j.CredentialPath != s.layout.CredentialPath || !validSHA256(j.CandidateHash) {
+		return "", unknownInstallState()
+	}
+	return j.CandidateHash, nil
 }
 
 func (s *nativeInstallSession) runLifecycle(ctx context.Context, operation string) error {
