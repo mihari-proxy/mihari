@@ -7,6 +7,30 @@ import (
 	"testing"
 )
 
+func TestServiceReplacement_CancellationDuringCheckPreventsMutation(t *testing.T) {
+	for _, boundary := range []string{"stop", "stage"} {
+		t.Run(boundary, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			events := []string{}
+			controller := &fakeController{status: StatusRunning, events: &events}
+			manager := New(Options{Executable: "fixture", NewController: func(RunFunc, string, []string) (Controller, error) { return controller, nil }})
+			manager.stageBinary = func(string) (string, error) { events = append(events, "stage"); return "fixture", nil }
+			check := func(context.Context) error { cancel(); return nil }
+			checks := ServiceReplacementChecks{BeforeStop: check}
+			want := "status"
+			if boundary == "stage" {
+				checks = ServiceReplacementChecks{BeforeStage: check}
+				want = "status,stop,start"
+			}
+			_, err := manager.UpdateInstalledBinaryChecked(ctx, checks)
+			if !errors.Is(err, context.Canceled) || strings.Join(events, ",") != want {
+				t.Fatalf("cancelled boundary: events=%v want=%s err=%v", events, want, err)
+			}
+		})
+	}
+}
+
 func TestServiceReplacement_ChecksPrecedeMutation(t *testing.T) {
 	for _, tc := range []struct {
 		name              string

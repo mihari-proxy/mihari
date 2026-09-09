@@ -347,7 +347,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch typed := message.(type) {
 	case ui.RelaunchRequestMsg:
-		if typed.Prepared != nil && typed.PreparationKey != "" {
+		if typed.Prepared != nil {
 			page, ok := model.pages[ui.PageSystem].(*systempage.Model)
 			if !ok || model.active != ui.PageSystem || !page.AcceptsMihariPreparation(typed.PreparationKey) {
 				return model, func() tea.Msg { return ui.DiscardPreparedUpdateMsg{Prepared: *typed.Prepared} }

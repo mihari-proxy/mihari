@@ -303,6 +303,37 @@ def test_windows_ordinary_fixed_tag_download_before_confirmation(tmp_path):
     assert 'Confirmation is required' in result.stderr
 
 
+def test_windows_ordinary_service_started_during_download_uses_confirmed_stop(tmp_path):
+    installed = tmp_path / 'installed'
+    installed.mkdir()
+    dest = installed / 'mihari.exe'
+    dest.write_bytes(b'old')
+    events = tmp_path / 'events'
+    source = "$global:replacementServiceState='Stopped'\n"
+    source += '$global:replacementEvents=' + ps_literal(events) + '\n'
+    source += "function Get-CimInstance { [pscustomobject]@{PathName=" + ps_literal('"' + str(dest) + '" daemon') + "; StartName='LocalSystem'; StartMode='Auto'; ServiceType='Own Process'; State=$global:replacementServiceState} }\n"
+    source += "function Invoke-RestMethod { [pscustomobject]@{tag_name='v1.0.0'} }\n"
+    source += "function Invoke-WebRequest { param($Uri,$OutFile,[switch]$UseBasicParsing) [IO.File]::WriteAllText($OutFile,'new'); $global:replacementServiceState='Running' }\n"
+    source += "function Stop-Service { param($Name,[switch]$Force) $global:replacementServiceState='Stopped'; [IO.File]::AppendAllText($global:replacementEvents,\"stop`n\") }\n"
+    source += "function Start-Service { param($Name) $global:replacementServiceState='Running'; [IO.File]::AppendAllText($global:replacementEvents,\"start`n\") }\n"
+    source += "function Copy-Item { param($LiteralPath,$Destination,[switch]$Force) if ($global:replacementServiceState -eq 'Running') { throw 'The executable is locked by the running service.' }; Microsoft.PowerShell.Management\\Copy-Item -LiteralPath $LiteralPath -Destination $Destination -Force; [IO.File]::AppendAllText($global:replacementEvents,\"copy`n\") }\n"
+    source += '$code=Get-Content -Raw -LiteralPath ' + ps_literal(INSTALL / 'install.ps1') + '\n'
+    # Isolate the administrator-token/PATH reads, while retaining the real
+    # preview, confirmation, swap action, content checks and file replacement.
+    source += "$code=[regex]::Replace($code,'(?s)\\$isAdmin = \\(\\[Security.Principal.WindowsPrincipal\\].*?WindowsBuiltinRole]::Administrator\\)','$isAdmin = $true')\n"
+    source += '$code=$code.Replace(' + ps_literal("[Environment]::GetEnvironmentVariable('Path', 'User')") + ", '$binDir')\n"
+    source += '& ([scriptblock]::Create($code))\n'
+    env = dict(os.environ, MIHARI_BIN=str(installed), MIHARI_DATA=str(tmp_path / 'data'),
+               USERPROFILE=str(tmp_path / 'profile'), LOCALAPPDATA=str(tmp_path / 'local'),
+               MIHARI_NO_INSTALL='1', MIHARI_YES='1', MIHARI_CHANNEL='', MIHARI_VERSION='', PROCESSOR_ARCHITECTURE='AMD64')
+    env.pop('MIHARI_INSTALL_TEST_MODE', None)
+    result = run_ps(tmp_path, source, env)
+    assert result.returncode == 0, result.stderr
+    assert 'will be stopped for installation' in result.stdout
+    assert dest.read_bytes() == b'new'
+    assert events.read_text().splitlines() == ['stop', 'copy', 'start']
+
+
 @pytest.mark.parametrize('name', ['install.ps1', 'install-aio.ps1'])
 def test_windows_native_probe_is_bounded_and_isolated(tmp_path, name):
     if os.name != 'nt':

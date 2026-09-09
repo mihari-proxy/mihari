@@ -56,7 +56,11 @@ jobs:
             throw 'Replacement confirmation tests require Windows PowerShell 5.1'
           }
       - name: Test replacement confirmation
-        shell: ${{ runner.os == 'Windows' && 'powershell' || 'bash' }}
+        if: runner.os != 'Windows'
+        run: python -m pytest scripts/install/test_replacement_confirmation.py scripts/install/test_remote_replacement_confirmation.py -q
+      - name: Test replacement confirmation on Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
         run: python -m pytest scripts/install/test_replacement_confirmation.py scripts/install/test_remote_replacement_confirmation.py -q
       - name: Test isolated security runner without privileges
         run: python -m pytest scripts/test/test_unix_layout_security.py -q

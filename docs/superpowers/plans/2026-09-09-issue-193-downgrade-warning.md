@@ -990,3 +990,6 @@ Task 1 → Task 2 → Task 3 → Task 4 → Task 5 → Task 6 → Task 7
 - macOS三个PTY用例看到提示后等待退出超时；fixture改为等待期间继续读取PTY echo/EOF，保留原时限/退出断言，Linux3case通过及独立复审PASS。BSD关闭等待排空属于根因推断，仍须macOS CI证实，不扩大或跳过测试。
 
 - CI修复定向复审PASS：两份PS服务参数使用string[]命名展开（6项便携测试）；remote隔离probe仅搜索所选宿主内置Modules（新环境契约Red→Green、最终48 passed）。前次remote48中1项外层20秒超时，单独4项及无改动完整48复跑通过，未放宽任何时限。原生Windows/macOS仍待下一CI；无新产品范围。
+
+- 13:30 UTC继续十分钟轮询：Cubic首轮23项已逐项核实，4项有效P2最小修复并独立复审PASS；不采纳扩展SCM写入、多文件事务或Windows发布框架，未确认需要扩大scope的致命P0/P1。完整判定见[bot triage](../reviews/2026-09-09-issue-193-bot-review.md)。CLI部分成功单错误JSON回归通过，remote退出码恢复12项通过，Windows脚本相关60 passed/10 native skipped。
+- 9f7c4ff的CI文件因shell位置不能引用runner表达式而未启动（GitHub明确annotation）；已改为互斥if的平台步骤和字面量powershell，无Actions升级或验收放宽。首个head的三OS race最终均通过；新head仍需重新跑原生unit及所有门禁。

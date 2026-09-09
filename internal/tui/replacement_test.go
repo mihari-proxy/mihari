@@ -18,6 +18,30 @@ type rootReplacementUpdater struct {
 	preview *update.ReplacementPreview
 }
 
+func TestPreparedConsent_RootRejectsMissingPreparationKey(t *testing.T) {
+	m, _, prepare := rootReplacementFixture(t)
+	next, command := m.Update(prepare())
+	m = next.(Model)
+	intent := command().(ui.ActionIntentMsg)
+	// Even a prepared candidate from this page needs its ownership key.
+	confirmed := intent.Execute()
+	next, _ = m.Update(actionCompletedMsg{Intent: intent, Result: confirmed})
+	m = next.(Model)
+	p := update.PreparedUpdate{Available: true, Version: "v1.0.0"}
+	next, discard := m.Update(ui.RelaunchRequestMsg{Prepared: &p})
+	m = next.(Model)
+	if m.relaunchRequested || m.preparedUpdate != nil {
+		t.Fatal("unkeyed prepared update requested application")
+	}
+	if discard == nil {
+		t.Fatal("unkeyed candidate was not discarded")
+	}
+	msg, ok := discard().(ui.DiscardPreparedUpdateMsg)
+	if !ok || msg.Prepared.Version != p.Version {
+		t.Fatal("discard did not retain the rejected candidate")
+	}
+}
+
 func (f *rootReplacementUpdater) Prepare(context.Context, string, string, string) (update.PreparedUpdate, error) {
 	f.calls++
 	if f.preview != nil {

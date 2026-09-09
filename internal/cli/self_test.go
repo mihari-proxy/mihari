@@ -239,6 +239,22 @@ func TestSelfUpdate_ConfirmedApplyFailureJSON(t *testing.T) {
 	}
 }
 
+func TestSelfUpdate_PartialFailureRetainsErrorJSONContract(t *testing.T) {
+	t.Setenv("MIHARI_DATA", t.TempDir())
+	previous := elevate.Check
+	t.Cleanup(func() { elevate.Check = previous })
+	elevate.Check = func() bool { return true }
+	fake := &fakeSelfUpdater{
+		result:   update.Result{Version: "v1.0.0", Updated: true},
+		applyErr: protocol.APIError{Code: protocol.CodeInvalidState, Message: "Mihari updated, but the installed service could not be synchronized"},
+	}
+	var out, stderr bytes.Buffer
+	code := Execute(context.Background(), []string{"self", "update", "--yes", "--json"}, &out, &stderr, Dependencies{SelfUpdater: fake})
+	if code != ExitInvalidState || out.Len() != 0 || !json.Valid(stderr.Bytes()) || !strings.Contains(stderr.String(), "Mihari updated, but") {
+		t.Fatalf("code=%d out=%q err=%q", code, out.String(), stderr.String())
+	}
+}
+
 func TestSelfUpdate_InvalidArgsDoNotPrepare(t *testing.T) {
 	for _, args := range [][]string{{"self", "update", "extra"}, {"self", "update", "--yes=invalid"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {

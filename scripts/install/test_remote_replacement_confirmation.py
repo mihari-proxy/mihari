@@ -135,11 +135,12 @@ def test_remote_handoff_restores_environment_and_checks_failure(tmp_path, prior,
     source = handoff_block() + '\n'
     source += ('Remove-Item Env:MIHARI_YES -ErrorAction SilentlyContinue' if prior is None else '$env:MIHARI_YES=' + literal(prior)) + '\n'
     source += '$failed=$false\n$LASTEXITCODE=83\ntry { Invoke-VerifiedLocalInstaller -Installer ' + literal(inner) + ' -BundleDir ' + literal(tmp_path) + ' -ExplicitYes $true -VerifiedSource $true } catch { $failed=$true }\n'
-    source += '@{failed=$failed; value=$env:MIHARI_YES; exists=(Test-Path Env:MIHARI_YES)} | ConvertTo-Json -Compress\n'
+    source += '@{failed=$failed; value=$env:MIHARI_YES; exists=(Test-Path Env:MIHARI_YES); exitCode=$LASTEXITCODE} | ConvertTo-Json -Compress\n'
     result = run_ps(tmp_path, source)
     assert result.returncode == 0, result.stderr
     state = json.loads(result.stdout)
     assert state['failed'] == bool(failure)
+    assert state['exitCode'] == 83
     assert state['value'] == prior
     assert state['exists'] == (prior is not None)
     assert (tmp_path / 'installed').read_text().strip() == '1'

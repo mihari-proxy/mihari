@@ -17,12 +17,16 @@
 
 ### M1：Unix 脚本第二次调用只有 `--yes`，丢失第一次交互确认的目标身份
 
+状态：已解决。R2 与实现增加 `--expected-preview` 绑定；以下保留 R1 当时的证据。
+
 - 位置：设计 §4.3、§5.2，尤其第 97–99 行。
 - 证据：设计要求交互绑定候选及全部目标，变化即拒绝；但流程是首次 `service apply` 返回错误、脚本提问、第二次同候选 `service apply --yes`。现有 `internal/cli/service_apply.go:11` 只有 request 文件参数，R1 只新增 yes；错误 details 又仅允许风险/版本/角色，没有目标或预览指纹输入输出契约。
 - 影响：用户对目标 A 确认后，另一个安装改变目标或服务定义为 B，第二次调用会新建 B 的预览并把 yes 当成对 B 的许可。固定 release tag 不能修复此问题，且违背设计宣称“即使 yes 也拒绝身份变化”。
 - 修订建议：选定跨进程预览绑定的具体契约，例如只读 preview 返回安全的摘要，apply 接受显式 expected-preview 参数并持锁比较；无需持久 token、无需改变 install-request/v1。把新增参数/输出影响列入公开变更。交互接受必须走绑定参数，用户一开始显式 yes 可以从本次调用建立预览后再复核。补测试：第一次检查后换目标、改服务定义、同 tag 换 digest，第二次调用不得停服务或写入。
 
 ### M2：Windows 原子保护及服务副本复核没有现成机制，当前复用描述不能兑现
+
+状态：已解决。R2 收紧为既有操作边界复核与部分成功语义，未承诺跨进程原子 CAS；以下保留 R1 当时的证据。
 
 - 位置：设计 §5.1、§5.3、§6。
 - 证据：`internal/update/replace_windows.go:12` 仅通过 `os.Rename` stash/replace；`scripts/install/install-aio.ps1:83` 直接 `Copy-Item`；`internal/app/self_update.go:54` 的 AfterReplace 才调用服务同步，`internal/service/service.go:124` 的 `UpdateInstalledBinary` 无预览/consent 参数，读取状态后停机并 stage。不存在设计称可复用的目标句柄保护。

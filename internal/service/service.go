@@ -505,9 +505,11 @@ func runServiceReplacementCheck(ctx context.Context, check func(context.Context)
 		return err
 	}
 	if check != nil {
-		return check(ctx)
+		if err := check(ctx); err != nil {
+			return err
+		}
 	}
-	return nil
+	return ctx.Err()
 }
 
 // ServiceReplacementView binds registration and the service copy this updater stages.

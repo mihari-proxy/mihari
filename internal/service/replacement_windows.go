@@ -25,7 +25,7 @@ func (m *Manager) ObserveReplacementService(ctx context.Context) (out ServiceRep
 	svc, err := manager.OpenService(serviceName)
 	if err != nil {
 		if isServiceDoesNotExist(err) {
-			return windowsReplacementServiceView(nil, "")
+			return windowsReplacementServiceView(ctx, nil, "")
 		}
 		return out, err
 	}
@@ -41,10 +41,13 @@ func (m *Manager) ObserveReplacementService(ctx context.Context) (out ServiceRep
 	if err != nil {
 		return out, err
 	}
-	return windowsReplacementServiceView(&config, binary)
+	return windowsReplacementServiceView(ctx, &config, binary)
 }
 
-func windowsReplacementServiceView(config *mgr.Config, binary string) (ServiceReplacementView, error) {
+func windowsReplacementServiceView(ctx context.Context, config *mgr.Config, binary string) (ServiceReplacementView, error) {
+	if err := ctx.Err(); err != nil {
+		return ServiceReplacementView{}, err
+	}
 	// SCM Config excludes transient status. Keep its full persistent definition
 	// inside the hash; neither command lines nor service account data are rendered.
 	raw, err := json.Marshal(config)

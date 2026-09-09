@@ -590,7 +590,7 @@ try {
   if (-not (Confirm-Replacement $preview ($env:MIHARI_YES -eq '1'))) { throw 'Cancelled. No installation changes were made.' }
   Assert-ReplacementPreview $preview $tmp $targets
   New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-  if ($serviceView.Running) {
+  if ($preview.StopRequired) {
     Invoke-ReplacementElevated ([pscustomobject]@{ Action='Swap'; Preview=$preview; Candidate=$tmp; Targets=$targets; Destination=$dest })
   } else {
     Assert-ReplacementPreview $preview $tmp $targets
