@@ -1718,3 +1718,28 @@ func requireLiveTun(t *testing.T, configs map[string]any, want map[string]any) {
 		t.Fatalf("tun=%#v want %#v", got, want)
 	}
 }
+
+func TestCaptureTunLive_RequiresBooleanEnableInPresentMapping(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		configs map[string]any
+		valid   bool
+	}{
+		{"absent", map[string]any{}, true},
+		{"null-block", map[string]any{"tun": nil}, true},
+		{"enabled", map[string]any{"tun": map[string]any{"enable": true, "stack": "gvisor"}}, true},
+		{"disabled", map[string]any{"tun": map[string]any{"enable": false}}, true},
+		{"empty-map", map[string]any{"tun": map[string]any{}}, false},
+		{"missing-enable", map[string]any{"tun": map[string]any{"stack": "gvisor"}}, false},
+		{"string-enable", map[string]any{"tun": map[string]any{"enable": "true"}}, false},
+		{"null-enable", map[string]any{"tun": map[string]any{"enable": nil}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTunManager(t, &fakeController{configs: tc.configs}, defaultTunSettings(nil))
+			_, valid := m.captureTunLive(context.Background())
+			if valid != tc.valid {
+				t.Fatalf("snapshot valid=%v want=%v", valid, tc.valid)
+			}
+		})
+	}
+}

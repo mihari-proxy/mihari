@@ -136,3 +136,35 @@ func TestRootManager_DisablingLastSubscriptionDoesNotInjectLegacyTunFields(t *te
 		t.Fatal("settings input changed")
 	}
 }
+
+func TestRootManager_DisableFailureRestoresEnabledTunWithoutDegrading(t *testing.T) {
+	var controller *tunFaultController
+	var settings config.Settings
+	m, f, _, _ := seamManager(t, func(o *runtimeapi.Options) {
+		o.Settings.Tun = map[string]any{"enable": true}
+		settings = o.Settings.Clone()
+		controller = &tunFaultController{seamController: o.Controller.(*seamController), rejectConfirmation: true}
+		controller.tun = map[string]any{"enable": true, "stack": "gvisor", "x-extra": map[string]any{"preserved": true}}
+		o.Controller = controller
+	})
+	previous, err := subscription.Generate(subscription.Document{"proxies": []any{}, "tun": controller.tun}, nil, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.Trusted.InitializeConfig(context.Background(), previous); err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.DisableTun(context.Background(), runtimeapi.Operation{ID: "disable-confirmation-failed", Source: "test"})
+	assertCode(t, err, protocol.CodeUpstreamFailure)
+	status, err := m.TunStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.DesiredEnable || status.LiveEnable == nil || !*status.LiveEnable || !bytes.Equal(previous, f.Content()) || controller.patches != 0 {
+		t.Fatal("enabled TUN was not restored")
+	}
+	controller.rejectConfirmation = false
+	if _, err = m.DisableTun(context.Background(), runtimeapi.Operation{ID: "disable-after-recovery", Source: "test"}); err != nil {
+		t.Fatal("confirmed rollback incorrectly refused subsequent mutation", err)
+	}
+}

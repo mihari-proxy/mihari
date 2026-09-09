@@ -278,6 +278,9 @@ func (m *Manager) captureTunLive(ctx context.Context) (map[string]any, bool) {
 	if !ok {
 		return nil, false
 	}
+	if _, ok := tun["enable"].(bool); !ok {
+		return nil, false
+	}
 	normalized, err := normalizeTunBlock(tun)
 	if err != nil {
 		return nil, false
