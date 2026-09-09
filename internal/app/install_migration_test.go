@@ -353,7 +353,11 @@ func TestUnixMigration_NativeProviderRemainsCoreValidationResponsibility(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(source["rule-providers"], generated["rule-providers"]) {
+	providers, present := source["proxy-providers"]
+	if !present || providers == nil {
+		t.Fatal("fixture must contain native proxy provider definitions")
+	}
+	if !reflect.DeepEqual(providers, generated["proxy-providers"]) {
 		t.Fatal("native provider definition rewritten during migration")
 	}
 	if !mapsEqual(before, fx.sourceHashes(t)) {
