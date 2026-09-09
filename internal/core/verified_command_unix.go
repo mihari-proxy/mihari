@@ -16,7 +16,7 @@ import (
 var generatedConfigName = regexp.MustCompile(`^config-[0-9a-f]{32}\.yaml$`)
 
 // BindGeneratedConfig borrows D and owns a held read descriptor and its parent.
-// expectedSHA256 must be computed by Manager from fresh RootConfigPolicy output.
+// expectedSHA256 must be computed by Manager from fresh generated configuration bytes.
 func BindGeneratedConfig(ctx context.Context, data *platform.TrustedRoot, relative string, expectedSHA256 [32]byte) (*ConfigCapability, error) {
 	root, _, owner, mode, e := data.Snapshot(ctx)
 	if e != nil {

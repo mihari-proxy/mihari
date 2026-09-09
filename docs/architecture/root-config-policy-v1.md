@@ -1,5 +1,7 @@
 # Root 配置策略 v1
 
+> **2026-09-09 状态更新：** 本文关于完整 RootConfigPolicy、字段白名单及新建受管 provider 资源图的要求已由[移除方案](../superpowers/plans/2026-09-09-remove-root-config-policy.md)替代；TUN 仅覆盖 enable。Unix 布局、核心身份校验、安装事务与历史 WAL 恢复约束继续保留。下文保留原设计及审核时的历史内容。
+
 本文记录 T06 的固定源码合同、完整类型化生成边界与实现裁定。默认接线归 T18；T06 只提供可注入接口，不能提前启用系统模式。独立安全审核是任务交付 gate，声明计数和测试通过均不能代替该审核。
 
 策略唯一标识为 `mihari.root-config/v1/mihomo-v1.19.30`，由 `subscription.RootPolicyID` 导出。核心源码固定到 [ac017cdd246ce8bd547653d927e7bf77d7ee73d5](https://github.com/MetaCubeX/mihomo/tree/ac017cdd246ce8bd547653d927e7bf77d7ee73d5)。仅 Linux/macOS 的 amd64/arm64 组合属于该策略；T07 另外验证四个核心制品的可信身份。配置检查不能代替制品认证。

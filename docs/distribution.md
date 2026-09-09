@@ -87,7 +87,7 @@ curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/insta
 
 Linux B=/var/lib/mihari，macOS B=/Library/Application Support/mihari；D=B/data，E/C/channel 位于 B，I 默认 /usr/local/lib/mihari。普通用户共享代理管理权限，TUI 日志位于独立 U。root installer 不依赖 HOME/SUDO_USER，不修复不安全的 /usr/local 等祖先；可明确指定安全 MIHARI_INSTALL_ROOT。详情见 [Unix 布局与恢复](unix-layout.md)。
 
-离线 root 信任必须由管理员预先在 `<解析后的 I>/install-trust/manifest.json` 配置，目录、清单与所引用资源均须符合既有 root/no-follow/只读规则。自定义 I 使用自己的 install-trust；bundle 相邻 checksum、请求中 hash 或旧用户树不能作为执行信任源。初始 root 核心策略只允许内置 v1.19.30 的四个 Unix hash，未知核心/provider 格式/字段/MRS 拒绝，可能与旧订阅和 alpha bundle 不兼容；非 root P 与 Windows 仍保持兼容。
+离线 root 信任必须由管理员预先在 `<解析后的 I>/install-trust/manifest.json` 配置，目录、清单与所引用资源均须符合既有 root/no-follow/只读规则。自定义 I 使用自己的 install-trust；bundle 相邻 checksum、请求中 hash 或旧用户树不能作为执行信任源。Unix root 仍只允许内置 v1.19.30 的四个 Unix hash，未知核心继续拒绝；该二进制身份校验与配置生成相互独立。各平台使用共同的配置生成语义，保留非托管订阅字段，仅覆盖 Mihari 管理的关键参数；TUN 开关只覆盖 `tun.enable`。配置语义与原生 provider 由 mihomo 处理，Mihari 保留候选校验与 reload 回滚，不再以完整 YAML 字段白名单限制所有额外 listener 或文件访问。
 
 安装事务停机后迁移必要数据，保留旧树及日志；activation 前可恢复 source，之后只修复 target。未完成事务通过 `service apply --request` 的 recover 请求恢复，普通启动不做隐式迁移。独立 native CI 不操作真实主机服务、用户数据、订阅或 core，不能作为生产环境迁移已验证的声明。
 

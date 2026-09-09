@@ -2,268 +2,217 @@ package subscription
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 )
 
-func activationFixture(t *testing.T) (*memoryProviderFiles, *PreparedResources, []string) {
+func legacyResourceFixture(t *testing.T, frontier int, done, absent, states bool) (*memoryProviderFiles, map[string]string) {
 	t.Helper()
-	fs, provider, target := seededProvider(t)
-	ctx := context.Background()
-	geoTarget := "runtime/core-home/GeoSite.dat"
-	if err := fs.write(ctx, geoTarget, []byte("old geo"), providerObject{}); err != nil {
-		t.Fatal(err)
-	}
-	geo, err := provider.store.prepareGeo(ctx, GeoResourceSpec{Kind: GeoSiteDAT, Bytes: []byte("new geo"), SHA256: providerDigest([]byte("new geo"))})
-	if err != nil {
-		t.Fatal(err)
-	}
-	configTarget := "runtime/config.yaml"
-	if err = fs.write(ctx, configTarget, []byte("old config"), providerObject{}); err != nil {
-		t.Fatal(err)
-	}
-	configuration, err := provider.store.prepareBytes(ctx, ProviderSpec{}, "", configTarget, []byte("new config"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	configuration.configuration = true
-	p := &PreparedResources{store: provider.store, providers: []*PreparedProvider{provider}, geo: []*PreparedProvider{geo}, configuration: configuration}
-	fs.mutations = 0
-	return fs, p, []string{target, geoTarget, configTarget}
-}
-
-func TestResourceActivation_ConfigBelongsToWholeRollback(t *testing.T) {
-	fs, p, paths := activationFixture(t)
-	ctx := context.Background()
-	a, err := p.Activate(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(fs.objects["runtime/config.yaml"]) != "old config" {
-		t.Fatal("configuration published before validation")
-	}
-	if err = a.PublishConfig(ctx, sha256.Sum256([]byte("new config"))); err != nil {
-		t.Fatal(err)
-	}
-	if string(fs.objects["runtime/config.yaml"]) != "new config" {
-		t.Fatal("validated config not published")
-	}
-	if err = a.Restore(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if string(fs.objects["runtime/config.yaml"]) != "old config" || string(fs.objects[paths[0]]) != "old" || string(fs.objects[paths[1]]) != "old geo" {
-		t.Fatal("whole config/resource rollback failed")
-	}
-}
-
-func TestResourceActivation_EveryCrashRestoresWholeSet(t *testing.T) {
-	fs, p, _ := activationFixture(t)
-	a, err := p.Activate(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = a.PublishConfig(context.Background(), sha256.Sum256([]byte("new config"))); err != nil {
-		t.Fatal(err)
-	}
-	if err = a.Restore(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	boundaries := fs.mutations
-	for point := 1; point <= boundaries; point++ {
-		t.Run(fmt.Sprint(point), func(t *testing.T) {
-			fs, p, paths := activationFixture(t)
-			fs.crashAt = point
-			func() {
-				defer func() {
-					if got := recover(); got != "simulated crash" {
-						t.Fatalf("expected crash, got %v", got)
-					}
-				}()
-				a, err := p.Activate(context.Background())
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err = a.PublishConfig(context.Background(), sha256.Sum256([]byte("new config"))); err != nil {
-					t.Fatal(err)
-				}
-				if err = a.Restore(context.Background()); err != nil {
-					t.Fatal(err)
-				}
-			}()
-			fs.crashAt = 0
-			s := &ProviderStore{files: fs}
-			for i := 0; i < 2; i++ {
-				if err := s.Recover(context.Background()); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if string(fs.objects[paths[0]]) != "old" || string(fs.objects[paths[1]]) != "old geo" || string(fs.objects[paths[2]]) != "old config" {
-				t.Fatal("crash left mixed activation")
-			}
-		})
-	}
-}
-
-func TestResourceActivation_EveryCommitCrashUsesDurableAuthority(t *testing.T) {
-	fs, prepared, _ := activationFixture(t)
-	activation, err := prepared.Activate(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = activation.PublishConfig(context.Background(), sha256.Sum256([]byte("new config"))); err != nil {
-		t.Fatal(err)
-	}
-	if err = activation.Finish(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	boundaries := fs.mutations
-	for point := 1; point <= boundaries; point++ {
-		t.Run(fmt.Sprint(point), func(t *testing.T) {
-			fs, prepared, paths := activationFixture(t)
-			fs.crashAt = point
-			func() {
-				defer func() {
-					if got := recover(); got != "simulated crash" {
-						t.Fatalf("expected crash, got %v", got)
-					}
-				}()
-				activation, err := prepared.Activate(context.Background())
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err = activation.PublishConfig(context.Background(), sha256.Sum256([]byte("new config"))); err != nil {
-					t.Fatal(err)
-				}
-				if err = activation.Finish(context.Background()); err != nil {
-					t.Fatal(err)
-				}
-			}()
-			fs.crashAt = 0
-			store := &ProviderStore{files: fs}
-			for i := 0; i < 2; i++ {
-				if err := store.Recover(context.Background()); err != nil {
-					t.Fatal(err)
-				}
-			}
-			want := []string{"old", "old geo", "old config"}
-			if fs.resourceDoneDurable {
-				want = []string{"new", "new geo", "new config"}
-			}
-			for i := range paths {
-				if string(fs.objects[paths[i]]) != want[i] {
-					t.Fatalf("path %s = %q, want %q (done=%v)", paths[i], fs.objects[paths[i]], want[i], fs.resourceDoneDurable)
-				}
-			}
-		})
-	}
-}
-
-func TestResourceActivation_JournalAllowsCompleteFixedSet(t *testing.T) {
 	fs := newMemoryProviderFiles()
-	journal := resourceJournal{Schema: "mihari.resource-activation/v1"}
-	add := func(entry resourceEntry) {
-		index := len(journal.Entries) + 1
-		entry.Transaction = fmt.Sprintf("%032x", index)
-		entry.New = providerObject{Present: true, Identity: fmt.Sprintf("new-%d", index), SHA256: providerDigest([]byte(fmt.Sprintf("new-%d", index))), BootID: fs.boot}
-		entry.Marker = providerObject{Present: true, Identity: fmt.Sprintf("marker-%d", index), SHA256: providerDigest([]byte(entry.Transaction)), BootID: fs.boot}
-		journal.Entries = append(journal.Entries, entry)
+	ctx := context.Background()
+	entries := []map[string]any{}
+	wants := map[string]string{}
+	roles := []string{"provider", "country-mmdb", "asn-mmdb", "geoip-dat", "geosite-dat", "configuration"}
+	if states {
+		roles = append(roles, "settings", "catalog", "source-cache", "onboarding")
 	}
-	for i := 0; i < 256; i++ {
-		name := fmt.Sprintf("provider-%d", i)
-		id, err := ProviderResourceID("0123456789abcdef0123456789abcdef", 7, "rule", name)
-		if err != nil {
-			t.Fatal(err)
+	for i, role := range roles {
+		tx := fmt.Sprintf("%032x", i+1)
+		e := map[string]any{"transaction": tx, "subscription_id": "", "generation": uint64(0), "kind": "", "name": "", "resource": "", "format": "", "geo": "", "configuration": false, "state_role": "",
+			"backup_intent": false, "backup_done": false, "swap_intent": false, "swap_done": false, "restore_intent": false, "restore_done": false}
+		path := ""
+		switch role {
+		case "provider":
+			id, err := ProviderResourceID(legacySubscription, 7, "rule", "domains")
+			if err != nil {
+				t.Fatal(err)
+			}
+			path, err = providerResourcePath(id, "yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			e["subscription_id"], e["generation"], e["kind"], e["name"], e["resource"], e["format"] = legacySubscription, uint64(7), "rule", "domains", id, "yaml"
+		case "configuration":
+			path = "runtime/config.yaml"
+			e["configuration"] = true
+		case "settings", "catalog", "source-cache", "onboarding":
+			id := ""
+			if role == "source-cache" {
+				id = legacySubscription
+			}
+			var err error
+			path, err = stateTarget(resourceStateRole(role), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e["state_role"], e["subscription_id"] = role, id
+		default:
+			name, err := GeoResourcePath(GeoResourceKind(role))
+			if err != nil {
+				t.Fatal(err)
+			}
+			path = "runtime/core-home/" + name
+			e["geo"] = role
 		}
-		add(resourceEntry{SubscriptionID: "0123456789abcdef0123456789abcdef", Generation: 7, Kind: "rule", Name: name, Resource: id, Format: "yaml"})
+		old := providerObject{}
+		oldBytes := ""
+		if !absent {
+			oldBytes = "old " + role
+			old = seedLegacyObject(t, fs, path, oldBytes)
+		}
+		newBytes := "new " + role
+		candidate := "staging/providers/" + tx + "/candidate"
+		next := seedLegacyObject(t, fs, candidate, newBytes)
+		marker := seedLegacyObject(t, fs, "staging/providers/"+tx+"/transaction-id", tx)
+		e["old"], e["new"], e["marker"] = old, next, marker
+		progress := frontier - i*6
+		if done {
+			progress = 6
+		}
+		if progress >= 1 {
+			e["backup_intent"] = true
+		}
+		if progress >= 2 && old.Present {
+			if err := fs.move(ctx, path, old, path+".old-"+tx, providerObject{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if progress >= 3 {
+			e["backup_done"] = true
+		}
+		if progress >= 4 {
+			e["swap_intent"] = true
+		}
+		if progress >= 5 {
+			if err := fs.move(ctx, candidate, next, path, providerObject{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if progress >= 6 {
+			e["swap_done"] = true
+		}
+		wants[path] = oldBytes
+		if done {
+			wants[path] = newBytes
+		}
+		entries = append(entries, e)
 	}
-	for _, kind := range []GeoResourceKind{GeoCountryMMDB, GeoASNMMDB, GeoIPDAT, GeoSiteDAT} {
-		add(resourceEntry{Geo: kind})
+	seedLegacyJSON(t, fs, resourceJournalPath, map[string]any{"schema": "mihari.resource-activation/v1", "done": done, "entries": entries})
+	fs.mutations = 0
+	return fs, wants
+}
+func TestLegacyResourceRecovery_WholeTupleEveryForwardAndRecoveryBoundary(t *testing.T) {
+	for _, absent := range []bool{false, true} {
+		for frontier := 0; frontier <= 60; frontier++ {
+			t.Run(fmt.Sprintf("absent=%v/frontier=%d", absent, frontier), func(t *testing.T) {
+				fs, wants := legacyResourceFixture(t, frontier, false, absent, true)
+				exerciseLegacyRecovery(t, fs, wants)
+			})
+		}
 	}
-	add(resourceEntry{Configuration: true})
-	b, err := json.Marshal(journal)
-	if err != nil {
+	for _, absent := range []bool{false, true} {
+		fs, wants := legacyResourceFixture(t, 60, true, absent, true)
+		exerciseLegacyRecovery(t, fs, wants)
+	}
+}
+func TestLegacyResourceRecovery_PreStateRoleJournal(t *testing.T) {
+	fs, wants := legacyResourceFixture(t, 36, false, false, false)
+	fs.objects[resourceJournalPath] = []byte(strings.ReplaceAll(string(fs.objects[resourceJournalPath]), `"state_role":"",`, ""))
+	exerciseLegacyRecovery(t, fs, wants)
+}
+func mutateLegacyResource(t *testing.T, fs *memoryProviderFiles, change func(map[string]any, []any)) {
+	t.Helper()
+	var j map[string]any
+	if err := json.Unmarshal(fs.objects[resourceJournalPath], &j); err != nil {
 		t.Fatal(err)
 	}
-	if err = fs.write(context.Background(), resourceJournalPath, b, providerObject{}); err != nil {
-		t.Fatal(err)
+	change(j, j["entries"].([]any))
+	seedLegacyJSON(t, fs, resourceJournalPath, j)
+}
+func TestLegacyResourceRecovery_RejectsInvalidAuthority(t *testing.T) {
+	cases := map[string]func(map[string]any, []any){
+		"missing-config":   func(j map[string]any, e []any) { j["entries"] = append(e[:5], e[6:]...) },
+		"duplicate-config": func(j map[string]any, e []any) { j["entries"] = append(e, e[5]) },
+		"duplicate-role":   func(j map[string]any, e []any) { j["entries"] = append(e, e[6]) },
+		"duplicate-tx": func(_ map[string]any, e []any) {
+			e[1].(map[string]any)["transaction"] = e[0].(map[string]any)["transaction"]
+		},
+		"state-path":           func(_ map[string]any, e []any) { e[6].(map[string]any)["state_role"] = "../../control.token" },
+		"state-extra-identity": func(_ map[string]any, e []any) { e[6].(map[string]any)["subscription_id"] = legacySubscription },
+		"null-role":            func(_ map[string]any, e []any) { e[6].(map[string]any)["state_role"] = nil },
+		"missing-field":        func(_ map[string]any, e []any) { delete(e[0].(map[string]any), "restore_done") },
+		"aliased-object":       func(_ map[string]any, e []any) { e[0].(map[string]any)["new"] = e[0].(map[string]any)["old"] },
+		"bad-action":           func(_ map[string]any, e []any) { e[0].(map[string]any)["backup_intent"] = false },
+		"oversized": func(j map[string]any, e []any) {
+			for len(e) <= 265 {
+				e = append(e, e[0])
+			}
+			j["entries"] = e
+		},
 	}
-	if _, err = (&ProviderStore{files: fs}).loadResourceJournal(context.Background()); err != nil {
-		t.Fatalf("complete fixed set rejected: %v", err)
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			fs, _ := legacyResourceFixture(t, 60, false, false, true)
+			before := cloneProviderMemory(fs)
+			mutateLegacyResource(t, fs, change)
+			if err := (&ProviderStore{files: fs}).Recover(context.Background()); err == nil {
+				t.Fatal("invalid historical authority accepted")
+			}
+			for p, b := range before.objects {
+				if p != resourceJournalPath && string(fs.objects[p]) != string(b) {
+					t.Fatalf("invalid WAL modified %s", p)
+				}
+			}
+		})
+	}
+}
+func TestLegacyResourceRecovery_ReplacementPreserved(t *testing.T) {
+	for _, target := range []string{"mihari.yaml", "runtime/config.yaml", "runtime/core-home/Country.mmdb", "staging/providers/00000000000000000000000000000001/transaction-id"} {
+		fs, _ := legacyResourceFixture(t, 60, false, false, true)
+		fs.objects[target] = []byte("foreign bytes")
+		fs.identities[target] = "foreign identity"
+		if err := (&ProviderStore{files: fs}).Recover(context.Background()); err == nil {
+			t.Fatal("replacement accepted")
+		}
+		if string(fs.objects[target]) != "foreign bytes" {
+			t.Fatal("replacement removed")
+		}
+	}
+}
+func TestLegacyResourceRecovery_GeoOnlyAllowed(t *testing.T) {
+	fs, _ := legacyResourceFixture(t, 0, false, false, false)
+	mutateLegacyResource(t, fs, func(j map[string]any, e []any) { j["entries"] = e[1:5] })
+	if _, err := (&ProviderStore{files: fs}).loadResourceJournal(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestResourceActivation_JournalRequiresSingleConfiguration(t *testing.T) {
-	fs, prepared, _ := activationFixture(t)
-	activation, err := prepared.Activate(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	journal := activation.journal
-	journal.Entries = journal.Entries[:len(journal.Entries)-1]
-	b, err := json.Marshal(journal)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fs.objects[resourceJournalPath] = b
-	if _, err = prepared.store.loadResourceJournal(context.Background()); err == nil {
-		t.Fatal("resource journal without fixed configuration accepted")
-	}
-}
-
-func TestResourceActivation_CrashAfterConfigPublicationRestoresWholeSet(t *testing.T) {
-	fs, p, paths := activationFixture(t)
-	a, err := p.Activate(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = a.PublishConfig(context.Background(), sha256.Sum256([]byte("new config"))); err != nil {
-		t.Fatal(err)
-	}
-	if string(fs.objects[paths[2]]) != "new config" {
-		t.Fatal("configuration publication fixture did not reach the crash window")
-	}
-
-	store := &ProviderStore{files: fs}
-	if err = store.Recover(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if string(fs.objects[paths[0]]) != "old" || string(fs.objects[paths[1]]) != "old geo" || string(fs.objects[paths[2]]) != "old config" {
-		t.Fatal("restart recovery left config and resources from different authorities")
-	}
-}
-
-func TestResourceActivation_RejectsDifferentGeneratedHash(t *testing.T) {
-	fs, p, paths := activationFixture(t)
-	a, err := p.Activate(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = a.PublishConfig(context.Background(), sha256.Sum256([]byte("different config"))); err == nil {
-		t.Fatal("different generated hash authorized configuration publication")
-	}
-	if string(fs.objects[paths[2]]) != "old config" {
-		t.Fatal("hash mismatch changed configuration")
-	}
-	if err = a.Restore(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestResourceActivation_RestoresWholeFixedSet(t *testing.T) {
-	fs, p, paths := activationFixture(t)
-	a, err := p.Activate(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(fs.objects[paths[0]]) != "new" || string(fs.objects[paths[1]]) != "new geo" {
-		t.Fatal("activation did not swap the complete resource set")
-	}
-	if err = a.Restore(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if string(fs.objects[paths[0]]) != "old" || string(fs.objects[paths[1]]) != "old geo" {
-		t.Fatal("rollback left mixed fixed resources")
+func TestLegacyResourceRecovery_MaximumFixedSet(t *testing.T) {
+	fs, _ := legacyResourceFixture(t, 0, false, false, true)
+	mutateLegacyResource(t, fs, func(j map[string]any, entries []any) {
+		template := entries[0].(map[string]any)
+		for i := 1; i < 256; i++ {
+			e := map[string]any{}
+			for k, v := range template {
+				e[k] = v
+			}
+			tx := fmt.Sprintf("%032x", i+1000)
+			name := fmt.Sprintf("legacy-provider-%d", i)
+			id, err := ProviderResourceID(legacySubscription, 7, "rule", name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e["transaction"], e["name"], e["resource"], e["old"] = tx, name, id, providerObject{}
+			e["new"] = seedLegacyObject(t, fs, "staging/providers/"+tx+"/candidate", "candidate")
+			e["marker"] = seedLegacyObject(t, fs, "staging/providers/"+tx+"/transaction-id", tx)
+			entries = append(entries, e)
+		}
+		j["entries"] = entries
+	})
+	journal, err := (&ProviderStore{files: fs}).loadResourceJournal(context.Background())
+	if err != nil || len(journal.Entries) != 265 {
+		t.Fatal("maximum historical fixed resource/state set rejected", err)
 	}
 }

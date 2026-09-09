@@ -1,14 +1,8 @@
 package subscription
 
-import "context"
-
 type geoArtifact struct {
 	url, hash string
 	size      int64
-}
-
-func (a geoArtifact) matches(b []byte) bool {
-	return len(b) > 0 && len(b) <= maxGeoResourceBytes && (a.size == 0 || int64(len(b)) == a.size) && providerDigest(b) == a.hash
 }
 
 // These fixed identities were approved from the retained artifact catalog.
@@ -39,24 +33,4 @@ func trustedGeoArtifact(kind GeoResourceKind) (geoArtifact, error) {
 	default:
 		return geoArtifact{}, dataError("unknown Geo artifact")
 	}
-}
-
-// DownloadGeo retrieves a pinned Geo artifact with a separate 128 MiB budget.
-func (d *Downloader) DownloadGeo(ctx context.Context, kind GeoResourceKind, mode string) ([]byte, error) {
-	a, err := trustedGeoArtifact(kind)
-	if err != nil {
-		return nil, err
-	}
-	limit := int64(maxGeoResourceBytes)
-	if a.size > 0 && a.size < limit {
-		limit = a.size
-	}
-	b, err := d.downloadManaged(ctx, ProviderSpec{URL: a.url}, mode, limit)
-	if err != nil {
-		return nil, err
-	}
-	if !a.matches(b) {
-		return nil, dataError("untrusted Geo artifact")
-	}
-	return b, nil
 }

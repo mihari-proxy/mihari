@@ -4,7 +4,7 @@ package subscription
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -54,31 +54,44 @@ func TestProviderStore_IsolatedRootIO(t *testing.T) {
 			t.Fatal("borrowed root closed by state IO")
 		}
 	}
-	input := rootPolicyInput()
-	input.YAML = []byte("rule-providers:\n  rules: {type: inline, behavior: domain, payload: ['example.test']}\nrules: ['RULE-SET,rules,DIRECT']\n")
-	output, err := NewRootConfigPolicy().Build(ctx, input)
-	if err != nil {
+	fixture, target := legacyProviderFixture(t, "intent", true, false, true)
+	// Seed historical bytes through the trusted IO adapter, rebinding journal
+	// identities to the actual filesystem objects before exercising recovery.
+	var journal providerJournal
+	if err = json.Unmarshal(fixture.objects[providerJournalPath], &journal); err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := s.Prepare(ctx, output.Providers[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	target, err := providerTarget(output.Providers[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = candidate.Commit(ctx, func(c context.Context) error {
-		b, e := s.files.read(c, target, maxDocumentBytes)
-		if e != nil {
-			return e
+	for rel, content := range fixture.objects {
+		if rel == providerJournalPath {
+			continue
 		}
-		if providerDigest(b) != providerDigest(output.Providers[0].Inline) {
-			return errors.New("wrong published bytes")
+		if err = s.files.write(ctx, rel, content, providerObject{}); err != nil {
+			t.Fatal(err)
 		}
-		return nil
-	}); err != nil {
+	}
+	journal.New, err = s.files.inspect(ctx, target)
+	if err != nil {
 		t.Fatal(err)
+	}
+	journal.Backup, err = s.files.inspect(ctx, target+".old-"+journal.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.Marker, err = s.files.inspect(ctx, "staging/providers/"+journal.ID+"/transaction-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.Old.Identity = "historical-removed-object"
+	journal.Old.BootID = journal.Marker.BootID
+	if err = s.saveJournal(ctx, journal); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := s.files.read(ctx, target, maxDocumentBytes)
+	if err != nil || string(restored) != "old" {
+		t.Fatal("wrong recovery bytes", err)
 	}
 	info, err := os.Stat(filepath.Join(path, filepath.FromSlash(target)))
 	if err != nil || info.Mode().Perm() != 0600 {
@@ -94,7 +107,7 @@ func TestProviderStore_IsolatedRootIO(t *testing.T) {
 	if err = root.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Prepare(ctx, output.Providers[0]); err == nil {
+	if err = s.Recover(ctx); err == nil {
 		t.Fatal("closed root accepted")
 	}
 }

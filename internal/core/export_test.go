@@ -9,6 +9,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/subscription"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -28,13 +29,14 @@ func NewTestTrustedFixture(t *testing.T, root string) *TestTrustedFixture {
 	f.Trusted = &TrustedExecution{store: s, files: f.files, executor: fixtureExecutor{f}}
 	settings := config.Defaults()
 	settings.ControllerSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	if e := f.Trusted.InitializeConfig(context.Background(), settings, FixturePolicyInput()); e != nil {
+	content, e := subscription.Generate(subscription.Document{"proxies": []any{}}, nil, settings)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e := f.Trusted.InitializeConfig(context.Background(), content); e != nil {
 		t.Fatal(e)
 	}
 	return f
-}
-func FixturePolicyInput() subscription.PolicyInput {
-	return subscription.PolicyInput{SubscriptionID: testTransaction, Generation: 1, CoreTag: "v1.19.30", OS: "linux", Arch: "amd64"}
 }
 func (f *TestTrustedFixture) ExecuteCommand(ctx context.Context, c CoreCommand) ([]byte, error) {
 	if f.Execute != nil {
@@ -93,4 +95,8 @@ func (f *TestTrustedFixture) InterruptPair(t *testing.T) {
 func (f *TestTrustedFixture) Pending() bool {
 	_, e := f.store.Load(context.Background(), PairJournal, "")
 	return !errors.Is(e, os.ErrNotExist)
+}
+
+func (f *TestTrustedFixture) CommandConfig(c CoreCommand) []byte {
+	return append([]byte(nil), f.store.disk.files[strings.TrimPrefix(c.Config, f.store.location()+"/")].bytes...)
 }

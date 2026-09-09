@@ -2,7 +2,6 @@ package app
 
 import (
 	"bytes"
-	"context"
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/platform"
@@ -12,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestStartupPolicyInput_NoActiveSubscriptionBuildsResourceFreeBootstrap(t *testing.T) {
+func TestStartupConfig_NoActiveSubscriptionBuildsResourceFreeBootstrap(t *testing.T) {
 	for _, inactiveProfile := range []bool{false, true} {
 		t.Run(map[bool]string{false: "empty-catalog", true: "inactive-uncached-profile"}[inactiveProfile], func(t *testing.T) {
 			paths := platform.NewPaths(t.TempDir())
@@ -35,25 +34,13 @@ func TestStartupPolicyInput_NoActiveSubscriptionBuildsResourceFreeBootstrap(t *t
 				t.Fatal(err)
 			}
 			settings := config.Defaults()
-			settings.ControllerSecret = "isolated-bootstrap-fixture"
-			options := RuntimeBuildOptions{RootConfigInput: func(_ context.Context, document subscription.Document, _ config.Settings) (subscription.PolicyInput, error) {
-				if document != nil {
-					t.Fatal("bootstrap unexpectedly loaded a subscription")
-				}
-				// Match the production Unix assembly: it supplies the supported
-				// core tuple, not a fabricated persisted subscription identity.
-				return subscription.PolicyInput{CoreTag: "v1.19.30", OS: "linux", Arch: "amd64"}, nil
-			}}
-			input, err := startupPolicyInput(context.Background(), options, subs, settings)
+			settings.ControllerSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+			generated, err := startupConfig(subs, settings)
 			if err != nil {
 				t.Fatal(err)
 			}
-			generated, err := subscription.NewRootConfigPolicy().Build(context.Background(), input)
-			if err != nil {
-				t.Fatalf("fresh startup policy rejected its bootstrap: %v", err)
-			}
-			if len(generated.Providers) != 0 || len(generated.Geo) != 0 || !bytes.Contains(generated.YAML, []byte("MATCH,DIRECT")) {
-				t.Fatal("bootstrap must require no external resources and route directly")
+			if !bytes.Contains(generated, []byte("MATCH,DIRECT")) {
+				t.Fatal("bootstrap must route directly")
 			}
 			after, err := os.ReadFile(paths.SubscriptionCatalog)
 			if err != nil || !bytes.Equal(before, after) {

@@ -128,7 +128,7 @@ mihari tun disable
 
 `sysproxy enable` 将桌面 HTTP/HTTPS/SOCKS 系统代理指向 Mihari 的混合端点。如果另一产品已持有代理,enable 会以 `system_proxy_conflict` 失败,除非传入 `--force`(TUI 会要求确认)。`sysproxy disable` 只清除**由 Mihari 持有**的代理;它不会关闭外部代理。在 Windows 上,当 Mihari 作为 LocalSystem 服务运行时,它写入**交互式控制台用户**的 WinINET 配置单元(`HKEY_USERS\<SID>\…`),而不是 SYSTEM 自己的 `HKCU`,因此桌面浏览器能感知到变更。
 
-`tun enable|disable` 持久化托管 TUN 块、将其注入生成的 mihomo 配置,并在可用时通过控制器实时生效。开启前会检测系统上的其他 TUN 网卡与其他 mihomo 进程(忽略 Down 状态的残留适配器);冲突时以 `tun_conflict` 失败,除非传入 `--force`(TUI 会要求确认)。`--force` 只绕过冲突门控:若内核未真正开启 TUN,Desired 会回滚。TUN 根据 OS 不同可能需要提权或安装服务。没有用于修改端口的 CLI 命令;Mixed / Controller / Web 端口在 TUI System 页的 Ports Config 中修改。
+`tun enable|disable` 仅覆盖 `tun.enable`；stack、device、DNS、路由等其他 TUN 参数保留订阅原值，不自动注入默认 stack。未通过 Mihari 托管开关时，订阅的 enable 也保持原值。开关意图由 daemon 持久化，并在可用时通过控制器实时生效。开启前会检测系统上的其他 TUN 网卡与其他 mihomo 进程(忽略 Down 状态的残留适配器);冲突时以 `tun_conflict` 失败,除非传入 `--force`(TUI 会要求确认)。`--force` 只绕过冲突门控:若内核未真正开启 TUN,Desired 会回滚。TUN 根据 OS 不同可能需要提权或安装服务。没有用于修改端口的 CLI 命令;Mixed / Controller / Web 端口在 TUI System 页的 Ports Config 中修改。
 
 ## Web 面板
 

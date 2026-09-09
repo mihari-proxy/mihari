@@ -396,3 +396,26 @@ func TestSubscriptionSetRestoreFailureRefreshesSecretsAndDegrades(t *testing.T) 
 		t.Fatal("degraded state exposed a subscription secret")
 	}
 }
+
+func TestBootstrapGeneration_IgnoresLegacyTunSettingsFields(t *testing.T) {
+	manager, _, _, _ := subscriptionManager(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("bootstrap fetched subscription") }))
+	settings := manager.settingsSnapshot()
+	settings.Tun = map[string]any{"enable": false, "stack": "legacy", "device": "legacy-device", "x-extra": true}
+	before := settings.Clone()
+	candidate, err := manager.prepareCatalogConfigWithSettings(context.Background(), subscription.Defaults(), settings, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer candidate.cleanup()
+	document, err := subscription.ParseDocument(candidate.content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tun, ok := document["tun"].(subscription.Document)
+	if !ok || len(tun) != 1 || tun["enable"] != false {
+		t.Fatalf("bootstrap synthesized legacy TUN fields: %#v", tun)
+	}
+	if !reflect.DeepEqual(settings, before) {
+		t.Fatal("bootstrap mutated settings input")
+	}
+}

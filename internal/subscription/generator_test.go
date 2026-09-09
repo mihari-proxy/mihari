@@ -1,6 +1,8 @@
 package subscription
 
 import (
+	"bytes"
+	"reflect"
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/config"
@@ -15,17 +17,36 @@ func testSettings() config.Settings {
 
 func TestGenerateAppliesOverridesThenManagedInvariants(t *testing.T) {
 	base, err := ParseDocument([]byte(`mixed-port: 1
+bind-address: 0.0.0.0
 allow-lan: true
 external-controller: 0.0.0.0:9999
-secret: leaked
-external-ui: unsafe
-proxies: []
-rules: [MATCH,DIRECT]
+secret: fixture-only
+external-ui: fixture-panel
+external-ui-name: fixture-panel
+external-ui-url: https://example.invalid/panel
+proxies:
+  - name: fixture-node
+    type: ss
+    server: 127.0.0.1
+    port: 443
+    cipher: aes-128-gcm
+    password: fixture-only
+    x-client-metadata:
+      labels: [fixture]
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := Generate(base, map[string]any{"mode": "global", "mixed-port": 2}, testSettings())
+	before, err := yaml.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := Generate(base, map[string]any{
+		"mode":                "global",
+		"mixed-port":          2,
+		"external-controller": "192.0.2.1:1234",
+		"secret":              "override-only",
+	}, testSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,11 +54,86 @@ rules: [MATCH,DIRECT]
 	if err := yaml.Unmarshal(content, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got["mixed-port"] != 9190 || got["allow-lan"] != false || got["external-controller"] != "127.0.0.1:9090" || got["mode"] != "global" {
+	if got["mixed-port"] != 9190 || got["bind-address"] != "127.0.0.1" || got["allow-lan"] != false || got["external-controller"] != "127.0.0.1:9090" || got["secret"] != testSettings().ControllerSecret || got["mode"] != "global" {
 		t.Fatalf("wrong merge result: %#v", got)
 	}
-	if _, exists := got["external-ui"]; exists {
-		t.Fatal("external-ui was not removed")
+	for _, field := range []string{"external-ui", "external-ui-name", "external-ui-url"} {
+		if _, exists := got[field]; exists {
+			t.Fatalf("%s was not removed", field)
+		}
+	}
+	proxies := got["proxies"].([]any)
+	metadata := proxies[0].(map[string]any)["x-client-metadata"].(map[string]any)
+	if !reflect.DeepEqual(metadata["labels"], []any{"fixture"}) {
+		t.Fatalf("metadata labels=%#v", metadata["labels"])
+	}
+	after, err := yaml.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("base mutated:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+func TestGeneratePreservesNativeControllerVariantsAndExtraListeners(t *testing.T) {
+	// Synthetic YAML only: these native endpoints and file references are never opened.
+	base, err := ParseDocument([]byte(`external-controller-unix: /fixture/controller.sock
+external-controller-pipe: '\\.\pipe\fixture-controller'
+external-controller-tls: 0.0.0.0:9443
+port: 18080
+socks-port: 18081
+redir-port: 18082
+tproxy-port: 18083
+tunnels:
+  - network: [tcp, udp]
+    address: 0.0.0.0:18084
+    target: example.invalid:443
+    proxy: DIRECT
+tuic-server:
+  enable: true
+  listen: 0.0.0.0:18085
+  certificate: /fixture/server.crt
+  private-key: /fixture/server.key
+iptables:
+  enable: true
+  inbound-interface: [fixture0]
+proxies: []
+rules: [MATCH,DIRECT]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := yaml.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := Generate(base, nil, testSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParseDocument(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{
+		"external-controller-unix", "external-controller-pipe", "external-controller-tls",
+		"port", "socks-port", "redir-port", "tproxy-port", "tunnels", "tuic-server", "iptables",
+	} {
+		want, present := base[field]
+		if !present {
+			t.Fatalf("native field %s missing from fixture", field)
+		}
+		if !reflect.DeepEqual(got[field], want) {
+			t.Errorf("native field %s was changed or removed", field)
+		}
+	}
+	after, err := yaml.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("native configuration source was mutated")
 	}
 }
 
@@ -77,16 +173,108 @@ func TestGenerateDoesNotMutateBase(t *testing.T) {
 	}
 }
 
-func TestGenerateInjectsManagedTun(t *testing.T) {
+func TestGenerateTunChangesOnlyManagedEnable(t *testing.T) {
+	baseYAML := []byte(`proxies: []
+rules: [MATCH,DIRECT]
+tun:
+  enable: false
+  stack: system
+  device: sub-tun
+  mtu: 1400
+  dns-hijack: [any:53]
+  auto-route: true
+  route-exclude-address: [192.0.2.0/24]
+  x-client-options:
+    strict: true
+`)
+	wantNonEnable := map[string]any{
+		"stack": "system", "device": "sub-tun", "mtu": 1400,
+		"dns-hijack": []any{"any:53"}, "auto-route": true,
+		"route-exclude-address": []any{"192.0.2.0/24"},
+		"x-client-options":      map[string]any{"strict": true},
+	}
+	tests := []struct {
+		name     string
+		settings map[string]any
+		want     bool
+	}{
+		{name: "enabled", settings: map[string]any{"enable": true, "stack": "gVisor"}, want: true},
+		{name: "disabled", settings: map[string]any{"enable": false, "stack": "gVisor"}, want: false},
+		{name: "unmanaged", settings: nil, want: false},
+		{name: "legacy stack without enable is unmanaged", settings: map[string]any{"stack": "gVisor"}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base, err := ParseDocument(baseYAML)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, _ := yaml.Marshal(base)
+			settings := testSettings()
+			settings.Tun = tt.settings
+			content, err := Generate(base, nil, settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got map[string]any
+			if err := yaml.Unmarshal(content, &got); err != nil {
+				t.Fatal(err)
+			}
+			tun := got["tun"].(map[string]any)
+			if tun["enable"] != tt.want {
+				t.Fatalf("tun.enable=%#v want %v", tun["enable"], tt.want)
+			}
+			delete(tun, "enable")
+			if !reflect.DeepEqual(tun, wantNonEnable) {
+				t.Fatalf("non-enable tun=%#v want %#v", tun, wantNonEnable)
+			}
+			after, _ := yaml.Marshal(base)
+			if !bytes.Equal(before, after) {
+				t.Fatal("base TUN was mutated")
+			}
+		})
+	}
+}
+
+func TestGenerateManagedTunPreservesOverrideFields(t *testing.T) {
+	base, err := ParseDocument([]byte("proxies: []\nrules: [MATCH,DIRECT]\ntun: {enable: false, stack: system}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	overrideTun := map[string]any{
+		"enable": false, "stack": "mixed", "device": "override-tun",
+		"x-client-options": map[string]any{"labels": []any{"override"}},
+	}
+	overrides := map[string]any{"tun": overrideTun}
+	settings := testSettings()
+	settings.Tun = map[string]any{"enable": true, "stack": "gVisor"}
+	content, err := Generate(base, overrides, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := yaml.Unmarshal(content, &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"enable": true, "stack": "mixed", "device": "override-tun",
+		"x-client-options": map[string]any{"labels": []any{"override"}},
+	}
+	if !reflect.DeepEqual(got["tun"], want) {
+		t.Fatalf("tun=%#v want %#v", got["tun"], want)
+	}
+	if overrideTun["enable"] != false || overrideTun["stack"] != "mixed" {
+		t.Fatalf("override TUN mutated: %#v", overrideTun)
+	}
+}
+
+func TestGenerateManagedTunCreatesEnableOnlyBlockWhenMissing(t *testing.T) {
 	base, err := ParseDocument([]byte("proxies: []\nrules: [MATCH,DIRECT]\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	settings := testSettings()
-	settings.Tun = map[string]any{
-		"enable": true,
-		"stack":  "gVisor",
-	}
+	settings.Tun = map[string]any{"enable": true, "stack": "gVisor"}
 	content, err := Generate(base, nil, settings)
 	if err != nil {
 		t.Fatal(err)
@@ -95,53 +283,32 @@ func TestGenerateInjectsManagedTun(t *testing.T) {
 	if err := yaml.Unmarshal(content, &got); err != nil {
 		t.Fatal(err)
 	}
-	tun, ok := got["tun"].(map[string]any)
-	if !ok {
-		t.Fatalf("tun missing or wrong type: %#v", got["tun"])
-	}
-	if tun["enable"] != true {
-		t.Fatalf("tun.enable=%#v, want true", tun["enable"])
-	}
-	if tun["stack"] != "gVisor" {
-		t.Fatalf("tun.stack=%#v, want gVisor", tun["stack"])
+	if want := map[string]any{"enable": true}; !reflect.DeepEqual(got["tun"], want) {
+		t.Fatalf("tun=%#v want %#v", got["tun"], want)
 	}
 }
 
-func TestGenerateManagedTunOverridesBaseAndOverrides(t *testing.T) {
-	base, err := ParseDocument([]byte(`proxies: []
-rules: [MATCH,DIRECT]
-tun:
-  enable: false
-  stack: system
-  device: sub-tun
-`))
-	if err != nil {
-		t.Fatal(err)
+func TestGenerateManagedTunRejectsInvalidEffectiveBlock(t *testing.T) {
+	tests := []struct {
+		name      string
+		baseYAML  string
+		overrides map[string]any
+	}{
+		{name: "base", baseYAML: "proxies: []\nrules: [MATCH,DIRECT]\ntun: invalid\n"},
+		{name: "override", baseYAML: "proxies: []\nrules: [MATCH,DIRECT]\n", overrides: map[string]any{"tun": "invalid"}},
 	}
-	settings := testSettings()
-	settings.Tun = map[string]any{
-		"enable": true,
-		"stack":  "gVisor",
-	}
-	content, err := Generate(base, map[string]any{
-		"tun": map[string]any{"enable": false, "stack": "mixed"},
-	}, settings)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got map[string]any
-	if err := yaml.Unmarshal(content, &got); err != nil {
-		t.Fatal(err)
-	}
-	tun, ok := got["tun"].(map[string]any)
-	if !ok {
-		t.Fatalf("tun missing or wrong type: %#v", got["tun"])
-	}
-	if tun["enable"] != true || tun["stack"] != "gVisor" {
-		t.Fatalf("managed tun did not win: %#v", tun)
-	}
-	if _, exists := tun["device"]; exists {
-		t.Fatalf("subscription tun keys should not remain: %#v", tun)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base, err := ParseDocument([]byte(tt.baseYAML))
+			if err != nil {
+				t.Fatal(err)
+			}
+			settings := testSettings()
+			settings.Tun = map[string]any{"enable": true}
+			if _, err := Generate(base, tt.overrides, settings); err == nil {
+				t.Fatal("expected invalid TUN block to be rejected")
+			}
+		})
 	}
 }
 

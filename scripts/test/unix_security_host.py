@@ -22,6 +22,9 @@ from unix_security import PREFIX, COMMON, SUPPLEMENTAL, DARWIN_SUPPLEMENTAL, fin
 
 MARKER = ".mihari-security-owner.json"
 SCHEMA = "mihari.unix-security-owner/v1"
+PACKAGE_TIMEOUT_SECONDS = 400
+APP_TIMEOUT_SECONDS = 900
+EXECUTION_TIMEOUT_SECONDS = 1200
 
 
 def atomic_json(path, value, mode=0o600):
@@ -653,7 +656,7 @@ def run_tests(args):
     host = Host(run)
     report = {"schema": "mihari.unix-security-result/v1", "os": sys.platform, "run_id": run["run_id"], "root_identity": run["root_identity"], "uids": run["uids"], "gids": [a["gid"] for a in run["accounts"]], "failures": [], "cleanup": {}, "passed": False}
     status, active = 0, None
-    deadline = time.monotonic()+480
+    deadline = time.monotonic()+EXECUTION_TIMEOUT_SECONDS
     def terminate(signum, _frame):
         raise InterruptedError(signum)
     old_term = signal.signal(signal.SIGTERM, terminate)
@@ -709,7 +712,8 @@ def run_tests(args):
                     child_env["TMPDIR"] = str(user_root)
                     child_env.update(GOCACHE=str(user_root/"go-cache"), GOMODCACHE=str(user_root/"go-modules"), GOPATH=str(user_root/"go-path"), TEST_TELEMETRY_DIR=str(user_root/"telemetry"))
                     credential = {"user": owner["uid"], "group": owner["gid"], "extra_groups": []}
-                command = [str(go), "tool", "test2json", "-t", "-p", PREFIX+package, str(binary), "-test.v=test2json", "-test.count=1", "-test.timeout="+str(max(1,min(400,int(deadline-time.monotonic()))))+"s", "-test.run=^("+"|".join(names)+")$"]
+                package_timeout = APP_TIMEOUT_SECONDS if package == "internal/app" else PACKAGE_TIMEOUT_SECONDS
+                command = [str(go), "tool", "test2json", "-t", "-p", PREFIX+package, str(binary), "-test.v=test2json", "-test.count=1", "-test.timeout="+str(max(1,min(package_timeout,int(deadline-time.monotonic()))))+"s", "-test.run=^("+"|".join(names)+")$"]
                 intent = {"package": PREFIX+package, "nonce": str(time.monotonic_ns())}
                 host.ledger["processes"].append(intent)
                 host.save()

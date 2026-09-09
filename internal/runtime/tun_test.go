@@ -63,6 +63,24 @@ func TestTunStatusLiveEnableFromConfigs(t *testing.T) {
 	}
 }
 
+func TestTunStatusLegacyStackOnlyIsUnmanaged(t *testing.T) {
+	controller := &fakeController{configs: map[string]any{
+		"tun": map[string]any{"enable": true, "stack": "subscription"},
+	}}
+	manager := newTunManager(t, controller, defaultTunSettings(map[string]any{"stack": "legacy"}))
+
+	status, err := manager.TunStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Managed || status.DesiredEnable || status.Stack != "legacy" {
+		t.Fatalf("status=%#v", status)
+	}
+	if status.LiveEnable == nil || !*status.LiveEnable {
+		t.Fatalf("live_enable=%v", status.LiveEnable)
+	}
+}
+
 func TestTunStatusOmitsLiveWhenCoreUnavailable(t *testing.T) {
 	controller := &fakeController{
 		configsErr: protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo controller is unavailable"},
@@ -91,7 +109,7 @@ func TestEnableTunPersistsAndPatches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !status.DesiredEnable || !status.Managed || status.Stack != "gVisor" {
+	if !status.DesiredEnable || !status.Managed || status.Stack != "" {
 		t.Fatalf("status=%#v", status)
 	}
 	if status.LiveEnable == nil || !*status.LiveEnable {
@@ -101,10 +119,10 @@ func TestEnableTunPersistsAndPatches(t *testing.T) {
 		t.Fatalf("patchCalls=%d", controller.patchCalls)
 	}
 	tun, ok := controller.lastPatch["tun"].(map[string]any)
-	if !ok || tun["enable"] != true || tun["stack"] != "gVisor" {
+	if !ok || !reflect.DeepEqual(tun, map[string]any{"enable": true}) {
 		t.Fatalf("lastPatch=%#v", controller.lastPatch)
 	}
-	assertPersistedTun(t, manager.settingsPath, true, "gVisor")
+	assertPersistedTun(t, manager.settingsPath, true, "")
 	if status.Revision != 1 {
 		t.Fatalf("revision=%d", status.Revision)
 	}
@@ -229,22 +247,65 @@ func TestDisableTunCompensationFailureCommitsDegradedState(t *testing.T) {
 	}
 }
 
-func TestEnableTunPreservesExistingStack(t *testing.T) {
-	controller := &fakeController{configs: map[string]any{}}
+func TestEnableTunPreservesLiveFieldsAndIgnoresLegacySettingsStack(t *testing.T) {
+	liveTun := map[string]any{
+		"enable": false, "stack": "mixed", "device": "subscription-tun",
+		"route-exclude-address": []any{"192.0.2.0/24"},
+		"x-client-options":      map[string]any{"strict": true},
+	}
+	controller := &fakeController{configs: map[string]any{"tun": cloneTunMap(liveTun)}}
 	manager := newTunManager(t, controller, defaultTunSettings(map[string]any{
-		"enable": false, "stack": "system",
+		"enable": false, "stack": "gVisor", "x-legacy": "kept-in-settings",
 	}))
 
 	status, err := manager.EnableTun(context.Background(), Operation{ID: "tun-stack", Source: "test"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Stack != "system" {
+	if status.Stack != "gVisor" {
 		t.Fatalf("stack=%q", status.Stack)
 	}
 	tun := controller.lastPatch["tun"].(map[string]any)
-	if tun["stack"] != "system" {
-		t.Fatalf("patched stack=%v", tun["stack"])
+	wantLive := cloneTunMap(liveTun)
+	wantLive["enable"] = true
+	if !reflect.DeepEqual(tun, wantLive) {
+		t.Fatalf("patched tun=%#v want %#v", tun, wantLive)
+	}
+	if !reflect.DeepEqual(liveTun, map[string]any{
+		"enable": false, "stack": "mixed", "device": "subscription-tun",
+		"route-exclude-address": []any{"192.0.2.0/24"},
+		"x-client-options":      map[string]any{"strict": true},
+	}) {
+		t.Fatalf("source live TUN mutated: %#v", liveTun)
+	}
+	loaded, err := config.Load(manager.settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Tun["stack"] != "gVisor" || loaded.Tun["x-legacy"] != "kept-in-settings" {
+		t.Fatalf("legacy settings fields were not preserved: %#v", loaded.Tun)
+	}
+}
+
+func TestBuildManagedTunChangesOnlyEnable(t *testing.T) {
+	existing := map[string]any{
+		"enable": false, "stack": "system",
+		"nested": map[string]any{"labels": []any{"fixture"}},
+	}
+	got := buildManagedTun(true, existing)
+	want := map[string]any{
+		"enable": true, "stack": "system",
+		"nested": map[string]any{"labels": []any{"fixture"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("managed tun=%#v want %#v", got, want)
+	}
+	got["nested"].(map[string]any)["labels"].([]any)[0] = "changed"
+	if existing["enable"] != false || existing["nested"].(map[string]any)["labels"].([]any)[0] != "fixture" {
+		t.Fatalf("existing TUN mutated or aliased: %#v", existing)
+	}
+	if got := buildManagedTun(false, nil); !reflect.DeepEqual(got, map[string]any{"enable": false}) {
+		t.Fatalf("new managed tun=%#v", got)
 	}
 }
 
@@ -274,7 +335,6 @@ func TestEnableTun_ManagedRevisionPrecedesAdapterConflict(t *testing.T) {
 	manager := newTunManagerWithDetect(t, controller, defaultTunSettings(nil), &tundetect.FakeBackend{
 		Detection: tundetect.Detection{TunInterfaces: []string{"foreign-tun"}},
 	})
-	manager.providerResources = &fakeProviderResources{}
 	manager.store.Store(state.Snapshot{Revision: 5, Health: "ok"})
 	stale := uint64(4)
 	_, err := manager.EnableTun(context.Background(), Operation{ID: "managed-stale", Source: "test", IfRevision: &stale}, false)
@@ -536,7 +596,7 @@ func TestEnableTunRollbackRestoresActiveSubscriptionLiveTarget(t *testing.T) {
 
 func TestEnableTunCanceledConfirmationRestoresActiveSubscriptionLiveTarget(t *testing.T) {
 	beforeTun := map[string]any{
-		"enable":     true,
+		"enable":     false,
 		"stack":      "system",
 		"device":     "subscription-tun",
 		"auto-route": true,
@@ -579,8 +639,8 @@ func TestEnableTunCanceledConfirmationRestoresActiveSubscriptionLiveTarget(t *te
 	cancel()
 	err := <-done
 	var apiError protocol.APIError
-	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "mutation compensation failed" {
-		t.Fatalf("err=%v want stable compensation failure", err)
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeUpstreamFailure {
+		t.Fatalf("err=%v want original apply failure after confirmed compensation", err)
 	}
 	requireLiveTun(t, controller.configs, beforeTun)
 	requireRuntimeTun(t, runtimePath, beforeTun)
@@ -591,7 +651,7 @@ func TestEnableTunCanceledConfirmationRestoresActiveSubscriptionLiveTarget(t *te
 	if len(manager.settingsSnapshot().Tun) != 0 {
 		t.Fatalf("settings rollback did not restore unmanaged before: %#v", manager.settingsSnapshot().Tun)
 	}
-	if snapshot := manager.Snapshot(); snapshot.Revision != 1 || snapshot.Health != "degraded" || snapshot.LastError != "mutation compensation failed; restart required" {
+	if snapshot := manager.Snapshot(); snapshot.Revision != 0 || snapshot.Health == "degraded" {
 		t.Fatalf("snapshot=%#v", snapshot)
 	}
 }
@@ -680,8 +740,8 @@ func TestEnableTunCanceledConfirmationRestoresNoActiveSubscriptionRuntimeTarget(
 	cancel()
 	err := <-done
 	var apiError protocol.APIError
-	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "mutation compensation failed" {
-		t.Fatalf("err=%v want stable compensation failure", err)
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeUpstreamFailure {
+		t.Fatalf("err=%v want original apply failure after confirmed compensation", err)
 	}
 	requireLiveTun(t, controller.configs, beforeTun)
 	requireRuntimeTun(t, runtimePath, beforeTun)
@@ -689,27 +749,26 @@ func TestEnableTunCanceledConfirmationRestoresNoActiveSubscriptionRuntimeTarget(
 		t.Fatal(err)
 	}
 	requireLiveTun(t, controller.configs, beforeTun)
-	if snapshot := manager.Snapshot(); snapshot.Revision != 1 || snapshot.Health != "degraded" {
+	if snapshot := manager.Snapshot(); snapshot.Revision != 0 || snapshot.Health == "degraded" {
 		t.Fatalf("snapshot=%#v", snapshot)
 	}
 }
 
-func TestEnableTunRollbackWithoutPreLiveSnapshotDegrades(t *testing.T) {
-	controller := &fakeController{configs: map[string]any{
-		"tun": map[string]any{"enable": false, "stack": "gVisor"},
-	}}
-	confirmationFailed := false
+func TestEnableTunUnavailablePreLiveSnapshotDoesNotReplaceUnknownBlock(t *testing.T) {
+	beforeTun := map[string]any{
+		"enable": false, "stack": "system", "device": "existing-tun",
+		"route-exclude-address": []any{"192.0.2.0/24"},
+	}
+	controller := &fakeController{configs: map[string]any{"tun": cloneTunMap(beforeTun)}}
 	controller.patchConfigs = func(_ context.Context, patch map[string]any) error {
 		controller.configs["tun"] = cloneTunMap(patch["tun"].(map[string]any))
 		return nil
 	}
+	configsCalls := 0
 	controller.configsFunc = func(context.Context) (map[string]any, error) {
+		configsCalls++
 		if controller.patchCalls == 0 {
 			return nil, errors.New("pre-live configs unavailable")
-		}
-		if controller.patchCalls == 1 && !confirmationFailed {
-			confirmationFailed = true
-			return nil, errors.New("post-apply confirmation failed")
 		}
 		return controller.configs, nil
 	}
@@ -717,16 +776,23 @@ func TestEnableTunRollbackWithoutPreLiveSnapshotDegrades(t *testing.T) {
 
 	_, err := manager.EnableTun(context.Background(), Operation{ID: "missing-pre-live", Source: "test"}, false)
 	var apiError protocol.APIError
-	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "mutation compensation failed" {
-		t.Fatalf("err=%v want stable compensation failure", err)
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeUpstreamFailure || apiError.Message != "TUN live state before apply is unavailable" {
+		t.Fatalf("err=%v want unavailable pre-live snapshot", err)
 	}
-	if controller.patchCalls != 1 {
-		t.Fatalf("patchCalls=%d want no guessed live restore without a before snapshot", controller.patchCalls)
+	if controller.patchCalls != 0 {
+		t.Fatalf("patchCalls=%d want no replacement from unknown state", controller.patchCalls)
+	}
+	if configsCalls == 0 {
+		t.Fatal("live snapshot was not attempted")
+	}
+	requireLiveTun(t, controller.configs, beforeTun)
+	if loaded, loadErr := config.Load(manager.settingsPath); loadErr != nil || len(loaded.Tun) != 0 {
+		t.Fatalf("persisted settings after rollback=%#v err=%v", loaded.Tun, loadErr)
 	}
 	if len(manager.settingsSnapshot().Tun) != 0 {
 		t.Fatalf("settings rollback did not restore unmanaged before: %#v", manager.settingsSnapshot().Tun)
 	}
-	if snapshot := manager.Snapshot(); snapshot.Revision != 1 || snapshot.Health != "degraded" || snapshot.LastError != "mutation compensation failed; restart required" {
+	if snapshot := manager.Snapshot(); snapshot.Revision != 0 || snapshot.Health != "ok" {
 		t.Fatalf("snapshot=%#v", snapshot)
 	}
 }
@@ -786,7 +852,7 @@ func TestTunCancellationBeforeLiveConfirmationCompensatesSettings(t *testing.T) 
 	}
 	var confirmation sync.Once
 	controller.configsFunc = func(ctx context.Context) (map[string]any, error) {
-		if controller.patchCalls == 0 {
+		if controller.patchCalls != 1 {
 			return controller.configs, nil
 		}
 		confirmation.Do(func() { close(configsEntered) })
@@ -818,8 +884,8 @@ func TestTunCancellationBeforeLiveConfirmationCompensatesSettings(t *testing.T) 
 	cancel()
 	err := <-done
 	var apiError protocol.APIError
-	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "mutation compensation failed" {
-		t.Fatalf("err=%v want stable compensation failure", err)
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeUpstreamFailure {
+		t.Fatalf("err=%v want original apply failure after confirmed compensation", err)
 	}
 	if !slices.Equal(saved, []bool{true, false}) || len(manager.settingsSnapshot().Tun) != 0 {
 		t.Fatalf("saved=%v tun=%#v", saved, manager.settingsSnapshot().Tun)
@@ -828,7 +894,7 @@ func TestTunCancellationBeforeLiveConfirmationCompensatesSettings(t *testing.T) 
 	if !ok || live {
 		t.Fatalf("live after canceled compensation=%v ok=%v configs=%#v", live, ok, controller.configs)
 	}
-	if snapshot := manager.Snapshot(); snapshot.Revision != 1 || snapshot.Health != "degraded" {
+	if snapshot := manager.Snapshot(); snapshot.Revision != 0 || snapshot.Health == "degraded" {
 		t.Fatalf("snapshot=%#v", snapshot)
 	}
 }
@@ -1159,7 +1225,11 @@ func assertPersistedTun(t *testing.T, path string, wantEnable bool, wantStack st
 	if loaded.Tun["enable"] != wantEnable {
 		t.Fatalf("tun.enable=%#v want %v", loaded.Tun["enable"], wantEnable)
 	}
-	if loaded.Tun["stack"] != wantStack {
+	if wantStack == "" {
+		if _, exists := loaded.Tun["stack"]; exists {
+			t.Fatalf("tun.stack=%#v want absent", loaded.Tun["stack"])
+		}
+	} else if loaded.Tun["stack"] != wantStack {
 		t.Fatalf("tun.stack=%#v want %q", loaded.Tun["stack"], wantStack)
 	}
 }
@@ -1646,5 +1716,30 @@ func requireLiveTun(t *testing.T, configs map[string]any, want map[string]any) {
 	got, ok := configs["tun"].(map[string]any)
 	if !ok || !reflect.DeepEqual(got, want) {
 		t.Fatalf("tun=%#v want %#v", got, want)
+	}
+}
+
+func TestCaptureTunLive_RequiresBooleanEnableInPresentMapping(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		configs map[string]any
+		valid   bool
+	}{
+		{"absent", map[string]any{}, true},
+		{"null-block", map[string]any{"tun": nil}, true},
+		{"enabled", map[string]any{"tun": map[string]any{"enable": true, "stack": "gvisor"}}, true},
+		{"disabled", map[string]any{"tun": map[string]any{"enable": false}}, true},
+		{"empty-map", map[string]any{"tun": map[string]any{}}, false},
+		{"missing-enable", map[string]any{"tun": map[string]any{"stack": "gvisor"}}, false},
+		{"string-enable", map[string]any{"tun": map[string]any{"enable": "true"}}, false},
+		{"null-enable", map[string]any{"tun": map[string]any{"enable": nil}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTunManager(t, &fakeController{configs: tc.configs}, defaultTunSettings(nil))
+			_, valid := m.captureTunLive(context.Background())
+			if valid != tc.valid {
+				t.Fatalf("snapshot valid=%v want=%v", valid, tc.valid)
+			}
+		})
 	}
 }

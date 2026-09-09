@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -55,7 +56,7 @@ func TestUnixMigration_PreservesFunction(t *testing.T) {
 
 func TestUnixMigration_NegativeCases(t *testing.T) {
 	cases := []string{
-		"missing-active-cache", "missing-provider-resource", "untrusted-core",
+		"missing-active-cache", "untrusted-core",
 		"unknown-top-level", "nested-source-target", "concurrent-business-write",
 		"oversize", "hardlink", "nested-mount",
 	}
@@ -67,10 +68,6 @@ func TestUnixMigration_NegativeCases(t *testing.T) {
 			switch name {
 			case "missing-active-cache":
 				if err := os.Remove(fx.source.osPath("subscriptions/cache/" + fx.profileID + ".yaml")); err != nil {
-					t.Fatal(err)
-				}
-			case "missing-provider-resource":
-				if err := os.Remove(fx.source.osPath("runtime/core-home/providers/" + fx.fileProviderID + ".yaml")); err != nil {
 					t.Fatal(err)
 				}
 			case "untrusted-core":
@@ -285,7 +282,7 @@ func (fx *migrationFixture) assertSourceUnchanged(t *testing.T) {
 
 func readMigrationMMDB(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "subscription", "testdata", "rootpolicy", "mmdb", name))
+	data, err := os.ReadFile(filepath.Join("testdata", "migration-mmdb", name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,3 +329,38 @@ func mapsEqual(a, b map[string]string) bool {
 }
 
 func ptrOptions(opts migrationOptions) *migrationOptions { return &opts }
+
+func TestUnixMigration_NativeProviderRemainsCoreValidationResponsibility(t *testing.T) {
+	fx := newMigrationFixture(t)
+	if err := os.Remove(fx.source.osPath("runtime/core-home/providers/" + fx.fileProviderID + ".yaml")); err != nil {
+		t.Fatal(err)
+	}
+	before := fx.sourceHashes(t)
+	prepared, err := prepareMigration(context.Background(), fx.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.cleanup()
+	raw, err := fx.source.ReadFile(context.Background(), "subscriptions/cache/"+fx.profileID+".yaml", migrationCacheDocMax)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := subscription.ParseDocument(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated, err := subscription.ParseDocument(prepared.runtimeYAML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers, present := source["proxy-providers"]
+	if !present || providers == nil {
+		t.Fatal("fixture must contain native proxy provider definitions")
+	}
+	if !reflect.DeepEqual(providers, generated["proxy-providers"]) {
+		t.Fatal("native provider definition rewritten during migration")
+	}
+	if !mapsEqual(before, fx.sourceHashes(t)) {
+		t.Fatal("migration changed source")
+	}
+}

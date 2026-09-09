@@ -1,5 +1,7 @@
 # Unix base-dir implementation status
 
+> **2026-09-09 状态更新：** 本文 T06–T08 关于完整 RootConfigPolicy、字段白名单及新建受管 provider 资源图的实现状态已由[移除方案](2026-09-09-remove-root-config-policy.md)替代；TUN 仅覆盖 `tun.enable`。Unix 布局、核心身份校验、安装事务与历史 provider/resource WAL 恢复约束继续保留。下文是 2026-09-08 的实施历史快照，不再作为当前配置生成合同；现行操作语义见 [Unix 布局与恢复](../../unix-layout.md)。
+
 Updated: 2026-09-08. Feature branch: `feat/system-data-root`.
 
 T01–T18 development gates are accepted. T19 now supplies the isolated native runner, required fixtures, CI and maintained documentation; fix1 addresses the initial review’s scenario-inventory, live-child recovery and early-preparation ownership findings and awaits scoped re-review; its local verification and outstanding hosted acceptance are recorded in [the implementation evidence](../reviews/2026-09-08-unix-base-dir-implementation-evidence.md). This is implementation status, not a hosted security PASS or merge authorization.

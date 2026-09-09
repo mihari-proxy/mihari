@@ -10,11 +10,10 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/subscription"
 	"github.com/mihari-proxy/mihari/internal/tundetect"
 	"go.yaml.in/yaml/v3"
 )
-
-const defaultTunStack = "gVisor"
 
 // TunStatus returns desired managed TUN intent plus live observation from mihomo when available.
 func (m *Manager) TunStatus(ctx context.Context) (protocol.TunStatus, error) {
@@ -50,9 +49,10 @@ func (m *Manager) DisableTun(ctx context.Context, op Operation) (protocol.TunSta
 }
 
 func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, force bool) (protocol.TunStatus, error) {
-	if m.providerResources != nil {
-		return m.mutateTunManaged(ctx, op, enable, force)
+	if m.trustedCore != nil {
+		return m.mutateTrustedTun(ctx, op, enable, force)
 	}
+
 	if err := m.lockMutation(ctx); err != nil {
 		return protocol.TunStatus{}, err
 	}
@@ -95,12 +95,17 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, err, false, nil)
 	}
 	nextTun := cloneTunMap(candidate.after.Tun)
-	liveBefore := m.captureTunLive(ctx)
+	liveBefore, liveSnapshotAvailable := m.captureTunLive(ctx)
 	if err := ctx.Err(); err != nil {
 		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, err, false, nil)
 	}
+	if !liveSnapshotAvailable {
+		mapped := protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "TUN live state before apply is unavailable"}
+		m.setTunLastError(mapped.Message)
+		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, mapped, false, nil)
+	}
 
-	if applyErr := m.applyTun(ctx, nextTun); applyErr != nil {
+	if applyErr := m.applyTun(ctx, nextTun, liveBefore); applyErr != nil {
 		mapped := mapTunApplyError(applyErr)
 		m.setTunLastError(tunErrorMessage(mapped))
 		compensated := m.compensateTun(ctx, op, candidate, mapped, m.trustedCore == nil, liveBefore)
@@ -146,7 +151,7 @@ func (m *Manager) compensateTun(ctx context.Context, op Operation, candidate set
 		if liveBefore == nil {
 			liveRestoreErr = errors.New("TUN live state before apply is unavailable")
 		} else {
-			liveRestoreErr = m.restoreTunLive(ctx, liveBefore)
+			liveRestoreErr = m.restoreTunLive(context.WithoutCancel(ctx), liveBefore)
 		}
 	}
 	if rollbackErr == nil && liveRestoreErr == nil {
@@ -165,7 +170,7 @@ func (m *Manager) compensateTun(ctx context.Context, op Operation, candidate set
 }
 
 func (m *Manager) restoreTunLive(ctx context.Context, target map[string]any) error {
-	if err := m.applyTun(ctx, target); err != nil {
+	if err := m.applyTun(ctx, target, target); err != nil {
 		return err
 	}
 	if m.controller == nil {
@@ -194,15 +199,22 @@ func (m *Manager) setTunLastError(message string) {
 
 // applyTun prefers regenerating the runtime config (generator injects managed tun) and
 // falls back to (or also uses) PATCH /configs for live apply.
-func (m *Manager) applyTun(ctx context.Context, nextTun map[string]any) error {
+func (m *Manager) applyTun(ctx context.Context, nextTun, liveBase map[string]any) error {
 	var regenerateErr, patchErr error
 	regenerated := false
 	settings, generation := m.configInputs()
-	settings.Tun = cloneTunMap(nextTun)
+	patchTun := cloneTunMap(liveBase)
+	if patchTun == nil {
+		patchTun = make(map[string]any)
+	}
+	patchTun["enable"] = tunDesiredEnable(nextTun)
+	// Subscription generation reads only settings.Tun.enable. Supplying the
+	// live fields here also preserves an existing bootstrap TUN block on reload.
+	settings.Tun = cloneTunMap(patchTun)
 
 	if m.subscriptions != nil && m.runtimeConfig != "" && m.stagingDir != "" {
 		catalog := m.subscriptions.Snapshot()
-		candidate, err := m.prepareCatalogConfigWithSettings(ctx, catalog, settings, generation)
+		candidate, err := m.prepareTunConfigWithSettings(ctx, catalog, settings, generation, liveBase)
 		if err != nil {
 			regenerateErr = err
 		} else {
@@ -228,7 +240,7 @@ func (m *Manager) applyTun(ctx context.Context, nextTun map[string]any) error {
 	}
 	patched := false
 	if m.controller != nil && nextTun != nil {
-		if err := m.controller.PatchConfigs(ctx, map[string]any{"tun": nextTun}); err != nil {
+		if err := m.controller.PatchConfigs(ctx, map[string]any{"tun": patchTun}); err != nil {
 			patchErr = err
 		} else {
 			patched = true
@@ -250,19 +262,30 @@ func (m *Manager) applyTun(ctx context.Context, nextTun map[string]any) error {
 	}
 }
 
-func (m *Manager) captureTunLive(ctx context.Context) map[string]any {
+func (m *Manager) captureTunLive(ctx context.Context) (map[string]any, bool) {
 	if m.controller == nil || ctx.Err() != nil {
-		return nil
+		return nil, false
 	}
 	configs, err := m.controller.Configs(ctx)
 	if err != nil {
-		return nil
+		return nil, false
 	}
-	normalized, err := normalizedLiveTun(configs)
+	raw, exists := configs["tun"]
+	if !exists || raw == nil {
+		return map[string]any{}, true
+	}
+	tun, ok := raw.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	if _, ok := tun["enable"].(bool); !ok {
+		return nil, false
+	}
+	normalized, err := normalizeTunBlock(tun)
 	if err != nil {
-		return nil
+		return nil, false
 	}
-	return normalized
+	return normalized, true
 }
 
 func (m *Manager) buildTunStatus(ctx context.Context, lastError string) protocol.TunStatus {
@@ -294,7 +317,7 @@ func buildTunStatusFromObservation(settings config.Settings, revision uint64, co
 		Schema:        "mihari/v1",
 		Revision:      revision,
 		DesiredEnable: tunDesiredEnable(tun),
-		Managed:       len(tun) > 0,
+		Managed:       tunManaged(tun),
 		Stack:         tunStack(tun),
 		LiveEnable:    liveEnable,
 		Conflict:      conflict,
@@ -307,14 +330,12 @@ func buildTunStatusFromObservation(settings config.Settings, revision uint64, co
 }
 
 func buildManagedTun(enable bool, existing map[string]any) map[string]any {
-	stack := defaultTunStack
-	if s := tunStack(existing); s != "" {
-		stack = s
+	tun := cloneTunMap(existing)
+	if tun == nil {
+		tun = make(map[string]any)
 	}
-	return map[string]any{
-		"enable": enable,
-		"stack":  stack,
-	}
+	tun["enable"] = enable
+	return tun
 }
 
 func cloneTunMap(in map[string]any) map[string]any {
@@ -353,6 +374,14 @@ func tunDesiredEnable(tun map[string]any) bool {
 	}
 	enable, ok := tun["enable"].(bool)
 	return ok && enable
+}
+
+func tunManaged(tun map[string]any) bool {
+	if len(tun) == 0 {
+		return false
+	}
+	_, managed := tun["enable"].(bool)
+	return managed
 }
 
 func tunStack(tun map[string]any) string {
@@ -474,4 +503,14 @@ func liveTunDevice(configs map[string]any) string {
 	raw, _ := configs["tun"].(map[string]any)
 	device, _ := raw["device"].(string)
 	return strings.TrimSpace(device)
+}
+
+// Only a TUN operation has an explicit observed bootstrap source. Catalog
+// regeneration never treats legacy settings fields as subscription YAML.
+func (m *Manager) prepareTunConfigWithSettings(ctx context.Context, catalog subscription.Catalog, settings config.Settings, generation uint64, liveBase map[string]any) (configCandidate, error) {
+	if catalog.ActiveID != "" {
+		return m.prepareCatalogConfigWithSettings(ctx, catalog, settings, generation)
+	}
+	document := subscription.Document{"proxies": []any{}, "proxy-groups": []any{}, "rules": []any{"MATCH,DIRECT"}, "tun": cloneTunMap(liveBase)}
+	return m.prepareConfigWithSettings(ctx, document, settings, generation)
 }

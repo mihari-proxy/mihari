@@ -10,6 +10,13 @@ import (
 )
 
 func probeManagedPorts(settings config.Settings, lookup func(string) (platform.TCPOccupant, bool)) error {
+	return probeManagedPortsWithListener(settings, lookup, nil)
+}
+
+func probeManagedPortsWithListener(settings config.Settings, lookup func(string) (platform.TCPOccupant, bool), listen func(string, string) (net.Listener, error)) error {
+	if listen == nil {
+		listen = net.Listen
+	}
 	if lookup == nil {
 		lookup = platform.LookupTCPOccupant
 	}
@@ -18,7 +25,7 @@ func probeManagedPorts(settings config.Settings, lookup func(string) (platform.T
 		{"controller-addr", settings.ControllerAddr},
 		{"web-addr", settings.WebAddr},
 	} {
-		listener, err := net.Listen("tcp", endpoint.address)
+		listener, err := listen("tcp", endpoint.address)
 		if err != nil {
 			details := map[string]any{"setting": endpoint.setting, "address": endpoint.address}
 			if occupant, ok := lookup(endpoint.address); ok && occupant.PID > 0 {

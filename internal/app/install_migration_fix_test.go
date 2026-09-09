@@ -206,7 +206,7 @@ func TestInstallArtifact_BundleUsesCapabilityWrites(t *testing.T) {
 
 func TestInstallArtifact_PrepareCleansStagingOnError(t *testing.T) {
 	fx := newMigrationFixture(t)
-	if err := os.Remove(fx.source.osPath("runtime/core-home/providers/" + fx.fileProviderID + ".yaml")); err != nil {
+	if err := os.Remove(fx.source.osPath("subscriptions/cache/" + fx.profileID + ".yaml")); err != nil {
 		t.Fatal(err)
 	}
 	staging := fx.staging.dir

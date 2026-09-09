@@ -74,9 +74,7 @@ type GeoIPService interface {
 }
 
 type Options struct {
-	TrustedCore     *core.TrustedExecution
-	RootConfigInput func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error)
-	Resources       *subscription.ResourcePreparer
+	TrustedCore *core.TrustedExecution
 
 	Store          *state.Store
 	Coordinator    *state.Coordinator
@@ -143,9 +141,7 @@ type WebGateway interface {
 }
 
 type Manager struct {
-	trustedCore       *core.TrustedExecution
-	rootConfigInput   func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error)
-	providerResources providerResourceRuntime
+	trustedCore *core.TrustedExecution
 
 	store                     *state.Store
 	coordinator               *state.Coordinator
@@ -182,10 +178,8 @@ type Manager struct {
 	activationPhase           string
 	settingsMu                sync.RWMutex
 	configGeneration          uint64
-	settingsCaptureGeneration uint64
 	tunLastError              string
 	maintenance               chan struct{}
-	resourceActivation        *resourceActivationOwner
 	installed                 chan struct{}
 	closing                   atomic.Bool
 	mutationDegraded          atomic.Bool
@@ -241,9 +235,7 @@ func New(options Options) *Manager {
 		settings = config.Defaults()
 	}
 	manager := &Manager{
-		trustedCore:       options.TrustedCore,
-		rootConfigInput:   options.RootConfigInput,
-		providerResources: newProviderResourceRuntime(options.Resources, options.TrustedCore),
+		trustedCore: options.TrustedCore,
 
 		store:              store,
 		coordinator:        coordinator,
@@ -468,9 +460,7 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		if m.installer == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "core installer is unavailable"}
 		}
-		if err := m.preflightResourceActivation(ctx); err != nil {
-			return nil, err
-		}
+
 		channel := m.settingsSnapshot().CoreChannel
 		if channel == "" {
 			channel = "stable"

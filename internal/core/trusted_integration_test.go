@@ -13,10 +13,12 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/subscription"
 
+	"github.com/mihari-proxy/mihari/internal/sysproxy"
 	"github.com/mihari-proxy/mihari/internal/tundetect"
 	"go.yaml.in/yaml/v3"
 
 	"path/filepath"
+	"reflect"
 
 	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/platform"
@@ -24,7 +26,6 @@ import (
 	"github.com/mihari-proxy/mihari/internal/supervisor"
 	"net"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -60,9 +61,12 @@ func (c *seamController) Reload(_ context.Context, _ string, _ bool) error {
 	return nil
 }
 
-type seamFetcher struct{}
+type seamFetcher struct{ content []byte }
 
-func (seamFetcher) Fetch(context.Context, subscription.FetchRequest) (subscription.FetchResult, error) {
+func (f seamFetcher) Fetch(context.Context, subscription.FetchRequest) (subscription.FetchResult, error) {
+	if f.content != nil {
+		return subscription.FetchResult{Content: f.content}, nil
+	}
 	return subscription.FetchResult{Content: []byte("proxies: []\nproxy-groups: []\nrules:\n  - MATCH,DIRECT\n")}, nil
 }
 
@@ -82,9 +86,7 @@ func seamManager(t *testing.T, change func(*runtimeapi.Options)) (*runtimeapi.Ma
 	settings := config.Defaults()
 	settings.ControllerSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	c := &seamController{fixture: f, tun: map[string]any{"enable": false, "stack": "gVisor"}}
-	options := runtimeapi.Options{TrustedCore: f.Trusted, RootConfigInput: func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error) {
-		return core.FixturePolicyInput(), nil
-	}, Subscriptions: service, Settings: settings, RuntimeConfig: filepath.Join(root, "runtime", "config.yaml"), StagingDir: filepath.Join(root, "staging"), Controller: c, Installer: f, TunDetect: seamTunDetect{}, LookupTCPOccupant: func(string) (int, bool) { return 0, false }}
+	options := runtimeapi.Options{TrustedCore: f.Trusted, Subscriptions: service, Settings: settings, RuntimeConfig: filepath.Join(root, "runtime", "config.yaml"), StagingDir: filepath.Join(root, "staging"), Controller: c, Installer: f, TunDetect: seamTunDetect{}, LookupTCPOccupant: func(string) (int, bool) { return 0, false }}
 	if change != nil {
 		change(&options)
 	}
@@ -97,18 +99,15 @@ func assertCode(t *testing.T, e error, code protocol.ErrorCode) {
 		t.Fatalf("error=%v, want %s", e, code)
 	}
 }
-func TestRootManager_TunPolicyFailureCannotFallBackToPatch(t *testing.T) {
-	m, f, c, _ := seamManager(t, func(o *runtimeapi.Options) {
-		o.RootConfigInput = func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error) {
-			input := core.FixturePolicyInput()
-			input.CoreTag = "unsupported-fixture-tag"
-			return input, nil
-		}
-	})
+func TestRootManager_TunValidationFailureCannotFallBackToPatch(t *testing.T) {
+	m, f, c, _ := seamManager(t, nil)
+	f.Execute = func(context.Context, core.CoreCommand) ([]byte, error) {
+		return nil, errors.New("synthetic core validation rejection")
+	}
 	before := f.Content()
 	_, e := m.EnableTun(context.Background(), runtimeapi.Operation{ID: "enable", Source: "test"}, true)
 	if e == nil {
-		t.Fatal("trusted policy refusal masked by successful PATCH")
+		t.Fatal("trusted validation refusal masked by successful PATCH")
 	}
 	status, e2 := m.TunStatus(context.Background())
 	if e2 != nil {
@@ -120,16 +119,16 @@ func TestRootManager_TunPolicyFailureCannotFallBackToPatch(t *testing.T) {
 }
 func TestRootManager_ActivationRejectsStaleGeneration(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
-	var pause atomic.Bool
-	m, f, c, service := seamManager(t, func(o *runtimeapi.Options) {
-		o.RootConfigInput = func(_ context.Context, _ subscription.Document, s config.Settings) (subscription.PolicyInput, error) {
-			if pause.Load() && s.Tun["enable"] != true {
-				close(entered)
-				<-release
-			}
-			return core.FixturePolicyInput(), nil
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	m, f, c, service := seamManager(t, func(o *runtimeapi.Options) { o.SysProxy = &seamSystemProxy{} })
+	f.Execute = func(_ context.Context, c core.CoreCommand) ([]byte, error) {
+		if c.Args[0] == "-t" {
+			close(entered)
+			<-release
 		}
-	})
+		return []byte("Mihomo v1.19.30"), nil
+	}
 	p, e := service.Add("cached", "https://fixture.invalid/sub", subscription.ProxyModeDirect)
 	if e != nil {
 		t.Fatal(e)
@@ -141,25 +140,29 @@ func TestRootManager_ActivationRejectsStaleGeneration(t *testing.T) {
 	if _, e = service.CommitRefresh(prepared); e != nil {
 		t.Fatal(e)
 	}
-	pause.Store(true)
 	done := make(chan error, 1)
+	joined := make(chan struct{})
+	t.Cleanup(func() { unblock(); <-joined })
 	go func() {
+		defer close(joined)
 		_, e := m.UseSubscription(context.Background(), runtimeapi.Operation{ID: "activate", Source: "test"}, p.ID)
 		done <- e
 	}()
 	<-entered
-	if _, e = m.EnableTun(context.Background(), runtimeapi.Operation{ID: "enable", Source: "test"}, true); e != nil {
+	// The executor holds the trusted execution gate. A synthetic system-proxy
+	// mutation advances settings generation without requesting another core run.
+	if _, e = m.EnableSystemProxy(context.Background(), runtimeapi.Operation{ID: "enable", Source: "test"}, true); e != nil {
 		t.Fatal(e)
 	}
 	newer := f.Content()
 	reloads := c.reloads
-	close(release)
+	unblock()
 	assertCode(t, <-done, protocol.CodeRevisionConflict)
-	status, e := m.TunStatus(context.Background())
+	status, e := m.SystemProxyStatus(context.Background())
 	if e != nil {
 		t.Fatal(e)
 	}
-	if !status.DesiredEnable || !bytes.Equal(newer, f.Content()) || c.reloads != reloads {
+	if !status.Desired || !bytes.Equal(newer, f.Content()) || c.reloads != reloads {
 		t.Fatal("stale activation overwrote newer config/settings")
 	}
 }
@@ -485,9 +488,7 @@ func TestRootAssembly_RecoversBeforeAnyExecutor(t *testing.T) {
 		}
 		resourcesRecovered = true
 		return nil
-	}}, RootConfigInput: func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error) {
-		return core.FixturePolicyInput(), nil
-	}})
+	}}})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -496,71 +497,139 @@ func TestRootAssembly_RecoversBeforeAnyExecutor(t *testing.T) {
 	}
 }
 
-func TestRootAssembly_ActiveSubscriptionFailsClosedBeforeCoreValidationWhenOfflineResourcesAreMissing(t *testing.T) {
-	root := t.TempDir()
-	f := core.NewTestTrustedFixture(t, root)
-	paths := platform.NewPaths(root)
-	paths.CoreBinary = filepath.Join(paths.Bin, "mihomo")
-	id := "0123456789abcdef0123456789abcdef"
-	if err := paths.EnsureDirs(); err != nil {
-		t.Fatal(err)
-	}
-	if err := subscription.Save(paths.SubscriptionCatalog, subscription.Catalog{
-		Schema: subscription.CatalogSchema, GlobalInterval: "12h", ActiveID: id,
-		Profiles: []subscription.Profile{{ID: id, Name: "active", URL: "https://example.test/sub", Enabled: true, Generation: 7}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(paths.SubscriptionCache, id+".yaml"), []byte("proxies: []\nrules: ['MATCH,DIRECT']\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	var executions atomic.Int32
-	f.Execute = func(context.Context, core.CoreCommand) ([]byte, error) {
-		executions.Add(1)
-		return []byte("Mihomo v1.19.30"), nil
-	}
-	missing := errors.New("required provider cache is unavailable")
-	resources := startupResourcesProbe{
-		recover: func() error { return nil },
-		snapshot: func(input subscription.PolicyInput) (*subscription.ResourceGraph, error) {
-			if input.SubscriptionID != id || input.Generation != 7 {
-				t.Fatalf("startup identity=(%q,%d)", input.SubscriptionID, input.Generation)
-			}
-			return &subscription.ResourceGraph{}, nil
-		},
-		offline: func(subscription.PolicyInput, *subscription.ResourceGraph) (subscription.PolicyInput, error) {
-			return subscription.PolicyInput{}, missing
-		},
-	}
-	settings := config.Defaults()
-	settings.ControllerSecret = strings.Repeat("a", 64)
-	_, err := app.BuildRuntimeWithOptions(paths, settings, "test", nil, nil, app.RuntimeBuildOptions{
-		TrustedCore: f.Trusted, Resources: resources,
-		RootConfigInput: func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error) {
-			return core.FixturePolicyInput(), nil
-		},
-	})
-	if !errors.Is(err, missing) || executions.Load() != 0 {
-		t.Fatalf("err=%v executions=%d", err, executions.Load())
-	}
-}
-
-type startupResourcesProbe struct {
-	recover  func() error
-	snapshot func(subscription.PolicyInput) (*subscription.ResourceGraph, error)
-	offline  func(subscription.PolicyInput, *subscription.ResourceGraph) (subscription.PolicyInput, error)
-}
+type startupResourcesProbe struct{ recover func() error }
 
 func (p startupResourcesProbe) Recover(context.Context) error { return p.recover() }
-func (p startupResourcesProbe) SnapshotResources(_ context.Context, input subscription.PolicyInput) (*subscription.ResourceGraph, error) {
-	if p.snapshot != nil {
-		return p.snapshot(input)
+
+func TestRootManager_PreservesUnknownSubscriptionFields(t *testing.T) {
+	raw := []byte(`proxies:
+  - name: synthetic
+    type: ss
+    server: example.invalid
+    port: 443
+    cipher: aes-128-gcm
+    password: synthetic-only
+    x-client-metadata:
+      labels: [work, test]
+      nested: {unknown: {enabled: true}}
+mixed-port: 1
+bind-address: 0.0.0.0
+allow-lan: true
+external-controller: 0.0.0.0:1
+secret: untrusted
+external-ui: /untrusted
+external-ui-name: untrusted
+external-ui-url: https://example.invalid/ui
+`)
+	var settings config.Settings
+	var service *subscription.Service
+	m, f, _, _ := seamManager(t, func(o *runtimeapi.Options) {
+		var err error
+		service, err = subscription.Open(subscription.ServiceOptions{CatalogPath: filepath.Join(t.TempDir(), "catalog.yaml"), CacheDir: t.TempDir(), Downloader: seamFetcher{content: raw}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.Subscriptions = service
+		settings = o.Settings
+	})
+	document, err := subscription.ParseDocument(raw)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return nil, errors.New("unexpected resource snapshot")
+	expected, err := subscription.Generate(document, nil, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validations := 0
+	f.Execute = func(_ context.Context, c core.CoreCommand) ([]byte, error) {
+		if c.Args[0] == "-t" {
+			validations++
+			if !bytes.Equal(f.CommandConfig(c), expected) {
+				t.Error("executor received different generated configuration")
+			}
+		}
+		return []byte("Mihomo v1.19.30"), nil
+	}
+	p, err := service.Add("synthetic", "https://example.invalid/sub", subscription.ProxyModeDirect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.RefreshSubscription(context.Background(), runtimeapi.Operation{ID: "refresh", Source: "test"}, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.UseSubscription(context.Background(), runtimeapi.Operation{ID: "use", Source: "test"}, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.RefreshSubscription(context.Background(), runtimeapi.Operation{ID: "refresh-active", Source: "test"}, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := subscription.ParseDocument(f.Content())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(actual["proxies"], document["proxies"]) {
+		t.Fatal("unknown nested proxy fields changed")
+	}
+	if actual["allow-lan"] != false || actual["bind-address"] != "127.0.0.1" || actual["external-controller"] != settings.ControllerAddr || actual["secret"] != settings.ControllerSecret {
+		t.Fatal("managed fields escaped generation")
+	}
+	for _, key := range []string{"external-ui", "external-ui-name", "external-ui-url"} {
+		if _, ok := actual[key]; ok {
+			t.Fatal("managed UI key retained")
+		}
+	}
+	if validations != 3 || !bytes.Equal(f.Content(), expected) {
+		t.Fatal("root runtime did not validate and publish Generate output")
+	}
+	cached, _, err := service.ReadCache(p.ID)
+	if err != nil || !bytes.Equal(cached, raw) {
+		t.Fatal("raw subscription cache changed")
+	}
 }
-func (p startupResourcesProbe) OfflineInput(_ context.Context, input subscription.PolicyInput, graph *subscription.ResourceGraph) (subscription.PolicyInput, error) {
-	if p.offline != nil {
-		return p.offline(input, graph)
+
+type seamSystemProxy struct{ state sysproxy.State }
+
+func (s *seamSystemProxy) Get() (sysproxy.State, error) { return s.state, nil }
+func (s *seamSystemProxy) Enable(host string, port int) error {
+	s.state = sysproxy.State{Enabled: true, Server: sysproxy.NormalizeServer(host, port)}
+	return nil
+}
+func (s *seamSystemProxy) Disable() error { s.state = sysproxy.State{}; return nil }
+
+func TestRootManager_TunPreparationDoesNotHoldMutationAndRejectsStaleSettings(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	m, f, c, _ := seamManager(t, func(o *runtimeapi.Options) { o.SysProxy = &seamSystemProxy{} })
+	f.Execute = func(_ context.Context, c core.CoreCommand) ([]byte, error) {
+		if c.Args[0] == "-t" {
+			close(entered)
+			<-release
+		}
+		return []byte("Mihomo v1.19.30"), nil
 	}
-	return subscription.PolicyInput{}, errors.New("unexpected offline input")
+	before := f.Content()
+	done := make(chan error, 1)
+	joined := make(chan struct{})
+	t.Cleanup(func() { unblock(); <-joined })
+	go func() {
+		defer close(joined)
+		_, err := m.EnableTun(context.Background(), runtimeapi.Operation{ID: "tun-prepare", Source: "test"}, true)
+		done <- err
+	}()
+	<-entered
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := m.EnableSystemProxy(ctx, runtimeapi.Operation{ID: "concurrent-setting", Source: "test"}, true); err != nil {
+		t.Fatalf("TUN validation blocked independent settings mutation: %v", err)
+	}
+	unblock()
+	assertCode(t, <-done, protocol.CodeRevisionConflict)
+	status, err := m.TunStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.DesiredEnable || !bytes.Equal(f.Content(), before) || c.reloads != 0 || c.patches != 0 {
+		t.Fatal("stale TUN published settings or configuration")
+	}
 }

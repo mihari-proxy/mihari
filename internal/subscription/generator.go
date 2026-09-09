@@ -1,27 +1,12 @@
 package subscription
 
 import (
-	"context"
 	"net/netip"
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"go.yaml.in/yaml/v3"
 )
-
-// PolicyBuilder validates raw candidate bytes and prepares managed resources.
-type PolicyBuilder interface {
-	Build(context.Context, PolicyInput) (PolicyOutput, error)
-}
-
-// GenerateWithPolicy is the opt-in root generation boundary. Legacy Generate
-// remains the default until system-mode wiring is installed separately.
-func GenerateWithPolicy(ctx context.Context, input PolicyInput, builder PolicyBuilder) (PolicyOutput, error) {
-	if builder == nil {
-		return PolicyOutput{}, PolicyError{Field: "policy", Code: protocol.CodeInvalidState}
-	}
-	return builder.Build(ctx, input)
-}
 
 func Generate(base Document, overrides map[string]any, settings config.Settings) ([]byte, error) {
 	if err := settings.Validate(); err != nil {
@@ -50,13 +35,20 @@ func Generate(base Document, overrides map[string]any, settings config.Settings)
 	delete(document, "external-ui")
 	delete(document, "external-ui-name")
 	delete(document, "external-ui-url")
-	// Managed TUN wins over subscription base and caller overrides when set.
-	if len(settings.Tun) > 0 {
-		tun, err := cloneDocument(Document(settings.Tun))
-		if err != nil {
-			return nil, err
+	// Managed TUN owns only enable. All other fields continue to come from the
+	// effective subscription document, including caller overrides.
+	if enable, managed := settings.Tun["enable"].(bool); managed {
+		var tun map[string]any
+		if raw, exists := document["tun"]; exists {
+			content, err := yaml.Marshal(raw)
+			if err != nil || yaml.Unmarshal(content, &tun) != nil || tun == nil {
+				return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "tun must be a mapping"}
+			}
+		} else {
+			tun = make(map[string]any)
 		}
-		document["tun"] = map[string]any(tun)
+		tun["enable"] = enable
+		document["tun"] = tun
 	}
 	content, err := yaml.Marshal(document)
 	if err != nil {

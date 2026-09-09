@@ -9,7 +9,7 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 - CLI、TUI 和浏览器面板通过本地命名管道 / Unix 域套接字连接同一守护进程控制面。
 - 控制 API 从不绑定 TCP 端口。
 - 控制面经过认证:Unix 系统令牌位于 B/control.token，Windows/显式私有 P 保留单根 control.token。
-- 守护进程可以安装、校验、托管、查询并重启 mihomo,同时将控制器保持在内环回。
+- 守护进程可以安装、校验、托管、查询并重启 mihomo,同时将 Mihari 托管的 TCP 控制器保持在 loopback。
 - 守护进程还负责订阅持久化、有界的自动刷新、校验过的配置生成、重载回滚与离线配置切换。
 - 控制面新增只读端点 `GET /v1/service/status`,返回 mihari 自身的 OS 服务注册状态(`running`/`stopped`/`not_installed`/`unknown`);`GET /v1/core` 增加可选 `localReady`/`localVersion` 字段反映本地 core 就绪。两者均为向后兼容增量,不改变现有协议字段、onboarding `Complete` 契约或持久化格式。
 - `/v1` 的 `CoreStatus`、`CoreInstallResult` 增加可选 `channel`;`MutationRequest` 增加可选 `channel` 以显式指定本次安装通道。均为向后兼容增量。
@@ -73,7 +73,7 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 - `sysproxy enable` 将桌面 HTTP/HTTPS/SOCKS 系统代理指向 Mihari 的混合端点。如果另一产品已持有代理,enable 会以 `system_proxy_conflict` 失败,除非传入 `--force`(TUI 会要求确认)。
 - `sysproxy disable` 只清除**由 Mihari 持有**的代理;它不会关闭外部代理。
 - 在 Windows 上,当 Mihari 作为 LocalSystem 服务运行时,它写入**交互式控制台用户**的 WinINET 配置单元(`HKEY_USERS\<SID>\…`),而不是 SYSTEM 自己的 `HKCU`,因此桌面浏览器能感知到变更。
-- `tun enable|disable` 持久化托管 TUN 块、将其注入生成的 mihomo 配置,并在可用时通过控制器实时生效。TUN 根据 OS 不同可能需要提权或安装服务。
+- `tun enable|disable` 仅持久化并覆盖 `tun.enable`，保留订阅中的其他 TUN 参数，不自动注入 stack，并在可用时通过控制器实时生效。TUN 根据 OS 不同可能需要提权或安装服务。
 - `tun enable` 前检测其他 TUN 网卡与其他 mihomo 进程,并按本实例内核 PID 与 live `tun.device` 扣除自身;Down 状态的残留适配器忽略。冲突时以 `tun_conflict` 失败,除非传入 `--force`(TUI 会要求确认)。`--force` 只绕过冲突门控,不绕过 live 核对:内核未真正开启则回滚 Desired。
 
 ## GeoIP
@@ -89,7 +89,7 @@ Unix 默认入口 B 为 Linux `/var/lib/mihari` 或 macOS `/Library/Application 
 
 业务写入归 daemon/Manager；窄例外为 root installer 的持锁停机迁移/安装事务，以及 app 对固定 channel sidecar 的受锁原子维护。安装锁顺序 B→私有服务 P→data→endpoint，永久锁不 unlink。activation 之前恢复 source，之后只修复 target；旧树和日志保留，未知身份拒绝覆盖。已安装服务启动先校验全局 B 的 matching activation 与 binary hash，取得 data/E 后再校验，不重入 installer 持有的 install lease。未标记 root P 前台只看 P。root P channel 写入持 P 锁时只读相关 B journal，相关未完成事务拒绝；非 root P 不读 B。
 
-root runtime 同时接入 typed RootConfigPolicy、可信核心 provenance 与 Manager provider 生命周期，初始允许 v1.19.30 的四个 Unix hash，拒绝未知字段/核心/MRS。验证子进程只做认证和只读校验，不启动真实业务、后台刷新或核心。可信 I 及全部祖先必须满足 owner/ACL/挂载规则，不能自动修复主机祖先；离线信任位置为解析后的 I/install-trust。无服务 self-update 使用编译通道且不访问 B；服务更新走统一安装事务。
+所有平台由共同的 subscription.Generate 保留非托管配置，仅覆盖 Mihari 管理的关键参数，TUN 只覆盖 enable；配置语义与原生 provider 由 mihomo 处理。root runtime 保留可信核心 provenance，仍只允许 v1.19.30 的四个 Unix hash；不再按完整字段白名单拒绝配置，也不保证限制所有额外 listener 或文件访问。旧 provider/resource WAL 先恢复，再从原订阅缓存生成；缺失原缓存时保留旧数据并报错，历史资源不主动清理。验证子进程先恢复历史事务，再执行认证和校验，不启动真实业务、后台刷新或核心。可信 I 及全部祖先必须满足 owner/ACL/挂载规则，不能自动修复主机祖先；离线信任位置为解析后的 I/install-trust。无服务 self-update 使用编译通道且不访问 B；服务更新走统一安装事务。
 
 日志/export 持有真实目录 identity，逐来源 Finish 与完整 EOF 校验后才发布；工作、快照、流、进程、日志与 FS 全部关闭并 join 后才释放 daemon lease。SIGTERM 参与同一清理路径。完整路径、权限、迁移、credential 轮换与恢复合同见 [Unix 布局与恢复](unix-layout.md)。
 
