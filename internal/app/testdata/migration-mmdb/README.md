@@ -9,4 +9,4 @@ Source is [MaxMind-DB commit 40d0b4ff0ffdad191e83bd8045b780dd052650e0](https://g
 | country.mmdb | GeoIP2-Country-Test.mmdb | 19492 | b37601903448683d241af52893c8cbf0fed461e0cdebe0bfaca01891fdeb6db9 |
 | asn.mmdb | GeoLite2-ASN-Test.mmdb | 12653 | 75901b98ed6e58d3bd41af9985044b747a7ec0be1369f930c24f5e044427181a |
 
-The policy tests validate the complete MMDB structure with `OpenBytes` and `Verify`, check the actual typed country/ASN records, and verify output bytes/digest ownership. A Country database cannot stand in for ASN or vice versa. No test fetches these files from the network.
+Migration tests use these synthetic country/ASN artifacts to verify type validation and preservation. No test fetches them from the network.

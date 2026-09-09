@@ -7,6 +7,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/onboarding"
 	"github.com/mihari-proxy/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/subscription"
 )
 
 func (m *Manager) OnboardingStatus(ctx context.Context) (onboarding.Snapshot, error) {
@@ -24,25 +25,43 @@ func (m *Manager) OnboardingStatus(ctx context.Context) (onboarding.Snapshot, er
 }
 
 func (m *Manager) UpdateOnboarding(ctx context.Context, operation Operation, update onboarding.Update) (onboarding.Snapshot, error) {
-	if m.providerResources != nil {
-		return m.updateOnboardingManaged(ctx, operation, update)
-	}
+
 	result, err := m.doOperation(ctx, "onboarding:"+operation.ID, func() (any, error) {
 		if m.onboarding == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "onboarding service is unavailable"}
 		}
-		if err := m.lockMutation(ctx); err != nil {
-			return nil, err
-		}
-		defer m.unlock()
-
-		meta := state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}
-		if err := m.checkIfRevision(meta.IfRevision); err != nil {
+		if err := m.checkIfRevision(operation.IfRevision); err != nil {
 			return nil, err
 		}
 		candidate, err := m.prepareSettings(applyEndpointUpdate(update))
 		if err != nil {
 			return nil, err
+		}
+		var catalog subscription.Catalog
+		if m.trustedCore != nil {
+			if m.subscriptions == nil {
+				return nil, subscriptionsUnavailable()
+			}
+			catalog = m.subscriptions.Snapshot()
+			generated, err := m.prepareCatalogConfigWithSettings(ctx, catalog, candidate.after, candidate.generation)
+			if err != nil {
+				return nil, err
+			}
+			defer generated.cleanup()
+			// The controller and health clients retain startup endpoints.
+			// Validate now; daemon restart regenerates and publishes using
+			// persisted settings before constructing those clients.
+		}
+		if err := m.lockMutation(ctx); err != nil {
+			return nil, err
+		}
+		defer m.unlock()
+		meta := state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}
+		if err := m.checkIfRevision(meta.IfRevision); err != nil {
+			return nil, err
+		}
+		if candidate.generation != m.currentConfigGeneration() || m.trustedCore != nil && !sameActiveSubscription(catalog, m.subscriptions.Snapshot()) {
+			return nil, protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "configuration inputs changed during onboarding preparation"}
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -84,83 +103,6 @@ func (m *Manager) UpdateOnboarding(ctx context.Context, operation Operation, upd
 		return onboarding.Snapshot{
 			Status:   m.composeOnboardingStatus(updatedState),
 			Revision: committed.Revision,
-		}, nil
-	})
-	if err != nil {
-		return onboarding.Snapshot{}, err
-	}
-	return result.(onboarding.Snapshot), nil
-}
-
-type onboardingResourceChange struct {
-	manager       *Manager
-	candidate     settingsCandidate
-	update        onboarding.Update
-	beforeState   onboarding.State
-	beforeRestart bool
-	applied       bool
-	durable       *onboarding.PreparedUpdate
-}
-
-func (c *onboardingResourceChange) ApplyLocked() error {
-	if _, err := c.manager.saveSettingsCandidate(c.candidate); err != nil {
-		return err
-	}
-	c.manager.publishSettings(c.candidate)
-	if _, err := c.manager.onboarding.Update(c.update.Complete); err != nil {
-		if _, restoreErr := c.manager.restoreSettings(c.candidate.before); restoreErr != nil {
-			return resourceActivationDegraded()
-		}
-		return mapPersistError(err)
-	}
-	c.manager.onboardingRestartRequired = c.beforeRestart || c.candidate.changed
-	c.applied = true
-	return nil
-}
-
-func (c *onboardingResourceChange) RestoreLocked() error {
-	if !c.applied {
-		return nil
-	}
-	complete := c.beforeState.Complete
-	if _, err := c.manager.onboarding.Update(&complete); err != nil {
-		return err
-	}
-	if _, err := c.manager.restoreSettings(c.candidate.before); err != nil {
-		return err
-	}
-	c.manager.onboardingRestartRequired = c.beforeRestart
-	c.applied = false
-	return nil
-}
-
-func (*onboardingResourceChange) UpdateSnapshot(*state.Snapshot) {}
-
-func (m *Manager) updateOnboardingManaged(ctx context.Context, operation Operation, update onboarding.Update) (onboarding.Snapshot, error) {
-	result, err := m.doOperation(ctx, "onboarding:"+operation.ID, func() (any, error) {
-		if m.onboarding == nil {
-			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "onboarding service is unavailable"}
-		}
-		candidate, err := m.prepareSettings(applyEndpointUpdate(update))
-		if err != nil {
-			return nil, err
-		}
-		plan, _, err := m.prepareManagedCurrent(ctx, candidate.after)
-		if err != nil {
-			return nil, err
-		}
-		defer func() { _ = plan.Close(context.WithoutCancel(ctx)) }()
-		change := &onboardingResourceChange{
-			manager: m, candidate: candidate, update: update,
-			beforeState: m.onboarding.State(), beforeRestart: m.onboardingRestartRequired,
-		}
-		if err = m.activateManagedPlan(ctx, operation, candidate.generation, plan, change); err != nil {
-			m.markConfigDegraded(ctx, err)
-			return nil, err
-		}
-		return onboarding.Snapshot{
-			Status:   m.composeOnboardingStatus(m.onboarding.State()),
-			Revision: m.store.Load().Revision,
 		}, nil
 	})
 	if err != nil {

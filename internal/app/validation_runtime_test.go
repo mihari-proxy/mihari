@@ -23,7 +23,7 @@ func TestInstallValidation_AssemblyRejectsCorruptCatalog(t *testing.T) {
 	}
 }
 
-func TestInstallValidation_AssemblyRejectsRootPolicy(t *testing.T) {
+func TestInstallValidation_AssemblyPreservesNativeExtensions(t *testing.T) {
 	paths := platform.NewPaths(t.TempDir())
 	id := "11111111111111111111111111111111"
 	if err := os.MkdirAll(paths.SubscriptionCache, 0700); err != nil {
@@ -35,17 +35,16 @@ func TestInstallValidation_AssemblyRejectsRootPolicy(t *testing.T) {
 	if err := subscription.Save(paths.SubscriptionCatalog, catalog); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(paths.SubscriptionCache, id+".yaml"), []byte("proxies: []\nproxy-groups: []\nrules: [MATCH,DIRECT]\nunknown-field: true\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(paths.SubscriptionCache, id+".yaml"), []byte("proxies: []\nproxy-groups: []\nrules: ['MATCH,DIRECT']\nunknown-field: {nested: [native, extension]}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	called := false
-	_, err := BuildRuntimeWithOptions(paths, config.Defaults(), "test", nil, nil, RuntimeBuildOptions{ValidationMode: true, RootConfigInput: func(context.Context, subscription.Document, config.Settings) (subscription.PolicyInput, error) {
-		called = true
-		return subscription.PolicyInput{CoreTag: "v1.19.30", OS: "linux", Arch: "amd64"}, nil
-	}})
-	if err == nil || !called {
-		t.Fatalf("root policy bypassed: err=%v called=%v", err, called)
+	settings := config.Defaults()
+	settings.ControllerSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	_, err := BuildRuntimeWithOptions(paths, settings, "test", nil, nil, RuntimeBuildOptions{ValidationMode: true})
+	if err != nil {
+		t.Fatalf("native extensions rejected: %v", err)
 	}
+
 }
 
 func TestInstallValidation_SetupRequiredReadOnly(t *testing.T) {
@@ -72,5 +71,66 @@ func TestInstallValidation_AssemblyCancellationBeforeIO(t *testing.T) {
 	_, err := BuildValidationRuntime(ctx, platform.NewPaths(t.TempDir()), config.Defaults(), "test", RuntimeBuildOptions{})
 	if err != context.Canceled {
 		t.Fatalf("canceled validation kept reading objects: %v", err)
+	}
+}
+
+type validationRecoveryProbe struct {
+	recover func() (*config.Settings, error)
+}
+
+func (p validationRecoveryProbe) Recover(context.Context) error { _, err := p.recover(); return err }
+func (p validationRecoveryProbe) RecoverState(context.Context) (*config.Settings, error) {
+	return p.recover()
+}
+
+func TestInstallValidation_RecoveryPrecedesStoresAndPropagatesSettings(t *testing.T) {
+	paths := platform.NewPaths(t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(paths.SubscriptionCatalog), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.SubscriptionCatalog, []byte("interrupted: ["), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.Onboarding, []byte("interrupted"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	settings := config.Defaults()
+	settings.ControllerSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	settings.MixedAddr = "127.0.0.1:19238"
+	settings.Tun = map[string]any{"enable": true}
+	probe := validationRecoveryProbe{recover: func() (*config.Settings, error) {
+		if err := subscription.Save(paths.SubscriptionCatalog, subscription.Defaults()); err != nil {
+			return nil, err
+		}
+		if err := os.Remove(paths.Onboarding); err != nil {
+			return nil, err
+		}
+		return &settings, nil
+	}}
+	assembly, err := BuildValidationRuntime(context.Background(), paths, config.Defaults(), "test", RuntimeBuildOptions{Resources: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := assembly.Manager.TunStatus(context.Background())
+	if err != nil || !actual.DesiredEnable {
+		t.Fatal("validation assembly used pre-recovery settings", err)
+	}
+	if !assembly.SetupRequired {
+		t.Fatal("recovered missing onboarding should require setup")
+	}
+}
+func TestInstallValidation_ActiveMissingCacheFails(t *testing.T) {
+	paths := platform.NewPaths(t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(paths.SubscriptionCatalog), 0700); err != nil {
+		t.Fatal(err)
+	}
+	catalog := subscription.Defaults()
+	catalog.ActiveID = "11111111111111111111111111111111"
+	catalog.Profiles = []subscription.Profile{{ID: catalog.ActiveID, Name: "missing-cache", URL: "https://example.invalid/sub", Enabled: true, Generation: 1}}
+	if err := subscription.Save(paths.SubscriptionCatalog, catalog); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BuildValidationRuntime(context.Background(), paths, config.Defaults(), "test", RuntimeBuildOptions{}); err == nil {
+		t.Fatal("active uncached profile accepted")
 	}
 }

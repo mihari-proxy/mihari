@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/mihari-proxy/mihari/internal/subscription"
 	"io"
 	"net/http"
 	"os"
@@ -245,7 +244,7 @@ func seedInstalledReceipt(t *testing.T, s *memoryStore, binary string) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	r := ProvenanceReceipt{Schema: provenanceSchema, PolicyID: subscription.RootPolicyID, AssetSHA256: a.AssetSHA256, BinarySHA256: digest([]byte(binary)), OS: a.OS, Arch: a.Arch, Tag: a.Tag}
+	r := ProvenanceReceipt{Schema: provenanceSchema, PolicyID: "mihari.root-config/v1/mihomo-v1.19.30", AssetSHA256: a.AssetSHA256, BinarySHA256: digest([]byte(binary)), OS: a.OS, Arch: a.Arch, Tag: a.Tag}
 	rb, e := json.Marshal(r)
 	if e != nil {
 		t.Fatal(e)
@@ -257,7 +256,7 @@ func seedInstalledReceipt(t *testing.T, s *memoryStore, binary string) {
 	}
 }
 func TestInstalledProvenance_RejectsBeforeExecution(t *testing.T) {
-	for _, name := range []string{"missing-receipt", "binary-hash-mismatch", "unknown-tag", "alpha-no-entry", "asset-hash-mismatch", "user-owned-receipt"} {
+	for _, name := range []string{"missing-receipt", "binary-hash-mismatch", "unknown-tag", "alpha-no-entry", "asset-hash-mismatch", "legacy-policy-mismatch", "user-owned-receipt"} {
 		t.Run(name, func(t *testing.T) {
 			s := newMemoryStore()
 			seedInstalledReceipt(t, s, "trusted binary")
@@ -275,6 +274,8 @@ func TestInstalledProvenance_RejectsBeforeExecution(t *testing.T) {
 				r.Tag = "v1.99.0"
 			case "alpha-no-entry":
 				r.Tag = "alpha-deadbeef"
+			case "legacy-policy-mismatch":
+				r.PolicyID = "mihari.root-config/v1/wrong"
 			case "asset-hash-mismatch":
 				r.AssetSHA256 = strings.Repeat("0", 64)
 			case "user-owned-receipt":

@@ -7,9 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
-	"net/url"
 	"os"
-	"runtime"
 
 	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/buildinfo"
@@ -135,7 +133,7 @@ func runUnixDaemonWithGate(ctx context.Context, layout platform.ResolvedLayout, 
 		if err != nil {
 			return err
 		}
-		if err = subscription.NewResourcePreparer(providers, nil, nil).Recover(ctx); err != nil {
+		if err = providers.Recover(ctx); err != nil {
 			return err
 		}
 		provenance, err := core.NewProvenanceStore(ctx, data)
@@ -161,11 +159,8 @@ func runUnixDaemonWithGate(ctx context.Context, layout platform.ResolvedLayout, 
 			if err != nil {
 				return app.RuntimeBuildOptions{}, err
 			}
-			proxy := &url.URL{Scheme: "http", Host: settings.MixedAddr}
-			downloader := subscription.NewDownloader(subscription.DownloaderOptions{ProxyURL: proxy})
-			return app.RuntimeBuildOptions{TrustedCore: trusted, Resources: subscription.NewResourcePreparer(providers, downloader, downloader), RootConfigInput: func(_ context.Context, _ subscription.Document, settings config.Settings) (subscription.PolicyInput, error) {
-				return subscription.PolicyInput{CoreTag: "v1.19.30", OS: runtime.GOOS, Arch: runtime.GOARCH, Settings: settings}, nil
-			}}, nil
+
+			return app.RuntimeBuildOptions{TrustedCore: trusted, Resources: providers}, nil
 		}
 	}
 	return runDaemonWith(ctx, deps)

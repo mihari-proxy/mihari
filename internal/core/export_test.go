@@ -38,9 +38,6 @@ func NewTestTrustedFixture(t *testing.T, root string) *TestTrustedFixture {
 	}
 	return f
 }
-func FixturePolicyInput() subscription.PolicyInput {
-	return subscription.PolicyInput{SubscriptionID: testTransaction, Generation: 1, CoreTag: "v1.19.30", OS: "linux", Arch: "amd64"}
-}
 func (f *TestTrustedFixture) ExecuteCommand(ctx context.Context, c CoreCommand) ([]byte, error) {
 	if f.Execute != nil {
 		return f.Execute(ctx, c)

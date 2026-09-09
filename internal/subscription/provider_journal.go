@@ -54,141 +54,7 @@ func (s *ProviderStore) acquire(ctx context.Context) (func(), error) {
 	}
 }
 
-// PreparedProvider binds validated bytes to the exact previous resource object.
-type PreparedProvider struct {
-	store          *ProviderStore
-	spec           ProviderSpec
-	transaction    string
-	old, candidate providerObject
-	marker         providerObject
-	closed         bool
-	geo            GeoResourceKind
-	configuration  bool
-	stateRole      resourceStateRole
-	required       map[string]resourceSource
-}
-
 func providerDigest(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
-
-// Commit replaces one local resource and compensates a failed core reload.
-func (p *PreparedProvider) Commit(ctx context.Context, reload func(context.Context) error) error {
-	if p == nil || p.store == nil || reload == nil {
-		return dataError("provider transaction unavailable")
-	}
-	target, err := providerTarget(p.spec)
-	if err != nil {
-		return err
-	}
-	fs := p.store.files
-	release, err := p.store.acquire(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-	if p.closed {
-		return dataError("provider candidate closed")
-	}
-	if err := p.store.noPending(ctx); err != nil {
-		return err
-	}
-	if pending, e := fs.inspect(ctx, providerJournalPath); e != nil {
-		return e
-	} else if pending.Present {
-		return dataError("provider recovery required")
-	}
-	actual, err := fs.inspect(ctx, target)
-	if err != nil {
-		return err
-	}
-	if actual != p.old {
-		return providerConflict()
-	}
-	candidatePath := "staging/providers/" + p.transaction + "/candidate"
-	actual, err = fs.inspect(ctx, candidatePath)
-	if err != nil {
-		return err
-	}
-	if actual != p.candidate {
-		return providerConflict()
-	}
-	marker, err := fs.inspect(ctx, "staging/providers/"+p.transaction+"/transaction-id")
-	if err != nil {
-		return err
-	}
-	if marker != p.marker {
-		return providerConflict()
-	}
-	if err = p.checkRequiredLocked(ctx); err != nil {
-		return err
-	}
-	backupPath := target + ".old-" + p.transaction
-	failPreparation := func(cause error) error {
-		// No target move has been attempted. Resolve ambiguous backup/journal
-		// writes now so a transient error does not require a daemon restart.
-		if e := p.store.recover(context.WithoutCancel(ctx)); e != nil {
-			return providerDegraded()
-		}
-		return cause
-	}
-	j := providerJournal{Schema: "mihari.provider-commit/v1", ID: p.transaction, Resource: p.spec.ResourceID, Format: p.spec.Format, Old: p.old, New: p.candidate, Phase: "prepared", Marker: p.marker, SubscriptionID: p.spec.SubscriptionID, Generation: p.spec.Generation, Kind: p.spec.Kind, Name: p.spec.Name}
-	if err = p.store.saveJournal(ctx, j); err != nil {
-		return failPreparation(err)
-	}
-	var backup providerObject
-	if p.old.Present {
-		b, e := fs.read(ctx, target, 16<<20)
-		if e != nil {
-			return failPreparation(e)
-		}
-		if providerDigest(b) != p.old.SHA256 {
-			return failPreparation(providerConflict())
-		}
-		if e = fs.write(ctx, backupPath, b, providerObject{}); e != nil {
-			return failPreparation(e)
-		}
-		backup, e = fs.inspect(ctx, backupPath)
-		if e != nil {
-			return failPreparation(e)
-		}
-	}
-	j.Backup = backup
-	j.Phase = "intent"
-	if err = p.store.saveJournal(ctx, j); err != nil {
-		return failPreparation(err)
-	}
-	recoveryCtx := context.WithoutCancel(ctx)
-	if err = fs.move(ctx, candidatePath, p.candidate, target, p.old); err == nil {
-		err = reload(ctx)
-	}
-	if err == nil {
-		var current providerObject
-		current, err = fs.inspect(ctx, target)
-		if err == nil && current != p.candidate {
-			err = providerConflict()
-		}
-	}
-	if err != nil {
-		if recoverErr := p.store.recover(recoveryCtx); recoverErr != nil {
-			return providerDegraded()
-		}
-		if reloadErr := reload(recoveryCtx); reloadErr != nil {
-			return providerDegraded()
-		}
-		return protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "provider update failed; previous resource restored"}
-	}
-	j.Phase = "done"
-	if err = p.store.saveJournal(recoveryCtx, j); err != nil {
-		return providerDegraded()
-	}
-	err = p.store.recover(recoveryCtx)
-	if err == nil {
-		err = p.store.cleanupTransaction(recoveryCtx, p.transaction)
-	}
-	if err == nil {
-		p.closed = true
-	}
-	return err
-}
 
 const providerJournalPath = "staging/providers/commit.json"
 
@@ -210,7 +76,7 @@ type providerJournal struct {
 	RecoveryDone   bool           `json:"recovery_done"`
 }
 
-func providerTarget(spec ProviderSpec) (string, error) {
+func providerTarget(spec legacyProviderIdentity) (string, error) {
 	id, err := ProviderResourceID(spec.SubscriptionID, spec.Generation, spec.Kind, spec.Name)
 	if err != nil || id != spec.ResourceID {
 		return "", dataError("provider identity mismatch")
@@ -235,9 +101,6 @@ func providerResourcePath(id, format string) (string, error) {
 func providerConflict() error {
 	return protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "provider changed during preparation"}
 }
-func providerDegraded() error {
-	return protocol.APIError{Code: protocol.CodeDataFailure, Message: "provider recovery could not be confirmed", Details: map[string]any{"degraded": true}}
-}
 
 func (s *ProviderStore) saveJournal(ctx context.Context, j providerJournal) error {
 	b, err := json.Marshal(j)
@@ -249,165 +112,6 @@ func (s *ProviderStore) saveJournal(ctx context.Context, j providerJournal) erro
 		return err
 	}
 	return s.files.write(ctx, providerJournalPath, b, old)
-}
-
-// Prepare stages policy-generated bytes privately, retaining the prior identity.
-func (s *ProviderStore) Prepare(ctx context.Context, spec ProviderSpec) (*PreparedProvider, error) {
-	if s == nil || s.files == nil {
-		return nil, dataError("provider store unavailable")
-	}
-	target, err := providerTarget(spec)
-	if err != nil {
-		return nil, err
-	}
-	if len(spec.Inline) == 0 || len(spec.Inline) > 16<<20 {
-		return nil, dataError("invalid provider content size")
-	}
-	return s.prepareBytes(ctx, spec, "", target, spec.Inline)
-}
-
-func (s *ProviderStore) prepareGeo(ctx context.Context, geo GeoResourceSpec) (*PreparedProvider, error) {
-	name, err := GeoResourcePath(geo.Kind)
-	if err != nil {
-		return nil, err
-	}
-	if len(geo.Bytes) == 0 || len(geo.Bytes) > maxGeoResourceBytes || providerDigest(geo.Bytes) != geo.SHA256 {
-		return nil, dataError("invalid Geo candidate")
-	}
-	return s.prepareBytes(ctx, ProviderSpec{}, geo.Kind, "runtime/core-home/"+name, geo.Bytes)
-}
-
-func (s *ProviderStore) prepareBytes(ctx context.Context, spec ProviderSpec, geo GeoResourceKind, target string, b []byte) (prepared *PreparedProvider, err error) {
-	old, err := s.files.inspect(ctx, target)
-	if err != nil {
-		return nil, err
-	}
-	tx, err := newProfileID()
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err != nil {
-			err = errors.Join(err, s.cleanupTransaction(context.WithoutCancel(ctx), tx))
-		}
-	}()
-	path := "staging/providers/" + tx + "/candidate"
-	markerPath := "staging/providers/" + tx + "/transaction-id"
-	if err = s.files.write(ctx, markerPath, []byte(tx), providerObject{}); err != nil {
-		return nil, err
-	}
-	marker, err := s.files.inspect(ctx, markerPath)
-	if err != nil {
-		return nil, err
-	}
-	if err = s.files.write(ctx, path, b, providerObject{}); err != nil {
-		return nil, err
-	}
-	next, err := s.files.inspect(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-	if !next.Present || next.SHA256 != providerDigest(b) {
-		return nil, dataError("staged provider content changed")
-	}
-	spec.Inline = nil // authority is the privately staged object, never a caller slice.
-	return &PreparedProvider{store: s, spec: spec, transaction: tx, old: old, candidate: next, marker: marker, geo: geo}, nil
-}
-
-func (p *PreparedProvider) targetPath() (string, error) {
-	if p.stateRole != "" {
-		return stateTarget(p.stateRole, p.spec.SubscriptionID)
-	}
-	if p.configuration {
-		return "runtime/config.yaml", nil
-	}
-	if p.geo != "" {
-		name, err := GeoResourcePath(p.geo)
-		return "runtime/core-home/" + name, err
-	}
-	return providerTarget(p.spec)
-}
-func (p *PreparedProvider) recheck(ctx context.Context) error {
-	if p == nil || p.store == nil {
-		return dataError("resource candidate unavailable")
-	}
-	release, err := p.store.acquire(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-	if p.closed {
-		return dataError("resource candidate unavailable")
-	}
-	target, err := p.targetPath()
-	if err != nil {
-		return err
-	}
-	for path, want := range map[string]providerObject{target: p.old, "staging/providers/" + p.transaction + "/candidate": p.candidate, "staging/providers/" + p.transaction + "/transaction-id": p.marker} {
-		got, err := p.store.files.inspect(ctx, path)
-		if err != nil {
-			return err
-		}
-		if got != want {
-			return providerConflict()
-		}
-	}
-	return p.checkRequiredLocked(ctx)
-}
-
-func (p *PreparedProvider) checkRequiredLocked(ctx context.Context) error {
-	for path, source := range p.required {
-		got, err := p.store.files.inspect(ctx, path)
-		if err != nil {
-			return err
-		}
-		if got != source.object {
-			return providerConflict()
-		}
-	}
-	return nil
-}
-
-// Close releases private unpublished files, preserving any pending WAL authority.
-func (p *PreparedProvider) Close(ctx context.Context) error {
-	if p == nil || p.store == nil {
-		return nil
-	}
-	release, err := p.store.acquire(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-	if p.closed {
-		return nil
-	}
-	if err := p.store.noPending(ctx); err != nil {
-		return err
-	}
-	journal, err := p.store.files.inspect(ctx, providerJournalPath)
-	if err != nil {
-		return err
-	}
-	if journal.Present {
-		return dataError("provider recovery required before cleanup")
-	}
-	for path, want := range map[string]providerObject{"staging/providers/" + p.transaction + "/candidate": p.candidate, "staging/providers/" + p.transaction + "/transaction-id": p.marker} {
-		got, e := p.store.files.inspect(ctx, path)
-		if e != nil {
-			return e
-		}
-		if !got.Present {
-			continue
-		}
-		if got != want {
-			return providerConflict()
-		}
-		if e = p.store.files.remove(ctx, path, got); e != nil {
-			return e
-		}
-	}
-	p.closed = true
-	return p.store.files.removeTransaction(ctx, p.transaction)
 }
 
 // Recover restores unfinished replacements before workers, core recovery or execution.
@@ -447,7 +151,7 @@ func (s *ProviderStore) cleanupTransaction(ctx context.Context, tx string) error
 	}
 	if !marker.Present {
 		return s.files.removeTransaction(ctx, tx)
-	} // An empty pre-marker directory grants no file authority.
+	}
 	if !validProviderObject(marker) || marker.SHA256 != providerDigest([]byte(tx)) {
 		return dataError("invalid staging transaction marker")
 	}
@@ -550,8 +254,7 @@ func (s *ProviderStore) recover(ctx context.Context) error {
 		if backup.Present && (!j.Old.Present || backup.SHA256 != j.Old.SHA256) {
 			return dataError("unrecognized prepared backup")
 		}
-		// No target mutation was authorized. Record an observed completed copy
-		// before deleting it, including an ambiguous write/sync result.
+
 		if j.Backup.Present && !sameProviderObject(backup, j.Backup) && (backup.Present || !j.RecoveryDone) {
 			return dataError("prepared backup changed")
 		}

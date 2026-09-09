@@ -1,27 +1,12 @@
 package subscription
 
 import (
-	"context"
 	"net/netip"
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"go.yaml.in/yaml/v3"
 )
-
-// PolicyBuilder validates raw candidate bytes and prepares managed resources.
-type PolicyBuilder interface {
-	Build(context.Context, PolicyInput) (PolicyOutput, error)
-}
-
-// GenerateWithPolicy is the opt-in root generation boundary. Legacy Generate
-// remains the default until system-mode wiring is installed separately.
-func GenerateWithPolicy(ctx context.Context, input PolicyInput, builder PolicyBuilder) (PolicyOutput, error) {
-	if builder == nil {
-		return PolicyOutput{}, PolicyError{Field: "policy", Code: protocol.CodeInvalidState}
-	}
-	return builder.Build(ctx, input)
-}
 
 func Generate(base Document, overrides map[string]any, settings config.Settings) ([]byte, error) {
 	if err := settings.Validate(); err != nil {

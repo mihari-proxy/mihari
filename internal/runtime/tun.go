@@ -10,6 +10,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/subscription"
 	"github.com/mihari-proxy/mihari/internal/tundetect"
 	"go.yaml.in/yaml/v3"
 )
@@ -48,9 +49,10 @@ func (m *Manager) DisableTun(ctx context.Context, op Operation) (protocol.TunSta
 }
 
 func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, force bool) (protocol.TunStatus, error) {
-	if m.providerResources != nil {
-		return m.mutateTunManaged(ctx, op, enable, force)
+	if m.trustedCore != nil {
+		return m.mutateTrustedTun(ctx, op, enable, force)
 	}
+
 	if err := m.lockMutation(ctx); err != nil {
 		return protocol.TunStatus{}, err
 	}
@@ -149,7 +151,7 @@ func (m *Manager) compensateTun(ctx context.Context, op Operation, candidate set
 		if liveBefore == nil {
 			liveRestoreErr = errors.New("TUN live state before apply is unavailable")
 		} else {
-			liveRestoreErr = m.restoreTunLive(ctx, liveBefore)
+			liveRestoreErr = m.restoreTunLive(context.WithoutCancel(ctx), liveBefore)
 		}
 	}
 	if rollbackErr == nil && liveRestoreErr == nil {
@@ -212,7 +214,7 @@ func (m *Manager) applyTun(ctx context.Context, nextTun, liveBase map[string]any
 
 	if m.subscriptions != nil && m.runtimeConfig != "" && m.stagingDir != "" {
 		catalog := m.subscriptions.Snapshot()
-		candidate, err := m.prepareCatalogConfigWithSettings(ctx, catalog, settings, generation)
+		candidate, err := m.prepareTunConfigWithSettings(ctx, catalog, settings, generation, liveBase)
 		if err != nil {
 			regenerateErr = err
 		} else {
@@ -498,4 +500,14 @@ func liveTunDevice(configs map[string]any) string {
 	raw, _ := configs["tun"].(map[string]any)
 	device, _ := raw["device"].(string)
 	return strings.TrimSpace(device)
+}
+
+// Only a TUN operation has an explicit observed bootstrap source. Catalog
+// regeneration never treats legacy settings fields as subscription YAML.
+func (m *Manager) prepareTunConfigWithSettings(ctx context.Context, catalog subscription.Catalog, settings config.Settings, generation uint64, liveBase map[string]any) (configCandidate, error) {
+	if catalog.ActiveID != "" {
+		return m.prepareCatalogConfigWithSettings(ctx, catalog, settings, generation)
+	}
+	document := subscription.Document{"proxies": []any{}, "proxy-groups": []any{}, "rules": []any{"MATCH,DIRECT"}, "tun": cloneTunMap(liveBase)}
+	return m.prepareConfigWithSettings(ctx, document, settings, generation)
 }

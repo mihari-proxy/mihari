@@ -335,7 +335,6 @@ func TestEnableTun_ManagedRevisionPrecedesAdapterConflict(t *testing.T) {
 	manager := newTunManagerWithDetect(t, controller, defaultTunSettings(nil), &tundetect.FakeBackend{
 		Detection: tundetect.Detection{TunInterfaces: []string{"foreign-tun"}},
 	})
-	manager.providerResources = &fakeProviderResources{}
 	manager.store.Store(state.Snapshot{Revision: 5, Health: "ok"})
 	stale := uint64(4)
 	_, err := manager.EnableTun(context.Background(), Operation{ID: "managed-stale", Source: "test", IfRevision: &stale}, false)
@@ -640,8 +639,8 @@ func TestEnableTunCanceledConfirmationRestoresActiveSubscriptionLiveTarget(t *te
 	cancel()
 	err := <-done
 	var apiError protocol.APIError
-	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "mutation compensation failed" {
-		t.Fatalf("err=%v want stable compensation failure", err)
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeUpstreamFailure {
+		t.Fatalf("err=%v want original apply failure after confirmed compensation", err)
 	}
 	requireLiveTun(t, controller.configs, beforeTun)
 	requireRuntimeTun(t, runtimePath, beforeTun)
@@ -652,7 +651,7 @@ func TestEnableTunCanceledConfirmationRestoresActiveSubscriptionLiveTarget(t *te
 	if len(manager.settingsSnapshot().Tun) != 0 {
 		t.Fatalf("settings rollback did not restore unmanaged before: %#v", manager.settingsSnapshot().Tun)
 	}
-	if snapshot := manager.Snapshot(); snapshot.Revision != 1 || snapshot.Health != "degraded" || snapshot.LastError != "mutation compensation failed; restart required" {
+	if snapshot := manager.Snapshot(); snapshot.Revision != 0 || snapshot.Health == "degraded" {
 		t.Fatalf("snapshot=%#v", snapshot)
 	}
 }
@@ -741,8 +740,8 @@ func TestEnableTunCanceledConfirmationRestoresNoActiveSubscriptionRuntimeTarget(
 	cancel()
 	err := <-done
 	var apiError protocol.APIError
-	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "mutation compensation failed" {
-		t.Fatalf("err=%v want stable compensation failure", err)
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeUpstreamFailure {
+		t.Fatalf("err=%v want original apply failure after confirmed compensation", err)
 	}
 	requireLiveTun(t, controller.configs, beforeTun)
 	requireRuntimeTun(t, runtimePath, beforeTun)
@@ -750,7 +749,7 @@ func TestEnableTunCanceledConfirmationRestoresNoActiveSubscriptionRuntimeTarget(
 		t.Fatal(err)
 	}
 	requireLiveTun(t, controller.configs, beforeTun)
-	if snapshot := manager.Snapshot(); snapshot.Revision != 1 || snapshot.Health != "degraded" {
+	if snapshot := manager.Snapshot(); snapshot.Revision != 0 || snapshot.Health == "degraded" {
 		t.Fatalf("snapshot=%#v", snapshot)
 	}
 }
@@ -853,7 +852,7 @@ func TestTunCancellationBeforeLiveConfirmationCompensatesSettings(t *testing.T) 
 	}
 	var confirmation sync.Once
 	controller.configsFunc = func(ctx context.Context) (map[string]any, error) {
-		if controller.patchCalls == 0 {
+		if controller.patchCalls != 1 {
 			return controller.configs, nil
 		}
 		confirmation.Do(func() { close(configsEntered) })
@@ -885,8 +884,8 @@ func TestTunCancellationBeforeLiveConfirmationCompensatesSettings(t *testing.T) 
 	cancel()
 	err := <-done
 	var apiError protocol.APIError
-	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "mutation compensation failed" {
-		t.Fatalf("err=%v want stable compensation failure", err)
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeUpstreamFailure {
+		t.Fatalf("err=%v want original apply failure after confirmed compensation", err)
 	}
 	if !slices.Equal(saved, []bool{true, false}) || len(manager.settingsSnapshot().Tun) != 0 {
 		t.Fatalf("saved=%v tun=%#v", saved, manager.settingsSnapshot().Tun)
@@ -895,7 +894,7 @@ func TestTunCancellationBeforeLiveConfirmationCompensatesSettings(t *testing.T) 
 	if !ok || live {
 		t.Fatalf("live after canceled compensation=%v ok=%v configs=%#v", live, ok, controller.configs)
 	}
-	if snapshot := manager.Snapshot(); snapshot.Revision != 1 || snapshot.Health != "degraded" {
+	if snapshot := manager.Snapshot(); snapshot.Revision != 0 || snapshot.Health == "degraded" {
 		t.Fatalf("snapshot=%#v", snapshot)
 	}
 }

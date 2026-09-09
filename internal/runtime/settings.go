@@ -32,9 +32,6 @@ func (m *Manager) prepareSettings(update func(*config.Settings) error) (settings
 	if err := after.Validate(); err != nil {
 		return settingsCandidate{}, err
 	}
-	m.settingsMu.Lock()
-	m.settingsCaptureGeneration = generation
-	m.settingsMu.Unlock()
 	return settingsCandidate{before: before, after: after, changed: !reflect.DeepEqual(before, after), generation: generation}, nil
 }
 
@@ -134,10 +131,7 @@ func (m *Manager) lockMutation(ctx context.Context) error {
 		m.unlock()
 		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "install activation is required"}
 	}
-	if m.resourceActivation != nil {
-		m.releaseMutation()
-		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "resource activation is in progress"}
-	}
+
 	if m.mutationDegraded.Load() {
 		m.unlock()
 		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "mutation compensation failed; restart required"}
@@ -174,10 +168,4 @@ func (m *Manager) currentConfigGeneration() uint64 {
 	m.settingsMu.RLock()
 	defer m.settingsMu.RUnlock()
 	return m.configGeneration
-}
-
-func (m *Manager) capturedSettingsGeneration() uint64 {
-	m.settingsMu.RLock()
-	defer m.settingsMu.RUnlock()
-	return m.settingsCaptureGeneration
 }

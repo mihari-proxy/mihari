@@ -8,8 +8,6 @@ import (
 	"io"
 	"net/http"
 	"time"
-
-	"github.com/mihari-proxy/mihari/internal/subscription"
 )
 
 // RebuildMigrationCore verifies a compressed artifact against the compiled Unix
@@ -77,7 +75,7 @@ func rebuildMigrationCore(ctx context.Context, a supportedAsset, archive []byte)
 	if err != nil || len(binary) == 0 || len(binary) > maxCoreBinarySize {
 		return nil, nil, dataFailure("invalid trusted core binary")
 	}
-	receipt, err := json.Marshal(ProvenanceReceipt{Schema: provenanceSchema, PolicyID: subscription.RootPolicyID, AssetSHA256: a.AssetSHA256, BinarySHA256: digest(binary), OS: a.OS, Arch: a.Arch, Tag: a.Tag})
+	receipt, err := json.Marshal(ProvenanceReceipt{Schema: provenanceSchema, PolicyID: legacyReceiptPolicyID, AssetSHA256: a.AssetSHA256, BinarySHA256: digest(binary), OS: a.OS, Arch: a.Arch, Tag: a.Tag})
 	if err != nil {
 		return nil, nil, err
 	}

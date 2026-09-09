@@ -11,7 +11,6 @@ import (
 	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/subscription"
-	"go.yaml.in/yaml/v3"
 )
 
 type AddSubscriptionInput struct {
@@ -102,9 +101,7 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 }
 
 func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, id string) (subscription.PublicProfile, error) {
-	if m.providerResources != nil {
-		return m.refreshSubscriptionManaged(ctx, operation, id)
-	}
+
 	result, err := m.doOperation(ctx, "sub-refresh:"+operation.ID, func() (any, error) {
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
@@ -152,9 +149,7 @@ func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, 
 }
 
 func (m *Manager) UseSubscription(ctx context.Context, operation Operation, id string) (subscription.PublicProfile, error) {
-	if m.providerResources != nil {
-		return m.useSubscriptionManaged(ctx, operation, id)
-	}
+
 	result, err := m.doOperation(ctx, "sub-use:"+operation.ID, func() (any, error) {
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
@@ -382,25 +377,7 @@ func (m *Manager) prepareCatalogConfig(ctx context.Context, catalog subscription
 
 func (m *Manager) prepareCatalogConfigWithSettings(ctx context.Context, catalog subscription.Catalog, settings config.Settings, generation uint64) (configCandidate, error) {
 	if catalog.ActiveID == "" {
-		if m.trustedCore != nil {
-			return m.prepareConfigWithSettings(ctx, subscription.Document{"proxies": []any{}, "proxy-groups": []any{}, "rules": []any{"MATCH,DIRECT"}}, settings, generation)
-		}
-		content, err := core.BootstrapConfig(settings)
-		if err != nil {
-			return configCandidate{}, err
-		}
-		if len(settings.Tun) > 0 {
-			var document map[string]any
-			if err := yaml.Unmarshal(content, &document); err != nil {
-				return configCandidate{}, protocol.APIError{Code: protocol.CodeInternal, Message: "decode bootstrap configuration"}
-			}
-			document["tun"] = settings.Tun
-			content, err = yaml.Marshal(document)
-			if err != nil {
-				return configCandidate{}, protocol.APIError{Code: protocol.CodeInternal, Message: "encode bootstrap TUN configuration"}
-			}
-		}
-		return m.prepareContent(ctx, content)
+		return m.prepareConfigWithSettings(ctx, subscription.Document{"proxies": []any{}, "proxy-groups": []any{}, "rules": []any{"MATCH,DIRECT"}}, settings, generation)
 	}
 	_, document, err := m.subscriptions.ReadCache(catalog.ActiveID)
 	if err != nil {

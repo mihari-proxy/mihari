@@ -718,7 +718,6 @@ func validateStagedBusiness(ctx context.Context, opts migrationOptions, prepared
 	}
 	prepared.activeID = catalog.ActiveID
 	var cacheSum int
-	resources := map[string][]byte{}
 	for _, profile := range catalog.Profiles {
 		if profile.Generation == 0 {
 			continue
@@ -741,63 +740,28 @@ func validateStagedBusiness(ctx context.Context, opts migrationOptions, prepared
 		if profile.ID != catalog.ActiveID {
 			continue
 		}
-		input := subscription.PolicyInput{
-			YAML: raw, SubscriptionID: profile.ID, Generation: profile.Generation,
-			CoreTag: "v1.19.30", OS: goos, Arch: arch, Settings: settings,
-		}
-		need, err := subscription.NewRootConfigPolicy().Inspect(ctx, input)
+		document, err := subscription.ParseDocument(raw)
 		if err != nil {
 			return err
 		}
-		for _, spec := range need.Providers {
-			key := spec.ResourceID
-			if spec.SourceResourceID != "" {
-				key = spec.SourceResourceID
-			}
-			if spec.URL == "" && spec.SourceResourceID == "" {
-				continue
-			}
-			raw, err := loadProviderResource(ctx, opts.Staging, key)
-			if err != nil {
-				return migrateData("missing provider resource")
-			}
-			resources[key] = raw
-		}
-		input.Resources = resources
-		out, err := subscription.GenerateWithPolicy(ctx, input, subscription.NewRootConfigPolicy())
+		out, err := subscription.Generate(document, nil, settings)
 		if err != nil {
 			return err
 		}
 		if err := opts.Staging.Mkdir(ctx, "runtime"); err != nil {
 			return err
 		}
-		if err := opts.Staging.WriteFile(ctx, "runtime/config.yaml", out.YAML); err != nil {
+		if err := opts.Staging.WriteFile(ctx, "runtime/config.yaml", out); err != nil {
 			return err
 		}
-		prepared.runtimeYAML = out.YAML
-		prepared.files["runtime/config.yaml"] = preparedFile{rel: "runtime/config.yaml", hash: sha256HexBytes(out.YAML), size: int64(len(out.YAML))}
-		prepared.hashes["runtime/config.yaml"] = sha256HexBytes(out.YAML)
+		prepared.runtimeYAML = out
+		prepared.files["runtime/config.yaml"] = preparedFile{rel: "runtime/config.yaml", hash: sha256HexBytes(out), size: int64(len(out))}
+		prepared.hashes["runtime/config.yaml"] = sha256HexBytes(out)
 	}
 	if prepared.runtimeYAML == nil {
 		return migrateData("missing active subscription cache")
 	}
 	return nil
-}
-
-func loadProviderResource(ctx context.Context, staging migrationCapability, key string) ([]byte, error) {
-	for _, rel := range []string{
-		"runtime/core-home/providers/" + key + ".yaml",
-		"runtime/core-home/providers/" + key + ".txt",
-	} {
-		raw, err := staging.ReadFile(ctx, rel, migrationCacheDocMax)
-		if err == nil {
-			return raw, nil
-		}
-		if !errors.Is(err, os.ErrNotExist) && !isNotExist(err) {
-			return nil, err
-		}
-	}
-	return nil, os.ErrNotExist
 }
 
 func isNotExist(err error) bool {

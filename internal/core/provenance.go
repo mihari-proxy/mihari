@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
-	"github.com/mihari-proxy/mihari/internal/subscription"
 	"io"
 	"net/http"
 	"os"
@@ -92,7 +91,7 @@ type ProvenanceReceipt struct {
 }
 
 func (r ProvenanceReceipt) validate(ctx context.Context) error {
-	if r.Schema != provenanceSchema || r.PolicyID != subscription.RootPolicyID || !validHash(r.BinarySHA256) {
+	if r.Schema != provenanceSchema || r.PolicyID != legacyReceiptPolicyID || !validHash(r.BinarySHA256) {
 		return dataFailure("invalid mihomo provenance receipt")
 	}
 	a, err := supportedCore(ctx, r.OS, r.Arch, r.Tag, "stable")
@@ -181,7 +180,7 @@ func (i Installer) stageTrustedBinary(ctx context.Context, a supportedAsset, bin
 	}
 	tx := hex.EncodeToString(random[:])
 	s := i.Provenance
-	receipt := ProvenanceReceipt{Schema: provenanceSchema, PolicyID: subscription.RootPolicyID, AssetSHA256: a.AssetSHA256, BinarySHA256: digest(binary), OS: a.OS, Arch: a.Arch, Tag: a.Tag}
+	receipt := ProvenanceReceipt{Schema: provenanceSchema, PolicyID: legacyReceiptPolicyID, AssetSHA256: a.AssetSHA256, BinarySHA256: digest(binary), OS: a.OS, Arch: a.Arch, Tag: a.Tag}
 	rb, e := json.Marshal(receipt)
 	if e != nil {
 		return nil, e
@@ -308,3 +307,6 @@ func (c *Candidate) cleanupTrusted() {
 		_ = t.store.Apply(ctx, ProvenanceMutation{Role: item.r, Transaction: t.transaction, Expected: o})
 	}
 }
+
+// legacyReceiptPolicyID preserves the historical provenance receipt contract.
+const legacyReceiptPolicyID = "mihari.root-config/v1/mihomo-v1.19.30"
