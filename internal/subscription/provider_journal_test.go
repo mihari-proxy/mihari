@@ -1,7 +1,6 @@
 package subscription
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,14 +9,12 @@ import (
 )
 
 type memoryProviderFiles struct {
-	objects             map[string][]byte
-	identities          map[string]string
-	sequence            int
-	mutations           int
-	crashAt             int
-	doneDurable         bool
-	resourceDoneDurable bool
-	boot                string
+	objects    map[string][]byte
+	identities map[string]string
+	sequence   int
+	mutations  int
+	crashAt    int
+	boot       string
 }
 
 func (m *memoryProviderFiles) checkpoint() {
@@ -56,12 +53,6 @@ func (m *memoryProviderFiles) write(ctx context.Context, path string, b []byte, 
 	m.sequence++
 	m.objects[path] = append([]byte(nil), b...)
 	m.identities[path] = fmt.Sprint(m.sequence)
-	if path == providerJournalPath && bytes.Contains(b, []byte(`"phase":"done"`)) {
-		m.doneDurable = true
-	}
-	if path == resourceJournalPath && bytes.Contains(b, []byte(`"done":true`)) {
-		m.resourceDoneDurable = true
-	}
 	m.checkpoint()
 	return nil
 }
@@ -110,7 +101,6 @@ func cloneProviderMemory(m *memoryProviderFiles) *memoryProviderFiles {
 	n := newMemoryProviderFiles()
 	n.sequence = m.sequence
 	n.boot = m.boot
-	n.doneDurable = m.doneDurable
 	for k, b := range m.objects {
 		n.objects[k] = append([]byte(nil), b...)
 	}
