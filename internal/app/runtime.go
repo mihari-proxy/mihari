@@ -137,7 +137,15 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		if _, err := options.TrustedCore.InstalledAvailable(context.Background()); err != nil {
 			return nil, err
 		}
-		if err = options.TrustedCore.InitializeConfig(context.Background(), settings, input); err != nil {
+		document, err := subscription.ParseDocument(input.YAML)
+		if err != nil {
+			return nil, err
+		}
+		content, err := subscription.Generate(document, nil, settings)
+		if err != nil {
+			return nil, err
+		}
+		if err = options.TrustedCore.InitializeConfig(context.Background(), content); err != nil {
 			return nil, err
 		}
 		installer = options.TrustedCore.Installer()

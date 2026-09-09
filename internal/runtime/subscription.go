@@ -415,39 +415,21 @@ func (m *Manager) prepareConfig(ctx context.Context, document subscription.Docum
 }
 
 func (m *Manager) prepareConfigWithSettings(ctx context.Context, document subscription.Document, settings config.Settings, generation uint64) (configCandidate, error) {
-	if m.trustedCore != nil {
-		if m.rootConfigInput == nil {
-			return configCandidate{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "root configuration context unavailable"}
-		}
-		input, e := m.rootConfigInput(ctx, document, settings)
-		if e != nil {
-			return configCandidate{}, e
-		}
-		input.YAML, e = yaml.Marshal(document)
-		if e != nil {
-			return configCandidate{}, e
-		}
-		input.Settings = settings
-		output, e := subscription.GenerateWithPolicy(ctx, input, subscription.NewRootConfigPolicy())
-		if e != nil {
-			return configCandidate{}, e
-		}
-		candidate, err := m.prepareContent(ctx, output.YAML)
-		candidate.generation, candidate.generationBound = generation, true
-		return candidate, err
-	}
-
 	content, err := subscription.Generate(document, nil, settings)
 	if err != nil {
 		return configCandidate{}, err
 	}
-	return m.prepareContent(ctx, content)
+	candidate, err := m.prepareContent(ctx, content)
+	if m.trustedCore != nil {
+		candidate.generation, candidate.generationBound = generation, true
+	}
+	return candidate, err
 }
 
 func (m *Manager) prepareContent(ctx context.Context, content []byte) (configCandidate, error) {
 	hash := sha256.Sum256(content)
 	if m.trustedCore != nil {
-		generated, e := m.trustedCore.PrepareGenerated(ctx, subscription.PolicyOutput{YAML: content})
+		generated, e := m.trustedCore.PrepareGenerated(ctx, content)
 		if e != nil {
 			return configCandidate{}, e
 		}
