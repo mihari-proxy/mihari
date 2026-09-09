@@ -169,3 +169,31 @@ func TestServiceApply_JSONWarningFailure(t *testing.T) {
 		t.Fatalf("code=%d out=%q err=%q", code, out.String(), stderr.String())
 	}
 }
+
+func TestServiceApply_JSONWarningFailureWithoutRoot(t *testing.T) {
+	request := filepath.Join(t.TempDir(), "request.json")
+	if err := os.WriteFile(request, []byte(`{"schema":"mihari.install-request/v1","operation":"recover"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	cmd := newServiceApplyCommand(Dependencies{ServiceApply: func(_ context.Context, _ app.InstallRequest, c update.ReplacementConsent) (app.InstallResult, error) {
+		calls++
+		if !c.Yes || c.Warn == nil {
+			t.Fatal("missing warning callback or consent")
+		}
+		if err := c.Warn("Safe compatibility warning."); err != nil {
+			return app.InstallResult{}, err
+		}
+		return app.InstallResult{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "installation changed; start again", Details: map[string]any{"reason": "fixture"}}
+	}}, &runOptions{json: true}, func() int { return 0 })
+	cmd.SilenceErrors, cmd.SilenceUsage = true, true
+	var out, stderr bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--request", request, "--yes"})
+	err := cmd.ExecuteContext(context.Background())
+	var api protocol.APIError
+	if calls != 1 || !errors.As(err, &api) || api.Code != protocol.CodeInvalidState || api.Details["reason"] != "fixture" || !strings.Contains(api.Message, "Safe compatibility warning.") || !strings.Contains(api.Message, "installation changed") || out.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("calls=%d api=%+v out=%q stderr=%q", calls, api, out.String(), stderr.String())
+	}
+}

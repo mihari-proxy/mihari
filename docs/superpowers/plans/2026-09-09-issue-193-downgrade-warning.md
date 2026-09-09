@@ -993,3 +993,7 @@ Task 1 → Task 2 → Task 3 → Task 4 → Task 5 → Task 6 → Task 7
 
 - 13:30 UTC继续十分钟轮询：Cubic首轮23项已逐项核实，4项有效P2最小修复并独立复审PASS；不采纳扩展SCM写入、多文件事务或Windows发布框架，未确认需要扩大scope的致命P0/P1。完整判定见[bot triage](../reviews/2026-09-09-issue-193-bot-review.md)。CLI部分成功单错误JSON回归通过，remote退出码恢复12项通过，Windows脚本相关60 passed/10 native skipped。
 - 9f7c4ff的CI文件因shell位置不能引用runner表达式而未启动（GitHub明确annotation）；已改为互斥if的平台步骤和字面量powershell，无Actions升级或验收放宽。首个head的三OS race最终均通过；新head仍需重新跑原生unit及所有门禁。
+
+- 13:50 UTC轮询：最新head macOS unit通过，PTY读回修正确认；Windows unit剩两项失败（错误文本自动换行断言、动态能力JSON路径），均继续最小修正。macOS race在未改动subscription恢复矩阵600秒超时，前head该OS已通过；不改订阅代码或CI时限。Cubic/Pullfrog已完成，Pullfrog建议的默认非rootwarning回归已补并真实非root通过；其余triage见审核记录。
+
+- 剩余Windows两项修正及Pullfrog覆盖补足已独立复审PASS：UAC断言归一化空白；AIO能力输出等价固定v1 JSON，移除该早期路径动态JSON/module autoload，16项便携能力测试通过。仅定位动态路径差分，未声称具体progress/timeout分支已证实；最终Win5.1Green待CI。

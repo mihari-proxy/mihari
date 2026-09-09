@@ -512,7 +512,7 @@ def test_windows_native_uac_handoff_consumes_original_preview(tmp_path, changed)
     result = run_ps(tmp_path, source, env)
     assert (result.returncode == 0) is (not changed), result.stderr
     if changed:
-        assert 'Installation changed' in result.stderr, result.stderr
+        assert 'Installation changed' in ' '.join(result.stderr.split()), result.stderr
     assert target.read_bytes() == (b'changed-after-preview' if changed else b'new')
 
 

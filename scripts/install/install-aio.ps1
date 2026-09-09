@@ -20,7 +20,7 @@
 param([string]$BundleDir, [string]$Channel, [switch]$Capabilities)
 # MIHARI_INSTALL_CAPABILITY: replacement_confirmation_v1
 if ($Capabilities) {
-  @{ schema = 'mihari.install-script/v1'; capabilities = @('replacement_confirmation_v1') } | ConvertTo-Json -Compress
+  '{"schema":"mihari.install-script/v1","capabilities":["replacement_confirmation_v1"]}'
   return
 }
 $ErrorActionPreference = 'Stop'

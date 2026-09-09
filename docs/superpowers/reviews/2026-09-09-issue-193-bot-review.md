@@ -29,3 +29,13 @@
 | 3968947232 | 保持准确状态：部分完整原生命令仍未通过，最终复合checkbox不能仅依据本地历史结果勾选；逐项结果在§17记录。 |
 
 首轮原生CI问题另行修复：PS5.1模块环境、服务参数展开、PTY读取；不是以上bot首轮重复发现的已解决项。仍需最新head CI通过。CodeRabbit因组织标签配置跳过，Cubic/Pullfrog状态按十分钟轮询记录；不擅自向bot发消息或改审核配置。
+
+## Pullfrog review 5155149810
+
+- distribution ahead：原代码与版本矩阵已保留stable ahead；补一句明确修正历史不准确文字，不改变版本选择。
+- service apply JSON warning默认CI覆盖：原完整Execute因真实UID限制跳过属实。增加无root的命令级测试，复用现有euid注入和真实Warn/error转换，断言风险文案、Code/Details及无混入输出；完整Execute测试保留，不增加公开测试接口。已在非root隔离副本实际执行通过。
+- app旧fake忽略checks：该fake针对历史AfterReplace；新的replacement_targets测试使用实际checked路径及独立fake，service层另有Stop/stage时序回归。未发现漏实现，保留现有职责。
+- architecture长行与执行历史精简：仅维护风格建议，保留本任务审核/验证追踪，不做非必要文档重组。
+- awk parser说明：现有代码已有受限结构说明，设计/计划保留完整约束，不增加解析框架。
+
+Pullfrog以COMMENTED结束，Cubic检查也已结束；CodeRabbit跳过。以上为本地核实与处理结论，不冒称各bot无评论或主动撤回。
