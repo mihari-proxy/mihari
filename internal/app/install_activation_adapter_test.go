@@ -75,6 +75,19 @@ type barrierValidation struct {
 	check func()
 }
 
+// restartWaitRunner models the legacy service repeatedly exiting before the
+// installer replaces its definition. Masking still stops its restart job.
+type restartWaitRunner struct{ barrierRunner }
+
+func (r restartWaitRunner) Run(ctx context.Context, args []string) (service.CommandResult, error) {
+	result, err := r.barrierRunner.Run(ctx, args)
+	unit := r.store.files[service.DefaultSystemdPaths().UnitFile]
+	if err == nil && strings.Contains(string(result.Stdout), "LoadState=loaded") && !strings.Contains(string(unit.Bytes), "Restart=on-failure") {
+		result.Stdout = []byte(strings.NewReplacer("ActiveState=inactive", "ActiveState=activating", "SubState=dead", "SubState=auto-restart").Replace(string(result.Stdout)))
+	}
+	return result, err
+}
+
 func (v barrierValidation) ReapValidation(ctx context.Context, id ProcessStartIdentity, j InstallJournal) error {
 	return v.ValidationChild.(*FakeValidationChild).ReapValidation(ctx, id, j)
 }
@@ -84,8 +97,17 @@ func (v barrierValidation) Start(ctx context.Context, s ValidationStart) (Valida
 }
 
 func TestInstallActivation_RealAdapterKeepsMaskUntilAuthority(t *testing.T) {
-	for _, failed := range []bool{false, true} {
-		t.Run(map[bool]string{false: "activation", true: "source recovery"}[failed], func(t *testing.T) {
+	for _, scenario := range []struct {
+		name                string
+		failed, restartWait bool
+	}{
+		{"activation", false, false},
+		{"source recovery", true, false},
+		{"auto-restart activation", false, true},
+		{"auto-restart source recovery", true, true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			failed := scenario.failed
 			h := newInstallHarness(t, InstallDataRetain)
 			h.art.OldRunning = false
 			h.art.OldEnabled = false
@@ -97,7 +119,11 @@ func TestInstallActivation_RealAdapterKeepsMaskUntilAuthority(t *testing.T) {
 			target := old
 			target.Bytes = append(append([]byte{}, old.Bytes...), []byte("Restart=on-failure\n")...)
 			store := &barrierStore{files: map[string]service.DefinitionFile{path: old}, links: map[string]string{}}
-			adapter := service.NewSystemdAdapterWithConfig(service.SystemdConfig{Runner: barrierRunner{store}, Files: store, Hook: h.tx.journaledHook})
+			var runner service.CommandRunner = barrierRunner{store}
+			if scenario.restartWait {
+				runner = restartWaitRunner{barrierRunner{store}}
+			}
+			adapter := service.NewSystemdAdapterWithConfig(service.SystemdConfig{Runner: runner, Files: store, Hook: h.tx.journaledHook})
 			h.tx.Service = adapter
 			oldDef := service.Definition{Status: service.StatusStopped, Binary: "/usr/local/lib/mihari/mihari", Files: []service.DefinitionFile{old}}
 			targetDef := oldDef
