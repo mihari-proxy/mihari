@@ -247,3 +247,127 @@ func TestUpdateLogging_ConcurrentRequestsKeepDiagnosticOperationIDsSeparate(t *t
 		t.Fatalf("operation counts=%#v", counts)
 	}
 }
+
+func TestSubscriptionMutations_BindDiagnosticOperationMetadata(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation logging.OperationMetadata
+		invoke    func(*Client) error
+	}{
+		{
+			name: "add", operation: logging.OperationMetadata{ID: "add-op", Name: "subscription.add"},
+			invoke: func(client *Client) error {
+				_, err := client.AddSubscription(context.Background(), protocol.SubscriptionAddRequest{OperationID: "add-op", Name: "main", URL: "https://example.test/private"})
+				return err
+			},
+		},
+		{
+			name: "refresh", operation: logging.OperationMetadata{ID: "refresh-op", Name: "subscription.refresh"},
+			invoke: func(client *Client) error {
+				_, err := client.RefreshSubscription(context.Background(), "one", protocol.MutationRequest{OperationID: "refresh-op"})
+				return err
+			},
+		},
+		{
+			name: "use", operation: logging.OperationMetadata{ID: "use-op", Name: "subscription.use"},
+			invoke: func(client *Client) error {
+				_, err := client.UseSubscription(context.Background(), "one", protocol.MutationRequest{OperationID: "use-op"})
+				return err
+			},
+		},
+		{
+			name: "enabled", operation: logging.OperationMetadata{ID: "enabled-op", Name: "subscription.enabled"},
+			invoke: func(client *Client) error {
+				_, err := client.SetSubscriptionEnabled(context.Background(), "one", protocol.SubscriptionEnabledRequest{OperationID: "enabled-op", Enabled: true})
+				return err
+			},
+		},
+		{
+			name: "update", operation: logging.OperationMetadata{ID: "update-op", Name: "subscription.set"},
+			invoke: func(client *Client) error {
+				_, err := client.UpdateSubscription(context.Background(), "one", protocol.SubscriptionUpdateRequest{OperationID: "update-op"})
+				return err
+			},
+		},
+		{
+			name: "remove", operation: logging.OperationMetadata{ID: "remove-op", Name: "subscription.remove"},
+			invoke: func(client *Client) error {
+				_, err := client.RemoveSubscription(context.Background(), "one", protocol.MutationRequest{OperationID: "remove-op"})
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			capture := new(diagnosticCapture)
+			client := NewHTTP("http://mihari", "token", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`not json`))}, nil
+			})})
+			if err := client.SetDiagnosticReporter(capture.report); err != nil {
+				t.Fatal(err)
+			}
+			if err := test.invoke(client); err == nil {
+				t.Fatal("mutation unexpectedly succeeded")
+			}
+			records, operations := capture.snapshot()
+			if len(records) != 2 || records[0].Level != slog.LevelDebug || records[1].Level != slog.LevelError {
+				t.Fatalf("records=%#v", records)
+			}
+			if operations[0] != test.operation || operations[1] != test.operation {
+				t.Fatalf("operations=%#v want=%#v", operations, test.operation)
+			}
+		})
+	}
+}
+
+func TestCoreMutations_BindDiagnosticOperationMetadata(t *testing.T) {
+	tests := []struct {
+		name      string
+		response  string
+		operation logging.OperationMetadata
+		invoke    func(context.Context, *Client) error
+	}{
+		{
+			name: "install", response: `{"schema":"mihari/v1","operation_id":"install-op","version":"v1.19.0","updated":true}`,
+			operation: logging.OperationMetadata{ID: "install-op", Name: "core.install"},
+			invoke: func(ctx context.Context, client *Client) error {
+				_, err := client.InstallCore(ctx, protocol.MutationRequest{OperationID: "install-op"})
+				return err
+			},
+		},
+		{
+			name: "restart", response: `{"schema":"mihari/v1","operation_id":"restart-op","revision":4}`,
+			operation: logging.OperationMetadata{ID: "restart-op", Name: "core.restart"},
+			invoke: func(ctx context.Context, client *Client) error {
+				_, err := client.RestartCore(ctx, protocol.MutationRequest{OperationID: "restart-op"})
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			capture := new(diagnosticCapture)
+			client := NewHTTP("http://mihari", "token", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(test.response))}, nil
+			})})
+			if err := client.SetDiagnosticReporter(capture.report); err != nil {
+				t.Fatal(err)
+			}
+			stale := logging.WithOperation(context.Background(), logging.OperationMetadata{ID: "stale", Name: "other.operation"})
+
+			if err := test.invoke(stale, client); err != nil {
+				t.Fatal(err)
+			}
+
+			records, operations := capture.snapshot()
+			if len(records) != 2 || records[0].Level != slog.LevelDebug || records[1].Level != slog.LevelDebug {
+				t.Fatalf("records=%#v", records)
+			}
+			if operations[0] != test.operation || operations[1] != test.operation {
+				t.Fatalf("operations=%#v want=%#v", operations, test.operation)
+			}
+		})
+	}
+}

@@ -37,6 +37,7 @@ func TestFailureLevel_ClassifiesExpectedAndActualFailures(t *testing.T) {
 		{name: "invalid argument", ctx: context.Background(), err: apiFailure(protocol.CodeInvalidArgument), wantLevel: slog.LevelDebug, wantEmit: true},
 		{name: "revision conflict", ctx: context.Background(), err: apiFailure(protocol.CodeRevisionConflict), wantLevel: slog.LevelDebug, wantEmit: true},
 		{name: "system proxy conflict", ctx: context.Background(), err: apiFailure(protocol.CodeSystemProxyConflict), wantLevel: slog.LevelDebug, wantEmit: true},
+		{name: "system proxy not owned", ctx: context.Background(), err: apiFailure(protocol.CodeSystemProxyNotOwned), wantLevel: slog.LevelDebug, wantEmit: true},
 		{name: "tun conflict", ctx: context.Background(), err: apiFailure(protocol.CodeTunConflict), wantLevel: slog.LevelDebug, wantEmit: true},
 		{name: "data failure", ctx: context.Background(), err: apiFailure(protocol.CodeDataFailure), wantLevel: slog.LevelError, wantEmit: true},
 		{name: "internal failure", ctx: context.Background(), err: apiFailure(protocol.CodeInternal), wantLevel: slog.LevelError, wantEmit: true},

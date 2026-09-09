@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/panel/archive"
 )
 
@@ -647,12 +648,12 @@ func (s *Service) download(ctx context.Context, panelID, build, assetURL string)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, assetURL, nil)
 	if err != nil {
-		return "", protocol.APIError{Code: protocol.CodeInternal, Message: "create panel download request"}
+		return "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "create panel download request"}, err)
 	}
 	request.Header.Set("User-Agent", "mihari")
 	response, err := s.httpClient.Do(request)
 	if err != nil {
-		return "", protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download panel asset failed"}
+		return "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download panel asset failed"}, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -670,7 +671,7 @@ func (s *Service) download(ctx context.Context, panelID, build, assetURL string)
 	closeErr := file.Close()
 	if copyErr != nil || closeErr != nil {
 		os.Remove(path)
-		return "", protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read panel asset failed"}
+		return "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read panel asset failed"}, errors.Join(copyErr, closeErr))
 	}
 	if written > s.maxBytes {
 		os.Remove(path)

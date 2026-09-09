@@ -35,13 +35,13 @@ func (c *Client) Core(ctx context.Context) (protocol.CoreStatus, error) {
 
 func (c *Client) InstallCore(ctx context.Context, request protocol.MutationRequest) (protocol.CoreInstallResult, error) {
 	var result protocol.CoreInstallResult
-	err := c.doRuntime(ctx, http.MethodPost, "/v1/core/install", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "core.install"}, http.MethodPost, "/v1/core/install", request, &result)
 	return result, err
 }
 
 func (c *Client) RestartCore(ctx context.Context, request protocol.MutationRequest) (protocol.MutationResult, error) {
 	var result protocol.MutationResult
-	err := c.doRuntime(ctx, http.MethodPost, "/v1/core/restart", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "core.restart"}, http.MethodPost, "/v1/core/restart", request, &result)
 	return result, err
 }
 
@@ -101,7 +101,7 @@ func (c *Client) RuleProviders(ctx context.Context) (protocol.RuleProviderList, 
 
 func (c *Client) UpdateRuleProvider(ctx context.Context, name string, request protocol.MutationRequest) (protocol.MutationResult, error) {
 	var result protocol.MutationResult
-	err := c.doRuntime(ctx, http.MethodPost, "/v1/rule-providers/"+url.PathEscape(name)+"/update", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "rule_provider.refresh"}, http.MethodPost, "/v1/rule-providers/"+url.PathEscape(name)+"/update", request, &result)
 	return result, err
 }
 
@@ -129,7 +129,7 @@ func (c *Client) LookupGeoIP(ctx context.Context, request protocol.GeoIPLookupRe
 // UpdateGeoIP requests a coordinated Country/ASN database refresh.
 func (c *Client) UpdateGeoIP(ctx context.Context, request protocol.MutationRequest) (protocol.GeoIPUpdateResult, error) {
 	var result protocol.GeoIPUpdateResult
-	err := c.doRuntime(ctx, http.MethodPost, "/v1/geoip/update", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "geoip.update"}, http.MethodPost, "/v1/geoip/update", request, &result)
 	return result, err
 }
 
@@ -174,14 +174,14 @@ func (c *Client) SystemProxy(ctx context.Context) (protocol.SystemProxyStatus, e
 // EnableSystemProxy enables the OS system proxy via the daemon mutation path.
 func (c *Client) EnableSystemProxy(ctx context.Context, request protocol.SystemProxyMutationRequest) (protocol.SystemProxyStatus, error) {
 	var result protocol.SystemProxyStatus
-	err := c.doRuntime(ctx, http.MethodPost, "/v1/system-proxy/enable", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "system_proxy.enable"}, http.MethodPost, "/v1/system-proxy/enable", request, &result)
 	return result, err
 }
 
 // DisableSystemProxy clears Mihari-owned system proxy via the daemon mutation path.
 func (c *Client) DisableSystemProxy(ctx context.Context, request protocol.SystemProxyMutationRequest) (protocol.SystemProxyStatus, error) {
 	var result protocol.SystemProxyStatus
-	err := c.doRuntime(ctx, http.MethodPost, "/v1/system-proxy/disable", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "system_proxy.disable"}, http.MethodPost, "/v1/system-proxy/disable", request, &result)
 	return result, err
 }
 
@@ -195,14 +195,14 @@ func (c *Client) Tun(ctx context.Context) (protocol.TunStatus, error) {
 // EnableTun enables managed TUN via the daemon mutation path.
 func (c *Client) EnableTun(ctx context.Context, request protocol.TunMutationRequest) (protocol.TunStatus, error) {
 	var result protocol.TunStatus
-	err := c.doRuntime(ctx, http.MethodPost, "/v1/tun/enable", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "tun.enable"}, http.MethodPost, "/v1/tun/enable", request, &result)
 	return result, err
 }
 
 // DisableTun disables managed TUN via the daemon mutation path.
 func (c *Client) DisableTun(ctx context.Context, request protocol.TunMutationRequest) (protocol.TunStatus, error) {
 	var result protocol.TunStatus
-	err := c.doRuntime(ctx, http.MethodPost, "/v1/tun/disable", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "tun.disable"}, http.MethodPost, "/v1/tun/disable", request, &result)
 	return result, err
 }
 
@@ -244,38 +244,61 @@ func (c *Client) Subscription(ctx context.Context, id string) (protocol.Subscrip
 
 func (c *Client) AddSubscription(ctx context.Context, request protocol.SubscriptionAddRequest) (protocol.SubscriptionResult, error) {
 	var result protocol.SubscriptionResult
-	err := c.doRuntime(ctx, http.MethodPost, "/v1/subscriptions", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "subscription.add"}, http.MethodPost, "/v1/subscriptions", request, &result)
 	return result, err
 }
 
 func (c *Client) RefreshSubscription(ctx context.Context, id string, request protocol.MutationRequest) (protocol.SubscriptionResult, error) {
 	var result protocol.SubscriptionResult
-	err := c.doRuntime(ctx, http.MethodPost, "/v1/subscriptions/"+url.PathEscape(id)+"/refresh", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "subscription.refresh"}, http.MethodPost, "/v1/subscriptions/"+url.PathEscape(id)+"/refresh", request, &result)
 	return result, err
 }
 
 func (c *Client) UseSubscription(ctx context.Context, id string, request protocol.MutationRequest) (protocol.SubscriptionResult, error) {
 	var result protocol.SubscriptionResult
-	err := c.doRuntime(ctx, http.MethodPut, "/v1/subscriptions/"+url.PathEscape(id)+"/active", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "subscription.use"}, http.MethodPut, "/v1/subscriptions/"+url.PathEscape(id)+"/active", request, &result)
 	return result, err
 }
 
 func (c *Client) SetSubscriptionEnabled(ctx context.Context, id string, request protocol.SubscriptionEnabledRequest) (protocol.SubscriptionResult, error) {
 	var result protocol.SubscriptionResult
-	err := c.doRuntime(ctx, http.MethodPut, "/v1/subscriptions/"+url.PathEscape(id)+"/enabled", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "subscription.enabled"}, http.MethodPut, "/v1/subscriptions/"+url.PathEscape(id)+"/enabled", request, &result)
 	return result, err
 }
 
 func (c *Client) UpdateSubscription(ctx context.Context, id string, request protocol.SubscriptionUpdateRequest) (protocol.SubscriptionResult, error) {
 	var result protocol.SubscriptionResult
-	err := c.doRuntime(ctx, http.MethodPatch, "/v1/subscriptions/"+url.PathEscape(id), request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "subscription.set"}, http.MethodPatch, "/v1/subscriptions/"+url.PathEscape(id), request, &result)
 	return result, err
 }
 
 func (c *Client) RemoveSubscription(ctx context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
 	var result protocol.MutationResult
-	err := c.doRuntime(ctx, http.MethodDelete, "/v1/subscriptions/"+url.PathEscape(id), request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "subscription.remove"}, http.MethodDelete, "/v1/subscriptions/"+url.PathEscape(id), request, &result)
 	return result, err
+}
+
+func (c *Client) doMutation(ctx context.Context, operation logging.OperationMetadata, method, path string, input, output any) error {
+	ctx = logging.WithOperation(ctx, operation)
+	reporter := c.diagnosticReporter()
+	if reporter != nil {
+		reporter(ctx, diagnostics.Record{Component: "control.client", Event: "mutation_started", Level: slog.LevelDebug})
+	}
+	outcome := c.doRuntimeOutcome(ctx, method, path, input, output, maxControlResponseSize)
+	if reporter == nil {
+		return outcome.err
+	}
+	switch {
+	case outcome.err == nil:
+		reporter(ctx, diagnostics.Record{Component: "control.client", Event: "mutation_succeeded", Level: slog.LevelDebug})
+	case outcome.remoteEnvelope:
+		reporter(ctx, diagnostics.Record{Component: "control.client", Event: "mutation_response", Level: slog.LevelDebug, Err: outcome.err})
+	default:
+		if level, report := diagnostics.FailureLevel(ctx, outcome.err); report {
+			reporter(ctx, diagnostics.Record{Component: "control.client", Event: "mutation_failed", Level: level, Err: outcome.err})
+		}
+	}
+	return outcome.err
 }
 
 func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.StreamEvent) error) error {

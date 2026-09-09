@@ -177,6 +177,7 @@ func expectedFailureCode(code protocol.ErrorCode) bool {
 	case protocol.CodeInvalidArgument,
 		protocol.CodeRevisionConflict,
 		protocol.CodeSystemProxyConflict,
+		protocol.CodeSystemProxyNotOwned,
 		protocol.CodeTunConflict:
 		return true
 	default:

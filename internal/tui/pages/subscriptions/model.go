@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -260,11 +261,12 @@ const (
 )
 
 type mutationResultMsg struct {
-	kind   mutationKind
-	id     string
-	result protocol.SubscriptionResult
-	remove protocol.MutationResult
-	err    error
+	kind      mutationKind
+	id        string
+	result    protocol.SubscriptionResult
+	remove    protocol.MutationResult
+	operation logging.OperationMetadata
+	err       error
 }
 
 // Err implements the shell's action-outcome contract so subscription mutations
@@ -606,20 +608,24 @@ func (m *Model) submitForm(form *formModel, id string, revision uint64) tea.Cmd 
 	if form.kind == formAdd {
 		m.pending["__add"] = "add"
 		request := form.addRequest(operationID, revision)
+		operation := logging.OperationMetadata{ID: operationID, Name: "subscription.add"}
 		return tea.Batch(func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
+			ctx = logging.WithOperation(ctx, operation)
 			result, err := m.client.AddSubscription(ctx, request)
-			return mutationResultMsg{kind: mutationAdd, result: result, err: err}
+			return mutationResultMsg{kind: mutationAdd, result: result, operation: operation, err: err}
 		}, m.loadSpinCmdIfNeeded())
 	}
 	m.pending[id] = "edit"
 	request := form.updateRequest(operationID, revision)
+	operation := logging.OperationMetadata{ID: operationID, Name: "subscription.set"}
 	return tea.Batch(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
+		ctx = logging.WithOperation(ctx, operation)
 		result, err := m.client.UpdateSubscription(ctx, id, request)
-		return mutationResultMsg{kind: mutationUpdate, id: id, result: result, err: err}
+		return mutationResultMsg{kind: mutationUpdate, id: id, result: result, operation: operation, err: err}
 	}, m.loadSpinCmdIfNeeded())
 }
 
@@ -628,12 +634,14 @@ func (m *Model) toggle(subscription protocol.Subscription) tea.Cmd {
 		return nil
 	}
 	id, operationID, revision := subscription.ID, m.newOperationID(), m.revision
+	operation := logging.OperationMetadata{ID: operationID, Name: "subscription.enabled"}
 	m.pending[id] = "toggle"
 	return tea.Batch(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
+		ctx = logging.WithOperation(ctx, operation)
 		result, err := m.client.SetSubscriptionEnabled(ctx, id, protocol.SubscriptionEnabledRequest{OperationID: operationID, IfRevision: &revision, Enabled: !subscription.Enabled})
-		return mutationResultMsg{kind: mutationToggle, id: id, result: result, err: err}
+		return mutationResultMsg{kind: mutationToggle, id: id, result: result, operation: operation, err: err}
 	}, m.loadSpinCmdIfNeeded())
 }
 
@@ -646,12 +654,14 @@ func (m *Model) cycleProxy(subscription protocol.Subscription) tea.Cmd {
 	}
 	mode := nextProxyMode(subscription.ProxyMode)
 	id, operationID, revision := subscription.ID, m.newOperationID(), m.revision
+	operation := logging.OperationMetadata{ID: operationID, Name: "subscription.set"}
 	m.pending[id] = "proxy"
 	return tea.Batch(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
+		ctx = logging.WithOperation(ctx, operation)
 		result, err := m.client.UpdateSubscription(ctx, id, protocol.SubscriptionUpdateRequest{OperationID: operationID, IfRevision: &revision, ProxyMode: &mode})
-		return mutationResultMsg{kind: mutationUpdate, id: id, result: result, err: err}
+		return mutationResultMsg{kind: mutationUpdate, id: id, result: result, operation: operation, err: err}
 	}, m.loadSpinCmdIfNeeded())
 }
 
@@ -685,12 +695,14 @@ func (m *Model) refresh(id string) tea.Cmd {
 		return nil
 	}
 	operationID, revision := m.newOperationID(), m.revision
+	operation := logging.OperationMetadata{ID: operationID, Name: "subscription.refresh"}
 	m.pending[id] = "refresh"
 	return tea.Batch(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		ctx = logging.WithOperation(ctx, operation)
 		result, err := m.client.RefreshSubscription(ctx, id, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision})
-		return mutationResultMsg{kind: mutationRefresh, id: id, result: result, err: err}
+		return mutationResultMsg{kind: mutationRefresh, id: id, result: result, operation: operation, err: err}
 	}, m.loadSpinCmdIfNeeded())
 }
 
@@ -713,7 +725,7 @@ func (m *Model) refreshAll() tea.Cmd {
 			if revision != 0 {
 				request.IfRevision = &revision
 			}
-			result, err := m.client.RefreshSubscription(ctx, id, request)
+			result, err := m.client.RefreshSubscription(logging.WithOperation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "subscription.refresh"}), id, request)
 			if err != nil {
 				return refreshAllResultMsg{revision: revision, err: err}
 			}
@@ -730,12 +742,14 @@ func (m *Model) use(id string) tea.Cmd {
 		return nil
 	}
 	operationID, revision := m.newOperationID(), m.revision
+	operation := logging.OperationMetadata{ID: operationID, Name: "subscription.use"}
 	m.pending[id] = "use"
 	return tea.Batch(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
+		ctx = logging.WithOperation(ctx, operation)
 		result, err := m.client.UseSubscription(ctx, id, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision})
-		return mutationResultMsg{kind: mutationUse, id: id, result: result, err: err}
+		return mutationResultMsg{kind: mutationUse, id: id, result: result, operation: operation, err: err}
 	}, m.loadSpinCmdIfNeeded())
 }
 
@@ -766,11 +780,13 @@ func (m *Model) remove(id, operationID string, revision uint64) tea.Cmd {
 	if m.client == nil {
 		return nil
 	}
+	operation := logging.OperationMetadata{ID: operationID, Name: "subscription.remove"}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
+		ctx = logging.WithOperation(ctx, operation)
 		result, err := m.client.RemoveSubscription(ctx, id, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision})
-		return mutationResultMsg{kind: mutationRemove, id: id, remove: result, err: err}
+		return mutationResultMsg{kind: mutationRemove, id: id, remove: result, operation: operation, err: err}
 	}
 }
 

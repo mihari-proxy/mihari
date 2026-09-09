@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 const maxResponseSize = 4 << 20
@@ -142,7 +143,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	request, err := http.NewRequestWithContext(ctx, method, requestURL, body)
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeInternal, Message: "create mihomo request"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "create mihomo request"}, err)
 	}
 	request.Header.Set("Authorization", "Bearer "+c.secret)
 	if input != nil {
@@ -151,12 +152,12 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 
 	response, err := c.http.Do(request)
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo controller is unavailable"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo controller is unavailable"}, err)
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseSize+1))
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "read mihomo response"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "read mihomo response"}, err)
 	}
 	if len(raw) > maxResponseSize {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo response is too large"}

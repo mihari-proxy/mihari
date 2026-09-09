@@ -7,6 +7,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/subscription"
 )
@@ -33,9 +34,9 @@ func (m *Manager) mutateTrustedTun(ctx context.Context, op Operation, enable, fo
 	if err != nil {
 		return protocol.TunStatus{}, err
 	}
-	liveBefore, ok := m.captureTunLive(ctx)
+	liveBefore, ok, liveErr := m.captureTunLive(ctx)
 	if !ok {
-		return protocol.TunStatus{}, protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "TUN live state before apply is unavailable"}
+		return protocol.TunStatus{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "TUN live state before apply is unavailable"}, liveErr)
 	}
 	if m.subscriptions == nil {
 		return protocol.TunStatus{}, subscriptionsUnavailable()
@@ -87,8 +88,11 @@ func (m *Manager) mutateTrustedTun(ctx context.Context, op Operation, enable, fo
 		return protocol.TunStatus{}, rollback
 	}
 	live, confirmed := false, false
+	var confirmationErr error
 	if m.controller != nil {
-		if configs, e := m.controller.Configs(ctx); e == nil {
+		configs, e := m.controller.Configs(ctx)
+		confirmationErr = e
+		if e == nil {
 			live, confirmed = liveTunEnable(configs)
 		}
 	}
@@ -99,7 +103,7 @@ func (m *Manager) mutateTrustedTun(ctx context.Context, op Operation, enable, fo
 		}
 		mapped := protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: message}
 		m.setTunLastError(message)
-		return protocol.TunStatus{}, m.rollbackTrustedTun(ctx, op, candidate, previous, mapped)
+		return protocol.TunStatus{}, m.rollbackTrustedTun(ctx, op, candidate, previous, diagnostics.Wrap(mapped, confirmationErr))
 	}
 	m.publishSettings(candidate)
 	m.setTunLastError("")
@@ -156,7 +160,7 @@ func (m *Manager) rollbackTrustedTun(ctx context.Context, op Operation, candidat
 				want, _ = tun["enable"].(bool)
 			}
 			if err != nil || parseErr != nil || !ok || live != want {
-				configErr = errors.New("TUN live restore is unconfirmed")
+				configErr = errors.Join(errors.New("TUN live restore is unconfirmed"), err, parseErr)
 			}
 		}
 	}
@@ -164,6 +168,13 @@ func (m *Manager) rollbackTrustedTun(ctx context.Context, op Operation, candidat
 		return cause
 	}
 	m.stopCoreOnUnlock.Store(true)
-	_, err := m.updateStateLocked(recovery, state.CommandMeta{ID: op.ID, Source: op.Source}, func(s state.Snapshot) (state.Snapshot, error) { err := m.enterMutationDegraded(&s); return s, err })
+	_, err := m.updateStateLocked(recovery, state.CommandMeta{ID: op.ID, Source: op.Source}, func(s state.Snapshot) (state.Snapshot, error) {
+		degradedErr := m.enterMutationDegraded(&s)
+		var api protocol.APIError
+		if errors.As(degradedErr, &api) {
+			return s, state.CommittedError{Err: diagnostics.Wrap(api, errors.Join(cause, settingsErr, configErr))}
+		}
+		return s, degradedErr
+	})
 	return err
 }

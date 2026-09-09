@@ -990,14 +990,16 @@ func (*fakeSelfUpdater) ApplyPrepared(context.Context, update.PreparedUpdate) (u
 }
 
 type fakeClient struct {
-	onboarding      protocol.OnboardingStatus
-	installCalls    int
-	restartCalls    int
-	lastMutation    protocol.MutationRequest
-	onboardingCalls int
-	coreCalls       int
-	coreStatus      protocol.CoreStatus
-	coreErr         error
+	onboarding         protocol.OnboardingStatus
+	installCalls       int
+	restartCalls       int
+	coreOperations     []logging.OperationMetadata
+	businessOperations []logging.OperationMetadata
+	lastMutation       protocol.MutationRequest
+	onboardingCalls    int
+	coreCalls          int
+	coreStatus         protocol.CoreStatus
+	coreErr            error
 
 	systemProxy       protocol.SystemProxyStatus
 	systemProxyCalls  int
@@ -1138,13 +1140,17 @@ func (f *fakeClient) Core(context.Context) (protocol.CoreStatus, error) {
 	}
 	return protocol.CoreStatus{Schema: "mihari/v1", Revision: f.onboarding.Revision, Status: "running", Version: "v1.19.0"}, nil
 }
-func (f *fakeClient) InstallCore(_ context.Context, request protocol.MutationRequest) (protocol.CoreInstallResult, error) {
+func (f *fakeClient) InstallCore(ctx context.Context, request protocol.MutationRequest) (protocol.CoreInstallResult, error) {
 	f.installCalls++
+	operation, _ := logging.OperationFromContext(ctx)
+	f.coreOperations = append(f.coreOperations, operation)
 	f.lastMutation = request
 	return protocol.CoreInstallResult{Schema: "mihari/v1", Revision: f.onboarding.Revision + 1, Version: "v1.20.0", Updated: true}, nil
 }
-func (f *fakeClient) RestartCore(_ context.Context, request protocol.MutationRequest) (protocol.MutationResult, error) {
+func (f *fakeClient) RestartCore(ctx context.Context, request protocol.MutationRequest) (protocol.MutationResult, error) {
 	f.restartCalls++
+	operation, _ := logging.OperationFromContext(ctx)
+	f.coreOperations = append(f.coreOperations, operation)
 	f.lastMutation = request
 	return protocol.MutationResult{Schema: "mihari/v1", Revision: f.onboarding.Revision + 1}, nil
 }
@@ -1152,7 +1158,9 @@ func (f *fakeClient) SystemProxy(context.Context) (protocol.SystemProxyStatus, e
 	f.systemProxyCalls++
 	return f.systemProxy, nil
 }
-func (f *fakeClient) EnableSystemProxy(_ context.Context, request protocol.SystemProxyMutationRequest) (protocol.SystemProxyStatus, error) {
+func (f *fakeClient) EnableSystemProxy(ctx context.Context, request protocol.SystemProxyMutationRequest) (protocol.SystemProxyStatus, error) {
+	operation, _ := logging.OperationFromContext(ctx)
+	f.businessOperations = append(f.businessOperations, operation)
 	f.enableProxyCalls++
 	f.lastProxyMutation = request
 	if f.enableProxyErr != nil {
@@ -1169,7 +1177,9 @@ func (f *fakeClient) EnableSystemProxy(_ context.Context, request protocol.Syste
 	f.systemProxy = status
 	return status, nil
 }
-func (f *fakeClient) DisableSystemProxy(_ context.Context, request protocol.SystemProxyMutationRequest) (protocol.SystemProxyStatus, error) {
+func (f *fakeClient) DisableSystemProxy(ctx context.Context, request protocol.SystemProxyMutationRequest) (protocol.SystemProxyStatus, error) {
+	operation, _ := logging.OperationFromContext(ctx)
+	f.businessOperations = append(f.businessOperations, operation)
 	f.disableProxyCalls++
 	f.lastProxyMutation = request
 	if f.disableProxyErr != nil {
@@ -1190,7 +1200,9 @@ func (f *fakeClient) Tun(context.Context) (protocol.TunStatus, error) {
 	f.tunCalls++
 	return f.tun, nil
 }
-func (f *fakeClient) EnableTun(_ context.Context, request protocol.TunMutationRequest) (protocol.TunStatus, error) {
+func (f *fakeClient) EnableTun(ctx context.Context, request protocol.TunMutationRequest) (protocol.TunStatus, error) {
+	operation, _ := logging.OperationFromContext(ctx)
+	f.businessOperations = append(f.businessOperations, operation)
 	f.enableTunCalls++
 	f.lastTunMutation = request
 	if f.enableTunErr != nil {
@@ -1212,7 +1224,9 @@ func (f *fakeClient) EnableTun(_ context.Context, request protocol.TunMutationRe
 	f.tun = status
 	return status, nil
 }
-func (f *fakeClient) DisableTun(_ context.Context, request protocol.TunMutationRequest) (protocol.TunStatus, error) {
+func (f *fakeClient) DisableTun(ctx context.Context, request protocol.TunMutationRequest) (protocol.TunStatus, error) {
+	operation, _ := logging.OperationFromContext(ctx)
+	f.businessOperations = append(f.businessOperations, operation)
 	f.disableTunCalls++
 	f.lastTunMutation = request
 	if f.disableTunErr != nil {
@@ -1644,6 +1658,34 @@ func TestSystemCoreUpdateAndRestartRequireConfirmationWithCapturedRevision(t *te
 		if test.calls() != 1 || client.lastMutation.IfRevision == nil || *client.lastMutation.IfRevision != 11 || reconcile == nil {
 			t.Fatalf("row=%s calls=%d mutation=%#v", test.id, test.calls(), client.lastMutation)
 		}
+	}
+}
+
+func TestSystemCoreActionsBindAndReturnOperationMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		kind      actionKind
+		operation string
+	}{
+		{name: "update", kind: actionUpdate, operation: "core.install"},
+		{name: "switch channel", kind: actionSwitchChannel, operation: "core.install"},
+		{name: "restart", kind: actionRestart, operation: "core.restart"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeClient{onboarding: protocol.OnboardingStatus{Revision: 7}}
+			model := New(client, func() string { return "unused" })
+			command := model.runAction(actionStartMsg{kind: test.kind, operationID: "core-action", revision: 7, channel: "alpha"})
+
+			message := command().(actionResultMsg)
+
+			want := logging.OperationMetadata{ID: "core-action", Name: test.operation}
+			if len(client.coreOperations) != 1 || client.coreOperations[0] != want {
+				t.Fatalf("operations=%#v want=%#v", client.coreOperations, want)
+			}
+			if message.operation != want || message.err != nil {
+				t.Fatalf("message=%#v", message)
+			}
+		})
 	}
 }
 
@@ -3963,5 +4005,37 @@ func TestSelfUpdateChannel_UsesInjectedDiscoveryBeforeLegacyPath(t *testing.T) {
 	}
 	if got := m.currentMihariChannel(); got != update.ChannelDev || !called {
 		t.Fatalf("channel=%q discovered=%v", got, called)
+	}
+}
+
+func TestSystemProxyDiagnostic_TUIMetadata(t *testing.T) {
+	for _, kind := range []proxyActionKind{proxyEnable, proxyDisable, proxyForceEnable} {
+		client := &fakeClient{}
+		model := New(client, func() string { return "unused" })
+		result := model.runSystemProxyAction(kind, "business-id", 0, kind == proxyForceEnable)().(systemProxyActionResultMsg)
+		name := "system_proxy.enable"
+		if kind == proxyDisable {
+			name = "system_proxy.disable"
+		}
+		want := logging.OperationMetadata{ID: "business-id", Name: name}
+		if len(client.businessOperations) != 1 || client.businessOperations[0] != want || result.operation != want {
+			t.Fatalf("metadata=%#v result=%#v", client.businessOperations, result.operation)
+		}
+	}
+}
+
+func TestTunDiagnostic_TUIMetadata(t *testing.T) {
+	for _, kind := range []tunActionKind{tunEnable, tunDisable, tunForceEnable} {
+		client := &fakeClient{}
+		model := New(client, func() string { return "unused" })
+		result := model.runTunAction(kind, "business-id", 0, kind == tunForceEnable)().(tunActionResultMsg)
+		name := "tun.enable"
+		if kind == tunDisable {
+			name = "tun.disable"
+		}
+		want := logging.OperationMetadata{ID: "business-id", Name: name}
+		if len(client.businessOperations) != 1 || client.businessOperations[0] != want || result.operation != want {
+			t.Fatalf("metadata=%#v result=%#v", client.businessOperations, result.operation)
+		}
 	}
 }

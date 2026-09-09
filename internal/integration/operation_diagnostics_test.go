@@ -23,9 +23,13 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/transport"
 	transporttest "github.com/mihari-proxy/mihari/internal/control/transport/testutil"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
+	"github.com/mihari-proxy/mihari/internal/geoip"
 	"github.com/mihari-proxy/mihari/internal/logging"
+	"github.com/mihari-proxy/mihari/internal/mihomo"
+	"github.com/mihari-proxy/mihari/internal/panel"
 	"github.com/mihari-proxy/mihari/internal/runtime"
 	"github.com/mihari-proxy/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/sysproxy"
 )
 
 const (
@@ -133,7 +137,7 @@ type operationDiagnosticsIPCFixture struct {
 	done       <-chan error
 }
 
-func newOperationDiagnosticsIPCFixture(t *testing.T, result config.CommitResult, saveErr error) *operationDiagnosticsIPCFixture {
+func newOperationDiagnosticsIPCFixture(t *testing.T, result config.CommitResult, saveErr error, configure ...func(*runtime.Options)) *operationDiagnosticsIPCFixture {
 	t.Helper()
 	redactor := logging.NewRedactor(diagnosticsIPCToken, diagnosticsIPCSecret, "subscription-token")
 	daemonLogs := new(synchronizedBuffer)
@@ -145,7 +149,7 @@ func newOperationDiagnosticsIPCFixture(t *testing.T, result config.CommitResult,
 	clientReporter := logging.NewDiagnosticReporter(slog.New(logging.NewJSONHandler(clientLogs, clientLevel, "client", redactor)), redactor)
 	saver := &ipcSettingsSaver{result: result, err: saveErr}
 	store := state.NewStore(state.Snapshot{Health: state.HealthOK})
-	manager := runtime.New(runtime.Options{
+	options := runtime.Options{
 		Store:        store,
 		Settings:     config.Defaults(),
 		SettingsPath: filepath.Join(t.TempDir(), "settings.yaml"),
@@ -154,7 +158,11 @@ func newOperationDiagnosticsIPCFixture(t *testing.T, result config.CommitResult,
 		DiagnosticReporter: func(ctx context.Context, record diagnostics.Record) {
 			daemonReporter(ctx, record)
 		},
-	})
+	}
+	for _, apply := range configure {
+		apply(&options)
+	}
+	manager := runtime.New(options)
 	endpoint := transporttest.Endpoint(t)
 	listener, err := transport.Listen(endpoint)
 	if err != nil {
@@ -532,3 +540,121 @@ func parseDiagnosticJSONLines(t *testing.T, logs string) []map[string]string {
 }
 
 func stringPointer(value string) *string { return &value }
+
+func TestSystemProxyDiagnostic_IPCOwnerDedup(t *testing.T) {
+	cause := &os.PathError{Op: "open", Path: diagnosticsIPCURL, Err: os.ErrPermission}
+	fixture := newOperationDiagnosticsIPCFixture(t, config.CommitResult{}, nil, func(options *runtime.Options) { options.SysProxy = &sysproxy.FakeBackend{GetErr: cause} })
+	for _, id := range []string{"proxy-ipc", "proxy-ipc", "proxy-ipc-next"} {
+		_, err := fixture.client.EnableSystemProxy(context.Background(), protocol.SystemProxyMutationRequest{OperationID: id})
+		var api protocol.APIError
+		if !errors.As(err, &api) || api.Code != protocol.CodeUpstreamFailure || api.Message != "read system proxy state" {
+			t.Fatalf("error=%v", err)
+		}
+		assertDiagnosticLogs(t, fixture.daemonLogs.String(), slog.LevelError, id, 1)
+		assertDiagnosticDetail(t, fixture.daemonLogs.String(), slog.LevelError, id, "runtime", "operation.failed", "permission denied")
+	}
+	if strings.Contains(fixture.daemonLogs.String(), `"component":"control"`) {
+		t.Fatalf("server duplicated owner: %s", fixture.daemonLogs.String())
+	}
+	if !strings.Contains(fixture.daemonLogs.String(), `"operation":"system_proxy.enable"`) || !strings.Contains(fixture.clientLogs.String(), `"operation":"system_proxy.enable"`) {
+		t.Fatal("operation missing from IPC logs")
+	}
+	assertNoDiagnosticSecrets(t, fixture.daemonLogs.String(), fixture.clientLogs.String())
+	assertNoDuplicateTopLevelJSONKeys(t, fixture.daemonLogs.String())
+	assertNoDuplicateTopLevelJSONKeys(t, fixture.clientLogs.String())
+}
+
+func TestTunDiagnostic_IPCOwnerDedup(t *testing.T) {
+	cause := &os.PathError{Op: "open", Path: diagnosticsIPCURL, Err: os.ErrPermission}
+	fixture := newOperationDiagnosticsIPCFixture(t, config.CommitResult{}, cause)
+	for _, id := range []string{"tun-ipc", "tun-ipc", "tun-ipc-next"} {
+		_, err := fixture.client.EnableTun(context.Background(), protocol.TunMutationRequest{OperationID: id, Force: true})
+		assertIPCDataFailure(t, err)
+		assertDiagnosticLogs(t, fixture.daemonLogs.String(), slog.LevelError, id, 1)
+		assertDiagnosticDetail(t, fixture.daemonLogs.String(), slog.LevelError, id, "runtime", "operation.failed", "permission denied")
+	}
+	if !strings.Contains(fixture.daemonLogs.String(), `"operation":"tun.enable"`) || !strings.Contains(fixture.clientLogs.String(), `"operation":"tun.enable"`) {
+		t.Fatal("TUN operation missing from IPC logs")
+	}
+	assertNoDiagnosticSecrets(t, fixture.daemonLogs.String(), fixture.clientLogs.String())
+	assertNoDuplicateTopLevelJSONKeys(t, fixture.daemonLogs.String())
+}
+
+func TestGeoIPDiagnostic_IPCRawFailureKeepsInternalEnvelope(t *testing.T) {
+	cause := &os.PathError{Op: "open", Path: diagnosticsIPCURL, Err: os.ErrPermission}
+	service := geoip.New(geoip.ServiceOptions{CountryPath: filepath.Join(t.TempDir(), "country.mmdb"), ASNPath: filepath.Join(t.TempDir(), "asn.mmdb")})
+	t.Cleanup(func() {
+		if err := service.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	fixture := newOperationDiagnosticsIPCFixture(t, config.CommitResult{}, nil, func(options *runtime.Options) {
+		options.GeoIP = service
+		options.PrepareGeoIP = func(context.Context) (runtime.GeoIPCandidate, error) { return nil, cause }
+	})
+	for _, id := range []string{"geoip-ipc", "geoip-ipc", "geoip-ipc-next"} {
+		_, err := fixture.client.UpdateGeoIP(context.Background(), protocol.MutationRequest{OperationID: id})
+		var api protocol.APIError
+		if !errors.As(err, &api) || api.Code != protocol.CodeInternal || api.Message != "internal error" || len(api.Details) != 0 {
+			t.Fatalf("raw domain error changed envelope: %v", err)
+		}
+		assertDiagnosticLogs(t, fixture.daemonLogs.String(), slog.LevelError, id, 1)
+		assertDiagnosticDetail(t, fixture.daemonLogs.String(), slog.LevelError, id, "runtime", "operation.failed", "permission denied")
+	}
+	if !strings.Contains(fixture.daemonLogs.String(), `"operation":"geoip.update"`) || !strings.Contains(fixture.clientLogs.String(), `"operation":"geoip.update"`) {
+		t.Fatal("operation metadata missing")
+	}
+	assertNoDiagnosticSecrets(t, fixture.daemonLogs.String(), fixture.clientLogs.String())
+	assertNoDuplicateTopLevelJSONKeys(t, fixture.daemonLogs.String())
+}
+
+type ipcPanelFailure struct {
+	runtime.PanelService
+	failure error
+}
+
+func (p ipcPanelFailure) PrepareInstall(context.Context, string, string) (panel.PreparedMutation, error) {
+	return nil, p.failure
+}
+func TestPanelDiagnostic_IPCOwnerDedup(t *testing.T) {
+	cause := &os.PathError{Op: "open", Path: diagnosticsIPCURL, Err: os.ErrPermission}
+	failure := diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download panel asset failed"}, cause)
+	fixture := newOperationDiagnosticsIPCFixture(t, config.CommitResult{}, nil, func(options *runtime.Options) { options.Panels = ipcPanelFailure{failure: failure} })
+	for _, id := range []string{"panel-ipc", "panel-ipc", "panel-ipc-next"} {
+		_, err := fixture.client.InstallPanel(context.Background(), "zashboard", protocol.PanelInstallRequest{OperationID: id})
+		var api protocol.APIError
+		if !errors.As(err, &api) || api.Code != protocol.CodeNetworkFailure || api.Message != "download panel asset failed" {
+			t.Fatalf("error=%v", err)
+		}
+		assertDiagnosticLogs(t, fixture.daemonLogs.String(), slog.LevelError, id, 1)
+		assertDiagnosticDetail(t, fixture.daemonLogs.String(), slog.LevelError, id, "runtime", "operation.failed", "permission denied")
+	}
+	if !strings.Contains(fixture.daemonLogs.String(), `"operation":"panel.install"`) || !strings.Contains(fixture.clientLogs.String(), `"operation":"panel.install"`) {
+		t.Fatal("panel metadata missing")
+	}
+	assertNoDiagnosticSecrets(t, fixture.daemonLogs.String(), fixture.clientLogs.String())
+	assertNoDuplicateTopLevelJSONKeys(t, fixture.daemonLogs.String())
+}
+
+type ipcProviderTransport func(*http.Request) (*http.Response, error)
+
+func (f ipcProviderTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+func TestProviderDiagnostic_IPCActualAdapterOwnerDedup(t *testing.T) {
+	cause := &os.PathError{Op: "open", Path: diagnosticsIPCURL, Err: os.ErrPermission}
+	adapter := mihomo.NewClient("http://127.0.0.1", diagnosticsIPCSecret, &http.Client{Transport: ipcProviderTransport(func(*http.Request) (*http.Response, error) { return nil, cause })})
+	fixture := newOperationDiagnosticsIPCFixture(t, config.CommitResult{}, nil, func(options *runtime.Options) { options.Controller = adapter })
+	for _, id := range []string{"provider-ipc", "provider-ipc", "provider-ipc-next"} {
+		_, err := fixture.client.UpdateRuleProvider(context.Background(), "native", protocol.MutationRequest{OperationID: id})
+		var api protocol.APIError
+		if !errors.As(err, &api) || api.Code != protocol.CodeUpstreamFailure || api.Message != "mihomo controller is unavailable" {
+			t.Fatalf("error=%v", err)
+		}
+		assertDiagnosticLogs(t, fixture.daemonLogs.String(), slog.LevelError, id, 1)
+		assertDiagnosticDetail(t, fixture.daemonLogs.String(), slog.LevelError, id, "runtime", "operation.failed", "permission denied")
+	}
+	if !strings.Contains(fixture.daemonLogs.String(), `"operation":"rule_provider.refresh"`) || !strings.Contains(fixture.clientLogs.String(), `"operation":"rule_provider.refresh"`) {
+		t.Fatal("provider metadata missing")
+	}
+	assertNoDiagnosticSecrets(t, fixture.daemonLogs.String(), fixture.clientLogs.String())
+	assertNoDuplicateTopLevelJSONKeys(t, fixture.daemonLogs.String())
+}

@@ -18,6 +18,9 @@ type memoryConfigs struct {
 	writes        int
 	failWriteAt   int
 	failWriteFrom int
+	writeErrors   map[int]error
+	pathErrors    map[int]error
+	readErrors    map[int]error
 }
 
 func (f *memoryConfigs) prepare(ctx context.Context, b []byte) (*ConfigCapability, error) {
@@ -30,6 +33,10 @@ func (f *memoryConfigs) prepare(ctx context.Context, b []byte) (*ConfigCapabilit
 	return &ConfigCapability{file: v, root: f.s.location(), hash: sha256.Sum256(b)}, e
 }
 func (f *memoryConfigs) read(ctx context.Context) ([]byte, error) {
+	if e := f.readErrors[f.writes]; e != nil {
+		delete(f.readErrors, f.writes)
+		return nil, e
+	}
 	return f.s.Load(ctx, ProvenanceRole("runtime_config"), "")
 }
 func (f *memoryConfigs) write(ctx context.Context, b []byte) (*ConfigCapability, error) {
@@ -40,7 +47,14 @@ func (f *memoryConfigs) write(ctx context.Context, b []byte) (*ConfigCapability,
 	if f.writes == f.failWriteAt || f.failWriteFrom > 0 && f.writes >= f.failWriteFrom {
 		return nil, errors.New("sync failed after replacement")
 	}
-	return f.bind(ctx, sha256.Sum256(b))
+	if e := f.writeErrors[f.writes]; e != nil {
+		return nil, e
+	}
+	cap, e := f.bind(ctx, sha256.Sum256(b))
+	if e == nil && f.pathErrors[f.writes] != nil {
+		cap.file = &configFaultFile{verifiedFile: cap.file, err: f.pathErrors[f.writes]}
+	}
+	return cap, e
 }
 func (f *memoryConfigs) bind(ctx context.Context, hash [32]byte) (*ConfigCapability, error) {
 	b, e := f.read(ctx)
@@ -386,3 +400,11 @@ func TestTrustedRuntime_RejectsEmptyGeneratedBytes(t *testing.T) {
 		t.Fatal("empty bytes staged or published")
 	}
 }
+
+// configFaultFile models failure of the identity check after a successful write.
+type configFaultFile struct {
+	verifiedFile
+	err error
+}
+
+func (f *configFaultFile) verify(context.Context) (string, error) { return "", f.err }

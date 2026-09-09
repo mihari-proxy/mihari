@@ -160,9 +160,10 @@ type systemProxyStatusMsg struct {
 }
 
 type systemProxyActionResultMsg struct {
-	kind   proxyActionKind
-	status protocol.SystemProxyStatus
-	err    error
+	operation logging.OperationMetadata
+	kind      proxyActionKind
+	status    protocol.SystemProxyStatus
+	err       error
 }
 
 // Err implements the shell's action-outcome contract so system proxy actions
@@ -198,9 +199,10 @@ func (m webGUIOpenResultMsg) Err() error { return m.err }
 var _ interface{ Err() error } = webGUIOpenResultMsg{}
 
 type tunActionResultMsg struct {
-	kind   tunActionKind
-	status protocol.TunStatus
-	err    error
+	operation logging.OperationMetadata
+	kind      tunActionKind
+	status    protocol.TunStatus
+	err       error
 }
 
 // Err implements the shell's action-outcome contract so TUN actions are
@@ -282,10 +284,11 @@ type actionStartMsg struct {
 }
 
 type actionResultMsg struct {
-	kind    actionKind
-	install protocol.CoreInstallResult
-	restart protocol.MutationResult
-	err     error
+	kind      actionKind
+	install   protocol.CoreInstallResult
+	restart   protocol.MutationResult
+	operation logging.OperationMetadata
+	err       error
 }
 
 type coreLoadResultMsg struct {
@@ -1989,6 +1992,11 @@ func (m *Model) confirmForceSystemProxy(apiError protocol.APIError) tea.Cmd {
 }
 
 func (m *Model) runSystemProxyAction(kind proxyActionKind, operationID string, revision uint64, force bool) tea.Cmd {
+	operation := logging.OperationMetadata{ID: operationID, Name: "system_proxy.enable"}
+	if kind == proxyDisable {
+		operation.Name = "system_proxy.disable"
+	}
+	ctx := logging.WithOperation(m.ctx, operation)
 	return func() tea.Msg {
 		request := protocol.SystemProxyMutationRequest{OperationID: operationID, Force: force}
 		if revision > 0 {
@@ -2000,11 +2008,11 @@ func (m *Model) runSystemProxyAction(kind proxyActionKind, operationID string, r
 		)
 		switch kind {
 		case proxyDisable:
-			status, err = m.client.DisableSystemProxy(m.ctx, request)
+			status, err = m.client.DisableSystemProxy(ctx, request)
 		default:
-			status, err = m.client.EnableSystemProxy(m.ctx, request)
+			status, err = m.client.EnableSystemProxy(ctx, request)
 		}
-		return systemProxyActionResultMsg{kind: kind, status: status, err: err}
+		return systemProxyActionResultMsg{operation: operation, kind: kind, status: status, err: err}
 	}
 }
 
@@ -2062,6 +2070,11 @@ func (m *Model) confirmForceTun(apiError protocol.APIError) tea.Cmd {
 }
 
 func (m *Model) runTunAction(kind tunActionKind, operationID string, revision uint64, force bool) tea.Cmd {
+	operation := logging.OperationMetadata{ID: operationID, Name: "tun.enable"}
+	if kind == tunDisable {
+		operation.Name = "tun.disable"
+	}
+	ctx := logging.WithOperation(m.ctx, operation)
 	return func() tea.Msg {
 		request := protocol.TunMutationRequest{OperationID: operationID, Force: force}
 		if revision > 0 {
@@ -2072,11 +2085,11 @@ func (m *Model) runTunAction(kind tunActionKind, operationID string, revision ui
 			err    error
 		)
 		if kind == tunDisable {
-			status, err = m.client.DisableTun(m.ctx, request)
+			status, err = m.client.DisableTun(ctx, request)
 		} else {
-			status, err = m.client.EnableTun(m.ctx, request)
+			status, err = m.client.EnableTun(ctx, request)
 		}
-		return tunActionResultMsg{kind: kind, status: status, err: err}
+		return tunActionResultMsg{operation: operation, kind: kind, status: status, err: err}
 	}
 }
 
@@ -2607,19 +2620,25 @@ func (m *Model) tunActionLabel() string {
 }
 
 func (m *Model) runAction(start actionStartMsg) tea.Cmd {
+	operationName := "core.restart"
+	if start.kind == actionUpdate || start.kind == actionSwitchChannel {
+		operationName = "core.install"
+	}
+	operation := logging.OperationMetadata{ID: start.operationID, Name: operationName}
 	return func() tea.Msg {
 		revision := start.revision
 		request := protocol.MutationRequest{OperationID: start.operationID, IfRevision: &revision, Source: start.source}
+		ctx := logging.WithOperation(m.ctx, operation)
 		if start.channel != "" {
 			channel := start.channel
 			request.Channel = &channel
 		}
 		if start.kind == actionUpdate || start.kind == actionSwitchChannel {
-			result, err := m.client.InstallCore(m.ctx, request)
-			return actionResultMsg{kind: start.kind, install: result, err: err}
+			result, err := m.client.InstallCore(ctx, request)
+			return actionResultMsg{kind: start.kind, install: result, operation: operation, err: err}
 		}
-		result, err := m.client.RestartCore(m.ctx, request)
-		return actionResultMsg{kind: start.kind, restart: result, err: err}
+		result, err := m.client.RestartCore(ctx, request)
+		return actionResultMsg{kind: start.kind, restart: result, operation: operation, err: err}
 	}
 }
 

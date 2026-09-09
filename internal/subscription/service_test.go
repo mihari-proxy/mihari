@@ -7,9 +7,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 func newServiceForTest(t *testing.T, handler http.Handler) (*Service, string) {
@@ -27,6 +30,15 @@ func newServiceForTest(t *testing.T, handler http.Handler) (*Service, string) {
 		t.Fatal(err)
 	}
 	return service, server.URL
+}
+
+func TestServiceDiagnostic_ReadCachePreservesMissingCacheCause(t *testing.T) {
+	service, _ := newServiceForTest(t, http.NotFoundHandler())
+	_, _, err := service.ReadCache("0123456789abcdef0123456789abcdef")
+	var api protocol.APIError
+	if !errors.Is(err, os.ErrNotExist) || !errors.As(err, &api) || api.Code != protocol.CodeDataFailure || api.Message != "subscription cache is unavailable" {
+		t.Fatalf("cache error cause or public classification lost: %v", err)
+	}
 }
 
 func TestPrepareRefreshDoesNotPersistUntilCommit(t *testing.T) {
@@ -119,6 +131,98 @@ func TestNotModifiedRetainsCacheAndAdvancesMetadataVersion(t *testing.T) {
 	}
 	if secondReceipt.After.Profiles[0].Version <= firstReceipt.After.Profiles[0].Version {
 		t.Fatal("304 did not advance metadata version")
+	}
+}
+
+func TestPrepareRefresh_NotModifiedMissingCachePreservesCauseAndCatalogState(t *testing.T) {
+	requests := 0
+	service, url := newServiceForTest(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requests++
+		if requests == 1 {
+			writer.Header().Set("ETag", `"one"`)
+			_, _ = writer.Write([]byte("proxies: []\n"))
+			return
+		}
+		writer.WriteHeader(http.StatusNotModified)
+	}))
+	profile, err := service.Add("main", url, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := service.PrepareRefresh(context.Background(), profile.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CommitRefresh(prepared); err != nil {
+		t.Fatal(err)
+	}
+	before := service.Snapshot().Profiles[0]
+	if err := os.Remove(service.CachePath(profile.ID)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.PrepareRefresh(context.Background(), profile.ID)
+	var api protocol.APIError
+	if !errors.Is(err, os.ErrNotExist) || !errors.As(err, &api) || api.Code != protocol.CodeDataFailure || api.Message != "subscription provider returned not-modified without a valid cache" {
+		t.Fatalf("304 cache error lost cause or public contract: %v", err)
+	}
+	after := service.Snapshot().Profiles[0]
+	if after.ID != before.ID || after.Generation != before.Generation || after.Version != before.Version || after.LastError != api.Message {
+		t.Fatalf("304 failure changed catalog state unexpectedly: before=%#v after=%#v", before, after)
+	}
+	if _, err := os.Stat(service.CachePath(profile.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("304 failure recreated cache: %v", err)
+	}
+}
+
+func TestCommitRefresh_ExistingCacheReadPreservesCauseAndCatalogState(t *testing.T) {
+	service, url := newServiceForTest(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte("proxies: []\n"))
+	}))
+	profile, err := service.Add("main", url, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := service.PrepareRefresh(context.Background(), profile.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(service.CachePath(profile.ID), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	before := service.Snapshot()
+	_, err = service.CommitRefresh(prepared)
+	var api protocol.APIError
+	var pathError *os.PathError
+	if !errors.As(err, &pathError) || pathError.Err == nil || pathError.Path != service.CachePath(profile.ID) || !errors.As(err, &api) || api.Code != protocol.CodeDataFailure || api.Message != "read existing subscription cache" {
+		t.Fatalf("cache read error lost cause or public contract: %v", err)
+	}
+	if got := service.Snapshot(); !reflect.DeepEqual(got, before) {
+		t.Fatalf("cache read failure changed catalog: before=%#v after=%#v", before, got)
+	}
+}
+
+func TestCommitRefresh_AtomicWritePreservesCauseAndCatalogState(t *testing.T) {
+	service, url := newServiceForTest(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte("proxies: []\n"))
+	}))
+	profile, err := service.Add("main", url, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := service.PrepareRefresh(context.Background(), profile.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	atomicCause := errors.New("private atomic write cause")
+	service.writeCache = func(string, []byte, os.FileMode) error { return atomicCause }
+	before := service.Snapshot()
+	_, err = service.CommitRefresh(prepared)
+	var api protocol.APIError
+	if !errors.Is(err, atomicCause) || !errors.As(err, &api) || api.Code != protocol.CodeDataFailure || api.Message != "write subscription cache" {
+		t.Fatalf("cache write error lost cause or public contract: %v", err)
+	}
+	if got := service.Snapshot(); !reflect.DeepEqual(got, before) {
+		t.Fatalf("cache write failure changed catalog: before=%#v after=%#v", before, got)
 	}
 }
 

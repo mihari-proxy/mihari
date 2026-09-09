@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -103,5 +104,17 @@ func TestSystemProxyDisableMapsNotOwnedError(t *testing.T) {
 	}
 	if fake.operation.ID != "sysproxy-disable-1" || fake.systemProxyForce {
 		t.Fatalf("operation=%#v force=%v (force must be ignored on disable)", fake.operation, fake.systemProxyForce)
+	}
+}
+
+func TestSystemProxyDiagnostic_ServerMetadata(t *testing.T) {
+	for _, action := range []string{"enable", "disable"} {
+		fake := &fakeRuntime{}
+		server := New(Options{Token: "token", Runtime: fake, Store: state.NewStore(state.Snapshot{})})
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, authorizedRequest(http.MethodPost, "/v1/system-proxy/"+action, bytes.NewBufferString(`{"operation_id":"business-id"}`)))
+		if response.Code != http.StatusOK || fake.operationContext != (logging.OperationMetadata{ID: "business-id", Name: "system_proxy." + action}) {
+			t.Fatalf("status=%d metadata=%#v", response.Code, fake.operationContext)
+		}
 	}
 }

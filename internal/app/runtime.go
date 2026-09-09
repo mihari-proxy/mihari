@@ -246,7 +246,8 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	}
 	var manager *runtimeapi.Manager
 	coreSupervisor := supervisor.New(supervisor.Options{
-		Starter: mihomoStarter,
+		Starter:            mihomoStarter,
+		DiagnosticReporter: options.DiagnosticReporter,
 		Health: func(ctx context.Context) error {
 			_, err := controller.Version(ctx)
 			return err

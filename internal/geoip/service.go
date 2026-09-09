@@ -206,9 +206,9 @@ func (p *PreparedUpdate) Commit() error {
 		return err
 	}
 	if err := p.asn.Commit(); err != nil {
-		_ = p.country.Rollback()
+		restoreErr := p.country.Rollback()
 		s.reopenLocked()
-		return err
+		return joinUpdateRecovery(err, restoreErr)
 	}
 	country, countryErr := s.openDatabase(s.countryPath)
 	asn, asnErr := s.openDatabase(s.asnPath)
@@ -219,10 +219,10 @@ func (p *PreparedUpdate) Commit() error {
 		if asn != nil {
 			_ = asn.Close()
 		}
-		_ = p.asn.Rollback()
-		_ = p.country.Rollback()
+		asnRestoreErr := p.asn.Rollback()
+		countryRestoreErr := p.country.Rollback()
 		s.reopenLocked()
-		return errors.Join(countryErr, asnErr)
+		return joinUpdateRecovery(errors.Join(countryErr, asnErr), asnRestoreErr, countryRestoreErr)
 	}
 	s.country, s.asn = country, asn
 	s.countryErr, s.asnErr = nil, nil
@@ -358,4 +358,18 @@ func (s *Service) NeedsUpdate(now time.Time, maxAge time.Duration) bool {
 		}
 	}
 	return false
+}
+
+// updateRecoveryFailure keeps the original error text; additional recovery
+// failures are available only to internal diagnostics and errors.Is/As.
+type updateRecoveryFailure struct{ primary, recovery error }
+
+func (e updateRecoveryFailure) Error() string   { return e.primary.Error() }
+func (e updateRecoveryFailure) Unwrap() []error { return []error{e.primary, e.recovery} }
+func joinUpdateRecovery(primary error, recovery ...error) error {
+	joined := errors.Join(recovery...)
+	if joined == nil {
+		return primary
+	}
+	return updateRecoveryFailure{primary: primary, recovery: joined}
 }

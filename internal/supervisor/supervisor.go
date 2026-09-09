@@ -3,10 +3,13 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
+	"github.com/mihari-proxy/mihari/internal/logging"
 )
 
 type Status string
@@ -45,17 +48,18 @@ type Waiter interface {
 type HealthChecker func(context.Context) error
 
 type Options struct {
-	Starter        Starter
-	Health         HealthChecker
-	Waiter         Waiter
-	Now            func() time.Time
-	Observe        func(Observation)
-	MinimumBackoff time.Duration
-	MaximumBackoff time.Duration
-	StableAfter    time.Duration
-	GracePeriod    time.Duration
-	HealthInterval time.Duration
-	StopTimeout    time.Duration
+	Starter            Starter
+	Health             HealthChecker
+	Waiter             Waiter
+	Now                func() time.Time
+	Observe            func(Observation)
+	MinimumBackoff     time.Duration
+	MaximumBackoff     time.Duration
+	StableAfter        time.Duration
+	GracePeriod        time.Duration
+	HealthInterval     time.Duration
+	StopTimeout        time.Duration
+	DiagnosticReporter diagnostics.Reporter
 }
 
 type maintenanceRequest struct {
@@ -113,6 +117,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	runDone := make(chan struct{})
 	s.runDone.Store(&runDone)
 	defer func() { s.active.Store(false); close(runDone) }()
+	ctx = logging.WithOperation(ctx, logging.OperationMetadata{})
 
 	backoff := NewBackoff(s.options.MinimumBackoff, s.options.MaximumBackoff)
 	var restarts uint64
@@ -146,6 +151,10 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		}
 		child, err := s.options.Starter.Start()
 		s.startGate <- struct{}{}
+		if err != nil {
+			err = supervisorFailure("mihomo process start failed", err)
+			s.report(ctx, "core.start.failed", slog.LevelError, err)
+		}
 		if err == nil {
 			s.observe(Observation{Status: StatusStarting, PID: child.PID(), Restarts: restarts})
 			var explicit bool
@@ -220,6 +229,9 @@ func (s *Supervisor) runChild(parent context.Context, child Child, restarts uint
 	case <-parent.Done():
 		err := s.stopChild(child, done)
 		finishMonitor()
+		if err != nil {
+			s.report(parent, "core.termination.failed", slog.LevelError, supervisorFailure("mihomo process termination failed", err))
+		}
 		return err, false
 	case request := <-s.maintain:
 		err := s.stopChild(child, done)
@@ -247,12 +259,19 @@ func (s *Supervisor) runChild(parent context.Context, child Child, restarts uint
 		return err, true
 	case err := <-done:
 		finishMonitor()
-		return errors.Join(err, s.waitDescendants(child)), false
+		err = supervisorFailure("mihomo process exited unexpectedly", errors.Join(err, s.waitDescendants(child)))
+		s.report(parent, "core.exit.unexpected", slog.LevelError, err)
+		return err, false
 	case err := <-healthFailure:
 		stopError := s.stopChild(child, done)
 		finishMonitor()
+		if level, emit := diagnostics.FailureLevel(parent, err); emit {
+			s.report(parent, "core.health.failed", level, err)
+		}
 		if stopError != nil {
-			return stopError, false
+			terminationError := supervisorFailure("mihomo process termination failed", stopError)
+			s.report(parent, "core.termination.failed", slog.LevelError, terminationError)
+			return supervisorFailure("mihomo health check failed three times", errors.Join(err, terminationError)), false
 		}
 		return err, false
 	}
@@ -280,8 +299,9 @@ func (s *Supervisor) monitor(ctx context.Context, pid int, restarts uint64, fail
 		} else {
 			failures++
 			if failures >= 3 {
+				failure := supervisorFailure("mihomo health check failed three times", err)
 				select {
-				case failed <- errors.New("mihomo health check failed three times"):
+				case failed <- failure:
 				case <-ctx.Done():
 				}
 				return
@@ -361,6 +381,22 @@ func (s *Supervisor) observe(observation Observation) {
 	if s.options.Observe != nil {
 		s.options.Observe(observation)
 	}
+}
+
+func (s *Supervisor) report(ctx context.Context, event string, level slog.Level, err error) {
+	if s.options.DiagnosticReporter == nil {
+		return
+	}
+	s.options.DiagnosticReporter(ctx, diagnostics.Record{
+		Component: "supervisor",
+		Event:     event,
+		Level:     level,
+		Err:       err,
+	})
+}
+
+func supervisorFailure(message string, cause error) error {
+	return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: message}, cause)
 }
 
 type realWaiter struct{}

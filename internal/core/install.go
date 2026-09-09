@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 const (
@@ -130,7 +131,7 @@ func (c *Candidate) Commit() (InstallResult, error) {
 		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core binary directory"}
 	}
 	if err := replaceBinary(c.path, c.binaryPath); err != nil {
-		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "replace mihomo core"}
+		return InstallResult{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "replace mihomo core"}, err)
 	}
 	c.path = ""
 	return InstallResult{Version: c.version, Updated: true, AlphaSHA: c.alphaSHA}, nil
@@ -265,7 +266,7 @@ func (i Installer) Download(ctx context.Context, asset Asset, destination string
 	request.Header.Set("User-Agent", "mihari")
 	response, err := i.httpClient().Do(request)
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download mihomo core failed"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download mihomo core failed"}, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -279,7 +280,7 @@ func (i Installer) Download(ctx context.Context, asset Asset, destination string
 	written, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, maxCoreArchiveSize+1))
 	closeErr := file.Close()
 	if copyErr != nil || closeErr != nil {
-		return protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "save mihomo core download failed"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "save mihomo core download failed"}, errors.Join(copyErr, closeErr))
 	}
 	if written > maxCoreArchiveSize || (asset.Size > 0 && written != asset.Size) {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo asset size mismatch"}
@@ -395,7 +396,7 @@ func withAIOHint(err error) error {
 	var apiError protocol.APIError
 	if errors.As(err, &apiError) && apiError.Code == protocol.CodeNetworkFailure {
 		apiError.Message += "; for offline or restricted networks, use the all-in-one installer (install-aio-remote.sh / .ps1)"
-		return apiError
+		return diagnostics.Wrap(apiError, err)
 	}
 	return err
 }

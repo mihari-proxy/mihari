@@ -29,7 +29,7 @@
 | --- | --- | --- |
 | 3A 订阅 | `runtime/subscription.go`、`subscription/{service,downloader}.go` | runtime/subscription_test.go 的 subscriptionManager；subscription service/downloader tests |
 | 3B 核心 | `runtime/manager.go` Install/Restart、`core/{install,config,command}.go` 中已有错误转换、`supervisor/supervisor.go` | core/install_test.go（Prepare/Download）、runtime manager fakes、supervisor fakeStarter/fakeChild/fakeWaiter |
-| 3C 配置事务 | `runtime/subscription.go` 的 prepareContent、commitRuntimeConfig、commitTrustedRuntimeConfig、markConfigDegraded；`core/trusted_runtime_unix.go` 中相应返回原因 | ValidateConfig/reload fake、trusted fixture、runtime subscription tests |
+| 3C 配置事务 | `runtime/subscription.go` 的 prepareContent、commitRuntimeConfig、commitTrustedRuntimeConfig、markConfigDegraded，以及六处配置 prepare/apply 后的 catalog/receipt 回滚错误出口；`core/trusted_runtime.go` 的 Publish 两处既有恢复失败转换（实际定位），`core/trusted_runtime_unix.go` 仅核对相应原因传递 | ValidateConfig/reload fake、trusted fixture、runtime subscription tests |
 | 3D 其他 | `runtime/{sysproxy,tun,tun_trusted,geoip,panel,provider}.go`；geoip/panel/mihomo 中这几条调用链已有 cause 丢弃点 | runtime 相邻 tests；geoip/panel/mihomo 单元测试 |
 | 每批控制入口 | `control/client/runtime.go`、server 对应 endpoint 文件、cli/runtime.go 及对应命令、tui 对应业务页 | 已有 DTO/命令/页面测试，只添加操作 ctx/元数据断言 |
 | 本阶段配套 | 各包相邻 `*_diagnostics_test.go`；`integration/operation_diagnostics_test.go`；`docs/architecture.md` | 扩展 Phase 2 IPC fixture；更新审计登记 |
@@ -68,7 +68,7 @@ func (r *diagnosticRecorder) snapshot() []diagnosticRecord {
 **Consumes:** diagnostics.Wrap、runtime doOperation 的执行 ctx、Reporter、Phase 1 OperationMetadata。
 **Produces:** 订阅原因可追溯；原有字段/刷新行为不变；此批已存在 mutation 的客户端与 server ID 接入。
 
-- [ ] **1. 补充最小原因回归。** 在 subscription/downloader_test.go 添加下列测试；无需新 HTTP stub 即可证明既有转换丢失原因。
+- [x] **1. 补充最小原因回归。** 在 subscription/downloader_test.go 添加下列测试；无需新 HTTP stub 即可证明既有转换丢失原因。
 
 ```go
 func TestDownloaderDiagnostic_PreservesNetworkCause(t *testing.T) {
@@ -82,8 +82,8 @@ func TestDownloaderDiagnostic_PreservesNetworkCause(t *testing.T) {
 }
 ```
 
-- [ ] **2. Red：** `go test ./internal/subscription -run '^TestDownloaderDiagnostic_' -count=1`。
-- [ ] **3. 最小修正。** toAPIError 仅在原 netFail 分支改为下面形式，不改变 `isFallbackable`、orderFor、HTTP状态判断或取消优先级：
+- [x] **2. Red：** `go test ./internal/subscription -run '^TestDownloaderDiagnostic_' -count=1`。
+- [x] **3. 最小修正。** toAPIError 仅在原 netFail 分支改为下面形式，不改变 `isFallbackable`、orderFor、HTTP状态判断或取消优先级：
 
 ```go
 return diagnostics.Wrap(protocol.APIError{
@@ -93,7 +93,7 @@ return diagnostics.Wrap(protocol.APIError{
 
 service/runtime 中相同类型的转换沿用既有 API Code/Message/Details，只保留原 cause；上下文 `fmt.Errorf("静态操作: %w", err)` 不能直接作为公开消息。noteRefreshError 仍只写安全摘要，不能把内部诊断写入 catalog/LastError。
 
-- [ ] **4. 扩展真实 mutation 失败测试并记录 Red。** 在既有 subscriptionManager fixture 通过 Options.DiagnosticReporter 注入 recorder（仅改变测试 helper 的装配，不改变生产构造语义）。补充下表断言：
+- [x] **4. 扩展真实 mutation 失败测试并记录 Red。** 在既有 subscriptionManager fixture 通过 Options.DiagnosticReporter 注入 recorder（仅改变测试 helper 的装配，不改变生产构造语义）。补充下表断言：
 
 | 基于既有测试/注入 | 保持业务断言 | 新诊断断言 |
 | --- | --- | --- |
@@ -103,18 +103,18 @@ service/runtime 中相同类型的转换沿用既有 API Code/Message/Details，
 | 下载/commit失败 | catalog/cache/revision维持既有结果 | 错误链保留注入原因，runtime owner一次记录，返回安全 |
 | 同一ID重放与两个ID并发 | 现有 doOperation 语义 | 无重复详细日志，不串ID |
 
-- [ ] **5. 接入该批 DTO 的 ctx。** client AddSubscription、RefreshSubscription、UseSubscription、SetSubscriptionEnabled、UpdateSubscription、RemoveSubscription 从各自 DTO ID绑定，server 正常认证解析后绑定同值；TUI subscriptions/CLI相应命令只传 ctx 与不可变结果元数据。记录用静态 operation 名称，不输出订阅 name/URL/config/body。
+- [x] **5. 接入该批 DTO 的 ctx。** client AddSubscription、RefreshSubscription、UseSubscription、SetSubscriptionEnabled、UpdateSubscription、RemoveSubscription 从各自 DTO ID绑定，server 正常认证解析后绑定同值；TUI subscriptions/CLI相应命令只传 ctx 与不可变结果元数据。记录用静态 operation 名称，不输出订阅 name/URL/config/body。
 
 AddSubscription 已在注册提交后发起独立 `operation.ID+"-fetch"` 的 Refresh；保留这个既有子 ID，不统一成父 ID，不因为自动刷新失败回滚注册。对同一个 add 缓存重放是否再触发该子操作，保留现有行为与子去重结果，不能用日志需求改变。
 
-- [ ] **6. Green：** `go test ./internal/subscription ./internal/runtime -run 'Subscription|Refresh|Downloader|Diagnostic' -count=1`；再执行两包全测试/race及对应client/server/TUI测试。成功摘要只在实际执行owner对已接入的静态操作输出一次 INFO；cache重放最多DEBUG，避免每层重复。
+- [x] **6. Green：** `go test ./internal/subscription ./internal/runtime -run 'Subscription|Refresh|Downloader|Diagnostic' -count=1`；再执行两包全测试/race及对应client/server/TUI测试。成功摘要只在实际执行owner对已接入的静态操作输出一次 INFO；cache重放最多DEBUG，避免每层重复。
 
 ## Task 3B：核心安装、重启与监督失败
 
 **Files:** 表中的核心链路、相关 fake/tests，以及 app/runtime.go 中 supervisor reporter 的装配。
 **Consumes:** Phase 2 Reporter/Wrap；**Produces:** 安装和显式重启的诊断；监督器独立运行事件保留真实原因。
 
-- [ ] **1. 核心 AIO 提示回归先 Red。** 该测试直接复用 Phase 2 Wrap，验证既有 withAIOHint 再构造 APIError 时的 cause 断裂。
+- [x] **1. 核心 AIO 提示回归先 Red。** 该测试直接复用 Phase 2 Wrap，验证既有 withAIOHint 再构造 APIError 时的 cause 断裂。
 
 ```go
 func TestCoreDiagnostic_AIOHintKeepsCause(t *testing.T) {
@@ -131,21 +131,23 @@ func TestCoreDiagnostic_AIOHintKeepsCause(t *testing.T) {
 }
 ```
 
-- [ ] **2. 运行 `go test ./internal/core -run '^TestCoreDiagnostic_' -count=1`，再将 withAIOHint 的原 `return apiError` 改为 `return diagnostics.Wrap(apiError,err)`。** 其余已确认丢 cause 的下载、校验、replace 返回点以同样规则最小修改，不能改变可信核心判断、大小/hash限制、校验命令或CGO支持。
-- [ ] **3. 安装端到端 failure matrix。** 用 runtime fakeInstaller/fakeCandidate/fakeSupervisor 覆盖 Prepare失败、Commit失败、Restart失败、维护失败；每项先新增 cause/日志断言，确认失败后最小修正。保留 revision/候选身份/cleanup次序和现有API分类；从安装器返回 error到runtime执行完成时一次详细记录。Candidate.Commit无ctx仍保持小接口，由owner关联，不能把ctx存入candidate。
-- [ ] **4. supervisor 自有生命周期。** 新增可选 `DiagnosticReporter diagnostics.Reporter` 到 supervisor.Options，由 app 装配；只在 Run 的实际子进程启动失败、异常退出、健康检查导致状态变化、终止失败的责任点记录。Observe.LastError仍安全；循环普通健康成功不逐次输出。使用既有fakeStarter/fakeChild/fakeWaiter/Now逐项验证事件和既有状态/退避不变，记录必须在监督器的锁外。
+- [x] **2. 运行 `go test ./internal/core -run '^TestCoreDiagnostic_' -count=1`，再将 withAIOHint 的原 `return apiError` 改为 `return diagnostics.Wrap(apiError,err)`。** 其余已确认丢 cause 的下载、校验、replace 返回点以同样规则最小修改，不能改变可信核心判断、大小/hash限制、校验命令或CGO支持。
+- [x] **3. 安装端到端 failure matrix。** 用 runtime fakeInstaller/fakeCandidate/fakeSupervisor 覆盖 Prepare失败、Commit失败、Restart失败、维护失败；每项先新增 cause/日志断言，确认失败后最小修正。保留 revision/候选身份/cleanup次序和现有API分类；从安装器返回 error到runtime执行完成时一次详细记录。Candidate.Commit无ctx仍保持小接口，由owner关联，不能把ctx存入candidate。
+- [x] **4. supervisor 自有生命周期。** 新增可选 `DiagnosticReporter diagnostics.Reporter` 到 supervisor.Options，由 app 装配；只在 Run 的实际子进程启动失败、异常退出、健康检查导致状态变化、终止失败的责任点记录。Observe.LastError仍安全；循环普通健康成功不逐次输出。使用既有fakeStarter/fakeChild/fakeWaiter/Now逐项验证事件和既有状态/退避不变，记录必须在监督器的锁外。
 
 显式 Restart/Install 结果由 runtime 使用请求 ID记录；监督器长期 Run、自动重启和原始核心stdout不借用最近一次请求ID。为避免两次详细诊断，监督器把同一次同步请求失败原样返回给owner，不在返回前再次记录；自主异常才由监督器记录。不得重写 Start/Wait/Terminate/Kill生命周期。
 
-- [ ] **5. 接入 InstallCore/RestartCore 的现有 DTO、CLI及对应TUI入口。** 不改变setup展示文案；日志关联能力不等于 #197完成。
-- [ ] **6. 验证：** core/supervisor/runtime/client/server目标测试→包测试→race；跨平台核心边界使用已有fake并运行六目标CGO-free构建，不实际安装/启动真实核心。
+- [x] **5. 接入 InstallCore/RestartCore 的现有 DTO、CLI及对应TUI入口。** 不改变setup展示文案；日志关联能力不等于 #197完成。
+- [x] **6. 验证：** core/supervisor/runtime/client/server目标测试→包测试→race；跨平台核心边界使用已有fake并运行六目标CGO-free构建，不实际安装/启动真实核心。
 
 ## Task 3C：配置校验、原子替换、reload 与 rollback
 
 **Files:** runtime/subscription.go（实际配置事务所在处）、core/trusted_runtime_unix.go 必要的原因返回；相邻测试。
 **Consumes:** Wrap/Reporter和既有配置事务；**Produces:** 可区分原始失败与恢复失败的单次诊断。
 
-- [ ] **1. 在 TestReloadFailureRollsBackSubscriptionActivation 及相关成功恢复测试上追加 cause 断言。** 使用该fixture的 reloadController 已有 `reload func(context.Context) error` 注入逐次返回错误，以测试私有计数区分第一次拒绝和第二次恢复拒绝；不修改其嵌入fakeController接口。保存原有文件/catalog/generation/degraded/revision断言，先让新增 errors.Is/诊断断言失败。
+实施定位核对：可信发布的两处原因丢弃实际位于 `core/trusted_runtime.go: TrustedExecution.Publish`，`_unix` 文件已直接传递原因；只修正既有恢复失败返回。`runtime/subscription.go` 的六处 `degradedConfigError` 调用属于同一配置 prepare/apply → catalog/receipt 回滚链（Refresh 一处、Use 一处、Remove 两处、Enabled 两处），仅保留原始失败与恢复失败，不更改这些入口的 CRUD、提交顺序、状态或公开分类。
+
+- [x] **1. 在 TestReloadFailureRollsBackSubscriptionActivation 及相关成功恢复测试上追加 cause 断言。** 使用该fixture的 reloadController 已有 `reload func(context.Context) error` 注入逐次返回错误，以测试私有计数区分第一次拒绝和第二次恢复拒绝；不修改其嵌入fakeController接口。保存原有文件/catalog/generation/degraded/revision断言，先让新增 errors.Is/诊断断言失败。
 
 ```go
 first := errors.New("initial reload failure")
@@ -160,10 +162,10 @@ if !errors.As(err, &api) || api.Details["degraded"] != true {
 }
 ```
 
-- [ ] **2. 在 commitRuntimeConfig 保留首个 Reload error变量。** 原先 `if err := Reload(...); err == nil` 分支改为命名 firstErr，失败之后继续既有restore/reload顺序。成功恢复返回既有安全失败消息，cause为firstErr；恢复不确定返回既有degraded API，cause为 `errors.Join(firstErr,restoreErr,reloadErr)`。不能以新诊断修改ctx取消和提交行为。
-- [ ] **3. 对 trusted 路径作等价 cause 保留，不合并两套事务实现。** 普通 rollback现用原ctx，trusted现用WithoutCancel，保持各自现状。restore、receipt、配置identity校验失败分别保留；API details/degraded状态继续由原有路径决定。
-- [ ] **4. 处理准备/校验原因的安全边界。** ValidateConfig可能包含配置内容，内部保留原因但输出用Phase2安全摘要，不打印候选YAML或命令完整输出。markConfigDegraded/noteRefreshError的持久摘要不展开cause。恢复成功可有WARN恢复说明，但最终请求失败仍只在owner一条详细ERROR；不把已提交warning改成失败。
-- [ ] **5. 验证表：**
+- [x] **2. 在 commitRuntimeConfig 保留首个 Reload error变量。** 原先 `if err := Reload(...); err == nil` 分支改为命名 firstErr，失败之后继续既有restore/reload顺序。成功恢复返回既有安全失败消息，cause为firstErr；恢复不确定返回既有degraded API，cause为 `errors.Join(firstErr,restoreErr,reloadErr)`。不能以新诊断修改ctx取消和提交行为。
+- [x] **3. 对 trusted 路径作等价 cause 保留，不合并两套事务实现。** 普通 rollback现用原ctx，trusted现用WithoutCancel，保持各自现状。restore、receipt、配置identity校验失败分别保留；API details/degraded状态继续由原有路径决定。
+- [x] **4. 处理准备/校验原因的安全边界。** ValidateConfig可能包含配置内容，内部保留原因但输出用Phase2安全摘要，不打印候选YAML或命令完整输出。markConfigDegraded/noteRefreshError的持久摘要不展开cause。恢复成功可有WARN恢复说明，但最终请求失败仍只在owner一条详细ERROR；不把已提交warning改成失败。
+- [x] **5. 验证表：**
 
 | 故障注入 | 必須保持的结果 | 诊断 |
 | --- | --- | --- |
@@ -173,14 +175,16 @@ if !errors.As(err, &api) || api.Details["degraded"] != true {
 | restore或第二次reload失败 | 既有degraded/stopCoreOnUnlock/revision语义 | 所有真实失败原因留在内部链，详细记录一次 |
 | 取消/陈旧结果 | 现有ctx及revision/identity校验 | 不改变补偿时机或缓存规则 |
 
-- [ ] **6. 运行 runtime/core相关目标测试、integration订阅/配置回归、race；检查写入顺序、LastError、Details与原有测试一致。** 本批不修复邻近事务设计问题。
+- [x] **6. 运行 runtime/core相关目标测试、integration订阅/配置回归、race；检查写入顺序、LastError、Details与原有测试一致。** 本批不修复邻近事务设计问题。
 
 ## Task 3D：系统代理、TUN、GeoIP、面板与provider
 
 **Files:** 表中3D入口及明确丢原因的领域转换；对应CLI/TUI/client/server现有mutation入口。
 **Consumes:** Phase2 owner与前三批规则；**Produces:** 剩余主要业务批次的诊断覆盖。
 
-- [ ] **1. 按下表一次处理一个域，先用原fixture新增明确cause/日志断言。** 有编译所需新可选reporter字段时先加空接线，再以缺少诊断的行为失败作为Red；不调整原有业务断言。
+共享分类器的必要接线：`internal/diagnostics/record.go` 的既有 `expectedFailureCode` 仅补入 `CodeSystemProxyNotOwned`，使“拒绝关闭其他程序代理”与本批外部代理冲突要求一致地记录 DEBUG；原错误码、API、force/归属拒绝及其他分类不变，并补直接回归测试。
+
+- [x] **1. 按下表一次处理一个域，先用原fixture新增明确cause/日志断言。** 有编译所需新可选reporter字段时先加空接线，再以缺少诊断的行为失败作为Red；不调整原有业务断言。
 
 | 域/函数 | 注入与既有测试 | 最小修正与验收 |
 | --- | --- | --- |
@@ -192,15 +196,17 @@ if !errors.As(err, &api) || api.Details["degraded"] != true {
 
 仅在原本丢弃cause的API转换点使用 `diagnostics.Wrap(existingAPI, originalError)`；同一个已报告的执行结果必须保留外层marker原样返回，不能把所有error一律重新Wrap。真正合并新失败或改变公开分类时才创建新结果；同时失败用errors.Join后外层安全包装，公共code/message/details仍取原有分支。不能简单 `return errors.Join(api,cause)` 使Error()泄露。
 
+GeoIP 的既有文件提交/成对恢复分支返回非 API 原始错误，server 已映射为 `internal` / `internal error`。这些分支不补造 API：仅在确有新增恢复失败时使用 geoip 私有聚合错误，保持原 primary.Error()（包括既有双 open 错误的文本），通过 Unwrap 暴露 primary 与恢复原因；没有新增失败则原样返回 primary/marker。公开 envelope、错误文本、恢复/重开顺序及状态保持，安全日志不得输出原始路径或恢复文本。该适配仅覆盖本表既有 GeoIP 提交/恢复原因，不扩大共享诊断接口。
+
 增加至少一项域owner→真实control.Server回归：既有Manager详细记录一次，server收到同一marker结果不重复；另用“已报告子错误 + 新补偿失败”的新aggregate验证新故障不会被旧marker抑制。
 
-- [ ] **2. 每个域测试至少一个真实handler输出。** 断言静态operation名称、调用方ID、错误码、无敏感内容；两次同ID重放不重复详细记录。成功仅有必要摘要，不输出配置对象、节点列表或OS环境。
-- [ ] **3. 接入现有DTO边界。** 只对该域已携带operation_id的请求绑定ctx；没有ID的只读接口不新增字段/header。客户端保留原传输分类和ResponseBody清理；TUI异步结果带值元数据，不改变现有交互/状态机。
-- [ ] **4. 每域独立Green→包测试→相关IPC集成/race，全部通过后再处理下一个域。** 日志自身IO出错的剩余故障矩阵不在此扩展，归Phase4。
+- [x] **2. 每个域测试至少一个真实handler输出。** 断言静态operation名称、调用方ID、错误码、无敏感内容；两次同ID重放不重复详细记录。成功仅有必要摘要，不输出配置对象、节点列表或OS环境。
+- [x] **3. 接入现有DTO边界。** 只对该域已携带operation_id的请求绑定ctx；没有ID的只读接口不新增字段/header。客户端保留原传输分类和ResponseBody清理；TUI异步结果带值元数据，不改变现有交互/状态机。
+- [x] **4. 每域独立Green→包测试→相关IPC集成/race，全部通过后再处理下一个域。** 日志自身IO出错的剩余故障矩阵不在此扩展，归Phase4。
 
 ## Task 3E：业务批次验收与审计登记
 
-- [ ] 在 `docs/architecture.md` 的诊断说明下登记已覆盖入口：操作ID来源、cause产生点、最终owner、日志级别、状态不变量、测试名称。未覆盖项明确列到Phase4，不写“全仓所有错误已覆盖”。
-- [ ] 运行相关包和 `internal/integration` 后，执行 Go1.26.5 `go test ./...`、`go test -race ./...`、`go vet ./...`、修改文件gofmt和Phase1 Task4六目标CGO-free构建。基线失败、环境不能运行项单列，不能修改权限或排除失败测试来通过。
-- [ ] diff检查只有本批确认的原因保留/记录/ctx与测试；原协议、错误码/退出码、ID幂等语义、持久化与事务行为未改。原始mihomo日志没有伪造请求关联。没有执行真实服务或公网测试。
-- [ ] 交付各批次真实结果；仅在用户授权时commit/push/PR，不自动关闭与日志展示有关的 #197。计划审核不等于上述实现/测试已完成。
+- [x] 在 `docs/architecture.md` 的诊断说明下登记已覆盖入口：操作ID来源、cause产生点、最终owner、日志级别、状态不变量、测试名称。未覆盖项明确列到Phase4，不写“全仓所有错误已覆盖”。
+- [x] 运行相关包和 `internal/integration` 后，执行 Go1.26.5 `go test ./...`、`go test -race ./...`、`go vet ./...`、修改文件gofmt和Phase1 Task4六目标CGO-free构建。基线失败、环境不能运行项单列，不能修改权限或排除失败测试来通过。
+- [x] diff检查只有本批确认的原因保留/记录/ctx与测试；原协议、错误码/退出码、ID幂等语义、持久化与事务行为未改。原始mihomo日志没有伪造请求关联。没有执行真实服务或公网测试。
+- [x] 交付各批次真实结果；仅在用户授权时commit/push/PR，不自动关闭与日志展示有关的 #197。计划审核不等于上述实现/测试已完成。

@@ -13,6 +13,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/geoip"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/mihomo"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 	"github.com/mihari-proxy/mihari/internal/state"
@@ -105,9 +106,10 @@ func (s *Server) installCore(writer http.ResponseWriter, request *http.Request) 
 	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
 		return
 	}
-	result, err := s.runtime.Install(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision, Channel: body.Channel})
+	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "core.install"})
+	result, err := s.runtime.Install(ctx, runtimeapi.Operation{ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision, Channel: body.Channel})
 	if err != nil {
-		s.writeControlError(request.Context(), writer, err)
+		s.writeControlError(ctx, writer, err)
 		return
 	}
 	snapshot := s.runtime.Snapshot()
@@ -124,8 +126,9 @@ func (s *Server) restartCore(writer http.ResponseWriter, request *http.Request) 
 	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
 		return
 	}
-	if err := s.runtime.Restart(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}); err != nil {
-		s.writeControlError(request.Context(), writer, err)
+	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "core.restart"})
+	if err := s.runtime.Restart(ctx, runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}); err != nil {
+		s.writeControlError(ctx, writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, protocol.MutationResult{Schema: "mihari/v1", OperationID: body.OperationID, Revision: s.runtime.Snapshot().Revision})
@@ -364,8 +367,9 @@ func (s *Server) updateRuleProvider(writer http.ResponseWriter, request *http.Re
 	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
 		return
 	}
-	if err := s.runtime.UpdateRuleProvider(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, name); err != nil {
-		s.writeControlError(request.Context(), writer, err)
+	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "rule_provider.refresh"})
+	if err := s.runtime.UpdateRuleProvider(ctx, runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, name); err != nil {
+		s.writeControlError(ctx, writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, protocol.MutationResult{

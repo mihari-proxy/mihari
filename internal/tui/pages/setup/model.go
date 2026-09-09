@@ -15,6 +15,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -45,9 +46,10 @@ type onboardingResultMsg struct {
 }
 
 type actionResultMsg struct {
-	next     step
-	revision uint64
-	err      error
+	next      step
+	revision  uint64
+	operation logging.OperationMetadata
+	err       error
 }
 
 // coreLocalResultMsg carries an advisory local-core readiness probe for stepCore.
@@ -689,12 +691,14 @@ func findAvailablePorts(current [3]string) [3]string {
 
 func (m *Model) installCore() tea.Cmd {
 	revision, operationID := m.status.Revision, m.newOperationID()
+	operation := logging.OperationMetadata{ID: operationID, Name: "core.install"}
 	return func() tea.Msg {
-		result, err := m.client.InstallCore(m.ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision, Source: "setup"})
+		ctx := logging.WithOperation(m.ctx, operation)
+		result, err := m.client.InstallCore(ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision, Source: "setup"})
 		// Capture the install outcome so stepReview can summarize "本地已有/新装/安装失败".
 		// The cmd→channel→Update path provides the happens-before guarantee (design §7.4).
 		m.coreResult = result
-		return actionResultMsg{next: stepSubscription, revision: result.Revision, err: err}
+		return actionResultMsg{next: stepSubscription, revision: result.Revision, operation: operation, err: err}
 	}
 }
 
@@ -712,13 +716,15 @@ func (m *Model) addSubscription(name, url string) tea.Cmd {
 
 func (m *Model) updateGeoIP() tea.Cmd {
 	revision, operationID := m.status.Revision, m.newOperationID()
+	operation := logging.OperationMetadata{ID: operationID, Name: "geoip.update"}
+	ctx := logging.WithOperation(m.ctx, operation)
 	return func() tea.Msg {
-		result, err := m.client.UpdateGeoIP(m.ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision, Source: "setup"})
+		result, err := m.client.UpdateGeoIP(ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision, Source: "setup"})
 		// Capture the update outcome so stepReview shows "Country ✓ ASN ✓" or "更新失败".
 		// Copied by value; the runtime result is not retained. See installCore for the note.
 		resultCopy := result
 		m.geoipResult = &resultCopy
-		return actionResultMsg{next: stepReview, revision: result.Revision, err: err}
+		return actionResultMsg{operation: operation, next: stepReview, revision: result.Revision, err: err}
 	}
 }
 

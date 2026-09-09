@@ -57,6 +57,19 @@ func (m *Manager) flushDiagnostics(ctx context.Context, batch *operationDiagnost
 	}
 }
 
+func operationSuccessKey(key string) bool {
+	prefix, _, found := strings.Cut(key, ":")
+	if !found {
+		return false
+	}
+	switch prefix {
+	case "install", "restart", "sub-add", "sub-refresh", "sub-remove", "sub-set", "sub-enabled", "sub-use":
+		return true
+	default:
+		return false
+	}
+}
+
 var operationDiagnosticNames = map[string]string{
 	"close":            "connection.close",
 	"close-all":        "connection.close_all",

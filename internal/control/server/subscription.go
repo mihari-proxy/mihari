@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 	"github.com/mihari-proxy/mihari/internal/subscription"
 )
@@ -72,27 +73,28 @@ func (s *Server) addSubscription(writer http.ResponseWriter, request *http.Reque
 		writeInvalidArgument(writer, "subscription name and URL are required")
 		return
 	}
-	profile, err := runtime.AddSubscription(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, runtimeapi.AddSubscriptionInput{Name: body.Name, URL: body.URL, ProxyMode: body.ProxyMode})
+	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "subscription.add"})
+	profile, err := runtime.AddSubscription(ctx, runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, runtimeapi.AddSubscriptionInput{Name: body.Name, URL: body.URL, ProxyMode: body.ProxyMode})
 	if err != nil {
-		s.writeControlError(request.Context(), writer, err)
+		s.writeControlError(ctx, writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusCreated, subscriptionResultDTO(profile, body.OperationID, s.runtime.Snapshot().Revision))
 }
 
 func (s *Server) refreshSubscription(writer http.ResponseWriter, request *http.Request) {
-	s.subscriptionProfileMutation(writer, request, func(runtime subscriptionAPI, operation runtimeapi.Operation, id string) (subscription.PublicProfile, error) {
-		return runtime.RefreshSubscription(request.Context(), operation, id)
+	s.subscriptionProfileMutation(writer, request, "subscription.refresh", func(ctx context.Context, runtime subscriptionAPI, operation runtimeapi.Operation, id string) (subscription.PublicProfile, error) {
+		return runtime.RefreshSubscription(ctx, operation, id)
 	})
 }
 
 func (s *Server) useSubscription(writer http.ResponseWriter, request *http.Request) {
-	s.subscriptionProfileMutation(writer, request, func(runtime subscriptionAPI, operation runtimeapi.Operation, id string) (subscription.PublicProfile, error) {
-		return runtime.UseSubscription(request.Context(), operation, id)
+	s.subscriptionProfileMutation(writer, request, "subscription.use", func(ctx context.Context, runtime subscriptionAPI, operation runtimeapi.Operation, id string) (subscription.PublicProfile, error) {
+		return runtime.UseSubscription(ctx, operation, id)
 	})
 }
 
-func (s *Server) subscriptionProfileMutation(writer http.ResponseWriter, request *http.Request, mutate func(subscriptionAPI, runtimeapi.Operation, string) (subscription.PublicProfile, error)) {
+func (s *Server) subscriptionProfileMutation(writer http.ResponseWriter, request *http.Request, operationName string, mutate func(context.Context, subscriptionAPI, runtimeapi.Operation, string) (subscription.PublicProfile, error)) {
 	runtime, ok := s.subscriptionsRuntime(request.Context(), writer)
 	if !ok {
 		return
@@ -101,9 +103,10 @@ func (s *Server) subscriptionProfileMutation(writer http.ResponseWriter, request
 	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
 		return
 	}
-	profile, err := mutate(runtime, runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, request.PathValue("id"))
+	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: operationName})
+	profile, err := mutate(ctx, runtime, runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, request.PathValue("id"))
 	if err != nil {
-		s.writeControlError(request.Context(), writer, err)
+		s.writeControlError(ctx, writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, subscriptionResultDTO(profile, body.OperationID, s.runtime.Snapshot().Revision))
@@ -118,9 +121,10 @@ func (s *Server) enableSubscription(writer http.ResponseWriter, request *http.Re
 	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
 		return
 	}
-	profile, err := runtime.SetSubscriptionEnabled(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, request.PathValue("id"), body.Enabled)
+	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "subscription.enabled"})
+	profile, err := runtime.SetSubscriptionEnabled(ctx, runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, request.PathValue("id"), body.Enabled)
 	if err != nil {
-		s.writeControlError(request.Context(), writer, err)
+		s.writeControlError(ctx, writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, subscriptionResultDTO(profile, body.OperationID, s.runtime.Snapshot().Revision))
@@ -135,11 +139,12 @@ func (s *Server) updateSubscription(writer http.ResponseWriter, request *http.Re
 	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
 		return
 	}
-	profile, err := runtime.SetSubscription(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, request.PathValue("id"), runtimeapi.SetSubscriptionInput{
+	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "subscription.set"})
+	profile, err := runtime.SetSubscription(ctx, runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, request.PathValue("id"), runtimeapi.SetSubscriptionInput{
 		Name: body.Name, URL: body.URL, Interval: body.Interval, AutoRefresh: body.AutoRefresh, GlobalPeriod: body.GlobalInterval, ProxyMode: body.ProxyMode,
 	})
 	if err != nil {
-		s.writeControlError(request.Context(), writer, err)
+		s.writeControlError(ctx, writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, subscriptionResultDTO(profile, body.OperationID, s.runtime.Snapshot().Revision))
@@ -154,8 +159,9 @@ func (s *Server) removeSubscription(writer http.ResponseWriter, request *http.Re
 	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
 		return
 	}
-	if err := runtime.RemoveSubscription(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, request.PathValue("id")); err != nil {
-		s.writeControlError(request.Context(), writer, err)
+	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "subscription.remove"})
+	if err := runtime.RemoveSubscription(ctx, runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, request.PathValue("id")); err != nil {
+		s.writeControlError(ctx, writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, protocol.MutationResult{Schema: "mihari/v1", OperationID: body.OperationID, Revision: s.runtime.Snapshot().Revision})

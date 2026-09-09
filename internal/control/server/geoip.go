@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"net/http"
 	"net/netip"
 
@@ -85,9 +86,10 @@ func (s *Server) geoIPUpdate(writer http.ResponseWriter, request *http.Request) 
 	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
 		return
 	}
-	status, err := s.runtime.UpdateGeoIP(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision})
+	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "geoip.update"})
+	status, err := s.runtime.UpdateGeoIP(ctx, runtimeapi.Operation{ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision})
 	if err != nil {
-		s.writeControlError(request.Context(), writer, err)
+		s.writeControlError(ctx, writer, err)
 		return
 	}
 	revision := s.runtime.Snapshot().Revision

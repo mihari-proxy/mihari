@@ -10,6 +10,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/sysproxy"
 )
@@ -74,7 +75,7 @@ func (m *Manager) mutateSystemProxy(ctx context.Context, op Operation, enable, f
 	}
 	observed, err := m.sysProxy.Get()
 	if err != nil {
-		return protocol.SystemProxyStatus{}, protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "read system proxy state"}
+		return protocol.SystemProxyStatus{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "read system proxy state"}, err)
 	}
 	if enable && sysproxy.IsForeign(observed, target) && !force {
 		return protocol.SystemProxyStatus{}, protocol.APIError{
@@ -108,11 +109,11 @@ func (m *Manager) mutateSystemProxy(ctx context.Context, op Operation, enable, f
 	var applyErr error
 	if enable {
 		if err := m.sysProxy.Enable(host, port); err != nil {
-			applyErr = protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "enable system proxy"}
+			applyErr = diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "enable system proxy"}, err)
 		}
 	} else if sysproxy.IsOwned(observed, target) {
 		if err := m.sysProxy.Disable(); err != nil {
-			applyErr = protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "disable system proxy"}
+			applyErr = diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "disable system proxy"}, err)
 		}
 	}
 	if applyErr != nil {
@@ -123,7 +124,7 @@ func (m *Manager) mutateSystemProxy(ctx context.Context, op Operation, enable, f
 	}
 	confirmed, err := m.sysProxy.Get()
 	if err != nil {
-		applyErr = protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "read system proxy state"}
+		applyErr = diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "read system proxy state"}, err)
 	} else if enable && !sysproxy.IsOwned(confirmed, target) {
 		applyErr = protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "enable system proxy"}
 	} else if !enable && confirmed.Enabled {
@@ -157,6 +158,10 @@ func (m *Manager) compensateSystemProxy(ctx context.Context, op Operation, candi
 		ID: op.ID, Source: op.Source, IfRevision: op.IfRevision,
 	}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 		degradedErr := m.enterMutationDegraded(&snapshot)
+		var api protocol.APIError
+		if errors.As(degradedErr, &api) {
+			return snapshot, state.CommittedError{Err: diagnostics.Wrap(api, errors.Join(cause, rollbackErr, liveRestoreErr))}
+		}
 		return snapshot, degradedErr
 	})
 	return err

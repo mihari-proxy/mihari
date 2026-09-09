@@ -18,6 +18,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/geoip"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/mihomo"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 	"github.com/mihari-proxy/mihari/internal/state"
@@ -334,6 +335,7 @@ type fakeRuntime struct {
 	capabilities          []string
 	snapshot              state.Snapshot
 	operation             runtimeapi.Operation
+	operationContext      logging.OperationMetadata
 	selectedGroup         string
 	selectedName          string
 	installResult         core.InstallResult
@@ -363,13 +365,15 @@ func (f *fakeRuntime) Capabilities() []string { return append([]string(nil), f.c
 
 func (f *fakeRuntime) Snapshot() state.Snapshot { return f.snapshot }
 
-func (f *fakeRuntime) Install(_ context.Context, operation runtimeapi.Operation) (core.InstallResult, error) {
+func (f *fakeRuntime) Install(ctx context.Context, operation runtimeapi.Operation) (core.InstallResult, error) {
 	f.operation = operation
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	return f.installResult, nil
 }
 
-func (f *fakeRuntime) Restart(_ context.Context, operation runtimeapi.Operation) error {
+func (f *fakeRuntime) Restart(ctx context.Context, operation runtimeapi.Operation) error {
 	f.operation = operation
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	return nil
 }
 
@@ -411,7 +415,8 @@ func (f *fakeRuntime) RuleProviders(context.Context) (mihomo.RuleProviders, erro
 	return f.ruleProviders, nil
 }
 
-func (f *fakeRuntime) UpdateRuleProvider(_ context.Context, operation runtimeapi.Operation, name string) error {
+func (f *fakeRuntime) UpdateRuleProvider(ctx context.Context, operation runtimeapi.Operation, name string) error {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.operation = operation
 	f.updatedRuleProvider = name
 	return nil
@@ -432,7 +437,8 @@ func (f *fakeRuntime) LookupGeoIP(context.Context, []netip.Addr) ([]geoip.Record
 	return append([]geoip.Record(nil), f.geoIPRecords...), nil
 }
 
-func (f *fakeRuntime) UpdateGeoIP(_ context.Context, operation runtimeapi.Operation) (geoip.Status, error) {
+func (f *fakeRuntime) UpdateGeoIP(ctx context.Context, operation runtimeapi.Operation) (geoip.Status, error) {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.operation = operation
 	return f.geoIPStatus, nil
 }
@@ -441,13 +447,15 @@ func (f *fakeRuntime) SystemProxyStatus(context.Context) (protocol.SystemProxySt
 	return f.systemProxyStatus, nil
 }
 
-func (f *fakeRuntime) EnableSystemProxy(_ context.Context, operation runtimeapi.Operation, force bool) (protocol.SystemProxyStatus, error) {
+func (f *fakeRuntime) EnableSystemProxy(ctx context.Context, operation runtimeapi.Operation, force bool) (protocol.SystemProxyStatus, error) {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.operation = operation
 	f.systemProxyForce = force
 	return f.systemProxyStatus, nil
 }
 
-func (f *fakeRuntime) DisableSystemProxy(_ context.Context, operation runtimeapi.Operation) (protocol.SystemProxyStatus, error) {
+func (f *fakeRuntime) DisableSystemProxy(ctx context.Context, operation runtimeapi.Operation) (protocol.SystemProxyStatus, error) {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.operation = operation
 	if f.disableSystemProxyErr != nil {
 		return protocol.SystemProxyStatus{}, f.disableSystemProxyErr
@@ -459,7 +467,8 @@ func (f *fakeRuntime) TunStatus(context.Context) (protocol.TunStatus, error) {
 	return f.tunStatus, nil
 }
 
-func (f *fakeRuntime) EnableTun(_ context.Context, operation runtimeapi.Operation, _ bool) (protocol.TunStatus, error) {
+func (f *fakeRuntime) EnableTun(ctx context.Context, operation runtimeapi.Operation, _ bool) (protocol.TunStatus, error) {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.operation = operation
 	if f.enableTunErr != nil {
 		return protocol.TunStatus{}, f.enableTunErr
@@ -467,7 +476,8 @@ func (f *fakeRuntime) EnableTun(_ context.Context, operation runtimeapi.Operatio
 	return f.tunStatus, nil
 }
 
-func (f *fakeRuntime) DisableTun(_ context.Context, operation runtimeapi.Operation) (protocol.TunStatus, error) {
+func (f *fakeRuntime) DisableTun(ctx context.Context, operation runtimeapi.Operation) (protocol.TunStatus, error) {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.operation = operation
 	if f.disableTunErr != nil {
 		return protocol.TunStatus{}, f.disableTunErr
@@ -620,6 +630,33 @@ func TestInstallCoreThreadsRequestSource(t *testing.T) {
 	}
 }
 
+func TestCoreMutationsBindDiagnosticOperationContext(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		path      string
+		body      string
+		operation logging.OperationMetadata
+	}{
+		{name: "install", path: "/v1/core/install", body: `{"operation_id":"install-context"}`, operation: logging.OperationMetadata{ID: "install-context", Name: "core.install"}},
+		{name: "restart", path: "/v1/core/restart", body: `{"operation_id":"restart-context"}`, operation: logging.OperationMetadata{ID: "restart-context", Name: "core.restart"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &fakeRuntime{installResult: core.InstallResult{Version: "v1.19.0"}}
+			server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: fake})
+			recorder := httptest.NewRecorder()
+
+			server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodPost, test.path, bytes.NewBufferString(test.body)))
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if fake.operationContext != test.operation {
+				t.Fatalf("operation context=%#v want=%#v", fake.operationContext, test.operation)
+			}
+		})
+	}
+}
+
 func TestInstallCoreThreadsRequestChannel(t *testing.T) {
 	tests := []struct {
 		name string
@@ -739,4 +776,14 @@ func FuzzDecodeControlJSON(f *testing.F) {
 			}
 		}
 	})
+}
+
+func TestProviderDiagnostic_ServerMetadata(t *testing.T) {
+	fake := &fakeRuntime{}
+	server := New(Options{Token: "token", Runtime: fake, Store: state.NewStore(state.Snapshot{})})
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, authorizedRequest(http.MethodPost, "/v1/rule-providers/native/update", bytes.NewBufferString(`{"operation_id":"business-id"}`)))
+	if response.Code != http.StatusOK || fake.operationContext != (logging.OperationMetadata{ID: "business-id", Name: "rule_provider.refresh"}) {
+		t.Fatalf("status=%d metadata=%#v", response.Code, fake.operationContext)
+	}
 }

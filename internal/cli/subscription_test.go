@@ -3,10 +3,12 @@ package cli
 import (
 	"bytes"
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 )
 
 type fakeSubscriptionClient struct {
@@ -15,6 +17,12 @@ type fakeSubscriptionClient struct {
 	lastEnabled protocol.SubscriptionEnabledRequest
 	lastUpdate  protocol.SubscriptionUpdateRequest
 	removed     int
+	operations  []logging.OperationMetadata
+}
+
+func (f *fakeSubscriptionClient) recordOperation(ctx context.Context) {
+	operation, _ := logging.OperationFromContext(ctx)
+	f.operations = append(f.operations, operation)
 }
 
 func (f *fakeSubscriptionClient) Subscriptions(context.Context) (protocol.SubscriptionList, error) {
@@ -23,26 +31,31 @@ func (f *fakeSubscriptionClient) Subscriptions(context.Context) (protocol.Subscr
 func (f *fakeSubscriptionClient) Subscription(context.Context, string) (protocol.SubscriptionResult, error) {
 	return protocol.SubscriptionResult{Schema: "mihari/v1", Subscription: protocol.Subscription{ID: "one", Name: "main"}}, nil
 }
-func (f *fakeSubscriptionClient) AddSubscription(_ context.Context, request protocol.SubscriptionAddRequest) (protocol.SubscriptionResult, error) {
+func (f *fakeSubscriptionClient) AddSubscription(ctx context.Context, request protocol.SubscriptionAddRequest) (protocol.SubscriptionResult, error) {
+	f.recordOperation(ctx)
 	f.lastAdd = request
 	return protocol.SubscriptionResult{Schema: "mihari/v1", OperationID: request.OperationID, Subscription: protocol.Subscription{ID: "one", Name: request.Name}}, nil
 }
-func (f *fakeSubscriptionClient) RefreshSubscription(_ context.Context, id string, request protocol.MutationRequest) (protocol.SubscriptionResult, error) {
+func (f *fakeSubscriptionClient) RefreshSubscription(ctx context.Context, id string, request protocol.MutationRequest) (protocol.SubscriptionResult, error) {
+	f.recordOperation(ctx)
 	f.lastID = id
 	return protocol.SubscriptionResult{Schema: "mihari/v1", OperationID: request.OperationID, Subscription: protocol.Subscription{ID: id}}, nil
 }
 func (f *fakeSubscriptionClient) UseSubscription(ctx context.Context, id string, request protocol.MutationRequest) (protocol.SubscriptionResult, error) {
 	return f.RefreshSubscription(ctx, id, request)
 }
-func (f *fakeSubscriptionClient) SetSubscriptionEnabled(_ context.Context, id string, request protocol.SubscriptionEnabledRequest) (protocol.SubscriptionResult, error) {
+func (f *fakeSubscriptionClient) SetSubscriptionEnabled(ctx context.Context, id string, request protocol.SubscriptionEnabledRequest) (protocol.SubscriptionResult, error) {
+	f.recordOperation(ctx)
 	f.lastID, f.lastEnabled = id, request
 	return protocol.SubscriptionResult{Schema: "mihari/v1", OperationID: request.OperationID, Subscription: protocol.Subscription{ID: id, Enabled: request.Enabled}}, nil
 }
-func (f *fakeSubscriptionClient) UpdateSubscription(_ context.Context, id string, request protocol.SubscriptionUpdateRequest) (protocol.SubscriptionResult, error) {
+func (f *fakeSubscriptionClient) UpdateSubscription(ctx context.Context, id string, request protocol.SubscriptionUpdateRequest) (protocol.SubscriptionResult, error) {
+	f.recordOperation(ctx)
 	f.lastID, f.lastUpdate = id, request
 	return protocol.SubscriptionResult{Schema: "mihari/v1", OperationID: request.OperationID, Subscription: protocol.Subscription{ID: id}}, nil
 }
-func (f *fakeSubscriptionClient) RemoveSubscription(_ context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+func (f *fakeSubscriptionClient) RemoveSubscription(ctx context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+	f.recordOperation(ctx)
 	f.lastID, f.removed = id, f.removed+1
 	return protocol.MutationResult{Schema: "mihari/v1", OperationID: request.OperationID}, nil
 }
@@ -84,6 +97,18 @@ func TestSubscriptionMutationsUseOperationIDAndExplicitValues(t *testing.T) {
 	}
 	if client.removed != 1 {
 		t.Fatalf("remove calls=%d", client.removed)
+	}
+	wantOperations := []logging.OperationMetadata{
+		{ID: "fixed", Name: "subscription.add"},
+		{ID: "fixed", Name: "subscription.refresh"},
+		{ID: "fixed", Name: "subscription.use"},
+		{ID: "fixed", Name: "subscription.enabled"},
+		{ID: "fixed", Name: "subscription.enabled"},
+		{ID: "fixed", Name: "subscription.set"},
+		{ID: "fixed", Name: "subscription.remove"},
+	}
+	if !reflect.DeepEqual(client.operations, wantOperations) {
+		t.Fatalf("operations=%#v want=%#v", client.operations, wantOperations)
 	}
 }
 

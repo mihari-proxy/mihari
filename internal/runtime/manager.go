@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/netip"
 	"path/filepath"
 	"sync"
@@ -783,6 +784,13 @@ func (m *Manager) doOperation(ctx context.Context, key string, execute func(cont
 				})
 				err = diagnostics.MarkReported(err)
 			}
+		}
+		if err == nil && m.diagnosticReporter != nil && operationSuccessKey(key) {
+			m.diagnosticReporter(executionCtx, diagnostics.Record{
+				Component: "runtime",
+				Event:     "operation.succeeded",
+				Level:     slog.LevelInfo,
+			})
 		}
 		return result, err
 	}

@@ -18,6 +18,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/onboarding"
 	"github.com/mihari-proxy/mihari/internal/platform"
@@ -234,6 +235,51 @@ func TestBuildRuntimeWithOptionsReportsOnboardingPersistenceWarning(t *testing.T
 	}
 	if assembly == nil || component != "onboarding" || message != "onboarding parent directory sync failed after commit" {
 		t.Fatalf("assembly=%#v component=%q message=%q", assembly, component, message)
+	}
+}
+
+func TestBuildRuntimeWithOptionsWiresSupervisorDiagnosticReporter(t *testing.T) {
+	paths := platform.NewPaths(filepath.Join(t.TempDir(), "data"))
+	if err := paths.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.CoreBinary, []byte("not an executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	settings := testRuntimeSettings(t)
+	settings.ControllerSecret = strings.Repeat("d", 64)
+	records := make(chan diagnostics.Record, 1)
+	assembly, err := BuildRuntimeWithOptions(paths, settings, "test-version", nil, nil, RuntimeBuildOptions{
+		SettingsPath: paths.Settings,
+		DiagnosticReporter: func(_ context.Context, record diagnostics.Record) {
+			if record.Component == "supervisor" {
+				records <- record
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- assembly.Manager.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("runtime did not stop")
+		}
+	})
+
+	select {
+	case record := <-records:
+		var pathError *os.PathError
+		if record.Event != "core.start.failed" || !errors.As(record.Err, &pathError) || record.Err.Error() != "mihomo process start failed" {
+			t.Fatalf("record=%#v", record)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("supervisor diagnostic reporter was not wired")
 	}
 }
 

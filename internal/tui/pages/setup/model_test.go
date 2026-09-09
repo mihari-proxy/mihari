@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -16,9 +17,11 @@ type fakeClient struct {
 	status             protocol.OnboardingStatus
 	installCalls       int
 	installRequest     protocol.MutationRequest
+	installOperation   logging.OperationMetadata
 	addCalls           int
 	geoIPCalls         int
 	geoIPRequest       protocol.MutationRequest
+	geoIPOperation     logging.OperationMetadata
 	updateCalls        int
 	update             protocol.OnboardingUpdateRequest
 	onboardingCalls    int
@@ -44,6 +47,7 @@ func (f *fakeClient) Onboarding(context.Context) (protocol.OnboardingStatus, err
 func (f *fakeClient) InstallCore(ctx context.Context, request protocol.MutationRequest) (protocol.CoreInstallResult, error) {
 	f.installCalls++
 	f.installRequest = request
+	f.installOperation, _ = logging.OperationFromContext(ctx)
 	if f.installErr != nil {
 		return protocol.CoreInstallResult{}, f.installErr
 	}
@@ -69,7 +73,8 @@ func (f *fakeClient) AddSubscription(_ context.Context, request protocol.Subscri
 	}
 	return result, nil
 }
-func (f *fakeClient) UpdateGeoIP(_ context.Context, request protocol.MutationRequest) (protocol.GeoIPUpdateResult, error) {
+func (f *fakeClient) UpdateGeoIP(ctx context.Context, request protocol.MutationRequest) (protocol.GeoIPUpdateResult, error) {
+	f.geoIPOperation, _ = logging.OperationFromContext(ctx)
 	f.geoIPCalls++
 	f.geoIPRequest = request
 	result := f.geoIPUpdateResult
@@ -539,6 +544,21 @@ func TestSetupReviewMarksFreshCoreInstall(t *testing.T) {
 	}
 }
 
+func TestSetupCoreInstallBindsAndReturnsOperationMetadata(t *testing.T) {
+	client := &fakeClient{status: defaultStatus(false), installResult: protocol.CoreInstallResult{Version: "v1.19.0", Updated: true}}
+	model := loadedModel(client)
+
+	message := model.installCore()().(actionResultMsg)
+
+	want := logging.OperationMetadata{ID: "setup-op", Name: "core.install"}
+	if client.installOperation != want || client.installRequest.OperationID != want.ID {
+		t.Fatalf("context=%#v request=%#v", client.installOperation, client.installRequest)
+	}
+	if message.operation != want || message.err != nil {
+		t.Fatalf("message=%#v", message)
+	}
+}
+
 func TestSetupReviewShowsSkippedSubscriptionAndGeoIP(t *testing.T) {
 	client := &fakeClient{status: defaultStatus(false)}
 	model := loadedModel(client)
@@ -723,5 +743,15 @@ func TestSetupPortProbeDoesNotBlockOnUnknown(t *testing.T) {
 	model = updated.(*Model)
 	if model.step != stepCore {
 		t.Fatalf("unknown port blocked enter: step=%v", model.step)
+	}
+}
+
+func TestGeoIPDiagnostic_SetupMetadata(t *testing.T) {
+	client := &fakeClient{status: defaultStatus(false)}
+	model := loadedModel(client)
+	message := model.updateGeoIP()().(actionResultMsg)
+	want := logging.OperationMetadata{ID: "setup-op", Name: "geoip.update"}
+	if client.geoIPOperation != want || message.operation != want || client.geoIPRequest.OperationID != want.ID {
+		t.Fatalf("context=%#v result=%#v request=%#v", client.geoIPOperation, message.operation, client.geoIPRequest)
 	}
 }
