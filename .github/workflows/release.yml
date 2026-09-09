@@ -329,6 +329,35 @@ jobs:
           python scripts/release/github_release_policy.py tag-chain \
             --chain /tmp/final-stable-tag-chain.json --expected-sha "${SHA}"
 
+      - name: Ensure installation guidance in release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NOTES="$(gh release view "${VERSION}" --json body -q .body)"
+          START_MARKER='<!-- install-guidance -->'
+          END_MARKER='<!-- /install-guidance -->'
+          has_start=0
+          has_end=0
+          if printf '%s' "$NOTES" | grep -qF "$START_MARKER"; then has_start=1; fi
+          if printf '%s' "$NOTES" | grep -qF "$END_MARKER"; then has_end=1; fi
+          if [ "$has_start" -ne "$has_end" ]; then
+            echo "::error::installation guidance markers are incomplete"
+            exit 1
+          fi
+          if [ "$has_start" -eq 1 ]; then
+            echo "installation guidance already present — skipping"
+            exit 0
+          fi
+          cat > /tmp/install_guidance.md <<'TEMPLATE'
+
+          <!-- install-guidance -->
+          > **Installation:** Use the complete installation commands in the [README](https://github.com/mihari-proxy/mihari#quick-start) or these release notes. Do not download and run individual release assets directly.
+          >
+          > **安装建议：** 请使用 [README](https://github.com/mihari-proxy/mihari/blob/main/README.zh-CN.md) 或本 Release notes 提供的完整安装命令；不建议单独下载并直接运行 Release assets。
+          <!-- /install-guidance -->
+          TEMPLATE
+          gh release edit "${VERSION}" --notes "$(printf '%s\n%s\n' "$(cat /tmp/install_guidance.md)" "$NOTES")"
+
       - uses: actions/setup-python@v7
         if: env.ALIST_CONFIGURED == 'true'
         with:
