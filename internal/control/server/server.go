@@ -13,36 +13,39 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/state"
 )
 
 type Options struct {
-	Token          string
-	Store          *state.Store
-	Runtime        RuntimeAPI
-	Now            func() time.Time
-	SnapshotSource logging.MachineSnapshotSource
-	SnapshotID     func() string
+	Token              string
+	Store              *state.Store
+	Runtime            RuntimeAPI
+	Now                func() time.Time
+	SnapshotSource     logging.MachineSnapshotSource
+	SnapshotID         func() string
+	DiagnosticReporter diagnostics.Reporter
 }
 
 type Server struct {
-	token             string
-	store             *state.Store
-	runtime           RuntimeAPI
-	now               func() time.Time
-	snapshotSource    logging.MachineSnapshotSource
-	snapshotID        func() string
-	snapshotCtx       context.Context
-	snapshotCancel    context.CancelFunc
-	snapshotWG        sync.WaitGroup
-	snapshotHandlers  sync.WaitGroup
-	handlers          sync.WaitGroup
-	snapshotLifecycle sync.Mutex
-	snapshotClosing   bool
-	snapshotGate      snapshotGate
-	shutdownTimeout   time.Duration
-	http              *http.Server
+	token              string
+	store              *state.Store
+	runtime            RuntimeAPI
+	now                func() time.Time
+	snapshotSource     logging.MachineSnapshotSource
+	snapshotID         func() string
+	diagnosticReporter diagnostics.Reporter
+	snapshotCtx        context.Context
+	snapshotCancel     context.CancelFunc
+	snapshotWG         sync.WaitGroup
+	snapshotHandlers   sync.WaitGroup
+	handlers           sync.WaitGroup
+	snapshotLifecycle  sync.Mutex
+	snapshotClosing    bool
+	snapshotGate       snapshotGate
+	shutdownTimeout    time.Duration
+	http               *http.Server
 }
 
 func New(options Options) *Server {
@@ -52,15 +55,16 @@ func New(options Options) *Server {
 	}
 	snapshotCtx, snapshotCancel := context.WithCancel(context.Background())
 	server := &Server{
-		token:           options.Token,
-		store:           options.Store,
-		runtime:         options.Runtime,
-		now:             now,
-		snapshotSource:  options.SnapshotSource,
-		snapshotID:      options.SnapshotID,
-		snapshotCtx:     snapshotCtx,
-		snapshotCancel:  snapshotCancel,
-		shutdownTimeout: 5 * time.Second,
+		token:              options.Token,
+		store:              options.Store,
+		runtime:            options.Runtime,
+		now:                now,
+		snapshotSource:     options.SnapshotSource,
+		snapshotID:         options.SnapshotID,
+		diagnosticReporter: options.DiagnosticReporter,
+		snapshotCtx:        snapshotCtx,
+		snapshotCancel:     snapshotCancel,
+		shutdownTimeout:    5 * time.Second,
 	}
 	server.http = &http.Server{
 		Handler:           server.Handler(),

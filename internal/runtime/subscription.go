@@ -51,7 +51,7 @@ func (m *Manager) Subscriptions() subscription.PublicCatalog {
 }
 
 func (m *Manager) AddSubscription(ctx context.Context, operation Operation, input AddSubscriptionInput) (subscription.PublicProfile, error) {
-	result, err := m.doOperation(ctx, "sub-add:"+operation.ID, func() (any, error) {
+	result, err := m.doOperation(ctx, "sub-add:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
 		}
@@ -102,7 +102,7 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 
 func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, id string) (subscription.PublicProfile, error) {
 
-	result, err := m.doOperation(ctx, "sub-refresh:"+operation.ID, func() (any, error) {
+	result, err := m.doOperation(ctx, "sub-refresh:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
 		}
@@ -150,7 +150,7 @@ func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, 
 
 func (m *Manager) UseSubscription(ctx context.Context, operation Operation, id string) (subscription.PublicProfile, error) {
 
-	result, err := m.doOperation(ctx, "sub-use:"+operation.ID, func() (any, error) {
+	result, err := m.doOperation(ctx, "sub-use:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
 		}
@@ -209,7 +209,7 @@ func (m *Manager) UseSubscription(ctx context.Context, operation Operation, id s
 }
 
 func (m *Manager) RemoveSubscription(ctx context.Context, operation Operation, id string) error {
-	_, err := m.doOperation(ctx, "sub-remove:"+operation.ID, func() (any, error) {
+	_, err := m.doOperation(ctx, "sub-remove:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
 		}
@@ -304,7 +304,7 @@ func (m *Manager) SetSubscription(ctx context.Context, operation Operation, id s
 }
 
 func (m *Manager) mutateSubscription(ctx context.Context, prefix string, operation Operation, id string, mutate func(*subscription.Catalog, *subscription.Profile) error) (subscription.PublicProfile, error) {
-	result, err := m.doOperation(ctx, prefix+operation.ID, func() (any, error) {
+	result, err := m.doOperation(ctx, prefix+operation.ID, func(ctx context.Context) (any, error) {
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
 		}

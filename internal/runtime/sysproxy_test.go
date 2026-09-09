@@ -11,6 +11,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/sysproxy"
 )
@@ -300,9 +301,9 @@ func TestSystemProxyCommittedWarningPublishesBeforeOSApplySettings(t *testing.T)
 			}
 			return config.CommitResult{Committed: true, Warning: errors.New("sensitive path")}, nil
 		},
-		OnBackgroundError: func(component string, err error) {
-			if component != "settings" || err.Error() != "parent directory sync failed after commit" {
-				t.Fatalf("warning component=%q err=%v", component, err)
+		DiagnosticReporter: func(_ context.Context, record diagnostics.Record) {
+			if record.Component != "settings" || record.Event != "persist.warning" || record.Err == nil {
+				t.Fatalf("warning record=%#v", record)
 			}
 			warnings++
 		},

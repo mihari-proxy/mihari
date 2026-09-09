@@ -254,6 +254,9 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 		if err := options.Client.SetRedactor(resources.Redactor); err != nil {
 			return errors.Join(err, resources.Close())
 		}
+		if err := options.Client.SetDiagnosticReporter(logging.NewDiagnosticReporter(resources.Runtime.Logger(), resources.Redactor)); err != nil {
+			return errors.Join(err, resources.Close())
+		}
 	}
 	reporter := newTUILoggingFailureReporter(options.ErrorOutput, resources.Redactor, nil)
 	if openErr != nil {

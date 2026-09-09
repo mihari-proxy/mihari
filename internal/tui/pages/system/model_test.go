@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/elevate"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -85,6 +86,77 @@ func TestModel_LoggingRowsShowDaemonStateAndLocalWriterHealth(t *testing.T) {
 		t.Fatal("local writer failure disabled daemon logging update")
 	}
 
+}
+
+func TestModel_LoggingUpdateBindsOperationMetadataInCommandClosure(t *testing.T) {
+	model, client := loggingModel("info", 4)
+	model.ctx = logging.WithOperation(context.Background(), logging.OperationMetadata{ID: "stale", Name: "other.operation"})
+	model.focusID = rowLogLevel
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	observed := loggingObservedFromCommand(t, command)
+	want := logging.OperationMetadata{ID: "logging-op", Name: "logging.update"}
+	if observed.Operation != want {
+		t.Fatalf("observed operation=%#v", observed.Operation)
+	}
+	if len(client.updateLoggingOperations) != 1 || client.updateLoggingOperations[0] != want {
+		t.Fatalf("client operations=%#v", client.updateLoggingOperations)
+	}
+}
+
+func TestModel_LoggingUpdateFailureCarriesImmutableOperationMetadata(t *testing.T) {
+	model, client := loggingModel("info", 4)
+	client.updateLoggingErr = errors.New("logging update failed")
+	model.focusID = rowLogLevel
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	result := firstSystemPageResult(t, command)
+	failure, ok := result.(loggingUpdateResultMsg)
+	if !ok {
+		t.Fatalf("result=%T want loggingUpdateResultMsg", result)
+	}
+	if failure.operation != (logging.OperationMetadata{ID: "logging-op", Name: "logging.update"}) {
+		t.Fatalf("operation=%#v", failure.operation)
+	}
+}
+
+func TestModel_LoggingUpdateOutOfOrderResultsRetainMetadataAndRejectStaleEpoch(t *testing.T) {
+	model, client := loggingModel("info", 4)
+	ids := []string{"logging-one", "logging-two"}
+	model.newOperationID = func() string {
+		id := ids[0]
+		ids = ids[1:]
+		return id
+	}
+	model.focusID = rowLogLevel
+	_, firstCommand := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	first := loggingObservedFromCommand(t, firstCommand)
+
+	updated, _ := model.Update(ui.LoggingSyncMsg{Epoch: 8, Available: false})
+	model = updated.(*Model)
+	updated, _ = model.Update(ui.LoggingSyncMsg{Epoch: 8, Status: client.logging, Available: true})
+	model = updated.(*Model)
+	model.focusID = rowLogLevel
+	_, secondCommand := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	second := loggingObservedFromCommand(t, secondCommand)
+
+	if first.Operation != (logging.OperationMetadata{ID: "logging-one", Name: "logging.update"}) ||
+		second.Operation != (logging.OperationMetadata{ID: "logging-two", Name: "logging.update"}) {
+		t.Fatalf("operations first=%#v second=%#v", first.Operation, second.Operation)
+	}
+	if first.Epoch != 7 || second.Epoch != 8 {
+		t.Fatalf("epochs first=%d second=%d", first.Epoch, second.Epoch)
+	}
+
+	updated, _ = model.Update(first)
+	model = updated.(*Model)
+	if !model.pending || model.loggingPendingEpoch != 8 || model.loggingEpoch != 8 || model.pendingRow != rowLogLevel {
+		t.Fatalf("stale result changed pending state: pending=%v pendingEpoch=%d epoch=%d row=%q", model.pending, model.loggingPendingEpoch, model.loggingEpoch, model.pendingRow)
+	}
+
+	updated, _ = model.Update(second)
+	model = updated.(*Model)
+	if model.pending || model.loggingPendingEpoch != 0 || model.loggingEpoch != 8 {
+		t.Fatalf("current result did not complete state: pending=%v pendingEpoch=%d epoch=%d", model.pending, model.loggingPendingEpoch, model.loggingEpoch)
+	}
 }
 
 func TestModel_LoggingDirectoryEnterCopiesPath(t *testing.T) {
@@ -954,13 +1026,14 @@ type fakeClient struct {
 	lastOnboarding        protocol.OnboardingUpdateRequest
 	updateOnboardingErr   error
 
-	logging             protocol.LoggingStatus
-	loggingCalls        int
-	updateLoggingCalls  int
-	lastLogging         protocol.LoggingUpdateRequest
-	loggingErr          error
-	updateLoggingErr    error
-	updateLoggingResult *protocol.LoggingStatus
+	logging                 protocol.LoggingStatus
+	loggingCalls            int
+	updateLoggingCalls      int
+	updateLoggingOperations []logging.OperationMetadata
+	lastLogging             protocol.LoggingUpdateRequest
+	loggingErr              error
+	updateLoggingErr        error
+	updateLoggingResult     *protocol.LoggingStatus
 }
 
 type fakeService struct {
@@ -1032,7 +1105,9 @@ func (f *fakeClient) Logging(context.Context) (protocol.LoggingStatus, error) {
 	}
 	return f.logging, nil
 }
-func (f *fakeClient) UpdateLogging(_ context.Context, request protocol.LoggingUpdateRequest) (protocol.LoggingStatus, error) {
+func (f *fakeClient) UpdateLogging(ctx context.Context, request protocol.LoggingUpdateRequest) (protocol.LoggingStatus, error) {
+	operation, _ := logging.OperationFromContext(ctx)
+	f.updateLoggingOperations = append(f.updateLoggingOperations, operation)
 	f.updateLoggingCalls++
 	f.lastLogging = request
 	if f.updateLoggingErr != nil {

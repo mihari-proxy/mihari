@@ -74,7 +74,7 @@ func (m *Manager) mutateTrustedTun(ctx context.Context, op Operation, enable, fo
 	if err != nil {
 		return protocol.TunStatus{}, err
 	}
-	if _, err = m.saveSettingsCandidate(candidate); err != nil {
+	if _, err = m.saveSettingsCandidate(ctx, candidate); err != nil {
 		return protocol.TunStatus{}, err
 	}
 	// Keep the captured generation until the validated config is committed;
@@ -125,7 +125,7 @@ func sameActiveSubscription(a, b subscription.Catalog) bool {
 func (m *Manager) rollbackTrustedTun(ctx context.Context, op Operation, candidate settingsCandidate, previous []byte, cause error) error {
 	recovery := context.WithoutCancel(ctx)
 	rollback := settingsCandidate{before: candidate.after, after: candidate.before, changed: candidate.changed}
-	_, settingsErr := m.saveSettingsCandidate(rollback)
+	_, settingsErr := m.saveSettingsCandidate(ctx, rollback)
 	var configErr error
 	if previous != nil {
 		cap, err := m.trustedCore.RestoreConfig(recovery, previous)

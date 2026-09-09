@@ -28,7 +28,7 @@ func (m *Manager) TunStatus(ctx context.Context) (protocol.TunStatus, error) {
 // When other TUN adapters are detected (routing conflict or loop risk), force
 // must be true to proceed. Disable is never gated (see mutateTun).
 func (m *Manager) EnableTun(ctx context.Context, op Operation, force bool) (protocol.TunStatus, error) {
-	result, err := m.doOperation(ctx, "tun-enable:"+op.ID, func() (any, error) {
+	result, err := m.doOperation(ctx, "tun-enable:"+op.ID, func(ctx context.Context) (any, error) {
 		return m.mutateTun(ctx, op, true, force)
 	})
 	if err != nil {
@@ -39,7 +39,7 @@ func (m *Manager) EnableTun(ctx context.Context, op Operation, force bool) (prot
 
 // DisableTun persists managed TUN enable=false (block stays non-empty so subscription tun stays overridden).
 func (m *Manager) DisableTun(ctx context.Context, op Operation) (protocol.TunStatus, error) {
-	result, err := m.doOperation(ctx, "tun-disable:"+op.ID, func() (any, error) {
+	result, err := m.doOperation(ctx, "tun-disable:"+op.ID, func(ctx context.Context) (any, error) {
 		return m.mutateTun(ctx, op, false, false)
 	})
 	if err != nil {
@@ -84,7 +84,7 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 		}
 	}
 
-	candidate, err := m.updateSettings(func(settings *config.Settings) error {
+	candidate, err := m.updateSettings(ctx, func(settings *config.Settings) error {
 		settings.Tun = buildManagedTun(enable, settings.Tun)
 		return nil
 	})
@@ -145,7 +145,7 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 }
 
 func (m *Manager) compensateTun(ctx context.Context, op Operation, candidate settingsCandidate, cause error, restoreLive bool, liveBefore map[string]any) error {
-	_, rollbackErr := m.restoreSettings(candidate.before)
+	_, rollbackErr := m.restoreSettings(ctx, candidate.before)
 	var liveRestoreErr error
 	if restoreLive {
 		if liveBefore == nil {

@@ -6,18 +6,26 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/coder/websocket"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
+	"github.com/mihari-proxy/mihari/internal/logging"
 )
 
 const (
 	maxControlResponseSize = 4 << 20
 	maxControlStreamSize   = 1 << 20
 )
+
+type runtimeOutcome struct {
+	err            error
+	remoteEnvelope bool
+}
 
 func (c *Client) Core(ctx context.Context) (protocol.CoreStatus, error) {
 	var result protocol.CoreStatus
@@ -134,9 +142,26 @@ func (c *Client) Logging(ctx context.Context) (protocol.LoggingStatus, error) {
 
 // UpdateLogging applies a partial daemon-owned file logging configuration update.
 func (c *Client) UpdateLogging(ctx context.Context, request protocol.LoggingUpdateRequest) (protocol.LoggingStatus, error) {
+	ctx = logging.WithOperation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "logging.update"})
 	var result protocol.LoggingStatus
-	err := c.doRuntime(ctx, http.MethodPatch, "/v1/logging", request, &result)
-	return result, err
+	reporter := c.diagnosticReporter()
+	if reporter != nil {
+		reporter(ctx, diagnostics.Record{Component: "control.client", Event: "logging_update_started", Level: slog.LevelDebug})
+	}
+	outcome := c.doRuntimeOutcome(ctx, http.MethodPatch, "/v1/logging", request, &result, maxControlResponseSize)
+	if reporter != nil {
+		switch {
+		case outcome.err == nil:
+			reporter(ctx, diagnostics.Record{Component: "control.client", Event: "logging_update_succeeded", Level: slog.LevelDebug})
+		case outcome.remoteEnvelope:
+			reporter(ctx, diagnostics.Record{Component: "control.client", Event: "logging_update_response", Level: slog.LevelDebug, Err: outcome.err})
+		default:
+			if level, report := diagnostics.FailureLevel(ctx, outcome.err); report {
+				reporter(ctx, diagnostics.Record{Component: "control.client", Event: "logging_update_failed", Level: level, Err: outcome.err})
+			}
+		}
+	}
+	return result, outcome.err
 }
 
 // SystemProxy returns desired intent and live OS system-proxy observation.
@@ -317,21 +342,25 @@ func (c *Client) doRuntime(ctx context.Context, method, path string, input, outp
 }
 
 func (c *Client) doRuntimeLimit(ctx context.Context, method, path string, input, output any, responseLimit int64) error {
+	return c.doRuntimeOutcome(ctx, method, path, input, output, responseLimit).err
+}
+
+func (c *Client) doRuntimeOutcome(ctx context.Context, method, path string, input, output any, responseLimit int64) runtimeOutcome {
 	var body io.Reader
 	if input != nil {
 		raw, err := json.Marshal(input)
 		if err != nil {
-			return protocol.APIError{Code: protocol.CodeInternal, Message: "encode control request"}
+			return runtimeOutcome{err: protocol.APIError{Code: protocol.CodeInternal, Message: "encode control request"}}
 		}
 		body = bytes.NewReader(raw)
 	}
 	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeInternal, Message: "create control request"}
+		return runtimeOutcome{err: protocol.APIError{Code: protocol.CodeInternal, Message: "create control request"}}
 	}
 	token, err := c.requestToken(ctx)
 	if err != nil {
-		return err
+		return runtimeOutcome{err: err}
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	if input != nil {
@@ -349,30 +378,39 @@ func (c *Client) doRuntimeLimit(ctx context.Context, method, path string, input,
 	}
 	response, err := c.requestHTTP().Do(request)
 	if err != nil {
-		return c.localError(err)
+		return c.localRuntimeOutcome(err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return c.responseError(response)
+		return c.responseOutcome(response)
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, responseLimit+1))
 	if err != nil {
-		return c.localError(err)
+		return c.localRuntimeOutcome(err)
 	}
 	if int64(len(raw)) > responseLimit {
-		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "control response is too large"}
+		return runtimeOutcome{err: protocol.APIError{Code: protocol.CodeDataFailure, Message: "control response is too large"}}
 	}
 	if err := json.Unmarshal(raw, output); err != nil {
-		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control response"}
+		return c.localRuntimeOutcome(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control response"})
 	}
-	return nil
+	return runtimeOutcome{}
 }
 
-func decodeRuntimeHTTPError(response *http.Response) error {
+func decodeRuntimeHTTPErrorOutcome(response *http.Response) (error, bool) {
 	defer response.Body.Close()
 	var envelope protocol.ErrorEnvelope
 	if err := json.NewDecoder(io.LimitReader(response.Body, maxControlResponseSize)).Decode(&envelope); err != nil || envelope.Error.Code == "" {
-		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control error response"}
+		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control error response"}, false
 	}
-	return envelope.Error
+	return envelope.Error, true
+}
+
+func (c *Client) localRuntimeOutcome(cause error) runtimeOutcome {
+	public := c.localError(cause)
+	var api protocol.APIError
+	if !errors.As(cause, &api) && errors.As(public, &api) {
+		return runtimeOutcome{err: diagnostics.Wrap(api, cause)}
+	}
+	return runtimeOutcome{err: public}
 }

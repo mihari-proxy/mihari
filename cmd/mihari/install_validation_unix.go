@@ -11,10 +11,11 @@ import (
 	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/subscription"
+	"io"
 	"net"
 )
 
-func runNativeInstallValidation(ctx context.Context, id, version string) error {
+func runNativeInstallValidation(ctx context.Context, id, version string, loggingFailureStderr io.Writer) error {
 	return app.RunInheritedValidation(ctx, id, func(ctx context.Context, layout platform.ResolvedLayout, locks *platform.OwnedDaemonLease, ready func(bool) error) (resultErr error) {
 		data, err := platform.OpenTrustedRoot(ctx, layout.Data.Root, platform.RootPolicy{Owner: 0, Mode: 0700})
 		if err != nil {
@@ -46,7 +47,7 @@ func runNativeInstallValidation(ctx context.Context, id, version string) error {
 		if err != nil {
 			return errors.Join(err, fs.Close())
 		}
-		return runDaemonWith(ctx, daemonRunDeps{Paths: layout.Data, PrivateFS: fs, Token: token, Version: version, Endpoint: layout.ControlEndpoint, ValidationMode: true, ValidationReady: ready, ActivationPhase: app.InstallPhaseDefinitionCommitted,
+		return runDaemonWith(ctx, daemonRunDeps{Paths: layout.Data, PrivateFS: fs, Token: token, Version: version, Endpoint: layout.ControlEndpoint, ValidationMode: true, ValidationReady: ready, ActivationPhase: app.InstallPhaseDefinitionCommitted, LoggingFailureStderr: loggingFailureStderr,
 			Listen: func(ctx context.Context) (net.Listener, error) { return transport.ListenOwned(ctx, layout, locks) },
 
 			RuntimeOptions: app.RuntimeBuildOptions{ValidationCore: provenance, Resources: providers},

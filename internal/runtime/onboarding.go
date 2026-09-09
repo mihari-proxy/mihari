@@ -26,7 +26,7 @@ func (m *Manager) OnboardingStatus(ctx context.Context) (onboarding.Snapshot, er
 
 func (m *Manager) UpdateOnboarding(ctx context.Context, operation Operation, update onboarding.Update) (onboarding.Snapshot, error) {
 
-	result, err := m.doOperation(ctx, "onboarding:"+operation.ID, func() (any, error) {
+	result, err := m.doOperation(ctx, "onboarding:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.onboarding == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "onboarding service is unavailable"}
 		}
@@ -66,7 +66,7 @@ func (m *Manager) UpdateOnboarding(ctx context.Context, operation Operation, upd
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if _, err := m.saveSettingsCandidate(candidate); err != nil {
+		if _, err := m.saveSettingsCandidate(ctx, candidate); err != nil {
 			return nil, err
 		}
 
@@ -78,7 +78,7 @@ func (m *Manager) UpdateOnboarding(ctx context.Context, operation Operation, upd
 					after:   candidate.before,
 					changed: true,
 				}
-				rollback, rollbackErr := m.saveSettingsCandidate(rollbackCandidate)
+				rollback, rollbackErr := m.saveSettingsCandidate(ctx, rollbackCandidate)
 				if rollbackErr != nil && !rollback.Committed {
 					m.publishSettings(candidate)
 					m.onboardingRestartRequired = true

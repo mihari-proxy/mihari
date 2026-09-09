@@ -14,19 +14,19 @@ func (s *Server) tunRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) tunStatus(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	status, err := s.runtime.TunStatus(request.Context())
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, status)
 }
 
 func (s *Server) enableTun(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	var body protocol.TunMutationRequest
@@ -37,14 +37,14 @@ func (s *Server) enableTun(writer http.ResponseWriter, request *http.Request) {
 		ID: body.OperationID, Source: "control", IfRevision: body.IfRevision,
 	}, body.Force)
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, status)
 }
 
 func (s *Server) disableTun(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	var body protocol.TunMutationRequest
@@ -55,7 +55,7 @@ func (s *Server) disableTun(writer http.ResponseWriter, request *http.Request) {
 		ID: body.OperationID, Source: "control", IfRevision: body.IfRevision,
 	})
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, status)

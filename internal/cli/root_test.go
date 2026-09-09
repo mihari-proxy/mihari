@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/update"
 )
@@ -132,6 +134,24 @@ func TestPrepareLocalRootFailurePreservesAPIError(t *testing.T) {
 	}
 	if got, want := stderr.String(), "{\"schema\":\"mihari.error/v1\",\"error\":{\"code\":\"data_failure\",\"message\":\"resolve Mihari data root\"}}\n"; got != want {
 		t.Fatalf("stderr=%q want=%q", got, want)
+	}
+}
+
+func TestExecuteJSON_DataFailureKeepsSingleSafeEnvelope(t *testing.T) {
+	const secret = "control-token-not-for-cli-output"
+	const subscriptionURL = "https://user:token@secret.example/sub?token=control-token-not-for-cli-output"
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	code := Execute(context.Background(), []string{"status", "--json"}, stdout, stderr, Dependencies{
+		SetupError: diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "persist settings"}, errors.New(subscriptionURL+"\nproxies:\n  - name: secret")),
+	})
+	if code != ExitData || stdout.Len() != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if got, want := stderr.String(), "{\"schema\":\"mihari.error/v1\",\"error\":{\"code\":\"data_failure\",\"message\":\"persist settings\"}}\n"; got != want {
+		t.Fatalf("stderr=%q want=%q", got, want)
+	}
+	if strings.Count(stderr.String(), "\n") != 1 || strings.Contains(stderr.String(), secret) || strings.Contains(stderr.String(), subscriptionURL) || strings.Contains(stderr.String(), "proxies:") {
+		t.Fatalf("CLI JSON output leaked diagnostics or wrote multiple envelopes: %q", stderr.String())
 	}
 }
 

@@ -14,19 +14,19 @@ func (s *Server) systemProxyRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) systemProxyStatus(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	status, err := s.runtime.SystemProxyStatus(request.Context())
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, status)
 }
 
 func (s *Server) enableSystemProxy(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	var body protocol.SystemProxyMutationRequest
@@ -37,14 +37,14 @@ func (s *Server) enableSystemProxy(writer http.ResponseWriter, request *http.Req
 		ID: body.OperationID, Source: "control", IfRevision: body.IfRevision,
 	}, body.Force)
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, status)
 }
 
 func (s *Server) disableSystemProxy(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	var body protocol.SystemProxyMutationRequest
@@ -56,7 +56,7 @@ func (s *Server) disableSystemProxy(writer http.ResponseWriter, request *http.Re
 		ID: body.OperationID, Source: "control", IfRevision: body.IfRevision,
 	})
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, status)

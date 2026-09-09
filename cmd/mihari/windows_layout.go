@@ -20,12 +20,16 @@ import (
 )
 
 func executeProcess(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	code := cli.Execute(ctx, args, stdout, stderr, legacyDependencies())
+	var diagnosticStderr io.Writer
+	if daemonInvocation(args) && !daemonJSONOutput(args) && !service.IsInteractive() {
+		diagnosticStderr = stderr
+	}
+	code := cli.Execute(ctx, args, stdout, stderr, legacyDependencies(diagnosticStderr, daemonLoggingFailureStderr(args, stderr)))
 	_ = closeCachedLocalRoot()
 	return code
 }
 
-func legacyDependencies() cli.Dependencies {
+func legacyDependencies(diagnosticStderr, loggingFailureStderr io.Writer) cli.Dependencies {
 
 	endpoint := transport.DefaultEndpoint()
 	localClient := controlclient.New(endpoint, "")
@@ -37,12 +41,14 @@ func legacyDependencies() cli.Dependencies {
 			return err
 		}
 		return runDaemonWith(ctx, daemonRunDeps{
-			Paths:     root.Paths,
-			PrivateFS: root.FS,
-			Token:     root.Token,
-			Version:   buildinfo.Version,
-			Endpoint:  endpoint,
-			Ready:     ready,
+			Paths:                root.Paths,
+			PrivateFS:            root.FS,
+			Token:                root.Token,
+			Version:              buildinfo.Version,
+			Endpoint:             endpoint,
+			Ready:                ready,
+			DiagnosticStderr:     diagnosticStderr,
+			LoggingFailureStderr: loggingFailureStderr,
 			ServiceStatus: func() (string, error) {
 				if serviceManager == nil {
 					return string(service.StatusUnknown), nil
@@ -66,7 +72,7 @@ func legacyDependencies() cli.Dependencies {
 	selfUpdater := update.SelfUpdater{ObserveTargets: selfUpdateCompletion.ObserveReplacement, AfterReplacePrepared: selfUpdateCompletion.AfterPreparedReplace}
 	executable, executableError := os.Executable()
 	runInstallValidation := func(ctx context.Context, transactionID string) error {
-		return runNativeInstallValidation(ctx, transactionID, buildinfo.Version)
+		return runNativeInstallValidation(ctx, transactionID, buildinfo.Version, nil)
 	}
 
 	dependencies := cli.Dependencies{

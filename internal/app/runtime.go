@@ -15,6 +15,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/core"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/geoip"
 	"github.com/mihari-proxy/mihari/internal/mihomo"
 	"github.com/mihari-proxy/mihari/internal/onboarding"
@@ -52,6 +53,7 @@ type RuntimeBuildOptions struct {
 	ServiceStatus        func() (string, error)
 	InstallationInspect  func(context.Context) (InstallationStatus, error)
 	Logging              runtimeapi.LoggingRuntime
+	DiagnosticReporter   diagnostics.Reporter
 	RefreshLogSecrets    func(catalogURLs []string)
 	MihomoStdout         io.Writer
 	MihomoStderr         io.Writer
@@ -277,6 +279,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		},
 		Onboarding:         onboardingService,
 		Logging:            options.Logging,
+		DiagnosticReporter: options.DiagnosticReporter,
 		RefreshLogSecrets:  options.RefreshLogSecrets,
 		Panels:             panelService,
 		WebGateway:         webGateway,
@@ -458,6 +461,7 @@ func BuildValidationRuntime(ctx context.Context, paths platform.Paths, settings 
 		Settings:           settings,
 		SettingsPath:       options.SettingsPath,
 		Logging:            options.Logging,
+		DiagnosticReporter: options.DiagnosticReporter,
 		ServiceStatus:      options.ServiceStatus,
 		InstallationStatus: installationStatusReader(options.InstallationInspect),
 		OnBackgroundError:  options.OnBackgroundError,

@@ -33,3 +33,14 @@ func TestUnixProcess_MissingPrivateDaemonDoesNotCreateData(t *testing.T) {
 		t.Fatalf("client created data root: %v", err)
 	}
 }
+
+func TestUnixDaemonAssembly_PassesServiceDiagnosticStderrToDaemonDependencies(t *testing.T) {
+	writer := &bytes.Buffer{}
+	deps := newUnixDaemonRunDeps(platform.ResolvedLayout{}, nil, "token", "phase", nil, nil, false, writer, writer)
+	if deps.DiagnosticStderr != writer {
+		t.Fatalf("DiagnosticStderr=%v want service writer", deps.DiagnosticStderr)
+	}
+	if deps.LoggingFailureStderr != writer {
+		t.Fatalf("LoggingFailureStderr=%v want logging failure writer", deps.LoggingFailureStderr)
+	}
+}

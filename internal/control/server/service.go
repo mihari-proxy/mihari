@@ -21,12 +21,12 @@ func (s *Server) serviceRoutes(mux *http.ServeMux) {
 func (s *Server) reportServiceStatus(writer http.ResponseWriter, request *http.Request) {
 	runtime, ok := s.runtime.(serviceStatusAPI)
 	if !ok {
-		writeControlError(writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "service status is unavailable"})
+		s.writeControlError(request.Context(), writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "service status is unavailable"})
 		return
 	}
 	status, err := runtime.ServiceStatus(request.Context())
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, status)

@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 	"github.com/mihari-proxy/mihari/internal/state"
 )
@@ -72,6 +76,103 @@ func TestLoggingEndpointMapsRuntimeErrors(t *testing.T) {
 				assertLoggingError(t, recorder, test.want, test.code)
 			})
 		})
+	}
+}
+
+func TestLoggingEndpointReportsUnclassifiedRuntimeFailure(t *testing.T) {
+	cause := errors.New("injected runtime failure")
+	var records []diagnostics.Record
+	var operation logging.OperationMetadata
+	server := New(Options{
+		Token:   "token",
+		Store:   state.NewStore(state.Snapshot{}),
+		Runtime: &loggingTestRuntime{fakeRuntime: &fakeRuntime{}, updateErr: cause},
+		DiagnosticReporter: func(ctx context.Context, record diagnostics.Record) {
+			records = append(records, record)
+			operation, _ = logging.OperationFromContext(ctx)
+		},
+	})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodPatch, "/v1/logging", bytes.NewBufferString(`{"operation_id":"logging-1","level":"debug"}`)))
+
+	assertLoggingError(t, recorder, http.StatusInternalServerError, protocol.CodeInternal)
+	if len(records) != 1 {
+		t.Fatalf("diagnostic records=%d want=1", len(records))
+	}
+	if records[0].Level != slog.LevelError || !errors.Is(records[0].Err, cause) {
+		t.Fatalf("record=%#v", records[0])
+	}
+	if operation.ID != "logging-1" || operation.Name != "logging.update" {
+		t.Fatalf("operation=%#v", operation)
+	}
+}
+
+func TestLoggingEndpointDoesNotReportRuntimeOwnedFailure(t *testing.T) {
+	var reports int
+	server := New(Options{
+		Token: "token",
+		Store: state.NewStore(state.Snapshot{}),
+		Runtime: &loggingTestRuntime{
+			fakeRuntime: &fakeRuntime{},
+			updateErr:   diagnostics.MarkReported(errors.New("runtime-owned failure")),
+		},
+		DiagnosticReporter: func(context.Context, diagnostics.Record) { reports++ },
+	})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodPatch, "/v1/logging", bytes.NewBufferString(`{"operation_id":"logging-1","level":"debug"}`)))
+
+	assertLoggingError(t, recorder, http.StatusInternalServerError, protocol.CodeInternal)
+	if reports != 0 {
+		t.Fatalf("diagnostic reports=%d want=0", reports)
+	}
+}
+
+func TestLoggingEndpointReportsExpectedConflictAtDebug(t *testing.T) {
+	var records []diagnostics.Record
+	server := New(Options{
+		Token: "token",
+		Store: state.NewStore(state.Snapshot{}),
+		Runtime: &loggingTestRuntime{fakeRuntime: &fakeRuntime{}, updateErr: protocol.APIError{
+			Code: protocol.CodeRevisionConflict, Message: "logging changed",
+		}},
+		DiagnosticReporter: func(_ context.Context, record diagnostics.Record) { records = append(records, record) },
+	})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodPatch, "/v1/logging", bytes.NewBufferString(`{"operation_id":"logging-1","level":"debug"}`)))
+
+	assertLoggingError(t, recorder, http.StatusConflict, protocol.CodeRevisionConflict)
+	if len(records) != 1 || records[0].Level != slog.LevelDebug {
+		t.Fatalf("records=%#v", records)
+	}
+}
+
+func TestLoggingEndpointDoesNotReportAuthenticationOrJSONFailures(t *testing.T) {
+	var reports int
+	server := New(Options{
+		Token:              "token",
+		Store:              state.NewStore(state.Snapshot{}),
+		Runtime:            &loggingTestRuntime{fakeRuntime: &fakeRuntime{}},
+		DiagnosticReporter: func(context.Context, diagnostics.Record) { reports++ },
+	})
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodPatch, "/v1/logging", bytes.NewBufferString(`{"operation_id":"logging-1","level":"debug","secret":"must-not-parse"}`)),
+		httptest.NewRequest(http.MethodPatch, "/v1/logging", bytes.NewBufferString(`{"operation_id":"logging-1","secret":"must-not-parse"}`)),
+	} {
+		if request.Header.Get("Authorization") == "" {
+			request.Header.Set("Authorization", "Bearer wrong-token")
+		}
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("status=%d want=%d", recorder.Code, http.StatusUnauthorized)
+		}
+	}
+	badJSON := authorizedRequest(http.MethodPatch, "/v1/logging", bytes.NewBufferString(`{"operation_id":"logging-1","secret":"must-not-parse"}`))
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, badJSON)
+	assertLoggingError(t, recorder, http.StatusBadRequest, protocol.CodeInvalidArgument)
+	if reports != 0 {
+		t.Fatalf("diagnostic reports=%d want=0", reports)
 	}
 }
 

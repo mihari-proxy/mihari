@@ -7,6 +7,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/state"
 )
 
@@ -35,7 +36,7 @@ func (m *Manager) prepareSettings(update func(*config.Settings) error) (settings
 	return settingsCandidate{before: before, after: after, changed: !reflect.DeepEqual(before, after), generation: generation}, nil
 }
 
-func (m *Manager) saveSettingsCandidate(candidate settingsCandidate) (config.CommitResult, error) {
+func (m *Manager) saveSettingsCandidate(ctx context.Context, candidate settingsCandidate) (config.CommitResult, error) {
 	if !candidate.changed {
 		return config.CommitResult{Committed: true}, nil
 	}
@@ -43,14 +44,18 @@ func (m *Manager) saveSettingsCandidate(candidate settingsCandidate) (config.Com
 		return config.CommitResult{Committed: true}, nil
 	}
 	result, err := m.saveSettings(m.settingsPath, candidate.after.Clone())
-	if (err != nil && result.Committed) || (err == nil && !result.Committed) {
-		return config.CommitResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "persist settings"}
+	api := protocol.APIError{Code: protocol.CodeDataFailure, Message: "persist settings"}
+	if err != nil && result.Committed {
+		return config.CommitResult{}, diagnostics.Wrap(api, err)
+	}
+	if err == nil && !result.Committed {
+		return config.CommitResult{}, diagnostics.Wrap(api, errors.New("invalid commit outcome"))
 	}
 	if err != nil {
-		return result, protocol.APIError{Code: protocol.CodeDataFailure, Message: "persist settings"}
+		return result, diagnostics.Wrap(api, err)
 	}
 	if result.Warning != nil {
-		m.reportBackground("settings", errors.New("parent directory sync failed after commit"))
+		collectWarning(ctx, "settings", "persist.warning", result.Warning)
 	}
 	return result, nil
 }
@@ -65,7 +70,7 @@ func (m *Manager) publishSettings(candidate settingsCandidate) {
 	m.settingsMu.Unlock()
 }
 
-func (m *Manager) updateSettings(update func(*config.Settings) error) (settingsCandidate, error) {
+func (m *Manager) updateSettings(ctx context.Context, update func(*config.Settings) error) (settingsCandidate, error) {
 	if m.mutationDegraded.Load() {
 		return settingsCandidate{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mutation compensation failed; restart required"}
 	}
@@ -73,17 +78,17 @@ func (m *Manager) updateSettings(update func(*config.Settings) error) (settingsC
 	if err != nil || !candidate.changed {
 		return candidate, err
 	}
-	if _, err := m.saveSettingsCandidate(candidate); err != nil {
+	if _, err := m.saveSettingsCandidate(ctx, candidate); err != nil {
 		return settingsCandidate{}, err
 	}
 	m.publishSettings(candidate)
 	return candidate, nil
 }
 
-func (m *Manager) restoreSettings(settings config.Settings) (config.CommitResult, error) {
+func (m *Manager) restoreSettings(ctx context.Context, settings config.Settings) (config.CommitResult, error) {
 	before := m.settingsSnapshot()
 	candidate := settingsCandidate{before: before, after: settings.Clone(), changed: !reflect.DeepEqual(before, settings)}
-	result, err := m.saveSettingsCandidate(candidate)
+	result, err := m.saveSettingsCandidate(ctx, candidate)
 	if err != nil {
 		return result, err
 	}

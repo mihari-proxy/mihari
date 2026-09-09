@@ -31,7 +31,7 @@ func (m *Manager) SystemProxyStatus(ctx context.Context) (protocol.SystemProxySt
 // EnableSystemProxy turns on the OS system proxy for the mixed endpoint.
 // When a foreign proxy is active, force must be true to overwrite it.
 func (m *Manager) EnableSystemProxy(ctx context.Context, op Operation, force bool) (protocol.SystemProxyStatus, error) {
-	result, err := m.doOperation(ctx, "sysproxy-enable:"+op.ID, func() (any, error) {
+	result, err := m.doOperation(ctx, "sysproxy-enable:"+op.ID, func(ctx context.Context) (any, error) {
 		return m.mutateSystemProxy(ctx, op, true, force)
 	})
 	if err != nil {
@@ -43,7 +43,7 @@ func (m *Manager) EnableSystemProxy(ctx context.Context, op Operation, force boo
 // DisableSystemProxy clears Mihari-owned system proxy (policy i).
 // Foreign proxies are refused without OS write or desired-state change.
 func (m *Manager) DisableSystemProxy(ctx context.Context, op Operation) (protocol.SystemProxyStatus, error) {
-	result, err := m.doOperation(ctx, "sysproxy-disable:"+op.ID, func() (any, error) {
+	result, err := m.doOperation(ctx, "sysproxy-disable:"+op.ID, func(ctx context.Context) (any, error) {
 		return m.mutateSystemProxy(ctx, op, false, false)
 	})
 	if err != nil {
@@ -94,7 +94,7 @@ func (m *Manager) mutateSystemProxy(ctx context.Context, op Operation, enable, f
 		return protocol.SystemProxyStatus{}, err
 	}
 
-	candidate, err := m.updateSettings(func(next *config.Settings) error {
+	candidate, err := m.updateSettings(ctx, func(next *config.Settings) error {
 		next.SystemProxyDesired = enable
 		return nil
 	})
@@ -145,7 +145,7 @@ func (m *Manager) mutateSystemProxy(ctx context.Context, op Operation, enable, f
 }
 
 func (m *Manager) compensateSystemProxy(ctx context.Context, op Operation, candidate settingsCandidate, observed sysproxy.State, cause error, restoreLive bool) error {
-	_, rollbackErr := m.restoreSettings(candidate.before)
+	_, rollbackErr := m.restoreSettings(ctx, candidate.before)
 	var liveRestoreErr error
 	if restoreLive {
 		liveRestoreErr = m.restoreSystemProxy(observed)

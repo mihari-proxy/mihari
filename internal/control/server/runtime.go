@@ -83,7 +83,7 @@ func (s *Server) runtimeRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) coreStatus(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	snapshot := s.runtime.Snapshot()
@@ -98,7 +98,7 @@ func (s *Server) coreStatus(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) installCore(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	var body protocol.MutationRequest
@@ -107,7 +107,7 @@ func (s *Server) installCore(writer http.ResponseWriter, request *http.Request) 
 	}
 	result, err := s.runtime.Install(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision, Channel: body.Channel})
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	snapshot := s.runtime.Snapshot()
@@ -117,7 +117,7 @@ func (s *Server) installCore(writer http.ResponseWriter, request *http.Request) 
 }
 
 func (s *Server) restartCore(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	var body protocol.MutationRequest
@@ -125,19 +125,19 @@ func (s *Server) restartCore(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	if err := s.runtime.Restart(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}); err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, protocol.MutationResult{Schema: "mihari/v1", OperationID: body.OperationID, Revision: s.runtime.Snapshot().Revision})
 }
 
 func (s *Server) proxies(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	upstream, err := s.runtime.Proxies(request.Context())
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	// Preserve mihomo/config order: follow GLOBAL.All when present. Do not sort
@@ -184,7 +184,7 @@ func orderedProxyGroups(proxies map[string]mihomo.Proxy) []protocol.ProxyGroup {
 }
 
 func (s *Server) selectProxy(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	var body protocol.ProxySelectionRequest
@@ -196,14 +196,14 @@ func (s *Server) selectProxy(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	if err := s.runtime.SelectProxy(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control"}, request.PathValue("name"), body.Name); err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, protocol.MutationResult{Schema: "mihari/v1", OperationID: body.OperationID})
 }
 
 func (s *Server) delayTest(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	var body protocol.DelayTestRequest
@@ -216,14 +216,14 @@ func (s *Server) delayTest(writer http.ResponseWriter, request *http.Request) {
 	}
 	delays, err := s.runtime.DelayGroup(request.Context(), request.PathValue("name"), body.URL, body.TimeoutMilliseconds)
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, protocol.DelayResult{Schema: "mihari/v1", Delays: map[string]uint16(delays)})
 }
 
 func (s *Server) delayProxy(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	var body protocol.DelayTestRequest
@@ -237,19 +237,19 @@ func (s *Server) delayProxy(writer http.ResponseWriter, request *http.Request) {
 	name := request.PathValue("name")
 	delay, err := s.runtime.DelayProxy(request.Context(), name, body.URL, body.TimeoutMilliseconds)
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, protocol.DelayResult{Schema: "mihari/v1", Delays: map[string]uint16{name: delay}})
 }
 
 func (s *Server) connections(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	upstream, err := s.runtime.Connections(request.Context())
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, connectionListDTO(upstream))
@@ -277,7 +277,7 @@ func connectionListDTO(upstream mihomo.Connections) protocol.ConnectionList {
 }
 
 func (s *Server) closeConnection(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	var body protocol.MutationRequest
@@ -285,14 +285,14 @@ func (s *Server) closeConnection(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	if err := s.runtime.CloseConnection(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control"}, request.PathValue("id")); err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, protocol.MutationResult{Schema: "mihari/v1", OperationID: body.OperationID})
 }
 
 func (s *Server) closeAllConnections(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	var body protocol.MutationRequest
@@ -300,19 +300,19 @@ func (s *Server) closeAllConnections(writer http.ResponseWriter, request *http.R
 		return
 	}
 	if err := s.runtime.CloseAllConnections(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control"}); err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, protocol.MutationResult{Schema: "mihari/v1", OperationID: body.OperationID})
 }
 
 func (s *Server) rules(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	upstream, err := s.runtime.Rules(request.Context())
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	rules := make([]protocol.Rule, 0, len(upstream.Rules))
@@ -323,12 +323,12 @@ func (s *Server) rules(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) ruleProviders(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	upstream, err := s.runtime.RuleProviders(request.Context())
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	names := make([]string, 0, len(upstream.Providers))
@@ -352,7 +352,7 @@ func (s *Server) ruleProviders(writer http.ResponseWriter, request *http.Request
 }
 
 func (s *Server) updateRuleProvider(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	name := request.PathValue("name")
@@ -365,7 +365,7 @@ func (s *Server) updateRuleProvider(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	if err := s.runtime.UpdateRuleProvider(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, name); err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, protocol.MutationResult{
@@ -374,7 +374,7 @@ func (s *Server) updateRuleProvider(writer http.ResponseWriter, request *http.Re
 }
 
 func (s *Server) stream(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	kind := mihomo.StreamKind(request.PathValue("kind"))
@@ -420,11 +420,11 @@ func (s *Server) stream(writer http.ResponseWriter, request *http.Request) {
 	_ = connection.Close(websocket.StatusInternalError, "stream failed")
 }
 
-func (s *Server) requireRuntime(writer http.ResponseWriter) bool {
+func (s *Server) requireRuntime(ctx context.Context, writer http.ResponseWriter) bool {
 	if s.runtime != nil {
 		return true
 	}
-	writeControlError(writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo runtime is unavailable"})
+	s.writeControlError(ctx, writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo runtime is unavailable"})
 	return false
 }
 

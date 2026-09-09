@@ -25,6 +25,18 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 - onboarding、系统代理或 TUN 等需要补偿的 mutation，若补偿写在提交点前失败，daemon 会按已经提交的磁盘状态收敛内存、推进 revision，并将 health 标为 `degraded`。只读请求仍可用；后续 mutation 返回 `invalid_state`，必须重启后重新加载并重试。
 - 该 degraded 边界不新增事务文件或持久化 schema。旧版二进制以 `KnownFields(true)` 严格解码 `mihari.yaml`，不能读取非默认 `log:` 块；降级前须在 System → Logging 恢复 `info` / 10 MiB / 3 份文件以自动移除该块，或备份后手动删除 `log:`。
 
+## 诊断错误链
+
+- Phase 1 的 operation metadata 已用于 Phase 2 的首条完整链路：TUI System → Logging 的更新复用既有 `/v1` DTO 的 `operation_id`，本地控制客户端和 daemon 在各自的诊断 ctx 中绑定该值；静态 operation 名为 `logging.update`。这不增加 header 或持久化状态；共享运行中的 mihomo 输出不附加此 ID。
+- settings 保存失败保留稳定的公开 `data_failure` / `persist settings` 分类，同时在内部错误链保留 cause，供 `errors.Is`/`errors.As` 与 daemon 的受控诊断使用。诊断 logger 输出有界、脱敏的类型化摘要，不能把路径、凭据、完整 URL 或配置原文带入公开响应、状态或事件。
+- 每次实际 mutation 执行是详细失败诊断的唯一 owner；同一 key 的缓存重放和并发等待者不会重复记录。控制服务器只为未被 owner 标记的意外失败补一条记录。对这条 settings 链路，已提交后的目录同步 warning 保持成功、revision 与内存发布，并在业务锁释放后以实际原因记录 WARN。
+- 客户端在这条 Logging 更新链路上记录 DEBUG 的开始和已解析 daemon 响应；本地传输或响应解码失败按其分类记录。普通 CLI 没有持久化诊断日志，非流式 JSON 模式维持单一安全 envelope。logger 建立前只有 Unix 显式 system-service/launchd 或 Windows SCM 的非交互 daemon owner 可使用注入的安全 stderr 摘要；日志资源写入或关闭失败继续使用独立的非 JSON fallback，不能递归写入失效 logger。
+
+其余边界尚未完成 cause 保留和诊断 owner 接入，不能据此宣称全链路覆盖。静态审计确认的后续范围包括：
+
+- Phase 3：订阅下载把 `networkFailureError` 收口为 `subscription download failed`，读取响应错误收口为 `read subscription response`（`internal/subscription/downloader.go`）。已发现的 mihomo 请求创建、传输、读取和 JSON 解码也收口为公开 API 错误（`internal/mihomo/client.go`）；仅在已批准业务调用链接入时，才分别确定 cause、operation metadata 与最终记录 owner。
+- Phase 4：后台任务、Web gateway、其余 CLI/TUI 本地任务、stream 生命周期、关闭流程和 logger 自身故障仍需逐项审计。当前 Web gateway 的 listen 失败已收口为 `web gateway address is unavailable`（`internal/web/server.go`）；mihomo stream 的连接、关闭和无效 JSON 收口位于 `internal/mihomo/stream.go`，等待该阶段审计。除 Logging 更新外，控制客户端方法尚未接入本阶段的客户端诊断链路。#197 的 Setup 用户提示不在本阶段范围内。
+
 ## 核心安装
 
 守护进程通过同一条下载、校验、替换链路安装 mihomo,并支持 `stable` 与 `alpha` 两个通道:

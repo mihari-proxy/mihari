@@ -13,6 +13,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/control/transport"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 )
 
@@ -24,6 +25,7 @@ type Client struct {
 	provider CredentialProvider
 	classify func(error) error
 	redactor *logging.Redactor
+	reporter diagnostics.Reporter
 	started  bool
 }
 
@@ -38,6 +40,17 @@ func (c *Client) SetRedactor(r *logging.Redactor) error {
 		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "control requests already started"}
 	}
 	c.redactor = r
+	return nil
+}
+
+// SetDiagnosticReporter binds an optional diagnostics reporter before the first request.
+func (c *Client) SetDiagnosticReporter(reporter diagnostics.Reporter) error {
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	if c.started {
+		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "control requests already started"}
+	}
+	c.reporter = reporter
 	return nil
 }
 
@@ -161,12 +174,22 @@ func (e authenticationError) Hint() string {
 }
 
 func (c *Client) responseError(response *http.Response) error {
-	err := decodeRuntimeHTTPError(response)
+	return c.responseOutcome(response).err
+}
+
+func (c *Client) responseOutcome(response *http.Response) runtimeOutcome {
+	err, remoteEnvelope := decodeRuntimeHTTPErrorOutcome(response)
 	var api protocol.APIError
 	if c.provider != nil && response.StatusCode == http.StatusUnauthorized && errors.As(err, &api) && api.Code == protocol.CodePermissionDenied {
-		return authenticationError{cause: err}
+		err = authenticationError{cause: err}
 	}
-	return err
+	return runtimeOutcome{err: err, remoteEnvelope: remoteEnvelope}
+}
+
+func (c *Client) diagnosticReporter() diagnostics.Reporter {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	return c.reporter
 }
 
 func (c *Client) Status(ctx context.Context) (protocol.Status, error) {

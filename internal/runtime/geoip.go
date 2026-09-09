@@ -55,7 +55,7 @@ func (m *Manager) LookupGeoIP(_ context.Context, addresses []netip.Addr) ([]geoi
 
 // UpdateGeoIP prepares outside the mutation gate and commits under revision control.
 func (m *Manager) UpdateGeoIP(ctx context.Context, operation Operation) (geoip.Status, error) {
-	result, err := m.doOperation(ctx, "geoip:"+operation.ID, func() (any, error) {
+	result, err := m.doOperation(ctx, "geoip:"+operation.ID, func(ctx context.Context) (any, error) {
 		// setup 预检（design §4.3）：aio 脚本已预置 GeoIP 且本地 MMDB 有效时直接返回，不联网下载。
 		if operation.Source == "setup" && m.geoip != nil {
 			if status := m.geoip.Status(); status.Country.Available && status.ASN.Available {

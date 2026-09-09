@@ -18,6 +18,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/elevate"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -387,15 +388,17 @@ type portsApplyResultMsg struct {
 }
 
 type loggingUpdateResultMsg struct {
-	epoch uint64
-	rowID string
-	err   error
+	epoch     uint64
+	rowID     string
+	operation logging.OperationMetadata
+	err       error
 }
 
 type loggingReloadResultMsg struct {
-	epoch uint64
-	rowID string
-	err   error
+	epoch     uint64
+	rowID     string
+	operation logging.OperationMetadata
+	err       error
 }
 
 func (m portsApplyResultMsg) Err() error { return m.err }
@@ -784,7 +787,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
 			m.loggingReloading = true
 			m.pendingNote = ui.LoggingProgressReloading
-			return m, tea.Batch(m.reloadLogging(typed.epoch, typed.rowID), m.rowSpinCmdIfNeeded())
+			return m, tea.Batch(m.reloadLogging(typed.epoch, typed.rowID, typed.operation), m.rowSpinCmdIfNeeded())
 		}
 		m.clearRowPending()
 		m.loggingPendingEpoch = 0
@@ -2291,27 +2294,29 @@ func (m *Model) startLoggingUpdate(rowID string, request protocol.LoggingUpdateR
 		return nil
 	}
 	epoch := m.loggingEpoch
+	operation := logging.OperationMetadata{ID: request.OperationID, Name: "logging.update"}
 	m.pending = true
 	m.pendingRow = rowID
 	m.pendingNote = ui.LoggingProgressApplying
 	m.loggingPendingEpoch = epoch
 	update := func() tea.Msg {
-		status, err := m.client.UpdateLogging(m.ctx, request)
+		ctx := logging.WithOperation(m.ctx, operation)
+		status, err := m.client.UpdateLogging(ctx, request)
 		if err != nil {
-			return ui.PageResultMsg{Page: ui.PageSystem, Result: loggingUpdateResultMsg{epoch: epoch, rowID: rowID, err: err}}
+			return ui.PageResultMsg{Page: ui.PageSystem, Result: loggingUpdateResultMsg{epoch: epoch, rowID: rowID, operation: operation, err: err}}
 		}
-		return ui.PageResultMsg{Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: epoch, Status: status}}
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: epoch, Status: status, Operation: operation}}
 	}
 	return tea.Batch(update, m.rowSpinCmdIfNeeded())
 }
 
-func (m *Model) reloadLogging(epoch uint64, rowID string) tea.Cmd {
+func (m *Model) reloadLogging(epoch uint64, rowID string, operation logging.OperationMetadata) tea.Cmd {
 	return func() tea.Msg {
 		status, err := m.client.Logging(m.ctx)
 		if err != nil {
-			return ui.PageResultMsg{Page: ui.PageSystem, Result: loggingReloadResultMsg{epoch: epoch, rowID: rowID, err: err}}
+			return ui.PageResultMsg{Page: ui.PageSystem, Result: loggingReloadResultMsg{epoch: epoch, rowID: rowID, operation: operation, err: err}}
 		}
-		return ui.PageResultMsg{Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: epoch, Status: status}}
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: epoch, Status: status, Operation: operation}}
 	}
 }
 
