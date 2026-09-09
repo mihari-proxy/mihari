@@ -118,7 +118,8 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Race
-        run: go test -count=1 -race ./...
+        # Recovery fault matrices need more than the default 10m under -race.
+        run: go test -count=1 -race -timeout=30m ./...
 
   vet-format:
     runs-on: ${{ matrix.os }}

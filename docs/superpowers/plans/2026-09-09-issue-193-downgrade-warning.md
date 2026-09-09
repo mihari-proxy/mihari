@@ -997,3 +997,5 @@ Task 1 → Task 2 → Task 3 → Task 4 → Task 5 → Task 6 → Task 7
 - 13:50 UTC轮询：最新head macOS unit通过，PTY读回修正确认；Windows unit剩两项失败（错误文本自动换行断言、动态能力JSON路径），均继续最小修正。macOS race在未改动subscription恢复矩阵600秒超时，前head该OS已通过；不改订阅代码或CI时限。Cubic/Pullfrog已完成，Pullfrog建议的默认非rootwarning回归已补并真实非root通过；其余triage见审核记录。
 
 - 剩余Windows两项修正及Pullfrog覆盖补足已独立复审PASS：UAC断言归一化空白；AIO能力输出等价固定v1 JSON，移除该早期路径动态JSON/module autoload，16项便携能力测试通过。仅定位动态路径差分，未声称具体progress/timeout分支已证实；最终Win5.1Green待CI。
+
+- 用户后续明确授权“增加时间上限”，原冻结范围对此项已获补充授权：三OS CI race命令增加`-timeout=30m`，保留`-count=1 -race ./...`与全部测试，不修改订阅代码、不跳过用例。此前“不放宽时限”为授权前历史决策；新CI结果待验证。
