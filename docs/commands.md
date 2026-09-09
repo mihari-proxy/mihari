@@ -27,7 +27,7 @@ Unix 的 install/reinstall/update/start/stop/uninstall 走统一安装用例，�
 
 Linux 服务启动失败后，systemd 可能显示 `activating (auto-restart)`。如果此时主进程已退出（`MainPID=0`），`mihari service status` 返回 `stopped`，仍允许进入服务停止或重装流程；这不表示 systemd 已取消自动重启。升级旧版本后若日志提示 `existing data requires recovery or migration`，应使用包含此修复的版本执行 `sudo mihari service reinstall`，由安装事务处理旧数据和服务定义，而不是直接修改 unit 的启动参数。重装失败时保留报错和 `journalctl -u mihari` 日志继续排查。
 
-如果旧目录只有 `mihari-channel`、空的 `install.lock` 和 `transactions/<ID>/transaction-id`，说明该目录尚未包含业务配置。安装事务可在校验这些启动残留后建立新的数据目录，保留旧目录，并由新 daemon 完成首次初始化。含恢复日志、事务备份、未知文件或不匹配标记的目录不会按此路径处理；不要通过删除这些文件强行绕过恢复检查。
+如果旧目录只有 `mihari-channel`、空的 `install.lock`、空的 `locks` 目录和 `transactions/<ID>/transaction-id` 中的部分或全部，说明该目录尚未包含业务配置。安装事务可在校验这些启动残留后建立新的数据目录，保留旧目录，并由新 daemon 完成首次初始化。含恢复日志、事务备份、非空 `locks`、未知文件或不匹配标记的目录不会按此路径处理；不要通过删除这些文件强行绕过恢复检查。
 
 守护进程本身可手动在前台运行(OS 服务与 TUI 的 System 页面使用同一入口);正常使用无需手动执行,且前台运行时关闭终端会停止守护进程:
 

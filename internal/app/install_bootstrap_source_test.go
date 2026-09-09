@@ -67,12 +67,55 @@ func TestUnixMigration_BootstrapResidueMainChannel(t *testing.T) {
 	}
 }
 
+func TestUnixMigration_BootstrapResidueEmptyLocks(t *testing.T) {
+	fx := bootstrapMigrationFixture(t)
+	if err := os.Mkdir(fx.source.osPath("locks"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := prepareMigration(context.Background(), fx.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.cleanup()
+	if err := prepared.recheckAndPublish(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, fx.source.osPath("locks/install-data-id"), []byte(testTxnID))
+	if err := prepared.recheckAndPublish(context.Background()); err == nil || apiCode(err) != protocol.CodeRevisionConflict {
+		t.Fatalf("new lock state accepted before publication: %v", err)
+	}
+}
+
+func TestUnixMigration_BootstrapResidueBeforeTransactionMarker(t *testing.T) {
+	fx := bootstrapMigrationFixture(t)
+	if err := os.RemoveAll(fx.source.osPath("transactions")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(fx.source.osPath("install.lock")); err != nil {
+		t.Fatal(err)
+	}
+	before := fx.sourceHashes(t)
+	prepared, err := prepareMigration(context.Background(), fx.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.cleanup()
+	if err := prepared.recheckAndPublish(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !mapsEqual(before, fx.sourceHashes(t)) {
+		t.Fatal("source changed")
+	}
+}
+
 func TestUnixMigration_BootstrapResidueRejectsRecoveryState(t *testing.T) {
-	for _, name := range []string{"journal", "backup", "marker-mismatch", "unknown-transaction", "business", "hardlink"} {
+	for _, name := range []string{"journal", "backup", "marker-mismatch", "unknown-transaction", "business", "hardlink", "nonempty-locks"} {
 		t.Run(name, func(t *testing.T) {
 			fx := bootstrapMigrationFixture(t)
 			marker := "transactions/" + strings.Repeat("a", 32) + "/transaction-id"
 			switch name {
+			case "nonempty-locks":
+				mustWrite(t, fx.source.osPath("locks/install-data-id"), []byte(testTxnID))
 			case "journal":
 				mustWrite(t, fx.source.osPath("install-transaction.json"), []byte("pending"))
 			case "backup":

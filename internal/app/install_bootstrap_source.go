@@ -18,7 +18,7 @@ func observeBootstrapSource(ctx context.Context, source migrationCapability) (ma
 	}
 	for _, entry := range top {
 		switch entry.Name {
-		case "install.lock", "mihari-channel", "transactions":
+		case "install.lock", "mihari-channel", "transactions", "locks":
 		default:
 			return nil, nil
 		}
@@ -47,6 +47,22 @@ func observeBootstrapSource(ctx context.Context, source migrationCapability) (ma
 		return source.ReadFile(ctx, rel, max)
 	}
 	for _, entry := range top {
+		if entry.Name == "locks" {
+			if err := record(entry.Name, entry); err != nil {
+				return nil, err
+			}
+			if !entry.Dir {
+				return nil, migrateState("unsupported migration source")
+			}
+			entries, err := source.List(ctx, "locks")
+			if err != nil {
+				return nil, err
+			}
+			if len(entries) != 0 {
+				return nil, migrateState("unsupported migration source")
+			}
+			continue
+		}
 		if entry.Name != "transactions" {
 			raw, err := read(entry.Name, entry, 32)
 			if err != nil {
