@@ -76,6 +76,67 @@ proxies:
 	}
 }
 
+func TestGeneratePreservesNativeControllerVariantsAndExtraListeners(t *testing.T) {
+	// Synthetic YAML only: these native endpoints and file references are never opened.
+	base, err := ParseDocument([]byte(`external-controller-unix: /fixture/controller.sock
+external-controller-pipe: '\\.\pipe\fixture-controller'
+external-controller-tls: 0.0.0.0:9443
+port: 18080
+socks-port: 18081
+redir-port: 18082
+tproxy-port: 18083
+tunnels:
+  - network: [tcp, udp]
+    address: 0.0.0.0:18084
+    target: example.invalid:443
+    proxy: DIRECT
+tuic-server:
+  enable: true
+  listen: 0.0.0.0:18085
+  certificate: /fixture/server.crt
+  private-key: /fixture/server.key
+iptables:
+  enable: true
+  inbound-interface: [fixture0]
+proxies: []
+rules: [MATCH,DIRECT]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := yaml.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := Generate(base, nil, testSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParseDocument(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{
+		"external-controller-unix", "external-controller-pipe", "external-controller-tls",
+		"port", "socks-port", "redir-port", "tproxy-port", "tunnels", "tuic-server", "iptables",
+	} {
+		want, present := base[field]
+		if !present {
+			t.Fatalf("native field %s missing from fixture", field)
+		}
+		if !reflect.DeepEqual(got[field], want) {
+			t.Errorf("native field %s was changed or removed", field)
+		}
+	}
+	after, err := yaml.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("native configuration source was mutated")
+	}
+}
+
 func TestGenerateMakesNodeOnlyDocumentRoutable(t *testing.T) {
 	base, err := ParseDocument([]byte(`proxies:
   - {name: one, type: ss, server: 127.0.0.1, port: 443, cipher: aes-128-gcm, password: x}

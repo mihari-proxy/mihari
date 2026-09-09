@@ -9,7 +9,7 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 - CLI、TUI 和浏览器面板通过本地命名管道 / Unix 域套接字连接同一守护进程控制面。
 - 控制 API 从不绑定 TCP 端口。
 - 控制面经过认证:Unix 系统令牌位于 B/control.token，Windows/显式私有 P 保留单根 control.token。
-- 守护进程可以安装、校验、托管、查询并重启 mihomo,同时将控制器保持在内环回。
+- 守护进程可以安装、校验、托管、查询并重启 mihomo,同时将 Mihari 托管的 TCP 控制器保持在 loopback。
 - 守护进程还负责订阅持久化、有界的自动刷新、校验过的配置生成、重载回滚与离线配置切换。
 - 控制面新增只读端点 `GET /v1/service/status`,返回 mihari 自身的 OS 服务注册状态(`running`/`stopped`/`not_installed`/`unknown`);`GET /v1/core` 增加可选 `localReady`/`localVersion` 字段反映本地 core 就绪。两者均为向后兼容增量,不改变现有协议字段、onboarding `Complete` 契约或持久化格式。
 - `/v1` 的 `CoreStatus`、`CoreInstallResult` 增加可选 `channel`;`MutationRequest` 增加可选 `channel` 以显式指定本次安装通道。均为向后兼容增量。
