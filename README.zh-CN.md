@@ -156,7 +156,7 @@ mihari sysproxy enable
 
 Unix 的 E/C/channel 分别为 `B/control.sock`、`B/control.token`、`B/mihari-channel`；I 默认 `/usr/local/lib/mihari`。B 为 root0711，D 为 root0700，C/channel 为 root0644，E 为 root0666。普通用户无需 sudo 即可认证并管理同一代理及读取受控机器诊断；不能直接读取 D 或其他用户的 U。Windows 继续使用 `\\.\pipe\mihari-control`。
 
-显式 `MIHARI_DATA=P` 保留 P 本身的私有单根语义与 0700/0600 权限，不是 P/data，也不能与默认 B/D 重叠。root 不信 HOME/SUDO_USER/XDG；默认共享发现不使用 XDG_RUNTIME_DIR。root 安装与迁移采用停机、校验、原子提交和可重复恢复；旧数据树及旧日志保留。root 配置仅接受内置可信核心 v1.19.30 与受支持的 typed 字段/provider，未知核心、字段或 MRS 会拒绝；Windows/非 root 私有 P 保持兼容。具体覆盖项、I/FS 限制、停机 credential 轮换和恢复入口见 [Unix 布局与安装恢复](docs/unix-layout.md)。
+显式 `MIHARI_DATA=P` 保留 P 本身的私有单根语义与 0700/0600 权限，不是 P/data，也不能与默认 B/D 重叠。root 不信 HOME/SUDO_USER/XDG；默认共享发现不使用 XDG_RUNTIME_DIR。root 安装与迁移采用停机、校验、原子提交和可重复恢复；旧数据树及旧日志保留。各平台统一保留订阅配置，仅覆盖 Mihari 托管参数；TUN 开关只覆盖 `tun.enable`，保留其余字段。配置语义和原生 provider 由 mihomo 处理，Mihari 保留候选校验与 reload 回滚。Unix root 仍要求内置可信核心 v1.19.30，二进制身份校验与配置生成相互独立。具体覆盖项、I/FS 限制、停机 credential 轮换和恢复入口见 [Unix 布局与安装恢复](docs/unix-layout.md)。
 
 ## 文件日志
 

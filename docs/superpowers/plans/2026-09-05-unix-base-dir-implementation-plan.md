@@ -1,5 +1,7 @@
 # Unix Base Dir Implementation Plan
 
+> **2026-09-09 状态更新：** 本文关于完整 RootConfigPolicy、字段白名单及新建受管 provider 资源图的要求已由[移除方案](2026-09-09-remove-root-config-policy.md)替代；TUN 仅覆盖 enable。Unix 布局、核心身份校验、安装事务与历史 WAL 恢复约束继续保留。下文保留原设计及审核时的历史内容。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. 此处不授予自动提交、推送或合并权限。
 
 **Goal:** 在 Linux/macOS 落地机器级数据与控制入口、用户级 TUI 诊断，以及安全可恢复的安装迁移，保持 Windows 和非 root 显式便携实例兼容。

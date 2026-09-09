@@ -1,5 +1,7 @@
 # System Data Root Redesign Handoff Plan
 
+> **2026-09-09 状态更新：** 本文关于完整 RootConfigPolicy、字段白名单及新建受管 provider 资源图的要求已由[移除方案](2026-09-09-remove-root-config-policy.md)替代；TUN 仅覆盖 enable。Unix 布局、核心身份校验、安装事务与历史 WAL 恢复约束继续保留。下文保留原设计及审核时的历史内容。
+
 > **2026-09-06 执行计划审阅收口：** 用户已明确授权继续编写执行计划并循环审核；已完成 [Unix Base Dir 执行计划 R3](2026-09-05-unix-base-dir-implementation-plan.md)，共19个任务，经过 Astra 三轮独立审核与修订，最终 [计划 R3 技术 PASS](../reviews/2026-09-05-unix-base-dir-plan-review-r3.md)，未关闭 Blocking/Critical/Major 为0。计划 SHA256=`0B708CE6FDBCE432FB26F16068F4B087F18CC6B2006A80BE39278BDC5CD3F74F`；前两轮报告同目录保留，分别记录5项和2项Major及关闭证据。R4设计及其已通过哈希保持不变。计划正文的“待复审”为送审快照，当前审核状态以绑定该哈希的独立PASS报告为准。执行顺序为平台/IPC基础→输入安全与日志导出→安装迁移/恢复→默认布局接线→跨平台验收；T19全部必需安全job通过才具备可合并条件。本轮仅完成文档计划和技术审核，未修改生产代码、运行实施测试、提交或操作真实服务；实际实施与契约变更仍以用户明确授权为前提。下方“尚未编写实施计划”等文字保留为历史记录，当前状态以本段为准。
 
 > **2026-09-05 技术审阅收口：** 已按用户要求完成 Astra 四轮独立审核和修订，最终 [Unix Base Dir 设计 R4](../specs/2026-09-05-unix-base-dir-design.md) 获得 [R4 技术 PASS](../reviews/2026-09-05-unix-base-dir-review-r4.md)，未关闭 Blocking/Critical/Major 为 0。审核规格 SHA256 为 `3A97A33DBB1B1CA5122F2A25F8545FD5A1EBD73B5DA5A160047749FF8A942F3E`。R1、R2、R3 报告同目录保留，分别记录 8、6、1 项 Major 及逐轮关闭证据。当前交付是完整 Unix 推荐设计，等待用户对分区、共享权限、RootConfigPolicy 兼容限制、公开协议及持久化格式的最终批准；尚未编写实施计划或修改生产代码。Windows 重设计不在本次技术 PASS 范围。下文保留历史交接材料，当前状态以本段及 R4 设计/报告为准。
