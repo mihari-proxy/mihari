@@ -140,6 +140,12 @@ func TestClientRuntimeRequests(t *testing.T) {
 			},
 		},
 		{
+			name: "reload startup config", method: http.MethodPut, path: "/configs", query: url.Values{"force": {"true"}}, body: `{"path":""}`,
+			invoke: func(ctx context.Context, client *Client) error {
+				return client.Reload(ctx, "", true)
+			},
+		},
+		{
 			name: "configs", method: http.MethodGet, path: "/configs", response: `{"mode":"rule","tun":{"enable":true,"stack":"gVisor"}}`,
 			invoke: func(ctx context.Context, client *Client) error {
 				got, err := client.Configs(ctx)

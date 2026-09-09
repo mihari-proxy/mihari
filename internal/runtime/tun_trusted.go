@@ -129,14 +129,16 @@ func (m *Manager) rollbackTrustedTun(ctx context.Context, op Operation, candidat
 		configErr = err
 		if err == nil {
 			defer func() { _ = cap.Close() }() // Read-only capability; rollback ownership is already settled.
-			path, err := cap.Path(recovery)
+			_, err := cap.Path(recovery)
 			configErr = err
 			if err == nil {
 				reloader, ok := m.controller.(configReloader)
 				if !ok {
 					configErr = errors.New("mihomo reload is unavailable")
 				} else {
-					configErr = reloader.Reload(recovery, path, true)
+					// Reload the startup-bound config after verifying the restored
+					// capability, just as commitTrustedRuntimeConfig does.
+					configErr = reloader.Reload(recovery, "", true)
 				}
 			}
 		}
