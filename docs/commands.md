@@ -29,6 +29,8 @@ Linux 服务启动失败后，systemd 可能显示 `activating (auto-restart)`�
 
 如果旧目录只有 `mihari-channel`、空的 `install.lock`、空的 `locks` 目录和 `transactions/<ID>/transaction-id` 中的部分或全部，说明该目录尚未包含业务配置。安装事务可在校验这些启动残留后建立新的数据目录，保留旧目录，并由新 daemon 完成首次初始化。含恢复日志、事务备份、非空 `locks`、未知文件或不匹配标记的目录不会按此路径处理；不要通过删除这些文件强行绕过恢复检查。
 
+上述残留迁移要求旧数据根与目标数据根不同，例如从旧私有目录迁移到系统布局的 `/var/lib/mihari/data`。显式设置或继承 `MIHARI_DATA` 后在同一私有目录重装会保留原数据，不会清理这些残留。含 `transactions/<ID>/unit-bootstrap` 的目录也不属于仅有启动标记的情形，应保留现场继续排查。
+
 守护进程本身可手动在前台运行(OS 服务与 TUI 的 System 页面使用同一入口);正常使用无需手动执行,且前台运行时关闭终端会停止守护进程:
 
 ```console
