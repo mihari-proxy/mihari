@@ -380,7 +380,9 @@ if [ -z "$entry" ] || [ -z "$candidate" ]; then
   root_fetch "$release/$asset" "$stage/entry"
   [ "$(checksum "$stage/entry")" = "$expected" ] || fail "official binary checksum mismatch"
   chmod 0700 "$stage/entry"
-  [ -n "$entry" ] || entry="$stage/entry"
+  # Run the verified release's installer so an older installed version cannot
+  # prevent its own upgrade before the candidate is published.
+  entry="$stage/entry"
   [ -n "$candidate" ] || candidate="$stage/entry"
 fi
 # BEGIN REQUEST JSON
