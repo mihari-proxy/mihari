@@ -560,6 +560,9 @@ func (c configCandidate) cleanup() {
 		_ = os.Remove(c.path)
 	}
 }
+
+// commitTrustedRuntimeConfig publishes validated bytes and reloads the fixed
+// startup configuration, restoring the previous bytes if reload fails.
 func (m *Manager) commitTrustedRuntimeConfig(ctx context.Context, candidate configCandidate) error {
 	// This internal generation is independent of optional client preconditions
 	// and is captured atomically with settings. Publication owns mutation.

@@ -13,10 +13,13 @@ import (
 
 type changingSubscriptionFetcher struct{ content []byte }
 
+// Fetch returns a copy of the subscription document selected by the test.
 func (f *changingSubscriptionFetcher) Fetch(context.Context, subscription.FetchRequest) (subscription.FetchResult, error) {
 	return subscription.FetchResult{Content: append([]byte(nil), f.content...)}, nil
 }
 
+// TestRootManager_SubscriptionReloadOutsideCoreHome verifies startup-bound reload,
+// restoration of rejected configuration changes, and a subsequent refresh.
 func TestRootManager_SubscriptionReloadOutsideCoreHome(t *testing.T) {
 	for _, reject := range []bool{false, true} {
 		name := "refresh"

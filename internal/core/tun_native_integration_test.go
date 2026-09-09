@@ -19,9 +19,17 @@ type tunFaultController struct {
 	*seamController
 	cancel             context.CancelFunc
 	rejectConfirmation bool
+	reloadRequests     []tunReloadRequest
 }
 
+type tunReloadRequest struct {
+	path  string
+	force bool
+}
+
+// Reload records the request and injects post-reload faults for rollback tests.
 func (c *tunFaultController) Reload(ctx context.Context, path string, force bool) error {
+	c.reloadRequests = append(c.reloadRequests, tunReloadRequest{path: path, force: force})
 	if err := c.seamController.Reload(ctx, path, force); err != nil {
 		return err
 	}
@@ -137,6 +145,8 @@ func TestRootManager_DisablingLastSubscriptionDoesNotInjectLegacyTunFields(t *te
 	}
 }
 
+// TestRootManager_DisableFailureRestoresEnabledTunWithoutDegrading verifies that
+// startup-bound reload restores live TUN state and permits a later mutation.
 func TestRootManager_DisableFailureRestoresEnabledTunWithoutDegrading(t *testing.T) {
 	var controller *tunFaultController
 	var settings config.Settings
@@ -162,6 +172,14 @@ func TestRootManager_DisableFailureRestoresEnabledTunWithoutDegrading(t *testing
 	}
 	if !status.DesiredEnable || status.LiveEnable == nil || !*status.LiveEnable || !bytes.Equal(previous, f.Content()) || controller.patches != 0 {
 		t.Fatal("enabled TUN was not restored")
+	}
+	if len(controller.reloadRequests) != 2 {
+		t.Fatalf("reload requests=%d, want apply and rollback", len(controller.reloadRequests))
+	}
+	for _, request := range controller.reloadRequests {
+		if request != (tunReloadRequest{path: "", force: true}) {
+			t.Fatalf("reload request=%+v, want forced startup-bound reload", request)
+		}
 	}
 	controller.rejectConfirmation = false
 	if _, err = m.DisableTun(context.Background(), runtimeapi.Operation{ID: "disable-after-recovery", Source: "test"}); err != nil {

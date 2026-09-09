@@ -119,6 +119,9 @@ func sameActiveSubscription(a, b subscription.Catalog) bool {
 	i, j := a.Index(a.ActiveID), b.Index(b.ActiveID)
 	return i >= 0 && j >= 0 && a.Profiles[i].Generation == b.Profiles[j].Generation && a.Profiles[i].Version == b.Profiles[j].Version
 }
+
+// rollbackTrustedTun restores settings and the startup-bound configuration,
+// degrading mutations only when recovery cannot be confirmed.
 func (m *Manager) rollbackTrustedTun(ctx context.Context, op Operation, candidate settingsCandidate, previous []byte, cause error) error {
 	recovery := context.WithoutCancel(ctx)
 	rollback := settingsCandidate{before: candidate.after, after: candidate.before, changed: candidate.changed}
