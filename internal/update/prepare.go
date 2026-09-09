@@ -17,6 +17,9 @@ import (
 type PreparedUpdate struct {
 	Version, CandidatePath, SHA256, Channel string
 	Available, Ahead                        bool
+	TargetPath                              string
+	Preview                                 ReplacementPreview
+	Consent                                 ReplacementConsent
 	cleanup                                 func() error
 }
 
@@ -39,7 +42,11 @@ func (u SelfUpdater) Prepare(ctx context.Context, binaryPath, currentVersion, ch
 		return PreparedUpdate{}, err
 	}
 	available, ahead := classifyUpdate(currentVersion, release.TagName)
-	result := PreparedUpdate{Version: release.TagName, Channel: ch, Available: available, Ahead: ahead}
+	targetPath, err := filepath.Abs(binaryPath)
+	if err != nil {
+		return PreparedUpdate{}, err
+	}
+	result := PreparedUpdate{TargetPath: targetPath, Version: release.TagName, Channel: ch, Available: available, Ahead: ahead}
 	if !available {
 		return result, nil
 	}
@@ -88,5 +95,12 @@ func (u SelfUpdater) Prepare(ctx context.Context, binaryPath, currentVersion, ch
 		return PreparedUpdate{}, errors.Join(err, result.Close())
 	}
 	result.SHA256 = hex.EncodeToString(expected[:])
+	snapshot, err := u.observeReplacement(ctx, result.TargetPath)
+	if err == nil {
+		result.Preview, err = NewReplacementPreview(ReplacementCandidate{Version: result.Version, SHA256: result.SHA256, Channel: result.Channel}, snapshot)
+	}
+	if err != nil {
+		return PreparedUpdate{}, errors.Join(err, result.Close())
+	}
 	return result, nil
 }

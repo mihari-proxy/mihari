@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -15,7 +16,8 @@ import (
 
 // SelfUpdater updates the running mihari binary.
 type SelfUpdater interface {
-	Update(ctx context.Context, binaryPath, currentVersion, channel string) (update.Result, error)
+	Prepare(ctx context.Context, binaryPath, currentVersion, channel string) (update.PreparedUpdate, error)
+	ApplyPrepared(context.Context, update.PreparedUpdate) (update.Result, error)
 }
 
 func newSelfCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
@@ -85,7 +87,8 @@ func newSelfVersionCommand(options *runOptions) *cobra.Command {
 }
 
 func newSelfUpdateCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
-	return &cobra.Command{Use: "update", Short: "Update the mihari binary from GitHub Releases", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
+	var yes bool
+	command := &cobra.Command{Use: "update", Short: "Update the mihari binary from GitHub Releases", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) (resultErr error) {
 		if err := elevate.RequireElevated(); err != nil {
 			return err
 		}
@@ -109,10 +112,31 @@ func newSelfUpdateCommand(dependencies Dependencies, options *runOptions) *cobra
 		if err != nil {
 			return err
 		}
-		result, err := dependencies.SelfUpdater.Update(command.Context(), binary, buildinfo.Version, channel)
+		prepared, err := dependencies.SelfUpdater.Prepare(command.Context(), binary, buildinfo.Version, channel)
 		if err != nil {
 			return classifyRuntimeError(err)
 		}
+		defer func() { resultErr = errors.Join(resultErr, prepared.Close()) }()
+		prepared.Consent = update.ReplacementConsent{Yes: yes}
+		var warning string
+		if prepared.Available {
+			warning = update.ReplacementWarning(prepared.Preview)
+			if err := update.ValidateReplacementConsent(prepared.Preview, prepared.Consent); err != nil {
+				return err
+			}
+		}
+		if warning != "" && !options.json {
+			if err := renderReplacementWarning(command, options, warning, nil); err != nil {
+				return err
+			}
+			warning = ""
+		}
+		result, err := dependencies.SelfUpdater.ApplyPrepared(command.Context(), prepared)
+		err = errors.Join(err, prepared.Close())
+		if err = renderReplacementWarning(command, options, warning, err); err != nil {
+			return err
+		}
+
 		if options.json {
 			return renderJSON(command.OutOrStdout(), map[string]any{
 				"schema":  "mihari/v1",
@@ -131,4 +155,28 @@ func newSelfUpdateCommand(dependencies Dependencies, options *runOptions) *cobra
 		}
 		return err
 	}}
+	command.Flags().BoolVar(&yes, "yes", false, "Accept replacement compatibility risks")
+	return command
+}
+
+// renderReplacementWarning preserves the single JSON error envelope on failure.
+func renderReplacementWarning(command *cobra.Command, options *runOptions, warning string, operationErr error) error {
+	if operationErr != nil {
+		classified := classifyRuntimeError(operationErr)
+		if warning != "" && options.json {
+			api := normalizeCommandError(classified)
+			api.Message = warning + " " + api.Message
+			return api
+		}
+		if warning != "" && !options.json {
+			_, writeErr := fmt.Fprintln(command.ErrOrStderr(), warning)
+			return errors.Join(classified, writeErr)
+		}
+		return classified
+	}
+	if warning != "" {
+		_, err := fmt.Fprintln(command.ErrOrStderr(), warning)
+		return err
+	}
+	return nil
 }

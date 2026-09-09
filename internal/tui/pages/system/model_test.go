@@ -905,6 +905,18 @@ func (f *fakeSelfUpdater) Update(_ context.Context, binaryPath, currentVersion, 
 	return f.updateResult, f.updateErr
 }
 
+func (f *fakeSelfUpdater) Prepare(ctx context.Context, binary, current, channel string) (update.PreparedUpdate, error) {
+	r, err := f.Update(ctx, binary, current, channel)
+	version := r.Version
+	if version == "" {
+		version = "v0.4.0"
+	}
+	return update.PreparedUpdate{Version: version, Available: err == nil, Channel: channel, Preview: update.ReplacementPreview{Candidate: update.ReplacementCandidate{Version: version}, Snapshot: update.ReplacementSnapshot{Targets: []update.ReplacementTarget{{Version: current}}}}}, err
+}
+func (*fakeSelfUpdater) ApplyPrepared(context.Context, update.PreparedUpdate) (update.Result, error) {
+	panic("page applied before exit")
+}
+
 type fakeClient struct {
 	onboarding      protocol.OnboardingStatus
 	installCalls    int
@@ -2739,8 +2751,9 @@ func TestSystemMihariAheadEnterDoesNotOfferUpdate(t *testing.T) {
 func TestSystemMihariSkipUpdateKeepsAhead(t *testing.T) {
 	model := New(nil, nil)
 	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.9.0", "mihari", func() bool { return true })
-	updated, _ := model.Update(selfUpdateResultMsg{
-		result: update.Result{Version: "v0.8.2", Updated: false, Ahead: true, Channel: update.ChannelMain},
+	updated, _ := model.Update(preparedMihariResultMsg{
+		channel:  model.currentMihariChannel(),
+		prepared: update.PreparedUpdate{Version: "v0.8.2", Ahead: true, Channel: update.ChannelMain},
 	})
 	model = updated.(*Model)
 	view := model.View()
@@ -2773,9 +2786,8 @@ func TestSystemMihariPrereleaseOnMainOffersOfficialUpdate(t *testing.T) {
 	if command == nil {
 		t.Fatal("available prerelease did not offer confirmation")
 	}
-	intent, ok := command().(ui.ActionIntentMsg)
-	if !ok || intent.Action != ui.ActionUpdateMihari || !strings.Contains(intent.Object, "v0.9.0-dev.8") || !strings.Contains(intent.Object, "v0.8.2") {
-		t.Fatalf("intent=%#v", intent)
+	if _, ok := command().(ui.PageResultMsg); !ok || model.pendingNote != ui.MihariProgressPreparing {
+		t.Fatal("update did not prepare")
 	}
 }
 
@@ -2802,9 +2814,8 @@ func TestSystemMihariOfficialOnDevOffersPrereleaseUpdate(t *testing.T) {
 	if command == nil {
 		t.Fatal("available official did not offer confirmation")
 	}
-	intent, ok := command().(ui.ActionIntentMsg)
-	if !ok || intent.Action != ui.ActionUpdateMihari || !strings.Contains(intent.Object, "v0.8.2") || !strings.Contains(intent.Object, "v0.9.0-dev.8") {
-		t.Fatalf("intent=%#v", intent)
+	if _, ok := command().(ui.PageResultMsg); !ok || model.pendingNote != ui.MihariProgressPreparing {
+		t.Fatal("update did not prepare")
 	}
 }
 
@@ -2885,104 +2896,43 @@ func TestSystemCheckingMihariBlocksOtherRowActions(t *testing.T) {
 
 func TestSystemMihariUpdateOffersConfirmationWhenAvailable(t *testing.T) {
 	model, _ := availableMihariUpdateModel(t, true, update.Result{})
-
-	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if command == nil {
-		t.Fatal("available update did not offer confirmation")
-	}
-	intent, ok := command().(ui.ActionIntentMsg)
-	if !ok || intent.Action != ui.ActionUpdateMihari || intent.Page != ui.PageSystem || intent.Capability != "" || intent.Execute == nil {
-		t.Fatalf("intent=%#v", intent)
-	}
-	if !strings.Contains(intent.Object, "v0.3.1") || !strings.Contains(intent.Object, "v0.4.0") {
-		t.Fatalf("confirmation object=%q", intent.Object)
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	msg := cmd().(ui.PageResultMsg)
+	_, confirm := model.Update(msg.Result)
+	intent, ok := confirm().(ui.ActionIntentMsg)
+	if !ok || intent.Action != ui.ActionUpdateMihari || intent.Cancel == nil || !strings.Contains(intent.Object, "v0.4.0") {
+		t.Fatalf("intent=%+v", intent)
 	}
 }
-
 func TestSystemMihariUpdatePermissionFailureDoesNotCallUpdater(t *testing.T) {
 	model, updater := availableMihariUpdateModel(t, false, update.Result{})
-	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	intent := command().(ui.ActionIntentMsg)
-	updated, _ := model.Update(ui.ActionPendingMsg{Page: ui.PageSystem, Action: ui.ActionUpdateMihari})
-	model = updated.(*Model)
-
-	updated, relaunch := model.Update(intent.Execute())
-	model = updated.(*Model)
-	if updater.updateCalls != 0 || relaunch != nil || model.outcomeOK || model.outcomeRow != rowMihariUpdate {
-		t.Fatalf("calls=%d relaunch=%v outcome=%q ok=%v", updater.updateCalls, relaunch != nil, model.outcomeRow, model.outcomeOK)
-	}
-	if view := model.View(); !strings.Contains(view, ui.FailedLabel) || !strings.Contains(strings.ToLower(view), "administrator") {
-		t.Fatalf("permission view:\n%s", view)
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	msg := cmd().(ui.PageResultMsg)
+	model.Update(msg.Result)
+	if updater.updateCalls != 0 || model.outcomeOK || !strings.Contains(model.View(), "administrator") {
+		t.Fatal("permission failure not preserved")
 	}
 }
-
 func TestSystemMihariUpdateFailureStaysInCurrentTUI(t *testing.T) {
-	model, _ := availableMihariUpdateModel(t, true, update.Result{})
-	model.selfUpdater.(*fakeSelfUpdater).updateErr = errors.New("raw replacement detail")
-	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	intent := command().(ui.ActionIntentMsg)
-	updated, _ := model.Update(ui.ActionPendingMsg{Page: ui.PageSystem, Action: ui.ActionUpdateMihari})
-	model = updated.(*Model)
-
-	updated, relaunch := model.Update(intent.Execute())
-	model = updated.(*Model)
-	if relaunch != nil || model.outcomeOK {
-		t.Fatalf("relaunch=%v outcomeOK=%v", relaunch != nil, model.outcomeOK)
-	}
-	view := model.View()
-	if !strings.Contains(view, ui.UpdateMihariActionFailed) || strings.Contains(view, "raw replacement detail") {
-		t.Fatalf("failure view:\n%s", view)
+	model, updater := availableMihariUpdateModel(t, true, update.Result{})
+	updater.updateErr = errors.New("raw replacement detail")
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	msg := cmd().(ui.PageResultMsg)
+	_, next := model.Update(msg.Result)
+	if _, ok := next().(ui.DiscardPreparedUpdateMsg); !ok || model.outcomeOK || !strings.Contains(model.View(), ui.UpdateMihariActionFailed) || strings.Contains(model.View(), "raw replacement detail") {
+		t.Fatal("preparation failure not safely rendered")
 	}
 }
-
 func TestSystemMihariUpdateSuccessRequestsRelaunch(t *testing.T) {
-	model, updater := availableMihariUpdateModel(t, true, update.Result{Version: "v0.4.0", Updated: true})
-	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	intent := command().(ui.ActionIntentMsg)
-	updated, _ := model.Update(ui.ActionPendingMsg{Page: ui.PageSystem, Action: ui.ActionUpdateMihari})
-	model = updated.(*Model)
-	if view := model.View(); !strings.Contains(view, ui.MihariProgressUpdating) {
-		t.Fatalf("updating view:\n%s", view)
-	}
-
-	result := intent.Execute()
-	if outcome, ok := result.(interface{ Err() error }); !ok || outcome.Err() != nil {
-		t.Fatalf("result=%T err=%v", result, outcome.Err())
-	}
-	updated, relaunch := model.Update(result)
-	model = updated.(*Model)
-	if updater.updateCalls != 1 || updater.lastBinary != `C:\Program Files\Mihari\mihari.exe` || updater.lastCurrent != "v0.3.1" {
-		t.Fatalf("calls=%d binary=%q current=%q", updater.updateCalls, updater.lastBinary, updater.lastCurrent)
-	}
-	if !model.outcomeOK || !strings.Contains(model.View(), ui.DoneLabel) || relaunch == nil {
-		t.Fatalf("outcomeOK=%v relaunch=%v view=\n%s", model.outcomeOK, relaunch != nil, model.View())
-	}
-	request, ok := relaunch().(ui.RelaunchRequestMsg)
-	if !ok || request.Warning != "" {
-		t.Fatalf("request=%#v", request)
-	}
-}
-
-func TestSystemMihariUpdateCommittedWithServiceFailureStillRelaunches(t *testing.T) {
-	model, updater := availableMihariUpdateModel(t, true, update.Result{Version: "v0.4.0", Updated: true})
-	updater.updateErr = protocol.APIError{Code: protocol.CodeInvalidState, Message: "restart installed service failed"}
-	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	intent := command().(ui.ActionIntentMsg)
-	updated, _ := model.Update(ui.ActionPendingMsg{Page: ui.PageSystem, Action: ui.ActionUpdateMihari})
-	model = updated.(*Model)
-
-	result := intent.Execute()
-	if outcome := result.(interface{ Err() error }); outcome.Err() != nil {
-		t.Fatalf("committed replacement classified as failed: %v", outcome.Err())
-	}
-	updated, relaunch := model.Update(result)
-	model = updated.(*Model)
-	if !model.outcomeOK || relaunch == nil {
-		t.Fatalf("outcomeOK=%v relaunch=%v", model.outcomeOK, relaunch != nil)
-	}
-	request := relaunch().(ui.RelaunchRequestMsg)
-	if request.Warning != "restart installed service failed" {
-		t.Fatalf("warning=%q", request.Warning)
+	model, updater := availableMihariUpdateModel(t, true, update.Result{Version: "v0.4.0"})
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	msg := cmd().(ui.PageResultMsg)
+	_, cmd = model.Update(msg.Result)
+	intent := cmd().(ui.ActionIntentMsg)
+	_, cmd = model.Update(intent.Execute())
+	request := cmd().(ui.RelaunchRequestMsg)
+	if updater.updateCalls != 1 || updater.lastCurrent != "v0.3.1" || request.Prepared == nil || !request.Prepared.Consent.Yes {
+		t.Fatal("missing confirmed prepared relaunch")
 	}
 }
 

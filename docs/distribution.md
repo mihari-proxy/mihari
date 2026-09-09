@@ -91,6 +91,17 @@ Linux B=/var/lib/mihari，macOS B=/Library/Application Support/mihari；D=B/data
 
 安装事务停机后迁移必要数据，保留旧树及日志；activation 前可恢复 source，之后只修复 target。未完成事务通过 `service apply --request` 的 recover 请求恢复，普通启动不做隐式迁移。独立 native CI 不操作真实主机服务、用户数据、订阅或 core，不能作为生产环境迁移已验证的声明。
 
+
+### 安装版本风险与旧安装器
+
+普通安装、本地 AIO 和远程 AIO 的 sh/PowerShell 入口都会先固定候选，并在安装写入前判断实际目标版本。降级或兼容性 unknown 需要确认，交互默认否；需要确认却没有可用终端时立即失败。无人值守可明确设置 `MIHARI_YES=1`；远程入口也支持原有 `--yes` / `-Yes`，并将该选择传至内层。接受下载计划本身不等于接受后续降级。下载-only 保持原行为。
+
+Unix 安装 helper 必须同时支持 `service apply --yes` 和 `--expected-preview`。当前脚本可在线使用同通道、固定并校验过的 helper，目标 release 仍是用户选定的版本；离线需事先准备可信且支持契约的 helper。缺少能力时拒绝写入并给出准备说明，不回退到旧入口。确认期间候选或目标变化，需要重新开始。离线候选还须通过受信副本的有界版本查询，确认其版本与请求的 tag 一致；无法证明版本时拒绝，不会为此隐式联网。
+
+Windows 远程 AIO 只自动运行已校验且声明确认能力的本地安装脚本。旧 bundle 缺少能力时保留已校验的解压包；可事先保存当前 `install-aio.ps1`，使用 `-BundleDir <解压目录>` 安装旧包。该脚本的 `-Capabilities` 仅查询能力，不访问 bundle 或创建安装目录。本地旧包没有可信版本信息时以内容摘要绑定 unknown 候选，明确确认后仍可使用既有安装路径。不会为兼容旧包隐式下载另一个公共脚本。
+
+版本警告与确认不会使配置获得向下兼容能力，也不会自动恢复磁盘状态。手工复制旧二进制、运行已经发布的旧脚本，仍不受当前入口的保护。
+
 ## 二、核心通道与 sidecar
 
 `scripts/tools/build-all-in-one` 不解析滚动 tag、latest release 或 GeoIP 可变分支。它要求显式传入仓库内已审核的 `scripts/release/release-inputs.lock.json`，并只下载 lock 中精确记录且有 SHA-256 的六个平台 mihomo 资产和两份 GeoIP 数据。当前 checked-in lock 使用 **stable** 内核；预置通道由 lock 的 `mihomo.channel` 决定，而不是由 bundler 在发版时动态选择。
@@ -232,7 +243,7 @@ dev 发布与 `retract-dev.yml` 另有两类 artifact，同样仅在 AList mutat
 
 ### 边界（务必知晓）
 
-撤回**只移除分发渠道，已安装用户不可回收**。canonical stable tag 保留且不可同版本重切；修复必须使用更高版本号。修复版发布前，已装用户主动 `self-update` 会先降到次高版本，再随修复版回升——最终靠**快速发布修复版**（`vN+1 > vN` 自更新覆盖坏版本）自愈。
+撤回**只移除分发渠道，已安装用户不可回收**。canonical stable tag 保留且不可同版本重切；修复必须使用更高版本号。修复版发布前，已安装 stable 高于当前发布版本时，`self update` 保持 ahead，不会自动降到次高版本。应快速发布更高版本号的修复版（`vN+1 > vN`），让用户沿现有自更新路径安装修复。安装脚本覆盖旧版本或已有跨通道替换确实发生降级时，需要明确的风险确认。
 
 ---
 

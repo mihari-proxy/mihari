@@ -48,6 +48,15 @@ jobs:
         run: python -m pytest scripts/install/test_install_channel.py -q
       - name: Test installer bootstrap and generated bridge
         run: python -m pytest scripts/install/test_root_apply_entry.py scripts/install/test_root_apply_generated.py -q
+      - name: Verify native Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
+            throw 'Replacement confirmation tests require Windows PowerShell 5.1'
+          }
+      - name: Test replacement confirmation
+        run: python -m pytest scripts/install/test_replacement_confirmation.py scripts/install/test_remote_replacement_confirmation.py -q
       - name: Test isolated security runner without privileges
         run: python -m pytest scripts/test/test_unix_layout_security.py -q
       - name: Test release safety policies

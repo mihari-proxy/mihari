@@ -45,8 +45,9 @@ const (
 // RelaunchRequestMsg asks the root shell to exit and enter the replacement TUI.
 // Warning must already be sanitized for display after terminal restoration.
 type RelaunchRequestMsg struct {
-	Prepared *update.PreparedUpdate
-	Warning  string
+	Prepared       *update.PreparedUpdate
+	PreparationKey string
+	Warning        string
 }
 
 // PageResultMsg routes asynchronous page-owned work back to its originating page.
@@ -65,6 +66,7 @@ type ActionIntentMsg struct {
 	Impact     string
 	Rollback   string
 	Execute    tea.Cmd
+	Cancel     tea.Cmd
 }
 
 // ActionPendingMsg is delivered to the target page when a confirmed action begins
@@ -109,3 +111,6 @@ func GlobalStateLabel(state GlobalState) string {
 		return ""
 	}
 }
+
+// DiscardPreparedUpdateMsg returns candidate cleanup to its Run owner.
+type DiscardPreparedUpdateMsg struct{ Prepared update.PreparedUpdate }

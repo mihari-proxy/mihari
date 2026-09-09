@@ -1,0 +1,82 @@
+[
+  {
+    "current": "v1.2.3",
+    "target": "v1.2.2",
+    "risk": "downgrade"
+  },
+  {
+    "current": "1.2.3",
+    "target": "v1.2.2",
+    "risk": "downgrade"
+  },
+  {
+    "current": "v1.2.3",
+    "target": "v1.2.3",
+    "risk": "none"
+  },
+  {
+    "current": "v1.2.3",
+    "target": "v1.3.0",
+    "risk": "none"
+  },
+  {
+    "current": "v1.2.3-dev.8",
+    "target": "v1.2.3",
+    "risk": "none"
+  },
+  {
+    "current": "v1.3.0-dev.8",
+    "target": "v1.2.3",
+    "risk": "downgrade"
+  },
+  {
+    "current": "v1.3.0-dev.10",
+    "target": "v1.3.0-dev.9",
+    "risk": "downgrade"
+  },
+  {
+    "current": "dev",
+    "target": "v1.2.3",
+    "risk": "unknown"
+  },
+  {
+    "current": "v1.2.3",
+    "target": "",
+    "risk": "unknown"
+  },
+  {
+    "current": "v999999999999999999999999.0.0",
+    "target": "v1.2.3",
+    "risk": "unknown"
+  },
+  {
+    "current": " v1.2.3 ",
+    "target": " 1.2.2 ",
+    "risk": "downgrade"
+  },
+  {
+    "current": "v1.02.3",
+    "target": "v1.2.3",
+    "risk": "unknown"
+  },
+  {
+    "current": "V1.2.3",
+    "target": "v1.2.3",
+    "risk": "unknown"
+  },
+  {
+    "current": "v1.2.3",
+    "target": "v1.99999999999999999999999.0",
+    "risk": "unknown"
+  },
+  {
+    "current": "v1.2.3-dev.99999999999999999999999",
+    "target": "v1.2.3",
+    "risk": "unknown"
+  },
+  {
+    "current": "v1.2.3",
+    "target": "v1.2.3-dev.9",
+    "risk": "downgrade"
+  }
+]

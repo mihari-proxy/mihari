@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/service"
 )
 
 type fakeInstalledServiceUpdater struct {
@@ -126,4 +127,11 @@ func TestSelfUpdateServiceCompletionReportsVersionMismatch(t *testing.T) {
 	if !strings.Contains(api.Message, "v0.6.0") || strings.Contains(api.Message, "v0.5.2") {
 		t.Fatalf("message=%q", api.Message)
 	}
+}
+
+func (f *fakeInstalledServiceUpdater) UpdateInstalledBinaryChecked(context.Context, service.ServiceReplacementChecks) (bool, error) {
+	return f.UpdateInstalledBinary()
+}
+func (f *fakeInstalledServiceUpdater) ObserveReplacementService(context.Context) (service.ServiceReplacementView, error) {
+	return service.ServiceReplacementView{Registered: f.installed}, nil
 }

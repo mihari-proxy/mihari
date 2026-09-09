@@ -4,12 +4,15 @@
 # arguments. The first executed mihari is a checked root installation or a
 # fixed official release verified inside this root-exclusive staging directory.
 root_apply() {
+  explicit_yes=0
+  [ "${MIHARI_YES:-}" != 1 ] || explicit_yes=1
+  [ "${5:-0}" != 1 ] || explicit_yes=1
   elevate=""
   if [ "$(id -u)" -ne 0 ]; then
     [ -x /usr/bin/sudo ] || err "installation requires root or /usr/bin/sudo"
     elevate=/usr/bin/sudo
   fi
-  $elevate /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/sh -s -- "$1" "$2" "$3" "$4" "${MIHARI_SOURCE:-}" "${MIHARI_DATA:-}" "${MIHARI_ENDPOINT:-}" "${MIHARI_CREDENTIAL:-}" "${MIHARI_INSTALL_ROOT:-}" "${MIHARI_BIN:-/usr/local/bin}/mihari" <<'MIHARI_ROOT_APPLY'
+  $elevate /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/sh -s -- "$1" "$2" "$3" "$4" "${MIHARI_SOURCE:-}" "${MIHARI_DATA:-}" "${MIHARI_ENDPOINT:-}" "${MIHARI_CREDENTIAL:-}" "${MIHARI_INSTALL_ROOT:-}" "${MIHARI_BIN:-/usr/local/bin}/mihari" "$explicit_yes" "${6:-offline}" <<'MIHARI_ROOT_APPLY'
 set -eu
 PATH=/usr/bin:/bin:/usr/sbin:/sbin
 export PATH
@@ -17,9 +20,10 @@ unset ENV BASH_ENV CDPATH
 [ "$(id -u)" -eq 0 ] || exit 1
 umask 077
 fail() { printf '%s\n' "$1" >&2; exit 1; }
-tag=$1; channel=$2; candidate=$3; bundle=$4; source=$5; data=$6; endpoint=$7; credential=$8; install_root=$9; shift 9; path_binary=$1
+tag=$1; channel=$2; candidate=$3; bundle=$4; source=$5; data=$6; endpoint=$7; credential=$8; install_root=$9; shift 9; path_binary=$1; explicit_yes=$2; bootstrap_mode=$3
+case "$bootstrap_mode" in online|offline) :;; *) fail "invalid bootstrap mode";; esac
 stage=$(mktemp -d /var/tmp/mihari-install.XXXXXXXX)
-cleanup() { rm -f "$stage/entry" "$stage/candidate" "$stage/checksums" "$stage/latest" "$stage/request.json"; rmdir "$stage"; }
+cleanup() { rm -f "$stage/entry" "$stage/candidate" "$stage/checksums" "$stage/latest" "$stage/request.json" "$stage/result.json" "$stage/error.json" "$stage/helper-help" "$stage/helper-latest"; rmdir "$stage"; }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 root_fetch() {
@@ -33,6 +37,7 @@ checksum() {
 case "$(uname -s)" in Linux) os=linux;; Darwin) os=darwin;; *) fail "unsupported OS";; esac
 case "$(uname -m)" in x86_64|amd64) arch=amd64;; aarch64|arm64) arch=arm64;; *) fail "unsupported architecture";; esac
 if [ -z "$tag" ]; then
+  [ -z "$candidate" ] || fail "Offline installation requires a fixed release tag; set MIHARI_VERSION."
   [ "$channel" = main ] || fail "set MIHARI_VERSION to a fixed dev tag"
   root_fetch https://api.github.com/repos/mihari-proxy/mihari/releases/latest "$stage/latest"
   [ "$(wc -c < "$stage/latest")" -le 1048576 ] || fail "release metadata exceeds limit"
@@ -60,24 +65,59 @@ trusted_entry() {
   done
 }
 entry=/usr/local/lib/mihari/mihari
-if ! trusted_entry "$entry"; then entry=""; fi
-if [ -n "$entry" ] && ! "$entry" service apply --help >/dev/null 2>&1; then entry=""; fi
-# An offline install uses a previously trusted root apply binary plus the Go
-# constructor's root-owned install-trust manifest and hash-named resources.
-if [ -z "$entry" ] || [ -z "$candidate" ]; then
+helper_capable() {
+  "$1" service apply --help >"$stage/helper-help" 2>/dev/null || return 1
+  [ "$(wc -c < "$stage/helper-help")" -le 65536 ] || return 1
+  grep -Eq '(^|[[:space:]])--yes([=[:space:]]|$)' "$stage/helper-help" &&
+    grep -Eq '(^|[[:space:]])--expected-preview([=[:space:]]|$)' "$stage/helper-help"
+}
+verified_binary() {
+  release="https://github.com/mihari-proxy/mihari/releases/download/$1"
   asset="mihari-$os-$arch"
-  release="https://github.com/mihari-proxy/mihari/releases/download/$tag"
   root_fetch "$release/SHA256SUMS.txt" "$stage/checksums"
   [ "$(wc -c < "$stage/checksums")" -le 1048576 ] || fail "checksum manifest exceeds limit"
   expected=$(awk -v asset="$asset" '$2==asset || $2=="*"asset {print $1}' "$stage/checksums")
   printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$' || fail "missing unique official binary checksum"
-  root_fetch "$release/$asset" "$stage/entry"
-  [ "$(checksum "$stage/entry")" = "$expected" ] || fail "official binary checksum mismatch"
-  chmod 0700 "$stage/entry"
-  # Run the verified release's installer so an older installed version cannot
-  # prevent its own upgrade before the candidate is published.
+  root_fetch "$release/$asset" "$2"
+  [ "$(checksum "$2")" = "$expected" ] || fail "official binary checksum mismatch"
+  chmod 0700 "$2"
+}
+if ! trusted_entry "$entry"; then entry=""; fi
+if [ -n "$entry" ] && ! helper_capable "$entry"; then entry=""; fi
+# Local offline candidates never cause an implicit network bootstrap. Remote
+# AIO passes online explicitly, even though its verified bundle is now local.
+if [ "$bootstrap_mode" = offline ] && [ -n "$candidate" ] && [ -z "$entry" ]; then
+  fail "Offline installation requires a trusted helper with replacement confirmation support. Prepare a current Mihari installation before installing this offline candidate."
+fi
+if [ -z "$candidate" ]; then
+  verified_binary "$tag" "$stage/candidate"
+  candidate="$stage/candidate"
+fi
+if [ -z "$entry" ]; then
+  # Resolve the helper independently; never change the selected candidate tag.
+  case "$channel" in
+    main) helper_url=https://api.github.com/repos/mihari-proxy/mihari/releases/latest;;
+    dev) helper_url='https://api.github.com/repos/mihari-proxy/mihari/releases?per_page=100';;
+    *) fail "invalid helper channel";;
+  esac
+  root_fetch "$helper_url" "$stage/helper-latest"
+  [ "$(wc -c < "$stage/helper-latest")" -le 1048576 ] || fail "helper release metadata exceeds limit"
+  helper_tag=$(tr '{' '\n' <"$stage/helper-latest" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | LC_ALL=C awk -v channel="$channel" '
+    function newer(a,b, x,y,n,i) {
+      sub(/^v/,"",a); sub(/^v/,"",b); gsub(/-dev\./,".",a); gsub(/-dev\./,".",b)
+      n=split(a,x,"."); split(b,y,".")
+      for(i=1;i<=n;i++) { if(length(x[i])!=length(y[i])) return length(x[i])>length(y[i]); if("x"x[i]!="x"y[i]) return "x"x[i]>"x"y[i] }
+      return 0
+    }
+    /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-dev\.(0|[1-9][0-9]*))?$/ {
+      if ((channel=="dev") != ($0 ~ /-dev\./)) next
+      if (best=="" || newer($0,best)) best=$0
+    }
+    END { print best }')
+  [ -n "$helper_tag" ] || fail "No current helper release found; prepare a trusted Mihari helper with replacement confirmation support."
+  verified_binary "$helper_tag" "$stage/entry"
   entry="$stage/entry"
-  [ -n "$candidate" ] || candidate="$stage/entry"
+  helper_capable "$entry" || fail "The current official helper lacks replacement confirmation support. Update the installer helper before installing the selected version."
 fi
 # BEGIN REQUEST JSON
 json_string() {
@@ -103,7 +143,116 @@ write_request() {
 }
 # END REQUEST JSON
 write_request > "$stage/request.json"
-"$entry" service apply --request "$stage/request.json" --json
+# BEGIN REPLACEMENT CONFIRMATION
+# This deliberately accepts only the bounded, string/object/array subset emitted
+# by this helper. Reject unknown fields, duplicate keys and escapes other than
+# Go encoding/json HTML escapes. Never evaluate or display unvalidated JSON.
+read_confirmation_preview() {
+  [ "$(wc -c < "$1")" -le 65536 ] || return 1
+  LC_ALL=C awk -v display="${2:-id}" '
+  function die() { failed=1; exit 1 }
+  function ws() { while (substr(s,p,1)==" ") p++ }
+  function take(c) { ws(); if (substr(s,p,1)!=c) die(); p++ }
+  function str( out,c,e) {
+    take("\""); out=""
+    while (p<=length(s)) {
+      c=substr(s,p++,1)
+      if (c=="\"") return out
+      if (c=="\\") {
+        e=substr(s,p,5); p+=5
+        if (e=="u003e") c=">"; else if (e=="u003c") c="<"; else if (e=="u0026") c="&"; else die()
+      }
+      if (c !~ /^[ -~]$/) die()
+      out=out c
+    }
+    die()
+  }
+  function allowed(path,k) {
+    if (path=="") return k=="schema" || k=="error"
+    if (path=="error") return k=="code" || k=="message" || k=="details"
+    if (path=="error.details") return k=="reason" || k=="risk" || k=="targets" || k=="target_version" || k=="preview_id"
+    if (path ~ /^error.details.targets\.[0-9]+$/) return k=="roles" || k=="version"
+    return 0
+  }
+  function object(path, k,q,n) {
+    take("{"); n=0
+    while (1) {
+      k=str(); if (!allowed(path,k)) die()
+      q=(path=="" ? k : path "." k)
+      if (seen[q]++) die()
+      take(":"); n++
+      if (q=="error" || q=="error.details") object(q)
+      else if (k=="targets" || k=="roles") array(q,k)
+      else value[q]=str()
+      ws(); if (substr(s,p,1)=="}") { p++; break }
+      take(",")
+    }
+    if ((path=="" && n!=2) || (path=="error" && n!=3) || (path=="error.details" && n!=5) || (path ~ /targets\.[0-9]+$/ && n!=2)) die()
+  }
+  function array(path,kind, n,q,r) {
+    take("["); n=0; ws()
+    if (substr(s,p,1)=="]") { p++; counts[path]=0; return }
+    while (1) {
+      n++; if (n>128) die(); q=path "." n
+      if (kind=="targets") object(q)
+      else { r=str(); if (r!="binary" && r!="service" && r!="path" && r!="managed") die(); value[q]=r }
+      ws(); if (substr(s,p,1)=="]") { p++; break }
+      take(",")
+    }
+    counts[path]=n
+  }
+  function version(v) { return v=="unknown" || v ~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-dev\.(0|[1-9][0-9]*))?$/ }
+  { if (NR!=1 || $0 ~ /[[:cntrl:]]/) die(); s=$0; p=1; object(""); ws(); if (p<=length(s)) die() }
+  END {
+    if (failed || NR!=1) exit 1
+    d="error.details"; id=value[d ".preview_id"]; risk=value[d ".risk"]
+    if (value["schema"]!="mihari.error/v1" || value["error.code"]!="invalid_argument" || value[d ".reason"]!="replacement_confirmation_required" || (risk!="downgrade" && risk!="unknown") || length(id)!=64 || id ~ /[^0-9a-f]/ || !version(value[d ".target_version"])) exit 1
+    for (i=1;i<=counts[d ".targets"];i++) {
+      q=d ".targets." i
+      if (!version(value[q ".version"]) || counts[q ".roles"]<1) exit 1
+    }
+    if (display=="id") { print id; exit }
+    if (risk=="unknown") print "Mihari could not determine version compatibility for this replacement."
+    print "Older Mihari versions may not support settings, subscriptions, state, or generated files written by the current version. Mihari may fail to start or load data, which can look like data loss. Downgrade is not a supported configuration migration and does not roll back disk state."
+    for (i=1;i<=counts[d ".targets"];i++) {
+      q=d ".targets." i; roles=""
+      for (j=1;j<=counts[q ".roles"];j++) roles=roles (j==1 ? "" : "/") value[q ".roles." j]
+      print roles ": " value[q ".version"] " -> " value[d ".target_version"] "."
+    }
+  }' "$1"
+}
+confirm_replacement() {
+  read_confirmation_preview "$1" warning >&2 || return 1
+  # Open the controlling terminal in a subshell so a failed redirection does not
+  # terminate the parent POSIX shell. A pipe on stdin never grants consent.
+  (
+    exec 3<>/dev/tty
+    [ -t 3 ] || exit 1
+    printf 'Proceed with this replacement? [y/N] ' >&3
+    IFS= read -r answer <&3 || exit 1
+    case "$answer" in y|Y|yes|YES) exit 0;; *) exit 1;; esac
+  ) 2>/dev/null
+}
+apply_with_confirmation() {
+  status=0
+  set -- service apply --request "$stage/request.json" --json
+  [ "$explicit_yes" != 1 ] || set -- "$@" --yes
+  "$entry" "$@" >"$stage/result.json" 2>"$stage/error.json" || status=$?
+  if [ "$status" -eq 0 ]; then
+    cat "$stage/error.json" >&2
+    cat "$stage/result.json"
+    return 0
+  fi
+  if [ "$status" -ne 2 ] || [ "$explicit_yes" = 1 ]; then
+    cat "$stage/error.json" >&2
+    return "$status"
+  fi
+  preview_id=$(read_confirmation_preview "$stage/error.json") || fail "Installation requires review; no changes made."
+  confirm_replacement "$stage/error.json" || fail "Cancelled; no installation changes made. Use MIHARI_YES=1 to explicitly accept replacement risk."
+  "$entry" service apply --request "$stage/request.json" --json --yes --expected-preview "$preview_id"
+}
+# END REPLACEMENT CONFIRMATION
+apply_with_confirmation
 MIHARI_ROOT_APPLY
 }
 # END ROOT APPLY

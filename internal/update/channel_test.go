@@ -76,6 +76,7 @@ func TestClassifyUpdate(t *testing.T) {
 		available bool
 		ahead     bool
 	}{
+		{name: "same-base dev to stable remains available", current: "v1.2.3-dev.8", latest: "v1.2.3", available: true},
 		{name: "same tag strips v", current: "0.8.2", latest: "v0.8.2", available: false, ahead: false},
 		{name: "dev to main offers official latest", current: "v0.9.0-dev.8", latest: "v0.8.2", available: true, ahead: false},
 		{name: "main to dev offers prerelease latest", current: "v0.8.2", latest: "v0.9.0-dev.8", available: true, ahead: false},

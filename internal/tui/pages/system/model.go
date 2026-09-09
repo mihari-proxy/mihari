@@ -90,16 +90,12 @@ type Client interface {
 // SelfUpdater is the local Mihari binary lifecycle surface used by the System page.
 type SelfUpdater interface {
 	Check(context.Context, string, string) (update.CheckResult, error)
-	Update(context.Context, string, string, string) (update.Result, error)
-}
-
-// PreparedSelfUpdater prepares inert bytes while Run owns download lifetime.
-// Only Run invokes ApplyPrepared, after closing all TUI resources.
-type PreparedSelfUpdater interface {
-	SelfUpdater
 	Prepare(context.Context, string, string, string) (update.PreparedUpdate, error)
 	ApplyPrepared(context.Context, update.PreparedUpdate) (update.Result, error)
 }
+
+// PreparedSelfUpdater preserves the Run-owned preparation interface name.
+type PreparedSelfUpdater = SelfUpdater
 
 // ServiceController is the local OS service manager surface (not daemon IPC).
 type ServiceController interface {
@@ -131,12 +127,6 @@ type selfCheckResultMsg struct {
 	err        error
 }
 
-type selfUpdateResultMsg struct {
-	prepared *update.PreparedUpdate
-	result   update.Result
-	err      error
-}
-
 type mihariChannelResultMsg struct {
 	channel string
 	err     error
@@ -145,17 +135,6 @@ type mihariChannelResultMsg struct {
 func (m mihariChannelResultMsg) Err() error { return m.err }
 
 var _ interface{ Err() error } = mihariChannelResultMsg{}
-
-// Err implements the shell action-outcome contract. Once replacement commits,
-// a service restart error is a warning and must not classify the update as failed.
-func (m selfUpdateResultMsg) Err() error {
-	if m.result.Updated {
-		return nil
-	}
-	return m.err
-}
-
-var _ interface{ Err() error } = selfUpdateResultMsg{}
 
 type serviceStatusMsg struct {
 	status   service.StatusKind
@@ -321,36 +300,39 @@ var _ interface{ Err() error } = actionResultMsg{}
 
 // Model is the System page.
 type Model struct {
-	writeClipboard      func(string) error
-	ctx                 context.Context
-	client              Client
-	service             ServiceController
-	openBrowser         func(string) error
-	newOperationID      func() string
-	selfUpdater         SelfUpdater
-	currentVersion      string
-	binaryPath          string
-	isElevated          func() bool
-	selfCheckResult     update.CheckResult
-	selfCheckLoaded     bool
-	selfCheckGeneration uint64
-	channelPath         func() (string, error)
-	loadChannel         func(string) (string, error)
-	selfUpdateChannel   func(context.Context) (string, error)
-	saveChannel         func(string, string) error
-	mihariChannel       string
-	mihariChannelLoaded bool
-	mihariChannelFailed bool
-	status              protocol.Status
-	core                protocol.CoreStatus
-	onboarding          protocol.OnboardingStatus
-	systemProxy         protocol.SystemProxyStatus
-	systemProxyLoaded   bool
-	tun                 protocol.TunStatus
-	tunLoaded           bool
-	webGUI              protocol.WebGUIStatus
-	webGUILoaded        bool
-	webGUIErr           bool
+	writeClipboard        func(string) error
+	ctx                   context.Context
+	client                Client
+	service               ServiceController
+	openBrowser           func(string) error
+	newOperationID        func() string
+	selfUpdater           SelfUpdater
+	currentVersion        string
+	binaryPath            string
+	isElevated            func() bool
+	selfCheckResult       update.CheckResult
+	selfCheckLoaded       bool
+	selfCheckGeneration   uint64
+	preparationGeneration uint64
+	preparationCancel     context.CancelFunc
+	pendingPrepared       *update.PreparedUpdate
+	channelPath           func() (string, error)
+	loadChannel           func(string) (string, error)
+	selfUpdateChannel     func(context.Context) (string, error)
+	saveChannel           func(string, string) error
+	mihariChannel         string
+	mihariChannelLoaded   bool
+	mihariChannelFailed   bool
+	status                protocol.Status
+	core                  protocol.CoreStatus
+	onboarding            protocol.OnboardingStatus
+	systemProxy           protocol.SystemProxyStatus
+	systemProxyLoaded     bool
+	tun                   protocol.TunStatus
+	tunLoaded             bool
+	webGUI                protocol.WebGUIStatus
+	webGUILoaded          bool
+	webGUIErr             bool
 
 	logging               protocol.LoggingStatus
 	loggingEpoch          uint64
@@ -680,7 +662,7 @@ func (m *Model) load(checkMihari bool) tea.Cmd {
 }
 
 func (m *Model) checkMihariVersion() tea.Cmd {
-	if m.selfUpdater == nil || m.pending {
+	if m.selfUpdater == nil || m.pending || m.pendingPrepared != nil {
 		return nil
 	}
 	path, err := m.channelFilePath()
@@ -843,6 +825,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.lastError = ""
 		return m, m.rowSpinCmdIfNeeded()
 	case mihariChannelResultMsg:
+		discard := m.CancelMihariPreparation()
 		m.clearRowPending()
 		if typed.err != nil {
 			m.markRowOutcome(rowMihariChannel, false, actionErrorDetail(typed.err, ui.MihariChannelFailed))
@@ -852,34 +835,22 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.mihariChannelLoaded = true
 		m.mihariChannelFailed = false
 		m.markRowOutcome(rowMihariChannel, true, "")
-		return m, tea.Batch(m.checkMihariVersion(), m.rowSpinCmdIfNeeded())
-	case selfUpdateResultMsg:
+		return m, tea.Batch(discard, m.checkMihariVersion(), m.rowSpinCmdIfNeeded())
+	case preparedMihariResultMsg:
+		return m.handlePreparedMihariResult(typed)
+	case preparedMihariCanceledMsg:
+		if typed.generation != m.preparationGeneration {
+			return m, discardMihari(typed.prepared)
+		}
+		return m, m.CancelMihariPreparation()
+	case preparedMihariConfirmedMsg:
+		if typed.generation != m.preparationGeneration || m.pendingPrepared == nil {
+			return m, discardMihari(typed.prepared)
+		}
 		m.clearRowPending()
-		if typed.prepared != nil && typed.err == nil && typed.prepared.Available {
-			return m, func() tea.Msg { return ui.RelaunchRequestMsg{Prepared: typed.prepared} }
+		return m, func() tea.Msg {
+			return ui.RelaunchRequestMsg{Prepared: &typed.prepared, PreparationKey: fmt.Sprintf("mihari:update:%d", typed.generation)}
 		}
-		if !typed.result.Updated {
-			if typed.err != nil {
-				m.markRowOutcome(rowMihariUpdate, false, actionErrorDetail(typed.err, ui.UpdateMihariActionFailed))
-				return m, m.rowSpinCmdIfNeeded()
-			}
-			m.selfCheckResult = update.CheckResult{
-				Current:   m.currentVersion,
-				Latest:    typed.result.Version,
-				Available: false,
-				Ahead:     typed.result.Ahead,
-				Channel:   typed.result.Channel,
-			}
-			m.selfCheckLoaded = true
-			m.outcomeRow = ""
-			return m, m.rowSpinCmdIfNeeded()
-		}
-		m.markRowOutcome(rowMihariUpdate, true, "")
-		warning := ""
-		if typed.err != nil {
-			warning = actionErrorDetail(typed.err, ui.UpdateMihariActionFailed)
-		}
-		return m, tea.Batch(func() tea.Msg { return ui.RelaunchRequestMsg{Warning: warning} }, m.rowSpinCmdIfNeeded())
 	case onboardingResultMsg:
 		if typed.err != nil {
 			m.lastError = ui.SystemStateUnavailable
@@ -1063,7 +1034,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	index := m.rowIndex(m.focusID)
 	switch key.String() {
 	case "esc":
-		return m, func() tea.Msg { return ui.FocusRailMsg{} }
+		return m, tea.Batch(m.CancelMihariPreparation(), func() tea.Msg { return ui.FocusRailMsg{} })
 	case "up":
 		if index > 0 {
 			m.focusID = rows[index-1].id
@@ -1091,7 +1062,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 				return m, nil
 			}
 			if m.selfCheckLoaded && m.selfCheckResult.Available {
-				return m, m.confirmMihariUpdate()
+				return m, m.startMihariPreparation()
 			}
 			return m, m.checkMihariVersion()
 		case rowRunSetup:
@@ -1161,41 +1132,6 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 	}
 	return m, nil
-}
-
-func (m *Model) confirmMihariUpdate() tea.Cmd {
-	current := valueOr(m.currentVersion, ui.UnknownLabel)
-	latest := valueOr(m.selfCheckResult.Latest, ui.UnknownLabel)
-	return func() tea.Msg {
-		return ui.ActionIntentMsg{
-			Action: ui.ActionUpdateMihari, Page: ui.PageSystem, Key: "mihari:update",
-			Title: ui.UpdateMihariTitle, Object: fmt.Sprintf("Mihari %s → %s", current, latest),
-			Impact: ui.UpdateMihariImpact, Rollback: ui.UpdateMihariRollback,
-			Execute: m.updateMihari(),
-		}
-	}
-}
-
-func (m *Model) updateMihari() tea.Cmd {
-	updater := m.selfUpdater
-	binaryPath := m.binaryPath
-	currentVersion := m.currentVersion
-	channel := m.currentMihariChannel()
-	isElevated := m.isElevated
-	return func() tea.Msg {
-		if isElevated == nil || !isElevated() {
-			return selfUpdateResultMsg{err: protocol.APIError{
-				Code:    protocol.CodePermissionDenied,
-				Message: "administrator privileges are required; re-run Mihari from an elevated shell",
-			}}
-		}
-		if preparer, ok := updater.(PreparedSelfUpdater); ok {
-			prepared, err := preparer.Prepare(m.ctx, binaryPath, currentVersion, channel)
-			return selfUpdateResultMsg{prepared: &prepared, result: update.Result{Version: prepared.Version, Channel: prepared.Channel, Ahead: prepared.Ahead}, err: err}
-		}
-		result, err := updater.Update(m.ctx, binaryPath, currentVersion, channel)
-		return selfUpdateResultMsg{result: result, err: err}
-	}
 }
 
 func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) (ui.Page, tea.Cmd) {

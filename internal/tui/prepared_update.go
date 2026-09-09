@@ -91,7 +91,10 @@ func finishPreparedRun(ctx context.Context, final tea.Model, runErr error, out i
 	}
 	result, err := apply(ctx, *model.preparedUpdate)
 	if !result.Updated {
-		return err
+		if err != nil {
+			return errors.Join(err, fmt.Errorf("mihari update did not complete; reopen Mihari and retry"))
+		}
+		return nil
 	}
 	err = errors.Join(err, model.preparedUpdate.Close())
 	if err != nil {
@@ -100,3 +103,8 @@ func finishPreparedRun(ctx context.Context, final tea.Model, runErr error, out i
 	model.preparedUpdate = nil
 	return errors.Join(err, finishRun(model, nil, out, relaunch, nil))
 }
+
+type discardPreparedResultMsg struct{ err error }
+
+func (m discardPreparedResultMsg) Err() error                       { return m.err }
+func (w *runPreparedUpdater) discard(p update.PreparedUpdate) error { return p.Close() }

@@ -63,7 +63,7 @@ func legacyDependencies() cli.Dependencies {
 		return runDaemonBody(ctx)
 	}
 	selfUpdateCompletion := app.NewSelfUpdateServiceCompletion(serviceManager, localClient)
-	selfUpdater := update.SelfUpdater{AfterReplace: selfUpdateCompletion.AfterReplace}
+	selfUpdater := update.SelfUpdater{ObserveTargets: selfUpdateCompletion.ObserveReplacement, AfterReplacePrepared: selfUpdateCompletion.AfterPreparedReplace}
 	executable, executableError := os.Executable()
 	runInstallValidation := func(ctx context.Context, transactionID string) error {
 		return runNativeInstallValidation(ctx, transactionID, buildinfo.Version)

@@ -97,8 +97,14 @@ class GitHubListHandler(BaseHTTPRequestHandler):
         if self.server.fail:
             self.send_error(500)
             return
-        if path.endswith("/releases/latest"):
-            self.send_error(404)
+        if path.endswith("/releases/latest") or "/releases/tags/" in path:
+            tag = path.rsplit("/", 1)[1] if "/releases/tags/" in path else "v0.8.2"
+            body = json.dumps({"tag_name": tag, "draft": False}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         page = ""
         for part in query.split("&"):
@@ -319,27 +325,27 @@ def test_script1_ps1_has_no_param_block():
 
 
 @requires_ps
-def test_script1_ps1_default_url_is_latest(tmp_path: Path):
+def test_script1_ps1_default_url_is_fixed(tmp_path: Path, github_server: GitHubListServer):
     sidecar = tmp_path / "mihari-channel"
     sidecar.write_text("dev\n", encoding="utf-8")
-    result = run_install_ps1(tmp_path, [], {})
+    result = run_install_ps1(tmp_path, [], {"MIHARI_GITHUB_API": f"http://127.0.0.1:{github_server.server_address[1]}"})
     assert result.returncode == 0, result.stderr
     got = parse_test_output(result.stdout)
-    assert "/releases/latest/download/mihari-windows-" in got.get("URL", "")
+    assert "/releases/download/v0.8.2/mihari-windows-" in got.get("URL", "")
     assert got.get("EXPLICIT") == "0"
     assert sidecar.read_text(encoding="utf-8") == "dev\n"
 
 
 @requires_ps
-def test_script1_ps1_without_windows_profile_env(tmp_path: Path):
+def test_script1_ps1_without_windows_profile_env(tmp_path: Path, github_server: GitHubListServer):
     result = run_install_ps1(
         tmp_path,
         [],
-        {"LOCALAPPDATA": "", "USERPROFILE": "", "PROCESSOR_ARCHITECTURE": ""},
+        {"LOCALAPPDATA": "", "USERPROFILE": "", "PROCESSOR_ARCHITECTURE": "", "MIHARI_GITHUB_API": f"http://127.0.0.1:{github_server.server_address[1]}"},
     )
     assert result.returncode == 0, result.stderr
     got = parse_test_output(result.stdout)
-    assert "/releases/latest/download/mihari-windows-" in got.get("URL", "")
+    assert "/releases/download/v0.8.2/mihari-windows-" in got.get("URL", "")
 
 
 @requires_ps
@@ -356,7 +362,7 @@ def test_script1_ps1_channel_args_and_env(tmp_path: Path, github_server: GitHubL
     assert colon.returncode == 0, colon.stderr
     got = parse_test_output(colon.stdout)
     assert got.get("CHANNEL") == "main"
-    assert "/releases/latest/download/" in got.get("URL", "")
+    assert "/releases/download/v0.8.2/" in got.get("URL", "")
 
 
 @requires_ps
@@ -406,8 +412,8 @@ def test_ps1_channel_and_tag_matches_are_case_sensitive():
 def test_script1_ps1_writes_sidecar_after_binary_commit():
     text = INSTALL_PS1.read_text(encoding="utf-8")
     block = text[text.index("Invoke-WebRequest -Uri $url -OutFile $tmp") :]
-    assert block.index("Start-Service -Name mihari") < block.index("Write-MihariChannel $channel")
-    assert block.rindex("Move-Item -LiteralPath $tmp -Destination $dest -Force") < block.rindex(
+    assert block.index("Invoke-ReplacementElevated") < block.index("Write-MihariChannel $channel")
+    assert block.rindex("Copy-Item -LiteralPath $tmp -Destination $dest -Force") < block.rindex(
         "Write-MihariChannel $channel"
     )
     assert '"draft"\\s*:\\s*true' in text

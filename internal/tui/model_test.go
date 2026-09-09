@@ -37,6 +37,13 @@ func (rootSelfUpdater) Update(context.Context, string, string, string) (update.R
 	return update.Result{}, nil
 }
 
+func (rootSelfUpdater) Prepare(context.Context, string, string, string) (update.PreparedUpdate, error) {
+	return update.PreparedUpdate{}, nil
+}
+func (rootSelfUpdater) ApplyPrepared(context.Context, update.PreparedUpdate) (update.Result, error) {
+	return update.Result{}, nil
+}
+
 var errNetworkStatusTest = errors.New("network status test failure")
 
 func TestModelRoutesConnectionSnapshotsAndPreferencesToPage(t *testing.T) {
