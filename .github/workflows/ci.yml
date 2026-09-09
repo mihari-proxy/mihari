@@ -46,6 +46,8 @@ jobs:
         run: python scripts/install/test_parallel_download.py -v
       - name: Test install channel resolution
         run: python -m pytest scripts/install/test_install_channel.py -q
+      - name: Test installer bootstrap and generated bridge
+        run: python -m pytest scripts/install/test_root_apply_entry.py scripts/install/test_root_apply_generated.py -q
       - name: Test isolated security runner without privileges
         run: python -m pytest scripts/test/test_unix_layout_security.py -q
       - name: Test release safety policies
