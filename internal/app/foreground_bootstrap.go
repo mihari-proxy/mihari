@@ -96,10 +96,6 @@ func (b ForegroundBootstrap) Start(ctx context.Context) (resultErr error) {
 		return installBusy("legacy source requires migration")
 	}
 	id := x.newTransactionID()
-	marker, err := x.Store.CreateTransactionMarker(ctx, id)
-	if err != nil {
-		return err
-	}
 	layout := InstallLayoutSystem
 	if x.Private {
 		layout = InstallLayoutPrivate
@@ -109,6 +105,12 @@ func (b ForegroundBootstrap) Start(ctx context.Context) (resultErr error) {
 		if err := b.InitializeJournal(ctx, id); err != nil {
 			return err
 		}
+	}
+	// Inspect existing data before creating transaction metadata: private
+	// layouts share the data directory with the journal store.
+	marker, err := x.Store.CreateTransactionMarker(ctx, id)
+	if err != nil {
+		return err
 	}
 	saveJournal := func() error {
 		art := x.preparedArtifacts(request)
