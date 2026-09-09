@@ -1119,14 +1119,124 @@ def test_dev_publish_mutates_alist_after_final_github_verify():
     )
 
 
-def test_dev_release_notes_append_index_url_with_stable_root_downloaders():
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert "<!-- aio-install-dev -->" in workflow
-    assert "mihari-dev/index.txt" in workflow
-    assert "mihari-release/mihari/install-aio-remote.sh" in workflow
-    assert "| MIHARI_INDEX_URL=" in workflow
-    assert "$env:MIHARI_INDEX_URL=" in workflow
-    assert "mihari-release/mihari/install-aio-remote.ps1" in workflow
+def test_dev_release_notes_use_explicit_dev_channel_with_stable_root_downloaders():
+    document = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    run = _workflow_step(
+        document,
+        "publish",
+        name="Append prerelease AList install hook to release notes",
+    )["run"]
+
+    assert "<!-- aio-install-dev -->" in run
+    assert (
+        "curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/"
+        "mihari/install-aio-remote.sh | bash -s -- --channel dev"
+    ) in run
+    assert (
+        "& ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/"
+        "mihari-release/mihari/install-aio-remote.ps1))) -Channel dev"
+    ) in run
+    assert "MIHARI_INDEX_URL" not in run
+
+
+def test_stable_and_dev_release_notes_upsert_guidance_without_replacing_existing_body(tmp_path):
+    stable = yaml.safe_load(STABLE_WORKFLOW.read_text(encoding="utf-8"))
+    dev = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    cases = (
+        (
+            stable,
+            "release",
+            "https://github.com/mihari-proxy/mihari/blob/main/README.zh-CN.md",
+            "https://github.com/mihari-proxy/mihari#quick-start",
+            "Generated changes\n\n<!-- aio-install -->\nstable commands\n",
+        ),
+        (
+            dev,
+            "publish",
+            "https://github.com/mihari-proxy/mihari/blob/dev/README.zh-CN.md",
+            "https://github.com/mihari-proxy/mihari/tree/dev#quick-start",
+            "This is a development release.\n\n<!-- github-release-dev -->\n\n"
+            "<!-- aio-install-dev -->\ndev commands\n",
+        ),
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -eu
+if [ "$1" = release ] && [ "$2" = view ]; then
+  cat "$FAKE_NOTES"
+elif [ "$1" = release ] && [ "$2" = edit ] && [ "$4" = --notes ]; then
+  printf '%s' "$5" > "$FAKE_EDITED"
+else
+  exit 97
+fi
+""",
+        encoding="utf-8",
+        newline="\n",
+    )
+    fake_gh.chmod(0o755)
+
+    for index, (document, job_name, readme_url, english_readme_url, existing_body) in enumerate(cases):
+        steps = document["jobs"][job_name]["steps"]
+        guidance = _workflow_step(
+            document,
+            job_name,
+            name="Ensure installation guidance in release notes",
+        )
+        assert "if" not in guidance
+        guidance_index = steps.index(guidance)
+        publication_name = (
+            "Publish GitHub release"
+            if job_name == "release"
+            else "Create prerelease and upload missing assets"
+        )
+        assert steps.index(_workflow_step(document, job_name, name=publication_name)) < guidance_index
+
+        notes = tmp_path / f"notes-{index}.md"
+        edited = tmp_path / f"edited-{index}.md"
+        notes.write_text(existing_body, encoding="utf-8")
+        script = (
+            f'export PATH="{_bash_path(fake_bin)}:$PATH"\n'
+            f'export FAKE_NOTES="{_bash_path(notes)}"\n'
+            f'export FAKE_EDITED="{_bash_path(edited)}"\n'
+            f'{guidance["run"]}'
+        )
+        first = subprocess.run(
+            [_bash_for_workflow_guard(), "-eu", "-o", "pipefail", "-c", script],
+            encoding="utf-8",
+            capture_output=True,
+            env={**os.environ, "VERSION": "v1.2.3"},
+            check=False,
+        )
+        assert first.returncode == 0, first.stderr
+        updated = edited.read_text(encoding="utf-8")
+        assert existing_body.rstrip("\n") in updated
+        assert updated.count("<!-- install-guidance -->") == 1
+        assert updated.count("<!-- /install-guidance -->") == 1
+        assert readme_url in updated
+        assert english_readme_url in updated
+        assert "Do not download and run individual release assets directly." in updated
+        assert "不建议单独下载并直接运行 Release assets" in updated
+
+        notes.write_text(updated, encoding="utf-8")
+        edited.unlink()
+        second = subprocess.run(
+            [_bash_for_workflow_guard(), "-eu", "-o", "pipefail", "-c", script],
+            encoding="utf-8",
+            capture_output=True,
+            env={**os.environ, "VERSION": "v1.2.3"},
+            check=False,
+        )
+        assert second.returncode == 0, second.stderr
+        assert not edited.exists()
+
+    stable_release = _workflow_step(stable, "release", name="Publish GitHub release")
+    assert "body" not in stable_release["with"]
+    final_dev = _workflow_step(dev, "publish", name="Final verify prerelease and stable latest")
+    assert "<!-- install-guidance -->" in final_dev["run"]
 
 
 def test_dev_retract_github_delete_is_idempotent_and_retains_canonical_tag():
