@@ -235,8 +235,8 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 	installationWorker, actions := newInstallationWorker(actions)
 	defer installationWorker.shutdown()
 	var preparedWorker *runPreparedUpdater
-	if updater, ok := options.SelfUpdater.(systempage.PreparedSelfUpdater); ok {
-		preparedWorker = newRunPreparedUpdater(updater)
+	if options.SelfUpdater != nil {
+		preparedWorker = newRunPreparedUpdater(options.SelfUpdater)
 		options.SelfUpdater = preparedWorker
 		defer func() { resultErr = errors.Join(resultErr, preparedWorker.close()) }()
 	}
@@ -288,6 +288,9 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 	}
 	if options.Service != nil {
 		model.SetServiceController(options.Service)
+	}
+	if preparedWorker != nil {
+		model.discardPrepared = preparedWorker.discard
 	}
 	model.SetSelfUpdater(options.SelfUpdater, options.CurrentVersion, options.BinaryPath, options.Elevated)
 	model.SetSelfUpdateChannel(options.SelfUpdateChannel)

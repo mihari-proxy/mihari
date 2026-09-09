@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -39,7 +40,9 @@ func NewUnixInstaller(layout platform.ResolvedLayout, binary, version string) (*
 	if strings.Contains(version, "-dev.") {
 		channel = update.ChannelDev
 	}
-	return &UnixInstaller{layout: layout, binary: filepath.Clean(binary), version: version, channel: channel, offlineRoot: filepath.Join(layout.InstallRoot, "install-trust"), adapter: newNativeInstallAdapter}, nil
+	installer := &UnixInstaller{layout: layout, binary: filepath.Clean(binary), version: version, channel: channel, offlineRoot: filepath.Join(layout.InstallRoot, "install-trust"), adapter: newNativeInstallAdapter}
+	installer.downloader.ObserveTargets = installer.ObserveReplacement
+	return installer, nil
 }
 
 // Channel inspects the service before opening B. Standalone updates use the
@@ -101,7 +104,7 @@ func (i *UnixInstaller) ApplyPrepared(ctx context.Context, prepared update.Prepa
 		req.InstallRoot = ""
 		req.PathBinary = ""
 	}
-	applied, err := i.applyWithStart(ctx, req, false)
+	applied, err := i.applyWithReplacement(ctx, req, false, prepared.Consent, &prepared.Preview)
 	result.Updated = applied.Changed
 	return result, err
 }
@@ -119,8 +122,125 @@ func (i *UnixInstaller) Update(ctx context.Context, binary, current, channel str
 // Apply is the shell/JSON service apply entrypoint; install requests start the
 // service after validation. CLI install calls RunService and registers it stopped.
 func (i *UnixInstaller) Apply(ctx context.Context, req InstallRequest) (InstallResult, error) {
-	return i.applyWithStart(ctx, req, true)
+	return i.ApplyWithConsent(ctx, req, update.ReplacementConsent{})
 }
+
+// ApplyWithConsent applies a replacement with explicit current-call risk consent.
+func (i *UnixInstaller) ApplyWithConsent(ctx context.Context, req InstallRequest, consent update.ReplacementConsent) (InstallResult, error) {
+	return i.applyWithReplacement(ctx, req, true, consent, nil)
+}
+
+func (i *UnixInstaller) applyWithReplacement(ctx context.Context, req InstallRequest, start bool, consent update.ReplacementConsent, expected *update.ReplacementPreview) (result InstallResult, err error) {
+	if req.Operation == InstallOperationRecover {
+		return i.applyWithStart(ctx, req, start)
+	}
+	if os.Geteuid() != 0 {
+		return result, errValidationNotRoot
+	}
+	if _, err = EncodeInstallRequest(req); err != nil {
+		return result, err
+	}
+	observed, err := i.adapter(nil).InspectDefinition(ctx)
+	if err != nil {
+		return result, err
+	}
+	standalone := req.Operation == InstallOperationUpdate && observed.Status == service.StatusNotInstalled
+	layout := i.layout
+	var inputs *nativeReleaseInputs
+	var candidateBytes []byte
+	if standalone {
+		candidateBytes, err = readHostFile(req.Binary, migrationBinaryMax)
+		if err != nil {
+			return result, err
+		}
+		digest, verifyErr := (update.OfficialReleaseSource{Client: i.client}).Checksum(ctx, req.ReleaseTag, "mihari-"+runtime.GOOS+"-"+runtime.GOARCH)
+		if verifyErr != nil {
+			return result, verifyErr
+		}
+		if digest != sha256HexBytes(candidateBytes) || (req.ArtifactSHA256 != "" && req.ArtifactSHA256 != digest) {
+			return result, migrateData("install binary checksum mismatch")
+		}
+	} else {
+		layout, err = platform.ResolveLayout(platform.LayoutInput{CWD: "/", Data: req.Data, Endpoint: req.Endpoint, Credential: req.Credential, InstallRoot: req.InstallRoot, EUID: 0}, platform.SystemLayoutDefaults())
+		if err != nil {
+			return result, err
+		}
+		if err = checkUnixReplacementPending(ctx, layout); err != nil {
+			return result, err
+		}
+		source, sourceErr := selectInstallSource(req, observed, layout)
+		if sourceErr != nil {
+			return result, sourceErr
+		}
+		inputs, err = prepareNativeReleaseInputs(ctx, req, source, i.offlineRoot, i.client)
+		if err != nil {
+			return result, err
+		}
+		defer func() { err = errors.Join(err, inputs.Close()) }()
+		candidateBytes = inputs.binary
+		if inputs.offlineBinary {
+			if err = verifyOfflineReplacementTag(ctx, filepath.Dir(i.offlineRoot), candidateBytes, req.ReleaseTag); err != nil {
+				return result, err
+			}
+		}
+	}
+	candidate := update.ReplacementCandidate{Version: req.ReleaseTag, SHA256: sha256HexBytes(candidateBytes), Channel: req.Channel}
+	req.ArtifactSHA256 = candidate.SHA256
+	snapshot, err := observeUnixReplacementTargets(ctx, req, layout, i.binary, observed, nil)
+	if err != nil {
+		return result, err
+	}
+	if expected != nil {
+		if err = update.RecheckReplacement(*expected, candidate, snapshot); err != nil {
+			return result, err
+		}
+	}
+	preview, err := update.NewReplacementPreview(candidate, snapshot)
+	if err != nil {
+		return result, err
+	}
+	if err = update.ValidateReplacementConsent(preview, consent); err != nil {
+		return result, err
+	}
+	if preview.Risk != update.ReplacementNone && consent.Warn != nil {
+		if err = consent.Warn(update.ReplacementWarning(preview)); err != nil {
+			return result, err
+		}
+	}
+	guard := &installReplacementGuard{preview: preview, consent: consent}
+	guard.recheck = func(ctx context.Context) error {
+		definition, err := i.adapter(nil).InspectDefinition(ctx)
+		if err != nil {
+			return err
+		}
+		if !standalone {
+			if err = checkUnixReplacementPending(ctx, layout); err != nil {
+				return err
+			}
+		}
+		current, err := observeUnixReplacementTargets(ctx, req, layout, i.binary, definition, &preview.Snapshot)
+		if err != nil {
+			return err
+		}
+		raw, err := readHostFile(req.Binary, migrationBinaryMax)
+		if err != nil {
+			return err
+		}
+		actual := candidate
+		actual.SHA256 = sha256HexBytes(raw)
+		return update.RecheckReplacement(preview, actual, current)
+	}
+	return dispatchInstall(ctx, req, i.channel, i.adapter(nil).InspectDefinition, func(ctx context.Context, req InstallRequest, def service.Definition) (InstallResult, error) {
+		return i.applyService(ctx, req, def, start, guard, inputs)
+	}, func(ctx context.Context) (binaryUpdateTarget, error) {
+		target, err := openUnixBinaryTarget(ctx, i.binary)
+		if err == nil {
+			target.verifiedCandidate = candidateBytes
+		}
+		return target, err
+	}, guard)
+}
+
 func (i *UnixInstaller) applyWithStart(ctx context.Context, req InstallRequest, start bool) (InstallResult, error) {
 	if os.Geteuid() != 0 {
 		return InstallResult{}, errValidationNotRoot
@@ -129,7 +249,7 @@ func (i *UnixInstaller) applyWithStart(ctx context.Context, req InstallRequest, 
 		return InstallResult{}, err
 	}
 	return dispatchInstall(ctx, req, i.channel, i.adapter(nil).InspectDefinition, func(ctx context.Context, req InstallRequest, def service.Definition) (InstallResult, error) {
-		return i.applyService(ctx, req, def, start)
+		return i.applyService(ctx, req, def, start, nil, nil)
 	}, func(ctx context.Context) (binaryUpdateTarget, error) {
 		return openUnixBinaryTarget(ctx, i.binary)
 	})
@@ -156,7 +276,7 @@ func (i *UnixInstaller) request(operation, binary, tag, channel string) InstallR
 	}
 	return req
 }
-func (i *UnixInstaller) applyService(ctx context.Context, req InstallRequest, observed service.Definition, start bool) (result InstallResult, err error) {
+func (i *UnixInstaller) applyService(ctx context.Context, req InstallRequest, observed service.Definition, start bool, guard *installReplacementGuard, preparedInputs *nativeReleaseInputs) (result InstallResult, err error) {
 	layout := i.layout
 	if req.Operation != InstallOperationRecover {
 		layout, err = platform.ResolveLayout(platform.LayoutInput{CWD: "/", Data: req.Data, Endpoint: req.Endpoint, Credential: req.Credential, InstallRoot: req.InstallRoot, EUID: 0}, platform.SystemLayoutDefaults())
@@ -169,6 +289,21 @@ func (i *UnixInstaller) applyService(ctx context.Context, req InstallRequest, ob
 		return result, ClassifyUnixLocalError(err)
 	}
 	defer func() { err = errors.Join(err, ClassifyUnixLocalError(session.Close())) }()
+
+	return i.applyServiceSession(ctx, req, observed, start, guard, preparedInputs, session, layout)
+}
+
+func (i *UnixInstaller) applyServiceSession(ctx context.Context, req InstallRequest, observed service.Definition, start bool, guard *installReplacementGuard, preparedInputs *nativeReleaseInputs, session *nativeInstallSession, layout platform.ResolvedLayout) (result InstallResult, err error) {
+	// Do not load historical state before the guard: loadState binds historical
+	// layout ownership, and Close may clean completed candidates once state is bound.
+	if guard != nil {
+		if err = rejectPendingReplacement(ctx, session.tx.Store); err != nil {
+			return result, err
+		}
+		return guard.run(ctx, func(ctx context.Context) (InstallResult, error) {
+			return i.applyServiceSession(ctx, req, observed, start, nil, preparedInputs, session, layout)
+		})
+	}
 	existing, err := session.loadState(ctx)
 	if err != nil {
 		return result, err
@@ -198,11 +333,14 @@ func (i *UnixInstaller) applyService(ctx context.Context, req InstallRequest, ob
 	if err != nil {
 		return result, err
 	}
-	inputs, err := prepareNativeReleaseInputs(ctx, req, source, i.offlineRoot, i.client)
-	if err != nil {
-		return result, err
+	inputs := preparedInputs
+	if inputs == nil {
+		inputs, err = prepareNativeReleaseInputs(ctx, req, source, i.offlineRoot, i.client)
+		if err != nil {
+			return result, err
+		}
+		defer func() { err = errors.Join(err, inputs.Close()) }()
 	}
-	defer func() { err = errors.Join(err, inputs.Close()) }()
 	if err := session.prepare(ctx, req, observed, inputs, start); err != nil {
 		return result, err
 	}

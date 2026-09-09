@@ -16,6 +16,11 @@ SUPPLEMENTAL = {
     ],
     "internal/core": ["TestSecurityConfigStage_BindCancellationRemovesWrittenFile"],
     "internal/app": [
+        "TestNativeInstallReplacement_StandaloneUpgradeWithoutYes",
+        "TestNativeInstallReplacement_OfflineDigestCannotClaimAnotherTag",
+        "TestNativeInstallReplacement_OfflineVersionBinding",
+        "TestNativeInstallReplacement_OfflineProbeTimeoutCleansStage",
+        "TestNativeInstallReplacement_UntrustedCandidateIsNotProbed",
         "TestNativeInstallEffects_FilePublicationAndActualBackup",
         "TestNativeInstallEffects_PrivatePublicationRetainsLockIdentity",
         "TestNativeInstallSession_PrivateMetadataBindsRecoveryAuthority",

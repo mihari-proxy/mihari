@@ -7,6 +7,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/update"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -102,5 +103,16 @@ func TestPreparedUpdate_RunCancelsAndJoinsDownload(t *testing.T) {
 	<-shutdown
 	if err := worker.close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPreparedUpdate_ApplyFailureRequiresReopening(t *testing.T) {
+	model := NewModel()
+	model.preparedUpdate = &update.PreparedUpdate{Available: true}
+	err := finishPreparedRun(context.Background(), model, nil, io.Discard, func() error { t.Fatal("relaunch after failed apply"); return nil }, func(tea.Model) error { return nil }, func(context.Context, update.PreparedUpdate) (update.Result, error) {
+		return update.Result{}, errors.New("installation changed")
+	})
+	if err == nil || !strings.Contains(err.Error(), "reopen Mihari and retry") {
+		t.Fatalf("missing retry instruction: %v", err)
 	}
 }

@@ -37,14 +37,28 @@ Linux 服务启动失败后，systemd 可能显示 `activating (auto-restart)`�
 mihari daemon
 ```
 
-更新 mihari 二进制本身需要提权。`self channel` 查询选定 Unix B/P sidecar（缺失为 main）；系统通道写入需要 root，私有 P 需要实际 owner，持 install.lock 并拒绝相关未完成事务。`self update` 先检查服务；没有服务时使用编译通道、只更新 binary，不为选择下载访问 B。已有服务通过统一停机安装事务更新。Windows 保留原行为：
+更新 mihari 二进制本身需要提权。`self channel` 查询选定 Unix B/P sidecar（缺失为 main）；系统通道写入需要 root，私有 P 需要实际 owner，持 install.lock 并拒绝相关未完成事务。`self update` 先检查服务；没有服务时使用编译通道、只更新 binary，不为选择下载访问 B。已有服务通过统一停机安装事务更新。Windows 自更新同时检查实际服务安装副本：
 
 ```console
 mihari self version
 mihari self channel
 mihari self channel [main|dev]
 mihari self update
+mihari self update --yes
 ```
+
+
+### 替换旧版本时的确认
+
+更新先固定下载候选，再检查将覆盖的实际二进制与服务副本。降级或无法确定旧版本兼容性时，`self update` 要求显式 `--yes`；缺少确认返回 `invalid_argument`、退出码 2。正常升级无需增加此参数。已安装 stable 高于当前发布版本时继续显示 ahead，保持现有版本；同基础版本的 dev → stable 视为升级。
+
+风险提示说明：旧程序可能无法读取新版本写入的设置、订阅、状态和生成文件，可能无法启动或表现为数据丢失。确认不会迁移配置或回滚磁盘状态。管理员操作用户可写的旧程序时不会执行它来查询版本，因此可能显示 unknown，仍可明确确认后使用既有修复路径。
+
+TUI 的 System 页面先显示 Preparing，再按实际准备的候选和目标版本确认。取消或离开页面会放弃准备结果。确认后关闭界面资源，再执行替换；若最终复核发现安装已变化，应重新打开 Mihari 后重试。
+
+Unix `service apply` 直接调用不询问交互输入。无确认时，风险错误的 details 包含安全版本、角色和 `preview_id`。交互脚本接受后对同一请求传 `--yes --expected-preview <原 preview_id>`；该参数必须与 `--yes` 同时使用。指纹变化返回 `invalid_state`，需重新开始，不自动忽略指纹重试。初始无人值守命令可以只传 `--yes`，本次执行仍复核目标。明确的 recover 请求保持原行为，确认不允许覆盖未完成事务。
+
+`--json` 保持成功 stdout JSON 和失败 stderr 错误 envelope。风险信息使用 stderr；已确认但执行失败时，JSON 风险说明合入错误 message。Windows 主程序成功替换后若服务副本或注册定义变化，会保留已更新结果并报告服务同步警告。Windows 在各实际操作边界复核，外部程序仍可能在检查与复制之间更改安装，未提供跨文件原子事务。
 
 ## 状态查询
 

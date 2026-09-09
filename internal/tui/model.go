@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"github.com/mihari-proxy/mihari/internal/app"
 	"slices"
 	"strings"
@@ -56,6 +57,8 @@ type Model struct {
 	monitor              MonitorModel
 	operations           []ui.OperationRecord
 	confirmationCmd      tea.Cmd
+	confirmationCancel   tea.Cmd
+	discardPrepared      func(update.PreparedUpdate) error
 	setupObserved        bool
 	setupReturn          ui.PageID
 	pendingActions       map[string]ui.Action
@@ -344,6 +347,12 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch typed := message.(type) {
 	case ui.RelaunchRequestMsg:
+		if typed.Prepared != nil {
+			page, ok := model.pages[ui.PageSystem].(*systempage.Model)
+			if !ok || model.active != ui.PageSystem || !page.AcceptsMihariPreparation(typed.PreparationKey) {
+				return model, func() tea.Msg { return ui.DiscardPreparedUpdateMsg{Prepared: *typed.Prepared} }
+			}
+		}
 		model.relaunchRequested = true
 		model.relaunchWarning = typed.Warning
 		model.preparedUpdate = typed.Prepared
@@ -449,6 +458,19 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.syncOverview()
 		model.syncSystem()
 		return model, nil
+	case ui.DiscardPreparedUpdateMsg:
+		discard := model.discardPrepared
+		return model, func() tea.Msg {
+			if discard != nil {
+				return discardPreparedResultMsg{err: discard(typed.Prepared)}
+			}
+			return discardPreparedResultMsg{err: fmt.Errorf("prepared update cleanup unavailable")}
+		}
+	case discardPreparedResultMsg:
+		if typed.err != nil {
+			model.recordActionOutcome(ui.ActionIntentMsg{Action: ui.ActionUpdateMihari, Title: "Prepared update cleanup"}, typed)
+		}
+		return model, nil
 	case ui.ActionIntentMsg:
 		return model.handleActionIntent(typed)
 	case actionExecuteMsg:
@@ -459,6 +481,12 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.globalState = ""
 		} else {
 			model.globalState = ui.StatePending
+		}
+		if typed.Intent.Action == ui.ActionUpdateMihari && typed.Intent.Cancel != nil {
+			page, ok := model.pages[ui.PageSystem].(*systempage.Model)
+			if !ok || model.active != ui.PageSystem || !page.AcceptsMihariPreparation(typed.Intent.Key) {
+				return model, typed.Intent.Cancel
+			}
 		}
 		model.recordActionOutcome(typed.Intent, typed.Result)
 		var pageCmd tea.Cmd
@@ -514,16 +542,18 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.Page != ui.PageSetup {
 			return model, nil
 		}
+		discard := model.clearSystemDoneIfLeaving(model.active)
 		model.setupReturn = model.active
 		model.active = ui.PageSetup
 		model.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageSetup}
 		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
-			return model, page.Load()
+			return model, tea.Batch(discard, page.Load())
 		}
-		return model, nil
+		return model, discard
 	case ui.ConfirmationRequestMsg:
 		model.modal = NewConfirmation(typed.Title, typed.Object, typed.Impact, typed.Rollback)
 		model.confirmationCmd = typed.OnConfirm
+		model.confirmationCancel = nil
 		return model, nil
 	case ui.OpenHelpMsg:
 		return model.openHelp()
@@ -539,10 +569,14 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if model.modal != nil {
 		switch model.modal.Update(key) {
 		case ModalClose:
+			cancel := model.confirmationCancel
 			model.modal = nil
 			model.confirmationCmd = nil
+			model.confirmationCancel = nil
+			return model, cancel
 		case ModalConfirm:
 			command := model.confirmationCmd
+			model.confirmationCancel = nil
 			result := ModalConfirmedMsg{Title: model.modal.title, Object: model.modal.object}
 			model.modal = nil
 			model.confirmationCmd = nil
@@ -635,12 +669,13 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		model.setupObserved = true
 		if event.Status.SetupRequired {
 			entering := model.active != ui.PageSetup
+			discard := model.clearSystemDoneIfLeaving(model.active)
 			model.setupReturn = ""
 			model.active = ui.PageSetup
 			model.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageSetup}
 			if entering {
 				if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
-					command = page.Load()
+					command = tea.Batch(discard, page.Load())
 				}
 			}
 		} else if model.active == ui.PageSetup {
@@ -946,26 +981,31 @@ func (model Model) landRailPage(prev ui.PageID) (tea.Model, tea.Cmd) {
 	if prev == model.active {
 		return model, nil
 	}
-	model.clearSystemDoneIfLeaving(prev)
+	discard := model.clearSystemDoneIfLeaving(prev)
 	// Refresh page-owned snapshots when the rail lands on the page so previews
 	// are not empty until Enter. System (network/service) and Web GUI (panels)
 	// both need this; Enter still Load()s after content focus.
 	switch model.active {
 	case ui.PageSystem, ui.PageWebGUI:
 		if page, ok := model.pages[model.active].(interface{ Load() tea.Cmd }); ok {
-			return model, page.Load()
+			return model, tea.Batch(discard, page.Load())
 		}
 	}
-	return model, nil
+	return model, discard
 }
 
-func (model *Model) clearSystemDoneIfLeaving(prev ui.PageID) {
+func (model *Model) clearSystemDoneIfLeaving(prev ui.PageID) tea.Cmd {
 	if prev != ui.PageSystem {
-		return
+		return nil
 	}
 	if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
 		page.ClearDone()
+		model.modal = nil
+		model.confirmationCmd = nil
+		model.confirmationCancel = nil
+		return page.CancelMihariPreparation()
 	}
+	return nil
 }
 
 // dispatchPage delivers non-root messages to the active page.
@@ -987,6 +1027,13 @@ func (model Model) dispatchPageTo(id ui.PageID, message tea.Msg) (tea.Model, tea
 }
 
 func (model Model) handleActionIntent(intent ui.ActionIntentMsg) (tea.Model, tea.Cmd) {
+	if intent.Action == ui.ActionUpdateMihari && intent.Cancel != nil {
+		page, ok := model.pages[ui.PageSystem].(*systempage.Model)
+		if !ok || model.active != ui.PageSystem || !page.AcceptsMihariPreparation(intent.Key) {
+			return model, intent.Cancel
+		}
+	}
+
 	if intent.Page == "" {
 		intent.Page = model.active
 	}
@@ -1016,12 +1063,20 @@ func (model Model) handleActionIntent(intent ui.ActionIntentMsg) (tea.Model, tea
 	if RequiresConfirmation(intent.Action) {
 		model.modal = NewConfirmation(intent.Title, intent.Object, intent.Impact, intent.Rollback)
 		model.confirmationCmd = func() tea.Msg { return actionExecuteMsg{Intent: intent} }
+		model.confirmationCancel = intent.Cancel
 		return model, nil
 	}
 	return model.executeAction(intent)
 }
 
 func (model Model) executeAction(intent ui.ActionIntentMsg) (tea.Model, tea.Cmd) {
+	if intent.Action == ui.ActionUpdateMihari && intent.Cancel != nil {
+		page, ok := model.pages[ui.PageSystem].(*systempage.Model)
+		if !ok || model.active != ui.PageSystem || !page.AcceptsMihariPreparation(intent.Key) {
+			return model, intent.Cancel
+		}
+	}
+
 	if intent.Execute == nil {
 		model.globalState = ui.StateCapabilityLost
 		return model, nil

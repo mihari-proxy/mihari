@@ -10,9 +10,11 @@
 #
 # Environment overrides:
 #   $env:MIHARI_INDEX_URL   index.txt public direct link (default: the fixed public URL below)
-#   $env:MIHARI_BUNDLE_URL  explicit bundle URL (skips index + sha256)
+#   $env:MIHARI_BUNDLE_URL  explicit bundle URL (unverified; automatic handoff refused)
+# -Yes or exactly MIHARI_YES=1 accepts this installation's compatibility risks.
 param([switch]$Yes, [string]$Channel)
 $ErrorActionPreference = 'Stop'
+$explicitYes = [bool]($Yes -or $env:MIHARI_YES -ceq '1')
 
 # Fixed public direct links. mihari distribution is fully public (signing
 # disabled on the AList drive), so these URLs are stable and identical across
@@ -45,11 +47,12 @@ function FixEncoding($s) {
 function Info($m) { Write-Host ("* " + (FixEncoding $m)) -ForegroundColor Cyan }
 function Fail($m) { $f = FixEncoding $m; Write-Host ("error: " + $f) -ForegroundColor Red; throw $f }
 function Confirm($p) {
-  # Read-Host reads the host console (not the stdin pipe), so no /dev/tty
-  # special-casing is needed (design 4.4 step 2).
-  if ($Yes) { return $true }
+  if ($explicitYes) { return $true }
+  if ([Console]::IsInputRedirected -or [Environment]::GetCommandLineArgs() -contains '-NonInteractive') {
+    throw 'Confirmation is required. Re-run interactively or use -Yes / MIHARI_YES=1.'
+  }
   $ans = Read-Host ((FixEncoding $p) + ' [y/N]')
-  return $ans -match '^[Yy]'
+  return $ans -match '^(?i:y|yes)$'
 }
 # Stream one response to disk with progress. This is also the compatibility
 # fallback when the origin does not provide a reliable byte-range contract.
@@ -187,20 +190,13 @@ function Download-FileWithProgress($url, $dest) {
     Write-Progress -Activity (FixEncoding 'Downloading the mihari package') -Completed
   }
 }
-# Print a short install plan + what's affected, then confirm. Runs once before the
-# download, unifying the per-branch confirms that used to scatter the version block.
+# This only describes inert preparation; the local installer owns final risk confirmation.
 function Show-InstallPlan {
-  $binHint = if ($env:MIHARI_BIN) { $env:MIHARI_BIN } else { Join-Path $env:LOCALAPPDATA 'Programs\mihari' }
-  $dataHint = if ($env:MIHARI_DATA) { $env:MIHARI_DATA } else { Join-Path $env:USERPROFILE '.mihari' }
   $ver = if ($latest) { $latest } else { '(unknown)' }
   Write-Host ''
-  Write-Host (FixEncoding "Ready to install mihari $ver") -ForegroundColor Yellow
-  Write-Host (FixEncoding "  Platform : $platform")
-  Write-Host (FixEncoding "  Source   : $resolvedUrl")
-  Write-Host (FixEncoding "  Binary   : $binHint")
-  Write-Host (FixEncoding "  Data     : $dataHint")
-  Write-Host (FixEncoding "  Action   : Register the system service (requires UAC elevation)")
-  Write-Host (FixEncoding "  Preserve : mihari.yaml, subscriptions, panel state, and other user settings")
+  Write-Host ("Ready to download mihari $ver") -ForegroundColor Yellow
+  Write-Host ("  Platform : $platform")
+  Write-Host '  The local installer will inspect the actual replacement targets and confirm compatibility risks before installation.'
   Write-Host ''
 }
 
@@ -223,6 +219,104 @@ function Write-RemoteTestState {
   Write-Output "HANDOFF=$handoff"
   Write-Output "LATEST=$latest"
 }
+
+# BEGIN VERIFIED LOCAL HANDOFF
+function Invoke-VerifiedLocalInstaller([string]$Installer, [string]$BundleDir, [string]$Channel, [bool]$ExplicitYes, [bool]$VerifiedSource) {
+  if (-not $VerifiedSource) { throw 'Automatic installer handoff requires a checksum-verified bundle. MIHARI_BUNDLE_URL does not provide execution trust.' }
+  $unsupported = 'This bundle contains an installer without replacement confirmation support. The verified bundle has been kept. Use the current install-aio.ps1 with -BundleDir pointing to this extracted bundle to install it safely.'
+  $unsupported += " Extracted bundle: $BundleDir"
+  # Read once: the same verified script bytes are queried and then invoked.
+  $source = [IO.File]::ReadAllText($Installer)
+  if ($source -cnotmatch '(?m)^# MIHARI_INSTALL_CAPABILITY: replacement_confirmation_v1\r?$') { throw $unsupported }
+  if (-not ('MihariInstallerCapabilityProbe' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Text;
+using System.Diagnostics;
+public static class MihariInstallerCapabilityProbe {
+  public static string Query(string executable, string command, string root) {
+    using (var p = new Process()) {
+      p.StartInfo = new ProcessStartInfo(executable, "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + command) {
+        UseShellExecute=false, CreateNoWindow=true, RedirectStandardOutput=true, RedirectStandardError=true, WorkingDirectory=root };
+      p.StartInfo.EnvironmentVariables.Clear();
+      // Resolve built-in capability commands from this host, never inherited modules.
+      p.StartInfo.EnvironmentVariables["PSModulePath"] = Path.Combine(Path.GetDirectoryName(executable), "Modules");
+      foreach (var key in new [] {"SystemRoot", "WINDIR"}) {
+        var value = Environment.GetEnvironmentVariable(key);
+        if (value != null) p.StartInfo.EnvironmentVariables[key] = value;
+      }
+      foreach (var key in new [] {"USERPROFILE", "LOCALAPPDATA", "APPDATA", "HOME", "TMP", "TEMP"}) p.StartInfo.EnvironmentVariables[key] = root;
+      if (!p.Start()) return null;
+      // Read one byte asynchronously per pipe: memory stays bounded even without newlines.
+      var stdout = new MemoryStream(); var stderr = new MemoryStream();
+      var a = new byte[1]; var b = new byte[1];
+      var ar = p.StandardOutput.BaseStream.ReadAsync(a, 0, 1);
+      var br = p.StandardError.BaseStream.ReadAsync(b, 0, 1);
+      bool ae = false, be = false, invalid = false;
+      var timer = Stopwatch.StartNew();
+      try {
+        while (!(ae && be && p.HasExited)) {
+          if (timer.ElapsedMilliseconds >= 3000) { invalid = true; break; }
+          if (!ae && ar.IsCompleted) { if (ar.Result == 0) ae = true; else { stdout.WriteByte(a[0]); ar = p.StandardOutput.BaseStream.ReadAsync(a, 0, 1); } }
+          if (!be && br.IsCompleted) { if (br.Result == 0) be = true; else { stderr.WriteByte(b[0]); br = p.StandardError.BaseStream.ReadAsync(b, 0, 1); } }
+          if (stdout.Length > 4096 || stderr.Length > 4096) { invalid = true; break; }
+          if ((!ae && !ar.IsCompleted) && (!be && !br.IsCompleted)) System.Threading.Thread.Sleep(1);
+        }
+      } finally {
+        if (!p.HasExited) p.Kill();
+        p.WaitForExit();
+      }
+      return invalid || p.ExitCode != 0 ? null : Encoding.UTF8.GetString(stdout.ToArray());
+    }
+  }
+}
+'@
+  }
+  $probeRoot = Join-Path ([IO.Path]::GetTempPath()) ('mihari-capability-' + [guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Path $probeRoot | Out-Null
+  try {
+    # Use this host's absolute executable, never an executable resolved from PATH.
+    $hostName = if ($PSVersionTable.PSEdition -eq 'Desktop') { 'powershell.exe' } elseif ($env:OS -eq 'Windows_NT') { 'pwsh.exe' } else { 'pwsh' }
+    $executable = Join-Path $PSHOME $hostName
+    $probeScript = Join-Path $probeRoot 'capabilities.ps1'
+    [IO.File]::WriteAllText($probeScript, $source, [Text.Encoding]::UTF8)
+    $command = "& '" + $probeScript.Replace("'", "''") + "' -Capabilities"
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $raw = [MihariInstallerCapabilityProbe]::Query($executable, $encodedCommand, $probeRoot)
+    # Fixed v1 response: one object, no duplicate fields, trailing objects, or extra output.
+    $schema = '"schema"[ \t\r\n]*:[ \t\r\n]*"mihari\.install-script/v1"'
+    $capability = '"capabilities"[ \t\r\n]*:[ \t\r\n]*\[[ \t\r\n]*"replacement_confirmation_v1"[ \t\r\n]*\]'
+    $shape = '\A[ \t\r\n]*\{[ \t\r\n]*(?:' + $schema + '[ \t\r\n]*,[ \t\r\n]*' + $capability + '|' + $capability + '[ \t\r\n]*,[ \t\r\n]*' + $schema + ')[ \t\r\n]*\}[ \t\r\n]*\z'
+    if (-not $raw -or $raw -cnotmatch $shape) { throw $unsupported }
+  } catch {
+    throw $unsupported
+  } finally {
+    Remove-Item -LiteralPath $probeRoot -Recurse -Force
+  }
+  $previousYes = $env:MIHARI_YES
+  $previousExitCode = $global:LASTEXITCODE
+  $invocation = $null
+  try {
+    if ($ExplicitYes) { $env:MIHARI_YES = '1' }
+    $global:LASTEXITCODE = 0
+    $arguments = @{ BundleDir = $BundleDir }
+    if ($Channel) { $arguments.Channel = $Channel }
+    # A nested pipeline contains script 'exit' without terminating the caller.
+    # Its error stream retains reported non-terminating errors which $? can miss,
+    # while preserving intentionally silent optional lookups in the installer.
+    $invocation = [powershell]::Create([System.Management.Automation.RunspaceMode]::CurrentRunspace)
+    [void]$invocation.AddScript($source).AddParameters($arguments)
+    $invocation.Invoke()
+    if ($invocation.Streams.Error.Count -gt 0 -or $global:LASTEXITCODE -ne 0) { throw 'Local installation failed.' }
+  } finally {
+    if ($null -ne $invocation) { $invocation.Dispose() }
+    $global:LASTEXITCODE = $previousExitCode
+    if ($null -eq $previousYes) { Remove-Item Env:MIHARI_YES -ErrorAction SilentlyContinue }
+    else { $env:MIHARI_YES = $previousYes }
+  }
+}
+# END VERIFIED LOCAL HANDOFF
 
 # Tests dot-source this standalone script to exercise the real downloader
 # against a local HTTP server without running the installation flow.
@@ -285,35 +379,9 @@ if ($env:MIHARI_INSTALL_TEST_MODE -eq '1') {
   return
 }
 
-# Version judgment: PATH mihari only, local (no daemon). Single source of truth
-# vs index.latest; empty -> unknown. (Equality-only compare: == latest ->
-# "reinstall", != latest -> "upgrade" with honest versions shown. Full semver is
-# not needed since judgment only informs the prompt, never gates the install.)
-$haveMihari = $false; $current = ''
-$mihariCmd = Get-Command mihari -ErrorAction SilentlyContinue
-if ($mihariCmd) {
-  $haveMihari = $true
-  try {
-    $vobj = (& mihari self version --json) | Out-String | ConvertFrom-Json
-    $current = $vobj.version
-  } catch { $current = '' }
-}
-
-if (-not $haveMihari) {
-  Info ("No mihari installation was found. Installing the latest version" + $(if ($latest) { " ($latest)" }))
-} elseif (-not $current) {
-  Info 'Mihari was found, but its version is unknown. The executable may be damaged; reinstalling to repair it.'
-} elseif ($latest -and $current -eq $latest) {
-  Info "The latest version ($current) is already installed. Reinstalling to repair it."
-} else {
-  Info ("Currently installed: $current" + $(if ($latest) { "; latest version: $latest. Upgrading." }))
-}
-
-# Install plan + confirm before the (large) download. -Yes skips it.
-if (-not $Yes) {
-  Show-InstallPlan
-  if (-not (Confirm 'Start installation?')) { Info 'Canceled.'; exit 0 }
-}
+# Download acceptance is not replacement consent.
+Show-InstallPlan
+if (-not (Confirm 'Download and prepare the bundle?')) { throw 'Canceled. No installation changes were made.' }
 
 # Download to a temp file (outside the work dir) so the work dir can be fully
 # cleared before extraction — PS 5.1 Expand-Archive does not reliably overwrite
@@ -323,9 +391,12 @@ New-Item -ItemType Directory -Force -Path $workdir | Out-Null
 $tmpArchive = Join-Path ([IO.Path]::GetTempPath()) ("mihari-aio-" + ([guid]::NewGuid().ToString('N')) + ".zip")
 Info "Downloading $resolvedUrl …"
 Download-FileWithProgress -url $resolvedUrl -dest $tmpArchive
+$verifiedSource = $false
 if ($wantSum) {
+  if ($wantSum -cnotmatch '^[0-9a-fA-F]{64}$') { Remove-Item -LiteralPath $tmpArchive -Force; Fail 'The index checksum is invalid.' }
   $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $tmpArchive).Hash.ToLower()
   if ($got -ne $wantSum.ToLower()) { Remove-Item -LiteralPath $tmpArchive -Force; Fail "SHA-256 verification failed: expected $wantSum, got $got." }
+  $verifiedSource = $true
   Info 'SHA-256 verification passed.'
 }
 Info "Extracting to $workdir …"
@@ -333,13 +404,7 @@ if (Test-Path -LiteralPath $workdir) { Get-ChildItem -LiteralPath $workdir | Rem
 Expand-Archive -LiteralPath $tmpArchive -DestinationPath $workdir -Force
 Remove-Item -LiteralPath $tmpArchive -Force
 
-# Hand off to the local installer inside the bundle (script 2) via a scriptblock
-# that reads the file content as a string — bypassing ExecutionPolicy and Mark of
-# the Web; the bundle dir is injected via -BundleDir (design 4.4 step 5).
+# Only checksum-verified bundles can authorize capability probing and handoff.
 $localInstaller = Join-Path $workdir 'install-aio.ps1'
 if (-not (Test-Path -LiteralPath $localInstaller)) { Fail 'The package is missing install-aio.ps1.' }
-if ($Channel) {
-  & ([scriptblock]::Create([IO.File]::ReadAllText($localInstaller))) -Channel $Channel -BundleDir $workdir
-} else {
-  & ([scriptblock]::Create([IO.File]::ReadAllText($localInstaller))) -BundleDir $workdir
-}
+Invoke-VerifiedLocalInstaller -Installer $localInstaller -BundleDir $workdir -Channel $Channel -ExplicitYes $explicitYes -VerifiedSource $verifiedSource

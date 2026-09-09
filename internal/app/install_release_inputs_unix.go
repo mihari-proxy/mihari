@@ -17,6 +17,7 @@ import (
 )
 
 type nativeReleaseInputs struct {
+	offlineBinary         bool
 	binary, core, receipt []byte
 	resources             map[string][]byte
 	trust                 migrationTrust
@@ -46,7 +47,8 @@ func prepareNativeReleaseInputs(ctx context.Context, req InstallRequest, sourceP
 	}
 	hash := sha256HexBytes(inputs.binary)
 	official := update.OfficialReleaseSource{Client: client}
-	if !inputs.trust.acceptsBinary(hash) {
+	inputs.offlineBinary = inputs.trust.acceptsBinary(hash)
+	if !inputs.offlineBinary {
 		want, err := official.Checksum(ctx, req.ReleaseTag, "mihari-"+runtime.GOOS+"-"+runtime.GOARCH)
 		if err != nil {
 			return nil, err

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/service"
 )
 
 const (
@@ -18,6 +19,8 @@ const (
 // service. The boolean result reports whether a service installation exists.
 type InstalledServiceUpdater interface {
 	UpdateInstalledBinary() (bool, error)
+	UpdateInstalledBinaryChecked(context.Context, service.ServiceReplacementChecks) (bool, error)
+	ObserveReplacementService(context.Context) (service.ServiceReplacementView, error)
 }
 
 // DaemonVersionClient reads the daemon version through the local control API.
@@ -57,6 +60,10 @@ func NewSelfUpdateServiceCompletion(service InstalledServiceUpdater, client Daem
 // version. A missing service is a successful no-op.
 func (c *SelfUpdateServiceCompletion) AfterReplace(ctx context.Context, version string) error {
 	installed, err := c.service.UpdateInstalledBinary()
+	return c.completeReplacement(ctx, version, installed, err)
+}
+
+func (c *SelfUpdateServiceCompletion) completeReplacement(ctx context.Context, version string, installed bool, err error) error {
 	if err != nil {
 		var apiError protocol.APIError
 		if errors.As(err, &apiError) {

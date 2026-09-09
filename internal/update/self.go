@@ -6,11 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -51,6 +51,10 @@ type SelfUpdater struct {
 	GOARCH     string
 	// AfterReplace is optional; used to restart the OS service after a successful replace.
 	AfterReplace func(ctx context.Context, version string) error
+	// ObserveTargets discovers every installation copy replaced by this operation.
+	ObserveTargets ReplacementObserver
+	// AfterReplacePrepared takes precedence over AfterReplace when configured.
+	AfterReplacePrepared func(context.Context, PreparedUpdate) error
 	// openCandidate is an optional test seam for candidate create/write/close failures.
 	openCandidate func(string) (io.WriteCloser, error)
 }
@@ -128,56 +132,13 @@ func (u SelfUpdater) Check(ctx context.Context, currentVersion, channel string) 
 }
 
 // Update downloads the latest release when newer than currentVersion and replaces binaryPath.
-func (u SelfUpdater) Update(ctx context.Context, binaryPath, currentVersion, channel string) (Result, error) {
-	ch, err := normalizeChannel(channel)
+func (u SelfUpdater) Update(ctx context.Context, binaryPath, currentVersion, channel string) (result Result, err error) {
+	p, err := u.Prepare(ctx, binaryPath, currentVersion, channel)
 	if err != nil {
 		return Result{}, err
 	}
-	release, err := u.latestRelease(ctx, ch)
-	if err != nil {
-		return Result{}, err
-	}
-	available, ahead := classifyUpdate(currentVersion, release.TagName)
-	if !available {
-		return Result{Version: release.TagName, Updated: false, Ahead: ahead, Channel: ch}, nil
-	}
-	asset, err := SelectSelfAsset(release, u.targetOS(), u.targetArch())
-	if err != nil {
-		return Result{}, err
-	}
-	if asset.Size < 0 || asset.Size > maxSelfBinarySize {
-		return Result{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihari asset is too large"}
-	}
-	checksumAsset, err := selectChecksumAsset(release)
-	if err != nil {
-		return Result{}, err
-	}
-	expected, err := u.fetchExpectedChecksum(ctx, checksumAsset, asset.Name)
-	if err != nil {
-		return Result{}, err
-	}
-	stagingDir := filepath.Join(filepath.Dir(binaryPath), ".mihari-update")
-	if err := os.MkdirAll(stagingDir, 0o700); err != nil {
-		return Result{}, fmt.Errorf("create self-update staging: %w", err)
-	}
-	defer os.RemoveAll(stagingDir)
-
-	candidate := filepath.Join(stagingDir, filepath.Base(binaryPath)+".new")
-	if err := u.download(ctx, asset, expected, candidate); err != nil {
-		return Result{}, err
-	}
-	if err := os.Chmod(candidate, 0o755); err != nil {
-		return Result{}, err
-	}
-	if err := replaceBinary(candidate, binaryPath); err != nil {
-		return Result{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "replace mihari binary"}
-	}
-	if u.AfterReplace != nil {
-		if err := u.AfterReplace(ctx, release.TagName); err != nil {
-			return Result{Version: release.TagName, Updated: true, Channel: ch}, err
-		}
-	}
-	return Result{Version: release.TagName, Updated: true, Channel: ch}, nil
+	defer func() { err = errors.Join(err, p.Close()) }()
+	return u.ApplyPrepared(ctx, p)
 }
 
 func sameTag(current, latest string) bool {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/update"
 	"github.com/spf13/cobra"
 )
 
@@ -52,7 +53,7 @@ type Dependencies struct {
 	SystemProxyClient       SystemProxyClient
 	TunClient               TunClient
 	ServiceController       ServiceController
-	ServiceApply            func(context.Context, app.InstallRequest) (app.InstallResult, error)
+	ServiceApply            func(context.Context, app.InstallRequest, update.ReplacementConsent) (app.InstallResult, error)
 	ServiceAction           func(context.Context, string) error
 	InstallationInspect     func(context.Context) (app.InstallationStatus, error)
 	InstallationPlan        func(context.Context, app.InstallationPlanRequest) (app.InstallationPlan, error)

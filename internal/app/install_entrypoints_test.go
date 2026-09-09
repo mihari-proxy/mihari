@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/mihari-proxy/mihari/internal/service"
+	"github.com/mihari-proxy/mihari/internal/update"
 	"reflect"
 	"testing"
 )
@@ -135,5 +136,51 @@ func TestInstallEntry_ReverseTracksConcreteObject(t *testing.T) {
 	second := JournalAction{Seq: 2, Kind: JournalActionDropin, TargetRole: JournalRoleDropin, BackupRef: "unit/1", CandidateRef: "target/1"}
 	if !x.alreadyReversed(first) || x.alreadyReversed(second) {
 		t.Fatal("reversing one drop-in suppressed recovery of another drop-in")
+	}
+}
+
+func TestInstallEntry_ReplacementGuardSurroundsBinaryLease(t *testing.T) {
+	for _, scenario := range []string{"normal-upgrade", "unconfirmed", "changed-under-lease"} {
+		t.Run(scenario, func(t *testing.T) {
+			events := []string{}
+			targetVersion := "v1.0.0"
+			if scenario == "unconfirmed" {
+				targetVersion = "v3.0.0"
+			}
+			preview, err := update.NewReplacementPreview(update.ReplacementCandidate{Version: "v2.0.0"}, update.ReplacementSnapshot{Targets: []update.ReplacementTarget{{Roles: []string{"path"}, Path: "/fixture/mihari", Exists: true, Version: targetVersion}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			guard := &installReplacementGuard{preview: preview, recheck: func(context.Context) error {
+				events = append(events, "recheck")
+				if scenario == "changed-under-lease" && len(events) > 2 {
+					return errors.New("changed installation")
+				}
+				return nil
+			}}
+			result, err := dispatchInstall(context.Background(), InstallRequest{Operation: "update", Channel: "main"}, "main", func(context.Context) (service.Definition, error) {
+				return service.Definition{Status: service.StatusNotInstalled}, nil
+			}, func(context.Context, InstallRequest, service.Definition) (InstallResult, error) {
+				t.Fatal("standalone update opened B")
+				return InstallResult{}, nil
+			}, func(context.Context) (binaryUpdateTarget, error) {
+				events = append(events, "lease")
+				return &binaryTargetSpy{events: &events, renamed: true}, nil
+			}, guard)
+			switch scenario {
+			case "normal-upgrade":
+				if err != nil || !result.Changed || !reflect.DeepEqual(events, []string{"recheck", "lease", "recheck", "verify-candidate", "rename-sync", "close"}) {
+					t.Fatalf("ordinary upgrade failed: %v %v", events, err)
+				}
+			case "unconfirmed":
+				if err == nil || len(events) != 0 {
+					t.Fatalf("missing consent reached lease: %v %v", events, err)
+				}
+			default:
+				if err == nil || result.Changed || !reflect.DeepEqual(events, []string{"recheck", "lease", "recheck", "close"}) {
+					t.Fatalf("changed target reached stage: %v %v", events, err)
+				}
+			}
+		})
 	}
 }

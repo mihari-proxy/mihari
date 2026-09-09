@@ -16,6 +16,7 @@ import (
 )
 
 type unixBinaryTarget struct {
+	verifiedCandidate      []byte
 	lease                  *platform.OwnedBinaryLease
 	parent, stage          *platform.TrustedRoot
 	currentID, candidateID platform.FileIdentity
@@ -49,25 +50,31 @@ func openUnixBinaryTarget(ctx context.Context, binary string) (target *unixBinar
 	if err = file.Close(); err != nil {
 		return nil, err
 	}
-	if err = cleanupUnixBinaryStages(ctx, target.parent); err != nil {
-		return nil, err
-	}
-	target.stageName = ".mihari-update-" + (&InstallTransaction{}).newTransactionID()
-	target.stage, err = target.parent.OpenDir(ctx, target.stageName, platform.RootPolicy{Owner: 0, Mode: 0700, AllowCreate: true})
-	if err != nil {
-		return nil, err
-	}
+
 	return target, nil
 }
 
 func (t *unixBinaryTarget) Stage(ctx context.Context, req InstallRequest) (err error) {
-	digest, err := (update.OfficialReleaseSource{}).Checksum(ctx, req.ReleaseTag, "mihari-"+runtime.GOOS+"-"+runtime.GOARCH)
+	if err = cleanupUnixBinaryStages(ctx, t.parent); err != nil {
+		return err
+	}
+	t.stageName = ".mihari-update-" + (&InstallTransaction{}).newTransactionID()
+	t.stage, err = t.parent.OpenDir(ctx, t.stageName, platform.RootPolicy{Owner: 0, Mode: 0700, AllowCreate: true})
 	if err != nil {
 		return err
 	}
-	raw, err := readHostFile(req.Binary, migrationBinaryMax)
-	if err != nil {
-		return err
+
+	raw := t.verifiedCandidate
+	digest := req.ArtifactSHA256
+	if raw == nil {
+		digest, err = (update.OfficialReleaseSource{}).Checksum(ctx, req.ReleaseTag, "mihari-"+runtime.GOOS+"-"+runtime.GOARCH)
+		if err != nil {
+			return err
+		}
+		raw, err = readHostFile(req.Binary, migrationBinaryMax)
+		if err != nil {
+			return err
+		}
 	}
 	if sha256HexBytes(raw) != digest {
 		return migrateState("untrusted install binary")

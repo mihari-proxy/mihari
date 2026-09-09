@@ -1,6 +1,7 @@
 package update
 
 import (
+	"cmp"
 	"errors"
 	"os"
 	"path/filepath"
@@ -31,18 +32,24 @@ type canonicalTag struct {
 }
 
 func parseCanonicalTag(tag string) (canonicalTag, bool) {
-	if m := canonicalStable.FindStringSubmatch(tag); m != nil {
-		return canonicalTag{major: atoi(m[1]), minor: atoi(m[2]), patch: atoi(m[3])}, true
+	m := canonicalStable.FindStringSubmatch(tag)
+	isDev := false
+	if m == nil {
+		m = canonicalDev.FindStringSubmatch(tag)
+		isDev = true
 	}
-	if m := canonicalDev.FindStringSubmatch(tag); m != nil {
-		return canonicalTag{major: atoi(m[1]), minor: atoi(m[2]), patch: atoi(m[3]), dev: atoi(m[4]), isDev: true}, true
+	if m == nil {
+		return canonicalTag{}, false
 	}
-	return canonicalTag{}, false
-}
-
-func atoi(s string) int {
-	n, _ := strconv.Atoi(s)
-	return n
+	var fields [4]int
+	for i, part := range m[1:] {
+		value, err := strconv.Atoi(part)
+		if err != nil {
+			return canonicalTag{}, false
+		}
+		fields[i] = value
+	}
+	return canonicalTag{major: fields[0], minor: fields[1], patch: fields[2], dev: fields[3], isDev: isDev}, true
 }
 
 func compareCanonicalTags(left, right string) (int, bool) {
@@ -51,14 +58,14 @@ func compareCanonicalTags(left, right string) (int, bool) {
 	if !okA || !okB {
 		return 0, false
 	}
-	if c := a.major - b.major; c != 0 {
-		return sign(c), true
+	if c := cmp.Compare(a.major, b.major); c != 0 {
+		return c, true
 	}
-	if c := a.minor - b.minor; c != 0 {
-		return sign(c), true
+	if c := cmp.Compare(a.minor, b.minor); c != 0 {
+		return c, true
 	}
-	if c := a.patch - b.patch; c != 0 {
-		return sign(c), true
+	if c := cmp.Compare(a.patch, b.patch); c != 0 {
+		return c, true
 	}
 	if a.isDev != b.isDev {
 		if a.isDev {
@@ -67,19 +74,9 @@ func compareCanonicalTags(left, right string) (int, bool) {
 		return 1, true
 	}
 	if a.isDev {
-		return sign(a.dev - b.dev), true
+		return cmp.Compare(a.dev, b.dev), true
 	}
 	return 0, true
-}
-
-func sign(n int) int {
-	if n < 0 {
-		return -1
-	}
-	if n > 0 {
-		return 1
-	}
-	return 0
 }
 
 func classifyUpdate(current, latest string) (available, ahead bool) {
