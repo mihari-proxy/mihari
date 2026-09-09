@@ -32,22 +32,37 @@ func (p recoveredStateProbe) RecoverState(ctx context.Context) (*config.Settings
 	}
 	return &p.settings, nil
 }
-func startupSettings(t *testing.T) config.Settings {
+
+type reservedStartupListener struct{ net.Listener }
+
+func (l reservedStartupListener) Close() error { return nil }
+
+func startupSettings(t *testing.T) (config.Settings, func(string, string) (net.Listener, error)) {
 	t.Helper()
 	s := config.Defaults()
 	s.ControllerSecret = strings.Repeat("a", 64)
-	addrs := []*string{&s.MixedAddr, &s.ControllerAddr, &s.WebAddr}
-	for _, addr := range addrs {
+	listeners := map[string]net.Listener{}
+	for _, addr := range []*string{&s.MixedAddr, &s.ControllerAddr, &s.WebAddr} {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() {
+			if err := listener.Close(); err != nil {
+				t.Error(err)
+			}
+		})
 		*addr = listener.Addr().String()
-		if err = listener.Close(); err != nil {
-			t.Fatal(err)
-		}
+		listeners[*addr] = listener
 	}
-	return s
+	probe := func(network, address string) (net.Listener, error) {
+		listener, ok := listeners[address]
+		if network != "tcp" || !ok {
+			return nil, errors.New("unexpected startup probe endpoint")
+		}
+		return reservedStartupListener{Listener: listener}, nil
+	}
+	return s, probe
 }
 func startupSourceFixture(t *testing.T) (*core.TestTrustedFixture, platform.Paths, string, []byte) {
 	t.Helper()
@@ -72,7 +87,7 @@ func startupSourceFixture(t *testing.T) (*core.TestTrustedFixture, platform.Path
 }
 func TestRootAssembly_ResourceRecoveryPrecedesBusinessStoreLoad(t *testing.T) {
 	f, paths, id, raw := startupSourceFixture(t)
-	settings := startupSettings(t)
+	settings, portProbe := startupSettings(t)
 	catalog, err := os.ReadFile(paths.SubscriptionCatalog)
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +124,7 @@ func TestRootAssembly_ResourceRecoveryPrecedesBusinessStoreLoad(t *testing.T) {
 		}
 		return []byte("Mihomo v1.19.30"), nil
 	}
-	_, err = app.BuildRuntimeWithOptions(paths, stale, "test", nil, nil, app.RuntimeBuildOptions{TrustedCore: f.Trusted, Resources: probe})
+	_, err = app.BuildRuntimeWithOptions(paths, stale, "test", nil, nil, app.RuntimeBuildOptions{TrustedCore: f.Trusted, Resources: probe, PortProbeListen: portProbe})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +139,7 @@ func TestRootAssembly_DaemonRestartConvergesPersistedSourceAndSettings(t *testin
 	for _, window := range []string{"cache-before-catalog", "catalog-before-config", "settings-before-config", "settings-before-onboarding"} {
 		t.Run(window, func(t *testing.T) {
 			f, paths, id, raw := startupSourceFixture(t)
-			settings := startupSettings(t)
+			settings, portProbe := startupSettings(t)
 			resources := map[string][]byte{}
 			for _, name := range []string{"providers/old-managed.yaml", "Country.mmdb", "GeoSite.dat"} {
 				p := filepath.Join(paths.Root, "runtime/core-home", name)
@@ -176,7 +191,7 @@ func TestRootAssembly_DaemonRestartConvergesPersistedSourceAndSettings(t *testin
 				}
 				return []byte("Mihomo v1.19.30"), nil
 			}
-			_, err = app.BuildRuntimeWithOptions(paths, settings, "test", nil, nil, app.RuntimeBuildOptions{TrustedCore: f.Trusted})
+			_, err = app.BuildRuntimeWithOptions(paths, settings, "test", nil, nil, app.RuntimeBuildOptions{TrustedCore: f.Trusted, PortProbeListen: portProbe})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -207,7 +222,7 @@ func TestRootAssembly_InvalidSourceOrCandidatePreservesLastValidData(t *testing.
 	for _, failure := range []string{"missing-cache", "invalid-cache", "core-rejection"} {
 		t.Run(failure, func(t *testing.T) {
 			f, paths, id, _ := startupSourceFixture(t)
-			settings := startupSettings(t)
+			settings, portProbe := startupSettings(t)
 			path := filepath.Join(paths.SubscriptionCache, id+".yaml")
 			if failure == "missing-cache" {
 				if err := os.Remove(path); err != nil {
@@ -229,7 +244,7 @@ func TestRootAssembly_InvalidSourceOrCandidatePreservesLastValidData(t *testing.
 				executions++
 				return nil, errors.New("synthetic refusal")
 			}
-			_, err = app.BuildRuntimeWithOptions(paths, settings, "test", nil, nil, app.RuntimeBuildOptions{TrustedCore: f.Trusted})
+			_, err = app.BuildRuntimeWithOptions(paths, settings, "test", nil, nil, app.RuntimeBuildOptions{TrustedCore: f.Trusted, PortProbeListen: portProbe})
 			if err == nil {
 				t.Fatal("invalid authority accepted")
 			}
@@ -252,16 +267,16 @@ func TestRootAssembly_InvalidSourceOrCandidatePreservesLastValidData(t *testing.
 
 func TestRootAssembly_OnboardingEndpointsApplyAtDaemonRestart(t *testing.T) {
 	f, paths, _, raw := startupSourceFixture(t)
-	old := startupSettings(t)
+	old, oldProbe := startupSettings(t)
 	if err := config.Save(paths.Settings, old); err != nil {
 		t.Fatal(err)
 	}
-	assembly, err := app.BuildRuntimeWithOptions(paths, old, "test", nil, nil, app.RuntimeBuildOptions{TrustedCore: f.Trusted})
+	assembly, err := app.BuildRuntimeWithOptions(paths, old, "test", nil, nil, app.RuntimeBuildOptions{TrustedCore: f.Trusted, PortProbeListen: oldProbe})
 	if err != nil {
 		t.Fatal(err)
 	}
 	before := f.Content()
-	next := startupSettings(t)
+	next, nextProbe := startupSettings(t)
 	result, err := assembly.Manager.UpdateOnboarding(context.Background(), runtimeapi.Operation{ID: "endpoint-update", Source: "test"}, onboarding.Update{MixedAddr: &next.MixedAddr, ControllerAddr: &next.ControllerAddr, WebAddr: &next.WebAddr})
 	if err != nil {
 		t.Fatal(err)
@@ -273,7 +288,7 @@ func TestRootAssembly_OnboardingEndpointsApplyAtDaemonRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = app.BuildRuntimeWithOptions(paths, saved, "test", nil, nil, app.RuntimeBuildOptions{TrustedCore: f.Trusted})
+	_, err = app.BuildRuntimeWithOptions(paths, saved, "test", nil, nil, app.RuntimeBuildOptions{TrustedCore: f.Trusted, PortProbeListen: nextProbe})
 	if err != nil {
 		t.Fatal(err)
 	}

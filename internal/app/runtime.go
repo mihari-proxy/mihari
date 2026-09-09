@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -42,6 +43,9 @@ type RuntimeAssembly struct {
 type RuntimeBuildOptions struct {
 	TrustedCore *core.TrustedExecution
 	Resources   StartupResources
+	// PortProbeListen opens temporary TCP listeners only for the managed-port probe.
+	// Nil uses net.Listen; it does not replace controller or gateway listeners.
+	PortProbeListen func(network, address string) (net.Listener, error)
 
 	InitialSetupRequired bool
 	SettingsPath         string
@@ -133,7 +137,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	} else if err := core.EnsureRuntimeConfig(paths.RuntimeConfig, settings); err != nil {
 		return nil, err
 	}
-	if err := probeManagedPorts(settings, nil); err != nil {
+	if err := probeManagedPortsWithListener(settings, nil, options.PortProbeListen); err != nil {
 		return nil, err
 	}
 
