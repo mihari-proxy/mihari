@@ -130,6 +130,13 @@ func (a *SystemdAdapter) definitionFromShow(ctx context.Context, props map[strin
 		running = true
 	case "inactive", "failed":
 		running = false
+	case "activating":
+		// A failed service waiting for RestartSec has no main process, but
+		// its definition must remain available for stop/reinstall recovery.
+		// Other activating states may still be starting a process.
+		if props["SubState"] != "auto-restart" || props["MainPID"] != "0" {
+			return Definition{}, invalidServiceState("service status is unknown")
+		}
 	default:
 		return Definition{}, invalidServiceState("service status is unknown")
 	}

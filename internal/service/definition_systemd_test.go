@@ -106,6 +106,60 @@ func systemdMaskedShow() string {
 	}, "\n") + "\n"
 }
 
+func TestSystemdInspect_AutoRestartIsInstalledButNotRunning(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(stateName(false, enabled), func(t *testing.T) {
+			h := newSystemdHarness(t, false, enabled, trustedUnitFile(t))
+			h.show = strings.NewReplacer("ActiveState=inactive", "ActiveState=activating", "SubState=dead", "SubState=auto-restart").Replace(h.show)
+			got, err := h.adapter.InspectDefinition(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != StatusStopped || got.Running || got.Enabled != enabled || got.Binary != "/usr/local/lib/mihari/mihari" {
+				t.Fatalf("unexpected restart-wait definition: %+v", got)
+			}
+			if len(h.hook.kinds) != 0 {
+				t.Fatal("inspection mutated the service")
+			}
+		})
+	}
+}
+
+func TestSystemdInspect_RejectsOtherActivatingStates(t *testing.T) {
+	for _, state := range []struct{ sub, pid string }{
+		{"start", "0"}, {"start-pre", "0"}, {"unknown", "0"},
+		{"auto-restart", "4242"}, {"auto-restart", "invalid"},
+	} {
+		t.Run(state.sub+"-"+state.pid, func(t *testing.T) {
+			h := newSystemdHarness(t, false, true, trustedUnitFile(t))
+			h.show = strings.NewReplacer("ActiveState=inactive", "ActiveState=activating", "SubState=dead", "SubState="+state.sub, "MainPID=0", "MainPID="+state.pid).Replace(h.show)
+			_, err := h.adapter.InspectDefinition(context.Background())
+			if err == nil {
+				t.Fatal("accepted an unverified activating state")
+			}
+			requireInvalidState(t, err)
+		})
+	}
+}
+
+func TestSystemdDisableAutostartAndStop_AutoRestart(t *testing.T) {
+	h := newSystemdHarness(t, false, true, trustedUnitFile(t))
+	h.show = strings.NewReplacer("ActiveState=inactive", "ActiveState=activating", "SubState=dead", "SubState=auto-restart").Replace(h.show)
+	if err := h.adapter.DisableAutostartAndStop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertSystemdStopSequence(t, h.runner.calls)
+	if !h.files.masked(defaultSystemdUnitFile) {
+		t.Fatal("restart loop was not masked")
+	}
+	if _, err := h.files.ReadLink(context.Background(), DefaultSystemdPaths().WantsLink); !os.IsNotExist(err) {
+		t.Fatalf("autostart link remains: %v", err)
+	}
+	if err := h.adapter.WaitOwnedTreeExit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSystemdInspect_RejectsSymlinkDropins(t *testing.T) {
 	for _, target := range []string{defaultDevNull, "/other/config.conf"} {
 		dropin := trustedDropinFile(t)
