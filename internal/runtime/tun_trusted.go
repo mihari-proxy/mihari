@@ -119,6 +119,9 @@ func sameActiveSubscription(a, b subscription.Catalog) bool {
 	i, j := a.Index(a.ActiveID), b.Index(b.ActiveID)
 	return i >= 0 && j >= 0 && a.Profiles[i].Generation == b.Profiles[j].Generation && a.Profiles[i].Version == b.Profiles[j].Version
 }
+
+// rollbackTrustedTun restores settings and the startup-bound configuration,
+// degrading mutations only when recovery cannot be confirmed.
 func (m *Manager) rollbackTrustedTun(ctx context.Context, op Operation, candidate settingsCandidate, previous []byte, cause error) error {
 	recovery := context.WithoutCancel(ctx)
 	rollback := settingsCandidate{before: candidate.after, after: candidate.before, changed: candidate.changed}
@@ -129,14 +132,16 @@ func (m *Manager) rollbackTrustedTun(ctx context.Context, op Operation, candidat
 		configErr = err
 		if err == nil {
 			defer func() { _ = cap.Close() }() // Read-only capability; rollback ownership is already settled.
-			path, err := cap.Path(recovery)
+			_, err := cap.Path(recovery)
 			configErr = err
 			if err == nil {
 				reloader, ok := m.controller.(configReloader)
 				if !ok {
 					configErr = errors.New("mihomo reload is unavailable")
 				} else {
-					configErr = reloader.Reload(recovery, path, true)
+					// Reload the startup-bound config after verifying the restored
+					// capability, just as commitTrustedRuntimeConfig does.
+					configErr = reloader.Reload(recovery, "", true)
 				}
 			}
 		}

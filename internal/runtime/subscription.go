@@ -560,6 +560,9 @@ func (c configCandidate) cleanup() {
 		_ = os.Remove(c.path)
 	}
 }
+
+// commitTrustedRuntimeConfig publishes validated bytes and reloads the fixed
+// startup configuration, restoring the previous bytes if reload fails.
 func (m *Manager) commitTrustedRuntimeConfig(ctx context.Context, candidate configCandidate) error {
 	// This internal generation is independent of optional client preconditions
 	// and is captured atomically with settings. Publication owns mutation.
@@ -582,9 +585,12 @@ func (m *Manager) commitTrustedRuntimeConfig(ctx context.Context, candidate conf
 		return e
 	}
 	defer func() { _ = cap.Close() }() // Read-only capability: no pending writes; closure cannot change the operation result.
-	path, e := cap.Path(ctx)
+	_, e = cap.Path(ctx)
 	if e == nil {
-		e = reloader.Reload(ctx, path, true)
+		// Trusted startup binds -f to runtime/config.yaml, outside the -d
+		// core-home. An empty reload path selects that same startup config;
+		// an explicit path is rejected by mihomo's safe-path check.
+		e = reloader.Reload(ctx, "", true)
 	}
 	if e == nil {
 		m.settingsMu.Lock()
@@ -597,11 +603,11 @@ func (m *Manager) commitTrustedRuntimeConfig(ctx context.Context, candidate conf
 	var reloadErr error
 	if restoreErr == nil {
 		defer func() { _ = old.Close() }() // Read-only capability: no pending writes; closure cannot change the operation result.
-		oldPath, pathErr := old.Path(rollbackCtx)
+		_, pathErr := old.Path(rollbackCtx)
 		if pathErr != nil {
 			restoreErr = pathErr
 		} else {
-			reloadErr = reloader.Reload(rollbackCtx, oldPath, true)
+			reloadErr = reloader.Reload(rollbackCtx, "", true)
 		}
 	}
 	if restoreErr != nil || reloadErr != nil {

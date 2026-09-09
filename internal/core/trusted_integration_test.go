@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -48,7 +49,24 @@ func (c *seamController) PatchConfigs(_ context.Context, p map[string]any) error
 	c.tun = p["tun"].(map[string]any)
 	return nil
 }
-func (c *seamController) Reload(_ context.Context, _ string, _ bool) error {
+
+// Reload models mihomo's startup configuration selection and safe-path check.
+func (c *seamController) Reload(ctx context.Context, path string, _ bool) error {
+	// Match mihomo v1.19.30: an explicit reload path must be under -d;
+	// an empty path selects the configuration already bound by -f at startup.
+	command, release, err := c.fixture.Trusted.RunCommand(ctx)
+	if err != nil {
+		return fmt.Errorf("prepare trusted reload command: %w", err)
+	}
+	if err := release(); err != nil {
+		return fmt.Errorf("release trusted reload command: %w", err)
+	}
+	if path != "" {
+		relative, err := filepath.Rel(command.Home, path)
+		if err != nil || !filepath.IsLocal(relative) {
+			return errors.New("path is not subpath of home directory or SAFE_PATHS")
+		}
+	}
 	c.reloads++
 	if c.reloads <= c.failReloads {
 		return errors.New("reload rejected")

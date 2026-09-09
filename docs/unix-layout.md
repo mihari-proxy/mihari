@@ -24,6 +24,8 @@ D 保存 settings、订阅、运行配置、GeoIP、面板、provider、核心�
 
 Unix root 仍只接受 v1.19.30 的四个 Unix OS/arch 内置核心 hash，继续核验 provenance receipt 与执行文件身份，不执行旧用户树 binary。移除 YAML 策略不扩大可信核心版本范围。Mihari 不再保证所有传给 root 核心的字段都经注册表审计；关键覆盖不限制所有额外 listener 或文件访问。
 
+可信核心以 `D/runtime/core-home` 为工作目录，启动配置固定为 `D/runtime/config.yaml`。更新和回滚在重新核验已发布配置的身份后，通过空路径 reload 重载启动时绑定的配置。mihomo 的显式 reload 路径受工作目录安全检查约束，不能直接传入位于该目录之外的配置路径；此流程不扩大 `SAFE_PATHS`，也不关闭路径检查。
+
 升级时先恢复旧 provider/resource WAL，再从活动订阅的原缓存生成配置。旧哈希命名 provider、Geo 资源和有效配置不会被主动删除；原缓存缺失或无效时返回可诊断错误并保留原数据，不从生成配置猜测 URL 或联网补回源数据。核心 receipt 中的历史 policy_id 字符串继续兼容，它不代表仍启用 YAML 策略。
 
 Unix 安装、迁移、服务生命周期与已安装服务自更新统一经过 app installer 的停机事务。锁顺序为 B install → 私有服务 P install → data → endpoint；永久锁文件不 unlink。daemon/Manager 仍是运行业务的唯一写入者，窄例外仅包括 root installer 在停机事务中迁移业务文件及维护安装资源，以及固定应用通道 metadata 的受锁保护维护。TUI 可经 logging 写自己的固定日志序列，不能直接写 settings、订阅或 token。
