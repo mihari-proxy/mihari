@@ -22,6 +22,7 @@ SUPPLEMENTAL = {
         "TestNativeBinaryStageCleanup_CrashAndIdentityMismatch",
         "TestNativeInstallBoundary_LifecycleRetainsDataAuthority",
         "TestNativeInstallBoundary_AbsentPathMigrationStagesBothBinaries",
+        "TestNativeInstallBoundary_BootstrapResidueMigration",
         "TestNativeInstallBoundary_ServiceIdentityRecovery",
         "TestNativeInstallBoundary_SourceRecoveryRetriesAfterRestore",
         "TestNativeInstallBoundary_UninstallAlreadyMaskedUnit",

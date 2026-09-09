@@ -137,6 +137,17 @@ func prepareMigration(ctx context.Context, opts migrationOptions) (*preparedMigr
 		return fail(err)
 	}
 	seenTop := map[string]bool{}
+	bootstrap, err := observeBootstrapSource(ctx, opts.Source)
+	if err != nil {
+		return fail(err)
+	}
+	if bootstrap != nil {
+		// An installation that never reached business initialization has no
+		// settings to migrate. The new daemon initializes its normal defaults.
+		prepared.bootstrapOnly = true
+		obs = bootstrap
+		top = nil
+	}
 	for _, entry := range top {
 		if err := rejectUnsafe(entry, entry.Name); err != nil {
 			return fail(err)
@@ -197,12 +208,15 @@ func prepareMigration(ctx context.Context, opts migrationOptions) (*preparedMigr
 	if opts.AfterCopy != nil {
 		opts.AfterCopy()
 	}
-	if err := verifyStationary(ctx, opts.Source, obs); err != nil {
+	prepared.obs = obs
+	if err := prepared.verifySource(ctx); err != nil {
 		return fail(err)
 	}
 
-	if err := validateStagedBusiness(ctx, opts, prepared, goos, arch); err != nil {
-		return fail(err)
+	if !prepared.bootstrapOnly {
+		if err := validateStagedBusiness(ctx, opts, prepared, goos, arch); err != nil {
+			return fail(err)
+		}
 	}
 	if err := verifyInstallBinary(ctx, opts, prepared); err != nil {
 		return fail(err)
@@ -956,7 +970,7 @@ func (p *preparedMigration) recheckAndPublish(ctx context.Context) error {
 	if p.afterStop != nil {
 		p.afterStop()
 	}
-	if err := verifyStationary(ctx, p.source, p.obs); err != nil {
+	if err := p.verifySource(ctx); err != nil {
 		return err
 	}
 	if p.target == nil || p.staging == nil {

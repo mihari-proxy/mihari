@@ -77,3 +77,31 @@ func migrationTrustedTempDir(t *testing.T) string {
 	}
 	return root
 }
+
+func TestUnixMigration_BootstrapResidueReadOnlySource(t *testing.T) {
+	fx := bootstrapMigrationFixture(t)
+	ctx := context.Background()
+	source, err := openReadOnlyMigrationRoot(ctx, fx.source.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	opts := fx.options()
+	opts.Source = source
+	prepared, err := prepareMigration(ctx, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.cleanup()
+	if err := prepared.recheckAndPublish(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, fx.source.osPath("transactions/"+testTxnID+"/transaction-id"), []byte(testTxnID))
+	if err := prepared.recheckAndPublish(ctx); err == nil || apiCode(err) != protocol.CodeRevisionConflict {
+		t.Fatalf("new transaction accepted after source observation: %v", err)
+	}
+}

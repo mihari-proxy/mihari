@@ -49,6 +49,7 @@ type preparedMigration struct {
 	activeID                string
 	coreHash                string
 	obs                     map[string]sourceObservation
+	bootstrapOnly           bool
 	afterStop               func()
 	cleanupOnce             sync.Once
 	cleanupFn               func()

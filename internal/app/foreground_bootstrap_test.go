@@ -121,3 +121,65 @@ func TestUnixBootstrap_PersistsRecoveryBeforePreparingData(t *testing.T) {
 		t.Fatal("data preparation began without a durable recovery journal")
 	}
 }
+
+func TestUnixBootstrap_RejectsExistingDataWithoutLeavingMarker(t *testing.T) {
+	h := newInstallHarness(t, InstallDataCreate)
+	h.tx.Service, h.tx.Effects = nil, nil
+	want := errors.New("existing data requires recovery or migration")
+	b := ForegroundBootstrap{Root: true, Transaction: h.tx,
+		DiscoverSource:    func(context.Context) (bool, error) { return false, nil },
+		InitializeJournal: func(context.Context, string) error { return want },
+		CreateData:        func(context.Context) error { t.Fatal("created data after rejection"); return nil },
+		Run:               func(context.Context, string) error { t.Fatal("started after rejection"); return nil },
+	}
+	for range 2 {
+		if err := b.Start(context.Background()); !errors.Is(err, want) {
+			t.Fatalf("bootstrap error = %v", err)
+		}
+		marker, err := h.tx.Store.files.inspect(context.Background(), transactionMarkerPath(testTxnID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if marker.Present {
+			t.Fatal("rejected bootstrap left a transaction marker")
+		}
+	}
+}
+
+func TestUnixBootstrap_InitializesBeforeCreatingPrivateMetadata(t *testing.T) {
+	h := newInstallHarness(t, InstallDataCreate)
+	h.tx.Private = true
+	h.tx.Service, h.tx.Effects = nil, nil
+	ran := false
+	b := ForegroundBootstrap{Root: true, Transaction: h.tx,
+		DiscoverSource: func(context.Context) (bool, error) { return false, nil },
+		InitializeJournal: func(ctx context.Context, id string) error {
+			marker, err := h.tx.Store.files.inspect(ctx, transactionMarkerPath(id))
+			if err != nil {
+				return err
+			}
+			if marker.Present {
+				return errors.New("existing data requires recovery or migration")
+			}
+			return nil
+		},
+		PrepareJournal: func(ctx context.Context, id string) error {
+			journal, err := h.tx.Store.Load(ctx)
+			if err != nil {
+				return err
+			}
+			if journal.TransactionID != id {
+				t.Fatal("journal lost bootstrap identity")
+			}
+			return nil
+		},
+		CreateData: func(context.Context) error { return nil },
+		Run:        func(context.Context, string) error { ran = true; return nil },
+	}
+	if err := b.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !ran {
+		t.Fatal("private bootstrap did not reach daemon")
+	}
+}

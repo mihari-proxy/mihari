@@ -372,6 +372,50 @@ func TestNativeInstallBoundary_AbsentPathMigrationStagesBothBinaries(t *testing.
 		}
 	}
 }
+
+func TestNativeInstallBoundary_BootstrapResidueMigration(t *testing.T) {
+	ctx, s, _, _ := nativeBoundarySession(t)
+	fx := bootstrapMigrationFixture(t)
+	before := fx.sourceHashes(t)
+	source, err := openReadOnlyMigrationRoot(ctx, fx.source.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	req := fx.request()
+	req.Layout, req.Data, req.InstallRoot = InstallLayoutPrivate, s.layout.Data.Root, s.layout.InstallRoot
+	req.PathBinary = filepath.Join(filepath.Dir(s.layout.InstallRoot), "mihari-path")
+	inputs := &nativeReleaseInputs{source: source, binary: fx.binary, trust: fx.trust, resources: map[string][]byte{}}
+	nativeBoundaryApply(t, ctx, s, req, service.Definition{Status: service.StatusNotInstalled}, inputs)
+	if s.tx.prepared != nil {
+		t.Cleanup(func() {
+			if err := s.tx.prepared.staging.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	for _, path := range []string{req.PathBinary, filepath.Join(s.layout.InstallRoot, "mihari")} {
+		raw, err := os.ReadFile(path)
+		if err != nil || string(raw) != string(fx.binary) {
+			t.Fatalf("candidate not published: %s (%v)", path, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(s.layout.Data.Root, "locks", "install-data-id")); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"mihari.yaml", "transactions"} {
+		if _, err := os.Stat(filepath.Join(s.layout.Data.Root, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("bootstrap source published unexpected %s: %v", name, err)
+		}
+	}
+	if !mapsEqual(before, fx.sourceHashes(t)) {
+		t.Fatal("bootstrap source changed during native migration")
+	}
+}
 func TestNativeInstallBoundary_ServiceIdentityRecovery(t *testing.T) {
 	ctx, s, manager, target := nativeBoundarySession(t)
 	oldFile := target.Files[0]
