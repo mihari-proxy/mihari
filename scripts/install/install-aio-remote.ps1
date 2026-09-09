@@ -240,6 +240,8 @@ public static class MihariInstallerCapabilityProbe {
       p.StartInfo = new ProcessStartInfo(executable, "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + command) {
         UseShellExecute=false, CreateNoWindow=true, RedirectStandardOutput=true, RedirectStandardError=true, WorkingDirectory=root };
       p.StartInfo.EnvironmentVariables.Clear();
+      // Resolve built-in capability commands from this host, never inherited modules.
+      p.StartInfo.EnvironmentVariables["PSModulePath"] = Path.Combine(Path.GetDirectoryName(executable), "Modules");
       foreach (var key in new [] {"SystemRoot", "WINDIR"}) {
         var value = Environment.GetEnvironmentVariable(key);
         if (value != null) p.StartInfo.EnvironmentVariables[key] = value;

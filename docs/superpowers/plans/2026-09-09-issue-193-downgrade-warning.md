@@ -983,3 +983,10 @@ Task 1 → Task 2 → Task 3 → Task 4 → Task 5 → Task 6 → Task 7
 - 最终Go快照 `go test ./...`、`go vet ./...`、gofmt、固定版本lint通过。全量 `go test -race -timeout=30m ./...`通过（subscription 563.211s）；随后唯一Go文案修正另跑相关app race通过。默认10分钟race的历史超时保留，CI不改变该限制。
 
 - 提交前最终完整脚本验证（包含portable pwsh）：176 passed、10 native Windows skipped、5 subtests passed；未把skip标为原生通过。全部82个改动文件均属于#193代码/测试/文档/已有CI接入，无CHANGELOG、依赖、subscription实现或临时制品。文档链接/围栏及diff检查通过。
+
+- 已提交268a971并创建PR #222（dev，Closes #193），工作树保留；首轮13:09 UTC及十分钟后13:19 UTC已实际检查CI与bot。Cubic/Pullfrog进行中；CodeRabbit按组织标签配置跳过，不计审核通过。
+- 首轮CI：六目标build、Linux unit/race、三OS vet/format、lint/vuln/coverage、Linux/macOS原生安全及汇总门禁通过；Windows/macOS unit在新脚本测试失败，另外两OS race尚在运行。正在修正，不声明CI完成。
+- Windows CI揭示PS7父shell→Python→PS5.1继承不兼容PSModulePath，新增replacement pytest步骤固定Windows原生powershell；不改产品环境权限。参数测试还揭示真实P2：表达式数组被当单参数传递，补count/type回归Red后改为命名string[] splat。
+- macOS三个PTY用例看到提示后等待退出超时；fixture改为等待期间继续读取PTY echo/EOF，保留原时限/退出断言，Linux3case通过及独立复审PASS。BSD关闭等待排空属于根因推断，仍须macOS CI证实，不扩大或跳过测试。
+
+- CI修复定向复审PASS：两份PS服务参数使用string[]命名展开（6项便携测试）；remote隔离probe仅搜索所选宿主内置Modules（新环境契约Red→Green、最终48 passed）。前次remote48中1项外层20秒超时，单独4项及无改动完整48复跑通过，未放宽任何时限。原生Windows/macOS仍待下一CI；无新产品范围。

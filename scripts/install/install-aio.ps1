@@ -326,7 +326,8 @@ function Invoke-ReplacementAction($Plan) {
       try {
         Assert-ReplacementPreview $Plan.Preview $Plan.Candidate $Plan.Targets
         $global:LASTEXITCODE = 0
-        & $Plan.Candidate @($Plan.ServiceArgs)
+        [string[]]$serviceArguments = $Plan.ServiceArgs
+        & $Plan.Candidate @serviceArguments
         if ($LASTEXITCODE -ne 0) { throw 'Mihari service operation failed.' }
       } catch {
         if ($running) { Start-Service -Name mihari -ErrorAction SilentlyContinue }

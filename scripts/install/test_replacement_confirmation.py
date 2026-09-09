@@ -115,12 +115,21 @@ def test_posix_real_terminal_defaults_no(tmp_path, answer, accepted):
         assert b"[y/N]" in output, output
         assert b"service: v2.0.0 -> v1.0.0" in output
         os.write(fd, answer.encode())
+        # Drain terminal echo while waiting: BSD PTY slave close may wait for
+        # the master to consume queued output before the child can exit.
         while time.monotonic() < deadline:
+            ready, _, _ = select.select([fd], [], [], 0.01)
+            if ready:
+                try:
+                    output += os.read(fd, 8192)
+                except OSError as exc:
+                    import errno
+                    if exc.errno != errno.EIO:  # Linux PTY EOF
+                        raise
             waited, status = os.waitpid(pid, os.WNOHANG)
             if waited:
                 assert (os.waitstatus_to_exitcode(status) == 0) is accepted
                 return
-            select.select([], [], [], 0.01)
         pytest.fail("terminal confirmation did not exit")
     finally:
         os.close(fd)
@@ -376,7 +385,7 @@ def test_windows_native_user_writable_old_binary_is_not_run_as_admin(tmp_path, n
 def test_windows_service_action_preserves_argument_boundaries(tmp_path, name):
     candidate = tmp_path / 'candidate with spaces.ps1'
     argv = tmp_path / 'argv'
-    candidate.write_text('$args | ConvertTo-Json -Compress | Set-Content -LiteralPath ' + ps_literal(argv))
+    candidate.write_text('@{count=$args.Count; firstIsString=($args[0] -is [string]); secondIsString=($args[1] -is [string]); values=@($args | ForEach-Object {[string]$_})} | ConvertTo-Json -Compress | Set-Content -LiteralPath ' + ps_literal(argv))
     source = ps_replacement_block(name) + '\n'
     source += "function Get-ReplacementService { [pscustomobject]@{Definition='same'; Running=$false} }\n"
     source += '$candidate=' + ps_literal(candidate) + '\n$targets=@($candidate)\n'
@@ -384,7 +393,7 @@ def test_windows_service_action_preserves_argument_boundaries(tmp_path, name):
     source += "Invoke-ReplacementAction ([pscustomobject]@{Action='Service'; Preview=$p; Candidate=$candidate; Targets=$targets; ServiceArgs=@('service','reinstall')})\n"
     result = run_ps(tmp_path, source)
     assert result.returncode == 0, result.stderr
-    assert json.loads(argv.read_text(encoding='utf-8-sig')) == ['service', 'reinstall']
+    assert json.loads(argv.read_text(encoding='utf-8-sig')) == {'count': 2, 'firstIsString': True, 'secondIsString': True, 'values': ['service', 'reinstall']}
 
 
 @pytest.mark.parametrize('name', ['install.ps1', 'install-aio.ps1'])
@@ -471,6 +480,8 @@ def test_windows_native_uac_handoff_consumes_original_preview(tmp_path, changed)
     env.pop('MIHARI_INSTALL_TEST_MODE', None)
     result = run_ps(tmp_path, source, env)
     assert (result.returncode == 0) is (not changed), result.stderr
+    if changed:
+        assert 'Installation changed' in result.stderr, result.stderr
     assert target.read_bytes() == (b'changed-after-preview' if changed else b'new')
 
 

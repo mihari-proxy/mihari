@@ -217,3 +217,19 @@ def test_remote_handoff_preserves_handled_optional_lookup_errors(tmp_path):
                     ' -BundleDir ' + literal(tmp_path) + ' -VerifiedSource $true\n')
     assert result.returncode == 0, result.stderr
     assert (tmp_path / 'installed').exists()
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX process-environment fixture; native Windows uses the real capability script')
+def test_remote_probe_searches_only_selected_host_builtin_modules(tmp_path):
+    # Exercise the production C# process boundary with a native shell fixture
+    # which reports its inherited module path before any PowerShell startup.
+    host = tmp_path / 'probe-host'
+    host.write_text('#!/bin/sh\nprintf "%s" "$PSModulePath"\n')
+    host.chmod(0o700)
+    inner = tmp_path / 'install-aio.ps1'
+    inner.write_text(installer_source(literal(CAPS)))
+    source = handoff_block() + '\nInvoke-VerifiedLocalInstaller -Installer ' + literal(inner) + ' -BundleDir ' + literal(tmp_path) + ' -VerifiedSource $true\n'
+    source += '[MihariInstallerCapabilityProbe]::Query(' + literal(host) + ", '', " + literal(tmp_path) + ')\n'
+    result = run_ps(tmp_path, source)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(tmp_path / 'Modules')
