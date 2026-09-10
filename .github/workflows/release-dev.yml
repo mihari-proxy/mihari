@@ -311,6 +311,22 @@ jobs:
       - name: Ensure installation guidance in release notes
         run: |
           NOTES="$(gh release view "${VERSION}" --json body -q .body)"
+          cat > /tmp/install_guidance_dev.md <<'TEMPLATE'
+
+          <!-- install-guidance -->
+          ## **Do not manually download all-in-one packages. We recommend using the installation scripts below for a one-click installation.**
+
+          ## **不建议手动下载all in one，推荐使用下方安装脚本一键完成。**
+          <!-- /install-guidance -->
+          TEMPLATE
+          cat > /tmp/install_guidance_legacy_dev.md <<'TEMPLATE'
+          <!-- install-guidance -->
+          > **Installation:** Use the complete installation commands in the [README](https://github.com/mihari-proxy/mihari/tree/dev#quick-start) or these release notes. Do not download and run individual release assets directly.
+          >
+          > **安装建议：** 请使用 [README](https://github.com/mihari-proxy/mihari/blob/dev/README.zh-CN.md) 或本 Release notes 提供的完整安装命令；不建议单独下载并直接运行 Release assets。
+          <!-- /install-guidance -->
+          TEMPLATE
+          GUIDANCE="$(cat /tmp/install_guidance_dev.md)"
           START_MARKER='<!-- install-guidance -->'
           END_MARKER='<!-- /install-guidance -->'
           has_start=0
@@ -322,18 +338,44 @@ jobs:
             exit 1
           fi
           if [ "$has_start" -eq 1 ]; then
+            UPDATED_NOTES="$(printf '%s\n' "$NOTES" | awk \
+              -v legacy_file=/tmp/install_guidance_legacy_dev.md \
+              -v guidance_file=/tmp/install_guidance_dev.md '
+                BEGIN {
+                  while ((getline line < legacy_file) > 0) legacy[++legacy_count] = line
+                  close(legacy_file)
+                  while ((getline line < guidance_file) > 0) guidance[++guidance_count] = line
+                  close(guidance_file)
+                }
+                $0 == legacy[1] {
+                  block[1] = $0
+                  block_count = 1
+                  matches_legacy = 1
+                  for (line_number = 2; line_number <= legacy_count; line_number++) {
+                    if ((getline line) <= 0) {
+                      matches_legacy = 0
+                      break
+                    }
+                    block[++block_count] = line
+                    if (line != legacy[line_number]) matches_legacy = 0
+                  }
+                  if (matches_legacy && block_count == legacy_count) {
+                    for (line_number = 1; line_number <= guidance_count; line_number++) print guidance[line_number]
+                  } else {
+                    for (line_number = 1; line_number <= block_count; line_number++) print block[line_number]
+                  }
+                  next
+                }
+                { print }
+              ')"
+            if [ "$UPDATED_NOTES" != "$NOTES" ]; then
+              gh release edit "${VERSION}" --notes "$UPDATED_NOTES"
+              exit 0
+            fi
             echo "installation guidance already present — skipping"
             exit 0
           fi
-          cat > /tmp/install_guidance_dev.md <<'TEMPLATE'
-
-          <!-- install-guidance -->
-          > **Installation:** Use the complete installation commands in the [README](https://github.com/mihari-proxy/mihari/tree/dev#quick-start) or these release notes. Do not download and run individual release assets directly.
-          >
-          > **安装建议：** 请使用 [README](https://github.com/mihari-proxy/mihari/blob/dev/README.zh-CN.md) 或本 Release notes 提供的完整安装命令；不建议单独下载并直接运行 Release assets。
-          <!-- /install-guidance -->
-          TEMPLATE
-          gh release edit "${VERSION}" --notes "$(printf '%s\n%s\n' "$(cat /tmp/install_guidance_dev.md)" "$NOTES")"
+          gh release edit "${VERSION}" --notes "$(printf '%s\n%s\n' "$GUIDANCE" "$NOTES")"
 
       - name: Final verify prerelease and stable latest
         run: |

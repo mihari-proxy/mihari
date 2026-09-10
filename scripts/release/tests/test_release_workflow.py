@@ -62,6 +62,14 @@ def _workflow_step(document, job_name, *, name=None, uses=None):
     return matches[0]
 
 
+def _installation_guidance_block(notes):
+    start_marker = "<!-- install-guidance -->"
+    end_marker = "<!-- /install-guidance -->"
+    start = notes.index(start_marker)
+    end = notes.index(end_marker, start) + len(end_marker)
+    return notes[start:end]
+
+
 def _shell_invocations(run):
     normalized = run.replace("\\\n", " ")
     invocations = []
@@ -1148,6 +1156,15 @@ def test_stable_and_dev_release_notes_upsert_guidance_without_replacing_existing
             "release",
             "https://github.com/mihari-proxy/mihari/blob/main/README.zh-CN.md",
             "https://github.com/mihari-proxy/mihari#quick-start",
+            "<!-- install-guidance -->\n"
+            "> **Installation:** Use the complete installation commands in the "
+            "[README](https://github.com/mihari-proxy/mihari#quick-start) or these "
+            "release notes. Do not download and run individual release assets directly.\n"
+            ">\n"
+            "> **安装建议：** 请使用 [README](https://github.com/mihari-proxy/mihari/"
+            "blob/main/README.zh-CN.md) 或本 Release notes 提供的完整安装命令；不建议单独下载并直接运行 "
+            "Release assets。\n"
+            "<!-- /install-guidance -->",
             "Generated changes\n\n<!-- aio-install -->\nstable commands\n",
         ),
         (
@@ -1155,6 +1172,11 @@ def test_stable_and_dev_release_notes_upsert_guidance_without_replacing_existing
             "publish",
             "https://github.com/mihari-proxy/mihari/blob/dev/README.zh-CN.md",
             "https://github.com/mihari-proxy/mihari/tree/dev#quick-start",
+            "<!-- install-guidance -->\n"
+            "## **Do not manually download all-in-one packages. We recommend using the "
+            "installation scripts below for a one-click installation.**\n\n"
+            "## **不建议手动下载all in one，推荐使用下方安装脚本一键完成。**\n"
+            "<!-- /install-guidance -->",
             "This is a development release.\n\n<!-- github-release-dev -->\n\n"
             "<!-- aio-install-dev -->\ndev commands\n",
         ),
@@ -1179,7 +1201,14 @@ fi
     )
     fake_gh.chmod(0o755)
 
-    for index, (document, job_name, readme_url, english_readme_url, existing_body) in enumerate(cases):
+    for index, (
+        document,
+        job_name,
+        readme_url,
+        english_readme_url,
+        expected_guidance,
+        existing_body,
+    ) in enumerate(cases):
         steps = document["jobs"][job_name]["steps"]
         guidance = _workflow_step(
             document,
@@ -1197,7 +1226,7 @@ fi
 
         notes = tmp_path / f"notes-{index}.md"
         edited = tmp_path / f"edited-{index}.md"
-        notes.write_text(existing_body, encoding="utf-8")
+        notes.write_text(existing_body, encoding="utf-8", newline="\n")
         script = (
             f'export PATH="{_bash_path(fake_bin)}:$PATH"\n'
             f'export FAKE_NOTES="{_bash_path(notes)}"\n'
@@ -1216,12 +1245,15 @@ fi
         assert existing_body.rstrip("\n") in updated
         assert updated.count("<!-- install-guidance -->") == 1
         assert updated.count("<!-- /install-guidance -->") == 1
-        assert readme_url in updated
-        assert english_readme_url in updated
-        assert "Do not download and run individual release assets directly." in updated
-        assert "不建议单独下载并直接运行 Release assets" in updated
+        assert _installation_guidance_block(updated) == expected_guidance
+        if job_name == "release":
+            assert readme_url in updated
+            assert english_readme_url in updated
+        else:
+            assert readme_url not in updated
+            assert english_readme_url not in updated
 
-        notes.write_text(updated, encoding="utf-8")
+        notes.write_text(updated, encoding="utf-8", newline="\n")
         edited.unlink()
         second = subprocess.run(
             [_bash_for_workflow_guard(), "-eu", "-o", "pipefail", "-c", script],
@@ -1232,6 +1264,33 @@ fi
         )
         assert second.returncode == 0, second.stderr
         assert not edited.exists()
+
+        if job_name == "publish":
+            legacy_guidance = (
+                "<!-- install-guidance -->\n"
+                "> **Installation:** Use the complete installation commands in the "
+                "[README](https://github.com/mihari-proxy/mihari/tree/dev#quick-start) "
+                "or these release notes. Do not download and run individual release assets "
+                "directly.\n>\n"
+                "> **安装建议：** 请使用 [README](https://github.com/mihari-proxy/mihari/"
+                "blob/dev/README.zh-CN.md) 或本 Release notes 提供的完整安装命令；不建议单独下载并直接运行 "
+                "Release assets。\n"
+                "<!-- /install-guidance -->"
+            )
+            notes.write_text(
+                f"{existing_body}\n{legacy_guidance}\n", encoding="utf-8", newline="\n"
+            )
+            migrated = subprocess.run(
+                [_bash_for_workflow_guard(), "-eu", "-o", "pipefail", "-c", script],
+                encoding="utf-8",
+                capture_output=True,
+                env={**os.environ, "VERSION": "v1.2.3"},
+                check=False,
+            )
+            assert migrated.returncode == 0, migrated.stderr
+            migrated_notes = edited.read_text(encoding="utf-8")
+            assert _installation_guidance_block(migrated_notes) == expected_guidance
+            assert legacy_guidance not in migrated_notes
 
     stable_release = _workflow_step(stable, "release", name="Publish GitHub release")
     assert "body" not in stable_release["with"]
