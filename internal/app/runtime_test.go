@@ -37,6 +37,8 @@ type webConnectionCloseCall struct {
 }
 
 type recordingWebMutationRuntime struct {
+	contexts           []context.Context
+	err                error
 	selectCalls        []webProxySelectionCall
 	closeCalls         []webConnectionCloseCall
 	closeAllOperations []runtimeapi.Operation
@@ -44,29 +46,34 @@ type recordingWebMutationRuntime struct {
 	disableOperations  []runtimeapi.Operation
 }
 
-func (r *recordingWebMutationRuntime) SelectProxy(_ context.Context, operation runtimeapi.Operation, group, name string) error {
+func (r *recordingWebMutationRuntime) SelectProxy(ctx context.Context, operation runtimeapi.Operation, group, name string) error {
+	r.contexts = append(r.contexts, ctx)
 	r.selectCalls = append(r.selectCalls, webProxySelectionCall{operation: operation, group: group, name: name})
-	return nil
+	return r.err
 }
 
-func (r *recordingWebMutationRuntime) CloseConnection(_ context.Context, operation runtimeapi.Operation, id string) error {
+func (r *recordingWebMutationRuntime) CloseConnection(ctx context.Context, operation runtimeapi.Operation, id string) error {
+	r.contexts = append(r.contexts, ctx)
 	r.closeCalls = append(r.closeCalls, webConnectionCloseCall{operation: operation, id: id})
-	return nil
+	return r.err
 }
 
-func (r *recordingWebMutationRuntime) CloseAllConnections(_ context.Context, operation runtimeapi.Operation) error {
+func (r *recordingWebMutationRuntime) CloseAllConnections(ctx context.Context, operation runtimeapi.Operation) error {
+	r.contexts = append(r.contexts, ctx)
 	r.closeAllOperations = append(r.closeAllOperations, operation)
-	return nil
+	return r.err
 }
 
-func (r *recordingWebMutationRuntime) EnableTun(_ context.Context, operation runtimeapi.Operation, _ bool) (protocol.TunStatus, error) {
+func (r *recordingWebMutationRuntime) EnableTun(ctx context.Context, operation runtimeapi.Operation, _ bool) (protocol.TunStatus, error) {
+	r.contexts = append(r.contexts, ctx)
 	r.enableOperations = append(r.enableOperations, operation)
-	return protocol.TunStatus{}, nil
+	return protocol.TunStatus{}, r.err
 }
 
-func (r *recordingWebMutationRuntime) DisableTun(_ context.Context, operation runtimeapi.Operation) (protocol.TunStatus, error) {
+func (r *recordingWebMutationRuntime) DisableTun(ctx context.Context, operation runtimeapi.Operation) (protocol.TunStatus, error) {
+	r.contexts = append(r.contexts, ctx)
 	r.disableOperations = append(r.disableOperations, operation)
-	return protocol.TunStatus{}, nil
+	return protocol.TunStatus{}, r.err
 }
 
 func TestWebMutatorRoutesOperationsThroughRuntime(t *testing.T) {

@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"net/netip"
 	"path/filepath"
@@ -305,7 +304,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		go func() {
 			defer close(webDone)
 			// Panel/gateway failure must not stop mihomo supervision.
-			m.reportBackground("web-gateway", m.webGateway.Serve(ctx))
+			m.reportBackgroundContext(ctx, "web-gateway", m.webGateway.Serve(ctx))
 		}()
 		defer func() { <-webDone }()
 	}
@@ -314,7 +313,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		schedulerDone := make(chan struct{})
 		go func() {
 			defer close(schedulerDone)
-			m.reportBackground("scheduler", m.runScheduler(schedulerCtx))
+			m.reportBackgroundContext(schedulerCtx, "scheduler", m.runScheduler(schedulerCtx))
 		}()
 		defer func() {
 			cancelScheduler()
@@ -359,13 +358,22 @@ func (m *Manager) Run(ctx context.Context) error {
 }
 
 func (m *Manager) reportBackground(component string, err error) {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	m.reportBackgroundContext(context.Background(), component, err)
+}
+
+func (m *Manager) reportBackgroundContext(ctx context.Context, component string, err error) {
+	if diagnostics.AlreadyReported(err) {
 		return
 	}
-	if m.onBackgroundError == nil {
+	level, emit := diagnostics.FailureLevel(ctx, err)
+	if !emit {
 		return
 	}
-	m.onBackgroundError(component, err)
+	if m.diagnosticReporter != nil {
+		m.diagnosticReporter(ctx, diagnostics.Record{Component: component, Event: "background.failed", Level: level, Err: err})
+	} else if m.onBackgroundError != nil {
+		m.onBackgroundError(component, err)
+	}
 }
 
 func (m *Manager) Observe(observation supervisor.Observation) {

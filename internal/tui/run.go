@@ -199,6 +199,8 @@ func (r *tuiLoggingFailureReporter) report(kind tuiLoggingFailureKind, err error
 	if r.redactor != nil {
 		message = r.redactor.String(message)
 	}
+	// The logger may already be closed; failure of this last independent
+	// warning outlet cannot safely be reported through it.
 	_, _ = fmt.Fprintf(r.out, "Warning: %s\n", message)
 }
 
@@ -250,11 +252,18 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 	if resources.Redactor == nil {
 		resources.Redactor = logging.NewRedactor()
 	}
+	diagnosticReporter := logging.NewDiagnosticReporter(resources.Runtime.Logger(), resources.Redactor)
+	localDiagnostics := ui.LocalTaskDiagnostics{Reporter: diagnosticReporter}
+	actions.Diagnostics.Reporter = diagnosticReporter
+	installationWorker.diagnostics = actions.Diagnostics
+	if preparedWorker != nil {
+		preparedWorker.diagnostics = localDiagnostics
+	}
 	if options.Client != nil {
 		if err := options.Client.SetRedactor(resources.Redactor); err != nil {
 			return errors.Join(err, resources.Close())
 		}
-		if err := options.Client.SetDiagnosticReporter(logging.NewDiagnosticReporter(resources.Runtime.Logger(), resources.Redactor)); err != nil {
+		if err := options.Client.SetDiagnosticReporter(diagnosticReporter); err != nil {
 			return errors.Join(err, resources.Close())
 		}
 	}
@@ -269,7 +278,7 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 	if resources.Runtime != nil && resources.Runtime.Logger() != nil {
 		resources.Runtime.Logger().Info("tui started")
 	}
-	applier := newRunLoggingApplier(ctx, resources.Runtime)
+	applier := newRunLoggingApplier(ctx, resources.Runtime, localDiagnostics)
 
 	var controlSession *session.Session
 	var events <-chan session.Event
@@ -277,7 +286,7 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 	if options.Client != nil {
 		sessionCtx, cancel := context.WithCancel(ctx)
 		cancelSession = cancel
-		controlSession = session.New(options.Client, session.Options{})
+		controlSession = session.New(options.Client, session.Options{Reporter: diagnosticReporter})
 		events = controlSession.Start(sessionCtx)
 	}
 	model := newRunModel(ctx, options.Client, events, health, applier)
@@ -288,6 +297,7 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 			userDir, exportDir = "", ""
 		}
 		page.SetLoggingLayout(options.SplitLogging, userDir, exportDir)
+		page.SetLocalTaskDiagnostics(localDiagnostics)
 	}
 	if options.Service != nil {
 		model.SetServiceController(options.Service)
@@ -297,7 +307,7 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 	}
 	model.SetSelfUpdater(options.SelfUpdater, options.CurrentVersion, options.BinaryPath, options.Elevated)
 	model.SetSelfUpdateChannel(options.SelfUpdateChannel)
-	exportLogs := attachRunExportLogs(ctx, &model, resources, options.BuildExportLogs)
+	exportLogs := attachRunExportLogs(ctx, &model, resources, options.BuildExportLogs, localDiagnostics)
 	program := tea.NewProgram(
 		model,
 		tea.WithContext(ctx),
@@ -334,12 +344,13 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 	return finishRun(final, err, options.Output, options.Relaunch, cleanup)
 }
 
-func attachRunExportLogs(ctx context.Context, model *Model, resources LoggingResources, build func(LoggingResources) ui.ExportLogsOptions) *ui.ExportLogsModel {
+func attachRunExportLogs(ctx context.Context, model *Model, resources LoggingResources, build func(LoggingResources) ui.ExportLogsOptions, diagnostics ui.LocalTaskDiagnostics) *ui.ExportLogsModel {
 	if model == nil || build == nil {
 		return nil
 	}
 	options := build(resources)
 	options.Context = ctx
+	options.Diagnostics.Reporter = diagnostics.Reporter
 	exportLogs := ui.NewExportLogsModel(options)
 	model.exportLogs = exportLogs
 	return exportLogs
@@ -487,11 +498,11 @@ func newRunCleanup(resources *LoggingResources, cancelSession, closeSession func
 	}
 }
 
-func newRunLoggingApplier(ctx context.Context, runtime *logging.Runtime) loggingApplier {
+func newRunLoggingApplier(ctx context.Context, runtime *logging.Runtime, diagnostics ui.LocalTaskDiagnostics) loggingApplier {
 	if runtime == nil {
 		return newLoggingApplier(ctx, nil)
 	}
-	return newLoggingApplier(ctx, runtime)
+	return newLoggingApplierWithDiagnostics(ctx, runtime, diagnostics)
 }
 
 func newRunModel(ctx context.Context, client *controlclient.Client, events <-chan session.Event, health LocalLoggingHealth, applier loggingApplier) Model {

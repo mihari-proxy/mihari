@@ -1,7 +1,11 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
+	"github.com/mihari-proxy/mihari/internal/logging"
+	"log/slog"
 	"os"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -51,9 +55,10 @@ func newServiceActionCommand(use, short string, dependencies Dependencies, optio
 				return err
 			}
 		}
+		ctx := localTaskContext(command.Context(), dependencies, "service."+use)
 		var err error
 		if dependencies.ServiceAction != nil {
-			err = dependencies.ServiceAction(command.Context(), use)
+			err = dependencies.ServiceAction(ctx, use)
 		} else {
 			var controller ServiceController
 			controller, err = serviceController(dependencies)
@@ -62,6 +67,7 @@ func newServiceActionCommand(use, short string, dependencies Dependencies, optio
 			}
 		}
 		if err != nil {
+			reportLocalTaskFailure(ctx, dependencies, "service."+use+".failed", err)
 			return classifyRuntimeError(err)
 		}
 		if options.json {
@@ -74,12 +80,15 @@ func newServiceActionCommand(use, short string, dependencies Dependencies, optio
 
 func newServiceStatusCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
 	return &cobra.Command{Use: "status", Short: "Show OS service status", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
+		ctx := localTaskContext(command.Context(), dependencies, "service.status")
 		controller, err := serviceController(dependencies)
 		if err != nil {
+			reportLocalTaskFailure(ctx, dependencies, "service.status.failed", err)
 			return err
 		}
 		status, err := controller.Status()
 		if err != nil {
+			reportLocalTaskFailure(ctx, dependencies, "service.status.failed", err)
 			return classifyRuntimeError(err)
 		}
 		if options.json {
@@ -88,4 +97,29 @@ func newServiceStatusCommand(dependencies Dependencies, options *runOptions) *co
 		_, err = fmt.Fprintln(command.OutOrStdout(), string(status))
 		return err
 	}}
+}
+
+// Local commands borrow diagnostics without changing their output or file ownership.
+func localTaskContext(ctx context.Context, dependencies Dependencies, name string) context.Context {
+	operation, bound := logging.OperationFromContext(ctx)
+	if !bound || operation.Name != name && operation.Name != "" {
+		operation = logging.OperationMetadata{}
+		id, err := operationID(dependencies)
+		if err == nil {
+			operation.ID = id
+		} else if dependencies.DiagnosticReporter != nil {
+			dependencies.DiagnosticReporter(logging.WithOperation(ctx, logging.OperationMetadata{Name: name}), diagnostics.Record{Component: "cli", Event: "local_task.id_generation_failed", Level: slog.LevelWarn, Err: err})
+		}
+	}
+	operation.Name = name
+	return logging.WithOperation(ctx, operation)
+}
+
+func reportLocalTaskFailure(ctx context.Context, dependencies Dependencies, event string, err error) {
+	if dependencies.DiagnosticReporter == nil || diagnostics.AlreadyReported(err) {
+		return
+	}
+	if level, report := diagnostics.FailureLevel(ctx, err); report {
+		dependencies.DiagnosticReporter(ctx, diagnostics.Record{Component: "cli", Event: event, Level: level, Err: err})
+	}
 }

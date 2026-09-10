@@ -511,7 +511,9 @@ func TestManagerIgnoresWebGatewayCancellation(t *testing.T) {
 		WebGateway:        errorGateway{err: context.Canceled},
 		OnBackgroundError: func(string, error) { called = true },
 	})
-	_ = manager.Run(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = manager.Run(ctx)
 	if called {
 		t.Fatal("cancellation reported as background error")
 	}
@@ -539,8 +541,9 @@ func TestManagerIgnoresSchedulerCancellation(t *testing.T) {
 	called := false
 	manager := newTestManager(Options{
 		Supervisor: &fakeSupervisor{run: func(context.Context) error { return errors.New("stopped") }},
-		RunScheduler: func(context.Context) error {
-			return context.Canceled
+		RunScheduler: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
 		},
 		OnBackgroundError: func(string, error) { called = true },
 	})

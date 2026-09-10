@@ -5,12 +5,19 @@ import (
 	"context"
 	"fmt"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"github.com/mihari-proxy/mihari/internal/update"
 	"strings"
 )
 
+// SetLocalTaskDiagnostics borrows diagnostics for existing local preparation tasks.
+func (m *Model) SetLocalTaskDiagnostics(diagnostics ui.LocalTaskDiagnostics) {
+	m.localTaskDiagnostics = diagnostics
+}
+
 type preparedMihariResultMsg struct {
+	operation  logging.OperationMetadata
 	generation uint64
 	channel    string
 	prepared   update.PreparedUpdate
@@ -64,7 +71,9 @@ func (m *Model) startMihariPreparation() tea.Cmd {
 	m.preparationGeneration++
 	generation := m.preparationGeneration
 	m.selfCheckGeneration++ // A queued display check must not clear Preparing.
-	ctx, cancel := context.WithCancel(m.ctx)
+	ctx := m.localTaskDiagnostics.NewContext(m.ctx, "self.prepare")
+	operation, _ := logging.OperationFromContext(ctx)
+	ctx, cancel := context.WithCancel(ctx)
 	m.preparationCancel = cancel
 	updater, binary, current, channel, elevated := m.selfUpdater, m.binaryPath, m.currentVersion, m.currentMihariChannel(), m.isElevated
 	m.pending = true
@@ -81,7 +90,7 @@ func (m *Model) startMihariPreparation() tea.Cmd {
 		} else {
 			p, err = updater.Prepare(ctx, binary, current, channel)
 		}
-		return ui.PageResultMsg{Page: ui.PageSystem, Result: preparedMihariResultMsg{generation: generation, channel: channel, prepared: p, err: err}}
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: preparedMihariResultMsg{generation: generation, channel: channel, prepared: p, err: err, operation: operation}}
 	}
 }
 func (m *Model) handlePreparedMihariResult(msg preparedMihariResultMsg) (ui.Page, tea.Cmd) {

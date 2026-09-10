@@ -518,11 +518,23 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "create mihari data directories"}
 	}
 	resources := newDaemonResources(deps.PrivateFS)
+	redactor := logging.NewRedactor()
+	reporter := logging.NewFailureReporter(deps.LoggingFailureStderr, redactor, nil)
+	logSecretsReady := false
 	var closeOnce sync.Once
 	closeResources := func() error {
 		var closeErr error
 		closeOnce.Do(func() {
 			closeErr = resources.Close()
+			// Logging is closed. Keep its final failure on the independent outlet;
+			// before secret registration only a fixed summary is safe.
+			if closeErr != nil {
+				failure := closeErr
+				if !logSecretsReady {
+					failure = errors.New("close logging resources failed")
+				}
+				reporter.Report(logging.FailureCleanup, failure)
+			}
 		})
 		return closeErr
 	}
@@ -577,14 +589,13 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 		return err
 	}
 
-	redactor := logging.NewRedactor()
 	baseSecrets := collectBaseLogSecretsMode(deps.Paths, deps.Token, settings, deps.ValidationMode)
 	catalogURLs := collectCatalogLogSecretsMode(deps.Paths, deps.ValidationMode)
 	redactor.ReplaceExact(append(append([]string{}, baseSecrets...), catalogURLs...))
 	for _, secret := range baseSecrets {
 		redactor.RetainCredential(secret)
 	}
-	reporter := logging.NewFailureReporter(deps.LoggingFailureStderr, redactor, nil)
+	logSecretsReady = true
 	cfg, err := daemonLoggingConfig(settings)
 	if err != nil {
 		reportDaemonStartupFailure(diagnosticStderr, "configure logging", err)

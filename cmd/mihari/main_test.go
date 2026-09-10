@@ -1379,12 +1379,13 @@ type countingCloser struct {
 	name  string
 	order *[]string
 	calls int
+	err   error
 }
 
 func (c *countingCloser) Close() error {
 	c.calls++
 	*c.order = append(*c.order, c.name)
-	return nil
+	return c.err
 }
 
 type countingCapture struct{ *countingCloser }

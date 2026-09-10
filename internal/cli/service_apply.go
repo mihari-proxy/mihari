@@ -39,7 +39,9 @@ func newServiceApplyCommand(deps Dependencies, options *runOptions, euid func() 
 			warning = message
 			return nil
 		}
-		result, err := deps.ServiceApply(cmd.Context(), req, consent)
+		ctx := localTaskContext(cmd.Context(), deps, "service.apply")
+		result, err := deps.ServiceApply(ctx, req, consent)
+		reportLocalTaskFailure(ctx, deps, "service.apply.failed", err)
 		if err = renderReplacementWarning(cmd, options, warning, err); err != nil {
 			return err
 		}

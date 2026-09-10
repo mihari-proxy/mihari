@@ -3,11 +3,13 @@ package session
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"sync"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 type EventKind string
@@ -56,6 +58,8 @@ type Event struct {
 }
 
 type Options struct {
+	// Reporter is the optional owner-provided diagnostic output.
+	Reporter         diagnostics.Reporter
 	Backoff          func(attempt int) time.Duration
 	OrderedQueueSize int
 	EventBufferSize  int
@@ -315,10 +319,19 @@ func (s *Session) putReconnecting(ctx context.Context, attempt int, err error) b
 // the daemon-level supervisor.
 func (s *Session) superviseStreams(ctx context.Context) error {
 	streamCtx, cancelStreams := context.WithCancel(ctx)
-	defer cancelStreams()
 	streamErr := make(chan error, 1)
+	streamActive := false
+	defer func() {
+		cancelStreams()
+		// The existing generation owns all producers and their diagnostic writes.
+		// Join it before the session owner can close its logger or reconnect.
+		if streamActive {
+			<-streamErr
+		}
+	}()
 	streamHealthy := make(chan struct{}, 1)
 	startStreams := func() {
+		streamActive = true
 		// runStreams joins every old producer before reporting its error, so any
 		// buffered health signal here belongs to the completed generation.
 		select {
@@ -336,11 +349,16 @@ func (s *Session) superviseStreams(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-streamHealthy:
+			if streamAttempt > 0 && ctx.Err() == nil && s.options.Reporter != nil {
+				s.options.Reporter(ctx, diagnostics.Record{Component: "tui.session", Event: "streams_recovered", Level: slog.LevelInfo})
+			}
 			streamAttempt = 0
-		case <-streamErr:
+		case err := <-streamErr:
+			streamActive = false
 			if ctx.Err() != nil {
 				return nil
 			}
+			s.reportStreamFailure(ctx, err)
 			status, statusErr := s.client.Status(streamCtx)
 			if statusErr != nil {
 				// The fresh health probe owns the reconnect diagnosis. Keeping
@@ -370,6 +388,23 @@ func (s *Session) superviseStreams(ctx context.Context) error {
 			// ready yet and must not mark the daemon stale.
 			_ = s.pollStatus(streamCtx, status)
 		}
+	}
+}
+
+// A normal client close still requires reopening the session's push streams.
+// It is a retry transition, not a transport failure.
+var errControlStreamEnded = errors.New("control stream ended")
+
+func (s *Session) reportStreamFailure(ctx context.Context, err error) {
+	if s.options.Reporter == nil || diagnostics.AlreadyReported(err) {
+		return
+	}
+	if err == errControlStreamEnded {
+		s.options.Reporter(ctx, diagnostics.Record{Component: "tui.session", Event: "streams_ended", Level: slog.LevelDebug})
+		return
+	}
+	if level, report := diagnostics.FailureLevel(ctx, err); report {
+		s.options.Reporter(ctx, diagnostics.Record{Component: "tui.session", Event: "streams_failed", Level: level, Err: err})
 	}
 }
 
@@ -409,7 +444,7 @@ func (s *Session) runStreams(parent context.Context, healthy chan<- struct{}) er
 				return nil
 			})
 			if err == nil {
-				err = errors.New("control stream ended")
+				err = errControlStreamEnded
 			}
 			select {
 			case errCh <- err:

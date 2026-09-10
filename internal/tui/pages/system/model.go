@@ -311,6 +311,7 @@ type Model struct {
 	openBrowser           func(string) error
 	newOperationID        func() string
 	selfUpdater           SelfUpdater
+	localTaskDiagnostics  ui.LocalTaskDiagnostics
 	currentVersion        string
 	binaryPath            string
 	isElevated            func() bool

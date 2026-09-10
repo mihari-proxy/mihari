@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mihari-proxy/mihari/internal/logging"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"io"
 	"strconv"
 	"strings"
@@ -16,11 +18,13 @@ import (
 // InstallationActions connects the TUI to the read-only inspector and explicit
 // application installation manager. Execute runs only after TUI cleanup.
 type InstallationActions struct {
-	Inspect  func(context.Context) (protocol.InstallationStatus, error)
-	Plan     func(context.Context, app.InstallationPlanRequest) (app.InstallationPlan, error)
-	Execute  func(context.Context, app.InstallationExecuteRequest) (app.InstallationOutcome, error)
-	Elevated func() bool
-	Binary   string
+	// Diagnostics borrows local task metadata and reporting from Run.
+	Diagnostics ui.LocalTaskDiagnostics
+	Inspect     func(context.Context) (protocol.InstallationStatus, error)
+	Plan        func(context.Context, app.InstallationPlanRequest) (app.InstallationPlan, error)
+	Execute     func(context.Context, app.InstallationExecuteRequest) (app.InstallationOutcome, error)
+	Elevated    func() bool
+	Binary      string
 }
 
 type installationUI struct {
@@ -37,10 +41,12 @@ type installationUI struct {
 }
 
 type installationStatusMsg struct {
-	status protocol.InstallationStatus
-	err    error
+	operation logging.OperationMetadata
+	status    protocol.InstallationStatus
+	err       error
 }
 type installationPlanMsg struct {
+	operation  logging.OperationMetadata
 	plan       app.InstallationPlan
 	err        error
 	generation uint64
@@ -153,10 +159,12 @@ func (model *Model) updateInstallation(message tea.Msg) (tea.Cmd, bool) {
 			if ctx == nil {
 				ctx = context.Background()
 			}
+			ctx = u.actions.Diagnostics.NewContext(ctx, "installation.plan")
+			operation, _ := logging.OperationFromContext(ctx)
 			ctx, u.cancel = context.WithCancel(ctx)
 			return func() tea.Msg {
 				result, err := plan(ctx, app.InstallationPlanRequest{Mode: mode, Binary: binary})
-				return installationPlanMsg{plan: result, err: err, generation: generation}
+				return installationPlanMsg{plan: result, err: err, generation: generation, operation: operation}
 			}, true
 		}
 		return nil, true
@@ -182,7 +190,12 @@ func (model Model) inspectInstallation() tea.Cmd {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return func() tea.Msg { status, err := inspect(ctx); return installationStatusMsg{status: status, err: err} }
+	ctx = model.installation.actions.Diagnostics.NewContext(ctx, "installation.inspect")
+	operation, _ := logging.OperationFromContext(ctx)
+	return func() tea.Msg {
+		status, err := inspect(ctx)
+		return installationStatusMsg{status: status, err: err, operation: operation}
+	}
 }
 
 func (u *installationUI) view(width, height int) string {
@@ -242,6 +255,9 @@ func finishInstallationRun(ctx context.Context, final tea.Model, runErr error, o
 	if !ok || model.preparedInstallation == nil || model.preparedUpdate != nil || execute == nil {
 		return errors.New("installation execution unavailable")
 	}
+	// Logging has closed before this task. Keep metadata local and leave its
+	// failure on the existing return/output path rather than the closed logger.
+	ctx = (ui.LocalTaskDiagnostics{}).Context(ctx, "installation.execute")
 	outcome, err := execute(ctx, *model.preparedInstallation)
 	if err != nil {
 		var apiErr protocol.APIError

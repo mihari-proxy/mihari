@@ -108,7 +108,10 @@ func TestServe_JoinsHijackedStreamBeforeReturning(t *testing.T) {
 	<-runtime.entered
 	cancel()
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("server shutdown stuck")
 	}

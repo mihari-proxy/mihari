@@ -307,7 +307,7 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 	}
 	streamURL, err := url.Parse(c.baseURL)
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeInternal, Message: "invalid local control address"}
+		return c.reportStreamOutcome(ctx, runtimeOutcome{err: diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "invalid local control address"}, err)})
 	}
 	switch streamURL.Scheme {
 	case "http":
@@ -315,7 +315,7 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 	case "https":
 		streamURL.Scheme = "wss"
 	default:
-		return protocol.APIError{Code: protocol.CodeInternal, Message: "invalid local control address"}
+		return c.reportStreamOutcome(ctx, runtimeOutcome{err: protocol.APIError{Code: protocol.CodeInternal, Message: "invalid local control address"}})
 	}
 	streamURL.Path = strings.TrimRight(streamURL.Path, "/") + "/v1/streams/" + url.PathEscape(kind)
 	header := http.Header{}
@@ -324,7 +324,7 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 		if ctx.Err() != nil {
 			return nil
 		}
-		return err
+		return c.reportStreamOutcome(ctx, runtimeOutcome{err: err})
 	}
 	header.Set("Authorization", "Bearer "+token)
 	connection, response, err := websocket.Dial(ctx, streamURL.String(), &websocket.DialOptions{HTTPClient: c.requestHTTP(), HTTPHeader: header})
@@ -333,9 +333,9 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 			return nil
 		}
 		if response != nil {
-			return c.responseError(response)
+			return c.reportStreamOutcome(ctx, c.responseOutcome(response))
 		}
-		return c.localError(err)
+		return c.reportStreamOutcome(ctx, c.localRuntimeOutcome(err))
 	}
 	defer connection.CloseNow()
 	connection.SetReadLimit(maxControlStreamSize)
@@ -346,18 +346,37 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 				return nil
 			}
 			if errors.Is(err, websocket.ErrMessageTooBig) {
-				return protocol.APIError{Code: protocol.CodeDataFailure, Message: "control stream message is too large"}
+				return c.reportStreamOutcome(ctx, runtimeOutcome{err: diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "control stream message is too large"}, err)})
 			}
-			return protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "control stream closed unexpectedly"}
+			return c.reportStreamOutcome(ctx, runtimeOutcome{err: diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "control stream closed unexpectedly"}, err)})
 		}
 		var event protocol.StreamEvent
 		if err := json.Unmarshal(raw, &event); err != nil || event.Schema != "mihari/v1" || event.Stream != kind {
-			return protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control stream event"}
+			return c.reportStreamOutcome(ctx, runtimeOutcome{err: diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control stream event"}, err)})
 		}
 		if err := receive(event); err != nil {
 			return err
 		}
 	}
+}
+
+// reportStreamOutcome owns local transport/decode failures and remote response
+// outcomes. Callback errors belong to the caller and never enter this path.
+func (c *Client) reportStreamOutcome(ctx context.Context, outcome runtimeOutcome) error {
+	reporter := c.diagnosticReporter()
+	if reporter == nil || diagnostics.AlreadyReported(outcome.err) {
+		return outcome.err
+	}
+	event := "stream_failed"
+	level, report := diagnostics.FailureLevel(ctx, outcome.err)
+	if outcome.remoteEnvelope {
+		event, level, report = "stream_response", slog.LevelDebug, true
+	}
+	if report {
+		reporter(ctx, diagnostics.Record{Component: "control.client", Event: event, Level: level, Err: outcome.err})
+		return diagnostics.MarkReported(outcome.err)
+	}
+	return outcome.err
 }
 
 func (c *Client) doRuntime(ctx context.Context, method, path string, input, output any) error {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	systempage "github.com/mihari-proxy/mihari/internal/tui/pages/system"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"github.com/mihari-proxy/mihari/internal/update"
 	"io"
 	"sync"
@@ -15,12 +16,13 @@ import (
 // Candidate ownership stays here until Run has applied or abandoned the result.
 type runPreparedUpdater struct {
 	systempage.PreparedSelfUpdater
-	next       uint64
-	cancels    map[uint64]context.CancelFunc
-	mu         sync.Mutex
-	closing    bool
-	workers    sync.WaitGroup
-	candidates []update.PreparedUpdate
+	diagnostics ui.LocalTaskDiagnostics
+	next        uint64
+	cancels     map[uint64]context.CancelFunc
+	mu          sync.Mutex
+	closing     bool
+	workers     sync.WaitGroup
+	candidates  []update.PreparedUpdate
 }
 
 func newRunPreparedUpdater(u systempage.PreparedSelfUpdater) *runPreparedUpdater {
@@ -40,11 +42,12 @@ func (w *runPreparedUpdater) Prepare(ctx context.Context, binary, current, chann
 	w.workers.Add(1)
 	w.mu.Unlock()
 	defer func() { cancel(); w.mu.Lock(); delete(w.cancels, id); w.mu.Unlock(); w.workers.Done() }()
+	child = w.diagnostics.Context(child, "self.prepare")
 	prepared, err := w.PreparedSelfUpdater.Prepare(child, binary, current, channel)
 	w.mu.Lock()
 	w.candidates = append(w.candidates, prepared)
 	w.mu.Unlock()
-	return prepared, err
+	return prepared, w.diagnostics.ReportFailure(child, "self.prepare.failed", err)
 }
 func (w *runPreparedUpdater) shutdown() {
 	w.mu.Lock()
@@ -89,6 +92,9 @@ func finishPreparedRun(ctx context.Context, final tea.Model, runErr error, out i
 	if apply == nil {
 		return fmt.Errorf("apply prepared Mihari update: unavailable")
 	}
+	// Cleanup deliberately closes logging before replacement. This task only
+	// binds metadata; its existing safe error/partial-success outlet remains owner.
+	ctx = (ui.LocalTaskDiagnostics{}).Context(ctx, "self.apply")
 	result, err := apply(ctx, *model.preparedUpdate)
 	if !result.Updated {
 		if err != nil {
