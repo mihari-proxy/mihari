@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -21,6 +22,20 @@ type diagnosticCapture struct {
 	contexts []logging.OperationMetadata
 }
 
+type diagnosticReadCloser struct {
+	io.Reader
+	closes int
+}
+
+func (r *diagnosticReadCloser) Close() error {
+	r.closes++
+	return nil
+}
+
+type diagnosticErrorReader struct{ err error }
+
+func (r diagnosticErrorReader) Read([]byte) (int, error) { return 0, r.err }
+
 func (c *diagnosticCapture) report(ctx context.Context, record diagnostics.Record) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -37,8 +52,9 @@ func (c *diagnosticCapture) snapshot() ([]diagnostics.Record, []logging.Operatio
 
 func TestUpdateLogging_LocalResponseFailureReportsBoundRequestOperation(t *testing.T) {
 	capture := new(diagnosticCapture)
+	body := &diagnosticReadCloser{Reader: strings.NewReader(`not json`)}
 	client := NewHTTP("http://mihari", "token", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`not json`))}, nil
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body}, nil
 	})})
 	if err := client.SetDiagnosticReporter(capture.report); err != nil {
 		t.Fatal(err)
@@ -50,6 +66,10 @@ func TestUpdateLogging_LocalResponseFailureReportsBoundRequestOperation(t *testi
 	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure {
 		t.Fatalf("error=%v", err)
 	}
+	var syntaxError *json.SyntaxError
+	if !errors.As(err, &syntaxError) || err.Error() != "invalid control response" || body.closes == 0 {
+		t.Fatalf("decode cause/body close lost: err=%v closes=%d", err, body.closes)
+	}
 
 	records, operations := capture.snapshot()
 	if len(records) != 2 {
@@ -58,10 +78,38 @@ func TestUpdateLogging_LocalResponseFailureReportsBoundRequestOperation(t *testi
 	if records[0].Level != slog.LevelDebug || records[1].Level != slog.LevelError {
 		t.Fatalf("levels=%v,%v want debug,error", records[0].Level, records[1].Level)
 	}
+	if !errors.As(records[1].Err, &syntaxError) || records[1].Err.Error() != "invalid control response" {
+		t.Fatalf("diagnostic decode cause=%v", records[1].Err)
+	}
 	for _, operation := range operations {
 		if operation.ID != "logging-op" || operation.Name != "logging.update" {
 			t.Fatalf("operation=%#v", operation)
 		}
+	}
+}
+
+func TestUpdateLogging_LocalResponseTypeFailureKeepsDiagnosticCause(t *testing.T) {
+	capture := new(diagnosticCapture)
+	body := &diagnosticReadCloser{Reader: strings.NewReader(`{"schema":"mihari/v1","revision":"private-response"}`)}
+	client := NewHTTP("http://mihari", "token", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body}, nil
+	})})
+	if err := client.SetDiagnosticReporter(capture.report); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := client.UpdateLogging(context.Background(), protocol.LoggingUpdateRequest{OperationID: "logging-type"})
+	var apiError protocol.APIError
+	var typeError *json.UnmarshalTypeError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "invalid control response" || !errors.As(err, &typeError) || err.Error() != "invalid control response" || body.closes == 0 {
+		t.Fatalf("error=%v closes=%d", err, body.closes)
+	}
+	records, operations := capture.snapshot()
+	if len(records) != 2 || records[1].Event != "logging_update_failed" || records[1].Level != slog.LevelError || !errors.As(records[1].Err, &typeError) || operations[1].ID != "logging-type" {
+		t.Fatalf("records=%#v operations=%#v", records, operations)
+	}
+	if strings.Contains(err.Error(), "private-response") || strings.Contains(records[1].Err.Error(), "private-response") {
+		t.Fatal("raw response leaked")
 	}
 }
 
@@ -110,19 +158,52 @@ func TestUpdateLogging_TransportFailureKeepsDiagnosticCause(t *testing.T) {
 }
 
 func TestUpdateLogging_InvalidErrorEnvelopeIsLocalFailure(t *testing.T) {
-	capture := new(diagnosticCapture)
-	client := NewHTTP("http://mihari", "token", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusInternalServerError, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`not an envelope`))}, nil
-	})})
-	if err := client.SetDiagnosticReporter(capture.report); err != nil {
-		t.Fatal(err)
-	}
+	readerCause := errors.New("response reader failed")
+	for _, test := range []struct {
+		name       string
+		reader     io.Reader
+		wantCause  error
+		wantSyntax bool
+	}{
+		{name: "syntax", reader: strings.NewReader(`not an envelope`), wantSyntax: true},
+		{name: "reader", reader: diagnosticErrorReader{err: readerCause}, wantCause: readerCause},
+		{name: "missing code", reader: strings.NewReader(`{"schema":"mihari.error/v1","error":{"message":"private-response"}}`)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			capture := new(diagnosticCapture)
+			body := &diagnosticReadCloser{Reader: test.reader}
+			client := NewHTTP("http://mihari", "token", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusInternalServerError, Header: make(http.Header), Body: body}, nil
+			})})
+			if err := client.SetDiagnosticReporter(capture.report); err != nil {
+				t.Fatal(err)
+			}
 
-	_, err := client.UpdateLogging(context.Background(), protocol.LoggingUpdateRequest{OperationID: "logging-op"})
-	assertControlCode(t, err, protocol.CodeDataFailure)
-	records, _ := capture.snapshot()
-	if len(records) != 2 || records[1].Level != slog.LevelError {
-		t.Fatalf("records=%#v", records)
+			_, err := client.UpdateLogging(context.Background(), protocol.LoggingUpdateRequest{OperationID: "logging-op"})
+			var apiError protocol.APIError
+			if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "invalid control error response" || err.Error() != "invalid control error response" || body.closes == 0 {
+				t.Fatalf("error=%v closes=%d", err, body.closes)
+			}
+			var syntaxError *json.SyntaxError
+			if test.wantSyntax != errors.As(err, &syntaxError) {
+				t.Fatalf("syntax cause present=%v want=%v err=%v", syntaxError != nil, test.wantSyntax, err)
+			}
+			if test.wantCause != nil && !errors.Is(err, test.wantCause) {
+				t.Fatalf("reader cause lost: %v", err)
+			}
+			if test.wantCause == nil && !test.wantSyntax {
+				if errors.Is(err, readerCause) || syntaxError != nil {
+					t.Fatalf("missing-code response acquired fabricated cause: %v", err)
+				}
+			}
+			records, _ := capture.snapshot()
+			if len(records) != 2 || records[1].Event != "logging_update_failed" || records[1].Level != slog.LevelError || records[1].Err.Error() != "invalid control error response" {
+				t.Fatalf("records=%#v", records)
+			}
+			if strings.Contains(err.Error(), "private-response") || strings.Contains(records[1].Err.Error(), "private-response") {
+				t.Fatal("raw error response leaked")
+			}
+		})
 	}
 }
 

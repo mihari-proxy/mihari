@@ -167,10 +167,14 @@ func TestLoggingEndpointDoesNotReportAuthenticationOrJSONFailures(t *testing.T) 
 			t.Fatalf("status=%d want=%d", recorder.Code, http.StatusUnauthorized)
 		}
 	}
-	badJSON := authorizedRequest(http.MethodPatch, "/v1/logging", bytes.NewBufferString(`{"operation_id":"logging-1","secret":"must-not-parse"}`))
-	recorder := httptest.NewRecorder()
-	server.Handler().ServeHTTP(recorder, badJSON)
-	assertLoggingError(t, recorder, http.StatusBadRequest, protocol.CodeInvalidArgument)
+	for _, body := range []string{
+		`{"operation_id":"logging-1","secret":"must-not-parse"}`,
+		`{"operation_id":"logging-1","level":`,
+	} {
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodPatch, "/v1/logging", bytes.NewBufferString(body)))
+		assertLoggingError(t, recorder, http.StatusBadRequest, protocol.CodeInvalidArgument)
+	}
 	if reports != 0 {
 		t.Fatalf("diagnostic reports=%d want=0", reports)
 	}

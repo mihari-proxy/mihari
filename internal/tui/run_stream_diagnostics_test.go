@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,13 +38,13 @@ func TestRun_StreamPayloadFailureUsesOwnedReporter(t *testing.T) {
 	}
 	// LoggingResources owns the normal close; this is an idempotent fallback.
 	defer func() { _ = runtime.Close() }()
-	probed := make(chan struct{})
-	var calls atomic.Int32
+	diagnosticComplete := make(chan struct{})
+	var signalDiagnostic sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/status" {
 			_, _ = io.WriteString(w, `{"schema":"mihari/v1","revision":1}`)
-			if calls.Add(1) == 2 {
-				close(probed)
+			if raw, err := os.ReadFile(paths.TUILog); err == nil && strings.Contains(string(raw), `"msg":"streams_failed"`) {
+				signalDiagnostic.Do(func() { close(diagnosticComplete) })
 			}
 			return
 		}
@@ -72,9 +72,9 @@ func TestRun_StreamPayloadFailureUsesOwnedReporter(t *testing.T) {
 		}})
 	}()
 	select {
-	case <-probed:
+	case <-diagnosticComplete:
 	case <-ctx.Done():
-		t.Fatal("session did not probe after payload failure")
+		t.Fatal("owned stream diagnostic did not complete")
 	}
 	cancel()
 	select {

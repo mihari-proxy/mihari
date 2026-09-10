@@ -139,6 +139,7 @@ func newSelfUpdateCommand(dependencies Dependencies, options *runOptions) *cobra
 		if prepared.Available {
 			warning = update.ReplacementWarning(prepared.Preview)
 			if err := update.ValidateReplacementConsent(prepared.Preview, prepared.Consent); err != nil {
+				taskErr = err
 				return err
 			}
 		}

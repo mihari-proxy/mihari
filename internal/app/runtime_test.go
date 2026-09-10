@@ -260,7 +260,10 @@ func TestBuildRuntimeWithOptionsWiresSupervisorDiagnosticReporter(t *testing.T) 
 		SettingsPath: paths.Settings,
 		DiagnosticReporter: func(_ context.Context, record diagnostics.Record) {
 			if record.Component == "supervisor" {
-				records <- record
+				select {
+				case records <- record:
+				default:
+				}
 			}
 		},
 	})

@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/mihari-proxy/mihari/internal/app"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
+	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/update"
@@ -174,6 +177,85 @@ func TestLocalTaskDiagnostics_CLILocalOwnersPreserveJSONAndExit(t *testing.T) {
 				t.Fatal("duplicate local failure")
 			}
 		})
+	}
+}
+
+func TestLocalTaskDiagnostics_SelfConsentRefusalIsOwned(t *testing.T) {
+	t.Setenv("MIHARI_DATA", t.TempDir())
+	previous := elevate.Check
+	t.Cleanup(func() { elevate.Check = previous })
+	elevate.Check = func() bool { return true }
+	preview, err := update.NewReplacementPreview(update.ReplacementCandidate{Version: "v1.0.0"}, update.ReplacementSnapshot{Targets: []update.ReplacementTarget{{Roles: []string{"binary"}, Exists: true, Version: "v2.0.0"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"self", "update", "--json"}
+	baselineUpdater := &fakeSelfUpdater{prepared: update.PreparedUpdate{Available: true, Preview: preview}}
+	var baselineOut, baselineErr bytes.Buffer
+	baselineCode := Execute(context.Background(), args, &baselineOut, &baselineErr, Dependencies{SelfUpdater: baselineUpdater, SelfUpdateChannel: func(context.Context) (string, error) { return "main", nil }})
+
+	reportedUpdater := &fakeSelfUpdater{prepared: update.PreparedUpdate{Available: true, Preview: preview}}
+	var records []diagnostics.Record
+	var operations []logging.OperationMetadata
+	deps := Dependencies{
+		SelfUpdater:       reportedUpdater,
+		SelfUpdateChannel: func(context.Context) (string, error) { return "main", nil },
+		NewOperationID:    func() string { return "self-consent" },
+		DiagnosticReporter: func(ctx context.Context, record diagnostics.Record) {
+			operation, _ := logging.OperationFromContext(ctx)
+			records = append(records, record)
+			operations = append(operations, operation)
+		},
+	}
+	var out, stderr bytes.Buffer
+	code := Execute(context.Background(), args, &out, &stderr, deps)
+	if code != baselineCode || out.String() != baselineOut.String() || stderr.String() != baselineErr.String() {
+		t.Fatal("consent diagnostic changed CLI contract")
+	}
+	if reportedUpdater.calls != 0 || reportedUpdater.prepares != 1 {
+		t.Fatalf("prepare/apply calls=%d/%d", reportedUpdater.prepares, reportedUpdater.calls)
+	}
+	var apiErr protocol.APIError
+	if len(records) != 1 || records[0].Event != "self.update.failed" || records[0].Level != slog.LevelDebug || !errors.As(records[0].Err, &apiErr) || apiErr.Code != protocol.CodeInvalidArgument {
+		t.Fatalf("records=%#v API=%#v", records, apiErr)
+	}
+	if len(operations) != 1 || operations[0] != (logging.OperationMetadata{ID: "self-consent", Name: "self.update"}) {
+		t.Fatalf("operations=%#v", operations)
+	}
+}
+
+func TestLocalTaskDiagnostics_InvalidInstallationOutcomeIsOwned(t *testing.T) {
+	malformed := app.InstallationOutcome{Schema: app.InstallationOutcomeSchema, InstallationComplete: true, ServiceState: "unknown"}
+	baselineDeps, _, _ := installationCommandFixture(t)
+	baselineDeps.InstallationExecute = func(context.Context, app.InstallationExecuteRequest) (app.InstallationOutcome, error) {
+		return malformed, nil
+	}
+	args := []string{"service", "repair", "--json"}
+	var baselineOut, baselineErr bytes.Buffer
+	baselineCode := Execute(context.Background(), args, &baselineOut, &baselineErr, baselineDeps)
+
+	deps, _, _ := installationCommandFixture(t)
+	deps.InstallationExecute = func(context.Context, app.InstallationExecuteRequest) (app.InstallationOutcome, error) {
+		return malformed, nil
+	}
+	deps.NewOperationID = func() string { return "installation-malformed" }
+	var records []diagnostics.Record
+	var operation logging.OperationMetadata
+	deps.DiagnosticReporter = func(ctx context.Context, record diagnostics.Record) {
+		operation, _ = logging.OperationFromContext(ctx)
+		records = append(records, record)
+	}
+	var out, stderr bytes.Buffer
+	code := Execute(context.Background(), args, &out, &stderr, deps)
+	if code != baselineCode || out.String() != baselineOut.String() || stderr.String() != baselineErr.String() {
+		t.Fatal("malformed-outcome diagnostic changed CLI contract")
+	}
+	var apiErr protocol.APIError
+	if len(records) != 1 || records[0].Event != "installation.execute.failed" || records[0].Level != slog.LevelError || !errors.As(records[0].Err, &apiErr) || apiErr.Code != protocol.CodeInvalidState {
+		t.Fatalf("records=%#v API=%#v", records, apiErr)
+	}
+	if operation != (logging.OperationMetadata{ID: "installation-malformed", Name: "installation.execute"}) {
+		t.Fatalf("operation=%#v", operation)
 	}
 }
 

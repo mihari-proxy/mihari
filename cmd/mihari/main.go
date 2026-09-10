@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -94,10 +95,8 @@ func daemonServiceDiagnosticStderr(args []string, stderr io.Writer) io.Writer {
 	if stderr == nil || daemonJSONOutput(args) {
 		return nil
 	}
-	for _, arg := range args {
-		if arg == "--system-service" || arg == "--system-service=true" {
-			return stderr
-		}
+	if enabled, _ := commandBooleanFlag(args, "system-service"); enabled {
+		return stderr
 	}
 	return nil
 }
@@ -110,22 +109,47 @@ func daemonLoggingFailureStderr(args []string, stderr io.Writer) io.Writer {
 }
 
 func daemonJSONOutput(args []string) bool {
-	for _, arg := range args {
-		if arg == "--json" || arg == "--json=true" {
-			return true
-		}
-	}
-	return false
+	enabled, _ := commandBooleanFlag(args, "json")
+	return enabled
 }
 
 func daemonInvocation(args []string) bool {
 	for _, arg := range args {
-		if arg == "--json" || arg == "--json=true" || arg == "--json=false" {
+		if arg == "--" {
+			return false
+		}
+		if _, recognized := commandBooleanFlagArgument(arg, "json"); recognized {
 			continue
 		}
 		return arg == "daemon"
 	}
 	return false
+}
+
+func commandBooleanFlag(args []string, name string) (value bool, changed bool) {
+	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
+		parsed, recognized := commandBooleanFlagArgument(arg, name)
+		if recognized {
+			value, changed = parsed, true
+		}
+	}
+	return value, changed
+}
+
+func commandBooleanFlagArgument(arg, name string) (bool, bool) {
+	flag := "--" + name
+	if arg == flag {
+		return true, true
+	}
+	prefix := flag + "="
+	if !strings.HasPrefix(arg, prefix) {
+		return false, false
+	}
+	value, err := strconv.ParseBool(strings.TrimPrefix(arg, prefix))
+	return value, err == nil
 }
 
 var (

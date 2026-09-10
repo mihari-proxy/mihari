@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -354,25 +354,29 @@ func TestSchedulerGeoIPRefresh_FailureStillChecksNextRound(t *testing.T) {
 }
 
 func TestSchedulerSubscriptionRefresh_FallbackKeepsAttemptID(t *testing.T) {
-	var proxyCalls atomic.Int32
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		proxyCalls.Add(1)
-		connection, _, err := w.(http.Hijacker).Hijack()
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		if err := connection.(*net.TCPConn).SetLinger(0); err != nil {
-			t.Error(err)
-		}
-		if err := connection.Close(); err != nil {
-			t.Error(err)
-		}
-	}))
-	defer proxy.Close()
+	proxy := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	proxyURL, err := url.Parse(proxy.URL)
 	if err != nil {
 		t.Fatal(err)
+	}
+	proxy.Close()
+	var proxyConnectStarts, proxyConnectDones atomic.Int32
+	trace := &httptrace.ClientTrace{
+		ConnectStart: func(network, address string) {
+			proxyConnectStarts.Add(1)
+			if network != "tcp" || address != proxyURL.Host {
+				t.Errorf("proxy connect start network=%q address=%q want tcp %q", network, address, proxyURL.Host)
+			}
+		},
+		ConnectDone: func(network, address string, err error) {
+			proxyConnectDones.Add(1)
+			if network != "tcp" || address != proxyURL.Host {
+				t.Errorf("proxy connect done network=%q address=%q want tcp %q", network, address, proxyURL.Host)
+			}
+			if err == nil {
+				t.Error("proxy connect unexpectedly succeeded")
+			}
+		},
 	}
 	var directID string
 	downloader := subscription.NewDownloader(subscription.DownloaderOptions{ProxyURL: proxyURL, Client: &http.Client{Transport: schedulerTransport(func(request *http.Request) (*http.Response, error) {
@@ -401,12 +405,13 @@ func TestSchedulerSubscriptionRefresh_FallbackKeepsAttemptID(t *testing.T) {
 		entranceID = meta.ID
 		return manager.RefreshSubscription(ctx, op, id)
 	}, func() time.Time { clocks++; return time.Date(2026, 9, 9, 1, 2, 3, 0, time.UTC) })
-	if err := refresh(context.Background(), profile.ID); err != nil {
+	ctx := httptrace.WithClientTrace(context.Background(), trace)
+	if err := refresh(ctx, profile.ID); err != nil {
 		t.Fatal(err)
 	}
 	want := "scheduler-" + profile.ID + "-20260909T010203.000000000"
-	if proxyCalls.Load() != 1 || clocks != 1 || entranceID != want || directID != want || !service.Snapshot().Public().Profiles[0].Cached {
-		t.Fatalf("proxy calls=%d clocks=%d entrance=%q direct=%q", proxyCalls.Load(), clocks, entranceID, directID)
+	if proxyConnectStarts.Load() != 1 || proxyConnectDones.Load() != 1 || clocks != 1 || entranceID != want || directID != want || !service.Snapshot().Public().Profiles[0].Cached {
+		t.Fatalf("proxy connect starts=%d dones=%d clocks=%d entrance=%q direct=%q", proxyConnectStarts.Load(), proxyConnectDones.Load(), clocks, entranceID, directID)
 	}
 	records := decodeSchedulerDiagnostics(t, output.String())
 	if len(records) != 1 || records[0]["msg"] != "operation.succeeded" || records[0]["operation_id"] != want {

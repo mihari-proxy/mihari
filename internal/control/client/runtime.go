@@ -434,7 +434,8 @@ func (c *Client) doRuntimeOutcome(ctx context.Context, method, path string, inpu
 		return runtimeOutcome{err: protocol.APIError{Code: protocol.CodeDataFailure, Message: "control response is too large"}}
 	}
 	if err := json.Unmarshal(raw, output); err != nil {
-		return c.localRuntimeOutcome(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control response"})
+		public := protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control response"}
+		return c.localRuntimeOutcome(diagnostics.Wrap(public, err))
 	}
 	return runtimeOutcome{}
 }
@@ -442,7 +443,10 @@ func (c *Client) doRuntimeOutcome(ctx context.Context, method, path string, inpu
 func decodeRuntimeHTTPErrorOutcome(response *http.Response) (error, bool) {
 	defer response.Body.Close()
 	var envelope protocol.ErrorEnvelope
-	if err := json.NewDecoder(io.LimitReader(response.Body, maxControlResponseSize)).Decode(&envelope); err != nil || envelope.Error.Code == "" {
+	if err := json.NewDecoder(io.LimitReader(response.Body, maxControlResponseSize)).Decode(&envelope); err != nil {
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control error response"}, err), false
+	}
+	if envelope.Error.Code == "" {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control error response"}, false
 	}
 	return envelope.Error, true

@@ -144,7 +144,9 @@ func newInstallationCommand(name string, deps Dependencies, options *runOptions)
 			return classifyInstallationError(err)
 		}
 		if outcome.Schema != app.InstallationOutcomeSchema || !outcome.InstallationComplete || outcome.StartFailed || outcome.ServiceState != "running" && outcome.ServiceState != "stopped" {
-			return protocol.APIError{Code: protocol.CodeInvalidState, Message: "installation result is invalid"}
+			err := protocol.APIError{Code: protocol.CodeInvalidState, Message: "installation result is invalid"}
+			reportLocalTaskFailure(ctx, deps, "installation.execute.failed", err)
+			return err
 		}
 		if options.json {
 			return renderJSON(cmd.OutOrStdout(), outcome)

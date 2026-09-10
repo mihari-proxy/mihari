@@ -203,12 +203,12 @@ func (p *PreparedUpdate) Commit() error {
 	s.closeReadersLocked()
 	if err := p.country.Commit(); err != nil {
 		s.reopenLocked()
-		return err
+		return joinUpdateRecovery(err, s.countryErr, s.asnErr)
 	}
 	if err := p.asn.Commit(); err != nil {
 		restoreErr := p.country.Rollback()
 		s.reopenLocked()
-		return joinUpdateRecovery(err, restoreErr)
+		return joinUpdateRecovery(err, restoreErr, s.countryErr, s.asnErr)
 	}
 	country, countryErr := s.openDatabase(s.countryPath)
 	asn, asnErr := s.openDatabase(s.asnPath)
@@ -222,7 +222,7 @@ func (p *PreparedUpdate) Commit() error {
 		asnRestoreErr := p.asn.Rollback()
 		countryRestoreErr := p.country.Rollback()
 		s.reopenLocked()
-		return joinUpdateRecovery(errors.Join(countryErr, asnErr), asnRestoreErr, countryRestoreErr)
+		return joinUpdateRecovery(errors.Join(countryErr, asnErr), asnRestoreErr, countryRestoreErr, s.countryErr, s.asnErr)
 	}
 	s.country, s.asn = country, asn
 	s.countryErr, s.asnErr = nil, nil

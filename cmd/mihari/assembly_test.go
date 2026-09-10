@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/mihari-proxy/mihari/internal/app"
+	"github.com/mihari-proxy/mihari/internal/cli"
 	"github.com/mihari-proxy/mihari/internal/config"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/daemon"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
@@ -118,14 +121,31 @@ func TestDaemonAssembly_RuntimeBuildFailureIsRecordedBeforeDegradedStartup(t *te
 
 func TestDaemonAssembly_ServiceDiagnosticStderrRequiresExplicitNonJSONServiceMode(t *testing.T) {
 	writer := &bytes.Buffer{}
-	if got := daemonServiceDiagnosticStderr([]string{"daemon", "--system-service"}, writer); got != writer {
-		t.Fatalf("service diagnostic stderr=%v want injected writer", got)
+	for _, args := range [][]string{
+		{"daemon", "--system-service"},
+		{"daemon", "--system-service=1"},
+		{"daemon", "--system-service=t"},
+		{"daemon", "--system-service=T"},
+		{"daemon", "--system-service=TRUE"},
+		{"daemon", "--system-service=True"},
+		{"daemon", "--system-service=false", "--system-service=1"},
+	} {
+		if got := daemonServiceDiagnosticStderr(args, writer); got != writer {
+			t.Fatalf("args=%q service diagnostic stderr=%v want injected writer", args, got)
+		}
 	}
 	for _, args := range [][]string{
 		{"daemon"},
 		{"daemon", "--system-service=false"},
+		{"daemon", "--system-service=0"},
+		{"daemon", "--system-service=f"},
+		{"daemon", "--system-service=F"},
+		{"daemon", "--system-service=FALSE"},
+		{"daemon", "--system-service=False"},
+		{"daemon", "--system-service", "--system-service=false"},
+		{"daemon", "--", "--system-service"},
 		{"daemon", "--system-service", "--json"},
-		{"daemon", "--system-service", "--json=true"},
+		{"daemon", "--system-service", "--json=1"},
 	} {
 		if got := daemonServiceDiagnosticStderr(args, writer); got != nil {
 			t.Fatalf("args=%q diagnostic stderr=%v want nil", args, got)
@@ -147,10 +167,60 @@ func TestDaemonAssembly_LoggingFailureStderrKeepsTextDaemonOutputAndExcludesJSON
 	for _, args := range [][]string{
 		{"status"},
 		{"daemon", "--json"},
-		{"daemon", "--json=true"},
+		{"daemon", "--json=1"},
+		{"daemon", "--json=t"},
+		{"daemon", "--json=T"},
+		{"daemon", "--json=TRUE"},
+		{"daemon", "--json=True"},
+		{"daemon", "--json=false", "--json=1"},
 	} {
 		if got := daemonLoggingFailureStderr(args, writer); got != nil {
 			t.Fatalf("args=%q logging failure stderr=%v want nil", args, got)
 		}
+	}
+	for _, args := range [][]string{
+		{"daemon", "--json=0"},
+		{"daemon", "--json=f"},
+		{"daemon", "--json=F"},
+		{"daemon", "--json=FALSE"},
+		{"daemon", "--json=False"},
+		{"daemon", "--json", "--json=false"},
+		{"--json=0", "daemon"},
+		{"daemon", "--", "--json"},
+	} {
+		if got := daemonLoggingFailureStderr(args, writer); got != writer {
+			t.Fatalf("args=%q logging failure stderr=%v want injected writer", args, got)
+		}
+	}
+}
+
+func TestDaemonAssembly_OutputSelectorsMatchActualBooleanRendering(t *testing.T) {
+	for _, spelling := range []string{"1", "t", "T", "TRUE", "true", "True"} {
+		t.Run("json="+spelling, func(t *testing.T) {
+			args := []string{"daemon", "--json=" + spelling}
+			var output bytes.Buffer
+			if outlet := daemonLoggingFailureStderr(args, &output); outlet != nil {
+				_, _ = outlet.Write([]byte("early logging fallback\n"))
+			}
+			code := cli.Execute(context.Background(), args, &output, &output, cli.Dependencies{RunDaemon: func(context.Context) error {
+				return protocol.APIError{Code: protocol.CodeInvalidState, Message: "daemon unavailable"}
+			}})
+			var envelope protocol.ErrorEnvelope
+			if code != cli.ExitInvalidState || json.Unmarshal(output.Bytes(), &envelope) != nil || envelope.Error.Code != protocol.CodeInvalidState {
+				t.Fatalf("code=%d output=%q", code, output.String())
+			}
+		})
+	}
+
+	args := []string{"--json=0", "daemon"}
+	var output bytes.Buffer
+	if outlet := daemonLoggingFailureStderr(args, &output); outlet != nil {
+		_, _ = outlet.Write([]byte("early logging fallback\n"))
+	}
+	code := cli.Execute(context.Background(), args, &output, &output, cli.Dependencies{RunDaemon: func(context.Context) error {
+		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "daemon unavailable"}
+	}})
+	if code != cli.ExitInvalidState || output.String() != "early logging fallback\nError: daemon unavailable\n" {
+		t.Fatalf("code=%d output=%q", code, output.String())
 	}
 }
