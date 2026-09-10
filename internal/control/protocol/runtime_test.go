@@ -227,3 +227,45 @@ func TestMutationRequestDecodesChannelOptionally(t *testing.T) {
 		t.Fatalf("channel=%v want nil", omitted.Channel)
 	}
 }
+
+func TestProxyGroupTestURLRoundTripAndOmitEmpty(t *testing.T) {
+	raw, err := json.Marshal(ProxyGroup{Name: "HK", Type: "URLTest", TestURL: "https://cp.cloudflare.com/generate_204"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"test_url":"https://cp.cloudflare.com/generate_204"`) {
+		t.Fatalf("raw=%s", raw)
+	}
+	var got ProxyGroup
+	if err := json.Unmarshal(raw, &got); err != nil || got.TestURL != "https://cp.cloudflare.com/generate_204" {
+		t.Fatalf("got=%#v err=%v", got, err)
+	}
+	empty, err := json.Marshal(ProxyGroup{Name: "GLOBAL", Type: "Selector"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(empty), "test_url") {
+		t.Fatalf("empty=%s", empty)
+	}
+	var old ProxyGroup
+	if err := json.Unmarshal([]byte(`{"name":"GLOBAL","type":"Selector"}`), &old); err != nil || old.TestURL != "" {
+		t.Fatalf("old=%#v err=%v", old, err)
+	}
+}
+
+func TestDelayTestRequestOmitsZeroValues(t *testing.T) {
+	raw, err := json.Marshal(DelayTestRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != `{}` {
+		t.Fatalf("raw=%s", raw)
+	}
+	explicit, err := json.Marshal(DelayTestRequest{URL: "https://example.com/ping", TimeoutMilliseconds: 3500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(explicit) != `{"url":"https://example.com/ping","timeout_ms":3500}` {
+		t.Fatalf("explicit=%s", explicit)
+	}
+}

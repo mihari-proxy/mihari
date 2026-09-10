@@ -257,3 +257,20 @@ func TestClientClassifiesErrorsAndBoundsResponses(t *testing.T) {
 		})
 	}
 }
+
+func TestProxyJSONDecodesTestURL(t *testing.T) {
+	var got Proxy
+	if err := json.Unmarshal([]byte(`{"name":"HK","type":"URLTest","testUrl":"https://cp.cloudflare.com/generate_204"}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "HK" || got.Type != "URLTest" || got.TestURL != "https://cp.cloudflare.com/generate_204" {
+		t.Fatalf("got=%#v", got)
+	}
+	var empty Proxy
+	if err := json.Unmarshal([]byte(`{"name":"HK","type":"Selector"}`), &empty); err != nil {
+		t.Fatal(err)
+	}
+	if empty.TestURL != "" {
+		t.Fatalf("TestURL=%q", empty.TestURL)
+	}
+}

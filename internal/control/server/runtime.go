@@ -21,6 +21,14 @@ import (
 
 const maxControlBodySize = 1 << 20
 
+const (
+	defaultDelayTestURL   = "https://www.gstatic.com/generate_204"
+	defaultDelayTimeoutMS = 5000
+	maxDelayTimeoutMS     = 60_000
+)
+
+var errInvalidDelayTimeout = errors.New("delay test timeout is invalid")
+
 type RuntimeAPI interface {
 	Capabilities() []string
 	Snapshot() state.Snapshot
@@ -160,6 +168,7 @@ func orderedProxyGroups(proxies map[string]mihomo.Proxy) []protocol.ProxyGroup {
 		return protocol.ProxyGroup{
 			Name: proxy.Name, Type: proxy.Type, Now: proxy.Now,
 			All: append([]string(nil), proxy.All...), Nodes: nodes,
+			TestURL: proxy.TestURL,
 		}
 	}
 
@@ -213,11 +222,18 @@ func (s *Server) delayTest(writer http.ResponseWriter, request *http.Request) {
 	if !decodeControlJSON(writer, request, &body) {
 		return
 	}
-	if body.URL == "" || body.TimeoutMilliseconds <= 0 || body.TimeoutMilliseconds > 60_000 {
-		writeInvalidArgument(writer, "delay test URL and timeout are invalid")
+	timeout, err := resolveDelayTimeout(body.TimeoutMilliseconds)
+	if err != nil {
+		writeInvalidArgument(writer, errInvalidDelayTimeout.Error())
 		return
 	}
-	delays, err := s.runtime.DelayGroup(request.Context(), request.PathValue("name"), body.URL, body.TimeoutMilliseconds)
+	name := request.PathValue("name")
+	testURL, err := s.resolveDelayURL(request.Context(), name, body.URL)
+	if err != nil {
+		s.writeControlError(request.Context(), writer, err)
+		return
+	}
+	delays, err := s.runtime.DelayGroup(request.Context(), name, testURL, timeout)
 	if err != nil {
 		s.writeControlError(request.Context(), writer, err)
 		return
@@ -233,17 +249,57 @@ func (s *Server) delayProxy(writer http.ResponseWriter, request *http.Request) {
 	if !decodeControlJSON(writer, request, &body) {
 		return
 	}
-	if body.URL == "" || body.TimeoutMilliseconds <= 0 || body.TimeoutMilliseconds > 60_000 {
-		writeInvalidArgument(writer, "delay test URL and timeout are invalid")
+	timeout, err := resolveDelayTimeout(body.TimeoutMilliseconds)
+	if err != nil {
+		writeInvalidArgument(writer, errInvalidDelayTimeout.Error())
 		return
 	}
 	name := request.PathValue("name")
-	delay, err := s.runtime.DelayProxy(request.Context(), name, body.URL, body.TimeoutMilliseconds)
+	testURL, err := s.resolveDelayURL(request.Context(), name, body.URL)
+	if err != nil {
+		s.writeControlError(request.Context(), writer, err)
+		return
+	}
+	delay, err := s.runtime.DelayProxy(request.Context(), name, testURL, timeout)
 	if err != nil {
 		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, protocol.DelayResult{Schema: "mihari/v1", Delays: map[string]uint16{name: delay}})
+}
+
+func resolveDelayTimeout(ms int) (int, error) {
+	if ms < 0 || ms > maxDelayTimeoutMS {
+		return 0, errInvalidDelayTimeout
+	}
+	if ms == 0 {
+		return defaultDelayTimeoutMS, nil
+	}
+	return ms, nil
+}
+
+func (s *Server) resolveDelayURL(ctx context.Context, name, requested string) (string, error) {
+	if requested != "" {
+		return requested, nil
+	}
+	upstream, err := s.runtime.Proxies(ctx)
+	if err != nil {
+		return "", err
+	}
+	if proxy, ok := upstream.Proxies[name]; ok && proxy.TestURL != "" {
+		return proxy.TestURL, nil
+	}
+	for _, group := range orderedProxyGroups(upstream.Proxies) {
+		if group.TestURL == "" {
+			continue
+		}
+		for _, member := range group.All {
+			if member == name {
+				return group.TestURL, nil
+			}
+		}
+	}
+	return defaultDelayTestURL, nil
 }
 
 func (s *Server) connections(writer http.ResponseWriter, request *http.Request) {

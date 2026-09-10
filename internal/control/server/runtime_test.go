@@ -80,6 +80,95 @@ func TestProxyDelayEndpointTestsOneNode(t *testing.T) {
 	}
 }
 
+func TestDelayTestFallsBackToKernelAndDefaultURL(t *testing.T) {
+	cloud := "https://cp.cloudflare.com/generate_204"
+	other := "https://www.gstatic.com/generate_204"
+	proxies := mihomo.Proxies{Proxies: map[string]mihomo.Proxy{
+		"GLOBAL": {Name: "GLOBAL", Type: "Selector", All: []string{"HK", "TW", "leaf"}},
+		"HK":     {Name: "HK", Type: "URLTest", All: []string{"leaf"}, TestURL: cloud},
+		"TW":     {Name: "TW", Type: "URLTest", All: []string{"leaf"}, TestURL: "https://example.com/tw"},
+		"leaf":   {Name: "leaf", Type: "VLESS"},
+		"plain":  {Name: "plain", Type: "Selector", All: []string{"orphan"}, TestURL: ""},
+		"orphan": {Name: "orphan", Type: "Direct"},
+	}}
+
+	t.Run("explicit url wins", func(t *testing.T) {
+		fake := &fakeRuntime{proxies: proxies}
+		postDelay(t, fake, "/v1/proxy-groups/HK/delay-test", `{"url":"https://example.com/ping","timeout_ms":3500}`)
+		if fake.delayedGroup != "HK" || fake.delayedURL != "https://example.com/ping" || fake.delayedTimeout != 3500 {
+			t.Fatalf("fake=%#v", fake)
+		}
+	})
+	t.Run("empty uses group testUrl", func(t *testing.T) {
+		fake := &fakeRuntime{proxies: proxies}
+		postDelay(t, fake, "/v1/proxy-groups/HK/delay-test", `{}`)
+		if fake.delayedURL != cloud || fake.delayedTimeout != 5000 {
+			t.Fatalf("fake=%#v", fake)
+		}
+	})
+	t.Run("leaf uses first parent in GLOBAL.All", func(t *testing.T) {
+		fake := &fakeRuntime{proxies: proxies}
+		postDelay(t, fake, "/v1/proxies/leaf/delay-test", `{}`)
+		if fake.delayedProxy != "leaf" || fake.delayedURL != cloud {
+			t.Fatalf("fake=%#v", fake)
+		}
+	})
+	t.Run("no kernel url uses default", func(t *testing.T) {
+		fake := &fakeRuntime{proxies: proxies}
+		postDelay(t, fake, "/v1/proxies/orphan/delay-test", `{}`)
+		if fake.delayedURL != other {
+			t.Fatalf("url=%q", fake.delayedURL)
+		}
+	})
+	t.Run("timeout bounds", func(t *testing.T) {
+		fake := &fakeRuntime{proxies: proxies}
+		rec := postDelayRaw(t, fake, "/v1/proxy-groups/HK/delay-test", `{"timeout_ms":70000}`)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_argument") {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), cloud) {
+			t.Fatalf("leaked url: %s", rec.Body.String())
+		}
+		rec = postDelayRaw(t, fake, "/v1/proxy-groups/HK/delay-test", `{"timeout_ms":-1}`)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("neg status=%d", rec.Code)
+		}
+	})
+	t.Run("proxies failure does not default", func(t *testing.T) {
+		fake := &fakeRuntime{proxiesErr: protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo controller is unavailable"}}
+		rec := postDelayRaw(t, fake, "/v1/proxy-groups/HK/delay-test", `{}`)
+		if rec.Code != http.StatusBadGateway {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		if fake.delayedURL != "" {
+			t.Fatalf("should not call DelayGroup, url=%q", fake.delayedURL)
+		}
+	})
+	t.Run("explicit url skips Proxies", func(t *testing.T) {
+		fake := &fakeRuntime{proxiesErr: protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo controller is unavailable"}}
+		postDelay(t, fake, "/v1/proxy-groups/HK/delay-test", `{"url":"https://example.com/ping","timeout_ms":3500}`)
+		if fake.delayedURL != "https://example.com/ping" || fake.delayedTimeout != 3500 {
+			t.Fatalf("fake=%#v", fake)
+		}
+	})
+}
+
+func postDelay(t *testing.T, fake *fakeRuntime, path, body string) {
+	t.Helper()
+	rec := postDelayRaw(t, fake, path, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func postDelayRaw(t *testing.T, fake *fakeRuntime, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: fake})
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, authorizedRequest(http.MethodPost, path, bytes.NewBufferString(body)))
+	return rec
+}
+
 func TestInstallAndQueryEndpoints(t *testing.T) {
 	fake := &fakeRuntime{
 		installResult: core.InstallResult{Version: "v1.19.0", Updated: true},
@@ -196,6 +285,39 @@ func TestProxiesPreservesGLOBALAllOrder(t *testing.T) {
 		if groups[i].Name != name {
 			t.Fatalf("order[%d]=%q want %q full=%v", i, groups[i].Name, name, groupNames(groups))
 		}
+	}
+}
+
+func TestProxiesMapsGroupTestURL(t *testing.T) {
+	fake := &fakeRuntime{proxies: mihomo.Proxies{Proxies: map[string]mihomo.Proxy{
+		"GLOBAL": {Name: "GLOBAL", Type: "Selector", Now: "HK", All: []string{"HK", "leaf"}},
+		"HK":     {Name: "HK", Type: "URLTest", Now: "leaf", All: []string{"leaf"}, TestURL: "https://cp.cloudflare.com/generate_204"},
+		"leaf":   {Name: "leaf", Type: "VLESS"},
+	}}}
+	server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: fake})
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, authorizedRequest(http.MethodGet, "/v1/proxies", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var got protocol.ProxyGroups
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Groups) < 1 {
+		t.Fatalf("groups=%#v", got.Groups)
+	}
+	var hk protocol.ProxyGroup
+	for _, group := range got.Groups {
+		if group.Name == "HK" {
+			hk = group
+		}
+	}
+	if hk.TestURL != "https://cp.cloudflare.com/generate_204" {
+		t.Fatalf("HK=%#v", hk)
+	}
+	if strings.Contains(response.Body.String(), `"test_url":"https://cp.cloudflare.com/generate_204"`) == false {
+		t.Fatalf("body=%s", response.Body.String())
 	}
 }
 
@@ -340,12 +462,16 @@ type fakeRuntime struct {
 	selectedName          string
 	installResult         core.InstallResult
 	proxies               mihomo.Proxies
+	proxiesErr            error
 	connections           mihomo.Connections
 	rules                 mihomo.Rules
 	ruleProviders         mihomo.RuleProviders
 	updatedRuleProvider   string
 	streamMessages        []json.RawMessage
 	delayedProxy          string
+	delayedGroup          string
+	delayedURL            string
+	delayedTimeout        int
 	proxyDelay            uint16
 	geoIPStatus           geoip.Status
 	geoIPRecords          []geoip.Record
@@ -377,7 +503,12 @@ func (f *fakeRuntime) Restart(ctx context.Context, operation runtimeapi.Operatio
 	return nil
 }
 
-func (f *fakeRuntime) Proxies(context.Context) (mihomo.Proxies, error) { return f.proxies, nil }
+func (f *fakeRuntime) Proxies(context.Context) (mihomo.Proxies, error) {
+	if f.proxiesErr != nil {
+		return mihomo.Proxies{}, f.proxiesErr
+	}
+	return f.proxies, nil
+}
 
 func (f *fakeRuntime) SelectProxy(_ context.Context, operation runtimeapi.Operation, group, name string) error {
 	f.operation = operation
@@ -386,12 +517,13 @@ func (f *fakeRuntime) SelectProxy(_ context.Context, operation runtimeapi.Operat
 	return nil
 }
 
-func (f *fakeRuntime) DelayGroup(context.Context, string, string, int) (mihomo.Delays, error) {
+func (f *fakeRuntime) DelayGroup(_ context.Context, group, testURL string, timeoutMilliseconds int) (mihomo.Delays, error) {
+	f.delayedGroup, f.delayedURL, f.delayedTimeout = group, testURL, timeoutMilliseconds
 	return mihomo.Delays{"DIRECT": 1}, nil
 }
 
-func (f *fakeRuntime) DelayProxy(_ context.Context, name, _ string, _ int) (uint16, error) {
-	f.delayedProxy = name
+func (f *fakeRuntime) DelayProxy(_ context.Context, name, testURL string, timeoutMilliseconds int) (uint16, error) {
+	f.delayedProxy, f.delayedURL, f.delayedTimeout = name, testURL, timeoutMilliseconds
 	return f.proxyDelay, nil
 }
 

@@ -18,6 +18,7 @@ type Proxy struct {
 	History []json.RawMessage `json:"history,omitempty"`
 	UDP     bool              `json:"udp,omitempty"`
 	XUDP    bool              `json:"xudp,omitempty"`
+	TestURL string            `json:"testUrl,omitempty"`
 }
 
 type Proxies struct {

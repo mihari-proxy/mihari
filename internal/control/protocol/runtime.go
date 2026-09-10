@@ -23,11 +23,12 @@ type CoreStatus struct {
 }
 
 type ProxyGroup struct {
-	Name  string      `json:"name"`
-	Type  string      `json:"type"`
-	Now   string      `json:"now,omitempty"`
-	All   []string    `json:"all,omitempty"`
-	Nodes []ProxyNode `json:"nodes,omitempty"`
+	Name    string      `json:"name"`
+	Type    string      `json:"type"`
+	Now     string      `json:"now,omitempty"`
+	All     []string    `json:"all,omitempty"`
+	Nodes   []ProxyNode `json:"nodes,omitempty"`
+	TestURL string      `json:"test_url,omitempty"`
 }
 
 type ProxyNode struct {
@@ -124,8 +125,8 @@ type ProxySelectionRequest struct {
 }
 
 type DelayTestRequest struct {
-	URL                 string `json:"url"`
-	TimeoutMilliseconds int    `json:"timeout_ms"`
+	URL                 string `json:"url,omitempty"`
+	TimeoutMilliseconds int    `json:"timeout_ms,omitempty"`
 }
 
 type MutationResult struct {
