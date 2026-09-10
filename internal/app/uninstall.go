@@ -251,7 +251,7 @@ func uninstallTargetPhase(target UninstallTarget) int {
 
 func removeUninstallTarget(target UninstallTarget, remove func(string) error) error {
 	info, err := os.Lstat(target.Path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {

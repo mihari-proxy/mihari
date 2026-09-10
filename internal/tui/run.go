@@ -354,9 +354,6 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 	if finalModel, ok := final.(Model); ok && finalModel.preparedUninstall {
 		return finishCompleteUninstallRun(ctx, final, err, options.Output, cleanup, options.Uninstaller)
 	}
-	if finalModel, ok := final.(*Model); ok && finalModel != nil && finalModel.preparedUninstall {
-		return finishCompleteUninstallRun(ctx, final, err, options.Output, cleanup, options.Uninstaller)
-	}
 	if preparedWorker != nil {
 		return finishPreparedRun(ctx, final, err, options.Output, options.Relaunch, cleanup, preparedWorker.ApplyPrepared)
 	}

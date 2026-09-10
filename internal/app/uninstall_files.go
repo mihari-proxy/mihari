@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,7 +42,7 @@ func CheckUninstallFiles(ctx context.Context, targets []UninstallTarget) error {
 			return fmt.Errorf("unknown uninstall target kind %q", target.Kind)
 		}
 		info, err := os.Lstat(target.Path)
-		if errorsIsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
@@ -58,10 +59,6 @@ func CheckUninstallFiles(ctx context.Context, targets []UninstallTarget) error {
 		}
 	}
 	return nil
-}
-
-func errorsIsNotExist(err error) bool {
-	return err != nil && os.IsNotExist(err)
 }
 
 func checkUninstallDirectory(ctx context.Context, target UninstallTarget, path, relative string) error {
