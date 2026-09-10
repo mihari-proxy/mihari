@@ -190,9 +190,9 @@ func TestServiceUninstall_PurgeFailurePreservesEnglishError(t *testing.T) {
 	elevate.Check = func() bool { return true }
 	stderr := &bytes.Buffer{}
 	exit := Execute(context.Background(), []string{"service", "uninstall", "--purge", "--yes"}, io.Discard, stderr, Dependencies{
-		Uninstaller: &fakePurgeUninstaller{err: errors.New("Mihari did not stop within 30 seconds; stop it and retry the uninstall")},
+		Uninstaller: &fakePurgeUninstaller{err: errors.New("did not stop within 30 seconds; stop Mihari and retry the uninstall")},
 	})
-	if exit != ExitInvalidState || !strings.Contains(stderr.String(), "Mihari did not stop within 30 seconds") {
+	if exit != ExitInvalidState || !strings.Contains(stderr.String(), "did not stop within 30 seconds") {
 		t.Fatalf("exit=%d stderr=%q", exit, stderr.String())
 	}
 }

@@ -58,7 +58,7 @@ func newUninstaller(layout platform.ResolvedLayout, opts UninstallerOptions, res
 	var controlRoot string
 	var controlRootErr error
 	if resolveControlRoot == nil {
-		controlRootErr = errors.New("Mihari installation control directory resolver is unavailable")
+		controlRootErr = errors.New("installation control directory resolver is unavailable")
 	} else {
 		controlRoot, controlRootErr = resolveControlRoot()
 	}
@@ -111,7 +111,7 @@ func (u *Uninstaller) Run(ctx context.Context, progress func(string)) error {
 			}
 			if err := removeUninstallTarget(target, u.opts.Remove); err != nil {
 				if target.Kind == "program" && runtime.GOOS == "windows" {
-					return fmt.Errorf("remove %s: %w. Run Mihari from a separate copy and retry the uninstall.", target.Path, err)
+					return fmt.Errorf("remove %s: %w; run Mihari from a separate copy and retry the uninstall", target.Path, err)
 				}
 				return fmt.Errorf("remove %s: %w", target.Path, err)
 			}
@@ -140,7 +140,7 @@ func (u *Uninstaller) uninstallService(ctx context.Context) error {
 		return u.opts.Uninstall(ctx)
 	}
 	if u.opts.Service == nil {
-		return errors.New("Mihari service uninstall is unavailable")
+		return errors.New("service uninstall is unavailable")
 	}
 	return u.opts.Service.Uninstall()
 }
@@ -153,14 +153,14 @@ func (u *Uninstaller) serviceStatus(ctx context.Context) (service.StatusKind, er
 		return u.opts.Status(ctx)
 	}
 	if u.opts.Service == nil {
-		return service.StatusUnknown, errors.New("Mihari service status is unavailable")
+		return service.StatusUnknown, errors.New("service status is unavailable")
 	}
 	return u.opts.Service.Status()
 }
 
 func (u *Uninstaller) waitForDaemonStop(ctx context.Context, progress func(string)) error {
 	if u.opts.ProbeDaemon == nil {
-		return errors.New("Mihari daemon activity probe is unavailable")
+		return errors.New("daemon activity probe is unavailable")
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, uninstallStopTimeout)
 	defer cancel()
@@ -198,7 +198,7 @@ func (u *Uninstaller) waitForDaemonStop(ctx context.Context, progress func(strin
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			return errors.New("Mihari did not stop within 30 seconds; stop it and retry the uninstall")
+			return errors.New("did not stop within 30 seconds; stop Mihari and retry the uninstall")
 		case <-timer.C:
 		}
 	}

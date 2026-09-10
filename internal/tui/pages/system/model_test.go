@@ -1370,8 +1370,7 @@ func TestSystemCompleteUninstall_PreviewsTargetsBeforeConfirmation(t *testing.T)
 	if command == nil || preview.calls != 0 {
 		t.Fatalf("command=%v preview calls=%d", command != nil, preview.calls)
 	}
-	updated, command = model.Update(command())
-	model = updated.(*Model)
+	_, command = model.Update(command())
 	if command == nil || preview.calls != 1 {
 		t.Fatalf("command=%v preview calls=%d", command != nil, preview.calls)
 	}
