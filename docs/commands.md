@@ -19,11 +19,12 @@ mihari service stop
 mihari service restart
 mihari service reinstall
 mihari service uninstall
+mihari service uninstall --purge --yes
 ```
 
 执行 `service install` + `start` 后,关闭 TUI 或普通控制台**不会**停止 Mihari;只有 `service stop`、卸载或操作系统才能停止它。同样的控制也在 TUI 的 **System** 页面中提供(变更操作需要提权 shell)。
 
-Unix 的 install/reinstall/update/start/stop/uninstall 走统一安装用例，未完成事务须显式恢复；Windows 保持原服务行为。Unix 自动化入口为 `mihari service apply --request /absolute/request.json`（严格版本化 JSON，请求文件 root0600）；operation=recover 用于恢复，不会隐式导入旧树。卸载保留数据与旧日志。
+Unix 的 install/reinstall/update/start/stop/uninstall 走统一安装用例，未完成事务须显式恢复；Windows 保持原服务行为。Unix 自动化入口为 `mihari service apply --request /absolute/request.json`（严格版本化 JSON，请求文件 root0600）；operation=recover 用于恢复，不会隐式导入旧树。普通 `service uninstall` 只注销 OS 服务，保留数据与旧日志。`--purge --yes` 与 TUI System 页 Maintenance 中的 **Completely Uninstall Mihari** 使用同一用例：先卸载服务，再删除预检通过的受管文件。未知文件名会停止且不删除。需要已提权 shell，不自动弹出 UAC/sudo。
 
 Linux 服务启动失败后，systemd 可能显示 `activating (auto-restart)`。如果此时主进程已退出（`MainPID=0`），`mihari service status` 返回 `stopped`，仍允许进入服务停止或重装流程；这不表示 systemd 已取消自动重启。升级旧版本后若日志提示 `existing data requires recovery or migration`，应使用包含此修复的版本执行 `sudo mihari service reinstall`，由安装事务处理旧数据和服务定义，而不是直接修改 unit 的启动参数。重装失败时保留报错和 `journalctl -u mihari` 日志继续排查。
 

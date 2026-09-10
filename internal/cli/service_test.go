@@ -34,6 +34,21 @@ func (f *fakePurgeUninstaller) Run(_ context.Context, progress func(string)) err
 	return f.err
 }
 
+type orderedPurgeUninstaller struct {
+	order *[]string
+	calls int
+}
+
+func (*orderedPurgeUninstaller) Preview(context.Context) ([]app.UninstallTarget, error) {
+	return nil, nil
+}
+
+func (f *orderedPurgeUninstaller) Run(context.Context, func(string)) error {
+	f.calls++
+	*f.order = append(*f.order, "run")
+	return nil
+}
+
 func (f *fakeService) Install() error                      { f.installs++; return nil }
 func (f *fakeService) Uninstall() error                    { return nil }
 func (f *fakeService) Reinstall() error                    { f.reinstalls++; return nil }
@@ -179,5 +194,38 @@ func TestServiceUninstall_PurgeFailurePreservesEnglishError(t *testing.T) {
 	})
 	if exit != ExitInvalidState || !strings.Contains(stderr.String(), "Mihari did not stop within 30 seconds") {
 		t.Fatalf("exit=%d stderr=%q", exit, stderr.String())
+	}
+}
+
+func TestServiceUninstall_PurgeClosesLocalResourcesBeforeRun(t *testing.T) {
+	prev := elevate.Check
+	t.Cleanup(func() { elevate.Check = prev })
+	elevate.Check = func() bool { return true }
+	var order []string
+	uninstaller := &orderedPurgeUninstaller{order: &order}
+	exit := Execute(context.Background(), []string{"service", "uninstall", "--purge", "--yes"}, io.Discard, io.Discard, Dependencies{
+		Uninstaller: uninstaller,
+		CloseForPurgeUninstall: func() error {
+			order = append(order, "close")
+			return nil
+		},
+	})
+	if exit != ExitOK || uninstaller.calls != 1 || len(order) != 2 || order[0] != "close" || order[1] != "run" {
+		t.Fatalf("exit=%d calls=%d order=%v", exit, uninstaller.calls, order)
+	}
+}
+
+func TestServiceUninstall_PurgeCloseFailurePreventsRun(t *testing.T) {
+	prev := elevate.Check
+	t.Cleanup(func() { elevate.Check = prev })
+	elevate.Check = func() bool { return true }
+	uninstaller := &fakePurgeUninstaller{}
+	stderr := &bytes.Buffer{}
+	exit := Execute(context.Background(), []string{"service", "uninstall", "--purge", "--yes"}, io.Discard, stderr, Dependencies{
+		Uninstaller:            uninstaller,
+		CloseForPurgeUninstall: func() error { return errors.New("close failed") },
+	})
+	if exit != ExitInvalidState || uninstaller.calls != 0 || !strings.Contains(stderr.String(), "close Mihari local resources before uninstall") {
+		t.Fatalf("exit=%d calls=%d stderr=%q", exit, uninstaller.calls, stderr.String())
 	}
 }

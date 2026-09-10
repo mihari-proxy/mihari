@@ -1037,7 +1037,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, tea.Batch(m.loadServiceStatus(), m.rowSpinCmdIfNeeded())
 	case uninstallPreviewMsg:
 		if typed.err != nil {
-			m.markRowOutcome(rowCompleteUninstall, false, actionErrorDetail(typed.err, "Complete uninstall preview failed"))
+			m.markRowOutcome(rowCompleteUninstall, false, actionErrorDetail(typed.err, ui.CompleteUninstallPreviewFailed))
 			return m, m.rowSpinCmdIfNeeded()
 		}
 		return m, func() tea.Msg {
@@ -1371,7 +1371,11 @@ func (m *Model) maintenanceRows() []row {
 }
 
 func (m *Model) previewCompleteUninstall() tea.Cmd {
-	if m.uninstaller == nil || m.pending {
+	if m.pending {
+		return nil
+	}
+	if m.uninstaller == nil {
+		m.markRowOutcome(rowCompleteUninstall, false, ui.CompleteUninstallUnavailable)
 		return nil
 	}
 	return func() tea.Msg {

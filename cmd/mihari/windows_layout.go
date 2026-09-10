@@ -5,6 +5,10 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
+
 	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/buildinfo"
 	"github.com/mihari-proxy/mihari/internal/cli"
@@ -17,9 +21,6 @@ import (
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/tui"
 	"github.com/mihari-proxy/mihari/internal/update"
-	"io"
-	"os"
-	"path/filepath"
 )
 
 func executeProcess(ctx context.Context, args []string, stdout, stderr io.Writer) int {

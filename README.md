@@ -134,6 +134,7 @@ mihari sysproxy enable
 | System proxy / TUN | `mihari sysproxy enable` · `mihari sysproxy enable --force` · `mihari tun enable` · `mihari tun enable --force` |
 | Web panels | `mihari panel list` · `mihari panel open` |
 | Service control | `mihari service status` · `mihari service stop` |
+| Completely uninstall | System page `Completely Uninstall Mihari` · `mihari service uninstall --purge --yes` |
 | Update mihari | System page `Update Mihari` · `mihari self update` |
 
 See [docs/commands.md](docs/commands.md) for the full command reference, and [docs/architecture.md](docs/architecture.md) for the architecture and security model.

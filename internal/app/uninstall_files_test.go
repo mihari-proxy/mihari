@@ -170,7 +170,7 @@ func TestCheckUninstallFiles_SymlinkIsRejected(t *testing.T) {
 	root := t.TempDir()
 	writeUninstallFixture(t, root, "mihari.yaml")
 	if err := os.Symlink(filepath.Join(root, "mihari.yaml"), filepath.Join(root, "daemon.lock")); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlink unavailable: %v", err)
 	}
 
 	err := CheckUninstallFiles(context.Background(), []UninstallTarget{{Path: root, Kind: "data"}})

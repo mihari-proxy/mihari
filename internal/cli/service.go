@@ -3,13 +3,13 @@ package cli
 import (
 	"context"
 	"fmt"
-	"github.com/mihari-proxy/mihari/internal/diagnostics"
-	"github.com/mihari-proxy/mihari/internal/logging"
 	"log/slog"
 	"os"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/elevate"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/spf13/cobra"
 )
@@ -65,7 +65,7 @@ func newServiceUninstallCommand(dependencies Dependencies, options *runOptions) 
 		}
 		if dependencies.CloseForPurgeUninstall != nil {
 			if err := dependencies.CloseForPurgeUninstall(); err != nil {
-				return fmt.Errorf("close Mihari local resources before uninstall: %w", err)
+				return protocol.APIError{Code: protocol.CodeInvalidState, Message: "close Mihari local resources before uninstall"}
 			}
 		}
 		ctx := localTaskContext(command.Context(), dependencies, "service.uninstall.purge")

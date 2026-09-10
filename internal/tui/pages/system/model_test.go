@@ -1381,6 +1381,16 @@ func TestSystemCompleteUninstall_PreviewsTargetsBeforeConfirmation(t *testing.T)
 	}
 }
 
+func TestSystemCompleteUninstall_UnavailableUninstallerReportsFailure(t *testing.T) {
+	model := New(nil, func() string { return "system-op" })
+	model.focusID = rowCompleteUninstall
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if command != nil || model.outcomeRow != rowCompleteUninstall || model.outcomeOK || model.outcomeDetail != ui.CompleteUninstallUnavailable {
+		t.Fatalf("command=%v outcome=%q ok=%v detail=%q", command != nil, model.outcomeRow, model.outcomeOK, model.outcomeDetail)
+	}
+}
+
 func TestSystemServiceRendersStatusAndActionsWhenControllerPresent(t *testing.T) {
 	withElevation(t, false)
 	svc := &fakeService{status: service.StatusRunning}

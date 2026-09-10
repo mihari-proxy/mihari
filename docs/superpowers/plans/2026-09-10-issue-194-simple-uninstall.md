@@ -49,16 +49,16 @@ if err := CheckUninstallFiles(ctx, []UninstallTarget{{Path: root, Kind: "data"}}
 
 **Files:** internal/cli/service.go/root dependency definitions; internal/tui/pages/system/model.go; internal/tui/model.go/run.go plus small adjacent uninstall file; cmd/mihari wiring. Tests alongside those files.
 **Interface:** Same app Uninstaller injected once; presentation callbacks Preview and Run. CLI renders existing error/envelope contracts; TUI exits then runs.
-- [ ] Write tests first: Maintenance placement/single row, repeated modal default Cancel, Enter/Esc cancel, no duplicate execution; no mutation before TUI cleanup.
-- [ ] Write CLI tests plain uninstall unchanged, --purge without --yes rejects before action, --purge --yes calls app once, English progress and error output, JSON single envelope. Add exact snapshot/call-order assertions with fake functions.
-- [ ] Run targeted RED. Implement `service uninstall --purge --yes`; attach TUI action and reuse run cleanup sequence before calling app. Close CLI logging/private handles before deletion too, avoid post-delete log/Setup recreation. No new daemon endpoints.
-- [ ] Recognize only existing Unix installJournalPathAllowed names (install-transaction.json, transactions/<32hex>/{transaction-id,unit,unit-bootstrap,ready.json,validation-launch.json}); add an integration regression for artifacts produced by existing service uninstall. This is a finite filename rule, not a new transaction system.
-- [ ] Run affected cli/tui/cmd tests and race; cross-build affected platforms.
+- [x] Write tests first: Maintenance placement/single row, repeated modal default Cancel, Enter/Esc cancel, no duplicate execution; no mutation before TUI cleanup.
+- [x] Write CLI tests plain uninstall unchanged, --purge without --yes rejects before action, --purge --yes calls app once, English progress and error output, JSON single envelope. Add exact snapshot/call-order assertions with fake functions.
+- [x] Run targeted RED. Implement `service uninstall --purge --yes`; attach TUI action and reuse run cleanup sequence before calling app. Close CLI logging/private handles before deletion too, avoid post-delete log/Setup recreation. No new daemon endpoints.
+- [x] Recognize only existing Unix installJournalPathAllowed names (install-transaction.json, transactions/<32hex>/{transaction-id,unit,unit-bootstrap,ready.json,validation-launch.json}); add an integration regression for artifacts produced by existing service uninstall. This is a finite filename rule, not a new transaction system.
+- [x] Run affected cli/tui/cmd tests and race; cross-build affected platforms.
 
 ## Task 4: End-to-end verification and concise docs
 
 **Files:** focused internal/integration/uninstall_test.go where cross-package gap exists; README.md/docs/unix-layout.md narrow user behavior note; AGENTS only narrow stopped app deletion exception. No CHANGELOG.
-- [ ] Add any missing observable cross-package regression before necessary fixes: cancellation, execution order, unknown content refusal, partial error/no success text. No implementation-mirroring tests.
-- [ ] Verify all new paths use actual app runner; remove dead prototype interfaces/strings and ensure unrelated System rows unchanged.
-- [ ] Run trusted-mirror `go test ./...`, `go test -race ./...`, `go vet ./...`, gofmt, relevant existing Python layout security tests and six CGO0 builds. Document actual failures/native limitations; don't invoke real services or clean installed Mihari.
+- [x] Add any missing observable cross-package regression before necessary fixes: cancellation, execution order, unknown content refusal, partial error/no success text. No implementation-mirroring tests.
+- [x] Verify all new paths use actual app runner; remove dead prototype interfaces/strings and ensure unrelated System rows unchanged.
+- [x] Run trusted-mirror `go test ./...`, `go test -race ./...`, `go vet ./...`, gofmt, relevant existing Python layout security tests and six CGO0 builds. Document actual failures/native limitations; don't invoke real services or clean installed Mihari.
 - [ ] Astra final diff review, fix only actionable scope findings. Deliver changed-file/test summary without commit/PR.
