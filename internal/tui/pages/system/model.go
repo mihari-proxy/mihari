@@ -16,6 +16,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
+	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/logging"
@@ -36,6 +37,7 @@ const (
 	rowZashboard          = "zashboard"
 	rowMetaCubeXD         = "metacubexd"
 	rowRunSetup           = "run-setup"
+	rowCompleteUninstall  = "complete-uninstall"
 	rowServiceStatus      = "service-status"
 	rowServiceHint        = "service-hint"
 	rowServiceInstall     = "service-install"
@@ -109,6 +111,11 @@ type ServiceController interface {
 	Status() (service.StatusKind, error)
 }
 
+// Uninstaller previews the fixed local roots before a complete uninstall.
+type Uninstaller interface {
+	Preview(context.Context) ([]app.UninstallTarget, error)
+}
+
 type row struct {
 	id      string
 	section string
@@ -147,6 +154,13 @@ type serviceResultMsg struct {
 	kind serviceActionKind
 	err  error
 }
+
+type uninstallPreviewMsg struct {
+	targets []app.UninstallTarget
+	err     error
+}
+
+func (m uninstallPreviewMsg) Err() error { return m.err }
 
 // Err implements the shell's action-outcome contract so OS service actions are
 // classified Succeeded/Failed in the Recent operations ledger.
@@ -308,6 +322,7 @@ type Model struct {
 	ctx                   context.Context
 	client                Client
 	service               ServiceController
+	uninstaller           Uninstaller
 	openBrowser           func(string) error
 	newOperationID        func() string
 	selfUpdater           SelfUpdater
@@ -471,6 +486,11 @@ func (m *Model) ApplyServiceStatus(status service.StatusKind, loaded bool) {
 // SetServiceController injects or replaces the OS service controller.
 func (m *Model) SetServiceController(svc ServiceController) {
 	m.service = svc
+}
+
+// SetUninstaller configures the local complete-uninstall preview action.
+func (m *Model) SetUninstaller(uninstaller Uninstaller) {
+	m.uninstaller = uninstaller
 }
 
 // SetOpenBrowser injects the browser launcher (tests and headless environments).
@@ -1015,6 +1035,18 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		m.markRowOutcome(rowID, true, "")
 		return m, tea.Batch(m.loadServiceStatus(), m.rowSpinCmdIfNeeded())
+	case uninstallPreviewMsg:
+		if typed.err != nil {
+			m.markRowOutcome(rowCompleteUninstall, false, actionErrorDetail(typed.err, "Complete uninstall preview failed"))
+			return m, m.rowSpinCmdIfNeeded()
+		}
+		return m, func() tea.Msg {
+			return ui.ActionIntentMsg{
+				Action: ui.ActionCompleteUninstall, Page: ui.PageSystem, Key: "system:complete-uninstall",
+				Title: ui.CompleteUninstallTitle, Object: uninstallTargetPaths(typed.targets), Impact: ui.CompleteUninstallImpact, Rollback: ui.CompleteUninstallRollback,
+				Execute: func() tea.Msg { return ui.CompleteUninstallConfirmedMsg{} },
+			}
+		}
 	case systemProxyActionResultMsg:
 		return m.handleSystemProxyActionResult(typed)
 	case tunActionResultMsg:
@@ -1077,6 +1109,8 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 				return m, nil
 			}
 			return m, func() tea.Msg { return ui.RouteRequestMsg{Page: ui.PageSetup} }
+		case rowCompleteUninstall:
+			return m, m.previewCompleteUninstall()
 		case rowCoreChannel:
 			if m.client == nil || !m.mutationsEnabled || !m.hasCapability(protocol.CapabilityCore) {
 				return m, nil
@@ -1322,8 +1356,36 @@ func (m *Model) rows() []row {
 	rows = append(rows, m.serviceRows()...)
 	rows = append(rows, m.networkRows()...)
 	rows = append(rows, m.loggingRows()...)
+	rows = append(rows, m.maintenanceRows()...)
 	rows = append(rows, m.aboutRows()...)
 	return rows
+}
+
+func (m *Model) maintenanceRows() []row {
+	return []row{{
+		id:      rowCompleteUninstall,
+		section: ui.MaintenanceSectionTitle,
+		label:   ui.CompleteUninstallLabel,
+		detail:  ui.CompleteUninstallImpact,
+	}}
+}
+
+func (m *Model) previewCompleteUninstall() tea.Cmd {
+	if m.uninstaller == nil || m.pending {
+		return nil
+	}
+	return func() tea.Msg {
+		targets, err := m.uninstaller.Preview(m.ctx)
+		return uninstallPreviewMsg{targets: targets, err: err}
+	}
+}
+
+func uninstallTargetPaths(targets []app.UninstallTarget) string {
+	paths := make([]string, 0, len(targets))
+	for _, target := range targets {
+		paths = append(paths, target.Path)
+	}
+	return strings.Join(paths, "\n")
 }
 
 func (m *Model) loggingRows() []row {

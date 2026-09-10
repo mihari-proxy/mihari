@@ -19,6 +19,12 @@ type StatusClient interface {
 	Status(context.Context) (protocol.Status, error)
 }
 
+// Uninstaller is the local application use case for a confirmed full uninstall.
+type Uninstaller interface {
+	Preview(context.Context) ([]app.UninstallTarget, error)
+	Run(context.Context, func(string)) error
+}
+
 type RuntimeClient interface {
 	Core(context.Context) (protocol.CoreStatus, error)
 	InstallCore(context.Context, protocol.MutationRequest) (protocol.CoreInstallResult, error)
@@ -56,6 +62,8 @@ type Dependencies struct {
 	SystemProxyClient       SystemProxyClient
 	TunClient               TunClient
 	ServiceController       ServiceController
+	Uninstaller             Uninstaller
+	CloseForPurgeUninstall  func() error
 	ServiceApply            func(context.Context, app.InstallRequest, update.ReplacementConsent) (app.InstallResult, error)
 	ServiceAction           func(context.Context, string) error
 	InstallationInspect     func(context.Context) (app.InstallationStatus, error)
@@ -200,7 +208,7 @@ func skipPrepareLocalRoot(cmd *cobra.Command) bool {
 	parent := cmd.Parent()
 	if parent != nil && parent.Name() == "service" {
 		switch cmd.Name() {
-		case "install-status", "install-plan", "repair", "fresh":
+		case "install-status", "install-plan", "repair", "fresh", "uninstall":
 			return true
 		}
 	}

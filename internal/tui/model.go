@@ -69,6 +69,7 @@ type Model struct {
 	preparedUpdate       *update.PreparedUpdate
 	installation         *installationUI
 	preparedInstallation *app.InstallationExecuteRequest
+	preparedUninstall    bool
 	now                  time.Time // spinner clock; advanced only while work is pending
 	spinning             bool      // true while a spinner tick loop is scheduled
 	spinGen              uint64    // generation so only the latest tick loop may reschedule
@@ -486,6 +487,12 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			page, ok := model.pages[ui.PageSystem].(*systempage.Model)
 			if !ok || model.active != ui.PageSystem || !page.AcceptsMihariPreparation(typed.Intent.Key) {
 				return model, typed.Intent.Cancel
+			}
+		}
+		if typed.Intent.Action == ui.ActionCompleteUninstall {
+			if _, ok := typed.Result.(ui.CompleteUninstallConfirmedMsg); ok {
+				model.preparedUninstall = true
+				return model, tea.Quit
 			}
 		}
 		model.recordActionOutcome(typed.Intent, typed.Result)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/mihari-proxy/mihari/internal/app"
 	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/logging"
@@ -25,6 +26,7 @@ type Options struct {
 	UserLogDir, UserExportDir string
 	Client                    *controlclient.Client
 	Service                   systempage.ServiceController
+	Uninstaller               Uninstaller
 	SelfUpdater               systempage.SelfUpdater
 	SelfUpdateChannel         func(context.Context) (string, error)
 	CurrentVersion            string
@@ -36,6 +38,12 @@ type Options struct {
 	OpenLogging               LoggingFactory
 	BuildExportLogs           func(LoggingResources) ui.ExportLogsOptions
 	ErrorOutput               io.Writer
+}
+
+// Uninstaller is the local complete-uninstall use case owned by app assembly.
+type Uninstaller interface {
+	Preview(context.Context) ([]app.UninstallTarget, error)
+	Run(context.Context, func(string)) error
 }
 
 // LocalLoggingHealth reports whether the local TUI file logger is available.
@@ -302,6 +310,11 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 	if options.Service != nil {
 		model.SetServiceController(options.Service)
 	}
+	if options.Uninstaller != nil {
+		if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
+			page.SetUninstaller(options.Uninstaller)
+		}
+	}
 	if preparedWorker != nil {
 		model.discardPrepared = preparedWorker.discard
 	}
@@ -337,6 +350,12 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 			cleanup = installationCleanup(preparedWorker.close, cleanup)
 		}
 		return finishInstallationRun(ctx, final, err, options.Output, cleanup, actions.Execute)
+	}
+	if finalModel, ok := final.(Model); ok && finalModel.preparedUninstall {
+		return finishCompleteUninstallRun(ctx, final, err, options.Output, cleanup, options.Uninstaller)
+	}
+	if finalModel, ok := final.(*Model); ok && finalModel != nil && finalModel.preparedUninstall {
+		return finishCompleteUninstallRun(ctx, final, err, options.Output, cleanup, options.Uninstaller)
 	}
 	if preparedWorker != nil {
 		return finishPreparedRun(ctx, final, err, options.Output, options.Relaunch, cleanup, preparedWorker.ApplyPrepared)

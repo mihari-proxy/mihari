@@ -3,9 +3,13 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/service"
 )
@@ -15,6 +19,19 @@ type fakeService struct {
 	reinstalls int
 	starts     int
 	status     service.StatusKind
+}
+
+type fakePurgeUninstaller struct {
+	calls int
+	err   error
+}
+
+func (*fakePurgeUninstaller) Preview(context.Context) ([]app.UninstallTarget, error) { return nil, nil }
+
+func (f *fakePurgeUninstaller) Run(_ context.Context, progress func(string)) error {
+	f.calls++
+	progress("Uninstalling Mihari service")
+	return f.err
 }
 
 func (f *fakeService) Install() error                      { f.installs++; return nil }
@@ -87,5 +104,80 @@ func TestServiceAction_ForwardsCommandContext(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("transactional service callback not called")
+	}
+}
+
+func TestServiceUninstall_PurgeRequiresYesBeforeAction(t *testing.T) {
+	prev := elevate.Check
+	t.Cleanup(func() { elevate.Check = prev })
+	elevate.Check = func() bool { return true }
+	calls := 0
+	stderr := &bytes.Buffer{}
+	exit := Execute(context.Background(), []string{"service", "uninstall", "--purge"}, io.Discard, stderr, Dependencies{
+		ServiceAction: func(context.Context, string) error {
+			calls++
+			return nil
+		},
+	})
+	if exit != ExitUsage || calls != 0 || !strings.Contains(stderr.String(), "--yes") {
+		t.Fatalf("exit=%d calls=%d stderr=%q", exit, calls, stderr.String())
+	}
+}
+
+func TestServiceUninstall_WithoutPurgeKeepsExistingAction(t *testing.T) {
+	prev := elevate.Check
+	t.Cleanup(func() { elevate.Check = prev })
+	elevate.Check = func() bool { return true }
+	var action string
+	exit := Execute(context.Background(), []string{"service", "uninstall", "--json"}, io.Discard, &bytes.Buffer{}, Dependencies{
+		ServiceAction: func(_ context.Context, got string) error {
+			action = got
+			return nil
+		},
+	})
+	if exit != ExitOK || action != "uninstall" {
+		t.Fatalf("exit=%d action=%q", exit, action)
+	}
+}
+
+func TestServiceUninstall_PurgeWithYesRunsOnceAndKeepsJSONSingleEnvelope(t *testing.T) {
+	prev := elevate.Check
+	t.Cleanup(func() { elevate.Check = prev })
+	elevate.Check = func() bool { return true }
+	for _, jsonOutput := range []bool{false, true} {
+		t.Run(strconv.FormatBool(jsonOutput), func(t *testing.T) {
+			uninstaller := &fakePurgeUninstaller{}
+			stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+			args := []string{"service", "uninstall", "--purge", "--yes"}
+			if jsonOutput {
+				args = append(args, "--json")
+			}
+			exit := Execute(context.Background(), args, stdout, stderr, Dependencies{Uninstaller: uninstaller})
+			if exit != ExitOK || uninstaller.calls != 1 {
+				t.Fatalf("exit=%d calls=%d stdout=%q stderr=%q", exit, uninstaller.calls, stdout.String(), stderr.String())
+			}
+			if jsonOutput {
+				if strings.Count(stdout.String(), "\n") != 1 || !strings.Contains(stdout.String(), `"ok":true`) || stderr.Len() != 0 {
+					t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+				}
+				return
+			}
+			if !strings.Contains(stderr.String(), "Uninstalling Mihari service") || !strings.Contains(stdout.String(), "Mihari has been completely uninstalled") {
+				t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestServiceUninstall_PurgeFailurePreservesEnglishError(t *testing.T) {
+	prev := elevate.Check
+	t.Cleanup(func() { elevate.Check = prev })
+	elevate.Check = func() bool { return true }
+	stderr := &bytes.Buffer{}
+	exit := Execute(context.Background(), []string{"service", "uninstall", "--purge", "--yes"}, io.Discard, stderr, Dependencies{
+		Uninstaller: &fakePurgeUninstaller{err: errors.New("Mihari did not stop within 30 seconds; stop it and retry the uninstall")},
+	})
+	if exit != ExitInvalidState || !strings.Contains(stderr.String(), "Mihari did not stop within 30 seconds") {
+		t.Fatalf("exit=%d stderr=%q", exit, stderr.String())
 	}
 }

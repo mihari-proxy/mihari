@@ -402,6 +402,13 @@ const (
 )
 
 const (
+	CompleteUninstallLabel    = "Completely Uninstall Mihari"
+	CompleteUninstallTitle    = "Completely Uninstall Mihari"
+	CompleteUninstallImpact   = "Removes the Mihari service and recognized Mihari files after confirmation."
+	CompleteUninstallRollback = "Reinstall Mihari from a separate copy if you need it again."
+)
+
+const (
 	SetupTitle                      = "Setup"
 	SetupProgress                   = "Step %d of %d"
 	SetupUnavailable                = "Setup state is unavailable"
