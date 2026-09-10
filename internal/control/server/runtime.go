@@ -160,6 +160,7 @@ func orderedProxyGroups(proxies map[string]mihomo.Proxy) []protocol.ProxyGroup {
 		return protocol.ProxyGroup{
 			Name: proxy.Name, Type: proxy.Type, Now: proxy.Now,
 			All: append([]string(nil), proxy.All...), Nodes: nodes,
+			TestURL: proxy.TestURL,
 		}
 	}
 

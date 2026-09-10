@@ -199,6 +199,39 @@ func TestProxiesPreservesGLOBALAllOrder(t *testing.T) {
 	}
 }
 
+func TestProxiesMapsGroupTestURL(t *testing.T) {
+	fake := &fakeRuntime{proxies: mihomo.Proxies{Proxies: map[string]mihomo.Proxy{
+		"GLOBAL": {Name: "GLOBAL", Type: "Selector", Now: "HK", All: []string{"HK", "leaf"}},
+		"HK":     {Name: "HK", Type: "URLTest", Now: "leaf", All: []string{"leaf"}, TestURL: "https://cp.cloudflare.com/generate_204"},
+		"leaf":   {Name: "leaf", Type: "VLESS"},
+	}}}
+	server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: fake})
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, authorizedRequest(http.MethodGet, "/v1/proxies", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var got protocol.ProxyGroups
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Groups) < 1 {
+		t.Fatalf("groups=%#v", got.Groups)
+	}
+	var hk protocol.ProxyGroup
+	for _, group := range got.Groups {
+		if group.Name == "HK" {
+			hk = group
+		}
+	}
+	if hk.TestURL != "https://cp.cloudflare.com/generate_204" {
+		t.Fatalf("HK=%#v", hk)
+	}
+	if strings.Contains(response.Body.String(), `"test_url":"https://cp.cloudflare.com/generate_204"`) == false {
+		t.Fatalf("body=%s", response.Body.String())
+	}
+}
+
 func groupNames(groups []protocol.ProxyGroup) []string {
 	names := make([]string, len(groups))
 	for i, g := range groups {
