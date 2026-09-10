@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -104,6 +105,8 @@ func TestDelayStyle_BandsAndTimeout(t *testing.T) {
 		{"untested", DelayState{Kind: DelayUntested}, "muted"},
 		{"testing", DelayState{Kind: DelayTesting}, "warning"},
 		{"timeout", DelayState{Kind: DelayTimeout}, "bad"},
+		{"failed", DelayState{Kind: DelayFailed}, "bad"},
+		{"invalid", DelayState{Kind: DelayInvalid}, "bad"},
 		{"good_28", DelayState{Kind: DelayValue, Milliseconds: 28}, "good"},
 		{"good_99", DelayState{Kind: DelayValue, Milliseconds: 99}, "good"},
 		{"mid_100", DelayState{Kind: DelayValue, Milliseconds: 100}, "mid"},
@@ -187,19 +190,14 @@ func TestRenderDelay_TestingUsesBrailleSpinner(t *testing.T) {
 }
 
 func TestModel_DelayTimeoutPath(t *testing.T) {
-	client := &fakeClient{delayErr: errors.New("timeout")}
+	client := &fakeClient{delayErr: context.DeadlineExceeded}
 	model := New(client, func() string { return "op" })
 	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{
 		Name: "G", Nodes: []protocol.ProxyNode{{Name: "n1", Type: "ss"}},
 	}}})
 	model.expanded["G"] = true
 	model.focus = FocusID{Group: "G", Node: "n1"}
-	cmd := model.testNode("n1")
-	if cmd == nil {
-		t.Fatal("expected delay command")
-	}
-	updated, _ := model.Update(cmd())
-	model = updated.(*Model)
+	applyProxyCmd(t, model, model.testNode("n1"))
 	if model.delays["n1"].Kind != DelayTimeout {
 		t.Fatalf("delay kind=%v", model.delays["n1"].Kind)
 	}
@@ -213,6 +211,67 @@ func TestModel_DelayTimeoutPath(t *testing.T) {
 		t.Fatalf("Timeout should be styled with DelayBad in view:\n%s", view)
 	}
 }
+
+func TestModel_DelayErrorKindsRender(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"failed", protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo request failed"}, ui.FailedLabel},
+		{"invalid", protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "delay test URL and timeout are invalid"}, ui.ProxyDelayInvalid},
+		{"wrapped timeout", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "local control operation failed"}, context.DeadlineExceeded), ui.TimeoutLabel},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &fakeClient{delayErr: tc.err}
+			model := New(client, func() string { return "op" })
+			model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{
+				Name: "G", Nodes: []protocol.ProxyNode{{Name: "n1", Type: "ss"}},
+			}}})
+			model.expanded["G"] = true
+			model.focus = FocusID{Group: "G", Node: "n1"}
+			applyProxyCmd(t, model, model.testNode("n1"))
+			view := model.View()
+			if !strings.Contains(view, tc.want) {
+				t.Fatalf("view missing %q:\n%s", tc.want, view)
+			}
+			if !themeDelayBadContains(model.theme, view, tc.want) {
+				t.Fatalf("%q should use DelayBad:\n%s", tc.want, view)
+			}
+		})
+	}
+}
+
+func TestClassifyDelayError(t *testing.T) {
+	timeoutNet := timeoutNetError{}
+	cases := []struct {
+		name string
+		err  error
+		kind DelayKind
+	}{
+		{"deadline", context.DeadlineExceeded, DelayTimeout},
+		{"wrapped data_failure deadline", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "local control operation failed"}, context.DeadlineExceeded), DelayTimeout},
+		{"net timeout", timeoutNet, DelayTimeout},
+		{"invalid", protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "delay test URL and timeout are invalid"}, DelayInvalid},
+		{"upstream", protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo request failed"}, DelayFailed},
+		{"canceled", context.Canceled, DelayFailed},
+		{"plain", errors.New("timeout"), DelayFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyDelayError(tc.err); got != tc.kind {
+				t.Fatalf("kind=%v want %v", got, tc.kind)
+			}
+		})
+	}
+}
+
+type timeoutNetError struct{}
+
+func (timeoutNetError) Error() string   { return "i/o timeout" }
+func (timeoutNetError) Timeout() bool   { return true }
+func (timeoutNetError) Temporary() bool { return true }
 
 func themeDelayBadContains(theme ui.Theme, view, label string) bool {
 	return strings.Contains(view, theme.DelayBad.Render(label))

@@ -119,6 +119,7 @@ const (
 	MissingValue             = "—"
 	TestingLabel             = "Testing…"
 	TimeoutLabel             = "Timeout"
+	ProxyDelayInvalid        = "Invalid"
 	ProxySelectFailed        = "Proxy selection failed"
 	ConnectionsActiveLabel   = "Active"
 	ConnectionsClosedLabel   = "Closed"

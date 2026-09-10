@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -33,6 +35,8 @@ const (
 	DelayTesting
 	DelayValue
 	DelayTimeout
+	DelayFailed
+	DelayInvalid
 )
 
 type DelayState struct {
@@ -149,10 +153,10 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		return m, nil
 	case delayResultMsg:
-		if typed.err != nil {
-			m.delays[typed.node] = DelayState{Kind: DelayTimeout}
-		} else {
+		if typed.err == nil {
 			m.delays[typed.node] = DelayState{Kind: DelayValue, Milliseconds: typed.delay}
+		} else {
+			m.delays[typed.node] = DelayState{Kind: classifyDelayError(typed.err)}
 		}
 		return m, m.delaySpinCmdIfNeeded()
 	case startDelaySpinMsg:
@@ -428,13 +432,28 @@ func (m *Model) delaySpinCmdIfNeeded() tea.Cmd {
 	return func() tea.Msg { return startDelaySpinMsg{gen: gen} }
 }
 
+func classifyDelayError(err error) DelayKind {
+	var api protocol.APIError
+	if errors.As(err, &api) && api.Code == protocol.CodeInvalidArgument {
+		return DelayInvalid
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return DelayTimeout
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return DelayTimeout
+	}
+	return DelayFailed
+}
+
 // delayStyle maps latency state onto the theme color ladder.
-// Bands (ms): <100 good, 100–399 mid, ≥400 bad; timeout → DelayBad; untested → Muted; testing → Warning.
+// Bands (ms): <100 good, 100–399 mid, ≥400 bad; timeout/failed/invalid → DelayBad; untested → Muted; testing → Warning.
 func delayStyle(theme ui.Theme, delay DelayState) lipgloss.Style {
 	switch delay.Kind {
 	case DelayTesting:
 		return theme.Warning
-	case DelayTimeout:
+	case DelayTimeout, DelayFailed, DelayInvalid:
 		return theme.DelayBad
 	case DelayValue:
 		switch {
@@ -463,6 +482,10 @@ func renderDelay(theme ui.Theme, delay DelayState, now time.Time) string {
 		return style.Render(fmt.Sprintf("%d ms", delay.Milliseconds))
 	case DelayTimeout:
 		return style.Render(ui.TimeoutLabel)
+	case DelayFailed:
+		return style.Render(ui.FailedLabel)
+	case DelayInvalid:
+		return style.Render(ui.ProxyDelayInvalid)
 	default:
 		return style.Render(ui.MissingValue)
 	}
