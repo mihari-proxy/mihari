@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"net/http"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -14,37 +15,38 @@ func (s *Server) systemProxyRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) systemProxyStatus(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	status, err := s.runtime.SystemProxyStatus(request.Context())
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, status)
 }
 
 func (s *Server) enableSystemProxy(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	var body protocol.SystemProxyMutationRequest
 	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
 		return
 	}
-	status, err := s.runtime.EnableSystemProxy(request.Context(), runtimeapi.Operation{
+	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "system_proxy.enable"})
+	status, err := s.runtime.EnableSystemProxy(ctx, runtimeapi.Operation{
 		ID: body.OperationID, Source: "control", IfRevision: body.IfRevision,
 	}, body.Force)
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(ctx, writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, status)
 }
 
 func (s *Server) disableSystemProxy(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	var body protocol.SystemProxyMutationRequest
@@ -52,11 +54,12 @@ func (s *Server) disableSystemProxy(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	// Force is intentionally ignored on disable; foreign proxies are refused by runtime.
-	status, err := s.runtime.DisableSystemProxy(request.Context(), runtimeapi.Operation{
+	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "system_proxy.disable"})
+	status, err := s.runtime.DisableSystemProxy(ctx, runtimeapi.Operation{
 		ID: body.OperationID, Source: "control", IfRevision: body.IfRevision,
 	})
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(ctx, writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, status)

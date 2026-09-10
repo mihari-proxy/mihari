@@ -17,7 +17,7 @@ func (m *Manager) TUIPreferences() preferences.Preferences {
 }
 
 func (m *Manager) UpdateTUIPreferences(ctx context.Context, operation Operation, update preferences.Update) (preferences.Preferences, error) {
-	result, err := m.doOperation(ctx, "preferences-tui:"+operation.ID, func() (any, error) {
+	result, err := m.doOperation(ctx, "preferences-tui:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.preferences == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "TUI preferences are unavailable"}
 		}

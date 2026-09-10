@@ -170,7 +170,9 @@ func TestUnixSecurity_FullAssembly(t *testing.T) {
 	daemonCtx, stopDaemon := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() {
-		done <- app.RunUnixStartup(daemonCtx, layout, func(context.Context) (bool, error) { return false, errors.New("activated startup must not bootstrap") }, func(ctx context.Context, phase string) error { return runUnixDaemon(ctx, layout, 0, phase, installer) })
+		done <- app.RunUnixStartup(daemonCtx, layout, func(context.Context) (bool, error) { return false, errors.New("activated startup must not bootstrap") }, func(ctx context.Context, phase string) error {
+			return runUnixDaemonWithLoggingFailure(ctx, layout, 0, phase, installer, nil)
+		})
 	}()
 	joined := false
 	defer func() {

@@ -3,7 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"log/slog"
 	"net/netip"
 	"path/filepath"
 	"sync"
@@ -12,6 +12,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/core"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/geoip"
 	"github.com/mihari-proxy/mihari/internal/mihomo"
 	"github.com/mihari-proxy/mihari/internal/onboarding"
@@ -116,6 +117,8 @@ type Options struct {
 	// SaveSettings persists an independently prepared settings candidate.
 	// Nil uses config.SaveWithCommit.
 	SaveSettings func(string, config.Settings) (config.CommitResult, error)
+	// DiagnosticReporter records internal diagnostics for actual operation execution.
+	DiagnosticReporter diagnostics.Reporter
 	// ServiceStatus reports the OS service registration state for onboarding review.
 	// Optional; nil reports "unknown". Injected as a func (not *service.Manager) to keep
 	// runtime free of the service package and break the main↔daemon assembly cycle.
@@ -174,6 +177,7 @@ type Manager struct {
 	serviceStatus             func() (string, error)
 	installationStatus        func(context.Context) (protocol.InstallationStatus, error)
 	onBackgroundError         func(component string, err error)
+	diagnosticReporter        diagnostics.Reporter
 	validationMode            bool
 	activationPhase           string
 	settingsMu                sync.RWMutex
@@ -267,6 +271,7 @@ func New(options Options) *Manager {
 		serviceStatus:      options.ServiceStatus,
 		installationStatus: options.InstallationStatus,
 		onBackgroundError:  options.OnBackgroundError,
+		diagnosticReporter: options.DiagnosticReporter,
 		validationMode:     options.ValidationMode,
 		activationPhase:    options.ActivationPhase,
 		maintenance:        make(chan struct{}, 1),
@@ -299,7 +304,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		go func() {
 			defer close(webDone)
 			// Panel/gateway failure must not stop mihomo supervision.
-			m.reportBackground("web-gateway", m.webGateway.Serve(ctx))
+			m.reportBackgroundContext(ctx, "web-gateway", m.webGateway.Serve(ctx))
 		}()
 		defer func() { <-webDone }()
 	}
@@ -308,7 +313,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		schedulerDone := make(chan struct{})
 		go func() {
 			defer close(schedulerDone)
-			m.reportBackground("scheduler", m.runScheduler(schedulerCtx))
+			m.reportBackgroundContext(schedulerCtx, "scheduler", m.runScheduler(schedulerCtx))
 		}()
 		defer func() {
 			cancelScheduler()
@@ -353,13 +358,22 @@ func (m *Manager) Run(ctx context.Context) error {
 }
 
 func (m *Manager) reportBackground(component string, err error) {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	m.reportBackgroundContext(context.Background(), component, err)
+}
+
+func (m *Manager) reportBackgroundContext(ctx context.Context, component string, err error) {
+	if diagnostics.AlreadyReported(err) {
 		return
 	}
-	if m.onBackgroundError == nil {
+	level, emit := diagnostics.FailureLevel(ctx, err)
+	if !emit {
 		return
 	}
-	m.onBackgroundError(component, err)
+	if m.diagnosticReporter != nil {
+		m.diagnosticReporter(ctx, diagnostics.Record{Component: component, Event: "background.failed", Level: level, Err: err})
+	} else if m.onBackgroundError != nil {
+		m.onBackgroundError(component, err)
+	}
 }
 
 func (m *Manager) Observe(observation supervisor.Observation) {
@@ -456,7 +470,7 @@ func (m *Manager) Stream(ctx context.Context, kind mihomo.StreamKind, receive fu
 }
 
 func (m *Manager) Install(ctx context.Context, operation Operation) (core.InstallResult, error) {
-	result, err := m.doOperation(ctx, "install:"+operation.ID, func() (any, error) {
+	result, err := m.doOperation(ctx, "install:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.installer == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "core installer is unavailable"}
 		}
@@ -505,7 +519,7 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 					if !candidate.changed {
 						return nil
 					}
-					if _, err := m.saveSettingsCandidate(candidate); err != nil {
+					if _, err := m.saveSettingsCandidate(ctx, candidate); err != nil {
 						return err
 					}
 					m.publishSettings(candidate)
@@ -558,7 +572,7 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 					}
 					return snapshot
 				}
-				if _, err := m.updateSettings(func(settings *config.Settings) error {
+				if _, err := m.updateSettings(ctx, func(settings *config.Settings) error {
 					settings.CoreChannel = channel
 					return nil
 				}); err != nil {
@@ -644,7 +658,7 @@ func (m *Manager) ServiceStatus(context.Context) (protocol.ServiceStatus, error)
 }
 
 func (m *Manager) Restart(ctx context.Context, operation Operation) error {
-	_, err := m.doOperation(ctx, "restart:"+operation.ID, func() (any, error) {
+	_, err := m.doOperation(ctx, "restart:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.supervisor == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo is not running"}
 		}
@@ -661,7 +675,7 @@ func (m *Manager) Restart(ctx context.Context, operation Operation) error {
 }
 
 func (m *Manager) SelectProxy(ctx context.Context, operation Operation, group, name string) error {
-	_, err := m.doOperation(ctx, "select:"+operation.ID, func() (any, error) {
+	_, err := m.doOperation(ctx, "select:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.controller == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
 		}
@@ -674,7 +688,7 @@ func (m *Manager) SelectProxy(ctx context.Context, operation Operation, group, n
 }
 
 func (m *Manager) CloseConnection(ctx context.Context, operation Operation, id string) error {
-	_, err := m.doOperation(ctx, "close:"+operation.ID, func() (any, error) {
+	_, err := m.doOperation(ctx, "close:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.controller == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
 		}
@@ -687,7 +701,7 @@ func (m *Manager) CloseConnection(ctx context.Context, operation Operation, id s
 }
 
 func (m *Manager) CloseAllConnections(ctx context.Context, operation Operation) error {
-	_, err := m.doOperation(ctx, "close-all:"+operation.ID, func() (any, error) {
+	_, err := m.doOperation(ctx, "close-all:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.controller == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
 		}
@@ -760,12 +774,36 @@ func (m *Manager) checkOpen() error {
 	return nil
 }
 
-func (m *Manager) doOperation(ctx context.Context, key string, execute func() (any, error)) (any, error) {
+func (m *Manager) doOperation(ctx context.Context, key string, execute func(context.Context) (any, error)) (any, error) {
 	if err := m.checkOpen(); err != nil {
 		return nil, err
 	}
+	executeOnce := func() (any, error) {
+		executionCtx, batch := newOperationDiagnostics(ctx, key)
+		result, err := execute(executionCtx)
+		m.flushDiagnostics(executionCtx, batch)
+		if err != nil && m.diagnosticReporter != nil && !diagnostics.AlreadyReported(err) {
+			if level, emit := diagnostics.FailureLevel(executionCtx, err); emit {
+				m.diagnosticReporter(executionCtx, diagnostics.Record{
+					Component: "runtime",
+					Event:     "operation.failed",
+					Level:     level,
+					Err:       err,
+				})
+				err = diagnostics.MarkReported(err)
+			}
+		}
+		if err == nil && m.diagnosticReporter != nil && operationSuccessKey(key) {
+			m.diagnosticReporter(executionCtx, diagnostics.Record{
+				Component: "runtime",
+				Event:     "operation.succeeded",
+				Level:     slog.LevelInfo,
+			})
+		}
+		return result, err
+	}
 	if key == "" || key[len(key)-1] == ':' {
-		return execute()
+		return executeOnce()
 	}
 	m.operationsMu.Lock()
 	if existing := m.operations[key]; existing != nil {
@@ -791,13 +829,13 @@ func (m *Manager) doOperation(ctx context.Context, key string, execute func() (a
 		}
 		if len(m.operations) >= 256 {
 			m.operationsMu.Unlock()
-			return execute()
+			return executeOnce()
 		}
 	}
 	m.operations[key] = entry
 	m.operationsMu.Unlock()
 
-	entry.result, entry.err = execute()
+	entry.result, entry.err = executeOnce()
 	close(entry.done)
 	return entry.result, entry.err
 }

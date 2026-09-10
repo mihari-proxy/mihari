@@ -641,7 +641,7 @@ func TestRunDaemon_BootstrapSettingsWarning(t *testing.T) {
 				LoadSettings: func(string, string) (config.Settings, bool, config.CommitResult, error) {
 					return settings, created, config.CommitResult{
 						Committed: true,
-						Warning:   errors.New(`sync C:\sensitive\mihari.yaml parent`),
+						Warning:   &os.PathError{Op: "sync", Path: `C:\sensitive\mihari.yaml`, Err: os.ErrPermission},
 					}, nil
 				},
 			}
@@ -672,8 +672,8 @@ func TestRunDaemon_BootstrapSettingsWarning(t *testing.T) {
 				t.Fatalf("Manager initial logging status=%#v", initial)
 			}
 			logged := readFileString(t, paths.DaemonLog)
-			if !strings.Contains(logged, `"component":"settings"`) || !strings.Contains(logged, "parent directory sync failed after commit") {
-				t.Fatalf("bootstrap warning was not logged with stable fields: %s", logged)
+			if !strings.Contains(logged, `"component":"daemon.settings"`) || !strings.Contains(logged, `"level":"WARN"`) || !strings.Contains(logged, "path operation sync: permission denied") {
+				t.Fatalf("bootstrap warning did not preserve the safe commit reason: %s", logged)
 			}
 			if strings.Contains(logged, "sensitive") || strings.Contains(logged, paths.Settings) {
 				t.Fatalf("bootstrap warning leaked underlying path: %s", logged)
@@ -727,6 +727,84 @@ func TestRunDaemon_BootstrapSettingsPreCommitFailureStopsBeforeLogging(t *testin
 	}
 }
 
+func TestRunDaemon_PreLoggerFailureUsesSafeInjectedDaemonStderr(t *testing.T) {
+	resetDaemonRunSeamsForTest(t)
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsafeParse := errors.New("parse " + paths.Settings + " token=secret-value")
+	var output bytes.Buffer
+	err = runDaemonWith(context.Background(), daemonRunDeps{
+		Paths: paths, PrivateFS: fs, Version: "test", DiagnosticStderr: &output,
+		LoadSettings: func(string, string) (config.Settings, bool, config.CommitResult, error) {
+			return config.Settings{}, false, config.CommitResult{}, unsafeParse
+		},
+	})
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "load settings" {
+		t.Fatalf("err=%v", err)
+	}
+	if got, want := output.String(), "mihari daemon startup: load settings: startup failed\n"; got != want {
+		t.Fatalf("diagnostic=%q want=%q", got, want)
+	}
+	for _, forbidden := range []string{paths.Root, paths.Settings, "secret-value", "parse"} {
+		if strings.Contains(output.String(), forbidden) {
+			t.Fatalf("startup diagnostic leaked %q: %s", forbidden, output.String())
+		}
+	}
+}
+
+func TestRunDaemon_PreLoggerTypedFileFailureKeepsSafeReason(t *testing.T) {
+	resetDaemonRunSeamsForTest(t)
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	err = runDaemonWith(context.Background(), daemonRunDeps{
+		Paths: paths, PrivateFS: fs, Version: "test", DiagnosticStderr: &output,
+		LoadSettings: func(string, string) (config.Settings, bool, config.CommitResult, error) {
+			return config.Settings{}, false, config.CommitResult{}, &os.PathError{Op: "open", Path: paths.Settings, Err: os.ErrPermission}
+		},
+	})
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "load settings" {
+		t.Fatalf("err=%v", err)
+	}
+	if got, want := output.String(), "mihari daemon startup: load settings: file operation open: permission denied\n"; got != want {
+		t.Fatalf("diagnostic=%q want=%q", got, want)
+	}
+	if strings.Contains(output.String(), paths.Settings) {
+		t.Fatalf("startup diagnostic leaked a path: %s", output.String())
+	}
+}
+
+func TestRunDaemon_PreLoggerFailureIgnoresUnavailableDiagnosticStderr(t *testing.T) {
+	resetDaemonRunSeamsForTest(t)
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := &failingDiagnosticWriter{}
+	err = runDaemonWith(context.Background(), daemonRunDeps{
+		Paths: paths, PrivateFS: fs, Version: "test", DiagnosticStderr: output,
+		LoadSettings: func(string, string) (config.Settings, bool, config.CommitResult, error) {
+			return config.Settings{}, false, config.CommitResult{}, errors.New("unsafe configuration text")
+		},
+	})
+	var apiError protocol.APIError
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "load settings" {
+		t.Fatalf("err=%v", err)
+	}
+	if output.writes != 1 {
+		t.Fatalf("diagnostic writes=%d want=1", output.writes)
+	}
+}
+
 func TestRunDaemon_RefreshSecretsKeepsBaseSecrets(t *testing.T) {
 	resetDaemonRunSeamsForTest(t)
 	paths := absoluteTempPaths(t)
@@ -746,11 +824,19 @@ func TestRunDaemon_RefreshSecretsKeepsBaseSecrets(t *testing.T) {
 		if options.RefreshLogSecrets == nil {
 			t.Fatal("daemon assembly did not receive secret refresh callback")
 		}
+		if options.DiagnosticReporter == nil {
+			t.Fatal("daemon assembly did not receive diagnostic reporter")
+		}
 		options.RefreshLogSecrets([]string{newURL})
 		daemonLogger.Info("base " + controlToken + " catalog " + newURL)
 		return &app.RuntimeAssembly{}, nil
 	}
-	runDaemon = func(context.Context, daemon.Options) error { return nil }
+	runDaemon = func(_ context.Context, options daemon.Options) error {
+		if options.DiagnosticReporter == nil {
+			t.Fatal("normal control server did not receive diagnostic reporter")
+		}
+		return nil
+	}
 
 	if err := runDaemonWith(context.Background(), daemonRunDeps{Paths: paths, PrivateFS: fs, Token: controlToken, Version: "test"}); err != nil {
 		t.Fatal(err)
@@ -1293,12 +1379,13 @@ type countingCloser struct {
 	name  string
 	order *[]string
 	calls int
+	err   error
 }
 
 func (c *countingCloser) Close() error {
 	c.calls++
 	*c.order = append(*c.order, c.name)
-	return nil
+	return c.err
 }
 
 type countingCapture struct{ *countingCloser }
@@ -1306,6 +1393,13 @@ type countingCapture struct{ *countingCloser }
 func (c *countingCapture) Write(value []byte) (int, error) { return len(value), nil }
 
 func (c *countingCapture) Flush() error { return nil }
+
+type failingDiagnosticWriter struct{ writes int }
+
+func (w *failingDiagnosticWriter) Write([]byte) (int, error) {
+	w.writes++
+	return 0, errors.New("diagnostic stderr unavailable")
+}
 
 func resetProcessLocalRootForTest(t *testing.T) {
 	t.Helper()

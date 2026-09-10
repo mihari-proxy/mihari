@@ -18,8 +18,10 @@ import (
 func addInstallationCommands(root *cobra.Command, deps Dependencies, options *runOptions) {
 	if deps.InstallationInspect != nil {
 		root.AddCommand(&cobra.Command{Use: "install-status", Short: "Inspect installation completeness without changing files", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-			status, err := deps.InstallationInspect(cmd.Context())
+			ctx := localTaskContext(cmd.Context(), deps, "installation.inspect")
+			status, err := deps.InstallationInspect(ctx)
 			if err != nil {
+				reportLocalTaskFailure(ctx, deps, "installation.inspect.failed", err)
 				return classifyInstallationError(err)
 			}
 			if options.json {
@@ -94,8 +96,10 @@ func newInstallationCommand(name string, deps Dependencies, options *runOptions)
 		if cmd.Flags().Changed("start") {
 			request.Start = &start
 		}
-		plan, err := deps.InstallationPlan(cmd.Context(), request)
+		ctx := localTaskContext(cmd.Context(), deps, "installation.plan")
+		plan, err := deps.InstallationPlan(ctx, request)
 		if err != nil {
+			reportLocalTaskFailure(ctx, deps, "installation.plan.failed", err)
 			return classifyInstallationError(err)
 		}
 		if name == "install-plan" {
@@ -133,12 +137,16 @@ func newInstallationCommand(name string, deps Dependencies, options *runOptions)
 				}
 			}
 		}
-		outcome, err := deps.InstallationExecute(cmd.Context(), app.InstallationExecuteRequest{Plan: plan, ResetConfirmed: name == "fresh"})
+		ctx = localTaskContext(cmd.Context(), deps, "installation.execute")
+		outcome, err := deps.InstallationExecute(ctx, app.InstallationExecuteRequest{Plan: plan, ResetConfirmed: name == "fresh"})
 		if err != nil {
+			reportLocalTaskFailure(ctx, deps, "installation.execute.failed", err)
 			return classifyInstallationError(err)
 		}
 		if outcome.Schema != app.InstallationOutcomeSchema || !outcome.InstallationComplete || outcome.StartFailed || outcome.ServiceState != "running" && outcome.ServiceState != "stopped" {
-			return protocol.APIError{Code: protocol.CodeInvalidState, Message: "installation result is invalid"}
+			err := protocol.APIError{Code: protocol.CodeInvalidState, Message: "installation result is invalid"}
+			reportLocalTaskFailure(ctx, deps, "installation.execute.failed", err)
+			return err
 		}
 		if options.json {
 			return renderJSON(cmd.OutOrStdout(), outcome)

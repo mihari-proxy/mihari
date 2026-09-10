@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/spf13/cobra"
 )
 
@@ -39,7 +40,8 @@ func newCoreCommand(dependencies Dependencies, options *runOptions) *cobra.Comma
 				if err != nil {
 					return err
 				}
-				result, err := client.InstallCore(command.Context(), request)
+				ctx := logging.WithOperation(command.Context(), logging.OperationMetadata{ID: request.OperationID, Name: "core.install"})
+				result, err := client.InstallCore(ctx, request)
 				if err != nil {
 					return classifyRuntimeError(err)
 				}
@@ -66,7 +68,8 @@ func newCoreCommand(dependencies Dependencies, options *runOptions) *cobra.Comma
 			if err != nil {
 				return err
 			}
-			result, err := client.RestartCore(command.Context(), request)
+			ctx := logging.WithOperation(command.Context(), logging.OperationMetadata{ID: request.OperationID, Name: "core.restart"})
+			result, err := client.RestartCore(ctx, request)
 			if err != nil {
 				return classifyRuntimeError(err)
 			}

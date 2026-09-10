@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	tea "charm.land/bubbletea/v2"
 	"context"
 	"errors"
@@ -18,11 +19,12 @@ func TestPreparedUpdate_CleanupBeforeApplyAndRelaunch(t *testing.T) {
 			model.relaunchRequested = true
 			model.preparedUpdate = &update.PreparedUpdate{Available: true, CandidatePath: "candidate"}
 			events := []string{}
+			var warnings bytes.Buffer
 			var runErr error
 			if failure == "program" {
 				runErr = errors.New("program")
 			}
-			err := finishPreparedRun(context.Background(), model, runErr, io.Discard, func() error { events = append(events, "relaunch"); return nil }, func(tea.Model) error {
+			err := finishPreparedRun(context.Background(), model, runErr, &warnings, func() error { events = append(events, "relaunch"); return nil }, func(tea.Model) error {
 				events = append(events, "workers-logging-fs-closed")
 				if failure == "cleanup" {
 					return errors.New("cleanup")
@@ -34,7 +36,7 @@ func TestPreparedUpdate_CleanupBeforeApplyAndRelaunch(t *testing.T) {
 					return update.Result{}, errors.New("apply")
 				}
 				if failure == "after-rename" {
-					return update.Result{Updated: true}, errors.New("sync")
+					return update.Result{Updated: true}, errors.New("sync /private/late-secret/data\r\nfailed")
 				}
 				return update.Result{Updated: true}, nil
 			})
@@ -47,6 +49,13 @@ func TestPreparedUpdate_CleanupBeforeApplyAndRelaunch(t *testing.T) {
 			}
 			if !reflect.DeepEqual(events, want) {
 				t.Fatalf("unsafe update order: %v want %v err=%v", events, want, err)
+			}
+			if failure == "after-rename" {
+				if warnings.String() != "Warning: Mihari updated, but installation recovery is required\n" {
+					t.Fatal("post-cleanup warning missing or leaked raw cause")
+				}
+			} else if warnings.Len() != 0 {
+				t.Fatal("unexpected post-cleanup output")
 			}
 			if failure != "" && err == nil {
 				t.Fatal("failure discarded")

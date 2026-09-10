@@ -17,16 +17,16 @@ func (s *Server) installationRoutes(mux *http.ServeMux) {
 func (s *Server) reportInstallationStatus(w http.ResponseWriter, r *http.Request) {
 	runtime, ok := s.runtime.(installationStatusAPI)
 	if !ok {
-		writeControlError(w, protocol.APIError{Code: protocol.CodeInvalidState, Message: "installation status is unavailable"})
+		s.writeControlError(r.Context(), w, protocol.APIError{Code: protocol.CodeInvalidState, Message: "installation status is unavailable"})
 		return
 	}
 	status, err := runtime.GetInstallationStatus(r.Context())
 	if err != nil {
-		writeControlError(w, err)
+		s.writeControlError(r.Context(), w, err)
 		return
 	}
 	if err := status.Validate(); err != nil {
-		writeControlError(w, err)
+		s.writeControlError(r.Context(), w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, status)

@@ -7,7 +7,7 @@ import (
 
 // RefreshProvider delegates native provider refresh to mihomo through the mutation coordinator.
 func (m *Manager) RefreshProvider(ctx context.Context, operation Operation, name string) error {
-	_, err := m.doOperation(ctx, "rule-provider:"+operation.ID, func() (any, error) {
+	_, err := m.doOperation(ctx, "rule-provider:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.controller == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
 		}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/subscription"
 	"github.com/mihari-proxy/mihari/internal/tundetect"
@@ -28,7 +29,7 @@ func (m *Manager) TunStatus(ctx context.Context) (protocol.TunStatus, error) {
 // When other TUN adapters are detected (routing conflict or loop risk), force
 // must be true to proceed. Disable is never gated (see mutateTun).
 func (m *Manager) EnableTun(ctx context.Context, op Operation, force bool) (protocol.TunStatus, error) {
-	result, err := m.doOperation(ctx, "tun-enable:"+op.ID, func() (any, error) {
+	result, err := m.doOperation(ctx, "tun-enable:"+op.ID, func(ctx context.Context) (any, error) {
 		return m.mutateTun(ctx, op, true, force)
 	})
 	if err != nil {
@@ -39,7 +40,7 @@ func (m *Manager) EnableTun(ctx context.Context, op Operation, force bool) (prot
 
 // DisableTun persists managed TUN enable=false (block stays non-empty so subscription tun stays overridden).
 func (m *Manager) DisableTun(ctx context.Context, op Operation) (protocol.TunStatus, error) {
-	result, err := m.doOperation(ctx, "tun-disable:"+op.ID, func() (any, error) {
+	result, err := m.doOperation(ctx, "tun-disable:"+op.ID, func(ctx context.Context) (any, error) {
 		return m.mutateTun(ctx, op, false, false)
 	})
 	if err != nil {
@@ -84,7 +85,7 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 		}
 	}
 
-	candidate, err := m.updateSettings(func(settings *config.Settings) error {
+	candidate, err := m.updateSettings(ctx, func(settings *config.Settings) error {
 		settings.Tun = buildManagedTun(enable, settings.Tun)
 		return nil
 	})
@@ -95,14 +96,14 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, err, false, nil)
 	}
 	nextTun := cloneTunMap(candidate.after.Tun)
-	liveBefore, liveSnapshotAvailable := m.captureTunLive(ctx)
+	liveBefore, liveSnapshotAvailable, liveErr := m.captureTunLive(ctx)
 	if err := ctx.Err(); err != nil {
 		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, err, false, nil)
 	}
 	if !liveSnapshotAvailable {
 		mapped := protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "TUN live state before apply is unavailable"}
 		m.setTunLastError(mapped.Message)
-		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, mapped, false, nil)
+		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, diagnostics.Wrap(mapped, liveErr), false, nil)
 	}
 
 	if applyErr := m.applyTun(ctx, nextTun, liveBefore); applyErr != nil {
@@ -114,8 +115,11 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 	}
 
 	live, ok := false, false
+	var confirmationErr error
 	if m.controller != nil && ctx.Err() == nil {
-		if configs, cfgErr := m.controller.Configs(ctx); cfgErr == nil {
+		configs, cfgErr := m.controller.Configs(ctx)
+		confirmationErr = cfgErr
+		if cfgErr == nil {
 			live, ok = liveTunEnable(configs)
 		}
 	}
@@ -126,7 +130,7 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 		}
 		mapped := protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: message}
 		m.setTunLastError(mapped.Message)
-		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, mapped, true, liveBefore)
+		return protocol.TunStatus{}, m.compensateTun(ctx, op, candidate, diagnostics.Wrap(mapped, confirmationErr), true, liveBefore)
 	}
 	liveEnable := &live
 
@@ -145,7 +149,7 @@ func (m *Manager) mutateTun(ctx context.Context, op Operation, enable bool, forc
 }
 
 func (m *Manager) compensateTun(ctx context.Context, op Operation, candidate settingsCandidate, cause error, restoreLive bool, liveBefore map[string]any) error {
-	_, rollbackErr := m.restoreSettings(candidate.before)
+	_, rollbackErr := m.restoreSettings(ctx, candidate.before)
 	var liveRestoreErr error
 	if restoreLive {
 		if liveBefore == nil {
@@ -164,6 +168,10 @@ func (m *Manager) compensateTun(ctx context.Context, op Operation, candidate set
 		ID: op.ID, Source: op.Source, IfRevision: op.IfRevision,
 	}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 		degradedErr := m.enterMutationDegraded(&snapshot)
+		var api protocol.APIError
+		if errors.As(degradedErr, &api) {
+			return snapshot, state.CommittedError{Err: diagnostics.Wrap(api, errors.Join(cause, rollbackErr, liveRestoreErr))}
+		}
 		return snapshot, degradedErr
 	})
 	return err
@@ -262,30 +270,30 @@ func (m *Manager) applyTun(ctx context.Context, nextTun, liveBase map[string]any
 	}
 }
 
-func (m *Manager) captureTunLive(ctx context.Context) (map[string]any, bool) {
+func (m *Manager) captureTunLive(ctx context.Context) (map[string]any, bool, error) {
 	if m.controller == nil || ctx.Err() != nil {
-		return nil, false
+		return nil, false, nil
 	}
 	configs, err := m.controller.Configs(ctx)
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
 	raw, exists := configs["tun"]
 	if !exists || raw == nil {
-		return map[string]any{}, true
+		return map[string]any{}, true, nil
 	}
 	tun, ok := raw.(map[string]any)
 	if !ok {
-		return nil, false
+		return nil, false, nil
 	}
 	if _, ok := tun["enable"].(bool); !ok {
-		return nil, false
+		return nil, false, nil
 	}
 	normalized, err := normalizeTunBlock(tun)
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
-	return normalized, true
+	return normalized, true, nil
 }
 
 func (m *Manager) buildTunStatus(ctx context.Context, lastError string) protocol.TunStatus {
@@ -423,13 +431,13 @@ func mapTunApplyError(err error) error {
 	var api protocol.APIError
 	if errors.As(err, &api) {
 		if api.Details["degraded"] == true {
-			return api
+			return err
 		}
 		if api.Code == protocol.CodePermissionDenied {
-			return protocol.APIError{
+			return diagnostics.Wrap(protocol.APIError{
 				Code:    protocol.CodePermissionDenied,
 				Message: "TUN requires elevated privileges; run Mihari as a service or from an elevated shell",
-			}
+			}, err)
 		}
 	}
 	msg := strings.ToLower(err.Error())
@@ -438,19 +446,19 @@ func mapTunApplyError(err error) error {
 		"not permitted", "elevat", "administrator",
 	} {
 		if strings.Contains(msg, needle) {
-			return protocol.APIError{
+			return diagnostics.Wrap(protocol.APIError{
 				Code:    protocol.CodePermissionDenied,
 				Message: "TUN requires elevated privileges; run Mihari as a service or from an elevated shell",
-			}
+			}, err)
 		}
 	}
 	if errors.As(err, &api) {
-		return api
+		return err
 	}
-	return protocol.APIError{
+	return diagnostics.Wrap(protocol.APIError{
 		Code:    protocol.CodeUpstreamFailure,
 		Message: "apply TUN configuration",
-	}
+	}, err)
 }
 
 // detectTunConflict returns classified conflict evidence, or nil when detection

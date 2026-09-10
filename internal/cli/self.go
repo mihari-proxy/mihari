@@ -95,33 +95,51 @@ func newSelfUpdateCommand(dependencies Dependencies, options *runOptions) *cobra
 		if dependencies.SelfUpdater == nil {
 			return protocol.APIError{Code: protocol.CodeInternal, Message: "self updater is unavailable"}
 		}
+		ctx := localTaskContext(command.Context(), dependencies, "self.update")
+		var taskErr error
+		defer func() { reportLocalTaskFailure(ctx, dependencies, "self.update.failed", taskErr) }()
 		binary, err := os.Executable()
 		if err != nil {
+			taskErr = err
 			return protocol.APIError{Code: protocol.CodeInternal, Message: "resolve mihari executable path"}
 		}
 		channel := ""
 		if dependencies.SelfUpdateChannel != nil {
-			channel, err = dependencies.SelfUpdateChannel(command.Context())
+			channel, err = dependencies.SelfUpdateChannel(ctx)
 		} else {
 			path, pathErr := platform.ChannelPath()
 			if pathErr != nil {
+				taskErr = pathErr
 				return protocol.APIError{Code: protocol.CodeDataFailure, Message: "resolve mihari channel path"}
 			}
 			channel, err = update.LoadChannel(path)
 		}
 		if err != nil {
+			taskErr = err
 			return err
 		}
-		prepared, err := dependencies.SelfUpdater.Prepare(command.Context(), binary, buildinfo.Version, channel)
+		prepared, err := dependencies.SelfUpdater.Prepare(ctx, binary, buildinfo.Version, channel)
 		if err != nil {
+			taskErr = err
 			return classifyRuntimeError(err)
 		}
-		defer func() { resultErr = errors.Join(resultErr, prepared.Close()) }()
+		defer func() {
+			closeErr := prepared.Close()
+			resultErr = errors.Join(resultErr, closeErr)
+			if closeErr != nil {
+				if taskErr == nil {
+					taskErr = closeErr
+				} else {
+					taskErr = errors.Join(taskErr, closeErr)
+				}
+			}
+		}()
 		prepared.Consent = update.ReplacementConsent{Yes: yes}
 		var warning string
 		if prepared.Available {
 			warning = update.ReplacementWarning(prepared.Preview)
 			if err := update.ValidateReplacementConsent(prepared.Preview, prepared.Consent); err != nil {
+				taskErr = err
 				return err
 			}
 		}
@@ -131,8 +149,17 @@ func newSelfUpdateCommand(dependencies Dependencies, options *runOptions) *cobra
 			}
 			warning = ""
 		}
-		result, err := dependencies.SelfUpdater.ApplyPrepared(command.Context(), prepared)
-		err = errors.Join(err, prepared.Close())
+		result, err := dependencies.SelfUpdater.ApplyPrepared(ctx, prepared)
+		taskErr = err
+		closeErr := prepared.Close()
+		err = errors.Join(err, closeErr)
+		if closeErr != nil {
+			if taskErr == nil {
+				taskErr = closeErr
+			} else {
+				taskErr = errors.Join(taskErr, closeErr)
+			}
+		}
 		if err = renderReplacementWarning(command, options, warning, err); err != nil {
 			return err
 		}

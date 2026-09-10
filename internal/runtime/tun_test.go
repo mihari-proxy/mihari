@@ -1736,7 +1736,7 @@ func TestCaptureTunLive_RequiresBooleanEnableInPresentMapping(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newTunManager(t, &fakeController{configs: tc.configs}, defaultTunSettings(nil))
-			_, valid := m.captureTunLive(context.Background())
+			_, valid, _ := m.captureTunLive(context.Background())
 			if valid != tc.valid {
 				t.Fatalf("snapshot valid=%v want=%v", valid, tc.valid)
 			}

@@ -21,16 +21,16 @@ func (s *Server) preferencesRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /v1/preferences/tui", s.updateTUIPreferences)
 }
 
-func (s *Server) preferencesRuntime(writer http.ResponseWriter) (preferencesAPI, bool) {
+func (s *Server) preferencesRuntime(ctx context.Context, writer http.ResponseWriter) (preferencesAPI, bool) {
 	runtime, ok := s.runtime.(preferencesAPI)
 	if !ok {
-		writeControlError(writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "TUI preferences are unavailable"})
+		s.writeControlError(ctx, writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "TUI preferences are unavailable"})
 	}
 	return runtime, ok
 }
 
-func (s *Server) getTUIPreferences(writer http.ResponseWriter, _ *http.Request) {
-	runtime, ok := s.preferencesRuntime(writer)
+func (s *Server) getTUIPreferences(writer http.ResponseWriter, request *http.Request) {
+	runtime, ok := s.preferencesRuntime(request.Context(), writer)
 	if !ok {
 		return
 	}
@@ -38,7 +38,7 @@ func (s *Server) getTUIPreferences(writer http.ResponseWriter, _ *http.Request) 
 }
 
 func (s *Server) updateTUIPreferences(writer http.ResponseWriter, request *http.Request) {
-	runtime, ok := s.preferencesRuntime(writer)
+	runtime, ok := s.preferencesRuntime(request.Context(), writer)
 	if !ok {
 		return
 	}
@@ -50,7 +50,7 @@ func (s *Server) updateTUIPreferences(writer http.ResponseWriter, request *http.
 		ID: body.OperationID, Source: "control", IfRevision: body.IfRevision,
 	}, preferences.Update{ConnectionsColumns: body.ConnectionsColumns})
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, tuiPreferencesDTO(updated, runtime.Snapshot().Revision))

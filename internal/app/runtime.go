@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -15,7 +16,9 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/core"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/geoip"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/mihomo"
 	"github.com/mihari-proxy/mihari/internal/onboarding"
 	"github.com/mihari-proxy/mihari/internal/panel"
@@ -52,6 +55,7 @@ type RuntimeBuildOptions struct {
 	ServiceStatus        func() (string, error)
 	InstallationInspect  func(context.Context) (InstallationStatus, error)
 	Logging              runtimeapi.LoggingRuntime
+	DiagnosticReporter   diagnostics.Reporter
 	RefreshLogSecrets    func(catalogURLs []string)
 	MihomoStdout         io.Writer
 	MihomoStderr         io.Writer
@@ -214,6 +218,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		ControllerURL:    "http://" + settings.ControllerAddr,
 		ControllerSecret: settings.ControllerSecret,
 		Panel:            panelService,
+		Reporter:         options.DiagnosticReporter,
 	})
 	if err != nil {
 		return nil, err
@@ -244,7 +249,8 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	}
 	var manager *runtimeapi.Manager
 	coreSupervisor := supervisor.New(supervisor.Options{
-		Starter: mihomoStarter,
+		Starter:            mihomoStarter,
+		DiagnosticReporter: options.DiagnosticReporter,
 		Health: func(ctx context.Context) error {
 			_, err := controller.Version(ctx)
 			return err
@@ -277,6 +283,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		},
 		Onboarding:         onboardingService,
 		Logging:            options.Logging,
+		DiagnosticReporter: options.DiagnosticReporter,
 		RefreshLogSecrets:  options.RefreshLogSecrets,
 		Panels:             panelService,
 		WebGateway:         webGateway,
@@ -297,38 +304,15 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 			return core.ValidateConfig(ctx, core.OSCommandRunner{}, paths.CoreBinary, paths.Root, candidatePath)
 		},
 		RunScheduler: func(ctx context.Context) error {
-			var schedulers sync.WaitGroup
-			schedulers.Add(2)
-			go func() {
-				defer schedulers.Done()
-				scheduler := subscription.NewScheduler(subscription.SchedulerOptions{
-					Snapshot: subscriptions.Snapshot,
-					Refresh: func(refreshContext context.Context, id string) error {
-						_, err := manager.RefreshSubscription(refreshContext, runtimeapi.Operation{
-							ID: "scheduler-" + id + "-" + time.Now().UTC().Format("20060102T150405.000000000"), Source: "scheduler",
-						}, id)
-						return err
-					},
-				})
-				_ = scheduler.Run(ctx)
-			}()
-			go func() {
-				defer schedulers.Done()
-				scheduler := geoip.Scheduler{
-					NeedsUpdate: geoIPService.NeedsUpdate,
-					Refresh: func(refreshContext context.Context) error {
-						_, err := manager.UpdateGeoIP(refreshContext, runtimeapi.Operation{
-							ID: "scheduler-geoip-" + time.Now().UTC().Format("20060102T150405.000000000"), Source: "scheduler",
-						})
-						return err
-					},
-				}
-				_ = scheduler.Run(ctx)
-			}()
-
-			<-ctx.Done()
-			schedulers.Wait()
-			return nil
+			subScheduler := subscription.NewScheduler(subscription.SchedulerOptions{
+				Snapshot: subscriptions.Snapshot,
+				Refresh:  schedulerSubscriptionRefresh(manager.RefreshSubscription, time.Now),
+			})
+			geoScheduler := geoip.Scheduler{
+				NeedsUpdate: geoIPService.NeedsUpdate,
+				Refresh:     schedulerGeoIPRefresh(manager.UpdateGeoIP, time.Now),
+			}
+			return runSchedulers(ctx, subScheduler.Run, geoScheduler.Run, options.DiagnosticReporter, options.OnBackgroundError)
 		},
 		BinaryExists: func() bool {
 			if options.TrustedCore != nil {
@@ -339,8 +323,56 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 			return err == nil && !info.IsDir()
 		},
 	})
-	webGateway.Mutator = webMutator{manager: manager}
+	webGateway.Mutator = webMutator{manager: manager, reporter: options.DiagnosticReporter}
 	return &RuntimeAssembly{Manager: manager, Store: store, Web: webGateway, mihomoStarter: mihomoStarter}, nil
+}
+
+func schedulerSubscriptionRefresh(refresh func(context.Context, runtimeapi.Operation, string) (subscription.PublicProfile, error), now func() time.Time) func(context.Context, string) error {
+	return func(ctx context.Context, id string) error {
+		operation := runtimeapi.Operation{ID: "scheduler-" + id + "-" + now().UTC().Format("20060102T150405.000000000"), Source: "scheduler"}
+		ctx = logging.WithOperation(ctx, logging.OperationMetadata{ID: operation.ID, Name: "subscription.refresh"})
+		_, err := refresh(ctx, operation, id)
+		return err
+	}
+}
+
+func schedulerGeoIPRefresh(refresh func(context.Context, runtimeapi.Operation) (geoip.Status, error), now func() time.Time) func(context.Context) error {
+	return func(ctx context.Context) error {
+		operation := runtimeapi.Operation{ID: "scheduler-geoip-" + now().UTC().Format("20060102T150405.000000000"), Source: "scheduler"}
+		ctx = logging.WithOperation(ctx, logging.OperationMetadata{ID: operation.ID, Name: "geoip.update"})
+		_, err := refresh(ctx, operation)
+		return err
+	}
+}
+
+func runSchedulers(ctx context.Context, subscriptionRun, geoIPRun func(context.Context) error, reporter diagnostics.Reporter, onBackgroundError func(string, error)) error {
+	report := func(component string, err error) {
+		if diagnostics.AlreadyReported(err) {
+			return
+		}
+		level, emit := diagnostics.FailureLevel(ctx, err)
+		if !emit {
+			return
+		}
+		if reporter != nil {
+			reporter(ctx, diagnostics.Record{Component: component, Event: "background.failed", Level: level, Err: err})
+		} else if onBackgroundError != nil {
+			onBackgroundError(component, err)
+		}
+	}
+	var schedulers sync.WaitGroup
+	schedulers.Add(2)
+	go func() {
+		defer schedulers.Done()
+		report("subscription-scheduler", subscriptionRun(ctx))
+	}()
+	go func() {
+		defer schedulers.Done()
+		report("geoip-scheduler", geoIPRun(ctx))
+	}()
+	<-ctx.Done()
+	schedulers.Wait()
+	return nil
 }
 
 func buildValidationRuntime(paths platform.Paths, settings config.Settings, daemonVersion string, options RuntimeBuildOptions) (*RuntimeAssembly, error) {
@@ -458,6 +490,7 @@ func BuildValidationRuntime(ctx context.Context, paths platform.Paths, settings 
 		Settings:           settings,
 		SettingsPath:       options.SettingsPath,
 		Logging:            options.Logging,
+		DiagnosticReporter: options.DiagnosticReporter,
 		ServiceStatus:      options.ServiceStatus,
 		InstallationStatus: installationStatusReader(options.InstallationInspect),
 		OnBackgroundError:  options.OnBackgroundError,
@@ -502,25 +535,49 @@ type webMutationRuntime interface {
 
 // webMutator routes browser mutations through the daemon coordinator.
 type webMutator struct {
-	manager webMutationRuntime
+	manager    webMutationRuntime
+	reporter   diagnostics.Reporter
+	now        func() time.Time
+	readRandom func([]byte) (int, error)
 }
 
 func (m webMutator) SelectProxy(ctx context.Context, group, name string) error {
-	return m.manager.SelectProxy(ctx, runtimeapi.Operation{
-		ID: "web-select-" + time.Now().UTC().Format("20060102T150405.000000000"), Source: "web",
-	}, group, name)
+	op := runtimeapi.Operation{ID: "web-select-" + m.timestamp(), Source: "web"}
+	ctx = logging.WithOperation(ctx, logging.OperationMetadata{ID: op.ID, Name: "proxy.select"})
+	return m.reportResult(ctx, m.manager.SelectProxy(ctx, op, group, name))
 }
 
 func (m webMutator) CloseConnection(ctx context.Context, id string) error {
-	return m.manager.CloseConnection(ctx, runtimeapi.Operation{
-		ID: "web-close-" + time.Now().UTC().Format("20060102T150405.000000000"), Source: "web",
-	}, id)
+	op := runtimeapi.Operation{ID: "web-close-" + m.timestamp(), Source: "web"}
+	ctx = logging.WithOperation(ctx, logging.OperationMetadata{ID: op.ID, Name: "connection.close"})
+	return m.reportResult(ctx, m.manager.CloseConnection(ctx, op, id))
 }
 
 func (m webMutator) CloseAllConnections(ctx context.Context) error {
-	return m.manager.CloseAllConnections(ctx, runtimeapi.Operation{
-		ID: "web-close-all-" + time.Now().UTC().Format("20060102T150405.000000000"), Source: "web",
-	})
+	op := runtimeapi.Operation{ID: "web-close-all-" + m.timestamp(), Source: "web"}
+	ctx = logging.WithOperation(ctx, logging.OperationMetadata{ID: op.ID, Name: "connection.close_all"})
+	return m.reportResult(ctx, m.manager.CloseAllConnections(ctx, op))
+}
+
+func (m webMutator) reportResult(ctx context.Context, err error) error {
+	if m.reporter == nil || diagnostics.AlreadyReported(err) {
+		return err
+	}
+	if err == nil {
+		m.reporter(ctx, diagnostics.Record{Component: "web", Event: "mutation.succeeded", Level: slog.LevelInfo})
+	} else if level, emit := diagnostics.FailureLevel(ctx, err); emit {
+		m.reporter(ctx, diagnostics.Record{Component: "web", Event: "mutation.failed", Level: level, Err: err})
+		err = diagnostics.MarkReported(err)
+	}
+	return err
+}
+
+func (m webMutator) timestamp() string {
+	now := m.now
+	if now == nil {
+		now = time.Now
+	}
+	return now().UTC().Format("20060102T150405.000000000")
 }
 
 // ApplyConfigPatch applies allowlisted config mutations (currently TUN only) via the coordinator.
@@ -546,20 +603,26 @@ func (m webMutator) ApplyConfigPatch(ctx context.Context, patch map[string]any) 
 			Message: "tun.enable must be a boolean",
 		}
 	}
-	op := runtimeapi.Operation{ID: "web-tun-" + newWebOperationID(), Source: "web"}
+	op := runtimeapi.Operation{ID: "web-tun-" + m.newWebOperationID(), Source: "web"}
 	if enable {
+		ctx = logging.WithOperation(ctx, logging.OperationMetadata{ID: op.ID, Name: "tun.enable"})
 		_, err := m.manager.EnableTun(ctx, op, false)
-		return err
+		return m.reportResult(ctx, err)
 	}
+	ctx = logging.WithOperation(ctx, logging.OperationMetadata{ID: op.ID, Name: "tun.disable"})
 	_, err := m.manager.DisableTun(ctx, op)
-	return err
+	return m.reportResult(ctx, err)
 }
 
-func newWebOperationID() string {
+func (m webMutator) newWebOperationID() string {
 	var value [16]byte
-	if _, err := rand.Read(value[:]); err != nil {
+	readRandom := m.readRandom
+	if readRandom == nil {
+		readRandom = rand.Read
+	}
+	if _, err := readRandom(value[:]); err != nil {
 		// Fallback keeps operation IDs unique enough for coordinator logging.
-		return time.Now().UTC().Format("20060102T150405.000000000")
+		return m.timestamp()
 	}
 	return hex.EncodeToString(value[:])
 }

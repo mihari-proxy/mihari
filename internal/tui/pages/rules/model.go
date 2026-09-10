@@ -12,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -83,14 +84,16 @@ type providersResultMsg struct {
 }
 
 type providerUpdateResultMsg struct {
-	name     string
-	revision uint64
-	err      error
+	operation logging.OperationMetadata
+	name      string
+	revision  uint64
+	err       error
 }
 
 type providersUpdateAllResultMsg struct {
-	revision uint64
-	err      error
+	operations []logging.OperationMetadata
+	revision   uint64
+	err        error
 }
 
 // Err implements the shell's action-outcome contract so bulk provider updates
@@ -722,6 +725,7 @@ func (m *Model) updateFocusedProvider() tea.Cmd {
 	name := m.providers[indexes[m.focus.row]].Name
 	m.pending[name] = true
 	operationID := m.newOperationID()
+	operation := logging.OperationMetadata{ID: operationID, Name: "rule_provider.refresh"}
 	revision := m.revision
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -730,8 +734,8 @@ func (m *Model) updateFocusedProvider() tea.Cmd {
 		if revision != 0 {
 			request.IfRevision = &revision
 		}
-		result, err := m.client.UpdateRuleProvider(ctx, name, request)
-		return providerUpdateResultMsg{name: name, revision: result.Revision, err: err}
+		result, err := m.client.UpdateRuleProvider(logging.WithOperation(ctx, operation), name, request)
+		return providerUpdateResultMsg{operation: operation, name: name, revision: result.Revision, err: err}
 	}
 }
 
@@ -749,20 +753,23 @@ func (m *Model) updateAllProviders() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(max(1, len(names)))*30*time.Second)
 		defer cancel()
+		operations := make([]logging.OperationMetadata, 0, len(names))
 		for index, name := range names {
 			request := protocol.MutationRequest{OperationID: fmt.Sprintf("%s-%d", baseID, index+1)}
 			if revision != 0 {
 				request.IfRevision = &revision
 			}
-			result, err := m.client.UpdateRuleProvider(ctx, name, request)
+			operation := logging.OperationMetadata{ID: request.OperationID, Name: "rule_provider.refresh"}
+			operations = append(operations, operation)
+			result, err := m.client.UpdateRuleProvider(logging.WithOperation(ctx, operation), name, request)
 			if err != nil {
-				return providersUpdateAllResultMsg{revision: revision, err: err}
+				return providersUpdateAllResultMsg{operations: operations, revision: revision, err: err}
 			}
 			if result.Revision != 0 {
 				revision = result.Revision
 			}
 		}
-		return providersUpdateAllResultMsg{revision: revision}
+		return providersUpdateAllResultMsg{operations: operations, revision: revision}
 	}
 }
 

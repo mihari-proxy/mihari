@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 // recordingMutator captures ApplyConfigPatch calls for allowlist tests.
@@ -28,9 +29,9 @@ type recordingMutator struct {
 	err     error
 }
 
-func (m *recordingMutator) SelectProxy(context.Context, string, string) error { return nil }
-func (m *recordingMutator) CloseConnection(context.Context, string) error     { return nil }
-func (m *recordingMutator) CloseAllConnections(context.Context) error         { return nil }
+func (m *recordingMutator) SelectProxy(context.Context, string, string) error { return m.err }
+func (m *recordingMutator) CloseConnection(context.Context, string) error     { return m.err }
+func (m *recordingMutator) CloseAllConnections(context.Context) error         { return m.err }
 
 func (m *recordingMutator) ApplyConfigPatch(_ context.Context, patch map[string]any) error {
 	m.mu.Lock()
@@ -474,6 +475,8 @@ func TestGatewayWebSocketHandlerWaitsForBothRelaysAfterNormalClose(t *testing.T)
 	})
 	observer := newWebSocketRelayJoinObserver()
 	gateway := newTask5Gateway(t, controller.URL, nil)
+	reporter, diagnosticsOutput := newWebDiagnostics()
+	gateway.Reporter = reporter
 	gateway.wsObserver = observer
 	base := serveWebSocketGateway(t, gateway)
 	stream := dialTask5GatewayStream(t, base)
@@ -510,6 +513,7 @@ func TestGatewayWebSocketHandlerWaitsForBothRelaysAfterNormalClose(t *testing.T)
 		t.Fatalf("browser did not receive graceful close: %v", readCtx.Err())
 	}
 	waitDone(t, controllerState.done, "normal upstream close")
+	assertWebDiagnostics(t, diagnosticsOutput, "", "", 0)
 	if controllerState.relayErr != nil || controllerState.relayContextErr != nil {
 		t.Fatalf("normal upstream close failed: relay=%v context=%v", controllerState.relayErr, controllerState.relayContextErr)
 	}
@@ -527,6 +531,15 @@ func TestGatewayWebSocketUpstreamCloseStopsRelay(t *testing.T) {
 		}
 	})
 	gateway := newTask5Gateway(t, controller.URL, nil)
+	reporter, diagnosticsOutput := newWebDiagnostics()
+	observer := newWebSocketRelayJoinObserver()
+	gateway.wsObserver = observer
+	gateway.Reporter = func(ctx context.Context, record diagnostics.Record) {
+		if observer.active.Load() != 0 {
+			t.Error("relay failure reported before both relays finished")
+		}
+		reporter(ctx, record)
+	}
 	base := serveWebSocketGateway(t, gateway)
 	stream := dialTask5GatewayStream(t, base)
 	waitDone(t, controllerState.accepted, "upstream WebSocket acceptance")
@@ -550,6 +563,7 @@ func TestGatewayWebSocketUpstreamCloseStopsRelay(t *testing.T) {
 		t.Fatalf("upstream WebSocket shutdown: %v", controllerState.relayErr)
 	}
 	waitTask5SessionCount(t, gateway, 0)
+	assertWebDiagnostics(t, diagnosticsOutput, "websocket.relay.failed", "ERROR", 1)
 }
 
 func TestGatewayWebSocketClientCloseStopsUpstream(t *testing.T) {
@@ -558,6 +572,8 @@ func TestGatewayWebSocketClientCloseStopsUpstream(t *testing.T) {
 		return err
 	})
 	gateway := newTask5Gateway(t, controller.URL, nil)
+	reporter, diagnosticsOutput := newWebDiagnostics()
+	gateway.Reporter = reporter
 	base := serveWebSocketGateway(t, gateway)
 	stream := dialTask5GatewayStream(t, base)
 	waitDone(t, controllerState.accepted, "upstream WebSocket acceptance")
@@ -568,6 +584,7 @@ func TestGatewayWebSocketClientCloseStopsUpstream(t *testing.T) {
 	waitDone(t, controllerState.done, "upstream WebSocket")
 	requireTask5PeerClose(t, controllerState)
 	waitTask5SessionCount(t, gateway, 0)
+	assertWebDiagnostics(t, diagnosticsOutput, "websocket.relay.failed", "ERROR", 1)
 }
 
 func TestGatewayWebSocketContextCancelReleasesBothSides(t *testing.T) {
@@ -576,6 +593,8 @@ func TestGatewayWebSocketContextCancelReleasesBothSides(t *testing.T) {
 		return err
 	})
 	gateway := newTask5Gateway(t, controller.URL, nil)
+	reporter, diagnosticsOutput := newWebDiagnostics()
+	gateway.Reporter = reporter
 
 	requestCtx, cancelRequest := context.WithCancel(context.Background())
 	t.Cleanup(cancelRequest)
@@ -604,6 +623,7 @@ func TestGatewayWebSocketContextCancelReleasesBothSides(t *testing.T) {
 	requireTask5PeerClose(t, controllerState)
 	waitDone(t, handlerDone, "gateway WebSocket handler")
 	waitTask5SessionCount(t, gateway, 0)
+	assertWebDiagnostics(t, diagnosticsOutput, "", "", 0)
 }
 
 func TestGatewayWebSocketHandshakeFailuresAreSanitized(t *testing.T) {
@@ -645,6 +665,8 @@ func TestGatewayWebSocketHandshakeFailuresAreSanitized(t *testing.T) {
 			}
 
 			gateway := newTask5Gateway(t, controllerURL, transport)
+			reporter, diagnosticsOutput := newWebDiagnostics()
+			gateway.Reporter = reporter
 			if tt.invalidURL {
 				gateway.ControllerURL = "%"
 			}
@@ -693,6 +715,7 @@ func TestGatewayWebSocketHandshakeFailuresAreSanitized(t *testing.T) {
 				}
 			}
 			waitTask5SessionCount(t, gateway, 0)
+			assertWebDiagnostics(t, diagnosticsOutput, "websocket.handshake.failed", "ERROR", 1)
 		})
 	}
 }

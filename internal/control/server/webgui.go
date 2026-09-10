@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/panel"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 )
@@ -34,29 +35,29 @@ func (s *Server) webGUIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/panels/{id}/reinstall", s.reinstallPanel)
 }
 
-func (s *Server) panelRuntime(writer http.ResponseWriter) (panelAPI, bool) {
+func (s *Server) panelRuntime(ctx context.Context, writer http.ResponseWriter) (panelAPI, bool) {
 	runtime, ok := s.runtime.(panelAPI)
 	if !ok {
-		writeControlError(writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "panel service is unavailable"})
+		s.writeControlError(ctx, writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "panel service is unavailable"})
 	}
 	return runtime, ok
 }
 
 func (s *Server) webGUIStatus(writer http.ResponseWriter, request *http.Request) {
-	runtime, ok := s.panelRuntime(writer)
+	runtime, ok := s.panelRuntime(request.Context(), writer)
 	if !ok {
 		return
 	}
 	status, err := runtime.WebGUIStatus(request.Context())
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, status)
 }
 
 func (s *Server) openWebGUI(writer http.ResponseWriter, request *http.Request) {
-	runtime, ok := s.panelRuntime(writer)
+	runtime, ok := s.panelRuntime(request.Context(), writer)
 	if !ok {
 		return
 	}
@@ -69,20 +70,20 @@ func (s *Server) openWebGUI(writer http.ResponseWriter, request *http.Request) {
 	}
 	openURL, panelID, err := runtime.OpenWebGUI(request.Context(), body.Panel)
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, protocol.WebGUIOpenResult{Schema: "mihari/v1", OpenURL: openURL, Panel: panelID})
 }
 
 func (s *Server) listPanels(writer http.ResponseWriter, request *http.Request) {
-	runtime, ok := s.panelRuntime(writer)
+	runtime, ok := s.panelRuntime(request.Context(), writer)
 	if !ok {
 		return
 	}
 	panels, err := runtime.ListPanels(request.Context())
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	dto := make([]protocol.PanelStatus, 0, len(panels))
@@ -99,7 +100,7 @@ func (s *Server) listPanels(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) installPanel(writer http.ResponseWriter, request *http.Request) {
-	runtime, ok := s.panelRuntime(writer)
+	runtime, ok := s.panelRuntime(request.Context(), writer)
 	if !ok {
 		return
 	}
@@ -112,10 +113,11 @@ func (s *Server) installPanel(writer http.ResponseWriter, request *http.Request)
 		writeInvalidArgument(writer, "panel id is required")
 		return
 	}
-	if err := runtime.InstallPanel(request.Context(), runtimeapi.Operation{
+	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "panel.install"})
+	if err := runtime.InstallPanel(ctx, runtimeapi.Operation{
 		ID: body.OperationID, Source: "control", IfRevision: body.IfRevision,
 	}, id, body.Build); err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(ctx, writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, protocol.MutationResult{
@@ -124,37 +126,37 @@ func (s *Server) installPanel(writer http.ResponseWriter, request *http.Request)
 }
 
 func (s *Server) updatePanel(writer http.ResponseWriter, request *http.Request) {
-	s.panelMutation(writer, request, func(runtime panelAPI, operation runtimeapi.Operation, id string) error {
-		return runtime.UpdatePanel(request.Context(), operation, id)
+	s.panelMutation(writer, request, "panel.update", func(ctx context.Context, runtime panelAPI, operation runtimeapi.Operation, id string) error {
+		return runtime.UpdatePanel(ctx, operation, id)
 	})
 }
 
 func (s *Server) activatePanel(writer http.ResponseWriter, request *http.Request) {
-	s.panelMutation(writer, request, func(runtime panelAPI, operation runtimeapi.Operation, id string) error {
-		return runtime.ActivatePanel(request.Context(), operation, id)
+	s.panelMutation(writer, request, "panel.activate", func(ctx context.Context, runtime panelAPI, operation runtimeapi.Operation, id string) error {
+		return runtime.ActivatePanel(ctx, operation, id)
 	})
 }
 
 func (s *Server) rollbackPanel(writer http.ResponseWriter, request *http.Request) {
-	s.panelMutation(writer, request, func(runtime panelAPI, operation runtimeapi.Operation, id string) error {
-		return runtime.RollbackPanel(request.Context(), operation, id)
+	s.panelMutation(writer, request, "panel.rollback", func(ctx context.Context, runtime panelAPI, operation runtimeapi.Operation, id string) error {
+		return runtime.RollbackPanel(ctx, operation, id)
 	})
 }
 
 func (s *Server) uninstallPanel(writer http.ResponseWriter, request *http.Request) {
-	s.panelMutation(writer, request, func(runtime panelAPI, operation runtimeapi.Operation, id string) error {
-		return runtime.UninstallPanel(request.Context(), operation, id)
+	s.panelMutation(writer, request, "panel.uninstall", func(ctx context.Context, runtime panelAPI, operation runtimeapi.Operation, id string) error {
+		return runtime.UninstallPanel(ctx, operation, id)
 	})
 }
 
 func (s *Server) reinstallPanel(writer http.ResponseWriter, request *http.Request) {
-	s.panelMutation(writer, request, func(runtime panelAPI, operation runtimeapi.Operation, id string) error {
-		return runtime.ReinstallPanel(request.Context(), operation, id)
+	s.panelMutation(writer, request, "panel.reinstall", func(ctx context.Context, runtime panelAPI, operation runtimeapi.Operation, id string) error {
+		return runtime.ReinstallPanel(ctx, operation, id)
 	})
 }
 
-func (s *Server) panelMutation(writer http.ResponseWriter, request *http.Request, mutate func(panelAPI, runtimeapi.Operation, string) error) {
-	runtime, ok := s.panelRuntime(writer)
+func (s *Server) panelMutation(writer http.ResponseWriter, request *http.Request, name string, mutate func(context.Context, panelAPI, runtimeapi.Operation, string) error) {
+	runtime, ok := s.panelRuntime(request.Context(), writer)
 	if !ok {
 		return
 	}
@@ -167,10 +169,11 @@ func (s *Server) panelMutation(writer http.ResponseWriter, request *http.Request
 		writeInvalidArgument(writer, "panel id is required")
 		return
 	}
-	if err := mutate(runtime, runtimeapi.Operation{
+	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: name})
+	if err := mutate(ctx, runtime, runtimeapi.Operation{
 		ID: body.OperationID, Source: "control", IfRevision: body.IfRevision,
 	}, id); err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(ctx, writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, protocol.MutationResult{

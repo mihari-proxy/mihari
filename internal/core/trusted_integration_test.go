@@ -38,6 +38,7 @@ type seamController struct {
 	fixture          *core.TestTrustedFixture
 	patches, reloads int
 	failReloads      int
+	reload           func(context.Context) error
 	tun              map[string]any
 }
 
@@ -68,6 +69,9 @@ func (c *seamController) Reload(ctx context.Context, path string, _ bool) error 
 		}
 	}
 	c.reloads++
+	if c.reload != nil {
+		return c.reload(ctx)
+	}
 	if c.reloads <= c.failReloads {
 		return errors.New("reload rejected")
 	}
@@ -265,7 +269,16 @@ func TestRootManager_ReloadCompensationAndDegradedStop(t *testing.T) {
 			id := cachedProfile(t, service)
 			child := startSeamSupervisor(t, manager, sup, starter)
 			before := f.Content()
-			c.failReloads = fails
+			first, second := errors.New("initial reload failure"), errors.New("rollback reload failure")
+			c.reload = func(context.Context) error {
+				if c.reloads == 1 {
+					return first
+				}
+				if fails == 2 {
+					return second
+				}
+				return nil
+			}
 			done := make(chan error, 1)
 			go func() {
 				_, e := manager.UseSubscription(context.Background(), runtimeapi.Operation{ID: "use", Source: "test"}, id)
@@ -273,6 +286,13 @@ func TestRootManager_ReloadCompensationAndDegradedStop(t *testing.T) {
 			}()
 			e := awaitSeam(t, done)
 			assertCode(t, e, protocol.CodeUpstreamFailure)
+			if !errors.Is(e, first) || (fails == 2 && !errors.Is(e, second)) {
+				t.Error("trusted reload cause missing")
+			}
+			var api protocol.APIError
+			if !errors.As(e, &api) || (api.Details["degraded"] == true) != (fails == 2) {
+				t.Error("degraded classification changed")
+			}
 			if c.reloads != 2 || !bytes.Equal(before, f.Content()) {
 				t.Fatal("reload failure did not restore previous bytes and reload twice")
 			}

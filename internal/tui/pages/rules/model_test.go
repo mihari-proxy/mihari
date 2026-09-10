@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -463,9 +464,10 @@ func TestView_RuleTypeNotTruncated(t *testing.T) {
 }
 
 type fakeClient struct {
-	rules     protocol.RuleList
-	providers protocol.RuleProviderList
-	updated   []string
+	operations []logging.OperationMetadata
+	rules      protocol.RuleList
+	providers  protocol.RuleProviderList
+	updated    []string
 }
 
 func (f *fakeClient) Rules(context.Context) (protocol.RuleList, error) { return f.rules, nil }
@@ -474,7 +476,34 @@ func (f *fakeClient) RuleProviders(context.Context) (protocol.RuleProviderList, 
 	return f.providers, nil
 }
 
-func (f *fakeClient) UpdateRuleProvider(_ context.Context, name string, _ protocol.MutationRequest) (protocol.MutationResult, error) {
+func (f *fakeClient) UpdateRuleProvider(ctx context.Context, name string, _ protocol.MutationRequest) (protocol.MutationResult, error) {
+	operation, _ := logging.OperationFromContext(ctx)
+	f.operations = append(f.operations, operation)
 	f.updated = append(f.updated, name)
 	return protocol.MutationResult{Schema: "mihari/v1"}, nil
+}
+
+func TestProviderDiagnostic_SingleAndBulkMetadata(t *testing.T) {
+	for _, bulk := range []bool{false, true} {
+		t.Run(map[bool]string{false: "single", true: "bulk"}[bulk], func(t *testing.T) {
+			client := &fakeClient{}
+			m := New(client, func() string { return "provider-op" })
+			m.SetProviders(protocol.RuleProviderList{Revision: 9, Providers: []protocol.RuleProvider{{Name: "first"}, {Name: "second"}}})
+			m.view = viewProviders
+			m.focus = pageFocus{kind: focusRow, row: 0}
+			if !bulk {
+				result := m.updateFocusedProvider()().(providerUpdateResultMsg)
+				want := logging.OperationMetadata{ID: "provider-op", Name: "rule_provider.refresh"}
+				if len(client.operations) != 1 || client.operations[0] != want || result.operation != want {
+					t.Fatalf("contexts=%#v result=%#v", client.operations, result.operation)
+				}
+			} else {
+				result := m.updateAllProviders()().(providersUpdateAllResultMsg)
+				want := []logging.OperationMetadata{{ID: "provider-op-1", Name: "rule_provider.refresh"}, {ID: "provider-op-2", Name: "rule_provider.refresh"}}
+				if !reflect.DeepEqual(client.operations, want) || !reflect.DeepEqual(result.operations, want) {
+					t.Fatalf("contexts=%#v result=%#v", client.operations, result.operations)
+				}
+			}
+		})
+	}
 }

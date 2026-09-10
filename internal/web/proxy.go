@@ -1,16 +1,19 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 // ProxyOptions configures the secret-injecting reverse proxy to the mihomo controller.
 type ProxyOptions struct {
+	Reporter diagnostics.Reporter
 	// ControllerURL is the loopback controller base, e.g. http://127.0.0.1:9090.
 	ControllerURL string
 	// ControllerSecret is injected as Bearer; never returned to the browser.
@@ -61,9 +64,20 @@ func NewControllerProxy(options ProxyOptions) (*httputil.ReverseProxy, error) {
 		return nil
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		reportFailure(r.Context(), options.Reporter, "proxy.failed", err)
 		http.Error(w, "upstream controller unavailable", http.StatusBadGateway)
 	}
 	return proxy, nil
+}
+
+// reportFailure is used only by the owner returning a final gateway outcome.
+func reportFailure(ctx context.Context, reporter diagnostics.Reporter, event string, err error) {
+	if reporter == nil || diagnostics.AlreadyReported(err) {
+		return
+	}
+	if level, emit := diagnostics.FailureLevel(ctx, err); emit {
+		reporter(ctx, diagnostics.Record{Component: "web", Event: event, Level: level, Err: err})
+	}
 }
 
 // WriteReject writes a JSON error for a classified reject action without contacting mihomo.

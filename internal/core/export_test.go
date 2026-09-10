@@ -100,3 +100,19 @@ func (f *TestTrustedFixture) Pending() bool {
 func (f *TestTrustedFixture) CommandConfig(c CoreCommand) []byte {
 	return append([]byte(nil), f.store.disk.files[strings.TrimPrefix(c.Config, f.store.location()+"/")].bytes...)
 }
+
+// FailConfigWriteAfter fails a synthetic write after replacing bytes.
+func (f *TestTrustedFixture) FailConfigWriteAfter(writes int, cause error) {
+	if f.files.writeErrors == nil {
+		f.files.writeErrors = map[int]error{}
+	}
+	f.files.writeErrors[f.files.writes+writes] = cause
+}
+
+// FailConfigPathAfter rejects the capability returned by the selected write.
+func (f *TestTrustedFixture) FailConfigPathAfter(writes int, cause error) {
+	if f.files.pathErrors == nil {
+		f.files.pathErrors = map[int]error{}
+	}
+	f.files.pathErrors[f.files.writes+writes] = cause
+}

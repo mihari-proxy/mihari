@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 )
 
@@ -19,29 +20,29 @@ func (s *Server) loggingRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/logging/snapshot", s.loggingSnapshot)
 }
 
-func (s *Server) loggingRuntime(writer http.ResponseWriter) (loggingAPI, bool) {
+func (s *Server) loggingRuntime(ctx context.Context, writer http.ResponseWriter) (loggingAPI, bool) {
 	runtime, ok := s.runtime.(loggingAPI)
 	if !ok {
-		writeControlError(writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "logging runtime is unavailable"})
+		s.writeControlError(ctx, writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "logging runtime is unavailable"})
 	}
 	return runtime, ok
 }
 
 func (s *Server) loggingStatus(writer http.ResponseWriter, request *http.Request) {
-	runtime, ok := s.loggingRuntime(writer)
+	runtime, ok := s.loggingRuntime(request.Context(), writer)
 	if !ok {
 		return
 	}
 	status, err := runtime.LoggingStatus(request.Context())
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, status)
 }
 
 func (s *Server) updateLogging(writer http.ResponseWriter, request *http.Request) {
-	runtime, ok := s.loggingRuntime(writer)
+	runtime, ok := s.loggingRuntime(request.Context(), writer)
 	if !ok {
 		return
 	}
@@ -49,15 +50,16 @@ func (s *Server) updateLogging(writer http.ResponseWriter, request *http.Request
 	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
 		return
 	}
+	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "logging.update"})
 	if err := validateLoggingUpdate(body); err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(ctx, writer, err)
 		return
 	}
-	status, err := runtime.UpdateLogging(request.Context(), runtimeapi.Operation{
+	status, err := runtime.UpdateLogging(ctx, runtimeapi.Operation{
 		ID: body.OperationID, Source: "control", IfRevision: body.IfRevision,
 	}, runtimeapi.LoggingUpdate{Level: body.Level, MaxSizeMB: body.MaxSizeMB, MaxFiles: body.MaxFiles})
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(ctx, writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, status)

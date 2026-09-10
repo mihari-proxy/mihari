@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 )
 
 func TestExecute_NoArgsNonInteractiveRejectsTUI(t *testing.T) {
@@ -41,6 +42,34 @@ func TestCoreStatusJSON(t *testing.T) {
 	var status protocol.CoreStatus
 	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil || status.Version != "v1.19.0" || status.PID != 42 {
 		t.Fatalf("status=%#v err=%v", status, err)
+	}
+}
+
+func TestCoreMutationCommandsBindOperationContext(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		args      []string
+		operation string
+	}{
+		{name: "install", args: []string{"core", "install", "--json"}, operation: "core.install"},
+		{name: "update", args: []string{"core", "update", "--json"}, operation: "core.install"},
+		{name: "restart", args: []string{"core", "restart", "--json"}, operation: "core.restart"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeRuntimeClient{}
+			stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+
+			exit := Execute(context.Background(), test.args, stdout, stderr, Dependencies{
+				RuntimeClient: client, NewOperationID: func() string { return "core-operation" },
+			})
+
+			if exit != ExitOK || stderr.Len() != 0 {
+				t.Fatalf("exit=%d stderr=%q", exit, stderr.String())
+			}
+			if client.coreOperation != (logging.OperationMetadata{ID: "core-operation", Name: test.operation}) || client.coreRequest.OperationID != "core-operation" {
+				t.Fatalf("operation=%#v request=%#v", client.coreOperation, client.coreRequest)
+			}
+		})
 	}
 }
 
@@ -126,15 +155,21 @@ type fakeRuntimeClient struct {
 	selectedGroup string
 	selected      protocol.ProxySelectionRequest
 	closeAllCalls int
+	coreOperation logging.OperationMetadata
+	coreRequest   protocol.MutationRequest
 }
 
 func (c *fakeRuntimeClient) Core(context.Context) (protocol.CoreStatus, error) { return c.core, nil }
 
-func (c *fakeRuntimeClient) InstallCore(context.Context, protocol.MutationRequest) (protocol.CoreInstallResult, error) {
+func (c *fakeRuntimeClient) InstallCore(ctx context.Context, request protocol.MutationRequest) (protocol.CoreInstallResult, error) {
+	c.coreOperation, _ = logging.OperationFromContext(ctx)
+	c.coreRequest = request
 	return protocol.CoreInstallResult{Schema: "mihari/v1", Version: "v1.19.0", Updated: true}, nil
 }
 
-func (c *fakeRuntimeClient) RestartCore(_ context.Context, request protocol.MutationRequest) (protocol.MutationResult, error) {
+func (c *fakeRuntimeClient) RestartCore(ctx context.Context, request protocol.MutationRequest) (protocol.MutationResult, error) {
+	c.coreOperation, _ = logging.OperationFromContext(ctx)
+	c.coreRequest = request
 	return protocol.MutationResult{Schema: "mihari/v1", OperationID: request.OperationID}, nil
 }
 

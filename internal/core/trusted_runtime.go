@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"os"
 	"path/filepath"
 	"sync"
@@ -120,11 +121,11 @@ func (t *TrustedExecution) Publish(ctx context.Context, g *GeneratedConfig, expe
 	recoveryCtx := context.WithoutCancel(ctx)
 	actual, readErr := t.files.read(recoveryCtx)
 	if !ready || readErr != nil || (sha256.Sum256(actual) != g.hash && sha256.Sum256(actual) != sha256.Sum256(previous)) {
-		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "configuration publication recovery could not be confirmed", Details: map[string]any{"degraded": true}}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "configuration publication recovery could not be confirmed", Details: map[string]any{"degraded": true}}, errors.Join(e, readErr))
 	}
 	restored, restoreErr := t.publishContent(recoveryCtx, previous)
 	if restoreErr != nil {
-		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "configuration publication recovery could not be confirmed", Details: map[string]any{"degraded": true}}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "configuration publication recovery could not be confirmed", Details: map[string]any{"degraded": true}}, errors.Join(e, restoreErr))
 	}
 	if closeErr := restored.Close(); closeErr != nil {
 		return nil, errors.Join(e, closeErr)

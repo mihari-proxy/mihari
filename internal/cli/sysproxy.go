@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"io"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -62,7 +63,7 @@ func newSysproxyEnableCommand(dependencies Dependencies, options *runOptions) *c
 			if err != nil {
 				return err
 			}
-			status, err := client.EnableSystemProxy(command.Context(), protocol.SystemProxyMutationRequest{
+			status, err := client.EnableSystemProxy(logging.WithOperation(command.Context(), logging.OperationMetadata{ID: id, Name: "system_proxy.enable"}), protocol.SystemProxyMutationRequest{
 				OperationID: id,
 				IfRevision:  revisionFlag(command, revision),
 				Force:       force,
@@ -91,7 +92,7 @@ func newSysproxyDisableCommand(dependencies Dependencies, options *runOptions) *
 			if err != nil {
 				return err
 			}
-			status, err := client.DisableSystemProxy(command.Context(), protocol.SystemProxyMutationRequest{
+			status, err := client.DisableSystemProxy(logging.WithOperation(command.Context(), logging.OperationMetadata{ID: id, Name: "system_proxy.disable"}), protocol.SystemProxyMutationRequest{
 				OperationID: id,
 				IfRevision:  revisionFlag(command, revision),
 			})

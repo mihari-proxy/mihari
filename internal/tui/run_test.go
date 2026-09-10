@@ -449,7 +449,7 @@ func TestAttachRunExportLogsBuildsOnceOnFinalClientModelWithProgramContext(t *te
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	resources := NewLoggingResources(nil, logging.NewRedactor("token"), nil)
-	model := newRunModel(ctx, controlclient.New("unused", ""), nil, &resources, newRunLoggingApplier(ctx, nil))
+	model := newRunModel(ctx, controlclient.New("unused", ""), nil, &resources, newRunLoggingApplier(ctx, nil, ui.LocalTaskDiagnostics{}))
 	calls := 0
 	observedCancel := make(chan struct{})
 	exportLogs := attachRunExportLogs(ctx, &model, resources, func(got LoggingResources) ui.ExportLogsOptions {
@@ -462,7 +462,7 @@ func TestAttachRunExportLogsBuildsOnceOnFinalClientModelWithProgramContext(t *te
 			close(observedCancel)
 			return logging.ExportResult{}, got.Err()
 		}}
-	})
+	}, ui.LocalTaskDiagnostics{})
 	if calls != 1 || exportLogs == nil || model.exportLogs != exportLogs {
 		t.Fatalf("calls=%d export=%p root=%p", calls, exportLogs, model.exportLogs)
 	}
@@ -484,7 +484,7 @@ func TestAttachRunExportLogsBuildsOnceOnFinalClientModelWithProgramContext(t *te
 }
 
 func TestNewRunLoggingApplierHandlesTypedNilRuntime(t *testing.T) {
-	applier := newRunLoggingApplier(context.Background(), nil)
+	applier := newRunLoggingApplier(context.Background(), nil, ui.LocalTaskDiagnostics{})
 	if !applier.Submit(logging.BootstrapConfig()) {
 		t.Fatal("typed-nil runtime applier rejected Submit")
 	}
@@ -535,6 +535,7 @@ func TestRunCleanupOwnsExportBeforeApplierAndResourcesWhenWaiterCmdIsUnexecuted(
 }
 
 func TestRunShutdown_LifecycleOrder(t *testing.T) {
+	closeFailure := errors.New("log close failed")
 	var order []string
 	observe := func(name string) { order = append(order, name) }
 	err := finishRun(requestedRelaunchModel(), nil, io.Discard, func() error {
@@ -548,12 +549,12 @@ func TestRunShutdown_LifecycleOrder(t *testing.T) {
 			CancelExport:  func() {},
 			CloseResponse: func() {},
 			WaitWorkers:   func() {},
-			Logging:       &countingCloser{},
+			Logging:       shutdownErrorCloser{err: closeFailure},
 			UserFS:        &countingCloser{},
 		}, observe)
 	})
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, closeFailure) {
+		t.Fatal("cleanup error was lost")
 	}
 	want := []string{"cancel-export", "close-response", "wait-workers", "close-logging", "close-user-fs", "relaunch"}
 	if !slices.Equal(order, want) {
@@ -587,15 +588,18 @@ func TestRunCleanup_NetworkTerminateDoesNotDropDiskWorkers(t *testing.T) {
 	}
 	<-started
 
+	closeFailure := errors.New("close /private/tui-secret/log\r\nfailed")
+	var warnings bytes.Buffer
+	reporter := newTUILoggingFailureReporter(&warnings, nil, func() time.Time { return time.Unix(100, 0) })
 	var order []string
 	resources := NewLoggingResources(nil, nil, nil)
 	resources.closeState = newLoggingResourcesCloseState(
-		&workerAwareCloser{name: "close-logging", workerDone: diskDone, order: &order, t: t},
+		&workerAwareCloser{name: "close-logging", workerDone: diskDone, order: &order, t: t, err: closeFailure},
 		&workerAwareCloser{name: "close-user-fs", workerDone: diskDone, order: &order, t: t},
 	)
 	done := make(chan error, 1)
 	go func() {
-		done <- newRunCleanup(&resources, nil, nil, exportModel, &orderedLoggingApplier{order: &order, workerDone: diskDone, t: t}, nil)(nil)
+		done <- newRunCleanup(&resources, nil, nil, exportModel, &orderedLoggingApplier{order: &order, workerDone: diskDone, t: t}, reporter)(nil)
 	}()
 	select {
 	case <-responseStarted:
@@ -610,11 +614,14 @@ func TestRunCleanup_NetworkTerminateDoesNotDropDiskWorkers(t *testing.T) {
 	close(diskReleased)
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
+		if !errors.Is(err, closeFailure) {
+			t.Fatal("cleanup lost close cause")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("cleanup did not wait for disk worker after network timeout")
+	}
+	if warnings.String() != "Warning: TUI file logging cleanup failed\n" {
+		t.Fatal("cleanup warning missing, duplicated or unsafe")
 	}
 	if want := []string{"applier", "close-logging", "close-user-fs"}; !slices.Equal(order, want) {
 		t.Fatalf("order=%q want=%q", order, want)
@@ -685,6 +692,7 @@ func (l *cancelAwareLocalLogging) Apply(ctx context.Context, _ logging.Config) {
 }
 
 type workerAwareCloser struct {
+	err        error
 	name       string
 	workerDone <-chan struct{}
 	order      *[]string
@@ -699,7 +707,7 @@ func (c *workerAwareCloser) Close() error {
 		c.t.Fatal("resource closed before logging worker exited")
 	}
 	*c.order = append(*c.order, c.name)
-	return nil
+	return c.err
 }
 
 type countingCloser struct{ calls int }

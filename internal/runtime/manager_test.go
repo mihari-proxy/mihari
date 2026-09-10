@@ -18,6 +18,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/core"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/geoip"
 	"github.com/mihari-proxy/mihari/internal/mihomo"
 	"github.com/mihari-proxy/mihari/internal/onboarding"
@@ -195,7 +196,7 @@ func TestOnboarding_StatePreCommitFailureRollsBackSettingsBeforePublish(t *testi
 		t.Fatal(err)
 	}
 	var saved []string
-	var warnings []string
+	var warnings []diagnostics.Record
 	manager := newTestManager(Options{
 		Onboarding: service, Settings: settings, SettingsPath: "settings.yaml",
 		SaveSettings: func(_ string, candidate config.Settings) (config.CommitResult, error) {
@@ -206,8 +207,10 @@ func TestOnboarding_StatePreCommitFailureRollsBackSettingsBeforePublish(t *testi
 			}
 			return config.CommitResult{Committed: true}, nil
 		},
-		OnBackgroundError: func(component string, err error) {
-			warnings = append(warnings, component+":"+err.Error())
+		DiagnosticReporter: func(_ context.Context, record diagnostics.Record) {
+			if record.Component == "settings" && record.Event == "persist.warning" {
+				warnings = append(warnings, record)
+			}
 		},
 	})
 
@@ -224,7 +227,7 @@ func TestOnboarding_StatePreCommitFailureRollsBackSettingsBeforePublish(t *testi
 	if disk.WebAddr != settings.WebAddr || manager.settingsSnapshot().WebAddr != settings.WebAddr {
 		t.Fatalf("disk=%q memory=%q want before=%q", disk.WebAddr, manager.settingsSnapshot().WebAddr, settings.WebAddr)
 	}
-	if !reflect.DeepEqual(warnings, []string{"settings:parent directory sync failed after commit"}) {
+	if len(warnings) != 1 || warnings[0].Component != "settings" || warnings[0].Event != "persist.warning" {
 		t.Fatalf("warnings=%v", warnings)
 	}
 	status, statusErr := manager.OnboardingStatus(context.Background())
@@ -508,7 +511,9 @@ func TestManagerIgnoresWebGatewayCancellation(t *testing.T) {
 		WebGateway:        errorGateway{err: context.Canceled},
 		OnBackgroundError: func(string, error) { called = true },
 	})
-	_ = manager.Run(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = manager.Run(ctx)
 	if called {
 		t.Fatal("cancellation reported as background error")
 	}
@@ -536,8 +541,9 @@ func TestManagerIgnoresSchedulerCancellation(t *testing.T) {
 	called := false
 	manager := newTestManager(Options{
 		Supervisor: &fakeSupervisor{run: func(context.Context) error { return errors.New("stopped") }},
-		RunScheduler: func(context.Context) error {
-			return context.Canceled
+		RunScheduler: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
 		},
 		OnBackgroundError: func(string, error) { called = true },
 	})
@@ -792,7 +798,7 @@ func TestControllerMutationsSettleAfterSuccessfulCallCancelsRequest(t *testing.T
 			if calls := controller.callsFor(test.kind); len(calls) != 1 {
 				t.Fatalf("%s calls=%d want=1", test.kind, len(calls))
 			}
-			if controller.callsFor(test.kind)[0].ctx != ctx {
+			if controller.callsFor(test.kind)[0].ctx.Done() != ctx.Done() {
 				t.Fatal("controller call did not receive the original request context")
 			}
 		})
@@ -919,7 +925,7 @@ func requireControllerCall(t *testing.T, controller *fakeController, kind string
 	if len(calls) != 1 {
 		t.Fatalf("%s calls=%d want=1", kind, len(calls))
 	}
-	if calls[0].ctx != wantContext {
+	if calls[0].ctx.Value(controllerMutationContextKey{}) != wantContext.Value(controllerMutationContextKey{}) || calls[0].ctx.Done() != wantContext.Done() {
 		t.Fatalf("%s context was not propagated", kind)
 	}
 	if !reflect.DeepEqual(calls[0].args, wantArgs) {

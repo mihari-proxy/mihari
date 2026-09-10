@@ -14,6 +14,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 type Fetcher interface {
@@ -35,6 +36,7 @@ type Service struct {
 	catalogPath string
 	cacheDir    string
 	downloader  Fetcher
+	writeCache  func(string, []byte, os.FileMode) error
 	now         func() time.Time
 	catalog     Catalog
 }
@@ -83,7 +85,7 @@ func Open(options ServiceOptions) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{catalogPath: options.CatalogPath, cacheDir: options.CacheDir, downloader: downloader, now: now, catalog: catalog}, nil
+	return &Service{catalogPath: options.CatalogPath, cacheDir: options.CacheDir, downloader: downloader, writeCache: config.AtomicWrite, now: now, catalog: catalog}, nil
 }
 
 func (s *Service) Snapshot() Catalog {
@@ -145,7 +147,7 @@ func (s *Service) PrepareRefresh(ctx context.Context, id string) (PreparedRefres
 	if result.NotModified {
 		content, err = os.ReadFile(s.CachePath(id))
 		if err != nil {
-			fail := dataError("subscription provider returned not-modified without a valid cache")
+			fail := diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription provider returned not-modified without a valid cache"}, err)
 			_ = s.noteRefreshError(id, fail)
 			return PreparedRefresh{}, fail
 		}
@@ -191,12 +193,12 @@ func (s *Service) CommitRefresh(prepared PreparedRefresh) (Receipt, error) {
 	cacheBefore, readErr := os.ReadFile(cachePath)
 	hadCache := readErr == nil
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-		return Receipt{}, dataError("read existing subscription cache")
+		return Receipt{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "read existing subscription cache"}, readErr)
 	}
 	wroteCache := !prepared.result.NotModified
 	if wroteCache {
-		if err := config.AtomicWrite(cachePath, prepared.result.Content, 0o600); err != nil {
-			return Receipt{}, dataError("write subscription cache")
+		if err := s.writeCache(cachePath, prepared.result.Content, 0o600); err != nil {
+			return Receipt{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "write subscription cache"}, err)
 		}
 		profile.Generation++
 	}
@@ -259,7 +261,7 @@ func (s *Service) ReadCache(id string) ([]byte, Document, error) {
 	}
 	content, err := os.ReadFile(s.CachePath(id))
 	if err != nil {
-		return nil, nil, dataError("subscription cache is unavailable")
+		return nil, nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription cache is unavailable"}, err)
 	}
 	document, err := ParseDocument(content)
 	return content, document, err

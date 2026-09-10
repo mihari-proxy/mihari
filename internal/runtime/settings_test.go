@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/geoip"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/sysproxy"
@@ -65,7 +67,7 @@ func TestManagerSettings_SaveCandidateOutcomes(t *testing.T) {
 			},
 		})
 		before := manager.settingsSnapshot()
-		candidate, err := manager.updateSettings(func(next *config.Settings) error {
+		candidate, err := manager.updateSettings(context.Background(), func(next *config.Settings) error {
 			next.Tun["nested"].(map[string]any)["enabled"] = false
 			return nil
 		})
@@ -83,30 +85,58 @@ func TestManagerSettings_SaveCandidateOutcomes(t *testing.T) {
 }
 
 func TestManagerSettings_PostCommitWarning(t *testing.T) {
-	var reports atomic.Int64
-	var component, message string
-	manager := newTestManager(Options{
-		Settings: config.Defaults(), SettingsPath: "settings.yaml",
+	warning := errors.New("injected post-commit warning")
+	var records []diagnostics.Record
+	var recordsMu sync.Mutex
+	runtime := &recordingLoggingRuntime{dir: "logs"}
+	var manager *Manager
+	manager = newTestManager(Options{
+		Settings: config.Defaults(), SettingsPath: "settings.yaml", Logging: runtime,
 		SaveSettings: func(string, config.Settings) (config.CommitResult, error) {
-			return config.CommitResult{Committed: true, Warning: errors.New("C:\\sensitive\\path")}, nil
+			return config.CommitResult{Committed: true, Warning: warning}, nil
 		},
-		OnBackgroundError: func(gotComponent string, err error) {
-			reports.Add(1)
-			component, message = gotComponent, err.Error()
+		DiagnosticReporter: func(_ context.Context, record diagnostics.Record) {
+			statusCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if _, err := manager.LoggingStatus(statusCtx); err != nil {
+				t.Errorf("reporter re-entry blocked until context timeout: %v", err)
+			}
+			recordsMu.Lock()
+			records = append(records, record)
+			recordsMu.Unlock()
 		},
 	})
-	candidate, err := manager.updateSettings(func(next *config.Settings) error {
-		next.WebAddr = "127.0.0.1:9999"
-		return nil
+	status, err := manager.UpdateLogging(context.Background(), Operation{ID: "settings-warning", Source: "test"}, LoggingUpdate{Level: stringPointer("debug")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Revision != 1 || manager.settingsSnapshot().EffectiveLogging().Level != "debug" || runtime.applyCalls != 1 {
+		t.Fatalf("status=%#v settings=%#v apply=%d", status, manager.settingsSnapshot().EffectiveLogging(), runtime.applyCalls)
+	}
+	recordsMu.Lock()
+	defer recordsMu.Unlock()
+	if len(records) != 1 || records[0].Component != "settings" || records[0].Event != "persist.warning" || records[0].Level.String() != "WARN" || !errors.Is(records[0].Err, warning) {
+		t.Fatalf("records=%#v", records)
+	}
+}
+
+func TestSettingsDiagnostic_CauseSurvives(t *testing.T) {
+	cause := errors.New("injected replace failure")
+	manager := newTestManager(Options{
+		Settings: config.Defaults(), SettingsPath: filepath.Join(t.TempDir(), "settings.yaml"),
+		Logging: &recordingLoggingRuntime{dir: "logs"},
+		SaveSettings: func(string, config.Settings) (config.CommitResult, error) {
+			return config.CommitResult{}, cause
+		},
 	})
-	if err != nil || !candidate.changed {
-		t.Fatalf("candidate=%#v err=%v", candidate, err)
+
+	_, err := manager.UpdateLogging(context.Background(), Operation{ID: "settings-cause"}, LoggingUpdate{Level: stringPointer("debug")})
+	if !errors.Is(err, cause) {
+		t.Fatalf("settings cause was lost: %v", err)
 	}
-	if got := manager.settingsSnapshot().WebAddr; got != "127.0.0.1:9999" {
-		t.Fatalf("published web address=%q", got)
-	}
-	if reports.Load() != 1 || component != "settings" || message != "parent directory sync failed after commit" {
-		t.Fatalf("warning report count=%d component=%q message=%q", reports.Load(), component, message)
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodeDataFailure || api.Message != "persist settings" {
+		t.Fatalf("public error changed: %v", err)
 	}
 }
 
@@ -130,7 +160,7 @@ func TestManagerSettings_SaveDoesNotHoldSettingsMutex(t *testing.T) {
 	}
 	saved := make(chan error, 1)
 	go func() {
-		_, saveErr := manager.saveSettingsCandidate(candidate)
+		_, saveErr := manager.saveSettingsCandidate(context.Background(), candidate)
 		saved <- saveErr
 	}()
 	<-saveStarted
@@ -159,7 +189,7 @@ func TestManagerSettings_NoOpDoesNotSaveOrPublish(t *testing.T) {
 			return config.CommitResult{Committed: true}, nil
 		},
 	})
-	candidate, err := manager.updateSettings(func(*config.Settings) error { return nil })
+	candidate, err := manager.updateSettings(context.Background(), func(*config.Settings) error { return nil })
 	if err != nil || candidate.changed || saves.Load() != 0 {
 		t.Fatalf("candidate=%#v err=%v saves=%d", candidate, err, saves.Load())
 	}
@@ -176,13 +206,13 @@ func TestManagerSettings_RestorePublishesOnlyAfterCommittedRollback(t *testing.T
 			return config.CommitResult{Committed: true}, nil
 		},
 	})
-	if _, err := manager.updateSettings(func(next *config.Settings) error {
+	if _, err := manager.updateSettings(context.Background(), func(next *config.Settings) error {
 		next.WebAddr = "127.0.0.1:9999"
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.restoreSettings(settings); err == nil {
+	if _, err := manager.restoreSettings(context.Background(), settings); err == nil {
 		t.Fatal("expected rollback failure")
 	}
 	if got := manager.settingsSnapshot().WebAddr; got != "127.0.0.1:9999" {
@@ -197,7 +227,7 @@ func TestManagerSettings_MapsInvalidSaverOutcome(t *testing.T) {
 			return config.CommitResult{Committed: true}, errors.New("ambiguous")
 		},
 	})
-	_, err := manager.updateSettings(func(next *config.Settings) error {
+	_, err := manager.updateSettings(context.Background(), func(next *config.Settings) error {
 		next.WebAddr = "127.0.0.1:9999"
 		return nil
 	})
@@ -219,7 +249,7 @@ func TestManagerSettings_DegradedMutationRejectsQueuedOperationButAllowsObservat
 		queued <- manager.SelectProxy(context.Background(), Operation{ID: "queued", Source: "test"}, "group", "proxy")
 	}()
 
-	degradeResult, degradeErr := manager.doOperation(context.Background(), "degrade", func() (any, error) {
+	degradeResult, degradeErr := manager.doOperation(context.Background(), "degrade", func(context.Context) (any, error) {
 		if err := manager.enterMutationDegraded(&state.Snapshot{}); err == nil {
 			return nil, errors.New("expected committed error")
 		} else {
@@ -244,7 +274,7 @@ func TestManagerSettings_DegradedMutationRejectsQueuedOperationButAllowsObservat
 		t.Fatalf("degraded mutation reached controller: %#v", calls)
 	}
 
-	_, retryErr := manager.doOperation(context.Background(), "degrade", func() (any, error) {
+	_, retryErr := manager.doOperation(context.Background(), "degrade", func(context.Context) (any, error) {
 		return nil, errors.New("must not execute retry")
 	})
 	var retryAPIError protocol.APIError

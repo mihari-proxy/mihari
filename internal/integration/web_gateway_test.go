@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/mihomo"
 	"github.com/mihari-proxy/mihari/internal/panel"
 	"github.com/mihari-proxy/mihari/internal/platform"
@@ -377,5 +379,69 @@ func TestPanelServiceFixtureInstallLayout(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(paths.WebRoot, panel.IDMetaCubeXD, "abc123", "index.html")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWebGatewayDiagnostics_RealManagerFailureIsReportedOnce(t *testing.T) {
+	const token = "web-credential-diagnostics-aaaaaaaaaaaa"
+	var output bytes.Buffer
+	redactor := logging.NewRedactor(token)
+	reporter := logging.NewDiagnosticReporter(slog.New(logging.NewJSONHandler(&output, new(slog.LevelVar), "daemon", redactor)), redactor)
+	manager := runtimeapi.New(runtimeapi.Options{DiagnosticReporter: reporter})
+	gateway, err := web.New(web.Options{Addr: "127.0.0.1:0", Auth: web.Authenticator{WebCredential: token}, ControllerURL: "http://controller.invalid", Mutator: integrationWebMutator{manager: manager}, Reporter: reporter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- gateway.Serve(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("gateway did not stop")
+		}
+	})
+	base := waitGatewayBase(t, gateway)
+	request, err := http.NewRequest(http.MethodPut, base+"/proxies/private-group", strings.NewReader(`{"name":"private-node"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusBadRequest || !bytes.Contains(body, []byte(`"code":"invalid_state"`)) {
+		t.Fatalf("Manager response changed: status=%d", response.StatusCode)
+	}
+	// Shutdown joins HTTP handlers before reading the synchronous reporter buffer.
+	if err := gateway.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("diagnostic count=%d, want 1", len(lines))
+	}
+	var record map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record["component"] != "runtime" || record["level"] != "ERROR" || record["operation_id"] != "web-select" || record["operation"] != "proxy.select" {
+		t.Fatalf("unexpected owner record: %#v", record)
+	}
+	for _, secret := range []string{token, "private-group", "private-node", "controller.invalid"} {
+		if strings.Contains(output.String(), secret) {
+			t.Fatal("diagnostic leaked request data")
+		}
 	}
 }

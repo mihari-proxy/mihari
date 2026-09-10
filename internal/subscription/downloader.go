@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 const (
@@ -135,7 +136,7 @@ func (d *Downloader) Fetch(ctx context.Context, input FetchRequest) (FetchResult
 func toAPIError(err error) error {
 	var netFail networkFailureError
 	if errors.As(err, &netFail) {
-		return protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "subscription download failed"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "subscription download failed"}, err)
 	}
 	return err
 }

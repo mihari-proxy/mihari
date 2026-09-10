@@ -2,6 +2,7 @@ package webgui
 
 import (
 	"context"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 )
 
 type fakeClient struct {
+	operation   logging.OperationMetadata
 	calls       int
 	status      protocol.WebGUIStatus
 	installed   int
@@ -28,32 +30,38 @@ func (f *fakeClient) WebGUI(context.Context) (protocol.WebGUIStatus, error) {
 	f.calls++
 	return f.status, nil
 }
-func (f *fakeClient) InstallPanel(_ context.Context, id string, _ protocol.PanelInstallRequest) (protocol.MutationResult, error) {
+func (f *fakeClient) InstallPanel(ctx context.Context, id string, _ protocol.PanelInstallRequest) (protocol.MutationResult, error) {
+	f.operation, _ = logging.OperationFromContext(ctx)
 	f.installed++
 	f.lastID = id
 	return protocol.MutationResult{Schema: "mihari/v1"}, nil
 }
-func (f *fakeClient) UpdatePanel(_ context.Context, id string, _ protocol.MutationRequest) (protocol.MutationResult, error) {
+func (f *fakeClient) UpdatePanel(ctx context.Context, id string, _ protocol.MutationRequest) (protocol.MutationResult, error) {
+	f.operation, _ = logging.OperationFromContext(ctx)
 	f.updated++
 	f.lastID = id
 	return protocol.MutationResult{Schema: "mihari/v1"}, nil
 }
-func (f *fakeClient) ActivatePanel(_ context.Context, id string, _ protocol.MutationRequest) (protocol.MutationResult, error) {
+func (f *fakeClient) ActivatePanel(ctx context.Context, id string, _ protocol.MutationRequest) (protocol.MutationResult, error) {
+	f.operation, _ = logging.OperationFromContext(ctx)
 	f.activated++
 	f.lastID = id
 	return protocol.MutationResult{Schema: "mihari/v1"}, nil
 }
-func (f *fakeClient) RollbackPanel(_ context.Context, id string, _ protocol.MutationRequest) (protocol.MutationResult, error) {
+func (f *fakeClient) RollbackPanel(ctx context.Context, id string, _ protocol.MutationRequest) (protocol.MutationResult, error) {
+	f.operation, _ = logging.OperationFromContext(ctx)
 	f.rolledBack++
 	f.lastID = id
 	return protocol.MutationResult{Schema: "mihari/v1"}, nil
 }
-func (f *fakeClient) UninstallPanel(_ context.Context, id string, _ protocol.MutationRequest) (protocol.MutationResult, error) {
+func (f *fakeClient) UninstallPanel(ctx context.Context, id string, _ protocol.MutationRequest) (protocol.MutationResult, error) {
+	f.operation, _ = logging.OperationFromContext(ctx)
 	f.uninstalled++
 	f.lastID = id
 	return protocol.MutationResult{Schema: "mihari/v1"}, nil
 }
-func (f *fakeClient) ReinstallPanel(_ context.Context, id string, _ protocol.MutationRequest) (protocol.MutationResult, error) {
+func (f *fakeClient) ReinstallPanel(ctx context.Context, id string, _ protocol.MutationRequest) (protocol.MutationResult, error) {
+	f.operation, _ = logging.OperationFromContext(ctx)
 	f.reinstalled++
 	f.lastID = id
 	return protocol.MutationResult{Schema: "mihari/v1"}, nil
@@ -255,5 +263,38 @@ func TestWebGUIUninstallAndReinstallActions(t *testing.T) {
 	_ = intent.Execute()
 	if fake.reinstalled != 1 {
 		t.Fatalf("reinstalled=%d", fake.reinstalled)
+	}
+}
+
+func TestPanelDiagnostic_TUIMetadata(t *testing.T) {
+	for _, action := range []string{"install", "update", "activate", "rollback", "uninstall", "reinstall"} {
+		client := &fakeClient{status: sampleStatus()}
+		m := New(client, []string{protocol.CapabilityWebGUI})
+		m.SetStatus(sampleStatus())
+		m.SetOperationID(func() string { return "business-id" })
+		var cmd tea.Cmd
+		switch action {
+		case "install":
+			cmd = m.installSelected()
+		case "update":
+			cmd = m.updateSelected()
+		case "activate":
+			cmd = m.activateSelected()
+		case "rollback":
+			cmd = m.rollbackSelected()
+		case "uninstall":
+			cmd = m.uninstallSelected()
+		case "reinstall":
+			cmd = m.reinstallSelected()
+		}
+		if cmd == nil {
+			t.Fatal("missing panel intent")
+		}
+		intent := cmd().(ui.ActionIntentMsg)
+		result := intent.Execute().(mutationDoneMsg)
+		want := logging.OperationMetadata{ID: "business-id", Name: "panel." + action}
+		if client.operation != want || result.operation != want {
+			t.Fatalf("context=%#v result=%#v", client.operation, result.operation)
+		}
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -27,6 +29,7 @@ var ErrMachineLogsUnavailable = errors.New("machine logs unavailable")
 
 // ExportLogsOptions supplies the local exporter and side-effect boundaries.
 type ExportLogsOptions struct {
+	Diagnostics      LocalTaskDiagnostics
 	Context          context.Context
 	Now              func() time.Time
 	DefaultDir       string
@@ -41,18 +44,20 @@ type ExportLogsOptions struct {
 
 type exportResultMsg struct {
 	Generation uint64
+	Operation  logging.OperationMetadata
 	Result     logging.ExportResult
 	Err        error
 	Warning    bool
 }
 
 type exportRunner struct {
-	mu      sync.Mutex
-	parent  context.Context
-	export  func(context.Context, logging.ExportRequest) (logging.ExportResult, error)
-	running bool
-	cancel  context.CancelFunc
-	done    chan struct{}
+	diagnostics LocalTaskDiagnostics
+	mu          sync.Mutex
+	parent      context.Context
+	export      func(context.Context, logging.ExportRequest) (logging.ExportResult, error)
+	running     bool
+	cancel      context.CancelFunc
+	done        chan struct{}
 }
 
 func newExportRunner(parent context.Context, export func(context.Context, logging.ExportRequest) (logging.ExportResult, error)) *exportRunner {
@@ -86,14 +91,39 @@ func (r *exportRunner) startExport(generation uint64, request logging.ExportRequ
 	done := make(chan struct{})
 	r.running, r.cancel, r.done = true, cancel, done
 	go func() {
-		message := exportResultMsg{Generation: generation}
+		ctx = r.diagnostics.NewContext(ctx, "logs.export")
+		operation, _ := logging.OperationFromContext(ctx)
+		message := exportResultMsg{Generation: generation, Operation: operation}
 		var warned atomic.Bool
 		// Keep raw errors on the worker boundary. Only a fixed notice crosses to UI.
-		request.OnWarning = func(error) { warned.Store(true) }
+		var warningMu sync.Mutex
+		var warning error
+		request.OnWarning = func(err error) {
+			warningMu.Lock()
+			if warning == nil {
+				warning = err
+			}
+			warningMu.Unlock()
+			warned.Store(true)
+		}
 		defer func() {
 			if recover() != nil {
 				message.Result = logging.ExportResult{}
 				message.Err = errExportPanicked
+			}
+			if r.diagnostics.Reporter != nil {
+				if expectedExportRejection(message.Err) {
+					r.diagnostics.Reporter(ctx, diagnostics.Record{Component: "tui", Event: "logs.export.rejected", Level: slog.LevelDebug, Err: message.Err})
+					message.Err = diagnostics.MarkReported(message.Err)
+				} else {
+					message.Err = r.diagnostics.ReportFailure(ctx, "logs.export.failed", message.Err)
+				}
+			}
+			warningMu.Lock()
+			warningErr := warning
+			warningMu.Unlock()
+			if warned.Load() && r.diagnostics.Reporter != nil {
+				r.diagnostics.Reporter(ctx, diagnostics.Record{Component: "tui", Event: "logs.export.warning", Level: slog.LevelWarn, Err: warningErr})
 			}
 			cancel()
 			message.Warning = warned.Load()
@@ -107,6 +137,28 @@ func (r *exportRunner) startExport(generation uint64, request logging.ExportRequ
 		message.Result, message.Err = exportFn(ctx, request)
 	}()
 	return result, true
+}
+
+// expectedExportRejection follows transparent single-cause wrappers used by
+// the exporter. Joined/unknown causes and over-deep chains stay operational
+// failures; matching one expected sentinel in such a graph is insufficient.
+func expectedExportRejection(err error) bool {
+	if diagnostics.AlreadyReported(err) {
+		return false
+	}
+	const maxDepth = 32
+	for depth := 0; err != nil && depth <= maxDepth; depth++ {
+		switch err {
+		case logging.ErrNoLogLines, logging.ErrExportTargetExists, logging.ErrInvalidExportRequest, logging.ErrExportTargetChanged:
+			return true
+		}
+		wrapped, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+		err = wrapped.Unwrap()
+	}
+	return false
 }
 
 // Cancel requests cancellation without blocking the UI loop.
@@ -186,7 +238,9 @@ func NewExportLogsModel(options ExportLogsOptions) *ExportLogsModel {
 	if options.WriteClipboard == nil {
 		options.WriteClipboard = clipboard.WriteAll
 	}
-	return &ExportLogsModel{options: options, runner: newExportRunner(options.Context, options.Export), closed: true}
+	runner := newExportRunner(options.Context, options.Export)
+	runner.diagnostics = options.Diagnostics
+	return &ExportLogsModel{options: options, runner: runner, closed: true}
 }
 
 // Open resets the editable form using one local-time sample.

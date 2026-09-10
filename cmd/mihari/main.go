@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/credential"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/daemon"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/panel"
 	"github.com/mihari-proxy/mihari/internal/platform"
@@ -64,6 +66,13 @@ type daemonRunDeps struct {
 	RuntimeOptions    app.RuntimeBuildOptions
 	ActivationPhase   string
 	ShareProcessGroup bool
+	// DiagnosticStderr is the daemon-owned fallback for failures before its
+	// structured logger is available. Nil deliberately suppresses diagnostics
+	// so CLI rendering keeps ownership of its text and JSON output.
+	DiagnosticStderr io.Writer
+	// LoggingFailureStderr is the independent sink already owned by the logging
+	// runtime for its own write and close failures. JSON invocations leave it nil.
+	LoggingFailureStderr io.Writer
 }
 
 type daemonLoggingResources struct {
@@ -78,6 +87,69 @@ type daemonLoggingRuntime struct {
 	Closer  io.Closer
 	Logger  *slog.Logger
 	Runtime *logging.Runtime
+}
+
+// daemonServiceDiagnosticStderr selects the explicit service-owned diagnostic
+// channel. Foreground and JSON CLI invocations retain renderer ownership.
+func daemonServiceDiagnosticStderr(args []string, stderr io.Writer) io.Writer {
+	if stderr == nil || daemonJSONOutput(args) {
+		return nil
+	}
+	if enabled, _ := commandBooleanFlag(args, "system-service"); enabled {
+		return stderr
+	}
+	return nil
+}
+
+func daemonLoggingFailureStderr(args []string, stderr io.Writer) io.Writer {
+	if stderr == nil || daemonJSONOutput(args) || !daemonInvocation(args) {
+		return nil
+	}
+	return stderr
+}
+
+func daemonJSONOutput(args []string) bool {
+	enabled, _ := commandBooleanFlag(args, "json")
+	return enabled
+}
+
+func daemonInvocation(args []string) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if _, recognized := commandBooleanFlagArgument(arg, "json"); recognized {
+			continue
+		}
+		return arg == "daemon"
+	}
+	return false
+}
+
+func commandBooleanFlag(args []string, name string) (value bool, changed bool) {
+	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
+		parsed, recognized := commandBooleanFlagArgument(arg, name)
+		if recognized {
+			value, changed = parsed, true
+		}
+	}
+	return value, changed
+}
+
+func commandBooleanFlagArgument(arg, name string) (bool, bool) {
+	flag := "--" + name
+	if arg == flag {
+		return true, true
+	}
+	prefix := flag + "="
+	if !strings.HasPrefix(arg, prefix) {
+		return false, false
+	}
+	value, err := strconv.ParseBool(strings.TrimPrefix(arg, prefix))
+	return value, err == nil
 }
 
 var (
@@ -464,15 +536,29 @@ func (r *daemonLoggingResources) Close() error {
 }
 
 func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
+	diagnosticStderr := deps.DiagnosticStderr
 	if deps.PrivateFS == nil {
+		reportDaemonStartupFailure(diagnosticStderr, "open data root", nil)
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "create mihari data directories"}
 	}
 	resources := newDaemonResources(deps.PrivateFS)
+	redactor := logging.NewRedactor()
+	reporter := logging.NewFailureReporter(deps.LoggingFailureStderr, redactor, nil)
+	logSecretsReady := false
 	var closeOnce sync.Once
 	closeResources := func() error {
 		var closeErr error
 		closeOnce.Do(func() {
 			closeErr = resources.Close()
+			// Logging is closed. Keep its final failure on the independent outlet;
+			// before secret registration only a fixed summary is safe.
+			if closeErr != nil {
+				failure := closeErr
+				if !logSecretsReady {
+					failure = errors.New("close logging resources failed")
+				}
+				reporter.Report(logging.FailureCleanup, failure)
+			}
 		})
 		return closeErr
 	}
@@ -488,6 +574,7 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	}
 	if !deps.ValidationMode {
 		if err := deps.Paths.EnsureDirs(); err != nil {
+			reportDaemonStartupFailure(diagnosticStderr, "create data directories", err)
 			return protocol.APIError{Code: protocol.CodeDataFailure, Message: "create mihari data directories"}
 		}
 	}
@@ -515,25 +602,27 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	}
 	if err != nil {
 		failure := protocol.APIError{Code: protocol.CodeDataFailure, Message: "load settings"}
+		reportDaemonStartupFailure(diagnosticStderr, "load settings", err)
 		if deps.Listen == nil || errors.Is(err, os.ErrPermission) {
 			return failure
 		}
-		return runDegradedDaemon(ctx, deps, failure, nil)
+		return runDegradedDaemon(ctx, deps, failure, nil, nil)
 	}
 	if err := deps.PrivateFS.EnsureDir(deps.Paths.LogDir); err != nil {
+		reportDaemonStartupFailure(diagnosticStderr, "create log directory", err)
 		return err
 	}
 
-	redactor := logging.NewRedactor()
 	baseSecrets := collectBaseLogSecretsMode(deps.Paths, deps.Token, settings, deps.ValidationMode)
 	catalogURLs := collectCatalogLogSecretsMode(deps.Paths, deps.ValidationMode)
 	redactor.ReplaceExact(append(append([]string{}, baseSecrets...), catalogURLs...))
 	for _, secret := range baseSecrets {
 		redactor.RetainCredential(secret)
 	}
-	reporter := logging.NewFailureReporter(os.Stderr, redactor, nil)
+	logSecretsReady = true
 	cfg, err := daemonLoggingConfig(settings)
 	if err != nil {
+		reportDaemonStartupFailure(diagnosticStderr, "configure logging", err)
 		return err
 	}
 
@@ -546,6 +635,7 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 		Reporter:  reporter,
 	})
 	if err != nil {
+		reportDaemonStartupFailure(diagnosticStderr, "open daemon log", err)
 		return err
 	}
 	resources.DaemonRuntime = daemonRT.Closer
@@ -559,6 +649,7 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 		Reporter:  reporter,
 	})
 	if err != nil {
+		reportDaemonStartupFailure(diagnosticStderr, "open mihomo log", err)
 		return err
 	}
 	resources.MihomoRuntime = mihomoRT.Closer
@@ -571,6 +662,7 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 		afterDaemonLoggingOpen(daemonRT.Logger)
 	}
 	loggingGroup := logging.NewGroup(deps.Paths.LogDir, cfg, daemonRT.Runtime, mihomoRT.Runtime)
+	diagnosticReporter := logging.NewDiagnosticReporter(daemonRT.Logger, redactor)
 	reportBackground := func(component string, bgErr error) {
 		if bgErr == nil {
 			return
@@ -578,7 +670,12 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 		daemonRT.Logger.Error(bgErr.Error(), slog.String("component", component))
 	}
 	if settingsCommit.Committed && settingsCommit.Warning != nil {
-		reportBackground("settings", errors.New("parent directory sync failed after commit"))
+		reportDaemonDiagnostic(ctx, diagnosticReporter, diagnosticStderr, diagnostics.Record{
+			Component: "daemon.settings",
+			Event:     "settings_commit_warning",
+			Level:     slog.LevelWarn,
+			Err:       settingsCommit.Warning,
+		})
 	}
 
 	options := deps.RuntimeOptions
@@ -592,6 +689,7 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	options.SettingsPath = deps.Paths.Settings
 	options.ServiceStatus = deps.ServiceStatus
 	options.Logging = loggingGroup
+	options.DiagnosticReporter = diagnosticReporter
 	options.RefreshLogSecrets = func(catalogURLs []string) {
 		redactor.ReplaceExact(append(append([]string{}, baseSecrets...), catalogURLs...))
 	}
@@ -623,7 +721,13 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 		if deps.ValidationMode {
 			return err
 		}
-		return runDegradedDaemon(ctx, deps, err, snapshot)
+		reportDaemonDiagnostic(ctx, diagnosticReporter, diagnosticStderr, diagnostics.Record{
+			Component: "daemon.startup",
+			Event:     "runtime_build_failed",
+			Level:     slog.LevelError,
+			Err:       err,
+		})
+		return runDegradedDaemon(ctx, deps, err, snapshot, diagnosticReporter)
 	}
 	var onReady func() error
 	if deps.ValidationReady != nil {
@@ -631,21 +735,77 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	}
 	return runDaemon(ctx, daemon.Options{
 		Listen: deps.Listen, OnReady: onReady, SnapshotSource: snapshot,
-		Endpoint:       deps.Endpoint,
-		Token:          deps.Token,
-		Version:        deps.Version,
-		Ready:          deps.Ready,
-		Store:          assembly.Store,
-		Runtime:        assembly.Manager,
-		ValidationMode: deps.ValidationMode,
+		Endpoint:           deps.Endpoint,
+		Token:              deps.Token,
+		Version:            deps.Version,
+		Ready:              deps.Ready,
+		Store:              assembly.Store,
+		Runtime:            assembly.Manager,
+		DiagnosticReporter: diagnosticReporter,
+		ValidationMode:     deps.ValidationMode,
 	})
 }
 
-func runDegradedDaemon(ctx context.Context, deps daemonRunDeps, cause error, snapshot logging.MachineSnapshotSource) error {
+func reportDaemonDiagnostic(ctx context.Context, reporter diagnostics.Reporter, fallback io.Writer, record diagnostics.Record) {
+	if reporter != nil {
+		reporter(ctx, record)
+		return
+	}
+	reportDaemonStartupFailure(fallback, record.Event, record.Err)
+}
+
+func reportDaemonStartupFailure(out io.Writer, operation string, err error) {
+	if out == nil {
+		return
+	}
+	_, _ = fmt.Fprintf(out, "mihari daemon startup: %s: %s\n", operation, safeStartupFailureSummary(err))
+}
+
+func safeStartupFailureSummary(err error) string {
+	if err == nil {
+		return "startup failed"
+	}
+	var pathError *os.PathError
+	if errors.As(err, &pathError) && pathError != nil {
+		return "file operation " + safeStartupOperation(pathError.Op) + ": " + safeStartupErrorClass(pathError.Err)
+	}
+	var syscallError *os.SyscallError
+	if errors.As(err, &syscallError) && syscallError != nil {
+		return "system call " + safeStartupOperation(syscallError.Syscall) + ": " + safeStartupErrorClass(syscallError.Err)
+	}
+	return "startup failed"
+}
+
+func safeStartupOperation(operation string) string {
+	if operation == "" {
+		return "failed"
+	}
+	for _, character := range operation {
+		if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '_' || character == '-') {
+			return "failed"
+		}
+	}
+	return operation
+}
+
+func safeStartupErrorClass(err error) string {
+	switch {
+	case errors.Is(err, os.ErrPermission):
+		return "permission denied"
+	case errors.Is(err, os.ErrNotExist):
+		return "not found"
+	case errors.Is(err, os.ErrExist):
+		return "already exists"
+	default:
+		return "failed"
+	}
+}
+
+func runDegradedDaemon(ctx context.Context, deps daemonRunDeps, cause error, snapshot logging.MachineSnapshotSource, diagnosticReporter diagnostics.Reporter) error {
 	if deps.ValidationMode {
 		return cause
 	}
-	return runDaemon(ctx, daemon.Options{Listen: deps.Listen, Endpoint: deps.Endpoint, Token: deps.Token, Version: deps.Version, Ready: deps.Ready, Store: app.NewDegradedStore(deps.Version, cause), SnapshotSource: snapshot})
+	return runDaemon(ctx, daemon.Options{Listen: deps.Listen, Endpoint: deps.Endpoint, Token: deps.Token, Version: deps.Version, Ready: deps.Ready, Store: app.NewDegradedStore(deps.Version, cause), SnapshotSource: snapshot, DiagnosticReporter: diagnosticReporter})
 }
 
 func daemonLoggingConfig(settings config.Settings) (logging.Config, error) {

@@ -42,7 +42,7 @@ func (m *Manager) ActivePanel(context.Context) (panel.Active, error) {
 
 // InstallPanel prepares a validated build outside the commit section, then installs and bumps revision.
 func (m *Manager) InstallPanel(ctx context.Context, operation Operation, panelID, pinBuild string) error {
-	_, err := m.doOperation(ctx, "panel-install:"+operation.ID, func() (any, error) {
+	_, err := m.doOperation(ctx, "panel-install:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.panels == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "panel service is unavailable"}
 		}
@@ -64,7 +64,7 @@ func (m *Manager) InstallPanel(ctx context.Context, operation Operation, panelID
 
 // UpdatePanel installs a newer build when available, then bumps revision.
 func (m *Manager) UpdatePanel(ctx context.Context, operation Operation, panelID string) error {
-	_, err := m.doOperation(ctx, "panel-update:"+operation.ID, func() (any, error) {
+	_, err := m.doOperation(ctx, "panel-update:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.panels == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "panel service is unavailable"}
 		}
@@ -86,7 +86,7 @@ func (m *Manager) UpdatePanel(ctx context.Context, operation Operation, panelID 
 
 // ActivatePanel switches the active panel pointer under the mutation lock.
 func (m *Manager) ActivatePanel(ctx context.Context, operation Operation, panelID string) error {
-	_, err := m.doOperation(ctx, "panel-activate:"+operation.ID, func() (any, error) {
+	_, err := m.doOperation(ctx, "panel-activate:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.panels == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "panel service is unavailable"}
 		}
@@ -110,7 +110,7 @@ func (m *Manager) ActivatePanel(ctx context.Context, operation Operation, panelI
 
 // RollbackPanel restores the retained previous build under the mutation lock.
 func (m *Manager) RollbackPanel(ctx context.Context, operation Operation, panelID string) error {
-	_, err := m.doOperation(ctx, "panel-rollback:"+operation.ID, func() (any, error) {
+	_, err := m.doOperation(ctx, "panel-rollback:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.panels == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "panel service is unavailable"}
 		}
@@ -134,7 +134,7 @@ func (m *Manager) RollbackPanel(ctx context.Context, operation Operation, panelI
 
 // UninstallPanel removes all local builds for a panel under the mutation lock.
 func (m *Manager) UninstallPanel(ctx context.Context, operation Operation, panelID string) error {
-	_, err := m.doOperation(ctx, "panel-uninstall:"+operation.ID, func() (any, error) {
+	_, err := m.doOperation(ctx, "panel-uninstall:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.panels == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "panel service is unavailable"}
 		}
@@ -159,7 +159,7 @@ func (m *Manager) UninstallPanel(ctx context.Context, operation Operation, panel
 // ReinstallPanel uninstalls then reinstalls outside/inside commit as needed, then bumps revision.
 // Download runs outside the commit section after uninstall clears local state.
 func (m *Manager) ReinstallPanel(ctx context.Context, operation Operation, panelID string) error {
-	_, err := m.doOperation(ctx, "panel-reinstall:"+operation.ID, func() (any, error) {
+	_, err := m.doOperation(ctx, "panel-reinstall:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.panels == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "panel service is unavailable"}
 		}

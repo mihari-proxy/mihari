@@ -10,6 +10,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/update"
 	"github.com/spf13/cobra"
 )
@@ -44,6 +45,8 @@ type SubscriptionClient interface {
 }
 
 type Dependencies struct {
+	// DiagnosticReporter borrows a caller-owned outlet; CLI never opens log files.
+	DiagnosticReporter      diagnostics.Reporter
 	ChannelQuery            func(context.Context) (string, error)
 	ChannelSet              func(context.Context, string) error
 	StatusClient            StatusClient

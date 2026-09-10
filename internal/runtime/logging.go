@@ -43,7 +43,7 @@ func (m *Manager) UpdateLogging(ctx context.Context, operation Operation, update
 	if err := validateLoggingUpdate(operation, update); err != nil {
 		return protocol.LoggingStatus{}, err
 	}
-	result, err := m.doOperation(ctx, "logging:"+operation.ID, func() (any, error) {
+	result, err := m.doOperation(ctx, "logging:"+operation.ID, func(ctx context.Context) (any, error) {
 		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
@@ -79,7 +79,7 @@ func (m *Manager) UpdateLogging(ctx context.Context, operation Operation, update
 			return nil, err
 		}
 		if beforeLogging != afterLogging {
-			if _, err := m.saveSettingsCandidate(candidate); err != nil {
+			if _, err := m.saveSettingsCandidate(ctx, candidate); err != nil {
 				return nil, err
 			}
 			m.publishSettings(candidate)

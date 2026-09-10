@@ -66,6 +66,10 @@ Mihari 是面向 Windows、Linux 和 macOS 的 mihomo 本地管理器。它使�
 - 错误信息描述失败的操作和对象，但不得包含凭据、controller secret、订阅 URL token 或敏感配置内容。
 - 库包不调用 `os.Exit`、`log.Fatal` 或 panic 处理可恢复错误。进程退出只在 `cmd/mihari` 边界完成。
 - 面向协议和 CLI 的错误必须经过既有错误码与退出码映射，不把底层实现文本当作稳定 API。
+- 内部诊断可以保留公开 `APIError` 之外的 cause，供 `errors.Is`/`errors.As` 和受控诊断输出使用；不得把 cause 写入 DTO、JSON envelope、`Message`、`Details`、状态或事件 payload。诊断格式化只在日志边界执行，并必须使用有界、脱敏的摘要。
+- 一次实际 mutation 的最终失败由执行 owner 记录一次；缓存命中和等待同一执行结果不得重复记录。控制 API 仅为尚未由 owner 标记的意外失败兜底。正常取消默认不记录，预期参数/冲突可为 DEBUG，实际未恢复失败为 ERROR。
+- Settings 在替换已提交后的同步 warning 仍是成功结果：保留提交、revision 与内存发布，并在锁外以实际、脱敏原因记录 WARN；不得回滚或把客户端响应改成失败。
+- 普通 CLI 不创建诊断日志文件，非流式 `--json` 继续只输出既有安全 envelope。logger 建立前的诊断 stderr 仅由 Unix 显式 system-service/launchd 入口或 Windows SCM 的非交互 daemon owner 注入；日志资源自身的写入/关闭失败继续由独立的非 JSON FailureReporter 出口处理，不能递归写回失效 logger。
 
 ### 4.3 Context、并发与生命周期
 

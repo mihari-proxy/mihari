@@ -18,6 +18,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/elevate"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -159,9 +160,10 @@ type systemProxyStatusMsg struct {
 }
 
 type systemProxyActionResultMsg struct {
-	kind   proxyActionKind
-	status protocol.SystemProxyStatus
-	err    error
+	operation logging.OperationMetadata
+	kind      proxyActionKind
+	status    protocol.SystemProxyStatus
+	err       error
 }
 
 // Err implements the shell's action-outcome contract so system proxy actions
@@ -197,9 +199,10 @@ func (m webGUIOpenResultMsg) Err() error { return m.err }
 var _ interface{ Err() error } = webGUIOpenResultMsg{}
 
 type tunActionResultMsg struct {
-	kind   tunActionKind
-	status protocol.TunStatus
-	err    error
+	operation logging.OperationMetadata
+	kind      tunActionKind
+	status    protocol.TunStatus
+	err       error
 }
 
 // Err implements the shell's action-outcome contract so TUN actions are
@@ -281,10 +284,11 @@ type actionStartMsg struct {
 }
 
 type actionResultMsg struct {
-	kind    actionKind
-	install protocol.CoreInstallResult
-	restart protocol.MutationResult
-	err     error
+	kind      actionKind
+	install   protocol.CoreInstallResult
+	restart   protocol.MutationResult
+	operation logging.OperationMetadata
+	err       error
 }
 
 type coreLoadResultMsg struct {
@@ -307,6 +311,7 @@ type Model struct {
 	openBrowser           func(string) error
 	newOperationID        func() string
 	selfUpdater           SelfUpdater
+	localTaskDiagnostics  ui.LocalTaskDiagnostics
 	currentVersion        string
 	binaryPath            string
 	isElevated            func() bool
@@ -387,15 +392,17 @@ type portsApplyResultMsg struct {
 }
 
 type loggingUpdateResultMsg struct {
-	epoch uint64
-	rowID string
-	err   error
+	epoch     uint64
+	rowID     string
+	operation logging.OperationMetadata
+	err       error
 }
 
 type loggingReloadResultMsg struct {
-	epoch uint64
-	rowID string
-	err   error
+	epoch     uint64
+	rowID     string
+	operation logging.OperationMetadata
+	err       error
 }
 
 func (m portsApplyResultMsg) Err() error { return m.err }
@@ -784,7 +791,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
 			m.loggingReloading = true
 			m.pendingNote = ui.LoggingProgressReloading
-			return m, tea.Batch(m.reloadLogging(typed.epoch, typed.rowID), m.rowSpinCmdIfNeeded())
+			return m, tea.Batch(m.reloadLogging(typed.epoch, typed.rowID, typed.operation), m.rowSpinCmdIfNeeded())
 		}
 		m.clearRowPending()
 		m.loggingPendingEpoch = 0
@@ -1986,6 +1993,11 @@ func (m *Model) confirmForceSystemProxy(apiError protocol.APIError) tea.Cmd {
 }
 
 func (m *Model) runSystemProxyAction(kind proxyActionKind, operationID string, revision uint64, force bool) tea.Cmd {
+	operation := logging.OperationMetadata{ID: operationID, Name: "system_proxy.enable"}
+	if kind == proxyDisable {
+		operation.Name = "system_proxy.disable"
+	}
+	ctx := logging.WithOperation(m.ctx, operation)
 	return func() tea.Msg {
 		request := protocol.SystemProxyMutationRequest{OperationID: operationID, Force: force}
 		if revision > 0 {
@@ -1997,11 +2009,11 @@ func (m *Model) runSystemProxyAction(kind proxyActionKind, operationID string, r
 		)
 		switch kind {
 		case proxyDisable:
-			status, err = m.client.DisableSystemProxy(m.ctx, request)
+			status, err = m.client.DisableSystemProxy(ctx, request)
 		default:
-			status, err = m.client.EnableSystemProxy(m.ctx, request)
+			status, err = m.client.EnableSystemProxy(ctx, request)
 		}
-		return systemProxyActionResultMsg{kind: kind, status: status, err: err}
+		return systemProxyActionResultMsg{operation: operation, kind: kind, status: status, err: err}
 	}
 }
 
@@ -2059,6 +2071,11 @@ func (m *Model) confirmForceTun(apiError protocol.APIError) tea.Cmd {
 }
 
 func (m *Model) runTunAction(kind tunActionKind, operationID string, revision uint64, force bool) tea.Cmd {
+	operation := logging.OperationMetadata{ID: operationID, Name: "tun.enable"}
+	if kind == tunDisable {
+		operation.Name = "tun.disable"
+	}
+	ctx := logging.WithOperation(m.ctx, operation)
 	return func() tea.Msg {
 		request := protocol.TunMutationRequest{OperationID: operationID, Force: force}
 		if revision > 0 {
@@ -2069,11 +2086,11 @@ func (m *Model) runTunAction(kind tunActionKind, operationID string, revision ui
 			err    error
 		)
 		if kind == tunDisable {
-			status, err = m.client.DisableTun(m.ctx, request)
+			status, err = m.client.DisableTun(ctx, request)
 		} else {
-			status, err = m.client.EnableTun(m.ctx, request)
+			status, err = m.client.EnableTun(ctx, request)
 		}
-		return tunActionResultMsg{kind: kind, status: status, err: err}
+		return tunActionResultMsg{operation: operation, kind: kind, status: status, err: err}
 	}
 }
 
@@ -2291,27 +2308,29 @@ func (m *Model) startLoggingUpdate(rowID string, request protocol.LoggingUpdateR
 		return nil
 	}
 	epoch := m.loggingEpoch
+	operation := logging.OperationMetadata{ID: request.OperationID, Name: "logging.update"}
 	m.pending = true
 	m.pendingRow = rowID
 	m.pendingNote = ui.LoggingProgressApplying
 	m.loggingPendingEpoch = epoch
 	update := func() tea.Msg {
-		status, err := m.client.UpdateLogging(m.ctx, request)
+		ctx := logging.WithOperation(m.ctx, operation)
+		status, err := m.client.UpdateLogging(ctx, request)
 		if err != nil {
-			return ui.PageResultMsg{Page: ui.PageSystem, Result: loggingUpdateResultMsg{epoch: epoch, rowID: rowID, err: err}}
+			return ui.PageResultMsg{Page: ui.PageSystem, Result: loggingUpdateResultMsg{epoch: epoch, rowID: rowID, operation: operation, err: err}}
 		}
-		return ui.PageResultMsg{Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: epoch, Status: status}}
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: epoch, Status: status, Operation: operation}}
 	}
 	return tea.Batch(update, m.rowSpinCmdIfNeeded())
 }
 
-func (m *Model) reloadLogging(epoch uint64, rowID string) tea.Cmd {
+func (m *Model) reloadLogging(epoch uint64, rowID string, operation logging.OperationMetadata) tea.Cmd {
 	return func() tea.Msg {
 		status, err := m.client.Logging(m.ctx)
 		if err != nil {
-			return ui.PageResultMsg{Page: ui.PageSystem, Result: loggingReloadResultMsg{epoch: epoch, rowID: rowID, err: err}}
+			return ui.PageResultMsg{Page: ui.PageSystem, Result: loggingReloadResultMsg{epoch: epoch, rowID: rowID, operation: operation, err: err}}
 		}
-		return ui.PageResultMsg{Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: epoch, Status: status}}
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: epoch, Status: status, Operation: operation}}
 	}
 }
 
@@ -2602,19 +2621,25 @@ func (m *Model) tunActionLabel() string {
 }
 
 func (m *Model) runAction(start actionStartMsg) tea.Cmd {
+	operationName := "core.restart"
+	if start.kind == actionUpdate || start.kind == actionSwitchChannel {
+		operationName = "core.install"
+	}
+	operation := logging.OperationMetadata{ID: start.operationID, Name: operationName}
 	return func() tea.Msg {
 		revision := start.revision
 		request := protocol.MutationRequest{OperationID: start.operationID, IfRevision: &revision, Source: start.source}
+		ctx := logging.WithOperation(m.ctx, operation)
 		if start.channel != "" {
 			channel := start.channel
 			request.Channel = &channel
 		}
 		if start.kind == actionUpdate || start.kind == actionSwitchChannel {
-			result, err := m.client.InstallCore(m.ctx, request)
-			return actionResultMsg{kind: start.kind, install: result, err: err}
+			result, err := m.client.InstallCore(ctx, request)
+			return actionResultMsg{kind: start.kind, install: result, operation: operation, err: err}
 		}
-		result, err := m.client.RestartCore(m.ctx, request)
-		return actionResultMsg{kind: start.kind, restart: result, err: err}
+		result, err := m.client.RestartCore(ctx, request)
+		return actionResultMsg{kind: start.kind, restart: result, operation: operation, err: err}
 	}
 }
 

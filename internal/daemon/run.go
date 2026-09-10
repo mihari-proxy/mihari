@@ -7,21 +7,23 @@ import (
 
 	controlserver "github.com/mihari-proxy/mihari/internal/control/server"
 	"github.com/mihari-proxy/mihari/internal/control/transport"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/state"
 )
 
 type Options struct {
-	SnapshotSource logging.MachineSnapshotSource
-	Listen         func(context.Context) (net.Listener, error)
-	OnReady        func() error
-	Endpoint       string
-	Token          string
-	Version        string
-	Ready          chan<- struct{}
-	Store          *state.Store
-	Runtime        Runtime
-	ValidationMode bool
+	SnapshotSource     logging.MachineSnapshotSource
+	DiagnosticReporter diagnostics.Reporter
+	Listen             func(context.Context) (net.Listener, error)
+	OnReady            func() error
+	Endpoint           string
+	Token              string
+	Version            string
+	Ready              chan<- struct{}
+	Store              *state.Store
+	Runtime            Runtime
+	ValidationMode     bool
 }
 
 type Runtime interface {
@@ -67,7 +69,7 @@ func Run(parent context.Context, options Options) error {
 		go func() { runtimeDone <- options.Runtime.Run(ctx) }()
 	}
 	runtimeAPI, _ := options.Runtime.(controlserver.RuntimeAPI)
-	server := controlserver.New(controlserver.Options{Token: options.Token, Store: store, Runtime: runtimeAPI, SnapshotSource: options.SnapshotSource})
+	server := controlserver.New(controlserver.Options{Token: options.Token, Store: store, Runtime: runtimeAPI, SnapshotSource: options.SnapshotSource, DiagnosticReporter: options.DiagnosticReporter})
 	serverError := server.Serve(ctx, listener)
 	cancel()
 	if runtimeDone != nil {

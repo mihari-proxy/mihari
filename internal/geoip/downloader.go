@@ -258,14 +258,14 @@ func (c *FileCandidate) Commit() error {
 		}
 	}
 	if err := os.Rename(c.staged, c.destination); err != nil {
-		_ = os.Rename(previous, c.destination)
-		return fmt.Errorf("activate geoip database: %w", err)
+		restoreErr := os.Rename(previous, c.destination)
+		return joinUpdateRecovery(fmt.Errorf("activate geoip database: %w", err), restoreErr)
 	}
 	c.committed = true
 	c.staged = ""
 	if err := syncDirectory(filepath.Dir(c.destination)); err != nil {
-		_ = c.Rollback()
-		return fmt.Errorf("sync geoip directory: %w", err)
+		restoreErr := c.Rollback()
+		return joinUpdateRecovery(fmt.Errorf("sync geoip directory: %w", err), restoreErr)
 	}
 	return nil
 }

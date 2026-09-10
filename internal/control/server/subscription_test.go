@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/subscription"
@@ -25,31 +26,36 @@ type fakeSubscriptionRuntime struct {
 	err       error
 	added     runtimeapi.AddSubscriptionInput
 	setInput  runtimeapi.SetSubscriptionInput
+	ctx       context.Context
 }
 
 func (f *fakeSubscriptionRuntime) Subscriptions() subscription.PublicCatalog {
 	return f.catalog
 }
 
-func (f *fakeSubscriptionRuntime) AddSubscription(_ context.Context, operation runtimeapi.Operation, input runtimeapi.AddSubscriptionInput) (subscription.PublicProfile, error) {
+func (f *fakeSubscriptionRuntime) AddSubscription(ctx context.Context, operation runtimeapi.Operation, input runtimeapi.AddSubscriptionInput) (subscription.PublicProfile, error) {
+	f.ctx = ctx
 	f.operation = operation
 	f.added = input
 	return subscription.PublicProfile{ID: "one", Name: input.Name, ProxyMode: input.ProxyMode}, f.err
 }
 
-func (f *fakeSubscriptionRuntime) RefreshSubscription(_ context.Context, operation runtimeapi.Operation, profileID string) (subscription.PublicProfile, error) {
+func (f *fakeSubscriptionRuntime) RefreshSubscription(ctx context.Context, operation runtimeapi.Operation, profileID string) (subscription.PublicProfile, error) {
+	f.ctx = ctx
 	f.operation = operation
 	f.profileID = profileID
 	return f.mutatedProfile(), f.err
 }
 
-func (f *fakeSubscriptionRuntime) UseSubscription(_ context.Context, operation runtimeapi.Operation, profileID string) (subscription.PublicProfile, error) {
+func (f *fakeSubscriptionRuntime) UseSubscription(ctx context.Context, operation runtimeapi.Operation, profileID string) (subscription.PublicProfile, error) {
+	f.ctx = ctx
 	f.operation = operation
 	f.profileID = profileID
 	return f.mutatedProfile(), f.err
 }
 
-func (f *fakeSubscriptionRuntime) SetSubscriptionEnabled(_ context.Context, operation runtimeapi.Operation, profileID string, enabled bool) (subscription.PublicProfile, error) {
+func (f *fakeSubscriptionRuntime) SetSubscriptionEnabled(ctx context.Context, operation runtimeapi.Operation, profileID string, enabled bool) (subscription.PublicProfile, error) {
+	f.ctx = ctx
 	f.operation = operation
 	f.profileID = profileID
 	f.enabled = enabled
@@ -58,7 +64,8 @@ func (f *fakeSubscriptionRuntime) SetSubscriptionEnabled(_ context.Context, oper
 	return profile, f.err
 }
 
-func (f *fakeSubscriptionRuntime) SetSubscription(_ context.Context, operation runtimeapi.Operation, profileID string, input runtimeapi.SetSubscriptionInput) (subscription.PublicProfile, error) {
+func (f *fakeSubscriptionRuntime) SetSubscription(ctx context.Context, operation runtimeapi.Operation, profileID string, input runtimeapi.SetSubscriptionInput) (subscription.PublicProfile, error) {
+	f.ctx = ctx
 	f.operation = operation
 	f.profileID = profileID
 	f.setInput = input
@@ -78,7 +85,8 @@ func (f *fakeSubscriptionRuntime) SetSubscription(_ context.Context, operation r
 	return profile, f.err
 }
 
-func (f *fakeSubscriptionRuntime) RemoveSubscription(_ context.Context, operation runtimeapi.Operation, profileID string) error {
+func (f *fakeSubscriptionRuntime) RemoveSubscription(ctx context.Context, operation runtimeapi.Operation, profileID string) error {
+	f.ctx = ctx
 	f.operation = operation
 	f.profileID = profileID
 	return f.err
@@ -303,6 +311,38 @@ func TestSubscriptionProfileMutationRoutesForwardOperation(t *testing.T) {
 			}
 			if test.wantEnabled != nil && (runtime.enabled != *test.wantEnabled || subscription.Enabled != *test.wantEnabled) {
 				t.Fatalf("runtime enabled=%v response enabled=%v want %v", runtime.enabled, subscription.Enabled, *test.wantEnabled)
+			}
+		})
+	}
+}
+
+func TestSubscriptionMutationRoutes_BindOperationMetadata(t *testing.T) {
+	tests := []struct {
+		name, method, path, body string
+		operation                logging.OperationMetadata
+	}{
+		{name: "add", method: http.MethodPost, path: "/v1/subscriptions", body: `{"operation_id":"add-op","name":"main","url":"https://example.test/sub"}`, operation: logging.OperationMetadata{ID: "add-op", Name: "subscription.add"}},
+		{name: "refresh", method: http.MethodPost, path: "/v1/subscriptions/one/refresh", body: `{"operation_id":"refresh-op"}`, operation: logging.OperationMetadata{ID: "refresh-op", Name: "subscription.refresh"}},
+		{name: "use", method: http.MethodPut, path: "/v1/subscriptions/one/active", body: `{"operation_id":"use-op"}`, operation: logging.OperationMetadata{ID: "use-op", Name: "subscription.use"}},
+		{name: "enabled", method: http.MethodPut, path: "/v1/subscriptions/one/enabled", body: `{"operation_id":"enabled-op","enabled":true}`, operation: logging.OperationMetadata{ID: "enabled-op", Name: "subscription.enabled"}},
+		{name: "update", method: http.MethodPatch, path: "/v1/subscriptions/one", body: `{"operation_id":"set-op","name":"renamed"}`, operation: logging.OperationMetadata{ID: "set-op", Name: "subscription.set"}},
+		{name: "remove", method: http.MethodDelete, path: "/v1/subscriptions/one", body: `{"operation_id":"remove-op"}`, operation: logging.OperationMetadata{ID: "remove-op", Name: "subscription.remove"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &fakeSubscriptionRuntime{fakeRuntime: &fakeRuntime{}}
+			server := New(Options{Token: "token", Runtime: runtime})
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+			request.Header.Set("Authorization", "Bearer token")
+			server.Handler().ServeHTTP(recorder, request)
+			if recorder.Code < http.StatusOK || recorder.Code >= http.StatusMultipleChoices {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			operation, ok := logging.OperationFromContext(runtime.ctx)
+			if !ok || operation != test.operation {
+				t.Fatalf("operation=%#v present=%t want=%#v", operation, ok, test.operation)
 			}
 		})
 	}
