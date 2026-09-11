@@ -595,6 +595,59 @@ func TestCompleteUninstallConfirmation_QuitsOnceAfterDeliberateConfirm(t *testin
 	}
 }
 
+func TestCompleteUninstallConfirmation_FirstConfirmOpensSecondPrompt(t *testing.T) {
+	model := NewModel()
+	updated, command := model.Update(ui.ActionIntentMsg{
+		Action: ui.ActionCompleteUninstall, Key: "system:complete-uninstall",
+		Title: ui.CompleteUninstallTitle, Object: "/tmp/mihari-data", Impact: ui.CompleteUninstallImpact,
+		Execute: func() tea.Msg {
+			return ui.ActionIntentMsg{
+				Action: ui.ActionCompleteUninstall, Key: ui.CompleteUninstallConfirmKey,
+				Title: ui.CompleteUninstallConfirmTitle, Object: "/tmp/mihari-data", Impact: ui.CompleteUninstallConfirmImpact,
+				Execute: func() tea.Msg { return ui.CompleteUninstallConfirmedMsg{} },
+			}
+		},
+	})
+	model = updated.(Model)
+	if command != nil || model.modal == nil || model.modal.selected != 1 {
+		t.Fatalf("first modal=%v selected=%d command=%v", model.modal != nil, modalSelected(model), command != nil)
+	}
+	model.modal.selected = 0
+	updated, command = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+	if command == nil {
+		t.Fatal("first confirm did not start execute")
+	}
+	updated, command = model.Update(command())
+	model = updated.(Model)
+	if command == nil {
+		t.Fatal("first confirm did not execute the complete uninstall action")
+	}
+	model, command = applyRootCmd(model, command)
+	if model.preparedUninstall || model.modal == nil || model.modal.selected != 1 || model.modal.title != ui.CompleteUninstallConfirmTitle {
+		t.Fatalf("prepared=%v modal title=%q selected=%d command=%v", model.preparedUninstall, modalTitle(model), modalSelected(model), command != nil)
+	}
+	updated, command = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = updated.(Model)
+	if command != nil || model.modal != nil || model.preparedUninstall {
+		t.Fatalf("cancel second: prepared=%v modal=%v command=%v", model.preparedUninstall, model.modal != nil, command != nil)
+	}
+}
+
+func modalSelected(model Model) int {
+	if model.modal == nil {
+		return -1
+	}
+	return model.modal.selected
+}
+
+func modalTitle(model Model) string {
+	if model.modal == nil {
+		return ""
+	}
+	return model.modal.title
+}
+
 func TestOperationLedgerKeepsNewestFiftyEntries(t *testing.T) {
 	model := NewModel()
 	for index := 0; index < 60; index++ {

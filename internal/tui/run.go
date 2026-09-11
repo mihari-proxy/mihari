@@ -44,6 +44,7 @@ type Options struct {
 type Uninstaller interface {
 	Preview(context.Context) ([]app.UninstallTarget, error)
 	Run(context.Context, func(string)) error
+	RunForce(context.Context, func(string)) error
 }
 
 // LocalLoggingHealth reports whether the local TUI file logger is available.

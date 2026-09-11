@@ -1062,6 +1062,10 @@ func (f *fakeUninstaller) Preview(context.Context) ([]app.UninstallTarget, error
 	return f.targets, f.err
 }
 
+func (*fakeUninstaller) Run(context.Context, func(string)) error { return nil }
+
+func (*fakeUninstaller) RunForce(context.Context, func(string)) error { return nil }
+
 func (f *fakeService) Install() error {
 	f.installs++
 	return f.controlErr
@@ -1376,8 +1380,15 @@ func TestSystemCompleteUninstall_PreviewsTargetsBeforeConfirmation(t *testing.T)
 		t.Fatalf("command=%v preview calls=%d", command != nil, preview.calls)
 	}
 	intent, ok := command().(ui.ActionIntentMsg)
-	if !ok || intent.Action != ui.ActionCompleteUninstall || intent.Object != "/tmp/mihari-data" {
+	if !ok || intent.Action != ui.ActionCompleteUninstall || intent.Object != "/tmp/mihari-data" || intent.Impact != ui.CompleteUninstallImpact || intent.Key != "system:complete-uninstall" {
 		t.Fatalf("intent=%#v", intent)
+	}
+	second, ok := intent.Execute().(ui.ActionIntentMsg)
+	if !ok || second.Action != ui.ActionCompleteUninstall || second.Object != intent.Object || second.Impact != ui.CompleteUninstallConfirmImpact || second.Key != ui.CompleteUninstallConfirmKey {
+		t.Fatalf("second intent=%#v", second)
+	}
+	if _, ok := second.Execute().(ui.CompleteUninstallConfirmedMsg); !ok {
+		t.Fatalf("second execute=%T", second.Execute())
 	}
 }
 

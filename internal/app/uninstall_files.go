@@ -48,15 +48,44 @@ func CheckUninstallFiles(ctx context.Context, targets []UninstallTarget) error {
 		if err != nil {
 			return fmt.Errorf("inspect uninstall %s root: %w", target.Kind, err)
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return newUninstallFileError(target, ".", "symbolic link")
-		}
-		if !info.IsDir() {
-			return newUninstallFileError(target, ".", "non-directory root")
+		if err := refuseInvalidUninstallRoot(target, info); err != nil {
+			return err
 		}
 		if err := checkUninstallDirectory(ctx, target, target.Path, ""); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func inspectUninstallRoots(ctx context.Context, targets []UninstallTarget) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for _, target := range targets {
+		if !validUninstallTargetKind(target.Kind) {
+			return fmt.Errorf("unknown uninstall target kind %q", target.Kind)
+		}
+		info, err := os.Lstat(target.Path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect uninstall %s root: %w", target.Kind, err)
+		}
+		if err := refuseInvalidUninstallRoot(target, info); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func refuseInvalidUninstallRoot(target UninstallTarget, info os.FileInfo) error {
+	if reason := uninstallRootLinkReason(info); reason != "" {
+		return newUninstallFileError(target, ".", reason)
+	}
+	if !info.IsDir() {
+		return newUninstallFileError(target, ".", "non-directory root")
 	}
 	return nil
 }
@@ -79,8 +108,8 @@ func checkUninstallDirectory(ctx context.Context, target UninstallTarget, path, 
 		if relative != "" {
 			rel = relative + "/" + entry.Name()
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return newUninstallFileError(target, rel, "symbolic link")
+		if reason := uninstallRootLinkReason(info); reason != "" {
+			return newUninstallFileError(target, rel, reason)
 		}
 		if !allowedUninstallEntry(target.Kind, rel, info.IsDir()) {
 			return newUninstallFileError(target, rel, "")
@@ -247,7 +276,7 @@ func allowedBinEntry(parts []string, isDir bool) bool {
 		return false
 	}
 	name := parts[0]
-	return name == "mihomo" || name == "mihomo.exe" || name == "mihomo.provenance.json" || canonicalPositiveSuffix(name, "mihomo.exe.old-")
+	return name == "mihomo" || name == "mihomo.exe" || name == "mihomo.provenance.json" || name == "core-channel" || canonicalPositiveSuffix(name, "mihomo.exe.old-")
 }
 
 func allowedRuntimeEntry(parts []string, isDir bool) bool {

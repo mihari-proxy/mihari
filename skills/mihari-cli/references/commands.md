@@ -28,7 +28,7 @@
 
 ### D 级 · 禁止执行（由用户自行操作）
 
-`mihari daemon`（阻塞前台进程）、`mihari service install/uninstall/reinstall/start/stop/restart`（系统服务生命周期，需提权）、`mihari service uninstall --purge --yes`（全量卸载服务与受管文件，需提权）、`mihari self update`（替换 mihari 自身二进制）、`mihari traffic --follow` / `mihari logs --follow`（无限流阻塞 shell）
+`mihari daemon`（阻塞前台进程）、`mihari service install/uninstall/reinstall/start/stop/restart`（系统服务生命周期，需提权）、`mihari service uninstall --purge --yes`（全量卸载服务与受管文件，需提权）、`mihari service uninstall --purge --yes --force`（跳过文件检查并删除整个目标文件夹，需提权）、`mihari self update`（替换 mihari 自身二进制）、`mihari traffic --follow` / `mihari logs --follow`（无限流阻塞 shell）
 
 ## 查询类
 

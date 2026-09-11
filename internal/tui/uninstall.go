@@ -23,7 +23,7 @@ func finishCompleteUninstallRun(ctx context.Context, final tea.Model, runErr err
 	if uninstaller == nil {
 		return errors.New("complete uninstall is unavailable")
 	}
-	return uninstaller.Run(ctx, func(message string) {
+	return uninstaller.RunForce(ctx, func(message string) {
 		if out != nil {
 			_, _ = fmt.Fprintln(out, message)
 		}

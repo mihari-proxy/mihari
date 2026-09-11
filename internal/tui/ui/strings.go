@@ -404,10 +404,13 @@ const (
 const (
 	CompleteUninstallLabel         = "Completely Uninstall Mihari"
 	CompleteUninstallTitle         = "Completely Uninstall Mihari"
-	CompleteUninstallImpact        = "Removes the Mihari service and recognized Mihari files after confirmation."
+	CompleteUninstallImpact        = "Deletes the listed folders entirely, including any extra files inside."
+	CompleteUninstallConfirmTitle  = "Confirm complete uninstall"
+	CompleteUninstallConfirmImpact = "This cannot be undone. The Mihari service and the listed folders will be permanently removed."
 	CompleteUninstallRollback      = "Reinstall Mihari from a separate copy if you need it again."
 	CompleteUninstallUnavailable   = "Complete uninstall is unavailable"
 	CompleteUninstallPreviewFailed = "Complete uninstall preview failed"
+	CompleteUninstallConfirmKey    = "system:complete-uninstall-confirm"
 )
 
 const (
