@@ -20,6 +20,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/platform"
+	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/subscription"
 	"github.com/mihari-proxy/mihari/internal/tui"
 	"github.com/mihari-proxy/mihari/internal/update"
@@ -51,9 +52,30 @@ func executeProcess(ctx context.Context, args []string, stdout, stderr io.Writer
 			return pure, app.ClassifyUnixLocalError(errors.Join(os.ErrInvalid, err))
 		}
 		client := controlclient.WithCredentialProvider(locator, credential.NewProvider(locator))
-		deps := cli.Dependencies{StatusClient: client, RuntimeClient: client, SubscriptionClient: client, PanelClient: client, SystemProxyClient: client, TunClient: client, ServiceController: installer, ChannelQuery: installer.QueryChannel, ChannelSet: installer.SetChannel, ServiceApply: installer.ApplyWithConsent, ServiceAction: installer.RunService, SelfUpdater: installer, SelfUpdateChannel: installer.Channel, OpenBrowser: platform.OpenBrowser, Interactive: isInteractiveTerminal(os.Stdin, os.Stdout), RunInstallValidation: pure.RunInstallValidation}
+		uninstaller := app.NewUninstaller(layout, app.UninstallerOptions{
+			Service: installer,
+			Uninstall: func(ctx context.Context) error {
+				return installer.RunService(ctx, "uninstall")
+			},
+			Status: func(context.Context) (service.StatusKind, error) {
+				return installer.Status()
+			},
+			Elevated: elevate.IsElevated,
+			ProbeDaemon: func(ctx context.Context) (bool, error) {
+				_, err := client.Status(ctx)
+				if err == nil {
+					return true, nil
+				}
+				var apiErr protocol.APIError
+				if errors.As(err, &apiErr) && apiErr.Code == protocol.CodeDaemonUnavailable {
+					return false, nil
+				}
+				return false, err
+			},
+		})
+		deps := cli.Dependencies{StatusClient: client, RuntimeClient: client, SubscriptionClient: client, PanelClient: client, SystemProxyClient: client, TunClient: client, ServiceController: installer, Uninstaller: uninstaller, ChannelQuery: installer.QueryChannel, ChannelSet: installer.SetChannel, ServiceApply: installer.ApplyWithConsent, ServiceAction: installer.RunService, SelfUpdater: installer, SelfUpdateChannel: installer.Channel, OpenBrowser: platform.OpenBrowser, Interactive: isInteractiveTerminal(os.Stdin, os.Stdout), RunInstallValidation: pure.RunInstallValidation}
 		deps.RunTUI = func(ctx context.Context) error {
-			opts := tui.Options{Client: client, Service: installer, SelfUpdater: installer, SelfUpdateChannel: installer.Channel, CurrentVersion: buildinfo.Version, BinaryPath: binary, Elevated: elevate.IsElevated, Input: os.Stdin, Output: stdout, ErrorOutput: stderr, Relaunch: func() error { return platform.Relaunch(binary, tuiRelaunchArgs(binary), os.Environ()) }, OpenLogging: func(ctx context.Context) (tui.LoggingResources, error) {
+			opts := tui.Options{Client: client, Service: installer, Uninstaller: uninstaller, SelfUpdater: installer, SelfUpdateChannel: installer.Channel, CurrentVersion: buildinfo.Version, BinaryPath: binary, Elevated: elevate.IsElevated, Input: os.Stdin, Output: stdout, ErrorOutput: stderr, Relaunch: func() error { return platform.Relaunch(binary, tuiRelaunchArgs(binary), os.Environ()) }, OpenLogging: func(ctx context.Context) (tui.LoggingResources, error) {
 				fs, err := platform.OpenClientLogFS(ctx, layout)
 				if err != nil {
 					return tui.NewLoggingResources(nil, nil, nil), err

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/logging"
@@ -1050,6 +1051,16 @@ type fakeService struct {
 	controlErr error
 }
 
+type fakeUninstaller struct {
+	targets []app.UninstallTarget
+	calls   int
+}
+
+func (f *fakeUninstaller) Preview(context.Context) ([]app.UninstallTarget, error) {
+	f.calls++
+	return f.targets, nil
+}
+
 func (f *fakeService) Install() error {
 	f.installs++
 	return f.controlErr
@@ -1332,15 +1343,50 @@ func TestSystemRendersCategorizedRowsWithoutStopDaemon(t *testing.T) {
 			t.Fatalf("missing %q in view=%s", want, view)
 		}
 	}
-	// Maintenance was a single-row section; it is now merged into Daemon.
-	if strings.Contains(view, ui.MaintenanceSectionTitle) {
-		t.Fatalf("Maintenance section should be merged into Daemon: %s", view)
+	maintenance := strings.Index(view, ui.MaintenanceSectionTitle)
+	logging := strings.Index(view, ui.LoggingSectionTitle)
+	about := strings.Index(view, ui.AboutSectionTitle)
+	if maintenance < 0 || logging < 0 || about < 0 || !(logging < maintenance && maintenance < about) {
+		t.Fatalf("Maintenance must be between Logging and About: %s", view)
+	}
+	if got := strings.Count(view, "Completely Uninstall Mihari"); got != 1 {
+		t.Fatalf("complete uninstall rows=%d want=1: %s", got, view)
 	}
 	if strings.Contains(view, "Stop Daemon") {
 		t.Fatalf("system page offered destructive self-stop: %s", view)
 	}
 	if strings.Contains(view, ui.ProxyEndpointLabel) || strings.Contains(view, ui.MihomoCoreAPILabel) {
 		t.Fatalf("daemon must not list address rows: %s", view)
+	}
+}
+
+func TestSystemCompleteUninstall_PreviewsTargetsBeforeConfirmation(t *testing.T) {
+	preview := &fakeUninstaller{targets: []app.UninstallTarget{{Path: "/tmp/mihari-data", Kind: "data"}}}
+	model := New(nil, func() string { return "system-op" })
+	model.SetUninstaller(preview)
+	model.focusID = rowCompleteUninstall
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil || preview.calls != 0 {
+		t.Fatalf("command=%v preview calls=%d", command != nil, preview.calls)
+	}
+	_, command = model.Update(command())
+	if command == nil || preview.calls != 1 {
+		t.Fatalf("command=%v preview calls=%d", command != nil, preview.calls)
+	}
+	intent, ok := command().(ui.ActionIntentMsg)
+	if !ok || intent.Action != ui.ActionCompleteUninstall || intent.Object != "/tmp/mihari-data" {
+		t.Fatalf("intent=%#v", intent)
+	}
+}
+
+func TestSystemCompleteUninstall_UnavailableUninstallerReportsFailure(t *testing.T) {
+	model := New(nil, func() string { return "system-op" })
+	model.focusID = rowCompleteUninstall
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if command != nil || model.outcomeRow != rowCompleteUninstall || model.outcomeOK || model.outcomeDetail != ui.CompleteUninstallUnavailable {
+		t.Fatalf("command=%v outcome=%q ok=%v detail=%q", command != nil, model.outcomeRow, model.outcomeOK, model.outcomeDetail)
 	}
 }
 

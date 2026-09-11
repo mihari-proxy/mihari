@@ -86,6 +86,7 @@ Phase 4 保留几条明确边界：认证前、预解析和只读请求没有统
 
 - TUI 只通过 `internal/control/client` 经原生 IPC 控制面与本地守护进程通信。它从不打开 mihomo 控制器、从不接收控制器密钥。
 - TUI 的日志直接写入例外是经 `internal/logging` 在当前 UID 的 U/logs 追加/轮转固定 `mihari-tui.log*`（Windows/显式私有 P 保留单根）;不得写 `mihari.yaml`、订阅、token、面板或其他业务状态。日志配置变更仍只走 daemon 控制面。
+- System 页面 Logging 下方的 Maintenance 区提供 **Completely Uninstall Mihari**。确认框默认 Cancel；确认后先关闭 TUI 资源，再由已提权的本地卸载路径停止并注销 OS 服务，然后删除预检通过的受管文件。CLI 对应入口是 `mihari service uninstall --purge --yes`。普通 `service uninstall` 仍只注销服务。
 - 搜索与表单字段中的括号粘贴和 Ctrl+V 使用纯 Go 实现的 `github.com/atotto/clipboard` 辅助库;Mihari 本身从不把密钥写入剪贴板。
 - 页面:独立的首次运行 Setup 路由、Overview、可展开的 Proxies、带本地 GeoIP 详情的活动/已关闭 Connections、Rules/Providers、有界的结构化 Logs 流、订阅管理表单、分类的 System 页面,以及驱动面板安装/更新/激活/打开/回滚的 Web GUI 页面(在守护进程通告 `web-gui` 能力之后)。
 - Setup 安装核心、可添加初始订阅、准备本地 GeoIP 数据,并请求守护进程持久化校验过的本地端点。
@@ -135,7 +136,7 @@ Unix 默认入口 B 为 Linux `/var/lib/mihari` 或 macOS `/Library/Application 
 
 显式 MIHARI_DATA=P 保留 P 本身的私有布局与0700/0600权限；Windows 路径、named pipe、DACL、服务与本地 ZIP v1 保留。Unix 系统导出为 mihari-logs-export/v2，通过固定机器快照协议组合机器和本用户日志，离线须明确选仅本用户日志。客户端不创建 B/D/C，也不直接读取 D。
 
-业务写入归 daemon/Manager；窄例外为 root installer 的持锁停机迁移/安装事务，以及 app 对固定 channel sidecar 的受锁原子维护。安装锁顺序 B→私有服务 P→data→endpoint，永久锁不 unlink。activation 之前恢复 source，之后只修复 target；旧树和日志保留，未知身份拒绝覆盖。已安装服务启动先校验全局 B 的 matching activation 与 binary hash，取得 data/E 后再校验，不重入 installer 持有的 install lease。未标记 root P 前台只看 P。root P channel 写入持 P 锁时只读相关 B journal，相关未完成事务拒绝；非 root P 不读 B。
+业务写入归 daemon/Manager；窄例外为 root installer 的持锁停机迁移/安装事务，app 对固定 channel sidecar 的受锁原子维护，以及服务已停止后的全量卸载删除预检通过的受管文件根。安装锁顺序 B→私有服务 P→data→endpoint，永久锁不 unlink。activation 之前恢复 source，之后只修复 target；旧树和日志保留，未知身份拒绝覆盖。已安装服务启动先校验全局 B 的 matching activation 与 binary hash，取得 data/E 后再校验，不重入 installer 持有的 install lease。未标记 root P 前台只看 P。root P channel 写入持 P 锁时只读相关 B journal，相关未完成事务拒绝；非 root P 不读 B。
 
 所有平台由共同的 subscription.Generate 保留非托管配置，仅覆盖 Mihari 管理的关键参数，TUN 只覆盖 enable；配置语义与原生 provider 由 mihomo 处理。root runtime 保留可信核心 provenance，仍只允许 v1.19.30 的四个 Unix hash；不再按完整字段白名单拒绝配置，也不保证限制所有额外 listener 或文件访问。旧 provider/resource WAL 先恢复，再从原订阅缓存生成；缺失原缓存时保留旧数据并报错，历史资源不主动清理。验证子进程先恢复历史事务，再执行认证和校验，不启动真实业务、后台刷新或核心。可信 I 及全部祖先必须满足 owner/ACL/挂载规则，不能自动修复主机祖先；离线信任位置为解析后的 I/install-trust。无服务 self-update 使用编译通道且不访问 B；服务更新走统一安装事务。
 

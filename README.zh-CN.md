@@ -134,6 +134,7 @@ mihari sysproxy enable
 | 系统代理 / TUN | `mihari sysproxy enable` · `mihari sysproxy enable --force` · `mihari tun enable` · `mihari tun enable --force` |
 | Web 面板 | `mihari panel list` · `mihari panel open` |
 | 服务控制 | `mihari service status` · `mihari service stop` |
+| 全量卸载 | System 页 `Completely Uninstall Mihari` · `mihari service uninstall --purge --yes` |
 | 更新 mihari | System 页 `Update Mihari` · `mihari self update` |
 
 完整命令参考见 [docs/commands.md](docs/commands.md),架构与安全机制见 [docs/architecture.md](docs/architecture.md)。

@@ -546,6 +546,55 @@ func TestConfirmationRequestRunsOnlyAfterConfirm(t *testing.T) {
 	}
 }
 
+func TestCompleteUninstallConfirmation_CancelIsDefaultOnEveryOpen(t *testing.T) {
+	for _, key := range []tea.KeyPressMsg{{Code: tea.KeyEnter}, {Code: tea.KeyEscape}} {
+		model := NewModel()
+		updated, command := model.Update(ui.ActionIntentMsg{
+			Action: ui.ActionCompleteUninstall, Key: "system:complete-uninstall",
+			Title: "Completely Uninstall Mihari", Execute: func() tea.Msg { t.Fatal("uninstall executed without deliberate confirmation"); return nil },
+		})
+		model = updated.(Model)
+		if command != nil || model.modal == nil || model.modal.selected != 1 {
+			t.Fatalf("modal=%v selected=%d command=%v", model.modal != nil, model.modal.selected, command != nil)
+		}
+		updated, command = model.Update(key)
+		model = updated.(Model)
+		if model.modal != nil || command != nil {
+			t.Fatalf("key=%q modal=%v command=%v", key.String(), model.modal != nil, command != nil)
+		}
+	}
+}
+
+func TestCompleteUninstallConfirmation_QuitsOnceAfterDeliberateConfirm(t *testing.T) {
+	model := NewModel()
+	updated, command := model.Update(ui.ActionIntentMsg{
+		Action: ui.ActionCompleteUninstall, Key: "system:complete-uninstall",
+		Title: "Completely Uninstall Mihari", Execute: func() tea.Msg { return ui.CompleteUninstallConfirmedMsg{} },
+	})
+	model = updated.(Model)
+	if command != nil || model.modal == nil {
+		t.Fatalf("modal=%v command=%v", model.modal != nil, command != nil)
+	}
+	model.modal.selected = 0
+	updated, command = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+	if command == nil || model.modal != nil {
+		t.Fatalf("modal=%v command=%v", model.modal != nil, command != nil)
+	}
+	updated, command = model.Update(command())
+	model = updated.(Model)
+	if command == nil {
+		t.Fatal("confirmation did not start the complete uninstall action")
+	}
+	model, command = applyRootCmd(model, command)
+	if command == nil || !model.preparedUninstall {
+		t.Fatalf("prepared=%v command=%v", model.preparedUninstall, command != nil)
+	}
+	if command() != tea.Quit() {
+		t.Fatal("complete uninstall did not quit the TUI")
+	}
+}
+
 func TestOperationLedgerKeepsNewestFiftyEntries(t *testing.T) {
 	model := NewModel()
 	for index := 0; index < 60; index++ {

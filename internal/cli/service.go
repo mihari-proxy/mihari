@@ -3,13 +3,13 @@ package cli
 import (
 	"context"
 	"fmt"
-	"github.com/mihari-proxy/mihari/internal/diagnostics"
-	"github.com/mihari-proxy/mihari/internal/logging"
 	"log/slog"
 	"os"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/elevate"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/spf13/cobra"
 )
@@ -28,7 +28,7 @@ type ServiceController interface {
 func newServiceCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
 	root := &cobra.Command{Use: "service", Aliases: []string{"svc"}, Short: "Install and control the OS service"}
 	root.AddCommand(newServiceActionCommand("install", "Register Mihari as an OS service", dependencies, options, true, func(c ServiceController) error { return c.Install() }))
-	root.AddCommand(newServiceActionCommand("uninstall", "Remove the Mihari OS service", dependencies, options, true, func(c ServiceController) error { return c.Uninstall() }))
+	root.AddCommand(newServiceUninstallCommand(dependencies, options))
 	root.AddCommand(newServiceActionCommand("reinstall", "Re-register the OS service from this binary (upgrade path)", dependencies, options, true, func(c ServiceController) error { return c.Reinstall() }))
 	root.AddCommand(newServiceActionCommand("start", "Start the Mihari OS service", dependencies, options, true, func(c ServiceController) error { return c.Start() }))
 	root.AddCommand(newServiceActionCommand("stop", "Stop the Mihari OS service", dependencies, options, true, func(c ServiceController) error { return c.Stop() }))
@@ -48,34 +48,79 @@ func serviceController(dependencies Dependencies) (ServiceController, error) {
 	return dependencies.ServiceController, nil
 }
 
-func newServiceActionCommand(use, short string, dependencies Dependencies, options *runOptions, requireAdmin bool, action func(ServiceController) error) *cobra.Command {
-	return &cobra.Command{Use: use, Short: short, Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
-		if requireAdmin {
-			if err := elevate.RequireElevated(); err != nil {
-				return err
+func newServiceUninstallCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
+	var purge, yes bool
+	command := &cobra.Command{Use: "uninstall", Short: "Remove the Mihari OS service", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
+		if !purge {
+			return runServiceAction(command, "uninstall", dependencies, options, true, func(c ServiceController) error { return c.Uninstall() })
+		}
+		if !yes {
+			return invalidArgument("--purge requires --yes")
+		}
+		if err := elevate.RequireElevated(); err != nil {
+			return err
+		}
+		if dependencies.Uninstaller == nil {
+			return protocol.APIError{Code: protocol.CodeInvalidState, Message: "complete uninstall is unavailable"}
+		}
+		if dependencies.CloseForPurgeUninstall != nil {
+			if err := dependencies.CloseForPurgeUninstall(); err != nil {
+				return protocol.APIError{Code: protocol.CodeInvalidState, Message: "close Mihari local resources before uninstall"}
 			}
 		}
-		ctx := localTaskContext(command.Context(), dependencies, "service."+use)
-		var err error
-		if dependencies.ServiceAction != nil {
-			err = dependencies.ServiceAction(ctx, use)
-		} else {
-			var controller ServiceController
-			controller, err = serviceController(dependencies)
-			if err == nil {
-				err = action(controller)
+		ctx := localTaskContext(command.Context(), dependencies, "service.uninstall.purge")
+		progress := func(message string) {
+			if !options.json {
+				_, _ = fmt.Fprintln(command.ErrOrStderr(), message)
 			}
 		}
-		if err != nil {
-			reportLocalTaskFailure(ctx, dependencies, "service."+use+".failed", err)
-			return classifyRuntimeError(err)
+		if err := dependencies.Uninstaller.Run(ctx, progress); err != nil {
+			reportLocalTaskFailure(ctx, dependencies, "service.uninstall.purge.failed", err)
+			return protocol.APIError{Code: protocol.CodeInvalidState, Message: err.Error()}
 		}
 		if options.json {
-			return renderJSON(command.OutOrStdout(), map[string]any{"schema": "mihari/v1", "action": use, "ok": true})
+			return renderJSON(command.OutOrStdout(), map[string]any{"schema": "mihari/v1", "action": "uninstall", "ok": true})
 		}
-		_, err = fmt.Fprintf(command.OutOrStdout(), "service %s ok\n", use)
+		_, err := fmt.Fprintln(command.OutOrStdout(), "Mihari has been completely uninstalled")
 		return err
 	}}
+	command.Flags().BoolVar(&purge, "purge", false, "remove the Mihari service and recognized Mihari files")
+	command.Flags().BoolVar(&yes, "yes", false, "confirm complete uninstall")
+	return command
+}
+
+func newServiceActionCommand(use, short string, dependencies Dependencies, options *runOptions, requireAdmin bool, action func(ServiceController) error) *cobra.Command {
+	return &cobra.Command{Use: use, Short: short, Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
+		return runServiceAction(command, use, dependencies, options, requireAdmin, action)
+	}}
+}
+
+func runServiceAction(command *cobra.Command, use string, dependencies Dependencies, options *runOptions, requireAdmin bool, action func(ServiceController) error) error {
+	if requireAdmin {
+		if err := elevate.RequireElevated(); err != nil {
+			return err
+		}
+	}
+	ctx := localTaskContext(command.Context(), dependencies, "service."+use)
+	var err error
+	if dependencies.ServiceAction != nil {
+		err = dependencies.ServiceAction(ctx, use)
+	} else {
+		var controller ServiceController
+		controller, err = serviceController(dependencies)
+		if err == nil {
+			err = action(controller)
+		}
+	}
+	if err != nil {
+		reportLocalTaskFailure(ctx, dependencies, "service."+use+".failed", err)
+		return classifyRuntimeError(err)
+	}
+	if options.json {
+		return renderJSON(command.OutOrStdout(), map[string]any{"schema": "mihari/v1", "action": use, "ok": true})
+	}
+	_, err = fmt.Fprintf(command.OutOrStdout(), "service %s ok\n", use)
+	return err
 }
 
 func newServiceStatusCommand(dependencies Dependencies, options *runOptions) *cobra.Command {

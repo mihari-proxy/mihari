@@ -34,6 +34,7 @@ const (
 	ActionServiceStart            Action = "service-start"
 	ActionServiceStop             Action = "service-stop"
 	ActionServiceRestart          Action = "service-restart"
+	ActionCompleteUninstall       Action = "complete-uninstall"
 	ActionEnableSystemProxy       Action = "enable-system-proxy"
 	ActionForceSystemProxy        Action = "force-system-proxy"
 	ActionDisableSystemProxy      Action = "disable-system-proxy"
@@ -68,6 +69,10 @@ type ActionIntentMsg struct {
 	Execute    tea.Cmd
 	Cancel     tea.Cmd
 }
+
+// CompleteUninstallConfirmedMsg marks an explicitly confirmed full uninstall.
+// The root shell exits before invoking the local app use case.
+type CompleteUninstallConfirmedMsg struct{}
 
 // ActionPendingMsg is delivered to the target page when a confirmed action begins
 // executing, so pages can show row-local progress (braille + note) before the result.
