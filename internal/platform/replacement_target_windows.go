@@ -12,6 +12,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// NT SERVICE\TrustedInstaller. C:\ and Program Files are owned by this SID.
+const windowsTrustedInstallerSID = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
+
 func openReplacementFile(ctx context.Context, path string) (file *os.File, id string, trusted bool, verify func() error, closeParent func() error, err error) {
 	type link struct {
 		path   string
@@ -59,7 +62,7 @@ func openReplacementFile(ctx context.Context, path string) (file *os.File, id st
 			return nil, "", false, nil, nil, e
 		}
 		sd, e := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
-		if e != nil || !replacementWindowsExecutionTrust(sd, elevated, user) {
+		if e != nil || !replacementWindowsExecutionTrust(sd, elevated, user, filepath.Dir(p) == p) {
 			trusted = false
 		}
 	}
@@ -80,7 +83,7 @@ func openReplacementFile(ctx context.Context, path string) (file *os.File, id st
 			actual, e := identityFromHandle(h)
 			if trusted {
 				sd, securityErr := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
-				if securityErr != nil || !replacementWindowsExecutionTrust(sd, elevated, user) {
+				if securityErr != nil || !replacementWindowsExecutionTrust(sd, elevated, user, filepath.Dir(l.path) == l.path) {
 					e = errors.Join(e, ErrIdentityMismatch, securityErr)
 				}
 			}
@@ -119,7 +122,7 @@ func replacementWindowsOpen(path string, file bool) (windows.Handle, error) {
 	return h, nil
 }
 
-func replacementWindowsExecutionTrust(sd *windows.SECURITY_DESCRIPTOR, elevated bool, user *windows.SID) bool {
+func replacementWindowsExecutionTrust(sd *windows.SECURITY_DESCRIPTOR, elevated bool, user *windows.SID, volumeRoot bool) bool {
 	if sd == nil {
 		return false
 	}
@@ -131,8 +134,12 @@ func replacementWindowsExecutionTrust(sd *windows.SECURITY_DESCRIPTOR, elevated 
 	if err != nil {
 		return false
 	}
+	installer, err := windows.StringToSid(windowsTrustedInstallerSID)
+	if err != nil {
+		return false
+	}
 	allowed := func(sid *windows.SID) bool {
-		return sid != nil && (sid.Equals(system) || sid.Equals(admins) || (!elevated && user != nil && sid.Equals(user)))
+		return sid != nil && (sid.Equals(system) || sid.Equals(admins) || sid.Equals(installer) || (!elevated && user != nil && sid.Equals(user)))
 	}
 	owner, _, err := sd.Owner()
 	if err != nil || !allowed(owner) {
@@ -142,7 +149,12 @@ func replacementWindowsExecutionTrust(sd *windows.SECURITY_DESCRIPTOR, elevated 
 	if err != nil || acl == nil {
 		return false
 	}
-	const write = windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA | windows.FILE_WRITE_EA | windows.FILE_WRITE_ATTRIBUTES | installControlFileDeleteChild | windows.DELETE | windows.WRITE_DAC | windows.WRITE_OWNER | windows.GENERIC_WRITE | windows.GENERIC_ALL
+	write := windows.ACCESS_MASK(windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA | windows.FILE_WRITE_EA | windows.FILE_WRITE_ATTRIBUTES | installControlFileDeleteChild | windows.DELETE | windows.WRITE_DAC | windows.WRITE_OWNER | windows.GENERIC_WRITE | windows.GENERIC_ALL)
+	if volumeRoot {
+		// Volume roots commonly let Authenticated Users create directories.
+		// That does not allow replacing existing children such as Program Files.
+		write &^= windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA
+	}
 	for i := uint32(0); i < uint32(acl.AceCount); i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(acl, i, &ace); err != nil {
