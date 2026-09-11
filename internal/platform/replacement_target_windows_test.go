@@ -15,20 +15,25 @@ func TestReplacementFile_WindowsExecutionTrust(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		name, sddl     string
-		elevated, want bool
+		name, sddl                 string
+		elevated, volumeRoot, want bool
 	}{
-		{"admin controlled", "O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;BU)", true, true},
-		{"unsafe write ACL", "O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;GW;;;BU)", true, false},
-		{"user owned elevated", "O:S-1-5-21-1-2-3-1000G:BAD:(A;;FA;;;S-1-5-21-1-2-3-1000)", true, false},
-		{"same user", "O:S-1-5-21-1-2-3-1000G:BAD:(A;;FA;;;S-1-5-21-1-2-3-1000)", false, true},
+		{"admin controlled", "O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;BU)", true, false, true},
+		{"unsafe write ACL", "O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;GW;;;BU)", true, false, false},
+		{"user owned elevated", "O:S-1-5-21-1-2-3-1000G:BAD:(A;;FA;;;S-1-5-21-1-2-3-1000)", true, false, false},
+		{"same user", "O:S-1-5-21-1-2-3-1000G:BAD:(A;;FA;;;S-1-5-21-1-2-3-1000)", false, false, true},
+		{"trusted installer owner", "O:" + windowsTrustedInstallerSID + "G:SYD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;" + windowsTrustedInstallerSID + ")(A;;GRGX;;;BU)", true, false, true},
+		{"trusted installer owner user write", "O:" + windowsTrustedInstallerSID + "G:SYD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;GW;;;BU)", true, false, false},
+		{"volume root users add subdirectory", "O:" + windowsTrustedInstallerSID + "G:SYD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x4;;;AU)(A;;GRGX;;;BU)", true, true, true},
+		{"non-root users add subdirectory", "O:" + windowsTrustedInstallerSID + "G:SYD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x4;;;AU)(A;;GRGX;;;BU)", true, false, false},
+		{"volume root users generic write", "O:" + windowsTrustedInstallerSID + "G:SYD:(A;;FA;;;SY)(A;;GW;;;AU)", true, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sd, err := windows.SecurityDescriptorFromString(tc.sddl)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := replacementWindowsExecutionTrust(sd, tc.elevated, user); got != tc.want {
+			if got := replacementWindowsExecutionTrust(sd, tc.elevated, user, tc.volumeRoot); got != tc.want {
 				t.Fatalf("trust=%v want %v", got, tc.want)
 			}
 		})
