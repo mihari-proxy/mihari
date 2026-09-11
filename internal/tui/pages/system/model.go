@@ -1037,7 +1037,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, tea.Batch(m.loadServiceStatus(), m.rowSpinCmdIfNeeded())
 	case uninstallPreviewMsg:
 		if typed.err != nil {
-			m.markRowOutcome(rowCompleteUninstall, false, actionErrorDetail(typed.err, ui.CompleteUninstallPreviewFailed))
+			m.markRowOutcome(rowCompleteUninstall, false, uninstallPreviewDetail(typed.err))
 			return m, m.rowSpinCmdIfNeeded()
 		}
 		return m, func() tea.Msg {
@@ -1382,6 +1382,13 @@ func (m *Model) previewCompleteUninstall() tea.Cmd {
 		targets, err := m.uninstaller.Preview(m.ctx)
 		return uninstallPreviewMsg{targets: targets, err: err}
 	}
+}
+
+func uninstallPreviewDetail(err error) string {
+	if msg := strings.TrimSpace(err.Error()); msg != "" {
+		return msg
+	}
+	return ui.CompleteUninstallPreviewFailed
 }
 
 func uninstallTargetPaths(targets []app.UninstallTarget) string {

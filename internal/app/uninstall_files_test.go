@@ -41,6 +41,32 @@ func TestCheckUninstallFiles_RecognizedDataEntriesPass(t *testing.T) {
 	}
 }
 
+func TestCheckUninstallFiles_RecognizesGeneratedRuntimeArtifacts(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{
+		"cache.db",
+		"cache.db-wal",
+		"cache.db-shm",
+		"geoip.metadb",
+		"ruleset/Apple.yaml",
+		"runtime/core-home/cache.db",
+		"runtime/core-home/geoip.metadb",
+		"runtime/core-home/ruleset/Lan.yaml",
+		"web/metacubexd/2d88afebba07/index.html",
+		"web/metacubexd/2d88afebba07/_nuxt/app.js",
+		"web/zashboard/abc/assets/index.css",
+		"staging/subscriptions/config-123.yaml",
+		"logs-export/mihari-logs-20260905-164855+0800.zip",
+		"logs-export/mihari-logs-20260902-234108-0500-2.zip",
+	} {
+		writeUninstallFixture(t, root, name)
+	}
+
+	if err := CheckUninstallFiles(context.Background(), []UninstallTarget{{Path: root, Kind: "data"}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCheckUninstallFiles_InventoriedScratchEntriesPass(t *testing.T) {
 	root := t.TempDir()
 	for _, test := range []struct {
