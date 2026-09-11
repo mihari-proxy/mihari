@@ -1392,8 +1392,8 @@ func TestSystemCompleteUninstall_PreviewsTargetsBeforeConfirmation(t *testing.T)
 	}
 }
 
-func TestSystemCompleteUninstall_PreviewFailureShowsUnrecognizedEntry(t *testing.T) {
-	preview := &fakeUninstaller{err: &app.UninstallFileError{Kind: "data", RelativePath: "cache.db"}}
+func TestSystemCompleteUninstall_PreviewFailureShowsRootError(t *testing.T) {
+	preview := &fakeUninstaller{err: &app.UninstallFileError{Kind: "data", RelativePath: ".", Reason: "symbolic link"}}
 	model := New(nil, func() string { return "system-op" })
 	model.SetUninstaller(preview)
 	model.focusID = rowCompleteUninstall
@@ -1404,7 +1404,7 @@ func TestSystemCompleteUninstall_PreviewFailureShowsUnrecognizedEntry(t *testing
 	}
 	updated, _ = model.Update(command())
 	model = updated.(*Model)
-	want := "unrecognized entry in data: cache.db"
+	want := "unrecognized symbolic link in data: ."
 	if model.outcomeRow != rowCompleteUninstall || model.outcomeOK || model.outcomeDetail != want {
 		t.Fatalf("outcome=%q ok=%v detail=%q want %q", model.outcomeRow, model.outcomeOK, model.outcomeDetail, want)
 	}

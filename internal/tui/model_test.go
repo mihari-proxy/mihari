@@ -634,6 +634,49 @@ func TestCompleteUninstallConfirmation_FirstConfirmOpensSecondPrompt(t *testing.
 	}
 }
 
+func TestCompleteUninstallConfirmation_TwoConfirmsQuitAndPrepareUninstall(t *testing.T) {
+	model := NewModel()
+	updated, command := model.Update(ui.ActionIntentMsg{
+		Action: ui.ActionCompleteUninstall, Key: "system:complete-uninstall",
+		Title: ui.CompleteUninstallTitle, Object: "/tmp/mihari-data", Impact: ui.CompleteUninstallImpact,
+		Execute: func() tea.Msg {
+			return ui.ActionIntentMsg{
+				Action: ui.ActionCompleteUninstall, Key: ui.CompleteUninstallConfirmKey,
+				Title: ui.CompleteUninstallConfirmTitle, Object: "/tmp/mihari-data", Impact: ui.CompleteUninstallConfirmImpact,
+				Execute: func() tea.Msg { return ui.CompleteUninstallConfirmedMsg{} },
+			}
+		},
+	})
+	model = updated.(Model)
+	model.modal.selected = 0
+	updated, command = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+	updated, command = model.Update(command())
+	model = updated.(Model)
+	model, _ = applyRootCmd(model, command)
+	if model.preparedUninstall || model.modal == nil || model.modal.selected != 1 {
+		t.Fatalf("after first confirm: prepared=%v modal=%v selected=%d", model.preparedUninstall, model.modal != nil, modalSelected(model))
+	}
+	model.modal.selected = 0
+	updated, command = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+	if command == nil {
+		t.Fatal("second confirm did not start execute")
+	}
+	updated, command = model.Update(command())
+	model = updated.(Model)
+	if command == nil {
+		t.Fatal("second confirm did not execute the complete uninstall action")
+	}
+	model, command = applyRootCmd(model, command)
+	if command == nil || !model.preparedUninstall || model.modal != nil {
+		t.Fatalf("prepared=%v modal=%v command=%v", model.preparedUninstall, model.modal != nil, command != nil)
+	}
+	if command() != tea.Quit() {
+		t.Fatal("two confirms did not quit the TUI")
+	}
+}
+
 func modalSelected(model Model) int {
 	if model.modal == nil {
 		return -1
