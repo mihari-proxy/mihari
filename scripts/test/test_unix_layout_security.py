@@ -93,6 +93,12 @@ def test_rejects_incomplete_or_forged_success(mutation):
     assert not security.verify(events, "linux", [51731, 51739], status)["passed"]
 
 
+def test_app_timeout_outlasts_slow_linux_crash_matrix():
+    import unix_security_host as host
+    assert host.APP_TIMEOUT_SECONDS >= 1500
+    assert host.EXECUTION_TIMEOUT_SECONDS >= host.APP_TIMEOUT_SECONDS + host.PACKAGE_TIMEOUT_SECONDS
+
+
 class FakeHost:
     def __init__(self, fail=None):
         self.fail = fail

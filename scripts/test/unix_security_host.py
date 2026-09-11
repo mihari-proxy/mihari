@@ -23,8 +23,8 @@ from unix_security import PREFIX, COMMON, SUPPLEMENTAL, DARWIN_SUPPLEMENTAL, fin
 MARKER = ".mihari-security-owner.json"
 SCHEMA = "mihari.unix-security-owner/v1"
 PACKAGE_TIMEOUT_SECONDS = 400
-APP_TIMEOUT_SECONDS = 900
-EXECUTION_TIMEOUT_SECONDS = 1200
+APP_TIMEOUT_SECONDS = 1500
+EXECUTION_TIMEOUT_SECONDS = 2100
 
 
 def atomic_json(path, value, mode=0o600):
