@@ -1053,12 +1053,13 @@ type fakeService struct {
 
 type fakeUninstaller struct {
 	targets []app.UninstallTarget
+	err     error
 	calls   int
 }
 
 func (f *fakeUninstaller) Preview(context.Context) ([]app.UninstallTarget, error) {
 	f.calls++
-	return f.targets, nil
+	return f.targets, f.err
 }
 
 func (f *fakeService) Install() error {
@@ -1377,6 +1378,24 @@ func TestSystemCompleteUninstall_PreviewsTargetsBeforeConfirmation(t *testing.T)
 	intent, ok := command().(ui.ActionIntentMsg)
 	if !ok || intent.Action != ui.ActionCompleteUninstall || intent.Object != "/tmp/mihari-data" {
 		t.Fatalf("intent=%#v", intent)
+	}
+}
+
+func TestSystemCompleteUninstall_PreviewFailureShowsUnrecognizedEntry(t *testing.T) {
+	preview := &fakeUninstaller{err: &app.UninstallFileError{Kind: "data", RelativePath: "cache.db"}}
+	model := New(nil, func() string { return "system-op" })
+	model.SetUninstaller(preview)
+	model.focusID = rowCompleteUninstall
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("expected preview command")
+	}
+	updated, _ = model.Update(command())
+	model = updated.(*Model)
+	want := "unrecognized entry in data: cache.db"
+	if model.outcomeRow != rowCompleteUninstall || model.outcomeOK || model.outcomeDetail != want {
+		t.Fatalf("outcome=%q ok=%v detail=%q want %q", model.outcomeRow, model.outcomeOK, model.outcomeDetail, want)
 	}
 }
 

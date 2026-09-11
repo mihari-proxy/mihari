@@ -197,6 +197,8 @@ func allowedDataEntry(relative string, isDir bool) bool {
 		return len(parts) == 2 && !isDir && providerFile(parts[1])
 	case "web":
 		return allowedWebEntry(parts[1:], isDir)
+	case "ruleset":
+		return allowedRulesetEntry(parts[1:], isDir)
 	case "logs", "logs-export":
 		return allowedLogsEntry(relative, isDir)
 	case "staging":
@@ -223,7 +225,7 @@ func dataScratchFile(parts []string, isDir bool) bool {
 func allowedDataRootEntry(name string, isDir bool) bool {
 	if isDir {
 		switch name {
-		case "bin", "runtime", "subscriptions", "geoip", "preferences", "providers", "web", "logs", "logs-export", "staging", "locks", "install-control":
+		case "bin", "runtime", "subscriptions", "geoip", "preferences", "providers", "web", "logs", "logs-export", "staging", "locks", "install-control", "ruleset":
 			return true
 		default:
 			return false
@@ -236,7 +238,7 @@ func allowedDataRootEntry(name string, isDir bool) bool {
 	case "mihari.yaml", "onboarding.json", "control.token", "daemon.lock", "mihari.yaml.lock", "control.sock", "mihari-channel", "install.lock":
 		return true
 	default:
-		return coreHomeFile(name) || atomicTemp(name, "mihari.yaml") || atomicTemp(name, "onboarding.json")
+		return coreHomeFile(name) || mihomoWorkingFile(name) || atomicTemp(name, "mihari.yaml") || atomicTemp(name, "onboarding.json")
 	}
 }
 
@@ -261,14 +263,18 @@ func allowedRuntimeEntry(parts []string, isDir bool) bool {
 func allowedCoreHomeEntry(parts []string, isDir bool) bool {
 	if len(parts) == 1 {
 		if isDir {
-			return parts[0] == "providers"
+			return parts[0] == "providers" || parts[0] == "ruleset"
 		}
-		return coreHomeFile(parts[0])
+		return coreHomeFile(parts[0]) || mihomoWorkingFile(parts[0])
 	}
-	if len(parts) != 2 || parts[0] != "providers" || isDir {
+	switch parts[0] {
+	case "providers":
+		return len(parts) == 2 && !isDir && providerFile(parts[1])
+	case "ruleset":
+		return allowedRulesetEntry(parts[1:], isDir)
+	default:
 		return false
 	}
-	return providerFile(parts[1])
 }
 
 func allowedSubscriptionsEntry(parts []string, isDir bool) bool {
@@ -286,13 +292,32 @@ func allowedGeoIPEntry(parts []string, isDir bool) bool {
 }
 
 func allowedWebEntry(parts []string, isDir bool) bool {
-	if len(parts) != 1 {
+	if len(parts) == 0 {
 		return false
 	}
-	if isDir {
-		return parts[0] == "zashboard" || parts[0] == "metacubexd"
+	if len(parts) == 1 {
+		if isDir {
+			return panelIDDir(parts[0])
+		}
+		return parts[0] == "active.json" || parts[0] == "credential" || atomicTemp(parts[0], "active.json")
 	}
-	return parts[0] == "active.json" || parts[0] == "credential" || atomicTemp(parts[0], "active.json")
+	if !panelIDDir(parts[0]) {
+		return false
+	}
+	for _, part := range parts[1:] {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func panelIDDir(name string) bool {
+	return name == "zashboard" || name == "metacubexd"
+}
+
+func allowedRulesetEntry(parts []string, isDir bool) bool {
+	return len(parts) == 1 && !isDir && parts[0] != "" && parts[0] != "." && parts[0] != ".."
 }
 
 func allowedLogsEntry(relative string, isDir bool) bool {
@@ -315,7 +340,7 @@ func allowedLogsEntry(relative string, isDir bool) bool {
 
 func allowedStagingEntry(parts []string, isDir bool) bool {
 	if len(parts) == 1 {
-		return (isDir && (parts[0] == "core" || parts[0] == "providers" || parts[0] == "geoip" || parts[0] == "panels")) || (!isDir && (tempName(parts[0], ".mihomo-download-", "") || tempName(parts[0], ".mihomo-candidate-", "")))
+		return (isDir && (parts[0] == "core" || parts[0] == "providers" || parts[0] == "geoip" || parts[0] == "panels" || parts[0] == "subscriptions")) || (!isDir && (tempName(parts[0], ".mihomo-download-", "") || tempName(parts[0], ".mihomo-candidate-", "")))
 	}
 	switch parts[0] {
 	case "core":
@@ -326,9 +351,22 @@ func allowedStagingEntry(parts []string, isDir bool) bool {
 		return len(parts) == 2 && !isDir && tempName(parts[1], ".candidate-", ".mmdb")
 	case "panels":
 		return len(parts) == 2 && ((isDir && panelStagingDirectory(parts[1])) || (!isDir && panelStagingZIP(parts[1])))
+	case "subscriptions":
+		return allowedSubscriptionStaging(parts[1:], isDir)
 	default:
 		return false
 	}
+}
+
+func allowedSubscriptionStaging(parts []string, isDir bool) bool {
+	if len(parts) != 1 || isDir {
+		return false
+	}
+	name := parts[0]
+	if !strings.HasPrefix(name, "config-") || !strings.HasSuffix(name, ".yaml") {
+		return false
+	}
+	return canonicalUint32Decimal(strings.TrimSuffix(strings.TrimPrefix(name, "config-"), ".yaml"))
 }
 
 func allowedCoreStaging(parts []string, isDir bool) bool {
@@ -377,6 +415,15 @@ func coreHomeFile(name string) bool {
 	return false
 }
 
+func mihomoWorkingFile(name string) bool {
+	switch name {
+	case "cache.db", "cache.db-wal", "cache.db-shm", "geoip.metadb":
+		return true
+	default:
+		return false
+	}
+}
+
 func providerFile(name string) bool {
 	if before, after, ok := strings.Cut(name, ".old-"); ok {
 		if !lowercaseHex(after, 32) {
@@ -414,10 +461,38 @@ func logExportFile(name string) bool {
 		return false
 	}
 	stem := strings.TrimSuffix(strings.TrimPrefix(name, "mihari-logs-"), ".zip")
-	if len(stem) < 21 || stem[8] != '-' || stem[15] != '-' || (stem[16] != '+' && stem[16] != '-') || !decimal(stem[:8]) || !decimal(stem[9:15]) || !decimal(stem[17:21]) {
+	_, suffix, ok := splitLogExportStamp(stem)
+	if !ok {
 		return false
 	}
-	return len(stem) == 21 || strings.HasPrefix(stem[21:], "-") && canonicalPositiveDecimal(stem[22:])
+	return suffix == "" || canonicalPositiveDecimal(suffix)
+}
+
+func splitLogExportStamp(stem string) (stamp, suffix string, ok bool) {
+	for _, size := range []int{20, 21} {
+		if len(stem) < size || !logExportStamp(stem[:size]) {
+			continue
+		}
+		rest := stem[size:]
+		if rest == "" {
+			return stem[:size], "", true
+		}
+		if strings.HasPrefix(rest, "-") {
+			return stem[:size], rest[1:], true
+		}
+	}
+	return "", "", false
+}
+
+func logExportStamp(stem string) bool {
+	switch len(stem) {
+	case 20:
+		return stem[8] == '-' && (stem[15] == '+' || stem[15] == '-') && decimal(stem[:8]) && decimal(stem[9:15]) && decimal(stem[16:20])
+	case 21:
+		return stem[8] == '-' && stem[15] == '-' && (stem[16] == '+' || stem[16] == '-') && decimal(stem[:8]) && decimal(stem[9:15]) && decimal(stem[17:21])
+	default:
+		return false
+	}
 }
 
 func panelStagingDirectory(name string) bool {
