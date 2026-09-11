@@ -63,9 +63,10 @@ sh install-aio.sh        # Windows: powershell -File install-aio.ps1
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `MIHARI_BIN` | `/usr/local/bin`（Linux/macOS）<br>`%LOCALAPPDATA%\Programs\mihari`（Windows） | mihari 二进制安装目录 |
-| `MIHARI_DATA` | `$HOME/.mihari`（Linux/macOS）<br>`%USERPROFILE%\.mihari`（Windows） | 数据根目录（核心 + GeoIP 落地处） |
+| `MIHARI_DATA` | Unix 默认不设置；Windows `%USERPROFILE%\.mihari` | 显式 Unix P 保持私有单根；默认业务 D 为系统 B/data |
+| `MIHARI_INSTALL_ROOT` | `/usr/local/lib/mihari`（Unix） | root0755 安装根 I；自定义 I 同样校验祖先安全 |
 | `MIHARI_INDEX_URL` | 公开直链（见脚本默认值） | index.txt 公开直链（脚本3）；默认仍是稳定 `/mihari-release/mihari/index.txt` |
-| `MIHARI_BUNDLE_URL` | 空 | 显式指定整合包 URL，**跳过 index 与 sha256 校验**（信任自担） |
+| `MIHARI_BUNDLE_URL` | 空 | 显式指定整合包 URL，跳过下载器 index；Unix root apply 仍须受信清单校验，不能以此绕过执行信任 |
 
 脚本 3 `--channel` 选择默认 index：缺省/`main` 读稳定 `…/mihari/index.txt`，`--channel dev` 读公开 `…/mihari-dev/index.txt`。`MIHARI_INDEX_URL` 仍可覆盖（即使同时传 `--channel dev`）。下载器本身仍从稳定根目录获取（dev 根不放置 `install-aio-remote.sh` / `.ps1`）。操作者仍可用 `$env:MIHARI_INDEX_URL=` 或 Unix 管道前缀 `| MIHARI_INDEX_URL=` 指向任意 index。
 
@@ -80,6 +81,26 @@ curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/insta
 ```
 
 ---
+
+
+## Unix root 安装与离线信任
+
+Linux B=/var/lib/mihari，macOS B=/Library/Application Support/mihari；D=B/data，E/C/channel 位于 B，I 默认 /usr/local/lib/mihari。普通用户共享代理管理权限，TUI 日志位于独立 U。root installer 不依赖 HOME/SUDO_USER，不修复不安全的 /usr/local 等祖先；可明确指定安全 MIHARI_INSTALL_ROOT。详情见 [Unix 布局与恢复](unix-layout.md)。
+
+离线 root 信任必须由管理员预先在 `<解析后的 I>/install-trust/manifest.json` 配置，目录、清单与所引用资源均须符合既有 root/no-follow/只读规则。自定义 I 使用自己的 install-trust；bundle 相邻 checksum、请求中 hash 或旧用户树不能作为执行信任源。Unix root 仍只允许内置 v1.19.30 的四个 Unix hash，未知核心继续拒绝；该二进制身份校验与配置生成相互独立。各平台使用共同的配置生成语义，保留非托管订阅字段，仅覆盖 Mihari 管理的关键参数；TUN 开关只覆盖 `tun.enable`。配置语义与原生 provider 由 mihomo 处理，Mihari 保留候选校验与 reload 回滚，不再以完整 YAML 字段白名单限制所有额外 listener 或文件访问。
+
+安装事务停机后迁移必要数据，保留旧树及日志；activation 前可恢复 source，之后只修复 target。未完成事务通过 `service apply --request` 的 recover 请求恢复，普通启动不做隐式迁移。独立 native CI 不操作真实主机服务、用户数据、订阅或 core，不能作为生产环境迁移已验证的声明。
+
+
+### 安装版本风险与旧安装器
+
+普通安装、本地 AIO 和远程 AIO 的 sh/PowerShell 入口都会先固定候选，并在安装写入前判断实际目标版本。降级或兼容性 unknown 需要确认，交互默认否；需要确认却没有可用终端时立即失败。无人值守可明确设置 `MIHARI_YES=1`；远程入口也支持原有 `--yes` / `-Yes`，并将该选择传至内层。接受下载计划本身不等于接受后续降级。下载-only 保持原行为。
+
+Unix 安装 helper 必须同时支持 `service apply --yes` 和 `--expected-preview`。当前脚本可在线使用同通道、固定并校验过的 helper，目标 release 仍是用户选定的版本；离线需事先准备可信且支持契约的 helper。缺少能力时拒绝写入并给出准备说明，不回退到旧入口。确认期间候选或目标变化，需要重新开始。离线候选还须通过受信副本的有界版本查询，确认其版本与请求的 tag 一致；无法证明版本时拒绝，不会为此隐式联网。
+
+Windows 远程 AIO 只自动运行已校验且声明确认能力的本地安装脚本。旧 bundle 缺少能力时保留已校验的解压包；可事先保存当前 `install-aio.ps1`，使用 `-BundleDir <解压目录>` 安装旧包。该脚本的 `-Capabilities` 仅查询能力，不访问 bundle 或创建安装目录。本地旧包没有可信版本信息时以内容摘要绑定 unknown 候选，明确确认后仍可使用既有安装路径。不会为兼容旧包隐式下载另一个公共脚本。
+
+版本警告与确认不会使配置获得向下兼容能力，也不会自动恢复磁盘状态。手工复制旧二进制、运行已经发布的旧脚本，仍不受当前入口的保护。
 
 ## 二、核心通道与 sidecar
 
@@ -113,7 +134,7 @@ Mihari 原始二进制由 Go 1.26.5 以 `-buildvcs=false -trimpath` 构建，避
 
 第 1 行为 `stable` 或 `alpha`；第 2 行为非空 stamp（通道 + 二进制指纹，例如 `stable-v1.19.29` 或 `alpha-e183c58`）。缺行、非法通道或 stamp 为空视为无效，守护进程忽略、不改 settings。
 
-`install-aio.sh` / `install-aio.ps1` 覆盖 `data/bin/mihomo` 时，若 bundle 带 sidecar 则一并覆盖到 `$MIHARI_DATA/bin/core-channel`，**仍不修改** `mihari.yaml`。守护进程在启动与 setup 快路径按 stamp 应用 sidecar：与已记录的 `core-channel-bundle` 相同则不改 `core-channel`（保护用户后来在 System 页切换的通道）；stamp 变化才把打包通道写入 settings。
+Windows `install-aio.ps1` 保持原 overlay/sidecar 行为。Unix root 安装器将 bundle 交给统一 app apply，经过可信核心/typed 配置校验及停机事务后发布 D，不直接 overlay 现有业务树；新通道由同一事务提交。守护进程在启动与 setup 快路径按 stamp 应用 sidecar：与已记录的 `core-channel-bundle` 相同则不改 `core-channel`（保护用户后来在 System 页切换的通道）；stamp 变化才把打包通道写入 settings。
 
 settings 新增可选字段 `core-channel` 与 `core-channel-bundle`（schema 仍为 `mihari.settings/v1`）。加载使用 `KnownFields(true)`：无这些字段的旧文件可由新 daemon 读取（空通道视为 `stable`）；**含这些字段的新 settings 文件无法被旧 daemon 加载**。
 
@@ -222,7 +243,9 @@ dev 发布与 `retract-dev.yml` 另有两类 artifact，同样仅在 AList mutat
 
 ### 边界（务必知晓）
 
-撤回**只移除分发渠道，已安装用户不可回收**。canonical stable tag 保留且不可同版本重切；修复必须使用更高版本号。修复版发布前，已装用户主动 `self-update` 会先降到次高版本，再随修复版回升——最终靠**快速发布修复版**（`vN+1 > vN` 自更新覆盖坏版本）自愈。
+此处修正此前“self-update 会降到次高版本”的不准确描述；候选选择行为未改变。
+
+撤回**只移除分发渠道，已安装用户不可回收**。canonical stable tag 保留且不可同版本重切；修复必须使用更高版本号。修复版发布前，已安装 stable 高于当前发布版本时，`self update` 保持 ahead，不会自动降到次高版本。应快速发布更高版本号的修复版（`vN+1 > vN`），让用户沿现有自更新路径安装修复。安装脚本覆盖旧版本或已有跨通道替换确实发生降级时，需要明确的风险确认。
 
 ---
 

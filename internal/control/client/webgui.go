@@ -6,6 +6,7 @@ import (
 	"net/url"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 )
 
 // WebGUI returns the secret-free gateway and panel status.
@@ -37,41 +38,41 @@ func (c *Client) Panels(ctx context.Context) (protocol.PanelList, error) {
 // InstallPanel downloads and installs a panel build.
 func (c *Client) InstallPanel(ctx context.Context, id string, request protocol.PanelInstallRequest) (protocol.MutationResult, error) {
 	var result protocol.MutationResult
-	err := c.doRuntime(ctx, http.MethodPost, "/v1/panels/"+url.PathEscape(id)+"/install", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "panel.install"}, http.MethodPost, "/v1/panels/"+url.PathEscape(id)+"/install", request, &result)
 	return result, err
 }
 
 // UpdatePanel updates a panel to the latest resolved build.
 func (c *Client) UpdatePanel(ctx context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
 	var result protocol.MutationResult
-	err := c.doRuntime(ctx, http.MethodPost, "/v1/panels/"+url.PathEscape(id)+"/update", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "panel.update"}, http.MethodPost, "/v1/panels/"+url.PathEscape(id)+"/update", request, &result)
 	return result, err
 }
 
 // ActivatePanel makes an installed panel the active Web GUI.
 func (c *Client) ActivatePanel(ctx context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
 	var result protocol.MutationResult
-	err := c.doRuntime(ctx, http.MethodPut, "/v1/panels/"+url.PathEscape(id)+"/active", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "panel.activate"}, http.MethodPut, "/v1/panels/"+url.PathEscape(id)+"/active", request, &result)
 	return result, err
 }
 
 // RollbackPanel restores the retained previous build for a panel.
 func (c *Client) RollbackPanel(ctx context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
 	var result protocol.MutationResult
-	err := c.doRuntime(ctx, http.MethodPost, "/v1/panels/"+url.PathEscape(id)+"/rollback", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "panel.rollback"}, http.MethodPost, "/v1/panels/"+url.PathEscape(id)+"/rollback", request, &result)
 	return result, err
 }
 
 // UninstallPanel removes all local builds for a panel.
 func (c *Client) UninstallPanel(ctx context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
 	var result protocol.MutationResult
-	err := c.doRuntime(ctx, http.MethodPost, "/v1/panels/"+url.PathEscape(id)+"/uninstall", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "panel.uninstall"}, http.MethodPost, "/v1/panels/"+url.PathEscape(id)+"/uninstall", request, &result)
 	return result, err
 }
 
 // ReinstallPanel uninstalls then reinstalls the latest build for a panel.
 func (c *Client) ReinstallPanel(ctx context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
 	var result protocol.MutationResult
-	err := c.doRuntime(ctx, http.MethodPost, "/v1/panels/"+url.PathEscape(id)+"/reinstall", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "panel.reinstall"}, http.MethodPost, "/v1/panels/"+url.PathEscape(id)+"/reinstall", request, &result)
 	return result, err
 }

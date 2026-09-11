@@ -122,6 +122,14 @@ func (m *Manager) stageServiceBinary() (string, error) {
 // reports whether a service installation was found. A missing service is a
 // successful no-op.
 func (m *Manager) UpdateInstalledBinary() (bool, error) {
+	return m.UpdateInstalledBinaryChecked(context.Background(), ServiceReplacementChecks{})
+}
+
+// UpdateInstalledBinaryChecked synchronizes using operation-boundary checks.
+func (m *Manager) UpdateInstalledBinaryChecked(ctx context.Context, checks ServiceReplacementChecks) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	status, err := m.Status()
 	if err != nil {
 		return false, protocol.APIError{
@@ -132,14 +140,29 @@ func (m *Manager) UpdateInstalledBinary() (bool, error) {
 	if status == StatusNotInstalled {
 		return false, nil
 	}
+	if err := runServiceReplacementCheck(ctx, checks.BeforeStop); err != nil {
+		return true, err
+	}
 	if err := m.Stop(); err != nil && !isIgnorableStopError(err) {
 		return true, protocol.APIError{
 			Code:    protocol.CodeInvalidState,
 			Message: "Mihari updated, but the installed service could not be stopped",
 		}
 	}
+	if err := runServiceReplacementCheck(ctx, checks.BeforeStage); err != nil {
+		if status == StatusRunning {
+			if restartErr := m.Start(); restartErr != nil {
+				return true, protocol.APIError{Code: protocol.CodeInvalidState, Message: "Mihari updated, but service verification failed and the previous service could not be restarted"}
+			}
+		}
+		return true, err
+	}
 	if _, err := m.stageServiceBinary(); err != nil {
-		if restartErr := m.Start(); restartErr != nil {
+		var restartErr error
+		if status == StatusRunning {
+			restartErr = m.Start()
+		}
+		if restartErr != nil {
 			return true, protocol.APIError{
 				Code:    protocol.CodeInvalidState,
 				Message: "Mihari updated, but service synchronization failed and the previous service could not be restarted",
@@ -469,4 +492,30 @@ func (c *kardianosController) Status() (StatusKind, error) {
 	default:
 		return StatusUnknown, nil
 	}
+}
+
+// ServiceReplacementChecks revalidate this attempt before service mutations.
+type ServiceReplacementChecks struct {
+	BeforeStop  func(context.Context) error
+	BeforeStage func(context.Context) error
+}
+
+func runServiceReplacementCheck(ctx context.Context, check func(context.Context) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if check != nil {
+		if err := check(ctx); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}
+
+// ServiceReplacementView binds registration and the service copy this updater stages.
+// DefinitionSHA256 covers configuration, never transient running state.
+type ServiceReplacementView struct {
+	Registered       bool
+	BinaryPath       string
+	DefinitionSHA256 string
 }

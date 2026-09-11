@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/panel"
 )
 
@@ -54,6 +56,7 @@ type webSocketRelayObserver interface {
 
 // Server is the loopback Web gateway: auth, static panel hosting, and API proxy.
 type Server struct {
+	Reporter         diagnostics.Reporter
 	Addr             string
 	Auth             Authenticator
 	Proxy            *httputil.ReverseProxy
@@ -73,6 +76,7 @@ type Server struct {
 
 // Options configures a Web gateway server.
 type Options struct {
+	Reporter         diagnostics.Reporter
 	Addr             string
 	Auth             Authenticator
 	ControllerURL    string
@@ -91,6 +95,7 @@ func New(options Options) (*Server, error) {
 		ControllerURL:    options.ControllerURL,
 		ControllerSecret: options.ControllerSecret,
 		Transport:        options.Transport,
+		Reporter:         options.Reporter,
 	})
 	if err != nil {
 		return nil, err
@@ -102,7 +107,7 @@ func New(options Options) (*Server, error) {
 	server := &Server{
 		Addr: options.Addr, Auth: options.Auth, Proxy: proxy,
 		ControllerURL: options.ControllerURL, ControllerSecret: options.ControllerSecret,
-		Panel: options.Panel, Mutator: options.Mutator, HTTPClient: client,
+		Panel: options.Panel, Mutator: options.Mutator, HTTPClient: client, Reporter: options.Reporter,
 	}
 	server.httpServer = &http.Server{
 		Handler:           server.handler(),
@@ -245,6 +250,7 @@ func (s *Server) handler() http.Handler {
 			s.proxyWebSocket(w, r)
 			return
 		case ActionRejectUpgrade, ActionRejectManaged, ActionRejectUnknown:
+			s.reportMutationRejection(r.Context(), nil)
 			WriteReject(w, action)
 			return
 		case ActionMutateSelectProxy, ActionMutateClose, ActionMutateDelayTest, ActionMutateRestart, ActionMutateConfigs:
@@ -540,6 +546,7 @@ func looksLikeStaticAssetPath(reqPath string) bool {
 
 func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, action Action) {
 	if s.Mutator == nil {
+		s.reportMutationRejection(r.Context(), nil)
 		WriteReject(w, ActionRejectUnknown)
 		return
 	}
@@ -551,10 +558,12 @@ func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, action A
 			Name string `json:"name"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil || body.Name == "" || group == "" {
+			s.reportMutationRejection(r.Context(), err)
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
 		if err := s.Mutator.SelectProxy(ctx, group, body.Name); err != nil {
+			reportFailure(r.Context(), s.Reporter, "mutation.failed", err)
 			writeMutationError(w, err)
 			return
 		}
@@ -563,6 +572,7 @@ func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, action A
 		p := normalizeAPIPath(r.URL.Path)
 		if p == "/connections" {
 			if err := s.Mutator.CloseAllConnections(ctx); err != nil {
+				reportFailure(r.Context(), s.Reporter, "mutation.failed", err)
 				writeMutationError(w, err)
 				return
 			}
@@ -571,10 +581,12 @@ func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, action A
 		}
 		id := strings.TrimPrefix(p, "/connections/")
 		if id == "" {
+			s.reportMutationRejection(r.Context(), nil)
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
 		if err := s.Mutator.CloseConnection(ctx, id); err != nil {
+			reportFailure(r.Context(), s.Reporter, "mutation.failed", err)
 			writeMutationError(w, err)
 			return
 		}
@@ -583,6 +595,7 @@ func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, action A
 		s.handleConfigMutation(w, r)
 	default:
 		// Delay/restart are classified but not fully implemented until control wiring matures.
+		s.reportMutationRejection(r.Context(), nil)
 		WriteReject(w, ActionRejectUnknown)
 	}
 }
@@ -592,10 +605,12 @@ func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, action A
 func (s *Server) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 	var patch map[string]any
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&patch); err != nil {
+		s.reportMutationRejection(r.Context(), err)
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	if len(patch) == 0 {
+		s.reportMutationRejection(r.Context(), nil)
 		WriteReject(w, ActionRejectUnknown)
 		return
 	}
@@ -603,6 +618,7 @@ func (s *Server) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 	// Managed fields reject even when mixed with allowlisted keys.
 	for key := range patch {
 		if isManagedConfigField(key) {
+			s.reportMutationRejection(r.Context(), nil)
 			WriteReject(w, ActionRejectManaged)
 			return
 		}
@@ -610,6 +626,7 @@ func (s *Server) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 	// Only "tun" is allowlisted for this phase.
 	for key := range patch {
 		if key != "tun" {
+			s.reportMutationRejection(r.Context(), nil)
 			WriteReject(w, ActionRejectUnknown)
 			return
 		}
@@ -617,30 +634,41 @@ func (s *Server) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 
 	tunRaw, ok := patch["tun"]
 	if !ok {
+		s.reportMutationRejection(r.Context(), nil)
 		WriteReject(w, ActionRejectUnknown)
 		return
 	}
 	tun, ok := tunRaw.(map[string]any)
 	if !ok {
+		s.reportMutationRejection(r.Context(), nil)
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	if _, ok := tun["enable"].(bool); !ok {
+		s.reportMutationRejection(r.Context(), nil)
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	if stack, exists := tun["stack"]; exists {
 		if _, ok := stack.(string); !ok {
+			s.reportMutationRejection(r.Context(), nil)
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
 	}
 
 	if err := s.Mutator.ApplyConfigPatch(r.Context(), patch); err != nil {
+		reportFailure(r.Context(), s.Reporter, "mutation.failed", err)
 		writeMutationError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) reportMutationRejection(ctx context.Context, err error) {
+	if s.Reporter != nil {
+		s.Reporter(ctx, diagnostics.Record{Component: "web", Event: "mutation.rejected", Level: slog.LevelDebug, Err: err})
+	}
 }
 
 // isManagedConfigField reports mihomo config keys that Mihari owns and never
@@ -654,9 +682,70 @@ func isManagedConfigField(key string) bool {
 	return strings.HasPrefix(key, "external-ui")
 }
 
+type webSocketRelayResult struct {
+	peer    *websocket.Conn
+	source  *websocket.Conn
+	err     error
+	reading bool // Failure came from source.Read rather than peer.Write.
+	stopped bool // Captured when the copy returns, before observer/result delivery.
+}
+
+// webSocketRelayFailure selects one actual failure only after both copies join.
+// A connection may close before its reader publishes a CloseError, so result
+// arrival order alone cannot distinguish a closed write from its cause.
+func webSocketRelayFailure(ctx context.Context, first, second webSocketRelayResult) error {
+	results := [2]webSocketRelayResult{first, second}
+	for i, result := range results {
+		sibling := results[1-i]
+		status, cause := webSocketRelayTermination(result.err)
+		if status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway {
+			continue
+		}
+		siblingStatus, _ := webSocketRelayTermination(sibling.err)
+		if !result.reading && sibling.reading && result.peer == sibling.source &&
+			siblingStatus != -1 && cause == net.ErrClosed {
+			// The reader received a Close frame on the connection this write used.
+			// Keep the reader's actual status, even when its result arrived second.
+			continue
+		}
+		if i == 1 && result.stopped && cause != nil {
+			// This sibling finished after relay cancellation. The owner joins it
+			// after closing both peers; only pure close/cancel chains are quiet.
+			continue
+		}
+		if _, emit := diagnostics.FailureLevel(ctx, result.err); emit {
+			return result.err
+		}
+	}
+	return nil
+}
+
+// webSocketRelayTermination recognizes only singly wrapped native termination
+// errors. Joined errors may contain independent faults and must remain visible.
+func webSocketRelayTermination(err error) (websocket.StatusCode, error) {
+	for depth := 0; err != nil && depth < 32; depth++ {
+		switch closeErr := err.(type) {
+		case websocket.CloseError:
+			return closeErr.Code, nil
+		case *websocket.CloseError:
+			if closeErr != nil {
+				return closeErr.Code, nil
+			}
+			return -1, nil
+		}
+		switch err {
+		case net.ErrClosed, context.Canceled, context.DeadlineExceeded:
+			return -1, err
+		}
+		err = errors.Unwrap(err)
+	}
+	return -1, nil
+}
+
 func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 	controller, err := url.Parse(s.ControllerURL)
 	if err != nil {
+		reportFailure(r.Context(), s.Reporter, "websocket.handshake.failed", err)
 		http.Error(w, "bad gateway", http.StatusBadGateway)
 		return
 	}
@@ -674,6 +763,7 @@ func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 		HTTPHeader: header,
 	})
 	if err != nil {
+		reportFailure(r.Context(), s.Reporter, "websocket.handshake.failed", err)
 		if resp != nil {
 			http.Error(w, "upstream stream unavailable", resp.StatusCode)
 			return
@@ -685,6 +775,7 @@ func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	client, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 	if err != nil {
+		reportFailure(r.Context(), s.Reporter, "websocket.handshake.failed", err)
 		upstream.CloseNow()
 		return
 	}
@@ -698,28 +789,25 @@ func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	relayCtx, cancelRelay := context.WithCancel(r.Context())
 	defer cancelRelay()
-	type relayResult struct {
-		peer *websocket.Conn
-		err  error
-	}
-	results := make(chan relayResult, 2)
-	copyWS := func(dst, src *websocket.Conn) error {
+	results := make(chan webSocketRelayResult, 2)
+	copyWS := func(dst, src *websocket.Conn) (bool, error) {
 		for {
 			msgType, data, err := src.Read(relayCtx)
 			if err != nil {
-				return err
+				return true, err
 			}
 			if err := dst.Write(relayCtx, msgType, data); err != nil {
-				return err
+				return false, err
 			}
 		}
 	}
 	runCopy := func(dst, src *websocket.Conn) {
-		err := copyWS(dst, src)
+		reading, err := copyWS(dst, src)
+		result := webSocketRelayResult{peer: dst, source: src, reading: reading, err: err, stopped: relayCtx.Err() != nil}
 		if observer != nil {
 			observer.relayFinished()
 		}
-		results <- relayResult{peer: dst, err: err}
+		results <- result
 	}
 	go runCopy(upstream, client)
 	go runCopy(client, upstream)
@@ -728,7 +816,8 @@ func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 	closeWebSocketRelayPeer(first.peer, first.err)
 	upstream.CloseNow()
 	client.CloseNow()
-	<-results
+	second := <-results
+	reportFailure(r.Context(), s.Reporter, "websocket.relay.failed", webSocketRelayFailure(r.Context(), first, second))
 }
 
 func closeWebSocketRelayPeer(peer *websocket.Conn, relayErr error) {

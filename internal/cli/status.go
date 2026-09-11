@@ -22,7 +22,7 @@ func newStatusCommand(dependencies Dependencies, options *runOptions) *cobra.Com
 			if err != nil {
 				var apiError protocol.APIError
 				if errors.As(err, &apiError) {
-					return apiError
+					return err
 				}
 				return protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "daemon is unavailable"}
 			}

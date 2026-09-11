@@ -87,6 +87,15 @@ func (r *Runtime) EnterRecordMutex() func() {
 	return func() { r.rotator.mu.Unlock() }
 }
 
+// EnterRecordMutexContext acquires the same gate as logging and rotation, with
+// cancellation while waiting. The returned release must be called exactly once.
+func (r *Runtime) EnterRecordMutexContext(ctx context.Context) (func(), error) {
+	if err := r.rotator.mu.lockContext(ctx); err != nil {
+		return nil, err
+	}
+	return r.rotator.mu.Unlock, nil
+}
+
 func (r *Runtime) swapConfig(cfg Config) {
 	copied := cfg
 	if r.level != nil {

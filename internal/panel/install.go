@@ -66,6 +66,12 @@ func prepareInstallCandidate(request InstallRequest) (string, error) {
 	return stagingDir, nil
 }
 
+// PrepareInstallCandidate extracts and hoists a panel zip using the existing
+// archive policy. The zip must already have been copied through a trusted fd.
+func PrepareInstallCandidate(request InstallRequest) (string, error) {
+	return prepareInstallCandidate(request)
+}
+
 func promoteInstallCandidate(stagingDir, finalDir string) error {
 	if err := os.MkdirAll(filepath.Dir(finalDir), 0o700); err != nil {
 		return fmt.Errorf("create panel install directory: %w", err)

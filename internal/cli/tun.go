@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"io"
 	"strings"
 
@@ -63,7 +64,7 @@ func newTunEnableCommand(dependencies Dependencies, options *runOptions) *cobra.
 			if err != nil {
 				return err
 			}
-			status, err := client.EnableTun(command.Context(), protocol.TunMutationRequest{
+			status, err := client.EnableTun(logging.WithOperation(command.Context(), logging.OperationMetadata{ID: id, Name: "tun.enable"}), protocol.TunMutationRequest{
 				OperationID: id,
 				IfRevision:  revisionFlag(command, revision),
 				Force:       force,
@@ -92,7 +93,7 @@ func newTunDisableCommand(dependencies Dependencies, options *runOptions) *cobra
 			if err != nil {
 				return err
 			}
-			status, err := client.DisableTun(command.Context(), protocol.TunMutationRequest{
+			status, err := client.DisableTun(logging.WithOperation(command.Context(), logging.OperationMetadata{ID: id, Name: "tun.disable"}), protocol.TunMutationRequest{
 				OperationID: id,
 				IfRevision:  revisionFlag(command, revision),
 			})

@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/platform"
 )
 
 func TestSelectSelfAsset(t *testing.T) {
@@ -646,14 +647,30 @@ func TestSelfUpdateSkipsAheadVersion(t *testing.T) {
 	}
 }
 
-func TestSelfUpdateInstallsOfficialWhenCurrentIsPrerelease(t *testing.T) {
+func TestSelfUpdateRequiresConsentForOlderOfficialWhenCurrentIsPrerelease(t *testing.T) {
 	payload := []byte("official-binary")
 	env := startSelfUpdateEnv(t, selfUpdateServerConfig{
-		tag:          "v0.8.2",
-		checksumBody: fixtureSHA256Hex(payload) + "  mihari-linux-amd64\n",
-		binaryBody:   payload,
+		currentVersion: "v0.9.0-dev.8",
+		tag:            "v0.8.2",
+		checksumBody:   fixtureSHA256Hex(payload) + "  mihari-linux-amd64\n",
+		binaryBody:     payload,
 	})
 	result, err := env.updater.Update(context.Background(), env.binaryPath, "v0.9.0-dev.8", ChannelMain)
+	if err == nil || result.Updated {
+		t.Fatal("downgrade did not require consent")
+	}
+	assertFailClosedUpdate(t, env, err, protocol.CodeInvalidArgument, true)
+	p, err := env.updater.Prepare(context.Background(), env.binaryPath, "v0.9.0-dev.8", ChannelMain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := p.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	p.Consent.Yes = true
+	result, err = env.updater.ApplyPrepared(context.Background(), p)
 	if err != nil || !result.Updated || result.Ahead || result.Version != "v0.8.2" || result.Channel != ChannelMain {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
@@ -666,9 +683,10 @@ func TestSelfUpdateInstallsOfficialWhenCurrentIsPrerelease(t *testing.T) {
 func TestSelfUpdateInstallsPrereleaseWhenCurrentIsOfficial(t *testing.T) {
 	payload := []byte("prerelease-binary")
 	env := startSelfUpdateEnv(t, selfUpdateServerConfig{
-		tag:          "v0.9.0-dev.8",
-		checksumBody: fixtureSHA256Hex(payload) + "  mihari-linux-amd64\n",
-		binaryBody:   payload,
+		currentVersion: "v0.8.2",
+		tag:            "v0.9.0-dev.8",
+		checksumBody:   fixtureSHA256Hex(payload) + "  mihari-linux-amd64\n",
+		binaryBody:     payload,
 	})
 	result, err := env.updater.Update(context.Background(), env.binaryPath, "v0.8.2", ChannelDev)
 	if err != nil || !result.Updated || result.Ahead || result.Version != "v0.9.0-dev.8" || result.Channel != ChannelDev {
@@ -1036,6 +1054,7 @@ func TestSelfUpdaterDevNextReleaseLink(t *testing.T) {
 const oldBinaryContent = "old"
 
 type selfUpdateServerConfig struct {
+	currentVersion string
 	tag            string
 	assets         func(string) []Asset
 	checksumBody   string
@@ -1089,6 +1108,9 @@ func startSelfUpdateEnv(t *testing.T, cfg selfUpdateServerConfig) *selfUpdateEnv
 	binaryPath := filepath.Join(dir, "mihari-test-bin")
 	if err := os.WriteFile(binaryPath, []byte(oldBinaryContent), 0o755); err != nil {
 		t.Fatal(err)
+	}
+	if cfg.currentVersion == "" {
+		cfg.currentVersion = "v1.0.0"
 	}
 	if cfg.tag == "" {
 		cfg.tag = "v9.9.9"
@@ -1157,6 +1179,10 @@ func startSelfUpdateEnv(t *testing.T, cfg selfUpdateServerConfig) *selfUpdateEnv
 	t.Cleanup(server.Close)
 	env.serverURL = server.URL
 	env.updater = SelfUpdater{
+		ObserveTargets: func(ctx context.Context, path string) (ReplacementSnapshot, error) {
+			f, err := platform.ObserveReplacementFile(ctx, path)
+			return ReplacementSnapshot{Targets: []ReplacementTarget{{Roles: []string{"binary"}, Path: f.Path, FileID: f.FileID, SHA256: f.SHA256, Exists: f.Exists, Version: cfg.currentVersion}}}, err
+		},
 		HTTPClient: server.Client(),
 		APIBase:    server.URL,
 		GOOS:       "linux",

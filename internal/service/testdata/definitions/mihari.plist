@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>mihari</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/lib/mihari/mihari</string>
+		<string>daemon</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>MIHARI_CONTROL_ENDPOINT</key>
+		<string>/Library/Application Support/mihari/control.sock</string>
+		<key>MIHARI_CONTROL_CREDENTIAL</key>
+		<string>/Library/Application Support/mihari/control.token</string>
+		<key>MIHARI_INSTALL_ROOT</key>
+		<string>/usr/local/lib/mihari</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+</dict>
+</plist>

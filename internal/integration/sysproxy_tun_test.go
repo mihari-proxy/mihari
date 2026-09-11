@@ -95,8 +95,38 @@ func TestSystemProxyForeignConflictAndForceOverIPC(t *testing.T) {
 func TestTunEnableDisableOverIPC(t *testing.T) {
 	backend := &sysproxy.FakeBackend{State: sysproxy.State{Enabled: false}}
 	controller := &stubMihomoController{configs: map[string]any{
-		"tun": map[string]any{"enable": false, "stack": "system"},
+		"tun": map[string]any{
+			"enable": false, "stack": "system", "device": "source-tun",
+			"mtu": 1400, "dns-hijack": []any{"any:53"},
+			"auto-route": true, "strict-route": false,
+			"route-exclude-address": []any{"192.168.0.0/16"},
+		},
 	}}
+	originalTun, err := json.Marshal(controller.configs["tun"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertTun := func(enable bool) {
+		t.Helper()
+		var want map[string]any
+		if err := json.Unmarshal(originalTun, &want); err != nil {
+			t.Fatal(err)
+		}
+		want["enable"] = enable
+		expected, err := json.Marshal(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, value := range map[string]any{"live": controller.configs["tun"], "patch": controller.lastPatch["tun"]} {
+			got, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(expected) {
+				t.Fatalf("%s TUN=%s want %s", name, got, expected)
+			}
+		}
+	}
 	client, cancel := startControlDaemon(t, backend, controller, &tundetect.FakeBackend{})
 	defer cancel()
 
@@ -117,7 +147,7 @@ func TestTunEnableDisableOverIPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !enabled.DesiredEnable || !enabled.Managed || enabled.Stack != "gVisor" {
+	if !enabled.DesiredEnable || !enabled.Managed || enabled.Stack != "" {
 		t.Fatalf("enabled=%#v", enabled)
 	}
 	if enabled.LiveEnable == nil || !*enabled.LiveEnable {
@@ -126,10 +156,7 @@ func TestTunEnableDisableOverIPC(t *testing.T) {
 	if controller.patchCalls != 1 {
 		t.Fatalf("patchCalls=%d", controller.patchCalls)
 	}
-	tun, ok := controller.lastPatch["tun"].(map[string]any)
-	if !ok || tun["enable"] != true || tun["stack"] != "gVisor" {
-		t.Fatalf("lastPatch=%#v", controller.lastPatch)
-	}
+	assertTun(true)
 
 	disabled, err := client.DisableTun(context.Background(), protocol.TunMutationRequest{
 		OperationID: "tun-disable-1",
@@ -137,7 +164,7 @@ func TestTunEnableDisableOverIPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if disabled.DesiredEnable || !disabled.Managed || disabled.Stack != "gVisor" {
+	if disabled.DesiredEnable || !disabled.Managed || disabled.Stack != "" {
 		t.Fatalf("disabled=%#v", disabled)
 	}
 	if disabled.LiveEnable == nil || *disabled.LiveEnable {
@@ -146,6 +173,7 @@ func TestTunEnableDisableOverIPC(t *testing.T) {
 	if controller.patchCalls != 2 {
 		t.Fatalf("patchCalls=%d after disable", controller.patchCalls)
 	}
+	assertTun(false)
 }
 
 // TestTunConflictAndForceOverIPC exercises TUN conflict gating end-to-end:

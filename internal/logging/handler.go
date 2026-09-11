@@ -45,6 +45,7 @@ func (h *redactingHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (h *redactingHandler) Handle(ctx context.Context, record slog.Record) error {
+	operation, bound := OperationFromContext(ctx)
 	msg := record.Message
 	if h.redactor != nil {
 		msg = h.redactor.String(msg)
@@ -59,13 +60,44 @@ func (h *redactingHandler) Handle(ctx context.Context, record slog.Record) error
 		}
 		return true
 	})
+	hiddenRootGroup := bound && len(h.groups) > 0 && operationKey(h.groups[0])
+	if hiddenRootGroup {
+		attrs = nil
+	} else if bound && len(h.groups) == 0 {
+		attrs = withoutOperationAttrs(attrs)
+	}
 	clean.AddAttrs(attrs...)
-	next := h.next.WithAttrs([]slog.Attr{slog.String("component", component)})
+
+	root := []slog.Attr{slog.String("component", component)}
+	if bound {
+		if validOperationLogID(operation.ID) {
+			root = append(root, slog.String("operation_id", operation.ID))
+		}
+		if operation.Name != "" {
+			root = append(root, slog.String("operation", operation.Name))
+		}
+	}
+	// Context metadata belongs to the root, not to h.groups.
+	if h.redactor != nil {
+		for i := 1; i < len(root); i++ {
+			root[i] = h.redactor.ReplaceAttr(nil, root[i])
+		}
+	}
+	next := h.next.WithAttrs(root)
+	grouped := false
 	for _, op := range h.ops {
 		if op.group != "" {
+			if bound && !grouped && operationKey(op.group) {
+				break
+			}
 			next = next.WithGroup(op.group)
+			grouped = true
 		} else {
-			next = next.WithAttrs(op.attrs)
+			opAttrs := op.attrs
+			if bound && !grouped {
+				opAttrs = withoutOperationAttrs(opAttrs)
+			}
+			next = next.WithAttrs(opAttrs)
 		}
 	}
 	return next.Handle(ctx, clean)

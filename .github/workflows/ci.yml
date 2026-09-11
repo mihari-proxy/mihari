@@ -46,6 +46,24 @@ jobs:
         run: python scripts/install/test_parallel_download.py -v
       - name: Test install channel resolution
         run: python -m pytest scripts/install/test_install_channel.py -q
+      - name: Test installer bootstrap and generated bridge
+        run: python -m pytest scripts/install/test_root_apply_entry.py scripts/install/test_root_apply_generated.py -q
+      - name: Verify native Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
+            throw 'Replacement confirmation tests require Windows PowerShell 5.1'
+          }
+      - name: Test replacement confirmation
+        if: runner.os != 'Windows'
+        run: python -m pytest scripts/install/test_replacement_confirmation.py scripts/install/test_remote_replacement_confirmation.py -q
+      - name: Test replacement confirmation on Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: python -m pytest scripts/install/test_replacement_confirmation.py scripts/install/test_remote_replacement_confirmation.py -q
+      - name: Test isolated security runner without privileges
+        run: python -m pytest scripts/test/test_unix_layout_security.py -q
       - name: Test release safety policies
         env:
           PYTHONPATH: ${{ github.workspace }}/scripts/release
@@ -89,17 +107,26 @@ jobs:
           exit 0
 
   race:
-    runs-on: windows-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Race
-        run: go test -count=1 -race ./...
+        # Recovery fault matrices need more than the default 10m under -race.
+        run: go test -count=1 -race -timeout=30m ./...
 
   vet-format:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -108,6 +135,7 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Format
+        shell: bash
         run: test -z "$(gofmt -l .)"
 
   # Observe-only coverage: reports total/critical packages; does not fail on percentage.

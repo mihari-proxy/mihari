@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -41,6 +42,97 @@ func drainCmd(t *testing.T, model *Model, cmd tea.Cmd) tea.Cmd {
 		t.Fatalf("model identity changed: %T", updated)
 	}
 	return next
+}
+
+func mutationResultFromCmd(t *testing.T, cmd tea.Cmd) mutationResultMsg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("missing mutation command")
+	}
+	message := cmd()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		for _, child := range batch {
+			if result, ok := child().(mutationResultMsg); ok {
+				return result
+			}
+		}
+		t.Fatalf("batch did not return mutation result: %#v", batch)
+	}
+	if result, ok := message.(mutationResultMsg); ok {
+		return result
+	}
+	t.Fatalf("message=%T", message)
+	return mutationResultMsg{}
+}
+
+func TestModel_RemoveKeepsContextAndImmutableMetadataForOutOfOrderResults(t *testing.T) {
+	client := &fakeClient{removeErr: context.DeadlineExceeded}
+	model := New(client, func() string { return "unused" }, time.Now)
+	first := model.remove("first", "remove-one", 3)
+	second := model.remove("second", "remove-two", 3)
+
+	secondResult, ok := second().(mutationResultMsg)
+	if !ok {
+		t.Fatalf("second message=%T", second())
+	}
+	firstResult, ok := first().(mutationResultMsg)
+	if !ok {
+		t.Fatalf("first message=%T", first())
+	}
+	want := []logging.OperationMetadata{
+		{ID: "remove-two", Name: "subscription.remove"},
+		{ID: "remove-one", Name: "subscription.remove"},
+	}
+	if !reflect.DeepEqual(client.removeOperations, want) {
+		t.Fatalf("client operations=%#v want=%#v", client.removeOperations, want)
+	}
+	if secondResult.operation != want[0] || firstResult.operation != want[1] {
+		t.Fatalf("result operations=%#v,%#v want=%#v", secondResult.operation, firstResult.operation, want)
+	}
+}
+
+func TestModel_SubscriptionMutationDTOsBindContextAndImmutableResultMetadata(t *testing.T) {
+	client := &fakeClient{}
+	operationIDs := []string{"add-id", "update-id", "refresh-id", "use-id", "enabled-id", "remove-id"}
+	model := New(client, func() string {
+		id := operationIDs[0]
+		operationIDs = operationIDs[1:]
+		return id
+	}, time.Now)
+	model.revision = 7
+	add := newAddForm()
+	add.inputs[0].SetValue("Added")
+	add.inputs[1].SetValue("https://example.test/add")
+	update := newEditForm(protocol.Subscription{ID: "update", Name: "Updated", AutoRefresh: true})
+
+	tests := []struct {
+		name      string
+		command   func() tea.Cmd
+		operation logging.OperationMetadata
+	}{
+		{"add", func() tea.Cmd { return model.submitForm(add, "", 7) }, logging.OperationMetadata{ID: "add-id", Name: "subscription.add"}},
+		{"update", func() tea.Cmd { return model.submitForm(update, "update", 7) }, logging.OperationMetadata{ID: "update-id", Name: "subscription.set"}},
+		{"refresh", func() tea.Cmd { return model.refresh("refresh") }, logging.OperationMetadata{ID: "refresh-id", Name: "subscription.refresh"}},
+		{"use", func() tea.Cmd { return model.use("use") }, logging.OperationMetadata{ID: "use-id", Name: "subscription.use"}},
+		{"enabled", func() tea.Cmd { return model.toggle(protocol.Subscription{ID: "enabled", Enabled: true}) }, logging.OperationMetadata{ID: "enabled-id", Name: "subscription.enabled"}},
+		{"remove", func() tea.Cmd { return model.remove("remove", "remove-id", 7) }, logging.OperationMetadata{ID: "remove-id", Name: "subscription.remove"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := mutationResultFromCmd(t, test.command())
+			if result.operation != test.operation {
+				t.Fatalf("result operation=%#v want=%#v", result.operation, test.operation)
+			}
+		})
+	}
+	if len(client.mutations) != len(tests) {
+		t.Fatalf("mutations=%#v", client.mutations)
+	}
+	for index, test := range tests {
+		if client.mutations[index].operation != test.operation || client.mutations[index].requestID != test.operation.ID {
+			t.Fatalf("mutation[%d]=%#v want=%#v", index, client.mutations[index], test.operation)
+		}
+	}
 }
 
 // testRowCols is the full subscription table definition used by row-level
@@ -695,28 +787,42 @@ func TestModel_CycleProxyWrapsAutoToDirect(t *testing.T) {
 }
 
 type fakeClient struct {
-	list          protocol.SubscriptionList
-	toggle        protocol.SubscriptionEnabledRequest
-	toggleResult  protocol.SubscriptionResult
-	toggleErr     error
-	update        protocol.SubscriptionUpdateRequest
-	updateResult  protocol.SubscriptionResult
-	remove        protocol.MutationRequest
-	removeErr     error
-	refreshed     []string
-	refreshResult protocol.SubscriptionResult
-	refreshErr    error
-	refreshRev    uint64
-	refreshHook   func(id string, call int) error
+	list             protocol.SubscriptionList
+	toggle           protocol.SubscriptionEnabledRequest
+	toggleResult     protocol.SubscriptionResult
+	toggleErr        error
+	update           protocol.SubscriptionUpdateRequest
+	updateResult     protocol.SubscriptionResult
+	remove           protocol.MutationRequest
+	removeOperations []logging.OperationMetadata
+	removeErr        error
+	refreshed        []string
+	refreshResult    protocol.SubscriptionResult
+	refreshErr       error
+	refreshRev       uint64
+	refreshHook      func(id string, call int) error
+	mutations        []mutationCall
+}
+
+type mutationCall struct {
+	operation logging.OperationMetadata
+	requestID string
+}
+
+func (f *fakeClient) captureMutation(ctx context.Context, requestID string) {
+	operation, _ := logging.OperationFromContext(ctx)
+	f.mutations = append(f.mutations, mutationCall{operation: operation, requestID: requestID})
 }
 
 func (f *fakeClient) Subscriptions(context.Context) (protocol.SubscriptionList, error) {
 	return f.list, nil
 }
-func (f *fakeClient) AddSubscription(context.Context, protocol.SubscriptionAddRequest) (protocol.SubscriptionResult, error) {
+func (f *fakeClient) AddSubscription(ctx context.Context, request protocol.SubscriptionAddRequest) (protocol.SubscriptionResult, error) {
+	f.captureMutation(ctx, request.OperationID)
 	return protocol.SubscriptionResult{}, nil
 }
-func (f *fakeClient) RefreshSubscription(_ context.Context, id string, _ protocol.MutationRequest) (protocol.SubscriptionResult, error) {
+func (f *fakeClient) RefreshSubscription(ctx context.Context, id string, request protocol.MutationRequest) (protocol.SubscriptionResult, error) {
+	f.captureMutation(ctx, request.OperationID)
 	f.refreshed = append(f.refreshed, id)
 	if f.refreshHook != nil {
 		if err := f.refreshHook(id, len(f.refreshed)); err != nil {
@@ -735,18 +841,24 @@ func (f *fakeClient) RefreshSubscription(_ context.Context, id string, _ protoco
 	result.Revision = f.refreshRev
 	return result, nil
 }
-func (f *fakeClient) UseSubscription(context.Context, string, protocol.MutationRequest) (protocol.SubscriptionResult, error) {
+func (f *fakeClient) UseSubscription(ctx context.Context, _ string, request protocol.MutationRequest) (protocol.SubscriptionResult, error) {
+	f.captureMutation(ctx, request.OperationID)
 	return protocol.SubscriptionResult{}, nil
 }
-func (f *fakeClient) SetSubscriptionEnabled(_ context.Context, _ string, request protocol.SubscriptionEnabledRequest) (protocol.SubscriptionResult, error) {
+func (f *fakeClient) SetSubscriptionEnabled(ctx context.Context, _ string, request protocol.SubscriptionEnabledRequest) (protocol.SubscriptionResult, error) {
+	f.captureMutation(ctx, request.OperationID)
 	f.toggle = request
 	return f.toggleResult, f.toggleErr
 }
-func (f *fakeClient) UpdateSubscription(_ context.Context, _ string, request protocol.SubscriptionUpdateRequest) (protocol.SubscriptionResult, error) {
+func (f *fakeClient) UpdateSubscription(ctx context.Context, _ string, request protocol.SubscriptionUpdateRequest) (protocol.SubscriptionResult, error) {
+	f.captureMutation(ctx, request.OperationID)
 	f.update = request
 	return f.updateResult, nil
 }
-func (f *fakeClient) RemoveSubscription(_ context.Context, _ string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+func (f *fakeClient) RemoveSubscription(ctx context.Context, _ string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+	operation, _ := logging.OperationFromContext(ctx)
+	f.removeOperations = append(f.removeOperations, operation)
+	f.captureMutation(ctx, request.OperationID)
 	f.remove = request
 	return protocol.MutationResult{}, f.removeErr
 }

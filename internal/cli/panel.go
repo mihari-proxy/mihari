@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/spf13/cobra"
 )
@@ -80,7 +81,7 @@ func newPanelInstallCommand(dependencies Dependencies, options *runOptions) *cob
 		if err != nil {
 			return err
 		}
-		result, err := client.InstallPanel(command.Context(), args[0], protocol.PanelInstallRequest{
+		result, err := client.InstallPanel(logging.WithOperation(command.Context(), logging.OperationMetadata{ID: id, Name: "panel.install"}), args[0], protocol.PanelInstallRequest{
 			OperationID: id, IfRevision: revisionFlag(command, revision),
 		})
 		if err != nil {
@@ -104,7 +105,7 @@ func newPanelUpdateCommand(dependencies Dependencies, options *runOptions) *cobr
 			return err
 		}
 		request.IfRevision = revisionFlag(command, revision)
-		result, err := client.UpdatePanel(command.Context(), args[0], request)
+		result, err := client.UpdatePanel(logging.WithOperation(command.Context(), logging.OperationMetadata{ID: request.OperationID, Name: "panel.update"}), args[0], request)
 		if err != nil {
 			return classifyRuntimeError(err)
 		}
@@ -126,7 +127,7 @@ func newPanelUseCommand(dependencies Dependencies, options *runOptions) *cobra.C
 			return err
 		}
 		request.IfRevision = revisionFlag(command, revision)
-		result, err := client.ActivatePanel(command.Context(), args[0], request)
+		result, err := client.ActivatePanel(logging.WithOperation(command.Context(), logging.OperationMetadata{ID: request.OperationID, Name: "panel.activate"}), args[0], request)
 		if err != nil {
 			return classifyRuntimeError(err)
 		}
@@ -192,7 +193,7 @@ func newPanelRollbackCommand(dependencies Dependencies, options *runOptions) *co
 			return err
 		}
 		request.IfRevision = revisionFlag(command, revision)
-		result, err := client.RollbackPanel(command.Context(), args[0], request)
+		result, err := client.RollbackPanel(logging.WithOperation(command.Context(), logging.OperationMetadata{ID: request.OperationID, Name: "panel.rollback"}), args[0], request)
 		if err != nil {
 			return classifyRuntimeError(err)
 		}
@@ -219,7 +220,7 @@ func newPanelUninstallCommand(dependencies Dependencies, options *runOptions) *c
 			return err
 		}
 		request.IfRevision = revisionFlag(command, revision)
-		result, err := client.UninstallPanel(command.Context(), args[0], request)
+		result, err := client.UninstallPanel(logging.WithOperation(command.Context(), logging.OperationMetadata{ID: request.OperationID, Name: "panel.uninstall"}), args[0], request)
 		if err != nil {
 			return classifyRuntimeError(err)
 		}
@@ -246,7 +247,7 @@ func newPanelReinstallCommand(dependencies Dependencies, options *runOptions) *c
 			return err
 		}
 		request.IfRevision = revisionFlag(command, revision)
-		result, err := client.ReinstallPanel(command.Context(), args[0], request)
+		result, err := client.ReinstallPanel(logging.WithOperation(command.Context(), logging.OperationMetadata{ID: request.OperationID, Name: "panel.reinstall"}), args[0], request)
 		if err != nil {
 			return classifyRuntimeError(err)
 		}

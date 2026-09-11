@@ -16,8 +16,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
+	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/elevate"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -25,38 +27,41 @@ import (
 )
 
 const (
-	rowDaemon            = "daemon"
-	rowCore              = "core"
-	rowCoreChannel       = "core-channel"
-	rowCoreUpdate        = "core-update"
-	rowCoreRestart       = "core-restart"
-	rowMihariChannel     = "mihari-channel"
-	rowMihariUpdate      = "mihari-update"
-	rowZashboard         = "zashboard"
-	rowMetaCubeXD        = "metacubexd"
-	rowRunSetup          = "run-setup"
-	rowServiceStatus     = "service-status"
-	rowServiceHint       = "service-hint"
-	rowServiceInstall    = "service-install"
-	rowServiceUninstall  = "service-uninstall"
-	rowServiceReinstall  = "service-reinstall"
-	rowServiceStart      = "service-start"
-	rowServiceStop       = "service-stop"
-	rowServiceRestart    = "service-restart"
-	rowSystemProxy       = "system-proxy"
-	rowSystemProxyAction = "system-proxy-action"
-	rowTUN               = "tun"
-	rowTUNAction         = "tun-action"
-	rowAbout             = "about"
-	rowGitHub            = "github"
-	rowMixed             = "port-mixed"
-	rowController        = "port-controller"
-	rowWeb               = "port-web"
-	rowLogLevel          = "log-level"
-	rowLogMaxSize        = "log-max-size"
-	rowLogMaxFiles       = "log-max-files"
-	rowLogDirectory      = "log-directory"
-	rowLogExport         = "log-export"
+	rowDaemon             = "daemon"
+	rowCore               = "core"
+	rowCoreChannel        = "core-channel"
+	rowCoreUpdate         = "core-update"
+	rowCoreRestart        = "core-restart"
+	rowMihariChannel      = "mihari-channel"
+	rowMihariUpdate       = "mihari-update"
+	rowZashboard          = "zashboard"
+	rowMetaCubeXD         = "metacubexd"
+	rowRunSetup           = "run-setup"
+	rowCompleteUninstall  = "complete-uninstall"
+	rowServiceStatus      = "service-status"
+	rowServiceHint        = "service-hint"
+	rowServiceInstall     = "service-install"
+	rowServiceUninstall   = "service-uninstall"
+	rowServiceReinstall   = "service-reinstall"
+	rowServiceStart       = "service-start"
+	rowServiceStop        = "service-stop"
+	rowServiceRestart     = "service-restart"
+	rowSystemProxy        = "system-proxy"
+	rowSystemProxyAction  = "system-proxy-action"
+	rowTUN                = "tun"
+	rowTUNAction          = "tun-action"
+	rowAbout              = "about"
+	rowGitHub             = "github"
+	rowMixed              = "port-mixed"
+	rowController         = "port-controller"
+	rowWeb                = "port-web"
+	rowLogLevel           = "log-level"
+	rowLogMaxSize         = "log-max-size"
+	rowLogMaxFiles        = "log-max-files"
+	rowLogDirectory       = "log-directory"
+	rowLogUserDirectory   = "log-user-directory"
+	rowLogExportDirectory = "log-export-directory"
+	rowLogExport          = "log-export"
 )
 
 // Panel IDs mirrored from internal/panel/catalog.go; local constants keep the
@@ -88,8 +93,12 @@ type Client interface {
 // SelfUpdater is the local Mihari binary lifecycle surface used by the System page.
 type SelfUpdater interface {
 	Check(context.Context, string, string) (update.CheckResult, error)
-	Update(context.Context, string, string, string) (update.Result, error)
+	Prepare(context.Context, string, string, string) (update.PreparedUpdate, error)
+	ApplyPrepared(context.Context, update.PreparedUpdate) (update.Result, error)
 }
+
+// PreparedSelfUpdater preserves the Run-owned preparation interface name.
+type PreparedSelfUpdater = SelfUpdater
 
 // ServiceController is the local OS service manager surface (not daemon IPC).
 type ServiceController interface {
@@ -100,6 +109,11 @@ type ServiceController interface {
 	Stop() error
 	Restart() error
 	Status() (service.StatusKind, error)
+}
+
+// Uninstaller previews the fixed local roots before a complete uninstall.
+type Uninstaller interface {
+	Preview(context.Context) ([]app.UninstallTarget, error)
 }
 
 type row struct {
@@ -121,11 +135,6 @@ type selfCheckResultMsg struct {
 	err        error
 }
 
-type selfUpdateResultMsg struct {
-	result update.Result
-	err    error
-}
-
 type mihariChannelResultMsg struct {
 	channel string
 	err     error
@@ -134,17 +143,6 @@ type mihariChannelResultMsg struct {
 func (m mihariChannelResultMsg) Err() error { return m.err }
 
 var _ interface{ Err() error } = mihariChannelResultMsg{}
-
-// Err implements the shell action-outcome contract. Once replacement commits,
-// a service restart error is a warning and must not classify the update as failed.
-func (m selfUpdateResultMsg) Err() error {
-	if m.result.Updated {
-		return nil
-	}
-	return m.err
-}
-
-var _ interface{ Err() error } = selfUpdateResultMsg{}
 
 type serviceStatusMsg struct {
 	status   service.StatusKind
@@ -156,6 +154,13 @@ type serviceResultMsg struct {
 	kind serviceActionKind
 	err  error
 }
+
+type uninstallPreviewMsg struct {
+	targets []app.UninstallTarget
+	err     error
+}
+
+func (m uninstallPreviewMsg) Err() error { return m.err }
 
 // Err implements the shell's action-outcome contract so OS service actions are
 // classified Succeeded/Failed in the Recent operations ledger.
@@ -169,9 +174,10 @@ type systemProxyStatusMsg struct {
 }
 
 type systemProxyActionResultMsg struct {
-	kind   proxyActionKind
-	status protocol.SystemProxyStatus
-	err    error
+	operation logging.OperationMetadata
+	kind      proxyActionKind
+	status    protocol.SystemProxyStatus
+	err       error
 }
 
 // Err implements the shell's action-outcome contract so system proxy actions
@@ -207,9 +213,10 @@ func (m webGUIOpenResultMsg) Err() error { return m.err }
 var _ interface{ Err() error } = webGUIOpenResultMsg{}
 
 type tunActionResultMsg struct {
-	kind   tunActionKind
-	status protocol.TunStatus
-	err    error
+	operation logging.OperationMetadata
+	kind      tunActionKind
+	status    protocol.TunStatus
+	err       error
 }
 
 // Err implements the shell's action-outcome contract so TUN actions are
@@ -291,10 +298,11 @@ type actionStartMsg struct {
 }
 
 type actionResultMsg struct {
-	kind    actionKind
-	install protocol.CoreInstallResult
-	restart protocol.MutationResult
-	err     error
+	kind      actionKind
+	install   protocol.CoreInstallResult
+	restart   protocol.MutationResult
+	operation logging.OperationMetadata
+	err       error
 }
 
 type coreLoadResultMsg struct {
@@ -310,35 +318,41 @@ var _ interface{ Err() error } = actionResultMsg{}
 
 // Model is the System page.
 type Model struct {
-	writeClipboard      func(string) error
-	ctx                 context.Context
-	client              Client
-	service             ServiceController
-	openBrowser         func(string) error
-	newOperationID      func() string
-	selfUpdater         SelfUpdater
-	currentVersion      string
-	binaryPath          string
-	isElevated          func() bool
-	selfCheckResult     update.CheckResult
-	selfCheckLoaded     bool
-	selfCheckGeneration uint64
-	channelPath         func() (string, error)
-	loadChannel         func(string) (string, error)
-	saveChannel         func(string, string) error
-	mihariChannel       string
-	mihariChannelLoaded bool
-	mihariChannelFailed bool
-	status              protocol.Status
-	core                protocol.CoreStatus
-	onboarding          protocol.OnboardingStatus
-	systemProxy         protocol.SystemProxyStatus
-	systemProxyLoaded   bool
-	tun                 protocol.TunStatus
-	tunLoaded           bool
-	webGUI              protocol.WebGUIStatus
-	webGUILoaded        bool
-	webGUIErr           bool
+	writeClipboard        func(string) error
+	ctx                   context.Context
+	client                Client
+	service               ServiceController
+	uninstaller           Uninstaller
+	openBrowser           func(string) error
+	newOperationID        func() string
+	selfUpdater           SelfUpdater
+	localTaskDiagnostics  ui.LocalTaskDiagnostics
+	currentVersion        string
+	binaryPath            string
+	isElevated            func() bool
+	selfCheckResult       update.CheckResult
+	selfCheckLoaded       bool
+	selfCheckGeneration   uint64
+	preparationGeneration uint64
+	preparationCancel     context.CancelFunc
+	pendingPrepared       *update.PreparedUpdate
+	channelPath           func() (string, error)
+	loadChannel           func(string) (string, error)
+	selfUpdateChannel     func(context.Context) (string, error)
+	saveChannel           func(string, string) error
+	mihariChannel         string
+	mihariChannelLoaded   bool
+	mihariChannelFailed   bool
+	status                protocol.Status
+	core                  protocol.CoreStatus
+	onboarding            protocol.OnboardingStatus
+	systemProxy           protocol.SystemProxyStatus
+	systemProxyLoaded     bool
+	tun                   protocol.TunStatus
+	tunLoaded             bool
+	webGUI                protocol.WebGUIStatus
+	webGUILoaded          bool
+	webGUIErr             bool
 
 	logging               protocol.LoggingStatus
 	loggingEpoch          uint64
@@ -346,6 +360,9 @@ type Model struct {
 	localLoggingAvailable bool
 	loggingPendingEpoch   uint64
 	loggingReloading      bool
+	splitLogging          bool
+	clientLogDir          string
+	exportLogDir          string
 
 	serviceStatus service.StatusKind
 	serviceLoaded bool
@@ -390,15 +407,17 @@ type portsApplyResultMsg struct {
 }
 
 type loggingUpdateResultMsg struct {
-	epoch uint64
-	rowID string
-	err   error
+	epoch     uint64
+	rowID     string
+	operation logging.OperationMetadata
+	err       error
 }
 
 type loggingReloadResultMsg struct {
-	epoch uint64
-	rowID string
-	err   error
+	epoch     uint64
+	rowID     string
+	operation logging.OperationMetadata
+	err       error
 }
 
 func (m portsApplyResultMsg) Err() error { return m.err }
@@ -445,7 +464,7 @@ func (m *Model) HelpMode() string {
 
 // FooterHints returns edit-mode shortcuts while a port row is being typed.
 func (m *Model) FooterHints() string {
-	if m.loggingAvailable && m.focusID == rowLogDirectory && m.editID == "" && m.detail == nil {
+	if m.directoryCopyAvailable(m.focusID) && m.editID == "" && m.detail == nil {
 		return "↑/↓ navigate  Enter copy directory  Esc back  ? help  q quit"
 	}
 	return ui.RenderFooter(m.ID(), m.HelpMode(), ui.FooterOpt{})
@@ -469,6 +488,11 @@ func (m *Model) SetServiceController(svc ServiceController) {
 	m.service = svc
 }
 
+// SetUninstaller configures the local complete-uninstall preview action.
+func (m *Model) SetUninstaller(uninstaller Uninstaller) {
+	m.uninstaller = uninstaller
+}
+
 // SetOpenBrowser injects the browser launcher (tests and headless environments).
 func (m *Model) SetOpenBrowser(open func(string) error) {
 	if open != nil {
@@ -486,6 +510,13 @@ func (m *Model) SetSelfUpdater(updater SelfUpdater, currentVersion, binaryPath s
 	} else {
 		m.isElevated = elevated
 	}
+}
+
+// SetSelfUpdateChannel supplies platform discovery without legacy data-root IO.
+func (m *Model) SetSelfUpdateChannel(read func(context.Context) (string, error)) {
+	m.selfUpdateChannel = read
+	m.mihariChannelLoaded = false
+	m.mihariChannelFailed = false
 }
 
 // SetWebGUI injects Web GUI status (tests and optional external refresh).
@@ -514,6 +545,43 @@ func (m *Model) SetLocalLoggingAvailable(available bool) {
 	if m != nil {
 		m.localLoggingAvailable = available
 	}
+}
+
+// SetLoggingLayout enables Unix split log-directory display. LoggingStatus.Dir
+// remains the machine directory. Empty user/export paths render as unavailable.
+func (m *Model) SetLoggingLayout(split bool, userDir, exportDir string) {
+	if m == nil {
+		return
+	}
+	m.splitLogging = split
+	m.clientLogDir = userDir
+	m.exportLogDir = exportDir
+}
+
+func (m *Model) directoryCopyAvailable(rowID string) bool {
+	switch rowID {
+	case rowLogDirectory:
+		return m.loggingAvailable && m.logging.Dir != ""
+	case rowLogUserDirectory:
+		return m.splitLogging && m.clientLogDir != ""
+	case rowLogExportDirectory:
+		return m.splitLogging && m.exportLogDir != ""
+	default:
+		return false
+	}
+}
+
+func (m *Model) copyDirectoryRow(rowID, path string) tea.Cmd {
+	write := m.writeClipboard
+	if write == nil {
+		write = clipboard.WriteAll
+	}
+	if err := write(path); err != nil {
+		m.markRowOutcome(rowID, false, ui.ExportCopyFailed)
+		return nil
+	}
+	m.markRowOutcome(rowID, true, "")
+	return m.scheduleOutcomeFade(rowID)
 }
 
 func (m *Model) ID() ui.PageID { return ui.PageSystem }
@@ -621,7 +689,7 @@ func (m *Model) load(checkMihari bool) tea.Cmd {
 }
 
 func (m *Model) checkMihariVersion() tea.Cmd {
-	if m.selfUpdater == nil || m.pending {
+	if m.selfUpdater == nil || m.pending || m.pendingPrepared != nil {
 		return nil
 	}
 	path, err := m.channelFilePath()
@@ -743,7 +811,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
 			m.loggingReloading = true
 			m.pendingNote = ui.LoggingProgressReloading
-			return m, tea.Batch(m.reloadLogging(typed.epoch, typed.rowID), m.rowSpinCmdIfNeeded())
+			return m, tea.Batch(m.reloadLogging(typed.epoch, typed.rowID, typed.operation), m.rowSpinCmdIfNeeded())
 		}
 		m.clearRowPending()
 		m.loggingPendingEpoch = 0
@@ -784,6 +852,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.lastError = ""
 		return m, m.rowSpinCmdIfNeeded()
 	case mihariChannelResultMsg:
+		discard := m.CancelMihariPreparation()
 		m.clearRowPending()
 		if typed.err != nil {
 			m.markRowOutcome(rowMihariChannel, false, actionErrorDetail(typed.err, ui.MihariChannelFailed))
@@ -793,31 +862,22 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.mihariChannelLoaded = true
 		m.mihariChannelFailed = false
 		m.markRowOutcome(rowMihariChannel, true, "")
-		return m, tea.Batch(m.checkMihariVersion(), m.rowSpinCmdIfNeeded())
-	case selfUpdateResultMsg:
+		return m, tea.Batch(discard, m.checkMihariVersion(), m.rowSpinCmdIfNeeded())
+	case preparedMihariResultMsg:
+		return m.handlePreparedMihariResult(typed)
+	case preparedMihariCanceledMsg:
+		if typed.generation != m.preparationGeneration {
+			return m, discardMihari(typed.prepared)
+		}
+		return m, m.CancelMihariPreparation()
+	case preparedMihariConfirmedMsg:
+		if typed.generation != m.preparationGeneration || m.pendingPrepared == nil {
+			return m, discardMihari(typed.prepared)
+		}
 		m.clearRowPending()
-		if !typed.result.Updated {
-			if typed.err != nil {
-				m.markRowOutcome(rowMihariUpdate, false, actionErrorDetail(typed.err, ui.UpdateMihariActionFailed))
-				return m, m.rowSpinCmdIfNeeded()
-			}
-			m.selfCheckResult = update.CheckResult{
-				Current:   m.currentVersion,
-				Latest:    typed.result.Version,
-				Available: false,
-				Ahead:     typed.result.Ahead,
-				Channel:   typed.result.Channel,
-			}
-			m.selfCheckLoaded = true
-			m.outcomeRow = ""
-			return m, m.rowSpinCmdIfNeeded()
+		return m, func() tea.Msg {
+			return ui.RelaunchRequestMsg{Prepared: &typed.prepared, PreparationKey: fmt.Sprintf("mihari:update:%d", typed.generation)}
 		}
-		m.markRowOutcome(rowMihariUpdate, true, "")
-		warning := ""
-		if typed.err != nil {
-			warning = actionErrorDetail(typed.err, ui.UpdateMihariActionFailed)
-		}
-		return m, tea.Batch(func() tea.Msg { return ui.RelaunchRequestMsg{Warning: warning} }, m.rowSpinCmdIfNeeded())
 	case onboardingResultMsg:
 		if typed.err != nil {
 			m.lastError = ui.SystemStateUnavailable
@@ -975,6 +1035,25 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		m.markRowOutcome(rowID, true, "")
 		return m, tea.Batch(m.loadServiceStatus(), m.rowSpinCmdIfNeeded())
+	case uninstallPreviewMsg:
+		if typed.err != nil {
+			m.markRowOutcome(rowCompleteUninstall, false, uninstallPreviewDetail(typed.err))
+			return m, m.rowSpinCmdIfNeeded()
+		}
+		return m, func() tea.Msg {
+			paths := uninstallTargetPaths(typed.targets)
+			return ui.ActionIntentMsg{
+				Action: ui.ActionCompleteUninstall, Page: ui.PageSystem, Key: "system:complete-uninstall",
+				Title: ui.CompleteUninstallTitle, Object: paths, Impact: ui.CompleteUninstallImpact, Rollback: ui.CompleteUninstallRollback,
+				Execute: func() tea.Msg {
+					return ui.ActionIntentMsg{
+						Action: ui.ActionCompleteUninstall, Page: ui.PageSystem, Key: ui.CompleteUninstallConfirmKey,
+						Title: ui.CompleteUninstallConfirmTitle, Object: paths, Impact: ui.CompleteUninstallConfirmImpact, Rollback: ui.CompleteUninstallRollback,
+						Execute: func() tea.Msg { return ui.CompleteUninstallConfirmedMsg{} },
+					}
+				},
+			}
+		}
 	case systemProxyActionResultMsg:
 		return m.handleSystemProxyActionResult(typed)
 	case tunActionResultMsg:
@@ -1001,7 +1080,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	index := m.rowIndex(m.focusID)
 	switch key.String() {
 	case "esc":
-		return m, func() tea.Msg { return ui.FocusRailMsg{} }
+		return m, tea.Batch(m.CancelMihariPreparation(), func() tea.Msg { return ui.FocusRailMsg{} })
 	case "up":
 		if index > 0 {
 			m.focusID = rows[index-1].id
@@ -1029,7 +1108,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 				return m, nil
 			}
 			if m.selfCheckLoaded && m.selfCheckResult.Available {
-				return m, m.confirmMihariUpdate()
+				return m, m.startMihariPreparation()
 			}
 			return m, m.checkMihariVersion()
 		case rowRunSetup:
@@ -1037,6 +1116,8 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 				return m, nil
 			}
 			return m, func() tea.Msg { return ui.RouteRequestMsg{Page: ui.PageSetup} }
+		case rowCompleteUninstall:
+			return m, m.previewCompleteUninstall()
 		case rowCoreChannel:
 			if m.client == nil || !m.mutationsEnabled || !m.hasCapability(protocol.CapabilityCore) {
 				return m, nil
@@ -1079,56 +1160,26 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		case rowLogExport:
 			return m, func() tea.Msg { return ui.OpenExportLogsMsg{} }
 		case rowLogDirectory:
-			if !m.loggingAvailable {
+			if !m.directoryCopyAvailable(rowLogDirectory) {
 				return m, nil
 			}
-			write := m.writeClipboard
-			if write == nil {
-				write = clipboard.WriteAll
-			}
-			if err := write(m.logging.Dir); err != nil {
-				m.markRowOutcome(rowLogDirectory, false, ui.ExportCopyFailed)
+			return m, m.copyDirectoryRow(rowLogDirectory, m.logging.Dir)
+		case rowLogUserDirectory:
+			if !m.directoryCopyAvailable(rowLogUserDirectory) {
 				return m, nil
 			}
-			m.markRowOutcome(rowLogDirectory, true, "")
-			return m, m.scheduleOutcomeFade(rowLogDirectory)
+			return m, m.copyDirectoryRow(rowLogUserDirectory, m.clientLogDir)
+		case rowLogExportDirectory:
+			if !m.directoryCopyAvailable(rowLogExportDirectory) {
+				return m, nil
+			}
+			return m, m.copyDirectoryRow(rowLogExportDirectory, m.exportLogDir)
 		default:
 			selected := rows[index]
 			m.detail = &selected
 		}
 	}
 	return m, nil
-}
-
-func (m *Model) confirmMihariUpdate() tea.Cmd {
-	current := valueOr(m.currentVersion, ui.UnknownLabel)
-	latest := valueOr(m.selfCheckResult.Latest, ui.UnknownLabel)
-	return func() tea.Msg {
-		return ui.ActionIntentMsg{
-			Action: ui.ActionUpdateMihari, Page: ui.PageSystem, Key: "mihari:update",
-			Title: ui.UpdateMihariTitle, Object: fmt.Sprintf("Mihari %s → %s", current, latest),
-			Impact: ui.UpdateMihariImpact, Rollback: ui.UpdateMihariRollback,
-			Execute: m.updateMihari(),
-		}
-	}
-}
-
-func (m *Model) updateMihari() tea.Cmd {
-	updater := m.selfUpdater
-	binaryPath := m.binaryPath
-	currentVersion := m.currentVersion
-	channel := m.currentMihariChannel()
-	isElevated := m.isElevated
-	return func() tea.Msg {
-		if isElevated == nil || !isElevated() {
-			return selfUpdateResultMsg{err: protocol.APIError{
-				Code:    protocol.CodePermissionDenied,
-				Message: "administrator privileges are required; re-run Mihari from an elevated shell",
-			}}
-		}
-		result, err := updater.Update(m.ctx, binaryPath, currentVersion, channel)
-		return selfUpdateResultMsg{result: result, err: err}
-	}
 }
 
 func (m *Model) handleSystemProxyActionResult(typed systemProxyActionResultMsg) (ui.Page, tea.Cmd) {
@@ -1312,8 +1363,47 @@ func (m *Model) rows() []row {
 	rows = append(rows, m.serviceRows()...)
 	rows = append(rows, m.networkRows()...)
 	rows = append(rows, m.loggingRows()...)
+	rows = append(rows, m.maintenanceRows()...)
 	rows = append(rows, m.aboutRows()...)
 	return rows
+}
+
+func (m *Model) maintenanceRows() []row {
+	return []row{{
+		id:      rowCompleteUninstall,
+		section: ui.MaintenanceSectionTitle,
+		label:   ui.CompleteUninstallLabel,
+		detail:  ui.CompleteUninstallImpact,
+	}}
+}
+
+func (m *Model) previewCompleteUninstall() tea.Cmd {
+	if m.pending {
+		return nil
+	}
+	if m.uninstaller == nil {
+		m.markRowOutcome(rowCompleteUninstall, false, ui.CompleteUninstallUnavailable)
+		return nil
+	}
+	return func() tea.Msg {
+		targets, err := m.uninstaller.Preview(m.ctx)
+		return uninstallPreviewMsg{targets: targets, err: err}
+	}
+}
+
+func uninstallPreviewDetail(err error) string {
+	if msg := strings.TrimSpace(err.Error()); msg != "" {
+		return msg
+	}
+	return ui.CompleteUninstallPreviewFailed
+}
+
+func uninstallTargetPaths(targets []app.UninstallTarget) string {
+	paths := make([]string, 0, len(targets))
+	for _, target := range targets {
+		paths = append(paths, target.Path)
+	}
+	return strings.Join(paths, "\n")
 }
 
 func (m *Model) loggingRows() []row {
@@ -1327,13 +1417,32 @@ func (m *Model) loggingRows() []row {
 		maxFiles = fmt.Sprintf("%d", m.logging.MaxFiles)
 		directory = m.logging.Dir
 	}
-	return []row{
+	rows := []row{
 		{id: rowLogLevel, section: ui.LoggingSectionTitle, label: ui.LoggingLevelLabel, value: level},
 		{id: rowLogMaxSize, section: ui.LoggingSectionTitle, label: ui.LoggingMaxSizeLabel, value: maxSize},
 		{id: rowLogMaxFiles, section: ui.LoggingSectionTitle, label: ui.LoggingMaxFilesLabel, value: maxFiles},
-		{id: rowLogDirectory, section: ui.LoggingSectionTitle, label: ui.LoggingDirectoryLabel, value: directory, detail: directory},
-		{id: rowLogExport, section: ui.LoggingSectionTitle, label: ui.ExportLogsLabel},
 	}
+	if m.splitLogging {
+		userDir := ui.UnavailableTitle
+		if m.clientLogDir != "" {
+			userDir = m.clientLogDir
+		}
+		exportDir := ui.UnavailableTitle
+		if m.exportLogDir != "" {
+			exportDir = m.exportLogDir
+		}
+		rows = append(rows,
+			row{id: rowLogDirectory, section: ui.LoggingSectionTitle, label: ui.LoggingMachineDirectoryLabel, value: directory, detail: directory},
+			row{id: rowLogUserDirectory, section: ui.LoggingSectionTitle, label: ui.LoggingUserDirectoryLabel, value: userDir, detail: userDir},
+			row{id: rowLogExportDirectory, section: ui.LoggingSectionTitle, label: ui.LoggingExportDirectoryLabel, value: exportDir, detail: exportDir},
+			row{id: rowLogExport, section: ui.LoggingSectionTitle, label: ui.ExportLogsLabel},
+		)
+		return rows
+	}
+	return append(rows,
+		row{id: rowLogDirectory, section: ui.LoggingSectionTitle, label: ui.LoggingDirectoryLabel, value: directory, detail: directory},
+		row{id: rowLogExport, section: ui.LoggingSectionTitle, label: ui.ExportLogsLabel},
+	)
 }
 
 func (m *Model) aboutRows() []row {
@@ -1964,6 +2073,11 @@ func (m *Model) confirmForceSystemProxy(apiError protocol.APIError) tea.Cmd {
 }
 
 func (m *Model) runSystemProxyAction(kind proxyActionKind, operationID string, revision uint64, force bool) tea.Cmd {
+	operation := logging.OperationMetadata{ID: operationID, Name: "system_proxy.enable"}
+	if kind == proxyDisable {
+		operation.Name = "system_proxy.disable"
+	}
+	ctx := logging.WithOperation(m.ctx, operation)
 	return func() tea.Msg {
 		request := protocol.SystemProxyMutationRequest{OperationID: operationID, Force: force}
 		if revision > 0 {
@@ -1975,11 +2089,11 @@ func (m *Model) runSystemProxyAction(kind proxyActionKind, operationID string, r
 		)
 		switch kind {
 		case proxyDisable:
-			status, err = m.client.DisableSystemProxy(m.ctx, request)
+			status, err = m.client.DisableSystemProxy(ctx, request)
 		default:
-			status, err = m.client.EnableSystemProxy(m.ctx, request)
+			status, err = m.client.EnableSystemProxy(ctx, request)
 		}
-		return systemProxyActionResultMsg{kind: kind, status: status, err: err}
+		return systemProxyActionResultMsg{operation: operation, kind: kind, status: status, err: err}
 	}
 }
 
@@ -2037,6 +2151,11 @@ func (m *Model) confirmForceTun(apiError protocol.APIError) tea.Cmd {
 }
 
 func (m *Model) runTunAction(kind tunActionKind, operationID string, revision uint64, force bool) tea.Cmd {
+	operation := logging.OperationMetadata{ID: operationID, Name: "tun.enable"}
+	if kind == tunDisable {
+		operation.Name = "tun.disable"
+	}
+	ctx := logging.WithOperation(m.ctx, operation)
 	return func() tea.Msg {
 		request := protocol.TunMutationRequest{OperationID: operationID, Force: force}
 		if revision > 0 {
@@ -2047,11 +2166,11 @@ func (m *Model) runTunAction(kind tunActionKind, operationID string, revision ui
 			err    error
 		)
 		if kind == tunDisable {
-			status, err = m.client.DisableTun(m.ctx, request)
+			status, err = m.client.DisableTun(ctx, request)
 		} else {
-			status, err = m.client.EnableTun(m.ctx, request)
+			status, err = m.client.EnableTun(ctx, request)
 		}
-		return tunActionResultMsg{kind: kind, status: status, err: err}
+		return tunActionResultMsg{operation: operation, kind: kind, status: status, err: err}
 	}
 }
 
@@ -2225,7 +2344,7 @@ func (m *Model) clearLoggingOutcome(rowID string) {
 
 func isLoggingRow(rowID string) bool {
 	switch rowID {
-	case rowLogLevel, rowLogMaxSize, rowLogMaxFiles, rowLogDirectory, rowLogExport:
+	case rowLogLevel, rowLogMaxSize, rowLogMaxFiles, rowLogDirectory, rowLogUserDirectory, rowLogExportDirectory, rowLogExport:
 		return true
 	default:
 		return false
@@ -2269,27 +2388,29 @@ func (m *Model) startLoggingUpdate(rowID string, request protocol.LoggingUpdateR
 		return nil
 	}
 	epoch := m.loggingEpoch
+	operation := logging.OperationMetadata{ID: request.OperationID, Name: "logging.update"}
 	m.pending = true
 	m.pendingRow = rowID
 	m.pendingNote = ui.LoggingProgressApplying
 	m.loggingPendingEpoch = epoch
 	update := func() tea.Msg {
-		status, err := m.client.UpdateLogging(m.ctx, request)
+		ctx := logging.WithOperation(m.ctx, operation)
+		status, err := m.client.UpdateLogging(ctx, request)
 		if err != nil {
-			return ui.PageResultMsg{Page: ui.PageSystem, Result: loggingUpdateResultMsg{epoch: epoch, rowID: rowID, err: err}}
+			return ui.PageResultMsg{Page: ui.PageSystem, Result: loggingUpdateResultMsg{epoch: epoch, rowID: rowID, operation: operation, err: err}}
 		}
-		return ui.PageResultMsg{Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: epoch, Status: status}}
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: epoch, Status: status, Operation: operation}}
 	}
 	return tea.Batch(update, m.rowSpinCmdIfNeeded())
 }
 
-func (m *Model) reloadLogging(epoch uint64, rowID string) tea.Cmd {
+func (m *Model) reloadLogging(epoch uint64, rowID string, operation logging.OperationMetadata) tea.Cmd {
 	return func() tea.Msg {
 		status, err := m.client.Logging(m.ctx)
 		if err != nil {
-			return ui.PageResultMsg{Page: ui.PageSystem, Result: loggingReloadResultMsg{epoch: epoch, rowID: rowID, err: err}}
+			return ui.PageResultMsg{Page: ui.PageSystem, Result: loggingReloadResultMsg{epoch: epoch, rowID: rowID, operation: operation, err: err}}
 		}
-		return ui.PageResultMsg{Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: epoch, Status: status}}
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: ui.LoggingObservedMsg{Epoch: epoch, Status: status, Operation: operation}}
 	}
 }
 
@@ -2463,6 +2584,16 @@ func (m *Model) ensureChannelLoaded() {
 	if m.mihariChannelLoaded || m.mihariChannelFailed {
 		return
 	}
+	if m.selfUpdateChannel != nil {
+		channel, err := m.selfUpdateChannel(m.ctx)
+		if err != nil {
+			m.mihariChannelFailed = true
+			return
+		}
+		m.mihariChannel = channel
+		m.mihariChannelLoaded = true
+		return
+	}
 	path, err := m.channelFilePath()
 	if err != nil {
 		m.mihariChannelFailed = true
@@ -2570,19 +2701,25 @@ func (m *Model) tunActionLabel() string {
 }
 
 func (m *Model) runAction(start actionStartMsg) tea.Cmd {
+	operationName := "core.restart"
+	if start.kind == actionUpdate || start.kind == actionSwitchChannel {
+		operationName = "core.install"
+	}
+	operation := logging.OperationMetadata{ID: start.operationID, Name: operationName}
 	return func() tea.Msg {
 		revision := start.revision
 		request := protocol.MutationRequest{OperationID: start.operationID, IfRevision: &revision, Source: start.source}
+		ctx := logging.WithOperation(m.ctx, operation)
 		if start.channel != "" {
 			channel := start.channel
 			request.Channel = &channel
 		}
 		if start.kind == actionUpdate || start.kind == actionSwitchChannel {
-			result, err := m.client.InstallCore(m.ctx, request)
-			return actionResultMsg{kind: start.kind, install: result, err: err}
+			result, err := m.client.InstallCore(ctx, request)
+			return actionResultMsg{kind: start.kind, install: result, operation: operation, err: err}
 		}
-		result, err := m.client.RestartCore(m.ctx, request)
-		return actionResultMsg{kind: start.kind, restart: result, err: err}
+		result, err := m.client.RestartCore(ctx, request)
+		return actionResultMsg{kind: start.kind, restart: result, operation: operation, err: err}
 	}
 }
 

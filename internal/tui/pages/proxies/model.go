@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -16,9 +18,8 @@ import (
 )
 
 const (
-	proxyBarMaxWidth = 28
-	delayTestURL     = "https://www.gstatic.com/generate_204"
-	delayTimeout     = 5_000
+	proxyBarMaxWidth     = 28
+	delayTestConcurrency = 5
 )
 
 type Client interface {
@@ -33,6 +34,8 @@ const (
 	DelayTesting
 	DelayValue
 	DelayTimeout
+	DelayFailed
+	DelayInvalid
 )
 
 type DelayState struct {
@@ -47,6 +50,9 @@ type Model struct {
 	expanded       map[string]bool
 	focus          FocusID
 	delays         map[string]DelayState
+	queue          []string
+	inFlight       map[string]uint64
+	delayTestGen   uint64
 	pending        map[FocusID]bool
 	lastError      string
 	contentFocused bool
@@ -75,6 +81,7 @@ type delayResultMsg struct {
 	node  string
 	delay uint16
 	err   error
+	gen   uint64
 }
 
 // delaySpinTickMsg advances braille frames while any node is DelayTesting.
@@ -93,7 +100,7 @@ func New(client Client, newOperationID func() string) *Model {
 	}
 	return &Model{
 		client: client, newOperationID: newOperationID,
-		expanded: make(map[string]bool), delays: make(map[string]DelayState), pending: make(map[FocusID]bool),
+		expanded: make(map[string]bool), delays: make(map[string]DelayState), inFlight: make(map[string]uint64), pending: make(map[FocusID]bool),
 		theme: ui.DefaultTheme(),
 	}
 }
@@ -149,12 +156,13 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		return m, nil
 	case delayResultMsg:
-		if typed.err != nil {
-			m.delays[typed.node] = DelayState{Kind: DelayTimeout}
-		} else {
+		delete(m.inFlight, typed.node)
+		if typed.err == nil {
 			m.delays[typed.node] = DelayState{Kind: DelayValue, Milliseconds: typed.delay}
+		} else {
+			m.delays[typed.node] = DelayState{Kind: classifyDelayError(typed.err)}
 		}
-		return m, m.delaySpinCmdIfNeeded()
+		return m, m.delayCmds()
 	case startDelaySpinMsg:
 		if typed.gen != m.delaySpinGen || !m.hasTesting() {
 			if typed.gen == m.delaySpinGen {
@@ -205,7 +213,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	case "enter":
 		return m, m.selectFocused()
 	case "t":
-		return m, tea.Batch(m.testNode(m.focus.Node), m.delaySpinCmdIfNeeded())
+		return m, m.testFocused()
 	}
 	return m, nil
 }
@@ -376,35 +384,116 @@ func (m *Model) selectFocused() tea.Cmd {
 	}
 }
 
-func (m *Model) testNode(node string) tea.Cmd {
-	if m.client == nil || node == "" {
-		return nil
+func (m *Model) groupNameSet() map[string]struct{} {
+	names := make(map[string]struct{}, len(m.groups))
+	for _, group := range m.groups {
+		names[group.Name] = struct{}{}
 	}
-	m.delays[node] = DelayState{Kind: DelayTesting}
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		result, err := m.client.DelayProxy(ctx, node, protocol.DelayTestRequest{URL: delayTestURL, TimeoutMilliseconds: delayTimeout})
-		return delayResultMsg{node: node, delay: result.Delays[node], err: err}
-	}
+	return names
 }
 
-func (m *Model) testAll() tea.Cmd {
+func (m *Model) delayTestLeaves() []string {
+	skip := m.groupNameSet()
 	seen := make(map[string]struct{})
-	commands := make([]tea.Cmd, 0)
+	var leaves []string
 	for _, group := range m.groups {
 		for _, node := range group.Nodes {
-			if _, exists := seen[node.Name]; exists {
+			if _, isGroup := skip[node.Name]; isGroup {
+				continue
+			}
+			if _, dup := seen[node.Name]; dup {
 				continue
 			}
 			seen[node.Name] = struct{}{}
-			commands = append(commands, m.testNode(node.Name))
+			leaves = append(leaves, node.Name)
 		}
 	}
-	if spin := m.delaySpinCmdIfNeeded(); spin != nil {
-		commands = append(commands, spin)
+	return leaves
+}
+
+func (m *Model) startDelay(name string) tea.Cmd {
+	gen := m.delayTestGen
+	if m.inFlight == nil {
+		m.inFlight = make(map[string]uint64)
 	}
-	return tea.Batch(commands...)
+	m.inFlight[name] = gen
+	m.delays[name] = DelayState{Kind: DelayTesting}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		result, err := m.client.DelayProxy(ctx, name, protocol.DelayTestRequest{})
+		delay := uint16(0)
+		if err == nil {
+			delay = result.Delays[name]
+		}
+		return delayResultMsg{node: name, delay: delay, err: err, gen: gen}
+	}
+}
+
+func (m *Model) fillSlots() []tea.Cmd {
+	var cmds []tea.Cmd
+	for len(m.inFlight) < delayTestConcurrency {
+		name, ok := m.popNextQueuedName()
+		if !ok {
+			break
+		}
+		cmds = append(cmds, m.startDelay(name))
+	}
+	return cmds
+}
+
+func (m *Model) delayCmds() tea.Cmd {
+	cmds := m.fillSlots()
+	if spin := m.delaySpinCmdIfNeeded(); spin != nil {
+		cmds = append(cmds, spin)
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *Model) popNextQueuedName() (string, bool) {
+	for i, name := range m.queue {
+		if _, flying := m.inFlight[name]; flying {
+			continue
+		}
+		m.queue = append(m.queue[:i], m.queue[i+1:]...)
+		return name, true
+	}
+	return "", false
+}
+
+func (m *Model) enqueueFront(name string) {
+	next := make([]string, 0, len(m.queue)+1)
+	next = append(next, name)
+	for _, existing := range m.queue {
+		if existing != name {
+			next = append(next, existing)
+		}
+	}
+	m.queue = next
+}
+
+func (m *Model) testAll() tea.Cmd {
+	m.delayTestGen++
+	m.queue = m.delayTestLeaves()
+	return m.delayCmds()
+}
+
+func (m *Model) testNode(node string) tea.Cmd {
+	if node == "" {
+		return nil
+	}
+	if _, isGroup := m.groupNameSet()[node]; isGroup {
+		return nil
+	}
+	if _, flying := m.inFlight[node]; flying {
+		return nil
+	}
+	m.enqueueFront(node)
+	return m.delayCmds()
+}
+
+func (m *Model) testFocused() tea.Cmd {
+	return m.testNode(m.focus.Node)
 }
 
 func (m *Model) hasTesting() bool {
@@ -428,13 +517,28 @@ func (m *Model) delaySpinCmdIfNeeded() tea.Cmd {
 	return func() tea.Msg { return startDelaySpinMsg{gen: gen} }
 }
 
+func classifyDelayError(err error) DelayKind {
+	var api protocol.APIError
+	if errors.As(err, &api) && api.Code == protocol.CodeInvalidArgument {
+		return DelayInvalid
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return DelayTimeout
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return DelayTimeout
+	}
+	return DelayFailed
+}
+
 // delayStyle maps latency state onto the theme color ladder.
-// Bands (ms): <100 good, 100–399 mid, ≥400 bad; timeout → DelayBad; untested → Muted; testing → Warning.
+// Bands (ms): <100 good, 100–399 mid, ≥400 bad; timeout/failed/invalid → DelayBad; untested → Muted; testing → Warning.
 func delayStyle(theme ui.Theme, delay DelayState) lipgloss.Style {
 	switch delay.Kind {
 	case DelayTesting:
 		return theme.Warning
-	case DelayTimeout:
+	case DelayTimeout, DelayFailed, DelayInvalid:
 		return theme.DelayBad
 	case DelayValue:
 		switch {
@@ -463,6 +567,10 @@ func renderDelay(theme ui.Theme, delay DelayState, now time.Time) string {
 		return style.Render(fmt.Sprintf("%d ms", delay.Milliseconds))
 	case DelayTimeout:
 		return style.Render(ui.TimeoutLabel)
+	case DelayFailed:
+		return style.Render(ui.FailedLabel)
+	case DelayInvalid:
+		return style.Render(ui.ProxyDelayInvalid)
 	default:
 		return style.Render(ui.MissingValue)
 	}

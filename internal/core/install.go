@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 const (
@@ -25,6 +26,11 @@ const (
 )
 
 type Installer struct {
+	// Provenance selects the trusted root route; nil preserves legacy platforms.
+	Provenance      ProvenanceStore
+	GeneratedConfig func(context.Context) (*ConfigCapability, error)
+	Executor        VerifiedExecutor
+
 	HTTPClient   *http.Client
 	APIBase      string
 	Repository   string
@@ -72,6 +78,15 @@ func (i Installer) Install(ctx context.Context, request InstallRequest) (Install
 // 复用，避免在 runtime.Manager 里另持 Runner；判据复用 DetectVersion（含 ParseVersion 版本
 // 格式校验），与 Prepare 的同版本短路同一判据、DRY（design §4.3 实现位置）。
 func (i Installer) DetectVersion(ctx context.Context, binaryPath string) (string, error) {
+	if i.Provenance != nil {
+		v, e := OpenInstalledCore(ctx, i.Provenance)
+		if e != nil {
+			return "", e
+		}
+		defer func() { _ = v.Close() }() // Read-only capability: no pending writes; closure cannot change the operation result.
+		return DetectVerifiedVersion(ctx, v, i.Executor)
+	}
+
 	runner := i.Runner
 	if runner == nil {
 		runner = OSCommandRunner{}
@@ -80,6 +95,8 @@ func (i Installer) DetectVersion(ctx context.Context, binaryPath string) (string
 }
 
 type Candidate struct {
+	trusted *trustedCandidate
+
 	path       string
 	binaryPath string
 	version    string
@@ -100,6 +117,10 @@ func (c *Candidate) Version() string { return c.version }
 func (c *Candidate) Updated() bool { return c.updated }
 
 func (c *Candidate) Commit() (InstallResult, error) {
+	if c.trusted != nil {
+		return c.commitTrusted()
+	}
+
 	if !c.updated {
 		return InstallResult{Version: c.version, Updated: false, AlphaSHA: c.alphaSHA}, nil
 	}
@@ -110,13 +131,18 @@ func (c *Candidate) Commit() (InstallResult, error) {
 		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core binary directory"}
 	}
 	if err := replaceBinary(c.path, c.binaryPath); err != nil {
-		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "replace mihomo core"}
+		return InstallResult{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "replace mihomo core"}, err)
 	}
 	c.path = ""
 	return InstallResult{Version: c.version, Updated: true, AlphaSHA: c.alphaSHA}, nil
 }
 
 func (c *Candidate) Cleanup() {
+	if c.trusted != nil {
+		c.cleanupTrusted()
+		return
+	}
+
 	c.cleanup.Do(func() {
 		if c.path != "" {
 			_ = os.Remove(c.path)
@@ -127,6 +153,11 @@ func (c *Candidate) Cleanup() {
 // localReadyVersion 在二进制存在且 DetectVersion（含 ParseVersion）成功时返回版本。
 // 判据与 Manager.Install setup 预检同一路径（design §4.3）；失败则走下载修复。
 func (i Installer) localReadyVersion(ctx context.Context, binaryPath string) (string, bool) {
+	if i.Provenance != nil {
+		v, e := i.DetectVersion(ctx, binaryPath)
+		return v, e == nil && v != ""
+	}
+
 	info, err := os.Stat(binaryPath)
 	if err != nil || info.IsDir() {
 		return "", false
@@ -143,6 +174,10 @@ func (i Installer) localReadyVersion(ctx context.Context, binaryPath string) (st
 }
 
 func (i Installer) Prepare(ctx context.Context, request InstallRequest) (PreparedCore, error) {
+	if i.Provenance != nil {
+		return i.prepareTrusted(ctx, request)
+	}
+
 	checkCtx, cancel := context.WithTimeout(ctx, i.checkTimeout())
 	release, err := i.LatestRelease(checkCtx, request.Channel)
 	cancel()
@@ -231,7 +266,7 @@ func (i Installer) Download(ctx context.Context, asset Asset, destination string
 	request.Header.Set("User-Agent", "mihari")
 	response, err := i.httpClient().Do(request)
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download mihomo core failed"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download mihomo core failed"}, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -245,7 +280,7 @@ func (i Installer) Download(ctx context.Context, asset Asset, destination string
 	written, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, maxCoreArchiveSize+1))
 	closeErr := file.Close()
 	if copyErr != nil || closeErr != nil {
-		return protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "save mihomo core download failed"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "save mihomo core download failed"}, errors.Join(copyErr, closeErr))
 	}
 	if written > maxCoreArchiveSize || (asset.Size > 0 && written != asset.Size) {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo asset size mismatch"}
@@ -360,8 +395,8 @@ func (i Installer) checkTimeout() time.Duration {
 func withAIOHint(err error) error {
 	var apiError protocol.APIError
 	if errors.As(err, &apiError) && apiError.Code == protocol.CodeNetworkFailure {
-		apiError.Message += "；若处于无网/受限网络环境，请使用 all-in-one 安装脚本（install-aio-remote.sh / .ps1）离线安装"
-		return apiError
+		apiError.Message += "; for offline or restricted networks, use the all-in-one installer (install-aio-remote.sh / .ps1)"
+		return diagnostics.Wrap(apiError, err)
 	}
 	return err
 }

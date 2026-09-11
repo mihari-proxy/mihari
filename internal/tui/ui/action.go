@@ -1,5 +1,7 @@
 package ui
 
+import "github.com/mihari-proxy/mihari/internal/update"
+
 import tea "charm.land/bubbletea/v2"
 
 type Action string
@@ -32,6 +34,7 @@ const (
 	ActionServiceStart            Action = "service-start"
 	ActionServiceStop             Action = "service-stop"
 	ActionServiceRestart          Action = "service-restart"
+	ActionCompleteUninstall       Action = "complete-uninstall"
 	ActionEnableSystemProxy       Action = "enable-system-proxy"
 	ActionForceSystemProxy        Action = "force-system-proxy"
 	ActionDisableSystemProxy      Action = "disable-system-proxy"
@@ -43,7 +46,9 @@ const (
 // RelaunchRequestMsg asks the root shell to exit and enter the replacement TUI.
 // Warning must already be sanitized for display after terminal restoration.
 type RelaunchRequestMsg struct {
-	Warning string
+	Prepared       *update.PreparedUpdate
+	PreparationKey string
+	Warning        string
 }
 
 // PageResultMsg routes asynchronous page-owned work back to its originating page.
@@ -62,7 +67,12 @@ type ActionIntentMsg struct {
 	Impact     string
 	Rollback   string
 	Execute    tea.Cmd
+	Cancel     tea.Cmd
 }
+
+// CompleteUninstallConfirmedMsg marks an explicitly confirmed full uninstall.
+// The root shell exits before invoking the local app use case.
+type CompleteUninstallConfirmedMsg struct{}
 
 // ActionPendingMsg is delivered to the target page when a confirmed action begins
 // executing, so pages can show row-local progress (braille + note) before the result.
@@ -106,3 +116,6 @@ func GlobalStateLabel(state GlobalState) string {
 		return ""
 	}
 }
+
+// DiscardPreparedUpdateMsg returns candidate cleanup to its Run owner.
+type DiscardPreparedUpdateMsg struct{ Prepared update.PreparedUpdate }

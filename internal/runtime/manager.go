@@ -3,7 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"log/slog"
 	"net/netip"
 	"path/filepath"
 	"sync"
@@ -12,6 +12,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/core"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/geoip"
 	"github.com/mihari-proxy/mihari/internal/mihomo"
 	"github.com/mihari-proxy/mihari/internal/onboarding"
@@ -74,6 +75,8 @@ type GeoIPService interface {
 }
 
 type Options struct {
+	TrustedCore *core.TrustedExecution
+
 	Store          *state.Store
 	Coordinator    *state.Coordinator
 	Installer      CoreInstaller
@@ -114,13 +117,23 @@ type Options struct {
 	// SaveSettings persists an independently prepared settings candidate.
 	// Nil uses config.SaveWithCommit.
 	SaveSettings func(string, config.Settings) (config.CommitResult, error)
+	// DiagnosticReporter records internal diagnostics for actual operation execution.
+	DiagnosticReporter diagnostics.Reporter
 	// ServiceStatus reports the OS service registration state for onboarding review.
 	// Optional; nil reports "unknown". Injected as a func (not *service.Manager) to keep
 	// runtime free of the service package and break the main↔daemon assembly cycle.
 	ServiceStatus func() (string, error)
+	// InstallationStatus is a read-only app inspector; nil reports unknown.
+	InstallationStatus func(context.Context) (protocol.InstallationStatus, error)
 	// OnBackgroundError receives non-cancellation failures from the web gateway
 	// and owned scheduler. Optional; nil keeps the previous discard behavior.
 	OnBackgroundError func(component string, err error)
+	// ValidationMode is the no-business install-validation daemon. It refuses
+	// mutation, background refresh, and core start.
+	ValidationMode bool
+	// ActivationPhase is the durable install journal phase. Empty means no Unix
+	// install journal (Windows / non-root private / already complete).
+	ActivationPhase string
 }
 
 // WebGateway is the loopback HTTP server for panel hosting and API proxying.
@@ -131,6 +144,8 @@ type WebGateway interface {
 }
 
 type Manager struct {
+	trustedCore *core.TrustedExecution
+
 	store                     *state.Store
 	coordinator               *state.Coordinator
 	installer                 CoreInstaller
@@ -160,13 +175,19 @@ type Manager struct {
 	settingsPath              string
 	saveSettings              func(string, config.Settings) (config.CommitResult, error)
 	serviceStatus             func() (string, error)
+	installationStatus        func(context.Context) (protocol.InstallationStatus, error)
 	onBackgroundError         func(component string, err error)
+	diagnosticReporter        diagnostics.Reporter
+	validationMode            bool
+	activationPhase           string
 	settingsMu                sync.RWMutex
+	configGeneration          uint64
 	tunLastError              string
 	maintenance               chan struct{}
 	installed                 chan struct{}
 	closing                   atomic.Bool
 	mutationDegraded          atomic.Bool
+	stopCoreOnUnlock          atomic.Bool
 	running                   atomic.Bool
 	operationsMu              sync.Mutex
 	operations                map[string]*operationEntry
@@ -218,38 +239,44 @@ func New(options Options) *Manager {
 		settings = config.Defaults()
 	}
 	manager := &Manager{
-		store:             store,
-		coordinator:       coordinator,
-		installer:         options.Installer,
-		installRequest:    options.InstallRequest,
-		supervisor:        options.Supervisor,
-		controller:        options.Controller,
-		binaryExists:      binaryExists,
-		subscriptions:     options.Subscriptions,
-		preferences:       options.Preferences,
-		settings:          settings,
-		runtimeConfig:     options.RuntimeConfig,
-		stagingDir:        options.StagingDir,
-		validateConfig:    options.ValidateConfig,
-		runScheduler:      options.RunScheduler,
-		geoip:             options.GeoIP,
-		prepareGeoIP:      options.PrepareGeoIP,
-		onboarding:        options.Onboarding,
-		logging:           options.Logging,
-		refreshLogSecrets: options.RefreshLogSecrets,
-		panels:            options.Panels,
-		webGateway:        options.WebGateway,
-		webOpenToken:      options.WebOpenToken,
-		sysProxy:          sysProxy,
-		tunDetect:         tunDetect,
-		lookupOccupant:    lookupOccupant,
-		settingsPath:      options.SettingsPath,
-		saveSettings:      saveSettings,
-		serviceStatus:     options.ServiceStatus,
-		onBackgroundError: options.OnBackgroundError,
-		maintenance:       make(chan struct{}, 1),
-		installed:         make(chan struct{}, 1),
-		operations:        make(map[string]*operationEntry),
+		trustedCore: options.TrustedCore,
+
+		store:              store,
+		coordinator:        coordinator,
+		installer:          options.Installer,
+		installRequest:     options.InstallRequest,
+		supervisor:         options.Supervisor,
+		controller:         options.Controller,
+		binaryExists:       binaryExists,
+		subscriptions:      options.Subscriptions,
+		preferences:        options.Preferences,
+		settings:           settings,
+		runtimeConfig:      options.RuntimeConfig,
+		stagingDir:         options.StagingDir,
+		validateConfig:     options.ValidateConfig,
+		runScheduler:       options.RunScheduler,
+		geoip:              options.GeoIP,
+		prepareGeoIP:       options.PrepareGeoIP,
+		onboarding:         options.Onboarding,
+		logging:            options.Logging,
+		refreshLogSecrets:  options.RefreshLogSecrets,
+		panels:             options.Panels,
+		webGateway:         options.WebGateway,
+		webOpenToken:       options.WebOpenToken,
+		sysProxy:           sysProxy,
+		tunDetect:          tunDetect,
+		lookupOccupant:     lookupOccupant,
+		settingsPath:       options.SettingsPath,
+		saveSettings:       saveSettings,
+		serviceStatus:      options.ServiceStatus,
+		installationStatus: options.InstallationStatus,
+		onBackgroundError:  options.OnBackgroundError,
+		diagnosticReporter: options.DiagnosticReporter,
+		validationMode:     options.ValidationMode,
+		activationPhase:    options.ActivationPhase,
+		maintenance:        make(chan struct{}, 1),
+		installed:          make(chan struct{}, 1),
+		operations:         make(map[string]*operationEntry),
 	}
 	manager.maintenance <- struct{}{}
 	if manager.subscriptions != nil {
@@ -262,6 +289,13 @@ func New(options Options) *Manager {
 
 func (m *Manager) Run(ctx context.Context) error {
 	defer m.closing.Store(true)
+	if m.validationMode {
+		<-ctx.Done()
+		return nil
+	}
+	if !m.businessMutationAllowed() {
+		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "install activation is required"}
+	}
 	if closer, ok := m.geoip.(interface{ Close() error }); ok {
 		defer func() { _ = closer.Close() }()
 	}
@@ -270,7 +304,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		go func() {
 			defer close(webDone)
 			// Panel/gateway failure must not stop mihomo supervision.
-			m.reportBackground("web-gateway", m.webGateway.Serve(ctx))
+			m.reportBackgroundContext(ctx, "web-gateway", m.webGateway.Serve(ctx))
 		}()
 		defer func() { <-webDone }()
 	}
@@ -279,7 +313,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		schedulerDone := make(chan struct{})
 		go func() {
 			defer close(schedulerDone)
-			m.reportBackground("scheduler", m.runScheduler(schedulerCtx))
+			m.reportBackgroundContext(schedulerCtx, "scheduler", m.runScheduler(schedulerCtx))
 		}()
 		defer func() {
 			cancelScheduler()
@@ -324,13 +358,22 @@ func (m *Manager) Run(ctx context.Context) error {
 }
 
 func (m *Manager) reportBackground(component string, err error) {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	m.reportBackgroundContext(context.Background(), component, err)
+}
+
+func (m *Manager) reportBackgroundContext(ctx context.Context, component string, err error) {
+	if diagnostics.AlreadyReported(err) {
 		return
 	}
-	if m.onBackgroundError == nil {
+	level, emit := diagnostics.FailureLevel(ctx, err)
+	if !emit {
 		return
 	}
-	m.onBackgroundError(component, err)
+	if m.diagnosticReporter != nil {
+		m.diagnosticReporter(ctx, diagnostics.Record{Component: component, Event: "background.failed", Level: level, Err: err})
+	} else if m.onBackgroundError != nil {
+		m.onBackgroundError(component, err)
+	}
 }
 
 func (m *Manager) Observe(observation supervisor.Observation) {
@@ -416,23 +459,7 @@ func (m *Manager) RuleProviders(ctx context.Context) (mihomo.RuleProviders, erro
 }
 
 func (m *Manager) UpdateRuleProvider(ctx context.Context, operation Operation, name string) error {
-	_, err := m.doOperation(ctx, "rule-provider:"+operation.ID, func() (any, error) {
-		if m.controller == nil {
-			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
-		}
-		if err := m.lockMutation(ctx); err != nil {
-			return nil, err
-		}
-		defer m.unlock()
-		_, err := m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
-			if updateErr := m.controller.UpdateRuleProvider(ctx, name); updateErr != nil {
-				return snapshot, updateErr
-			}
-			return snapshot, nil
-		})
-		return struct{}{}, err
-	})
-	return err
+	return m.RefreshProvider(ctx, operation, name)
 }
 
 func (m *Manager) Stream(ctx context.Context, kind mihomo.StreamKind, receive func(json.RawMessage) error) error {
@@ -443,10 +470,11 @@ func (m *Manager) Stream(ctx context.Context, kind mihomo.StreamKind, receive fu
 }
 
 func (m *Manager) Install(ctx context.Context, operation Operation) (core.InstallResult, error) {
-	result, err := m.doOperation(ctx, "install:"+operation.ID, func() (any, error) {
+	result, err := m.doOperation(ctx, "install:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.installer == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "core installer is unavailable"}
 		}
+
 		channel := m.settingsSnapshot().CoreChannel
 		if channel == "" {
 			channel = "stable"
@@ -491,7 +519,7 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 					if !candidate.changed {
 						return nil
 					}
-					if _, err := m.saveSettingsCandidate(candidate); err != nil {
+					if _, err := m.saveSettingsCandidate(ctx, candidate); err != nil {
 						return err
 					}
 					m.publishSettings(candidate)
@@ -517,7 +545,7 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		}
 		defer candidate.Cleanup()
 		var result core.InstallResult
-		if err := func() error {
+		commitWork := func() error {
 			if err := m.lockMutation(ctx); err != nil {
 				return err
 			}
@@ -544,7 +572,7 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 					}
 					return snapshot
 				}
-				if _, err := m.updateSettings(func(settings *config.Settings) error {
+				if _, err := m.updateSettings(ctx, func(settings *config.Settings) error {
 					settings.CoreChannel = channel
 					return nil
 				}); err != nil {
@@ -564,13 +592,25 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 				})
 			}
 			return err
-		}(); err != nil {
+		}
+		if m.trustedCore != nil {
+			maintenance, ok := m.supervisor.(interface {
+				Maintain(context.Context, func() error) error
+			})
+			if !ok {
+				return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "trusted core maintenance unavailable"}
+			}
+			err = maintenance.Maintain(ctx, commitWork)
+		} else {
+			err = commitWork()
+		}
+		if err != nil {
 			return nil, err
 		}
 		if !result.Updated {
 			return result, nil
 		}
-		if m.running.Load() {
+		if m.running.Load() && m.trustedCore == nil {
 			if err := m.supervisor.Restart(ctx); err != nil {
 				return nil, err
 			}
@@ -618,7 +658,7 @@ func (m *Manager) ServiceStatus(context.Context) (protocol.ServiceStatus, error)
 }
 
 func (m *Manager) Restart(ctx context.Context, operation Operation) error {
-	_, err := m.doOperation(ctx, "restart:"+operation.ID, func() (any, error) {
+	_, err := m.doOperation(ctx, "restart:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.supervisor == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo is not running"}
 		}
@@ -635,7 +675,7 @@ func (m *Manager) Restart(ctx context.Context, operation Operation) error {
 }
 
 func (m *Manager) SelectProxy(ctx context.Context, operation Operation, group, name string) error {
-	_, err := m.doOperation(ctx, "select:"+operation.ID, func() (any, error) {
+	_, err := m.doOperation(ctx, "select:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.controller == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
 		}
@@ -648,7 +688,7 @@ func (m *Manager) SelectProxy(ctx context.Context, operation Operation, group, n
 }
 
 func (m *Manager) CloseConnection(ctx context.Context, operation Operation, id string) error {
-	_, err := m.doOperation(ctx, "close:"+operation.ID, func() (any, error) {
+	_, err := m.doOperation(ctx, "close:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.controller == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
 		}
@@ -661,7 +701,7 @@ func (m *Manager) CloseConnection(ctx context.Context, operation Operation, id s
 }
 
 func (m *Manager) CloseAllConnections(ctx context.Context, operation Operation) error {
-	_, err := m.doOperation(ctx, "close-all:"+operation.ID, func() (any, error) {
+	_, err := m.doOperation(ctx, "close-all:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.controller == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
 		}
@@ -712,7 +752,20 @@ func (m *Manager) withMaintenance(ctx context.Context, operation func() error) e
 	return operation()
 }
 
-func (m *Manager) unlock() { m.maintenance <- struct{}{} }
+func (m *Manager) unlock() {
+	stop := m.stopCoreOnUnlock.Swap(false)
+	m.releaseMutation()
+	if stop {
+		if maintenance, ok := m.supervisor.(interface {
+			Maintain(context.Context, func() error) error
+		}); ok {
+			err := maintenance.Maintain(context.Background(), func() error {
+				return protocol.APIError{Code: protocol.CodeDataFailure, Message: "configuration recovery required", Details: map[string]any{"degraded": true}}
+			})
+			m.reportBackground("core-recovery", err)
+		}
+	}
+}
 
 func (m *Manager) checkOpen() error {
 	if m.closing.Load() {
@@ -721,12 +774,36 @@ func (m *Manager) checkOpen() error {
 	return nil
 }
 
-func (m *Manager) doOperation(ctx context.Context, key string, execute func() (any, error)) (any, error) {
+func (m *Manager) doOperation(ctx context.Context, key string, execute func(context.Context) (any, error)) (any, error) {
 	if err := m.checkOpen(); err != nil {
 		return nil, err
 	}
+	executeOnce := func() (any, error) {
+		executionCtx, batch := newOperationDiagnostics(ctx, key)
+		result, err := execute(executionCtx)
+		m.flushDiagnostics(executionCtx, batch)
+		if err != nil && m.diagnosticReporter != nil && !diagnostics.AlreadyReported(err) {
+			if level, emit := diagnostics.FailureLevel(executionCtx, err); emit {
+				m.diagnosticReporter(executionCtx, diagnostics.Record{
+					Component: "runtime",
+					Event:     "operation.failed",
+					Level:     level,
+					Err:       err,
+				})
+				err = diagnostics.MarkReported(err)
+			}
+		}
+		if err == nil && m.diagnosticReporter != nil && operationSuccessKey(key) {
+			m.diagnosticReporter(executionCtx, diagnostics.Record{
+				Component: "runtime",
+				Event:     "operation.succeeded",
+				Level:     slog.LevelInfo,
+			})
+		}
+		return result, err
+	}
 	if key == "" || key[len(key)-1] == ':' {
-		return execute()
+		return executeOnce()
 	}
 	m.operationsMu.Lock()
 	if existing := m.operations[key]; existing != nil {
@@ -752,13 +829,13 @@ func (m *Manager) doOperation(ctx context.Context, key string, execute func() (a
 		}
 		if len(m.operations) >= 256 {
 			m.operationsMu.Unlock()
-			return execute()
+			return executeOnce()
 		}
 	}
 	m.operations[key] = entry
 	m.operationsMu.Unlock()
 
-	entry.result, entry.err = execute()
+	entry.result, entry.err = executeOnce()
 	close(entry.done)
 	return entry.result, entry.err
 }

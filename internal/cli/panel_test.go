@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 )
 
 type fakePanelClient struct {
+	operation   logging.OperationMetadata
 	list        protocol.PanelList
 	lastID      string
 	lastOp      string
@@ -34,27 +36,33 @@ func (f *fakePanelClient) OpenWebGUI(_ context.Context, panelID string) (protoco
 func (f *fakePanelClient) Panels(context.Context) (protocol.PanelList, error) {
 	return f.list, nil
 }
-func (f *fakePanelClient) InstallPanel(_ context.Context, id string, request protocol.PanelInstallRequest) (protocol.MutationResult, error) {
+func (f *fakePanelClient) InstallPanel(ctx context.Context, id string, request protocol.PanelInstallRequest) (protocol.MutationResult, error) {
+	f.operation, _ = logging.OperationFromContext(ctx)
 	f.lastID, f.lastOp, f.installed = id, request.OperationID, f.installed+1
 	return protocol.MutationResult{Schema: "mihari/v1", OperationID: request.OperationID, Revision: 2}, nil
 }
-func (f *fakePanelClient) UpdatePanel(_ context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+func (f *fakePanelClient) UpdatePanel(ctx context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+	f.operation, _ = logging.OperationFromContext(ctx)
 	f.lastID, f.lastOp, f.updated = id, request.OperationID, f.updated+1
 	return protocol.MutationResult{Schema: "mihari/v1", OperationID: request.OperationID, Revision: 3}, nil
 }
-func (f *fakePanelClient) ActivatePanel(_ context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+func (f *fakePanelClient) ActivatePanel(ctx context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+	f.operation, _ = logging.OperationFromContext(ctx)
 	f.lastID, f.lastOp, f.activated = id, request.OperationID, f.activated+1
 	return protocol.MutationResult{Schema: "mihari/v1", OperationID: request.OperationID, Revision: 4}, nil
 }
-func (f *fakePanelClient) RollbackPanel(_ context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+func (f *fakePanelClient) RollbackPanel(ctx context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+	f.operation, _ = logging.OperationFromContext(ctx)
 	f.lastID, f.lastOp, f.rolledBack = id, request.OperationID, f.rolledBack+1
 	return protocol.MutationResult{Schema: "mihari/v1", OperationID: request.OperationID, Revision: 5}, nil
 }
-func (f *fakePanelClient) UninstallPanel(_ context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+func (f *fakePanelClient) UninstallPanel(ctx context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+	f.operation, _ = logging.OperationFromContext(ctx)
 	f.lastID, f.lastOp, f.uninstalled = id, request.OperationID, f.uninstalled+1
 	return protocol.MutationResult{Schema: "mihari/v1", OperationID: request.OperationID, Revision: 6}, nil
 }
-func (f *fakePanelClient) ReinstallPanel(_ context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+func (f *fakePanelClient) ReinstallPanel(ctx context.Context, id string, request protocol.MutationRequest) (protocol.MutationResult, error) {
+	f.operation, _ = logging.OperationFromContext(ctx)
 	f.lastID, f.lastOp, f.reinstalled = id, request.OperationID, f.reinstalled+1
 	return protocol.MutationResult{Schema: "mihari/v1", OperationID: request.OperationID, Revision: 7}, nil
 }
@@ -138,5 +146,24 @@ func TestPanelOpenDoesNotPrintToken(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "token") || strings.Contains(stdout.String(), "super-secret") {
 		t.Fatalf("json open printed token: %s", stdout)
+	}
+}
+
+func TestPanelDiagnostic_CLIMetadata(t *testing.T) {
+	for _, action := range []string{"install", "update", "activate", "rollback", "uninstall", "reinstall"} {
+		client := &fakePanelClient{}
+		command := action
+		if action == "activate" {
+			command = "use"
+		}
+		args := []string{"panel", command, "zashboard", "--json"}
+		if action == "rollback" || action == "uninstall" || action == "reinstall" {
+			args = append(args, "--yes")
+		}
+		var out, stderr bytes.Buffer
+		exit := Execute(context.Background(), args, &out, &stderr, Dependencies{PanelClient: client, NewOperationID: func() string { return "business-id" }})
+		if exit != ExitOK || client.operation != (logging.OperationMetadata{ID: "business-id", Name: "panel." + action}) {
+			t.Fatalf("exit=%d stderr=%s metadata=%#v", exit, stderr.String(), client.operation)
+		}
 	}
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/onboarding"
 	"github.com/mihari-proxy/mihari/internal/state"
@@ -187,6 +188,7 @@ func TestLogging_UpdatePreservesFullSettingsValidationFailure(t *testing.T) {
 func TestLogging_UpdateCommitsSavePublishApplyRevisionInOrder(t *testing.T) {
 	var manager *Manager
 	var order []string
+	warning := errors.New(`C:\sensitive\settings.yaml`)
 	runtime := &recordingLoggingRuntime{dir: `C:\absolute\mihari\logs`}
 	runtime.apply = func(_ context.Context, cfg logging.Config) {
 		order = append(order, "apply")
@@ -210,12 +212,12 @@ func TestLogging_UpdateCommitsSavePublishApplyRevisionInOrder(t *testing.T) {
 			if got := saved.EffectiveLogging(); got != (config.LoggingSettings{Level: "debug", MaxSizeMB: 20, MaxFiles: 5}) {
 				t.Fatalf("saved settings=%#v", got)
 			}
-			return config.CommitResult{Committed: true, Warning: errors.New(`C:\sensitive\settings.yaml`)}, nil
+			return config.CommitResult{Committed: true, Warning: warning}, nil
 		},
-		OnBackgroundError: func(component string, err error) {
+		DiagnosticReporter: func(_ context.Context, record diagnostics.Record) {
 			order = append(order, "warning")
-			if component != "settings" || err.Error() != "parent directory sync failed after commit" {
-				t.Fatalf("warning component=%q err=%v", component, err)
+			if record.Component != "settings" || record.Event != "persist.warning" || !errors.Is(record.Err, warning) {
+				t.Fatalf("warning record=%#v", record)
 			}
 		},
 	})
@@ -226,7 +228,7 @@ func TestLogging_UpdateCommitsSavePublishApplyRevisionInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(order, []string{"save", "warning", "apply"}) {
+	if !slices.Equal(order, []string{"save", "apply", "warning"}) {
 		t.Fatalf("order=%v", order)
 	}
 	if got != (protocol.LoggingStatus{Schema: "mihari/v1", Revision: 1, Level: "debug", MaxSizeMB: 20, MaxFiles: 5, Dir: runtime.dir}) {

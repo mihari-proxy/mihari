@@ -5,10 +5,12 @@ import (
 	"errors"
 	"net/netip"
 	"os"
+	"os/exec"
 	"reflect"
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -99,7 +101,24 @@ func ValidateConfig(ctx context.Context, runner CommandRunner, binaryPath, dataD
 		runner = OSCommandRunner{}
 	}
 	if _, err := runner.Run(ctx, binaryPath, "-t", "-d", dataDir, "-f", configPath); err != nil {
-		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo configuration validation failed"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo configuration validation failed"}, err)
+	}
+	return nil
+}
+
+// ValidateVerifiedConfig preserves the selected candidate identity and hash.
+func ValidateVerifiedConfig(ctx context.Context, v *VerifiedCore, c *ConfigCapability, x VerifiedExecutor) error {
+	if _, e := executeVerified(ctx, v, CoreValidate, c, x); e != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var exited *exec.ExitError
+		if errors.As(e, &exited) && exited.ProcessState != nil && exited.Exited() {
+			// A rejected config can echo secrets in stdout/stderr. Keep this
+			// response generic; capability, startup and signal errors retain their class.
+			return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo configuration validation failed"}, e)
+		}
+		return e
 	}
 	return nil
 }

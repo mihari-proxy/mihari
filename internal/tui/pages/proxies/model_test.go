@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -104,6 +106,8 @@ func TestDelayStyle_BandsAndTimeout(t *testing.T) {
 		{"untested", DelayState{Kind: DelayUntested}, "muted"},
 		{"testing", DelayState{Kind: DelayTesting}, "warning"},
 		{"timeout", DelayState{Kind: DelayTimeout}, "bad"},
+		{"failed", DelayState{Kind: DelayFailed}, "bad"},
+		{"invalid", DelayState{Kind: DelayInvalid}, "bad"},
 		{"good_28", DelayState{Kind: DelayValue, Milliseconds: 28}, "good"},
 		{"good_99", DelayState{Kind: DelayValue, Milliseconds: 99}, "good"},
 		{"mid_100", DelayState{Kind: DelayValue, Milliseconds: 100}, "mid"},
@@ -187,19 +191,14 @@ func TestRenderDelay_TestingUsesBrailleSpinner(t *testing.T) {
 }
 
 func TestModel_DelayTimeoutPath(t *testing.T) {
-	client := &fakeClient{delayErr: errors.New("timeout")}
+	client := &fakeClient{delayErr: context.DeadlineExceeded}
 	model := New(client, func() string { return "op" })
 	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{
 		Name: "G", Nodes: []protocol.ProxyNode{{Name: "n1", Type: "ss"}},
 	}}})
 	model.expanded["G"] = true
 	model.focus = FocusID{Group: "G", Node: "n1"}
-	cmd := model.testNode("n1")
-	if cmd == nil {
-		t.Fatal("expected delay command")
-	}
-	updated, _ := model.Update(cmd())
-	model = updated.(*Model)
+	applyProxyCmd(t, model, model.testNode("n1"))
 	if model.delays["n1"].Kind != DelayTimeout {
 		t.Fatalf("delay kind=%v", model.delays["n1"].Kind)
 	}
@@ -213,6 +212,67 @@ func TestModel_DelayTimeoutPath(t *testing.T) {
 		t.Fatalf("Timeout should be styled with DelayBad in view:\n%s", view)
 	}
 }
+
+func TestModel_DelayErrorKindsRender(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"failed", protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo request failed"}, ui.FailedLabel},
+		{"invalid", protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "delay test URL and timeout are invalid"}, ui.ProxyDelayInvalid},
+		{"wrapped timeout", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "local control operation failed"}, context.DeadlineExceeded), ui.TimeoutLabel},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &fakeClient{delayErr: tc.err}
+			model := New(client, func() string { return "op" })
+			model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{
+				Name: "G", Nodes: []protocol.ProxyNode{{Name: "n1", Type: "ss"}},
+			}}})
+			model.expanded["G"] = true
+			model.focus = FocusID{Group: "G", Node: "n1"}
+			applyProxyCmd(t, model, model.testNode("n1"))
+			view := model.View()
+			if !strings.Contains(view, tc.want) {
+				t.Fatalf("view missing %q:\n%s", tc.want, view)
+			}
+			if !themeDelayBadContains(model.theme, view, tc.want) {
+				t.Fatalf("%q should use DelayBad:\n%s", tc.want, view)
+			}
+		})
+	}
+}
+
+func TestClassifyDelayError(t *testing.T) {
+	timeoutNet := timeoutNetError{}
+	cases := []struct {
+		name string
+		err  error
+		kind DelayKind
+	}{
+		{"deadline", context.DeadlineExceeded, DelayTimeout},
+		{"wrapped data_failure deadline", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "local control operation failed"}, context.DeadlineExceeded), DelayTimeout},
+		{"net timeout", timeoutNet, DelayTimeout},
+		{"invalid", protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "delay test URL and timeout are invalid"}, DelayInvalid},
+		{"upstream", protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo request failed"}, DelayFailed},
+		{"canceled", context.Canceled, DelayFailed},
+		{"plain", errors.New("timeout"), DelayFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyDelayError(tc.err); got != tc.kind {
+				t.Fatalf("kind=%v want %v", got, tc.kind)
+			}
+		})
+	}
+}
+
+type timeoutNetError struct{}
+
+func (timeoutNetError) Error() string   { return "i/o timeout" }
+func (timeoutNetError) Timeout() bool   { return true }
+func (timeoutNetError) Temporary() bool { return true }
 
 func themeDelayBadContains(theme ui.Theme, view, label string) bool {
 	return strings.Contains(view, theme.DelayBad.Render(label))
@@ -247,6 +307,201 @@ func TestModel_ControlTTestsEveryUniqueNodeOnce(t *testing.T) {
 	if client.delayCalls["shared"] != 1 || client.delayCalls["only-a"] != 1 || client.delayCalls["only-b"] != 1 {
 		t.Fatalf("calls=%v", client.delayCalls)
 	}
+	if client.lastDelayReq.URL != "" || client.lastDelayReq.TimeoutMilliseconds != 0 {
+		t.Fatalf("req=%#v", client.lastDelayReq)
+	}
+}
+
+func TestModel_DelayRequestOmitsURL(t *testing.T) {
+	client := &fakeClient{delay: 10}
+	model := New(client, func() string { return "op" })
+	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{
+		Name: "G", Nodes: []protocol.ProxyNode{{Name: "n1"}},
+	}}})
+	model.focus = FocusID{Group: "G", Node: "n1"}
+	applyProxyCmd(t, model, updateProxyKey(t, model, tea.KeyPressMsg{Code: 't', Text: "t"}))
+	if client.lastDelayReq.URL != "" || client.lastDelayReq.TimeoutMilliseconds != 0 {
+		t.Fatalf("req=%#v", client.lastDelayReq)
+	}
+}
+
+func TestModel_ControlTSkipsGroupNamesKeepsDIRECT(t *testing.T) {
+	client := &fakeClient{delay: 10}
+	model := New(client, func() string { return "op" })
+	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{
+		{Name: "HK", Type: "URLTest", Nodes: []protocol.ProxyNode{{Name: "leaf"}, {Name: "TW"}, {Name: "DIRECT"}}},
+		{Name: "TW", Type: "Selector", Nodes: []protocol.ProxyNode{{Name: "leaf"}}},
+	}})
+	_, cmd := model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	applyProxyCmd(t, model, cmd)
+	if client.delayCalls["TW"] != 0 || client.delayCalls["HK"] != 0 {
+		t.Fatalf("calls=%v", client.delayCalls)
+	}
+	if client.delayCalls["leaf"] != 1 || client.delayCalls["DIRECT"] != 1 {
+		t.Fatalf("calls=%v", client.delayCalls)
+	}
+}
+
+func leafCmds(t *testing.T, cmd tea.Cmd) []tea.Cmd {
+	t.Helper()
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("want flat BatchMsg, got %T", msg)
+	}
+	var leaves []tea.Cmd
+	for _, child := range batch {
+		leaves = append(leaves, child)
+	}
+	return leaves
+}
+
+func TestModel_ControlTCapsInFlightAtFive(t *testing.T) {
+	started := make(chan string, 16)
+	release := make(chan struct{})
+	client := &fakeClient{delay: 1, started: started, release: release}
+	model := New(client, func() string { return "op" })
+	nodes := make([]protocol.ProxyNode, 7)
+	for i := range nodes {
+		nodes[i] = protocol.ProxyNode{Name: string(rune('a' + i))}
+	}
+	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{Name: "G", Nodes: nodes}}})
+	_, cmd := model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	leaves := leafCmds(t, cmd)
+	var wg sync.WaitGroup
+	for _, worker := range leaves {
+		worker := worker
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = worker()
+		}()
+	}
+	for i := 0; i < 5; i++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for start")
+		}
+	}
+	client.mu.Lock()
+	max := client.maxInProgress
+	calls := len(client.delayCalls)
+	client.mu.Unlock()
+	if max > 5 || calls != 5 {
+		t.Fatalf("max=%d calls=%d", max, calls)
+	}
+	select {
+	case <-started:
+		t.Fatal("started a 6th before release")
+	default:
+	}
+	close(release)
+	wg.Wait()
+}
+
+func TestModel_QueuedNameIsNotTesting(t *testing.T) {
+	model := New(&fakeClient{delay: 1}, func() string { return "op" })
+	nodes := make([]protocol.ProxyNode, 6)
+	for i := range nodes {
+		nodes[i] = protocol.ProxyNode{Name: string(rune('a' + i))}
+	}
+	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{Name: "G", Nodes: nodes}}})
+	model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	testingCount := 0
+	for _, st := range model.delays {
+		if st.Kind == DelayTesting {
+			testingCount++
+		}
+	}
+	if testingCount != 5 {
+		t.Fatalf("testing=%d delays=%v", testingCount, model.delays)
+	}
+	if model.delays[string(rune('a'+5))].Kind == DelayTesting {
+		t.Fatal("queued 6th node must not be Testing")
+	}
+}
+
+func TestModel_TDoesNotReplaceQueueOrDoubleInFlight(t *testing.T) {
+	started := make(chan string, 8)
+	release := make(chan struct{})
+	client := &fakeClient{delay: 1, started: started, release: release}
+	model := New(client, func() string { return "op" })
+	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{
+		Name: "G", Nodes: []protocol.ProxyNode{{Name: "n1"}, {Name: "n2"}},
+	}}})
+	model.focus = FocusID{Group: "G", Node: "n1"}
+	_, cmd := model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	var wg sync.WaitGroup
+	for _, worker := range leafCmds(t, cmd) {
+		worker := worker
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = worker()
+		}()
+	}
+	<-started
+	<-started
+	_, again := model.Update(tea.KeyPressMsg{Code: 't', Text: "t"})
+	if again != nil {
+		if msg := again(); msg != nil {
+			if _, ok := msg.(tea.BatchMsg); ok {
+				t.Fatal("t must not start a second in-flight DelayProxy for n1")
+			}
+		}
+	}
+	client.mu.Lock()
+	n1 := client.delayCalls["n1"]
+	client.mu.Unlock()
+	if n1 != 1 {
+		t.Fatalf("parallel n1 calls=%d", n1)
+	}
+	close(release)
+	wg.Wait()
+}
+
+func TestModel_TDoesNotReplaceUnstartedQueue(t *testing.T) {
+	model := New(&fakeClient{delay: 1}, func() string { return "op" })
+	nodes := make([]protocol.ProxyNode, 7)
+	for i := range nodes {
+		nodes[i] = protocol.ProxyNode{Name: string(rune('a' + i))}
+	}
+	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{Name: "G", Nodes: nodes}}})
+	model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	if len(model.queue) != 2 {
+		t.Fatalf("queue=%d want 2", len(model.queue))
+	}
+	before := append([]string(nil), model.queue...)
+	model.focus = FocusID{Group: "G", Node: string(rune('a'))}
+	model.Update(tea.KeyPressMsg{Code: 't', Text: "t"})
+	if len(model.queue) != 2 || model.queue[0] != before[0] || model.queue[1] != before[1] {
+		t.Fatalf("t replaced Ctrl+T queue: before=%v after=%v", before, model.queue)
+	}
+}
+
+func TestModel_SecondControlTReplacesUnstartedQueue(t *testing.T) {
+	model := New(&fakeClient{delay: 1}, func() string { return "op" })
+	nodes := make([]protocol.ProxyNode, 7)
+	for i := range nodes {
+		nodes[i] = protocol.ProxyNode{Name: string(rune('a' + i))}
+	}
+	model.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{Name: "G", Nodes: nodes}}})
+	model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	if len(model.inFlight) != 5 || len(model.queue) != 2 {
+		t.Fatalf("after first inFlight=%d queue=%d", len(model.inFlight), len(model.queue))
+	}
+	firstQueue := append([]string(nil), model.queue...)
+	model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	if len(model.inFlight) != 5 {
+		t.Fatalf("second Ctrl+T must not start over cap, inFlight=%d", len(model.inFlight))
+	}
+	if len(model.queue) != 7 {
+		t.Fatalf("second Ctrl+T must replace queue with all leaves, queue=%d first=%v now=%v", len(model.queue), firstQueue, model.queue)
+	}
 }
 
 type fakeClient struct {
@@ -257,6 +512,12 @@ type fakeClient struct {
 	delay         uint16
 	delayErr      error
 	delayCalls    map[string]int
+	lastDelayReq  protocol.DelayTestRequest
+	started       chan string
+	release       chan struct{}
+	mu            sync.Mutex
+	inProgress    int
+	maxInProgress int
 }
 
 func (c *fakeClient) SelectProxy(_ context.Context, group string, request protocol.ProxySelectionRequest) (protocol.MutationResult, error) {
@@ -267,11 +528,29 @@ func (c *fakeClient) SelectProxy(_ context.Context, group string, request protoc
 	return protocol.MutationResult{Schema: "mihari/v1", OperationID: request.OperationID}, nil
 }
 
-func (c *fakeClient) DelayProxy(_ context.Context, name string, _ protocol.DelayTestRequest) (protocol.DelayResult, error) {
+func (c *fakeClient) DelayProxy(_ context.Context, name string, req protocol.DelayTestRequest) (protocol.DelayResult, error) {
+	c.mu.Lock()
 	if c.delayCalls == nil {
 		c.delayCalls = make(map[string]int)
 	}
 	c.delayCalls[name]++
+	c.lastDelayReq = req
+	c.inProgress++
+	if c.inProgress > c.maxInProgress {
+		c.maxInProgress = c.inProgress
+	}
+	started := c.started
+	release := c.release
+	c.mu.Unlock()
+	if started != nil {
+		started <- name
+	}
+	if release != nil {
+		<-release
+	}
+	c.mu.Lock()
+	c.inProgress--
+	c.mu.Unlock()
 	if c.delayErr != nil {
 		return protocol.DelayResult{}, c.delayErr
 	}

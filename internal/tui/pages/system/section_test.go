@@ -20,15 +20,16 @@ func TestRows_LoggingSectionPrecedesAboutAndIsUnavailableOffline(t *testing.T) {
 	}
 
 	loggingStart := slices.Index(ids, rowLogLevel)
+	maintenance := slices.Index(ids, rowCompleteUninstall)
 	about := slices.Index(ids, rowAbout)
-	if loggingStart < 0 || about < 0 {
+	if loggingStart < 0 || maintenance < 0 || about < 0 {
 		t.Fatalf("missing boundary rows: %v", ids)
 	}
 	want := []string{"log-level", "log-max-size", "log-max-files", "log-directory", "log-export"}
-	if got := ids[loggingStart:about]; !slices.Equal(got, want) {
+	if got := ids[loggingStart:maintenance]; !slices.Equal(got, want) {
 		t.Fatalf("logging rows before About = %v, want %v", got, want)
 	}
-	for _, item := range rows[loggingStart : about-1] {
+	for _, item := range rows[loggingStart : maintenance-1] {
 		if item.section != "Logging" || item.value != ui.UnavailableTitle {
 			t.Fatalf("offline logging row = %#v", item)
 		}
@@ -83,15 +84,15 @@ func TestView_SectionGroups(t *testing.T) {
 	if !strings.Contains(view, "╭") || !strings.Contains(view, "╰") {
 		t.Fatalf("missing section borders:\n%s", view)
 	}
-	// Daemon now absorbs the endpoint and Run Setup rows; the standalone
-	// Maintenance and Local endpoints cards are gone.
-	for _, title := range []string{ui.DaemonSectionTitle, ui.CoreSectionTitle, ui.SystemServiceSectionTitle} {
+	// Daemon absorbs the endpoint and Run Setup rows. Maintenance remains a
+	// separate, single-row section between Logging and About.
+	for _, title := range []string{ui.DaemonSectionTitle, ui.CoreSectionTitle, ui.SystemServiceSectionTitle, ui.MaintenanceSectionTitle} {
 		if !strings.Contains(view, title) {
 			t.Fatalf("missing section title %q:\n%s", title, view)
 		}
 	}
-	if strings.Contains(view, ui.MaintenanceSectionTitle) {
-		t.Fatalf("Maintenance section should be merged into Daemon:\n%s", view)
+	if !strings.Contains(view, ui.CompleteUninstallLabel) {
+		t.Fatalf("Maintenance does not expose complete uninstall:\n%s", view)
 	}
 	if !strings.Contains(view, ui.RunSetupLabel) || !strings.Contains(view, ui.PortsConfigSectionTitle) {
 		t.Fatalf("ports/daemon rows missing labels:\n%s", view)

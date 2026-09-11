@@ -128,9 +128,21 @@ func TestClientRuntimeRequests(t *testing.T) {
 			},
 		},
 		{
+			name: "update escaped proxy provider", method: http.MethodPut, path: "/providers/proxies/AI%2FSearch", statusCode: http.StatusNoContent,
+			invoke: func(ctx context.Context, client *Client) error {
+				return client.UpdateProxyProvider(ctx, "AI/Search")
+			},
+		},
+		{
 			name: "reload", method: http.MethodPut, path: "/configs", query: url.Values{"force": {"true"}}, body: `{"path":"C:\\managed\\config.yaml"}`,
 			invoke: func(ctx context.Context, client *Client) error {
 				return client.Reload(ctx, `C:\managed\config.yaml`, true)
+			},
+		},
+		{
+			name: "reload startup config", method: http.MethodPut, path: "/configs", query: url.Values{"force": {"true"}}, body: `{"path":""}`,
+			invoke: func(ctx context.Context, client *Client) error {
+				return client.Reload(ctx, "", true)
 			},
 		},
 		{
@@ -243,5 +255,22 @@ func TestClientClassifiesErrorsAndBoundsResponses(t *testing.T) {
 				t.Fatalf("err=%v want=%s", err, test.want)
 			}
 		})
+	}
+}
+
+func TestProxyJSONDecodesTestURL(t *testing.T) {
+	var got Proxy
+	if err := json.Unmarshal([]byte(`{"name":"HK","type":"URLTest","testUrl":"https://cp.cloudflare.com/generate_204"}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "HK" || got.Type != "URLTest" || got.TestURL != "https://cp.cloudflare.com/generate_204" {
+		t.Fatalf("got=%#v", got)
+	}
+	var empty Proxy
+	if err := json.Unmarshal([]byte(`{"name":"HK","type":"Selector"}`), &empty); err != nil {
+		t.Fatal(err)
+	}
+	if empty.TestURL != "" {
+		t.Fatalf("TestURL=%q", empty.TestURL)
 	}
 }

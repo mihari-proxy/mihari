@@ -133,5 +133,7 @@ func (r *failureReporter) Report(class FailureClass, err error) {
 	if msg != "" {
 		line += ": " + msg
 	}
+	// This independent outlet is the final fallback. Retrying its own failure
+	// through logging would recurse; the existing rate window still applies.
 	_, _ = io.WriteString(r.out, line+"\n")
 }

@@ -221,6 +221,24 @@ func validateMMDB(path string) error {
 	return reader.Verify()
 }
 
+// ValidateMMDBFile verifies a MaxMind database with the downloader's validator.
+func ValidateMMDBFile(path string) error {
+	return validateMMDB(path)
+}
+
+// MatchSHA256 reports whether data matches an expected lowercase hex digest.
+func MatchSHA256(data []byte, expected string) error {
+	want, err := parseExpectedSHA256(expected)
+	if err != nil {
+		return err
+	}
+	got := sha256.Sum256(data)
+	if got != want {
+		return errors.New("geoip candidate checksum mismatch")
+	}
+	return nil
+}
+
 // Commit activates the candidate while retaining the previous file.
 func (c *FileCandidate) Commit() error {
 	if c == nil || c.staged == "" || c.destination == "" {
@@ -240,14 +258,14 @@ func (c *FileCandidate) Commit() error {
 		}
 	}
 	if err := os.Rename(c.staged, c.destination); err != nil {
-		_ = os.Rename(previous, c.destination)
-		return fmt.Errorf("activate geoip database: %w", err)
+		restoreErr := os.Rename(previous, c.destination)
+		return joinUpdateRecovery(fmt.Errorf("activate geoip database: %w", err), restoreErr)
 	}
 	c.committed = true
 	c.staged = ""
 	if err := syncDirectory(filepath.Dir(c.destination)); err != nil {
-		_ = c.Rollback()
-		return fmt.Errorf("sync geoip directory: %w", err)
+		restoreErr := c.Rollback()
+		return joinUpdateRecovery(fmt.Errorf("sync geoip directory: %w", err), restoreErr)
 	}
 	return nil
 }

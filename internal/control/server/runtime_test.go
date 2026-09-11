@@ -18,6 +18,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/geoip"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/mihomo"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 	"github.com/mihari-proxy/mihari/internal/state"
@@ -77,6 +78,95 @@ func TestProxyDelayEndpointTestsOneNode(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.Delays["Node A"] != 42 {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
+}
+
+func TestDelayTestFallsBackToKernelAndDefaultURL(t *testing.T) {
+	cloud := "https://cp.cloudflare.com/generate_204"
+	other := "https://www.gstatic.com/generate_204"
+	proxies := mihomo.Proxies{Proxies: map[string]mihomo.Proxy{
+		"GLOBAL": {Name: "GLOBAL", Type: "Selector", All: []string{"HK", "TW", "leaf"}},
+		"HK":     {Name: "HK", Type: "URLTest", All: []string{"leaf"}, TestURL: cloud},
+		"TW":     {Name: "TW", Type: "URLTest", All: []string{"leaf"}, TestURL: "https://example.com/tw"},
+		"leaf":   {Name: "leaf", Type: "VLESS"},
+		"plain":  {Name: "plain", Type: "Selector", All: []string{"orphan"}, TestURL: ""},
+		"orphan": {Name: "orphan", Type: "Direct"},
+	}}
+
+	t.Run("explicit url wins", func(t *testing.T) {
+		fake := &fakeRuntime{proxies: proxies}
+		postDelay(t, fake, "/v1/proxy-groups/HK/delay-test", `{"url":"https://example.com/ping","timeout_ms":3500}`)
+		if fake.delayedGroup != "HK" || fake.delayedURL != "https://example.com/ping" || fake.delayedTimeout != 3500 {
+			t.Fatalf("fake=%#v", fake)
+		}
+	})
+	t.Run("empty uses group testUrl", func(t *testing.T) {
+		fake := &fakeRuntime{proxies: proxies}
+		postDelay(t, fake, "/v1/proxy-groups/HK/delay-test", `{}`)
+		if fake.delayedURL != cloud || fake.delayedTimeout != 5000 {
+			t.Fatalf("fake=%#v", fake)
+		}
+	})
+	t.Run("leaf uses first parent in GLOBAL.All", func(t *testing.T) {
+		fake := &fakeRuntime{proxies: proxies}
+		postDelay(t, fake, "/v1/proxies/leaf/delay-test", `{}`)
+		if fake.delayedProxy != "leaf" || fake.delayedURL != cloud {
+			t.Fatalf("fake=%#v", fake)
+		}
+	})
+	t.Run("no kernel url uses default", func(t *testing.T) {
+		fake := &fakeRuntime{proxies: proxies}
+		postDelay(t, fake, "/v1/proxies/orphan/delay-test", `{}`)
+		if fake.delayedURL != other {
+			t.Fatalf("url=%q", fake.delayedURL)
+		}
+	})
+	t.Run("timeout bounds", func(t *testing.T) {
+		fake := &fakeRuntime{proxies: proxies}
+		rec := postDelayRaw(t, fake, "/v1/proxy-groups/HK/delay-test", `{"timeout_ms":70000}`)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_argument") {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), cloud) {
+			t.Fatalf("leaked url: %s", rec.Body.String())
+		}
+		rec = postDelayRaw(t, fake, "/v1/proxy-groups/HK/delay-test", `{"timeout_ms":-1}`)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("neg status=%d", rec.Code)
+		}
+	})
+	t.Run("proxies failure does not default", func(t *testing.T) {
+		fake := &fakeRuntime{proxiesErr: protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo controller is unavailable"}}
+		rec := postDelayRaw(t, fake, "/v1/proxy-groups/HK/delay-test", `{}`)
+		if rec.Code != http.StatusBadGateway {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		if fake.delayedURL != "" {
+			t.Fatalf("should not call DelayGroup, url=%q", fake.delayedURL)
+		}
+	})
+	t.Run("explicit url skips Proxies", func(t *testing.T) {
+		fake := &fakeRuntime{proxiesErr: protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo controller is unavailable"}}
+		postDelay(t, fake, "/v1/proxy-groups/HK/delay-test", `{"url":"https://example.com/ping","timeout_ms":3500}`)
+		if fake.delayedURL != "https://example.com/ping" || fake.delayedTimeout != 3500 {
+			t.Fatalf("fake=%#v", fake)
+		}
+	})
+}
+
+func postDelay(t *testing.T, fake *fakeRuntime, path, body string) {
+	t.Helper()
+	rec := postDelayRaw(t, fake, path, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func postDelayRaw(t *testing.T, fake *fakeRuntime, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: fake})
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, authorizedRequest(http.MethodPost, path, bytes.NewBufferString(body)))
+	return rec
 }
 
 func TestInstallAndQueryEndpoints(t *testing.T) {
@@ -195,6 +285,39 @@ func TestProxiesPreservesGLOBALAllOrder(t *testing.T) {
 		if groups[i].Name != name {
 			t.Fatalf("order[%d]=%q want %q full=%v", i, groups[i].Name, name, groupNames(groups))
 		}
+	}
+}
+
+func TestProxiesMapsGroupTestURL(t *testing.T) {
+	fake := &fakeRuntime{proxies: mihomo.Proxies{Proxies: map[string]mihomo.Proxy{
+		"GLOBAL": {Name: "GLOBAL", Type: "Selector", Now: "HK", All: []string{"HK", "leaf"}},
+		"HK":     {Name: "HK", Type: "URLTest", Now: "leaf", All: []string{"leaf"}, TestURL: "https://cp.cloudflare.com/generate_204"},
+		"leaf":   {Name: "leaf", Type: "VLESS"},
+	}}}
+	server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: fake})
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, authorizedRequest(http.MethodGet, "/v1/proxies", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var got protocol.ProxyGroups
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Groups) < 1 {
+		t.Fatalf("groups=%#v", got.Groups)
+	}
+	var hk protocol.ProxyGroup
+	for _, group := range got.Groups {
+		if group.Name == "HK" {
+			hk = group
+		}
+	}
+	if hk.TestURL != "https://cp.cloudflare.com/generate_204" {
+		t.Fatalf("HK=%#v", hk)
+	}
+	if strings.Contains(response.Body.String(), `"test_url":"https://cp.cloudflare.com/generate_204"`) == false {
+		t.Fatalf("body=%s", response.Body.String())
 	}
 }
 
@@ -334,16 +457,21 @@ type fakeRuntime struct {
 	capabilities          []string
 	snapshot              state.Snapshot
 	operation             runtimeapi.Operation
+	operationContext      logging.OperationMetadata
 	selectedGroup         string
 	selectedName          string
 	installResult         core.InstallResult
 	proxies               mihomo.Proxies
+	proxiesErr            error
 	connections           mihomo.Connections
 	rules                 mihomo.Rules
 	ruleProviders         mihomo.RuleProviders
 	updatedRuleProvider   string
 	streamMessages        []json.RawMessage
 	delayedProxy          string
+	delayedGroup          string
+	delayedURL            string
+	delayedTimeout        int
 	proxyDelay            uint16
 	geoIPStatus           geoip.Status
 	geoIPRecords          []geoip.Record
@@ -363,17 +491,24 @@ func (f *fakeRuntime) Capabilities() []string { return append([]string(nil), f.c
 
 func (f *fakeRuntime) Snapshot() state.Snapshot { return f.snapshot }
 
-func (f *fakeRuntime) Install(_ context.Context, operation runtimeapi.Operation) (core.InstallResult, error) {
+func (f *fakeRuntime) Install(ctx context.Context, operation runtimeapi.Operation) (core.InstallResult, error) {
 	f.operation = operation
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	return f.installResult, nil
 }
 
-func (f *fakeRuntime) Restart(_ context.Context, operation runtimeapi.Operation) error {
+func (f *fakeRuntime) Restart(ctx context.Context, operation runtimeapi.Operation) error {
 	f.operation = operation
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	return nil
 }
 
-func (f *fakeRuntime) Proxies(context.Context) (mihomo.Proxies, error) { return f.proxies, nil }
+func (f *fakeRuntime) Proxies(context.Context) (mihomo.Proxies, error) {
+	if f.proxiesErr != nil {
+		return mihomo.Proxies{}, f.proxiesErr
+	}
+	return f.proxies, nil
+}
 
 func (f *fakeRuntime) SelectProxy(_ context.Context, operation runtimeapi.Operation, group, name string) error {
 	f.operation = operation
@@ -382,12 +517,13 @@ func (f *fakeRuntime) SelectProxy(_ context.Context, operation runtimeapi.Operat
 	return nil
 }
 
-func (f *fakeRuntime) DelayGroup(context.Context, string, string, int) (mihomo.Delays, error) {
+func (f *fakeRuntime) DelayGroup(_ context.Context, group, testURL string, timeoutMilliseconds int) (mihomo.Delays, error) {
+	f.delayedGroup, f.delayedURL, f.delayedTimeout = group, testURL, timeoutMilliseconds
 	return mihomo.Delays{"DIRECT": 1}, nil
 }
 
-func (f *fakeRuntime) DelayProxy(_ context.Context, name, _ string, _ int) (uint16, error) {
-	f.delayedProxy = name
+func (f *fakeRuntime) DelayProxy(_ context.Context, name, testURL string, timeoutMilliseconds int) (uint16, error) {
+	f.delayedProxy, f.delayedURL, f.delayedTimeout = name, testURL, timeoutMilliseconds
 	return f.proxyDelay, nil
 }
 
@@ -411,7 +547,8 @@ func (f *fakeRuntime) RuleProviders(context.Context) (mihomo.RuleProviders, erro
 	return f.ruleProviders, nil
 }
 
-func (f *fakeRuntime) UpdateRuleProvider(_ context.Context, operation runtimeapi.Operation, name string) error {
+func (f *fakeRuntime) UpdateRuleProvider(ctx context.Context, operation runtimeapi.Operation, name string) error {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.operation = operation
 	f.updatedRuleProvider = name
 	return nil
@@ -432,7 +569,8 @@ func (f *fakeRuntime) LookupGeoIP(context.Context, []netip.Addr) ([]geoip.Record
 	return append([]geoip.Record(nil), f.geoIPRecords...), nil
 }
 
-func (f *fakeRuntime) UpdateGeoIP(_ context.Context, operation runtimeapi.Operation) (geoip.Status, error) {
+func (f *fakeRuntime) UpdateGeoIP(ctx context.Context, operation runtimeapi.Operation) (geoip.Status, error) {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.operation = operation
 	return f.geoIPStatus, nil
 }
@@ -441,13 +579,15 @@ func (f *fakeRuntime) SystemProxyStatus(context.Context) (protocol.SystemProxySt
 	return f.systemProxyStatus, nil
 }
 
-func (f *fakeRuntime) EnableSystemProxy(_ context.Context, operation runtimeapi.Operation, force bool) (protocol.SystemProxyStatus, error) {
+func (f *fakeRuntime) EnableSystemProxy(ctx context.Context, operation runtimeapi.Operation, force bool) (protocol.SystemProxyStatus, error) {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.operation = operation
 	f.systemProxyForce = force
 	return f.systemProxyStatus, nil
 }
 
-func (f *fakeRuntime) DisableSystemProxy(_ context.Context, operation runtimeapi.Operation) (protocol.SystemProxyStatus, error) {
+func (f *fakeRuntime) DisableSystemProxy(ctx context.Context, operation runtimeapi.Operation) (protocol.SystemProxyStatus, error) {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.operation = operation
 	if f.disableSystemProxyErr != nil {
 		return protocol.SystemProxyStatus{}, f.disableSystemProxyErr
@@ -459,7 +599,8 @@ func (f *fakeRuntime) TunStatus(context.Context) (protocol.TunStatus, error) {
 	return f.tunStatus, nil
 }
 
-func (f *fakeRuntime) EnableTun(_ context.Context, operation runtimeapi.Operation, _ bool) (protocol.TunStatus, error) {
+func (f *fakeRuntime) EnableTun(ctx context.Context, operation runtimeapi.Operation, _ bool) (protocol.TunStatus, error) {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.operation = operation
 	if f.enableTunErr != nil {
 		return protocol.TunStatus{}, f.enableTunErr
@@ -467,7 +608,8 @@ func (f *fakeRuntime) EnableTun(_ context.Context, operation runtimeapi.Operatio
 	return f.tunStatus, nil
 }
 
-func (f *fakeRuntime) DisableTun(_ context.Context, operation runtimeapi.Operation) (protocol.TunStatus, error) {
+func (f *fakeRuntime) DisableTun(ctx context.Context, operation runtimeapi.Operation) (protocol.TunStatus, error) {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.operation = operation
 	if f.disableTunErr != nil {
 		return protocol.TunStatus{}, f.disableTunErr
@@ -620,6 +762,33 @@ func TestInstallCoreThreadsRequestSource(t *testing.T) {
 	}
 }
 
+func TestCoreMutationsBindDiagnosticOperationContext(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		path      string
+		body      string
+		operation logging.OperationMetadata
+	}{
+		{name: "install", path: "/v1/core/install", body: `{"operation_id":"install-context"}`, operation: logging.OperationMetadata{ID: "install-context", Name: "core.install"}},
+		{name: "restart", path: "/v1/core/restart", body: `{"operation_id":"restart-context"}`, operation: logging.OperationMetadata{ID: "restart-context", Name: "core.restart"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &fakeRuntime{installResult: core.InstallResult{Version: "v1.19.0"}}
+			server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: fake})
+			recorder := httptest.NewRecorder()
+
+			server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodPost, test.path, bytes.NewBufferString(test.body)))
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if fake.operationContext != test.operation {
+				t.Fatalf("operation context=%#v want=%#v", fake.operationContext, test.operation)
+			}
+		})
+	}
+}
+
 func TestInstallCoreThreadsRequestChannel(t *testing.T) {
 	tests := []struct {
 		name string
@@ -739,4 +908,14 @@ func FuzzDecodeControlJSON(f *testing.F) {
 			}
 		}
 	})
+}
+
+func TestProviderDiagnostic_ServerMetadata(t *testing.T) {
+	fake := &fakeRuntime{}
+	server := New(Options{Token: "token", Runtime: fake, Store: state.NewStore(state.Snapshot{})})
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, authorizedRequest(http.MethodPost, "/v1/rule-providers/native/update", bytes.NewBufferString(`{"operation_id":"business-id"}`)))
+	if response.Code != http.StatusOK || fake.operationContext != (logging.OperationMetadata{ID: "business-id", Name: "rule_provider.refresh"}) {
+		t.Fatalf("status=%d metadata=%#v", response.Code, fake.operationContext)
+	}
 }

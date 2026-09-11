@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -32,32 +33,38 @@ func (f *panelFakeRuntime) WebGUIStatus(context.Context) (protocol.WebGUIStatus,
 func (f *panelFakeRuntime) ListPanels(context.Context) ([]panel.PanelInfo, error) {
 	return append([]panel.PanelInfo(nil), f.panels...), nil
 }
-func (f *panelFakeRuntime) InstallPanel(_ context.Context, op runtimeapi.Operation, id, pin string) error {
+func (f *panelFakeRuntime) InstallPanel(ctx context.Context, op runtimeapi.Operation, id, pin string) error {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.lastOp, f.lastID, f.lastPin = op, id, pin
 	f.snapshot.Revision++
 	return nil
 }
-func (f *panelFakeRuntime) UpdatePanel(_ context.Context, op runtimeapi.Operation, id string) error {
+func (f *panelFakeRuntime) UpdatePanel(ctx context.Context, op runtimeapi.Operation, id string) error {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.lastOp, f.lastID = op, id
 	f.snapshot.Revision++
 	return nil
 }
-func (f *panelFakeRuntime) ActivatePanel(_ context.Context, op runtimeapi.Operation, id string) error {
+func (f *panelFakeRuntime) ActivatePanel(ctx context.Context, op runtimeapi.Operation, id string) error {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.lastOp, f.lastAct = op, id
 	f.snapshot.Revision++
 	return nil
 }
-func (f *panelFakeRuntime) RollbackPanel(_ context.Context, op runtimeapi.Operation, id string) error {
+func (f *panelFakeRuntime) RollbackPanel(ctx context.Context, op runtimeapi.Operation, id string) error {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.lastOp, f.lastID = op, id
 	f.snapshot.Revision++
 	return nil
 }
-func (f *panelFakeRuntime) UninstallPanel(_ context.Context, op runtimeapi.Operation, id string) error {
+func (f *panelFakeRuntime) UninstallPanel(ctx context.Context, op runtimeapi.Operation, id string) error {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.lastOp, f.lastID = op, id
 	f.snapshot.Revision++
 	return nil
 }
-func (f *panelFakeRuntime) ReinstallPanel(_ context.Context, op runtimeapi.Operation, id string) error {
+func (f *panelFakeRuntime) ReinstallPanel(ctx context.Context, op runtimeapi.Operation, id string) error {
+	f.operationContext, _ = logging.OperationFromContext(ctx)
 	f.lastOp, f.lastID = op, id
 	f.snapshot.Revision++
 	return nil
@@ -154,5 +161,22 @@ func TestWebGUIRoutesRequireAuth(t *testing.T) {
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d", response.Code)
+	}
+}
+
+func TestPanelDiagnostic_ServerMetadata(t *testing.T) {
+	for _, action := range []string{"install", "update", "activate", "rollback", "uninstall", "reinstall"} {
+		fake := &panelFakeRuntime{fakeRuntime: &fakeRuntime{}}
+		server := New(Options{Token: "token", Runtime: fake, Store: state.NewStore(state.Snapshot{})})
+		response := httptest.NewRecorder()
+		method, path := http.MethodPost, action
+		if action == "activate" {
+			method = http.MethodPut
+			path = "active"
+		}
+		server.Handler().ServeHTTP(response, authorizedRequest(method, "/v1/panels/zashboard/"+path, bytes.NewBufferString(`{"operation_id":"business-id"}`)))
+		if response.Code != http.StatusOK || fake.operationContext != (logging.OperationMetadata{ID: "business-id", Name: "panel." + action}) {
+			t.Fatalf("status=%d metadata=%#v", response.Code, fake.operationContext)
+		}
 	}
 }

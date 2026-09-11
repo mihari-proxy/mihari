@@ -22,12 +22,12 @@ func (s *Server) onboardingRoutes(mux *http.ServeMux) {
 func (s *Server) onboardingStatus(writer http.ResponseWriter, request *http.Request) {
 	runtime, ok := s.runtime.(onboardingAPI)
 	if !ok {
-		writeControlError(writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "onboarding service is unavailable"})
+		s.writeControlError(request.Context(), writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "onboarding service is unavailable"})
 		return
 	}
 	status, err := runtime.OnboardingStatus(request.Context())
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, onboardingDTO(status))
@@ -36,7 +36,7 @@ func (s *Server) onboardingStatus(writer http.ResponseWriter, request *http.Requ
 func (s *Server) updateOnboarding(writer http.ResponseWriter, request *http.Request) {
 	runtime, ok := s.runtime.(onboardingAPI)
 	if !ok {
-		writeControlError(writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "onboarding service is unavailable"})
+		s.writeControlError(request.Context(), writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "onboarding service is unavailable"})
 		return
 	}
 	var body protocol.OnboardingUpdateRequest
@@ -49,7 +49,7 @@ func (s *Server) updateOnboarding(writer http.ResponseWriter, request *http.Requ
 	}
 	status, err := runtime.UpdateOnboarding(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, onboarding.Update{Complete: body.Complete, MixedAddr: body.MixedAddr, ControllerAddr: body.ControllerAddr, WebAddr: body.WebAddr})
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, onboardingDTO(status))

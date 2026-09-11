@@ -2,20 +2,28 @@ package daemon
 
 import (
 	"context"
+	"net"
 	"time"
 
 	controlserver "github.com/mihari-proxy/mihari/internal/control/server"
 	"github.com/mihari-proxy/mihari/internal/control/transport"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/state"
 )
 
 type Options struct {
-	Endpoint string
-	Token    string
-	Version  string
-	Ready    chan<- struct{}
-	Store    *state.Store
-	Runtime  Runtime
+	SnapshotSource     logging.MachineSnapshotSource
+	DiagnosticReporter diagnostics.Reporter
+	Listen             func(context.Context) (net.Listener, error)
+	OnReady            func() error
+	Endpoint           string
+	Token              string
+	Version            string
+	Ready              chan<- struct{}
+	Store              *state.Store
+	Runtime            Runtime
+	ValidationMode     bool
 }
 
 type Runtime interface {
@@ -23,13 +31,25 @@ type Runtime interface {
 }
 
 func Run(parent context.Context, options Options) error {
+	if options.ValidationMode && (options.Listen == nil || options.OnReady == nil) {
+		return activationRefused()
+	}
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	listener, err := transport.Listen(options.Endpoint)
+	listen := options.Listen
+	if listen == nil {
+		listen = func(context.Context) (net.Listener, error) { return transport.Listen(options.Endpoint) }
+	}
+	listener, err := listen(ctx)
 	if err != nil {
 		return err
 	}
 	defer listener.Close()
+	if options.OnReady != nil {
+		if err := options.OnReady(); err != nil {
+			return err
+		}
+	}
 	if options.Ready != nil {
 		close(options.Ready)
 	}
@@ -49,7 +69,7 @@ func Run(parent context.Context, options Options) error {
 		go func() { runtimeDone <- options.Runtime.Run(ctx) }()
 	}
 	runtimeAPI, _ := options.Runtime.(controlserver.RuntimeAPI)
-	server := controlserver.New(controlserver.Options{Token: options.Token, Store: store, Runtime: runtimeAPI})
+	server := controlserver.New(controlserver.Options{Token: options.Token, Store: store, Runtime: runtimeAPI, SnapshotSource: options.SnapshotSource, DiagnosticReporter: options.DiagnosticReporter})
 	serverError := server.Serve(ctx, listener)
 	cancel()
 	if runtimeDone != nil {

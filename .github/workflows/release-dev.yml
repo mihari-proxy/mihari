@@ -308,6 +308,75 @@ jobs:
               || { echo "::error::unable to upload a missing release asset"; exit 1; }
           done < /tmp/missing-assets
 
+      - name: Ensure installation guidance in release notes
+        run: |
+          NOTES="$(gh release view "${VERSION}" --json body -q .body)"
+          cat > /tmp/install_guidance_dev.md <<'TEMPLATE'
+
+          <!-- install-guidance -->
+          ## **Do not manually download all-in-one packages. We recommend using the installation scripts below for a one-click installation.**
+
+          ## **不建议手动下载all in one，推荐使用下方安装脚本一键完成。**
+          <!-- /install-guidance -->
+          TEMPLATE
+          cat > /tmp/install_guidance_legacy_dev.md <<'TEMPLATE'
+          <!-- install-guidance -->
+          > **Installation:** Use the complete installation commands in the [README](https://github.com/mihari-proxy/mihari/tree/dev#quick-start) or these release notes. Do not download and run individual release assets directly.
+          >
+          > **安装建议：** 请使用 [README](https://github.com/mihari-proxy/mihari/blob/dev/README.zh-CN.md) 或本 Release notes 提供的完整安装命令；不建议单独下载并直接运行 Release assets。
+          <!-- /install-guidance -->
+          TEMPLATE
+          GUIDANCE="$(cat /tmp/install_guidance_dev.md)"
+          START_MARKER='<!-- install-guidance -->'
+          END_MARKER='<!-- /install-guidance -->'
+          has_start=0
+          has_end=0
+          if printf '%s' "$NOTES" | grep -qF "$START_MARKER"; then has_start=1; fi
+          if printf '%s' "$NOTES" | grep -qF "$END_MARKER"; then has_end=1; fi
+          if [ "$has_start" -ne "$has_end" ]; then
+            echo "::error::installation guidance markers are incomplete"
+            exit 1
+          fi
+          if [ "$has_start" -eq 1 ]; then
+            UPDATED_NOTES="$(printf '%s\n' "$NOTES" | awk \
+              -v legacy_file=/tmp/install_guidance_legacy_dev.md \
+              -v guidance_file=/tmp/install_guidance_dev.md '
+                BEGIN {
+                  while ((getline line < legacy_file) > 0) legacy[++legacy_count] = line
+                  close(legacy_file)
+                  while ((getline line < guidance_file) > 0) guidance[++guidance_count] = line
+                  close(guidance_file)
+                }
+                $0 == legacy[1] {
+                  block[1] = $0
+                  block_count = 1
+                  matches_legacy = 1
+                  for (line_number = 2; line_number <= legacy_count; line_number++) {
+                    if ((getline line) <= 0) {
+                      matches_legacy = 0
+                      break
+                    }
+                    block[++block_count] = line
+                    if (line != legacy[line_number]) matches_legacy = 0
+                  }
+                  if (matches_legacy && block_count == legacy_count) {
+                    for (line_number = 1; line_number <= guidance_count; line_number++) print guidance[line_number]
+                  } else {
+                    for (line_number = 1; line_number <= block_count; line_number++) print block[line_number]
+                  }
+                  next
+                }
+                { print }
+              ')"
+            if [ "$UPDATED_NOTES" != "$NOTES" ]; then
+              gh release edit "${VERSION}" --notes "$UPDATED_NOTES"
+              exit 0
+            fi
+            echo "installation guidance already present — skipping"
+            exit 0
+          fi
+          gh release edit "${VERSION}" --notes "$(printf '%s\n%s\n' "$GUIDANCE" "$NOTES")"
+
       - name: Final verify prerelease and stable latest
         run: |
           verify_final_tag_ref() {
@@ -359,6 +428,8 @@ jobs:
           python scripts/release/github_release_policy.py release \
             --document /tmp/final-release.json --version "${VERSION}" \
             --release-name "${DEV_RELEASE_NAME}" --marker "<!-- github-release-dev -->" --mode final
+          jq -e '(.body | contains("<!-- install-guidance -->")) and (.body | contains("<!-- /install-guidance -->"))' /tmp/final-release.json >/dev/null \
+            || { echo "::error::final release is missing installation guidance"; exit 1; }
           download_and_verify_assets
           verify_final_tag_ref
           gh api "repos/${GITHUB_REPOSITORY}/releases/latest" > /tmp/latest-after.json 2> /tmp/latest-after.err \
@@ -439,19 +510,18 @@ jobs:
           cat > /tmp/aio_append_dev.md <<'TEMPLATE'
 
           <!-- aio-install-dev -->
-          ## 国内 prerelease 安装（AList，免 GitHub；覆盖 index，不改默认稳定入口）
+          ## 国内 prerelease 安装（AList，免 GitHub；显式 dev 通道，不改默认稳定入口）
 
           Linux / macOS：
 
           ```bash
-          curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.sh | MIHARI_INDEX_URL=https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt bash
+          curl -fsSL https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.sh | bash -s -- --channel dev
           ```
 
           Windows (PowerShell)：
 
           ```powershell
-          $env:MIHARI_INDEX_URL='https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt'
-          & ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1)))
+          & ([scriptblock]::Create((irm https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/install-aio-remote.ps1))) -Channel dev
           ```
           TEMPLATE
           gh release edit "${VERSION}" --notes "$(printf '%s\n%s\n' "$NOTES" "$(cat /tmp/aio_append_dev.md)")"

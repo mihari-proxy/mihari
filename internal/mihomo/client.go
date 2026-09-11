@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 const maxResponseSize = 4 << 20
@@ -100,6 +101,11 @@ func (c *Client) UpdateRuleProvider(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodPut, "/providers/rules/"+url.PathEscape(name), nil, nil, nil)
 }
 
+// UpdateProxyProvider asks mihomo to reload one managed local proxy provider.
+func (c *Client) UpdateProxyProvider(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodPut, "/providers/proxies/"+url.PathEscape(name), nil, nil, nil)
+}
+
 func (c *Client) Reload(ctx context.Context, path string, force bool) error {
 	query := url.Values{}
 	query.Set("force", strconv.FormatBool(force))
@@ -137,7 +143,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	request, err := http.NewRequestWithContext(ctx, method, requestURL, body)
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeInternal, Message: "create mihomo request"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "create mihomo request"}, err)
 	}
 	request.Header.Set("Authorization", "Bearer "+c.secret)
 	if input != nil {
@@ -146,12 +152,12 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 
 	response, err := c.http.Do(request)
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo controller is unavailable"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo controller is unavailable"}, err)
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseSize+1))
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "read mihomo response"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "read mihomo response"}, err)
 	}
 	if len(raw) > maxResponseSize {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo response is too large"}

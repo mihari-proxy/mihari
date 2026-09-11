@@ -14,6 +14,18 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
+func TestDownloaderDiagnostic_PreservesNetworkCause(t *testing.T) {
+	injected := errors.New("transport fixture failure")
+	err := toAPIError(networkFailureError{cause: injected})
+	var api protocol.APIError
+	if !errors.Is(err, injected) || !errors.As(err, &api) || api.Code != protocol.CodeNetworkFailure {
+		t.Fatal("network error cause or public code lost")
+	}
+	if err.Error() != "subscription download failed" {
+		t.Fatal("public message changed")
+	}
+}
+
 func TestDownloaderConditionalRequestAndNotModified(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("If-None-Match") != `"v1"` || request.Header.Get("If-Modified-Since") != "yesterday" {

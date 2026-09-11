@@ -11,8 +11,10 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/elevate"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -87,6 +89,77 @@ func TestModel_LoggingRowsShowDaemonStateAndLocalWriterHealth(t *testing.T) {
 
 }
 
+func TestModel_LoggingUpdateBindsOperationMetadataInCommandClosure(t *testing.T) {
+	model, client := loggingModel("info", 4)
+	model.ctx = logging.WithOperation(context.Background(), logging.OperationMetadata{ID: "stale", Name: "other.operation"})
+	model.focusID = rowLogLevel
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	observed := loggingObservedFromCommand(t, command)
+	want := logging.OperationMetadata{ID: "logging-op", Name: "logging.update"}
+	if observed.Operation != want {
+		t.Fatalf("observed operation=%#v", observed.Operation)
+	}
+	if len(client.updateLoggingOperations) != 1 || client.updateLoggingOperations[0] != want {
+		t.Fatalf("client operations=%#v", client.updateLoggingOperations)
+	}
+}
+
+func TestModel_LoggingUpdateFailureCarriesImmutableOperationMetadata(t *testing.T) {
+	model, client := loggingModel("info", 4)
+	client.updateLoggingErr = errors.New("logging update failed")
+	model.focusID = rowLogLevel
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	result := firstSystemPageResult(t, command)
+	failure, ok := result.(loggingUpdateResultMsg)
+	if !ok {
+		t.Fatalf("result=%T want loggingUpdateResultMsg", result)
+	}
+	if failure.operation != (logging.OperationMetadata{ID: "logging-op", Name: "logging.update"}) {
+		t.Fatalf("operation=%#v", failure.operation)
+	}
+}
+
+func TestModel_LoggingUpdateOutOfOrderResultsRetainMetadataAndRejectStaleEpoch(t *testing.T) {
+	model, client := loggingModel("info", 4)
+	ids := []string{"logging-one", "logging-two"}
+	model.newOperationID = func() string {
+		id := ids[0]
+		ids = ids[1:]
+		return id
+	}
+	model.focusID = rowLogLevel
+	_, firstCommand := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	first := loggingObservedFromCommand(t, firstCommand)
+
+	updated, _ := model.Update(ui.LoggingSyncMsg{Epoch: 8, Available: false})
+	model = updated.(*Model)
+	updated, _ = model.Update(ui.LoggingSyncMsg{Epoch: 8, Status: client.logging, Available: true})
+	model = updated.(*Model)
+	model.focusID = rowLogLevel
+	_, secondCommand := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	second := loggingObservedFromCommand(t, secondCommand)
+
+	if first.Operation != (logging.OperationMetadata{ID: "logging-one", Name: "logging.update"}) ||
+		second.Operation != (logging.OperationMetadata{ID: "logging-two", Name: "logging.update"}) {
+		t.Fatalf("operations first=%#v second=%#v", first.Operation, second.Operation)
+	}
+	if first.Epoch != 7 || second.Epoch != 8 {
+		t.Fatalf("epochs first=%d second=%d", first.Epoch, second.Epoch)
+	}
+
+	updated, _ = model.Update(first)
+	model = updated.(*Model)
+	if !model.pending || model.loggingPendingEpoch != 8 || model.loggingEpoch != 8 || model.pendingRow != rowLogLevel {
+		t.Fatalf("stale result changed pending state: pending=%v pendingEpoch=%d epoch=%d row=%q", model.pending, model.loggingPendingEpoch, model.loggingEpoch, model.pendingRow)
+	}
+
+	updated, _ = model.Update(second)
+	model = updated.(*Model)
+	if model.pending || model.loggingPendingEpoch != 0 || model.loggingEpoch != 8 {
+		t.Fatalf("current result did not complete state: pending=%v pendingEpoch=%d epoch=%d", model.pending, model.loggingPendingEpoch, model.loggingEpoch)
+	}
+}
+
 func TestModel_LoggingDirectoryEnterCopiesPath(t *testing.T) {
 	model, _ := loggingModel("info", 4)
 	model.focusID = rowLogDirectory
@@ -98,6 +171,56 @@ func TestModel_LoggingDirectoryEnterCopiesPath(t *testing.T) {
 	}
 	if systemRowByID(model, rowLogDirectory).label != "Logging Dir" {
 		t.Fatal("wrong directory label")
+	}
+}
+
+func TestModel_WindowsSingleDirectoryUnchanged(t *testing.T) {
+	model, _ := loggingModel("info", 4)
+	if systemRowByID(model, rowLogDirectory).label != ui.LoggingDirectoryLabel {
+		t.Fatal("windows single-directory label changed")
+	}
+	if systemRowByID(model, rowLogUserDirectory).id != "" || systemRowByID(model, rowLogExportDirectory).id != "" {
+		t.Fatal("windows must not show split logging directories")
+	}
+	if model.rowIndex(rowLogExport) != model.rowIndex(rowLogDirectory)+1 {
+		t.Fatal("export row must follow the single logging directory")
+	}
+}
+
+func TestModel_SplitLoggingDirectoriesKeepMachineDir(t *testing.T) {
+	model, _ := loggingModel("info", 4)
+	machine := model.logging.Dir
+	userDir := `/home/a/.local/state/mihari/logs`
+	exportDir := `/home/a/.local/state/mihari/logs-export`
+	model.SetLoggingLayout(true, userDir, exportDir)
+	if systemRowByID(model, rowLogDirectory).value != machine || systemRowByID(model, rowLogDirectory).label != ui.LoggingMachineDirectoryLabel {
+		t.Fatalf("machine directory=%+v want dir %q", systemRowByID(model, rowLogDirectory), machine)
+	}
+	if systemRowByID(model, rowLogUserDirectory).value != userDir || systemRowByID(model, rowLogUserDirectory).label != ui.LoggingUserDirectoryLabel {
+		t.Fatalf("user directory=%+v", systemRowByID(model, rowLogUserDirectory))
+	}
+	if systemRowByID(model, rowLogExportDirectory).value != exportDir || systemRowByID(model, rowLogExportDirectory).label != ui.LoggingExportDirectoryLabel {
+		t.Fatalf("export directory=%+v", systemRowByID(model, rowLogExportDirectory))
+	}
+	if model.rowIndex(rowLogExport) != model.rowIndex(rowLogExportDirectory)+1 {
+		t.Fatal("export row must follow the default export directory")
+	}
+}
+
+func TestModel_SplitLoggingUnavailableUserTreeIsMemoryOnlyDisplay(t *testing.T) {
+	model, _ := loggingModel("info", 4)
+	machine := model.logging.Dir
+	model.SetLoggingLayout(true, "", "")
+	model.SetLocalLoggingAvailable(false)
+	if systemRowByID(model, rowLogDirectory).value != machine {
+		t.Fatal("LoggingStatus.dir must remain the machine directory")
+	}
+	if systemRowByID(model, rowLogUserDirectory).value != ui.UnavailableTitle || systemRowByID(model, rowLogExportDirectory).value != ui.UnavailableTitle {
+		t.Fatal("unavailable user tree must not invent log paths")
+	}
+	view := model.View()
+	if !strings.Contains(view, ui.LocalFileLogUnavailable) {
+		t.Fatalf("missing in-memory diagnostics marker:\n%s", view)
 	}
 }
 
@@ -855,15 +978,29 @@ func (f *fakeSelfUpdater) Update(_ context.Context, binaryPath, currentVersion, 
 	return f.updateResult, f.updateErr
 }
 
+func (f *fakeSelfUpdater) Prepare(ctx context.Context, binary, current, channel string) (update.PreparedUpdate, error) {
+	r, err := f.Update(ctx, binary, current, channel)
+	version := r.Version
+	if version == "" {
+		version = "v0.4.0"
+	}
+	return update.PreparedUpdate{Version: version, Available: err == nil, Channel: channel, Preview: update.ReplacementPreview{Candidate: update.ReplacementCandidate{Version: version}, Snapshot: update.ReplacementSnapshot{Targets: []update.ReplacementTarget{{Version: current}}}}}, err
+}
+func (*fakeSelfUpdater) ApplyPrepared(context.Context, update.PreparedUpdate) (update.Result, error) {
+	panic("page applied before exit")
+}
+
 type fakeClient struct {
-	onboarding      protocol.OnboardingStatus
-	installCalls    int
-	restartCalls    int
-	lastMutation    protocol.MutationRequest
-	onboardingCalls int
-	coreCalls       int
-	coreStatus      protocol.CoreStatus
-	coreErr         error
+	onboarding         protocol.OnboardingStatus
+	installCalls       int
+	restartCalls       int
+	coreOperations     []logging.OperationMetadata
+	businessOperations []logging.OperationMetadata
+	lastMutation       protocol.MutationRequest
+	onboardingCalls    int
+	coreCalls          int
+	coreStatus         protocol.CoreStatus
+	coreErr            error
 
 	systemProxy       protocol.SystemProxyStatus
 	systemProxyCalls  int
@@ -892,13 +1029,14 @@ type fakeClient struct {
 	lastOnboarding        protocol.OnboardingUpdateRequest
 	updateOnboardingErr   error
 
-	logging             protocol.LoggingStatus
-	loggingCalls        int
-	updateLoggingCalls  int
-	lastLogging         protocol.LoggingUpdateRequest
-	loggingErr          error
-	updateLoggingErr    error
-	updateLoggingResult *protocol.LoggingStatus
+	logging                 protocol.LoggingStatus
+	loggingCalls            int
+	updateLoggingCalls      int
+	updateLoggingOperations []logging.OperationMetadata
+	lastLogging             protocol.LoggingUpdateRequest
+	loggingErr              error
+	updateLoggingErr        error
+	updateLoggingResult     *protocol.LoggingStatus
 }
 
 type fakeService struct {
@@ -912,6 +1050,21 @@ type fakeService struct {
 	statusErr  error
 	controlErr error
 }
+
+type fakeUninstaller struct {
+	targets []app.UninstallTarget
+	err     error
+	calls   int
+}
+
+func (f *fakeUninstaller) Preview(context.Context) ([]app.UninstallTarget, error) {
+	f.calls++
+	return f.targets, f.err
+}
+
+func (*fakeUninstaller) Run(context.Context, func(string)) error { return nil }
+
+func (*fakeUninstaller) RunForce(context.Context, func(string)) error { return nil }
 
 func (f *fakeService) Install() error {
 	f.installs++
@@ -970,7 +1123,9 @@ func (f *fakeClient) Logging(context.Context) (protocol.LoggingStatus, error) {
 	}
 	return f.logging, nil
 }
-func (f *fakeClient) UpdateLogging(_ context.Context, request protocol.LoggingUpdateRequest) (protocol.LoggingStatus, error) {
+func (f *fakeClient) UpdateLogging(ctx context.Context, request protocol.LoggingUpdateRequest) (protocol.LoggingStatus, error) {
+	operation, _ := logging.OperationFromContext(ctx)
+	f.updateLoggingOperations = append(f.updateLoggingOperations, operation)
 	f.updateLoggingCalls++
 	f.lastLogging = request
 	if f.updateLoggingErr != nil {
@@ -1001,13 +1156,17 @@ func (f *fakeClient) Core(context.Context) (protocol.CoreStatus, error) {
 	}
 	return protocol.CoreStatus{Schema: "mihari/v1", Revision: f.onboarding.Revision, Status: "running", Version: "v1.19.0"}, nil
 }
-func (f *fakeClient) InstallCore(_ context.Context, request protocol.MutationRequest) (protocol.CoreInstallResult, error) {
+func (f *fakeClient) InstallCore(ctx context.Context, request protocol.MutationRequest) (protocol.CoreInstallResult, error) {
 	f.installCalls++
+	operation, _ := logging.OperationFromContext(ctx)
+	f.coreOperations = append(f.coreOperations, operation)
 	f.lastMutation = request
 	return protocol.CoreInstallResult{Schema: "mihari/v1", Revision: f.onboarding.Revision + 1, Version: "v1.20.0", Updated: true}, nil
 }
-func (f *fakeClient) RestartCore(_ context.Context, request protocol.MutationRequest) (protocol.MutationResult, error) {
+func (f *fakeClient) RestartCore(ctx context.Context, request protocol.MutationRequest) (protocol.MutationResult, error) {
 	f.restartCalls++
+	operation, _ := logging.OperationFromContext(ctx)
+	f.coreOperations = append(f.coreOperations, operation)
 	f.lastMutation = request
 	return protocol.MutationResult{Schema: "mihari/v1", Revision: f.onboarding.Revision + 1}, nil
 }
@@ -1015,7 +1174,9 @@ func (f *fakeClient) SystemProxy(context.Context) (protocol.SystemProxyStatus, e
 	f.systemProxyCalls++
 	return f.systemProxy, nil
 }
-func (f *fakeClient) EnableSystemProxy(_ context.Context, request protocol.SystemProxyMutationRequest) (protocol.SystemProxyStatus, error) {
+func (f *fakeClient) EnableSystemProxy(ctx context.Context, request protocol.SystemProxyMutationRequest) (protocol.SystemProxyStatus, error) {
+	operation, _ := logging.OperationFromContext(ctx)
+	f.businessOperations = append(f.businessOperations, operation)
 	f.enableProxyCalls++
 	f.lastProxyMutation = request
 	if f.enableProxyErr != nil {
@@ -1032,7 +1193,9 @@ func (f *fakeClient) EnableSystemProxy(_ context.Context, request protocol.Syste
 	f.systemProxy = status
 	return status, nil
 }
-func (f *fakeClient) DisableSystemProxy(_ context.Context, request protocol.SystemProxyMutationRequest) (protocol.SystemProxyStatus, error) {
+func (f *fakeClient) DisableSystemProxy(ctx context.Context, request protocol.SystemProxyMutationRequest) (protocol.SystemProxyStatus, error) {
+	operation, _ := logging.OperationFromContext(ctx)
+	f.businessOperations = append(f.businessOperations, operation)
 	f.disableProxyCalls++
 	f.lastProxyMutation = request
 	if f.disableProxyErr != nil {
@@ -1053,7 +1216,9 @@ func (f *fakeClient) Tun(context.Context) (protocol.TunStatus, error) {
 	f.tunCalls++
 	return f.tun, nil
 }
-func (f *fakeClient) EnableTun(_ context.Context, request protocol.TunMutationRequest) (protocol.TunStatus, error) {
+func (f *fakeClient) EnableTun(ctx context.Context, request protocol.TunMutationRequest) (protocol.TunStatus, error) {
+	operation, _ := logging.OperationFromContext(ctx)
+	f.businessOperations = append(f.businessOperations, operation)
 	f.enableTunCalls++
 	f.lastTunMutation = request
 	if f.enableTunErr != nil {
@@ -1075,7 +1240,9 @@ func (f *fakeClient) EnableTun(_ context.Context, request protocol.TunMutationRe
 	f.tun = status
 	return status, nil
 }
-func (f *fakeClient) DisableTun(_ context.Context, request protocol.TunMutationRequest) (protocol.TunStatus, error) {
+func (f *fakeClient) DisableTun(ctx context.Context, request protocol.TunMutationRequest) (protocol.TunStatus, error) {
+	operation, _ := logging.OperationFromContext(ctx)
+	f.businessOperations = append(f.businessOperations, operation)
 	f.disableTunCalls++
 	f.lastTunMutation = request
 	if f.disableTunErr != nil {
@@ -1181,15 +1348,75 @@ func TestSystemRendersCategorizedRowsWithoutStopDaemon(t *testing.T) {
 			t.Fatalf("missing %q in view=%s", want, view)
 		}
 	}
-	// Maintenance was a single-row section; it is now merged into Daemon.
-	if strings.Contains(view, ui.MaintenanceSectionTitle) {
-		t.Fatalf("Maintenance section should be merged into Daemon: %s", view)
+	maintenance := strings.Index(view, ui.MaintenanceSectionTitle)
+	logging := strings.Index(view, ui.LoggingSectionTitle)
+	about := strings.Index(view, ui.AboutSectionTitle)
+	if maintenance < 0 || logging < 0 || about < 0 || !(logging < maintenance && maintenance < about) {
+		t.Fatalf("Maintenance must be between Logging and About: %s", view)
+	}
+	if got := strings.Count(view, "Completely Uninstall Mihari"); got != 1 {
+		t.Fatalf("complete uninstall rows=%d want=1: %s", got, view)
 	}
 	if strings.Contains(view, "Stop Daemon") {
 		t.Fatalf("system page offered destructive self-stop: %s", view)
 	}
 	if strings.Contains(view, ui.ProxyEndpointLabel) || strings.Contains(view, ui.MihomoCoreAPILabel) {
 		t.Fatalf("daemon must not list address rows: %s", view)
+	}
+}
+
+func TestSystemCompleteUninstall_PreviewsTargetsBeforeConfirmation(t *testing.T) {
+	preview := &fakeUninstaller{targets: []app.UninstallTarget{{Path: "/tmp/mihari-data", Kind: "data"}}}
+	model := New(nil, func() string { return "system-op" })
+	model.SetUninstaller(preview)
+	model.focusID = rowCompleteUninstall
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil || preview.calls != 0 {
+		t.Fatalf("command=%v preview calls=%d", command != nil, preview.calls)
+	}
+	_, command = model.Update(command())
+	if command == nil || preview.calls != 1 {
+		t.Fatalf("command=%v preview calls=%d", command != nil, preview.calls)
+	}
+	intent, ok := command().(ui.ActionIntentMsg)
+	if !ok || intent.Action != ui.ActionCompleteUninstall || intent.Object != "/tmp/mihari-data" || intent.Impact != ui.CompleteUninstallImpact || intent.Key != "system:complete-uninstall" {
+		t.Fatalf("intent=%#v", intent)
+	}
+	second, ok := intent.Execute().(ui.ActionIntentMsg)
+	if !ok || second.Action != ui.ActionCompleteUninstall || second.Object != intent.Object || second.Impact != ui.CompleteUninstallConfirmImpact || second.Key != ui.CompleteUninstallConfirmKey {
+		t.Fatalf("second intent=%#v", second)
+	}
+	if _, ok := second.Execute().(ui.CompleteUninstallConfirmedMsg); !ok {
+		t.Fatalf("second execute=%T", second.Execute())
+	}
+}
+
+func TestSystemCompleteUninstall_PreviewFailureShowsRootError(t *testing.T) {
+	preview := &fakeUninstaller{err: &app.UninstallFileError{Kind: "data", RelativePath: ".", Reason: "symbolic link"}}
+	model := New(nil, func() string { return "system-op" })
+	model.SetUninstaller(preview)
+	model.focusID = rowCompleteUninstall
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("expected preview command")
+	}
+	updated, _ = model.Update(command())
+	model = updated.(*Model)
+	want := "unrecognized symbolic link in data: ."
+	if model.outcomeRow != rowCompleteUninstall || model.outcomeOK || model.outcomeDetail != want {
+		t.Fatalf("outcome=%q ok=%v detail=%q want %q", model.outcomeRow, model.outcomeOK, model.outcomeDetail, want)
+	}
+}
+
+func TestSystemCompleteUninstall_UnavailableUninstallerReportsFailure(t *testing.T) {
+	model := New(nil, func() string { return "system-op" })
+	model.focusID = rowCompleteUninstall
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	if command != nil || model.outcomeRow != rowCompleteUninstall || model.outcomeOK || model.outcomeDetail != ui.CompleteUninstallUnavailable {
+		t.Fatalf("command=%v outcome=%q ok=%v detail=%q", command != nil, model.outcomeRow, model.outcomeOK, model.outcomeDetail)
 	}
 }
 
@@ -1507,6 +1734,34 @@ func TestSystemCoreUpdateAndRestartRequireConfirmationWithCapturedRevision(t *te
 		if test.calls() != 1 || client.lastMutation.IfRevision == nil || *client.lastMutation.IfRevision != 11 || reconcile == nil {
 			t.Fatalf("row=%s calls=%d mutation=%#v", test.id, test.calls(), client.lastMutation)
 		}
+	}
+}
+
+func TestSystemCoreActionsBindAndReturnOperationMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		kind      actionKind
+		operation string
+	}{
+		{name: "update", kind: actionUpdate, operation: "core.install"},
+		{name: "switch channel", kind: actionSwitchChannel, operation: "core.install"},
+		{name: "restart", kind: actionRestart, operation: "core.restart"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeClient{onboarding: protocol.OnboardingStatus{Revision: 7}}
+			model := New(client, func() string { return "unused" })
+			command := model.runAction(actionStartMsg{kind: test.kind, operationID: "core-action", revision: 7, channel: "alpha"})
+
+			message := command().(actionResultMsg)
+
+			want := logging.OperationMetadata{ID: "core-action", Name: test.operation}
+			if len(client.coreOperations) != 1 || client.coreOperations[0] != want {
+				t.Fatalf("operations=%#v want=%#v", client.coreOperations, want)
+			}
+			if message.operation != want || message.err != nil {
+				t.Fatalf("message=%#v", message)
+			}
+		})
 	}
 }
 
@@ -2689,8 +2944,9 @@ func TestSystemMihariAheadEnterDoesNotOfferUpdate(t *testing.T) {
 func TestSystemMihariSkipUpdateKeepsAhead(t *testing.T) {
 	model := New(nil, nil)
 	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.9.0", "mihari", func() bool { return true })
-	updated, _ := model.Update(selfUpdateResultMsg{
-		result: update.Result{Version: "v0.8.2", Updated: false, Ahead: true, Channel: update.ChannelMain},
+	updated, _ := model.Update(preparedMihariResultMsg{
+		channel:  model.currentMihariChannel(),
+		prepared: update.PreparedUpdate{Version: "v0.8.2", Ahead: true, Channel: update.ChannelMain},
 	})
 	model = updated.(*Model)
 	view := model.View()
@@ -2723,9 +2979,8 @@ func TestSystemMihariPrereleaseOnMainOffersOfficialUpdate(t *testing.T) {
 	if command == nil {
 		t.Fatal("available prerelease did not offer confirmation")
 	}
-	intent, ok := command().(ui.ActionIntentMsg)
-	if !ok || intent.Action != ui.ActionUpdateMihari || !strings.Contains(intent.Object, "v0.9.0-dev.8") || !strings.Contains(intent.Object, "v0.8.2") {
-		t.Fatalf("intent=%#v", intent)
+	if _, ok := command().(ui.PageResultMsg); !ok || model.pendingNote != ui.MihariProgressPreparing {
+		t.Fatal("update did not prepare")
 	}
 }
 
@@ -2752,9 +3007,8 @@ func TestSystemMihariOfficialOnDevOffersPrereleaseUpdate(t *testing.T) {
 	if command == nil {
 		t.Fatal("available official did not offer confirmation")
 	}
-	intent, ok := command().(ui.ActionIntentMsg)
-	if !ok || intent.Action != ui.ActionUpdateMihari || !strings.Contains(intent.Object, "v0.8.2") || !strings.Contains(intent.Object, "v0.9.0-dev.8") {
-		t.Fatalf("intent=%#v", intent)
+	if _, ok := command().(ui.PageResultMsg); !ok || model.pendingNote != ui.MihariProgressPreparing {
+		t.Fatal("update did not prepare")
 	}
 }
 
@@ -2835,104 +3089,43 @@ func TestSystemCheckingMihariBlocksOtherRowActions(t *testing.T) {
 
 func TestSystemMihariUpdateOffersConfirmationWhenAvailable(t *testing.T) {
 	model, _ := availableMihariUpdateModel(t, true, update.Result{})
-
-	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if command == nil {
-		t.Fatal("available update did not offer confirmation")
-	}
-	intent, ok := command().(ui.ActionIntentMsg)
-	if !ok || intent.Action != ui.ActionUpdateMihari || intent.Page != ui.PageSystem || intent.Capability != "" || intent.Execute == nil {
-		t.Fatalf("intent=%#v", intent)
-	}
-	if !strings.Contains(intent.Object, "v0.3.1") || !strings.Contains(intent.Object, "v0.4.0") {
-		t.Fatalf("confirmation object=%q", intent.Object)
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	msg := cmd().(ui.PageResultMsg)
+	_, confirm := model.Update(msg.Result)
+	intent, ok := confirm().(ui.ActionIntentMsg)
+	if !ok || intent.Action != ui.ActionUpdateMihari || intent.Cancel == nil || !strings.Contains(intent.Object, "v0.4.0") {
+		t.Fatalf("intent=%+v", intent)
 	}
 }
-
 func TestSystemMihariUpdatePermissionFailureDoesNotCallUpdater(t *testing.T) {
 	model, updater := availableMihariUpdateModel(t, false, update.Result{})
-	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	intent := command().(ui.ActionIntentMsg)
-	updated, _ := model.Update(ui.ActionPendingMsg{Page: ui.PageSystem, Action: ui.ActionUpdateMihari})
-	model = updated.(*Model)
-
-	updated, relaunch := model.Update(intent.Execute())
-	model = updated.(*Model)
-	if updater.updateCalls != 0 || relaunch != nil || model.outcomeOK || model.outcomeRow != rowMihariUpdate {
-		t.Fatalf("calls=%d relaunch=%v outcome=%q ok=%v", updater.updateCalls, relaunch != nil, model.outcomeRow, model.outcomeOK)
-	}
-	if view := model.View(); !strings.Contains(view, ui.FailedLabel) || !strings.Contains(strings.ToLower(view), "administrator") {
-		t.Fatalf("permission view:\n%s", view)
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	msg := cmd().(ui.PageResultMsg)
+	model.Update(msg.Result)
+	if updater.updateCalls != 0 || model.outcomeOK || !strings.Contains(model.View(), "administrator") {
+		t.Fatal("permission failure not preserved")
 	}
 }
-
 func TestSystemMihariUpdateFailureStaysInCurrentTUI(t *testing.T) {
-	model, _ := availableMihariUpdateModel(t, true, update.Result{})
-	model.selfUpdater.(*fakeSelfUpdater).updateErr = errors.New("raw replacement detail")
-	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	intent := command().(ui.ActionIntentMsg)
-	updated, _ := model.Update(ui.ActionPendingMsg{Page: ui.PageSystem, Action: ui.ActionUpdateMihari})
-	model = updated.(*Model)
-
-	updated, relaunch := model.Update(intent.Execute())
-	model = updated.(*Model)
-	if relaunch != nil || model.outcomeOK {
-		t.Fatalf("relaunch=%v outcomeOK=%v", relaunch != nil, model.outcomeOK)
-	}
-	view := model.View()
-	if !strings.Contains(view, ui.UpdateMihariActionFailed) || strings.Contains(view, "raw replacement detail") {
-		t.Fatalf("failure view:\n%s", view)
+	model, updater := availableMihariUpdateModel(t, true, update.Result{})
+	updater.updateErr = errors.New("raw replacement detail")
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	msg := cmd().(ui.PageResultMsg)
+	_, next := model.Update(msg.Result)
+	if _, ok := next().(ui.DiscardPreparedUpdateMsg); !ok || model.outcomeOK || !strings.Contains(model.View(), ui.UpdateMihariActionFailed) || strings.Contains(model.View(), "raw replacement detail") {
+		t.Fatal("preparation failure not safely rendered")
 	}
 }
-
 func TestSystemMihariUpdateSuccessRequestsRelaunch(t *testing.T) {
-	model, updater := availableMihariUpdateModel(t, true, update.Result{Version: "v0.4.0", Updated: true})
-	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	intent := command().(ui.ActionIntentMsg)
-	updated, _ := model.Update(ui.ActionPendingMsg{Page: ui.PageSystem, Action: ui.ActionUpdateMihari})
-	model = updated.(*Model)
-	if view := model.View(); !strings.Contains(view, ui.MihariProgressUpdating) {
-		t.Fatalf("updating view:\n%s", view)
-	}
-
-	result := intent.Execute()
-	if outcome, ok := result.(interface{ Err() error }); !ok || outcome.Err() != nil {
-		t.Fatalf("result=%T err=%v", result, outcome.Err())
-	}
-	updated, relaunch := model.Update(result)
-	model = updated.(*Model)
-	if updater.updateCalls != 1 || updater.lastBinary != `C:\Program Files\Mihari\mihari.exe` || updater.lastCurrent != "v0.3.1" {
-		t.Fatalf("calls=%d binary=%q current=%q", updater.updateCalls, updater.lastBinary, updater.lastCurrent)
-	}
-	if !model.outcomeOK || !strings.Contains(model.View(), ui.DoneLabel) || relaunch == nil {
-		t.Fatalf("outcomeOK=%v relaunch=%v view=\n%s", model.outcomeOK, relaunch != nil, model.View())
-	}
-	request, ok := relaunch().(ui.RelaunchRequestMsg)
-	if !ok || request.Warning != "" {
-		t.Fatalf("request=%#v", request)
-	}
-}
-
-func TestSystemMihariUpdateCommittedWithServiceFailureStillRelaunches(t *testing.T) {
-	model, updater := availableMihariUpdateModel(t, true, update.Result{Version: "v0.4.0", Updated: true})
-	updater.updateErr = protocol.APIError{Code: protocol.CodeInvalidState, Message: "restart installed service failed"}
-	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	intent := command().(ui.ActionIntentMsg)
-	updated, _ := model.Update(ui.ActionPendingMsg{Page: ui.PageSystem, Action: ui.ActionUpdateMihari})
-	model = updated.(*Model)
-
-	result := intent.Execute()
-	if outcome := result.(interface{ Err() error }); outcome.Err() != nil {
-		t.Fatalf("committed replacement classified as failed: %v", outcome.Err())
-	}
-	updated, relaunch := model.Update(result)
-	model = updated.(*Model)
-	if !model.outcomeOK || relaunch == nil {
-		t.Fatalf("outcomeOK=%v relaunch=%v", model.outcomeOK, relaunch != nil)
-	}
-	request := relaunch().(ui.RelaunchRequestMsg)
-	if request.Warning != "restart installed service failed" {
-		t.Fatalf("warning=%q", request.Warning)
+	model, updater := availableMihariUpdateModel(t, true, update.Result{Version: "v0.4.0"})
+	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	msg := cmd().(ui.PageResultMsg)
+	_, cmd = model.Update(msg.Result)
+	intent := cmd().(ui.ActionIntentMsg)
+	_, cmd = model.Update(intent.Execute())
+	request := cmd().(ui.RelaunchRequestMsg)
+	if updater.updateCalls != 1 || updater.lastCurrent != "v0.3.1" || request.Prepared == nil || !request.Prepared.Consent.Yes {
+		t.Fatal("missing confirmed prepared relaunch")
 	}
 }
 
@@ -3876,4 +4069,49 @@ func runSelfCheckCmd(t *testing.T, cmd tea.Cmd) {
 		}
 	}
 	t.Fatal("recheck batch did not include version check")
+}
+
+func TestSelfUpdateChannel_UsesInjectedDiscoveryBeforeLegacyPath(t *testing.T) {
+	m := New(nil, nil)
+	called := false
+	m.selfUpdateChannel = func(context.Context) (string, error) { called = true; return update.ChannelDev, nil }
+	m.channelPath = func() (string, error) {
+		t.Fatal("legacy channel path accessed before injected service discovery")
+		return "", nil
+	}
+	if got := m.currentMihariChannel(); got != update.ChannelDev || !called {
+		t.Fatalf("channel=%q discovered=%v", got, called)
+	}
+}
+
+func TestSystemProxyDiagnostic_TUIMetadata(t *testing.T) {
+	for _, kind := range []proxyActionKind{proxyEnable, proxyDisable, proxyForceEnable} {
+		client := &fakeClient{}
+		model := New(client, func() string { return "unused" })
+		result := model.runSystemProxyAction(kind, "business-id", 0, kind == proxyForceEnable)().(systemProxyActionResultMsg)
+		name := "system_proxy.enable"
+		if kind == proxyDisable {
+			name = "system_proxy.disable"
+		}
+		want := logging.OperationMetadata{ID: "business-id", Name: name}
+		if len(client.businessOperations) != 1 || client.businessOperations[0] != want || result.operation != want {
+			t.Fatalf("metadata=%#v result=%#v", client.businessOperations, result.operation)
+		}
+	}
+}
+
+func TestTunDiagnostic_TUIMetadata(t *testing.T) {
+	for _, kind := range []tunActionKind{tunEnable, tunDisable, tunForceEnable} {
+		client := &fakeClient{}
+		model := New(client, func() string { return "unused" })
+		result := model.runTunAction(kind, "business-id", 0, kind == tunForceEnable)().(tunActionResultMsg)
+		name := "tun.enable"
+		if kind == tunDisable {
+			name = "tun.disable"
+		}
+		want := logging.OperationMetadata{ID: "business-id", Name: name}
+		if len(client.businessOperations) != 1 || client.businessOperations[0] != want || result.operation != want {
+			t.Fatalf("metadata=%#v result=%#v", client.businessOperations, result.operation)
+		}
+	}
 }

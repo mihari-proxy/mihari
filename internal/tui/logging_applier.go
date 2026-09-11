@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"sync"
 
 	"github.com/mihari-proxy/mihari/internal/logging"
@@ -13,15 +14,17 @@ type localLogging interface {
 
 type loggingApplier interface {
 	Submit(logging.Config) bool
+	Cancel()
 	CloseAndWait()
 }
 
 type ownedLoggingApplier struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	local  localLogging
-	wake   chan struct{}
-	done   chan struct{}
+	diagnostics ui.LocalTaskDiagnostics
+	ctx         context.Context
+	cancel      context.CancelFunc
+	local       localLogging
+	wake        chan struct{}
+	done        chan struct{}
 
 	mu         sync.Mutex
 	closing    bool
@@ -31,12 +34,16 @@ type ownedLoggingApplier struct {
 }
 
 func newLoggingApplier(parent context.Context, local localLogging) loggingApplier {
+	return newLoggingApplierWithDiagnostics(parent, local, ui.LocalTaskDiagnostics{})
+}
+
+func newLoggingApplierWithDiagnostics(parent context.Context, local localLogging, diagnostics ui.LocalTaskDiagnostics) loggingApplier {
 	if parent == nil {
 		parent = context.Background()
 	}
 	ctx, cancel := context.WithCancel(parent)
 	applier := &ownedLoggingApplier{
-		ctx: ctx, cancel: cancel, local: local,
+		ctx: ctx, cancel: cancel, local: local, diagnostics: diagnostics,
 		wake: make(chan struct{}, 1), done: make(chan struct{}),
 	}
 	go applier.run()
@@ -59,7 +66,7 @@ func (a *ownedLoggingApplier) Submit(cfg logging.Config) bool {
 	return true
 }
 
-func (a *ownedLoggingApplier) CloseAndWait() {
+func (a *ownedLoggingApplier) Cancel() {
 	if a == nil {
 		return
 	}
@@ -69,6 +76,13 @@ func (a *ownedLoggingApplier) CloseAndWait() {
 		a.cancel()
 		a.mu.Unlock()
 	})
+}
+
+func (a *ownedLoggingApplier) CloseAndWait() {
+	if a == nil {
+		return
+	}
+	a.Cancel()
 	<-a.done
 }
 
@@ -91,7 +105,10 @@ func (a *ownedLoggingApplier) run() {
 			a.mu.Unlock()
 
 			if a.local != nil {
-				a.local.Apply(a.ctx, cfg)
+				// Each actual coalesced application has its own identity. Apply is
+				// void: its logger-resource failures belong to FailureReporter.
+				ctx := a.diagnostics.NewContext(a.ctx, "logging.apply")
+				a.local.Apply(ctx, cfg)
 			}
 			if a.ctx.Err() != nil {
 				return

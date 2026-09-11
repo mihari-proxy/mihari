@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -90,5 +91,15 @@ func TestGeoIPUpdateThreadsRequestSource(t *testing.T) {
 				t.Fatalf("source=%q want %q", fake.operation.Source, test.want)
 			}
 		})
+	}
+}
+
+func TestGeoIPDiagnostic_ServerMetadata(t *testing.T) {
+	fake := &fakeRuntime{}
+	server := New(Options{Token: "token", Runtime: fake, Store: state.NewStore(state.Snapshot{})})
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, authorizedRequest(http.MethodPost, "/v1/geoip/update", bytes.NewBufferString(`{"operation_id":"business-id"}`)))
+	if response.Code != http.StatusOK || fake.operationContext != (logging.OperationMetadata{ID: "business-id", Name: "geoip.update"}) {
+		t.Fatalf("status=%d metadata=%#v", response.Code, fake.operationContext)
 	}
 }

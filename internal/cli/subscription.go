@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/subscription"
 	"github.com/spf13/cobra"
 )
@@ -82,7 +84,7 @@ func newSubscriptionAddCommand(dependencies Dependencies, options *runOptions) *
 		if err != nil {
 			return err
 		}
-		result, err := client.AddSubscription(command.Context(), protocol.SubscriptionAddRequest{OperationID: id, IfRevision: revisionFlag(command, revision), Name: args[0], URL: args[1], ProxyMode: mode})
+		result, err := client.AddSubscription(subscriptionOperationContext(command.Context(), id, "subscription.add"), protocol.SubscriptionAddRequest{OperationID: id, IfRevision: revisionFlag(command, revision), Name: args[0], URL: args[1], ProxyMode: mode})
 		if err != nil {
 			return classifyRuntimeError(err)
 		}
@@ -107,9 +109,9 @@ func newSubscriptionSimpleCommand(action string, dependencies Dependencies, opti
 		request := protocol.MutationRequest{OperationID: id, IfRevision: revisionFlag(command, revision)}
 		var result protocol.SubscriptionResult
 		if action == "refresh" {
-			result, err = client.RefreshSubscription(command.Context(), args[0], request)
+			result, err = client.RefreshSubscription(subscriptionOperationContext(command.Context(), id, "subscription.refresh"), args[0], request)
 		} else {
-			result, err = client.UseSubscription(command.Context(), args[0], request)
+			result, err = client.UseSubscription(subscriptionOperationContext(command.Context(), id, "subscription.use"), args[0], request)
 		}
 		if err != nil {
 			return classifyRuntimeError(err)
@@ -131,7 +133,7 @@ func newSubscriptionEnabledCommand(action string, enabled bool, dependencies Dep
 		if err != nil {
 			return err
 		}
-		result, err := client.SetSubscriptionEnabled(command.Context(), args[0], protocol.SubscriptionEnabledRequest{OperationID: id, IfRevision: revisionFlag(command, revision), Enabled: enabled})
+		result, err := client.SetSubscriptionEnabled(subscriptionOperationContext(command.Context(), id, "subscription.enabled"), args[0], protocol.SubscriptionEnabledRequest{OperationID: id, IfRevision: revisionFlag(command, revision), Enabled: enabled})
 		if err != nil {
 			return classifyRuntimeError(err)
 		}
@@ -180,7 +182,7 @@ func newSubscriptionSetCommand(dependencies Dependencies, options *runOptions) *
 		if request.Name == nil && request.URL == nil && request.Interval == nil && request.AutoRefresh == nil && request.GlobalInterval == nil && request.ProxyMode == nil {
 			return invalidArgument("at least one setting flag is required")
 		}
-		result, err := client.UpdateSubscription(command.Context(), args[0], request)
+		result, err := client.UpdateSubscription(subscriptionOperationContext(command.Context(), id, "subscription.set"), args[0], request)
 		if err != nil {
 			return classifyRuntimeError(err)
 		}
@@ -211,7 +213,7 @@ func newSubscriptionRemoveCommand(dependencies Dependencies, options *runOptions
 		if err != nil {
 			return err
 		}
-		result, err := client.RemoveSubscription(command.Context(), args[0], protocol.MutationRequest{OperationID: id, IfRevision: revisionFlag(command, revision)})
+		result, err := client.RemoveSubscription(subscriptionOperationContext(command.Context(), id, "subscription.remove"), args[0], protocol.MutationRequest{OperationID: id, IfRevision: revisionFlag(command, revision)})
 		if err != nil {
 			return classifyRuntimeError(err)
 		}
@@ -230,6 +232,10 @@ func subscriptionClient(dependencies Dependencies) (SubscriptionClient, error) {
 		return nil, protocol.APIError{Code: protocol.CodeInternal, Message: "subscription client is unavailable"}
 	}
 	return dependencies.SubscriptionClient, nil
+}
+
+func subscriptionOperationContext(ctx context.Context, id, name string) context.Context {
+	return logging.WithOperation(ctx, logging.OperationMetadata{ID: id, Name: name})
 }
 
 func revisionFlag(command *cobra.Command, value uint64) *uint64 {

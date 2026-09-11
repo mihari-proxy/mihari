@@ -860,13 +860,13 @@ func TestRunHonorsContextAndRejectsInsecureRedirects(t *testing.T) {
 	})
 }
 
-func TestSidecarScriptInstallersCopyCoreChannel(t *testing.T) {
+func TestSidecarWindowsInstallerCopiesCoreChannel(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
 	root := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", "..", ".."))
-	for _, name := range []string{"install-aio.sh", "install-aio.ps1"} {
+	for _, name := range []string{"install-aio.ps1"} {
 		data, err := os.ReadFile(filepath.Join(root, "scripts", "install", name))
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)

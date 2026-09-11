@@ -9,26 +9,43 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/state"
 )
 
 type Options struct {
-	Token   string
-	Store   *state.Store
-	Runtime RuntimeAPI
-	Now     func() time.Time
+	Token              string
+	Store              *state.Store
+	Runtime            RuntimeAPI
+	Now                func() time.Time
+	SnapshotSource     logging.MachineSnapshotSource
+	SnapshotID         func() string
+	DiagnosticReporter diagnostics.Reporter
 }
 
 type Server struct {
-	token           string
-	store           *state.Store
-	runtime         RuntimeAPI
-	now             func() time.Time
-	shutdownTimeout time.Duration
-	http            *http.Server
+	token              string
+	store              *state.Store
+	runtime            RuntimeAPI
+	now                func() time.Time
+	snapshotSource     logging.MachineSnapshotSource
+	snapshotID         func() string
+	diagnosticReporter diagnostics.Reporter
+	snapshotCtx        context.Context
+	snapshotCancel     context.CancelFunc
+	snapshotWG         sync.WaitGroup
+	snapshotHandlers   sync.WaitGroup
+	handlers           sync.WaitGroup
+	snapshotLifecycle  sync.Mutex
+	snapshotClosing    bool
+	snapshotGate       snapshotGate
+	shutdownTimeout    time.Duration
+	http               *http.Server
 }
 
 func New(options Options) *Server {
@@ -36,7 +53,19 @@ func New(options Options) *Server {
 	if now == nil {
 		now = time.Now
 	}
-	server := &Server{token: options.Token, store: options.Store, runtime: options.Runtime, now: now, shutdownTimeout: 5 * time.Second}
+	snapshotCtx, snapshotCancel := context.WithCancel(context.Background())
+	server := &Server{
+		token:              options.Token,
+		store:              options.Store,
+		runtime:            options.Runtime,
+		now:                now,
+		snapshotSource:     options.SnapshotSource,
+		snapshotID:         options.SnapshotID,
+		diagnosticReporter: options.DiagnosticReporter,
+		snapshotCtx:        snapshotCtx,
+		snapshotCancel:     snapshotCancel,
+		shutdownTimeout:    5 * time.Second,
+	}
 	server.http = &http.Server{
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -49,6 +78,20 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/status", s.status)
 	s.runtimeRoutes(mux)
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		s.snapshotLifecycle.Lock()
+		if s.snapshotClosing {
+			s.snapshotLifecycle.Unlock()
+			writeJSON(writer, http.StatusServiceUnavailable, protocol.NewError(protocol.CodeInvalidState, "local control is stopping", nil))
+			return
+		}
+		s.handlers.Add(1)
+		s.snapshotLifecycle.Unlock()
+		defer s.handlers.Done()
+		requestCtx, cancel := context.WithCancel(request.Context())
+		stop := context.AfterFunc(s.snapshotCtx, cancel)
+		defer stop()
+		defer cancel()
+		request = request.WithContext(requestCtx)
 		want := "Bearer " + s.token
 		if subtle.ConstantTimeCompare([]byte(request.Header.Get("Authorization")), []byte(want)) != 1 {
 			writeJSON(writer, http.StatusUnauthorized, protocol.NewError(
@@ -75,12 +118,20 @@ func (s *Server) status(writer http.ResponseWriter, request *http.Request) {
 		PID:             os.Getpid(),
 	}
 	if s.runtime != nil {
-		status.Capabilities = sortedUnique(s.runtime.Capabilities())
+		for _, capability := range s.runtime.Capabilities() {
+			if capability != protocol.MachineLogSnapshotCapability {
+				status.Capabilities = append(status.Capabilities, capability)
+			}
+		}
+		status.Capabilities = sortedUnique(status.Capabilities)
 		if runtime, ok := s.runtime.(onboardingAPI); ok {
 			if onboardingStatus, err := runtime.OnboardingStatus(request.Context()); err == nil {
 				status.SetupRequired = !onboardingStatus.Status.Complete
 			}
 		}
+	}
+	if s.snapshotSource != nil {
+		status.Capabilities = sortedUnique(append(status.Capabilities, protocol.MachineLogSnapshotCapability))
 	}
 	if snapshot.Config.Status != "" {
 		status.Config = &protocol.ConfigStatus{
@@ -114,25 +165,48 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		errCh <- s.http.Serve(listener)
 	}()
 
+	var serveErr, shutdownErr error
 	select {
-	case err := <-errCh:
-		if err == http.ErrServerClosed {
-			return nil
-		}
-		return err
+	case serveErr = <-errCh:
 	case <-ctx.Done():
+		s.cancelSnapshots()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
-		defer cancel()
-		// Graceful shutdown is best-effort: if in-flight connections prevent
-		// draining within the budget, http.Shutdown returns DeadlineExceeded.
-		// On the cancellation path that timeout is expected and must not be
-		// surfaced as a daemon error (it flaked the integration suite under
-		// -race on slow CI). Only propagate genuine, non-deadline errors.
-		if err := s.http.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
-			return err
+		shutdownErr = s.http.Shutdown(shutdownCtx)
+		cancel()
+		if errors.Is(shutdownErr, context.DeadlineExceeded) {
+			shutdownErr = nil
 		}
-		return nil
+		// Request-context cancellation must precede every snapshot-owner join.
+		shutdownErr = errors.Join(shutdownErr, s.http.Close())
+		serveErr = <-errCh
 	}
+	s.cancelSnapshots()
+	closeErr := s.http.Close()
+	s.handlers.Wait()
+	s.snapshotHandlers.Wait()
+	s.snapshotWG.Wait()
+	if errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = nil
+	}
+	return errors.Join(serveErr, shutdownErr, closeErr)
+}
+
+func (s *Server) cancelSnapshots() {
+	s.snapshotLifecycle.Lock()
+	s.snapshotClosing = true
+	if s.snapshotCancel != nil {
+		s.snapshotCancel()
+	}
+	s.snapshotLifecycle.Unlock()
+}
+func (s *Server) beginSnapshot() bool {
+	s.snapshotLifecycle.Lock()
+	defer s.snapshotLifecycle.Unlock()
+	if s.snapshotClosing {
+		return false
+	}
+	s.snapshotHandlers.Add(1)
+	return true
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) {

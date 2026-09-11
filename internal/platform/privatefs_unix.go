@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -28,10 +29,12 @@ var (
 )
 
 type privateFSState struct {
-	rootFD int
-	dirs   map[string]int
-	uid    int
-	gid    int
+	trusted     *TrustedRoot
+	trustedDirs map[string]*TrustedRoot
+	rootFD      int
+	dirs        map[string]int
+	uid         int
+	gid         int
 }
 
 type fileIdentity struct {
@@ -84,15 +87,20 @@ func (fs *PrivateFS) openRoot() error {
 
 func (fs *PrivateFS) closePlatform() error {
 	var errs []error
-	fs.dirsMu.Lock()
+	for name, root := range fs.plat.trustedDirs {
+		errs = append(errs, root.Close())
+		delete(fs.plat.trustedDirs, name)
+	}
 	for name, fd := range fs.plat.dirs {
 		if fd >= 0 {
 			errs = append(errs, unix.Close(fd))
 		}
 		delete(fs.plat.dirs, name)
 	}
-	fs.dirsMu.Unlock()
-	if fs.plat.rootFD >= 0 {
+	if fs.plat.trusted != nil {
+		errs = append(errs, fs.plat.trusted.Close())
+		fs.plat.rootFD = -1
+	} else if fs.plat.rootFD >= 0 {
 		errs = append(errs, unix.Close(fs.plat.rootFD))
 		fs.plat.rootFD = -1
 	}
@@ -100,6 +108,10 @@ func (fs *PrivateFS) closePlatform() error {
 }
 
 func (fs *PrivateFS) ensureDirLocked(name string) error {
+	if fs.plat.trusted != nil {
+		_, err := fs.trustedDir(name, true)
+		return err
+	}
 	if err := unix.Mkdirat(fs.plat.rootFD, name, 0o700); err != nil && !errors.Is(err, unix.EEXIST) {
 		return fmt.Errorf("mkdir %s: %w", name, err)
 	}
@@ -124,25 +136,26 @@ func (fs *PrivateFS) ensureDirLocked(name string) error {
 		_ = unix.Close(fd)
 		return err
 	}
-	fs.dirsMu.Lock()
 	if old, ok := fs.plat.dirs[name]; ok {
-		fs.dirsMu.Unlock()
 		_ = unix.Close(fd)
 		_ = old
 		return nil
 	}
 	fs.plat.dirs[name] = fd
-	fs.dirsMu.Unlock()
 	return nil
 }
 
 func (fs *PrivateFS) dirFD(name string) (int, error) {
-	fs.dirsMu.Lock()
+	if fs.plat.trusted != nil {
+		r, err := fs.trustedDir(name, false)
+		if err != nil {
+			return -1, err
+		}
+		return r.chain[len(r.chain)-1].fd, nil
+	}
 	if fd, ok := fs.plat.dirs[name]; ok {
-		fs.dirsMu.Unlock()
 		return fd, nil
 	}
-	fs.dirsMu.Unlock()
 	fd, err := unix.Openat(fs.plat.rootFD, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return -1, fmt.Errorf("open dir %s: %w", name, err)
@@ -156,18 +169,18 @@ func (fs *PrivateFS) dirFD(name string) (int, error) {
 		_ = unix.Close(fd)
 		return -1, fmt.Errorf("%s is not a directory", name)
 	}
-	fs.dirsMu.Lock()
 	if old, ok := fs.plat.dirs[name]; ok {
-		fs.dirsMu.Unlock()
 		_ = unix.Close(fd)
 		return old, nil
 	}
 	fs.plat.dirs[name] = fd
-	fs.dirsMu.Unlock()
 	return fd, nil
 }
 
 func (fs *PrivateFS) openAppendLocked(dir, name string) (*os.File, error) {
+	if fs.plat.trusted != nil {
+		return fs.trustedOpen(dir, name, unix.O_WRONLY|unix.O_APPEND, true)
+	}
 	dirfd, err := fs.dirFD(dir)
 	if err != nil {
 		return nil, err
@@ -201,6 +214,20 @@ func (fs *PrivateFS) openAppendLocked(dir, name string) (*os.File, error) {
 }
 
 func (fs *PrivateFS) openReadCheckedLocked(dir, name string, expected FileIdentity) (*os.File, error) {
+	if fs.plat.trusted != nil {
+		r, err := fs.trustedDir(dir, false)
+		if err != nil {
+			return nil, err
+		}
+		f, id, err := r.OpenFile(context.Background(), name, 0600)
+		if err != nil {
+			return nil, err
+		}
+		if id != expected {
+			return nil, errors.Join(ErrIdentityMismatch, f.Close())
+		}
+		return f, nil
+	}
 	dirfd, err := fs.dirFD(dir)
 	if err != nil {
 		return nil, err
@@ -227,6 +254,13 @@ func (fs *PrivateFS) openReadCheckedLocked(dir, name string, expected FileIdenti
 }
 
 func (fs *PrivateFS) createTempLocked(dir, pattern string) (*os.File, string, error) {
+	if fs.plat.trusted != nil {
+		r, err := fs.trustedDir(dir, false)
+		if err != nil {
+			return nil, "", err
+		}
+		return trustedCreateTemp(r, pattern)
+	}
 	dirfd, err := fs.dirFD(dir)
 	if err != nil {
 		return nil, "", err
@@ -319,6 +353,9 @@ func (fs *PrivateFS) openDirIdentityLocked(name string) (*DirectoryIdentity, err
 }
 
 func (fs *PrivateFS) openPublishDirLocked(name string) (*PublishDir, error) {
+	if fs.plat.trusted != nil {
+		return fs.trustedPublishDir(name)
+	}
 	fd, err := fs.dirFD(name)
 	if err != nil {
 		return nil, err
@@ -340,6 +377,9 @@ func (fs *PrivateFS) openPublishDirLocked(name string) (*PublishDir, error) {
 }
 
 func (fs *PrivateFS) renameLocked(dir, oldName, newName string, replace bool) error {
+	if fs.plat.trusted != nil {
+		return fs.trustedRename(dir, oldName, newName, replace)
+	}
 	dirfd, err := fs.dirFD(dir)
 	if err != nil {
 		return err
@@ -357,6 +397,13 @@ func (fs *PrivateFS) renameLocked(dir, oldName, newName string, replace bool) er
 }
 
 func (fs *PrivateFS) removeLocked(dir, name string) error {
+	if fs.plat.trusted != nil {
+		r, err := fs.trustedDir(dir, false)
+		if err != nil {
+			return err
+		}
+		return trustedRemove(r, name, nil)
+	}
 	dirfd, err := fs.dirFD(dir)
 	if err != nil {
 		return err
@@ -386,26 +433,22 @@ func (fs *PrivateFS) chownat(dirfd int, name string) error {
 
 // Close releases the duplicated directory handle. Repeat calls return nil.
 func (d *DirectoryIdentity) Close() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closed {
+	return d.closeWith(func() error {
+		if d.plat.fd >= 0 {
+			err := unix.Close(d.plat.fd)
+			d.plat.fd = -1
+			return err
+		}
 		return nil
-	}
-	d.closed = true
-	if d.plat.fd >= 0 {
-		err := unix.Close(d.plat.fd)
-		d.plat.fd = -1
-		return err
-	}
-	return nil
+	})
 }
 
 func (d *DirectoryIdentity) identity() (FileIdentity, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closed {
-		return FileIdentity{}, errPrivateFSClosed
+	finish, err := d.begin(context.Background())
+	if err != nil {
+		return FileIdentity{}, err
 	}
+	defer finish()
 	return FileIdentity{plat: d.plat.id}, nil
 }
 

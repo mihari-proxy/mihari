@@ -53,11 +53,14 @@ func newProxyCommand(dependencies Dependencies, options *runOptions) *cobra.Comm
 			return printMutation(command.OutOrStdout(), result)
 		},
 	})
-	testURL := "https://www.gstatic.com/generate_204"
-	timeout := 5000
+	testURL := ""
+	timeout := 0
 	testCommand := &cobra.Command{
 		Use: "test GROUP", Short: "Test proxy-group delays", Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
+			if timeout < 0 || timeout > 60_000 {
+				return invalidArgument("delay test timeout is invalid")
+			}
 			client, err := runtimeClient(dependencies)
 			if err != nil {
 				return err
@@ -82,8 +85,8 @@ func newProxyCommand(dependencies Dependencies, options *runOptions) *cobra.Comm
 			return nil
 		},
 	}
-	testCommand.Flags().StringVar(&testURL, "url", testURL, "URL used for delay testing")
-	testCommand.Flags().IntVar(&timeout, "timeout", timeout, "timeout in milliseconds")
+	testCommand.Flags().StringVar(&testURL, "url", testURL, "URL used for delay testing; empty uses daemon fallback")
+	testCommand.Flags().IntVar(&timeout, "timeout", timeout, "timeout in milliseconds; empty uses daemon fallback")
 	root.AddCommand(testCommand)
 	return root
 }

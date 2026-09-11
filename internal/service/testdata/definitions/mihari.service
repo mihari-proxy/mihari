@@ -1,0 +1,15 @@
+[Unit]
+Description=Mihari
+After=network.target
+
+[Service]
+Type=simple
+ExecStart="/usr/local/lib/mihari/mihari" daemon --system-service
+Environment="MIHARI_CONTROL_ENDPOINT=/var/lib/mihari/control.sock"
+Environment="MIHARI_CONTROL_CREDENTIAL=/var/lib/mihari/control.token"
+Environment="MIHARI_INSTALL_ROOT=/usr/local/lib/mihari"
+Restart=on-failure
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

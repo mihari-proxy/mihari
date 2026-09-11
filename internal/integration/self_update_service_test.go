@@ -75,7 +75,7 @@ func TestSelfUpdateSynchronizesDifferentServiceBinaryAndVerifiesDaemonVersion(t 
 	}))
 	defer statusServer.Close()
 	completion := app.NewSelfUpdateServiceCompletion(
-		serviceManager,
+		selfUpdateObservedService{Manager: serviceManager, binary: serviceBinary},
 		controlclient.NewHTTP(statusServer.URL, "test-token", statusServer.Client()),
 	)
 
@@ -89,7 +89,7 @@ func TestSelfUpdateSynchronizesDifferentServiceBinaryAndVerifiesDaemonVersion(t 
 	var releaseServer *httptest.Server
 	releaseServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/mihari-proxy/mihari/releases/latest":
+		case "/repos/mihari-proxy/mihari/releases/latest", "/repos/mihari-proxy/mihari/releases/tags/v9.9.9":
 			_ = json.NewEncoder(w).Encode(update.Release{
 				TagName: "v9.9.9",
 				Assets: []update.Asset{
@@ -108,13 +108,25 @@ func TestSelfUpdateSynchronizesDifferentServiceBinaryAndVerifiesDaemonVersion(t 
 	defer releaseServer.Close()
 
 	updater := update.SelfUpdater{
-		HTTPClient:   releaseServer.Client(),
-		APIBase:      releaseServer.URL,
-		GOOS:         runtime.GOOS,
-		GOARCH:       runtime.GOARCH,
-		AfterReplace: completion.AfterReplace,
+		HTTPClient:           releaseServer.Client(),
+		APIBase:              releaseServer.URL,
+		GOOS:                 runtime.GOOS,
+		GOARCH:               runtime.GOARCH,
+		AfterReplacePrepared: completion.AfterPreparedReplace,
+		ObserveTargets:       completion.ObserveReplacement,
 	}
-	result, err := updater.Update(context.Background(), tuiBinary, "v1.0.0", "")
+	prepared, err := updater.Prepare(context.Background(), tuiBinary, "v1.0.0", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := prepared.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	// Fixture bytes have no executable version; explicitly accept unknown compatibility.
+	prepared.Consent = update.ReplacementConsent{Yes: true, ExpectedPreview: prepared.Preview.ID}
+	result, err := updater.ApplyPrepared(context.Background(), prepared)
 	if err != nil || !result.Updated || result.Version != "v9.9.9" {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
@@ -130,4 +142,14 @@ func TestSelfUpdateSynchronizesDifferentServiceBinaryAndVerifiesDaemonVersion(t 
 	if controller.stops != 1 || controller.starts != 1 || statusRequests != 1 {
 		t.Fatalf("stops=%d starts=%d status requests=%d", controller.stops, controller.starts, statusRequests)
 	}
+}
+
+// The fake service definition is paired with the real Manager control/stage path.
+type selfUpdateObservedService struct {
+	*service.Manager
+	binary string
+}
+
+func (s selfUpdateObservedService) ObserveReplacementService(context.Context) (service.ServiceReplacementView, error) {
+	return service.ServiceReplacementView{Registered: true, BinaryPath: s.binary, DefinitionSHA256: "fixture-definition"}, nil
 }

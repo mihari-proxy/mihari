@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/mihari-proxy/mihari/internal/logging"
 	"net/http"
 	"net/netip"
 
@@ -16,19 +17,19 @@ func (s *Server) geoIPRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) geoIPStatus(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	status, err := s.runtime.GeoIPStatus(request.Context())
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, geoIPStatusDTO(status, s.runtime.Snapshot().Revision))
 }
 
 func (s *Server) geoIPLookup(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	var body protocol.GeoIPLookupRequest
@@ -61,11 +62,11 @@ func (s *Server) geoIPLookup(writer http.ResponseWriter, request *http.Request) 
 	}
 	records, err := s.runtime.LookupGeoIP(request.Context(), addresses)
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(request.Context(), writer, err)
 		return
 	}
 	if len(records) != len(addresses) {
-		writeControlError(writer, protocol.APIError{Code: protocol.CodeDataFailure, Message: "geoip lookup returned an invalid record count"})
+		s.writeControlError(request.Context(), writer, protocol.APIError{Code: protocol.CodeDataFailure, Message: "geoip lookup returned an invalid record count"})
 		return
 	}
 	result := make([]protocol.GeoIPRecord, len(records))
@@ -78,16 +79,17 @@ func (s *Server) geoIPLookup(writer http.ResponseWriter, request *http.Request) 
 }
 
 func (s *Server) geoIPUpdate(writer http.ResponseWriter, request *http.Request) {
-	if !s.requireRuntime(writer) {
+	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
 	var body protocol.MutationRequest
 	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
 		return
 	}
-	status, err := s.runtime.UpdateGeoIP(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision})
+	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "geoip.update"})
+	status, err := s.runtime.UpdateGeoIP(ctx, runtimeapi.Operation{ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision})
 	if err != nil {
-		writeControlError(writer, err)
+		s.writeControlError(ctx, writer, err)
 		return
 	}
 	revision := s.runtime.Snapshot().Revision

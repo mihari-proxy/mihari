@@ -18,6 +18,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/onboarding"
 	"github.com/mihari-proxy/mihari/internal/platform"
@@ -36,6 +37,8 @@ type webConnectionCloseCall struct {
 }
 
 type recordingWebMutationRuntime struct {
+	contexts           []context.Context
+	err                error
 	selectCalls        []webProxySelectionCall
 	closeCalls         []webConnectionCloseCall
 	closeAllOperations []runtimeapi.Operation
@@ -43,29 +46,34 @@ type recordingWebMutationRuntime struct {
 	disableOperations  []runtimeapi.Operation
 }
 
-func (r *recordingWebMutationRuntime) SelectProxy(_ context.Context, operation runtimeapi.Operation, group, name string) error {
+func (r *recordingWebMutationRuntime) SelectProxy(ctx context.Context, operation runtimeapi.Operation, group, name string) error {
+	r.contexts = append(r.contexts, ctx)
 	r.selectCalls = append(r.selectCalls, webProxySelectionCall{operation: operation, group: group, name: name})
-	return nil
+	return r.err
 }
 
-func (r *recordingWebMutationRuntime) CloseConnection(_ context.Context, operation runtimeapi.Operation, id string) error {
+func (r *recordingWebMutationRuntime) CloseConnection(ctx context.Context, operation runtimeapi.Operation, id string) error {
+	r.contexts = append(r.contexts, ctx)
 	r.closeCalls = append(r.closeCalls, webConnectionCloseCall{operation: operation, id: id})
-	return nil
+	return r.err
 }
 
-func (r *recordingWebMutationRuntime) CloseAllConnections(_ context.Context, operation runtimeapi.Operation) error {
+func (r *recordingWebMutationRuntime) CloseAllConnections(ctx context.Context, operation runtimeapi.Operation) error {
+	r.contexts = append(r.contexts, ctx)
 	r.closeAllOperations = append(r.closeAllOperations, operation)
-	return nil
+	return r.err
 }
 
-func (r *recordingWebMutationRuntime) EnableTun(_ context.Context, operation runtimeapi.Operation, _ bool) (protocol.TunStatus, error) {
+func (r *recordingWebMutationRuntime) EnableTun(ctx context.Context, operation runtimeapi.Operation, _ bool) (protocol.TunStatus, error) {
+	r.contexts = append(r.contexts, ctx)
 	r.enableOperations = append(r.enableOperations, operation)
-	return protocol.TunStatus{}, nil
+	return protocol.TunStatus{}, r.err
 }
 
-func (r *recordingWebMutationRuntime) DisableTun(_ context.Context, operation runtimeapi.Operation) (protocol.TunStatus, error) {
+func (r *recordingWebMutationRuntime) DisableTun(ctx context.Context, operation runtimeapi.Operation) (protocol.TunStatus, error) {
+	r.contexts = append(r.contexts, ctx)
 	r.disableOperations = append(r.disableOperations, operation)
-	return protocol.TunStatus{}, nil
+	return protocol.TunStatus{}, r.err
 }
 
 func TestWebMutatorRoutesOperationsThroughRuntime(t *testing.T) {
@@ -234,6 +242,54 @@ func TestBuildRuntimeWithOptionsReportsOnboardingPersistenceWarning(t *testing.T
 	}
 	if assembly == nil || component != "onboarding" || message != "onboarding parent directory sync failed after commit" {
 		t.Fatalf("assembly=%#v component=%q message=%q", assembly, component, message)
+	}
+}
+
+func TestBuildRuntimeWithOptionsWiresSupervisorDiagnosticReporter(t *testing.T) {
+	paths := platform.NewPaths(filepath.Join(t.TempDir(), "data"))
+	if err := paths.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.CoreBinary, []byte("not an executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	settings := testRuntimeSettings(t)
+	settings.ControllerSecret = strings.Repeat("d", 64)
+	records := make(chan diagnostics.Record, 1)
+	assembly, err := BuildRuntimeWithOptions(paths, settings, "test-version", nil, nil, RuntimeBuildOptions{
+		SettingsPath: paths.Settings,
+		DiagnosticReporter: func(_ context.Context, record diagnostics.Record) {
+			if record.Component == "supervisor" {
+				select {
+				case records <- record:
+				default:
+				}
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- assembly.Manager.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("runtime did not stop")
+		}
+	})
+
+	select {
+	case record := <-records:
+		var pathError *os.PathError
+		if record.Event != "core.start.failed" || !errors.As(record.Err, &pathError) || record.Err.Error() != "mihomo process start failed" {
+			t.Fatalf("record=%#v", record)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("supervisor diagnostic reporter was not wired")
 	}
 }
 

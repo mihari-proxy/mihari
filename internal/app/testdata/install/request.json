@@ -1,0 +1,16 @@
+{
+  "schema": "mihari.install-request/v1",
+  "operation": "install",
+  "binary": "/tmp/mihari-candidate",
+  "bundle": "/tmp/mihari-aio.tar.gz",
+  "source": "/home/user/.mihari",
+  "channel": "main",
+  "layout": "system",
+  "endpoint": "/var/lib/mihari/control.sock",
+  "credential": "/var/lib/mihari/control.token",
+  "install_root": "/usr/local/lib/mihari",
+  "path_binary": "/usr/local/bin/mihari",
+  "release_tag": "v1.0.0",
+  "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "bundle_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}
