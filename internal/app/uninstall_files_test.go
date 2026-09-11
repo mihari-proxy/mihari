@@ -106,6 +106,7 @@ func TestCheckUninstallFiles_UnrecognizedScratchEntriesAreRejected(t *testing.T)
 		{name: "staging/panels/zashboard--", isDir: true},
 		{name: "staging/panels/.zashboard-v1-4294967296.zip"},
 		{name: "runtime/core-home/providers/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.old-0123456789abcdef0123456789abcdef.yaml"},
+		{name: "web/other", isDir: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
