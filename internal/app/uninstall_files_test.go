@@ -14,6 +14,7 @@ func TestCheckUninstallFiles_RecognizedDataEntriesPass(t *testing.T) {
 		"mihari.yaml",
 		".mihari.yaml.tmp-4294967295",
 		"bin/mihomo",
+		"bin/core-channel",
 		"runtime/config.yaml",
 		"runtime/.mihari-abcdef123456",
 		"runtime/core-home/Country.mmdb.old-0123456789abcdef0123456789abcdef",

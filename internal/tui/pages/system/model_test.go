@@ -1062,6 +1062,10 @@ func (f *fakeUninstaller) Preview(context.Context) ([]app.UninstallTarget, error
 	return f.targets, f.err
 }
 
+func (*fakeUninstaller) Run(context.Context, func(string)) error { return nil }
+
+func (*fakeUninstaller) RunForce(context.Context, func(string)) error { return nil }
+
 func (f *fakeService) Install() error {
 	f.installs++
 	return f.controlErr
@@ -1376,13 +1380,20 @@ func TestSystemCompleteUninstall_PreviewsTargetsBeforeConfirmation(t *testing.T)
 		t.Fatalf("command=%v preview calls=%d", command != nil, preview.calls)
 	}
 	intent, ok := command().(ui.ActionIntentMsg)
-	if !ok || intent.Action != ui.ActionCompleteUninstall || intent.Object != "/tmp/mihari-data" {
+	if !ok || intent.Action != ui.ActionCompleteUninstall || intent.Object != "/tmp/mihari-data" || intent.Impact != ui.CompleteUninstallImpact || intent.Key != "system:complete-uninstall" {
 		t.Fatalf("intent=%#v", intent)
+	}
+	second, ok := intent.Execute().(ui.ActionIntentMsg)
+	if !ok || second.Action != ui.ActionCompleteUninstall || second.Object != intent.Object || second.Impact != ui.CompleteUninstallConfirmImpact || second.Key != ui.CompleteUninstallConfirmKey {
+		t.Fatalf("second intent=%#v", second)
+	}
+	if _, ok := second.Execute().(ui.CompleteUninstallConfirmedMsg); !ok {
+		t.Fatalf("second execute=%T", second.Execute())
 	}
 }
 
-func TestSystemCompleteUninstall_PreviewFailureShowsUnrecognizedEntry(t *testing.T) {
-	preview := &fakeUninstaller{err: &app.UninstallFileError{Kind: "data", RelativePath: "cache.db"}}
+func TestSystemCompleteUninstall_PreviewFailureShowsRootError(t *testing.T) {
+	preview := &fakeUninstaller{err: &app.UninstallFileError{Kind: "data", RelativePath: ".", Reason: "symbolic link"}}
 	model := New(nil, func() string { return "system-op" })
 	model.SetUninstaller(preview)
 	model.focusID = rowCompleteUninstall
@@ -1393,7 +1404,7 @@ func TestSystemCompleteUninstall_PreviewFailureShowsUnrecognizedEntry(t *testing
 	}
 	updated, _ = model.Update(command())
 	model = updated.(*Model)
-	want := "unrecognized entry in data: cache.db"
+	want := "unrecognized symbolic link in data: ."
 	if model.outcomeRow != rowCompleteUninstall || model.outcomeOK || model.outcomeDetail != want {
 		t.Fatalf("outcome=%q ok=%v detail=%q want %q", model.outcomeRow, model.outcomeOK, model.outcomeDetail, want)
 	}

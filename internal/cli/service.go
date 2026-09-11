@@ -49,8 +49,11 @@ func serviceController(dependencies Dependencies) (ServiceController, error) {
 }
 
 func newServiceUninstallCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
-	var purge, yes bool
+	var purge, yes, force bool
 	command := &cobra.Command{Use: "uninstall", Short: "Remove the Mihari OS service", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
+		if force && !purge {
+			return invalidArgument("--force requires --purge")
+		}
 		if !purge {
 			return runServiceAction(command, "uninstall", dependencies, options, true, func(c ServiceController) error { return c.Uninstall() })
 		}
@@ -74,7 +77,11 @@ func newServiceUninstallCommand(dependencies Dependencies, options *runOptions) 
 				_, _ = fmt.Fprintln(command.ErrOrStderr(), message)
 			}
 		}
-		if err := dependencies.Uninstaller.Run(ctx, progress); err != nil {
+		run := dependencies.Uninstaller.Run
+		if force {
+			run = dependencies.Uninstaller.RunForce
+		}
+		if err := run(ctx, progress); err != nil {
 			reportLocalTaskFailure(ctx, dependencies, "service.uninstall.purge.failed", err)
 			return protocol.APIError{Code: protocol.CodeInvalidState, Message: err.Error()}
 		}
@@ -86,6 +93,7 @@ func newServiceUninstallCommand(dependencies Dependencies, options *runOptions) 
 	}}
 	command.Flags().BoolVar(&purge, "purge", false, "remove the Mihari service and recognized Mihari files")
 	command.Flags().BoolVar(&yes, "yes", false, "confirm complete uninstall")
+	command.Flags().BoolVar(&force, "force", false, "delete entire target folders without checking recognized files (requires --purge --yes)")
 	return command
 }
 

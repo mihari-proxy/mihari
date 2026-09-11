@@ -213,6 +213,70 @@ func TestUninstaller_RunReturnsCancellationWhileWaitingForDaemon(t *testing.T) {
 	}
 }
 
+func TestUninstaller_PreviewAllowsUnrecognizedFiles(t *testing.T) {
+	layout, data, program := uninstallTestLayout(t)
+	writeUninstallFixture(t, data, "unknown.txt")
+	writeUninstallFixture(t, program, "mihari")
+	runner := newUninstallTestRunner(t, layout, UninstallerOptions{})
+
+	targets, err := runner.Preview(context.Background())
+	if err != nil {
+		t.Fatalf("Preview error = %v, want success when only folder contents are unrecognized", err)
+	}
+	if len(targets) < 2 || targets[0].Path != data || targets[1].Path != program {
+		t.Fatalf("Preview targets = %#v, want data and program roots", targets)
+	}
+}
+
+func TestUninstaller_RunForceRemovesUnrecognizedFiles(t *testing.T) {
+	layout, data, program := uninstallTestLayout(t)
+	writeUninstallFixture(t, data, "unknown.txt")
+	writeUninstallFixture(t, program, "mihari")
+	service := &uninstallFakeService{status: service.StatusStopped}
+	runner := newUninstallTestRunner(t, layout, UninstallerOptions{
+		Service:     service,
+		Elevated:    func() bool { return true },
+		ProbeDaemon: func(context.Context) (bool, error) { return false, nil },
+	})
+
+	if err := runner.RunForce(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if service.uninstallCalls != 1 {
+		t.Fatalf("uninstall calls = %d, want 1", service.uninstallCalls)
+	}
+	if fileExists(data) || fileExists(program) {
+		t.Fatalf("forced roots remain: data=%t program=%t", fileExists(data), fileExists(program))
+	}
+}
+
+func TestUninstaller_RunForceStillRefusesSymlinkRoot(t *testing.T) {
+	layout, data, program := uninstallTestLayout(t)
+	writeUninstallFixture(t, program, "mihari")
+	realData := filepath.Join(t.TempDir(), "real-data")
+	if err := os.MkdirAll(realData, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realData, data); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	service := &uninstallFakeService{status: service.StatusStopped}
+	runner := newUninstallTestRunner(t, layout, UninstallerOptions{
+		Service:     service,
+		Elevated:    func() bool { return true },
+		ProbeDaemon: func(context.Context) (bool, error) { return false, nil },
+	})
+
+	err := runner.RunForce(context.Background(), nil)
+	var checkErr *UninstallFileError
+	if !errors.As(err, &checkErr) || service.uninstallCalls != 0 || !fileExists(realData) {
+		t.Fatalf("RunForce error = %v, uninstall calls = %d; want symlink root refusal without deletion", err, service.uninstallCalls)
+	}
+}
+
 func TestUninstaller_PreviewPrivateLayoutIncludesCapturedWindowsControlTarget(t *testing.T) {
 	layout, data, program := uninstallTestLayout(t)
 	writeUninstallFixture(t, data, "mihari.yaml")

@@ -494,6 +494,13 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				model.preparedUninstall = true
 				return model, tea.Quit
 			}
+			if next, ok := typed.Result.(ui.ActionIntentMsg); ok && next.Action == ui.ActionCompleteUninstall {
+				delete(model.pendingActions, typed.Intent.Key)
+				if len(model.pendingActions) == 0 {
+					model.globalState = ""
+				}
+				return model.handleActionIntent(next)
+			}
 		}
 		model.recordActionOutcome(typed.Intent, typed.Result)
 		var pageCmd tea.Cmd

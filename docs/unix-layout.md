@@ -30,7 +30,7 @@ Unix root 仍只接受 v1.19.30 的四个 Unix OS/arch 内置核心 hash，继�
 
 Unix 安装、迁移、服务生命周期与已安装服务自更新统一经过 app installer 的停机事务。锁顺序为 B install → 私有服务 P install → data → endpoint；永久锁文件不 unlink。daemon/Manager 仍是运行业务的唯一写入者，窄例外仅包括 root installer 在停机事务中迁移业务文件及维护安装资源，以及固定应用通道 metadata 的受锁保护维护。TUI 可经 logging 写自己的固定日志序列，不能直接写 settings、订阅或 token。
 
-迁移来源由可信已有服务定义或显式来源选项决定。没有已有服务时，固定 root-home 旧树存在可阻止错误的新建，但不会自动选择或导入该树。旧树与旧日志保留，不删除用户数据；迁移不会执行旧树 core。候选数据/核心/二进制先校验，持久化 action intent 后才改变安装资源。activation 持久化前可以恢复 source，之后只修复 target；恢复会核对 inode/hash/事务身份，重复恢复必须收敛。`mihari service apply --request <file>` 的 recover 请求是明确恢复入口；普通启动和通道写入不会悄悄恢复未完成事务。`service uninstall` 保留业务数据与恢复所需身份。`service uninstall --purge --yes` 在服务停止后删除预检通过的受管文件根；未知名称停止且不删除。
+迁移来源由可信已有服务定义或显式来源选项决定。没有已有服务时，固定 root-home 旧树存在可阻止错误的新建，但不会自动选择或导入该树。旧树与旧日志保留，不删除用户数据；迁移不会执行旧树 core。候选数据/核心/二进制先校验，持久化 action intent 后才改变安装资源。activation 持久化前可以恢复 source，之后只修复 target；恢复会核对 inode/hash/事务身份，重复恢复必须收敛。`mihari service apply --request <file>` 的 recover 请求是明确恢复入口；普通启动和通道写入不会悄悄恢复未完成事务。`service uninstall` 保留业务数据与恢复所需身份。`service uninstall --purge --yes` 在服务停止后删除白名单内的受管文件根；未知名称停止且不删除。`--purge --yes --force` 跳过内容检查并删除整个目标根。
 
 已安装服务启动必须匹配全局 B 的 activation/complete、选定 P/D/E/C/I 和当前 binary hash，并在取得 data/endpoint lease 后再次校验。普通未标记的 root P 前台只查看自己的 P；不存在安装权限绕过。TUI 更新先取消并等待工作与日志句柄退出，再执行安装事务和重新启动界面。
 

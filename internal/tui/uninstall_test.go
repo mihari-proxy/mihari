@@ -25,6 +25,13 @@ func (f *uninstallRunFake) Run(_ context.Context, progress func(string)) error {
 	return nil
 }
 
+func (f *uninstallRunFake) RunForce(_ context.Context, progress func(string)) error {
+	f.runCalls++
+	*f.order = append(*f.order, "run")
+	progress("Uninstalling Mihari service")
+	return nil
+}
+
 func TestFinishCompleteUninstallRun_CleansUpBeforeRunningAndPrintsProgress(t *testing.T) {
 	var order []string
 	fake := &uninstallRunFake{order: &order}

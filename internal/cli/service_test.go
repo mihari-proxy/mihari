@@ -22,14 +22,21 @@ type fakeService struct {
 }
 
 type fakePurgeUninstaller struct {
-	calls int
-	err   error
+	calls      int
+	forceCalls int
+	err        error
 }
 
 func (*fakePurgeUninstaller) Preview(context.Context) ([]app.UninstallTarget, error) { return nil, nil }
 
 func (f *fakePurgeUninstaller) Run(_ context.Context, progress func(string)) error {
 	f.calls++
+	progress("Uninstalling Mihari service")
+	return f.err
+}
+
+func (f *fakePurgeUninstaller) RunForce(_ context.Context, progress func(string)) error {
+	f.forceCalls++
 	progress("Uninstalling Mihari service")
 	return f.err
 }
@@ -46,6 +53,12 @@ func (*orderedPurgeUninstaller) Preview(context.Context) ([]app.UninstallTarget,
 func (f *orderedPurgeUninstaller) Run(context.Context, func(string)) error {
 	f.calls++
 	*f.order = append(*f.order, "run")
+	return nil
+}
+
+func (f *orderedPurgeUninstaller) RunForce(context.Context, func(string)) error {
+	f.calls++
+	*f.order = append(*f.order, "run-force")
 	return nil
 }
 
@@ -168,8 +181,8 @@ func TestServiceUninstall_PurgeWithYesRunsOnceAndKeepsJSONSingleEnvelope(t *test
 				args = append(args, "--json")
 			}
 			exit := Execute(context.Background(), args, stdout, stderr, Dependencies{Uninstaller: uninstaller})
-			if exit != ExitOK || uninstaller.calls != 1 {
-				t.Fatalf("exit=%d calls=%d stdout=%q stderr=%q", exit, uninstaller.calls, stdout.String(), stderr.String())
+			if exit != ExitOK || uninstaller.calls != 1 || uninstaller.forceCalls != 0 {
+				t.Fatalf("exit=%d calls=%d forceCalls=%d stdout=%q stderr=%q", exit, uninstaller.calls, uninstaller.forceCalls, stdout.String(), stderr.String())
 			}
 			if jsonOutput {
 				if strings.Count(stdout.String(), "\n") != 1 || !strings.Contains(stdout.String(), `"ok":true`) || stderr.Len() != 0 {
@@ -212,6 +225,37 @@ func TestServiceUninstall_PurgeClosesLocalResourcesBeforeRun(t *testing.T) {
 	})
 	if exit != ExitOK || uninstaller.calls != 1 || len(order) != 2 || order[0] != "close" || order[1] != "run" {
 		t.Fatalf("exit=%d calls=%d order=%v", exit, uninstaller.calls, order)
+	}
+}
+
+func TestServiceUninstall_ForceRequiresPurge(t *testing.T) {
+	stderr := &bytes.Buffer{}
+	exit := Execute(context.Background(), []string{"service", "uninstall", "--force"}, io.Discard, stderr, Dependencies{})
+	if exit != ExitUsage || !strings.Contains(stderr.String(), "--force requires --purge") {
+		t.Fatalf("exit=%d stderr=%q", exit, stderr.String())
+	}
+}
+
+func TestServiceUninstall_PurgeForceRequiresYes(t *testing.T) {
+	stderr := &bytes.Buffer{}
+	exit := Execute(context.Background(), []string{"service", "uninstall", "--purge", "--force"}, io.Discard, stderr, Dependencies{})
+	if exit != ExitUsage || !strings.Contains(stderr.String(), "--purge requires --yes") {
+		t.Fatalf("exit=%d stderr=%q", exit, stderr.String())
+	}
+}
+
+func TestServiceUninstall_PurgeYesForceRunsForceOnce(t *testing.T) {
+	prev := elevate.Check
+	t.Cleanup(func() { elevate.Check = prev })
+	elevate.Check = func() bool { return true }
+	uninstaller := &fakePurgeUninstaller{}
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	exit := Execute(context.Background(), []string{"service", "uninstall", "--purge", "--yes", "--force"}, stdout, stderr, Dependencies{Uninstaller: uninstaller})
+	if exit != ExitOK || uninstaller.calls != 0 || uninstaller.forceCalls != 1 {
+		t.Fatalf("exit=%d calls=%d forceCalls=%d stdout=%q stderr=%q", exit, uninstaller.calls, uninstaller.forceCalls, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Uninstalling Mihari service") || !strings.Contains(stdout.String(), "Mihari has been completely uninstalled") {
+		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
 

@@ -65,7 +65,8 @@ func newUninstaller(layout platform.ResolvedLayout, opts UninstallerOptions, res
 	return &Uninstaller{layout: layout, opts: opts, controlRoot: controlRoot, controlRootErr: controlRootErr}
 }
 
-// Preview verifies and returns the fixed roots selected for uninstall.
+// Preview returns the fixed roots selected for uninstall. It does not inspect
+// folder contents; callers that must refuse unrecognized files use Run.
 func (u *Uninstaller) Preview(ctx context.Context) ([]UninstallTarget, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -74,17 +75,33 @@ func (u *Uninstaller) Preview(ctx context.Context) ([]UninstallTarget, error) {
 		return nil, fmt.Errorf("resolve Mihari installation control directory: %w", u.controlRootErr)
 	}
 	targets := uninstallTargets(u.layout, u.controlRoot)
-	if err := CheckUninstallFiles(ctx, targets); err != nil {
+	if err := inspectUninstallRoots(ctx, targets); err != nil {
 		return nil, err
 	}
 	return targets, nil
 }
 
-// Run stops and removes the service, then removes only roots verified by Preview.
+// Run stops and removes the service, then removes only roots whose contents
+// match the generated-file allowlist.
 func (u *Uninstaller) Run(ctx context.Context, progress func(string)) error {
+	return u.run(ctx, progress, false)
+}
+
+// RunForce stops and removes the service, then deletes the previewed folders
+// without inspecting unrecognized files inside them.
+func (u *Uninstaller) RunForce(ctx context.Context, progress func(string)) error {
+	return u.run(ctx, progress, true)
+}
+
+func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool) error {
 	targets, err := u.Preview(ctx)
 	if err != nil {
 		return err
+	}
+	if !force {
+		if err := CheckUninstallFiles(ctx, targets); err != nil {
+			return err
+		}
 	}
 	if u.opts.Elevated == nil || !u.opts.Elevated() {
 		return errors.New("administrator privileges are required; re-run this command from an elevated shell")
@@ -97,8 +114,13 @@ func (u *Uninstaller) Run(ctx context.Context, progress func(string)) error {
 	if err := u.waitForDaemonStop(ctx, progress); err != nil {
 		return err
 	}
-	if err := CheckUninstallFiles(ctx, targets); err != nil {
+	if err := inspectUninstallRoots(ctx, targets); err != nil {
 		return err
+	}
+	if !force {
+		if err := CheckUninstallFiles(ctx, targets); err != nil {
+			return err
+		}
 	}
 
 	for phase := 0; phase < 3; phase++ {
@@ -257,8 +279,8 @@ func removeUninstallTarget(target UninstallTarget, remove func(string) error) er
 	if err != nil {
 		return err
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return newUninstallFileError(target, ".", "symbolic link")
+	if reason := uninstallRootLinkReason(info); reason != "" {
+		return newUninstallFileError(target, ".", reason)
 	}
 	if !info.IsDir() {
 		return newUninstallFileError(target, ".", "non-directory root")

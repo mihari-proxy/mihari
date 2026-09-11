@@ -1041,10 +1041,17 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, m.rowSpinCmdIfNeeded()
 		}
 		return m, func() tea.Msg {
+			paths := uninstallTargetPaths(typed.targets)
 			return ui.ActionIntentMsg{
 				Action: ui.ActionCompleteUninstall, Page: ui.PageSystem, Key: "system:complete-uninstall",
-				Title: ui.CompleteUninstallTitle, Object: uninstallTargetPaths(typed.targets), Impact: ui.CompleteUninstallImpact, Rollback: ui.CompleteUninstallRollback,
-				Execute: func() tea.Msg { return ui.CompleteUninstallConfirmedMsg{} },
+				Title: ui.CompleteUninstallTitle, Object: paths, Impact: ui.CompleteUninstallImpact, Rollback: ui.CompleteUninstallRollback,
+				Execute: func() tea.Msg {
+					return ui.ActionIntentMsg{
+						Action: ui.ActionCompleteUninstall, Page: ui.PageSystem, Key: ui.CompleteUninstallConfirmKey,
+						Title: ui.CompleteUninstallConfirmTitle, Object: paths, Impact: ui.CompleteUninstallConfirmImpact, Rollback: ui.CompleteUninstallRollback,
+						Execute: func() tea.Msg { return ui.CompleteUninstallConfirmedMsg{} },
+					}
+				},
 			}
 		}
 	case systemProxyActionResultMsg:
