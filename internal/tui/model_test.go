@@ -636,7 +636,7 @@ func TestCompleteUninstallConfirmation_FirstConfirmOpensSecondPrompt(t *testing.
 
 func TestCompleteUninstallConfirmation_TwoConfirmsQuitAndPrepareUninstall(t *testing.T) {
 	model := NewModel()
-	updated, command := model.Update(ui.ActionIntentMsg{
+	updated, _ := model.Update(ui.ActionIntentMsg{
 		Action: ui.ActionCompleteUninstall, Key: "system:complete-uninstall",
 		Title: ui.CompleteUninstallTitle, Object: "/tmp/mihari-data", Impact: ui.CompleteUninstallImpact,
 		Execute: func() tea.Msg {
@@ -649,7 +649,7 @@ func TestCompleteUninstallConfirmation_TwoConfirmsQuitAndPrepareUninstall(t *tes
 	})
 	model = updated.(Model)
 	model.modal.selected = 0
-	updated, command = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(Model)
 	updated, command = model.Update(command())
 	model = updated.(Model)
