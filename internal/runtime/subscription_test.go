@@ -606,7 +606,7 @@ func TestProxySelectionWaitsForSubscriptionReload(t *testing.T) {
 	<-reloadEntered
 	selectDone := make(chan error, 1)
 	go func() {
-		selectDone <- manager.SelectProxy(context.Background(), Operation{ID: "select", Source: "test"}, "GLOBAL", "DIRECT")
+		selectDone <- manager.SelectProxy(context.Background(), Operation{ID: "select", Source: "test"}, "TEST", "DIRECT")
 	}()
 	select {
 	case <-selected:

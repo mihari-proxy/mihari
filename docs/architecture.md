@@ -103,6 +103,15 @@ Phase 4 保留几条明确边界：认证前、预解析和只读请求没有统
 - System 页面的 `Core Channel` 行可在 `stable` / `alpha` 之间切换;切换后由守护进程按新通道重装核心。版本行显示 `ParseVersion(mihomo -v)` 的身份 token,从不显示 `Prerelease-Alpha`。
 - 规则顺序从不排序;onboarding、系统、provider、订阅、面板和浏览器变更都经由守护进程变更协调器,破坏性或大范围操作需要确认。
 
+## 运行模式与 GLOBAL
+
+- Mihari 管理 `rule` / `global` / `direct` 的持久意图，settings 可选 `routing` 字段缺省为 Rule，覆盖订阅和 overrides 的 mode。GLOBAL 出口按稳定订阅 ID 保存，无订阅使用独立的 `bootstrap-global`。
+- 可选能力 `routing-mode-v1` 提供 `GET/PATCH /v1/routing`，明确区分 saved/live 与 applied/pending/unknown。`GET /v1/proxies` 附带候选所属的 revision/subscription_id；选择请求可携带 `if_revision`。TUI/CLI 不写业务文件。
+- 在线模式切换经统一 Manager mutation：观察旧模式/出口，按需 PATCH/PUT，读回确认，原子保存 settings 后发布 revision。写失败或保存失败恢复旧 live 状态；无法确认恢复则进入 degraded 并拒绝后续业务写入。请求超时后使用有界恢复 context 核对，不推断已停止或已成功。
+- 普通模式切换不 reload，不关闭连接。runtime YAML 在正常配置生成时写入保存的模式；supervisor 的健康检查在报告 running 前恢复 settings 意图，覆盖已有 runtime 文件及自动重启。订阅 reload 在同一 mutation 内恢复新订阅出口，失败同时回滚配置、目录和旧 live 出口。
+- GLOBAL 只使用实际可选择的候选。丢失出口时优先 DIRECT，否则退回 Rule，持久化后不会自动返回旧节点。Rule/Direct 下也可预选出口；删除订阅同步删除保存选择。
+- Proxies 顶部 Mode 使用项目 Theme 的回车弹窗，GLOBAL 入口复用现有组。候选 revision、订阅身份和会话 epoch 防止迟到结果影响当前选择。
+
 ## Web 网关
 
 - 守护进程在 `web-addr`(默认 `127.0.0.1:9191`)上启动回环 Web 网关。
@@ -111,6 +120,7 @@ Phase 4 保留几条明确边界：认证前、预解析和只读请求没有统
 - 面板静态资产位于 `web/{panel}/{build}/` 下,使用原子 `active.json` 切换,并保留一个先前构建用于回滚。
 - 浏览器 REST 与 WebSocket 流量在网关处认证;网关只将控制器密钥注入被代理的控制器请求。
 - 未知写入默认拒绝;核心升级与托管字段写入永远不会到达 mihomo。
+- zashboard/MetaCubeXD 的单字段 `PATCH /configs {"mode":"..."}` 与 `PUT /proxies/GLOBAL` 进入同一持久化用例。mode 与 TUN/其他字段混合、任意完整配置 PUT 仍拒绝；面板自行发起的连接关闭是独立操作。
 
 ## 订阅
 

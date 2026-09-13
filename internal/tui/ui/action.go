@@ -18,6 +18,7 @@ const (
 	ActionUpdateMihari            Action = "update-mihari"
 	ActionApplyEndpointChange     Action = "apply-endpoint-change"
 	ActionSelectProxy             Action = "select-proxy"
+	ActionSetRouting              Action = "set-routing"
 	ActionCloseConnection         Action = "close-connection"
 	ActionRefreshSubscription     Action = "refresh-subscription"
 	ActionRefreshAllSubscriptions Action = "refresh-all-subscriptions"

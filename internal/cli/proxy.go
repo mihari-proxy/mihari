@@ -10,6 +10,7 @@ import (
 
 func newProxyCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
 	root := &cobra.Command{Use: "proxy", Short: "Inspect and select proxies"}
+	root.AddCommand(newRoutingCommand(dependencies, options))
 	root.AddCommand(&cobra.Command{
 		Use: "groups", Short: "List proxy groups", Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {

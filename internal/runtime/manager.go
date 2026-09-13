@@ -144,7 +144,8 @@ type WebGateway interface {
 }
 
 type Manager struct {
-	trustedCore *core.TrustedExecution
+	routingMessage string // guarded by mutation ownership
+	trustedCore    *core.TrustedExecution
 
 	store                     *state.Store
 	coordinator               *state.Coordinator
@@ -676,6 +677,26 @@ func (m *Manager) Restart(ctx context.Context, operation Operation) error {
 
 func (m *Manager) SelectProxy(ctx context.Context, operation Operation, group, name string) error {
 	_, err := m.doOperation(ctx, "select:"+operation.ID, func(ctx context.Context) (any, error) {
+		if group == "GLOBAL" {
+			if name == "" {
+				return nil, routingArgument("GLOBAL selection is empty")
+			}
+			if err := m.lockMutation(ctx); err != nil {
+				return nil, err
+			}
+			defer m.unlock()
+			if err := m.checkIfRevision(operation.IfRevision); err != nil {
+				return nil, err
+			}
+			_, changed, err := m.changeRoutingLocked(ctx, m.settingsSnapshot().RoutingMode(), name, false, m.routingCoreStopped())
+			if err != nil {
+				m.markRoutingDegraded(ctx, err)
+			}
+			if err == nil && changed {
+				_, err = m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{ID: operation.ID, Source: operation.Source}, func(s state.Snapshot) (state.Snapshot, error) { return s, nil })
+			}
+			return nil, err
+		}
 		if m.controller == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
 		}

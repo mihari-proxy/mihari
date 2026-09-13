@@ -44,31 +44,38 @@ type DelayState struct {
 }
 
 type Model struct {
-	client         Client
-	newOperationID func() string
-	groups         []protocol.ProxyGroup
-	expanded       map[string]bool
-	focus          FocusID
-	delays         map[string]DelayState
-	queue          []string
-	inFlight       map[string]uint64
-	delayTestGen   uint64
-	pending        map[FocusID]bool
-	lastError      string
-	contentFocused bool
-	width          int
-	height         int
-	scrollY        int // top visible content line (viewport origin)
-	theme          ui.Theme
-	now            time.Time // delay-test spinner clock
-	delaySpinning  bool
-	delaySpinGen   uint64
+	routing            routingUI
+	groupsRevision     *uint64
+	groupsSubscription string
+	groupsFresh        bool
+	client             Client
+	newOperationID     func() string
+	groups             []protocol.ProxyGroup
+	expanded           map[string]bool
+	focus              FocusID
+	delays             map[string]DelayState
+	queue              []string
+	inFlight           map[string]uint64
+	delayTestGen       uint64
+	pending            map[FocusID]bool
+	lastError          string
+	contentFocused     bool
+	width              int
+	height             int
+	scrollY            int // top visible content line (viewport origin)
+	theme              ui.Theme
+	now                time.Time // delay-test spinner clock
+	delaySpinning      bool
+	delaySpinGen       uint64
 }
 
 type selectionResultMsg struct {
-	group string
-	node  string
-	err   error
+	group        string
+	node         string
+	err          error
+	routing      bool
+	epoch        uint64
+	subscription string
 }
 
 // Err implements the shell's action-outcome contract so proxy selections are
@@ -116,6 +123,11 @@ func (m *Model) SetSize(width, height int) {
 }
 
 func (m *Model) FocusFirst() {
+	if m.routing.available {
+		m.routing.focus = 0
+		m.scrollY = 0
+		return
+	}
 	if len(m.groups) > 0 {
 		m.focus = FocusID{Group: m.groups[0].Name}
 	}
@@ -124,6 +136,13 @@ func (m *Model) FocusFirst() {
 }
 
 func (m *Model) SetGroups(groups protocol.ProxyGroups) {
+	m.groupsFresh = true
+	m.groupsRevision = nil
+	if groups.Revision != nil {
+		revision := *groups.Revision
+		m.groupsRevision = &revision
+	}
+	m.groupsSubscription = groups.SubscriptionID
 	m.groups = append([]protocol.ProxyGroup(nil), groups.Groups...)
 	for index := range m.groups {
 		m.groups[index].All = append([]string(nil), groups.Groups[index].All...)
@@ -144,13 +163,27 @@ func (m *Model) SetGroups(groups protocol.ProxyGroups) {
 
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	switch typed := message.(type) {
+	case routingResultMsg:
+		m.routingResult(typed)
+		return m, nil
 	case selectionResultMsg:
+		if typed.routing && (!m.routing.available || typed.epoch != m.routing.epoch || typed.subscription != m.routing.status.SubscriptionID) {
+			return m, nil
+		}
 		delete(m.pending, FocusID{Group: typed.group, Node: typed.node})
+		if typed.routing {
+			m.InvalidateGroups()
+		}
 		if typed.err != nil {
 			m.lastError = ui.ProxySelectFailed
 			return m, nil
 		}
 		m.lastError = ""
+		if typed.routing {
+			// The next authoritative snapshot owns selection display. A later
+			// panel change may already have superseded this completed request.
+			return m, nil
+		}
 		if index := m.groupIndex(typed.group); index >= 0 {
 			m.groups[index].Now = typed.node
 		}
@@ -190,6 +223,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	if handled, cmd := m.routingKey(key.String()); handled {
+		return m, cmd
+	}
 	if key.String() == "ctrl+t" {
 		return m, m.testAll()
 	}
@@ -219,13 +255,21 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 }
 
 func (m *Model) View() string {
+	if m.routing.open {
+		return m.routingView()
+	}
+	header := m.routingHeader()
 	if len(m.groups) == 0 {
 		inner := ui.FullSectionInner(m.width)
 		body := m.theme.Muted.Render(ui.NoProxyGroups)
-		return ui.RenderBorderedSection(m.theme, ui.ProxiesSectionTitle, body, inner)
+		return strings.Join(append(header, ui.RenderBorderedSection(m.theme, ui.ProxiesSectionTitle, body, inner)), "\n")
 	}
 	lines, _, _ := m.buildContent()
-	return strings.Join(ui.SliceLines(lines, m.scrollY, m.height), "\n")
+	height := m.height
+	if height > 0 {
+		height = max(1, height-len(header))
+	}
+	return strings.Join(append(header, ui.SliceLines(lines, m.scrollY, height)...), "\n")
 }
 
 // buildContent renders the full page as terminal lines and reports the inclusive
@@ -244,7 +288,7 @@ func (m *Model) buildContent() (lines []string, focusStart, focusEnd int) {
 			marker = "▾"
 		}
 		focus := "  "
-		groupFocused := m.focus == (FocusID{Group: group.Name})
+		groupFocused := m.focus == (FocusID{Group: group.Name}) && (!m.routing.available || m.routing.focus < 0)
 		if groupFocused {
 			focus = ui.FocusMarker
 		}
@@ -318,13 +362,13 @@ func (m *Model) ensureFocusVisible() {
 		return
 	}
 	lines, focusStart, focusEnd := m.buildContent()
-	m.scrollY = ui.EnsureLineVisible(m.scrollY, m.height, len(lines), focusStart, focusEnd)
+	m.scrollY = ui.EnsureLineVisible(m.scrollY, max(1, m.height-len(m.routingHeader())), len(lines), focusStart, focusEnd)
 }
 
 func (m *Model) renderNode(group protocol.ProxyGroup, node protocol.ProxyNode, width int) string {
 	id := FocusID{Group: group.Name, Node: node.Name}
 	focus := "  "
-	if m.focus == id {
+	if m.focus == id && (!m.routing.available || m.routing.focus < 0) {
 		focus = ui.FocusMarker
 	}
 	selected := " "
@@ -351,7 +395,7 @@ func (m *Model) renderNode(group protocol.ProxyGroup, node protocol.ProxyNode, w
 	content := fmt.Sprintf("%s%s %s\n%s  %s", focus, selected, name, metadata, renderDelay(m.theme, m.delays[node.Name], m.now))
 	style := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(width)
 	// Accent the focused node only while content owns keyboard focus.
-	if m.focus == id && m.contentFocused {
+	if m.focus == id && m.contentFocused && (!m.routing.available || m.routing.focus < 0) {
 		style = style.BorderForeground(m.theme.ColorAccent)
 	}
 	return style.Render(content)
@@ -372,15 +416,34 @@ func (m *Model) selectFocused() tea.Cmd {
 	if m.client == nil || m.focus.Node == "" {
 		return nil
 	}
+	var revision *uint64
+	if m.routing.available && m.focus.Group == "GLOBAL" {
+		for id, pending := range m.pending {
+			if id.Group == "GLOBAL" && pending {
+				return nil
+			}
+		}
+		if !m.globalCandidatesCurrent() {
+			m.lastError = "GLOBAL candidates changed; wait for refresh"
+			return nil
+		}
+		value := *m.groupsRevision
+		revision = &value
+	}
 	m.lastError = ""
 	id := m.focus
 	m.pending[id] = true
 	operationID := m.newOperationID()
+	routing, epoch, subscription := revision != nil, m.routing.epoch, m.groupsSubscription
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, err := m.client.SelectProxy(ctx, id.Group, protocol.ProxySelectionRequest{OperationID: operationID, Name: id.Node})
-		return selectionResultMsg{group: id.Group, node: id.Node, err: err}
+		_, err := m.client.SelectProxy(ctx, id.Group, protocol.ProxySelectionRequest{OperationID: operationID, Name: id.Node, IfRevision: revision})
+		result := selectionResultMsg{group: id.Group, node: id.Node, err: err, routing: routing, epoch: epoch, subscription: subscription}
+		if routing {
+			return ui.PageResultMsg{Page: ui.PageProxies, Result: result}
+		}
+		return result
 	}
 }
 

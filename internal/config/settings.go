@@ -36,6 +36,7 @@ type LoggingSettings struct {
 }
 
 type Settings struct {
+	Routing            *RoutingSettings `yaml:"routing,omitempty"`
 	Schema             string           `yaml:"schema"`
 	MixedAddr          string           `yaml:"mixed-addr"`
 	ControllerAddr     string           `yaml:"controller-addr"`
@@ -88,6 +89,16 @@ func (s *Settings) SetLogging(logging LoggingSettings) {
 // Clone returns a copy of Settings that does not share mutable YAML values.
 func (s Settings) Clone() Settings {
 	clone := s
+	if s.Routing != nil {
+		routing := *s.Routing
+		if s.Routing.GlobalSelections != nil {
+			routing.GlobalSelections = make(map[string]string, len(s.Routing.GlobalSelections))
+			for id, name := range s.Routing.GlobalSelections {
+				routing.GlobalSelections[id] = name
+			}
+		}
+		clone.Routing = &routing
+	}
 	if s.Logging != nil {
 		logging := *s.Logging
 		clone.Logging = &logging
@@ -404,10 +415,16 @@ func SaveWithCommit(path string, settings Settings) (CommitResult, error) {
 	if err != nil {
 		return CommitResult{}, fmt.Errorf("encode settings: %w", err)
 	}
+	if len(content) > maxSettingsSize {
+		return CommitResult{}, dataError("settings file is too large")
+	}
 	return AtomicWriteWithCommit(path, content, 0o600)
 }
 
 func (s Settings) Validate() error {
+	if err := validateRouting(s.Routing); err != nil {
+		return err
+	}
 	if s.Schema != "mihari.settings/v1" {
 		return dataError("unsupported settings schema")
 	}

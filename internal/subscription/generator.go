@@ -23,6 +23,7 @@ func Generate(base Document, overrides map[string]any, settings config.Settings)
 		document[key] = value
 	}
 	ensureRoutable(document)
+	document["mode"] = settings.RoutingMode()
 	mixed, err := netip.ParseAddrPort(settings.MixedAddr)
 	if err != nil {
 		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mixed address"}

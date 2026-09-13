@@ -16,6 +16,7 @@ const (
 	UpdateMihari            = ui.ActionUpdateMihari
 	ApplyEndpointChange     = ui.ActionApplyEndpointChange
 	SelectProxy             = ui.ActionSelectProxy
+	SetRouting              = ui.ActionSetRouting
 	CloseConnection         = ui.ActionCloseConnection
 	RefreshSubscription     = ui.ActionRefreshSubscription
 	RefreshAllSubscriptions = ui.ActionRefreshAllSubscriptions
@@ -68,7 +69,7 @@ func RequiresDaemon(action Action) bool {
 func knownAction(action Action) bool {
 	switch action {
 	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, SwitchCoreChannel, SwitchMihariChannel, UpdateMihari, ApplyEndpointChange,
-		SelectProxy, CloseConnection, RefreshSubscription, UpdateProvider,
+		SelectProxy, SetRouting, CloseConnection, RefreshSubscription, UpdateProvider,
 		InstallPanel, UpdatePanel, ActivatePanel, OpenWebGUI, UninstallPanel, ReinstallPanel,
 		ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart,
 		CompleteUninstall,

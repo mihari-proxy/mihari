@@ -42,6 +42,7 @@ func (a fixturePanelAdapter) ResolveLatest(context.Context) (string, string, err
 }
 
 type trackingController struct {
+	mode     atomic.Value // string
 	selected atomic.Value // string
 	upgrade  atomic.Int64
 	server   *httptest.Server
@@ -52,12 +53,25 @@ func newTrackingController(t *testing.T, secret string) *trackingController {
 	t.Helper()
 	tc := &trackingController{secret: secret}
 	tc.selected.Store("DIRECT")
+	tc.mode.Store("rule")
 	tc.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+secret {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/configs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"mode": tc.mode.Load()})
+		case r.Method == http.MethodPatch && r.URL.Path == "/configs":
+			var patch struct {
+				Mode string `json:"mode"`
+			}
+			if json.NewDecoder(r.Body).Decode(&patch) != nil {
+				http.Error(w, "bad patch", 400)
+				return
+			}
+			tc.mode.Store(patch.Mode)
+			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodGet && r.URL.Path == "/version":
 			_ = json.NewEncoder(w).Encode(map[string]any{"version": "v1.19.0"})
 		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/upgrade"):

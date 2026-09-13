@@ -229,6 +229,8 @@ func TestCatalog_KeysAppearInHandlerSource(t *testing.T) {
 			}
 		case b.Mode == ModeColumns:
 			return []string{filepath.Join(tuiDir, "pages", "connections", "model.go")}
+		case b.Mode == ModeRouting:
+			return []string{filepath.Join(tuiDir, "pages", "proxies", "routing.go")}
 		case b.Mode == ModeForm:
 			return []string{
 				filepath.Join(tuiDir, "pages", "subscriptions", "form.go"),

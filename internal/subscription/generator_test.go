@@ -54,7 +54,7 @@ proxies:
 	if err := yaml.Unmarshal(content, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got["mixed-port"] != 9190 || got["bind-address"] != "127.0.0.1" || got["allow-lan"] != false || got["external-controller"] != "127.0.0.1:9090" || got["secret"] != testSettings().ControllerSecret || got["mode"] != "global" {
+	if got["mixed-port"] != 9190 || got["bind-address"] != "127.0.0.1" || got["allow-lan"] != false || got["external-controller"] != "127.0.0.1:9090" || got["secret"] != testSettings().ControllerSecret || got["mode"] != "rule" {
 		t.Fatalf("wrong merge result: %#v", got)
 	}
 	for _, field := range []string{"external-ui", "external-ui-name", "external-ui-url"} {

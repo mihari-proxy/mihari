@@ -253,6 +253,9 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		DiagnosticReporter: options.DiagnosticReporter,
 		Health: func(ctx context.Context) error {
 			_, err := controller.Version(ctx)
+			if err == nil && manager != nil {
+				err = manager.RestoreRouting(ctx)
+			}
 			return err
 		},
 		Observe: func(observation supervisor.Observation) {
@@ -580,8 +583,24 @@ func (m webMutator) timestamp() string {
 	return now().UTC().Format("20060102T150405.000000000")
 }
 
-// ApplyConfigPatch applies allowlisted config mutations (currently TUN only) via the coordinator.
+// ApplyConfigPatch applies one allowlisted routing or TUN mutation via the coordinator.
 func (m webMutator) ApplyConfigPatch(ctx context.Context, patch map[string]any) error {
+	if raw, exists := patch["mode"]; exists {
+		mode, ok := raw.(string)
+		if len(patch) != 1 || !ok || !protocol.ValidRoutingMode(mode) {
+			return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid routing patch"}
+		}
+		op := runtimeapi.Operation{ID: "web-routing-" + m.newWebOperationID(), Source: "web"}
+		ctx = logging.WithOperation(ctx, logging.OperationMetadata{ID: op.ID, Name: "routing.update"})
+		routing, ok := m.manager.(interface {
+			UpdateRouting(context.Context, runtimeapi.Operation, string) (protocol.RoutingStatus, error)
+		})
+		if !ok {
+			return protocol.APIError{Code: protocol.CodeInvalidState, Message: "routing mode is unavailable"}
+		}
+		_, err := routing.UpdateRouting(ctx, op, mode)
+		return m.reportResult(ctx, err)
+	}
 	tunRaw, ok := patch["tun"]
 	if !ok {
 		return protocol.APIError{

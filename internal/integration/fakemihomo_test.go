@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -49,16 +50,42 @@ func runFakeMihomo(arguments []string) int {
 	var config struct {
 		Controller string `yaml:"external-controller"`
 		Secret     string `yaml:"secret"`
+		Mode       string `yaml:"mode"`
 	}
 	if err := yaml.Unmarshal(raw, &config); err != nil || config.Controller == "" || config.Secret == "" {
 		return 1
 	}
 	mux := http.NewServeMux()
 	selected := "DIRECT"
+	var routingMu sync.Mutex
+	mode := config.Mode
+	if mode == "" {
+		mode = "rule"
+	}
+	mux.HandleFunc("GET /configs", func(w http.ResponseWriter, _ *http.Request) {
+		routingMu.Lock()
+		defer routingMu.Unlock()
+		writeFakeJSON(w, map[string]any{"mode": mode})
+	})
+	mux.HandleFunc("PATCH /configs", func(w http.ResponseWriter, r *http.Request) {
+		var patch struct {
+			Mode string `json:"mode"`
+		}
+		if json.NewDecoder(r.Body).Decode(&patch) != nil {
+			http.Error(w, "invalid patch", 400)
+			return
+		}
+		routingMu.Lock()
+		mode = patch.Mode
+		routingMu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("GET /version", func(response http.ResponseWriter, _ *http.Request) {
 		writeFakeJSON(response, map[string]any{"meta": true, "version": "v1.19.0"})
 	})
 	mux.HandleFunc("GET /proxies", func(response http.ResponseWriter, _ *http.Request) {
+		routingMu.Lock()
+		defer routingMu.Unlock()
 		writeFakeJSON(response, map[string]any{"proxies": map[string]any{
 			"GLOBAL": map[string]any{"name": "GLOBAL", "type": "Selector", "now": selected, "all": []string{"DIRECT", "REJECT"}},
 		}})
@@ -71,7 +98,9 @@ func runFakeMihomo(arguments []string) int {
 			http.Error(response, "bad request", http.StatusBadRequest)
 			return
 		}
+		routingMu.Lock()
 		selected = body.Name
+		routingMu.Unlock()
 		response.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /group/{name}/delay", func(response http.ResponseWriter, _ *http.Request) {
@@ -93,10 +122,21 @@ func runFakeMihomo(arguments []string) int {
 			http.Error(response, "bad request", http.StatusBadRequest)
 			return
 		}
-		if _, err := os.Stat(body.Path); err != nil {
+		content, err := os.ReadFile(body.Path)
+		if err != nil {
 			http.Error(response, "missing config", http.StatusUnprocessableEntity)
 			return
 		}
+		var next struct {
+			Mode string `yaml:"mode"`
+		}
+		if yaml.Unmarshal(content, &next) != nil {
+			http.Error(response, "invalid config", http.StatusUnprocessableEntity)
+			return
+		}
+		routingMu.Lock()
+		mode, selected = next.Mode, "DIRECT"
+		routingMu.Unlock()
 		response.WriteHeader(http.StatusNoContent)
 	})
 	for _, stream := range []string{"traffic", "memory", "logs"} {

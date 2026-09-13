@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"time"
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -105,6 +106,12 @@ func (m *Manager) mutateTrustedTun(ctx context.Context, op Operation, enable, fo
 		m.setTunLastError(message)
 		return protocol.TunStatus{}, m.rollbackTrustedTun(ctx, op, candidate, previous, diagnostics.Wrap(mapped, confirmationErr))
 	}
+	// Routing restoration may have persisted a fallback during reload. Merge
+	// that result into this staged TUN commit so neither setting is lost.
+	candidate, err = m.settleRoutingSettings(ctx, candidate)
+	if err != nil {
+		return protocol.TunStatus{}, m.rollbackTrustedTun(ctx, op, candidate, previous, err)
+	}
 	m.publishSettings(candidate)
 	m.setTunLastError("")
 	_, err = m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{ID: op.ID, Source: op.Source, IfRevision: op.IfRevision}, func(s state.Snapshot) (state.Snapshot, error) { markConfigApplied(&s); return s, nil })
@@ -127,9 +134,13 @@ func sameActiveSubscription(a, b subscription.Catalog) bool {
 // rollbackTrustedTun restores settings and the startup-bound configuration,
 // degrading mutations only when recovery cannot be confirmed.
 func (m *Manager) rollbackTrustedTun(ctx context.Context, op Operation, candidate settingsCandidate, previous []byte, cause error) error {
-	recovery := context.WithoutCancel(ctx)
+	recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
 	rollback := settingsCandidate{before: candidate.after, after: candidate.before, changed: candidate.changed}
 	_, settingsErr := m.saveSettingsCandidate(ctx, rollback)
+	if settingsErr == nil {
+		m.publishSettings(rollback)
+	}
 	var configErr error
 	if previous != nil {
 		cap, err := m.trustedCore.RestoreConfig(recovery, previous)
@@ -163,6 +174,9 @@ func (m *Manager) rollbackTrustedTun(ctx context.Context, op Operation, candidat
 				configErr = errors.Join(errors.New("TUN live restore is unconfirmed"), err, parseErr)
 			}
 		}
+	}
+	if configErr == nil && previous != nil && candidate.before.Routing != nil {
+		configErr = m.applyRoutingLive(recovery, candidate.before.RoutingMode(), candidate.before.GlobalSelection(m.routingSubscriptionID()))
 	}
 	if settingsErr == nil && configErr == nil {
 		return cause

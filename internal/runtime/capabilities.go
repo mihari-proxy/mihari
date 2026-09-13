@@ -6,6 +6,7 @@ func (m *Manager) Capabilities() []string {
 	capabilities := []string{
 		protocol.CapabilityCore,
 		protocol.CapabilityProxies,
+		protocol.CapabilityRouting,
 		protocol.CapabilityConnections,
 		protocol.CapabilityRules,
 		protocol.CapabilityRuleProviders,

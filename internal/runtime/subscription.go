@@ -246,6 +246,19 @@ func (m *Manager) RemoveSubscription(ctx context.Context, operation Operation, i
 					return snapshot, applyErr
 				}
 				markConfigApplied(&snapshot)
+			} else {
+				_, saveErr := m.updateSettings(ctx, func(settings *config.Settings) error {
+					if settings.Routing != nil {
+						delete(settings.Routing.GlobalSelections, id)
+					}
+					return nil
+				})
+				if saveErr != nil {
+					if restoreErr := m.subscriptions.Restore(before); restoreErr != nil {
+						return snapshot, degradedConfigError(saveErr, restoreErr)
+					}
+					return snapshot, saveErr
+				}
 			}
 			m.syncSubscriptionState(&snapshot, after)
 			return snapshot, nil
@@ -398,9 +411,7 @@ func (m *Manager) prepareConfigWithSettings(ctx context.Context, document subscr
 		return configCandidate{}, err
 	}
 	candidate, err := m.prepareContent(ctx, content)
-	if m.trustedCore != nil {
-		candidate.generation, candidate.generationBound = generation, true
-	}
+	candidate.generation, candidate.generationBound = generation, true
 	return candidate, err
 }
 
@@ -460,7 +471,7 @@ func (m *Manager) prepareContent(ctx context.Context, content []byte) (configCan
 	return configCandidate{path: path, content: content, hash: hash}, nil
 }
 
-func (m *Manager) commitRuntimeConfig(ctx context.Context, candidate configCandidate) error {
+func (m *Manager) commitRuntimeConfigBytes(ctx context.Context, candidate configCandidate) error {
 	if m.trustedCore != nil {
 		return m.commitTrustedRuntimeConfig(ctx, candidate)
 	}

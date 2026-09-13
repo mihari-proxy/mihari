@@ -1315,7 +1315,7 @@ func TestGatewayConfigPatchAllowlistTUN(t *testing.T) {
 	}
 
 	// PATCH with unknown key → reject unsupported.
-	req, _ = http.NewRequest(http.MethodPatch, base+"/configs", strings.NewReader(`{"mode":"global"}`))
+	req, _ = http.NewRequest(http.MethodPatch, base+"/configs", strings.NewReader(`{"unknown":"global"}`))
 	authHeader(req)
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {

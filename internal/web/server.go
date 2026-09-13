@@ -601,10 +601,17 @@ func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, action A
 }
 
 // handleConfigMutation validates the browser PATCH/PUT /configs body against the
-// allowlist (TUN only in this phase) and routes through the coordinator mutator.
+// allowlist and routes one mode or TUN operation through the coordinator mutator.
 func (s *Server) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 	var patch map[string]any
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&patch); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err := decoder.Decode(&patch); err != nil {
+		s.reportMutationRejection(r.Context(), err)
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
 		s.reportMutationRejection(r.Context(), err)
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
@@ -623,7 +630,22 @@ func (s *Server) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Only "tun" is allowlisted for this phase.
+	if raw, exists := patch["mode"]; exists {
+		if len(patch) != 1 || r.Method != http.MethodPatch {
+			s.reportMutationRejection(r.Context(), nil)
+			WriteReject(w, ActionRejectUnknown)
+			return
+		}
+		mode, ok := raw.(string)
+		if !ok || !protocol.ValidRoutingMode(mode) {
+			s.reportMutationRejection(r.Context(), nil)
+			http.Error(w, "invalid routing mode", http.StatusBadRequest)
+			return
+		}
+		s.applyConfigMutation(w, r, patch)
+		return
+	}
+	// TUN preserves its existing request contract; mixed mutations are rejected.
 	for key := range patch {
 		if key != "tun" {
 			s.reportMutationRejection(r.Context(), nil)
@@ -657,6 +679,10 @@ func (s *Server) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	s.applyConfigMutation(w, r, patch)
+}
+
+func (s *Server) applyConfigMutation(w http.ResponseWriter, r *http.Request, patch map[string]any) {
 	if err := s.Mutator.ApplyConfigPatch(r.Context(), patch); err != nil {
 		reportFailure(r.Context(), s.Reporter, "mutation.failed", err)
 		writeMutationError(w, err)

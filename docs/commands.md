@@ -98,6 +98,11 @@ mihari core install
 mihari core update
 mihari core restart
 mihari proxy groups
+mihari proxy mode
+mihari proxy mode rule
+mihari proxy mode global
+mihari proxy mode direct
+mihari proxy select GLOBAL PROXY
 mihari proxy select GROUP PROXY
 mihari proxy test GROUP
 mihari connections list
@@ -107,6 +112,12 @@ mihari rules list
 mihari traffic --follow
 mihari logs --follow
 ```
+
+`proxy mode` 查询保存模式、实际模式和应用状态，带参数则切换；支持 `--json`。模式只有 `rule` / `global` / `direct`，默认 Rule，覆盖订阅自带 mode。模式由 Mihari 全局持久化，GLOBAL 出口按订阅记忆；Rule/Direct 下也能预选 GLOBAL，选择本身不会切换模式。Global 选择 `DIRECT` 表示所有新连接通过 GLOBAL 直连；Direct 是独立运行模式，不依赖 GLOBAL 的选择。
+
+TUI Proxies 顶部选中 **Mode** 按 Enter 打开弹窗，↑/↓ 选择、Enter 应用、Esc 取消。下一行 **GLOBAL** 展开同页的 GLOBAL 组，候选完全来自 mihomo。切换保留已有连接。有效候选消失时，有 DIRECT 则持久保存 DIRECT，否则保存 Rule，不会在节点重新出现时自动切回。内核明确停止时可保存模式，显示 `pending`；无法确认实际状态时显示 `unknown`，不会把保存值伪装成运行值。
+
+settings 新增可选 `routing.mode`、`routing.global-selections`（订阅 ID → 出口）与 `routing.bootstrap-global`。它们由 daemon 管理；支持的 Web 面板也走相同保存路径。旧版本可能拒绝新增 settings 字段，降级前应备份并迁移设置。旧 daemon 不通告 `routing-mode-v1` 时，TUI 隐藏新入口。
 
 ## 订阅管理
 

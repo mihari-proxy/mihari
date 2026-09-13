@@ -42,7 +42,7 @@ func BootstrapConfig(settings config.Settings) ([]byte, error) {
 		MixedPort:          mixed.Port(),
 		AllowLAN:           false,
 		BindAddress:        mixed.Addr().String(),
-		Mode:               "rule",
+		Mode:               settings.RoutingMode(),
 		LogLevel:           "info",
 		ExternalController: settings.ControllerAddr,
 		Secret:             settings.ControllerSecret,

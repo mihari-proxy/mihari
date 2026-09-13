@@ -648,7 +648,7 @@ func TestRuntimeMutationDoesNotWaitForSupervisorRestart(t *testing.T) {
 	mutationCtx := &doneObservedContext{Context: context.Background(), observed: make(chan struct{})}
 	selectDone := make(chan error, 1)
 	go func() {
-		selectDone <- manager.SelectProxy(mutationCtx, Operation{ID: "select", Source: "test"}, "GLOBAL", "DIRECT")
+		selectDone <- manager.SelectProxy(mutationCtx, Operation{ID: "select", Source: "test"}, "TEST", "DIRECT")
 	}()
 	select {
 	case <-selectEntered:
@@ -691,10 +691,10 @@ func TestControllerMutationsCommitRevisionAndPropagateErrors(t *testing.T) {
 		{
 			name:     "select proxy",
 			kind:     "select",
-			wantArgs: []string{"GLOBAL", "DIRECT"},
+			wantArgs: []string{"TEST", "DIRECT"},
 			setError: func(controller *fakeController, err error) { controller.selectProxyErr = err },
 			invoke: func(ctx context.Context, manager *Manager, operation Operation) error {
-				return manager.SelectProxy(ctx, operation, "GLOBAL", "DIRECT")
+				return manager.SelectProxy(ctx, operation, "TEST", "DIRECT")
 			},
 		},
 		{
@@ -760,7 +760,7 @@ func TestControllerMutationsSettleAfterSuccessfulCallCancelsRequest(t *testing.T
 			name: "select proxy",
 			kind: "select",
 			invoke: func(ctx context.Context, manager *Manager, operation Operation) error {
-				return manager.SelectProxy(ctx, operation, "GLOBAL", "DIRECT")
+				return manager.SelectProxy(ctx, operation, "TEST", "DIRECT")
 			},
 		},
 		{
@@ -815,7 +815,7 @@ func TestControllerMutationsSettleAfterConcurrentCoordinatorRevision(t *testing.
 	go func() {
 		mutationDone <- manager.SelectProxy(context.Background(), Operation{
 			ID: "select-with-concurrent-state", Source: "test", IfRevision: &current,
-		}, "GLOBAL", "DIRECT")
+		}, "TEST", "DIRECT")
 	}()
 	select {
 	case <-entered:
@@ -886,7 +886,7 @@ func TestControllerMutationsDeduplicateConcurrentOperationID(t *testing.T) {
 	operation := Operation{ID: "same-select", Source: "test"}
 	firstDone := make(chan error, 1)
 	go func() {
-		firstDone <- manager.SelectProxy(context.Background(), operation, "GLOBAL", "DIRECT")
+		firstDone <- manager.SelectProxy(context.Background(), operation, "TEST", "DIRECT")
 	}()
 	select {
 	case <-entered:
@@ -897,7 +897,7 @@ func TestControllerMutationsDeduplicateConcurrentOperationID(t *testing.T) {
 	secondCtx := &doneObservedContext{Context: context.Background(), observed: make(chan struct{})}
 	secondDone := make(chan error, 1)
 	go func() {
-		secondDone <- manager.SelectProxy(secondCtx, operation, "GLOBAL", "DIRECT")
+		secondDone <- manager.SelectProxy(secondCtx, operation, "TEST", "DIRECT")
 	}()
 	select {
 	case <-secondCtx.observed:
@@ -1348,7 +1348,7 @@ func TestInstallReleasesGateBeforeSupervisorRestartSettings(t *testing.T) {
 
 	selectDone := make(chan error, 1)
 	go func() {
-		selectDone <- manager.SelectProxy(context.Background(), Operation{ID: "during-install-restart", Source: "test"}, "GLOBAL", "DIRECT")
+		selectDone <- manager.SelectProxy(context.Background(), Operation{ID: "during-install-restart", Source: "test"}, "TEST", "DIRECT")
 	}()
 	select {
 	case <-selectEntered:
@@ -1545,7 +1545,7 @@ func TestMissingCoreStaysControllableAndStartsAfterInstall(t *testing.T) {
 	if err := waitManager(t, done); err != nil {
 		t.Fatal(err)
 	}
-	err := manager.SelectProxy(context.Background(), Operation{ID: "after-stop", Source: "test"}, "GLOBAL", "DIRECT")
+	err := manager.SelectProxy(context.Background(), Operation{ID: "after-stop", Source: "test"}, "TEST", "DIRECT")
 	var apiError protocol.APIError
 	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeInvalidState {
 		t.Fatalf("post-shutdown err=%v", err)

@@ -134,6 +134,7 @@ mihari sysproxy enable
 | View status | `mihari status` |
 | Core management | `mihari core status` · `mihari core restart` |
 | Proxy groups | `mihari proxy groups` · `mihari proxy select <GROUP> <PROXY>` |
+| Routing mode | `mihari proxy mode [rule\|global\|direct]` · `mihari proxy select GLOBAL <PROXY>` |
 | Subscription management | `mihari sub add <NAME> <URL>` · `mihari sub set <ID> --proxy auto` · `mihari sub use <ID>` |
 | System proxy / TUN | `mihari sysproxy enable` · `mihari sysproxy enable --force` · `mihari tun enable` · `mihari tun enable --force` |
 | Web panels | `mihari panel list` · `mihari panel open` |
@@ -142,6 +143,8 @@ mihari sysproxy enable
 | Update mihari | System page `Update Mihari` · `mihari self update` |
 
 See [docs/commands.md](docs/commands.md) for the full command reference, and [docs/architecture.md](docs/architecture.md) for the architecture and security model.
+
+In TUI **Proxies**, focus **Mode** and press Enter to choose Rule, Global, or Direct; use ↑/↓, Enter to apply, and Esc to cancel. **GLOBAL** opens the core's existing candidate group. Mihari saves the mode globally and the GLOBAL exit per subscription, including choices made by supported Web panels. Rule is the default. Mode and exit changes preserve existing connections. If a saved exit disappears, Mihari saves DIRECT when available, otherwise Rule; a stopped core shows saved changes as pending.
 
 ## Platform targets
 

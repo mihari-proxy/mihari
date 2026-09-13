@@ -1,0 +1,28 @@
+ Mihari  ·  ●  ·  0 conn  ·  ↑      0 B/s  ↓      0 B/s  ·  0 B                             Offline
+   1 Overview
+ › 2 Proxies
+   3 Conns
+   4 Rules
+   5 Logs                       ╭────────────────────────────────────────────────────╮
+   6 Subs                       │                                                    │
+   7 Web GUI                    │  Routing Mode                                      │
+   8 System                     │  Choose how traffic leaves mihomo                  │
+                                │                                                    │
+                                │     Rule  Current                                  │
+                                │    Follow routing rules                            │
+                                │                                                    │
+                                │  › Global                                          │
+                                │    Use the GLOBAL selection                        │
+                                │                                                    │
+                                │     Direct                                         │
+                                │    Connect directly                                │
+                                │                                                    │
+                                │  ↑↓ Select   Enter Apply   Esc Cancel              │
+                                │                                                    │
+                                ╰────────────────────────────────────────────────────╯
+
+
+
+
+
+ ↑/↓ select  Enter apply  Esc cancel  ? help  q quit

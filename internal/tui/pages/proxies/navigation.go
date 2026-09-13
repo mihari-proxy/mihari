@@ -22,6 +22,10 @@ func (m *Model) move(key string) {
 func (m *Model) moveGroup(key string) {
 	items := m.visibleItems()
 	index := indexOfFocus(items, m.focus)
+	if key == "up" && index == 0 && m.routing.available {
+		m.routing.focus = 1
+		return
+	}
 	switch key {
 	case "up":
 		if index > 0 {

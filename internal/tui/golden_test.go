@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	proxypage "github.com/mihari-proxy/mihari/internal/tui/pages/proxies"
 	systempage "github.com/mihari-proxy/mihari/internal/tui/pages/system"
 	"github.com/mihari-proxy/mihari/internal/tui/session"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -27,6 +28,36 @@ var ansiPattern = regexp.MustCompile("\x1b\\[[0-9;]*[A-Za-z]|\x1b\\][^\x07]*(\x0
 func normalizeRender(view string) string {
 	plain := ansiPattern.ReplaceAllString(view, "")
 	return strings.ReplaceAll(plain, "\r\n", "\n")
+}
+
+func TestGoldenRoutingMode(t *testing.T) {
+	for _, size := range []struct {
+		name          string
+		width, height int
+	}{{"compact", 72, 22}, {"full", 100, 28}} {
+		t.Run(size.name, func(t *testing.T) {
+			freezeUTC(t)
+			model := goldenModel(t, ui.PageProxies, size.width, size.height)
+			model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{Health: "ok", Revision: 3, Capabilities: []string{protocol.CapabilityProxies, protocol.CapabilityRouting}}})
+			model.applySessionEvent(session.Event{Kind: session.EventRouting, Epoch: 1, Routing: protocol.RoutingStatus{Revision: 3, DesiredMode: "rule", LiveMode: "rule", State: "applied", GlobalSelection: "DIRECT", LiveGlobalSelection: "DIRECT"}})
+			revision := uint64(3)
+			model.applySessionEvent(session.Event{Kind: session.EventProxies, Epoch: 1, Proxies: protocol.ProxyGroups{Revision: &revision, Groups: []protocol.ProxyGroup{{Name: "GLOBAL", Type: "Selector", Now: "DIRECT", All: []string{"DIRECT", "Tokyo", "Singapore"}, Nodes: []protocol.ProxyNode{{Name: "DIRECT", Type: "Direct"}, {Name: "Tokyo", Type: "VLESS"}, {Name: "Singapore", Type: "Trojan"}}}}}})
+			page := model.pages[ui.PageProxies].(*proxypage.Model)
+			page.FocusFirst()
+			assertGoldenContent(t, "routing_header_"+size.name, trimRenderPadding(normalizeRender(model.View().Content)))
+			page.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			page.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+			assertGoldenContent(t, "routing_picker_"+size.name, trimRenderPadding(normalizeRender(model.View().Content)))
+			next, _ := model.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
+			if next.(Model).active != ui.PageProxies || page.HelpMode() != ui.ModeRouting {
+				t.Fatal("digit escaped routing modal")
+			}
+			next, _ = model.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
+			if next.(Model).modal == nil {
+				t.Fatal("routing help did not open")
+			}
+		})
+	}
 }
 
 // freezeUTC pins time.Local so any .Local() formatting in the rendered pages is

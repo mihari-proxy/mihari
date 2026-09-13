@@ -134,6 +134,7 @@ mihari sysproxy enable
 | 查看状态 | `mihari status` |
 | 核心管理 | `mihari core status` · `mihari core restart` |
 | 代理组 | `mihari proxy groups` · `mihari proxy select <GROUP> <PROXY>` |
+| 运行模式 | `mihari proxy mode [rule\|global\|direct]` · `mihari proxy select GLOBAL <PROXY>` |
 | 订阅管理 | `mihari sub add <NAME> <URL>` · `mihari sub set <ID> --proxy auto` · `mihari sub use <ID>` |
 | 系统代理 / TUN | `mihari sysproxy enable` · `mihari sysproxy enable --force` · `mihari tun enable` · `mihari tun enable --force` |
 | Web 面板 | `mihari panel list` · `mihari panel open` |
@@ -142,6 +143,8 @@ mihari sysproxy enable
 | 更新 mihari | System 页 `Update Mihari` · `mihari self update` |
 
 完整命令参考见 [docs/commands.md](docs/commands.md),架构与安全机制见 [docs/architecture.md](docs/architecture.md)。
+
+TUI **Proxies** 页顶部的 **Mode** 按 Enter 打开 Rule / Global / Direct 选择弹窗，↑/↓ 选择、Enter 应用、Esc 取消；**GLOBAL** 入口展开 mihomo 返回的候选组。Mihari 全局保存模式、按订阅保存 GLOBAL 出口，支持面板发起的相同操作。默认使用 Rule，切换模式和出口保留已有连接。保存的出口消失时，有 DIRECT 候选则保存 DIRECT，否则保存 Rule；内核停止时保存的模式显示为 pending，待启动应用。
 
 ## 平台目标
 
