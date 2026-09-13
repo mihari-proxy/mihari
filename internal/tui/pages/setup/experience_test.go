@@ -84,7 +84,8 @@ func TestSetupPortSuggestions_PreserveOwnedUnknownAndNeverWrap(t *testing.T) {
 
 type observingClient struct {
 	*fakeClient
-	state string
+	state   string
+	queries int
 }
 
 type subscriptionClient struct {
@@ -185,7 +186,24 @@ func TestSetupWaitingRestart_ReturnToEditCannotBypassRestart(t *testing.T) {
 }
 
 func (f *observingClient) OperationStatus(context.Context, string) (protocol.OperationStatus, error) {
+	f.queries++
 	return protocol.OperationStatus{State: f.state}, nil
+}
+
+func TestSetupSettlement_RespectsAdvertisedCapability(t *testing.T) {
+	f := &observingClient{fakeClient: &fakeClient{status: defaultStatus(false)}, state: "finished"}
+	m := loadedModel(f.fakeClient)
+	m.client, m.step = f, stepCore
+	m.ObserveDaemon(protocol.Status{}, protocol.CoreStatus{})
+	m.Update(m.settle()())
+	if f.queries != 0 || !m.resultUnknown || !strings.Contains(m.View(), "does not support operation status") {
+		t.Fatal("old daemon was queried without the operation-status capability")
+	}
+	m.ObserveDaemon(protocol.Status{Capabilities: []string{protocol.OperationStatusCapability}}, protocol.CoreStatus{})
+	m.Update(m.settle()())
+	if f.queries != 1 || m.resultUnknown {
+		t.Fatal("updated daemon could not confirm settlement")
+	}
 }
 
 func TestSetupCancellation_EndpointsOnlyNeedsEndpointReadback(t *testing.T) {
@@ -196,6 +214,27 @@ func TestSetupCancellation_EndpointsOnlyNeedsEndpointReadback(t *testing.T) {
 	m.Update(m.settle()())
 	if m.resultUnknown {
 		t.Fatal("unavailable core blocked settlement of an endpoint-only operation")
+	}
+}
+
+func TestSetupSettlement_OnlyMentionsCancellationWhenRequested(t *testing.T) {
+	for _, cancelled := range []bool{false, true} {
+		m := loadedModel(&fakeClient{status: defaultStatus(false)})
+		m.step, m.cancelRequested = stepCore, cancelled
+		m.fail("Lost response", io.EOF)
+		m.Update(settlementMsg{gen: m.executionGen, confirmed: true, status: defaultStatus(false)})
+		if m.lastError != "" || m.errorDetail != "" {
+			t.Fatal("confirmed settlement was rendered as a failure")
+		}
+		for _, framed := range []bool{false, true} {
+			if framed {
+				m.SetSize(86, 24)
+			}
+			view := m.View()
+			if !strings.Contains(view, "Operation ended") || strings.Contains(view, "Cancellation requested") != cancelled {
+				t.Fatalf("wrong settlement copy for cancelled=%v:\n%s", cancelled, view)
+			}
+		}
 	}
 }
 

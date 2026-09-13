@@ -135,6 +135,7 @@ type Model struct {
 	focusedField       int
 	loading            bool
 	lastError          string
+	settlementNotice   string
 	errorAdvice        string
 	errorDetail        string
 	operationID        string
@@ -147,6 +148,7 @@ type Model struct {
 	cancelRequested    bool
 	settling           bool
 	resultUnknown      bool
+	statusUnsupported  bool
 	coreLocal          protocol.CoreStatus
 	coreLocalLoaded    bool
 	coreLocalGen       uint64
@@ -253,6 +255,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, nil
 		}
 		m.loading, m.settling = false, false
+		cancelled := m.cancelRequested
 		m.cancelRequested = false
 		if m.cancelSettlement != nil {
 			m.cancelSettlement()
@@ -260,7 +263,11 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		m.resultUnknown = !typed.confirmed || typed.err != nil
 		if m.resultUnknown {
-			m.fail("Result could not be confirmed", protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "The daemon has not confirmed settlement. Recheck before starting another operation."})
+			message := "The daemon has not confirmed settlement. Recheck before starting another operation."
+			if typed.unsupported {
+				message = "The connected daemon does not support operation status. Reconnect to an updated daemon before rechecking."
+			}
+			m.fail("Result could not be confirmed", protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: message})
 		} else {
 			m.status = typed.status
 			m.waitingRestart = typed.status.RestartRequired || m.portRecovery
@@ -282,7 +289,11 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 					}
 				}
 			}
-			m.fail("Operation settled", context.Canceled)
+			m.clearFailure()
+			m.settlementNotice = "Operation ended. Saved state rechecked; review before continuing."
+			if cancelled {
+				m.settlementNotice = "Cancellation requested · Operation ended. Saved work is kept."
+			}
 		}
 		return m, nil
 	case onboardingResultMsg:
@@ -737,6 +748,9 @@ func (m *Model) View() string {
 	}
 	if m.lastError != "" {
 		lines = append(lines, "", m.lastError)
+	}
+	if m.settlementNotice != "" {
+		lines = append(lines, "", m.theme.Info.Render(m.settlementNotice))
 	}
 	return strings.Join(lines, "\n")
 }

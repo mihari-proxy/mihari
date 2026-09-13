@@ -35,6 +35,7 @@ func (m *Model) WaitingRestart() bool { return m.waitingRestart }
 
 // ObserveDaemon supplies owner identity already available on the authenticated session.
 func (m *Model) ObserveDaemon(status protocol.Status, core protocol.CoreStatus) {
+	m.statusUnsupported = !slices.Contains(status.Capabilities, protocol.OperationStatusCapability)
 	m.portOwners = [3]int{core.PID, core.PID, status.PID}
 	m.portRecovery = status.Health == "degraded" && slices.Contains(status.Capabilities, protocol.CapabilityOnboarding) && !slices.Contains(status.Capabilities, protocol.CapabilityCore)
 }

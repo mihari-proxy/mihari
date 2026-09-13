@@ -20,6 +20,7 @@ type subscriptionReader interface {
 
 type cancelExecutionMsg struct{ gen uint64 }
 type settlementMsg struct {
+	unsupported   bool
 	gen           uint64
 	confirmed     bool
 	status        protocol.OnboardingStatus
@@ -84,11 +85,13 @@ func (m *Model) settle() tea.Cmd {
 	ctx, cancel := context.WithTimeout(owner, 15*time.Second)
 	m.cancelSettlement = cancel
 	current := m.step
+	unsupported := m.statusUnsupported
 	return func() tea.Msg {
 		defer cancel()
 		result := settlementMsg{gen: gen}
 		observer, ok := client.(operationObserver)
-		if !ok {
+		if !ok || unsupported {
+			result.unsupported = true
 			return result
 		}
 		for {

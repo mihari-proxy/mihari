@@ -84,6 +84,9 @@ func (m *Model) renderFrame(body []string) string {
 		content = append(content, ui.TruncateVisible(line, inner))
 	}
 	var tail []string
+	if m.settlementNotice != "" {
+		tail = append(tail, m.theme.Info.Render(ui.TruncateVisible(m.settlementNotice, inner)))
+	}
 	if m.loading {
 		tail = append(tail, m.theme.Info.Render(ui.TruncateVisible(m.executionText(), inner)))
 	}

@@ -34,6 +34,7 @@ func (m *Model) safeText(text string) string {
 }
 
 func (m *Model) fail(prefix string, err error) {
+	m.settlementNotice = ""
 	cause, advice := "The cause could not be confirmed.", "Open details and use the operation ID to locate daemon logs."
 	code := protocol.CodeInternal
 	var api protocol.APIError
@@ -70,7 +71,9 @@ func (m *Model) fail(prefix string, err error) {
 	}
 }
 
-func (m *Model) clearFailure() { m.lastError, m.errorAdvice, m.errorDetail = "", "", "" }
+func (m *Model) clearFailure() {
+	m.lastError, m.errorAdvice, m.errorDetail, m.settlementNotice = "", "", "", ""
+}
 
 func uncertainOutcome(err error) bool {
 	var api protocol.APIError
