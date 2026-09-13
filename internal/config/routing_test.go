@@ -60,6 +60,25 @@ func TestRouting_OversizedSelectionsCannotReplaceLoadableSettings(t *testing.T) 
 	}
 }
 
+func TestRouting_ClearedSelectionRemovesEntryAndKeepsOtherScopes(t *testing.T) {
+	s := Defaults()
+	s.SetRoutingMode("global")
+	s.SetGlobalSelection("a", "Missing")
+	s.SetGlobalSelection("b", "Node B")
+	s.SetGlobalSelection("", "DIRECT")
+	s.SetGlobalSelection("a", "")
+	if _, exists := s.Routing.GlobalSelections["a"]; exists {
+		t.Fatal("cleared selection retained an empty map entry")
+	}
+	if s.GlobalSelection("b") != "Node B" || s.GlobalSelection("") != "DIRECT" || s.RoutingMode() != "global" {
+		t.Fatal("clear changed unrelated routing intent")
+	}
+	s.SetGlobalSelection("", "")
+	if s.GlobalSelection("") != "" || s.GlobalSelection("b") != "Node B" {
+		t.Fatal("bootstrap clear affected subscription selection")
+	}
+}
+
 func TestRoutingSettings_RejectInvalidMode(t *testing.T) {
 	s := Defaults()
 	s.SetRoutingMode("proxy")

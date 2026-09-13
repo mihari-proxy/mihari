@@ -48,6 +48,10 @@ func (s *Settings) SetGlobalSelection(id, name string) {
 		s.Routing.BootstrapGlobal = name
 		return
 	}
+	if name == "" {
+		delete(s.Routing.GlobalSelections, id)
+		return
+	}
 	if s.Routing.GlobalSelections == nil {
 		s.Routing.GlobalSelections = make(map[string]string)
 	}
