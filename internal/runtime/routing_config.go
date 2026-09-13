@@ -36,7 +36,9 @@ func (m *Manager) commitRuntimeConfig(ctx context.Context, candidate configCandi
 		return err
 	}
 	oldGlobal, globalErr := m.observeGlobal(ctx)
-	if globalErr != nil && settings.RoutingMode() == "global" {
+	// Rule/Direct can also have a preselected exit. Reload must not start
+	// without capturing the old selection needed for compensation.
+	if globalErr != nil {
 		return globalErr
 	}
 	err = m.commitRuntimeConfigBytes(ctx, candidate)
