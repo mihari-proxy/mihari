@@ -6,6 +6,7 @@ import (
 	"net/netip"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/geoip"
 	"github.com/mihari-proxy/mihari/internal/state"
 )
@@ -68,7 +69,7 @@ func (m *Manager) UpdateGeoIP(ctx context.Context, operation Operation) (geoip.S
 		}
 		candidate, err := m.prepareGeoIP(ctx)
 		if err != nil {
-			return nil, err
+			return nil, geoIPUpdateFailure("prepare GeoIP databases", err)
 		}
 		defer candidate.Cleanup()
 		if err := m.lockMutation(ctx); err != nil {
@@ -89,7 +90,7 @@ func (m *Manager) UpdateGeoIP(ctx context.Context, operation Operation) (geoip.S
 				if errors.Is(err, geoip.ErrStaleCandidate) {
 					return snapshot, protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "geoip database pair changed during update"}
 				}
-				return snapshot, err
+				return snapshot, geoIPUpdateFailure("activate GeoIP databases", err)
 			}
 			return snapshot, nil
 		})
@@ -111,4 +112,17 @@ func (m *Manager) UpdateGeoIP(ctx context.Context, operation Operation) (geoip.S
 		return geoip.Status{}, err
 	}
 	return result.(geoip.Status), nil
+}
+
+func geoIPUpdateFailure(stage string, err error) error {
+	var api protocol.APIError
+	if errors.As(err, &api) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	reason := geoip.SafeFailureReason(err)
+	if reason == "" {
+		reason = "failed; the cause could not be confirmed"
+	}
+	// Preserve the established error code while improving its safe explanation.
+	return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: stage + ": " + reason}, err)
 }

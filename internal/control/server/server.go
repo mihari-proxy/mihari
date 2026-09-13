@@ -19,6 +19,7 @@ import (
 )
 
 type Options struct {
+	Onboarding         OnboardingAPI
 	Token              string
 	Store              *state.Store
 	Runtime            RuntimeAPI
@@ -29,6 +30,8 @@ type Options struct {
 }
 
 type Server struct {
+	onboarding         OnboardingAPI
+	operations         operationObservation
 	token              string
 	store              *state.Store
 	runtime            RuntimeAPI
@@ -55,6 +58,7 @@ func New(options Options) *Server {
 	}
 	snapshotCtx, snapshotCancel := context.WithCancel(context.Background())
 	server := &Server{
+		onboarding:         options.Onboarding,
 		token:              options.Token,
 		store:              options.Store,
 		runtime:            options.Runtime,
@@ -70,12 +74,16 @@ func New(options Options) *Server {
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	if server.onboarding == nil {
+		server.onboarding, _ = options.Runtime.(onboardingAPI)
+	}
 	return server
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/status", s.status)
+	mux.HandleFunc("GET /v1/operations/{operation_id}", s.operationStatus)
 	s.runtimeRoutes(mux)
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		s.snapshotLifecycle.Lock()
@@ -118,6 +126,7 @@ func (s *Server) status(writer http.ResponseWriter, request *http.Request) {
 		PID:             os.Getpid(),
 	}
 	if s.runtime != nil {
+		status.Capabilities = append(status.Capabilities, protocol.OperationStatusCapability)
 		for _, capability := range s.runtime.Capabilities() {
 			if capability != protocol.MachineLogSnapshotCapability {
 				status.Capabilities = append(status.Capabilities, capability)
@@ -129,9 +138,20 @@ func (s *Server) status(writer http.ResponseWriter, request *http.Request) {
 				status.SetupRequired = !onboardingStatus.Status.Complete
 			}
 		}
+		if runtime, ok := s.runtime.(interface {
+			SetupRequired(context.Context) (bool, error)
+		}); ok {
+			if required, err := runtime.SetupRequired(request.Context()); err == nil {
+				status.SetupRequired = required
+			}
+		}
 	}
 	if s.snapshotSource != nil {
 		status.Capabilities = sortedUnique(append(status.Capabilities, protocol.MachineLogSnapshotCapability))
+	}
+	if s.runtime == nil && s.onboarding != nil {
+		status.Capabilities = sortedUnique(append(status.Capabilities, protocol.CapabilityOnboarding, protocol.OperationStatusCapability))
+		status.SetupRequired = true
 	}
 	if snapshot.Config.Status != "" {
 		status.Config = &protocol.ConfigStatus{

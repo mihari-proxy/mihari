@@ -90,9 +90,11 @@ Phase 4 保留几条明确边界：认证前、预解析和只读请求没有统
 - 搜索与表单字段中的括号粘贴和 Ctrl+V 使用纯 Go 实现的 `github.com/atotto/clipboard` 辅助库;Mihari 本身从不把密钥写入剪贴板。
 - 页面:独立的首次运行 Setup 路由、Overview、可展开的 Proxies、带本地 GeoIP 详情的活动/已关闭 Connections、Rules/Providers、有界的结构化 Logs 流、订阅管理表单、分类的 System 页面,以及驱动面板安装/更新/激活/打开/回滚的 Web GUI 页面(在守护进程通告 `web-gui` 能力之后)。
 - Setup 安装核心、可添加初始订阅、准备本地 GeoIP 数据,并请求守护进程持久化校验过的本地端点。
-- Setup 第一步用短连接 `net.Listen` 预检三个托管端口的可用性:占用端口标红(Danger)并提供一键自动切换到下一个可用端口(从 `port+1` 起搜索,上限 `+1024`,三端口保持互异);权限等未知错误不标红、不阻塞,仍由守护进程启动时兜底校验。预检以 generation 守卫拒绝迟到的探测结果。
-- 进入 core / GeoIP 步骤时,Setup 经只读 `GET /v1/core`、`GET /v1/geoip/status` 探测本地资源就绪:已就绪显示版本并提示「将直接使用、无需下载」,失败回退静态文案且绝不阻塞流程。
-- Setup 审查页汇总端口(改端口且守护进程报告需重启时标注「需重启生效」)/ core 来源与版本(本地已有/新装/安装失败)/ 订阅 / GeoIP / mihari 服务注册状态(经 `GET /v1/service/status` 拉取);跳过项如实标注。各步结果在命令闭包内回写 Model,依赖 Bubble Tea 的 cmd→channel→Update happens-before 保证。
+- Setup 端口预检复用 PID owner 分类，区分本实例占用、确认的外部冲突、可用与未知；仅外部冲突允许自动建议新端口。搜索最多 `+1024`，不越过 65535，预留其他字段的端口，generation 守卫拒绝迟到探测结果。
+- Setup 使用共享 Theme 的分步固定布局，按动作显示动态等待与耗时。异步命令只返回结果，页面字段仅在 Update 中发布；错误详情使用安全消息和白名单诊断字段，可滚动、复制，不公开内部 cause。
+- 每步经 daemon 提交，端口确认时 PATCH onboarding（Complete=nil），随后等待重启生效。最终 Review 只结束引导，不重交端口。SetupRequired 根据端口生效状态与核心资源判断，历史 Complete、可选订阅和 GeoIP 不再独自决定是否进入向导。读取失败不等于核心缺失；已有订阅自动略过，注册后首次下载失败重试同一 ID 的 refresh。
+- 仅已确认的启动端口占用可开放 daemon 内部受限 onboarding 适配器，复用 Manager 的校验和原子设置事务。健康仍为 degraded，不挂载完整 RuntimeAPI；不扩大权限错误、安装事务失败等场景的可写边界。当前服务适配器不提供实例身份，端口保存后提供手动重启及重连检查，不自动操作无法核对身份的服务。
+- 新增认证只读 `GET /v1/operations/{operation_id}`（能力 `operation-status-v1`）：响应 schema、operation_id、state（running/finished/unknown），不返回请求体或内部原因。内存最多保留 256 条固定长度摘要键记录，饱和时保守 unknown；重启/淘汰亦为 unknown。覆盖 setup 的 core install、GeoIP update、onboarding update、订阅 add（含首次刷新）及 profile mutation 的完整 handler 生命周期；同 ID 所有 handler 收尾后才可能 finished。finished 不代表业务成功，取消后仍读取对应领域状态；查询绝不重放 mutation。
 - System 页面通过与 `mihari service` 相同的本地服务适配器管理 OS 服务(安装/卸载/启动/停止/重启/状态);这些操作要求进程已经提权,且不经过守护进程控制协议。当守护进程通告相应能力时,System 页面显示实时的系统代理与 TUN 状态,并通过本地控制 API 切换它们(开启外部代理或其他 TUN / mihomo 实例需要强制确认;Mihari 从不清除其他产品的代理)。
 - System 页面的 Ports Config 可修改 Mixed / Controller / Web 端口;占用按本实例 PID 显示 `Owned`,或 `Occupied by name (pid)` / `Available`。写入复用 onboarding 更新,应用后通常 `RestartRequired`。没有对应 CLI。
 - System 页面的 Logging 区可修改 daemon-owned 的 level、最大文件大小与保留数量；更新经稳定的 `/v1/logging` 控制协议热应用，不需要 daemon restart。Logs 页的 `e` 与 System → Logging 的 **Export logs** 打开同一个本地导出对话框；导出不增加 CLI 命令；Unix 系统模式使用可选的 machine-log-snapshot-v1 控制协议。

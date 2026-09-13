@@ -727,6 +727,16 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 			Level:     slog.LevelError,
 			Err:       err,
 		})
+		var conflict *app.ManagedPortConflict
+		if errors.As(err, &conflict) {
+			store := app.NewDegradedStore(deps.Version, err)
+			recovery, recoveryErr := app.NewPortRecovery(deps.Paths, settings, store, err, diagnosticReporter)
+			if recoveryErr == nil {
+				return runDaemon(ctx, daemon.Options{Listen: deps.Listen, Endpoint: deps.Endpoint, Token: deps.Token, Version: deps.Version, Ready: deps.Ready, Store: store, Onboarding: recovery, SnapshotSource: snapshot, DiagnosticReporter: diagnosticReporter})
+			}
+			reportDaemonDiagnostic(ctx, diagnosticReporter, diagnosticStderr, diagnostics.Record{Component: "daemon.startup", Event: "port_recovery_failed", Level: slog.LevelError, Err: recoveryErr})
+			return runDegradedDaemon(ctx, deps, recoveryErr, snapshot, diagnosticReporter)
+		}
 		return runDegradedDaemon(ctx, deps, err, snapshot, diagnosticReporter)
 	}
 	var onReady func() error

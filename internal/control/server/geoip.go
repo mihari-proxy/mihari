@@ -87,6 +87,7 @@ func (s *Server) geoIPUpdate(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "geoip.update"})
+	defer s.operations.begin(body.OperationID)()
 	status, err := s.runtime.UpdateGeoIP(ctx, runtimeapi.Operation{ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision})
 	if err != nil {
 		s.writeControlError(ctx, writer, err)

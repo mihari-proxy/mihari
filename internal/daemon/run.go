@@ -13,6 +13,7 @@ import (
 )
 
 type Options struct {
+	Onboarding         controlserver.OnboardingAPI
 	SnapshotSource     logging.MachineSnapshotSource
 	DiagnosticReporter diagnostics.Reporter
 	Listen             func(context.Context) (net.Listener, error)
@@ -69,7 +70,7 @@ func Run(parent context.Context, options Options) error {
 		go func() { runtimeDone <- options.Runtime.Run(ctx) }()
 	}
 	runtimeAPI, _ := options.Runtime.(controlserver.RuntimeAPI)
-	server := controlserver.New(controlserver.Options{Token: options.Token, Store: store, Runtime: runtimeAPI, SnapshotSource: options.SnapshotSource, DiagnosticReporter: options.DiagnosticReporter})
+	server := controlserver.New(controlserver.Options{Token: options.Token, Store: store, Runtime: runtimeAPI, Onboarding: options.Onboarding, SnapshotSource: options.SnapshotSource, DiagnosticReporter: options.DiagnosticReporter})
 	serverError := server.Serve(ctx, listener)
 	cancel()
 	if runtimeDone != nil {

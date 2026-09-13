@@ -25,6 +25,14 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 		response string
 		invoke   func(context.Context, *Client) error
 	}{
+		{"operation status escaped", http.MethodGet, "/v1/operations/setup%2Fone", "", `{"schema":"mihari/v1","operation_id":"setup/one","state":"unknown"}`,
+			func(ctx context.Context, client *Client) error {
+				result, err := client.OperationStatus(ctx, "setup/one")
+				if err == nil && result.State != "unknown" {
+					return errors.New("invalid operation state")
+				}
+				return err
+			}},
 		{"core", http.MethodGet, "/v1/core", "", `{"schema":"mihari/v1","revision":1,"status":"running","version":"v1"}`,
 			func(ctx context.Context, client *Client) error { _, err := client.Core(ctx); return err }},
 		{"install", http.MethodPost, "/v1/core/install", `{"operation_id":"op","if_revision":1}`, `{"schema":"mihari/v1","version":"v1","updated":true,"revision":2}`,

@@ -32,10 +32,14 @@ func probeManagedPortsWithListener(settings config.Settings, lookup func(string)
 				details["pid"] = occupant.PID
 				details["process"] = filepath.Base(occupant.Process)
 			}
-			return protocol.APIError{
+			failure := protocol.APIError{
 				Code: protocol.CodeInvalidState, Message: "managed port is unavailable",
 				Details: details,
 			}
+			if platform.PortInUse(err) {
+				return &ManagedPortConflict{failure: failure}
+			}
+			return failure
 		}
 		_ = listener.Close()
 	}

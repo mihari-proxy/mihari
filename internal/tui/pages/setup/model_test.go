@@ -215,8 +215,12 @@ func TestSetupEscapeAtFirstStepRequestsCancelWithoutCompleting(t *testing.T) {
 	if command == nil || client.updateCalls != 0 {
 		t.Fatalf("command=%v updates=%d", command != nil, client.updateCalls)
 	}
-	if _, ok := command().(CancelledMsg); !ok || model.status.Complete != true {
+	request, ok := command().(ui.ConfirmationRequestMsg)
+	if !ok || request.OnConfirm == nil || model.status.Complete != true {
 		t.Fatalf("message=%T status=%#v", command(), model.status)
+	}
+	if _, ok := request.OnConfirm().(CancelledMsg); !ok {
+		t.Fatal("leave confirmation did not cancel manual setup")
 	}
 }
 
@@ -318,7 +322,7 @@ func TestSetupCommandsUseOwnedContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &fakeClient{status: defaultStatus(false)}
 	model := NewWithContext(ctx, client, func() string { return "setup-op" })
-	updated, _ := model.Update(onboardingResultMsg{status: client.status})
+	updated, _ := model.Update(onboardingResultMsg{status: client.status, core: &client.coreStatus})
 	model = updated.(*Model)
 	model.step = stepCore
 	cancel()
@@ -343,11 +347,13 @@ func TestSetupConfirmsBeforeChangingCompletedEffectiveConfiguration(t *testing.T
 	if command == nil {
 		t.Fatal("missing confirmation request")
 	}
-	request, ok := command().(ui.ActionIntentMsg)
-	if !ok || request.Execute == nil || request.Action != ui.ActionApplyEndpointChange || client.updateCalls != 0 {
+	request, ok := command().(ui.ConfirmationRequestMsg)
+	if !ok || request.OnConfirm == nil || client.updateCalls != 0 {
 		t.Fatalf("message=%T updates=%d", command(), client.updateCalls)
 	}
-	updated, _ = model.Update(request.Execute())
+	updated, command = model.Update(request.OnConfirm())
+	model = updated.(*Model)
+	updated, _ = model.Update(command())
 	_ = updated.(*Model)
 	if client.updateCalls != 1 {
 		t.Fatalf("updates=%d", client.updateCalls)
@@ -386,7 +392,11 @@ func defaultStatus(complete bool) protocol.OnboardingStatus {
 
 func loadedModel(client *fakeClient) *Model {
 	model := New(client, func() string { return "setup-op" })
-	updated, _ := model.Update(onboardingResultMsg{status: client.status})
+	result := onboardingResultMsg{status: client.status}
+	if client.coreErr == nil {
+		result.core = &client.coreStatus
+	}
+	updated, _ := model.Update(result)
 	return updated.(*Model)
 }
 
@@ -466,6 +476,7 @@ func TestSetupStepGeoIPShowsLocalReadyAndSkipStillWorks(t *testing.T) {
 func TestSetupLocalDetectionStaleResultsIgnored(t *testing.T) {
 	client := &fakeClient{status: defaultStatus(false), coreStatus: protocol.CoreStatus{LocalReady: true, LocalVersion: "v1.18.5"}}
 	model := loadedModel(client)
+	model.coreLocalLoaded = false
 	model.step = stepCore
 	first := model.fetchCoreLocal()
 	model.fetchCoreLocal() // bump generation, making first stale
@@ -491,8 +502,12 @@ func TestSetupLocalDetectionFallsBackToStaticOnProbeFailure(t *testing.T) {
 	}
 	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(*Model)
-	if !model.loading || command == nil {
-		t.Fatalf("enter blocked after probe failure: loading=%v command=%v", model.loading, command != nil)
+	if command == nil {
+		t.Fatal("missing read-only retry after probe failure")
+	}
+	model.Update(command())
+	if client.installCalls != 0 {
+		t.Fatal("probe failure was mistaken for missing core")
 	}
 }
 
@@ -702,10 +717,13 @@ func TestSetupEndpointsEnterAutoFixesOccupiedPorts(t *testing.T) {
 	if model.inputs[0].Value() == occupied {
 		t.Fatalf("occupied port not rewritten: %s", model.inputs[0].Value())
 	}
-	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, command = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(*Model)
-	if model.step != stepCore {
-		t.Fatalf("did not advance after fix: step=%v", model.step)
+	if model.step != stepEndpoints || command == nil {
+		t.Fatal("changed ports must be confirmed and saved before advancing")
+	}
+	if _, ok := command().(ui.ConfirmationRequestMsg); !ok {
+		t.Fatal("missing endpoint save confirmation")
 	}
 }
 

@@ -11,11 +11,13 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/logging"
+	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -41,20 +43,26 @@ const (
 )
 
 type onboardingResultMsg struct {
-	status protocol.OnboardingStatus
-	err    error
+	core             *protocol.CoreStatus
+	subscriptions    *protocol.SubscriptionList
+	subscriptionsErr error
+	status           protocol.OnboardingStatus
+	err              error
 }
 
 type actionResultMsg struct {
-	next      step
-	revision  uint64
-	operation logging.OperationMetadata
-	err       error
+	gen          uint64
+	core         *protocol.CoreInstallResult
+	subscription *protocol.Subscription
+	geoip        *protocol.GeoIPUpdateResult
+	next         step
+	revision     uint64
+	operation    logging.OperationMetadata
+	err          error
 }
 
-// coreLocalResultMsg carries an advisory local-core readiness probe for stepCore.
-// A stale generation (step re-entered) or non-nil err leaves the step on its static
-// copy (design §4.4) — local detection never blocks onboarding.
+// coreLocalResultMsg carries a read-only core readiness probe. Older generations
+// are ignored; a failed read remains unknown, not proof of a missing core.
 type coreLocalResultMsg struct {
 	gen    uint64
 	status protocol.CoreStatus
@@ -77,13 +85,14 @@ type serviceStatusMsg struct {
 	err    error
 }
 
-// portState is the three-valued result of a single endpoint port probe.
+// portState distinguishes bindable, foreign, unknown and owned endpoints.
 type portState uint8
 
 const (
 	portFree     portState = iota // bindable — net.Listen succeeded
 	portOccupied                  // EADDRINUSE — another process holds the port
 	portUnknown                   // any other error (permissions) — not red, not blocking
+	portOwned
 )
 
 // portProbeMsg carries generation-guarded endpoint port probe results for
@@ -97,6 +106,7 @@ type portProbeMsg struct {
 type completeStartMsg struct{}
 
 type completeResultMsg struct {
+	gen    uint64
 	status protocol.OnboardingStatus
 	err    error
 }
@@ -125,6 +135,18 @@ type Model struct {
 	focusedField       int
 	loading            bool
 	lastError          string
+	errorAdvice        string
+	errorDetail        string
+	operationID        string
+	cancelExecution    context.CancelFunc
+	cancelSettlement   context.CancelFunc
+	executionGen       uint64
+	executionStarted   time.Time
+	executionNow       time.Time
+	executionLabel     string
+	cancelRequested    bool
+	settling           bool
+	resultUnknown      bool
 	coreLocal          protocol.CoreStatus
 	coreLocalLoaded    bool
 	coreLocalGen       uint64
@@ -140,10 +162,19 @@ type Model struct {
 	serviceErr         bool
 	serviceGen         uint64
 	portProbe          [3]portState
+	portOwners         [3]int
+	automatic          bool
+	resumePending      bool
+	refreshInPlace     bool
+	portRecovery       bool
+	waitingRestart     bool
+	subscriptionsErr   error
+	subscriptions      protocol.SubscriptionList
 	portProbeLoaded    bool
 	portProbeGen       uint64
 	probe              func(string) portState
 	width              int
+	scroll             int
 	height             int
 	theme              ui.Theme
 }
@@ -165,7 +196,15 @@ func NewWithContext(ctx context.Context, client Client, newOperationID func() st
 
 func (m *Model) ID() ui.PageID { return ui.PageSetup }
 
-func (m *Model) SetSize(width, height int) { m.width, m.height = width, height }
+func (m *Model) SetSize(width, height int) {
+	m.width, m.height = width, height
+	for i := range m.inputs {
+		m.inputs[i].SetWidth(max(1, min(52, width-16)))
+	}
+	for i := range m.subscriptionInputs {
+		m.subscriptionInputs[i].SetWidth(max(1, min(52, width-10)))
+	}
+}
 
 func (m *Model) FocusFirst() {
 	if len(m.inputs) > 0 {
@@ -177,47 +216,181 @@ func (m *Model) Load() tea.Cmd {
 	if m.client == nil {
 		return nil
 	}
+	client, ctx := m.client, m.ctx
+	m.loading = true
+	m.executionLabel = "Reading saved setup state"
+	m.executionStarted, m.executionNow = time.Now(), time.Now()
 	return func() tea.Msg {
-		status, err := m.client.Onboarding(m.ctx)
-		return onboardingResultMsg{status: status, err: err}
+		status, err := client.Onboarding(ctx)
+		result := onboardingResultMsg{status: status, err: err}
+		if err != nil {
+			return result
+		}
+		return loadResources(ctx, client, result)
 	}
 }
 
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
+	previousStep := m.step
+	defer func() {
+		if m.step != previousStep {
+			m.scroll = 0
+		}
+	}()
 	switch typed := message.(type) {
+	case saveEndpointsStartMsg:
+		return m, m.saveEndpoints()
+	case endpointsSavedMsg:
+		return m.handleEndpointsSaved(typed)
+	case cancelExecutionMsg:
+		if typed.gen == m.executionGen && m.loading && m.cancelExecution != nil {
+			m.cancelRequested = true
+			m.cancelExecution()
+		}
+		return m, nil
+	case settlementMsg:
+		if typed.gen != m.executionGen {
+			return m, nil
+		}
+		m.loading, m.settling = false, false
+		m.cancelRequested = false
+		if m.cancelSettlement != nil {
+			m.cancelSettlement()
+			m.cancelSettlement = nil
+		}
+		m.resultUnknown = !typed.confirmed || typed.err != nil
+		if m.resultUnknown {
+			m.fail("Result could not be confirmed", protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "The daemon has not confirmed settlement. Recheck before starting another operation."})
+		} else {
+			m.status = typed.status
+			m.waitingRestart = typed.status.RestartRequired || m.portRecovery
+			if typed.core != nil {
+				m.coreLocal, m.coreLocalLoaded = *typed.core, true
+			}
+			if typed.geoip != nil {
+				m.geoipLocal, m.geoipLocalLoaded = *typed.geoip, true
+			}
+			if m.step == stepSubscription {
+				m.subscriptions = typed.subscriptions
+				m.subscriptionsErr = nil
+			}
+			if m.addedSubscription != nil {
+				for _, profile := range typed.subscriptions.Subscriptions {
+					if profile.ID == m.addedSubscription.ID {
+						value := profile
+						m.addedSubscription = &value
+					}
+				}
+			}
+			m.fail("Operation settled", context.Canceled)
+		}
+		return m, nil
 	case onboardingResultMsg:
 		m.loading = false
 		if typed.err != nil {
-			m.lastError = ui.SetupUnavailable
+			m.fail(ui.SetupUnavailable, typed.err)
 			return m, nil
 		}
 		m.status, m.initial = typed.status, typed.status
-		m.inputs = endpointInputs(typed.status)
-		m.subscriptionInputs = subscriptionInputs()
-		m.focusEndpoint(0)
+		preserve := m.refreshInPlace && len(m.inputs) > 0
+		m.refreshInPlace = false
+		if !preserve {
+			m.inputs = endpointInputs(typed.status)
+		}
+		if len(m.subscriptionInputs) == 0 {
+			m.subscriptionInputs = subscriptionInputs()
+		}
+		m.coreLocalLoaded = typed.core != nil
+		if typed.core != nil {
+			m.coreLocal = *typed.core
+			m.coreLocalLoaded = true
+			m.portOwners[0], m.portOwners[1] = typed.core.PID, typed.core.PID
+		}
+		m.subscriptionsErr = typed.subscriptionsErr
+		if typed.subscriptions != nil {
+			m.subscriptions = *typed.subscriptions
+			if m.addedSubscription != nil {
+				savedID := m.addedSubscription.ID
+				m.addedSubscription = nil
+				for _, profile := range m.subscriptions.Subscriptions {
+					if profile.ID == savedID {
+						value := profile
+						m.addedSubscription = &value
+					}
+				}
+			}
+		}
+		m.resumePending = !preserve && (m.automatic || m.waitingRestart)
+		m.waitingRestart = typed.status.RestartRequired
+		if m.width > 0 {
+			m.SetSize(m.width, m.height)
+		}
+		if !preserve {
+			m.focusEndpoint(0)
+		}
+		if preserve && m.step != stepEndpoints {
+			return m, nil
+		}
 		return m, m.probePorts()
 	case actionResultMsg:
+		if typed.gen != 0 && typed.gen != m.executionGen {
+			return m, nil
+		}
 		m.loading = false
+		if typed.core != nil && typed.err == nil {
+			m.coreResult = *typed.core
+			if typed.core.Version != "" {
+				m.coreLocal.LocalReady, m.coreLocalLoaded = true, true
+				m.coreLocal.LocalVersion = typed.core.Version
+			}
+		}
+		if typed.subscription != nil {
+			value := *typed.subscription
+			m.addedSubscription = &value
+			m.rememberSubscription(value)
+		}
+		if typed.geoip != nil && typed.err == nil {
+			value := *typed.geoip
+			m.geoipResult = &value
+			m.geoipLocal, m.geoipLocalLoaded = value.Status, true
+		}
+		if m.cancelExecution != nil {
+			m.cancelExecution()
+			m.cancelExecution = nil
+		}
+		if m.cancelRequested || uncertainOutcome(typed.err) {
+			m.loading, m.settling = true, true
+			return m, m.settle()
+		}
 		if typed.err != nil {
 			var apiError protocol.APIError
 			if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
-				m.lastError = ui.SetupChangedMessage
-				m.loading = true
-				return m, m.Load()
+				m.fail(ui.SetupChangedMessage, typed.err)
+				return m, m.reloadInPlace()
 			}
-			m.lastError = ui.SetupActionFailed
+			m.fail(ui.SetupActionFailed, typed.err)
 			return m, nil
 		}
-		m.lastError = ""
+		m.clearFailure()
 		if typed.revision > 0 {
 			m.status.Revision = typed.revision
+		}
+		if typed.subscription != nil && typed.subscription.ID != "" && (!typed.subscription.Cached || typed.subscription.LastError != "") {
+			cause := typed.subscription.LastError
+			if cause == "" {
+				cause = "The first download did not produce a usable subscription."
+			}
+			m.fail("Subscription saved; first download failed", protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: cause})
+			return m, nil
 		}
 		m.step = typed.next
 		switch m.step {
 		case stepCore:
 			return m, m.fetchCoreLocal()
 		case stepSubscription:
-			m.focusSubscription(0)
+			if !m.hasSubscriptions() {
+				m.focusSubscription(0)
+			}
 		case stepGeoIP:
 			return m, m.fetchGeoIPLocal()
 		case stepReview:
@@ -231,6 +404,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		if typed.err == nil {
 			m.coreLocal = typed.status
 			m.coreLocalLoaded = true
+		} else {
+			m.coreLocalLoaded = false
+			m.fail("Read local core state", typed.err)
 		}
 		return m, nil
 	case geoipLocalResultMsg:
@@ -240,6 +416,8 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		if typed.err == nil {
 			m.geoipLocal = typed.status
 			m.geoipLocalLoaded = true
+		} else {
+			m.geoipLocalLoaded = false
 		}
 		return m, nil
 	case serviceStatusMsg:
@@ -259,20 +437,33 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		m.portProbe = typed.results
 		m.portProbeLoaded = true
+		if m.resumePending {
+			return m, m.resumeFromState()
+		}
 		return m, nil
 	case completeStartMsg:
 		m.loading = true
 		return m, m.complete()
 	case completeResultMsg:
+		if typed.gen != 0 && typed.gen != m.executionGen {
+			return m, nil
+		}
+		if m.cancelExecution != nil {
+			m.cancelExecution()
+			m.cancelExecution = nil
+		}
+		if m.cancelRequested || uncertainOutcome(typed.err) {
+			m.loading, m.settling = true, true
+			return m, m.settle()
+		}
 		m.loading = false
 		if typed.err != nil {
 			var apiError protocol.APIError
 			if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
-				m.lastError = ui.SetupChangedMessage
-				m.loading = true
-				return m, m.Load()
+				m.fail(ui.SetupChangedMessage, typed.err)
+				return m, m.reloadInPlace()
 			}
-			m.lastError = ui.SetupCompletionFailed
+			m.fail(ui.SetupCompletionFailed, typed.err)
 			return m, nil
 		}
 		m.status = typed.status
@@ -280,6 +471,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	}
 
 	if m.loading {
+		if key, ok := message.(tea.KeyPressMsg); ok && key.String() == "esc" && m.cancelExecution != nil && !m.settling && !m.cancelRequested {
+			return m, m.cancelPrompt()
+		}
 		return m, nil
 	}
 	key, ok := message.(tea.KeyPressMsg)
@@ -287,18 +481,70 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		// Bracketed paste, clipboard results, and textinput blink updates must reach focused fields.
 		return m.forwardTextInput(message)
 	}
+	if key.String() == "f2" && m.errorDetail != "" {
+		body := m.errorDetail
+		return m, func() tea.Msg { return ui.ErrorDetailMsg{Title: "Setup error details", Body: body} }
+	}
+	if key.String() == "ctrl+q" {
+		return m, m.exitPrompt()
+	}
+	if key.String() == "pgdown" {
+		m.scroll++
+		return m, nil
+	}
+	if key.String() == "pgup" {
+		m.scroll = max(0, m.scroll-1)
+		return m, nil
+	}
 	if len(m.inputs) == 0 && m.step != stepSubscription {
+		if key.String() == "enter" {
+			m.loading = true
+			return m, m.Load()
+		}
+		return m, nil
+	}
+	if m.resultUnknown {
+		if key.String() == "enter" {
+			m.loading, m.settling = true, true
+			return m, m.settle()
+		}
+		return m, nil
+	}
+	if m.waitingRestart {
+		switch key.String() {
+		case "enter":
+			m.resumePending = true
+			return m, m.Load()
+		case "esc":
+			m.waitingRestart = false
+			return m, nil
+		}
 		return m, nil
 	}
 	if key.String() == "esc" {
 		if m.step > stepEndpoints {
 			m.step--
+			m.clearFailure()
+			if m.step == stepEndpoints {
+				m.focusEndpoint(0)
+			}
+			if m.step == stepCore {
+				return m, m.fetchCoreLocal()
+			}
+			if m.step == stepGeoIP {
+				return m, m.fetchGeoIPLocal()
+			}
 			return m, nil
 		}
-		return m, func() tea.Msg { return CancelledMsg{} }
+		if m.automatic {
+			return m, m.exitPrompt()
+		}
+		return m, func() tea.Msg {
+			return ui.ConfirmationRequestMsg{Title: "Leave setup?", Impact: "Saved ports, installed resources and registered subscriptions are kept. Unconfirmed edits are not saved.", Rollback: "Open setup again to continue.", OnConfirm: func() tea.Msg { return CancelledMsg{} }}
+		}
 	}
 	if key.String() == "q" && m.step != stepEndpoints && m.step != stepSubscription {
-		return m, tea.Quit
+		return m, m.exitPrompt()
 	}
 	if key.String() == "?" && m.step != stepEndpoints && m.step != stepSubscription {
 		return m, func() tea.Msg { return ui.OpenHelpMsg{} }
@@ -308,6 +554,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m.updateEndpoints(message, key)
 	case stepCore:
 		if key.String() == "enter" {
+			if !m.coreLocalLoaded {
+				return m, m.fetchCoreLocal()
+			}
 			m.loading = true
 			return m, m.installCore()
 		}
@@ -326,14 +575,8 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	case stepReview:
 		if key.String() == "enter" {
 			if m.endpointsChanged() {
-				return m, func() tea.Msg {
-					return ui.ActionIntentMsg{
-						Action: ui.ActionApplyEndpointChange, Page: ui.PageSetup, Capability: protocol.CapabilityOnboarding, Key: "setup:endpoints",
-						Title: ui.ReplaceConfigurationTitle, Object: ui.LocalEndpointsLabel,
-						Impact: ui.ReplaceConfigurationImpact, Rollback: ui.ReplaceConfigurationRollback,
-						Execute: m.complete(),
-					}
-				}
+				m.step = stepEndpoints
+				return m, m.saveEndpointsPrompt()
 			}
 			m.loading = true
 			return m, m.complete()
@@ -352,6 +595,9 @@ func (m *Model) forwardTextInput(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.inputs[m.focusedField] = updated
 		return m, command
 	case stepSubscription:
+		if m.hasSubscriptions() || m.subscriptionsErr != nil {
+			return m, nil
+		}
 		if len(m.subscriptionInputs) == 0 || m.focusedField < 0 || m.focusedField >= len(m.subscriptionInputs) {
 			return m, nil
 		}
@@ -377,12 +623,19 @@ func (m *Model) updateEndpoints(message tea.Msg, key tea.KeyPressMsg) (ui.Page, 
 			return m, nil
 		}
 		if m.portProbeLoaded && m.anyPortOccupied() {
-			fixed := findAvailablePorts(m.endpointValuesArray())
+			fixed := findAvailablePortsForStates(m.endpointValuesArray(), m.portProbe)
 			m.writeEndpoints(fixed)
 			m.lastError = ui.SetupPortAutoFixHint
 			return m, m.probePorts()
 		}
 		m.lastError = ""
+		if m.endpointsChanged() || m.portRecovery {
+			return m, m.saveEndpointsPrompt()
+		}
+		if m.status.RestartRequired {
+			m.waitingRestart = true
+			return m, nil
+		}
 		m.step = stepCore
 		return m, m.fetchCoreLocal()
 	}
@@ -392,6 +645,26 @@ func (m *Model) updateEndpoints(message tea.Msg, key tea.KeyPressMsg) (ui.Page, 
 }
 
 func (m *Model) updateSubscription(message tea.Msg, key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
+	if key.String() == "ctrl+s" {
+		m.step = stepGeoIP
+		m.clearFailure()
+		return m, m.fetchGeoIPLocal()
+	}
+	if m.hasSubscriptions() || m.subscriptionsErr != nil {
+		if key.String() != "enter" {
+			return m, nil
+		}
+		if m.subscriptionsErr != nil {
+			m.fail("Read subscriptions", m.subscriptionsErr)
+			return m, m.reloadInPlace()
+		}
+		if m.subscriptionNeedsRetry() {
+			return m, m.refreshSavedSubscription()
+		}
+		m.step = stepGeoIP
+		m.clearFailure()
+		return m, m.fetchGeoIPLocal()
+	}
 	switch key.String() {
 	case "tab":
 		m.focusSubscription((m.focusedField + 1) % len(m.subscriptionInputs))
@@ -419,8 +692,18 @@ func (m *Model) updateSubscription(message tea.Msg, key tea.KeyPressMsg) (ui.Pag
 }
 
 func (m *Model) View() string {
+	if m.waitingRestart {
+		lines := []string{ui.RestartRequiredTitle, "Ports are saved. Restart the Mihari daemon to apply them.", "For an installed service: restart Mihari with administrator/root privileges.", "For a foreground daemon: stop it and run mihari daemon again.", "Enter recheck connection and saved state"}
+		if m.width > 0 {
+			return m.renderFrame(lines)
+		}
+		return strings.Join(lines, "\n")
+	}
 	if m.loading && len(m.inputs) == 0 {
-		return m.theme.Title.Render(ui.SetupTitle) + "\n\n" + ui.LoadingLabel
+		if m.width > 0 {
+			return m.renderFrame(nil)
+		}
+		return m.theme.Title.Render(ui.SetupTitle) + "\n\n" + m.executionText()
 	}
 	lines := []string{m.theme.Title.Render(ui.SetupTitle), m.theme.Muted.Render(fmt.Sprintf(ui.SetupProgress, int(m.step)+1, 5)), ""}
 	switch m.step {
@@ -429,33 +712,11 @@ func (m *Model) View() string {
 		lines = append(lines, m.renderEndpoints()...)
 		lines = append(lines, "", ui.SetupEndpointHelp)
 	case stepCore:
-		lines = append(lines, ui.SetupCoreTitle, ui.SetupCoreBody)
-		if m.coreLocalLoaded {
-			if m.coreLocal.LocalReady {
-				version := m.coreLocal.LocalVersion
-				if version == "" {
-					version = "unknown"
-				}
-				lines = append(lines, "", fmt.Sprintf(ui.SetupCoreLocalReady, version))
-			} else {
-				lines = append(lines, "", ui.SetupCoreWillDownload)
-			}
-		}
-		lines = append(lines, "", ui.SetupEnterInstall)
+		lines = append(lines, m.coreStatusLines()...)
 	case stepSubscription:
-		lines = append(lines, ui.SetupSubscriptionTitle, ui.SetupSubscriptionBody)
-		lines = append(lines, renderInputs([]string{"Name", "URL"}, m.subscriptionInputs, m.focusedField)...)
-		lines = append(lines, "", ui.SetupSubscriptionHelp)
+		lines = append(lines, m.subscriptionStatusLines()...)
 	case stepGeoIP:
-		lines = append(lines, ui.SetupGeoIPTitle, ui.SetupGeoIPBody)
-		if m.geoipLocalLoaded {
-			if m.geoipLocal.Country.Available && m.geoipLocal.ASN.Available {
-				lines = append(lines, "", ui.SetupGeoIPLocalReady)
-			} else {
-				lines = append(lines, "", ui.SetupGeoIPWillDownload)
-			}
-		}
-		lines = append(lines, "", ui.SetupEnterOrSkip)
+		lines = append(lines, m.geoipStatusLines()...)
 	case stepReview:
 		mixed, controller, web := m.endpointValues()
 		lines = append(lines, ui.SetupReviewTitle,
@@ -468,8 +729,11 @@ func (m *Model) View() string {
 			"Service      "+m.serviceSummary(),
 			"", ui.SetupCompleteHelp)
 	}
+	if m.width > 0 {
+		return m.renderFrame(lines[3:])
+	}
 	if m.loading {
-		lines = append(lines, "", ui.LoadingLabel)
+		lines = append(lines, "", m.executionText())
 	}
 	if m.lastError != "" {
 		lines = append(lines, "", m.lastError)
@@ -591,13 +855,19 @@ func (m *Model) anyPortOccupied() bool {
 func (m *Model) probePorts() tea.Cmd {
 	m.portProbeGen++
 	gen := m.portProbeGen
+	values := m.endpointValuesArray()
+	owners := m.portOwners
 	probe := m.probe
-	if probe == nil {
-		probe = probeEndpoint
-	}
 	return func() tea.Msg {
-		values := m.endpointValuesArray()
-		return portProbeMsg{gen: gen, results: [3]portState{probe(values[0]), probe(values[1]), probe(values[2])}}
+		var results [3]portState
+		for i, address := range values {
+			if probe != nil {
+				results[i] = probe(address)
+			} else {
+				results[i] = classifySetupPort(address, owners[i], platform.LookupTCPOccupant)
+			}
+		}
+		return portProbeMsg{gen: gen, results: results}
 	}
 }
 
@@ -616,6 +886,8 @@ func (m *Model) renderEndpoints() []string {
 		suffix := ""
 		if m.portProbeLoaded {
 			switch m.portProbe[index] {
+			case portOwned:
+				suffix = "  " + ui.RenderPortHold(m.theme, ui.PortHold{Kind: ui.PortHoldOwned})
 			case portFree:
 				suffix = "  " + m.theme.Success.Render("✓")
 			case portOccupied:
@@ -661,20 +933,36 @@ func isAddrInUse(err error) bool {
 // distinct so validateEndpoints' collision rule still holds. If no free port is
 // found within the cap the input is left as-is (design §8) — never an invalid value.
 func findAvailablePorts(current [3]string) [3]string {
+	var states [3]portState
+	for i, addr := range current {
+		states[i] = probeEndpoint(addr)
+	}
+	return findAvailablePortsForStates(current, states)
+}
+
+func findAvailablePortsForStates(current [3]string, states [3]portState) [3]string {
 	result := current
 	used := make(map[uint16]bool)
+	for _, addr := range current {
+		if parsed, err := netip.ParseAddrPort(addr); err == nil {
+			used[parsed.Port()] = true
+		}
+	}
 	for index, addr := range current {
 		parsed, err := netip.ParseAddrPort(addr)
 		if err != nil {
 			continue
 		}
-		if probeEndpoint(addr) != portOccupied {
-			used[parsed.Port()] = true
+		if states[index] != portOccupied {
 			continue
 		}
 		host := parsed.Addr()
 		for offset := 1; offset <= 1024; offset++ {
-			candidate := uint16(parsed.Port()) + uint16(offset)
+			port := int(parsed.Port()) + offset
+			if port > 65535 {
+				break
+			}
+			candidate := uint16(port)
 			if used[candidate] {
 				continue
 			}
@@ -690,47 +978,51 @@ func findAvailablePorts(current [3]string) [3]string {
 }
 
 func (m *Model) installCore() tea.Cmd {
-	revision, operationID := m.status.Revision, m.newOperationID()
+	revision := m.status.Revision
+	executionCtx, gen, operationID := m.beginExecution("Installing mihomo core")
 	operation := logging.OperationMetadata{ID: operationID, Name: "core.install"}
 	return func() tea.Msg {
-		ctx := logging.WithOperation(m.ctx, operation)
+		ctx := logging.WithOperation(executionCtx, operation)
 		result, err := m.client.InstallCore(ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision, Source: "setup"})
 		// Capture the install outcome so stepReview can summarize "本地已有/新装/安装失败".
 		// The cmd→channel→Update path provides the happens-before guarantee (design §7.4).
-		m.coreResult = result
-		return actionResultMsg{next: stepSubscription, revision: result.Revision, operation: operation, err: err}
+		return actionResultMsg{gen: gen, core: &result, next: stepSubscription, revision: result.Revision, operation: operation, err: err}
 	}
 }
 
 func (m *Model) addSubscription(name, url string) tea.Cmd {
-	revision, operationID := m.status.Revision, m.newOperationID()
+	revision := m.status.Revision
+	ctx, gen, operationID := m.beginExecution("Saving and fetching subscription")
 	return func() tea.Msg {
-		result, err := m.client.AddSubscription(m.ctx, protocol.SubscriptionAddRequest{OperationID: operationID, IfRevision: &revision, Name: name, URL: url})
+		result, err := m.client.AddSubscription(ctx, protocol.SubscriptionAddRequest{OperationID: operationID, IfRevision: &revision, Name: name, URL: url})
 		// Capture the added subscription so stepReview shows its name, not the
 		// "未添加（已跳过）" fallback. See installCore for the happens-before note.
 		subscription := result.Subscription
-		m.addedSubscription = &subscription
-		return actionResultMsg{next: stepGeoIP, revision: result.Revision, err: err}
+		var saved *protocol.Subscription
+		if err == nil {
+			saved = &subscription
+		}
+		return actionResultMsg{gen: gen, subscription: saved, next: stepGeoIP, revision: result.Revision, err: err}
 	}
 }
 
 func (m *Model) updateGeoIP() tea.Cmd {
-	revision, operationID := m.status.Revision, m.newOperationID()
+	revision := m.status.Revision
+	executionCtx, gen, operationID := m.beginExecution("Preparing Country and ASN databases")
 	operation := logging.OperationMetadata{ID: operationID, Name: "geoip.update"}
-	ctx := logging.WithOperation(m.ctx, operation)
+	ctx := logging.WithOperation(executionCtx, operation)
 	return func() tea.Msg {
 		result, err := m.client.UpdateGeoIP(ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision, Source: "setup"})
 		// Capture the update outcome so stepReview shows "Country ✓ ASN ✓" or "更新失败".
 		// Copied by value; the runtime result is not retained. See installCore for the note.
 		resultCopy := result
-		m.geoipResult = &resultCopy
-		return actionResultMsg{operation: operation, next: stepReview, revision: result.Revision, err: err}
+		return actionResultMsg{gen: gen, geoip: &resultCopy, operation: operation, next: stepReview, revision: result.Revision, err: err}
 	}
 }
 
-// fetchCoreLocal probes GET /v1/core for the stepCore "use existing" hint. Advisory
-// only: failures leave coreLocalLoaded=false and the step renders its static copy.
-// The generation guard rejects results from a prior step entry.
+// fetchCoreLocal probes GET /v1/core before deciding whether setup can reuse or
+// install a core. Failed reads require a read-only retry, not a blind install.
+// The generation guard rejects older probe results.
 func (m *Model) fetchCoreLocal() tea.Cmd {
 	m.coreLocalGen++
 	gen := m.coreLocalGen
@@ -777,8 +1069,15 @@ func (m *Model) coreSummary() string {
 // subscriptionSummary renders the Subscription review row: the added
 // subscription name, or the skipped fallback when none was added.
 func (m *Model) subscriptionSummary() string {
+	if len(m.subscriptions.Subscriptions) > 0 {
+		return m.subscriptionCounts()
+	}
 	if m.addedSubscription != nil && m.addedSubscription.Name != "" {
-		return m.addedSubscription.Name
+		name := m.safeText(m.addedSubscription.Name)
+		if m.addedSubscription.ID != "" && (!m.addedSubscription.Cached || m.addedSubscription.LastError != "") {
+			return name + " · not ready; refresh in Subscriptions"
+		}
+		return name
 	}
 	return ui.SetupReviewSubscriptionNone
 }
@@ -831,15 +1130,14 @@ func (m *Model) restartSuffix() string {
 }
 
 func (m *Model) complete() tea.Cmd {
-	mixed, controller, web := m.endpointValues()
-	revision, operationID, complete := m.status.Revision, m.newOperationID(), true
+	revision, complete := m.status.Revision, true
+	ctx, gen, operationID := m.beginExecution("Finishing setup")
 	request := protocol.OnboardingUpdateRequest{
 		OperationID: operationID, IfRevision: &revision, Complete: &complete,
-		MixedAddr: &mixed, ControllerAddr: &controller, WebAddr: &web,
 	}
 	return func() tea.Msg {
-		status, err := m.client.UpdateOnboarding(m.ctx, request)
-		return completeResultMsg{status: status, err: err}
+		status, err := m.client.UpdateOnboarding(ctx, request)
+		return completeResultMsg{gen: gen, status: status, err: err}
 	}
 }
 

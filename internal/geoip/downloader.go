@@ -108,7 +108,7 @@ func (d Downloader) Prepare(ctx context.Context, spec DownloadSpec) (_ *FileCand
 		return nil, err
 	}
 	if got != want {
-		return nil, errors.New("geoip candidate checksum mismatch")
+		return nil, downloadFailure{message: "geoip candidate checksum mismatch"}
 	}
 	if err := file.Sync(); err != nil {
 		return nil, fmt.Errorf("sync geoip candidate: %w", err)
@@ -121,7 +121,7 @@ func (d Downloader) Prepare(ctx context.Context, spec DownloadSpec) (_ *FileCand
 		validate = validateMMDB
 	}
 	if err := validate(staged); err != nil {
-		return nil, fmt.Errorf("validate geoip candidate: %w", err)
+		return nil, downloadFailure{message: "geoip candidate failed database validation", cause: err}
 	}
 	return &FileCandidate{staged: staged, destination: spec.Destination, digest: got}, nil
 }
@@ -186,7 +186,7 @@ func downloadFile(ctx context.Context, client *http.Client, rawURL string, desti
 		return result, fmt.Errorf("download geoip database: %w", err)
 	}
 	if written > maxBytes {
-		return result, errors.New("geoip database exceeds size limit")
+		return result, downloadFailure{message: "geoip database exceeds size limit"}
 	}
 	copy(result[:], hash.Sum(nil))
 	return result, nil
@@ -207,7 +207,7 @@ func doGET(ctx context.Context, client *http.Client, rawURL string, allowHTTP bo
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		response.Body.Close()
-		return nil, fmt.Errorf("download geoip resource: unexpected HTTP status %d", response.StatusCode)
+		return nil, downloadFailure{message: fmt.Sprintf("download geoip resource: unexpected HTTP status %d", response.StatusCode)}
 	}
 	return response, nil
 }

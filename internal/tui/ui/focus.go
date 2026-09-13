@@ -39,6 +39,9 @@ type InputModeMsg struct{ Mode InputMode }
 // OpenHelpMsg asks the root shell to open the keyboard help overlay.
 type OpenHelpMsg struct{}
 
+// ErrorDetailMsg opens a safe, scrollable diagnostic detail supplied by a page.
+type ErrorDetailMsg struct{ Title, Body string }
+
 type RouteRequestMsg struct{ Page PageID }
 
 type CoreObservedMsg struct{ Core protocol.CoreStatus }
