@@ -46,14 +46,15 @@ func (m *Manager) RoutingStatus(ctx context.Context) (protocol.RoutingStatus, er
 	return status, nil
 }
 
-// RoutingProxies binds the candidate list to its mutation revision and subscription.
-func (m *Manager) RoutingProxies(ctx context.Context) (mihomo.Proxies, uint64, string, error) {
+// RoutingProxyCatalog binds complete display metadata and duplicate names to
+// the candidate list's mutation revision and subscription.
+func (m *Manager) RoutingProxyCatalog(ctx context.Context) (mihomo.Proxies, []string, uint64, string, error) {
 	if err := m.lockMaintenance(ctx); err != nil {
-		return mihomo.Proxies{}, 0, "", err
+		return mihomo.Proxies{}, nil, 0, "", err
 	}
 	defer m.unlock()
-	proxies, err := m.Proxies(ctx)
-	return proxies, m.store.Load().Revision, m.routingSubscriptionID(), err
+	proxies, duplicates, err := m.ProxyCatalog(ctx)
+	return proxies, duplicates, m.store.Load().Revision, m.routingSubscriptionID(), err
 }
 
 // UpdateRouting persists and applies a routing mode without closing connections.

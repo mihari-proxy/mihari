@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"encoding/json"
 	"log/slog"
 	"regexp"
 	"sort"
@@ -22,6 +23,8 @@ var (
 	quotedSecretPattern = regexp.MustCompile(`(?i)\b(token|secret|password|authorization|credential|api[-_]key)\s*([:=])\s*(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')`)
 	namedSecretPattern  = regexp.MustCompile(`(?i)\b(token|secret|password|authorization|credential|api[-_]key)\s*([:=])\s*[^\s&;,"']+`)
 	hex64Pattern        = regexp.MustCompile(`(?i)\b[0-9a-f]{64}\b`)
+	jsonSecretPattern   = regexp.MustCompile(`(?i)("(?:token|secret|password|authorization|credential|cookie|api[-_]key)"\s*:\s*)(?:"(?:\\.|[^"\\])*"|[^,}\s]+)`)
+	jsonMemberPattern   = regexp.MustCompile(`"(?:\\.|[^"\\])*"\s*:`)
 
 	sensitiveKeys = map[string]struct{}{
 		"secret":        {},
@@ -149,6 +152,7 @@ func (r *Redactor) String(value string) string {
 		out = strings.ReplaceAll(out, exact, redactedExact)
 	}
 	out = urlPattern.ReplaceAllString(out, redactedURL)
+	out = jsonSecretPattern.ReplaceAllString(normalizeSensitiveJSONKeys(out), `${1}"***"`)
 	out = authSchemePattern.ReplaceAllStringFunc(out, func(match string) string {
 		parts := strings.Fields(match)
 		if len(parts) == 0 {
@@ -161,6 +165,27 @@ func (r *Redactor) String(value string) string {
 	out = namedSecretPattern.ReplaceAllString(out, "${1}${2}"+redactedExact)
 	out = hex64Pattern.ReplaceAllString(out, redactedExact)
 	return out
+}
+
+// normalizeSensitiveJSONKeys recognizes escaped member names in embedded JSON
+// without reformatting the surrounding diagnostic or changing ordinary keys.
+func normalizeSensitiveJSONKeys(text string) string {
+	return jsonMemberPattern.ReplaceAllStringFunc(text, func(member string) string {
+		if !strings.Contains(member, `\`) {
+			return member
+		}
+		end := strings.LastIndex(member, `"`) + 1
+		var name string
+		if err := json.Unmarshal([]byte(member[:end]), &name); err != nil {
+			return member
+		}
+		_, sensitive := sensitiveKeys[strings.ToLower(name)]
+		if !sensitive && !strings.EqualFold(name, "api_key") {
+			return member
+		}
+		// Recognized names contain only ASCII letters, a hyphen or an underscore.
+		return `"` + name + `"` + member[end:]
+	})
 }
 
 // Value recursively redacts decoded JSON values without modifying the input.

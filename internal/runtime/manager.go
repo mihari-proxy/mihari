@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/netip"
 	"path/filepath"
@@ -435,7 +436,23 @@ func (m *Manager) DelayProxy(ctx context.Context, name, testURL string, timeoutM
 	if m.controller == nil {
 		return 0, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo controller is unavailable"}
 	}
-	return m.controller.DelayProxy(ctx, name, testURL, timeoutMilliseconds)
+	global, err := m.controller.Proxies(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("read global proxies for delay: %w", err)
+	}
+	if _, exists := global.Proxies[name]; exists {
+		return m.controller.DelayProxy(ctx, name, testURL, timeoutMilliseconds)
+	}
+	providers, err := m.proxyProviders(ctx)
+	if err != nil {
+		return 0, err
+	}
+	_, _, sources := resolveProxyCatalog(global, providers)
+	provider, found := sources[name]
+	if !found {
+		return 0, protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "Proxy node was not found"}
+	}
+	return m.controller.(proxyProviderController).DelayProviderProxy(ctx, provider, name, testURL, timeoutMilliseconds)
 }
 
 func (m *Manager) Connections(ctx context.Context) (mihomo.Connections, error) {

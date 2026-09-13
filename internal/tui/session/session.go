@@ -90,6 +90,7 @@ type Session struct {
 	loggingCapability      bool
 	loggingCapabilityKnown bool
 	routingCapability      bool
+	proxiesObserved        bool // current poll already published success or failure
 }
 
 func New(client Client, options Options) *Session {
@@ -193,7 +194,7 @@ func (s *Session) supervise(ctx context.Context) {
 // observed snapshot and retry without changing daemon transport state.
 func (s *Session) poll(ctx context.Context, status protocol.Status) error {
 	err := s.pollSnapshots(ctx, status)
-	if err != nil && slices.Contains(status.Capabilities, protocol.CapabilityRouting) {
+	if err != nil && !s.proxiesObserved && slices.Contains(status.Capabilities, protocol.CapabilityRouting) {
 		putOrdered(ctx, s.control, Event{Kind: EventProxies, Epoch: s.loggingEpoch, Err: err})
 	}
 	s.pollLogging(ctx, status)
@@ -202,6 +203,8 @@ func (s *Session) poll(ctx context.Context, status protocol.Status) error {
 }
 
 func (s *Session) pollSnapshots(ctx context.Context, status protocol.Status) error {
+	s.proxiesObserved = false
+	var proxyErr error
 	if slices.Contains(status.Capabilities, protocol.CapabilityCore) {
 		coreStatus, err := s.client.Core(ctx)
 		if err != nil {
@@ -222,12 +225,14 @@ func (s *Session) pollSnapshots(ctx context.Context, status protocol.Status) err
 	}
 	if slices.Contains(status.Capabilities, protocol.CapabilityProxies) {
 		proxies, err := s.client.ProxyGroups(ctx)
-		if err != nil {
-			return err
-		}
-		if !putOrdered(ctx, s.control, Event{Kind: EventProxies, Proxies: proxies, Epoch: s.loggingEpoch}) {
+		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		proxyErr = err
+		if !putOrdered(ctx, s.control, Event{Kind: EventProxies, Proxies: proxies, Epoch: s.loggingEpoch, Err: err}) {
+			return ctx.Err()
+		}
+		s.proxiesObserved = true
 	}
 	if slices.Contains(status.Capabilities, protocol.CapabilityRules) {
 		rules, err := s.client.Rules(ctx)
@@ -265,7 +270,7 @@ func (s *Session) pollSnapshots(ctx context.Context, status protocol.Status) err
 			return ctx.Err()
 		}
 	}
-	return nil
+	return proxyErr
 }
 
 func (s *Session) pollStatus(ctx context.Context, status protocol.Status) error {

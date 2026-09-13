@@ -90,6 +90,9 @@ func runFakeMihomo(arguments []string) int {
 			"GLOBAL": map[string]any{"name": "GLOBAL", "type": "Selector", "now": selected, "all": []string{"DIRECT", "REJECT"}},
 		}})
 	})
+	mux.HandleFunc("GET /providers/proxies", func(response http.ResponseWriter, _ *http.Request) {
+		writeFakeJSON(response, map[string]any{"providers": map[string]any{}})
+	})
 	mux.HandleFunc("PUT /proxies/{name}", func(response http.ResponseWriter, request *http.Request) {
 		var body struct {
 			Name string `json:"name"`

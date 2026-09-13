@@ -27,6 +27,9 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 
 ## 诊断错误链
 
+- Issue #204：mihomo typed REST、Web gateway REST 与 WebSocket HTTP 握手使用专用内部 HTTP cause 保留真实状态、固定操作类别、失败阶段与原始报错。仅日志边界输出这些内容，执行脱敏并明确标记截断；成功响应正文不转储。公开 API 继续只返回安全错误 envelope。非 HTTP 的既有保守诊断规则保持。
+- provider 读取由 Manager 编排，最多三次，单次最多 1 秒、该读取总计最多 4 秒，退避可取消；普通节点查询不增加这项预算。原始全局节点映射用于测速路由，合并后的目录仅供展示。普通节点优先，否则按 provider 名排序选择首个候选；Compatible 投影不重复计数。
+- `/v1/proxies` 成功响应增加可选 `duplicate_names`；失败不发布残缺目录。TUI 的启动首次成功完整检查消费一次同名提示机会；错误快照保留旧数据并标记过期，恢复后清除加载错误。原始原因、重试进度和来源身份不加入公开 DTO。
 - Phase 1 的 operation metadata 已用于 Phase 2 的 Logging 更新链路和 Phase 3 的主要业务 mutation。CLI/TUI 生成 ID，既有 `/v1` mutation DTO 携带 `operation_id`，本地控制客户端、控制服务器和 daemon 在各自的诊断 ctx 中绑定同一 ID 与静态 operation 名；没有增加 header 或持久化状态。一个实际 mutation 执行使用一个 ID；订阅 Add 后的立即拉取是独立子操作，批量 provider 更新的每个子操作也保留各自既有 ID。
 - settings 保存失败保留稳定的公开 `data_failure` / `persist settings` 分类，同时在内部错误链保留 cause，供 `errors.Is`/`errors.As` 与 daemon 的受控诊断使用。诊断 logger 输出有界、脱敏的类型化摘要，不能把路径、凭据、完整 URL 或配置原文带入公开响应、状态或事件。
 - 每次实际 mutation 执行是详细失败诊断的唯一 owner；同一 key 的缓存重放和并发等待者不会重复记录。控制服务器只为未被 owner 标记的意外失败补一条记录。对这条 settings 链路，已提交后的目录同步 warning 保持成功、revision 与内存发布，并在业务锁释放后以实际原因记录 WARN。

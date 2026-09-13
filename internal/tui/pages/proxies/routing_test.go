@@ -9,6 +9,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"strings"
 	"testing"
+	"time"
 )
 
 type modeClient struct {
@@ -140,5 +141,27 @@ func TestRouting_LateGLOBALSelectionCannotOverwriteNewSubscription(t *testing.T)
 	m.Update(result)
 	if m.groups[0].Now != "DIRECT" {
 		t.Fatal("late result changed new subscription")
+	}
+}
+
+func TestRouting_FailedProviderSnapshotRetainsModeAndDisablesGLOBAL(t *testing.T) {
+	m := New(&modeClient{}, nil)
+	m.SetSize(84, 26)
+	m.SetRoutingAvailable(true, 1)
+	revision := uint64(3)
+	m.SetRouting(protocol.RoutingStatus{Revision: revision, DesiredMode: "global", LiveMode: "global", State: "applied", GlobalSelection: "DIRECT"}, 1)
+	m.ObserveSnapshot(protocol.ProxyGroups{Revision: &revision, Groups: []protocol.ProxyGroup{{Name: "GLOBAL", Type: "Selector", Now: "DIRECT", All: []string{"DIRECT"}, Nodes: []protocol.ProxyNode{{Name: "DIRECT", Type: "Direct"}}}}}, time.Now(), nil)
+	if !m.globalCandidatesCurrent() {
+		t.Fatal("fresh GLOBAL disabled")
+	}
+	m.ObserveSnapshot(protocol.ProxyGroups{}, time.Now(), errors.New("provider failure"))
+	if m.globalCandidatesCurrent() {
+		t.Fatal("failed provider snapshot kept stale GLOBAL selectable")
+	}
+	view := m.View()
+	for _, want := range []string{"Mode", "Global", "Stale data", "Waiting for candidates"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %s", want)
+		}
 	}
 }

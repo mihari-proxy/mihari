@@ -91,6 +91,15 @@ func (f *diagnosticFormatter) visit(err error, depth int) {
 	}
 
 	switch value := err.(type) {
+	case *diagnostics.HTTPError:
+		redactor := f.redactor
+		if redactor == nil {
+			redactor = NewRedactor()
+		}
+		text := redactor.String(strings.ToValidUTF8(value.DiagnosticText(), "�"))
+		text = pathTokenPattern.ReplaceAllString(text, "[path]")
+		f.parts = append(f.parts, truncateDiagnostic(text, diagnosticMaxBytes))
+		return
 	case *os.PathError:
 		f.addOperation("path operation", value.Op)
 		f.visit(value.Err, depth+1)
@@ -305,9 +314,13 @@ func truncateDiagnostic(text string, limit int) string {
 	if len(text) <= limit {
 		return text
 	}
-	text = text[:limit]
+	const marker = " [truncated]"
+	if limit < len(marker) {
+		return marker[:limit]
+	}
+	text = text[:limit-len(marker)]
 	for !utf8.ValidString(text) {
 		text = text[:len(text)-1]
 	}
-	return text
+	return text + marker
 }

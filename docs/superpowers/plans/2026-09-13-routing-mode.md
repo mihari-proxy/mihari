@@ -190,3 +190,5 @@ gofmt -l .
 本地验证通过：`go test ./...`、`go test -race ./...`、`go vet ./...`；末轮事务修正后再次通过全仓普通测试及 config/runtime/app/integration/TUI 的 race。Linux 目标 `golangci-lint run ./...` 零问题，修改的 Go 文件 `gofmt -l` 无输出，`git diff --check` 通过。Windows/Linux/macOS × amd64/arm64 的 `CGO_ENABLED=0` 构建通过，产物保存在仓库外临时目录。Windows lint 对既有 Unix 专用 `maxGeoResourceBytes` 报 unused，未扩展修改该无关代码。
 
 用户已追加授权提交、推送、创建指向 dev 的 PR，并跟进 CI 与可执行的 bot review；不自动合并。
+
+2026-09-14 同步 `dev` 的 `04ee706`（provider 节点目录与 HTTP 错误诊断）：候选快照通过完整 ProxyCatalog 保留元数据和重名提示，同时绑定 routing revision/订阅；provider 失败保留页面并撤销 GLOBAL 选择权限。新增组合回归覆盖元数据与 revision 同时返回、失败页面保留 Mode、错误快照只发布一次且不阻断 Rules/Routing 更新。

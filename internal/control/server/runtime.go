@@ -35,6 +35,7 @@ type RuntimeAPI interface {
 	Install(context.Context, runtimeapi.Operation) (core.InstallResult, error)
 	Restart(context.Context, runtimeapi.Operation) error
 	Proxies(context.Context) (mihomo.Proxies, error)
+	ProxyCatalog(context.Context) (mihomo.Proxies, []string, error)
 	SelectProxy(context.Context, runtimeapi.Operation, string, string) error
 	DelayGroup(context.Context, string, string, int) (mihomo.Delays, error)
 	DelayProxy(context.Context, string, string, int) (uint16, error)
@@ -152,15 +153,16 @@ func (s *Server) proxies(writer http.ResponseWriter, request *http.Request) {
 	var upstream mihomo.Proxies
 	var revision *uint64
 	var subscriptionID string
+	var duplicates []string
 	var err error
 	if source, ok := s.runtime.(interface {
-		RoutingProxies(context.Context) (mihomo.Proxies, uint64, string, error)
+		RoutingProxyCatalog(context.Context) (mihomo.Proxies, []string, uint64, string, error)
 	}); ok {
 		var current uint64
-		upstream, current, subscriptionID, err = source.RoutingProxies(request.Context())
+		upstream, duplicates, current, subscriptionID, err = source.RoutingProxyCatalog(request.Context())
 		revision = &current
 	} else {
-		upstream, err = s.runtime.Proxies(request.Context())
+		upstream, duplicates, err = s.runtime.ProxyCatalog(request.Context())
 	}
 	if err != nil {
 		s.writeControlError(request.Context(), writer, err)
@@ -169,7 +171,7 @@ func (s *Server) proxies(writer http.ResponseWriter, request *http.Request) {
 	// Preserve mihomo/config order: follow GLOBAL.All when present. Do not sort
 	// alphabetically — panel UIs expect subscription default group order.
 	groups := orderedProxyGroups(upstream.Proxies)
-	writeJSON(writer, http.StatusOK, protocol.ProxyGroups{Schema: "mihari/v1", Groups: groups, Revision: revision, SubscriptionID: subscriptionID})
+	writeJSON(writer, http.StatusOK, protocol.ProxyGroups{Schema: "mihari/v1", Groups: groups, Revision: revision, SubscriptionID: subscriptionID, DuplicateNames: duplicates})
 }
 
 func orderedProxyGroups(proxies map[string]mihomo.Proxy) []protocol.ProxyGroup {

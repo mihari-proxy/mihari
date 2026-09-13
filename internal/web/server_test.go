@@ -627,7 +627,7 @@ func TestGatewayWebSocketContextCancelReleasesBothSides(t *testing.T) {
 }
 
 func TestGatewayWebSocketHandshakeFailuresAreSanitized(t *testing.T) {
-	const upstreamBody = "upstream-private-diagnostic-task5"
+	const upstreamBody = "upstream handshake rejected"
 	tests := []struct {
 		name             string
 		upstreamStatus   int

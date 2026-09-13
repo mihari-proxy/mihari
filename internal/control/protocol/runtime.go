@@ -43,6 +43,8 @@ type ProxyGroups struct {
 	SubscriptionID string       `json:"subscription_id,omitempty"`
 	Schema         string       `json:"schema"`
 	Groups         []ProxyGroup `json:"groups"`
+	// DuplicateNames lists distinct names shared by multiple node sources.
+	DuplicateNames []string `json:"duplicate_names,omitempty"`
 }
 
 type ConnectionMetadata struct {

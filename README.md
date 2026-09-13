@@ -43,6 +43,10 @@ Specifically:
 - **In-TUI Mihari updates**: the System page checks GitHub Releases on entry, shows `current · latest available` or `current · Up to date`, and—when Mihari was started with administrator/root privileges—replaces the binary, synchronizes and restarts an installed OS-service copy, verifies its daemon version, and automatically enters the updated TUI.
 - **Core channel**: the System page can switch the mihomo core between `stable` and `alpha`.
 
+Proxy latency tests discover provider nodes and use mihomo's provider-specific endpoint when needed. Duplicate names appear once per group and share a test result: a global node takes priority, otherwise the first matching provider in name order is used. The first successful node check after TUI startup warns about duplicates; the tested source may differ from the group's selected source. Provider reads retry transient failures up to three times. If a refresh still fails, Proxies retains the last snapshot with a **Stale data** notice and the key error; the notice clears after recovery. CLI/TUI and daemon should be upgraded together.
+
+Mihomo HTTP failures retain their original error text and upstream status in diagnostic logs, including gateway requests and WebSocket handshakes. Credentials and URLs are redacted, and bounded output explicitly marks truncation. User-facing errors remain concise.
+
 A single CGO-free static binary (< 15 MB) contains everything, with built-in GitHub Releases self-update and local GeoIP resolution.
 
 ## Quick start

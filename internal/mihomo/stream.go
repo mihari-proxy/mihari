@@ -10,6 +10,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 const maxStreamMessageSize = 1 << 20
@@ -32,7 +33,7 @@ func (c *Client) Stream(ctx context.Context, kind StreamKind, receive func(json.
 	}
 	streamURL, err := c.streamURL(kind)
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeInternal, Message: "invalid mihomo controller address"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "invalid mihomo controller address"}, &diagnostics.HTTPError{Operation: "mihomo stream", Phase: "request", Cause: err})
 	}
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+c.secret)
@@ -41,13 +42,18 @@ func (c *Client) Stream(ctx context.Context, kind StreamKind, receive func(json.
 		HTTPHeader: header,
 	})
 	if err != nil {
+		detail := diagnostics.HandshakeError("mihomo stream "+string(kind), response, err, c.secret)
 		if ctx.Err() != nil {
 			return nil
 		}
-		if response != nil && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden) {
-			return protocol.APIError{Code: protocol.CodePermissionDenied, Message: "mihomo authentication failed"}
+		var details map[string]any
+		if response != nil {
+			details = map[string]any{"status": response.StatusCode}
 		}
-		return protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo stream is unavailable"}
+		if response != nil && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden) {
+			return diagnostics.Wrap(protocol.APIError{Code: protocol.CodePermissionDenied, Message: "mihomo authentication failed", Details: details}, detail)
+		}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo stream is unavailable", Details: details}, detail)
 	}
 	defer connection.CloseNow()
 	connection.SetReadLimit(maxStreamMessageSize)

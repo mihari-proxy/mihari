@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -19,9 +21,10 @@ import (
 const maxResponseSize = 4 << 20
 
 type Client struct {
-	baseURL string
-	secret  string
-	http    *http.Client
+	baseURL  string
+	secret   string
+	http     *http.Client
+	reporter diagnostics.Reporter
 }
 
 func NewClient(baseURL, secret string, httpClient *http.Client) *Client {
@@ -128,12 +131,23 @@ func (c *Client) Restart(ctx context.Context) error {
 	return c.do(ctx, http.MethodPost, "/restart", nil, nil, nil)
 }
 
-func (c *Client) do(ctx context.Context, method, path string, query url.Values, input, output any) error {
+// SetDiagnosticReporter configures resource-close reporting before the client is used.
+func (c *Client) SetDiagnosticReporter(reporter diagnostics.Reporter) { c.reporter = reporter }
+
+func (c *Client) do(ctx context.Context, method, path string, query url.Values, input, output any) (resultErr error) {
+	operation := diagnostics.HTTPOperation(method, path)
+	fail := func(code protocol.ErrorCode, message, phase string, status int, raw []byte, cause error) error {
+		var details map[string]any
+		if status != 0 {
+			details = map[string]any{"status": status}
+		}
+		return diagnostics.Wrap(protocol.APIError{Code: code, Message: message, Details: details}, (&diagnostics.HTTPError{Operation: operation, Phase: phase, Status: status, Body: diagnostics.HTTPBody(raw, c.secret), Cause: cause}).HideSecret(c.secret))
+	}
 	var body io.Reader
 	if input != nil {
 		encoded, err := json.Marshal(input)
 		if err != nil {
-			return protocol.APIError{Code: protocol.CodeInternal, Message: "encode mihomo request"}
+			return fail(protocol.CodeInternal, "encode mihomo request", "encode", 0, nil, err)
 		}
 		body = bytes.NewReader(encoded)
 	}
@@ -143,43 +157,72 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	request, err := http.NewRequestWithContext(ctx, method, requestURL, body)
 	if err != nil {
-		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "create mihomo request"}, err)
+		return fail(protocol.CodeInternal, "create mihomo request", "request", 0, nil, err)
 	}
 	request.Header.Set("Authorization", "Bearer "+c.secret)
 	if input != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-
 	response, err := c.http.Do(request)
 	if err != nil {
-		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo controller is unavailable"}, err)
+		return fail(protocol.CodeUpstreamFailure, "mihomo controller is unavailable", "transport", 0, nil, err)
 	}
-	defer response.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseSize+1))
-	if err != nil {
-		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "read mihomo response"}, err)
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			closeErr := (&diagnostics.HTTPError{Operation: operation, Phase: "close", Status: response.StatusCode, Cause: err}).HideSecret(c.secret)
+			if resultErr != nil {
+				var api protocol.APIError
+				if errors.As(resultErr, &api) {
+					resultErr = diagnostics.Wrap(api, errors.Join(resultErr, closeErr))
+				}
+			} else if c.reporter != nil {
+				if _, emit := diagnostics.FailureLevel(ctx, closeErr); emit {
+					c.reporter(ctx, diagnostics.Record{Component: "mihomo", Event: "http.close.failed", Level: slog.LevelWarn, Err: closeErr})
+				}
+			}
+		}
+	}()
+	raw, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseSize+1))
+	status := response.StatusCode
+	if status < 200 || status >= 300 {
+		code := protocol.CodeUpstreamFailure
+		message := "mihomo request failed"
+		if status == 401 || status == 403 {
+			code = protocol.CodePermissionDenied
+			message = "mihomo authentication failed"
+		}
+		resultErr = fail(code, message, "response", status, raw, readErr)
+		var detail *diagnostics.HTTPError
+		if errors.As(resultErr, &detail) {
+			if seconds, err := strconv.Atoi(response.Header.Get("Retry-After")); err == nil && seconds > 0 {
+				if seconds > 86400 {
+					seconds = 86400
+				}
+				detail.RetryDelay = time.Duration(seconds) * time.Second
+			} else if date, err := http.ParseTime(response.Header.Get("Retry-After")); err == nil {
+				detail.RetryDelay = time.Until(date)
+			}
+		}
+		return resultErr
+	}
+	if readErr != nil {
+		return fail(protocol.CodeUpstreamFailure, "read mihomo response", "read", status, nil, readErr)
 	}
 	if len(raw) > maxResponseSize {
-		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo response is too large"}
-	}
-	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
-		return protocol.APIError{Code: protocol.CodePermissionDenied, Message: "mihomo authentication failed"}
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return protocol.APIError{
-			Code:    protocol.CodeUpstreamFailure,
-			Message: "mihomo request failed",
-			Details: map[string]any{"status": response.StatusCode},
-		}
+		return fail(protocol.CodeDataFailure, "mihomo response is too large", "read", status, nil, errors.New("response exceeds 4 MiB limit"))
 	}
 	if output == nil {
 		return nil
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo returned an empty response"}
+		return fail(protocol.CodeDataFailure, "mihomo returned an empty response", "decode", status, nil, io.EOF)
 	}
 	if err := json.Unmarshal(raw, output); err != nil {
-		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo returned invalid JSON", Details: map[string]any{"cause": fmt.Sprintf("%T", err)}}
+		resultErr = fail(protocol.CodeDataFailure, "mihomo returned invalid JSON", "decode", status, nil, err)
+		var api protocol.APIError
+		errors.As(resultErr, &api)
+		api.Details["cause"] = fmt.Sprintf("%T", err)
+		return diagnostics.Wrap(api, resultErr)
 	}
 	return nil
 }
