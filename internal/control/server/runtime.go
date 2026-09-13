@@ -106,6 +106,7 @@ func (s *Server) coreStatus(writer http.ResponseWriter, request *http.Request) {
 	writeJSON(writer, http.StatusOK, status)
 }
 
+// installCore validates and observes a daemon-owned core installation mutation.
 func (s *Server) installCore(writer http.ResponseWriter, request *http.Request) {
 	if !s.requireRuntime(request.Context(), writer) {
 		return
@@ -115,6 +116,7 @@ func (s *Server) installCore(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "core.install"})
+	defer s.operations.begin(body.OperationID)()
 	result, err := s.runtime.Install(ctx, runtimeapi.Operation{ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision, Channel: body.Channel})
 	if err != nil {
 		s.writeControlError(ctx, writer, err)

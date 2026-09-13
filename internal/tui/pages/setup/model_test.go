@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/logging"
+	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -215,8 +216,12 @@ func TestSetupEscapeAtFirstStepRequestsCancelWithoutCompleting(t *testing.T) {
 	if command == nil || client.updateCalls != 0 {
 		t.Fatalf("command=%v updates=%d", command != nil, client.updateCalls)
 	}
-	if _, ok := command().(CancelledMsg); !ok || model.status.Complete != true {
+	request, ok := command().(ui.ConfirmationRequestMsg)
+	if !ok || request.OnConfirm == nil || model.status.Complete != true {
 		t.Fatalf("message=%T status=%#v", command(), model.status)
+	}
+	if _, ok := request.OnConfirm().(CancelledMsg); !ok {
+		t.Fatal("leave confirmation did not cancel manual setup")
 	}
 }
 
@@ -318,7 +323,7 @@ func TestSetupCommandsUseOwnedContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &fakeClient{status: defaultStatus(false)}
 	model := NewWithContext(ctx, client, func() string { return "setup-op" })
-	updated, _ := model.Update(onboardingResultMsg{status: client.status})
+	updated, _ := model.Update(onboardingResultMsg{status: client.status, core: &client.coreStatus})
 	model = updated.(*Model)
 	model.step = stepCore
 	cancel()
@@ -343,11 +348,13 @@ func TestSetupConfirmsBeforeChangingCompletedEffectiveConfiguration(t *testing.T
 	if command == nil {
 		t.Fatal("missing confirmation request")
 	}
-	request, ok := command().(ui.ActionIntentMsg)
-	if !ok || request.Execute == nil || request.Action != ui.ActionApplyEndpointChange || client.updateCalls != 0 {
+	request, ok := command().(ui.ConfirmationRequestMsg)
+	if !ok || request.OnConfirm == nil || client.updateCalls != 0 {
 		t.Fatalf("message=%T updates=%d", command(), client.updateCalls)
 	}
-	updated, _ = model.Update(request.Execute())
+	updated, command = model.Update(request.OnConfirm())
+	model = updated.(*Model)
+	updated, _ = model.Update(command())
 	_ = updated.(*Model)
 	if client.updateCalls != 1 {
 		t.Fatalf("updates=%d", client.updateCalls)
@@ -386,7 +393,11 @@ func defaultStatus(complete bool) protocol.OnboardingStatus {
 
 func loadedModel(client *fakeClient) *Model {
 	model := New(client, func() string { return "setup-op" })
-	updated, _ := model.Update(onboardingResultMsg{status: client.status})
+	result := onboardingResultMsg{status: client.status}
+	if client.coreErr == nil {
+		result.core = &client.coreStatus
+	}
+	updated, _ := model.Update(result)
 	return updated.(*Model)
 }
 
@@ -466,6 +477,7 @@ func TestSetupStepGeoIPShowsLocalReadyAndSkipStillWorks(t *testing.T) {
 func TestSetupLocalDetectionStaleResultsIgnored(t *testing.T) {
 	client := &fakeClient{status: defaultStatus(false), coreStatus: protocol.CoreStatus{LocalReady: true, LocalVersion: "v1.18.5"}}
 	model := loadedModel(client)
+	model.coreLocalLoaded = false
 	model.step = stepCore
 	first := model.fetchCoreLocal()
 	model.fetchCoreLocal() // bump generation, making first stale
@@ -491,8 +503,12 @@ func TestSetupLocalDetectionFallsBackToStaticOnProbeFailure(t *testing.T) {
 	}
 	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(*Model)
-	if !model.loading || command == nil {
-		t.Fatalf("enter blocked after probe failure: loading=%v command=%v", model.loading, command != nil)
+	if command == nil {
+		t.Fatal("missing read-only retry after probe failure")
+	}
+	model.Update(command())
+	if client.installCalls != 0 {
+		t.Fatal("probe failure was mistaken for missing core")
 	}
 }
 
@@ -665,6 +681,8 @@ func TestSetupEndpointsMarksOccupiedPortRed(t *testing.T) {
 	defer listener.Close()
 	occupied := listener.Addr().String()
 	model := loadedModel(&fakeClient{status: defaultStatus(false)})
+	// This tests the UI for a confirmed foreign port, not OS PID discovery.
+	model.probe = probeEndpoint
 	model.inputs[0].SetValue(occupied)
 	updated, _ := model.Update(model.probePorts()())
 	model = updated.(*Model)
@@ -684,6 +702,8 @@ func TestSetupEndpointsEnterAutoFixesOccupiedPorts(t *testing.T) {
 	defer listener.Close()
 	occupied := listener.Addr().String()
 	model := loadedModel(&fakeClient{status: defaultStatus(false)})
+	// macOS may not expose an occupant PID; inject the confirmed probe result.
+	model.probe = probeEndpoint
 	model.inputs[0].SetValue(occupied)
 	model.inputs[1].SetValue("127.0.0.1:20001")
 	model.inputs[2].SetValue("127.0.0.1:20002")
@@ -702,10 +722,45 @@ func TestSetupEndpointsEnterAutoFixesOccupiedPorts(t *testing.T) {
 	if model.inputs[0].Value() == occupied {
 		t.Fatalf("occupied port not rewritten: %s", model.inputs[0].Value())
 	}
-	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, command = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(*Model)
-	if model.step != stepCore {
-		t.Fatalf("did not advance after fix: step=%v", model.step)
+	if model.step != stepEndpoints || command == nil {
+		t.Fatal("changed ports must be confirmed and saved before advancing")
+	}
+	if _, ok := command().(ui.ConfirmationRequestMsg); !ok {
+		t.Fatal("missing endpoint save confirmation")
+	}
+}
+
+func TestClassifySetupPort_RequiresConfirmedOwner(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := listener.Close(); err != nil {
+			t.Errorf("close occupied-port test listener: %v", err)
+		}
+	})
+	for _, test := range []struct {
+		name string
+		pid  int
+		ok   bool
+		want portState
+	}{
+		{"owned", 42, true, portOwned},
+		{"foreign", 43, true, portOccupied},
+		{"unavailable", 0, false, portUnknown},
+		{"invalid PID", 0, true, portUnknown},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := classifySetupPort(listener.Addr().String(), 42, func(string) (platform.TCPOccupant, bool) {
+				return platform.TCPOccupant{PID: test.pid}, test.ok
+			})
+			if got != test.want {
+				t.Fatalf("classification=%v want=%v", got, test.want)
+			}
+		})
 	}
 }
 

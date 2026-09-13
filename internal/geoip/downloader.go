@@ -108,7 +108,7 @@ func (d Downloader) Prepare(ctx context.Context, spec DownloadSpec) (_ *FileCand
 		return nil, err
 	}
 	if got != want {
-		return nil, errors.New("geoip candidate checksum mismatch")
+		return nil, downloadFailure{message: "geoip candidate checksum mismatch"}
 	}
 	if err := file.Sync(); err != nil {
 		return nil, fmt.Errorf("sync geoip candidate: %w", err)
@@ -121,7 +121,7 @@ func (d Downloader) Prepare(ctx context.Context, spec DownloadSpec) (_ *FileCand
 		validate = validateMMDB
 	}
 	if err := validate(staged); err != nil {
-		return nil, fmt.Errorf("validate geoip candidate: %w", err)
+		return nil, downloadFailure{message: "geoip candidate failed database validation", cause: err}
 	}
 	return &FileCandidate{staged: staged, destination: spec.Destination, digest: got}, nil
 }
@@ -173,6 +173,7 @@ func downloadChecksum(ctx context.Context, client *http.Client, rawURL string, a
 	return result, nil
 }
 
+// downloadFile streams a size-bounded resource while computing its SHA-256 digest.
 func downloadFile(ctx context.Context, client *http.Client, rawURL string, destination io.Writer, maxBytes int64, allowHTTP bool) ([sha256.Size]byte, error) {
 	var result [sha256.Size]byte
 	response, err := doGET(ctx, client, rawURL, allowHTTP)
@@ -186,12 +187,13 @@ func downloadFile(ctx context.Context, client *http.Client, rawURL string, desti
 		return result, fmt.Errorf("download geoip database: %w", err)
 	}
 	if written > maxBytes {
-		return result, errors.New("geoip database exceeds size limit")
+		return result, downloadFailure{message: "geoip database exceeds size limit"}
 	}
 	copy(result[:], hash.Sum(nil))
 	return result, nil
 }
 
+// doGET checks response status and redirect transport policy; callers close a successful response.
 func doGET(ctx context.Context, client *http.Client, rawURL string, allowHTTP bool) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -207,7 +209,7 @@ func doGET(ctx context.Context, client *http.Client, rawURL string, allowHTTP bo
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		response.Body.Close()
-		return nil, fmt.Errorf("download geoip resource: unexpected HTTP status %d", response.StatusCode)
+		return nil, downloadFailure{message: fmt.Sprintf("download geoip resource: unexpected HTTP status %d", response.StatusCode)}
 	}
 	return response, nil
 }

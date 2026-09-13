@@ -329,8 +329,12 @@ func (model *Model) syncSystemNetworkStatus() {
 	page.ApplyRootNetworkStatus(model.systemProxy, model.systemProxyOK, model.tunStatus, model.tunOK)
 }
 
+// Update routes shell, modal and page events while retaining ownership of asynchronous results.
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := message.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" {
+		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
+			page.Stop()
+		}
 		return model, tea.Quit
 	}
 	if command, consumed := model.updateInstallation(message); consumed {
@@ -347,6 +351,17 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	switch typed := message.(type) {
+	case ui.ErrorDetailMsg:
+		model.modal = NewErrorDetail(typed.Title, typed.Body)
+		return model, nil
+	case errorCopyResultMsg:
+		if model.modal == typed.modal {
+			model.modal.copyStatus = "Copied"
+			if typed.err != nil {
+				model.modal.copyStatus = "Copy failed"
+			}
+		}
+		return model, nil
 	case ui.RelaunchRequestMsg:
 		if typed.Prepared != nil {
 			page, ok := model.pages[ui.PageSystem].(*systempage.Model)
@@ -430,6 +445,15 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model, tea.Batch(command, waitSessionEvent(model.events))
 	case systempage.RestartRequiredMsg:
 		model.modal = NewDetail(ui.RestartRequiredTitle, ui.RestartRequiredBody)
+		return model, nil
+	case setuppage.ReadyMsg:
+		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); !ok || !page.Automatic() || page.Busy() {
+			return model, nil
+		}
+		model.status.SetupRequired = false
+		model.setupObserved = true
+		model.setupReturn = ""
+		model.activateOverview()
 		return model, nil
 	case setuppage.CompletedMsg:
 		model.status.SetupRequired = !typed.Status.Complete
@@ -530,6 +554,9 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return model, nil
 		}
 		model.now = typed.t
+		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
+			page.ObserveTime(typed.t)
+		}
 		if model.needsSpinner() {
 			model.spinning = true
 			return model, spinnerTick(typed.gen)
@@ -561,7 +588,10 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.active = ui.PageSetup
 		model.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageSetup}
 		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
-			return model, tea.Batch(discard, page.Load())
+			page.SetAutomatic(false)
+			page.ObserveDaemon(model.status, model.core)
+			load := setupCommand(page.Load())
+			return model, tea.Batch(discard, load, model.spinnerCmdIfNeeded())
 		}
 		return model, discard
 	case ui.ConfirmationRequestMsg:
@@ -582,6 +612,8 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if model.modal != nil {
 		switch model.modal.Update(key) {
+		case ModalCopy:
+			return model, model.modal.copyCommand()
 		case ModalClose:
 			cancel := model.confirmationCancel
 			model.modal = nil
@@ -640,6 +672,7 @@ func (model Model) openHelp() (Model, tea.Cmd) {
 	return model, nil
 }
 
+// applySessionEvent reconciles daemon observations and resumes setup across owner changes.
 func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 	var command tea.Cmd
 	model.monitor.Observe(event)
@@ -673,7 +706,14 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 				model.loggingRevision = &revision
 			}
 		}
+		previousPID := model.status.PID
 		model.status = event.Status
+		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
+			page.ObserveDaemon(model.status, model.core)
+			if model.active == ui.PageSetup && page.WaitingRestart() && !page.Busy() && (statusEpochAdvanced || previousPID != event.Status.PID) {
+				command = setupCommand(page.Load())
+			}
+		}
 		if model.connected && event.Status.Health != "degraded" {
 			model.daemonHint = ""
 		}
@@ -689,11 +729,11 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 			model.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageSetup}
 			if entering {
 				if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
-					command = tea.Batch(discard, page.Load())
+					page.SetAutomatic(true)
+					page.ObserveDaemon(model.status, model.core)
+					command = tea.Batch(discard, setupCommand(page.Load()))
 				}
 			}
-		} else if model.active == ui.PageSetup {
-			model.activateOverview()
 		}
 		// Refresh network strip when status/capabilities land after connect.
 		if model.connected {
@@ -710,6 +750,9 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		}
 	case session.EventCore:
 		model.core = event.Core
+		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
+			page.ObserveDaemon(model.status, model.core)
+		}
 	case session.EventSubscriptions:
 		model.subscriptions = event.Subscriptions
 		if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
@@ -789,7 +832,7 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 	}
 	model.syncSystem()
 	model.syncOverview()
-	return command
+	return tea.Batch(command, model.spinnerCmdIfNeeded())
 }
 
 func (model *Model) resetLogging(epoch uint64) {
@@ -1030,6 +1073,7 @@ func (model Model) dispatchPage(message tea.Msg) (tea.Model, tea.Cmd) {
 	return model.dispatchPageTo(model.active, message)
 }
 
+// dispatchPageTo delivers results to their owning page, including setup after navigation.
 func (model Model) dispatchPageTo(id ui.PageID, message tea.Msg) (tea.Model, tea.Cmd) {
 	page := model.pages[id]
 	if page == nil {
@@ -1037,6 +1081,9 @@ func (model Model) dispatchPageTo(id ui.PageID, message tea.Msg) (tea.Model, tea
 	}
 	updated, command := page.Update(message)
 	model.pages[id] = updated
+	if id == ui.PageSetup {
+		return model, tea.Batch(setupCommand(command), model.spinnerCmdIfNeeded())
+	}
 	return model, command
 }
 
@@ -1112,7 +1159,13 @@ func (model Model) executeAction(intent ui.ActionIntentMsg) (tea.Model, tea.Cmd)
 	return model, tea.Batch(pageCmd, exec, model.spinnerCmdIfNeeded())
 }
 
+// needsSpinner reports visible setup work or pending shell actions that need animation.
 func (model Model) needsSpinner() bool {
+	if model.active == ui.PageSetup {
+		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok && page.Busy() {
+			return true
+		}
+	}
 	return len(model.pendingActions) > 0 || model.globalState == ui.StatePending
 }
 
@@ -1309,6 +1362,7 @@ func (model *Model) refreshDaemonHintForService() {
 	model.daemonHint = base
 }
 
+// View renders the active shell or setup layout and overlays the current modal.
 func (model Model) View() tea.View {
 	if model.installation != nil && model.installation.visible {
 		view := tea.NewView(model.installation.view(model.width, model.height))
@@ -1317,11 +1371,20 @@ func (model Model) View() tea.View {
 		return view
 	}
 	if model.active == ui.PageSetup {
+		if Classify(model.width, model.height) == ui.TooSmall {
+			view := tea.NewView(lipgloss.Place(model.width, model.height, lipgloss.Center, lipgloss.Center, model.theme.Title.Render(ui.ResizeRequired)+"\n"+model.theme.Muted.Render(ui.ResizeInstructions)))
+			view.AltScreen = true
+			return view
+		}
 		body := model.pages[ui.PageSetup].View()
+		footer := ui.SetupFooter
+		if page, ok := model.pages[ui.PageSetup].(ui.FooterHintProvider); ok {
+			footer = page.FooterHints()
+		}
 		status := ui.RenderStatusBar(model.theme, model.statusBarData(), model.width, true)
 		content := status + "\n" +
 			model.theme.Content.Width(model.width).Height(max(1, model.height-2)).Render(body) + "\n" +
-			model.theme.Footer.Width(model.width).Render(ui.SetupFooter)
+			model.theme.Footer.Width(model.width).Render(ui.FitFooter(footer, "", max(1, model.width-2)))
 		if model.exportLogs != nil && !model.exportLogs.Closed() {
 			content = model.exportLogs.View(model.width, model.height)
 		} else if model.modal != nil {
@@ -1380,9 +1443,13 @@ func (model Model) View() tea.View {
 	return view
 }
 
+// resizePages applies shell dimensions and gives setup its dedicated wizard area.
 func (model Model) resizePages() {
 	layout := calculateLayout(model.width, model.height)
 	for _, page := range model.pages {
 		page.SetSize(layout.ContentWidth, layout.ContentHeight)
+	}
+	if page := model.pages[ui.PageSetup]; page != nil {
+		page.SetSize(max(1, model.width-2), max(1, model.height-2))
 	}
 }

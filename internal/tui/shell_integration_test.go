@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	setuppage "github.com/mihari-proxy/mihari/internal/tui/pages/setup"
 	"github.com/mihari-proxy/mihari/internal/tui/session"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
@@ -34,6 +35,11 @@ func TestTUI_SetupRequiredRoutesAndStaleDisablesMutations(t *testing.T) {
 		Kind:   session.EventStatus,
 		Status: protocol.Status{SetupRequired: false, Capabilities: []string{protocol.CapabilityCore}},
 	})
+	if model.Route() != ui.PageSetup {
+		t.Fatal("status refresh dismissed the in-progress wizard")
+	}
+	updated, _ := model.Update(setuppage.ReadyMsg{})
+	model = updated.(Model)
 	if model.Route() != ui.PageOverview {
 		t.Fatalf("post-setup route=%v", model.Route())
 	}

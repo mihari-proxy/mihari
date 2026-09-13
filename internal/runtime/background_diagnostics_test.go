@@ -135,7 +135,7 @@ func TestManagerBackgroundDiagnostic_RealMutationMarkerPreventsSecondReport(t *t
 	if err := json.Unmarshal(output.Bytes(), &record); err != nil {
 		t.Fatalf("expected one mutation diagnostic: %v", err)
 	}
-	if record["component"] != "runtime" || record["msg"] != "operation.failed" || record["operation_id"] != "scheduled-geoip-failure" || record["cause"] != "permission denied" {
+	if record["component"] != "runtime" || record["msg"] != "operation.failed" || record["operation_id"] != "scheduled-geoip-failure" || record["cause"] != "api error (internal): permission denied" {
 		t.Fatalf("record=%v", record)
 	}
 }

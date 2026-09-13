@@ -112,7 +112,11 @@ See [docs/distribution.md](docs/distribution.md) for the offline distribution de
 mihari
 ```
 
-The interactive setup installs the mihomo core, guides you through adding your first subscription, and prepares local GeoIP data. It pre-checks the managed ports up front (with one-key auto-fix on conflict), reuses any local core/GeoIP already present, and the final review summarizes ports, core, subscription, GeoIP and service registration.
+The interactive setup uses the shared TUI theme and a step-by-step layout, with the current action, an animated waiting indicator and elapsed time. Failures show a safe explanation and next action; press F2 for scrollable, copyable diagnostic details.
+
+Confirmed endpoint changes are saved immediately by the daemon. Saved resources survive interruption; reopening checks required ports/core and resumes missing setup, without requiring optional subscriptions or GeoIP. Core shows local readiness, version, channel and runtime state; GeoIP shows Country/ASN availability and update times separately. Existing subscriptions remain visible as an overview with counts, per-profile state and the current selection; Enter continues without changing them. Add more or manage existing profiles on the Subscriptions page. If a newly registered subscription's first download fails, retry refreshes that same subscription.
+
+Esc during an operation asks to cancel, then checks daemon settlement and saved state. An unknown result is not proof that nothing was saved: recheck or exit without blindly resubmitting. Ctrl+Q confirms exit. A confirmed startup port conflict exposes restricted endpoint recovery over authenticated local IPC; other business mutations remain unavailable. After changing ports, restart the daemon and recheck (or wait for reconnection). Service ownership cannot currently be verified, so setup does not automatically restart a potentially different service instance.
 
 **Add a subscription and enable the system proxy**
 

@@ -24,6 +24,35 @@ func (m *Manager) OnboardingStatus(ctx context.Context) (onboarding.Snapshot, er
 	}, nil
 }
 
+// SetupRequired derives required setup from effective runtime resources. Optional
+// subscriptions/GeoIP and the historical welcome marker do not force onboarding.
+func (m *Manager) SetupRequired(ctx context.Context) (bool, error) {
+	if m.onboarding == nil {
+		return false, nil
+	}
+	status, err := m.OnboardingStatus(ctx)
+	if err != nil {
+		return false, err
+	}
+	if status.Status.RestartRequired {
+		return true, nil
+	}
+	coreState := m.store.Load().Core
+	if !m.binaryExists() || coreState.Status == "missing" {
+		return true, nil
+	}
+	// A known running/starting or previously validated core is not missing
+	// configuration merely because runtime health is temporarily degraded.
+	if m.installer != nil && coreState.Version == "" && coreState.Status != "running" && coreState.Status != "starting" {
+		local, err := m.LocalCore(ctx)
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		return !local.Ready, err
+	}
+	return false, nil
+}
+
 func (m *Manager) UpdateOnboarding(ctx context.Context, operation Operation, update onboarding.Update) (onboarding.Snapshot, error) {
 
 	result, err := m.doOperation(ctx, "onboarding:"+operation.ID, func(ctx context.Context) (any, error) {
