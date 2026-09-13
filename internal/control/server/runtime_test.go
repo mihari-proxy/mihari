@@ -510,6 +510,11 @@ func (f *fakeRuntime) Proxies(context.Context) (mihomo.Proxies, error) {
 	return f.proxies, nil
 }
 
+func (f *fakeRuntime) ProxyCatalog(ctx context.Context) (mihomo.Proxies, []string, error) {
+	proxies, err := f.Proxies(ctx)
+	return proxies, nil, err
+}
+
 func (f *fakeRuntime) SelectProxy(_ context.Context, operation runtimeapi.Operation, group, name string) error {
 	f.operation = operation
 	f.selectedGroup = group

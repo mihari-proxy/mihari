@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -33,7 +35,10 @@ func NewControllerProxy(options ProxyOptions) (*httputil.ReverseProxy, error) {
 	// falls back to http.DefaultTransport. Rewrite fully overrides the
 	// single-host rewrite, so SetURL must be called explicitly.
 	proxy := &httputil.ReverseProxy{
-		Transport: options.Transport,
+		// The response observer owns upstream read diagnostics. The default
+		// ReverseProxy logger would duplicate them without credential redaction.
+		ErrorLog:  log.New(io.Discard, "", 0),
+		Transport: controllerTransport{options.Transport},
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
 			// Strip any browser-supplied auth so the web credential never reaches the controller.
@@ -47,6 +52,10 @@ func NewControllerProxy(options ProxyOptions) (*httputil.ReverseProxy, error) {
 	}
 	// Do not rewrite Location in a way that exposes controller host if avoidable; default is fine for loopback.
 	proxy.ModifyResponse = func(resp *http.Response) error {
+		if resp.Body != nil {
+			resp.Body = &observedHTTPBody{ReadCloser: resp.Body, ctx: resp.Request.Context(), reporter: options.Reporter, secret: secret,
+				detail: diagnostics.HTTPError{Operation: diagnostics.HTTPOperation(resp.Request.Method, resp.Request.URL.Path), Phase: "response", Status: resp.StatusCode}}
+		}
 		// Never forward controller secret in response headers.
 		for name, values := range resp.Header {
 			lower := strings.ToLower(name)
@@ -64,10 +73,24 @@ func NewControllerProxy(options ProxyOptions) (*httputil.ReverseProxy, error) {
 		return nil
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		reportFailure(r.Context(), options.Reporter, "proxy.failed", err)
+		reportFailure(r.Context(), options.Reporter, "proxy.failed", (&diagnostics.HTTPError{Operation: diagnostics.HTTPOperation(r.Method, r.URL.Path), Phase: "transport", Cause: err}).HideSecret(secret))
 		http.Error(w, "upstream controller unavailable", http.StatusBadGateway)
 	}
 	return proxy, nil
+}
+
+type controllerTransport struct{ transport http.RoundTripper }
+
+func (t controllerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	transport := t.transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	response, err := transport.RoundTrip(request)
+	if response != nil && response.Request == nil {
+		response.Request = request
+	}
+	return response, err
 }
 
 // reportFailure is used only by the owner returning a final gateway outcome.

@@ -35,6 +35,7 @@ type RuntimeAPI interface {
 	Install(context.Context, runtimeapi.Operation) (core.InstallResult, error)
 	Restart(context.Context, runtimeapi.Operation) error
 	Proxies(context.Context) (mihomo.Proxies, error)
+	ProxyCatalog(context.Context) (mihomo.Proxies, []string, error)
 	SelectProxy(context.Context, runtimeapi.Operation, string, string) error
 	DelayGroup(context.Context, string, string, int) (mihomo.Delays, error)
 	DelayProxy(context.Context, string, string, int) (uint16, error)
@@ -146,7 +147,7 @@ func (s *Server) proxies(writer http.ResponseWriter, request *http.Request) {
 	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
-	upstream, err := s.runtime.Proxies(request.Context())
+	upstream, duplicates, err := s.runtime.ProxyCatalog(request.Context())
 	if err != nil {
 		s.writeControlError(request.Context(), writer, err)
 		return
@@ -154,7 +155,7 @@ func (s *Server) proxies(writer http.ResponseWriter, request *http.Request) {
 	// Preserve mihomo/config order: follow GLOBAL.All when present. Do not sort
 	// alphabetically — panel UIs expect subscription default group order.
 	groups := orderedProxyGroups(upstream.Proxies)
-	writeJSON(writer, http.StatusOK, protocol.ProxyGroups{Schema: "mihari/v1", Groups: groups})
+	writeJSON(writer, http.StatusOK, protocol.ProxyGroups{Schema: "mihari/v1", Groups: groups, DuplicateNames: duplicates})
 }
 
 func orderedProxyGroups(proxies map[string]mihomo.Proxy) []protocol.ProxyGroup {

@@ -38,7 +38,7 @@ func TestProviderDiagnostic_RealAdapterOwnerJSONAndReplay(t *testing.T) {
 }
 func TestProviderDiagnostic_UnsupportedNativeMutationKeepsContract(t *testing.T) {
 	adapter := mihomo.NewClient("http://127.0.0.1", "controller-secret", &http.Client{Transport: providerDiagnosticTransport(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 405, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("business-secret upstream configuration"))}, nil
+		return &http.Response{StatusCode: 405, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"message":"provider configuration rejected","secret":"business-secret"}`))}, nil
 	})})
 	var output bytes.Buffer
 	m := newTestManager(Options{Controller: adapter, DiagnosticReporter: businessJSONReporter(&output)})
@@ -47,7 +47,7 @@ func TestProviderDiagnostic_UnsupportedNativeMutationKeepsContract(t *testing.T)
 	if !errors.As(err, &api) || api.Code != protocol.CodeUpstreamFailure || api.Message != "mihomo request failed" || api.Details["status"] != 405 || m.Snapshot().Revision != 0 {
 		t.Fatalf("native unsupported contract changed: %v", err)
 	}
-	if strings.Contains(output.String(), "business-secret") || !strings.Contains(output.String(), `"operation":"rule_provider.refresh"`) {
+	if strings.Contains(output.String(), "business-secret") || !strings.Contains(output.String(), "provider configuration rejected") || !strings.Contains(output.String(), `"operation":"rule_provider.refresh"`) {
 		t.Fatalf("provider logs=%s", output.String())
 	}
 }

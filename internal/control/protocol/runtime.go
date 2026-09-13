@@ -41,6 +41,8 @@ type ProxyNode struct {
 type ProxyGroups struct {
 	Schema string       `json:"schema"`
 	Groups []ProxyGroup `json:"groups"`
+	// DuplicateNames lists distinct names shared by multiple node sources.
+	DuplicateNames []string `json:"duplicate_names,omitempty"`
 }
 
 type ConnectionMetadata struct {

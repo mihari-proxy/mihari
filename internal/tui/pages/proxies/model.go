@@ -13,6 +13,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
@@ -41,6 +42,7 @@ const (
 type DelayState struct {
 	Kind         DelayKind
 	Milliseconds uint16
+	TestedAt     time.Time
 }
 
 type Model struct {
@@ -55,6 +57,8 @@ type Model struct {
 	delayTestGen   uint64
 	pending        map[FocusID]bool
 	lastError      string
+	loadError      string
+	lastSuccess    time.Time
 	contentFocused bool
 	width          int
 	height         int
@@ -124,10 +128,18 @@ func (m *Model) FocusFirst() {
 }
 
 func (m *Model) SetGroups(groups protocol.ProxyGroups) {
+	m.loadError = ""
 	m.groups = append([]protocol.ProxyGroup(nil), groups.Groups...)
 	for index := range m.groups {
 		m.groups[index].All = append([]string(nil), groups.Groups[index].All...)
-		m.groups[index].Nodes = append([]protocol.ProxyNode(nil), groups.Groups[index].Nodes...)
+		m.groups[index].Nodes = nil
+		seen := make(map[string]bool)
+		for _, node := range groups.Groups[index].Nodes {
+			if !seen[node.Name] {
+				m.groups[index].Nodes = append(m.groups[index].Nodes, node)
+				seen[node.Name] = true
+			}
+		}
 	}
 	if m.groupIndex(m.focus.Group) < 0 {
 		m.FocusFirst()
@@ -158,7 +170,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	case delayResultMsg:
 		delete(m.inFlight, typed.node)
 		if typed.err == nil {
-			m.delays[typed.node] = DelayState{Kind: DelayValue, Milliseconds: typed.delay}
+			m.delays[typed.node] = DelayState{Kind: DelayValue, Milliseconds: typed.delay, TestedAt: time.Now()}
 		} else {
 			m.delays[typed.node] = DelayState{Kind: classifyDelayError(typed.err)}
 		}
@@ -220,9 +232,16 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 
 func (m *Model) View() string {
 	if len(m.groups) == 0 {
+		if m.loadError != "" && !m.lastSuccess.IsZero() {
+			lines, _, _ := m.buildContent()
+			return strings.Join(lines, "\n")
+		}
 		inner := ui.FullSectionInner(m.width)
 		body := m.theme.Muted.Render(ui.NoProxyGroups)
-		return ui.RenderBorderedSection(m.theme, ui.ProxiesSectionTitle, body, inner)
+		if m.loadError != "" {
+			body = m.theme.Danger.Render("Unable to load proxy groups") + "\n" + m.loadError + "\n" + m.theme.Muted.Render("Waiting for automatic retry")
+		}
+		return ui.RenderBorderedSection(m.theme, ui.ProxiesSectionTitle, ansi.Wrap(body, ui.SectionTextWidth(inner), ""), inner)
 	}
 	lines, _, _ := m.buildContent()
 	return strings.Join(ui.SliceLines(lines, m.scrollY, m.height), "\n")
@@ -233,6 +252,15 @@ func (m *Model) View() string {
 // a bordered section; expanded node cards sit inside the parent section body.
 func (m *Model) buildContent() (lines []string, focusStart, focusEnd int) {
 	focusStart, focusEnd = -1, -1
+	if m.loadError != "" {
+		body := "Refresh failed\n" + m.loadError + "\nShowing last available data. Retrying automatically."
+		if !m.lastSuccess.IsZero() {
+			body = "Last updated " + m.lastSuccess.Local().Format("15:04:05") + fmt.Sprintf(" · %ds ago\n", max(0, int(time.Since(m.lastSuccess).Seconds()))) + body
+		}
+		inner := ui.FullSectionInner(m.width)
+		section := ui.RenderBorderedSection(m.theme, "Stale data", ansi.Wrap(body, ui.SectionTextWidth(inner), ""), inner)
+		lines = append(lines, strings.Split(m.theme.Warning.Render(section), "\n")...)
+	}
 	if m.lastError != "" {
 		lines = append(lines, m.theme.Danger.Render(m.lastError))
 	}
@@ -255,12 +283,26 @@ func (m *Model) buildContent() (lines []string, focusStart, focusEnd int) {
 			nowDisplay = m.theme.Success.Render(nowName)
 		}
 		header := fmt.Sprintf("%s%s  Now: %s", focus, marker, nowDisplay)
+		if m.loadError != "" {
+			header = fmt.Sprintf("%s%s  Last selected: %s", focus, marker, nowDisplay)
+		}
 		switch {
 		case groupFocused && m.contentFocused:
 			header = ui.ApplyFocusStyle(header, m.theme.RowFocus)
 		}
 
 		bodyLines := []string{header}
+		if m.loadError != "" {
+			var tested time.Time
+			for _, node := range group.Nodes {
+				if stamp := m.delays[node.Name].TestedAt; stamp.After(tested) {
+					tested = stamp
+				}
+			}
+			if !tested.IsZero() {
+				bodyLines = append(bodyLines, m.theme.Muted.Render("Last tested "+tested.Local().Format("15:04:05")))
+			}
+		}
 		// Body-relative line of the group header (0). After section wrap, this
 		// maps to sectionLines[1] (after the top border).
 		groupBodyLine := 0

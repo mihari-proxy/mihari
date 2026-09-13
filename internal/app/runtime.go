@@ -159,6 +159,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	}
 	coordinator := state.NewCoordinator(store)
 	controller := mihomo.NewClient("http://"+settings.ControllerAddr, settings.ControllerSecret, nil)
+	controller.SetDiagnosticReporter(options.DiagnosticReporter)
 	// A persisted active subscription already had its generated config installed
 	// into the runtime config file; without this the status API would report
 	// "Not applied" after every daemon restart until the next subscription op.

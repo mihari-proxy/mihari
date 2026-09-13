@@ -195,6 +195,7 @@ func (s *Session) poll(ctx context.Context, status protocol.Status) error {
 }
 
 func (s *Session) pollSnapshots(ctx context.Context, status protocol.Status) error {
+	var proxyErr error
 	if slices.Contains(status.Capabilities, protocol.CapabilityCore) {
 		coreStatus, err := s.client.Core(ctx)
 		if err != nil {
@@ -215,10 +216,11 @@ func (s *Session) pollSnapshots(ctx context.Context, status protocol.Status) err
 	}
 	if slices.Contains(status.Capabilities, protocol.CapabilityProxies) {
 		proxies, err := s.client.ProxyGroups(ctx)
-		if err != nil {
-			return err
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		if !putOrdered(ctx, s.control, Event{Kind: EventProxies, Proxies: proxies}) {
+		proxyErr = err
+		if !putOrdered(ctx, s.control, Event{Kind: EventProxies, Proxies: proxies, Err: err, ObservedAt: time.Now()}) {
 			return ctx.Err()
 		}
 	}
@@ -258,7 +260,7 @@ func (s *Session) pollSnapshots(ctx context.Context, status protocol.Status) err
 			return ctx.Err()
 		}
 	}
-	return nil
+	return proxyErr
 }
 
 func (s *Session) pollStatus(ctx context.Context, status protocol.Status) error {

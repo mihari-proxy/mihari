@@ -22,6 +22,7 @@ var (
 	quotedSecretPattern = regexp.MustCompile(`(?i)\b(token|secret|password|authorization|credential|api[-_]key)\s*([:=])\s*(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')`)
 	namedSecretPattern  = regexp.MustCompile(`(?i)\b(token|secret|password|authorization|credential|api[-_]key)\s*([:=])\s*[^\s&;,"']+`)
 	hex64Pattern        = regexp.MustCompile(`(?i)\b[0-9a-f]{64}\b`)
+	jsonSecretPattern   = regexp.MustCompile(`(?i)("(?:token|secret|password|authorization|credential|cookie|api[-_]key)"\s*:\s*)(?:"(?:\\.|[^"\\])*"|[^,}\s]+)`)
 
 	sensitiveKeys = map[string]struct{}{
 		"secret":        {},
@@ -149,6 +150,7 @@ func (r *Redactor) String(value string) string {
 		out = strings.ReplaceAll(out, exact, redactedExact)
 	}
 	out = urlPattern.ReplaceAllString(out, redactedURL)
+	out = jsonSecretPattern.ReplaceAllString(out, `${1}"***"`)
 	out = authSchemePattern.ReplaceAllStringFunc(out, func(match string) string {
 		parts := strings.Fields(match)
 		if len(parts) == 0 {

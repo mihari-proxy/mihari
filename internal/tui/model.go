@@ -37,6 +37,8 @@ type Model struct {
 	focus                ui.Focus
 	inputMode            ui.InputMode
 	modal                *Modal
+	proxyNamesChecked    bool
+	proxyNamesPending    []string
 	width                int
 	height               int
 	theme                ui.Theme
@@ -330,6 +332,7 @@ func (model *Model) syncSystemNetworkStatus() {
 }
 
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	model.showDuplicateNames()
 	if key, ok := message.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" {
 		return model, tea.Quit
 	}
@@ -717,8 +720,13 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		}
 	case session.EventProxies:
 		if page, ok := model.pages[ui.PageProxies].(*proxypage.Model); ok {
-			page.SetGroups(event.Proxies)
+			page.ObserveSnapshot(event.Proxies, event.ObservedAt, event.Err)
 		}
+		if event.Err == nil && !model.proxyNamesChecked {
+			model.proxyNamesChecked = true
+			model.proxyNamesPending = append([]string(nil), event.Proxies.DuplicateNames...)
+		}
+		model.showDuplicateNames()
 	case session.EventPreferences:
 		if page, ok := model.pages[ui.PageConnections].(*connectionspage.Model); ok {
 			page.SetPreferences(event.Preferences)

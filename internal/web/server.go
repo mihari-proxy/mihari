@@ -745,7 +745,7 @@ func webSocketRelayTermination(err error) (websocket.StatusCode, error) {
 func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 	controller, err := url.Parse(s.ControllerURL)
 	if err != nil {
-		reportFailure(r.Context(), s.Reporter, "websocket.handshake.failed", err)
+		reportFailure(r.Context(), s.Reporter, "websocket.handshake.failed", (&diagnostics.HTTPError{Operation: "mihomo stream", Phase: "request", Cause: err}).HideSecret(s.ControllerSecret))
 		http.Error(w, "bad gateway", http.StatusBadGateway)
 		return
 	}
@@ -763,7 +763,7 @@ func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 		HTTPHeader: header,
 	})
 	if err != nil {
-		reportFailure(r.Context(), s.Reporter, "websocket.handshake.failed", err)
+		reportFailure(r.Context(), s.Reporter, "websocket.handshake.failed", diagnostics.HandshakeError(diagnostics.HTTPOperation(r.Method, r.URL.Path), resp, err, s.ControllerSecret))
 		if resp != nil {
 			http.Error(w, "upstream stream unavailable", resp.StatusCode)
 			return

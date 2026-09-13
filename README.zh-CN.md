@@ -45,6 +45,10 @@ Mihari 是面向 Windows、Linux 和 macOS 的跨平台 [mihomo](https://github.
 
 单个无 CGO 的静态二进制(< 15 MB)即包含全部功能,内置 GitHub Releases 自动更新与本地 GeoIP 解析。
 
+代理节点测速会读取 provider 节点，并在需要时调用 mihomo 的 provider 专用接口。同名节点在每个组内合并显示、共享测速结果：优先全局普通节点，否则按 provider 名排序选择首个匹配项。TUI 启动后的首次成功检查会对重名弹窗提示，测速来源可能与组实际选中的来源不同。provider 读取对瞬时故障最多尝试三次；持续失败时保留旧列表，显示 **Stale data** 和关键原因，恢复后自动清除提示。CLI/TUI 与 daemon 应配套升级。
+
+mihomo HTTP 失败的原始报错与上游状态会写入诊断日志，范围包括 gateway 和 WebSocket 握手；凭据与 URL 脱敏，超长内容明确标记截断。用户侧只显示简洁关键原因。
+
 ## 快速开始
 
 **安装**
