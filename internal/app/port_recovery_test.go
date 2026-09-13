@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/config"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/onboarding"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
@@ -61,6 +63,33 @@ func TestPortConflict_IsDistinguishableFromPermissionFailure(t *testing.T) {
 			got := errors.As(err, &conflict) && conflict.PortConflict()
 			if got != test.want {
 				t.Fatalf("port recovery eligibility=%v want=%v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPortRecovery_InitializationErrorsIdentifyStage(t *testing.T) {
+	for _, stage := range []string{"load port recovery settings", "open port recovery onboarding"} {
+		t.Run(stage, func(t *testing.T) {
+			dir := t.TempDir()
+			paths := platform.Paths{Settings: filepath.Join(dir, "settings.yaml"), Onboarding: dir}
+			settings := config.Defaults()
+			settings.ControllerSecret = strings.Repeat("ab", 32)
+			if err := config.Save(paths.Settings, settings); err != nil {
+				t.Fatal(err)
+			}
+			if stage == "load port recovery settings" {
+				paths.Settings = dir
+			}
+			_, err := NewPortRecovery(paths, state.NewStore(state.Snapshot{}), &ManagedPortConflict{}, nil)
+			var pathError *os.PathError
+			var apiError protocol.APIError
+			preserved := errors.As(err, &pathError)
+			if stage == "load port recovery settings" {
+				preserved = errors.As(err, &apiError) && apiError.Code == protocol.CodeDataFailure
+			}
+			if err == nil || !strings.Contains(err.Error(), stage) || !preserved {
+				t.Fatalf("recovery error lacks context or underlying cause: %v", err)
 			}
 		})
 	}

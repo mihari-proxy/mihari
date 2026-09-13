@@ -133,16 +133,16 @@ func (s *Server) status(writer http.ResponseWriter, request *http.Request) {
 			}
 		}
 		status.Capabilities = sortedUnique(status.Capabilities)
-		if runtime, ok := s.runtime.(onboardingAPI); ok {
-			if onboardingStatus, err := runtime.OnboardingStatus(request.Context()); err == nil {
-				status.SetupRequired = !onboardingStatus.Status.Complete
-			}
-		}
-		if runtime, ok := s.runtime.(interface {
-			SetupRequired(context.Context) (bool, error)
-		}); ok {
+		// A failed read does not prove setup is required. Keep the zero value;
+		// only runtimes without a readiness probe use the historical marker.
+		switch runtime := s.runtime.(type) {
+		case setupRequiredAPI:
 			if required, err := runtime.SetupRequired(request.Context()); err == nil {
 				status.SetupRequired = required
+			}
+		case onboardingAPI:
+			if onboardingStatus, err := runtime.OnboardingStatus(request.Context()); err == nil {
+				status.SetupRequired = !onboardingStatus.Status.Complete
 			}
 		}
 	}

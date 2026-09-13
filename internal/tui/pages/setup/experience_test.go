@@ -144,8 +144,11 @@ func TestSetupErrorDetails_RedactsURLAndDoesNotExposeRawCause(t *testing.T) {
 	secretURL := "https://example.test/sub?token=private-token"
 	m.subscriptionInputs[1].SetValue(secretURL)
 	m.fail("Download", protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "failed " + secretURL})
-	if strings.Contains(m.errorDetail, "private-token") || strings.Contains(m.errorDetail, secretURL) {
-		t.Fatal("diagnostic text exposed subscription credentials")
+	m.SetSize(86, 24)
+	for _, text := range []string{m.errorDetail, m.lastError, m.errorAdvice, m.View()} {
+		if strings.Contains(text, "private-token") || strings.Contains(text, secretURL) {
+			t.Fatal("diagnostic text exposed subscription credentials")
+		}
 	}
 }
 
@@ -238,6 +241,29 @@ func TestSetupSettlement_OnlyMentionsCancellationWhenRequested(t *testing.T) {
 	}
 }
 
+func TestSetupSettlement_DeletedSubscriptionDoesNotSurviveReadback(t *testing.T) {
+	m := loadedModel(&fakeClient{status: defaultStatus(false)})
+	m.step = stepSubscription
+	m.addedSubscription = &protocol.Subscription{ID: "deleted", Name: "Removed"}
+	m.Update(settlementMsg{gen: m.executionGen, confirmed: true, status: defaultStatus(false)})
+	if m.addedSubscription != nil || m.hasSubscriptions() || m.subscriptionNeedsRetry() {
+		t.Fatal("deleted subscription survived the authoritative readback")
+	}
+	if !strings.Contains(m.View(), "No subscriptions") {
+		t.Fatal("empty catalog did not restore the initial subscription form")
+	}
+}
+
+func TestSetupSettlement_OtherStepPreservesSubscription(t *testing.T) {
+	m := loadedModel(&fakeClient{status: defaultStatus(false)})
+	m.step = stepCore
+	m.addedSubscription = &protocol.Subscription{ID: "saved", Name: "Saved"}
+	m.Update(settlementMsg{gen: m.executionGen, confirmed: true, status: defaultStatus(false)})
+	if m.addedSubscription == nil || m.addedSubscription.ID != "saved" {
+		t.Fatal("unrelated settlement cleared a subscription without reading it")
+	}
+}
+
 func TestSetupFailure_ShowsSafeCause(t *testing.T) {
 	m := loadedModel(&fakeClient{status: defaultStatus(false)})
 	m.step = stepCore
@@ -272,7 +298,10 @@ func TestSetupLayout_AllStepsFitCompactAndWideTerminals(t *testing.T) {
 	m.step = stepCore
 	m.SetSize(70, 20)
 	m.fail("Install core", protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "Core download request failed."})
-	t.Log("Compact failure view:\n" + m.View())
+	view := m.View()
+	if lipgloss.Width(view) > 70 || lipgloss.Height(view) > 20 {
+		t.Fatal("failure view overflows compact layout")
+	}
 }
 
 func TestSetupBusy_EscapeOffersCancellation(t *testing.T) {

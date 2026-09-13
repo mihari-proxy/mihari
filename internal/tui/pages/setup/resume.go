@@ -140,6 +140,8 @@ func classifySetupPort(address string, owner int, lookup func(string) (platform.
 
 // loadResources returns values only; page fields remain owned by Update.
 func loadResources(ctx context.Context, client Client, result onboardingResultMsg) onboardingResultMsg {
+	// A failed core read leaves readiness unconfirmed; the page offers a
+	// read-only retry rather than treating it as a missing core or a load failure.
 	if core, err := client.Core(ctx); err == nil {
 		result.core = &core
 	}

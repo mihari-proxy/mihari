@@ -92,12 +92,16 @@ func TestOperationStatus_CancelledRequestRemainsRunningUntilSettlement(t *testin
 	}
 }
 
-func TestOperationStatus_FinishedAndAuthenticated(t *testing.T) {
+func TestOperationStatus_Finished(t *testing.T) {
 	s := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: &fakeRuntime{}})
 	s.Handler().ServeHTTP(httptest.NewRecorder(), authorizedRequest(http.MethodPost, "/v1/core/install", bytes.NewBufferString(`{"operation_id":"finished"}`)))
 	if got := readOperationState(t, s, "finished"); got != "finished" {
 		t.Fatalf("state=%s", got)
 	}
+}
+
+func TestOperationStatus_RejectsUnauthenticatedQuery(t *testing.T) {
+	s := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: &fakeRuntime{}})
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/operations/finished", nil))
 	if w.Code != http.StatusUnauthorized {

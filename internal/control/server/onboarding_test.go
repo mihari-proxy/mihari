@@ -15,7 +15,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/state"
 )
 
-func TestPortRecoverySurface_AdvertisesOnlyRecoveryAndRejectsCoreMutation(t *testing.T) {
+func TestPortRecoverySurface_AdvertisesOnlyRecovery(t *testing.T) {
 	f := &fakeOnboardingRuntime{fakeRuntime: &fakeRuntime{}, status: onboarding.Status{}}
 	s := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{Health: "degraded"}), Onboarding: f})
 	w := httptest.NewRecorder()
@@ -27,12 +27,22 @@ func TestPortRecoverySurface_AdvertisesOnlyRecoveryAndRejectsCoreMutation(t *tes
 	if status.Health != "degraded" || !status.SetupRequired || !slices.Contains(status.Capabilities, protocol.CapabilityOnboarding) || slices.Contains(status.Capabilities, protocol.CapabilityCore) {
 		t.Fatal("recovery exposed normal-runtime capabilities")
 	}
-	w = httptest.NewRecorder()
+}
+
+func TestPortRecoverySurface_AcceptsEndpointUpdate(t *testing.T) {
+	f := &fakeOnboardingRuntime{fakeRuntime: &fakeRuntime{}, status: onboarding.Status{}}
+	s := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{Health: "degraded"}), Onboarding: f})
+	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, authorizedRequest(http.MethodPatch, "/v1/onboarding", bytes.NewBufferString(`{"operation_id":"save","web_addr":"127.0.0.1:19291"}`)))
 	if w.Code != http.StatusOK || f.update.WebAddr == nil {
 		t.Fatal("recovery could not update endpoints")
 	}
-	w = httptest.NewRecorder()
+}
+
+func TestPortRecoverySurface_RejectsCoreMutation(t *testing.T) {
+	f := &fakeOnboardingRuntime{fakeRuntime: &fakeRuntime{}, status: onboarding.Status{}}
+	s := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{Health: "degraded"}), Onboarding: f})
+	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, authorizedRequest(http.MethodPost, "/v1/core/install", bytes.NewBufferString(`{"operation_id":"forbidden"}`)))
 	if w.Code < 400 {
 		t.Fatal("restricted recovery accepted core installation")
@@ -44,6 +54,7 @@ type fakeOnboardingRuntime struct {
 	status   onboarding.Status
 	update   onboarding.Update
 	revision uint64
+	reads    int
 }
 
 type readyOnboardingRuntime struct{ *fakeOnboardingRuntime }
@@ -62,9 +73,33 @@ func TestStatus_ReadyRequiredResourcesDoNotRepeatOptionalSetup(t *testing.T) {
 	if got.SetupRequired {
 		t.Fatal("optional setup marker overrode actual readiness")
 	}
+	if f.reads != 0 {
+		t.Fatal("status read both readiness and the historical onboarding marker")
+	}
+}
+
+type unavailableReadinessRuntime struct{ *fakeOnboardingRuntime }
+
+func (f *unavailableReadinessRuntime) SetupRequired(context.Context) (bool, error) {
+	return false, context.DeadlineExceeded
+}
+
+func TestStatus_ReadinessFailureDoesNotRequireSetup(t *testing.T) {
+	f := &unavailableReadinessRuntime{&fakeOnboardingRuntime{fakeRuntime: &fakeRuntime{}, status: onboarding.Status{Complete: false}}}
+	s := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: f})
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, authorizedRequest(http.MethodGet, "/v1/status", nil))
+	var status protocol.Status
+	if err := json.Unmarshal(w.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusOK || status.SetupRequired || f.reads != 0 {
+		t.Fatal("readiness failure fell back to a stale onboarding marker")
+	}
 }
 
 func (f *fakeOnboardingRuntime) OnboardingStatus(context.Context) (onboarding.Snapshot, error) {
+	f.reads++
 	return onboarding.Snapshot{Status: f.status, Revision: f.revision}, nil
 }
 

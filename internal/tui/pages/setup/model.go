@@ -280,12 +280,14 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			if m.step == stepSubscription {
 				m.subscriptions = typed.subscriptions
 				m.subscriptionsErr = nil
-			}
-			if m.addedSubscription != nil {
-				for _, profile := range typed.subscriptions.Subscriptions {
-					if profile.ID == m.addedSubscription.ID {
-						value := profile
-						m.addedSubscription = &value
+				if m.addedSubscription != nil {
+					savedID := m.addedSubscription.ID
+					m.addedSubscription = nil
+					for _, profile := range typed.subscriptions.Subscriptions {
+						if profile.ID == savedID {
+							value := profile
+							m.addedSubscription = &value
+						}
 					}
 				}
 			}

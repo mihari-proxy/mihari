@@ -17,6 +17,7 @@ const (
 	ModalNone ModalAction = iota
 	ModalClose
 	ModalConfirm
+	// ModalCopy requests copying the current modal's safe text.
 	ModalCopy
 )
 

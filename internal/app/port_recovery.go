@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -38,11 +39,11 @@ func NewPortRecovery(paths platform.Paths, store *state.Store, cause error, repo
 	// port probe failed. Never use the caller's pre-recovery snapshot to write.
 	settings, err := config.Load(paths.Settings)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load port recovery settings: %w", err)
 	}
 	service, err := onboarding.Open(onboarding.Options{StatePath: paths.Onboarding, InitialSetupRequired: true})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open port recovery onboarding: %w", err)
 	}
 	manager := runtimeapi.New(runtimeapi.Options{Store: store, Settings: settings, SettingsPath: paths.Settings, Onboarding: service, DiagnosticReporter: reporter})
 	return &PortRecovery{manager: manager}, nil

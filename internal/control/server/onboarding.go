@@ -17,6 +17,10 @@ type OnboardingAPI interface {
 
 type onboardingAPI = OnboardingAPI
 
+type setupRequiredAPI interface {
+	SetupRequired(context.Context) (bool, error)
+}
+
 func (s *Server) onboardingRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/onboarding", s.onboardingStatus)
 	mux.HandleFunc("PATCH /v1/onboarding", s.updateOnboarding)
