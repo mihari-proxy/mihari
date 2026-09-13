@@ -26,7 +26,7 @@ func TestPortRecovery_PreservesLatestSettingsAndRejectsCompletion(t *testing.T) 
 	if err := config.Save(paths.Settings, latest); err != nil {
 		t.Fatal(err)
 	}
-	r, err := NewPortRecovery(paths, initial, state.NewStore(state.Snapshot{}), &ManagedPortConflict{}, nil)
+	r, err := NewPortRecovery(paths, state.NewStore(state.Snapshot{}), &ManagedPortConflict{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

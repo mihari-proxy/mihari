@@ -29,15 +29,14 @@ type PortRecovery struct{ manager *runtimeapi.Manager }
 
 // NewPortRecovery builds the daemon-owned recovery surface after a confirmed
 // port conflict, using the existing settings transaction and onboarding format.
-func NewPortRecovery(paths platform.Paths, settings config.Settings, store *state.Store, cause error, reporter diagnostics.Reporter) (*PortRecovery, error) {
+func NewPortRecovery(paths platform.Paths, store *state.Store, cause error, reporter diagnostics.Reporter) (*PortRecovery, error) {
 	var conflict *ManagedPortConflict
 	if !errors.As(cause, &conflict) {
 		return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "startup failure is not a port conflict"}
 	}
 	// Startup resource recovery may have committed newer settings before the
 	// port probe failed. Never use the caller's pre-recovery snapshot to write.
-	var err error
-	settings, err = config.Load(paths.Settings)
+	settings, err := config.Load(paths.Settings)
 	if err != nil {
 		return nil, err
 	}

@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/logging"
+	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -680,6 +681,8 @@ func TestSetupEndpointsMarksOccupiedPortRed(t *testing.T) {
 	defer listener.Close()
 	occupied := listener.Addr().String()
 	model := loadedModel(&fakeClient{status: defaultStatus(false)})
+	// This tests the UI for a confirmed foreign port, not OS PID discovery.
+	model.probe = probeEndpoint
 	model.inputs[0].SetValue(occupied)
 	updated, _ := model.Update(model.probePorts()())
 	model = updated.(*Model)
@@ -699,6 +702,8 @@ func TestSetupEndpointsEnterAutoFixesOccupiedPorts(t *testing.T) {
 	defer listener.Close()
 	occupied := listener.Addr().String()
 	model := loadedModel(&fakeClient{status: defaultStatus(false)})
+	// macOS may not expose an occupant PID; inject the confirmed probe result.
+	model.probe = probeEndpoint
 	model.inputs[0].SetValue(occupied)
 	model.inputs[1].SetValue("127.0.0.1:20001")
 	model.inputs[2].SetValue("127.0.0.1:20002")
@@ -724,6 +729,34 @@ func TestSetupEndpointsEnterAutoFixesOccupiedPorts(t *testing.T) {
 	}
 	if _, ok := command().(ui.ConfirmationRequestMsg); !ok {
 		t.Fatal("missing endpoint save confirmation")
+	}
+}
+
+func TestClassifySetupPort_RequiresConfirmedOwner(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	for _, test := range []struct {
+		name string
+		pid  int
+		ok   bool
+		want portState
+	}{
+		{"owned", 42, true, portOwned},
+		{"foreign", 43, true, portOccupied},
+		{"unavailable", 0, false, portUnknown},
+		{"invalid PID", 0, true, portUnknown},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := classifySetupPort(listener.Addr().String(), 42, func(string) (platform.TCPOccupant, bool) {
+				return platform.TCPOccupant{PID: test.pid}, test.ok
+			})
+			if got != test.want {
+				t.Fatalf("classification=%v want=%v", got, test.want)
+			}
+		})
 	}
 }
 
