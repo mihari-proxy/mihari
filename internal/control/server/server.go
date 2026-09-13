@@ -19,6 +19,7 @@ import (
 )
 
 type Options struct {
+	Onboarding         OnboardingAPI
 	Token              string
 	Store              *state.Store
 	Runtime            RuntimeAPI
@@ -29,6 +30,8 @@ type Options struct {
 }
 
 type Server struct {
+	onboarding         OnboardingAPI
+	operations         operationObservation
 	token              string
 	store              *state.Store
 	runtime            RuntimeAPI
@@ -48,6 +51,7 @@ type Server struct {
 	http               *http.Server
 }
 
+// New assembles local control handlers and selects the injected or runtime onboarding surface.
 func New(options Options) *Server {
 	now := options.Now
 	if now == nil {
@@ -55,6 +59,7 @@ func New(options Options) *Server {
 	}
 	snapshotCtx, snapshotCancel := context.WithCancel(context.Background())
 	server := &Server{
+		onboarding:         options.Onboarding,
 		token:              options.Token,
 		store:              options.Store,
 		runtime:            options.Runtime,
@@ -70,12 +75,17 @@ func New(options Options) *Server {
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	if server.onboarding == nil {
+		server.onboarding, _ = options.Runtime.(onboardingAPI)
+	}
 	return server
 }
 
+// Handler authenticates local control requests and ties their lifetime to server shutdown.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/status", s.status)
+	mux.HandleFunc("GET /v1/operations/{operation_id}", s.operationStatus)
 	s.runtimeRoutes(mux)
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		s.snapshotLifecycle.Lock()
@@ -105,6 +115,7 @@ func (s *Server) Handler() http.Handler {
 	})
 }
 
+// status publishes capabilities and confirmed readiness without inferring setup from a failed read.
 func (s *Server) status(writer http.ResponseWriter, request *http.Request) {
 	snapshot := s.store.Load()
 	status := protocol.Status{
@@ -118,13 +129,21 @@ func (s *Server) status(writer http.ResponseWriter, request *http.Request) {
 		PID:             os.Getpid(),
 	}
 	if s.runtime != nil {
+		status.Capabilities = append(status.Capabilities, protocol.OperationStatusCapability)
 		for _, capability := range s.runtime.Capabilities() {
 			if capability != protocol.MachineLogSnapshotCapability {
 				status.Capabilities = append(status.Capabilities, capability)
 			}
 		}
 		status.Capabilities = sortedUnique(status.Capabilities)
-		if runtime, ok := s.runtime.(onboardingAPI); ok {
+		// A failed read does not prove setup is required. Keep the zero value;
+		// only runtimes without a readiness probe use the historical marker.
+		switch runtime := s.runtime.(type) {
+		case setupRequiredAPI:
+			if required, err := runtime.SetupRequired(request.Context()); err == nil {
+				status.SetupRequired = required
+			}
+		case onboardingAPI:
 			if onboardingStatus, err := runtime.OnboardingStatus(request.Context()); err == nil {
 				status.SetupRequired = !onboardingStatus.Status.Complete
 			}
@@ -132,6 +151,10 @@ func (s *Server) status(writer http.ResponseWriter, request *http.Request) {
 	}
 	if s.snapshotSource != nil {
 		status.Capabilities = sortedUnique(append(status.Capabilities, protocol.MachineLogSnapshotCapability))
+	}
+	if s.runtime == nil && s.onboarding != nil {
+		status.Capabilities = sortedUnique(append(status.Capabilities, protocol.CapabilityOnboarding, protocol.OperationStatusCapability))
+		status.SetupRequired = true
 	}
 	if snapshot.Config.Status != "" {
 		status.Config = &protocol.ConfigStatus{

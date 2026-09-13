@@ -6,6 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -15,6 +17,8 @@ const (
 	ModalNone ModalAction = iota
 	ModalClose
 	ModalConfirm
+	// ModalCopy requests copying the current modal's safe text.
+	ModalCopy
 )
 
 type ModalConfirmedMsg struct {
@@ -28,17 +32,36 @@ const (
 	modalDetail modalKind = iota
 	modalConfirmation
 	modalHelp
+	modalError
 )
 
 type Modal struct {
-	kind     modalKind
-	title    string
-	body     string
-	object   string
-	impact   string
-	rollback string
-	selected int
-	scroll   int
+	kind       modalKind
+	title      string
+	body       string
+	object     string
+	impact     string
+	rollback   string
+	selected   int
+	scroll     int
+	copyText   func(string) error
+	copyStatus string
+}
+
+// NewErrorDetail creates a scrollable, copyable safe diagnostic dialog.
+func NewErrorDetail(title, body string) *Modal {
+	return &Modal{kind: modalError, title: title, body: body, copyText: clipboard.WriteAll}
+}
+
+type errorCopyResultMsg struct {
+	modal *Modal
+	err   error
+}
+
+// copyCommand copies the supplied safe body and routes the result back to its owning modal.
+func (m *Modal) copyCommand() tea.Cmd {
+	body, copyText := m.body, m.copyText
+	return func() tea.Msg { return errorCopyResultMsg{modal: m, err: copyText(body)} }
 }
 
 func NewDetail(title, body string) *Modal {
@@ -53,6 +76,7 @@ func NewConfirmation(title, object, impact, rollback string) *Modal {
 	return &Modal{kind: modalConfirmation, title: title, object: object, impact: impact, rollback: rollback, selected: 1}
 }
 
+// Update handles modal navigation and reports explicit close, confirm or copy actions.
 func (m *Modal) Update(message tea.Msg) ModalAction {
 	key, ok := message.(tea.KeyPressMsg)
 	if !ok {
@@ -62,8 +86,16 @@ func (m *Modal) Update(message tea.Msg) ModalAction {
 	case "esc":
 		return ModalClose
 	}
-	if m.kind == modalHelp {
+	if m.kind == modalHelp || m.kind == modalError {
 		switch key.String() {
+		case "c":
+			if m.kind == modalError {
+				return ModalCopy
+			}
+		case "pgdown":
+			m.scroll += 5
+		case "pgup":
+			m.scroll = max(0, m.scroll-5)
 		case "up":
 			m.scroll = max(0, m.scroll-1)
 		case "down":
@@ -86,8 +118,12 @@ func (m *Modal) Update(message tea.Msg) ModalAction {
 	return ModalNone
 }
 
+// View renders the selected dialog kind using the shared TUI theme.
 func (m *Modal) View(width, height int) string {
 	theme := ui.DefaultTheme()
+	if m.kind == modalError {
+		return m.errorView(theme, width, height)
+	}
 	if m.kind == modalHelp {
 		return m.helpView(theme, width, height)
 	}
@@ -120,6 +156,23 @@ func (m *Modal) View(width, height int) string {
 	boxWidth := min(64, max(24, width-8))
 	content := theme.Dialog.Width(boxWidth).Render(theme.Title.Render(m.title) + "\n\n" + body)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, content)
+}
+
+// errorView wraps and scrolls diagnostics within terminal bounds while preserving copy hints.
+func (m *Modal) errorView(theme ui.Theme, width, height int) string {
+	boxWidth := max(1, min(76, width-4))
+	inner := max(1, boxWidth-6)
+	lines := strings.Split(ansi.Hardwrap(m.body, inner, true), "\n")
+	rows := max(1, height-10)
+	start := min(m.scroll, max(0, len(lines)-rows))
+	end := min(len(lines), start+rows)
+	foot := "↑/↓ scroll  c copy  Esc close"
+	if m.copyStatus != "" {
+		foot = m.copyStatus + " · " + foot
+	}
+	body := theme.Title.Render(ui.TruncateVisible(m.title, inner)) + "\n\n" + strings.Join(lines[start:end], "\n") + "\n\n" + theme.Muted.Render(ui.TruncateVisible(foot, inner))
+	box := theme.Dialog.Width(boxWidth).MaxWidth(boxWidth).MaxHeight(max(1, height-2)).Render(body)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
 
 func (m *Modal) helpView(theme ui.Theme, width, height int) string {

@@ -348,7 +348,7 @@ func TestSchedulerGeoIPRefresh_FailureStillChecksNextRound(t *testing.T) {
 		t.Fatalf("checks=%d ids=%v candidate=%+v", checks, ids, candidate)
 	}
 	records := decodeSchedulerDiagnostics(t, output.String())
-	if len(records) != 1 || records[0]["msg"] != "operation.failed" || records[0]["operation_id"] != ids[0] || records[0]["operation"] != "geoip.update" || records[0]["cause"] != "permission denied" {
+	if len(records) != 1 || records[0]["msg"] != "operation.failed" || records[0]["operation_id"] != ids[0] || records[0]["operation"] != "geoip.update" || records[0]["cause"] != "api error (internal): permission denied" {
 		t.Fatalf("records=%v", records)
 	}
 }

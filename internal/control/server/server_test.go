@@ -80,7 +80,7 @@ func TestStatusReturnsSortedUniqueRuntimeCapabilities(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{protocol.CapabilityCore, protocol.CapabilityLogs}
+	want := []string{protocol.CapabilityCore, protocol.CapabilityLogs, protocol.OperationStatusCapability}
 	if !slices.Equal(got.Capabilities, want) {
 		t.Fatalf("capabilities=%v want=%v", got.Capabilities, want)
 	}

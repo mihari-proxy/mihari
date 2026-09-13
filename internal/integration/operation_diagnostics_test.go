@@ -595,7 +595,7 @@ func TestGeoIPDiagnostic_IPCRawFailureKeepsInternalEnvelope(t *testing.T) {
 	for _, id := range []string{"geoip-ipc", "geoip-ipc", "geoip-ipc-next"} {
 		_, err := fixture.client.UpdateGeoIP(context.Background(), protocol.MutationRequest{OperationID: id})
 		var api protocol.APIError
-		if !errors.As(err, &api) || api.Code != protocol.CodeInternal || api.Message != "internal error" || len(api.Details) != 0 {
+		if !errors.As(err, &api) || api.Code != protocol.CodeInternal || api.Message != "prepare GeoIP databases: permission denied while accessing local database files" || len(api.Details) != 0 {
 			t.Fatalf("raw domain error changed envelope: %v", err)
 		}
 		assertDiagnosticLogs(t, fixture.daemonLogs.String(), slog.LevelError, id, 1)

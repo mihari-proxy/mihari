@@ -13,6 +13,7 @@ func probeManagedPorts(settings config.Settings, lookup func(string) (platform.T
 	return probeManagedPortsWithListener(settings, lookup, nil)
 }
 
+// probeManagedPortsWithListener tests configured endpoints and marks only confirmed address conflicts.
 func probeManagedPortsWithListener(settings config.Settings, lookup func(string) (platform.TCPOccupant, bool), listen func(string, string) (net.Listener, error)) error {
 	if listen == nil {
 		listen = net.Listen
@@ -32,10 +33,14 @@ func probeManagedPortsWithListener(settings config.Settings, lookup func(string)
 				details["pid"] = occupant.PID
 				details["process"] = filepath.Base(occupant.Process)
 			}
-			return protocol.APIError{
+			failure := protocol.APIError{
 				Code: protocol.CodeInvalidState, Message: "managed port is unavailable",
 				Details: details,
 			}
+			if platform.PortInUse(err) {
+				return &ManagedPortConflict{failure: failure}
+			}
+			return failure
 		}
 		_ = listener.Close()
 	}

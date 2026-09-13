@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -8,6 +9,34 @@ import (
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 )
+
+func TestErrorModal_ScrollsCopiesAndKeepsFocusOnCopyFailure(t *testing.T) {
+	m := NewModel()
+	modal := NewErrorDetail("Safe setup details", strings.Repeat("safe diagnostic line\n", 30))
+	m.modal = modal
+	before := modal.View(72, 22)
+	modal.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if modal.scroll == 0 || lipgloss.Width(before) > 72 || lipgloss.Height(before) > 22 {
+		t.Fatal("details did not scroll or fit")
+	}
+	var copied string
+	modal.copyText = func(text string) error { copied = text; return errors.New("clipboard unavailable") }
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("missing copy command")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(Model)
+	if copied != modal.body || m.modal != modal || modal.copyStatus == "" {
+		t.Fatal("copy result lost dialog or feedback")
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = updated.(Model)
+	if m.modal != nil {
+		t.Fatal("details did not close")
+	}
+}
 
 func TestConfirmationStatesImpactAndRollbackWithoutRetyping(t *testing.T) {
 	modal := NewConfirmation("Restart core", "mihomo", "Connections will be interrupted", "The previous binary remains available")

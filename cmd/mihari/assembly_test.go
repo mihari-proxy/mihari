@@ -119,6 +119,29 @@ func TestDaemonAssembly_RuntimeBuildFailureIsRecordedBeforeDegradedStartup(t *te
 	}
 }
 
+func TestDaemonAssembly_PortConflictOnlyOpensRestrictedOnboarding(t *testing.T) {
+	resetDaemonRunSeamsForTest(t)
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buildDaemonRuntime = func(platform.Paths, config.Settings, string, io.Writer, io.Writer, app.RuntimeBuildOptions) (*app.RuntimeAssembly, error) {
+		return nil, &app.ManagedPortConflict{}
+	}
+	var recovered bool
+	runDaemon = func(_ context.Context, options daemon.Options) error {
+		recovered = options.Onboarding != nil && options.Runtime == nil && options.Store.Load().Health == "degraded"
+		return nil
+	}
+	if err := runDaemonWith(context.Background(), daemonRunDeps{Paths: paths, PrivateFS: fs, Version: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if !recovered {
+		t.Fatal("confirmed port conflict did not expose restricted onboarding")
+	}
+}
+
 func TestDaemonAssembly_ServiceDiagnosticStderrRequiresExplicitNonJSONServiceMode(t *testing.T) {
 	writer := &bytes.Buffer{}
 	for _, args := range [][]string{

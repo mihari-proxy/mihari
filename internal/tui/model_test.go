@@ -135,6 +135,16 @@ func TestRootAcceptsSystemRouteRequestForStandaloneSetup(t *testing.T) {
 	}
 }
 
+func TestRootManualSetup_IsNotDismissedByReadyStatus(t *testing.T) {
+	model := NewModel()
+	updated, _ := model.Update(ui.RouteRequestMsg{Page: ui.PageSetup})
+	model = updated.(Model)
+	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{SetupRequired: false}})
+	if model.Route() != ui.PageSetup {
+		t.Fatal("live status dismissed the manually opened wizard")
+	}
+}
+
 func TestRootSetupRequiredRoutesToStandaloneSetupAndEscDoesNotComplete(t *testing.T) {
 	model := NewModel()
 	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{SetupRequired: true}})
