@@ -44,8 +44,15 @@ func TestPortRecoverySurface_RejectsCoreMutation(t *testing.T) {
 	s := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{Health: "degraded"}), Onboarding: f})
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, authorizedRequest(http.MethodPost, "/v1/core/install", bytes.NewBufferString(`{"operation_id":"forbidden"}`)))
-	if w.Code < 400 {
-		t.Fatal("restricted recovery accepted core installation")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("restricted recovery status = %d, want %d", w.Code, http.StatusConflict)
+	}
+	var envelope protocol.ErrorEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode restricted recovery error: %v", err)
+	}
+	if envelope.Error.Code != protocol.CodeInvalidState {
+		t.Fatalf("restricted recovery error code = %s, want %s", envelope.Error.Code, protocol.CodeInvalidState)
 	}
 }
 
