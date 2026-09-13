@@ -13,6 +13,7 @@ func probeManagedPorts(settings config.Settings, lookup func(string) (platform.T
 	return probeManagedPortsWithListener(settings, lookup, nil)
 }
 
+// probeManagedPortsWithListener tests configured endpoints and marks only confirmed address conflicts.
 func probeManagedPortsWithListener(settings config.Settings, lookup func(string) (platform.TCPOccupant, bool), listen func(string, string) (net.Listener, error)) error {
 	if listen == nil {
 		listen = net.Listen

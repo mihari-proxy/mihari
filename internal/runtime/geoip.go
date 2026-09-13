@@ -114,6 +114,7 @@ func (m *Manager) UpdateGeoIP(ctx context.Context, operation Operation) (geoip.S
 	return result.(geoip.Status), nil
 }
 
+// geoIPUpdateFailure adds a classified safe reason while retaining existing codes and internal causes.
 func geoIPUpdateFailure(stage string, err error) error {
 	var api protocol.APIError
 	if errors.As(err, &api) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

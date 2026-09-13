@@ -12,7 +12,10 @@ type downloadFailure struct {
 	cause   error
 }
 
+// Error exposes only the controlled description, not the underlying download cause.
 func (e downloadFailure) Error() string { return e.message }
+
+// Unwrap preserves the internal cause for classification and controlled diagnostics.
 func (e downloadFailure) Unwrap() error { return e.cause }
 
 // SafeFailureReason reports only classified, non-sensitive update causes.

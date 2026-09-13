@@ -14,6 +14,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/logging"
 )
 
+// safeText redacts subscription credentials, removes unsafe controls and bounds display text.
 func (m *Model) safeText(text string) string {
 	var secrets []string
 	if len(m.subscriptionInputs) > 1 {
@@ -33,6 +34,7 @@ func (m *Model) safeText(text string) string {
 	return text
 }
 
+// fail builds safe step diagnostics from classified errors without exposing internal causes.
 func (m *Model) fail(prefix string, err error) {
 	m.settlementNotice = ""
 	cause, advice := "The cause could not be confirmed.", "Open details and use the operation ID to locate daemon logs."
@@ -71,10 +73,12 @@ func (m *Model) fail(prefix string, err error) {
 	}
 }
 
+// clearFailure removes obsolete error and settlement messages before another action.
 func (m *Model) clearFailure() {
 	m.lastError, m.errorAdvice, m.errorDetail, m.settlementNotice = "", "", "", ""
 }
 
+// uncertainOutcome identifies response failures that require readback before retrying a mutation.
 func uncertainOutcome(err error) bool {
 	var api protocol.APIError
 	var network net.Error

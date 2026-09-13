@@ -51,6 +51,7 @@ type Server struct {
 	http               *http.Server
 }
 
+// New assembles local control handlers and selects the injected or runtime onboarding surface.
 func New(options Options) *Server {
 	now := options.Now
 	if now == nil {
@@ -80,6 +81,7 @@ func New(options Options) *Server {
 	return server
 }
 
+// Handler authenticates local control requests and ties their lifetime to server shutdown.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/status", s.status)
@@ -113,6 +115,7 @@ func (s *Server) Handler() http.Handler {
 	})
 }
 
+// status publishes capabilities and confirmed readiness without inferring setup from a failed read.
 func (s *Server) status(writer http.ResponseWriter, request *http.Request) {
 	snapshot := s.store.Load()
 	status := protocol.Status{

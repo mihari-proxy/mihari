@@ -18,7 +18,10 @@ import (
 // retaining the existing safe API error and JSON contract.
 type ManagedPortConflict struct{ failure protocol.APIError }
 
+// Error returns the existing safe managed-port failure message.
 func (e *ManagedPortConflict) Error() string { return e.failure.Message }
+
+// Unwrap preserves typed access to the underlying public API error.
 func (e *ManagedPortConflict) Unwrap() error { return e.failure }
 
 // PortConflict marks only confirmed address-in-use errors.

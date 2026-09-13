@@ -31,6 +31,7 @@ type Runtime interface {
 	Run(context.Context) error
 }
 
+// Run owns the local control listener and joins the optional runtime when serving ends.
 func Run(parent context.Context, options Options) error {
 	if options.ValidationMode && (options.Listen == nil || options.OnReady == nil) {
 		return activationRefused()

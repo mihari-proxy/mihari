@@ -9,10 +9,12 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+// statusRow aligns a muted label with a value styled by the existing theme.
 func (m *Model) statusRow(label, value string) string {
 	return "  " + m.theme.Muted.Render(fmt.Sprintf("%-12s", label)) + "  " + value
 }
 
+// statusText normalizes safe metadata to one line and labels missing values as unknown.
 func (m *Model) statusText(value string) string {
 	value = strings.Join(strings.Fields(m.safeText(value)), " ")
 	if value == "" {
@@ -21,6 +23,7 @@ func (m *Model) statusText(value string) string {
 	return value
 }
 
+// coreStatusLines distinguishes unconfirmed, missing and reusable local core state.
 func (m *Model) coreStatusLines() []string {
 	lines := []string{m.theme.Title.Render(ui.SetupCoreTitle), ui.SetupCoreBody, "", m.theme.Title.Render("Current status")}
 	if !m.coreLocalLoaded {
@@ -39,6 +42,7 @@ func (m *Model) coreStatusLines() []string {
 	return lines
 }
 
+// databaseTime displays a confirmed timestamp in local time or an unknown placeholder.
 func databaseTime(value time.Time) string {
 	if value.IsZero() {
 		return "Unknown"
@@ -46,6 +50,7 @@ func databaseTime(value time.Time) string {
 	return value.Local().Format("2006-01-02 15:04 MST")
 }
 
+// databaseStatus distinguishes usable saved data from the result of its latest update.
 func (m *Model) databaseStatus(value protocol.GeoIPDatabaseStatus) string {
 	if value.Available {
 		if value.Error != "" {
@@ -56,6 +61,7 @@ func (m *Model) databaseStatus(value protocol.GeoIPDatabaseStatus) string {
 	return m.theme.Warning.Render("Unavailable")
 }
 
+// geoipStatusLines summarizes Country and ASN availability, update times and the next action.
 func (m *Model) geoipStatusLines() []string {
 	lines := []string{m.theme.Title.Render(ui.SetupGeoIPTitle), ui.SetupGeoIPBody, "", m.theme.Title.Render("Current status")}
 	if !m.geoipLocalLoaded {
@@ -74,14 +80,17 @@ func (m *Model) geoipStatusLines() []string {
 	return append(lines, "", m.theme.Info.Render("Next · "+next))
 }
 
+// hasSubscriptions includes both the loaded catalog and a profile saved in this session.
 func (m *Model) hasSubscriptions() bool {
 	return len(m.subscriptions.Subscriptions) > 0 || (m.addedSubscription != nil && m.addedSubscription.ID != "")
 }
 
+// subscriptionNeedsRetry identifies a newly saved profile whose download still needs attention.
 func (m *Model) subscriptionNeedsRetry() bool {
 	return m.addedSubscription != nil && m.addedSubscription.ID != "" && (!m.addedSubscription.Cached || m.addedSubscription.LastError != "")
 }
 
+// rememberSubscription updates the displayed catalog by ID without adding duplicate entries.
 func (m *Model) rememberSubscription(value protocol.Subscription) {
 	if value.ID == "" {
 		return
@@ -95,6 +104,7 @@ func (m *Model) rememberSubscription(value protocol.Subscription) {
 	m.subscriptions.Subscriptions = append(m.subscriptions.Subscriptions, value)
 }
 
+// subscriptionCounts summarizes cached profiles without errors separately from those needing attention.
 func (m *Model) subscriptionCounts() string {
 	ready := 0
 	for _, profile := range m.subscriptions.Subscriptions {
@@ -110,6 +120,7 @@ func (m *Model) subscriptionCounts() string {
 	return fmt.Sprintf("%d %s · %d ready · %d need attention", count, noun, ready, count-ready)
 }
 
+// subscriptionStatusLines shows saved profiles or the initial form and directs further additions to Subscriptions.
 func (m *Model) subscriptionStatusLines() []string {
 	lines := []string{m.theme.Title.Render(ui.SetupSubscriptionTitle)}
 	if m.subscriptionsErr != nil {

@@ -535,6 +535,7 @@ func (r *daemonLoggingResources) Close() error {
 	return errors.Join(errs...)
 }
 
+// runDaemonWith assembles logging and the runtime, selecting restricted recovery for confirmed port conflicts.
 func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	diagnosticStderr := deps.DiagnosticStderr
 	if deps.PrivateFS == nil {

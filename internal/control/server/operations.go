@@ -25,6 +25,7 @@ type operationObservation struct {
 	untracked int
 }
 
+// begin tracks an active handler and returns its release callback; saturated records stay unknown.
 func (o *operationObservation) begin(id string) func() {
 	id = observationKey(id)
 	o.mu.Lock()
@@ -61,6 +62,7 @@ func (o *operationObservation) begin(id string) func() {
 	}
 }
 
+// state reports process-local settlement, conservatively returning unknown for untracked work.
 func (o *operationObservation) state(id string) string {
 	id = observationKey(id)
 	o.mu.Lock()
@@ -79,11 +81,13 @@ func (o *operationObservation) state(id string) string {
 	return "unknown"
 }
 
+// observationKey bounds retained identifiers without storing their original text.
 func observationKey(id string) string {
 	digest := sha256.Sum256([]byte(id))
 	return hex.EncodeToString(digest[:])
 }
 
+// operationStatus validates an operation ID and observes it without executing or replaying work.
 func (s *Server) operationStatus(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("operation_id")
 	if !requireOperationID(w, id) {

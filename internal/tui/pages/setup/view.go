@@ -59,6 +59,7 @@ func (m *Model) FooterHints() string {
 	return hints
 }
 
+// renderFrame bounds the themed step layout while reserving space for progress and diagnostics.
 func (m *Model) renderFrame(body []string) string {
 	width := max(1, min(86, m.width))
 	height := max(1, m.height)

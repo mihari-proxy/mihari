@@ -329,6 +329,7 @@ func (model *Model) syncSystemNetworkStatus() {
 	page.ApplyRootNetworkStatus(model.systemProxy, model.systemProxyOK, model.tunStatus, model.tunOK)
 }
 
+// Update routes shell, modal and page events while retaining ownership of asynchronous results.
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := message.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" {
 		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
@@ -671,6 +672,7 @@ func (model Model) openHelp() (Model, tea.Cmd) {
 	return model, nil
 }
 
+// applySessionEvent reconciles daemon observations and resumes setup across owner changes.
 func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 	var command tea.Cmd
 	model.monitor.Observe(event)
@@ -1071,6 +1073,7 @@ func (model Model) dispatchPage(message tea.Msg) (tea.Model, tea.Cmd) {
 	return model.dispatchPageTo(model.active, message)
 }
 
+// dispatchPageTo delivers results to their owning page, including setup after navigation.
 func (model Model) dispatchPageTo(id ui.PageID, message tea.Msg) (tea.Model, tea.Cmd) {
 	page := model.pages[id]
 	if page == nil {
@@ -1156,6 +1159,7 @@ func (model Model) executeAction(intent ui.ActionIntentMsg) (tea.Model, tea.Cmd)
 	return model, tea.Batch(pageCmd, exec, model.spinnerCmdIfNeeded())
 }
 
+// needsSpinner reports visible setup work or pending shell actions that need animation.
 func (model Model) needsSpinner() bool {
 	if model.active == ui.PageSetup {
 		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok && page.Busy() {
@@ -1358,6 +1362,7 @@ func (model *Model) refreshDaemonHintForService() {
 	model.daemonHint = base
 }
 
+// View renders the active shell or setup layout and overlays the current modal.
 func (model Model) View() tea.View {
 	if model.installation != nil && model.installation.visible {
 		view := tea.NewView(model.installation.view(model.width, model.height))
@@ -1438,6 +1443,7 @@ func (model Model) View() tea.View {
 	return view
 }
 
+// resizePages applies shell dimensions and gives setup its dedicated wizard area.
 func (model Model) resizePages() {
 	layout := calculateLayout(model.width, model.height)
 	for _, page := range model.pages {

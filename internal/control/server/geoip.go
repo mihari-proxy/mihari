@@ -78,6 +78,7 @@ func (s *Server) geoIPLookup(writer http.ResponseWriter, request *http.Request) 
 	writeJSON(writer, http.StatusOK, protocol.GeoIPLookupResult{Schema: "mihari/v1", Records: result})
 }
 
+// geoIPUpdate validates and observes a daemon-owned database update mutation.
 func (s *Server) geoIPUpdate(writer http.ResponseWriter, request *http.Request) {
 	if !s.requireRuntime(request.Context(), writer) {
 		return

@@ -58,6 +58,7 @@ type errorCopyResultMsg struct {
 	err   error
 }
 
+// copyCommand copies the supplied safe body and routes the result back to its owning modal.
 func (m *Modal) copyCommand() tea.Cmd {
 	body, copyText := m.body, m.copyText
 	return func() tea.Msg { return errorCopyResultMsg{modal: m, err: copyText(body)} }
@@ -75,6 +76,7 @@ func NewConfirmation(title, object, impact, rollback string) *Modal {
 	return &Modal{kind: modalConfirmation, title: title, object: object, impact: impact, rollback: rollback, selected: 1}
 }
 
+// Update handles modal navigation and reports explicit close, confirm or copy actions.
 func (m *Modal) Update(message tea.Msg) ModalAction {
 	key, ok := message.(tea.KeyPressMsg)
 	if !ok {
@@ -116,6 +118,7 @@ func (m *Modal) Update(message tea.Msg) ModalAction {
 	return ModalNone
 }
 
+// View renders the selected dialog kind using the shared TUI theme.
 func (m *Modal) View(width, height int) string {
 	theme := ui.DefaultTheme()
 	if m.kind == modalError {
@@ -155,6 +158,7 @@ func (m *Modal) View(width, height int) string {
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, content)
 }
 
+// errorView wraps and scrolls diagnostics within terminal bounds while preserving copy hints.
 func (m *Modal) errorView(theme ui.Theme, width, height int) string {
 	boxWidth := max(1, min(76, width-4))
 	inner := max(1, boxWidth-6)

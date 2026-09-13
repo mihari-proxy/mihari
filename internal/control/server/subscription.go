@@ -60,6 +60,7 @@ func (s *Server) showSubscription(writer http.ResponseWriter, request *http.Requ
 	writeJSON(writer, http.StatusOK, subscriptionResultDTO(profile, "", s.runtime.Snapshot().Revision))
 }
 
+// addSubscription validates profile input and tracks the daemon-owned add operation.
 func (s *Server) addSubscription(writer http.ResponseWriter, request *http.Request) {
 	runtime, ok := s.subscriptionsRuntime(request.Context(), writer)
 	if !ok {
@@ -95,6 +96,7 @@ func (s *Server) useSubscription(writer http.ResponseWriter, request *http.Reque
 	})
 }
 
+// subscriptionProfileMutation adapts an observed profile mutation to the stable control response.
 func (s *Server) subscriptionProfileMutation(writer http.ResponseWriter, request *http.Request, operationName string, mutate func(context.Context, subscriptionAPI, runtimeapi.Operation, string) (subscription.PublicProfile, error)) {
 	runtime, ok := s.subscriptionsRuntime(request.Context(), writer)
 	if !ok {

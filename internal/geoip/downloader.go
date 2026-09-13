@@ -173,6 +173,7 @@ func downloadChecksum(ctx context.Context, client *http.Client, rawURL string, a
 	return result, nil
 }
 
+// downloadFile streams a size-bounded resource while computing its SHA-256 digest.
 func downloadFile(ctx context.Context, client *http.Client, rawURL string, destination io.Writer, maxBytes int64, allowHTTP bool) ([sha256.Size]byte, error) {
 	var result [sha256.Size]byte
 	response, err := doGET(ctx, client, rawURL, allowHTTP)
@@ -192,6 +193,7 @@ func downloadFile(ctx context.Context, client *http.Client, rawURL string, desti
 	return result, nil
 }
 
+// doGET checks response status and redirect transport policy; callers close a successful response.
 func doGET(ctx context.Context, client *http.Client, rawURL string, allowHTTP bool) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {

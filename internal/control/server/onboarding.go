@@ -26,6 +26,7 @@ func (s *Server) onboardingRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /v1/onboarding", s.updateOnboarding)
 }
 
+// onboardingStatus reads the daemon-owned setup surface, including restricted recovery.
 func (s *Server) onboardingStatus(writer http.ResponseWriter, request *http.Request) {
 	runtime := s.onboarding
 	if runtime == nil {
@@ -40,6 +41,7 @@ func (s *Server) onboardingStatus(writer http.ResponseWriter, request *http.Requ
 	writeJSON(writer, http.StatusOK, onboardingDTO(status))
 }
 
+// updateOnboarding validates a setup mutation and tracks its settlement through the owner.
 func (s *Server) updateOnboarding(writer http.ResponseWriter, request *http.Request) {
 	runtime := s.onboarding
 	if runtime == nil {

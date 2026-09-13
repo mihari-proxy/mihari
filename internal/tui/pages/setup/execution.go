@@ -30,6 +30,7 @@ type settlementMsg struct {
 	err           error
 }
 
+// beginExecution replaces the owned request and assigns a generation and operation ID.
 func (m *Model) beginExecution(label string) (context.Context, uint64, string) {
 	if m.cancelExecution != nil {
 		m.cancelExecution()
@@ -61,12 +62,14 @@ func (m *Model) Stop() {
 	}
 }
 
+// exitPrompt explains which committed resources survive leaving setup.
 func (m *Model) exitPrompt() tea.Cmd {
 	return func() tea.Msg {
 		return ui.ConfirmationRequestMsg{Title: "Exit setup?", Impact: "Saved ports, installed core/databases and registered subscriptions are kept. Unconfirmed edits are not saved.", Rollback: "Next launch checks required resources and resumes missing setup.", OnConfirm: tea.Quit}
 	}
 }
 
+// cancelPrompt binds cancellation confirmation to the current execution generation.
 func (m *Model) cancelPrompt() tea.Cmd {
 	gen := m.executionGen
 	return func() tea.Msg {
@@ -77,6 +80,7 @@ func (m *Model) cancelPrompt() tea.Cmd {
 	}
 }
 
+// settle waits for observed completion before reading saved state; unknown never proves failure.
 func (m *Model) settle() tea.Cmd {
 	client, owner, id, gen := m.client, m.ctx, m.operationID, m.executionGen
 	if m.cancelSettlement != nil {
@@ -140,6 +144,7 @@ func (m *Model) settle() tea.Cmd {
 	}
 }
 
+// executionText renders the current action, spinner and elapsed time without estimated progress.
 func (m *Model) executionText() string {
 	label := m.executionLabel
 	if label == "" {
@@ -158,6 +163,7 @@ func (m *Model) executionText() string {
 	return fmt.Sprintf("%s %s  %02d:%02d", frames[int(elapsed/(100*time.Millisecond))%len(frames)], label, int(elapsed/time.Minute), int(elapsed/time.Second)%60)
 }
 
+// refreshSavedSubscription retries the saved profile through the daemon without adding a duplicate.
 func (m *Model) refreshSavedSubscription() tea.Cmd {
 	reader, ok := m.client.(subscriptionReader)
 	if !ok {

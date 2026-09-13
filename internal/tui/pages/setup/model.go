@@ -198,6 +198,7 @@ func NewWithContext(ctx context.Context, client Client, newOperationID func() st
 
 func (m *Model) ID() ui.PageID { return ui.PageSetup }
 
+// SetSize records the wizard bounds and constrains endpoint and subscription input widths.
 func (m *Model) SetSize(width, height int) {
 	m.width, m.height = width, height
 	for i := range m.inputs {
@@ -214,6 +215,7 @@ func (m *Model) FocusFirst() {
 	}
 }
 
+// Load reads saved onboarding and resource state without mutating daemon-owned files.
 func (m *Model) Load() tea.Cmd {
 	if m.client == nil {
 		return nil
@@ -232,6 +234,7 @@ func (m *Model) Load() tea.Cmd {
 	}
 }
 
+// Update owns wizard state, rejects stale execution results and handles recovery before navigation.
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	previousStep := m.step
 	defer func() {
@@ -598,6 +601,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	return m, nil
 }
 
+// forwardTextInput updates only the current editable field, leaving status overviews read-only.
 func (m *Model) forwardTextInput(message tea.Msg) (ui.Page, tea.Cmd) {
 	switch m.step {
 	case stepEndpoints:
@@ -622,6 +626,7 @@ func (m *Model) forwardTextInput(message tea.Msg) (ui.Page, tea.Cmd) {
 	}
 }
 
+// updateEndpoints validates edits and offers confirmed persistence before advancing.
 func (m *Model) updateEndpoints(message tea.Msg, key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 	switch key.String() {
 	case "tab":
@@ -657,6 +662,7 @@ func (m *Model) updateEndpoints(message tea.Msg, key tea.KeyPressMsg) (ui.Page, 
 	return m, tea.Batch(command, m.probePorts())
 }
 
+// updateSubscription handles the initial form, saved-profile retry and explicit optional skip.
 func (m *Model) updateSubscription(message tea.Msg, key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 	if key.String() == "ctrl+s" {
 		m.step = stepGeoIP
@@ -704,6 +710,7 @@ func (m *Model) updateSubscription(message tea.Msg, key tea.KeyPressMsg) (ui.Pag
 	return m, command
 }
 
+// View renders the current wizard step, restart guidance or loading state with safe diagnostics.
 func (m *Model) View() string {
 	if m.waitingRestart {
 		lines := []string{ui.RestartRequiredTitle, "Ports are saved. Restart the Mihari daemon to apply them.", "For an installed service: restart Mihari with administrator/root privileges.", "For a foreground daemon: stop it and run mihari daemon again.", "Enter recheck connection and saved state"}
@@ -956,6 +963,7 @@ func findAvailablePorts(current [3]string) [3]string {
 	return findAvailablePortsForStates(current, states)
 }
 
+// findAvailablePortsForStates replaces only confirmed occupied ports, reserving all retained values.
 func findAvailablePortsForStates(current [3]string, states [3]portState) [3]string {
 	result := current
 	used := make(map[uint16]bool)
@@ -993,6 +1001,7 @@ func findAvailablePortsForStates(current [3]string, states [3]portState) [3]stri
 	return result
 }
 
+// installCore starts a cancellable daemon installation and returns its generation-tagged result.
 func (m *Model) installCore() tea.Cmd {
 	revision := m.status.Revision
 	executionCtx, gen, operationID := m.beginExecution("Installing mihomo core")
@@ -1006,6 +1015,7 @@ func (m *Model) installCore() tea.Cmd {
 	}
 }
 
+// addSubscription submits one profile and retains successful registration for reuse or retry.
 func (m *Model) addSubscription(name, url string) tea.Cmd {
 	revision := m.status.Revision
 	ctx, gen, operationID := m.beginExecution("Saving and fetching subscription")
@@ -1022,6 +1032,7 @@ func (m *Model) addSubscription(name, url string) tea.Cmd {
 	}
 }
 
+// updateGeoIP starts an observed database preparation and returns copied status to the page owner.
 func (m *Model) updateGeoIP() tea.Cmd {
 	revision := m.status.Revision
 	executionCtx, gen, operationID := m.beginExecution("Preparing Country and ASN databases")
@@ -1145,6 +1156,7 @@ func (m *Model) restartSuffix() string {
 	return ""
 }
 
+// complete submits the final marker without resubmitting endpoints already saved by their step.
 func (m *Model) complete() tea.Cmd {
 	revision, complete := m.status.Revision, true
 	ctx, gen, operationID := m.beginExecution("Finishing setup")
