@@ -737,7 +737,11 @@ func TestClassifySetupPort_RequiresConfirmedOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	t.Cleanup(func() {
+		if err := listener.Close(); err != nil {
+			t.Errorf("close occupied-port test listener: %v", err)
+		}
+	})
 	for _, test := range []struct {
 		name string
 		pid  int
