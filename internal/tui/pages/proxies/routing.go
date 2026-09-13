@@ -253,7 +253,8 @@ func (m *Model) routingResult(result routingResultMsg) {
 	}
 	m.routing.pending = false
 	if result.err != nil {
-		m.routing.err = "Could not apply mode; refresh and retry"
+		m.routing.known = false
+		m.routing.err = "Could not confirm mode; wait for refresh"
 		var api protocol.APIError
 		if errors.As(result.err, &api) && api.Code == protocol.CodeRevisionConflict {
 			m.routing.err = "State changed; refresh and try again"

@@ -57,12 +57,18 @@ func TestModePicker_FailureKeepsSelectionAndFitsCompactViewport(t *testing.T) {
 	updateProxyKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	updateProxyKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	m.Update(routingResultMsg{epoch: 1, err: errors.New("private error")})
+	if m.routing.known {
+		t.Fatal("failed or uncertain response allowed retry before refresh")
+	}
 	view := m.View()
-	if !m.routing.open || m.routing.cursor != 1 || strings.Contains(view, "private error") || !strings.Contains(view, "Could not apply") {
+	if !m.routing.open || m.routing.cursor != 1 || strings.Contains(view, "private error") || !strings.Contains(view, "Could not confirm") {
 		t.Fatal("failure state was lost or leaked")
 	}
 	if lipgloss.Width(view) > 58 || lipgloss.Height(view) > 20 {
 		t.Fatalf("dialog overflows: %dx%d", lipgloss.Width(view), lipgloss.Height(view))
+	}
+	if m.submitRouting() != nil {
+		t.Fatal("retry did not wait for refresh")
 	}
 }
 
