@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
@@ -18,6 +19,28 @@ type partialDiagnosticBody struct {
 	data              []byte
 	readErr, closeErr error
 	reads, closes     int
+}
+
+func TestHTTPBody_CloseOwnerCancellationIsQuiet(t *testing.T) {
+	for _, failure := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			if errors.Is(failure, context.DeadlineExceeded) {
+				cancel()
+				ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			}
+			cancel()
+			source := &partialDiagnosticBody{closeErr: failure}
+			reports := 0
+			body := &observedHTTPBody{ReadCloser: source, ctx: ctx, reporter: func(context.Context, diagnostics.Record) { reports++ }, detail: diagnostics.HTTPError{Status: http.StatusOK}}
+			if err := body.Close(); !errors.Is(err, failure) {
+				t.Fatal("close result changed")
+			}
+			if reports != 0 || source.closes != 1 {
+				t.Fatal("owner cancellation logged or body not closed exactly once")
+			}
+		})
+	}
 }
 
 func (b *partialDiagnosticBody) Read(p []byte) (int, error) {

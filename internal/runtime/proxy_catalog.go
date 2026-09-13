@@ -25,7 +25,7 @@ type proxyProviderController interface {
 func (m *Manager) ProxyCatalog(ctx context.Context) (mihomo.Proxies, []string, error) {
 	global, err := m.Proxies(ctx)
 	if err != nil {
-		return mihomo.Proxies{}, nil, err
+		return mihomo.Proxies{}, nil, fmt.Errorf("read global proxies for catalog: %w", err)
 	}
 	providers, err := m.proxyProviders(ctx)
 	if err != nil {

@@ -176,7 +176,9 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 					resultErr = diagnostics.Wrap(api, errors.Join(resultErr, closeErr))
 				}
 			} else if c.reporter != nil {
-				c.reporter(ctx, diagnostics.Record{Component: "mihomo", Event: "http.close.failed", Level: slog.LevelWarn, Err: closeErr})
+				if _, emit := diagnostics.FailureLevel(ctx, closeErr); emit {
+					c.reporter(ctx, diagnostics.Record{Component: "mihomo", Event: "http.close.failed", Level: slog.LevelWarn, Err: closeErr})
+				}
 			}
 		}
 	}()

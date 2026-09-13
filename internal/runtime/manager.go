@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/netip"
 	"path/filepath"
@@ -436,7 +437,7 @@ func (m *Manager) DelayProxy(ctx context.Context, name, testURL string, timeoutM
 	}
 	global, err := m.controller.Proxies(ctx)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("read global proxies for delay: %w", err)
 	}
 	if _, exists := global.Proxies[name]; exists {
 		return m.controller.DelayProxy(ctx, name, testURL, timeoutMilliseconds)

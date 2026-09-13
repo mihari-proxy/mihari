@@ -220,7 +220,7 @@ func (s *Session) pollSnapshots(ctx context.Context, status protocol.Status) err
 			return ctx.Err()
 		}
 		proxyErr = err
-		if !putOrdered(ctx, s.control, Event{Kind: EventProxies, Proxies: proxies, Err: err, ObservedAt: time.Now()}) {
+		if !putOrdered(ctx, s.control, Event{Kind: EventProxies, Proxies: proxies, Err: err}) {
 			return ctx.Err()
 		}
 	}

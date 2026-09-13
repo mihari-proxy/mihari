@@ -20,7 +20,9 @@ func (c proxyFailureClient) ProxyGroups(context.Context) (protocol.ProxyGroups, 
 func TestPoll_ProxyFailurePublishesErrorAndContinuesRules(t *testing.T) {
 	failure := errors.New("read failed")
 	s := New(proxyFailureClient{newFakeClient(), failure}, Options{})
-	_ = s.pollSnapshots(context.Background(), protocol.Status{Capabilities: []string{protocol.CapabilityProxies, protocol.CapabilityRules}})
+	if err := s.pollSnapshots(context.Background(), protocol.Status{Capabilities: []string{protocol.CapabilityProxies, protocol.CapabilityRules}}); !errors.Is(err, failure) {
+		t.Fatal("poll did not return the proxy failure")
+	}
 	var proxyError, rules bool
 	for len(s.control) > 0 {
 		event := <-s.control
@@ -34,4 +36,21 @@ func TestPoll_ProxyFailurePublishesErrorAndContinuesRules(t *testing.T) {
 	if !proxyError || !rules {
 		t.Fatalf("proxyError=%v rules=%v", proxyError, rules)
 	}
+}
+
+func TestPoll_ProxySnapshotDoesNotClaimStreamObservationTime(t *testing.T) {
+	s := New(newFakeClient(), Options{})
+	if err := s.pollSnapshots(context.Background(), protocol.Status{Capabilities: []string{protocol.CapabilityProxies}}); err != nil {
+		t.Fatal(err)
+	}
+	for len(s.control) > 0 {
+		event := <-s.control
+		if event.Kind == EventProxies {
+			if !event.ObservedAt.IsZero() {
+				t.Fatal("proxy poll can overwrite the last daemon stream observation")
+			}
+			return
+		}
+	}
+	t.Fatal("proxy snapshot missing")
 }

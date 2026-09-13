@@ -54,3 +54,12 @@
 - 原诊断脚本保持历史复现性质，新增 README 明确其不能作为修复后验收。正式回归位于 internal/integration/provider_delay_test.go 及相关包。
 - 构建产物位于已忽略的 bin/issue204。上述验证在首次提交前完成；后续 PR/CI/bot review 与 dev 发版记录另行补充。未运行真实环境验证。
 
+### PR #235 首轮审查
+
+- 同步 dev 的 setup 变更后，提交 c01f60f 的全部 CI 通过，包含三平台普通测试/race/格式/vet、六目标构建、lint、coverage、Unix 原生安全测试、DCO 和分支规则。
+- Pullfrog 在该提交给出 LGTM，无阻塞意见；额外全局查询、握手正文 1024 字节标记与历史脚本保持已批准边界，不新增缓存或调整业务行为。其报告的日志快照 spool 测试问题未在本次本地或 CI 复现，不据此扩大修复范围。
+- CodeRabbit 的有效反馈落实为设计第 5、6 节补充：识别 JSON 转义的敏感键；typed/gateway 关闭取消保持静默；代理轮询时间与流样本时间分离。新增回归先在修改前失败，再作最小修复。
+- 补强 Retry-After 终态错误和 pollSnapshots 返回错误断言，拆分独立重试场景，并为全局节点读取失败添加安全操作上下文。
+- Cubic 因月度额度耗尽返回 neutral；用户确认不阻塞，以可用 bot review 为准。后续等待最新提交的 CI 与可用 bot 复审。
+- 首轮反馈修复已通过定向回归、相关包及集成 race、全仓 vet、Linux 目标全仓 golangci-lint；转义键、关闭取消和轮询时间回归均已实际确认修改前失败、修改后通过。
+

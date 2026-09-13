@@ -24,6 +24,34 @@ type closeDiagnosticBody struct {
 
 func (b closeDiagnosticBody) Close() error { return b.err }
 
+type canceledCloseDiagnosticBody struct {
+	closeDiagnosticBody
+	cancel context.CancelFunc
+}
+
+func (b canceledCloseDiagnosticBody) Close() error {
+	b.cancel()
+	return b.err
+}
+
+func TestHTTPDiagnostics_CloseOwnerCancellationIsQuiet(t *testing.T) {
+	for _, failure := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			c := NewClient("http://127.0.0.1", "", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: canceledCloseDiagnosticBody{closeDiagnosticBody{strings.NewReader(`{"version":"fixture"}`), failure}, cancel}}, nil
+			})})
+			reports := 0
+			c.SetDiagnosticReporter(func(context.Context, diagnostics.Record) { reports++ })
+			result, err := c.Version(ctx)
+			if err != nil || result.Version != "fixture" || reports != 0 {
+				t.Fatal("close cancellation logged or changed completed success")
+			}
+		})
+	}
+}
+
 func TestHTTPDiagnostics_SuccessfulCloseWarningRedactsShortCredential(t *testing.T) {
 	var out bytes.Buffer
 	report := logging.NewDiagnosticReporter(slog.New(slog.NewTextHandler(&out, nil)), logging.NewRedactor())

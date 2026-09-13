@@ -35,7 +35,7 @@ func TestProxyCatalog_FixedCandidateAndProjectionDeduplication(t *testing.T) {
 	}
 }
 
-func TestProviderRead_RetryClassificationAndRecovery(t *testing.T) {
+func TestProviderRead_RetryClassification(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		err   error
@@ -61,6 +61,9 @@ func TestProviderRead_RetryClassificationAndRecovery(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProviderRead_RecoversAfterTransientFailure(t *testing.T) {
 	calls := 0
 	result, err := readProxyProviders(context.Background(), func(context.Context) (mihomo.ProxyProviders, error) {
 		calls++
@@ -74,8 +77,9 @@ func TestProviderRead_RetryClassificationAndRecovery(t *testing.T) {
 	}
 }
 
-func TestProviderRead_CancellationStopsAndRetryAfterHonored(t *testing.T) {
+func TestProviderRead_CancellationStopsRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	calls := 0
 	_, err := readProxyProviders(ctx, func(context.Context) (mihomo.ProxyProviders, error) {
 		calls++
@@ -84,14 +88,19 @@ func TestProviderRead_CancellationStopsAndRetryAfterHonored(t *testing.T) {
 	if calls != 1 || !errors.Is(err, context.Canceled) {
 		t.Fatal("cancellation did not stop retry")
 	}
-	calls = 0
-	rateLimited := diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Details: map[string]any{"status": 429}}, &diagnostics.HTTPError{Status: 429, RetryDelay: time.Hour})
-	_, _ = readProxyProviders(context.Background(), func(context.Context) (mihomo.ProxyProviders, error) {
+}
+
+func TestProviderRead_RetryAfterExceedsBudget(t *testing.T) {
+	calls := 0
+	cause := &diagnostics.HTTPError{Status: 429, RetryDelay: time.Hour}
+	rateLimited := diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Details: map[string]any{"status": 429}}, cause)
+	_, err := readProxyProviders(context.Background(), func(context.Context) (mihomo.ProxyProviders, error) {
 		calls++
 		return mihomo.ProxyProviders{}, rateLimited
 	}, func(context.Context, time.Duration) error { t.Fatal("wait exceeds budget"); return nil }, nil)
-	if calls != 1 {
-		t.Fatal("ignored Retry-After")
+	var api protocol.APIError
+	if calls != 1 || !errors.Is(err, cause) || !errors.As(err, &api) || api.Details["status"] != 429 {
+		t.Fatal("ignored Retry-After or lost terminal error")
 	}
 }
 

@@ -57,7 +57,9 @@ func (b *observedHTTPBody) Close() error {
 	_ = b.detail.HideSecret(b.secret)
 	if closeOnly && b.reporter != nil {
 		b.detail.Phase = "close"
-		b.reporter(b.ctx, diagnostics.Record{Component: "web", Event: "proxy.close.failed", Level: slog.LevelWarn, Err: &b.detail})
+		if _, emit := diagnostics.FailureLevel(b.ctx, &b.detail); emit {
+			b.reporter(b.ctx, diagnostics.Record{Component: "web", Event: "proxy.close.failed", Level: slog.LevelWarn, Err: &b.detail})
+		}
 	} else if b.detail.Status >= 400 || b.detail.Cause != nil {
 		reportFailure(b.ctx, b.reporter, "proxy.failed", &b.detail)
 	}
