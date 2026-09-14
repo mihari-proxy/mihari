@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,6 +155,18 @@ func TestCoreOriginal_HTTPTransportCausePreserved(t *testing.T) {
 				t.Fatal("transport cause lost")
 			}
 		})
+	}
+}
+
+func TestCoreOriginal_InvalidDownloadURLPreservesCause(t *testing.T) {
+	err := (Installer{}).Download(t.Context(), Asset{URL: "://invalid"}, filepath.Join(t.TempDir(), "archive"))
+	var api protocol.APIError
+	var parseErr *url.Error
+	if !errors.As(err, &api) || api.Code != protocol.CodeInternal || api.Message != "create core download request" {
+		t.Fatalf("public request error changed: %v", err)
+	}
+	if !errors.As(err, &parseErr) || err.Error() != "create core download request" {
+		t.Fatalf("private URL parse cause lost: %v", err)
 	}
 }
 

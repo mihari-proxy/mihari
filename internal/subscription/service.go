@@ -167,7 +167,9 @@ func (s *Service) refreshFailure(id string, cause error) error {
 		if errors.As(cause, &api) {
 			return diagnostics.Wrap(api, joined)
 		}
-		return joined
+		// Match the public fallback for the original unclassified failure.
+		// A secondary status error must not replace its code or expose IO text.
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "internal error"}, joined)
 	}
 	return cause
 }

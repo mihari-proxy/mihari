@@ -303,7 +303,7 @@ func (i Installer) Prepare(ctx context.Context, request InstallRequest) (Prepare
 func (i Installer) Download(ctx context.Context, asset Asset, destination string) (resultErr error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeInternal, Message: "create core download request"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "create core download request"}, err)
 	}
 	request.Header.Set("User-Agent", "mihari")
 	response, err := i.httpClient().Do(request)

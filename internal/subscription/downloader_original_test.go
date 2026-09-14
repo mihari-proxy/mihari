@@ -76,6 +76,23 @@ func TestDownloader_ReadAndCloseFailureKeepBothCauses(t *testing.T) {
 	}
 }
 
+func TestDownloader_TransportFailureWinsSynchronousContextCancellation(t *testing.T) {
+	transportErr := errors.New("fixture transport failure")
+	ctx, cancel := context.WithCancel(context.Background())
+	d := NewDownloader(DownloaderOptions{Client: &http.Client{Transport: originalSubscriptionTransport(func(*http.Request) (*http.Response, error) {
+		cancel()
+		return nil, transportErr
+	})}})
+	_, err := d.Fetch(ctx, FetchRequest{URL: "https://fixture.invalid/subscription"})
+	var api protocol.APIError
+	if !errors.Is(err, transportErr) || errors.Is(err, context.Canceled) {
+		t.Fatalf("transport failure was replaced by cancellation: %v", err)
+	}
+	if !errors.As(err, &api) || api.Code != protocol.CodeNetworkFailure || api.Message != "subscription download failed" {
+		t.Fatalf("public network classification changed: %v", err)
+	}
+}
+
 func TestSubscription_ParsingErrorKeepsCause(t *testing.T) {
 	_, err := ParseDocument([]byte("proxies: ["))
 	if err == nil || err.Error() != "invalid subscription YAML" {
