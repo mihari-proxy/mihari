@@ -18,6 +18,7 @@ func TestUpdateConfirmation_InstalledVersionsAndRisk(t *testing.T) {
 		{"downgrade", "v2.0.0", "", "v2.0.0", ui.UpdateDowngradeCompatibility, true, true},
 		{"upgrade", "v0.9.3", "", "v0.9.3", "", true, false},
 		{"absent", "", "", "Not installed", "", false, false},
+		{"registered service missing binary", "", "", "Not installed", "", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, f := replacementFixture(t)

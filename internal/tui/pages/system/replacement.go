@@ -158,6 +158,7 @@ func mihariUpdateConfirmation(p update.ReplacementPreview) *ui.MihariUpdateConfi
 				roles = append(roles, "Binary")
 			case "service":
 				roles = append(roles, "Service")
+				// The role means a registered service; Exists only describes its binary.
 				content.AfterConfirmation = ui.UpdateAfterService
 			case "path":
 				roles = append(roles, "Path")

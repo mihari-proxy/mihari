@@ -36,58 +36,102 @@ func updateConfirmationModel(t *testing.T, width, height int, label string) Mode
 	return m
 }
 
-func TestUpdateConfirmation_LayoutAndScroll(t *testing.T) {
+func forUpdateConfirmationSizes(t *testing.T, check func(*testing.T, *Modal, int, int)) {
+	t.Helper()
 	for _, size := range []struct{ width, height int }{{72, 22}, {100, 28}} {
 		t.Run(fmt.Sprintf("%dx%d", size.width, size.height), func(t *testing.T) {
-			label := strings.Repeat("abcdefgh", 16)
-			m := updateConfirmationModel(t, size.width, size.height, label)
-			initial := m.modal.View(size.width, size.height)
-			if !strings.Contains(ansi.Strip(initial), ui.UpdateInstalledHeading) {
-				t.Fatal("missing Installed section")
-			}
-			seenLabel, seenNote := false, false
-			for n := 0; n < 60; n++ {
-				view := m.modal.View(size.width, size.height)
-				plain := ansi.Strip(view)
-				if lipgloss.Width(view) > size.width || lipgloss.Height(view) > size.height {
-					t.Fatalf("dialog %dx%d exceeds %dx%d:\n%s", lipgloss.Width(view), lipgloss.Height(view), size.width, size.height, plain)
-				}
-				for _, fixed := range []string{ui.UpdateMihariTitle, ui.ConfirmLabel, ui.CancelLabel} {
-					if !strings.Contains(plain, fixed) {
-						t.Fatalf("missing fixed element %q", fixed)
-					}
-				}
-				compact := strings.Map(func(r rune) rune {
-					if r == ' ' || r == '\n' || r == '│' || r == '\r' {
-						return -1
-					}
-					return r
-				}, plain)
-				seenLabel = seenLabel || strings.Contains(compact, label)
-				seenNote = seenNote || strings.Contains(compact, "Ifinstallationfails,reopenMiharitoretry.")
-				if m.modal.Update(tea.KeyPressMsg{Code: tea.KeyDown}) != ModalNone || m.modal.selected != 1 {
-					t.Fatal("scroll changed confirmation")
-				}
-			}
-			if !seenLabel || !seenNote {
-				t.Fatal("scroll cannot reveal all content")
-			}
-			m.modal.View(size.width, size.height)
-			previous := m.modal.scroll
-			m.modal.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
-			if previous > 0 && m.modal.scroll >= previous {
-				t.Fatal("page up did not scroll towards the beginning")
-			}
-			m.modal.scroll = 0
-			m.modal.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
-			if m.modal.View(size.width, size.height) == initial || m.modal.scroll == 0 {
-				t.Fatal("page down did not reveal more content")
-			}
-			m.modal.View(100, 28)
-			if m.modal.scroll < 0 {
-				t.Fatal("negative scroll after resize")
-			}
+			m := updateConfirmationModel(t, size.width, size.height, strings.Repeat("abcdefgh", 16))
+			check(t, m.modal, size.width, size.height)
 		})
+	}
+}
+
+func TestUpdateConfirmation_LayoutBounds(t *testing.T) {
+	forUpdateConfirmationSizes(t, func(t *testing.T, modal *Modal, width, height int) {
+		for n := 0; n < 60; n++ {
+			view := modal.View(width, height)
+			if lipgloss.Width(view) > width || lipgloss.Height(view) > height {
+				t.Fatalf("dialog exceeds %dx%d:\n%s", width, height, ansi.Strip(view))
+			}
+			modal.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		}
+	})
+}
+
+func TestUpdateConfirmation_FixedControls(t *testing.T) {
+	forUpdateConfirmationSizes(t, func(t *testing.T, modal *Modal, width, height int) {
+		for n := 0; n < 60; n++ {
+			plain := ansi.Strip(modal.View(width, height))
+			for _, fixed := range []string{ui.UpdateMihariTitle, ui.ConfirmLabel, ui.CancelLabel} {
+				if !strings.Contains(plain, fixed) {
+					t.Fatalf("missing fixed element %q", fixed)
+				}
+			}
+			modal.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		}
+	})
+}
+
+func TestUpdateConfirmation_LineScrollingRevealsContent(t *testing.T) {
+	forUpdateConfirmationSizes(t, func(t *testing.T, modal *Modal, width, height int) {
+		if !strings.Contains(ansi.Strip(modal.View(width, height)), ui.UpdateInstalledHeading) {
+			t.Fatal("missing Installed section")
+		}
+		seenLabel, seenNote := false, false
+		for n := 0; n < 60; n++ {
+			compact := strings.Map(func(r rune) rune {
+				if r == ' ' || r == '\n' || r == '│' || r == '\r' {
+					return -1
+				}
+				return r
+			}, ansi.Strip(modal.View(width, height)))
+			seenLabel = seenLabel || strings.Contains(compact, strings.Repeat("abcdefgh", 16))
+			seenNote = seenNote || strings.Contains(compact, "Ifinstallationfails,reopenMiharitoretry.")
+			if modal.Update(tea.KeyPressMsg{Code: tea.KeyDown}) != ModalNone || modal.selected != 1 {
+				t.Fatal("scroll changed confirmation")
+			}
+		}
+		if !seenLabel || !seenNote {
+			t.Fatal("scroll cannot reveal all content")
+		}
+		modal.View(width, height)
+		previous := modal.scroll
+		modal.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+		if modal.scroll != previous-1 {
+			t.Fatal("up did not scroll one line")
+		}
+	})
+}
+
+func TestUpdateConfirmation_PageScrolling(t *testing.T) {
+	forUpdateConfirmationSizes(t, func(t *testing.T, modal *Modal, width, height int) {
+		initial := modal.View(width, height)
+		modal.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+		if modal.View(width, height) == initial || modal.scroll == 0 {
+			t.Fatal("page down did not reveal more content")
+		}
+		previous := modal.scroll
+		modal.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+		if modal.scroll >= previous {
+			t.Fatal("page up did not scroll towards the beginning")
+		}
+	})
+}
+
+func TestUpdateConfirmation_ResizeClampsScroll(t *testing.T) {
+	m := updateConfirmationModel(t, 72, 22, strings.Repeat("abcdefgh", 16))
+	m.modal.scroll = 10000
+	m.modal.View(72, 22)
+	if m.modal.scroll <= 0 || m.modal.scroll >= 10000 {
+		t.Fatal("scroll did not clamp to the compact body")
+	}
+	m.modal.View(100, 60)
+	if m.modal.scroll != 0 {
+		t.Fatal("enlarged viewport did not reset the fully visible body")
+	}
+	m.modal.View(72, 22)
+	if m.modal.scroll < 0 {
+		t.Fatal("negative scroll after resize")
 	}
 }
 

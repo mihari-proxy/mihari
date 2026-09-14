@@ -4,7 +4,7 @@
 
 设计依据：[已安装未知版本展示与弹窗布局](../specs/2026-09-14-update-confirmation-version-design.md)。基线：`dev` 的 `6221d69e0e599d77cf2fdfde31a93d2f23886922`。分支：`fix/update-confirmation-version`。
 
-当前 worktree：`C:/Users/Kinema/Documents/modular_dev/mihari/.worktrees/fix-update-confirmation-version`。原工作区 `.gitignore` 的用户修改不得带入或覆盖。
+当前 worktree：`.worktrees/fix-update-confirmation-version`。原工作区 `.gitignore` 的用户修改不得带入或覆盖。
 
 ## 1. 实施边界和依赖顺序
 
