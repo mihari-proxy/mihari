@@ -2,9 +2,9 @@
 
 日期：2026-09-14
 
-状态：设计方案已完成；行为决策来自 grilling。worktree 已有部分未提交实现与测试，实施和全范围验收尚未完成。
+状态：设计、模块审计、实施与本地验收已完成；行为决策来自 grilling。最终 CI 与 bot review 状态见 [PR #240](https://github.com/mihari-proxy/mihari/pull/240)，验证证据见审计总表。
 
-本文件记录本次会话确认的目标、代码模块范围和验收要求，不代表现有实现已经满足这些要求。设计与现有改动位于独立 worktree `.worktrees/full-error-logging`、分支 `feat/full-error-logging`，从 `dev` 历史中的 `e2865d04f64c39591757f5b6f973ffcd4c6baf59` 派生。核查时本地 `origin/dev` 已前进至 `8141430e035a60932826ffa7b3fbd3e84a54c87f`；当前基线是其祖先，尚未同步这两笔后续提交。
+本文件记录本次会话确认的目标、代码模块范围和验收要求；实际完成证据另见审计总表。设计与实现位于独立 worktree `.worktrees/full-error-logging`、分支 `feat/full-error-logging`，从 `dev` 历史中的 `e2865d04f64c39591757f5b6f973ffcd4c6baf59` 派生，已在本地验收前 rebase 到 `8141430e035a60932826ffa7b3fbd3e84a54c87f`。
 
 具体文件、任务依赖、回归场景和验证命令见[实施计划](../plans/2026-09-14-full-error-logging.md)。用户已在后续目标中授权生产实施、本地验证、rebase dev、提交与创建 PR，并要求根据 CI 和 bot review 修复至全绿；GitHub Actions 查询间隔为 5 分钟。设计完成不等于该目标完成。
 
@@ -198,6 +198,6 @@
 
 Q1–Q6 已获得会话决策；编码后分片、导出兼容和模块阶段是落实这些决策的配套设计。实施及全量模块审计状态以[审计总表](../plans/2026-09-14-full-error-logging-audit.md)为准，范围定义与实际验收结果分别记录。
 
-本次设计整理执行文档链接、引用路径、任务覆盖和 Git 变更范围检查。worktree 中已有部分生产与测试改动，不能据此声称全仓回归或跨平台验收通过；模块审计状态见[审计登记](../plans/2026-09-14-full-error-logging-audit.md)。主工作目录仍在 `dev`，用户已有 `.gitignore` 修改保留；任务文档与未完成实现均位于上述独立 worktree。
+模块审计、回归测试、全仓本地测试和六目标构建的实际证据见[审计登记](../plans/2026-09-14-full-error-logging-audit.md)；PR 当前提交的原生 CI 与审查结果单独核实。主工作目录仍在 `dev`，用户已有 `.gitignore` 修改保留；任务文档与实现均位于上述独立 worktree。
 
-本次按用户最新指示汇报设计成果。仓库规范引用的 `2026-08-03-mihari-architecture-design.md` 在当前 worktree 中不存在，架构边界核查采用现有 `AGENTS.md` 与 [docs/architecture.md](../../architecture.md)；这不代表已经完成其余模块的实现审计。
+仓库规范引用的 `2026-08-03-mihari-architecture-design.md` 在当前 worktree 中不存在，架构边界核查采用现有 `AGENTS.md` 与 [docs/architecture.md](../../architecture.md)。本次实施授权包括提交、推送与 PR 反馈收口，不包括合并。

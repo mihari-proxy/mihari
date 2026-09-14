@@ -32,3 +32,11 @@
 - `python -m pytest scripts/test/test_unix_layout_security.py -q`：74 passed、4 skipped；未运行真实服务、真实订阅或真实 mihomo 验证。
 - 最终 `go test -race ./...` 全部通过，临时输出 `mihari-verified-race.txt`；结果来自同步 dev 后的当前实现。
 - 本地验收已完成；PR 的 CI 与 bot review 状态以对应 PR 实时结果为准，Actions 查询间隔为 5 分钟。本地 Windows 测试和跨平台编译不能替代 Linux/macOS 原生 CI。
+
+## PR 反馈与后续验证
+
+- [PR #240](https://github.com/mihari-proxy/mihari/pull/240) 以 `dev` 为目标，保持未合并。`fe7e7d5` 的三平台 unit/race/vet、coverage、lint、govulncheck、六目标构建和 Unix 原生安全检查全部通过；后续提交须以自身 CI 结果验收。
+- Pullfrog 首轮无阻塞问题，三项建议已处理：core 请求创建保留 cause；订阅下载补充传输失败伴随取消的回归；订阅刷新双失败保留原因并维持既有 `CodeInternal` 公开兜底，未采纳会改变 HTTP 状态的分类建议。对应审查线程已回复并关闭。
+- CodeRabbit 因变更文件数超过 100 个限制跳过审查；其成功状态不作为完成代码审查的证据。
+- CI 发现的两处平台故障注入不稳定已修正：runtime 测试注入 FakeBackend，daemon 清理测试固定在最终关闭阶段注入错误。
+- 后续 CI 发现客户端流取消与正常 WebSocket 关闭竞态。`9b5f44e` 区分正常结束、取消诱发的关闭和独立传输失败；聚焦普通及 race 测试各重复 100 次通过，client/TUI/session/集成测试及 lint 通过。真实传输错误及合并的独立原因仍保留 ERROR 级别。

@@ -2,7 +2,7 @@
 
 日期：2026-09-14
 
-状态：方案与任务拆分完成；worktree 已有部分未提交实现与测试，尚未完成全范围实施及验收。
+状态：模块审计、实施与本地验收已完成；已创建 [PR #240](https://github.com/mihari-proxy/mihari/pull/240)。CI 与 bot review 的最终状态以 PR 当前提交为准，验证证据见审计总表。
 
 设计依据：[完整错误日志与独立用户提示设计](../specs/2026-09-14-full-error-logging-design.md)。
 
@@ -12,11 +12,11 @@
 | --- | --- |
 | Worktree | `.worktrees/full-error-logging` |
 | 当前分支 | `feat/full-error-logging` |
-| 创建时的 dev 基线 | `e2865d04f64c39591757f5b6f973ffcd4c6baf59`；当前 `origin/dev` 已前进，实施验收前同步 |
+| 创建时的 dev 基线 | `e2865d04f64c39591757f5b6f973ffcd4c6baf59`；验收前已 rebase 到 `8141430e035a60932826ffa7b3fbd3e84a54c87f` |
 | 后续 PR 目标 | `dev` |
 | 完整交付 | 日志升级实现与文档、本地验证、rebase dev、PR、CI 与 bot review 全绿 |
-| 当前实施状态 | 已有部分生产与测试改动，尚未完成模块审计与全范围验证；尚未 commit、push、创建 PR |
-| 本次汇报范围 | 按最新指示交付设计方案、模块 scope 和实施计划；已有实现保留，完成设计不等于实现验收通过 |
+| 当前实施状态 | 模块审计与本地验收完成，变更已提交并推送至 PR #240；持续处理 CI 与 bot review 反馈 |
+| 本次汇报范围 | 设计、模块审计、实现及验证证据；最终交付需核实 PR 当前提交的 CI 与审查结果，不执行合并 |
 
 所有任务从本 worktree 执行。主工作目录保留用户原有 `.gitignore` 修改，不借用其他任务 worktree，不在 `main`/`dev` 修改代码。用户后续已明确授权实施、本地验证后 rebase dev、commit/push/PR，以及根据 CI 和 bot review 修复至全绿。GitHub Actions 轮询间隔为 5 分钟；尚未授权合并。
 
@@ -36,7 +36,7 @@ Q1–Q6 的决定已经收口：全模块链路审计；仅使用已有 logger�
 
 ## 3. T1：建立模块审计登记
 
-**产物**：[模块审计登记](2026-09-14-full-error-logging-audit.md) 已建立。搜索计数和初步定位仅用于确定范围，不能作为完整审计结果；逐项状态与证据仍需收口。
+**产物**：[模块审计登记](2026-09-14-full-error-logging-audit.md) 已收口，包含各责任组的候选处置和回归证据。搜索计数和初步定位仅用于确定范围，不能作为完整审计结果。
 
 每个实际入口一行，至少包含：模块/入口、cause 源、转换点、记录 owner、logger 来源、公开输出、问题、拟修改文件、最小回归、最终结果。
 
