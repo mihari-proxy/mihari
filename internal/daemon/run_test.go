@@ -16,7 +16,8 @@ import (
 
 type closeErrorListener struct {
 	net.Listener
-	err error
+	err    error
+	closes atomic.Int32
 }
 
 type closedOnSecondListener struct {
@@ -31,8 +32,11 @@ func (l *closedOnSecondListener) Close() error {
 	return net.ErrClosed
 }
 
-func (l closeErrorListener) Close() error {
-	return errors.Join(l.Listener.Close(), l.err)
+func (l *closeErrorListener) Close() error {
+	if l.closes.Add(1) == 1 {
+		return l.Listener.Close()
+	}
+	return l.err
 }
 
 func TestRunStopsWhenContextIsCancelled(t *testing.T) {
@@ -192,7 +196,7 @@ func TestOwnerScan_RunReportsRuntimeAndListenerCleanupFailures(t *testing.T) {
 	go func() {
 		done <- Run(ctx, Options{
 			Listen: func(context.Context) (net.Listener, error) {
-				return closeErrorListener{Listener: listener, err: closeCause}, nil
+				return &closeErrorListener{Listener: listener, err: closeCause}, nil
 			},
 			Token:   "token",
 			Ready:   ready,
