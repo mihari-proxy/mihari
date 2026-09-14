@@ -86,7 +86,8 @@ func TestOwnerScan_RuntimeCleanupCancellationIsInfo(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var records []diagnostics.Record
 	manager := newTestManager(Options{
-		GeoIP: ownerScanGeoIP{closeErr: context.Canceled},
+		GeoIP:    ownerScanGeoIP{closeErr: context.Canceled},
+		SysProxy: &sysproxy.FakeBackend{},
 		Supervisor: &fakeSupervisor{run: func(context.Context) error {
 			cancel()
 			return nil
@@ -104,10 +105,13 @@ func TestOwnerScan_RuntimeCleanupCancellationIsInfo(t *testing.T) {
 func TestOwnerScan_RuntimePreservesActualSupervisorFailureDuringCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cause := errors.New("supervisor failed while shutdown began")
-	manager := newTestManager(Options{Supervisor: &fakeSupervisor{run: func(context.Context) error {
-		cancel()
-		return cause
-	}}})
+	manager := newTestManager(Options{
+		SysProxy: &sysproxy.FakeBackend{},
+		Supervisor: &fakeSupervisor{run: func(context.Context) error {
+			cancel()
+			return cause
+		}},
+	})
 	if err := manager.Run(ctx); !errors.Is(err, cause) {
 		t.Fatalf("simultaneous supervisor cause was masked: %v", err)
 	}
