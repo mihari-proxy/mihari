@@ -67,8 +67,10 @@ type ActionIntentMsg struct {
 	Object     string
 	Impact     string
 	Rollback   string
-	Execute    tea.Cmd
-	Cancel     tea.Cmd
+	// MihariUpdate provides structured copy only for the self-update confirmation.
+	MihariUpdate *MihariUpdateConfirmation
+	Execute      tea.Cmd
+	Cancel       tea.Cmd
 }
 
 // CompleteUninstallConfirmedMsg marks an explicitly confirmed full uninstall.

@@ -122,12 +122,22 @@ func observeReplacementTarget(ctx context.Context, role, path string, runner Ver
 		return ReplacementTarget{}, replacementChanged()
 	}
 	if queryErr == nil {
-		out.Version = decodeProbedVersion(raw)
+		label := decodeVersionLabel(raw)
+		out.Version = normalizedReplacementVersion(label)
+		if out.Version == "" {
+			out.UnrecognizedVersion = safeUnrecognizedVersion(label)
+		}
 	}
 	return out, nil
 }
 
 func decodeProbedVersion(raw []byte) string {
+	return normalizedReplacementVersion(decodeVersionLabel(raw))
+}
+
+// decodeVersionLabel accepts only the version field of a single strict envelope.
+// The result must be classified and filtered before it is retained or displayed.
+func decodeVersionLabel(raw []byte) string {
 	if len(raw) > versionProbeLimit {
 		return ""
 	}
@@ -171,5 +181,5 @@ func decodeProbedVersion(raw []byte) string {
 	if schema != "mihari/v1" || !seen["version"] {
 		return ""
 	}
-	return normalizedReplacementVersion(version)
+	return version
 }

@@ -84,6 +84,7 @@ func observeUnixReplacementTargets(ctx context.Context, req InstallRequest, layo
 			for _, previous := range bound.Targets {
 				if previous.Path == target.Path && previous.FileID == target.FileID && previous.SHA256 == target.SHA256 && previous.Exists == target.Exists {
 					target.Version = previous.Version
+					target.UnrecognizedVersion = previous.UnrecognizedVersion
 					break
 				}
 			}

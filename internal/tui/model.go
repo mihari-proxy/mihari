@@ -614,6 +614,9 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model, tea.Quit
 	}
 	if model.modal != nil {
+		if model.modal.kind == modalMihariUpdate && Classify(model.width, model.height) == ui.TooSmall && key.String() != "esc" {
+			return model, nil
+		}
 		switch model.modal.Update(key) {
 		case ModalCopy:
 			return model, model.modal.copyCommand()
@@ -1156,6 +1159,9 @@ func (model Model) handleActionIntent(intent ui.ActionIntentMsg) (tea.Model, tea
 	}
 	if RequiresConfirmation(intent.Action) {
 		model.modal = NewConfirmation(intent.Title, intent.Object, intent.Impact, intent.Rollback)
+		if intent.Action == ui.ActionUpdateMihari && intent.MihariUpdate != nil {
+			model.modal = newMihariUpdateConfirmation(intent.Title, intent.Object, *intent.MihariUpdate)
+		}
 		model.confirmationCmd = func() tea.Msg { return actionExecuteMsg{Intent: intent} }
 		model.confirmationCancel = intent.Cancel
 		return model, nil

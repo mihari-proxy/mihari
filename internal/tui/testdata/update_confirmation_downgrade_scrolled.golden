@@ -1,0 +1,27 @@
+
+                  ╭──────────────────────────────────────────────────────────────╮
+                  │                                                              │
+                  │  Update Mihari                                               │
+                  │                                                              │
+                  │                                                              │
+                  │  Downgrade detected                                          │
+                  │  Older Mihari versions may not support settings,             │
+                  │  subscriptions, state, or generated files written by the     │
+                  │  current version. Mihari may fail to start or load data,     │
+                  │  which can look like data loss.                              │
+                  │                                                              │
+                  │  Downgrade is not a supported configuration migration and    │
+                  │  does not roll back disk state.                              │
+                  │                                                              │
+                  │  After confirmation                                          │
+                  │  Replace Mihari, synchronize and restart the installed       │
+                  │  service, verify its version, then reopen the TUI.           │
+                  │                                                              │
+                  │  This TUI closes after confirmation. If installation fails,  │
+                  │  reopen Mihari to retry.                                     │
+                  │  ↑/↓ PgUp/PgDn scroll · 5–20/20                              │
+                  │                                                              │
+                  │                                          Confirm    Cancel   │
+                  │  ←/→ Tab select · Enter accept · Esc cancel                  │
+                  │                                                              │
+                  ╰──────────────────────────────────────────────────────────────╯

@@ -20,6 +20,9 @@ type ReplacementTarget struct {
 	Path, FileID, SHA256 string
 	Exists               bool
 	Version              string
+	// UnrecognizedVersion is bounded display evidence for the TUI only.
+	// It never participates in version comparison, JSON or the preview ID.
+	UnrecognizedVersion string `json:"-"`
 }
 
 // ReplacementSnapshot binds actual targets and the persistent service definition.
@@ -59,10 +62,14 @@ func NewReplacementPreview(c ReplacementCandidate, s ReplacementSnapshot) (Repla
 		slices.Sort(target.Roles)
 		target.Roles = slices.Compact(target.Roles)
 		target.Version = normalizedReplacementVersion(target.Version)
+		target.UnrecognizedVersion = safeUnrecognizedVersion(target.UnrecognizedVersion)
+		if target.Version != "" || !target.Exists {
+			target.UnrecognizedVersion = ""
+		}
 		n := len(p.Snapshot.Targets)
 		if n > 0 && p.Snapshot.Targets[n-1].Path == target.Path {
 			prev := &p.Snapshot.Targets[n-1]
-			if prev.FileID != target.FileID || prev.SHA256 != target.SHA256 || prev.Exists != target.Exists || prev.Version != target.Version {
+			if prev.FileID != target.FileID || prev.SHA256 != target.SHA256 || prev.Exists != target.Exists || prev.Version != target.Version || prev.UnrecognizedVersion != target.UnrecognizedVersion {
 				return ReplacementPreview{}, replacementChanged()
 			}
 			prev.Roles = append(prev.Roles, target.Roles...)

@@ -40,7 +40,7 @@ Mihari 是面向 Windows、Linux 和 macOS 的跨平台 [mihomo](https://github.
 - **Web 面板**:一键安装 / 更新 / 激活 / 回滚 zashboard 与 MetaCubeXD,置于带独立访问凭据的回环 Web 网关之后。
 - **系统代理与 TUN**:跨平台的系统代理控制与托管 TUN,均由守护进程持有并持久化。若其他产品已持有系统代理(`system_proxy_conflict`),或检测到其他 TUN / mihomo 实例(`tun_conflict`),enable 会失败,除非传入 `--force`(TUI 会要求确认)。
 - **端口配置**:System 页面可修改 Mixed / Controller / Web 端口;占用显示 `Owned` 或 `Occupied by name (pid)`。应用后通常需要重启守护进程。
-- **TUI 内更新 Mihari**：System 页面进入时检查 GitHub Releases，显示 `当前版本 · 最新版本 available` 或 `当前版本 · Up to date`；以管理员/root 权限启动时可替换二进制、同步并重启已安装的系统服务副本、验证 daemon 版本，并自动进入更新后的 TUI。
+- **TUI 内更新 Mihari**：System 页面进入时检查 GitHub Releases，显示 `当前版本 · 最新版本 available` 或 `当前版本 · Up to date`；以管理员/root 权限启动时可替换二进制、同步并重启已安装的系统服务副本、验证 daemon 版本，并自动进入更新后的 TUI。更新确认会将安全的非标准已安装构建标识显示为 `Unknown[标识]`，兼容性仍为未知；长内容可用 ↑/↓ 或 PgUp/PgDn 滚动，默认选择 Cancel。
 - **内核通道**:System 页面可在 mihomo 的 `stable` / `alpha` 通道之间切换。
 
 单个无 CGO 的静态二进制(< 15 MB)即包含全部功能,内置 GitHub Releases 自动更新与本地 GeoIP 解析。

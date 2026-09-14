@@ -33,19 +33,22 @@ const (
 	modalConfirmation
 	modalHelp
 	modalError
+	modalMihariUpdate
 )
 
 type Modal struct {
-	kind       modalKind
-	title      string
-	body       string
-	object     string
-	impact     string
-	rollback   string
-	selected   int
-	scroll     int
-	copyText   func(string) error
-	copyStatus string
+	kind          modalKind
+	title         string
+	body          string
+	object        string
+	impact        string
+	rollback      string
+	selected      int
+	scroll        int
+	copyText      func(string) error
+	copyStatus    string
+	updateContent *ui.MihariUpdateConfirmation
+	updateRows    int
 }
 
 // NewErrorDetail creates a scrollable, copyable safe diagnostic dialog.
@@ -103,7 +106,19 @@ func (m *Modal) Update(message tea.Msg) ModalAction {
 		}
 		return ModalNone
 	}
-	if m.kind != modalConfirmation {
+	if m.kind == modalMihariUpdate {
+		switch key.String() {
+		case "up":
+			m.scroll = max(0, m.scroll-1)
+		case "down":
+			m.scroll++
+		case "pgup":
+			m.scroll = max(0, m.scroll-max(1, m.updateRows))
+		case "pgdown":
+			m.scroll += max(1, m.updateRows)
+		}
+	}
+	if m.kind != modalConfirmation && m.kind != modalMihariUpdate {
 		return ModalNone
 	}
 	switch key.String() {
@@ -121,6 +136,9 @@ func (m *Modal) Update(message tea.Msg) ModalAction {
 // View renders the selected dialog kind using the shared TUI theme.
 func (m *Modal) View(width, height int) string {
 	theme := ui.DefaultTheme()
+	if m.kind == modalMihariUpdate {
+		return m.updateConfirmationView(theme, width, height)
+	}
 	if m.kind == modalError {
 		return m.errorView(theme, width, height)
 	}

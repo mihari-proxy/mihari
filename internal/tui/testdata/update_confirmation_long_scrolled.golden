@@ -1,0 +1,21 @@
+
+    ╭──────────────────────────────────────────────────────────────╮
+    │                                                              │
+    │  Update Mihari                                               │
+    │                                                              │
+    │  The installed build uses an unrecognized version label.     │
+    │  Mihari cannot determine whether this is an upgrade or       │
+    │  downgrade, or confirm data compatibility.                   │
+    │                                                              │
+    │  After confirmation                                          │
+    │  Replace Mihari, synchronize and restart the installed       │
+    │  service, verify its version, then reopen the TUI.           │
+    │                                                              │
+    │  This TUI closes after confirmation. If installation fails,  │
+    │  reopen Mihari to retry.                                     │
+    │  ↑/↓ PgUp/PgDn scroll · 11–20/20                             │
+    │                                                              │
+    │                                          Confirm    Cancel   │
+    │  ←/→ Tab select · Enter accept · Esc cancel                  │
+    │                                                              │
+    ╰──────────────────────────────────────────────────────────────╯

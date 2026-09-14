@@ -45,7 +45,7 @@ func (u *replacementCLIUpdater) ApplyPrepared(ctx context.Context, p update.Prep
 }
 
 func TestReplacementConfirmation_CLIUsesVerifiedCandidate(t *testing.T) {
-	for _, scenario := range []string{"no consent", "confirmed fixed candidate", "confirmed stale target"} {
+	for _, scenario := range []string{"no consent", "unknown no consent", "confirmed fixed candidate", "confirmed stale target"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("MIHARI_DATA", t.TempDir())
 			elevate.SetChecker(func() bool { return true })
@@ -98,7 +98,11 @@ func TestReplacementConfirmation_CLIUsesVerifiedCandidate(t *testing.T) {
 					}
 					// Fixture bytes stand in for a known version; actual identity/digest
 					// observation and all subsequent risk/commit checks are production.
-					return update.ReplacementSnapshot{Targets: []update.ReplacementTarget{{Roles: []string{"binary"}, Path: file.Path, FileID: file.FileID, SHA256: file.SHA256, Exists: file.Exists, Version: "v2.0.0-dev.1"}}}, nil
+					target := update.ReplacementTarget{Roles: []string{"binary"}, Path: file.Path, FileID: file.FileID, SHA256: file.SHA256, Exists: file.Exists, Version: "v2.0.0-dev.1"}
+					if scenario == "unknown no consent" {
+						target.Version, target.UnrecognizedVersion = "", "dev-setup-local"
+					}
+					return update.ReplacementSnapshot{Targets: []update.ReplacementTarget{target}}, nil
 				},
 				AfterReplace: func(context.Context, string) error { replacements++; return nil },
 			}}
@@ -111,7 +115,7 @@ func TestReplacementConfirmation_CLIUsesVerifiedCandidate(t *testing.T) {
 				}
 			}
 			args := []string{"self", "update", "--json"}
-			if scenario != "no consent" {
+			if !strings.HasSuffix(scenario, "no consent") {
 				args = append(args, "--yes")
 			}
 			var stdout, stderr bytes.Buffer
@@ -139,12 +143,15 @@ func TestReplacementConfirmation_CLIUsesVerifiedCandidate(t *testing.T) {
 				if err := json.Unmarshal(stderr.Bytes(), &envelope); err != nil {
 					t.Fatalf("single error envelope lost: %v", err)
 				}
-				if scenario == "no consent" && (exit != cli.ExitUsage || u.applies != 0 || !bytes.Equal(actual, old)) {
+				if strings.HasSuffix(scenario, "no consent") && (exit != cli.ExitUsage || u.applies != 0 || !bytes.Equal(actual, old)) {
 					t.Fatal("unconfirmed command reached replacement")
 				}
 				if scenario == "confirmed stale target" && string(actual) != "concurrent installation" {
 					t.Fatal("stale consent overwrote the changed target")
 				}
+			}
+			if scenario == "unknown no consent" && (!strings.Contains(stderr.String(), "unknown") || strings.Contains(stderr.String(), "dev-setup-local") || strings.Contains(stderr.String(), "UnrecognizedVersion")) {
+				t.Fatal("display-only label changed CLI JSON")
 			}
 			for _, warning := range []string{"settings", "subscriptions", "data loss", "does not roll back disk state"} {
 				if !strings.Contains(stderr.String(), warning) {

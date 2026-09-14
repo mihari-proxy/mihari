@@ -41,7 +41,11 @@ func TestReplacementTargets_ActualPathsAndDefinition(t *testing.T) {
 		t.Fatalf("targets=%+v", first.Targets)
 	}
 	for j := range first.Targets {
-		first.Targets[j].Version = "v2.0.0"
+		if j == 0 {
+			first.Targets[j].Version = "v2.0.0"
+		} else {
+			first.Targets[j].UnrecognizedVersion = "local"
+		}
 	}
 	def.Status = service.StatusStopped
 	def.Running = false
@@ -69,8 +73,8 @@ func TestReplacementTargets_ActualPathsAndDefinition(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, target := range changed.Targets {
-		if target.Path == managed && target.Version != "" {
-			t.Fatal("version was reused for changed bytes")
+		if target.Path == managed && (target.Version != "" || target.UnrecognizedVersion != "") {
+			t.Fatal("version evidence was reused for changed bytes")
 		}
 	}
 }
