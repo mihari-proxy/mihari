@@ -5,6 +5,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/onboarding"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/subscription"
@@ -76,7 +77,7 @@ func (m *Manager) UpdateOnboarding(ctx context.Context, operation Operation, upd
 			if err != nil {
 				return nil, err
 			}
-			defer generated.cleanup()
+			defer func() { collectWarning(ctx, "onboarding", "candidate.cleanup.failed", generated.cleanup()) }()
 			// The controller and health clients retain startup endpoints.
 			// Validate now; daemon restart regenerates and publishes using
 			// persisted settings before constructing those clients.
@@ -166,6 +167,6 @@ func (m *Manager) composeOnboardingStatus(onboardingState onboarding.State) onbo
 	}
 }
 
-func mapPersistError(error) error {
-	return protocol.APIError{Code: protocol.CodeDataFailure, Message: "persist settings"}
+func mapPersistError(err error) error {
+	return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "persist settings"}, err)
 }

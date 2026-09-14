@@ -239,6 +239,14 @@ func TestPublishWorkspace_WindowsProtectedDACL(t *testing.T) {
 	}
 }
 
+func TestOpenPublishDir_WindowsMissingPathPreservesNotExistCause(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing", "logs-export")
+	_, err := OpenPublishDir(missing)
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing publish directory cause=%v", err)
+	}
+}
+
 func TestCheckPrincipalSystemDACL_DistinguishesOwnerFromProcessPrincipal(t *testing.T) {
 	networkService, err := windows.CreateWellKnownSid(windows.WinNetworkServiceSid)
 	if err != nil {

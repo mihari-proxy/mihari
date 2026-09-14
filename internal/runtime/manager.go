@@ -299,7 +299,11 @@ func (m *Manager) Run(ctx context.Context) error {
 		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "install activation is required"}
 	}
 	if closer, ok := m.geoip.(interface{ Close() error }); ok {
-		defer func() { _ = closer.Close() }()
+		defer func() {
+			if err := closer.Close(); err != nil {
+				m.reportWarning(ctx, "geoip", "cleanup.failed", err)
+			}
+		}()
 	}
 	if m.webGateway != nil {
 		webDone := make(chan struct{})
@@ -346,12 +350,21 @@ func (m *Manager) Run(ctx context.Context) error {
 	}
 	m.running.Store(true)
 	// Best-effort restore of desired OS system proxy; failures must not block core supervision.
-	_ = m.ApplyDesiredSystemProxy(ctx)
-	defer func() { _ = m.ClearOwnedSystemProxy(context.Background()) }()
+	if err := m.ApplyDesiredSystemProxy(ctx); err != nil {
+		m.reportWarning(ctx, "system-proxy", "restore.failed", err)
+	}
+	defer func() {
+		if err := m.ClearOwnedSystemProxy(context.Background()); err != nil {
+			m.reportWarning(ctx, "system-proxy", "cleanup.failed", err)
+		}
+	}()
 	err := m.supervisor.Run(ctx)
 	m.running.Store(false)
 	if ctx.Err() != nil {
-		return nil
+		if err == nil || diagnostics.NormalCancellation(ctx, err) {
+			return nil
+		}
+		return err
 	}
 	if err != nil {
 		m.setCoreState(state.CoreState{Status: "degraded", LastError: "mihomo supervisor stopped"})
@@ -361,6 +374,20 @@ func (m *Manager) Run(ctx context.Context) error {
 
 func (m *Manager) reportBackground(component string, err error) {
 	m.reportBackgroundContext(context.Background(), component, err)
+}
+
+func (m *Manager) reportWarning(ctx context.Context, component, event string, err error) {
+	if err == nil || m.diagnosticReporter == nil || diagnostics.AlreadyReported(err) {
+		return
+	}
+	level, emit := diagnostics.FailureLevel(ctx, err)
+	if !emit {
+		return
+	}
+	if level > slog.LevelWarn {
+		level = slog.LevelWarn
+	}
+	m.diagnosticReporter(ctx, diagnostics.Record{Component: component, Event: event, Level: level, Err: err})
 }
 
 func (m *Manager) reportBackgroundContext(ctx context.Context, component string, err error) {
@@ -373,7 +400,7 @@ func (m *Manager) reportBackgroundContext(ctx context.Context, component string,
 	}
 	if m.diagnosticReporter != nil {
 		m.diagnosticReporter(ctx, diagnostics.Record{Component: component, Event: "background.failed", Level: level, Err: err})
-	} else if m.onBackgroundError != nil {
+	} else if m.onBackgroundError != nil && !diagnostics.NormalCancellation(ctx, err) {
 		m.onBackgroundError(component, err)
 	}
 }

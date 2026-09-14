@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -88,9 +89,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/operations/{operation_id}", s.operationStatus)
 	s.runtimeRoutes(mux)
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		observed := &responseWriteObserver{ResponseWriter: writer}
+		writer = observed
+		defer func() {
+			if observed.err != nil && !observed.handled && s.diagnosticReporter != nil {
+				if level, emit := diagnostics.FailureLevel(request.Context(), observed.err); emit {
+					s.diagnosticReporter(request.Context(), diagnostics.Record{Component: "control.server", Event: "response.write.failed", Level: level, Err: observed.err})
+				}
+			}
+		}()
 		s.snapshotLifecycle.Lock()
 		if s.snapshotClosing {
 			s.snapshotLifecycle.Unlock()
+			s.reportRequestRejection(request.Context(), protocol.APIError{Code: protocol.CodeInvalidState, Message: "local control is stopping"})
 			writeJSON(writer, http.StatusServiceUnavailable, protocol.NewError(protocol.CodeInvalidState, "local control is stopping", nil))
 			return
 		}
@@ -104,6 +115,7 @@ func (s *Server) Handler() http.Handler {
 		request = request.WithContext(requestCtx)
 		want := "Bearer " + s.token
 		if subtle.ConstantTimeCompare([]byte(request.Header.Get("Authorization")), []byte(want)) != 1 {
+			s.reportRequestRejection(request.Context(), protocol.APIError{Code: protocol.CodePermissionDenied, Message: "control authentication failed"})
 			writeJSON(writer, http.StatusUnauthorized, protocol.NewError(
 				protocol.CodePermissionDenied,
 				"control authentication failed",
@@ -113,6 +125,32 @@ func (s *Server) Handler() http.Handler {
 		}
 		mux.ServeHTTP(writer, request)
 	})
+}
+
+type responseWriteObserver struct {
+	http.ResponseWriter
+	err     error
+	handled bool
+}
+
+func (w *responseWriteObserver) Write(body []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(body)
+	if err == nil && n != len(body) {
+		err = io.ErrShortWrite
+	}
+	if err != nil && w.err == nil {
+		w.err = err
+	}
+	return n, err
+}
+
+func (w *responseWriteObserver) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func acknowledgeResponseWrite(writer http.ResponseWriter, err error) {
+	observed, ok := writer.(*responseWriteObserver)
+	if ok && observed.err != nil && errors.Is(err, observed.err) {
+		observed.handled = true
+	}
 }
 
 // status publishes capabilities and confirmed readiness without inferring setup from a failed read.

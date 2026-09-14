@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 // LoadCredential reads the Web access credential from path.
@@ -20,11 +21,14 @@ func LoadCredential(path string) (string, error) {
 	}
 	token := strings.TrimSpace(string(raw))
 	decoded, err := hex.DecodeString(token)
-	if err != nil || len(decoded) != 32 {
-		return "", protocol.APIError{
+	if err != nil {
+		return "", diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeDataFailure,
 			Message: "invalid web credential",
-		}
+		}, err)
+	}
+	if len(decoded) != 32 {
+		return "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid web credential"}
 	}
 	return token, nil
 }
@@ -55,13 +59,17 @@ func LoadOrCreateCredential(path string) (string, error) {
 		return "", err
 	}
 	if _, err := file.WriteString(token + "\n"); err != nil {
-		file.Close()
-		os.Remove(path)
-		return "", err
+		return "", errors.Join(err, file.Close(), removeCredential(path))
 	}
 	if err := file.Close(); err != nil {
-		os.Remove(path)
-		return "", err
+		return "", errors.Join(err, removeCredential(path))
 	}
 	return token, nil
+}
+
+func removeCredential(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }

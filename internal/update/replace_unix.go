@@ -4,6 +4,6 @@ package update
 
 import "os"
 
-func replaceBinary(candidate, target string) error {
-	return os.Rename(candidate, target)
+func replaceBinary(candidate, target string) (error, error) {
+	return nil, os.Rename(candidate, target)
 }

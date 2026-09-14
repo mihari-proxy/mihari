@@ -68,10 +68,10 @@ func TestLocalTaskDiagnostics_ServiceBorrowsReporterWithoutChangingOutput(t *tes
 			if calls != 1 || (cause == nil && err != nil) || (cause != nil && err == nil) {
 				t.Fatalf("changed execution: calls=%d err=%v", calls, err)
 			}
-			if strings.Contains(logs.String(), "/private/") {
-				t.Fatal("path leaked")
+			if mode == "failure" && !strings.Contains(logs.String(), "/private/service-token") {
+				t.Fatal("original path missing")
 			}
-			if mode == "cancel" || mode == "nil-reporter" {
+			if mode == "nil-reporter" {
 				if logs.Len() != 0 {
 					t.Fatalf("unexpected diagnostic: %s", logs.String())
 				}
@@ -84,6 +84,9 @@ func TestLocalTaskDiagnostics_ServiceBorrowsReporterWithoutChangingOutput(t *tes
 			}
 			if record["operation"] != "service.stop" {
 				t.Fatalf("wrong operation: %+v", record)
+			}
+			if mode == "cancel" && record["level"] != "INFO" {
+				t.Fatal("cancellation is not visible at INFO")
 			}
 			if mode == "id-failure" {
 				if record["operation_id"] != nil || record["msg"] != "local_task.id_generation_failed" {
@@ -216,7 +219,7 @@ func TestLocalTaskDiagnostics_SelfConsentRefusalIsOwned(t *testing.T) {
 		t.Fatalf("prepare/apply calls=%d/%d", reportedUpdater.prepares, reportedUpdater.calls)
 	}
 	var apiErr protocol.APIError
-	if len(records) != 1 || records[0].Event != "self.update.failed" || records[0].Level != slog.LevelDebug || !errors.As(records[0].Err, &apiErr) || apiErr.Code != protocol.CodeInvalidArgument {
+	if len(records) != 1 || records[0].Event != "self.update.failed" || records[0].Level != slog.LevelInfo || !errors.As(records[0].Err, &apiErr) || apiErr.Code != protocol.CodeInvalidArgument {
 		t.Fatalf("records=%#v API=%#v", records, apiErr)
 	}
 	if len(operations) != 1 || operations[0] != (logging.OperationMetadata{ID: "self-consent", Name: "self.update"}) {

@@ -17,7 +17,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/platform"
 )
 
-func TestExport_ZipLayoutManifestAndRedaction(t *testing.T) {
+func TestExport_ZipLayoutManifestAndOriginalContent(t *testing.T) {
 	fs, paths := openExportTestFS(t)
 	writeExportFixture(t, fs, paths.DaemonLog, strings.Join([]string{
 		`{"time":"2026-09-02T10:30:00Z","token":"secret","seq":1}`,
@@ -71,13 +71,13 @@ func TestExport_ZipLayoutManifestAndRedaction(t *testing.T) {
 	if _, ok := got[exportTUIEntry]; ok {
 		t.Fatal("empty TUI source must be omitted")
 	}
-	if strings.Contains(got[exportDaemonEntry], "secret") || !strings.HasSuffix(got[exportDaemonEntry], "\n") {
+	if !strings.Contains(got[exportDaemonEntry], "secret") || !strings.HasSuffix(got[exportDaemonEntry], "\n") {
 		t.Fatalf("daemon=%q", got[exportDaemonEntry])
 	}
-	if got[exportDaemonEntry] != `{"seq":1,"time":"2026-09-02T10:30:00Z","token":"***"}`+"\n" {
+	if got[exportDaemonEntry] != `{"time":"2026-09-02T10:30:00Z","token":"secret","seq":1}`+"\n" {
 		t.Fatalf("daemon JSONL=%q", got[exportDaemonEntry])
 	}
-	if got[exportMihomoEntry] != `{"msg":"ok","time":"2026-09-02T11:00:00Z"}`+"\n" {
+	if got[exportMihomoEntry] != `{"time":"2026-09-02T11:00:00Z","msg":"ok"}`+"\n" {
 		t.Fatalf("mihomo JSONL=%q", got[exportMihomoEntry])
 	}
 	var manifest map[string]any
@@ -90,7 +90,7 @@ func TestExport_ZipLayoutManifestAndRedaction(t *testing.T) {
 		"schema": "mihari-logs-export/v1", "exported_at": "2026-09-02T23:41:08+08:00", "timezone": "+08:00",
 		"range": map[string]any{"kind": "between", "from": "2026-09-02T10:00:00Z", "to": "2026-09-02T12:00:00Z"},
 		"files": []any{
-			map[string]any{"name": exportDaemonEntry, "lines": json.Number("1"), "skipped_invalid": json.Number("1"), "redacted": json.Number("1"), "sources": []any{"mihari-daemon.log"}},
+			map[string]any{"name": exportDaemonEntry, "lines": json.Number("1"), "skipped_invalid": json.Number("1"), "redacted": json.Number("0"), "sources": []any{"mihari-daemon.log"}},
 			map[string]any{"name": exportMihomoEntry, "lines": json.Number("1"), "skipped_invalid": json.Number("0"), "redacted": json.Number("0"), "sources": []any{"mihomo.log"}},
 		},
 		"notes": []any{exportReviewNote},

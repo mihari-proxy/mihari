@@ -3,11 +3,13 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 const maxReleaseResponseSize = 2 << 20
@@ -28,36 +30,38 @@ type Release struct {
 
 // LatestRelease 取 mihomo 最新 release（bundler 复用入口，design §4.1 export 边界）。
 // channel=="alpha" 走滚动 tag Prerelease-Alpha；其余（含空）走 /releases/latest。
-func (i Installer) LatestRelease(ctx context.Context, channel string) (Release, error) {
-	var release Release
+func (i Installer) LatestRelease(ctx context.Context, channel string) (release Release, resultErr error) {
 	path := "/releases/latest"
 	if channel == "alpha" {
 		path = "/releases/tags/Prerelease-Alpha"
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(i.apiBase(), "/")+"/repos/"+i.repository()+path, nil)
 	if err != nil {
-		return release, protocol.APIError{Code: protocol.CodeInternal, Message: "create release request"}
+		return release, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "create release request"}, err)
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-GitHub-Api-Version", "2026-03-10")
 	request.Header.Set("User-Agent", "mihari")
 	response, err := i.httpClient().Do(request)
 	if err != nil {
-		return release, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch mihomo release failed"}
+		return release, coreHTTPError(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch mihomo release failed"}, "core GET release", request.URL.String(), "transport", nil, err)
 	}
-	defer response.Body.Close()
+	defer closeCoreResponse(ctx, response, "core GET release", request.URL.String(), &resultErr, i.Reporter)
 	if response.StatusCode != http.StatusOK {
-		return release, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch mihomo release failed", Details: map[string]any{"status": response.StatusCode}}
+		return release, coreHTTPError(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch mihomo release failed", Details: map[string]any{"status": response.StatusCode}}, "core GET release", request.URL.String(), "response", response, nil)
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxReleaseResponseSize+1))
 	if err != nil {
-		return release, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read mihomo release failed"}
+		return release, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read mihomo release failed"}, &diagnostics.HTTPError{Operation: "core GET release", URL: request.URL.String(), Phase: "read", Status: response.StatusCode, Cause: err})
 	}
 	if len(raw) > maxReleaseResponseSize {
 		return release, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo release response is too large"}
 	}
-	if err := json.Unmarshal(raw, &release); err != nil || release.TagName == "" {
-		return Release{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mihomo release response"}
+	if err := json.Unmarshal(raw, &release); err != nil {
+		return Release{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mihomo release response"}, errors.Join(err, commandOutputCause("github release response", raw)))
+	}
+	if release.TagName == "" {
+		return Release{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mihomo release response"}, errors.New("github release response is missing tag_name"))
 	}
 	return release, nil
 }

@@ -115,7 +115,7 @@ func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, 
 		if err != nil {
 			return nil, err
 		}
-		defer candidate.cleanup()
+		defer func() { collectWarning(ctx, "subscription", "candidate.cleanup.failed", candidate.cleanup()) }()
 		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
@@ -169,7 +169,7 @@ func (m *Manager) UseSubscription(ctx context.Context, operation Operation, id s
 		if err != nil {
 			return nil, err
 		}
-		defer candidate.cleanup()
+		defer func() { collectWarning(ctx, "subscription", "candidate.cleanup.failed", candidate.cleanup()) }()
 		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
@@ -238,7 +238,7 @@ func (m *Manager) RemoveSubscription(ctx context.Context, operation Operation, i
 					}
 					return snapshot, prepareErr
 				}
-				defer candidate.cleanup()
+				defer func() { collectWarning(ctx, "subscription", "candidate.cleanup.failed", candidate.cleanup()) }()
 				if applyErr := m.commitRuntimeConfig(ctx, candidate); applyErr != nil {
 					if restoreErr := m.subscriptions.Restore(before); restoreErr != nil {
 						return snapshot, degradedConfigError(applyErr, restoreErr)
@@ -268,7 +268,9 @@ func (m *Manager) RemoveSubscription(ctx context.Context, operation Operation, i
 			m.markConfigDegraded(ctx, err)
 			return nil, err
 		}
-		_ = os.Remove(m.subscriptions.CachePath(id))
+		if cleanupErr := os.Remove(m.subscriptions.CachePath(id)); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
+			collectWarning(ctx, "subscription", "cache.cleanup.failed", cleanupErr)
+		}
 		return struct{}{}, nil
 	})
 	return err
@@ -345,7 +347,7 @@ func (m *Manager) mutateSubscription(ctx context.Context, prefix string, operati
 					}
 					return snapshot, prepareErr
 				}
-				defer candidate.cleanup()
+				defer func() { collectWarning(ctx, "subscription", "candidate.cleanup.failed", candidate.cleanup()) }()
 				if applyErr := m.commitRuntimeConfig(ctx, candidate); applyErr != nil {
 					if restoreErr := m.subscriptions.Restore(before); restoreErr != nil {
 						return snapshot, degradedConfigError(applyErr, restoreErr)
@@ -566,12 +568,15 @@ func degradedConfigError(causes ...error) error {
 	return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription state rollback failed", Details: map[string]any{"degraded": true}}, errors.Join(causes...))
 }
 
-func (c configCandidate) cleanup() {
+func (c configCandidate) cleanup() error {
 	if c.generated != nil {
-		_ = c.generated.Close()
+		return c.generated.Close()
 	} else if c.path != "" {
-		_ = os.Remove(c.path)
+		if err := os.Remove(c.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
+	return nil
 }
 
 // commitTrustedRuntimeConfig publishes validated bytes and reloads the fixed

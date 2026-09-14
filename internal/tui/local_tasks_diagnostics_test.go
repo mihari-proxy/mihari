@@ -104,7 +104,7 @@ func TestLocalTaskDiagnostics_InstallationFailureOnceAndCancellation(t *testing.
 			if calls != 1 || !errors.Is(err, cause) {
 				t.Fatalf("execution/result changed: calls=%d err=%v", calls, err)
 			}
-			want := mode == "failure" || mode == "upstream-timeout"
+			want := mode == "failure" || mode == "upstream-timeout" || mode == "cancel"
 			if !want {
 				if out.Len() != 0 {
 					t.Fatalf("unexpected diagnostic: %s", out.String())
@@ -116,7 +116,11 @@ func TestLocalTaskDiagnostics_InstallationFailureOnceAndCancellation(t *testing.
 			if err := decoder.Decode(&record); err != nil {
 				t.Fatalf("missing failure JSON: %v", err)
 			}
-			if record["level"] != "ERROR" || record["operation"] != "installation.inspect" || record["operation_id"] == nil || record["msg"] != "installation.inspect.failed" {
+			wantLevel := "ERROR"
+			if mode == "cancel" {
+				wantLevel = "INFO"
+			}
+			if record["level"] != wantLevel || record["operation"] != "installation.inspect" || record["operation_id"] == nil || record["msg"] != "installation.inspect.failed" {
 				t.Fatalf("wrong diagnostic: %+v", record)
 			}
 			if decoder.Decode(&record) != io.EOF {
@@ -146,8 +150,8 @@ func TestLocalTaskDiagnostics_InstallationIDFailureStillExecutes(t *testing.T) {
 	if err != nil || result.Kind != "complete" || op.ID != "" || op.Name != "installation.inspect" {
 		t.Fatalf("diagnostic failure changed operation: %+v %+v %v", result, op, err)
 	}
-	if !strings.Contains(out.String(), "local_task.id_generation_failed") || strings.Contains(out.String(), "secret-random-source") || strings.Contains(out.String(), "operation_id") {
-		t.Fatalf("missing or unsafe ID failure: %s", out.String())
+	if !strings.Contains(out.String(), "local_task.id_generation_failed") || !strings.Contains(out.String(), "secret-random-source") || strings.Contains(out.String(), "operation_id") {
+		t.Fatalf("missing original ID failure or invented ID: %s", out.String())
 	}
 }
 

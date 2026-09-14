@@ -54,7 +54,7 @@ func (s *Server) showSubscription(writer http.ResponseWriter, request *http.Requ
 	}
 	profile, found := publicProfile(runtime.Subscriptions(), request.PathValue("id"))
 	if !found {
-		writeInvalidArgument(writer, "subscription not found")
+		s.writeInvalidArgument(request.Context(), writer, "subscription not found")
 		return
 	}
 	writeJSON(writer, http.StatusOK, subscriptionResultDTO(profile, "", s.runtime.Snapshot().Revision))
@@ -67,11 +67,11 @@ func (s *Server) addSubscription(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	var body protocol.SubscriptionAddRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	if body.Name == "" || body.URL == "" {
-		writeInvalidArgument(writer, "subscription name and URL are required")
+		s.writeInvalidArgument(request.Context(), writer, "subscription name and URL are required")
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "subscription.add"})
@@ -103,7 +103,7 @@ func (s *Server) subscriptionProfileMutation(writer http.ResponseWriter, request
 		return
 	}
 	var body protocol.MutationRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: operationName})
@@ -122,7 +122,7 @@ func (s *Server) enableSubscription(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	var body protocol.SubscriptionEnabledRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "subscription.enabled"})
@@ -140,7 +140,7 @@ func (s *Server) updateSubscription(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	var body protocol.SubscriptionUpdateRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "subscription.set"})
@@ -160,7 +160,7 @@ func (s *Server) removeSubscription(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	var body protocol.MutationRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "subscription.remove"})

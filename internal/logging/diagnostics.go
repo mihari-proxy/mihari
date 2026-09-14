@@ -2,15 +2,12 @@ package logging
 
 import (
 	"context"
-	"io"
+	"encoding/json"
+	"fmt"
 	"log/slog"
-	"net"
-	"net/url"
-	"os"
 	"os/exec"
 	"reflect"
 	"strings"
-	"syscall"
 	"unicode/utf8"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -20,11 +17,13 @@ import (
 const (
 	diagnosticMaxDepth = 32
 	diagnosticMaxNodes = 64
-	diagnosticMaxBytes = 4096
+	diagnosticMaxBytes = 256 << 10
 )
 
-// NewDiagnosticReporter adapts internal diagnostics to logger output.
-func NewDiagnosticReporter(logger *slog.Logger, redactor *Redactor) diagnostics.Reporter {
+// NewDiagnosticReporter writes original internal causes to a file logger.
+// The redactor argument is retained for existing owners that also use it for
+// public fallback output; it does not alter file diagnostics.
+func NewDiagnosticReporter(logger *slog.Logger, _ *Redactor) diagnostics.Reporter {
 	if logger == nil {
 		return nil
 	}
@@ -37,134 +36,181 @@ func NewDiagnosticReporter(logger *slog.Logger, redactor *Redactor) diagnostics.
 		}
 		logger.LogAttrs(ctx, record.Level, record.Event,
 			slog.String("component", record.Component),
-			slog.String("cause", diagnosticText(record.Err, redactor)),
+			slog.String("cause", diagnosticText(record.Err, nil)),
 		)
 	}
 }
 
-func diagnosticText(err error, redactor *Redactor) string {
-	if err == nil {
-		return ""
-	}
-	formatter := diagnosticFormatter{redactor: redactor, seen: make(map[error]struct{})}
-	formatter.visit(err, 1)
-	if len(formatter.parts) == 0 {
-		formatter.add(typeSummary(err))
-	}
-	return truncateDiagnostic(strings.Join(formatter.parts, ": "), diagnosticMaxBytes)
+func diagnosticText(err error, _ *Redactor) string {
+	formatter := diagnosticFormatter{seen: make(map[error]*diagnosticVisit)}
+	text, _ := formatter.visit(err, 1)
+	return text
+}
+
+type diagnosticVisit struct {
+	active   bool
+	text     string
+	complete bool
 }
 
 type diagnosticFormatter struct {
-	redactor *Redactor
-	seen     map[error]struct{}
-	parts    []string
-	nodes    int
-	bounded  bool
+	seen  map[error]*diagnosticVisit
+	nodes int
 }
 
-func (f *diagnosticFormatter) visit(err error, depth int) {
-	if f.bounded {
-		return
-	}
-	if f.nodes >= diagnosticMaxNodes {
-		f.markBounded()
-		return
+// visit checks children before formatting their parent: a recursive Error or
+// joined Error must not bypass a cycle or the traversal budget.
+func (f *diagnosticFormatter) visit(err error, depth int) (text string, complete bool) {
+	if f.nodes >= diagnosticMaxNodes || depth > diagnosticMaxDepth {
+		return "diagnostic graph truncated", false
 	}
 	f.nodes++
 	if err == nil {
-		return
+		return "", true
 	}
-	if depth > diagnosticMaxDepth {
-		f.markBounded()
-		return
+	value := reflect.ValueOf(err)
+	if nilDiagnosticErrorValue(value) {
+		return typeSummary(err) + " (nil)", true
 	}
-	reflected := reflect.ValueOf(err)
-	if nilDiagnosticErrorValue(reflected) {
-		f.add(typeSummary(err))
-		return
-	}
-	if reflected.Comparable() {
-		if _, ok := f.seen[err]; ok {
-			return
+	if value.Comparable() {
+		if previous := f.seen[err]; previous != nil {
+			if previous.active {
+				return "diagnostic error cycle", false
+			}
+			return previous.text, previous.complete
 		}
-		f.seen[err] = struct{}{}
+		entry := &diagnosticVisit{active: true}
+		f.seen[err] = entry
+		defer func() { entry.active, entry.text, entry.complete = false, text, complete }()
 	}
 
-	switch value := err.(type) {
-	case *diagnostics.HTTPError:
-		redactor := f.redactor
-		if redactor == nil {
-			redactor = NewRedactor()
-		}
-		text := redactor.String(strings.ToValidUTF8(value.DiagnosticText(), "�"))
-		text = pathTokenPattern.ReplaceAllString(text, "[path]")
-		f.parts = append(f.parts, truncateDiagnostic(text, diagnosticMaxBytes))
-		return
-	case *os.PathError:
-		f.addOperation("path operation", value.Op)
-		f.visit(value.Err, depth+1)
-		return
-	case *os.LinkError:
-		f.addOperation("link operation", value.Op)
-		f.visit(value.Err, depth+1)
-		return
-	case *os.SyscallError:
-		f.addOperation("system call", value.Syscall)
-		f.visit(value.Err, depth+1)
-		return
-	case *url.Error:
-		f.addOperation("URL operation", value.Op)
-		f.visit(value.Err, depth+1)
-		return
-	case *net.OpError:
-		f.addOperation("network operation", value.Op)
-		f.visit(value.Err, depth+1)
-		return
-	case *exec.ExitError, *exec.Error:
-		f.add("command execution failed")
-		return
-	case protocol.APIError:
-		f.add(apiErrorSummary(value.Code))
-		return
-	case *protocol.APIError:
-		if value == nil {
-			f.add("api error")
-		} else {
-			f.add(apiErrorSummary(value.Code))
-		}
-		return
-	}
-	if summary, ok := sensitiveTypeSummary(err); ok {
-		f.add(summary)
-		return
-	}
-
-	switch value := err.(type) {
+	var children []error
+	switch wrapped := err.(type) {
 	case interface{ Unwrap() []error }:
-		children := value.Unwrap()
-		if len(children) == 0 {
-			f.add(typeSummary(err))
-			return
-		}
-		for _, child := range children {
-			if f.nodes >= diagnosticMaxNodes {
-				f.markBounded()
-				break
-			}
-			f.visit(child, depth+1)
-			if f.bounded {
-				break
-			}
-		}
-		return
+		children = wrapped.Unwrap()
 	case interface{ Unwrap() error }:
-		if child := value.Unwrap(); child != nil {
-			f.visit(child, depth+1)
-			return
+		if child := wrapped.Unwrap(); child != nil {
+			children = []error{child}
 		}
 	}
+	parts := make([]string, 0, min(len(children), diagnosticMaxNodes))
+	complete = true
+	for _, child := range children {
+		if f.nodes >= diagnosticMaxNodes {
+			parts = append(parts, "diagnostic graph truncated")
+			complete = false
+			break
+		}
+		childText, childComplete := f.visit(child, depth+1)
+		parts = append(parts, childText)
+		complete = complete && childComplete
+	}
+	if !complete {
+		return joinDiagnostic("", parts), false
+	}
 
-	f.add(knownLeafSummary(err))
+	var own string
+	switch detail := err.(type) {
+	case *diagnostics.HTTPError:
+		own = detail.Operation + " phase=" + detail.Phase
+		if detail.URL != "" {
+			own += " URL=" + detail.URL
+		}
+		if detail.Status != 0 {
+			own += fmt.Sprintf(" HTTP %d", detail.Status)
+		}
+		if detail.Body != "" {
+			own += " response=" + boundDiagnostic(detail.Body)
+		}
+	case protocol.APIError:
+		own = apiDiagnosticText(detail)
+	case *protocol.APIError:
+		own = apiDiagnosticText(*detail)
+	case *exec.ExitError:
+		own = "command exited"
+		if detail.ProcessState != nil {
+			own = detail.Error()
+		}
+		if len(detail.Stderr) != 0 {
+			own += "\nstderr: " + boundDiagnostic(string(detail.Stderr))
+		}
+	default:
+		// %+v retains a stack already carried by a formatter; it does not
+		// capture a new stack at the final logging site.
+		own = fmt.Sprintf("%+v", err)
+	}
+	return joinDiagnostic(boundDiagnostic(own), parts), true
+}
+
+func apiDiagnosticText(api protocol.APIError) string {
+	text := "api error (" + string(api.Code) + "): " + api.Message
+	if len(api.Details) != 0 {
+		details, err := json.Marshal(api.Details)
+		if err != nil {
+			// Invalid/cyclic DTO data is not traversed by an unbounded formatter.
+			return boundDiagnostic(text + "\ndetails encoding failed: " + err.Error())
+		}
+		text += "\ndetails: " + string(details)
+	}
+	return boundDiagnostic(text)
+}
+
+func joinDiagnostic(text string, children []string) string {
+	parts := []string{}
+	if text != "" {
+		parts = append(parts, text)
+	}
+	total := len(text)
+	for _, child := range children {
+		if child == "" || strings.Contains(text, child) {
+			continue
+		}
+		parts = append(parts, child)
+		total += len(child)
+	}
+	const separator = "\ncaused by: "
+	if len(parts) == 0 {
+		return ""
+	}
+	if total+(len(parts)-1)*len(separator) <= diagnosticMaxBytes {
+		return strings.Join(parts, separator)
+	}
+	// At the budget boundary put already-formatted children first and reserve
+	// space for every branch. A long outer context must not hide a leaf cause.
+	if text != "" && len(parts) > 1 {
+		parts = append(parts[1:], text)
+	}
+	remaining := diagnosticMaxBytes - (len(parts) - 1)
+	for index, part := range parts {
+		parts[index] = truncateDiagnostic(part, remaining/(len(parts)-index))
+		remaining -= len(parts[index])
+	}
+	return strings.Join(parts, "\n")
+}
+
+func boundDiagnostic(text string) string {
+	// Bound before UTF-8 repair too: an untrusted Error may hold a large
+	// string and each invalid byte can expand to a replacement character.
+	truncated := len(text) > diagnosticMaxBytes
+	if len(text) > diagnosticMaxBytes+utf8.UTFMax {
+		text = text[:diagnosticMaxBytes+utf8.UTFMax]
+	}
+	if truncated {
+		start := len(text) - 1
+		for start > 0 && !utf8.RuneStart(text[start]) {
+			start--
+		}
+		if !utf8.FullRuneInString(text[start:]) {
+			text = text[:start]
+		}
+	}
+	if !utf8.ValidString(text) {
+		text = strings.ToValidUTF8(text, "�") + " [invalid UTF-8]"
+	}
+	if truncated && len(text) <= diagnosticMaxBytes {
+		text += " [truncated]"
+	}
+	return truncateDiagnostic(text, diagnosticMaxBytes)
 }
 
 func nilDiagnosticErrorValue(value reflect.Value) bool {
@@ -176,138 +222,11 @@ func nilDiagnosticErrorValue(value reflect.Value) bool {
 	}
 }
 
-func (f *diagnosticFormatter) addOperation(kind, operation string) {
-	if f.redactor == nil {
-		f.add(kind + " failed")
-		return
-	}
-	operation = f.clean(operation)
-	if operation == "" {
-		f.add(kind + " failed")
-		return
-	}
-	f.parts = append(f.parts, truncateDiagnostic(kind+" "+operation, diagnosticMaxBytes))
-}
-
-func (f *diagnosticFormatter) add(text string) {
-	if text = f.clean(text); text != "" {
-		f.parts = append(f.parts, truncateDiagnostic(text, diagnosticMaxBytes))
-	}
-}
-
-func (f *diagnosticFormatter) clean(text string) string {
-	text = strings.ToValidUTF8(text, "�")
-	if f.redactor != nil {
-		text = f.redactor.String(text)
-	}
-	text = pathTokenPattern.ReplaceAllString(text, "[path]")
-	text = strings.NewReplacer("\r", " ", "\n", " ").Replace(text)
-	return strings.TrimSpace(text)
-}
-
-func (f *diagnosticFormatter) markBounded() {
-	if f.bounded {
-		return
-	}
-	f.bounded = true
-	f.add("diagnostic graph truncated")
-}
-
-func sensitiveTypeSummary(err error) (string, bool) {
-	typeOf := reflect.TypeOf(err)
-	if typeOf == nil {
-		return "error", true
-	}
-	for typeOf.Kind() == reflect.Pointer {
-		typeOf = typeOf.Elem()
-	}
-	switch typeOf.PkgPath() {
-	case "go.yaml.in/yaml/v3", "gopkg.in/yaml.v2", "gopkg.in/yaml.v3", "encoding/json":
-		return "configuration parse error", true
-	case "net/url":
-		return "URL parse error", true
-	case "os/exec":
-		return "command execution failed", true
-	}
-	return "", false
-}
-
-func knownLeafSummary(err error) string {
-	if !reflect.ValueOf(err).Comparable() {
-		return typeSummary(err)
-	}
-	switch err {
-	case context.Canceled:
-		return "operation canceled"
-	case context.DeadlineExceeded:
-		return "operation deadline exceeded"
-	case os.ErrInvalid:
-		return "invalid operation"
-	case os.ErrPermission:
-		return "permission denied"
-	case os.ErrExist:
-		return "file already exists"
-	case os.ErrNotExist:
-		return "file does not exist"
-	case os.ErrClosed:
-		return "file already closed"
-	case os.ErrDeadlineExceeded:
-		return "I/O deadline exceeded"
-	case io.EOF:
-		return "end of input"
-	case io.ErrUnexpectedEOF:
-		return "unexpected end of input"
-	case io.ErrNoProgress:
-		return "I/O made no progress"
-	case io.ErrShortBuffer:
-		return "short buffer"
-	case io.ErrShortWrite:
-		return "short write"
-	case io.ErrClosedPipe:
-		return "closed pipe"
-	}
-	if errno, ok := err.(syscall.Errno); ok {
-		return "system error: " + errno.Error()
-	}
-	return typeSummary(err)
-}
-
 func typeSummary(err error) string {
-	typeOf := reflect.TypeOf(err)
-	if typeOf == nil {
-		return "error"
+	if kind := reflect.TypeOf(err); kind != nil {
+		return "error (" + kind.String() + ")"
 	}
-	return "error (" + typeOf.String() + ")"
-}
-
-func apiErrorSummary(code protocol.ErrorCode) string {
-	if !knownAPIErrorCode(code) {
-		return "api error"
-	}
-	return "api error (" + string(code) + ")"
-}
-
-func knownAPIErrorCode(code protocol.ErrorCode) bool {
-	switch code {
-	case protocol.CodeInvalidArgument,
-		protocol.CodeDaemonUnavailable,
-		protocol.CodeInvalidState,
-		protocol.CodePermissionDenied,
-		protocol.CodeRevisionConflict,
-		protocol.CodeUpstreamFailure,
-		protocol.CodeNetworkFailure,
-		protocol.CodeDataFailure,
-		protocol.CodeInternal,
-		protocol.CodeManagedField,
-		protocol.CodeManagedOperation,
-		protocol.CodeUnsupportedMutation,
-		protocol.CodeSystemProxyConflict,
-		protocol.CodeSystemProxyNotOwned,
-		protocol.CodeTunConflict:
-		return true
-	default:
-		return false
-	}
+	return "error"
 }
 
 func truncateDiagnostic(text string, limit int) string {

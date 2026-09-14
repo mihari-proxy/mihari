@@ -28,6 +28,21 @@ type APIError struct {
 
 func (e APIError) Error() string { return e.Message }
 
+type apiErrorCause struct {
+	public APIError
+	cause  error
+}
+
+func (e apiErrorCause) Error() string   { return e.public.Error() }
+func (e apiErrorCause) Unwrap() []error { return []error{e.public, e.cause} }
+
+func wrapAPIErrorCause(public APIError, cause error) error {
+	if cause == nil {
+		return public
+	}
+	return apiErrorCause{public: public, cause: cause}
+}
+
 type ErrorEnvelope struct {
 	Schema string   `json:"schema"`
 	Error  APIError `json:"error"`

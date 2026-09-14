@@ -4,13 +4,13 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"strings"
 	"time"
 
 	kardservice "github.com/kardianos/service"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/platform"
 )
 
@@ -87,7 +87,7 @@ func (m *Manager) controller(run RunFunc) (Controller, error) {
 	if exe == "" {
 		path, err := os.Executable()
 		if err != nil {
-			return nil, protocol.APIError{Code: protocol.CodeInternal, Message: "resolve mihari executable path"}
+			return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "resolve mihari executable path"}, err)
 		}
 		exe = path
 	}
@@ -103,16 +103,16 @@ func (m *Manager) stageServiceBinary() (string, error) {
 		var err error
 		src, err = os.Executable()
 		if err != nil {
-			return "", protocol.APIError{Code: protocol.CodeInternal, Message: "resolve mihari executable path"}
+			return "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "resolve mihari executable path"}, err)
 		}
 	}
 	dest, err := m.stageBinary(src)
 	if err != nil {
-		return "", protocol.APIError{
+		return "", diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeDataFailure,
 			Message: "copy mihari into install directory failed",
-			Details: map[string]any{"error": err.Error()},
-		}
+			Details: map[string]any{"error": "copy failed"},
+		}, err)
 	}
 	return dest, nil
 }
@@ -132,10 +132,10 @@ func (m *Manager) UpdateInstalledBinaryChecked(ctx context.Context, checks Servi
 	}
 	status, err := m.Status()
 	if err != nil {
-		return false, protocol.APIError{
+		return false, diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeInvalidState,
 			Message: "Mihari updated, but the installed service status could not be determined",
-		}
+		}, err)
 	}
 	if status == StatusNotInstalled {
 		return false, nil
@@ -144,15 +144,15 @@ func (m *Manager) UpdateInstalledBinaryChecked(ctx context.Context, checks Servi
 		return true, err
 	}
 	if err := m.Stop(); err != nil && !isIgnorableStopError(err) {
-		return true, protocol.APIError{
+		return true, diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeInvalidState,
 			Message: "Mihari updated, but the installed service could not be stopped",
-		}
+		}, err)
 	}
 	if err := runServiceReplacementCheck(ctx, checks.BeforeStage); err != nil {
 		if status == StatusRunning {
 			if restartErr := m.Start(); restartErr != nil {
-				return true, protocol.APIError{Code: protocol.CodeInvalidState, Message: "Mihari updated, but service verification failed and the previous service could not be restarted"}
+				return true, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidState, Message: "Mihari updated, but service verification failed and the previous service could not be restarted"}, errors.Join(err, restartErr))
 			}
 		}
 		return true, err
@@ -163,21 +163,21 @@ func (m *Manager) UpdateInstalledBinaryChecked(ctx context.Context, checks Servi
 			restartErr = m.Start()
 		}
 		if restartErr != nil {
-			return true, protocol.APIError{
+			return true, diagnostics.Wrap(protocol.APIError{
 				Code:    protocol.CodeInvalidState,
 				Message: "Mihari updated, but service synchronization failed and the previous service could not be restarted",
-			}
+			}, errors.Join(err, restartErr))
 		}
-		return true, protocol.APIError{
+		return true, diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeDataFailure,
 			Message: "Mihari updated, but the installed service binary could not be synchronized",
-		}
+		}, err)
 	}
 	if err := m.Start(); err != nil {
-		return true, protocol.APIError{
+		return true, diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeInvalidState,
 			Message: "Mihari updated and synchronized the installed service binary, but the service could not be restarted",
-		}
+		}, err)
 	}
 	return true, nil
 }
@@ -341,26 +341,26 @@ func mapServiceError(err error) error {
 	lower := strings.ToLower(msg)
 	switch {
 	case isNotInstalledError(err):
-		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihari service is not installed"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihari service is not installed"}, err)
 	case strings.Contains(lower, "access is denied"), strings.Contains(lower, "permission"), strings.Contains(lower, "operation not permitted"):
-		return protocol.APIError{Code: protocol.CodePermissionDenied, Message: "administrator privileges are required; re-run from an elevated shell"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodePermissionDenied, Message: "administrator privileges are required; re-run from an elevated shell"}, err)
 	case strings.Contains(lower, "marked for deletion"), strings.Contains(lower, "1072"):
-		return protocol.APIError{
+		return diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeInvalidState,
 			Message: "service is marked for deletion; stop any remaining mihari process, close Services.msc, wait a few seconds or reboot, then retry",
-		}
+		}, err)
 	case strings.Contains(lower, "did not respond to the start or control request"),
 		strings.Contains(lower, "timely fashion"),
 		strings.Contains(lower, "timeout was reached"),
 		strings.Contains(lower, "1053"):
 		// Classic SCM failure when the process never called StartServiceCtrlDispatcher
 		// (e.g. old builds ran `daemon` as a plain CLI under the service ImagePath).
-		return protocol.APIError{
+		return diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeInvalidState,
 			Message: "service failed to start in time; ensure this mihari binary is used for the service ImagePath and reinstall/start after upgrading",
-		}
+		}, err)
 	default:
-		return protocol.APIError{Code: protocol.CodeInvalidState, Message: fmt.Sprintf("service operation failed: %s", msg)}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidState, Message: "service operation failed"}, err)
 	}
 }
 
@@ -452,7 +452,7 @@ func newKardianosController(run RunFunc, executable string, arguments []string, 
 	prog := &program{run: run, ready: ready, startTimeout: startTimeout}
 	svc, err := kardservice.New(prog, cfg)
 	if err != nil {
-		return nil, protocol.APIError{Code: protocol.CodeInternal, Message: "create service definition"}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "create service definition"}, err)
 	}
 	return &kardianosController{svc: svc}, nil
 }

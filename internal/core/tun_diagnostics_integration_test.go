@@ -79,7 +79,7 @@ func TestTunDiagnostic_TrustedConfirmationAndRollbackJSON(t *testing.T) {
 			if e := json.Unmarshal(output.Bytes(), &record); e != nil {
 				t.Fatalf("expected one diagnostic: %v", e)
 			}
-			if record["operation_id"] != op.ID || record["operation"] != "tun.enable" || record["level"] != "ERROR" || !strings.Contains(output.String(), "permission denied") || strings.Contains(output.String(), "business-secret") {
+			if record["operation_id"] != op.ID || record["operation"] != "tun.enable" || record["level"] != "ERROR" || !strings.Contains(output.String(), "permission denied") || !strings.Contains(output.String(), "/private/business-secret") {
 				t.Fatalf("record=%#v", record)
 			}
 			if !bytes.Equal(before, f.Content()) || c.patches != 0 {

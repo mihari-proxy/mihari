@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/core"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/geoip"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/mihomo"
@@ -114,7 +115,7 @@ func (s *Server) installCore(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	var body protocol.MutationRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "core.install"})
@@ -135,7 +136,7 @@ func (s *Server) restartCore(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	var body protocol.MutationRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "core.restart"})
@@ -217,11 +218,11 @@ func (s *Server) selectProxy(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	var body protocol.ProxySelectionRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	if body.Name == "" {
-		writeInvalidArgument(writer, "proxy name is required")
+		s.writeInvalidArgument(request.Context(), writer, "proxy name is required")
 		return
 	}
 	if err := s.runtime.SelectProxy(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, request.PathValue("name"), body.Name); err != nil {
@@ -236,12 +237,12 @@ func (s *Server) delayTest(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	var body protocol.DelayTestRequest
-	if !decodeControlJSON(writer, request, &body) {
+	if !s.decodeControlJSON(writer, request, &body) {
 		return
 	}
 	timeout, err := resolveDelayTimeout(body.TimeoutMilliseconds)
 	if err != nil {
-		writeInvalidArgument(writer, errInvalidDelayTimeout.Error())
+		s.writeInvalidArgument(request.Context(), writer, errInvalidDelayTimeout.Error())
 		return
 	}
 	name := request.PathValue("name")
@@ -263,12 +264,12 @@ func (s *Server) delayProxy(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	var body protocol.DelayTestRequest
-	if !decodeControlJSON(writer, request, &body) {
+	if !s.decodeControlJSON(writer, request, &body) {
 		return
 	}
 	timeout, err := resolveDelayTimeout(body.TimeoutMilliseconds)
 	if err != nil {
-		writeInvalidArgument(writer, errInvalidDelayTimeout.Error())
+		s.writeInvalidArgument(request.Context(), writer, errInvalidDelayTimeout.Error())
 		return
 	}
 	name := request.PathValue("name")
@@ -357,7 +358,7 @@ func (s *Server) closeConnection(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	var body protocol.MutationRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	if err := s.runtime.CloseConnection(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control"}, request.PathValue("id")); err != nil {
@@ -372,7 +373,7 @@ func (s *Server) closeAllConnections(writer http.ResponseWriter, request *http.R
 		return
 	}
 	var body protocol.MutationRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	if err := s.runtime.CloseAllConnections(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control"}); err != nil {
@@ -433,11 +434,11 @@ func (s *Server) updateRuleProvider(writer http.ResponseWriter, request *http.Re
 	}
 	name := request.PathValue("name")
 	if name == "" {
-		writeInvalidArgument(writer, "rule provider name is required")
+		s.writeInvalidArgument(request.Context(), writer, "rule provider name is required")
 		return
 	}
 	var body protocol.MutationRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "rule_provider.refresh"})
@@ -456,11 +457,12 @@ func (s *Server) stream(writer http.ResponseWriter, request *http.Request) {
 	}
 	kind := mihomo.StreamKind(request.PathValue("kind"))
 	if kind != mihomo.StreamTraffic && kind != mihomo.StreamMemory && kind != mihomo.StreamLogs && kind != mihomo.StreamConnections {
-		writeInvalidArgument(writer, "unsupported stream")
+		s.writeInvalidArgument(request.Context(), writer, "unsupported stream")
 		return
 	}
 	connection, err := websocket.Accept(writer, request, nil)
 	if err != nil {
+		s.reportRequestRejection(request.Context(), err)
 		return
 	}
 	defer connection.CloseNow()
@@ -512,27 +514,29 @@ func coreStatusDTO(snapshot state.Snapshot) protocol.CoreStatus {
 	}
 }
 
-func decodeControlJSON(writer http.ResponseWriter, request *http.Request, target any) bool {
+func (s *Server) decodeControlJSON(writer http.ResponseWriter, request *http.Request, target any) bool {
 	body := http.MaxBytesReader(writer, request.Body, maxControlBodySize)
 	decoder := json.NewDecoder(body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
+		s.reportRequestRejection(request.Context(), diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid request body"}, err))
 		writeInvalidArgument(writer, "invalid request body")
 		return false
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		s.reportRequestRejection(request.Context(), diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "request body must contain one JSON object"}, err))
 		writeInvalidArgument(writer, "request body must contain one JSON object")
 		return false
 	}
 	return true
 }
 
-func requireOperationID(writer http.ResponseWriter, operationID string) bool {
+func (s *Server) requireOperationID(ctx context.Context, writer http.ResponseWriter, operationID string) bool {
 	if operationID != "" {
 		return true
 	}
-	writeInvalidArgument(writer, "operation_id is required")
+	s.writeInvalidArgument(ctx, writer, "operation_id is required")
 	return false
 }
 

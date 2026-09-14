@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -64,7 +65,7 @@ func (ExecVersionRunner) RunVersion(ctx context.Context, executable, dir string)
 		return nil, ctx.Err()
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("version query stdout=%s stderr=%s: %w", stdout.buf.Bytes(), stderr.buf.Bytes(), err)
 	}
 	return stdout.buf.Bytes(), nil
 }
@@ -111,6 +112,7 @@ func observeReplacementTarget(ctx context.Context, role, path string, runner Ver
 		runner = ExecVersionRunner{}
 	}
 	raw, queryErr := runner.RunVersion(probeCtx, before.Path, dir)
+	out.probeErr = queryErr
 	if ctx.Err() != nil {
 		return ReplacementTarget{}, ctx.Err()
 	}

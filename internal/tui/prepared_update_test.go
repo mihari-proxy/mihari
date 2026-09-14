@@ -115,6 +115,49 @@ func TestPreparedUpdate_RunCancelsAndJoinsDownload(t *testing.T) {
 	}
 }
 
+type blockingCheckUpdater struct{ started, canceled, allow chan struct{} }
+
+func (u *blockingCheckUpdater) Check(ctx context.Context, _, _ string) (update.CheckResult, error) {
+	close(u.started)
+	<-ctx.Done()
+	close(u.canceled)
+	<-u.allow
+	return update.CheckResult{}, ctx.Err()
+}
+func (*blockingCheckUpdater) Prepare(context.Context, string, string, string) (update.PreparedUpdate, error) {
+	return update.PreparedUpdate{}, nil
+}
+func (*blockingCheckUpdater) ApplyPrepared(context.Context, update.PreparedUpdate) (update.Result, error) {
+	return update.Result{}, nil
+}
+
+func TestPreparedUpdate_RunCancelsAndJoinsCheck(t *testing.T) {
+	updater := &blockingCheckUpdater{started: make(chan struct{}), canceled: make(chan struct{}), allow: make(chan struct{})}
+	worker := newRunPreparedUpdater(updater)
+	done := make(chan struct{})
+	go func() { defer close(done); _, _ = worker.Check(context.Background(), "v1", "main") }()
+	<-updater.started
+	shutdown := make(chan struct{})
+	go func() { worker.shutdown(); close(shutdown) }()
+	select {
+	case <-shutdown:
+		close(updater.allow)
+		<-done
+		t.Fatal("Run abandoned active Check before cancel/join")
+	case <-updater.canceled:
+	}
+	select {
+	case <-shutdown:
+		close(updater.allow)
+		<-done
+		t.Fatal("Run abandoned canceled Check before join")
+	default:
+	}
+	close(updater.allow)
+	<-done
+	<-shutdown
+}
+
 func TestPreparedUpdate_ApplyFailureRequiresReopening(t *testing.T) {
 	model := NewModel()
 	model.preparedUpdate = &update.PreparedUpdate{Available: true}

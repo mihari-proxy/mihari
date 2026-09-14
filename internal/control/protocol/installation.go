@@ -58,7 +58,9 @@ func (s *InstallationStatus) UnmarshalJSON(data []byte) error {
 		return invalid
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+	if token, err := decoder.Token(); err != nil {
+		return wrapAPIErrorCause(invalid, err)
+	} else if token != json.Delim('{') {
 		return invalid
 	}
 	var next InstallationStatus
@@ -67,7 +69,7 @@ func (s *InstallationStatus) UnmarshalJSON(data []byte) error {
 	for decoder.More() {
 		token, err := decoder.Token()
 		if err != nil {
-			return invalid
+			return wrapAPIErrorCause(invalid, err)
 		}
 		key, ok := token.(string)
 		field, exists := fields[key]
@@ -76,17 +78,25 @@ func (s *InstallationStatus) UnmarshalJSON(data []byte) error {
 		}
 		seen[key] = true
 		var raw json.RawMessage
-		if err := decoder.Decode(&raw); err != nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		if err := decoder.Decode(&raw); err != nil {
+			return wrapAPIErrorCause(invalid, err)
+		}
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			return invalid
 		}
 		if err := json.Unmarshal(raw, field); err != nil {
-			return invalid
+			return wrapAPIErrorCause(invalid, err)
 		}
 	}
-	if token, err := decoder.Token(); err != nil || token != json.Delim('}') || len(seen) != len(fields) {
+	if token, err := decoder.Token(); err != nil {
+		return wrapAPIErrorCause(invalid, err)
+	} else if token != json.Delim('}') || len(seen) != len(fields) {
 		return invalid
 	}
 	if _, err := decoder.Token(); err != io.EOF {
+		if err != nil {
+			return wrapAPIErrorCause(invalid, err)
+		}
 		return invalid
 	}
 	if err := next.Validate(); err != nil {

@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 func TestStreamReadsAllSupportedKindsWithAuthentication(t *testing.T) {
@@ -78,9 +82,13 @@ func TestStreamStopsCleanlyWhenContextIsCancelled(t *testing.T) {
 	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
+	reports := make(chan diagnostics.Record, 2)
+	client := NewClient(server.URL, "secret", server.Client())
+	client.SetDiagnosticReporter(func(_ context.Context, record diagnostics.Record) { reports <- record })
 	go func() {
-		done <- NewClient(server.URL, "secret", server.Client()).Stream(ctx, StreamTraffic, func(json.RawMessage) error {
+		done <- client.Stream(ctx, StreamTraffic, func(json.RawMessage) error {
 			return nil
 		})
 	}()
@@ -99,6 +107,36 @@ func TestStreamStopsCleanlyWhenContextIsCancelled(t *testing.T) {
 		t.Fatal("cancelled stream did not stop")
 	}
 	closeRelease.Do(func() { close(release) })
+	select {
+	case record := <-reports:
+		if record.Level != slog.LevelInfo || !errors.Is(record.Err, context.Canceled) {
+			t.Fatal("stream cancellation lost original cause or INFO level")
+		}
+	default:
+		t.Fatal("stream cancellation was not recorded by the available owner")
+	}
+	if len(reports) != 0 {
+		t.Fatal("stream cancellation logged more than once")
+	}
+}
+
+func TestReportStreamClose_ReportsOnlyGenuineCloseFailure(t *testing.T) {
+	for _, expected := range []error{nil, net.ErrClosed, io.EOF, context.Canceled, websocket.CloseError{Code: websocket.StatusNormalClosure}} {
+		var records []diagnostics.Record
+		client := &Client{reporter: func(_ context.Context, record diagnostics.Record) { records = append(records, record) }}
+		client.reportStreamClose(context.Background(), expected)
+		if len(records) != 0 {
+			t.Fatalf("expected close %v produced diagnostics: %+v", expected, records)
+		}
+	}
+
+	cause := errors.New("close websocket transport fixture")
+	var records []diagnostics.Record
+	client := &Client{reporter: func(_ context.Context, record diagnostics.Record) { records = append(records, record) }}
+	client.reportStreamClose(context.Background(), cause)
+	if len(records) != 1 || records[0].Event != "stream.close.failed" || records[0].Level != slog.LevelWarn || !errors.Is(records[0].Err, cause) {
+		t.Fatalf("genuine close cause missing: %+v", records)
+	}
 }
 
 func TestStreamRejectsInvalidAndOversizedMessages(t *testing.T) {
@@ -106,7 +144,7 @@ func TestStreamRejectsInvalidAndOversizedMessages(t *testing.T) {
 		name    string
 		message string
 	}{
-		{"invalid JSON", `not-json`},
+		{"invalid JSON", `not-json token=stream-fixture-secret`},
 		{"oversized", `"` + strings.Repeat("x", maxStreamMessageSize) + `"`},
 	}
 	for _, test := range tests {
@@ -127,6 +165,19 @@ func TestStreamRejectsInvalidAndOversizedMessages(t *testing.T) {
 			var apiError protocol.APIError
 			if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure {
 				t.Fatalf("err=%v", err)
+			}
+			if test.name == "oversized" && !errors.Is(err, websocket.ErrMessageTooBig) {
+				t.Fatal("oversize stream lost original websocket cause")
+			}
+			if test.name == "invalid JSON" {
+				var syntax *json.SyntaxError
+				var detail *diagnostics.HTTPError
+				if !errors.As(err, &syntax) || !errors.As(err, &detail) || detail.Body != test.message {
+					t.Fatal("invalid stream JSON lost syntax cause or original failed message")
+				}
+				if strings.Contains(err.Error(), "stream-fixture-secret") {
+					t.Fatal("stream cause leaked into public error")
+				}
 			}
 		})
 	}

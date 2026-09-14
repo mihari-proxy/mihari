@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/preferences"
 	"github.com/mihari-proxy/mihari/internal/state"
 )
@@ -49,7 +50,7 @@ func (m *Manager) UpdateTUIPreferences(ctx context.Context, operation Operation,
 
 func preferenceMutationError(err error) error {
 	if errors.Is(err, preferences.ErrInvalidColumns) {
-		return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid TUI connections columns"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid TUI connections columns"}, err)
 	}
-	return protocol.APIError{Code: protocol.CodeDataFailure, Message: "persist TUI preferences"}
+	return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "persist TUI preferences"}, err)
 }

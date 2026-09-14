@@ -34,7 +34,7 @@ func (b canceledCloseDiagnosticBody) Close() error {
 	return b.err
 }
 
-func TestHTTPDiagnostics_CloseOwnerCancellationIsQuiet(t *testing.T) {
+func TestHTTPDiagnostics_CloseOwnerCancellationIsInfo(t *testing.T) {
 	for _, failure := range []error{context.Canceled, context.DeadlineExceeded} {
 		t.Run(failure.Error(), func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -43,16 +43,21 @@ func TestHTTPDiagnostics_CloseOwnerCancellationIsQuiet(t *testing.T) {
 				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: canceledCloseDiagnosticBody{closeDiagnosticBody{strings.NewReader(`{"version":"fixture"}`), failure}, cancel}}, nil
 			})})
 			reports := 0
-			c.SetDiagnosticReporter(func(context.Context, diagnostics.Record) { reports++ })
+			c.SetDiagnosticReporter(func(_ context.Context, record diagnostics.Record) {
+				reports++
+				if record.Level != slog.LevelInfo || !errors.Is(record.Err, failure) {
+					t.Error("cancellation lost INFO classification or original cause")
+				}
+			})
 			result, err := c.Version(ctx)
-			if err != nil || result.Version != "fixture" || reports != 0 {
-				t.Fatal("close cancellation logged or changed completed success")
+			if err != nil || result.Version != "fixture" || reports != 1 {
+				t.Fatal("close cancellation missing or changed completed success")
 			}
 		})
 	}
 }
 
-func TestHTTPDiagnostics_SuccessfulCloseWarningRedactsShortCredential(t *testing.T) {
+func TestHTTPDiagnostics_SuccessfulCloseWarningPreservesOriginalCause(t *testing.T) {
 	var out bytes.Buffer
 	report := logging.NewDiagnosticReporter(slog.New(slog.NewTextHandler(&out, nil)), logging.NewRedactor())
 	c := NewClient("http://127.0.0.1", "tiny", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -63,8 +68,8 @@ func TestHTTPDiagnostics_SuccessfulCloseWarningRedactsShortCredential(t *testing
 	if err != nil || result.Version != "fixture" {
 		t.Fatal("close failure changed successful operation")
 	}
-	if !strings.Contains(out.String(), "WARN") || !strings.Contains(out.String(), "close failed") || strings.Contains(out.String(), "tiny") {
-		t.Fatal("close diagnostic missing or unsafe")
+	if !strings.Contains(out.String(), "WARN") || !strings.Contains(out.String(), "close failed tiny") {
+		t.Fatal("close diagnostic lost original cause")
 	}
 }
 
@@ -141,8 +146,8 @@ func TestHTTPDiagnostics_StatusBodyAndPublicBoundary(t *testing.T) {
 		}
 	}
 	for _, secret := range []string{"tiny", "abc"} {
-		if strings.Contains(out.String(), secret) {
-			t.Error("diagnostic leaked credential")
+		if !strings.Contains(out.String(), secret) {
+			t.Error("diagnostic lost original body")
 		}
 	}
 }

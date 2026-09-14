@@ -31,7 +31,7 @@ func (s *Server) enableTun(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	var body protocol.TunMutationRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "tun.enable"})
@@ -50,7 +50,7 @@ func (s *Server) disableTun(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	var body protocol.TunMutationRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "tun.disable"})

@@ -126,7 +126,25 @@ func (w *lineCaptureWriter) emitLine() {
 		line = line[:n-1]
 	}
 	truncated := w.trunc
+	if truncated && len(line) != 0 {
+		// A capped valid rune can end in its leading byte or continuation
+		// bytes. Drop that incomplete suffix without labelling it bad input.
+		start := len(line) - 1
+		for start > 0 && !utf8.RuneStart(line[start]) {
+			start--
+		}
+		if !utf8.FullRune(line[start:]) {
+			line = line[:start]
+		}
+	}
 	msg, invalid := sanitizeUTF8(line)
+	if len(msg) > MaxCaptureLineBytes {
+		end := MaxCaptureLineBytes
+		for !utf8.RuneStart(msg[end]) {
+			end--
+		}
+		msg, truncated = msg[:end], true
+	}
 	w.buf = w.buf[:0]
 	w.trunc = false
 	w.drop = false
@@ -149,6 +167,8 @@ func (w *lineCaptureWriter) logLine(msg string, truncated, invalid bool) {
 	if invalid {
 		rec.AddAttrs(slog.Bool("invalid_utf8", true))
 	}
+	// The file writer reports failures through its independent FailureReporter.
+	// Returning them here would stop draining the supervised process output.
 	_ = h.Handle(context.Background(), rec)
 }
 

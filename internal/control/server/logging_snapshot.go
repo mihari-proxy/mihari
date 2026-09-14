@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 )
 
@@ -58,25 +60,25 @@ func (g *snapshotGate) release() {
 
 func (s *Server) loggingSnapshot(writer http.ResponseWriter, request *http.Request) {
 	if !s.beginSnapshot() {
-		writeSnapshotPrestreamError(writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "machine snapshot is busy"})
+		s.writeSnapshotPrestreamError(request.Context(), writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "machine snapshot is busy"})
 		return
 	}
 	defer s.snapshotHandlers.Done()
 	decoded, err := protocol.DecodeMachineLogRequest(request.Body, s.now())
 	if err != nil {
-		writeSnapshotPrestreamError(writer, err)
+		s.writeSnapshotPrestreamError(request.Context(), writer, err)
 		return
 	}
 	if s.snapshotContext().Err() != nil {
-		writeSnapshotPrestreamError(writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "machine snapshot is busy"})
+		s.writeSnapshotPrestreamError(request.Context(), writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "machine snapshot is busy"})
 		return
 	}
 	if s.snapshotSource == nil {
-		writeSnapshotPrestreamError(writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "machine snapshot is unavailable"})
+		s.writeSnapshotPrestreamError(request.Context(), writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "machine snapshot is unavailable"})
 		return
 	}
 	if !s.snapshotGate.tryAdmit(s.now()) {
-		writeSnapshotPrestreamError(writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "machine snapshot is busy"})
+		s.writeSnapshotPrestreamError(request.Context(), writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "machine snapshot is busy"})
 		return
 	}
 	defer s.snapshotGate.release()
@@ -88,14 +90,21 @@ func (s *Server) loggingSnapshot(writer http.ResponseWriter, request *http.Reque
 
 	set, err := s.snapshotSource.Open(ctx, logging.SnapshotWindow{From: decoded.From, To: decoded.To})
 	if err != nil {
-		writeSnapshotPrestreamError(writer, snapshotError(err))
+		s.writeSnapshotPrestreamError(ctx, writer, snapshotError(err))
 		return
 	}
-	defer func() { _ = set.Close() }() // Handler owns the set until its producer has joined.
+	defer func() {
+		// Handler owns the set until its producer has joined. Cleanup alone
+		// cannot turn a completed snapshot into a failed protocol response.
+		if closeErr := set.Close(); closeErr != nil && s.diagnosticReporter != nil {
+			level, _ := diagnostics.FailureLevel(request.Context(), closeErr)
+			s.diagnosticReporter(request.Context(), diagnostics.Record{Component: "control.server", Event: "snapshot.close_failed", Level: min(level, slog.LevelWarn), Err: closeErr})
+		}
+	}()
 
 	snapshotID, err := s.newSnapshotID()
 	if err != nil {
-		writeSnapshotPrestreamError(writer, err)
+		s.writeSnapshotPrestreamError(ctx, writer, err)
 		return
 	}
 
@@ -121,23 +130,29 @@ func (s *Server) loggingSnapshot(writer http.ResponseWriter, request *http.Reque
 			writer.Header().Set("Content-Type", "application/x-ndjson")
 			writer.WriteHeader(http.StatusOK)
 			started = true
-			_ = http.NewResponseController(writer).Flush()
 		}
 		if writeErr := writeSnapshotFrame(writer, frame); writeErr != nil {
+			acknowledgeResponseWrite(writer, writeErr)
+			s.reportSnapshotFailure(request.Context(), writeErr)
 			return
 		}
 	}
 	select {
 	case streamErr := <-errCh:
 		if !started {
-			writeSnapshotPrestreamError(writer, snapshotError(streamErr))
+			s.writeSnapshotPrestreamError(ctx, writer, snapshotError(streamErr))
 			return
 		}
+		s.reportSnapshotFailure(ctx, streamErr)
 		frame, encodeErr := encodeSnapshotErrorFrame(streamErr)
 		if encodeErr != nil {
+			s.reportSnapshotFailure(ctx, encodeErr)
 			return
 		}
-		_ = writeSnapshotFrame(writer, frame)
+		if writeErr := writeSnapshotFrame(writer, frame); writeErr != nil {
+			acknowledgeResponseWrite(writer, writeErr)
+			s.reportSnapshotFailure(request.Context(), writeErr)
+		}
 	default:
 	}
 }
@@ -244,7 +259,7 @@ func sendSnapshotFrame(ctx context.Context, frames chan []byte, frame []byte) er
 func encodeSnapshotFrame(value any) ([]byte, error) {
 	raw, err := json.Marshal(value)
 	if err != nil {
-		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "machine snapshot failed"}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "machine snapshot failed"}, err)
 	}
 	raw = append(raw, '\n')
 	if len(raw) > protocol.MaxMachineLogFrameBytes {
@@ -262,7 +277,9 @@ func encodeSnapshotErrorFrame(err error) ([]byte, error) {
 
 func writeSnapshotFrame(writer http.ResponseWriter, frame []byte) error {
 	rc := http.NewResponseController(writer)
-	_ = rc.SetWriteDeadline(time.Now().Add(snapshotWriteTimeout))
+	if err := rc.SetWriteDeadline(time.Now().Add(snapshotWriteTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		return err
+	}
 	if _, err := writer.Write(frame); err != nil {
 		return err
 	}
@@ -270,6 +287,19 @@ func writeSnapshotFrame(writer http.ResponseWriter, frame []byte) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Server) reportSnapshotFailure(ctx context.Context, err error) {
+	if s.diagnosticReporter != nil && !diagnostics.AlreadyReported(err) {
+		if level, emit := diagnostics.FailureLevel(ctx, err); emit {
+			s.diagnosticReporter(ctx, diagnostics.Record{Component: "control.server", Event: "snapshot.failed", Level: level, Err: err})
+		}
+	}
+}
+
+func (s *Server) writeSnapshotPrestreamError(ctx context.Context, writer http.ResponseWriter, err error) {
+	s.reportSnapshotFailure(ctx, err)
+	writeSnapshotPrestreamError(writer, err)
 }
 
 func writeSnapshotPrestreamError(writer http.ResponseWriter, err error) {
@@ -289,7 +319,7 @@ func writeSnapshotPrestreamError(writer http.ResponseWriter, err error) {
 }
 
 func snapshotError(err error) error {
-	return snapshotAPIError(err)
+	return diagnostics.Wrap(snapshotAPIError(err), err)
 }
 
 func snapshotAPIError(err error) protocol.APIError {
@@ -311,7 +341,7 @@ func (s *Server) newSnapshotID() (string, error) {
 	}
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
-		return "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "machine snapshot failed"}
+		return "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "machine snapshot failed"}, err)
 	}
 	return hex.EncodeToString(raw[:]), nil
 }

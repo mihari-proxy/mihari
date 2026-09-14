@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	maxminddb "github.com/oschwald/maxminddb-golang/v2"
 )
 
@@ -36,6 +38,8 @@ type Downloader struct {
 	MaxBytes   int64
 	AllowHTTP  bool
 	Validate   func(string) error
+	// Reporter borrows an existing file diagnostic outlet; nil skips warnings.
+	Reporter diagnostics.Reporter
 }
 
 // FileCandidate is one validated file awaiting activation.
@@ -45,6 +49,7 @@ type FileCandidate struct {
 	digest      [sha256.Size]byte
 	committed   bool
 	hadPrevious bool
+	reporter    diagnostics.Reporter
 }
 
 // Prepare downloads, verifies, and stages one database without changing the active file.
@@ -77,7 +82,7 @@ func (d Downloader) Prepare(ctx context.Context, spec DownloadSpec) (_ *FileCand
 	}
 	if spec.ChecksumURL != "" {
 		var err error
-		want, err = downloadChecksum(ctx, client, spec.ChecksumURL, d.AllowHTTP)
+		want, err = downloadChecksum(ctx, client, spec.ChecksumURL, d.AllowHTTP, d.Reporter)
 		if err != nil {
 			return nil, err
 		}
@@ -90,10 +95,15 @@ func (d Downloader) Prepare(ctx context.Context, spec DownloadSpec) (_ *FileCand
 		return nil, fmt.Errorf("create geoip candidate: %w", err)
 	}
 	staged := file.Name()
+	closed := false
 	defer func() {
-		_ = file.Close()
+		if !closed {
+			resultErr = errors.Join(resultErr, file.Close())
+		}
 		if resultErr != nil {
-			_ = os.Remove(staged)
+			if err := os.Remove(staged); err != nil && !errors.Is(err, os.ErrNotExist) {
+				resultErr = errors.Join(resultErr, fmt.Errorf("remove geoip candidate: %w", err))
+			}
 		}
 	}()
 	if err := file.Chmod(0o600); err != nil {
@@ -103,7 +113,7 @@ func (d Downloader) Prepare(ctx context.Context, spec DownloadSpec) (_ *FileCand
 	if limit <= 0 {
 		limit = defaultMaxDatabaseBytes
 	}
-	got, err := downloadFile(ctx, client, spec.URL, file, limit, d.AllowHTTP)
+	got, err := downloadFile(ctx, client, spec.URL, file, limit, d.AllowHTTP, d.Reporter)
 	if err != nil {
 		return nil, err
 	}
@@ -114,8 +124,10 @@ func (d Downloader) Prepare(ctx context.Context, spec DownloadSpec) (_ *FileCand
 		return nil, fmt.Errorf("sync geoip candidate: %w", err)
 	}
 	if err := file.Close(); err != nil {
+		closed = true
 		return nil, fmt.Errorf("close geoip candidate: %w", err)
 	}
+	closed = true
 	validate := d.Validate
 	if validate == nil {
 		validate = validateMMDB
@@ -123,7 +135,7 @@ func (d Downloader) Prepare(ctx context.Context, spec DownloadSpec) (_ *FileCand
 	if err := validate(staged); err != nil {
 		return nil, downloadFailure{message: "geoip candidate failed database validation", cause: err}
 	}
-	return &FileCandidate{staged: staged, destination: spec.Destination, digest: got}, nil
+	return &FileCandidate{staged: staged, destination: spec.Destination, digest: got, reporter: d.Reporter}, nil
 }
 
 func parseExpectedSHA256(raw string) ([sha256.Size]byte, error) {
@@ -150,15 +162,17 @@ func validateDownloadURL(raw string, allowHTTP bool) error {
 	return nil
 }
 
-func downloadChecksum(ctx context.Context, client *http.Client, rawURL string, allowHTTP bool) ([sha256.Size]byte, error) {
-	var result [sha256.Size]byte
+func downloadChecksum(ctx context.Context, client *http.Client, rawURL string, allowHTTP bool, reporter diagnostics.Reporter) (result [sha256.Size]byte, resultErr error) {
 	response, err := doGET(ctx, client, rawURL, allowHTTP)
 	if err != nil {
 		return result, err
 	}
-	defer response.Body.Close()
+	defer closeGeoIPResponse(ctx, response, rawURL, &resultErr, reporter)
 	raw, err := io.ReadAll(io.LimitReader(response.Body, 4097))
-	if err != nil || len(raw) > 4096 {
+	if err != nil {
+		return result, downloadFailure{message: "read geoip checksum", cause: &diagnostics.HTTPError{Operation: "geoip GET checksum", URL: rawURL, Phase: "read", Status: response.StatusCode, Cause: err}}
+	}
+	if len(raw) > 4096 {
 		return result, errors.New("read geoip checksum")
 	}
 	fields := strings.Fields(string(raw))
@@ -166,7 +180,10 @@ func downloadChecksum(ctx context.Context, client *http.Client, rawURL string, a
 		return result, errors.New("invalid geoip checksum")
 	}
 	decoded, err := hex.DecodeString(fields[0])
-	if err != nil || len(decoded) != sha256.Size {
+	if err != nil {
+		return result, downloadFailure{message: "invalid geoip checksum", cause: err}
+	}
+	if len(decoded) != sha256.Size {
 		return result, errors.New("invalid geoip checksum")
 	}
 	copy(result[:], decoded)
@@ -174,13 +191,12 @@ func downloadChecksum(ctx context.Context, client *http.Client, rawURL string, a
 }
 
 // downloadFile streams a size-bounded resource while computing its SHA-256 digest.
-func downloadFile(ctx context.Context, client *http.Client, rawURL string, destination io.Writer, maxBytes int64, allowHTTP bool) ([sha256.Size]byte, error) {
-	var result [sha256.Size]byte
+func downloadFile(ctx context.Context, client *http.Client, rawURL string, destination io.Writer, maxBytes int64, allowHTTP bool, reporter diagnostics.Reporter) (result [sha256.Size]byte, resultErr error) {
 	response, err := doGET(ctx, client, rawURL, allowHTTP)
 	if err != nil {
 		return result, err
 	}
-	defer response.Body.Close()
+	defer closeGeoIPResponse(ctx, response, rawURL, &resultErr, reporter)
 	hash := sha256.New()
 	written, err := io.Copy(io.MultiWriter(destination, hash), io.LimitReader(response.Body, maxBytes+1))
 	if err != nil {
@@ -201,17 +217,29 @@ func doGET(ctx context.Context, client *http.Client, rawURL string, allowHTTP bo
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("download geoip resource: %w", err)
+		return nil, downloadFailure{message: "download geoip resource", cause: &diagnostics.HTTPError{Operation: "geoip GET resource", URL: rawURL, Phase: "transport", Cause: err}}
 	}
 	if err := validateDownloadURL(response.Request.URL.String(), allowHTTP); err != nil {
-		response.Body.Close()
-		return nil, errors.New("geoip redirect must preserve HTTPS")
+		closeErr := response.Body.Close()
+		return nil, downloadFailure{message: "geoip redirect must preserve HTTPS", cause: &diagnostics.HTTPError{Operation: "geoip GET resource", URL: response.Request.URL.String(), Phase: "redirect", Status: response.StatusCode, Cause: errors.Join(err, closeErr)}}
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		response.Body.Close()
-		return nil, downloadFailure{message: fmt.Sprintf("download geoip resource: unexpected HTTP status %d", response.StatusCode)}
+		raw, readErr := io.ReadAll(io.LimitReader(response.Body, diagnostics.MaxHTTPBodyBytes+1))
+		closeErr := response.Body.Close()
+		return nil, downloadFailure{message: fmt.Sprintf("download geoip resource: unexpected HTTP status %d", response.StatusCode), cause: &diagnostics.HTTPError{Operation: "geoip GET resource", URL: rawURL, Phase: "response", Status: response.StatusCode, Body: diagnostics.HTTPBody(raw), Cause: errors.Join(readErr, closeErr)}}
 	}
 	return response, nil
+}
+
+func closeGeoIPResponse(ctx context.Context, response *http.Response, rawURL string, resultErr *error, reporter diagnostics.Reporter) {
+	if err := response.Body.Close(); err != nil {
+		detail := &diagnostics.HTTPError{Operation: "geoip GET resource", URL: rawURL, Phase: "close", Status: response.StatusCode, Cause: err}
+		if *resultErr != nil {
+			*resultErr = downloadFailure{message: (*resultErr).Error(), cause: errors.Join(*resultErr, detail)}
+		} else if reporter != nil {
+			reporter(ctx, diagnostics.Record{Component: "geoip", Event: "http.close.failed", Level: slog.LevelWarn, Err: detail})
+		}
+	}
 }
 
 func validateMMDB(path string) error {
@@ -309,7 +337,9 @@ func (c *FileCandidate) Rollback() error {
 // Cleanup removes an uncommitted staged file.
 func (c *FileCandidate) Cleanup() {
 	if c != nil && c.staged != "" {
-		_ = os.Remove(c.staged)
+		if err := os.Remove(c.staged); err != nil && !errors.Is(err, os.ErrNotExist) && c.reporter != nil {
+			c.reporter(context.Background(), diagnostics.Record{Component: "geoip", Event: "candidate.cleanup.failed", Level: slog.LevelWarn, Err: fmt.Errorf("remove geoip candidate %s: %w", c.staged, err)})
+		}
 		c.staged = ""
 	}
 }

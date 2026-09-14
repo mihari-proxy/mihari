@@ -41,9 +41,9 @@ func TestWebMutatorDiagnostics_ContextOutcomeAndID(t *testing.T) {
 			level  string
 			cancel bool
 		}{
-			{"success", nil, "INFO", false}, {"expected", protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "private-api-message"}, "DEBUG", false},
+			{"success", nil, "INFO", false}, {"expected", protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "private-api-message"}, "INFO", false},
 			{"failure", &os.PathError{Op: "write", Path: "/private/controller-secret", Err: os.ErrPermission}, "ERROR", false},
-			{"cancel", context.Canceled, "", true}, {"live deadline", context.DeadlineExceeded, "ERROR", false},
+			{"cancel", context.Canceled, "INFO", true}, {"live deadline", context.DeadlineExceeded, "ERROR", false},
 		} {
 			t.Run(action.name+"/"+outcome.name, func(t *testing.T) {
 				var out bytes.Buffer
@@ -101,10 +101,8 @@ func TestWebMutatorDiagnostics_ContextOutcomeAndID(t *testing.T) {
 				if err != nil && !diagnostics.AlreadyReported(err) {
 					t.Fatal("reported mutation lacks marker")
 				}
-				for _, secret := range []string{"private-group", "private-node", "private-connection", "private-api-message", "/private/controller-secret"} {
-					if strings.Contains(out.String(), secret) {
-						t.Fatal("diagnostic leaked private data")
-					}
+				if outcome.err != nil && !strings.Contains(record["cause"].(string), outcome.err.Error()) {
+					t.Fatal("diagnostic lost original failure")
 				}
 			})
 		}

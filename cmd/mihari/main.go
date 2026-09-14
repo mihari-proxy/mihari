@@ -440,12 +440,12 @@ func prepareLocalRoot() (processLocalRoot, error) {
 func doPrepareLocalRoot() (processLocalRoot, error) {
 	absolutePaths, err := defaultAbsolutePaths()
 	if err != nil {
-		return processLocalRoot{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "resolve Mihari data root"}
+		return processLocalRoot{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "resolve Mihari data root"}, err)
 	}
 	processFS, fsErr := newPrivateFS(absolutePaths.Root)
 	credPath, err := resolveCredentialPath(absolutePaths)
 	if err != nil {
-		return processLocalRoot{Paths: absolutePaths, FS: processFS}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "resolve Mihari control credential"}
+		return processLocalRoot{Paths: absolutePaths, FS: processFS}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "resolve Mihari control credential"}, err)
 	}
 	token, err := loadProcessToken(credPath, absolutePaths.Root, fsErr == nil)
 	if err != nil {
@@ -475,11 +475,11 @@ func loadProcessToken(credPath, root string, fsOK bool) (string, error) {
 		var apiError protocol.APIError
 		if errors.As(err, &apiError) {
 			if apiError.Code == "" {
-				apiError.Code = protocol.CodeDataFailure
+				return "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: apiError.Message, Details: apiError.Details}, err)
 			}
-			return "", apiError
+			return "", err
 		}
-		return "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "local control setup failed"}
+		return "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "local control setup failed"}, err)
 	}
 	token, err := credential.Load(credPath)
 	if err != nil {
@@ -576,7 +576,7 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	if !deps.ValidationMode {
 		if err := deps.Paths.EnsureDirs(); err != nil {
 			reportDaemonStartupFailure(diagnosticStderr, "create data directories", err)
-			return protocol.APIError{Code: protocol.CodeDataFailure, Message: "create mihari data directories"}
+			return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "create mihari data directories"}, err)
 		}
 	}
 
@@ -602,7 +602,7 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 		settings, created, settingsCommit, err = loadSettings(deps.Paths.Settings, sidecar)
 	}
 	if err != nil {
-		failure := protocol.APIError{Code: protocol.CodeDataFailure, Message: "load settings"}
+		failure := diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "load settings"}, err)
 		reportDaemonStartupFailure(diagnosticStderr, "load settings", err)
 		if deps.Listen == nil || errors.Is(err, os.ErrPermission) {
 			return failure
@@ -823,7 +823,7 @@ func daemonLoggingConfig(settings config.Settings) (logging.Config, error) {
 	effective := settings.EffectiveLogging()
 	cfg, err := logging.ConfigFromFields(effective.Level, effective.MaxSizeMB, effective.MaxFiles)
 	if err != nil {
-		return logging.Config{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid logging configuration"}
+		return logging.Config{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid logging configuration"}, err)
 	}
 	return cfg, nil
 }

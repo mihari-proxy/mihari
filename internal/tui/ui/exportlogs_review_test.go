@@ -38,9 +38,23 @@ func TestExportLogsModel_SuccessRemindsReviewBeforeSharing(t *testing.T) {
 	cmd, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m.Update(cmd())
 	view := m.View(120, 35)
-	for _, text := range []string{"Review before sharing", "node names", "domains/IPs", "traffic metadata"} {
+	for _, text := range []string{"Logs are not redacted", "passwords", "access tokens", "subscription URLs"} {
 		if !strings.Contains(view, text) {
 			t.Errorf("missing %q in success view", text)
+		}
+	}
+}
+
+func TestExportLogsModel_DisclosesOriginalContentBeforeExport(t *testing.T) {
+	m := NewExportLogsModel(ExportLogsOptions{})
+	m.Open()
+	for _, pending := range []bool{false, true} {
+		m.pending = pending
+		view := m.View(120, 35)
+		for _, text := range []string{"Logs are not redacted", "passwords", "access tokens"} {
+			if !strings.Contains(view, text) {
+				t.Errorf("missing %q before completion", text)
+			}
 		}
 	}
 }

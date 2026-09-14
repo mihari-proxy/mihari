@@ -25,6 +25,7 @@ type ServiceOptions struct {
 	CatalogPath string
 	CacheDir    string
 	Downloader  Fetcher
+	Reporter    diagnostics.Reporter
 	// ProxyAddr is the mihomo mixed-port address (host:port). When non-empty,
 	// subscriptions with proxy/auto modes fetch through it.
 	ProxyAddr string
@@ -64,7 +65,7 @@ type Receipt struct {
 
 func Open(options ServiceOptions) (*Service, error) {
 	if err := os.MkdirAll(options.CacheDir, 0o700); err != nil {
-		return nil, dataError("create subscription cache directory")
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "create subscription cache directory"}, err)
 	}
 	catalog, err := LoadOrCreate(options.CatalogPath)
 	if err != nil {
@@ -79,7 +80,7 @@ func Open(options ServiceOptions) (*Service, error) {
 				proxyURL = parsed
 			}
 		}
-		downloader = NewDownloader(DownloaderOptions{ProxyURL: proxyURL})
+		downloader = NewDownloader(DownloaderOptions{ProxyURL: proxyURL, Reporter: options.Reporter})
 	}
 	now := options.Now
 	if now == nil {
@@ -97,7 +98,7 @@ func (s *Service) Snapshot() Catalog {
 func (s *Service) Add(name, rawURL, proxyMode string) (Profile, error) {
 	id, err := newProfileID()
 	if err != nil {
-		return Profile{}, protocol.APIError{Code: protocol.CodeInternal, Message: "generate subscription ID"}
+		return Profile{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "generate subscription ID"}, err)
 	}
 	profile := Profile{ID: id, Name: name, URL: rawURL, Enabled: true, AutoRefresh: true, Version: 1, ProxyMode: proxyMode}
 	_, after, err := s.Mutate(func(catalog *Catalog) error {
@@ -140,28 +141,39 @@ func (s *Service) PrepareRefresh(ctx context.Context, id string) (PreparedRefres
 	s.mu.RUnlock()
 	result, err := s.downloader.Fetch(ctx, FetchRequest{URL: profile.URL, ETag: profile.ETag, LastModified: profile.LastModified, Mode: profile.ProxyMode})
 	if err != nil {
-		_ = s.noteRefreshError(id, err)
-		return PreparedRefresh{}, err
+		return PreparedRefresh{}, s.refreshFailure(id, err)
 	}
 	content := result.Content
 	if result.NotModified {
 		content, err = os.ReadFile(s.CachePath(id))
 		if err != nil {
 			fail := diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription provider returned not-modified without a valid cache"}, err)
-			_ = s.noteRefreshError(id, fail)
-			return PreparedRefresh{}, fail
+			return PreparedRefresh{}, s.refreshFailure(id, fail)
 		}
 	}
 	document, err := ParseDocument(content)
 	if err != nil {
-		_ = s.noteRefreshError(id, err)
-		return PreparedRefresh{}, err
+		return PreparedRefresh{}, s.refreshFailure(id, err)
 	}
 	return PreparedRefresh{profileID: id, profileVersion: profile.Version, result: result, document: document}, nil
 }
 
+// refreshFailure preserves both the actual failure and a failed status write.
+// The original public classification and message still describe the operation.
+func (s *Service) refreshFailure(id string, cause error) error {
+	if noteErr := s.noteRefreshError(id, cause); noteErr != nil {
+		joined := errors.Join(cause, fmt.Errorf("record subscription refresh failure: %w", noteErr))
+		var api protocol.APIError
+		if errors.As(cause, &api) {
+			return diagnostics.Wrap(api, joined)
+		}
+		return joined
+	}
+	return cause
+}
+
 // noteRefreshError records a safe last-error on the profile without replacing
-// a valid cache. Failures here are best-effort and do not mask the original error.
+// a valid cache. Its caller keeps failures alongside the original cause.
 func (s *Service) noteRefreshError(id string, cause error) error {
 	message := "subscription refresh failed"
 	var apiError protocol.APIError
@@ -284,7 +296,7 @@ func (s *Service) restoreCache(path string, content []byte, existed, changed boo
 		return config.AtomicWrite(path, content, 0o600)
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return dataError("remove rolled-back subscription cache")
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "remove rolled-back subscription cache"}, err)
 	}
 	return nil
 }

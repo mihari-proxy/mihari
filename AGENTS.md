@@ -64,12 +64,12 @@ Mihari 是面向 Windows、Linux 和 macOS 的 mihomo 本地管理器。它使�
 
 - 所有错误都必须处理。只有在语义上明确安全时才可忽略返回值，并写出原因。
 - 用 `%w` 包装错误并补充操作上下文；调用方需要分类时使用哨兵错误、类型化错误及 `errors.Is`/`errors.As`。
-- 错误信息描述失败的操作和对象，但不得包含凭据、controller secret、订阅 URL token 或敏感配置内容。
+- 公开错误信息描述失败的操作和对象，不包含凭据、controller secret、订阅 URL token 或敏感配置内容；文件诊断保留原始 cause，遵循下述独立策略。
 - 库包不调用 `os.Exit`、`log.Fatal` 或 panic 处理可恢复错误。进程退出只在 `cmd/mihari` 边界完成。
 - 面向协议和 CLI 的错误必须经过既有错误码与退出码映射，不把底层实现文本当作稳定 API。
-- 内部诊断可以保留公开 `APIError` 之外的 cause，供 `errors.Is`/`errors.As` 和受控诊断输出使用；不得把 cause 写入 DTO、JSON envelope、`Message`、`Details`、状态或事件 payload。诊断格式化只在日志边界执行，并必须使用有界、脱敏的摘要。
-- 一次实际 mutation 的最终失败由执行 owner 记录一次；缓存命中和等待同一执行结果不得重复记录。控制 API 仅为尚未由 owner 标记的意外失败兜底。正常取消默认不记录，预期参数/冲突可为 DEBUG，实际未恢复失败为 ERROR。
-- Settings 在替换已提交后的同步 warning 仍是成功结果：保留提交、revision 与内存发布，并在锁外以实际、脱敏原因记录 WARN；不得回滚或把客户端响应改成失败。
+- 内部诊断保留公开 `APIError` 之外的 cause，供 `errors.Is`/`errors.As` 和文件日志使用；不得把 cause 写入普通 DTO、JSON envelope、`Message`、`Details`、状态或事件 payload。诊断格式化只在日志边界执行：保留原文、包装上下文、合并原因及已有堆栈，不脱敏、不额外转储配置文件。诊断文本、HTTP 失败正文、mihomo 逻辑行各限 256 KiB，超限明确标记；JSONL 分片适配既有快照大小上限。
+- 一次实际 mutation 的最终失败由执行 owner 记录一次；缓存命中和等待同一执行结果不得重复记录。控制 API 为尚未由 owner 标记的拒绝及失败兜底。有可用文件 reporter 时，预期参数/冲突和主动取消为 INFO，可重试失败及恢复/同步 warning 为 WARN，实际未恢复失败为 ERROR；遵循配置的日志级别，正常 EOF 不虚构为错误。
+- Settings 在替换已提交后的同步 warning 仍是成功结果：保留提交、revision 与内存发布，并在锁外以实际原始原因记录 WARN；不得回滚或把客户端响应改成失败。
 - 普通 CLI 不创建诊断日志文件，非流式 `--json` 继续只输出既有安全 envelope。logger 建立前的诊断 stderr 仅由 Unix 显式 system-service/launchd 入口或 Windows SCM 的非交互 daemon owner 注入；日志资源自身的写入/关闭失败继续由独立的非 JSON FailureReporter 出口处理，不能递归写回失效 logger。
 
 ### 4.3 Context、并发与生命周期
@@ -87,7 +87,7 @@ Mihari 是面向 Windows、Linux 和 macOS 的 mihomo 本地管理器。它使�
 - 持久化写入使用同目录临时文件、必要的同步与原子替换，并保留最后一个有效版本用于回滚。
 - 创建文件、目录、Unix socket 和凭据时使用最小权限；Windows 使用等价 ACL 语义。
 - 外部下载必须设置超时和大小上限，校验 HTTP 状态；归档解压必须拒绝绝对路径、路径穿越和链接逃逸。
-- 日志、事件、默认 CLI 输出和测试失败信息都不得泄露 secrets、tokens 或完整订阅 URL。
+- 文件日志、日志快照和导出保留原文，包括错误自带的 secrets、tokens、URL、配置片段与路径；导出页在开始前和成功后以红色文字说明未脱敏。事件、普通状态/API、默认 CLI 输出仍不得泄露凭据；独立 FailureReporter 的终端输出策略保持不变。测试只使用合成凭据与临时目录，不读取或打印真实用户秘密。
 - 新网络监听默认绑定 loopback；任何扩大暴露面的行为都需显式设计与用户批准。
 
 ## 5. 测试驱动开发流程

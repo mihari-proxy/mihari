@@ -28,26 +28,68 @@ type runPreparedUpdater struct {
 func newRunPreparedUpdater(u systempage.PreparedSelfUpdater) *runPreparedUpdater {
 	return &runPreparedUpdater{PreparedSelfUpdater: u, cancels: map[uint64]context.CancelFunc{}}
 }
+
+// liveUpdater borrows the reporter only for requests made before TUI cleanup.
+// ApplyPrepared still uses the original updater after the logger has closed.
+func (w *runPreparedUpdater) liveUpdater() systempage.PreparedSelfUpdater {
+	switch u := w.PreparedSelfUpdater.(type) {
+	case update.SelfUpdater:
+		u.Reporter = w.diagnostics.Reporter
+		return u
+	case *update.SelfUpdater:
+		if u != nil {
+			copy := *u
+			copy.Reporter = w.diagnostics.Reporter
+			return copy
+		}
+	}
+	return w.PreparedSelfUpdater
+}
+
+func (w *runPreparedUpdater) Check(ctx context.Context, current, channel string) (update.CheckResult, error) {
+	child, updater, finish, err := w.begin(ctx, "self.check")
+	if err != nil {
+		return update.CheckResult{}, err
+	}
+	defer finish()
+	return updater.Check(child, current, channel)
+}
+
 func (w *runPreparedUpdater) Prepare(ctx context.Context, binary, current, channel string) (update.PreparedUpdate, error) {
+	child, updater, finish, err := w.begin(ctx, "self.prepare")
+	if err != nil {
+		return update.PreparedUpdate{}, err
+	}
+	defer finish()
+	prepared, err := updater.Prepare(child, binary, current, channel)
+	w.mu.Lock()
+	w.candidates = append(w.candidates, prepared)
+	w.mu.Unlock()
+	return prepared, w.diagnostics.ReportFailure(child, "self.prepare.failed", err)
+}
+
+func (w *runPreparedUpdater) begin(ctx context.Context, operation string) (context.Context, systempage.PreparedSelfUpdater, func(), error) {
 	child, cancel := context.WithCancel(ctx)
 	w.mu.Lock()
 	if w.closing {
 		w.mu.Unlock()
 		cancel()
-		return update.PreparedUpdate{}, context.Canceled
+		return nil, nil, nil, context.Canceled
 	}
 	w.next++
 	id := w.next
 	w.cancels[id] = cancel
 	w.workers.Add(1)
+	updater := w.liveUpdater()
 	w.mu.Unlock()
-	defer func() { cancel(); w.mu.Lock(); delete(w.cancels, id); w.mu.Unlock(); w.workers.Done() }()
-	child = w.diagnostics.Context(child, "self.prepare")
-	prepared, err := w.PreparedSelfUpdater.Prepare(child, binary, current, channel)
-	w.mu.Lock()
-	w.candidates = append(w.candidates, prepared)
-	w.mu.Unlock()
-	return prepared, w.diagnostics.ReportFailure(child, "self.prepare.failed", err)
+	finish := func() {
+		cancel()
+		w.mu.Lock()
+		delete(w.cancels, id)
+		w.mu.Unlock()
+		w.workers.Done()
+	}
+	return w.diagnostics.Context(child, operation), updater, finish, nil
 }
 func (w *runPreparedUpdater) shutdown() {
 	w.mu.Lock()

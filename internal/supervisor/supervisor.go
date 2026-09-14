@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync/atomic"
 	"time"
@@ -291,6 +292,9 @@ func (s *Supervisor) monitor(ctx context.Context, pid int, restarts uint64, fail
 	for {
 		err := s.options.Health(ctx)
 		if err == nil {
+			if failures > 0 {
+				s.report(ctx, "core.health.recovered", slog.LevelInfo, nil)
+			}
 			failures = 0
 			if !runningPublished {
 				runningPublished = true
@@ -306,6 +310,8 @@ func (s *Supervisor) monitor(ctx context.Context, pid int, restarts uint64, fail
 				}
 				return
 			}
+			level, _ := diagnostics.FailureLevel(ctx, err)
+			s.report(ctx, "core.health.retry", min(level, slog.LevelWarn), fmt.Errorf("health attempt %d of 3: %w", failures, err))
 		}
 		if err := s.options.Waiter.Wait(ctx, s.options.HealthInterval); err != nil {
 			return

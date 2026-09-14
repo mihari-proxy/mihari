@@ -19,6 +19,16 @@ type Record struct {
 // Reporter records an internal diagnostic event at an owning boundary.
 type Reporter func(context.Context, Record)
 
+// NormalCancellation reports whether only cancellation caused an ended operation.
+// It lets non-log failure callbacks retain their shutdown semantics.
+func NormalCancellation(ctx context.Context, err error) bool {
+	if err == nil || ctx == nil || ctx.Err() == nil {
+		return false
+	}
+	classification := inspectFailure(err)
+	return classification.cancellation && !classification.actual && !classification.expected
+}
+
 // FailureLevel classifies an operation failure for diagnostic logging.
 func FailureLevel(ctx context.Context, err error) (slog.Level, bool) {
 	if err == nil {
@@ -30,10 +40,10 @@ func FailureLevel(ctx context.Context, err error) (slog.Level, bool) {
 		return slog.LevelError, true
 	}
 	if classification.expected {
-		return slog.LevelDebug, true
+		return slog.LevelInfo, true
 	}
 	if ctx != nil && ctx.Err() != nil {
-		return 0, false
+		return slog.LevelInfo, true
 	}
 	return slog.LevelError, true
 }

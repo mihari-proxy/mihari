@@ -132,6 +132,7 @@ func TestUpdate_PreCommitFailureKeepsMemory(t *testing.T) {
 func TestUpdate_PostCommitWarningPublishesAndReportsStableWarning(t *testing.T) {
 	var calls int
 	var warnings []error
+	warningCause := errors.New("C:\\sensitive\\onboarding.json")
 	service, err := Open(Options{
 		StatePath:            filepath.Join(t.TempDir(), "onboarding.json"),
 		InitialSetupRequired: true,
@@ -140,7 +141,7 @@ func TestUpdate_PostCommitWarningPublishesAndReportsStableWarning(t *testing.T) 
 			if calls == 1 {
 				return config.CommitResult{Committed: true}, nil
 			}
-			return config.CommitResult{Committed: true, Warning: errors.New("C:\\sensitive\\onboarding.json")}, nil
+			return config.CommitResult{Committed: true, Warning: warningCause}, nil
 		},
 		OnPersistenceWarning: func(err error) { warnings = append(warnings, err) },
 	})
@@ -155,7 +156,7 @@ func TestUpdate_PostCommitWarningPublishesAndReportsStableWarning(t *testing.T) 
 	if !got.Complete || !service.State().Complete {
 		t.Fatalf("committed warning did not publish state: got=%#v service=%#v", got, service.State())
 	}
-	if len(warnings) != 1 || warnings[0].Error() != "onboarding parent directory sync failed after commit" {
+	if len(warnings) != 1 || !errors.Is(warnings[0], warningCause) {
 		t.Fatalf("warnings=%v", warnings)
 	}
 }

@@ -10,10 +10,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
+
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 //go:embed supported_policy.json
@@ -104,7 +107,7 @@ func (r ProvenanceReceipt) validate(ctx context.Context) error {
 	return nil
 }
 
-func (i Installer) prepareTrusted(ctx context.Context, request InstallRequest) (PreparedCore, error) {
+func (i Installer) prepareTrusted(ctx context.Context, request InstallRequest) (prepared PreparedCore, resultErr error) {
 	channel := request.Channel
 	if channel == "" {
 		channel = "stable"
@@ -121,7 +124,7 @@ func (i Installer) prepareTrusted(ctx context.Context, request InstallRequest) (
 		// The recorded version alone is not authority. Recheck the installed
 		// receipt, bytes and version before treating this install as a no-op.
 		if version, ready := i.localReadyVersion(ctx, request.BinaryPath); ready && version == a.Tag {
-			return &Candidate{version: version}, nil
+			return &Candidate{version: version, reporter: i.Reporter}, nil
 		}
 		if e := ctx.Err(); e != nil {
 			return nil, e
@@ -139,11 +142,11 @@ func (i Installer) prepareTrusted(ctx context.Context, request InstallRequest) (
 	req.Header.Set("User-Agent", "mihari")
 	response, e := i.httpClient().Do(req)
 	if e != nil {
-		return nil, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download trusted mihomo core failed"}
+		return nil, coreHTTPError(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download trusted mihomo core failed"}, "core GET trusted asset", a.URL, "transport", nil, e)
 	}
-	defer response.Body.Close()
+	defer closeCoreResponse(ctx, response, "core GET trusted asset", a.URL, &resultErr, i.Reporter)
 	if response.StatusCode != http.StatusOK {
-		return nil, dataFailure("trusted core download status")
+		return nil, coreHTTPError(protocol.APIError{Code: protocol.CodeDataFailure, Message: "trusted core download status"}, "core GET trusted asset", a.URL, "response", response, nil)
 	}
 	archive, e := io.ReadAll(io.LimitReader(response.Body, maxCoreArchiveSize+1))
 	if e != nil {
@@ -164,11 +167,14 @@ func (i Installer) prepareTrustedAsset(ctx context.Context, a supportedAsset, ar
 	}
 	reader, e := gzip.NewReader(bytes.NewReader(archive))
 	if e != nil {
-		return nil, dataFailure("invalid trusted core archive")
+		return nil, dataFailureCause("invalid trusted core archive", e)
 	}
 	defer reader.Close()
 	binary, e := io.ReadAll(io.LimitReader(reader, maxCoreBinarySize+1))
-	if e != nil || len(binary) == 0 || len(binary) > maxCoreBinarySize {
+	if e != nil {
+		return nil, dataFailureCause("invalid trusted core binary", e)
+	}
+	if len(binary) == 0 || len(binary) > maxCoreBinarySize {
 		return nil, dataFailure("invalid trusted core binary")
 	}
 	return i.stageTrustedBinary(ctx, a, binary)
@@ -185,7 +191,7 @@ func (i Installer) stageTrustedBinary(ctx context.Context, a supportedAsset, bin
 	if e != nil {
 		return nil, e
 	}
-	c := &Candidate{updated: true, version: a.Tag, trusted: &trustedCandidate{store: s, transaction: tx}}
+	c := &Candidate{updated: true, version: a.Tag, trusted: &trustedCandidate{store: s, transaction: tx}, reporter: i.Reporter}
 	defer func() {
 		if err != nil {
 			c.cleanupTrusted()
@@ -220,8 +226,11 @@ func (i Installer) stageTrustedBinary(ctx context.Context, a supportedAsset, bin
 	}
 	defer func() { _ = v.Close() }() // Read-only capability: no pending writes; closure cannot change the operation result.
 	version, e := DetectVerifiedVersion(ctx, v, i.Executor)
-	if e != nil || version != a.Tag {
-		return nil, dataFailure("trusted core version mismatch")
+	if e != nil {
+		return nil, dataFailureCause("trusted core version mismatch", e)
+	}
+	if version != a.Tag {
+		return nil, dataFailureCause("trusted core version mismatch", fmt.Errorf("trusted core reported version %q, expected %q", version, a.Tag))
 	}
 	configuration, e := i.GeneratedConfig(ctx)
 	if e != nil {
@@ -263,13 +272,16 @@ func (c *Candidate) commitTrusted() (InstallResult, error) {
 	}
 	recovery := recoverProvenance(ctx, t.store)
 	if recovery != nil {
-		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "core pair recovery failed; execution prohibited", Details: map[string]any{"degraded": true}}
+		return InstallResult{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "core pair recovery failed; execution prohibited", Details: map[string]any{"degraded": true}}, errors.Join(e, journalErr, recovery))
 	}
 	t.mu.Lock()
 	t.closed = true
 	t.mu.Unlock()
 	if e != nil && !committed {
 		return InstallResult{}, e
+	}
+	if warning := errors.Join(e, journalErr); warning != nil && c.reporter != nil {
+		c.reporter(ctx, diagnostics.Record{Component: "core", Event: "provenance.recovered", Level: slog.LevelWarn, Err: warning})
 	}
 	return InstallResult{Version: c.version, Updated: true}, nil
 }
@@ -281,16 +293,22 @@ func (c *Candidate) cleanupTrusted() {
 	ctx := context.Background()
 	release, e := t.store.coreStore().execution().acquire(ctx)
 	if e != nil {
+		c.reportCleanup("acquire cleanup ownership", e)
 		return
 	}
 	defer release()
 	if _, e := t.store.Load(ctx, PairJournal, ""); !errors.Is(e, os.ErrNotExist) {
+		if e != nil {
+			c.reportCleanup("inspect cleanup journal", e)
+		}
 		return
 	}
 	for r, expected := range t.retired {
 		o, e := t.store.Inspect(ctx, r, t.transaction)
 		if e == nil && o.Present && sameObject(o, expected) {
-			_ = t.store.Apply(ctx, ProvenanceMutation{Role: r, Transaction: t.transaction, Expected: o})
+			c.reportCleanup("remove retired core object", t.store.Apply(ctx, ProvenanceMutation{Role: r, Transaction: t.transaction, Expected: o}))
+		} else if e != nil {
+			c.reportCleanup("inspect retired core object", e)
 		}
 	}
 	// A pending or unreadable journal retains everything. Fixed-role cleanup
@@ -301,10 +319,20 @@ func (c *Candidate) cleanupTrusted() {
 		expected ProvenanceObject
 	}{{CandidateBinary, t.binary}, {CandidateReceipt, t.receipt}, {TransactionMarker, t.marker}} {
 		o, e := t.store.Inspect(ctx, item.r, t.transaction)
-		if e != nil || !o.Present || !sameObject(o, item.expected) {
+		if e != nil {
+			c.reportCleanup("inspect core candidate cleanup", e)
 			continue
 		}
-		_ = t.store.Apply(ctx, ProvenanceMutation{Role: item.r, Transaction: t.transaction, Expected: o})
+		if !o.Present || !sameObject(o, item.expected) {
+			continue
+		}
+		c.reportCleanup("remove core candidate object", t.store.Apply(ctx, ProvenanceMutation{Role: item.r, Transaction: t.transaction, Expected: o}))
+	}
+}
+
+func (c *Candidate) reportCleanup(operation string, err error) {
+	if err != nil && c != nil && c.reporter != nil {
+		c.reporter(context.Background(), diagnostics.Record{Component: "core", Event: "candidate.cleanup.failed", Level: slog.LevelWarn, Err: fmt.Errorf("%s: %w", operation, err)})
 	}
 }
 

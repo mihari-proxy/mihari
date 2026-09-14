@@ -71,16 +71,15 @@ func TestJSONHandler_FormatAndComponent(t *testing.T) {
 				t.Fatalf("level = %v", payload["level"])
 			}
 			msg, _ := payload["msg"].(string)
-			if msg != "hello ***" {
+			if msg != "hello "+testWebCredential {
 				t.Fatalf("msg = %q", msg)
 			}
-			encoded := line
-			assertNotContains(t, encoded, testWebCredential, "should-hide", "nested-pass", "example.test")
-			if !strings.Contains(encoded, `"token":"***"`) {
-				t.Fatalf("token attr not redacted: %s", encoded)
+			if payload["token"] != "should-hide" || payload["url"] != "https://example.test/path" {
+				t.Fatal("file attributes must retain original values")
 			}
-			if !strings.Contains(encoded, `[REDACTED_URL]`) {
-				t.Fatalf("url attr not redacted: %s", encoded)
+			nested, ok := payload["nested"].(map[string]any)
+			if !ok || nested["password"] != "nested-pass" {
+				t.Fatal("nested attribute was changed")
 			}
 		})
 	}
@@ -99,7 +98,7 @@ func TestJSONHandler_LevelVarFilters(t *testing.T) {
 	}
 }
 
-func TestJSONHandler_SensitiveParentGroupsReplaceWholeValue(t *testing.T) {
+func TestJSONHandler_SensitiveParentGroupsPreserveWholeValue(t *testing.T) {
 	tests := []struct {
 		name   string
 		parent string
@@ -136,13 +135,15 @@ func TestJSONHandler_SensitiveParentGroupsReplaceWholeValue(t *testing.T) {
 			}
 
 			encoded := buf.String()
-			assertNotContains(t, encoded, "hunter-two", "nested-hunter-two", "valuer-hunter-two", "valuer-nested-hunter-two")
+			if !strings.Contains(encoded, "hunter-two") {
+				t.Fatal("group values were removed")
+			}
 			var payload map[string]any
 			if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &payload); err != nil {
 				t.Fatalf("decode JSON: %v in %q", err, encoded)
 			}
-			if got := payload[test.parent]; got != "***" {
-				t.Fatalf("%s = %#v, want whole sensitive value replaced with ***", test.parent, got)
+			if got, ok := payload[test.parent].(map[string]any); !ok || got["detail"] == nil {
+				t.Fatalf("%s lost its nested structure", test.parent)
 			}
 		})
 	}

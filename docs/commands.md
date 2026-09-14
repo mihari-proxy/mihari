@@ -80,13 +80,15 @@ TUI 的 System 页面提供 Logging 区，可修改由守护进程持有的级�
 
 日志导出只在 TUI 中提供：Logs 页按 `e`，或在 System → Logging 选择 **Export logs**。可选最近 24 小时、最近 60 分钟、本地时间区间或全部记录。Unix 默认目录是本用户的 `U/logs-export/`（Windows/私有 P 保留原目录）；自定义目标必须是既有目录内的绝对 `.zip` 路径。导出永不覆盖已有文件，默认重名时自动编号。
 
-Unix 系统导出使用 mihari-logs-export/v2，组合认证机器快照与本用户日志，离线必须明确选择仅本用户日志；Windows/显式私有 P 保持本地 v1。zip 固定使用 `manifest.json`、`daemon/mihari-daemon.log`、`tui/mihari-tui.log`、`mihomo/mihomo.log` 这些 entry，某来源无匹配记录时省略对应日志 entry。每条记录会递归二次脱敏并重新编码。自动遮蔽不保证移除节点名、目标域名/IP 或流量元数据，发送前必须自查这些内容。
+Unix 系统导出使用 mihari-logs-export/v2，组合认证机器快照与本用户日志，离线必须明确选择仅本用户日志；Windows/显式私有 P 保持本地 v1。zip 固定使用 `manifest.json`、`daemon/mihari-daemon.log`、`tui/mihari-tui.log`、`mihomo/mihomo.log` 这些 entry，某来源无匹配记录时省略对应日志 entry。文件日志、快照与导出均不脱敏，错误自带的密码、访问令牌、完整 URL、配置片段及路径会保留；导出开始前及完成后都有红色说明，分享前应自行检查。
 
 Unix 自定义目标的同 UID 进程和本机 root/管理员属于受信主体。不可信共享父目录下，若内容已清理，仍可能留下空的 0700 私有 workspace；若清理 IO 失败，界面会报告可能存在内容残留。导出持有目标父目录 identity，生成期间替换父路径会安全失败而不会跟随；发布后外部再次改名目标目录，可能使已显示路径失效。
 
 旧版二进制以 `KnownFields(true)` 严格解码 `mihari.yaml`，不能读取非默认的 `log:` 块。降级前应在 System → Logging 恢复 `info` / 10 MiB / 3 份文件，使该块自动移除；也可以先备份设置文件后手动删除 `log:`。
 
-日志脱敏是尽力而为，所有日志与导出包仍须按敏感资料处理。
+诊断文本、HTTP 失败正文和 mihomo 单个逻辑输出行各限 256 KiB，超出明确标记截断。最坏 JSON 转义可能使一条逻辑诊断分成多条 JSONL；通过 `record_id`、`fragment_index`、`fragment_count` 关联和重组，缺片可识别。历史脱敏日志无法恢复原文，旧客户端仍可能按旧策略处理导出。
+
+普通 CLI 不创建或探测日志文件；当前执行路径已有可用文件 logger/reporter 时记录，否则跳过。预期拒绝和主动取消为 INFO、重试和可恢复警告为 WARN、最终未恢复失败为 ERROR，均遵循用户配置的级别。用户提示与日志原文独立。
 
 ## 核心与代理管理
 

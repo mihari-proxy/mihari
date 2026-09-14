@@ -44,19 +44,19 @@ func TestMachineSnapshot_FixedPrefixesWindowAndExactStats(t *testing.T) {
 		t.Fatal("Finish succeeded before EOF")
 	}
 	payload, changed, err := reader.Next(context.Background())
-	if err != nil || !changed || strings.Contains(string(payload), "old-secret-value") {
-		t.Fatalf("bad payload/redaction: %v", err)
+	if err != nil || changed || !strings.Contains(string(payload), "old-secret-value") {
+		t.Fatalf("original payload was not preserved: %v", err)
 	}
 	var decoded map[string]any
-	if err := json.Unmarshal(payload, &decoded); err != nil || decoded["msg"] != "***" {
-		t.Fatal("record not redacted")
+	if err := json.Unmarshal(payload, &decoded); err != nil || decoded["msg"] != "old-secret-value" {
+		t.Fatal("record lost original message")
 	}
 	digest := sha256.Sum256(append(append([]byte(nil), payload...), '\n'))
 	if _, _, err := reader.Next(context.Background()); !errors.Is(err, io.EOF) {
 		t.Fatalf("want prefix EOF, got %v", err)
 	}
 	stats, err := reader.Finish(context.Background())
-	if err != nil || stats.Lines != 1 || stats.Redacted != 1 || stats.SkippedInvalid != 1 || stats.Bytes != int64(len(payload)+1) || stats.SHA256 != hex.EncodeToString(digest[:]) {
+	if err != nil || stats.Lines != 1 || stats.Redacted != 0 || stats.SkippedInvalid != 1 || stats.Bytes != int64(len(payload)+1) || stats.SHA256 != hex.EncodeToString(digest[:]) {
 		t.Fatalf("wrong stats: %+v %v", stats, err)
 	}
 	if len(stats.Files) != 1 || stats.Files[0] != "mihari-daemon.log" {
@@ -136,7 +136,7 @@ func TestMachineSnapshot_RetainsInitialAndNewSecrets(t *testing.T) {
 	for _, next := range []string{"later-secret", "newest-secret"} {
 		redactor.ReplaceExact([]string{next})
 		payload, changed, err := reader.Next(context.Background())
-		if err != nil || !changed || strings.Contains(string(payload), "-secret") {
+		if err != nil || changed || !strings.Contains(string(payload), next) || !strings.Contains(string(payload), "initial-secret") {
 			t.Fatalf("secrets not retained: changed=%v err=%v", changed, err)
 		}
 	}
@@ -165,7 +165,7 @@ func TestMachineSnapshot_RetainsSecretsReplacedBetweenReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload, changed, err := reader.Next(context.Background())
-	if err != nil || !changed || strings.Contains(string(payload), "temporary-secret") {
+	if err != nil || changed || !strings.Contains(string(payload), "temporary-secret") {
 		t.Fatalf("secret replaced between reads was not retained: changed=%v err=%v", changed, err)
 	}
 }

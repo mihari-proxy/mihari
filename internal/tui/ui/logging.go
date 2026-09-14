@@ -63,7 +63,10 @@ func (d LocalTaskDiagnostics) NewContext(ctx context.Context, name string) conte
 	}
 	ctx = logging.WithOperation(ctx, operation)
 	if operation.ID == "" && d.Reporter != nil {
-		d.Reporter(ctx, diagnostics.Record{Component: "tui", Event: "local_task.id_generation_failed", Level: slog.LevelWarn, Err: errors.New("diagnostic identity unavailable")})
+		if err == nil {
+			err = errors.New("diagnostic identity unavailable")
+		}
+		d.Reporter(ctx, diagnostics.Record{Component: "tui", Event: "local_task.id_generation_failed", Level: slog.LevelWarn, Err: err})
 	}
 	return ctx
 }

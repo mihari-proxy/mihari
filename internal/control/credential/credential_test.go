@@ -1,6 +1,7 @@
 package credential
 
 import (
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -47,5 +48,9 @@ func TestLoadRejectsMalformedCredential(t *testing.T) {
 	var apiError protocol.APIError
 	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure {
 		t.Fatalf("error=%T %v", err, err)
+	}
+	var corrupt hex.InvalidByteError
+	if !errors.As(err, &corrupt) {
+		t.Fatalf("hex parser cause lost: %v", err)
 	}
 }

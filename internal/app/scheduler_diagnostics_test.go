@@ -114,8 +114,8 @@ func TestSchedulerSubscriptionRefresh_RetryUsesFreshContextAndExecution(t *testi
 			t.Fatalf("record=%v", record)
 		}
 	}
-	if !strings.Contains(records[0]["cause"].(string), "path operation read: permission denied") || strings.Contains(output.String(), "scheduler-secret") || strings.Contains(output.String(), "example.invalid") {
-		t.Fatal("unsafe or missing failure cause")
+	if !strings.Contains(records[0]["cause"].(string), "read /private/scheduler-secret: permission denied") || !strings.Contains(output.String(), "example.invalid") {
+		t.Fatal("original scheduler failure cause missing")
 	}
 	if !service.Snapshot().Public().Profiles[0].Cached {
 		t.Fatal("retry did not commit cache")
@@ -263,6 +263,7 @@ func TestRunSchedulers_FailureClassificationAndLegacy(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				calls := 0
+				subscriptionCancellations := 0
 				check := func(component string, err error) {
 					calls++
 					if component != "geoip-scheduler" || err != test.err {
@@ -274,7 +275,18 @@ func TestRunSchedulers_FailureClassificationAndLegacy(t *testing.T) {
 				callback := check
 				if !legacy {
 					reporter = func(_ context.Context, record diagnostics.Record) {
-						if record.Level != slog.LevelError || record.Event != "background.failed" {
+						if record.Component == "subscription-scheduler" {
+							subscriptionCancellations++
+							if record.Level != slog.LevelInfo || record.Event != "background.failed" || !errors.Is(record.Err, context.Canceled) {
+								t.Error("sibling cancellation diagnostic changed")
+							}
+							return
+						}
+						wantLevel := slog.LevelError
+						if test.name == "cancel" {
+							wantLevel = slog.LevelInfo
+						}
+						if record.Level != wantLevel || record.Event != "background.failed" {
 							t.Error("failure event/level changed")
 						}
 						check(record.Component, record.Err)
@@ -287,8 +299,15 @@ func TestRunSchedulers_FailureClassificationAndLegacy(t *testing.T) {
 					}
 					return test.err
 				}, reporter, callback)
-				if err != nil || calls != test.want {
-					t.Fatalf("Run=%v calls=%d want=%d", err, calls, test.want)
+				want := test.want
+				if !legacy && test.name == "cancel" {
+					want = 1
+				}
+				if err != nil || calls != want {
+					t.Fatalf("Run=%v calls=%d want=%d", err, calls, want)
+				}
+				if !legacy && subscriptionCancellations != 1 {
+					t.Fatalf("sibling cancellation records=%d want=1", subscriptionCancellations)
 				}
 			})
 		}
@@ -348,7 +367,7 @@ func TestSchedulerGeoIPRefresh_FailureStillChecksNextRound(t *testing.T) {
 		t.Fatalf("checks=%d ids=%v candidate=%+v", checks, ids, candidate)
 	}
 	records := decodeSchedulerDiagnostics(t, output.String())
-	if len(records) != 1 || records[0]["msg"] != "operation.failed" || records[0]["operation_id"] != ids[0] || records[0]["operation"] != "geoip.update" || records[0]["cause"] != "api error (internal): permission denied" {
+	if len(records) != 1 || records[0]["msg"] != "operation.failed" || records[0]["operation_id"] != ids[0] || records[0]["operation"] != "geoip.update" || !strings.Contains(records[0]["cause"].(string), "prepare GeoIP databases: permission denied") {
 		t.Fatalf("records=%v", records)
 	}
 }

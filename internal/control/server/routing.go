@@ -43,7 +43,7 @@ func (s *Server) updateRouting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body protocol.RoutingUpdateRequest
-	if !decodeControlJSON(w, r, &body) || !requireOperationID(w, body.OperationID) {
+	if !s.decodeControlJSON(w, r, &body) || !s.requireOperationID(r.Context(), w, body.OperationID) {
 		return
 	}
 	if !protocol.ValidRoutingMode(body.Mode) {

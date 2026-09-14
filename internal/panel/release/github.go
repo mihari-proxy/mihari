@@ -4,12 +4,15 @@ package release
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 const (
@@ -42,6 +45,8 @@ type Branch struct {
 type Client struct {
 	HTTPClient *http.Client
 	APIBase    string
+	// Reporter borrows an existing file diagnostic outlet for resource warnings.
+	Reporter diagnostics.Reporter
 }
 
 func defaultHTTPClient() *http.Client {
@@ -70,7 +75,7 @@ func (c Client) LatestRelease(ctx context.Context, owner, repo string) (Release,
 		return Release{}, err
 	}
 	if release.TagName == "" {
-		return Release{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid github release response"}
+		return Release{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid github release response"}, errors.New("github release response is missing tag_name"))
 	}
 	return release, nil
 }
@@ -83,7 +88,7 @@ func (c Client) BranchTip(ctx context.Context, owner, repo, branch string) (stri
 		return "", err
 	}
 	if tip.Commit.SHA == "" {
-		return "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid github branch response"}
+		return "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid github branch response"}, errors.New("github branch response is missing commit SHA"))
 	}
 	return tip.Commit.SHA, nil
 }
@@ -98,35 +103,50 @@ func ArchiveURL(apiBase, owner, repo, ref string) string {
 	return base + "/repos/" + owner + "/" + repo + "/zipball/" + ref
 }
 
-func (c Client) getJSON(ctx context.Context, url string, dest any) error {
+func (c Client) getJSON(ctx context.Context, url string, dest any) (resultErr error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeInternal, Message: "create github request"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "create github request"}, err)
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	request.Header.Set("User-Agent", "mihari")
 	response, err := c.httpClient().Do(request)
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch github resource failed"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch github resource failed"}, &diagnostics.HTTPError{Operation: "github GET resource", URL: url, Phase: "transport", Cause: err})
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			detail := &diagnostics.HTTPError{Operation: "github GET resource", URL: url, Phase: "close", Status: response.StatusCode, Cause: err}
+			if resultErr != nil {
+				var api protocol.APIError
+				if errors.As(resultErr, &api) {
+					resultErr = diagnostics.Wrap(api, errors.Join(resultErr, detail))
+				}
+			} else if c.Reporter != nil {
+				if level, emit := diagnostics.FailureLevel(ctx, detail); emit {
+					c.Reporter(ctx, diagnostics.Record{Component: "panel.release", Event: "http.close.failed", Level: min(level, slog.LevelWarn), Err: detail})
+				}
+			}
+		}
+	}()
 	if response.StatusCode != http.StatusOK {
-		return protocol.APIError{
+		raw, readErr := io.ReadAll(io.LimitReader(response.Body, diagnostics.MaxHTTPBodyBytes+1))
+		return diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeNetworkFailure,
 			Message: "fetch github resource failed",
 			Details: map[string]any{"status": response.StatusCode},
-		}
+		}, &diagnostics.HTTPError{Operation: "github GET resource", URL: url, Phase: "response", Status: response.StatusCode, Body: diagnostics.HTTPBody(raw), Cause: readErr})
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseSize+1))
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read github resource failed"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read github resource failed"}, &diagnostics.HTTPError{Operation: "github GET resource", URL: url, Phase: "read", Status: response.StatusCode, Cause: err})
 	}
 	if len(raw) > maxResponseSize {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "github response is too large"}
 	}
 	if err := json.Unmarshal(raw, dest); err != nil {
-		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid github response"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid github response"}, &diagnostics.HTTPError{Operation: "github GET resource", URL: url, Phase: "decode", Status: response.StatusCode, Body: diagnostics.HTTPBody(raw), Cause: err})
 	}
 	return nil
 }

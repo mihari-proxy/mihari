@@ -43,7 +43,7 @@ func (s *Server) updateTUIPreferences(writer http.ResponseWriter, request *http.
 		return
 	}
 	var body protocol.UpdateTUIPreferencesRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	updated, err := runtime.UpdateTUIPreferences(request.Context(), runtimeapi.Operation{

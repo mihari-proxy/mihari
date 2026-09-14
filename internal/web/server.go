@@ -70,8 +70,10 @@ type Server struct {
 	httpServer *http.Server
 	sessions   atomic.Int64
 	wsObserver webSocketRelayObserver
+	statPath   func(string) (fs.FileInfo, error)
 	mu         sync.Mutex
 	serving    bool
+	shutdown   time.Duration
 }
 
 // Options configures a Web gateway server.
@@ -107,7 +109,7 @@ func New(options Options) (*Server, error) {
 	server := &Server{
 		Addr: options.Addr, Auth: options.Auth, Proxy: proxy,
 		ControllerURL: options.ControllerURL, ControllerSecret: options.ControllerSecret,
-		Panel: options.Panel, Mutator: options.Mutator, HTTPClient: client, Reporter: options.Reporter,
+		Panel: options.Panel, Mutator: options.Mutator, HTTPClient: client, Reporter: options.Reporter, shutdown: 5 * time.Second,
 	}
 	server.httpServer = &http.Server{
 		Handler:           server.handler(),
@@ -139,11 +141,11 @@ func (s *Server) ListenAddr() string {
 func (s *Server) Serve(ctx context.Context) error {
 	listener, err := net.Listen("tcp", s.Addr)
 	if err != nil {
-		return protocol.APIError{
+		return diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeInvalidState,
 			Message: "web gateway address is unavailable",
 			Details: map[string]any{"setting": "web-addr", "address": s.Addr},
-		}
+		}, err)
 	}
 	s.mu.Lock()
 	s.listener = listener
@@ -162,10 +164,13 @@ func (s *Server) Serve(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.shutdown)
 		defer cancel()
-		_ = s.httpServer.Shutdown(shutdownCtx)
-		return <-errCh
+		shutdownErr := s.httpServer.Shutdown(shutdownCtx)
+		if shutdownErr != nil {
+			shutdownErr = errors.Join(shutdownErr, s.httpServer.Close())
+		}
+		return errors.Join(<-errCh, shutdownErr)
 	case err := <-errCh:
 		return err
 	}
@@ -227,6 +232,7 @@ func (s *Server) handler() http.Handler {
 			// and Workbox precaches index.html the same way. Gate only API/WS/mutations;
 			// any non-API GET/HEAD serves static without a session.
 			if looksLikeAPIPath(normalizeAPIPath(r.URL.Path)) || isUpgradeRequest(r) {
+				s.reportRequestRejection(r.Context(), fmt.Errorf("gateway authentication required for %s %s", r.Method, r.URL))
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -250,7 +256,7 @@ func (s *Server) handler() http.Handler {
 			s.proxyWebSocket(w, r)
 			return
 		case ActionRejectUpgrade, ActionRejectManaged, ActionRejectUnknown:
-			s.reportMutationRejection(r.Context(), nil)
+			s.reportMutationRejection(r.Context(), fmt.Errorf("gateway rejected %s %s: action=%v", r.Method, r.URL, action))
 			WriteReject(w, action)
 			return
 		case ActionMutateSelectProxy, ActionMutateClose, ActionMutateDelayTest, ActionMutateRestart, ActionMutateConfigs:
@@ -271,11 +277,13 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 		s.writeLogin(w, r)
 	case http.MethodPost:
 		if err := r.ParseForm(); err != nil {
+			s.reportRequestRejection(r.Context(), err)
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
 		password := r.FormValue("password")
 		if !s.Auth.AuthenticateForm(password) {
+			s.reportRequestRejection(r.Context(), errors.New("gateway password authentication failed"))
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -286,6 +294,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Redirect(w, r, next, http.StatusFound)
 	default:
+		s.reportRequestRejection(r.Context(), fmt.Errorf("gateway authentication method %s is unsupported", r.Method))
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
@@ -325,7 +334,12 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 	mountPrefix := ""
 	if panelID := panelIDFromPath(reqPath); panelID != "" {
 		root, err := s.Panel.PanelDir(panelID)
-		if err != nil || root == "" {
+		if err != nil {
+			reportFailure(r.Context(), s.Reporter, "static.failed", err)
+			http.Error(w, "panel is not installed", http.StatusNotFound)
+			return
+		}
+		if root == "" {
 			http.Error(w, "panel is not installed", http.StatusNotFound)
 			return
 		}
@@ -347,7 +361,12 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 		}
 		if fileRoot == "" {
 			root, err := s.Panel.ActiveDir()
-			if err != nil || root == "" {
+			if err != nil {
+				reportFailure(r.Context(), s.Reporter, "static.failed", err)
+				http.Error(w, "no active panel", http.StatusServiceUnavailable)
+				return
+			}
+			if root == "" {
 				http.Error(w, "no active panel", http.StatusServiceUnavailable)
 				return
 			}
@@ -356,10 +375,14 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 	}
 	// ResolveFileRoot already prefers dist/ and nested index; keep a defensive dist check
 	// for PanelSource implementations that return the raw build directory.
-	if info, err := os.Stat(filepath.Join(fileRoot, "dist")); err == nil && info.IsDir() {
-		if _, err := os.Stat(filepath.Join(fileRoot, "dist", "index.html")); err == nil {
+	if info, err := s.staticStat(filepath.Join(fileRoot, "dist")); err == nil && info.IsDir() {
+		if _, err := s.staticStat(filepath.Join(fileRoot, "dist", "index.html")); err == nil {
 			fileRoot = filepath.Join(fileRoot, "dist")
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			s.reportStaticWarning(r.Context(), err)
 		}
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		s.reportStaticWarning(r.Context(), err)
 	}
 	// Serve under the stripped panel path (or original path for the default root panel).
 	// Do not rewrite "/" → "/index.html": FileServer redirects */index.html to "./" and that loops.
@@ -376,24 +399,43 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 	indexPath := filepath.Join(fileRoot, "index.html")
 	// Directory entry (/ or /__mihari/panels/{id}/) always serves rewritten index when present.
 	if upath == "/" || upath == "." {
-		if _, err := os.Stat(indexPath); err == nil {
+		if _, err := s.staticStat(indexPath); err == nil {
 			s.servePanelIndex(w, r, indexPath, mountPrefix)
 			return
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			reportFailure(r.Context(), s.Reporter, "static.failed", err)
 		}
 		http.NotFound(w, r)
 		return
 	}
-	f, err := fs.Stat(dirFS, rel)
-	if err != nil || (f != nil && f.IsDir()) {
+	f, lookupErr := fs.Stat(dirFS, rel)
+	if lookupErr != nil || (f != nil && f.IsDir()) {
 		// Never SPA-fallback for real static extensions — that yields text/html for
 		// module scripts (strict MIME check) and breaks Vite/Workbox loads.
 		if looksLikeStaticAssetPath(upath) {
+			if lookupErr != nil && !errors.Is(lookupErr, fs.ErrNotExist) {
+				reportFailure(r.Context(), s.Reporter, "static.failed", lookupErr)
+			}
 			http.NotFound(w, r)
 			return
 		}
-		if _, err := os.Stat(indexPath); err == nil {
+		if _, err := s.staticStat(indexPath); err == nil {
+			if lookupErr != nil && !errors.Is(lookupErr, fs.ErrNotExist) {
+				s.reportStaticWarning(r.Context(), lookupErr)
+			}
 			s.servePanelIndex(w, r, indexPath, mountPrefix)
 			return
+		} else {
+			actualLookup := error(nil)
+			if lookupErr != nil && !errors.Is(lookupErr, fs.ErrNotExist) {
+				actualLookup = lookupErr
+			}
+			if !errors.Is(err, fs.ErrNotExist) {
+				actualLookup = errors.Join(actualLookup, err)
+			}
+			if actualLookup != nil {
+				reportFailure(r.Context(), s.Reporter, "static.failed", actualLookup)
+			}
 		}
 		http.NotFound(w, r)
 		return
@@ -403,7 +445,45 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 		s.servePanelIndex(w, r, filepath.Join(fileRoot, filepath.FromSlash(rel)), mountPrefix)
 		return
 	}
-	http.FileServer(http.FS(dirFS)).ServeHTTP(w, r)
+	observed := &staticResponseWriter{ResponseWriter: w}
+	http.FileServer(http.FS(dirFS)).ServeHTTP(observed, r)
+	if observed.err != nil {
+		reportFailure(r.Context(), s.Reporter, "static.failed", observed.err)
+	}
+}
+
+type staticResponseWriter struct {
+	http.ResponseWriter
+	err error
+}
+
+func (w *staticResponseWriter) Write(body []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(body)
+	if err == nil && n != len(body) {
+		err = io.ErrShortWrite
+	}
+	if err != nil && w.err == nil {
+		w.err = err
+	}
+	return n, err
+}
+
+func (w *staticResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (s *Server) reportStaticWarning(ctx context.Context, err error) {
+	if s.Reporter == nil || err == nil || diagnostics.AlreadyReported(err) {
+		return
+	}
+	if level, emit := diagnostics.FailureLevel(ctx, err); emit {
+		s.Reporter(ctx, diagnostics.Record{Component: "web", Event: "static.failed", Level: min(level, slog.LevelWarn), Err: err})
+	}
+}
+
+func (s *Server) staticStat(name string) (fs.FileInfo, error) {
+	if s.statPath != nil {
+		return s.statPath(name)
+	}
+	return os.Stat(name)
 }
 
 // servePanelIndex serves index.html, rewriting root-absolute asset URLs so a panel
@@ -411,6 +491,7 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 func (s *Server) servePanelIndex(w http.ResponseWriter, r *http.Request, indexPath, mountPrefix string) {
 	raw, err := os.ReadFile(indexPath)
 	if err != nil {
+		reportFailure(r.Context(), s.Reporter, "static.failed", err)
 		http.NotFound(w, r)
 		return
 	}
@@ -426,7 +507,9 @@ func (s *Server) servePanelIndex(w http.ResponseWriter, r *http.Request, indexPa
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+	if _, err := w.Write(body); err != nil {
+		reportFailure(r.Context(), s.Reporter, "static.failed", err)
+	}
 }
 
 // rewriteRootAbsoluteURLs prefixes same-origin absolute paths (src="/…", href="/…")
@@ -546,7 +629,7 @@ func looksLikeStaticAssetPath(reqPath string) bool {
 
 func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, action Action) {
 	if s.Mutator == nil {
-		s.reportMutationRejection(r.Context(), nil)
+		s.reportMutationRejection(r.Context(), errors.New("gateway mutator is unavailable"))
 		WriteReject(w, ActionRejectUnknown)
 		return
 	}
@@ -558,6 +641,9 @@ func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, action A
 			Name string `json:"name"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil || body.Name == "" || group == "" {
+			if err == nil {
+				err = errors.New("proxy group and name are required")
+			}
 			s.reportMutationRejection(r.Context(), err)
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
@@ -581,7 +667,7 @@ func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, action A
 		}
 		id := strings.TrimPrefix(p, "/connections/")
 		if id == "" {
-			s.reportMutationRejection(r.Context(), nil)
+			s.reportMutationRejection(r.Context(), errors.New("connection id is required"))
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
@@ -595,7 +681,7 @@ func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, action A
 		s.handleConfigMutation(w, r)
 	default:
 		// Delay/restart are classified but not fully implemented until control wiring matures.
-		s.reportMutationRejection(r.Context(), nil)
+		s.reportMutationRejection(r.Context(), fmt.Errorf("gateway mutation action %v is unavailable", action))
 		WriteReject(w, ActionRejectUnknown)
 	}
 }
@@ -612,12 +698,15 @@ func (s *Server) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			err = errors.New("configuration mutation contains multiple JSON values")
+		}
 		s.reportMutationRejection(r.Context(), err)
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	if len(patch) == 0 {
-		s.reportMutationRejection(r.Context(), nil)
+		s.reportMutationRejection(r.Context(), errors.New("configuration mutation is empty"))
 		WriteReject(w, ActionRejectUnknown)
 		return
 	}
@@ -625,20 +714,20 @@ func (s *Server) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 	// Managed fields reject even when mixed with allowlisted keys.
 	for key := range patch {
 		if isManagedConfigField(key) {
-			s.reportMutationRejection(r.Context(), nil)
+			s.reportMutationRejection(r.Context(), fmt.Errorf("configuration field %q is managed by Mihari", key))
 			WriteReject(w, ActionRejectManaged)
 			return
 		}
 	}
 	if raw, exists := patch["mode"]; exists {
 		if len(patch) != 1 || r.Method != http.MethodPatch {
-			s.reportMutationRejection(r.Context(), nil)
+			s.reportMutationRejection(r.Context(), errors.New("routing mode requires PATCH with exactly one field"))
 			WriteReject(w, ActionRejectUnknown)
 			return
 		}
 		mode, ok := raw.(string)
 		if !ok || !protocol.ValidRoutingMode(mode) {
-			s.reportMutationRejection(r.Context(), nil)
+			s.reportMutationRejection(r.Context(), fmt.Errorf("invalid routing mode: %v", raw))
 			http.Error(w, "invalid routing mode", http.StatusBadRequest)
 			return
 		}
@@ -648,7 +737,7 @@ func (s *Server) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 	// TUN preserves its existing request contract; mixed mutations are rejected.
 	for key := range patch {
 		if key != "tun" {
-			s.reportMutationRejection(r.Context(), nil)
+			s.reportMutationRejection(r.Context(), fmt.Errorf("unsupported configuration field %q", key))
 			WriteReject(w, ActionRejectUnknown)
 			return
 		}
@@ -656,24 +745,24 @@ func (s *Server) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 
 	tunRaw, ok := patch["tun"]
 	if !ok {
-		s.reportMutationRejection(r.Context(), nil)
+		s.reportMutationRejection(r.Context(), errors.New("TUN configuration is required"))
 		WriteReject(w, ActionRejectUnknown)
 		return
 	}
 	tun, ok := tunRaw.(map[string]any)
 	if !ok {
-		s.reportMutationRejection(r.Context(), nil)
+		s.reportMutationRejection(r.Context(), errors.New("TUN configuration must be an object"))
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	if _, ok := tun["enable"].(bool); !ok {
-		s.reportMutationRejection(r.Context(), nil)
+		s.reportMutationRejection(r.Context(), errors.New("tun.enable must be a boolean"))
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	if stack, exists := tun["stack"]; exists {
 		if _, ok := stack.(string); !ok {
-			s.reportMutationRejection(r.Context(), nil)
+			s.reportMutationRejection(r.Context(), errors.New("tun.stack must be a string"))
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
@@ -693,7 +782,13 @@ func (s *Server) applyConfigMutation(w http.ResponseWriter, r *http.Request, pat
 
 func (s *Server) reportMutationRejection(ctx context.Context, err error) {
 	if s.Reporter != nil {
-		s.Reporter(ctx, diagnostics.Record{Component: "web", Event: "mutation.rejected", Level: slog.LevelDebug, Err: err})
+		s.Reporter(ctx, diagnostics.Record{Component: "web", Event: "mutation.rejected", Level: slog.LevelInfo, Err: err})
+	}
+}
+
+func (s *Server) reportRequestRejection(ctx context.Context, err error) {
+	if s.Reporter != nil {
+		s.Reporter(ctx, diagnostics.Record{Component: "web", Event: "request.rejected", Level: slog.LevelInfo, Err: err})
 	}
 }
 
@@ -771,7 +866,7 @@ func webSocketRelayTermination(err error) (websocket.StatusCode, error) {
 func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 	controller, err := url.Parse(s.ControllerURL)
 	if err != nil {
-		reportFailure(r.Context(), s.Reporter, "websocket.handshake.failed", (&diagnostics.HTTPError{Operation: "mihomo stream", Phase: "request", Cause: err}).HideSecret(s.ControllerSecret))
+		reportFailure(r.Context(), s.Reporter, "websocket.handshake.failed", (&diagnostics.HTTPError{Operation: "mihomo stream", Phase: "request", Cause: err}))
 		http.Error(w, "bad gateway", http.StatusBadGateway)
 		return
 	}
@@ -789,7 +884,9 @@ func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 		HTTPHeader: header,
 	})
 	if err != nil {
-		reportFailure(r.Context(), s.Reporter, "websocket.handshake.failed", diagnostics.HandshakeError(diagnostics.HTTPOperation(r.Method, r.URL.Path), resp, err, s.ControllerSecret))
+		detail := diagnostics.HandshakeError(diagnostics.HTTPOperation(r.Method, r.URL.Path), resp, err)
+		detail.URL = target
+		reportFailure(r.Context(), s.Reporter, "websocket.handshake.failed", detail)
 		if resp != nil {
 			http.Error(w, "upstream stream unavailable", resp.StatusCode)
 			return

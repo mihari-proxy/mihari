@@ -110,18 +110,18 @@ func TestExportJSON_StrictDecodeTimeRangeNumberAndOrder(t *testing.T) {
 	}
 }
 
-func TestExportJSON_RedactedCountsRecordsNotReplacements(t *testing.T) {
+func TestExportJSON_OriginalContentHasZeroRedactions(t *testing.T) {
 	input := `{"time":"2026-09-02T10:00:00Z","token":"hidden","msg":"https://example.test/private"}`
 	var out bytes.Buffer
 	stats, err := exportJSON(context.Background(), strings.NewReader(input), &out, ExportRange{Kind: RangeAll}, NewRedactor())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Lines != 1 || stats.Redacted != 1 {
-		t.Fatalf("stats = %+v, want one line and one redacted record", stats)
+	if stats.Lines != 1 || stats.Redacted != 0 {
+		t.Fatalf("stats = %+v, want one original record", stats)
 	}
-	if strings.Contains(out.String(), "hidden") || strings.Contains(out.String(), "example.test") {
-		t.Fatalf("output leaked sensitive values: %s", out.String())
+	if !strings.Contains(out.String(), "hidden") || !strings.Contains(out.String(), "https://example.test/private") {
+		t.Fatal("export lost original content")
 	}
 }
 

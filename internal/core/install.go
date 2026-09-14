@@ -7,7 +7,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -30,6 +32,7 @@ type Installer struct {
 	Provenance      ProvenanceStore
 	GeneratedConfig func(context.Context) (*ConfigCapability, error)
 	Executor        VerifiedExecutor
+	Reporter        diagnostics.Reporter
 
 	HTTPClient   *http.Client
 	APIBase      string
@@ -103,6 +106,7 @@ type Candidate struct {
 	alphaSHA   string
 	updated    bool
 	cleanup    sync.Once
+	reporter   diagnostics.Reporter
 }
 
 type PreparedCore interface {
@@ -128,12 +132,16 @@ func (c *Candidate) Commit() (InstallResult, error) {
 		return InstallResult{}, protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo candidate is unavailable"}
 	}
 	if err := os.MkdirAll(filepath.Dir(c.binaryPath), 0o700); err != nil {
-		return InstallResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core binary directory"}
+		return InstallResult{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core binary directory"}, err)
 	}
-	if err := replaceBinary(c.path, c.binaryPath); err != nil {
+	warning, err := replaceBinary(c.path, c.binaryPath)
+	if err != nil {
 		return InstallResult{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "replace mihomo core"}, err)
 	}
 	c.path = ""
+	if warning != nil && c.reporter != nil {
+		c.reporter(context.Background(), diagnostics.Record{Component: "core", Event: "replacement.cleanup.failed", Level: slog.LevelWarn, Err: fmt.Errorf("remove replaced core backup: %w", warning)})
+	}
 	return InstallResult{Version: c.version, Updated: true, AlphaSHA: c.alphaSHA}, nil
 }
 
@@ -145,7 +153,9 @@ func (c *Candidate) Cleanup() {
 
 	c.cleanup.Do(func() {
 		if c.path != "" {
-			_ = os.Remove(c.path)
+			if err := os.Remove(c.path); err != nil && !errors.Is(err, os.ErrNotExist) && c.reporter != nil {
+				c.reporter(context.Background(), diagnostics.Record{Component: "core", Event: "candidate.cleanup.failed", Level: slog.LevelWarn, Err: fmt.Errorf("remove core candidate %s: %w", c.path, err)})
+			}
 		}
 	})
 }
@@ -155,11 +165,21 @@ func (c *Candidate) Cleanup() {
 func (i Installer) localReadyVersion(ctx context.Context, binaryPath string) (string, bool) {
 	if i.Provenance != nil {
 		v, e := i.DetectVersion(ctx, binaryPath)
+		if e != nil {
+			i.reportFallback(ctx, "local_core.check.failed", e)
+		}
 		return v, e == nil && v != ""
 	}
 
 	info, err := os.Stat(binaryPath)
-	if err != nil || info.IsDir() {
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			i.reportFallback(ctx, "local_core.stat.failed", err)
+		}
+		return "", false
+	}
+	if info.IsDir() {
+		i.reportFallback(ctx, "local_core.check.failed", fmt.Errorf("mihomo binary path is a directory: %s", binaryPath))
 		return "", false
 	}
 	runner := i.Runner
@@ -168,9 +188,18 @@ func (i Installer) localReadyVersion(ctx context.Context, binaryPath string) (st
 	}
 	version, err := DetectVersion(ctx, runner, binaryPath)
 	if err != nil || version == "" {
+		if err != nil {
+			i.reportFallback(ctx, "local_core.check.failed", err)
+		}
 		return "", false
 	}
 	return version, true
+}
+
+func (i Installer) reportFallback(ctx context.Context, event string, err error) {
+	if i.Reporter != nil && err != nil {
+		i.Reporter(ctx, diagnostics.Record{Component: "core", Event: event, Level: slog.LevelWarn, Err: err})
+	}
 }
 
 func (i Installer) Prepare(ctx context.Context, request InstallRequest) (PreparedCore, error) {
@@ -186,7 +215,7 @@ func (i Installer) Prepare(ctx context.Context, request InstallRequest) (Prepare
 	}
 	if request.Channel != "alpha" && request.CurrentVersion == release.TagName {
 		if version, ok := i.localReadyVersion(ctx, request.BinaryPath); ok {
-			return &Candidate{binaryPath: request.BinaryPath, version: version, updated: false}, nil
+			return &Candidate{binaryPath: request.BinaryPath, version: version, updated: false, reporter: i.Reporter}, nil
 		}
 	}
 	asset, err := SelectAsset(release, i.targetOS(), i.targetArch(), request.Channel)
@@ -197,7 +226,7 @@ func (i Installer) Prepare(ctx context.Context, request InstallRequest) (Prepare
 		releaseSHA := ParseAlphaSHA(asset.Name)
 		if releaseSHA != "" && releaseSHA == request.AlphaSHA {
 			if version, ok := i.localReadyVersion(ctx, request.BinaryPath); ok {
-				return &Candidate{binaryPath: request.BinaryPath, version: version, alphaSHA: releaseSHA, updated: false}, nil
+				return &Candidate{binaryPath: request.BinaryPath, version: version, alphaSHA: releaseSHA, updated: false, reporter: i.Reporter}, nil
 			}
 		}
 	}
@@ -205,43 +234,56 @@ func (i Installer) Prepare(ctx context.Context, request InstallRequest) (Prepare
 		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo asset is too large"}
 	}
 	if err := os.MkdirAll(request.StagingDir, 0o700); err != nil {
-		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core staging directory"}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core staging directory"}, err)
 	}
 	archive, err := os.CreateTemp(request.StagingDir, ".mihomo-download-*")
 	if err != nil {
-		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core download file"}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core download file"}, err)
 	}
 	archivePath := archive.Name()
-	archive.Close()
-	defer os.Remove(archivePath)
+	if err := archive.Close(); err != nil {
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "close core download file"}, errors.Join(err, os.Remove(archivePath)))
+	}
+	defer func() {
+		if err := os.Remove(archivePath); err != nil && !errors.Is(err, os.ErrNotExist) && i.Reporter != nil {
+			i.Reporter(context.Background(), diagnostics.Record{Component: "core", Event: "archive.cleanup.failed", Level: slog.LevelWarn, Err: fmt.Errorf("remove core archive %s: %w", archivePath, err)})
+		}
+	}()
 	if err := i.Download(ctx, asset, archivePath); err != nil {
 		return nil, err
 	}
 
 	candidate, err := os.CreateTemp(request.StagingDir, ".mihomo-candidate-*")
 	if err != nil {
-		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core candidate"}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core candidate"}, err)
 	}
 	candidatePath := candidate.Name()
-	candidate.Close()
+	if err := candidate.Close(); err != nil {
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "close core candidate"}, errors.Join(err, os.Remove(candidatePath)))
+	}
 	keepCandidate := false
 	defer func() {
 		if !keepCandidate {
-			_ = os.Remove(candidatePath)
+			if err := os.Remove(candidatePath); err != nil && !errors.Is(err, os.ErrNotExist) && i.Reporter != nil {
+				i.Reporter(context.Background(), diagnostics.Record{Component: "core", Event: "candidate.cleanup.failed", Level: slog.LevelWarn, Err: fmt.Errorf("remove core candidate %s: %w", candidatePath, err)})
+			}
 		}
 	}()
 	if err := extractAsset(archivePath, asset.Name, candidatePath); err != nil {
 		return nil, err
 	}
 	if err := os.Chmod(candidatePath, 0o700); err != nil {
-		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "set core executable permissions"}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "set core executable permissions"}, err)
 	}
 	runner := i.Runner
 	if runner == nil {
 		runner = OSCommandRunner{}
 	}
 	versionOutput, err := runner.Run(ctx, candidatePath, "-v")
-	if err != nil || len(strings.TrimSpace(string(versionOutput))) == 0 {
+	if err != nil {
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo candidate did not start"}, errors.Join(err, commandOutputCause("mihomo candidate version", versionOutput)))
+	}
+	if len(strings.TrimSpace(string(versionOutput))) == 0 {
 		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo candidate did not start"}
 	}
 	version, err := ParseVersion(string(versionOutput))
@@ -252,13 +294,13 @@ func (i Installer) Prepare(ctx context.Context, request InstallRequest) (Prepare
 		return nil, err
 	}
 	keepCandidate = true
-	return &Candidate{path: candidatePath, binaryPath: request.BinaryPath, version: version, alphaSHA: ParseAlphaSHA(asset.Name), updated: true}, nil
+	return &Candidate{path: candidatePath, binaryPath: request.BinaryPath, version: version, alphaSHA: ParseAlphaSHA(asset.Name), updated: true, reporter: i.Reporter}, nil
 }
 
 // Download 取 asset 并落盘到 destination，校验 asset.Digest 的 sha256:<hex>
 // （bundler 复用入口，design §4.1 export 边界；绝不照 self.go 复刻——其无 Digest 校验）。
 // 以 O_WRONLY|O_TRUNC 写入：调用方需先落盘目标文件（与 Prepare 内 CreateTemp 同契约）。
-func (i Installer) Download(ctx context.Context, asset Asset, destination string) error {
+func (i Installer) Download(ctx context.Context, asset Asset, destination string) (resultErr error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
 	if err != nil {
 		return protocol.APIError{Code: protocol.CodeInternal, Message: "create core download request"}
@@ -266,15 +308,15 @@ func (i Installer) Download(ctx context.Context, asset Asset, destination string
 	request.Header.Set("User-Agent", "mihari")
 	response, err := i.httpClient().Do(request)
 	if err != nil {
-		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download mihomo core failed"}, err)
+		return coreHTTPError(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download mihomo core failed"}, "core GET asset", asset.URL, "transport", nil, err)
 	}
-	defer response.Body.Close()
+	defer closeCoreResponse(ctx, response, "core GET asset", asset.URL, &resultErr, i.Reporter)
 	if response.StatusCode != http.StatusOK {
-		return protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download mihomo core failed", Details: map[string]any{"status": response.StatusCode}}
+		return coreHTTPError(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download mihomo core failed", Details: map[string]any{"status": response.StatusCode}}, "core GET asset", asset.URL, "response", response, nil)
 	}
 	file, err := os.OpenFile(destination, os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "open core download file"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "open core download file"}, err)
 	}
 	hash := sha256.New()
 	written, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, maxCoreArchiveSize+1))
@@ -311,12 +353,12 @@ func extractAsset(archivePath, assetName, candidatePath string) error {
 func extractGzip(archivePath, candidatePath string) error {
 	archive, err := os.Open(archivePath)
 	if err != nil {
-		return dataFailure("open mihomo archive")
+		return dataFailureCause("open mihomo archive", err)
 	}
-	defer archive.Close()
+	defer archive.Close() // A read-only source close cannot invalidate a completed candidate write.
 	reader, err := gzip.NewReader(archive)
 	if err != nil {
-		return dataFailure("invalid mihomo gzip archive")
+		return dataFailureCause("invalid mihomo gzip archive", err)
 	}
 	defer reader.Close()
 	return writeCandidate(candidatePath, reader)
@@ -325,7 +367,7 @@ func extractGzip(archivePath, candidatePath string) error {
 func extractZip(archivePath, candidatePath string) error {
 	archive, err := zip.OpenReader(archivePath)
 	if err != nil {
-		return dataFailure("invalid mihomo zip archive")
+		return dataFailureCause("invalid mihomo zip archive", err)
 	}
 	defer archive.Close()
 	var selected *zip.File
@@ -343,7 +385,7 @@ func extractZip(archivePath, candidatePath string) error {
 	}
 	reader, err := selected.Open()
 	if err != nil {
-		return dataFailure("open mihomo executable in archive")
+		return dataFailureCause("open mihomo executable in archive", err)
 	}
 	defer reader.Close()
 	return writeCandidate(candidatePath, reader)
@@ -358,7 +400,7 @@ func safeArchiveName(name string) bool {
 func writeCandidate(path string, source io.Reader) error {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o700)
 	if err != nil {
-		return dataFailure("open mihomo candidate")
+		return dataFailureCause("open mihomo candidate", err)
 	}
 	written, copyErr := io.Copy(file, io.LimitReader(source, maxCoreBinarySize+1))
 	if syncErr := file.Sync(); copyErr == nil {
@@ -368,7 +410,7 @@ func writeCandidate(path string, source io.Reader) error {
 		copyErr = closeErr
 	}
 	if copyErr != nil {
-		return dataFailure("write mihomo candidate")
+		return dataFailureCause("write mihomo candidate", copyErr)
 	}
 	if written > maxCoreBinarySize {
 		return dataFailure("mihomo executable is too large")
@@ -431,4 +473,8 @@ func (i Installer) targetArch() string {
 
 func dataFailure(message string) error {
 	return protocol.APIError{Code: protocol.CodeDataFailure, Message: message}
+}
+
+func dataFailureCause(message string, cause error) error {
+	return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: message}, cause)
 }

@@ -83,8 +83,8 @@ func TestProviderDelay_ControlPlaneRoutesAndReportsOriginalFailure(t *testing.T)
 	if !errors.As(err, &api) || api.Details["status"] != float64(503) || strings.Contains(err.Error(), "temporarily") || strings.Contains(err.Error(), "fixture-secret") {
 		t.Fatalf("unsafe failure envelope: %v", err)
 	}
-	if !strings.Contains(logs.String(), "provider temporarily unavailable") || strings.Contains(logs.String(), "fixture-secret") {
-		t.Fatal("raw diagnostics missing or unsafe")
+	if !strings.Contains(logs.String(), "provider temporarily unavailable") || !strings.Contains(logs.String(), "fixture-secret") {
+		t.Fatal("raw diagnostics lost original HTTP body")
 	}
 	if strings.Count(logs.String(), "proxy_provider.retry") != 2 || strings.Count(logs.String(), "request_failed") != 1 {
 		t.Fatal("retry/final diagnostic ownership changed")

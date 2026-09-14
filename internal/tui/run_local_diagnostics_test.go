@@ -117,7 +117,11 @@ func assertLocalDiagnosticFile(t *testing.T, path, event, id string) {
 	if count != 1 {
 		t.Fatalf("owner failure count=%d want 1; logs=%s", count, raw)
 	}
-	if strings.Contains(string(raw), "local-task-secret") || strings.Contains(string(raw), "/private/") {
-		t.Fatal("local diagnostic leaked path/secret")
+	wantCause := "open /private/local-task-secret: permission denied"
+	if event == "installation.inspect.failed" {
+		wantCause = io.ErrUnexpectedEOF.Error()
+	}
+	if !strings.Contains(string(raw), wantCause) {
+		t.Fatal("local diagnostic lost original cause")
 	}
 }

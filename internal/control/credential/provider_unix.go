@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/platform"
 )
 
@@ -37,7 +38,10 @@ func parseCredential(raw []byte) (string, error) {
 	}
 	token := string(raw)
 	decoded, err := hex.DecodeString(token)
-	if err != nil || len(decoded) != 32 {
+	if err != nil {
+		return "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control credential"}, err)
+	}
+	if len(decoded) != 32 {
 		return "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control credential"}
 	}
 	return token, nil

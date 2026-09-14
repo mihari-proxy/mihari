@@ -47,7 +47,7 @@ func TestProviderDiagnostic_UnsupportedNativeMutationKeepsContract(t *testing.T)
 	if !errors.As(err, &api) || api.Code != protocol.CodeUpstreamFailure || api.Message != "mihomo request failed" || api.Details["status"] != 405 || m.Snapshot().Revision != 0 {
 		t.Fatalf("native unsupported contract changed: %v", err)
 	}
-	if strings.Contains(output.String(), "business-secret") || !strings.Contains(output.String(), "provider configuration rejected") || !strings.Contains(output.String(), `"operation":"rule_provider.refresh"`) {
+	if !strings.Contains(output.String(), "business-secret") || !strings.Contains(output.String(), "provider configuration rejected") || !strings.Contains(output.String(), `"operation":"rule_provider.refresh"`) {
 		t.Fatalf("provider logs=%s", output.String())
 	}
 }

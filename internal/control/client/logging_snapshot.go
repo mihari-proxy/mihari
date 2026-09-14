@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 )
 
@@ -34,10 +35,12 @@ type frameResult struct {
 
 type idleBody struct {
 	io.ReadCloser
-	mu    sync.Mutex
-	idle  time.Duration
-	timer *time.Timer
-	err   error
+	mu           sync.Mutex
+	idle         time.Duration
+	timer        *time.Timer
+	err          error
+	bodyClose    sync.Once
+	bodyCloseErr error
 }
 
 func newIdleBody(body io.ReadCloser, idle time.Duration) *idleBody {
@@ -58,7 +61,8 @@ func (b *idleBody) timeout() {
 	}
 	b.err = snapshotDataFailure()
 	b.mu.Unlock()
-	_ = b.ReadCloser.Close()
+	// Read or Close observes the stored close result after this callback unblocks I/O.
+	_ = b.closeUnderlying()
 }
 
 func (b *idleBody) resetLocked() {
@@ -76,7 +80,7 @@ func (b *idleBody) Read(p []byte) (int, error) {
 	}
 	b.mu.Unlock()
 	if timeoutErr != nil {
-		return n, timeoutErr
+		return n, joinSnapshotCleanup(timeoutErr, b.closeUnderlying())
 	}
 	return n, err
 }
@@ -95,16 +99,20 @@ func (b *idleBody) Close() error {
 		b.timer = nil
 	}
 	b.mu.Unlock()
-	return b.ReadCloser.Close()
+	return b.closeUnderlying()
+}
+
+func (b *idleBody) closeUnderlying() error {
+	b.bodyClose.Do(func() { b.bodyCloseErr = b.ReadCloser.Close() })
+	return b.bodyCloseErr
 }
 
 type networkSnapshotSet struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	body     *idleBody
-	frames   <-chan frameResult
-	header   protocol.MachineLogHeader
-	redactor *logging.Redactor
+	ctx    context.Context
+	cancel context.CancelFunc
+	body   *idleBody
+	frames <-chan frameResult
+	header protocol.MachineLogHeader
 
 	mu        sync.Mutex
 	next      int
@@ -117,11 +125,9 @@ type networkSnapshotSet struct {
 type networkSourceReader struct {
 	set            *networkSnapshotSet
 	id             logging.SourceID
-	redactor       *logging.Redactor
 	digest         hash.Hash
 	lines          int64
 	serverRedacted int64
-	orRedacted     int64
 	bytes          int64
 	end            *protocol.MachineLogSourceEnd
 	stats          logging.SourceStats
@@ -146,7 +152,10 @@ func (c *Client) OpenMachineSnapshot(ctx context.Context, window logging.Snapsho
 		From:   window.From,
 		To:     window.To.UTC(),
 	})
-	if err != nil || len(body) > protocol.MaxMachineLogRequestBytes {
+	if err != nil {
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid machine snapshot request"}, err)
+	}
+	if len(body) > protocol.MaxMachineLogRequestBytes {
 		return nil, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid machine snapshot request"}
 	}
 
@@ -154,7 +163,7 @@ func (c *Client) OpenMachineSnapshot(ctx context.Context, window logging.Snapsho
 	request, err := http.NewRequestWithContext(totalCtx, http.MethodPost, c.baseURL+"/v1/logging/snapshot", bytes.NewReader(body))
 	if err != nil {
 		totalCancel()
-		return nil, protocol.APIError{Code: protocol.CodeInternal, Message: "create control request"}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "create control request"}, err)
 	}
 	token, err := c.requestToken(totalCtx)
 	if err != nil {
@@ -169,25 +178,23 @@ func (c *Client) OpenMachineSnapshot(ctx context.Context, window logging.Snapsho
 	response, err := c.snapshotHTTP().Do(request)
 	if err != nil {
 		totalCancel()
-		return nil, snapshotStreamError(c.localError(err), totalCtx, ctx)
+		return nil, snapshotStreamError(c.localRuntimeOutcome(err).err, totalCtx, ctx)
 	}
 	if response.StatusCode != http.StatusOK {
 		totalCancel()
-		return nil, c.responseError(response)
+		return nil, c.responseError(ctx, response)
 	}
 
 	idle := newIdleBody(response.Body, snapshotIdleTimeout)
 	context.AfterFunc(totalCtx, func() { _ = idle.Close() })
 	set := &networkSnapshotSet{
-		ctx:      totalCtx,
-		cancel:   totalCancel,
-		body:     idle,
-		redactor: c.redactor,
+		ctx:    totalCtx,
+		cancel: totalCancel,
+		body:   idle,
 	}
 	set.frames = startFrameReader(totalCtx, idle)
 	if err := set.readHeader(); err != nil {
-		_ = set.Close()
-		return nil, err
+		return nil, joinSnapshotCleanup(err, set.Close())
 	}
 	return set, nil
 }
@@ -297,7 +304,7 @@ func (s *networkSnapshotSet) Source(id logging.SourceID) (logging.SourceReader, 
 	if s.next >= 2 || id != want || (s.next == 1 && (s.readers[0] == nil || !s.readers[0].finished)) {
 		return nil, snapshotDataFailure()
 	}
-	reader := &networkSourceReader{set: s, id: id, redactor: s.redactor, digest: sha256.New()}
+	reader := &networkSourceReader{set: s, id: id, digest: sha256.New()}
 	s.readers[s.next] = reader
 	s.next++
 	return reader, nil
@@ -405,7 +412,7 @@ func (r *networkSourceReader) Next(ctx context.Context) ([]byte, bool, error) {
 			}
 			payload, err := protocol.DecodeMachineLogPayload(record.PayloadB64)
 			if err != nil {
-				r.readErr = snapshotDataFailure()
+				r.readErr = snapshotDataCause(err)
 				return nil, false, r.readErr
 			}
 			_, _ = r.digest.Write(payload)
@@ -415,12 +422,7 @@ func (r *networkSourceReader) Next(ctx context.Context) ([]byte, bool, error) {
 				r.serverRedacted++
 			}
 			r.bytes += int64(len(payload) + 1)
-			encoded, changed := secondRedact(r.redactor, payload)
-			redacted := record.Redacted || changed
-			if redacted {
-				r.orRedacted++
-			}
-			return encoded, redacted, nil
+			return payload, record.Redacted, nil
 		case "source_end":
 			end, err := decodeMachineSourceEnd(fields)
 			if err != nil {
@@ -468,7 +470,7 @@ func (r *networkSourceReader) Finish(ctx context.Context) (logging.SourceStats, 
 		Source:         r.id,
 		Lines:          r.lines,
 		SkippedInvalid: r.end.SkippedInvalid,
-		Redacted:       r.orRedacted,
+		Redacted:       r.serverRedacted,
 		Bytes:          r.bytes,
 		Files:          append([]string{}, files...),
 		SHA256:         sum,
@@ -480,24 +482,6 @@ func (r *networkSourceReader) Finish(ctx context.Context) (logging.SourceStats, 
 func (r *networkSourceReader) Close() error {
 	r.closed.Store(true)
 	return nil
-}
-
-func secondRedact(redactor *logging.Redactor, payload []byte) ([]byte, bool) {
-	if redactor == nil {
-		redactor = logging.NewRedactor()
-	}
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.UseNumber()
-	var record map[string]any
-	if err := decoder.Decode(&record); err != nil || record == nil {
-		return payload, false
-	}
-	clean, changed := redactor.Value(record)
-	encoded, err := json.Marshal(clean)
-	if err != nil {
-		return payload, false
-	}
-	return encoded, changed
 }
 
 func decodeFrameFields(raw []byte) (protocol.MachineLogFrameMeta, map[string]json.RawMessage, error) {
@@ -523,14 +507,20 @@ func decodeFrameFields(raw []byte) (protocol.MachineLogFrameMeta, map[string]jso
 func decodeExactObject(data []byte) (map[string]json.RawMessage, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	start, err := dec.Token()
-	if err != nil || start != json.Delim('{') {
+	if err != nil {
+		return nil, snapshotDataCause(err)
+	}
+	if start != json.Delim('{') {
 		return nil, snapshotDataFailure()
 	}
 	values := make(map[string]json.RawMessage)
 	for dec.More() {
 		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, snapshotDataCause(err)
+		}
 		key, ok := keyTok.(string)
-		if err != nil || !ok {
+		if !ok {
 			return nil, snapshotDataFailure()
 		}
 		if _, exists := values[key]; exists {
@@ -538,15 +528,21 @@ func decodeExactObject(data []byte) (map[string]json.RawMessage, error) {
 		}
 		var raw json.RawMessage
 		if err := dec.Decode(&raw); err != nil {
-			return nil, snapshotDataFailure()
+			return nil, snapshotDataCause(err)
 		}
 		values[key] = raw
 	}
 	end, err := dec.Token()
-	if err != nil || end != json.Delim('}') {
+	if err != nil {
+		return nil, snapshotDataCause(err)
+	}
+	if end != json.Delim('}') {
 		return nil, snapshotDataFailure()
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return nil, snapshotDataCause(err)
+		}
 		return nil, snapshotDataFailure()
 	}
 	return values, nil
@@ -554,7 +550,10 @@ func decodeExactObject(data []byte) (map[string]json.RawMessage, error) {
 
 func decodeMachineHeader(raw []byte) (protocol.MachineLogHeader, error) {
 	meta, fields, err := decodeFrameFields(raw)
-	if err != nil || meta.Type != "header" {
+	if err != nil {
+		return protocol.MachineLogHeader{}, err
+	}
+	if meta.Type != "header" {
 		return protocol.MachineLogHeader{}, snapshotDataFailure()
 	}
 	if err := requireKeys(fields, "schema", "type", "snapshot_id", "to", "sources"); err != nil {
@@ -568,7 +567,10 @@ func decodeMachineHeader(raw []byte) (protocol.MachineLogHeader, error) {
 		}
 	}
 	id, err := decodeJSONString(fields["snapshot_id"])
-	if err != nil || !isLowerHex(id, 32) {
+	if err != nil {
+		return protocol.MachineLogHeader{}, err
+	}
+	if !isLowerHex(id, 32) {
 		return protocol.MachineLogHeader{}, snapshotDataFailure()
 	}
 	to, err := decodeJSONTime(fields["to"])
@@ -576,7 +578,10 @@ func decodeMachineHeader(raw []byte) (protocol.MachineLogHeader, error) {
 		return protocol.MachineLogHeader{}, err
 	}
 	sources, err := decodeJSONStringSlice(fields["sources"])
-	if err != nil || len(sources) != 2 || sources[0] != string(logging.DaemonSource) || sources[1] != string(logging.MihomoSource) {
+	if err != nil {
+		return protocol.MachineLogHeader{}, err
+	}
+	if len(sources) != 2 || sources[0] != string(logging.DaemonSource) || sources[1] != string(logging.MihomoSource) {
 		return protocol.MachineLogHeader{}, snapshotDataFailure()
 	}
 	header := protocol.MachineLogHeader{
@@ -696,7 +701,10 @@ func decodeMachineError(fields map[string]json.RawMessage) error {
 		return err
 	}
 	var api protocol.APIError
-	if err := json.Unmarshal(fields["error"], &api); err != nil || api.Code == "" {
+	if err := json.Unmarshal(fields["error"], &api); err != nil {
+		return snapshotDataCause(err)
+	}
+	if api.Code == "" {
 		return snapshotDataFailure()
 	}
 	return api
@@ -721,7 +729,7 @@ func requireExactKeys(fields map[string]json.RawMessage, keys ...string) error {
 func decodeJSONString(raw json.RawMessage) (string, error) {
 	var value string
 	if err := json.Unmarshal(raw, &value); err != nil {
-		return "", snapshotDataFailure()
+		return "", snapshotDataCause(err)
 	}
 	return value, nil
 }
@@ -739,14 +747,14 @@ func decodeJSONBool(raw json.RawMessage) (bool, error) {
 func decodeJSONInt64(raw json.RawMessage) (int64, error) {
 	var n json.Number
 	if err := json.Unmarshal(raw, &n); err != nil {
-		return 0, snapshotDataFailure()
+		return 0, snapshotDataCause(err)
 	}
 	if strings.ContainsAny(string(n), ".eE+") {
 		return 0, snapshotDataFailure()
 	}
 	value, err := n.Int64()
 	if err != nil {
-		return 0, snapshotDataFailure()
+		return 0, snapshotDataCause(err)
 	}
 	return value, nil
 }
@@ -757,7 +765,7 @@ func decodeJSONStringSlice(raw json.RawMessage) ([]string, error) {
 	}
 	var values []string
 	if err := json.Unmarshal(raw, &values); err != nil {
-		return nil, snapshotDataFailure()
+		return nil, snapshotDataCause(err)
 	}
 	if values == nil {
 		values = []string{}
@@ -772,7 +780,7 @@ func decodeJSONTime(raw json.RawMessage) (time.Time, error) {
 	}
 	parsed, err := time.Parse(time.RFC3339Nano, text)
 	if err != nil {
-		return time.Time{}, snapshotDataFailure()
+		return time.Time{}, snapshotDataCause(err)
 	}
 	if _, offset := parsed.Zone(); offset != 0 {
 		return time.Time{}, snapshotDataFailure()
@@ -797,6 +805,24 @@ func snapshotDataFailure() error {
 	return protocol.APIError{Code: protocol.CodeDataFailure, Message: "machine snapshot failed"}
 }
 
+func snapshotDataCause(err error) error {
+	if err == nil {
+		return snapshotDataFailure()
+	}
+	return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "machine snapshot failed"}, err)
+}
+
+func joinSnapshotCleanup(err, cleanupErr error) error {
+	if cleanupErr == nil {
+		return err
+	}
+	var api protocol.APIError
+	if errors.As(err, &api) {
+		return diagnostics.Wrap(api, errors.Join(err, cleanupErr))
+	}
+	return errors.Join(err, cleanupErr)
+}
+
 func snapshotStreamError(err error, streamCtx, callerCtx context.Context) error {
 	if err == nil {
 		return snapshotDataFailure()
@@ -814,5 +840,5 @@ func snapshotStreamError(err error, streamCtx, callerCtx context.Context) error 
 	if errors.As(err, &api) {
 		return err
 	}
-	return snapshotDataFailure()
+	return snapshotDataCause(err)
 }

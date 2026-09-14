@@ -23,6 +23,7 @@ type ReplacementTarget struct {
 	// UnrecognizedVersion is bounded display evidence for the TUI only.
 	// It never participates in version comparison, JSON or the preview ID.
 	UnrecognizedVersion string `json:"-"`
+	probeErr            error  `json:"-"`
 }
 
 // ReplacementSnapshot binds actual targets and the persistent service definition.

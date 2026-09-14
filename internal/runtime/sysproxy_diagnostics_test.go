@@ -121,12 +121,12 @@ func assertBusinessFailureJSON(t *testing.T, output, id, name, code string) {
 	if record["operation_id"] != id || record["operation"] != name || record["level"] != "ERROR" || !strings.Contains(output, "api error ("+code+")") || record["msg"] != "operation.failed" {
 		t.Fatalf("record=%#v", record)
 	}
-	if strings.Contains(output, "sysproxy-secret") || strings.Contains(output, "business-secret") || !strings.Contains(output, "permission denied") {
-		t.Fatalf("unsafe or missing cause: %s", output)
+	if !strings.Contains(output, "permission denied") {
+		t.Fatalf("missing original cause: %s", output)
 	}
 }
 
-func TestSystemProxyDiagnostic_ForeignConflictIsDebug(t *testing.T) {
+func TestSystemProxyDiagnostic_ForeignConflictIsInfo(t *testing.T) {
 	for _, enable := range []bool{true, false} {
 		var output bytes.Buffer
 		backend := &sysproxy.FakeBackend{State: sysproxy.State{Enabled: true, Server: "192.0.2.1:8080"}}
@@ -142,7 +142,7 @@ func TestSystemProxyDiagnostic_ForeignConflictIsDebug(t *testing.T) {
 		if !errors.As(err, &api) || backend.EnableCalls != 0 || backend.DisableCalls != 0 || manager.Snapshot().Revision != 0 {
 			t.Fatalf("conflict changed state: %v", err)
 		}
-		if !strings.Contains(output.String(), `"level":"DEBUG"`) || strings.Contains(output.String(), `"level":"ERROR"`) {
+		if !strings.Contains(output.String(), `"level":"INFO"`) || strings.Contains(output.String(), `"level":"ERROR"`) {
 			t.Fatalf("conflict logs=%s", output.String())
 		}
 	}

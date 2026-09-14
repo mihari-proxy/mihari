@@ -71,7 +71,7 @@ func exportWithOps(ctx context.Context, request ExportRequest, ops exportOps) (_
 	if err != nil {
 		// Acquisition can fail after mkdir without a safely owned workspace.
 		// Report possible residual data while preserving the primary failure.
-		warnExport(request.OnWarning)
+		warnExport(request.OnWarning, err)
 		closeExportTargetWithWarning(target, request.OnWarning)
 		return ExportResult{}, exportPipelineError(err)
 	}
@@ -101,7 +101,11 @@ func exportWithOps(ctx context.Context, request ExportRequest, ops exportOps) (_
 		// A rejected temp can fail its first cleanup, then be removed by this
 		// final pass. Preserve its warning even when the retry recovered fully.
 		if cleanup != nil || errors.Is(retErr, platform.ErrPublishCleanupIncomplete) {
-			warnExport(request.OnWarning)
+			warningCause := cleanup
+			if errors.Is(retErr, platform.ErrPublishCleanupIncomplete) {
+				warningCause = errors.Join(warningCause, retErr)
+			}
+			warnExport(request.OnWarning, warningCause)
 			if !published && retErr != nil {
 				retErr = errors.Join(retErr, cleanup)
 			}
@@ -222,7 +226,7 @@ func exportWithOps(ctx context.Context, request ExportRequest, ops exportOps) (_
 		if inside {
 			return ExportResult{}, ErrExportTargetChanged
 		}
-		err = ops.Publish(target.Dir, workspace, zipName, target.Name, func(error) { warnExport(request.OnWarning) })
+		err = ops.Publish(target.Dir, workspace, zipName, target.Name, func(cause error) { warnExport(request.OnWarning, cause) })
 		if err == nil {
 			published = true
 			return ExportResult{Path: target.Path}, nil
@@ -296,10 +300,20 @@ func copySpool(ctx context.Context, source io.Reader, destination io.Writer, ops
 		}
 		n, readErr := source.Read(buffer)
 		if n > 0 {
-			if _, err := destination.Write(buffer[:n]); err != nil {
+			written, err := destination.Write(buffer[:n])
+			if err == nil && written != n {
+				err = io.ErrShortWrite
+			}
+			if err != nil {
+				if readErr != io.EOF {
+					err = errors.Join(err, readErr)
+				}
 				return err
 			}
 			if err := ctx.Err(); err != nil {
+				if readErr != io.EOF {
+					err = errors.Join(err, readErr)
+				}
 				return err
 			}
 		}
@@ -321,19 +335,24 @@ func runCheckpoint(ctx context.Context, ops exportOps, stage exportStage) error 
 
 func closeExportTargetWithWarning(target *exportTarget, warning func(error)) {
 	if err := errors.Join(target.Dir.Close(), target.LogDir.Close()); err != nil {
-		warnExport(warning)
+		warnExport(warning, err)
 	}
 }
 
-func warnExport(warning func(error)) {
+type exportWarning struct{ cause error }
+
+func (e exportWarning) Error() string { return "log export cleanup incomplete" }
+func (e exportWarning) Unwrap() error { return e.cause }
+
+func warnExport(warning func(error), cause error) {
 	if warning != nil {
-		warning(errors.New("log export cleanup incomplete"))
+		warning(exportWarning{cause: cause})
 	}
 }
 
 func joinCleanupError(primary, cleanup error, warning func(error)) error {
 	if cleanup != nil {
-		warnExport(warning)
+		warnExport(warning, cleanup)
 	}
 	return errors.Join(primary, cleanup)
 }

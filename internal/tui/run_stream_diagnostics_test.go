@@ -101,7 +101,7 @@ func TestRun_StreamPayloadFailureUsesOwnedReporter(t *testing.T) {
 				t.Fatalf("record=%v", record)
 			}
 		}
-		if record["msg"] == "stream_failed" {
+		if record["msg"] == "stream_failed" && record["level"] != "INFO" {
 			t.Fatal("callback error diagnosed as client transport failure")
 		}
 	}

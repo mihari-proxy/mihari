@@ -226,7 +226,7 @@ func (m *Manager) applyTun(ctx context.Context, nextTun, liveBase map[string]any
 		if err != nil {
 			regenerateErr = err
 		} else {
-			defer candidate.cleanup()
+			defer func() { collectWarning(ctx, "tun", "candidate.cleanup.failed", candidate.cleanup()) }()
 			if err := m.commitRuntimeConfig(ctx, candidate); err != nil {
 				regenerateErr = err
 			} else {

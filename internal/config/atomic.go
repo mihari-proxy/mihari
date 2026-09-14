@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,7 +36,7 @@ func AtomicWriteWithCommit(path string, content []byte, mode os.FileMode) (Commi
 	})
 }
 
-func writeAtomic(path string, content []byte, mode os.FileMode, ops atomicWriteOps) (CommitResult, error) {
+func writeAtomic(path string, content []byte, mode os.FileMode, ops atomicWriteOps) (result CommitResult, resultErr error) {
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return CommitResult{}, fmt.Errorf("create parent directory: %w", err)
@@ -45,27 +46,46 @@ func writeAtomic(path string, content []byte, mode os.FileMode, ops atomicWriteO
 		return CommitResult{}, fmt.Errorf("create temporary file: %w", err)
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	closed := false
+	defer func() {
+		var cleanup error
+		if !closed {
+			if err := temporary.Close(); err != nil {
+				cleanup = fmt.Errorf("close temporary file: %w", err)
+			}
+		}
+		// A successful replace normally consumed the temporary path.
+		if err := os.Remove(temporaryPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			cleanup = errors.Join(cleanup, fmt.Errorf("remove temporary file: %w", err))
+		}
+		if cleanup == nil {
+			return
+		}
+		if result.Committed {
+			result.Warning = errors.Join(result.Warning, cleanup)
+		} else {
+			resultErr = errors.Join(resultErr, cleanup)
+		}
+	}()
 
 	if err := temporary.Chmod(mode); err != nil {
-		temporary.Close()
 		return CommitResult{}, fmt.Errorf("set temporary permissions: %w", err)
 	}
 	if _, err := temporary.Write(content); err != nil {
-		temporary.Close()
 		return CommitResult{}, fmt.Errorf("write temporary file: %w", err)
 	}
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
 		return CommitResult{}, fmt.Errorf("sync temporary file: %w", err)
 	}
-	if err := temporary.Close(); err != nil {
-		return CommitResult{}, fmt.Errorf("close temporary file: %w", err)
+	closeErr := temporary.Close()
+	closed = true
+	if closeErr != nil {
+		return CommitResult{}, fmt.Errorf("close temporary file: %w", closeErr)
 	}
 	if err := ops.replace(temporaryPath, path); err != nil {
 		return CommitResult{}, fmt.Errorf("replace active file: %w", err)
 	}
-	result := CommitResult{Committed: true}
+	result = CommitResult{Committed: true}
 	if err := ops.syncDir(directory); err != nil {
 		result.Warning = fmt.Errorf("sync parent directory: %w", err)
 	}

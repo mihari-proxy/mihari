@@ -27,7 +27,10 @@ type ProxyOptions struct {
 // NewControllerProxy builds a reverse proxy that strips client Authorization and injects the controller secret.
 func NewControllerProxy(options ProxyOptions) (*httputil.ReverseProxy, error) {
 	target, err := url.Parse(options.ControllerURL)
-	if err != nil || target.Scheme == "" || target.Host == "" {
+	if err != nil {
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid controller url"}, err)
+	}
+	if target.Scheme == "" || target.Host == "" {
 		return nil, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid controller url"}
 	}
 	secret := options.ControllerSecret
@@ -36,7 +39,7 @@ func NewControllerProxy(options ProxyOptions) (*httputil.ReverseProxy, error) {
 	// single-host rewrite, so SetURL must be called explicitly.
 	proxy := &httputil.ReverseProxy{
 		// The response observer owns upstream read diagnostics. The default
-		// ReverseProxy logger would duplicate them without credential redaction.
+		// ReverseProxy logger would duplicate them outside the file reporter.
 		ErrorLog:  log.New(io.Discard, "", 0),
 		Transport: controllerTransport{options.Transport},
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -53,8 +56,8 @@ func NewControllerProxy(options ProxyOptions) (*httputil.ReverseProxy, error) {
 	// Do not rewrite Location in a way that exposes controller host if avoidable; default is fine for loopback.
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		if resp.Body != nil {
-			resp.Body = &observedHTTPBody{ReadCloser: resp.Body, ctx: resp.Request.Context(), reporter: options.Reporter, secret: secret,
-				detail: diagnostics.HTTPError{Operation: diagnostics.HTTPOperation(resp.Request.Method, resp.Request.URL.Path), Phase: "response", Status: resp.StatusCode}}
+			resp.Body = &observedHTTPBody{ReadCloser: resp.Body, ctx: resp.Request.Context(), reporter: options.Reporter,
+				detail: diagnostics.HTTPError{Operation: diagnostics.HTTPOperation(resp.Request.Method, resp.Request.URL.Path), URL: resp.Request.URL.String(), Phase: "response", Status: resp.StatusCode}}
 		}
 		// Never forward controller secret in response headers.
 		for name, values := range resp.Header {
@@ -73,7 +76,7 @@ func NewControllerProxy(options ProxyOptions) (*httputil.ReverseProxy, error) {
 		return nil
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		reportFailure(r.Context(), options.Reporter, "proxy.failed", (&diagnostics.HTTPError{Operation: diagnostics.HTTPOperation(r.Method, r.URL.Path), Phase: "transport", Cause: err}).HideSecret(secret))
+		reportFailure(r.Context(), options.Reporter, "proxy.failed", (&diagnostics.HTTPError{Operation: diagnostics.HTTPOperation(r.Method, r.URL.Path), URL: r.URL.String(), Phase: "transport", Cause: err}))
 		http.Error(w, "upstream controller unavailable", http.StatusBadGateway)
 	}
 	return proxy, nil

@@ -4,6 +4,7 @@ package archive
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 const (
@@ -93,7 +95,7 @@ func ExtractZipBytes(data []byte, limits Limits, mkdir func(string) error, write
 	}
 	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		return dataFailure("invalid panel archive")
+		return dataFailure("invalid panel archive", err)
 	}
 	return extractZipFiles(reader.File, limits.internal(), mkdir, write)
 }
@@ -105,12 +107,16 @@ func (l Limits) internal() extractLimits {
 	}
 }
 
-func extractZipWithLimits(archivePath, destDir string, limits extractLimits) error {
+func extractZipWithLimits(archivePath, destDir string, limits extractLimits) (resultErr error) {
 	reader, err := zip.OpenReader(archivePath)
 	if err != nil {
-		return dataFailure("invalid panel archive")
+		return dataFailure("invalid panel archive", err)
 	}
-	defer reader.Close()
+	defer func() {
+		if closeErr := reader.Close(); resultErr != nil && closeErr != nil {
+			resultErr = joinDataFailure(resultErr, closeErr)
+		}
+	}()
 	if err := os.MkdirAll(destDir, 0o700); err != nil {
 		return fmt.Errorf("create panel extract directory: %w", err)
 	}
@@ -124,7 +130,9 @@ func extractZipWithLimits(archivePath, destDir string, limits extractLimits) err
 		return os.WriteFile(path, body, 0o600)
 	})
 	if err != nil {
-		_ = os.RemoveAll(destDir)
+		if cleanupErr := os.RemoveAll(destDir); cleanupErr != nil {
+			err = joinDataFailure(err, fmt.Errorf("remove failed panel extraction: %w", cleanupErr))
+		}
 	}
 	return err
 }
@@ -193,15 +201,19 @@ func extractZipFiles(files []*zip.File, limits extractLimits, mkdir func(string)
 	return nil
 }
 
-func readZipFile(file *zip.File, maxFile uint64) ([]byte, error) {
+func readZipFile(file *zip.File, maxFile uint64) (body []byte, resultErr error) {
 	source, err := file.Open()
 	if err != nil {
-		return nil, dataFailure("open panel archive entry")
+		return nil, dataFailure("open panel archive entry", err)
 	}
-	defer source.Close()
-	body, err := io.ReadAll(io.LimitReader(source, int64(maxFile)+1))
+	defer func() {
+		if closeErr := source.Close(); resultErr != nil && closeErr != nil {
+			resultErr = joinDataFailure(resultErr, closeErr)
+		}
+	}()
+	body, err = io.ReadAll(io.LimitReader(source, int64(maxFile)+1))
 	if err != nil {
-		return nil, dataFailure("extract panel archive entry")
+		return nil, dataFailure("extract panel archive entry", err)
 	}
 	if uint64(len(body)) > maxFile {
 		return nil, dataFailure("panel archive file is too large")
@@ -237,12 +249,16 @@ func resolveTarget(destDir, name string) (string, error) {
 	return target, nil
 }
 
-func extractFile(file *zip.File, target string, maxFile uint64) (int64, error) {
+func extractFile(file *zip.File, target string, maxFile uint64) (written int64, resultErr error) {
 	source, err := file.Open()
 	if err != nil {
-		return 0, dataFailure("open panel archive entry")
+		return 0, dataFailure("open panel archive entry", err)
 	}
-	defer source.Close()
+	defer func() {
+		if closeErr := source.Close(); resultErr != nil && closeErr != nil {
+			resultErr = joinDataFailure(resultErr, closeErr)
+		}
+	}()
 
 	destination, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
@@ -251,20 +267,35 @@ func extractFile(file *zip.File, target string, maxFile uint64) (int64, error) {
 	written, copyErr := io.Copy(destination, io.LimitReader(source, int64(maxFile)+1))
 	closeErr := destination.Close()
 	if copyErr != nil {
-		os.Remove(target)
-		return written, dataFailure("extract panel archive entry")
+		cleanupErr := os.Remove(target)
+		return written, joinDataFailure(dataFailure("extract panel archive entry", copyErr), cleanupErr)
 	}
 	if uint64(written) > maxFile {
-		os.Remove(target)
-		return written, dataFailure("panel archive file is too large")
+		cleanupErr := os.Remove(target)
+		return written, joinDataFailure(dataFailure("panel archive file is too large"), cleanupErr)
 	}
 	if closeErr != nil {
-		os.Remove(target)
-		return written, closeErr
+		cleanupErr := os.Remove(target)
+		return written, errors.Join(closeErr, cleanupErr)
 	}
 	return written, nil
 }
 
-func dataFailure(message string) error {
-	return protocol.APIError{Code: protocol.CodeDataFailure, Message: message}
+func dataFailure(message string, causes ...error) error {
+	public := protocol.APIError{Code: protocol.CodeDataFailure, Message: message}
+	if cause := errors.Join(causes...); cause != nil {
+		return diagnostics.Wrap(public, cause)
+	}
+	return public
+}
+
+func joinDataFailure(primary, secondary error) error {
+	if primary == nil || secondary == nil || errors.Is(secondary, os.ErrNotExist) {
+		return primary
+	}
+	var api protocol.APIError
+	if errors.As(primary, &api) {
+		return diagnostics.Wrap(api, errors.Join(primary, secondary))
+	}
+	return errors.Join(primary, secondary)
 }

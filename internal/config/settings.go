@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -194,11 +195,11 @@ func Load(path string) (Settings, error) {
 	decoder.KnownFields(true)
 	var settings Settings
 	if err := decoder.Decode(&settings); err != nil {
-		return Settings{}, dataError("invalid settings file")
+		return Settings{}, dataError("invalid settings file", err)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return Settings{}, dataError("settings file must contain one document")
+		return Settings{}, dataError("settings file must contain one document", err)
 	}
 	if err := settings.Validate(); err != nil {
 		return Settings{}, err
@@ -255,6 +256,8 @@ type settingsCreationOps struct {
 	load              func(string) (Settings, error)
 	save              func(string, Settings) (CommitResult, error)
 	openLock          func(string) (*os.File, error)
+	closeLock         func(*os.File) error
+	removeLock        func(string) error
 	transientConflict func(error) bool
 }
 
@@ -267,6 +270,8 @@ func defaultSettingsCreationOps() settingsCreationOps {
 		openLock: func(path string) (*os.File, error) {
 			return os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		},
+		closeLock:         func(file *os.File) error { return file.Close() },
+		removeLock:        os.Remove,
 		transientConflict: isSettingsConflict,
 	}
 }
@@ -282,9 +287,15 @@ func loadOrCreateWithOps(path, sidecar string, ops settingsCreationOps) (Setting
 	return settings, created, nil
 }
 
-func loadOrCreateWithOpsOutcome(path, sidecar string, ops settingsCreationOps) (Settings, bool, CommitResult, error) {
+func loadOrCreateWithOpsOutcome(path, sidecar string, ops settingsCreationOps) (settings Settings, created bool, result CommitResult, resultErr error) {
 	if ops.save == nil {
 		ops.save = SaveWithCommit
+	}
+	if ops.closeLock == nil {
+		ops.closeLock = func(file *os.File) error { return file.Close() }
+	}
+	if ops.removeLock == nil {
+		ops.removeLock = os.Remove
 	}
 	deadline := ops.now().Add(10 * time.Second)
 	settings, err := ops.load(path)
@@ -306,8 +317,15 @@ func loadOrCreateWithOpsOutcome(path, sidecar string, ops settingsCreationOps) (
 	}
 	lockPath := lock.Name()
 	defer func() {
-		_ = lock.Close()
-		_ = os.Remove(lockPath)
+		cleanup := errors.Join(ops.closeLock(lock), removeIfPresent(ops.removeLock, lockPath))
+		if cleanup == nil {
+			return
+		}
+		if resultErr != nil {
+			resultErr = errors.Join(resultErr, cleanup)
+		} else {
+			result.Warning = errors.Join(result.Warning, cleanup)
+		}
 	}()
 	for {
 		if !ops.now().Before(deadline) {
@@ -337,11 +355,18 @@ func loadOrCreateWithOpsOutcome(path, sidecar string, ops settingsCreationOps) (
 	if _, err := applySidecarIfPresent(&settings, sidecar); err != nil {
 		return Settings{}, false, CommitResult{}, err
 	}
-	result, err := ops.save(path, settings)
+	result, err = ops.save(path, settings)
 	if err != nil {
 		return Settings{}, false, result, err
 	}
 	return settings, true, result, nil
+}
+
+func removeIfPresent(remove func(string) error, path string) error {
+	if err := remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 func persistSidecarIfChangedOutcome(path string, settings Settings, sidecar string, save func(string, Settings) (CommitResult, error)) (Settings, bool, CommitResult, error) {
@@ -528,6 +553,10 @@ func parseEndpoint(name, value string, loopback bool) (netip.AddrPort, error) {
 	return endpoint, nil
 }
 
-func dataError(message string) error {
-	return protocol.APIError{Code: protocol.CodeDataFailure, Message: message}
+func dataError(message string, causes ...error) error {
+	public := protocol.APIError{Code: protocol.CodeDataFailure, Message: message}
+	if cause := errors.Join(causes...); cause != nil {
+		return diagnostics.Wrap(public, cause)
+	}
+	return public
 }

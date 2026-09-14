@@ -8,6 +8,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 // Active is the atomic pointer to the panel build served by the Web gateway.
@@ -29,10 +30,10 @@ func LoadActive(path string) (Active, error) {
 	}
 	var active Active
 	if err := json.Unmarshal(raw, &active); err != nil {
-		return Active{}, protocol.APIError{
+		return Active{}, diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeDataFailure,
 			Message: "invalid panel active pointer",
-		}
+		}, err)
 	}
 	return active, nil
 }

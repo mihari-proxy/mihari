@@ -111,11 +111,8 @@ func TestDaemonAssembly_RuntimeBuildFailureIsRecordedBeforeDegradedStartup(t *te
 	if !degraded {
 		t.Fatal("runtime build failure did not continue through degraded daemon startup")
 	}
-	if !strings.Contains(records.String(), `"msg":"runtime_build_failed"`) || !strings.Contains(records.String(), "path operation open: permission denied") {
+	if !strings.Contains(records.String(), `"msg":"runtime_build_failed"`) || !strings.Contains(records.String(), "open /private/runtime.yaml: permission denied") {
 		t.Fatalf("runtime build diagnostic=%s", records.String())
-	}
-	if strings.Contains(records.String(), "/private/runtime.yaml") {
-		t.Fatalf("runtime build diagnostic leaked a path: %s", records.String())
 	}
 }
 

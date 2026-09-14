@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 const validationLeaseFD = 3
@@ -55,7 +56,7 @@ func (l *unixPipeLease) Close() error {
 func newUnixValidationPipes() (parent, child ValidationLease, err error) {
 	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	if err != nil {
-		return nil, nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create validation pipe"}
+		return nil, nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "create validation pipe"}, err)
 	}
 	syscall.CloseOnExec(fds[0])
 	syscall.CloseOnExec(fds[1])

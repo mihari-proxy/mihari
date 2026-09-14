@@ -1,17 +1,16 @@
 package logging
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"hash"
 	"io"
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"github.com/mihari-proxy/mihari/internal/platform"
 )
@@ -84,7 +83,7 @@ type MachineSnapshotOptions struct {
 
 type machineSnapshotSource struct{ options MachineSnapshotOptions }
 
-// NewMachineSnapshotSource borrows the daemon's logging filesystem and redactor.
+// NewMachineSnapshotSource borrows the daemon's logging filesystem.
 func NewMachineSnapshotSource(options MachineSnapshotOptions) MachineSnapshotSource {
 	return &machineSnapshotSource{options: options}
 }
@@ -100,8 +99,7 @@ func (s *machineSnapshotSource) Open(ctx context.Context, window SnapshotWindow)
 			return nil, ErrInvalidExportRequest
 		}
 	}
-	retained, releaseSecrets := s.options.Redactor.snapshot()
-	set := &machineSnapshotSet{releaseSecrets: releaseSecrets}
+	set := &machineSnapshotSet{}
 	var scanned int64
 	for _, source := range []struct {
 		id   SourceID
@@ -124,7 +122,7 @@ func (s *machineSnapshotSource) Open(ctx context.Context, window SnapshotWindow)
 		if err != nil {
 			return nil, errors.Join(err, set.Close())
 		}
-		reader := &machineSourceReader{handles: handles, window: window, redactor: retained, outputBytes: &set.outputBytes, digest: sha256.New(), stats: SourceStats{Source: source.id, Files: []string{}}}
+		reader := &machineSourceReader{handles: handles, window: window, outputBytes: &set.outputBytes, digest: sha256.New(), stats: SourceStats{Source: source.id, Files: []string{}}}
 		set.readers = append(set.readers, reader)
 		if len(handles) > 10 {
 			return nil, errors.Join(errSnapshotBudget, set.Close())
@@ -143,13 +141,12 @@ func (s *machineSnapshotSource) Open(ctx context.Context, window SnapshotWindow)
 var errSnapshotBudget = errors.New("machine snapshot budget exceeded")
 
 type machineSnapshotSet struct {
-	readers        []*machineSourceReader
-	next           int
-	outputBytes    int64
-	closed         atomic.Bool
-	closeOnce      sync.Once
-	closeErr       error
-	releaseSecrets func()
+	readers     []*machineSourceReader
+	next        int
+	outputBytes int64
+	closed      atomic.Bool
+	closeOnce   sync.Once
+	closeErr    error
 }
 
 func (s *machineSnapshotSet) Source(id SourceID) (SourceReader, error) {
@@ -177,9 +174,6 @@ func (s *machineSnapshotSet) Close() error {
 		for _, reader := range s.readers {
 			s.closeErr = errors.Join(s.closeErr, reader.Close())
 		}
-		if s.releaseSecrets != nil {
-			s.releaseSecrets()
-		}
 	})
 	return s.closeErr
 }
@@ -187,7 +181,6 @@ func (s *machineSnapshotSet) Close() error {
 type machineSourceReader struct {
 	handles     []snapshotHandle
 	window      SnapshotWindow
-	redactor    *Redactor
 	outputBytes *int64
 	digest      hash.Hash
 	stats       SourceStats
@@ -237,18 +230,13 @@ func (r *machineSourceReader) Next(ctx context.Context) ([]byte, bool, error) {
 		if !present {
 			continue
 		}
-		record, stamp, valid := decodeExportRecord(line)
-		if !valid || !utf8.Valid(line) {
+		payload, stamp, valid := decodeExportPayload(line)
+		if !valid {
 			r.stats.SkippedInvalid++
 			continue
 		}
 		if stamp.After(r.window.To) || (r.window.From != nil && stamp.Before(*r.window.From)) {
 			continue
-		}
-		clean, changed := r.redactor.Value(record)
-		payload, err := json.Marshal(clean)
-		if err != nil {
-			return r.fail(err)
 		}
 		if len(payload) > MaxExportRecordBytes || int64(len(payload)+1) > (1<<30)-*r.outputBytes {
 			return r.fail(errSnapshotBudget)
@@ -256,16 +244,14 @@ func (r *machineSourceReader) Next(ctx context.Context) ([]byte, bool, error) {
 		if err := ctx.Err(); err != nil {
 			return r.fail(err)
 		}
+		payload = bytes.Clone(payload)
 		// hash.Hash.Write cannot fail, and payload retains the exact sent encoding.
 		_, _ = r.digest.Write(payload)
 		_, _ = r.digest.Write([]byte{'\n'})
 		r.stats.Lines++
-		if changed {
-			r.stats.Redacted++
-		}
 		r.stats.Bytes += int64(len(payload) + 1)
 		*r.outputBytes += int64(len(payload) + 1)
-		return payload, changed, nil
+		return payload, false, nil
 	}
 }
 

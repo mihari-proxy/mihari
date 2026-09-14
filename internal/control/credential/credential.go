@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 func Load(path string) (string, error) {
@@ -18,11 +19,14 @@ func Load(path string) (string, error) {
 	}
 	token := strings.TrimSpace(string(raw))
 	decoded, err := hex.DecodeString(token)
-	if err != nil || len(decoded) != 32 {
-		return "", protocol.APIError{
+	if err != nil {
+		return "", diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeDataFailure,
 			Message: "invalid control credential",
-		}
+		}, err)
+	}
+	if len(decoded) != 32 {
+		return "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control credential"}
 	}
 	return token, nil
 }
@@ -52,13 +56,10 @@ func LoadOrCreate(path string) (string, error) {
 		return "", err
 	}
 	if _, err := file.WriteString(token + "\n"); err != nil {
-		file.Close()
-		os.Remove(path)
-		return "", err
+		return "", errors.Join(err, file.Close(), os.Remove(path))
 	}
 	if err := file.Close(); err != nil {
-		os.Remove(path)
-		return "", err
+		return "", errors.Join(err, os.Remove(path))
 	}
 	return token, nil
 }

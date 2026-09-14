@@ -5,6 +5,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/state"
 )
@@ -128,11 +129,11 @@ func validLoggingLevel(level string) bool {
 
 func loggingConfig(settings config.LoggingSettings) (logging.Config, error) {
 	if _, err := logging.ParseLevel(settings.Level); err != nil {
-		return logging.Config{}, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid logging level"}
+		return logging.Config{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid logging level"}, err)
 	}
 	cfg, err := logging.ConfigFromFields(settings.Level, settings.MaxSizeMB, settings.MaxFiles)
 	if err != nil {
-		return logging.Config{}, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid logging limits"}
+		return logging.Config{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid logging limits"}, err)
 	}
 	return cfg, nil
 }

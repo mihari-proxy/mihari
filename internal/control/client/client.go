@@ -123,7 +123,7 @@ func (c *Client) requestToken(ctx context.Context) (string, error) {
 	if c.provider != nil {
 		token, err := c.provider.Load(ctx)
 		if err != nil {
-			return "", c.localError(err)
+			return "", c.localRuntimeOutcome(err).err
 		}
 		if r != nil {
 			r.RetainCredential(token)
@@ -173,11 +173,12 @@ func (e authenticationError) Hint() string {
 	return "if the control credential was changed, restart the service"
 }
 
-func (c *Client) responseError(response *http.Response) error {
-	return c.responseOutcome(response).err
+func (c *Client) responseError(ctx context.Context, response *http.Response) error {
+	return c.responseOutcome(ctx, response).err
 }
 
-func (c *Client) responseOutcome(response *http.Response) runtimeOutcome {
+func (c *Client) responseOutcome(ctx context.Context, response *http.Response) (outcome runtimeOutcome) {
+	defer c.closeRuntimeResponse(ctx, response, &outcome)
 	err, remoteEnvelope := decodeRuntimeHTTPErrorOutcome(response)
 	var api protocol.APIError
 	if c.provider != nil && response.StatusCode == http.StatusUnauthorized && errors.As(err, &api) && api.Code == protocol.CodePermissionDenied {

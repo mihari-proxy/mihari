@@ -11,6 +11,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/platform"
 )
 
@@ -131,7 +132,7 @@ func LoadChannel(path string) (string, error) {
 		return ChannelMain, nil
 	}
 	if err != nil {
-		return "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "read mihari channel"}
+		return "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "read mihari channel"}, err)
 	}
 	line, _, _ := strings.Cut(string(raw), "\n")
 	switch strings.TrimSpace(line) {
@@ -153,7 +154,7 @@ func SaveChannel(path, channel string) error {
 	_, statErr := os.Lstat(parent)
 	newParent := errors.Is(statErr, os.ErrNotExist)
 	if err := config.AtomicWrite(path, []byte(channel+"\n"), 0o600); err != nil {
-		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "write mihari channel"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "write mihari channel"}, err)
 	}
 	return platform.OwnChannelWrite(path, newParent)
 }

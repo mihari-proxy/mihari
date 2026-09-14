@@ -269,7 +269,7 @@ func TestCoreDiagnostic_FailureJSONKeepsSafeCauseAndExecutionOperation(t *testin
 	if record["msg"] != "operation.failed" || record["operation_id"] != "install-failure-json" || record["operation"] != "core.install" {
 		t.Fatalf("diagnostic record=%#v", record)
 	}
-	if !strings.Contains(causeText, "path operation open") || !strings.Contains(causeText, "permission denied") || strings.Contains(output.String(), secret) {
+	if !strings.Contains(causeText, cause.Error()) {
 		t.Fatalf("diagnostic cause=%q output=%s", causeText, output.String())
 	}
 }

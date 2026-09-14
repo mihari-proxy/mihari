@@ -5,11 +5,17 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
 )
+
+type failingSnapshotReader struct{ err error }
+
+func (r failingSnapshotReader) Read([]byte) (int, error) { return 0, r.err }
 
 func TestDecodeMachineLogRequest_BodyBudget(t *testing.T) {
 	valid := `{"schema":"mihari.machine-log-request/v1","to":"2026-09-05T00:00:00Z"}`
@@ -27,6 +33,23 @@ func TestDecodeMachineLogRequest_BodyBudget(t *testing.T) {
 	}
 }
 
+func TestDecodeMachineLogRequest_PreservesReadAndParseCauses(t *testing.T) {
+	now := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+	readCause := errors.New("read snapshot request fixture")
+	if _, err := DecodeMachineLogRequest(failingSnapshotReader{err: readCause}, now); !errors.Is(err, readCause) {
+		t.Fatalf("read cause lost: %v", err)
+	}
+	_, err := DecodeMachineLogRequest(strings.NewReader(`{"schema":"mihari.machine-log-request/v1","to":`), now)
+	var syntax *json.SyntaxError
+	if !errors.As(err, &syntax) && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("JSON parse cause lost: %v", err)
+	}
+	var api APIError
+	if !errors.As(err, &api) || err.Error() != "invalid machine snapshot request" {
+		t.Fatalf("public error changed: %v", err)
+	}
+}
+
 func TestDecodeMachineLogPayload_PreservesFixtureBytes(t *testing.T) {
 	const encoded = "eyJ0aW1lIjoiMjAyNi0wOS0wNVQwMDowMDowMFoiLCJtc2ciOiLoioLngrkiLCJuIjoxZTB9"
 	got, err := DecodeMachineLogPayload(encoded)
@@ -41,6 +64,23 @@ func TestDecodeMachineLogPayload_PreservesFixtureBytes(t *testing.T) {
 	digest := sha256.Sum256(line)
 	if len(line) != 55 || hex.EncodeToString(digest[:]) != "1625f1821f85ab2dc68c7da55c4fbe769637b7752174c7d5be8a83cd8d388a48" {
 		t.Fatal("fixture wire digest changed")
+	}
+}
+
+func TestDecodeMachineLogPayload_PreservesDecodeCauses(t *testing.T) {
+	_, err := DecodeMachineLogPayload("!!!!")
+	var corrupt base64.CorruptInputError
+	if !errors.As(err, &corrupt) {
+		t.Fatalf("base64 cause lost: %v", err)
+	}
+	_, err = DecodeMachineLogPayload(base64.StdEncoding.EncodeToString([]byte(`{"value":`)))
+	var syntax *json.SyntaxError
+	if !errors.As(err, &syntax) {
+		t.Fatalf("JSON cause lost: %v", err)
+	}
+	var api APIError
+	if !errors.As(err, &api) || err.Error() != "invalid machine snapshot payload" {
+		t.Fatalf("public error changed: %v", err)
 	}
 }
 

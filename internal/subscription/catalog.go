@@ -12,6 +12,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -51,11 +52,11 @@ func Load(path string) (Catalog, error) {
 	decoder.KnownFields(true)
 	var catalog Catalog
 	if err := decoder.Decode(&catalog); err != nil {
-		return Catalog{}, dataError(decodeErrorMessage(err, "subscription catalog"))
+		return Catalog{}, dataError(decodeErrorMessage(err, "subscription catalog"), err)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return Catalog{}, dataError("subscription catalog must contain one document")
+		return Catalog{}, dataError("subscription catalog must contain one document", err)
 	}
 	catalog.migrate()
 	if err := catalog.Normalize(); err != nil {
@@ -87,7 +88,7 @@ func Save(path string, catalog Catalog) error {
 	catalog.fillDefaults()
 	content, err := yaml.Marshal(catalog)
 	if err != nil {
-		return dataError("encode subscription catalog")
+		return dataError("encode subscription catalog", err)
 	}
 	return config.AtomicWrite(path, content, 0o600)
 }
@@ -115,7 +116,7 @@ func (c *Catalog) Normalize() error {
 		}
 		parsed, err := url.Parse(profile.URL)
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-			return dataError("subscription URL must use HTTP or HTTPS")
+			return dataError("subscription URL must use HTTP or HTTPS", err)
 		}
 		if !ValidProxyMode(profile.ProxyMode) {
 			return dataError("invalid subscription proxy mode")
@@ -186,13 +187,17 @@ func (c Catalog) EffectiveInterval(profile Profile) time.Duration {
 func parseInterval(value string) (time.Duration, error) {
 	duration, err := time.ParseDuration(value)
 	if err != nil || duration <= 0 {
-		return 0, dataError(fmt.Sprintf("invalid refresh interval %q", value))
+		return 0, dataError(fmt.Sprintf("invalid refresh interval %q", value), err)
 	}
 	return duration, nil
 }
 
-func dataError(message string) error {
-	return protocol.APIError{Code: protocol.CodeDataFailure, Message: message}
+func dataError(message string, causes ...error) error {
+	public := protocol.APIError{Code: protocol.CodeDataFailure, Message: message}
+	if cause := errors.Join(causes...); cause != nil {
+		return diagnostics.Wrap(public, cause)
+	}
+	return public
 }
 
 // decodeErrorMessage turns a yaml decode error into a user-facing message.

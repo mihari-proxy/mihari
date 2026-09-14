@@ -100,7 +100,7 @@ func TestLineCaptureWriter_UTF8SplitAcrossWrites(t *testing.T) {
 	assertCapture(t, recs[0], "INFO", "世界", "stdout", false, false)
 }
 
-func TestLineCaptureWriter_Exact16KiB(t *testing.T) {
+func TestLineCaptureWriter_Exact256KiB(t *testing.T) {
 	w, buf := newTestCapture(t, slog.LevelInfo, "stdout")
 	line := bytes.Repeat([]byte("x"), MaxCaptureLineBytes)
 	payload := append(line, '\n')
@@ -115,7 +115,7 @@ func TestLineCaptureWriter_Exact16KiB(t *testing.T) {
 	assertCapture(t, recs[0], "INFO", string(line), "stdout", false, false)
 }
 
-func TestLineCaptureWriter_TruncatesOver16KiB(t *testing.T) {
+func TestLineCaptureWriter_TruncatesOver256KiB(t *testing.T) {
 	w, buf := newTestCapture(t, slog.LevelInfo, "stdout")
 	line := bytes.Repeat([]byte("x"), MaxCaptureLineBytes+100)
 	payload := append(append(line, '\n'), []byte("next\n")...)
@@ -157,7 +157,7 @@ func TestLineCaptureWriter_BufferNeverExceedsExactCap(t *testing.T) {
 	if len(recs) != 1 {
 		t.Fatalf("records=%d, want 1", len(recs))
 	}
-	assertCapture(t, recs[0], "INFO", strings.Repeat("x", MaxCaptureLineBytes-1)+"\uFFFD", "stdout", true, true)
+	assertCapture(t, recs[0], "INFO", strings.Repeat("x", MaxCaptureLineBytes-1), "stdout", true, false)
 }
 
 func TestLineCaptureWriter_FlushPartialThenWrite(t *testing.T) {

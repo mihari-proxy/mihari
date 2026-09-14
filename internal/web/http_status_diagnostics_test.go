@@ -21,7 +21,7 @@ type partialDiagnosticBody struct {
 	reads, closes     int
 }
 
-func TestHTTPBody_CloseOwnerCancellationIsQuiet(t *testing.T) {
+func TestHTTPBody_CloseOwnerCancellationIsInfo(t *testing.T) {
 	for _, failure := range []error{context.Canceled, context.DeadlineExceeded} {
 		t.Run(failure.Error(), func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -32,12 +32,17 @@ func TestHTTPBody_CloseOwnerCancellationIsQuiet(t *testing.T) {
 			cancel()
 			source := &partialDiagnosticBody{closeErr: failure}
 			reports := 0
-			body := &observedHTTPBody{ReadCloser: source, ctx: ctx, reporter: func(context.Context, diagnostics.Record) { reports++ }, detail: diagnostics.HTTPError{Status: http.StatusOK}}
+			body := &observedHTTPBody{ReadCloser: source, ctx: ctx, reporter: func(_ context.Context, record diagnostics.Record) {
+				reports++
+				if record.Level != slog.LevelInfo || !errors.Is(record.Err, failure) {
+					t.Error("cancellation lost INFO or original cause")
+				}
+			}, detail: diagnostics.HTTPError{Status: http.StatusOK}}
 			if err := body.Close(); !errors.Is(err, failure) {
 				t.Fatal("close result changed")
 			}
-			if reports != 0 || source.closes != 1 {
-				t.Fatal("owner cancellation logged or body not closed exactly once")
+			if reports != 1 || source.closes != 1 {
+				t.Fatal("owner cancellation missing or body not closed exactly once")
 			}
 		})
 	}
@@ -55,7 +60,7 @@ func (b *partialDiagnosticBody) Read(p []byte) (int, error) {
 func (b *partialDiagnosticBody) Close() error { b.closes++; return b.closeErr }
 
 func TestHTTPBody_ObserveOnlyConsumedBytesAndCloseOnce(t *testing.T) {
-	original := bytes.Repeat([]byte{0x1f, 0x8b, 'a'}, 30000)
+	original := bytes.Repeat([]byte{0x1f, 0x8b, 'a'}, 100000)
 	source := &partialDiagnosticBody{data: append([]byte(nil), original...), readErr: io.ErrUnexpectedEOF, closeErr: errors.New("close failed")}
 	var records []diagnostics.Record
 	body := &observedHTTPBody{ReadCloser: source, ctx: context.Background(), reporter: func(_ context.Context, r diagnostics.Record) { records = append(records, r) }, detail: diagnostics.HTTPError{Status: 503, Phase: "response"}}
@@ -68,16 +73,16 @@ func TestHTTPBody_ObserveOnlyConsumedBytesAndCloseOnce(t *testing.T) {
 	}
 	_ = body.Close()
 	_ = body.Close()
-	if source.closes != 1 || len(records) != 1 || len(body.raw) > 64<<10 {
+	if source.closes != 1 || len(records) != 1 || len(body.raw) > diagnostics.MaxHTTPBodyBytes+1 {
 		t.Fatal("unbounded capture or duplicate close/report")
 	}
 	detail := records[0].Err.(*diagnostics.HTTPError)
-	if !strings.Contains(detail.DiagnosticText(), "truncated") || !errors.Is(detail, io.ErrUnexpectedEOF) || !strings.Contains(detail.DiagnosticText(), "close failed") {
+	if len(detail.Body) > diagnostics.MaxHTTPBodyBytes || !strings.Contains(detail.DiagnosticText(), "truncated") || !errors.Is(detail, io.ErrUnexpectedEOF) || !strings.Contains(detail.DiagnosticText(), "close failed") {
 		t.Fatal("partial body lost diagnostic causes")
 	}
 }
 
-func TestHTTPBody_SuccessNoDumpAndCanceledReadQuiet(t *testing.T) {
+func TestHTTPBody_SuccessNoDumpAndCanceledReadInfo(t *testing.T) {
 	for _, cancelled := range []bool{false, true} {
 		ctx, cancel := context.WithCancel(context.Background())
 		source := &partialDiagnosticBody{data: []byte("successful private config"), readErr: io.EOF}
@@ -90,8 +95,15 @@ func TestHTTPBody_SuccessNoDumpAndCanceledReadQuiet(t *testing.T) {
 		_, _ = io.ReadAll(body)
 		_ = body.Close()
 		cancel()
-		if len(records) != 0 || len(body.raw) != 0 {
-			t.Fatal("successful/canceled read logged or dumped body")
+		want := 0
+		if cancelled {
+			want = 1
+		}
+		if len(records) != want || len(body.raw) != 0 {
+			t.Fatal("incorrect cancellation reporting or successful body dumped")
+		}
+		if cancelled && (records[0].Level != slog.LevelInfo || !errors.Is(records[0].Err, context.Canceled)) {
+			t.Fatal("cancellation lost INFO classification or cause")
 		}
 	}
 	source := &partialDiagnosticBody{readErr: io.EOF, closeErr: errors.New("close failure")}

@@ -171,7 +171,7 @@ func TestOnboarding_SettingsAndStateCommitBeforePublish(t *testing.T) {
 	if current := manager.settingsSnapshot(); current.WebAddr != webAddr || current.EffectiveLogging() != settings.EffectiveLogging() {
 		t.Fatalf("published settings=%#v", current)
 	}
-	if len(warnings) != 1 || warnings[0] != "onboarding parent directory sync failed after commit" {
+	if len(warnings) != 1 || warnings[0] != "onboarding parent directory sync failed after commit: C:\\sensitive\\onboarding.json" {
 		t.Fatalf("warnings=%v", warnings)
 	}
 }

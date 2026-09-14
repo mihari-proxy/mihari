@@ -31,7 +31,7 @@ func (s *Server) enableSystemProxy(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	var body protocol.SystemProxyMutationRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "system_proxy.enable"})
@@ -50,7 +50,7 @@ func (s *Server) disableSystemProxy(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	var body protocol.SystemProxyMutationRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	// Force is intentionally ignored on disable; foreign proxies are refused by runtime.

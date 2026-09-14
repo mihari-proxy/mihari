@@ -3,7 +3,9 @@ package subscription
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -49,6 +51,7 @@ type Downloader struct {
 	direct   *http.Client
 	proxy    *http.Client
 	MaxBytes int64
+	Reporter diagnostics.Reporter
 }
 
 // DownloaderOptions configures a Downloader. Client is the direct transport; a
@@ -58,6 +61,7 @@ type DownloaderOptions struct {
 	Client   *http.Client
 	ProxyURL *url.URL
 	MaxBytes int64
+	Reporter diagnostics.Reporter
 }
 
 func NewDownloader(opts DownloaderOptions) *Downloader {
@@ -73,7 +77,7 @@ func NewDownloader(opts DownloaderOptions) *Downloader {
 	if opts.ProxyURL != nil {
 		proxyClient = newHTTPClient(opts.ProxyURL)
 	}
-	return &Downloader{direct: direct, proxy: proxyClient, MaxBytes: maxBytes}
+	return &Downloader{direct: direct, proxy: proxyClient, MaxBytes: maxBytes, Reporter: opts.Reporter}
 }
 
 // newHTTPClient builds a 30s HTTP client with the shared redirect policy. When
@@ -116,16 +120,25 @@ func (d *Downloader) Fetch(ctx context.Context, input FetchRequest) (FetchResult
 		if err == nil {
 			if index > 0 {
 				result.FellBack = true
+				if d.Reporter != nil {
+					d.Reporter(ctx, diagnostics.Record{Component: "subscription", Event: "download.recovered", Level: slog.LevelInfo})
+				}
 			}
 			return result, nil
 		}
 		last = err
-		if ctx.Err() != nil {
+		if diagnostics.NormalCancellation(ctx, err) {
 			return FetchResult{}, ctx.Err()
+		}
+		if ctx.Err() != nil {
+			return FetchResult{}, toAPIError(err)
 		}
 		// Retry only on network-layer failures, and only while a client remains.
 		if !isFallbackable(err) || index == len(order)-1 {
 			break
+		}
+		if d.Reporter != nil {
+			d.Reporter(ctx, diagnostics.Record{Component: "subscription", Event: "download.retry", Level: slog.LevelWarn, Err: fmt.Errorf("subscription download attempt %d of %d: %w", index+1, len(order), err)})
 		}
 	}
 	return FetchResult{}, toAPIError(last)
@@ -162,10 +175,10 @@ func (d *Downloader) orderFor(mode string) []*http.Client {
 }
 
 // do performs one fetch attempt against a single client.
-func (d *Downloader) do(ctx context.Context, input FetchRequest, client *http.Client) (FetchResult, error) {
+func (d *Downloader) do(ctx context.Context, input FetchRequest, client *http.Client) (result FetchResult, resultErr error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, input.URL, nil)
 	if err != nil {
-		return FetchResult{}, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid subscription URL"}
+		return FetchResult{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid subscription URL"}, err)
 	}
 	request.Header.Set("User-Agent", subscriptionUserAgent)
 	request.Header.Set("Accept", "application/yaml, text/yaml, text/plain, application/octet-stream")
@@ -177,13 +190,27 @@ func (d *Downloader) do(ctx context.Context, input FetchRequest, client *http.Cl
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		if ctx.Err() != nil {
+		if diagnostics.NormalCancellation(ctx, err) {
 			return FetchResult{}, ctx.Err()
 		}
 		return FetchResult{}, networkFailureError{cause: err}
 	}
-	defer response.Body.Close()
-	result := FetchResult{
+	defer func() {
+		if closeErr := response.Body.Close(); closeErr != nil {
+			if resultErr != nil {
+				var api protocol.APIError
+				if errors.As(resultErr, &api) {
+					resultErr = diagnostics.Wrap(api, errors.Join(resultErr, closeErr))
+				} else {
+					resultErr = errors.Join(resultErr, closeErr)
+				}
+			} else if d.Reporter != nil {
+				level, _ := diagnostics.FailureLevel(ctx, closeErr)
+				d.Reporter(ctx, diagnostics.Record{Component: "subscription", Event: "response.close_failed", Level: min(level, slog.LevelWarn), Err: closeErr})
+			}
+		}
+	}()
+	result = FetchResult{
 		ETag:         response.Header.Get("ETag"),
 		LastModified: response.Header.Get("Last-Modified"),
 		// Go canonicalizes the header key; providers send "subscription-userinfo".
@@ -194,7 +221,9 @@ func (d *Downloader) do(ctx context.Context, input FetchRequest, client *http.Cl
 		return result, nil
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return FetchResult{}, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "subscription provider returned an unsuccessful response", Details: map[string]any{"status": response.StatusCode}}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, diagnostics.MaxHTTPBodyBytes+1))
+		detail := &diagnostics.HTTPError{Operation: "subscription download", URL: input.URL, Phase: "response", Status: response.StatusCode, Body: diagnostics.HTTPBody(body), Cause: readErr}
+		return FetchResult{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "subscription provider returned an unsuccessful response", Details: map[string]any{"status": response.StatusCode}}, detail)
 	}
 	limit := d.MaxBytes
 	if limit <= 0 {
@@ -202,7 +231,7 @@ func (d *Downloader) do(ctx context.Context, input FetchRequest, client *http.Cl
 	}
 	content, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {
-		return FetchResult{}, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read subscription response"}
+		return FetchResult{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read subscription response"}, &diagnostics.HTTPError{Operation: "subscription download", URL: input.URL, Phase: "read", Cause: err})
 	}
 	if int64(len(content)) > limit {
 		return FetchResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription document is too large"}

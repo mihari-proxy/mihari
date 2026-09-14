@@ -8,6 +8,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/buildinfo"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/update"
@@ -55,7 +56,7 @@ func newSelfChannelCommand(dependencies Dependencies, options *runOptions) *cobr
 			}
 			path, err := platform.ChannelPath()
 			if err != nil {
-				return protocol.APIError{Code: protocol.CodeDataFailure, Message: "resolve mihari channel path"}
+				return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "resolve mihari channel path"}, err)
 			}
 			if len(args) == 1 {
 				if err := update.SaveChannel(path, args[0]); err != nil {

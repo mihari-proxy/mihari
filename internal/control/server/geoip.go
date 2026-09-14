@@ -33,11 +33,11 @@ func (s *Server) geoIPLookup(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	var body protocol.GeoIPLookupRequest
-	if !decodeControlJSON(writer, request, &body) {
+	if !s.decodeControlJSON(writer, request, &body) {
 		return
 	}
 	if len(body.Addresses) == 0 || len(body.Addresses) > 16 {
-		writeInvalidArgument(writer, "geoip lookup requires 1 to 16 addresses")
+		s.writeInvalidArgument(request.Context(), writer, "geoip lookup requires 1 to 16 addresses")
 		return
 	}
 	addresses := make([]netip.Addr, 0, len(body.Addresses))
@@ -45,16 +45,16 @@ func (s *Server) geoIPLookup(writer http.ResponseWriter, request *http.Request) 
 	for _, raw := range body.Addresses {
 		address, err := netip.ParseAddr(raw)
 		if err != nil {
-			writeInvalidArgument(writer, "invalid geoip address")
+			s.writeInvalidArgument(request.Context(), writer, "invalid geoip address")
 			return
 		}
 		address = address.Unmap()
 		if !address.IsGlobalUnicast() || address.IsPrivate() || address.IsLoopback() || address.IsMulticast() || address.IsUnspecified() {
-			writeInvalidArgument(writer, "geoip lookup accepts public addresses only")
+			s.writeInvalidArgument(request.Context(), writer, "geoip lookup accepts public addresses only")
 			return
 		}
 		if _, exists := seen[address]; exists {
-			writeInvalidArgument(writer, "duplicate geoip address")
+			s.writeInvalidArgument(request.Context(), writer, "duplicate geoip address")
 			return
 		}
 		seen[address] = struct{}{}
@@ -84,7 +84,7 @@ func (s *Server) geoIPUpdate(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	var body protocol.MutationRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "geoip.update"})

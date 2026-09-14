@@ -117,12 +117,14 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		CatalogPath: paths.SubscriptionCatalog,
 		CacheDir:    paths.SubscriptionCache,
 		ProxyAddr:   settings.MixedAddr,
+		Reporter:    options.DiagnosticReporter,
 	})
 	if err != nil {
 		return nil, err
 	}
-	installer := core.Installer{}
+	installer := core.Installer{Reporter: options.DiagnosticReporter}
 	if options.TrustedCore != nil {
+		options.TrustedCore.SetDiagnosticReporter(options.DiagnosticReporter)
 
 		if err := core.RecoverProvenance(context.Background(), options.TrustedCore.Provenance()); err != nil {
 			return nil, err
@@ -177,7 +179,8 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	geoIPService := geoip.New(geoip.ServiceOptions{
 		CountryPath: paths.GeoIPCountry,
 		ASNPath:     paths.GeoIPASN,
-		Downloader:  geoip.Downloader{StagingDir: paths.GeoIPStaging},
+		Reporter:    options.DiagnosticReporter,
+		Downloader:  geoip.Downloader{StagingDir: paths.GeoIPStaging, Reporter: options.DiagnosticReporter},
 	})
 	settingsPath := options.SettingsPath
 	if settingsPath == "" {
@@ -200,11 +203,16 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	if err != nil {
 		return nil, err
 	}
+	zashboardAdapter := zashboard.New(nil, "")
+	zashboardAdapter.Client.Reporter = options.DiagnosticReporter
+	metacubexdAdapter := metacubexd.New(nil, "")
+	metacubexdAdapter.Client.Reporter = options.DiagnosticReporter
 	panelService, err := panel.Open(panel.ServiceOptions{
 		WebRoot: paths.WebRoot, WebActive: paths.WebActive, StagingDir: paths.PanelStaging,
+		Reporter: options.DiagnosticReporter,
 		Adapters: []panel.Adapter{
-			zashboard.New(nil, ""),
-			metacubexd.New(nil, ""),
+			zashboardAdapter,
+			metacubexdAdapter,
 		},
 	})
 	if err != nil {
@@ -360,7 +368,7 @@ func runSchedulers(ctx context.Context, subscriptionRun, geoIPRun func(context.C
 		}
 		if reporter != nil {
 			reporter(ctx, diagnostics.Record{Component: component, Event: "background.failed", Level: level, Err: err})
-		} else if onBackgroundError != nil {
+		} else if onBackgroundError != nil && !diagnostics.NormalCancellation(ctx, err) {
 			onBackgroundError(component, err)
 		}
 	}
@@ -464,7 +472,7 @@ func BuildValidationRuntime(ctx context.Context, paths platform.Paths, settings 
 		}
 		file, err := os.Open(filepath.Join(paths.SubscriptionCache, profile.ID+".yaml"))
 		if err != nil {
-			return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription cache is unavailable"}
+			return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription cache is unavailable"}, err)
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(validationContextReader{ctx: ctx, reader: file}, (16<<20)+1))
 		if err = errors.Join(readErr, file.Close()); err != nil {
@@ -515,18 +523,18 @@ func startupConfig(subscriptions *subscription.Service, settings config.Settings
 		}
 		_, cached, err := subscriptions.ReadCache(catalog.ActiveID)
 		if err != nil {
-			return nil, startupCacheError()
+			return nil, startupCacheError(err)
 		}
 		document = cached
 	}
 	content, err := subscription.Generate(document, nil, settings)
 	if err != nil {
-		return nil, startupCacheError()
+		return nil, startupCacheError(err)
 	}
 	return content, nil
 }
-func startupCacheError() error {
-	return protocol.APIError{Code: protocol.CodeDataFailure, Message: "active subscription cache is unavailable"}
+func startupCacheError(causes ...error) error {
+	return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "active subscription cache is unavailable"}, errors.Join(causes...))
 }
 
 type webMutationRuntime interface {

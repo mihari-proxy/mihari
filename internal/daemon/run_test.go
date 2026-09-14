@@ -2,15 +2,38 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	transporttest "github.com/mihari-proxy/mihari/internal/control/transport/testutil"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
+
+type closeErrorListener struct {
+	net.Listener
+	err error
+}
+
+type closedOnSecondListener struct {
+	net.Listener
+	closes atomic.Int32
+}
+
+func (l *closedOnSecondListener) Close() error {
+	if l.closes.Add(1) == 1 {
+		return l.Listener.Close()
+	}
+	return net.ErrClosed
+}
+
+func (l closeErrorListener) Close() error {
+	return errors.Join(l.Listener.Close(), l.err)
+}
 
 func TestRunStopsWhenContextIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -152,6 +175,81 @@ func TestRunForwardsDiagnosticReporterToControlServer(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOwnerScan_RunReportsRuntimeAndListenerCleanupFailures(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeCause := errors.New("runtime private failure")
+	closeCause := errors.New("listener close private failure")
+	ctx, cancel := context.WithCancel(context.Background())
+	records := make(chan diagnostics.Record, 4)
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Options{
+			Listen: func(context.Context) (net.Listener, error) {
+				return closeErrorListener{Listener: listener, err: closeCause}, nil
+			},
+			Token:   "token",
+			Ready:   ready,
+			Runtime: runtimeFunc(func(context.Context) error { return runtimeCause }),
+			DiagnosticReporter: func(_ context.Context, record diagnostics.Record) {
+				records <- record
+			},
+		})
+	}()
+	<-ready
+	select {
+	case record := <-records:
+		if !errors.Is(record.Err, runtimeCause) || record.Level != slog.LevelError {
+			t.Fatalf("runtime record=%#v", record)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runtime failure was not reported")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case record := <-records:
+		if !errors.Is(record.Err, closeCause) || record.Level != slog.LevelWarn {
+			t.Fatalf("listener close record=%#v", record)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("listener cleanup failure was not reported")
+	}
+}
+
+func TestOwnerScan_NormalListenerShutdownDoesNotReportClosedCleanup(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped := &closedOnSecondListener{Listener: listener}
+	ctx, cancel := context.WithCancel(context.Background())
+	records := make(chan diagnostics.Record, 2)
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Options{
+			Listen: func(context.Context) (net.Listener, error) { return wrapped, nil }, Token: "token", Ready: ready,
+			DiagnosticReporter: func(_ context.Context, record diagnostics.Record) { records <- record },
+		})
+	}()
+	<-ready
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case record := <-records:
+		t.Fatalf("normal listener shutdown reported cleanup failure: %#v", record)
+	default:
 	}
 }
 

@@ -27,18 +27,18 @@ func TestFailureLevel_ClassifiesExpectedAndActualFailures(t *testing.T) {
 		wantEmit  bool
 	}{
 		{name: "nil", ctx: context.Background(), wantEmit: false},
-		{name: "canceled", ctx: canceled, err: context.Canceled, wantEmit: false},
-		{name: "wrapped cancellation", ctx: canceled, err: fmt.Errorf("stop operation: %w", context.Canceled), wantEmit: false},
-		{name: "public wrapper around cancellation", ctx: canceled, err: Wrap(apiFailureValue(protocol.CodeDataFailure), context.Canceled), wantEmit: false},
-		{name: "expired deadline", ctx: deadline, err: context.DeadlineExceeded, wantEmit: false},
+		{name: "canceled", ctx: canceled, err: context.Canceled, wantLevel: slog.LevelInfo, wantEmit: true},
+		{name: "wrapped cancellation", ctx: canceled, err: fmt.Errorf("stop operation: %w", context.Canceled), wantLevel: slog.LevelInfo, wantEmit: true},
+		{name: "public wrapper around cancellation", ctx: canceled, err: Wrap(apiFailureValue(protocol.CodeDataFailure), context.Canceled), wantLevel: slog.LevelInfo, wantEmit: true},
+		{name: "expired deadline", ctx: deadline, err: context.DeadlineExceeded, wantLevel: slog.LevelInfo, wantEmit: true},
 		{name: "upstream deadline", ctx: context.Background(), err: context.DeadlineExceeded, wantLevel: slog.LevelError, wantEmit: true},
 		{name: "cancellation with disk failure", ctx: canceled, err: errors.Join(context.Canceled, &os.PathError{Op: "write", Path: "/private/settings.yaml", Err: os.ErrPermission}), wantLevel: slog.LevelError, wantEmit: true},
 		{name: "deadline with disk failure", ctx: deadline, err: errors.Join(context.DeadlineExceeded, &os.PathError{Op: "sync", Path: "/private", Err: os.ErrPermission}), wantLevel: slog.LevelError, wantEmit: true},
-		{name: "invalid argument", ctx: context.Background(), err: apiFailure(protocol.CodeInvalidArgument), wantLevel: slog.LevelDebug, wantEmit: true},
-		{name: "revision conflict", ctx: context.Background(), err: apiFailure(protocol.CodeRevisionConflict), wantLevel: slog.LevelDebug, wantEmit: true},
-		{name: "system proxy conflict", ctx: context.Background(), err: apiFailure(protocol.CodeSystemProxyConflict), wantLevel: slog.LevelDebug, wantEmit: true},
-		{name: "system proxy not owned", ctx: context.Background(), err: apiFailure(protocol.CodeSystemProxyNotOwned), wantLevel: slog.LevelDebug, wantEmit: true},
-		{name: "tun conflict", ctx: context.Background(), err: apiFailure(protocol.CodeTunConflict), wantLevel: slog.LevelDebug, wantEmit: true},
+		{name: "invalid argument", ctx: context.Background(), err: apiFailure(protocol.CodeInvalidArgument), wantLevel: slog.LevelInfo, wantEmit: true},
+		{name: "revision conflict", ctx: context.Background(), err: apiFailure(protocol.CodeRevisionConflict), wantLevel: slog.LevelInfo, wantEmit: true},
+		{name: "system proxy conflict", ctx: context.Background(), err: apiFailure(protocol.CodeSystemProxyConflict), wantLevel: slog.LevelInfo, wantEmit: true},
+		{name: "system proxy not owned", ctx: context.Background(), err: apiFailure(protocol.CodeSystemProxyNotOwned), wantLevel: slog.LevelInfo, wantEmit: true},
+		{name: "tun conflict", ctx: context.Background(), err: apiFailure(protocol.CodeTunConflict), wantLevel: slog.LevelInfo, wantEmit: true},
 		{name: "data failure", ctx: context.Background(), err: apiFailure(protocol.CodeDataFailure), wantLevel: slog.LevelError, wantEmit: true},
 		{name: "internal failure", ctx: context.Background(), err: apiFailure(protocol.CodeInternal), wantLevel: slog.LevelError, wantEmit: true},
 		{name: "network failure", ctx: context.Background(), err: apiFailure(protocol.CodeNetworkFailure), wantLevel: slog.LevelError, wantEmit: true},
@@ -79,8 +79,8 @@ func TestFailureLevel_ActiveCycleIsActualFailureButSharedDAGIsNot(t *testing.T) 
 	}
 
 	shared := &failureLevelWrap{cause: context.Canceled}
-	if level, emit := FailureLevel(canceled, errors.Join(shared, shared)); emit {
-		t.Fatalf("shared completed cancellation = (%v, %v), want no record", level, emit)
+	if level, emit := FailureLevel(canceled, errors.Join(shared, shared)); !emit || level != slog.LevelInfo {
+		t.Fatalf("shared completed cancellation = (%v, %v), want (INFO, true)", level, emit)
 	}
 }
 
@@ -92,8 +92,8 @@ func TestFailureLevel_TraversalBoundsCountRootAndFanoutWork(t *testing.T) {
 	for range 31 {
 		withinDepth = &failureLevelWrap{cause: withinDepth}
 	}
-	if level, emit := FailureLevel(canceled, withinDepth); emit {
-		t.Fatalf("32-layer cancellation = (%v, %v), want no record", level, emit)
+	if level, emit := FailureLevel(canceled, withinDepth); !emit || level != slog.LevelInfo {
+		t.Fatalf("32-layer cancellation = (%v, %v), want (INFO, true)", level, emit)
 	}
 
 	beyondDepth := error(context.Canceled)
@@ -108,8 +108,8 @@ func TestFailureLevel_TraversalBoundsCountRootAndFanoutWork(t *testing.T) {
 	for i := range withinNodes {
 		withinNodes[i] = context.Canceled
 	}
-	if level, emit := FailureLevel(canceled, failureLevelMulti{children: withinNodes}); emit {
-		t.Fatalf("64-node repeated DAG = (%v, %v), want no record", level, emit)
+	if level, emit := FailureLevel(canceled, failureLevelMulti{children: withinNodes}); !emit || level != slog.LevelInfo {
+		t.Fatalf("64-node repeated DAG = (%v, %v), want (INFO, true)", level, emit)
 	}
 
 	wide := make([]error, 64)

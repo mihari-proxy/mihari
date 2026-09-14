@@ -6,10 +6,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 
 	maxminddb "github.com/oschwald/maxminddb-golang/v2"
 )
@@ -74,6 +77,7 @@ type ServiceOptions struct {
 	ASNChecksumURL     string
 	Downloader         Downloader
 	OpenDatabase       func(string) (databaseReader, error)
+	Reporter           diagnostics.Reporter
 }
 
 // Service owns the active MMDB readers and their update transaction.
@@ -93,6 +97,7 @@ type Service struct {
 	asnURL             string
 	asnChecksumURL     string
 	openDatabase       func(string) (databaseReader, error)
+	reporter           diagnostics.Reporter
 }
 
 type countryRecord struct {
@@ -123,13 +128,26 @@ func New(options ServiceOptions) *Service {
 	if options.OpenDatabase == nil {
 		options.OpenDatabase = openDatabase
 	}
+	if options.Downloader.Reporter == nil {
+		options.Downloader.Reporter = options.Reporter
+	}
 	service := &Service{
 		countryPath: options.CountryPath, asnPath: options.ASNPath, downloader: options.Downloader,
 		countryURL: options.CountryURL, countryChecksumURL: options.CountryChecksumURL,
-		asnURL: options.ASNURL, asnChecksumURL: options.ASNChecksumURL, openDatabase: options.OpenDatabase,
+		asnURL: options.ASNURL, asnChecksumURL: options.ASNChecksumURL, openDatabase: options.OpenDatabase, reporter: options.Reporter,
 	}
 	service.country, service.countryErr = service.openDatabase(options.CountryPath)
 	service.asn, service.asnErr = service.openDatabase(options.ASNPath)
+	if service.reporter != nil {
+		for _, item := range []struct {
+			event string
+			err   error
+		}{{"country.open.failed", service.countryErr}, {"asn.open.failed", service.asnErr}} {
+			if item.err != nil && !errors.Is(item.err, os.ErrNotExist) && !errors.Is(item.err, ErrUnavailable) {
+				service.reporter(context.Background(), diagnostics.Record{Component: "geoip", Event: item.event, Level: slog.LevelWarn, Err: item.err})
+			}
+		}
+	}
 	return service
 }
 
@@ -200,7 +218,9 @@ func (p *PreparedUpdate) Commit() error {
 	if s.generation != p.baseGeneration {
 		return ErrStaleCandidate
 	}
-	s.closeReadersLocked()
+	if err := s.closeReadersLocked(); err != nil {
+		return err
+	}
 	if err := p.country.Commit(); err != nil {
 		s.reopenLocked()
 		return joinUpdateRecovery(err, s.countryErr, s.asnErr)
@@ -213,16 +233,17 @@ func (p *PreparedUpdate) Commit() error {
 	country, countryErr := s.openDatabase(s.countryPath)
 	asn, asnErr := s.openDatabase(s.asnPath)
 	if countryErr != nil || asnErr != nil {
+		var openedCloseErr error
 		if country != nil {
-			_ = country.Close()
+			openedCloseErr = errors.Join(openedCloseErr, country.Close())
 		}
 		if asn != nil {
-			_ = asn.Close()
+			openedCloseErr = errors.Join(openedCloseErr, asn.Close())
 		}
 		asnRestoreErr := p.asn.Rollback()
 		countryRestoreErr := p.country.Rollback()
 		s.reopenLocked()
-		return joinUpdateRecovery(errors.Join(countryErr, asnErr), asnRestoreErr, countryRestoreErr, s.countryErr, s.asnErr)
+		return joinUpdateRecovery(errors.Join(countryErr, asnErr), openedCloseErr, asnRestoreErr, countryRestoreErr, s.countryErr, s.asnErr)
 	}
 	s.country, s.asn = country, asn
 	s.countryErr, s.asnErr = nil, nil
@@ -231,15 +252,17 @@ func (p *PreparedUpdate) Commit() error {
 	return nil
 }
 
-func (s *Service) closeReadersLocked() {
+func (s *Service) closeReadersLocked() error {
+	var result error
 	if s.country != nil {
-		_ = s.country.Close()
+		result = errors.Join(result, s.country.Close())
 		s.country = nil
 	}
 	if s.asn != nil {
-		_ = s.asn.Close()
+		result = errors.Join(result, s.asn.Close())
 		s.asn = nil
 	}
+	return result
 }
 
 func (s *Service) reopenLocked() {
@@ -256,8 +279,7 @@ func openDatabase(path string) (databaseReader, error) {
 		return nil, fmt.Errorf("open geoip database: %w", err)
 	}
 	if err := reader.Verify(); err != nil {
-		_ = reader.Close()
-		return nil, fmt.Errorf("verify geoip database: %w", err)
+		return nil, errors.Join(fmt.Errorf("verify geoip database: %w", err), reader.Close())
 	}
 	return maxMindReader{reader: reader}, nil
 }

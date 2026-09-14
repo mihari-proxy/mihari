@@ -9,11 +9,12 @@ import (
 	"fmt"
 	"io"
 	"time"
+	"unicode/utf8"
 )
 
 const (
 	exportReadBufferBytes = 32 << 10
-	exportReviewNote      = "mihomo level is Mihari capture classification; core-emitted node names and traffic metadata may remain"
+	exportReviewNote      = "Logs are not redacted and may contain passwords, access tokens, full subscription URLs, and user configuration. Review them before sharing. mihomo level is Mihari capture classification."
 	exportManifestV2      = "mihari-logs-export/v2"
 )
 
@@ -111,12 +112,9 @@ func exportJSON(ctx context.Context, source io.Reader, destination io.Writer, ex
 	return exportJSONWithCheckpoints(ctx, source, destination, exportRange, redactor, nil)
 }
 
-func exportJSONWithCheckpoints(ctx context.Context, source io.Reader, destination io.Writer, exportRange ExportRange, redactor *Redactor, checkpoint func(exportStage) error) (exportFile, error) {
+func exportJSONWithCheckpoints(ctx context.Context, source io.Reader, destination io.Writer, exportRange ExportRange, _ *Redactor, checkpoint func(exportStage) error) (exportFile, error) {
 	if ctx == nil {
 		ctx = context.Background()
-	}
-	if redactor == nil {
-		redactor = NewRedactor()
 	}
 	reader := newBoundedLineReader(source)
 	var stats exportFile
@@ -148,18 +146,12 @@ func exportJSONWithCheckpoints(ctx context.Context, source io.Reader, destinatio
 		if err := ctx.Err(); err != nil {
 			return stats, err
 		}
-		record, recordTime, valid := decodeExportRecord(line)
+		payload, recordTime, valid := decodeExportPayload(line)
 		if !valid {
 			stats.SkippedInvalid++
 			continue
 		}
 		if exportRange.Kind != RangeAll && (recordTime.Before(exportRange.From) || recordTime.After(exportRange.To)) {
-			continue
-		}
-		clean, changed := redactor.Value(record)
-		encoded, err := json.Marshal(clean)
-		if err != nil {
-			stats.SkippedInvalid++
 			continue
 		}
 		if err := ctx.Err(); err != nil {
@@ -170,14 +162,25 @@ func exportJSONWithCheckpoints(ctx context.Context, source io.Reader, destinatio
 				return stats, err
 			}
 		}
-		if _, err := destination.Write(append(encoded, '\n')); err != nil {
+		if _, err := writeCompleteRecord(destination, append(payload, '\n')); err != nil {
 			return stats, fmt.Errorf("write export log: %w", err)
 		}
 		stats.Lines++
-		if changed {
-			stats.Redacted++
-		}
 	}
+}
+
+func decodeExportPayload(line []byte) ([]byte, time.Time, bool) {
+	if len(line) != 0 && line[len(line)-1] == '\r' {
+		line = line[:len(line)-1]
+	}
+	if !utf8.Valid(line) || bytes.ContainsAny(line, "\r\n") {
+		return nil, time.Time{}, false
+	}
+	_, stamp, valid := decodeExportRecord(line)
+	if !valid {
+		return nil, time.Time{}, false
+	}
+	return line, stamp, true
 }
 
 func decodeExportRecord(line []byte) (map[string]any, time.Time, bool) {

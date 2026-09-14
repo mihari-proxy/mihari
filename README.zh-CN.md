@@ -47,7 +47,7 @@ Mihari 是面向 Windows、Linux 和 macOS 的跨平台 [mihomo](https://github.
 
 代理节点测速会读取 provider 节点，并在需要时调用 mihomo 的 provider 专用接口。同名节点在每个组内合并显示、共享测速结果：优先全局普通节点，否则按 provider 名排序选择首个匹配项。TUI 启动后的首次成功检查会对重名弹窗提示，测速来源可能与组实际选中的来源不同。provider 读取对瞬时故障最多尝试三次；持续失败时保留旧列表，显示 **Stale data** 和关键原因，恢复后自动清除提示。CLI/TUI 与 daemon 应配套升级。
 
-mihomo HTTP 失败的原始报错与上游状态会写入诊断日志，范围包括 gateway 和 WebSocket 握手；凭据与 URL 脱敏，超长内容明确标记截断。用户侧只显示简洁关键原因。
+mihomo HTTP 失败的原始报错与上游状态会写入诊断日志，范围包括 gateway 和 WebSocket 握手。文件日志及导出不脱敏，保留错误自带的凭据、URL、路径与配置片段以便排查；用户侧仍显示简洁关键原因。
 
 ## 快速开始
 
@@ -188,11 +188,15 @@ Logging 位于 Network 下方、About 上方。Unix 分别显示机器日志目�
 
 Windows 私有日志授权给具体的数据用户及 LocalSystem，兼容提权进程创建、owner 为 Administrators 的数据目录；写入器启动时会修复 daemon、TUI、mihomo 的现有日志、保留归档及锁文件的 ACL，不改动内容。运行中的服务创建或加固文件时会重新读取根目录权限策略，避免轮转后恢复旧权限。如果旧版本已经移除了普通用户访问权限，需要更新后的程序以管理员权限运行一次完成修复。TUI 内的提权更新流程会以该权限进入新 TUI；手动替换二进制的用户可能需要首次以管理员权限启动。
 
-Unix 系统模式使用 `mihari-logs-export/v2`，通过认证的机器快照协议组合机器与本用户日志；离线时须明确选择仅本用户日志。Windows/显式私有 P 保持本地 v1。zip 固定包含 `manifest.json`，以及有内容时才出现的 `daemon/mihari-daemon.log`、`tui/mihari-tui.log`、`mihomo/mihomo.log`。记录会重新解析、筛选、递归二次脱敏并编码，不会原样复制 JSONL。若对象成员的键本身含已识别凭据或 URL，该成员会被省略，安全的兄弟字段仍保留。已知凭据和 URL 会被遮蔽，但节点名、目标域名/IP 与流量元数据仍可能保留；发送前请逐项自查。
+Unix 系统模式使用 `mihari-logs-export/v2`，通过认证的机器快照协议组合机器与本用户日志；离线时须明确选择仅本用户日志。Windows/显式私有 P 保持本地 v1。zip 固定包含 `manifest.json`，以及有内容时才出现的 `daemon/mihari-daemon.log`、`tui/mihari-tui.log`、`mihomo/mihomo.log`。记录经过有效性与时间范围筛选，并保留原始 JSON 记录字节；快照及导出均不脱敏。导出前与成功页面以红色文字说明：日志可能包含密码、访问令牌、完整订阅地址及用户配置，分享前请自行检查。
+
+诊断文本、HTTP 失败正文与 mihomo 单个逻辑输出行各限 256 KiB，超限明确标记。JSON 转义使记录超过既有快照限额时，使用带 `record_id`、`fragment_index`、`fragment_count` 的有界分片；轮转或写入中断造成的缺片仍可识别。保留已有堆栈，普通错误不额外采集堆栈。
+
+错误仅使用当前可用的文件 logger；普通 CLI 不创建日志，也不打开历史日志文件。预期拒绝和主动取消为 INFO，可恢复失败及重试尝试为 WARN，最终失败为 ERROR，并遵循配置的级别过滤。同一失败由实际执行 owner 记录，重放同一结果不重复记错。
 
 导出全程持有已打开的目标父目录 identity，生成期间父路径被替换时不会跟随被替换后的路径。Unix 清理以同 UID 与本机 root/管理员为受信主体；若自定义父目录初始为不可信共享目录，即使导出期间收紧权限，内容清理成功后仍可能留下空的私有 workspace，清理 IO 失败则会报告可能存在内容残留。发布成功后若目标目录又被外部改名，界面显示的绝对路径也可能失效。
 
-旧版二进制使用 `KnownFields(true)` 解码 `mihari.yaml`，无法读取自定义 `log:` 块。降级前，请在 System → Logging 恢复 `info` / 10 MiB / 3 份文件，使该块自动移除；或先备份设置文件，再手动删除 `log:`。脱敏仅为尽力而为，仍应将所有日志文件按敏感资料处理，并在分享前审阅内容。
+旧版二进制使用 `KnownFields(true)` 解码 `mihari.yaml`，无法读取自定义 `log:` 块。降级前，请在 System → Logging 恢复 `info` / 10 MiB / 3 份文件，使该块自动移除；或先备份设置文件，再手动删除 `log:`。历史脱敏日志无法恢复原文，旧客户端仍可能对导出内容执行脱敏。
 
 ## 开发
 

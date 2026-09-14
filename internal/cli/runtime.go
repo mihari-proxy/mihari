@@ -10,6 +10,7 @@ import (
 	"io"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 func runtimeClient(dependencies Dependencies) (RuntimeClient, error) {
@@ -43,12 +44,12 @@ func classifyRuntimeError(err error) error {
 	}
 	var apiError protocol.APIError
 	if errors.As(err, &apiError) {
-		return apiError
+		return err
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	return protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "daemon is unavailable"}
+	return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "daemon is unavailable"}, err)
 }
 
 func mutationRequest(dependencies Dependencies) (protocol.MutationRequest, error) {

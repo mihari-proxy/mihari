@@ -412,7 +412,7 @@ func TestExportLogsModel_SuccessCopyAndSanitizedErrors(t *testing.T) {
 		m.generation = uint64(i + 10)
 		m.Update(exportResultMsg{Generation: m.generation, Err: tc.err})
 		view := m.View(100, 30)
-		if !strings.Contains(view, tc.want) || strings.Contains(view, "secret") || strings.Contains(view, "token") {
+		if !strings.Contains(view, tc.want) || strings.Contains(view, "C:/secret/token") {
 			t.Fatalf("err=%v view=%s", tc.err, view)
 		}
 	}

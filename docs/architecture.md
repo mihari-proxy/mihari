@@ -27,7 +27,12 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 
 ## 诊断错误链
 
-- Issue #204：mihomo typed REST、Web gateway REST 与 WebSocket HTTP 握手使用专用内部 HTTP cause 保留真实状态、固定操作类别、失败阶段与原始报错。仅日志边界输出这些内容，执行脱敏并明确标记截断；成功响应正文不转储。公开 API 继续只返回安全错误 envelope。非 HTTP 的既有保守诊断规则保持。
+本节后续 Phase 表格保留先前诊断建设的历史审计记录。其中“脱敏摘要”“取消静默”“预期拒绝 DEBUG”等旧策略由[完整错误日志设计](superpowers/specs/2026-09-14-full-error-logging-design.md)替代，实施与验证证据见[模块登记](superpowers/plans/2026-09-14-full-error-logging-audit.md)。
+
+- 文件日志、快照与导出保留原始 cause、包装上下文、合并原因及已有堆栈，不脱敏。普通 API、状态、事件、CLI JSON 与独立终端 FailureReporter 保留各自的输出边界；日志原文仅经既有授权日志快照协议传输。
+- 仅使用已建立且可用的文件 reporter；普通 CLI 不新建或探测日志。预期拒绝与主动取消 INFO、重试与恢复 warning WARN、最终失败 ERROR，遵循配置过滤；实际执行 owner 去重，缓存重放不再报告。
+- 诊断文本、HTTP 失败正文与核心逻辑行各限 256 KiB。保留错误图预算及截断标记；最坏 JSON 转义采用 UTF-8 分片，适配既有 1 MiB record / 2 MiB frame。快照校验、摘要、来源范围、权限与业务提交语义保持。
+- Issue #204 的专用内部 HTTP cause 保留真实状态、失败阶段、URL、失败正文与原始报错。成功响应正文不转储。导出前与完成页面红色说明日志未经脱敏，不增加确认步骤或额外配置文件。
 - provider 读取由 Manager 编排，最多三次，单次最多 1 秒、该读取总计最多 4 秒，退避可取消；普通节点查询不增加这项预算。原始全局节点映射用于测速路由，合并后的目录仅供展示。普通节点优先，否则按 provider 名排序选择首个候选；Compatible 投影不重复计数。
 - `/v1/proxies` 成功响应增加可选 `duplicate_names`；失败不发布残缺目录。TUI 的启动首次成功完整检查消费一次同名提示机会；错误快照保留旧数据并标记过期，恢复后清除加载错误。原始原因、重试进度和来源身份不加入公开 DTO。
 - Phase 1 的 operation metadata 已用于 Phase 2 的 Logging 更新链路和 Phase 3 的主要业务 mutation。CLI/TUI 生成 ID，既有 `/v1` mutation DTO 携带 `operation_id`，本地控制客户端、控制服务器和 daemon 在各自的诊断 ctx 中绑定同一 ID 与静态 operation 名；没有增加 header 或持久化状态。一个实际 mutation 执行使用一个 ID；订阅 Add 后的立即拉取是独立子操作，批量 provider 更新的每个子操作也保留各自既有 ID。
@@ -118,7 +123,7 @@ Phase 4 保留几条明确边界：认证前、预解析和只读请求没有统
 ## Web 网关
 
 - 守护进程在 `web-addr`(默认 `127.0.0.1:9191`)上启动回环 Web 网关。
-- 浏览器认证使用存储在数据根目录下的专用 Web 访问凭据;它绝不是 mihomo 控制器密钥,也不会出现在状态 DTO、默认 CLI 输出或日志中。
+- 浏览器认证使用存储在数据根目录下的专用 Web 访问凭据；它绝不是 mihomo 控制器密钥，也不会出现在状态 DTO 或默认 CLI 输出中。错误自带的凭据可能保留在未脱敏文件日志内。
 - `panel open` 铸造一次性本地 URL、启动 OS 浏览器,且不打印令牌。
 - 面板静态资产位于 `web/{panel}/{build}/` 下,使用原子 `active.json` 切换,并保留一个先前构建用于回滚。
 - 浏览器 REST 与 WebSocket 流量在网关处认证;网关只将控制器密钥注入被代理的控制器请求。

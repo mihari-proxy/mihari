@@ -13,12 +13,16 @@ import (
 // ExtractTarGzipBytes extracts a Unix release bundle through capability callbacks.
 // ZIP and tar share SafeName, depth and caller budgets. Only ordinary files and
 // directories are accepted; links, devices and sparse/extension entries fail.
-func ExtractTarGzipBytes(data []byte, limits Limits, mkdir func(string) error, write func(string, []byte) error) error {
+func ExtractTarGzipBytes(data []byte, limits Limits, mkdir func(string) error, write func(string, []byte) error) (resultErr error) {
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
-		return dataFailure("invalid install archive")
+		return dataFailure("invalid install archive", err)
 	}
-	defer gz.Close()
+	defer func() {
+		if closeErr := gz.Close(); resultErr != nil && closeErr != nil {
+			resultErr = joinDataFailure(resultErr, closeErr)
+		}
+	}()
 	gz.Multistream(false)
 	tr := tar.NewReader(gz)
 	seen := map[string]bool{}
@@ -30,7 +34,7 @@ func ExtractTarGzipBytes(data []byte, limits Limits, mkdir func(string) error, w
 			break
 		}
 		if err != nil {
-			return dataFailure("invalid install archive")
+			return dataFailure("invalid install archive", err)
 		}
 		count++
 		if limits.MaxEntries <= 0 || count > limits.MaxEntries {
@@ -65,7 +69,10 @@ func ExtractTarGzipBytes(data []byte, limits Limits, mkdir func(string) error, w
 		}
 		total += uint64(h.Size)
 		body, err := io.ReadAll(io.LimitReader(tr, h.Size+1))
-		if err != nil || int64(len(body)) != h.Size {
+		if err != nil {
+			return dataFailure("truncated install archive", err)
+		}
+		if int64(len(body)) != h.Size {
 			return dataFailure("truncated install archive")
 		}
 		if write != nil {
@@ -75,7 +82,9 @@ func ExtractTarGzipBytes(data []byte, limits Limits, mkdir func(string) error, w
 		}
 	}
 	// Drain the gzip member to verify its footer and CRC, even when tar ended early.
-	if n, err := io.Copy(io.Discard, io.LimitReader(gz, (1<<20)+1)); err != nil || n > 1<<20 {
+	if n, err := io.Copy(io.Discard, io.LimitReader(gz, (1<<20)+1)); err != nil {
+		return dataFailure("invalid compressed install archive", err)
+	} else if n > 1<<20 {
 		return dataFailure("invalid compressed install archive")
 	}
 	return nil

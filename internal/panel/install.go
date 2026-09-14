@@ -1,12 +1,14 @@
 package panel
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/panel/archive"
 )
 
@@ -33,8 +35,7 @@ func InstallFromZip(request InstallRequest) (string, error) {
 	}
 	finalDir := PanelBuildDir(request.WebRoot, request.PanelID, request.Build)
 	if err := promoteInstallCandidate(stagingDir, finalDir); err != nil {
-		_ = os.RemoveAll(stagingDir)
-		return "", err
+		return "", errors.Join(err, removePanelTree(stagingDir))
 	}
 	return finalDir, nil
 }
@@ -53,14 +54,12 @@ func prepareInstallCandidate(request InstallRequest) (string, error) {
 	}
 
 	if err := archive.ExtractZip(request.Archive, stagingDir); err != nil {
-		_ = os.RemoveAll(stagingDir)
-		return "", err
+		return "", errors.Join(err, removePanelTree(stagingDir))
 	}
 	// GitHub zipballs wrap contents in a single top-level directory; hoist so the
 	// build root itself is servable (index.html at web/{panel}/{build}/).
 	if err := hoistSingleRootDir(stagingDir); err != nil {
-		_ = os.RemoveAll(stagingDir)
-		return "", fmt.Errorf("normalize panel archive root: %w", err)
+		return "", errors.Join(fmt.Errorf("normalize panel archive root: %w", err), removePanelTree(stagingDir))
 	}
 
 	return stagingDir, nil
@@ -77,13 +76,22 @@ func promoteInstallCandidate(stagingDir, finalDir string) error {
 		return fmt.Errorf("create panel install directory: %w", err)
 	}
 	// Replace any previous incomplete install of the same build.
-	_ = os.RemoveAll(finalDir)
+	if err := os.RemoveAll(finalDir); err != nil {
+		return fmt.Errorf("remove incomplete panel install: %w", err)
+	}
 	if err := os.Rename(stagingDir, finalDir); err != nil {
 		// Cross-device rename fallback: copy is not implemented; fail closed.
-		return protocol.APIError{
+		return diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeDataFailure,
 			Message: "promote panel install candidate",
-		}
+		}, err)
+	}
+	return nil
+}
+
+func removePanelTree(path string) error {
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("remove panel staging tree: %w", err)
 	}
 	return nil
 }

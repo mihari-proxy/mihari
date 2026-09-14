@@ -64,7 +64,7 @@ func (s *Server) openWebGUI(writer http.ResponseWriter, request *http.Request) {
 	var body protocol.WebGUIOpenRequest
 	// Empty body is allowed and opens the default active panel.
 	if request.ContentLength != 0 {
-		if !decodeControlJSON(writer, request, &body) {
+		if !s.decodeControlJSON(writer, request, &body) {
 			return
 		}
 	}
@@ -105,12 +105,12 @@ func (s *Server) installPanel(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	var body protocol.PanelInstallRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	id := request.PathValue("id")
 	if id == "" {
-		writeInvalidArgument(writer, "panel id is required")
+		s.writeInvalidArgument(request.Context(), writer, "panel id is required")
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "panel.install"})
@@ -161,12 +161,12 @@ func (s *Server) panelMutation(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	var body protocol.MutationRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	id := strings.TrimSpace(request.PathValue("id"))
 	if id == "" {
-		writeInvalidArgument(writer, "panel id is required")
+		s.writeInvalidArgument(request.Context(), writer, "panel id is required")
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: name})

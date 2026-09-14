@@ -19,6 +19,7 @@ const (
 	ExportRangeAll               = "All"
 	ExportPending                = "Exporting…"
 	ExportComplete               = "Export complete"
+	ExportPrivacyNotice          = "Logs are not redacted.\nThey may contain passwords, access tokens, full subscription URLs,\nand user configuration. Review them before sharing."
 	ExportCancelled              = "Export cancelled"
 	ExportCopyFailed             = "Could not copy path"
 	ExportPathCopied             = "Log file path copied!"

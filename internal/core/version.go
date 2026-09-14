@@ -2,10 +2,13 @@ package core
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"unicode"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 func DetectVersion(ctx context.Context, runner CommandRunner, binaryPath string) (string, error) {
@@ -14,7 +17,7 @@ func DetectVersion(ctx context.Context, runner CommandRunner, binaryPath string)
 	}
 	output, err := runner.Run(ctx, binaryPath, "-v")
 	if err != nil {
-		return "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "read mihomo version failed"}
+		return "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "read mihomo version failed"}, errors.Join(err, commandOutputCause("mihomo version", output)))
 	}
 	return ParseVersion(string(output))
 }
@@ -29,7 +32,14 @@ func ParseVersion(output string) (string, error) {
 			return candidate, nil
 		}
 	}
-	return "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mihomo version output"}
+	return "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mihomo version output"}, commandOutputCause("mihomo version", []byte(output)))
+}
+
+func commandOutputCause(operation string, output []byte) error {
+	if len(output) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s output: %s", operation, output)
 }
 
 func ParseAlphaSHA(name string) string {

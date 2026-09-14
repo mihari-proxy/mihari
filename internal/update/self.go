@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 const (
@@ -44,6 +45,8 @@ type Release struct {
 
 // SelfUpdater installs a newer Mihari binary from GitHub Releases.
 type SelfUpdater struct {
+	// Reporter borrows the current execution owner's diagnostic outlet.
+	Reporter   diagnostics.Reporter
 	HTTPClient *http.Client
 	APIBase    string
 	Repository string
@@ -224,28 +227,28 @@ func parseChecksumManifest(raw []byte, targetName string) ([sha256.Size]byte, er
 	return found, nil
 }
 
-func (u SelfUpdater) fetchExpectedChecksum(ctx context.Context, asset Asset, targetName string) ([sha256.Size]byte, error) {
+func (u SelfUpdater) fetchExpectedChecksum(ctx context.Context, asset Asset, targetName string) (result [sha256.Size]byte, resultErr error) {
 	var zero [sha256.Size]byte
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
 	if err != nil {
-		return zero, protocol.APIError{Code: protocol.CodeInternal, Message: "create checksum request"}
+		return zero, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "create checksum request"}, err)
 	}
 	request.Header.Set("User-Agent", "mihari")
 	response, err := u.httpClient().Do(request)
 	if err != nil {
-		return zero, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download checksum manifest failed"}
+		return zero, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download checksum manifest failed"}, updateHTTPTransport(asset.URL, err))
 	}
-	defer response.Body.Close()
+	defer closeUpdateResponse(ctx, response, asset.URL, &resultErr, u.Reporter)
 	if response.StatusCode != http.StatusOK {
-		return zero, protocol.APIError{
+		return zero, diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeNetworkFailure,
 			Message: "download checksum manifest failed",
 			Details: map[string]any{"status": response.StatusCode},
-		}
+		}, updateHTTPStatus(response, asset.URL))
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxChecksumManifestSize+1))
 	if err != nil {
-		return zero, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read checksum manifest failed"}
+		return zero, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read checksum manifest failed"}, updateHTTPRead(response, asset.URL, err))
 	}
 	if len(raw) > maxChecksumManifestSize {
 		return zero, protocol.APIError{Code: protocol.CodeDataFailure, Message: "checksum manifest is too large"}
@@ -304,72 +307,75 @@ func (u SelfUpdater) latestDevRelease(ctx context.Context) (Release, error) {
 	return best, nil
 }
 
-func (u SelfUpdater) fetchReleaseListPage(ctx context.Context, pageURL string) ([]Release, string, error) {
+func (u SelfUpdater) fetchReleaseListPage(ctx context.Context, pageURL string) (result []Release, nextURL string, resultErr error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
-		return nil, "", protocol.APIError{Code: protocol.CodeInternal, Message: "create release list request"}
+		return nil, "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "create release list request"}, err)
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	request.Header.Set("User-Agent", "mihari")
 	response, err := u.httpClient().Do(request)
 	if err != nil {
-		return nil, "", protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch mihari release list failed"}
+		return nil, "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch mihari release list failed"}, updateHTTPTransport(pageURL, err))
 	}
-	defer response.Body.Close()
+	defer closeUpdateResponse(ctx, response, pageURL, &resultErr, u.Reporter)
 	if response.StatusCode != http.StatusOK {
-		return nil, "", protocol.APIError{
+		return nil, "", diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeNetworkFailure,
 			Message: "fetch mihari release list failed",
 			Details: map[string]any{"status": response.StatusCode},
-		}
+		}, updateHTTPStatus(response, pageURL))
 	}
 	next := nextReleaseLink(response.Header)
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxReleaseListResponseSize+1))
 	if err != nil {
-		return nil, "", protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read mihari release list failed"}
+		return nil, "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read mihari release list failed"}, updateHTTPRead(response, pageURL, err))
 	}
 	if len(raw) > maxReleaseListResponseSize {
 		return nil, "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihari release list is too large"}
 	}
 	var releases []Release
 	if err := json.Unmarshal(raw, &releases); err != nil {
-		return nil, "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mihari release list"}
+		return nil, "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mihari release list"}, err)
 	}
 	return releases, next, nil
 }
 
-func (u SelfUpdater) releaseByTag(ctx context.Context, tag string) (Release, error) {
+func (u SelfUpdater) releaseByTag(ctx context.Context, tag string) (result Release, resultErr error) {
 	var release Release
 	url := u.apiBase() + "/repos/" + u.repository() + "/releases/tags/" + tag
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return release, protocol.APIError{Code: protocol.CodeInternal, Message: "create release tag request"}
+		return release, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "create release tag request"}, err)
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	request.Header.Set("User-Agent", "mihari")
 	response, err := u.httpClient().Do(request)
 	if err != nil {
-		return release, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch mihari release failed"}
+		return release, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch mihari release failed"}, updateHTTPTransport(url, err))
 	}
-	defer response.Body.Close()
+	defer closeUpdateResponse(ctx, response, url, &resultErr, u.Reporter)
 	if response.StatusCode != http.StatusOK {
-		return release, protocol.APIError{
+		return release, diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeNetworkFailure,
 			Message: "fetch mihari release failed",
 			Details: map[string]any{"status": response.StatusCode},
-		}
+		}, updateHTTPStatus(response, url))
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxReleaseResponseSize+1))
 	if err != nil {
-		return release, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read mihari release failed"}
+		return release, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read mihari release failed"}, updateHTTPRead(response, url, err))
 	}
 	if len(raw) > maxReleaseResponseSize {
 		return release, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihari release response is too large"}
 	}
-	if err := json.Unmarshal(raw, &release); err != nil || release.TagName == "" {
-		return Release{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mihari release response"}
+	if err := json.Unmarshal(raw, &release); err != nil {
+		return Release{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mihari release response"}, err)
+	}
+	if release.TagName == "" {
+		return Release{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mihari release response"}, errors.New("mihari release response is missing tag_name"))
 	}
 	return release, nil
 }
@@ -409,36 +415,39 @@ func linkRel(params string) string {
 	return ""
 }
 
-func (u SelfUpdater) latestMainRelease(ctx context.Context) (Release, error) {
+func (u SelfUpdater) latestMainRelease(ctx context.Context) (result Release, resultErr error) {
 	var release Release
 	url := u.apiBase() + "/repos/" + u.repository() + "/releases/latest"
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return release, protocol.APIError{Code: protocol.CodeInternal, Message: "create release request"}
+		return release, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "create release request"}, err)
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	request.Header.Set("User-Agent", "mihari")
 	response, err := u.httpClient().Do(request)
 	if err != nil {
-		return release, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch mihari release failed"}
+		return release, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch mihari release failed"}, updateHTTPTransport(url, err))
 	}
-	defer response.Body.Close()
+	defer closeUpdateResponse(ctx, response, url, &resultErr, u.Reporter)
 	if response.StatusCode != http.StatusOK {
-		return release, protocol.APIError{
+		return release, diagnostics.Wrap(protocol.APIError{
 			Code: protocol.CodeNetworkFailure, Message: "fetch mihari release failed",
 			Details: map[string]any{"status": response.StatusCode},
-		}
+		}, updateHTTPStatus(response, url))
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxReleaseResponseSize+1))
 	if err != nil {
-		return release, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read mihari release failed"}
+		return release, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read mihari release failed"}, updateHTTPRead(response, url, err))
 	}
 	if len(raw) > maxReleaseResponseSize {
 		return release, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihari release response is too large"}
 	}
-	if err := json.Unmarshal(raw, &release); err != nil || release.TagName == "" {
-		return Release{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mihari release response"}
+	if err := json.Unmarshal(raw, &release); err != nil {
+		return Release{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mihari release response"}, err)
+	}
+	if release.TagName == "" {
+		return Release{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mihari release response"}, errors.New("mihari release response is missing tag_name"))
 	}
 	return release, nil
 }
@@ -450,47 +459,54 @@ func (u SelfUpdater) openCandidateFile(destination string) (io.WriteCloser, erro
 	return os.OpenFile(destination, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 }
 
-func (u SelfUpdater) download(ctx context.Context, asset Asset, expected [sha256.Size]byte, destination string) error {
+func (u SelfUpdater) download(ctx context.Context, asset Asset, expected [sha256.Size]byte, destination string) (resultErr error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeInternal, Message: "create mihari download request"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "create mihari download request"}, err)
 	}
 	request.Header.Set("User-Agent", "mihari")
 	response, err := u.httpClient().Do(request)
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download mihari asset failed"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download mihari asset failed"}, updateHTTPTransport(asset.URL, err))
 	}
-	defer response.Body.Close()
+	defer closeUpdateResponse(ctx, response, asset.URL, &resultErr, u.Reporter)
 	if response.StatusCode != http.StatusOK {
-		return protocol.APIError{
+		return diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeNetworkFailure,
 			Message: "download mihari asset failed",
 			Details: map[string]any{"status": response.StatusCode},
-		}
+		}, updateHTTPStatus(response, asset.URL))
 	}
 	file, err := u.openCandidateFile(destination)
 	if err != nil {
 		return fmt.Errorf("create mihari candidate: %w", err)
 	}
+	defer func() {
+		if resultErr != nil {
+			if err := os.Remove(destination); err != nil && !errors.Is(err, os.ErrNotExist) {
+				resultErr = joinUpdateFailure(resultErr, fmt.Errorf("remove mihari candidate: %w", err))
+			}
+		}
+	}()
 	hash := sha256.New()
 	written, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, maxSelfBinarySize+1))
 	closeErr := file.Close()
 	if copyErr != nil || closeErr != nil {
-		os.Remove(destination)
-		return protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read mihari asset failed"}
+		var transferErr error
+		if copyErr != nil {
+			transferErr = updateHTTPRead(response, asset.URL, copyErr)
+		}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read mihari asset failed"}, errors.Join(transferErr, closeErr))
 	}
 	if written > maxSelfBinarySize {
-		os.Remove(destination)
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihari asset is too large"}
 	}
 	if asset.Size > 0 && written != asset.Size {
-		os.Remove(destination)
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihari asset size mismatch"}
 	}
 	var got [sha256.Size]byte
 	copy(got[:], hash.Sum(nil))
 	if got != expected {
-		os.Remove(destination)
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihari asset digest mismatch"}
 	}
 	return nil

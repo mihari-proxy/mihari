@@ -8,6 +8,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -148,7 +149,7 @@ func TestGeoIPDiagnostic_RecoveryAggregateKeepsTextAndNewOwner(t *testing.T) {
 	redactor := logging.NewRedactor("business-secret", "restore-secret")
 	report := logging.NewDiagnosticReporter(slog.New(logging.NewJSONHandler(&output, level, "daemon", redactor)), redactor)
 	report(logging.WithOperation(context.Background(), logging.OperationMetadata{ID: "geoip-pair", Name: "geoip.update"}), diagnostics.Record{Component: "runtime", Event: "operation.failed", Level: slog.LevelError, Err: combined})
-	if !strings.Contains(output.String(), "permission denied") || !strings.Contains(output.String(), "file does not exist") || strings.Contains(output.String(), "secret") || !strings.Contains(output.String(), `"operation_id":"geoip-pair"`) {
+	if !strings.Contains(output.String(), "permission denied") || !strings.Contains(output.String(), "file does not exist") || !strings.Contains(output.String(), "/private/business-secret") || !strings.Contains(output.String(), "/private/restore-secret") || !strings.Contains(output.String(), `"operation_id":"geoip-pair"`) {
 		t.Fatalf("aggregate logs=%s", output.String())
 	}
 }
@@ -182,5 +183,27 @@ func TestGeoIPDiagnostic_FileActivationFailureKeepsRestoreAttempt(t *testing.T) 
 	}
 	if !strings.HasPrefix(err.Error(), "activate geoip database: ") || strings.Contains(err.Error(), ".previous") {
 		t.Fatalf("primary error text changed: %v", err)
+	}
+}
+
+type geoIPCloseFailureReader struct{ err error }
+
+func (r geoIPCloseFailureReader) Lookup(netip.Addr, any) error { return nil }
+func (r geoIPCloseFailureReader) Close() error                 { return r.err }
+
+func TestGeoIPDiagnostic_ReaderCloseFailuresStopCommit(t *testing.T) {
+	root := t.TempDir()
+	countryClose, asnClose := errors.New("country close fixture"), errors.New("asn close fixture")
+	service := &Service{country: geoIPCloseFailureReader{countryClose}, asn: geoIPCloseFailureReader{asnClose}}
+	candidate := &PreparedUpdate{service: service,
+		country: testFileCandidate(t, filepath.Join(root, "country.new"), filepath.Join(root, "country.mmdb"), "country"),
+		asn:     testFileCandidate(t, filepath.Join(root, "asn.new"), filepath.Join(root, "asn.mmdb"), "asn"),
+	}
+	err := candidate.Commit()
+	if !errors.Is(err, countryClose) || !errors.Is(err, asnClose) {
+		t.Fatalf("reader close causes lost: %v", err)
+	}
+	if _, statErr := os.Stat(candidate.country.staged); statErr != nil {
+		t.Fatal("commit proceeded after active reader close failure")
 	}
 }

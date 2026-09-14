@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 const (
@@ -125,7 +126,7 @@ func layoutIdentityOf(journal InstallJournal) string {
 func newValidationNonce() (nonce []byte, hash string, err error) {
 	nonce = make([]byte, 32)
 	if _, err = rand.Read(nonce); err != nil {
-		return nil, "", protocol.APIError{Code: protocol.CodeInternal, Message: "create validation nonce"}
+		return nil, "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "create validation nonce"}, err)
 	}
 	return nonce, sha256HexBytes(nonce), nil
 }

@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -20,11 +21,11 @@ func ParseDocument(content []byte) (Document, error) {
 	decoder := yaml.NewDecoder(bytes.NewReader(content))
 	var document Document
 	if err := decoder.Decode(&document); err != nil || document == nil {
-		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid subscription YAML"}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid subscription YAML"}, err)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription must contain one YAML document"}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription must contain one YAML document"}, err)
 	}
 	if _, proxies := document["proxies"]; !proxies {
 		if _, providers := document["proxy-providers"]; !providers {

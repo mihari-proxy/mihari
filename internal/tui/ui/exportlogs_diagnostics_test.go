@@ -52,6 +52,7 @@ func TestLocalTaskDiagnostics_ExportFailureWarningAndCancellation(t *testing.T) 
 				case "warning":
 					req.OnWarning(cause)
 					req.OnWarning(cause)
+					req.OnWarning(io.ErrUnexpectedEOF)
 					return logging.ExportResult{Path: "/private/archive.zip"}, nil
 				case "cancel":
 					cancel()
@@ -84,10 +85,14 @@ func TestLocalTaskDiagnostics_ExportFailureWarningAndCancellation(t *testing.T) 
 			if result.Generation != 8 || (mode == "warning" && (!result.Warning || result.Err != nil)) || (mode == "id-failure" && result.Err != nil) {
 				t.Fatalf("result semantics changed: %+v", result)
 			}
-			if strings.Contains(out.String(), "/private/") || strings.Contains(out.String(), "secret-") {
-				t.Fatalf("unsafe diagnostic: %s", out.String())
+			wantCause := map[string]string{"failure": "/private/export-token", "warning": "/private/export-token", "panic": "secret-panic", "id-failure": "secret-id-error", "cancel": "context canceled"}
+			if want := wantCause[mode]; want != "" && !strings.Contains(out.String(), want) {
+				t.Fatalf("missing original cause for %s", mode)
 			}
-			if mode == "cancel" || mode == "nil-reporter" {
+			if mode == "panic" && (!strings.Contains(out.String(), "goroutine") || result.Err.Error() != errExportPanicked.Error()) {
+				t.Fatal("recovered panic lost stack or changed public error")
+			}
+			if mode == "nil-reporter" {
 				if out.Len() != 0 {
 					t.Fatalf("unexpected diagnostics: %s", out.String())
 				}
@@ -111,10 +116,40 @@ func TestLocalTaskDiagnostics_ExportFailureWarningAndCancellation(t *testing.T) 
 			if mode == "warning" && record["level"] != "WARN" {
 				t.Fatalf("lost warning severity: %+v", record)
 			}
+			if mode == "warning" && (!strings.Contains(record["cause"].(string), io.ErrUnexpectedEOF.Error()) || strings.Count(record["cause"].(string), "/private/export-token") != 1) {
+				t.Fatal("distinct warning lost or repeated warning duplicated")
+			}
+			if mode == "cancel" && record["level"] != "INFO" {
+				t.Fatal("cancellation should be visible at INFO")
+			}
 			if decoder.Decode(&record) != io.EOF {
 				t.Fatal("duplicate export diagnostic")
 			}
 		})
+	}
+}
+
+func TestLocalTaskDiagnostics_ExportFinalFailureContainsWarningLoggedOnce(t *testing.T) {
+	var out bytes.Buffer
+	cause := errors.New("cleanup failure shared with final export")
+	r := newExportRunner(context.Background(), func(_ context.Context, request logging.ExportRequest) (logging.ExportResult, error) {
+		request.OnWarning(cause)
+		return logging.ExportResult{}, cause
+	})
+	r.diagnostics.Reporter = exportDiagnosticReporter(&out)
+	results, _ := r.Start(1, logging.ExportRequest{})
+	result := <-results
+	r.Wait()
+	if !errors.Is(result.Err, cause) || !result.Warning {
+		t.Fatalf("result changed: %+v", result)
+	}
+	decoder := json.NewDecoder(&out)
+	var record map[string]any
+	if err := decoder.Decode(&record); err != nil || record["msg"] != "logs.export.failed" {
+		t.Fatalf("final failure missing: %+v %v", record, err)
+	}
+	if err := decoder.Decode(&record); !errors.Is(err, io.EOF) {
+		t.Fatalf("warning duplicated contained final cause: %+v %v", record, err)
 	}
 }
 
@@ -133,7 +168,7 @@ func TestLocalTaskDiagnostics_ExportExpectedOutcomesAreNotErrors(t *testing.T) {
 				t.Fatal("expected outcome changed")
 			}
 			var record map[string]any
-			if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &record); err != nil || record["level"] != "DEBUG" {
+			if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &record); err != nil || record["level"] != "INFO" {
 				t.Fatalf("expected export outcome recorded as operational failure: %+v %v", record, err)
 			}
 		})
@@ -156,7 +191,7 @@ func TestLocalTaskDiagnostics_ExportResultsHaveIndependentValues(t *testing.T) {
 	}
 }
 
-func TestLocalTaskDiagnostics_NativeExportRejectionsRemainDebug(t *testing.T) {
+func TestLocalTaskDiagnostics_NativeExportRejectionsAreInfo(t *testing.T) {
 	for _, kind := range []string{"invalid-range", "existing-target", "no-lines"} {
 		t.Run(kind, func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "data")
@@ -199,7 +234,7 @@ func TestLocalTaskDiagnostics_NativeExportRejectionsRemainDebug(t *testing.T) {
 			if !errors.Is(result.Err, wantCause) || result.Result.Path != "" || result.Warning {
 				t.Fatalf("unexpected native export result: %+v", result)
 			}
-			assertExportDiagnosticLevel(t, &logs, "DEBUG", "logs.export.rejected")
+			assertExportDiagnosticLevel(t, &logs, "INFO", "logs.export.rejected")
 			if kind == "existing-target" {
 				raw, err := os.ReadFile(request.OutputPath)
 				if err != nil || string(raw) != "existing archive" {
@@ -225,7 +260,7 @@ func TestLocalTaskDiagnostics_ExportWrapperClassificationPreservesRealCauses(t *
 		cause        error
 		level, event string
 	}{
-		{"transparent wrapper", wrapped, "DEBUG", "logs.export.rejected"},
+		{"transparent wrapper", wrapped, "INFO", "logs.export.rejected"},
 		{"joined IO", fmt.Errorf("wrapped join: %w", errors.Join(native, io.ErrUnexpectedEOF)), "ERROR", "logs.export.failed"},
 		{"joined unknown", errors.Join(native, errors.New("private-extra-cause")), "ERROR", "logs.export.failed"},
 		{"over-depth", deep, "ERROR", "logs.export.failed"},

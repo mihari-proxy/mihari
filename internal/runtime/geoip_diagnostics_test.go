@@ -43,7 +43,7 @@ func TestGeoIPDiagnostic_PrepareCommitAndReplayJSON(t *testing.T) {
 		})
 	}
 }
-func TestGeoIPDiagnostic_StaleCandidateRemainsDebugAndHealthUnchanged(t *testing.T) {
+func TestGeoIPDiagnostic_StaleCandidateIsInfoAndHealthUnchanged(t *testing.T) {
 	var output bytes.Buffer
 	service := &fakeGeoIPService{}
 	candidate := &fakeGeoIPCandidate{valid: true, identity: "stale", commitErr: geoip.ErrStaleCandidate}
@@ -53,7 +53,7 @@ func TestGeoIPDiagnostic_StaleCandidateRemainsDebugAndHealthUnchanged(t *testing
 	if !errors.As(err, &api) || api.Code != protocol.CodeRevisionConflict || service.recordedError || m.Snapshot().Revision != 0 {
 		t.Fatalf("stale behavior changed: %v", err)
 	}
-	if !strings.Contains(output.String(), `"level":"DEBUG"`) || strings.Contains(output.String(), `"level":"ERROR"`) {
+	if !strings.Contains(output.String(), `"level":"INFO"`) || strings.Contains(output.String(), `"level":"ERROR"`) {
 		t.Fatalf("stale logs=%s", output.String())
 	}
 }

@@ -89,19 +89,19 @@ func (s *ProviderStore) loadResourceJournal(ctx context.Context) (resourceJourna
 		return j, err
 	}
 	if err = resourceJournalShape(b); err != nil {
-		return j, dataError("invalid resource journal shape")
+		return j, dataError("invalid resource journal shape", err)
 	}
 	d := json.NewDecoder(bytes.NewReader(b))
 	if err = uniqueProviderJSON(d, 0); err != nil {
-		return j, dataError("invalid resource journal")
+		return j, dataError("invalid resource journal", err)
 	}
 	if _, err = d.Token(); err != io.EOF {
-		return j, dataError("invalid resource journal")
+		return j, dataError("invalid resource journal", err)
 	}
 	d = json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
 	if err = d.Decode(&j); err != nil {
-		return j, dataError("invalid resource journal")
+		return j, dataError("invalid resource journal", err)
 	}
 	if j.Schema != "mihari.resource-activation/v1" || len(j.Entries) == 0 || len(j.Entries) > 265 {
 		return j, dataError("invalid resource journal")

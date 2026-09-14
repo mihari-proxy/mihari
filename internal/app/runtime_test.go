@@ -240,7 +240,7 @@ func TestBuildRuntimeWithOptionsReportsOnboardingPersistenceWarning(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if assembly == nil || component != "onboarding" || message != "onboarding parent directory sync failed after commit" {
+	if assembly == nil || component != "onboarding" || message != "onboarding parent directory sync failed after commit: C:\\sensitive\\onboarding.json" {
 		t.Fatalf("assembly=%#v component=%q message=%q", assembly, component, message)
 	}
 }
@@ -410,7 +410,7 @@ func TestBuildRuntime_UsesOptionWritersCapture(t *testing.T) {
 	}
 }
 
-func TestBuildRuntime_LogsRedactedBackground(t *testing.T) {
+func TestBuildRuntime_LogsOriginalBackground(t *testing.T) {
 	paths := platform.NewPaths(filepath.Join(t.TempDir(), "data"))
 	settings := testRuntimeSettings(t)
 	settings.ControllerSecret = strings.Repeat("b", 64)
@@ -459,10 +459,7 @@ func TestBuildRuntime_LogsRedactedBackground(t *testing.T) {
 		t.Fatalf("component=%q", gotComponent)
 	}
 	logged := buf.String()
-	if strings.Contains(logged, secret) {
-		t.Fatalf("secret leaked into daemon logger: %s", logged)
-	}
-	if !strings.Contains(logged, "***") || !strings.Contains(logged, "web-gateway") {
+	if !strings.Contains(logged, secret) || !strings.Contains(logged, "web-gateway") {
 		t.Fatalf("logger=%s", logged)
 	}
 }

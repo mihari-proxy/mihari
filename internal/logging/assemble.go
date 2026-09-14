@@ -92,28 +92,21 @@ func (s *fileSnapshotSource) Open(ctx context.Context, window SnapshotWindow) (S
 		return nil, err
 	}
 	if len(handles) > tuiMaxFiles {
-		_ = closeSnapshots(handles)
-		return nil, errSnapshotBudget
+		return nil, errors.Join(errSnapshotBudget, closeSnapshots(handles))
 	}
 	var scanned int64
 	files := make([]string, 0, len(handles))
 	for _, handle := range handles {
 		if handle.size < 0 || handle.size > tuiMaxBytes-scanned {
-			_ = closeSnapshots(handles)
-			return nil, errSnapshotBudget
+			return nil, errors.Join(errSnapshotBudget, closeSnapshots(handles))
 		}
 		scanned += handle.size
 		files = append(files, handle.name)
-	}
-	redactor := s.options.Redactor
-	if redactor == nil {
-		redactor = NewRedactor()
 	}
 	var outputBytes int64
 	return &machineSourceReader{
 		handles:     handles,
 		window:      window,
-		redactor:    redactor,
 		outputBytes: &outputBytes,
 		digest:      sha256.New(),
 		stats:       SourceStats{Source: s.id, Files: files},
@@ -163,7 +156,7 @@ func assembleWithOps(ctx context.Context, request ExportRequest, scope string, s
 	}
 	workspace, err := target.Dir.CreateWorkspace()
 	if err != nil {
-		warnExport(request.OnWarning)
+		warnExport(request.OnWarning, err)
 		closeExportTargetWithWarning(target, request.OnWarning)
 		return ExportResult{}, exportPipelineError(err)
 	}
@@ -191,7 +184,11 @@ func assembleWithOps(ctx context.Context, request ExportRequest, scope string, s
 		}
 		cleanup = errors.Join(cleanup, ops.CloseWorkspace(workspace), ops.ClosePublishDir(target.Dir), ops.CloseLogDir(target.LogDir))
 		if cleanup != nil || errors.Is(retErr, platform.ErrPublishCleanupIncomplete) {
-			warnExport(request.OnWarning)
+			warningCause := cleanup
+			if errors.Is(retErr, platform.ErrPublishCleanupIncomplete) {
+				warningCause = errors.Join(warningCause, retErr)
+			}
+			warnExport(request.OnWarning, warningCause)
 			if !published && retErr != nil {
 				retErr = errors.Join(retErr, cleanup)
 			}
@@ -220,14 +217,13 @@ func assembleWithOps(ctx context.Context, request ExportRequest, scope string, s
 		}
 		spool, name, err := workspace.CreateTemp("spool-*")
 		if err != nil {
-			_ = reader.Close()
-			return ExportResult{}, exportPipelineError(err)
+			return ExportResult{}, exportPipelineError(errors.Join(err, reader.Close()))
 		}
 		item := exportSpool{name: name, file: spool, data: exportFile{Name: entry}}
 		spools = append(spools, item)
 		current := &spools[len(spools)-1]
 		readErr := copySourceReader(ctx, ops, reader, spool, &totalBytes)
-		stats, finishErr := sourceFinish(ctx, reader, readErr)
+		stats, finishErr := reader.Finish(ctx)
 		closeErr := reader.Close()
 		if err := errors.Join(readErr, finishErr, closeErr); err != nil {
 			return ExportResult{}, exportPipelineError(err)
@@ -357,7 +353,7 @@ func assembleWithOps(ctx context.Context, request ExportRequest, scope string, s
 		if inside {
 			return ExportResult{}, ErrExportTargetChanged
 		}
-		err = ops.Publish(target.Dir, workspace, zipName, target.Name, func(error) { warnExport(request.OnWarning) })
+		err = ops.Publish(target.Dir, workspace, zipName, target.Name, func(cause error) { warnExport(request.OnWarning, cause) })
 		if err == nil {
 			published = true
 			return ExportResult{Path: target.Path}, nil
@@ -393,19 +389,11 @@ func copySourceReader(ctx context.Context, ops exportOps, reader SourceReader, s
 		if *totalBytes > assembleSpoolLimit-n {
 			return errSnapshotBudget
 		}
-		if _, err := spool.Write(append(append([]byte(nil), payload...), '\n')); err != nil {
+		if _, err := writeCompleteRecord(spool, append(append([]byte(nil), payload...), '\n')); err != nil {
 			return err
 		}
 		*totalBytes += n
 	}
-}
-
-func sourceFinish(ctx context.Context, reader SourceReader, readErr error) (SourceStats, error) {
-	if readErr != nil {
-		_, _ = reader.Finish(ctx)
-		return SourceStats{}, readErr
-	}
-	return reader.Finish(ctx)
 }
 
 func assembleWindow(request ExportRequest, exportRange ExportRange) SnapshotWindow {

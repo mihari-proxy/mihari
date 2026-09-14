@@ -136,12 +136,16 @@ func (c *Client) SetDiagnosticReporter(reporter diagnostics.Reporter) { c.report
 
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, input, output any) (resultErr error) {
 	operation := diagnostics.HTTPOperation(method, path)
+	requestURL := c.baseURL + path
+	if len(query) != 0 {
+		requestURL += "?" + query.Encode()
+	}
 	fail := func(code protocol.ErrorCode, message, phase string, status int, raw []byte, cause error) error {
 		var details map[string]any
 		if status != 0 {
 			details = map[string]any{"status": status}
 		}
-		return diagnostics.Wrap(protocol.APIError{Code: code, Message: message, Details: details}, (&diagnostics.HTTPError{Operation: operation, Phase: phase, Status: status, Body: diagnostics.HTTPBody(raw, c.secret), Cause: cause}).HideSecret(c.secret))
+		return diagnostics.Wrap(protocol.APIError{Code: code, Message: message, Details: details}, (&diagnostics.HTTPError{Operation: operation, URL: requestURL, Phase: phase, Status: status, Body: diagnostics.HTTPBody(raw), Cause: cause}))
 	}
 	var body io.Reader
 	if input != nil {
@@ -150,10 +154,6 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 			return fail(protocol.CodeInternal, "encode mihomo request", "encode", 0, nil, err)
 		}
 		body = bytes.NewReader(encoded)
-	}
-	requestURL := c.baseURL + path
-	if len(query) != 0 {
-		requestURL += "?" + query.Encode()
 	}
 	request, err := http.NewRequestWithContext(ctx, method, requestURL, body)
 	if err != nil {
@@ -169,21 +169,25 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	defer func() {
 		if err := response.Body.Close(); err != nil {
-			closeErr := (&diagnostics.HTTPError{Operation: operation, Phase: "close", Status: response.StatusCode, Cause: err}).HideSecret(c.secret)
+			closeErr := (&diagnostics.HTTPError{Operation: operation, URL: requestURL, Phase: "close", Status: response.StatusCode, Cause: err})
 			if resultErr != nil {
 				var api protocol.APIError
 				if errors.As(resultErr, &api) {
 					resultErr = diagnostics.Wrap(api, errors.Join(resultErr, closeErr))
 				}
 			} else if c.reporter != nil {
-				if _, emit := diagnostics.FailureLevel(ctx, closeErr); emit {
-					c.reporter(ctx, diagnostics.Record{Component: "mihomo", Event: "http.close.failed", Level: slog.LevelWarn, Err: closeErr})
+				if level, emit := diagnostics.FailureLevel(ctx, closeErr); emit {
+					c.reporter(ctx, diagnostics.Record{Component: "mihomo", Event: "http.close.failed", Level: min(level, slog.LevelWarn), Err: closeErr})
 				}
 			}
 		}
 	}()
-	raw, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseSize+1))
 	status := response.StatusCode
+	readLimit := int64(maxResponseSize + 1)
+	if status < 200 || status >= 300 {
+		readLimit = diagnostics.MaxHTTPBodyBytes + 1
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(response.Body, readLimit))
 	if status < 200 || status >= 300 {
 		code := protocol.CodeUpstreamFailure
 		message := "mihomo request failed"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -34,16 +35,19 @@ type RotatorOptions struct {
 
 // RotatingWriter appends full JSONL records with overflow-safe rotation.
 type RotatingWriter struct {
-	mu        recordMutex
-	cfg       atomic.Pointer[Config]
-	dropped   atomic.Uint64
-	fs        *platform.PrivateFS
-	basePath  string
-	lock      platform.AdvisoryLock
-	file      *os.File
-	writeWait time.Duration
-	reporter  FailureReporter
-	closed    bool
+	mu       recordMutex
+	cfg      atomic.Pointer[Config]
+	dropped  atomic.Uint64
+	fs       *platform.PrivateFS
+	basePath string
+	lock     platform.AdvisoryLock
+	file     *os.File
+	// closeOutput permits deterministic tests of final file-close failures.
+	// Production closes the owned os.File directly.
+	closeOutput func(*os.File) error
+	writeWait   time.Duration
+	reporter    FailureReporter
+	closed      bool
 }
 
 // OpenRotatingWriter creates the lock, converges archives, and creates the base file.
@@ -85,9 +89,9 @@ func OpenRotatingWriter(ctx context.Context, opts RotatorOptions) (*RotatingWrit
 	err = w.lock.Lock(lockCtx, platform.LockExclusive)
 	cancelLock()
 	if err != nil {
-		_ = lock.Close()
+		closeErr := lock.Close()
 		w.lock = nil
-		return nil, err
+		return nil, errors.Join(err, closeErr)
 	}
 	if hook := testAfterExclusiveLock; hook != nil {
 		hook()
@@ -105,9 +109,9 @@ func OpenRotatingWriter(ctx context.Context, opts RotatorOptions) (*RotatingWrit
 	}
 	unlockErr := w.lock.Unlock()
 	if err != nil || unlockErr != nil {
-		_ = lock.Close()
+		closeErr := lock.Close()
 		w.lock = nil
-		return nil, errors.Join(err, unlockErr)
+		return nil, errors.Join(err, unlockErr, closeErr)
 	}
 	return w, nil
 }
@@ -143,7 +147,7 @@ func (w *RotatingWriter) Write(p []byte) (n int, err error) {
 	}
 	st, err := w.file.Stat()
 	if err != nil {
-		_ = w.closeFile()
+		err = errors.Join(err, w.closeFile())
 		w.report(FailureWrite, err)
 		return 0, err
 	}
@@ -161,12 +165,16 @@ func (w *RotatingWriter) Write(p []byte) (n int, err error) {
 		}
 	}
 	n, err = w.file.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
 	closeErr := w.closeFile()
+	err = errors.Join(err, closeErr)
 	if err != nil {
 		w.report(FailureWrite, err)
 		return n, err
 	}
-	return n, closeErr
+	return n, nil
 }
 
 // Apply atomically stores cfg, then waits min(ctx deadline, WriteWait) for the
@@ -262,7 +270,12 @@ func (w *RotatingWriter) closeFile() error {
 	if w.file == nil {
 		return nil
 	}
-	err := w.file.Close()
+	var err error
+	if w.closeOutput != nil {
+		err = w.closeOutput(w.file)
+	} else {
+		err = w.file.Close()
+	}
 	w.file = nil
 	return err
 }

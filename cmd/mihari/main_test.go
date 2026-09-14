@@ -69,8 +69,8 @@ func TestOpenTUILogging_UsesInjectedPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	logged := readFileString(t, paths.TUILog)
-	if strings.Contains(logged, "tui-control-token") || !strings.Contains(logged, "***") {
-		t.Fatalf("TUI log was not redacted: %s", logged)
+	if !strings.Contains(logged, "TUI startup token=tui-control-token") {
+		t.Fatal("TUI log lost original message")
 	}
 }
 
@@ -212,8 +212,8 @@ func TestBuildExportLogs_PartialLoggerResourcesExportAndOwnPrivateFS(t *testing.
 		}
 		content = append(content, part...)
 	}
-	if strings.Contains(string(content), "partial-secret") || !strings.Contains(string(content), "***") {
-		t.Fatalf("archive was not redacted: %s", content)
+	if !strings.Contains(string(content), "partial-secret") {
+		t.Fatal("archive lost original file content")
 	}
 	if err := fs.EnsureDir(paths.LogDir); err != nil {
 		t.Fatalf("export closed shared PrivateFS: %v", err)
@@ -519,8 +519,8 @@ func TestRunDaemon_LoggingOpensBeforeBuildRuntime(t *testing.T) {
 		t.Fatalf("mihomo log missing: %v", err)
 	}
 	for _, secretValue := range []string{token, secret, catalogURL} {
-		if strings.Contains(daemonLog, secretValue) {
-			t.Fatalf("secret %q leaked: %s", secretValue, daemonLog)
+		if !strings.Contains(daemonLog, secretValue) {
+			t.Fatal("daemon file lost original message content")
 		}
 	}
 }
@@ -672,11 +672,8 @@ func TestRunDaemon_BootstrapSettingsWarning(t *testing.T) {
 				t.Fatalf("Manager initial logging status=%#v", initial)
 			}
 			logged := readFileString(t, paths.DaemonLog)
-			if !strings.Contains(logged, `"component":"daemon.settings"`) || !strings.Contains(logged, `"level":"WARN"`) || !strings.Contains(logged, "path operation sync: permission denied") {
-				t.Fatalf("bootstrap warning did not preserve the safe commit reason: %s", logged)
-			}
-			if strings.Contains(logged, "sensitive") || strings.Contains(logged, paths.Settings) {
-				t.Fatalf("bootstrap warning leaked underlying path: %s", logged)
+			if !strings.Contains(logged, `"component":"daemon.settings"`) || !strings.Contains(logged, `"level":"WARN"`) || !strings.Contains(logged, "permission denied") || !strings.Contains(logged, "sensitive") {
+				t.Fatal("bootstrap warning lost original commit reason or path")
 			}
 		})
 	}
@@ -842,11 +839,8 @@ func TestRunDaemon_RefreshSecretsKeepsBaseSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	logged := readFileString(t, paths.DaemonLog)
-	if strings.Contains(logged, controlToken) || strings.Contains(logged, newURL) {
-		t.Fatalf("refreshed exact snapshot leaked a base secret or catalog URL: %s", logged)
-	}
-	if !strings.Contains(logged, "base *** catalog ***") {
-		t.Fatalf("refreshed redaction output=%s", logged)
+	if !strings.Contains(logged, "base "+controlToken+" catalog "+newURL) {
+		t.Fatal("credential refresh changed original file log content")
 	}
 }
 
@@ -1059,13 +1053,17 @@ func TestPrepareLocalRoot_AbsFailureDoesNoIO(t *testing.T) {
 	resetProcessLocalRootForTest(t)
 	rootDir := filepath.Join(t.TempDir(), "data")
 	t.Setenv("MIHARI_DATA", rootDir)
+	cause := errors.New("abs failed")
 	defaultAbsolutePaths = func() (platform.Paths, error) {
-		return platform.Paths{}, errors.New("abs failed")
+		return platform.Paths{}, cause
 	}
 	_, err := prepareLocalRoot()
 	var apiError protocol.APIError
 	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "resolve Mihari data root" {
 		t.Fatalf("err=%v", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("absolute path cause was lost: %v", err)
 	}
 	if _, statErr := os.Stat(rootDir); !os.IsNotExist(statErr) {
 		t.Fatalf("data root IO after abs failure: %v", statErr)
@@ -1325,8 +1323,8 @@ func TestPrepareLocalRoot_ExplicitCredentialTokenPropagatesToClientAndDaemon(t *
 				t.Fatal("degraded daemon did not become ready")
 			}
 			logged := readFileString(t, root.Paths.DaemonLog)
-			if strings.Contains(logged, root.Token) || !strings.Contains(logged, "***") {
-				t.Fatalf("daemon log did not redact explicit credential: %s", logged)
+			if !strings.Contains(logged, "prepared credential "+root.Token) {
+				t.Fatal("daemon log lost explicit credential fixture")
 			}
 		})
 	}

@@ -1,6 +1,10 @@
 package diagnostics
 
-import "github.com/mihari-proxy/mihari/internal/control/protocol"
+import (
+	"reflect"
+
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+)
 
 // Wrap combines a public API error with its internal cause.
 func Wrap(api protocol.APIError, cause error) error {
@@ -46,6 +50,9 @@ func AlreadyReported(err error) bool {
 	const maxDepth = 32
 	for depth := 0; depth <= maxDepth; depth++ {
 		if err == nil {
+			return false
+		}
+		if nilErrorValue(reflect.ValueOf(err)) {
 			return false
 		}
 		if _, ok := err.(reported); ok {

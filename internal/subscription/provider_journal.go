@@ -183,23 +183,23 @@ func (s *ProviderStore) recover(ctx context.Context) error {
 	}
 	var j providerJournal
 	if err = providerJSONShape(b, reflect.TypeOf(j)); err != nil {
-		return dataError("invalid provider journal shape")
+		return dataError("invalid provider journal shape", err)
 	}
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err = uniqueProviderJSON(dec, 0); err != nil {
-		return dataError("invalid provider journal")
+		return dataError("invalid provider journal", err)
 	}
 	if _, err = dec.Token(); err != io.EOF {
-		return dataError("invalid provider journal")
+		return dataError("invalid provider journal", err)
 	}
 	dec = json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err = dec.Decode(&j); err != nil {
-		return dataError("invalid provider journal")
+		return dataError("invalid provider journal", err)
 	}
-	if dec.Decode(&struct{}{}) != io.EOF {
-		return dataError("invalid provider journal")
+	if err = dec.Decode(&struct{}{}); err != io.EOF {
+		return dataError("invalid provider journal", err)
 	}
 	if j.Schema != "mihari.provider-commit/v1" || !profileIDPattern.MatchString(j.ID) || (j.Phase != "prepared" && j.Phase != "intent" && j.Phase != "done") || !j.New.Present || j.New.Identity == "" || len(j.New.SHA256) != 64 {
 		return dataError("invalid provider journal")

@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -190,7 +191,7 @@ func TestSupervisorDiagnostic_HealthTransitionKeepsThirdCause(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("health transition did not stop the child")
 	}
-	record := recorder.next(t)
+	record := recorder.waitForCount(t, 3)[2]
 	if record.record.Event != "core.health.failed" || !errors.Is(record.record.Err, causes[2]) {
 		t.Fatalf("record=%#v", record)
 	}
@@ -201,7 +202,7 @@ func TestSupervisorDiagnostic_HealthTransitionKeepsThirdCause(t *testing.T) {
 	}
 }
 
-func TestSupervisorDiagnostic_ThirdHealthCancellationDoesNotEmitFailure(t *testing.T) {
+func TestSupervisorDiagnostic_ThirdHealthCancellationIsInfo(t *testing.T) {
 	starter := newFakeStarter()
 	waiter := newFakeWaiter()
 	recorder := newSupervisorDiagnosticRecorder()
@@ -258,10 +259,17 @@ func TestSupervisorDiagnostic_ThirdHealthCancellationDoesNotEmitFailure(t *testi
 	releaseGates()
 	run.stop(t)
 
+	cancellations := 0
 	for _, record := range recorder.snapshot() {
 		if record.record.Event == "core.health.failed" {
-			t.Fatalf("reported normal health cancellation: %#v", record)
+			cancellations++
+			if record.record.Level != slog.LevelInfo || !errors.Is(record.record.Err, context.Canceled) {
+				t.Fatalf("wrong health cancellation diagnostic: %#v", record)
+			}
 		}
+	}
+	if cancellations != 1 {
+		t.Fatalf("health cancellation records=%d want=1", cancellations)
 	}
 }
 
@@ -287,12 +295,12 @@ func TestSupervisorDiagnostic_HealthAndTerminationFailuresKeepBothCauses(t *test
 		waiter.next(t).release()
 	}
 
-	records := recorder.waitForCount(t, 2)
-	if records[0].record.Event != "core.health.failed" || !errors.Is(records[0].record.Err, healthCause) || records[0].record.Err.Error() != "mihomo health check failed three times" {
-		t.Fatalf("health record=%#v", records[0])
+	records := recorder.waitForCount(t, 4)
+	if records[2].record.Event != "core.health.failed" || !errors.Is(records[2].record.Err, healthCause) || records[2].record.Err.Error() != "mihomo health check failed three times" {
+		t.Fatalf("health record=%#v", records[2])
 	}
-	if records[1].record.Event != "core.termination.failed" || !errors.Is(records[1].record.Err, terminationCause) || records[1].record.Err.Error() != "mihomo process termination failed" {
-		t.Fatalf("termination record=%#v", records[1])
+	if records[3].record.Event != "core.termination.failed" || !errors.Is(records[3].record.Err, terminationCause) || records[3].record.Err.Error() != "mihomo process termination failed" {
+		t.Fatalf("termination record=%#v", records[3])
 	}
 }
 

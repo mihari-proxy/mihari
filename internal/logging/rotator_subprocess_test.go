@@ -296,14 +296,14 @@ func runRotatorChild() int {
 		}
 		fmt.Println("wrote2")
 		return 0
-	case "write", "write-pause":
+	case "write", "write-pause", "fragment-pause":
 		w, err := OpenRotatingWriter(context.Background(), RotatorOptions{BasePath: base, Config: cfg, PrivateFS: fs, WriteWait: 30 * time.Second})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "child Open: %v\n", err)
 			return 1
 		}
 		defer func() { _ = w.Close() }()
-		if mode == "write-pause" {
+		if mode == "write-pause" || mode == "fragment-pause" {
 			fmt.Println("opened")
 			sc := bufio.NewScanner(os.Stdin)
 			if !sc.Scan() {
@@ -312,6 +312,10 @@ func runRotatorChild() int {
 			}
 		}
 		for i := 1; i <= count; i++ {
+			if mode == "fragment-pause" {
+				slog.New(NewJSONHandler(w, new(slog.LevelVar), "tui", nil)).Error("process fragment", "writer", writer, "cause", strings.Repeat("\x01", diagnosticMaxBytes))
+				continue
+			}
 			if err := writeRotatorRecord(w, writer, i); err != nil {
 				fmt.Fprintf(os.Stderr, "child write %d: %v\n", i, err)
 				return 1

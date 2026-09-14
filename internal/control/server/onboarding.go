@@ -49,11 +49,11 @@ func (s *Server) updateOnboarding(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	var body protocol.OnboardingUpdateRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	if body.Complete == nil && body.MixedAddr == nil && body.ControllerAddr == nil && body.WebAddr == nil {
-		writeInvalidArgument(writer, "onboarding update is empty")
+		s.writeInvalidArgument(request.Context(), writer, "onboarding update is empty")
 		return
 	}
 	defer s.operations.begin(body.OperationID)()

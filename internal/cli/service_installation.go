@@ -10,6 +10,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/spf13/cobra"
@@ -172,15 +173,15 @@ func installationDigest(value string) bool {
 func classifyInstallationError(err error) error {
 	var api protocol.APIError
 	if errors.As(err, &api) {
-		return api
+		return err
 	}
 	if errors.Is(err, os.ErrPermission) || errors.Is(err, app.ErrInstallationPermissionRequired) {
-		return protocol.APIError{Code: protocol.CodePermissionDenied, Message: "installation permission required"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodePermissionDenied, Message: "installation permission required"}, err)
 	}
 	if errors.Is(err, app.ErrInstallationObservationUnknown) || errors.Is(err, platform.ErrInstallControlBusy) || errors.Is(err, platform.ErrInstallStateChanged) {
-		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "installation state could not be confirmed; inspect again"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidState, Message: "installation state could not be confirmed; inspect again"}, err)
 	}
-	return protocol.APIError{Code: protocol.CodeDataFailure, Message: "installation operation failed"}
+	return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "installation operation failed"}, err)
 }
 
 func renderInstallationPlan(cmd *cobra.Command, plan app.InstallationPlan) error {

@@ -25,8 +25,8 @@ func TestManagerBackgroundDiagnostic_ReporterOwnsSchedulerFailure(t *testing.T) 
 		{name: "failure", err: &os.PathError{Op: "open", Path: "/private/background-token", Err: os.ErrPermission}},
 		{name: "upstream deadline", err: context.DeadlineExceeded},
 		{name: "upstream canceled", err: context.Canceled},
-		{name: "shutdown", err: context.Canceled, canceled: true, silent: true},
-		{name: "shutdown deadline", err: context.DeadlineExceeded, canceled: true, silent: true},
+		{name: "shutdown", err: context.Canceled, canceled: true},
+		{name: "shutdown deadline", err: context.DeadlineExceeded, canceled: true},
 		{name: "mixed shutdown failure", err: errors.Join(context.Canceled, os.ErrPermission), canceled: true},
 		{name: "mixed deadline failure", err: errors.Join(context.DeadlineExceeded, os.ErrPermission), canceled: true},
 		{name: "reported", err: fmt.Errorf("owner: %w", diagnostics.MarkReported(os.ErrPermission)), silent: true},
@@ -66,13 +66,14 @@ func TestManagerBackgroundDiagnostic_ReporterOwnsSchedulerFailure(t *testing.T) 
 			if err := json.Unmarshal(output.Bytes(), &record); err != nil {
 				t.Fatalf("missing single JSON diagnostic: %v", err)
 			}
-			if record["component"] != "scheduler" || record["msg"] != "background.failed" || record["level"] != "ERROR" || record["operation_id"] != "background-owner" || record["operation"] != "scheduler.run" {
+			wantLevel := "ERROR"
+			if test.name == "shutdown" || test.name == "shutdown deadline" {
+				wantLevel = "INFO"
+			}
+			if record["component"] != "scheduler" || record["msg"] != "background.failed" || record["level"] != wantLevel || record["operation_id"] != "background-owner" || record["operation"] != "scheduler.run" {
 				t.Fatalf("record=%v", record)
 			}
-			if strings.Contains(output.String(), "background-token") || strings.Contains(output.String(), "/private/") {
-				t.Fatal("private diagnostic data leaked")
-			}
-			if test.name == "failure" && record["cause"] != "path operation open: permission denied" {
+			if test.name == "failure" && record["cause"] != "open /private/background-token: permission denied" {
 				t.Fatalf("cause=%v", record["cause"])
 			}
 		})
@@ -135,7 +136,7 @@ func TestManagerBackgroundDiagnostic_RealMutationMarkerPreventsSecondReport(t *t
 	if err := json.Unmarshal(output.Bytes(), &record); err != nil {
 		t.Fatalf("expected one mutation diagnostic: %v", err)
 	}
-	if record["component"] != "runtime" || record["msg"] != "operation.failed" || record["operation_id"] != "scheduled-geoip-failure" || record["cause"] != "api error (internal): permission denied" {
+	if record["component"] != "runtime" || record["msg"] != "operation.failed" || record["operation_id"] != "scheduled-geoip-failure" || !strings.Contains(record["cause"].(string), "prepare GeoIP databases: permission denied") {
 		t.Fatalf("record=%v", record)
 	}
 }

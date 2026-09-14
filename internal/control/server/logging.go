@@ -47,7 +47,7 @@ func (s *Server) updateLogging(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	var body protocol.LoggingUpdateRequest
-	if !decodeControlJSON(writer, request, &body) || !requireOperationID(writer, body.OperationID) {
+	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "logging.update"})

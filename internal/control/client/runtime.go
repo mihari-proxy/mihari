@@ -158,6 +158,7 @@ func (c *Client) UpdateLogging(ctx context.Context, request protocol.LoggingUpda
 		default:
 			if level, report := diagnostics.FailureLevel(ctx, outcome.err); report {
 				reporter(ctx, diagnostics.Record{Component: "control.client", Event: "logging_update_failed", Level: level, Err: outcome.err})
+				outcome.err = diagnostics.MarkReported(outcome.err)
 			}
 		}
 	}
@@ -296,6 +297,7 @@ func (c *Client) doMutation(ctx context.Context, operation logging.OperationMeta
 	default:
 		if level, report := diagnostics.FailureLevel(ctx, outcome.err); report {
 			reporter(ctx, diagnostics.Record{Component: "control.client", Event: "mutation_failed", Level: level, Err: outcome.err})
+			outcome.err = diagnostics.MarkReported(outcome.err)
 		}
 	}
 	return outcome.err
@@ -322,6 +324,8 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 	token, err := c.requestToken(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
+			// Cancellation keeps the historical nil stream result; reporting owns the error here.
+			_ = c.reportStreamOutcome(ctx, runtimeOutcome{err: err})
 			return nil
 		}
 		return c.reportStreamOutcome(ctx, runtimeOutcome{err: err})
@@ -330,10 +334,12 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 	connection, response, err := websocket.Dial(ctx, streamURL.String(), &websocket.DialOptions{HTTPClient: c.requestHTTP(), HTTPHeader: header})
 	if err != nil {
 		if ctx.Err() != nil {
+			// Cancellation keeps the historical nil stream result; reporting owns the error here.
+			_ = c.reportStreamOutcome(ctx, runtimeOutcome{err: err})
 			return nil
 		}
 		if response != nil {
-			return c.reportStreamOutcome(ctx, c.responseOutcome(response))
+			return c.reportStreamOutcome(ctx, c.responseOutcome(ctx, response))
 		}
 		return c.reportStreamOutcome(ctx, c.localRuntimeOutcome(err))
 	}
@@ -342,7 +348,12 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 	for {
 		_, raw, err := connection.Read(ctx)
 		if err != nil {
-			if ctx.Err() != nil || websocket.CloseStatus(err) == websocket.StatusNormalClosure {
+			if ctx.Err() != nil {
+				// Cancellation keeps the historical nil stream result; reporting owns the error here.
+				_ = c.reportStreamOutcome(ctx, runtimeOutcome{err: err})
+				return nil
+			}
+			if websocket.CloseStatus(err) == websocket.StatusNormalClosure {
 				return nil
 			}
 			if errors.Is(err, websocket.ErrMessageTooBig) {
@@ -363,14 +374,18 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 // reportStreamOutcome owns local transport/decode failures and remote response
 // outcomes. Callback errors belong to the caller and never enter this path.
 func (c *Client) reportStreamOutcome(ctx context.Context, outcome runtimeOutcome) error {
+	return c.reportRuntimeOutcome(ctx, outcome, "stream_failed", "stream_response")
+}
+
+func (c *Client) reportRuntimeOutcome(ctx context.Context, outcome runtimeOutcome, failureEvent, responseEvent string) error {
 	reporter := c.diagnosticReporter()
 	if reporter == nil || diagnostics.AlreadyReported(outcome.err) {
 		return outcome.err
 	}
-	event := "stream_failed"
+	event := failureEvent
 	level, report := diagnostics.FailureLevel(ctx, outcome.err)
 	if outcome.remoteEnvelope {
-		event, level, report = "stream_response", slog.LevelDebug, true
+		event, level, report = responseEvent, slog.LevelDebug, true
 	}
 	if report {
 		reporter(ctx, diagnostics.Record{Component: "control.client", Event: event, Level: level, Err: outcome.err})
@@ -384,21 +399,22 @@ func (c *Client) doRuntime(ctx context.Context, method, path string, input, outp
 }
 
 func (c *Client) doRuntimeLimit(ctx context.Context, method, path string, input, output any, responseLimit int64) error {
-	return c.doRuntimeOutcome(ctx, method, path, input, output, responseLimit).err
+	outcome := c.doRuntimeOutcome(ctx, method, path, input, output, responseLimit)
+	return c.reportRuntimeOutcome(ctx, outcome, "request_failed", "request_response")
 }
 
-func (c *Client) doRuntimeOutcome(ctx context.Context, method, path string, input, output any, responseLimit int64) runtimeOutcome {
+func (c *Client) doRuntimeOutcome(ctx context.Context, method, path string, input, output any, responseLimit int64) (outcome runtimeOutcome) {
 	var body io.Reader
 	if input != nil {
 		raw, err := json.Marshal(input)
 		if err != nil {
-			return runtimeOutcome{err: protocol.APIError{Code: protocol.CodeInternal, Message: "encode control request"}}
+			return runtimeOutcome{err: diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "encode control request"}, err)}
 		}
 		body = bytes.NewReader(raw)
 	}
 	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
-		return runtimeOutcome{err: protocol.APIError{Code: protocol.CodeInternal, Message: "create control request"}}
+		return runtimeOutcome{err: diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "create control request"}, err)}
 	}
 	token, err := c.requestToken(ctx)
 	if err != nil {
@@ -422,10 +438,10 @@ func (c *Client) doRuntimeOutcome(ctx context.Context, method, path string, inpu
 	if err != nil {
 		return c.localRuntimeOutcome(err)
 	}
-	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return c.responseOutcome(response)
+		return c.responseOutcome(ctx, response)
 	}
+	defer c.closeRuntimeResponse(ctx, response, &outcome)
 	raw, err := io.ReadAll(io.LimitReader(response.Body, responseLimit+1))
 	if err != nil {
 		return c.localRuntimeOutcome(err)
@@ -441,7 +457,6 @@ func (c *Client) doRuntimeOutcome(ctx context.Context, method, path string, inpu
 }
 
 func decodeRuntimeHTTPErrorOutcome(response *http.Response) (error, bool) {
-	defer response.Body.Close()
 	var envelope protocol.ErrorEnvelope
 	if err := json.NewDecoder(io.LimitReader(response.Body, maxControlResponseSize)).Decode(&envelope); err != nil {
 		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control error response"}, err), false
@@ -450,6 +465,26 @@ func decodeRuntimeHTTPErrorOutcome(response *http.Response) (error, bool) {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control error response"}, false
 	}
 	return envelope.Error, true
+}
+
+// closeRuntimeResponse keeps local cleanup causes with the local failure owner.
+// A valid response remains valid when cleanup alone fails.
+func (c *Client) closeRuntimeResponse(ctx context.Context, response *http.Response, outcome *runtimeOutcome) {
+	if err := response.Body.Close(); err != nil {
+		if outcome.err != nil && !outcome.remoteEnvelope {
+			var api protocol.APIError
+			if errors.As(outcome.err, &api) {
+				outcome.err = diagnostics.Wrap(api, errors.Join(outcome.err, err))
+			} else {
+				outcome.err = errors.Join(outcome.err, err)
+			}
+			return
+		}
+		if reporter := c.diagnosticReporter(); reporter != nil {
+			level, _ := diagnostics.FailureLevel(ctx, err)
+			reporter(ctx, diagnostics.Record{Component: "control.client", Event: "response.close_failed", Level: min(level, slog.LevelWarn), Err: err})
+		}
+	}
 }
 
 func (c *Client) localRuntimeOutcome(cause error) runtimeOutcome {

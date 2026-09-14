@@ -36,7 +36,7 @@ func BootstrapConfig(settings config.Settings) ([]byte, error) {
 	}
 	mixed, err := netip.ParseAddrPort(settings.MixedAddr)
 	if err != nil {
-		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mixed address"}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mixed address"}, err)
 	}
 	document := bootstrapDocument{
 		MixedPort:          mixed.Port(),
@@ -52,7 +52,7 @@ func BootstrapConfig(settings config.Settings) ([]byte, error) {
 	}
 	content, err := yaml.Marshal(document)
 	if err != nil {
-		return nil, protocol.APIError{Code: protocol.CodeInternal, Message: "encode bootstrap configuration"}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "encode bootstrap configuration"}, err)
 	}
 	return content, nil
 }
@@ -71,14 +71,14 @@ func EnsureRuntimeConfig(path string, settings config.Settings) error {
 		return WriteBootstrapConfig(path, settings)
 	}
 	if err != nil {
-		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "read runtime configuration"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "read runtime configuration"}, err)
 	}
 	if len(content) > 32<<20 {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "runtime configuration is too large"}
 	}
 	var document map[string]any
 	if err := yaml.Unmarshal(content, &document); err != nil {
-		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid runtime configuration"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid runtime configuration"}, err)
 	}
 	bootstrap, err := BootstrapConfig(settings)
 	if err != nil {
@@ -86,7 +86,7 @@ func EnsureRuntimeConfig(path string, settings config.Settings) error {
 	}
 	var managed map[string]any
 	if err := yaml.Unmarshal(bootstrap, &managed); err != nil {
-		return protocol.APIError{Code: protocol.CodeInternal, Message: "decode managed runtime invariants"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "decode managed runtime invariants"}, err)
 	}
 	for _, key := range []string{"mixed-port", "allow-lan", "bind-address", "external-controller", "secret"} {
 		if !reflect.DeepEqual(document[key], managed[key]) {
@@ -100,8 +100,8 @@ func ValidateConfig(ctx context.Context, runner CommandRunner, binaryPath, dataD
 	if runner == nil {
 		runner = OSCommandRunner{}
 	}
-	if _, err := runner.Run(ctx, binaryPath, "-t", "-d", dataDir, "-f", configPath); err != nil {
-		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo configuration validation failed"}, err)
+	if output, err := runner.Run(ctx, binaryPath, "-t", "-d", dataDir, "-f", configPath); err != nil {
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo configuration validation failed"}, errors.Join(err, commandOutputCause("mihomo configuration validation", output)))
 	}
 	return nil
 }

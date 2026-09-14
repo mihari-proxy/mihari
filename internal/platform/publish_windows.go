@@ -45,6 +45,9 @@ func openPublishDir(path string) (*PublishDir, error) {
 	h, err := openNTPath(path, publishDirAccess, windows.FILE_OPEN,
 		windows.FILE_DIRECTORY_FILE|windows.FILE_SYNCHRONOUS_IO_NONALERT, windows.FILE_ATTRIBUTE_DIRECTORY, nil)
 	if err != nil {
+		if isWindowsNotFound(err) {
+			return nil, fmt.Errorf("open publish directory: %w", errors.Join(os.ErrNotExist, err))
+		}
 		return nil, fmt.Errorf("open publish directory: %w", err)
 	}
 	d, err := publishDirFromHandle(h)

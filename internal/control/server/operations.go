@@ -90,7 +90,7 @@ func observationKey(id string) string {
 // operationStatus validates an operation ID and observes it without executing or replaying work.
 func (s *Server) operationStatus(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("operation_id")
-	if !requireOperationID(w, id) {
+	if !s.requireOperationID(r.Context(), w, id) {
 		return
 	}
 	writeJSON(w, http.StatusOK, protocol.OperationStatus{Schema: "mihari/v1", OperationID: id, State: s.operations.state(id)})

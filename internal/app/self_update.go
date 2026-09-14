@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/service"
 )
 
@@ -67,12 +68,12 @@ func (c *SelfUpdateServiceCompletion) completeReplacement(ctx context.Context, v
 	if err != nil {
 		var apiError protocol.APIError
 		if errors.As(err, &apiError) {
-			return apiError
+			return err
 		}
-		return protocol.APIError{
+		return diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeInvalidState,
 			Message: "Mihari updated, but the installed service could not be synchronized",
-		}
+		}, err)
 	}
 	if !installed {
 		return nil
@@ -80,16 +81,20 @@ func (c *SelfUpdateServiceCompletion) completeReplacement(ctx context.Context, v
 
 	verifyCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
+	var lastStatusErr error
 	for {
 		status, statusErr := c.client.Status(verifyCtx)
 		if statusErr == nil && sameVersion(status.DaemonVersion, version) {
 			return nil
 		}
-		if err := c.wait(verifyCtx); err != nil {
-			return protocol.APIError{
+		if statusErr != nil {
+			lastStatusErr = statusErr
+		}
+		if waitErr := c.wait(verifyCtx); waitErr != nil {
+			return diagnostics.Wrap(protocol.APIError{
 				Code:    protocol.CodeInvalidState,
 				Message: "Mihari updated and synchronized the installed service, but the daemon did not report version " + version,
-			}
+			}, errors.Join(lastStatusErr, waitErr))
 		}
 	}
 }

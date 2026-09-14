@@ -11,6 +11,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 const (
@@ -120,7 +121,7 @@ func (s *Service) Update(complete *bool) (State, error) {
 
 func reportPersistenceWarning(report func(error), warning error) {
 	if warning != nil && report != nil {
-		report(errors.New("onboarding parent directory sync failed after commit"))
+		report(fmt.Errorf("onboarding parent directory sync failed after commit: %w", warning))
 	}
 }
 
@@ -140,11 +141,11 @@ func decodeState(raw []byte) (State, error) {
 	decoder.DisallowUnknownFields()
 	var persisted persistedState
 	if err := decoder.Decode(&persisted); err != nil {
-		return State{}, dataError("invalid onboarding state")
+		return State{}, dataError("invalid onboarding state", err)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return State{}, dataError("onboarding state must contain one document")
+		return State{}, dataError("onboarding state must contain one document", err)
 	}
 	if persisted.Schema != stateSchema {
 		return State{}, dataError("unsupported onboarding state schema")
@@ -163,6 +164,10 @@ func saveState(path string, state State) (config.CommitResult, error) {
 	return config.AtomicWriteWithCommit(path, append(raw, '\n'), 0o600)
 }
 
-func dataError(message string) error {
-	return protocol.APIError{Code: protocol.CodeDataFailure, Message: message}
+func dataError(message string, causes ...error) error {
+	public := protocol.APIError{Code: protocol.CodeDataFailure, Message: message}
+	if cause := errors.Join(causes...); cause != nil {
+		return diagnostics.Wrap(public, cause)
+	}
+	return public
 }

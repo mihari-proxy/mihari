@@ -47,8 +47,8 @@ func assertStreamDiagnostic(t *testing.T, out *bytes.Buffer, event, level string
 			t.Fatalf("duplicate/missing key %s", key)
 		}
 	}
-	if strings.Contains(out.String(), "stream-private-token") || strings.Contains(out.String(), "example.invalid") {
-		t.Fatal("diagnostic leaked private data")
+	if cause, ok := record["cause"].(string); !ok || cause == "" {
+		t.Fatal("diagnostic lost cause")
 	}
 }
 
@@ -72,7 +72,7 @@ func TestStreamDiagnostics_TransportCauseAndReportedOwnership(t *testing.T) {
 		t.Fatalf("cause or ownership lost: %T", err)
 	}
 	assertStreamDiagnostic(t, &out, "stream_failed", "ERROR")
-	if !strings.Contains(out.String(), "unexpected end of input") {
+	if !strings.Contains(out.String(), "unexpected EOF") || !strings.Contains(out.String(), cause.Error()) {
 		t.Fatal("known cause missing")
 	}
 }
@@ -218,7 +218,9 @@ func TestStreamDiagnostics_CallbackAndNormalTerminationStayQuiet(t *testing.T) {
 			if mode == "normal" && count != 2 {
 				t.Fatalf("event count=%d", count)
 			}
-			if out.Len() != 0 {
+			if mode == "cancel" {
+				assertStreamDiagnostic(t, &out, "stream_failed", "INFO")
+			} else if out.Len() != 0 {
 				t.Fatalf("normal/callback termination diagnosed: %s", out.String())
 			}
 		})
@@ -266,6 +268,8 @@ func TestStreamDiagnostics_CancellationDeadlineAndNilReporter(t *testing.T) {
 			}
 			if mode == "upstream deadline" {
 				assertStreamDiagnostic(t, &out, "stream_failed", "ERROR")
+			} else if mode == "canceled dial" {
+				assertStreamDiagnostic(t, &out, "stream_failed", "INFO")
 			} else if out.Len() != 0 {
 				t.Fatalf("unexpected duplicate/cancellation diagnostic: %s", out.String())
 			}

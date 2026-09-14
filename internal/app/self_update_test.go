@@ -71,7 +71,8 @@ func TestSelfUpdateServiceCompletionSkipsVersionCheckWhenNotInstalled(t *testing
 }
 
 func TestSelfUpdateServiceCompletionReturnsRedactedSyncWarning(t *testing.T) {
-	service := &fakeInstalledServiceUpdater{installed: true, err: errors.New(`copy C:\Users\secret\mihari.exe failed`)}
+	cause := errors.New(`copy C:\Users\secret\mihari.exe failed`)
+	service := &fakeInstalledServiceUpdater{installed: true, err: cause}
 	completion := NewSelfUpdateServiceCompletion(service, &fakeDaemonVersionClient{})
 
 	err := completion.AfterReplace(context.Background(), "v0.6.0")
@@ -79,23 +80,30 @@ func TestSelfUpdateServiceCompletionReturnsRedactedSyncWarning(t *testing.T) {
 	if !errors.As(err, &api) {
 		t.Fatalf("err=%v", err)
 	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("service synchronization cause was lost: %v", err)
+	}
 	if strings.Contains(api.Message, "secret") || strings.Contains(api.Message, `C:\Users`) {
 		t.Fatalf("unsafe message=%q", api.Message)
 	}
 }
 
 func TestSelfUpdateServiceCompletionPreservesSafeServiceWarning(t *testing.T) {
+	cause := errors.New("service restart fixture cause")
 	warning := protocol.APIError{
 		Code:    protocol.CodeDataFailure,
 		Message: "Mihari updated, but the installed service binary could not be synchronized",
 	}
-	service := &fakeInstalledServiceUpdater{installed: true, err: warning}
+	service := &fakeInstalledServiceUpdater{installed: true, err: errors.Join(warning, cause)}
 	completion := NewSelfUpdateServiceCompletion(service, &fakeDaemonVersionClient{})
 
 	err := completion.AfterReplace(context.Background(), "v0.6.0")
 	var api protocol.APIError
 	if !errors.As(err, &api) || api.Code != warning.Code || api.Message != warning.Message {
 		t.Fatalf("err=%v", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("classified service cause was lost: %v", err)
 	}
 }
 
@@ -115,9 +123,11 @@ func TestSelfUpdateServiceCompletionCancellationReportsUnverifiedVersion(t *test
 
 func TestSelfUpdateServiceCompletionReportsVersionMismatch(t *testing.T) {
 	service := &fakeInstalledServiceUpdater{installed: true}
-	client := &fakeDaemonVersionClient{results: []statusResult{{status: protocol.Status{DaemonVersion: "v0.5.2"}}}}
+	statusCause := errors.New("daemon status private transport failure")
+	client := &fakeDaemonVersionClient{results: []statusResult{{status: protocol.Status{DaemonVersion: "v0.5.2"}, err: statusCause}}}
 	completion := NewSelfUpdateServiceCompletion(service, client)
-	completion.wait = func(context.Context) error { return context.DeadlineExceeded }
+	waitCause := context.DeadlineExceeded
+	completion.wait = func(context.Context) error { return waitCause }
 
 	err := completion.AfterReplace(context.Background(), "v0.6.0")
 	var api protocol.APIError
@@ -126,6 +136,9 @@ func TestSelfUpdateServiceCompletionReportsVersionMismatch(t *testing.T) {
 	}
 	if !strings.Contains(api.Message, "v0.6.0") || strings.Contains(api.Message, "v0.5.2") {
 		t.Fatalf("message=%q", api.Message)
+	}
+	if !errors.Is(err, statusCause) || !errors.Is(err, waitCause) {
+		t.Fatalf("status/wait causes were lost: %v", err)
 	}
 }
 

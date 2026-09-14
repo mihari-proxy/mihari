@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 func (u SelfUpdater) observeReplacement(ctx context.Context, path string) (ReplacementSnapshot, error) {
@@ -17,6 +19,10 @@ func (u SelfUpdater) observeReplacement(ctx context.Context, path string) (Repla
 		return u.ObserveTargets(ctx, path)
 	}
 	target, err := ObserveReplacementTarget(ctx, "binary", path, nil)
+	if target.probeErr != nil && u.Reporter != nil {
+		u.Reporter(ctx, diagnostics.Record{Component: "update", Event: "version_probe.failed", Level: slog.LevelWarn, Err: target.probeErr})
+	}
+	target.probeErr = nil
 	return ReplacementSnapshot{Targets: []ReplacementTarget{target}}, err
 }
 
@@ -83,10 +89,14 @@ func (u SelfUpdater) ApplyPrepared(ctx context.Context, p PreparedUpdate) (resul
 	if err = ctx.Err(); err != nil {
 		return result, err
 	}
-	if err = replaceBinary(path, p.TargetPath); err != nil {
-		return result, protocol.APIError{Code: protocol.CodeDataFailure, Message: "replace mihari binary"}
+	var warning error
+	if warning, err = replaceBinary(path, p.TargetPath); err != nil {
+		return result, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "replace mihari binary"}, err)
 	}
 	result.Updated = true
+	if warning != nil && u.Reporter != nil {
+		u.Reporter(ctx, diagnostics.Record{Component: "update", Event: "replacement.cleanup.failed", Level: slog.LevelWarn, Err: warning})
+	}
 	if u.AfterReplacePrepared != nil {
 		return result, u.AfterReplacePrepared(ctx, p)
 	}

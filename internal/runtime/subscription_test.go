@@ -186,12 +186,12 @@ func TestSubscriptionDiagnostic_UseCacheFailurePreservesCauseAndSafeJSON(t *test
 		t.Fatalf("diagnostic record=%#v", record)
 	}
 	cause, _ := record["cause"].(string)
-	if !strings.Contains(cause, "path operation open") || strings.Contains(output.String(), secret) || strings.Contains(output.String(), url) {
+	if !strings.Contains(cause, service.CachePath(profile.ID)) || !strings.Contains(cause, "open ") {
 		t.Fatalf("cause=%q output=%s", cause, output.String())
 	}
 }
 
-func TestSubscriptionDiagnostic_UnknownCauseUsesConservativeJSONSummary(t *testing.T) {
+func TestSubscriptionDiagnostic_UnknownCauseRetainsOriginalText(t *testing.T) {
 	const opaque = "subscription-private-unknown-error"
 	var output bytes.Buffer
 	level := new(slog.LevelVar)
@@ -206,7 +206,7 @@ func TestSubscriptionDiagnostic_UnknownCauseUsesConservativeJSONSummary(t *testi
 	if err := json.Unmarshal(output.Bytes(), &record); err != nil {
 		t.Fatalf("diagnostic JSON: %v; output=%s", err, output.String())
 	}
-	if record["operation_id"] != "unknown-cause" || record["operation"] != "subscription.refresh" || record["cause"] != "error (*errors.errorString)" || strings.Contains(output.String(), opaque) {
+	if record["operation_id"] != "unknown-cause" || record["operation"] != "subscription.refresh" || record["cause"] != opaque {
 		t.Fatalf("diagnostic record=%#v output=%s", record, output.String())
 	}
 }
@@ -281,14 +281,14 @@ func TestSubscriptionDiagnostic_FailedReplayAndNewIDKeepCausesIsolated(t *testin
 	if len(records) != 2 {
 		t.Fatalf("error records=%#v", records)
 	}
-	for index, want := range []struct{ id, cause string }{{"replay", "path operation read: permission denied"}, {"new-id", "path operation open: file does not exist"}} {
+	for index, want := range []struct{ id, cause string }{{"replay", firstCause.Error()}, {"new-id", secondCause.Error()}} {
 		record := records[index]
 		if record["msg"] != "operation.failed" || record["level"] != "ERROR" || record["operation_id"] != want.id || record["operation"] != "subscription.refresh" || record["cause"] != want.cause {
 			t.Fatalf("record[%d]=%#v", index, record)
 		}
 	}
-	if strings.Contains(raw, "replay-cause") || strings.Contains(raw, "new-id-cause") {
-		t.Fatalf("diagnostic exposed private causes: %s", raw)
+	if !strings.Contains(raw, "replay-cause") || !strings.Contains(raw, "new-id-cause") {
+		t.Fatal("diagnostic lost original causes")
 	}
 }
 
@@ -329,8 +329,8 @@ func TestSubscriptionDiagnostic_AddFailedChildKeepsSafeLastErrorAndCause(t *test
 		t.Fatalf("records=%#v", records)
 	}
 	child := records[1]
-	if child["msg"] != "operation.failed" || child["level"] != "ERROR" || child["operation_id"] != "add-fetch" || child["operation"] != "subscription.refresh" || child["cause"] != "path operation read: permission denied" || strings.Contains(raw, private) {
-		t.Fatalf("unsafe child diagnostic=%#v output=%s", child, raw)
+	if child["msg"] != "operation.failed" || child["level"] != "ERROR" || child["operation_id"] != "add-fetch" || child["operation"] != "subscription.refresh" || child["cause"] != cause.Error() {
+		t.Fatalf("incomplete child diagnostic=%#v output=%s", child, raw)
 	}
 }
 
@@ -539,7 +539,7 @@ func TestRefreshCannotRecreateSubscriptionDeletedDuringDownload(t *testing.T) {
 	}
 	diagnosticsMu.Lock()
 	defer diagnosticsMu.Unlock()
-	if len(records) != 2 || records[0].operation != (logging.OperationMetadata{ID: "remove", Name: "subscription.remove"}) || records[0].record.Event != "operation.succeeded" || records[1].operation != (logging.OperationMetadata{ID: "refresh", Name: "subscription.refresh"}) || records[1].record.Event != "operation.failed" || records[1].record.Level != slog.LevelDebug {
+	if len(records) != 2 || records[0].operation != (logging.OperationMetadata{ID: "remove", Name: "subscription.remove"}) || records[0].record.Event != "operation.succeeded" || records[1].operation != (logging.OperationMetadata{ID: "refresh", Name: "subscription.refresh"}) || records[1].record.Event != "operation.failed" || records[1].record.Level != slog.LevelInfo {
 		t.Fatalf("diagnostics=%#v", records)
 	}
 }
@@ -780,7 +780,11 @@ func TestBootstrapGeneration_IgnoresLegacyTunSettingsFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer candidate.cleanup()
+	t.Cleanup(func() {
+		if err := candidate.cleanup(); err != nil {
+			t.Error(err)
+		}
+	})
 	document, err := subscription.ParseDocument(candidate.content)
 	if err != nil {
 		t.Fatal(err)

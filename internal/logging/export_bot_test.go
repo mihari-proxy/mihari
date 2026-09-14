@@ -15,7 +15,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/platform"
 )
 
-func TestExportJSON_OmitsSensitiveKeyMembersWithoutCollisions(t *testing.T) {
+func TestExportJSON_PreservesMembersIndependentlyOfPublicRedactor(t *testing.T) {
 	const input = `{"time":"2026-09-02T12:00:00Z","seq":9007199254740993,"export-secret":"drop","***":"keep","nested":[{"https://example.test/a":"drop","https://example.test/b":"drop","[REDACTED_URL]":"keep","safe":"export-secret"}]}`
 	const want = `{"time":"2026-09-02T12:00:00Z","seq":9007199254740993,"***":"keep","nested":[{"[REDACTED_URL]":"keep","safe":"***"}]}`
 	decode := func(s string) any {
@@ -39,11 +39,11 @@ func TestExportJSON_OmitsSensitiveKeyMembersWithoutCollisions(t *testing.T) {
 	}
 	var output bytes.Buffer
 	stats, err := exportJSON(context.Background(), strings.NewReader(input+"\n"+`{"time":"2026-09-02T12:00:00Z","msg":"safe"}`), &output, ExportRange{Kind: RangeAll}, r)
-	if err != nil || stats.Lines != 2 || stats.Redacted != 1 || stats.SkippedInvalid != 0 {
+	if err != nil || stats.Lines != 2 || stats.Redacted != 0 || stats.SkippedInvalid != 0 {
 		t.Fatalf("record statistics=%+v err=%v", stats, err)
 	}
-	if strings.Contains(output.String(), "export-secret") || strings.Contains(output.String(), "example.test") {
-		t.Fatal("export leaked sensitive key")
+	if !reflect.DeepEqual(decode(strings.SplitN(output.String(), "\n", 2)[0]), original) {
+		t.Fatal("export changed original keys or values")
 	}
 }
 

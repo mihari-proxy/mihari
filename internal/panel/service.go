@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -30,6 +31,7 @@ type ServiceOptions struct {
 	HTTPClient *http.Client
 	MaxBytes   int64
 	AllowHTTP  bool
+	Reporter   diagnostics.Reporter
 }
 
 // PanelInfo is a redacted view of one supported panel's install state.
@@ -61,6 +63,7 @@ type Service struct {
 	httpClient *http.Client
 	maxBytes   int64
 	allowHTTP  bool
+	reporter   diagnostics.Reporter
 }
 
 // Open constructs a panel service. Adapters may be empty for path-only tests.
@@ -91,7 +94,7 @@ func Open(options ServiceOptions) (*Service, error) {
 	}
 	return &Service{
 		webRoot: options.WebRoot, webActive: options.WebActive, stagingDir: options.StagingDir,
-		adapters: adapters, httpClient: client, maxBytes: maxBytes, allowHTTP: options.AllowHTTP,
+		adapters: adapters, httpClient: client, maxBytes: maxBytes, allowHTTP: options.AllowHTTP, reporter: options.Reporter,
 	}, nil
 }
 
@@ -146,7 +149,11 @@ func (s *Service) PanelDir(panelID string) (string, error) {
 // SetupPath returns the default active panel's same-origin setup deep-link (under /__mihari/panels/{id}/).
 func (s *Service) SetupPath(gatewayHost string) string {
 	active, err := s.Active()
-	if err != nil || active.Panel == "" {
+	if err != nil {
+		s.reportWarning("active.read.failed", err)
+		return "/"
+	}
+	if active.Panel == "" {
 		return "/"
 	}
 	return s.SetupPathFor(active.Panel, gatewayHost)
@@ -181,7 +188,10 @@ func (s *Service) SetupPathFor(panelID, gatewayHost string) string {
 func (s *Service) List() []PanelInfo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	active, _ := LoadActive(s.webActive)
+	active, err := LoadActive(s.webActive)
+	if err != nil {
+		s.reportWarning("active.read.failed", err)
+	}
 	catalog := BuiltInCatalog()
 	out := make([]PanelInfo, 0, len(catalog))
 	for _, entry := range catalog {
@@ -443,7 +453,11 @@ func (s *Service) prepareBuild(ctx context.Context, panelID, build, assetURL str
 	if err != nil {
 		return nil, err
 	}
-	defer os.Remove(zipPath)
+	defer func() {
+		if err := os.Remove(zipPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.reportWarning("download.cleanup.failed", fmt.Errorf("remove panel download %s: %w", zipPath, err))
+		}
+	}()
 	candidateDir, err := prepareInstallCandidate(InstallRequest{
 		PanelID: panelID, Build: build, Archive: zipPath,
 		StagingDir: s.stagingDir, WebRoot: s.webRoot,
@@ -532,15 +546,21 @@ func (p *preparedPanelMutation) Cleanup() {
 	defer p.mu.Unlock()
 	if p.candidateDir != "" {
 		// Cleanup cannot change the committed result; removal is best-effort because the interface has no error return.
-		_ = os.RemoveAll(p.candidateDir)
+		p.reportCleanup(os.RemoveAll(p.candidateDir), p.candidateDir)
 		p.candidateDir = ""
 	}
 	for _, dir := range p.cleanupDirs {
 		// Committed backups are no longer live state; remove them after the coordinator lock is released.
-		_ = os.RemoveAll(dir)
+		p.reportCleanup(os.RemoveAll(dir), dir)
 	}
 	p.cleanupDirs = nil
 	p.cleaned = true
+}
+
+func (p *preparedPanelMutation) reportCleanup(err error, path string) {
+	if err != nil && p.service != nil && p.service.reporter != nil {
+		p.service.reporter(context.Background(), diagnostics.Record{Component: "panel", Event: "cleanup.failed", Level: slog.LevelWarn, Err: fmt.Errorf("remove panel tree %s: %w", path, err)})
+	}
 }
 
 func (p *preparedPanelMutation) commitUpdateLocked() error {
@@ -614,7 +634,9 @@ func moveAside(path, backup string) (string, bool, error) {
 		return backup, false, err
 	}
 	// Backup names are candidate-unique; a leftover is cleanup debris and a failed removal makes Rename fail closed.
-	_ = os.RemoveAll(backup)
+	if err := os.RemoveAll(backup); err != nil {
+		return backup, false, fmt.Errorf("remove previous panel backup: %w", err)
+	}
 	if err := os.Rename(path, backup); err != nil {
 		return backup, false, fmt.Errorf("retain previous panel install: %w", err)
 	}
@@ -642,7 +664,7 @@ func candidateReady(root string) bool {
 	return found
 }
 
-func (s *Service) download(ctx context.Context, panelID, build, assetURL string) (string, error) {
+func (s *Service) download(ctx context.Context, panelID, build, assetURL string) (result string, resultErr error) {
 	if err := os.MkdirAll(s.stagingDir, 0o700); err != nil {
 		return "", fmt.Errorf("create panel staging: %w", err)
 	}
@@ -653,28 +675,53 @@ func (s *Service) download(ctx context.Context, panelID, build, assetURL string)
 	request.Header.Set("User-Agent", "mihari")
 	response, err := s.httpClient.Do(request)
 	if err != nil {
-		return "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download panel asset failed"}, err)
+		return "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download panel asset failed"}, &diagnostics.HTTPError{Operation: "panel GET asset", URL: assetURL, Phase: "transport", Cause: err})
 	}
-	defer response.Body.Close()
+	defer func() {
+		if closeErr := response.Body.Close(); closeErr != nil {
+			detail := &diagnostics.HTTPError{Operation: "panel GET asset", URL: assetURL, Phase: "close", Status: response.StatusCode, Cause: closeErr}
+			if resultErr != nil {
+				var api protocol.APIError
+				if errors.As(resultErr, &api) {
+					resultErr = diagnostics.Wrap(api, errors.Join(resultErr, detail))
+				} else {
+					resultErr = errors.Join(resultErr, detail)
+				}
+			} else if s.reporter != nil {
+				s.reporter(ctx, diagnostics.Record{Component: "panel", Event: "http.close.failed", Level: slog.LevelWarn, Err: detail})
+			}
+		}
+	}()
 	if response.StatusCode != http.StatusOK {
-		return "", protocol.APIError{
+		raw, readErr := io.ReadAll(io.LimitReader(response.Body, diagnostics.MaxHTTPBodyBytes+1))
+		return "", diagnostics.Wrap(protocol.APIError{
 			Code: protocol.CodeNetworkFailure, Message: "download panel asset failed",
 			Details: map[string]any{"status": response.StatusCode},
-		}
+		}, &diagnostics.HTTPError{Operation: "panel GET asset", URL: assetURL, Phase: "response", Status: response.StatusCode, Body: diagnostics.HTTPBody(raw), Cause: readErr})
 	}
 	file, err := os.CreateTemp(s.stagingDir, "."+sanitizeBuild(panelID+"-"+build)+"-*.zip")
 	if err != nil {
 		return "", fmt.Errorf("create panel download: %w", err)
 	}
 	path := file.Name()
+	defer func() {
+		if resultErr != nil {
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				var api protocol.APIError
+				if errors.As(resultErr, &api) {
+					resultErr = diagnostics.Wrap(api, errors.Join(resultErr, fmt.Errorf("remove panel download: %w", err)))
+				} else {
+					resultErr = errors.Join(resultErr, fmt.Errorf("remove panel download: %w", err))
+				}
+			}
+		}
+	}()
 	written, copyErr := io.Copy(file, io.LimitReader(response.Body, s.maxBytes+1))
 	closeErr := file.Close()
 	if copyErr != nil || closeErr != nil {
-		os.Remove(path)
 		return "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read panel asset failed"}, errors.Join(copyErr, closeErr))
 	}
 	if written > s.maxBytes {
-		os.Remove(path)
 		return "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "panel asset is too large"}
 	}
 	// Soft-check archive can open before promote.
@@ -706,6 +753,9 @@ func (s *Service) listBuildsLocked(panelID string) []string {
 	dir := filepath.Join(s.webRoot, panelID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			s.reportWarning("builds.read.failed", err)
+		}
 		return nil
 	}
 	var builds []string
@@ -735,7 +785,7 @@ func (s *Service) buildReadyLocked(panelID, build string) bool {
 	}
 	// Nested single-root dist/index.html is also valid after extract.
 	var found bool
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
@@ -744,7 +794,9 @@ func (s *Service) buildReadyLocked(panelID, build string) bool {
 			return io.EOF
 		}
 		return nil
-	})
+	}); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, io.EOF) {
+		s.reportWarning("build.scan.failed", err)
+	}
 	return found
 }
 
@@ -752,6 +804,9 @@ func (s *Service) pruneBuildsLocked(panelID, activeBuild, previousBuild string) 
 	dir := filepath.Join(s.webRoot, panelID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			s.reportWarning("builds.read.failed", err)
+		}
 		return
 	}
 	keep := map[string]struct{}{activeBuild: {}}
@@ -765,7 +820,16 @@ func (s *Service) pruneBuildsLocked(panelID, activeBuild, previousBuild string) 
 		if _, ok := keep[entry.Name()]; ok {
 			continue
 		}
-		_ = os.RemoveAll(filepath.Join(dir, entry.Name()))
+		path := filepath.Join(dir, entry.Name())
+		if err := os.RemoveAll(path); err != nil {
+			s.reportWarning("build.cleanup.failed", fmt.Errorf("remove panel build %s: %w", path, err))
+		}
+	}
+}
+
+func (s *Service) reportWarning(event string, err error) {
+	if err != nil && s != nil && s.reporter != nil {
+		s.reporter(context.Background(), diagnostics.Record{Component: "panel", Event: event, Level: slog.LevelWarn, Err: err})
 	}
 }
 

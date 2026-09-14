@@ -259,9 +259,9 @@ func (m *Manager) systemProxyStatusLocked(ctx context.Context) (protocol.SystemP
 	}
 	observed, err := m.sysProxy.Get()
 	if err != nil {
-		return protocol.SystemProxyStatus{}, protocol.APIError{
+		return protocol.SystemProxyStatus{}, diagnostics.Wrap(protocol.APIError{
 			Code: protocol.CodeUpstreamFailure, Message: "read system proxy state",
-		}
+		}, err)
 	}
 	return m.buildSystemProxyStatus(desired, target, observed, ""), nil
 }
@@ -285,10 +285,10 @@ func (m *Manager) buildSystemProxyStatus(desired bool, target string, observed s
 func resolveSystemProxyTarget(mixedAddr string) (target, host string, port int, err error) {
 	addrPort, parseErr := netip.ParseAddrPort(mixedAddr)
 	if parseErr != nil {
-		return "", "", 0, protocol.APIError{
+		return "", "", 0, diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeInvalidArgument,
 			Message: "invalid mixed-addr for system proxy",
-		}
+		}, parseErr)
 	}
 	host = addrPort.Addr().String()
 	port = int(addrPort.Port())

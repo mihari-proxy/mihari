@@ -55,7 +55,7 @@ func (m *Manager) mutateTrustedTun(ctx context.Context, op Operation, enable, fo
 	if err != nil {
 		return protocol.TunStatus{}, mapTunApplyError(err)
 	}
-	defer generated.cleanup()
+	defer func() { collectWarning(ctx, "tun", "candidate.cleanup.failed", generated.cleanup()) }()
 	if err = m.lockMutation(ctx); err != nil {
 		return protocol.TunStatus{}, err
 	}

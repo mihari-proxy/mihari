@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -127,7 +128,7 @@ func TestLoggingEndpointDoesNotReportRuntimeOwnedFailure(t *testing.T) {
 	}
 }
 
-func TestLoggingEndpointReportsExpectedConflictAtDebug(t *testing.T) {
+func TestLoggingEndpointReportsExpectedConflictAtInfo(t *testing.T) {
 	var records []diagnostics.Record
 	server := New(Options{
 		Token: "token",
@@ -141,18 +142,23 @@ func TestLoggingEndpointReportsExpectedConflictAtDebug(t *testing.T) {
 	server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodPatch, "/v1/logging", bytes.NewBufferString(`{"operation_id":"logging-1","level":"debug"}`)))
 
 	assertLoggingError(t, recorder, http.StatusConflict, protocol.CodeRevisionConflict)
-	if len(records) != 1 || records[0].Level != slog.LevelDebug {
+	if len(records) != 1 || records[0].Level != slog.LevelInfo {
 		t.Fatalf("records=%#v", records)
 	}
 }
 
-func TestLoggingEndpointDoesNotReportAuthenticationOrJSONFailures(t *testing.T) {
-	var reports int
+func TestLoggingEndpointReportsAuthenticationAndJSONFailuresAtInfo(t *testing.T) {
+	var records []diagnostics.Record
 	server := New(Options{
-		Token:              "token",
-		Store:              state.NewStore(state.Snapshot{}),
-		Runtime:            &loggingTestRuntime{fakeRuntime: &fakeRuntime{}},
-		DiagnosticReporter: func(context.Context, diagnostics.Record) { reports++ },
+		Token:   "token",
+		Store:   state.NewStore(state.Snapshot{}),
+		Runtime: &loggingTestRuntime{fakeRuntime: &fakeRuntime{}},
+		DiagnosticReporter: func(ctx context.Context, record diagnostics.Record) {
+			if metadata, exists := logging.OperationFromContext(ctx); exists && metadata.ID != "" {
+				t.Error("pre-parse rejection borrowed unverified operation identity")
+			}
+			records = append(records, record)
+		},
 	})
 	for _, request := range []*http.Request{
 		httptest.NewRequest(http.MethodPatch, "/v1/logging", bytes.NewBufferString(`{"operation_id":"logging-1","level":"debug","secret":"must-not-parse"}`)),
@@ -175,8 +181,16 @@ func TestLoggingEndpointDoesNotReportAuthenticationOrJSONFailures(t *testing.T) 
 		server.Handler().ServeHTTP(recorder, authorizedRequest(http.MethodPatch, "/v1/logging", bytes.NewBufferString(body)))
 		assertLoggingError(t, recorder, http.StatusBadRequest, protocol.CodeInvalidArgument)
 	}
-	if reports != 0 {
-		t.Fatalf("diagnostic reports=%d want=0", reports)
+	if len(records) != 4 {
+		t.Fatalf("diagnostic reports=%d want=4", len(records))
+	}
+	for _, record := range records {
+		if record.Level != slog.LevelInfo {
+			t.Fatal("request rejection was not recorded at INFO")
+		}
+	}
+	if !errors.Is(records[3].Err, io.ErrUnexpectedEOF) {
+		t.Fatal("request JSON decode lost its original cause")
 	}
 }
 

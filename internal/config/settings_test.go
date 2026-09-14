@@ -1128,3 +1128,29 @@ func TestLoadOrCreateWithSidecarAppliesNewStampToExistingSettings(t *testing.T) 
 		t.Fatalf("reloaded=%#v err=%v", reloaded, err)
 	}
 }
+
+func TestLoadOrCreateOutcome_LockCleanupFailuresBecomeWarning(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "settings.yaml")
+	closeCause, removeCause := errors.New("close settings lock fixture"), errors.New("remove settings lock fixture")
+	loads := 0
+	ops := defaultSettingsCreationOps()
+	ops.load = func(string) (Settings, error) {
+		loads++
+		return Settings{}, os.ErrNotExist
+	}
+	ops.openLock = func(string) (*os.File, error) { return os.CreateTemp(root, "settings-lock-") }
+	ops.closeLock = func(file *os.File) error {
+		_ = file.Close()
+		return closeCause
+	}
+	ops.removeLock = func(path string) error {
+		_ = os.Remove(path)
+		return removeCause
+	}
+	ops.save = func(string, Settings) (CommitResult, error) { return CommitResult{Committed: true}, nil }
+	settings, created, result, err := loadOrCreateWithOpsOutcome(path, "", ops)
+	if err != nil || !created || settings.ControllerSecret == "" || loads < 2 || !errors.Is(result.Warning, closeCause) || !errors.Is(result.Warning, removeCause) {
+		t.Fatalf("cleanup warning or successful creation changed: created=%t result=%+v err=%v", created, result, err)
+	}
+}

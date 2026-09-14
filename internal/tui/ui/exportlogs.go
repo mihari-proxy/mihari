@@ -7,6 +7,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"log/slog"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -98,31 +99,49 @@ func (r *exportRunner) startExport(generation uint64, request logging.ExportRequ
 		// Keep raw errors on the worker boundary. Only a fixed notice crosses to UI.
 		var warningMu sync.Mutex
 		var warning error
+		var warnings []error
 		request.OnWarning = func(err error) {
 			warningMu.Lock()
-			if warning == nil {
-				warning = err
+			if err != nil && !errors.Is(warning, err) {
+				warning = errors.Join(warning, err)
+				warnings = append(warnings, err)
 			}
 			warningMu.Unlock()
 			warned.Store(true)
 		}
 		defer func() {
-			if recover() != nil {
+			if value := recover(); value != nil {
 				message.Result = logging.ExportResult{}
 				message.Err = errExportPanicked
+				if r.diagnostics.Reporter != nil {
+					// The raw panic is reported here; only the fixed marked error crosses into UI state.
+					_ = r.diagnostics.ReportFailure(ctx, "logs.export.failed", fmt.Errorf("log export panic: %v\n%s", value, debug.Stack()))
+					message.Err = diagnostics.MarkReported(message.Err)
+				}
 			}
 			if r.diagnostics.Reporter != nil {
 				if expectedExportRejection(message.Err) {
-					r.diagnostics.Reporter(ctx, diagnostics.Record{Component: "tui", Event: "logs.export.rejected", Level: slog.LevelDebug, Err: message.Err})
+					r.diagnostics.Reporter(ctx, diagnostics.Record{Component: "tui", Event: "logs.export.rejected", Level: slog.LevelInfo, Err: message.Err})
 					message.Err = diagnostics.MarkReported(message.Err)
 				} else {
 					message.Err = r.diagnostics.ReportFailure(ctx, "logs.export.failed", message.Err)
 				}
 			}
-			warningMu.Lock()
-			warningErr := warning
-			warningMu.Unlock()
-			if warned.Load() && r.diagnostics.Reporter != nil {
+			var warningErr error
+			if r.diagnostics.Reporter != nil {
+				warningMu.Lock()
+				warningErr = warning
+				if message.Err != nil {
+					warningErr = nil
+					for _, err := range warnings {
+						if !errors.Is(message.Err, err) {
+							warningErr = errors.Join(warningErr, err)
+						}
+					}
+				}
+				warningMu.Unlock()
+			}
+			if warningErr != nil && r.diagnostics.Reporter != nil {
 				r.diagnostics.Reporter(ctx, diagnostics.Record{Component: "tui", Event: "logs.export.warning", Level: slog.LevelWarn, Err: warningErr})
 			}
 			cancel()
@@ -610,7 +629,7 @@ func (m *ExportLogsModel) View(width, height int) string {
 	}
 	if m.resultPath != "" {
 		body := theme.Title.Render(ExportComplete) + "\n" + m.resultPath
-		body += "\n\nReview before sharing: node names, domains/IPs, and traffic metadata may remain."
+		body += "\n\n" + theme.Danger.Render(ExportPrivacyNotice)
 		if m.warning {
 			body += "\n\n" + exportWarningNotice
 		}
@@ -637,7 +656,7 @@ func (m *ExportLogsModel) View(width, height int) string {
 		}
 		return marker + label + "  " + value
 	}
-	lines := []string{theme.Title.Render(ExportLogsTitle), "", "  " + ExportNowLabel + "  " + m.options.Now().Format("2006-01-02 15:04:05 -07:00"), line(exportFocusRange, ExportRangeLabel, exportRangeLabel(m.rangeKind))}
+	lines := []string{theme.Title.Render(ExportLogsTitle), "", theme.Danger.Render(ExportPrivacyNotice), "", "  " + ExportNowLabel + "  " + m.options.Now().Format("2006-01-02 15:04:05 -07:00"), line(exportFocusRange, ExportRangeLabel, exportRangeLabel(m.rangeKind))}
 	if m.options.SourcesPrompt {
 		lines = append(lines, line(exportFocusSources, ExportSourcesLabel, exportScopeLabel(m.exportScope())))
 	}

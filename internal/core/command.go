@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 )
 
@@ -60,7 +61,7 @@ func executeVerifiedOwned(ctx context.Context, v *VerifiedCore, p CorePurpose, c
 	}
 	output, err := x.Execute(ctx, command)
 	if err != nil {
-		return output, verifiedExecutionError{cause: err}
+		return output, verifiedExecutionError{cause: errors.Join(err, commandOutputCause("verified mihomo command", output))}
 	}
 	return output, nil
 }

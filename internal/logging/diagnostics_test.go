@@ -21,7 +21,7 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-func TestNewDiagnosticReporter_DiagnosticOutputIsSafe(t *testing.T) {
+func TestNewDiagnosticReporter_DiagnosticOutputPreservesOriginalContext(t *testing.T) {
 	const secret = "registered-secret"
 	var output bytes.Buffer
 	redactor := NewRedactor(secret)
@@ -52,9 +52,9 @@ func TestNewDiagnosticReporter_DiagnosticOutputIsSafe(t *testing.T) {
 			t.Fatalf("cause %q does not contain safe diagnostic %q", causeText, want)
 		}
 	}
-	for _, forbidden := range []string{path, secret, rawURL, "user:password", "mihari.yaml"} {
-		if strings.Contains(output.String(), forbidden) {
-			t.Fatalf("diagnostic output leaked %q: %s", forbidden, output.String())
+	for _, want := range []string{path, secret, rawURL, "user:password", "mihari.yaml"} {
+		if !strings.Contains(causeText, want) {
+			t.Fatalf("diagnostic lost context %q", want)
 		}
 	}
 	if got := jsonStringField(t, record, "operation_id"); got != "op-settings-1" {
@@ -68,13 +68,13 @@ func TestNewDiagnosticReporter_DiagnosticOutputIsSafe(t *testing.T) {
 	}
 }
 
-func TestNewDiagnosticReporter_DiagnosticTextIsBoundedAfterRedaction(t *testing.T) {
+func TestNewDiagnosticReporter_DiagnosticTextIsBoundedWithoutRedaction(t *testing.T) {
 	const secret = "boundary-secret-value"
 	var output bytes.Buffer
 	redactor := NewRedactor(secret)
 	logger := slog.New(NewJSONHandler(&output, diagnosticTestLevel(slog.LevelDebug), "daemon", redactor))
 	reporter := NewDiagnosticReporter(logger, redactor)
-	rawOperation := strings.Repeat("界", 1360) + secret + " https://example.test/private?token=" + secret
+	rawOperation := secret + " https://example.test/private?token=" + secret + strings.Repeat("界", 90000)
 
 	reporter(context.Background(), diagnostics.Record{
 		Component: "daemon.settings",
@@ -86,21 +86,21 @@ func TestNewDiagnosticReporter_DiagnosticTextIsBoundedAfterRedaction(t *testing.
 	})
 	record := decodeDiagnosticRecord(t, output.Bytes())
 	causeText := jsonStringField(t, record, "cause")
-	if len(causeText) > 4096 {
-		t.Fatalf("cause has %d bytes, want at most 4096", len(causeText))
+	if len(causeText) > 256<<10 {
+		t.Fatalf("cause has %d bytes, want at most 256 KiB", len(causeText))
 	}
 	if !utf8.ValidString(causeText) {
 		t.Fatal("bounded diagnostic is not valid UTF-8")
 	}
-	if !strings.Contains(causeText, "path operation") {
-		t.Fatalf("cause lost typed operation summary: %q", causeText)
+	if !strings.HasSuffix(causeText, " [truncated]") {
+		t.Fatal("cause lost truncation marker")
 	}
-	if strings.Contains(causeText, secret) || strings.Contains(causeText, "boundary-sec") || strings.Contains(causeText, "https://") {
-		t.Fatalf("redaction happened after truncation: %q", causeText)
+	if !strings.Contains(causeText, secret) || !strings.Contains(causeText, "https://") {
+		t.Fatal("diagnostic was redacted")
 	}
 }
 
-func TestNewDiagnosticReporter_UnknownTextUsesConservativeSummary(t *testing.T) {
+func TestNewDiagnosticReporter_UnknownTextPreservesOriginal(t *testing.T) {
 	tests := []struct {
 		name string
 		raw  string
@@ -118,27 +118,22 @@ func TestNewDiagnosticReporter_UnknownTextUsesConservativeSummary(t *testing.T) 
 				Component: "daemon.settings", Event: "operation_failed", Level: slog.LevelError, Err: errors.New(test.raw),
 			})
 			cause := jsonStringField(t, decodeDiagnosticRecord(t, output.Bytes()), "cause")
-			if cause != "error (*errors.errorString)" {
-				t.Fatalf("cause = %q, want conservative type summary", cause)
-			}
-			for _, forbidden := range []string{"socks5://", "alice", "hunter2", "configs/", "private-settings.yaml", "private payload", "command output"} {
-				if strings.Contains(output.String(), forbidden) {
-					t.Fatalf("unknown diagnostic leaked %q: %s", forbidden, output.String())
-				}
+			if cause != test.raw {
+				t.Fatal("unknown diagnostic did not preserve original text")
 			}
 		})
 	}
 }
 
-func TestNewDiagnosticReporter_UsesSafeSummariesForSensitiveErrorTypes(t *testing.T) {
+func TestNewDiagnosticReporter_RetainsConfigurationAndCommandDetails(t *testing.T) {
 	const raw = "token: config-secret https://example.test/config /private/settings.yaml"
 	tests := []struct {
 		name string
 		err  error
 		want string
 	}{
-		{name: "yaml", err: &yaml.TypeError{Errors: []string{raw}}, want: "configuration parse error"},
-		{name: "command output", err: &exec.ExitError{Stderr: []byte(raw)}, want: "command execution failed"},
+		{name: "yaml", err: &yaml.TypeError{Errors: []string{raw}}, want: "yaml: unmarshal errors:"},
+		{name: "command output", err: &exec.ExitError{Stderr: []byte(raw)}, want: "stderr:"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -151,10 +146,8 @@ func TestNewDiagnosticReporter_UsesSafeSummariesForSensitiveErrorTypes(t *testin
 			if !strings.Contains(causeText, test.want) {
 				t.Fatalf("cause = %q, want safe summary %q", causeText, test.want)
 			}
-			for _, forbidden := range []string{"config-secret", "https://", "/private", "settings.yaml"} {
-				if strings.Contains(output.String(), forbidden) {
-					t.Fatalf("diagnostic output leaked %q: %s", forbidden, output.String())
-				}
+			if !strings.Contains(causeText, raw) {
+				t.Fatal("configuration or command diagnostic was shortened")
 			}
 		})
 	}

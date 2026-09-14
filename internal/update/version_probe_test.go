@@ -96,6 +96,9 @@ func TestVersionProbe_ObservesAndNeverElevates(t *testing.T) {
 			if got.Version != wantVersion {
 				t.Fatalf("version=%q", got.Version)
 			}
+			if tc.queryErr != nil && !errors.Is(got.probeErr, tc.queryErr) {
+				t.Fatalf("suppressed probe cause lost: %v", got.probeErr)
+			}
 		})
 	}
 }

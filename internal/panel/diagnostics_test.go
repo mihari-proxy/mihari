@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 type diagnosticTransport func(*http.Request) (*http.Response, error)
@@ -18,12 +19,22 @@ type diagnosticTransport func(*http.Request) (*http.Response, error)
 func (f diagnosticTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 type diagnosticReadBody struct {
-	cause  error
-	closed bool
+	cause     error
+	closed    bool
+	content   io.Reader
+	closeErr  error
+	readBytes int
 }
 
-func (b *diagnosticReadBody) Read([]byte) (int, error) { return 0, b.cause }
-func (b *diagnosticReadBody) Close() error             { b.closed = true; return nil }
+func (b *diagnosticReadBody) Read(p []byte) (int, error) {
+	if b.content != nil {
+		n, err := b.content.Read(p)
+		b.readBytes += n
+		return n, err
+	}
+	return 0, b.cause
+}
+func (b *diagnosticReadBody) Close() error { b.closed = true; return b.closeErr }
 func TestPanelDiagnostic_DownloadPreservesSafeCause(t *testing.T) {
 	for _, stage := range []string{"request", "transport", "read"} {
 		t.Run(stage, func(t *testing.T) {
@@ -67,3 +78,19 @@ func TestPanelDiagnostic_DownloadPreservesSafeCause(t *testing.T) {
 }
 
 var _ io.ReadCloser = (*diagnosticReadBody)(nil)
+
+func TestPanelDiagnostic_StatusBodyAndCloseCausePreserved(t *testing.T) {
+	closeCause := errors.New("close panel response")
+	body := &diagnosticReadBody{content: strings.NewReader("token=fixture\n" + strings.Repeat("x", diagnostics.MaxHTTPBodyBytes)), closeErr: closeCause}
+	service := &Service{stagingDir: t.TempDir(), maxBytes: 1024, httpClient: &http.Client{Transport: diagnosticTransport(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusForbidden, Body: body, Header: make(http.Header), Request: r}, nil
+	})}}
+	_, err := service.download(context.Background(), "fixture", "v1", "https://fixture.invalid/panel?token=fixture")
+	var detail *diagnostics.HTTPError
+	if !errors.As(err, &detail) || !strings.HasPrefix(detail.Body, "token=fixture\n") || !strings.Contains(detail.Body, "[truncated]") || !errors.Is(err, closeCause) {
+		t.Fatalf("status body or close cause lost: %v", err)
+	}
+	if body.readBytes != diagnostics.MaxHTTPBodyBytes+1 || !body.closed {
+		t.Fatalf("body accounting changed: bytes=%d closed=%t", body.readBytes, body.closed)
+	}
+}

@@ -53,7 +53,8 @@ func TestOperationDiagnosticsIPC_SaveFailureReplayAndNewExecution(t *testing.T) 
 	assertIPCDataFailure(t, err)
 	rawFailure := fixture.responses.At(t, 0)
 	assertRawErrorEnvelope(t, rawFailure)
-	assertNoDiagnosticSecrets(t, fixture.daemonLogs.String(), fixture.clientLogs.String(), string(rawFailure), err.Error())
+	assertOriginalFileCause(t, fixture.daemonLogs.String(), diagnosticsIPCURL)
+	assertNoDiagnosticSecrets(t, fixture.clientLogs.String(), string(rawFailure), err.Error())
 	assertDiagnosticLogs(t, fixture.daemonLogs.String(), slog.LevelError, diagnosticsIPCFailureID, 1)
 	assertDiagnosticDetail(t, fixture.daemonLogs.String(), slog.LevelError, diagnosticsIPCFailureID, "runtime", "operation.failed", "permission denied")
 	assertClientOperationLogs(t, fixture.clientLogs.String(), diagnosticsIPCFailureID, "logging_update_response")
@@ -121,7 +122,8 @@ func TestOperationDiagnosticsIPC_CommittedWarningPreservesSuccess(t *testing.T) 
 		t.Fatalf("committed warning produced ERROR log: %s", fixture.daemonLogs.String())
 	}
 	assertClientOperationLogs(t, fixture.clientLogs.String(), diagnosticsIPCWarningID, "logging_update_succeeded")
-	assertNoDiagnosticSecrets(t, fixture.daemonLogs.String(), fixture.clientLogs.String(), string(rawSuccess))
+	assertOriginalFileCause(t, fixture.daemonLogs.String(), diagnosticsIPCConfig)
+	assertNoDiagnosticSecrets(t, fixture.clientLogs.String(), string(rawSuccess))
 	assertNoDuplicateTopLevelJSONKeys(t, fixture.daemonLogs.String())
 	assertNoDuplicateTopLevelJSONKeys(t, fixture.clientLogs.String())
 }
@@ -418,6 +420,16 @@ func assertDiagnosticDetail(t *testing.T, logs string, level slog.Level, operati
 	t.Fatalf("missing diagnostic record level=%s operation_id=%q", level, operationID)
 }
 
+func assertOriginalFileCause(t *testing.T, logs, want string) {
+	t.Helper()
+	for _, record := range parseDiagnosticJSONLines(t, logs) {
+		if strings.Contains(record["cause"], want) {
+			return
+		}
+	}
+	t.Fatal("file diagnostics lost original fixture cause")
+}
+
 func assertNoDiagnosticSecrets(t *testing.T, values ...string) {
 	t.Helper()
 	for _, value := range values {
@@ -559,7 +571,8 @@ func TestSystemProxyDiagnostic_IPCOwnerDedup(t *testing.T) {
 	if !strings.Contains(fixture.daemonLogs.String(), `"operation":"system_proxy.enable"`) || !strings.Contains(fixture.clientLogs.String(), `"operation":"system_proxy.enable"`) {
 		t.Fatal("operation missing from IPC logs")
 	}
-	assertNoDiagnosticSecrets(t, fixture.daemonLogs.String(), fixture.clientLogs.String())
+	assertOriginalFileCause(t, fixture.daemonLogs.String(), cause.Error())
+	assertNoDiagnosticSecrets(t, fixture.clientLogs.String())
 	assertNoDuplicateTopLevelJSONKeys(t, fixture.daemonLogs.String())
 	assertNoDuplicateTopLevelJSONKeys(t, fixture.clientLogs.String())
 }
@@ -576,7 +589,8 @@ func TestTunDiagnostic_IPCOwnerDedup(t *testing.T) {
 	if !strings.Contains(fixture.daemonLogs.String(), `"operation":"tun.enable"`) || !strings.Contains(fixture.clientLogs.String(), `"operation":"tun.enable"`) {
 		t.Fatal("TUN operation missing from IPC logs")
 	}
-	assertNoDiagnosticSecrets(t, fixture.daemonLogs.String(), fixture.clientLogs.String())
+	assertOriginalFileCause(t, fixture.daemonLogs.String(), cause.Error())
+	assertNoDiagnosticSecrets(t, fixture.clientLogs.String())
 	assertNoDuplicateTopLevelJSONKeys(t, fixture.daemonLogs.String())
 }
 
@@ -604,7 +618,8 @@ func TestGeoIPDiagnostic_IPCRawFailureKeepsInternalEnvelope(t *testing.T) {
 	if !strings.Contains(fixture.daemonLogs.String(), `"operation":"geoip.update"`) || !strings.Contains(fixture.clientLogs.String(), `"operation":"geoip.update"`) {
 		t.Fatal("operation metadata missing")
 	}
-	assertNoDiagnosticSecrets(t, fixture.daemonLogs.String(), fixture.clientLogs.String())
+	assertOriginalFileCause(t, fixture.daemonLogs.String(), cause.Error())
+	assertNoDiagnosticSecrets(t, fixture.clientLogs.String())
 	assertNoDuplicateTopLevelJSONKeys(t, fixture.daemonLogs.String())
 }
 
@@ -632,7 +647,8 @@ func TestPanelDiagnostic_IPCOwnerDedup(t *testing.T) {
 	if !strings.Contains(fixture.daemonLogs.String(), `"operation":"panel.install"`) || !strings.Contains(fixture.clientLogs.String(), `"operation":"panel.install"`) {
 		t.Fatal("panel metadata missing")
 	}
-	assertNoDiagnosticSecrets(t, fixture.daemonLogs.String(), fixture.clientLogs.String())
+	assertOriginalFileCause(t, fixture.daemonLogs.String(), cause.Error())
+	assertNoDiagnosticSecrets(t, fixture.clientLogs.String())
 	assertNoDuplicateTopLevelJSONKeys(t, fixture.daemonLogs.String())
 }
 
@@ -655,6 +671,7 @@ func TestProviderDiagnostic_IPCActualAdapterOwnerDedup(t *testing.T) {
 	if !strings.Contains(fixture.daemonLogs.String(), `"operation":"rule_provider.refresh"`) || !strings.Contains(fixture.clientLogs.String(), `"operation":"rule_provider.refresh"`) {
 		t.Fatal("provider metadata missing")
 	}
-	assertNoDiagnosticSecrets(t, fixture.daemonLogs.String(), fixture.clientLogs.String())
+	assertOriginalFileCause(t, fixture.daemonLogs.String(), cause.Error())
+	assertNoDiagnosticSecrets(t, fixture.clientLogs.String())
 	assertNoDuplicateTopLevelJSONKeys(t, fixture.daemonLogs.String())
 }

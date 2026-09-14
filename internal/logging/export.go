@@ -86,7 +86,7 @@ var (
 	errExportTargetSuffixOverflow = errors.New("export target suffix overflow")
 )
 
-// Export creates a redacted archive and atomically publishes it.
+// Export preserves diagnostic content in an archive and atomically publishes it.
 func Export(ctx context.Context, request ExportRequest) (ExportResult, error) {
 	return exportWithOps(ctx, request, exportOps{})
 }
@@ -135,7 +135,7 @@ func resolveExportTargetWithOps(request ExportRequest, ops exportOps) (_ *export
 
 	logDir, err := request.PrivateFS.OpenDirIdentity(request.Paths.LogDir)
 	if err != nil {
-		return nil, fmt.Errorf("%w: open log directory identity", ErrInvalidExportRequest)
+		return nil, fmt.Errorf("%w: open log directory identity: %w", ErrInvalidExportRequest, err)
 	}
 	defer func() {
 		if retErr != nil {
@@ -154,7 +154,7 @@ func resolveExportTargetWithOps(request ExportRequest, ops exportOps) (_ *export
 		}
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%w: open export directory", ErrInvalidExportRequest)
+		return nil, fmt.Errorf("%w: open export directory: %w", ErrInvalidExportRequest, err)
 	}
 	defer func() {
 		if retErr != nil {
@@ -166,7 +166,7 @@ func resolveExportTargetWithOps(request ExportRequest, ops exportOps) (_ *export
 
 	inside, err := dir.IsWithin(logDir)
 	if err != nil {
-		return nil, fmt.Errorf("%w: check export directory", ErrInvalidExportRequest)
+		return nil, fmt.Errorf("%w: check export directory: %w", ErrInvalidExportRequest, err)
 	}
 	if inside {
 		return nil, fmt.Errorf("%w: export directory is within log directory", ErrInvalidExportRequest)
@@ -182,7 +182,7 @@ func resolveExportTargetWithOps(request ExportRequest, ops exportOps) (_ *export
 	for {
 		exists, existsErr := dir.Exists(target.Name)
 		if existsErr != nil {
-			return nil, fmt.Errorf("%w: inspect export target", ErrInvalidExportRequest)
+			return nil, fmt.Errorf("%w: inspect export target: %w", ErrInvalidExportRequest, existsErr)
 		}
 		if !exists {
 			break
@@ -211,7 +211,7 @@ func exportTargetParts(request ExportRequest) (name, parent, base string, err er
 	}
 	abs, err := filepath.Abs(filepath.Clean(request.OutputPath))
 	if err != nil {
-		return "", "", "", fmt.Errorf("%w: resolve export target", ErrInvalidExportRequest)
+		return "", "", "", fmt.Errorf("%w: resolve export target: %w", ErrInvalidExportRequest, err)
 	}
 	name = filepath.Base(abs)
 	if name == ".zip" || name == "" || name == "." || name == ".." {

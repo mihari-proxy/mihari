@@ -43,9 +43,6 @@ func sessionJSONReporter(out io.Writer) diagnostics.Reporter {
 func sessionRecords(t *testing.T, out *sessionDiagnosticBuffer) []map[string]any {
 	t.Helper()
 	raw := out.text()
-	if strings.Contains(raw, "session-private-token") || strings.Contains(raw, "example.invalid") {
-		t.Fatal("private failure data leaked")
-	}
 	var records []map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
 		if line == "" {
@@ -121,8 +118,11 @@ func TestSessionDiagnostics_FailureOwnershipAndFreshStatus(t *testing.T) {
 			if tc.count != 0 && (records[0]["msg"] != tc.event || records[0]["level"] != tc.level) {
 				t.Fatalf("record=%v", records[0])
 			}
-			if tc.decode && !strings.Contains(records[0]["cause"].(string), "configuration parse error") {
+			if tc.decode && !strings.Contains(records[0]["cause"].(string), "unexpected end of JSON input") {
 				t.Fatal("decode cause missing")
+			}
+			if tc.name == "unreported" && !strings.Contains(records[0]["cause"].(string), tc.err.Error()) {
+				t.Fatal("original stream error missing")
 			}
 		})
 	}
@@ -393,15 +393,43 @@ func TestSessionDiagnostics_RealClientFailureIsNotReportedTwice(t *testing.T) {
 		t.Fatalf("fresh Status error changed: %v", err)
 	}
 	decoder := json.NewDecoder(strings.NewReader(out.text()))
-	var record map[string]any
-	if err := decoder.Decode(&record); err != nil {
-		t.Fatal(err)
+	failures := 0
+	statusResponses := 0
+	for {
+		var record map[string]any
+		if err := decoder.Decode(&record); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		if record["component"] != "control.client" || record["operation_id"] != "session-local" {
+			t.Fatalf("unexpected owner: %v", record)
+		}
+		if record["msg"] == "request_response" {
+			statusResponses++
+			if record["level"] != "DEBUG" || !strings.Contains(record["cause"].(string), "fresh status failed") {
+				t.Fatalf("remote status response changed: %v", record)
+			}
+			continue
+		}
+		if record["msg"] != "stream_failed" {
+			t.Fatalf("unexpected event: %v", record)
+		}
+		switch record["level"] {
+		case "ERROR":
+			failures++
+		case "INFO":
+			if !strings.Contains(record["cause"].(string), "context canceled") {
+				t.Fatalf("sibling stream cancellation cause missing: %v", record)
+			}
+		default:
+			t.Fatalf("unexpected level: %v", record)
+		}
 	}
-	if record["component"] != "control.client" || record["msg"] != "stream_failed" || record["level"] != "ERROR" || record["operation_id"] != "session-local" {
-		t.Fatalf("record=%v", record)
+	if failures != 1 {
+		t.Fatalf("actual stream failure records=%d want=1", failures)
 	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		t.Fatal("session duplicated client diagnostic")
+	if statusResponses != 1 {
+		t.Fatalf("remote status responses=%d want=1", statusResponses)
 	}
 }

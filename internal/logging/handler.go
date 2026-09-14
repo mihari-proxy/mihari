@@ -11,8 +11,9 @@ import (
 const rfc3339NanoNumeric = "2006-01-02T15:04:05.999999999-07:00"
 
 // NewJSONHandler returns a slog JSON handler that stamps component, formats time
-// as RFC3339Nano with a numeric offset, and redacts attrs through redactor.
-func NewJSONHandler(out io.Writer, level *slog.LevelVar, component string, redactor *Redactor) slog.Handler {
+// as RFC3339Nano with a numeric offset, and preserves original log content.
+// Redaction for public fallback output is owned separately by the caller.
+func NewJSONHandler(out io.Writer, level *slog.LevelVar, component string, _ *Redactor) slog.Handler {
 	opts := &slog.HandlerOptions{
 		Level: level,
 		ReplaceAttr: func(groups []string, attr slog.Attr) slog.Attr {
@@ -24,12 +25,11 @@ func NewJSONHandler(out io.Writer, level *slog.LevelVar, component string, redac
 			return attr
 		},
 	}
-	return &redactingHandler{next: slog.NewJSONHandler(out, opts), redactor: redactor, component: component}
+	return &contextHandler{next: slog.NewJSONHandler(&recordWriter{out: out}, opts), component: component}
 }
 
-type redactingHandler struct {
+type contextHandler struct {
 	next      slog.Handler
-	redactor  *Redactor
 	component string
 	groups    []string
 	ops       []handlerOp
@@ -40,16 +40,13 @@ type handlerOp struct {
 	attrs []slog.Attr
 }
 
-func (h *redactingHandler) Enabled(ctx context.Context, level slog.Level) bool {
+func (h *contextHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	return h.next.Enabled(ctx, level)
 }
 
-func (h *redactingHandler) Handle(ctx context.Context, record slog.Record) error {
+func (h *contextHandler) Handle(ctx context.Context, record slog.Record) error {
 	operation, bound := OperationFromContext(ctx)
 	msg := record.Message
-	if h.redactor != nil {
-		msg = h.redactor.String(msg)
-	}
 	clean := slog.NewRecord(record.Time, record.Level, msg, record.PC)
 	component := h.component
 	attrs := make([]slog.Attr, 0, record.NumAttrs())
@@ -78,11 +75,6 @@ func (h *redactingHandler) Handle(ctx context.Context, record slog.Record) error
 		}
 	}
 	// Context metadata belongs to the root, not to h.groups.
-	if h.redactor != nil {
-		for i := 1; i < len(root); i++ {
-			root[i] = h.redactor.ReplaceAttr(nil, root[i])
-		}
-	}
 	next := h.next.WithAttrs(root)
 	grouped := false
 	for _, op := range h.ops {
@@ -103,7 +95,7 @@ func (h *redactingHandler) Handle(ctx context.Context, record slog.Record) error
 	return next.Handle(ctx, clean)
 }
 
-func (h *redactingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+func (h *contextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	clean := make([]slog.Attr, 0, len(attrs))
 	component := h.component
 	for _, attr := range attrs {
@@ -116,26 +108,37 @@ func (h *redactingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(clean) > 0 {
 		ops = append(ops, handlerOp{attrs: clean})
 	}
-	return &redactingHandler{next: h.next, redactor: h.redactor, component: component, groups: h.groups, ops: ops}
+	return &contextHandler{next: h.next, component: component, groups: h.groups, ops: ops}
 }
 
-func (h *redactingHandler) WithGroup(name string) slog.Handler {
+func (h *contextHandler) WithGroup(name string) slog.Handler {
 	if name == "" {
 		return h
 	}
 	groups := append(append([]string{}, h.groups...), name)
 	ops := append(append([]handlerOp{}, h.ops...), handlerOp{group: name})
-	return &redactingHandler{next: h.next, redactor: h.redactor, component: h.component, groups: groups, ops: ops}
+	return &contextHandler{next: h.next, component: h.component, groups: groups, ops: ops}
 }
 
-func (h *redactingHandler) cleanAttr(attr slog.Attr) slog.Attr {
-	if h.redactor != nil {
-		return h.redactor.ReplaceAttr(h.groups, attr)
+func (h *contextHandler) cleanAttr(attr slog.Attr) slog.Attr {
+	attr.Value = attr.Value.Resolve()
+	if attr.Value.Kind() == slog.KindAny {
+		if err, ok := attr.Value.Any().(error); ok {
+			return slog.String(attr.Key, diagnosticText(err, nil))
+		}
+	}
+	if attr.Value.Kind() == slog.KindGroup {
+		children := attr.Value.Group()
+		resolved := make([]slog.Attr, len(children))
+		for i, child := range children {
+			resolved[i] = h.cleanAttr(child)
+		}
+		return slog.Attr{Key: attr.Key, Value: slog.GroupValue(resolved...)}
 	}
 	return attr
 }
 
-func (h *redactingHandler) extractTopLevelComponent(attr slog.Attr, component string) (slog.Attr, string) {
+func (h *contextHandler) extractTopLevelComponent(attr slog.Attr, component string) (slog.Attr, string) {
 	if len(h.groups) != 0 {
 		return attr, component
 	}
@@ -143,9 +146,6 @@ func (h *redactingHandler) extractTopLevelComponent(attr slog.Attr, component st
 	if attr.Key == "component" {
 		if value.Kind() == slog.KindString {
 			component = value.String()
-			if h.redactor != nil {
-				component = h.redactor.String(component)
-			}
 		}
 		return slog.Attr{}, component
 	}

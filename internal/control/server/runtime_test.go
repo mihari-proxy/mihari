@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -17,12 +18,24 @@ import (
 	"github.com/coder/websocket/wsjson"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/core"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/geoip"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/mihomo"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 	"github.com/mihari-proxy/mihari/internal/state"
 )
+
+func TestRuntimeStream_RecordsHandshakeRejection(t *testing.T) {
+	var records []diagnostics.Record
+	server := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: &fakeRuntime{}, DiagnosticReporter: func(_ context.Context, record diagnostics.Record) { records = append(records, record) }})
+	request := authorizedRequest(http.MethodGet, "/v1/streams/traffic", nil)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if len(records) != 1 || records[0].Event != "request_rejected" || records[0].Level != slog.LevelInfo || records[0].Err == nil {
+		t.Fatalf("handshake rejection missing: %+v", records)
+	}
+}
 
 func TestCoreEndpointReturnsRedactedStableStatus(t *testing.T) {
 	store := state.NewStore(state.Snapshot{Revision: 8, Core: state.CoreState{Status: "running", Version: "v1.19.0", PID: 42, Restarts: 1}})
@@ -891,7 +904,7 @@ func FuzzDecodeControlJSON(f *testing.F) {
 		for _, target := range []any{&protocol.MutationRequest{}, &protocol.SubscriptionUpdateRequest{}} {
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "/v1/fuzz", bytes.NewReader(body))
-			ok := decodeControlJSON(recorder, request, target)
+			ok := (&Server{}).decodeControlJSON(recorder, request, target)
 			if ok {
 				if recorder.Body.Len() != 0 {
 					t.Fatalf("success wrote body: %s", recorder.Body.String())

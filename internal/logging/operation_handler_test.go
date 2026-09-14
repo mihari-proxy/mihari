@@ -81,7 +81,7 @@ func TestOperationHandler_ContextWinsAtRoot(t *testing.T) {
 	}
 }
 
-func TestOperationHandler_IDFilteringAndRedaction(t *testing.T) {
+func TestOperationHandler_IDFilteringWithoutRedaction(t *testing.T) {
 	tests := []struct {
 		name string
 		id   string
@@ -95,8 +95,8 @@ func TestOperationHandler_IDFilteringAndRedaction(t *testing.T) {
 		{"unicode", "操作", ""},
 		{"control", "bad\nvalue", ""},
 		{"url", "https://invalid.test/x", ""},
-		{"secret", "registered-secret", `"***"`},
-		{"hex-secret", strings.Repeat("b", 64), `"***"`},
+		{"secret", "registered-secret", `"registered-secret"`},
+		{"hex-secret", strings.Repeat("b", 64), `"` + strings.Repeat("b", 64) + `"`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -109,8 +109,8 @@ func TestOperationHandler_IDFilteringAndRedaction(t *testing.T) {
 			if string(out["operation_id"]) != test.want {
 				t.Fatal("unexpected ID output")
 			}
-			if string(out["operation"]) != `"***"` {
-				t.Fatal("operation must be redacted")
+			if string(out["operation"]) != `"registered-secret"` {
+				t.Fatal("operation must retain original text")
 			}
 			if got, _ := OperationFromContext(ctx); got.ID != test.id {
 				t.Fatal("input changed")
@@ -183,11 +183,11 @@ func TestOperationHandler_DerivedLoggerAndDynamicSecrets(t *testing.T) {
 	ctx := WithOperation(context.Background(), OperationMetadata{ID: "later-secret", Name: "settings.update"})
 	derived.InfoContext(ctx, "done", "password", "hidden-pass", "value", 1)
 	out := decodeOperationRecord(t, buf.String())
-	if string(out["operation_id"]) != `"***"` {
-		t.Fatal("derived handler missed current redaction rules")
+	if string(out["operation_id"]) != `"later-secret"` {
+		t.Fatal("derived handler changed record identity")
 	}
-	if strings.Contains(buf.String(), "later-secret") || strings.Contains(buf.String(), "hidden-pass") {
-		t.Fatal("sensitive data leaked")
+	if !strings.Contains(buf.String(), "later-secret") || !strings.Contains(buf.String(), "hidden-pass") {
+		t.Fatal("original attribute data was removed")
 	}
 	var request map[string]json.RawMessage
 	if err := json.Unmarshal(out["request"], &request); err != nil {

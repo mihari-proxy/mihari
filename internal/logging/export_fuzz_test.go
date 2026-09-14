@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"io"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func FuzzExportJSON(f *testing.F) {
@@ -32,13 +34,25 @@ func FuzzExportJSON(f *testing.F) {
 			t.Skip()
 		}
 		var output bytes.Buffer
-		_, err := exportJSON(context.Background(), bytes.NewReader(input), &output, ExportRange{Kind: RangeAll}, NewRedactor(secret))
+		stats, err := exportJSON(context.Background(), bytes.NewReader(input), &output, ExportRange{Kind: RangeAll}, NewRedactor(secret))
 		if err != nil {
 			t.Fatalf("exportJSON returned an unexpected reader/writer error: %v", err)
 		}
-		if bytes.Contains(output.Bytes(), []byte(secret)) || bytes.Contains(output.Bytes(), []byte("https://example.test/private")) {
-			t.Fatalf("export leaked a known sensitive value: %q", output.Bytes())
+		if stats.Redacted != 0 {
+			t.Fatal("export unexpectedly replaced content")
 		}
+		var originals []map[string]any
+		for _, line := range bytes.Split(input, []byte("\n")) {
+			// JSONL payloads must be valid UTF-8 and contain no embedded
+			// carriage return; a CRLF terminator is normalized on export.
+			payload := bytes.TrimSuffix(line, []byte{'\r'})
+			if len(line) <= MaxExportRecordBytes && utf8.Valid(payload) && !bytes.ContainsRune(payload, '\r') {
+				if record, _, valid := decodeExportRecord(line); valid {
+					originals = append(originals, record)
+				}
+			}
+		}
+		index := 0
 		for _, line := range bytes.Split(bytes.TrimSuffix(output.Bytes(), []byte("\n")), []byte("\n")) {
 			if len(line) == 0 {
 				continue
@@ -49,10 +63,17 @@ func FuzzExportJSON(f *testing.F) {
 			if err := decoder.Decode(&record); err != nil || record == nil {
 				t.Fatalf("output line is not a JSON object: %q: %v", line, err)
 			}
+			if index >= len(originals) || !reflect.DeepEqual(record, originals[index]) {
+				t.Fatal("export lost original JSON keys, values or numeric precision")
+			}
+			index++
 			var trailing any
 			if err := decoder.Decode(&trailing); err != io.EOF {
 				t.Fatalf("output line contains trailing JSON: %q: %v", line, err)
 			}
+		}
+		if index != len(originals) {
+			t.Fatal("export omitted a valid bounded record")
 		}
 	})
 }

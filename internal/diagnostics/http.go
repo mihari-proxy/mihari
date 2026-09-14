@@ -7,38 +7,42 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
+
+// MaxHTTPBodyBytes bounds retained upstream failure bodies, before JSON encoding.
+const MaxHTTPBodyBytes = 256 << 10
 
 // HandshakeError captures the failed websocket dial response. The websocket
 // adapter returns a closed-network-body copy capped at 1024 bytes; mark that
 // upstream library limit rather than claiming a complete error payload.
-func HandshakeError(operation string, response *http.Response, cause error, secret string) *HTTPError {
+func HandshakeError(operation string, response *http.Response, cause error) *HTTPError {
 	detail := &HTTPError{Operation: operation, Phase: "handshake", Cause: cause}
 	if response == nil {
-		return detail.HideSecret(secret)
+		return detail
 	}
 	detail.Status = response.StatusCode
 	if response.Body != nil {
-		raw, err := io.ReadAll(io.LimitReader(response.Body, (64<<10)+1))
+		raw, err := io.ReadAll(io.LimitReader(response.Body, MaxHTTPBodyBytes+1))
 		closeErr := response.Body.Close()
-		detail.Body = HTTPBody(raw, secret)
+		detail.Body = HTTPBody(raw)
 		if response.ContentLength > int64(len(raw)) || len(raw) == 1024 {
 			detail.Body += " [handshake body truncated]"
 		}
 		detail.Cause = errors.Join(cause, err, closeErr)
 	}
-	return detail.HideSecret(secret)
+	return detail
 }
 
 // HTTPError retains upstream diagnostics outside the public API error. Only the
 // logging boundary may render DiagnosticText; Error deliberately stays safe.
 type HTTPError struct {
 	Operation  string
+	URL        string
 	Phase      string
 	Status     int
 	Body       string
 	Cause      error
-	CauseText  string
 	RetryDelay time.Duration
 }
 
@@ -48,9 +52,12 @@ func (e *HTTPError) Unwrap() error { return e.Cause }
 // RetryAfter exposes a parsed upstream retry delay to the provider read policy.
 func (e *HTTPError) RetryAfter() time.Duration { return e.RetryDelay }
 
-// DiagnosticText returns original error text for a redacting, bounded logger.
+// DiagnosticText returns original HTTP details for the file diagnostic boundary.
 func (e *HTTPError) DiagnosticText() string {
 	text := e.Operation + " phase=" + e.Phase
+	if e.URL != "" {
+		text += " URL=" + e.URL
+	}
 	if e.Status != 0 {
 		text += fmt.Sprintf(" HTTP %d", e.Status)
 	}
@@ -58,36 +65,42 @@ func (e *HTTPError) DiagnosticText() string {
 		text += " response=" + e.Body
 	}
 	if e.Cause != nil {
-		cause := e.CauseText
-		if cause == "" {
-			cause = e.Cause.Error()
-		}
-		text += " cause=" + cause
+		text += " cause=" + e.Cause.Error()
 	}
 	return text
-}
-
-// HideSecret removes a known controller credential from the rendered copy while
-// retaining the original cause for errors.Is/As. Call after adding all causes.
-func (e *HTTPError) HideSecret(secret string) *HTTPError {
-	e.Body = HTTPBody([]byte(e.Body), secret)
-	if e.Cause != nil {
-		e.CauseText = HTTPBody([]byte(e.Cause.Error()), secret)
-	}
-	return e
 }
 
 // HTTPBody bounds retained error payloads without retaining response objects.
-func HTTPBody(raw []byte, secret string) string {
+func HTTPBody(raw []byte) string {
+	const marker = " [truncated]"
+	truncated := len(raw) > MaxHTTPBodyBytes
+	if len(raw) > MaxHTTPBodyBytes+utf8.UTFMax {
+		raw = raw[:MaxHTTPBodyBytes+utf8.UTFMax]
+	}
+	if truncated {
+		start := len(raw) - 1
+		for start > 0 && !utf8.RuneStart(raw[start]) {
+			start--
+		}
+		if !utf8.FullRune(raw[start:]) {
+			raw = raw[:start]
+		}
+	}
 	text := string(raw)
-	if secret != "" {
-		text = strings.ReplaceAll(text, secret, "***")
+	if !utf8.Valid(raw) {
+		text = strings.ToValidUTF8(text, "�") + " [invalid UTF-8]"
 	}
-	const limit = 64 << 10
-	if len(text) > limit {
-		text = text[:limit] + " [truncated]"
+	if truncated && len(text) <= MaxHTTPBodyBytes {
+		text += marker
 	}
-	return text
+	if len(text) <= MaxHTTPBodyBytes {
+		return text
+	}
+	end := MaxHTTPBodyBytes - len(marker)
+	for !utf8.RuneStart(text[end]) {
+		end--
+	}
+	return text[:end] + marker
 }
 
 // HTTPOperation removes user-controlled path segments and query parameters.

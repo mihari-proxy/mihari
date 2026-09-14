@@ -2,9 +2,26 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 )
+
+func TestInstallationStatus_UnmarshalPreservesParserCause(t *testing.T) {
+	var status InstallationStatus
+	err := status.UnmarshalJSON([]byte(`{"schema":`))
+	if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		var syntax *json.SyntaxError
+		if !errors.As(err, &syntax) {
+			t.Fatalf("parser cause lost: %v", err)
+		}
+	}
+	var api APIError
+	if !errors.As(err, &api) || api.Code != CodeDataFailure || err.Error() != "invalid installation status" {
+		t.Fatalf("public error changed: %v", err)
+	}
+}
 
 const validInstallationStatusJSON = `{"schema":"mihari.install-status/v1","kind":"interrupted","service_state":"stopped","start_failed":false,"reason":"operation_interrupted","id":"0123456789abcdef0123456789abcdef"}`
 

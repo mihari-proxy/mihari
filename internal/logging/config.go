@@ -12,7 +12,7 @@ import (
 
 const (
 	// MaxCaptureLineBytes is the per-line capture cap for mihomo stdout/stderr.
-	MaxCaptureLineBytes = 16 << 10
+	MaxCaptureLineBytes = 256 << 10
 	// MaxExportRecordBytes is the per-record export parse cap.
 	MaxExportRecordBytes = 1 << 20
 

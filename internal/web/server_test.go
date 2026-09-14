@@ -623,7 +623,7 @@ func TestGatewayWebSocketContextCancelReleasesBothSides(t *testing.T) {
 	requireTask5PeerClose(t, controllerState)
 	waitDone(t, handlerDone, "gateway WebSocket handler")
 	waitTask5SessionCount(t, gateway, 0)
-	assertWebDiagnostics(t, diagnosticsOutput, "", "", 0)
+	assertWebDiagnostics(t, diagnosticsOutput, "websocket.relay.failed", "INFO", 1)
 }
 
 func TestGatewayWebSocketHandshakeFailuresAreSanitized(t *testing.T) {

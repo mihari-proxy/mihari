@@ -16,6 +16,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/credential"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/control/transport"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/service"
@@ -129,7 +130,7 @@ func legacyDependencies(diagnosticStderr, loggingFailureStderr io.Writer) cli.De
 		PrepareLocalRoot:       prepareLocalRootForClient(localClient),
 		RunTUI: func(ctx context.Context) error {
 			if executableError != nil {
-				return protocol.APIError{Code: protocol.CodeInternal, Message: "resolve Mihari executable path"}
+				return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "resolve Mihari executable path"}, executableError)
 			}
 			root, err := prepareLocalRoot()
 			if err != nil {

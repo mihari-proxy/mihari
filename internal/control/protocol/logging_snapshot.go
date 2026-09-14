@@ -92,18 +92,23 @@ func DecodeMachineLogRequest(reader io.Reader, now time.Time) (MachineLogRequest
 		return MachineLogRequest{}, invalid
 	}
 	data, err := io.ReadAll(io.LimitReader(reader, MaxMachineLogRequestBytes+1))
-	if err != nil || len(data) > MaxMachineLogRequestBytes || !utf8.Valid(data) {
+	if err != nil {
+		return MachineLogRequest{}, wrapAPIErrorCause(invalid, err)
+	}
+	if len(data) > MaxMachineLogRequestBytes || !utf8.Valid(data) {
 		return MachineLogRequest{}, invalid
 	}
 	d := json.NewDecoder(bytes.NewReader(data))
-	if start, err := d.Token(); err != nil || start != json.Delim('{') {
+	if start, err := d.Token(); err != nil {
+		return MachineLogRequest{}, wrapAPIErrorCause(invalid, err)
+	} else if start != json.Delim('{') {
 		return MachineLogRequest{}, invalid
 	}
 	values := make(map[string]string, 3)
 	for d.More() {
 		key, err := d.Token()
 		if err != nil {
-			return MachineLogRequest{}, invalid
+			return MachineLogRequest{}, wrapAPIErrorCause(invalid, err)
 		}
 		name, ok := key.(string)
 		if !ok || (name != "schema" && name != "from" && name != "to") {
@@ -113,29 +118,43 @@ func DecodeMachineLogRequest(reader io.Reader, now time.Time) (MachineLogRequest
 			return MachineLogRequest{}, invalid
 		}
 		value, err := d.Token()
+		if err != nil {
+			return MachineLogRequest{}, wrapAPIErrorCause(invalid, err)
+		}
 		text, ok := value.(string)
-		if err != nil || !ok {
+		if !ok {
 			return MachineLogRequest{}, invalid
 		}
 		values[name] = text
 	}
-	if end, err := d.Token(); err != nil || end != json.Delim('}') {
+	if end, err := d.Token(); err != nil {
+		return MachineLogRequest{}, wrapAPIErrorCause(invalid, err)
+	} else if end != json.Delim('}') {
 		return MachineLogRequest{}, invalid
 	}
 	if _, err := d.Token(); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return MachineLogRequest{}, wrapAPIErrorCause(invalid, err)
+		}
 		return MachineLogRequest{}, invalid
 	}
 	if values["schema"] != MachineLogRequestSchema {
 		return MachineLogRequest{}, invalid
 	}
 	to, err := parseSnapshotUTC(values["to"])
-	if err != nil || to.After(now.Add(5*time.Minute)) {
+	if err != nil {
+		return MachineLogRequest{}, wrapAPIErrorCause(invalid, err)
+	}
+	if to.After(now.Add(5 * time.Minute)) {
 		return MachineLogRequest{}, invalid
 	}
 	request := MachineLogRequest{Schema: MachineLogRequestSchema, To: to}
 	if raw, exists := values["from"]; exists {
 		from, err := parseSnapshotUTC(raw)
-		if err != nil || from.After(to) {
+		if err != nil {
+			return MachineLogRequest{}, wrapAPIErrorCause(invalid, err)
+		}
+		if from.After(to) {
 			return MachineLogRequest{}, invalid
 		}
 		request.From = &from
@@ -166,7 +185,10 @@ func DecodeMachineLogPayload(encoded string) ([]byte, error) {
 		return nil, invalid
 	}
 	payload, err := base64.StdEncoding.Strict().DecodeString(encoded)
-	if err != nil || len(payload) > MaxMachineLogRecordBytes || !utf8.Valid(payload) || bytes.ContainsAny(payload, "\r\n") {
+	if err != nil {
+		return nil, wrapAPIErrorCause(invalid, err)
+	}
+	if len(payload) > MaxMachineLogRecordBytes || !utf8.Valid(payload) || bytes.ContainsAny(payload, "\r\n") {
 		return nil, invalid
 	}
 	// Strict decoding still ignores CR/LF; require the canonical wire spelling.
@@ -174,7 +196,14 @@ func DecodeMachineLogPayload(encoded string) ([]byte, error) {
 		return nil, invalid
 	}
 	trimmed := bytes.TrimSpace(payload)
-	if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(payload) {
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil, invalid
+	}
+	if !json.Valid(payload) {
+		var value json.RawMessage
+		if err := json.Unmarshal(payload, &value); err != nil {
+			return nil, wrapAPIErrorCause(invalid, err)
+		}
 		return nil, invalid
 	}
 	return payload, nil

@@ -10,11 +10,16 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 // OfficialReleaseSource obtains independent fixed-tag evidence from the project
 // release origin. Client permits an injected transport; URLs are never inputs.
-type OfficialReleaseSource struct{ Client *http.Client }
+type OfficialReleaseSource struct {
+	Client *http.Client
+	// Reporter borrows an existing diagnostic outlet; nil skips close warnings.
+	Reporter diagnostics.Reporter
+}
 
 func (s OfficialReleaseSource) client() *http.Client {
 	var client http.Client
@@ -60,7 +65,7 @@ func (s OfficialReleaseSource) Checksum(ctx context.Context, tag, asset string) 
 
 // Download retrieves a bounded asset from the immutable release URL. Callers
 // must verify its independent checksum before trusting executable/resource bytes.
-func (s OfficialReleaseSource) Download(ctx context.Context, tag, asset string, limit int64) ([]byte, error) {
+func (s OfficialReleaseSource) Download(ctx context.Context, tag, asset string, limit int64) (result []byte, resultErr error) {
 	if _, ok := parseCanonicalTag(tag); !ok {
 		return nil, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid fixed release tag"}
 	}
@@ -75,14 +80,17 @@ func (s OfficialReleaseSource) Download(ctx context.Context, tag, asset string, 
 	request.Header.Set("User-Agent", "mihari")
 	response, err := s.client().Do(request)
 	if err != nil {
-		return nil, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download official release evidence"}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download official release evidence"}, updateHTTPTransport(address, err))
 	}
-	defer response.Body.Close()
+	defer closeUpdateResponse(ctx, response, address, &resultErr, s.Reporter)
 	if response.StatusCode != http.StatusOK {
-		return nil, protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download official release evidence"}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download official release evidence"}, updateHTTPStatus(response, address))
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
-	if err != nil || int64(len(raw)) > limit {
+	if err != nil {
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid official release asset"}, updateHTTPRead(response, address, err))
+	}
+	if int64(len(raw)) > limit {
 		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid official release asset"}
 	}
 	return raw, nil

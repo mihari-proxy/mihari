@@ -9,22 +9,26 @@ import (
 	"time"
 )
 
-func replaceBinary(candidate, target string) error {
+func replaceBinary(candidate, target string) (error, error) {
+	return replaceBinaryWithOps(candidate, target, os.Rename, os.Remove)
+}
+
+func replaceBinaryWithOps(candidate, target string, rename func(string, string) error, remove func(string) error) (warning, resultErr error) {
 	stash := fmt.Sprintf("%s.old-%d", target, time.Now().UnixNano())
 	stashed := false
-	if err := os.Rename(target, stash); err == nil {
+	if err := rename(target, stash); err == nil {
 		stashed = true
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+		return nil, err
 	}
-	if err := os.Rename(candidate, target); err != nil {
+	if err := rename(candidate, target); err != nil {
 		if stashed {
-			_ = os.Rename(stash, target)
+			return nil, errors.Join(err, rename(stash, target))
 		}
-		return err
+		return nil, err
 	}
 	if stashed {
-		_ = os.Remove(stash)
+		return remove(stash), nil
 	}
-	return nil
+	return nil, nil
 }

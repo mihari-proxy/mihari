@@ -2,6 +2,8 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"testing"
 )
 
@@ -21,6 +23,22 @@ func TestAPIErrorImplementsError(t *testing.T) {
 	err := APIError{Code: CodeRevisionConflict, Message: "state changed"}
 	if err.Error() != "state changed" {
 		t.Fatalf("got %q", err.Error())
+	}
+}
+
+func TestAPIErrorCause_ExposesPublicAndInternalErrors(t *testing.T) {
+	public := APIError{Code: CodeDataFailure, Message: "invalid payload", Details: map[string]any{"field": "payload"}}
+	err := wrapAPIErrorCause(public, io.ErrUnexpectedEOF)
+	var got APIError
+	if !errors.As(err, &got) || got.Code != public.Code || got.Message != public.Message || got.Details["field"] != "payload" {
+		t.Fatalf("public API error missing: %#v", got)
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) || err.Error() != public.Message {
+		t.Fatalf("internal cause or safe message missing: %v", err)
+	}
+	children, ok := err.(interface{ Unwrap() []error })
+	if !ok || len(children.Unwrap()) != 2 {
+		t.Fatalf("diagnostic traversal cannot inspect both errors: %T", err)
 	}
 }
 

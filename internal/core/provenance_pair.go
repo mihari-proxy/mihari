@@ -133,15 +133,15 @@ func decodeStrict(b []byte, v any) error {
 	}
 	d := json.NewDecoder(bytes.NewReader(b))
 	if e := uniqueJSON(d); e != nil {
-		return dataFailure("invalid provenance JSON")
+		return dataFailureCause("invalid provenance JSON", e)
 	}
 	if _, e := d.Token(); e != io.EOF {
-		return dataFailure("invalid provenance JSON tail")
+		return dataFailureCause("invalid provenance JSON tail", e)
 	}
 	d = json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
 	if e := d.Decode(v); e != nil {
-		return dataFailure("invalid provenance document")
+		return dataFailureCause("invalid provenance document", e)
 	}
 	return nil
 }

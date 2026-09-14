@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 // PreparedUpdate owns a verified download until Apply or Close consumes it.
@@ -78,7 +79,7 @@ func (u SelfUpdater) Prepare(ctx context.Context, binaryPath, currentVersion, ch
 	}
 	workspace, err := os.MkdirTemp("", "mihari-prepare-")
 	if err != nil {
-		return PreparedUpdate{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "create update workspace"}
+		return PreparedUpdate{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "create update workspace"}, err)
 	}
 	var once sync.Once
 	var closeErr error
