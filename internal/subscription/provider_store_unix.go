@@ -146,6 +146,9 @@ func (r providerContextReader) Read(b []byte) (int, error) {
 	}
 	return r.r.Read(b)
 }
+
+const maxGeoResourceBytes = 128 << 20
+
 func readProviderFile(ctx context.Context, r io.Reader, limit int64) ([]byte, error) {
 	if limit < 0 || limit > maxGeoResourceBytes {
 		return nil, os.ErrInvalid

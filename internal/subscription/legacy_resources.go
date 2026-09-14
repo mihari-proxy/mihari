@@ -49,8 +49,6 @@ type legacyProviderIdentity struct {
 	Kind, Name, ResourceID, Format string
 }
 
-const maxGeoResourceBytes = 128 << 20
-
 // GeoResourceKind selects one compiled global Geo asset; it is never a path.
 type GeoResourceKind string
 

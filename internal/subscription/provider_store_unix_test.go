@@ -3,8 +3,10 @@
 package subscription
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -114,6 +116,32 @@ func TestProviderStore_IsolatedRootIO(t *testing.T) {
 func TestProviderStore_RejectsAbsentCapability(t *testing.T) {
 	if _, err := NewProviderStore(context.Background(), nil); err == nil {
 		t.Fatal("nil root accepted")
+	}
+}
+
+func TestReadProviderFile_Enforces128MiBCeiling(t *testing.T) {
+	tests := []struct {
+		name    string
+		limit   int64
+		wantErr error
+	}{
+		{name: "above 128 MiB", limit: 128<<20 + 1, wantErr: os.ErrInvalid},
+		{name: "exactly 128 MiB", limit: 128 << 20},
+		{name: "negative", limit: -1, wantErr: os.ErrInvalid},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := readProviderFile(context.Background(), bytes.NewReader([]byte("ok")), tt.limit)
+			if tt.wantErr == nil {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("got %v, want %v", err, tt.wantErr)
+			}
+		})
 	}
 }
 func TestProviderStore_AllowedPathsExcludeOtherBusinessData(t *testing.T) {
