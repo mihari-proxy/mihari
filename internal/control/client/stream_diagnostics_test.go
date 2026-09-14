@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -222,6 +224,50 @@ func TestStreamDiagnostics_CallbackAndNormalTerminationStayQuiet(t *testing.T) {
 				assertStreamDiagnostic(t, &out, "stream_failed", "INFO")
 			} else if out.Len() != 0 {
 				t.Fatalf("normal/callback termination diagnosed: %s", out.String())
+			}
+		})
+	}
+}
+
+func TestControlStreamReadTermination_ClassifiesCancellationRaceDeterministically(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	normal := fmt.Errorf("reader: %w", websocket.CloseError{Code: websocket.StatusNormalClosure, Reason: "done"})
+	inducedClose := fmt.Errorf("reader: %w", net.ErrClosed)
+	actual := fmt.Errorf("reader: %w", io.ErrUnexpectedEOF)
+	joined := errors.Join(inducedClose, actual)
+
+	tests := []struct {
+		name      string
+		ctx       context.Context
+		err       error
+		wantQuiet bool
+		wantCause error
+		wantLevel slog.Level
+	}{
+		{name: "normal close", ctx: context.Background(), err: normal, wantQuiet: true},
+		{name: "cancel with normal close", ctx: canceled, err: normal, wantCause: context.Canceled, wantLevel: slog.LevelInfo},
+		{name: "cancel with induced socket close", ctx: canceled, err: inducedClose, wantCause: context.Canceled, wantLevel: slog.LevelInfo},
+		{name: "cancel with actual transport failure", ctx: canceled, err: actual, wantCause: io.ErrUnexpectedEOF, wantLevel: slog.LevelError},
+		{name: "cancel with joined close and transport failure", ctx: canceled, err: joined, wantCause: io.ErrUnexpectedEOF, wantLevel: slog.LevelError},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, quiet := controlStreamReadTermination(test.ctx, test.err)
+			if quiet != test.wantQuiet {
+				t.Fatalf("quiet=%v want=%v err=%v", quiet, test.wantQuiet, got)
+			}
+			if test.wantQuiet {
+				if got != nil {
+					t.Fatalf("quiet termination retained error: %v", got)
+				}
+				return
+			}
+			if !errors.Is(got, test.wantCause) {
+				t.Fatalf("cause=%v want %v", got, test.wantCause)
+			}
+			if level, emit := diagnostics.FailureLevel(test.ctx, got); !emit || level != test.wantLevel {
+				t.Fatalf("classification=(%v,%v) want=(%v,true)", level, emit, test.wantLevel)
 			}
 		})
 	}

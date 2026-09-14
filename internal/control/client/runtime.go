@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -348,12 +349,13 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 	for {
 		_, raw, err := connection.Read(ctx)
 		if err != nil {
-			if ctx.Err() != nil {
-				// Cancellation keeps the historical nil stream result; reporting owns the error here.
-				_ = c.reportStreamOutcome(ctx, runtimeOutcome{err: err})
+			readErr, quiet := controlStreamReadTermination(ctx, err)
+			if quiet {
 				return nil
 			}
-			if websocket.CloseStatus(err) == websocket.StatusNormalClosure {
+			if ctx.Err() != nil {
+				// Cancellation keeps the historical nil stream result; reporting owns the error here.
+				_ = c.reportStreamOutcome(ctx, runtimeOutcome{err: readErr})
 				return nil
 			}
 			if errors.Is(err, websocket.ErrMessageTooBig) {
@@ -368,6 +370,71 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 		if err := receive(event); err != nil {
 			return err
 		}
+	}
+}
+
+// controlStreamReadTermination resolves cancellation races without hiding an
+// independent transport failure. Only a single expected termination chain can
+// be replaced by the active context cause; joined siblings remain actual.
+func controlStreamReadTermination(ctx context.Context, err error) (error, bool) {
+	ctxErr := ctx.Err()
+	if ctxErr != nil {
+		if expectedControlStreamTermination(err) {
+			return ctxErr, false
+		}
+		return err, false
+	}
+	if normalControlStreamClose(err) {
+		return nil, true
+	}
+	return err, false
+}
+
+func expectedControlStreamTermination(err error) bool {
+	return singleControlStreamTermination(err, true)
+}
+
+func normalControlStreamClose(err error) bool {
+	return singleControlStreamTermination(err, false)
+}
+
+func singleControlStreamTermination(err error, allowInduced bool) bool {
+	const maxDepth = 32
+	for depth := 0; err != nil && depth < maxDepth; depth++ {
+		if joined, ok := err.(interface{ Unwrap() []error }); ok {
+			children := joined.Unwrap()
+			if len(children) != 1 {
+				return false
+			}
+			err = children[0]
+			continue
+		}
+		if normalControlStreamCloseValue(err) {
+			return true
+		}
+		if allowInduced {
+			switch err {
+			case net.ErrClosed, io.EOF, context.Canceled, context.DeadlineExceeded:
+				return true
+			}
+		}
+		unwrapper, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+		err = unwrapper.Unwrap()
+	}
+	return false
+}
+
+func normalControlStreamCloseValue(err error) bool {
+	switch closeErr := err.(type) {
+	case websocket.CloseError:
+		return closeErr.Code == websocket.StatusNormalClosure
+	case *websocket.CloseError:
+		return closeErr != nil && closeErr.Code == websocket.StatusNormalClosure
+	default:
+		return false
 	}
 }
 
