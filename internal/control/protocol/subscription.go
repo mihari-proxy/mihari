@@ -3,15 +3,18 @@ package protocol
 import "time"
 
 type Subscription struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Enabled     bool      `json:"enabled"`
-	AutoRefresh bool      `json:"auto_refresh"`
-	Interval    string    `json:"interval"`
-	Cached      bool      `json:"cached"`
-	Generation  uint64    `json:"generation"`
-	UpdatedAt   time.Time `json:"updated_at,omitempty"`
-	LastError   string    `json:"last_error,omitempty"`
+	CacheOutdated           bool      `json:"cache_outdated,omitempty"`
+	ScheduleFrom            time.Time `json:"schedule_from,omitempty"`
+	IntervalRefreshRequired bool      `json:"interval_refresh_required,omitempty"`
+	ID                      string    `json:"id"`
+	Name                    string    `json:"name"`
+	Enabled                 bool      `json:"enabled"`
+	AutoRefresh             bool      `json:"auto_refresh"`
+	Interval                string    `json:"interval"`
+	Cached                  bool      `json:"cached"`
+	Generation              uint64    `json:"generation"`
+	UpdatedAt               time.Time `json:"updated_at,omitempty"`
+	LastError               string    `json:"last_error,omitempty"`
 	// Traffic quota from provider subscription-userinfo (bytes).
 	Upload   int64 `json:"upload,omitempty"`
 	Download int64 `json:"download,omitempty"`
@@ -19,6 +22,12 @@ type Subscription struct {
 	Expire   int64 `json:"expire,omitempty"`
 	// ProxyMode is the per-subscription refresh transport: direct (omitted), proxy, or auto.
 	ProxyMode string `json:"proxy_mode,omitempty"`
+}
+
+// SubscriptionURL is the authenticated, explicit current-source reveal response.
+type SubscriptionURL struct {
+	Schema string `json:"schema"`
+	URL    string `json:"url"`
 }
 
 type SubscriptionList struct {

@@ -51,6 +51,22 @@ func (m *Manager) Subscriptions() subscription.PublicCatalog {
 	return m.subscriptions.Snapshot().Public()
 }
 
+// SubscriptionURL reveals the current source to authenticated local clients.
+func (m *Manager) SubscriptionURL(ctx context.Context, id string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if m.subscriptions == nil {
+		return "", subscriptionsUnavailable()
+	}
+	for _, profile := range m.subscriptions.Snapshot().Profiles {
+		if profile.ID == id {
+			return profile.URL, nil
+		}
+	}
+	return "", protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "subscription not found"}
+}
+
 func (m *Manager) AddSubscription(ctx context.Context, operation Operation, input AddSubscriptionInput) (subscription.PublicProfile, error) {
 	result, err := m.doOperation(ctx, "sub-add:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.subscriptions == nil {
@@ -113,7 +129,7 @@ func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, 
 		}
 		candidate, err := m.prepareConfig(ctx, prepared.Document())
 		if err != nil {
-			return nil, err
+			return nil, m.subscriptions.RecordRefreshFailure(prepared, err)
 		}
 		defer func() { collectWarning(ctx, "subscription", "candidate.cleanup.failed", candidate.cleanup()) }()
 		if err := m.lockMutation(ctx); err != nil {
@@ -139,7 +155,7 @@ func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, 
 		})
 		if err != nil {
 			m.markConfigDegraded(ctx, err)
-			return nil, err
+			return nil, m.subscriptions.RecordRefreshFailure(prepared, err)
 		}
 		return findPublicProfile(m.subscriptions.Snapshot().Public(), id)
 	})
@@ -289,6 +305,14 @@ func (m *Manager) SetSubscriptionEnabled(ctx context.Context, operation Operatio
 
 func (m *Manager) SetSubscription(ctx context.Context, operation Operation, id string, input SetSubscriptionInput) (subscription.PublicProfile, error) {
 	return m.mutateSubscription(ctx, "sub-set:", operation, id, func(catalog *subscription.Catalog, profile *subscription.Profile) error {
+		intervalChanged := input.Interval != nil && *input.Interval != profile.Interval
+		urlChanged := input.URL != nil && *input.URL != profile.URL
+		if intervalChanged || urlChanged {
+			m.subscriptions.ResetRefreshSchedule(profile)
+		}
+		if intervalChanged {
+			profile.IntervalRefreshRequired = true
+		}
 		if input.Name != nil {
 			profile.Name = *input.Name
 		}
@@ -304,15 +328,11 @@ func (m *Manager) SetSubscription(ctx context.Context, operation Operation, id s
 		if input.ProxyMode != nil {
 			profile.ProxyMode = *input.ProxyMode
 		}
-		if input.URL != nil && *input.URL != profile.URL {
+		if urlChanged {
 			profile.URL = *input.URL
-			profile.Generation = 0
-			profile.UpdatedAt = subscription.Profile{}.UpdatedAt
 			profile.ETag = ""
 			profile.LastModified = ""
-			if catalog.ActiveID == profile.ID {
-				catalog.ActiveID = ""
-			}
+			profile.LastError = ""
 		}
 		profile.Version++
 		return nil

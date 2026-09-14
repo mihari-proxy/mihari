@@ -150,6 +150,14 @@ mihari sysproxy enable
 
 TUI **Proxies** 页顶部的 **Routing** 卡片包含 **Mode** 和 **GLOBAL**。**Mode** 按 Enter 打开 Rule / Global / Direct 选择弹窗，↑/↓ 选择、Enter 应用、Esc 取消；**GLOBAL** 入口展开 mihomo 返回的候选组，并自动滚动到整个 section 完整可见；超过一屏时从列表视口顶部展示，继续用方向键浏览候选。Mihari 全局保存模式、按订阅保存 GLOBAL 出口，支持面板发起的相同操作。默认使用 Rule，切换模式和出口保留已有连接。保存的出口消失时，有 DIRECT 候选则保存 DIRECT，否则保存 Rule；内核停止时保存的模式显示为 pending，待启动应用。
 
+TUI **Subs** 页按 Enter 打开可编辑详情，`a` 添加订阅。Tab/Shift+Tab 或 ↑/↓ 切换字段，←/→/Space 在 **Auto refresh** 和 **Mode** 行循环选择；文本框 Enter 进入下一项，仅 **Save** 焦点上的 Enter 提交。PgUp/PgDn 滚动正文，长 URL 单行横向滚动。所有 TUI 内置文案均为英文。列表显示 **InUse**、**Enabled**、**Status**、**Mode**，`p` 循环切换拉取模式。
+
+修改 URL 会保留旧缓存和 InUse，不立即下载或 reload；**Outdated** 表示缓存来自旧 URL，仍可离线 Use。修改单条 interval 会重置下次刷新时间，并持久标记 **Expired**，直到刷新成功（包括有效 304）；Disabled、Failed、Missing、Outdated 等更高优先级状态仍优先显示。关闭 Auto refresh 时 Next 显示 **Manual**。
+
+保存等待结果后关闭。revision 冲突会询问是否仅覆盖本次实际修改的字段。结果未知时先只读查询操作和当前状态，不自动重放保存；**Submit again** 需要再次确认，添加场景可能产生重复条目。关闭界面不代表撤销保存。已经添加但首次下载失败时，返回列表选中该订阅，按 `r` 重试下载。
+
+TUI 与 daemon 必须配套升级，不保证混用版本。升级前停止 daemon，按实际布局备份完整业务数据（Unix B/D，或 Windows/私有 P），将 catalog、缓存、settings/state、运行配置作为一致整体保存。旧二进制无法读取新增 catalog 字段，不支持直接降级；回退二进制时应停机恢复兼容的完整备份，不通过单独删除 YAML 字段降级。
+
 ## 平台目标
 
 - Windows amd64 与 arm64

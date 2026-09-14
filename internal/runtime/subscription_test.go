@@ -705,7 +705,7 @@ func TestLogging_RefreshSecretsKeepsToken(t *testing.T) {
 	}
 }
 
-func TestSubscriptionSetRestoreFailureRefreshesSecretsAndDegrades(t *testing.T) {
+func TestSubscriptionDisableRestoreFailureRefreshesSecretsAndDegrades(t *testing.T) {
 	manager, service, _, serverURL := subscriptionManager(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		if _, err := writer.Write([]byte("proxies: []\nrules: [MATCH,DIRECT]\n")); err != nil {
 			t.Errorf("write fixture response: %v", err)
@@ -741,9 +741,8 @@ func TestSubscriptionSetRestoreFailureRefreshesSecretsAndDegrades(t *testing.T) 
 		}
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "reject generated configuration"}
 	}
-	newURL := serverURL + "?token=new-subscription-secret"
 	op := Operation{ID: "restore-fail-set", Source: "test"}
-	_, err = manager.SetSubscription(context.Background(), op, added.ID, SetSubscriptionInput{URL: &newURL})
+	_, err = manager.SetSubscriptionEnabled(context.Background(), op, added.ID, false)
 	var apiError protocol.APIError
 	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "subscription state rollback failed" {
 		t.Fatalf("err code=%q message=%q", apiError.Code, apiError.Message)
@@ -753,14 +752,14 @@ func TestSubscriptionSetRestoreFailureRefreshesSecretsAndDegrades(t *testing.T) 
 	}
 	current := service.Snapshot()
 	index := current.Index(added.ID)
-	if index < 0 || current.Profiles[index].URL != newURL {
+	if index < 0 || current.Profiles[index].URL != oldURL || current.Profiles[index].Enabled || current.ActiveID != "" {
 		t.Fatal("failed restore did not leave the actual catalog mutation observable")
 	}
-	if len(snapshots) != 1 || len(snapshots[0]) != 1 || snapshots[0][0] != newURL {
+	if len(snapshots) != 1 || len(snapshots[0]) != 1 || snapshots[0][0] != oldURL {
 		t.Fatalf("refreshed secret snapshot count=%d", len(snapshots))
 	}
-	if got := redactor.String("request=" + newURL); got != "request=***" {
-		t.Fatal("new subscription URL was not redacted")
+	if got := redactor.String("request=" + oldURL); got != "request=***" {
+		t.Fatal("stored subscription URL was not redacted")
 	}
 	snapshot := manager.Snapshot()
 	if snapshot.Revision != beforeRevision+1 || snapshot.Health != "degraded" || snapshot.Config.Status != "degraded" || snapshot.Config.LastError != "generated configuration rollback could not be confirmed" {

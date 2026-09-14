@@ -279,7 +279,7 @@ func TestView_LoadHeaderAndLivePhase(t *testing.T) {
 		},
 	})
 	view := model.View()
-	for _, want := range []string{ui.LoadLabel, ui.LoadLiveState, ui.LoadCachedState, "kanata2"} {
+	for _, want := range []string{"Status", ui.LoadLiveState, ui.LoadCachedState, "kanata2"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -316,8 +316,8 @@ func TestRefreshStartsBrailleLoadSpin(t *testing.T) {
 	model.pending["a"] = "refresh"
 	model.loadSpinClock = time.Unix(0, 0)
 	view := model.View()
-	// Load column is 9 wide by design; "⠋ Fetching" truncates to "⠋ Fetchi…".
-	if !strings.Contains(view, "Fetch") || !strings.Contains(view, "…") {
+	// Status has enough room for the complete spinner label.
+	if !strings.Contains(view, "Fetching") {
 		t.Fatalf("view missing fetching label:\n%s", view)
 	}
 	if !strings.Contains(view, "⠋") {
@@ -443,7 +443,7 @@ func TestModel_AddEditRefreshAndUseKeysAreAvailable(t *testing.T) {
 		t.Fatalf("add form=%#v", model.form)
 	}
 	model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
-	model.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if model.form == nil || model.form.kind != formEdit {
 		t.Fatalf("edit form=%#v", model.form)
 	}
@@ -597,11 +597,11 @@ func TestModel_FooterHintsAreContextual(t *testing.T) {
 	if hints := model.FooterHints(); !strings.Contains(hints, "r refresh") || !strings.Contains(hints, "Ctrl+R") {
 		t.Fatalf("list footer=%q", hints)
 	}
-	model.detail = &detailState{subscription: protocol.Subscription{ID: "a", Name: "A"}}
+	model.form = newEditForm(protocol.Subscription{ID: "a", Name: "A"})
 	if hints := model.FooterHints(); !strings.Contains(hints, "Esc") {
 		t.Fatalf("detail footer=%q", hints)
 	}
-	model.detail = nil
+	model.form = nil
 	model.form = newAddForm()
 	if hints := model.FooterHints(); hints != ui.FormHelp {
 		t.Fatalf("form footer=%q", hints)
@@ -683,9 +683,10 @@ func TestModel_EditFormKeepsOpeningRevision(t *testing.T) {
 	model := New(client, func() string { return "edit-1" }, nil)
 	model.SetSubscriptions(protocol.SubscriptionList{Revision: 7, Subscriptions: []protocol.Subscription{{ID: "a", Name: "A", Enabled: true}}})
 	model.focus = pageFocus{kind: focusRow, id: "a"}
-	model.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model.SetSubscriptions(protocol.SubscriptionList{Revision: 8, Subscriptions: []protocol.Subscription{{ID: "a", Name: "Changed", Enabled: true}}})
-	model.form.index = len(model.form.inputs) - 1
+	model.form.inputs[0].SetValue("My change")
+	model.form.index = len(model.form.inputs)
 	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = drainCmd(t, model, command)
 	if client.update.IfRevision == nil || *client.update.IfRevision != 7 {
@@ -740,7 +741,7 @@ func TestView_RendersProxyColumnAndThreeLabels(t *testing.T) {
 		},
 	})
 	view := model.View()
-	for _, want := range []string{"Proxy", "DIRECT", "PROXY", "AUTO"} {
+	for _, want := range []string{"Mode", "DIRECT", "PROXY", "AUTO"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}

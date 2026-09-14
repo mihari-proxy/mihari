@@ -244,6 +244,13 @@ func (c *Client) Subscription(ctx context.Context, id string) (protocol.Subscrip
 	return result, err
 }
 
+// SubscriptionURL explicitly reveals the current subscription source.
+func (c *Client) SubscriptionURL(ctx context.Context, id string) (protocol.SubscriptionURL, error) {
+	var result protocol.SubscriptionURL
+	err := c.doRuntime(ctx, http.MethodGet, "/v1/subscriptions/"+url.PathEscape(id)+"/url", nil, &result)
+	return result, err
+}
+
 func (c *Client) AddSubscription(ctx context.Context, request protocol.SubscriptionAddRequest) (protocol.SubscriptionResult, error) {
 	var result protocol.SubscriptionResult
 	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "subscription.add"}, http.MethodPost, "/v1/subscriptions", request, &result)
@@ -287,6 +294,9 @@ func (c *Client) doMutation(ctx context.Context, operation logging.OperationMeta
 		reporter(ctx, diagnostics.Record{Component: "control.client", Event: "mutation_started", Level: slog.LevelDebug})
 	}
 	outcome := c.doRuntimeOutcome(ctx, method, path, input, output, maxControlResponseSize)
+	if outcome.err != nil && !outcome.remoteEnvelope && (operation.Name == "subscription.add" || operation.Name == "subscription.set") {
+		outcome.err = unknownSubscriptionOutcome{outcome.err}
+	}
 	if reporter == nil {
 		return outcome.err
 	}
@@ -303,6 +313,13 @@ func (c *Client) doMutation(ctx context.Context, operation logging.OperationMeta
 	}
 	return outcome.err
 }
+
+// unknownSubscriptionOutcome preserves error classification while distinguishing
+// a lost response from an explicit daemon rejection. It never implies rollback.
+type unknownSubscriptionOutcome struct{ error }
+
+func (e unknownSubscriptionOutcome) Unwrap() error        { return e.error }
+func (e unknownSubscriptionOutcome) OutcomeUnknown() bool { return true }
 
 func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.StreamEvent) error) error {
 	if receive == nil {

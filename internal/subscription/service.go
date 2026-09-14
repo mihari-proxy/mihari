@@ -95,6 +95,12 @@ func (s *Service) Snapshot() Catalog {
 	return s.catalog.Clone()
 }
 
+// ResetRefreshSchedule starts a new interval on a candidate profile. Callers
+// publish that candidate through Mutate, keeping it within the same transaction.
+func (s *Service) ResetRefreshSchedule(profile *Profile) {
+	profile.ScheduleFrom = s.now().UTC()
+}
+
 func (s *Service) Add(name, rawURL, proxyMode string) (Profile, error) {
 	id, err := newProfileID()
 	if err != nil {
@@ -141,27 +147,33 @@ func (s *Service) PrepareRefresh(ctx context.Context, id string) (PreparedRefres
 	s.mu.RUnlock()
 	result, err := s.downloader.Fetch(ctx, FetchRequest{URL: profile.URL, ETag: profile.ETag, LastModified: profile.LastModified, Mode: profile.ProxyMode})
 	if err != nil {
-		return PreparedRefresh{}, s.refreshFailure(id, err)
+		return PreparedRefresh{}, s.refreshFailure(id, err, profile.Version)
 	}
 	content := result.Content
 	if result.NotModified {
+		if profile.Generation > 0 && profile.CacheURL != profile.URL {
+			return PreparedRefresh{}, s.refreshFailure(id, dataError("subscription provider returned not-modified for a different cache source"), profile.Version)
+		}
 		content, err = os.ReadFile(s.CachePath(id))
 		if err != nil {
 			fail := diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription provider returned not-modified without a valid cache"}, err)
-			return PreparedRefresh{}, s.refreshFailure(id, fail)
+			return PreparedRefresh{}, s.refreshFailure(id, fail, profile.Version)
 		}
 	}
 	document, err := ParseDocument(content)
 	if err != nil {
-		return PreparedRefresh{}, s.refreshFailure(id, err)
+		return PreparedRefresh{}, s.refreshFailure(id, err, profile.Version)
 	}
 	return PreparedRefresh{profileID: id, profileVersion: profile.Version, result: result, document: document}, nil
 }
 
 // refreshFailure preserves both the actual failure and a failed status write.
 // The original public classification and message still describe the operation.
-func (s *Service) refreshFailure(id string, cause error) error {
-	if noteErr := s.noteRefreshError(id, cause); noteErr != nil {
+func (s *Service) refreshFailure(id string, cause error, versions ...uint64) error {
+	if errors.Is(cause, context.Canceled) {
+		return cause
+	}
+	if noteErr := s.noteRefreshError(id, cause, versions...); noteErr != nil && !errors.Is(noteErr, errStaleRefreshFailure) {
 		joined := errors.Join(cause, fmt.Errorf("record subscription refresh failure: %w", noteErr))
 		var api protocol.APIError
 		if errors.As(cause, &api) {
@@ -174,9 +186,21 @@ func (s *Service) refreshFailure(id string, cause error) error {
 	return cause
 }
 
+var errStaleRefreshFailure = errors.New("subscription refresh failure belongs to an older profile")
+
+// RecordRefreshFailure keeps a prepared refresh's failure on its original
+// profile version only. Revision conflicts and cancellation do not invalidate a cache.
+func (s *Service) RecordRefreshFailure(prepared PreparedRefresh, cause error) error {
+	var api protocol.APIError
+	if errors.As(cause, &api) && (api.Code == protocol.CodeRevisionConflict || api.Details["degraded"] == true) {
+		return cause
+	}
+	return s.refreshFailure(prepared.profileID, cause, prepared.profileVersion)
+}
+
 // noteRefreshError records a safe last-error on the profile without replacing
 // a valid cache. Its caller keeps failures alongside the original cause.
-func (s *Service) noteRefreshError(id string, cause error) error {
+func (s *Service) noteRefreshError(id string, cause error, versions ...uint64) error {
 	message := "subscription refresh failed"
 	var apiError protocol.APIError
 	if errors.As(cause, &apiError) && apiError.Message != "" {
@@ -184,6 +208,9 @@ func (s *Service) noteRefreshError(id string, cause error) error {
 	}
 	_, _, err := s.Mutate(func(catalog *Catalog) error {
 		index := catalog.Index(id)
+		if len(versions) > 0 && (index < 0 || catalog.Profiles[index].Version != versions[0]) {
+			return errStaleRefreshFailure
+		}
 		if index < 0 {
 			return notFoundError()
 		}
@@ -219,6 +246,9 @@ func (s *Service) CommitRefresh(prepared PreparedRefresh) (Receipt, error) {
 	profile.Version++
 	profile.UpdatedAt = s.now().UTC()
 	profile.LastError = ""
+	profile.CacheURL = profile.URL
+	profile.ScheduleFrom = time.Time{}
+	profile.IntervalRefreshRequired = false
 	if prepared.result.ETag != "" {
 		profile.ETag = prepared.result.ETag
 	}

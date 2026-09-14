@@ -98,7 +98,7 @@ func TestRenderHelp_SameKeyKeepsPageSpecificActions(t *testing.T) {
 	if !strings.Contains(conn, "pause") || strings.Contains(conn, "cycle proxy") {
 		t.Fatalf("connections p:\n%s", conn)
 	}
-	if !strings.Contains(subs, "cycle proxy") || strings.Contains(subs, "pause or resume") {
+	if !strings.Contains(subs, "cycle mode") || strings.Contains(subs, "pause or resume") {
 		t.Fatalf("subscriptions p:\n%s", subs)
 	}
 	if !strings.Contains(subs, "activate") || strings.Contains(subs, "update the focused provider") {
@@ -207,7 +207,7 @@ func TestCatalog_KeysAppearInHandlerSource(t *testing.T) {
 				filepath.Join(tuiDir, "pages", "subscriptions", "model.go"),
 			}
 		case b.Page == PageSubscriptions:
-			return []string{filepath.Join(tuiDir, "pages", "subscriptions", "model.go")}
+			return []string{filepath.Join(tuiDir, "pages", "subscriptions", "model.go"), filepath.Join(tuiDir, "pages", "subscriptions", "form.go"), filepath.Join(tuiDir, "pages", "subscriptions", "dialog.go")}
 		case b.Page == PageWebGUI:
 			return []string{filepath.Join(tuiDir, "pages", "webgui", "model.go")}
 		case b.Page == PageSystem:
@@ -298,7 +298,7 @@ func TestRenderFooter_MatchesCurrentLayout(t *testing.T) {
 		{"connections", RenderFooter(PageConnections, "", FooterOpt{}), "Esc back  / search  x close  p pause  Enter details  ? help  q quit"},
 		{"rules", RenderFooter(PageRules, "", FooterOpt{}), "Esc back  / search  r reload  u update  Ctrl+U update all  Enter details  ? help  q quit"},
 		{"logs", RenderFooter(PageLogs, "", FooterOpt{}), "Esc back  / search  p pause  w wrap  G newest  e export  Enter details  ? help  q quit"},
-		{"subscriptions", RenderFooter(PageSubscriptions, "", FooterOpt{}), "Esc back  Enter details  a add  e edit  Space toggle  p proxy  r refresh  Ctrl+R refresh all  u use  d delete  ? help  q quit"},
+		{"subscriptions", RenderFooter(PageSubscriptions, "", FooterOpt{}), "Esc back  Enter details  a add  Space toggle  p mode  r refresh  Ctrl+R refresh all  u use  d delete  ? help  q quit"},
 		{"webgui-off", RenderFooter(PageWebGUI, "", FooterOpt{}), "Esc back  ? help  q quit"},
 		{"webgui-on", RenderFooter(PageWebGUI, "", FooterOpt{WebGUIAvailable: true}), "Esc back  ↑/↓ panel  Space set default  o open  i install  u update  r reinstall  x uninstall  b rollback  ? help  q quit"},
 		{"system", RenderFooter(PageSystem, "", FooterOpt{}), "Esc back  Enter activate  ? help  q quit"},

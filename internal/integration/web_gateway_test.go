@@ -182,6 +182,22 @@ func TestWebGatewayAuthProxyRejectInstallActivateRollback(t *testing.T) {
 	if strings.Contains(string(body), controllerSecret) || strings.Contains(string(body), webToken) {
 		t.Fatal("secrets leaked through version proxy")
 	}
+	// The authenticated browser gateway has no local subscription reveal route.
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/subscriptions/one/url", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+webToken)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode < http.StatusBadRequest {
+		t.Fatalf("browser reveal status=%d", resp.StatusCode)
+	}
 
 	// 2) POST /upgrade never hits fake mihomo
 	req, _ = http.NewRequest(http.MethodPost, base+"/upgrade", nil)

@@ -158,6 +158,41 @@ func TestMihomoRuntimeLifecycleAndControlCommands(t *testing.T) {
 	}
 	refreshSubscription(t, client, first.Subscription.ID, "sub-refresh-a")
 	refreshSubscription(t, client, second.Subscription.ID, "sub-refresh-b")
+	// Editing an active source keeps the running config until a successful refresh.
+	if _, err := client.UseSubscription(ctx, first.Subscription.ID, protocol.MutationRequest{OperationID: "sub-edit-use-a"}); err != nil {
+		t.Fatal(err)
+	}
+	beforeConfig, err := os.ReadFile(paths.RuntimeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newSource := provider.URL + "?name=UpdatedA&token=private-updated"
+	changed, err := client.UpdateSubscription(ctx, first.Subscription.ID, protocol.SubscriptionUpdateRequest{OperationID: "sub-edit-url", URL: &newSource})
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterConfig, err := os.ReadFile(paths.RuntimeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed.Subscription.Cached || !changed.Subscription.CacheOutdated || !bytes.Equal(beforeConfig, afterConfig) {
+		t.Fatal("active source edit replaced running configuration")
+	}
+	assertRouting("global", "DIRECT", first.Subscription.ID)
+	updatedCache, err := client.RefreshSubscription(ctx, first.Subscription.ID, protocol.MutationRequest{OperationID: "sub-edit-refresh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedCache.Subscription.CacheOutdated || updatedCache.Subscription.Generation <= changed.Subscription.Generation {
+		t.Fatal("new source was not committed")
+	}
+	afterConfig, err = os.ReadFile(paths.RuntimeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(afterConfig, []byte("UpdatedA")) {
+		t.Fatal("successful refresh was not applied to fake mihomo config")
+	}
 	provider.Close()
 	if _, err := client.UseSubscription(context.Background(), second.Subscription.ID, protocol.MutationRequest{OperationID: "sub-use-b"}); err != nil {
 		t.Fatalf("offline activation failed: %v", err)

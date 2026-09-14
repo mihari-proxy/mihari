@@ -335,6 +335,9 @@ func (model *Model) syncSystemNetworkStatus() {
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	model.showDuplicateNames()
 	if key, ok := message.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" {
+		if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
+			page.Stop()
+		}
 		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
 			page.Stop()
 		}
@@ -354,6 +357,8 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	switch typed := message.(type) {
+	case subscriptionspage.Message:
+		return model.dispatchPageTo(ui.PageSubscriptions, message)
 	case ui.ErrorDetailMsg:
 		model.modal = NewErrorDetail(typed.Title, typed.Body)
 		return model, nil
@@ -425,6 +430,9 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model, nil
 	case sessionEventMsg:
 		if !typed.Open {
+			if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
+				page.ObserveConnection(false)
+			}
 			model.resetLogging(model.loggingEpoch)
 			model.connected = false
 			model.stale = true
@@ -643,6 +651,11 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model.dispatchPage(message)
 	}
 	name := key.String()
+	if model.active == ui.PageSubscriptions {
+		if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok && page.HasDialog() {
+			return model.dispatchPage(message)
+		}
+	}
 	if name == "?" && model.inputMode != ui.InputText {
 		return model.openHelp()
 	}
@@ -812,6 +825,9 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 			page.Observe(event.Log, event.ObservedAt)
 		}
 	case session.EventConnected:
+		if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
+			command = tea.Batch(command, page.ObserveConnection(true))
+		}
 		model.connected = true
 		model.stale = false
 		model.reconnecting = false
@@ -823,6 +839,9 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		}
 		command = tea.Batch(command, model.loadNetworkStatus())
 	case session.EventReconnecting:
+		if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
+			command = tea.Batch(command, page.ObserveConnection(false))
+		}
 		if page, ok := model.pages[ui.PageProxies].(*proxypage.Model); ok {
 			page.SetRoutingAvailable(false, event.Epoch)
 			page.InvalidateGroups()
@@ -846,6 +865,9 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 			page.ResetSession()
 		}
 	case session.EventTerminalError:
+		if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
+			command = tea.Batch(command, page.ObserveConnection(false))
+		}
 		if page, ok := model.pages[ui.PageProxies].(*proxypage.Model); ok {
 			page.SetRoutingAvailable(false, event.Epoch)
 			page.InvalidateGroups()
@@ -1117,6 +1139,12 @@ func (model Model) dispatchPageTo(id ui.PageID, message tea.Msg) (tea.Model, tea
 	}
 	updated, command := page.Update(message)
 	model.pages[id] = updated
+	if id == ui.PageSubscriptions && model.active == id {
+		model.inputMode = ui.InputNavigation
+		if page, ok := updated.(*subscriptionspage.Model); ok && page.HasDialog() {
+			model.inputMode = ui.InputText
+		}
+	}
 	if id == ui.PageSetup {
 		return model, tea.Batch(setupCommand(command), model.spinnerCmdIfNeeded())
 	}

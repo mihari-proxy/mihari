@@ -24,6 +24,7 @@ import (
 )
 
 type controlledSubscriptionFetcher struct {
+	failure     error
 	entered     chan struct{}
 	enteredOnce sync.Once
 	release     chan struct{}
@@ -41,6 +42,9 @@ func (f *controlledSubscriptionFetcher) Fetch(ctx context.Context, _ subscriptio
 	f.enteredOnce.Do(func() { close(f.entered) })
 	select {
 	case <-f.release:
+		if f.failure != nil {
+			return subscription.FetchResult{}, f.failure
+		}
 		return subscription.FetchResult{Content: []byte("proxies: []\n")}, nil
 	case <-ctx.Done():
 		return subscription.FetchResult{}, ctx.Err()
@@ -52,15 +56,17 @@ func (f *controlledSubscriptionFetcher) releaseFetch() {
 }
 
 type subscriptionControlFixture struct {
-	client    *controlclient.Client
-	fetcher   *controlledSubscriptionFetcher
-	profileID string
-	cancel    context.CancelFunc
-	done      chan struct{}
-	daemonErr error
+	manager                         *runtimeapi.Manager
+	catalogPath, cacheDir, endpoint string
+	client                          *controlclient.Client
+	fetcher                         *controlledSubscriptionFetcher
+	profileID                       string
+	cancel                          context.CancelFunc
+	done                            chan struct{}
+	daemonErr                       error
 }
 
-func newSubscriptionControlFixture(t *testing.T) *subscriptionControlFixture {
+func newSubscriptionControlFixture(t *testing.T, controllers ...runtimeapi.Controller) *subscriptionControlFixture {
 	t.Helper()
 	root := t.TempDir()
 	fetcher := newControlledSubscriptionFetcher()
@@ -90,7 +96,12 @@ func newSubscriptionControlFixture(t *testing.T) *subscriptionControlFixture {
 	})
 	settings := config.Defaults()
 	settings.ControllerSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	var controller runtimeapi.Controller
+	if len(controllers) > 0 {
+		controller = controllers[0]
+	}
 	manager := runtimeapi.New(runtimeapi.Options{
+		Controller:     controller,
 		Store:          store,
 		Coordinator:    state.NewCoordinator(store),
 		Subscriptions:  service,
@@ -105,6 +116,8 @@ func newSubscriptionControlFixture(t *testing.T) *subscriptionControlFixture {
 	ctx, cancel := context.WithCancel(context.Background())
 	ready := make(chan struct{})
 	fixture := &subscriptionControlFixture{
+		manager:     manager,
+		catalogPath: filepath.Join(root, "subscriptions", "catalog.yaml"), cacheDir: filepath.Join(root, "subscriptions", "cache"), endpoint: endpoint,
 		client:    controlclient.New(endpoint, token),
 		fetcher:   fetcher,
 		profileID: profile.ID,

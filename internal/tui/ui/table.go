@@ -25,6 +25,7 @@ type Align uint8
 const (
 	AlignLeft Align = iota
 	AlignRight
+	AlignCenter
 )
 
 // TableColumn describes a flex-capable column for FitColumnWidths.
@@ -226,6 +227,9 @@ func PadCell(s string, width int, align Align) string {
 	spaces := strings.Repeat(" ", pad)
 	if align == AlignRight {
 		return spaces + s
+	}
+	if align == AlignCenter {
+		return strings.Repeat(" ", pad/2) + s + strings.Repeat(" ", pad-pad/2)
 	}
 	return s + spaces
 }

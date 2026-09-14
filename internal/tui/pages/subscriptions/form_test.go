@@ -44,7 +44,7 @@ func TestEditForm_LeavesURLBlankAndBuildsTypedUpdate(t *testing.T) {
 		t.Fatalf("URL was exposed: %q", form.inputs[1].Value())
 	}
 	request := form.updateRequest("op-1", 7)
-	if request.URL != nil || request.Name == nil || *request.Name != "Main" || request.Interval == nil || *request.Interval != "6h" || request.AutoRefresh == nil || !*request.AutoRefresh || request.IfRevision == nil || *request.IfRevision != 7 {
+	if request.URL != nil || request.Name != nil || request.Interval != nil || request.AutoRefresh != nil || request.IfRevision == nil || *request.IfRevision != 7 {
 		t.Fatalf("request=%#v", request)
 	}
 }

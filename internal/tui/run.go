@@ -14,6 +14,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
+	subscriptionspage "github.com/mihari-proxy/mihari/internal/tui/pages/subscriptions"
 	systempage "github.com/mihari-proxy/mihari/internal/tui/pages/system"
 	"github.com/mihari-proxy/mihari/internal/tui/session"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -299,6 +300,9 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 		events = controlSession.Start(sessionCtx)
 	}
 	model := newRunModel(ctx, options.Client, events, health, applier)
+	if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
+		defer page.Stop()
+	}
 	model.setInstallationActions(actions)
 	if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
 		userDir, exportDir := options.UserLogDir, options.UserExportDir

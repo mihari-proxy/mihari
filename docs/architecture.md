@@ -132,7 +132,12 @@ Phase 4 保留几条明确边界：认证前、预解析和只读请求没有统
 
 ## 订阅
 
-- 订阅 URL 仅存储在守护进程私有的目录中,并从 list/show 响应与常规错误中省略。
+- 订阅 URL 与缓存源 `cache-url` 由 daemon 持久化，list/show、事件与公开错误均省略。认证的本地 `GET /v1/subscriptions/{id}/url` 专门返回 schema 与当前 URL；所有已通过现有控制认证的本机用户都可读取，包括 Unix 共享控制凭据允许的本机用户。Web gateway 不挂载此接口；不新增能力标记，TUI/daemon 配套升级。
+- reveal 响应不主动写日志，TUI 传输错误使用安全文案；文件诊断日志沿用当前 dev 原始错误策略，不恢复 redactor。
+- `cache-url` 记录缓存来源，`schedule-from` 记录 URL/interval 变化的调度起点，`interval-refresh-required` 独立持久化强制过期。公共 DTO 添加 `cache_outdated`、`schedule_from`、`interval_refresh_required`。URL 修改保留缓存与 active；interval 修改统一强制过期；成功刷新清除调度起点和过期标记，失败或回滚保留。旧源在途成功/失败均受 profile version 守卫。
+- 调度以 schedule-from（否则 UpdatedAt）加有效 interval 为基准，保留 jitter/backoff；URL/interval 实际变化使旧重试等待失效，执行排队任务前再检查到期。Name/Mode 等无关变化不重置调度。
+- TUI Enter 合并详情与编辑，字段 diff PATCH 走统一 mutation path；PATCH 纳入既有 operation-status 跟踪，finished 仅表示 handler 已结束。冲突与未知结果的重提分别要求确认，新操作 ID 与最新 revision 防止静默覆盖。URL 草稿仅存在于当前弹层。
+- 旧二进制严格解码不能读取新增持久化字段；不支持直接降级。升级前停机备份完整业务数据，降级恢复与旧二进制兼容的一致备份，详见 README。
 - 每个有效配置都有独立缓存,因此 `sub use` 在无 provider 网络访问时也能工作。
 - 每个订阅可独立配置拉取代理(`direct` / `proxy` / `auto`);`auto` 在代理失败时回退直连。
 - 生成的配置总是在 `mihomo -t` 与重载之前恢复 Mihari 托管的内环回控制器、密钥与端口不变量。

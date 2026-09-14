@@ -155,6 +155,12 @@ func (c *Catalog) migrate() {
 // sensible default. Today it selects an active subscription when none is set;
 // future "zero ≠ default" fields belong here rather than scattered in Normalize.
 func (c *Catalog) fillDefaults() {
+	for i := range c.Profiles {
+		profile := &c.Profiles[i]
+		if profile.Generation > 0 && profile.CacheURL == "" {
+			profile.CacheURL = profile.URL
+		}
+	}
 	if c.ActiveID != "" {
 		return
 	}

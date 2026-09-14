@@ -1,8 +1,10 @@
 package subscriptions
 
 import (
+	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -18,22 +20,28 @@ const (
 )
 
 type formModel struct {
-	kind   formKind
-	inputs []textinput.Model
-	labels []string
-	index  int
+	kind        formKind
+	inputs      []textinput.Model
+	labels      []string
+	index       int
+	baseline    protocol.Subscription
+	urlBaseline string
+	urlTouched  bool
+	errorText   string
 }
 
 func newAddForm() *formModel {
-	return newForm(formAdd, []string{"Name", "URL"}, []string{"", ""}, []string{"Subscription name", "https://example.test/subscription"})
+	return newForm(formAdd, []string{"Name", "URL", "Mode"}, []string{"", "", ""}, []string{"Subscription name", "https://example.test/subscription", ""})
 }
 
 func newEditForm(subscription protocol.Subscription) *formModel {
-	return newForm(formEdit,
-		[]string{"Name", "URL", "Interval", "Auto refresh"},
-		[]string{subscription.Name, "", subscription.Interval, strconv.FormatBool(subscription.AutoRefresh)},
-		[]string{"Subscription name", "Leave blank to keep the stored URL", "Use global interval when blank", "true or false"},
+	f := newForm(formEdit,
+		[]string{"Name", "URL", "Interval", "Auto refresh", "Mode"},
+		[]string{subscription.Name, "", subscription.Interval, strconv.FormatBool(subscription.AutoRefresh), subscription.ProxyMode},
+		[]string{"Subscription name", "Loading URL...", "Use global interval when blank", "", ""},
 	)
+	f.baseline = subscription
+	return f
 }
 
 func newForm(kind formKind, labels, values, placeholders []string) *formModel {
@@ -42,7 +50,6 @@ func newForm(kind formKind, labels, values, placeholders []string) *formModel {
 		input := textinput.New()
 		input.Prompt = ""
 		input.Placeholder = placeholders[index]
-		input.CharLimit = 2048
 		input.SetWidth(52)
 		input.SetValue(values[index])
 		form.inputs[index] = input
@@ -58,22 +65,62 @@ func (f *formModel) Update(message tea.Msg) (bool, tea.Cmd) {
 		switch key.String() {
 		case "esc":
 			return true, nil
-		case "tab":
+		case "tab", "down", "enter":
 			return false, f.move(1)
-		case "shift+tab":
+		case "shift+tab", "up":
 			return false, f.move(-1)
 		}
+		if f.isCycle() {
+			switch key.String() {
+			case "left", "right", "space":
+				value := f.inputs[f.index].Value()
+				if f.kind == formEdit && f.index == 3 {
+					value = strconv.FormatBool(value != "true")
+				} else {
+					value = nextProxyMode(value)
+					if key.String() == "left" {
+						value = nextProxyMode(value)
+					}
+				}
+				f.inputs[f.index].SetValue(value)
+			}
+			return false, nil
+		}
+	}
+	if f.index >= len(f.inputs) || f.isCycle() {
+		return false, nil
 	}
 	// Forward keys, bracketed paste, and clipboard paste results into the focused textinput.
+	before := f.inputs[f.index].Value()
 	updated, command := f.inputs[f.index].Update(message)
 	f.inputs[f.index] = updated
+	if f.index == 1 && before != updated.Value() {
+		f.urlTouched = true
+	}
 	return false, command
 }
 
+func (f *formModel) isCycle() bool {
+	return f.index < len(f.inputs) && (f.kind == formAdd && f.index == 2 || f.kind == formEdit && f.index >= 3)
+}
+
+func (f *formModel) reveal(raw string) {
+	if f.urlTouched {
+		return
+	}
+	f.urlBaseline = raw
+	f.inputs[1].SetValue(raw)
+}
+
 func (f *formModel) move(delta int) tea.Cmd {
-	f.inputs[f.index].Blur()
-	f.index = (f.index + delta + len(f.inputs)) % len(f.inputs)
-	return f.inputs[f.index].Focus()
+	if f.index < len(f.inputs) {
+		f.inputs[f.index].Blur()
+	}
+	f.index = (f.index + delta + len(f.inputs) + 1) % (len(f.inputs) + 1)
+	if f.index < len(f.inputs) && !f.isCycle() {
+		return f.inputs[f.index].Focus()
+	}
+	return nil
 }
 
 func (f *formModel) View() string {
@@ -83,24 +130,59 @@ func (f *formModel) View() string {
 		if index == f.index {
 			marker = ui.FocusMarker
 		}
-		lines = append(lines, marker+f.labels[index], "  "+f.inputs[index].View())
+		value := f.inputs[index].View()
+		if f.labels[index] == "Mode" {
+			value = proxyModeLabel(f.inputs[index].Value())
+		}
+		if f.labels[index] == "Auto refresh" {
+			value = "Off"
+			if f.inputs[index].Value() == "true" {
+				value = "On"
+			}
+		}
+		lines = append(lines, marker+f.labels[index], "  "+value)
 	}
+	marker := "  "
+	if f.index == len(f.inputs) {
+		marker = ui.FocusMarker
+	}
+	lines = append(lines, marker+"Save")
 	return strings.Join(lines, "\n")
 }
 
 func (f *formModel) valid() bool {
+	f.errorText = ""
 	if strings.TrimSpace(f.inputs[0].Value()) == "" {
+		f.errorText = "Name is required."
 		return false
 	}
-	if f.kind == formAdd {
-		return strings.TrimSpace(f.inputs[1].Value()) != ""
+	raw := strings.TrimSpace(f.inputs[1].Value())
+	if f.kind == formAdd || f.urlTouched || raw != "" {
+		if raw == "" {
+			f.errorText = "URL is required."
+			return false
+		}
+		u, err := url.Parse(raw)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+			f.errorText = "Enter a valid HTTP or HTTPS URL."
+			return false
+		}
 	}
-	_, err := strconv.ParseBool(strings.TrimSpace(f.inputs[3].Value()))
-	return err == nil
+	if f.kind == formEdit {
+		interval := strings.TrimSpace(f.inputs[2].Value())
+		if interval != "" {
+			d, err := time.ParseDuration(interval)
+			if err != nil || d <= 0 {
+				f.errorText = "Enter a positive interval or leave it blank."
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (f *formModel) addRequest(operationID string, revision uint64) protocol.SubscriptionAddRequest {
-	request := protocol.SubscriptionAddRequest{OperationID: operationID, Name: strings.TrimSpace(f.inputs[0].Value()), URL: strings.TrimSpace(f.inputs[1].Value())}
+	request := protocol.SubscriptionAddRequest{OperationID: operationID, Name: strings.TrimSpace(f.inputs[0].Value()), URL: strings.TrimSpace(f.inputs[1].Value()), ProxyMode: f.inputs[2].Value()}
 	request.IfRevision = &revision
 	return request
 }
@@ -109,8 +191,21 @@ func (f *formModel) updateRequest(operationID string, revision uint64) protocol.
 	name := strings.TrimSpace(f.inputs[0].Value())
 	interval := strings.TrimSpace(f.inputs[2].Value())
 	autoRefresh, _ := strconv.ParseBool(strings.TrimSpace(f.inputs[3].Value()))
-	request := protocol.SubscriptionUpdateRequest{OperationID: operationID, IfRevision: &revision, Name: &name, Interval: &interval, AutoRefresh: &autoRefresh}
-	if rawURL := strings.TrimSpace(f.inputs[1].Value()); rawURL != "" {
+	request := protocol.SubscriptionUpdateRequest{OperationID: operationID, IfRevision: &revision}
+	if name != f.baseline.Name {
+		request.Name = &name
+	}
+	if interval != f.baseline.Interval {
+		request.Interval = &interval
+	}
+	if autoRefresh != f.baseline.AutoRefresh {
+		request.AutoRefresh = &autoRefresh
+	}
+	mode := f.inputs[4].Value()
+	if mode != f.baseline.ProxyMode {
+		request.ProxyMode = &mode
+	}
+	if rawURL := strings.TrimSpace(f.inputs[1].Value()); f.urlTouched && rawURL != "" && rawURL != f.urlBaseline {
 		request.URL = &rawURL
 	}
 	return request

@@ -160,6 +160,9 @@ func TestConfigDiagnostic_ReloadCompensation(t *testing.T) {
 			if mode != "restore" && !bytes.Equal(before, configDiagnosticRead(t, m.runtimeConfig)) {
 				t.Error("previous config not restored")
 			}
+			if mode == "restored" {
+				catalog.Profiles[0].LastError = wantMessage
+			}
 			if mode != "receipt" && !reflect.DeepEqual(catalog, m.Subscriptions()) {
 				t.Error("catalog/cache generation not rolled back")
 			}
@@ -234,6 +237,7 @@ func TestConfigDiagnostic_ValidationFailureSafeJSON(t *testing.T) {
 	if !errors.Is(err, cause) || err.Error() != "mihomo configuration validation failed" {
 		t.Fatalf("validation contract/cause: %v", err)
 	}
+	catalog.Profiles[0].LastError = "mihomo configuration validation failed"
 	if !bytes.Equal(before, configDiagnosticRead(t, m.runtimeConfig)) || c.reloads != reloads || !reflect.DeepEqual(catalog, m.Subscriptions()) || !reflect.DeepEqual(snapshot, m.Snapshot()) {
 		t.Fatal("validation changed last valid state or reloaded")
 	}
@@ -302,6 +306,7 @@ func TestConfigDiagnostic_IOFailuresKeepPreviousState(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			catalog.Profiles[0].LastError = message
 			if c.reloads != reloads || !bytes.Equal(before, configDiagnosticRead(t, m.runtimeConfig)) || !reflect.DeepEqual(catalog, m.Subscriptions()) || !reflect.DeepEqual(snapshot, m.Snapshot()) {
 				t.Fatal("failed preparation/publication changed valid state")
 			}

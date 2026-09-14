@@ -23,12 +23,29 @@ type subscriptionAPI interface {
 func (s *Server) subscriptionRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/subscriptions", s.listSubscriptions)
 	mux.HandleFunc("GET /v1/subscriptions/{id}", s.showSubscription)
+	mux.HandleFunc("GET /v1/subscriptions/{id}/url", s.revealSubscriptionURL)
 	mux.HandleFunc("POST /v1/subscriptions", s.addSubscription)
 	mux.HandleFunc("POST /v1/subscriptions/{id}/refresh", s.refreshSubscription)
 	mux.HandleFunc("PUT /v1/subscriptions/{id}/active", s.useSubscription)
 	mux.HandleFunc("PUT /v1/subscriptions/{id}/enabled", s.enableSubscription)
 	mux.HandleFunc("PATCH /v1/subscriptions/{id}", s.updateSubscription)
 	mux.HandleFunc("DELETE /v1/subscriptions/{id}", s.removeSubscription)
+}
+
+func (s *Server) revealSubscriptionURL(writer http.ResponseWriter, request *http.Request) {
+	runtime, ok := s.runtime.(interface {
+		SubscriptionURL(context.Context, string) (string, error)
+	})
+	if !ok {
+		s.writeControlError(request.Context(), writer, subscriptionsUnavailable())
+		return
+	}
+	url, err := runtime.SubscriptionURL(request.Context(), request.PathValue("id"))
+	if err != nil {
+		s.writeControlError(request.Context(), writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, protocol.SubscriptionURL{Schema: "mihari/v1", URL: url})
 }
 
 func (s *Server) subscriptionsRuntime(ctx context.Context, writer http.ResponseWriter) (subscriptionAPI, bool) {
@@ -144,6 +161,7 @@ func (s *Server) updateSubscription(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "subscription.set"})
+	defer s.operations.begin(body.OperationID)()
 	profile, err := runtime.SetSubscription(ctx, runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, request.PathValue("id"), runtimeapi.SetSubscriptionInput{
 		Name: body.Name, URL: body.URL, Interval: body.Interval, AutoRefresh: body.AutoRefresh, GlobalPeriod: body.GlobalInterval, ProxyMode: body.ProxyMode,
 	})
@@ -188,6 +206,7 @@ func subscriptionDTO(profile subscription.PublicProfile) protocol.Subscription {
 		ID: profile.ID, Name: profile.Name, Enabled: profile.Enabled, AutoRefresh: profile.AutoRefresh,
 		Interval: profile.Interval, Cached: profile.Cached, Generation: profile.Generation,
 		UpdatedAt: profile.UpdatedAt, LastError: profile.LastError,
+		CacheOutdated: profile.CacheOutdated, ScheduleFrom: profile.ScheduleFrom, IntervalRefreshRequired: profile.IntervalRefreshRequired,
 		Upload: profile.Upload, Download: profile.Download, Total: profile.Total, Expire: profile.Expire,
 		ProxyMode: profile.ProxyMode,
 	}

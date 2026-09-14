@@ -150,6 +150,14 @@ See [docs/commands.md](docs/commands.md) for the full command reference, and [do
 
 In TUI **Proxies**, the **Routing** card contains **Mode** and **GLOBAL**. Focus **Mode** and press Enter to choose Rule, Global, or Direct; use ↑/↓, Enter to apply, and Esc to cancel. **GLOBAL** expands the core's existing candidate group and scrolls to show the whole section when it fits; larger groups start at the top of the list viewport and remain navigable with the arrow keys. Mihari saves the mode globally and the GLOBAL exit per subscription, including choices made by supported Web panels. Rule is the default. Mode and exit changes preserve existing connections. If a saved exit disappears, Mihari saves DIRECT when available, otherwise Rule; a stopped core shows saved changes as pending.
 
+In TUI **Subs**, Enter opens editable details; `a` adds a profile. Use Tab/Shift+Tab or ↑/↓ to move between fields, and ←/→/Space to cycle **Auto refresh** or **Mode**. Enter advances to the next field; only Enter on **Save** submits. PgUp/PgDn scroll the details; long URLs scroll horizontally. All built-in TUI text is English. The list uses **InUse**, **Enabled**, **Status**, and **Mode**; `p` cycles fetch mode.
+
+Changing a subscription URL preserves its existing cache and InUse selection, without downloading or reloading immediately. **Outdated** means the cache came from another URL; you can still use it offline. Changing a profile's interval resets its next refresh and marks its cache **Expired** until a successful refresh, including a valid 304 response. Higher-priority states such as Disabled, Failed, Missing, and Outdated still take precedence. With Auto refresh off, Next shows **Manual**.
+
+Save waits for a result before closing. A revision conflict asks whether to overwrite only your changed fields. If the result is unknown, Mihari checks the operation and current state without replaying the save; **Submit again** requires another confirmation and can create a duplicate when adding. Closing does not cancel a save. If a profile was created but its first download failed, select it and press `r` to retry the download.
+
+Upgrade the TUI and daemon together; mixed versions are not supported. Before upgrading, stop the daemon and back up the complete business data for your layout (Unix B/D, or Windows/private P), including catalog, caches, settings/state, and runtime configuration as one consistent set. New catalog fields cannot be read by old binaries. Direct downgrade is unsupported: stop the daemon and restore a compatible complete backup when reverting the binary. Removing individual YAML fields is not a supported downgrade procedure.
+
 ## Platform targets
 
 - Windows amd64 and arm64

@@ -23,12 +23,18 @@ func ValidProxyMode(mode string) bool {
 }
 
 type Profile struct {
-	ID          string `yaml:"id"`
-	Name        string `yaml:"name"`
-	URL         string `yaml:"url"`
-	Enabled     bool   `yaml:"enabled"`
-	AutoRefresh bool   `yaml:"auto-refresh"`
-	Interval    string `yaml:"interval,omitempty"`
+	ID   string `yaml:"id"`
+	Name string `yaml:"name"`
+	URL  string `yaml:"url"`
+	// CacheURL identifies the source of the last successfully committed cache.
+	CacheURL string `yaml:"cache-url,omitempty"`
+	// ScheduleFrom restarts the refresh interval without changing cache age.
+	ScheduleFrom time.Time `yaml:"schedule-from,omitempty"`
+	// IntervalRefreshRequired remains set until a refresh succeeds.
+	IntervalRefreshRequired bool   `yaml:"interval-refresh-required,omitempty"`
+	Enabled                 bool   `yaml:"enabled"`
+	AutoRefresh             bool   `yaml:"auto-refresh"`
+	Interval                string `yaml:"interval,omitempty"`
 	// ProxyMode controls how refresh fetches reach this provider. Empty = direct.
 	ProxyMode    string    `yaml:"proxy-mode,omitempty"`
 	Version      uint64    `yaml:"version,omitempty"`
@@ -52,15 +58,18 @@ type Catalog struct {
 }
 
 type PublicProfile struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Enabled     bool      `json:"enabled"`
-	AutoRefresh bool      `json:"auto_refresh"`
-	Interval    string    `json:"interval"`
-	Cached      bool      `json:"cached"`
-	Generation  uint64    `json:"generation"`
-	UpdatedAt   time.Time `json:"updated_at,omitempty"`
-	LastError   string    `json:"last_error,omitempty"`
+	CacheOutdated           bool      `json:"cache_outdated,omitempty"`
+	ScheduleFrom            time.Time `json:"schedule_from,omitempty"`
+	IntervalRefreshRequired bool      `json:"interval_refresh_required,omitempty"`
+	ID                      string    `json:"id"`
+	Name                    string    `json:"name"`
+	Enabled                 bool      `json:"enabled"`
+	AutoRefresh             bool      `json:"auto_refresh"`
+	Interval                string    `json:"interval"`
+	Cached                  bool      `json:"cached"`
+	Generation              uint64    `json:"generation"`
+	UpdatedAt               time.Time `json:"updated_at,omitempty"`
+	LastError               string    `json:"last_error,omitempty"`
 	// Traffic from subscription-userinfo (bytes). Omitted when unknown.
 	Upload   int64 `json:"upload,omitempty"`
 	Download int64 `json:"download,omitempty"`
@@ -80,6 +89,8 @@ func (c Catalog) Public() PublicCatalog {
 	result := PublicCatalog{ActiveID: c.ActiveID, GlobalInterval: c.GlobalInterval, Profiles: make([]PublicProfile, 0, len(c.Profiles))}
 	for _, profile := range c.Profiles {
 		result.Profiles = append(result.Profiles, PublicProfile{
+			CacheOutdated: profile.Generation > 0 && profile.CacheURL != profile.URL,
+			ScheduleFrom:  profile.ScheduleFrom, IntervalRefreshRequired: profile.IntervalRefreshRequired,
 			ID: profile.ID, Name: profile.Name, Enabled: profile.Enabled, AutoRefresh: profile.AutoRefresh,
 			Interval: profile.Interval, Cached: profile.Generation > 0, Generation: profile.Generation,
 			UpdatedAt: profile.UpdatedAt, LastError: profile.LastError,

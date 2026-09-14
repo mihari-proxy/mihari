@@ -139,7 +139,9 @@ mihari sub set ID --proxy auto
 mihari sub remove ID --yes
 ```
 
-订阅 URL 仅存储在守护进程私有的目录中,并从 list/show 响应与常规错误中省略。每个有效配置都有独立缓存,因此 `sub use` 在无 provider 网络访问时也能工作。`--proxy` 为该订阅的拉取代理:`direct`(默认)、`proxy` 或 `auto`;`auto` 在代理失败时回退直连。生成的配置总是在 `mihomo -t` 与重载之前恢复 Mihari 托管的内环回控制器、密钥与端口不变量。
+订阅 URL 由守护进程持久化,并从 list/show 响应与常规错误中省略。每个有效配置都有独立缓存,因此 `sub use` 在无 provider 网络访问时也能工作。`--proxy` 为该订阅的拉取代理:`direct`(默认)、`proxy` 或 `auto`;`auto` 在代理失败时回退直连。生成的配置总是在 `mihomo -t` 与重载之前恢复 Mihari 托管的内环回控制器、密钥与端口不变量。
+
+`sub set` 修改 URL 保留旧缓存与 InUse，不立即拉取或重载；修改单条 interval 重置调度并标记 Expired，成功刷新后清除。CLI 参数仍为 `--proxy`，JSON 字段仍为 `proxy_mode`；仅新增公开缓存状态字段，没有新增 reveal CLI 命令。完整 URL 仅经专门的认证本地 API 读取，普通 list/show 继续省略。TUI 操作、结果未知处理和配套升级/降级备份要求见 [README](../README.zh-CN.md)。
 
 ## 系统代理与 TUN
 
