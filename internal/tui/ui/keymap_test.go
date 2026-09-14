@@ -135,37 +135,70 @@ func TestCatalog_FooterTokensHaveBindings(t *testing.T) {
 	cat := Catalog()
 	cases := []struct {
 		footer string
+		page   PageID
+		mode   string
 		want   []string
 	}{
-		{FooterRail, []string{"↑/↓", "Enter", "?", "q"}},
-		{FooterProxies, []string{"Enter", "t", "Ctrl+T"}},
-		{FooterConnections, []string{"/", "x", "p", "Enter"}},
-		{FooterRules, []string{"/", "r", "u", "Ctrl+U", "Enter"}},
-		{FooterLogs, []string{"/", "p", "w", "G", "Enter"}},
-		{FooterSubscriptions, []string{"a", "e", "Space", "p", "r", "Ctrl+R", "u", "d", "Enter"}},
-		{FooterWebGUIActions, []string{"Space", "o", "i", "u", "r", "x", "b"}},
-		{FooterSystem, []string{"Enter"}},
-		{FooterSearchMode, []string{"←/→", "↑/↓", "Esc"}},
-		{FooterColumnsMode, []string{"Space", "Enter", "Esc"}},
-		{FormHelp, []string{"Tab", "Enter", "Esc"}},
-		{FooterPortsEdit, []string{"Enter", "Esc"}},
+		{FooterRail, "", "", []string{"↑/↓", "Enter", "?", "q"}},
+		{FooterProxies, PageProxies, "", []string{"Enter", "t", "Ctrl+T"}},
+		{FooterConnections, PageConnections, "", []string{"/", "x", "p", "Enter"}},
+		{FooterRules, PageRules, "", []string{"/", "r", "u", "Ctrl+U", "Enter"}},
+		{FooterLogs, PageLogs, "", []string{"/", "p", "w", "G", "Enter"}},
+		{FooterSubscriptions, PageSubscriptions, "", []string{"a", "Space", "p", "r", "Ctrl+R", "u", "d", "Enter"}},
+		{FooterWebGUIActions, PageWebGUI, "", []string{"Space", "o", "i", "u", "r", "x", "b"}},
+		{FooterSystem, PageSystem, "", []string{"Enter"}},
+		{FooterSearchMode, PageConnections, ModeSearch, []string{"←/→", "↑/↓", "Esc"}},
+		{FooterColumnsMode, PageConnections, ModeColumns, []string{"Space", "Enter", "Esc"}},
+		{FormHelp, PageSubscriptions, ModeForm, []string{"Tab", "Enter", "Esc"}},
+		{FooterPortsEdit, PageSystem, ModePortsEdit, []string{"Enter", "Esc"}},
 	}
 	for _, tc := range cases {
+		scoped := filter(cat, func(b KeyBinding) bool {
+			if tc.mode != "" {
+				return b.Scope == ScopeMode && b.Mode == tc.mode && (b.Page == "" || b.Page == tc.page)
+			}
+			return b.Scope == ScopeGlobal || (b.Scope == ScopePage && b.Page == tc.page && b.Mode == "")
+		})
 		for _, token := range tc.want {
-			if !catalogHasDisplayFragment(cat, token) {
+			if !catalogHasDisplayFragment(scoped, token) {
 				t.Fatalf("footer %q token %q missing from catalog", tc.footer, token)
 			}
 		}
 	}
 }
 
+// catalogHasDisplayFragment matches whole displayed keys, never substrings such as e in Enter.
 func catalogHasDisplayFragment(cat []KeyBinding, token string) bool {
 	for _, b := range cat {
-		if b.Display == token || strings.Contains(b.Display, token) || strings.Contains(b.Footer, token) {
+		if b.Display == token {
+			return true
+		}
+		if token == "/" {
+			continue
+		}
+		parts := strings.FieldsFunc(b.Display, func(r rune) bool { return r == '/' || r == ' ' })
+		want := strings.Split(token, "/")
+		all := true
+		for _, key := range want {
+			found := false
+			for _, part := range parts {
+				if part == key {
+					found = true
+				}
+			}
+			all = all && found
+		}
+		if all {
 			return true
 		}
 	}
 	return false
+}
+
+func TestCatalog_DisplayFragmentsDoNotMatchPartialKeys(t *testing.T) {
+	if catalogHasDisplayFragment([]KeyBinding{{Display: "Enter"}}, "e") {
+		t.Fatal("deleted e matched Enter")
+	}
 }
 
 func TestCatalog_KeysAppearInHandlerSource(t *testing.T) {

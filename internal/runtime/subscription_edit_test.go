@@ -17,7 +17,9 @@ func TestSubscriptionEdit_URLPreservesActiveCache(t *testing.T) {
 	m, service, controller, address := subscriptionManager(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("ETag", "old-tag")
 		w.Header().Set("Last-Modified", "Mon, 14 Sep 2026 00:00:00 GMT")
-		_, _ = w.Write([]byte("proxies: []\n"))
+		if _, err := w.Write([]byte("proxies: []\n")); err != nil {
+			t.Error(err)
+		}
 	}))
 	ctx := context.Background()
 	a, err := m.AddSubscription(ctx, Operation{ID: "edit-add-a"}, AddSubscriptionInput{Name: "a", URL: address + "/a"})
@@ -53,6 +55,15 @@ func TestSubscriptionEdit_URLPreservesActiveCache(t *testing.T) {
 	if p.ScheduleFrom.Before(start) || p.ScheduleFrom.After(time.Now().UTC()) || p.IntervalRefreshRequired {
 		t.Fatal("URL edit did not reset only the schedule")
 	}
+	// Restoring the cached source must not invent interval expiry.
+	originalURL := previous.URL
+	restored, err := m.SetSubscription(ctx, Operation{ID: "edit-url-back"}, a.ID, SetSubscriptionInput{URL: &originalURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.CacheOutdated || restored.IntervalRefreshRequired {
+		t.Fatal("URL round trip forced an interval refresh")
+	}
 	actual, err := os.ReadFile(service.CachePath(a.ID))
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +79,11 @@ func TestSubscriptionEdit_URLPreservesActiveCache(t *testing.T) {
 }
 
 func TestSubscriptionRefreshState_ApplyFailureKeepsOldCacheState(t *testing.T) {
-	m, service, controller, address := subscriptionManager(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("proxies: []\n")) }))
+	m, service, controller, address := subscriptionManager(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := w.Write([]byte("proxies: []\n")); err != nil {
+			t.Error(err)
+		}
+	}))
 	ctx := context.Background()
 	p, err := m.AddSubscription(ctx, Operation{ID: "apply-add"}, AddSubscriptionInput{Name: "a", URL: address})
 	if err != nil {
@@ -103,7 +118,11 @@ func TestSubscriptionRefreshState_ApplyFailureKeepsOldCacheState(t *testing.T) {
 }
 
 func TestSubscriptionEdit_IntervalResetsSchedule(t *testing.T) {
-	m, service, _, address := subscriptionManager(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("proxies: []\n")) }))
+	m, service, _, address := subscriptionManager(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := w.Write([]byte("proxies: []\n")); err != nil {
+			t.Error(err)
+		}
+	}))
 	ctx := context.Background()
 	p, err := m.AddSubscription(ctx, Operation{ID: "interval-add"}, AddSubscriptionInput{Name: "a", URL: address})
 	if err != nil {
@@ -143,7 +162,11 @@ func TestSubscriptionEdit_IntervalResetsSchedule(t *testing.T) {
 }
 
 func TestSubscriptionURL_OnlyCurrentSourceAndSafeFailures(t *testing.T) {
-	m, _, _, address := subscriptionManager(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("proxies: []\n")) }))
+	m, _, _, address := subscriptionManager(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := w.Write([]byte("proxies: []\n")); err != nil {
+			t.Error(err)
+		}
+	}))
 	ctx := context.Background()
 	p, err := m.AddSubscription(ctx, Operation{ID: "url-add"}, AddSubscriptionInput{Name: "Main", URL: address + "/old"})
 	if err != nil {
@@ -170,5 +193,44 @@ func TestSubscriptionURL_OnlyCurrentSourceAndSafeFailures(t *testing.T) {
 	var empty Manager
 	if _, err = empty.SubscriptionURL(ctx, p.ID); err == nil {
 		t.Fatal("missing manager accepted reveal")
+	}
+}
+
+func TestSubscriptionEdit_NotifiesSchedulerOnlyAfterCommit(t *testing.T) {
+	m, _, _, address := subscriptionManager(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := w.Write([]byte("proxies: []\n")); err != nil {
+			t.Error(err)
+		}
+	}))
+	p, err := m.AddSubscription(context.Background(), Operation{ID: "wake-add"}, AddSubscriptionInput{Name: "a", URL: address})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid := "invalid"
+	if _, err := m.SetSubscription(context.Background(), Operation{ID: "wake-invalid"}, p.ID, SetSubscriptionInput{Interval: &invalid}); err == nil {
+		t.Fatal("invalid edit succeeded")
+	}
+	select {
+	case <-m.SubscriptionChanges():
+		t.Fatal("failed edit woke scheduler")
+	default:
+	}
+	interval := "1s"
+	if _, err := m.SetSubscription(context.Background(), Operation{ID: "wake-edit"}, p.ID, SetSubscriptionInput{Interval: &interval}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-m.SubscriptionChanges():
+	default:
+		t.Fatal("committed edit did not wake scheduler")
+	}
+	// Cached operation results must not notify again.
+	if _, err := m.SetSubscription(context.Background(), Operation{ID: "wake-edit"}, p.ID, SetSubscriptionInput{Interval: &interval}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-m.SubscriptionChanges():
+		t.Fatal("cached result woke scheduler")
+	default:
 	}
 }

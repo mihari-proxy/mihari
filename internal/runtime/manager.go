@@ -186,6 +186,7 @@ type Manager struct {
 	configGeneration          uint64
 	tunLastError              string
 	maintenance               chan struct{}
+	subscriptionChanges       chan struct{}
 	installed                 chan struct{}
 	closing                   atomic.Bool
 	mutationDegraded          atomic.Bool
@@ -280,6 +281,7 @@ func New(options Options) *Manager {
 		installed:          make(chan struct{}, 1),
 		operations:         make(map[string]*operationEntry),
 	}
+	manager.subscriptionChanges = make(chan struct{}, 1)
 	manager.maintenance <- struct{}{}
 	if manager.subscriptions != nil {
 		snapshot := manager.store.Load()

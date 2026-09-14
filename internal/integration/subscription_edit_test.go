@@ -164,7 +164,9 @@ func TestSubscriptionEdit_LostResponseObservationNeverReplaysPatch(t *testing.T)
 		// The mutation has committed, but the client sees a truncated success body.
 		w.Header().Set("Content-Length", "1000")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"schema":"mihari/v1"`))
+		if _, err := w.Write([]byte(`{"schema":"mihari/v1"`)); err != nil {
+			t.Error(err)
+		}
 	}))
 	defer s.Close()
 	client := controlclient.NewHTTP(s.URL, "token", s.Client())
@@ -189,5 +191,21 @@ func TestSubscriptionEdit_LostResponseObservationNeverReplaysPatch(t *testing.T)
 	}
 	if writes.Load() != 1 || f.manager.Snapshot().Revision != revision {
 		t.Fatal("observation replayed a mutation")
+	}
+}
+
+func TestSubscriptionEdit_ZeroScheduleOmittedFromPublicJSON(t *testing.T) {
+	for _, value := range []any{protocol.Subscription{}, subscription.PublicProfile{}} {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := fields["schedule_from"]; exists {
+			t.Fatal("zero schedule was serialized")
+		}
 	}
 }

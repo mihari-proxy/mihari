@@ -26,6 +26,7 @@ const (
 type runtimeOutcome struct {
 	err            error
 	remoteEnvelope bool
+	dispatched     bool
 }
 
 func (c *Client) Core(ctx context.Context) (protocol.CoreStatus, error) {
@@ -295,7 +296,11 @@ func (c *Client) doMutation(ctx context.Context, operation logging.OperationMeta
 	}
 	outcome := c.doRuntimeOutcome(ctx, method, path, input, output, maxControlResponseSize)
 	if outcome.err != nil && !outcome.remoteEnvelope && (operation.Name == "subscription.add" || operation.Name == "subscription.set") {
-		outcome.err = unknownSubscriptionOutcome{outcome.err}
+		if outcome.dispatched {
+			outcome.err = unknownSubscriptionOutcome{outcome.err}
+		} else {
+			outcome.err = unsentSubscriptionOutcome{outcome.err}
+		}
 	}
 	if reporter == nil {
 		return outcome.err
@@ -317,6 +322,12 @@ func (c *Client) doMutation(ctx context.Context, operation logging.OperationMeta
 // unknownSubscriptionOutcome preserves error classification while distinguishing
 // a lost response from an explicit daemon rejection. It never implies rollback.
 type unknownSubscriptionOutcome struct{ error }
+
+// unsentSubscriptionOutcome marks failures before HTTP dispatch as safe to retry.
+type unsentSubscriptionOutcome struct{ error }
+
+func (e unsentSubscriptionOutcome) Unwrap() error        { return e.error }
+func (e unsentSubscriptionOutcome) OutcomeUnknown() bool { return false }
 
 func (e unknownSubscriptionOutcome) Unwrap() error        { return e.error }
 func (e unknownSubscriptionOutcome) OutcomeUnknown() bool { return true }
@@ -518,6 +529,8 @@ func (c *Client) doRuntimeOutcome(ctx context.Context, method, path string, inpu
 			request.ContentLength = -1
 		}
 	}
+	// Every return after Do may describe a request that reached the daemon.
+	defer func() { outcome.dispatched = true }()
 	response, err := c.requestHTTP().Do(request)
 	if err != nil {
 		return c.localRuntimeOutcome(err)

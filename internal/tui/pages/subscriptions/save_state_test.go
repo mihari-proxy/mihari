@@ -164,12 +164,25 @@ func TestDetailLayout_FocusedFieldVisible(t *testing.T) {
 			t.Fatalf("focused %s is clipped", label)
 		}
 	}
-	m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
-	m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
-	m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+}
+
+func TestDetailLayout_StatusCanScrollIntoView(t *testing.T) {
+	m := New(nil, nil, nil)
+	m.SetSize(68, 19)
+	m.openForm(newEditForm(protocol.Subscription{Name: "Main"}), "a")
+	m.form.index = len(m.form.inputs)
+	m.ensureFormFocus()
+	for i := 0; i < 3; i++ {
+		m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	}
 	if !strings.Contains(m.View(), "In use:") {
 		t.Fatal("cannot scroll to status")
 	}
+}
+
+func TestDetailLayout_SavingFooterDoesNotPromiseCancel(t *testing.T) {
+	m := New(nil, nil, nil)
+	m.openForm(newEditForm(protocol.Subscription{Name: "Main"}), "a")
 	m.saveState = saveSending
 	if strings.Contains(m.FooterHints(), "cancel") {
 		t.Fatal("Saving footer promises cancellation")
@@ -285,5 +298,85 @@ func TestDetailReveal_LongURLIsNotTruncatedOrSubmittedAsAnEdit(t *testing.T) {
 	f.inputs[0].SetValue("Renamed")
 	if f.updateRequest("save", 1).URL != nil {
 		t.Fatal("reveal was treated as an edit")
+	}
+}
+
+func TestDetailLayout_PageUpAfterExcessPageDown(t *testing.T) {
+	m := New(nil, nil, nil)
+	m.SetSize(68, 19)
+	m.openForm(newEditForm(protocol.Subscription{Name: "Main"}), "a")
+	for i := 0; i < 100; i++ {
+		m.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+		m.View()
+	}
+	before := m.View()
+	m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if m.View() == before {
+		t.Fatal("PageUp ignored after scrolling beyond the end")
+	}
+}
+
+type unsentSaveError struct{}
+
+func (unsentSaveError) Error() string        { return "credential read timed out" }
+func (unsentSaveError) Unwrap() error        { return context.DeadlineExceeded }
+func (unsentSaveError) OutcomeUnknown() bool { return false }
+
+func TestDetailSave_UnsentFailureAllowsEditing(t *testing.T) {
+	m := New(nil, nil, nil)
+	m.openForm(newEditForm(protocol.Subscription{Name: "Main"}), "a")
+	m.saveState = saveSending
+	m.finishSave(mutationResultMsg{err: unsentSaveError{}})
+	if m.saveState != saveEditing {
+		t.Fatal("unsent failure required unknown-outcome confirmation")
+	}
+}
+
+func TestDetailReveal_RetriesAfterFailedSave(t *testing.T) {
+	f := &detailClient{fakeClient: &fakeClient{}, raw: "https://fixture.test/current"}
+	m := New(f, nil, nil)
+	cmd := m.openForm(newEditForm(protocol.Subscription{Name: "Main"}), "a")
+	m.saveState = saveSending
+	drainCmd(t, m, cmd)
+	cmd = m.finishSave(mutationResultMsg{err: protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid"}})
+	drainCmd(t, m, cmd)
+	if m.form.inputs[1].Value() != f.raw {
+		t.Fatal("failed save left URL unreadable after discarded reveal")
+	}
+}
+
+func TestDetailSave_ConflictRequiresConfirmationEveryTime(t *testing.T) {
+	for _, cancelDefault := range []bool{true, false} {
+		t.Run(map[bool]string{true: "default cancel", false: "repeat conflict"}[cancelDefault], func(t *testing.T) {
+			f := &detailClient{fakeClient: &fakeClient{list: protocol.SubscriptionList{Revision: 9, Subscriptions: []protocol.Subscription{{ID: "a", Name: "Other"}}}}, updateErr: protocol.APIError{Code: protocol.CodeRevisionConflict}}
+			m := New(f, nil, nil)
+			m.SetSubscriptions(protocol.SubscriptionList{Revision: 7, Subscriptions: []protocol.Subscription{{ID: "a", Name: "Main"}}})
+			m.openForm(newEditForm(protocol.Subscription{Name: "Main"}), "a")
+			m.form.inputs[0].SetValue("Mine")
+			m.form.index = len(m.form.inputs)
+			_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			drainCmd(t, m, cmd)
+			if !cancelDefault {
+				m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+			}
+			_, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			for i := 0; i < 4 && cmd != nil; i++ {
+				cmd = drainCmd(t, m, cmd)
+			}
+			if cancelDefault {
+				if m.form != nil || len(f.mutations) != 1 {
+					t.Fatal("default Cancel resubmitted")
+				}
+				return
+			}
+			if m.saveState != saveConflict || m.confirmYes || len(f.mutations) != 2 {
+				t.Fatal("second conflict skipped confirmation")
+			}
+			_, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			drainCmd(t, m, cmd)
+			if m.form != nil || len(f.mutations) != 2 {
+				t.Fatal("second default Cancel resubmitted")
+			}
+		})
 	}
 }

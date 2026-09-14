@@ -318,6 +318,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		RunScheduler: func(ctx context.Context) error {
 			subScheduler := subscription.NewScheduler(subscription.SchedulerOptions{
 				Snapshot: subscriptions.Snapshot,
+				Changes:  manager.SubscriptionChanges(),
 				Refresh:  schedulerSubscriptionRefresh(manager.RefreshSubscription, time.Now),
 			})
 			geoScheduler := geoip.Scheduler{

@@ -91,3 +91,42 @@ func TestSubscriptionSchedule_RechecksQueuedProfiles(t *testing.T) {
 		t.Fatalf("refresh calls=%d", calls)
 	}
 }
+
+func TestSubscriptionSchedule_EditWakesBeforeOldTimer(t *testing.T) {
+	now := time.Unix(100000, 0).UTC()
+	c := Defaults()
+	c.Profiles = []Profile{{ID: "a", Enabled: true, AutoRefresh: true, Interval: "12h", UpdatedAt: now}}
+	changes := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls, waits := 0, 0
+	s := NewScheduler(SchedulerOptions{Changes: changes, Now: func() time.Time { return now }, Snapshot: func() Catalog { return c.Clone() }, Jitter: func(string, time.Duration) time.Duration { return 0 },
+		Refresh: func(context.Context, string) error { calls++; cancel(); return nil },
+		After: func(time.Duration) <-chan time.Time {
+			waits++
+			if waits == 1 {
+				c.Profiles[0].Interval = "1s"
+				c.Profiles[0].ScheduleFrom = now
+				changes <- struct{}{}
+			} else {
+				now = now.Add(time.Second)
+			}
+			timer := make(chan time.Time, 1)
+			if waits > 1 {
+				timer <- now
+			}
+			return timer
+		}})
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		cancel()
+		<-done
+		t.Fatal("catalog edit did not wake scheduler before the old timer")
+	}
+	if calls != 1 || waits != 2 {
+		t.Fatalf("refreshes=%d waits=%d", calls, waits)
+	}
+}

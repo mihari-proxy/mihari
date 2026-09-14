@@ -24,6 +24,11 @@ func TestSubscriptionCacheState_LegacyCatalogWithActiveID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, p := range catalog.Profiles {
+		if p.IntervalRefreshRequired {
+			t.Fatal("legacy cache acquired forced expiry")
+		}
+	}
 	if catalog.ActiveID != active {
 		t.Fatal("active subscription changed")
 	}

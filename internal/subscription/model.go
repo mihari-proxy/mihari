@@ -58,8 +58,11 @@ type Catalog struct {
 }
 
 type PublicProfile struct {
-	CacheOutdated           bool      `json:"cache_outdated,omitempty"`
-	ScheduleFrom            time.Time `json:"schedule_from,omitempty"`
+	// CacheOutdated reports a cache fetched from a different current URL.
+	CacheOutdated bool `json:"cache_outdated,omitempty"`
+	// ScheduleFrom overrides cache age as the next refresh scheduling origin.
+	ScheduleFrom time.Time `json:"schedule_from,omitzero"`
+	// IntervalRefreshRequired forces expiry until a successful refresh.
 	IntervalRefreshRequired bool      `json:"interval_refresh_required,omitempty"`
 	ID                      string    `json:"id"`
 	Name                    string    `json:"name"`

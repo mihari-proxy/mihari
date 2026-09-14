@@ -10,7 +10,8 @@ import (
 	"testing"
 )
 
-func TestSubscriptionDetail_MinimumRootFrameAndTextKeys(t *testing.T) {
+// subscriptionDetailRoot opens the editable overlay at the minimum terminal size.
+func subscriptionDetailRoot() Model {
 	m := NewModel()
 	m.width, m.height = 72, 22
 	m.active = ui.PageSubscriptions
@@ -20,8 +21,13 @@ func TestSubscriptionDetail_MinimumRootFrameAndTextKeys(t *testing.T) {
 	p.SetSubscriptions(protocol.SubscriptionList{Subscriptions: []protocol.Subscription{{ID: "a", Name: "Main", Enabled: true}}})
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
+	return m
+}
+
+func TestSubscriptionDetail_TextKeysStayInForm(t *testing.T) {
+	m := subscriptionDetailRoot()
 	// Keys must remain page-owned immediately, even before an async InputModeMsg.
-	next, _ = m.Update(tea.KeyPressMsg{Code: '6', Text: "6"})
+	next, _ := m.Update(tea.KeyPressMsg{Code: '6', Text: "6"})
 	m = next.(Model)
 	next, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	m = next.(Model)
@@ -33,6 +39,10 @@ func TestSubscriptionDetail_MinimumRootFrameAndTextKeys(t *testing.T) {
 	if m.active != ui.PageSubscriptions {
 		t.Fatal("text digit changed pages")
 	}
+}
+
+func TestSubscriptionDetail_MinimumRootFrame(t *testing.T) {
+	m := subscriptionDetailRoot()
 	for i := 0; i < 6; i++ {
 		view := ansi.Strip(m.View().Content)
 		if len(strings.Split(view, "\n")) > 22 {
@@ -46,7 +56,7 @@ func TestSubscriptionDetail_MinimumRootFrameAndTextKeys(t *testing.T) {
 		if i == 5 && !strings.Contains(view, "Save") {
 			t.Fatal("Save is clipped at minimum root size")
 		}
-		next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+		next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 		m = next.(Model)
 	}
 }

@@ -158,6 +158,8 @@ Use（`u`）：仍要求 enabled 且 `generation>0`。Outdated 时加载**现有
 
 ### 5.3 调度
 
+提交成功后唤醒 scheduler 重新计算等待；失败和同一操作缓存命中不发送通知。
+
 `schedule-from` 非零：下次到期 = `schedule-from + EffectiveInterval + jitter`。
 否则：`updated_at` 为零则立刻到期，否则 `updated_at + interval + jitter`。
 

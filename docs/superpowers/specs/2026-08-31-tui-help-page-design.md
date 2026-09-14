@@ -1,5 +1,7 @@
 # TUI `?` 帮助页设计
 
+> 订阅页后续更新：本文件中的 Subscriptions `e edit`、`p proxy` 和只读 ModeDetail 设计已被 [2026-09-14 订阅详情内编辑设计](2026-09-14-subscription-detail-edit-design.md) 取代；当前使用 Enter 编辑详情、`p cycle mode`，以及 Save/冲突/结果未知的专用帮助模式。其他页面规则继续适用。
+
 日期：2026-08-31
 状态：待审核
 关联 issue：https://github.com/mihari-proxy/mihari/issues/162

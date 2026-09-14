@@ -3,8 +3,11 @@ package protocol
 import "time"
 
 type Subscription struct {
-	CacheOutdated           bool      `json:"cache_outdated,omitempty"`
-	ScheduleFrom            time.Time `json:"schedule_from,omitempty"`
+	// CacheOutdated reports a cache fetched from a different current URL.
+	CacheOutdated bool `json:"cache_outdated,omitempty"`
+	// ScheduleFrom overrides cache age as the next refresh scheduling origin.
+	ScheduleFrom time.Time `json:"schedule_from,omitzero"`
+	// IntervalRefreshRequired forces expiry until a successful refresh.
 	IntervalRefreshRequired bool      `json:"interval_refresh_required,omitempty"`
 	ID                      string    `json:"id"`
 	Name                    string    `json:"name"`
@@ -26,8 +29,10 @@ type Subscription struct {
 
 // SubscriptionURL is the authenticated, explicit current-source reveal response.
 type SubscriptionURL struct {
+	// Schema identifies the local control protocol version.
 	Schema string `json:"schema"`
-	URL    string `json:"url"`
+	// URL is the complete current subscription source.
+	URL string `json:"url"`
 }
 
 type SubscriptionList struct {

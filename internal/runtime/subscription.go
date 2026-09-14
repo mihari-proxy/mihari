@@ -384,6 +384,10 @@ func (m *Manager) mutateSubscription(ctx context.Context, prefix string, operati
 			m.markConfigDegraded(ctx, err)
 			return nil, err
 		}
+		select {
+		case m.subscriptionChanges <- struct{}{}:
+		default:
+		}
 		return findPublicProfile(m.subscriptions.Snapshot().Public(), id)
 	})
 	if err != nil {
@@ -653,3 +657,7 @@ func (m *Manager) commitTrustedRuntimeConfig(ctx context.Context, candidate conf
 	}
 	return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo rejected generated configuration; previous configuration restored"}, e)
 }
+
+// SubscriptionChanges supplies coalesced committed-edit notifications to the single subscription scheduler.
+// The Manager owns this channel for its lifetime; it is never closed.
+func (m *Manager) SubscriptionChanges() <-chan struct{} { return m.subscriptionChanges }

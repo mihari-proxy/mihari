@@ -8,6 +8,8 @@ import (
 )
 
 type SchedulerOptions struct {
+	// Changes wakes the scheduler after a committed catalog edit. The owner must not close it while Run is active.
+	Changes  <-chan struct{}
 	Snapshot func() Catalog
 	Refresh  func(context.Context, string) error
 	Now      func() time.Time
@@ -126,6 +128,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
+			case <-s.options.Changes:
 			case <-s.options.After(wait):
 			}
 			continue

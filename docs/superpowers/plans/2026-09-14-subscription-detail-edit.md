@@ -367,7 +367,7 @@ finally {
 | T06 | 完成 | `go test ./internal/tui/pages/subscriptions -run TestDetailStatus_`：旧 Stale/Retry pending 不满足 Expired/Outdated/Next | 状态优先级、居中/显示宽度与 TUI 全包通过 | InUse/Enabled/Status/Mode；Status 最小 12 列 |
 | T07 | 完成 | `go test ./internal/tui/pages/subscriptions -run TestDetailForm_`：未改字段仍提交、缺少 Mode/Save；`TestDetailReveal_LongURL`：2048 字符截断 | 导航、touched、空值、迟到/跨连接/跨弹层、长 URL 回归通过 | form.go、dialog.go；无 UI 人为截断；仅 touched 且值变化才提交 URL |
 | T08 | 完成 | `go test ./internal/tui/pages/subscriptions -run TestDetailSave_`：Enter 非编辑、Save 提前关闭；旧核对 revision 可误报成功；空 PATCH 被发送 | Saving/冲突/Unknown/再确认/新 ID/默认 Cancel/部分成功/旧核对回归通过 | dialog.go；请求有 timeout/cancel；异步回调归属订阅页，原始错误仅用于诊断 |
-| T09 | 完成 | `go test ./internal/tui -run TestSubscriptionDetail_`：输入模式消息前 q 退出；`TestDetailLayout_`：Saving footer 宣称 cancel；`TestSubscriptionHelp_`：表单仍显示列表动作 | 72×22 根层、滚动/resize、长 URL、焦点、帮助/底栏与 TUI 全包通过 | 正文滚动，PgUp/PgDn 读状态；共享 keymap，移除只读 detail 和 e |
+| T09 | 完成 | `go test ./internal/tui -run TestSubscriptionDetail_`：输入模式消息前 q 退出；`go test ./internal/tui/pages/subscriptions -run TestDetailLayout_`：Saving footer 宣称 cancel；`go test ./internal/tui/ui -run TestSubscriptionHelp_`：表单仍显示列表动作 | 72×22 根层、滚动/resize、长 URL、焦点、帮助/底栏与 TUI 全包通过 | 正文滚动，PgUp/PgDn 读状态；共享 keymap，移除只读 detail 和 e |
 | T10 | 完成 | 跨包复用前述 Red 行为；新增集成验证与文档静态检查 | 全仓、race、vet、六目标编译、Unix 静态安全脚本通过（4 项条件跳过） | 真实 IPC + fake controller/mihomo；响应丢失不重放；中英文 README/commands/architecture 同步 |
 
 
@@ -409,3 +409,9 @@ finally {
 移除 e 与 Enter 打开新编辑详情必须在同一可用交付中完成，不能把“只读详情 + 已删除 edit”作为中间可合并结果。根据后续提交 PR 指令，本次使用一个完整功能 PR，保证协议、持久化和 TUI 同步交付。
 
 交付时报告完成任务、实际通过的检查、未验证项与原因，并检查精确 diff。已有设计文件仍需与执行文档一同保留在本分支工作区；不覆盖主工作区旧副本或其 `.gitignore` 修改。后续功能 PR 指向 dev，合并仍需用户确认。
+
+## 7. PR review 修订
+
+PR #241 首轮三平台 CI 全部通过。审查修订增加：成功提交后的 scheduler 唤醒、发送前失败的明确结果分类、零 ScheduleFrom 的 JSON 省略，以及滚动越界回归。浏览器 reveal 隔离测试改在活动面板下断言 SPA 内容，统一删除提示并修正测试命令记录；补充测试资源清理和导出字段注释。
+
+本轮 Red 已复现发送前失败、零时间 JSON、PageUp 越界、旧定时器未唤醒、成功提交未通知及失败后 URL 占位不恢复。修复后全仓 `go test ./...`、`go vet ./...`、golangci-lint v2.12.2（0 issues）、control/client/server、TUI、integration、runtime、app 的包级 race，以及 subscription 调度/缓存状态 race 均通过。补充了重复冲突默认取消、URL A→B→A 和 legacy 无虚假过期断言。

@@ -70,6 +70,18 @@ func (m *Model) openForm(f *formModel, id string) tea.Cmd {
 	m.dialogScroll = 0
 	m.confirmYes = false
 	m.ensureFormFocus()
+	return m.readFormURL()
+}
+
+// readFormURL retries a guarded reveal without resetting the current draft or dialog identity.
+func (m *Model) readFormURL() tea.Cmd {
+	f, id := m.form, m.formID
+	if f.urlTouched || f.urlBaseline != "" {
+		return nil
+	}
+	if m.revealCancel != nil {
+		m.revealCancel()
+	}
 	reader, ok := m.client.(interface {
 		SubscriptionURL(context.Context, string) (protocol.SubscriptionURL, error)
 	})
@@ -129,7 +141,12 @@ func (m *Model) finishSave(result mutationResultMsg) tea.Cmd {
 		return m.loadSpinCmdIfNeeded()
 	}
 	// Without a confirmed daemon rejection, transport loss cannot establish failure.
-	if !errors.As(result.err, &api) || api.Code == protocol.CodeDaemonUnavailable || errors.Is(result.err, context.DeadlineExceeded) || outcomeUnknown(result.err) {
+	unknown := !errors.As(result.err, &api) || api.Code == protocol.CodeDaemonUnavailable || errors.Is(result.err, context.DeadlineExceeded)
+	var outcome interface{ OutcomeUnknown() bool }
+	if errors.As(result.err, &outcome) {
+		unknown = outcome.OutcomeUnknown()
+	}
+	if unknown {
 		m.saveState = saveUnknown
 		m.dialogNote = "Save outcome unknown."
 		if m.disconnected {
@@ -142,12 +159,7 @@ func (m *Model) finishSave(result mutationResultMsg) tea.Cmd {
 	m.dialogNote = ""
 	m.form.errorText = subscriptionErrorMessage(result.err)
 	m.ensureFormFocus()
-	return m.loadSpinCmdIfNeeded()
-}
-
-func outcomeUnknown(err error) bool {
-	var uncertain interface{ OutcomeUnknown() bool }
-	return errors.As(err, &uncertain) && uncertain.OutcomeUnknown()
+	return tea.Batch(m.loadSpinCmdIfNeeded(), m.readFormURL())
 }
 
 func (m *Model) updateSaveKeys(message tea.Msg) tea.Cmd {
@@ -372,7 +384,7 @@ func (m *Model) updateDialogMessage(message tea.Msg) (bool, tea.Cmd) {
 		}
 		m.SetSubscriptions(msg.list)
 		if m.formID != "" && m.index(m.formID) < 0 {
-			m.lastError = "This subscription was removed."
+			m.lastError = "This subscription no longer exists."
 			return true, m.closeForm()
 		}
 		if msg.purpose != saveUnknown {
@@ -494,7 +506,8 @@ func (m *Model) formView(title string) string {
 		lines = strings.Split(lipgloss.NewStyle().Width(textWidth).Render(body), "\n")
 		m.dialogScroll = 0
 	}
-	start := min(m.dialogScroll, max(0, len(lines)-m.formBodyHeight()))
+	m.dialogScroll = min(m.dialogScroll, max(0, len(lines)-m.formBodyHeight()))
+	start := m.dialogScroll
 	end := min(len(lines), start+m.formBodyHeight())
 	visible := strings.Join(lines[start:end], "\n")
 	visible = lipgloss.NewStyle().Height(m.formBodyHeight()).Render(visible)

@@ -69,8 +69,12 @@ type trackedSubscriptionRuntime struct {
 
 func (f *trackedSubscriptionRuntime) SetSubscription(ctx context.Context, op runtimeapi.Operation, id string, input runtimeapi.SetSubscriptionInput) (subscription.PublicProfile, error) {
 	close(f.started)
-	<-f.release
-	return subscription.PublicProfile{ID: id}, nil
+	select {
+	case <-f.release:
+		return subscription.PublicProfile{ID: id}, nil
+	case <-ctx.Done():
+		return subscription.PublicProfile{}, ctx.Err()
+	}
 }
 
 func TestSubscriptionSaveTracking_PatchSettlement(t *testing.T) {
