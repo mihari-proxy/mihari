@@ -148,7 +148,7 @@ mihari sysproxy enable
 
 See [docs/commands.md](docs/commands.md) for the full command reference, and [docs/architecture.md](docs/architecture.md) for the architecture and security model.
 
-In TUI **Proxies**, focus **Mode** and press Enter to choose Rule, Global, or Direct; use ↑/↓, Enter to apply, and Esc to cancel. **GLOBAL** opens the core's existing candidate group. Mihari saves the mode globally and the GLOBAL exit per subscription, including choices made by supported Web panels. Rule is the default. Mode and exit changes preserve existing connections. If a saved exit disappears, Mihari saves DIRECT when available, otherwise Rule; a stopped core shows saved changes as pending.
+In TUI **Proxies**, the **Routing** card contains **Mode** and **GLOBAL**. Focus **Mode** and press Enter to choose Rule, Global, or Direct; use ↑/↓, Enter to apply, and Esc to cancel. **GLOBAL** expands the core's existing candidate group and scrolls to show the whole section when it fits; larger groups start at the top of the list viewport and remain navigable with the arrow keys. Mihari saves the mode globally and the GLOBAL exit per subscription, including choices made by supported Web panels. Rule is the default. Mode and exit changes preserve existing connections. If a saved exit disappears, Mihari saves DIRECT when available, otherwise Rule; a stopped core shows saved changes as pending.
 
 ## Platform targets
 

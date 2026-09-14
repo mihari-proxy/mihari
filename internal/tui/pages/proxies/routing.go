@@ -122,24 +122,32 @@ func (m *Model) routingHeader() []string {
 	if !m.globalCandidatesCurrent() {
 		notes[1] = "Waiting for candidates"
 	}
+	inner := ui.FullSectionInner(m.width)
+	textWidth := ui.SectionTextWidth(inner)
 	lines := make([]string, 0, 2)
 	for i, label := range labels {
 		prefix := "  "
-		labelStyle := m.theme.Muted
-		if m.routing.focus == i && m.contentFocused {
-			prefix = "› "
-			labelStyle = m.theme.RowSelected
+		focused := m.routing.focus == i && m.contentFocused
+		if focused {
+			prefix = ui.FocusMarker
 		}
-		value := ui.TruncateVisible(values[i], max(8, m.width-36))
-		row := prefix + labelStyle.Width(9).Render(label) + m.theme.Title.Render(value)
-		padding := max(1, m.width-lipgloss.Width(row)-lipgloss.Width(notes[i])-2)
-		row += strings.Repeat(" ", padding) + m.theme.Muted.Render(notes[i])
-		lines = append(lines, ui.TruncateVisible(row, max(1, m.width)))
+		row := prefix + m.theme.Muted.Width(9).Render(label)
+		// Reserve the hint before truncating long node names. At very narrow
+		// widths, shorten the hint too so the value still has room to render.
+		note := ui.TruncateVisible(notes[i], max(0, textWidth-lipgloss.Width(row)-9))
+		value := ui.TruncateVisible(values[i], max(1, textWidth-lipgloss.Width(row)-lipgloss.Width(note)-1))
+		row += m.theme.Title.Render(value)
+		padding := max(1, textWidth-lipgloss.Width(row)-lipgloss.Width(note))
+		row += strings.Repeat(" ", padding) + m.theme.Muted.Render(note)
+		if focused {
+			row = ui.ApplyFocusStyle(row, m.theme.RowFocus)
+		}
+		lines = append(lines, ui.TruncateVisible(row, textWidth))
 	}
 	if status.Message != "" {
-		lines = append(lines, m.theme.Muted.Render(ui.TruncateVisible("  "+status.Message, max(1, m.width))))
+		lines = append(lines, m.theme.Muted.Render(ui.TruncateVisible("  "+status.Message, textWidth)))
 	}
-	return lines
+	return strings.Split(ui.RenderBorderedSection(m.theme, "Routing", strings.Join(lines, "\n"), inner), "\n")
 }
 
 func routingLabel(mode string) string {
@@ -208,7 +216,10 @@ func (m *Model) routingKey(key string) (bool, tea.Cmd) {
 				m.routing.focus = -1
 				m.expanded["GLOBAL"] = true
 				m.focus = FocusID{Group: "GLOBAL"}
-				m.ensureFocusVisible()
+				// Reveal all candidates when they fit; an oversized section
+				// starts at the viewport top instead of leaving only its header visible.
+				lines, start, end := m.buildContent(true)
+				m.scrollY = ui.EnsureLineVisible(m.scrollY, max(1, m.height-len(m.routingHeader())), len(lines), start, end)
 			}
 		}
 	}

@@ -273,7 +273,7 @@ func (m *Model) View() string {
 	header := m.routingHeader()
 	if len(m.groups) == 0 {
 		if m.loadError != "" && !m.lastSuccess.IsZero() {
-			lines, _, _ := m.buildContent()
+			lines, _, _ := m.buildContent(false)
 			return strings.Join(append(header, lines...), "\n")
 		}
 		inner := ui.FullSectionInner(m.width)
@@ -283,7 +283,7 @@ func (m *Model) View() string {
 		}
 		return strings.Join(append(header, ui.RenderBorderedSection(m.theme, ui.ProxiesSectionTitle, ansi.Wrap(body, ui.SectionTextWidth(inner), ""), inner)), "\n")
 	}
-	lines, _, _ := m.buildContent()
+	lines, _, _ := m.buildContent(false)
 	height := m.height
 	if height > 0 {
 		height = max(1, height-len(header))
@@ -294,7 +294,8 @@ func (m *Model) View() string {
 // buildContent renders the full page as terminal lines and reports the inclusive
 // line range of the keyboard focus target (end exclusive). Each proxy group is
 // a bordered section; expanded node cards sit inside the parent section body.
-func (m *Model) buildContent() (lines []string, focusStart, focusEnd int) {
+// focusWholeGroup includes all candidates and the bottom border for explicit jumps.
+func (m *Model) buildContent(focusWholeGroup bool) (lines []string, focusStart, focusEnd int) {
 	focusStart, focusEnd = -1, -1
 	if m.loadError != "" {
 		body := "Refresh failed\n" + m.loadError + "\nShowing last available data. Retrying automatically."
@@ -389,6 +390,9 @@ func (m *Model) buildContent() (lines []string, focusStart, focusEnd int) {
 		if groupFocused {
 			focusStart = sectionBase
 			focusEnd = bodyOffset + groupBodyLine + 1
+			if focusWholeGroup {
+				focusEnd = len(lines)
+			}
 		}
 		if nodeFocusBodyStart >= 0 {
 			focusStart = bodyOffset + nodeFocusBodyStart
@@ -403,7 +407,7 @@ func (m *Model) ensureFocusVisible() {
 	if m.height <= 0 || len(m.groups) == 0 {
 		return
 	}
-	lines, focusStart, focusEnd := m.buildContent()
+	lines, focusStart, focusEnd := m.buildContent(false)
 	m.scrollY = ui.EnsureLineVisible(m.scrollY, max(1, m.height-len(m.routingHeader())), len(lines), focusStart, focusEnd)
 }
 
