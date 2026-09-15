@@ -15,6 +15,7 @@ func TestSubscriptionHelp_FormDoesNotAdvertiseListActions(t *testing.T) {
 	}
 }
 
+// TestSubscriptionHelp_SaveAndCycleBindings checks mode-specific help and footer consistency.
 func TestSubscriptionHelp_SaveAndCycleBindings(t *testing.T) {
 	for _, tc := range []struct{ mode, want, banned string }{
 		{ModeSubscriptionInput, "next field", "refresh all"},

@@ -188,7 +188,7 @@ git diff --check
 
 上述命令在实施中按先小后大执行，重复运行只用于新的变更或失败。gofmt 只写入本任务修改过的 Go 文件；若出现基线 CRLF 或无关格式问题，记录而不顺手修改。Windows race 若缺少所需本机工具链，报告原因并交由相应 CI 验证，不自动安装或声称通过。
 
-本次不改变平台代码或支持范围；完成当前平台测试后做 CGO=0 三平台 smoke build，产物写临时目录并恢复进程环境变量，避免影响后续测试：
+本次不改变平台代码或支持范围；完成当前平台测试后做 CGO=0 三平台、每平台 amd64/arm64 的六目标构建，产物写临时目录并恢复进程环境变量，避免影响后续测试：
 
 ```powershell
 $priorCGO = $env:CGO_ENABLED
@@ -200,7 +200,10 @@ try {
     $env:CGO_ENABLED = '0'
     foreach ($target in @(
         @{ OS = 'windows'; Arch = 'amd64'; File = 'mihari-windows-amd64.exe' },
+        @{ OS = 'windows'; Arch = 'arm64'; File = 'mihari-windows-arm64.exe' },
         @{ OS = 'linux'; Arch = 'amd64'; File = 'mihari-linux-amd64' },
+        @{ OS = 'linux'; Arch = 'arm64'; File = 'mihari-linux-arm64' },
+        @{ OS = 'darwin'; Arch = 'amd64'; File = 'mihari-darwin-amd64' },
         @{ OS = 'darwin'; Arch = 'arm64'; File = 'mihari-darwin-arm64' }
     )) {
         $env:GOOS = $target.OS

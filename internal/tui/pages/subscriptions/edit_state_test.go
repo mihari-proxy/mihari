@@ -42,6 +42,7 @@ func TestDetailStatus_PriorityAndSchedule(t *testing.T) {
 	}
 }
 
+// TestDetailForm_ChangedFieldsAndSaveFocus checks PATCH field selection and Save navigation.
 func TestDetailForm_ChangedFieldsAndSaveFocus(t *testing.T) {
 	f := newEditForm(protocol.Subscription{Name: "Main", Interval: "6h", AutoRefresh: true, ProxyMode: "auto"})
 	req := f.updateRequest("op", 7)

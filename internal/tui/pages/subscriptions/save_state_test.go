@@ -166,6 +166,7 @@ func TestDetailLayout_FocusedFieldVisible(t *testing.T) {
 	}
 }
 
+// TestDetailLayout_StatusCanScrollIntoView keeps status reachable after field navigation.
 func TestDetailLayout_StatusCanScrollIntoView(t *testing.T) {
 	m := New(nil, nil, nil)
 	m.SetSize(68, 19)

@@ -591,6 +591,7 @@ func TestModel_RevisionConflictOnRefreshAllReloads(t *testing.T) {
 	}
 }
 
+// TestModel_FooterHintsAreContextual distinguishes form shortcuts from list shortcuts.
 func TestModel_FooterHintsAreContextual(t *testing.T) {
 	model := New(nil, nil, nil)
 	model.SetSubscriptions(protocol.SubscriptionList{Subscriptions: []protocol.Subscription{{ID: "a", Name: "A"}}})
