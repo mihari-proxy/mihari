@@ -10,6 +10,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+// TestProxies_LocateThroughShellAndHelp verifies key forwarding and focus retention across the help dialog.
 func TestProxies_LocateThroughShellAndHelp(t *testing.T) {
 	model := goldenModel(t, ui.PageProxies, 100, 28)
 	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{

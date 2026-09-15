@@ -13,6 +13,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+// locateHeader finds the rendered control row without depending on preceding status rows.
 func locateHeader(t *testing.T, m *Model) string {
 	t.Helper()
 	lines, _, _ := m.buildContent(false)
@@ -25,6 +26,7 @@ func locateHeader(t *testing.T, m *Model) string {
 	return ""
 }
 
+// TestLocateHeader_PreservesButtonWithLongName checks raw width budgets and full target identity.
 func TestLocateHeader_PreservesButtonWithLongName(t *testing.T) {
 	for _, width := range []int{30, 58, 80, 160} {
 		for _, stale := range []bool{false, true} {
@@ -38,9 +40,14 @@ func TestLocateHeader_PreservesButtonWithLongName(t *testing.T) {
 				if stale {
 					m.loadError = "Refresh failed"
 				}
-				header := locateHeader(t, m)
-				if lipgloss.Width(header) != ui.FullSectionInner(width)+2 || !strings.Contains(header, "…") {
-					t.Fatalf("header width/truncation invalid: %q", header)
+				// Check before the section painter can clip or pad the header.
+				textWidth := ui.SectionTextWidth(ui.FullSectionInner(width))
+				raw := m.renderGroupHeader(m.groups[0], textWidth, true)
+				if lipgloss.Width(raw) > textWidth || !strings.Contains(ansi.Strip(raw), "[Locate]") {
+					t.Fatalf("raw header exceeds its budget or lost Locate: %q", raw)
+				}
+				if header := locateHeader(t, m); !strings.Contains(header, "…") {
+					t.Fatalf("long name was not truncated: %q", header)
 				}
 				locateCurrent(t, m)
 				if m.focus.Node != name {
@@ -51,6 +58,7 @@ func TestLocateHeader_PreservesButtonWithLongName(t *testing.T) {
 	}
 }
 
+// TestLocateHeader_ButtonFollowsShortName rejects alignment that detaches Locate from its label.
 func TestLocateHeader_ButtonFollowsShortName(t *testing.T) {
 	m, _ := newLocateModel()
 	if !strings.Contains(ansi.Strip(locateHeader(t, m)), "Now: two  [Locate]") {
@@ -58,6 +66,7 @@ func TestLocateHeader_ButtonFollowsShortName(t *testing.T) {
 	}
 }
 
+// TestLocateHeader_FocusAndDisabledStyles distinguishes header, button, inactive, and disabled states.
 func TestLocateHeader_FocusAndDisabledStyles(t *testing.T) {
 	m, _ := newLocateModel()
 	header := locateHeader(t, m)
@@ -89,6 +98,7 @@ func TestLocateHeader_FocusAndDisabledStyles(t *testing.T) {
 	}
 }
 
+// TestLocate_ScrollRevealsCurrentCard verifies full card visibility across grid widths and list positions.
 func TestLocate_ScrollRevealsCurrentCard(t *testing.T) {
 	for _, width := range []int{30, 100} {
 		for _, target := range []int{18, 29} {
@@ -120,6 +130,7 @@ func TestLocate_ScrollRevealsCurrentCard(t *testing.T) {
 	}
 }
 
+// TestLocateHeader_OffscreenButtonStaysVisible accounts for stale notices and fixed Routing chrome.
 func TestLocateHeader_OffscreenButtonStaysVisible(t *testing.T) {
 	m := newRoutingJumpModel(30, 2)
 	jumpToGLOBAL(t, m)
@@ -132,6 +143,7 @@ func TestLocateHeader_OffscreenButtonStaysVisible(t *testing.T) {
 	}
 }
 
+// TestLocate_SmallViewportPinsCardStart preserves the target through a short viewport and resize.
 func TestLocate_SmallViewportPinsCardStart(t *testing.T) {
 	m, _ := newLocateModel()
 	m.SetSize(30, 2)

@@ -21,6 +21,7 @@ func (m *Model) move(key string) {
 	m.ensureFocusVisible()
 }
 
+// moveGroup treats Locate as part of its header rather than an extra vertical item.
 func (m *Model) moveGroup(key string) {
 	items := m.visibleItems()
 	index := indexOfFocus(items, FocusID{Group: m.focus.Group})

@@ -14,6 +14,7 @@ func locateTarget(group protocol.ProxyGroup) string {
 	return group.Now
 }
 
+// locateCurrent resolves the selected card at activation time without submitting a selection.
 func (m *Model) locateCurrent() {
 	index := m.groupIndex(m.focus.Group)
 	if index < 0 {
@@ -28,6 +29,7 @@ func (m *Model) locateCurrent() {
 	m.ensureFocusVisible()
 }
 
+// renderGroupHeader reserves space for Locate before styling or truncating selection text.
 func (m *Model) renderGroupHeader(group protocol.ProxyGroup, width int, focused bool) string {
 	marker := "▸"
 	if m.expanded[group.Name] {

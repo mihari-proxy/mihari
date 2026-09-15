@@ -10,6 +10,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+// TestNavigation_GroupAndNodeArrowRules checks transitions between headers, controls, and the node grid.
 func TestNavigation_GroupAndNodeArrowRules(t *testing.T) {
 	model := New(nil, nil)
 	// Width must leave section text width >= 2*proxyBarMaxWidth for a 2-column node grid.

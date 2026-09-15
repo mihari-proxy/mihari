@@ -126,6 +126,7 @@ func (m *Model) SetSize(width, height int) {
 	m.ensureFocusVisible()
 }
 
+// FocusFirst resets stale focus before selecting the page's first available control.
 func (m *Model) FocusFirst() {
 	m.focus = FocusID{}
 	if m.routing.available {
@@ -174,6 +175,7 @@ func (m *Model) SetGroups(groups protocol.ProxyGroups) {
 	m.ensureFocusVisible()
 }
 
+// Update applies page results and keyboard events, including local-only Locate navigation.
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	switch typed := message.(type) {
 	case routingResultMsg:

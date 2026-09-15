@@ -1,7 +1,7 @@
 # Issue #242：Proxies Locate 执行方案
 
 日期：2026-09-15。
-状态：实现与本地验证进行中；用户已授权提交、推送、创建 PR，并每 10 分钟检查 CI 与 bot review，处理反馈直到通过。
+状态：实现与本地验证已完成，PR #244 正在处理远端验收反馈；用户已授权提交、推送、创建 PR，并每 10 分钟检查 CI 与 bot review，处理反馈直到通过。
 
 ## 目标与工作位置
 
@@ -172,6 +172,13 @@ git diff --check
 - 已观察到导航/定位、按钮渲染/焦点范围、空快照焦点清理、帮助/底栏测试因缺少行为正确失败，随后最小实现使对应测试通过。
 - 已通过：go test ./...（含 integration）、最终 Proxies 包 race、go vet ./...、golangci-lint（全仓与最终 TUI）、六目标 CGO_ENABLED=0 编译、gofmt 检查。
 - Unix 布局安全检查：74 passed、4 skipped；本机未执行真实账户/挂载测试。
-- 全仓 go test -race ./... 已启动；首次提交时订阅包仍在运行，最终结果随 PR 验证记录更新。六目标编译不代表目标 OS 运行测试，平台运行由 CI 验证。
+- 全仓 go test -race ./... 已通过（订阅包 414.933s）；后续测试质量改动另行运行 TUI race。六目标编译不代表目标 OS 运行测试，平台运行由 CI 验证。
 - 普通源文件 diff --check 通过；full/proxies.golden 保留现有渲染测试要求的行尾填充，按该格式审查其差异。
 - 用户已明确授权提交、推送、创建 PR，以及每 10 分钟检查 CI/bot review 并修复反馈。PR 最终结果是远端验收依据；合并等待用户确认。
+
+### 第一轮 review 与 CI（10:52）
+
+- CodeRabbit：将保留焦点、删除节点后回退拆为独立测试，各自建立 fixture；已处理。
+- Pullfrog：将宽度预算断言移到原始 header，避免 section 的裁剪/填充掩盖错误；保留实际按钮可见性与完整名称定位断言。
+- 补充本次新增/修改函数的行为说明，处理 CodeRabbit docstring coverage 提示。
+- 首轮 macOS unit 的失败位于既有 logging 子进程锁测试；coverage 失败位于既有 WebSocket 关闭诊断测试。定位功能相关测试通过。随 review 修订触发新 CI；若重复失败，进一步定位后再决定必要修复。
