@@ -4,9 +4,10 @@ import "github.com/mihari-proxy/mihari/internal/control/protocol"
 
 // FocusID identifies a group header, its Locate button, or a candidate card.
 type FocusID struct {
-	Group  string
-	Node   string
-	Locate bool // Only group headers have a Locate button; Node is empty when true.
+	Group string
+	Node  string
+	// Locate indicates focus on the group header's Locate button; Node is empty when true.
+	Locate bool
 }
 
 func (m *Model) move(key string) {

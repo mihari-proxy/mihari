@@ -129,8 +129,8 @@ go test ./internal/tui -run 'TestGolden(ProxiesFull|RoutingMode)$' -count=1
 
 ## Task 6：格式、回归与构建验证
 
-- [ ] 对本次改动的 Go 文件执行 gofmt；检查 diff 中无无关格式变化。
-- [ ] 以下命令按顺序执行，失败时定位原因，修改后只重复必要范围：
+- [x] 对本次改动的 Go 文件执行 gofmt；检查 diff 中无无关格式变化。
+- [x] 以下命令按顺序执行，失败时定位原因，修改后只重复必要范围：
 
 ```powershell
 go test ./internal/tui/... -count=1
@@ -142,8 +142,8 @@ gofmt -l internal/tui
 git diff --check
 ```
 
-- [ ] Race 使用本机可用的 race 工具链，与 CGO-free 发布构建分开。若缺少 C 工具链，记录未验证原因并由对应 CI 补齐，不将 CGO=0 下的 race 失败当成功。
-- [ ] 用临时进程环境执行 `CGO_ENABLED=0` 的六目标编译。每个构建独立检查退出码，结束后恢复原 GOOS/GOARCH/CGO_ENABLED；产物放入既有忽略的 bin 目录或外部临时目录，不提交。
+- [x] Race 使用本机可用的 race 工具链，与 CGO-free 发布构建分开。若缺少 C 工具链，记录未验证原因并由对应 CI 补齐，不将 CGO=0 下的 race 失败当成功。
+- [x] 用临时进程环境执行 `CGO_ENABLED=0` 的六目标编译。每个构建独立检查退出码，结束后恢复原 GOOS/GOARCH/CGO_ENABLED；产物放入既有忽略的 bin 目录或外部临时目录，不提交。
 
 | GOOS | GOARCH | 建议产物 |
 | --- | --- | --- |
@@ -156,7 +156,7 @@ git diff --check
 
 每个矩阵项设置上述环境后，使用 `go build -trimpath -o <建议产物> ./cmd/mihari`；编译成功不代表在目标 OS 上运行测试成功。平台运行验证由现有 CI 补齐。
 
-- [ ] 不启动真实 mihomo、不连接真实订阅、不安装或重启系统服务。UI 行为用本地 fixture 和渲染结果验证。
+- [x] 不启动真实 mihomo、不连接真实订阅、不安装或重启系统服务。UI 行为用本地 fixture 和渲染结果验证。
 
 ## 完成标准与交付
 
@@ -182,3 +182,10 @@ git diff --check
 - Pullfrog：将宽度预算断言移到原始 header，避免 section 的裁剪/填充掩盖错误；保留实际按钮可见性与完整名称定位断言。
 - 补充本次新增/修改函数的行为说明，处理 CodeRabbit docstring coverage 提示。
 - 首轮 macOS unit 的失败位于既有 logging 子进程锁测试；coverage 失败位于既有 WebSocket 关闭诊断测试。定位功能相关测试通过。随 review 修订触发新 CI；若重复失败，进一步定位后再决定必要修复。
+
+### 第二轮 review 与 CI（11:02）
+
+- 首轮失败的 macOS unit、coverage 已通过；当前提交的三平台 unit、六目标构建、vet/format、lint、Unix 原生安全检查均通过，三平台 race 仍在运行。
+- Pullfrog 复审无新问题；CodeRabbit 五项检查全部通过（docstring coverage 96.43%），另提示导出字段注释和 Task 6 状态一致性。
+- 将 Locate 字段说明改为以字段名开头的前置注释，并勾选已完成的本地验证。此轮仅改变注释及文档，不改变行为。
+- WebSocket 首轮失败用例在本机连续运行 100 次通过；日志和 WebSocket 相关代码保持原状，首次 CI 的两个失败保留在上述记录中。
