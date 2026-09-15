@@ -154,6 +154,8 @@ Proxies 每个组（含 GLOBAL）的当前选择右侧都有 **Locate**。在组
 
 TUI **Subs** 页按 Enter 打开可编辑详情，`a` 添加订阅。Tab/Shift+Tab 或 ↑/↓ 切换字段，←/→/Space 在 **Auto refresh** 和 **Mode** 行循环选择；文本框 Enter 进入下一项，仅 **Save** 焦点上的 Enter 提交。PgUp/PgDn 滚动正文，长 URL 单行横向滚动。所有 TUI 内置文案均为英文。列表显示 **InUse**、**Enabled**、**Status**、**Mode**，`p` 循环切换拉取模式。
 
+添加和编辑共用居中紧凑表单，详情按运行状态和设置分组；没有错误时隐藏错误行，时间显示为本地时间并精确到分钟。窗口较矮时正文滚动，**Save** 始终可见。循环字段使用反色焦点，文本框使用浅色输入底和白色光标。快捷键仅在终端底部显示一份并随焦点变化。**Interval** 留空时以占位文字显示当前全局间隔，保存空值仍表示继承。
+
 修改 URL 会保留旧缓存和 InUse，不立即下载或 reload；**Outdated** 表示缓存来自旧 URL，仍可离线 Use。修改单条 interval 会重置下次刷新时间，并持久标记 **Expired**，直到刷新成功（包括有效 304）；Disabled、Failed、Missing、Outdated 等更高优先级状态仍优先显示。关闭 Auto refresh 时 Next 显示 **Manual**。
 
 保存等待结果后关闭。revision 冲突会询问是否仅覆盖本次实际修改的字段。结果未知时先只读查询操作和当前状态，不自动重放保存；**Submit again** 需要再次确认，添加场景可能产生重复条目。关闭界面不代表撤销保存。已经添加但首次下载失败时，返回列表选中该订阅，按 `r` 重试下载。

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
@@ -327,7 +326,10 @@ func (m *Model) formHelpMode() string {
 	if m.form.isCycle() {
 		return ui.ModeSubscriptionCycle
 	}
-	return ui.ModeForm
+	if m.form.index == len(m.form.inputs) {
+		return ui.ModeSubscriptionSubmit
+	}
+	return ui.ModeSubscriptionInput
 }
 
 func (m *Model) formFooter() string { return ui.RenderFooter(m.ID(), m.formHelpMode(), ui.FooterOpt{}) }
@@ -343,6 +345,9 @@ func (m *Model) updateDialogMessage(message tea.Msg) (bool, tea.Cmd) {
 				m.form.reveal(msg.result.URL)
 			} else {
 				m.form.inputs[1].Placeholder = "Unable to read URL. Paste to replace."
+			}
+			if !m.dialogManualScroll {
+				m.ensureFormFocus()
 			}
 		}
 		return true, nil
@@ -411,45 +416,26 @@ func (m *Model) formStatus() string {
 	}
 	phase := resolveLoadPhase(p, p.ID == m.activeID, m.pending[p.ID], m.now(), m.globalInterval)
 	status, _ := loadPhaseLabel(phase, m.now())
-	inUse := "no"
+	inUse := m.theme.Muted.Render("Not in use")
 	if p.ID == m.activeID {
-		inUse = "yes"
+		inUse = ui.StatusDot(m.theme, ui.TonePositive, "In use")
 	}
 	traffic := ui.FormatSubscriptionTraffic(p.Upload, p.Download, p.Total)
 	if traffic == "" {
 		traffic = ui.MissingValue
 	}
-	return fmt.Sprintf("In use: %s\nStatus: %s\nEnabled: %s\nTraffic: %s\nCache: %t\nLast update: %s\nNext update: %s\nLast error: %s\n", inUse, status, enabledLabel(p.Enabled), traffic, p.Cached, formatTimestamp(p.UpdatedAt), nextRefreshLabel(p, m.now(), m.globalInterval), valueOr(p.LastError, ui.MissingValue))
-}
-
-func (m *Model) formBodyHeight() int {
-	if m.height == 0 {
-		return 24
+	cache := "Missing"
+	if p.Cached {
+		cache = "Available"
 	}
-	return max(2, m.height-8)
-}
-func (m *Model) ensureFormFocus() {
-	line := m.form.index * 2
-	if m.form.kind == formEdit {
-		line += len(strings.Split(strings.TrimSuffix(m.wrappedFormStatus(), "\n"), "\n"))
+	lines := []string{inUse + " · " + ui.ToneStyle(m.theme, phaseTone(phase)).Render(status) + " · " + enabledLabel(p.Enabled)}
+	for _, field := range [][2]string{{"Traffic", traffic}, {"Cache", cache}, {"Last update", formatTimestamp(p.UpdatedAt)}, {"Next update", nextRefreshLabel(p, m.now(), m.globalInterval)}} {
+		lines = append(lines, m.theme.Muted.Render(fmt.Sprintf("%-14s", field[0]))+field[1])
 	}
-	end := line
-	if m.form.index < len(m.form.inputs) {
-		end++
+	if p.LastError != "" {
+		lines = append(lines, m.theme.Danger.Render("Last error    "+p.LastError))
 	}
-	if line < m.dialogScroll {
-		m.dialogScroll = line
-	}
-	if end >= m.dialogScroll+m.formBodyHeight() {
-		m.dialogScroll = end - m.formBodyHeight() + 1
-	}
-}
-
-func (m *Model) wrappedFormStatus() string {
-	if m.form.kind != formEdit {
-		return ""
-	}
-	return lipgloss.NewStyle().Width(min(72, max(24, m.layoutWidth()-8))-6).Render(strings.TrimSuffix(m.formStatus(), "\n")) + "\n"
+	return strings.Join(lines, "\n") + "\n"
 }
 
 // Stop cancels page-owned requests when the TUI exits. Cancellation is not rollback.
@@ -465,52 +451,27 @@ func (m *Model) Stop() {
 	}
 }
 
-func (m *Model) formView(title string) string {
-	width := min(72, max(24, m.layoutWidth()-8))
-	textWidth := width - 6
-	for i := range m.form.inputs {
-		m.form.inputs[i].SetWidth(max(8, textWidth-2))
-	}
-	body := m.wrappedFormStatus() + m.form.View()
-	footer := m.formFooter()
-	if m.saveState != saveEditing {
-		body = m.dialogNote
-		switch m.saveState {
-		case saveConflict, saveRetryConfirm:
-			yes := "Overwrite"
-			if m.saveState == saveRetryConfirm {
-				yes = "Submit again"
-			}
-			if m.confirmYes {
-				yes = "[" + yes + "]"
-			} else {
-				yes += "    [Cancel]"
-			}
-			if m.confirmYes {
-				yes += "    Cancel"
-			}
-			body += "\n\n" + yes
-		case saveUnknown:
-			if !m.disconnected {
-				body += "\n\nSubmit again"
-			}
+func (m *Model) saveBody() string {
+	body := m.dialogNote
+	switch m.saveState {
+	case saveConflict, saveRetryConfirm:
+		yes := "Overwrite"
+		if m.saveState == saveRetryConfirm {
+			yes = "Submit again"
 		}
-	} else if m.form.errorText != "" {
-		footer = m.form.errorText
+		if m.confirmYes {
+			yes = "[" + yes + "]"
+		} else {
+			yes += "    [Cancel]"
+		}
+		if m.confirmYes {
+			yes += "    Cancel"
+		}
+		body += "\n\n" + yes
+	case saveUnknown:
+		if !m.disconnected {
+			body += "\n\nSubmit again"
+		}
 	}
-	lines := strings.Split(body, "\n")
-	for i, line := range lines {
-		lines[i] = ui.TruncateVisible(line, textWidth)
-	}
-	if m.saveState != saveEditing {
-		lines = strings.Split(lipgloss.NewStyle().Width(textWidth).Render(body), "\n")
-		m.dialogScroll = 0
-	}
-	m.dialogScroll = min(m.dialogScroll, max(0, len(lines)-m.formBodyHeight()))
-	start := m.dialogScroll
-	end := min(len(lines), start+m.formBodyHeight())
-	visible := strings.Join(lines[start:end], "\n")
-	visible = lipgloss.NewStyle().Height(m.formBodyHeight()).Render(visible)
-	content := m.theme.Dialog.Width(width).Render(m.theme.Title.Render(title) + "\n" + visible + "\n" + ui.TruncateVisible(footer, textWidth))
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
+	return body
 }

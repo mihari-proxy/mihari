@@ -32,6 +32,8 @@ const (
 	ModeConfirm    = "confirm"
 	ModeSetup      = "setup"
 	// Subscription overlay modes share help and footer bindings.
+	ModeSubscriptionInput   = "subscription-input"
+	ModeSubscriptionSubmit  = "subscription-submit"
 	ModeSubscriptionCycle   = "subscription-cycle"
 	ModeSubscriptionSaving  = "subscription-saving"
 	ModeSubscriptionUnknown = "subscription-unknown"
@@ -142,9 +144,18 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"enter"}, Display: "Enter", Label: "next or save", Footer: "Enter next/save", Scope: ScopeMode, Mode: ModeForm},
 		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel", Footer: "Esc cancel", Scope: ScopeMode, Mode: ModeForm},
 		{Display: "Wait", Label: "Saving... No form input is accepted.", Footer: "Saving...", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionSaving},
+		{Keys: []string{"tab", "shift+tab", "up", "down"}, Display: "Tab/Shift+Tab/↑/↓", Label: "move between fields", Footer: "Tab/↑/↓ fields", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionInput},
+		{Keys: []string{"enter"}, Display: "Enter", Label: "next field", Footer: "Enter next", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionInput},
+		{Keys: []string{"pgup", "pgdown"}, Display: "PgUp/PgDn", Label: "scroll details", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionInput},
+		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel", Footer: "Esc cancel", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionInput},
+		{Keys: []string{"tab", "shift+tab", "up", "down"}, Display: "Tab/Shift+Tab/↑/↓", Label: "move between fields", Footer: "Tab/↑/↓ fields", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionSubmit},
+		{Keys: []string{"enter"}, Display: "Enter", Label: "save changes", Footer: "Enter save", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionSubmit},
+		{Keys: []string{"pgup", "pgdown"}, Display: "PgUp/PgDn", Label: "scroll details", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionSubmit},
+		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel", Footer: "Esc cancel", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionSubmit},
 		{Keys: []string{"up", "down"}, Display: "↑/↓", Label: "move between fields", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeForm},
 		{Keys: []string{"pgup", "pgdown"}, Display: "PgUp/PgDn", Label: "scroll details", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeForm},
 		{Keys: []string{"left", "right", "space"}, Display: "←/→/Space", Label: "cycle draft value", Footer: "←/→/Space cycle", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionCycle},
+		{Keys: []string{"pgup", "pgdown"}, Display: "PgUp/PgDn", Label: "scroll details", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionCycle},
 		{Keys: []string{"tab", "shift+tab", "up", "down"}, Display: "Tab/↑/↓", Label: "move between fields", Footer: "Tab/↑/↓ fields", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionCycle},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "next field", Footer: "Enter next", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionCycle},
 		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel", Footer: "Esc cancel", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionCycle},
@@ -232,7 +243,7 @@ func RenderFooter(page PageID, mode string, opt FooterOpt) string {
 	helpQuit := helpQuitTokens()
 	escBack := globalFooterToken("Esc")
 	switch mode {
-	case ModeSubscriptionSaving, ModeSubscriptionCycle, ModeSubscriptionUnknown, ModeSubscriptionWaiting, ModeSubscriptionConfirm:
+	case ModeSubscriptionInput, ModeSubscriptionSubmit, ModeSubscriptionSaving, ModeSubscriptionCycle, ModeSubscriptionUnknown, ModeSubscriptionWaiting, ModeSubscriptionConfirm:
 		return joinFooter(footerTokens(func(b KeyBinding) bool { return b.Mode == mode }))
 	case ModeSearch:
 		tokens := footerTokens(func(b KeyBinding) bool {
@@ -359,6 +370,10 @@ func modeTitle(mode string) string {
 		return "Columns"
 	case ModeForm:
 		return "Form"
+	case ModeSubscriptionInput:
+		return "Subscription field"
+	case ModeSubscriptionSubmit:
+		return "Save changes"
 	case ModeSubscriptionCycle:
 		return "Cycle field"
 	case ModeSubscriptionSaving:

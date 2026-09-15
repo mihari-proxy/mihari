@@ -1,0 +1,22 @@
+ Mihari  ·  ● running  ·  0c  ·  ↑     0/s ↓     0/s          Connected
+   1 Overview
+   2 Proxies       ╭────────────────────────────────────────────────╮
+   3 Conns         │                                                │
+   4 Rules         │  Edit subscription                             │
+   5 Logs          │                                                │
+ › 6 Subs          │  Next update   in 5h                           │
+   7 Web GUI       │                                                │
+   8 System        │  Settings                                      │
+                   │                                                │
+                   │    Name          Example                       │
+                   │    URL                                         │
+                   │    https://example.test/subscription/sample-…  │
+                   │    Interval      Global · 12h                  │
+                   │    Auto refresh  ‹ On ›                        │
+                   │    Mode          ‹ PROXY ›                     │
+                   │  ↑ PgUp/PgDn ────────────────────────────────  │
+                   │                   › [ Save ]                   │
+                   │                                                │
+                   ╰────────────────────────────────────────────────╯
+
+ Tab/↑/↓ fields  Enter save  Esc cancel

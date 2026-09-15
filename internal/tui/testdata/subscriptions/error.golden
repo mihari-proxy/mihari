@@ -1,0 +1,30 @@
+ Mihari  ·  ● running  ·  0 conn  ·  ↑      0 B/s  ↓      0 B/s                           Connected
+   1 Overview
+   2 Proxies
+   3 Conns             ╭──────────────────────────────────────────────────────────────────────╮
+   4 Rules             │                                                                      │
+   5 Logs              │  Edit subscription                                                   │
+ › 6 Subs              │                                                                      │
+   7 Web GUI           │  ● In use · Failed · Enabled                                         │
+   8 System            │  Traffic       52.5 GiB/80.0 GiB                                     │
+                       │  Cache         Available                                             │
+                       │  Last update   2026-09-15 01:00                                      │
+                       │  Next update   in 5h                                                 │
+                       │  Last error    Download failed. The cached configuration remains av  │
+                       │  ailable.                                                            │
+                       │                                                                      │
+                       │  Settings                                                            │
+                       │                                                                      │
+                       │  › Name          Example                                             │
+                       │    URL                                                               │
+                       │    https://example.test/subscription/sample-sample-sample-sample-s…  │
+                       │    Interval      Global · 12h                                        │
+                       │    Auto refresh  ‹ On ›                                              │
+                       │    Mode          ‹ PROXY ›                                           │
+                       │  ──────────────────────────────────────────────────────────────────  │
+                       │                               [ Save ]                               │
+                       │                                                                      │
+                       ╰──────────────────────────────────────────────────────────────────────╯
+
+
+ Tab/↑/↓ fields  Enter next  Esc cancel

@@ -175,7 +175,7 @@ func TestDetailLayout_StatusCanScrollIntoView(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
 	}
-	if !strings.Contains(m.View(), "In use:") {
+	if !strings.Contains(m.View(), "In use") && !strings.Contains(m.View(), "Not in use") {
 		t.Fatal("cannot scroll to status")
 	}
 }

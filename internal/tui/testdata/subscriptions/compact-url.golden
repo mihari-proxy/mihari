@@ -1,0 +1,22 @@
+ Mihari  ·  ● running  ·  0c  ·  ↑     0/s ↓     0/s          Connected
+   1 Overview
+   2 Proxies       ╭────────────────────────────────────────────────╮
+   3 Conns         │                                                │
+   4 Rules         │  Edit subscription                             │
+   5 Logs          │                                                │
+ › 6 Subs          │  Traffic       52.5 GiB/80.0 GiB               │
+   7 Web GUI       │  Cache         Available                       │
+   8 System        │  Last update   2026-09-15 01:00                │
+                   │  Next update   in 5h                           │
+                   │                                                │
+                   │  Settings                                      │
+                   │                                                │
+                   │    Name          Example                       │
+                   │  › URL                                         │
+                   │    ample-sample-sample-sample-sample-sample-   │
+                   │  ↑ PgUp/PgDn ↓───────────────────────────────  │
+                   │                    [ Save ]                    │
+                   │                                                │
+                   ╰────────────────────────────────────────────────╯
+
+ Tab/↑/↓ fields  Enter next  Esc cancel

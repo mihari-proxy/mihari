@@ -227,35 +227,36 @@ func rowFrom(subscription protocol.Subscription, active bool, pending string, no
 }
 
 type Model struct {
-	client          Client
-	newOperationID  func() string
-	now             func() time.Time
-	subscriptions   []protocol.Subscription
-	activeID        string
-	globalInterval  string
-	revision        uint64
-	focus           pageFocus
-	pending         map[string]string
-	form            *formModel
-	formID          string
-	formRevision    uint64
-	dialogEpoch     uint64
-	saveState       savePhase
-	saveOperation   string
-	confirmYes      bool
-	dialogNote      string
-	dialogScroll    int
-	revealCancel    context.CancelFunc
-	queryCancel     context.CancelFunc
-	querySeq        uint64
-	disconnected    bool
-	connectionEpoch uint64
-	saveCancel      context.CancelFunc
-	lastError       string
-	width           int
-	height          int
-	theme           ui.Theme
-	contentFocused  bool
+	client             Client
+	newOperationID     func() string
+	now                func() time.Time
+	subscriptions      []protocol.Subscription
+	activeID           string
+	globalInterval     string
+	revision           uint64
+	focus              pageFocus
+	pending            map[string]string
+	form               *formModel
+	formID             string
+	formRevision       uint64
+	dialogEpoch        uint64
+	saveState          savePhase
+	saveOperation      string
+	confirmYes         bool
+	dialogNote         string
+	dialogScroll       int
+	dialogManualScroll bool
+	revealCancel       context.CancelFunc
+	queryCancel        context.CancelFunc
+	querySeq           uint64
+	disconnected       bool
+	connectionEpoch    uint64
+	saveCancel         context.CancelFunc
+	lastError          string
+	width              int
+	height             int
+	theme              ui.Theme
+	contentFocused     bool
 	// loadSpinClock advances braille frames while any row has in-flight work.
 	loadSpinClock time.Time
 	loadSpinning  bool
@@ -362,6 +363,9 @@ func (m *Model) SetSubscriptions(result protocol.SubscriptionList) {
 		} else {
 			m.focus = pageFocus{kind: focusRow, id: m.subscriptions[min(max(0, previousIndex), len(m.subscriptions)-1)].ID}
 		}
+	}
+	if m.form != nil && m.saveState == saveEditing && !m.dialogManualScroll {
+		m.ensureFormFocus()
 	}
 }
 
@@ -613,7 +617,11 @@ func (m *Model) updateForm(message tea.Msg) (ui.Page, tea.Cmd) {
 			m.ensureFormFocus()
 			return m, cmd
 		}
-		if !m.form.valid() || m.client == nil {
+		if !m.form.valid() {
+			m.ensureFormFocus()
+			return m, nil
+		}
+		if m.client == nil {
 			return m, nil
 		}
 		form, id, revision := m.form, m.formID, m.formRevision
@@ -623,10 +631,12 @@ func (m *Model) updateForm(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, m.submitForm(form, id, revision)
 	}
 	if isKey && key.String() == "pgup" {
+		m.dialogManualScroll = true
 		m.dialogScroll = max(0, m.dialogScroll-3)
 		return m, nil
 	}
 	if isKey && key.String() == "pgdown" {
+		m.dialogManualScroll = true
 		m.dialogScroll += 3
 		return m, nil
 	}
@@ -956,14 +966,7 @@ func formatTimestamp(value time.Time) string {
 	if value.IsZero() {
 		return ui.MissingValue
 	}
-	return value.Local().Format(time.RFC3339)
-}
-
-func valueOr(value, fallback string) string {
-	if value == "" {
-		return fallback
-	}
-	return value
+	return value.Local().Format("2006-01-02 15:04")
 }
 
 var fallbackOperationID atomic.Uint64

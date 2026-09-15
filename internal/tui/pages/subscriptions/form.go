@@ -8,8 +8,8 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
-	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
 type formKind uint8
@@ -49,6 +49,13 @@ func newForm(kind formKind, labels, values, placeholders []string) *formModel {
 	for index := range labels {
 		input := textinput.New()
 		input.Prompt = ""
+		styles := textinput.DefaultDarkStyles()
+		styles.Focused.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("7")).Background(lipgloss.Color("236"))
+		styles.Focused.Placeholder = styles.Focused.Text.Foreground(lipgloss.Color("245"))
+		styles.Blurred.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("7"))
+		styles.Blurred.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+		styles.Cursor.Color = lipgloss.Color("15")
+		input.SetStyles(styles)
 		input.Placeholder = placeholders[index]
 		input.SetWidth(52)
 		input.SetValue(values[index])
@@ -121,33 +128,6 @@ func (f *formModel) move(delta int) tea.Cmd {
 		return f.inputs[f.index].Focus()
 	}
 	return nil
-}
-
-func (f *formModel) View() string {
-	lines := make([]string, 0, len(f.inputs)*2)
-	for index := range f.inputs {
-		marker := "  "
-		if index == f.index {
-			marker = ui.FocusMarker
-		}
-		value := f.inputs[index].View()
-		if f.labels[index] == "Mode" {
-			value = proxyModeLabel(f.inputs[index].Value())
-		}
-		if f.labels[index] == "Auto refresh" {
-			value = "Off"
-			if f.inputs[index].Value() == "true" {
-				value = "On"
-			}
-		}
-		lines = append(lines, marker+f.labels[index], "  "+value)
-	}
-	marker := "  "
-	if f.index == len(f.inputs) {
-		marker = ui.FocusMarker
-	}
-	lines = append(lines, marker+"Save")
-	return strings.Join(lines, "\n")
 }
 
 func (f *formModel) valid() bool {

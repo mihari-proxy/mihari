@@ -603,7 +603,7 @@ func TestModel_FooterHintsAreContextual(t *testing.T) {
 	}
 	model.form = nil
 	model.form = newAddForm()
-	if hints := model.FooterHints(); hints != ui.FormHelp {
+	if hints := model.FooterHints(); hints != ui.RenderFooter(ui.PageSubscriptions, ui.ModeSubscriptionInput, ui.FooterOpt{}) {
 		t.Fatalf("form footer=%q", hints)
 	}
 }

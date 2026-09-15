@@ -1,0 +1,30 @@
+ Mihari  ·  ● running  ·  0 conn  ·  ↑      0 B/s  ↓      0 B/s                           Connected
+   1 Overview
+   2 Proxies
+   3 Conns
+   4 Rules
+   5 Logs
+ › 6 Subs
+   7 Web GUI
+   8 System
+                       ╭──────────────────────────────────────────────────────────────────────╮
+                       │                                                                      │
+                       │  Add subscription                                                    │
+                       │                                                                      │
+                       │  › Name          Example                                             │
+                       │    URL                                                               │
+                       │    https://example.test/subscription/sample-sample-sample-sample-s…  │
+                       │    Mode          ‹ DIRECT ›                                          │
+                       │  ──────────────────────────────────────────────────────────────────  │
+                       │                               [ Save ]                               │
+                       │                                                                      │
+                       ╰──────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+ Tab/↑/↓ fields  Enter next  Esc cancel
