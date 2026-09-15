@@ -158,15 +158,30 @@ func TestRenderDelay_TimeoutUsesDangerStyle(t *testing.T) {
 		t.Fatal("low latency should use DelayGood")
 	}
 	testingGot := renderDelay(theme, DelayState{Kind: DelayTesting}, zero)
-	testingWant := theme.Warning.Render(ui.SpinnerLabel(zero, "Testing"))
+	testingWant := theme.Warning.Render("⠋")
 	if testingGot != testingWant {
-		t.Fatalf("testing should use Warning + braille SpinnerLabel: got %q want %q", testingGot, testingWant)
+		t.Fatalf("testing should show only a Warning braille frame: got %q want %q", testingGot, testingWant)
 	}
-	if !strings.Contains(testingGot, "Testing") || strings.Contains(testingGot, ui.TestingLabel) {
-		// SpinnerLabel uses "Testing" without the old static ellipsis-only label alone.
-		if !strings.Contains(testingGot, "Testing") {
-			t.Fatalf("testing label missing: %q", testingGot)
+}
+
+func TestRenderNode_TestingDoesNotWrapMetadata(t *testing.T) {
+	model := New(nil, nil)
+	node := protocol.ProxyNode{Name: "node-a", Type: "VLESS", XUDP: true}
+	group := protocol.ProxyGroup{Name: "G", Now: node.Name}
+	model.delays[node.Name] = DelayState{Kind: DelayTesting}
+	model.now = time.Unix(0, 0)
+
+	card := model.renderNode(group, node, 22)
+	if lines := len(strings.Split(card, "\n")); lines != 4 {
+		t.Fatalf("testing card should have two content lines and two borders, got %d:\n%s", lines, card)
+	}
+	for _, want := range []string{"VLESS / XUDP", "⠋"} {
+		if !strings.Contains(card, want) {
+			t.Fatalf("testing card missing %q:\n%s", want, card)
 		}
+	}
+	if strings.Contains(card, "Testing") {
+		t.Fatalf("testing card should omit the Testing label:\n%s", card)
 	}
 }
 

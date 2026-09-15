@@ -662,8 +662,7 @@ func renderDelay(theme ui.Theme, delay DelayState, now time.Time) string {
 		if now.IsZero() {
 			now = time.Unix(0, 0)
 		}
-		// Braille spinner + "Testing" (not static Testing…).
-		return style.Render(ui.SpinnerLabel(now, "Testing"))
+		return style.Render(ui.SpinnerFrame(now, delaySpinInterval))
 	case DelayValue:
 		return style.Render(fmt.Sprintf("%d ms", delay.Milliseconds))
 	case DelayTimeout:

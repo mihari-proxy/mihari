@@ -47,6 +47,8 @@ On Windows, updates can query the version of a user-owned installation (includin
 
 Proxy latency tests discover provider nodes and use mihomo's provider-specific endpoint when needed. Duplicate names appear once per group and share a test result: a global node takes priority, otherwise the first matching provider in name order is used. The first successful node check after TUI startup warns about duplicates; the tested source may differ from the group's selected source. Provider reads retry transient failures up to three times. If a refresh still fails, Proxies retains the last snapshot with a **Stale data** notice and the key error; the notice clears after recovery. CLI/TUI and daemon should be upgraded together.
 
+While a TUI proxy latency test is running, its node card shows only an animated Braille spinner beside the protocol.
+
 Mihomo HTTP failures retain their original error text and upstream status in diagnostic logs, including gateway requests and WebSocket handshakes. File logs and exports are not redacted: credentials, URLs, paths, and configuration fragments carried by errors remain available for diagnosis. User-facing errors remain concise.
 
 A single CGO-free static binary (< 15 MB) contains everything, with built-in GitHub Releases self-update and local GeoIP resolution.
