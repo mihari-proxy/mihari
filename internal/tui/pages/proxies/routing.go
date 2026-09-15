@@ -35,6 +35,10 @@ var routingModes = []string{"rule", "global", "direct"}
 var routingLabels = []string{"Rule", "Global", "Direct"}
 var routingDescriptions = []string{"Follow routing rules", "Use the GLOBAL selection", "Connect directly"}
 
+// routingLabelStyle uses the reference's white labels without changing the
+// shared theme; reverse video turns this white foreground into the focus fill.
+var routingLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("7")).Width(9)
+
 // SetRoutingAvailable updates capability and daemon session identity.
 func (m *Model) SetRoutingAvailable(available bool, epoch uint64) {
 	if epoch < m.routing.epoch {
@@ -99,6 +103,8 @@ func (m *Model) FooterHints() string {
 	return ui.RenderFooter(m.ID(), "", ui.FooterOpt{})
 }
 
+// routingHeader keeps status explanations visible and adds optional action hints
+// only beside a focused value when the complete hint fits.
 func (m *Model) routingHeader() []string {
 	if !m.routing.available {
 		return nil
@@ -108,7 +114,7 @@ func (m *Model) routingHeader() []string {
 	if status.DesiredMode != "" {
 		mode = routingLabel(status.DesiredMode)
 	}
-	note := "Enter change"
+	note := ""
 	if status.State == "pending" {
 		note = "Saved · pending"
 	} else if !m.routing.known || status.State == "unknown" {
@@ -123,7 +129,8 @@ func (m *Model) routingHeader() []string {
 	}
 	values := []string{mode, ui.DisplayProxyName(global)}
 	labels := []string{"Mode", "GLOBAL"}
-	notes := []string{note, "Enter select"}
+	notes := []string{note, ""}
+	actions := []string{" · Press Enter to Change", " · Press Enter to Select"}
 	if !m.globalCandidatesCurrent() {
 		notes[1] = "Waiting for candidates"
 	}
@@ -136,18 +143,27 @@ func (m *Model) routingHeader() []string {
 		if focused {
 			prefix = ui.FocusMarker
 		}
-		row := prefix + m.theme.Muted.Width(9).Render(label)
-		// Reserve the hint before truncating long node names. At very narrow
-		// widths, shorten the hint too so the value still has room to render.
-		note := ui.TruncateVisible(notes[i], max(0, textWidth-lipgloss.Width(row)-9))
-		value := ui.TruncateVisible(values[i], max(1, textWidth-lipgloss.Width(row)-lipgloss.Width(note)-1))
-		row += m.theme.Title.Render(value)
-		padding := max(1, textWidth-lipgloss.Width(row)-lipgloss.Width(note))
-		row += strings.Repeat(" ", padding) + m.theme.Muted.Render(note)
+		row := prefix + routingLabelStyle.Render(label)
+		valueWidth := max(0, textWidth-lipgloss.Width(row))
+		suffix := ""
+		if notes[i] != "" {
+			// Status explanations remain visible without focus and retain their
+			// existing width priority and right alignment.
+			note := ui.TruncateVisible(notes[i], max(0, valueWidth-9))
+			valueWidth = max(0, valueWidth-lipgloss.Width(note)-1)
+			value := ui.TruncateVisible(values[i], valueWidth)
+			padding := max(1, textWidth-lipgloss.Width(row)-lipgloss.Width(value)-lipgloss.Width(note))
+			suffix = strings.Repeat(" ", padding) + m.theme.Muted.Render(note)
+		} else if focused && lipgloss.Width(values[i]+actions[i]) <= valueWidth {
+			// Optional actions never take space from the value or appear partially.
+			suffix = m.theme.Muted.Render(actions[i])
+		}
+		row += m.theme.Success.Render(ui.TruncateVisible(values[i], valueWidth))
 		if focused {
 			row = ui.ApplyFocusStyle(row, m.theme.RowFocus)
 		}
-		lines = append(lines, ui.TruncateVisible(row, textWidth))
+		// Keep both action hints and status explanations outside reverse video.
+		lines = append(lines, ui.TruncateVisible(row+suffix, textWidth))
 	}
 	if status.Message != "" {
 		lines = append(lines, m.theme.Muted.Render(ui.TruncateVisible("  "+status.Message, textWidth)))
