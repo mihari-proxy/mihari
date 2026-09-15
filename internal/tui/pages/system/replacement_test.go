@@ -90,8 +90,8 @@ func TestPreparedConsent_CancelAndChannelChangeDiscardCandidate(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			m, _ := replacementFixture(t)
 			_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-			msg := cmd().(ui.PageResultMsg)
-			_, cmd = m.Update(msg.Result)
+			msg := firstSystemPageResult(t, cmd)
+			_, cmd = m.Update(msg)
 			intent := cmd().(ui.ActionIntentMsg)
 			switch kind {
 			case "cancel":
@@ -125,8 +125,8 @@ func TestPreparedConsent_RepeatedEnterAndLoadDoNotPrepareAgain(t *testing.T) {
 	if again != nil {
 		t.Fatal("duplicate preparation while downloading")
 	}
-	msg := cmd().(ui.PageResultMsg)
-	m.Update(msg.Result)
+	msg := firstSystemPageResult(t, cmd)
+	m.Update(msg)
 	_, again = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if again != nil {
 		t.Fatal("duplicate while confirmation queued")
@@ -157,13 +157,30 @@ func TestPreparedConsent_EscapeCancelsDownloadAndDiscardsLateResult(t *testing.T
 	m.selfUpdater = blocking
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	result := make(chan tea.Msg, 1)
-	go func() { result <- cmd() }()
+	go func() {
+		var run func(tea.Cmd)
+		run = func(command tea.Cmd) {
+			switch message := command().(type) {
+			case tea.BatchMsg:
+				for _, child := range message {
+					if child != nil {
+						run(child)
+					}
+				}
+			case ui.PageResultMsg:
+				if _, ok := message.Result.(preparedMihariResultMsg); ok {
+					result <- message.Result
+				}
+			}
+		}
+		run(cmd)
+	}()
 	<-blocking.started
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	<-blocking.canceled
 	close(blocking.release)
-	msg := (<-result).(ui.PageResultMsg)
-	_, discard := m.Update(msg.Result)
+	msg := <-result
+	_, discard := m.Update(msg)
 	if _, ok := discard().(ui.DiscardPreparedUpdateMsg); !ok || m.pending {
 		t.Fatal("late download revived canceled update")
 	}
@@ -181,8 +198,8 @@ func TestPreparedConsent_OrdinaryUpgradeLabelsActualTargetVersions(t *testing.T)
 	f.prepared.Preview = preview
 	f.prepared.Version = "v3.0.0"
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	message := cmd().(ui.PageResultMsg)
-	_, cmd = m.Update(message.Result)
+	message := firstSystemPageResult(t, cmd)
+	_, cmd = m.Update(message)
 	intent := cmd().(ui.ActionIntentMsg)
 	for _, want := range []string{"binary: v1.0.0", "service: v2.0.0", "v3.0.0"} {
 		if !strings.Contains(intent.Object, want) {

@@ -82,7 +82,31 @@ func rootReplacementFixture(t *testing.T, previews ...update.ReplacementPreview)
 	for n := 0; n < 64; n++ {
 		if strings.Contains(ansi.Strip(p.View()), ui.FocusMarker+ui.UpdateMihariLabel) {
 			_, c := p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-			return m, p, c
+			// These ownership tests delay the preparation result independently of
+			// animation messages. Identify it by the fake updater call, not batch order.
+			return m, p, func() tea.Msg {
+				var result tea.Msg
+				var run func(tea.Cmd)
+				run = func(command tea.Cmd) {
+					if command == nil {
+						return
+					}
+					before := f.calls
+					message := command()
+					if batch, ok := message.(tea.BatchMsg); ok {
+						for _, child := range batch {
+							run(child)
+						}
+					} else if f.calls > before {
+						result = message
+					}
+				}
+				run(c)
+				if result == nil {
+					t.Fatal("missing preparation result")
+				}
+				return result
+			}
 		}
 		p.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	}

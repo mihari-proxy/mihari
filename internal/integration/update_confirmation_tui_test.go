@@ -67,6 +67,7 @@ func TestUpdateConfirmation_ObservedLabelReachesTUI(t *testing.T) {
 	p.SetSelfUpdater(installedLabelUpdater{preview}, "unrelated-process", binary, func() bool { return true })
 	p.SetSelfUpdateChannel(func(context.Context) (string, error) { return "dev", nil })
 	p.SetSize(180, 100)
+	var intent ui.ActionIntentMsg
 	var route func(tea.Cmd)
 	route = func(cmd tea.Cmd) {
 		if cmd == nil {
@@ -80,6 +81,8 @@ func TestUpdateConfirmation_ObservedLabelReachesTUI(t *testing.T) {
 		case ui.PageResultMsg:
 			_, next := p.Update(msg.Result)
 			route(next)
+		case ui.ActionIntentMsg:
+			intent = msg
 		}
 	}
 	route(p.Load())
@@ -89,12 +92,7 @@ func TestUpdateConfirmation_ObservedLabelReachesTUI(t *testing.T) {
 			if prepare == nil {
 				t.Fatal("no preparation command")
 			}
-			result := prepare().(ui.PageResultMsg)
-			_, confirm := p.Update(result.Result)
-			if confirm == nil {
-				t.Fatal("no confirmation command")
-			}
-			intent := confirm().(ui.ActionIntentMsg)
+			route(prepare)
 			if intent.MihariUpdate == nil || len(intent.MihariUpdate.Installed) != 1 || intent.MihariUpdate.Installed[0].Version != want || intent.MihariUpdate.Risk != update.ReplacementUnknown {
 				t.Fatalf("wrong installed display: %+v", intent.MihariUpdate)
 			}

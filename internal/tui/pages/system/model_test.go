@@ -2979,7 +2979,7 @@ func TestSystemMihariPrereleaseOnMainOffersOfficialUpdate(t *testing.T) {
 	if command == nil {
 		t.Fatal("available prerelease did not offer confirmation")
 	}
-	if _, ok := command().(ui.PageResultMsg); !ok || model.pendingNote != ui.MihariProgressPreparing {
+	if _, ok := firstSystemPageResult(t, command).(preparedMihariResultMsg); !ok || model.pendingNote != ui.MihariProgressPreparing {
 		t.Fatal("update did not prepare")
 	}
 }
@@ -3007,7 +3007,7 @@ func TestSystemMihariOfficialOnDevOffersPrereleaseUpdate(t *testing.T) {
 	if command == nil {
 		t.Fatal("available official did not offer confirmation")
 	}
-	if _, ok := command().(ui.PageResultMsg); !ok || model.pendingNote != ui.MihariProgressPreparing {
+	if _, ok := firstSystemPageResult(t, command).(preparedMihariResultMsg); !ok || model.pendingNote != ui.MihariProgressPreparing {
 		t.Fatal("update did not prepare")
 	}
 }
@@ -3090,8 +3090,8 @@ func TestSystemCheckingMihariBlocksOtherRowActions(t *testing.T) {
 func TestSystemMihariUpdateOffersConfirmationWhenAvailable(t *testing.T) {
 	model, _ := availableMihariUpdateModel(t, true, update.Result{})
 	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	msg := cmd().(ui.PageResultMsg)
-	_, confirm := model.Update(msg.Result)
+	msg := firstSystemPageResult(t, cmd)
+	_, confirm := model.Update(msg)
 	intent, ok := confirm().(ui.ActionIntentMsg)
 	if !ok || intent.Action != ui.ActionUpdateMihari || intent.Cancel == nil || !strings.Contains(intent.Object, "v0.4.0") {
 		t.Fatalf("intent=%+v", intent)
@@ -3100,8 +3100,8 @@ func TestSystemMihariUpdateOffersConfirmationWhenAvailable(t *testing.T) {
 func TestSystemMihariUpdatePermissionFailureDoesNotCallUpdater(t *testing.T) {
 	model, updater := availableMihariUpdateModel(t, false, update.Result{})
 	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	msg := cmd().(ui.PageResultMsg)
-	model.Update(msg.Result)
+	msg := firstSystemPageResult(t, cmd)
+	model.Update(msg)
 	if updater.updateCalls != 0 || model.outcomeOK || !strings.Contains(model.View(), "administrator") {
 		t.Fatal("permission failure not preserved")
 	}
@@ -3110,8 +3110,8 @@ func TestSystemMihariUpdateFailureStaysInCurrentTUI(t *testing.T) {
 	model, updater := availableMihariUpdateModel(t, true, update.Result{})
 	updater.updateErr = errors.New("raw replacement detail")
 	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	msg := cmd().(ui.PageResultMsg)
-	_, next := model.Update(msg.Result)
+	msg := firstSystemPageResult(t, cmd)
+	_, next := model.Update(msg)
 	if _, ok := next().(ui.DiscardPreparedUpdateMsg); !ok || model.outcomeOK || !strings.Contains(model.View(), ui.UpdateMihariActionFailed) || strings.Contains(model.View(), "raw replacement detail") {
 		t.Fatal("preparation failure not safely rendered")
 	}
@@ -3119,8 +3119,8 @@ func TestSystemMihariUpdateFailureStaysInCurrentTUI(t *testing.T) {
 func TestSystemMihariUpdateSuccessRequestsRelaunch(t *testing.T) {
 	model, updater := availableMihariUpdateModel(t, true, update.Result{Version: "v0.4.0"})
 	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	msg := cmd().(ui.PageResultMsg)
-	_, cmd = model.Update(msg.Result)
+	msg := firstSystemPageResult(t, cmd)
+	_, cmd = model.Update(msg)
 	intent := cmd().(ui.ActionIntentMsg)
 	_, cmd = model.Update(intent.Execute())
 	request := cmd().(ui.RelaunchRequestMsg)

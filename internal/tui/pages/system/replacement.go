@@ -82,7 +82,7 @@ func (m *Model) startMihariPreparation() tea.Cmd {
 	m.outcomeRow = ""
 	m.outcomeDetail = ""
 	m.lastError = ""
-	return func() tea.Msg {
+	prepare := func() tea.Msg {
 		var p update.PreparedUpdate
 		var err error
 		if elevated == nil || !elevated() {
@@ -92,6 +92,7 @@ func (m *Model) startMihariPreparation() tea.Cmd {
 		}
 		return ui.PageResultMsg{Page: ui.PageSystem, Result: preparedMihariResultMsg{generation: generation, channel: channel, prepared: p, err: err, operation: operation}}
 	}
+	return tea.Batch(prepare, m.rowSpinCmdIfNeeded())
 }
 func (m *Model) handlePreparedMihariResult(msg preparedMihariResultMsg) (ui.Page, tea.Cmd) {
 	if msg.generation != m.preparationGeneration || msg.channel != m.currentMihariChannel() {
