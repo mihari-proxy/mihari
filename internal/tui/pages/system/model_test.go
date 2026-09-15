@@ -2956,6 +2956,7 @@ func TestSystemMihariSkipUpdateKeepsAhead(t *testing.T) {
 	}
 }
 
+// TestSystemMihariPrereleaseOnMainOffersOfficialUpdate allows a prerelease installation to prepare the official main-channel release.
 func TestSystemMihariPrereleaseOnMainOffersOfficialUpdate(t *testing.T) {
 	model := New(nil, nil)
 	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.9.0-dev.8", "mihari", func() bool { return true })
@@ -2984,6 +2985,7 @@ func TestSystemMihariPrereleaseOnMainOffersOfficialUpdate(t *testing.T) {
 	}
 }
 
+// TestSystemMihariOfficialOnDevOffersPrereleaseUpdate allows an official installation to prepare a dev-channel prerelease.
 func TestSystemMihariOfficialOnDevOffersPrereleaseUpdate(t *testing.T) {
 	model := New(nil, nil)
 	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.8.2", "mihari", func() bool { return true })
@@ -3087,6 +3089,7 @@ func TestSystemCheckingMihariBlocksOtherRowActions(t *testing.T) {
 	}
 }
 
+// TestSystemMihariUpdateOffersConfirmationWhenAvailable requires a prepared candidate before exposing a cancellable update confirmation.
 func TestSystemMihariUpdateOffersConfirmationWhenAvailable(t *testing.T) {
 	model, _ := availableMihariUpdateModel(t, true, update.Result{})
 	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -3097,6 +3100,8 @@ func TestSystemMihariUpdateOffersConfirmationWhenAvailable(t *testing.T) {
 		t.Fatalf("intent=%+v", intent)
 	}
 }
+
+// TestSystemMihariUpdatePermissionFailureDoesNotCallUpdater keeps an unelevated update on the permission-error path without preparing a binary.
 func TestSystemMihariUpdatePermissionFailureDoesNotCallUpdater(t *testing.T) {
 	model, updater := availableMihariUpdateModel(t, false, update.Result{})
 	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -3106,6 +3111,8 @@ func TestSystemMihariUpdatePermissionFailureDoesNotCallUpdater(t *testing.T) {
 		t.Fatal("permission failure not preserved")
 	}
 }
+
+// TestSystemMihariUpdateFailureStaysInCurrentTUI retains the current UI and displays a safe error when preparation fails.
 func TestSystemMihariUpdateFailureStaysInCurrentTUI(t *testing.T) {
 	model, updater := availableMihariUpdateModel(t, true, update.Result{})
 	updater.updateErr = errors.New("raw replacement detail")
@@ -3116,6 +3123,8 @@ func TestSystemMihariUpdateFailureStaysInCurrentTUI(t *testing.T) {
 		t.Fatal("preparation failure not safely rendered")
 	}
 }
+
+// TestSystemMihariUpdateSuccessRequestsRelaunch hands a consent-bound candidate to the relaunch owner after confirmation.
 func TestSystemMihariUpdateSuccessRequestsRelaunch(t *testing.T) {
 	model, updater := availableMihariUpdateModel(t, true, update.Result{Version: "v0.4.0"})
 	_, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})

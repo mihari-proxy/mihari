@@ -2,6 +2,7 @@ package system
 
 import "testing"
 
+// TestLocalTaskDiagnostics_PreparationAsyncResultsCarryDistinctValues keeps operation metadata and generation guards separate across overlapping preparations.
 func TestLocalTaskDiagnostics_PreparationAsyncResultsCarryDistinctValues(t *testing.T) {
 	m, _ := replacementFixture(t)
 	first := m.startMihariPreparation()

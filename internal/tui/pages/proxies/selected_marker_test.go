@@ -10,6 +10,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+// TestSelectedNodeMarker_UsesLogInfoCircle keeps selection color aligned with INFO logs while preserving focus, pending state, and card geometry.
 func TestSelectedNodeMarker_UsesLogInfoCircle(t *testing.T) {
 	for _, tc := range []struct {
 		name           string

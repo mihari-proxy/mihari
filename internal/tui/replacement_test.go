@@ -49,6 +49,8 @@ func (f *rootReplacementUpdater) Prepare(context.Context, string, string, string
 	}
 	return update.PreparedUpdate{Available: true, Version: "v1.0.0", Channel: "main", Preview: update.ReplacementPreview{ID: strings.Repeat("a", 64), Candidate: update.ReplacementCandidate{Version: "v1.0.0"}, Risk: update.ReplacementDowngrade, Snapshot: update.ReplacementSnapshot{Targets: []update.ReplacementTarget{{Roles: []string{"binary"}, Version: "v2.0.0"}}}}}, nil
 }
+
+// rootReplacementFixture provides a delayed preparation result for shell ownership tests, independently of animation messages.
 func rootReplacementFixture(t *testing.T, previews ...update.ReplacementPreview) (Model, *systempage.Model, tea.Cmd) {
 	t.Helper()
 	t.Setenv("MIHARI_DATA", t.TempDir())

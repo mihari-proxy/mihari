@@ -64,6 +64,7 @@ func (m *Model) AcceptsMihariPreparation(key string) bool {
 	return m.pendingPrepared != nil && key == fmt.Sprintf("mihari:update:%d", m.preparationGeneration)
 }
 
+// startMihariPreparation starts owned preparation and its row animation concurrently, invalidating older display checks.
 func (m *Model) startMihariPreparation() tea.Cmd {
 	if m.pending || m.pendingPrepared != nil || m.selfUpdater == nil {
 		return nil

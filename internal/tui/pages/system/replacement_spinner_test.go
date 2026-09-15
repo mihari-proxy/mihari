@@ -10,8 +10,10 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+// TestMihariPreparation_SpinnerRunsUntilPreparationEnds covers animation lifetime
+// and both delivery orders of the preparation result and spinner start.
 func TestMihariPreparation_SpinnerRunsUntilPreparationEnds(t *testing.T) {
-	for _, outcome := range []string{"ready", "failed", "unavailable", "cancelled"} {
+	for _, outcome := range []string{"ready", "failed", "unavailable", "cancelled", "ready before spinner"} {
 		t.Run(outcome, func(t *testing.T) {
 			m, updater := replacementFixture(t)
 			t.Cleanup(func() { m.CancelMihariPreparation() })
@@ -50,6 +52,14 @@ func TestMihariPreparation_SpinnerRunsUntilPreparationEnds(t *testing.T) {
 			}
 			if result == nil || updater.calls != 1 {
 				t.Fatal("preparation did not produce exactly one result")
+			}
+			if outcome == "ready before spinner" {
+				m.Update(*result)
+				_, tick := m.Update(*start)
+				if tick != nil || m.rowSpinning || m.pending {
+					t.Fatal("late spinner start revived a completed preparation")
+				}
+				return
 			}
 			// Hold the result as if preparation were still in flight. Drive frames
 			// with explicit timestamps, without waiting for real timer commands.

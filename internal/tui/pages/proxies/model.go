@@ -402,6 +402,7 @@ func (m *Model) ensureFocusVisible() {
 	m.scrollY = ui.EnsureLineVisible(m.scrollY, max(1, m.height-len(m.routingHeader())), len(lines), focusStart, focusEnd)
 }
 
+// renderNode renders selection, keyboard focus, and pending state independently within a fixed-size proxy card.
 func (m *Model) renderNode(group protocol.ProxyGroup, node protocol.ProxyNode, width int) string {
 	id := FocusID{Group: group.Name, Node: node.Name}
 	focus := "  "

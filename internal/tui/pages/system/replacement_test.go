@@ -85,6 +85,7 @@ func TestPreparedConsent_PreparesBeforeDisplayingActualCandidate(t *testing.T) {
 	}
 }
 
+// TestPreparedConsent_CancelAndChannelChangeDiscardCandidate rejects candidates after cancellation, channel changes, or delayed confirmation.
 func TestPreparedConsent_CancelAndChannelChangeDiscardCandidate(t *testing.T) {
 	for _, kind := range []string{"cancel", "channel", "late-confirm"} {
 		t.Run(kind, func(t *testing.T) {
@@ -118,6 +119,8 @@ func TestPreparedConsent_CancelAndChannelChangeDiscardCandidate(t *testing.T) {
 		})
 	}
 }
+
+// TestPreparedConsent_RepeatedEnterAndLoadDoNotPrepareAgain prevents duplicate preparation while a download or confirmation is pending.
 func TestPreparedConsent_RepeatedEnterAndLoadDoNotPrepareAgain(t *testing.T) {
 	m, f := replacementFixture(t)
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -151,6 +154,8 @@ func (f *cancelReplacementUpdater) Prepare(ctx context.Context, _, _, _ string) 
 	<-f.release
 	return f.prepared, ctx.Err()
 }
+
+// TestPreparedConsent_EscapeCancelsDownloadAndDiscardsLateResult cancels the owned download and rejects its delayed result.
 func TestPreparedConsent_EscapeCancelsDownloadAndDiscardsLateResult(t *testing.T) {
 	m, f := replacementFixture(t)
 	blocking := &cancelReplacementUpdater{replacementUpdater: *f, started: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{})}
@@ -186,6 +191,7 @@ func TestPreparedConsent_EscapeCancelsDownloadAndDiscardsLateResult(t *testing.T
 	}
 }
 
+// TestPreparedConsent_OrdinaryUpgradeLabelsActualTargetVersions shows each installed target version without applying downgrade warnings to an upgrade.
 func TestPreparedConsent_OrdinaryUpgradeLabelsActualTargetVersions(t *testing.T) {
 	m, f := replacementFixture(t)
 	preview, err := update.NewReplacementPreview(update.ReplacementCandidate{Version: "v3.0.0", Channel: "main", SHA256: strings.Repeat("a", 64)}, update.ReplacementSnapshot{Targets: []update.ReplacementTarget{

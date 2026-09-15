@@ -35,6 +35,7 @@ func (installedLabelUpdater) ApplyPrepared(context.Context, update.PreparedUpdat
 	return update.Result{}, errors.New("confirmation must not apply the update")
 }
 
+// TestUpdateConfirmation_ObservedLabelReachesTUI preserves installed build evidence through the preparation and confirmation boundary.
 func TestUpdateConfirmation_ObservedLabelReachesTUI(t *testing.T) {
 	ctx := context.Background()
 	binary := filepath.Join(t.TempDir(), platform.InstalledBinaryName())
