@@ -35,6 +35,10 @@ var routingModes = []string{"rule", "global", "direct"}
 var routingLabels = []string{"Rule", "Global", "Direct"}
 var routingDescriptions = []string{"Follow routing rules", "Use the GLOBAL selection", "Connect directly"}
 
+// routingLabelStyle uses the reference's white labels without changing the
+// shared theme; reverse video turns this white foreground into the focus fill.
+var routingLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("7")).Width(9)
+
 // SetRoutingAvailable updates capability and daemon session identity.
 func (m *Model) SetRoutingAvailable(available bool, epoch uint64) {
 	if epoch < m.routing.epoch {
@@ -139,7 +143,7 @@ func (m *Model) routingHeader() []string {
 		if focused {
 			prefix = ui.FocusMarker
 		}
-		row := prefix + lipgloss.NewStyle().Foreground(lipgloss.Color("7")).Width(9).Render(label)
+		row := prefix + routingLabelStyle.Render(label)
 		valueWidth := max(0, textWidth-lipgloss.Width(row))
 		suffix := ""
 		if notes[i] != "" {

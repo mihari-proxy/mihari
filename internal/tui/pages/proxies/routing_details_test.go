@@ -78,13 +78,14 @@ func TestRoutingHeader_ActionHintWidthPriority(t *testing.T) {
 				header := m.routingHeader()
 				plain := ansi.Strip(header[row+1])
 				wantHint := width >= boundary
-				if strings.Contains(plain, suffix) != wantHint || strings.Contains(plain, " · ") != wantHint || strings.Contains(plain, "Enter") != wantHint || !strings.Contains(plain, value) {
-					t.Fatalf("width priority mismatch: %q", plain)
+				want := fmt.Sprintf("› %-9s%s", []string{"Mode", "GLOBAL"}[row], value)
+				if wantHint {
+					want += suffix
 				}
-				for _, line := range header {
-					if lipgloss.Width(line) != width-2 {
-						t.Fatalf("card overflow: %q", line)
-					}
+				// Check the actual content, not the width enforced by the section
+				// painter: a clipped partial hint must not pass at narrow widths.
+				if got := strings.TrimSpace(strings.Trim(plain, "│")); got != want {
+					t.Fatalf("row content=%q; want %q", got, want)
 				}
 			})
 		}
