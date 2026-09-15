@@ -46,7 +46,7 @@ func (m *Model) renderGroupHeader(group protocol.ProxyGroup, width int, focused 
 	if m.loadError != "" {
 		label = "Last selected: "
 	}
-	button := "[Locate]"
+	button := "Locate Selected"
 	// Reserve the action before truncating names, including in retained snapshots.
 	available := max(0, width-lipgloss.Width(prefix)-2-lipgloss.Width(button))
 	label = ui.TruncateVisible(label, max(0, available-1))

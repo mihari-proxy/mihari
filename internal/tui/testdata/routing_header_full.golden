@@ -1,10 +1,10 @@
  Mihari  ·  ●  ·  0 conn  ·  ↑      0 B/s  ↓      0 B/s  ·  0 B                             Offline
    1 Overview    ╭───Routing──────────────────────────────────────────────────────────────────────╮
- › 2 Proxies     │ › Mode     Rule                                                   Enter change │
-   3 Conns       │   GLOBAL   DIRECT · direct connection                             Enter select │
+ › 2 Proxies     │ › Mode     Rule · Press Enter to Change                                        │
+   3 Conns       │   GLOBAL   DIRECT · direct connection                                          │
    4 Rules       ╰────────────────────────────────────────────────────────────────────────────────╯
    5 Logs        ╭───GLOBAL · SELECTOR · 3────────────────────────────────────────────────────────╮
-   6 Subs        │   ▸  Now: DIRECT  [Locate]                                                     │
+   6 Subs        │   ▸  Now: DIRECT  Locate Selected                                              │
    7 Web GUI     ╰────────────────────────────────────────────────────────────────────────────────╯
    8 System
 
