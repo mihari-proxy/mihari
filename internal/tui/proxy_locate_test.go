@@ -36,7 +36,7 @@ func TestProxies_LocateThroughShellAndHelp(t *testing.T) {
 	}
 	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	view := normalizeRender(model.View().Content)
-	if !strings.Contains(view, "› ✓ two") || strings.Contains(view, "Enter locate") {
+	if !strings.Contains(view, "› ● two") || strings.Contains(view, "Enter locate") {
 		t.Fatalf("shell did not focus the selected card:\n%s", view)
 	}
 }

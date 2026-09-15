@@ -157,7 +157,7 @@ func TestLocate_SmallViewportPinsCardStart(t *testing.T) {
 		t.Fatalf("short viewport did not pin card start: scroll=%d range=%d:%d", m.scrollY, start, end)
 	}
 	m.SetSize(80, 20)
-	if m.focus != (FocusID{Group: "A", Node: "two"}) || !strings.Contains(ansi.Strip(m.View()), "› ✓ two") {
+	if m.focus != (FocusID{Group: "A", Node: "two"}) || !strings.Contains(ansi.Strip(m.View()), "› ● two") {
 		t.Fatal("resize lost the located card")
 	}
 }

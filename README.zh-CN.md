@@ -154,7 +154,7 @@ TUI **Proxies** 页顶部的 **Routing** 卡片包含 **Mode** 和 **GLOBAL**。
 
 Routing 标签为白色、值为绿色。仅焦点行在值后紧跟显示 `· Press Enter to Change` 或 `· Press Enter to Select`；窄屏优先保留值，空间不足时隐藏操作提示。状态说明不随失焦隐藏。
 
-Proxies 每个组（含 GLOBAL）的当前选择右侧都有 **→ Jump to Selected**（窄窗口缩短为 **→ Selected**）。在组标题上按 → 聚焦按钮，再按 Enter 自动展开并定位到当前选中的卡片；← 返回组标题。定位只移动键盘焦点，后续刷新改变选中项时不自动跟随。保留的 **Last selected** 数据仍可定位；选中项为空或不在候选列表中时按钮置灰。
+已选代理卡片使用蓝色 **●** 标记，颜色与日志 **INFO** 一致。Proxies 每个组（含 GLOBAL）的当前选择右侧都有 **→ Jump to Selected**（窄窗口缩短为 **→ Selected**）。在组标题上按 → 聚焦按钮，再按 Enter 自动展开并定位到当前选中的卡片；← 返回组标题。定位只移动键盘焦点，后续刷新改变选中项时不自动跟随。保留的 **Last selected** 数据仍可定位；选中项为空或不在候选列表中时按钮置灰。
 
 TUI **Subs** 页按 Enter 打开可编辑详情，`a` 添加订阅。Tab/Shift+Tab 或 ↑/↓ 切换字段，←/→/Space 在 **Auto refresh** 和 **Mode** 行循环选择；文本框 Enter 进入下一项，仅 **Save** 焦点上的 Enter 提交。PgUp/PgDn 滚动正文，长 URL 单行横向滚动。所有 TUI 内置文案均为英文。列表显示 **InUse**、**Enabled**、**Status**、**Mode**，`p` 循环切换拉取模式。
 

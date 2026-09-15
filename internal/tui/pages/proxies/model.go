@@ -410,7 +410,7 @@ func (m *Model) renderNode(group protocol.ProxyGroup, node protocol.ProxyNode, w
 	}
 	selected := " "
 	if group.Now == node.Name {
-		selected = "✓"
+		selected = m.theme.Info.Render("●")
 	}
 	if m.pending[id] {
 		selected = "…"
@@ -427,7 +427,7 @@ func (m *Model) renderNode(group protocol.ProxyGroup, node protocol.ProxyNode, w
 	// Network/protocol metadata shares the TCP/UDP network styling.
 	metadata = ui.StyleNetwork(m.theme, metadata)
 	// Truncate long names to the card's inner width so the card stays a stable
-	// two lines (design P3): width − border 2 − padding 2 − marker/✓ 2.
+	// two lines (design P3): width − border 2 − padding 2 − marker/selection 2.
 	name := ui.TruncateVisible(ui.DisplayProxyName(node.Name), max(4, width-7))
 	content := fmt.Sprintf("%s%s %s\n%s  %s", focus, selected, name, metadata, renderDelay(m.theme, m.delays[node.Name], m.now))
 	style := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(width)
