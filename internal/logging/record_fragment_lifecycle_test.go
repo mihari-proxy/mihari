@@ -100,8 +100,17 @@ func TestRecordFragment_ConcurrentWritersRotateSnapshotAndExport(t *testing.T) {
 	fs, paths := openExportTestFS(t)
 	var writers []*RotatingWriter
 	var loggers []*slog.Logger
+	var failures []FailureClass
+	var failureMu sync.Mutex
+	reporter := scanFailureReporter(func(class FailureClass, _ error) {
+		failureMu.Lock()
+		defer failureMu.Unlock()
+		failures = append(failures, class)
+	})
 	for range 2 {
-		writer, err := OpenRotatingWriter(context.Background(), RotatorOptions{PrivateFS: fs, BasePath: paths.DaemonLog, Config: Config{Level: slog.LevelInfo, MaxSizeBytes: 1 << 20, MaxFiles: 10}})
+		// This test proves record integrity. Default lock-timeout drops have
+		// separate deterministic coverage and must not depend on CI scheduling.
+		writer, err := OpenRotatingWriter(context.Background(), RotatorOptions{PrivateFS: fs, BasePath: paths.DaemonLog, Reporter: reporter, WriteWait: 10 * time.Second, Config: Config{Level: slog.LevelInfo, MaxSizeBytes: 1 << 20, MaxFiles: 10}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -115,14 +124,31 @@ func TestRecordFragment_ConcurrentWritersRotateSnapshotAndExport(t *testing.T) {
 	}
 	raw := strings.Repeat("\x01", diagnosticMaxBytes-24) + "https://test/?token=abc"
 	var tasks sync.WaitGroup
-	for _, logger := range loggers {
-		tasks.Go(func() { logger.Error("failure", "cause", raw) })
+	start := make(chan struct{})
+	writeErrors := make([]error, len(loggers))
+	for i, logger := range loggers {
+		tasks.Go(func() {
+			<-start
+			record := slog.NewRecord(time.Now(), slog.LevelError, "failure", 0)
+			record.AddAttrs(slog.String("cause", raw))
+			writeErrors[i] = logger.Handler().Handle(context.Background(), record)
+		})
 	}
+	close(start)
 	tasks.Wait()
-	for _, writer := range writers {
+	for i, writer := range writers {
+		if writeErrors[i] != nil || writer.Dropped() != 0 {
+			t.Errorf("writer %d: error=%v dropped=%d", i, writeErrors[i], writer.Dropped())
+		}
 		if err := writer.Close(); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if len(failures) != 0 {
+		t.Errorf("write failure classes=%v", failures)
+	}
+	if t.Failed() {
+		t.FailNow()
 	}
 	now := time.Now().Add(time.Second)
 	set, err := NewMachineSnapshotSource(MachineSnapshotOptions{PrivateFS: fs, Paths: paths}).Open(context.Background(), SnapshotWindow{To: now})
@@ -166,7 +192,7 @@ func TestRecordFragment_ConcurrentWritersRotateSnapshotAndExport(t *testing.T) {
 		records[part.ID][part.Index-1] = part.Detail.Cause
 	}
 	if len(records) != 2 {
-		t.Fatal("concurrent logical records were lost or mixed")
+		t.Fatalf("logical records=%d, want 2 after successful writes", len(records))
 	}
 	for _, parts := range records {
 		if strings.Join(parts, "") != raw {

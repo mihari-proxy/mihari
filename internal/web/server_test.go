@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -573,7 +574,13 @@ func TestGatewayWebSocketClientCloseStopsUpstream(t *testing.T) {
 	})
 	gateway := newTask5Gateway(t, controller.URL, nil)
 	reporter, diagnosticsOutput := newWebDiagnostics()
-	gateway.Reporter = reporter
+	var reported []diagnostics.Record
+	gateway.Reporter = func(ctx context.Context, record diagnostics.Record) {
+		reported = append(reported, record)
+		reporter(ctx, record)
+	}
+	observer := newWebSocketRelayJoinObserver()
+	gateway.wsObserver = observer
 	base := serveWebSocketGateway(t, gateway)
 	stream := dialTask5GatewayStream(t, base)
 	waitDone(t, controllerState.accepted, "upstream WebSocket acceptance")
@@ -583,8 +590,33 @@ func TestGatewayWebSocketClientCloseStopsUpstream(t *testing.T) {
 	stream.CloseNow()
 	waitDone(t, controllerState.done, "upstream WebSocket")
 	requireTask5PeerClose(t, controllerState)
+	select {
+	case active := <-observer.handlerResult:
+		if active != 0 {
+			t.Fatal("handler left a relay active")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("handler did not join both relays")
+	}
 	waitTask5SessionCount(t, gateway, 0)
-	assertWebDiagnostics(t, diagnosticsOutput, "websocket.relay.failed", "ERROR", 1)
+	if len(reported) != 1 {
+		t.Fatalf("relay reported %d failures, want one terminal outcome", len(reported))
+	}
+	// A hijacked HTTP request can be canceled by the peer disconnect before
+	// either WebSocket reader publishes its error. Only a pure cancellation
+	// chain may be INFO; independent faults remain ERROR in the owner tests.
+	level := "ERROR"
+	if reported[0].Level == slog.LevelInfo {
+		err := reported[0].Err
+		for depth := 0; depth < 32 && errors.Unwrap(err) != nil; depth++ {
+			err = errors.Unwrap(err)
+		}
+		if err != context.Canceled && err != context.DeadlineExceeded {
+			t.Fatal("non-cancellation relay failure was downgraded to INFO")
+		}
+		level = "INFO"
+	}
+	assertWebDiagnostics(t, diagnosticsOutput, "websocket.relay.failed", level, 1)
 }
 
 func TestGatewayWebSocketContextCancelReleasesBothSides(t *testing.T) {

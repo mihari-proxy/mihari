@@ -2,6 +2,7 @@ package logging
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -282,8 +283,8 @@ func TestExportWithOps_CancellationDuringMultiChunkZipCopyReturnsPromptly(t *tes
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	chunks := 0
-	start := time.Now()
 	_, err := exportWithOps(ctx, ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: filepath.Join(parent, "cancelled.zip"), Paths: paths, PrivateFS: fs}, exportOps{Checkpoint: func(stage exportStage) error {
 		if stage == stageWriteZip {
 			chunks++
@@ -296,8 +297,8 @@ func TestExportWithOps_CancellationDuringMultiChunkZipCopyReturnsPromptly(t *tes
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error=%v", err)
 	}
-	if time.Since(start) > 2*time.Second {
-		t.Fatalf("cancellation took %v", time.Since(start))
+	if chunks != 2 {
+		t.Fatalf("copy checkpoints=%d, want cancellation during second chunk", chunks)
 	}
 	entries, readErr := os.ReadDir(parent)
 	if readErr != nil {
@@ -305,6 +306,34 @@ func TestExportWithOps_CancellationDuringMultiChunkZipCopyReturnsPromptly(t *tes
 	}
 	if len(entries) != 0 {
 		t.Fatalf("resources remain: %v", entries)
+	}
+}
+
+func TestCopySpool_CancelStopsBeforeNextChunk(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	const chunkBytes = 32 << 10
+	source := bytes.NewReader(bytes.Repeat([]byte("x"), 4*chunkBytes))
+	var destination bytes.Buffer
+	checkpoints := 0
+	err := copySpool(ctx, source, &destination, exportOps{Checkpoint: func(stage exportStage) error {
+		if stage != stageWriteZip {
+			t.Fatalf("unexpected stage %v", stage)
+		}
+		checkpoints++
+		if checkpoints == 2 {
+			cancel()
+		}
+		return nil
+	}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("copy error=%v, want cancellation", err)
+	}
+	if checkpoints != 2 || destination.Len() < chunkBytes || destination.Len() > 2*chunkBytes {
+		t.Fatalf("checkpoints=%d copied=%d, want at most the in-flight chunk after cancel", checkpoints, destination.Len())
+	}
+	if read := 4*chunkBytes - source.Len(); read > 2*chunkBytes || read != destination.Len() {
+		t.Fatalf("read=%d written=%d, copy continued after cancellation", read, destination.Len())
 	}
 }
 

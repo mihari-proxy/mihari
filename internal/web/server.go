@@ -816,6 +816,7 @@ type webSocketRelayResult struct {
 // arrival order alone cannot distinguish a closed write from its cause.
 func webSocketRelayFailure(ctx context.Context, first, second webSocketRelayResult) error {
 	results := [2]webSocketRelayResult{first, second}
+	var cancellation error
 	for i, result := range results {
 		sibling := results[1-i]
 		status, cause := webSocketRelayTermination(result.err)
@@ -835,10 +836,18 @@ func webSocketRelayFailure(ctx context.Context, first, second webSocketRelayResu
 			continue
 		}
 		if _, emit := diagnostics.FailureLevel(ctx, result.err); emit {
+			if cause == context.Canceled || cause == context.DeadlineExceeded {
+				// Cancellation may reach the owner before the other copy's actual
+				// failure. Keep it only when neither copy has an independent fault.
+				if cancellation == nil {
+					cancellation = result.err
+				}
+				continue
+			}
 			return result.err
 		}
 	}
-	return nil
+	return cancellation
 }
 
 // webSocketRelayTermination recognizes only singly wrapped native termination

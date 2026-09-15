@@ -403,3 +403,31 @@ func TestWebSocketRelayFailure_PreservesIndependentFaults(t *testing.T) {
 		})
 	}
 }
+
+func TestWebSocketRelayFailure_IndependentFaultOutranksCancellation(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		if canceled {
+			cancel()
+		}
+		for _, fault := range []error{
+			os.ErrPermission,
+			websocket.CloseError{Code: websocket.StatusPolicyViolation},
+			errors.Join(context.Canceled, os.ErrPermission),
+		} {
+			for _, cancellation := range []error{context.Canceled, context.DeadlineExceeded} {
+				for _, faultFirst := range []bool{false, true} {
+					first := webSocketRelayResult{reading: true, err: fmt.Errorf("read: %w", cancellation), stopped: canceled}
+					second := webSocketRelayResult{reading: true, err: fault, stopped: true}
+					if faultFirst {
+						first, second = second, first
+					}
+					if got := webSocketRelayFailure(ctx, first, second); !errors.Is(got, fault) {
+						t.Errorf("canceled=%v faultFirst=%v: selected %v, want %v", canceled, faultFirst, got, fault)
+					}
+				}
+			}
+		}
+		cancel()
+	}
+}

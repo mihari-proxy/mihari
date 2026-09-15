@@ -2,6 +2,7 @@ package logging
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -13,13 +14,19 @@ func TestRecordFragment_TwoProcessesKeepOriginalContentAcrossRotation(t *testing
 	fs, paths := openTestLogFS(t)
 	cfg := Config{Level: slog.LevelInfo, MaxSizeBytes: 1 << 20, MaxFiles: 10}
 	children := []*rotatorChild{
-		startRotatorChild(t, paths.Root, paths.TUILog, "fragment-pause", "A", cfg, 1),
-		startRotatorChild(t, paths.Root, paths.TUILog, "fragment-pause", "B", cfg, 1),
+		startRotatorChild(t, paths.Root, paths.TUILog, "fragment-open-pause", "A", cfg, 1),
+		startRotatorChild(t, paths.Root, paths.TUILog, "fragment-open-pause", "B", cfg, 1),
 	}
 	for _, child := range children {
-		if !child.sc.Scan() || child.sc.Text() != "opened" {
-			t.Fatalf("fragment writer failed to open: %s", child.errBuf.String())
+		requireRotatorChildLine(t, child, "ready")
+	}
+	for _, child := range children {
+		if _, err := io.WriteString(child.stdin, "open\n"); err != nil {
+			t.Fatal(err)
 		}
+	}
+	for _, child := range children {
+		requireRotatorChildLine(t, child, "opened")
 	}
 	for _, child := range children {
 		if _, err := io.WriteString(child.stdin, "go\n"); err != nil {
@@ -68,5 +75,16 @@ func TestRecordFragment_TwoProcessesKeepOriginalContentAcrossRotation(t *testing
 		if strings.Join(parts, "") != strings.Repeat("\x01", diagnosticMaxBytes) {
 			t.Fatal("original content lost across processes/rotation")
 		}
+	}
+}
+
+func TestRecordFragment_SubprocessWritePreservesFailure(t *testing.T) {
+	cause := errors.New("fixture fragment write failure")
+	out := &fragmentFailureWriter{failAt: 2, failure: cause}
+	if err := writeRotatorFragment(out, "fixture"); !errors.Is(err, cause) {
+		t.Fatalf("fragment write error=%v, want original failure", err)
+	}
+	if out.writes != 2 {
+		t.Fatalf("writes=%d, writer continued after failure", out.writes)
 	}
 }

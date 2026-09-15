@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -187,12 +188,32 @@ type rotatorChild struct {
 	stdin  io.WriteCloser
 	sc     *bufio.Scanner
 	cmd    *exec.Cmd
-	errBuf *bytes.Buffer
+	errBuf *rotatorErrorBuffer
+}
+
+type rotatorErrorBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *rotatorErrorBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *rotatorErrorBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func startRotatorChild(t *testing.T, root, base, mode, writer string, cfg Config, count int) *rotatorChild {
 	t.Helper()
-	cmd := exec.Command(os.Args[0])
+	// Bound both protocol Scan and Wait, including a child that never opens.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	t.Cleanup(cancel)
+	cmd := exec.CommandContext(ctx, os.Args[0])
 	cmd.Env = append(os.Environ(),
 		rotatorChildEnv+"="+mode,
 		"MIHARI_ROTATOR_ROOT="+root,
@@ -202,7 +223,7 @@ func startRotatorChild(t *testing.T, root, base, mode, writer string, cfg Config
 		"MIHARI_ROTATOR_MAXSIZE="+strconv.FormatInt(cfg.MaxSizeBytes, 10),
 		"MIHARI_ROTATOR_MAXFILES="+strconv.Itoa(cfg.MaxFiles),
 	)
-	errBuf := &bytes.Buffer{}
+	errBuf := &rotatorErrorBuffer{}
 	cmd.Stderr = errBuf
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -210,9 +231,12 @@ func startRotatorChild(t *testing.T, root, base, mode, writer string, cfg Config
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = stdin.Close() // The command never started; release its pipe.
 		t.Fatal(err)
 	}
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close() // No child owns the pipes on Start failure.
+		_ = stdout.Close()
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -230,10 +254,23 @@ func waitChildExit(t *testing.T, child *rotatorChild) {
 	if err := child.stdin.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := child.cmd.Wait(); err != nil {
+	err := child.cmd.Wait()
+	child.cmd.Process = nil // Wait consumed this process even on failure.
+	if err != nil {
 		t.Fatalf("child wait: %v stderr=%s", err, child.errBuf.String())
 	}
+}
+
+func requireRotatorChildLine(t *testing.T, child *rotatorChild, want string) {
+	t.Helper()
+	if child.sc.Scan() && child.sc.Text() == want {
+		return
+	}
+	_ = child.stdin.Close() // Failure teardown: let a waiting child exit.
+	_ = child.cmd.Process.Kill()
+	err := child.cmd.Wait()
 	child.cmd.Process = nil
+	t.Fatalf("child stage=%s got=%q scan=%v exit=%v stderr=%s", want, child.sc.Text(), child.sc.Err(), err, child.errBuf.String())
 }
 
 func runRotatorChild() int {
@@ -241,6 +278,15 @@ func runRotatorChild() int {
 	base := os.Getenv("MIHARI_ROTATOR_BASE")
 	writer := os.Getenv("MIHARI_ROTATOR_WRITER")
 	mode := os.Getenv(rotatorChildEnv)
+	if mode == "fragment-open-pause" {
+		fmt.Println("ready")
+		input := bufio.NewScanner(os.Stdin)
+		if !input.Scan() || input.Text() != "open" {
+			fmt.Fprintln(os.Stderr, "child initialization barrier failed")
+			return 1
+		}
+		mode = "fragment-pause"
+	}
 	maxSize, _ := strconv.ParseInt(os.Getenv("MIHARI_ROTATOR_MAXSIZE"), 10, 64)
 	maxFiles, _ := strconv.Atoi(os.Getenv("MIHARI_ROTATOR_MAXFILES"))
 	count, _ := strconv.Atoi(os.Getenv("MIHARI_ROTATOR_COUNT"))
@@ -313,7 +359,10 @@ func runRotatorChild() int {
 		}
 		for i := 1; i <= count; i++ {
 			if mode == "fragment-pause" {
-				slog.New(NewJSONHandler(w, new(slog.LevelVar), "tui", nil)).Error("process fragment", "writer", writer, "cause", strings.Repeat("\x01", diagnosticMaxBytes))
+				if err := writeRotatorFragment(w, writer); err != nil {
+					fmt.Fprintf(os.Stderr, "child fragment write: %v\n", err)
+					return 1
+				}
 				continue
 			}
 			if err := writeRotatorRecord(w, writer, i); err != nil {
@@ -321,11 +370,21 @@ func runRotatorChild() int {
 				return 1
 			}
 		}
+		if err := w.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "child close: %v\n", err)
+			return 1
+		}
 		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "unknown child mode %q\n", mode)
 		return 1
 	}
+}
+
+func writeRotatorFragment(out io.Writer, writer string) error {
+	record := slog.NewRecord(time.Now(), slog.LevelError, "process fragment", 0)
+	record.AddAttrs(slog.String("writer", writer), slog.String("cause", strings.Repeat("\x01", diagnosticMaxBytes)))
+	return NewJSONHandler(out, new(slog.LevelVar), "tui", nil).Handle(context.Background(), record)
 }
 
 func writeRotatorRecord(w *RotatingWriter, writer string, seq int) error {
