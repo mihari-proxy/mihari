@@ -351,9 +351,9 @@ jobs:
           cat > /tmp/install_guidance.md <<'TEMPLATE'
 
           <!-- install-guidance -->
-          > **Installation:** Use the complete installation commands in the [README](https://github.com/mihari-proxy/mihari#quick-start) or these release notes. Do not download and run individual release assets directly.
-          >
-          > **安装建议：** 请使用 [README](https://github.com/mihari-proxy/mihari/blob/main/README.zh-CN.md) 或本 Release notes 提供的完整安装命令；不建议单独下载并直接运行 Release assets。
+          ## **Installation:** Use the complete installation commands in the [README](https://github.com/mihari-proxy/mihari#quick-start) or these release notes. Do not download and run individual release assets directly.
+
+          ## **安装建议：** 请使用 [README](https://github.com/mihari-proxy/mihari/blob/main/README.zh-CN.md) 或本 Release notes 提供的完整安装命令；不建议单独下载并直接运行 Release assets。
           <!-- /install-guidance -->
           TEMPLATE
           gh release edit "${VERSION}" --notes "$(printf '%s\n%s\n' "$(cat /tmp/install_guidance.md)" "$NOTES")"

@@ -1157,11 +1157,11 @@ def test_stable_and_dev_release_notes_upsert_guidance_without_replacing_existing
             "https://github.com/mihari-proxy/mihari/blob/main/README.zh-CN.md",
             "https://github.com/mihari-proxy/mihari#quick-start",
             "<!-- install-guidance -->\n"
-            "> **Installation:** Use the complete installation commands in the "
+            "## **Installation:** Use the complete installation commands in the "
             "[README](https://github.com/mihari-proxy/mihari#quick-start) or these "
             "release notes. Do not download and run individual release assets directly.\n"
-            ">\n"
-            "> **安装建议：** 请使用 [README](https://github.com/mihari-proxy/mihari/"
+            "\n"
+            "## **安装建议：** 请使用 [README](https://github.com/mihari-proxy/mihari/"
             "blob/main/README.zh-CN.md) 或本 Release notes 提供的完整安装命令；不建议单独下载并直接运行 "
             "Release assets。\n"
             "<!-- /install-guidance -->",
