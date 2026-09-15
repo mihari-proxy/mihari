@@ -57,7 +57,7 @@ func (f *formModel) fieldLayout(theme ui.Theme, width int) formLayout {
 		layout.lines = append(layout.lines, line)
 		if label == "Interval" && index == f.index {
 			help := "Leave blank to use global interval"
-			layout.lines = append(layout.lines, strings.Split(ansi.Hardwrap(theme.Muted.Render(help), width, true), "\n")...)
+			layout.lines = append(layout.lines, strings.Split(ansi.Wrap(theme.Muted.Render(help), width, ""), "\n")...)
 		}
 		layout.fields = append(layout.fields, formFieldRows{first, len(layout.lines) - 1})
 	}

@@ -255,3 +255,12 @@ func TestDetailLayout_BlurredURLShowsOrigin(t *testing.T) {
 		t.Fatal("display clipping changed URL")
 	}
 }
+
+func TestDetailLayout_ErrorWrapPreservesWords(t *testing.T) {
+	m := compactDetail()
+	m.subscriptions[0].LastError = "Download failed. The cached configuration remains available."
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "available.") {
+		t.Fatal("error wrapping split a word that fits on a line")
+	}
+}

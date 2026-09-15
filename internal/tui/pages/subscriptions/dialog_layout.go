@@ -24,7 +24,7 @@ func (m *Model) formLayout() formLayout {
 	layout := m.form.fieldLayout(m.theme, width)
 	if m.form.kind == formEdit {
 		status := strings.TrimSuffix(m.formStatus(), "\n")
-		prefix := strings.Split(ansi.Hardwrap(status, width, true), "\n")
+		prefix := strings.Split(ansi.Wrap(status, width, ""), "\n")
 		prefix = append(prefix, "", m.theme.Title.Render("Settings"), "")
 		for i := range layout.fields {
 			layout.fields[i].first += len(prefix)
@@ -34,7 +34,7 @@ func (m *Model) formLayout() formLayout {
 	}
 	if m.form.errorText != "" {
 		layout.lines = append(layout.lines, "")
-		layout.lines = append(layout.lines, strings.Split(ansi.Hardwrap(m.theme.Danger.Render(m.form.errorText), width, true), "\n")...)
+		layout.lines = append(layout.lines, strings.Split(ansi.Wrap(m.theme.Danger.Render(m.form.errorText), width, ""), "\n")...)
 	}
 	height := m.height
 	if height == 0 {
@@ -67,7 +67,7 @@ func (m *Model) formView(title string) string {
 	width := m.formTextWidth()
 	var body string
 	if m.saveState != saveEditing {
-		body = ansi.Hardwrap(m.saveBody(), width, true)
+		body = ansi.Wrap(m.saveBody(), width, "")
 	} else {
 		layout := m.formLayout()
 		m.dialogScroll = max(0, min(m.dialogScroll, len(layout.lines)-layout.bodyHeight))
