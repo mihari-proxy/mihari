@@ -99,6 +99,8 @@ func (m *Model) FooterHints() string {
 	return ui.RenderFooter(m.ID(), "", ui.FooterOpt{})
 }
 
+// routingHeader keeps status explanations visible and adds optional action hints
+// only beside a focused value when the complete hint fits.
 func (m *Model) routingHeader() []string {
 	if !m.routing.available {
 		return nil

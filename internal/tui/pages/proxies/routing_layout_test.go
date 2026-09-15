@@ -47,6 +47,7 @@ func TestRoutingHeader_CompactBorderedCard(t *testing.T) {
 	})
 }
 
+// TestRoutingHeader_LongSelectionPreservesStatusNotes protects explanations from long values.
 func TestRoutingHeader_LongSelectionPreservesStatusNotes(t *testing.T) {
 	forRoutingHeaderCases(t, func(t *testing.T, m *Model) {
 		plain := ansi.Strip(strings.Join(m.routingHeader(), "\n"))

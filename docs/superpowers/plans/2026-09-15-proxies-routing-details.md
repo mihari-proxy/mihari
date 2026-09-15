@@ -2,7 +2,7 @@
 
 日期：2026-09-15
 
-状态：T01–T05 实现与本地验证已完成；提交 PR 后继续跟进 CI 和可用 bot review。
+状态：T01–T05 实现与本地验证已完成；已创建 [PR #247](https://github.com/mihari-proxy/mihari/pull/247)，远端检查与 review 结果以 PR 最新提交记录为准。
 
 设计：[已确认设计](../specs/2026-09-15-proxies-routing-details-design.md)
 
@@ -162,7 +162,7 @@ exit $LASTEXITCODE
 | 产品设计 | 用户已确认 | 文案、配色、分段反色、提示焦点、窄屏和状态规则已写入设计 |
 | 设计与执行文档 | 已编写 | 本文及关联设计文档 |
 | T01–T05 | 本地已完成 | 下述 Red/Green、样式预览、TUI 检查与六目标构建记录 |
-| PR / CI / bot review | 待创建与跟进 | 不以本地验证替代远端结果 |
+| PR / CI / bot review | 已创建 PR 并跟进 | [PR #247](https://github.com/mihari-proxy/mihari/pull/247)；以最新提交的检查与 review 记录为准 |
 
 后续执行时逐项填写：失败测试及原因、最小修复、通过的实际命令、视觉核对结果，以及因环境无法验证的项目。
 
@@ -177,4 +177,10 @@ exit $LASTEXITCODE
 - `CGO_ENABLED=0` 的 Windows、Linux、macOS × amd64、arm64 六目标构建均通过；产物在忽略的 `bin/`。
 - `git diff --check` 仅报告 `full/proxies.golden` 两条变更行的既有固定宽度行尾空格；这是快照保留的渲染列，不能删空格改变基线含义。普通文件用排除 `.golden` 的检查，快照另以允许行末空格的检查验证。
 - 中英文 README 已同步。CHANGELOG、全局主题、协议、业务行为及其他 worktree 未修改。
-- CI 将执行全仓三平台 unit/race、lint、vet-format、coverage、六目标构建与 Unix 安全检查；结果待 PR 创建后核实。
+- CI 执行全仓三平台 unit/race、lint、vet-format、coverage、六目标构建与 Unix 安全检查；在 PR #247 持续核实最新提交结果。Pullfrog 已自动开始 review；CodeRabbit 自动 review 被标签配置跳过，已通过其评论入口请求单次 review。
+
+- 补充本地检查：`golangci-lint run ./internal/tui/pages/proxies/...`（v2.12.2）通过，0 issues。
+
+### 首轮 bot review 跟进
+
+CodeRabbit 在 `7658365` 上未发现 actionable 问题；其预合并说明报告修改函数的注释覆盖率不足。已为新增测试、fixture 和 Routing 渲染函数补充说明意图的注释，不改行为；同时记录 PR 链接及本地 lint 结果。后续审查与 CI 继续以 PR 最新提交为准。

@@ -13,6 +13,8 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+// newRoutingDetailsModel supplies matching routing and candidate revisions so
+// both rows offer actions instead of displaying stale-state explanations.
 func newRoutingDetailsModel() *Model {
 	m := New(nil, nil)
 	m.SetSize(100, 22)
@@ -24,6 +26,7 @@ func newRoutingDetailsModel() *Model {
 	return m
 }
 
+// TestLocateHeader_SelectedLabel pins the unboxed action beside the selected name.
 func TestLocateHeader_SelectedLabel(t *testing.T) {
 	m, _ := newLocateModel()
 	line := ansi.Strip(m.renderGroupHeader(m.groups[0], 74, true))
@@ -32,6 +35,7 @@ func TestLocateHeader_SelectedLabel(t *testing.T) {
 	}
 }
 
+// TestRoutingHeader_FocusedActionHint limits inline hints to the active content row.
 func TestRoutingHeader_FocusedActionHint(t *testing.T) {
 	for _, focused := range []bool{true, false} {
 		for _, row := range []int{0, 1, -1} {
@@ -52,6 +56,8 @@ func TestRoutingHeader_FocusedActionHint(t *testing.T) {
 	}
 }
 
+// TestRoutingHeader_ActionHintWidthPriority prevents optional hints from shortening
+// values and checks the exact column at which each complete hint fits.
 func TestRoutingHeader_ActionHintWidthPriority(t *testing.T) {
 	for row, value := range []string{"Rule", "Tokyo"} {
 		suffix := []string{" · Press Enter to Change", " · Press Enter to Select"}[row]
@@ -89,6 +95,8 @@ func TestRoutingHeader_ActionHintWidthPriority(t *testing.T) {
 	}
 }
 
+// TestRoutingHeader_StatusNotesRemainVisible keeps unavailable-state explanations
+// independent of keyboard focus and mutually exclusive with the row's action hint.
 func TestRoutingHeader_StatusNotesRemainVisible(t *testing.T) {
 	for _, state := range []string{"pending", "unknown", "unconfirmed", "stale"} {
 		for _, focused := range []bool{true, false} {
@@ -128,6 +136,8 @@ func TestRoutingHeader_StatusNotesRemainVisible(t *testing.T) {
 	}
 }
 
+// TestRoutingHeader_SegmentedFocusColors verifies the displayed colors across
+// inline style resets, including the hint immediately after a reversed value.
 func TestRoutingHeader_SegmentedFocusColors(t *testing.T) {
 	for _, focused := range []bool{false, true} {
 		for _, row := range []int{0, 1} {
