@@ -185,7 +185,15 @@ func (fs *PrivateFS) openAppendLocked(dir, name string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	fd, err := unix.Openat(dirfd, name, unix.O_WRONLY|unix.O_APPEND|unix.O_CREAT|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0o600)
+	// Separate creation from opening an existing file, as trustedOpen does.
+	// Concurrent non-exclusive O_CREAT opens have returned ENOENT on macOS
+	// during logger initialization. EEXIST selects the existing-file path;
+	// all other failures remain errors, with no retry or namespace recreation.
+	flags := unix.O_WRONLY | unix.O_APPEND | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
+	fd, err := unix.Openat(dirfd, name, flags|unix.O_CREAT|unix.O_EXCL, 0o600)
+	if errors.Is(err, unix.EEXIST) {
+		fd, err = unix.Openat(dirfd, name, flags, 0)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("open append %s: %w", name, err)
 	}

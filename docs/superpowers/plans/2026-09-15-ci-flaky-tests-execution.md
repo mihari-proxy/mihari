@@ -228,7 +228,7 @@ git status --short
 
 ## 执行记录
 
-执行基线已更新至 `f365631`。生产变更限于 `webSocketRelayFailure`：将纯取消暂存为后备结果，优先保留另一条 relay 的独立故障。没有改变 request context 传播、全局日志级别策略和产品锁超时。
+执行基线已更新至 `f365631`。首轮生产变更为 `webSocketRelayFailure`：将纯取消暂存为后备结果，优先保留另一条 relay 的独立故障。没有改变 request context 传播、全局日志级别策略和产品锁超时。
 
 - Task 0：相关包基线通过。
 - Task 1：新确定性回归先出现 12 个错误选择失败，最小生产修复后通过；保留正常关闭、混合链和异常状态的既有回归。真实 CloseNow 测试等待两个 relay 完成，仍严格要求一次终止报告，仅纯取消链可为 INFO。coverage 重复 1000 次通过。
@@ -238,4 +238,12 @@ git status --short
 - Task 5：双子进程在初始化前同时释放；子进程使用 2 分钟保护期限，失败先回收再读取诊断，stderr buffer 并发安全，Wait 仅消费一次。现有 macOS unit job 增加原测试的 100 次重复检查；ENOENT 尚无确定根因，等待原生平台证据，不将其描述为已修复。
 - Task 6 本地验证：`go test -count=1 ./...`、`go vet ./...`、目标包 unit/race、集成测试全部通过；WebSocket race 重复 100 次、coverage 重复 1000 次通过；日志并发 race 重复 30 次通过；workflow 策略测试 79 项通过。Web 包覆盖率基线 83.6%，本分支 83.7%（两个基线提交之间该包没有变更）。修改的 Go 文件 gofmt 检查与 diff whitespace 检查通过。全仓三平台 race/构建及 macOS 专项重复等待 PR CI，未以本地目标包结果替代。
 
-实施中的取舍：未重设计 gateway 的升级连接生命周期，未改 Unix 文件打开实现。为避免给已有偶发初始化故障指定未经证实的修复，macOS 平台修改以复现证据为前提。
+实施中的取舍：未重设计 gateway 的升级连接生命周期。macOS 平台修改以原生复现证据为前提。
+
+### macOS 原生 Red 与后续修复
+
+PR #248 首轮 CI `34933283302` 在 macOS 专项 100 次检查中多次失败，错误一致为 `open append mihari-tui.log.lock: no such file or directory`。该错误来自旧版 PrivateFS 的 `unix.Openat`，发生在获取 advisory lock 之前；两个 child 均在父进程发出后续写入命令前初始化，此时没有日志轮转或测试目录清理。三平台完整 race、其余平台 unit、六目标构建、安全检查通过。
+
+后续将旧版 Unix append-create 与现有 `trustedOpen` 对齐：先 `O_CREAT|O_EXCL`，仅 `EEXIST` 时打开已存在文件；其他错误立即返回。保留 held dirfd、`O_NOFOLLOW`、`O_NONBLOCK`、普通文件验证及权限收紧，不增加 ENOENT 重试。新增 16 个独立 PrivateFS 并发打开同一新文件的回归，验证同一文件身份和所有追加内容。原生失败测试已先于此生产修改运行；后续 macOS Green 仍须由 CI 确认，尚不能归因到某个具体内核缺陷。
+
+本地新增回归重复 30 次通过；Linux amd64/macOS arm64 平台测试二进制与 CLI 无 CGO 编译通过。后续 CI 使用同一个 100 次检查作为 macOS 验收。

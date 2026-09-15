@@ -6,9 +6,67 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
+
+func TestPrivateFS_ConcurrentOpenAppendKeepsSameFile(t *testing.T) {
+	_, paths := openTestPrivateFS(t)
+	const writers = 16
+	start := make(chan struct{})
+	type result struct {
+		info os.FileInfo
+		err  error
+	}
+	results := make(chan result, writers)
+	filesystems := make([]*PrivateFS, 0, writers)
+	for range writers {
+		fs, err := NewPrivateFS(paths.Root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = fs.Close() })
+		if err := fs.EnsureDir(paths.LogDir); err != nil {
+			t.Fatal(err)
+		}
+		filesystems = append(filesystems, fs)
+	}
+	for _, fs := range filesystems {
+		go func() {
+			<-start
+			f, err := fs.OpenAppend(paths.TUILog + ".lock")
+			if err != nil {
+				results <- result{err: err}
+				return
+			}
+			info, statErr := f.Stat()
+			_, writeErr := f.Write([]byte("x"))
+			results <- result{info: info, err: errors.Join(statErr, writeErr, f.Close())}
+		}()
+	}
+	close(start)
+	var first os.FileInfo
+	for range writers {
+		got := <-results
+		if got.err != nil {
+			t.Error(got.err)
+			continue
+		}
+		if first == nil {
+			first = got.info
+		} else if !os.SameFile(first, got.info) {
+			t.Error("concurrent append opens returned different files")
+		}
+	}
+	body, err := os.ReadFile(paths.TUILog + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != strings.Repeat("x", writers) {
+		t.Fatalf("concurrent append content=%q want %d markers", body, writers)
+	}
+}
 
 func TestPrivateFS_RejectsRelativeDataRoot(t *testing.T) {
 	if _, err := NewPrivateFS("relative-data"); err == nil {
