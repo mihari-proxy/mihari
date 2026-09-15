@@ -18,7 +18,7 @@ func locateHeader(t *testing.T, m *Model) string {
 	t.Helper()
 	lines, _, _ := m.buildContent(false)
 	for _, line := range lines {
-		if strings.Contains(ansi.Strip(line), "Locate Selected") {
+		if strings.Contains(ansi.Strip(line), "Selected") {
 			return line
 		}
 	}
@@ -43,7 +43,11 @@ func TestLocateHeader_PreservesButtonWithLongName(t *testing.T) {
 				// Check before the section painter can clip or pad the header.
 				textWidth := ui.SectionTextWidth(ui.FullSectionInner(width))
 				raw := m.renderGroupHeader(m.groups[0], textWidth, true)
-				if lipgloss.Width(raw) > textWidth || !strings.Contains(ansi.Strip(raw), "Locate Selected") {
+				button := "→ Jump to Selected"
+				if width == 30 {
+					button = "→ Selected"
+				}
+				if lipgloss.Width(raw) > textWidth || !strings.Contains(ansi.Strip(raw), button) {
 					t.Fatalf("raw header exceeds its budget or lost Locate: %q", raw)
 				}
 				if header := locateHeader(t, m); !strings.Contains(header, "…") {
@@ -61,7 +65,7 @@ func TestLocateHeader_PreservesButtonWithLongName(t *testing.T) {
 // TestLocateHeader_ButtonFollowsShortName rejects alignment that detaches Locate from its label.
 func TestLocateHeader_ButtonFollowsShortName(t *testing.T) {
 	m, _ := newLocateModel()
-	if !strings.Contains(ansi.Strip(locateHeader(t, m)), "Now: two  Locate Selected") {
+	if !strings.Contains(ansi.Strip(locateHeader(t, m)), "Now: two  → Jump to Selected") {
 		t.Fatal("Locate must immediately follow the name")
 	}
 }
@@ -70,12 +74,12 @@ func TestLocateHeader_ButtonFollowsShortName(t *testing.T) {
 func TestLocateHeader_FocusAndDisabledStyles(t *testing.T) {
 	m, _ := newLocateModel()
 	header := locateHeader(t, m)
-	if strings.Contains(header, m.theme.RowFocus.Render("Locate Selected")) {
+	if strings.Contains(header, m.theme.RowFocus.Render("→ Jump to Selected")) {
 		t.Fatal("header focus also highlighted Locate")
 	}
 	updateProxyKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
 	header = locateHeader(t, m)
-	if !strings.Contains(header, m.theme.RowFocus.Render("Locate Selected")) {
+	if !strings.Contains(header, m.theme.RowFocus.Render("→ Jump to Selected")) {
 		t.Fatal("Locate focus lacks the page focus style")
 	}
 	if strings.Contains(header[:strings.Index(header, "Now:")], "\x1b[7m") {
@@ -88,7 +92,7 @@ func TestLocateHeader_FocusAndDisabledStyles(t *testing.T) {
 	}
 	m.groups[0].Now = "missing"
 	header = locateHeader(t, m)
-	if !strings.Contains(header, m.theme.Muted.Render("Locate Selected")) {
+	if !strings.Contains(header, m.theme.Muted.Render("→ Jump to Selected")) {
 		t.Fatal("disabled Locate is not muted")
 	}
 	m.SetContentFocused(true)

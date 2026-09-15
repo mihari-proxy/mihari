@@ -46,7 +46,11 @@ func (m *Model) renderGroupHeader(group protocol.ProxyGroup, width int, focused 
 	if m.loadError != "" {
 		label = "Last selected: "
 	}
-	button := "Locate Selected"
+	button := "→ Jump to Selected"
+	// Keep room for the selection label and at least one name column.
+	if width < lipgloss.Width(prefix+label+button)+3 {
+		button = "→ Selected"
+	}
 	// Reserve the action before truncating names, including in retained snapshots.
 	available := max(0, width-lipgloss.Width(prefix)-2-lipgloss.Width(button))
 	label = ui.TruncateVisible(label, max(0, available-1))

@@ -154,7 +154,7 @@ In TUI **Proxies**, the **Routing** card contains **Mode** and **GLOBAL**. Focus
 
 Routing uses white labels and green values. Only the focused row shows `· Press Enter to Change` or `· Press Enter to Select` immediately after its value; narrow windows hide the action hint to preserve the value. Status explanations remain visible without focus.
 
-Each Proxies group, including GLOBAL, has **Locate Selected** beside its current selection. On the group header, press → to focus Locate Selected and Enter to expand the group and scroll to its selected card; ← returns to the header. This only moves keyboard focus. Later refreshes do not move that focus when the selection changes. Locate Selected remains usable with retained **Last selected** data, and is disabled when the selection is empty or absent from the candidate list.
+Each Proxies group, including GLOBAL, has **→ Jump to Selected** beside its current selection (shortened to **→ Selected** in narrow windows). On the group header, press → to focus the button and Enter to expand the group and scroll to its selected card; ← returns to the header. This only moves keyboard focus. Later refreshes do not move that focus when the selection changes. The button remains usable with retained **Last selected** data, and is disabled when the selection is empty or absent from the candidate list.
 
 In TUI **Subs**, Enter opens editable details; `a` adds a profile. Use Tab/Shift+Tab or ↑/↓ to move between fields, and ←/→/Space to cycle **Auto refresh** or **Mode**. Enter advances to the next field; only Enter on **Save** submits. PgUp/PgDn scroll the details; long URLs scroll horizontally. All built-in TUI text is English. The list uses **InUse**, **Enabled**, **Status**, and **Mode**; `p` cycles fetch mode.
 

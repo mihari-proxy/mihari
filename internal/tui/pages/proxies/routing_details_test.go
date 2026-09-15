@@ -30,7 +30,7 @@ func newRoutingDetailsModel() *Model {
 func TestLocateHeader_SelectedLabel(t *testing.T) {
 	m, _ := newLocateModel()
 	line := ansi.Strip(m.renderGroupHeader(m.groups[0], 74, true))
-	if !strings.Contains(line, "Now: two  Locate Selected") || strings.Contains(line, "[Locate]") {
+	if !strings.Contains(line, "Now: two  → Jump to Selected") || strings.Contains(line, "[Locate]") {
 		t.Fatalf("unexpected locate label: %q", line)
 	}
 }
