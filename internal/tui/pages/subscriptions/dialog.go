@@ -309,6 +309,7 @@ func emptyPatch(r protocol.SubscriptionUpdateRequest) bool {
 	return r.Name == nil && r.URL == nil && r.Interval == nil && r.AutoRefresh == nil && r.ProxyMode == nil && r.GlobalInterval == nil
 }
 
+// formHelpMode selects root help bindings for the current save phase or field.
 func (m *Model) formHelpMode() string {
 	switch m.saveState {
 	case saveSending:
@@ -337,6 +338,8 @@ func (m *Model) formFooter() string { return ui.RenderFooter(m.ID(), m.formHelpM
 // HasDialog reports page ownership of all keyboard input, including save waits.
 func (m *Model) HasDialog() bool { return m.form != nil }
 
+// updateDialogMessage reconciles asynchronous replies against the current dialog.
+// URL reveal preserves a user's draft and manual scroll position.
 func (m *Model) updateDialogMessage(message tea.Msg) (bool, tea.Cmd) {
 	switch msg := message.(type) {
 	case revealResultMsg:
@@ -406,6 +409,7 @@ func (m *Model) updateDialogMessage(message tea.Msg) (bool, tea.Cmd) {
 	return false, nil
 }
 
+// formStatus groups catalog status above editable fields, omitting absent errors.
 func (m *Model) formStatus() string {
 	if m.form.kind != formEdit {
 		return ""
@@ -451,6 +455,7 @@ func (m *Model) Stop() {
 	}
 }
 
+// saveBody renders save progress and confirmation choices without edit controls.
 func (m *Model) saveBody() string {
 	body := m.dialogNote
 	switch m.saveState {

@@ -8,10 +8,13 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+// formTextWidth reserves the dialog frame within the shared width cap.
 func (m *Model) formTextWidth() int {
 	return min(72, max(24, m.layoutWidth()-8)) - m.theme.Dialog.GetHorizontalFrameSize()
 }
 
+// formLayout combines status and field rows within the available body height.
+// Global interval text is a placeholder and never becomes a draft value.
 func (m *Model) formLayout() formLayout {
 	width := m.formTextWidth()
 	if m.form.kind == formEdit {
@@ -46,6 +49,8 @@ func (m *Model) formLayout() formLayout {
 	return layout
 }
 
+// ensureFormFocus reveals the active field using its rendered row bounds.
+// Moving focus ends manual scrolling; Save stays outside the scrollable body.
 func (m *Model) ensureFormFocus() {
 	m.dialogManualScroll = false
 	layout := m.formLayout()
@@ -63,6 +68,8 @@ func (m *Model) ensureFormFocus() {
 	m.dialogScroll = max(0, min(m.dialogScroll, len(layout.lines)-layout.bodyHeight))
 }
 
+// formView centers a content-sized dialog with a scrollable body and fixed Save.
+// Non-editing phases replace the form with their existing status controls.
 func (m *Model) formView(title string) string {
 	width := m.formTextWidth()
 	var body string

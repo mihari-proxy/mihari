@@ -25,6 +25,7 @@ func subscriptionDetailRoot() Model {
 	return m
 }
 
+// TestSubscriptionDetail_ResizesWithSaveVisible checks every field against the root frame budget.
 func TestSubscriptionDetail_ResizesWithSaveVisible(t *testing.T) {
 	for _, add := range []bool{false, true} {
 		t.Run(fmt.Sprintf("add=%v", add), func(t *testing.T) {
@@ -101,6 +102,7 @@ func TestSubscriptionDetail_MinimumRootFrame(t *testing.T) {
 	}
 }
 
+// TestSubscriptionDetail_FooterFollowsFocusOnce prevents duplicated or stale root shortcuts.
 func TestSubscriptionDetail_FooterFollowsFocusOnce(t *testing.T) {
 	for _, add := range []bool{false, true} {
 		m := subscriptionDetailRoot()

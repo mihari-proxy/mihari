@@ -12,6 +12,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+// subscriptionDialogFixture drives the root with synthetic events and a fixed clock.
 func subscriptionDialogFixture(t *testing.T, width, height int, add bool, field int, lastError string) Model {
 	t.Helper()
 	freezeUTC(t)
@@ -42,6 +43,7 @@ func subscriptionDialogFixture(t *testing.T, width, height int, add bool, field 
 	return m
 }
 
+// TestGoldenSubscriptionDialogs captures shared add/edit, focus, overflow, and error layouts.
 func TestGoldenSubscriptionDialogs(t *testing.T) {
 	for _, tc := range []struct {
 		name                 string

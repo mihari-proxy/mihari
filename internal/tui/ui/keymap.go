@@ -31,8 +31,9 @@ const (
 	ModeExportLogs = "export-logs"
 	ModeConfirm    = "confirm"
 	ModeSetup      = "setup"
-	// Subscription overlay modes share help and footer bindings.
-	ModeSubscriptionInput   = "subscription-input"
+	// ModeSubscriptionInput identifies an editable subscription form field.
+	ModeSubscriptionInput = "subscription-input"
+	// ModeSubscriptionSubmit identifies the subscription form Save control.
 	ModeSubscriptionSubmit  = "subscription-submit"
 	ModeSubscriptionCycle   = "subscription-cycle"
 	ModeSubscriptionSaving  = "subscription-saving"
@@ -358,6 +359,7 @@ func RenderHelp(active PageID, mode string) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// modeTitle supplies the heading for a contextual shortcut group.
 func modeTitle(mode string) string {
 	switch mode {
 	case ModeRouting:

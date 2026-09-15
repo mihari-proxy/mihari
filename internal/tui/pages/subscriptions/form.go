@@ -44,6 +44,7 @@ func newEditForm(subscription protocol.Subscription) *formModel {
 	return f
 }
 
+// newForm initializes the shared draft and text-input styling for add and edit.
 func newForm(kind formKind, labels, values, placeholders []string) *formModel {
 	form := &formModel{kind: kind, labels: append([]string(nil), labels...), inputs: make([]textinput.Model, len(labels))}
 	for index := range labels {

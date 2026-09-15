@@ -11,6 +11,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
+// compactDetail opens an edit form with a fixed clock and synthetic catalog.
 func compactDetail() *Model {
 	now := time.Date(2026, 9, 15, 8, 0, 0, 0, time.UTC)
 	m := New(nil, nil, func() time.Time { return now })
@@ -21,6 +22,7 @@ func compactDetail() *Model {
 	return m
 }
 
+// TestDetailLayout_CompactSharedFields protects the single-row fields and two-row URL contract.
 func TestDetailLayout_CompactSharedFields(t *testing.T) {
 	for _, add := range []bool{false, true} {
 		m := compactDetail()
@@ -53,6 +55,7 @@ func TestDetailLayout_CompactSharedFields(t *testing.T) {
 	}
 }
 
+// dialogBorderHeight measures the box independently of its centered outer padding.
 func dialogBorderHeight(view string) int {
 	start, end := -1, -1
 	for i, line := range strings.Split(ansi.Strip(view), "\n") {
@@ -66,6 +69,7 @@ func dialogBorderHeight(view string) int {
 	return end - start + 1
 }
 
+// TestDetailLayout_HeightFollowsContent rejects growth caused only by a taller terminal.
 func TestDetailLayout_HeightFollowsContent(t *testing.T) {
 	m := compactDetail()
 	first := dialogBorderHeight(m.View())
@@ -76,6 +80,7 @@ func TestDetailLayout_HeightFollowsContent(t *testing.T) {
 	}
 }
 
+// TestDetailLayout_SaveAlwaysVisible keeps submission reachable below overflowing status.
 func TestDetailLayout_SaveAlwaysVisible(t *testing.T) {
 	m := compactDetail()
 	m.SetSize(54, 20)
@@ -89,6 +94,7 @@ func TestDetailLayout_SaveAlwaysVisible(t *testing.T) {
 	}
 }
 
+// TestDetailLayout_GlobalIntervalIsOnlyPlaceholder distinguishes inherited values from edits.
 func TestDetailLayout_GlobalIntervalIsOnlyPlaceholder(t *testing.T) {
 	m := compactDetail()
 	m.globalInterval = "6h"
@@ -109,6 +115,7 @@ func TestDetailLayout_GlobalIntervalIsOnlyPlaceholder(t *testing.T) {
 	}
 }
 
+// TestDetailStatus_CompactSummary keeps active selection independent of cache readiness.
 func TestDetailStatus_CompactSummary(t *testing.T) {
 	m := compactDetail()
 	view := ansi.Strip(m.formStatus())
@@ -131,6 +138,7 @@ func TestDetailStatus_CompactSummary(t *testing.T) {
 	}
 }
 
+// TestDetailTimestamp_LocalMinutes fixes the local timezone and missing-value contract.
 func TestDetailTimestamp_LocalMinutes(t *testing.T) {
 	prior := time.Local
 	time.Local = time.FixedZone("test", 8*60*60)
@@ -143,6 +151,7 @@ func TestDetailTimestamp_LocalMinutes(t *testing.T) {
 	}
 }
 
+// TestDetailLayout_ValidationErrorVisibleBelowLongStatus prevents hidden validation failures.
 func TestDetailLayout_ValidationErrorVisibleBelowLongStatus(t *testing.T) {
 	m := compactDetail()
 	m.SetSize(54, 20)
@@ -156,6 +165,7 @@ func TestDetailLayout_ValidationErrorVisibleBelowLongStatus(t *testing.T) {
 	}
 }
 
+// TestDetailLayout_StatusRefreshKeepsFocusedField distinguishes focus tracking from manual scrolling.
 func TestDetailLayout_StatusRefreshKeepsFocusedField(t *testing.T) {
 	m := compactDetail()
 	m.SetSize(54, 20)
@@ -174,6 +184,7 @@ func TestDetailLayout_StatusRefreshKeepsFocusedField(t *testing.T) {
 	}
 }
 
+// TestDetailLayout_InputAndCycleFocusStyles checks white text cursors and reversed cycle controls.
 func TestDetailLayout_InputAndCycleFocusStyles(t *testing.T) {
 	m := compactDetail()
 	styles := m.form.inputs[0].Styles()
@@ -197,6 +208,7 @@ func TestDetailLayout_InputAndCycleFocusStyles(t *testing.T) {
 	}
 }
 
+// TestDetailLayout_IntervalDraftAndWideInputSurviveResize protects draft and PATCH semantics.
 func TestDetailLayout_IntervalDraftAndWideInputSurviveResize(t *testing.T) {
 	m := compactDetail()
 	url := "https://example.test/" + strings.Repeat("long-path/", 50)
@@ -223,6 +235,7 @@ func TestDetailLayout_IntervalDraftAndWideInputSurviveResize(t *testing.T) {
 	}
 }
 
+// TestDetailLayout_SaveStatesFitSmallWindow keeps save feedback and cancellation inside the frame.
 func TestDetailLayout_SaveStatesFitSmallWindow(t *testing.T) {
 	m := compactDetail()
 	m.SetSize(54, 20)
@@ -242,6 +255,7 @@ func TestDetailLayout_SaveStatesFitSmallWindow(t *testing.T) {
 	}
 }
 
+// TestDetailLayout_BlurredURLShowsOrigin checks clipping without changing the stored address.
 func TestDetailLayout_BlurredURLShowsOrigin(t *testing.T) {
 	m := compactDetail()
 	url := "https://example.test/" + strings.Repeat("sample-", 50)
@@ -256,6 +270,7 @@ func TestDetailLayout_BlurredURLShowsOrigin(t *testing.T) {
 	}
 }
 
+// TestDetailLayout_ErrorWrapPreservesWords guards against splitting ordinary error text.
 func TestDetailLayout_ErrorWrapPreservesWords(t *testing.T) {
 	m := compactDetail()
 	m.subscriptions[0].LastError = "Download failed. The cached configuration remains available."

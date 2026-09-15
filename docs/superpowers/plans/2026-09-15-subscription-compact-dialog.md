@@ -165,7 +165,8 @@
 - [x] 按实际帮助调整必要文档；历史设计若保留原描述，添加指向本计划的后续调整说明，不抹去历史行为。
 - [x] 执行 §5 验证，记录已运行结果与未验证项。
 - [x] 检查变更范围不含业务层、协议、CHANGELOG、临时产物和主 worktree 既有修改。
-- [ ] 提交并创建指向 dev 的 PR；按后续授权每 10 分钟检查 Actions 与 bot review，修复相关问题直到全绿，交付结果。合并仍需另行确认。
+- [x] 提交并创建指向 dev 的 PR。
+- [ ] 按后续授权每 10 分钟检查 Actions 与 bot review，修复相关问题直到全绿，交付结果。合并仍需另行确认。
 
 ## 5. 验证命令与验收矩阵
 
@@ -242,5 +243,6 @@ try {
 
 - PR：https://github.com/mihari-proxy/mihari/pull/245，目标 `dev`。
 - 2026-09-15：按后续指令 rebase 到最新 `origin/dev` @ `d132db2`，无冲突；rebase 后 `go test ./internal/tui/...` 通过。更新 PR 分支后继续检查新 head 的 CI 和 bot review。
+- 2026-09-15 11:58（UTC+8）：`112f8fb` 的全部 Actions 通过，包含三平台 unit/race 和六目标构建；Pullfrog 审查该提交后报告无问题。CodeRabbit 提出的导出常量注释、PR 创建勾选状态及函数注释覆盖率提示已在后续文档提交中处理，继续验证新 head。Cubic 因本月免费额度耗尽跳过审查，服务提示 10 月 1 日恢复；未修改其配置或购买额度。
 
 创建 PR 后记录链接；每次检查同时核对当前 head commit 的 Actions、reviews、review comments 与未解决线程。新反馈先确认适用性，补回归测试并修复，不通过取消检查、降低门禁或忽略有效反馈获得绿色。最终汇报 PR 链接、通过结果和剩余限制，不自动合并。

@@ -18,6 +18,8 @@ type formLayout struct {
 	bodyHeight int
 }
 
+// fieldLayout renders shared add/edit fields and records their inclusive row bounds.
+// Display widths and clipping preserve the full input values and cursor offsets.
 func (f *formModel) fieldLayout(theme ui.Theme, width int) formLayout {
 	layout := formLayout{}
 	for index, label := range f.labels {

@@ -353,6 +353,7 @@ func (m *Model) FocusFirst() {
 	}
 }
 
+// SetSubscriptions refreshes catalog state while preserving form drafts and manual scrolling.
 func (m *Model) SetSubscriptions(result protocol.SubscriptionList) {
 	previousIndex := m.index(m.focus.id)
 	m.subscriptions = append([]protocol.Subscription(nil), result.Subscriptions...)
@@ -606,6 +607,7 @@ func (m *Model) View() string {
 	return content
 }
 
+// updateForm routes editing, scrolling, and submission while keeping feedback visible.
 func (m *Model) updateForm(message tea.Msg) (ui.Page, tea.Cmd) {
 	if m.saveState != saveEditing {
 		return m, m.updateSaveKeys(message)
@@ -962,6 +964,7 @@ func enabledLabel(enabled bool) string {
 	return ui.DisabledLabel
 }
 
+// formatTimestamp displays local minute precision, or a missing marker for zero time.
 func formatTimestamp(value time.Time) string {
 	if value.IsZero() {
 		return ui.MissingValue
