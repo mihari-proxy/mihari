@@ -74,10 +74,10 @@ func Catalog() []KeyBinding {
 
 		{Keys: []string{"esc"}, Display: "Esc", Label: "return to the rail", Scope: ScopePage, Page: PageOverview},
 
-		{Keys: []string{"enter"}, Display: "Enter", Label: "change Mode, open GLOBAL, expand a group or select a node", Footer: "Enter expand", Scope: ScopePage, Page: PageProxies},
+		{Keys: []string{"enter"}, Display: "Enter", Label: "change Mode, open GLOBAL, expand a group, select a node, or Locate the current selection", Footer: "Enter expand", Scope: ScopePage, Page: PageProxies},
 		{Keys: []string{"t"}, Display: "t", Label: "test the focused node", Footer: "t test", Scope: ScopePage, Page: PageProxies},
 		{Keys: []string{"ctrl+t"}, Display: "Ctrl+T", Label: "test all", Footer: "Ctrl+T test all", Scope: ScopePage, Page: PageProxies},
-		{Keys: []string{"up", "down", "left", "right"}, Display: "↑/↓/←/→", Label: "move", Scope: ScopePage, Page: PageProxies},
+		{Keys: []string{"up", "down", "left", "right"}, Display: "↑/↓/←/→", Label: "move; at a group header, → focuses Locate and ← returns to the header", Scope: ScopePage, Page: PageProxies},
 
 		{Keys: []string{"/"}, Display: "/", Label: "search", Footer: "/ search", Scope: ScopePage, Page: PageConnections},
 		{Keys: []string{"x"}, Display: "x", Label: "close the focused connection", Footer: "x close", Scope: ScopePage, Page: PageConnections},

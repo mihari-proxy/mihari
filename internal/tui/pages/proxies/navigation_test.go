@@ -45,8 +45,8 @@ func TestNavigation_GroupAndNodeArrowRules(t *testing.T) {
 	}
 
 	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	if command != nil || model.focus != (FocusID{Group: "A"}) {
-		t.Fatalf("group right changed focus=%#v", model.focus)
+	if command != nil || model.focus != (FocusID{Group: "A", Locate: true}) {
+		t.Fatalf("group right did not focus Locate: %#v", model.focus)
 	}
 	_, command = model.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	if command != nil || model.focus != (FocusID{Group: "A"}) {

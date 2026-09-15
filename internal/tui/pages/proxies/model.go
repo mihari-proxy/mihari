@@ -127,6 +127,7 @@ func (m *Model) SetSize(width, height int) {
 }
 
 func (m *Model) FocusFirst() {
+	m.focus = FocusID{}
 	if m.routing.available {
 		m.routing.focus = 0
 		m.scrollY = 0
@@ -248,8 +249,17 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	if m.focus.Node == "" {
 		switch key.String() {
 		case "enter":
-			m.expanded[m.focus.Group] = !m.expanded[m.focus.Group]
-			m.ensureFocusVisible()
+			if m.focus.Locate {
+				m.locateCurrent()
+			} else if m.groupIndex(m.focus.Group) >= 0 {
+				m.expanded[m.focus.Group] = !m.expanded[m.focus.Group]
+				m.ensureFocusVisible()
+			}
+		case "left", "right":
+			if m.groupIndex(m.focus.Group) >= 0 {
+				m.focus.Locate = key.String() == "right"
+				m.ensureFocusVisible()
+			}
 		case "up", "down":
 			m.move(key.String())
 		}
@@ -312,29 +322,8 @@ func (m *Model) buildContent(focusWholeGroup bool) (lines []string, focusStart, 
 	inner := ui.FullSectionInner(m.width)
 	textW := ui.SectionTextWidth(inner)
 	for _, group := range m.groups {
-		marker := "▸"
-		if m.expanded[group.Name] {
-			marker = "▾"
-		}
-		focus := "  "
-		groupFocused := m.focus == (FocusID{Group: group.Name}) && (!m.routing.available || m.routing.focus < 0)
-		if groupFocused {
-			focus = ui.FocusMarker
-		}
-		nowName := ui.DisplayProxyName(group.Now)
-		nowDisplay := ui.MissingValue
-		if nowName != "" {
-			// The current node is the live selection → Positive.
-			nowDisplay = m.theme.Success.Render(nowName)
-		}
-		header := fmt.Sprintf("%s%s  Now: %s", focus, marker, nowDisplay)
-		if m.loadError != "" {
-			header = fmt.Sprintf("%s%s  Last selected: %s", focus, marker, nowDisplay)
-		}
-		switch {
-		case groupFocused && m.contentFocused:
-			header = ui.ApplyFocusStyle(header, m.theme.RowFocus)
-		}
+		groupFocused := m.focus.Group == group.Name && m.focus.Node == "" && (!m.routing.available || m.routing.focus < 0)
+		header := m.renderGroupHeader(group, textW, groupFocused)
 
 		bodyLines := []string{header}
 		if m.loadError != "" {

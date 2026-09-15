@@ -4,7 +4,7 @@
    3 Conns     │   GLOBAL   DIRECT · direct connection   Enter select │
    4 Rules     ╰──────────────────────────────────────────────────────╯
    5 Logs      ╭───GLOBAL · SELECTOR · 3──────────────────────────────╮
-   6 Subs      │   ▸  Now: DIRECT                                     │
+   6 Subs      │   ▸  Now: DIRECT  [Locate]                           │
    7 Web GUI   ╰──────────────────────────────────────────────────────╯
    8 System
 

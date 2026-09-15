@@ -2,9 +2,11 @@ package proxies
 
 import "github.com/mihari-proxy/mihari/internal/control/protocol"
 
+// FocusID identifies a group header, its Locate button, or a candidate card.
 type FocusID struct {
-	Group string
-	Node  string
+	Group  string
+	Node   string
+	Locate bool // Only group headers have a Locate button; Node is empty when true.
 }
 
 func (m *Model) move(key string) {
@@ -21,7 +23,7 @@ func (m *Model) move(key string) {
 
 func (m *Model) moveGroup(key string) {
 	items := m.visibleItems()
-	index := indexOfFocus(items, m.focus)
+	index := indexOfFocus(items, FocusID{Group: m.focus.Group})
 	if key == "up" && index == 0 && m.routing.available {
 		m.routing.focus = 1
 		return
