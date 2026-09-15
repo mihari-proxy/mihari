@@ -22,6 +22,8 @@ func TestReplacementFile_WindowsExecutionTrust(t *testing.T) {
 		{"unsafe write ACL", "O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;GW;;;BU)", true, false, false},
 		{"user owned elevated", "O:S-1-5-21-1-2-3-1000G:BAD:(A;;FA;;;S-1-5-21-1-2-3-1000)", true, false, false},
 		{"same user", "O:S-1-5-21-1-2-3-1000G:BAD:(A;;FA;;;S-1-5-21-1-2-3-1000)", false, false, true},
+		{"same user with another writer", "O:S-1-5-21-1-2-3-1000G:BAD:(A;;FA;;;S-1-5-21-1-2-3-1000)(A;;GW;;;S-1-5-21-1-2-3-1001)", false, false, false},
+		{"another owner after reduction", "O:S-1-5-21-1-2-3-1001G:BAD:(A;;FA;;;S-1-5-21-1-2-3-1000)", false, false, false},
 		{"trusted installer owner", "O:" + windowsTrustedInstallerSID + "G:SYD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;" + windowsTrustedInstallerSID + ")(A;;GRGX;;;BU)", true, false, true},
 		{"trusted installer owner user write", "O:" + windowsTrustedInstallerSID + "G:SYD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;GW;;;BU)", true, false, false},
 		{"volume root users add subdirectory", "O:" + windowsTrustedInstallerSID + "G:SYD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x4;;;AU)(A;;GRGX;;;BU)", true, true, true},

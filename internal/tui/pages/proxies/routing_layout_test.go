@@ -47,10 +47,11 @@ func TestRoutingHeader_CompactBorderedCard(t *testing.T) {
 	})
 }
 
-func TestRoutingHeader_LongSelectionPreservesHints(t *testing.T) {
+// TestRoutingHeader_LongSelectionPreservesStatusNotes protects explanations from long values.
+func TestRoutingHeader_LongSelectionPreservesStatusNotes(t *testing.T) {
 	forRoutingHeaderCases(t, func(t *testing.T, m *Model) {
 		plain := ansi.Strip(strings.Join(m.routingHeader(), "\n"))
-		note := map[string]string{"applied": "Enter change", "pending": "Saved · pending", "unknown": "Live state unavailable"}[m.routing.status.State]
+		note := map[string]string{"applied": "Rule · Press Enter to Change", "pending": "Saved · pending", "unknown": "Live state unavailable"}[m.routing.status.State]
 		for _, want := range []string{"…", note, "Waiting for candidates"} {
 			if !strings.Contains(plain, want) {
 				t.Fatalf("missing %q in truncated card:\n%s", want, plain)

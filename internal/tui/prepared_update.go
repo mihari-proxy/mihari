@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	systempage "github.com/mihari-proxy/mihari/internal/tui/pages/system"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"github.com/mihari-proxy/mihari/internal/update"
@@ -52,7 +53,11 @@ func (w *runPreparedUpdater) Check(ctx context.Context, current, channel string)
 		return update.CheckResult{}, err
 	}
 	defer finish()
-	return updater.Check(child, current, channel)
+	result, err := updater.Check(child, current, channel)
+	if diagnostics.NormalCancellation(child, err) {
+		return result, err
+	}
+	return result, w.diagnostics.ReportFailure(child, "self.check.failed", err)
 }
 
 func (w *runPreparedUpdater) Prepare(ctx context.Context, binary, current, channel string) (update.PreparedUpdate, error) {
