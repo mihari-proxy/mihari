@@ -49,6 +49,8 @@ Proxy latency tests discover provider nodes and use mihomo's provider-specific e
 
 While a TUI proxy latency test is running, its node card shows only an animated Braille spinner beside the protocol.
 
+The TUI subscription table sizes Name and Traffic to their contents, capped at 32 and 24 terminal columns. Extra width stays on the right; narrow terminals hide lower-priority fields first.
+
 Mihomo HTTP failures retain their original error text and upstream status in diagnostic logs, including gateway requests and WebSocket handshakes. File logs and exports are not redacted: credentials, URLs, paths, and configuration fragments carried by errors remain available for diagnosis. User-facing errors remain concise.
 
 A single CGO-free static binary (< 15 MB) contains everything, with built-in GitHub Releases self-update and local GeoIP resolution.

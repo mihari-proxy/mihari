@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -541,13 +542,21 @@ func (m *Model) FooterHints() string {
 // subscriptionColumns is the checked table definition (design S1 table):
 // name is highest priority, nextRefresh drops first.
 func (m *Model) subscriptionColumns() []ui.TableColumn {
+	// Grow only to the content's visible width, leaving surplus space on the
+	// right instead of pushing related fields apart on wide terminals.
+	nameWidth, trafficWidth := 10, 11
+	for _, subscription := range m.subscriptions {
+		nameWidth = max(nameWidth, lipgloss.Width(subscription.Name))
+		traffic := ui.FormatSubscriptionTrafficCompact(subscription.Upload, subscription.Download, subscription.Total)
+		trafficWidth = max(trafficWidth, lipgloss.Width(traffic))
+	}
 	return []ui.TableColumn{
-		{ID: "name", Title: ui.NameLabel, MinWidth: 10, Flex: 3, Priority: 8},
+		{ID: "name", Title: ui.NameLabel, MinWidth: 10, MaxWidth: min(nameWidth, 32), Flex: 3, Priority: 8},
 		{ID: "active", Title: "InUse", MinWidth: 5, Flex: 0, Priority: 7, Align: ui.AlignCenter},
 		{ID: "state", Title: "Enabled", MinWidth: 8, Flex: 0, Priority: 6},
 		{ID: "load", Title: "Status", MinWidth: 12, Flex: 0, Priority: 5},
 		{ID: "proxy", Title: "Mode", MinWidth: 6, Flex: 0, Priority: 4},
-		{ID: "traffic", Title: ui.TrafficLabel, MinWidth: 11, Flex: 1, Priority: 3},
+		{ID: "traffic", Title: ui.TrafficLabel, MinWidth: 11, MaxWidth: min(trafficWidth, 24), Flex: 1, Priority: 3},
 		{ID: "lastSuccess", Title: ui.LastUpdateLabel, MinWidth: 11, Flex: 0, Priority: 2},
 		{ID: "nextRefresh", Title: ui.NextUpdateLabel, MinWidth: 11, Flex: 0, Priority: 1},
 	}
