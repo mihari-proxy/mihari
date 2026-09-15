@@ -59,15 +59,22 @@ func TestRoutingHeader_FocusedActionHint(t *testing.T) {
 // TestRoutingHeader_ActionHintWidthPriority prevents optional hints from shortening
 // values and checks the exact column at which each complete hint fits.
 func TestRoutingHeader_ActionHintWidthPriority(t *testing.T) {
-	for row, value := range []string{"Rule", "Tokyo"} {
+	for _, test := range []struct {
+		row, valueWidth int
+		value           string
+	}{{0, 4, "Rule"}, {1, 5, "Tokyo"}, {1, 6, "香港🌏"}} {
+		row, value := test.row, test.value
 		suffix := []string{" · Press Enter to Change", " · Press Enter to Select"}[row]
 		// Page chrome consumes six columns; the marker and aligned label use eleven.
-		boundary := 6 + 11 + lipgloss.Width(value+suffix)
+		boundary := 6 + 11 + test.valueWidth + lipgloss.Width(suffix)
 		for _, width := range []int{30, boundary - 1, boundary, boundary + 1, 58, 80, 160} {
-			t.Run(fmt.Sprintf("row=%d/width=%d", row, width), func(t *testing.T) {
+			t.Run(fmt.Sprintf("value=%s/width=%d", value, width), func(t *testing.T) {
 				m := newRoutingDetailsModel()
 				m.SetSize(width, 22)
 				m.routing.focus = row
+				if row == 1 {
+					m.routing.status.GlobalSelection = value
+				}
 				header := m.routingHeader()
 				plain := ansi.Strip(header[row+1])
 				wantHint := width >= boundary

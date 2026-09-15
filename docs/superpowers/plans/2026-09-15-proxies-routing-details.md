@@ -184,3 +184,7 @@ exit $LASTEXITCODE
 ### 首轮 bot review 跟进
 
 CodeRabbit 在 `7658365` 上未发现 actionable 问题；其预合并说明报告修改函数的注释覆盖率不足。已为新增测试、fixture 和 Routing 渲染函数补充说明意图的注释，不改行为；同时记录 PR 链接及本地 lint 结果。后续审查与 CI 继续以 PR 最新提交为准。
+
+### 第二轮 bot review 跟进
+
+CodeRabbit 在 `b121cb0` 上建议补充中文/emoji 值恰好容纳操作提示的边界。已将 `香港🌏` 作为明确占 6 显示列的 fixture，覆盖恰好容纳、少一列、多一列和常规宽度；完整后缀、无半截提示和值保留均有断言。目标测试、Proxies 全包与 golangci-lint 均通过，生产实现未改。
