@@ -29,6 +29,10 @@ type ExecVersionRunner struct{}
 
 // RunVersion runs self version in an isolated temporary environment.
 func (ExecVersionRunner) RunVersion(ctx context.Context, executable, dir string) ([]byte, error) {
+	return runVersionProbe(ctx, executable, dir, (*exec.Cmd).Run)
+}
+
+func runVersionProbe(ctx context.Context, executable, dir string, run func(*exec.Cmd) error) ([]byte, error) {
 	if !filepath.IsAbs(executable) || !filepath.IsAbs(dir) {
 		return nil, os.ErrInvalid
 	}
@@ -57,7 +61,7 @@ func (ExecVersionRunner) RunVersion(ctx context.Context, executable, dir string)
 	cmd.Stderr = stderr
 	// Bound inherited pipes too, then Wait reaps the child before returning.
 	cmd.WaitDelay = 100 * time.Millisecond
-	err := cmd.Run()
+	err := run(cmd)
 	if stdout.overflow || stderr.overflow {
 		return nil, errors.Join(errVersionProbeLimit, err)
 	}
@@ -90,6 +94,10 @@ func ObserveReplacementTarget(ctx context.Context, role, path string, runner Ver
 	return observeReplacementTarget(ctx, role, path, runner, platform.ObserveReplacementFile)
 }
 func observeReplacementTarget(ctx context.Context, role, path string, runner VersionRunner, observe func(context.Context, string) (platform.ReplacementFile, error)) (out ReplacementTarget, err error) {
+	return observeReplacementTargetWithFallback(ctx, role, path, runner, observe, observeUserReplacementTarget)
+}
+
+func observeReplacementTargetWithFallback(ctx context.Context, role, path string, runner VersionRunner, observe func(context.Context, string) (platform.ReplacementFile, error), userProbe func(context.Context, ReplacementTarget) (ReplacementTarget, error)) (out ReplacementTarget, err error) {
 	if err = ctx.Err(); err != nil {
 		return out, err
 	}
@@ -98,7 +106,13 @@ func observeReplacementTarget(ctx context.Context, role, path string, runner Ver
 		return out, err
 	}
 	out = ReplacementTarget{Roles: []string{role}, Path: before.Path, FileID: before.FileID, SHA256: before.SHA256, Exists: before.Exists}
-	if !before.Exists || !before.MayExecute {
+	if !before.Exists {
+		return out, nil
+	}
+	if !before.MayExecute {
+		if runner == nil {
+			return userProbe(ctx, out)
+		}
 		return out, nil
 	}
 	dir, err := os.MkdirTemp("", "mihari-version-")

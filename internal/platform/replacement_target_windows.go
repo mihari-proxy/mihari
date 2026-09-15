@@ -16,6 +16,13 @@ import (
 const windowsTrustedInstallerSID = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
 
 func openReplacementFile(ctx context.Context, path string) (file *os.File, id string, trusted bool, verify func() error, closeParent func() error, err error) {
+	elevated := windows.GetCurrentProcessToken().IsElevated()
+	system, systemErr := processIsLocalSystem()
+	user, userErr := currentUserSID()
+	return openReplacementWindowsFile(ctx, path, elevated || system, user, systemErr == nil && userErr == nil)
+}
+
+func openReplacementWindowsFile(ctx context.Context, path string, elevated bool, user *windows.SID, trusted bool) (file *os.File, id string, mayExecute bool, verify func() error, closeParent func() error, err error) {
 	type link struct {
 		path   string
 		handle windows.Handle
@@ -43,11 +50,6 @@ func openReplacementFile(ctx context.Context, path string) (file *os.File, id st
 		current = filepath.Join(current, part)
 		paths = append(paths, current)
 	}
-	elevated := windows.GetCurrentProcessToken().IsElevated()
-	system, systemErr := processIsLocalSystem()
-	user, userErr := currentUserSID()
-	trusted = systemErr == nil && userErr == nil
-	elevated = elevated || system
 	for i, p := range paths {
 		if err = ctx.Err(); err != nil {
 			return nil, "", false, nil, nil, err

@@ -23,6 +23,12 @@ const replacementFileLimit = 128 << 20
 
 // ObserveReplacementFile observes an absolute replacement target without writing it.
 func ObserveReplacementFile(ctx context.Context, path string) (out ReplacementFile, err error) {
+	return observeReplacementFile(ctx, path, openReplacementFile)
+}
+
+type replacementFileOpener func(context.Context, string) (*os.File, string, bool, func() error, func() error, error)
+
+func observeReplacementFile(ctx context.Context, path string, open replacementFileOpener) (out ReplacementFile, err error) {
 	if err = ctx.Err(); err != nil {
 		return out, err
 	}
@@ -41,7 +47,7 @@ func ObserveReplacementFile(ctx context.Context, path string) (out ReplacementFi
 	if !named.Mode().IsRegular() {
 		return out, ErrUnsafeComponent
 	}
-	f, id, trusted, verify, closeParent, err := openReplacementFile(ctx, path)
+	f, id, trusted, verify, closeParent, err := open(ctx, path)
 	if err != nil {
 		return out, err
 	}
