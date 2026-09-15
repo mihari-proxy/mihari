@@ -72,7 +72,7 @@ jobs:
         run: go test -count=1 ./...
       - name: Repeat concurrent logger initialization on macOS
         if: runner.os == 'macOS'
-        run: go test -count=100 -timeout=10m -run '^TestRecordFragment_TwoProcessesKeepOriginalContentAcrossRotation$' ./internal/logging
+        run: go test -count=100 -timeout=10m -run '^(TestRecordFragment_TwoProcessesKeepOriginalContentAcrossRotation|TestPrivateFS_ConcurrentOpenAppendKeepsSameFile)$' ./internal/logging ./internal/platform
 
   # Fan-in for branch protection rules that still require a status named "test".
   test:

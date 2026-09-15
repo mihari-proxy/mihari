@@ -247,3 +247,7 @@ PR #248 首轮 CI `34933283302` 在 macOS 专项 100 次检查中多次失败，
 后续将旧版 Unix append-create 与现有 `trustedOpen` 对齐：先 `O_CREAT|O_EXCL`，仅 `EEXIST` 时打开已存在文件；其他错误立即返回。保留 held dirfd、`O_NOFOLLOW`、`O_NONBLOCK`、普通文件验证及权限收紧，不增加 ENOENT 重试。新增 16 个独立 PrivateFS 并发打开同一新文件的回归，验证同一文件身份和所有追加内容。原生失败测试已先于此生产修改运行；后续 macOS Green 仍须由 CI 确认，尚不能归因到某个具体内核缺陷。
 
 本地新增回归重复 30 次通过；Linux amd64/macOS arm64 平台测试二进制与 CLI 无 CGO 编译通过。后续 CI 使用同一个 100 次检查作为 macOS 验收。
+
+`98c203f` 的 CI `34934792110` 三平台 unit/race/vet、六目标无 CGO build、lint、coverage 全部通过，macOS 双进程初始化重复 100 次通过；`34934792281` 的 Linux/macOS 原生安全与汇总检查通过。由此 Task 5 获得同一原生复现测试的 Red/Green 证据。
+
+Pullfrog 分别审查 `ee5bcea` 与 `98c203f`，未发现生产代码问题；采纳其唯一建议，将直接验证文件身份和追加内容的 `TestPrivateFS_ConcurrentOpenAppendKeepsSameFile` 也加入 macOS 100 次重复步骤。CodeRabbit 手动审查受免费额度限制，cubic 月度额度耗尽，二者未提供实际审查结果。
