@@ -93,7 +93,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/diagnostics/{id}", s.diagnosticDetail)
 	s.runtimeRoutes(mux)
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		observed := &responseWriteObserver{ResponseWriter: writer}
+		observed := &responseWriteObserver{ResponseWriter: writer, diagnosticHistory: s.diagnosticHistory}
 		writer = observed
 		defer func() {
 			if observed.err != nil && !observed.handled && s.diagnosticReporter != nil {
@@ -134,9 +134,10 @@ func (s *Server) Handler() http.Handler {
 
 type responseWriteObserver struct {
 	http.ResponseWriter
-	err              error
-	handled          bool
-	diagnosticResult *diagnostics.Result
+	err               error
+	handled           bool
+	diagnosticResult  *diagnostics.Result
+	diagnosticHistory *diagnostics.History
 }
 
 func (w *responseWriteObserver) Write(body []byte) (int, error) {
@@ -281,10 +282,14 @@ func (s *Server) beginSnapshot() bool {
 
 func writeJSON(writer http.ResponseWriter, status int, value any) {
 	var warnings protocol.WarningOutcome
-	if observed, ok := writer.(*responseWriteObserver); ok && observed.diagnosticResult != nil {
-		warnings = observed.diagnosticResult.Warnings()
+	var history *diagnostics.History
+	if observed, ok := writer.(*responseWriteObserver); ok {
+		history = observed.diagnosticHistory
+		if observed.diagnosticResult != nil {
+			warnings = observed.diagnosticResult.Warnings()
+		}
 	}
-	body, references, err := encodeDiagnosticResponse(value, warnings)
+	body, references, err := encodeDiagnosticResponse(value, warnings, history)
 	if references != "" {
 		writer.Header().Set(protocol.DiagnosticReferencesHeader, references)
 	}

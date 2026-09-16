@@ -3,13 +3,16 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
+	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 )
 
 func TestDiagnosticResponse_InlineBudgetReferencesExcessWarnings(t *testing.T) {
@@ -138,12 +141,201 @@ func TestDiagnosticResponse_InvalidSupplementDoesNotInvalidateCommit(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(supplement.Warnings) != 1 || supplement.Warnings[0].Diagnostic == nil || supplement.Warnings[0].Diagnostic.State != protocol.DiagnosticUnavailable || supplement.Warnings[0].Diagnostic.RetrievalError == "" || supplement.WarningsOmitted != 1 {
+			wantOmitted := uint64(0)
+			if kind == "oversized_metadata" {
+				wantOmitted = 1
+			}
+			if len(supplement.Warnings) != 1 || supplement.Warnings[0].Diagnostic == nil || supplement.Warnings[0].Diagnostic.State != protocol.DiagnosticUnavailable || supplement.Warnings[0].Diagnostic.RetrievalError == "" || supplement.WarningsOmitted != wantOmitted {
 				t.Fatalf("missing explicit diagnostic delivery failure: %#v", supplement)
 			}
 			if business.Warnings[0].Diagnostic.Detail != "token=fixture-captured" {
 				t.Fatal("captured original text was changed")
 			}
 		})
+	}
+}
+
+// anonymousWarningRuntime models an adapter that captured warnings before an owner was attached.
+type anonymousWarningRuntime struct {
+	fakeRuntime
+	warnings protocol.WarningOutcome
+	calls    int
+}
+
+func (r *anonymousWarningRuntime) Install(ctx context.Context, _ runtimeapi.Operation) (core.InstallResult, error) {
+	r.calls++
+	diagnostics.ReturnWarnings(ctx, r.warnings)
+	return core.InstallResult{Version: "fixture", Updated: true}, nil
+}
+
+func TestDiagnosticResponse_AnonymousWarningsKeepOriginalsInHistory(t *testing.T) {
+	server, history := diagnosticServer(t, protocol.MaxWarnings)
+	runtime := &anonymousWarningRuntime{}
+	for i := range protocol.MaxWarnings {
+		detail := protocol.Diagnostic{State: protocol.DiagnosticAvailable, Severity: "warning", Detail: fmt.Sprintf("token=fixture-%d\n", i) + strings.Repeat("x", diagnostics.MaxBytes-32)}
+		runtime.warnings.Warnings = append(runtime.warnings.Warnings, protocol.Warning{Message: fmt.Sprintf("warning %d", i), Diagnostic: &detail})
+	}
+	server.runtime = runtime
+	request := httptest.NewRequest(http.MethodPost, "/v1/core/install", strings.NewReader(`{"operation_id":"fixture-operation"}`))
+	request.Header.Set("Authorization", "Bearer fixture-auth")
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	var got protocol.CoreInstallResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusOK || !got.Updated || runtime.calls != 1 || len(got.Warnings) != protocol.MaxWarnings || recorder.Body.Len() > 4<<20 {
+		t.Fatalf("business result or warnings lost: status=%d warnings=%d bytes=%d", recorder.Code, len(got.Warnings), recorder.Body.Len())
+	}
+	inlineBytes := 0
+	for i, warning := range got.Warnings {
+		if warning.Diagnostic == nil || warning.Message != runtime.warnings.Warnings[i].Message {
+			t.Fatal("warning metadata lost")
+		}
+		inlineBytes += len(warning.Diagnostic.Detail)
+		if warning.Diagnostic.State == protocol.DiagnosticReference {
+			result := diagnosticRequest(server, "/v1/diagnostics/"+warning.Diagnostic.ID, true)
+			var detail protocol.DiagnosticResult
+			if err := json.Unmarshal(result.Body.Bytes(), &detail); err != nil {
+				t.Fatal(err)
+			}
+			if detail.Diagnostic == nil || detail.Diagnostic.Detail != runtime.warnings.Warnings[i].Diagnostic.Detail {
+				t.Fatal("anonymous original is not queryable")
+			}
+		} else if warning.Diagnostic.Detail != runtime.warnings.Warnings[i].Diagnostic.Detail {
+			t.Fatal("inline original was changed")
+		}
+		if runtime.warnings.Warnings[i].Diagnostic.ID != "" {
+			t.Fatal("response changed the original result")
+		}
+	}
+	if inlineBytes > diagnostics.MaxBytes {
+		t.Fatalf("inline budget exceeded: %d", inlineBytes)
+	}
+	if len(history.List("", 0, 100).Records) == 0 {
+		t.Fatal("excess anonymous details were not retained")
+	}
+}
+
+func TestDiagnosticResponse_AnonymousFallbackPreservesEachWarning(t *testing.T) {
+	business := protocol.SubscriptionResult{Schema: "mihari/v1", Revision: 42}
+	base, err := json.Marshal(business)
+	if err != nil {
+		t.Fatal(err)
+	}
+	business.Subscription.Name = strings.Repeat("x", (4<<20)-len(base)-1)
+	for _, severity := range []string{"warning", "info"} {
+		snapshot := protocol.Diagnostic{State: protocol.DiagnosticAvailable, Severity: severity, Detail: "token=fixture-original"}
+		business.Warnings = append(business.Warnings, protocol.Warning{Code: protocol.CodeDataFailure, Message: "original " + severity, Diagnostic: &snapshot})
+	}
+	business.WarningsOmitted = 4
+	body, header, err := encodeDiagnosticResponse(business, protocol.WarningOutcome{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body)+1 > 4<<20 {
+		t.Fatal("body budget exceeded")
+	}
+	supplement, err := protocol.DecodeDiagnosticReferences(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(supplement.Warnings) != 2 || supplement.WarningsOmitted != 4 {
+		t.Fatalf("warnings collapsed: %#v", supplement.WarningOutcome)
+	}
+	for i, warning := range supplement.Warnings {
+		want := business.Warnings[i]
+		if warning.Message != want.Message || warning.Code != want.Code || warning.Diagnostic == nil || warning.Diagnostic.Severity != want.Diagnostic.Severity || warning.Diagnostic.State != protocol.DiagnosticUnavailable || warning.Diagnostic.RetrievalError == "" {
+			t.Fatalf("warning metadata lost: %#v", warning)
+		}
+		if want.Diagnostic.Detail != "token=fixture-original" {
+			t.Fatal("original snapshot was mutated")
+		}
+	}
+}
+
+func TestDiagnosticResponse_AnonymousDetailsRespectInlineBudget(t *testing.T) {
+	var warnings protocol.WarningOutcome
+	for range 3 {
+		detail := protocol.Diagnostic{State: protocol.DiagnosticAvailable, Severity: "warning", Detail: strings.Repeat("x", diagnostics.MaxBytes)}
+		warnings.Warnings = append(warnings.Warnings, protocol.Warning{Message: "fixture", Diagnostic: &detail})
+	}
+	got := budgetWarnings(warnings, protocol.WarningOutcome{}, diagnostics.MaxBytes, nil)
+	inlineBytes := 0
+	for _, warning := range got.Warnings {
+		inlineBytes += len(warning.Diagnostic.Detail)
+	}
+	if inlineBytes > diagnostics.MaxBytes {
+		t.Fatalf("anonymous detail budget exceeded: %d", inlineBytes)
+	}
+	if warnings.Warnings[2].Diagnostic.Detail != strings.Repeat("x", diagnostics.MaxBytes) {
+		t.Fatal("original detail was altered")
+	}
+}
+
+func TestDiagnosticResponse_AnonymousErrorRemainsQueryableAtExactBodyLimit(t *testing.T) {
+	_, history := diagnosticServer(t, 10)
+	envelope := protocol.NewError(protocol.CodeDataFailure, "fixture failure", map[string]any{"fixture": ""})
+	base, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope.Error.Details["fixture"] = strings.Repeat("x", (4<<20)-len(base)-1)
+	snapshot := protocol.Diagnostic{State: protocol.DiagnosticAvailable, Severity: "error", Detail: "token=fixture-original\noriginal cause"}
+	envelope.Error.Diagnostic = &snapshot
+	recorder := httptest.NewRecorder()
+	writer := &responseWriteObserver{ResponseWriter: recorder, diagnosticHistory: history}
+	writeJSON(writer, http.StatusUnprocessableEntity, envelope)
+	if recorder.Body.Len() != 4<<20 || recorder.Code != http.StatusUnprocessableEntity || writer.err != nil {
+		t.Fatal("business error changed")
+	}
+	supplement, err := protocol.DecodeDiagnosticReferences(recorder.Header().Get(protocol.DiagnosticReferencesHeader))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if supplement.Diagnostic == nil || supplement.Diagnostic.State != protocol.DiagnosticReference {
+		t.Fatal("anonymous error was not retained")
+	}
+	stored := history.Get(supplement.Diagnostic.ID)
+	if stored.Diagnostic == nil || stored.Diagnostic.Detail != snapshot.Detail || snapshot.ID != "" {
+		t.Fatal("original error changed or was lost")
+	}
+}
+
+func TestDiagnosticResponse_InvalidReferencePreservesOtherWarnings(t *testing.T) {
+	business := protocol.SubscriptionResult{Schema: "mihari/v1", Revision: 42}
+	base, err := json.Marshal(business)
+	if err != nil {
+		t.Fatal(err)
+	}
+	business.Subscription.Name = strings.Repeat("x", (4<<20)-len(base)-1)
+	invalid := protocol.Diagnostic{ID: strings.Repeat("x", 257), State: protocol.DiagnosticAvailable, Severity: "info", Detail: "fixture-original"}
+	valid := protocol.Diagnostic{ID: "fixture:1", State: protocol.DiagnosticAvailable, Severity: "warning", Detail: "fixture-other"}
+	business.Warnings = []protocol.Warning{
+		{Code: protocol.CodeDataFailure, Message: "first original", Diagnostic: &invalid},
+		{Code: protocol.CodeRevisionConflict, Message: "second original", Diagnostic: &valid},
+	}
+	_, header, err := encodeDiagnosticResponse(business, protocol.WarningOutcome{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	supplement, err := protocol.DecodeDiagnosticReferences(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(supplement.Warnings) != 2 || supplement.WarningsOmitted != 0 {
+		t.Fatal("fallback collapsed warning metadata")
+	}
+	for i, got := range supplement.Warnings {
+		want := business.Warnings[i]
+		if got.Message != want.Message || got.Code != want.Code || got.Diagnostic == nil || got.Diagnostic.Severity != want.Diagnostic.Severity {
+			t.Fatal("individual metadata lost")
+		}
+	}
+	if supplement.Warnings[0].Diagnostic.State != protocol.DiagnosticUnavailable || supplement.Warnings[1].Diagnostic.ID != valid.ID || supplement.Warnings[1].Diagnostic.State != protocol.DiagnosticReference {
+		t.Fatal("invalid reference affected unrelated warning")
+	}
+	if invalid.Detail != "fixture-original" || valid.Detail != "fixture-other" {
+		t.Fatal("fallback mutated original snapshots")
 	}
 }

@@ -312,3 +312,12 @@ Green / 目标包 / 集成 / race 证据：
 - Linux/macOS unit 与 Linux coverage 均在同一新增测试 `TestReadInstallRequestFile_PreservesFilesystemCause` 失败：测试假设底层一定是 `*os.PathError`，但 Unix `readHostFile` 使用 `unix.Open`，实际返回 `syscall.Errno`。生产路径已经保留原始 cause。
 - 测试改为验证 `errors.Is(os.ErrNotExist)`、原生文件读取错误文本进入 Capture、外层仍为 InvalidArgument；保留三项实际行为断言，不增加平台跳过。Windows 下相关三组错误传播回归 `-race -count=20` 通过；app lint 通过。Unix 由后续 CI 复验。
 - Cubic 因月度额度耗尽（91,860/80,000 行）返回 neutral；CodeRabbit 因标签配置跳过，均不计作审查通过。Pullfrog 仍在审查，最新提交结果持续核对。
+
+## 18. Pullfrog 评审修正：无 ID 的诊断预算
+
+- Pullfrog 重试完成，对 `2f41f25` 提出两条 IMPORTANT：无 ID 的详情绕过内联预算，且超限 header fallback 将全部 warning 折叠而丢失各自概要。三项新增回归分别以 64 条 warning 丢失、warning 被折叠、内联字节超限正确失败。
+- 控制响应 observer 接入现有 daemon history。超预算且尚无 ID 的已采集详情先进入有界历史，再返回可查询引用，不再次裁剪、脱敏或改写原始 DTO。没有历史出口的装配明确返回 unavailable，逐条保留 warning 的概要、分类和严重程度；不伪造可查询 ID。
+- 损坏的补充元数据只降级受影响的那一条，保留其他有效引用；仅原 warning 的概要/分类本身超过元数据契约时标记遗漏，不因详情不可用而将已保留的 warning 计为 omitted。采集原文留在原快照中。
+- 回归同时覆盖恰好 4 MiB 的无 ID 错误响应、authenticated history 查询、64 条上限、源结果不可变、invalid reference 与有效 warning 混合。无新增依赖、公开字段或持久化格式。
+- 非阻塞意见：外部严格 JSON 消费者需要接受已明确批准的新增可选字段，同版本 CLI/TUI 配套；本变更不承诺逐字节保持带诊断的真实错误响应。业务载荷自身超限属于既有响应限制，本次只保证诊断附加内容不会撑破原本可读的业务结果，已修正相应注释。既有可变 map 及非控制 Unicode 的观察未扩大为无关重构。
+- 修复后五组目标回归、全仓 `go test ./...`、control server/client/protocol、diagnostics 与完整 integration race（57.318s）、lint（0 issues）、vet 和 diff 检查通过；远端 CI 与 Pullfrog 复审随新提交执行。
