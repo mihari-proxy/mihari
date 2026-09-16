@@ -11,6 +11,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+// bodyLines groups the observed fields and wraps them before viewport slicing.
 func (d *Detail) bodyLines(width int) []string {
 	theme := ui.DefaultTheme()
 	c := d.connection
@@ -53,6 +54,7 @@ func (d *Detail) bodyLines(width int) []string {
 	return strings.Split(strings.Join(parts, "\n"), "\n")
 }
 
+// trafficView stacks narrow layouts and distinguishes final from live rates.
 func (d *Detail) trafficView(width int) string {
 	downLabel, upLabel := "↓ Download", "↑ Upload"
 	if d.closed {
@@ -79,6 +81,7 @@ func detailField(label, text string, width int) string {
 	return detailFieldColumns(label, text, width, 18)
 }
 
+// detailFieldColumns keeps continuation lines aligned with the value column.
 func detailFieldColumns(label, text string, width, labelWidth int) string {
 	theme := ui.DefaultTheme()
 	labelWidth = max(labelWidth, ansi.StringWidth(label)+2)
@@ -96,6 +99,7 @@ func detailFieldColumns(label, text string, width, labelWidth int) string {
 	return strings.Join(lines, "\n")
 }
 
+// detailEndpoint brackets IPv6 addresses and avoids inventing missing ports.
 func detailEndpoint(host, port string) string {
 	if host == "" {
 		return ui.MissingValue
@@ -106,6 +110,7 @@ func detailEndpoint(host, port string) string {
 	return net.JoinHostPort(host, port)
 }
 
+// detailTime renders an observation in local time while preserving missing values.
 func detailTime(at time.Time) string {
 	if at.IsZero() {
 		return ui.MissingValue
@@ -113,6 +118,7 @@ func detailTime(at time.Time) string {
 	return at.Local().Format("2006-01-02 15:04:05")
 }
 
+// geoIPView associates every result with its address and hides lookup error causes.
 func (d *Detail) geoIPView() string {
 	if !d.geoIPReady {
 		return ui.LoadingLabel

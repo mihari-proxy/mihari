@@ -169,10 +169,12 @@ func TestGoldenProxiesFull(t *testing.T) {
 	assertGolden(t, "full/proxies", model)
 }
 
+// TestGoldenConnectionsDetailFull pins the complete wide connection detail.
 func TestGoldenConnectionsDetailFull(t *testing.T) {
 	goldenConnectionDetail(t, "full/connections-detail", 110, 40, false, false, false)
 }
 
+// TestGoldenConnectionsDetailVariants pins compact and retained-observation states.
 func TestGoldenConnectionsDetailVariants(t *testing.T) {
 	for _, tc := range []struct {
 		name                   string
@@ -190,6 +192,7 @@ func TestGoldenConnectionsDetailVariants(t *testing.T) {
 	}
 }
 
+// goldenConnectionDetail enters the real detail through page navigation before capture.
 func goldenConnectionDetail(t *testing.T, name string, width, height int, closed, paused, bottom bool) {
 	t.Helper()
 	freezeUTC(t)

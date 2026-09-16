@@ -421,6 +421,7 @@ func TestConnections_SearchDirectTypeNoEnter(t *testing.T) {
 	}
 }
 
+// TestModel_DetailLooksUpOnlyPublicDestinationAddresses excludes local source addresses.
 func TestModel_DetailLooksUpOnlyPublicDestinationAddresses(t *testing.T) {
 	client := &fakeConnectionsClient{geoIPResult: protocol.GeoIPLookupResult{Records: []protocol.GeoIPRecord{
 		{Address: "1.1.1.1", CountryCode: "AU", ASN: 13335, Organization: "Cloudflare, Inc."},
@@ -451,6 +452,7 @@ func TestModel_DetailLooksUpOnlyPublicDestinationAddresses(t *testing.T) {
 	}
 }
 
+// TestModel_GeoIPFailureDegradesOnlyGeoIPCard keeps connection fields available on lookup failure.
 func TestModel_GeoIPFailureDegradesOnlyGeoIPCard(t *testing.T) {
 	client := &fakeConnectionsClient{geoIPErr: errors.New("database unavailable")}
 	model := New(client, nil)

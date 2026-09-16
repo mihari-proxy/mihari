@@ -329,6 +329,7 @@ func TestRenderHelp_IncludesGlobalJumpAndQuit(t *testing.T) {
 	}
 }
 
+// TestRenderFooter_MatchesCurrentLayout pins each page and mode's shortcut contract.
 func TestRenderFooter_MatchesCurrentLayout(t *testing.T) {
 	cases := []struct {
 		name string

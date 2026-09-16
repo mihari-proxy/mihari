@@ -13,6 +13,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
+// TestDetail_SinglePage verifies that neither the view nor arrow keys expose tabs.
 func TestDetail_SinglePage(t *testing.T) {
 	d := NewDetail(protocol.Connection{ID: "detail-test", Chains: []string{"Group", "Node"}}, false)
 	view := stripConnANSI(d.View(100, 40))
@@ -30,6 +31,7 @@ func TestDetail_SinglePage(t *testing.T) {
 	}
 }
 
+// detailFixture supplies deterministic, synthetic connection metadata and counters.
 func detailFixture() protocol.Connection {
 	return protocol.Connection{
 		ID: "8d37b6a2-51a4-4f9e-b1d9-6e84b12fa205", Start: time.Date(2026, 9, 16, 10, 30, 0, 0, time.Local),
@@ -44,6 +46,7 @@ func detailFixture() protocol.Connection {
 	}
 }
 
+// TestDetail_FieldsAndStates verifies complete observations in active and closed views.
 func TestDetail_FieldsAndStates(t *testing.T) {
 	for _, closed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("closed=%v", closed), func(t *testing.T) {
@@ -81,6 +84,7 @@ func TestDetail_FieldsAndStates(t *testing.T) {
 	}
 }
 
+// TestDetail_MissingFieldsAndGeoIP checks safe presentation of unavailable data.
 func TestDetail_MissingFieldsAndGeoIP(t *testing.T) {
 	d := NewDetail(protocol.Connection{}, false)
 	view := stripConnANSI(d.View(100, 100))
@@ -99,11 +103,9 @@ func TestDetail_MissingFieldsAndGeoIP(t *testing.T) {
 	}
 }
 
+// TestDetail_LayoutBounds checks viewport containment across supported sizes.
 func TestDetail_LayoutBounds(t *testing.T) {
-	c := detailFixture()
-	c.Metadata.Host = strings.Repeat("long-domain", 15) + ".test"
-	c.Metadata.ProcessPath = strings.Repeat("路径/", 30) + "chrome.exe"
-	c.Chains = []string{strings.Repeat("日本🇯🇵👩‍💻", 25), "final-node"}
+	c := longDetailFixture()
 	for _, size := range [][2]int{{100, 32}, {80, 24}, {60, 16}, {36, 12}, {20, 6}, {12, 8}, {1, 1}, {0, 0}} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
 			d := NewDetail(c, false)
@@ -116,6 +118,20 @@ func TestDetail_LayoutBounds(t *testing.T) {
 			}
 		})
 	}
+}
+
+// longDetailFixture includes unbroken text and multi-codepoint terminal graphemes.
+func longDetailFixture() protocol.Connection {
+	c := detailFixture()
+	c.Metadata.Host = strings.Repeat("long-domain", 15) + ".test"
+	c.Metadata.ProcessPath = strings.Repeat("路径/", 30) + "chrome.exe"
+	c.Chains = []string{strings.Repeat("日本🇯🇵👩‍💻", 25), "final-node"}
+	return c
+}
+
+// TestDetail_WrappingPreservesCharacters detects content loss independently of bounds.
+func TestDetail_WrappingPreservesCharacters(t *testing.T) {
+	c := longDetailFixture()
 	view := stripConnANSI(NewDetail(c, false).View(36, 600))
 	flatten := func(s string) string {
 		return strings.Map(func(r rune) rune {
@@ -125,13 +141,21 @@ func TestDetail_LayoutBounds(t *testing.T) {
 			return r
 		}, s)
 	}
-	for _, want := range []string{c.Metadata.Host, c.Metadata.ProcessPath, strings.Repeat("日本[JP]👩‍💻", 25), c.ID} {
-		if !strings.Contains(flatten(view), flatten(want)) {
-			t.Errorf("wrapped field lost characters: %q", want)
-		}
+	for _, tc := range []struct{ name, want string }{
+		{"host", c.Metadata.Host},
+		{"process path", c.Metadata.ProcessPath},
+		{"Unicode proxy name", strings.Repeat("日本[JP]👩‍💻", 25)},
+		{"connection ID", c.ID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(flatten(view), flatten(tc.want)) {
+				t.Errorf("wrapped field lost characters: %q", tc.want)
+			}
+		})
 	}
 }
 
+// TestDetail_ScrollAndResize guards tail access and removal of excess scroll offset.
 func TestDetail_ScrollAndResize(t *testing.T) {
 	d := NewDetail(detailFixture(), false)
 	d.View(60, 16)
@@ -162,6 +186,7 @@ func TestDetail_ScrollAndResize(t *testing.T) {
 	}
 }
 
+// TestModel_DetailPaused verifies frozen observations and their application on resume.
 func TestModel_DetailPaused(t *testing.T) {
 	m := New(nil, nil)
 	m.SetSize(100, 40)
@@ -183,6 +208,7 @@ func TestModel_DetailPaused(t *testing.T) {
 	}
 }
 
+// TestModel_DetailLifecycleAndReturn exercises observation updates without mutations.
 func TestModel_DetailLifecycleAndReturn(t *testing.T) {
 	for _, closeKey := range []rune{tea.KeyEnter, tea.KeyEsc} {
 		t.Run(fmt.Sprint(closeKey), func(t *testing.T) {
@@ -214,6 +240,7 @@ func TestModel_DetailLifecycleAndReturn(t *testing.T) {
 	}
 }
 
+// TestModel_DetailIgnoresOtherConnectionGeoIP rejects a previous selection's late result.
 func TestModel_DetailIgnoresOtherConnectionGeoIP(t *testing.T) {
 	m := New(nil, nil)
 	m.SetSize(100, 40)

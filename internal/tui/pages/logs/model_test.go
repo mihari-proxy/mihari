@@ -257,6 +257,7 @@ func TestView_FocusedRowHighlightOnlyWhenContentFocused(t *testing.T) {
 	}
 }
 
+// TestModel_FooterHintsAreContextual checks Logs hints independently of other pages.
 func TestModel_FooterHintsAreContextual(t *testing.T) {
 	model := New(10)
 	if hints := model.FooterHints(); !strings.Contains(hints, "/ search") {

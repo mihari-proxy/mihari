@@ -9,6 +9,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+// View renders the connection list or its active detail/column overlay.
 func (m *Model) View() string {
 	controlFocused := m.contentFocused && m.focus.kind == focusControl
 	activeN, closedN := len(m.history.Active()), len(m.history.Closed())

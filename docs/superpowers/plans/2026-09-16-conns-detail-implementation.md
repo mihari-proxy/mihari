@@ -2,7 +2,7 @@
 
 日期：2026-09-16
 
-状态：实现及本地验证已完成，准备提交 PR。用户已授权开发、提交 PR，并每 10 分钟检查 CI 与 bot review 至可用检查全绿；不合并。下文为执行步骤，实际验证结果另行记录。
+状态：实现及本地验证已完成，已创建 [PR #263](https://github.com/mihari-proxy/mihari/pull/263)，正在处理审查反馈及等待 CI。用户已授权开发、提交 PR，并每 10 分钟检查 CI 与 bot review 至可用检查全绿；不合并。下文为执行步骤，实际验证结果另行记录。
 
 设计依据：[Conns 连接详情设计](../specs/2026-09-16-conns-detail-design.md)。用户后续决定优先：取消 Raw、Proxies 页面，取消整个标签栏，完整代理链保留在详情正文中。
 
@@ -181,3 +181,13 @@ git diff --check
 - 修改 Go 文件已 gofmt；`git diff --check` 已通过。
 - 已检查完整 shell 的文字快照，字段列、边框、状态和窄屏换行正常。尚未执行真实 daemon/mihomo 或 Linux/macOS 终端会话验证；这些不属于本次本地测试。
 - 全仓及其他目标平台的运行测试由 PR CI 验证；CI/bot review 状态以 PR 当前 head 为准。
+
+## 7. PR 审查记录
+
+- 2026-09-16 15:03（北京时间）首次 10 分钟检查：无失败 CI，Windows/macOS race 和 Pullfrog 尚在运行。
+- CodeRabbit 提出的两项测试职责拆分已处理：布局边界与字符保真分开，Connections 帮助/footer 与 Logs 隔离检查分开；补充变更函数说明。
+- 以上测试整理后重新通过 `go test ./internal/tui/...`、`golangci-lint run ./internal/tui/...` 和 `git diff --check`，未改变生产行为。
+- Cubic 因本月额度已用尽返回 neutral，没有执行审查；不能记为审查通过。CodeRabbit 此轮提示 clone-backed analysis 不可用，需在最终汇报注明其覆盖限制。
+
+- 15:13 检查：初版提交 `08e2f8f` 的全部 CI、CodeRabbit 与 Pullfrog 检查成功。Pullfrog 无阻塞意见，仅建议清理已移除标签对应的两个常量；确认全仓无引用后删除，Logs 所用 RawTabLabel 保留。
+- 将测试整理、注释和常量清理一起推送后，需对最终提交重新确认远端状态。

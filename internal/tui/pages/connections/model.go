@@ -151,6 +151,7 @@ func (m *Model) FooterHints() string {
 	return ui.RenderFooter(m.ID(), m.HelpMode(), ui.FooterOpt{})
 }
 
+// SetSize propagates the shell's usable content dimensions to an open detail.
 func (m *Model) SetSize(width, height int) {
 	m.width, m.height = width, height
 	if m.detail != nil {
@@ -354,6 +355,7 @@ func (m *Model) updateRow(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 	return m, nil
 }
 
+// openDetail captures the selected observation and schedules only its public GeoIP lookup.
 func (m *Model) openDetail(connection protocol.Connection) tea.Cmd {
 	m.detail = NewDetail(connection, m.dataset == datasetClosed)
 	m.detail.paused = m.paused

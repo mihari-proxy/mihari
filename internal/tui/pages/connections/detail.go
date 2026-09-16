@@ -76,6 +76,7 @@ type detailLayout struct {
 	rows   int
 }
 
+// layout budgets fixed chrome and the scrollable body in terminal cells.
 func (d *Detail) layout() detailLayout {
 	outer := min(88, d.width-2)
 	if outer < 16 || d.height < 7 {
@@ -99,6 +100,7 @@ func (d *Detail) layout() detailLayout {
 	return detailLayout{outer: outer, header: header, lines: lines, rows: rows}
 }
 
+// clampScroll removes excess offset after navigation, resize or content changes.
 func (d *Detail) clampScroll() {
 	layout := d.layout()
 	d.scroll = min(max(0, d.scroll), max(0, len(layout.lines)-layout.rows))
@@ -125,6 +127,7 @@ func (d *Detail) View(width, height int) string {
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, panel)
 }
 
+// value uses the shared missing-value marker without changing nonempty text.
 func value(input string) string {
 	if input == "" {
 		return ui.MissingValue
