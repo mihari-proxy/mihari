@@ -306,3 +306,9 @@ Green / 目标包 / 集成 / race 证据：
 
 - PR #264 等待远端检查期间发现 daemon degraded LastError 的 shell footer 仍直接使用原文。`TestShellFooter_DegradedErrorEscapesControlsWithoutChangingStatus` 先因 ESC/NUL/换行未转义失败，再通过既有单行诊断显示函数修复；原始状态文本保持不变。
 - 修复后目标回归、全部 TUI race、lint（0 issues）、TUI vet 和 diff 检查通过。变更仅为显示边界的一行调用及对应回归；等待最新 PR CI/bot review。
+
+## 17. 首轮 CI 修正
+
+- Linux/macOS unit 与 Linux coverage 均在同一新增测试 `TestReadInstallRequestFile_PreservesFilesystemCause` 失败：测试假设底层一定是 `*os.PathError`，但 Unix `readHostFile` 使用 `unix.Open`，实际返回 `syscall.Errno`。生产路径已经保留原始 cause。
+- 测试改为验证 `errors.Is(os.ErrNotExist)`、原生文件读取错误文本进入 Capture、外层仍为 InvalidArgument；保留三项实际行为断言，不增加平台跳过。Windows 下相关三组错误传播回归 `-race -count=20` 通过；app lint 通过。Unix 由后续 CI 复验。
+- Cubic 因月度额度耗尽（91,860/80,000 行）返回 neutral；CodeRabbit 因标签配置跳过，均不计作审查通过。Pullfrog 仍在审查，最新提交结果持续核对。

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 func readInstallFixture(t *testing.T, name string) []byte {
@@ -291,10 +292,19 @@ func TestInstallDecode_PreservesOriginalCause(t *testing.T) {
 }
 
 func TestReadInstallRequestFile_PreservesFilesystemCause(t *testing.T) {
-	_, err := ReadInstallRequestFile(context.Background(), filepath.Join(t.TempDir(), "missing-token-fixture.json"))
-	var pathErr *os.PathError
-	if !errors.As(err, &pathErr) {
+	path := filepath.Join(t.TempDir(), "missing-token-fixture.json")
+	_, nativeErr := readHostFile(path, MaxInstallRequestBytes)
+	if !errors.Is(nativeErr, os.ErrNotExist) {
+		t.Fatalf("fixture must fail with a missing file: %v", nativeErr)
+	}
+	_, err := ReadInstallRequestFile(context.Background(), path)
+	// Unix uses raw syscall.Errno while Windows wraps it in os.PathError.
+	if !errors.Is(err, os.ErrNotExist) || !strings.Contains(diagnostics.Capture(err).Text, nativeErr.Error()) {
 		t.Fatalf("file cause lost: %v", err)
+	}
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodeInvalidArgument {
+		t.Fatalf("classification changed: %v", err)
 	}
 }
 
