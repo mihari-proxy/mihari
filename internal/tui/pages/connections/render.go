@@ -51,7 +51,7 @@ func (m *Model) View() string {
 		return m.columnsView()
 	}
 	if m.detail != nil {
-		return m.detail.View(m.width, m.height)
+		return m.detail.View(max(0, m.width-m.theme.Content.GetHorizontalPadding()), m.height)
 	}
 	return base
 }

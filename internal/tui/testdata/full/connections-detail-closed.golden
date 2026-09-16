@@ -1,18 +1,17 @@
- Mihari  ·  ●  ·  1 conn  ·  ↑      0 B/s  ↓      0 B/s  ·  0 B                                       Offline
+ Mihari  ·  ●  ·  0 conn  ·  ↑      0 B/s  ↓      0 B/s  ·  0 B                                       Offline
    1 Overview
    2 Proxies
  › 3 Conns
    4 Rules
-   5 Logs
-   6 Subs          ╭───Connection details─────────────────────────────────────────────────────────────────╮
-   7 Web GUI       │ ● Active                                                                             │
-   8 System        │                                                                                      │
-                   │ api.example.test:443                                                                 │
+   5 Logs          ╭───Connection details─────────────────────────────────────────────────────────────────╮
+   6 Subs          │ ○ Closed                                                                             │
+   7 Web GUI       │                                                                                      │
+   8 System        │ api.example.test:443                                                                 │
                    │ chrome.exe · Mixed · TCP                                                             │
                    │                                                                                      │
                    │ TRAFFIC                                                                              │
-                   │ ↓ Download      3.0 KiB/s                   ↑ Upload        1.0 KiB/s                │
-                   │ Received        4.0 KiB                     Sent            2.0 KiB                  │
+                   │ Last download rate  3.0 KiB/s               Last upload rate    1.0 KiB/s            │
+                   │ Received            4.0 KiB                 Sent                2.0 KiB              │
                    │                                                                                      │
                    │ ENDPOINTS                                                                            │
                    │ Source            192.168.1.12:52341                                                 │
@@ -30,6 +29,7 @@
                    │ Process path      C:/Apps/Browser/chrome.exe                                         │
                    │ Inbound name      mixed-in                                                           │
                    │ Started           2026-09-16 10:30:00                                                │
+                   │ Closed observed   2026-09-16 10:31:00                                                │
                    │ Connection ID     8d37b6a2-51a4-4f9e-b1d9-6e84b12fa205                               │
                    ╰──────────────────────────────────────────────────────────────────────────────────────╯
 

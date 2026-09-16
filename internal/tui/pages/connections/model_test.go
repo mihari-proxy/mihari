@@ -444,7 +444,7 @@ func TestModel_DetailLooksUpOnlyPublicDestinationAddresses(t *testing.T) {
 		t.Fatalf("addresses=%q", got)
 	}
 	view := model.View()
-	for _, want := range []string{"GeoIP", "AU", "AS13335", "Cloudflare, Inc.", "Basic"} {
+	for _, want := range []string{"GeoIP", "AU", "AS13335", "Cloudflare, Inc.", "ENDPOINTS"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q: %s", want, view)
 		}
@@ -462,7 +462,7 @@ func TestModel_GeoIPFailureDegradesOnlyGeoIPCard(t *testing.T) {
 	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model.Update(command())
 	view := model.View()
-	if !strings.Contains(view, "GeoIP") || !strings.Contains(view, "Unavailable") || !strings.Contains(view, "Basic") {
+	if !strings.Contains(view, "GeoIP") || !strings.Contains(view, "Unavailable") || !strings.Contains(view, "ENDPOINTS") {
 		t.Fatalf("view=%s", view)
 	}
 }

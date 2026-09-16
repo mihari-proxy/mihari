@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	proxypage "github.com/mihari-proxy/mihari/internal/tui/pages/proxies"
 	systempage "github.com/mihari-proxy/mihari/internal/tui/pages/system"
@@ -169,30 +170,76 @@ func TestGoldenProxiesFull(t *testing.T) {
 }
 
 func TestGoldenConnectionsDetailFull(t *testing.T) {
+	goldenConnectionDetail(t, "full/connections-detail", 110, 40, false, false, false)
+}
+
+func TestGoldenConnectionsDetailVariants(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		width, height          int
+		closed, paused, bottom bool
+	}{
+		{"compact", 72, 22, false, false, false},
+		{"closed", 110, 40, true, false, false},
+		{"paused", 100, 28, false, true, false},
+		{"bottom", 72, 22, true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			goldenConnectionDetail(t, "full/connections-detail-"+tc.name, tc.width, tc.height, tc.closed, tc.paused, tc.bottom)
+		})
+	}
+}
+
+func goldenConnectionDetail(t *testing.T, name string, width, height int, closed, paused, bottom bool) {
+	t.Helper()
 	freezeUTC(t)
-	model := goldenModel(t, ui.PageConnections, 100, 28)
+	model := goldenModel(t, ui.PageConnections, width, height)
 	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{
 		Schema: "mihari/v1", Revision: 1, Capabilities: []string{protocol.CapabilityConnections},
 	}})
-	model.applySessionEvent(session.Event{Kind: session.EventPreferences, Preferences: protocol.TUIPreferences{
-		Revision: 1, ConnectionsColumns: []string{"host", "network", "chain", "traffic"},
-	}})
-	start := time.Unix(1700000000, 0).UTC()
+	start := time.Date(2026, 9, 16, 10, 30, 0, 0, time.UTC)
 	model.applySessionEvent(session.Event{Kind: session.EventConnections, ObservedAt: start, Connections: protocol.ConnectionList{
-		UploadTotal: 2048, DownloadTotal: 8192,
 		Connections: []protocol.Connection{{
-			ID: "conn-1", Upload: 1024, Download: 4096,
-			Chains: []string{"DIRECT"}, Rule: "DOMAIN-SUFFIX",
-			Metadata: protocol.ConnectionMetadata{Network: "TCP", Host: "example.com",
-				SourceIP: "127.0.0.1", DestinationIP: "93.184.216.34", Process: "curl"},
+			ID: "8d37b6a2-51a4-4f9e-b1d9-6e84b12fa205", Start: start,
+			Upload: 2048, Download: 4096, UploadSpeed: 1024, DownloadSpeed: 3072,
+			Chains: []string{"Proxy", "Auto Select", "Japan 01"}, Rule: "DomainSuffix", RulePay: "example.test",
+			Metadata: protocol.ConnectionMetadata{Network: "TCP", Type: "Mixed", Host: "api.example.test",
+				SourceIP: "192.168.1.12", SourcePort: "52341", DestinationIP: "203.0.113.24", DestinationPort: "443",
+				Process: "chrome.exe", ProcessPath: "C:/Apps/Browser/chrome.exe", InboundName: "mixed-in"},
 		}},
 	}})
 	page := model.pages[ui.PageConnections]
 	page.FocusFirst()
-	page = updatePage(page, tea.KeyPressMsg{Code: tea.KeyDown})
+	if closed {
+		model.applySessionEvent(session.Event{Kind: session.EventConnections, ObservedAt: start.Add(time.Minute), Connections: protocol.ConnectionList{}})
+		page = updatePage(page, tea.KeyPressMsg{Code: tea.KeyEnter}) // Active -> Closed dataset.
+	}
+	if paused {
+		page = updatePage(page, tea.KeyPressMsg{Code: 'p', Text: "p"})
+	}
+	// Control -> search -> header -> first row, then open its detail.
+	for range 3 {
+		page = updatePage(page, tea.KeyPressMsg{Code: tea.KeyDown})
+	}
 	page = updatePage(page, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !strings.Contains(normalizeRender(page.View()), ui.ConnectionDetailsTitle) {
+		t.Fatal("golden must enter connection details before capturing the view")
+	}
+	if bottom {
+		for range 100 {
+			page = updatePage(page, tea.KeyPressMsg{Code: tea.KeyDown})
+		}
+	}
 	model.pages[ui.PageConnections] = page
-	assertGoldenContent(t, "full/connections-detail", trimRenderPadding(normalizeRender(model.View().Content)))
+	rendered := model.View().Content
+	if lipgloss.Width(rendered) > width || lipgloss.Height(rendered) > height {
+		t.Fatalf("shell exceeds %dx%d: %dx%d", width, height, lipgloss.Width(rendered), lipgloss.Height(rendered))
+	}
+	view := trimRenderPadding(normalizeRender(rendered))
+	if !strings.Contains(view, ui.ConnectionDetailsTitle) {
+		t.Fatalf("shell did not render the detail:\n%s", view)
+	}
+	assertGoldenContent(t, name, view)
 }
 
 func TestGoldenLogsCompact(t *testing.T) {

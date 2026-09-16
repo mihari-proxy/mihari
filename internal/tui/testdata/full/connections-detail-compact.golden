@@ -1,0 +1,22 @@
+ Mihari  ·  ●  ·  1c  ·  ↑     0/s ↓     0/s  ·  0              Offline
+   1 Overview   ╭───Connection details───────────────────────────────╮
+   2 Proxies    │ ● Active                                           │
+ › 3 Conns      │                                                    │
+   4 Rules      │ api.example.test:443                               │
+   5 Logs       │ chrome.exe · Mixed · TCP                           │
+   6 Subs       │                                                    │
+   7 Web GUI    │ TRAFFIC                                            │
+   8 System     │ ↓ Download      3.0 KiB/s                          │
+                │ Received        4.0 KiB                            │
+                │ ↑ Upload        1.0 KiB/s                          │
+                │ Sent            2.0 KiB                            │
+                │                                                    │
+                │ ENDPOINTS                                          │
+                │ Source            192.168.1.12:52341               │
+                │ Destination       203.0.113.24:443                 │
+                │ Host              api.example.test                 │
+                │                                                    │
+                │ ROUTING                                            │
+                │ 1–15 / 27                                          │
+                ╰────────────────────────────────────────────────────╯
+ Enter/Esc close  ↑/↓ scroll  ? help  q quit

@@ -158,6 +158,8 @@ mihari sysproxy enable
 
 **Connections** 为 Chain 分配更多宽度，窄窗口中优先于 Source、Destination、Rule 保留。Traffic 使用固定宽度的上下行紧凑速率，`K/M/G/T/P/E` 按 1024 进制表示字节每秒；连接详情仍显示完整速率与代理链。**Rules** 用居中弹窗展示规则或 provider 的完整详情，↑/↓ 或 PgUp/PgDn 滚动，Enter/Esc 关闭后返回原行。
 
+连接详情采用单个居中页面，按流量、端点、路由和元数据分组，完整代理链直接在正文展示，移除 Raw 和 Proxies 标签。长字段自动换行，↑/↓ 滚动，Enter/Esc 返回选中行。**Paused** 表示观测数据已冻结；已关闭连接显示最后观测速率与累计流量，**Closed observed** 是 TUI 发现连接消失的时间，不是内核报告的精确关闭时间。
+
 **Web GUI** 面板卡片宽屏并排、窄屏纵排。Tab/Shift+Tab 选择 Open/Install 或 Manage，Enter 执行；原有面板快捷键保留。Manage 包含更新、设为默认、重装、回滚及卸载，不可用项标明原因。黄色 **Ctrl+Shift+R** 刷新提示始终保留在卡片上方，网关保护说明移至 `?` 帮助。**System** 的 Network 分区移至 Ports Config 之后。
 
 TUI **Proxies** 页顶部的 **Routing** 卡片包含 **Mode** 和 **GLOBAL**。**Mode** 按 Enter 打开 Rule / Global / Direct 选择弹窗，↑/↓ 选择、Enter 应用、Esc 取消；**GLOBAL** 入口展开 mihomo 返回的候选组，并自动滚动到整个 section 完整可见；超过一屏时从列表视口顶部展示，继续用方向键浏览候选。Mihari 全局保存模式、按订阅保存 GLOBAL 出口，支持面板发起的相同操作。默认使用 Rule，切换模式和出口保留已有连接。保存的出口消失时，有 DIRECT 候选则保存 DIRECT，否则保存 Rule；内核停止时保存的模式显示为 pending，待启动应用。

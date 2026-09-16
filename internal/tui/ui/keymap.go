@@ -137,8 +137,7 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"esc"}, Display: "Esc", Label: "finish search", Footer: "Esc done", Scope: ScopeMode, Mode: ModeSearch},
 
 		{Keys: []string{"enter", "esc"}, Display: "Enter / Esc", Label: "close", Footer: "Enter/Esc close", Scope: ScopeMode, Mode: ModeDetail},
-		{Keys: []string{"left", "right"}, Display: "←/→", Label: "switch tabs", Scope: ScopePage, Page: PageConnections, Mode: ModeDetail},
-		{Keys: []string{"up", "down"}, Display: "↑/↓", Label: "scroll", Scope: ScopePage, Page: PageConnections, Mode: ModeDetail},
+		{Keys: []string{"up", "down"}, Display: "↑/↓", Label: "scroll", Footer: "↑/↓ scroll", Scope: ScopePage, Page: PageConnections, Mode: ModeDetail},
 		{Keys: []string{"up", "down", "pgup", "pgdown", "home", "end"}, Display: "↑/↓ PgUp/PgDn Home/End", Label: "scroll rule details", Footer: "↑/↓ PgUp/PgDn scroll", Scope: ScopePage, Page: PageRules, Mode: ModeDetail},
 		{Keys: []string{"up", "down", "tab", "shift+tab"}, Display: "↑/↓ Tab", Label: "choose an action", Footer: "↑/↓ choose", Scope: ScopePage, Page: PageWebGUI, Mode: ModePanelMenu},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "apply the selected action", Footer: "Enter apply", Scope: ScopePage, Page: PageWebGUI, Mode: ModePanelMenu},

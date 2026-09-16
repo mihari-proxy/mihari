@@ -151,7 +151,12 @@ func (m *Model) FooterHints() string {
 	return ui.RenderFooter(m.ID(), m.HelpMode(), ui.FooterOpt{})
 }
 
-func (m *Model) SetSize(width, height int) { m.width, m.height = width, height }
+func (m *Model) SetSize(width, height int) {
+	m.width, m.height = width, height
+	if m.detail != nil {
+		m.detail.SetSize(max(0, width-m.theme.Content.GetHorizontalPadding()), height)
+	}
+}
 
 func (m *Model) FocusFirst() { m.focus = pageFocus{kind: focusControl} }
 
@@ -351,6 +356,8 @@ func (m *Model) updateRow(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 
 func (m *Model) openDetail(connection protocol.Connection) tea.Cmd {
 	m.detail = NewDetail(connection, m.dataset == datasetClosed)
+	m.detail.paused = m.paused
+	m.detail.SetSize(max(0, m.width-m.theme.Content.GetHorizontalPadding()), m.height)
 	addresses := publicConnectionAddresses(connection)
 	if m.client == nil || len(addresses) == 0 {
 		m.detail.SetGeoIP(nil, nil)
