@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"os"
+	"time"
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -12,6 +13,11 @@ import (
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/subscription"
+)
+
+const (
+	subscriptionExecutionTimeout = 120 * time.Second
+	subscriptionRecoveryTimeout  = 10 * time.Second
 )
 
 type AddSubscriptionInput struct {
@@ -68,6 +74,8 @@ func (m *Manager) SubscriptionURL(ctx context.Context, id string) (string, error
 }
 
 func (m *Manager) AddSubscription(ctx context.Context, operation Operation, input AddSubscriptionInput) (subscription.PublicProfile, error) {
+	ctx, cancel := context.WithTimeout(ctx, m.subscriptionTimeout)
+	defer cancel()
 	result, err := m.doOperation(ctx, "sub-add:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
@@ -118,7 +126,8 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 }
 
 func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, id string) (subscription.PublicProfile, error) {
-
+	ctx, cancel := context.WithTimeout(ctx, m.subscriptionTimeout)
+	defer cancel()
 	result, err := m.doOperation(ctx, "sub-refresh:"+operation.ID, func(ctx context.Context) (any, error) {
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
@@ -520,8 +529,10 @@ func (m *Manager) commitRuntimeConfigBytes(ctx context.Context, candidate config
 	if firstErr == nil {
 		return nil
 	}
+	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.subscriptionRecoveryTimeout)
+	defer cancel()
 	restoreErr := restoreRuntimeConfig(m.runtimeConfig, previous, hadPrevious)
-	reloadErr := reloader.Reload(ctx, m.runtimeConfig, true)
+	reloadErr := reloader.Reload(rollbackCtx, m.runtimeConfig, true)
 	if restoreErr != nil || reloadErr != nil {
 		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "mihomo reload failed and rollback could not be confirmed", Details: map[string]any{"degraded": true}}, errors.Join(firstErr, restoreErr, reloadErr))
 	}
@@ -640,7 +651,8 @@ func (m *Manager) commitTrustedRuntimeConfig(ctx context.Context, candidate conf
 		m.settingsMu.Unlock()
 		return nil
 	}
-	rollbackCtx := context.WithoutCancel(ctx)
+	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.subscriptionRecoveryTimeout)
+	defer cancel()
 	old, restoreErr := m.trustedCore.RestoreConfig(rollbackCtx, previous)
 	var reloadErr error
 	if restoreErr == nil {

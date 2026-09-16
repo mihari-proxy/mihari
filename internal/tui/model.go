@@ -224,15 +224,16 @@ type pageClient interface {
 }
 
 func newModelWithClientContext(ctx context.Context, events <-chan session.Event, client pageClient) Model {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	model := newModelWithPageClients(client, client, client, client)
+	model.pages[ui.PageSubscriptions].(*subscriptionspage.Model).SetContextFactory(func() (context.Context, context.CancelFunc) { return context.WithCancel(ctx) })
 	model.pages[ui.PageSetup] = setuppage.NewWithContext(ctx, client, nil)
 	model.pages[ui.PageSystem] = systempage.NewWithContext(ctx, client, nil, nil)
 	model.pages[ui.PageWebGUI] = webguipage.NewWithContext(ctx, client, nil)
 	model.resizePages()
 	model.events = events
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	model.pageCtx = ctx
 	model.networkClient = client
 	return model

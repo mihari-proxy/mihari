@@ -12,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -229,6 +230,9 @@ func rowFrom(subscription protocol.Subscription, active bool, pending string, no
 
 type Model struct {
 	client             Client
+	newContext         func() (context.Context, context.CancelFunc)
+	requestTimeout     time.Duration
+	requestCancels     map[string]context.CancelFunc
 	newOperationID     func() string
 	now                func() time.Time
 	subscriptions      []protocol.Subscription
@@ -306,9 +310,12 @@ type subscriptionsResultMsg struct {
 }
 
 type refreshAllResultMsg struct {
-	revision uint64
-	err      error
+	operationID string
+	revision    uint64
+	err         error
 }
+
+type canceledRefreshAllMsg struct{ operationID string }
 
 // Err implements the shell's action-outcome contract so bulk refreshes are
 // classified Succeeded/Failed in the Recent operations ledger.
@@ -323,7 +330,30 @@ func New(client Client, newOperationID func() string, now func() time.Time) *Mod
 	if now == nil {
 		now = time.Now
 	}
-	return &Model{client: client, newOperationID: newOperationID, now: now, pending: make(map[string]string), theme: ui.DefaultTheme()}
+	return &Model{client: client, newOperationID: newOperationID, now: now, pending: make(map[string]string), theme: ui.DefaultTheme(),
+		newContext:     func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) },
+		requestTimeout: controlclient.SubscriptionMutationTimeout, requestCancels: make(map[string]context.CancelFunc)}
+}
+
+// SetContextFactory binds subscription work to the run owner before commands are created.
+// The factory must return a cancelable scope without a per-item deadline.
+func (m *Model) SetContextFactory(factory func() (context.Context, context.CancelFunc)) {
+	if factory != nil {
+		m.newContext = factory
+	}
+}
+
+func (m *Model) subscriptionContext() (context.Context, context.CancelFunc) {
+	owner, cancelOwner := m.newContext()
+	ctx, cancel := context.WithTimeout(owner, m.requestTimeout)
+	return ctx, func() { cancel(); cancelOwner() }
+}
+
+func (m *Model) finishRequest(id string) {
+	if cancel := m.requestCancels[id]; cancel != nil {
+		cancel()
+		delete(m.requestCancels, id)
+	}
 }
 
 func (m *Model) ID() ui.PageID { return ui.PageSubscriptions }
@@ -376,7 +406,11 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, cmd
 	}
 	switch typed := message.(type) {
+	case canceledRefreshAllMsg:
+		m.finishRequest(typed.operationID)
+		return m, nil
 	case mutationResultMsg:
+		m.finishRequest(typed.operation.ID)
 		if m.form != nil && m.saveState == saveSending && typed.operation.ID == m.saveOperation {
 			return m, m.finishSave(typed)
 		}
@@ -414,6 +448,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		return m, m.loadSpinCmdIfNeeded()
 	case refreshAllResultMsg:
+		m.finishRequest(typed.operationID)
 		clear(m.pending)
 		if typed.err != nil {
 			var apiError protocol.APIError
@@ -489,12 +524,17 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 	case "ctrl+r":
 		if len(m.subscriptions) > 0 {
+			baseID := m.newOperationID()
+			execute := m.refreshAllWithID(baseID)
 			return m, func() tea.Msg {
 				return ui.ActionIntentMsg{
 					Action: ui.ActionRefreshAllSubscriptions, Page: ui.PageSubscriptions, Capability: protocol.CapabilitySubscriptions, Key: "subscriptions:refresh-all",
 					Title: ui.RefreshAllSubscriptionsTitle, Object: ui.AllSubscriptionsLabel,
 					Impact: ui.RefreshAllSubscriptionsImpact, Rollback: ui.RefreshAllSubscriptionsRollback,
-					Execute: m.refreshAll(),
+					Execute: execute,
+					Cancel: func() tea.Msg {
+						return ui.PageResultMsg{Page: ui.PageSubscriptions, Result: canceledRefreshAllMsg{operationID: baseID}}
+					},
 				}
 			}
 		}
@@ -544,18 +584,19 @@ func (m *Model) FooterHints() string {
 func (m *Model) subscriptionColumns() []ui.TableColumn {
 	// Grow only to the content's visible width, leaving surplus space on the
 	// right instead of pushing related fields apart on wide terminals.
-	nameWidth, trafficWidth := 10, 11
+	nameWidth, trafficWidth, modeWidth := 10, 11, 6
 	for _, subscription := range m.subscriptions {
 		nameWidth = max(nameWidth, lipgloss.Width(subscription.Name))
 		traffic := ui.FormatSubscriptionTrafficCompact(subscription.Upload, subscription.Download, subscription.Total)
 		trafficWidth = max(trafficWidth, lipgloss.Width(traffic))
+		modeWidth = max(modeWidth, lipgloss.Width(proxyModeLabel(subscription.ProxyMode)))
 	}
 	return []ui.TableColumn{
 		{ID: "name", Title: ui.NameLabel, MinWidth: 10, MaxWidth: min(nameWidth, 32), Flex: 3, Priority: 8},
 		{ID: "active", Title: "InUse", MinWidth: 5, Flex: 0, Priority: 7, Align: ui.AlignCenter},
 		{ID: "state", Title: "Enabled", MinWidth: 8, Flex: 0, Priority: 6},
 		{ID: "load", Title: "Status", MinWidth: 12, Flex: 0, Priority: 5},
-		{ID: "proxy", Title: "Mode", MinWidth: 6, Flex: 0, Priority: 4},
+		{ID: "proxy", Title: "Mode", MinWidth: modeWidth, Flex: 0, Priority: 4},
 		{ID: "traffic", Title: ui.TrafficLabel, MinWidth: 11, MaxWidth: min(trafficWidth, 24), Flex: 1, Priority: 3},
 		{ID: "lastSuccess", Title: ui.LastUpdateLabel, MinWidth: 11, Flex: 0, Priority: 2},
 		{ID: "nextRefresh", Title: ui.NextUpdateLabel, MinWidth: 11, Flex: 0, Priority: 1},
@@ -664,7 +705,13 @@ func (m *Model) updateForm(message tea.Msg) (ui.Page, tea.Cmd) {
 
 func (m *Model) submitForm(form *formModel, id string, revision uint64) tea.Cmd {
 	operationID := m.newOperationID()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if form.kind == formAdd {
+		ctx, cancel = m.subscriptionContext()
+	} else {
+		ctx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
+	}
 	if m.form == form {
 		m.saveCancel = cancel
 		m.saveState = saveSending
@@ -747,7 +794,7 @@ func proxyModeLabel(mode string) string {
 	case "proxy":
 		return "PROXY"
 	case "auto":
-		return "AUTO"
+		return "PROXY w Fallback to DIRECT"
 	default:
 		return "DIRECT"
 	}
@@ -760,8 +807,9 @@ func (m *Model) refresh(id string) tea.Cmd {
 	operationID, revision := m.newOperationID(), m.revision
 	operation := logging.OperationMetadata{ID: operationID, Name: "subscription.refresh"}
 	m.pending[id] = "refresh"
+	ctx, cancel := m.subscriptionContext()
+	m.requestCancels[operationID] = cancel
 	return tea.Batch(func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		ctx = logging.WithOperation(ctx, operation)
 		result, err := m.client.RefreshSubscription(ctx, id, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision})
@@ -772,6 +820,10 @@ func (m *Model) refresh(id string) tea.Cmd {
 // refreshAll refreshes every subscription in list order. Presentation pending
 // is owned by the Root Shell confirmation dispatcher until execute begins.
 func (m *Model) refreshAll() tea.Cmd {
+	return m.refreshAllWithID(m.newOperationID())
+}
+
+func (m *Model) refreshAllWithID(baseID string) tea.Cmd {
 	if m.client == nil {
 		return nil
 	}
@@ -779,24 +831,31 @@ func (m *Model) refreshAll() tea.Cmd {
 	for _, subscription := range m.subscriptions {
 		ids = append(ids, subscription.ID)
 	}
-	baseID, revision := m.newOperationID(), m.revision
+	revision := m.revision
+	ctx, cancel := m.newContext()
+	m.requestCancels[baseID] = cancel
+	timeout := m.requestTimeout
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(max(1, len(ids)))*30*time.Second)
 		defer cancel()
 		for index, id := range ids {
+			if err := ctx.Err(); err != nil {
+				return refreshAllResultMsg{operationID: baseID, revision: revision, err: err}
+			}
 			request := protocol.MutationRequest{OperationID: fmt.Sprintf("%s-%d", baseID, index+1)}
 			if revision != 0 {
 				request.IfRevision = &revision
 			}
-			result, err := m.client.RefreshSubscription(logging.WithOperation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "subscription.refresh"}), id, request)
+			itemCtx, cancelItem := context.WithTimeout(ctx, timeout)
+			result, err := m.client.RefreshSubscription(logging.WithOperation(itemCtx, logging.OperationMetadata{ID: request.OperationID, Name: "subscription.refresh"}), id, request)
+			cancelItem()
 			if err != nil {
-				return refreshAllResultMsg{revision: revision, err: err}
+				return refreshAllResultMsg{operationID: baseID, revision: revision, err: err}
 			}
 			if result.Revision != 0 {
 				revision = result.Revision
 			}
 		}
-		return refreshAllResultMsg{revision: revision}
+		return refreshAllResultMsg{operationID: baseID, revision: revision}
 	}
 }
 

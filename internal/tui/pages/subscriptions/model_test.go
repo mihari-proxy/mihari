@@ -696,7 +696,7 @@ func TestModel_EditFormKeepsOpeningRevision(t *testing.T) {
 }
 
 func TestProxyModeLabelRendersThreeStates(t *testing.T) {
-	for mode, want := range map[string]string{"": "DIRECT", "proxy": "PROXY", "auto": "AUTO"} {
+	for mode, want := range map[string]string{"": "DIRECT", "proxy": "PROXY", "auto": "PROXY w Fallback to DIRECT"} {
 		if got := proxyModeLabel(mode); got != want {
 			t.Errorf("proxyModeLabel(%q)=%q want %q", mode, got, want)
 		}
@@ -742,7 +742,7 @@ func TestView_RendersProxyColumnAndThreeLabels(t *testing.T) {
 		},
 	})
 	view := model.View()
-	for _, want := range []string{"Mode", "DIRECT", "PROXY", "AUTO"} {
+	for _, want := range []string{"Mode", "DIRECT", "PROXY", "PROXY w Fallback to DIRECT"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}

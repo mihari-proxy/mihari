@@ -90,8 +90,8 @@ func TestConfigDiagnostic_ReloadCompensation(t *testing.T) {
 					return first
 				}
 				if mode == "cancel" {
-					if got.Err() != context.Canceled {
-						t.Error("ordinary rollback lost original canceled context")
+					if _, bounded := got.Deadline(); got.Err() != nil || !bounded {
+						t.Error("ordinary rollback needs an independent bounded context")
 					}
 					return got.Err()
 				}
@@ -113,7 +113,7 @@ func TestConfigDiagnostic_ReloadCompensation(t *testing.T) {
 			_, err := m.RefreshSubscription(ctx, Operation{ID: "config-failure", Source: "test"}, id)
 			wantMessage := "mihomo rejected generated configuration; previous configuration restored"
 			wantCode := protocol.CodeUpstreamFailure
-			degraded := mode != "restored"
+			degraded := mode != "restored" && mode != "cancel"
 			if degraded {
 				wantMessage = "mihomo reload failed and rollback could not be confirmed"
 			}
@@ -130,9 +130,6 @@ func TestConfigDiagnostic_ReloadCompensation(t *testing.T) {
 			}
 			if (mode == "second_reload" || mode == "restore") && !errors.Is(err, second) {
 				t.Error("second reload cause missing")
-			}
-			if mode == "cancel" && !errors.Is(err, context.Canceled) {
-				t.Error("rollback cancellation cause missing")
 			}
 			if mode == "restore" || mode == "receipt" {
 				// This distinct filesystem failure must survive alongside both reload causes.
@@ -160,7 +157,7 @@ func TestConfigDiagnostic_ReloadCompensation(t *testing.T) {
 			if mode != "restore" && !bytes.Equal(before, configDiagnosticRead(t, m.runtimeConfig)) {
 				t.Error("previous config not restored")
 			}
-			if mode == "restored" {
+			if mode == "restored" || mode == "cancel" {
 				catalog.Profiles[0].LastError = wantMessage
 			}
 			if mode != "receipt" && !reflect.DeepEqual(catalog, m.Subscriptions()) {

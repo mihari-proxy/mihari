@@ -52,3 +52,40 @@ func TestSchedulerCallsRefreshAndStopsWithContext(t *testing.T) {
 		t.Fatalf("err=%v calls=%d", err, calls.Load())
 	}
 }
+
+func TestScheduler_RefreshDeadlineDoesNotStopOwner(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	now := time.Unix(1000, 0)
+	catalog := Defaults()
+	catalog.Profiles = []Profile{{ID: "fixture", Enabled: true, AutoRefresh: true}}
+	calls, retries := 0, 0
+	scheduler := NewScheduler(SchedulerOptions{
+		Snapshot: func() Catalog { return catalog }, Now: func() time.Time { return now },
+		Jitter: func(string, time.Duration) time.Duration { return 0 },
+		After: func(wait time.Duration) <-chan time.Time {
+			retries++
+			if wait != time.Minute {
+				t.Errorf("retry delay=%v", wait)
+			}
+			now = now.Add(wait)
+			ch := make(chan time.Time, 1)
+			ch <- now
+			return ch
+		},
+		Refresh: func(parent context.Context, _ string) error {
+			calls++
+			if parent.Err() != nil {
+				t.Error("scheduler owner was canceled")
+			}
+			if calls == 2 {
+				cancel()
+				return nil
+			}
+			return context.DeadlineExceeded
+		},
+	})
+	if err := scheduler.Run(ctx); !errors.Is(err, context.Canceled) || calls != 2 || retries != 1 {
+		t.Fatalf("scheduler stopped on item deadline: calls=%d retries=%d err=%v", calls, retries, err)
+	}
+}

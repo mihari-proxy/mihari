@@ -444,6 +444,9 @@ func (m *Model) formStatus() string {
 
 // Stop cancels page-owned requests when the TUI exits. Cancellation is not rollback.
 func (m *Model) Stop() {
+	for id := range m.requestCancels {
+		m.finishRequest(id)
+	}
 	if m.revealCancel != nil {
 		m.revealCancel()
 	}

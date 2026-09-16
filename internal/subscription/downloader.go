@@ -101,7 +101,8 @@ func redirectPolicy(request *http.Request, via []*http.Request) error {
 }
 
 // networkFailureError marks transport failures and managed-provider body failures.
-// Fetch wraps transport failures only; Download also wraps provider body failures.
+// Fetch wraps transport failures and successful-response body timeouts;
+// Download also wraps provider body failures.
 // It is the only error isFallbackable recognizes for auto-mode retry.
 // Fetch converts it back to a protocol.APIError before returning to callers.
 type networkFailureError struct{ cause error }
@@ -231,7 +232,12 @@ func (d *Downloader) do(ctx context.Context, input FetchRequest, client *http.Cl
 	}
 	content, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {
-		return FetchResult{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read subscription response"}, &diagnostics.HTTPError{Operation: "subscription download", URL: input.URL, Phase: "read", Cause: err})
+		detail := &diagnostics.HTTPError{Operation: "subscription download", URL: input.URL, Phase: "read", Cause: err}
+		var timeout net.Error
+		if errors.As(err, &timeout) && timeout.Timeout() {
+			return FetchResult{}, networkFailureError{cause: detail}
+		}
+		return FetchResult{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read subscription response"}, detail)
 	}
 	if int64(len(content)) > limit {
 		return FetchResult{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription document is too large"}
@@ -241,8 +247,9 @@ func (d *Downloader) do(ctx context.Context, input FetchRequest, client *http.Cl
 }
 
 // isFallbackable reports whether a fetch error is a network-layer failure that
-// auto mode should retry against the next client (proxy→direct). Only transport
-// failures (timeout, connection refused, connection reset) qualify; HTTP status
+// auto mode should retry against the next client (proxy→direct). Transport
+// failures (timeout, connection refused, connection reset) and successful-response
+// body timeouts qualify; HTTP status
 // errors, invalid URLs, and oversized responses do not, since direct would fail
 // for the same reason and the retry only wastes time.
 func isFallbackable(err error) bool {

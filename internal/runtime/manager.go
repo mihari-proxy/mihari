@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -148,6 +149,9 @@ type Manager struct {
 	routingMessage string // guarded by mutation ownership
 	trustedCore    *core.TrustedExecution
 
+	subscriptionRecoveryTimeout time.Duration
+	subscriptionTimeout         time.Duration
+
 	store                     *state.Store
 	coordinator               *state.Coordinator
 	installer                 CoreInstaller
@@ -242,7 +246,9 @@ func New(options Options) *Manager {
 		settings = config.Defaults()
 	}
 	manager := &Manager{
-		trustedCore: options.TrustedCore,
+		subscriptionRecoveryTimeout: subscriptionRecoveryTimeout,
+		subscriptionTimeout:         subscriptionExecutionTimeout,
+		trustedCore:                 options.TrustedCore,
 
 		store:              store,
 		coordinator:        coordinator,

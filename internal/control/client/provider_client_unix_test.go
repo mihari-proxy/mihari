@@ -7,9 +7,33 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/control/transport"
 	"github.com/mihari-proxy/mihari/internal/platform"
+	"io"
+	"net/http"
 	"os"
+	"strings"
 	"testing"
+	"time"
 )
+
+func TestSubscriptionTimeout_VerifiedUnixConstructorUsesLongBudget(t *testing.T) {
+	for _, add := range []bool{false, true} {
+		p := &sequenceProvider{value: "fixture"}
+		c := WithCredentialProvider(platform.ControlLocator{}, p)
+		c.http.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			deadline, ok := r.Context().Deadline()
+			if !ok || time.Until(deadline) < SubscriptionMutationTimeout-time.Second {
+				t.Error("Unix subscription used ordinary timeout")
+			}
+			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"schema":"mihari/v1"}`))}, nil
+		})
+		if err := invokeSubscriptionMutation(context.Background(), c, add); err != nil {
+			t.Fatal(err)
+		}
+		if p.calls != 1 || c.http.Timeout != 10*time.Second {
+			t.Fatal("Unix credential or ordinary budget changed")
+		}
+	}
+}
 
 func TestProviderClient_UnixClassifications(t *testing.T) {
 	for _, tc := range []struct {

@@ -333,6 +333,9 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 		tea.WithOutput(options.Output),
 	)
 	final, err := program.Run()
+	if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
+		page.Stop()
+	}
 	cleanup := newRunCleanup(&resources, cancelSession, func() {
 		if controlSession != nil {
 			controlSession.Close()

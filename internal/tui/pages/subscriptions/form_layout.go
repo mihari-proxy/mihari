@@ -52,11 +52,25 @@ func (f *formModel) fieldLayout(theme ui.Theme, width int) formLayout {
 			}
 			value = "‹ " + value + " ›"
 		}
+		if label == "Mode" && lipgloss.Width(prefix+value) > width {
+			layout.lines = append(layout.lines, theme.Muted.Render(prefix))
+			prefix = "  "
+		}
 		line := theme.Muted.Render(prefix) + value
 		if cycle && index == f.index {
 			line = theme.RowFocus.Render(ui.PadCell(prefix+value, width, ui.AlignLeft))
 		}
 		layout.lines = append(layout.lines, line)
+		if label == "Mode" && index == f.index {
+			help := "Download subscription YAML directly."
+			switch f.inputs[index].Value() {
+			case "proxy":
+				help = "Download subscription YAML via proxy."
+			case "auto":
+				help = "Download subscription YAML via proxy; retry DIRECT on eligible network errors."
+			}
+			layout.lines = append(layout.lines, strings.Split(ansi.Wrap(theme.Muted.Render(help), width, ""), "\n")...)
+		}
 		if label == "Interval" && index == f.index {
 			help := "Leave blank to use global interval"
 			layout.lines = append(layout.lines, strings.Split(ansi.Wrap(theme.Muted.Render(help), width, ""), "\n")...)

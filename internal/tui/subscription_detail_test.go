@@ -25,6 +25,41 @@ func subscriptionDetailRoot() Model {
 	return m
 }
 
+func TestSubscriptionMode_RootCompactFormShowsFullFallback(t *testing.T) {
+	for _, add := range []bool{false, true} {
+		m := subscriptionDetailRoot()
+		press := func(key tea.KeyPressMsg) { next, _ := m.Update(key); m = next.(Model) }
+		fields := 4
+		if add {
+			press(tea.KeyPressMsg{Code: tea.KeyEscape})
+			press(tea.KeyPressMsg{Code: 'a', Text: "a"})
+			fields = 2
+		}
+		for range fields {
+			press(tea.KeyPressMsg{Code: tea.KeyTab})
+		}
+		press(tea.KeyPressMsg{Code: tea.KeyRight})
+		press(tea.KeyPressMsg{Code: tea.KeyRight})
+		for _, size := range [][2]int{{72, 22}, {100, 28}, {72, 22}} {
+			next, _ := m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+			m = next.(Model)
+			view := ansi.Strip(m.View().Content)
+			if !strings.Contains(view, "PROXY w Fallback to DIRECT") || !strings.Contains(view, "[ Save ]") {
+				t.Fatalf("full value/Save missing at %v:\n%s", size, view)
+			}
+			lines := strings.Split(view, "\n")
+			if len(lines) > size[1] {
+				t.Fatal("height overflow")
+			}
+			for _, line := range lines {
+				if ansi.StringWidth(line) > size[0] {
+					t.Fatal("width overflow")
+				}
+			}
+		}
+	}
+}
+
 // TestSubscriptionDetail_ResizesWithSaveVisible checks every field against the root frame budget.
 func TestSubscriptionDetail_ResizesWithSaveVisible(t *testing.T) {
 	for _, add := range []bool{false, true} {

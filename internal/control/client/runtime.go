@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -22,6 +23,14 @@ const (
 	maxControlResponseSize = 4 << 20
 	maxControlStreamSize   = 1 << 20
 )
+
+// SubscriptionMutationTimeout lets a subscription download, fallback and daemon
+// compensation finish before the local control request expires.
+const SubscriptionMutationTimeout = 180 * time.Second
+
+type runtimeRequestOptions struct {
+	timeout time.Duration
+}
 
 type runtimeOutcome struct {
 	err            error
@@ -254,13 +263,13 @@ func (c *Client) SubscriptionURL(ctx context.Context, id string) (protocol.Subsc
 
 func (c *Client) AddSubscription(ctx context.Context, request protocol.SubscriptionAddRequest) (protocol.SubscriptionResult, error) {
 	var result protocol.SubscriptionResult
-	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "subscription.add"}, http.MethodPost, "/v1/subscriptions", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "subscription.add"}, http.MethodPost, "/v1/subscriptions", request, &result, runtimeRequestOptions{timeout: SubscriptionMutationTimeout})
 	return result, err
 }
 
 func (c *Client) RefreshSubscription(ctx context.Context, id string, request protocol.MutationRequest) (protocol.SubscriptionResult, error) {
 	var result protocol.SubscriptionResult
-	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "subscription.refresh"}, http.MethodPost, "/v1/subscriptions/"+url.PathEscape(id)+"/refresh", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "subscription.refresh"}, http.MethodPost, "/v1/subscriptions/"+url.PathEscape(id)+"/refresh", request, &result, runtimeRequestOptions{timeout: SubscriptionMutationTimeout})
 	return result, err
 }
 
@@ -288,13 +297,18 @@ func (c *Client) RemoveSubscription(ctx context.Context, id string, request prot
 	return result, err
 }
 
-func (c *Client) doMutation(ctx context.Context, operation logging.OperationMetadata, method, path string, input, output any) error {
+func (c *Client) doMutation(ctx context.Context, operation logging.OperationMetadata, method, path string, input, output any, options ...runtimeRequestOptions) error {
+	if len(options) > 0 && options[0].timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, options[0].timeout)
+		defer cancel()
+	}
 	ctx = logging.WithOperation(ctx, operation)
 	reporter := c.diagnosticReporter()
 	if reporter != nil {
 		reporter(ctx, diagnostics.Record{Component: "control.client", Event: "mutation_started", Level: slog.LevelDebug})
 	}
-	outcome := c.doRuntimeOutcome(ctx, method, path, input, output, maxControlResponseSize)
+	outcome := c.doRuntimeOutcome(ctx, method, path, input, output, maxControlResponseSize, options...)
 	if outcome.err != nil && !outcome.remoteEnvelope && (operation.Name == "subscription.add" || operation.Name == "subscription.set") {
 		if outcome.dispatched {
 			outcome.err = unknownSubscriptionOutcome{outcome.err}
@@ -498,7 +512,7 @@ func (c *Client) doRuntimeLimit(ctx context.Context, method, path string, input,
 	return c.reportRuntimeOutcome(ctx, outcome, "request_failed", "request_response")
 }
 
-func (c *Client) doRuntimeOutcome(ctx context.Context, method, path string, input, output any, responseLimit int64) (outcome runtimeOutcome) {
+func (c *Client) doRuntimeOutcome(ctx context.Context, method, path string, input, output any, responseLimit int64, options ...runtimeRequestOptions) (outcome runtimeOutcome) {
 	var body io.Reader
 	if input != nil {
 		raw, err := json.Marshal(input)
@@ -531,7 +545,13 @@ func (c *Client) doRuntimeOutcome(ctx context.Context, method, path string, inpu
 	}
 	// Every return after Do may describe a request that reached the daemon.
 	defer func() { outcome.dispatched = true }()
-	response, err := c.requestHTTP().Do(request)
+	httpClient := c.requestHTTP()
+	if len(options) > 0 && options[0].timeout > 0 {
+		copy := *httpClient
+		copy.Timeout = options[0].timeout
+		httpClient = &copy
+	}
+	response, err := httpClient.Do(request)
 	if err != nil {
 		return c.localRuntimeOutcome(err)
 	}

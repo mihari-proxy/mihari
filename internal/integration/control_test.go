@@ -67,13 +67,20 @@ type subscriptionControlFixture struct {
 }
 
 func newSubscriptionControlFixture(t *testing.T, controllers ...runtimeapi.Controller) *subscriptionControlFixture {
+	return newSubscriptionControlFixtureWithDownloader(t, nil, controllers...)
+}
+
+func newSubscriptionControlFixtureWithDownloader(t *testing.T, downloader subscription.Fetcher, controllers ...runtimeapi.Controller) *subscriptionControlFixture {
 	t.Helper()
 	root := t.TempDir()
 	fetcher := newControlledSubscriptionFetcher()
+	if downloader == nil {
+		downloader = fetcher
+	}
 	service, err := subscription.Open(subscription.ServiceOptions{
 		CatalogPath: filepath.Join(root, "subscriptions", "catalog.yaml"),
 		CacheDir:    filepath.Join(root, "subscriptions", "cache"),
-		Downloader:  fetcher,
+		Downloader:  downloader,
 	})
 	if err != nil {
 		t.Fatal(err)
