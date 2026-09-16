@@ -39,6 +39,7 @@ func TestSettingsLogging_LoadDefaultsAndNormalizesYAML(t *testing.T) {
 		{name: "omitted", want: LoggingSettings{Level: "info", MaxSizeMB: 10, MaxFiles: 3}},
 		{name: "empty block", log: "log: {}\n", want: LoggingSettings{Level: "info", MaxSizeMB: 10, MaxFiles: 3}},
 		{name: "partial block", log: "log:\n  level: debug\n", want: LoggingSettings{Level: "debug", MaxSizeMB: 10, MaxFiles: 3}},
+		{name: "adopted silent", log: "log:\n  level: silent\n", want: LoggingSettings{Level: "silent", MaxSizeMB: 10, MaxFiles: 3}},
 		{name: "explicit zero limits", log: "log:\n  level: warn\n  max-size-mb: 0\n  max-files: 0\n", want: LoggingSettings{Level: "warn", MaxSizeMB: 10, MaxFiles: 3}},
 	}
 

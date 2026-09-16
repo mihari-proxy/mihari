@@ -163,7 +163,7 @@ var (
 		}
 		return daemonLoggingRuntime{Closer: runtime, Logger: runtime.Logger(), Runtime: runtime}, nil
 	}
-	newDaemonCapture   = logging.NewLineCaptureWriter
+	newDaemonCapture   = logging.NewMihomoCaptureWriter
 	buildDaemonRuntime = app.BuildRuntimeWithOptions
 	runDaemon          = daemon.Run
 )

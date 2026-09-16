@@ -14,6 +14,9 @@ import (
 // mutation. The catalog already identifies the candidate subscription; the
 // caller restores it on failure. Never re-enter the coordinator here.
 func (m *Manager) commitRuntimeConfig(ctx context.Context, candidate configCandidate) error {
+	if m.loggingUnsaved && ctx.Value(controlledLoggingContextKey{}) != true {
+		return loggingCoreError("save the observed core logging level before reloading configuration", nil)
+	}
 	if candidate.generationBound && candidate.generation != m.currentConfigGeneration() {
 		return routingConflict()
 	}

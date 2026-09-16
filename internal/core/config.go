@@ -43,7 +43,7 @@ func BootstrapConfig(settings config.Settings) ([]byte, error) {
 		AllowLAN:           false,
 		BindAddress:        mixed.Addr().String(),
 		Mode:               settings.RoutingMode(),
-		LogLevel:           "info",
+		LogLevel:           settings.CoreLoggingLevel(),
 		ExternalController: settings.ControllerAddr,
 		Secret:             settings.ControllerSecret,
 		Proxies:            []any{},

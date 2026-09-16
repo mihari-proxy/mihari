@@ -236,6 +236,11 @@ func (m *Manager) UseSubscription(ctx context.Context, operation Operation, id s
 
 func (m *Manager) RemoveSubscription(ctx context.Context, operation Operation, id string) error {
 	_, err := m.doOperation(ctx, "sub-remove:"+operation.ID, func(ctx context.Context) (any, error) {
+		if m.subscriptions != nil && m.subscriptions.Snapshot().ActiveID == id {
+			if err := m.SyncLogging(ctx); err != nil {
+				return nil, err
+			}
+		}
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
 		}
@@ -350,6 +355,11 @@ func (m *Manager) SetSubscription(ctx context.Context, operation Operation, id s
 
 func (m *Manager) mutateSubscription(ctx context.Context, prefix string, operation Operation, id string, mutate func(*subscription.Catalog, *subscription.Profile) error) (subscription.PublicProfile, error) {
 	result, err := m.doOperation(ctx, prefix+operation.ID, func(ctx context.Context) (any, error) {
+		if prefix == "sub-enabled:" && m.subscriptions != nil && m.subscriptions.Snapshot().ActiveID == id {
+			if err := m.SyncLogging(ctx); err != nil {
+				return nil, err
+			}
+		}
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
 		}
@@ -436,6 +446,9 @@ func (m *Manager) prepareCatalogConfigWithSettings(ctx context.Context, catalog 
 }
 
 func (m *Manager) prepareConfig(ctx context.Context, document subscription.Document) (configCandidate, error) {
+	if err := m.SyncLogging(ctx); err != nil {
+		return configCandidate{}, err
+	}
 	settings, generation := m.configInputs()
 	return m.prepareConfigWithSettings(ctx, document, settings, generation)
 }

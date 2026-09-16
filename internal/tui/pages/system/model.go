@@ -1408,17 +1408,30 @@ func uninstallTargetPaths(targets []app.UninstallTarget) string {
 
 func (m *Model) loggingRows() []row {
 	level := ui.UnavailableTitle
+	detail := ui.LoggingLevelHint
+	if m.logging.SyncMessage != "" {
+		detail += " " + m.logging.SyncMessage
+	}
 	maxSize := ui.UnavailableTitle
 	maxFiles := ui.UnavailableTitle
 	directory := ui.UnavailableTitle
 	if m.loggingAvailable {
 		level = m.logging.Level
+		if level == "silent" {
+			level += " (adopted from core)"
+		}
+		switch m.logging.SyncState {
+		case "unsaved":
+			level += fmt.Sprintf(" (core: %s; unsaved)", m.logging.CoreLevel)
+		case "pending", "unknown":
+			level += " (" + m.logging.SyncState + ")"
+		}
 		maxSize = fmt.Sprintf("%d MiB", m.logging.MaxSizeMB)
 		maxFiles = fmt.Sprintf("%d", m.logging.MaxFiles)
 		directory = m.logging.Dir
 	}
 	rows := []row{
-		{id: rowLogLevel, section: ui.LoggingSectionTitle, label: ui.LoggingLevelLabel, value: level},
+		{id: rowLogLevel, section: ui.LoggingSectionTitle, label: ui.LoggingLevelLabel, value: level, detail: detail},
 		{id: rowLogMaxSize, section: ui.LoggingSectionTitle, label: ui.LoggingMaxSizeLabel, value: maxSize},
 		{id: rowLogMaxFiles, section: ui.LoggingSectionTitle, label: ui.LoggingMaxFilesLabel, value: maxFiles},
 	}

@@ -202,7 +202,9 @@ Unix 机器日志写入 D，本用户 TUI 日志写入 U；Windows/显式私有 
 | TUI（当前 UID 的实例共享） | `U/logs/mihari-tui.log` |
 | 捕获的 mihomo 输出 | `D/logs/mihomo.log` |
 
-守护进程与捕获的 mihomo 文件日志默认级别为 `info`，每个活跃文件到 10 MiB 时轮转，并保留三份文件（活跃文件加最多两份归档）。TUI 启动时使用 bootstrap 配置——级别 `debug`、100 MiB、10 份文件——以便在守护进程设置可用前也能记录日志；在后续控制面同步前会保持该 bootstrap 配置。TUI 的 System 页面可修改由守护进程持有的级别、单文件最大大小和保留数量，变更无需重启守护进程。捕获的 mihomo stdout 记为 `INFO`，stderr 记为 `WARN`；这些捕获级别不代表 mihomo 行内文本本身的严重程度。
+守护进程与捕获的 mihomo 文件日志默认级别为 `info`，每个活跃文件到 10 MiB 时轮转，并保留三份文件（活跃文件加最多两份归档）。TUI 启动时使用 bootstrap 配置——级别 `debug`、100 MiB、10 份文件——以便在守护进程设置可用前也能记录日志；在后续控制面同步前会保持该 bootstrap 配置。TUI 的 System 页面可修改由守护进程持有的级别、单文件最大大小和保留数量，变更无需重启守护进程。捕获 mihomo 输出时会识别文本/JSON 中的真实级别并保留原行；无法识别时，stdout 回退为 `INFO`，stderr 回退为 `WARN`。
+
+System → Logging → Level 同时控制 Mihari 文件日志与 mihomo 全局 `log-level`，生成配置覆盖订阅值但不修改原缓存。主动可选 `debug`、`info`、`warn`、`error`。在线修改经过校验、内核确认、reload 与保存，失败补偿恢复；内核停止时保存到下次启动应用。外部内核变化每 2 秒观察：保存失败保留内核现状、显示未保存并重试最新值。仅被动采纳内核的 `silent`，保留历史文件和操作错误提示，用户可切回四档。旧版本可能拒绝已保存的 `silent`，降级前应切回支持级别或恢复兼容的停机备份。TUI/Web 实时日志筛选独立于文件级别，silent 也不限制实时订阅。网关允许单字段 `PATCH /configs {"log-level":"debug"}`，混合及未知写入仍拒绝。
 
 `GET /v1/logging` 与 `PATCH /v1/logging` 是供 TUI 使用的稳定 v1 本地控制端点，并非 CLI 命令。日志导出仅在 TUI 提供：可在 Logs 页按 `e`，或在 System → Logging 选择 **Export logs**。对话框支持最近 24 小时、最近 60 分钟、本地时间区间和全部记录。默认输出到 `U/logs-export/`；已有 zip 永不覆盖，自定义目标必须是既有目录中的绝对 `.zip` 路径。没有 CLI 日志导出命令。
 

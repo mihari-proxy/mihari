@@ -719,6 +719,21 @@ func (s *Server) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if raw, exists := patch["log-level"]; exists {
+		if len(patch) != 1 || r.Method != http.MethodPatch {
+			s.reportMutationRejection(r.Context(), errors.New("logging level requires PATCH with exactly one field"))
+			WriteReject(w, ActionRejectUnknown)
+			return
+		}
+		level, ok := raw.(string)
+		if !ok || (level != "debug" && level != "info" && level != "warn" && level != "warning" && level != "error") {
+			s.reportMutationRejection(r.Context(), errors.New("invalid logging level"))
+			http.Error(w, "invalid logging level", http.StatusBadRequest)
+			return
+		}
+		s.applyConfigMutation(w, r, patch)
+		return
+	}
 	if raw, exists := patch["mode"]; exists {
 		if len(patch) != 1 || r.Method != http.MethodPatch {
 			s.reportMutationRejection(r.Context(), errors.New("routing mode requires PATCH with exactly one field"))

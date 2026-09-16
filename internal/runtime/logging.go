@@ -45,45 +45,34 @@ func (m *Manager) UpdateLogging(ctx context.Context, operation Operation, update
 		return protocol.LoggingStatus{}, err
 	}
 	result, err := m.doOperation(ctx, "logging:"+operation.ID, func(ctx context.Context) (any, error) {
-		if err := m.lockMutation(ctx); err != nil {
+		candidate, runtimeCandidate, err := m.prepareLoggingUpdate(ctx, operation, update)
+		if err != nil {
 			return nil, err
 		}
+		// prepareLoggingUpdate returns with mutation ownership, including stopped changes.
 		defer m.unlock()
-		if err := m.checkIfRevision(operation.IfRevision); err != nil {
-			return nil, err
-		}
-
-		candidate, err := m.prepareSettings(func(settings *config.Settings) error {
-			effective := settings.EffectiveLogging()
-			if update.Level != nil {
-				effective.Level = *update.Level
+		defer func() { collectWarning(ctx, "logging", "candidate.cleanup.failed", runtimeCandidate.cleanup()) }()
+		if runtimeCandidate.path != "" {
+			candidate, err = m.commitLoggingCore(ctx, candidate, runtimeCandidate)
+			if err != nil {
+				return nil, err
 			}
-			if update.MaxSizeMB != nil {
-				effective.MaxSizeMB = *update.MaxSizeMB
-			}
-			if update.MaxFiles != nil {
-				effective.MaxFiles = *update.MaxFiles
-			}
-			settings.SetLogging(effective)
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		beforeLogging := candidate.before.EffectiveLogging()
-		afterLogging := candidate.after.EffectiveLogging()
-		cfg, err := loggingConfig(afterLogging)
-		if err != nil {
-			return nil, err
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if beforeLogging != afterLogging {
+		} else {
 			if _, err := m.saveSettingsCandidate(ctx, candidate); err != nil {
 				return nil, err
 			}
-			m.publishSettings(candidate)
+		}
+		m.publishSettings(candidate)
+		afterLogging := candidate.after.EffectiveLogging()
+		if runtimeCandidate.path != "" {
+			m.loggingUnsaved = false
+			m.loggingObservation = loggingObservation{level: afterLogging.Level, state: "applied"}
+		}
+		if candidate.before.EffectiveLogging() != afterLogging {
+			cfg, err := loggingConfig(afterLogging)
+			if err != nil {
+				return nil, err
+			} // Validated before any side effect.
 			m.logging.Apply(ctx, cfg)
 		}
 
@@ -123,8 +112,7 @@ func validateLoggingUpdate(operation Operation, update LoggingUpdate) error {
 }
 
 func validLoggingLevel(level string) bool {
-	_, err := logging.ParseLevel(level)
-	return err == nil
+	return config.ActiveLoggingLevel(level)
 }
 
 func loggingConfig(settings config.LoggingSettings) (logging.Config, error) {
@@ -139,9 +127,16 @@ func loggingConfig(settings config.LoggingSettings) (logging.Config, error) {
 }
 
 func (m *Manager) loggingStatusLocked(settings config.LoggingSettings, revision uint64) protocol.LoggingStatus {
+	observed := m.loggingObservation
+	if m.loggingCoreStopped() {
+		observed = loggingObservation{state: "pending", message: "Saved; waiting for the core to start"}
+	} else if observed.state == "" || m.mutationDegraded.Load() {
+		observed = loggingObservation{state: "unknown", message: "Core logging state is unavailable"}
+	}
 	return protocol.LoggingStatus{
 		Schema: "mihari/v1", Revision: revision, Level: settings.Level,
 		MaxSizeMB: settings.MaxSizeMB, MaxFiles: settings.MaxFiles, Dir: m.logging.Dir(),
+		CoreLevel: observed.level, SyncState: observed.state, SyncMessage: observed.message,
 	}
 }
 

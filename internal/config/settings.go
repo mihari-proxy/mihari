@@ -479,7 +479,7 @@ func (s Settings) Validate() error {
 	}
 	logging := s.EffectiveLogging()
 	switch logging.Level {
-	case "debug", "info", "warn", "error":
+	case "debug", "info", "warn", "error", "silent":
 	default:
 		return dataError("invalid log level")
 	}

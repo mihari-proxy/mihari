@@ -98,6 +98,8 @@ type Options struct {
 	Onboarding     *onboarding.Service
 	// Logging applies daemon-owned file logging settings at runtime.
 	Logging LoggingRuntime
+	// LoggingWait injects the observation interval wait for lifecycle tests.
+	LoggingWait func(context.Context, time.Duration) error
 	// RefreshLogSecrets replaces the exact subscription URL redaction snapshot.
 	RefreshLogSecrets func(catalogURLs []string)
 	Panels            PanelService
@@ -171,6 +173,9 @@ type Manager struct {
 	onboarding                *onboarding.Service
 	onboardingRestartRequired bool
 	logging                   LoggingRuntime
+	loggingObservation        loggingObservation // guarded by mutation ownership
+	loggingUnsaved            bool               // remains set across observation failures until saved or restarted
+	loggingWait               func(context.Context, time.Duration) error
 	refreshLogSecrets         func(catalogURLs []string)
 	panels                    PanelService
 	webGateway                WebGateway
@@ -188,6 +193,7 @@ type Manager struct {
 	activationPhase           string
 	settingsMu                sync.RWMutex
 	configGeneration          uint64
+	coreEpoch                 uint64 // guarded by mutation ownership; includes startup preparation
 	tunLastError              string
 	maintenance               chan struct{}
 	subscriptionChanges       chan struct{}
@@ -268,6 +274,7 @@ func New(options Options) *Manager {
 		prepareGeoIP:       options.PrepareGeoIP,
 		onboarding:         options.Onboarding,
 		logging:            options.Logging,
+		loggingWait:        options.LoggingWait,
 		refreshLogSecrets:  options.RefreshLogSecrets,
 		panels:             options.Panels,
 		webGateway:         options.WebGateway,
@@ -333,6 +340,12 @@ func (m *Manager) Run(ctx context.Context) error {
 			cancelScheduler()
 			<-schedulerDone
 		}()
+	}
+	if m.logging != nil && m.controller != nil {
+		loggingCtx, cancelLogging := context.WithCancel(ctx)
+		loggingDone := make(chan struct{})
+		go func() { defer close(loggingDone); m.runLoggingObserver(loggingCtx) }()
+		defer func() { cancelLogging(); <-loggingDone }()
 	}
 	shutdownObserved := make(chan struct{})
 	go func() {
@@ -419,6 +432,10 @@ func (m *Manager) Observe(observation supervisor.Observation) {
 	}
 	defer m.unlock()
 	current := m.store.Load().Core
+	if current.Status != string(observation.Status) || current.PID != observation.PID || current.Restarts != observation.Restarts {
+		m.coreEpoch++
+		m.loggingObservation = loggingObservation{}
+	}
 	m.setCoreStateLocked(state.CoreState{
 		Status:      string(observation.Status),
 		PID:         observation.PID,

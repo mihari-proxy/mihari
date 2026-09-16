@@ -51,6 +51,7 @@ func runFakeMihomo(arguments []string) int {
 		Controller string `yaml:"external-controller"`
 		Secret     string `yaml:"secret"`
 		Mode       string `yaml:"mode"`
+		LogLevel   string `yaml:"log-level"`
 	}
 	if err := yaml.Unmarshal(raw, &config); err != nil || config.Controller == "" || config.Secret == "" {
 		return 1
@@ -59,24 +60,31 @@ func runFakeMihomo(arguments []string) int {
 	selected := "DIRECT"
 	var routingMu sync.Mutex
 	mode := config.Mode
+	logLevel := config.LogLevel
 	if mode == "" {
 		mode = "rule"
 	}
 	mux.HandleFunc("GET /configs", func(w http.ResponseWriter, _ *http.Request) {
 		routingMu.Lock()
 		defer routingMu.Unlock()
-		writeFakeJSON(w, map[string]any{"mode": mode})
+		writeFakeJSON(w, map[string]any{"mode": mode, "log-level": logLevel})
 	})
 	mux.HandleFunc("PATCH /configs", func(w http.ResponseWriter, r *http.Request) {
 		var patch struct {
-			Mode string `json:"mode"`
+			Mode     string `json:"mode"`
+			LogLevel string `json:"log-level"`
 		}
 		if json.NewDecoder(r.Body).Decode(&patch) != nil {
 			http.Error(w, "invalid patch", 400)
 			return
 		}
 		routingMu.Lock()
-		mode = patch.Mode
+		if patch.Mode != "" {
+			mode = patch.Mode
+		}
+		if patch.LogLevel != "" {
+			logLevel = patch.LogLevel
+		}
 		routingMu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -131,7 +139,8 @@ func runFakeMihomo(arguments []string) int {
 			return
 		}
 		var next struct {
-			Mode string `yaml:"mode"`
+			Mode     string `yaml:"mode"`
+			LogLevel string `yaml:"log-level"`
 		}
 		if yaml.Unmarshal(content, &next) != nil {
 			http.Error(response, "invalid config", http.StatusUnprocessableEntity)
@@ -139,19 +148,35 @@ func runFakeMihomo(arguments []string) int {
 		}
 		routingMu.Lock()
 		mode, selected = next.Mode, "DIRECT"
+		logLevel = next.LogLevel
 		routingMu.Unlock()
 		response.WriteHeader(http.StatusNoContent)
 	})
 	for _, stream := range []string{"traffic", "memory", "logs"} {
 		stream := stream
 		mux.HandleFunc("GET /"+stream, func(response http.ResponseWriter, request *http.Request) {
+			message, _ := json.Marshal(map[string]any{"stream": stream, "value": 1, "type": request.URL.Query().Get("level"), "format": request.URL.Query().Get("format"), "payload": "fixture-log"})
+			if stream == "logs" && request.Header.Get("Upgrade") == "" {
+				response.Header().Set("Content-Type", "application/x-ndjson")
+				_, _ = response.Write(append(message, '\n'))
+				return
+			}
 			connection, err := websocket.Accept(response, request, nil)
 			if err != nil {
 				return
 			}
 			defer connection.CloseNow()
-			message, _ := json.Marshal(map[string]any{"stream": stream, "value": 1})
 			_ = connection.Write(request.Context(), websocket.MessageText, message)
+			if stream == "logs" && os.Getenv("MIHARI_FAKE_LOG_STREAM_KEEP_OPEN") == "1" {
+				for {
+					if _, _, err := connection.Read(request.Context()); err != nil {
+						return
+					}
+					if err := connection.Write(request.Context(), websocket.MessageText, message); err != nil {
+						return
+					}
+				}
+			}
 			_ = connection.Close(websocket.StatusNormalClosure, "fixture complete")
 		})
 	}

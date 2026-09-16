@@ -13,6 +13,8 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 - 守护进程还负责订阅持久化、有界的自动刷新、校验过的配置生成、重载回滚与离线配置切换。
 - 控制面新增只读端点 `GET /v1/service/status`,返回 mihari 自身的 OS 服务注册状态(`running`/`stopped`/`not_installed`/`unknown`);`GET /v1/core` 增加可选 `localReady`/`localVersion` 字段反映本地 core 就绪。两者均为向后兼容增量,不改变现有协议字段、onboarding `Complete` 契约或持久化格式。
 - `/v1` 的 `CoreStatus`、`CoreInstallResult` 增加可选 `channel`;`MutationRequest` 增加可选 `channel` 以显式指定本次安装通道。均为向后兼容增量。
+- 统一日志配置：System → Logging → Level 同时控制 Mihari 文件日志与 mihomo 全局 `log-level`，生成配置覆盖订阅值但不修改原缓存。主动可选 `debug`、`info`、`warn`、`error`。在线修改经过校验、内核确认、reload 与保存，失败补偿恢复；内核停止时保存到下次启动应用。外部内核变化每 2 秒观察：保存失败保留内核现状、显示未保存并重试最新值。仅被动采纳内核的 `silent`，保留历史文件和操作错误提示，用户可切回四档。旧版本可能拒绝已保存的 `silent`，降级前应切回支持级别或恢复兼容的停机备份。TUI/Web 实时日志筛选独立于文件级别，silent 也不限制实时订阅。网关允许单字段 `PATCH /configs {"log-level":"debug"}`，混合及未知写入仍拒绝。
+- LoggingStatus 的 `level` 保留为已保存的文件级别，可选 `core_level`、`sync_state`、`sync_message` 分别表示确认的实际值、applied/pending/unsaved/unknown 与安全提示；不放入原始错误。状态变化推进 revision，不单独推进配置 generation。受控写和外部采纳分别补偿与重试。外部采纳只保存 settings 并应用文件 logger，派生 runtime 在正常生成或每次子进程启动前更新；启动准备持有提交所有权直到 Start 返回，周期健康检查不覆盖外部日志修改。
 - `GET /v1/logging` 与 `PATCH /v1/logging` 是稳定的 v1 本地控制协议：前者返回完整 Logging 状态，后者在 revision 预检后更新级别、单文件大小或保留数量。它们供 TUI 使用，不增加 CLI 命令。
 - Windows 私有日志的授权主体优先为数据根的个人 owner SID。owner 为 Administrators 时，从既有 DACL 的显式个人用户 full-control ACE 解析主体，再写入个人用户与 LocalSystem 的受保护 DACL，避免未提权用户失去读取权限；多个用户、deny ACE 或无法解析的授权主体均拒绝猜测。旧 ACL 已丢失个人授权时，仅成功以 WRITE_DAC 打开数据根的交互进程可补回自身 SID，LocalSystem 不猜测桌面用户。日志写入器持有自身序列锁后，修复三个固定日志序列的当前文件、归档和锁文件，通过 no-follow handle 核对文件 identity，不改内容；其他序列轮转导致 identity 变化时有界重试。SYSTEM 尚不能确定用户时仅保留受保护的旧 BA/SYSTEM 根权限，不回写根目录。子项创建及加固重新读取根策略，并在应用后复查，避免服务缓存或并发迁移覆盖个人授权。
 - daemon 装配失败但控制通道可 listen 时驻留降级控制面,`GET /v1/status` 的 `health` 为 `degraded`,并带可省略 `last_error`。

@@ -25,11 +25,12 @@ func NewJSONHandler(out io.Writer, level *slog.LevelVar, component string, _ *Re
 			return attr
 		},
 	}
-	return &contextHandler{next: slog.NewJSONHandler(&recordWriter{out: out}, opts), component: component}
+	return &contextHandler{next: slog.NewJSONHandler(&recordWriter{out: out}, opts), level: level, component: component}
 }
 
 type contextHandler struct {
 	next      slog.Handler
+	level     *slog.LevelVar
 	component string
 	groups    []string
 	ops       []handlerOp
@@ -41,7 +42,7 @@ type handlerOp struct {
 }
 
 func (h *contextHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	return h.next.Enabled(ctx, level)
+	return (h.level == nil || h.level.Level() != LevelSilent) && h.next.Enabled(ctx, level)
 }
 
 func (h *contextHandler) Handle(ctx context.Context, record slog.Record) error {
@@ -108,7 +109,7 @@ func (h *contextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(clean) > 0 {
 		ops = append(ops, handlerOp{attrs: clean})
 	}
-	return &contextHandler{next: h.next, component: component, groups: h.groups, ops: ops}
+	return &contextHandler{next: h.next, level: h.level, component: component, groups: h.groups, ops: ops}
 }
 
 func (h *contextHandler) WithGroup(name string) slog.Handler {
@@ -117,7 +118,7 @@ func (h *contextHandler) WithGroup(name string) slog.Handler {
 	}
 	groups := append(append([]string{}, h.groups...), name)
 	ops := append(append([]handlerOp{}, h.ops...), handlerOp{group: name})
-	return &contextHandler{next: h.next, component: h.component, groups: groups, ops: ops}
+	return &contextHandler{next: h.next, level: h.level, component: h.component, groups: groups, ops: ops}
 }
 
 func (h *contextHandler) cleanAttr(attr slog.Attr) slog.Attr {

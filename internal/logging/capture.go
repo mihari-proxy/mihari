@@ -19,9 +19,10 @@ type LineCaptureWriter interface {
 }
 
 type lineCaptureWriter struct {
-	logger *slog.Logger
-	level  slog.Level
-	stream string
+	logger       *slog.Logger
+	level        slog.Level
+	stream       string
+	resolveLevel func(string, slog.Level, bool) slog.Level
 
 	mu     sync.Mutex
 	buf    []byte
@@ -156,10 +157,14 @@ func (w *lineCaptureWriter) logLine(msg string, truncated, invalid bool) {
 		return
 	}
 	h := w.logger.Handler()
-	if h == nil || !h.Enabled(context.Background(), w.level) {
+	level := w.level
+	if w.resolveLevel != nil {
+		level = w.resolveLevel(msg, level, truncated)
+	}
+	if h == nil || !h.Enabled(context.Background(), level) {
 		return
 	}
-	rec := slog.NewRecord(time.Now(), w.level, msg, 0)
+	rec := slog.NewRecord(time.Now(), level, msg, 0)
 	rec.AddAttrs(slog.String("stream", w.stream))
 	if truncated {
 		rec.AddAttrs(slog.Bool("truncated", true))

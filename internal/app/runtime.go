@@ -258,7 +258,10 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	}
 	var manager *runtimeapi.Manager
 	coreSupervisor := supervisor.New(supervisor.Options{
-		Starter:            mihomoStarter,
+		Starter: mihomoStarter,
+		BeforeStart: func(ctx context.Context) (func(), error) {
+			return manager.PrepareCoreStart(ctx)
+		},
 		DiagnosticReporter: options.DiagnosticReporter,
 		Health: func(ctx context.Context) error {
 			_, err := controller.Version(ctx)
@@ -593,8 +596,27 @@ func (m webMutator) timestamp() string {
 	return now().UTC().Format("20060102T150405.000000000")
 }
 
-// ApplyConfigPatch applies one allowlisted routing or TUN mutation via the coordinator.
+// ApplyConfigPatch applies one allowlisted configuration mutation via the coordinator.
 func (m webMutator) ApplyConfigPatch(ctx context.Context, patch map[string]any) error {
+	if raw, exists := patch["log-level"]; exists {
+		level, ok := raw.(string)
+		if level == "warning" {
+			level = "warn"
+		}
+		if len(patch) != 1 || !ok || !config.ActiveLoggingLevel(level) {
+			return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid logging patch"}
+		}
+		owner, ok := m.manager.(interface {
+			UpdateLogging(context.Context, runtimeapi.Operation, runtimeapi.LoggingUpdate) (protocol.LoggingStatus, error)
+		})
+		if !ok {
+			return protocol.APIError{Code: protocol.CodeInvalidState, Message: "logging runtime is unavailable"}
+		}
+		op := runtimeapi.Operation{ID: "web-logging-" + m.newWebOperationID(), Source: "web"}
+		ctx = logging.WithOperation(ctx, logging.OperationMetadata{ID: op.ID, Name: "logging.update"})
+		_, err := owner.UpdateLogging(ctx, op, runtimeapi.LoggingUpdate{Level: &level})
+		return m.reportResult(ctx, err)
+	}
 	if raw, exists := patch["mode"]; exists {
 		mode, ok := raw.(string)
 		if len(patch) != 1 || !ok || !protocol.ValidRoutingMode(mode) {

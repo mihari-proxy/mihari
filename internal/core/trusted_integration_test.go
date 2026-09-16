@@ -40,13 +40,18 @@ type seamController struct {
 	failReloads      int
 	reload           func(context.Context) error
 	tun              map[string]any
+	logLevel         string
 }
 
 func (c *seamController) Configs(context.Context) (map[string]any, error) {
-	return map[string]any{"tun": c.tun}, nil
+	return map[string]any{"tun": c.tun, "log-level": c.logLevel}, nil
 }
 func (c *seamController) PatchConfigs(_ context.Context, p map[string]any) error {
 	c.patches++
+	if level, ok := p["log-level"].(string); ok {
+		c.logLevel = level
+		return nil
+	}
 	c.tun = p["tun"].(map[string]any)
 	return nil
 }
@@ -80,6 +85,7 @@ func (c *seamController) Reload(ctx context.Context, path string, _ bool) error 
 		return e
 	}
 	c.tun, _ = document["tun"].(map[string]any)
+	c.logLevel, _ = document["log-level"].(string)
 	return nil
 }
 

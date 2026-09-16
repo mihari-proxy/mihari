@@ -16,6 +16,9 @@ import (
 // Trusted TUN changes prepare source-derived bytes before mutation ownership.
 // Settings/catalog/cache remain restart authority; no new graph WAL is created.
 func (m *Manager) mutateTrustedTun(ctx context.Context, op Operation, enable, force bool) (protocol.TunStatus, error) {
+	if err := m.SyncLogging(ctx); err != nil {
+		return protocol.TunStatus{}, err
+	}
 	if err := m.lockMutation(ctx); err != nil {
 		return protocol.TunStatus{}, err
 	}

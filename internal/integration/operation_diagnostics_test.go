@@ -470,7 +470,17 @@ func assertRawErrorEnvelope(t *testing.T, raw []byte) {
 func assertRawLoggingStatus(t *testing.T, raw []byte, want protocol.LoggingStatus) {
 	t.Helper()
 	members := decodeJSONObjectMembers(t, string(raw))
-	assertJSONKeySet(t, members, "schema", "revision", "level", "max_size_mb", "max_files", "dir")
+	keys := []string{"schema", "revision", "level", "max_size_mb", "max_files", "dir"}
+	if want.CoreLevel != "" {
+		keys = append(keys, "core_level")
+	}
+	if want.SyncState != "" {
+		keys = append(keys, "sync_state")
+	}
+	if want.SyncMessage != "" {
+		keys = append(keys, "sync_message")
+	}
+	assertJSONKeySet(t, members, keys...)
 	var got protocol.LoggingStatus
 	if err := json.Unmarshal(raw, &got); err != nil || got != want {
 		t.Fatalf("wire status=%#v want=%#v err=%v raw=%s", got, want, err, raw)

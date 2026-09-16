@@ -143,5 +143,10 @@ func (c *Client) streamURL(kind StreamKind) (string, error) {
 		return "", errors.New("unsupported controller URL scheme")
 	}
 	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/" + string(kind)
+	if kind == StreamLogs {
+		query := parsed.Query()
+		query.Set("level", "debug")
+		parsed.RawQuery = query.Encode()
+	}
 	return parsed.String(), nil
 }

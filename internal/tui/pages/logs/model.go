@@ -16,6 +16,14 @@ import (
 
 const defaultCapacity = 10_000
 
+func normalizeLevel(level string) string {
+	level = strings.ToLower(level)
+	if level == "warning" {
+		return "warn"
+	}
+	return level
+}
+
 type focusKind uint8
 
 const (
@@ -285,7 +293,7 @@ func (m *Model) visibleEntries() []Entry {
 	result := make([]Entry, 0, len(entries))
 	visible := []string{"time", "level", "message"}
 	for _, entry := range entries {
-		if m.level != "" && !strings.EqualFold(entry.Log.Level, m.level) {
+		if m.level != "" && normalizeLevel(entry.Log.Level) != normalizeLevel(m.level) {
 			continue
 		}
 		timestamp := ui.MissingValue
@@ -375,7 +383,7 @@ func (m *Model) renderDetail() string {
 func (m *Model) activateControl() tea.Cmd {
 	switch m.controlIndex {
 	case 0:
-		m.level = cycleValue(m.level, []string{"debug", "info", "warning", "warn", "error"})
+		m.level = cycleValue(normalizeLevel(m.level), []string{"debug", "info", "warn", "error"})
 		m.reconcileFocus()
 	case 1:
 		m.wrap = !m.wrap

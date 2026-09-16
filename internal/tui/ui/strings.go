@@ -241,6 +241,7 @@ const (
 	PortsApplyFailed             = "Could not update ports"
 	LoggingSectionTitle          = "Logging"
 	LoggingLevelLabel            = "Level"
+	LoggingLevelHint             = "Mihari + mihomo file logging; live filters are independent."
 	LoggingMaxSizeLabel          = "Max file size"
 	LoggingMaxFilesLabel         = "Files to keep"
 	LoggingDirectoryLabel        = "Logging Dir"

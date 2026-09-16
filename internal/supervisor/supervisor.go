@@ -49,7 +49,9 @@ type Waiter interface {
 type HealthChecker func(context.Context) error
 
 type Options struct {
-	Starter            Starter
+	Starter Starter
+	// BeforeStart prepares each child and returns ownership held until Start completes.
+	BeforeStart        func(context.Context) (release func(), err error)
 	Health             HealthChecker
 	Waiter             Waiter
 	Now                func() time.Time
@@ -150,8 +152,26 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			s.startGate <- struct{}{}
 			continue
 		}
-		child, err := s.options.Starter.Start()
+		var child Child
+		var release func()
+		var err error
+		if s.options.BeforeStart != nil {
+			release, err = s.options.BeforeStart(ctx)
+		}
+		if err == nil {
+			err = ctx.Err()
+		}
+		if err == nil {
+			child, err = s.options.Starter.Start()
+		}
+		if release != nil {
+			release()
+		}
 		s.startGate <- struct{}{}
+		if maintenanceDegraded(err) {
+			s.blocked.Store(true)
+			s.observe(Observation{Status: StatusDegraded, Restarts: restarts, LastError: "Core startup recovery could not be confirmed"})
+		}
 		if err != nil {
 			err = supervisorFailure("mihomo process start failed", err)
 			s.report(ctx, "core.start.failed", slog.LevelError, err)

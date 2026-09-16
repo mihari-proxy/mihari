@@ -11,6 +11,8 @@ import (
 )
 
 const (
+	// LevelSilent disables ordinary file records, independently of severity.
+	LevelSilent slog.Level = 100
 	// MaxCaptureLineBytes is the per-line capture cap for mihomo stdout/stderr.
 	MaxCaptureLineBytes = 256 << 10
 	// MaxExportRecordBytes is the per-record export parse cap.
@@ -52,6 +54,8 @@ func ParseLevel(level string) (slog.Level, error) {
 		return slog.LevelWarn, nil
 	case "error":
 		return slog.LevelError, nil
+	case "silent":
+		return LevelSilent, nil
 	default:
 		return 0, fmt.Errorf("unsupported logging level %q", level)
 	}

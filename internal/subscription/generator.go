@@ -24,6 +24,7 @@ func Generate(base Document, overrides map[string]any, settings config.Settings)
 	}
 	ensureRoutable(document)
 	document["mode"] = settings.RoutingMode()
+	document["log-level"] = settings.CoreLoggingLevel()
 	mixed, err := netip.ParseAddrPort(settings.MixedAddr)
 	if err != nil {
 		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mixed address"}
@@ -85,9 +86,6 @@ func ensureRoutable(document Document) {
 	}
 	if _, exists := document["mode"]; !exists {
 		document["mode"] = "rule"
-	}
-	if _, exists := document["log-level"]; !exists {
-		document["log-level"] = "info"
 	}
 }
 
