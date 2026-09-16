@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -68,22 +69,24 @@ func newServiceUninstallCommand(dependencies Dependencies, options *runOptions) 
 		}
 		if dependencies.CloseForPurgeUninstall != nil {
 			if err := dependencies.CloseForPurgeUninstall(); err != nil {
-				return protocol.APIError{Code: protocol.CodeInvalidState, Message: "close Mihari local resources before uninstall"}
+				return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidState, Message: "close Mihari local resources before uninstall"}, err)
 			}
 		}
 		ctx := localTaskContext(command.Context(), dependencies, "service.uninstall.purge")
+		var progressErr error
 		progress := func(message string) {
-			if !options.json {
-				_, _ = fmt.Fprintln(command.ErrOrStderr(), message)
+			if !options.json && progressErr == nil {
+				_, progressErr = fmt.Fprintln(command.ErrOrStderr(), diagnostics.EscapeTerminal(message))
 			}
 		}
 		run := dependencies.Uninstaller.Run
 		if force {
 			run = dependencies.Uninstaller.RunForce
 		}
-		if err := run(ctx, progress); err != nil {
+		runErr := run(ctx, progress)
+		if err := errors.Join(runErr, progressErr); err != nil {
 			reportLocalTaskFailure(ctx, dependencies, "service.uninstall.purge.failed", err)
-			return protocol.APIError{Code: protocol.CodeInvalidState, Message: err.Error()}
+			return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidState, Message: err.Error()}, err)
 		}
 		if options.json {
 			return renderJSON(command.OutOrStdout(), map[string]any{"schema": "mihari/v1", "action": "uninstall", "ok": true})

@@ -47,7 +47,7 @@ func (c *routingSnapshotClient) Routing(context.Context) (protocol.RoutingStatus
 	return protocol.RoutingStatus{DesiredMode: "direct", State: "pending", Revision: 5}, nil
 }
 
-func TestSession_RoutingSurvivesCoreSnapshotFailureAndInvalidatesCandidates(t *testing.T) {
+func TestSession_RoutingSurvivesCoreSnapshotFailureWithoutInventingProxyRead(t *testing.T) {
 	c := &routingSnapshotClient{fakeClient: newFakeClient()}
 	c.coreFailures = 1
 	s := New(c, Options{})
@@ -56,8 +56,8 @@ func TestSession_RoutingSurvivesCoreSnapshotFailureAndInvalidatesCandidates(t *t
 		t.Fatal("expected core snapshot error")
 	}
 	first, second, third := <-s.control, <-s.control, <-s.control
-	if first.Kind != EventStatus || second.Kind != EventProxies || second.Err == nil || third.Kind != EventRouting || third.Routing.State != "pending" || third.Epoch != first.Epoch {
-		t.Fatal("routing/candidate events missing")
+	if first.Kind != EventStatus || second.Kind != EventCore || second.Err == nil || third.Kind != EventRouting || third.Routing.State != "pending" || third.Epoch != first.Epoch {
+		t.Fatal("routing/core failure events missing")
 	}
 	status.Capabilities = nil
 	if err := s.pollStatus(context.Background(), status); err != nil {

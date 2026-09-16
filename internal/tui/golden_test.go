@@ -37,7 +37,6 @@ func TestGoldenRoutingMode(t *testing.T) {
 		width, height int
 	}{{"compact", 72, 22}, {"full", 100, 28}} {
 		t.Run(size.name, func(t *testing.T) {
-			freezeUTC(t)
 			model := goldenModel(t, ui.PageProxies, size.width, size.height)
 			model.applySessionEvent(session.Event{Kind: session.EventStatus, Epoch: 1, Status: protocol.Status{Health: "ok", Revision: 3, Capabilities: []string{protocol.CapabilityProxies, protocol.CapabilityRouting}}})
 			model.applySessionEvent(session.Event{Kind: session.EventRouting, Epoch: 1, Routing: protocol.RoutingStatus{Revision: 3, DesiredMode: "rule", LiveMode: "rule", State: "applied", GlobalSelection: "DIRECT", LiveGlobalSelection: "DIRECT"}})
@@ -61,13 +60,11 @@ func TestGoldenRoutingMode(t *testing.T) {
 	}
 }
 
-// freezeUTC pins time.Local so any .Local() formatting in the rendered pages is
-// deterministic across machines. Cleanup restores the original zone.
-func freezeUTC(t *testing.T) {
-	t.Helper()
-	orig := time.Local
+// TestMain fixes the test process timezone before tests start timers or workers.
+// Changing time.Local between golden cases races with time.Now in those workers.
+func TestMain(m *testing.M) {
 	time.Local = time.UTC
-	t.Cleanup(func() { time.Local = orig })
+	os.Exit(m.Run())
 }
 
 func goldenModel(t *testing.T, page ui.PageID, width, height int) Model {
@@ -129,7 +126,6 @@ func fullCapabilities() []string {
 }
 
 func TestGoldenOverviewFull(t *testing.T) {
-	freezeUTC(t)
 	model := goldenModel(t, ui.PageOverview, 100, 28)
 	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{
 		Schema: "mihari/v1", Revision: 1, Capabilities: fullCapabilities(),
@@ -151,7 +147,6 @@ func TestGoldenOverviewFull(t *testing.T) {
 }
 
 func TestGoldenProxiesFull(t *testing.T) {
-	freezeUTC(t)
 	model := goldenModel(t, ui.PageProxies, 100, 28)
 	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{
 		Schema: "mihari/v1", Revision: 1, Capabilities: []string{protocol.CapabilityProxies},
@@ -195,7 +190,6 @@ func TestGoldenConnectionsDetailVariants(t *testing.T) {
 // goldenConnectionDetail enters the real detail through page navigation before capture.
 func goldenConnectionDetail(t *testing.T, name string, width, height int, closed, paused, bottom bool) {
 	t.Helper()
-	freezeUTC(t)
 	model := goldenModel(t, ui.PageConnections, width, height)
 	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{
 		Schema: "mihari/v1", Revision: 1, Capabilities: []string{protocol.CapabilityConnections},
@@ -234,6 +228,17 @@ func goldenConnectionDetail(t *testing.T, name string, width, height int, closed
 		}
 	}
 	model.pages[ui.PageConnections] = page
+	beforeDiagnostics := model.View().Content
+	next, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyF2})
+	model = next.(Model)
+	if !model.diagnosticWindow.open {
+		t.Fatal("connection detail intercepted global F2")
+	}
+	next, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	model = next.(Model)
+	if model.View().Content != beforeDiagnostics {
+		t.Fatal("closing diagnostics changed the connection detail or scroll position")
+	}
 	rendered := model.View().Content
 	if lipgloss.Width(rendered) > width || lipgloss.Height(rendered) > height {
 		t.Fatalf("shell exceeds %dx%d: %dx%d", width, height, lipgloss.Width(rendered), lipgloss.Height(rendered))
@@ -246,7 +251,6 @@ func goldenConnectionDetail(t *testing.T, name string, width, height int, closed
 }
 
 func TestGoldenLogsCompact(t *testing.T) {
-	freezeUTC(t)
 	model := goldenModel(t, ui.PageLogs, 72, 22)
 	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{
 		Schema: "mihari/v1", Revision: 1, Capabilities: []string{protocol.CapabilityLogs},
@@ -264,7 +268,6 @@ func TestGoldenLogsCompact(t *testing.T) {
 }
 
 func TestGoldenSystemLoggingFull(t *testing.T) {
-	freezeUTC(t)
 	t.Setenv("MIHARI_DATA", t.TempDir())
 	model := goldenModel(t, ui.PageSystem, 100, 40)
 	model.applySessionEvent(session.Event{Kind: session.EventConnected})
@@ -289,7 +292,6 @@ func TestGoldenSystemLoggingFull(t *testing.T) {
 }
 
 func TestGoldenWebGUIUnavailable(t *testing.T) {
-	freezeUTC(t)
 	model := goldenModel(t, ui.PageWebGUI, 100, 28)
 	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{
 		Schema: "mihari/v1", Revision: 1, Capabilities: []string{protocol.CapabilityCore},
@@ -298,7 +300,6 @@ func TestGoldenWebGUIUnavailable(t *testing.T) {
 }
 
 func TestGoldenStaleState(t *testing.T) {
-	freezeUTC(t)
 	model := goldenModel(t, ui.PageOverview, 100, 28)
 	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{
 		Schema: "mihari/v1", Revision: 1, Capabilities: []string{protocol.CapabilityCore},

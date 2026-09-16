@@ -22,6 +22,7 @@ func updateHTTPStatus(response *http.Response, address string) error {
 	raw, err := io.ReadAll(io.LimitReader(response.Body, diagnostics.MaxHTTPBodyBytes+1))
 	detail := updateHTTPDetail(response, address, "response", err)
 	detail.Body = diagnostics.HTTPBody(raw)
+	detail.BodyTruncated = len(raw) > diagnostics.MaxHTTPBodyBytes
 	return detail
 }
 

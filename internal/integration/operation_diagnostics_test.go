@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -54,7 +55,10 @@ func TestOperationDiagnosticsIPC_SaveFailureReplayAndNewExecution(t *testing.T) 
 	rawFailure := fixture.responses.At(t, 0)
 	assertRawErrorEnvelope(t, rawFailure)
 	assertOriginalFileCause(t, fixture.daemonLogs.String(), diagnosticsIPCURL)
-	assertNoDiagnosticSecrets(t, fixture.clientLogs.String(), string(rawFailure), err.Error())
+	assertOriginalFileCause(t, fixture.clientLogs.String(), diagnosticsIPCURL)
+	if err.Error() != "persist settings" {
+		t.Fatal("summary changed")
+	}
 	assertDiagnosticLogs(t, fixture.daemonLogs.String(), slog.LevelError, diagnosticsIPCFailureID, 1)
 	assertDiagnosticDetail(t, fixture.daemonLogs.String(), slog.LevelError, diagnosticsIPCFailureID, "runtime", "operation.failed", "permission denied")
 	assertClientOperationLogs(t, fixture.clientLogs.String(), diagnosticsIPCFailureID, "logging_update_response")
@@ -66,7 +70,9 @@ func TestOperationDiagnosticsIPC_SaveFailureReplayAndNewExecution(t *testing.T) 
 	assertIPCDataFailure(t, replayErr)
 	rawReplay := fixture.responses.At(t, 1)
 	assertRawErrorEnvelope(t, rawReplay)
-	assertNoDiagnosticSecrets(t, string(rawReplay), replayErr.Error())
+	if replayErr.Error() != "persist settings" {
+		t.Fatal("replay summary changed")
+	}
 	if got := fixture.saver.CallCount(); got != 1 {
 		t.Fatalf("save calls after replay=%d want 1", got)
 	}
@@ -79,7 +85,9 @@ func TestOperationDiagnosticsIPC_SaveFailureReplayAndNewExecution(t *testing.T) 
 	assertIPCDataFailure(t, nextErr)
 	rawNextFailure := fixture.responses.At(t, 2)
 	assertRawErrorEnvelope(t, rawNextFailure)
-	assertNoDiagnosticSecrets(t, string(rawNextFailure), nextErr.Error())
+	if nextErr.Error() != "persist settings" {
+		t.Fatal("new execution summary changed")
+	}
 	if got := fixture.saver.CallCount(); got != 2 {
 		t.Fatalf("save calls after new operation=%d want 2", got)
 	}
@@ -105,7 +113,9 @@ func TestOperationDiagnosticsIPC_CommittedWarningPreservesSuccess(t *testing.T) 
 	}
 	rawSuccess := fixture.responses.At(t, 0)
 	assertRawLoggingStatus(t, rawSuccess, status)
-	assertNoDiagnosticSecrets(t, string(rawSuccess))
+	if len(status.Warnings) != 1 || status.Warnings[0].Diagnostic == nil || !strings.Contains(status.Warnings[0].Diagnostic.Detail, diagnosticsIPCConfig) {
+		t.Fatal("committed warning lost original cause")
+	}
 	got, err := fixture.manager.LoggingStatus(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +133,7 @@ func TestOperationDiagnosticsIPC_CommittedWarningPreservesSuccess(t *testing.T) 
 	}
 	assertClientOperationLogs(t, fixture.clientLogs.String(), diagnosticsIPCWarningID, "logging_update_succeeded")
 	assertOriginalFileCause(t, fixture.daemonLogs.String(), diagnosticsIPCConfig)
-	assertNoDiagnosticSecrets(t, fixture.clientLogs.String(), string(rawSuccess))
+	assertNoDiagnosticSecrets(t, fixture.clientLogs.String())
 	assertNoDuplicateTopLevelJSONKeys(t, fixture.daemonLogs.String())
 	assertNoDuplicateTopLevelJSONKeys(t, fixture.clientLogs.String())
 }
@@ -147,7 +157,11 @@ func newOperationDiagnosticsIPCFixture(t *testing.T, result config.CommitResult,
 	daemonLevel, clientLevel := new(slog.LevelVar), new(slog.LevelVar)
 	daemonLevel.Set(slog.LevelDebug)
 	clientLevel.Set(slog.LevelDebug)
-	daemonReporter := logging.NewDiagnosticReporter(slog.New(logging.NewJSONHandler(daemonLogs, daemonLevel, "daemon", redactor)), redactor)
+	history, err := diagnostics.NewHistory(diagnostics.HistoryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemonReporter := diagnostics.NewOwner(history, logging.NewDiagnosticReporter(slog.New(logging.NewJSONHandler(daemonLogs, daemonLevel, "daemon", redactor)), redactor)).Report
 	clientReporter := logging.NewDiagnosticReporter(slog.New(logging.NewJSONHandler(clientLogs, clientLevel, "client", redactor)), redactor)
 	saver := &ipcSettingsSaver{result: result, err: saveErr}
 	store := state.NewStore(state.Snapshot{Health: state.HealthOK})
@@ -171,7 +185,7 @@ func newOperationDiagnosticsIPCFixture(t *testing.T, result config.CommitResult,
 		t.Fatal(err)
 	}
 	server := controlserver.New(controlserver.Options{
-		Token: diagnosticsIPCToken, Store: store, Runtime: manager, DiagnosticReporter: daemonReporter,
+		Token: diagnosticsIPCToken, Store: store, Runtime: manager, DiagnosticReporter: daemonReporter, DiagnosticHistory: history,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	ready := make(chan struct{})
@@ -373,7 +387,7 @@ func (b *wireCaptureBody) Close() error {
 func assertIPCDataFailure(t *testing.T, err error) {
 	t.Helper()
 	var apiError protocol.APIError
-	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "persist settings" || len(apiError.Details) != 0 {
+	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "persist settings" || len(apiError.Details) != 0 || apiError.Diagnostic == nil || apiError.Diagnostic.ID == "" || !strings.Contains(apiError.Diagnostic.Detail, diagnosticsIPCURL) {
 		t.Fatalf("error=%#v", err)
 	}
 }
@@ -460,7 +474,7 @@ func assertRawErrorEnvelope(t *testing.T, raw []byte) {
 		t.Fatalf("schema=%q err=%v raw=%s", schema, err, raw)
 	}
 	errorMembers := decodeJSONObjectMembers(t, string(members["error"]))
-	assertJSONKeySet(t, errorMembers, "code", "message")
+	assertJSONKeySet(t, errorMembers, "code", "message", "diagnostic")
 	var apiError protocol.APIError
 	if err := json.Unmarshal(members["error"], &apiError); err != nil || apiError.Code != protocol.CodeDataFailure || apiError.Message != "persist settings" || len(apiError.Details) != 0 {
 		t.Fatalf("wire error=%#v err=%v raw=%s", apiError, err, raw)
@@ -480,9 +494,12 @@ func assertRawLoggingStatus(t *testing.T, raw []byte, want protocol.LoggingStatu
 	if want.SyncMessage != "" {
 		keys = append(keys, "sync_message")
 	}
+	if len(want.Warnings) > 0 {
+		keys = append(keys, "warnings")
+	}
 	assertJSONKeySet(t, members, keys...)
 	var got protocol.LoggingStatus
-	if err := json.Unmarshal(raw, &got); err != nil || got != want {
+	if err := json.Unmarshal(raw, &got); err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("wire status=%#v want=%#v err=%v raw=%s", got, want, err, raw)
 	}
 }
@@ -582,7 +599,7 @@ func TestSystemProxyDiagnostic_IPCOwnerDedup(t *testing.T) {
 		t.Fatal("operation missing from IPC logs")
 	}
 	assertOriginalFileCause(t, fixture.daemonLogs.String(), cause.Error())
-	assertNoDiagnosticSecrets(t, fixture.clientLogs.String())
+	assertOriginalFileCause(t, fixture.clientLogs.String(), cause.Error())
 	assertNoDuplicateTopLevelJSONKeys(t, fixture.daemonLogs.String())
 	assertNoDuplicateTopLevelJSONKeys(t, fixture.clientLogs.String())
 }
@@ -600,7 +617,7 @@ func TestTunDiagnostic_IPCOwnerDedup(t *testing.T) {
 		t.Fatal("TUN operation missing from IPC logs")
 	}
 	assertOriginalFileCause(t, fixture.daemonLogs.String(), cause.Error())
-	assertNoDiagnosticSecrets(t, fixture.clientLogs.String())
+	assertOriginalFileCause(t, fixture.clientLogs.String(), cause.Error())
 	assertNoDuplicateTopLevelJSONKeys(t, fixture.daemonLogs.String())
 }
 
@@ -629,7 +646,7 @@ func TestGeoIPDiagnostic_IPCRawFailureKeepsInternalEnvelope(t *testing.T) {
 		t.Fatal("operation metadata missing")
 	}
 	assertOriginalFileCause(t, fixture.daemonLogs.String(), cause.Error())
-	assertNoDiagnosticSecrets(t, fixture.clientLogs.String())
+	assertOriginalFileCause(t, fixture.clientLogs.String(), cause.Error())
 	assertNoDuplicateTopLevelJSONKeys(t, fixture.daemonLogs.String())
 }
 
@@ -658,7 +675,7 @@ func TestPanelDiagnostic_IPCOwnerDedup(t *testing.T) {
 		t.Fatal("panel metadata missing")
 	}
 	assertOriginalFileCause(t, fixture.daemonLogs.String(), cause.Error())
-	assertNoDiagnosticSecrets(t, fixture.clientLogs.String())
+	assertOriginalFileCause(t, fixture.clientLogs.String(), cause.Error())
 	assertNoDuplicateTopLevelJSONKeys(t, fixture.daemonLogs.String())
 }
 
@@ -682,6 +699,6 @@ func TestProviderDiagnostic_IPCActualAdapterOwnerDedup(t *testing.T) {
 		t.Fatal("provider metadata missing")
 	}
 	assertOriginalFileCause(t, fixture.daemonLogs.String(), cause.Error())
-	assertNoDiagnosticSecrets(t, fixture.clientLogs.String())
+	assertOriginalFileCause(t, fixture.clientLogs.String(), cause.Error())
 	assertNoDuplicateTopLevelJSONKeys(t, fixture.daemonLogs.String())
 }

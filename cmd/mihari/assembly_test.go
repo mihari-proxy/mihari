@@ -240,7 +240,7 @@ func TestDaemonAssembly_OutputSelectorsMatchActualBooleanRendering(t *testing.T)
 	code := cli.Execute(context.Background(), args, &output, &output, cli.Dependencies{RunDaemon: func(context.Context) error {
 		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "daemon unavailable"}
 	}})
-	if code != cli.ExitInvalidState || output.String() != "early logging fallback\nError: daemon unavailable\n" {
+	if code != cli.ExitInvalidState || output.String() != "early logging fallback\nError: daemon unavailable\nCode: invalid_state\n\nDetails:\napi error (invalid_state): daemon unavailable\n" {
 		t.Fatalf("code=%d output=%q", code, output.String())
 	}
 }

@@ -2,6 +2,8 @@ package setup
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -139,16 +141,31 @@ func TestSetupPartialSubscription_RetryRefreshesSameID(t *testing.T) {
 	}
 }
 
-func TestSetupErrorDetails_RedactsURLAndDoesNotExposeRawCause(t *testing.T) {
+func TestSetupErrorDetails_PreservesOriginalCauseAndURL(t *testing.T) {
 	m := loadedModel(&fakeClient{status: defaultStatus(false)})
-	secretURL := "https://example.test/sub?token=private-token"
-	m.subscriptionInputs[1].SetValue(secretURL)
-	m.fail("Download", protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "failed " + secretURL})
-	m.SetSize(86, 24)
-	for _, text := range []string{m.errorDetail, m.lastError, m.errorAdvice, m.View()} {
-		if strings.Contains(text, "private-token") || strings.Contains(text, secretURL) {
-			t.Fatal("diagnostic text exposed subscription credentials")
-		}
+	originalURL := "https://example.test/sub?token=fixture-original"
+	m.subscriptionInputs[1].SetValue(originalURL)
+	cause := strings.Repeat("fixture detail line\n", 300) + originalURL
+	m.fail("Download", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "failed " + originalURL}, fmt.Errorf("download body: %s", cause)))
+	if !strings.Contains(m.errorDetail, cause) || !strings.Contains(m.lastError, originalURL) {
+		t.Fatal("Setup redacted or discarded original diagnostic content")
+	}
+	if !strings.Contains(m.errorDetail, "Code: network_failure") || !strings.Contains(m.errorAdvice, "connectivity") {
+		t.Fatal("classification or advice lost")
+	}
+}
+
+func TestSetupReadFailure_ReachesShellWithoutMakingReadinessFalse(t *testing.T) {
+	cause := fmt.Errorf("fixture core read: token=original")
+	m := New(&fakeClient{status: defaultStatus(false), coreErr: cause}, nil)
+	result := m.Load()()
+	outcome, ok := result.(interface{ Err() error })
+	if !ok || !errors.Is(outcome.Err(), cause) {
+		t.Fatal("shell cannot see the original resource read failure")
+	}
+	m.Update(result)
+	if m.coreLocalLoaded {
+		t.Fatal("failed core read became confirmed missing/ready state")
 	}
 }
 

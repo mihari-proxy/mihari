@@ -80,6 +80,12 @@ func (d LocalTaskDiagnostics) ReportFailure(ctx context.Context, event string, e
 	if !report {
 		return err
 	}
-	d.Reporter(ctx, diagnostics.Record{Component: "tui", Event: event, Level: level, Err: err})
+	err = diagnostics.ReportError(ctx, d.Reporter, diagnostics.Record{Component: "tui", Event: event, Level: level, Err: err})
 	return diagnostics.MarkReported(err)
 }
+
+// Warnings exposes committed logging warnings to the shared diagnostic window.
+func (m LoggingObservedMsg) Warnings() protocol.WarningOutcome { return m.Status.WarningOutcome }
+
+// DiagnosticPage preserves the task origin when the user changes pages.
+func (m LoggingObservedMsg) DiagnosticPage() PageID { return PageSystem }

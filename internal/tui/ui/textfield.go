@@ -9,13 +9,21 @@ import (
 )
 
 // ClipboardPasteMsg delivers text read from the system clipboard for plain text fields.
-type ClipboardPasteMsg struct{ Text string }
+type ClipboardPasteMsg struct {
+	Text string
+	err  error
+}
+
+// Err exposes clipboard failures without turning them into paste text.
+func (m ClipboardPasteMsg) Err() error { return m.err }
 
 // ReadClipboard is a command that reads the system clipboard for paste into text fields.
-func ReadClipboard() tea.Msg {
-	text, err := clipboard.ReadAll()
+func ReadClipboard() tea.Msg { return readClipboard(clipboard.ReadAll) }
+
+func readClipboard(read func() (string, error)) tea.Msg {
+	text, err := read()
 	if err != nil {
-		return ClipboardPasteMsg{}
+		return ClipboardPasteMsg{err: err}
 	}
 	return ClipboardPasteMsg{Text: text}
 }

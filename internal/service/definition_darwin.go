@@ -131,7 +131,7 @@ func observeDarwinProcess(ctx context.Context, pid int) (darwinProcessObservatio
 func darwinBootID() (string, error) {
 	tv, err := unix.SysctlTimeval("kern.boottime")
 	if err != nil {
-		return "", invalidServiceState("service process identity is unknown")
+		return "", invalidServiceState("service process identity is unknown", err)
 	}
 	return fmt.Sprintf("%d.%d", tv.Sec, tv.Usec), nil
 }

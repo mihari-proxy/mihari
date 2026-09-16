@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -41,7 +42,7 @@ func TestModel_LoggingSyncStoresRootAcceptedStatus(t *testing.T) {
 	if command != nil {
 		t.Fatal("LoggingSyncMsg unexpectedly returned a command")
 	}
-	if model.loggingEpoch != 1 || !model.loggingAvailable || model.logging != status {
+	if model.loggingEpoch != 1 || !model.loggingAvailable || !reflect.DeepEqual(model.logging, status) {
 		t.Fatalf("epoch=%d available=%v logging=%+v", model.loggingEpoch, model.loggingAvailable, model.logging)
 	}
 	model.SetLocalLoggingAvailable(true)
@@ -316,7 +317,7 @@ func TestModel_LoggingUnavailableSyncClearsPendingAndIgnoresLateResults(t *testi
 
 			updated, followup := model.Update(late)
 			model = updated.(*Model)
-			if followup != nil || model.loggingAvailable || model.logging != (protocol.LoggingStatus{}) || model.pending || model.outcomeRow != "" || model.outcomeDetail != "" || model.lastError != "" {
+			if followup != nil || model.loggingAvailable || !reflect.DeepEqual(model.logging, protocol.LoggingStatus{}) || model.pending || model.outcomeRow != "" || model.outcomeDetail != "" || model.lastError != "" {
 				t.Fatalf("late result restored state: followup=%v available=%v pending=%v outcome=%q", followup != nil, model.loggingAvailable, model.pending, model.outcomeRow)
 			}
 		})
@@ -568,8 +569,11 @@ func TestModel_LoggingNumericEditRejectsInvalidValuesWithoutPatch(t *testing.T) 
 			model.editInput.SetValue(tc.value)
 			updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 			model = updated.(*Model)
-			if command != nil || client.updateLoggingCalls != 0 {
-				t.Fatalf("invalid value produced command/PATCH: command=%v calls=%d", command != nil, client.updateLoggingCalls)
+			if command == nil || client.updateLoggingCalls != 0 {
+				t.Fatal("invalid value did not report diagnostics or issued a PATCH")
+			}
+			if msg, ok := command().(ui.DiagnosticMsg); !ok || msg.Err == nil {
+				t.Fatal("validation did not return a diagnostic")
 			}
 			if model.editID != tc.rowID || model.lastError != tc.want {
 				t.Fatalf("editID=%q error=%q want %q", model.editID, model.lastError, tc.want)
@@ -613,8 +617,11 @@ func TestModel_LoggingNumericValidationKeepsInputVisibleWhileCorrecting(t *testi
 
 			updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 			model = updated.(*Model)
-			if command != nil || client.updateLoggingCalls != 0 {
-				t.Fatalf("invalid value produced command/PATCH: command=%v calls=%d", command != nil, client.updateLoggingCalls)
+			if command == nil || client.updateLoggingCalls != 0 {
+				t.Fatal("invalid value did not report diagnostics or issued a PATCH")
+			}
+			if msg, ok := command().(ui.DiagnosticMsg); !ok || msg.Err == nil {
+				t.Fatal("validation did not return a diagnostic")
 			}
 			view := model.View()
 			if model.editInput.Value() != tc.invalid || !strings.Contains(view, model.editInput.View()) || !strings.Contains(view, tc.wantError) || strings.Contains(view, ui.FailedLabel) {
@@ -738,10 +745,10 @@ func TestModel_LoggingPatchPublishesOnlyCompleteResponseWithRequestEpoch(t *test
 	model.focusID = rowLogLevel
 	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	observed := loggingObservedFromCommand(t, command)
-	if observed.Epoch != 7 || observed.Status != response {
+	if observed.Epoch != 7 || !reflect.DeepEqual(observed.Status, response) {
 		t.Fatalf("observed=%+v want epoch 7 full response %+v", observed, response)
 	}
-	if model.logging != client.logging {
+	if !reflect.DeepEqual(model.logging, client.logging) {
 		t.Fatalf("page adopted PATCH before root gate: got %+v want %+v", model.logging, client.logging)
 	}
 }
@@ -798,7 +805,7 @@ func TestModel_LoggingRevisionConflictReloadsSameEpochWithoutReplay(t *testing.T
 		t.Fatal("revision conflict did not start Logging GET")
 	}
 	observed := loggingObservedFromCommand(t, reload)
-	if observed.Epoch != 7 || observed.Status != client.logging {
+	if observed.Epoch != 7 || !reflect.DeepEqual(observed.Status, client.logging) {
 		t.Fatalf("reload observed=%+v", observed)
 	}
 	if client.updateLoggingCalls != 1 || client.loggingCalls != 1 {
@@ -867,7 +874,7 @@ func TestModel_LoggingStaleResultsClearMatchingPendingWithoutRollback(t *testing
 		model.ApplyLoggingSync(ui.LoggingSyncMsg{Epoch: 8, Status: current, Available: true})
 		updated, _ := model.Update(observed)
 		model = updated.(*Model)
-		if model.pending || model.logging != current || model.outcomeRow != "" {
+		if model.pending || !reflect.DeepEqual(model.logging, current) || model.outcomeRow != "" {
 			t.Fatalf("pending=%v logging=%+v outcome=%q", model.pending, model.logging, model.outcomeRow)
 		}
 	})
@@ -882,7 +889,7 @@ func TestModel_LoggingStaleResultsClearMatchingPendingWithoutRollback(t *testing
 		current := model.logging
 		updated, _ := model.Update(observed)
 		model = updated.(*Model)
-		if model.pending || model.logging != current || model.outcomeRow != "" {
+		if model.pending || !reflect.DeepEqual(model.logging, current) || model.outcomeRow != "" {
 			t.Fatalf("pending=%v logging=%+v outcome=%q", model.pending, model.logging, model.outcomeRow)
 		}
 	})
@@ -900,7 +907,7 @@ func TestModel_LoggingStaleResultsClearMatchingPendingWithoutRollback(t *testing
 		observed := loggingObservedFromCommand(t, reload)
 		updated, _ = model.Update(observed)
 		model = updated.(*Model)
-		if model.pending || model.logging != current || model.outcomeRow != "" {
+		if model.pending || !reflect.DeepEqual(model.logging, current) || model.outcomeRow != "" {
 			t.Fatalf("pending=%v logging=%+v outcome=%q", model.pending, model.logging, model.outcomeRow)
 		}
 		if client.updateLoggingCalls != 1 || client.loggingCalls != 1 {
@@ -925,7 +932,7 @@ func TestModel_LoggingOldEpochErrorsOnlyClearMatchingPending(t *testing.T) {
 
 		updated, followup := model.Update(result)
 		model = updated.(*Model)
-		if followup != nil || model.pending || model.outcomeRow != "" || model.lastError != "" || model.logging != current {
+		if followup != nil || model.pending || model.outcomeRow != "" || model.lastError != "" || !reflect.DeepEqual(model.logging, current) {
 			t.Fatalf("followup=%v pending=%v outcome=%q error=%q logging=%+v", followup != nil, model.pending, model.outcomeRow, model.lastError, model.logging)
 		}
 	})
@@ -940,7 +947,7 @@ func TestModel_LoggingOldEpochErrorsOnlyClearMatchingPending(t *testing.T) {
 
 		updated, followup := model.Update(result)
 		model = updated.(*Model)
-		if followup != nil || client.loggingCalls != 0 || model.pending || model.outcomeRow != "" || model.lastError != "" || model.logging != current {
+		if followup != nil || client.loggingCalls != 0 || model.pending || model.outcomeRow != "" || model.lastError != "" || !reflect.DeepEqual(model.logging, current) {
 			t.Fatalf("followup=%v GET calls=%d pending=%v outcome=%q error=%q logging=%+v", followup != nil, client.loggingCalls, model.pending, model.outcomeRow, model.lastError, model.logging)
 		}
 	})
@@ -958,7 +965,7 @@ func TestModel_LoggingOldEpochErrorsOnlyClearMatchingPending(t *testing.T) {
 
 		updated, followup := model.Update(reloadResult)
 		model = updated.(*Model)
-		if followup != nil || client.loggingCalls != 1 || model.pending || model.outcomeRow != "" || model.lastError != "" || model.logging != current {
+		if followup != nil || client.loggingCalls != 1 || model.pending || model.outcomeRow != "" || model.lastError != "" || !reflect.DeepEqual(model.logging, current) {
 			t.Fatalf("followup=%v GET calls=%d pending=%v outcome=%q error=%q logging=%+v", followup != nil, client.loggingCalls, model.pending, model.outcomeRow, model.lastError, model.logging)
 		}
 	})
@@ -1415,7 +1422,7 @@ func TestSystemCompleteUninstall_UnavailableUninstallerReportsFailure(t *testing
 	model.focusID = rowCompleteUninstall
 	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(*Model)
-	if command != nil || model.outcomeRow != rowCompleteUninstall || model.outcomeOK || model.outcomeDetail != ui.CompleteUninstallUnavailable {
+	if command == nil || model.outcomeRow != rowCompleteUninstall || model.outcomeOK || model.outcomeDetail != ui.CompleteUninstallUnavailable {
 		t.Fatalf("command=%v outcome=%q ok=%v detail=%q", command != nil, model.outcomeRow, model.outcomeOK, model.outcomeDetail)
 	}
 }
@@ -3868,8 +3875,12 @@ func TestSystemMihariChannelLoadFailureDoesNotCheckMain(t *testing.T) {
 	model.loadChannel = func(string) (string, error) {
 		return "", errors.New("invalid mihari channel file")
 	}
-	if cmd := model.checkMihariVersion(); cmd != nil {
-		t.Fatal("check must not start after channel load failure")
+	cmd := model.checkMihariVersion()
+	if cmd == nil {
+		t.Fatal("channel load failure must remain inspectable")
+	}
+	if _, ok := cmd().(ui.DiagnosticMsg); !ok {
+		t.Fatal("failed precondition must report a diagnostic without starting a check")
 	}
 	if updater.checkCalls != 0 {
 		t.Fatalf("checkCalls=%d", updater.checkCalls)

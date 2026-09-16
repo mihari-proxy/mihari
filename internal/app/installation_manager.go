@@ -13,6 +13,7 @@ import (
 	"reflect"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/platform"
 )
 
@@ -171,7 +172,7 @@ func (m *InstallationManager) Execute(ctx context.Context, request InstallationE
 		return InstallationOutcome{}, fmt.Errorf("describe installation execution: %w", err)
 	}
 	if err := validateInstallationPrepared(input, target); err != nil || !sameInstallationPlanInput(input, authorized.plan) || !reflect.DeepEqual(target, authorized.target) {
-		return InstallationOutcome{}, invalidInstallationExecution("installation plan changed")
+		return InstallationOutcome{}, invalidInstallationExecution("installation plan changed", err)
 	}
 
 	session, err := prepared.Begin(ctx)
@@ -329,7 +330,7 @@ func validInstallationPlanRequest(request InstallationPlanRequest) bool {
 
 func validateInstallationPrepared(input VerifiedInstallationPlanInput, target InstallationManifest) error {
 	if err := validateInstallationPlanInput(input); err != nil || !target.Installed || validateInstallationManifest(target, true) != nil || target.Binary == nil {
-		return invalidInstallationExecution("installation preparation is invalid")
+		return invalidInstallationExecution("installation preparation is invalid", err)
 	}
 	instance := input.Instance
 	if target.DataRoot != instance.DataRoot || !reflect.DeepEqual(target.DataIdentity, instance.DataIdentity) || !reflect.DeepEqual(target.DataParentIdentity, instance.DataParentIdentity) || target.Binary.SHA256 != input.CandidateSHA256 || target.Enabled != instance.Enabled || target.RunAfterInstall != instance.RunAfterInstall {
@@ -399,7 +400,7 @@ func revalidateInstallationExecution(ctx context.Context, session InstallationEx
 		return InstallationLockedPreparation{}, nil, fmt.Errorf("revalidate installation operation: %w", err)
 	}
 	if err := validateInstallationPrepared(locked.Input, locked.Target); err != nil || !sameInstallationPlanInput(locked.Input, authorized.plan) || !reflect.DeepEqual(locked.Target, authorized.target) || !validInstallationOwner(locked.Owner) {
-		return InstallationLockedPreparation{}, nil, invalidInstallationExecution("installation changed while acquiring operation lock")
+		return InstallationLockedPreparation{}, nil, invalidInstallationExecution("installation changed while acquiring operation lock", err)
 	}
 	if len(locked.RawState) == 0 {
 		if locked.StateSHA256 != "" || locked.Input.Instance.RecordID != "" || locked.Input.Instance.RecordSHA256 != "" {
@@ -418,7 +419,7 @@ func revalidateInstallationExecution(ctx context.Context, session InstallationEx
 	}
 	state, err := DecodeInstallationState(bytes.NewReader(locked.RawState))
 	if err != nil || state.ID != locked.Input.Instance.RecordID || !reflect.DeepEqual(state.SourceScope, locked.Input.Instance.SourceScope) {
-		return InstallationLockedPreparation{}, nil, invalidInstallationExecution("installation record changed while acquiring operation lock")
+		return InstallationLockedPreparation{}, nil, invalidInstallationExecution("installation record changed while acquiring operation lock", err)
 	}
 	return locked, &state, nil
 }
@@ -450,7 +451,7 @@ func installationResetEntryNames(plan InstallationPlan) ([]string, error) {
 	for i, entry := range plan.Delete {
 		relative, err := filepath.Rel(plan.Instance.DataRoot, entry.Path)
 		if err != nil || relative == "." || filepath.IsAbs(relative) || filepath.Dir(relative) != "." || !validResetEntry(relative) {
-			return nil, invalidInstallationExecution("installation reset scope is invalid")
+			return nil, invalidInstallationExecution("installation reset scope is invalid", err)
 		}
 		names[i] = relative
 	}
@@ -589,8 +590,12 @@ func wrapInstallationClose(operation string, err error) error {
 	return fmt.Errorf("%s: %w", operation, err)
 }
 
-func invalidInstallationExecution(message string) error {
-	return protocol.APIError{Code: protocol.CodeInvalidState, Message: message}
+func invalidInstallationExecution(message string, causes ...error) error {
+	api := protocol.APIError{Code: protocol.CodeInvalidState, Message: message}
+	if cause := errors.Join(causes...); cause != nil {
+		return diagnostics.Wrap(api, cause)
+	}
+	return api
 }
 
 func installationStartFailure(id string) error {

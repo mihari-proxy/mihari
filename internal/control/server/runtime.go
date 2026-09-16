@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"sort"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -489,6 +490,9 @@ func (s *Server) stream(writer http.ResponseWriter, request *http.Request) {
 		}
 		return connection.Write(request.Context(), websocket.MessageText, event)
 	})
+	if err != nil {
+		err = s.captureStreamFailure(request.Context(), err)
+	}
 	if request.Context().Err() != nil {
 		return
 	}
@@ -496,7 +500,45 @@ func (s *Server) stream(writer http.ResponseWriter, request *http.Request) {
 		_ = connection.Close(websocket.StatusNormalClosure, "stream complete")
 		return
 	}
+	if s.diagnosticHistory != nil && request.Header.Get(protocol.DiagnosticCapabilityHeader) == protocol.CapabilityDiagnostics {
+		snapshot, ok := diagnostics.Snapshot(err)
+		if ok {
+			reference := snapshot.Reference()
+			event, encodeErr := json.Marshal(protocol.StreamEvent{Schema: "mihari/v1", Stream: string(kind), ObservedAt: s.now().UTC(), Terminal: true, Diagnostic: &reference})
+			if encodeErr == nil {
+				writeCtx, cancel := context.WithTimeout(request.Context(), 2*time.Second)
+				writeErr := connection.Write(writeCtx, websocket.MessageText, event)
+				cancel()
+				if writeErr != nil {
+					_ = s.captureStreamFailure(request.Context(), writeErr) // Recorded locally; the failed stream cannot receive another outcome.
+				}
+			} else {
+				_ = s.captureStreamFailure(request.Context(), encodeErr) // Recorded locally; preserve the original stream failure.
+			}
+		}
+	}
 	_ = connection.Close(websocket.StatusInternalError, "stream failed")
+}
+
+func (s *Server) captureStreamFailure(ctx context.Context, err error) error {
+	if diagnostics.NormalCancellation(ctx, err) {
+		return err
+	}
+	level, emit := diagnostics.FailureLevel(ctx, err)
+	if !emit {
+		return err
+	}
+	if !diagnostics.AlreadyReported(err) {
+		err = diagnostics.ReportError(ctx, s.diagnosticReporter, diagnostics.Record{Component: "control.server", Event: "stream.failed", Level: level, Err: err})
+	}
+	snapshot, ok := diagnostics.Snapshot(err)
+	if !ok {
+		snapshot = diagnostics.Describe(ctx, diagnostics.Record{Component: "control.server", Event: "stream.failed", Level: level, Err: err})
+	}
+	if snapshot.ID == "" && s.diagnosticHistory != nil {
+		snapshot = s.diagnosticHistory.Add(snapshot)
+	}
+	return diagnostics.WithSnapshot(err, snapshot)
 }
 
 func (s *Server) requireRuntime(ctx context.Context, writer http.ResponseWriter) bool {
@@ -519,14 +561,12 @@ func (s *Server) decodeControlJSON(writer http.ResponseWriter, request *http.Req
 	decoder := json.NewDecoder(body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
-		s.reportRequestRejection(request.Context(), diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid request body"}, err))
-		writeInvalidArgument(writer, "invalid request body")
+		s.writeRequestRejection(request.Context(), writer, "invalid request body", err)
 		return false
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		s.reportRequestRejection(request.Context(), diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "request body must contain one JSON object"}, err))
-		writeInvalidArgument(writer, "request body must contain one JSON object")
+		s.writeRequestRejection(request.Context(), writer, "request body must contain one JSON object", err)
 		return false
 	}
 	return true
@@ -554,10 +594,15 @@ func writeInvalidArgument(writer http.ResponseWriter, message string) {
 }
 
 func writeControlError(writer http.ResponseWriter, err error) {
-	var apiError protocol.APIError
-	if !errors.As(err, &apiError) {
+	apiError, classified := diagnostics.Classification(err)
+	if !classified {
 		apiError = protocol.APIError{Code: protocol.CodeInternal, Message: "internal error"}
 	}
+	snapshot, captured := diagnostics.Snapshot(err)
+	if !captured {
+		snapshot = diagnostics.Describe(context.Background(), diagnostics.Record{Err: err})
+	}
+	apiError.Diagnostic = &snapshot
 	status := http.StatusInternalServerError
 	switch apiError.Code {
 	case protocol.CodeInvalidArgument:
@@ -573,5 +618,5 @@ func writeControlError(writer http.ResponseWriter, err error) {
 	case protocol.CodeDaemonUnavailable, protocol.CodeUpstreamFailure, protocol.CodeNetworkFailure:
 		status = http.StatusBadGateway
 	}
-	writeJSON(writer, status, protocol.NewError(apiError.Code, apiError.Message, apiError.Details))
+	writeJSON(writer, status, protocol.ErrorEnvelope{WarningOutcome: apiError.WarningOutcome, Schema: "mihari.error/v1", Error: apiError})
 }

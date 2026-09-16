@@ -15,6 +15,7 @@ import (
 type EventKind string
 
 const (
+	EventDiagnostics   EventKind = "diagnostics"
 	EventStatus        EventKind = "status"
 	EventCore          EventKind = "core"
 	EventSubscriptions EventKind = "subscriptions"
@@ -36,18 +37,21 @@ const (
 )
 
 type Event struct {
-	Kind          EventKind
-	ObservedAt    time.Time
-	Attempt       int
-	Status        protocol.Status
-	Core          protocol.CoreStatus
-	Subscriptions protocol.SubscriptionList
-	Proxies       protocol.ProxyGroups
-	Routing       protocol.RoutingStatus
-	Preferences   protocol.TUIPreferences
-	Rules         protocol.RuleList
-	RuleProviders protocol.RuleProviderList
-	WebGUI        protocol.WebGUIStatus
+	Diagnostics protocol.DiagnosticList
+	// DiagnosticQuery distinguishes history lookup errors from stream failures.
+	DiagnosticQuery bool
+	Kind            EventKind
+	ObservedAt      time.Time
+	Attempt         int
+	Status          protocol.Status
+	Core            protocol.CoreStatus
+	Subscriptions   protocol.SubscriptionList
+	Proxies         protocol.ProxyGroups
+	Routing         protocol.RoutingStatus
+	Preferences     protocol.TUIPreferences
+	Rules           protocol.RuleList
+	RuleProviders   protocol.RuleProviderList
+	WebGUI          protocol.WebGUIStatus
 	// Logging contains the daemon logging status associated with the event.
 	Logging     protocol.LoggingStatus
 	Traffic     protocol.TrafficSample
@@ -71,8 +75,11 @@ type Options struct {
 }
 
 type Session struct {
-	client  Client
-	options Options
+	diagnosticInstance    string
+	diagnosticSequence    uint64
+	diagnosticUnsupported bool
+	client                Client
+	options               Options
 
 	mu      sync.Mutex
 	started bool
@@ -90,7 +97,6 @@ type Session struct {
 	loggingCapability      bool
 	loggingCapabilityKnown bool
 	routingCapability      bool
-	proxiesObserved        bool // current poll already published success or failure
 }
 
 func New(client Client, options Options) *Session {
@@ -190,36 +196,67 @@ func (s *Session) supervise(ctx context.Context) {
 }
 
 // poll pulls one snapshot of every capability-backed resource and forwards it
-// as ordered events. It returns the first error so callers can retain the last
+// as ordered events. It returns the collected errors so callers can retain the last
 // observed snapshot and retry without changing daemon transport state.
 func (s *Session) poll(ctx context.Context, status protocol.Status) error {
 	err := s.pollSnapshots(ctx, status)
-	if err != nil && !s.proxiesObserved && slices.Contains(status.Capabilities, protocol.CapabilityRouting) {
-		putOrdered(ctx, s.control, Event{Kind: EventProxies, Epoch: s.loggingEpoch, Err: err})
-	}
 	s.pollLogging(ctx, status)
 	s.pollRouting(ctx, status)
+	s.pollDiagnostics(ctx, status)
 	return err
 }
 
+func (s *Session) pollDiagnostics(ctx context.Context, status protocol.Status) {
+	client, ok := s.client.(interface {
+		Diagnostics(context.Context, string, uint64, int) (protocol.DiagnosticList, error)
+	})
+	if !ok {
+		return
+	}
+	if !slices.Contains(status.Capabilities, protocol.CapabilityDiagnostics) {
+		if !s.diagnosticUnsupported {
+			s.diagnosticUnsupported = putOrdered(ctx, s.control, Event{Kind: EventDiagnostics, DiagnosticQuery: true, Diagnostics: protocol.DiagnosticList{State: protocol.DiagnosticUnsupported}})
+		}
+		return
+	}
+	s.diagnosticUnsupported = false
+	// Bound each poll independently of concurrent publishers. The next poll
+	// resumes after the last delivered page instead of fetching bodies again.
+	for range 3 {
+		page, err := client.Diagnostics(ctx, s.diagnosticInstance, s.diagnosticSequence, 100)
+		if ctx.Err() != nil {
+			return
+		}
+		if !putOrdered(ctx, s.control, Event{Kind: EventDiagnostics, DiagnosticQuery: true, Diagnostics: page, Err: err}) || err != nil {
+			return
+		}
+		s.diagnosticInstance, s.diagnosticSequence = page.InstanceID, page.NextSequence
+		if !page.HasMore {
+			s.diagnosticSequence = page.LatestSequence
+			return
+		}
+	}
+}
+
 func (s *Session) pollSnapshots(ctx context.Context, status protocol.Status) error {
-	s.proxiesObserved = false
-	var proxyErr error
+	var failures []error
 	if slices.Contains(status.Capabilities, protocol.CapabilityCore) {
 		coreStatus, err := s.client.Core(ctx)
-		if err != nil {
-			return err
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		if !putOrdered(ctx, s.control, Event{Kind: EventCore, Core: coreStatus}) {
+		failures = append(failures, err)
+		if !putOrdered(ctx, s.control, Event{Kind: EventCore, Core: coreStatus, Err: err}) {
 			return ctx.Err()
 		}
 	}
 	if slices.Contains(status.Capabilities, protocol.CapabilitySubscriptions) {
 		subscriptions, err := s.client.Subscriptions(ctx)
-		if err != nil {
-			return err
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		if !putOrdered(ctx, s.control, Event{Kind: EventSubscriptions, Subscriptions: subscriptions}) {
+		failures = append(failures, err)
+		if !putOrdered(ctx, s.control, Event{Kind: EventSubscriptions, Subscriptions: subscriptions, Err: err}) {
 			return ctx.Err()
 		}
 	}
@@ -228,49 +265,52 @@ func (s *Session) pollSnapshots(ctx context.Context, status protocol.Status) err
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		proxyErr = err
+		failures = append(failures, err)
 		if !putOrdered(ctx, s.control, Event{Kind: EventProxies, Proxies: proxies, Epoch: s.loggingEpoch, Err: err}) {
 			return ctx.Err()
 		}
-		s.proxiesObserved = true
 	}
 	if slices.Contains(status.Capabilities, protocol.CapabilityRules) {
 		rules, err := s.client.Rules(ctx)
-		if err != nil {
-			return err
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		if !putOrdered(ctx, s.control, Event{Kind: EventRules, Rules: rules}) {
+		failures = append(failures, err)
+		if !putOrdered(ctx, s.control, Event{Kind: EventRules, Rules: rules, Err: err}) {
 			return ctx.Err()
 		}
 	}
 	if slices.Contains(status.Capabilities, protocol.CapabilityRuleProviders) {
 		providers, err := s.client.RuleProviders(ctx)
-		if err != nil {
-			return err
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		if !putOrdered(ctx, s.control, Event{Kind: EventRuleProviders, RuleProviders: providers}) {
+		failures = append(failures, err)
+		if !putOrdered(ctx, s.control, Event{Kind: EventRuleProviders, RuleProviders: providers, Err: err}) {
 			return ctx.Err()
 		}
 	}
 	if slices.Contains(status.Capabilities, protocol.CapabilityPreferences) {
 		preferences, err := s.client.TUIPreferences(ctx)
-		if err != nil {
-			return err
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		if !putOrdered(ctx, s.control, Event{Kind: EventPreferences, Preferences: preferences}) {
+		failures = append(failures, err)
+		if !putOrdered(ctx, s.control, Event{Kind: EventPreferences, Preferences: preferences, Err: err}) {
 			return ctx.Err()
 		}
 	}
 	if slices.Contains(status.Capabilities, protocol.CapabilityWebGUI) {
 		webGUI, err := s.client.WebGUI(ctx)
-		if err != nil {
-			return err
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		if !putOrdered(ctx, s.control, Event{Kind: EventWebGUI, WebGUI: webGUI}) {
+		failures = append(failures, err)
+		if !putOrdered(ctx, s.control, Event{Kind: EventWebGUI, WebGUI: webGUI, Err: err}) {
 			return ctx.Err()
 		}
 	}
-	return proxyErr
+	return errors.Join(failures...)
 }
 
 func (s *Session) pollStatus(ctx context.Context, status protocol.Status) error {
@@ -306,10 +346,10 @@ func (s *Session) pollLogging(ctx context.Context, status protocol.Status) {
 	}
 	requestEpoch := s.loggingEpoch
 	observed, err := s.client.Logging(ctx)
-	if err != nil {
+	if ctx.Err() != nil {
 		return
 	}
-	if !putOrdered(ctx, s.control, Event{Kind: EventLogging, Logging: observed, Epoch: requestEpoch}) {
+	if !putOrdered(ctx, s.control, Event{Kind: EventLogging, Logging: observed, Epoch: requestEpoch, Err: err}) || err != nil {
 		return
 	}
 	if requestEpoch == s.loggingEpoch {
@@ -384,7 +424,10 @@ func (s *Session) superviseStreams(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			s.reportStreamFailure(ctx, err)
+			err = s.reportStreamFailure(ctx, err)
+			if err != nil && !putOrdered(ctx, s.control, Event{Kind: EventDiagnostics, Err: err}) {
+				return ctx.Err()
+			}
 			status, statusErr := s.client.Status(streamCtx)
 			if statusErr != nil {
 				// The fresh health probe owns the reconnect diagnosis. Keeping
@@ -421,17 +464,23 @@ func (s *Session) superviseStreams(ctx context.Context) error {
 // It is a retry transition, not a transport failure.
 var errControlStreamEnded = errors.New("control stream ended")
 
-func (s *Session) reportStreamFailure(ctx context.Context, err error) {
-	if s.options.Reporter == nil || diagnostics.AlreadyReported(err) {
-		return
-	}
+func (s *Session) reportStreamFailure(ctx context.Context, err error) error {
 	if err == errControlStreamEnded {
-		s.options.Reporter(ctx, diagnostics.Record{Component: "tui.session", Event: "streams_ended", Level: slog.LevelDebug})
-		return
+		if s.options.Reporter != nil {
+			s.options.Reporter(ctx, diagnostics.Record{Component: "tui.session", Event: "streams_ended", Level: slog.LevelDebug})
+		}
+		return nil
+	}
+	if diagnostics.NormalCancellation(ctx, err) {
+		return nil
+	}
+	if diagnostics.AlreadyReported(err) {
+		return err
 	}
 	if level, report := diagnostics.FailureLevel(ctx, err); report {
-		s.options.Reporter(ctx, diagnostics.Record{Component: "tui.session", Event: "streams_failed", Level: level, Err: err})
+		return diagnostics.ReportError(ctx, s.options.Reporter, diagnostics.Record{Component: "tui.session", Event: "streams_failed", Level: level, Err: err})
 	}
+	return err
 }
 
 func (s *Session) runStreams(parent context.Context, healthy chan<- struct{}) error {

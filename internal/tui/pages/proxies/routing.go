@@ -24,9 +24,10 @@ type routingClient interface {
 	UpdateRouting(context.Context, protocol.RoutingUpdateRequest) (protocol.RoutingStatus, error)
 }
 type routingResultMsg struct {
-	status protocol.RoutingStatus
-	epoch  uint64
-	err    error
+	cancelled bool
+	status    protocol.RoutingStatus
+	epoch     uint64
+	err       error
 }
 
 func (r routingResultMsg) Err() error { return r.err }
@@ -274,7 +275,7 @@ func (m *Model) submitRouting() tea.Cmd {
 	}
 	return func() tea.Msg {
 		return ui.ActionIntentMsg{Action: ui.ActionSetRouting, Page: ui.PageProxies, Capability: protocol.CapabilityRouting, Key: "routing", Title: "Change routing mode", Object: routingLabel(mode), Execute: execute, Cancel: func() tea.Msg {
-			return ui.PageResultMsg{Page: ui.PageProxies, Result: routingResultMsg{epoch: epoch, err: errors.New("routing change was not started")}}
+			return ui.PageResultMsg{Page: ui.PageProxies, Result: routingResultMsg{epoch: epoch, cancelled: true}}
 		}}
 	}
 }
@@ -284,6 +285,9 @@ func (m *Model) routingResult(result routingResultMsg) {
 		return
 	}
 	m.routing.pending = false
+	if result.cancelled {
+		return
+	}
 	if result.err != nil {
 		m.routing.known = false
 		m.routing.err = "Could not confirm mode; wait for refresh"

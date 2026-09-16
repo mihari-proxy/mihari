@@ -51,7 +51,7 @@ func newProxyCommand(dependencies Dependencies, options *runOptions) *cobra.Comm
 			if options.json {
 				return renderJSON(command.OutOrStdout(), result)
 			}
-			return printMutation(command.OutOrStdout(), result)
+			return renderMutation(command, options, result)
 		},
 	})
 	testURL := ""

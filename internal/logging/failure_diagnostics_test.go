@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/platform"
 )
 
@@ -37,7 +39,7 @@ func TestFailureReporter_OutputFailureDoesNotRecurse(t *testing.T) {
 	}
 }
 
-func TestRotatingWriter_FailuresKeepCountsAndSafeFallback(t *testing.T) {
+func TestRotatingWriter_FailuresKeepCountsAndOriginalFallback(t *testing.T) {
 	for _, kind := range []string{"lock", "write", "unlock", "apply unlock"} {
 		t.Run(kind, func(t *testing.T) {
 			w, fs, _ := openTestRotator(t, DefaultConfig())
@@ -94,11 +96,15 @@ func TestRotatingWriter_FailuresKeepCountsAndSafeFallback(t *testing.T) {
 			if strings.Count(got, "\n") != 1 {
 				t.Fatalf("fallback lines=%d want one", strings.Count(got, "\n"))
 			}
-			for _, raw := range []string{"fixture-secret", "/private/", "fixture logs", "\r"} {
-				if strings.Contains(got, raw) {
-					t.Fatal("fallback leaked raw error")
+			if strings.Contains(got, "\r") {
+				t.Fatal("fallback injected carriage return")
+			}
+			if kind == "unlock" || kind == "apply unlock" {
+				if !strings.Contains(got, `fixture-secret /private/fixture logs\r\nfailed`) {
+					t.Fatal("fallback discarded original failure")
 				}
 			}
+
 		})
 	}
 }
@@ -146,3 +152,19 @@ type diagnosticErrorLock struct {
 func (l *diagnosticErrorLock) Lock(context.Context, platform.LockMode) error { return l.lockErr }
 func (l *diagnosticErrorLock) Unlock() error                                 { return l.unlockErr }
 func (l *diagnosticErrorLock) Close() error                                  { l.closes++; return l.closeErr }
+
+func TestFailureReporter_PreservesCausePathsAndCredentials(t *testing.T) {
+	var output bytes.Buffer
+	cause := errors.New("fixture-secret /private/fixture logs\nbody\x1b[31m")
+	failure := diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "fixture summary"}, cause)
+	NewFailureReporter(&output, NewRedactor("fixture-secret"), nil).Report(FailureWrite, failure)
+	got := output.String()
+	for _, part := range []string{"fixture summary", "fixture-secret", "/private/fixture logs", `\nbody\x1b[31m`} {
+		if !strings.Contains(got, part) {
+			t.Fatalf("missing original diagnostic %q", part)
+		}
+	}
+	if strings.Count(got, "\n") != 1 || strings.Contains(got, "\x1b") {
+		t.Fatal("fallback executed or injected terminal controls")
+	}
+}

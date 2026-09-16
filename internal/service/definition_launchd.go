@@ -87,7 +87,7 @@ func (a *LaunchdAdapter) InspectDefinition(ctx context.Context) (Definition, err
 	plist, plistErr := a.files.Read(ctx, a.paths.Plist)
 	plistMissing := errors.Is(plistErr, os.ErrNotExist)
 	if plistErr != nil && !plistMissing {
-		return Definition{}, invalidServiceState("service status is unknown")
+		return Definition{}, invalidServiceState("service status is unknown", plistErr)
 	}
 	if !plistMissing && (plist.Kind == "link" || plist.Kind == "mask") {
 		return Definition{}, invalidServiceState("service definition is unsupported")
@@ -466,7 +466,7 @@ func (a *LaunchdAdapter) Start(ctx context.Context) error {
 	}
 	disabled, err := parsePrintDisabled(disabledOut.Stdout, a.paths.Label)
 	if err != nil || !disabled {
-		return invalidServiceState("service status is unknown")
+		return invalidServiceState("service status is unknown", err)
 	}
 	return nil
 }
@@ -478,7 +478,7 @@ func (a *LaunchdAdapter) requireLaunchdRunning(ctx context.Context) error {
 	}
 	loaded, running, _, err := parseLaunchdPrint(result, a.jobTarget())
 	if err != nil || !loaded || !running {
-		return invalidServiceState("service status is unknown")
+		return invalidServiceState("service status is unknown", err)
 	}
 	return nil
 }

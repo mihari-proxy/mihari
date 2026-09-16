@@ -37,7 +37,7 @@ func TestGeoIPHTTP_StatusBodyAndCloseCauseArePreserved(t *testing.T) {
 	})}
 	_, err := downloadChecksum(t.Context(), client, "https://fixture.invalid/geoip?token=fixture", false, nil)
 	var detail *diagnostics.HTTPError
-	if !errors.As(err, &detail) || detail.URL != "https://fixture.invalid/geoip?token=fixture" || !strings.HasPrefix(detail.Body, "token=fixture\n") || !strings.Contains(detail.Body, "[truncated]") {
+	if !errors.As(err, &detail) || detail.URL != "https://fixture.invalid/geoip?token=fixture" || !strings.HasPrefix(detail.Body, "token=fixture\n") || !strings.Contains(detail.Body, "[truncated]") || !detail.BodyTruncated {
 		t.Fatalf("HTTP detail lost: %v", err)
 	}
 	if !errors.Is(err, closeCause) || body.closes != 1 || body.readBytes != diagnostics.MaxHTTPBodyBytes+1 {

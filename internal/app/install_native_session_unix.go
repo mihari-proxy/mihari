@@ -105,7 +105,7 @@ func (s *nativeInstallSession) loadState(ctx context.Context) (bool, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&state); err != nil {
-		return false, invalidInstallJournal()
+		return false, invalidInstallJournal(err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return false, invalidInstallJournal()
@@ -178,7 +178,7 @@ func (s *nativeInstallSession) cleanupBootstrapCandidate(ctx context.Context) er
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&final); err != nil {
-		return invalidInstallJournal()
+		return invalidInstallJournal(err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return invalidInstallJournal()

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -315,7 +316,7 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 }
 
 func assertSubscriptionResult(result, want protocol.SubscriptionResult) error {
-	if result != want {
+	if !reflect.DeepEqual(result, want) {
 		return fmt.Errorf("subscription result=%#v want=%#v", result, want)
 	}
 	return nil

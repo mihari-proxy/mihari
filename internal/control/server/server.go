@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -28,6 +27,7 @@ type Options struct {
 	SnapshotSource     logging.MachineSnapshotSource
 	SnapshotID         func() string
 	DiagnosticReporter diagnostics.Reporter
+	DiagnosticHistory  *diagnostics.History
 }
 
 type Server struct {
@@ -40,6 +40,7 @@ type Server struct {
 	snapshotSource     logging.MachineSnapshotSource
 	snapshotID         func() string
 	diagnosticReporter diagnostics.Reporter
+	diagnosticHistory  *diagnostics.History
 	snapshotCtx        context.Context
 	snapshotCancel     context.CancelFunc
 	snapshotWG         sync.WaitGroup
@@ -68,6 +69,7 @@ func New(options Options) *Server {
 		snapshotSource:     options.SnapshotSource,
 		snapshotID:         options.SnapshotID,
 		diagnosticReporter: options.DiagnosticReporter,
+		diagnosticHistory:  options.DiagnosticHistory,
 		snapshotCtx:        snapshotCtx,
 		snapshotCancel:     snapshotCancel,
 		shutdownTimeout:    5 * time.Second,
@@ -87,6 +89,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/status", s.status)
 	mux.HandleFunc("GET /v1/operations/{operation_id}", s.operationStatus)
+	mux.HandleFunc("GET /v1/diagnostics", s.diagnosticList)
+	mux.HandleFunc("GET /v1/diagnostics/{id}", s.diagnosticDetail)
 	s.runtimeRoutes(mux)
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		observed := &responseWriteObserver{ResponseWriter: writer}
@@ -109,6 +113,7 @@ func (s *Server) Handler() http.Handler {
 		s.snapshotLifecycle.Unlock()
 		defer s.handlers.Done()
 		requestCtx, cancel := context.WithCancel(request.Context())
+		requestCtx, observed.diagnosticResult = diagnostics.WithResult(requestCtx)
 		stop := context.AfterFunc(s.snapshotCtx, cancel)
 		defer stop()
 		defer cancel()
@@ -129,8 +134,9 @@ func (s *Server) Handler() http.Handler {
 
 type responseWriteObserver struct {
 	http.ResponseWriter
-	err     error
-	handled bool
+	err              error
+	handled          bool
+	diagnosticResult *diagnostics.Result
 }
 
 func (w *responseWriteObserver) Write(body []byte) (int, error) {
@@ -189,6 +195,9 @@ func (s *Server) status(writer http.ResponseWriter, request *http.Request) {
 	}
 	if s.snapshotSource != nil {
 		status.Capabilities = sortedUnique(append(status.Capabilities, protocol.MachineLogSnapshotCapability))
+	}
+	if s.diagnosticHistory != nil {
+		status.Capabilities = sortedUnique(append(status.Capabilities, protocol.CapabilityDiagnostics))
 	}
 	if s.runtime == nil && s.onboarding != nil {
 		status.Capabilities = sortedUnique(append(status.Capabilities, protocol.CapabilityOnboarding, protocol.OperationStatusCapability))
@@ -271,7 +280,23 @@ func (s *Server) beginSnapshot() bool {
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) {
+	var warnings protocol.WarningOutcome
+	if observed, ok := writer.(*responseWriteObserver); ok && observed.diagnosticResult != nil {
+		warnings = observed.diagnosticResult.Warnings()
+	}
+	body, references, err := encodeDiagnosticResponse(value, warnings)
+	if references != "" {
+		writer.Header().Set(protocol.DiagnosticReferencesHeader, references)
+	}
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
-	_ = json.NewEncoder(writer).Encode(value)
+	if err != nil {
+		if observed, ok := writer.(*responseWriteObserver); ok && observed.err == nil {
+			observed.err = err
+		}
+		return
+	}
+	// The handler observer owns reporting write failures; never try to replace an
+	// already written result with another error response.
+	_, _ = writer.Write(append(body, '\n'))
 }

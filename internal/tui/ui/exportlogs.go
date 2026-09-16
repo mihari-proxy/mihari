@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"log/slog"
 	"path/filepath"
+	"reflect"
 	"runtime/debug"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -44,6 +45,8 @@ type ExportLogsOptions struct {
 }
 
 type exportResultMsg struct {
+	outcome    protocol.WarningOutcome
+	cancelled  bool
 	Generation uint64
 	Operation  logging.OperationMetadata
 	Result     logging.ExportResult
@@ -95,57 +98,41 @@ func (r *exportRunner) startExport(generation uint64, request logging.ExportRequ
 		ctx = r.diagnostics.NewContext(ctx, "logs.export")
 		operation, _ := logging.OperationFromContext(ctx)
 		message := exportResultMsg{Generation: generation, Operation: operation}
-		var warned atomic.Bool
-		// Keep raw errors on the worker boundary. Only a fixed notice crosses to UI.
 		var warningMu sync.Mutex
-		var warning error
-		var warnings []error
+		var warningOutcome protocol.WarningOutcome
 		request.OnWarning = func(err error) {
-			warningMu.Lock()
-			if err != nil && !errors.Is(warning, err) {
-				warning = errors.Join(warning, err)
-				warnings = append(warnings, err)
+			if err == nil {
+				return
 			}
+			failure := diagnostics.ReportError(ctx, r.diagnostics.Reporter, diagnostics.Record{Component: "tui", Event: "logs.export.warning", Level: slog.LevelWarn, Err: err})
+			snapshot, _ := diagnostics.Snapshot(failure)
+			warningMu.Lock()
+			warningOutcome.Append(protocol.WarningOutcome{Warnings: []protocol.Warning{{Message: snapshot.Summary, Diagnostic: &snapshot}}})
 			warningMu.Unlock()
-			warned.Store(true)
 		}
 		defer func() {
 			if value := recover(); value != nil {
 				message.Result = logging.ExportResult{}
-				message.Err = errExportPanicked
-				if r.diagnostics.Reporter != nil {
-					// The raw panic is reported here; only the fixed marked error crosses into UI state.
-					_ = r.diagnostics.ReportFailure(ctx, "logs.export.failed", fmt.Errorf("log export panic: %v\n%s", value, debug.Stack()))
-					message.Err = diagnostics.MarkReported(message.Err)
-				}
+				failure := diagnostics.ReportError(ctx, r.diagnostics.Reporter, diagnostics.Record{Component: "tui", Event: "logs.export.failed", Level: slog.LevelError, Summary: errExportPanicked.Error(), Err: fmt.Errorf("log export panic: %v\n%s", value, debug.Stack())})
+				snapshot, _ := diagnostics.Snapshot(failure)
+				message.Err = diagnostics.MarkReported(diagnostics.WithSnapshot(errExportPanicked, snapshot))
 			}
-			if r.diagnostics.Reporter != nil {
+			if message.Err != nil && !diagnostics.AlreadyReported(message.Err) {
+				level, emit := diagnostics.FailureLevel(ctx, message.Err)
+				event := "logs.export.failed"
 				if expectedExportRejection(message.Err) {
-					r.diagnostics.Reporter(ctx, diagnostics.Record{Component: "tui", Event: "logs.export.rejected", Level: slog.LevelInfo, Err: message.Err})
-					message.Err = diagnostics.MarkReported(message.Err)
-				} else {
-					message.Err = r.diagnostics.ReportFailure(ctx, "logs.export.failed", message.Err)
+					level, emit, event = slog.LevelInfo, true, "logs.export.rejected"
+				}
+				if emit {
+					message.Err = diagnostics.MarkReported(diagnostics.ReportError(ctx, r.diagnostics.Reporter, diagnostics.Record{Component: "tui", Event: event, Level: level, Err: message.Err}))
 				}
 			}
-			var warningErr error
-			if r.diagnostics.Reporter != nil {
-				warningMu.Lock()
-				warningErr = warning
-				if message.Err != nil {
-					warningErr = nil
-					for _, err := range warnings {
-						if !errors.Is(message.Err, err) {
-							warningErr = errors.Join(warningErr, err)
-						}
-					}
-				}
-				warningMu.Unlock()
-			}
-			if warningErr != nil && r.diagnostics.Reporter != nil {
-				r.diagnostics.Reporter(ctx, diagnostics.Record{Component: "tui", Event: "logs.export.warning", Level: slog.LevelWarn, Err: warningErr})
-			}
+			message.cancelled = diagnostics.NormalCancellation(ctx, message.Err)
+			warningMu.Lock()
+			message.outcome = warningOutcome.Clone()
+			warningMu.Unlock()
 			cancel()
-			message.Warning = warned.Load()
+			message.Warning = len(message.outcome.Warnings) > 0 || message.outcome.WarningsOmitted > 0
 			result <- message
 			close(result)
 			r.mu.Lock()
@@ -167,6 +154,13 @@ func expectedExportRejection(err error) bool {
 	}
 	const maxDepth = 32
 	for depth := 0; err != nil && depth <= maxDepth; depth++ {
+		value := reflect.ValueOf(err)
+		switch value.Kind() {
+		case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+			if value.IsNil() {
+				return false
+			}
+		}
 		switch err {
 		case logging.ErrNoLogLines, logging.ErrExportTargetExists, logging.ErrInvalidExportRequest, logging.ErrExportTargetChanged:
 			return true
@@ -220,6 +214,7 @@ const (
 
 // ExportLogsModel is the reusable shared log export dialog.
 type ExportLogsModel struct {
+	previewWarnings                       protocol.WarningOutcome
 	options                               ExportLogsOptions
 	runner                                *exportRunner
 	closed, pending                       bool
@@ -284,7 +279,21 @@ func (m *ExportLogsModel) Open() {
 }
 
 // Update handles dialog-owned input and returns whether the root must stop routing it.
-func (m *ExportLogsModel) Update(message tea.Msg) (tea.Cmd, bool) {
+func (m *ExportLogsModel) Update(message tea.Msg) (command tea.Cmd, consumed bool) {
+	defer func() {
+		if len(m.previewWarnings.Warnings) == 0 && m.previewWarnings.WarningsOmitted == 0 {
+			return
+		}
+		outcome := m.previewWarnings
+		m.previewWarnings = protocol.WarningOutcome{}
+		publish := func() tea.Msg { return exportPreviewWarningsMsg{outcome: outcome} }
+		if command == nil {
+			command = publish
+		} else {
+			command = tea.Batch(command, publish)
+		}
+		consumed = true
+	}()
 	if _, ok := message.(OpenExportLogsMsg); ok {
 		if m.pending {
 			return nil, true
@@ -307,7 +316,7 @@ func (m *ExportLogsModel) Update(message tea.Msg) (tea.Cmd, bool) {
 		}
 		m.pending = false
 		m.warning = result.Warning
-		if errors.Is(result.Err, context.Canceled) || errors.Is(result.Err, context.DeadlineExceeded) {
+		if result.cancelled {
 			m.message = ExportCancelled
 			return nil, true
 		}
@@ -328,9 +337,11 @@ func (m *ExportLogsModel) Update(message tea.Msg) (tea.Cmd, bool) {
 		}
 		switch key.String() {
 		case "enter":
-			m.copySucceeded = m.options.WriteClipboard(m.resultPath) == nil
+			err := m.options.WriteClipboard(m.resultPath)
+			m.copySucceeded = err == nil
 			if !m.copySucceeded {
 				m.message = ExportCopyFailed
+				return m.localFailure("logs.export.copy", ExportCopyFailed, err), true
 			} else {
 				m.message = ExportPathCopied
 			}
@@ -444,7 +455,7 @@ func (m *ExportLogsModel) submit() tea.Cmd {
 	scope := m.exportScope()
 	if m.options.SourcesPrompt && scope == logging.ExportScopeMachineAndCurrentUser && !m.machineAvailable() {
 		m.message = ExportMachineUnavailable
-		return nil
+		return m.localFailure("logs.export.sources", ExportMachineUnavailable, ErrMachineLogsUnavailable)
 	}
 	exportRange := logging.ExportRange{Kind: m.rangeKind}
 	switch m.rangeKind {
@@ -457,11 +468,11 @@ func (m *ExportLogsModel) submit() tea.Cmd {
 		to, errTo := parseExportTime(m.to, m.openedAt.Location())
 		if errFrom != nil || errTo != nil {
 			m.message = ExportTimeInvalid
-			return nil
+			return m.localFailure("logs.export.range", ExportTimeInvalid, errors.Join(errFrom, errTo))
 		}
 		if from.After(to) {
 			m.message = ExportRangeInvalid
-			return nil
+			return m.localFailure("logs.export.range", ExportRangeInvalid, fmt.Errorf("export range starts after it ends: from=%s to=%s", m.from, m.to))
 		}
 		exportRange.From, exportRange.To = from.UTC(), to.UTC()
 	}
@@ -502,8 +513,15 @@ func (m *ExportLogsModel) defaultPath(now time.Time) string {
 		const maxPreviewProbes = 8
 		for suffix := 0; suffix < maxPreviewProbes; suffix++ {
 			exists, err := m.options.Exists(m.options.DefaultDir, name)
-			if err != nil || !exists {
-				// A failed probe leaves a candidate, not permission to overwrite.
+			if err != nil {
+				ctx := m.options.Diagnostics.NewContext(m.runner.parent, "logs.export.preview")
+				failure := diagnostics.ReportError(ctx, m.options.Diagnostics.Reporter, diagnostics.Record{Component: "tui", Event: "logs.export.preview.failed", Level: slog.LevelWarn, Err: err})
+				snapshot, _ := diagnostics.Snapshot(failure)
+				m.previewWarnings.Append(protocol.WarningOutcome{Warnings: []protocol.Warning{{Message: snapshot.Summary, Diagnostic: &snapshot}}})
+				// Keep the candidate; the exporter checks it again before publishing.
+				break
+			}
+			if !exists {
 				break
 			}
 			name = fmt.Sprintf("%s-%d.zip", base, suffix+1)
@@ -728,8 +746,11 @@ func (m *ExportLogsModel) CancelAndWait() {
 
 func parseExportTime(value string, location *time.Location) (time.Time, error) {
 	parsed, err := time.ParseInLocation(exportTimeLayout, value, location)
-	if err != nil || parsed.Format(exportTimeLayout) != value {
-		return time.Time{}, errors.New("invalid export time")
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse export time: %w", err)
+	}
+	if parsed.Format(exportTimeLayout) != value {
+		return time.Time{}, fmt.Errorf("noncanonical export time %q; expected %s", value, exportTimeLayout)
 	}
 	return parsed, nil
 }
@@ -753,22 +774,35 @@ func exportRangeLabel(kind logging.RangeKind) string {
 	}
 }
 func exportErrorMessage(err error) string {
-	switch {
-	case errors.Is(err, ErrLocalLogStorageUnavailable):
-		return "Local log storage unavailable"
-	case errors.Is(err, ErrMachineLogsUnavailable):
-		return ExportMachineUnavailable
-	case errors.Is(err, context.Canceled):
-		return ExportCancelled
-	case errors.Is(err, logging.ErrNoLogLines):
-		return ExportNoLogLines
-	case errors.Is(err, logging.ErrExportTargetExists):
-		return ExportTargetExists
-	case errors.Is(err, logging.ErrInvalidExportRequest), errors.Is(err, logging.ErrExportTargetChanged):
-		return ExportTargetInvalid
-	default:
-		return ExportFailed
+	// Presentation classification follows bounded transparent wrappers only.
+	// Joined cleanup failures and malformed error graphs retain the failure notice.
+	for depth := 0; err != nil && depth <= 32; depth++ {
+		value := reflect.ValueOf(err)
+		switch value.Kind() {
+		case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+			if value.IsNil() {
+				return ExportFailed
+			}
+		}
+		switch err {
+		case ErrLocalLogStorageUnavailable:
+			return "Local log storage unavailable"
+		case ErrMachineLogsUnavailable:
+			return ExportMachineUnavailable
+		case logging.ErrNoLogLines:
+			return ExportNoLogLines
+		case logging.ErrExportTargetExists:
+			return ExportTargetExists
+		case logging.ErrInvalidExportRequest, logging.ErrExportTargetChanged:
+			return ExportTargetInvalid
+		}
+		wrapper, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			break
+		}
+		err = wrapper.Unwrap()
 	}
+	return ExportFailed
 }
 
 const exportTimeLayout = "2006-01-02 15:04"
@@ -776,3 +810,25 @@ const exportTimeLayout = "2006-01-02 15:04"
 const exportWarningNotice = "Export cleanup or durability could not be confirmed.\nTemporary export data may remain."
 
 var errExportPanicked = errors.New("log export failed")
+
+// DiagnosticErrors and Warnings expose results before the export modal consumes
+// them, preserving details even when the file reporter is unavailable.
+func (m exportResultMsg) DiagnosticErrors() []error {
+	if m.cancelled || m.Err == nil {
+		return nil
+	}
+	return []error{m.Err}
+}
+func (m exportResultMsg) Warnings() protocol.WarningOutcome { return m.outcome }
+func (m exportResultMsg) DiagnosticPage() PageID            { return PageLogs }
+
+func (m *ExportLogsModel) localFailure(operation, summary string, err error) tea.Cmd {
+	ctx := m.options.Diagnostics.NewContext(m.runner.parent, operation)
+	failure := diagnostics.ReportError(ctx, m.options.Diagnostics.Reporter, diagnostics.Record{Component: "tui", Event: operation + ".failed", Level: slog.LevelError, Summary: summary, Err: err})
+	return func() tea.Msg { return DiagnosticMsg{Page: PageLogs, Err: failure} }
+}
+
+type exportPreviewWarningsMsg struct{ outcome protocol.WarningOutcome }
+
+func (m exportPreviewWarningsMsg) Warnings() protocol.WarningOutcome { return m.outcome }
+func (m exportPreviewWarningsMsg) DiagnosticPage() PageID            { return PageLogs }

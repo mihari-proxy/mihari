@@ -111,7 +111,10 @@ func renderTunStatus(command *cobra.Command, options *runOptions, status protoco
 	if options.json {
 		return renderJSON(command.OutOrStdout(), status)
 	}
-	return printTunStatus(command.OutOrStdout(), status)
+	if err := printTunStatus(command.OutOrStdout(), status); err != nil {
+		return err
+	}
+	return renderWarnings(command.ErrOrStderr(), status.WarningOutcome)
 }
 
 func printTunStatus(writer io.Writer, status protocol.TunStatus) error {

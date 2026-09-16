@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -34,6 +34,7 @@ const (
 
 type detailState struct {
 	entry Entry
+	raw   string
 }
 
 type Model struct {
@@ -198,7 +199,18 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		entries := m.visibleEntries()
 		if m.focused >= 0 && m.focused < len(entries) {
-			m.detail = &detailState{entry: entries[m.focused]}
+			entry := entries[m.focused]
+			m.detail = &detailState{entry: entry, raw: ui.UnavailableTitle}
+			encoded, err := json.MarshalIndent(struct {
+				ObservedAt time.Time `json:"observed_at,omitzero"`
+				Level      string    `json:"type"`
+				Message    string    `json:"payload"`
+			}{entry.ObservedAt, entry.Log.Level, entry.Log.Message}, "", "  ")
+			if err != nil {
+				failure := fmt.Errorf("encode log details: %w", err)
+				return m, func() tea.Msg { return ui.DiagnosticMsg{Page: ui.PageLogs, Err: failure} }
+			}
+			m.detail.raw = string(encoded)
 		}
 		return m, nil
 	}
@@ -363,14 +375,7 @@ func (m *Model) renderEntry(entry Entry, focused bool) []string {
 func (m *Model) renderDetail() string {
 	entry := m.detail.entry
 	safe := protocol.LogEntry{Level: safeLine(entry.Log.Level), Message: safeMultiline(entry.Log.Message)}
-	raw := ui.UnavailableTitle
-	if encoded, err := json.MarshalIndent(struct {
-		ObservedAt time.Time `json:"observed_at,omitzero"`
-		Level      string    `json:"type"`
-		Message    string    `json:"payload"`
-	}{ObservedAt: entry.ObservedAt, Level: safe.Level, Message: safe.Message}, "", "  "); err == nil {
-		raw = string(encoded)
-	}
+	raw := diagnostics.EscapeTerminal(m.detail.raw)
 	timestamp := ui.MissingValue
 	if !entry.ObservedAt.IsZero() {
 		timestamp = entry.ObservedAt.Local().Format(time.RFC3339)
@@ -495,13 +500,7 @@ func safeLine(value string) string {
 }
 
 func safeMultiline(value string) string {
-	var builder strings.Builder
-	for _, r := range value {
-		if r == '\n' || r == '\t' || (!unicode.IsControl(r) && r != '\x1b') {
-			builder.WriteRune(r)
-		}
-	}
-	return builder.String()
+	return diagnostics.EscapeTerminal(value)
 }
 
 func wrapText(value string, width int) []string {

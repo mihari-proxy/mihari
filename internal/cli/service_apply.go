@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/update"
 	"github.com/spf13/cobra"
 )
@@ -33,7 +34,7 @@ func newServiceApplyCommand(deps Dependencies, options *runOptions, euid func() 
 		var warning string
 		consent.Warn = func(message string) error {
 			if !options.json {
-				_, err := fmt.Fprintln(cmd.ErrOrStderr(), message)
+				_, err := fmt.Fprintln(cmd.ErrOrStderr(), diagnostics.EscapeTerminal(message))
 				return err
 			}
 			warning = message
@@ -46,6 +47,7 @@ func newServiceApplyCommand(deps Dependencies, options *runOptions, euid func() 
 			return err
 		}
 		if options.json {
+			result.Append(replacementWarnings(ctx, warning))
 			return renderJSON(cmd.OutOrStdout(), result)
 		}
 		_, err = fmt.Fprintf(cmd.OutOrStdout(), "service %s (%s)\n", result.ServiceStatus, result.TransactionID)

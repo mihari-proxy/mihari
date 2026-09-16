@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/app"
@@ -102,13 +103,28 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, depen
 		return ExitOK
 	}
 	apiError := normalizeCommandError(err)
+	snapshot, captured := diagnostics.Snapshot(err)
+	if !captured {
+		snapshot = diagnostics.Describe(ctx, diagnostics.Record{Err: err, Summary: apiError.Message, Level: slog.LevelError, Component: "cli", Event: "command.failed"})
+	}
+	snapshot.Code, snapshot.Summary = apiError.Code, apiError.Message
+	apiError.Diagnostic = &snapshot
 	if options.json {
-		_ = json.NewEncoder(stderr).Encode(protocol.NewError(apiError.Code, apiError.Message, apiError.Details))
+		if err := json.NewEncoder(stderr).Encode(protocol.ErrorEnvelope{Schema: "mihari.error/v1", Error: apiError, WarningOutcome: apiError.WarningOutcome}); err != nil {
+			return exitCode(apiError)
+		}
 	} else {
-		_, _ = fmt.Fprintf(stderr, "Error: %s\n", apiError.Message)
+		if _, err := io.WriteString(stderr, diagnostics.TerminalText("Error", snapshot)); err != nil {
+			return exitCode(apiError)
+		}
+		if err := renderWarnings(stderr, apiError.WarningOutcome); err != nil {
+			return exitCode(apiError)
+		}
 		var diagnostic interface{ Hint() string }
 		if errors.As(err, &diagnostic) {
-			_, _ = fmt.Fprintln(stderr, diagnostic.Hint())
+			if _, err := fmt.Fprintln(stderr, diagnostics.EscapeTerminal(diagnostic.Hint())); err != nil {
+				return exitCode(apiError)
+			}
 		}
 	}
 	return exitCode(apiError)
@@ -137,10 +153,11 @@ func newRoot(dependencies Dependencies, options *runOptions) *cobra.Command {
 					if errors.As(err, &apiError) {
 						if apiError.Code == "" {
 							apiError.Code = protocol.CodeDataFailure
+							return diagnostics.Wrap(apiError, err)
 						}
-						return apiError
+						return err
 					}
-					return protocol.APIError{Code: protocol.CodeDataFailure, Message: "local control setup failed"}
+					return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "local control setup failed"}, err)
 				}
 			}
 			if dependencies.SetupError == nil {
@@ -150,7 +167,7 @@ func newRoot(dependencies Dependencies, options *runOptions) *cobra.Command {
 			if errors.As(dependencies.SetupError, &apiError) && apiError.Code != "" {
 				return dependencies.SetupError
 			}
-			return protocol.APIError{Code: protocol.CodeDataFailure, Message: "local control setup failed"}
+			return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "local control setup failed"}, dependencies.SetupError)
 		},
 	}
 	root.PersistentFlags().BoolVar(&options.json, "json", false, "write machine-readable JSON")

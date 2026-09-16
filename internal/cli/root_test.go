@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -132,12 +133,16 @@ func TestPrepareLocalRootFailurePreservesAPIError(t *testing.T) {
 	if code != ExitData {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
-	if got, want := stderr.String(), "{\"schema\":\"mihari.error/v1\",\"error\":{\"code\":\"data_failure\",\"message\":\"resolve Mihari data root\"}}\n"; got != want {
-		t.Fatalf("stderr=%q want=%q", got, want)
+	var envelope protocol.ErrorEnvelope
+	if err := json.Unmarshal(stderr.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Error.Code != protocol.CodeDataFailure || envelope.Error.Message != "resolve Mihari data root" || envelope.Error.Diagnostic == nil {
+		t.Fatalf("classification or detail lost: %+v", envelope.Error)
 	}
 }
 
-func TestExecuteJSON_DataFailureKeepsSingleSafeEnvelope(t *testing.T) {
+func TestExecuteJSON_DataFailureKeepsSingleOriginalEnvelope(t *testing.T) {
 	const secret = "control-token-not-for-cli-output"
 	const subscriptionURL = "https://user:token@secret.example/sub?token=control-token-not-for-cli-output"
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
@@ -147,11 +152,20 @@ func TestExecuteJSON_DataFailureKeepsSingleSafeEnvelope(t *testing.T) {
 	if code != ExitData || stdout.Len() != 0 {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
-	if got, want := stderr.String(), "{\"schema\":\"mihari.error/v1\",\"error\":{\"code\":\"data_failure\",\"message\":\"persist settings\"}}\n"; got != want {
-		t.Fatalf("stderr=%q want=%q", got, want)
+	var envelope protocol.ErrorEnvelope
+	if err := json.Unmarshal(stderr.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
 	}
-	if strings.Count(stderr.String(), "\n") != 1 || strings.Contains(stderr.String(), secret) || strings.Contains(stderr.String(), subscriptionURL) || strings.Contains(stderr.String(), "proxies:") {
-		t.Fatalf("CLI JSON output leaked diagnostics or wrote multiple envelopes: %q", stderr.String())
+	if envelope.Error.Code != protocol.CodeDataFailure || envelope.Error.Message != "persist settings" || envelope.Error.Diagnostic == nil {
+		t.Fatalf("error=%+v", envelope.Error)
+	}
+	for _, original := range []string{secret, subscriptionURL, "proxies:\n  - name: secret"} {
+		if !strings.Contains(envelope.Error.Diagnostic.Detail, original) {
+			t.Fatal("CLI JSON lost original cause")
+		}
+	}
+	if strings.Count(stderr.String(), "\n") != 1 {
+		t.Fatal("CLI JSON mixed multiple envelopes or unescaped text")
 	}
 }
 

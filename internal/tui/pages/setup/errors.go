@@ -8,36 +8,25 @@ import (
 	"io"
 	"net"
 	"strings"
-	"unicode"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
-	"github.com/mihari-proxy/mihari/internal/logging"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
-// safeText redacts subscription credentials, removes unsafe controls and bounds display text.
-func (m *Model) safeText(text string) string {
-	var secrets []string
-	if len(m.subscriptionInputs) > 1 {
-		secrets = append(secrets, m.subscriptionInputs[1].Value())
-	}
-	text = logging.NewRedactor(secrets...).String(text)
-	text = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) && r != '\n' && r != '\t' {
-			return -1
-		}
-		return r
-	}, text)
-	runes := []rune(text)
-	if len(runes) > 4096 {
-		return string(runes[:4095]) + "…"
-	}
-	return text
-}
+// safeText escapes terminal controls without redacting the underlying text.
+func (m *Model) safeText(text string) string { return diagnostics.EscapeTerminal(text) }
 
-// fail builds safe step diagnostics from classified errors without exposing internal causes.
+// fail retains original diagnostic details alongside the classified step summary.
 func (m *Model) fail(prefix string, err error) {
 	m.settlementNotice = ""
-	cause, advice := "The cause could not be confirmed.", "Open details and use the operation ID to locate daemon logs."
+	cause, advice := "The cause could not be confirmed.", "Press F2 to inspect the original error details."
+	snapshot, ok := diagnostics.Snapshot(err)
+	if !ok {
+		snapshot = diagnostics.Describe(m.ctx, diagnostics.Record{Err: err})
+	}
+	if snapshot.Summary != "" {
+		cause = m.safeText(snapshot.Summary)
+	}
 	code := protocol.CodeInternal
 	var api protocol.APIError
 	if errors.As(err, &api) {
@@ -64,10 +53,13 @@ func (m *Model) fail(prefix string, err error) {
 	}
 	m.lastError = prefix + ": " + strings.Join(strings.Fields(cause), " ")
 	m.errorAdvice = advice
-	m.errorDetail = fmt.Sprintf("%s\n\n%s\n\n%s\n\nCode: %s", prefix, cause, advice, m.safeText(string(code)))
-	if m.operationID != "" {
-		m.errorDetail += "\nOperation: " + m.safeText(m.operationID)
+	if snapshot.Code == "" {
+		snapshot.Code = code
 	}
+	if snapshot.OperationID == "" {
+		snapshot.OperationID = m.operationID
+	}
+	m.errorDetail = prefix + "\n\n" + diagnostics.TerminalText("Error", snapshot) + "\n" + advice
 	if status, ok := api.Details["status"].(float64); ok && status >= 100 && status <= 599 {
 		m.errorDetail += fmt.Sprintf("\nHTTP status: %.0f", status)
 	}

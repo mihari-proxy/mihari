@@ -165,3 +165,24 @@ func TestRouting_FailedProviderSnapshotRetainsModeAndDisablesGLOBAL(t *testing.T
 		}
 	}
 }
+
+func TestModePicker_CancelConfirmationDoesNotReportFailureOrLoseStatus(t *testing.T) {
+	client := &modeClient{}
+	model := New(client, func() string { return "fixture-cancel" })
+	model.SetRoutingAvailable(true, 1)
+	before := protocol.RoutingStatus{DesiredMode: "rule", LiveMode: "rule", State: "applied", Revision: 3}
+	model.SetRouting(before, 1)
+	model.routing.open, model.routing.cursor = true, 1
+	intent := model.submitRouting()().(ui.ActionIntentMsg)
+	result := intent.Cancel().(ui.PageResultMsg).Result.(routingResultMsg)
+	if result.Err() != nil {
+		t.Fatal("unstarted mutation cancellation fabricated an error")
+	}
+	if diagnostic, ok := any(result).(interface{ DiagnosticErrors() []error }); ok && len(diagnostic.DiagnosticErrors()) != 0 {
+		t.Fatal("cancel confirmation created an error diagnostic")
+	}
+	model.Update(result)
+	if client.updates != 0 || model.routing.pending || !model.routing.known || model.routing.status.Revision != before.Revision || model.routing.status.DesiredMode != before.DesiredMode {
+		t.Fatal("cancel confirmation changed authoritative routing state")
+	}
+}

@@ -2,10 +2,13 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -67,7 +70,7 @@ func TestInstallRequest_FixtureRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	resultAgain, err := DecodeInstallResult(bytes.NewReader(encodedResult))
-	if err != nil || resultAgain != result {
+	if err != nil || !reflect.DeepEqual(resultAgain, result) {
 		t.Fatalf("result round-trip: %+v %v", resultAgain, err)
 	}
 }
@@ -218,5 +221,100 @@ func TestInstallRequest_JSONKeysStable(t *testing.T) {
 		if _, ok := raw[key]; !ok {
 			t.Fatalf("missing fixture field %s", key)
 		}
+	}
+}
+
+func TestInstallResult_OptionalWarningsPreserveStrictRoundTrip(t *testing.T) {
+	result, err := DecodeInstallResult(bytes.NewReader(readInstallFixture(t, "result.json")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := EncodeInstallResult(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(legacy), "warnings") {
+		t.Fatal("absent warnings changed legacy result")
+	}
+	result.WarningOutcome = protocol.WarningOutcome{Warnings: []protocol.Warning{{Message: "compatibility warning", Diagnostic: &protocol.Diagnostic{State: protocol.DiagnosticAvailable, Detail: "token=fixture-original"}}}}
+	encoded, err := EncodeInstallResult(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := DecodeInstallResult(bytes.NewReader(encoded))
+	if err != nil || !reflect.DeepEqual(again, result) {
+		t.Fatal("structured warning or business result changed")
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	fields["unexpected"] = json.RawMessage(`true`)
+	malformed, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeInstallResult(bytes.NewReader(malformed)); err == nil {
+		t.Fatal("optional warnings weakened unknown-field validation")
+	}
+}
+
+type installFailingReader struct{ err error }
+
+func (r installFailingReader) Read([]byte) (int, error) { return 0, r.err }
+
+func TestInstallDecode_PreservesOriginalCause(t *testing.T) {
+	cause := errors.New("read request: token=fixture-original")
+	for _, tc := range []struct {
+		name   string
+		decode func(io.Reader) error
+	}{
+		{"request", func(r io.Reader) error { _, err := DecodeInstallRequest(r); return err }},
+		{"result", func(r io.Reader) error { _, err := DecodeInstallResult(r); return err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.decode(installFailingReader{cause})
+			if !errors.Is(err, cause) {
+				t.Fatalf("reader cause lost: %v", err)
+			}
+			var api protocol.APIError
+			if !errors.As(err, &api) || api.Code != protocol.CodeInvalidArgument {
+				t.Fatalf("classification changed: %v", err)
+			}
+			err = tc.decode(strings.NewReader(`{"schema": ?}`))
+			var syntax *json.SyntaxError
+			if !errors.As(err, &syntax) {
+				t.Fatalf("syntax cause lost: %v", err)
+			}
+		})
+	}
+}
+
+func TestReadInstallRequestFile_PreservesFilesystemCause(t *testing.T) {
+	_, err := ReadInstallRequestFile(context.Background(), filepath.Join(t.TempDir(), "missing-token-fixture.json"))
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) {
+		t.Fatalf("file cause lost: %v", err)
+	}
+}
+
+func TestInstallationCodecs_PreserveReadAndSyntaxCauses(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		decode func(io.Reader) error
+	}{
+		{"state", func(r io.Reader) error { _, err := DecodeInstallationState(r); return err }},
+		{"journal", func(r io.Reader) error { _, err := DecodeJournal(r); return err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cause := errors.New("read token=fixture-original")
+			if err := tc.decode(installFailingReader{cause}); !errors.Is(err, cause) {
+				t.Fatalf("read cause lost: %v", err)
+			}
+			var syntax *json.SyntaxError
+			if err := tc.decode(strings.NewReader(`{"schema": ?}`)); !errors.As(err, &syntax) {
+				t.Fatalf("syntax cause lost: %v", err)
+			}
+		})
 	}
 }

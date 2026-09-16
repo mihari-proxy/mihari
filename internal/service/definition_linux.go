@@ -41,7 +41,7 @@ func (t linuxCgroupTree) Empty(_ context.Context, group string) (bool, error) {
 		return classifyCgroupEmpty(false, os.ErrNotExist, nil)
 	}
 	if err != nil {
-		return false, invalidServiceState("service process tree is unknown")
+		return false, invalidServiceState("service process tree is unknown", err)
 	}
 	raw, err := os.ReadFile(path.Join(dir, "cgroup.events"))
 	return classifyCgroupEmpty(true, err, raw)
@@ -94,14 +94,14 @@ func (t linuxCgroupTree) Identify(_ context.Context, pid int) (ProcessIdentity, 
 	}
 	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
 	if err != nil {
-		return ProcessIdentity{}, invalidServiceState("service process identity is unknown")
+		return ProcessIdentity{}, invalidServiceState("service process identity is unknown", err)
 	}
 	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if errors.Is(err, os.ErrNotExist) {
 		return ProcessIdentity{}, nil
 	}
 	if err != nil {
-		return ProcessIdentity{}, invalidServiceState("service process identity is unknown")
+		return ProcessIdentity{}, invalidServiceState("service process identity is unknown", err)
 	}
 	start, err := parseProcStatStart(stat)
 	if err != nil {
@@ -125,7 +125,7 @@ func parseProcStatStart(raw []byte) (int64, error) {
 	}
 	start, err := strconv.ParseInt(fields[19], 10, 64)
 	if err != nil {
-		return 0, invalidServiceState("service process identity is unknown")
+		return 0, invalidServiceState("service process identity is unknown", err)
 	}
 	return start, nil
 }
@@ -181,7 +181,7 @@ func readCgroupPIDs(name string) ([]int, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, invalidServiceState("service process tree is unknown")
+		return nil, invalidServiceState("service process tree is unknown", err)
 	}
 	var pids []int
 	for _, line := range strings.Split(string(raw), "\n") {
@@ -191,7 +191,7 @@ func readCgroupPIDs(name string) ([]int, error) {
 		}
 		pid, err := strconv.Atoi(line)
 		if err != nil || pid <= 0 {
-			return nil, invalidServiceState("service process tree is unknown")
+			return nil, invalidServiceState("service process tree is unknown", err)
 		}
 		pids = append(pids, pid)
 	}

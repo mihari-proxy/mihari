@@ -31,7 +31,7 @@ func TestSubscriptionHelp_SaveAndCycleBindings(t *testing.T) {
 			t.Fatalf("incorrect help for %s", tc.mode)
 		}
 	}
-	if footer := RenderFooter(PageSubscriptions, ModeSubscriptionSaving, FooterOpt{}); footer != "Saving..." {
+	if footer := RenderFooter(PageSubscriptions, ModeSubscriptionSaving, FooterOpt{}); footer != "F2 details  Saving..." {
 		t.Fatal("saving footer offered input")
 	}
 	for _, mode := range []string{ModeSubscriptionInput, ModeSubscriptionSubmit, ModeSubscriptionUnknown, ModeSubscriptionWaiting, ModeSubscriptionConfirm, ModeSubscriptionCycle} {

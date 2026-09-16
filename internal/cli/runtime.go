@@ -29,7 +29,7 @@ func operationID(dependencies Dependencies) (string, error) {
 	}
 	var value [16]byte
 	if _, err := rand.Read(value[:]); err != nil {
-		return "", protocol.APIError{Code: protocol.CodeInternal, Message: "operation ID generation failed"}
+		return "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "operation ID generation failed"}, err)
 	}
 	return hex.EncodeToString(value[:]), nil
 }

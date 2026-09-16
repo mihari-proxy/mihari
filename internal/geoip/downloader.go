@@ -226,7 +226,7 @@ func doGET(ctx context.Context, client *http.Client, rawURL string, allowHTTP bo
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		raw, readErr := io.ReadAll(io.LimitReader(response.Body, diagnostics.MaxHTTPBodyBytes+1))
 		closeErr := response.Body.Close()
-		return nil, downloadFailure{message: fmt.Sprintf("download geoip resource: unexpected HTTP status %d", response.StatusCode), cause: &diagnostics.HTTPError{Operation: "geoip GET resource", URL: rawURL, Phase: "response", Status: response.StatusCode, Body: diagnostics.HTTPBody(raw), Cause: errors.Join(readErr, closeErr)}}
+		return nil, downloadFailure{message: fmt.Sprintf("download geoip resource: unexpected HTTP status %d", response.StatusCode), cause: &diagnostics.HTTPError{Operation: "geoip GET resource", URL: rawURL, Phase: "response", Status: response.StatusCode, Body: diagnostics.HTTPBody(raw), BodyTruncated: len(raw) > diagnostics.MaxHTTPBodyBytes, Cause: errors.Join(readErr, closeErr)}}
 	}
 	return response, nil
 }

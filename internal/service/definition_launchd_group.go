@@ -39,7 +39,7 @@ func parseDarwinGroup(token string) (ProcessIdentity, error) {
 	id := ProcessIdentity{PID: int(pid), BootID: parts[0], StartUnix: seconds, StartUsec: uint32(micros), Group: token}
 	canonical, err := darwinGroupToken(id)
 	if e1 != nil || e2 != nil || e3 != nil || err != nil || canonical != token {
-		return ProcessIdentity{}, invalidServiceState("service process group identity is unknown")
+		return ProcessIdentity{}, invalidServiceState("service process group identity is unknown", e1, e2, e3, err)
 	}
 	return id, nil
 }
@@ -47,7 +47,7 @@ func parseDarwinGroup(token string) (ProcessIdentity, error) {
 func validateDarwinGroup(id ProcessIdentity) error {
 	parsed, err := parseDarwinGroup(id.Group)
 	if err != nil || !sameLaunchdProcess(parsed, id) {
-		return invalidServiceState("service process group identity is unknown")
+		return invalidServiceState("service process group identity is unknown", err)
 	}
 	return nil
 }
@@ -102,7 +102,7 @@ func identifyLaunchdProcess(ctx context.Context, pid int, observe func(context.C
 	}
 	raw, err := arguments(pid)
 	if err != nil {
-		return ProcessIdentity{}, invalidServiceState("service process arguments are unknown")
+		return ProcessIdentity{}, invalidServiceState("service process arguments are unknown", err)
 	}
 	argv, err := parseDarwinProcArgs(raw)
 	if err != nil {
@@ -158,7 +158,7 @@ func observeLaunchdGroupExit(ctx context.Context, group string, boot func(contex
 		return true, nil
 	}
 	if err != nil {
-		return false, invalidServiceState("service process group is unknown")
+		return false, invalidServiceState("service process group is unknown", err)
 	}
 	return false, nil
 }

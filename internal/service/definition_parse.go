@@ -105,7 +105,7 @@ func systemdLogicalLines(raw []byte) ([]string, error) {
 		lines = append(lines, strings.TrimSpace(line))
 	}
 	if pending != "" || scanner.Err() != nil {
-		return nil, invalidServiceState("service definition is unsupported")
+		return nil, invalidServiceState("service definition is unsupported", scanner.Err())
 	}
 	return lines, nil
 }
@@ -177,7 +177,7 @@ func nextExecArg(value string) (string, string, error) {
 				if ch == 'x' && i+2 < len(value) {
 					n, err := strconv.ParseUint(value[i+1:i+3], 16, 8)
 					if err != nil {
-						return "", "", invalidServiceState("service definition is unsupported")
+						return "", "", invalidServiceState("service definition is unsupported", err)
 					}
 					b.WriteByte(byte(n))
 					i += 2
@@ -241,7 +241,7 @@ func parseSystemdShow(raw []byte) (map[string]string, error) {
 		out[key] = value
 	}
 	if scanner.Err() != nil {
-		return nil, invalidServiceState("service status is unknown")
+		return nil, invalidServiceState("service status is unknown", scanner.Err())
 	}
 	for _, key := range []string{"LoadState", "ActiveState", "SubState", "MainPID", "ControlGroup", "FragmentPath", "DropInPaths", "UnitFileState"} {
 		if _, ok := out[key]; !ok {
@@ -306,7 +306,7 @@ func parsePlistDictRoot(raw []byte) (map[string]any, error) {
 	for {
 		tok, err := dec.Token()
 		if err != nil {
-			return nil, invalidServiceState("service definition is unsupported")
+			return nil, invalidServiceState("service definition is unsupported", err)
 		}
 		start, ok := tok.(xml.StartElement)
 		if !ok {
@@ -328,14 +328,14 @@ func parsePlistDict(dec *xml.Decoder) (map[string]any, error) {
 	for {
 		tok, err := dec.Token()
 		if err != nil {
-			return nil, invalidServiceState("service definition is unsupported")
+			return nil, invalidServiceState("service definition is unsupported", err)
 		}
 		switch item := tok.(type) {
 		case xml.StartElement:
 			if item.Name.Local == "key" {
 				var next string
 				if err := dec.DecodeElement(&next, &item); err != nil || next == "" {
-					return nil, invalidServiceState("service definition is unsupported")
+					return nil, invalidServiceState("service definition is unsupported", err)
 				}
 				if key != "" {
 					return nil, invalidServiceState("service definition is unsupported")
@@ -371,7 +371,7 @@ func parsePlistArray(dec *xml.Decoder) ([]any, error) {
 	for {
 		tok, err := dec.Token()
 		if err != nil {
-			return nil, invalidServiceState("service definition is unsupported")
+			return nil, invalidServiceState("service definition is unsupported", err)
 		}
 		switch item := tok.(type) {
 		case xml.StartElement:
@@ -393,17 +393,17 @@ func parsePlistValue(dec *xml.Decoder, start xml.StartElement) (any, error) {
 	case "string", "integer":
 		var s string
 		if err := dec.DecodeElement(&s, &start); err != nil {
-			return nil, invalidServiceState("service definition is unsupported")
+			return nil, invalidServiceState("service definition is unsupported", err)
 		}
 		return s, nil
 	case "true":
 		if err := dec.DecodeElement(new(struct{}), &start); err != nil {
-			return nil, invalidServiceState("service definition is unsupported")
+			return nil, invalidServiceState("service definition is unsupported", err)
 		}
 		return true, nil
 	case "false":
 		if err := dec.DecodeElement(new(struct{}), &start); err != nil {
-			return nil, invalidServiceState("service definition is unsupported")
+			return nil, invalidServiceState("service definition is unsupported", err)
 		}
 		return false, nil
 	case "array":

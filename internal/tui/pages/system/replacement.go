@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"github.com/mihari-proxy/mihari/internal/update"
@@ -17,6 +18,7 @@ func (m *Model) SetLocalTaskDiagnostics(diagnostics ui.LocalTaskDiagnostics) {
 }
 
 type preparedMihariResultMsg struct {
+	cancelled  bool
 	operation  logging.OperationMetadata
 	generation uint64
 	channel    string
@@ -91,7 +93,7 @@ func (m *Model) startMihariPreparation() tea.Cmd {
 		} else {
 			p, err = updater.Prepare(ctx, binary, current, channel)
 		}
-		return ui.PageResultMsg{Page: ui.PageSystem, Result: preparedMihariResultMsg{generation: generation, channel: channel, prepared: p, err: err, operation: operation}}
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: preparedMihariResultMsg{cancelled: diagnostics.NormalCancellation(ctx, err), generation: generation, channel: channel, prepared: p, err: err, operation: operation}}
 	}
 	return tea.Batch(prepare, m.rowSpinCmdIfNeeded())
 }

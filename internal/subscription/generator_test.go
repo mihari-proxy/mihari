@@ -2,6 +2,7 @@ package subscription
 
 import (
 	"bytes"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -379,5 +380,37 @@ func TestGenerateDoesNotMutateSettingsTun(t *testing.T) {
 	tun["enable"] = false
 	if settings.Tun["enable"] != true {
 		t.Fatal("settings.Tun was mutated through generated document")
+	}
+}
+
+type generatorMarshalFailure struct{ err error }
+
+func (f generatorMarshalFailure) MarshalYAML() (any, error) { return nil, f.err }
+func TestGenerate_PreservesOriginalEncodingCause(t *testing.T) {
+	cause := errors.New("encode token=fixture-original")
+	for _, tc := range []struct {
+		name      string
+		base      Document
+		overrides map[string]any
+	}{
+		{"clone", Document{"fixture": generatorMarshalFailure{cause}}, nil},
+		{"final", Document{}, map[string]any{"fixture": generatorMarshalFailure{cause}}},
+		{"tun", Document{}, map[string]any{"tun": generatorMarshalFailure{cause}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			settings := testSettings()
+			settings.Tun = map[string]any{"enable": true}
+			_, err := Generate(tc.base, tc.overrides, settings)
+			if !errors.Is(err, cause) {
+				t.Fatalf("original encoding cause lost: %v", err)
+			}
+		})
+	}
+	settings := testSettings()
+	settings.Tun = map[string]any{"enable": true}
+	_, err := Generate(Document{}, map[string]any{"tun": "token=fixture-original"}, settings)
+	var causeType *yaml.TypeError
+	if !errors.As(err, &causeType) {
+		t.Fatalf("original tun mapping failure lost: %v", err)
 	}
 }

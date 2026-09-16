@@ -145,7 +145,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		if status != 0 {
 			details = map[string]any{"status": status}
 		}
-		return diagnostics.Wrap(protocol.APIError{Code: code, Message: message, Details: details}, (&diagnostics.HTTPError{Operation: operation, URL: requestURL, Phase: phase, Status: status, Body: diagnostics.HTTPBody(raw), Cause: cause}))
+		return diagnostics.Wrap(protocol.APIError{Code: code, Message: message, Details: details}, (&diagnostics.HTTPError{Operation: operation, URL: requestURL, Phase: phase, Status: status, Body: diagnostics.HTTPBody(raw), BodyTruncated: len(raw) > diagnostics.MaxHTTPBodyBytes, Cause: cause}))
 	}
 	var body io.Reader
 	if input != nil {

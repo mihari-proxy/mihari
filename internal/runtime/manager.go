@@ -207,9 +207,10 @@ type Manager struct {
 }
 
 type operationEntry struct {
-	done   chan struct{}
-	result any
-	err    error
+	done     chan struct{}
+	result   any
+	err      error
+	warnings protocol.WarningOutcome
 }
 
 func New(options Options) *Manager {
@@ -868,19 +869,21 @@ func (m *Manager) doOperation(ctx context.Context, key string, execute func(cont
 	if err := m.checkOpen(); err != nil {
 		return nil, err
 	}
-	executeOnce := func() (any, error) {
+	executeOnce := func() (any, protocol.WarningOutcome, error) {
 		executionCtx, batch := newOperationDiagnostics(ctx, key)
 		result, err := execute(executionCtx)
-		m.flushDiagnostics(executionCtx, batch)
-		if err != nil && m.diagnosticReporter != nil && !diagnostics.AlreadyReported(err) {
+		warnings := m.flushDiagnostics(executionCtx, batch)
+		if err != nil && !diagnostics.AlreadyReported(err) {
 			if level, emit := diagnostics.FailureLevel(executionCtx, err); emit {
-				m.diagnosticReporter(executionCtx, diagnostics.Record{
+				err = diagnostics.ReportError(executionCtx, m.diagnosticReporter, diagnostics.Record{
 					Component: "runtime",
 					Event:     "operation.failed",
 					Level:     level,
 					Err:       err,
 				})
-				err = diagnostics.MarkReported(err)
+				if m.diagnosticReporter != nil {
+					err = diagnostics.MarkReported(err)
+				}
 			}
 		}
 		if err == nil && m.diagnosticReporter != nil && operationSuccessKey(key) {
@@ -890,17 +893,21 @@ func (m *Manager) doOperation(ctx context.Context, key string, execute func(cont
 				Level:     slog.LevelInfo,
 			})
 		}
+		return result, warnings, err
+	}
+	returnResult := func(result any, warnings protocol.WarningOutcome, err error) (any, error) {
+		diagnostics.ReturnWarnings(ctx, warnings)
 		return result, err
 	}
 	if key == "" || key[len(key)-1] == ':' {
-		return executeOnce()
+		return returnResult(executeOnce())
 	}
 	m.operationsMu.Lock()
 	if existing := m.operations[key]; existing != nil {
 		m.operationsMu.Unlock()
 		select {
 		case <-existing.done:
-			return existing.result, existing.err
+			return returnResult(existing.result, existing.warnings, existing.err)
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -919,15 +926,16 @@ func (m *Manager) doOperation(ctx context.Context, key string, execute func(cont
 		}
 		if len(m.operations) >= 256 {
 			m.operationsMu.Unlock()
-			return executeOnce()
+			return returnResult(executeOnce())
 		}
 	}
 	m.operations[key] = entry
 	m.operationsMu.Unlock()
 
-	entry.result, entry.err = executeOnce()
+	result, warnings, err := executeOnce()
+	entry.result, entry.err, entry.warnings = result, err, warnings.References()
 	close(entry.done)
-	return entry.result, entry.err
+	return returnResult(result, warnings, err)
 }
 
 func (m *Manager) setCoreState(coreState state.CoreState) {

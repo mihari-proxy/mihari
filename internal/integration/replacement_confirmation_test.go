@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/cli"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/update"
@@ -129,10 +130,11 @@ func TestReplacementConfirmation_CLIUsesVerifiedCandidate(t *testing.T) {
 					t.Fatalf("confirmed replacement: exit=%d replaces=%d applies=%d stderr=%s", exit, replacements, u.applies, stderr.String())
 				}
 				var result struct {
+					protocol.WarningOutcome
 					Version string `json:"version"`
 					Updated bool   `json:"updated"`
 				}
-				if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || result.Version != "v1.9.0" || !result.Updated {
+				if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || result.Version != "v1.9.0" || !result.Updated || len(result.Warnings) != 1 || result.Warnings[0].Diagnostic == nil || stderr.Len() != 0 {
 					t.Fatalf("result=%+v err=%v", result, err)
 				}
 			} else {
@@ -153,8 +155,12 @@ func TestReplacementConfirmation_CLIUsesVerifiedCandidate(t *testing.T) {
 			if scenario == "unknown no consent" && (!strings.Contains(stderr.String(), "unknown") || strings.Contains(stderr.String(), "dev-setup-local") || strings.Contains(stderr.String(), "UnrecognizedVersion")) {
 				t.Fatal("display-only label changed CLI JSON")
 			}
+			warningOutput := stderr.String()
+			if exit == cli.ExitOK {
+				warningOutput = stdout.String()
+			}
 			for _, warning := range []string{"settings", "subscriptions", "data loss", "does not roll back disk state"} {
-				if !strings.Contains(stderr.String(), warning) {
+				if !strings.Contains(warningOutput, warning) {
 					t.Fatalf("missing risk text %q", warning)
 				}
 			}

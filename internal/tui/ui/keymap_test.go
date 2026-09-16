@@ -222,7 +222,7 @@ func TestCatalog_KeysAppearInHandlerSource(t *testing.T) {
 		switch {
 		case b.Scope == ScopeGlobal:
 			return []string{
-				filepath.Join(tuiDir, "model.go"),
+				filepath.Join(tuiDir, "model.go"), filepath.Join(tuiDir, "diagnostics.go"),
 				filepath.Join(tuiDir, "modal.go"),
 			}
 		case b.Mode == ModeConfirm:
@@ -230,7 +230,7 @@ func TestCatalog_KeysAppearInHandlerSource(t *testing.T) {
 		case b.Mode == ModeSetup || b.Page == PageSetup:
 			return []string{
 				filepath.Join(tuiDir, "pages", "setup", "model.go"),
-				filepath.Join(tuiDir, "model.go"),
+				filepath.Join(tuiDir, "model.go"), filepath.Join(tuiDir, "diagnostics.go"),
 			}
 		case b.Page == PageOverview:
 			return []string{filepath.Join(tuiDir, "pages", "overview", "model.go")}
@@ -336,39 +336,39 @@ func TestRenderFooter_MatchesCurrentLayout(t *testing.T) {
 		got  string
 		want string
 	}{
-		{"rail", RenderRailFooter(), "↑/↓ page  Enter open  ? help  q quit"},
-		{"overview", RenderFooter(PageOverview, "", FooterOpt{}), "Esc back  ? help  q quit"},
-		{"proxies", RenderFooter(PageProxies, "", FooterOpt{}), "Esc back  Enter expand  t test  Ctrl+T test all  ? help  q quit"},
-		{"connections", RenderFooter(PageConnections, "", FooterOpt{}), "Esc back  / search  x close  p pause  Enter details  ? help  q quit"},
-		{"rules", RenderFooter(PageRules, "", FooterOpt{}), "Esc back  / search  r reload  u update  Ctrl+U update all  Enter details  ? help  q quit"},
-		{"logs", RenderFooter(PageLogs, "", FooterOpt{}), "Esc back  / search  p pause  w wrap  G newest  e export  Enter details  ? help  q quit"},
-		{"subscriptions", RenderFooter(PageSubscriptions, "", FooterOpt{}), "Esc back  Enter details  a add  Space toggle  p mode  r refresh  Ctrl+R refresh all  u use  d delete  ? help  q quit"},
-		{"webgui-off", RenderFooter(PageWebGUI, "", FooterOpt{}), "Esc back  ? help  q quit"},
-		{"webgui-on", RenderFooter(PageWebGUI, "", FooterOpt{WebGUIAvailable: true}), "Esc back  ↑/↓ panel  Tab move  Enter activate  o open  ? help  q quit"},
-		{"system", RenderFooter(PageSystem, "", FooterOpt{}), "Esc back  Enter activate  ? help  q quit"},
-		{"search", RenderFooter(PageConnections, ModeSearch, FooterOpt{}), "Type to filter  ←/→ cursor  ↑/↓ leave  Esc done"},
-		{"setup", RenderFooter(PageSetup, "", FooterOpt{}), "Tab fields  Enter continue  Esc back  Ctrl+C quit"},
-		{"detail", RenderFooter(PageConnections, ModeDetail, FooterOpt{}), "Enter/Esc close  ↑/↓ scroll  ? help  q quit"},
-		{"columns", RenderFooter(PageConnections, ModeColumns, FooterOpt{}), "↑/↓ column  Space toggle  Enter save  Esc cancel  ? help  q quit"},
-		{"form", RenderFooter(PageSubscriptions, ModeForm, FooterOpt{}), "Tab/Shift+Tab fields  Enter next/save  Esc cancel"},
-		{"ports", RenderFooter(PageSystem, ModePortsEdit, FooterOpt{}), "Type address  Enter apply  Esc cancel  ? help  q quit"},
-		{"logging", RenderFooter(PageSystem, ModeLoggingEdit, FooterOpt{}), "Type value  Enter apply  Esc cancel"},
+		{"rail", RenderRailFooter(), "F2 details  ↑/↓ page  Enter open  ? help  q quit"},
+		{"overview", RenderFooter(PageOverview, "", FooterOpt{}), "F2 details  Esc back  ? help  q quit"},
+		{"proxies", RenderFooter(PageProxies, "", FooterOpt{}), "F2 details  Esc back  Enter expand  t test  Ctrl+T test all  ? help  q quit"},
+		{"connections", RenderFooter(PageConnections, "", FooterOpt{}), "F2 details  Esc back  / search  x close  p pause  Enter details  ? help  q quit"},
+		{"rules", RenderFooter(PageRules, "", FooterOpt{}), "F2 details  Esc back  / search  r reload  u update  Ctrl+U update all  Enter details  ? help  q quit"},
+		{"logs", RenderFooter(PageLogs, "", FooterOpt{}), "F2 details  Esc back  / search  p pause  w wrap  G newest  e export  Enter details  ? help  q quit"},
+		{"subscriptions", RenderFooter(PageSubscriptions, "", FooterOpt{}), "F2 details  Esc back  Enter details  a add  Space toggle  p mode  r refresh  Ctrl+R refresh all  u use  d delete  ? help  q quit"},
+		{"webgui-off", RenderFooter(PageWebGUI, "", FooterOpt{}), "F2 details  Esc back  ? help  q quit"},
+		{"webgui-on", RenderFooter(PageWebGUI, "", FooterOpt{WebGUIAvailable: true}), "F2 details  Esc back  ↑/↓ panel  Tab move  Enter activate  o open  ? help  q quit"},
+		{"system", RenderFooter(PageSystem, "", FooterOpt{}), "F2 details  Esc back  Enter activate  ? help  q quit"},
+		{"search", RenderFooter(PageConnections, ModeSearch, FooterOpt{}), "F2 details  Type to filter  ←/→ cursor  ↑/↓ leave  Esc done"},
+		{"setup", RenderFooter(PageSetup, "", FooterOpt{}), "F2 details  Tab fields  Enter continue  Esc back  Ctrl+C quit"},
+		{"detail", RenderFooter(PageConnections, ModeDetail, FooterOpt{}), "F2 details  Enter/Esc close  ↑/↓ scroll  ? help  q quit"},
+		{"columns", RenderFooter(PageConnections, ModeColumns, FooterOpt{}), "F2 details  ↑/↓ column  Space toggle  Enter save  Esc cancel  ? help  q quit"},
+		{"form", RenderFooter(PageSubscriptions, ModeForm, FooterOpt{}), "F2 details  Tab/Shift+Tab fields  Enter next/save  Esc cancel"},
+		{"ports", RenderFooter(PageSystem, ModePortsEdit, FooterOpt{}), "F2 details  Type address  Enter apply  Esc cancel  ? help  q quit"},
+		{"logging", RenderFooter(PageSystem, ModeLoggingEdit, FooterOpt{}), "F2 details  Type value  Enter apply  Esc cancel"},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {
 			t.Fatalf("%s:\n got %q\nwant %q", tc.name, tc.got, tc.want)
 		}
 	}
-	if FooterProxies != "Esc back  Enter expand  t test  Ctrl+T test all  ? help  q quit" {
+	if FooterProxies != "F2 details  Esc back  Enter expand  t test  Ctrl+T test all  ? help  q quit" {
 		t.Fatalf("FooterProxies=%q", FooterProxies)
 	}
-	if FormHelp != "Tab/Shift+Tab fields  Enter next/save  Esc cancel" {
+	if FormHelp != "F2 details  Tab/Shift+Tab fields  Enter next/save  Esc cancel" {
 		t.Fatalf("FormHelp=%q", FormHelp)
 	}
-	if FooterRail != "↑/↓ page  Enter open  ? help  q quit" {
+	if FooterRail != "F2 details  ↑/↓ page  Enter open  ? help  q quit" {
 		t.Fatalf("FooterRail=%q", FooterRail)
 	}
-	if SetupFooter != "Tab fields  Enter continue  Esc back  Ctrl+C quit" {
+	if SetupFooter != "F2 details  Tab fields  Enter continue  Esc back  Ctrl+C quit" {
 		t.Fatalf("SetupFooter=%q", SetupFooter)
 	}
 }

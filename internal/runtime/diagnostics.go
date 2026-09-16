@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 )
@@ -15,6 +16,7 @@ type operationDiagnosticsContextKey struct{}
 type operationDiagnostics struct {
 	mu      sync.Mutex
 	records []diagnostics.Record
+	omitted uint64
 }
 
 func newOperationDiagnostics(ctx context.Context, key string) (context.Context, *operationDiagnostics) {
@@ -41,20 +43,29 @@ func collectWarning(ctx context.Context, component, event string, err error) {
 		return
 	}
 	batch.mu.Lock()
-	batch.records = append(batch.records, diagnostics.Record{Component: component, Event: event, Level: slog.LevelWarn, Err: err})
+	if len(batch.records) < protocol.MaxWarnings {
+		batch.records = append(batch.records, diagnostics.Record{Component: component, Event: event, Level: slog.LevelWarn, Err: err})
+	} else {
+		batch.omitted++
+	}
 	batch.mu.Unlock()
 }
 
-func (m *Manager) flushDiagnostics(ctx context.Context, batch *operationDiagnostics) {
-	if m.diagnosticReporter == nil || batch == nil {
-		return
+func (m *Manager) flushDiagnostics(ctx context.Context, batch *operationDiagnostics) protocol.WarningOutcome {
+	if batch == nil {
+		return protocol.WarningOutcome{}
 	}
 	batch.mu.Lock()
 	records := append([]diagnostics.Record(nil), batch.records...)
+	outcome := protocol.WarningOutcome{WarningsOmitted: batch.omitted}
+	batch.records = nil
 	batch.mu.Unlock()
 	for _, record := range records {
-		m.diagnosticReporter(ctx, record)
+		err := diagnostics.ReportError(ctx, m.diagnosticReporter, record)
+		snapshot, _ := diagnostics.Snapshot(err)
+		outcome.Warnings = append(outcome.Warnings, protocol.Warning{Code: snapshot.Code, Message: snapshot.Summary, Diagnostic: &snapshot})
 	}
+	return outcome
 }
 
 func operationSuccessKey(key string) bool {

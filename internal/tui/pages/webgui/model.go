@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -31,6 +32,7 @@ type statusResultMsg struct {
 }
 
 type mutationDoneMsg struct {
+	warnings  protocol.WarningOutcome
 	operation logging.OperationMetadata
 	err       error
 }
@@ -162,7 +164,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, nil
 	case mutationDoneMsg:
 		if typed.err != nil {
-			m.toast = typed.err.Error()
+			m.toast = diagnostics.EscapeTerminal(typed.err.Error())
 		} else {
 			m.toast = ""
 		}
@@ -257,8 +259,8 @@ func (m *Model) activateSelected() tea.Cmd {
 			Key: "panel:activate:" + panel.ID, Title: ui.ActivatePanelTitle, Object: panel.Name,
 			Impact: ui.ActivatePanelImpact, Rollback: ui.ActivatePanelRollback,
 			Execute: func() tea.Msg {
-				_, err := m.client.ActivatePanel(ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
-				return mutationDoneMsg{operation: operation, err: err}
+				result, err := m.client.ActivatePanel(ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
+				return mutationDoneMsg{operation: operation, err: err, warnings: result.WarningOutcome}
 			},
 		}
 	}
@@ -278,8 +280,8 @@ func (m *Model) installSelected() tea.Cmd {
 			Key: "panel:install:" + panel.ID, Title: ui.InstallPanelTitle, Object: panel.Name,
 			Impact: ui.InstallPanelImpact, Rollback: ui.InstallPanelRollback,
 			Execute: func() tea.Msg {
-				_, err := m.client.InstallPanel(ctx, panel.ID, protocol.PanelInstallRequest{OperationID: operationID})
-				return mutationDoneMsg{operation: operation, err: err}
+				result, err := m.client.InstallPanel(ctx, panel.ID, protocol.PanelInstallRequest{OperationID: operationID})
+				return mutationDoneMsg{operation: operation, err: err, warnings: result.WarningOutcome}
 			},
 		}
 	}
@@ -299,8 +301,8 @@ func (m *Model) updateSelected() tea.Cmd {
 			Key: "panel:update:" + panel.ID, Title: ui.UpdatePanelTitle, Object: panel.Name,
 			Impact: ui.UpdatePanelImpact, Rollback: ui.UpdatePanelRollback,
 			Execute: func() tea.Msg {
-				_, err := m.client.UpdatePanel(ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
-				return mutationDoneMsg{operation: operation, err: err}
+				result, err := m.client.UpdatePanel(ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
+				return mutationDoneMsg{operation: operation, err: err, warnings: result.WarningOutcome}
 			},
 		}
 	}
@@ -320,8 +322,8 @@ func (m *Model) rollbackSelected() tea.Cmd {
 			Key: "panel:rollback:" + panel.ID, Title: ui.RollbackPanelTitle, Object: panel.Name,
 			Impact: ui.RollbackPanelImpact, Rollback: ui.RollbackPanelRollback,
 			Execute: func() tea.Msg {
-				_, err := m.client.RollbackPanel(ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
-				return mutationDoneMsg{operation: operation, err: err}
+				result, err := m.client.RollbackPanel(ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
+				return mutationDoneMsg{operation: operation, err: err, warnings: result.WarningOutcome}
 			},
 		}
 	}
@@ -347,8 +349,8 @@ func (m *Model) uninstallSelected() tea.Cmd {
 			Key: "panel:uninstall:" + panel.ID, Title: ui.UninstallPanelTitle, Object: panel.Name,
 			Impact: ui.UninstallPanelImpact, Rollback: ui.UninstallPanelRollback,
 			Execute: func() tea.Msg {
-				_, err := m.client.UninstallPanel(ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
-				return mutationDoneMsg{operation: operation, err: err}
+				result, err := m.client.UninstallPanel(ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
+				return mutationDoneMsg{operation: operation, err: err, warnings: result.WarningOutcome}
 			},
 		}
 	}
@@ -368,8 +370,8 @@ func (m *Model) reinstallSelected() tea.Cmd {
 			Key: "panel:reinstall:" + panel.ID, Title: ui.ReinstallPanelTitle, Object: panel.Name,
 			Impact: ui.ReinstallPanelImpact, Rollback: ui.ReinstallPanelRollback,
 			Execute: func() tea.Msg {
-				_, err := m.client.ReinstallPanel(ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
-				return mutationDoneMsg{operation: operation, err: err}
+				result, err := m.client.ReinstallPanel(ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
+				return mutationDoneMsg{operation: operation, err: err, warnings: result.WarningOutcome}
 			},
 		}
 	}

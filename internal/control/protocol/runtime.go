@@ -135,12 +135,14 @@ type DelayTestRequest struct {
 }
 
 type MutationResult struct {
+	WarningOutcome
 	Schema      string `json:"schema"`
 	OperationID string `json:"operation_id"`
 	Revision    uint64 `json:"revision,omitempty"`
 }
 
 type CoreInstallResult struct {
+	WarningOutcome
 	Schema   string `json:"schema"`
 	Version  string `json:"version"`
 	Updated  bool   `json:"updated"`
@@ -149,6 +151,8 @@ type CoreInstallResult struct {
 }
 
 type StreamEvent struct {
+	Terminal   bool            `json:"terminal,omitempty"`
+	Diagnostic *Diagnostic     `json:"diagnostic,omitempty"`
 	Schema     string          `json:"schema"`
 	Stream     string          `json:"stream"`
 	ObservedAt time.Time       `json:"observed_at,omitzero"`

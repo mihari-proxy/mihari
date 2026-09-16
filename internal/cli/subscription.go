@@ -220,7 +220,7 @@ func newSubscriptionRemoveCommand(dependencies Dependencies, options *runOptions
 		if options.json {
 			return renderJSON(command.OutOrStdout(), result)
 		}
-		return printMutation(command.OutOrStdout(), result)
+		return renderMutation(command, options, result)
 	}}
 	command.Flags().BoolVar(&yes, "yes", false, "confirm permanent removal")
 	command.Flags().Uint64Var(&revision, "if-revision", 0, "require this state revision")
@@ -249,7 +249,10 @@ func renderSubscriptionResult(command *cobra.Command, options *runOptions, resul
 	if options.json {
 		return renderJSON(command.OutOrStdout(), result)
 	}
-	return printSubscription(command, result.Subscription)
+	if err := printSubscription(command, result.Subscription); err != nil {
+		return err
+	}
+	return renderWarnings(command.ErrOrStderr(), result.WarningOutcome)
 }
 
 func printSubscription(command *cobra.Command, profile protocol.Subscription) error {

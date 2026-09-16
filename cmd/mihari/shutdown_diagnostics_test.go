@@ -18,7 +18,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/platform"
 )
 
-func TestRunDaemonWith_CloseFailureUsesIndependentSafeOutlet(t *testing.T) {
+func TestRunDaemonWith_CloseFailureUsesIndependentOriginalOutlet(t *testing.T) {
 	for _, test := range []struct{ name, fail, output, openError string }{
 		{"stdout", "stdout", "enabled", ""},
 		{"stderr", "stderr", "enabled", ""},
@@ -117,14 +117,15 @@ func TestRunDaemonWith_CloseFailureUsesIndependentSafeOutlet(t *testing.T) {
 				if strings.Count(got, "logging: cleanup:") != 1 || strings.Count(got, "\n") != 1 {
 					t.Fatalf("cleanup report count=%d lines=%d want one", strings.Count(got, "logging: cleanup:"), strings.Count(got, "\n"))
 				}
-				if test.openError == "settings" && got != "logging: cleanup: close logging resources failed\n" {
-					t.Fatal("early close exposed unregistered cause")
-				}
-				for _, raw := range []string{"shutdown-secret", "/private/", "secret-data", "\r"} {
-					if strings.Contains(got, raw) {
-						t.Fatal("cleanup report leaked secret, path or CR")
+				for _, raw := range []string{"shutdown-secret", "/private/secret-data/logs"} {
+					if !strings.Contains(got, raw) {
+						t.Fatal("cleanup report lost original cause")
 					}
 				}
+				if strings.Contains(got, "\r") {
+					t.Fatal("cleanup report injected carriage return")
+				}
+
 			} else if output.Len() != 0 {
 				t.Fatal("disabled outlet emitted output")
 			}

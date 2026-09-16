@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"strings"
 	"testing"
@@ -165,5 +166,14 @@ func TestPanelDiagnostic_CLIMetadata(t *testing.T) {
 		if exit != ExitOK || client.operation != (logging.OperationMetadata{ID: "business-id", Name: "panel." + action}) {
 			t.Fatalf("exit=%d stderr=%s metadata=%#v", exit, stderr.String(), client.operation)
 		}
+	}
+}
+
+func TestPanelOpen_OriginalBrowserFailureReachesDetails(t *testing.T) {
+	var out, errs bytes.Buffer
+	fake := &fakePanelClient{openURL: "https://fixture.invalid?token=synthetic"}
+	exit := Execute(context.Background(), []string{"panel", "open", "zashboard", "--json"}, &out, &errs, Dependencies{PanelClient: fake, OpenBrowser: func(string) error { return errors.New("browser token=fixture-original") }})
+	if exit != ExitInternal || !strings.Contains(errs.String(), "token=fixture-original") {
+		t.Fatalf("exit=%d errors=%s", exit, &errs)
 	}
 }

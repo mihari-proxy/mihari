@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -167,8 +168,7 @@ func (m *Model) executionText() string {
 func (m *Model) refreshSavedSubscription() tea.Cmd {
 	reader, ok := m.client.(subscriptionReader)
 	if !ok {
-		m.fail("Refresh unavailable", protocol.APIError{Code: protocol.CodeInvalidState, Message: "Reconnect to a compatible daemon to refresh this saved subscription."})
-		return nil
+		return m.localFailure("Refresh unavailable", protocol.APIError{Code: protocol.CodeInvalidState, Message: "Reconnect to a compatible daemon to refresh this saved subscription."})
 	}
 	id, revision := m.addedSubscription.ID, m.status.Revision
 	ctx, gen, operationID := m.beginExecution("Refreshing saved subscription")
@@ -178,6 +178,6 @@ func (m *Model) refreshSavedSubscription() tea.Cmd {
 		if err == nil {
 			profile = &result.Subscription
 		}
-		return actionResultMsg{gen: gen, next: stepGeoIP, revision: result.Revision, subscription: profile, err: err}
+		return actionResultMsg{cancelled: diagnostics.NormalCancellation(ctx, err), warnings: result.WarningOutcome, gen: gen, next: stepGeoIP, revision: result.Revision, subscription: profile, err: err}
 	}
 }

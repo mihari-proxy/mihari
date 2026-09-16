@@ -4,9 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 // InstallationPlanRequest selects a repair or fresh installation preview.
@@ -113,7 +115,7 @@ func VerifyInstallationPlan(plan InstallationPlan) error {
 	}
 	digest, err := installationPlanDigest(plan)
 	if err != nil || digest != plan.PlanSHA256 {
-		return invalidInstallationPlan()
+		return invalidInstallationPlan(err)
 	}
 	return nil
 }
@@ -121,7 +123,7 @@ func VerifyInstallationPlan(plan InstallationPlan) error {
 func validateInstallationPlanWireSize(plan InstallationPlan) error {
 	raw, err := json.Marshal(plan)
 	if err != nil || len(raw) > MaxInstallationPlanBytes {
-		return invalidInstallationPlan()
+		return invalidInstallationPlan(err)
 	}
 	return nil
 }
@@ -145,7 +147,7 @@ func installationPlanDigest(plan InstallationPlan) (string, error) {
 		Delete:          plan.Delete,
 	})
 	if err != nil {
-		return "", invalidInstallationPlan()
+		return "", invalidInstallationPlan(err)
 	}
 	if len(raw) > MaxInstallationPlanBytes {
 		return "", invalidInstallationPlan()
@@ -242,6 +244,10 @@ func cloneInstallationEntries(entries []InstallationEntry) []InstallationEntry {
 	return clone
 }
 
-func invalidInstallationPlan() error {
-	return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid installation plan"}
+func invalidInstallationPlan(causes ...error) error {
+	api := protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid installation plan"}
+	if cause := errors.Join(causes...); cause != nil {
+		return diagnostics.Wrap(api, cause)
+	}
+	return api
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -1181,7 +1182,7 @@ func TestModel_LoggingRevisionResetRejectsOldEventAndPageObservationUntilFloor(t
 
 	current := protocol.LoggingStatus{Revision: 11, Level: "warn", MaxSizeMB: 20, MaxFiles: 5}
 	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: current})
-	if !model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 11 || model.loggingStatus != current {
+	if !model.loggingLoaded || model.loggingRevision == nil || *model.loggingRevision != 11 || !reflect.DeepEqual(model.loggingStatus, current) {
 		t.Fatalf("current observation not accepted: loaded=%v revision=%v status=%+v", model.loggingLoaded, model.loggingRevision, model.loggingStatus)
 	}
 	if applier.count() != applyCount+1 || page.synced != syncCount+1 {
@@ -1251,11 +1252,11 @@ func TestModel_LoggingObservationSendsSynchronizedStateToSystem(t *testing.T) {
 	model.pages[ui.PageSystem] = page
 	status := protocol.LoggingStatus{Revision: 0, Level: "debug", MaxSizeMB: 100, MaxFiles: 10}
 	model.applySessionEvent(session.Event{Kind: session.EventLogging, Epoch: 1, Logging: status})
-	if page.synced != 1 || page.lastSync.Epoch != 1 || !page.lastSync.Available || page.lastSync.Status != status {
+	if page.synced != 1 || page.lastSync.Epoch != 1 || !page.lastSync.Available || !reflect.DeepEqual(page.lastSync.Status, status) {
 		t.Fatalf("sync count=%d message=%+v", page.synced, page.lastSync)
 	}
 	model.SetLocalLoggingHealth(testLoggingHealth{available: true})
-	if page.synced != 2 || !page.lastSync.Available || page.lastSync.Status != status {
+	if page.synced != 2 || !page.lastSync.Available || !reflect.DeepEqual(page.lastSync.Status, status) {
 		t.Fatalf("health refresh lost synchronized status: count=%d message=%+v", page.synced, page.lastSync)
 	}
 }
@@ -1280,7 +1281,7 @@ func TestModel_LoggingPageObservationAdvancesGlobalRevision(t *testing.T) {
 	if model.status.Revision != 6 || model.loggingRevision == nil || *model.loggingRevision != 6 {
 		t.Fatalf("global=%d logging=%v", model.status.Revision, model.loggingRevision)
 	}
-	if page.synced != 1 || page.lastSync.Status != after {
+	if page.synced != 1 || !reflect.DeepEqual(page.lastSync.Status, after) {
 		t.Fatalf("syncs=%d last=%+v", page.synced, page.lastSync)
 	}
 }

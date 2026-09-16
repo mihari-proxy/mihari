@@ -2,6 +2,7 @@ package protocol
 
 // SystemProxyStatus is the versioned status DTO for OS system proxy.
 type SystemProxyStatus struct {
+	WarningOutcome
 	Schema    string              `json:"schema"`
 	Revision  uint64              `json:"revision"`
 	Desired   bool                `json:"desired"`

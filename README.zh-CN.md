@@ -55,7 +55,7 @@ TUI 订阅表格的 Name 和 Traffic 列按内容分配宽度，分别最多占 
 
 订阅下载 Mode 将 `auto` 显示为 **PROXY w Fallback to DIRECT**。回退覆盖主订阅 YAML 的连接超时和成功响应正文读取超时等可重试网络错误；HTTP 错误、无效文档不触发回退。每次代理/直连尝试保留 30 秒预算，daemon 的 Add/Refresh 整次执行上限为 120 秒，CLI/TUI 每条等待最多 180 秒以容纳有界回滚和响应。更短的调用方 deadline 与主动取消仍优先，批量刷新逐条计时。窄列表必要时整列隐藏 Mode，进入详情可查看完整值。Provider 下载策略及 Proxies 页 Routing Mode 独立于此设置。
 
-mihomo HTTP 失败的原始报错与上游状态会写入诊断日志，范围包括 gateway 和 WebSocket 握手。文件日志及导出不脱敏，保留错误自带的凭据、URL、路径与配置片段以便排查；用户侧仍显示简洁关键原因。
+mihomo HTTP 失败的原始报错与上游状态会写入诊断日志，范围包括 gateway 和 WebSocket 握手。日志、导出及本地 CLI/TUI 错误汇报均不脱敏，保留错误自带的凭据、URL、路径与配置片段。CLI 分段展示概要、错误分类和原始详情，JSON 增加可选诊断和 warnings，业务退出码保持不变。TUI 所有页面均可按 F2 打开统一诊断历史，滚动查看详情并复制原文。终端控制字符仅在显示时转义。
 
 ## 快速开始
 

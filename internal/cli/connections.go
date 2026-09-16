@@ -48,7 +48,7 @@ func newConnectionsCommand(dependencies Dependencies, options *runOptions) *cobr
 			if options.json {
 				return renderJSON(command.OutOrStdout(), result)
 			}
-			return printMutation(command.OutOrStdout(), result)
+			return renderMutation(command, options, result)
 		},
 	})
 	confirmed := false
@@ -73,7 +73,7 @@ func newConnectionsCommand(dependencies Dependencies, options *runOptions) *cobr
 			if options.json {
 				return renderJSON(command.OutOrStdout(), result)
 			}
-			return printMutation(command.OutOrStdout(), result)
+			return renderMutation(command, options, result)
 		},
 	}
 	closeAll.Flags().BoolVar(&confirmed, "yes", false, "confirm closing every connection")

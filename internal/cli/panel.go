@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/spf13/cobra"
@@ -161,7 +162,7 @@ func newPanelOpenCommand(dependencies Dependencies, options *runOptions) *cobra.
 				openBrowser = platform.OpenBrowser
 			}
 			if err := openBrowser(open.OpenURL); err != nil {
-				return protocol.APIError{Code: protocol.CodeInternal, Message: "failed to open browser"}
+				return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "failed to open browser"}, err)
 			}
 			// Never print the open URL or token (human or JSON default CLI output).
 			if options.json {
@@ -262,7 +263,10 @@ func renderMutation(command *cobra.Command, options *runOptions, result protocol
 	if options.json {
 		return renderJSON(command.OutOrStdout(), result)
 	}
-	return printMutation(command.OutOrStdout(), result)
+	if err := printMutation(command.OutOrStdout(), result); err != nil {
+		return err
+	}
+	return renderWarnings(command.ErrOrStderr(), result.WarningOutcome)
 }
 
 func emptyDash(value string) string {

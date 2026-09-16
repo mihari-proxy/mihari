@@ -83,10 +83,17 @@ func TestSelfUpdate_ReplacementConfirmation(t *testing.T) {
 					if code != ExitOK || fake.calls != 1 || fake.consent.Yes != yes || !json.Valid(out.Bytes()) {
 						t.Fatalf("code=%d calls=%d consent=%+v out=%q err=%q", code, fake.calls, fake.consent, out.String(), stderr.String())
 					}
-					if risky && !strings.Contains(stderr.String(), update.ReplacementWarning(preview)) {
-						t.Fatalf("missing warning: %q", stderr.String())
+					var outcome protocol.WarningOutcome
+					if err := json.Unmarshal(out.Bytes(), &outcome); err != nil {
+						t.Fatal(err)
 					}
-					if !risky && stderr.Len() != 0 {
+					if risky && (len(outcome.Warnings) != 1 || outcome.Warnings[0].Message != update.ReplacementWarning(preview)) {
+						t.Fatal("structured compatibility warning missing")
+					}
+					if !risky && len(outcome.Warnings) != 0 {
+						t.Fatal("unnecessary compatibility warning")
+					}
+					if stderr.Len() != 0 {
 						t.Fatalf("unexpected warning: %q", stderr.String())
 					}
 				}

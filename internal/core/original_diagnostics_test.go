@@ -133,7 +133,7 @@ func TestCoreOriginal_HTTPFailurePreservesBodyAndClose(t *testing.T) {
 				return &http.Response{StatusCode: 503, Body: body, Request: r, Header: make(http.Header)}, nil
 			})})
 			var detail *diagnostics.HTTPError
-			if !errors.As(err, &detail) || detail.Status != 503 || detail.URL == "" || !strings.HasPrefix(detail.Body, "token=fixture\n") || !strings.Contains(detail.Body, "[truncated]") {
+			if !errors.As(err, &detail) || detail.Status != 503 || detail.URL == "" || !strings.HasPrefix(detail.Body, "token=fixture\n") || !strings.Contains(detail.Body, "[truncated]") || !detail.BodyTruncated {
 				t.Fatal("HTTP cause/body lost")
 			}
 			if !errors.Is(err, cause) || body.closes != 1 || body.readBytes != diagnostics.MaxHTTPBodyBytes+1 {

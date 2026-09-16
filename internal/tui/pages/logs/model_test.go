@@ -1,6 +1,8 @@
 package logs
 
 import (
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -403,4 +405,44 @@ func TestView_PositionIndicator(t *testing.T) {
 
 func logAt(message, level string, second int64) Entry {
 	return Entry{ObservedAt: time.Unix(second, 0), Log: protocol.LogEntry{Level: level, Message: message}}
+}
+
+func TestLogDetail_SerializationFailureIsInspectable(t *testing.T) {
+	model := New(2)
+	model.SetSize(100, 24)
+	model.Append(Entry{ObservedAt: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC), Log: protocol.LogEntry{Level: "error", Message: "token=fixture-original"}})
+	model.focus = focusRow
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("serialization failure has no diagnostic")
+	}
+	message, ok := command().(ui.DiagnosticMsg)
+	var cause *json.MarshalerError
+	if !ok || message.Page != ui.PageLogs || !errors.As(message.Err, &cause) {
+		t.Fatalf("diagnostic=%#v", message)
+	}
+	if !strings.Contains(model.View(), "token=fixture-original") {
+		t.Fatal("original log lost on serialization failure")
+	}
+	_, command = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if command != nil {
+		t.Fatal("detail redraw repeated the occurrence")
+	}
+}
+
+func TestLogDetail_OriginalControlsAreEscapedWithoutRemoval(t *testing.T) {
+	model := New(2)
+	model.SetSize(120, 30)
+	model.Append(logAt("token=fixture\x1b[31m\x00", "error", 1))
+	model.focus = focusRow
+	model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	view := model.View()
+	for _, want := range []string{`token=fixture\x1b[31m\x00`, `token=fixture\u001b[31m\u0000`} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %q: %q", want, view)
+		}
+	}
+	if model.buffer.Visible()[0].Log.Message != "token=fixture\x1b[31m\x00" {
+		t.Fatal("original buffer was changed")
+	}
 }

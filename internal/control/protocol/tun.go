@@ -2,6 +2,7 @@ package protocol
 
 // TunStatus is the versioned status DTO for managed TUN mode.
 type TunStatus struct {
+	WarningOutcome
 	Schema        string       `json:"schema"`
 	Revision      uint64       `json:"revision"`
 	DesiredEnable bool         `json:"desired_enable"`

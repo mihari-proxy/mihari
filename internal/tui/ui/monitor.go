@@ -33,7 +33,7 @@ type OperationRecord struct {
 	// Action is the short verb (Enable / Disable / Force enable). Empty for
 	// operations that are not System proxy or TUN.
 	Action string
-	// Detail is a sanitized one-line result summary. Empty when there is no
+	// Detail is a one-line result summary. Empty when there is no
 	// extra ledger text beyond Object and State.
 	Detail string
 	State  string

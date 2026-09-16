@@ -99,6 +99,8 @@ mihari's architectural invariants are recorded in `AGENTS.md` in the repository 
 
 Before changing these boundaries, please explain the impact in an Issue/PR first.
 
+Logs, exports, and authenticated local CLI/TUI error reports preserve original diagnostic content without redaction. Capture remains bounded and truncation is explicit. CLI text and JSON, TUI F2 details, and logs share the diagnostic snapshot; optional diagnostics and warnings retain existing business success, error codes, and exit codes. Terminal display escapes control characters; copying and JSON preserve the captured text. Local diagnostic history is not exposed through the browser gateway.
+
 
 The narrow Unix write exceptions are a root installer's locked, stopped transaction for business-file migration and installation resources, and app-owned atomic maintenance of the fixed channel sidecar under the selected install.lock with pending-transaction refusal. TUI logging writes only its current UID's U logs and exports; Windows/explicit private P retain their layout. This grants no arbitrary CLI/TUI business-file writes. See [Unix layout and recovery](../docs/unix-layout.md).
 

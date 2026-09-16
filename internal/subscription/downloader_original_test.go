@@ -49,7 +49,7 @@ func TestDownloader_StatusBodyPreservesOriginalWithinBudget(t *testing.T) {
 	_, err := d.Fetch(context.Background(), FetchRequest{URL: "https://fixture.invalid/subscription?token=fixture"})
 	var detail *diagnostics.HTTPError
 	var api protocol.APIError
-	if !errors.As(err, &detail) || !strings.HasPrefix(detail.Body, "token=fixture\n") || !strings.Contains(detail.Body, "[truncated]") || detail.URL != "https://fixture.invalid/subscription?token=fixture" {
+	if !errors.As(err, &detail) || !strings.HasPrefix(detail.Body, "token=fixture\n") || !strings.Contains(detail.Body, "[truncated]") || !detail.BodyTruncated || detail.URL != "https://fixture.invalid/subscription?token=fixture" {
 		t.Fatal("original HTTP failure details missing")
 	}
 	if body.readBytes != diagnostics.MaxHTTPBodyBytes+1 || body.closes != 1 {

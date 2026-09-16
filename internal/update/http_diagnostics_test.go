@@ -87,7 +87,7 @@ func TestUpdateHTTP_StatusBodyBoundedAndCloseCauseRetained(t *testing.T) {
 			})})
 			var detail *diagnostics.HTTPError
 			var api protocol.APIError
-			if !errors.As(err, &detail) || detail.Status != 503 || detail.URL == "" || !strings.HasPrefix(detail.Body, "token=fixture\n") || !strings.Contains(detail.Body, "[truncated]") {
+			if !errors.As(err, &detail) || detail.Status != 503 || detail.URL == "" || !strings.HasPrefix(detail.Body, "token=fixture\n") || !strings.Contains(detail.Body, "[truncated]") || !detail.BodyTruncated {
 				t.Fatal("HTTP failure source/body missing")
 			}
 			if !errors.Is(err, closeCause) || body.closes != 1 || body.readBytes != diagnostics.MaxHTTPBodyBytes+1 {

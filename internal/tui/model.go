@@ -12,6 +12,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/buildinfo"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/state"
@@ -30,56 +31,58 @@ import (
 )
 
 type Model struct {
-	pages                map[ui.PageID]ui.Page
-	rail                 []ui.PageID
-	railIndex            int
-	active               ui.PageID
-	focus                ui.Focus
-	inputMode            ui.InputMode
-	modal                *Modal
-	proxyNamesChecked    bool
-	proxyNamesPending    []string
-	width                int
-	height               int
-	theme                ui.Theme
-	events               <-chan session.Event
-	connected            bool
-	stale                bool
-	reconnecting         bool
-	mutationsEnabled     bool
-	status               protocol.Status
-	statusEpoch          uint64
-	statusEpochKnown     bool
-	traffic              protocol.TrafficSample
-	memory               protocol.MemorySample
-	connections          protocol.ConnectionList
-	core                 protocol.CoreStatus
-	subscriptions        protocol.SubscriptionList
-	webGUI               *protocol.WebGUIStatus
-	monitor              MonitorModel
-	operations           []ui.OperationRecord
-	confirmationCmd      tea.Cmd
-	confirmationCancel   tea.Cmd
-	discardPrepared      func(update.PreparedUpdate) error
-	setupObserved        bool
-	setupReturn          ui.PageID
-	pendingActions       map[string]ui.Action
-	globalState          ui.GlobalState
-	lastObservedAt       time.Time // last daemon stream sample; shown in stale footer
-	relaunchRequested    bool
-	relaunchWarning      string
-	preparedUpdate       *update.PreparedUpdate
-	installation         *installationUI
-	preparedInstallation *app.InstallationExecuteRequest
-	preparedUninstall    bool
-	now                  time.Time // spinner clock; advanced only while work is pending
-	spinning             bool      // true while a spinner tick loop is scheduled
-	spinGen              uint64    // generation so only the latest tick loop may reschedule
+	diagnosticWindow       *diagnosticWindow
+	localDiagnosticHistory *diagnostics.History
+	pages                  map[ui.PageID]ui.Page
+	rail                   []ui.PageID
+	railIndex              int
+	active                 ui.PageID
+	focus                  ui.Focus
+	inputMode              ui.InputMode
+	modal                  *Modal
+	proxyNamesChecked      bool
+	proxyNamesPending      []string
+	width                  int
+	height                 int
+	theme                  ui.Theme
+	events                 <-chan session.Event
+	connected              bool
+	stale                  bool
+	reconnecting           bool
+	mutationsEnabled       bool
+	status                 protocol.Status
+	statusEpoch            uint64
+	statusEpochKnown       bool
+	traffic                protocol.TrafficSample
+	memory                 protocol.MemorySample
+	connections            protocol.ConnectionList
+	core                   protocol.CoreStatus
+	subscriptions          protocol.SubscriptionList
+	webGUI                 *protocol.WebGUIStatus
+	monitor                MonitorModel
+	operations             []ui.OperationRecord
+	confirmationCmd        tea.Cmd
+	confirmationCancel     tea.Cmd
+	discardPrepared        func(update.PreparedUpdate) error
+	setupObserved          bool
+	setupReturn            ui.PageID
+	pendingActions         map[string]ui.Action
+	globalState            ui.GlobalState
+	lastObservedAt         time.Time // last daemon stream sample; shown in stale footer
+	relaunchRequested      bool
+	relaunchWarning        string
+	preparedUpdate         *update.PreparedUpdate
+	installation           *installationUI
+	preparedInstallation   *app.InstallationExecuteRequest
+	preparedUninstall      bool
+	now                    time.Time // spinner clock; advanced only while work is pending
+	spinning               bool      // true while a spinner tick loop is scheduled
+	spinGen                uint64    // generation so only the latest tick loop may reschedule
 	// OS service observation for top-right status badge (local, not daemon IPC).
 	serviceCtrl   systempage.ServiceController
 	serviceStatus service.StatusKind
 	serviceLoaded bool
-	// Sanitized reconnect reason shown after the stale footer label.
+	// Short reconnect reason shown after the stale footer label.
 	daemonHint string
 	// Daemon network features for Overview strip (via control client when live).
 	pageCtx         context.Context
@@ -171,7 +174,8 @@ func newModelWithPageClients(proxyClient proxypage.Client, connectionsClient con
 	pages[ui.PageSystem] = systempage.New(nil, nil)
 	active := rail[0]
 	model := Model{
-		pages: pages, rail: rail, active: active,
+		diagnosticWindow: newDiagnosticWindow(),
+		pages:            pages, rail: rail, active: active,
 		focus: ui.Focus{Area: ui.FocusRail, Page: active},
 		width: 100, height: 28, theme: ui.DefaultTheme(), monitor: NewMonitor(),
 		pendingActions: make(map[string]ui.Action),
@@ -210,7 +214,7 @@ func (model *Model) SetSelfUpdateChannel(read func(context.Context) (string, err
 // RelaunchRequested reports whether the updated binary should enter the TUI.
 func (model Model) RelaunchRequested() bool { return model.relaunchRequested }
 
-// RelaunchWarning returns sanitized partial-success detail for the restored terminal.
+// RelaunchWarning returns a partial-success summary for the restored terminal.
 func (model Model) RelaunchWarning() string { return model.relaunchWarning }
 
 type pageClient interface {
@@ -236,6 +240,9 @@ func newModelWithClientContext(ctx context.Context, events <-chan session.Event,
 	model.events = events
 	model.pageCtx = ctx
 	model.networkClient = client
+	if source, ok := client.(diagnosticClient); ok {
+		model.diagnosticWindow.client = source
+	}
 	return model
 }
 
@@ -245,7 +252,7 @@ const servicePollInterval = 2 * time.Second
 type servicePollTickMsg struct{}
 
 func (model Model) Init() tea.Cmd {
-	return tea.Batch(waitSessionEvent(model.events), model.loadRootServiceStatus(), model.scheduleServicePoll(), model.inspectInstallation())
+	return tea.Batch(waitSessionEvent(model.events), model.loadRootServiceStatus(), model.scheduleServicePoll(), model.inspectInstallation(), model.scheduleDiagnosticPoll())
 }
 
 func (model Model) scheduleServicePoll() tea.Cmd {
@@ -336,6 +343,9 @@ func (model *Model) syncSystemNetworkStatus() {
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	model.showDuplicateNames()
 	if key, ok := message.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" {
+		if model.diagnosticWindow != nil {
+			model.diagnosticWindow.close()
+		}
 		if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
 			page.Stop()
 		}
@@ -344,6 +354,10 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return model, tea.Quit
 	}
+	if command, consumed := model.updateDiagnostics(message); consumed {
+		return model, command
+	}
+	model.observeDiagnosticMessage(message)
 	if command, consumed := model.updateInstallation(message); consumed {
 		return model, command
 	}
@@ -779,11 +793,20 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 			page.Observe(event.Connections, event.ObservedAt)
 		}
 	case session.EventCore:
+		if event.Err != nil {
+			if page, ok := model.pages[ui.PageProxies].(*proxypage.Model); ok {
+				page.InvalidateGroups()
+			}
+			break
+		}
 		model.core = event.Core
 		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
 			page.ObserveDaemon(model.status, model.core)
 		}
 	case session.EventSubscriptions:
+		if event.Err != nil {
+			break
+		}
 		model.subscriptions = event.Subscriptions
 		if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
 			page.SetSubscriptions(event.Subscriptions)
@@ -809,21 +832,36 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 			}
 		}
 	case session.EventPreferences:
+		if event.Err != nil {
+			break
+		}
 		if page, ok := model.pages[ui.PageConnections].(*connectionspage.Model); ok {
 			page.SetPreferences(event.Preferences)
 		}
 	case session.EventRules:
+		if event.Err != nil {
+			break
+		}
 		if page, ok := model.pages[ui.PageRules].(*rulespage.Model); ok {
 			page.SetRules(event.Rules)
 		}
 	case session.EventRuleProviders:
+		if event.Err != nil {
+			break
+		}
 		if page, ok := model.pages[ui.PageRules].(*rulespage.Model); ok {
 			page.SetProviders(event.RuleProviders)
 		}
 	case session.EventWebGUI:
+		if event.Err != nil {
+			break
+		}
 		webGUI := event.WebGUI
 		model.webGUI = &webGUI
 	case session.EventLogging:
+		if event.Err != nil {
+			break
+		}
 		model.observeLogging(event.Epoch, event.Logging)
 	case session.EventLog:
 		if page, ok := model.pages[ui.PageLogs].(*logspage.Model); ok {
@@ -1359,6 +1397,9 @@ func activeSubscriptionNameCompact(list protocol.SubscriptionList) string {
 }
 
 func (model Model) footerGlobalSegment() string {
+	if summary := model.diagnosticResourceSummary(); summary != "" {
+		return summary + " · F2 details"
+	}
 	if model.needsSpinner() {
 		label := ui.GlobalStatePendingLabel
 		if model.globalState != ui.StatePending && model.globalState != "" {
@@ -1436,6 +1477,11 @@ func (model *Model) refreshDaemonHintForService() {
 
 // View renders the active shell or setup layout and overlays the current modal.
 func (model Model) View() tea.View {
+	if model.diagnosticWindow != nil && model.diagnosticWindow.open {
+		view := tea.NewView(model.diagnosticWindow.view(model.width, model.height))
+		view.AltScreen, view.WindowTitle = true, ui.AppName
+		return view
+	}
 	if model.installation != nil && model.installation.visible {
 		view := tea.NewView(model.installation.view(model.width, model.height))
 		view.AltScreen = true

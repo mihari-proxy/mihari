@@ -31,7 +31,7 @@ func TestHTTPDiagnostics_FailureBodyReadIsBoundedAtCollection(t *testing.T) {
 	})})
 	_, err := c.Version(context.Background())
 	var detail *diagnostics.HTTPError
-	if !errors.As(err, &detail) || len(detail.Body) != diagnostics.MaxHTTPBodyBytes || !strings.HasSuffix(detail.Body, " [truncated]") {
+	if !errors.As(err, &detail) || len(detail.Body) != diagnostics.MaxHTTPBodyBytes || !strings.HasSuffix(detail.Body, " [truncated]") || !detail.BodyTruncated {
 		t.Fatal("HTTP failure did not retain the bounded diagnostic body")
 	}
 	if body.read != diagnostics.MaxHTTPBodyBytes+1 || body.closed != 1 {

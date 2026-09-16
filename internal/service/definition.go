@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 const (
@@ -209,7 +211,7 @@ func (OSCommandRunner) Run(ctx context.Context, argv []string) (CommandResult, e
 		return result, nil
 	}
 	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
-		return CommandResult{}, invalidServiceState("service manager is unavailable")
+		return CommandResult{}, invalidServiceState("service manager is unavailable", err)
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
@@ -218,15 +220,19 @@ func (OSCommandRunner) Run(ctx context.Context, argv []string) (CommandResult, e
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return CommandResult{}, err
 	}
-	return CommandResult{}, invalidServiceState("service manager query failed")
+	return CommandResult{}, invalidServiceState("service manager query failed", err)
 }
 
 func unixAbs(path string) bool {
 	return strings.HasPrefix(path, "/") && !strings.Contains(path, "\x00")
 }
 
-func invalidServiceState(message string) error {
-	return protocol.APIError{Code: protocol.CodeInvalidState, Message: message}
+func invalidServiceState(message string, causes ...error) error {
+	api := protocol.APIError{Code: protocol.CodeInvalidState, Message: message}
+	if cause := errors.Join(causes...); cause != nil {
+		return diagnostics.Wrap(api, cause)
+	}
+	return api
 }
 
 func runAbsolute(ctx context.Context, runner CommandRunner, argv []string) (CommandResult, error) {
@@ -241,12 +247,12 @@ func runAbsolute(ctx context.Context, runner CommandRunner, argv []string) (Comm
 	}
 	result, err := runner.Run(ctx, argv)
 	if err != nil {
-		return CommandResult{}, redactServiceError(err)
+		return CommandResult{}, classifyServiceError(err)
 	}
 	return result, nil
 }
 
-func redactServiceError(err error) error {
+func classifyServiceError(err error) error {
 	if err == nil {
 		return nil
 	}
@@ -259,9 +265,9 @@ func redactServiceError(err error) error {
 		if api.Message == "" {
 			api.Message = "service manager query failed"
 		}
-		return api
+		return diagnostics.Wrap(api, err)
 	}
-	return invalidServiceState("service manager query failed")
+	return invalidServiceState("service manager query failed", err)
 }
 
 func applyAction(ctx context.Context, hook ActionHook, action DefinitionAction, apply func(context.Context) error) error {
@@ -289,7 +295,7 @@ func incompleteProcessIdentity(id ProcessIdentity) bool {
 
 func requireZeroExit(result CommandResult) error {
 	if result.ExitCode != 0 {
-		return invalidServiceState("service manager query failed")
+		return invalidServiceState("service manager query failed", fmt.Errorf("exit status %d\nstdout:\n%s\nstderr:\n%s", result.ExitCode, result.Stdout, result.Stderr))
 	}
 	return nil
 }
@@ -299,10 +305,10 @@ func classifyCgroupEmpty(dirExists bool, eventsErr error, events []byte) (bool, 
 		return true, nil
 	}
 	if errors.Is(eventsErr, os.ErrNotExist) {
-		return false, invalidServiceState("service process tree is unknown")
+		return false, invalidServiceState("service process tree is unknown", eventsErr)
 	}
 	if eventsErr != nil {
-		return false, invalidServiceState("service process tree is unknown")
+		return false, invalidServiceState("service process tree is unknown", eventsErr)
 	}
 	populated, ok := parseCgroupPopulated(events)
 	if !ok {

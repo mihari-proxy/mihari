@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"io"
@@ -46,6 +47,7 @@ type installationStatusMsg struct {
 	err       error
 }
 type installationPlanMsg struct {
+	cancelled  bool
 	operation  logging.OperationMetadata
 	plan       app.InstallationPlan
 	err        error
@@ -62,7 +64,7 @@ func (model *Model) updateInstallation(message tea.Msg) (tea.Cmd, bool) {
 	}
 	switch message := message.(type) {
 	case installationStatusMsg:
-		if message.err != nil || message.status.Validate() != nil || u.seen {
+		if message.Err() != nil || u.seen {
 			return nil, true
 		}
 		if message.status.Kind == "permission_required" {
@@ -82,7 +84,7 @@ func (model *Model) updateInstallation(message tea.Msg) (tea.Cmd, bool) {
 			u.cancel()
 			u.cancel = nil
 		}
-		if message.err != nil || message.plan.Mode != u.mode || app.VerifyInstallationPlan(message.plan) != nil {
+		if message.Err() != nil || message.plan.Mode != u.mode {
 			u.visible = false
 			model.modal = NewDetail("Unable to prepare installation", "The installation state may have changed. Check it again before retrying. Reinstallation has not started.")
 			return nil, true
@@ -141,12 +143,14 @@ func (model *Model) updateInstallation(message tea.Msg) (tea.Cmd, bool) {
 			if u.actions.Elevated == nil || !u.actions.Elevated() {
 				u.dismiss()
 				model.modal = NewDetail("Administrator privileges required", "Run Mihari from an administrator terminal, then choose a reinstallation option.")
-				return nil, true
+				failure := protocol.APIError{Code: protocol.CodePermissionDenied, Message: "installation planning requires administrator privileges"}
+				return func() tea.Msg { return ui.DiagnosticMsg{Page: ui.PageSystem, Err: failure} }, true
 			}
 			if u.actions.Plan == nil || u.actions.Execute == nil {
 				u.dismiss()
 				model.modal = NewDetail("Use the installer", "Use a newly downloaded Mihari installer to choose a repair or fresh installation.")
-				return nil, true
+				failure := protocol.APIError{Code: protocol.CodeInvalidState, Message: "installation planning or execution is unavailable in this session"}
+				return func() tea.Msg { return ui.DiagnosticMsg{Page: ui.PageSystem, Err: failure} }, true
 			}
 			u.mode = app.InstallationModeRepair
 			if u.selected == 1 {
@@ -164,7 +168,10 @@ func (model *Model) updateInstallation(message tea.Msg) (tea.Cmd, bool) {
 			ctx, u.cancel = context.WithCancel(ctx)
 			return func() tea.Msg {
 				result, err := plan(ctx, app.InstallationPlanRequest{Mode: mode, Binary: binary})
-				return installationPlanMsg{plan: result, err: err, generation: generation, operation: operation}
+				if err == nil && result.Mode != mode {
+					err = fmt.Errorf("installation preview mode %q does not match requested mode %q", result.Mode, mode)
+				}
+				return installationPlanMsg{cancelled: diagnostics.NormalCancellation(ctx, err), plan: result, err: err, generation: generation, operation: operation}
 			}, true
 		}
 		return nil, true
@@ -287,4 +294,25 @@ func installationCleanup(closeCandidates func() error, cleanup func(tea.Model) e
 		}
 		return errors.Join(candidateErr, cleanupErr)
 	}
+}
+
+func (m installationStatusMsg) Err() error {
+	if m.err != nil {
+		return m.err
+	}
+	return m.status.Validate()
+}
+func (m installationStatusMsg) DiagnosticPage() ui.PageID { return ui.PageSystem }
+func (m installationPlanMsg) Err() error {
+	if m.err != nil {
+		return m.err
+	}
+	return app.VerifyInstallationPlan(m.plan)
+}
+func (m installationPlanMsg) DiagnosticPage() ui.PageID { return ui.PageSystem }
+func (m installationPlanMsg) DiagnosticErrors() []error {
+	if m.cancelled || m.Err() == nil {
+		return nil
+	}
+	return []error{m.Err()}
 }

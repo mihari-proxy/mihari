@@ -724,7 +724,7 @@ func TestRunDaemon_BootstrapSettingsPreCommitFailureStopsBeforeLogging(t *testin
 	}
 }
 
-func TestRunDaemon_PreLoggerFailureUsesSafeInjectedDaemonStderr(t *testing.T) {
+func TestRunDaemon_PreLoggerFailureUsesOriginalInjectedDaemonStderr(t *testing.T) {
 	resetDaemonRunSeamsForTest(t)
 	paths := absoluteTempPaths(t)
 	fs, err := platform.NewPrivateFS(paths.Root)
@@ -743,17 +743,16 @@ func TestRunDaemon_PreLoggerFailureUsesSafeInjectedDaemonStderr(t *testing.T) {
 	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "load settings" {
 		t.Fatalf("err=%v", err)
 	}
-	if got, want := output.String(), "mihari daemon startup: load settings: startup failed\n"; got != want {
+	if got, want := output.String(), "Error: mihari daemon startup: load settings\n\nDetails:\n"+unsafeParse.Error()+"\n"; got != want {
 		t.Fatalf("diagnostic=%q want=%q", got, want)
 	}
-	for _, forbidden := range []string{paths.Root, paths.Settings, "secret-value", "parse"} {
-		if strings.Contains(output.String(), forbidden) {
-			t.Fatalf("startup diagnostic leaked %q: %s", forbidden, output.String())
-		}
+	if !strings.Contains(output.String(), paths.Settings) || !strings.Contains(output.String(), "secret-value") {
+		t.Fatal("startup diagnostic lost original cause")
 	}
+
 }
 
-func TestRunDaemon_PreLoggerTypedFileFailureKeepsSafeReason(t *testing.T) {
+func TestRunDaemon_PreLoggerTypedFileFailureKeepsOriginalReason(t *testing.T) {
 	resetDaemonRunSeamsForTest(t)
 	paths := absoluteTempPaths(t)
 	fs, err := platform.NewPrivateFS(paths.Root)
@@ -771,11 +770,11 @@ func TestRunDaemon_PreLoggerTypedFileFailureKeepsSafeReason(t *testing.T) {
 	if !errors.As(err, &apiError) || apiError.Code != protocol.CodeDataFailure || apiError.Message != "load settings" {
 		t.Fatalf("err=%v", err)
 	}
-	if got, want := output.String(), "mihari daemon startup: load settings: file operation open: permission denied\n"; got != want {
+	if got, want := output.String(), "Error: mihari daemon startup: load settings\n\nDetails:\nopen "+paths.Settings+": permission denied\n"; got != want {
 		t.Fatalf("diagnostic=%q want=%q", got, want)
 	}
-	if strings.Contains(output.String(), paths.Settings) {
-		t.Fatalf("startup diagnostic leaked a path: %s", output.String())
+	if !strings.Contains(output.String(), paths.Settings) {
+		t.Fatalf("startup diagnostic lost a path: %s", output.String())
 	}
 }
 

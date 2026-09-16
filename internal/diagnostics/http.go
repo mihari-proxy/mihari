@@ -26,24 +26,28 @@ func HandshakeError(operation string, response *http.Response, cause error) *HTT
 		raw, err := io.ReadAll(io.LimitReader(response.Body, MaxHTTPBodyBytes+1))
 		closeErr := response.Body.Close()
 		detail.Body = HTTPBody(raw)
+		detail.BodyTruncated = len(raw) > MaxHTTPBodyBytes
 		if response.ContentLength > int64(len(raw)) || len(raw) == 1024 {
 			detail.Body += " [handshake body truncated]"
+			detail.BodyTruncated = true
 		}
 		detail.Cause = errors.Join(cause, err, closeErr)
 	}
 	return detail
 }
 
-// HTTPError retains upstream diagnostics outside the public API error. Only the
-// logging boundary may render DiagnosticText; Error deliberately stays safe.
+// HTTPError retains original upstream diagnostics for shared bounded capture.
+// Error provides the basic assertion; DiagnosticText supplies the collected cause.
 type HTTPError struct {
-	Operation  string
-	URL        string
-	Phase      string
-	Status     int
-	Body       string
-	Cause      error
-	RetryDelay time.Duration
+	Operation string
+	URL       string
+	Phase     string
+	Status    int
+	Body      string
+	// BodyTruncated records an upstream collection limit independently of text.
+	BodyTruncated bool
+	Cause         error
+	RetryDelay    time.Duration
 }
 
 func (e *HTTPError) Error() string { return "mihomo HTTP operation failed" }
@@ -52,7 +56,7 @@ func (e *HTTPError) Unwrap() error { return e.Cause }
 // RetryAfter exposes a parsed upstream retry delay to the provider read policy.
 func (e *HTTPError) RetryAfter() time.Duration { return e.RetryDelay }
 
-// DiagnosticText returns original HTTP details for the file diagnostic boundary.
+// DiagnosticText returns original HTTP details for diagnostic capture.
 func (e *HTTPError) DiagnosticText() string {
 	text := e.Operation + " phase=" + e.Phase
 	if e.URL != "" {

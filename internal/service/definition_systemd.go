@@ -112,7 +112,7 @@ func (a *SystemdAdapter) definitionFromShow(ctx context.Context, props map[strin
 	unit, unitErr := a.files.Read(ctx, a.paths.UnitFile)
 	unitMissing := errors.Is(unitErr, os.ErrNotExist)
 	if unitErr != nil && !unitMissing {
-		return Definition{}, invalidServiceState("service status is unknown")
+		return Definition{}, invalidServiceState("service status is unknown", unitErr)
 	}
 
 	if load == "not-found" && unitMissing {
@@ -161,7 +161,7 @@ func (a *SystemdAdapter) definitionFromShow(ctx context.Context, props map[strin
 	}
 	listed, err := a.files.List(ctx, a.paths.DropinDir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return Definition{}, invalidServiceState("service status is unknown")
+		return Definition{}, invalidServiceState("service status is unknown", err)
 	}
 	listedSet := map[string]struct{}{}
 	for _, name := range listed {
@@ -177,7 +177,7 @@ func (a *SystemdAdapter) definitionFromShow(ctx context.Context, props map[strin
 		if _, ok := listedSet[dropin]; !ok {
 			file, readErr := a.files.Read(ctx, dropin)
 			if readErr != nil {
-				return Definition{}, invalidServiceState("service definition is unsupported")
+				return Definition{}, invalidServiceState("service definition is unsupported", readErr)
 			}
 			_ = file
 		}
@@ -214,7 +214,7 @@ func (a *SystemdAdapter) definitionFromShow(ctx context.Context, props map[strin
 	for _, dropinPath := range dropins {
 		file, err := a.files.Read(ctx, dropinPath)
 		if err != nil || file.Kind == "link" || file.Kind == "mask" {
-			return Definition{}, invalidServiceState("service definition is unsupported")
+			return Definition{}, invalidServiceState("service definition is unsupported", err)
 		}
 		parsed, err := parseSystemdUnitFile(file.Bytes)
 		if err != nil {
@@ -230,7 +230,7 @@ func (a *SystemdAdapter) definitionFromShow(ctx context.Context, props map[strin
 	if link, err := a.files.ReadLink(ctx, a.paths.WantsLink); err == nil {
 		info, readErr := a.files.Read(ctx, a.paths.WantsLink)
 		if readErr != nil {
-			return Definition{}, invalidServiceState("service status is unknown")
+			return Definition{}, invalidServiceState("service status is unknown", readErr)
 		}
 		def.Links = append(def.Links, DefinitionLink{Identity: info.Identity, Path: a.paths.WantsLink, Target: link, Owner: info.Owner, Mode: info.Mode})
 		if !masked {
@@ -242,7 +242,7 @@ func (a *SystemdAdapter) definitionFromShow(ctx context.Context, props map[strin
 
 	pid, err := strconv.Atoi(props["MainPID"])
 	if err != nil || pid < 0 {
-		return Definition{}, invalidServiceState("service status is unknown")
+		return Definition{}, invalidServiceState("service status is unknown", err)
 	}
 	def.Process = ProcessIdentity{PID: pid, Group: props["ControlGroup"]}
 	if running && (pid == 0 || def.Process.Group == "") {
@@ -288,7 +288,7 @@ func (a *SystemdAdapter) checkEnvFile(ctx context.Context, spec string) error {
 		return invalidServiceState("service definition is unsupported")
 	}
 	if err != nil {
-		return invalidServiceState("service definition is unsupported")
+		return invalidServiceState("service definition is unsupported", err)
 	}
 	return invalidServiceState("service definition is unsupported")
 }
@@ -596,7 +596,7 @@ func (a *SystemdAdapter) reload(ctx context.Context, verifyMasked bool) error {
 		}
 		target, err := a.files.ReadLink(ctx, a.paths.UnitFile)
 		if err != nil || target != a.paths.DevNull {
-			return invalidServiceState("service status is unknown")
+			return invalidServiceState("service status is unknown", err)
 		}
 		return nil
 	})

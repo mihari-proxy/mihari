@@ -45,6 +45,21 @@ func TestPageOverlays_FitInsideShell(t *testing.T) {
 				p.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 				p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 			}
+
+			mode := ""
+			if page, ok := m.pages[pageID].(interface{ HelpMode() string }); ok {
+				mode = page.HelpMode()
+			}
+			next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyF2})
+			m = next.(Model)
+			if !m.diagnosticWindow.open {
+				t.Fatal("page overlay intercepted global F2")
+			}
+			next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+			m = next.(Model)
+			if page, ok := m.pages[pageID].(interface{ HelpMode() string }); ok && page.HelpMode() != mode {
+				t.Fatal("closing diagnostics changed the underlying overlay")
+			}
 			view := m.View().Content
 			if lipgloss.Height(view) > 28 || lipgloss.Width(view) > width {
 				t.Fatalf("%s at %d: shell grew to %dx%d", pageID, width, lipgloss.Width(view), lipgloss.Height(view))

@@ -74,6 +74,7 @@ type Model struct {
 }
 
 type selectionResultMsg struct {
+	warnings     protocol.WarningOutcome
 	group        string
 	node         string
 	err          error
@@ -476,8 +477,8 @@ func (m *Model) selectFocused() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, err := m.client.SelectProxy(ctx, id.Group, protocol.ProxySelectionRequest{OperationID: operationID, Name: id.Node, IfRevision: revision})
-		result := selectionResultMsg{group: id.Group, node: id.Node, err: err, routing: routing, epoch: epoch, subscription: subscription}
+		outcome, err := m.client.SelectProxy(ctx, id.Group, protocol.ProxySelectionRequest{OperationID: operationID, Name: id.Node, IfRevision: revision})
+		result := selectionResultMsg{warnings: outcome.WarningOutcome, group: id.Group, node: id.Node, err: err, routing: routing, epoch: epoch, subscription: subscription}
 		if routing {
 			return ui.PageResultMsg{Page: ui.PageProxies, Result: result}
 		}

@@ -44,7 +44,7 @@ func TestExportLogsModel_WrappedDeadlineReturnsToEditableForm(t *testing.T) {
 	m.Open()
 	m.pending, m.generation, m.focus = true, 1, exportFocusOutput
 	m.Update(exportResultMsg{Generation: 1, Err: fmt.Errorf("wrapped: %w", context.DeadlineExceeded), Warning: true})
-	if m.pending || m.message != ExportCancelled || !m.warning {
+	if m.pending || m.message != ExportFailed || !m.warning {
 		t.Fatal("deadline did not retain cancellation/warning state")
 	}
 	m.Update(key(tea.KeyEnter, ""))

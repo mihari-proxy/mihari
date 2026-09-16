@@ -21,6 +21,15 @@ type SelfUpdater interface {
 	ApplyPrepared(context.Context, update.PreparedUpdate) (update.Result, error)
 }
 
+type selfUpdateResult struct {
+	protocol.WarningOutcome
+	Schema  string `json:"schema"`
+	Version string `json:"version"`
+	Updated bool   `json:"updated"`
+	Channel string `json:"channel"`
+	Ahead   bool   `json:"ahead"`
+}
+
 func newSelfCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
 	root := &cobra.Command{Use: "self", Short: "Manage the mihari binary"}
 	root.AddCommand(newSelfVersionCommand(options))
@@ -102,7 +111,7 @@ func newSelfUpdateCommand(dependencies Dependencies, options *runOptions) *cobra
 		binary, err := os.Executable()
 		if err != nil {
 			taskErr = err
-			return protocol.APIError{Code: protocol.CodeInternal, Message: "resolve mihari executable path"}
+			return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "resolve mihari executable path"}, err)
 		}
 		channel := ""
 		if dependencies.SelfUpdateChannel != nil {
@@ -111,7 +120,7 @@ func newSelfUpdateCommand(dependencies Dependencies, options *runOptions) *cobra
 			path, pathErr := platform.ChannelPath()
 			if pathErr != nil {
 				taskErr = pathErr
-				return protocol.APIError{Code: protocol.CodeDataFailure, Message: "resolve mihari channel path"}
+				return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "resolve mihari channel path"}, pathErr)
 			}
 			channel, err = update.LoadChannel(path)
 		}
@@ -166,12 +175,10 @@ func newSelfUpdateCommand(dependencies Dependencies, options *runOptions) *cobra
 		}
 
 		if options.json {
-			return renderJSON(command.OutOrStdout(), map[string]any{
-				"schema":  "mihari/v1",
-				"version": result.Version,
-				"updated": result.Updated,
-				"channel": result.Channel,
-				"ahead":   result.Ahead,
+			return renderJSON(command.OutOrStdout(), selfUpdateResult{
+				WarningOutcome: replacementWarnings(ctx, warning),
+				Schema:         "mihari/v1", Version: result.Version, Updated: result.Updated,
+				Channel: result.Channel, Ahead: result.Ahead,
 			})
 		}
 		if result.Updated {
@@ -194,16 +201,17 @@ func renderReplacementWarning(command *cobra.Command, options *runOptions, warni
 		if warning != "" && options.json {
 			api := normalizeCommandError(classified)
 			api.Message = warning + " " + api.Message
-			return api
+			api.Append(replacementWarnings(command.Context(), warning))
+			return diagnostics.Wrap(api, classified)
 		}
 		if warning != "" && !options.json {
-			_, writeErr := fmt.Fprintln(command.ErrOrStderr(), warning)
+			_, writeErr := fmt.Fprintln(command.ErrOrStderr(), diagnostics.EscapeTerminal(warning))
 			return errors.Join(classified, writeErr)
 		}
 		return classified
 	}
-	if warning != "" {
-		_, err := fmt.Fprintln(command.ErrOrStderr(), warning)
+	if warning != "" && !options.json {
+		_, err := fmt.Fprintln(command.ErrOrStderr(), diagnostics.EscapeTerminal(warning))
 		return err
 	}
 	return nil

@@ -21,9 +21,12 @@ const (
 )
 
 type APIError struct {
-	Code    ErrorCode      `json:"code"`
-	Message string         `json:"message"`
-	Details map[string]any `json:"details,omitempty"`
+	// WarningOutcome is carried by errors.As; its wire location is the envelope.
+	WarningOutcome `json:"-"`
+	Code           ErrorCode      `json:"code"`
+	Message        string         `json:"message"`
+	Details        map[string]any `json:"details,omitempty"`
+	Diagnostic     *Diagnostic    `json:"diagnostic,omitempty"`
 }
 
 func (e APIError) Error() string { return e.Message }
@@ -44,6 +47,7 @@ func wrapAPIErrorCause(public APIError, cause error) error {
 }
 
 type ErrorEnvelope struct {
+	WarningOutcome
 	Schema string   `json:"schema"`
 	Error  APIError `json:"error"`
 }

@@ -1,6 +1,9 @@
 package subscriptions
 
 import (
+	"errors"
+	"fmt"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"net/url"
 	"strconv"
 	"strings"
@@ -20,14 +23,15 @@ const (
 )
 
 type formModel struct {
-	kind        formKind
-	inputs      []textinput.Model
-	labels      []string
-	index       int
-	baseline    protocol.Subscription
-	urlBaseline string
-	urlTouched  bool
-	errorText   string
+	validationErr error
+	kind          formKind
+	inputs        []textinput.Model
+	labels        []string
+	index         int
+	baseline      protocol.Subscription
+	urlBaseline   string
+	urlTouched    bool
+	errorText     string
 }
 
 func newAddForm() *formModel {
@@ -133,20 +137,21 @@ func (f *formModel) move(delta int) tea.Cmd {
 
 func (f *formModel) valid() bool {
 	f.errorText = ""
+	f.validationErr = nil
 	if strings.TrimSpace(f.inputs[0].Value()) == "" {
-		f.errorText = "Name is required."
-		return false
+		return f.validationFailure("Name is required.", nil)
 	}
 	raw := strings.TrimSpace(f.inputs[1].Value())
 	if f.kind == formAdd || f.urlTouched || raw != "" {
 		if raw == "" {
-			f.errorText = "URL is required."
-			return false
+			return f.validationFailure("URL is required.", nil)
 		}
 		u, err := url.Parse(raw)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
-			f.errorText = "Enter a valid HTTP or HTTPS URL."
-			return false
+			if err == nil {
+				err = fmt.Errorf("subscription URL %q must use HTTP or HTTPS and have a host", raw)
+			}
+			return f.validationFailure("Enter a valid HTTP or HTTPS URL.", err)
 		}
 	}
 	if f.kind == formEdit {
@@ -154,8 +159,10 @@ func (f *formModel) valid() bool {
 		if interval != "" {
 			d, err := time.ParseDuration(interval)
 			if err != nil || d <= 0 {
-				f.errorText = "Enter a positive interval or leave it blank."
-				return false
+				if err == nil {
+					err = fmt.Errorf("subscription interval %q must be positive", interval)
+				}
+				return f.validationFailure("Enter a positive interval or leave it blank.", err)
 			}
 		}
 	}
@@ -190,4 +197,13 @@ func (f *formModel) updateRequest(operationID string, revision uint64) protocol.
 		request.URL = &rawURL
 	}
 	return request
+}
+
+func (f *formModel) validationFailure(summary string, cause error) bool {
+	f.errorText = summary
+	if cause == nil {
+		cause = errors.New(summary)
+	}
+	f.validationErr = diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: summary}, cause)
+	return false
 }

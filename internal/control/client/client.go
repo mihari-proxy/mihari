@@ -180,11 +180,14 @@ func (c *Client) responseError(ctx context.Context, response *http.Response) err
 func (c *Client) responseOutcome(ctx context.Context, response *http.Response) (outcome runtimeOutcome) {
 	defer c.closeRuntimeResponse(ctx, response, &outcome)
 	err, remoteEnvelope := decodeRuntimeHTTPErrorOutcome(response)
+	if remoteEnvelope && ctx.Value(diagnosticQueryContextKey{}) == nil {
+		err = c.resolveErrorDiagnostic(ctx, err)
+	}
 	var api protocol.APIError
 	if c.provider != nil && response.StatusCode == http.StatusUnauthorized && errors.As(err, &api) && api.Code == protocol.CodePermissionDenied {
 		err = authenticationError{cause: err}
 	}
-	return runtimeOutcome{err: err, remoteEnvelope: remoteEnvelope}
+	return runtimeOutcome{err: err, remoteEnvelope: remoteEnvelope, httpStatus: response.StatusCode}
 }
 
 func (c *Client) diagnosticReporter() diagnostics.Reporter {

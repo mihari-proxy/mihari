@@ -167,3 +167,29 @@ func TestManagerBackgroundDiagnostic_CoreRecoveryHasNoInventedOperation(t *testi
 		t.Fatal("invented recovery operation")
 	}
 }
+
+func TestManagerBackgroundDiagnostic_HistoryKeepsActualSchedulerFailure(t *testing.T) {
+	history, err := diagnostics.NewHistory(diagnostics.HistoryOptions{InstanceID: "scheduler-fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := diagnostics.NewOwner(history, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cause := errors.New("scheduler token=fixture-original /private/fixture")
+	manager := newTestManager(Options{
+		RunScheduler:       func(context.Context) error { return cause },
+		DiagnosticReporter: func(ctx context.Context, record diagnostics.Record) { owner.Report(ctx, record); cancel() },
+	})
+	if err := manager.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	records := history.List("", 0, 100).Records
+	if len(records) != 1 {
+		t.Fatalf("scheduler occurrences=%d", len(records))
+	}
+	got := history.Get(records[0].ID).Diagnostic
+	if got == nil || got.Detail != cause.Error() || got.Component != "scheduler" || got.OperationID != "" {
+		t.Fatal("background owner lost original cause or invented operation identity")
+	}
+}

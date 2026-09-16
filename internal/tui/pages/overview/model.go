@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
@@ -196,7 +197,7 @@ func formatConfigHealth(theme ui.Theme, snap Snapshot, valueWidth int) string {
 		// A failed apply (e.g. rollback) carries the actionable detail.
 		indent := strings.Repeat(" ", overviewLabelWidth+2)
 		return ui.StatusDot(theme, ui.ToneNegative, ui.ConfigFailedLabel) +
-			"\n" + indent + ui.ToneStyle(theme, ui.ToneNegative).Render(current.LastError)
+			"\n" + indent + ui.ToneStyle(theme, ui.ToneNegative).Render(diagnostics.EscapeTerminal(current.LastError))
 	}
 	switch valueOr(current.Status, ui.UnknownLabel) {
 	case "ok":
@@ -383,7 +384,7 @@ func renderActiveSubscription(list protocol.SubscriptionList, stale bool) string
 			subscription += " · " + ui.StaleLabel
 		}
 		if profile.LastError != "" {
-			subscription += "\n" + profile.LastError
+			subscription += "\n" + diagnostics.EscapeTerminal(profile.LastError)
 		}
 		return subscription
 	}

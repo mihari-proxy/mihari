@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 const (
@@ -58,6 +59,7 @@ type InstallRequest struct {
 
 // InstallResult is the R4 §9 success JSON contract.
 type InstallResult struct {
+	protocol.WarningOutcome
 	Schema         string `json:"schema"`
 	Changed        bool   `json:"changed"`
 	ServiceStatus  string `json:"service_status"`
@@ -70,7 +72,7 @@ func DecodeInstallRequest(reader io.Reader) (InstallRequest, error) {
 	var request InstallRequest
 	keys, err := decodeStrictJSON(reader, MaxInstallRequestBytes, &request)
 	if err != nil {
-		return InstallRequest{}, invalidInstallRequest()
+		return InstallRequest{}, invalidInstallRequest(err)
 	}
 	if err := validateInstallRequest(request, keys); err != nil {
 		return InstallRequest{}, err
@@ -90,7 +92,7 @@ func EncodeInstallRequest(request InstallRequest) ([]byte, error) {
 func DecodeInstallResult(reader io.Reader) (InstallResult, error) {
 	var result InstallResult
 	if _, err := decodeStrictJSON(reader, MaxInstallRequestBytes, &result); err != nil {
-		return InstallResult{}, invalidInstallResult()
+		return InstallResult{}, invalidInstallResult(err)
 	}
 	if err := validateInstallResult(result); err != nil {
 		return InstallResult{}, err
@@ -208,38 +210,47 @@ func decodeStrictJSON(reader io.Reader, max int, dest any) (map[string]bool, err
 		return nil, os.ErrInvalid
 	}
 	data, err := io.ReadAll(io.LimitReader(reader, int64(max)+1))
-	if err != nil || len(data) > max || !utf8.Valid(data) {
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > max || !utf8.Valid(data) {
 		return nil, os.ErrInvalid
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	keys, err := uniqueJSONObject(dec)
 	if err != nil {
-		return nil, os.ErrInvalid
+		return nil, err
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return nil, os.ErrInvalid
+		return nil, errors.Join(os.ErrInvalid, err)
 	}
 	dec = json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dest); err != nil {
-		return nil, os.ErrInvalid
+		return nil, err
 	}
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return nil, os.ErrInvalid
+		return nil, errors.Join(os.ErrInvalid, err)
 	}
 	return keys, nil
 }
 
 func uniqueJSONObject(dec *json.Decoder) (map[string]bool, error) {
 	token, err := dec.Token()
-	if err != nil || token != json.Delim('{') {
+	if err != nil {
+		return nil, err
+	}
+	if token != json.Delim('{') {
 		return nil, os.ErrInvalid
 	}
 	keys := map[string]bool{}
 	for dec.More() {
 		key, err := dec.Token()
 		name, ok := key.(string)
-		if err != nil || !ok || keys[name] {
+		if err != nil {
+			return nil, err
+		}
+		if !ok || keys[name] {
 			return nil, os.ErrInvalid
 		}
 		keys[name] = true
@@ -248,7 +259,10 @@ func uniqueJSONObject(dec *json.Decoder) (map[string]bool, error) {
 		}
 	}
 	end, err := dec.Token()
-	if err != nil || end != json.Delim('}') {
+	if err != nil {
+		return nil, err
+	}
+	if end != json.Delim('}') {
 		return nil, os.ErrInvalid
 	}
 	return keys, nil
@@ -259,7 +273,10 @@ func uniqueJSONValue(dec *json.Decoder, depth int) error {
 		return os.ErrInvalid
 	}
 	token, err := dec.Token()
-	if err != nil || token == nil {
+	if err != nil {
+		return err
+	}
+	if token == nil {
 		return os.ErrInvalid
 	}
 	switch token {
@@ -268,7 +285,10 @@ func uniqueJSONValue(dec *json.Decoder, depth int) error {
 		for dec.More() {
 			key, err := dec.Token()
 			name, ok := key.(string)
-			if err != nil || !ok || seen[name] {
+			if err != nil {
+				return err
+			}
+			if !ok || seen[name] {
 				return os.ErrInvalid
 			}
 			seen[name] = true
@@ -310,12 +330,20 @@ func validTransactionID(value string) bool {
 	return err == nil && len(raw) == 16 && hex.EncodeToString(raw) == value
 }
 
-func invalidInstallRequest() error {
-	return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid install request"}
+func invalidInstallRequest(causes ...error) error {
+	api := protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid install request"}
+	if cause := errors.Join(causes...); cause != nil {
+		return diagnostics.Wrap(api, cause)
+	}
+	return api
 }
 
-func invalidInstallResult() error {
-	return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid install result"}
+func invalidInstallResult(causes ...error) error {
+	api := protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid install result"}
+	if cause := errors.Join(causes...); cause != nil {
+		return diagnostics.Wrap(api, cause)
+	}
+	return api
 }
 
 // ReadInstallRequestFile reads a bounded, regular, no-follow request on Unix.
@@ -329,7 +357,7 @@ func ReadInstallRequestFile(ctx context.Context, path string) (InstallRequest, e
 	}
 	raw, err := readHostFile(path, MaxInstallRequestBytes)
 	if err != nil {
-		return InstallRequest{}, invalidInstallRequest()
+		return InstallRequest{}, invalidInstallRequest(err)
 	}
 	return DecodeInstallRequest(bytes.NewReader(raw))
 }

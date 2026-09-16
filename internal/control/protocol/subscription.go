@@ -36,6 +36,7 @@ type SubscriptionURL struct {
 }
 
 type SubscriptionList struct {
+	WarningOutcome
 	Schema         string         `json:"schema"`
 	Revision       uint64         `json:"revision"`
 	ActiveID       string         `json:"active_id,omitempty"`
@@ -44,6 +45,7 @@ type SubscriptionList struct {
 }
 
 type SubscriptionResult struct {
+	WarningOutcome
 	Schema       string       `json:"schema"`
 	OperationID  string       `json:"operation_id,omitempty"`
 	Revision     uint64       `json:"revision"`

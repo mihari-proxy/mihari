@@ -208,7 +208,7 @@ func TestRunFactoryClosesPartialResourcesLogging(t *testing.T) {
 	if err := fs.EnsureDir(paths.LogDir); err == nil {
 		t.Fatal("partial logging PrivateFS was not closed")
 	}
-	if got := warnings.String(); got != "Warning: TUI file logging is unavailable\n" {
+	if got := warnings.String(); got != "Warning: TUI file logging is unavailable\n\nDetails:\nopen https://example.invalid/?token=tui-bootstrap-token\n" {
 		t.Fatalf("warnings=%q", got)
 	}
 }
@@ -235,7 +235,7 @@ func TestRunNilPrivateFSContinuesWithoutCreatingDataRootLogging(t *testing.T) {
 	if _, statErr := os.Stat(paths.Root); !os.IsNotExist(statErr) {
 		t.Fatalf("nil PrivateFS created data root: %v", statErr)
 	}
-	if got, want := warnings.String(), "Warning: TUI file logging is unavailable\n"; got != want {
+	if got, want := warnings.String(), "Warning: TUI file logging is unavailable\n\nDetails:\nprivate fs unavailable\n"; got != want {
 		t.Fatalf("warnings=%q want=%q", got, want)
 	}
 }
@@ -332,23 +332,23 @@ func TestTUILoggingBootstrapFailureIsRateLimited(t *testing.T) {
 	reporter := newTUILoggingFailureReporter(&warnings, nil, func() time.Time { return now })
 	reporter.report(tuiLoggingBootstrapFailure, errors.New("open failed"))
 	reporter.report(tuiLoggingBootstrapFailure, errors.New("open failed"))
-	if got, want := warnings.String(), "Warning: TUI file logging is unavailable\n"; got != want {
+	if got, want := warnings.String(), "Warning: TUI file logging is unavailable\n\nDetails:\nopen failed\n"; got != want {
 		t.Fatalf("warnings=%q want=%q", got, want)
 	}
 	now = now.Add(tuiLoggingFailureWindow)
 	reporter.report(tuiLoggingBootstrapFailure, errors.New("open failed"))
-	if got, want := warnings.String(), "Warning: TUI file logging is unavailable\nWarning: TUI file logging is unavailable\n"; got != want {
+	if got, want := warnings.String(), "Warning: TUI file logging is unavailable\n\nDetails:\nopen failed\nWarning: TUI file logging is unavailable\n\nDetails:\nopen failed\n"; got != want {
 		t.Fatalf("warnings after window=%q want=%q", got, want)
 	}
 }
 
-func TestTUILoggingCleanupFailureNeverLeaksDetails(t *testing.T) {
+func TestTUILoggingCleanupFailurePreservesDetails(t *testing.T) {
 	path := filepath.Join("C:", "Users", "operator", "secret-data")
 	for _, redactor := range []*logging.Redactor{nil, logging.NewRedactor("tui-bootstrap-token")} {
 		var warnings bytes.Buffer
 		reporter := newTUILoggingFailureReporter(&warnings, redactor, nil)
 		reporter.report(tuiLoggingCleanupFailure, errors.New("close "+path+" token=tui-bootstrap-token"))
-		if got, want := warnings.String(), "Warning: TUI file logging cleanup failed\n"; got != want {
+		if got, want := warnings.String(), "Warning: TUI file logging cleanup failed\n\nDetails:\nclose "+path+" token=tui-bootstrap-token\n"; got != want {
 			t.Fatalf("warnings=%q want=%q", got, want)
 		}
 	}
@@ -620,8 +620,8 @@ func TestRunCleanup_NetworkTerminateDoesNotDropDiskWorkers(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("cleanup did not wait for disk worker after network timeout")
 	}
-	if warnings.String() != "Warning: TUI file logging cleanup failed\n" {
-		t.Fatal("cleanup warning missing, duplicated or unsafe")
+	if warnings.String() != "Warning: TUI file logging cleanup failed\n\nDetails:\nclose /private/tui-secret/log\\r\nfailed\n" {
+		t.Fatal("cleanup warning missing, duplicated or changed")
 	}
 	if want := []string{"applier", "close-logging", "close-user-fs"}; !slices.Equal(order, want) {
 		t.Fatalf("order=%q want=%q", order, want)
@@ -726,3 +726,13 @@ func (c *orderedCloser) Close() error {
 type testLoggingHealth struct{ available bool }
 
 func (h testLoggingHealth) Available() bool { return h.available }
+
+func TestTUILoggingFailure_PreservesOriginalDetail(t *testing.T) {
+	var output bytes.Buffer
+	original := "https://example.invalid/?token=fixture-original /private/fixture logs"
+	reporter := newTUILoggingFailureReporter(&output, logging.NewRedactor("fixture-original"), nil)
+	reporter.report(tuiLoggingBootstrapFailure, errors.New(original))
+	if !strings.Contains(output.String(), original) {
+		t.Fatal("bootstrap fallback hid original detail")
+	}
+}

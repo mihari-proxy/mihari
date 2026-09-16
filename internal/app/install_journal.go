@@ -6,11 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 const (
@@ -180,7 +182,7 @@ type InstallJournalStore struct {
 func DecodeJournal(reader io.Reader) (InstallJournal, error) {
 	var journal InstallJournal
 	if _, err := decodeStrictJSON(reader, MaxInstallJournalBytes, &journal); err != nil {
-		return InstallJournal{}, invalidInstallJournal()
+		return InstallJournal{}, invalidInstallJournal(err)
 	}
 	if err := validateInstallJournal(journal); err != nil {
 		return InstallJournal{}, err
@@ -524,8 +526,12 @@ func transactionMarkerPath(id string) string {
 	return "transactions/" + id + "/transaction-id"
 }
 
-func invalidInstallJournal() error {
-	return protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid install journal"}
+func invalidInstallJournal(causes ...error) error {
+	api := protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid install journal"}
+	if cause := errors.Join(causes...); cause != nil {
+		return diagnostics.Wrap(api, cause)
+	}
+	return api
 }
 
 func unknownInstallState() error {

@@ -14,15 +14,22 @@ type Record struct {
 	Event     string
 	Level     slog.Level
 	Err       error
+	Summary   string
+	Object    string
+	// Snapshot is populated by an owner before forwarding to a file outlet.
+	Snapshot *protocol.Diagnostic
+	// receipt is written synchronously by an owner during ReportError.
+	receipt *protocol.Diagnostic
 }
 
 // Reporter records an internal diagnostic event at an owning boundary.
 type Reporter func(context.Context, Record)
 
-// NormalCancellation reports whether only cancellation caused an ended operation.
+// NormalCancellation reports whether active cancellation ended an operation.
+// An elapsed request deadline remains an inspectable failure.
 // It lets non-log failure callbacks retain their shutdown semantics.
 func NormalCancellation(ctx context.Context, err error) bool {
-	if err == nil || ctx == nil || ctx.Err() == nil {
+	if err == nil || ctx == nil || ctx.Err() != context.Canceled {
 		return false
 	}
 	classification := inspectFailure(err)

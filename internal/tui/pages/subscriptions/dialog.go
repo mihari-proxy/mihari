@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -25,6 +26,7 @@ const (
 )
 
 type revealResultMsg struct {
+	cancelled  bool
 	epoch      uint64
 	connection uint64
 	id         string
@@ -32,6 +34,7 @@ type revealResultMsg struct {
 	err        error
 }
 type saveCheckMsg struct {
+	cancelled  bool
 	epoch, seq uint64
 	purpose    savePhase
 	state      string
@@ -98,7 +101,7 @@ func (m *Model) readFormURL() tea.Cmd {
 	return func() tea.Msg {
 		defer cancel()
 		result, err := reader.SubscriptionURL(ctx, id)
-		return revealResultMsg{epoch: epoch, connection: connection, id: id, result: result, err: err}
+		return revealResultMsg{cancelled: diagnostics.NormalCancellation(ctx, err), epoch: epoch, connection: connection, id: id, result: result, err: err}
 	}
 }
 
@@ -260,6 +263,7 @@ func (m *Model) checkSave(purpose savePhase) tea.Cmd {
 	return func() tea.Msg {
 		defer cancel()
 		msg := saveCheckMsg{epoch: epoch, seq: seq, purpose: purpose}
+		reply := func() tea.Msg { msg.cancelled = diagnostics.NormalCancellation(ctx, msg.err); return msg }
 		if purpose == saveUnknown || purpose == saveRetryConfirm {
 			reader, ok := client.(interface {
 				OperationStatus(context.Context, string) (protocol.OperationStatus, error)
@@ -269,16 +273,16 @@ func (m *Model) checkSave(purpose savePhase) tea.Cmd {
 				msg.state = status.State
 				if err != nil {
 					msg.err = err
-					return msg
+					return reply()
 				}
 				if status.State == "running" {
-					return msg
+					return reply()
 				}
 			}
 		}
 		msg.list, msg.err = client.Subscriptions(ctx)
 		if msg.err != nil {
-			return msg
+			return reply()
 		}
 		if purpose == saveUnknown && id != "" {
 			for _, p := range msg.list.Subscriptions {
@@ -292,12 +296,13 @@ func (m *Model) checkSave(purpose savePhase) tea.Cmd {
 						if ok {
 							revealed, err := reader.SubscriptionURL(ctx, id)
 							msg.matches = err == nil && revealed.URL == *patch.URL
+							msg.err = err
 						}
 					}
 				}
 			}
 		}
-		return msg
+		return reply()
 	}
 }
 

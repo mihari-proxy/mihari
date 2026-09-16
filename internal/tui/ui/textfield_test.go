@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -106,5 +107,18 @@ func TestIsTextEditMsg(t *testing.T) {
 	}
 	if IsTextEditMsg(tea.KeyPressMsg{Code: tea.KeyEsc}) {
 		t.Fatal("esc is not a text edit")
+	}
+}
+
+func TestClipboardReadFailure_RetainsCauseWithoutChangingInput(t *testing.T) {
+	cause := errors.New("clipboard token=fixture-paste")
+	result := readClipboard(func() (string, error) { return "", cause })
+	outcome, ok := result.(interface{ Err() error })
+	if !ok || !errors.Is(outcome.Err(), cause) {
+		t.Fatal("clipboard read failure was discarded")
+	}
+	value, cursor, handled, _ := EditTextField("draft", 3, result, 100)
+	if value != "draft" || cursor != 3 || !handled {
+		t.Fatal("failed paste altered draft or focus")
 	}
 }

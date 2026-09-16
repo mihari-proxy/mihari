@@ -84,7 +84,7 @@ func (c *Client) Stream(ctx context.Context, kind StreamKind, receive func(json.
 		}
 		var validated json.RawMessage
 		if err := json.Unmarshal(message, &validated); err != nil {
-			return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo stream returned invalid JSON"}, &diagnostics.HTTPError{Operation: "mihomo stream " + string(kind), URL: streamURL, Phase: "decode", Body: diagnostics.HTTPBody(message), Cause: err})
+			return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo stream returned invalid JSON"}, &diagnostics.HTTPError{Operation: "mihomo stream " + string(kind), URL: streamURL, Phase: "decode", Body: diagnostics.HTTPBody(message), BodyTruncated: len(message) > diagnostics.MaxHTTPBodyBytes, Cause: err})
 		}
 		if err := receive(json.RawMessage(message)); err != nil {
 			return err

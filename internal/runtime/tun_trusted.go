@@ -72,7 +72,7 @@ func (m *Manager) mutateTrustedTun(ctx context.Context, op Operation, enable, fo
 	if catalog.ActiveID != "" {
 		raw, _, err := m.subscriptions.ReadCache(catalog.ActiveID)
 		if err != nil || sha256.Sum256(raw) != sourceHash {
-			return protocol.TunStatus{}, protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "subscription cache changed during TUN preparation"}
+			return protocol.TunStatus{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "subscription cache changed during TUN preparation"}, err)
 		}
 	}
 	previous, err := m.trustedCore.PreviousConfig(ctx)

@@ -65,6 +65,7 @@ type FooterOpt struct {
 // the same physical key may appear more than once with different labels.
 func Catalog() []KeyBinding {
 	return []KeyBinding{
+		{Keys: []string{"f2"}, Display: "F2", Label: "diagnostic history and error details", Footer: "F2 details", Scope: ScopeGlobal},
 		{Keys: []string{"up", "down"}, Display: "↑/↓", Label: "select a routing mode", Footer: "↑/↓ select", Scope: ScopeMode, Mode: ModeRouting},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "apply the selected mode", Footer: "Enter apply", Scope: ScopeMode, Mode: ModeRouting},
 		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel mode selection", Footer: "Esc cancel", Scope: ScopeMode, Mode: ModeRouting},
@@ -241,13 +242,17 @@ func RenderRailFooter() string {
 	tokens := footerTokens(func(b KeyBinding) bool {
 		return b.Scope == ScopeGlobal && (b.Footer == "↑/↓ page" || b.Footer == "Enter open")
 	})
-	return joinFooter(append(tokens, helpQuitTokens()...))
+	return joinFooter(append([]string{globalFooterToken("F2")}, append(tokens, helpQuitTokens()...)...))
 }
 
 // RenderFooter builds the one-line shortcut hint for a page and overlay mode.
 // Empty mode is the page default. FooterOpt selects state-dependent recipes such
 // as Web GUI availability.
 func RenderFooter(page PageID, mode string, opt FooterOpt) string {
+	return joinFooter([]string{globalFooterToken("F2"), renderPageFooter(page, mode, opt)})
+}
+
+func renderPageFooter(page PageID, mode string, opt FooterOpt) string {
 	helpQuit := helpQuitTokens()
 	escBack := globalFooterToken("Esc")
 	switch mode {
@@ -351,7 +356,7 @@ func RenderHelp(active PageID, mode string) string {
 
 	subscriptionOverlay := active == PageSubscriptions && (mode == ModeForm || strings.HasPrefix(mode, "subscription-"))
 	write("Global", filter(cat, func(x KeyBinding) bool {
-		return x.Scope == ScopeGlobal && (!subscriptionOverlay || x.Display == "Ctrl+C")
+		return x.Scope == ScopeGlobal && (!subscriptionOverlay || x.Display == "Ctrl+C" || x.Display == "F2")
 	}))
 
 	if mode != "" && mode != ModeSetup {

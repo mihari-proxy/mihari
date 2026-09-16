@@ -23,41 +23,50 @@ func decodeInstallationJSON(reader io.Reader, max int, dest any) (map[string]boo
 		return nil, os.ErrInvalid
 	}
 	data, err := io.ReadAll(io.LimitReader(reader, int64(max)+1))
-	if err != nil || len(data) > max || !utf8.Valid(data) {
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > max || !utf8.Valid(data) {
 		return nil, os.ErrInvalid
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	keys, err := uniqueInstallationObject(dec)
 	if err != nil {
-		return nil, os.ErrInvalid
+		return nil, err
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return nil, os.ErrInvalid
+		return nil, errors.Join(os.ErrInvalid, err)
 	}
 	if err := validateInstallationJSONShape(data, typeOfDest.Elem()); err != nil {
-		return nil, os.ErrInvalid
+		return nil, err
 	}
 	dec = json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dest); err != nil {
-		return nil, os.ErrInvalid
+		return nil, err
 	}
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return nil, os.ErrInvalid
+		return nil, errors.Join(os.ErrInvalid, err)
 	}
 	return keys, nil
 }
 
 func uniqueInstallationObject(dec *json.Decoder) (map[string]bool, error) {
 	token, err := dec.Token()
-	if err != nil || token != json.Delim('{') {
+	if err != nil {
+		return nil, err
+	}
+	if token != json.Delim('{') {
 		return nil, os.ErrInvalid
 	}
 	keys := map[string]bool{}
 	for dec.More() {
 		key, err := dec.Token()
 		name, ok := key.(string)
-		if err != nil || !ok || keys[name] {
+		if err != nil {
+			return nil, err
+		}
+		if !ok || keys[name] {
 			return nil, os.ErrInvalid
 		}
 		keys[name] = true
@@ -66,7 +75,10 @@ func uniqueInstallationObject(dec *json.Decoder) (map[string]bool, error) {
 		}
 	}
 	end, err := dec.Token()
-	if err != nil || end != json.Delim('}') {
+	if err != nil {
+		return nil, err
+	}
+	if end != json.Delim('}') {
 		return nil, os.ErrInvalid
 	}
 	return keys, nil
@@ -78,7 +90,7 @@ func uniqueInstallationValue(dec *json.Decoder, depth int) error {
 	}
 	token, err := dec.Token()
 	if err != nil {
-		return os.ErrInvalid
+		return err
 	}
 	if token == nil {
 		return nil
@@ -89,7 +101,10 @@ func uniqueInstallationValue(dec *json.Decoder, depth int) error {
 		for dec.More() {
 			key, err := dec.Token()
 			name, ok := key.(string)
-			if err != nil || !ok || seen[name] {
+			if err != nil {
+				return err
+			}
+			if !ok || seen[name] {
 				return os.ErrInvalid
 			}
 			seen[name] = true
@@ -98,7 +113,10 @@ func uniqueInstallationValue(dec *json.Decoder, depth int) error {
 			}
 		}
 		end, err := dec.Token()
-		if err != nil || end != json.Delim('}') {
+		if err != nil {
+			return err
+		}
+		if end != json.Delim('}') {
 			return os.ErrInvalid
 		}
 	case json.Delim('['):
@@ -108,7 +126,10 @@ func uniqueInstallationValue(dec *json.Decoder, depth int) error {
 			}
 		}
 		end, err := dec.Token()
-		if err != nil || end != json.Delim(']') {
+		if err != nil {
+			return err
+		}
+		if end != json.Delim(']') {
 			return os.ErrInvalid
 		}
 	}

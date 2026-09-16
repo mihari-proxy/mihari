@@ -15,7 +15,6 @@ import (
 // subscriptionDialogFixture drives the root with synthetic events and a fixed clock.
 func subscriptionDialogFixture(t *testing.T, width, height int, add bool, field int, lastError string) Model {
 	t.Helper()
-	freezeUTC(t)
 	now := time.Date(2026, 9, 15, 8, 0, 0, 0, time.UTC)
 	m := goldenModel(t, ui.PageSubscriptions, width, height)
 	m.pages[ui.PageSubscriptions] = subscriptionspage.New(nil, nil, func() time.Time { return now })

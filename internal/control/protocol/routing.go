@@ -10,6 +10,7 @@ func ValidRoutingMode(mode string) bool {
 
 // RoutingStatus separates persisted intent from confirmed kernel observation.
 type RoutingStatus struct {
+	WarningOutcome
 	Schema              string `json:"schema"`
 	Revision            uint64 `json:"revision"`
 	DesiredMode         string `json:"desired_mode"`

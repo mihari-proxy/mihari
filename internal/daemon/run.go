@@ -18,6 +18,7 @@ type Options struct {
 	Onboarding         controlserver.OnboardingAPI
 	SnapshotSource     logging.MachineSnapshotSource
 	DiagnosticReporter diagnostics.Reporter
+	DiagnosticHistory  *diagnostics.History
 	Listen             func(context.Context) (net.Listener, error)
 	OnReady            func() error
 	Endpoint           string
@@ -83,7 +84,7 @@ func Run(parent context.Context, options Options) error {
 		}()
 	}
 	runtimeAPI, _ := options.Runtime.(controlserver.RuntimeAPI)
-	server := controlserver.New(controlserver.Options{Token: options.Token, Store: store, Runtime: runtimeAPI, Onboarding: options.Onboarding, SnapshotSource: options.SnapshotSource, DiagnosticReporter: options.DiagnosticReporter})
+	server := controlserver.New(controlserver.Options{Token: options.Token, Store: store, Runtime: runtimeAPI, Onboarding: options.Onboarding, SnapshotSource: options.SnapshotSource, DiagnosticReporter: options.DiagnosticReporter, DiagnosticHistory: options.DiagnosticHistory})
 	serverError := server.Serve(ctx, listener)
 	cancel()
 	if runtimeDone != nil {

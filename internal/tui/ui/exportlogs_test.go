@@ -163,7 +163,7 @@ func TestExportLogsModel_CustomBetweenValidationAndRequest(t *testing.T) {
 	m.from = "2026-09-03 00:00"
 	m.to = "2026-09-02 23:59"
 	m.output = out
-	if cmd, _ := m.Update(key(tea.KeyEnter, "")); cmd != nil || !strings.Contains(m.View(100, 30), "From must not be after To") {
+	if cmd, _ := m.Update(key(tea.KeyEnter, "")); !isExportFailureCommand(cmd) || m.Pending() || !strings.Contains(m.View(100, 30), "From must not be after To") {
 		t.Fatal("invalid interval accepted")
 	}
 	if m.from != "2026-09-03 00:00" || m.to != "2026-09-02 23:59" {
@@ -194,7 +194,7 @@ func TestExportLogsModel_BetweenRejectsMalformedAndNoncanonicalTimes(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			m.Open()
 			m.rangeKind, m.focus, m.from, m.to = logging.RangeBetween, exportFocusSubmit, tc.from, tc.to
-			if cmd, consumed := m.Update(key(tea.KeyEnter, "")); !consumed || cmd != nil {
+			if cmd, consumed := m.Update(key(tea.KeyEnter, "")); !consumed || !isExportFailureCommand(cmd) || m.Pending() {
 				t.Fatalf("submit=(%v,%v)", cmd, consumed)
 			}
 			if !strings.Contains(m.View(100, 30), ExportTimeInvalid) || m.from != tc.from || m.to != tc.to {
@@ -493,7 +493,7 @@ func TestExportLogsModel_DefaultDoesNotDegradeWhenMachineUnavailable(t *testing.
 	}
 	m.focus = exportFocusSubmit
 	cmd, consumed := m.Update(key(tea.KeyEnter, ""))
-	if !consumed || cmd != nil || called || m.Pending() {
+	if !consumed || !isExportFailureCommand(cmd) || called || m.Pending() {
 		t.Fatal("default export silently degraded")
 	}
 	if !strings.Contains(m.View(140, 40), ExportMachineUnavailable) {
@@ -559,4 +559,12 @@ func TestExportLogsModel_OnlineFullExportUsesSameWindow(t *testing.T) {
 	if got.Range.Kind != logging.RangeLast24Hours || !got.Range.To.Equal(now.UTC()) || !got.Range.From.Equal(now.Add(-24*time.Hour).UTC()) {
 		t.Fatalf("window=%+v now=%v", got.Range, now)
 	}
+}
+
+func isExportFailureCommand(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	msg, ok := cmd().(DiagnosticMsg)
+	return ok && msg.Err != nil
 }

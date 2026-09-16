@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,8 +55,8 @@ func TestRunCleanup_CloseFailureReportsAfterAllResourcesOnce(t *testing.T) {
 			if !slices.Equal(order, want) {
 				t.Fatalf("close order=%q want=%q", order, want)
 			}
-			if warnings.String() != "Warning: TUI file logging cleanup failed\n" {
-				t.Fatal("cleanup warning leaked details or duplicated")
+			if strings.Count(warnings.String(), "Warning: TUI file logging cleanup failed") != 1 || !strings.Contains(warnings.String(), fsErr.Error()) || (available && !strings.Contains(warnings.String(), "close /private/tui-secret/log")) {
+				t.Fatal("cleanup warning lost details or duplicated")
 			}
 		})
 	}

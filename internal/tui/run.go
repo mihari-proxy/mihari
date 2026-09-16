@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/app"
 	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	subscriptionspage "github.com/mihari-proxy/mihari/internal/tui/pages/subscriptions"
@@ -172,10 +174,9 @@ const (
 	tuiLoggingFailureWindow = time.Second
 )
 
-// tuiLoggingFailureReporter emits rate-limited, stable local logging warnings.
-// It intentionally never includes the underlying error because it may contain
-// sensitive data or an absolute local path.
+// tuiLoggingFailureReporter reports original local logging failures without using the failed logger.
 type tuiLoggingFailureReporter struct {
+	history  *diagnostics.History
 	out      io.Writer
 	redactor *logging.Redactor
 	now      func() time.Time
@@ -192,7 +193,7 @@ func newTUILoggingFailureReporter(out io.Writer, redactor *logging.Redactor, now
 }
 
 func (r *tuiLoggingFailureReporter) report(kind tuiLoggingFailureKind, err error) {
-	if r == nil || r.out == nil || err == nil {
+	if r == nil || err == nil {
 		return
 	}
 	now := r.now()
@@ -206,12 +207,16 @@ func (r *tuiLoggingFailureReporter) report(kind tuiLoggingFailureKind, err error
 	if kind == tuiLoggingCleanupFailure {
 		message = "TUI file logging cleanup failed"
 	}
-	if r.redactor != nil {
-		message = r.redactor.String(message)
+	snapshot := diagnostics.Describe(context.Background(), diagnostics.Record{Component: "tui.logging", Event: "logging.failed", Summary: message, Level: slog.LevelWarn, Err: err})
+	if r.history != nil {
+		snapshot = r.history.Add(snapshot)
 	}
-	// The logger may already be closed; failure of this last independent
-	// warning outlet cannot safely be reported through it.
-	_, _ = fmt.Fprintf(r.out, "Warning: %s\n", message)
+	if r.out == nil {
+		return
+	}
+	// This last independent outlet cannot recursively report its own write failure.
+	_, _ = io.WriteString(r.out, diagnostics.TerminalText("Warning", snapshot))
+
 }
 
 func inspectInstallationWithOfflineFallback(
@@ -262,7 +267,11 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 	if resources.Redactor == nil {
 		resources.Redactor = logging.NewRedactor()
 	}
-	diagnosticReporter := logging.NewDiagnosticReporter(resources.Runtime.Logger(), resources.Redactor)
+	history, historyErr := diagnostics.NewHistory(diagnostics.HistoryOptions{MaxRecords: 128, MaxBytes: 16 << 20})
+	if historyErr != nil {
+		return errors.Join(historyErr, resources.Close())
+	}
+	diagnosticReporter := diagnostics.NewOwner(history, logging.NewDiagnosticReporter(resources.Runtime.Logger(), resources.Redactor)).Report
 	localDiagnostics := ui.LocalTaskDiagnostics{Reporter: diagnosticReporter}
 	actions.Diagnostics.Reporter = diagnosticReporter
 	installationWorker.diagnostics = actions.Diagnostics
@@ -278,6 +287,7 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 		}
 	}
 	reporter := newTUILoggingFailureReporter(options.ErrorOutput, resources.Redactor, nil)
+	reporter.history = history
 	if openErr != nil {
 		reporter.report(tuiLoggingBootstrapFailure, openErr)
 	}
@@ -300,6 +310,7 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 		events = controlSession.Start(sessionCtx)
 	}
 	model := newRunModel(ctx, options.Client, events, health, applier)
+	model.localDiagnosticHistory = history
 	if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
 		defer page.Stop()
 	}

@@ -1,6 +1,7 @@
 package protocol
 
 type TUIPreferences struct {
+	WarningOutcome
 	Schema             string   `json:"schema"`
 	Revision           uint64   `json:"revision"`
 	ConnectionsColumns []string `json:"connections_columns"`

@@ -138,7 +138,6 @@ func TestShellView_StaleUsesRightStatusNotSpinner(t *testing.T) {
 }
 
 func TestShellView_StaleFooterShowsLastObserved(t *testing.T) {
-	freezeUTC(t)
 	model := NewModel()
 	model.width, model.height = 100, 28
 	model.resizePages()

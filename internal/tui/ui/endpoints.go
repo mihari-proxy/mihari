@@ -3,6 +3,8 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"net"
 	"net/netip"
 	"syscall"
@@ -12,15 +14,15 @@ import (
 func ValidateManagedEndpoints(mixedValue, controllerValue, webValue string) error {
 	mixed, err := netip.ParseAddrPort(mixedValue)
 	if err != nil || mixed.Port() == 0 {
-		return fmt.Errorf("mixed endpoint must be an IP address and valid port")
+		return endpointFailure("mixed endpoint must be an IP address and valid port", mixedValue, err)
 	}
 	controller, err := netip.ParseAddrPort(controllerValue)
 	if err != nil || controller.Port() == 0 || !controller.Addr().IsLoopback() {
-		return fmt.Errorf("controller endpoint must use a loopback address and valid port")
+		return endpointFailure("controller endpoint must use a loopback address and valid port", controllerValue, err)
 	}
 	web, err := netip.ParseAddrPort(webValue)
 	if err != nil || web.Port() == 0 || !web.Addr().IsLoopback() {
-		return fmt.Errorf("web endpoint must use a loopback address and valid port")
+		return endpointFailure("web endpoint must use a loopback address and valid port", webValue, err)
 	}
 	if mixed.Port() == controller.Port() || mixed.Port() == web.Port() || controller.Port() == web.Port() {
 		return fmt.Errorf("managed ports must be distinct")
@@ -30,12 +32,19 @@ func ValidateManagedEndpoints(mixedValue, controllerValue, webValue string) erro
 
 // ListenFree reports whether addr accepted a short-lived TCP bind.
 func ListenFree(addr string) bool {
+	// Availability-only callers do not consume diagnostics; the System probe
+	// uses ProbeListen directly to retain bind and cleanup failures.
+	free, _ := ProbeListen(addr)
+	return free
+}
+
+// ProbeListen reports availability and preserves any bind or cleanup failure.
+func ProbeListen(addr string) (bool, error) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		return false
+		return false, err
 	}
-	_ = listener.Close()
-	return true
+	return true, listener.Close()
 }
 
 // AddrInUse reports whether a listen error means the address is already bound.
@@ -79,4 +88,13 @@ func FindAvailablePorts(current [3]string, occupied [3]bool, probe func(string) 
 		}
 	}
 	return result
+}
+
+func endpointFailure(summary, value string, cause error) error {
+	if cause == nil {
+		cause = fmt.Errorf("endpoint %q does not meet the required address and port constraints", value)
+	} else {
+		cause = fmt.Errorf("parse endpoint %q: %w", value, cause)
+	}
+	return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: summary}, cause)
 }

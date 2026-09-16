@@ -223,7 +223,7 @@ func (d *Downloader) do(ctx context.Context, input FetchRequest, client *http.Cl
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		body, readErr := io.ReadAll(io.LimitReader(response.Body, diagnostics.MaxHTTPBodyBytes+1))
-		detail := &diagnostics.HTTPError{Operation: "subscription download", URL: input.URL, Phase: "response", Status: response.StatusCode, Body: diagnostics.HTTPBody(body), Cause: readErr}
+		detail := &diagnostics.HTTPError{Operation: "subscription download", URL: input.URL, Phase: "response", Status: response.StatusCode, Body: diagnostics.HTTPBody(body), BodyTruncated: len(body) > diagnostics.MaxHTTPBodyBytes, Cause: readErr}
 		return FetchResult{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "subscription provider returned an unsuccessful response", Details: map[string]any{"status": response.StatusCode}}, detail)
 	}
 	limit := d.MaxBytes

@@ -116,8 +116,15 @@ func TestLocalTaskDiagnostics_ExportFailureWarningAndCancellation(t *testing.T) 
 			if mode == "warning" && record["level"] != "WARN" {
 				t.Fatalf("lost warning severity: %+v", record)
 			}
-			if mode == "warning" && (!strings.Contains(record["cause"].(string), io.ErrUnexpectedEOF.Error()) || strings.Count(record["cause"].(string), "/private/export-token") != 1) {
-				t.Fatal("distinct warning lost or repeated warning duplicated")
+			if mode == "warning" {
+				if !strings.Contains(record["cause"].(string), "/private/export-token") {
+					t.Fatal("first warning missing")
+				}
+				for _, want := range []string{"/private/export-token", io.ErrUnexpectedEOF.Error()} {
+					if err := decoder.Decode(&record); err != nil || record["level"] != "WARN" || !strings.Contains(record["cause"].(string), want) {
+						t.Fatalf("warning occurrence lost: %+v %v", record, err)
+					}
+				}
 			}
 			if mode == "cancel" && record["level"] != "INFO" {
 				t.Fatal("cancellation should be visible at INFO")
@@ -129,7 +136,7 @@ func TestLocalTaskDiagnostics_ExportFailureWarningAndCancellation(t *testing.T) 
 	}
 }
 
-func TestLocalTaskDiagnostics_ExportFinalFailureContainsWarningLoggedOnce(t *testing.T) {
+func TestLocalTaskDiagnostics_ExportWarningAndFinalFailureRemainSeparateOccurrences(t *testing.T) {
 	var out bytes.Buffer
 	cause := errors.New("cleanup failure shared with final export")
 	r := newExportRunner(context.Background(), func(_ context.Context, request logging.ExportRequest) (logging.ExportResult, error) {
@@ -145,11 +152,14 @@ func TestLocalTaskDiagnostics_ExportFinalFailureContainsWarningLoggedOnce(t *tes
 	}
 	decoder := json.NewDecoder(&out)
 	var record map[string]any
+	if err := decoder.Decode(&record); err != nil || record["msg"] != "logs.export.warning" {
+		t.Fatalf("warning occurrence missing: %+v %v", record, err)
+	}
 	if err := decoder.Decode(&record); err != nil || record["msg"] != "logs.export.failed" {
 		t.Fatalf("final failure missing: %+v %v", record, err)
 	}
 	if err := decoder.Decode(&record); !errors.Is(err, io.EOF) {
-		t.Fatalf("warning duplicated contained final cause: %+v %v", record, err)
+		t.Fatalf("unexpected additional occurrence: %+v %v", record, err)
 	}
 }
 
@@ -310,7 +320,7 @@ func assertExportDiagnosticLevel(t *testing.T, logs *bytes.Buffer, level, event 
 	}
 }
 
-func TestLocalTaskDiagnostics_ExportWithoutReporterDoesNotInspectError(t *testing.T) {
+func TestLocalTaskDiagnostics_ExportWithoutReporterPreservesResultAndDetails(t *testing.T) {
 	cause := &opaqueExportDiagnosticError{}
 	released := make(chan struct{})
 	var canceled <-chan struct{}
@@ -326,13 +336,12 @@ func TestLocalTaskDiagnostics_ExportWithoutReporterDoesNotInspectError(t *testin
 	}
 	result := <-results
 	r.Wait()
-	// Error identity is compared directly: the no-reporter contract must not
-	// invoke the opaque error's methods, including from this test assertion.
-	if result.Err != cause || result.Result.Path != "original-result" || result.Generation != 13 || !result.Warning {
-		t.Fatal("disabled diagnostics changed the export result")
+	// Independent diagnostic capture retains the original cause and business result.
+	if !errors.Is(result.Err, cause) || result.Result.Path != "original-result" || result.Generation != 13 || !result.Warning {
+		t.Fatal("diagnostic capture changed the export result")
 	}
-	if cause.unwrapCalls != 0 {
-		t.Fatalf("disabled diagnostics inspected opaque error %d times", cause.unwrapCalls)
+	if got := diagnostics.Capture(result.Err).Text; got != "opaque export error" {
+		t.Fatalf("original details missing: %q", got)
 	}
 	select {
 	case <-released:
@@ -371,8 +380,8 @@ func TestLocalTaskDiagnostics_ExportWithoutReporterPreservesTypedNilError(t *tes
 	}
 	result := <-results
 	r.Wait()
-	if result.Err != cause || result.Result.Path != "original-result" || result.Generation != 14 {
-		t.Fatal("disabled diagnostics changed typed-nil result identity")
+	if !errors.Is(result.Err, cause) || result.Result.Path != "original-result" || result.Generation != 14 {
+		t.Fatal("diagnostic capture changed typed-nil result identity")
 	}
 	if _, open := <-results; open {
 		t.Fatal("result channel not closed")

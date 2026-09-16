@@ -161,3 +161,5 @@ type discardPreparedResultMsg struct{ err error }
 
 func (m discardPreparedResultMsg) Err() error                       { return m.err }
 func (w *runPreparedUpdater) discard(p update.PreparedUpdate) error { return p.Close() }
+
+func (m discardPreparedResultMsg) DiagnosticPage() ui.PageID { return ui.PageSystem }

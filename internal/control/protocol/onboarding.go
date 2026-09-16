@@ -1,6 +1,7 @@
 package protocol
 
 type OnboardingStatus struct {
+	WarningOutcome
 	Schema          string `json:"schema"`
 	Revision        uint64 `json:"revision"`
 	Complete        bool   `json:"complete"`

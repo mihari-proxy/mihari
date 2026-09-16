@@ -12,7 +12,7 @@ const rfc3339NanoNumeric = "2006-01-02T15:04:05.999999999-07:00"
 
 // NewJSONHandler returns a slog JSON handler that stamps component, formats time
 // as RFC3339Nano with a numeric offset, and preserves original log content.
-// Redaction for public fallback output is owned separately by the caller.
+// Terminal control escaping is owned separately by terminal display adapters.
 func NewJSONHandler(out io.Writer, level *slog.LevelVar, component string, _ *Redactor) slog.Handler {
 	opts := &slog.HandlerOptions{
 		Level: level,

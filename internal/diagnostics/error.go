@@ -8,12 +8,7 @@ import (
 
 // Wrap combines a public API error with its internal cause.
 func Wrap(api protocol.APIError, cause error) error {
-	public := protocol.APIError{
-		Code:    api.Code,
-		Message: api.Message,
-		Details: api.Details,
-	}
-	return failure{api: public, cause: cause}
+	return failure{api: api, cause: cause}
 }
 
 type failure struct {

@@ -2,12 +2,14 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
 const (
@@ -155,7 +157,7 @@ type InstallationStatus struct {
 func DecodeInstallationState(reader io.Reader) (InstallationState, error) {
 	var state InstallationState
 	if _, err := decodeInstallationJSON(reader, MaxInstallationStateBytes, &state); err != nil {
-		return InstallationState{}, invalidInstallationState()
+		return InstallationState{}, invalidInstallationState(err)
 	}
 	if err := validateInstallationState(state); err != nil {
 		return InstallationState{}, err
@@ -170,7 +172,7 @@ func EncodeInstallationState(state InstallationState) ([]byte, error) {
 	}
 	raw, err := json.Marshal(state)
 	if err != nil || len(raw) > MaxInstallationStateBytes {
-		return nil, invalidInstallationState()
+		return nil, invalidInstallationState(err)
 	}
 	return raw, nil
 }
@@ -349,6 +351,10 @@ func validResetEntry(entry string) bool {
 	}
 }
 
-func invalidInstallationState() error {
-	return protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid installation state"}
+func invalidInstallationState(causes ...error) error {
+	api := protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid installation state"}
+	if cause := errors.Join(causes...); cause != nil {
+		return diagnostics.Wrap(api, cause)
+	}
+	return api
 }

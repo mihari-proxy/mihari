@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -43,6 +45,7 @@ const (
 )
 
 type onboardingResultMsg struct {
+	coreErr          error
 	core             *protocol.CoreStatus
 	subscriptions    *protocol.SubscriptionList
 	subscriptionsErr error
@@ -51,6 +54,8 @@ type onboardingResultMsg struct {
 }
 
 type actionResultMsg struct {
+	cancelled    bool
+	warnings     protocol.WarningOutcome
 	gen          uint64
 	core         *protocol.CoreInstallResult
 	subscription *protocol.Subscription
@@ -99,16 +104,18 @@ const (
 // stepEndpoints. A stale generation is discarded so rapid edits honor only the
 // latest probe.
 type portProbeMsg struct {
-	gen     uint64
-	results [3]portState
+	failures []error
+	gen      uint64
+	results  [3]portState
 }
 
 type completeStartMsg struct{}
 
 type completeResultMsg struct {
-	gen    uint64
-	status protocol.OnboardingStatus
-	err    error
+	cancelled bool
+	gen       uint64
+	status    protocol.OnboardingStatus
+	err       error
 }
 
 // Err implements the shell's action-outcome contract so Setup completion is
@@ -396,8 +403,13 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			if cause == "" {
 				cause = "The first download did not produce a usable subscription."
 			}
-			m.fail("Subscription saved; first download failed", protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: cause})
-			return m, nil
+			failure := protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: cause}
+			m.fail("Subscription saved; first download failed", failure)
+			if len(typed.warnings.Warnings) > 0 {
+				return m, nil
+			}
+			snapshot := diagnostics.Describe(m.ctx, diagnostics.Record{Component: "tui.setup", Event: "subscription.first_download.failed", Level: slog.LevelWarn, Summary: "Subscription saved; first download failed", Err: failure})
+			return m, func() tea.Msg { return ui.DiagnosticMsg{Page: ui.PageSetup, Diagnostic: &snapshot} }
 		}
 		m.step = typed.next
 		switch m.step {
@@ -637,8 +649,7 @@ func (m *Model) updateEndpoints(message tea.Msg, key tea.KeyPressMsg) (ui.Page, 
 		return m, m.inputs[m.focusedField].Focus()
 	case "enter":
 		if err := validateEndpoints(m.endpointValues()); err != nil {
-			m.lastError = err.Error()
-			return m, nil
+			return m, m.localFailure("Invalid endpoints", err)
 		}
 		if m.portProbeLoaded && m.anyPortOccupied() {
 			fixed := findAvailablePortsForStates(m.endpointValuesArray(), m.portProbe)
@@ -699,8 +710,7 @@ func (m *Model) updateSubscription(message tea.Msg, key tea.KeyPressMsg) (ui.Pag
 			return m, m.fetchGeoIPLocal()
 		}
 		if name == "" || url == "" {
-			m.lastError = ui.InvalidSubscriptionForm
-			return m, nil
+			return m, m.localFailure("Invalid subscription", protocol.APIError{Code: protocol.CodeInvalidArgument, Message: ui.InvalidSubscriptionForm})
 		}
 		m.loading = true
 		return m, m.addSubscription(name, url)
@@ -883,14 +893,19 @@ func (m *Model) probePorts() tea.Cmd {
 	probe := m.probe
 	return func() tea.Msg {
 		var results [3]portState
+		var failures []error
 		for i, address := range values {
 			if probe != nil {
 				results[i] = probe(address)
 			} else {
-				results[i] = classifySetupPort(address, owners[i], platform.LookupTCPOccupant)
+				var err error
+				results[i], err = classifySetupPortResult(address, owners[i], platform.LookupTCPOccupant)
+				if err != nil {
+					failures = append(failures, fmt.Errorf("probe setup endpoint %s: %w", address, err))
+				}
 			}
 		}
-		return portProbeMsg{gen: gen, results: results}
+		return portProbeMsg{gen: gen, results: results, failures: failures}
 	}
 }
 
@@ -928,15 +943,23 @@ func (m *Model) renderEndpoints() []string {
 // occupied; any other error (permissions) → unknown — the socket never contends
 // with core startup.
 func probeEndpoint(addr string) portState {
+	// Candidate scanning only needs availability; the final endpoint probe reports failures.
+	state, _ := probeEndpointResult(addr)
+	return state
+}
+
+func probeEndpointResult(addr string) (portState, error) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		if isAddrInUse(err) {
-			return portOccupied
+			return portOccupied, err
 		}
-		return portUnknown
+		return portUnknown, err
 	}
-	_ = listener.Close()
-	return portFree
+	if err := listener.Close(); err != nil {
+		return portUnknown, fmt.Errorf("close endpoint probe: %w", err)
+	}
+	return portFree, nil
 }
 
 // isAddrInUse reports whether a listen error means the address is already bound.
@@ -1011,7 +1034,7 @@ func (m *Model) installCore() tea.Cmd {
 		result, err := m.client.InstallCore(ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision, Source: "setup"})
 		// Capture the install outcome so stepReview can summarize "本地已有/新装/安装失败".
 		// The cmd→channel→Update path provides the happens-before guarantee (design §7.4).
-		return actionResultMsg{gen: gen, core: &result, next: stepSubscription, revision: result.Revision, operation: operation, err: err}
+		return actionResultMsg{cancelled: diagnostics.NormalCancellation(ctx, err), warnings: result.WarningOutcome, gen: gen, core: &result, next: stepSubscription, revision: result.Revision, operation: operation, err: err}
 	}
 }
 
@@ -1028,7 +1051,7 @@ func (m *Model) addSubscription(name, url string) tea.Cmd {
 		if err == nil {
 			saved = &subscription
 		}
-		return actionResultMsg{gen: gen, subscription: saved, next: stepGeoIP, revision: result.Revision, err: err}
+		return actionResultMsg{cancelled: diagnostics.NormalCancellation(ctx, err), warnings: result.WarningOutcome, gen: gen, subscription: saved, next: stepGeoIP, revision: result.Revision, err: err}
 	}
 }
 
@@ -1043,7 +1066,7 @@ func (m *Model) updateGeoIP() tea.Cmd {
 		// Capture the update outcome so stepReview shows "Country ✓ ASN ✓" or "更新失败".
 		// Copied by value; the runtime result is not retained. See installCore for the note.
 		resultCopy := result
-		return actionResultMsg{gen: gen, geoip: &resultCopy, operation: operation, next: stepReview, revision: result.Revision, err: err}
+		return actionResultMsg{cancelled: diagnostics.NormalCancellation(ctx, err), warnings: result.WarningOutcome, gen: gen, geoip: &resultCopy, operation: operation, next: stepReview, revision: result.Revision, err: err}
 	}
 }
 
@@ -1165,7 +1188,7 @@ func (m *Model) complete() tea.Cmd {
 	}
 	return func() tea.Msg {
 		status, err := m.client.UpdateOnboarding(ctx, request)
-		return completeResultMsg{gen: gen, status: status, err: err}
+		return completeResultMsg{cancelled: diagnostics.NormalCancellation(ctx, err), gen: gen, status: status, err: err}
 	}
 }
 

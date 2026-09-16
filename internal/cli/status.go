@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/spf13/cobra"
 )
 
@@ -24,7 +25,7 @@ func newStatusCommand(dependencies Dependencies, options *runOptions) *cobra.Com
 				if errors.As(err, &apiError) {
 					return err
 				}
-				return protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "daemon is unavailable"}
+				return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "daemon is unavailable"}, err)
 			}
 			if options.json {
 				return json.NewEncoder(command.OutOrStdout()).Encode(status)
@@ -35,7 +36,7 @@ func newStatusCommand(dependencies Dependencies, options *runOptions) *cobra.Com
 				return err
 			}
 			if status.LastError != "" {
-				if _, err = fmt.Fprintf(command.OutOrStdout(), "Error: %s\n", status.LastError); err != nil {
+				if _, err = fmt.Fprintf(command.OutOrStdout(), "Error: %s\n", diagnostics.EscapeTerminal(status.LastError)); err != nil {
 					return err
 				}
 			}

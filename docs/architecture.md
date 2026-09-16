@@ -29,9 +29,14 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 
 ## 诊断错误链
 
+当前本地错误汇报策略由 [Issue #197 统一错误汇报设计](superpowers/specs/2026-09-16-unified-error-reporting-design.md)规定：日志与本地 CLI/TUI 错误均不脱敏，执行 owner 使用共享 formatter 采集原始原因并分配发生记录 ID；响应、warning 和历史查询复用同一快照。下文历史 Phase 记录中的“安全 envelope”“原文仅限文件日志”和 FailureReporter 脱敏限制不再适用。普通业务 DTO 字段、浏览器和网络认证边界保持。
+
+本地 `/v1/diagnostics` 分页返回元数据，单条查询返回有界原文；daemon 256 条/32 MiB、TUI 本地 128 条/16 MiB。F2 合并窗口最多 384 条/16 MiB，并保留一条正在阅读的快照；历史无持久化、无内容去重或恢复关联。文件级别过滤不影响内存历史，缓存重放只复用既有 ID。CLI/TUI 共用可选 `diagnostic` 和 `warnings`，旧端、淘汰、重启及读取失败显式降级，绝不重放 mutation。业务正文保持 4 MiB；诊断超预算时使用只读引用，连引用也放不下时采用有界元数据响应头。stream 仅在能力协商后发送小型 terminal reference，然后按既有状态关闭，不发送原始正文。
+
+
 本节后续 Phase 表格保留先前诊断建设的历史审计记录。其中“脱敏摘要”“取消静默”“预期拒绝 DEBUG”等旧策略由[完整错误日志设计](superpowers/specs/2026-09-14-full-error-logging-design.md)替代，实施与验证证据见[模块登记](superpowers/plans/2026-09-14-full-error-logging-audit.md)。
 
-- 文件日志、快照与导出保留原始 cause、包装上下文、合并原因及已有堆栈，不脱敏。普通 API、状态、事件、CLI JSON 与独立终端 FailureReporter 保留各自的输出边界；日志原文仅经既有授权日志快照协议传输。
+- 文件日志、快照、导出和本地 CLI/TUI 错误详情保留原始 cause、包装上下文、合并原因及已有堆栈，不脱敏。原文经授权本地诊断接口传输；独立终端 FailureReporter 同样保留有界原文，不依赖故障 logger。
 - 仅使用已建立且可用的文件 reporter；普通 CLI 不新建或探测日志。预期拒绝与主动取消 INFO、重试与恢复 warning WARN、最终失败 ERROR，遵循配置过滤；实际执行 owner 去重，缓存重放不再报告。
 - 诊断文本、HTTP 失败正文与核心逻辑行各限 256 KiB。保留错误图预算及截断标记；最坏 JSON 转义采用 UTF-8 分片，适配既有 1 MiB record / 2 MiB frame。快照校验、摘要、来源范围、权限与业务提交语义保持。
 - Issue #204 的专用内部 HTTP cause 保留真实状态、失败阶段、URL、失败正文与原始报错。成功响应正文不转储。导出前与完成页面红色说明日志未经脱敏，不增加确认步骤或额外配置文件。
@@ -101,7 +106,7 @@ Phase 4 保留几条明确边界：认证前、预解析和只读请求没有统
 - 页面:独立的首次运行 Setup 路由、Overview、可展开的 Proxies、带本地 GeoIP 详情的活动/已关闭 Connections、Rules/Providers、有界的结构化 Logs 流、订阅管理表单、分类的 System 页面,以及驱动面板安装/更新/激活/打开/回滚的 Web GUI 页面(在守护进程通告 `web-gui` 能力之后)。
 - Setup 安装核心、可添加初始订阅、准备本地 GeoIP 数据,并请求守护进程持久化校验过的本地端点。
 - Setup 端口预检复用 PID owner 分类，区分本实例占用、确认的外部冲突、可用与未知；仅外部冲突允许自动建议新端口。搜索最多 `+1024`，不越过 65535，预留其他字段的端口，generation 守卫拒绝迟到探测结果。
-- Setup 使用共享 Theme 的分步固定布局，按动作显示动态等待与耗时。异步命令只返回结果，页面字段仅在 Update 中发布；错误详情使用安全消息和白名单诊断字段，可滚动、复制，不公开内部 cause。
+- Setup 使用共享 Theme 的分步固定布局，按动作显示动态等待与耗时。异步命令只返回结果，页面字段仅在 Update 中发布；错误通过统一诊断快照保留原始 cause，F2 可滚动查看并复制；概要与详情分开展示，终端控制字符只在显示层转义。
 - 每步经 daemon 提交，端口确认时 PATCH onboarding（Complete=nil），随后等待重启生效。最终 Review 只结束引导，不重交端口。SetupRequired 根据端口生效状态与核心资源判断，历史 Complete、可选订阅和 GeoIP 不再独自决定是否进入向导。读取失败不等于核心缺失；已有订阅自动略过，注册后首次下载失败重试同一 ID 的 refresh。
 - 仅已确认的启动端口占用可开放 daemon 内部受限 onboarding 适配器，复用 Manager 的校验和原子设置事务。健康仍为 degraded，不挂载完整 RuntimeAPI；不扩大权限错误、安装事务失败等场景的可写边界。当前服务适配器不提供实例身份，端口保存后提供手动重启及重连检查，不自动操作无法核对身份的服务。
 - 新增认证只读 `GET /v1/operations/{operation_id}`（能力 `operation-status-v1`）：响应 schema、operation_id、state（running/finished/unknown），不返回请求体或内部原因。内存最多保留 256 条固定长度摘要键记录，饱和时保守 unknown；重启/淘汰亦为 unknown。覆盖 setup 的 core install、GeoIP update、onboarding update、订阅 add（含首次刷新）及 profile mutation 的完整 handler 生命周期；同 ID 所有 handler 收尾后才可能 finished。finished 不代表业务成功，取消后仍读取对应领域状态；查询绝不重放 mutation。
@@ -136,7 +141,7 @@ Phase 4 保留几条明确边界：认证前、预解析和只读请求没有统
 ## 订阅
 
 - 订阅 URL 与缓存源 `cache-url` 由 daemon 持久化，list/show、事件与公开错误均省略。认证的本地 `GET /v1/subscriptions/{id}/url` 专门返回 schema 与当前 URL；所有已通过现有控制认证的本机用户都可读取，包括 Unix 共享控制凭据允许的本机用户。Web gateway 不挂载此接口；不新增能力标记，TUI/daemon 配套升级。
-- reveal 响应不主动写日志，TUI 传输错误使用安全文案；文件诊断日志沿用当前 dev 原始错误策略，不恢复 redactor。
+- reveal 响应不主动写日志；TUI 传输错误保留概要及原始诊断详情，文件诊断日志与本地错误汇报均不脱敏。
 - `cache-url` 记录缓存来源，`schedule-from` 记录 URL/interval 变化的调度起点，`interval-refresh-required` 独立持久化强制过期。公共 DTO 添加 `cache_outdated`、`schedule_from`、`interval_refresh_required`。URL 修改保留缓存与 active；interval 修改统一强制过期；成功刷新清除调度起点和过期标记，失败或回滚保留。旧源在途成功/失败均受 profile version 守卫。
 - 调度以 schedule-from（否则 UpdatedAt）加有效 interval 为基准，保留 jitter/backoff；URL/interval 实际变化使旧重试等待失效，执行排队任务前再检查到期。Name/Mode 等无关变化不重置调度。
 - TUI Enter 合并详情与编辑，字段 diff PATCH 走统一 mutation path；PATCH 纳入既有 operation-status 跟踪，finished 仅表示 handler 已结束。冲突与未知结果的重提分别要求确认，新操作 ID 与最新 revision 防止静默覆盖。URL 草稿仅存在于当前弹层。

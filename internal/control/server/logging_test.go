@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -218,7 +219,7 @@ func TestLoggingEndpointsReturnFullUnwrappedStatus(t *testing.T) {
 			if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
 				t.Fatal(err)
 			}
-			if got != status {
+			if !reflect.DeepEqual(got, status) {
 				t.Fatalf("status=%#v want=%#v", got, status)
 			}
 			var envelope protocol.ErrorEnvelope

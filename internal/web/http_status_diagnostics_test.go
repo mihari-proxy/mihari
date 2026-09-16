@@ -77,7 +77,7 @@ func TestHTTPBody_ObserveOnlyConsumedBytesAndCloseOnce(t *testing.T) {
 		t.Fatal("unbounded capture or duplicate close/report")
 	}
 	detail := records[0].Err.(*diagnostics.HTTPError)
-	if len(detail.Body) > diagnostics.MaxHTTPBodyBytes || !strings.Contains(detail.DiagnosticText(), "truncated") || !errors.Is(detail, io.ErrUnexpectedEOF) || !strings.Contains(detail.DiagnosticText(), "close failed") {
+	if len(detail.Body) > diagnostics.MaxHTTPBodyBytes || !detail.BodyTruncated || !strings.Contains(detail.DiagnosticText(), "truncated") || !errors.Is(detail, io.ErrUnexpectedEOF) || !strings.Contains(detail.DiagnosticText(), "close failed") {
 		t.Fatal("partial body lost diagnostic causes")
 	}
 }

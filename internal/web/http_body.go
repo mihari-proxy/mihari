@@ -45,6 +45,7 @@ func (b *observedHTTPBody) Close() error {
 	closeOnly := b.detail.Status < 400 && b.detail.Cause == nil && err != nil
 	b.detail.Cause = errors.Join(b.detail.Cause, err)
 	b.detail.Body = diagnostics.HTTPBody(b.raw)
+	b.detail.BodyTruncated = len(b.raw) > diagnostics.MaxHTTPBodyBytes
 	if closeOnly && b.reporter != nil {
 		b.detail.Phase = "close"
 		if level, emit := diagnostics.FailureLevel(b.ctx, &b.detail); emit {

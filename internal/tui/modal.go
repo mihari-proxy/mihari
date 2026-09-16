@@ -17,7 +17,7 @@ const (
 	ModalNone ModalAction = iota
 	ModalClose
 	ModalConfirm
-	// ModalCopy requests copying the current modal's safe text.
+	// ModalCopy requests copying the current modal's text.
 	ModalCopy
 )
 
@@ -51,7 +51,7 @@ type Modal struct {
 	updateRows    int
 }
 
-// NewErrorDetail creates a scrollable, copyable safe diagnostic dialog.
+// NewErrorDetail creates a scrollable, copyable diagnostic dialog.
 func NewErrorDetail(title, body string) *Modal {
 	return &Modal{kind: modalError, title: title, body: body, copyText: clipboard.WriteAll}
 }
@@ -61,7 +61,7 @@ type errorCopyResultMsg struct {
 	err   error
 }
 
-// copyCommand copies the supplied safe body and routes the result back to its owning modal.
+// copyCommand copies the supplied body and routes the result back to its owning modal.
 func (m *Modal) copyCommand() tea.Cmd {
 	body, copyText := m.body, m.copyText
 	return func() tea.Msg { return errorCopyResultMsg{modal: m, err: copyText(body)} }
@@ -226,3 +226,5 @@ func (m *Modal) helpView(theme ui.Theme, width, height int) string {
 	)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, content)
 }
+
+func (m errorCopyResultMsg) Err() error { return m.err }

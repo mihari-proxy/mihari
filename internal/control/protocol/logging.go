@@ -2,6 +2,7 @@ package protocol
 
 // LoggingStatus is the complete effective file logging configuration returned by the v1 control API.
 type LoggingStatus struct {
+	WarningOutcome
 	Schema      string `json:"schema"`
 	Revision    uint64 `json:"revision"`
 	Level       string `json:"level"`

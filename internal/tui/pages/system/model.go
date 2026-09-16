@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
@@ -318,6 +320,7 @@ var _ interface{ Err() error } = actionResultMsg{}
 
 // Model is the System page.
 type Model struct {
+	channelDiagnostic     tea.Cmd
 	writeClipboard        func(string) error
 	ctx                   context.Context
 	client                Client
@@ -398,7 +401,8 @@ type Model struct {
 type RestartRequiredMsg struct{}
 
 type portHoldsMsg struct {
-	holds map[string]ui.PortHold
+	failures []error
+	holds    map[string]ui.PortHold
 }
 
 type portsApplyResultMsg struct {
@@ -578,7 +582,7 @@ func (m *Model) copyDirectoryRow(rowID, path string) tea.Cmd {
 	}
 	if err := write(path); err != nil {
 		m.markRowOutcome(rowID, false, ui.ExportCopyFailed)
-		return nil
+		return m.localFailure("clipboard.write", ui.ExportCopyFailed, err)
 	}
 	m.markRowOutcome(rowID, true, "")
 	return m.scheduleOutcomeFade(rowID)
@@ -696,13 +700,13 @@ func (m *Model) checkMihariVersion() tea.Cmd {
 	if err != nil {
 		m.mihariChannelFailed = true
 		m.markRowOutcome(rowMihariChannel, false, actionErrorDetail(err, ui.MihariChannelFailed))
-		return nil
+		return m.localFailure("self.channel.read", ui.MihariChannelFailed, err)
 	}
 	channel, err := m.readChannel(path)
 	if err != nil {
 		m.mihariChannelFailed = true
 		m.markRowOutcome(rowMihariChannel, false, actionErrorDetail(err, ui.MihariChannelFailed))
-		return nil
+		return m.localFailure("self.channel.read", ui.MihariChannelFailed, err)
 	}
 	m.mihariChannel = channel
 	m.mihariChannelLoaded = true
@@ -756,7 +760,19 @@ func (m *Model) loadWebGUI() tea.Cmd {
 	}
 }
 
-func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
+func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
+	// Lazy channel discovery may run during rendering. Retain at most one
+	// occurrence and deliver it on the next update, even without a file reporter.
+	defer func() {
+		if m.channelDiagnostic != nil {
+			if command == nil {
+				command = m.channelDiagnostic
+			} else {
+				command = tea.Batch(command, m.channelDiagnostic)
+			}
+			m.channelDiagnostic = nil
+		}
+	}()
 	defer func() {
 		if m.detail != nil {
 			return
@@ -784,7 +800,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	case ui.LoggingObservedMsg:
 		if m.pending && typed.Epoch == m.loggingPendingEpoch {
 			rowID := m.pendingRow
-			current := typed.Epoch == m.loggingEpoch && m.loggingAvailable && typed.Status == m.logging
+			current := typed.Epoch == m.loggingEpoch && m.loggingAvailable && reflect.DeepEqual(typed.Status, m.logging)
 			reloading := m.loggingReloading
 			m.clearRowPending()
 			m.loggingPendingEpoch = 0
@@ -1383,7 +1399,7 @@ func (m *Model) previewCompleteUninstall() tea.Cmd {
 	}
 	if m.uninstaller == nil {
 		m.markRowOutcome(rowCompleteUninstall, false, ui.CompleteUninstallUnavailable)
-		return nil
+		return m.localFailure("uninstall.preview", ui.CompleteUninstallUnavailable, errors.New("complete uninstallation is unavailable in this session"))
 	}
 	return func() tea.Msg {
 		targets, err := m.uninstaller.Preview(m.ctx)
@@ -1393,7 +1409,7 @@ func (m *Model) previewCompleteUninstall() tea.Cmd {
 
 func uninstallPreviewDetail(err error) string {
 	if msg := strings.TrimSpace(err.Error()); msg != "" {
-		return msg
+		return diagnostics.EscapeTerminal(msg)
 	}
 	return ui.CompleteUninstallPreviewFailed
 }
@@ -1873,7 +1889,7 @@ func (m *Model) markRowOutcome(rowID string, ok bool, detail string) {
 		m.lastError = ""
 		return
 	}
-	m.outcomeDetail = strings.TrimSpace(detail)
+	m.outcomeDetail = diagnostics.EscapeTerminal(strings.TrimSpace(detail))
 	m.lastError = m.outcomeDetail
 }
 
@@ -2013,7 +2029,7 @@ func rowProgressForAction(action ui.Action, coreMissing bool) (rowID, note strin
 	}
 }
 
-// actionErrorDetail prefers a redacted API message, else the domain fallback.
+// actionErrorDetail selects the row summary; the diagnostic retains the cause.
 func actionErrorDetail(err error, fallback string) string {
 	var apiError protocol.APIError
 	if errors.As(err, &apiError) {
@@ -2228,9 +2244,9 @@ func (m *Model) openPanelBrowser(panelID string) tea.Cmd {
 }
 
 func (m *Model) probePortHolds() tea.Cmd {
-	listen := m.listenFree
-	if listen == nil {
-		listen = ui.ListenFree
+	probe := ui.ProbeListen
+	if listen := m.listenFree; listen != nil {
+		probe = func(addr string) (bool, error) { return listen(addr), nil }
 	}
 	lookup := m.lookupOccupant
 	if lookup == nil {
@@ -2248,19 +2264,23 @@ func (m *Model) probePortHolds() tea.Cmd {
 	}
 	return func() tea.Msg {
 		holds := make(map[string]ui.PortHold, 3)
+		var failures []error
 		for id, addr := range addrs {
 			if strings.TrimSpace(addr) == "" {
 				holds[id] = ui.PortHold{Kind: ui.PortHoldUnknown}
 				continue
 			}
-			free := listen(addr)
+			free, err := probe(addr)
 			var occ platform.TCPOccupant
 			if !free {
 				occ, _ = lookup(addr)
 			}
 			holds[id] = ui.ClassifyPortHold(free, occ.PID, occ.Process, owners[id])
+			if err != nil && !(owners[id] > 0 && occ.PID == owners[id]) {
+				failures = append(failures, fmt.Errorf("probe %s endpoint %q: %w", id, addr, err))
+			}
 		}
-		return portHoldsMsg{holds: holds}
+		return portHoldsMsg{holds: holds, failures: failures}
 	}
 }
 
@@ -2380,13 +2400,19 @@ func (m *Model) confirmLoggingEdit() tea.Cmd {
 	case rowLogMaxSize:
 		if err != nil || value < 1 || value > 100 {
 			m.markRowOutcome(rowID, false, ui.LoggingMaxSizeInvalid)
-			return nil
+			if err == nil {
+				err = fmt.Errorf("logging value %q must be between 1 and 100", m.editInput.Value())
+			}
+			return m.localFailure("logging.validate", ui.LoggingMaxSizeInvalid, err)
 		}
 		request.MaxSizeMB = &value
 	case rowLogMaxFiles:
 		if err != nil || value < 1 || value > 10 {
 			m.markRowOutcome(rowID, false, ui.LoggingMaxFilesInvalid)
-			return nil
+			if err == nil {
+				err = fmt.Errorf("logging value %q must be between 1 and 10", m.editInput.Value())
+			}
+			return m.localFailure("logging.validate", ui.LoggingMaxFilesInvalid, err)
 		}
 		request.MaxFiles = &value
 	default:
@@ -2465,7 +2491,7 @@ func (m *Model) confirmPortEdit() tea.Cmd {
 	}
 	if err := ui.ValidateManagedEndpoints(mixed, controller, web); err != nil {
 		m.lastError = ui.InvalidPortEndpoint
-		return nil
+		return m.localFailure("endpoints.validate", ui.InvalidPortEndpoint, err)
 	}
 	occupied := [3]bool{
 		m.portHolds[rowMixed].Kind == ui.PortHoldOccupied,
@@ -2520,7 +2546,7 @@ func (m *Model) openGitHub() tea.Cmd {
 	}
 	if err := openBrowser(ui.AboutGitHubURL); err != nil {
 		m.lastError = ui.AboutGitHubOpenFailed
-		return nil
+		return m.localFailure("browser.open", ui.AboutGitHubOpenFailed, err)
 	}
 	m.lastError = ""
 	return nil
@@ -2601,6 +2627,7 @@ func (m *Model) ensureChannelLoaded() {
 		channel, err := m.selfUpdateChannel(m.ctx)
 		if err != nil {
 			m.mihariChannelFailed = true
+			m.channelDiagnostic = m.localFailure("self.channel.read", ui.MihariChannelFailed, err)
 			return
 		}
 		m.mihariChannel = channel
@@ -2610,11 +2637,13 @@ func (m *Model) ensureChannelLoaded() {
 	path, err := m.channelFilePath()
 	if err != nil {
 		m.mihariChannelFailed = true
+		m.channelDiagnostic = m.localFailure("self.channel.read", ui.MihariChannelFailed, err)
 		return
 	}
 	channel, err := m.readChannel(path)
 	if err != nil {
 		m.mihariChannelFailed = true
+		m.channelDiagnostic = m.localFailure("self.channel.read", ui.MihariChannelFailed, err)
 		return
 	}
 	m.mihariChannel = channel

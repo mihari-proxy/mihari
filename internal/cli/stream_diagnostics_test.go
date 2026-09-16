@@ -78,8 +78,8 @@ func TestStreamCLI_DiagnosticInjectionPreservesOutputContracts(t *testing.T) {
 				t.Fatalf("stderr=%q", stderr.String())
 			}
 			if tc.fail {
-				if strings.Contains(stderr.String(), "private-output-token") {
-					t.Fatal("writer cause leaked")
+				if !strings.Contains(stderr.String(), "private-output-token") {
+					t.Fatal("writer cause lost")
 				}
 				if strings.Contains(tc.name, "json") {
 					var envelope protocol.ErrorEnvelope
@@ -94,7 +94,7 @@ func TestStreamCLI_DiagnosticInjectionPreservesOutputContracts(t *testing.T) {
 					if err := decoder.Decode(&extra); err != io.EOF {
 						t.Fatal("error envelope polluted")
 					}
-				} else if stderr.String() != "Error: daemon is unavailable\n" {
+				} else if !strings.HasPrefix(stderr.String(), "Error: daemon is unavailable\nCode: daemon_unavailable\n") {
 					t.Fatalf("stderr=%q", stderr.String())
 				}
 			}

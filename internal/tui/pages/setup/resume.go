@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
@@ -15,9 +16,10 @@ import (
 type ReadyMsg struct{}
 type saveEndpointsStartMsg struct{}
 type endpointsSavedMsg struct {
-	gen    uint64
-	status protocol.OnboardingStatus
-	err    error
+	cancelled bool
+	gen       uint64
+	status    protocol.OnboardingStatus
+	err       error
 }
 
 // SetAutomatic selects state-derived recovery versus explicitly opening the wizard.
@@ -84,7 +86,7 @@ func (m *Model) saveEndpoints() tea.Cmd {
 	request := protocol.OnboardingUpdateRequest{OperationID: id, IfRevision: &revision, MixedAddr: &mixed, ControllerAddr: &controller, WebAddr: &web}
 	return func() tea.Msg {
 		status, err := client.UpdateOnboarding(ctx, request)
-		return endpointsSavedMsg{gen: gen, status: status, err: err}
+		return endpointsSavedMsg{cancelled: diagnostics.NormalCancellation(ctx, err), gen: gen, status: status, err: err}
 	}
 }
 
@@ -129,19 +131,25 @@ func (m *Model) reloadInPlace() tea.Cmd {
 
 // classifySetupPort treats an occupied endpoint as owned only when its PID is confirmed.
 func classifySetupPort(address string, owner int, lookup func(string) (platform.TCPOccupant, bool)) portState {
-	state := probeEndpoint(address)
+	// Compatibility helper for availability-only callers; page probes keep the error.
+	state, _ := classifySetupPortResult(address, owner, lookup)
+	return state
+}
+
+func classifySetupPortResult(address string, owner int, lookup func(string) (platform.TCPOccupant, bool)) (portState, error) {
+	state, err := probeEndpointResult(address)
 	if state != portOccupied {
-		return state
+		return state, err
 	}
 	occupant, ok := lookup(address)
 	if !ok || occupant.PID <= 0 {
-		return portUnknown
+		return portUnknown, err
 	}
 	hold := ui.ClassifyPortHold(false, occupant.PID, occupant.Process, owner)
 	if hold.Kind == ui.PortHoldOwned {
-		return portOwned
+		return portOwned, nil
 	}
-	return portOccupied
+	return portOccupied, err
 }
 
 // loadResources returns values only; page fields remain owned by Update.
@@ -150,6 +158,8 @@ func loadResources(ctx context.Context, client Client, result onboardingResultMs
 	// read-only retry rather than treating it as a missing core or a load failure.
 	if core, err := client.Core(ctx); err == nil {
 		result.core = &core
+	} else {
+		result.coreErr = err
 	}
 	if reader, ok := client.(subscriptionReader); ok {
 		list, err := reader.Subscriptions(ctx)

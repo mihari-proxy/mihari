@@ -88,8 +88,9 @@ type Model struct {
 }
 
 type closeResultMsg struct {
-	id  string
-	err error
+	warnings protocol.WarningOutcome
+	id       string
+	err      error
 }
 
 // Err implements the shell's action-outcome contract so connection closes are
@@ -579,8 +580,8 @@ func (m *Model) closeConnection(id string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, err := m.client.CloseConnection(ctx, id, protocol.MutationRequest{OperationID: operationID})
-		return closeResultMsg{id: id, err: err}
+		result, err := m.client.CloseConnection(ctx, id, protocol.MutationRequest{OperationID: operationID})
+		return closeResultMsg{id: id, err: err, warnings: result.WarningOutcome}
 	}
 }
 
@@ -592,8 +593,8 @@ func (m *Model) closeAllConnections() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, err := m.client.CloseAllConnections(ctx, protocol.MutationRequest{OperationID: operationID})
-		return closeResultMsg{err: err}
+		result, err := m.client.CloseAllConnections(ctx, protocol.MutationRequest{OperationID: operationID})
+		return closeResultMsg{err: err, warnings: result.WarningOutcome}
 	}
 }
 

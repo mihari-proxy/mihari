@@ -99,7 +99,7 @@ func footerProtected(part string) bool {
 		return false
 	}
 	// Keep help and quit affordances preferred by the status-shell design.
-	if strings.Contains(lower, "?") {
+	if strings.Contains(lower, "?") || strings.HasPrefix(lower, "f2 ") {
 		return true
 	}
 	if lower == "q" || strings.HasPrefix(lower, "q ") || strings.Contains(lower, "q quit") {

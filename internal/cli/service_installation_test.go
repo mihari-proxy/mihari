@@ -126,7 +126,7 @@ func TestInstallationRepair_LocalIOFailureIsNotDaemonUnavailable(t *testing.T) {
 	}
 	stderr := &bytes.Buffer{}
 	exit := Execute(context.Background(), []string{"service", "repair", "--json"}, &bytes.Buffer{}, stderr, deps)
-	if exit != ExitData || strings.Contains(stderr.String(), "private-path-and-secret") {
+	if exit != ExitData || !strings.Contains(stderr.String(), "private-path-and-secret") {
 		t.Fatalf("local error classification: exit=%d", exit)
 	}
 }

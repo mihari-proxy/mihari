@@ -1,5 +1,7 @@
 # 完整错误日志与独立用户提示设计
 
+> 后续策略替代：本地 CLI/TUI 错误汇报、诊断 cause 传输、warnings 与全局 F2 详情现以 [2026-09-16 统一错误汇报设计](2026-09-16-unified-error-reporting-design.md) 为准。下文关于公开错误过滤、固定提示或不传 cause 的限制保留为历史记录；本地认证、浏览器凭据隔离、事务和文件权限边界继续保持。
+
 日期：2026-09-14
 
 状态：设计、模块审计、实施与本地验收已完成；行为决策来自 grilling。最终 CI 与 bot review 状态见 [PR #240](https://github.com/mihari-proxy/mihari/pull/240)，验证证据见审计总表。

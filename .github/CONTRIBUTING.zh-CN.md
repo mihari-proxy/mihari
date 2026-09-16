@@ -99,6 +99,8 @@ mihari 的架构不变量记录在仓库根目录的 `AGENTS.md`。核心几点�
 
 改动这些边界前，请先在 Issue/PR 中说明影响。
 
+日志、导出及经过认证的本地 CLI/TUI 错误汇报保留原始诊断内容，不脱敏；采集仍有界并明确标记截断。CLI 文本/JSON、TUI F2 详情和日志使用统一诊断快照，可选诊断及 warnings 不改变业务成功语义、错误码和退出码。终端显示转义控制字符，复制和 JSON 保留采集原文。本地诊断历史不通过浏览器网关开放。
+
 
 Unix 的窄写入例外：root installer 在持锁停机事务中迁移业务文件并管理安装资源；app 可在选定 install.lock 下原子维护固定应用通道 sidecar，并拒绝相关未完成事务。TUI 仅经 logging 写当前 UID 的 U 日志及导出（Windows/显式私有 P 保留原布局）。不授予任意 CLI/TUI 业务文件写权限。详见 [Unix 布局与恢复](../docs/unix-layout.md)。
 

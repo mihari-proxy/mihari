@@ -634,3 +634,12 @@ var clockPattern = regexp.MustCompile(`\d{2}:\d{2}:\d{2}`)
 func looksLikeClock(plain string) bool {
 	return clockPattern.MatchString(plain)
 }
+
+func TestOverview_ConfigErrorEscapesControls(t *testing.T) {
+	model := New()
+	model.SetSize(100, 30)
+	model.SetSnapshot(Snapshot{Status: protocol.Status{Config: &protocol.ConfigStatus{LastError: "token=fixture\x1b[31m"}}})
+	if view := model.View(); !strings.Contains(view, `token=fixture\x1b[31m`) || strings.Contains(view, "fixture\x1b[31m") {
+		t.Fatalf("original controls were not escaped: %q", view)
+	}
+}

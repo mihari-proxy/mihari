@@ -697,7 +697,7 @@ func (s *Service) download(ctx context.Context, panelID, build, assetURL string)
 		return "", diagnostics.Wrap(protocol.APIError{
 			Code: protocol.CodeNetworkFailure, Message: "download panel asset failed",
 			Details: map[string]any{"status": response.StatusCode},
-		}, &diagnostics.HTTPError{Operation: "panel GET asset", URL: assetURL, Phase: "response", Status: response.StatusCode, Body: diagnostics.HTTPBody(raw), Cause: readErr})
+		}, &diagnostics.HTTPError{Operation: "panel GET asset", URL: assetURL, Phase: "response", Status: response.StatusCode, Body: diagnostics.HTTPBody(raw), BodyTruncated: len(raw) > diagnostics.MaxHTTPBodyBytes, Cause: readErr})
 	}
 	file, err := os.CreateTemp(s.stagingDir, "."+sanitizeBuild(panelID+"-"+build)+"-*.zip")
 	if err != nil {
@@ -846,7 +846,7 @@ func clonePrevious(in map[string]string) map[string]string {
 func validateDownloadURL(raw string, allowHTTP bool) error {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Host == "" {
-		return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid panel asset url"}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid panel asset url"}, err)
 	}
 	switch strings.ToLower(parsed.Scheme) {
 	case "https":

@@ -44,7 +44,7 @@ func TestStatus_PreservesCategoriesAndAuthenticationHint(t *testing.T) {
 				if e := json.Unmarshal(stderr.Bytes(), &envelope); e != nil {
 					t.Fatal(e)
 				}
-				if envelope.Error.Code != tc.code || envelope.Error.Message != api.Message || envelope.Error.Details["scope"] != "control" || strings.Contains(stderr.String(), "restart") {
+				if envelope.Error.Code != tc.code || envelope.Error.Message != api.Message || envelope.Error.Details["scope"] != "control" || envelope.Error.Diagnostic == nil {
 					t.Fatal("JSON error changed")
 				}
 			} else if tc.code == protocol.CodePermissionDenied && !strings.Contains(stderr.String(), "restart the service") {
@@ -183,5 +183,21 @@ func TestDaemonCommandRunsInjectedDaemon(t *testing.T) {
 	})
 	if code != ExitOK || !called {
 		t.Fatalf("code=%d called=%v stderr=%q", code, called, stderr.String())
+	}
+}
+
+func TestStatus_TransportCauseReachesDetails(t *testing.T) {
+	for _, format := range []string{"text", "json"} {
+		t.Run(format, func(t *testing.T) {
+			var out, errs bytes.Buffer
+			args := []string{"status"}
+			if format == "json" {
+				args = append(args, "--json")
+			}
+			exit := Execute(context.Background(), args, &out, &errs, Dependencies{StatusClient: fakeStatusClient{err: errors.New("dial pipe token=fixture-original")}})
+			if exit != ExitDaemonUnavailable || !strings.Contains(errs.String(), "token=fixture-original") {
+				t.Fatalf("exit=%d details=%s", exit, &errs)
+			}
+		})
 	}
 }

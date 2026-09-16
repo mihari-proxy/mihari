@@ -87,7 +87,7 @@ func TestPanelDiagnostic_StatusBodyAndCloseCausePreserved(t *testing.T) {
 	})}}
 	_, err := service.download(context.Background(), "fixture", "v1", "https://fixture.invalid/panel?token=fixture")
 	var detail *diagnostics.HTTPError
-	if !errors.As(err, &detail) || !strings.HasPrefix(detail.Body, "token=fixture\n") || !strings.Contains(detail.Body, "[truncated]") || !errors.Is(err, closeCause) {
+	if !errors.As(err, &detail) || !strings.HasPrefix(detail.Body, "token=fixture\n") || !strings.Contains(detail.Body, "[truncated]") || !detail.BodyTruncated || !errors.Is(err, closeCause) {
 		t.Fatalf("status body or close cause lost: %v", err)
 	}
 	if body.readBytes != diagnostics.MaxHTTPBodyBytes+1 || !body.closed {

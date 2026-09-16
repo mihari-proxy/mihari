@@ -136,7 +136,7 @@ func (c Client) getJSON(ctx context.Context, url string, dest any) (resultErr er
 			Code:    protocol.CodeNetworkFailure,
 			Message: "fetch github resource failed",
 			Details: map[string]any{"status": response.StatusCode},
-		}, &diagnostics.HTTPError{Operation: "github GET resource", URL: url, Phase: "response", Status: response.StatusCode, Body: diagnostics.HTTPBody(raw), Cause: readErr})
+		}, &diagnostics.HTTPError{Operation: "github GET resource", URL: url, Phase: "response", Status: response.StatusCode, Body: diagnostics.HTTPBody(raw), BodyTruncated: len(raw) > diagnostics.MaxHTTPBodyBytes, Cause: readErr})
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseSize+1))
 	if err != nil {
@@ -146,7 +146,7 @@ func (c Client) getJSON(ctx context.Context, url string, dest any) (resultErr er
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "github response is too large"}
 	}
 	if err := json.Unmarshal(raw, dest); err != nil {
-		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid github response"}, &diagnostics.HTTPError{Operation: "github GET resource", URL: url, Phase: "decode", Status: response.StatusCode, Body: diagnostics.HTTPBody(raw), Cause: err})
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid github response"}, &diagnostics.HTTPError{Operation: "github GET resource", URL: url, Phase: "decode", Status: response.StatusCode, Body: diagnostics.HTTPBody(raw), BodyTruncated: len(raw) > diagnostics.MaxHTTPBodyBytes, Cause: err})
 	}
 	return nil
 }

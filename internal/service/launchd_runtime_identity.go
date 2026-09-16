@@ -16,7 +16,7 @@ func RecordedLaunchdIdentity(boot string, pid int, start string) (ProcessIdentit
 	s, secondsErr := strconv.ParseInt(seconds, 10, 64)
 	u, microsErr := strconv.ParseUint(micros, 10, 32)
 	if secondsErr != nil || microsErr != nil || s <= 0 || u >= 1000000 || strconv.FormatInt(s, 10) != seconds || fmt.Sprintf("%06d", u) != micros {
-		return ProcessIdentity{}, invalidServiceState("recorded launchd process identity is unknown")
+		return ProcessIdentity{}, invalidServiceState("recorded launchd process identity is unknown", secondsErr, microsErr)
 	}
 	id := ProcessIdentity{BootID: boot, PID: pid, StartUnix: s, StartUsec: uint32(u)}
 	group, err := darwinGroupToken(id)

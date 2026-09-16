@@ -448,6 +448,9 @@ func TestSession_LoggingFailureRetriesWithoutShortCircuitingSnapshots(t *testing
 	if first, second := <-s.control, <-s.control; first.Kind != EventStatus || second.Kind != EventCore {
 		t.Fatalf("events=%s,%s want status,core", first.Kind, second.Kind)
 	}
+	if failed := <-s.control; failed.Kind != EventLogging || failed.Err == nil {
+		t.Fatal("logging failure details missing")
+	}
 	if err := s.pollStatus(context.Background(), status); err != nil {
 		t.Fatal(err)
 	}
@@ -469,8 +472,8 @@ func TestSession_CoreFailureDoesNotSkipLogging(t *testing.T) {
 	if err := s.pollStatus(context.Background(), status); err == nil {
 		t.Fatal("core failure was not reported")
 	}
-	if first, second := <-s.control, <-s.control; first.Kind != EventStatus || second.Kind != EventLogging {
-		t.Fatalf("events=%s,%s want status,logging", first.Kind, second.Kind)
+	if first, second, third := <-s.control, <-s.control, <-s.control; first.Kind != EventStatus || second.Kind != EventCore || second.Err == nil || third.Kind != EventLogging {
+		t.Fatalf("events=%s,%s,%s want status,core failure,logging", first.Kind, second.Kind, third.Kind)
 	}
 }
 

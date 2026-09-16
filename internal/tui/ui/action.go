@@ -45,7 +45,7 @@ const (
 )
 
 // RelaunchRequestMsg asks the root shell to exit and enter the replacement TUI.
-// Warning must already be sanitized for display after terminal restoration.
+// Warning is a summary displayed after terminal restoration.
 type RelaunchRequestMsg struct {
 	Prepared       *update.PreparedUpdate
 	PreparationKey string

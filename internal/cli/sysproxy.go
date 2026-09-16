@@ -110,7 +110,10 @@ func renderSystemProxyStatus(command *cobra.Command, options *runOptions, status
 	if options.json {
 		return renderJSON(command.OutOrStdout(), status)
 	}
-	return printSystemProxyStatus(command.OutOrStdout(), status)
+	if err := printSystemProxyStatus(command.OutOrStdout(), status); err != nil {
+		return err
+	}
+	return renderWarnings(command.ErrOrStderr(), status.WarningOutcome)
 }
 
 func printSystemProxyStatus(writer io.Writer, status protocol.SystemProxyStatus) error {

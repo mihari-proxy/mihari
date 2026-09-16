@@ -38,6 +38,7 @@ type GeoIPLookupResult struct {
 
 // GeoIPUpdateResult reports a coordinated database-pair update.
 type GeoIPUpdateResult struct {
+	WarningOutcome
 	Schema      string      `json:"schema"`
 	OperationID string      `json:"operation_id"`
 	Revision    uint64      `json:"revision"`

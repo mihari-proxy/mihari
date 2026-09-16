@@ -59,7 +59,7 @@ Connection details open as one centered page with traffic totals, endpoints, rou
 
 **Web GUI** shows panel cards side by side in wide windows and stacked in narrow ones. Use Tab/Shift+Tab to focus Open/Install or Manage, then Enter; existing panel shortcuts remain available. Manage contains update, default selection, reinstall, rollback and uninstall, with unavailable actions marked. The yellow **Ctrl+Shift+R** reminder stays above the cards; gateway safeguards are in `?` help. **System** places Network immediately after Ports Config.
 
-Mihomo HTTP failures retain their original error text and upstream status in diagnostic logs, including gateway requests and WebSocket handshakes. File logs and exports are not redacted: credentials, URLs, paths, and configuration fragments carried by errors remain available for diagnosis. User-facing errors remain concise.
+Mihomo HTTP failures retain their original error text and upstream status in diagnostic logs, including gateway requests and WebSocket handshakes. Logs and local CLI/TUI error reports are not redacted: credentials, URLs, paths, and configuration fragments carried by errors remain available for diagnosis. CLI errors show the summary, classification, and original details; JSON adds optional diagnostics and warnings without changing business exit codes. In every TUI page, F2 opens shared diagnostic history with scrollable details and raw-text copying. Terminal control characters are escaped for display.
 
 A single CGO-free static binary (< 15 MB) contains everything, with built-in GitHub Releases self-update and local GeoIP resolution.
 
@@ -130,7 +130,7 @@ See [docs/distribution.md](docs/distribution.md) for the offline distribution de
 mihari
 ```
 
-The interactive setup uses the shared TUI theme and a step-by-step layout, with the current action, an animated waiting indicator and elapsed time. Failures show a safe explanation and next action; press F2 for scrollable, copyable diagnostic details.
+The interactive setup uses the shared TUI theme and a step-by-step layout, with the current action, an animated waiting indicator and elapsed time. Failures show a summary and next action; press F2 for scrollable, copyable diagnostic details.
 
 Confirmed endpoint changes are saved immediately by the daemon. Saved resources survive interruption; reopening checks required ports/core and resumes missing setup, without requiring optional subscriptions or GeoIP. Core shows local readiness, version, channel and runtime state; GeoIP shows Country/ASN availability and update times separately. Existing subscriptions remain visible as an overview with counts, per-profile state and the current selection; Enter continues without changing them. Add more or manage existing profiles on the Subscriptions page. If a newly registered subscription's first download fails, retry refreshes that same subscription.
 

@@ -538,6 +538,11 @@ func (r *daemonLoggingResources) Close() error {
 // runDaemonWith assembles logging and the runtime, selecting restricted recovery for confirmed port conflicts.
 func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	diagnosticStderr := deps.DiagnosticStderr
+	diagnosticHistory, historyErr := diagnostics.NewHistory(diagnostics.HistoryOptions{})
+	if historyErr != nil {
+		return historyErr
+	}
+	diagnosticReporter := diagnostics.NewOwner(diagnosticHistory, nil).Report
 	if deps.PrivateFS == nil {
 		reportDaemonStartupFailure(diagnosticStderr, "open data root", nil)
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "create mihari data directories"}
@@ -545,21 +550,16 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	resources := newDaemonResources(deps.PrivateFS)
 	redactor := logging.NewRedactor()
 	reporter := logging.NewFailureReporter(deps.LoggingFailureStderr, redactor, nil)
-	logSecretsReady := false
 	var closeOnce sync.Once
 	closeResources := func() error {
 		var closeErr error
 		closeOnce.Do(func() {
 			closeErr = resources.Close()
-			// Logging is closed. Keep its final failure on the independent outlet;
-			// before secret registration only a fixed summary is safe.
+			// Logging is closed; its actual final failure uses the independent outlet.
 			if closeErr != nil {
-				failure := closeErr
-				if !logSecretsReady {
-					failure = errors.New("close logging resources failed")
-				}
-				reporter.Report(logging.FailureCleanup, failure)
+				reporter.Report(logging.FailureCleanup, closeErr)
 			}
+
 		})
 		return closeErr
 	}
@@ -602,12 +602,15 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 		settings, created, settingsCommit, err = loadSettings(deps.Paths.Settings, sidecar)
 	}
 	if err != nil {
-		failure := diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "load settings"}, err)
+		failure := diagnostics.ReportError(ctx, diagnosticReporter, diagnostics.Record{
+			Component: "daemon.startup", Event: "settings.load.failed", Level: slog.LevelError,
+			Err: diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "load settings"}, err),
+		})
 		reportDaemonStartupFailure(diagnosticStderr, "load settings", err)
 		if deps.Listen == nil || errors.Is(err, os.ErrPermission) {
 			return failure
 		}
-		return runDegradedDaemon(ctx, deps, failure, nil, nil)
+		return runDegradedDaemon(ctx, deps, failure, nil, diagnosticReporter, diagnosticHistory)
 	}
 	if err := deps.PrivateFS.EnsureDir(deps.Paths.LogDir); err != nil {
 		reportDaemonStartupFailure(diagnosticStderr, "create log directory", err)
@@ -620,7 +623,6 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	for _, secret := range baseSecrets {
 		redactor.RetainCredential(secret)
 	}
-	logSecretsReady = true
 	cfg, err := daemonLoggingConfig(settings)
 	if err != nil {
 		reportDaemonStartupFailure(diagnosticStderr, "configure logging", err)
@@ -663,7 +665,7 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 		afterDaemonLoggingOpen(daemonRT.Logger)
 	}
 	loggingGroup := logging.NewGroup(deps.Paths.LogDir, cfg, daemonRT.Runtime, mihomoRT.Runtime)
-	diagnosticReporter := logging.NewDiagnosticReporter(daemonRT.Logger, redactor)
+	diagnosticReporter = diagnostics.NewOwner(diagnosticHistory, logging.NewDiagnosticReporter(daemonRT.Logger, redactor)).Report
 	reportBackground := func(component string, bgErr error) {
 		if bgErr == nil {
 			return
@@ -733,12 +735,12 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 			store := app.NewDegradedStore(deps.Version, err)
 			recovery, recoveryErr := app.NewPortRecovery(deps.Paths, store, err, diagnosticReporter)
 			if recoveryErr == nil {
-				return runDaemon(ctx, daemon.Options{Listen: deps.Listen, Endpoint: deps.Endpoint, Token: deps.Token, Version: deps.Version, Ready: deps.Ready, Store: store, Onboarding: recovery, SnapshotSource: snapshot, DiagnosticReporter: diagnosticReporter})
+				return runDaemon(ctx, daemon.Options{Listen: deps.Listen, Endpoint: deps.Endpoint, Token: deps.Token, Version: deps.Version, Ready: deps.Ready, Store: store, Onboarding: recovery, SnapshotSource: snapshot, DiagnosticReporter: diagnosticReporter, DiagnosticHistory: diagnosticHistory})
 			}
 			reportDaemonDiagnostic(ctx, diagnosticReporter, diagnosticStderr, diagnostics.Record{Component: "daemon.startup", Event: "port_recovery_failed", Level: slog.LevelError, Err: recoveryErr})
-			return runDegradedDaemon(ctx, deps, recoveryErr, snapshot, diagnosticReporter)
+			return runDegradedDaemon(ctx, deps, recoveryErr, snapshot, diagnosticReporter, diagnosticHistory)
 		}
-		return runDegradedDaemon(ctx, deps, err, snapshot, diagnosticReporter)
+		return runDegradedDaemon(ctx, deps, err, snapshot, diagnosticReporter, diagnosticHistory)
 	}
 	var onReady func() error
 	if deps.ValidationReady != nil {
@@ -753,6 +755,7 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 		Store:              assembly.Store,
 		Runtime:            assembly.Manager,
 		DiagnosticReporter: diagnosticReporter,
+		DiagnosticHistory:  diagnosticHistory,
 		ValidationMode:     deps.ValidationMode,
 	})
 }
@@ -769,54 +772,20 @@ func reportDaemonStartupFailure(out io.Writer, operation string, err error) {
 	if out == nil {
 		return
 	}
-	_, _ = fmt.Fprintf(out, "mihari daemon startup: %s: %s\n", operation, safeStartupFailureSummary(err))
-}
-
-func safeStartupFailureSummary(err error) string {
+	summary := "mihari daemon startup: " + operation
+	snapshot := diagnostics.Describe(context.Background(), diagnostics.Record{Component: "daemon", Event: "startup.failed", Summary: summary, Level: slog.LevelError, Err: err})
 	if err == nil {
-		return "startup failed"
+		snapshot.Summary += ": startup failed"
 	}
-	var pathError *os.PathError
-	if errors.As(err, &pathError) && pathError != nil {
-		return "file operation " + safeStartupOperation(pathError.Op) + ": " + safeStartupErrorClass(pathError.Err)
-	}
-	var syscallError *os.SyscallError
-	if errors.As(err, &syscallError) && syscallError != nil {
-		return "system call " + safeStartupOperation(syscallError.Syscall) + ": " + safeStartupErrorClass(syscallError.Err)
-	}
-	return "startup failed"
+	// The fallback is independent of the unavailable logger and cannot recurse.
+	_, _ = io.WriteString(out, diagnostics.TerminalText("Error", snapshot))
 }
 
-func safeStartupOperation(operation string) string {
-	if operation == "" {
-		return "failed"
-	}
-	for _, character := range operation {
-		if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '_' || character == '-') {
-			return "failed"
-		}
-	}
-	return operation
-}
-
-func safeStartupErrorClass(err error) string {
-	switch {
-	case errors.Is(err, os.ErrPermission):
-		return "permission denied"
-	case errors.Is(err, os.ErrNotExist):
-		return "not found"
-	case errors.Is(err, os.ErrExist):
-		return "already exists"
-	default:
-		return "failed"
-	}
-}
-
-func runDegradedDaemon(ctx context.Context, deps daemonRunDeps, cause error, snapshot logging.MachineSnapshotSource, diagnosticReporter diagnostics.Reporter) error {
+func runDegradedDaemon(ctx context.Context, deps daemonRunDeps, cause error, snapshot logging.MachineSnapshotSource, diagnosticReporter diagnostics.Reporter, diagnosticHistory *diagnostics.History) error {
 	if deps.ValidationMode {
 		return cause
 	}
-	return runDaemon(ctx, daemon.Options{Listen: deps.Listen, Endpoint: deps.Endpoint, Token: deps.Token, Version: deps.Version, Ready: deps.Ready, Store: app.NewDegradedStore(deps.Version, cause), SnapshotSource: snapshot, DiagnosticReporter: diagnosticReporter})
+	return runDaemon(ctx, daemon.Options{Listen: deps.Listen, Endpoint: deps.Endpoint, Token: deps.Token, Version: deps.Version, Ready: deps.Ready, Store: app.NewDegradedStore(deps.Version, cause), SnapshotSource: snapshot, DiagnosticReporter: diagnosticReporter, DiagnosticHistory: diagnosticHistory})
 }
 
 func daemonLoggingConfig(settings config.Settings) (logging.Config, error) {

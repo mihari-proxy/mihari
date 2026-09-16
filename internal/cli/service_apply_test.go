@@ -197,3 +197,33 @@ func TestServiceApply_JSONWarningFailureWithoutRoot(t *testing.T) {
 		t.Fatalf("calls=%d api=%+v out=%q stderr=%q", calls, api, out.String(), stderr.String())
 	}
 }
+
+func TestServiceApply_JSONSuccessContainsStructuredWarning(t *testing.T) {
+	request := filepath.Join(t.TempDir(), "request.json")
+	if err := os.WriteFile(request, []byte(`{"schema":"mihari.install-request/v1","operation":"recover"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	cmd := newServiceApplyCommand(Dependencies{ServiceApply: func(_ context.Context, _ app.InstallRequest, c update.ReplacementConsent) (app.InstallResult, error) {
+		calls++
+		if err := c.Warn("compatibility token=fixture-original"); err != nil {
+			return app.InstallResult{}, err
+		}
+		return app.InstallResult{Schema: app.InstallResultSchema, Changed: true, ServiceStatus: "stopped", TransactionID: strings.Repeat("a", 32)}, nil
+	}}, &runOptions{json: true}, func() int { return 0 })
+	var out, stderr bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--request", request, "--yes"})
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var warnings protocol.WarningOutcome
+	if json.Unmarshal(out.Bytes(), &warnings) != nil || len(warnings.Warnings) != 1 || warnings.Warnings[0].Diagnostic == nil || warnings.Warnings[0].Diagnostic.Detail != "compatibility token=fixture-original" || stderr.Len() != 0 || calls != 1 {
+		t.Fatal("service apply warning lost or JSON mixed with text")
+	}
+	result, err := app.DecodeInstallResult(bytes.NewReader(out.Bytes()))
+	if err != nil || !result.Changed || result.ServiceStatus != "stopped" {
+		t.Fatal("optional warning broke strict install result decoder")
+	}
+}

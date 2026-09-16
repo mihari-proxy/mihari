@@ -3,6 +3,7 @@ package protocol
 // WebGUIStatus is the future-safe read model for the Mihari browser gateway.
 // It must never include controller secrets, web credentials, or open-browser tokens.
 type WebGUIStatus struct {
+	WarningOutcome
 	Schema          string            `json:"schema"`
 	Revision        uint64            `json:"revision"`
 	GatewayAddr     string            `json:"gateway_addr"`
@@ -26,6 +27,7 @@ type PanelStatus struct {
 
 // PanelList is the additive list response for GET /v1/panels.
 type PanelList struct {
+	WarningOutcome
 	Schema   string        `json:"schema"`
 	Revision uint64        `json:"revision"`
 	Panels   []PanelStatus `json:"panels"`

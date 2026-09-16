@@ -14,7 +14,11 @@ import (
 func (m *Model) View() string {
 	inner := ui.FullSectionInner(m.layoutWidth())
 	if !m.available {
-		return ui.RenderBorderedSection(m.theme, ui.WebGUITitle, m.theme.Muted.Render(ui.UnavailableTitle+": "+ui.WebGUILifecycleUnavailable), inner)
+		body := m.theme.Muted.Render(ui.UnavailableTitle + ": " + ui.WebGUILifecycleUnavailable)
+		if m.lastError != "" {
+			body += "\n" + m.lastError
+		}
+		return ui.RenderBorderedSection(m.theme, ui.WebGUITitle, body, inner)
 	}
 	textW := ui.SectionTextWidth(inner)
 	height := m.height
@@ -54,11 +58,6 @@ func (m *Model) View() string {
 	view := pinned + "\n" + strings.Join(ui.SliceLines(lines, offset, room), "\n")
 	if m.menuOpen {
 		view = m.renderMenu(view, height)
-	}
-	// Browser URLs are transient credentials and never belong in any view.
-	lower := strings.ToLower(ansi.Strip(view))
-	if strings.Contains(lower, "token=") || strings.Contains(lower, "open_url") {
-		return ui.RenderBorderedSection(m.theme, ui.WebGUITitle, ui.WebGUIUnavailable, inner)
 	}
 	return view
 }

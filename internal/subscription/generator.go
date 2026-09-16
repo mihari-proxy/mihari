@@ -5,6 +5,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -27,7 +28,7 @@ func Generate(base Document, overrides map[string]any, settings config.Settings)
 	document["log-level"] = settings.CoreLoggingLevel()
 	mixed, err := netip.ParseAddrPort(settings.MixedAddr)
 	if err != nil {
-		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mixed address"}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mixed address"}, err)
 	}
 	document["mixed-port"] = int(mixed.Port())
 	document["bind-address"] = mixed.Addr().String()
@@ -43,8 +44,11 @@ func Generate(base Document, overrides map[string]any, settings config.Settings)
 		var tun map[string]any
 		if raw, exists := document["tun"]; exists {
 			content, err := yaml.Marshal(raw)
-			if err != nil || yaml.Unmarshal(content, &tun) != nil || tun == nil {
-				return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "tun must be a mapping"}
+			if err == nil {
+				err = yaml.Unmarshal(content, &tun)
+			}
+			if err != nil || tun == nil {
+				return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "tun must be a mapping"}, err)
 			}
 		} else {
 			tun = make(map[string]any)
@@ -54,7 +58,7 @@ func Generate(base Document, overrides map[string]any, settings config.Settings)
 	}
 	content, err := yaml.Marshal(document)
 	if err != nil {
-		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "encode generated configuration"}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "encode generated configuration"}, err)
 	}
 	return content, nil
 }
@@ -62,11 +66,11 @@ func Generate(base Document, overrides map[string]any, settings config.Settings)
 func cloneDocument(base Document) (Document, error) {
 	content, err := yaml.Marshal(base)
 	if err != nil {
-		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "copy subscription document"}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "copy subscription document"}, err)
 	}
 	var clone Document
 	if err := yaml.Unmarshal(content, &clone); err != nil {
-		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "copy subscription document"}
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "copy subscription document"}, err)
 	}
 	return clone, nil
 }

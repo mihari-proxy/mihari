@@ -85,6 +85,7 @@ type providersResultMsg struct {
 }
 
 type providerUpdateResultMsg struct {
+	warnings  protocol.WarningOutcome
 	operation logging.OperationMetadata
 	name      string
 	revision  uint64
@@ -92,6 +93,7 @@ type providerUpdateResultMsg struct {
 }
 
 type providersUpdateAllResultMsg struct {
+	warnings   protocol.WarningOutcome
 	operations []logging.OperationMetadata
 	revision   uint64
 	err        error
@@ -734,7 +736,7 @@ func (m *Model) updateFocusedProvider() tea.Cmd {
 			request.IfRevision = &revision
 		}
 		result, err := m.client.UpdateRuleProvider(logging.WithOperation(ctx, operation), name, request)
-		return providerUpdateResultMsg{operation: operation, name: name, revision: result.Revision, err: err}
+		return providerUpdateResultMsg{warnings: result.WarningOutcome, operation: operation, name: name, revision: result.Revision, err: err}
 	}
 }
 
@@ -753,6 +755,7 @@ func (m *Model) updateAllProviders() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(max(1, len(names)))*30*time.Second)
 		defer cancel()
 		operations := make([]logging.OperationMetadata, 0, len(names))
+		var warnings protocol.WarningOutcome
 		for index, name := range names {
 			request := protocol.MutationRequest{OperationID: fmt.Sprintf("%s-%d", baseID, index+1)}
 			if revision != 0 {
@@ -761,14 +764,15 @@ func (m *Model) updateAllProviders() tea.Cmd {
 			operation := logging.OperationMetadata{ID: request.OperationID, Name: "rule_provider.refresh"}
 			operations = append(operations, operation)
 			result, err := m.client.UpdateRuleProvider(logging.WithOperation(ctx, operation), name, request)
+			warnings.Append(result.WarningOutcome)
 			if err != nil {
-				return providersUpdateAllResultMsg{operations: operations, revision: revision, err: err}
+				return providersUpdateAllResultMsg{warnings: warnings, operations: operations, revision: revision, err: err}
 			}
 			if result.Revision != 0 {
 				revision = result.Revision
 			}
 		}
-		return providersUpdateAllResultMsg{operations: operations, revision: revision}
+		return providersUpdateAllResultMsg{warnings: warnings, operations: operations, revision: revision}
 	}
 }
 

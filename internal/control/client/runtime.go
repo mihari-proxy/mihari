@@ -36,6 +36,7 @@ type runtimeOutcome struct {
 	err            error
 	remoteEnvelope bool
 	dispatched     bool
+	httpStatus     int
 }
 
 func (c *Client) Core(ctx context.Context) (protocol.CoreStatus, error) {
@@ -168,7 +169,7 @@ func (c *Client) UpdateLogging(ctx context.Context, request protocol.LoggingUpda
 			reporter(ctx, diagnostics.Record{Component: "control.client", Event: "logging_update_response", Level: slog.LevelDebug, Err: outcome.err})
 		default:
 			if level, report := diagnostics.FailureLevel(ctx, outcome.err); report {
-				reporter(ctx, diagnostics.Record{Component: "control.client", Event: "logging_update_failed", Level: level, Err: outcome.err})
+				outcome.err = diagnostics.ReportError(ctx, reporter, diagnostics.Record{Component: "control.client", Event: "logging_update_failed", Level: level, Err: outcome.err})
 				outcome.err = diagnostics.MarkReported(outcome.err)
 			}
 		}
@@ -326,7 +327,7 @@ func (c *Client) doMutation(ctx context.Context, operation logging.OperationMeta
 		reporter(ctx, diagnostics.Record{Component: "control.client", Event: "mutation_response", Level: slog.LevelDebug, Err: outcome.err})
 	default:
 		if level, report := diagnostics.FailureLevel(ctx, outcome.err); report {
-			reporter(ctx, diagnostics.Record{Component: "control.client", Event: "mutation_failed", Level: level, Err: outcome.err})
+			outcome.err = diagnostics.ReportError(ctx, reporter, diagnostics.Record{Component: "control.client", Event: "mutation_failed", Level: level, Err: outcome.err})
 			outcome.err = diagnostics.MarkReported(outcome.err)
 		}
 	}
@@ -374,6 +375,7 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 		return c.reportStreamOutcome(ctx, runtimeOutcome{err: err})
 	}
 	header.Set("Authorization", "Bearer "+token)
+	header.Set(protocol.DiagnosticCapabilityHeader, protocol.CapabilityDiagnostics)
 	connection, response, err := websocket.Dial(ctx, streamURL.String(), &websocket.DialOptions{HTTPClient: c.requestHTTP(), HTTPHeader: header})
 	if err != nil {
 		if ctx.Err() != nil {
@@ -403,11 +405,29 @@ func (c *Client) Stream(ctx context.Context, kind string, receive func(protocol.
 			if errors.Is(err, websocket.ErrMessageTooBig) {
 				return c.reportStreamOutcome(ctx, runtimeOutcome{err: diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "control stream message is too large"}, err)})
 			}
-			return c.reportStreamOutcome(ctx, runtimeOutcome{err: diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "control stream closed unexpectedly"}, err)})
+			failure := diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "control stream closed unexpectedly"}, err)
+			snapshot := diagnostics.Describe(ctx, diagnostics.Record{Component: "control.client", Event: "stream_failed", Level: slog.LevelError, Err: failure})
+			snapshot.RetrievalError = "Remote diagnostic details were not received; this record contains the local stream transport failure."
+			return c.reportStreamOutcome(ctx, runtimeOutcome{err: diagnostics.WithSnapshot(failure, snapshot)})
 		}
 		var event protocol.StreamEvent
 		if err := json.Unmarshal(raw, &event); err != nil || event.Schema != "mihari/v1" || event.Stream != kind {
 			return c.reportStreamOutcome(ctx, runtimeOutcome{err: diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control stream event"}, err)})
+		}
+		if event.Terminal {
+			if event.Diagnostic == nil || event.Diagnostic.ID == "" || event.Diagnostic.State != protocol.DiagnosticReference || event.Diagnostic.Detail != "" {
+				return c.reportStreamOutcome(ctx, runtimeOutcome{err: protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control stream terminal diagnostic"}})
+			}
+			// Release the stream before the independent HTTP detail request. The
+			// terminal event has already supplied the remote failure classification.
+			_ = connection.CloseNow()
+			if ctx.Err() != nil {
+				return nil
+			}
+			snapshot := c.ResolveDiagnostic(ctx, *event.Diagnostic)
+			return c.reportStreamOutcome(ctx, runtimeOutcome{remoteEnvelope: true, err: protocol.APIError{
+				Code: protocol.CodeDaemonUnavailable, Message: "control stream closed unexpectedly", Diagnostic: &snapshot,
+			}})
 		}
 		if err := receive(event); err != nil {
 			return err
@@ -497,7 +517,11 @@ func (c *Client) reportRuntimeOutcome(ctx context.Context, outcome runtimeOutcom
 		event, level, report = responseEvent, slog.LevelDebug, true
 	}
 	if report {
-		reporter(ctx, diagnostics.Record{Component: "control.client", Event: event, Level: level, Err: outcome.err})
+		if outcome.remoteEnvelope {
+			reporter(ctx, diagnostics.Record{Component: "control.client", Event: event, Level: level, Err: outcome.err})
+		} else {
+			outcome.err = diagnostics.ReportError(ctx, reporter, diagnostics.Record{Component: "control.client", Event: event, Level: level, Err: outcome.err})
+		}
 		return diagnostics.MarkReported(outcome.err)
 	}
 	return outcome.err
@@ -570,6 +594,12 @@ func (c *Client) doRuntimeOutcome(ctx context.Context, method, path string, inpu
 		public := protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control response"}
 		return c.localRuntimeOutcome(diagnostics.Wrap(public, err))
 	}
+	if result, ok := output.(interface {
+		DiagnosticWarnings() *protocol.WarningOutcome
+	}); ok {
+		readDiagnosticReferences(response.Header, nil, result.DiagnosticWarnings())
+		c.resolveWarnings(ctx, result.DiagnosticWarnings())
+	}
 	return runtimeOutcome{}
 }
 
@@ -581,6 +611,8 @@ func decodeRuntimeHTTPErrorOutcome(response *http.Response) (error, bool) {
 	if envelope.Error.Code == "" {
 		return protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid control error response"}, false
 	}
+	readDiagnosticReferences(response.Header, &envelope.Error.Diagnostic, &envelope.WarningOutcome)
+	envelope.Error.Append(envelope.WarningOutcome)
 	return envelope.Error, true
 }
 

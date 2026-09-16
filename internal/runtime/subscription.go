@@ -117,6 +117,14 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 		Source: operation.Source,
 	}, profile.ID)
 	if refreshErr != nil {
+		// Registration committed before its independent first-fetch operation.
+		// Return that child's existing occurrence as a warning, including on
+		// replay; do not publish another failure or change the saved result.
+		snapshot, ok := diagnostics.Snapshot(refreshErr)
+		if !ok {
+			snapshot = diagnostics.Describe(ctx, diagnostics.Record{Err: refreshErr})
+		}
+		diagnostics.ReturnWarnings(ctx, protocol.WarningOutcome{Warnings: []protocol.Warning{{Code: snapshot.Code, Message: "Subscription saved; first download failed", Diagnostic: &snapshot}}})
 		if current, findErr := findPublicProfile(m.subscriptions.Snapshot().Public(), profile.ID); findErr == nil {
 			return current, nil
 		}

@@ -99,3 +99,23 @@ func TestGitHubDiagnostics_RetainsHTTPFailureBodyPrivately(t *testing.T) {
 		t.Fatal("internal response body escaped into public message")
 	}
 }
+
+func TestGitHubDiagnostics_CollectionLimitIsStructured(t *testing.T) {
+	for _, oversized := range []bool{false, true} {
+		original := "literal [truncated] token=fixture"
+		if oversized {
+			original += strings.Repeat("x", diagnostics.MaxHTTPBodyBytes)
+		}
+		client := Client{HTTPClient: &http.Client{Transport: githubDiagnosticTransport(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 403, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(original))}, nil
+		})}}
+		_, err := client.LatestRelease(context.Background(), "owner", "repo")
+		var detail *diagnostics.HTTPError
+		if !errors.As(err, &detail) || detail.BodyTruncated != oversized {
+			t.Fatalf("structured collection state missing for oversized=%v", oversized)
+		}
+		if !oversized && diagnostics.Capture(err).Truncated {
+			t.Fatal("literal truncation marker was interpreted as metadata")
+		}
+	}
+}

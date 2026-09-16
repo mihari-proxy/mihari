@@ -23,9 +23,14 @@ import (
 // This storage fixture exercises client/session refresh over a real HTTP/WS
 // transport. Trusted filesystem discovery and peer verification have separate
 // Unix tests; an httptest adapter does not claim those public-root guarantees.
-type readOnlyCredentialFixture struct{ path string }
+type readOnlyCredentialFixture struct {
+	path string
+	mu   *sync.RWMutex
+}
 
 func (f readOnlyCredentialFixture) Load(ctx context.Context) (string, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -111,8 +116,14 @@ func awaitCredentialEvent(t *testing.T, events <-chan session.Event, accept func
 func TestCredentialRefresh_LongLivedSessionRecoversAfterStopDeleteStart(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "control.token")
+	// Coordinate fixture mutations with its own readers: Windows rejects an
+	// unlink while os.ReadFile has the fixture open. The session stays alive and
+	// still observes the missing file and the regenerated token between writes.
+	var fileMu sync.RWMutex
 	write := func(token string) {
 		t.Helper()
+		fileMu.Lock()
+		defer fileMu.Unlock()
 		if err := os.WriteFile(path, []byte(token+"\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -122,7 +133,7 @@ func TestCredentialRefresh_LongLivedSessionRecoversAfterStopDeleteStart(t *testi
 	s, stop, started := startCredentialDaemonFixture(t, "", first)
 	address := s.Listener.Addr().String()
 	httpClient := s.Client()
-	c := controlclient.NewHTTPWithCredentialProvider(s.URL, readOnlyCredentialFixture{path}, httpClient)
+	c := controlclient.NewHTTPWithCredentialProvider(s.URL, readOnlyCredentialFixture{path: path, mu: &fileMu}, httpClient)
 	sess := session.New(c, session.Options{Backoff: func(int) time.Duration { return 5 * time.Millisecond }, PollInterval: 5 * time.Millisecond})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -147,7 +158,10 @@ func TestCredentialRefresh_LongLivedSessionRecoversAfterStopDeleteStart(t *testi
 		t.Fatal("online rewrite refusal lacked conditional advice")
 	}
 	stop()
-	if err := os.Remove(path); err != nil {
+	fileMu.Lock()
+	removeErr := os.Remove(path)
+	fileMu.Unlock()
+	if err := removeErr; err != nil {
 		t.Fatal(err)
 	}
 	awaitCredentialEvent(t, events, func(e session.Event) bool {

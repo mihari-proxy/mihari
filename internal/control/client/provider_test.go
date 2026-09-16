@@ -116,7 +116,9 @@ func TestProvider_AuthenticationHintPreservesEnvelope(t *testing.T) {
 			}} {
 				err := call()
 				var got protocol.APIError
-				if !errors.As(err, &got) || !reflect.DeepEqual(got, want) {
+				expected := want
+				expected.Diagnostic = &protocol.Diagnostic{Code: want.Code, Summary: want.Message, State: protocol.DiagnosticUnsupported}
+				if !errors.As(err, &got) || !reflect.DeepEqual(got, expected) {
 					t.Fatalf("envelope changed: %v", err)
 				}
 				var hint interface{ Hint() string }

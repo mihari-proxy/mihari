@@ -18,6 +18,7 @@ func coreHTTPError(api protocol.APIError, operation, address, phase string, resp
 		if response.Body != nil && phase == "response" {
 			raw, readErr := io.ReadAll(io.LimitReader(response.Body, diagnostics.MaxHTTPBodyBytes+1))
 			detail.Body = diagnostics.HTTPBody(raw)
+			detail.BodyTruncated = len(raw) > diagnostics.MaxHTTPBodyBytes
 			detail.Cause = errors.Join(cause, readErr)
 		}
 	}
