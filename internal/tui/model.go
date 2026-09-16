@@ -1410,7 +1410,7 @@ func (model Model) footerGlobalSegment() string {
 		return ui.SpinnerLabel(model.now, label)
 	}
 	if model.connected && model.status.Health == state.HealthDegraded && model.status.LastError != "" {
-		return ui.DaemonDegradedLabel + " — " + model.status.LastError
+		return ui.DaemonDegradedLabel + " — " + diagnosticSingleLine(model.status.LastError)
 	}
 	label := ui.GlobalStateLabel(model.globalState)
 	if model.globalState == ui.StateStale && !model.lastObservedAt.IsZero() {

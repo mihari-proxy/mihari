@@ -301,3 +301,8 @@ Green / 目标包 / 集成 / race 证据：
 - 五种 Connections 详情变体额外验证 F2 → Esc 后完整视图不变，覆盖紧凑、已关闭、暂停、滚动到底部。README 和页面动作自动合并已核对，warnings 传播保持。
 - 受影响的 Connections/Logs/UI 目标测试及全部 TUI race 通过；lint 0 issues、vet、gofmt 与六轴 CGO0 编译复验通过。第 14 节覆盖率比较基线保持为 `03d33a1`，不冒充本次新基线数据；#263 仅整合详情展示及相关测试，没有修改诊断采集或协议。
 - `ad6ecae` 最终全仓 `go test ./...` 与 `go test -race ./...` 均 exit 0（集成普通测试 27.175s，race 57.178s）。本地验收完成；远端 CI/bot review 随 PR 继续。
+
+## 16. PR 自查补充
+
+- PR #264 等待远端检查期间发现 daemon degraded LastError 的 shell footer 仍直接使用原文。`TestShellFooter_DegradedErrorEscapesControlsWithoutChangingStatus` 先因 ESC/NUL/换行未转义失败，再通过既有单行诊断显示函数修复；原始状态文本保持不变。
+- 修复后目标回归、全部 TUI race、lint（0 issues）、TUI vet 和 diff 检查通过。变更仅为显示边界的一行调用及对应回归；等待最新 PR CI/bot review。
