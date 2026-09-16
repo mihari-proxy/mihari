@@ -36,7 +36,7 @@ func (m *Model) View() string {
 	header := ui.RenderBorderedSection(m.theme, ui.WebGUITitle, summary, inner)
 	hint := strings.ReplaceAll(ui.WebGUICacheRefreshHint, "Ctrl+Shift+R", m.theme.Warning.Bold(true).Render("Ctrl+Shift+R"))
 	warning := ui.RenderBorderedSectionColored(m.theme, "! Browser refresh", m.theme.Warning.Render(ansi.Wrap(hint, textW, "")), inner, m.theme.ColorWarning, m.theme.ColorWarning)
-	pinned := header + "\n\n" + warning
+	pinned := header + "\n" + warning
 	if m.lastError != "" {
 		pinned += "\n" + m.theme.Danger.Render(ui.TruncateVisible(strings.Join(strings.Fields(m.lastError), " "), textW))
 	}
@@ -112,6 +112,9 @@ func (m *Model) panelBody(panel protocol.PanelStatus, index, inner int) string {
 	}
 	if panel.Health != "" && !strings.EqualFold(panel.Health, "healthy") && !strings.EqualFold(panel.Health, "ok") && panel.Health != "installed" && panel.Health != "missing" {
 		state = m.theme.Warning.Render("! " + panel.Health)
+	}
+	if m.installing["panel:install:"+panel.ID] || m.installing["panel:reinstall:"+panel.ID] {
+		state = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(m.installClock, "Installing"))
 	}
 	if panel.Active || panel.ID == m.status.ActivePanel {
 		state += "  " + m.theme.Success.Bold(true).Render("DEFAULT")

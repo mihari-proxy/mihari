@@ -119,7 +119,7 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"up", "down"}, Display: "↑/↓", Label: "move", Scope: ScopePage, Page: PageSubscriptions},
 
 		{Keys: []string{"up", "down", "k", "j"}, Display: "↑/↓", Label: "select a panel", Footer: "↑/↓ panel", Scope: ScopePage, Page: PageWebGUI},
-		{Keys: []string{"tab", "shift+tab"}, Display: "Tab/Shift+Tab", Label: "move between panel actions", Footer: "Tab move", Scope: ScopePage, Page: PageWebGUI},
+		{Keys: []string{"tab", "shift+tab", "left", "right"}, Display: "Tab/Shift+Tab/←/→", Label: "move between panel actions", Footer: "Tab move", Scope: ScopePage, Page: PageWebGUI},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "activate the focused action", Footer: "Enter activate", Scope: ScopePage, Page: PageWebGUI},
 		{Keys: []string{"space"}, Display: "Space", Label: "set default", Footer: "Space set default", Scope: ScopePage, Page: PageWebGUI},
 		{Keys: []string{"o"}, Display: "o", Label: "open", Footer: "o open", Scope: ScopePage, Page: PageWebGUI},
@@ -285,7 +285,7 @@ func renderPageFooter(page PageID, mode string, opt FooterOpt) string {
 		}
 		if page == PageWebGUI {
 			tokens := footerTokens(func(b KeyBinding) bool {
-				return b.Page == page && b.Mode == "" && (b.Display == "↑/↓" || b.Display == "Tab/Shift+Tab" || b.Display == "Enter" || b.Display == "o")
+				return b.Page == page && b.Mode == "" && (b.Display == "↑/↓" || b.Display == "Tab/Shift+Tab/←/→" || b.Display == "Enter" || b.Display == "o")
 			})
 			return joinFooter(append(append([]string{escBack}, tokens...), helpQuit...))
 		}

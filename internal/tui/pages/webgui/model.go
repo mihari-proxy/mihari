@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"slices"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -32,9 +33,10 @@ type statusResultMsg struct {
 }
 
 type mutationDoneMsg struct {
-	warnings  protocol.WarningOutcome
-	operation logging.OperationMetadata
-	err       error
+	pendingKey string
+	warnings   protocol.WarningOutcome
+	operation  logging.OperationMetadata
+	err        error
 }
 
 // Err implements the shell's action-outcome contract so panel lifecycle
@@ -61,6 +63,9 @@ type Model struct {
 	width          int
 	height         int
 	theme          ui.Theme
+	installing     map[string]bool
+	installClock   time.Time
+	installSpinGen uint64
 }
 
 // New constructs a Web GUI page with background context.
@@ -154,6 +159,14 @@ func (m *Model) Load() tea.Cmd {
 
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	switch typed := message.(type) {
+	case ui.ActionPendingMsg:
+		return m, m.beginInstall(typed)
+	case installSpinTickMsg:
+		if typed.gen != m.installSpinGen || len(m.installing) == 0 {
+			return m, nil
+		}
+		m.installClock = typed.at
+		return m, m.installTick()
 	case statusResultMsg:
 		if typed.err != nil {
 			m.lastError = ui.WebGUIUnavailable
@@ -163,6 +176,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		return m, nil
 	case mutationDoneMsg:
+		delete(m.installing, typed.pendingKey)
 		if typed.err != nil {
 			m.toast = diagnostics.EscapeTerminal(typed.err.Error())
 		} else {
@@ -188,19 +202,19 @@ func (m *Model) handleKey(name string) tea.Cmd {
 	switch name {
 	case "esc":
 		return func() tea.Msg { return ui.FocusRailMsg{} }
-	case "up", "k", "left":
+	case "up", "k":
 		if m.selected > 0 {
 			m.selected--
 			m.action = 0
 		}
-	case "down", "j", "right":
+	case "down", "j":
 		if m.selected+1 < len(m.status.Panels) {
 			m.selected++
 			m.action = 0
 		}
-	case "tab":
+	case "tab", "right":
 		m.moveAction(1)
-	case "shift+tab":
+	case "shift+tab", "left":
 		m.moveAction(-1)
 	case "enter":
 		panel, ok := m.selectedPanel()
@@ -281,7 +295,7 @@ func (m *Model) installSelected() tea.Cmd {
 			Impact: ui.InstallPanelImpact, Rollback: ui.InstallPanelRollback,
 			Execute: func() tea.Msg {
 				result, err := m.client.InstallPanel(ctx, panel.ID, protocol.PanelInstallRequest{OperationID: operationID})
-				return mutationDoneMsg{operation: operation, err: err, warnings: result.WarningOutcome}
+				return mutationDoneMsg{pendingKey: "panel:install:" + panel.ID, operation: operation, err: err, warnings: result.WarningOutcome}
 			},
 		}
 	}
@@ -371,7 +385,7 @@ func (m *Model) reinstallSelected() tea.Cmd {
 			Impact: ui.ReinstallPanelImpact, Rollback: ui.ReinstallPanelRollback,
 			Execute: func() tea.Msg {
 				result, err := m.client.ReinstallPanel(ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
-				return mutationDoneMsg{operation: operation, err: err, warnings: result.WarningOutcome}
+				return mutationDoneMsg{pendingKey: "panel:reinstall:" + panel.ID, operation: operation, err: err, warnings: result.WarningOutcome}
 			},
 		}
 	}
