@@ -213,8 +213,14 @@ func (m *Model) handleKey(name string) tea.Cmd {
 		}
 		m.menuOpen, m.menuIndex = true, 0
 	case "space":
+		if panel, ok := m.selectedPanel(); !ok || panel.InstalledBuild == "" {
+			return nil
+		}
 		return m.activateSelected()
 	case "o":
+		if panel, ok := m.selectedPanel(); !ok || panel.InstalledBuild == "" {
+			return nil
+		}
 		return m.openBrowserAction()
 	case "i":
 		return m.installSelected()

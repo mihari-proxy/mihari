@@ -68,6 +68,33 @@ func TestWebGUI_PrimaryActionAndManageMenu(t *testing.T) {
 	}
 }
 
+func TestWebGUI_InstalledOnlyShortcuts(t *testing.T) {
+	for _, key := range []string{"space", "o"} {
+		t.Run(key, func(t *testing.T) {
+			f := &fakeClient{status: sampleStatus()}
+			m := New(f, []string{protocol.CapabilityWebGUI})
+			m.SetStatus(f.status)
+			cmd := m.handleKey(key)
+			if cmd == nil {
+				t.Fatal("installed panel shortcut must remain available")
+			}
+			want := ui.ActionOpenWebGUI
+			if key == "space" {
+				want = ui.ActionActivatePanel
+			}
+			if cmd().(ui.ActionIntentMsg).Action != want {
+				t.Fatal("shortcut emitted the wrong action")
+			}
+			f.status.Panels[0].InstalledBuild = ""
+			f.status.Panels[0].Active = false
+			m.SetStatus(f.status)
+			if m.handleKey(key) != nil {
+				t.Fatal("missing panel must not offer an installed-only action")
+			}
+		})
+	}
+}
+
 func TestWebGUI_MenuDisabledItemsAndDangerousIntents(t *testing.T) {
 	f := &fakeClient{status: sampleStatus()}
 	m := New(f, []string{protocol.CapabilityWebGUI})
