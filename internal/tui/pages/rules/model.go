@@ -43,8 +43,9 @@ type pageFocus struct {
 }
 
 type detailState struct {
-	title string
-	body  string
+	title  string
+	body   string
+	scroll int
 }
 
 type Model struct {
@@ -230,9 +231,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, nil
 	}
 	if m.detail != nil {
-		if key.String() == "esc" || key.String() == "enter" {
-			m.detail = nil
-		}
+		m.updateDetail(key.String())
 		return m, nil
 	}
 	switch key.String() {
@@ -334,7 +333,7 @@ func (m *Model) View() string {
 
 	content := controls + "\n" + list + "\n" + listStatus
 	if m.detail != nil {
-		content += "\n\n" + m.theme.Dialog.Render(m.theme.Title.Render(m.detail.title)+"\n\n"+m.detail.body+"\n\n"+ui.EscCloseHint)
+		return m.renderDetail(content)
 	}
 	return content
 }
@@ -607,7 +606,7 @@ func (m *Model) openDetail() {
 		}
 		index := indexes[m.focus.row]
 		rule := m.rules[index]
-		m.detail = &detailState{title: ui.RuleDetailsTitle, body: fmt.Sprintf("%s: %d\n%s: %s\n%s: %s\n%s: %s", ui.EvaluationOrderLabel, index+1, ui.TypeLabel, rule.Type, ui.PayloadLabel, valueOr(rule.Payload, ui.MissingValue), ui.TargetLabel, rule.Proxy)}
+		m.detail = &detailState{title: ui.RuleDetailsTitle, body: fmt.Sprintf("%s: %d\n%s: %s\n%s: %s\n\n%s\n%s", ui.EvaluationOrderLabel, index+1, ui.TypeLabel, ui.StyleRuleType(m.theme, rule.Type), ui.TargetLabel, ui.StyleProxyTarget(m.theme, rule.Proxy), m.theme.Muted.Render(ui.PayloadLabel), valueOr(rule.Payload, ui.MissingValue))}
 		return
 	}
 	indexes := m.visibleProviderIndexes()

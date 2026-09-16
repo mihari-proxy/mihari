@@ -141,6 +141,11 @@ func (m *Model) HelpMode() string {
 	}
 }
 
+// HelpContent explains compact rates without taking space from the table.
+func (m *Model) HelpContent() string {
+	return ui.RenderHelp(m.ID(), m.HelpMode()) + "\n\nTraffic (B/s): upload ↑, download ↓. K/M/G/T/P/E use powers of 1024.\nOpen connection details for full rates and the complete proxy chain."
+}
+
 // FooterHints returns contextual shortcuts for the root shell footer.
 func (m *Model) FooterHints() string {
 	return ui.RenderFooter(m.ID(), m.HelpMode(), ui.FooterOpt{})

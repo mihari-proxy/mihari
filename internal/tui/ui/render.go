@@ -50,6 +50,11 @@ type FooterHintProvider interface {
 	FooterHints() string
 }
 
+// HelpContentProvider supplies page-specific help, including contextual status.
+type HelpContentProvider interface {
+	HelpContent() string
+}
+
 // HelpModeProvider reports the current overlay/input mode for keyboard help.
 type HelpModeProvider interface {
 	HelpMode() string

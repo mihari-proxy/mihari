@@ -117,7 +117,7 @@ func TestRenderHelp_SameKeyKeepsPageSpecificActions(t *testing.T) {
 	if !strings.Contains(rules, "update the focused provider") {
 		t.Fatalf("rules u:\n%s", rules)
 	}
-	if !strings.Contains(strings.ToLower(web), "update") || strings.Contains(web, "activate") {
+	if !strings.Contains(strings.ToLower(web), "update") || strings.Contains(web, "update the focused provider") {
 		t.Fatalf("web gui u:\n%s", web)
 	}
 	if strings.Contains(conn, PageLabel(PageSubscriptions)+":") {
@@ -241,7 +241,7 @@ func TestCatalog_KeysAppearInHandlerSource(t *testing.T) {
 		case b.Page == PageConnections:
 			return []string{filepath.Join(tuiDir, "pages", "connections", "model.go")}
 		case b.Page == PageRules:
-			return []string{filepath.Join(tuiDir, "pages", "rules", "model.go")}
+			return []string{filepath.Join(tuiDir, "pages", "rules", "model.go"), filepath.Join(tuiDir, "pages", "rules", "detail.go")}
 		case b.Page == PageLogs:
 			return []string{filepath.Join(tuiDir, "pages", "logs", "model.go")}
 		case b.Page == PageSubscriptions && b.Mode == ModeForm:
@@ -252,7 +252,7 @@ func TestCatalog_KeysAppearInHandlerSource(t *testing.T) {
 		case b.Page == PageSubscriptions:
 			return []string{filepath.Join(tuiDir, "pages", "subscriptions", "model.go"), filepath.Join(tuiDir, "pages", "subscriptions", "form.go"), filepath.Join(tuiDir, "pages", "subscriptions", "dialog.go")}
 		case b.Page == PageWebGUI:
-			return []string{filepath.Join(tuiDir, "pages", "webgui", "model.go")}
+			return []string{filepath.Join(tuiDir, "pages", "webgui", "model.go"), filepath.Join(tuiDir, "pages", "webgui", "menu.go")}
 		case b.Page == PageSystem:
 			return []string{filepath.Join(tuiDir, "pages", "system", "model.go")}
 		case b.Mode == ModeSearch:
@@ -343,7 +343,7 @@ func TestRenderFooter_MatchesCurrentLayout(t *testing.T) {
 		{"logs", RenderFooter(PageLogs, "", FooterOpt{}), "Esc back  / search  p pause  w wrap  G newest  e export  Enter details  ? help  q quit"},
 		{"subscriptions", RenderFooter(PageSubscriptions, "", FooterOpt{}), "Esc back  Enter details  a add  Space toggle  p mode  r refresh  Ctrl+R refresh all  u use  d delete  ? help  q quit"},
 		{"webgui-off", RenderFooter(PageWebGUI, "", FooterOpt{}), "Esc back  ? help  q quit"},
-		{"webgui-on", RenderFooter(PageWebGUI, "", FooterOpt{WebGUIAvailable: true}), "Esc back  ↑/↓ panel  Space set default  o open  i install  u update  r reinstall  x uninstall  b rollback  ? help  q quit"},
+		{"webgui-on", RenderFooter(PageWebGUI, "", FooterOpt{WebGUIAvailable: true}), "Esc back  ↑/↓ panel  Tab move  Enter activate  o open  ? help  q quit"},
 		{"system", RenderFooter(PageSystem, "", FooterOpt{}), "Esc back  Enter activate  ? help  q quit"},
 		{"search", RenderFooter(PageConnections, ModeSearch, FooterOpt{}), "Type to filter  ←/→ cursor  ↑/↓ leave  Esc done"},
 		{"setup", RenderFooter(PageSetup, "", FooterOpt{}), "Tab fields  Enter continue  Esc back  Ctrl+C quit"},

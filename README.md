@@ -53,6 +53,10 @@ The TUI subscription table sizes Name and Traffic to their contents, capped at 3
 
 Subscription Mode displays `auto` as **PROXY w Fallback to DIRECT**. It retries the main subscription YAML directly after eligible proxy network failures, including a timeout while reading a successful response body; HTTP errors and invalid documents do not trigger fallback. Each download attempt allows 30 seconds. Add/Refresh share a 120-second daemon execution budget, while CLI/TUI allow 180 seconds per subscription to include bounded rollback and the response. Shorter caller deadlines and cancellation still apply; batch refresh uses a fresh budget per item. Narrow lists hide the whole Mode column when necessary; editable details retain its full value. Provider download policies and Routing Mode are independent.
 
+In **Connections**, Chain receives more width and stays visible before Source, Destination and Rule in narrow windows. Traffic uses fixed, compact upload/download slots (`K/M/G/T/P/E` mean powers of 1024 bytes per second); connection details retain full rates and the complete chain. **Rules** opens full rule or provider details in a centered popup: scroll with ↑/↓ or PgUp/PgDn and close with Enter/Esc to return to the same row.
+
+**Web GUI** shows panel cards side by side in wide windows and stacked in narrow ones. Use Tab/Shift+Tab to focus Open/Install or Manage, then Enter; existing panel shortcuts remain available. Manage contains update, default selection, reinstall, rollback and uninstall, with unavailable actions marked. The yellow **Ctrl+Shift+R** reminder stays above the cards; gateway safeguards are in `?` help. **System** places Network immediately after Ports Config.
+
 Mihomo HTTP failures retain their original error text and upstream status in diagnostic logs, including gateway requests and WebSocket handshakes. File logs and exports are not redacted: credentials, URLs, paths, and configuration fragments carried by errors remain available for diagnosis. User-facing errors remain concise.
 
 A single CGO-free static binary (< 15 MB) contains everything, with built-in GitHub Releases self-update and local GeoIP resolution.

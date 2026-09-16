@@ -691,7 +691,11 @@ func (model Model) openHelp() (Model, tea.Cmd) {
 	if page, ok := model.pages[model.active].(ui.HelpModeProvider); ok {
 		mode = page.HelpMode()
 	}
-	model.modal = NewHelp(ui.HelpTitle+" · "+ui.PageLabel(model.active), ui.RenderHelp(model.active, mode))
+	body := ui.RenderHelp(model.active, mode)
+	if page, ok := model.pages[model.active].(ui.HelpContentProvider); ok {
+		body = page.HelpContent()
+	}
+	model.modal = NewHelp(ui.HelpTitle+" · "+ui.PageLabel(model.active), body)
 	return model, nil
 }
 

@@ -2,6 +2,7 @@ package connections
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -118,17 +119,17 @@ func (m *Model) layoutWidth() int {
 }
 
 // connectionColumns maps the checked column set to table column definitions.
-// Priority is positional-reverse (host is never dropped, tail columns drop
-// first), so the checked order, table order and drop order are one.
+// Display order follows preferences; Host, Traffic and Chain survive shrinking
+// windows before the lower-priority metadata columns.
 func (m *Model) connectionColumns() []ui.TableColumn {
 	specs := map[string]ui.TableColumn{
 		"host":        {MinWidth: 12, Flex: 3, Priority: 0},
-		"traffic":     {MinWidth: 26, MaxWidth: 26, Flex: 1, Align: ui.AlignRight, Priority: 10},
+		"traffic":     {MinWidth: 15, MaxWidth: 15, Align: ui.AlignRight, Priority: 12},
 		"network":     {MinWidth: 10, Flex: 1, Priority: 9},
 		"rule":        {MinWidth: 12, Flex: 2, Priority: 8},
 		"start":       {MinWidth: 10, Flex: 1, Priority: 7},
 		"process":     {MinWidth: 12, Flex: 1, Priority: 6},
-		"chain":       {MinWidth: 12, Flex: 2, Priority: 5},
+		"chain":       {MinWidth: 12, Flex: 6, Priority: 11},
 		"source":      {MinWidth: 14, Flex: 1, Priority: 4},
 		"destination": {MinWidth: 14, Flex: 1, Priority: 3},
 		"upload":      {MinWidth: 10, Flex: 1, Align: ui.AlignRight, Priority: 2},
@@ -139,6 +140,9 @@ func (m *Model) connectionColumns() []ui.TableColumn {
 		spec := specs[id]
 		spec.ID = id
 		spec.Title = ui.ConnectionColumnLabel(id)
+		if id == "traffic" {
+			spec.Title = "Traffic (B/s)"
+		}
 		cols = append(cols, spec)
 	}
 	return cols
@@ -167,9 +171,8 @@ func (m *Model) renderConnection(connection protocol.Connection, focused bool) [
 		var text string
 		switch col.ID {
 		case "traffic":
-			text = ui.RenderTrafficColumn(m.theme,
-				ui.FormatRate(connection.UploadSpeed),
-				ui.FormatRate(connection.DownloadSpeed), widths[index])
+			text = m.theme.Success.Render(ui.PadCell("↑"+compactRate(connection.UploadSpeed), 7, ui.AlignRight)) + " " +
+				m.theme.Info.Render(ui.PadCell("↓"+compactRate(connection.DownloadSpeed), 7, ui.AlignRight))
 		case "network":
 			text = ui.StyleNetwork(m.theme, columnValue(connection, col.ID))
 		default:
@@ -182,6 +185,30 @@ func (m *Model) renderConnection(connection protocol.Connection, focused bool) [
 		line = ui.ApplyFocusStyle(line, m.theme.RowFocus)
 	}
 	return []string{line}
+}
+
+// compactRate keeps the number and IEC suffix within six cells. Rounded values
+// that reach 1024 advance a unit; large magnitudes drop the fractional digit.
+func compactRate(value int64) string {
+	amount := float64(max(0, value))
+	units := []string{"", "K", "M", "G", "T", "P", "E"}
+	unit := 0
+	for amount >= 1024 && unit < len(units)-1 {
+		amount /= 1024
+		unit++
+	}
+	if unit == 0 {
+		return fmt.Sprintf("%.0f", amount)
+	}
+	amount = math.Round(amount*10) / 10
+	if amount >= 1000 {
+		amount = math.Round(amount)
+	}
+	if amount >= 1024 && unit < len(units)-1 {
+		amount /= 1024
+		unit++
+	}
+	return strings.TrimSuffix(fmt.Sprintf("%.1f", amount), ".0") + units[unit]
 }
 
 func (m *Model) pauseLabel() string {
@@ -236,7 +263,7 @@ func columnValue(connection protocol.Connection, column string) string {
 	case "download":
 		return ui.FormatBytes(connection.Download)
 	case "traffic":
-		return fmt.Sprintf("↑%s ↓%s", ui.FormatRate(connection.UploadSpeed), ui.FormatRate(connection.DownloadSpeed))
+		return fmt.Sprintf("↑%s ↓%s", compactRate(connection.UploadSpeed), compactRate(connection.DownloadSpeed))
 	case "start":
 		if connection.Start.IsZero() {
 			return ui.MissingValue

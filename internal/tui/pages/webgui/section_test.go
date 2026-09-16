@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
@@ -34,8 +35,8 @@ func TestView_SectionsAndNoTokenLeak(t *testing.T) {
 	if !strings.Contains(view, ui.WebGUITitle) {
 		t.Fatalf("missing gateway title:\n%s", view)
 	}
-	if !strings.Contains(view, ui.GatewaySafeguardsTitle) {
-		t.Fatalf("missing safeguards section:\n%s", view)
+	if strings.Contains(view, ui.GatewaySafeguardsTitle) || !strings.Contains(model.HelpContent(), ui.GatewaySafeguardsTitle) {
+		t.Fatalf("safeguards should be in help:\n%s", view)
 	}
 	if !strings.Contains(view, "Default") {
 		t.Fatalf("panel missing:\n%s", view)
@@ -46,7 +47,7 @@ func TestView_SectionsAndNoTokenLeak(t *testing.T) {
 	}
 }
 
-func TestView_WebGUISectionEndsWithCacheRefreshHint(t *testing.T) {
+func TestView_WebGUIRefreshCalloutBeforeCards(t *testing.T) {
 	hint := ui.WebGUICacheRefreshHint
 	if hint == "" || !strings.Contains(hint, "Ctrl+Shift+R") {
 		t.Fatalf("WebGUICacheRefreshHint is empty or missing Ctrl+Shift+R: %q", hint)
@@ -57,22 +58,21 @@ func TestView_WebGUISectionEndsWithCacheRefreshHint(t *testing.T) {
 		}
 	}
 
-	t.Run("wide fits one plain body line before panel cards", func(t *testing.T) {
+	t.Run("wide fits one warning line before panel cards", func(t *testing.T) {
 		model := New(nil, []string{protocol.CapabilityWebGUI})
 		model.SetStatus(sampleStatus())
 		model.SetSize(100, 28)
 		view := model.View()
-		assertHintBeforePanel(t, view, hint)
-		if !strings.Contains(view, hint) {
-			t.Fatalf("hint should appear as plain body text:\n%s", view)
+		assertHintBeforePanel(t, ansi.Strip(view), hint)
+		if !strings.Contains(ansi.Strip(view), hint) {
+			t.Fatalf("hint should remain complete:\n%s", view)
 		}
 		warning := lipgloss.NewStyle().
 			Bold(true).
 			Foreground(ui.DefaultTheme().ColorWarning).
-			Background(lipgloss.Color("15")).
-			Render(hint)
-		if strings.Contains(view, warning) {
-			t.Fatalf("hint should match other body text, not warning callout chrome\nview=%s", view)
+			Render("Ctrl+Shift+R")
+		if !strings.Contains(view, warning) {
+			t.Fatalf("refresh shortcut must be bold and warning-colored\nview=%s", view)
 		}
 	})
 

@@ -4,12 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"slices"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
@@ -53,6 +50,9 @@ type Model struct {
 	available      bool
 	status         protocol.WebGUIStatus
 	selected       int
+	action         int
+	menuOpen       bool
+	menuIndex      int
 	lastError      string
 	toast          string
 	contentFocused bool
@@ -99,6 +99,8 @@ func (m *Model) SetSize(width, height int) { m.width, m.height = width, height }
 func (m *Model) SetContentFocused(focused bool) { m.contentFocused = focused }
 
 func (m *Model) FocusFirst() {
+	m.action, m.menuIndex = 0, 0
+	m.menuOpen = false
 	if len(m.status.Panels) > 0 {
 		m.selected = 0
 	}
@@ -106,19 +108,36 @@ func (m *Model) FocusFirst() {
 
 func (m *Model) SetCapabilities(capabilities []string) {
 	m.available = slices.Contains(capabilities, protocol.CapabilityWebGUI)
+	if !m.available {
+		m.menuOpen = false
+	}
 }
 
 func (m *Model) SetStatus(status protocol.WebGUIStatus) {
+	previous, hadSelection := m.selectedPanel()
 	status.Panels = append([]protocol.PanelStatus(nil), status.Panels...)
 	m.status = status
+	if hadSelection {
+		index := slices.IndexFunc(status.Panels, func(panel protocol.PanelStatus) bool { return panel.ID == previous.ID })
+		if index >= 0 {
+			m.selected = index
+		} else {
+			m.menuOpen = false
+			m.action = 0
+		}
+	}
 	if m.selected >= len(m.status.Panels) {
 		m.selected = max(0, len(m.status.Panels)-1)
+	}
+	if panel, ok := m.selectedPanel(); !ok || panel.InstalledBuild == "" {
+		m.action = 0
+		m.menuOpen = false
 	}
 }
 
 // FooterHints returns contextual shortcuts for the root shell footer.
 func (m *Model) FooterHints() string {
-	return ui.RenderFooter(m.ID(), "", ui.FooterOpt{WebGUIAvailable: m.available})
+	return ui.RenderFooter(m.ID(), m.HelpMode(), ui.FooterOpt{WebGUIAvailable: m.available})
 }
 
 func (m *Model) Load() tea.Cmd {
@@ -161,17 +180,38 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 }
 
 func (m *Model) handleKey(name string) tea.Cmd {
+	if m.menuOpen {
+		return m.handleMenuKey(name)
+	}
 	switch name {
 	case "esc":
 		return func() tea.Msg { return ui.FocusRailMsg{} }
-	case "up", "k":
+	case "up", "k", "left":
 		if m.selected > 0 {
 			m.selected--
+			m.action = 0
 		}
-	case "down", "j":
+	case "down", "j", "right":
 		if m.selected+1 < len(m.status.Panels) {
 			m.selected++
+			m.action = 0
 		}
+	case "tab":
+		m.moveAction(1)
+	case "shift+tab":
+		m.moveAction(-1)
+	case "enter":
+		panel, ok := m.selectedPanel()
+		if !ok {
+			return nil
+		}
+		if panel.InstalledBuild == "" {
+			return m.installSelected()
+		}
+		if m.action == 0 {
+			return m.openBrowserAction()
+		}
+		m.menuOpen, m.menuIndex = true, 0
 	case "space":
 		return m.activateSelected()
 	case "o":
@@ -373,71 +413,6 @@ func (m *Model) layoutWidth() int {
 	return 100
 }
 
-func (m *Model) View() string {
-	inner := ui.FullSectionInner(m.layoutWidth())
-	if !m.available {
-		body := m.theme.Muted.Render(ui.UnavailableTitle + ": " + ui.WebGUILifecycleUnavailable)
-		return ui.RenderBorderedSection(m.theme, ui.WebGUITitle, body, inner)
-	}
-	active := valueOr(m.status.ActivePanel, ui.MissingValue)
-	// Summary lines: health+addr, Active panel + sessions, then a cache-refresh
-	// hint in the same body style. OpenBrowserHint stays in the footer (the o key).
-	textW := ui.SectionTextWidth(inner)
-	line1 := ui.TruncateVisible(valueOr(m.status.GatewayHealth, ui.UnknownLabel)+"  "+valueOr(m.status.GatewayAddr, ui.MissingValue), textW)
-	line2 := ui.TruncateVisible(fmt.Sprintf("%s %s  ·  %s %d", ui.ActivePanelLabel, active, ui.BrowserSessionsLabel, m.status.BrowserSessions), textW)
-	header := line1 + "\n" + line2 + "\n" + wrapPlain(ui.WebGUICacheRefreshHint, textW)
-	var parts []string
-	parts = append(parts, ui.RenderBorderedSection(m.theme, ui.WebGUITitle, header, inner))
-
-	if len(m.status.Panels) == 0 {
-		parts = append(parts, ui.RenderBorderedSection(m.theme, "Panels", m.theme.Muted.Render(ui.NoWebGUIPanels), inner))
-	}
-	for index, panel := range m.status.Panels {
-		state := ""
-		if panel.Active {
-			state = "  " + ui.ActiveLabel
-		}
-		selected := index == m.selected
-		marker := "  "
-		if selected {
-			marker = ui.FocusMarker
-		}
-		body := fmt.Sprintf("%sInstalled  %s\n  Latest     %s\n  Health     %s\n  Rollback   %s",
-			marker, valueOr(panel.InstalledBuild, ui.MissingValue), valueOr(panel.LatestBuild, ui.MissingValue),
-			valueOr(panel.Health, ui.UnknownLabel), valueOr(panel.RollbackBuild, ui.MissingValue))
-		title := valueOr(panel.Name, panel.ID) + state
-		border := m.theme.ColorSurfaceBorder
-		// Accent the focused panel only while content owns keyboard focus.
-		if selected && m.contentFocused {
-			border = m.theme.ColorAccent
-		}
-		parts = append(parts, ui.RenderBorderedSectionWithBorder(m.theme, title, body, inner, border))
-	}
-	safeguards := []string{
-		boolState("Loopback binding", m.status.Safeguards.LoopbackBound),
-		boolState("Browser authentication", m.status.Safeguards.BrowserAuthenticated),
-		boolState("Controller isolation", m.status.Safeguards.ControllerIsolated),
-		boolState("Mutation coordinator", m.status.Safeguards.MutationsCoordinated),
-	}
-	// 2×2 layout (design W1); each line clips to the section text width.
-	row1 := ui.TruncateVisible(safeguards[0]+"  "+safeguards[1], textW)
-	row2 := ui.TruncateVisible(safeguards[2]+"  "+safeguards[3], textW)
-	parts = append(parts, ui.RenderBorderedSection(m.theme, ui.GatewaySafeguardsTitle, row1+"\n"+row2, inner))
-	if m.lastError != "" {
-		parts = append(parts, m.lastError)
-	}
-	if m.toast != "" {
-		parts = append(parts, m.toast)
-	}
-	// Never render auth tokens or open URLs.
-	view := strings.Join(parts, "\n")
-	lower := strings.ToLower(view)
-	if strings.Contains(lower, "token=") || strings.Contains(lower, "open_url") {
-		return ui.RenderBorderedSection(m.theme, ui.WebGUITitle, ui.WebGUIUnavailable, inner)
-	}
-	return view
-}
-
 func boolState(label string, enabled bool) string {
 	state := ui.OffLabel
 	if enabled {
@@ -451,13 +426,6 @@ func valueOr(value, fallback string) string {
 		return fallback
 	}
 	return value
-}
-
-func wrapPlain(text string, width int) string {
-	if width < 1 || lipgloss.Width(text) <= width {
-		return text
-	}
-	return lipgloss.NewStyle().Width(width).Render(text)
 }
 
 func randomOperationID() string {

@@ -302,7 +302,7 @@ func TestModel_FooterHintsAreContextual(t *testing.T) {
 	}
 	model.searching = false
 	model.detail = &detailState{title: "x", body: "y"}
-	if hints := model.FooterHints(); hints != ui.FooterDetailMode {
+	if hints := model.FooterHints(); hints != ui.RenderFooter(ui.PageRules, ui.ModeDetail, ui.FooterOpt{}) {
 		t.Fatalf("detail=%q", hints)
 	}
 }

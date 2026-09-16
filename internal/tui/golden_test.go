@@ -192,7 +192,7 @@ func TestGoldenConnectionsDetailFull(t *testing.T) {
 	page = updatePage(page, tea.KeyPressMsg{Code: tea.KeyDown})
 	page = updatePage(page, tea.KeyPressMsg{Code: tea.KeyEnter})
 	model.pages[ui.PageConnections] = page
-	assertGolden(t, "full/connections-detail", model)
+	assertGoldenContent(t, "full/connections-detail", trimRenderPadding(normalizeRender(model.View().Content)))
 }
 
 func TestGoldenLogsCompact(t *testing.T) {

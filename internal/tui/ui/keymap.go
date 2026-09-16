@@ -25,6 +25,8 @@ const (
 	ModeRouting   = "routing"
 	ModeForm      = "form"
 	ModePortsEdit = "ports-edit"
+	// ModePanelMenu identifies Web GUI lifecycle actions for the selected panel.
+	ModePanelMenu = "panel-menu"
 	// ModeLoggingEdit identifies numeric Logging settings text input.
 	ModeLoggingEdit = "logging-edit"
 	// ModeExportLogs identifies the shared log export overlay.
@@ -116,6 +118,8 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"up", "down"}, Display: "↑/↓", Label: "move", Scope: ScopePage, Page: PageSubscriptions},
 
 		{Keys: []string{"up", "down", "k", "j"}, Display: "↑/↓", Label: "select a panel", Footer: "↑/↓ panel", Scope: ScopePage, Page: PageWebGUI},
+		{Keys: []string{"tab", "shift+tab"}, Display: "Tab/Shift+Tab", Label: "move between panel actions", Footer: "Tab move", Scope: ScopePage, Page: PageWebGUI},
+		{Keys: []string{"enter"}, Display: "Enter", Label: "activate the focused action", Footer: "Enter activate", Scope: ScopePage, Page: PageWebGUI},
 		{Keys: []string{"space"}, Display: "Space", Label: "set default", Footer: "Space set default", Scope: ScopePage, Page: PageWebGUI},
 		{Keys: []string{"o"}, Display: "o", Label: "open", Footer: "o open", Scope: ScopePage, Page: PageWebGUI},
 		{Keys: []string{"i"}, Display: "i", Label: "install", Footer: "i install", Scope: ScopePage, Page: PageWebGUI},
@@ -135,6 +139,10 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"enter", "esc"}, Display: "Enter / Esc", Label: "close", Footer: "Enter/Esc close", Scope: ScopeMode, Mode: ModeDetail},
 		{Keys: []string{"left", "right"}, Display: "←/→", Label: "switch tabs", Scope: ScopePage, Page: PageConnections, Mode: ModeDetail},
 		{Keys: []string{"up", "down"}, Display: "↑/↓", Label: "scroll", Scope: ScopePage, Page: PageConnections, Mode: ModeDetail},
+		{Keys: []string{"up", "down", "pgup", "pgdown", "home", "end"}, Display: "↑/↓ PgUp/PgDn Home/End", Label: "scroll rule details", Footer: "↑/↓ PgUp/PgDn scroll", Scope: ScopePage, Page: PageRules, Mode: ModeDetail},
+		{Keys: []string{"up", "down", "tab", "shift+tab"}, Display: "↑/↓ Tab", Label: "choose an action", Footer: "↑/↓ choose", Scope: ScopePage, Page: PageWebGUI, Mode: ModePanelMenu},
+		{Keys: []string{"enter"}, Display: "Enter", Label: "apply the selected action", Footer: "Enter apply", Scope: ScopePage, Page: PageWebGUI, Mode: ModePanelMenu},
+		{Keys: []string{"esc"}, Display: "Esc", Label: "close the menu", Footer: "Esc close", Scope: ScopePage, Page: PageWebGUI, Mode: ModePanelMenu},
 
 		{Keys: []string{"up", "down"}, Display: "↑/↓", Label: "move", Footer: "↑/↓ column", Scope: ScopeMode, Mode: ModeColumns},
 		{Keys: []string{"space"}, Display: "Space", Label: "toggle", Footer: "Space toggle", Scope: ScopeMode, Mode: ModeColumns},
@@ -251,7 +259,7 @@ func RenderFooter(page PageID, mode string, opt FooterOpt) string {
 			return b.Mode == mode && (b.Page == "" || b.Page == page)
 		})
 		return joinFooter(tokens)
-	case ModeDetail, ModeColumns, ModePortsEdit, ModeRouting:
+	case ModeDetail, ModeColumns, ModePortsEdit, ModeRouting, ModePanelMenu:
 		tokens := footerTokens(func(b KeyBinding) bool {
 			return b.Mode == mode && (b.Page == "" || b.Page == page)
 		})
@@ -270,6 +278,12 @@ func RenderFooter(page PageID, mode string, opt FooterOpt) string {
 		}
 		if page == PageWebGUI && !opt.WebGUIAvailable {
 			return joinFooter(append([]string{escBack}, helpQuit...))
+		}
+		if page == PageWebGUI {
+			tokens := footerTokens(func(b KeyBinding) bool {
+				return b.Page == page && b.Mode == "" && (b.Display == "↑/↓" || b.Display == "Tab/Shift+Tab" || b.Display == "Enter" || b.Display == "o")
+			})
+			return joinFooter(append(append([]string{escBack}, tokens...), helpQuit...))
 		}
 		tokens := footerTokens(func(b KeyBinding) bool {
 			return b.Scope == ScopePage && b.Page == page && b.Mode == ""
@@ -364,6 +378,8 @@ func modeTitle(mode string) string {
 	switch mode {
 	case ModeRouting:
 		return "Routing Mode"
+	case ModePanelMenu:
+		return "Panel management"
 	case ModeSearch:
 		return "Search"
 	case ModeDetail:

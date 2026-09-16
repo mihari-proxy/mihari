@@ -1,28 +1,28 @@
- Mihari  ·  ●  ·  1 conn  ·  ↑      0 B/s  ↓      0 B/s  ·  0 B                             Offline 
-   1 Overview    ╭───Controls─────────────────────────────────────────────────────────────────────╮ 
-   2 Proxies     │ [Active 1 | Closed 0]  [Source IP: All]  [Columns]  [Pause]                    │ 
- › 3 Conns       │  / Search…                                                                     │ 
-   4 Rules       ╰────────────────────────────────────────────────────────────────────────────────╯ 
-   5 Logs        ╭───Connections · 1 active───────────────────────────────────────────────────────╮ 
-   6 Subs        │   Host              Network      Chain                                 Traffic │ 
-   7 Web GUI     │   ──────────────────────────────────────────────────────────────────────────── │ 
-   8 System      │   example.com       —/TCP        DIRECT                   ↑0 B/s        ↓0 B/s │ 
-                 ╰────────────────────────────────────────────────────────────────────────────────╯ 
-                                                                                              —/1   
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
- Type to filter  ←/→ cursor  ↑/↓ leave  Esc done                                                    
+ Mihari  ·  ●  ·  1 conn  ·  ↑      0 B/s  ↓      0 B/s  ·  0 B                             Offline
+   1 Overview    ╭───Controls─────────────────────────────────────────────────────────────────────╮
+   2 Proxies     │ [Active 1 | Closed 0]  [Source IP: All]  [Columns]  [Pause]                    │
+ › 3 Conns       │  / Search…                                                                     │
+   4 Rules       ╰────────────────────────────────────────────────────────────────────────────────╯
+   5 Logs        ╭───Connections · 1 active───────────────────────────────────────────────────────╮
+   6 Subs        │   Host                Network        Chain                       Traffic (B/s) │
+   7 Web GUI     │   ──────────────────────────────────────────────────────────────────────────── │
+   8 System      │   example.com         —/TCP          DIRECT                         ↑0      ↓0 │
+                 ╰────────────────────────────────────────────────────────────────────────────────╯
+                                                                                              —/1
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ Type to filter  ←/→ cursor  ↑/↓ leave  Esc done

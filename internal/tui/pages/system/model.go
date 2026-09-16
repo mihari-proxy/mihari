@@ -1349,6 +1349,7 @@ func (m *Model) rows() []row {
 	daemon := fmt.Sprintf("Version %s\nUptime %s\nHealth %s\nRevision %d\nConfig %s", valueOr(m.status.DaemonVersion, ui.UnknownLabel), uptime(m.status.StartedAt), valueOr(m.status.Health, ui.UnknownLabel), m.status.Revision, configState)
 	core := fmt.Sprintf("Status %s\nVersion %s\nPID %d\nRestarts %d", valueOr(m.core.Status, ui.UnknownLabel), valueOr(m.core.Version, ui.UnknownLabel), m.core.PID, m.core.Restarts)
 	rows := m.portRows()
+	rows = append(rows, m.networkRows()...)
 	rows = append(rows, row{id: rowDaemon, section: ui.DaemonSectionTitle, label: ui.DaemonLabel, value: daemonValue(m.theme, m.status, !m.mutationsEnabled), detail: daemon})
 	rows = append(rows, m.panelRows()...)
 	rows = append(rows, m.mihariChannelRow())
@@ -1361,7 +1362,6 @@ func (m *Model) rows() []row {
 		row{id: rowCoreRestart, section: ui.CoreSectionTitle, label: ui.RestartCoreLabel, value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.RestartCoreImpact},
 	)
 	rows = append(rows, m.serviceRows()...)
-	rows = append(rows, m.networkRows()...)
 	rows = append(rows, m.loggingRows()...)
 	rows = append(rows, m.maintenanceRows()...)
 	rows = append(rows, m.aboutRows()...)
