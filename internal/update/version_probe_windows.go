@@ -11,7 +11,7 @@ import (
 // A user probe binds the observation policy and child process to one held token.
 type userVersionProbe interface {
 	Observe(context.Context, string) (platform.ReplacementFile, error)
-	Run(*exec.Cmd) error
+	Run(context.Context, *exec.Cmd) error
 	Close() error
 }
 

@@ -7,9 +7,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"golang.org/x/sys/windows"
@@ -67,9 +69,22 @@ func TestVersionProbe_WindowsUserRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	attributes := windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), InheritHandle: 1}
+	sentinel, err := windows.CreateEvent(&attributes, 1, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := windows.CloseHandle(sentinel); err != nil {
+			t.Error(err)
+		}
+	})
 	for _, mode := range []string{"version", "stdout-overflow", "stderr-overflow", "wait"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "unexpected-handle"), []byte(strconv.FormatUint(uint64(sentinel), 10)), 0600); err != nil {
+				t.Fatal(err)
+			}
 			if err := os.WriteFile(filepath.Join(dir, "expected-user"), []byte(user.User.Sid.String()), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -79,6 +94,9 @@ func TestVersionProbe_WindowsUserRunner(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			raw, err := (userVersionRunner{probe}).RunVersion(ctx, exe, dir)
+			if state, waitErr := windows.WaitForSingleObject(sentinel, 0); waitErr != nil || state != uint32(windows.WAIT_TIMEOUT) {
+				t.Fatalf("unrelated inheritable handle leaked: state=%d error=%v", state, waitErr)
+			}
 			switch mode {
 			case "version":
 				if err != nil || decodeProbedVersion(raw) != "v1.2.3" {
@@ -94,6 +112,41 @@ func TestVersionProbe_WindowsUserRunner(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestVersionProbe_WindowsInstalledBinary(t *testing.T) {
+	if windows.GetCurrentProcessToken().IsElevated() {
+		linked, err := windows.GetCurrentProcessToken().GetLinkedToken()
+		if err != nil {
+			t.Skip("host has no filtered UAC token")
+		}
+		if err := linked.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Exercise the real CLI and full path/token observation, not just a runner
+	// fake. All version-process state is redirected to its temporary environment.
+	exe := filepath.Join(t.TempDir(), "installed mihari.exe")
+	cmd := exec.Command("go", "build", "-trimpath", "-buildvcs=false", "-ldflags", "-X github.com/mihari-proxy/mihari/internal/buildinfo.Version=v1.2.3", "-o", exe, "../../cmd/mihari")
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN="+runtime.Version(), "CGO_ENABLED=0")
+	if raw, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build installed fixture: %v\n%s", err, raw)
+	}
+	probe, err := platform.OpenWindowsUserVersionProbe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, observeErr := probe.Observe(context.Background(), exe)
+	if err := errors.Join(observeErr, probe.Close()); err != nil {
+		t.Fatal(err)
+	}
+	if !file.MayExecute {
+		t.Skip("temporary directory ancestry permits another user to write; version execution is correctly refused")
+	}
+	got, err := ObserveReplacementTarget(context.Background(), "binary", exe, nil)
+	if err != nil || got.Version != "v1.2.3" || !got.Exists || got.FileID == "" || got.SHA256 == "" || got.probeErr != nil {
+		t.Fatalf("installed binary version=%q exists=%v error=%v probe error=%v", got.Version, got.Exists, err, got.probeErr)
 	}
 }
 
@@ -114,7 +167,7 @@ func (p *userVersionProbeFake) Observe(context.Context, string) (platform.Replac
 	return file, nil
 }
 
-func (p *userVersionProbeFake) Run(cmd *exec.Cmd) error {
+func (p *userVersionProbeFake) Run(_ context.Context, cmd *exec.Cmd) error {
 	p.runs++
 	if p.beforeRun != nil {
 		p.beforeRun(cmd)

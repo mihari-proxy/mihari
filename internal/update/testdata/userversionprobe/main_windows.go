@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,15 @@ func main() {
 	user, userErr := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil || userErr != nil || user.User.Sid.String() != string(expectedUser) {
 		os.Exit(5)
+	}
+	if raw, err := os.ReadFile(filepath.Join(dir, "unexpected-handle")); err == nil {
+		handle, err := strconv.ParseUint(string(raw), 10, 64)
+		if err != nil {
+			os.Exit(7)
+		}
+		// A non-inherited handle is invalid (or may identify a different object
+		// here). Only signaling the parent's sentinel proves a handle leak.
+		_ = windows.SetEvent(windows.Handle(handle))
 	}
 	mode, err := os.ReadFile(filepath.Join(dir, "probe-mode"))
 	if err != nil {

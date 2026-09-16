@@ -23,7 +23,8 @@ type WindowsUserVersionProbe struct {
 }
 
 // OpenWindowsUserVersionProbe uses the caller's filtered UAC token when elevated.
-// Missing linked tokens and unprovable privilege reduction fail closed. It never
+// An identification-only linked token falls back to the desktop shell token only
+// after proving the same user and logon session with non-admin rights. It never
 // selects another desktop user, prompts for elevation, or changes parent rights.
 func OpenWindowsUserVersionProbe() (probe *WindowsUserVersionProbe, err error) {
 	var source windows.Token
@@ -52,7 +53,7 @@ func OpenWindowsUserVersionProbe() (probe *WindowsUserVersionProbe, err error) {
 		defer func() { err = errors.Join(err, selected.Close()) }()
 	}
 	var primary windows.Token
-	if err = windows.DuplicateTokenEx(selected, windows.TOKEN_QUERY|windows.TOKEN_DUPLICATE|windows.TOKEN_ASSIGN_PRIMARY, nil, windows.SecurityImpersonation, windows.TokenPrimary, &primary); err != nil {
+	if primary, err = duplicateWindowsVersionProbeToken(selected, identity, openWindowsVersionShellToken); err != nil {
 		return nil, fmt.Errorf("duplicate version probe token: %w", err)
 	}
 	probe = &WindowsUserVersionProbe{token: primary, user: identity.user, session: identity.session}
@@ -60,6 +61,90 @@ func OpenWindowsUserVersionProbe() (probe *WindowsUserVersionProbe, err error) {
 		return probe, err
 	}
 	return probe, nil
+}
+
+func duplicateWindowsVersionProbeToken(selected windows.Token, identity windowsVersionIdentity, openShell func() (windows.Token, error)) (primary windows.Token, err error) {
+	selectedIdentity, err := readWindowsVersionIdentity(selected)
+	if err != nil {
+		return 0, err
+	}
+	if err := validateWindowsVersionIdentity(selectedIdentity, identity.user, identity.session); err != nil {
+		return 0, err
+	}
+	duplicate := func(token windows.Token) error {
+		// The secondary-logon process creation path also needs access to the
+		// duplicate's default/session metadata. These are handle access rights,
+		// not additional privileges for the caller or the child.
+		return windows.DuplicateTokenEx(token, windows.TOKEN_QUERY|windows.TOKEN_DUPLICATE|windows.TOKEN_ASSIGN_PRIMARY|windows.TOKEN_ADJUST_DEFAULT|windows.TOKEN_ADJUST_SESSIONID, nil, windows.SecurityImpersonation, windows.TokenPrimary, &primary)
+	}
+	if err = duplicate(selected); err == nil || !identity.elevated || !errors.Is(err, windows.ERROR_BAD_IMPERSONATION_LEVEL) {
+		return primary, err
+	}
+	// Linked tokens can be identification-only, which cannot become a primary
+	// token. Do not enable extra privileges or execute with the elevated token.
+	linkedErr := err
+	if err = validateWindowsVersionShellIdentity(selectedIdentity, identity); err != nil {
+		return 0, errors.Join(linkedErr, err)
+	}
+	shell, err := openShell()
+	if err != nil {
+		return 0, errors.Join(linkedErr, err)
+	}
+	defer func() {
+		err = errors.Join(err, shell.Close())
+		if err != nil {
+			err = errors.Join(linkedErr, err)
+			if primary != 0 {
+				err = errors.Join(err, primary.Close())
+				primary = 0
+			}
+		}
+	}()
+	shellIdentity, err := readWindowsVersionIdentity(shell)
+	if err != nil {
+		return 0, err
+	}
+	if err = validateWindowsVersionShellIdentity(shellIdentity, identity); err != nil {
+		return 0, err
+	}
+	err = duplicate(shell)
+	return primary, err
+}
+
+func validateWindowsVersionShellIdentity(actual, expected windowsVersionIdentity) error {
+	if err := validateWindowsVersionIdentity(actual, expected.user, expected.session); err != nil {
+		return err
+	}
+	if actual.logon == nil || expected.logon == nil || !actual.logon.Equals(expected.logon) {
+		return fmt.Errorf("version probe requires the same logon session: %w", os.ErrPermission)
+	}
+	return nil
+}
+
+func openWindowsVersionShellToken() (token windows.Token, err error) {
+	window := windows.GetShellWindow()
+	if window == 0 {
+		return 0, fmt.Errorf("version probe desktop shell unavailable: %w", os.ErrNotExist)
+	}
+	var pid uint32
+	if _, err = windows.GetWindowThreadProcessId(window, &pid); err != nil {
+		return 0, fmt.Errorf("locate version probe desktop shell: %w", err)
+	}
+	process, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		return 0, fmt.Errorf("open version probe desktop shell: %w", err)
+	}
+	defer func() {
+		err = errors.Join(err, windows.CloseHandle(process))
+		if err != nil && token != 0 {
+			err = errors.Join(err, token.Close())
+			token = 0
+		}
+	}()
+	if err = windows.OpenProcessToken(process, windows.TOKEN_QUERY|windows.TOKEN_DUPLICATE, &token); err != nil {
+		return 0, fmt.Errorf("open version probe desktop shell token: %w", err)
+	}
+	return token, nil
 }
 
 // Observe checks the complete path under the held user's non-admin trust policy.
@@ -73,18 +158,19 @@ func (p *WindowsUserVersionProbe) Observe(ctx context.Context, path string) (Rep
 }
 
 // Run executes only the fixed version command; the caller owns its context,
-// bounded pipes and isolated environment. Go inherits only the standard handles
-// through its explicit handle list, never the updater's token or other handles.
-func (p *WindowsUserVersionProbe) Run(cmd *exec.Cmd) error {
+// bounded pipes and isolated environment. Only the standard handles are passed
+// to the child, never the updater's token or other inheritable handles.
+func (p *WindowsUserVersionProbe) Run(ctx context.Context, cmd *exec.Cmd) error {
 	if err := p.validate(); err != nil {
 		return err
 	}
 	if cmd == nil || len(cmd.Args) != 4 || !slices.Equal(cmd.Args[1:], []string{"self", "version", "--json"}) || cmd.Env == nil || cmd.SysProcAttr != nil {
 		return os.ErrInvalid
 	}
-	// Go uses CreateProcessAsUser for this token and owns process termination
-	// and Wait. A start failure is returned; there is no elevated retry.
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW, Token: syscall.Token(p.token)}
+	if windows.GetCurrentProcessToken().IsElevated() {
+		return runWindowsVersionWithToken(ctx, cmd, p.token)
+	}
 	return cmd.Run()
 }
 
@@ -111,6 +197,7 @@ func (p *WindowsUserVersionProbe) validate() error {
 
 type windowsVersionIdentity struct {
 	user               *windows.SID
+	logon              *windows.SID
 	session, integrity uint32
 	elevated, admin    bool
 	uiAccess           bool
@@ -185,6 +272,12 @@ func readWindowsVersionIdentity(token windows.Token) (id windowsVersionIdentity,
 		return id, fmt.Errorf("read version probe groups: %w", err)
 	}
 	for _, group := range groups.AllGroups() {
+		if group.Attributes&windows.SE_GROUP_LOGON_ID == windows.SE_GROUP_LOGON_ID {
+			if id.logon != nil {
+				return id, fmt.Errorf("multiple version probe logon identities: %w", os.ErrInvalid)
+			}
+			id.logon = group.Sid
+		}
 		if group.Sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) && group.Attributes&windows.SE_GROUP_ENABLED != 0 {
 			id.admin = true
 		}

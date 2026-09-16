@@ -43,7 +43,7 @@ Mihari 是面向 Windows、Linux 和 macOS 的跨平台 [mihomo](https://github.
 - **TUI 内更新 Mihari**：System 页面进入时检查 GitHub Releases，显示 `当前版本 · 最新版本 available` 或 `当前版本 · Up to date`；以管理员/root 权限启动时可替换二进制、同步并重启已安装的系统服务副本、验证 daemon 版本，并自动进入更新后的 TUI。更新确认会将安全的非标准已安装构建标识显示为 `Unknown[标识]`，兼容性仍为未知；长内容可用 ↑/↓ 或 PgUp/PgDn 滚动，默认选择 Cancel。
 - **内核通道**:System 页面可在 mihomo 的 `stable` / `alpha` 通道之间切换。
 
-Windows 更新可使用同一用户的非管理员令牌查询用户目录中的安装版本，包括默认的 AppData 安装位置。目录权限不安全或无法取得降权 UAC 令牌时，版本仍显示 unknown；版本查询不会以管理员权限执行用户可写的文件。
+Windows 更新可使用同一用户的非管理员令牌查询用户目录中的安装版本，包括默认的 AppData 安装位置。若降权 UAC 令牌只能识别身份，Mihari 会在核验同一用户、同一登录会话和非管理员权限后，使用桌面 Shell 的令牌。目录权限不安全或无法取得通过核验的令牌时，版本仍显示 unknown；版本查询不会以管理员权限执行用户可写的文件。
 
 单个无 CGO 的静态二进制(< 15 MB)即包含全部功能,内置 GitHub Releases 自动更新与本地 GeoIP 解析。
 

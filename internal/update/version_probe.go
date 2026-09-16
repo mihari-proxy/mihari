@@ -29,10 +29,10 @@ type ExecVersionRunner struct{}
 
 // RunVersion runs self version in an isolated temporary environment.
 func (ExecVersionRunner) RunVersion(ctx context.Context, executable, dir string) ([]byte, error) {
-	return runVersionProbe(ctx, executable, dir, (*exec.Cmd).Run)
+	return runVersionProbe(ctx, executable, dir, func(_ context.Context, cmd *exec.Cmd) error { return cmd.Run() })
 }
 
-func runVersionProbe(ctx context.Context, executable, dir string, run func(*exec.Cmd) error) ([]byte, error) {
+func runVersionProbe(ctx context.Context, executable, dir string, run func(context.Context, *exec.Cmd) error) ([]byte, error) {
 	if !filepath.IsAbs(executable) || !filepath.IsAbs(dir) {
 		return nil, os.ErrInvalid
 	}
@@ -61,7 +61,7 @@ func runVersionProbe(ctx context.Context, executable, dir string, run func(*exec
 	cmd.Stderr = stderr
 	// Bound inherited pipes too, then Wait reaps the child before returning.
 	cmd.WaitDelay = 100 * time.Millisecond
-	err := run(cmd)
+	err := run(ctx, cmd)
 	if stdout.overflow || stderr.overflow {
 		return nil, errors.Join(errVersionProbeLimit, err)
 	}
