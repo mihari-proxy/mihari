@@ -43,6 +43,10 @@ func (m *Model) updateDetail(key string) {
 
 func (m *Model) renderDetail(background string) string {
 	lines, inner, rows, height := m.detailLayout()
+	if height < 8 {
+		dialog := m.theme.Warning.Render(ui.TruncateVisible("Resize terminal · Enter/Esc close", m.layoutWidth()))
+		return ui.CenterOverlay(m.theme, background, dialog, m.layoutWidth(), height)
+	}
 	offset := min(max(0, m.detail.scroll), max(0, len(lines)-rows))
 	footer := "Enter/Esc close"
 	if len(lines) > rows {

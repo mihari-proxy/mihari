@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -10,12 +11,28 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
-func TestRuleDetail_CenteredOverlayKeepsTableAndColors(t *testing.T) {
+func TestRuleDetail_ShortViewport(t *testing.T) {
+	for height := 1; height <= 12; height++ {
+		t.Run(fmt.Sprint(height), func(t *testing.T) {
+			m := ruleDetailModel(protocol.Rule{Type: "AND", Payload: strings.Repeat("example.test,", 100), Proxy: "Proxy"}, 58, height)
+			m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			if view := m.View(); lipgloss.Height(view) > height {
+				t.Fatalf("height %d overflow: %d", height, lipgloss.Height(view))
+			}
+		})
+	}
+}
+
+func ruleDetailModel(rule protocol.Rule, width, height int) *Model {
 	m := New(nil, nil)
-	m.SetSize(100, 28)
-	m.SetRules(protocol.RuleList{Rules: []protocol.Rule{{Type: "RuleSet", Payload: "Lan", Proxy: "DIRECT"}}})
+	m.SetSize(width, height)
+	m.SetRules(protocol.RuleList{Rules: []protocol.Rule{rule, {Type: "Match", Proxy: "DIRECT"}}})
 	m.focus = pageFocus{kind: focusRow, row: 0}
-	before := m.View()
+	return m
+}
+
+func TestRuleDetail_CenteredOverlayKeepsTableAndColors(t *testing.T) {
+	m := ruleDetailModel(protocol.Rule{Type: "RuleSet", Payload: "Lan", Proxy: "DIRECT"}, 100, 28)
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	view := m.View()
 	if lipgloss.Height(view) > 28 || lipgloss.Width(view) > 100 {
@@ -40,17 +57,10 @@ func TestRuleDetail_CenteredOverlayKeepsTableAndColors(t *testing.T) {
 			t.Fatalf("missing semantic/dim color %s", code)
 		}
 	}
-	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if m.View() != before {
-		t.Fatal("closing changed table state")
-	}
 }
 
 func TestRuleDetail_LongPayloadScrollsInsideBounds(t *testing.T) {
-	m := New(nil, nil)
-	m.SetSize(58, 20)
-	m.SetRules(protocol.RuleList{Rules: []protocol.Rule{{Type: "AND", Payload: strings.Repeat("(DOMAIN-SUFFIX,example.test),", 70) + "PAYLOAD-END", Proxy: "Proxy"}}})
-	m.focus = pageFocus{kind: focusRow, row: 0}
+	m := ruleDetailModel(protocol.Rule{Type: "AND", Payload: strings.Repeat("(DOMAIN-SUFFIX,example.test),", 70) + "PAYLOAD-END", Proxy: "Proxy"}, 58, 20)
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	first := m.View()
 	if lipgloss.Height(first) > 20 || lipgloss.Width(first) > 58 {
@@ -63,11 +73,29 @@ func TestRuleDetail_LongPayloadScrollsInsideBounds(t *testing.T) {
 	if first == last || !strings.Contains(ansi.Strip(last), "PAYLOAD-END") || !strings.Contains(ansi.Strip(last), "Enter/Esc close") {
 		t.Fatalf("payload cannot scroll to end: %s", last)
 	}
-	if m.focus.row != 0 {
-		t.Fatal("detail navigation moved table")
+}
+
+func TestRuleDetail_CloseRestoresTable(t *testing.T) {
+	for _, key := range []rune{tea.KeyEscape, tea.KeyEnter} {
+		t.Run(fmt.Sprint(key), func(t *testing.T) {
+			m := ruleDetailModel(protocol.Rule{Type: "RuleSet", Payload: "Lan", Proxy: "DIRECT"}, 100, 28)
+			before := m.View()
+			m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			m.Update(tea.KeyPressMsg{Code: key})
+			if m.detail != nil || m.View() != before {
+				t.Fatal("closing did not restore the table")
+			}
+		})
 	}
+}
+
+func TestRuleDetail_NavigationPreservesSelection(t *testing.T) {
+	m := ruleDetailModel(protocol.Rule{Type: "AND", Payload: strings.Repeat("example.test,", 100), Proxy: "Proxy"}, 58, 20)
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.detail != nil {
-		t.Fatal("Enter did not close")
+	for _, key := range []rune{tea.KeyDown, tea.KeyPgDown, tea.KeyEnd, tea.KeyUp, tea.KeyPgUp, tea.KeyHome} {
+		m.Update(tea.KeyPressMsg{Code: key})
+		if m.focus.row != 0 {
+			t.Fatal("detail navigation moved table selection")
+		}
 	}
 }

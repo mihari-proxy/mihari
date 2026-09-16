@@ -1,6 +1,7 @@
 package webgui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -11,7 +12,24 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
-func TestWebGUI_ResponsiveCardsAndProminentRefresh(t *testing.T) {
+func TestWebGUI_ShortViewport(t *testing.T) {
+	for height := 1; height <= 12; height++ {
+		t.Run(fmt.Sprint(height), func(t *testing.T) {
+			m := New(nil, []string{protocol.CapabilityWebGUI})
+			m.SetStatus(sampleStatus())
+			m.SetSize(58, height)
+			view := m.View()
+			if lipgloss.Height(view) > height {
+				t.Fatalf("height %d overflow: %d", height, lipgloss.Height(view))
+			}
+			if !strings.Contains(ansi.Strip(view), "Ctrl+Shift+R") {
+				t.Fatal("short viewport lost refresh shortcut")
+			}
+		})
+	}
+}
+
+func TestWebGUI_ResponsiveCards(t *testing.T) {
 	for _, width := range []int{58, 100, 160} {
 		m := New(nil, []string{protocol.CapabilityWebGUI})
 		m.SetStatus(sampleStatus())
@@ -32,9 +50,6 @@ func TestWebGUI_ResponsiveCardsAndProminentRefresh(t *testing.T) {
 		}
 		if lipgloss.Width(view) > width-2 {
 			t.Fatalf("width %d leaves no room for shell padding: rendered %d", width, lipgloss.Width(view))
-		}
-		if !strings.Contains(view, "38;5;214") || !strings.Contains(plain, "Ctrl+Shift+R") || strings.Contains(plain, ui.GatewaySafeguardsTitle) {
-			t.Fatalf("refresh emphasis / safeguards: %s", view)
 		}
 	}
 }

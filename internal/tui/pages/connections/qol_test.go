@@ -16,7 +16,7 @@ func TestColumns_ChainGetsWidthAndSurvivesBeforeRule(t *testing.T) {
 	for i, c := range cols {
 		sizes[c.ID] = widths[i]
 	}
-	if sizes["chain"] <= sizes["host"] || sizes["traffic"] > 17 {
+	if sizes["chain"] <= sizes["host"] || sizes["traffic"] != 15 {
 		t.Fatalf("widths=%v", sizes)
 	}
 	m.SetSize(58, 24)
@@ -38,7 +38,7 @@ func TestTraffic_CompactRatesStayCompleteAndAligned(t *testing.T) {
 	for _, tc := range []struct {
 		speed int64
 		want  string
-	}{{0, "0"}, {1024, "1K"}, {1610612736, "1.5G"}, {1048472678, "999.9M"}, {1048575, "1M"}, {1<<63 - 1, "8E"}} {
+	}{{-1, "0"}, {0, "0"}, {1024, "1K"}, {1610612736, "1.5G"}, {1048472678, "999.9M"}, {1048575, "1M"}, {1<<63 - 1, "8E"}} {
 		row := stripConnANSI(m.renderConnection(protocol.Connection{UploadSpeed: tc.speed, DownloadSpeed: tc.speed}, false)[0])
 		if width < 0 {
 			width = len([]rune(row))

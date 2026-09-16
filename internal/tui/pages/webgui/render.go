@@ -10,6 +10,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+// View renders the Web GUI page.
 func (m *Model) View() string {
 	inner := ui.FullSectionInner(m.layoutWidth())
 	if !m.available {
@@ -37,6 +38,11 @@ func (m *Model) View() string {
 	}
 	if m.toast != "" {
 		pinned += "\n" + m.theme.Danger.Render(ui.TruncateVisible(strings.Join(strings.Fields(m.toast), " "), textW))
+	}
+	if lipgloss.Height(pinned) >= height {
+		compact := m.theme.Warning.Bold(true).Render(ui.TruncateVisible("! Ctrl+Shift+R · Refresh Web GUI", textW)) + "\n" +
+			m.theme.Warning.Render(ansi.Wrap(hint, textW, "")) + "\n" + m.theme.Muted.Render("Resize terminal to view panels")
+		return strings.Join(ui.SliceLines(strings.Split(compact, "\n"), 0, height), "\n")
 	}
 	lines, start, end := m.panelLines()
 	room := max(1, height-lipgloss.Height(pinned)-1)

@@ -112,6 +112,11 @@ func TestWebGUIRendersCardsAndFooterWithoutSecrets(t *testing.T) {
 	updated, _ := model.Update(command())
 	model = updated.(*Model)
 	view := model.View()
+	for _, moved := range []string{"Loopback", "Controller isolation", "Mutation coordinator"} {
+		if strings.Contains(view, moved) {
+			t.Fatalf("safeguard %q should only appear in help", moved)
+		}
+	}
 	for _, want := range []string{"127.0.0.1:9191", "Zashboard", "v2.1.0", "v2.0.0", "MetaCubeXD", "8e31c4a", "3"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("missing %q in view=%s", want, view)
