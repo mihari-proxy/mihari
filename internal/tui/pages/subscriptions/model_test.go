@@ -2,6 +2,7 @@ package subscriptions
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -46,23 +47,32 @@ func drainCmd(t *testing.T, model *Model, cmd tea.Cmd) tea.Cmd {
 
 func mutationResultFromCmd(t *testing.T, cmd tea.Cmd) mutationResultMsg {
 	t.Helper()
+	result, err := runMutationCommand(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+// runMutationCommand extracts a mutation result without terminating its caller's
+// goroutine, so concurrent tests can report command failures through a channel.
+func runMutationCommand(cmd tea.Cmd) (mutationResultMsg, error) {
 	if cmd == nil {
-		t.Fatal("missing mutation command")
+		return mutationResultMsg{}, fmt.Errorf("missing mutation command")
 	}
 	message := cmd()
 	if batch, ok := message.(tea.BatchMsg); ok {
 		for _, child := range batch {
 			if result, ok := child().(mutationResultMsg); ok {
-				return result
+				return result, nil
 			}
 		}
-		t.Fatalf("batch did not return mutation result: %#v", batch)
+		return mutationResultMsg{}, fmt.Errorf("batch did not return mutation result")
 	}
 	if result, ok := message.(mutationResultMsg); ok {
-		return result
+		return result, nil
 	}
-	t.Fatalf("message=%T", message)
-	return mutationResultMsg{}
+	return mutationResultMsg{}, fmt.Errorf("message=%T", message)
 }
 
 func TestModel_RemoveKeepsContextAndImmutableMetadataForOutOfOrderResults(t *testing.T) {

@@ -35,10 +35,19 @@ func TestSubscriptionTimeout_StopCancelsRunningRows(t *testing.T) {
 	entered := make(chan context.Context, 2)
 	nextID := 0
 	m := New(timeoutPageClient{call: func(ctx context.Context) error { entered <- ctx; <-ctx.Done(); return ctx.Err() }}, func() string { nextID++; return fmt.Sprint(nextID) }, nil)
+	t.Cleanup(m.Stop)
 	first, second := m.refresh("a"), m.refresh("b")
-	done := make(chan mutationResultMsg, 2)
-	go func() { done <- mutationResultFromCmd(t, first) }()
-	go func() { done <- mutationResultFromCmd(t, second) }()
+	type outcome struct {
+		result mutationResultMsg
+		err    error
+	}
+	done := make(chan outcome, 2)
+	for _, cmd := range []tea.Cmd{first, second} {
+		go func() {
+			result, err := runMutationCommand(cmd)
+			done <- outcome{result, err}
+		}()
+	}
 	for range 2 {
 		select {
 		case <-entered:
@@ -49,11 +58,19 @@ func TestSubscriptionTimeout_StopCancelsRunningRows(t *testing.T) {
 	}
 	m.Stop()
 	for range 2 {
-		result := <-done
-		if !errors.Is(result.err, context.Canceled) {
-			t.Error("running request not canceled")
+		select {
+		case completed := <-done:
+			if completed.err != nil {
+				t.Error(completed.err)
+				continue
+			}
+			if !errors.Is(completed.result.err, context.Canceled) {
+				t.Error("running request not canceled")
+			}
+			m.Update(completed.result)
+		case <-time.After(5 * time.Second):
+			t.Fatal("canceled row did not return")
 		}
-		m.Update(result)
 	}
 	if len(m.requestCancels) != 0 {
 		t.Fatal("cancel registrations leaked")
