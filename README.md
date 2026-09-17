@@ -19,6 +19,8 @@ An open-source terminal alternative to graphical Mihomo / Clash clients such as 
 
 ![Overview](assets/overview.png)
 
+Overview's Core card shortens its traffic charts to keep each speed and its unit together on the chart line.
+
 ## What is this?
 
 **TLDR**: Mihari is a terminal manager for mihomo — the same family of tools as mihomo GUIs like Clash Party and Sparkle, but it runs in the terminal and is hosted by a daemon in the background, so the CLI, TUI, and browser panels share one control plane.

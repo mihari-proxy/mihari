@@ -169,9 +169,14 @@ func (m *Model) renderCoreCard(inner int) string {
 		ui.StyleTrafficPair(m.theme,
 			"↑"+ui.FormatBytes(m.snapshot.Monitor.UploadTotal),
 			"↓"+ui.FormatBytes(m.snapshot.Monitor.DownloadTotal)))
-	// Reserve a fixed width for the trailing rate so chart lines never shift.
-	const rateReserve = 12 // " 999.9 GiB/s" worst case
-	chartWidth := min(50, max(8, inner-len(ui.MonitorUploadShort)-1-rateReserve))
+	uploadRate := ui.FormatRate(m.snapshot.Monitor.UploadRate)
+	downloadRate := ui.FormatRate(m.snapshot.Monitor.DownloadRate)
+	// Budget against printable width, excluding the card's horizontal padding.
+	// Keep a stable reserve for typical rates, growing it for longer values.
+	// Both charts share the same width; narrow cards shrink the charts first.
+	rateReserve := max(12, 1+lipgloss.Width(uploadRate), 1+lipgloss.Width(downloadRate))
+	labelWidth := max(lipgloss.Width(ui.MonitorUploadShort), lipgloss.Width(ui.MonitorDownloadShort))
+	chartWidth := min(50, max(0, ui.SectionTextWidth(inner)-labelWidth-1-rateReserve))
 	upload := make([]int64, len(m.snapshot.Monitor.Traffic))
 	download := make([]int64, len(m.snapshot.Monitor.Traffic))
 	for index, point := range m.snapshot.Monitor.Traffic {
@@ -179,8 +184,8 @@ func (m *Model) renderCoreCard(inner int) string {
 	}
 	return strings.Join([]string{
 		line1, line2,
-		ui.MonitorUploadShort + " " + ui.Sparkline(upload, chartWidth) + " " + ui.FormatRate(m.snapshot.Monitor.UploadRate),
-		ui.MonitorDownloadShort + " " + ui.Sparkline(download, chartWidth) + " " + ui.FormatRate(m.snapshot.Monitor.DownloadRate),
+		ui.MonitorUploadShort + " " + ui.Sparkline(upload, chartWidth) + " " + uploadRate,
+		ui.MonitorDownloadShort + " " + ui.Sparkline(download, chartWidth) + " " + downloadRate,
 	}, "\n")
 }
 

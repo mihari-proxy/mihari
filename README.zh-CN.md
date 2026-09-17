@@ -19,6 +19,8 @@ Mihari 是面向 Windows、Linux 和 macOS 的跨平台 [mihomo](https://github.
 
 ![Overview](assets/overview.png)
 
+Overview 的 Core 卡片会缩短流量趋势图，为速度值及其单位保留同一行的显示空间。
+
 ## 这是什么?
 
 **TLDR**:Mihari 是 mihomo 的终端管理器——和 Clash Party、Sparkle 等 mihomo GUI 是同类工具,但它运行在终端里,并由一个守护进程在后台托管,CLI、TUI 和浏览器面板共享同一个控制面。
