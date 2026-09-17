@@ -74,3 +74,8 @@
 - Windows/Linux/macOS × amd64/arm64 六个目标均通过 `CGO_ENABLED=0 go build -buildvcs=false -trimpath ./cmd/mihari`，产物位于仓库外临时目录。
 - 修改的 Go 文件已通过 gofmt，`git diff --check` 无错误。没有修改 CHANGELOG，也没有替换或重启本机服务。
 - 全仓 `go test -race ./...` 已通过；其中既有订阅包测试耗时约 503 秒，无 race 报告或测试失败。
+
+## PR 审查反馈
+
+- PR #271 的首轮 Pullfrog 与 CodeRabbit 审查未发现功能问题。Pullfrog 独立验证了消息边界、布局预算、目标包测试、race 与 vet。
+- 根据 CodeRabbit 的函数说明覆盖提示，补充本次改动中布局、文本处理、键盘输入、双向转发及回归测试的职责说明；保留已验证的行为和容量边界。

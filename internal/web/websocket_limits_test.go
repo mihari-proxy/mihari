@@ -10,6 +10,8 @@ import (
 	"github.com/coder/websocket"
 )
 
+// TestGatewayWebSocketLargeUpstreamMessages verifies intact text/binary forwarding
+// above the library default through the supported limit, followed by quiet closure.
 func TestGatewayWebSocketLargeUpstreamMessages(t *testing.T) {
 	for _, kind := range []websocket.MessageType{websocket.MessageText, websocket.MessageBinary} {
 		t.Run(fmt.Sprint(kind), func(t *testing.T) {
@@ -51,6 +53,8 @@ func TestGatewayWebSocketLargeUpstreamMessages(t *testing.T) {
 	}
 }
 
+// TestGatewayWebSocketBrowserReadLimit preserves the smaller browser boundary
+// while proving that the gateway, rather than the controller, rejects excess data.
 func TestGatewayWebSocketBrowserReadLimit(t *testing.T) {
 	controller, state := newTask5WebSocketController(t, func(ctx context.Context, conn *websocket.Conn) error {
 		conn.SetReadLimit(1 << 20)
@@ -94,6 +98,7 @@ func TestGatewayWebSocketBrowserReadLimit(t *testing.T) {
 	assertWebDiagnostics(t, out, "websocket.relay.failed", "ERROR", 1)
 }
 
+// assertLimitRelayJoined waits for the owner to confirm that neither relay remains.
 func assertLimitRelayJoined(t *testing.T, ctx context.Context, observer *webSocketRelayJoinObserver) {
 	t.Helper()
 	select {

@@ -17,6 +17,8 @@ type diagnosticLayout struct {
 	stacked                bool
 }
 
+// widths reserves dialog chrome and divides printable columns between panes.
+// Stacked panes each receive the entire available content width.
 func (w *diagnosticWindow) widths(width int) (int, int) {
 	inner := max(1, min(144, width-4)-4) // border plus one cell of padding per side
 	if width < 88 {
@@ -26,6 +28,8 @@ func (w *diagnosticWindow) widths(width int) (int, int) {
 	return list, max(1, inner-list-3)
 }
 
+// layout budgets pane rows after chrome and notices, then shrinks short histories.
+// The same budget drives rendering and keyboard page/scroll bounds.
 func (w *diagnosticWindow) layout(width, height, detailLines int) diagnosticLayout {
 	listWidth, detailWidth := w.widths(width)
 	l := diagnosticLayout{boxWidth: max(1, min(144, width-4)), listWidth: listWidth, detailWidth: detailWidth, stacked: width < 88}
@@ -46,6 +50,8 @@ func (w *diagnosticWindow) layout(width, height, detailLines int) diagnosticLayo
 	return l
 }
 
+// notice combines copy feedback and history-availability notices outside the
+// scrollable body so changing selection does not hide them.
 func (w *diagnosticWindow) notice() string {
 	var parts []string
 	for _, notice := range []string{w.copyStatus, w.remoteNotice, w.localNotice} {
@@ -56,6 +62,8 @@ func (w *diagnosticWindow) notice() string {
 	return strings.Join(parts, " · ")
 }
 
+// detailLines prepares escaped, wrapped display text from the pinned occurrence.
+// It leaves the original snapshot intact for copying and asynchronous selection.
 func (w *diagnosticWindow) detailLines(width int) []string {
 	_, detailWidth := w.widths(width)
 	s := w.pinned
@@ -105,6 +113,8 @@ func (w *diagnosticWindow) detailLines(width int) []string {
 	return strings.Split(ansi.Hardwrap(text, detailWidth, true), "\n")
 }
 
+// listView renders separate occurrences and keeps the selected record in view.
+// Selection and keyboard focus use distinct styles without regrouping history.
 func (w *diagnosticWindow) listView(theme ui.Theme, l diagnosticLayout) string {
 	capacity := max(1, l.listRows/2)
 	selected := w.selectedIndex()
@@ -147,6 +157,7 @@ func (w *diagnosticWindow) listView(theme ui.Theme, l diagnosticLayout) string {
 	return lipgloss.NewStyle().Width(l.listWidth).Height(l.listRows).MaxHeight(l.listRows).Render(strings.Join(lines, "\n"))
 }
 
+// diagnosticPaneTitle marks the pane receiving navigation keys within its width.
 func diagnosticPaneTitle(theme ui.Theme, title string, focused bool, width int) string {
 	style := theme.Muted
 	if focused {
@@ -158,6 +169,8 @@ func diagnosticPaneTitle(theme ui.Theme, title string, focused bool, width int) 
 	return style.Width(width).Render(ui.TruncateVisible(title, width))
 }
 
+// view composes both diagnostic panes and persistent hints within terminal bounds.
+// Very small terminals show a resize hint while retaining the return shortcut.
 func (w *diagnosticWindow) view(width, height int) string {
 	theme := ui.DefaultTheme()
 	if width < 30 || height < 12 {
@@ -199,6 +212,7 @@ func (w *diagnosticWindow) view(width, height int) string {
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
 
+// footer prioritizes pane switching, copying and returning when space is limited.
 func (w *diagnosticWindow) footer(width int) string {
 	action := "select"
 	if w.detailFocus {

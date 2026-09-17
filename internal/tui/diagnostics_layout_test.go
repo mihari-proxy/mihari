@@ -13,6 +13,8 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+// TestDiagnosticsLayout_BothPanesAndCompleteFrame guards both-pane visibility
+// and uncropped borders across wide, narrow and short terminals in either focus.
 func TestDiagnosticsLayout_BothPanesAndCompleteFrame(t *testing.T) {
 	for _, size := range [][2]int{{140, 40}, {100, 28}, {72, 22}, {50, 25}, {60, 12}} {
 		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {
@@ -36,6 +38,8 @@ func TestDiagnosticsLayout_BothPanesAndCompleteFrame(t *testing.T) {
 	}
 }
 
+// TestDiagnosticsLayout_DetailMetadataAndDuplicateSummary checks that removing
+// repeated error text does not remove the occurrence's identifying metadata.
 func TestDiagnosticsLayout_DetailMetadataAndDuplicateSummary(t *testing.T) {
 	w := newDiagnosticWindow()
 	w.add(protocol.Diagnostic{ID: "fixture:1", Time: time.Date(2026, 9, 17, 11, 25, 53, 0, time.UTC), Severity: "error", Component: "web", Event: "websocket.relay.failed", Summary: "same failure", Detail: "same failure", State: protocol.DiagnosticAvailable}, ui.PageOverview)
@@ -51,6 +55,8 @@ func TestDiagnosticsLayout_DetailMetadataAndDuplicateSummary(t *testing.T) {
 	}
 }
 
+// TestDiagnosticsLayout_NarrowScrollReachesLastLine exercises keyboard scrolling
+// of mixed-width text while the stacked record list remains visible.
 func TestDiagnosticsLayout_NarrowScrollReachesLastLine(t *testing.T) {
 	model := NewModel()
 	model.width, model.height = 50, 20
@@ -65,6 +71,8 @@ func TestDiagnosticsLayout_NarrowScrollReachesLastLine(t *testing.T) {
 	}
 }
 
+// TestDiagnosticsLayout_RepeatedRecordsAndLiveSelection rejects content grouping
+// and verifies that incoming occurrences cannot replace the pinned selection.
 func TestDiagnosticsLayout_RepeatedRecordsAndLiveSelection(t *testing.T) {
 	w := newDiagnosticWindow()
 	for i := range 4 {
@@ -81,6 +89,8 @@ func TestDiagnosticsLayout_RepeatedRecordsAndLiveSelection(t *testing.T) {
 	}
 }
 
+// TestDiagnosticsLayout_ShortHistoryAvoidsEmptyRows guards content-sized dialogs
+// instead of filling a tall terminal with unused rows.
 func TestDiagnosticsLayout_ShortHistoryAvoidsEmptyRows(t *testing.T) {
 	w := newDiagnosticWindow()
 	w.add(protocol.Diagnostic{ID: "fixture:1", Summary: "short failure", Detail: "short failure", State: protocol.DiagnosticAvailable}, ui.PageOverview)
@@ -103,6 +113,8 @@ func TestDiagnosticsLayout_ShortHistoryAvoidsEmptyRows(t *testing.T) {
 	}
 }
 
+// TestDiagnosticsLayout_NoticesAndLongTextStayBounded covers notice-row budgeting,
+// terminal escaping, tabs and wide characters without losing availability details.
 func TestDiagnosticsLayout_NoticesAndLongTextStayBounded(t *testing.T) {
 	w := newDiagnosticWindow()
 	w.add(protocol.Diagnostic{ID: "fixture:1", Severity: "warning", Component: strings.Repeat("来源", 30), Summary: strings.Repeat("长摘要", 50), Detail: strings.Repeat("错误\x1b[31m\t", 80), State: protocol.DiagnosticExpired, Truncated: true, TruncationReason: "fixture limit"}, ui.PageOverview)
@@ -126,6 +138,8 @@ func TestDiagnosticsLayout_NoticesAndLongTextStayBounded(t *testing.T) {
 	}
 }
 
+// TestGoldenDiagnostics pins the wide, stacked and short-window arrangements
+// using synthetic repeats of the originally reported WebSocket failure.
 func TestGoldenDiagnostics(t *testing.T) {
 	for _, size := range []struct {
 		name          string

@@ -894,6 +894,8 @@ const (
 	maxBrowserWebSocketMessage  = 32 << 10
 )
 
+// proxyWebSocket relays authenticated panel traffic with directional message
+// bounds and joins both copy loops before reporting their single terminal failure.
 func (s *Server) proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 	controller, err := url.Parse(s.ControllerURL)
 	if err != nil {

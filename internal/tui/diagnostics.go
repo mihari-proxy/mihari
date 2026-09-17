@@ -293,6 +293,8 @@ func (model Model) diagnosticContext() context.Context {
 	return context.Background()
 }
 
+// updateDiagnostics owns diagnostic input and async results without disturbing
+// the page beneath the window; its boolean reports whether the message was consumed.
 func (model *Model) updateDiagnostics(message tea.Msg) (tea.Cmd, bool) {
 	if model.diagnosticWindow == nil {
 		model.diagnosticWindow = newDiagnosticWindow()

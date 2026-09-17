@@ -243,6 +243,8 @@ func TestControllerProxyDiagnostics_PreservesLocalMetadata(t *testing.T) {
 	}
 }
 
+// TestGatewayWebSocketReadLimitKeepsSingleFailureOwner checks that an oversized
+// upstream message closes both relays and produces exactly one failure record.
 func TestGatewayWebSocketReadLimitKeepsSingleFailureOwner(t *testing.T) {
 	send := make(chan struct{})
 	controller, state := newTask5WebSocketController(t, func(ctx context.Context, conn *websocket.Conn) error {
