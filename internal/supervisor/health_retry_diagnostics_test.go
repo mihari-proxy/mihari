@@ -9,6 +9,34 @@ import (
 	"time"
 )
 
+func TestMonitorRunningObservationIncludesStartedAt(t *testing.T) {
+	started := time.Unix(1_700_000_000, 0).UTC()
+	observations := &observationLog{}
+	waiter := newFakeWaiter()
+	s := New(Options{
+		Waiter:  waiter,
+		Observe: observations.add,
+		Health:  func(context.Context) error { return nil },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.monitor(ctx, 42, 3, started, make(chan error, 1))
+	}()
+	waiter.next(t).release()
+	waitForObservation(t, observations, func(observation Observation) bool {
+		return observation.Status == StatusRunning && observation.PID == 42 && observation.Restarts == 3 && observation.StartedAt.Equal(started)
+	})
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("health monitor failed to stop")
+	}
+}
+
 func TestMonitor_ReportsEachRetryAndRecovery(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

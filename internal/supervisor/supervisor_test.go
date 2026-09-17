@@ -26,8 +26,14 @@ func TestSupervisorPublishesProcessStartTimeAndClearsOnBackoff(t *testing.T) {
 	go func() { done <- supervisor.Run(ctx) }()
 
 	child := starter.next(t)
+	started := func(observation Observation) bool {
+		return observation.PID == child.pid && observation.StartedAt.Equal(processStart) && observation.StartedAt.Location() == time.UTC
+	}
 	waitForObservation(t, observations, func(observation Observation) bool {
-		return observation.Status == StatusStarting && observation.PID == child.pid && observation.StartedAt.Equal(processStart) && observation.StartedAt.Location() == time.UTC
+		return observation.Status == StatusStarting && started(observation)
+	})
+	waitForObservation(t, observations, func(observation Observation) bool {
+		return observation.Status == StatusRunning && started(observation)
 	})
 	child.exit(errors.New("crashed"))
 	waiter.next(t)

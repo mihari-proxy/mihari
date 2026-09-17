@@ -159,7 +159,7 @@ func TestMutationRequestThreadsSource(t *testing.T) {
 	}
 }
 
-func TestCoreStatusStartedAtAdditiveAndOmitted(t *testing.T) {
+func TestCoreStatusStartedAtRoundTrip(t *testing.T) {
 	started := time.Date(2026, 9, 17, 14, 32, 0, 0, time.UTC)
 	raw, err := json.Marshal(CoreStatus{Schema: "mihari/v1", Status: "running", StartedAt: started})
 	if err != nil {
@@ -172,13 +172,19 @@ func TestCoreStatusStartedAtAdditiveAndOmitted(t *testing.T) {
 	if err := json.Unmarshal(raw, &got); err != nil || !got.StartedAt.Equal(started) {
 		t.Fatalf("got=%#v err=%v", got, err)
 	}
-	omitted, err := json.Marshal(CoreStatus{Schema: "mihari/v1", Status: "backoff"})
+}
+
+func TestCoreStatusOmitsZeroStartedAt(t *testing.T) {
+	raw, err := json.Marshal(CoreStatus{Schema: "mihari/v1", Status: "backoff"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(omitted), "started_at") {
-		t.Fatalf("zero started_at should be omitted: %s", omitted)
+	if strings.Contains(string(raw), "started_at") {
+		t.Fatalf("zero started_at should be omitted: %s", raw)
 	}
+}
+
+func TestCoreStatusOldJSONLeavesStartedAtZero(t *testing.T) {
 	var old CoreStatus
 	if err := json.Unmarshal([]byte(`{"schema":"mihari/v1","status":"running","restarts":2}`), &old); err != nil {
 		t.Fatal(err)
