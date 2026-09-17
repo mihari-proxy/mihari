@@ -264,3 +264,7 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/mihari ./cmd/mihari
 [GPL-3.0](LICENSE) © 2026 Mihar1
 
 Mihari 是一个独立项目,与 mihomo 项目或 MetaCubeX 无关联,也不受其背书。
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/chart?repos=mihari-proxy/mihari&type=date&legend=bottom-right)](https://www.star-history.com/?repos=mihari-proxy%2Fmihari&type=date&legend=bottom-right)

@@ -264,3 +264,7 @@ Mihari is fully open source. This project recognizes [LINUX DO](https://linux.do
 [GPL-3.0](LICENSE) © 2026 Mihar1
 
 Mihari is an independent project and is not affiliated with or endorsed by the mihomo project or MetaCubeX.
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/chart?repos=mihari-proxy/mihari&type=date&legend=bottom-right)](https://www.star-history.com/?repos=mihari-proxy%2Fmihari&type=date&legend=bottom-right)
