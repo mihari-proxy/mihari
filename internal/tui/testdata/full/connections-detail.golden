@@ -1,40 +1,40 @@
  Mihari  ·  ●  ·  1 conn  ·  ↑      0 B/s  ↓      0 B/s  ·  0 B                                       Offline
    1 Overview
-   2 Proxies
- › 3 Conns
-   4 Rules
-   5 Logs
-   6 Subs          ╭───Connection details─────────────────────────────────────────────────────────────────╮
-   7 Web GUI       │ ● Active                                                                             │
-   8 System        │                                                                                      │
-                   │ api.example.test:443                                                                 │
-                   │ chrome.exe · Mixed · TCP                                                             │
+   2 Proxies       ╭───Connection details─────────────────────────────────────────────────────────────────╮
+ › 3 Conns         │ ● Active                                                                             │
+   4 Rules         │                                                                                      │
+   5 Logs          │ api.example.test:443                                                                 │
+   6 Subs          │                                                                                      │
+   7 Web GUI       │ ↑ Upload                                    ↓ Download                               │
+   8 System        │ Rate        1.0 KiB/s                       Rate        3.0 KiB/s                    │
+                   │ Sent        2.0 KiB                         Received    4.0 KiB                      │
                    │                                                                                      │
-                   │ TRAFFIC                                                                              │
-                   │ ↓ Download      3.0 KiB/s                   ↑ Upload        1.0 KiB/s                │
-                   │ Received        4.0 KiB                     Sent            2.0 KiB                  │
+                   │ ● APPLICATION                                                                        │
+                   │ │ chrome.exe                                                                         │
+                   │ │ Source            192.168.1.12:52341                                               │
+                   │ │ Process path      C:/Apps/Browser/chrome.exe                                       │
+                   │ │                                                                                    │
+                   │ ● ROUTING                                                                            │
+                   │ │ Inbound           mixed-in · HTTP · TCP                                            │
+                   │ │ Rule Matched      DomainSuffix · example.test                                      │
+                   │ │                                                                                    │
+                   │ │ Proxy                                                                              │
+                   │ │   └─ Auto Select                                                                   │
+                   │ │      └─ Japan 01                                                                   │
+                   │ │                                                                                    │
+                   │ ● OUTBOUND                                                                           │
+                   │ │ Japan 01                                                                           │
+                   │ │ Remote            —                                                                │
+                   │ │ GeoIP             —                                                                │
+                   │ │                                                                                    │
+                   │ ● DESTINATION                                                                        │
+                   │   Host              api.example.test                                                 │
+                   │   Destination       203.0.113.24:443                                                 │
+                   │   GeoIP             Unavailable                                                      │
                    │                                                                                      │
-                   │ ENDPOINTS                                                                            │
-                   │ Source            192.168.1.12:52341                                                 │
-                   │ Destination       203.0.113.24:443                                                   │
-                   │ Host              api.example.test                                                   │
-                   │                                                                                      │
-                   │ ROUTING                                                                              │
-                   │ Rule              DomainSuffix                                                       │
-                   │ Rule payload      example.test                                                       │
-                   │ Chain             Proxy → Auto Select → Japan 01                                     │
-                   │ GeoIP             Unavailable                                                        │
-                   │                                                                                      │
-                   │ METADATA                                                                             │
-                   │ Process           chrome.exe                                                         │
-                   │ Process path      C:/Apps/Browser/chrome.exe                                         │
-                   │ Inbound name      mixed-in                                                           │
                    │ Started           2026-09-16 10:30:00                                                │
                    │ Connection ID     8d37b6a2-51a4-4f9e-b1d9-6e84b12fa205                               │
                    ╰──────────────────────────────────────────────────────────────────────────────────────╯
-
-
-
 
 
  F2 details  Enter/Esc close  ↑/↓ scroll  ? help  q quit

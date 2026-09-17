@@ -36,11 +36,11 @@ func detailFixture() protocol.Connection {
 	return protocol.Connection{
 		ID: "8d37b6a2-51a4-4f9e-b1d9-6e84b12fa205", Start: time.Date(2026, 9, 16, 10, 30, 0, 0, time.Local),
 		Upload: 2048, Download: 4096, UploadSpeed: 1024, DownloadSpeed: 3072,
-		Chains: []string{"Proxy", "Auto Select", "Japan 01"}, Rule: "DomainSuffix", RulePay: "example.test",
+		Chains: []string{"Japan 01", "Auto Select", "Proxy"}, Rule: "DomainSuffix", RulePay: "example.test",
 		Metadata: protocol.ConnectionMetadata{
-			Host: "api.example.test", Network: "TCP", Type: "Mixed", SourceIP: "2001:db8::1", SourcePort: "52341",
+			Host: "api.example.test", Network: "TCP", Type: "HTTP", SourceIP: "2001:db8::1", SourcePort: "52341",
 			DestinationIP: "203.0.113.24", DestinationPort: "443", SniffHost: "sniff.example.test",
-			RemoteDestination: "203.0.113.25:443", Process: "chrome.exe", ProcessPath: "C:/Apps/chrome.exe",
+			RemoteDestination: "203.0.113.25", Process: "chrome.exe", ProcessPath: "C:/Apps/chrome.exe",
 			InboundName: "mixed-in", InboundUser: "test-user",
 		},
 	}
@@ -62,14 +62,14 @@ func TestDetail_FieldsAndStates(t *testing.T) {
 			view := stripConnANSI(d.View(100, 100))
 			for _, want := range []string{c.ID, "[2001:db8::1]:52341", "203.0.113.24:443", "api.example.test:443",
 				"sniff.example.test", c.Metadata.ProcessPath, "mixed-in", "test-user", "2026-09-16 10:30:00",
-				"Proxy → Auto Select → Japan 01", "DomainSuffix", "example.test", "Received", "Sent", "2.0 KiB", "4.0 KiB",
+				"Proxy", "Auto Select", "Japan 01", "DomainSuffix", "example.test", "Received", "Sent", "2.0 KiB", "4.0 KiB",
 				"203.0.113.24", "JP", "AS64500", "Example Network", "203.0.113.25", "AU", "AS64501", "Other Network"} {
 				if !strings.Contains(view, want) {
 					t.Errorf("missing %q in:\n%s", want, view)
 				}
 			}
 			if closed {
-				for _, want := range []string{"Closed", "Last download rate", "Last upload rate", "Closed observed", "2026-09-16 10:31:00"} {
+				for _, want := range []string{"Closed", "Last rate", "↑ Upload", "↓ Download", "Closed observed", "2026-09-16 10:31:00"} {
 					if !strings.Contains(view, want) {
 						t.Errorf("closed detail missing %q", want)
 					}
@@ -86,12 +86,12 @@ func TestDetail_FieldsAndStates(t *testing.T) {
 
 // TestDetail_MissingFieldsAndGeoIP checks safe presentation of unavailable data.
 func TestDetail_MissingFieldsAndGeoIP(t *testing.T) {
-	d := NewDetail(protocol.Connection{}, false)
+	d := NewDetail(protocol.Connection{Metadata: protocol.ConnectionMetadata{DestinationIP: "203.0.113.24"}}, false)
 	view := stripConnANSI(d.View(100, 100))
 	if !strings.Contains(view, "Loading") {
 		t.Error("missing GeoIP loading state")
 	}
-	for _, omitted := range []string{"Sniff host", "Remote", "Process path", "Inbound user", "—:—", "0001-01-01"} {
+	for _, omitted := range []string{"Sniff host", "Process path", "Inbound user", "—:—", "0001-01-01"} {
 		if strings.Contains(view, omitted) {
 			t.Errorf("empty field shown: %q", omitted)
 		}
@@ -245,7 +245,7 @@ func TestModel_DetailIgnoresOtherConnectionGeoIP(t *testing.T) {
 	m := New(nil, nil)
 	m.SetSize(100, 40)
 	m.openDetail(protocol.Connection{ID: "A"})
-	m.openDetail(protocol.Connection{ID: "B"})
+	m.openDetail(protocol.Connection{ID: "B", Metadata: protocol.ConnectionMetadata{DestinationIP: "203.0.113.1"}})
 	m.Update(geoIPResultMsg{connectionID: "A", records: []protocol.GeoIPRecord{{Organization: "old-address"}}})
 	if strings.Contains(stripConnANSI(m.View()), "old-address") {
 		t.Fatal("old connection lookup leaked into new detail")

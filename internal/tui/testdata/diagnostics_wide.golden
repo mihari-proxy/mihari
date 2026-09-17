@@ -1,0 +1,13 @@
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ Diagnostics                                                                                            4 records │
+  │ ▸ Records 2/4                                │   Details 1–6/6                                                   │
+  │   11:25:53 error web                         │ failed to read: websocket: message too big: read limited at 32769 │
+  │   failed to read: websocket: message too bi… │ bytes                                                             │
+  │ › 11:25:52 error web                         │                                                                   │
+  │   failed to read: websocket: message too bi… │ Time    2026-09-17 11:25:52 +00:00                                │
+  │   11:25:51 error web                         │ Source  web                                                       │
+  │   failed to read: websocket: message too bi… │ Event   websocket.relay.failed                                    │
+  │   11:25:50 error web                         │                                                                   │
+  │   failed to read: websocket: message too bi… │                                                                   │
+  │ Tab pane · ↑/↓ select · PgUp/PgDn · Home/End · c copy · Esc back                                                 │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

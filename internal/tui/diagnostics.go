@@ -9,9 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/tui/session"
@@ -295,6 +293,8 @@ func (model Model) diagnosticContext() context.Context {
 	return context.Background()
 }
 
+// updateDiagnostics owns diagnostic input and async results without disturbing
+// the page beneath the window; its boolean reports whether the message was consumed.
 func (model *Model) updateDiagnostics(message tea.Msg) (tea.Cmd, bool) {
 	if model.diagnosticWindow == nil {
 		model.diagnosticWindow = newDiagnosticWindow()
@@ -366,16 +366,17 @@ func (model *Model) updateDiagnostics(message tea.Msg) (tea.Cmd, bool) {
 			copyText, generation, id := w.copyText, w.generation, w.selected
 			return func() tea.Msg { return diagnosticCopyMsg{generation: generation, id: id, err: copyText(body)} }, true
 		case "up", "down", "pgup", "pgdown", "home", "end":
+			lines := w.detailLines(model.width)
+			layout := w.layout(model.width, model.height, len(lines))
 			step := 1
 			if typed.String() == "pgup" || typed.String() == "pgdown" {
-				step = max(1, model.height-9)
+				step = layout.detailRows
 				if !w.detailFocus {
-					step = max(1, step/2)
+					step = max(1, layout.listRows/2)
 				}
 			}
 			if w.detailFocus {
-				lines := w.detailLines(model.width)
-				last := max(0, len(lines)-max(1, model.height-9))
+				last := max(0, len(lines)-layout.detailRows)
 				switch typed.String() {
 				case "up", "pgup":
 					w.scroll = max(0, w.scroll-step)
@@ -404,83 +405,6 @@ func (model *Model) updateDiagnostics(message tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 	}
 	return nil, false
-}
-
-func (w *diagnosticWindow) widths(width int) (int, int) {
-	inner := max(1, min(110, width-4)-6)
-	if width < 72 {
-		return inner, inner
-	}
-	list := min(34, max(1, inner/3))
-	return list, max(1, inner-list-3)
-}
-
-func (w *diagnosticWindow) detailLines(width int) []string {
-	_, detailWidth := w.widths(width)
-	text := diagnostics.TerminalText("Diagnostic", w.pinned)
-	if w.selected == "" {
-		text = "No diagnostic records"
-		if w.remoteNotice != "" {
-			text += "\n" + w.remoteNotice
-		}
-		if w.localNotice != "" {
-			text += "\n" + w.localNotice
-		}
-	}
-	if w.historyQueryFailure != nil {
-		text += "\n\n" + diagnostics.TerminalText("History query", *w.historyQueryFailure)
-	}
-	return strings.Split(ansi.Hardwrap(text, detailWidth, true), "\n")
-}
-
-func (w *diagnosticWindow) view(width, height int) string {
-	theme := ui.DefaultTheme()
-	listWidth, detailWidth := w.widths(width)
-	rows := max(1, height-9)
-	selected := w.selectedIndex()
-	start := max(0, selected-max(1, rows/2)+1)
-	var list []string
-	for i := start; i < len(w.entries) && len(list) < rows; i++ {
-		s := w.entries[i].snapshot
-		prefix := "  "
-		if s.ID == w.selected {
-			prefix = "> "
-		}
-		list = append(list, ui.TruncateVisible(prefix+s.Time.Local().Format("15:04:05")+" "+diagnosticSingleLine(s.Severity+" "+s.Component), listWidth))
-		if len(list) < rows {
-			list = append(list, ui.TruncateVisible("  "+diagnosticSingleLine(s.Summary), listWidth))
-		}
-	}
-	if len(list) == 0 {
-		list = []string{"No diagnostic records"}
-	}
-	lines := w.detailLines(width)
-	detailStart := min(w.scroll, max(0, len(lines)-rows))
-	detail := strings.Join(lines[detailStart:min(len(lines), detailStart+rows)], "\n")
-	body := detail
-	if width >= 72 {
-		body = lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(listWidth).Render(strings.Join(list, "\n")), " │ ", lipgloss.NewStyle().Width(detailWidth).Render(detail))
-	} else if !w.detailFocus {
-		body = strings.Join(list, "\n")
-	}
-	mode := "list"
-	if w.detailFocus {
-		mode = "details"
-	}
-	footer := "Tab pane · ↑/↓ · PgUp/PgDn · Home/End · c copy · Esc back"
-	if w.copyStatus != "" {
-		footer = w.copyStatus + " · " + footer
-	}
-	if w.remoteNotice != "" {
-		footer = w.remoteNotice + " · " + footer
-	}
-	if w.localNotice != "" {
-		footer = w.localNotice + " · " + footer
-	}
-	boxWidth := max(1, min(110, width-4))
-	content := theme.Title.Render("Diagnostics · "+mode) + "\n\n" + body + "\n\n" + theme.Muted.Render(ui.TruncateVisible(footer, max(1, boxWidth-6)))
-	box := theme.Dialog.Width(boxWidth).MaxWidth(boxWidth).MaxHeight(max(1, height-2)).Render(content)
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
 
 // observeDiagnosticMessage captures explicit result contracts before the owning

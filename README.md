@@ -19,6 +19,8 @@ An open-source terminal alternative to graphical Mihomo / Clash clients such as 
 
 ![Overview](assets/overview.png)
 
+Overview's Core card shortens its traffic charts to keep each speed and its unit together on the chart line.
+
 ## What is this?
 
 **TLDR**: Mihari is a terminal manager for mihomo — the same family of tools as mihomo GUIs like Clash Party and Sparkle, but it runs in the terminal and is hosted by a daemon in the background, so the CLI, TUI, and browser panels share one control plane.
@@ -56,11 +58,13 @@ Subscription Mode displays `auto` as **PROXY w Fallback to DIRECT**. It retries 
 
 In **Connections**, Chain receives more width and stays visible before Source, Destination and Rule in narrow windows. Traffic uses fixed, compact upload/download slots (`K/M/G/T/P/E` mean powers of 1024 bytes per second); connection details retain full rates and the complete chain. **Rules** opens full rule or provider details in a centered popup: scroll with ↑/↓ or PgUp/PgDn and close with Enter/Esc to return to the same row.
 
-Connection details open as one centered page with traffic totals, endpoints, routing and metadata. The complete proxy chain stays in the page; Raw and Proxies tabs have been removed. Long fields wrap; use ↑/↓ to scroll and Enter/Esc to return to the selected row. **Paused** identifies frozen observations. Closed connections retain their **last** observed rates and totals; **Closed observed** is when the TUI noticed the connection disappear, not an exact core-reported close time.
+Connection details show a vertical **Application → Routing → Outbound → Destination** path in one centered page. Fields stay with their stage: Routing combines the inbound name/type/protocol and **Rule Matched**, then expands the reported selection chain from outer group to outbound. Outbound shows **Remote** and its GeoIP; Destination keeps its own target address and GeoIP. The selection tree does not claim to show every underlying network hop. Upload rates and totals are green; download rates and totals are blue. Rejected outbounds have a broken connector to a muted requested destination. Long fields wrap, deep trees retain numbered levels, and the panel stays within 88 terminal columns. Use ↑/↓ to scroll and Enter/Esc to return to the selected row. **Paused** identifies frozen observations. Closed connections retain their **last** observed rates and totals; **Closed observed** is when the TUI noticed the connection disappear, not an exact core-reported close time.
 
 **Web GUI** shows panel cards side by side in wide windows and stacked in narrow ones. Use Tab/Shift+Tab or ←/→ to focus Open/Install or Manage, then Enter; ↑/↓ selects a panel. Installing or reinstalling a panel shows an orange Installing badge with an animated Braille spinner on that panel until the operation finishes. Existing panel shortcuts remain available. Manage contains update, default selection, reinstall, rollback and uninstall, with unavailable actions marked. The yellow **Ctrl+Shift+R** reminder stays above the cards; gateway safeguards are in `?` help. **System** places Network immediately after Ports Config.
 
 Mihomo HTTP failures retain their original error text and upstream status in diagnostic logs, including gateway requests and WebSocket handshakes. Logs and local CLI/TUI error reports are not redacted: credentials, URLs, paths, and configuration fragments carried by errors remain available for diagnosis. CLI errors show the summary, classification, and original details; JSON adds optional diagnostics and warnings without changing business exit codes. In every TUI page, F2 opens shared diagnostic history with scrollable details and raw-text copying. Terminal control characters are escaped for display.
+
+F2 keeps each occurrence as a separate record, with severity colors and a highlighted selection. The list and details appear side by side in wide terminals and stack in narrow ones. Tab switches panes; arrows, PgUp/PgDn and Home/End navigate; c copies the original detail; Esc returns. New records do not move the current selection. Web gateway messages from mihomo allow up to 1 MiB, matching the mihomo stream client; browser-originated messages retain a 32 KiB limit.
 
 A single CGO-free static binary (< 15 MB) contains everything, with built-in GitHub Releases self-update and local GeoIP resolution.
 

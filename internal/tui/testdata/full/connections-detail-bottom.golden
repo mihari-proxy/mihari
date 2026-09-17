@@ -2,21 +2,21 @@
    1 Overview   ╭───Connection details───────────────────────────────╮
    2 Proxies    │ ○ Closed                                           │
  › 3 Conns      │                                                    │
-   4 Rules      │                                                    │
-   5 Logs       │ ROUTING                                            │
-   6 Subs       │ Rule              DomainSuffix                     │
-   7 Web GUI    │ Rule payload      example.test                     │
-   8 System     │ Chain             Proxy → Auto Select → Japan 01   │
-                │ GeoIP             Unavailable                      │
+   4 Rules      │ │                                                  │
+   5 Logs       │ ● OUTBOUND                                         │
+   6 Subs       │ │ Japan 01                                         │
+   7 Web GUI    │ │ Remote            —                              │
+   8 System     │ │ GeoIP             —                              │
+                │ │                                                  │
+                │ ● DESTINATION                                      │
+                │   Host              api.example.test               │
+                │   Destination       203.0.113.24:443               │
+                │   GeoIP             Unavailable                    │
                 │                                                    │
-                │ METADATA                                           │
-                │ Process           chrome.exe                       │
-                │ Process path      C:/Apps/Browser/chrome.exe       │
-                │ Inbound name      mixed-in                         │
                 │ Started           2026-09-16 10:30:00              │
                 │ Closed observed   2026-09-16 10:31:00              │
                 │ Connection ID     8d37b6a2-51a4-4f9e-b1d9-6e84b12f │
                 │                   a205                             │
-                │ 14–28 / 28                                         │
+                │ 22–36 / 36                                         │
                 ╰────────────────────────────────────────────────────╯
  F2 details  Enter/Esc close  ↑/↓ scroll  ? help  q quit

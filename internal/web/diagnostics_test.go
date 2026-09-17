@@ -243,6 +243,8 @@ func TestControllerProxyDiagnostics_PreservesLocalMetadata(t *testing.T) {
 	}
 }
 
+// TestGatewayWebSocketReadLimitKeepsSingleFailureOwner checks that an oversized
+// upstream message closes both relays and produces exactly one failure record.
 func TestGatewayWebSocketReadLimitKeepsSingleFailureOwner(t *testing.T) {
 	send := make(chan struct{})
 	controller, state := newTask5WebSocketController(t, func(ctx context.Context, conn *websocket.Conn) error {
@@ -251,7 +253,7 @@ func TestGatewayWebSocketReadLimitKeepsSingleFailureOwner(t *testing.T) {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-		if err := conn.Write(ctx, websocket.MessageText, bytes.Repeat([]byte("private-body"), 8192)); err != nil {
+		if err := conn.Write(ctx, websocket.MessageText, bytes.Repeat([]byte("x"), (1<<20)+1)); err != nil {
 			return err
 		}
 		_, _, err := conn.Read(ctx)
@@ -263,7 +265,8 @@ func TestGatewayWebSocketReadLimitKeepsSingleFailureOwner(t *testing.T) {
 	observer := newWebSocketRelayJoinObserver()
 	gateway.wsObserver = observer
 	stream := dialTask5GatewayStream(t, serveWebSocketGateway(t, gateway))
-	stream.SetReadLimit(1 << 20)
+	// The browser must not be the owner rejecting this message.
+	stream.SetReadLimit(2 << 20)
 	waitDone(t, state.accepted, "upstream accepted")
 	close(send)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

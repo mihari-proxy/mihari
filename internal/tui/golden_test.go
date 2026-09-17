@@ -166,7 +166,7 @@ func TestGoldenProxiesFull(t *testing.T) {
 
 // TestGoldenConnectionsDetailFull pins the complete wide connection detail.
 func TestGoldenConnectionsDetailFull(t *testing.T) {
-	goldenConnectionDetail(t, "full/connections-detail", 110, 40, false, false, false)
+	goldenConnectionDetail(t, "full/connections-detail", 110, 40, false, false, false, nil)
 }
 
 // TestGoldenConnectionsDetailVariants pins compact and retained-observation states.
@@ -182,28 +182,31 @@ func TestGoldenConnectionsDetailVariants(t *testing.T) {
 		{"bottom", 72, 22, true, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			goldenConnectionDetail(t, "full/connections-detail-"+tc.name, tc.width, tc.height, tc.closed, tc.paused, tc.bottom)
+			goldenConnectionDetail(t, "full/connections-detail-"+tc.name, tc.width, tc.height, tc.closed, tc.paused, tc.bottom, nil)
 		})
 	}
 }
 
 // goldenConnectionDetail enters the real detail through page navigation before capture.
-func goldenConnectionDetail(t *testing.T, name string, width, height int, closed, paused, bottom bool) {
+func goldenConnectionDetail(t *testing.T, name string, width, height int, closed, paused, bottom bool, connection *protocol.Connection) {
 	t.Helper()
 	model := goldenModel(t, ui.PageConnections, width, height)
 	model.applySessionEvent(session.Event{Kind: session.EventStatus, Status: protocol.Status{
 		Schema: "mihari/v1", Revision: 1, Capabilities: []string{protocol.CapabilityConnections},
 	}})
 	start := time.Date(2026, 9, 16, 10, 30, 0, 0, time.UTC)
-	model.applySessionEvent(session.Event{Kind: session.EventConnections, ObservedAt: start, Connections: protocol.ConnectionList{
-		Connections: []protocol.Connection{{
+	if connection == nil {
+		connection = &protocol.Connection{
 			ID: "8d37b6a2-51a4-4f9e-b1d9-6e84b12fa205", Start: start,
 			Upload: 2048, Download: 4096, UploadSpeed: 1024, DownloadSpeed: 3072,
-			Chains: []string{"Proxy", "Auto Select", "Japan 01"}, Rule: "DomainSuffix", RulePay: "example.test",
-			Metadata: protocol.ConnectionMetadata{Network: "TCP", Type: "Mixed", Host: "api.example.test",
+			Chains: []string{"Japan 01", "Auto Select", "Proxy"}, Rule: "DomainSuffix", RulePay: "example.test",
+			Metadata: protocol.ConnectionMetadata{Network: "TCP", Type: "HTTP", Host: "api.example.test",
 				SourceIP: "192.168.1.12", SourcePort: "52341", DestinationIP: "203.0.113.24", DestinationPort: "443",
 				Process: "chrome.exe", ProcessPath: "C:/Apps/Browser/chrome.exe", InboundName: "mixed-in"},
-		}},
+		}
+	}
+	model.applySessionEvent(session.Event{Kind: session.EventConnections, ObservedAt: start, Connections: protocol.ConnectionList{
+		Connections: []protocol.Connection{*connection},
 	}})
 	page := model.pages[ui.PageConnections]
 	page.FocusFirst()
@@ -248,6 +251,26 @@ func goldenConnectionDetail(t *testing.T, name string, width, height int, closed
 		t.Fatalf("shell did not render the detail:\n%s", view)
 	}
 	assertGoldenContent(t, name, view)
+}
+
+func TestGoldenConnectionsRouteStates(t *testing.T) {
+	for _, outbound := range []string{"DIRECT", "REJECT"} {
+		t.Run(outbound, func(t *testing.T) {
+			c := protocol.Connection{
+				ID: "route-state", Start: time.Date(2026, 9, 16, 10, 30, 0, 0, time.UTC),
+				Rule: "DomainSuffix", RulePay: "example.test", Chains: []string{outbound, "Local"},
+				Metadata: protocol.ConnectionMetadata{
+					Host: "api.example.test", DestinationIP: "203.0.113.24", DestinationPort: "443",
+					Type: "Tun", Network: "tcp", InboundName: "DEFAULT-TUN", Process: "browser.exe",
+					SourceIP: "198.18.0.1", SourcePort: "52341",
+				},
+			}
+			if outbound == "DIRECT" {
+				c.Metadata.RemoteDestination = c.Metadata.DestinationIP
+			}
+			goldenConnectionDetail(t, "full/connections-detail-"+strings.ToLower(outbound), 110, 40, true, false, false, &c)
+		})
+	}
 }
 
 func TestGoldenLogsCompact(t *testing.T) {

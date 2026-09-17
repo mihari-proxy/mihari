@@ -19,6 +19,8 @@ Mihari 是面向 Windows、Linux 和 macOS 的跨平台 [mihomo](https://github.
 
 ![Overview](assets/overview.png)
 
+Overview 的 Core 卡片会缩短流量趋势图，为速度值及其单位保留同一行的显示空间。
+
 ## 这是什么?
 
 **TLDR**:Mihari 是 mihomo 的终端管理器——和 Clash Party、Sparkle 等 mihomo GUI 是同类工具,但它运行在终端里,并由一个守护进程在后台托管,CLI、TUI 和浏览器面板共享同一个控制面。
@@ -57,6 +59,8 @@ TUI 订阅表格的 Name 和 Traffic 列按内容分配宽度，分别最多占 
 订阅下载 Mode 将 `auto` 显示为 **PROXY w Fallback to DIRECT**。回退覆盖主订阅 YAML 的连接超时和成功响应正文读取超时等可重试网络错误；HTTP 错误、无效文档不触发回退。每次代理/直连尝试保留 30 秒预算，daemon 的 Add/Refresh 整次执行上限为 120 秒，CLI/TUI 每条等待最多 180 秒以容纳有界回滚和响应。更短的调用方 deadline 与主动取消仍优先，批量刷新逐条计时。窄列表必要时整列隐藏 Mode，进入详情可查看完整值。Provider 下载策略及 Proxies 页 Routing Mode 独立于此设置。
 
 mihomo HTTP 失败的原始报错与上游状态会写入诊断日志，范围包括 gateway 和 WebSocket 握手。日志、导出及本地 CLI/TUI 错误汇报均不脱敏，保留错误自带的凭据、URL、路径与配置片段。CLI 分段展示概要、错误分类和原始详情，JSON 增加可选诊断和 warnings，业务退出码保持不变。TUI 所有页面均可按 F2 打开统一诊断历史，滚动查看详情并复制原文。终端控制字符仅在显示时转义。
+
+F2 每次发生保留独立记录，以级别颜色和选中高亮帮助浏览。宽终端左右显示列表和详情，窄终端上下排列。Tab 切换窗格，方向键、PgUp/PgDn、Home/End 导航，c 复制原始详情，Esc 返回；新记录不会抢走当前选择。Web gateway 允许来自 mihomo 的单条消息最大 1 MiB，与 mihomo 流客户端一致；浏览器发送方向仍限制为 32 KiB。
 
 ## 快速开始
 
@@ -159,7 +163,7 @@ mihari sysproxy enable
 
 **Connections** 为 Chain 分配更多宽度，窄窗口中优先于 Source、Destination、Rule 保留。Traffic 使用固定宽度的上下行紧凑速率，`K/M/G/T/P/E` 按 1024 进制表示字节每秒；连接详情仍显示完整速率与代理链。**Rules** 用居中弹窗展示规则或 provider 的完整详情，↑/↓ 或 PgUp/PgDn 滚动，Enter/Esc 关闭后返回原行。
 
-连接详情采用单个居中页面，按流量、端点、路由和元数据分组，完整代理链直接在正文展示，移除 Raw 和 Proxies 标签。长字段自动换行，↑/↓ 滚动，Enter/Esc 返回选中行。**Paused** 表示观测数据已冻结；已关闭连接显示最后观测速率与累计流量，**Closed observed** 是 TUI 发现连接消失的时间，不是内核报告的精确关闭时间。
+连接详情采用单个居中页面，以 **Application → Routing → Outbound → Destination** 纵向展示处理链路，字段归入对应阶段。Routing 合并显示入站名称／类型／协议和 **Rule Matched**，并从外层代理组到出站逐级展开上报的选择链；Outbound 展示 **Remote** 及其 GeoIP，Destination 保留自己的目标地址及 GeoIP，选择树不代表完整网络中转拓扑。上传速率与累计量为绿色，下载为蓝色；拒绝出站以断线连接灰色的请求目标节点。长字段自动换行，深层选择树保留层级序号，面板最大 88 个终端字符列。↑/↓ 滚动，Enter/Esc 返回选中行。**Paused** 表示观测数据已冻结；已关闭连接显示最后观测速率与累计流量，**Closed observed** 是 TUI 发现连接消失的时间，不是内核报告的精确关闭时间。
 
 **Web GUI** 面板卡片宽屏并排、窄屏纵排。Tab/Shift+Tab 或 ←/→ 选择 Open/Install 或 Manage，Enter 执行，↑/↓ 切换面板。安装或重装期间，对应卡片显示橘色 Installing 状态 badge 和动态盲文动画，操作结束后清除；原有面板快捷键保留。Manage 包含更新、设为默认、重装、回滚及卸载，不可用项标明原因。黄色 **Ctrl+Shift+R** 刷新提示始终保留在卡片上方，网关保护说明移至 `?` 帮助。**System** 的 Network 分区移至 Ports Config 之后。
 

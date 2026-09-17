@@ -46,7 +46,7 @@ func TestModel_ControlRowAndDetailsPreserveFullChain(t *testing.T) {
 	model.SetSize(100, 24)
 	model.SetPreferences(protocol.TUIPreferences{ConnectionsColumns: []string{"host", "chain", "traffic"}})
 	model.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{
-		ID: "one", Chains: []string{"GLOBAL", "Streaming", "Auto Select", "Japan 01"},
+		ID: "one", Chains: []string{"Japan 01", "Auto Select", "Streaming", "GLOBAL"},
 		Metadata: protocol.ConnectionMetadata{Host: "chatgpt.com", SourceIP: "127.0.0.1"},
 	}}}, time.Unix(1, 0))
 	model.focus = pageFocus{kind: focusRow, rowID: "one"}
@@ -57,10 +57,10 @@ func TestModel_ControlRowAndDetailsPreserveFullChain(t *testing.T) {
 			t.Fatalf("view does not contain %q: %s", want, view)
 		}
 	}
-	if !strings.Contains(view, "GLOBAL") {
+	if !strings.Contains(view, "Japan 01") {
 		t.Fatalf("chain column missing: %s", view)
 	}
-	if got := strings.Join(model.visibleRows()[0].Chains, " / "); got != "GLOBAL / Streaming / Auto Select / Japan 01" {
+	if got := strings.Join(model.visibleRows()[0].Chains, " / "); got != "Japan 01 / Auto Select / Streaming / GLOBAL" {
 		t.Fatalf("model chain=%q", got)
 	}
 	// Detail replaces the whole page (design C1); the pane shows the chain
@@ -72,8 +72,13 @@ func TestModel_ControlRowAndDetailsPreserveFullChain(t *testing.T) {
 	}
 	model.detail.scroll = 6
 	view = model.View()
-	if !strings.Contains(view, "GLOBAL → Streaming → Auto Select → Japan 01") {
-		t.Fatalf("detail should show the full chain: %s", view)
+	previous := -1
+	for _, name := range []string{"GLOBAL", "Streaming", "Auto Select", "Japan 01"} {
+		index := strings.Index(view, name)
+		if index <= previous {
+			t.Fatalf("detail should show the full selection order: %s", view)
+		}
+		previous = index
 	}
 }
 
@@ -428,7 +433,7 @@ func TestModel_DetailLooksUpOnlyPublicDestinationAddresses(t *testing.T) {
 		{Address: "8.8.8.8", CountryCode: "US", ASN: 15169, Organization: "Google LLC"},
 	}}}
 	model := New(client, nil)
-	model.SetSize(100, 28)
+	model.SetSize(100, 60)
 	model.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{
 		ID: "one", Metadata: protocol.ConnectionMetadata{
 			SourceIP: "127.0.0.1", DestinationIP: "1.1.1.1", RemoteDestination: "8.8.8.8:443",
@@ -445,7 +450,7 @@ func TestModel_DetailLooksUpOnlyPublicDestinationAddresses(t *testing.T) {
 		t.Fatalf("addresses=%q", got)
 	}
 	view := model.View()
-	for _, want := range []string{"GeoIP", "AU", "AS13335", "Cloudflare, Inc.", "ENDPOINTS"} {
+	for _, want := range []string{"GeoIP", "AU", "AS13335", "Cloudflare, Inc.", "● DESTINATION"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q: %s", want, view)
 		}
@@ -456,7 +461,7 @@ func TestModel_DetailLooksUpOnlyPublicDestinationAddresses(t *testing.T) {
 func TestModel_GeoIPFailureDegradesOnlyGeoIPCard(t *testing.T) {
 	client := &fakeConnectionsClient{geoIPErr: errors.New("database unavailable")}
 	model := New(client, nil)
-	model.SetSize(100, 28)
+	model.SetSize(100, 60)
 	model.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{
 		ID: "one", Metadata: protocol.ConnectionMetadata{DestinationIP: "1.1.1.1"},
 	}}}, time.Unix(1, 0))
@@ -464,7 +469,7 @@ func TestModel_GeoIPFailureDegradesOnlyGeoIPCard(t *testing.T) {
 	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model.Update(command())
 	view := model.View()
-	if !strings.Contains(view, "GeoIP") || !strings.Contains(view, "Unavailable") || !strings.Contains(view, "ENDPOINTS") {
+	if !strings.Contains(view, "GeoIP") || !strings.Contains(view, "Unavailable") || !strings.Contains(view, "● DESTINATION") {
 		t.Fatalf("view=%s", view)
 	}
 }
