@@ -4,6 +4,40 @@
 
 ## [Unreleased]
 
+## [v0.9.5] - 2026-09-17
+
+### Added
+
+- 统一 System Logging 与 mihomo 实际日志级别，保存值覆盖内核配置；Level 改为行内选择确认后再提交，并增加被动 silent（#209, #262, #270）。
+- CLI/TUI 统一展示原始错误详情：文本保留分类与原文，JSON 增加可选 diagnostics/warnings；TUI 全局 F2 诊断历史支持滚动、复制与紧凑双区（#197, #264, #271）。
+- Conns 改为居中单页详情，并按 Application → Routing → Outbound → Destination 可视化处理链路（#263, #269）。
+- 优化 System、Web GUI 与 Rules 布局及详情弹窗；Conns/Rules/Logs 支持 Ctrl+F，已关闭连接历史扩至 5000 条，Logs 级别改为多选筛选（#261, #272）。
+- Overview 与 System 展示 daemon/core 启动时刻，以及本次 daemon 生命周期内的核心重启次数（#278）。
+- 进入 System / Web GUI 时自动检查内核与面板最新版本（#267）。
+
+### Changed
+
+- TUI 拉取 daemon 快照间隔改为 1 秒（#277）。
+- 订阅 AUTO 模式展示为 `PROXY w Fallback to DIRECT`，窄屏必要时隐藏 Mode 列（#260）。
+- all-in-one 整合包锁定 mihomo v1.19.31 与更新的 GeoIP 数据。
+
+### Fixed
+
+- 修复订阅刷新被 10 秒控制超时提前取消，使 AUTO 来不及直连回退；成功响应正文超时也可触发既有回退（#259, #260）。
+- 修复管理员更新时 Windows 用户目录安装的 Binary 版本显示 unknown（#265）。
+- 修复 Web GUI 导航间距、方向键跳过 Manage，以及安装过程进度展示（#266）。
+- 修复 Overview 速度单位换行截断、Health 成功文案换行，以及从内容区按数字键跳到 Overview 时误入页签（#268, #276, #275）。
+- 修复 Web gateway 转发超过 32 KiB 的 mihomo 消息时断连（#271）。
+- 放大正式版发布页安装提示（#255）。
+
+### Upgrade notes
+
+- CLI/TUI 与 daemon 应同步升级。
+- `GET/PATCH /v1/logging` 新增可选 `core_level`、`sync_state`、`sync_message`；保存级别新增 silent。降级前应切回四档并备份配置（#262）。
+- CLI `--json` 可增加 diagnostics/warnings；`/v1` 增加可选诊断字段与本地历史端点。旧客户端忽略未知字段（#264）。
+- 新增只读 `GET /v1/core/version-check` 与 `GET /v1/panels/{id}/version-check`（#267）。
+- 日志、导出与本地错误详情仍不脱敏，分享前须自行检查并移除敏感内容（#240, #264）。
+
 ## [v0.9.4] - 2026-09-15
 
 ### Added
