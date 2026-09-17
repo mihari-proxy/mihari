@@ -64,6 +64,8 @@ Connection details open as one centered page with traffic totals, endpoints, rou
 
 Mihomo HTTP failures retain their original error text and upstream status in diagnostic logs, including gateway requests and WebSocket handshakes. Logs and local CLI/TUI error reports are not redacted: credentials, URLs, paths, and configuration fragments carried by errors remain available for diagnosis. CLI errors show the summary, classification, and original details; JSON adds optional diagnostics and warnings without changing business exit codes. In every TUI page, F2 opens shared diagnostic history with scrollable details and raw-text copying. Terminal control characters are escaped for display.
 
+F2 keeps each occurrence as a separate record, with severity colors and a highlighted selection. The list and details appear side by side in wide terminals and stack in narrow ones. Tab switches panes; arrows, PgUp/PgDn and Home/End navigate; c copies the original detail; Esc returns. New records do not move the current selection. Web gateway messages from mihomo allow up to 1 MiB, matching the mihomo stream client; browser-originated messages retain a 32 KiB limit.
+
 A single CGO-free static binary (< 15 MB) contains everything, with built-in GitHub Releases self-update and local GeoIP resolution.
 
 ## Quick start

@@ -1,0 +1,10 @@
+  ╭──────────────────────────────────────────────────────╮
+  │ Diagnostics                                4 records │
+  │ ▸ Records 2/4                                        │
+  │ › 11:25:52 error web                                 │
+  │   failed to read: websocket: message too big: read … │
+  │   Details 1–2/6                                      │
+  │ failed to read: websocket: message too big: read     │
+  │ limited at 32769 bytes                               │
+  │ Tab pane · ↑/↓ select · c copy · Esc back            │
+  ╰──────────────────────────────────────────────────────╯

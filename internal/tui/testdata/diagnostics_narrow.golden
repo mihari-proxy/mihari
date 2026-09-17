@@ -1,0 +1,16 @@
+  ╭──────────────────────────────────────────────────────╮
+  │ Diagnostics                                4 records │
+  │ ▸ Records 2/4                                        │
+  │   11:25:53 error web                                 │
+  │   failed to read: websocket: message too big: read … │
+  │ › 11:25:52 error web                                 │
+  │   failed to read: websocket: message too big: read … │
+  │   Details 1–6/6                                      │
+  │ failed to read: websocket: message too big: read     │
+  │ limited at 32769 bytes                               │
+  │                                                      │
+  │ Time    2026-09-17 11:25:52 +00:00                   │
+  │ Source  web                                          │
+  │ Event   websocket.relay.failed                       │
+  │ Tab pane · ↑/↓ select · c copy · Esc back            │
+  ╰──────────────────────────────────────────────────────╯
