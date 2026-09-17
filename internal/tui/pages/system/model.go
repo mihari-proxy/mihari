@@ -865,6 +865,9 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		m.coreVersion.checking = false
 		m.coreVersion.failed = typed.err != nil || typed.result.Latest == ""
 		m.coreVersion.latest = typed.result.Latest
+		if !m.coreVersion.failed {
+			m.coreVersion.checkedAt = time.Now()
+		}
 		if typed.err == nil && typed.result.Channel != "" {
 			m.coreVersion.channel = typed.result.Channel
 		}
@@ -988,11 +991,7 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		m.markRowOutcome(typed.rowID, false, actionErrorDetail(typed.err, ui.WebGUIUnavailable))
 		return m, nil
 	case ui.CoreObservedMsg:
-		previousChannel := coreChannelName(m.core.Channel)
 		m.core = typed.Core
-		if previousChannel != coreChannelName(m.core.Channel) {
-			return m, m.checkCoreVersion()
-		}
 		return m, nil
 	case coreLoadResultMsg:
 		if typed.err == nil {
@@ -1066,6 +1065,9 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		revision := typed.restart.Revision
 		if typed.kind == actionUpdate || typed.kind == actionSwitchChannel {
 			revision = typed.install.Revision
+			// Reload the committed channel before checking, and reject any
+			// metadata request that started before this mutation finished.
+			m.coreVersion = coreVersionState{generation: m.coreVersion.generation + 1}
 		}
 		return m, tea.Batch(m.refresh(), m.loadCore(), func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: revision} }, m.rowSpinCmdIfNeeded())
 	case serviceResultMsg:

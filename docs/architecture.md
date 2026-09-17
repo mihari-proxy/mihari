@@ -90,7 +90,7 @@ Phase 4 保留几条明确边界：认证前、预解析和只读请求没有统
 
 ## 核心安装
 
-TUI 进入 System/Web GUI 时通过带认证的本地控制接口 `GET /v1/core/version-check`、`GET /v1/panels/{id}/version-check` 查询上游版本。响应为 `schema: mihari/v1`、`latest`，core 另有 `channel`；失败使用既有错误 envelope。daemon 复用 core installer / panel adapter 查询元数据，网络 IO 不持 mutation gate 或 panel 锁，不下载、不执行二进制、不修改业务文件或 revision。现有状态读取保持本地查询，不触发公网请求。alpha 展示对应平台资产中的 `alpha-{sha}`，面板沿用发布 tag 或构建提交标识。TUI 逐项保存检查状态并拒绝旧 core 通道/旧请求结果，普通状态轮询不清除检查结果；安装权限与可信 core 限制保持不变。
+TUI 进入 System/Web GUI 时通过带认证的本地控制接口 `GET /v1/core/version-check`、`GET /v1/panels/{id}/version-check` 查询上游版本。响应为 `schema: mihari/v1`、`latest`，core 另有 `channel`；失败使用既有错误 envelope。daemon 复用 core installer / panel adapter 查询元数据，网络 IO 不持 mutation gate 或 panel 锁，不下载、不执行二进制、不修改业务文件或 revision。现有状态读取保持本地查询，不触发公网请求。alpha 展示对应平台资产中的 `alpha-{sha}`，面板沿用发布 tag 或构建提交标识。TUI 逐项保存检查状态并拒绝旧 core 通道/旧请求结果，普通状态轮询不清除检查结果。成功结果在 TUI 会话内缓存 5 分钟，失败不缓存；成功的 core 安装/通道切换在重新读取 core 状态后检查，面板安装/更新/回滚/重装/卸载只失效并重查对应条目，旧 generation 的结果不能覆盖刷新结果。安装权限与可信 core 限制保持不变。
 
 守护进程通过同一条下载、校验、替换链路安装 mihomo,并支持 `stable` 与 `alpha` 两个通道:
 

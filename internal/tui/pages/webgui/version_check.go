@@ -6,22 +6,34 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
+	"time"
 )
 
 type panelVersionState struct {
 	latest           string
 	checking, failed bool
+	checkedAt        time.Time
+	generation       uint64
 }
 type panelVersionMsg struct {
-	id     string
-	result protocol.VersionCheck
-	err    error
+	id         string
+	result     protocol.VersionCheck
+	err        error
+	generation uint64
 }
 
 func (m panelVersionMsg) Err() error                { return m.err }
 func (m panelVersionMsg) DiagnosticPage() ui.PageID { return ui.PageWebGUI }
 
 func (m *Model) checkPanelVersions() tea.Cmd {
+	var commands []tea.Cmd
+	for _, panel := range m.status.Panels {
+		commands = append(commands, m.checkPanelVersion(panel.ID))
+	}
+	return tea.Batch(commands...)
+}
+
+func (m *Model) checkPanelVersion(id string) tea.Cmd {
 	checker, ok := m.client.(interface {
 		CheckPanelVersion(context.Context, string) (protocol.VersionCheck, error)
 	})
@@ -31,23 +43,19 @@ func (m *Model) checkPanelVersions() tea.Cmd {
 	if m.versions == nil {
 		m.versions = make(map[string]panelVersionState)
 	}
-	var commands []tea.Cmd
 	ctx := m.ctx
-	for _, panel := range m.status.Panels {
-		id := panel.ID
-		state := m.versions[id]
-		if state.checking {
-			continue
-		}
-		state.checking = true
-		state.failed = false
-		m.versions[id] = state
-		commands = append(commands, func() tea.Msg {
-			result, err := checker.CheckPanelVersion(ctx, id)
-			return ui.PageResultMsg{Page: ui.PageWebGUI, Result: panelVersionMsg{id: id, result: result, err: err}}
-		})
+	state := m.versions[id]
+	if state.checking || (!state.failed && state.latest != "" && time.Since(state.checkedAt) < 5*time.Minute) {
+		return nil
 	}
-	return tea.Batch(commands...)
+	state.checking = true
+	state.failed = false
+	state.generation++
+	m.versions[id] = state
+	return func() tea.Msg {
+		result, err := checker.CheckPanelVersion(ctx, id)
+		return ui.PageResultMsg{Page: ui.PageWebGUI, Result: panelVersionMsg{id: id, result: result, err: err, generation: state.generation}}
+	}
 }
 
 func (m *Model) latestLabel(panel protocol.PanelStatus) string {

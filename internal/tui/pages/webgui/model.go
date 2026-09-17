@@ -34,10 +34,11 @@ type statusResultMsg struct {
 }
 
 type mutationDoneMsg struct {
-	pendingKey string
-	warnings   protocol.WarningOutcome
-	operation  logging.OperationMetadata
-	err        error
+	changedPanel string
+	pendingKey   string
+	warnings     protocol.WarningOutcome
+	operation    logging.OperationMetadata
+	err          error
 }
 
 // Err implements the shell's action-outcome contract so panel lifecycle
@@ -166,7 +167,15 @@ func (m *Model) load(checkVersions bool) tea.Cmd {
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	switch typed := message.(type) {
 	case panelVersionMsg:
-		m.versions[typed.id] = panelVersionState{latest: typed.result.Latest, failed: typed.err != nil || typed.result.Latest == ""}
+		state, ok := m.versions[typed.id]
+		if !ok || typed.generation != state.generation {
+			return m, nil
+		}
+		state.latest, state.checking, state.failed = typed.result.Latest, false, typed.err != nil || typed.result.Latest == ""
+		if !state.failed {
+			state.checkedAt = time.Now()
+		}
+		m.versions[typed.id] = state
 		return m, nil
 	case ui.ActionPendingMsg:
 		return m, m.beginInstall(typed)
@@ -193,6 +202,12 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			m.toast = diagnostics.EscapeTerminal(typed.err.Error())
 		} else {
 			m.toast = ""
+			if typed.changedPanel != "" {
+				if m.versions != nil {
+					m.versions[typed.changedPanel] = panelVersionState{generation: m.versions[typed.changedPanel].generation + 1}
+				}
+				return m, tea.Batch(m.load(false), m.checkPanelVersion(typed.changedPanel))
+			}
 		}
 		return m, m.load(false)
 	case tea.KeyPressMsg:
@@ -307,7 +322,7 @@ func (m *Model) installSelected() tea.Cmd {
 			Impact: ui.InstallPanelImpact, Rollback: ui.InstallPanelRollback,
 			Execute: func() tea.Msg {
 				result, err := m.client.InstallPanel(ctx, panel.ID, protocol.PanelInstallRequest{OperationID: operationID})
-				return mutationDoneMsg{pendingKey: "panel:install:" + panel.ID, operation: operation, err: err, warnings: result.WarningOutcome}
+				return mutationDoneMsg{changedPanel: panel.ID, pendingKey: "panel:install:" + panel.ID, operation: operation, err: err, warnings: result.WarningOutcome}
 			},
 		}
 	}
@@ -328,7 +343,7 @@ func (m *Model) updateSelected() tea.Cmd {
 			Impact: ui.UpdatePanelImpact, Rollback: ui.UpdatePanelRollback,
 			Execute: func() tea.Msg {
 				result, err := m.client.UpdatePanel(ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
-				return mutationDoneMsg{operation: operation, err: err, warnings: result.WarningOutcome}
+				return mutationDoneMsg{changedPanel: panel.ID, operation: operation, err: err, warnings: result.WarningOutcome}
 			},
 		}
 	}
@@ -349,7 +364,7 @@ func (m *Model) rollbackSelected() tea.Cmd {
 			Impact: ui.RollbackPanelImpact, Rollback: ui.RollbackPanelRollback,
 			Execute: func() tea.Msg {
 				result, err := m.client.RollbackPanel(ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
-				return mutationDoneMsg{operation: operation, err: err, warnings: result.WarningOutcome}
+				return mutationDoneMsg{changedPanel: panel.ID, operation: operation, err: err, warnings: result.WarningOutcome}
 			},
 		}
 	}
@@ -376,7 +391,7 @@ func (m *Model) uninstallSelected() tea.Cmd {
 			Impact: ui.UninstallPanelImpact, Rollback: ui.UninstallPanelRollback,
 			Execute: func() tea.Msg {
 				result, err := m.client.UninstallPanel(ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
-				return mutationDoneMsg{operation: operation, err: err, warnings: result.WarningOutcome}
+				return mutationDoneMsg{changedPanel: panel.ID, operation: operation, err: err, warnings: result.WarningOutcome}
 			},
 		}
 	}
@@ -397,7 +412,7 @@ func (m *Model) reinstallSelected() tea.Cmd {
 			Impact: ui.ReinstallPanelImpact, Rollback: ui.ReinstallPanelRollback,
 			Execute: func() tea.Msg {
 				result, err := m.client.ReinstallPanel(ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
-				return mutationDoneMsg{pendingKey: "panel:reinstall:" + panel.ID, operation: operation, err: err, warnings: result.WarningOutcome}
+				return mutationDoneMsg{changedPanel: panel.ID, pendingKey: "panel:reinstall:" + panel.ID, operation: operation, err: err, warnings: result.WarningOutcome}
 			},
 		}
 	}

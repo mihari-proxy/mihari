@@ -8,15 +8,20 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"strings"
 	"testing"
+	"time"
 )
 
 type checkingClient struct {
 	fakeClient
 	checked []string
+	latest  string
 }
 
 func (c *checkingClient) CheckPanelVersion(_ context.Context, id string) (protocol.VersionCheck, error) {
 	c.checked = append(c.checked, id)
+	if c.latest != "" {
+		return protocol.VersionCheck{Latest: c.latest}, nil
+	}
 	return protocol.VersionCheck{Latest: "v9.0.0"}, nil
 }
 
@@ -34,7 +39,7 @@ func TestPanelChecks_IndependentFailureRetryAndSnapshotRefresh(t *testing.T) {
 	commands := first().(tea.BatchMsg)
 	// One panel completes while the other is still pending.
 	m.Update(commands[0]().(ui.PageResultMsg).Result)
-	m.Update(panelVersionMsg{id: "metacubexd", err: errors.New("synthetic secret")})
+	m.Update(panelVersionMsg{id: "metacubexd", generation: m.versions["metacubexd"].generation, err: errors.New("synthetic secret")})
 	m.SetStatus(c.status) // Background status polls have no checked LatestBuild.
 	if !strings.Contains(m.latestLabel(c.status.Panels[0]), "v9.0.0") {
 		t.Fatal("snapshot erased checked version")
@@ -85,5 +90,53 @@ func TestLoadChecksEveryPanelIncludingUninstalled(t *testing.T) {
 	}
 	if c.installed != 0 || c.updated != 0 {
 		t.Fatal("checking installed an update")
+	}
+}
+
+func TestPanelChecks_CacheSuccessfulEntryChecks(t *testing.T) {
+	c := &checkingClient{fakeClient: fakeClient{status: sampleStatus()}}
+	m := New(c, []string{protocol.CapabilityWebGUI})
+	runCheckCommands(m, m.Load())
+	runCheckCommands(m, m.Load())
+	if len(c.checked) != 2 {
+		t.Fatalf("navigation repeated upstream requests: %v", c.checked)
+	}
+	state := m.versions["zashboard"]
+	state.checkedAt = time.Now().Add(-6 * time.Minute)
+	m.versions["zashboard"] = state
+	runCheckCommands(m, m.Load())
+	if len(c.checked) != 3 || c.checked[2] != "zashboard" {
+		t.Fatalf("expired cache not refreshed independently: %v", c.checked)
+	}
+}
+
+func TestPanelChecks_MutationDiscardsEarlierCheckResult(t *testing.T) {
+	c := &checkingClient{fakeClient: fakeClient{status: sampleStatus()}}
+	m := New(c, []string{protocol.CapabilityWebGUI})
+	m.SetStatus(c.status)
+	old := m.checkPanelVersion("zashboard")().(ui.PageResultMsg).Result
+	c.latest = "v10.0.0"
+	intent := m.updateSelected()().(ui.ActionIntentMsg)
+	_, cmd := m.Update(intent.Execute())
+	runCheckCommands(m, cmd)
+	m.Update(old)
+	if m.versions["zashboard"].latest != "v10.0.0" {
+		t.Fatal("pre-mutation result replaced refreshed metadata")
+	}
+}
+
+func TestPanelChecks_RefreshOnlyChangedPanelAfterMutation(t *testing.T) {
+	for _, key := range []string{"i", "u", "b", "r", "x"} {
+		t.Run(key, func(t *testing.T) {
+			c := &checkingClient{fakeClient: fakeClient{status: sampleStatus()}}
+			m := New(c, []string{protocol.CapabilityWebGUI})
+			runCheckCommands(m, m.Load())
+			intent := m.handleKey(key)().(ui.ActionIntentMsg)
+			_, cmd := m.Update(intent.Execute())
+			runCheckCommands(m, cmd)
+			if len(c.checked) != 3 || c.checked[2] != "zashboard" {
+				t.Fatalf("mutation checks=%v", c.checked)
+			}
+		})
 	}
 }

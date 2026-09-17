@@ -8,15 +8,20 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"strings"
 	"testing"
+	"time"
 )
 
 type coreCheckingClient struct {
 	fakeClient
 	checks int
+	result protocol.VersionCheck
 }
 
 func (c *coreCheckingClient) CheckCoreVersion(context.Context) (protocol.VersionCheck, error) {
 	c.checks++
+	if c.result.Latest != "" {
+		return c.result, nil
+	}
 	return protocol.VersionCheck{Latest: "v1.20.0", Channel: "stable"}, nil
 }
 
@@ -91,5 +96,50 @@ func TestLoadAutomaticallyChecksCoreVersion(t *testing.T) {
 	}
 	if !strings.Contains(m.coreUpdateValue(), "v1.20.0") {
 		t.Fatalf("missing latest: %s", m.coreUpdateValue())
+	}
+}
+
+func TestCoreCheck_CacheSuccessfulEntryChecks(t *testing.T) {
+	c := &coreCheckingClient{}
+	m := New(c, nil)
+	m.SetSelfUpdateChannel(func(context.Context) (string, error) { return "main", nil })
+	m.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityCore}}, protocol.CoreStatus{Channel: "stable"})
+	runCoreCheckCommands(m, m.Load())
+	runCoreCheckCommands(m, m.Load())
+	if c.checks != 1 {
+		t.Fatalf("navigation repeated upstream checks: %d", c.checks)
+	}
+	m.coreVersion.checkedAt = time.Now().Add(-6 * time.Minute)
+	runCoreCheckCommands(m, m.Load())
+	if c.checks != 2 {
+		t.Fatalf("expired cache not refreshed: %d", c.checks)
+	}
+}
+
+func TestCoreCheck_ChannelSwitchRechecksAfterCoreStatusReload(t *testing.T) {
+	c := &coreCheckingClient{}
+	m := New(c, nil)
+	m.SetSelfUpdateChannel(func(context.Context) (string, error) { return "main", nil })
+	m.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityCore}}, protocol.CoreStatus{Channel: "stable"})
+	runCoreCheckCommands(m, m.Load())
+	c.coreStatus = protocol.CoreStatus{Schema: "mihari/v1", Channel: "alpha", Version: "alpha-abc1234"}
+	c.result = protocol.VersionCheck{Channel: "alpha", Latest: "alpha-abc1234"}
+	_, cmd := m.Update(actionResultMsg{kind: actionSwitchChannel, install: protocol.CoreInstallResult{Version: "alpha-abc1234"}})
+	runCoreCheckCommands(m, cmd)
+	if c.checks != 2 || m.coreVersion.channel != "alpha" || m.coreVersion.latest != "alpha-abc1234" {
+		t.Fatalf("switch did not use reloaded channel: checks=%d state=%+v", c.checks, m.coreVersion)
+	}
+}
+
+func TestCoreCheck_RefreshAfterSameChannelUpdate(t *testing.T) {
+	c := &coreCheckingClient{}
+	m := New(c, nil)
+	m.SetSelfUpdateChannel(func(context.Context) (string, error) { return "main", nil })
+	m.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityCore}}, protocol.CoreStatus{Channel: "stable"})
+	runCoreCheckCommands(m, m.Load())
+	_, cmd := m.Update(actionResultMsg{kind: actionUpdate, install: protocol.CoreInstallResult{Version: "v1.20.0"}})
+	runCoreCheckCommands(m, cmd)
+	if c.checks != 2 {
+		t.Fatalf("successful core update did not refresh metadata: %d", c.checks)
 	}
 }
