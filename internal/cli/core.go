@@ -24,6 +24,13 @@ func newCoreCommand(dependencies Dependencies, options *runOptions) *cobra.Comma
 				return renderJSON(command.OutOrStdout(), status)
 			}
 			_, err = fmt.Fprintf(command.OutOrStdout(), "Core: %s\nVersion: %s\nPID: %d\nRestarts: %d\n", status.Status, status.Version, status.PID, status.Restarts)
+			if err != nil {
+				return err
+			}
+			if status.StartedAt.IsZero() {
+				return nil
+			}
+			_, err = fmt.Fprintf(command.OutOrStdout(), "Started: %s\n", status.StartedAt.Format("2006-01-02T15:04:05Z07:00"))
 			return err
 		},
 	})

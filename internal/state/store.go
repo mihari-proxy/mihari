@@ -50,6 +50,7 @@ type CoreState struct {
 	Restarts    uint64
 	LastError   string
 	NextRetryAt time.Time
+	StartedAt   time.Time
 }
 
 type Store struct {

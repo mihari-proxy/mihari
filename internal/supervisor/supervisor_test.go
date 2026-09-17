@@ -10,6 +10,37 @@ import (
 	"time"
 )
 
+func TestSupervisorPublishesProcessStartTimeAndClearsOnBackoff(t *testing.T) {
+	starter := newFakeStarter()
+	waiter := newFakeWaiter()
+	observations := &observationLog{}
+	processStart := time.Unix(1_700_000_000, 0).UTC()
+	supervisor := New(Options{
+		Starter: starter,
+		Waiter:  waiter,
+		Now:     func() time.Time { return processStart },
+		Observe: observations.add,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+
+	child := starter.next(t)
+	waitForObservation(t, observations, func(observation Observation) bool {
+		return observation.Status == StatusStarting && observation.PID == child.pid && observation.StartedAt.Equal(processStart)
+	})
+	child.exit(errors.New("crashed"))
+	waiter.next(t)
+	waitForObservation(t, observations, func(observation Observation) bool {
+		return observation.Status == StatusBackoff && observation.StartedAt.IsZero()
+	})
+
+	cancel()
+	if err := waitDone(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSupervisorRestartsCrashAfterExponentialBackoff(t *testing.T) {
 	starter := newFakeStarter()
 	waiter := newFakeWaiter()
@@ -487,6 +518,20 @@ func (l *observationLog) containsStatus(status Status) bool {
 		}
 	}
 	return false
+}
+
+func waitForObservation(t *testing.T, log *observationLog, match func(Observation) bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, observation := range log.snapshot() {
+			if match(observation) {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("observation not seen: %#v", log.snapshot())
 }
 
 func waitDone(t *testing.T, done <-chan error) error {

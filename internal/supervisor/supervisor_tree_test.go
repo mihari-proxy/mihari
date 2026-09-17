@@ -82,7 +82,7 @@ func TestSupervisor_UnexpectedExitChecksDescendantsBeforeIdleMaintenance(t *test
 	child := newDescendantTestChild(func(context.Context) error { return failure })
 	close(child.done)
 	s := New(Options{})
-	err, explicit := s.runChild(context.Background(), child, 0)
+	err, explicit := s.runChild(context.Background(), child, 0, time.Time{})
 	if !errors.Is(err, failure) || explicit {
 		t.Fatalf("unexpected exit bypassed descendants: err=%v explicit=%v", err, explicit)
 	}

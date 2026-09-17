@@ -554,7 +554,7 @@ func (s *Server) requireRuntime(ctx context.Context, writer http.ResponseWriter)
 func coreStatusDTO(snapshot state.Snapshot) protocol.CoreStatus {
 	return protocol.CoreStatus{
 		Schema: "mihari/v1", Revision: snapshot.Revision, Status: snapshot.Core.Status, Version: snapshot.Core.Version, Channel: snapshot.Core.Channel,
-		PID: snapshot.Core.PID, Restarts: snapshot.Core.Restarts, LastError: snapshot.Core.LastError, NextRetryAt: snapshot.Core.NextRetryAt,
+		PID: snapshot.Core.PID, Restarts: snapshot.Core.Restarts, LastError: snapshot.Core.LastError, NextRetryAt: snapshot.Core.NextRetryAt, StartedAt: snapshot.Core.StartedAt,
 	}
 }
 

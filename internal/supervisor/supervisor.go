@@ -29,6 +29,7 @@ type Observation struct {
 	Restarts    uint64
 	LastError   string
 	NextRetryAt time.Time
+	StartedAt   time.Time
 }
 
 type Child interface {
@@ -177,9 +178,10 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			s.report(ctx, "core.start.failed", slog.LevelError, err)
 		}
 		if err == nil {
-			s.observe(Observation{Status: StatusStarting, PID: child.PID(), Restarts: restarts})
+			processStarted := s.options.Now()
+			s.observe(Observation{Status: StatusStarting, PID: child.PID(), Restarts: restarts, StartedAt: processStarted})
 			var explicit bool
-			err, explicit = s.runChild(ctx, child, restarts)
+			err, explicit = s.runChild(ctx, child, restarts, processStarted)
 			if ctx.Err() != nil {
 				s.observe(Observation{Status: StatusStopped, Restarts: restarts})
 				return nil
@@ -230,7 +232,7 @@ func (s *Supervisor) Restart(ctx context.Context) error {
 	}
 }
 
-func (s *Supervisor) runChild(parent context.Context, child Child, restarts uint64) (error, bool) {
+func (s *Supervisor) runChild(parent context.Context, child Child, restarts uint64, startedAt time.Time) (error, bool) {
 	done := make(chan error, 1)
 	joined := make(chan struct{})
 	go func() { defer close(joined); done <- child.Wait() }()
@@ -239,7 +241,7 @@ func (s *Supervisor) runChild(parent context.Context, child Child, restarts uint
 	monitorDone := make(chan struct{})
 	go func() {
 		defer close(monitorDone)
-		s.monitor(monitorCtx, child.PID(), restarts, healthFailure)
+		s.monitor(monitorCtx, child.PID(), restarts, startedAt, healthFailure)
 	}()
 	finishMonitor := func() {
 		cancelMonitor()
@@ -298,9 +300,9 @@ func (s *Supervisor) runChild(parent context.Context, child Child, restarts uint
 	}
 }
 
-func (s *Supervisor) monitor(ctx context.Context, pid int, restarts uint64, failed chan<- error) {
+func (s *Supervisor) monitor(ctx context.Context, pid int, restarts uint64, startedAt time.Time, failed chan<- error) {
 	if s.options.Health == nil {
-		s.observe(Observation{Status: StatusRunning, PID: pid, Restarts: restarts})
+		s.observe(Observation{Status: StatusRunning, PID: pid, Restarts: restarts, StartedAt: startedAt})
 		<-ctx.Done()
 		return
 	}
@@ -318,7 +320,7 @@ func (s *Supervisor) monitor(ctx context.Context, pid int, restarts uint64, fail
 			failures = 0
 			if !runningPublished {
 				runningPublished = true
-				s.observe(Observation{Status: StatusRunning, PID: pid, Restarts: restarts})
+				s.observe(Observation{Status: StatusRunning, PID: pid, Restarts: restarts, StartedAt: startedAt})
 			}
 		} else {
 			failures++

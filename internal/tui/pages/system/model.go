@@ -1411,8 +1411,8 @@ func (m *Model) rows() []row {
 	if m.status.Config != nil {
 		configState = fmt.Sprintf("%s · desired %d / observed %d", m.status.Config.Status, m.status.Config.DesiredRevision, m.status.Config.ObservedRevision)
 	}
-	daemon := fmt.Sprintf("Version %s\nUptime %s\nHealth %s\nRevision %d\nConfig %s", valueOr(m.status.DaemonVersion, ui.UnknownLabel), uptime(m.status.StartedAt), valueOr(m.status.Health, ui.UnknownLabel), m.status.Revision, configState)
-	core := fmt.Sprintf("Status %s\nVersion %s\nPID %d\nRestarts %d", valueOr(m.core.Status, ui.UnknownLabel), valueOr(m.core.Version, ui.UnknownLabel), m.core.PID, m.core.Restarts)
+	daemon := fmt.Sprintf("Version %s\n%s\nHealth %s\nRevision %d\nConfig %s", valueOr(m.status.DaemonVersion, ui.UnknownLabel), formatUpSinceDetail(m.status.StartedAt), valueOr(m.status.Health, ui.UnknownLabel), m.status.Revision, configState)
+	core := fmt.Sprintf("Status %s\nVersion %s\nPID %d\nRestarts %d\n%s", valueOr(m.core.Status, ui.UnknownLabel), valueOr(m.core.Version, ui.UnknownLabel), m.core.PID, m.core.Restarts, formatUpSinceDetail(m.core.StartedAt))
 	rows := m.portRows()
 	rows = append(rows, m.networkRows()...)
 	rows = append(rows, row{id: rowDaemon, section: ui.DaemonSectionTitle, label: ui.DaemonLabel, value: daemonValue(m.theme, m.status, !m.mutationsEnabled), detail: daemon})
@@ -3095,6 +3095,13 @@ func uptime(started time.Time) string {
 		duration = 0
 	}
 	return duration.Round(time.Second).String()
+}
+
+func formatUpSinceDetail(started time.Time) string {
+	if started.IsZero() {
+		return ui.UpSinceLabel + " " + ui.MissingValue + " · " + ui.MissingValue
+	}
+	return ui.UpSinceLabel + " " + uptime(started) + " · " + started.Local().Format("2006-01-02 15:04:05")
 }
 
 func valueOr(value, fallback string) string {

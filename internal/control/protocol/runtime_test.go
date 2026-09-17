@@ -159,6 +159,35 @@ func TestMutationRequestThreadsSource(t *testing.T) {
 	}
 }
 
+func TestCoreStatusStartedAtAdditiveAndOmitted(t *testing.T) {
+	started := time.Date(2026, 9, 17, 14, 32, 0, 0, time.UTC)
+	raw, err := json.Marshal(CoreStatus{Schema: "mihari/v1", Status: "running", StartedAt: started})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"started_at":"2026-09-17T14:32:00Z"`) {
+		t.Fatalf("started_at missing: %s", raw)
+	}
+	var got CoreStatus
+	if err := json.Unmarshal(raw, &got); err != nil || !got.StartedAt.Equal(started) {
+		t.Fatalf("got=%#v err=%v", got, err)
+	}
+	omitted, err := json.Marshal(CoreStatus{Schema: "mihari/v1", Status: "backoff"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(omitted), "started_at") {
+		t.Fatalf("zero started_at should be omitted: %s", omitted)
+	}
+	var old CoreStatus
+	if err := json.Unmarshal([]byte(`{"schema":"mihari/v1","status":"running","restarts":2}`), &old); err != nil {
+		t.Fatal(err)
+	}
+	if !old.StartedAt.IsZero() || old.Restarts != 2 {
+		t.Fatalf("old=%#v", old)
+	}
+}
+
 func TestCoreStatusMarshalsLocalReadinessOptionally(t *testing.T) {
 	raw, err := json.Marshal(CoreStatus{Schema: "mihari/v1", LocalReady: true, LocalVersion: "v1.18.5"})
 	if err != nil {

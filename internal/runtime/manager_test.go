@@ -1366,6 +1366,21 @@ func TestInstallReleasesGateBeforeSupervisorRestartSettings(t *testing.T) {
 	}
 }
 
+func TestObserveCopiesAndClearsCoreStartedAt(t *testing.T) {
+	started := time.Unix(1_700_000_000, 0).UTC()
+	manager := newTestManager(Options{Supervisor: &fakeSupervisor{}})
+	manager.Observe(supervisor.Observation{Status: supervisor.StatusRunning, PID: 7, Restarts: 1, StartedAt: started})
+	got := manager.store.Load().Core
+	if !got.StartedAt.Equal(started) || got.PID != 7 || got.Restarts != 1 {
+		t.Fatalf("running=%#v", got)
+	}
+	manager.Observe(supervisor.Observation{Status: supervisor.StatusBackoff, Restarts: 1})
+	got = manager.store.Load().Core
+	if !got.StartedAt.IsZero() || got.Status != string(supervisor.StatusBackoff) {
+		t.Fatalf("backoff should clear started_at: %#v", got)
+	}
+}
+
 func TestObservePreservesCoreChannelAndAlphaSHA(t *testing.T) {
 	installer := &fakeInstaller{candidate: &fakeCandidate{
 		version:  "v1.19.0",

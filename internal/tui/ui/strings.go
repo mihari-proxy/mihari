@@ -83,6 +83,8 @@ const (
 	OverviewSysProxyLabel = "SysProxy"
 	OverviewTunLabel      = "TUN"
 	OverviewHealthLabel   = "Health"
+	UpSinceLabel          = "Up Since"
+	RestartsLabel         = "Restarts"
 	OverviewValueOff      = "off"
 	OverviewValueOn       = "on"
 	OverviewValueOwned    = "owned"

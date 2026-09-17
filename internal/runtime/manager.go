@@ -433,7 +433,7 @@ func (m *Manager) Observe(observation supervisor.Observation) {
 	}
 	defer m.unlock()
 	current := m.store.Load().Core
-	if current.Status != string(observation.Status) || current.PID != observation.PID || current.Restarts != observation.Restarts {
+	if current.Status != string(observation.Status) || current.PID != observation.PID || current.Restarts != observation.Restarts || !current.StartedAt.Equal(observation.StartedAt) {
 		m.coreEpoch++
 		m.loggingObservation = loggingObservation{}
 	}
@@ -443,6 +443,7 @@ func (m *Manager) Observe(observation supervisor.Observation) {
 		Restarts:    observation.Restarts,
 		LastError:   observation.LastError,
 		NextRetryAt: observation.NextRetryAt,
+		StartedAt:   observation.StartedAt,
 		Version:     current.Version,
 		Channel:     current.Channel,
 		AlphaSHA:    current.AlphaSHA,

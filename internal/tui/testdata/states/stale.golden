@@ -12,7 +12,8 @@
                  │ Mihari     dev                        ││ 0 conn · Stale · ↑0 B  ↓0 B           │ 
                  │ SysProxy   —                          ││ UL ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁ 0 B/s       │ 
                  │ TUN        —                          ││ DL ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁ 0 B/s       │ 
-                 │ Health     ● Not applied              ││                                       │ 
+                 │ Health     ● Not applied              ││ Up Since —  Restarts 0                │ 
+                 │ Up Since   —                          ││                                       │ 
                  ╰───────────────────────────────────────╯╰───────────────────────────────────────╯ 
                  ╭───Subscription────────────────────────╮╭───Web GUI─────────────────────────────╮ 
                  │ None configured                       ││ Web GUI status unavailable            │ 
@@ -20,7 +21,6 @@
                  ╭───Recent operations────────────────────────────────────────────────────────────╮ 
                  │ No operations in this session                                                  │ 
                  ╰────────────────────────────────────────────────────────────────────────────────╯ 
-                                                                                                    
                                                                                                     
                                                                                                     
                                                                                                     

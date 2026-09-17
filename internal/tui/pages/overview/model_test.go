@@ -60,6 +60,63 @@ func TestOverview_RecentOperationsShowsActionDetailAndTime(t *testing.T) {
 	}
 }
 
+func TestOverview_GeneralUpSinceAndCoreLifetimeRow(t *testing.T) {
+	started := time.Date(2026, 9, 17, 14, 32, 0, 0, time.Local)
+	coreStart := time.Date(2026, 9, 17, 15, 1, 0, 0, time.Local)
+	snapshot := Snapshot{
+		Status:        protocol.Status{StartedAt: started},
+		Core:          protocol.CoreStatus{Status: "running", Version: "v1.19.0", PID: 42, Restarts: 3, StartedAt: coreStart},
+		MihariVersion: "0.1.0",
+		Monitor:       ui.MonitorSnapshot{Traffic: []ui.TrafficPoint{{Up: 1, Down: 2}}, MemoryInUse: 1024},
+	}
+	clock := started.Format("2006-01-02 15:04")
+	coreClock := coreStart.Format("2006-01-02 15:04")
+
+	wide := New()
+	wide.SetSize(100, 30)
+	wide.SetSnapshot(snapshot)
+	wideView := stripANSI(wide.View())
+	if !strings.Contains(wideView, ui.OverviewGeneralTitle) || !strings.Contains(wideView, "Up Since") || !strings.Contains(wideView, clock) {
+		t.Fatalf("general missing Up Since:\n%s", wideView)
+	}
+	foundSameRow := false
+	for _, line := range strings.Split(wideView, "\n") {
+		if strings.Contains(line, "Up Since") && strings.Contains(line, coreClock) && strings.Contains(line, "Restarts") && strings.Contains(line, "3") {
+			foundSameRow = true
+			break
+		}
+	}
+	if !foundSameRow {
+		t.Fatalf("core lifetime should share one row below UL/DL:\n%s", wideView)
+	}
+
+	narrow := New()
+	narrow.SetSize(40, 30)
+	narrow.SetSnapshot(snapshot)
+	narrowView := stripANSI(narrow.View())
+	foundWrapped := false
+	for _, line := range strings.Split(narrowView, "\n") {
+		if strings.Contains(line, "Up Since") && strings.Contains(line, coreClock) && strings.Contains(line, "Restarts") {
+			t.Fatalf("narrow core lifetime should wrap, still one line: %q\n%s", line, narrowView)
+		}
+		if strings.Contains(line, "Up Since") && strings.Contains(line, coreClock) {
+			foundWrapped = true
+		}
+	}
+	if !foundWrapped || !strings.Contains(narrowView, "Restarts") || !strings.Contains(narrowView, "3") {
+		t.Fatalf("narrow wrap missing fields:\n%s", narrowView)
+	}
+
+	wide.SetSnapshot(Snapshot{
+		Status: protocol.Status{},
+		Core:   protocol.CoreStatus{Status: "backoff", Restarts: 1},
+	})
+	empty := stripANSI(wide.View())
+	if !strings.Contains(empty, ui.MissingValue) || !strings.Contains(empty, "Restarts") {
+		t.Fatalf("missing process should dash Up Since and keep Restarts:\n%s", empty)
+	}
+}
+
 func TestOverview_GeneralCardServiceMihariSysProxyTun(t *testing.T) {
 	live := true
 	model := New()

@@ -3,6 +3,7 @@ package overview
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -145,7 +146,8 @@ func (m *Model) View() string {
 // the global arrow pair; then the UL/DL trend sparklines with the live rate
 // fixed at the end of each chart line (no standalone rate row — the rates
 // update every stream tick and would otherwise shift line width).
-// Core PID/restarts stay on the System page (design G6).
+// Up Since and Restarts sit on one row below UL/DL; the row wraps when the
+// card is too narrow to keep the full date and count together.
 func (m *Model) renderCoreCard(inner int) string {
 	coreStatusRaw := valueOr(m.snapshot.Core.Status, ui.UnknownLabel)
 	coreTone := ui.ClassifyStatusTone(coreStatusRaw)
@@ -186,7 +188,22 @@ func (m *Model) renderCoreCard(inner int) string {
 		line1, line2,
 		ui.MonitorUploadShort + " " + ui.Sparkline(upload, chartWidth) + " " + uploadRate,
 		ui.MonitorDownloadShort + " " + ui.Sparkline(download, chartWidth) + " " + downloadRate,
+		formatCoreLifetime(inner, m.snapshot.Core.StartedAt, m.snapshot.Core.Restarts),
 	}, "\n")
+}
+
+func formatCoreLifetime(inner int, started time.Time, restarts uint64) string {
+	clock := ui.MissingValue
+	if !started.IsZero() {
+		clock = started.Local().Format("2006-01-02 15:04")
+	}
+	left := ui.UpSinceLabel + " " + clock
+	right := ui.RestartsLabel + " " + strconv.FormatUint(restarts, 10)
+	line := left + "  " + right
+	if lipgloss.Width(line) <= ui.SectionTextWidth(inner) {
+		return line
+	}
+	return left + "\n" + right
 }
 
 // formatConfigHealth renders the config state as the General card's Health row.
@@ -258,6 +275,7 @@ func (m *Model) renderGeneralBody(inner int) string {
 		{ui.OverviewSysProxyLabel, formatSysProxyValue(m.theme, m.snapshot)},
 		{ui.OverviewTunLabel, formatTunValue(m.theme, m.snapshot)},
 		{ui.OverviewHealthLabel, formatConfigHealth(m.theme, m.snapshot, inner-overviewLabelWidth-2)},
+		{ui.UpSinceLabel, formatOverviewClock(m.snapshot.Status.StartedAt)},
 	}
 	lines := make([]string, 0, len(rows))
 	for _, row := range rows {
@@ -265,6 +283,13 @@ func (m *Model) renderGeneralBody(inner int) string {
 		lines = append(lines, label+"  "+row.value)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func formatOverviewClock(started time.Time) string {
+	if started.IsZero() {
+		return ui.MissingValue
+	}
+	return started.Local().Format("2006-01-02 15:04")
 }
 
 func formatServiceValue(theme ui.Theme, snap Snapshot) string {

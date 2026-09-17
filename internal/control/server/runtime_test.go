@@ -38,7 +38,8 @@ func TestRuntimeStream_RecordsHandshakeRejection(t *testing.T) {
 }
 
 func TestCoreEndpointReturnsRedactedStableStatus(t *testing.T) {
-	store := state.NewStore(state.Snapshot{Revision: 8, Core: state.CoreState{Status: "running", Version: "v1.19.0", PID: 42, Restarts: 1}})
+	started := time.Unix(1_700_000_000, 0).UTC()
+	store := state.NewStore(state.Snapshot{Revision: 8, Core: state.CoreState{Status: "running", Version: "v1.19.0", PID: 42, Restarts: 1, StartedAt: started}})
 	server := New(Options{Token: "token", Store: store, Runtime: &fakeRuntime{snapshot: store.Load()}})
 	request := authorizedRequest(http.MethodGet, "/v1/core", nil)
 	recorder := httptest.NewRecorder()
@@ -52,6 +53,9 @@ func TestCoreEndpointReturnsRedactedStableStatus(t *testing.T) {
 	}
 	if status.Schema != "mihari/v1" || status.Revision != 8 || status.Status != "running" || status.Version != "v1.19.0" || status.PID != 42 {
 		t.Fatalf("status=%#v", status)
+	}
+	if !status.StartedAt.Equal(started) || status.Restarts != 1 {
+		t.Fatalf("started_at=%v restarts=%d", status.StartedAt, status.Restarts)
 	}
 }
 

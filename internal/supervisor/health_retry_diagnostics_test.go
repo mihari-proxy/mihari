@@ -24,7 +24,7 @@ func TestMonitor_ReportsEachRetryAndRecovery(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		s.monitor(ctx, 42, 0, make(chan error, 1))
+		s.monitor(ctx, 42, 0, time.Time{}, make(chan error, 1))
 	}()
 	t.Cleanup(func() {
 		cancel()

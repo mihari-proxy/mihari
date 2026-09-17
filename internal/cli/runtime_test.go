@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/logging"
@@ -43,6 +44,20 @@ func TestCoreStatusJSON(t *testing.T) {
 	var status protocol.CoreStatus
 	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil || status.Version != "v1.19.0" || status.PID != 42 {
 		t.Fatalf("status=%#v err=%v", status, err)
+	}
+}
+
+func TestCoreStatusTextIncludesStarted(t *testing.T) {
+	started := time.Date(2026, 9, 17, 14, 32, 0, 0, time.UTC)
+	client := &fakeRuntimeClient{core: protocol.CoreStatus{Status: "running", Version: "v1.19.0", PID: 42, Restarts: 2, StartedAt: started}}
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	exit := Execute(context.Background(), []string{"core", "status"}, stdout, stderr, Dependencies{RuntimeClient: client})
+	if exit != ExitOK || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stderr=%q", exit, stderr.String())
+	}
+	want := "Core: running\nVersion: v1.19.0\nPID: 42\nRestarts: 2\nStarted: " + started.Format("2006-01-02T15:04:05Z07:00") + "\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout=%q want=%q", stdout.String(), want)
 	}
 }
 
