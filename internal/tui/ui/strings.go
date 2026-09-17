@@ -107,7 +107,7 @@ const (
 	DesiredLabel             = "Desired"
 	ObservedLabel            = "Observed"
 	ConfigApplyingLabel      = "Applying changes..."
-	ConfigHealthOKLabel      = "All Config Desired and Applied Successfully"
+	ConfigHealthOKLabel      = "All Configs Applied"
 	ConfigFailedLabel        = "Config apply failed"
 	CacheMissingLabel        = "Cache missing"
 	NoDefaultPanelLabel      = "no default panel"

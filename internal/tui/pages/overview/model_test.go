@@ -257,10 +257,17 @@ func TestOverview_WideLayoutUsesTwoColumnKPIGrid(t *testing.T) {
 		}
 	}
 
-	// Config state lives in the General Health row with the ok phrase; in a
-	// half-width card the long phrase wraps, so match the visible fragments.
-	if !strings.Contains(wideView, ui.OverviewHealthLabel) || !strings.Contains(wideView, "All Config Desired and") || !strings.Contains(wideView, "Applied Successfully") {
-		t.Fatalf("wide view missing Health row:\n%s", wideView)
+	// Config state lives in the General Health row. Keep the ok phrase short
+	// enough that a half-width card shows it on the same line as the label.
+	foundHealthOK := false
+	for _, line := range strings.Split(wideView, "\n") {
+		if strings.Contains(line, ui.OverviewHealthLabel) && strings.Contains(line, "All Configs Applied") {
+			foundHealthOK = true
+			break
+		}
+	}
+	if !foundHealthOK {
+		t.Fatalf("wide view missing unwrapped Health row %q:\n%s", "All Configs Applied", wideView)
 	}
 
 	// General and Core titles should share a visual row when joined horizontally.

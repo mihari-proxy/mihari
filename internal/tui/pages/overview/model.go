@@ -190,9 +190,8 @@ func (m *Model) renderCoreCard(inner int) string {
 }
 
 // formatConfigHealth renders the config state as the General card's Health row.
-// The ok phrase is long, so it wraps within the value column with continuation
-// lines indented under the value; the raw Desired/Observed revision numbers
-// stay on the System page.
+// wrapStatusDot still wraps if the value column is too narrow; the raw
+// Desired/Observed revision numbers stay on the System page.
 func formatConfigHealth(theme ui.Theme, snap Snapshot, valueWidth int) string {
 	current := snap.Status.Config
 	if current == nil {
