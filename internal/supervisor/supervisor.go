@@ -178,7 +178,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			s.report(ctx, "core.start.failed", slog.LevelError, err)
 		}
 		if err == nil {
-			processStarted := s.options.Now()
+			processStarted := s.options.Now().UTC()
 			s.observe(Observation{Status: StatusStarting, PID: child.PID(), Restarts: restarts, StartedAt: processStarted})
 			var explicit bool
 			err, explicit = s.runChild(ctx, child, restarts, processStarted)

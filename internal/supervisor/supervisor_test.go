@@ -14,7 +14,7 @@ func TestSupervisorPublishesProcessStartTimeAndClearsOnBackoff(t *testing.T) {
 	starter := newFakeStarter()
 	waiter := newFakeWaiter()
 	observations := &observationLog{}
-	processStart := time.Unix(1_700_000_000, 0).UTC()
+	processStart := time.Unix(1_700_000_000, 0).In(time.FixedZone("CST", 8*3600))
 	supervisor := New(Options{
 		Starter: starter,
 		Waiter:  waiter,
@@ -27,7 +27,7 @@ func TestSupervisorPublishesProcessStartTimeAndClearsOnBackoff(t *testing.T) {
 
 	child := starter.next(t)
 	waitForObservation(t, observations, func(observation Observation) bool {
-		return observation.Status == StatusStarting && observation.PID == child.pid && observation.StartedAt.Equal(processStart)
+		return observation.Status == StatusStarting && observation.PID == child.pid && observation.StartedAt.Equal(processStart) && observation.StartedAt.Location() == time.UTC
 	})
 	child.exit(errors.New("crashed"))
 	waiter.next(t)
