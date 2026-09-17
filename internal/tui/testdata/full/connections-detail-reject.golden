@@ -1,0 +1,40 @@
+ Mihari  ·  ●  ·  0 conn  ·  ↑      0 B/s  ↓      0 B/s  ·  0 B                                       Offline
+   1 Overview
+   2 Proxies
+ › 3 Conns         ╭───Connection details─────────────────────────────────────────────────────────────────╮
+   4 Rules         │ ○ Closed                                                                             │
+   5 Logs          │                                                                                      │
+   6 Subs          │ api.example.test:443                                                                 │
+   7 Web GUI       │                                                                                      │
+   8 System        │ ↑ Upload                                    ↓ Download                               │
+                   │ Last rate   0 B/s                           Last rate   0 B/s                        │
+                   │ Sent        0 B                             Received    0 B                          │
+                   │                                                                                      │
+                   │ ● APPLICATION                                                                        │
+                   │ │ browser.exe                                                                        │
+                   │ │ Source            198.18.0.1:52341                                                 │
+                   │ │                                                                                    │
+                   │ ● ROUTING                                                                            │
+                   │ │ Inbound           DEFAULT-TUN · TUN · TCP                                          │
+                   │ │ Rule Matched      DomainSuffix · example.test                                      │
+                   │ │                                                                                    │
+                   │ │ Local                                                                              │
+                   │ │   └─ REJECT                                                                        │
+                   │ │                                                                                    │
+                   │ ● OUTBOUND                                                                           │
+                   │ │ REJECT                                                                             │
+                   │ │ Remote            —                                                                │
+                   │ │ GeoIP             —                                                                │
+                   │ ┆                                                                                    │
+                   │ ○ DESTINATION                                                                        │
+                   │   Host              api.example.test                                                 │
+                   │   Destination       203.0.113.24:443                                                 │
+                   │   GeoIP             Unavailable                                                      │
+                   │                                                                                      │
+                   │ Started           2026-09-16 10:30:00                                                │
+                   │ Closed observed   2026-09-16 10:31:00                                                │
+                   │ Connection ID     route-state                                                        │
+                   ╰──────────────────────────────────────────────────────────────────────────────────────╯
+
+
+ F2 details  Enter/Esc close  ↑/↓ scroll  ? help  q quit

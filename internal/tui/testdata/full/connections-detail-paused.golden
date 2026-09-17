@@ -3,26 +3,26 @@
    2 Proxies      │ ● Active · Paused                                                            │
  › 3 Conns        │                                                                              │
    4 Rules        │ api.example.test:443                                                         │
-   5 Logs         │ chrome.exe · Mixed · TCP                                                     │
-   6 Subs         │                                                                              │
-   7 Web GUI      │ TRAFFIC                                                                      │
-   8 System       │ ↓ Download      3.0 KiB/s               ↑ Upload        1.0 KiB/s            │
-                  │ Received        4.0 KiB                 Sent            2.0 KiB              │
+   5 Logs         │                                                                              │
+   6 Subs         │ ↑ Upload                                ↓ Download                           │
+   7 Web GUI      │ Rate        1.0 KiB/s                   Rate        3.0 KiB/s                │
+   8 System       │ Sent        2.0 KiB                     Received    4.0 KiB                  │
                   │                                                                              │
-                  │ ENDPOINTS                                                                    │
-                  │ Source            192.168.1.12:52341                                         │
-                  │ Destination       203.0.113.24:443                                           │
-                  │ Host              api.example.test                                           │
-                  │                                                                              │
-                  │ ROUTING                                                                      │
-                  │ Rule              DomainSuffix                                               │
-                  │ Rule payload      example.test                                               │
-                  │ Chain             Proxy → Auto Select → Japan 01                             │
-                  │ GeoIP             Unavailable                                                │
-                  │                                                                              │
-                  │ METADATA                                                                     │
-                  │ Process           chrome.exe                                                 │
-                  │ Process path      C:/Apps/Browser/chrome.exe                                 │
-                  │ 1–21 / 24                                                                    │
+                  │ ● APPLICATION                                                                │
+                  │ │ chrome.exe                                                                 │
+                  │ │ Source            192.168.1.12:52341                                       │
+                  │ │ Process path      C:/Apps/Browser/chrome.exe                               │
+                  │ │                                                                            │
+                  │ ● ROUTING                                                                    │
+                  │ │ Inbound           mixed-in · HTTP · TCP                                    │
+                  │ │ Rule Matched      DomainSuffix · example.test                              │
+                  │ │                                                                            │
+                  │ │ Proxy                                                                      │
+                  │ │   └─ Auto Select                                                           │
+                  │ │      └─ Japan 01                                                           │
+                  │ │                                                                            │
+                  │ ● OUTBOUND                                                                   │
+                  │ │ Japan 01                                                                   │
+                  │ 1–21 / 31                                                                    │
                   ╰──────────────────────────────────────────────────────────────────────────────╯
  F2 details  Enter/Esc close  ↑/↓ scroll  ? help  q quit

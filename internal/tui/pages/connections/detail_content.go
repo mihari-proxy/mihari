@@ -1,7 +1,6 @@
 package connections
 
 import (
-	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -11,8 +10,9 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
-// bodyLines groups the observed fields and wraps them before viewport slicing.
+// bodyLines attaches observations to their route stages before viewport slicing.
 func (d *Detail) bodyLines(width int) []string {
+	width = max(1, width)
 	theme := ui.DefaultTheme()
 	c := d.connection
 	meta := c.Metadata
@@ -20,32 +20,55 @@ func (d *Detail) bodyLines(width int) []string {
 	if host == "" {
 		host = meta.DestinationIP
 	}
-	parts := []string{
-		theme.Title.Render(ansi.Hardwrap(detailEndpoint(host, meta.DestinationPort), width, true)),
-		theme.Muted.Render(ansi.Wrap(value(meta.Process)+" · "+value(meta.Type)+" · "+value(meta.Network), width, "")),
-		"", theme.Title.Render("TRAFFIC"), d.trafficView(width),
-		"", theme.Title.Render("ENDPOINTS"),
-		detailField("Source", detailEndpoint(meta.SourceIP, meta.SourcePort), width),
-		detailField("Destination", detailEndpoint(meta.DestinationIP, meta.DestinationPort), width),
-		detailField("Host", value(meta.Host), width),
-	}
-	optional := func(label, text string) {
+	inner := max(1, width-2)
+	app := []string{ansi.Hardwrap(value(meta.Process), inner, true),
+		detailField("Source", detailEndpoint(meta.SourceIP, meta.SourcePort), inner)}
+	optional := func(fields *[]string, label, text string) {
 		if text != "" {
-			parts = append(parts, detailField(label, text, width))
+			*fields = append(*fields, detailField(label, text, inner))
 		}
 	}
-	optional("Sniff host", meta.SniffHost)
-	optional("Remote", meta.RemoteDestination)
-	parts = append(parts, "", theme.Title.Render("ROUTING"),
-		detailField("Rule", value(c.Rule), width),
-		detailField("Rule payload", value(c.RulePay), width),
-		detailField(ui.ChainLabel, value(ui.DisplayProxyName(strings.Join(c.Chains, " → "))), width),
-		detailField(ui.GeoIPSectionTitle, d.geoIPView(), width),
-		"", theme.Title.Render("METADATA"),
-		detailField("Process", value(meta.Process), width))
-	optional("Process path", meta.ProcessPath)
-	parts = append(parts, detailField("Inbound name", value(meta.InboundName), width))
-	optional("Inbound user", meta.InboundUser)
+	optional(&app, "Process path", meta.ProcessPath)
+	inbound := strings.ToUpper(value(meta.Type)) + " · " + strings.ToUpper(value(meta.Network))
+	if meta.InboundName != "" {
+		inbound = meta.InboundName + " · " + inbound
+	}
+	rule := value(c.Rule)
+	if c.RulePay != "" {
+		rule += " · " + c.RulePay
+	}
+	routing := []string{detailField("Inbound", inbound, inner)}
+	optional(&routing, "Inbound user", meta.InboundUser)
+	routing = append(routing, detailField("Rule Matched", rule, inner), "", detailSelectionTree(c.Chains, inner))
+
+	outbound := ui.MissingValue
+	if len(c.Chains) > 0 {
+		outbound = value(ui.DisplayProxyName(c.Chains[0]))
+	}
+	rejected := outbound == "REJECT" || outbound == "REJECT-DROP"
+	outbound = ansi.Hardwrap(outbound, inner, true)
+	if rejected {
+		outbound = theme.Danger.Render(outbound)
+	}
+	out := []string{outbound,
+		detailField("Remote", value(meta.RemoteDestination), inner),
+		detailField("GeoIP", d.geoIPForAddress(meta.RemoteDestination), inner)}
+	dest := []string{detailField("Host", value(meta.Host), inner),
+		detailField("Destination", detailEndpoint(meta.DestinationIP, meta.DestinationPort), inner)}
+	optional(&dest, "Sniff host", meta.SniffHost)
+	dest = append(dest, detailField("GeoIP", d.geoIPForAddress(meta.DestinationIP), inner))
+	link := "│"
+	if rejected {
+		link = "┆"
+	}
+	parts := []string{
+		theme.Title.Render(ansi.Hardwrap(detailEndpoint(host, meta.DestinationPort), width, true)),
+		"", d.trafficView(width), "",
+		detailStage("APPLICATION", app, width, "│", false),
+		detailStage("ROUTING", routing, width, "│", false),
+		detailStage("OUTBOUND", out, width, link, false),
+		detailStage("DESTINATION", dest, width, "", rejected), "",
+	}
 	parts = append(parts, detailField("Started", detailTime(c.Start), width))
 	if !c.ClosedAt.IsZero() {
 		parts = append(parts, detailField("Closed observed", detailTime(c.ClosedAt), width))
@@ -56,23 +79,26 @@ func (d *Detail) bodyLines(width int) []string {
 
 // trafficView stacks narrow layouts and distinguishes final from live rates.
 func (d *Detail) trafficView(width int) string {
-	downLabel, upLabel := "↓ Download", "↑ Upload"
+	theme := ui.DefaultTheme()
+	rateLabel := "Rate"
 	if d.closed {
-		downLabel, upLabel = "Last download rate", "Last upload rate"
+		rateLabel = "Last rate"
 	}
 	columnWidth := width
 	if width >= 64 {
 		columnWidth = (width - 4) / 2
 	}
-	labelWidth := max(16, ansi.StringWidth(downLabel)+2)
-	down := detailFieldColumns(downLabel, ui.FormatRate(d.connection.DownloadSpeed), columnWidth, labelWidth) + "\n" +
-		detailFieldColumns("Received", ui.FormatBytes(d.connection.Download), columnWidth, labelWidth)
-	up := detailFieldColumns(upLabel, ui.FormatRate(d.connection.UploadSpeed), columnWidth, labelWidth) + "\n" +
-		detailFieldColumns("Sent", ui.FormatBytes(d.connection.Upload), columnWidth, labelWidth)
-	if width >= 64 {
-		return lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(columnWidth+4).Render(down), up)
+	column := func(title, totalLabel, rate, total string, style lipgloss.Style) string {
+		return style.Render(ansi.Hardwrap(title, columnWidth, true)) + "\n" +
+			detailFieldColumns(rateLabel, style.Render(rate), columnWidth, 12) + "\n" +
+			detailFieldColumns(totalLabel, style.Render(total), columnWidth, 12)
 	}
-	return down + "\n" + up
+	up := column("↑ Upload", "Sent", ui.FormatRate(d.connection.UploadSpeed), ui.FormatBytes(d.connection.Upload), theme.Success)
+	down := column("↓ Download", "Received", ui.FormatRate(d.connection.DownloadSpeed), ui.FormatBytes(d.connection.Download), theme.Info)
+	if width >= 64 {
+		return lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(columnWidth+4).Render(up), down)
+	}
+	return up + "\n" + down
 }
 
 // detailField wraps values before adding hanging indentation. Hardwrap preserves
@@ -116,23 +142,4 @@ func detailTime(at time.Time) string {
 		return ui.MissingValue
 	}
 	return at.Local().Format("2006-01-02 15:04:05")
-}
-
-// geoIPView associates every result with its address and hides lookup error causes.
-func (d *Detail) geoIPView() string {
-	if !d.geoIPReady {
-		return ui.LoadingLabel
-	}
-	if d.geoIPErr != nil || len(d.geoIP) == 0 {
-		return ui.UnavailableTitle
-	}
-	lines := make([]string, 0, len(d.geoIP)*2)
-	for _, record := range d.geoIP {
-		asn := ui.MissingValue
-		if record.ASN != 0 {
-			asn = fmt.Sprintf("AS%d", record.ASN)
-		}
-		lines = append(lines, record.Address+" · "+value(record.CountryCode)+" · "+asn, value(record.Organization))
-	}
-	return strings.Join(lines, "\n")
 }
