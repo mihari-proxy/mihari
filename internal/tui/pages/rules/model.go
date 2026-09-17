@@ -220,6 +220,10 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, m.reloadProviders()
 	}
 
+	if key, ok := message.(tea.KeyPressMsg); ok && key.String() == "ctrl+f" {
+		cmd, _ := m.FocusSearch()
+		return m, cmd
+	}
 	if m.searching {
 		return m.updateSearch(message)
 	}
@@ -682,6 +686,14 @@ func (m *Model) updateSearch(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, command
 	}
 	return m, nil
+}
+
+// FocusSearch focuses the query at its end unless a page dialog owns input.
+func (m *Model) FocusSearch() (tea.Cmd, bool) {
+	if m.detail != nil {
+		return nil, false
+	}
+	return m.startSearch(), true
 }
 
 func (m *Model) startSearch() tea.Cmd {

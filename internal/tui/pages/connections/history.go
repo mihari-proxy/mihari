@@ -6,6 +6,8 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
+const defaultHistoryLimit = 5000
+
 type History struct {
 	limit      int
 	active     []protocol.Connection
@@ -15,7 +17,7 @@ type History struct {
 
 func NewHistory(limit int) *History {
 	if limit <= 0 {
-		limit = 500
+		limit = defaultHistoryLimit
 	}
 	return &History{limit: limit}
 }

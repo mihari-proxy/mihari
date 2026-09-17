@@ -1,0 +1,28 @@
+ Mihari  ·  ●  ·  0 conn  ·  ↑      0 B/s  ↓      0 B/s  ·  0 B                             Offline 
+   1 Overview    ╭───Controls─────────────────────────────────────────────────────────────────────╮ 
+   2 Proxies     │ Level: DEBUG+  Wrap: ● Off  Pause: ● Off  Export                               │ 
+   3 Conns       │ / Search…                                                                      │ 
+   4 Rules       ╰────────────────────────────────────────────────────────────────────────────────╯ 
+ › 5 Logs        ╭───Logs─────────────────────────────────────────────────────────────────────────╮ 
+   6 Subs        │   Time      Level    Message                                                   │ 
+   7 Web GUI     │   ──────────────────────────────────────────────────────────────────────────── │ 
+   8 System      │ No matching logs.                                                              │ 
+                 ╰────────────────────╭──────────────────────────────────────╮────────────────────╯ 
+                                      │ Log levels                           │                0/0   
+                                      │ › [x] Select all                     │                      
+                                      │   [x] DEBUG                          │                      
+                                      │   [x] INFO                           │                      
+                                      │   [x] WARNING                        │                      
+                                      │   [x] ERROR                          │                      
+                                      │ Space toggle                         │                      
+                                      │ Enter apply · Esc cancel             │                      
+                                      ╰──────────────────────────────────────╯                      
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+ F2 details  ↑/↓ level  Space toggle  Enter apply  Esc cancel                                       

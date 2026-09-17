@@ -272,6 +272,8 @@ func TestCatalog_KeysAppearInHandlerSource(t *testing.T) {
 			}
 		case b.Mode == ModeColumns:
 			return []string{filepath.Join(tuiDir, "pages", "connections", "model.go")}
+		case b.Mode == ModeLogFilter:
+			return []string{filepath.Join(tuiDir, "pages", "logs", "level_filter.go")}
 		case b.Mode == ModeRouting:
 			return []string{filepath.Join(tuiDir, "pages", "proxies", "routing.go")}
 		case b.Mode == ModeForm:
@@ -341,9 +343,9 @@ func TestRenderFooter_MatchesCurrentLayout(t *testing.T) {
 		{"rail", RenderRailFooter(), "F2 details  ↑/↓ page  Enter open  ? help  q quit"},
 		{"overview", RenderFooter(PageOverview, "", FooterOpt{}), "F2 details  Esc back  ? help  q quit"},
 		{"proxies", RenderFooter(PageProxies, "", FooterOpt{}), "F2 details  Esc back  Enter expand  t test  Ctrl+T test all  ? help  q quit"},
-		{"connections", RenderFooter(PageConnections, "", FooterOpt{}), "F2 details  Esc back  / search  x close  p pause  Enter details  ? help  q quit"},
-		{"rules", RenderFooter(PageRules, "", FooterOpt{}), "F2 details  Esc back  / search  r reload  u update  Ctrl+U update all  Enter details  ? help  q quit"},
-		{"logs", RenderFooter(PageLogs, "", FooterOpt{}), "F2 details  Esc back  / search  p pause  w wrap  G newest  e export  Enter details  ? help  q quit"},
+		{"connections", RenderFooter(PageConnections, "", FooterOpt{}), "F2 details  Esc back  / search · Ctrl+F  x close  p pause  Enter details  ? help  q quit"},
+		{"rules", RenderFooter(PageRules, "", FooterOpt{}), "F2 details  Esc back  / search · Ctrl+F  r reload  u update  Ctrl+U update all  Enter details  ? help  q quit"},
+		{"logs", RenderFooter(PageLogs, "", FooterOpt{}), "F2 details  Esc back  / search · Ctrl+F  p pause  w wrap  G newest  e export  Enter details  ? help  q quit"},
 		{"subscriptions", RenderFooter(PageSubscriptions, "", FooterOpt{}), "F2 details  Esc back  Enter details  a add  Space toggle  p mode  r refresh  Ctrl+R refresh all  u use  d delete  ? help  q quit"},
 		{"webgui-off", RenderFooter(PageWebGUI, "", FooterOpt{}), "F2 details  Esc back  ? help  q quit"},
 		{"webgui-on", RenderFooter(PageWebGUI, "", FooterOpt{WebGUIAvailable: true}), "F2 details  Esc back  ↑/↓ panel  Tab move  Enter activate  o open  ? help  q quit"},

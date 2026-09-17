@@ -44,7 +44,8 @@ type Model struct {
 	focused        int
 	following      bool
 	scrollUnread   int
-	level          string
+	levels         levelSelection
+	levelDialog    *levelDialogState
 	query          string
 	queryCursor    int
 	searching      bool
@@ -61,7 +62,7 @@ func New(capacity int) *Model {
 	if capacity <= 0 {
 		capacity = defaultCapacity
 	}
-	return &Model{buffer: NewBuffer(capacity), following: true, focus: focusControl, theme: ui.DefaultTheme()}
+	return &Model{buffer: NewBuffer(capacity), following: true, levels: allLevels, focus: focusControl, theme: ui.DefaultTheme()}
 }
 
 func (m *Model) ID() ui.PageID { return ui.PageLogs }
@@ -71,6 +72,8 @@ func (m *Model) SetContentFocused(focused bool) { m.contentFocused = focused }
 
 func (m *Model) HelpMode() string {
 	switch {
+	case m.levelDialog != nil:
+		return ui.ModeLogFilter
 	case m.detail != nil:
 		return ui.ModeDetail
 	case m.searching:
@@ -105,7 +108,7 @@ func (m *Model) Append(entry Entry) {
 }
 
 func (m *Model) visibleCount() int {
-	if m.level == "" && strings.TrimSpace(m.query) == "" {
+	if m.levels == allLevels && strings.TrimSpace(m.query) == "" {
 		return m.buffer.Len()
 	}
 	return len(m.visibleEntries())
@@ -116,13 +119,20 @@ func (m *Model) Observe(entry protocol.LogEntry, observedAt time.Time) {
 }
 
 func (m *Model) SetFilter(level, query string) {
-	m.level, m.query = level, query
+	m.levels, m.query = selectionForLevel(level), query
 	m.reconcileFocus()
 }
 
 func (m *Model) Unread() int { return m.scrollUnread + m.buffer.Unread() }
 
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
+	if m.levelDialog != nil {
+		return m.updateLevelDialog(message)
+	}
+	if key, ok := message.(tea.KeyPressMsg); ok && key.String() == "ctrl+f" {
+		cmd, _ := m.FocusSearch()
+		return m, cmd
+	}
 	if m.searching {
 		return m.updateSearch(message)
 	}
@@ -218,10 +228,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 }
 
 func (m *Model) View() string {
-	level := valueOr(m.level, ui.FilterAllLabel)
 	controlFocused := m.contentFocused && m.focus == focusControl
 	control := ui.RenderControlStrip(m.theme, []string{
-		fmt.Sprintf("%s: %s", ui.LevelLabel, ui.StyleLogLevel(m.theme, level)),
+		fmt.Sprintf("%s: %s", ui.LevelLabel, m.renderLevelSummary()),
 		fmt.Sprintf("%s: %s", ui.WrapLabel, ui.StatusDot(m.theme, ui.ClassifyStatusTone(onOff(m.wrap)), onOff(m.wrap))),
 		fmt.Sprintf("%s: %s", ui.PauseLabel, ui.StatusDot(m.theme, ui.ClassifyStatusTone(onOff(m.buffer.Paused())), onOff(m.buffer.Paused()))),
 		ui.ExportLabel,
@@ -273,6 +282,9 @@ func (m *Model) View() string {
 	if m.detail != nil {
 		content = m.renderDetail()
 	}
+	if m.levelDialog != nil {
+		return m.renderLevelDialog(content)
+	}
 	return content
 }
 
@@ -305,7 +317,7 @@ func (m *Model) visibleEntries() []Entry {
 	result := make([]Entry, 0, len(entries))
 	visible := []string{"time", "level", "message"}
 	for _, entry := range entries {
-		if m.level != "" && normalizeLevel(entry.Log.Level) != normalizeLevel(m.level) {
+		if !m.levels.matches(entry.Log.Level) {
 			continue
 		}
 		timestamp := ui.MissingValue
@@ -388,8 +400,7 @@ func (m *Model) renderDetail() string {
 func (m *Model) activateControl() tea.Cmd {
 	switch m.controlIndex {
 	case 0:
-		m.level = cycleValue(normalizeLevel(m.level), []string{"debug", "info", "warn", "error"})
-		m.reconcileFocus()
+		m.openLevelDialog()
 	case 1:
 		m.wrap = !m.wrap
 	case 2:
@@ -459,6 +470,14 @@ func (m *Model) updateSearch(message tea.Msg) (ui.Page, tea.Cmd) {
 	return m, nil
 }
 
+// FocusSearch focuses the query at its end unless a page dialog owns input.
+func (m *Model) FocusSearch() (tea.Cmd, bool) {
+	if m.detail != nil || m.levelDialog != nil {
+		return nil, false
+	}
+	return m.startSearch(), true
+}
+
 func (m *Model) startSearch() tea.Cmd {
 	m.searching = true
 	m.focus = focusSearch
@@ -518,28 +537,6 @@ func wrapText(value string, width int) []string {
 		runes = runes[end:]
 	}
 	return lines
-}
-
-func cycleValue(current string, values []string) string {
-	if current == "" {
-		return values[0]
-	}
-	for index, value := range values {
-		if strings.EqualFold(current, value) {
-			if index+1 == len(values) {
-				return ""
-			}
-			return values[index+1]
-		}
-	}
-	return values[0]
-}
-
-func valueOr(value, fallback string) string {
-	if value == "" {
-		return fallback
-	}
-	return value
 }
 
 func onOff(value bool) string {

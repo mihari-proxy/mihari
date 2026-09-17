@@ -666,6 +666,12 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model.dispatchPage(message)
 	}
 	name := key.String()
+	if page, ok := model.pages[model.active].(*logspage.Model); ok && page.HasLevelDialog() {
+		if Classify(model.width, model.height) == ui.TooSmall && name != "esc" {
+			return model, nil
+		}
+		return model.dispatchPage(message)
+	}
 	if model.active == ui.PageSubscriptions {
 		if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok && page.HasDialog() {
 			return model.dispatchPage(message)
@@ -679,6 +685,16 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if Classify(model.width, model.height) == ui.TooSmall {
 		return model, nil
+	}
+	if name == "ctrl+f" {
+		if page, ok := model.pages[model.active].(ui.SearchFocusable); ok {
+			if _, focused := page.FocusSearch(); focused {
+				model.focus = ui.Focus{Area: ui.FocusContent, Page: model.active}
+				// Publish text ownership synchronously; a fast digit key must not navigate.
+				model.inputMode = ui.InputText
+			}
+			return model, nil
+		}
 	}
 	if page, ok := model.pages[model.active].(ui.HelpModeProvider); ok && page.HelpMode() == ui.ModeRouting {
 		return model.dispatchPage(message)

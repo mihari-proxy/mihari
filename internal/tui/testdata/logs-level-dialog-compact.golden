@@ -4,19 +4,19 @@
    3 Conns     │ / Search…                                            │ 
    4 Rules     ╰──────────────────────────────────────────────────────╯ 
  › 5 Logs      ╭───Logs───────────────────────────────────────────────╮ 
-   6 Subs      │   Time      Level    Message                         │ 
-   7 Web GUI   │   ────────────────────────────────────────────────── │ 
-   8 System    │   22:13:20  INFO     daemon started                  │ 
-               │   22:13:21  WARNING  geoip database missing          │ 
-               │   22:13:22  ERROR    upstream connection reset       │ 
-               ╰──────────────────────────────────────────────────────╯ 
-                                                                  —/3   
+   6 Subs      │   Time╭──────────────────────────────────────╮       │ 
+   7 Web GUI   │   ────│ Log levels                           │────── │ 
+   8 System    │ No mat│ › [x] Select all                     │       │ 
+               ╰───────│   [x] DEBUG                          │───────╯ 
+                       │   [x] INFO                           │   0/0   
+                       │   [x] WARNING                        │         
+                       │   [x] ERROR                          │         
+                       │ Space toggle                         │         
+                       │ Enter apply · Esc cancel             │         
+                       ╰──────────────────────────────────────╯         
                                                                         
                                                                         
                                                                         
                                                                         
                                                                         
-                                                                        
-                                                                        
-                                                                        
- F2 details  Esc back  / search · Ctrl+F  p pause  ? help  q quit       
+ F2 details  ↑/↓ level  Space toggle  Enter apply  Esc cancel           

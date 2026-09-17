@@ -36,3 +36,9 @@ type Page interface {
 	Update(tea.Msg) (Page, tea.Cmd)
 	View() string
 }
+
+// SearchFocusable allows the shell to enter a page query from the navigation rail.
+// A false result means a page-owned dialog must retain focus.
+type SearchFocusable interface {
+	FocusSearch() (tea.Cmd, bool)
+}

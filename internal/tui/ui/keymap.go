@@ -33,6 +33,8 @@ const (
 	ModeLoggingLevel = "logging-level"
 	// ModeLoggingApplying identifies a submitted logging level change.
 	ModeLoggingApplying = "logging-applying"
+	// ModeLogFilter identifies the Logs page display-level multi-select dialog.
+	ModeLogFilter = "log-filter"
 	// ModeExportLogs identifies the shared log export overlay.
 	ModeExportLogs = "export-logs"
 	ModeConfirm    = "confirm"
@@ -89,7 +91,8 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"ctrl+t"}, Display: "Ctrl+T", Label: "test all", Footer: "Ctrl+T test all", Scope: ScopePage, Page: PageProxies},
 		{Keys: []string{"up", "down", "left", "right"}, Display: "↑/↓/←/→", Label: "move; at a group header, → focuses Locate and ← returns to the header", Scope: ScopePage, Page: PageProxies},
 
-		{Keys: []string{"/"}, Display: "/", Label: "search", Footer: "/ search", Scope: ScopePage, Page: PageConnections},
+		{Keys: []string{"/"}, Display: "/", Label: "search from page content", Footer: "/ search · Ctrl+F", Scope: ScopePage, Page: PageConnections},
+		{Keys: []string{"ctrl+f"}, Display: "Ctrl+F", Label: "focus search from the rail or page content", Scope: ScopePage, Page: PageConnections},
 		{Keys: []string{"x"}, Display: "x", Label: "close the focused connection", Footer: "x close", Scope: ScopePage, Page: PageConnections},
 		{Keys: []string{"p"}, Display: "p", Label: "pause or resume", Footer: "p pause", Scope: ScopePage, Page: PageConnections},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "open details or activate a control", Footer: "Enter details", Scope: ScopePage, Page: PageConnections},
@@ -97,14 +100,16 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"tab"}, Display: "Tab", Label: "move between controls", Scope: ScopePage, Page: PageConnections},
 		{Keys: []string{"up", "down", "left", "right"}, Display: "↑/↓/←/→", Label: "move", Scope: ScopePage, Page: PageConnections},
 
-		{Keys: []string{"/"}, Display: "/", Label: "search", Footer: "/ search", Scope: ScopePage, Page: PageRules},
+		{Keys: []string{"/"}, Display: "/", Label: "search from page content", Footer: "/ search · Ctrl+F", Scope: ScopePage, Page: PageRules},
+		{Keys: []string{"ctrl+f"}, Display: "Ctrl+F", Label: "focus search from the rail or page content", Scope: ScopePage, Page: PageRules},
 		{Keys: []string{"r"}, Display: "r", Label: "reload", Footer: "r reload", Scope: ScopePage, Page: PageRules},
 		{Keys: []string{"u"}, Display: "u", Label: "update the focused provider", Footer: "u update", Scope: ScopePage, Page: PageRules},
 		{Keys: []string{"ctrl+u"}, Display: "Ctrl+U", Label: "update all providers", Footer: "Ctrl+U update all", Scope: ScopePage, Page: PageRules},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "open details or activate a control", Footer: "Enter details", Scope: ScopePage, Page: PageRules},
 		{Keys: []string{"up", "down", "left", "right"}, Display: "↑/↓/←/→", Label: "move", Scope: ScopePage, Page: PageRules},
 
-		{Keys: []string{"/"}, Display: "/", Label: "search", Footer: "/ search", Scope: ScopePage, Page: PageLogs},
+		{Keys: []string{"/"}, Display: "/", Label: "search from page content", Footer: "/ search · Ctrl+F", Scope: ScopePage, Page: PageLogs},
+		{Keys: []string{"ctrl+f"}, Display: "Ctrl+F", Label: "focus search from the rail or page content", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"p"}, Display: "p", Label: "pause or resume", Footer: "p pause", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"w"}, Display: "w", Label: "wrap", Footer: "w wrap", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"G"}, Display: "G", Label: "jump to newest", Footer: "G newest", Scope: ScopePage, Page: PageLogs},
@@ -136,6 +141,10 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"enter"}, Display: "Enter", Label: "activate the focused row", Footer: "Enter activate", Scope: ScopePage, Page: PageSystem},
 		{Keys: []string{"up", "down"}, Display: "↑/↓", Label: "move", Scope: ScopePage, Page: PageSystem},
 
+		{Keys: []string{"up", "down"}, Display: "↑/↓", Label: "select a level", Footer: "↑/↓ level", Scope: ScopeMode, Mode: ModeLogFilter},
+		{Keys: []string{"space"}, Display: "Space", Label: "toggle the selected level or Select all", Footer: "Space toggle", Scope: ScopeMode, Mode: ModeLogFilter},
+		{Keys: []string{"enter"}, Display: "Enter", Label: "apply selected levels", Footer: "Enter apply", Scope: ScopeMode, Mode: ModeLogFilter},
+		{Keys: []string{"esc"}, Display: "Esc", Label: "discard level selection", Footer: "Esc cancel", Scope: ScopeMode, Mode: ModeLogFilter},
 		{Display: "type", Label: "filter the list", Footer: "Type to filter", Scope: ScopeMode, Mode: ModeSearch},
 		{Keys: []string{"left", "right"}, Display: "←/→", Label: "move cursor", Footer: "←/→ cursor", Scope: ScopeMode, Mode: ModeSearch},
 		{Keys: []string{"up", "down"}, Display: "↑/↓", Label: "leave the field", Footer: "↑/↓ leave", Scope: ScopeMode, Mode: ModeSearch},
@@ -266,7 +275,7 @@ func renderPageFooter(page PageID, mode string, opt FooterOpt) string {
 	switch mode {
 	case ModeSubscriptionInput, ModeSubscriptionSubmit, ModeSubscriptionSaving, ModeSubscriptionCycle, ModeSubscriptionUnknown, ModeSubscriptionWaiting, ModeSubscriptionConfirm:
 		return joinFooter(footerTokens(func(b KeyBinding) bool { return b.Mode == mode }))
-	case ModeSearch:
+	case ModeSearch, ModeLogFilter:
 		tokens := footerTokens(func(b KeyBinding) bool {
 			return b.Mode == mode && (b.Page == "" || b.Page == page)
 		})
@@ -398,6 +407,8 @@ func modeTitle(mode string) string {
 		return "Detail"
 	case ModeColumns:
 		return "Columns"
+	case ModeLogFilter:
+		return "Log levels"
 	case ModeForm:
 		return "Form"
 	case ModeSubscriptionInput:

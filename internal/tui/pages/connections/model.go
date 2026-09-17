@@ -115,7 +115,7 @@ func New(client Client, newOperationID func() string) *Model {
 		newOperationID = defaultConnectionOperationID
 	}
 	return &Model{
-		client: client, newOperationID: newOperationID, history: NewHistory(500),
+		client: client, newOperationID: newOperationID, history: NewHistory(defaultHistoryLimit),
 		focus: pageFocus{kind: focusControl}, source: allSources,
 		// Default 5 columns = the 5 highest-priority slots in allColumnIDs order,
 		// so the checked set matches what a 100-column terminal actually shows.
@@ -218,6 +218,10 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	}
 	if m.columnsOpen {
 		return m.updateColumns(message)
+	}
+	if key, ok := message.(tea.KeyPressMsg); ok && key.String() == "ctrl+f" {
+		cmd, _ := m.FocusSearch()
+		return m, cmd
 	}
 	if m.searching {
 		return m.updateSearch(message)
@@ -430,6 +434,14 @@ func (m *Model) updateSearch(message tea.Msg) (ui.Page, tea.Cmd) {
 	}
 	// Page shortcuts disabled while typing (left/right already handled as cursor).
 	return m, nil
+}
+
+// FocusSearch focuses the query at its end unless a page dialog owns input.
+func (m *Model) FocusSearch() (tea.Cmd, bool) {
+	if m.detail != nil || m.columnsOpen {
+		return nil, false
+	}
+	return m.startSearch(), true
 }
 
 func (m *Model) startSearch() tea.Cmd {
