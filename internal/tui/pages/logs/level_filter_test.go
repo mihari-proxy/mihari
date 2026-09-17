@@ -174,3 +174,18 @@ func TestLevelFilter_EveryCombinationMatchesOnlyItsSelectedLevels(t *testing.T) 
 		})
 	}
 }
+
+func TestLevelFilter_EmptyLevelRequiresFullSelection(t *testing.T) {
+	m := New(10)
+	m.Append(logAt("unclassified", "", 1))
+	m.Append(logAt("classified", "info", 2))
+	m.SetFilter("info", "")
+	got := m.visibleEntries()
+	if len(got) != 1 || got[0].Log.Message != "classified" {
+		t.Fatalf("partial selection included an empty level: %v", got)
+	}
+	m.SetFilter("", "")
+	if len(m.visibleEntries()) != 2 {
+		t.Fatal("full selection dropped the empty-level record")
+	}
+}

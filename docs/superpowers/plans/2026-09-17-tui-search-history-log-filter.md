@@ -44,5 +44,8 @@
 - `go vet ./...`、`golangci-lint run ./...` 通过；lint 为 0 issues。修改的 Go 文件 gofmt 无输出。
 - 最终代码完成 Windows/Linux/macOS 的 amd64/arm64 六目标无 CGO 构建。
 - 非快照 diff 空白检查通过；golden 文件保留固定终端布局所需的行尾空格。宽窄级别弹窗快照和已有 Logs 快照已核对。
-- 全仓 race 已启动；该结果及 PR 的最终 CI、bot review 验收记录将维护于 PR。
+- `go test -race ./...` 已完整通过。PR：[#272](https://github.com/mihari-proxy/mihari/pull/272)。
+- 首轮远端三平台 unit/race/vet、六目标构建、coverage、lint、安全测试及其他 CI 检查全部通过。CodeRabbit 无可操作代码问题，Cubic 完成为非阻断 neutral，Pullfrog 通过并提出两条可读性建议。
+- 按 Pullfrog 建议明确级别匹配表达式括号、说明连续后缀的摘要压缩条件，并增加空级别记录仅在全选时可见的回归覆盖。窄窗口页脚按既有预算省略部分快捷键，完整操作仍见帮助；不改变既有页脚优先级。
+- CodeRabbit 的通用 docstring 覆盖率提示为非阻断建议；新增导出接口与方法已有 Go 文档注释，不引入项目未规定的固定注释覆盖率门槛。最终提交的 CI 与 review 状态继续维护于 PR。
 - 未执行真实订阅、mihomo、系统服务或其他 testenv 操作。

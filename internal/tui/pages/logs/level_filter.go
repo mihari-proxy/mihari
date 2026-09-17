@@ -28,7 +28,7 @@ func selectionForLevel(level string) levelSelection {
 
 func (s levelSelection) matches(level string) bool {
 	// Full selection preserves the former All filter, including unknown levels.
-	return s == allLevels || s&selectionForLevel(level) != 0 && level != ""
+	return s == allLevels || (s&selectionForLevel(level) != 0 && level != "")
 }
 
 func (m *Model) renderLevelSummary() string {
@@ -38,6 +38,7 @@ func (m *Model) renderLevelSummary() string {
 		if m.levels&bit == 0 {
 			continue
 		}
+		// Compress only a consecutive suffix that includes every level through ERROR.
 		if m.levels == allLevels & ^(bit-1) && i < len(levelLabels)-1 {
 			return ui.StyleLogLevel(m.theme, label) + "+"
 		}
