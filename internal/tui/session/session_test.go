@@ -22,6 +22,13 @@ func (c categoryClient) Stream(context.Context, string, func(protocol.StreamEven
 	return protocol.APIError{Code: protocol.CodeDaemonUnavailable, Message: "old stream disconnected"}
 }
 
+func TestSession_DefaultPollIntervalIsOneSecond(t *testing.T) {
+	s := New(newFakeClient(), Options{})
+	if s.options.PollInterval != time.Second {
+		t.Fatalf("PollInterval=%s, want 1s", s.options.PollInterval)
+	}
+}
+
 func TestSession_StatusCategoryTakesPrecedenceOverOldStream(t *testing.T) {
 	for _, code := range []protocol.ErrorCode{protocol.CodePermissionDenied, protocol.CodeDataFailure, protocol.CodeInvalidArgument, protocol.CodeInvalidState} {
 		api := protocol.APIError{Code: code, Message: "current status failed"}

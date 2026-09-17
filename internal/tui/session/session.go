@@ -110,7 +110,7 @@ func New(client Client, options Options) *Session {
 		options.EventBufferSize = 64
 	}
 	if options.PollInterval <= 0 {
-		options.PollInterval = 3 * time.Second
+		options.PollInterval = time.Second
 	}
 	return &Session{
 		client: client, options: options,
