@@ -29,6 +29,10 @@ const (
 	ModePanelMenu = "panel-menu"
 	// ModeLoggingEdit identifies numeric Logging settings text input.
 	ModeLoggingEdit = "logging-edit"
+	// ModeLoggingLevel identifies the inline logging level selector.
+	ModeLoggingLevel = "logging-level"
+	// ModeLoggingApplying identifies a submitted logging level change.
+	ModeLoggingApplying = "logging-applying"
 	// ModeExportLogs identifies the shared log export overlay.
 	ModeExportLogs = "export-logs"
 	ModeConfirm    = "confirm"
@@ -180,6 +184,10 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel", Footer: "Esc cancel", Scope: ScopeMode, Mode: ModePortsEdit},
 
 		{Display: "type", Label: "edit the value", Footer: "Type value", Scope: ScopeMode, Mode: ModeLoggingEdit},
+		{Keys: []string{"left", "right"}, Display: "←/→", Label: "select a logging level", Footer: "←/→ select", Scope: ScopeMode, Mode: ModeLoggingLevel},
+		{Keys: []string{"enter"}, Display: "Enter", Label: "apply the selected level", Footer: "Enter apply", Scope: ScopeMode, Mode: ModeLoggingLevel},
+		{Keys: []string{"esc"}, Display: "Esc", Label: "discard the selected level", Footer: "Esc cancel", Scope: ScopeMode, Mode: ModeLoggingLevel},
+		{Display: "Wait", Label: "Applying… Editing is locked until the request finishes.", Footer: "Applying…", Scope: ScopeMode, Mode: ModeLoggingApplying},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "apply", Footer: "Enter apply", Scope: ScopeMode, Mode: ModeLoggingEdit},
 		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel", Footer: "Esc cancel", Scope: ScopeMode, Mode: ModeLoggingEdit},
 
@@ -270,8 +278,8 @@ func renderPageFooter(page PageID, mode string, opt FooterOpt) string {
 		return joinFooter(append(tokens, helpQuit...))
 	case ModeForm:
 		return joinFooter(footerTokens(func(b KeyBinding) bool { return b.Mode == ModeForm }))
-	case ModeLoggingEdit:
-		return joinFooter(footerTokens(func(b KeyBinding) bool { return b.Mode == ModeLoggingEdit }))
+	case ModeLoggingEdit, ModeLoggingLevel, ModeLoggingApplying:
+		return joinFooter(footerTokens(func(b KeyBinding) bool { return b.Mode == mode }))
 	case ModeExportLogs:
 		return joinFooter(footerTokens(func(b KeyBinding) bool { return b.Mode == ModeExportLogs }))
 	default:
@@ -410,6 +418,10 @@ func modeTitle(mode string) string {
 		return "Ports edit"
 	case ModeLoggingEdit:
 		return "Logging edit"
+	case ModeLoggingLevel:
+		return "Logging level"
+	case ModeLoggingApplying:
+		return "Applying logging level"
 	case ModeExportLogs:
 		return "Export logs"
 	case ModeConfirm:

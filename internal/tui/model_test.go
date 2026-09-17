@@ -1331,15 +1331,19 @@ func TestModel_StatusDoesNotRegressWithinEpochButAcceptsNewEpoch(t *testing.T) {
 }
 
 func TestModel_LoggingUnavailableSyncLeavesRootTextInputMode(t *testing.T) {
-	model := NewModel()
-	page := &loggingResultRecordingPage{helpMode: ui.ModeLoggingEdit}
-	model.pages[ui.PageSystem] = page
-	model.active = ui.PageSystem
-	model.inputMode = ui.InputText
+	for _, mode := range []string{ui.ModeLoggingEdit, ui.ModeLoggingLevel, ui.ModeLoggingApplying} {
+		t.Run(mode, func(t *testing.T) {
+			model := NewModel()
+			page := &loggingResultRecordingPage{helpMode: mode}
+			model.pages[ui.PageSystem] = page
+			model.active = ui.PageSystem
+			model.inputMode = ui.InputText
 
-	model.syncSystemLoggingStatus(protocol.LoggingStatus{}, false)
-	if model.inputMode != ui.InputNavigation {
-		t.Fatalf("input mode=%v want navigation", model.inputMode)
+			model.syncSystemLoggingStatus(protocol.LoggingStatus{}, false)
+			if model.inputMode != ui.InputNavigation {
+				t.Fatalf("input mode=%v want navigation", model.inputMode)
+			}
+		})
 	}
 }
 

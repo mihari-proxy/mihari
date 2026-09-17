@@ -359,6 +359,7 @@ type Model struct {
 	webGUIErr             bool
 
 	logging               protocol.LoggingStatus
+	loggingLevelCandidate string
 	loggingEpoch          uint64
 	loggingAvailable      bool
 	localLoggingAvailable bool
@@ -459,6 +460,12 @@ func NewWithContext(ctx context.Context, client Client, svc ServiceController, n
 
 func (m *Model) HelpMode() string {
 	if m.editID != "" {
+		if m.editID == rowLogLevel {
+			if m.pending {
+				return ui.ModeLoggingApplying
+			}
+			return ui.ModeLoggingLevel
+		}
 		if m.editID == rowLogMaxSize || m.editID == rowLogMaxFiles {
 			return ui.ModeLoggingEdit
 		}
@@ -785,7 +792,7 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 	}()
 	switch typed := message.(type) {
 	case ui.LoggingSyncMsg:
-		wasLoggingEdit := m.editID == rowLogMaxSize || m.editID == rowLogMaxFiles
+		wasLoggingEdit := m.editID == rowLogLevel || m.editID == rowLogMaxSize || m.editID == rowLogMaxFiles
 		m.ApplyLoggingSync(typed)
 		if !typed.Available {
 			if m.pending && isLoggingRow(m.pendingRow) {
@@ -810,8 +817,15 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 			m.loggingPendingEpoch = 0
 			m.loggingReloading = false
 			if current && !reloading {
+				var leaveEdit tea.Cmd
+				if m.editID == rowLogLevel && rowID == rowLogLevel {
+					leaveEdit = m.cancelLoggingEdit()
+				}
 				m.markRowOutcome(rowID, true, "")
-				return m, m.scheduleOutcomeFade(rowID)
+				return m, tea.Batch(leaveEdit, m.scheduleOutcomeFade(rowID))
+			}
+			if current && reloading && m.editID == rowLogLevel {
+				m.markRowOutcome(rowID, false, ui.SystemChangedMessage)
 			}
 		}
 		return m, m.rowSpinCmdIfNeeded()
@@ -1112,6 +1126,9 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		return m, nil
 	}
 	if m.editID != "" {
+		if m.editID == rowLogLevel {
+			return m.updateLoggingLevelEdit(message)
+		}
 		if m.editID == rowLogMaxSize || m.editID == rowLogMaxFiles {
 			return m.updateLoggingEdit(message)
 		}
@@ -1198,7 +1215,7 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		case rowMixed, rowController, rowWeb:
 			return m, m.beginPortEdit(m.focusID)
 		case rowLogLevel:
-			return m, m.cycleLoggingLevel()
+			return m, m.beginLoggingLevelEdit()
 		case rowLogMaxSize, rowLogMaxFiles:
 			return m, m.beginLoggingEdit(m.focusID)
 		case rowLogExport:
@@ -1322,12 +1339,14 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 		idx := len(sections) - 1
 		marker := "  "
 		rowFocused := item.id == m.focusID
-		if rowFocused {
+		if rowFocused && m.editID != rowLogLevel {
 			marker = ui.FocusMarker
 		}
 		labelPart := marker + item.label
 		value := item.value
 		switch {
+		case m.editID == rowLogLevel && item.id == rowLogLevel:
+			value = m.loggingLevelEditorView(clock)
 		case m.editID == item.id:
 			value = m.editInput.View()
 		case m.pending && m.pendingRow == item.id && m.pendingNote != "":
@@ -2332,25 +2351,6 @@ func (m *Model) loggingMutationAvailable() bool {
 	return m.client != nil && m.mutationsEnabled && m.loggingAvailable && m.hasCapability(protocol.CapabilityLogging)
 }
 
-func (m *Model) cycleLoggingLevel() tea.Cmd {
-	if !m.loggingMutationAvailable() {
-		return nil
-	}
-	next := "debug"
-	switch m.logging.Level {
-	case "debug":
-		next = "info"
-	case "info":
-		next = "warn"
-	case "warn":
-		next = "error"
-	}
-	request := protocol.LoggingUpdateRequest{
-		OperationID: m.newOperationID(), IfRevision: loggingRevisionPointer(m.logging.Revision), Level: &next,
-	}
-	return m.startLoggingUpdate(rowLogLevel, request)
-}
-
 func (m *Model) beginLoggingEdit(id string) tea.Cmd {
 	if !m.loggingMutationAvailable() {
 		return nil
@@ -2413,6 +2413,10 @@ func isLoggingRow(rowID string) bool {
 }
 
 func (m *Model) cancelLoggingEdit() tea.Cmd {
+	if m.editID == rowLogLevel {
+		m.clearLoggingOutcome(rowLogLevel)
+		m.loggingLevelCandidate = ""
+	}
 	m.editID = ""
 	m.editInput = textinput.Model{}
 	return func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
@@ -2454,6 +2458,7 @@ func (m *Model) startLoggingUpdate(rowID string, request protocol.LoggingUpdateR
 	if !m.loggingMutationAvailable() || m.pending {
 		return nil
 	}
+	m.clearLoggingOutcome(rowID)
 	epoch := m.loggingEpoch
 	operation := logging.OperationMetadata{ID: request.OperationID, Name: "logging.update"}
 	m.pending = true

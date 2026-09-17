@@ -991,7 +991,10 @@ func (model *Model) syncSystemLoggingStatus(status protocol.LoggingStatus, avail
 	leavingLoggingEdit := false
 	if !available && model.active == ui.PageSystem && model.inputMode == ui.InputText {
 		if provider, ok := page.(ui.HelpModeProvider); ok {
-			leavingLoggingEdit = provider.HelpMode() == ui.ModeLoggingEdit
+			switch provider.HelpMode() {
+			case ui.ModeLoggingEdit, ui.ModeLoggingLevel, ui.ModeLoggingApplying:
+				leavingLoggingEdit = true
+			}
 		}
 	}
 	updated, _ := page.Update(ui.LoggingSyncMsg{Epoch: model.loggingEpoch, Status: status, Available: available})

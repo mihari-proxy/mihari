@@ -213,6 +213,8 @@ Unix 机器日志写入 D，本用户 TUI 日志写入 U；Windows/显式私有 
 
 System → Logging → Level 同时控制 Mihari 文件日志与 mihomo 全局 `log-level`，生成配置覆盖订阅值但不修改原缓存。主动可选 `debug`、`info`、`warn`、`error`。在线修改经过校验、内核确认、reload 与保存，失败补偿恢复；内核停止时保存到下次启动应用。外部内核变化每 2 秒观察：保存失败保留内核现状、显示未保存并重试最新值。仅被动采纳内核的 `silent`，保留历史文件和操作错误提示，用户可切回四档。旧版本可能拒绝已保存的 `silent`，降级前应切回支持级别或恢复兼容的停机备份。TUI/Web 实时日志筛选独立于文件级别，silent 也不限制实时订阅。网关允许单字段 `PATCH /configs {"log-level":"debug"}`，混合及未知写入仍拒绝。
 
+选中 **Level** 后按 Enter，右侧以 `< INFO >` 整块高亮当前级别。←/→ 在 DEBUG、INFO、WARN、ERROR 间循环选择，再按 Enter 应用；Esc 放弃候选并显示最新实际值。编辑期间 ↑/↓ 和 Tab 不移动焦点；提交时显示 Applying 旋转动画并锁定编辑，成功返回 Level，失败保留候选以便重试。未改变值时直接退出，不发送请求；外部更新不会覆盖候选。从 SILENT 开始编辑时，→ 选 DEBUG、← 选 ERROR，SILENT 不加入主动选项。
+
 `GET /v1/logging` 与 `PATCH /v1/logging` 是供 TUI 使用的稳定 v1 本地控制端点，并非 CLI 命令。日志导出仅在 TUI 提供：可在 Logs 页按 `e`，或在 System → Logging 选择 **Export logs**。对话框支持最近 24 小时、最近 60 分钟、本地时间区间和全部记录。默认输出到 `U/logs-export/`；已有 zip 永不覆盖，自定义目标必须是既有目录中的绝对 `.zip` 路径。没有 CLI 日志导出命令。
 
 Logging 位于 Network 下方、About 上方。Unix 分别显示机器日志目录与本用户日志目录；Windows 的 **Logging Dir** 保持单目录只读路径，选中后按 Enter 复制。Export Logs 中的 **Current Time** 每秒刷新；↑/↓ 选择字段，Enter 进入编辑或应用修改，编辑时 Esc 弹窗确认放弃。Range 编辑支持方向键及 Tab/Shift+Tab 切换模式，自定义区间在行末提示 `Use YYYY-MM-DD HH:MM format`。选中 **Export** 后按 Enter 开始导出。

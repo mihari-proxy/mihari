@@ -83,6 +83,8 @@ func TestModel_LoggingRowsShowDaemonStateAndLocalWriterHealth(t *testing.T) {
 		t.Fatalf("missing local writer health marker:\n%s", view)
 	}
 	model.focusID = rowLogLevel
+	levelKey(model, tea.KeyEnter)
+	levelKey(model, tea.KeyRight)
 	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if command == nil {
 		t.Fatal("local writer failure disabled daemon logging update")
@@ -94,6 +96,8 @@ func TestModel_LoggingUpdateBindsOperationMetadataInCommandClosure(t *testing.T)
 	model, client := loggingModel("info", 4)
 	model.ctx = logging.WithOperation(context.Background(), logging.OperationMetadata{ID: "stale", Name: "other.operation"})
 	model.focusID = rowLogLevel
+	levelKey(model, tea.KeyEnter)
+	levelKey(model, tea.KeyRight)
 	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	observed := loggingObservedFromCommand(t, command)
 	want := logging.OperationMetadata{ID: "logging-op", Name: "logging.update"}
@@ -109,6 +113,8 @@ func TestModel_LoggingUpdateFailureCarriesImmutableOperationMetadata(t *testing.
 	model, client := loggingModel("info", 4)
 	client.updateLoggingErr = errors.New("logging update failed")
 	model.focusID = rowLogLevel
+	levelKey(model, tea.KeyEnter)
+	levelKey(model, tea.KeyRight)
 	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	result := firstSystemPageResult(t, command)
 	failure, ok := result.(loggingUpdateResultMsg)
@@ -129,6 +135,8 @@ func TestModel_LoggingUpdateOutOfOrderResultsRetainMetadataAndRejectStaleEpoch(t
 		return id
 	}
 	model.focusID = rowLogLevel
+	levelKey(model, tea.KeyEnter)
+	levelKey(model, tea.KeyRight)
 	_, firstCommand := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	first := loggingObservedFromCommand(t, firstCommand)
 
@@ -137,6 +145,8 @@ func TestModel_LoggingUpdateOutOfOrderResultsRetainMetadataAndRejectStaleEpoch(t
 	updated, _ = model.Update(ui.LoggingSyncMsg{Epoch: 8, Status: client.logging, Available: true})
 	model = updated.(*Model)
 	model.focusID = rowLogLevel
+	levelKey(model, tea.KeyEnter)
+	levelKey(model, tea.KeyRight)
 	_, secondCommand := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	second := loggingObservedFromCommand(t, secondCommand)
 
@@ -298,6 +308,8 @@ func TestModel_LoggingUnavailableSyncClearsPendingAndIgnoresLateResults(t *testi
 				test.configure(client)
 			}
 			model.focusID = rowLogLevel
+			levelKey(model, tea.KeyEnter)
+			levelKey(model, tea.KeyRight)
 			_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 			late := firstSystemPageResult(t, command)
 			if !model.pending || model.pendingRow != rowLogLevel || model.loggingPendingEpoch != 7 {
@@ -391,6 +403,8 @@ func TestModel_LoggingUnavailableSyncClearsLevelPatchFailure(t *testing.T) {
 	model, client := loggingModel("info", 4)
 	client.updateLoggingErr = errors.New("logging write failed")
 	model.focusID = rowLogLevel
+	levelKey(model, tea.KeyEnter)
+	levelKey(model, tea.KeyRight)
 	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	updated, _ := model.Update(firstSystemPageResult(t, command))
 	model = updated.(*Model)
@@ -470,7 +484,7 @@ func assertLoggingUnavailableWithoutOutcome(t *testing.T, model *Model, oldDetai
 	}
 }
 
-func TestModel_LoggingLevelEnterCyclesAndPatchesRevisionZero(t *testing.T) {
+func TestModel_LoggingLevelConfirmPatchesRevisionZero(t *testing.T) {
 	cases := []struct {
 		level string
 		want  string
@@ -484,6 +498,8 @@ func TestModel_LoggingLevelEnterCyclesAndPatchesRevisionZero(t *testing.T) {
 		t.Run(tc.level, func(t *testing.T) {
 			model, client := loggingModel(tc.level, 0)
 			model.focusID = rowLogLevel
+			levelKey(model, tea.KeyEnter)
+			levelKey(model, tea.KeyRight)
 			_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 			observed := loggingObservedFromCommand(t, command)
 			if observed.Epoch != 7 || observed.Status.Level != tc.want {
@@ -743,6 +759,8 @@ func TestModel_LoggingPatchPublishesOnlyCompleteResponseWithRequestEpoch(t *test
 	}
 	client.updateLoggingResult = &response
 	model.focusID = rowLogLevel
+	levelKey(model, tea.KeyEnter)
+	levelKey(model, tea.KeyRight)
 	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	observed := loggingObservedFromCommand(t, command)
 	if observed.Epoch != 7 || !reflect.DeepEqual(observed.Status, response) {
@@ -758,6 +776,8 @@ func TestModel_LoggingObservationRejectedByRootDoesNotShowSuccess(t *testing.T) 
 	invalid := protocol.LoggingStatus{Schema: "mihari/v1", Revision: 6, Level: "verbose", MaxSizeMB: 10, MaxFiles: 3, Dir: `C:\logs`}
 	client.updateLoggingResult = &invalid
 	model.focusID = rowLogLevel
+	levelKey(model, tea.KeyEnter)
+	levelKey(model, tea.KeyRight)
 	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	observed := loggingObservedFromCommand(t, command)
 	updated, _ := model.Update(observed)
@@ -797,6 +817,8 @@ func TestModel_LoggingRevisionConflictReloadsSameEpochWithoutReplay(t *testing.T
 		MaxFiles: 7, Dir: `C:\logs`,
 	}
 	model.focusID = rowLogLevel
+	levelKey(model, tea.KeyEnter)
+	levelKey(model, tea.KeyRight)
 	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	result := firstSystemPageResult(t, command)
 	updated, reload := model.Update(result)
@@ -820,6 +842,8 @@ func TestModel_LoggingPatchFailureIsStableAndRedacted(t *testing.T) {
 	model, client := loggingModel("info", 5)
 	client.updateLoggingErr = errors.New(`write C:\Users\alice\.mihari\mihari.yaml: access denied token=sekret`)
 	model.focusID = rowLogLevel
+	levelKey(model, tea.KeyEnter)
+	levelKey(model, tea.KeyRight)
 	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	result := firstSystemPageResult(t, command)
 	updated, followup := model.Update(result)
@@ -843,6 +867,8 @@ func TestModel_LoggingConflictReloadFailureIsStableAndRedacted(t *testing.T) {
 	client.updateLoggingErr = protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "conflict"}
 	client.loggingErr = errors.New(`/private/alice/mihari.yaml token=sekret`)
 	model.focusID = rowLogLevel
+	levelKey(model, tea.KeyEnter)
+	levelKey(model, tea.KeyRight)
 	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	updated, reload := model.Update(firstSystemPageResult(t, command))
 	model = updated.(*Model)
@@ -868,6 +894,8 @@ func TestModel_LoggingStaleResultsClearMatchingPendingWithoutRollback(t *testing
 		response := protocol.LoggingStatus{Schema: "mihari/v1", Revision: 6, Level: "warn", MaxSizeMB: 20, MaxFiles: 4, Dir: `C:\old`}
 		client.updateLoggingResult = &response
 		model.focusID = rowLogLevel
+		levelKey(model, tea.KeyEnter)
+		levelKey(model, tea.KeyRight)
 		_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		observed := loggingObservedFromCommand(t, command)
 		current := protocol.LoggingStatus{Schema: "mihari/v1", Revision: 12, Level: "error", MaxSizeMB: 80, MaxFiles: 9, Dir: `C:\new`}
@@ -884,6 +912,8 @@ func TestModel_LoggingStaleResultsClearMatchingPendingWithoutRollback(t *testing
 		response := protocol.LoggingStatus{Schema: "mihari/v1", Revision: 11, Level: "warn", MaxSizeMB: 20, MaxFiles: 4, Dir: `C:\old`}
 		client.updateLoggingResult = &response
 		model.focusID = rowLogLevel
+		levelKey(model, tea.KeyEnter)
+		levelKey(model, tea.KeyRight)
 		_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		observed := loggingObservedFromCommand(t, command)
 		current := model.logging
@@ -899,6 +929,8 @@ func TestModel_LoggingStaleResultsClearMatchingPendingWithoutRollback(t *testing
 		client.updateLoggingErr = protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "conflict"}
 		client.logging = protocol.LoggingStatus{Schema: "mihari/v1", Revision: 6, Level: "warn", MaxSizeMB: 20, MaxFiles: 4, Dir: `C:\old`}
 		model.focusID = rowLogLevel
+		levelKey(model, tea.KeyEnter)
+		levelKey(model, tea.KeyRight)
 		_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		updated, reload := model.Update(firstSystemPageResult(t, command))
 		model = updated.(*Model)
@@ -926,6 +958,8 @@ func TestModel_LoggingOldEpochErrorsOnlyClearMatchingPending(t *testing.T) {
 		model, client := loggingModel("info", 5)
 		client.updateLoggingErr = errors.New(`write C:\Users\alice\.mihari\mihari.yaml: access denied`)
 		model.focusID = rowLogLevel
+		levelKey(model, tea.KeyEnter)
+		levelKey(model, tea.KeyRight)
 		_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		result := firstSystemPageResult(t, command)
 		model.ApplyLoggingSync(ui.LoggingSyncMsg{Epoch: 8, Status: current, Available: true})
@@ -941,6 +975,8 @@ func TestModel_LoggingOldEpochErrorsOnlyClearMatchingPending(t *testing.T) {
 		model, client := loggingModel("info", 5)
 		client.updateLoggingErr = protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "conflict"}
 		model.focusID = rowLogLevel
+		levelKey(model, tea.KeyEnter)
+		levelKey(model, tea.KeyRight)
 		_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		result := firstSystemPageResult(t, command)
 		model.ApplyLoggingSync(ui.LoggingSyncMsg{Epoch: 8, Status: current, Available: true})
@@ -957,6 +993,8 @@ func TestModel_LoggingOldEpochErrorsOnlyClearMatchingPending(t *testing.T) {
 		client.updateLoggingErr = protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "conflict"}
 		client.loggingErr = errors.New(`/private/alice/mihari.yaml: access denied`)
 		model.focusID = rowLogLevel
+		levelKey(model, tea.KeyEnter)
+		levelKey(model, tea.KeyRight)
 		_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		updated, reload := model.Update(firstSystemPageResult(t, command))
 		model = updated.(*Model)

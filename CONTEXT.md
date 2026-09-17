@@ -4,6 +4,9 @@ Mihari 管理本机 mihomo，并向本地用户提供一致的配置管理与运
 
 ## Language
 
+**统一日志级别（Unified Logging Level）**：Mihari 与 mihomo 普通日志共同采用的记录阈值，在 System 的 Logging 区域显示为 Level。它与 Logs 页的显示筛选及实时日志订阅阈值是不同概念。
+_Avoid_: 将 System 的 Level 与 Logs 页筛选混用。
+
 **代理节点（Proxy Node）**：可作为代理连接出口的节点。节点名称用于展示，名称相同不表示两个来源中的节点必然是同一个对象。
 _Avoid_: 将所有可显示的组成员统称为全局节点。
 

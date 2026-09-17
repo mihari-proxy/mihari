@@ -283,6 +283,8 @@ func TestCatalog_KeysAppearInHandlerSource(t *testing.T) {
 			return []string{filepath.Join(tuiDir, "pages", "system", "model.go")}
 		case b.Mode == ModeLoggingEdit:
 			return []string{filepath.Join(tuiDir, "pages", "system", "model.go")}
+		case b.Mode == ModeLoggingLevel:
+			return []string{filepath.Join(tuiDir, "pages", "system", "logging_level_edit.go")}
 		case b.Mode == ModeExportLogs:
 			return []string{filepath.Join(uiDir, "exportlogs.go")}
 		default:
@@ -353,6 +355,8 @@ func TestRenderFooter_MatchesCurrentLayout(t *testing.T) {
 		{"form", RenderFooter(PageSubscriptions, ModeForm, FooterOpt{}), "F2 details  Tab/Shift+Tab fields  Enter next/save  Esc cancel"},
 		{"ports", RenderFooter(PageSystem, ModePortsEdit, FooterOpt{}), "F2 details  Type address  Enter apply  Esc cancel  ? help  q quit"},
 		{"logging", RenderFooter(PageSystem, ModeLoggingEdit, FooterOpt{}), "F2 details  Type value  Enter apply  Esc cancel"},
+		{"logging level", RenderFooter(PageSystem, ModeLoggingLevel, FooterOpt{}), "F2 details  ←/→ select  Enter apply  Esc cancel"},
+		{"logging applying", RenderFooter(PageSystem, ModeLoggingApplying, FooterOpt{}), "F2 details  Applying…"},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {
