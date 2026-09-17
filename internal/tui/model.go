@@ -1155,6 +1155,13 @@ func (model Model) updateRail(key string) (tea.Model, tea.Cmd) {
 func (model Model) landRailPage(prev ui.PageID) (tea.Model, tea.Cmd) {
 	model.active = model.rail[model.railIndex]
 	model.focus.Page = model.active
+	// Digit jumps preserve FocusContent across enterable pages. Overview and
+	// unavailable stubs are not ContentFocusable, so Enter cannot move into
+	// them; landing there with leftover content focus would hide the rail
+	// footer and swallow arrow keys.
+	if _, ok := model.pages[model.active].(ui.ContentFocusable); !ok {
+		model.focus.Area = ui.FocusRail
+	}
 	if prev == model.active {
 		return model, nil
 	}

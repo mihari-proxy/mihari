@@ -869,6 +869,26 @@ func TestRail_DigitShortcutWorksFromContentFocus(t *testing.T) {
 	}
 }
 
+// Overview has no in-page keyboard targets (it is not ContentFocusable), so
+// digit-jumping there from another page's content must park on the rail
+// instead of carrying FocusContent into the page.
+func TestRail_DigitShortcutToOverviewDropsContentFocus(t *testing.T) {
+	model := NewModel()
+	model.inputMode = ui.InputNavigation
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if model.active != ui.PageProxies || model.focus.Area != ui.FocusContent {
+		t.Fatalf("enter focus=%v active=%s", model.focus.Area, model.active)
+	}
+	model = updateModelKey(t, model, tea.KeyPressMsg{Code: '1', Text: "1"})
+	if model.active != ui.PageOverview || model.railIndex != 0 {
+		t.Fatalf("digit 1 from content: active=%s railIndex=%d", model.active, model.railIndex)
+	}
+	if model.focus.Area != ui.FocusRail {
+		t.Fatalf("Overview entered via digit jump: focus=%v", model.focus.Area)
+	}
+}
+
 // In text-input mode (form / search focused) digits must type, never switch pages.
 func TestRail_DigitShortcutDisabledInTextInputMode(t *testing.T) {
 	model := NewModel()
