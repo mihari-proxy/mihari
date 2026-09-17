@@ -138,6 +138,6 @@ func (m *Model) panelBody(panel protocol.PanelStatus, index, inner int) string {
 		actions += "  " + action("Manage ▾", 1)
 	}
 	field := func(label, value string) string { return m.theme.Muted.Render(fmt.Sprintf("%-11s", label)) + value }
-	body := strings.Join([]string{state, "", field("Installed", valueOr(panel.InstalledBuild, ui.MissingValue)), field("Latest", valueOr(panel.LatestBuild, ui.UnknownLabel)), field("Rollback", valueOr(panel.RollbackBuild, ui.MissingValue)), "", actions}, "\n")
+	body := strings.Join([]string{state, "", field("Installed", valueOr(panel.InstalledBuild, ui.MissingValue)), field("Latest", m.latestLabel(panel)), field("Rollback", valueOr(panel.RollbackBuild, ui.MissingValue)), "", actions}, "\n")
 	return ansi.Wrap(body, ui.SectionTextWidth(inner), "")
 }

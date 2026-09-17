@@ -109,7 +109,7 @@ func TestWebGUIRendersCardsAndFooterWithoutSecrets(t *testing.T) {
 	if command == nil {
 		t.Fatal("capability did not enable status load")
 	}
-	updated, _ := model.Update(command())
+	updated, _ := model.Update(command().(ui.PageResultMsg).Result)
 	model = updated.(*Model)
 	view := model.View()
 	for _, moved := range []string{"Loopback", "Controller isolation", "Mutation coordinator"} {

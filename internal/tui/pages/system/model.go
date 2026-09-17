@@ -320,6 +320,7 @@ var _ interface{ Err() error } = actionResultMsg{}
 
 // Model is the System page.
 type Model struct {
+	coreVersion           coreVersionState
 	channelDiagnostic     tea.Cmd
 	writeClipboard        func(string) error
 	ctx                   context.Context
@@ -650,7 +651,7 @@ func (m *Model) ApplyRootNetworkStatus(proxy protocol.SystemProxyStatus, proxyOK
 
 func (m *Model) SetMutationsEnabled(enabled bool) { m.mutationsEnabled = enabled }
 
-// Load refreshes onboarding, OS service status, system proxy, and TUN when available.
+// Load refreshes local status and checks Mihari and core versions when available.
 func (m *Model) Load() tea.Cmd {
 	return m.load(true)
 }
@@ -659,9 +660,12 @@ func (m *Model) refresh() tea.Cmd {
 	return m.load(false)
 }
 
-func (m *Model) load(checkMihari bool) tea.Cmd {
+func (m *Model) load(checkVersions bool) tea.Cmd {
 	var cmds []tea.Cmd
-	if checkMihari && m.selfUpdater != nil && !m.pending {
+	if checkVersions {
+		cmds = append(cmds, m.checkCoreVersion())
+	}
+	if checkVersions && m.selfUpdater != nil && !m.pending {
 		cmds = append(cmds, m.checkMihariVersion())
 	}
 	if m.client != nil && m.hasCapability(protocol.CapabilityOnboarding) {
@@ -851,6 +855,20 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		m.loggingReloading = false
 		m.markRowOutcome(typed.rowID, false, ui.LoggingReloadFailed)
 		return m, m.rowSpinCmdIfNeeded()
+	case coreVersionMsg:
+		if typed.generation != m.coreVersion.generation {
+			return m, nil
+		}
+		if m.coreVersion.channel != coreChannelName(m.core.Channel) {
+			return m, m.checkCoreVersion()
+		}
+		m.coreVersion.checking = false
+		m.coreVersion.failed = typed.err != nil || typed.result.Latest == ""
+		m.coreVersion.latest = typed.result.Latest
+		if typed.err == nil && typed.result.Channel != "" {
+			m.coreVersion.channel = typed.result.Channel
+		}
+		return m, nil
 	case selfCheckResultMsg:
 		if typed.generation != m.selfCheckGeneration {
 			return m, nil
@@ -970,11 +988,19 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		m.markRowOutcome(typed.rowID, false, actionErrorDetail(typed.err, ui.WebGUIUnavailable))
 		return m, nil
 	case ui.CoreObservedMsg:
+		previousChannel := coreChannelName(m.core.Channel)
 		m.core = typed.Core
+		if previousChannel != coreChannelName(m.core.Channel) {
+			return m, m.checkCoreVersion()
+		}
 		return m, nil
 	case coreLoadResultMsg:
 		if typed.err == nil {
+			previousChannel := coreChannelName(m.core.Channel)
 			m.core = typed.core
+			if previousChannel != coreChannelName(m.core.Channel) || m.coreVersion.channel != coreChannelName(m.core.Channel) {
+				return m, m.checkCoreVersion()
+			}
 		}
 		return m, nil
 	case ui.ActionPendingMsg:
@@ -1374,7 +1400,7 @@ func (m *Model) rows() []row {
 		row{id: rowRunSetup, section: ui.DaemonSectionTitle, label: ui.RunSetupLabel, detail: ui.RunSetupDetail},
 		row{id: rowCore, section: ui.CoreSectionTitle, label: ui.MihomoCoreLabel, value: coreValue(m.theme, m.core, !m.mutationsEnabled), detail: core},
 		row{id: rowCoreChannel, section: ui.CoreSectionTitle, label: ui.CoreChannelLabel, value: coreChannelName(m.core.Channel), detail: ui.SwitchCoreChannelImpact},
-		row{id: rowCoreUpdate, section: ui.CoreSectionTitle, label: m.coreActionLabel(), value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.UpdateCoreImpact},
+		row{id: rowCoreUpdate, section: ui.CoreSectionTitle, label: m.coreActionLabel(), value: m.coreUpdateValue(), detail: ui.UpdateCoreImpact},
 		row{id: rowCoreRestart, section: ui.CoreSectionTitle, label: ui.RestartCoreLabel, value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.RestartCoreImpact},
 	)
 	rows = append(rows, m.serviceRows()...)

@@ -28,8 +28,9 @@ type Client interface {
 }
 
 type statusResultMsg struct {
-	status protocol.WebGUIStatus
-	err    error
+	status        protocol.WebGUIStatus
+	err           error
+	checkVersions bool
 }
 
 type mutationDoneMsg struct {
@@ -47,6 +48,7 @@ var _ interface{ Err() error } = mutationDoneMsg{}
 
 // Model is the Web GUI lifecycle page.
 type Model struct {
+	versions       map[string]panelVersionState
 	ctx            context.Context
 	client         Client
 	openBrowser    func(string) error
@@ -148,17 +150,24 @@ func (m *Model) FooterHints() string {
 }
 
 func (m *Model) Load() tea.Cmd {
+	return m.load(true)
+}
+
+func (m *Model) load(checkVersions bool) tea.Cmd {
 	if !m.available || m.client == nil {
 		return nil
 	}
 	return func() tea.Msg {
 		status, err := m.client.WebGUI(m.ctx)
-		return statusResultMsg{status: status, err: err}
+		return ui.PageResultMsg{Page: ui.PageWebGUI, Result: statusResultMsg{status: status, err: err, checkVersions: checkVersions}}
 	}
 }
 
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	switch typed := message.(type) {
+	case panelVersionMsg:
+		m.versions[typed.id] = panelVersionState{latest: typed.result.Latest, failed: typed.err != nil || typed.result.Latest == ""}
+		return m, nil
 	case ui.ActionPendingMsg:
 		return m, m.beginInstall(typed)
 	case installSpinTickMsg:
@@ -173,6 +182,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		} else {
 			m.lastError = ""
 			m.SetStatus(typed.status)
+			if typed.checkVersions {
+				return m, m.checkPanelVersions()
+			}
 		}
 		return m, nil
 	case mutationDoneMsg:
@@ -182,7 +194,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		} else {
 			m.toast = ""
 		}
-		return m, m.Load()
+		return m, m.load(false)
 	case tea.KeyPressMsg:
 		if !m.available {
 			if typed.String() == "esc" {

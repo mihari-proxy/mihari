@@ -68,6 +68,8 @@ type localCoreAPI interface {
 }
 
 func (s *Server) runtimeRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/core/version-check", s.checkCoreVersion)
+	mux.HandleFunc("GET /v1/panels/{id}/version-check", s.checkPanelVersion)
 	mux.HandleFunc("GET /v1/core", s.coreStatus)
 	mux.HandleFunc("POST /v1/core/install", s.installCore)
 	mux.HandleFunc("POST /v1/core/restart", s.restartCore)

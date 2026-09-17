@@ -116,7 +116,7 @@ func TestWebGUIActions_CommittedWarningsReachF2(t *testing.T) {
 			model.active = ui.PageWebGUI
 			page := model.pages[ui.PageWebGUI].(*webguipage.Model)
 			page.SetCapabilities([]string{protocol.CapabilityWebGUI})
-			page.Update(page.Load()())
+			page.Update(page.Load()().(ui.PageResultMsg).Result)
 			press := tea.KeyPressMsg{Code: rune(key[0]), Text: key}
 			if key == "space" {
 				press = tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
