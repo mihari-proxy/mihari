@@ -36,3 +36,4 @@ PR 最终验收标准：当前提交的 CI 和 Bot review 全部通过，相关 
 - 首次本地 `go test -race ./...` 在既有 `TestLegacyResourceRecovery_WholeTupleEveryForwardAndRecoveryBoundary` 触发默认 10 分钟超时，未报告数据竞争；本次 TUI 包 race 已通过。按 CI 已有配置改为 `go test -race -timeout=30m ./...` 重跑，不修改订阅代码。
 - 本地 `go test -race -timeout=30m ./...` 重跑全部通过，其中订阅包耗时 424.858 秒；没有数据竞争报告。
 - 功能提交 `03fea25` 的 [CI](https://github.com/mihari-proxy/mihari/actions/runs/35179487340) 和 [原生安全检查](https://github.com/mihari-proxy/mihari/actions/runs/35179487347) 全部通过，包含三系统 unit/race/vet-format、六目标构建、lint 和覆盖率任务。后续文档提交及 review 收口按上述 PR 最终验收标准继续验证。
+- 自查补充并发边界：revision 冲突后的 GET 可能落后于已接受的新状态。先新增 `TestLoggingLevelEdit_SupersededConflictReloadStillReportsConflict` 并确认缺少错误提示而失败；修正为同一 epoch 下始终保留已知冲突提示，保持较新实际状态及候选、不重放请求。该回归测试、`go test -race ./internal/tui/...` 和全仓 lint 均通过。

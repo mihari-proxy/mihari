@@ -824,7 +824,9 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 				m.markRowOutcome(rowID, true, "")
 				return m, tea.Batch(leaveEdit, m.scheduleOutcomeFade(rowID))
 			}
-			if current && reloading && m.editID == rowLogLevel {
+			// A newer observation can supersede the reload without resolving the
+			// failed mutation. Keep its conflict visible alongside the candidate.
+			if typed.Epoch == m.loggingEpoch && m.loggingAvailable && reloading && m.editID == rowLogLevel {
 				m.markRowOutcome(rowID, false, ui.SystemChangedMessage)
 			}
 		}

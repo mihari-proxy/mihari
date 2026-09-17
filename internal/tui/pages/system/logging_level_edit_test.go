@@ -205,3 +205,26 @@ func TestLoggingLevelEdit_UnavailableClearsDraftAndPending(t *testing.T) {
 		}
 	}
 }
+
+func TestLoggingLevelEdit_SupersededConflictReloadStillReportsConflict(t *testing.T) {
+	m, client := loggingModel("info", 4)
+	client.updateLoggingErr = protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "conflict"}
+	client.logging.Level, client.logging.Revision = "error", 9
+	m.focusID = rowLogLevel
+	levelKey(m, tea.KeyEnter)
+	levelKey(m, tea.KeyRight)
+	_, reload := m.Update(firstSystemPageResult(t, levelKey(m, tea.KeyEnter)))
+	observed := loggingObservedFromCommand(t, reload)
+	// A newer session observation wins before the GET response reaches the page.
+	latest := observed.Status
+	latest.Level, latest.Revision = "debug", 10
+	m.Update(ui.LoggingSyncMsg{Epoch: observed.Epoch, Available: true, Status: latest})
+	m.Update(observed)
+	view := levelContent(m)
+	if m.pending || m.logging.Revision != 10 || m.logging.Level != "debug" || !strings.Contains(view, "< WARN >") || !strings.Contains(view, ui.SystemChangedMessage) {
+		t.Fatalf("superseded reload lost conflict feedback or rolled back current state:\n%s", view)
+	}
+	if client.updateLoggingCalls != 1 {
+		t.Fatal("conflict automatically replayed mutation")
+	}
+}
