@@ -19,7 +19,6 @@
 
 - TUI 拉取 daemon 快照间隔改为 1 秒（#277）。
 - 订阅 AUTO 模式展示为 `PROXY w Fallback to DIRECT`，窄屏必要时隐藏 Mode 列（#260）。
-- all-in-one 整合包锁定 mihomo v1.19.31 与更新的 GeoIP 数据。
 
 ### Fixed
 
