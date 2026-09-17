@@ -120,6 +120,22 @@ func TestLoggingLevelEdit_ExternalChangePreservesCandidate(t *testing.T) {
 	}
 }
 
+func TestLoggingLevelEdit_PassiveSilentCannotBeSubmittedAfterExternalChange(t *testing.T) {
+	m, client := loggingModel("silent", 4)
+	m.focusID = rowLogLevel
+	levelKey(m, tea.KeyEnter)
+	latest := m.logging
+	latest.Level, latest.Revision = "info", 5
+	m.Update(ui.LoggingSyncMsg{Epoch: 7, Available: true, Status: latest})
+	if !strings.Contains(levelContent(m), "< SILENT >") {
+		t.Fatal("external observation overwrote passive candidate")
+	}
+	cmd := levelKey(m, tea.KeyEnter)
+	if cmd == nil || cmd() != (ui.InputModeMsg{Mode: ui.InputNavigation}) || m.editID != "" || m.pending || client.updateLoggingCalls != 0 || m.logging.Level != "info" {
+		t.Fatal("unchanged passive candidate must exit without submitting SILENT")
+	}
+}
+
 func TestLoggingLevelEdit_ApplyingLocksInputAndSuccessReturnsFocus(t *testing.T) {
 	m, _ := loggingModel("info", 4)
 	m.focusID = rowLogLevel

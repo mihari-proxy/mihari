@@ -41,6 +41,8 @@ func (m *Model) updateLoggingLevelEdit(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.loggingLevelCandidate = levels[index]
 		m.clearLoggingOutcome(rowLogLevel)
 	case "enter":
+		// A passive SILENT candidate can outlive an external change to the
+		// actual level. Leaving that untouched draft must never submit SILENT.
 		if m.loggingLevelCandidate == m.logging.Level || m.loggingLevelCandidate == "silent" {
 			return m, m.cancelLoggingEdit()
 		}
