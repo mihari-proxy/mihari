@@ -19,9 +19,10 @@
 - [x] 覆盖首次 Enter 无 PATCH、焦点高亮、左右循环及 SILENT、Esc 和被禁用的导航、无变化确认。
 - [x] 覆盖外部更新保持候选、确认使用最新 revision、Applying 动画及输入锁定、成功退出、失败重试、冲突重载和断连清理。
 - [x] 覆盖 root 输入模式和快捷键提示，调整依赖旧单次 Enter 行为的测试。
-- [ ] 最小测试通过后执行 `go test ./internal/tui/...`、`go test ./internal/integration`、`go test ./...`、`go vet ./...`；执行可用的 race 验证和六目标 CGO-free 构建。
-- [ ] 检查 gofmt、git diff、变更范围与文档；创建符合 DCO 的 Conventional Commit，推送并提交 PR 到 dev。
-- [ ] 跟踪该 PR 当前提交的 CI 和 Bot review，修复相关问题并重新验证，全部通过后汇报，不自动合并。
+- [x] 最小测试通过后执行 `go test ./internal/tui/...`、`go test ./internal/integration`、`go test ./...`、`go vet ./...`；执行可用的 race 验证和六目标 CGO-free 构建。
+- [x] 检查 gofmt、git diff、变更范围与文档；创建符合 DCO 的 Conventional Commit，推送并提交 PR 到 dev。
+
+PR 最终验收标准：当前提交的 CI 和 Bot review 全部通过，相关 review 问题处理并重新验证后汇报，不自动合并。后续提交及最终验收证据以 [PR #270 的检查与 review](https://github.com/mihari-proxy/mihari/pull/270) 为准。
 
 ## 执行记录
 
@@ -31,4 +32,7 @@
 - `go test ./internal/integration` 通过；`golangci-lint run ./...`（2.12.2）返回 0 issues。
 - 六目标 `CGO_ENABLED=0 go build ./cmd/mihari` 通过：Windows、Linux、macOS 的 amd64/arm64。构建输出写入 NUL，未生成待提交二进制。
 - `go test ./...`、`go vet ./...`、全仓 `gofmt -l .`、`git diff --check` 通过。
-- 本地 `go test -race ./...` 仍在运行；先提交 PR，以便远端三系统 CI 与 Bot review 并行验证，未提前标记 race 通过。
+- 功能提交：`03fea25`，包含 DCO；[PR #270](https://github.com/mihari-proxy/mihari/pull/270) 指向 `dev`。
+- 首次本地 `go test -race ./...` 在既有 `TestLegacyResourceRecovery_WholeTupleEveryForwardAndRecoveryBoundary` 触发默认 10 分钟超时，未报告数据竞争；本次 TUI 包 race 已通过。按 CI 已有配置改为 `go test -race -timeout=30m ./...` 重跑，不修改订阅代码。
+- 本地 `go test -race -timeout=30m ./...` 重跑全部通过，其中订阅包耗时 424.858 秒；没有数据竞争报告。
+- 功能提交 `03fea25` 的 [CI](https://github.com/mihari-proxy/mihari/actions/runs/35179487340) 和 [原生安全检查](https://github.com/mihari-proxy/mihari/actions/runs/35179487347) 全部通过，包含三系统 unit/race/vet-format、六目标构建、lint 和覆盖率任务。后续文档提交及 review 收口按上述 PR 最终验收标准继续验证。
