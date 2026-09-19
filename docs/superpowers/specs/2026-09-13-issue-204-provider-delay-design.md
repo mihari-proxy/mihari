@@ -28,7 +28,7 @@
 - 在保持现有公开字段的条件下，可以修复 provider-only 名称并补元数据；本轮保留按名称操作，采用已确认的全局普通节点优先规则，不实现完整跨来源身份协议。
 - 上游非成功 HTTP 响应的状态保存在 APIError.Details.status；诊断格式化器只输出错误码。
 - 2026-09-10 的 URL 回落和 TUI 限流设计已进入当前代码。此次缺陷不能通过重复调整默认 URL 解决；该旧文档对现场根因的描述属于当时判断，不代替 2026-09-13 的新证据。
-- Zashboard/MetaCubeXD 都采用 provider 节点发现与专用测速路径，但仍有按名称合并的歧义局限。参见 [面板对照](../../../projects/research-204-panels-20260913/report.md)。
+- Zashboard/MetaCubeXD 都采用 provider 节点发现与专用测速路径，但仍有按名称合并的歧义局限。参见 [面板对照（历史版本）](https://github.com/mihari-proxy/mihari/blob/8661e5bd2f1eedb0dd5dff3ef4c8fd27b089b95d/projects/research-204-panels-20260913/report.md)。
 - 现场日志缺少上游状态，不能断言其中 338 条简短错误全部为 404。参见 [调查记录](../../investigations/2026-09-13-issue-204-new-logs.md)。
 - mihomo v1.19.30 的 Selector 列表只序列化成员名称，选择接口也只接收节点名；实际选择为组当前遍历顺序中第一个同名对象。provider 单节点测速则可以明确指定来源。两者不能被描述成同一种能力。参见 [Selector 源码](https://github.com/MetaCubeX/mihomo/blob/ac017cdd246ce8bd547653d927e7bf77d7ee73d5/adapter/outboundgroup/selector.go#L50-L104)。
 - AGENTS.md 指向的 2026-08-03 架构规格在当前 worktree 和原工作区均不存在；现行参照为 AGENTS.md、[docs/architecture.md](../../architecture.md) 与已有相关设计。既有诊断设计也记录了该旧路径缺失。
@@ -233,7 +233,7 @@ session 只发布完整成功快照或带 Err 的最终失败事件；不新增�
 | 首次失败 | `Load failed`、`Unable to load proxy groups` | 错误空态 |
 | 恢复 | `Up to date` | 替换列表、更新成功时间、清除加载错误；测速时间不变 |
 
-过期标记的视觉方案已获用户确认，并按后续要求统一使用英文：页头显示 `Stale data`，下面用 `Last updated` 显示本 TUI 最近一次成功接收快照的时间与距今时长；分区错误区域给出失败类别，例如 `Refresh failed` 与 `Failed to load provider nodes: mihomo returned HTTP 503.`。列表保留，选中状态称 `Last selected`，历史测速值保持且用 `Last tested` 注明测速时间，不因列表刷新失败改成 `Failed`，也不在恢复列表时伪造新的测速结果。`Daemon connected` 与节点快照时效分别显示。采用默认分区提示与组级历史说明，不默认逐节点追加标签；预览中的紧凑提示和逐节点 `Previous` 标签仅为备选。交互示意见研究目录 proxies-stale-preview.html，涵盖正常、重试、耗尽、首次失败及恢复五种模拟状态；不是生产界面。
+过期标记的视觉方案已获用户确认，并按后续要求统一使用英文：页头显示 `Stale data`，下面用 `Last updated` 显示本 TUI 最近一次成功接收快照的时间与距今时长；分区错误区域给出失败类别，例如 `Refresh failed` 与 `Failed to load provider nodes: mihomo returned HTTP 503.`。列表保留，选中状态称 `Last selected`，历史测速值保持且用 `Last tested` 注明测速时间，不因列表刷新失败改成 `Failed`，也不在恢复列表时伪造新的测速结果。`Daemon connected` 与节点快照时效分别显示。采用默认分区提示与组级历史说明，不默认逐节点追加标签；预览中的紧凑提示和逐节点 `Previous` 标签仅为备选。交互示意见 [历史预览](https://github.com/mihari-proxy/mihari/blob/8661e5bd2f1eedb0dd5dff3ef4c8fd27b089b95d/projects/research-204-panels-20260913/proxies-stale-preview.html)，涵盖正常、重试、耗尽、首次失败及恢复五种模拟状态；不是生产界面。
 
 同名告警以启动后的首次成功完整目录作为本进程检查结果。失败不消耗检查机会；成功无重名后结束本次启动检查，后续轮询不再触发新告警。成功发现重名时进入 pending，直到现有 modal/安装提示关闭再显示一次。重新启动 TUI 后重新检查。
 
