@@ -86,15 +86,55 @@ func TestPageSettings_LayoutFitsAndKeepsFooter(t *testing.T) {
 }
 
 type settingsTestClient struct {
-	calls   int
-	request protocol.UpdateTUIPreferencesRequest
-	err     error
+	calls    int
+	request  protocol.UpdateTUIPreferencesRequest
+	err      error
+	warnings protocol.WarningOutcome
 }
 
 func (c *settingsTestClient) UpdateTUIPreferences(_ context.Context, req protocol.UpdateTUIPreferencesRequest) (protocol.TUIPreferences, error) {
 	c.calls++
 	c.request = req
-	return protocol.TUIPreferences{Revision: 8, Proxies: req.Proxies}, c.err
+	return protocol.TUIPreferences{Revision: 8, Proxies: req.Proxies, WarningOutcome: c.warnings}, c.err
+}
+
+func TestPageSettings_FullSaveFailureReachesF2(t *testing.T) {
+	m := NewModel()
+	m.active = ui.PageProxies
+	original := "synthetic save failure\nserver details\n" + strings.Repeat("full diagnostic detail ", 100)
+	m.preferencesClient = &settingsTestClient{err: errors.New(original)}
+	m.applyPreferences(protocol.TUIPreferences{Revision: 7})
+	m.pageSettings = newPageSettings(ui.PageProxies, m.preferences)
+	m.pageSettings.draft.ExtraLatency = false
+	next, _ := m.Update(m.savePageSettings()())
+	m = next.(Model)
+	if len(m.diagnosticWindow.entries) != 1 || !strings.Contains(m.diagnosticWindow.entries[0].snapshot.Detail, original) {
+		t.Fatal("save failure lost full diagnostic detail")
+	}
+	next, _ = m.Update(diagnosticKey(tea.KeyF2))
+	m = next.(Model)
+	if !m.diagnosticWindow.open || !strings.Contains(m.diagnosticWindow.pinned.Detail, original) || m.pageSettings == nil {
+		t.Fatal("F2 did not preserve full failure and underlying settings draft")
+	}
+}
+
+func TestPageSettings_CommittedWarningReachesF2(t *testing.T) {
+	m := NewModel()
+	m.active = ui.PageProxies
+	warning := protocol.Diagnostic{ID: "fixture:page-settings", State: protocol.DiagnosticAvailable, Severity: "warning", Summary: "saved with synchronization warning", Detail: "full warning\nsynthetic detail"}
+	m.preferencesClient = &settingsTestClient{warnings: protocol.WarningOutcome{Warnings: []protocol.Warning{{Message: warning.Summary, Diagnostic: &warning}}}}
+	m.applyPreferences(protocol.TUIPreferences{Revision: 7})
+	m.pageSettings = newPageSettings(ui.PageProxies, m.preferences)
+	m.pageSettings.draft.ExtraLatency = false
+	next, _ := m.Update(m.savePageSettings()())
+	m = next.(Model)
+	if m.pageSettings != nil || m.preferences.EffectiveProxies().ExtraLatency || len(m.diagnosticWindow.entries) != 1 {
+		t.Fatal("warning changed save success or disappeared")
+	}
+	next, _ = m.Update(diagnosticKey(tea.KeyF2))
+	if next.(Model).diagnosticWindow.pinned.Detail != warning.Detail {
+		t.Fatal("F2 did not retain full committed warning")
+	}
 }
 
 func TestPageSettings_SaveCommitsDraft(t *testing.T) {

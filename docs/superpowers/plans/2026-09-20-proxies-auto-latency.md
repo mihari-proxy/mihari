@@ -51,3 +51,4 @@ UI 快照覆盖 72×22、100×28 的初始弹窗和跨 Section 跳转；布局�
 - CodeRabbit 指出的重连间隙已由回归测试复现：新 Status 尚未到达时，旧保存响应只凭 status epoch 会被接收。新增偏好连接 generation，在开始重连时立即失效旧保存响应，保留草稿；回归测试由失败转为通过。
 - 保存成功、取消、失败保留草稿拆为独立测试。两处 import 建议实际运行 `gofmt` 后均无差异。
 - 未采纳过滤 Ctrl+T 正在测速节点的建议：基线 `TestModel_SecondControlTReplacesUnstartedQueue` 明确要求重新建立全部叶子队列；本任务保留已有手动重测语义，自动发现仍按每轮去重。
+- Pullfrog 提出的 F2 丢失完整保存诊断无法复现：`observeDiagnosticMessage` 的 default 分支已经消费该消息的 `Err()` 和 `Warnings()`。补充两个端到端模型测试，确认多行长错误完整进入 F2、成功 warning 保留详情且不改变保存成功；无需修改生产逻辑。
