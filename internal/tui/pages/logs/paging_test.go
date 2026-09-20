@@ -8,8 +8,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// TestModel_PageKeys verifies filtered paging, resize-aware steps, and visible selection.
-func TestModel_PageKeys(t *testing.T) {
+// newPagingLogs creates a filtered list following its newest matching entry.
+func newPagingLogs() *Model {
 	m := New(100)
 	for i := range 80 {
 		level := "info"
@@ -20,6 +20,13 @@ func TestModel_PageKeys(t *testing.T) {
 	}
 	m.SetFilter("info", "entry-")
 	m.focus = focusRow
+	m.SetSize(100, 24)
+	return m
+}
+
+// TestModel_PageKeys verifies filtered paging, resize-aware steps, and visible selection.
+func TestModel_PageKeys(t *testing.T) {
+	m := newPagingLogs()
 	for _, step := range []struct {
 		key          rune
 		height, want int
@@ -38,10 +45,23 @@ func TestModel_PageKeys(t *testing.T) {
 			t.Fatal("selected log is outside the rendered window")
 		}
 	}
+}
+
+// TestModel_PageKeysPreserveSelectionOnAppend verifies paging keeps new logs from moving the reader.
+func TestModel_PageKeysPreserveSelectionOnAppend(t *testing.T) {
+	m := newPagingLogs()
+	m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
 	m.Append(logAt("entry-new", "info", 100))
-	if m.focused != 39 || m.Unread() != 1 {
+	if m.following || m.focused != 24 || m.Unread() != 1 {
 		t.Fatal("new log moved the selection or lost unread count")
 	}
+}
+
+// TestModel_PageKeysGResumesFollowing verifies G restores live following after paging.
+func TestModel_PageKeysGResumesFollowing(t *testing.T) {
+	m := newPagingLogs()
+	m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	m.Append(logAt("entry-new", "info", 100))
 	m.Update(tea.KeyPressMsg{Code: 'G', Text: "G"})
 	if !m.following || m.focused != 40 || m.Unread() != 0 {
 		t.Fatal("G did not restore follow")
