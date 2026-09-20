@@ -74,7 +74,7 @@ func (m *Model) latestLabel(panel protocol.PanelStatus) string {
 		return latest + " · Up to date"
 	}
 	if panel.InstalledBuild != "" {
-		return latest + " · available"
+		return latest + " · Update available"
 	}
 	return latest
 }

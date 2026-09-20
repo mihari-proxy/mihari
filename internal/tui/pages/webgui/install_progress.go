@@ -25,6 +25,8 @@ func (m *Model) beginInstall(pending ui.ActionPendingMsg) tea.Cmd {
 		prefix = "panel:install:"
 	case ui.ActionReinstallPanel:
 		prefix = "panel:reinstall:"
+	case ui.ActionUpdatePanel:
+		prefix = "panel:update:"
 	default:
 		return nil
 	}
