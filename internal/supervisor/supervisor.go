@@ -154,10 +154,10 @@ func (s *Supervisor) Run(ctx context.Context) (resultErr error) {
 			case <-ctx.Done():
 				return nil
 			case response := <-s.restart:
-				response <- coreRecoveryRequired()
+				response <- s.idleRejection()
 				continue
 			case request := <-s.maintain:
-				request.response <- coreRecoveryRequired()
+				request.response <- s.idleRejection()
 				continue
 			case request := <-s.update:
 				if s.blocked.Load() && !request.reinstall {
@@ -401,6 +401,13 @@ func (s *Supervisor) stopChild(child Child, done <-chan error) (resultErr error)
 		<-done
 		return s.waitDescendants(child)
 	}
+}
+
+func (s *Supervisor) idleRejection() error {
+	if s.blocked.Load() {
+		return coreRecoveryRequired()
+	}
+	return protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo core is not installed"}
 }
 
 func coreRecoveryRequired() error {

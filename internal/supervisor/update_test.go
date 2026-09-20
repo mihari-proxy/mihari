@@ -7,8 +7,46 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/core"
 )
+
+func TestWaitingCoreRejectsRestartAndMaintenanceWithoutRecoveryError(t *testing.T) {
+	starter := newFakeStarter()
+	ready := make(chan struct{}, 1)
+	s := New(Options{Starter: starter, Now: func() time.Time {
+		select {
+		case ready <- struct{}{}:
+		default:
+		}
+		return time.Now()
+	}})
+	s.WaitForCore()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := waitDone(t, done); err != nil {
+			t.Error(err)
+		}
+	})
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal("supervisor did not enter waiting state")
+	}
+	called := false
+	for _, err := range []error{s.Restart(ctx), s.Maintain(ctx, func() error { called = true; return nil })} {
+		var apiErr protocol.APIError
+		if !errors.As(err, &apiErr) || apiErr.Code != protocol.CodeInvalidState || apiErr.Message != "mihomo core is not installed" {
+			t.Errorf("first installation rejection = %v", err)
+		}
+	}
+	if called || starter.nextPID.Load() != 0 {
+		t.Fatalf("waiting state performed maintenance or started a core: called=%v starts=%d", called, starter.nextPID.Load())
+	}
+}
 
 func TestUpdateAdoptionRetainsActualTrialStartTime(t *testing.T) {
 	starter := newFakeStarter()
