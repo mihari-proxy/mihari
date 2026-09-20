@@ -328,6 +328,7 @@ func (m *Model) installSelected() tea.Cmd {
 	}
 }
 
+// updateSelected builds an update intent whose result clears the panel's progress.
 func (m *Model) updateSelected() tea.Cmd {
 	panel, ok := m.selectedPanel()
 	if !ok || m.client == nil {

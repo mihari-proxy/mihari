@@ -9,6 +9,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+// TestWebGUI_SummaryUsesAlignedRows verifies the three aligned summary fields.
 func TestWebGUI_SummaryUsesAlignedRows(t *testing.T) {
 	m := New(nil, []string{protocol.CapabilityWebGUI})
 	m.SetStatus(sampleStatus())
@@ -21,6 +22,7 @@ func TestWebGUI_SummaryUsesAlignedRows(t *testing.T) {
 	}
 }
 
+// TestWebGUI_ProgressFollowsActions verifies inline and wrapped progress placement.
 func TestWebGUI_ProgressFollowsActions(t *testing.T) {
 	for _, tc := range []struct {
 		key, label, button string
@@ -71,6 +73,7 @@ func TestWebGUI_ProgressFollowsActions(t *testing.T) {
 	}
 }
 
+// TestWebGUI_UpdateAvailabilityStaysOnLatestRow keeps availability separate from progress.
 func TestWebGUI_UpdateAvailabilityStaysOnLatestRow(t *testing.T) {
 	c := &checkingClient{fakeClient: fakeClient{status: sampleStatus()}, latest: "v9.0.0"}
 	m := New(c, []string{protocol.CapabilityWebGUI})
@@ -86,10 +89,19 @@ func TestWebGUI_UpdateAvailabilityStaysOnLatestRow(t *testing.T) {
 			t.Fatal("availability moved to actions")
 		}
 	}
+}
+
+// TestWebGUI_UpdateCompletionRefreshesVersion verifies settlement after a successful update.
+func TestWebGUI_UpdateCompletionRefreshesVersion(t *testing.T) {
+	c := &checkingClient{fakeClient: fakeClient{status: sampleStatus()}, latest: "v9.0.0"}
+	m := New(c, []string{protocol.CapabilityWebGUI})
+	runCheckCommands(m, m.Load())
+	intent := m.updateSelected()().(ui.ActionIntentMsg)
+	m.Update(ui.ActionPendingMsg{Page: intent.Page, Action: intent.Action, Key: intent.Key})
 	c.status.Panels[0].InstalledBuild = "v9.0.0"
 	_, reload := m.Update(intent.Execute())
 	runCheckCommands(m, reload)
-	body = ansi.Strip(m.panelBody(m.status.Panels[0], 0, 80))
+	body := ansi.Strip(m.panelBody(m.status.Panels[0], 0, 80))
 	if strings.Contains(body, "Updating") || strings.Contains(body, "Update available") || !strings.Contains(body, "v9.0.0 · Up to date") {
 		t.Fatalf("completion did not settle: %s", body)
 	}

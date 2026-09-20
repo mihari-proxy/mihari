@@ -28,6 +28,7 @@ func TestWebGUI_RefreshImmediatelyFollowsSummary(t *testing.T) {
 	t.Fatal("missing refresh callout")
 }
 
+// TestWebGUI_InstallAnimationLifetime verifies install, reinstall and update animation cleanup.
 func TestWebGUI_InstallAnimationLifetime(t *testing.T) {
 	for _, action := range []ui.Action{ui.ActionInstallPanel, ui.ActionReinstallPanel, ui.ActionUpdatePanel} {
 		for _, failed := range []bool{false, true} {

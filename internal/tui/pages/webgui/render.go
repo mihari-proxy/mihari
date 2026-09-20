@@ -110,6 +110,7 @@ func (m *Model) panelCard(index int, body string, inner int) string {
 	return ui.RenderBorderedSectionWithBorder(m.theme, valueOr(panel.Name, panel.ID), body, inner, border)
 }
 
+// panelBody renders installed state, version metadata and action-local progress.
 func (m *Model) panelBody(panel protocol.PanelStatus, index, inner int) string {
 	installed := panel.InstalledBuild != ""
 	state := m.theme.Muted.Render("○ Not installed")

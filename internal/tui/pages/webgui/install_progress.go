@@ -15,6 +15,7 @@ type installSpinTickMsg struct {
 	gen uint64
 }
 
+// beginInstall tracks panel deployment progress and starts the shared animation timer.
 func (m *Model) beginInstall(pending ui.ActionPendingMsg) tea.Cmd {
 	if pending.Page != ui.PageWebGUI {
 		return nil
