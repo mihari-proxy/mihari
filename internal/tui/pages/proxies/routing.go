@@ -208,6 +208,12 @@ func (m *Model) routingKey(key string) (bool, tea.Cmd) {
 	switch key {
 	case "esc":
 		return true, func() tea.Msg { return ui.FocusRailMsg{} }
+	case "pgdown":
+		if len(m.groups) > 0 {
+			m.routing.focus = -1
+			m.focus = FocusID{Group: m.groups[0].Name}
+			m.movePage(1)
+		}
 	case "up":
 		if m.routing.focus > 0 {
 			m.routing.focus--

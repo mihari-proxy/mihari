@@ -52,6 +52,8 @@ Proxy latency tests discover provider nodes and use mihomo's provider-specific e
 
 While a TUI proxy latency test is running, its node card shows only an animated Braille spinner beside the protocol.
 
+On **Proxies**, **PgUp/PgDn** moves about one screen through group headers and expanded node cards, keeps the focused card visible, and preserves its grid column where possible. The step adapts to the window size and fixed Routing header. PgDn also enters the group list from Routing controls; paging leaves the selected proxy and expanded groups unchanged.
+
 The TUI subscription table sizes Name and Traffic to their contents, capped at 32 and 24 terminal columns. Extra width stays on the right; narrow terminals hide lower-priority fields first.
 
 Subscription Mode displays `auto` as **PROXY w Fallback to DIRECT**. It retries the main subscription YAML directly after eligible proxy network failures, including a timeout while reading a successful response body; HTTP errors and invalid documents do not trigger fallback. Each download attempt allows 30 seconds. Add/Refresh share a 120-second daemon execution budget, while CLI/TUI allow 180 seconds per subscription to include bounded rollback and the response. Shorter caller deadlines and cancellation still apply; batch refresh uses a fresh budget per item. Narrow lists hide the whole Mode column when necessary; editable details retain its full value. Provider download policies and Routing Mode are independent.

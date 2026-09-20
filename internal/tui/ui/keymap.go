@@ -90,6 +90,7 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"t"}, Display: "t", Label: "test the focused node", Footer: "t test", Scope: ScopePage, Page: PageProxies},
 		{Keys: []string{"ctrl+t"}, Display: "Ctrl+T", Label: "test all", Footer: "Ctrl+T test all", Scope: ScopePage, Page: PageProxies},
 		{Keys: []string{"up", "down", "left", "right"}, Display: "↑/↓/←/→", Label: "move; at a group header, → focuses Locate and ← returns to the header", Scope: ScopePage, Page: PageProxies},
+		{Keys: []string{"pgup", "pgdown"}, Display: "PgUp/PgDn", Label: "page through groups and node cards", Scope: ScopePage, Page: PageProxies},
 
 		{Keys: []string{"/"}, Display: "/", Label: "search from page content", Footer: "/ search · Ctrl+F", Scope: ScopePage, Page: PageConnections},
 		{Keys: []string{"ctrl+f"}, Display: "Ctrl+F", Label: "focus search from the rail or page content", Scope: ScopePage, Page: PageConnections},
