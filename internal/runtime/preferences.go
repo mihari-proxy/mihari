@@ -49,6 +49,9 @@ func (m *Manager) UpdateTUIPreferences(ctx context.Context, operation Operation,
 }
 
 func preferenceMutationError(err error) error {
+	if errors.Is(err, preferences.ErrInvalidLogLevels) {
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid TUI log display levels"}, err)
+	}
 	if errors.Is(err, preferences.ErrInvalidColumns) {
 		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid TUI connections columns"}, err)
 	}

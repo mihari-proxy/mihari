@@ -16,6 +16,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
+	logspage "github.com/mihari-proxy/mihari/internal/tui/pages/logs"
 	subscriptionspage "github.com/mihari-proxy/mihari/internal/tui/pages/subscriptions"
 	systempage "github.com/mihari-proxy/mihari/internal/tui/pages/system"
 	"github.com/mihari-proxy/mihari/internal/tui/session"
@@ -310,6 +311,9 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 		events = controlSession.Start(sessionCtx)
 	}
 	model := newRunModel(ctx, options.Client, events, health, applier)
+	if page, ok := model.pages[ui.PageLogs].(*logspage.Model); ok {
+		defer page.Stop()
+	}
 	model.localDiagnosticHistory = history
 	if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
 		defer page.Stop()
@@ -344,6 +348,9 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 		tea.WithOutput(options.Output),
 	)
 	final, err := program.Run()
+	if page, ok := model.pages[ui.PageLogs].(*logspage.Model); ok {
+		page.Stop()
+	}
 	if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
 		page.Stop()
 	}

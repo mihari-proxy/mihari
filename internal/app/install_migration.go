@@ -18,6 +18,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/geoip"
 	"github.com/mihari-proxy/mihari/internal/panel"
 	"github.com/mihari-proxy/mihari/internal/panel/archive"
+	"github.com/mihari-proxy/mihari/internal/preferences"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/subscription"
 	"go.yaml.in/yaml/v3"
@@ -1031,6 +1032,7 @@ func decodeTUIBytes(raw []byte) error {
 			ExtraLatency    bool `json:"extra_latency"`
 			AutoLatencyTest bool `json:"auto_latency_test"`
 		} `json:"proxies,omitempty"`
+		LogLevels []string `json:"log_levels"`
 	}
 	if err := dec.Decode(&persisted); err != nil {
 		return migrateData("invalid tui preferences")
@@ -1040,6 +1042,11 @@ func decodeTUIBytes(raw []byte) error {
 	}
 	if persisted.Schema != "mihari.tui-preferences/v1" {
 		return migrateData("unsupported tui preferences schema")
+	}
+	if persisted.LogLevels != nil {
+		if err := preferences.ValidateLogLevels(persisted.LogLevels); err != nil {
+			return migrateData("invalid tui log display levels")
+		}
 	}
 	return nil
 }

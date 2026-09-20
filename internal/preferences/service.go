@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sync/atomic"
 
 	"github.com/mihari-proxy/mihari/internal/config"
@@ -19,7 +20,10 @@ const (
 )
 
 var (
-	ErrInvalidColumns   = errors.New("invalid connections columns")
+	ErrInvalidColumns = errors.New("invalid connections columns")
+	// ErrInvalidLogLevels identifies an empty, unknown, or duplicate display-level selection.
+	ErrInvalidLogLevels = errors.New("invalid log display levels")
+	defaultLogLevels    = []string{"debug", "info", "warn", "error"}
 	defaultColumns      = []string{"host", "network", "source", "destination", "chain", "rule", "traffic"}
 	connectionColumnIDs = map[string]struct{}{
 		"host": {}, "network": {}, "source": {}, "destination": {}, "chain": {},
@@ -30,6 +34,8 @@ var (
 type Preferences struct {
 	ConnectionsColumns []string
 	Proxies            ProxyPreferences
+	// LogLevels is the committed set of canonical levels restored by new TUI sessions.
+	LogLevels []string
 }
 
 // ProxyPreferences controls Proxies presentation and automatic latency tests.
@@ -46,6 +52,8 @@ func DefaultProxyPreferences() ProxyPreferences {
 type Update struct {
 	ConnectionsColumns []string
 	Proxies            *ProxyPreferences
+	// LogLevels replaces the saved set when non-nil; an empty set is invalid.
+	LogLevels []string
 }
 
 type Service struct {
@@ -57,10 +65,11 @@ type document struct {
 	Schema             string            `json:"schema"`
 	ConnectionsColumns []string          `json:"connections_columns"`
 	Proxies            *ProxyPreferences `json:"proxies,omitempty"`
+	LogLevels          []string          `json:"log_levels"`
 }
 
 func Open(path string) (*Service, error) {
-	preferences := Preferences{ConnectionsColumns: append([]string(nil), defaultColumns...), Proxies: DefaultProxyPreferences()}
+	preferences := Preferences{ConnectionsColumns: append([]string(nil), defaultColumns...), Proxies: DefaultProxyPreferences(), LogLevels: append([]string(nil), defaultLogLevels...)}
 	raw, err := readFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read TUI preferences: %w", err)
@@ -86,6 +95,12 @@ func Open(path string) (*Service, error) {
 		if persisted.Proxies != nil {
 			preferences.Proxies = *persisted.Proxies
 		}
+		if persisted.LogLevels != nil {
+			if err := ValidateLogLevels(persisted.LogLevels); err != nil {
+				return nil, fmt.Errorf("decode TUI preferences: %w", err)
+			}
+			preferences.LogLevels = append([]string(nil), persisted.LogLevels...)
+		}
 	}
 	service := &Service{path: path}
 	service.snapshot.Store(preferences)
@@ -100,7 +115,9 @@ func (s *Service) Update(ctx context.Context, update Update) (Preferences, error
 	if err := ctx.Err(); err != nil {
 		return Preferences{}, err
 	}
-	if update.ConnectionsColumns != nil || update.Proxies == nil {
+	// An omitted field preserves its committed value. An empty update retains
+	// the former invalid-columns error instead of silently writing a no-op.
+	if update.ConnectionsColumns != nil || (update.Proxies == nil && update.LogLevels == nil) {
 		if err := validateColumns(update.ConnectionsColumns); err != nil {
 			return Preferences{}, err
 		}
@@ -112,11 +129,17 @@ func (s *Service) Update(ctx context.Context, update Update) (Preferences, error
 	if update.Proxies != nil {
 		next.Proxies = *update.Proxies
 	}
+	if update.LogLevels != nil {
+		if err := ValidateLogLevels(update.LogLevels); err != nil {
+			return Preferences{}, err
+		}
+		next.LogLevels = append([]string(nil), update.LogLevels...)
+	}
 	var proxyOverrides *ProxyPreferences
 	if next.Proxies != DefaultProxyPreferences() {
 		proxyOverrides = &next.Proxies
 	}
-	raw, err := json.MarshalIndent(document{Schema: fileSchema, ConnectionsColumns: next.ConnectionsColumns, Proxies: proxyOverrides}, "", "  ")
+	raw, err := json.MarshalIndent(document{Schema: fileSchema, ConnectionsColumns: next.ConnectionsColumns, Proxies: proxyOverrides, LogLevels: next.LogLevels}, "", "  ")
 	if err != nil {
 		return Preferences{}, fmt.Errorf("encode TUI preferences: %w", err)
 	}
@@ -147,7 +170,26 @@ func validateColumns(columns []string) error {
 
 func clone(value Preferences) Preferences {
 	value.ConnectionsColumns = append([]string(nil), value.ConnectionsColumns...)
+	value.LogLevels = append([]string(nil), value.LogLevels...)
 	return value
+}
+
+// ValidateLogLevels validates a nonempty set of canonical display level names.
+func ValidateLogLevels(levels []string) error {
+	if len(levels) == 0 {
+		return fmt.Errorf("%w: at least one level is required", ErrInvalidLogLevels)
+	}
+	seen := make(map[string]bool, len(levels))
+	for _, level := range levels {
+		if !slices.Contains(defaultLogLevels, level) {
+			return fmt.Errorf("%w: unknown level %q", ErrInvalidLogLevels, level)
+		}
+		if seen[level] {
+			return fmt.Errorf("%w: duplicate level %q", ErrInvalidLogLevels, level)
+		}
+		seen[level] = true
+	}
+	return nil
 }
 
 func readFile(path string) ([]byte, error) {
