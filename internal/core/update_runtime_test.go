@@ -30,8 +30,15 @@ func TestCoreUpdateRuntimeFirstInstallStartsButIdleUpdateStaysStopped(t *testing
 			starter := &capabilityStarter{seamStarter: &seamStarter{children: make(chan *seamChild, 8)}}
 			var manager *runtimeapi.Manager
 			var healthChecks atomic.Int32
+			ready := make(chan struct{})
+			var readyOnce sync.Once
 			sup := supervisor.New(supervisor.Options{
 				Starter: starter, Waiter: updateTestWaiter{},
+				Now: func() time.Time {
+					// Run reads the clock after publishing its event-loop lifetime.
+					readyOnce.Do(func() { close(ready) })
+					return time.Now()
+				},
 				BeforeStart: func(ctx context.Context) (func(), error) { return manager.PrepareCoreStart(ctx) },
 				Health: func(context.Context) error {
 					healthChecks.Add(1)
@@ -42,12 +49,10 @@ func TestCoreUpdateRuntimeFirstInstallStartsButIdleUpdateStaysStopped(t *testing
 				},
 				Observe: func(o supervisor.Observation) { manager.Observe(o) },
 			})
-			ready := make(chan struct{})
-			var readyOnce sync.Once
 			manager, starter.fixture, _, _ = seamManager(t, func(o *runtimeapi.Options) {
 				o.Supervisor, o.Installer = sup, installer
 				o.SysProxy = &seamSystemProxy{}
-				o.BinaryExists = func() bool { readyOnce.Do(func() { close(ready) }); return len(starter.fixture.Binary()) != 0 }
+				o.BinaryExists = func() bool { return len(starter.fixture.Binary()) != 0 }
 			})
 			installer.TestTrustedFixture = starter.fixture
 			starter.inspect = starter.fixture.Binary
@@ -62,7 +67,11 @@ func TestCoreUpdateRuntimeFirstInstallStartsButIdleUpdateStaysStopped(t *testing
 						t.Error(err)
 					}
 				})
-				<-ready
+				select {
+				case <-ready:
+				case <-time.After(5 * time.Second):
+					t.Fatal("supervisor did not enter the waiting event loop")
+				}
 			}
 			channel := "alpha"
 			_, err := manager.Install(context.WithValue(t.Context(), updateTestContextKey{}, true), runtimeapi.Operation{ID: "first-or-stopped", Channel: &channel})
