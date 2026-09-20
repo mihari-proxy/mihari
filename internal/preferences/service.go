@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sync/atomic"
 
 	"github.com/mihari-proxy/mihari/internal/config"
@@ -177,9 +178,7 @@ func ValidateLogLevels(levels []string) error {
 	}
 	seen := make(map[string]bool, len(levels))
 	for _, level := range levels {
-		switch level {
-		case "debug", "info", "warn", "error":
-		default:
+		if !slices.Contains(defaultLogLevels, level) {
 			return fmt.Errorf("%w: unknown level %q", ErrInvalidLogLevels, level)
 		}
 		if seen[level] {

@@ -52,3 +52,11 @@
 6. 合并后核对 PR 的 MERGED 状态、merge commit 和远端 dev 归属。最终交付 PR 链接与验证结果；不在本地 dev 上直接提交，不自动删除其他 worktree。
 
 CI、bot review 和最终合并状态以 PR 上对应提交的检查记录为准；本计划中的待执行步骤本身不作为已完成证据。
+
+## 执行记录
+
+- 已在独立分支完成 DCO 签名提交，并无冲突 rebase 到 `origin/dev` 的 `58199b2`，保留上游列表快速翻页行为；[PR #292](https://github.com/mihari-proxy/mihari/pull/292) 指向 `dev`。
+- rebase 后全仓 test/race、vet、golangci-lint v2.12.2 和格式检查通过。本地 Unix 安全脚本测试为 74 passed、4 skipped；真实平台矩阵由 GitHub CI 验收。
+- Pullfrog 未发现重要问题；其关于旧代码接受 nil 列的意见与 `len(nil) == 0` 校验及既有回归测试相反，已提供基线证据并解决讨论。
+- 采纳 CodeRabbit 的维护性建议：级别合法性校验复用默认全级别列表，避免两处字符串集合漂移，原有空列表、未知及重复值校验保持不变。
+- cubic 因月度额度用尽返回 neutral，属于不可用评审；不将其视为已完成代码审查。最新 head 的其余 CI 与可用 bot 评审须在合并前全部收口。
