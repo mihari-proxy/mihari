@@ -234,6 +234,7 @@ const (
 	WebPortLabel                 = "Web"
 	PortOwned                    = "Owned"
 	PortAvailable                = "Available"
+	PortCheckingOwner            = "Checking owner…"
 	PortOccupiedByNamed          = "Occupied by %s (%d)"
 	PortOccupiedByPID            = "Occupied by PID %d"
 	PortOccupiedByOtherApp       = "Occupied by other app"

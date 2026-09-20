@@ -18,6 +18,9 @@ const (
 	PortHoldOwned
 	// PortHoldOccupied means some other process holds the address.
 	PortHoldOccupied
+	// PortHoldChecking means the occupant is known but the managed core's
+	// identity has not arrived yet, so ownership cannot be decided.
+	PortHoldChecking
 )
 
 // PortHold is the classified result for one managed endpoint.
@@ -63,6 +66,8 @@ func FormatPortHoldLabel(hold PortHold) string {
 		return PortOwned
 	case PortHoldAvailable:
 		return PortAvailable
+	case PortHoldChecking:
+		return PortCheckingOwner
 	case PortHoldOccupied:
 		name := strings.TrimSpace(hold.Process)
 		if name != "" && hold.PID > 0 {
