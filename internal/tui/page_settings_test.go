@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	proxypage "github.com/mihari-proxy/mihari/internal/tui/pages/proxies"
+	"github.com/mihari-proxy/mihari/internal/tui/session"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"strings"
 	"testing"
@@ -96,7 +97,7 @@ func (c *settingsTestClient) UpdateTUIPreferences(_ context.Context, req protoco
 	return protocol.TUIPreferences{Revision: 8, Proxies: req.Proxies}, c.err
 }
 
-func TestPageSettings_SaveCancelAndFailure(t *testing.T) {
+func TestPageSettings_SaveCommitsDraft(t *testing.T) {
 	m := NewModel()
 	c := &settingsTestClient{}
 	m.preferencesClient = c
@@ -112,17 +113,30 @@ func TestPageSettings_SaveCancelAndFailure(t *testing.T) {
 	if c.calls != 1 || c.request.ConnectionsColumns != nil || *c.request.IfRevision != 7 || c.request.Proxies.AutoLatencyTest || m.pageSettings != nil || m.preferences.EffectiveProxies().AutoLatencyTest {
 		t.Fatalf("request=%+v model=%+v", c.request, m.pageSettings)
 	}
+}
+
+func TestPageSettings_CancelPreservesCommittedPreferences(t *testing.T) {
+	m := NewModel()
+	c := &settingsTestClient{}
+	m.preferencesClient = c
+	m.applyPreferences(protocol.TUIPreferences{Revision: 7})
 	m.pageSettings = newPageSettings(ui.PageProxies, m.preferences)
 	m.pageSettings.draft.ExtraLatency = false
-	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = next.(Model)
-	if c.calls != 1 || !m.preferences.EffectiveProxies().ExtraLatency {
+	if c.calls != 0 || m.pageSettings != nil || !m.preferences.EffectiveProxies().ExtraLatency {
 		t.Fatal("Cancel changed preferences")
 	}
+}
+
+func TestPageSettings_FailureRetainsDraft(t *testing.T) {
+	m := NewModel()
+	c := &settingsTestClient{err: errors.New("synthetic save failure\nserver details\nmore details")}
+	m.preferencesClient = c
+	m.applyPreferences(protocol.TUIPreferences{Revision: 7})
 	m.pageSettings = newPageSettings(ui.PageProxies, m.preferences)
 	m.pageSettings.draft.ExtraLatency = false
-	c.err = errors.New("synthetic save failure\nserver details\nmore details")
-	next, _ = m.Update(m.savePageSettings()())
+	next, _ := m.Update(m.savePageSettings()())
 	m = next.(Model)
 	if m.pageSettings == nil || m.pageSettings.saving || m.pageSettings.draft.ExtraLatency || !strings.Contains(m.pageSettings.err, "synthetic save failure") || !m.preferences.EffectiveProxies().ExtraLatency {
 		t.Fatal("failed save did not retain draft and committed state")
@@ -147,6 +161,23 @@ func TestPageSettings_SaveResultFromPreviousDaemonDoesNotApply(t *testing.T) {
 	m = next.(Model)
 	if !m.preferences.EffectiveProxies().ExtraLatency || m.pageSettings == nil || m.pageSettings.err == "" {
 		t.Fatal("previous daemon's save result applied after reconnect")
+	}
+}
+
+func TestPageSettings_ReconnectingRejectsOutstandingSave(t *testing.T) {
+	m := NewModel()
+	m.statusEpoch = 1
+	m.preferencesClient = &settingsTestClient{}
+	m.applyPreferences(protocol.TUIPreferences{Revision: 7})
+	m.pageSettings = newPageSettings(ui.PageProxies, m.preferences)
+	m.pageSettings.draft.ExtraLatency = false
+	cmd := m.savePageSettings()
+	m.applySessionEvent(session.Event{Kind: session.EventReconnecting, Epoch: 2})
+	// Reconnecting precedes the new status event, so statusEpoch is still 1.
+	next, _ := m.Update(cmd())
+	m = next.(Model)
+	if m.preferencesLoaded || !m.preferences.EffectiveProxies().ExtraLatency || m.pageSettings == nil || m.pageSettings.saving || m.pageSettings.err == "" {
+		t.Fatal("save from disconnected session applied or discarded the draft")
 	}
 }
 

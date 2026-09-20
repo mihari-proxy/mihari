@@ -237,6 +237,7 @@ func (d *pageSettingsDialog) view(width, height int) string {
 
 type pageSettingsSavedMsg struct {
 	epoch       uint64
+	generation  uint64
 	dialog      *pageSettingsDialog
 	preferences protocol.TUIPreferences
 	err         error
@@ -266,7 +267,7 @@ func (model *Model) savePageSettings() tea.Cmd {
 	}
 	d.saving, d.err = true, ""
 	draft, revision := d.draft, model.preferences.Revision
-	epoch := model.statusEpoch
+	epoch, generation := model.statusEpoch, model.preferencesGeneration
 	client := model.preferencesClient
 	parent := model.pageCtx
 	if parent == nil {
@@ -277,7 +278,7 @@ func (model *Model) savePageSettings() tea.Cmd {
 		ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 		defer cancel()
 		prefs, err := client.UpdateTUIPreferences(ctx, protocol.UpdateTUIPreferencesRequest{OperationID: id, IfRevision: &revision, Proxies: &draft})
-		return pageSettingsSavedMsg{dialog: d, preferences: prefs, err: err, epoch: epoch}
+		return pageSettingsSavedMsg{dialog: d, preferences: prefs, err: err, epoch: epoch, generation: generation}
 	}
 }
 
@@ -296,10 +297,10 @@ func (model *Model) applyPreferences(prefs protocol.TUIPreferences) {
 
 func (model *Model) updatePageSettings(message tea.Msg) (tea.Cmd, bool) {
 	if saved, ok := message.(pageSettingsSavedMsg); ok {
-		if saved.epoch != model.statusEpoch {
+		if saved.epoch != model.statusEpoch || saved.generation != model.preferencesGeneration {
 			if model.pageSettings == saved.dialog {
 				saved.dialog.saving = false
-				saved.dialog.err = "Daemon changed; reopen settings to review"
+				saved.dialog.err = "Daemon connection changed; reopen settings to review"
 			}
 			return nil, true
 		}

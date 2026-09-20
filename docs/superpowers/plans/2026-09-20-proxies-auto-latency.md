@@ -45,3 +45,9 @@ UI 快照覆盖 72×22、100×28 的初始弹窗和跨 Section 跳转；布局�
 构建产物位于 worktree 的忽略目录 `bin/`。未连接真实订阅或真实 mihomo，未修改系统服务。原工作目录的用户 `.gitignore` 修改未改动。
 
 用户随后授权提交、rebase、创建 PR、根据 CI 和可用 bot review 修正，并在全绿后 bypass merge 到 dev。rebase 保留了上游 PgUp/PgDn 功能，翻页和自动测速共用渲染几何；新增回归测试验证翻页后的可见及部分可见卡片会测速，屏外节点不提前测速，已见节点不重复测速。PR 中记录最终 CI 和 review 结果。
+
+## PR 审查修正
+
+- CodeRabbit 指出的重连间隙已由回归测试复现：新 Status 尚未到达时，旧保存响应只凭 status epoch 会被接收。新增偏好连接 generation，在开始重连时立即失效旧保存响应，保留草稿；回归测试由失败转为通过。
+- 保存成功、取消、失败保留草稿拆为独立测试。两处 import 建议实际运行 `gofmt` 后均无差异。
+- 未采纳过滤 Ctrl+T 正在测速节点的建议：基线 `TestModel_SecondControlTReplacesUnstartedQueue` 明确要求重新建立全部叶子队列；本任务保留已有手动重测语义，自动发现仍按每轮去重。

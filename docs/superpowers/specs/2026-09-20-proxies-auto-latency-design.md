@@ -2,7 +2,7 @@
 
 日期：2026-09-20。
 状态：逐项设计已获用户确认，按 Q13、Q14 的修正完成实现与验证；详见[执行记录](../plans/2026-09-20-proxies-auto-latency.md)。
-分支：`feat/proxies-auto-latency`，基于本地 `dev` @ `f1abdd37`。
+分支：`feat/proxies-auto-latency`，初始基于本地 `dev` @ `f1abdd37`，交付前 rebase 至 `origin/dev` @ `58199b2`。
 工作目录：`.worktrees/feat-proxies-auto-latency`。
 
 ## 用户请求
@@ -66,7 +66,7 @@ GLOBAL   [US] Haruka 0x 149 ms
 - 延迟插在当前名称之后、Jump to Selected 按钮之前。Basic GLOBAL 的延迟与该行实际展示的目标一致，不能将保存目标与实时目标混配。
 - 窄终端内对名称按显示列截断，避免延迟、定位按钮或提示越过边框；Basic 保持两行、设置入口保持第一行第二列。配置弹窗右侧可滚动，底部按钮固定，保持 C 的双列结构并适应支持的窗口尺寸。
 - 页面设置仅纳入 Proxies 两个开关，其他 Section 显示占位文案；不迁移 Conns 列配置、Logs 筛选或 System 业务设置。
-- 只使用合成数据与 fake 客户端验证，不连接真实订阅、真实 mihomo 或修改系统服务；本任务尚未授权创建 commit、推送或 PR。
+- 只使用合成数据与 fake 客户端验证，不连接真实订阅、真实 mihomo 或修改系统服务；用户在实现验证完成后已授权提交、推送、PR 及全绿后的 bypass merge。
 
 ## 实施顺序与验证
 

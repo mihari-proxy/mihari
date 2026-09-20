@@ -44,6 +44,7 @@ type Model struct {
 	preferencesClient      pagePreferencesClient
 	preferences            protocol.TUIPreferences
 	preferencesLoaded      bool
+	preferencesGeneration  uint64
 	quitting               bool
 	proxyNamesChecked      bool
 	proxyNamesPending      []string
@@ -960,6 +961,7 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		command = tea.Batch(command, model.loadNetworkStatus())
 	case session.EventReconnecting:
 		model.preferencesLoaded = false
+		model.preferencesGeneration++
 		if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
 			command = tea.Batch(command, page.ObserveConnection(false))
 		}
