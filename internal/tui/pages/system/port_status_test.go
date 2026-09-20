@@ -8,6 +8,8 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+// TestSystemPortStatus_ReconcilesOwnerAfterRestart verifies that owner updates
+// correct cached occupancy regardless of probe delivery order or core update source.
 func TestSystemPortStatus_ReconcilesOwnerAfterRestart(t *testing.T) {
 	for _, order := range []string{"probe-first", "snapshot-first", "core-observed", "core-loaded"} {
 		t.Run(order, func(t *testing.T) {
@@ -49,6 +51,8 @@ func TestSystemPortStatus_ReconcilesOwnerAfterRestart(t *testing.T) {
 	}
 }
 
+// TestSystemPortStatus_OlderProbeCannotOverwriteNewerResult verifies that a delayed
+// probe cannot replace a newer observation of available endpoints.
 func TestSystemPortStatus_OlderProbeCannotOverwriteNewerResult(t *testing.T) {
 	model := portsModel(t)
 	model.listenFree = func(string) bool { return false }
@@ -66,6 +70,8 @@ func TestSystemPortStatus_OlderProbeCannotOverwriteNewerResult(t *testing.T) {
 	}
 }
 
+// TestSystemPortStatus_OwnerChangePreservesForeignOccupant verifies that a socket
+// held by a different PID remains foreign even when its process is named mihomo.
 func TestSystemPortStatus_OwnerChangePreservesForeignOccupant(t *testing.T) {
 	model := portsModel(t)
 	model.listenFree = func(string) bool { return false }
