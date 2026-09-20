@@ -22,7 +22,7 @@ func TestVersionChecks_RealAdaptersThroughControlClientWithoutInstallation(t *te
 		var body string
 		switch r.URL.Path {
 		case "/repos/MetaCubeX/mihomo/releases/latest":
-			body = `{"tag_name":"v1.20.0","assets":[{"name":"mihomo-linux-amd64-v1.20.0.gz"}]}`
+			body = `{"id":123,"tag_name":"v1.20.0","assets":[{"id":456,"name":"mihomo-linux-amd64-v1.20.0.gz","state":"uploaded","size":32,"updated_at":"2026-09-17T01:00:00Z"}]}`
 		case "/repos/Zephyruso/zashboard/releases/latest":
 			body = `{"tag_name":"v2.0.0","assets":[{"name":"dist.zip","browser_download_url":"https://example.invalid/dist.zip"}]}`
 		case "/repos/MetaCubeX/metacubexd/branches/gh-pages":

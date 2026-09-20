@@ -28,8 +28,10 @@ const (
 )
 
 type Installer struct {
-	// Provenance selects the trusted root route; nil preserves legacy platforms.
-	Provenance      ProvenanceStore
+	// Provenance binds protected staging and execution to a verified data root.
+	Provenance ProvenanceStore
+	// Updates enables daemon-owned transactions without changing execution policy.
+	Updates         ProvenanceStore
 	GeneratedConfig func(context.Context) (*ConfigCapability, error)
 	Executor        VerifiedExecutor
 	Reporter        diagnostics.Reporter
@@ -77,10 +79,12 @@ func (i Installer) Install(ctx context.Context, request InstallRequest) (Install
 	return candidate.Commit()
 }
 
-// DetectVersion 报告现有核心二进制的版本（运行 mihomo -v）。供 runtime 侧 setup 本地预检
-// 复用，避免在 runtime.Manager 里另持 Runner；判据复用 DetectVersion（含 ParseVersion 版本
-// 格式校验），与 Prepare 的同版本短路同一判据、DRY（design §4.3 实现位置）。
+// DetectVersion reports a local core version after the configured platform checks.
+// Setup uses it to recognize an existing offline or administrator-deployed core.
 func (i Installer) DetectVersion(ctx context.Context, binaryPath string) (string, error) {
+	if err := i.CheckExecution(ctx); err != nil {
+		return "", err
+	}
 	if i.Provenance != nil {
 		v, e := OpenInstalledCore(ctx, i.Provenance)
 		if e != nil {
@@ -97,8 +101,18 @@ func (i Installer) DetectVersion(ctx context.Context, binaryPath string) (string
 	return DetectVersion(ctx, runner, binaryPath)
 }
 
+// CheckExecution refuses an incomplete update outside its owning lifecycle.
+// Normal ordinary-platform starts retain their existing execution policy.
+func (i Installer) CheckExecution(ctx context.Context) error {
+	if i.Updates != nil {
+		return authorizePendingUpdate(ctx, i.Updates)
+	}
+	return nil
+}
+
 type Candidate struct {
-	trusted *trustedCandidate
+	trusted   *trustedCandidate
+	protected *protectedCandidate
 
 	path       string
 	binaryPath string
@@ -107,6 +121,7 @@ type Candidate struct {
 	updated    bool
 	cleanup    sync.Once
 	reporter   diagnostics.Reporter
+	warnings   []error
 }
 
 type PreparedCore interface {
@@ -120,7 +135,13 @@ func (c *Candidate) Version() string { return c.version }
 
 func (c *Candidate) Updated() bool { return c.updated }
 
+// Warnings returns preparation diagnostics for the operation owner to publish.
+func (c *Candidate) Warnings() []error { return append([]error(nil), c.warnings...) }
+
 func (c *Candidate) Commit() (InstallResult, error) {
+	if c.protected != nil {
+		return InstallResult{}, dataFailure("core update requires the runtime transaction owner")
+	}
 	if c.trusted != nil {
 		return c.commitTrusted()
 	}
@@ -146,6 +167,10 @@ func (c *Candidate) Commit() (InstallResult, error) {
 }
 
 func (c *Candidate) Cleanup() {
+	if c.protected != nil {
+		c.cleanup.Do(c.cleanupProtected)
+		return
+	}
 	if c.trusted != nil {
 		c.cleanupTrusted()
 		return
@@ -160,79 +185,18 @@ func (c *Candidate) Cleanup() {
 	})
 }
 
-// localReadyVersion 在二进制存在且 DetectVersion（含 ParseVersion）成功时返回版本。
-// 判据与 Manager.Install setup 预检同一路径（design §4.3）；失败则走下载修复。
-func (i Installer) localReadyVersion(ctx context.Context, binaryPath string) (string, bool) {
-	if i.Provenance != nil {
-		v, e := i.DetectVersion(ctx, binaryPath)
-		if e != nil {
-			i.reportFallback(ctx, "local_core.check.failed", e)
-		}
-		return v, e == nil && v != ""
-	}
-
-	info, err := os.Stat(binaryPath)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			i.reportFallback(ctx, "local_core.stat.failed", err)
-		}
-		return "", false
-	}
-	if info.IsDir() {
-		i.reportFallback(ctx, "local_core.check.failed", fmt.Errorf("mihomo binary path is a directory: %s", binaryPath))
-		return "", false
-	}
-	runner := i.Runner
-	if runner == nil {
-		runner = OSCommandRunner{}
-	}
-	version, err := DetectVersion(ctx, runner, binaryPath)
-	if err != nil || version == "" {
-		if err != nil {
-			i.reportFallback(ctx, "local_core.check.failed", err)
-		}
-		return "", false
-	}
-	return version, true
-}
-
-func (i Installer) reportFallback(ctx context.Context, event string, err error) {
-	if i.Reporter != nil && err != nil {
-		i.Reporter(ctx, diagnostics.Record{Component: "core", Event: event, Level: slog.LevelWarn, Err: err})
-	}
-}
-
 func (i Installer) Prepare(ctx context.Context, request InstallRequest) (PreparedCore, error) {
-	if i.Provenance != nil {
-		return i.prepareTrusted(ctx, request)
-	}
-
-	checkCtx, cancel := context.WithTimeout(ctx, i.checkTimeout())
-	release, err := i.LatestRelease(checkCtx, request.Channel)
-	cancel()
+	target, err := i.ResolveTarget(ctx, request.Channel)
 	if err != nil {
 		return nil, withAIOHint(err)
 	}
-	if request.Channel != "alpha" && request.CurrentVersion == release.TagName {
-		if version, ok := i.localReadyVersion(ctx, request.BinaryPath); ok {
-			return &Candidate{binaryPath: request.BinaryPath, version: version, updated: false, reporter: i.Reporter}, nil
-		}
+	if i.Provenance != nil {
+		return i.prepareProtected(ctx, target)
 	}
-	asset, err := SelectAsset(release, i.targetOS(), i.targetArch(), request.Channel)
-	if err != nil {
-		return nil, err
+	if i.Updates != nil {
+		return i.prepareFileUpdate(ctx, target, request)
 	}
-	if request.Channel == "alpha" {
-		releaseSHA := ParseAlphaSHA(asset.Name)
-		if releaseSHA != "" && releaseSHA == request.AlphaSHA {
-			if version, ok := i.localReadyVersion(ctx, request.BinaryPath); ok {
-				return &Candidate{binaryPath: request.BinaryPath, version: version, alphaSHA: releaseSHA, updated: false, reporter: i.Reporter}, nil
-			}
-		}
-	}
-	if asset.Size < 0 || asset.Size > maxCoreArchiveSize {
-		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo asset is too large"}
-	}
+	asset := target.asset
 	if err := os.MkdirAll(request.StagingDir, 0o700); err != nil {
 		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "create core staging directory"}, err)
 	}
@@ -249,7 +213,7 @@ func (i Installer) Prepare(ctx context.Context, request InstallRequest) (Prepare
 			i.Reporter(context.Background(), diagnostics.Record{Component: "core", Event: "archive.cleanup.failed", Level: slog.LevelWarn, Err: fmt.Errorf("remove core archive %s: %w", archivePath, err)})
 		}
 	}()
-	if err := i.Download(ctx, asset, archivePath); err != nil {
+	if err := i.downloadTarget(ctx, target, archivePath); err != nil {
 		return nil, err
 	}
 
@@ -290,22 +254,41 @@ func (i Installer) Prepare(ctx context.Context, request InstallRequest) (Prepare
 	if err != nil {
 		return nil, err
 	}
+	expectedVersion := target.tag
+	if request.Channel == "alpha" {
+		expectedVersion = "alpha-" + ParseAlphaSHA(asset.Name)
+	}
+	if version != expectedVersion {
+		return nil, dataFailureCause("mihomo candidate version does not match selected release", fmt.Errorf("selected %s, candidate reported %s", expectedVersion, version))
+	}
 	if err := ValidateConfig(ctx, runner, candidatePath, request.DataDir, request.ConfigPath); err != nil {
 		return nil, err
 	}
 	keepCandidate = true
-	return &Candidate{path: candidatePath, binaryPath: request.BinaryPath, version: version, alphaSHA: ParseAlphaSHA(asset.Name), updated: true, reporter: i.Reporter}, nil
+	prepared := &Candidate{path: candidatePath, binaryPath: request.BinaryPath, version: version, alphaSHA: ParseAlphaSHA(asset.Name), updated: true, reporter: i.Reporter}
+	if asset.Digest == "" {
+		prepared.warnings = []error{missingDigestWarning(asset)}
+	}
+	return prepared, nil
 }
 
 // Download 取 asset 并落盘到 destination，校验 asset.Digest 的 sha256:<hex>
 // （bundler 复用入口，design §4.1 export 边界；绝不照 self.go 复刻——其无 Digest 校验）。
 // 以 O_WRONLY|O_TRUNC 写入：调用方需先落盘目标文件（与 Prepare 内 CreateTemp 同契约）。
 func (i Installer) Download(ctx context.Context, asset Asset, destination string) (resultErr error) {
+	return i.downloadAsset(ctx, asset, destination, "")
+}
+
+func (i Installer) downloadAsset(ctx context.Context, asset Asset, destination, accept string) (resultErr error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
 	if err != nil {
 		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: "create core download request"}, err)
 	}
 	request.Header.Set("User-Agent", "mihari")
+	if accept != "" {
+		request.Header.Set("Accept", accept)
+		request.Header.Set("X-GitHub-Api-Version", "2026-03-10")
+	}
 	response, err := i.httpClient().Do(request)
 	if err != nil {
 		return coreHTTPError(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download mihomo core failed"}, "core GET asset", asset.URL, "transport", nil, err)
@@ -477,4 +460,12 @@ func dataFailure(message string) error {
 
 func dataFailureCause(message string, cause error) error {
 	return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: message}, cause)
+}
+
+// UpdateStore returns the daemon-owned store used for explicit reinstall.
+func (i Installer) UpdateStore() ProvenanceStore {
+	if i.Provenance != nil {
+		return i.Provenance
+	}
+	return i.Updates
 }

@@ -6,22 +6,18 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"os"
-	"path/filepath"
 	"runtime"
 
-	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/panel/archive"
-	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/update"
 )
 
 type nativeReleaseInputs struct {
-	offlineBinary         bool
-	binary, core, receipt []byte
-	resources             map[string][]byte
-	trust                 migrationTrust
-	source                migrationCapability
+	offlineBinary bool
+	binary, core  []byte
+	resources     map[string][]byte
+	trust         migrationTrust
+	source        migrationCapability
 }
 
 func (i *nativeReleaseInputs) Close() error {
@@ -61,18 +57,12 @@ func prepareNativeReleaseInputs(ctx context.Context, req InstallRequest, sourceP
 	if req.ArtifactSHA256 != "" && req.ArtifactSHA256 != hash {
 		return nil, migrateData("install binary checksum mismatch")
 	}
-	needsCore := false
 	if sourcePath != "" {
 		inputs.source, err = openReadOnlyMigrationRoot(ctx, sourcePath)
 		if err != nil {
 			return nil, err
 		}
-		_, err = inputs.source.Stat(ctx, "bin/mihomo")
-		if err == nil {
-			needsCore = true
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
+
 	}
 	if req.Bundle != "" {
 		raw, err := readHostFile(req.Bundle, migrationBundleComp)
@@ -102,11 +92,11 @@ func prepareNativeReleaseInputs(ctx context.Context, req InstallRequest, sourceP
 			case "install-aio.sh": // Inert installer text is never executed by apply.
 			case "data/bin/mihomo":
 				inputs.resources["bin/mihomo"] = body
-				needsCore = true
 			case "data/bin/core-channel":
-				if string(body) != "stable" && string(body) != "stable\n" {
+				if string(body) != "stable" && string(body) != "stable\n" && string(body) != "alpha" && string(body) != "alpha\n" {
 					return migrateState("unsupported bundled core channel")
 				}
+				inputs.resources["bin/core-channel"] = body
 			case "data/geoip/GeoLite2-Country.mmdb", "data/geoip/GeoLite2-ASN.mmdb":
 				inputs.resources[name[len("data/"):]] = body
 				inputs.trust.geo[sha256HexBytes(body)] = struct{}{}
@@ -119,41 +109,9 @@ func prepareNativeReleaseInputs(ctx context.Context, req InstallRequest, sourceP
 			return nil, err
 		}
 	}
-	if needsCore {
-		digest, err := core.CompiledAssetDigest(ctx, runtime.GOOS, runtime.GOARCH, "v1.19.30", "stable")
-		if err != nil {
-			return nil, err
-		}
-		raw, err := readUnixOfflineArtifact(ctx, offlineRoot, digest+".gz", 128<<20)
-		if err == nil {
-			inputs.core, inputs.receipt, err = core.RebuildMigrationCore(ctx, runtime.GOOS, runtime.GOARCH, "v1.19.30", raw)
-		} else if errors.Is(err, os.ErrNotExist) {
-			inputs.core, inputs.receipt, err = core.DownloadMigrationCore(ctx, client, runtime.GOOS, runtime.GOARCH, "v1.19.30")
-		}
-		if err != nil {
-			return nil, err
-		}
-		coreHash := sha256HexBytes(inputs.core)
-		inputs.trust.core[coreHash] = struct{}{}
-		if bundled, ok := inputs.resources["bin/mihomo"]; ok && sha256HexBytes(bundled) != coreHash {
-			return nil, migrateState("unsupported bundled core")
-		}
-	}
+	// The enclosing bundle has already been independently verified. Its core
+	// is an offline input, not a request to fetch the compiled legacy version.
+	inputs.core = inputs.resources["bin/mihomo"]
+
 	return inputs, nil
-}
-func readUnixOfflineArtifact(ctx context.Context, rootPath, name string, limit int64) (raw []byte, err error) {
-	if filepath.Base(name) != name {
-		return nil, os.ErrInvalid
-	}
-	root, err := platform.OpenTrustedParent(ctx, rootPath, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { err = errors.Join(err, root.Close()) }()
-	file, _, err := root.OpenFile(ctx, name, 0644)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { err = errors.Join(err, file.Close()) }()
-	return readInstallFile(ctx, file, limit)
 }

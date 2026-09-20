@@ -5,7 +5,9 @@ package core
 // exporting production trust constructors or invoking native privileged IO.
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/subscription"
 	"os"
@@ -72,6 +74,57 @@ func (f *TestTrustedFixture) Prepare(ctx context.Context, _ InstallRequest) (Pre
 }
 func (f *TestTrustedFixture) DetectVersion(ctx context.Context, path string) (string, error) {
 	return f.Trusted.Installer().DetectVersion(ctx, path)
+}
+
+// PrepareUpdate supplies a synthetic validated candidate to the real update owner.
+func (f *TestTrustedFixture) PrepareUpdate(ctx context.Context, request InstallRequest) (PreparedCore, error) {
+	tx := fmt.Sprintf("%032x", f.store.disk.next+100)
+	p := &protectedCandidate{store: f.store, transaction: tx}
+	version, sha, body := "alpha-abcdef1", "abcdef1", "new official alpha"
+	if request.Channel == "stable" {
+		version, sha, body = "v1.20.0", "", "new official stable"
+	}
+	for _, item := range []struct {
+		role     ProvenanceRole
+		content  string
+		observed *ProvenanceObject
+	}{
+		{UpdateMarker, tx, &p.marker}, {UpdateCandidate, body, &p.binary},
+	} {
+		if err := f.store.Save(ctx, item.role, p.transaction, []byte(item.content)); err != nil {
+			return nil, err
+		}
+		observed, err := f.store.Inspect(ctx, item.role, p.transaction)
+		if err != nil {
+			return nil, err
+		}
+		*item.observed = observed
+	}
+	return &Candidate{protected: p, version: version, alphaSHA: sha, updated: true}, nil
+}
+
+func (f *TestTrustedFixture) UpdatePending() bool {
+	_, err := f.store.Load(context.Background(), UpdateJournal, "")
+	return !errors.Is(err, os.ErrNotExist)
+}
+
+func (f *TestTrustedFixture) UpdateStartsNewCore() bool {
+	raw, err := f.store.Load(context.Background(), UpdateJournal, "")
+	if err != nil {
+		return false
+	}
+	var record struct {
+		Intent struct {
+			StartNew bool `json:"start_new"`
+		} `json:"intent"`
+	}
+	return json.Unmarshal(raw, &record) == nil && record.Intent.StartNew
+}
+
+func (f *TestTrustedFixture) RemoveInstalledCore() {
+	delete(f.store.disk.files, objectKey(InstalledBinary, ""))
+	delete(f.store.disk.files, objectKey(InstalledReceipt, ""))
+	f.store.gate.acceptPublished(ProvenanceObject{})
 }
 
 // InterruptPair leaves a real prepared WAL with an incomplete new publication.

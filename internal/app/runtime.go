@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -123,25 +124,58 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		return nil, err
 	}
 	installer := core.Installer{Reporter: options.DiagnosticReporter}
+	coreRepairRequired := false
+	var coreRepairCause error
 	if options.TrustedCore != nil {
 		options.TrustedCore.SetDiagnosticReporter(options.DiagnosticReporter)
 
 		if err := core.RecoverProvenance(context.Background(), options.TrustedCore.Provenance()); err != nil {
 			return nil, err
 		}
-		content, err := startupConfig(subscriptions, settings)
+		coreRepairRequired, err = core.InterruptedUpdate(context.Background(), options.TrustedCore.Provenance())
 		if err != nil {
 			return nil, err
 		}
-		if _, err := options.TrustedCore.InstalledAvailable(context.Background()); err != nil {
-			return nil, err
-		}
-		if err = options.TrustedCore.InitializeConfig(context.Background(), content); err != nil {
-			return nil, err
+		if coreRepairRequired {
+			if err := options.TrustedCore.BindRepairConfig(context.Background()); err != nil {
+				return nil, err
+			}
+		} else {
+			content, err := startupConfig(subscriptions, settings)
+			if err != nil {
+				return nil, err
+			}
+			if err := options.TrustedCore.InitializeConfig(context.Background(), content); err != nil {
+				// Keep the authenticated repair owner available when a local core
+				// cannot validate startup. Binding still enforces the existing
+				// protected configuration identity and never executes the core.
+				if bindErr := options.TrustedCore.BindRepairConfig(context.Background()); bindErr != nil {
+					return nil, errors.Join(err, bindErr)
+				}
+				coreRepairRequired, coreRepairCause = true, err
+			}
 		}
 		installer = options.TrustedCore.Installer()
-	} else if err := core.EnsureRuntimeConfig(paths.RuntimeConfig, settings); err != nil {
-		return nil, err
+	} else {
+		installer.Updates, err = core.NewUpdateStore(paths.Root)
+		if err != nil {
+			return nil, err
+		}
+		coreRepairRequired, err = core.InterruptedUpdate(context.Background(), installer.Updates)
+		if err != nil {
+			return nil, err
+		}
+		if !coreRepairRequired {
+			if err := core.EnsureRuntimeConfig(paths.RuntimeConfig, settings); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if coreRepairRequired && options.DiagnosticReporter != nil {
+		options.DiagnosticReporter(context.Background(), diagnostics.Record{
+			Component: "core", Event: "repair.required", Level: slog.LevelError,
+			Err: errors.Join(coreRepairCause, fmt.Errorf("mihomo startup requires repair; automatic core start is blocked; retained update records and backups, when present: %s; use mihari core reinstall or System > Reinstall core to download the original channel's latest official core", filepath.Join(paths.Root, "staging", "core"))),
+		})
 	}
 	if err := probeManagedPortsWithListener(settings, nil, options.PortProbeListen); err != nil {
 		return nil, err
@@ -152,7 +186,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		StartedAt: time.Now().UTC(),
 		Health:    "ok",
 	})
-	if info, err := os.Stat(paths.CoreBinary); err == nil && !info.IsDir() {
+	if info, err := os.Stat(paths.CoreBinary); !coreRepairRequired && err == nil && !info.IsDir() {
 		if version, err := installer.DetectVersion(context.Background(), paths.CoreBinary); err == nil {
 			snapshot := store.Load()
 			snapshot.Core = state.CoreState{Status: "stopped", Version: version, Channel: settings.CoreChannel}
@@ -277,11 +311,12 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		},
 	})
 	manager = runtimeapi.New(runtimeapi.Options{
-		ActivationPhase: options.ActivationPhase,
-		Store:           store,
-		Coordinator:     coordinator,
-		Installer:       installer,
-		TrustedCore:     options.TrustedCore,
+		ActivationPhase:    options.ActivationPhase,
+		CoreRepairRequired: coreRepairRequired,
+		Store:              store,
+		Coordinator:        coordinator,
+		Installer:          installer,
+		TrustedCore:        options.TrustedCore,
 		InstallRequest: core.InstallRequest{
 			BinaryPath: paths.CoreBinary,
 			DataDir:    paths.Root,

@@ -72,6 +72,7 @@ func (s *Server) runtimeRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/panels/{id}/version-check", s.checkPanelVersion)
 	mux.HandleFunc("GET /v1/core", s.coreStatus)
 	mux.HandleFunc("POST /v1/core/install", s.installCore)
+	mux.HandleFunc("POST /v1/core/reinstall", s.reinstallCore)
 	mux.HandleFunc("POST /v1/core/restart", s.restartCore)
 	mux.HandleFunc("GET /v1/proxies", s.proxies)
 	mux.HandleFunc("PUT /v1/proxy-groups/{name}", s.selectProxy)
@@ -114,6 +115,14 @@ func (s *Server) coreStatus(writer http.ResponseWriter, request *http.Request) {
 
 // installCore validates and observes a daemon-owned core installation mutation.
 func (s *Server) installCore(writer http.ResponseWriter, request *http.Request) {
+	s.installCoreAction(writer, request, false)
+}
+
+func (s *Server) reinstallCore(writer http.ResponseWriter, request *http.Request) {
+	s.installCoreAction(writer, request, true)
+}
+
+func (s *Server) installCoreAction(writer http.ResponseWriter, request *http.Request, reinstall bool) {
 	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}
@@ -121,9 +130,21 @@ func (s *Server) installCore(writer http.ResponseWriter, request *http.Request) 
 	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
-	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "core.install"})
+	action := s.runtime.Install
+	name := "core.install"
+	if reinstall {
+		repair, ok := s.runtime.(interface {
+			Reinstall(context.Context, runtimeapi.Operation) (core.InstallResult, error)
+		})
+		if !ok {
+			s.writeControlError(request.Context(), writer, protocol.APIError{Code: protocol.CodeInvalidState, Message: "core reinstall unavailable"})
+			return
+		}
+		action, name = repair.Reinstall, "core.reinstall"
+	}
+	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: name})
 	defer s.operations.begin(body.OperationID)()
-	result, err := s.runtime.Install(ctx, runtimeapi.Operation{ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision, Channel: body.Channel})
+	result, err := action(ctx, runtimeapi.Operation{ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision, Channel: body.Channel})
 	if err != nil {
 		s.writeControlError(ctx, writer, err)
 		return

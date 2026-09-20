@@ -4,6 +4,21 @@ Mihari 管理本机 mihomo，并向本地用户提供一致的配置管理与运
 
 ## Language
 
+**核心通道（Core Channel）**：mihomo 官方核心的发布系列，分为 stable 与 alpha。它与 Mihari 自身的 main/dev 发布通道不同。
+_Avoid_: 将核心通道与 Mihari 应用通道混用。
+
+**官方核心（Official Core）**：由 MetaCubeX/mihomo 官方发布的核心制品。官方来源不代表该制品已被 Mihari 逐版本验证兼容。
+_Avoid_: 将官方核心等同于某个固定版本或兼容性保证。
+
+**通道最新版本（Latest Channel Release）**：检查时对应核心通道的最新官方发布。它与已经安装或离线安装包内附的核心版本不同。
+_Avoid_: 将最新版本与当前版本、内附版本混用。
+
+**本地已有核心（Existing Local Core）**：已经部署在 Mihari 核心位置的可执行制品，可来自官方发布或有权部署者的自编译版本。它是否为官方制品与能否被本机接纳是不同问题。
+_Avoid_: 将缺少官方来源证明等同于不能接纳。
+
+**本次更新目标（Selected Core Release）**：一次核心更新开始时确定的通道发布及具体制品。上游随后发布新版不改变本次目标。
+_Avoid_: 将本次目标等同于随时变化的通道最新版本。
+
 **统一日志级别（Unified Logging Level）**：Mihari 与 mihomo 普通日志共同采用的记录阈值，在 System 的 Logging 区域显示为 Level。它与 Logs 页的显示筛选及实时日志订阅阈值是不同概念。
 _Avoid_: 将 System 的 Level 与 Logs 页筛选混用。
 

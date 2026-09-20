@@ -215,6 +215,31 @@ def test_windows_capabilities_does_not_touch_bundle(tmp_path):
     assert not missing.exists()
 
 
+@pytest.mark.parametrize("existing_core", [False, True])
+def test_windows_aio_preserves_existing_core_and_channel(tmp_path, existing_core):
+    bundle = tmp_path / "bundle"
+    for name in ["mihari.exe", "data/bin/mihomo.exe", "data/geoip/GeoLite2-Country.mmdb", "data/geoip/GeoLite2-ASN.mmdb"]:
+        file = bundle / name
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(b"bundled")
+    (bundle / "data/bin/core-channel").write_bytes(b"stable\n")
+    data = tmp_path / "data"
+    (data / "bin").mkdir(parents=True)
+    (data / "mihari.yaml").write_bytes(b"original settings")
+    if existing_core:
+        (data / "bin/mihomo.exe").write_bytes(b"existing custom core")
+        (data / "bin/core-channel").write_bytes(b"alpha\n")
+    env = dict(os.environ, MIHARI_INSTALL_TEST_MODE="1", MIHARI_YES="1",
+               MIHARI_BIN=str(tmp_path / "installed"), MIHARI_DATA=str(data),
+               USERPROFILE=str(tmp_path / "profile"), LOCALAPPDATA=str(tmp_path / "local"))
+    result = run_ps(tmp_path, "& " + ps_literal(INSTALL / "install-aio.ps1") +
+                    " -BundleDir " + ps_literal(bundle), env)
+    assert result.returncode == 0, result.stderr
+    assert (data / "bin/mihomo.exe").read_bytes() == (b"existing custom core" if existing_core else b"bundled")
+    assert (data / "bin/core-channel").read_bytes() == (b"alpha\n" if existing_core else b"stable\n")
+    assert (data / "mihari.yaml").read_bytes() == b"original settings"
+
+
 @pytest.mark.parametrize("explicit,expected", [(False, False), (True, True)])
 def test_windows_aio_unknown_candidate_requires_consent_before_overlay(tmp_path, explicit, expected):
     bundle = tmp_path / 'bundle'

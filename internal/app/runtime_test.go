@@ -18,6 +18,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/onboarding"
@@ -29,6 +30,58 @@ type webProxySelectionCall struct {
 	operation runtimeapi.Operation
 	group     string
 	name      string
+}
+
+func TestBuildRuntime_InterruptedCoreKeepsRepairControlPlane(t *testing.T) {
+	paths := platform.NewPaths(t.TempDir())
+	if err := paths.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	settings := testRuntimeSettings(t)
+	settings.ControllerSecret = strings.Repeat("d", 64)
+	if err := core.WriteBootstrapConfig(paths.RuntimeConfig, settings); err != nil {
+		t.Fatal(err)
+	}
+	store, err := core.NewUpdateStore(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := "1234567890abcdef1234567890abcdef"
+	for role, body := range map[core.ProvenanceRole][]byte{core.UpdateMarker: []byte(tx), core.UpdateCandidate: []byte("inert interrupted candidate")} {
+		if err := store.Save(t.Context(), role, tx, body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	candidate, err := store.Inspect(t.Context(), core.UpdateCandidate, tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := core.BeginUpdate(t.Context(), store, tx, candidate, core.UpdateIntent{Previous: core.CoreSelection{Channel: "stable"}, Next: core.CoreSelection{Channel: "alpha"}, StartNew: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Publish(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var records []diagnostics.Record
+	assembly, err := BuildRuntimeWithOptions(paths, settings, "test", nil, nil, RuntimeBuildOptions{SettingsPath: paths.Settings,
+		DiagnosticReporter: func(_ context.Context, record diagnostics.Record) { records = append(records, record) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assembly.Manager == nil || assembly.Store.Load().Health != "degraded" {
+		t.Fatal("interrupted core lost repair owner")
+	}
+	if len(records) != 1 || records[0].Err == nil || !strings.Contains(records[0].Err.Error(), filepath.Join(paths.Root, "staging", "core")) || !strings.Contains(records[0].Err.Error(), "core reinstall") {
+		t.Fatalf("missing repair instructions and material location: %+v", records)
+	}
+	if err := assembly.Manager.Restart(t.Context(), runtimeapi.Operation{ID: "unsafe-restart"}); err == nil {
+		t.Fatal("ordinary restart bypassed interruption")
+	}
+	if _, err := assembly.Manager.Install(t.Context(), runtimeapi.Operation{ID: "unsafe-update"}); err == nil {
+		t.Fatal("ordinary install bypassed interruption")
+	}
 }
 
 type webConnectionCloseCall struct {
