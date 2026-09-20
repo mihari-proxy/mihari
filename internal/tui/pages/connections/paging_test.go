@@ -10,6 +10,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
+// TestModel_PageKeys verifies filtered paging, resize-aware steps, and visible selection.
 func TestModel_PageKeys(t *testing.T) {
 	for _, closed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("closed=%v", closed), func(t *testing.T) {
@@ -53,6 +54,7 @@ func TestModel_PageKeys(t *testing.T) {
 	}
 }
 
+// TestModel_PageKeysShortAndEmptyList verifies clamping and safe paging without rows.
 func TestModel_PageKeysShortAndEmptyList(t *testing.T) {
 	m := New(nil, nil)
 	m.SetSize(100, 24)
@@ -77,6 +79,7 @@ func TestModel_PageKeysShortAndEmptyList(t *testing.T) {
 	}
 }
 
+// TestModel_PageKeysRespectInputOwner keeps page keys from moving a list owned by another input mode.
 func TestModel_PageKeysRespectInputOwner(t *testing.T) {
 	m := New(nil, nil)
 	m.SetSize(100, 24)

@@ -334,6 +334,7 @@ func (m *Model) updateHeader(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 	return m, nil
 }
 
+// updateRow navigates the filtered, sorted list and acts on the selected connection.
 func (m *Model) updateRow(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 	rows := m.visibleRows()
 	index := rowIndex(rows, m.focus.rowID)

@@ -182,6 +182,7 @@ func (m *Model) VisibleIndexes() []int {
 	return indexes
 }
 
+// Update applies rule/provider results and routes input to the active control, list, or dialog.
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	switch typed := message.(type) {
 	case rulesResultMsg:

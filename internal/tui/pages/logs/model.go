@@ -125,6 +125,7 @@ func (m *Model) SetFilter(level, query string) {
 
 func (m *Model) Unread() int { return m.scrollUnread + m.buffer.Unread() }
 
+// Update routes input to the active log control, list, or dialog and manages follow mode.
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	if m.levelDialog != nil {
 		return m.updateLevelDialog(message)

@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+// TestModel_PageKeys verifies filtered paging, resize-aware steps, and visible selection.
 func TestModel_PageKeys(t *testing.T) {
 	m := New(100)
 	for i := range 80 {
@@ -47,6 +48,7 @@ func TestModel_PageKeys(t *testing.T) {
 	}
 }
 
+// TestModel_PageKeysShortAndEmptyList verifies clamping and safe paging without rows.
 func TestModel_PageKeysShortAndEmptyList(t *testing.T) {
 	m := New(10)
 	m.SetSize(100, 24)
@@ -71,6 +73,7 @@ func TestModel_PageKeysShortAndEmptyList(t *testing.T) {
 	}
 }
 
+// TestModel_PageKeysRespectInputOwner keeps page keys from moving a list owned by another input mode.
 func TestModel_PageKeysRespectInputOwner(t *testing.T) {
 	m := New(10)
 	m.SetSize(100, 24)
