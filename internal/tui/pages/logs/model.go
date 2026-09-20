@@ -171,6 +171,18 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.focus = focusRow
 		m.focused = max(0, len(m.visibleEntries())-1)
 		return m, nil
+	case "pgup", "pgdown":
+		if m.focus == focusRow {
+			if count := m.visibleCount(); count > 0 {
+				delta := max(1, m.height-logChrome)
+				if key.String() == "pgup" {
+					delta = -delta
+				}
+				m.following = false
+				m.focused = min(max(0, m.focused+delta), count-1)
+			}
+		}
+		return m, nil
 	case "left":
 		if m.focus == focusControl {
 			m.controlIndex = max(0, m.controlIndex-1)

@@ -165,7 +165,7 @@ mihari sysproxy enable
 
 **Connections** 为 Chain 分配更多宽度，窄窗口中优先于 Source、Destination、Rule 保留。Traffic 使用固定宽度的上下行紧凑速率，`K/M/G/T/P/E` 按 1024 进制表示字节每秒；连接详情仍显示完整速率与代理链。**Rules** 用居中弹窗展示规则或 provider 的完整详情，↑/↓ 或 PgUp/PgDn 滚动，Enter/Esc 关闭后返回原行。
 
-**Conns、Rules、Logs** 支持 Ctrl+F 从侧栏或页面内容区直接聚焦检索框，保留已有文字并将光标移到末尾；页面内容区仍支持 `/`。弹窗打开时不抢走焦点。Conns 在当前 TUI 会话中保留最新 **5000 条已关闭连接记录**，切页保留，重连或退出后清空；活动连接不占此配额。
+**Conns、Rules、Logs** 支持 Ctrl+F 从侧栏或页面内容区直接聚焦检索框，保留已有文字并将光标移到末尾；页面内容区仍支持 `/`。弹窗打开时不抢走焦点。焦点位于列表行时，**PgUp/PgDn** 按当前窗口高度移动一页行数，在筛选结果的首尾停住；Rules 的 provider 列表同样支持。Logs 翻页后停止自动跟随，按 **G** 返回最新记录并恢复跟随。Conns 在当前 TUI 会话中保留最新 **5000 条已关闭连接记录**，切页保留，重连或退出后清空；活动连接不占此配额。
 
 **Logs** 中选中 **Level** 后按 Enter 打开多选小窗。↑/↓ 移动，Space 勾选 DEBUG、INFO、WARNING、ERROR；**Select all** 用于全选或清空。Enter 应用、Esc 放弃，至少勾选一个级别。连续选到 ERROR 的组合显示为 `DEBUG+`、`INFO+` 或 `WARNING+`，其他组合完整列出，例如 `DEBUG, WARNING`。这只是显示摘要，筛选按所选精确级别匹配，再与文字检索取交集。切页和重连保留选择，重启 TUI 恢复全选；全选时也保留未知级别记录。筛选不修改 System 日志设置或实时流订阅。
 
