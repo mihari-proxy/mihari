@@ -26,8 +26,14 @@ func (m *Model) View() string {
 		height = 40
 	}
 	active := valueOr(m.status.ActivePanel, "None")
-	summary := m.theme.Info.Render(valueOr(m.status.GatewayAddr, ui.MissingValue)) + "\n" +
-		fmt.Sprintf("%s: %s · %s: %d", ui.ActivePanelLabel, active, ui.BrowserSessionsLabel, m.status.BrowserSessions)
+	field := func(label, value string) string {
+		return m.theme.Muted.Render(fmt.Sprintf("%-18s", label)) + value
+	}
+	summary := strings.Join([]string{
+		field("Gateway", m.theme.Info.Render(valueOr(m.status.GatewayAddr, ui.MissingValue))),
+		field(ui.ActivePanelLabel, active),
+		field(ui.BrowserSessionsLabel, fmt.Sprint(m.status.BrowserSessions)),
+	}, "\n")
 	summaryLines := strings.Split(summary, "\n")
 	for i, line := range summaryLines {
 		summaryLines[i] = ui.TruncateVisible(line, textW)
@@ -104,6 +110,7 @@ func (m *Model) panelCard(index int, body string, inner int) string {
 	return ui.RenderBorderedSectionWithBorder(m.theme, valueOr(panel.Name, panel.ID), body, inner, border)
 }
 
+// panelBody renders installed state, version metadata and action-local progress.
 func (m *Model) panelBody(panel protocol.PanelStatus, index, inner int) string {
 	installed := panel.InstalledBuild != ""
 	state := m.theme.Muted.Render("○ Not installed")
@@ -112,9 +119,6 @@ func (m *Model) panelBody(panel protocol.PanelStatus, index, inner int) string {
 	}
 	if panel.Health != "" && !strings.EqualFold(panel.Health, "healthy") && !strings.EqualFold(panel.Health, "ok") && panel.Health != "installed" && panel.Health != "missing" {
 		state = m.theme.Warning.Render("! " + panel.Health)
-	}
-	if m.installing["panel:install:"+panel.ID] || m.installing["panel:reinstall:"+panel.ID] {
-		state = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(m.installClock, "Installing"))
 	}
 	if panel.Active || panel.ID == m.status.ActivePanel {
 		state += "  " + m.theme.Success.Bold(true).Render("DEFAULT")
@@ -136,6 +140,23 @@ func (m *Model) panelBody(panel protocol.PanelStatus, index, inner int) string {
 	actions := action(primary, 0)
 	if installed {
 		actions += "  " + action("Manage ▾", 1)
+	}
+	progress := ""
+	switch {
+	case m.installing["panel:install:"+panel.ID]:
+		progress = "Installing"
+	case m.installing["panel:reinstall:"+panel.ID]:
+		progress = "Reinstalling"
+	case m.installing["panel:update:"+panel.ID]:
+		progress = "Updating"
+	}
+	if progress != "" {
+		badge := ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(m.installClock, progress))
+		separator := "  "
+		if lipgloss.Width(actions+separator+badge) > ui.SectionTextWidth(inner) {
+			separator = "\n"
+		}
+		actions += separator + badge
 	}
 	field := func(label, value string) string { return m.theme.Muted.Render(fmt.Sprintf("%-11s", label)) + value }
 	body := strings.Join([]string{state, "", field("Installed", valueOr(panel.InstalledBuild, ui.MissingValue)), field("Latest", m.latestLabel(panel)), field("Rollback", valueOr(panel.RollbackBuild, ui.MissingValue)), "", actions}, "\n")

@@ -4,6 +4,12 @@ Mihari 管理本机 mihomo，并向本地用户提供一致的配置管理与运
 
 ## Language
 
+**面板可用更新（Available Panel Update）**：版本检查发现面板有可更新的版本，不代表更新已经开始。
+_Avoid_: 将 Update available 与正在更新混用。
+
+**面板更新中（Panel Update in Progress）**：已发起的面板更新尚未结束的执行状态，不等同于发现了新版。
+_Avoid_: 将 Updating 与有更新可用混用。
+
 **核心通道（Core Channel）**：mihomo 官方核心的发布系列，分为 stable 与 alpha。它与 Mihari 自身的 main/dev 发布通道不同。
 _Avoid_: 将核心通道与 Mihari 应用通道混用。
 

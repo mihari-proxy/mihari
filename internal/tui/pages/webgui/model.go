@@ -328,6 +328,7 @@ func (m *Model) installSelected() tea.Cmd {
 	}
 }
 
+// updateSelected builds an update intent whose result clears the panel's progress.
 func (m *Model) updateSelected() tea.Cmd {
 	panel, ok := m.selectedPanel()
 	if !ok || m.client == nil {
@@ -343,7 +344,7 @@ func (m *Model) updateSelected() tea.Cmd {
 			Impact: ui.UpdatePanelImpact, Rollback: ui.UpdatePanelRollback,
 			Execute: func() tea.Msg {
 				result, err := m.client.UpdatePanel(ctx, panel.ID, protocol.MutationRequest{OperationID: operationID})
-				return mutationDoneMsg{changedPanel: panel.ID, operation: operation, err: err, warnings: result.WarningOutcome}
+				return mutationDoneMsg{changedPanel: panel.ID, pendingKey: "panel:update:" + panel.ID, operation: operation, err: err, warnings: result.WarningOutcome}
 			},
 		}
 	}

@@ -58,6 +58,7 @@ func (m *Model) checkPanelVersion(id string) tea.Cmd {
 	}
 }
 
+// latestLabel describes the version check and update availability independently of progress.
 func (m *Model) latestLabel(panel protocol.PanelStatus) string {
 	state, ok := m.versions[panel.ID]
 	if !ok {
@@ -74,7 +75,7 @@ func (m *Model) latestLabel(panel protocol.PanelStatus) string {
 		return latest + " · Up to date"
 	}
 	if panel.InstalledBuild != "" {
-		return latest + " · available"
+		return latest + " · Update available"
 	}
 	return latest
 }
