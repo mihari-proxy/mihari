@@ -52,7 +52,11 @@ func TestNativeCoreInputs_AcceptsBundledVersionWithoutAdditionalDownload(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer inputs.Close()
+	t.Cleanup(func() {
+		if err := inputs.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if !bytes.Equal(inputs.core, coreBinary) || string(inputs.resources["bin/core-channel"]) != "alpha\n" {
 		t.Fatalf("bundled core or channel changed: %q, %q", inputs.core, inputs.resources["bin/core-channel"])
 	}

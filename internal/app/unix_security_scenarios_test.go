@@ -94,7 +94,6 @@ func (f *securityNativeInstall) inputs(t *testing.T) *nativeReleaseInputs {
 	}
 	if f.scenario.resources {
 		input.core = []byte("verified-input-core-fixture")
-		input.receipt = []byte("verified-input-provenance-fixture")
 		input.resources["geoip/GeoLite2-Country.mmdb"] = readMigrationMMDB(t, "country.mmdb")
 		input.resources["web/panels/zashboard/native/index.html"] = []byte("isolated bundled panel")
 	}
