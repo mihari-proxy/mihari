@@ -397,6 +397,8 @@ type Model struct {
 	editID           string
 	editInput        textinput.Model
 	portHolds        map[string]ui.PortHold
+	portProbeGen     uint64
+	portProbeNeeded  bool
 	listenFree       func(string) bool
 	lookupOccupant   func(string) (platform.TCPOccupant, bool)
 }
@@ -405,8 +407,9 @@ type Model struct {
 type RestartRequiredMsg struct{}
 
 type portHoldsMsg struct {
-	failures []error
-	holds    map[string]ui.PortHold
+	generation uint64
+	failures   []error
+	holds      map[string]ui.PortHold
 }
 
 type portsApplyResultMsg struct {
@@ -623,7 +626,11 @@ func (m *Model) FocusFirst() {
 }
 
 func (m *Model) SetSnapshot(status protocol.Status, core protocol.CoreStatus) {
+	if m.status.PID != status.PID || m.core.PID != core.PID || (m.core.Status != core.Status && core.Status == "running") {
+		m.portProbeNeeded = true
+	}
 	m.status, m.core = status, core
+	m.reconcilePortOwners()
 	m.ensureFocusVisible()
 }
 
@@ -942,7 +949,11 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		}
 		return m, m.probePortHolds()
 	case portHoldsMsg:
+		if typed.generation != m.portProbeGen {
+			return m, nil
+		}
 		m.portHolds = typed.holds
+		m.reconcilePortOwners()
 		return m, nil
 	case portsApplyResultMsg:
 		m.clearRowPending()
@@ -1009,15 +1020,17 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		m.markRowOutcome(typed.rowID, false, actionErrorDetail(typed.err, ui.WebGUIUnavailable))
 		return m, nil
 	case ui.CoreObservedMsg:
-		m.core = typed.Core
-		return m, nil
+		m.SetSnapshot(m.status, typed.Core)
+		return m, m.SyncPortHolds()
 	case coreLoadResultMsg:
 		if typed.err == nil {
 			previousChannel := coreChannelName(m.core.Channel)
-			m.core = typed.core
+			m.SetSnapshot(m.status, typed.core)
+			probe := m.SyncPortHolds()
 			if previousChannel != coreChannelName(m.core.Channel) || m.coreVersion.channel != coreChannelName(m.core.Channel) {
-				return m, m.checkCoreVersion()
+				return m, tea.Batch(probe, m.checkCoreVersion())
 			}
+			return m, probe
 		}
 		return m, nil
 	case ui.ActionPendingMsg:
@@ -2306,7 +2319,34 @@ func (m *Model) openPanelBrowser(panelID string) tea.Cmd {
 	}
 }
 
+// reconcilePortOwners keeps cached socket observations aligned with the latest
+// daemon/core identity. Owner snapshots and asynchronous probes arrive independently.
+func (m *Model) reconcilePortOwners() {
+	for id, hold := range m.portHolds {
+		owner := m.core.PID
+		if id == rowWeb {
+			owner = m.status.PID
+		}
+		m.portHolds[id] = ui.ClassifyPortHold(hold.Kind == ui.PortHoldAvailable, hold.PID, hold.Process, owner)
+	}
+}
+
+// SyncPortHolds refreshes socket observations after an owner change. Repeated
+// snapshots with the same owners do not schedule additional probes.
+func (m *Model) SyncPortHolds() tea.Cmd {
+	if !m.portProbeNeeded || (m.onboarding.MixedAddr == "" && m.onboarding.ControllerAddr == "" && m.onboarding.WebAddr == "") {
+		return nil
+	}
+	probe := m.probePortHolds()
+	return func() tea.Msg {
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: probe()}
+	}
+}
+
 func (m *Model) probePortHolds() tea.Cmd {
+	m.portProbeNeeded = false
+	m.portProbeGen++
+	generation := m.portProbeGen
 	probe := ui.ProbeListen
 	if listen := m.listenFree; listen != nil {
 		probe = func(addr string) (bool, error) { return listen(addr), nil }
@@ -2343,7 +2383,7 @@ func (m *Model) probePortHolds() tea.Cmd {
 				failures = append(failures, fmt.Errorf("probe %s endpoint %q: %w", id, addr, err))
 			}
 		}
-		return portHoldsMsg{holds: holds, failures: failures}
+		return portHoldsMsg{generation: generation, holds: holds, failures: failures}
 	}
 }
 

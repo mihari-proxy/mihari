@@ -503,7 +503,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.core = typed.Core
 		model.syncOverview()
 		model.syncSystem()
-		return model, nil
+		return model, model.syncSystemPorts()
 	case ui.RuntimeRevisionMsg:
 		model.status.Revision = max(model.status.Revision, typed.Revision)
 		model.syncOverview()
@@ -952,7 +952,7 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 	if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
 		command = tea.Batch(command, page.SyncStartupNetwork())
 	}
-	return tea.Batch(command, model.spinnerCmdIfNeeded())
+	return tea.Batch(command, model.syncSystemPorts(), model.spinnerCmdIfNeeded())
 }
 
 func (model *Model) resetLogging(epoch uint64) {
@@ -1112,6 +1112,14 @@ func (model *Model) syncSystem() {
 		page.SetSnapshot(model.status, model.core)
 		page.SetMutationsEnabled(model.mutationsEnabled)
 	}
+}
+
+func (model *Model) syncSystemPorts() tea.Cmd {
+	page, ok := model.pages[ui.PageSystem].(*systempage.Model)
+	if !ok {
+		return nil
+	}
+	return page.SyncPortHolds()
 }
 
 // railDigit reports the 1-based rail position a digit key selects, or ok=false
