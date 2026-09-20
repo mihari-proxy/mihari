@@ -174,6 +174,7 @@ func newModelWithPageClients(proxyClient proxypage.Client, connectionsClient con
 	pages[ui.PageConnections] = connectionspage.New(connectionsClient, nil)
 	pages[ui.PageRules] = rulespage.New(rulesClient, nil)
 	pages[ui.PageLogs] = logspage.New(0)
+	pages[ui.PageLogs].(*logspage.Model).SetPreferenceClient(connectionsClient, nil)
 	pages[ui.PageSubscriptions] = subscriptionspage.New(subscriptionsClient, nil, nil)
 	pages[ui.PageSetup] = setuppage.New(nil, nil)
 	pages[ui.PageWebGUI] = webguipage.New(nil, nil)
@@ -239,6 +240,7 @@ func newModelWithClientContext(ctx context.Context, events <-chan session.Event,
 		ctx = context.Background()
 	}
 	model := newModelWithPageClients(client, client, client, client)
+	model.pages[ui.PageLogs].(*logspage.Model).SetPreferenceClient(client, func() (context.Context, context.CancelFunc) { return context.WithCancel(ctx) })
 	model.pages[ui.PageSubscriptions].(*subscriptionspage.Model).SetContextFactory(func() (context.Context, context.CancelFunc) { return context.WithCancel(ctx) })
 	model.pages[ui.PageSetup] = setuppage.NewWithContext(ctx, client, nil)
 	model.pages[ui.PageSystem] = systempage.NewWithContext(ctx, client, nil, nil)
@@ -916,6 +918,9 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 			break
 		}
 		model.applyPreferences(event.Preferences)
+		if page, ok := model.pages[ui.PageLogs].(*logspage.Model); ok {
+			page.SetPreferences(event.Preferences)
+		}
 	case session.EventRules:
 		if event.Err != nil {
 			break

@@ -175,7 +175,7 @@ mihari sysproxy enable
 
 **Conns、Rules、Logs** 支持 Ctrl+F 从侧栏或页面内容区直接聚焦检索框，保留已有文字并将光标移到末尾；页面内容区仍支持 `/`。弹窗打开时不抢走焦点。焦点位于列表行时，**PgUp/PgDn** 按当前窗口高度移动一页行数，在筛选结果的首尾停住；Rules 的 provider 列表同样支持。Logs 翻页后停止自动跟随，按 **G** 返回最新记录并恢复跟随。Conns 在当前 TUI 会话中保留最新 **5000 条已关闭连接记录**，切页保留，重连或退出后清空；活动连接不占此配额。
 
-**Logs** 中选中 **Level** 后按 Enter 打开多选小窗。↑/↓ 移动，Space 勾选 DEBUG、INFO、WARNING、ERROR；**Select all** 用于全选或清空。Enter 应用、Esc 放弃，至少勾选一个级别。连续选到 ERROR 的组合显示为 `DEBUG+`、`INFO+` 或 `WARNING+`，其他组合完整列出，例如 `DEBUG, WARNING`。这只是显示摘要，筛选按所选精确级别匹配，再与文字检索取交集。切页和重连保留选择，重启 TUI 恢复全选；全选时也保留未知级别记录。筛选不修改 System 日志设置或实时流订阅。
+**Logs** 中选中 **Level** 后按 Enter 打开多选小窗。↑/↓ 移动，Space 勾选 DEBUG、INFO、WARNING、ERROR；**Select all** 用于全选或清空。Enter 应用、Esc 放弃，至少勾选一个级别。连续选到 ERROR 的组合显示为 `DEBUG+`、`INFO+` 或 `WARNING+`，其他组合完整列出，例如 `DEBUG, WARNING`。这只是显示摘要，筛选按所选精确级别匹配，再与文字检索取交集。Enter 确认改动后异步保存，Level 旁显示 **Saving…**，不阻断导航和操作。保存失败保留当前筛选，显示 **Unsaved**，错误进入 F2；不重试、不在重连时补交，退出也不等待保存。新 TUI 恢复同一 daemon 最后成功保存的选择；已打开的窗口各自保留当前选择，切页和重连不覆盖。尚无已保存选择时默认全选；全选也保留未知级别记录。筛选不修改 System 日志设置或实时流订阅。TUI 与 daemon 须同步升级；旧版 daemon 无法读取含新增 `log_levels` 字段的偏好文件。
 
 连接详情采用单个居中页面，以 **Application → Routing → Outbound → Destination** 纵向展示处理链路，字段归入对应阶段。Routing 合并显示入站名称／类型／协议和 **Rule Matched**，并从外层代理组到出站逐级展开上报的选择链；Outbound 展示 **Remote** 及其 GeoIP，Destination 保留自己的目标地址及 GeoIP，选择树不代表完整网络中转拓扑。上传速率与累计量为绿色，下载为蓝色；拒绝出站以断线连接灰色的请求目标节点。长字段自动换行，深层选择树保留层级序号，面板最大 88 个终端字符列。↑/↓ 滚动，Enter/Esc 返回选中行。**Paused** 表示观测数据已冻结；已关闭连接显示最后观测速率与累计流量，**Closed observed** 是 TUI 发现连接消失的时间，不是内核报告的精确关闭时间。
 
