@@ -9,6 +9,7 @@ func TestDecodeTUIBytes_LogLevels(t *testing.T) {
 	}{
 		{"legacy", "", true},
 		{"selected", `,"log_levels":["debug","warn"]`, true},
+		{"with-proxy-settings", `,"log_levels":["warn"],"proxies":{"extra_latency":false,"auto_latency_test":true}`, true},
 		{"empty", `,"log_levels":[]`, false},
 		{"unknown", `,"log_levels":["silent"]`, false},
 		{"duplicate", `,"log_levels":["warn","warn"]`, false},
