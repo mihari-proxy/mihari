@@ -1,0 +1,21 @@
+  ╭──────────────────────────────────────────────────────────────────╮
+  │                                                                  │
+  │  Page Settings                                                   │
+  │                                                                  │
+  │  Sections       │   ▸ Overview                                   │
+  │                 │   ▾ Proxies ─────────────────────────────────  │
+  │    Overview     │     Extra latency display                 [x]  │
+  │    Proxies      │     Automatic latency test                [x]  │
+  │  ● Conns        │ › ▾ Conns ───────────────────────────────────  │
+  │    Rules        │     No settings available yet                  │
+  │    Logs         │   ▸ Rules                                      │
+  │    Subs         │   ▸ Logs                                       │
+  │    Web GUI      │   ▸ Subs                                       │
+  │    System       │   ▸ Web GUI                                    │
+  │                 │   ▸ System                                     │
+  │                 │                                                │
+  │                                                                  │
+  │                                         [Cancel]  [Save] Ctrl+S  │
+  │  Tab area  ↑/↓ move  Enter select  Esc cancel                    │
+  │                                                                  │
+  ╰──────────────────────────────────────────────────────────────────╯

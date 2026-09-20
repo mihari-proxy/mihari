@@ -15,6 +15,7 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -46,31 +47,39 @@ type DelayState struct {
 }
 
 type Model struct {
-	routing            routingUI
-	groupsRevision     *uint64
-	groupsSubscription string
-	groupsFresh        bool
-	client             Client
-	newOperationID     func() string
-	groups             []protocol.ProxyGroup
-	expanded           map[string]bool
-	focus              FocusID
-	delays             map[string]DelayState
-	queue              []string
-	inFlight           map[string]uint64
-	delayTestGen       uint64
-	pending            map[FocusID]bool
-	lastError          string
-	loadError          string
-	lastSuccess        time.Time
-	contentFocused     bool
-	width              int
-	height             int
-	scrollY            int // top visible content line (viewport origin)
-	theme              ui.Theme
-	now                time.Time // delay-test spinner clock
-	delaySpinning      bool
-	delaySpinGen       uint64
+	preferences            protocol.ProxyPreferences
+	contextFactory         func() (context.Context, context.CancelFunc)
+	delayTasks             map[string]*delayTask
+	autoQueued             map[string]bool
+	autoSeen               map[string]bool
+	autoEnabled, autoDirty bool
+	autoObscured           bool
+	autoIdentity           delayIdentity
+	routing                routingUI
+	groupsRevision         *uint64
+	groupsSubscription     string
+	groupsFresh            bool
+	client                 Client
+	newOperationID         func() string
+	groups                 []protocol.ProxyGroup
+	expanded               map[string]bool
+	focus                  FocusID
+	delays                 map[string]DelayState
+	queue                  []string
+	inFlight               map[string]uint64
+	delayTestGen           uint64
+	pending                map[FocusID]bool
+	lastError              string
+	loadError              string
+	lastSuccess            time.Time
+	contentFocused         bool
+	width                  int
+	height                 int
+	scrollY                int // top visible content line (viewport origin)
+	theme                  ui.Theme
+	now                    time.Time // delay-test spinner clock
+	delaySpinning          bool
+	delaySpinGen           uint64
 }
 
 type selectionResultMsg struct {
@@ -90,10 +99,11 @@ func (m selectionResultMsg) Err() error { return m.err }
 var _ interface{ Err() error } = selectionResultMsg{}
 
 type delayResultMsg struct {
-	node  string
-	delay uint16
-	err   error
-	gen   uint64
+	cancelled bool
+	node      string
+	delay     uint16
+	err       error
+	gen       uint64
 }
 
 // delaySpinTickMsg advances braille frames while any node is DelayTesting.
@@ -111,7 +121,9 @@ func New(client Client, newOperationID func() string) *Model {
 		newOperationID = defaultOperationID
 	}
 	return &Model{
-		client: client, newOperationID: newOperationID,
+		delayTasks: make(map[string]*delayTask), autoQueued: make(map[string]bool),
+		preferences: protocol.TUIPreferences{}.EffectiveProxies(),
+		client:      client, newOperationID: newOperationID,
 		expanded: make(map[string]bool), delays: make(map[string]DelayState), inFlight: make(map[string]uint64), pending: make(map[FocusID]bool),
 		theme: ui.DefaultTheme(),
 	}
@@ -123,12 +135,14 @@ func (m *Model) ID() ui.PageID { return ui.PageProxies }
 func (m *Model) SetContentFocused(focused bool) { m.contentFocused = focused }
 
 func (m *Model) SetSize(width, height int) {
+	m.autoDirty = true
 	m.width, m.height = width, height
 	m.ensureFocusVisible()
 }
 
 // FocusFirst resets stale focus before selecting the page's first available control.
 func (m *Model) FocusFirst() {
+	m.autoDirty = true
 	m.focus = FocusID{}
 	if m.routing.available {
 		m.routing.focus = 0
@@ -143,6 +157,7 @@ func (m *Model) FocusFirst() {
 }
 
 func (m *Model) SetGroups(groups protocol.ProxyGroups) {
+	m.autoDirty = true
 	m.loadError = ""
 	m.groupsFresh = true
 	m.groupsRevision = nil
@@ -179,10 +194,16 @@ func (m *Model) SetGroups(groups protocol.ProxyGroups) {
 // Update applies page results and keyboard events, including local-only Locate navigation.
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	switch typed := message.(type) {
+	case ui.PageResultMsg:
+		if typed.Page == ui.PageProxies {
+			return m.Update(typed.Result)
+		}
+		return m, nil
 	case routingResultMsg:
 		m.routingResult(typed)
 		return m, nil
 	case selectionResultMsg:
+		m.autoDirty = true
 		if typed.routing && (!m.routing.available || typed.epoch != m.routing.epoch || typed.subscription != m.routing.status.SubscriptionID) {
 			return m, nil
 		}
@@ -205,7 +226,18 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		return m, nil
 	case delayResultMsg:
+		if gen, ok := m.inFlight[typed.node]; !ok || gen != typed.gen {
+			return m, nil
+		}
 		delete(m.inFlight, typed.node)
+		task := m.delayTasks[typed.node]
+		delete(m.delayTasks, typed.node)
+		if task != nil {
+			task.cancel()
+			if task.cancelled {
+				return m, m.delayCmds()
+			}
+		}
 		if typed.err == nil {
 			m.delays[typed.node] = DelayState{Kind: DelayValue, Milliseconds: typed.delay, TestedAt: time.Now()}
 		} else {
@@ -220,7 +252,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Tick(delaySpinInterval, func(t time.Time) tea.Msg {
-			return delaySpinTickMsg{t: t, gen: typed.gen}
+			return proxyResult(delaySpinTickMsg{t: t, gen: typed.gen})
 		})
 	case delaySpinTickMsg:
 		if typed.gen != m.delaySpinGen {
@@ -232,13 +264,14 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Tick(delaySpinInterval, func(t time.Time) tea.Msg {
-			return delaySpinTickMsg{t: t, gen: typed.gen}
+			return proxyResult(delaySpinTickMsg{t: t, gen: typed.gen})
 		})
 	}
 	key, ok := message.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
 	}
+	m.autoDirty = true
 	if handled, cmd := m.routingKey(key.String()); handled {
 		return m, cmd
 	}
@@ -317,12 +350,22 @@ func (m *Model) View() string {
 // a bordered section; expanded node cards sit inside the parent section body.
 // focusWholeGroup includes all candidates and the bottom border for explicit jumps.
 func (m *Model) buildContent(focusWholeGroup bool) (lines []string, focusStart, focusEnd int) {
-	return m.buildContentWithTargets(focusWholeGroup, nil)
+	return m.buildRenderedContent(focusWholeGroup, nil, nil)
 }
 
-// buildContentWithTargets optionally records actual rendered positions for page navigation.
+// buildContentWithTargets records rendered positions for page navigation.
 func (m *Model) buildContentWithTargets(focusWholeGroup bool, targets *[]pageTarget) (lines []string, focusStart, focusEnd int) {
+	return m.buildRenderedContent(focusWholeGroup, targets, nil)
+}
+
+func (m *Model) buildVisibleContent(focusWholeGroup bool, visible *[]string) (lines []string, focusStart, focusEnd int) {
+	return m.buildRenderedContent(focusWholeGroup, nil, visible)
+}
+
+// buildRenderedContent shares layout geometry between navigation and lazy tests.
+func (m *Model) buildRenderedContent(focusWholeGroup bool, targets *[]pageTarget, visible *[]string) (lines []string, focusStart, focusEnd int) {
 	focusStart, focusEnd = -1, -1
+	viewportEnd := m.scrollY + max(0, m.height-len(m.routingHeader()))
 	if m.loadError != "" {
 		body := "Refresh failed\n" + m.loadError + "\nShowing last available data. Retrying automatically."
 		if !m.lastSuccess.IsZero() {
@@ -338,6 +381,9 @@ func (m *Model) buildContentWithTargets(focusWholeGroup bool, targets *[]pageTar
 	inner := ui.FullSectionInner(m.width)
 	textW := ui.SectionTextWidth(inner)
 	for _, group := range m.groups {
+		if visible != nil && len(lines)+1 >= m.scrollY && len(lines)+1 < viewportEnd {
+			*visible = append(*visible, group.Now)
+		}
 		groupFocused := m.focus.Group == group.Name && m.focus.Node == "" && (!m.routing.available || m.routing.focus < 0)
 		header := m.renderGroupHeader(group, textW, groupFocused)
 
@@ -384,6 +430,14 @@ func (m *Model) buildContentWithTargets(focusWholeGroup bool, targets *[]pageTar
 							focus: FocusID{Group: group.Name, Node: group.Nodes[i].Name},
 							start: line, end: line + len(rowLines), column: i - start,
 						})
+					}
+				}
+				// Borders alone do not make a card's content visible.
+				contentStart := len(lines) + 1 + len(bodyLines) + 1
+				contentEnd := contentStart + len(rowLines) - 2
+				if visible != nil && contentStart < viewportEnd && contentEnd > m.scrollY {
+					for i := start; i < min(start+columns, len(group.Nodes)); i++ {
+						*visible = append(*visible, group.Nodes[i].Name)
 					}
 				}
 				if rowHasFocus {
@@ -539,21 +593,38 @@ func (m *Model) delayTestLeaves() []string {
 }
 
 func (m *Model) startDelay(name string) tea.Cmd {
+	m.delayTestGen++
 	gen := m.delayTestGen
 	if m.inFlight == nil {
 		m.inFlight = make(map[string]uint64)
 	}
 	m.inFlight[name] = gen
+	ctx, cancel := context.WithCancel(context.Background())
+	if m.contextFactory != nil {
+		cancel()
+		ctx, cancel = m.contextFactory()
+	}
+	task := &delayTask{cancel: cancel, automatic: m.autoQueued[name], previous: m.delays[name]}
+	m.delayTasks[name] = task
+	delete(m.autoQueued, name)
+	if m.autoEnabled {
+		m.autoSeen[name] = true
+	}
 	m.delays[name] = DelayState{Kind: DelayTesting}
+	client := m.client
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		result, err := m.client.DelayProxy(ctx, name, protocol.DelayTestRequest{})
+		ctx, timeoutCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer timeoutCancel()
+		if err := ctx.Err(); err != nil {
+			return proxyResult(delayResultMsg{node: name, err: err, gen: gen, cancelled: diagnostics.NormalCancellation(ctx, err)})
+		}
+		result, err := client.DelayProxy(ctx, name, protocol.DelayTestRequest{})
 		delay := uint16(0)
 		if err == nil {
 			delay = result.Delays[name]
 		}
-		return delayResultMsg{node: name, delay: delay, err: err, gen: gen}
+		return proxyResult(delayResultMsg{node: name, delay: delay, err: err, gen: gen, cancelled: diagnostics.NormalCancellation(ctx, err)})
 	}
 }
 
@@ -600,7 +671,10 @@ func (m *Model) enqueueFront(name string) {
 }
 
 func (m *Model) testAll() tea.Cmd {
-	m.delayTestGen++
+	m.autoQueued = make(map[string]bool)
+	for _, task := range m.delayTasks {
+		task.automatic = false
+	}
 	m.queue = m.delayTestLeaves()
 	return m.delayCmds()
 }
@@ -613,8 +687,12 @@ func (m *Model) testNode(node string) tea.Cmd {
 		return nil
 	}
 	if _, flying := m.inFlight[node]; flying {
+		if task := m.delayTasks[node]; task != nil {
+			task.automatic = false
+		}
 		return nil
 	}
+	delete(m.autoQueued, node)
 	m.enqueueFront(node)
 	return m.delayCmds()
 }
@@ -641,7 +719,7 @@ func (m *Model) delaySpinCmdIfNeeded() tea.Cmd {
 	m.delaySpinGen++
 	gen := m.delaySpinGen
 	m.delaySpinning = true
-	return func() tea.Msg { return startDelaySpinMsg{gen: gen} }
+	return func() tea.Msg { return proxyResult(startDelaySpinMsg{gen: gen}) }
 }
 
 func classifyDelayError(err error) DelayKind {

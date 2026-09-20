@@ -1,0 +1,27 @@
+      ╭──────────────────────────────────────────────────────────────────────────────────────╮
+      │                                                                                      │
+      │  Page Settings                                                                       │
+      │                                                                                      │
+      │  Sections       │   ▸ Overview                                                       │
+      │                 │ › ▾ Proxies ─────────────────────────────────────────────────────  │
+      │    Overview     │     Extra latency display                                     [x]  │
+      │  ● Proxies      │     Automatic latency test                                    [x]  │
+      │    Conns        │   ▸ Conns                                                          │
+      │    Rules        │   ▸ Rules                                                          │
+      │    Logs         │   ▸ Logs                                                           │
+      │    Subs         │   ▸ Subs                                                           │
+      │    Web GUI      │   ▸ Web GUI                                                        │
+      │    System       │   ▸ System                                                         │
+      │                 │                                                                    │
+      │                 │                                                                    │
+      │                 │                                                                    │
+      │                 │                                                                    │
+      │                 │                                                                    │
+      │                 │                                                                    │
+      │                 │                                                                    │
+      │                 │                                                                    │
+      │                                                                                      │
+      │                                                             [Cancel]  [Save] Ctrl+S  │
+      │  Tab area  ↑/↓ move  Enter select  Esc cancel                                        │
+      │                                                                                      │
+      ╰──────────────────────────────────────────────────────────────────────────────────────╯

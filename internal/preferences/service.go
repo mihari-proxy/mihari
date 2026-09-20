@@ -29,10 +29,23 @@ var (
 
 type Preferences struct {
 	ConnectionsColumns []string
+	Proxies            ProxyPreferences
+}
+
+// ProxyPreferences controls Proxies presentation and automatic latency tests.
+type ProxyPreferences struct {
+	ExtraLatency    bool `json:"extra_latency"`
+	AutoLatencyTest bool `json:"auto_latency_test"`
+}
+
+// DefaultProxyPreferences enables both features for existing installations.
+func DefaultProxyPreferences() ProxyPreferences {
+	return ProxyPreferences{ExtraLatency: true, AutoLatencyTest: true}
 }
 
 type Update struct {
 	ConnectionsColumns []string
+	Proxies            *ProxyPreferences
 }
 
 type Service struct {
@@ -41,18 +54,20 @@ type Service struct {
 }
 
 type document struct {
-	Schema             string   `json:"schema"`
-	ConnectionsColumns []string `json:"connections_columns"`
+	Schema             string            `json:"schema"`
+	ConnectionsColumns []string          `json:"connections_columns"`
+	Proxies            *ProxyPreferences `json:"proxies,omitempty"`
 }
 
 func Open(path string) (*Service, error) {
-	preferences := Preferences{ConnectionsColumns: append([]string(nil), defaultColumns...)}
+	preferences := Preferences{ConnectionsColumns: append([]string(nil), defaultColumns...), Proxies: DefaultProxyPreferences()}
 	raw, err := readFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read TUI preferences: %w", err)
 	}
 	if err == nil {
-		var persisted document
+		defaults := DefaultProxyPreferences()
+		persisted := document{Proxies: &defaults}
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
 		if decodeErr := decoder.Decode(&persisted); decodeErr != nil {
@@ -68,6 +83,9 @@ func Open(path string) (*Service, error) {
 			return nil, fmt.Errorf("decode TUI preferences: %w", validateErr)
 		}
 		preferences.ConnectionsColumns = append([]string(nil), persisted.ConnectionsColumns...)
+		if persisted.Proxies != nil {
+			preferences.Proxies = *persisted.Proxies
+		}
 	}
 	service := &Service{path: path}
 	service.snapshot.Store(preferences)
@@ -82,11 +100,23 @@ func (s *Service) Update(ctx context.Context, update Update) (Preferences, error
 	if err := ctx.Err(); err != nil {
 		return Preferences{}, err
 	}
-	if err := validateColumns(update.ConnectionsColumns); err != nil {
-		return Preferences{}, err
+	if update.ConnectionsColumns != nil || update.Proxies == nil {
+		if err := validateColumns(update.ConnectionsColumns); err != nil {
+			return Preferences{}, err
+		}
 	}
-	next := Preferences{ConnectionsColumns: append([]string(nil), update.ConnectionsColumns...)}
-	raw, err := json.MarshalIndent(document{Schema: fileSchema, ConnectionsColumns: next.ConnectionsColumns}, "", "  ")
+	next := s.Snapshot()
+	if update.ConnectionsColumns != nil {
+		next.ConnectionsColumns = append([]string(nil), update.ConnectionsColumns...)
+	}
+	if update.Proxies != nil {
+		next.Proxies = *update.Proxies
+	}
+	var proxyOverrides *ProxyPreferences
+	if next.Proxies != DefaultProxyPreferences() {
+		proxyOverrides = &next.Proxies
+	}
+	raw, err := json.MarshalIndent(document{Schema: fileSchema, ConnectionsColumns: next.ConnectionsColumns, Proxies: proxyOverrides}, "", "  ")
 	if err != nil {
 		return Preferences{}, fmt.Errorf("encode TUI preferences: %w", err)
 	}

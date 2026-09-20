@@ -1027,6 +1027,10 @@ func decodeTUIBytes(raw []byte) error {
 	var persisted struct {
 		Schema             string   `json:"schema"`
 		ConnectionsColumns []string `json:"connections_columns"`
+		Proxies            *struct {
+			ExtraLatency    bool `json:"extra_latency"`
+			AutoLatencyTest bool `json:"auto_latency_test"`
+		} `json:"proxies,omitempty"`
 	}
 	if err := dec.Decode(&persisted); err != nil {
 		return migrateData("invalid tui preferences")

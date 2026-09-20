@@ -71,6 +71,7 @@ type FooterOpt struct {
 // the same physical key may appear more than once with different labels.
 func Catalog() []KeyBinding {
 	return []KeyBinding{
+		{Keys: []string{"f4"}, Display: "F4", Label: "open page settings", Footer: "F4 settings", Scope: ScopeGlobal},
 		{Keys: []string{"f2"}, Display: "F2", Label: "diagnostic history and error details", Footer: "F2 details", Scope: ScopeGlobal},
 		{Keys: []string{"up", "down"}, Display: "↑/↓", Label: "select a routing mode", Footer: "↑/↓ select", Scope: ScopeMode, Mode: ModeRouting},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "apply the selected mode", Footer: "Enter apply", Scope: ScopeMode, Mode: ModeRouting},
