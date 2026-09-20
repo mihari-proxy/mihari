@@ -21,7 +21,7 @@
 - [x] Windows AIO 仅为缺失核心写入包内版本，应用升级保留已有核心／通道。
 - [x] README、命令说明、设计及决策文档同步收敛。
 - [ ] 完成最终全仓测试、race、lint 和平台验收。
-- [ ] 检查精确提交范围，DCO commit，push，创建指向 dev 的 PR。
+- [x] 检查精确提交范围，DCO commit，push，创建指向 dev 的 PR。
 - [ ] 跟进 CI 与 bot review，按实际反馈修正至全绿；不合并。
 
 以上完成项表示代码与对应合成测试已落地，不表示整项任务交付完成。
@@ -58,3 +58,11 @@
 脚本组合测试首次 159 passed、40 skipped、2 failed；两条失败来自 PowerShell 7 模块路径污染 Windows PowerShell 子进程。仅设置本次测试进程的 Windows PowerShell 模块路径后，两条失败和新增 AIO 两条测试全部通过。完整重跑、最终 race、同步最新 dev 和 PR 验收继续进行。
 
 移除了已不再调用的旧核心白名单辅助函数。远端 dev 新增 10 个提交，需要同步并验证生命周期展示的衔接。用户 `.gitignore` 仍不包含在提交中。
+
+## PR 与后续检查
+
+已同步最新 dev，创建 [PR #284](https://github.com/mihari-proxy/mihari/pull/284)，未合并。更新接管时保留实际启动时刻的衔接回归已修复；最终全源码包 race 测试通过，脚本组合测试 161 passed／40 skipped。
+
+首轮 CI 暴露 Unix 专用测试的旧 receipt 字段引用及未检查 Close 返回值，已修正，并将离线内附核心测试加入原生安全清单。Linux amd64／macOS arm64 的带 unix_security 标签测试二进制交叉编译通过；修正后的 CI 仍在执行。
+
+2026-09-20 用户要求 GitHub Actions 每 10 分钟检查一次，已停止 30 秒轮询，改为本线程定时跟进。CodeRabbit 已请求实际审查；Cubic 因月度额度用尽返回 neutral，不能当作已审查。后续以 PR 最新提交的 CI／review 结果为准，处理完毕后停用跟进。
