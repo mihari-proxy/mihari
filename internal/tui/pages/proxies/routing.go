@@ -16,7 +16,7 @@ type routingUI struct {
 	available, known, open, pending bool
 	epoch                           uint64
 	status                          protocol.RoutingStatus
-	focus, cursor                   int // focus: 0 Mode, 1 GLOBAL, -1 groups
+	focus, cursor                   int // focus: 0 Mode, 1 GLOBAL, 2 Page Settings, -1 groups
 	err                             string
 }
 
@@ -58,6 +58,7 @@ func (m *Model) SetRoutingAvailable(available bool, epoch uint64) {
 
 // SetRouting observes authoritative routing state for this daemon session.
 func (m *Model) SetRouting(status protocol.RoutingStatus, epoch uint64) {
+	m.autoDirty = true
 	if !m.routing.available || epoch != m.routing.epoch || (m.routing.known && status.Revision < m.routing.status.Revision) {
 		return
 	}
@@ -96,7 +97,7 @@ func (m *Model) FooterHints() string {
 		return ui.RenderFooter(m.ID(), ui.ModeRouting, ui.FooterOpt{})
 	}
 	if m.routing.available && m.routing.focus >= 0 {
-		return "↑/↓ move  Enter select  Esc back  ? help  q quit"
+		return "↑/↓/←/→ move  Enter select  F4 settings  Esc back  ? help  q quit"
 	}
 	if m.focus.Locate {
 		return "↑/↓ move  ← group  Enter locate  Esc back  ? help  q quit"
@@ -139,21 +140,44 @@ func (m *Model) routingHeader() []string {
 	textWidth := ui.SectionTextWidth(inner)
 	lines := make([]string, 0, 2)
 	for i, label := range labels {
+		rowWidth := textWidth
+		if i == 0 {
+			rowWidth = max(15, min(textWidth/2, textWidth-17))
+			need := 11 + lipgloss.Width(values[i])
+			if notes[i] != "" {
+				need += 1 + lipgloss.Width(notes[i])
+			} else if m.routing.focus == i && m.contentFocused {
+				need += lipgloss.Width(actions[i])
+			}
+			if notes[i] != "" {
+				rowWidth = max(rowWidth, min(need, textWidth-17))
+			} else if need <= textWidth-17 {
+				rowWidth = max(rowWidth, need)
+			}
+		}
 		prefix := "  "
 		focused := m.routing.focus == i && m.contentFocused
 		if focused {
 			prefix = ui.FocusMarker
 		}
 		row := prefix + routingLabelStyle.Render(label)
-		valueWidth := max(0, textWidth-lipgloss.Width(row))
+		valueWidth := max(0, rowWidth-lipgloss.Width(row))
+		latency := ""
+		if i == 1 {
+			latency = m.extraLatency(status.GlobalSelection)
+		}
+		if lipgloss.Width(latency)+1 > valueWidth {
+			latency = ""
+		}
+		valueWidth -= lipgloss.Width(latency)
 		suffix := ""
 		if notes[i] != "" {
 			// Status explanations remain visible without focus and retain their
 			// existing width priority and right alignment.
-			note := ui.TruncateVisible(notes[i], max(0, valueWidth-9))
+			note := ui.TruncateVisible(notes[i], max(0, valueWidth-min(9, lipgloss.Width(values[i]))-1))
 			valueWidth = max(0, valueWidth-lipgloss.Width(note)-1)
 			value := ui.TruncateVisible(values[i], valueWidth)
-			padding := max(1, textWidth-lipgloss.Width(row)-lipgloss.Width(value)-lipgloss.Width(note))
+			padding := max(1, rowWidth-lipgloss.Width(row)-lipgloss.Width(value)-lipgloss.Width(note)-lipgloss.Width(latency))
 			suffix = strings.Repeat(" ", padding) + m.theme.Muted.Render(note)
 		} else if focused && lipgloss.Width(values[i]+actions[i]) <= valueWidth {
 			// Optional actions never take space from the value or appear partially.
@@ -164,12 +188,20 @@ func (m *Model) routingHeader() []string {
 			row = ui.ApplyFocusStyle(row, m.theme.RowFocus)
 		}
 		// Keep both action hints and status explanations outside reverse video.
-		lines = append(lines, ui.TruncateVisible(row+suffix, textWidth))
+		line := ui.TruncateVisible(row+latency+suffix, rowWidth)
+		if i == 0 {
+			settings := "  Page Settings"
+			if m.routing.focus == 2 && m.contentFocused {
+				settings = m.theme.RowFocus.Render("› Page Settings")
+			}
+			line = ui.PadCell(line, rowWidth, ui.AlignLeft) + "  " + settings
+		}
+		lines = append(lines, ui.TruncateVisible(line, textWidth))
 	}
 	if status.Message != "" {
 		lines = append(lines, m.theme.Muted.Render(ui.TruncateVisible("  "+status.Message, textWidth)))
 	}
-	return strings.Split(ui.RenderBorderedSection(m.theme, "Routing", strings.Join(lines, "\n"), inner), "\n")
+	return strings.Split(ui.RenderBorderedSection(m.theme, "Basic", strings.Join(lines, "\n"), inner), "\n")
 }
 
 func routingLabel(mode string) string {
@@ -214,12 +246,34 @@ func (m *Model) routingKey(key string) (bool, tea.Cmd) {
 			m.focus = FocusID{Group: m.groups[0].Name}
 			m.movePage(1)
 		}
-	case "up":
-		if m.routing.focus > 0 {
-			m.routing.focus--
+	case "right":
+		m.routing.focus = 2
+	case "left":
+		if m.routing.focus == 2 {
+			m.routing.focus = 0
 		}
+	case "tab":
+		switch m.routing.focus {
+		case 0:
+			m.routing.focus = 2
+		case 2:
+			m.routing.focus = 1
+		case 1:
+			m.routing.focus = 0
+		}
+	case "shift+tab":
+		switch m.routing.focus {
+		case 0:
+			m.routing.focus = 1
+		case 1:
+			m.routing.focus = 2
+		case 2:
+			m.routing.focus = 0
+		}
+	case "up":
+		m.routing.focus = 0
 	case "down":
-		if m.routing.focus == 0 {
+		if m.routing.focus == 0 || m.routing.focus == 2 {
 			m.routing.focus = 1
 		} else if len(m.groups) > 0 {
 			m.routing.focus = -1
@@ -227,6 +281,9 @@ func (m *Model) routingKey(key string) (bool, tea.Cmd) {
 			m.ensureFocusVisible()
 		}
 	case "enter":
+		if m.routing.focus == 2 {
+			return true, func() tea.Msg { return ui.OpenPageSettingsMsg{Page: ui.PageProxies} }
+		}
 		if m.routing.focus == 0 {
 			if !m.routing.known {
 				m.lastError = "Routing status unavailable; wait for refresh"

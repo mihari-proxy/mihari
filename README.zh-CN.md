@@ -54,7 +54,13 @@ Windows 更新可使用同一用户的非管理员令牌查询用户目录中的
 
 TUI 节点测速进行中时，卡片在协议名称旁仅显示盲文加载动画。
 
-**Proxies** 支持 **PgUp/PgDn** 在分组标题和已展开节点卡片之间按约一屏快速移动，保持焦点可见，并尽量保留当前列。翻页距离随窗口尺寸和固定 Routing 区域调整；焦点在 Routing 控件时，PgDn 也可进入分组列表。翻页不改变代理选择或分组展开状态。
+**Proxies** 支持 **PgUp/PgDn** 在分组标题和已展开节点卡片之间按约一屏快速移动，保持焦点可见，并尽量保留当前列。翻页距离随窗口尺寸和固定 Basic 区域调整；焦点在 Basic 控件时，PgDn 也可进入分组列表。翻页不改变代理选择或分组展开状态。
+
+每次进入 **Proxies** 都开始新一轮自动测速。展开后的节点卡片内容首次进入视口时触发；视口内组头的当前选择和顶部 **Basic → GLOBAL** 也会沿选择关系找到最终节点并测速。同名项每轮只自动测一次，滚出视口后已排队任务继续执行；离页或关闭自动测速时取消自动任务。重新进入、重新开启、切换订阅或核心重启后开始新一轮。新测速状态和结果直接覆盖原显示；失败本轮不自动重试，可手动测速或下次进入再测。GLOBAL 与组头当前选择旁的额外延迟复用节点卡片的结果和配色。
+
+任一主页面按 **F4** 打开统一 **Page Settings**，也可访问 Proxies 的 **Basic** 第一行第二列入口。弹窗左侧是 Section 目录，右侧保留完整、可滚动的配置列表；初始展开并聚焦来源页面。左侧 Enter 跳转并展开右侧对应标题，不改变其他 Section 的折叠状态；右侧光标跨组移动时，左侧高亮同步跟随。其他页面暂显示 **No settings available yet**。Proxies 提供 **Extra latency display** 和 **Automatic latency test**，均默认开启；由 daemon 保存，同一 daemon 的 TUI 客户端共享，重启 TUI 后保留，不覆盖 Conns 列设置。
+
+↑/↓ 在列表内移动，Enter/Space 展开标题或切换开关；Tab/Shift+Tab 在左侧目录、右侧配置区、Cancel、Save 之间切换。底部按钮固定可见，任意位置按 **Ctrl+S** 保存，Esc/Cancel 放弃草稿，保存后生效。TUI 与 daemon 应配套升级；旧版不能读取包含非默认 Proxies 设置的偏好文件，将两个开关恢复默认会移除该可选块。
 
 TUI 订阅表格的 Name 和 Traffic 列按内容分配宽度，分别最多占 32 和 24 个终端字符格；多余空间留在右侧，窄屏优先隐藏次要字段。
 
@@ -175,9 +181,9 @@ mihari sysproxy enable
 
 **Web GUI** 面板卡片宽屏并排、窄屏纵排。Tab/Shift+Tab 或 ←/→ 选择 Open/Install 或 Manage，Enter 执行，↑/↓ 切换面板。顶部以三行对齐展示 Gateway、Default panel 和 Browser sessions。安装、重装或更新期间，橘色 Installing／Reinstalling／Updating 动画 badge 显示在 Manage 后（首次安装在 Install 后）；窄卡片中 badge 整体换到按钮下方，操作结束后清除。Update available 保留在 Latest 版本后，更新成功后刷新版本状态；原有面板快捷键保留。Manage 包含更新、设为默认、重装、回滚及卸载，不可用项标明原因。黄色 **Ctrl+Shift+R** 刷新提示始终保留在卡片上方，网关保护说明移至 `?` 帮助。**System** 的 Network 分区移至 Ports Config 之后。
 
-TUI **Proxies** 页顶部的 **Routing** 卡片包含 **Mode** 和 **GLOBAL**。**Mode** 按 Enter 打开 Rule / Global / Direct 选择弹窗，↑/↓ 选择、Enter 应用、Esc 取消；**GLOBAL** 入口展开 mihomo 返回的候选组，并自动滚动到整个 section 完整可见；超过一屏时从列表视口顶部展示，继续用方向键浏览候选。Mihari 全局保存模式、按订阅保存 GLOBAL 出口，支持面板发起的相同操作。默认使用 Rule，切换模式和出口保留已有连接。保存的出口消失时，有 DIRECT 候选则保存 DIRECT，否则保存 Rule；内核停止时保存的模式显示为 pending，待启动应用。
+TUI **Proxies** 页顶部的 **Basic** 卡片包含 **Mode**、**GLOBAL** 和 **Page Settings**。**Mode** 按 Enter 打开 Rule / Global / Direct 选择弹窗，↑/↓ 选择、Enter 应用、Esc 取消；**GLOBAL** 入口展开 mihomo 返回的候选组，并自动滚动到整个 section 完整可见；超过一屏时从列表视口顶部展示，继续用方向键浏览候选。Mihari 全局保存模式、按订阅保存 GLOBAL 出口，支持面板发起的相同操作。默认使用 Rule，切换模式和出口保留已有连接。保存的出口消失时，有 DIRECT 候选则保存 DIRECT，否则保存 Rule；内核停止时保存的模式显示为 pending，待启动应用。
 
-Routing 标签为白色、值为绿色。仅焦点行在值后紧跟显示 `· Press Enter to Change` 或 `· Press Enter to Select`；窄屏优先保留值，空间不足时隐藏操作提示。状态说明不随失焦隐藏。
+Basic 标签为白色、值为绿色。仅焦点行在值后紧跟显示 `· Press Enter to Change` 或 `· Press Enter to Select`；窄屏优先保留值，空间不足时隐藏操作提示。状态说明不随失焦隐藏。
 
 已选代理卡片使用蓝色 **●** 标记，颜色与日志 **INFO** 一致。Proxies 每个组（含 GLOBAL）的当前选择右侧都有 **→ Jump to Selected**（窄窗口缩短为 **→ Selected**）。在组标题上按 → 聚焦按钮，再按 Enter 自动展开并定位到当前选中的卡片；← 返回组标题。定位只移动键盘焦点，后续刷新改变选中项时不自动跟随。保留的 **Last selected** 数据仍可定位；选中项为空或不在候选列表中时按钮置灰。
 

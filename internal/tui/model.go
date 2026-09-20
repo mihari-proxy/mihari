@@ -40,6 +40,12 @@ type Model struct {
 	focus                  ui.Focus
 	inputMode              ui.InputMode
 	modal                  *Modal
+	pageSettings           *pageSettingsDialog
+	preferencesClient      pagePreferencesClient
+	preferences            protocol.TUIPreferences
+	preferencesLoaded      bool
+	preferencesGeneration  uint64
+	quitting               bool
 	proxyNamesChecked      bool
 	proxyNamesPending      []string
 	width                  int
@@ -174,8 +180,9 @@ func newModelWithPageClients(proxyClient proxypage.Client, connectionsClient con
 	pages[ui.PageSystem] = systempage.New(nil, nil)
 	active := rail[0]
 	model := Model{
-		diagnosticWindow: newDiagnosticWindow(),
-		pages:            pages, rail: rail, active: active,
+		preferencesClient: connectionsClient,
+		diagnosticWindow:  newDiagnosticWindow(),
+		pages:             pages, rail: rail, active: active,
 		focus: ui.Focus{Area: ui.FocusRail, Page: active},
 		width: 100, height: 28, theme: ui.DefaultTheme(), monitor: NewMonitor(),
 		pendingActions: make(map[string]ui.Action),
@@ -239,6 +246,7 @@ func newModelWithClientContext(ctx context.Context, events <-chan session.Event,
 	model.resizePages()
 	model.events = events
 	model.pageCtx = ctx
+	model.pages[ui.PageProxies].(*proxypage.Model).SetContextFactory(func() (context.Context, context.CancelFunc) { return context.WithCancel(ctx) })
 	model.networkClient = client
 	if source, ok := client.(diagnosticClient); ok {
 		model.diagnosticWindow.client = source
@@ -341,6 +349,27 @@ func (model *Model) syncSystemNetworkStatus() {
 
 // Update routes shell, modal and page events while retaining ownership of asynchronous results.
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	next, command := model.update(message)
+	updated := next.(Model)
+	if page, ok := updated.pages[ui.PageProxies].(*proxypage.Model); ok {
+		if updated.quitting {
+			page.Stop()
+			return updated, command
+		}
+		page.SetObscured(updated.pageSettings != nil || updated.modal != nil || page.HelpMode() != "" ||
+			(updated.diagnosticWindow != nil && updated.diagnosticWindow.open) ||
+			(updated.installation != nil && updated.installation.visible) ||
+			(updated.exportLogs != nil && !updated.exportLogs.Closed()) || Classify(updated.width, updated.height) == ui.TooSmall)
+		ready := updated.connected && !updated.reconnecting && updated.preferencesLoaded && updated.core.Status == "running"
+		auto := page.ReconcileAutoTests(updated.active == ui.PageProxies, ready, updated.statusEpoch, updated.core)
+		if auto != nil {
+			command = tea.Batch(command, auto)
+		}
+	}
+	return updated, command
+}
+
+func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	model.showDuplicateNames()
 	if key, ok := message.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" {
 		if model.diagnosticWindow != nil {
@@ -352,12 +381,16 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
 			page.Stop()
 		}
+		model.quitting = true
 		return model, tea.Quit
 	}
 	if command, consumed := model.updateDiagnostics(message); consumed {
 		return model, command
 	}
 	model.observeDiagnosticMessage(message)
+	if command, consumed := model.updatePageSettings(message); consumed {
+		return model, command
+	}
 	if command, consumed := model.updateInstallation(message); consumed {
 		return model, command
 	}
@@ -627,6 +660,15 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model, nil
 	case ui.OpenHelpMsg:
 		return model.openHelp()
+	case ui.OpenPageSettingsMsg:
+		if typed.Page != model.active || model.modal != nil || model.pageSettings != nil ||
+			(model.diagnosticWindow != nil && model.diagnosticWindow.open) ||
+			(model.installation != nil && model.installation.visible) ||
+			(model.exportLogs != nil && !model.exportLogs.Closed()) {
+			return model, nil
+		}
+		model.pageSettings = newPageSettings(model.active, model.preferences)
+		return model, nil
 	}
 
 	key, isKey := message.(tea.KeyPressMsg)
@@ -681,6 +723,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model.openHelp()
 	}
 	if name == "q" && model.inputMode != ui.InputText {
+		model.quitting = true
 		return model, tea.Quit
 	}
 	if Classify(model.width, model.height) == ui.TooSmall {
@@ -698,6 +741,13 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if page, ok := model.pages[model.active].(ui.HelpModeProvider); ok && page.HelpMode() == ui.ModeRouting {
 		return model.dispatchPage(message)
+	}
+	if name == "f4" {
+		if page, ok := model.pages[model.active].(ui.HelpModeProvider); ok && page.HelpMode() != "" && page.HelpMode() != ui.ModeSearch {
+			return model.dispatchPage(message)
+		}
+		model.pageSettings = newPageSettings(model.active, model.preferences)
+		return model, nil
 	}
 	// Digit keys 1–9 jump straight to the matching rail page while the focus is
 	// not in a text input (search box / form). InputText mode passes digits
@@ -743,6 +793,9 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		statusEpochAdvanced := !model.statusEpochKnown || event.Epoch > model.statusEpoch
 		if model.statusEpochKnown && (event.Epoch < model.statusEpoch || (!statusEpochAdvanced && event.Status.Revision < model.status.Revision)) {
 			break
+		}
+		if statusEpochAdvanced && model.statusEpochKnown {
+			model.preferencesLoaded = false
 		}
 		model.statusEpoch = event.Epoch
 		model.statusEpochKnown = true
@@ -809,11 +862,19 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 			page.Observe(event.Connections, event.ObservedAt)
 		}
 	case session.EventCore:
+		if model.statusEpochKnown && event.Epoch != 0 && event.Epoch < model.statusEpoch {
+			break
+		}
 		if event.Err != nil {
 			if page, ok := model.pages[ui.PageProxies].(*proxypage.Model); ok {
 				page.InvalidateGroups()
 			}
 			break
+		}
+		if model.core.PID != event.Core.PID || !model.core.StartedAt.Equal(event.Core.StartedAt) || model.core.Restarts != event.Core.Restarts {
+			if page, ok := model.pages[ui.PageProxies].(*proxypage.Model); ok {
+				page.InvalidateGroups()
+			}
 		}
 		model.core = event.Core
 		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
@@ -848,12 +909,13 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 			}
 		}
 	case session.EventPreferences:
+		if model.statusEpochKnown && event.Epoch != 0 && event.Epoch < model.statusEpoch {
+			break
+		}
 		if event.Err != nil {
 			break
 		}
-		if page, ok := model.pages[ui.PageConnections].(*connectionspage.Model); ok {
-			page.SetPreferences(event.Preferences)
-		}
+		model.applyPreferences(event.Preferences)
 	case session.EventRules:
 		if event.Err != nil {
 			break
@@ -898,6 +960,8 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		}
 		command = tea.Batch(command, model.loadNetworkStatus())
 	case session.EventReconnecting:
+		model.preferencesLoaded = false
+		model.preferencesGeneration++
 		if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
 			command = tea.Batch(command, page.ObserveConnection(false))
 		}
@@ -1514,6 +1578,11 @@ func (model *Model) refreshDaemonHintForService() {
 
 // View renders the active shell or setup layout and overlays the current modal.
 func (model Model) View() tea.View {
+	if model.pageSettings != nil && (model.diagnosticWindow == nil || !model.diagnosticWindow.open) {
+		view := tea.NewView(model.pageSettings.view(model.width, model.height))
+		view.AltScreen, view.WindowTitle = true, ui.AppName
+		return view
+	}
 	if model.diagnosticWindow != nil && model.diagnosticWindow.open {
 		view := tea.NewView(model.diagnosticWindow.view(model.width, model.height))
 		view.AltScreen, view.WindowTitle = true, ui.AppName
@@ -1581,6 +1650,13 @@ func (model Model) View() tea.View {
 			}
 		}
 		// Compact mode metrics live in the status bar — never append ViewSummary.
+		settingsAvailable := true
+		if p, ok := page.(ui.HelpModeProvider); ok {
+			settingsAvailable = p.HelpMode() == "" || p.HelpMode() == ui.ModeSearch
+		}
+		if settingsAvailable && !strings.Contains(footer, "F4") {
+			footer = "F4 settings  " + footer
+		}
 		// Prefer dropping middle shortcuts before ?/q and the global spinner segment.
 		// Budget = width−2: the Footer style pads 1 cell each side (design S2),
 		// so the full width would word-wrap candidate strings at the edge.

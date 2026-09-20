@@ -46,9 +46,13 @@ func (s *Server) updateTUIPreferences(writer http.ResponseWriter, request *http.
 	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
+	update := preferences.Update{ConnectionsColumns: body.ConnectionsColumns}
+	if body.Proxies != nil {
+		update.Proxies = &preferences.ProxyPreferences{ExtraLatency: body.Proxies.ExtraLatency, AutoLatencyTest: body.Proxies.AutoLatencyTest}
+	}
 	updated, err := runtime.UpdateTUIPreferences(request.Context(), runtimeapi.Operation{
 		ID: body.OperationID, Source: "control", IfRevision: body.IfRevision,
-	}, preferences.Update{ConnectionsColumns: body.ConnectionsColumns})
+	}, update)
 	if err != nil {
 		s.writeControlError(request.Context(), writer, err)
 		return
@@ -60,5 +64,6 @@ func tuiPreferencesDTO(value preferences.Preferences, revision uint64) protocol.
 	return protocol.TUIPreferences{
 		Schema: "mihari/v1", Revision: revision,
 		ConnectionsColumns: append([]string(nil), value.ConnectionsColumns...),
+		Proxies:            &protocol.ProxyPreferences{ExtraLatency: value.Proxies.ExtraLatency, AutoLatencyTest: value.Proxies.AutoLatencyTest},
 	}
 }

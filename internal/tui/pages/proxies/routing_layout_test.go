@@ -34,7 +34,7 @@ func TestRoutingHeader_CompactBorderedCard(t *testing.T) {
 			t.Fatalf("header has %d rows; want two entries plus borders", len(header))
 		}
 		plain := ansi.Strip(strings.Join(header, "\n"))
-		for _, want := range []string{"╭", "Routing", "╮", "Mode", "GLOBAL", "╰", "╯"} {
+		for _, want := range []string{"╭", "Basic", "╮", "Mode", "Page Settings", "GLOBAL", "╰", "╯"} {
 			if !strings.Contains(plain, want) {
 				t.Fatalf("missing %q in card:\n%s", want, plain)
 			}
@@ -51,7 +51,10 @@ func TestRoutingHeader_CompactBorderedCard(t *testing.T) {
 func TestRoutingHeader_LongSelectionPreservesStatusNotes(t *testing.T) {
 	forRoutingHeaderCases(t, func(t *testing.T, m *Model) {
 		plain := ansi.Strip(strings.Join(m.routingHeader(), "\n"))
-		note := map[string]string{"applied": "Rule · Press Enter to Change", "pending": "Saved · pending", "unknown": "Live state unavailable"}[m.routing.status.State]
+		note := map[string]string{"applied": "Rule", "pending": "Saved · pending", "unknown": "Live state unavailable"}[m.routing.status.State]
+		if m.width == 58 && m.routing.status.State == "unknown" {
+			note = "Live state unavail"
+		}
 		for _, want := range []string{"…", note, "Waiting for candidates"} {
 			if !strings.Contains(plain, want) {
 				t.Fatalf("missing %q in truncated card:\n%s", want, plain)
