@@ -949,6 +949,9 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 	}
 	model.syncSystem()
 	model.syncOverview()
+	if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
+		command = tea.Batch(command, page.SyncStartupNetwork())
+	}
 	return tea.Batch(command, model.spinnerCmdIfNeeded())
 }
 
@@ -1028,7 +1031,7 @@ func (model *Model) syncSystemLoggingStatus(status protocol.LoggingStatus, avail
 
 func (model Model) loadNetworkStatus() tea.Cmd {
 	client := model.networkClient
-	if client == nil || !model.connected {
+	if client == nil || !model.connected || model.status.StartupNetwork.Applying() {
 		return nil
 	}
 	ctx := model.pageCtx

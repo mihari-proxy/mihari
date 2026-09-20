@@ -1024,7 +1024,7 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		m.beginRowPending(typed.Action)
 		return m, m.rowSpinCmdIfNeeded()
 	case startRowSpinMsg:
-		if typed.gen != m.rowSpinGen || !m.pending {
+		if typed.gen != m.rowSpinGen || !m.hasRowProgress() {
 			if typed.gen == m.rowSpinGen {
 				m.rowSpinning = false
 			}
@@ -1038,7 +1038,7 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 			return m, nil
 		}
 		m.rowSpinClock = typed.t
-		if !m.pending {
+		if !m.hasRowProgress() {
 			m.rowSpinning = false
 			return m, nil
 		}
@@ -1694,7 +1694,7 @@ func (m *Model) networkRows() []row {
 		}
 		rows = append(rows, row{
 			id: rowSystemProxy, section: section, label: ui.SystemProxyLabel,
-			value: value, detail: systemProxyDetail(m.systemProxy),
+			value: m.withStartupBadge(value, rowSystemProxy), detail: systemProxyDetail(m.systemProxy),
 		})
 		// Action row carries the toggle verb; its badge (pending/Done/Failed)
 		// binds here via rowProgressForAction / outcomeRowID.
@@ -1727,7 +1727,7 @@ func (m *Model) networkRows() []row {
 	}
 	rows = append(rows, row{
 		id: rowTUN, section: section, label: ui.TUNLabel,
-		value: tunValue, detail: tunDetail,
+		value: m.withStartupBadge(tunValue, rowTUN), detail: tunDetail,
 	})
 	if m.hasCapability(protocol.CapabilityTUN) {
 		tunImpact := ui.EnableTunImpact
@@ -2024,7 +2024,7 @@ func coreRowForKind(kind actionKind) string {
 }
 
 func (m *Model) rowSpinCmdIfNeeded() tea.Cmd {
-	if !m.pending || m.pendingRow == "" {
+	if !m.hasRowProgress() {
 		m.rowSpinning = false
 		return nil
 	}

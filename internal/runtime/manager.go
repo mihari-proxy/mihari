@@ -174,7 +174,7 @@ type Manager struct {
 	geoip                     GeoIPService
 	prepareGeoIP              func(context.Context) (GeoIPCandidate, error)
 	onboarding                *onboarding.Service
-	onboardingRestartRequired bool
+	onboardingRestartRequired atomic.Bool
 	logging                   LoggingRuntime
 	loggingObservation        loggingObservation // guarded by mutation ownership
 	loggingUnsaved            bool               // remains set across observation failures until saved or restarted
@@ -210,6 +210,9 @@ type Manager struct {
 	coreRunRequested          atomic.Bool
 	operationsMu              sync.Mutex
 	operations                map[string]*operationEntry
+
+	startupSystemProxyApplying atomic.Bool
+	startupTunApplying         atomic.Bool
 }
 
 type operationEntry struct {
@@ -320,6 +323,8 @@ func New(options Options) *Manager {
 
 func (m *Manager) Run(ctx context.Context) error {
 	defer m.closing.Store(true)
+	defer m.startupSystemProxyApplying.Store(false)
+	defer m.startupTunApplying.Store(false)
 	if m.validationMode {
 		<-ctx.Done()
 		return nil
@@ -378,6 +383,7 @@ func (m *Manager) Run(ctx context.Context) error {
 	m.coreRunRequested.Store(true)
 	defer m.coreRunRequested.Store(false)
 	missing := m.coreRecovery.Load() || !m.binaryExists()
+	initialCoreAvailable := !missing
 	if paused, ok := m.supervisor.(interface{ WaitForCore() }); ok && missing {
 		if !m.coreRecovery.Load() {
 			m.setCoreState(state.CoreState{Status: "missing"})
@@ -397,7 +403,11 @@ func (m *Manager) Run(ctx context.Context) error {
 	m.running.Store(true)
 	// Best-effort restore of desired OS system proxy; failures must not block core supervision.
 	if !missing {
-		if err := m.ApplyDesiredSystemProxy(ctx); err != nil {
+		apply := m.ApplyDesiredSystemProxy
+		if initialCoreAvailable {
+			apply = m.applyStartupSystemProxy
+		}
+		if err := apply(ctx); err != nil {
 			m.reportWarning(ctx, "system-proxy", "restore.failed", err)
 		}
 	}
@@ -406,7 +416,11 @@ func (m *Manager) Run(ctx context.Context) error {
 			m.reportWarning(ctx, "system-proxy", "cleanup.failed", err)
 		}
 	}()
+	if initialCoreAvailable && ctx.Err() == nil {
+		m.startupTunApplying.Store(tunManaged(m.settingsSnapshot().Tun))
+	}
 	err := m.supervisor.Run(ctx)
+	m.startupTunApplying.Store(false)
 	m.running.Store(false)
 	if ctx.Err() != nil {
 		if err == nil || diagnostics.NormalCancellation(ctx, err) {
@@ -454,6 +468,10 @@ func (m *Manager) reportBackgroundContext(ctx context.Context, component string,
 }
 
 func (m *Manager) Observe(observation supervisor.Observation) {
+	switch observation.Status {
+	case supervisor.StatusRunning, supervisor.StatusBackoff, supervisor.StatusDegraded, supervisor.StatusStopped:
+		m.startupTunApplying.Store(false)
+	}
 	if m.lockMaintenance(context.Background()) != nil {
 		return
 	}

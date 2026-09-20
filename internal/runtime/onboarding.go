@@ -31,11 +31,15 @@ func (m *Manager) SetupRequired(ctx context.Context) (bool, error) {
 	if m.onboarding == nil {
 		return false, nil
 	}
-	status, err := m.OnboardingStatus(ctx)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	if status.Status.RestartRequired {
+	if err := m.checkOpen(); err != nil {
+		return false, err
+	}
+	// Readiness must remain readable while startup owns the mutation gate.
+	// Only the restart marker was needed from the full onboarding snapshot.
+	if m.onboardingRestartRequired.Load() {
 		return true, nil
 	}
 	coreState := m.store.Load().Core
@@ -111,7 +115,7 @@ func (m *Manager) UpdateOnboarding(ctx context.Context, operation Operation, upd
 				rollback, rollbackErr := m.saveSettingsCandidate(ctx, rollbackCandidate)
 				if rollbackErr != nil && !rollback.Committed {
 					m.publishSettings(candidate)
-					m.onboardingRestartRequired = true
+					m.onboardingRestartRequired.Store(true)
 					_, degradedErr := m.updateStateLocked(context.WithoutCancel(ctx), meta, func(snapshot state.Snapshot) (state.Snapshot, error) {
 						degradedErr := m.enterMutationDegraded(&snapshot)
 						return snapshot, degradedErr
@@ -123,7 +127,9 @@ func (m *Manager) UpdateOnboarding(ctx context.Context, operation Operation, upd
 		}
 
 		m.publishSettings(candidate)
-		m.onboardingRestartRequired = m.onboardingRestartRequired || candidate.changed
+		if candidate.changed {
+			m.onboardingRestartRequired.Store(true)
+		}
 		committed, err := m.updateStateLocked(context.WithoutCancel(ctx), meta, func(snapshot state.Snapshot) (state.Snapshot, error) {
 			return snapshot, nil
 		})
@@ -163,7 +169,7 @@ func (m *Manager) composeOnboardingStatus(onboardingState onboarding.State) onbo
 		MixedAddr:       settings.MixedAddr,
 		ControllerAddr:  settings.ControllerAddr,
 		WebAddr:         settings.WebAddr,
-		RestartRequired: m.onboardingRestartRequired,
+		RestartRequired: m.onboardingRestartRequired.Load(),
 	}
 }
 

@@ -10,6 +10,9 @@ _Avoid_: 将 Update available 与正在更新混用。
 **面板更新中（Panel Update in Progress）**：已发起的面板更新尚未结束的执行状态，不等同于发现了新版。
 _Avoid_: 将 Updating 与有更新可用混用。
 
+**启动期望状态应用（Startup Desired-State Application）**：Mihari 启动时，将保存的 TUN 或系统代理期望状态应用到实际运行环境的过程；目标可以是开启或关闭。界面称为 Applying，完成、失败或取消后该过程结束。
+_Avoid_: 自动修复、仅凭期望与实际不一致推断正在应用、将 Applying 等同于开启。
+
 **核心通道（Core Channel）**：mihomo 官方核心的发布系列，分为 stable 与 alpha。它与 Mihari 自身的 main/dev 发布通道不同。
 _Avoid_: 将核心通道与 Mihari 应用通道混用。
 

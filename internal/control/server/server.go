@@ -210,6 +210,11 @@ func (s *Server) status(writer http.ResponseWriter, request *http.Request) {
 			ObservedRevision: snapshot.Config.ObservedRevision, LastError: snapshot.Config.LastError,
 		}
 	}
+	if runtime, ok := s.runtime.(interface {
+		StartupNetworkStatus() *protocol.StartupNetworkStatus
+	}); ok {
+		status.StartupNetwork = runtime.StartupNetworkStatus()
+	}
 	writeJSON(writer, http.StatusOK, status)
 }
 
