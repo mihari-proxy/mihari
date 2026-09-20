@@ -13,6 +13,7 @@ const (
 	ActionRollbackPanel           Action = "rollback-panel"
 	ActionRestartCore             Action = "restart-core"
 	ActionUpdateCore              Action = "update-core"
+	ActionReinstallCore           Action = "reinstall-core"
 	ActionSwitchCoreChannel       Action = "switch-core-channel"
 	ActionSwitchMihariChannel     Action = "switch-mihari-channel"
 	ActionUpdateMihari            Action = "update-mihari"

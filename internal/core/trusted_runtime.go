@@ -221,7 +221,7 @@ func (t *TrustedExecution) RunCommand(ctx context.Context) (CoreCommand, func() 
 }
 
 // InitializeConfig validates and publishes already-generated startup bytes.
-// A bootstrap may be accepted only when both installed provenance roles are absent.
+// A bootstrap may be accepted when no local core exists and no recovery is pending.
 func (t *TrustedExecution) InitializeConfig(ctx context.Context, generated []byte) error {
 	if len(generated) == 0 {
 		return dataFailure("generated configuration is empty")
@@ -268,25 +268,39 @@ func (t *TrustedExecution) CheckPaths(root, binary, configuration string) error 
 	return nil
 }
 
-// InstalledAvailable distinguishes a true green install from a broken pair.
+// InstalledAvailable checks local executable availability after legacy recovery.
+// An orphan historical receipt does not turn a missing core into a broken pair.
 func (t *TrustedExecution) InstalledAvailable(ctx context.Context) (bool, error) {
-	b, e := t.store.Inspect(ctx, InstalledBinary, "")
-	if e != nil {
-		return false, e
-	}
-	r, e := t.store.Inspect(ctx, InstalledReceipt, "")
-	if e != nil {
-		return false, e
-	}
-	if b.Present != r.Present {
-		return false, dataFailure("incomplete installed core provenance pair")
-	}
-	if !b.Present {
+	v, e := OpenInstalledCore(ctx, t.store)
+	if errors.Is(e, os.ErrNotExist) {
 		return false, nil
 	}
-	v, e := OpenInstalledCore(ctx, t.store)
 	if e != nil {
 		return false, e
 	}
 	return true, v.Close()
+}
+
+// BindRepairConfig retains the existing configuration without executing the
+// interrupted core. Only a freshly downloaded candidate will validate it.
+func (t *TrustedExecution) BindRepairConfig(ctx context.Context) error {
+	content, err := t.files.read(ctx)
+	if err != nil {
+		return err
+	}
+	if len(content) == 0 {
+		return dataFailure("repair configuration is empty")
+	}
+	hash := sha256.Sum256(content)
+	capability, err := t.files.bind(ctx, hash)
+	if err != nil {
+		return err
+	}
+	if err := capability.Close(); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	t.committed, t.ready = hash, true
+	t.mu.Unlock()
+	return nil
 }

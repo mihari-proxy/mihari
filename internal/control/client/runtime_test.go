@@ -62,6 +62,12 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 				_, err := client.InstallCore(ctx, protocol.MutationRequest{OperationID: "op", IfRevision: &revision})
 				return err
 			}},
+		{"reinstall", http.MethodPost, "/v1/core/reinstall", `{"operation_id":"op","if_revision":1}`, `{"schema":"mihari/v1","version":"v1","updated":true,"revision":2}`,
+			func(ctx context.Context, client *Client) error {
+				revision := uint64(1)
+				_, err := client.ReinstallCore(ctx, protocol.MutationRequest{OperationID: "op", IfRevision: &revision})
+				return err
+			}},
 		{"restart", http.MethodPost, "/v1/core/restart", `{"operation_id":"op"}`, `{"schema":"mihari/v1","operation_id":"op"}`,
 			func(ctx context.Context, client *Client) error {
 				_, err := client.RestartCore(ctx, protocol.MutationRequest{OperationID: "op"})

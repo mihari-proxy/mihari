@@ -299,7 +299,7 @@ func (c *publicationContext) Done() <-chan struct{} {
 	return c.Context.Done()
 }
 
-func TestTrustedRuntime_InitializeRejectsIncompletePair(t *testing.T) {
+func TestTrustedRuntime_InitializeTreatsHistoricalReceiptAsOptional(t *testing.T) {
 	for _, missing := range []ProvenanceRole{InstalledBinary, InstalledReceipt} {
 		t.Run(string(missing), func(t *testing.T) {
 			s := newMemoryStore()
@@ -319,8 +319,8 @@ func TestTrustedRuntime_InitializeRejectsIncompletePair(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if e = trusted.InitializeConfig(context.Background(), content); e == nil || files.writes != 0 {
-				t.Fatal("incomplete installed pair accepted")
+			if e = trusted.InitializeConfig(context.Background(), content); e != nil || files.writes != 1 {
+				t.Fatalf("historical receipt affected bootstrap: err=%v writes=%d", e, files.writes)
 			}
 		})
 	}

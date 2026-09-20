@@ -49,6 +49,8 @@ func (s *unixProvenanceStore) check(ctx context.Context) error {
 }
 func rolePath(r ProvenanceRole, tx string) (string, uint32, error) {
 	switch r {
+	case UpdateJournal, UpdateCandidate, UpdateBackup, UpdateRestore, UpdateMarker, UpdateInterrupted:
+		return updateRolePath(r, tx)
 	case InstalledBinary:
 		return "bin/mihomo", 0700, nil
 	case InstalledReceipt:
@@ -173,7 +175,7 @@ func (s *unixProvenanceStore) Load(ctx context.Context, r ProvenanceRole, tx str
 	}
 	defer func() { err = errors.Join(err, f.Close()) }()
 	limit := int64(1 << 20)
-	if r == InstalledBinary || r == CandidateBinary || r == BackupBinary || r == RestoreBinary {
+	if r == InstalledBinary || r == CandidateBinary || r == BackupBinary || r == RestoreBinary || r == UpdateCandidate || r == UpdateBackup || r == UpdateRestore {
 		limit = maxCoreBinarySize
 	}
 	return readCoreFile(ctx, f, limit)
@@ -217,7 +219,7 @@ func (s *unixProvenanceStore) Save(ctx context.Context, r ProvenanceRole, tx str
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return e
 	}
-	if r != PairJournal && expected != nil {
+	if r != PairJournal && r != UpdateJournal && expected != nil {
 		return os.ErrExist
 	}
 	return p.WriteFile(ctx, n, b, m, expected)
@@ -256,6 +258,7 @@ func (s *unixProvenanceStore) Apply(ctx context.Context, a ProvenanceMutation) (
 		return p.RemoveFile(ctx, n, m, *expected)
 	}
 	publish := (a.Role == InstalledBinary || a.Role == InstalledReceipt) && (a.Source == candidateRole(a.Role) || a.Source == restoreRole(a.Role))
+	publish = publish || (a.Role == InstalledBinary && (a.Source == UpdateCandidate || a.Source == UpdateRestore))
 	quarantine := (a.Source == InstalledBinary || a.Source == InstalledReceipt) && a.Role == quarantineRole(a.Source)
 	if !publish && !quarantine {
 		return os.ErrInvalid

@@ -24,7 +24,12 @@ type CommandStarter struct {
 }
 
 func (s CommandStarter) Start() (Child, error) {
-	command, release, err := s.command(context.Background())
+	return s.StartContext(context.Background())
+}
+
+// StartContext preserves the owner's execution capability through OS Start.
+func (s CommandStarter) StartContext(ctx context.Context) (Child, error) {
+	command, release, err := s.command(ctx)
 	if err != nil {
 		return nil, err
 	}

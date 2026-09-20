@@ -33,6 +33,7 @@ const (
 	rowCore               = "core"
 	rowCoreChannel        = "core-channel"
 	rowCoreUpdate         = "core-update"
+	rowCoreReinstall      = "core-reinstall"
 	rowCoreRestart        = "core-restart"
 	rowMihariChannel      = "mihari-channel"
 	rowMihariUpdate       = "mihari-update"
@@ -236,6 +237,7 @@ const (
 	actionUpdate actionKind = iota
 	actionRestart
 	actionSwitchChannel
+	actionReinstall
 )
 
 type serviceActionKind uint8
@@ -1079,7 +1081,7 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		}
 		m.markRowOutcome(rowID, true, "")
 		revision := typed.restart.Revision
-		if typed.kind == actionUpdate || typed.kind == actionSwitchChannel {
+		if typed.kind == actionUpdate || typed.kind == actionSwitchChannel || typed.kind == actionReinstall {
 			revision = typed.install.Revision
 			// Reload the committed channel before checking, and reject any
 			// metadata request that started before this mutation finished.
@@ -1186,6 +1188,11 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 				return m, nil
 			}
 			return m, m.confirmSwitchCoreChannel(otherCoreChannel(m.core.Channel))
+		case rowCoreReinstall:
+			if m.client == nil || !m.mutationsEnabled || !m.hasCapability(protocol.CapabilityCoreReinstall) {
+				return m, nil
+			}
+			return m, m.confirmAction(actionReinstall)
 		case rowCoreUpdate:
 			if m.client == nil || !m.mutationsEnabled || !m.hasCapability(protocol.CapabilityCore) {
 				return m, nil
@@ -1426,6 +1433,9 @@ func (m *Model) rows() []row {
 		row{id: rowCoreUpdate, section: ui.CoreSectionTitle, label: m.coreActionLabel(), value: m.coreUpdateValue(), detail: ui.UpdateCoreImpact},
 		row{id: rowCoreRestart, section: ui.CoreSectionTitle, label: ui.RestartCoreLabel, value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.RestartCoreImpact},
 	)
+	if m.hasCapability(protocol.CapabilityCoreReinstall) {
+		rows = append(rows, row{id: rowCoreReinstall, section: ui.CoreSectionTitle, label: ui.ReinstallCoreLabel, value: actionState(true, m.mutationsEnabled), detail: ui.ReinstallCoreImpact})
+	}
 	rows = append(rows, m.serviceRows()...)
 	rows = append(rows, m.loggingRows()...)
 	rows = append(rows, m.maintenanceRows()...)
@@ -2002,6 +2012,8 @@ func coreRowForKind(kind actionKind) string {
 	switch kind {
 	case actionUpdate:
 		return rowCoreUpdate
+	case actionReinstall:
+		return rowCoreReinstall
 	case actionRestart:
 		return rowCoreRestart
 	case actionSwitchChannel:
@@ -2063,6 +2075,8 @@ func rowProgressForAction(action ui.Action, coreMissing bool) (rowID, note strin
 		return rowCoreUpdate, ui.CoreProgressUpdating
 	case ui.ActionSwitchCoreChannel:
 		return rowCoreChannel, ui.CoreProgressSwitching
+	case ui.ActionReinstallCore:
+		return rowCoreReinstall, ui.CoreProgressReinstalling
 	case ui.ActionRestartCore:
 		return rowCoreRestart, ui.CoreProgressRestarting
 	case ui.ActionEnableSystemProxy, ui.ActionForceSystemProxy:
@@ -2732,6 +2746,7 @@ func (m *Model) confirmAction(kind actionKind) tea.Cmd {
 	revision, operationID := m.currentRevision(), m.newOperationID()
 	title, object, impact, rollback := ui.UpdateCoreTitle, ui.MihomoCoreLabel, ui.UpdateCoreImpact, ui.UpdateCoreRollback
 	action := ui.ActionUpdateCore
+	capability := protocol.CapabilityCore
 	if kind == actionUpdate && m.core.Version == "" {
 		title, impact = ui.InstallCoreTitle, ui.InstallCoreImpact
 	}
@@ -2739,9 +2754,13 @@ func (m *Model) confirmAction(kind actionKind) tea.Cmd {
 		title, impact, rollback = ui.RestartCoreTitle, ui.RestartCoreImpact, ui.RestartCoreRollback
 		action = ui.ActionRestartCore
 	}
+	if kind == actionReinstall {
+		title, impact, rollback = ui.ReinstallCoreTitle, ui.ReinstallCoreImpact, ui.ReinstallCoreRollback
+		action, capability = ui.ActionReinstallCore, protocol.CapabilityCoreReinstall
+	}
 	return func() tea.Msg {
 		return ui.ActionIntentMsg{
-			Action: action, Page: ui.PageSystem, Capability: protocol.CapabilityCore, Key: "system:" + string(action),
+			Action: action, Page: ui.PageSystem, Capability: capability, Key: "system:" + string(action),
 			Title: title, Object: object, Impact: impact, Rollback: rollback,
 			Execute: m.runAction(actionStartMsg{kind: kind, operationID: operationID, revision: revision}),
 		}
@@ -2782,14 +2801,27 @@ func (m *Model) runAction(start actionStartMsg) tea.Cmd {
 	if start.kind == actionUpdate || start.kind == actionSwitchChannel {
 		operationName = "core.install"
 	}
+	if start.kind == actionReinstall {
+		operationName = "core.reinstall"
+	}
 	operation := logging.OperationMetadata{ID: start.operationID, Name: operationName}
 	return func() tea.Msg {
 		revision := start.revision
 		request := protocol.MutationRequest{OperationID: start.operationID, IfRevision: &revision, Source: start.source}
 		ctx := logging.WithOperation(m.ctx, operation)
-		if start.channel != "" {
+		if start.channel != "" && start.kind != actionReinstall {
 			channel := start.channel
 			request.Channel = &channel
+		}
+		if start.kind == actionReinstall {
+			repair, ok := m.client.(interface {
+				ReinstallCore(context.Context, protocol.MutationRequest) (protocol.CoreInstallResult, error)
+			})
+			if !ok {
+				return actionResultMsg{kind: start.kind, operation: operation, err: protocol.APIError{Code: protocol.CodeInvalidState, Message: "core reinstall unavailable"}}
+			}
+			result, err := repair.ReinstallCore(ctx, request)
+			return actionResultMsg{kind: start.kind, install: result, operation: operation, err: err}
 		}
 		if start.kind == actionUpdate || start.kind == actionSwitchChannel {
 			result, err := m.client.InstallCore(ctx, request)

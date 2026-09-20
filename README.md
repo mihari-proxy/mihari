@@ -28,7 +28,7 @@ Overview's Core card shortens its traffic charts to keep each speed and its unit
 Specifically:
 
 - **Subscription management**: add, refresh, and switch subscription profiles, with offline switching, independent refresh intervals, and per-profile fetch proxy
-- **Core management**: install, update, and restart the mihomo core
+- **Core management**: install, update, reinstall, and restart the mihomo core. Online updates use the latest official stable/alpha release; existing local cores need no official provenance receipt. Mihari application updates preserve the core and its channel. Interrupted core updates block uncertain starts; use **System → Reinstall core** or `mihari core reinstall` to fetch the original channel's latest release while retaining subscriptions and configuration.
 - **Service supervision**: run in the background as an OS service, with crash auto-restart
 - **System proxy / TUN**: enable system proxy or TUN; a foreign proxy or another TUN/mihomo instance requires confirmation or `--force`
 - **Web panels**: one-click install and open of the zashboard / MetaCubeXD panels

@@ -5,8 +5,8 @@
 #
 # Bundle layout (produced by scripts/build-all-in-one):
 #   mihari.exe             -> $binDir\mihari.exe
-#   data\bin\mihomo.exe    -> $MIHARI_DATA\bin\mihomo.exe       (overwrite)
-#   data\bin\core-channel  -> $MIHARI_DATA\bin\core-channel     (overwrite if present)
+#   data\bin\mihomo.exe    -> $MIHARI_DATA\bin\mihomo.exe       (only if core absent)
+#   data\bin\core-channel  -> $MIHARI_DATA\bin\core-channel     (with new core only)
 #   data\geoip\*.mmdb      -> $MIHARI_DATA\geoip\*.mmdb         (overwrite)
 #
 # Never touches: mihari.yaml, subscriptions\, control.token, onboarding.json,
@@ -474,15 +474,20 @@ try {
     }
   }
 
-  # 2. Data overlay -> MIHARI_DATA (bundle authoritative for core + GeoIP; user
-  #    config / panel state below is never touched).
+  # 2. Seed an absent core from the bundle; application updates preserve the
+  #    installed core and its channel. GeoIP remains a bundled data overlay.
   New-Item -ItemType Directory -Force -Path (Join-Path $dataDir 'bin') | Out-Null
   New-Item -ItemType Directory -Force -Path (Join-Path $dataDir 'geoip') | Out-Null
-  Info "Replacing the mihomo core and GeoIP files in $dataDir"
-  Copy-Item -LiteralPath $mihomoSrc -Destination (Join-Path $dataDir 'bin\mihomo.exe') -Force
-  $sidecarSrc = Join-Path $BundleDir 'data\bin\core-channel'
-  if (Test-Path -LiteralPath $sidecarSrc) {
-    Copy-Item -LiteralPath $sidecarSrc -Destination (Join-Path $dataDir 'bin\core-channel') -Force
+  $coreDest = Join-Path $dataDir 'bin\mihomo.exe'
+  if (-not (Test-Path -LiteralPath $coreDest)) {
+    Info "Installing the bundled mihomo core in $dataDir"
+    Copy-Item -LiteralPath $mihomoSrc -Destination $coreDest
+    $sidecarSrc = Join-Path $BundleDir 'data\bin\core-channel'
+    if (Test-Path -LiteralPath $sidecarSrc) {
+      Copy-Item -LiteralPath $sidecarSrc -Destination (Join-Path $dataDir 'bin\core-channel') -Force
+    }
+  } else {
+    Info 'Preserving the installed mihomo core and channel'
   }
   Copy-Item -LiteralPath (Join-Path $BundleDir 'data\geoip\GeoLite2-Country.mmdb') -Destination (Join-Path $dataDir 'geoip\GeoLite2-Country.mmdb') -Force
   Copy-Item -LiteralPath (Join-Path $BundleDir 'data\geoip\GeoLite2-ASN.mmdb') -Destination (Join-Path $dataDir 'geoip\GeoLite2-ASN.mmdb') -Force

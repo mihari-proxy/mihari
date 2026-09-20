@@ -4,6 +4,7 @@ import "time"
 
 const (
 	CapabilityCore          = "core"
+	CapabilityCoreReinstall = "core-reinstall"
 	CapabilityProxies       = "proxies"
 	CapabilityConnections   = "connections"
 	CapabilityRules         = "rules"

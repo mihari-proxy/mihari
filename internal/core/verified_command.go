@@ -28,7 +28,7 @@ type verifiedFile interface {
 	Close() error
 }
 
-// VerifiedCore holds the installed pair or a private, authenticated candidate.
+// VerifiedCore holds a platform-verified local core or a private candidate.
 // Its zero value is unusable; callers cannot fill in trust identities.
 type VerifiedCore struct {
 	mu              sync.Mutex
@@ -55,13 +55,16 @@ func (c *VerifiedCore) Command(ctx context.Context, purpose CorePurpose, configu
 	c.mu.Lock()
 	closed := c.closed
 	c.mu.Unlock()
-	if closed || c.store == nil || c.binary == nil || c.receipt == nil {
+	if closed || c.store == nil || c.binary == nil {
 		return CoreCommand{}, os.ErrClosed
 	}
 	if err := ctx.Err(); err != nil {
 		return CoreCommand{}, err
 	}
-	if c.candidate != nil {
+	if c.candidate != nil && c.candidate.protected != nil && c.candidate.protected.closed.Load() {
+		return CoreCommand{}, os.ErrClosed
+	}
+	if c.candidate != nil && c.candidate.trusted != nil {
 		v := c.candidate.trusted
 		v.mu.Lock()
 		closed = v.closed
@@ -80,13 +83,18 @@ func (c *VerifiedCore) Command(ctx context.Context, purpose CorePurpose, configu
 			}
 			return CoreCommand{}, dataFailure("provenance recovery required")
 		}
+		if err := authorizePendingUpdate(ctx, c.store); err != nil {
+			return CoreCommand{}, err
+		}
 	}
 	binary, e := c.binary.verify(ctx)
 	if e != nil {
 		return CoreCommand{}, e
 	}
-	if _, e = c.receipt.verify(ctx); e != nil {
-		return CoreCommand{}, e
+	if c.receipt != nil {
+		if _, e = c.receipt.verify(ctx); e != nil {
+			return CoreCommand{}, e
+		}
 	}
 	root := c.store.coreStore().location()
 	home := filepath.Join(root, "runtime", "core-home")
@@ -160,8 +168,9 @@ type trustedCandidate struct {
 	mu                      sync.Mutex
 }
 
-// OpenInstalledCore verifies the recovered installed receipt and binary before
-// opening an execution capability. It never recovers while a process may run.
+// OpenInstalledCore binds a recovered local binary to its platform-checked file
+// identity. Historical origin receipts are not execution authority. It never
+// recovers while a process may run.
 func OpenInstalledCore(ctx context.Context, s ProvenanceStore) (*VerifiedCore, error) {
 	if s == nil || s.coreStore() == nil {
 		return nil, dataFailure("provenance store unavailable")
@@ -172,7 +181,31 @@ func OpenInstalledCore(ctx context.Context, s ProvenanceStore) (*VerifiedCore, e
 		}
 		return nil, dataFailure("provenance recovery required")
 	}
-	return openVerifiedPair(ctx, s, InstalledBinary, InstalledReceipt, "", nil)
+	if err := authorizePendingUpdate(ctx, s); err != nil {
+		return nil, err
+	}
+	observed, err := s.Inspect(ctx, InstalledBinary, "")
+	if err != nil {
+		return nil, err
+	}
+	if !observed.Present {
+		return nil, os.ErrNotExist
+	}
+	binary, err := s.coreStore().open(ctx, InstalledBinary, "")
+	if err != nil {
+		return nil, err
+	}
+	current, err := s.Inspect(ctx, InstalledBinary, "")
+	if err == nil && !sameObject(current, observed) {
+		err = dataFailure("mihomo binary changed while opening")
+	}
+	if err == nil {
+		err = s.coreStore().execution().admitInstalled(observed)
+	}
+	if err != nil {
+		return nil, errors.Join(err, binary.Close())
+	}
+	return &VerifiedCore{store: s, binary: binary, installed: true}, nil
 }
 func openVerifiedPair(ctx context.Context, s ProvenanceStore, br, rr ProvenanceRole, tx string, candidate *Candidate) (*VerifiedCore, error) {
 	rb, e := s.Load(ctx, rr, tx)
@@ -222,6 +255,9 @@ func openVerifiedPair(ctx context.Context, s ProvenanceStore, br, rr ProvenanceR
 // Verified opens this authenticated candidate, including a green installation
 // where no installed pair exists. Commit/Cleanup revoke all candidate commands.
 func (c *Candidate) Verified(ctx context.Context) (*VerifiedCore, error) {
+	if c != nil && c.protected != nil {
+		return c.verifiedProtected(ctx)
+	}
 	if c == nil || c.trusted == nil {
 		return nil, dataFailure("untrusted mihomo candidate")
 	}
@@ -259,8 +295,28 @@ func (c *ConfigCapability) Path(ctx context.Context) (string, error) {
 // a probe/validator/OS Start from racing managed pair publication. No goroutine
 // is created; the owner always releases it after execution or recovery joins.
 type executionGate struct {
-	mu    sync.Mutex
-	token chan struct{}
+	mu        sync.Mutex
+	token     chan struct{}
+	installed ProvenanceObject
+	admitted  bool
+}
+
+func (g *executionGate) admitInstalled(observed ProvenanceObject) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.admitted && !sameObject(g.installed, observed) {
+		return dataFailure("installed mihomo changed outside a core update transaction")
+	}
+	g.installed, g.admitted = observed, true
+	return nil
+}
+
+// acceptPublished requires the execution lease and a completed managed publish
+// or recovery. Ordinary probes must use admitInstalled, never reset admission.
+func (g *executionGate) acceptPublished(observed ProvenanceObject) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.installed, g.admitted = observed, observed.Present
 }
 
 func (g *executionGate) acquire(ctx context.Context) (func(), error) {

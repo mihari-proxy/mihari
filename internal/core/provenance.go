@@ -1,8 +1,6 @@
 package core
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/rand"
 	_ "embed"
@@ -10,9 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"os"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -107,78 +103,6 @@ func (r ProvenanceReceipt) validate(ctx context.Context) error {
 	return nil
 }
 
-func (i Installer) prepareTrusted(ctx context.Context, request InstallRequest) (prepared PreparedCore, resultErr error) {
-	channel := request.Channel
-	if channel == "" {
-		channel = "stable"
-	}
-	entries, e := supportedAssets()
-	if e != nil {
-		return nil, e
-	}
-	a, e := supportedCore(ctx, i.targetOS(), i.targetArch(), entries[0].Tag, channel)
-	if e != nil {
-		return nil, e
-	}
-	if request.CurrentVersion == a.Tag {
-		// The recorded version alone is not authority. Recheck the installed
-		// receipt, bytes and version before treating this install as a no-op.
-		if version, ready := i.localReadyVersion(ctx, request.BinaryPath); ready && version == a.Tag {
-			return &Candidate{version: version, reporter: i.Reporter}, nil
-		}
-		if e := ctx.Err(); e != nil {
-			return nil, e
-		}
-	}
-	if i.GeneratedConfig == nil {
-		return nil, dataFailure("generated configuration capability unavailable")
-	}
-	// Resolve exclusively from the compiled table. Neither GitHub latest nor
-	// downloaded digest/version metadata can select a trusted asset.
-	req, e := http.NewRequestWithContext(ctx, http.MethodGet, a.URL, nil)
-	if e != nil {
-		return nil, e
-	}
-	req.Header.Set("User-Agent", "mihari")
-	response, e := i.httpClient().Do(req)
-	if e != nil {
-		return nil, coreHTTPError(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download trusted mihomo core failed"}, "core GET trusted asset", a.URL, "transport", nil, e)
-	}
-	defer closeCoreResponse(ctx, response, "core GET trusted asset", a.URL, &resultErr, i.Reporter)
-	if response.StatusCode != http.StatusOK {
-		return nil, coreHTTPError(protocol.APIError{Code: protocol.CodeDataFailure, Message: "trusted core download status"}, "core GET trusted asset", a.URL, "response", response, nil)
-	}
-	archive, e := io.ReadAll(io.LimitReader(response.Body, maxCoreArchiveSize+1))
-	if e != nil {
-		return nil, e
-	}
-	if int64(len(archive)) != a.Size || len(archive) > maxCoreArchiveSize || digest(archive) != a.AssetSHA256 {
-		return nil, dataFailure("mihomo compiled asset hash mismatch")
-	}
-	return i.prepareTrustedAsset(ctx, a, archive)
-}
-
-// prepareTrustedAsset is private: its asset argument always comes from the
-// compiled resolver above. Tests supply compressed fixtures without a public
-// alternate trust table, hash override, or executable bypass.
-func (i Installer) prepareTrustedAsset(ctx context.Context, a supportedAsset, archive []byte) (prepared PreparedCore, err error) {
-	if digest(archive) != a.AssetSHA256 || len(archive) > maxCoreArchiveSize {
-		return nil, dataFailure("mihomo compiled asset hash mismatch")
-	}
-	reader, e := gzip.NewReader(bytes.NewReader(archive))
-	if e != nil {
-		return nil, dataFailureCause("invalid trusted core archive", e)
-	}
-	defer reader.Close()
-	binary, e := io.ReadAll(io.LimitReader(reader, maxCoreBinarySize+1))
-	if e != nil {
-		return nil, dataFailureCause("invalid trusted core binary", e)
-	}
-	if len(binary) == 0 || len(binary) > maxCoreBinarySize {
-		return nil, dataFailure("invalid trusted core binary")
-	}
-	return i.stageTrustedBinary(ctx, a, binary)
-}
 func (i Installer) stageTrustedBinary(ctx context.Context, a supportedAsset, binary []byte) (prepared PreparedCore, err error) {
 	var random [16]byte
 	if _, e := rand.Read(random[:]); e != nil {
@@ -274,6 +198,11 @@ func (c *Candidate) commitTrusted() (InstallResult, error) {
 	if recovery != nil {
 		return InstallResult{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "core pair recovery failed; execution prohibited", Details: map[string]any{"degraded": true}}, errors.Join(e, journalErr, recovery))
 	}
+	observed, observeErr := t.store.Inspect(ctx, InstalledBinary, "")
+	if observeErr != nil {
+		return InstallResult{}, observeErr
+	}
+	t.store.coreStore().execution().acceptPublished(observed)
 	t.mu.Lock()
 	t.closed = true
 	t.mu.Unlock()

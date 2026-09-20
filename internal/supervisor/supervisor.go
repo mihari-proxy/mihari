@@ -71,10 +71,14 @@ type maintenanceRequest struct {
 	response chan error
 }
 type Supervisor struct {
-	maintain  chan maintenanceRequest
-	startGate chan struct{}
-	runDone   atomic.Pointer[chan struct{}]
-	blocked   atomic.Bool
+	update     chan updateRequest
+	updateWake chan struct{}
+	pending    *ownedChild // event-loop owned; idle update writes under startGate
+	maintain   chan maintenanceRequest
+	startGate  chan struct{}
+	runDone    atomic.Pointer[chan struct{}]
+	blocked    atomic.Bool
+	waiting    atomic.Bool
 
 	options Options
 	restart chan chan error
@@ -106,12 +110,12 @@ func New(options Options) *Supervisor {
 	if options.StopTimeout <= 0 {
 		options.StopTimeout = 5 * time.Second
 	}
-	s := &Supervisor{options: options, restart: make(chan chan error), maintain: make(chan maintenanceRequest), startGate: make(chan struct{}, 1)}
+	s := &Supervisor{options: options, restart: make(chan chan error), maintain: make(chan maintenanceRequest), update: make(chan updateRequest), updateWake: make(chan struct{}, 1), startGate: make(chan struct{}, 1)}
 	s.startGate <- struct{}{}
 	return s
 }
 
-func (s *Supervisor) Run(ctx context.Context) error {
+func (s *Supervisor) Run(ctx context.Context) (resultErr error) {
 	if s.options.Starter == nil {
 		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "mihomo process starter is unavailable"}
 	}
@@ -121,6 +125,18 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	runDone := make(chan struct{})
 	s.runDone.Store(&runDone)
 	defer func() { s.active.Store(false); close(runDone) }()
+	defer func() {
+		<-s.startGate
+		defer func() { s.startGate <- struct{}{} }()
+		if s.pending != nil {
+			if err := s.stopChild(s.pending.child, s.pending.done); err != nil {
+				failure := supervisorFailure("mihomo pending process termination failed", err)
+				s.report(ctx, "core.termination.failed", slog.LevelError, failure)
+				resultErr = errors.Join(resultErr, failure)
+			}
+			s.pending = nil
+		}
+	}()
 	ctx = logging.WithOperation(ctx, logging.OperationMetadata{})
 
 	backoff := NewBackoff(s.options.MinimumBackoff, s.options.MaximumBackoff)
@@ -131,8 +147,10 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			return nil
 		}
 		startedAt := s.options.Now()
-		if s.blocked.Load() {
+		if s.blocked.Load() || s.waiting.Load() {
 			select {
+			case <-s.updateWake:
+				continue
 			case <-ctx.Done():
 				return nil
 			case response := <-s.restart:
@@ -140,6 +158,16 @@ func (s *Supervisor) Run(ctx context.Context) error {
 				continue
 			case request := <-s.maintain:
 				request.response <- coreRecoveryRequired()
+				continue
+			case request := <-s.update:
+				if s.blocked.Load() && !request.reinstall {
+					request.response <- coreRecoveryRequired()
+				} else {
+					if request.reinstall {
+						s.blocked.Store(false)
+					}
+					request.response <- s.performUpdate(request.work, !s.waiting.Load())
+				}
 				continue
 			}
 		}
@@ -149,24 +177,21 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		case <-s.startGate:
 		}
 		// Idle maintenance may have degraded while Run waited for this gate.
-		if ctx.Err() != nil || s.blocked.Load() {
+		if ctx.Err() != nil || s.blocked.Load() || (s.waiting.Load() && s.pending == nil) {
 			s.startGate <- struct{}{}
 			continue
 		}
 		var child Child
-		var release func()
+		var owned *ownedChild
 		var err error
-		if s.options.BeforeStart != nil {
-			release, err = s.options.BeforeStart(ctx)
-		}
-		if err == nil {
-			err = ctx.Err()
-		}
-		if err == nil {
-			child, err = s.options.Starter.Start()
-		}
-		if release != nil {
-			release()
+		if s.pending != nil {
+			owned, s.pending = s.pending, nil
+			child = owned.child
+		} else {
+			child, err = s.start(ctx)
+			if err == nil {
+				owned = ownChild(child)
+			}
 		}
 		s.startGate <- struct{}{}
 		if maintenanceDegraded(err) {
@@ -181,7 +206,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			processStarted := s.options.Now().UTC()
 			s.observe(Observation{Status: StatusStarting, PID: child.PID(), Restarts: restarts, StartedAt: processStarted})
 			var explicit bool
-			err, explicit = s.runChild(ctx, child, restarts, processStarted)
+			err, explicit = s.runOwnedChild(ctx, owned, restarts, processStarted)
 			if ctx.Err() != nil {
 				s.observe(Observation{Status: StatusStopped, Restarts: restarts})
 				return nil
@@ -233,9 +258,11 @@ func (s *Supervisor) Restart(ctx context.Context) error {
 }
 
 func (s *Supervisor) runChild(parent context.Context, child Child, restarts uint64, startedAt time.Time) (error, bool) {
-	done := make(chan error, 1)
-	joined := make(chan struct{})
-	go func() { defer close(joined); done <- child.Wait() }()
+	return s.runOwnedChild(parent, ownChild(child), restarts, startedAt)
+}
+
+func (s *Supervisor) runOwnedChild(parent context.Context, owned *ownedChild, restarts uint64, startedAt time.Time) (error, bool) {
+	child, done, joined := owned.child, owned.done, owned.joined
 	monitorCtx, cancelMonitor := context.WithCancel(parent)
 	healthFailure := make(chan error, 1)
 	monitorDone := make(chan struct{})
@@ -249,6 +276,19 @@ func (s *Supervisor) runChild(parent context.Context, child Child, restarts uint
 	}
 
 	select {
+	case request := <-s.update:
+		err := s.stopChild(child, done)
+		finishMonitor()
+		if err != nil {
+			s.blocked.Store(true)
+			request.response <- err
+			<-joined
+			return err, true
+		}
+		<-joined
+		err = s.performUpdate(request.work, true)
+		request.response <- err
+		return err, true
 	case <-parent.Done():
 		err := s.stopChild(child, done)
 		finishMonitor()
@@ -390,6 +430,10 @@ func (s *Supervisor) waitBackoff(ctx context.Context, delay time.Duration) error
 	select {
 	case err := <-done:
 		return err
+	case request := <-s.update:
+		err := s.performUpdate(request.work, true)
+		request.response <- err
+		return nil
 	case request := <-s.maintain:
 		err := request.work()
 		if maintenanceDegraded(err) {

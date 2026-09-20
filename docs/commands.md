@@ -100,6 +100,7 @@ Unix 自定义目标的同 UID 进程和本机 root/管理员属于受信主体�
 mihari core status
 mihari core install
 mihari core update
+mihari core reinstall
 mihari core restart
 mihari proxy groups
 mihari proxy mode
@@ -116,6 +117,10 @@ mihari rules list
 mihari traffic --follow
 mihari logs --follow
 ```
+
+`core install` / `core update` 从所选 stable/alpha 通道获取官方最新版，先检查候选，再替换和验收；常规失败保留或恢复旧核心与原通道。更新 Mihari 本身保留已有核心，离线首次安装可使用包内版本。本地已有核心不要求官方来源凭据，但仍遵守平台已有权限和文件身份保护。
+
+`core reinstall` 重新下载原通道官方最新版，即使当前版本相同也会重装；TUI System 的 **Reinstall core** 提供同一操作。更新中断后，它沿用更新前通道，保留订阅和配置，失败继续保留备份与阻断，验收成功才解除阻断。普通 `core restart` 不修复中断更新。诊断会列出数据根 `staging/core` 中的材料位置；不要删除中断记录来绕过阻断。损坏的记录、无效配置或权限错误仍须按诊断处理，重装不能保证修复所有故障。
 
 `proxy mode` 查询保存模式、实际模式和应用状态，带参数则切换；支持 `--json`。模式只有 `rule` / `global` / `direct`，默认 Rule，覆盖订阅自带 mode。模式由 Mihari 全局持久化，GLOBAL 出口按订阅记忆；Rule/Direct 下也能预选 GLOBAL，选择本身不会切换模式。Global 选择 `DIRECT` 表示所有新连接通过 GLOBAL 直连；Direct 是独立运行模式，不依赖 GLOBAL 的选择。
 
