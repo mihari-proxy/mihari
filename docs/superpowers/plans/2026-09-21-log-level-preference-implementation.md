@@ -59,4 +59,5 @@ CI、bot review 和最终合并状态以 PR 上对应提交的检查记录为准
 - rebase 后全仓 test/race、vet、golangci-lint v2.12.2 和格式检查通过。本地 Unix 安全脚本测试为 74 passed、4 skipped；真实平台矩阵由 GitHub CI 验收。
 - Pullfrog 未发现重要问题；其关于旧代码接受 nil 列的意见与 `len(nil) == 0` 校验及既有回归测试相反，已提供基线证据并解决讨论。
 - 采纳 CodeRabbit 的维护性建议：级别合法性校验复用默认全级别列表，避免两处字符串集合漂移，原有空列表、未知及重复值校验保持不变。
+- 补充新增导出字段和诊断结果方法的 Go 文档，明确持久化选择、nil 更新与日志记录阈值的区别。CodeRabbit 的增量复审因额度限制未完成，不将其 success 状态等同于已审完增量；继续使用可用的 Pullfrog 复审。
 - cubic 因月度额度用尽返回 neutral，属于不可用评审；不将其视为已完成代码审查。最新 head 的其余 CI 与可用 bot 评审须在合并前全部收口。

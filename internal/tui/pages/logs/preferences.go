@@ -34,9 +34,14 @@ type preferenceSavedMsg struct {
 	err     error
 }
 
-func (m preferenceSavedMsg) Err() error                        { return m.err }
+// Err exposes the save failure to the shell's diagnostic history.
+func (m preferenceSavedMsg) Err() error { return m.err }
+
+// Warnings preserves successful-save warnings for the shared diagnostic view.
 func (m preferenceSavedMsg) Warnings() protocol.WarningOutcome { return m.outcome }
-func (m preferenceSavedMsg) DiagnosticPage() ui.PageID         { return ui.PageLogs }
+
+// DiagnosticPage keeps the result associated with Logs after navigation.
+func (m preferenceSavedMsg) DiagnosticPage() ui.PageID { return ui.PageLogs }
 
 type preferenceTickMsg struct {
 	version uint64

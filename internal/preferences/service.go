@@ -20,7 +20,8 @@ const (
 )
 
 var (
-	ErrInvalidColumns   = errors.New("invalid connections columns")
+	ErrInvalidColumns = errors.New("invalid connections columns")
+	// ErrInvalidLogLevels identifies an empty, unknown, or duplicate display-level selection.
 	ErrInvalidLogLevels = errors.New("invalid log display levels")
 	defaultLogLevels    = []string{"debug", "info", "warn", "error"}
 	defaultColumns      = []string{"host", "network", "source", "destination", "chain", "rule", "traffic"}
@@ -33,7 +34,8 @@ var (
 type Preferences struct {
 	ConnectionsColumns []string
 	Proxies            ProxyPreferences
-	LogLevels          []string
+	// LogLevels is the committed set of canonical levels restored by new TUI sessions.
+	LogLevels []string
 }
 
 // ProxyPreferences controls Proxies presentation and automatic latency tests.
@@ -50,7 +52,8 @@ func DefaultProxyPreferences() ProxyPreferences {
 type Update struct {
 	ConnectionsColumns []string
 	Proxies            *ProxyPreferences
-	LogLevels          []string
+	// LogLevels replaces the saved set when non-nil; an empty set is invalid.
+	LogLevels []string
 }
 
 type Service struct {

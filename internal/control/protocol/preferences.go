@@ -6,7 +6,8 @@ type TUIPreferences struct {
 	Revision           uint64            `json:"revision"`
 	ConnectionsColumns []string          `json:"connections_columns"`
 	Proxies            *ProxyPreferences `json:"proxies,omitempty"`
-	LogLevels          []string          `json:"log_levels,omitempty"`
+	// LogLevels contains the daemon's saved display selection, not its logging threshold.
+	LogLevels []string `json:"log_levels,omitempty"`
 }
 
 // ProxyPreferences controls page presentation and automatic latency tests.
@@ -28,6 +29,6 @@ type UpdateTUIPreferencesRequest struct {
 	IfRevision         *uint64           `json:"if_revision,omitempty"`
 	ConnectionsColumns []string          `json:"connections_columns"`
 	Proxies            *ProxyPreferences `json:"proxies,omitempty"`
-	// Nil preserves the saved selection; an explicit empty list is invalid.
+	// LogLevels preserves the saved selection when nil; an explicit empty list is invalid.
 	LogLevels []string `json:"log_levels,omitzero"`
 }
