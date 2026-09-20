@@ -398,6 +398,7 @@ type Model struct {
 	editInput        textinput.Model
 	portHolds        map[string]ui.PortHold
 	portProbeGen     uint64
+	portProbeNeeded  bool
 	listenFree       func(string) bool
 	lookupOccupant   func(string) (platform.TCPOccupant, bool)
 }
@@ -625,6 +626,9 @@ func (m *Model) FocusFirst() {
 }
 
 func (m *Model) SetSnapshot(status protocol.Status, core protocol.CoreStatus) {
+	if m.status.PID != status.PID || m.core.PID != core.PID || (m.core.Status != core.Status && core.Status == "running") {
+		m.portProbeNeeded = true
+	}
 	m.status, m.core = status, core
 	m.reconcilePortOwners()
 	m.ensureFocusVisible()
@@ -1016,17 +1020,17 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		m.markRowOutcome(typed.rowID, false, actionErrorDetail(typed.err, ui.WebGUIUnavailable))
 		return m, nil
 	case ui.CoreObservedMsg:
-		m.core = typed.Core
-		m.reconcilePortOwners()
-		return m, nil
+		m.SetSnapshot(m.status, typed.Core)
+		return m, m.SyncPortHolds()
 	case coreLoadResultMsg:
 		if typed.err == nil {
 			previousChannel := coreChannelName(m.core.Channel)
-			m.core = typed.core
-			m.reconcilePortOwners()
+			m.SetSnapshot(m.status, typed.core)
+			probe := m.SyncPortHolds()
 			if previousChannel != coreChannelName(m.core.Channel) || m.coreVersion.channel != coreChannelName(m.core.Channel) {
-				return m, m.checkCoreVersion()
+				return m, tea.Batch(probe, m.checkCoreVersion())
 			}
+			return m, probe
 		}
 		return m, nil
 	case ui.ActionPendingMsg:
@@ -2327,7 +2331,20 @@ func (m *Model) reconcilePortOwners() {
 	}
 }
 
+// SyncPortHolds refreshes socket observations after an owner change. Repeated
+// snapshots with the same owners do not schedule additional probes.
+func (m *Model) SyncPortHolds() tea.Cmd {
+	if !m.portProbeNeeded || (m.onboarding.MixedAddr == "" && m.onboarding.ControllerAddr == "" && m.onboarding.WebAddr == "") {
+		return nil
+	}
+	probe := m.probePortHolds()
+	return func() tea.Msg {
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: probe()}
+	}
+}
+
 func (m *Model) probePortHolds() tea.Cmd {
+	m.portProbeNeeded = false
 	m.portProbeGen++
 	generation := m.portProbeGen
 	probe := ui.ProbeListen
