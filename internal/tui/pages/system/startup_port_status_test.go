@@ -34,6 +34,10 @@ func TestSystemPortStatus_StartupWaitsForCoreIdentity(t *testing.T) {
 			if hold.PID != 40616 || hold.Process != "mihomo.exe" {
 				t.Errorf("lost socket observation: %+v", hold)
 			}
+			detail := m.portRow(id, "Core port", m.portAddr(id), 0).detail
+			if !strings.Contains(detail, "mihomo.exe") || !strings.Contains(detail, "40616") {
+				t.Errorf("pending ownership details lost the observed process: %s", detail)
+			}
 		}
 		if m.portHolds[rowWeb].Kind != ui.PortHoldOwned {
 			t.Error("known daemon owner should remain Owned")

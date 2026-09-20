@@ -1611,6 +1611,9 @@ func (m *Model) portRow(id, label, addr string, ownerPID int) row {
 		value += "  " + status
 	}
 	detail := fmt.Sprintf("%s\n%s", valueOr(addr, ui.MissingValue), ui.FormatPortHoldLabel(hold))
+	if hold.Kind == ui.PortHoldChecking && hold.Process != "" {
+		detail += fmt.Sprintf("\nHolder process %s", hold.Process)
+	}
 	if hold.PID > 0 {
 		detail += fmt.Sprintf("\nHolder PID %d", hold.PID)
 	}
