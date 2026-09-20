@@ -334,10 +334,19 @@ func (m *Model) updateHeader(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 	return m, nil
 }
 
+// updateRow navigates the filtered, sorted list and acts on the selected connection.
 func (m *Model) updateRow(key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
 	rows := m.visibleRows()
 	index := rowIndex(rows, m.focus.rowID)
 	switch key.String() {
+	case "pgup", "pgdown":
+		if index >= 0 {
+			delta := max(1, m.height-connectionChrome)
+			if key.String() == "pgup" {
+				delta = -delta
+			}
+			m.focus.rowID = rows[min(max(0, index+delta), len(rows)-1)].ID
+		}
 	case "up":
 		if index <= 0 {
 			m.focus = pageFocus{kind: focusHeader}

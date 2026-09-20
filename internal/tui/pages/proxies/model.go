@@ -242,6 +242,14 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	if handled, cmd := m.routingKey(key.String()); handled {
 		return m, cmd
 	}
+	if key.String() == "pgup" || key.String() == "pgdown" {
+		direction := 1
+		if key.String() == "pgup" {
+			direction = -1
+		}
+		m.movePage(direction)
+		return m, nil
+	}
 	if key.String() == "ctrl+t" {
 		return m, m.testAll()
 	}
@@ -309,6 +317,11 @@ func (m *Model) View() string {
 // a bordered section; expanded node cards sit inside the parent section body.
 // focusWholeGroup includes all candidates and the bottom border for explicit jumps.
 func (m *Model) buildContent(focusWholeGroup bool) (lines []string, focusStart, focusEnd int) {
+	return m.buildContentWithTargets(focusWholeGroup, nil)
+}
+
+// buildContentWithTargets optionally records actual rendered positions for page navigation.
+func (m *Model) buildContentWithTargets(focusWholeGroup bool, targets *[]pageTarget) (lines []string, focusStart, focusEnd int) {
 	focusStart, focusEnd = -1, -1
 	if m.loadError != "" {
 		body := "Refresh failed\n" + m.loadError + "\nShowing last available data. Retrying automatically."
@@ -329,6 +342,9 @@ func (m *Model) buildContent(focusWholeGroup bool) (lines []string, focusStart, 
 		header := m.renderGroupHeader(group, textW, groupFocused)
 
 		bodyLines := []string{header}
+		if targets != nil {
+			*targets = append(*targets, pageTarget{focus: FocusID{Group: group.Name}, start: len(lines), end: len(lines) + 2})
+		}
 		if m.loadError != "" {
 			var tested time.Time
 			for _, node := range group.Nodes {
@@ -361,6 +377,15 @@ func (m *Model) buildContent(focusWholeGroup bool) (lines []string, focusStart, 
 				}
 				row := lipgloss.JoinHorizontal(lipgloss.Top, bars...)
 				rowLines := strings.Split(row, "\n")
+				if targets != nil {
+					line := len(lines) + 1 + len(bodyLines)
+					for i := start; i < min(start+columns, len(group.Nodes)); i++ {
+						*targets = append(*targets, pageTarget{
+							focus: FocusID{Group: group.Name, Node: group.Nodes[i].Name},
+							start: line, end: line + len(rowLines), column: i - start,
+						})
+					}
+				}
 				if rowHasFocus {
 					nodeFocusBodyStart = len(bodyLines)
 					nodeFocusBodyEnd = len(bodyLines) + len(rowLines)

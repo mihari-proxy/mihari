@@ -182,6 +182,7 @@ func (m *Model) VisibleIndexes() []int {
 	return indexes
 }
 
+// Update applies rule/provider results and routes input to the active control, list, or dialog.
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 	switch typed := message.(type) {
 	case rulesResultMsg:
@@ -259,6 +260,22 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, m.moveFocus(-1)
 	case "down":
 		return m, m.moveFocus(1)
+	case "pgup", "pgdown":
+		if m.focus.kind == focusRow {
+			count := len(m.VisibleIndexes())
+			if m.view == viewProviders {
+				count = len(m.visibleProviderIndexes())
+			}
+			if count > 0 {
+				delta := max(1, m.height-rulesChrome)
+				if key.String() == "pgup" {
+					delta = -delta
+				}
+				m.focus.row = min(max(0, m.focus.row+delta), count-1)
+				m.rememberFocusedProvider()
+			}
+		}
+		return m, nil
 	case "enter":
 		if m.focus.kind == focusControl {
 			return m, m.activateControl()

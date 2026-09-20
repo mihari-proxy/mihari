@@ -1,6 +1,56 @@
 package proxies
 
-import "github.com/mihari-proxy/mihari/internal/control/protocol"
+import (
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
+)
+
+// pageTarget maps a group header or node card to its rendered vertical span.
+type pageTarget struct {
+	focus              FocusID
+	start, end, column int
+}
+
+// movePage moves roughly one viewport through rendered rows, preserving the node column.
+func (m *Model) movePage(direction int) {
+	if len(m.groups) == 0 || m.height <= 0 {
+		return
+	}
+	var targets []pageTarget
+	lines, _, _ := m.buildContentWithTargets(false, &targets)
+	focus := m.focus
+	focus.Locate = false
+	current := -1
+	for i, target := range targets {
+		if target.focus == focus {
+			current = i
+			break
+		}
+	}
+	if current < 0 {
+		return
+	}
+	height := max(1, m.height-len(m.routingHeader()))
+	origin := targets[current]
+	wanted := origin.start + direction*height
+	best, bestDistance, bestColumnDistance := -1, 0, 0
+	for i, target := range targets {
+		if (target.start-origin.start)*direction <= 0 {
+			continue
+		}
+		distance := max(target.start-wanted, wanted-target.start)
+		columnDistance := max(target.column-origin.column, origin.column-target.column)
+		if best < 0 || distance < bestDistance || (distance == bestDistance && columnDistance < bestColumnDistance) {
+			best, bestDistance, bestColumnDistance = i, distance, columnDistance
+		}
+	}
+	if best < 0 {
+		best = current
+	}
+	selected := targets[best]
+	m.focus = selected.focus
+	m.scrollY = ui.EnsureLineVisible(m.scrollY+direction*height, height, len(lines), selected.start, selected.end)
+}
 
 // FocusID identifies a group header, its Locate button, or a candidate card.
 type FocusID struct {

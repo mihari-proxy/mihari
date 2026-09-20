@@ -54,6 +54,8 @@ Windows 更新可使用同一用户的非管理员令牌查询用户目录中的
 
 TUI 节点测速进行中时，卡片在协议名称旁仅显示盲文加载动画。
 
+**Proxies** 支持 **PgUp/PgDn** 在分组标题和已展开节点卡片之间按约一屏快速移动，保持焦点可见，并尽量保留当前列。翻页距离随窗口尺寸和固定 Routing 区域调整；焦点在 Routing 控件时，PgDn 也可进入分组列表。翻页不改变代理选择或分组展开状态。
+
 TUI 订阅表格的 Name 和 Traffic 列按内容分配宽度，分别最多占 32 和 24 个终端字符格；多余空间留在右侧，窄屏优先隐藏次要字段。
 
 订阅下载 Mode 将 `auto` 显示为 **PROXY w Fallback to DIRECT**。回退覆盖主订阅 YAML 的连接超时和成功响应正文读取超时等可重试网络错误；HTTP 错误、无效文档不触发回退。每次代理/直连尝试保留 30 秒预算，daemon 的 Add/Refresh 整次执行上限为 120 秒，CLI/TUI 每条等待最多 180 秒以容纳有界回滚和响应。更短的调用方 deadline 与主动取消仍优先，批量刷新逐条计时。窄列表必要时整列隐藏 Mode，进入详情可查看完整值。Provider 下载策略及 Proxies 页 Routing Mode 独立于此设置。
@@ -165,7 +167,7 @@ mihari sysproxy enable
 
 **Connections** 为 Chain 分配更多宽度，窄窗口中优先于 Source、Destination、Rule 保留。Traffic 使用固定宽度的上下行紧凑速率，`K/M/G/T/P/E` 按 1024 进制表示字节每秒；连接详情仍显示完整速率与代理链。**Rules** 用居中弹窗展示规则或 provider 的完整详情，↑/↓ 或 PgUp/PgDn 滚动，Enter/Esc 关闭后返回原行。
 
-**Conns、Rules、Logs** 支持 Ctrl+F 从侧栏或页面内容区直接聚焦检索框，保留已有文字并将光标移到末尾；页面内容区仍支持 `/`。弹窗打开时不抢走焦点。Conns 在当前 TUI 会话中保留最新 **5000 条已关闭连接记录**，切页保留，重连或退出后清空；活动连接不占此配额。
+**Conns、Rules、Logs** 支持 Ctrl+F 从侧栏或页面内容区直接聚焦检索框，保留已有文字并将光标移到末尾；页面内容区仍支持 `/`。弹窗打开时不抢走焦点。焦点位于列表行时，**PgUp/PgDn** 按当前窗口高度移动一页行数，在筛选结果的首尾停住；Rules 的 provider 列表同样支持。Logs 翻页后停止自动跟随，按 **G** 返回最新记录并恢复跟随。Conns 在当前 TUI 会话中保留最新 **5000 条已关闭连接记录**，切页保留，重连或退出后清空；活动连接不占此配额。
 
 **Logs** 中选中 **Level** 后按 Enter 打开多选小窗。↑/↓ 移动，Space 勾选 DEBUG、INFO、WARNING、ERROR；**Select all** 用于全选或清空。Enter 应用、Esc 放弃，至少勾选一个级别。连续选到 ERROR 的组合显示为 `DEBUG+`、`INFO+` 或 `WARNING+`，其他组合完整列出，例如 `DEBUG, WARNING`。这只是显示摘要，筛选按所选精确级别匹配，再与文字检索取交集。切页和重连保留选择，重启 TUI 恢复全选；全选时也保留未知级别记录。筛选不修改 System 日志设置或实时流订阅。
 
