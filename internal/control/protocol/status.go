@@ -33,7 +33,20 @@ type Status struct {
 	SetupRequired   bool          `json:"setup_required,omitempty"`
 	// PID is this daemon process id. Optional additive field so local clients
 	// can tell whether a TCP occupant is this instance's web gateway.
-	PID int `json:"pid,omitempty"`
+	PID            int                   `json:"pid,omitempty"`
+	StartupNetwork *StartupNetworkStatus `json:"startup_network,omitempty"`
+}
+
+// StartupNetworkStatus reports the daemon's initial network application only.
+// It is transient observation, not evidence of drift repair or network health.
+type StartupNetworkStatus struct {
+	SystemProxyApplying bool `json:"system_proxy_applying"`
+	TunApplying         bool `json:"tun_applying"`
+}
+
+// Applying reports whether either startup application is in progress.
+func (s *StartupNetworkStatus) Applying() bool {
+	return s != nil && (s.SystemProxyApplying || s.TunApplying)
 }
 
 type ConfigStatus struct {

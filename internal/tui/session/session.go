@@ -183,7 +183,11 @@ func (s *Session) supervise(ctx context.Context) {
 		if !putOrdered(ctx, s.control, Event{Kind: EventConnected}) {
 			return
 		}
-		if err := s.superviseStreams(ctx); err != nil {
+		err = s.waitStartupNetwork(ctx, status)
+		if err == nil && ctx.Err() == nil {
+			err = s.superviseStreams(ctx)
+		}
+		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
@@ -195,10 +199,41 @@ func (s *Session) supervise(ctx context.Context) {
 	}
 }
 
+// waitStartupNetwork keeps initial status polling independent of controller
+// stream retries and snapshot endpoints that can wait for startup ownership.
+func (s *Session) waitStartupNetwork(ctx context.Context, status protocol.Status) error {
+	if !status.StartupNetwork.Applying() {
+		return nil
+	}
+	ticker := time.NewTicker(s.options.PollInterval)
+	defer ticker.Stop()
+	for status.StartupNetwork.Applying() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+		next, err := s.client.Status(ctx)
+		if err != nil {
+			return err
+		}
+		status = next
+		// Snapshot errors after a healthy status remain nonfatal, as in the
+		// ordinary session poll. Cancellation is handled by the owner.
+		_ = s.pollStatus(ctx, status)
+	}
+	return ctx.Err()
+}
+
 // poll pulls one snapshot of every capability-backed resource and forwards it
 // as ordered events. It returns the collected errors so callers can retain the last
 // observed snapshot and retry without changing daemon transport state.
 func (s *Session) poll(ctx context.Context, status protocol.Status) error {
+	// Startup owns mutation gates used by some snapshot endpoints. Keep the
+	// authoritative Status cadence responsive until that initial work finishes.
+	if status.StartupNetwork.Applying() {
+		return ctx.Err()
+	}
 	err := s.pollSnapshots(ctx, status)
 	s.pollLogging(ctx, status)
 	s.pollRouting(ctx, status)
