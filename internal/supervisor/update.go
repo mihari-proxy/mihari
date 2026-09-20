@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
@@ -24,10 +25,11 @@ type updateRequest struct {
 }
 
 type ownedChild struct {
-	child   Child
-	done    chan error
-	joined  chan struct{}
-	exitErr error // read only after joined closes
+	startedAt time.Time
+	child     Child
+	done      chan error
+	joined    chan struct{}
+	exitErr   error // read only after joined closes
 }
 
 func ownChild(child Child) *ownedChild {
@@ -45,6 +47,14 @@ func (s *UpdateSession) PID() int {
 		return 0
 	}
 	return s.process.child.PID()
+}
+
+// StartedAt is the actual start of the currently owned process.
+func (s *UpdateSession) StartedAt() time.Time {
+	if s.process == nil {
+		return time.Time{}
+	}
+	return s.process.startedAt
 }
 
 // KeepStopped preserves a stopped or missing original core after recovery.
@@ -70,6 +80,7 @@ func (s *UpdateSession) Start(ctx context.Context) error {
 		return supervisorFailure("mihomo trial start failed", err)
 	}
 	s.process = ownChild(child)
+	s.process.startedAt = s.supervisor.options.Now().UTC()
 	if err := s.confirmHealth(ctx); err != nil {
 		return supervisorFailure("mihomo trial health check failed", err)
 	}

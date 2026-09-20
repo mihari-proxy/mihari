@@ -169,13 +169,13 @@ func (m *Manager) installCoreUpdate(ctx context.Context, operation Operation, in
 				return m.blockCoreUpdate(recoveryCtx, errors.Join(updateErr, err))
 			}
 			// Recovery health may legitimately update routing. Publish only core fields.
-			if err := m.publishCoreSelection(recoveryCtx, inputs.selection, session.PID()); err != nil {
+			if err := m.publishCoreSelection(recoveryCtx, inputs.selection, session.PID(), session.StartedAt()); err != nil {
 				return m.blockCoreUpdate(recoveryCtx, errors.Join(updateErr, err))
 			}
 			collectWarning(ctx, "core", "recovery.cleanup.warning", update.Finish(recoveryCtx))
 			return updateErr
 		}
-		if err := m.publishCoreSelection(recoveryCtx, next, session.PID()); err != nil {
+		if err := m.publishCoreSelection(recoveryCtx, next, session.PID(), session.StartedAt()); err != nil {
 			return m.blockCoreUpdate(recoveryCtx, update.RequireRecovery(recoveryCtx, err))
 		}
 		collectWarning(ctx, "core", "update.cleanup.warning", update.Finish(recoveryCtx))
@@ -215,7 +215,7 @@ func (m *Manager) saveCoreSelection(ctx context.Context, selection core.CoreSele
 	return err
 }
 
-func (m *Manager) publishCoreSelection(ctx context.Context, selection core.CoreSelection, pid int) error {
+func (m *Manager) publishCoreSelection(ctx context.Context, selection core.CoreSelection, pid int, startedAt time.Time) error {
 	if err := m.lockMaintenance(ctx); err != nil {
 		return err
 	}
@@ -231,6 +231,7 @@ func (m *Manager) publishCoreSelection(ctx context.Context, selection core.CoreS
 	_, err = m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{Source: "core-update"}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 		snapshot.Core.Version, snapshot.Core.AlphaSHA, snapshot.Core.Channel = selection.Version, selection.AlphaSHA, selection.Channel
 		snapshot.Core.PID = pid
+		snapshot.Core.StartedAt = startedAt
 		snapshot.Core.Status = "stopped"
 		if pid != 0 {
 			snapshot.Core.Status = "running"

@@ -191,6 +191,7 @@ func (s *Supervisor) Run(ctx context.Context) (resultErr error) {
 			child, err = s.start(ctx)
 			if err == nil {
 				owned = ownChild(child)
+				owned.startedAt = s.options.Now().UTC()
 			}
 		}
 		s.startGate <- struct{}{}
@@ -203,7 +204,7 @@ func (s *Supervisor) Run(ctx context.Context) (resultErr error) {
 			s.report(ctx, "core.start.failed", slog.LevelError, err)
 		}
 		if err == nil {
-			processStarted := s.options.Now().UTC()
+			processStarted := owned.startedAt
 			s.observe(Observation{Status: StatusStarting, PID: child.PID(), Restarts: restarts, StartedAt: processStarted})
 			var explicit bool
 			err, explicit = s.runOwnedChild(ctx, owned, restarts, processStarted)

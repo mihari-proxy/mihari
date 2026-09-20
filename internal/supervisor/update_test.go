@@ -3,11 +3,47 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/core"
 )
+
+func TestUpdateAdoptionRetainsActualTrialStartTime(t *testing.T) {
+	starter := newFakeStarter()
+	var clock atomic.Int64
+	clock.Store(100)
+	observed := make(chan Observation, 8)
+	s := New(Options{Starter: starter, Now: func() time.Time { return time.Unix(clock.Load(), 0) }, Observe: func(o Observation) { observed <- o }})
+	ctx, cancel := context.WithCancel(t.Context())
+	if err := s.Update(ctx, func(session *UpdateSession) error {
+		if err := session.Start(ctx); err != nil {
+			return err
+		}
+		clock.Store(200)
+		return nil
+	}); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := waitDone(t, done); err != nil {
+			t.Error(err)
+		}
+	})
+	select {
+	case o := <-observed:
+		if !o.StartedAt.Equal(time.Unix(100, 0)) {
+			t.Fatalf("adoption changed process start time: %+v", o)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("adopted process was not observed")
+	}
+}
 
 func TestUpdateAdoptsHealthyTrialWithoutStartingAnotherProcess(t *testing.T) {
 	starter := newFakeStarter()
