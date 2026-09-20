@@ -1611,6 +1611,9 @@ func (m *Model) portRow(id, label, addr string, ownerPID int) row {
 		value += "  " + status
 	}
 	detail := fmt.Sprintf("%s\n%s", valueOr(addr, ui.MissingValue), ui.FormatPortHoldLabel(hold))
+	if hold.Kind == ui.PortHoldChecking && hold.Process != "" {
+		detail += fmt.Sprintf("\nHolder process %s", hold.Process)
+	}
 	if hold.PID > 0 {
 		detail += fmt.Sprintf("\nHolder PID %d", hold.PID)
 	}
@@ -2327,7 +2330,14 @@ func (m *Model) reconcilePortOwners() {
 		if id == rowWeb {
 			owner = m.status.PID
 		}
-		m.portHolds[id] = ui.ClassifyPortHold(hold.Kind == ui.PortHoldAvailable, hold.PID, hold.Process, owner)
+		hold = ui.ClassifyPortHold(hold.Kind == ui.PortHoldAvailable, hold.PID, hold.Process, owner)
+		// Startup network application defers core snapshots. A missing owner
+		// during that interval is not evidence of a foreign process. A stopped
+		// core, or a snapshot with a PID, still permits a definite classification.
+		if id != rowWeb && owner == 0 && (m.core.Status == "" || m.core.Status == "starting") && hold.Kind == ui.PortHoldOccupied {
+			hold.Kind = ui.PortHoldChecking
+		}
+		m.portHolds[id] = hold
 	}
 }
 

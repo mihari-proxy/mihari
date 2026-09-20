@@ -1,5 +1,8 @@
 package ui
 
+// PortCheckingOwner labels a listener whose core ownership is not yet known.
+const PortCheckingOwner = "Checking owner…"
+
 const (
 	ExportLogsTitle              = "Export Logs"
 	ExportLogsLabel              = "Export logs"
