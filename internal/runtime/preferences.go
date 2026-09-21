@@ -49,6 +49,9 @@ func (m *Manager) UpdateTUIPreferences(ctx context.Context, operation Operation,
 }
 
 func preferenceMutationError(err error) error {
+	if errors.Is(err, preferences.ErrInvalidLatencyConcurrency) {
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "latency test concurrency must be between 1 and 50"}, err)
+	}
 	if errors.Is(err, preferences.ErrInvalidLogLevels) {
 		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid TUI log display levels"}, err)
 	}

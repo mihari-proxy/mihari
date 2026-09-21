@@ -5,7 +5,9 @@ import "github.com/mihari-proxy/mihari/internal/control/protocol"
 // SetPreferences applies committed page preferences without changing selections.
 func (m *Model) SetPreferences(prefs protocol.TUIPreferences) {
 	m.autoDirty = true
-	m.preferences = prefs.EffectiveProxies()
+	next := prefs.EffectiveProxies()
+	m.concurrencyChanged = m.concurrencyChanged || next.LatencyTestConcurrency != m.preferences.LatencyTestConcurrency
+	m.preferences = next
 }
 
 // selectedLeaf follows current selections, rejecting missing members and cycles.

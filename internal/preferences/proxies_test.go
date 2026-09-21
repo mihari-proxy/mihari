@@ -55,7 +55,12 @@ func TestService_ProxyDefaultsAndRoundTripPreserveColumns(t *testing.T) {
 				t.Fatalf("defaults=%+v", p)
 			}
 			columns := s.Snapshot().ConnectionsColumns
-			for _, want := range []ProxyPreferences{{false, false}, {true, false}, {false, true}, {true, true}} {
+			for _, want := range []ProxyPreferences{
+				{ExtraLatency: false, AutoLatencyTest: false, LatencyTestConcurrency: 5},
+				{ExtraLatency: true, AutoLatencyTest: false, LatencyTestConcurrency: 5},
+				{ExtraLatency: false, AutoLatencyTest: true, LatencyTestConcurrency: 5},
+				{ExtraLatency: true, AutoLatencyTest: true, LatencyTestConcurrency: 5},
+			} {
 				if _, err = s.Update(context.Background(), Update{Proxies: &want}); err != nil {
 					t.Fatal(err)
 				}

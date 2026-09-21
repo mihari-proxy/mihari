@@ -6,14 +6,14 @@
       │                 │   ▾ Proxies ─────────────────────────────────────────────────────  │
       │    Overview     │     Extra latency display                                     [x]  │
       │    Proxies      │     Automatic latency test                                    [x]  │
-      │  ● Conns        │ › ▾ Conns ───────────────────────────────────────────────────────  │
-      │    Rules        │     No settings available yet                                      │
-      │    Logs         │   ▸ Rules                                                          │
-      │    Subs         │   ▸ Logs                                                           │
-      │    Web GUI      │   ▸ Subs                                                           │
-      │    System       │   ▸ Web GUI                                                        │
+      │  ● Conns        │     Test concurrency                                        < 5 >  │
+      │    Rules        │ › ▾ Conns ───────────────────────────────────────────────────────  │
+      │    Logs         │     No settings available yet                                      │
+      │    Subs         │   ▸ Rules                                                          │
+      │    Web GUI      │   ▸ Logs                                                           │
+      │    System       │   ▸ Subs                                                           │
+      │                 │   ▸ Web GUI                                                        │
       │                 │   ▸ System                                                         │
-      │                 │                                                                    │
       │                 │                                                                    │
       │                 │                                                                    │
       │                 │                                                                    │

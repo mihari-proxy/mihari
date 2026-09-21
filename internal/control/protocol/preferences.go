@@ -1,5 +1,11 @@
 package protocol
 
+// DefaultLatencyTestConcurrency preserves the existing per-TUI scheduling limit.
+const DefaultLatencyTestConcurrency = 5
+
+// MaxLatencyTestConcurrency bounds simultaneous latency requests per TUI.
+const MaxLatencyTestConcurrency = 50
+
 type TUIPreferences struct {
 	WarningOutcome
 	Schema             string            `json:"schema"`
@@ -14,14 +20,20 @@ type TUIPreferences struct {
 type ProxyPreferences struct {
 	ExtraLatency    bool `json:"extra_latency"`
 	AutoLatencyTest bool `json:"auto_latency_test"`
+	// LatencyTestConcurrency is optional; zero preserves the saved value on PATCH.
+	LatencyTestConcurrency int `json:"latency_test_concurrency,omitempty"`
 }
 
 // EffectiveProxies supplies the defaults when an older server omits the block.
 func (p TUIPreferences) EffectiveProxies() ProxyPreferences {
-	if p.Proxies == nil {
-		return ProxyPreferences{ExtraLatency: true, AutoLatencyTest: true}
+	value := ProxyPreferences{ExtraLatency: true, AutoLatencyTest: true}
+	if p.Proxies != nil {
+		value = *p.Proxies
 	}
-	return *p.Proxies
+	if value.LatencyTestConcurrency < 1 || value.LatencyTestConcurrency > MaxLatencyTestConcurrency {
+		value.LatencyTestConcurrency = DefaultLatencyTestConcurrency
+	}
+	return value
 }
 
 type UpdateTUIPreferencesRequest struct {
