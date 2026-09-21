@@ -12,5 +12,5 @@ const UpdatePreparationAvailable = false
 
 // OpenUpdateOwner refuses unsupported transports instead of accepting a supplied PID.
 func OpenUpdateOwner(context.Context) (UpdateOwner, error) {
-	return nil, errors.New("Windows update preparation is unavailable")
+	return nil, errors.New("windows update preparation is unavailable")
 }

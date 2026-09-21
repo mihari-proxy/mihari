@@ -9,5 +9,5 @@ import (
 )
 
 func applicationUpdateIdentity(context.Context, string) (protocol.ApplicationUpdatePrepared, error) {
-	return protocol.ApplicationUpdatePrepared{}, errors.New("Windows application update identity unavailable")
+	return protocol.ApplicationUpdatePrepared{}, errors.New("windows application update identity unavailable")
 }
