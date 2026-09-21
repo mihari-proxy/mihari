@@ -117,9 +117,10 @@ func TestVisibleContent_WrappedRowUsesActualHeight(t *testing.T) {
 			var visible []string
 			m.buildVisibleContent(false, &visible)
 			want := ""
-			if tc.want == "first row" {
+			switch tc.want {
+			case "first row":
 				want = longName + ",short"
-			} else if tc.want == "next row" {
+			case "next row":
 				want = "next-row"
 			}
 			if strings.Join(visible, ",") != want {
