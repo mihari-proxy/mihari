@@ -15,17 +15,21 @@ import (
 )
 
 const (
-	fileSchema       = "mihari.tui-preferences/v1"
-	maxFileSizeBytes = 1 << 20
+	fileSchema                = "mihari.tui-preferences/v1"
+	maxFileSizeBytes          = 1 << 20
+	defaultLatencyConcurrency = 5
+	maxLatencyConcurrency     = 50
 )
 
 var (
 	ErrInvalidColumns = errors.New("invalid connections columns")
 	// ErrInvalidLogLevels identifies an empty, unknown, or duplicate display-level selection.
 	ErrInvalidLogLevels = errors.New("invalid log display levels")
-	defaultLogLevels    = []string{"debug", "info", "warn", "error"}
-	defaultColumns      = []string{"host", "network", "source", "destination", "chain", "rule", "traffic"}
-	connectionColumnIDs = map[string]struct{}{
+	// ErrInvalidLatencyConcurrency identifies an out-of-range latency test limit.
+	ErrInvalidLatencyConcurrency = errors.New("latency test concurrency must be between 1 and 50")
+	defaultLogLevels             = []string{"debug", "info", "warn", "error"}
+	defaultColumns               = []string{"host", "network", "source", "destination", "chain", "rule", "traffic"}
+	connectionColumnIDs          = map[string]struct{}{
 		"host": {}, "network": {}, "source": {}, "destination": {}, "chain": {},
 		"rule": {}, "process": {}, "upload": {}, "download": {}, "traffic": {}, "start": {},
 	}
@@ -40,13 +44,14 @@ type Preferences struct {
 
 // ProxyPreferences controls Proxies presentation and automatic latency tests.
 type ProxyPreferences struct {
-	ExtraLatency    bool `json:"extra_latency"`
-	AutoLatencyTest bool `json:"auto_latency_test"`
+	ExtraLatency           bool `json:"extra_latency"`
+	AutoLatencyTest        bool `json:"auto_latency_test"`
+	LatencyTestConcurrency int  `json:"latency_test_concurrency,omitempty"`
 }
 
-// DefaultProxyPreferences enables both features for existing installations.
+// DefaultProxyPreferences enables both switches and keeps five concurrent tests.
 func DefaultProxyPreferences() ProxyPreferences {
-	return ProxyPreferences{ExtraLatency: true, AutoLatencyTest: true}
+	return ProxyPreferences{ExtraLatency: true, AutoLatencyTest: true, LatencyTestConcurrency: defaultLatencyConcurrency}
 }
 
 type Update struct {
@@ -93,6 +98,9 @@ func Open(path string) (*Service, error) {
 		}
 		preferences.ConnectionsColumns = append([]string(nil), persisted.ConnectionsColumns...)
 		if persisted.Proxies != nil {
+			if err := ValidateLatencyConcurrency(persisted.Proxies.LatencyTestConcurrency); err != nil {
+				return nil, fmt.Errorf("decode TUI preferences: %w", err)
+			}
 			preferences.Proxies = *persisted.Proxies
 		}
 		if persisted.LogLevels != nil {
@@ -127,7 +135,15 @@ func (s *Service) Update(ctx context.Context, update Update) (Preferences, error
 		next.ConnectionsColumns = append([]string(nil), update.ConnectionsColumns...)
 	}
 	if update.Proxies != nil {
+		previousConcurrency := next.Proxies.LatencyTestConcurrency
 		next.Proxies = *update.Proxies
+		// Older clients replace the two switches without supplying this field.
+		if next.Proxies.LatencyTestConcurrency == 0 {
+			next.Proxies.LatencyTestConcurrency = previousConcurrency
+		}
+		if err := ValidateLatencyConcurrency(next.Proxies.LatencyTestConcurrency); err != nil {
+			return Preferences{}, err
+		}
 	}
 	if update.LogLevels != nil {
 		if err := ValidateLogLevels(update.LogLevels); err != nil {
@@ -137,7 +153,12 @@ func (s *Service) Update(ctx context.Context, update Update) (Preferences, error
 	}
 	var proxyOverrides *ProxyPreferences
 	if next.Proxies != DefaultProxyPreferences() {
-		proxyOverrides = &next.Proxies
+		overrides := next.Proxies
+		// Keep the old file shape when only the existing switches differ.
+		if overrides.LatencyTestConcurrency == DefaultProxyPreferences().LatencyTestConcurrency {
+			overrides.LatencyTestConcurrency = 0
+		}
+		proxyOverrides = &overrides
 	}
 	raw, err := json.MarshalIndent(document{Schema: fileSchema, ConnectionsColumns: next.ConnectionsColumns, Proxies: proxyOverrides, LogLevels: next.LogLevels}, "", "  ")
 	if err != nil {
@@ -149,6 +170,14 @@ func (s *Service) Update(ctx context.Context, update Update) (Preferences, error
 	}
 	s.snapshot.Store(next)
 	return clone(next), nil
+}
+
+// ValidateLatencyConcurrency shares the stored-value bounds with installer migration.
+func ValidateLatencyConcurrency(value int) error {
+	if value < 1 || value > maxLatencyConcurrency {
+		return ErrInvalidLatencyConcurrency
+	}
+	return nil
 }
 
 func validateColumns(columns []string) error {

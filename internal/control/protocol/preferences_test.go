@@ -57,3 +57,38 @@ func TestTUIPreferences_ExplicitEmptyListsSurviveEncodingForValidation(t *testin
 		})
 	}
 }
+
+func TestTUIPreferences_LatencyConcurrencyDefaultsAndContract(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want int
+	}{
+		{`{}`, 5},
+		{`{"proxies":{"extra_latency":false,"auto_latency_test":false}}`, 5},
+		{`{"proxies":{"latency_test_concurrency":1}}`, 1},
+		{`{"proxies":{"latency_test_concurrency":50}}`, 50},
+		{`{"proxies":{"latency_test_concurrency":-1}}`, 5},
+		{`{"proxies":{"latency_test_concurrency":51}}`, 5},
+	} {
+		var prefs TUIPreferences
+		if err := json.Unmarshal([]byte(tc.raw), &prefs); err != nil {
+			t.Fatal(err)
+		}
+		if got := prefs.EffectiveProxies().LatencyTestConcurrency; got != tc.want {
+			t.Fatalf("%s: concurrency=%d want=%d", tc.raw, got, tc.want)
+		}
+	}
+	for _, limit := range []int{0, 5, 50} {
+		raw, err := json.Marshal(UpdateTUIPreferencesRequest{OperationID: "fixture", Proxies: &ProxyPreferences{LatencyTestConcurrency: limit}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "latency_test_concurrency") != (limit != 0) {
+			t.Fatalf("optional concurrency contract: %s", raw)
+		}
+		var request UpdateTUIPreferencesRequest
+		if err := json.Unmarshal(raw, &request); err != nil || request.Proxies.LatencyTestConcurrency != limit {
+			t.Fatalf("round-trip limit=%d err=%v", limit, err)
+		}
+	}
+}

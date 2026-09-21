@@ -63,7 +63,7 @@ func TestLogPreferences_ControlPlanePersistsIndependentFields(t *testing.T) {
 	if !slices.Equal(got.LogLevels, []string{"error"}) || !slices.Equal(got.ConnectionsColumns, []string{"host", "traffic"}) {
 		t.Fatalf("reopened preferences=%+v", got)
 	}
-	if got.Proxies == nil || *got.Proxies != (protocol.ProxyPreferences{ExtraLatency: true, AutoLatencyTest: false}) {
+	if got.Proxies == nil || *got.Proxies != (protocol.ProxyPreferences{ExtraLatency: true, AutoLatencyTest: false, LatencyTestConcurrency: 5}) {
 		t.Fatalf("independent updates lost proxy settings: %+v", got.Proxies)
 	}
 }

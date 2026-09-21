@@ -41,6 +41,7 @@ func TestPageSettings_JumpExpandsAndFocusLinksDirectory(t *testing.T) {
 		t.Fatalf("jump=%+v", d)
 	}
 	d.key("up")
+	d.key("up")
 	if d.directory != 1 || d.focus != (settingsFocus{1, 1}) {
 		t.Fatalf("directory did not follow focus: %+v", d)
 	}

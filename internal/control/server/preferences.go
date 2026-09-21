@@ -48,7 +48,7 @@ func (s *Server) updateTUIPreferences(writer http.ResponseWriter, request *http.
 	}
 	update := preferences.Update{ConnectionsColumns: body.ConnectionsColumns, LogLevels: body.LogLevels}
 	if body.Proxies != nil {
-		update.Proxies = &preferences.ProxyPreferences{ExtraLatency: body.Proxies.ExtraLatency, AutoLatencyTest: body.Proxies.AutoLatencyTest}
+		update.Proxies = &preferences.ProxyPreferences{ExtraLatency: body.Proxies.ExtraLatency, AutoLatencyTest: body.Proxies.AutoLatencyTest, LatencyTestConcurrency: body.Proxies.LatencyTestConcurrency}
 	}
 	updated, err := runtime.UpdateTUIPreferences(request.Context(), runtimeapi.Operation{
 		ID: body.OperationID, Source: "control", IfRevision: body.IfRevision,
@@ -64,7 +64,7 @@ func tuiPreferencesDTO(value preferences.Preferences, revision uint64) protocol.
 	return protocol.TUIPreferences{
 		Schema: "mihari/v1", Revision: revision,
 		ConnectionsColumns: append([]string(nil), value.ConnectionsColumns...),
-		Proxies:            &protocol.ProxyPreferences{ExtraLatency: value.Proxies.ExtraLatency, AutoLatencyTest: value.Proxies.AutoLatencyTest},
+		Proxies:            &protocol.ProxyPreferences{ExtraLatency: value.Proxies.ExtraLatency, AutoLatencyTest: value.Proxies.AutoLatencyTest, LatencyTestConcurrency: value.Proxies.LatencyTestConcurrency},
 		LogLevels:          append([]string(nil), value.LogLevels...),
 	}
 }

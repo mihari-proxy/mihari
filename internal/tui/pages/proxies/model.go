@@ -19,10 +19,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
-const (
-	proxyBarMaxWidth     = 28
-	delayTestConcurrency = 5
-)
+const proxyBarMaxWidth = 28
 
 type Client interface {
 	SelectProxy(context.Context, string, protocol.ProxySelectionRequest) (protocol.MutationResult, error)
@@ -47,6 +44,7 @@ type DelayState struct {
 }
 
 type Model struct {
+	concurrencyChanged     bool
 	preferences            protocol.ProxyPreferences
 	contextFactory         func() (context.Context, context.CancelFunc)
 	delayTasks             map[string]*delayTask
@@ -630,7 +628,7 @@ func (m *Model) startDelay(name string) tea.Cmd {
 
 func (m *Model) fillSlots() []tea.Cmd {
 	var cmds []tea.Cmd
-	for len(m.inFlight) < delayTestConcurrency {
+	for len(m.inFlight) < m.preferences.LatencyTestConcurrency {
 		name, ok := m.popNextQueuedName()
 		if !ok {
 			break

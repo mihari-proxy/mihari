@@ -63,7 +63,13 @@ func (m *Model) cancelTests(automaticOnly bool) {
 
 // ReconcileAutoTests schedules newly visible targets after shell state changes.
 // Visibility never starts IO from View; all state changes remain on Update's owner.
-func (m *Model) ReconcileAutoTests(active, ready bool, epoch uint64, core protocol.CoreStatus) tea.Cmd {
+func (m *Model) ReconcileAutoTests(active, ready bool, epoch uint64, core protocol.CoreStatus) (command tea.Cmd) {
+	if m.concurrencyChanged {
+		m.concurrencyChanged = false
+		// Apply cancellation/identity changes first, then fill already queued
+		// work even when automatic discovery is disabled or obscured.
+		defer func() { command = tea.Batch(command, m.delayCmds()) }()
+	}
 	identity := delayIdentity{epoch, core.PID, core.StartedAt, core.Restarts, m.groupsSubscription}
 	changed := m.autoIdentity != identity
 	if changed {

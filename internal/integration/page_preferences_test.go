@@ -35,7 +35,7 @@ func TestPagePreferences_ControlRoundTripAndIndependentUpdates(t *testing.T) {
 	if !initial.EffectiveProxies().ExtraLatency || !initial.EffectiveProxies().AutoLatencyTest {
 		t.Fatalf("defaults=%+v", initial)
 	}
-	disabled := protocol.ProxyPreferences{}
+	disabled := protocol.ProxyPreferences{LatencyTestConcurrency: 5}
 	saved, err := client.UpdateTUIPreferences(ctx, protocol.UpdateTUIPreferencesRequest{OperationID: "proxy-settings", IfRevision: &initial.Revision, Proxies: &disabled})
 	if err != nil {
 		t.Fatal(err)

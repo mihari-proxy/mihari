@@ -51,7 +51,7 @@ func (d *pageSettingsDialog) rows() []settingsFocus {
 	for i, id := range d.pages {
 		rows = append(rows, settingsFocus{i, -1})
 		if id == ui.PageProxies && d.expanded[id] {
-			rows = append(rows, settingsFocus{i, 0}, settingsFocus{i, 1})
+			rows = append(rows, settingsFocus{i, 0}, settingsFocus{i, 1}, settingsFocus{i, 2})
 		}
 	}
 	return rows
@@ -90,6 +90,14 @@ func (d *pageSettingsDialog) key(key string) ModalAction {
 		}
 	case 1:
 		switch key {
+		case "left", "right":
+			if d.focus.field == 2 {
+				delta := 1
+				if key == "left" {
+					delta = -1
+				}
+				d.draft.LatencyTestConcurrency = max(1, min(protocol.MaxLatencyTestConcurrency, d.draft.LatencyTestConcurrency+delta))
+			}
 		case "up", "down", "pgup", "pgdown":
 			rows := d.rows()
 			for i, row := range rows {
@@ -113,7 +121,7 @@ func (d *pageSettingsDialog) key(key string) ModalAction {
 				d.expanded[id] = !d.expanded[id]
 			} else if d.focus.field == 0 {
 				d.draft.ExtraLatency = !d.draft.ExtraLatency
-			} else {
+			} else if d.focus.field == 1 {
 				d.draft.AutoLatencyTest = !d.draft.AutoLatencyTest
 			}
 		}
@@ -161,7 +169,7 @@ func (d *pageSettingsDialog) view(width, height int) string {
 		right = append(right, ui.TruncateVisible(line, rightWidth))
 		if d.expanded[id] {
 			if id == ui.PageProxies {
-				for field, label := range []string{"Extra latency display", "Automatic latency test"} {
+				for field, label := range []string{"Extra latency display", "Automatic latency test", "Test concurrency"} {
 					checked := d.draft.ExtraLatency
 					if field == 1 {
 						checked = d.draft.AutoLatencyTest
@@ -170,7 +178,11 @@ func (d *pageSettingsDialog) view(width, height int) string {
 					if checked {
 						check = "[x]"
 					}
-					text := "    " + ui.PadCell(ui.TruncateVisible(label, rightWidth-9), rightWidth-9, ui.AlignLeft) + "  " + check
+					if field == 2 {
+						check = fmt.Sprintf("< %d >", d.draft.LatencyTestConcurrency)
+					}
+					labelWidth := rightWidth - 6 - lipgloss.Width(check)
+					text := "    " + ui.PadCell(ui.TruncateVisible(label, labelWidth), labelWidth, ui.AlignLeft) + "  " + check
 					if d.focus == (settingsFocus{i, field}) {
 						focusLine = len(right)
 						if d.area == 1 {
@@ -229,8 +241,12 @@ func (d *pageSettingsDialog) view(width, height int) string {
 	} else if d.err != "" {
 		status = theme.Danger.Render(ui.TruncateVisible(d.err, inner))
 	}
+	hint := "Tab area  ↑/↓ move  Enter select  Esc cancel"
+	if d.area == 1 && d.focus.field == 2 {
+		hint = "←/→ adjust (1–50)  Tab area  Esc cancel"
+	}
 	body := theme.Title.Render("Page Settings") + "\n\n" + strings.Join(lines, "\n") + "\n" + status + "\n" +
-		strings.Repeat(" ", max(0, inner-lipgloss.Width(buttons))) + buttons + "\n" + theme.Muted.Render("Tab area  ↑/↓ move  Enter select  Esc cancel")
+		strings.Repeat(" ", max(0, inner-lipgloss.Width(buttons))) + buttons + "\n" + theme.Muted.Render(hint)
 	box := theme.Dialog.Width(boxWidth).Render(body)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
