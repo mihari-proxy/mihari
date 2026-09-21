@@ -6,6 +6,8 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
+出口网卡可在 **System → Network → Outbound Interface** 中选择，或使用 `mihari egress list|status|set <网卡名>|auto`。弹窗以 ↑/↓ 浏览滚动列表，PgUp/PgDn 查看详情，Tab 切换至 Cancel / Apply；只有 Apply 才会提交。失效的已保存网卡仍会显示，不自动回退。详细语义见[出口网卡](docs/commands.md#egress--出口网卡)。
+
 [![license](https://img.shields.io/github/license/mihari-proxy/mihari)](LICENSE)
 [![ci](https://img.shields.io/github/actions/workflow/status/mihari-proxy/mihari/ci.yml?branch=main)](https://github.com/mihari-proxy/mihari/actions)
 [![go version](https://img.shields.io/github/go-mod/go-version/mihari-proxy/mihari)](go.mod)

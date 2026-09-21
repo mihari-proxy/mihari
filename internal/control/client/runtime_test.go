@@ -26,6 +26,19 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 		response string
 		invoke   func(context.Context, *Client) error
 	}{
+		{"egress", http.MethodGet, "/v1/egress", "", `{"schema":"mihari/v1","selection":{"mode":"automatic"},"state":"saved","interfaces":[],"revision":1}`,
+			func(ctx context.Context, client *Client) error {
+				result, err := client.Egress(ctx)
+				if err == nil && result.Selection.Mode != "automatic" {
+					return errors.New("invalid egress selection")
+				}
+				return err
+			}},
+		{"egress update", http.MethodPatch, "/v1/egress", `{"operation_id":"op","mode":"manual","interface_name":"VPN 日本"}`, `{"schema":"mihari/v1","selection":{"mode":"manual","interface_name":"VPN 日本"},"state":"saved","interfaces":[],"revision":2}`,
+			func(ctx context.Context, client *Client) error {
+				_, err := client.UpdateEgress(ctx, protocol.EgressUpdateRequest{OperationID: "op", Mode: "manual", InterfaceName: "VPN 日本"})
+				return err
+			}},
 		{"routing", http.MethodGet, "/v1/routing", "", `{"schema":"mihari/v1","desired_mode":"rule","state":"pending","revision":1}`,
 			func(ctx context.Context, client *Client) error {
 				result, err := client.Routing(ctx)

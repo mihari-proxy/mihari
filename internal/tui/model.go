@@ -120,10 +120,13 @@ type rootServiceStatusMsg struct {
 
 // networkStatusMsg carries daemon-backed sysproxy/TUN snapshots for Overview and System.
 type networkStatusMsg struct {
-	proxy    protocol.SystemProxyStatus
-	proxyErr error
-	tun      protocol.TunStatus
-	tunErr   error
+	egress      *protocol.EgressStatus
+	egressPID   int
+	egressEpoch uint64
+	proxy       protocol.SystemProxyStatus
+	proxyErr    error
+	tun         protocol.TunStatus
+	tunErr      error
 }
 
 type actionExecuteMsg struct{ Intent ui.ActionIntentMsg }
@@ -462,6 +465,11 @@ func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.syncSystemServiceStatus()
 		return model, nil
 	case networkStatusMsg:
+		if typed.egress != nil && typed.egressPID == model.status.PID && typed.egressEpoch == model.statusEpoch {
+			if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
+				page.SetEgress(*typed.egress)
+			}
+		}
 		if typed.proxyErr == nil {
 			model.systemProxy = typed.proxy
 			model.systemProxyOK = true
@@ -1104,13 +1112,22 @@ func (model Model) loadNetworkStatus() tea.Cmd {
 		return nil
 	}
 	ctx := model.pageCtx
+	egressEnabled, daemonPID, epoch := slices.Contains(model.status.Capabilities, protocol.CapabilityEgress), model.status.PID, model.statusEpoch
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	return func() tea.Msg {
 		proxy, proxyErr := client.SystemProxy(ctx)
 		tun, tunErr := client.Tun(ctx)
-		return networkStatusMsg{proxy: proxy, proxyErr: proxyErr, tun: tun, tunErr: tunErr}
+		result := networkStatusMsg{proxy: proxy, proxyErr: proxyErr, tun: tun, tunErr: tunErr, egressPID: daemonPID, egressEpoch: epoch}
+		if egress, ok := client.(interface {
+			Egress(context.Context) (protocol.EgressStatus, error)
+		}); ok && egressEnabled {
+			if status, err := egress.Egress(ctx); err == nil {
+				result.egress = &status
+			}
+		}
+		return result
 	}
 }
 
@@ -1288,6 +1305,13 @@ func (model Model) dispatchPageTo(id ui.PageID, message tea.Msg) (tea.Model, tea
 	}
 	updated, command := page.Update(message)
 	model.pages[id] = updated
+	if id == ui.PageSystem && model.active == id {
+		if page, ok := updated.(*systempage.Model); ok && page.HasEgressDialog() {
+			model.inputMode = ui.InputText
+		} else if provider, ok := updated.(ui.HelpModeProvider); ok && provider.HelpMode() == "" {
+			model.inputMode = ui.InputNavigation
+		}
+	}
 	if id == ui.PageSubscriptions && model.active == id {
 		model.inputMode = ui.InputNavigation
 		if page, ok := updated.(*subscriptionspage.Model); ok && page.HasDialog() {

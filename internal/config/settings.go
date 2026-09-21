@@ -37,6 +37,7 @@ type LoggingSettings struct {
 }
 
 type Settings struct {
+	EgressInterface    string           `yaml:"egress-interface,omitempty"`
 	Routing            *RoutingSettings `yaml:"routing,omitempty"`
 	Schema             string           `yaml:"schema"`
 	MixedAddr          string           `yaml:"mixed-addr"`

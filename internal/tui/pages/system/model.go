@@ -322,6 +322,7 @@ var _ interface{ Err() error } = actionResultMsg{}
 
 // Model is the System page.
 type Model struct {
+	egress                egressUI
 	coreVersion           coreVersionState
 	channelDiagnostic     tea.Cmd
 	writeClipboard        func(string) error
@@ -464,6 +465,9 @@ func NewWithContext(ctx context.Context, client Client, svc ServiceController, n
 }
 
 func (m *Model) HelpMode() string {
+	if m.egress.open {
+		return "egress"
+	}
 	if m.editID != "" {
 		if m.editID == rowLogLevel {
 			if m.pending {
@@ -481,6 +485,9 @@ func (m *Model) HelpMode() string {
 
 // FooterHints returns edit-mode shortcuts while a port row is being typed.
 func (m *Model) FooterHints() string {
+	if m.egress.open {
+		return "↑/↓ select  PgUp/Dn details  Tab actions  Enter activate  Esc cancel"
+	}
 	if m.directoryCopyAvailable(m.focusID) && m.editID == "" && m.detail == nil {
 		return "↑/↓ navigate  Enter copy directory  Esc back  ? help  q quit"
 	}
@@ -626,6 +633,9 @@ func (m *Model) FocusFirst() {
 }
 
 func (m *Model) SetSnapshot(status protocol.Status, core protocol.CoreStatus) {
+	if m.status.PID != status.PID {
+		m.egress = egressUI{epoch: m.egress.epoch + 1}
+	}
 	if m.status.PID != status.PID || m.core.PID != core.PID || (m.core.Status != core.Status && core.Status == "running") {
 		m.portProbeNeeded = true
 	}
@@ -665,7 +675,17 @@ func (m *Model) ApplyRootNetworkStatus(proxy protocol.SystemProxyStatus, proxyOK
 	m.tunLoaded = true
 }
 
-func (m *Model) SetMutationsEnabled(enabled bool) { m.mutationsEnabled = enabled }
+func (m *Model) SetMutationsEnabled(enabled bool) {
+	if m.mutationsEnabled && !enabled {
+		m.egress.epoch++
+		m.egress.pending = false
+		m.egress.loaded = false
+		if m.egress.open {
+			m.egress.err = "Disconnected. Reopen after reconnecting."
+		}
+	}
+	m.mutationsEnabled = enabled
+}
 
 // Load refreshes local status and checks Mihari and core versions when available.
 func (m *Model) Load() tea.Cmd {
@@ -698,6 +718,9 @@ func (m *Model) load(checkVersions bool) tea.Cmd {
 	}
 	if m.client != nil && m.hasCapability(protocol.CapabilityTUN) {
 		cmds = append(cmds, m.loadTun())
+	}
+	if m.client != nil && m.hasCapability(protocol.CapabilityEgress) {
+		cmds = append(cmds, m.loadEgress())
 	}
 	if m.client != nil && m.hasCapability(protocol.CapabilityWebGUI) {
 		cmds = append(cmds, m.loadWebGUI())
@@ -800,6 +823,8 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		m.ensureFocusVisible()
 	}()
 	switch typed := message.(type) {
+	case egressResultMsg:
+		return m, m.handleEgressResult(typed)
 	case ui.LoggingSyncMsg:
 		wasLoggingEdit := m.editID == rowLogLevel || m.editID == rowLogMaxSize || m.editID == rowLogMaxFiles
 		m.ApplyLoggingSync(typed)
@@ -1136,6 +1161,9 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 	}
 
 	key, ok := message.(tea.KeyPressMsg)
+	if m.egress.open {
+		return m, m.updateEgressDialog(message)
+	}
 	if m.detail != nil {
 		if ok && (key.String() == "esc" || key.String() == "enter") {
 			m.detail = nil
@@ -1175,6 +1203,8 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 			return m, nil
 		}
 		switch m.focusID {
+		case "egress":
+			return m, m.openEgressDialog()
 		case rowZashboard:
 			return m, m.openPanelBrowser(panelIDZashboard)
 		case rowMetaCubeXD:
@@ -1321,7 +1351,12 @@ func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cm
 	}, m.rowSpinCmdIfNeeded(), m.scheduleOutcomeFade(rowID))
 }
 
-func (m *Model) View() string {
+func (m *Model) View() (view string) {
+	defer func() {
+		if m.egress.open {
+			view = ui.CenterOverlay(m.theme, view, m.egressDialogView(), m.width, m.height)
+		}
+	}()
 	if m.detail != nil {
 		return m.theme.Content.Width(m.width).Height(m.height).Render(
 			m.theme.Title.Render(strings.TrimSpace(m.detail.label)+" details") + "\n\n" + m.detail.detail + "\n\n" + ui.EscCloseHint,
@@ -1693,6 +1728,21 @@ func padEndpointLabel(label string) string {
 func (m *Model) networkRows() []row {
 	section := ui.NetworkSectionTitle
 	var rows []row
+	if m.hasCapability(protocol.CapabilityEgress) {
+		value := "Loading…"
+		if m.egress.loaded {
+			value = "Saved · " + diagnostics.EscapeTerminal(egressLabel(m.egress.status.Selection))
+			if m.egress.status.State == "unknown" {
+				value += " · Application unconfirmed"
+			}
+			for _, item := range m.egress.status.Interfaces {
+				if item.Name == m.egress.status.Selection.InterfaceName {
+					value += " · " + egressAvailability(item.Availability)
+				}
+			}
+		}
+		rows = append(rows, row{id: "egress", section: section, label: "Outbound Interface", value: value, detail: "Choose the outbound network interface"})
+	}
 	if m.hasCapability(protocol.CapabilitySystemProxy) {
 		// Status row shows observed state. It is never overlaid by the
 		// pending/outcome chips (those bind the action row below), so the live
