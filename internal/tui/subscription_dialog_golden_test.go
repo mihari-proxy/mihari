@@ -52,9 +52,12 @@ func TestGoldenSubscriptionDialogs(t *testing.T) {
 	}{
 		{"detail", 100, 30, 0, false, ""},
 		{"cycle", 100, 30, 4, false, ""},
+		{"interval", 100, 30, 2, false, ""},
+		{"enabled-action", 100, 36, 5, false, ""},
+		{"inuse-action", 100, 36, 6, false, ""},
 		{"add", 100, 30, 0, true, ""},
 		{"compact-url", 72, 22, 1, false, ""},
-		{"compact-save", 72, 22, 5, false, ""},
+		{"compact-save", 72, 22, 7, false, ""},
 		{"error", 100, 30, 0, false, "Download failed. The cached configuration remains available."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

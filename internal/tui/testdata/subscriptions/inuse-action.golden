@@ -1,18 +1,20 @@
  Mihari  ·  ● running  ·  0 conn  ·  ↑      0 B/s  ↓      0 B/s                           Connected
    1 Overview
-   2 Proxies           ╭──────────────────────────────────────────────────────────────────────╮
-   3 Conns             │                                                                      │
-   4 Rules             │  Edit subscription                                                   │
+   2 Proxies
+   3 Conns
+   4 Rules             ╭──────────────────────────────────────────────────────────────────────╮
    5 Logs              │                                                                      │
- › 6 Subs              │  ● In use · Live · Enabled                                           │
-   7 Web GUI           │  Traffic       52.5 GiB/80.0 GiB                                     │
-   8 System            │  Cache         Available                                             │
+ › 6 Subs              │  Edit subscription                                                   │
+   7 Web GUI           │                                                                      │
+   8 System            │  ● In use · Live · Enabled                                           │
+                       │  Traffic       52.5 GiB/80.0 GiB                                     │
+                       │  Cache         Available                                             │
                        │  Last update   2026-09-15 01:00                                      │
                        │  Next update   in 5h                                                 │
                        │                                                                      │
                        │  Settings                                                            │
                        │                                                                      │
-                       │  › Name          Example                                             │
+                       │    Name          Example                                             │
                        │    URL                                                               │
                        │    https://example.test/subscription/sample-sample-sample-sample-s…  │
                        │    Interval      Global · 12h                        ns/us/ms/s/m/h  │
@@ -21,10 +23,14 @@
                        │                                                                      │
                        │  Actions · Apply immediately                                         │
                        │    Enabled       [ Disable ]                                         │
-                       │    InUse         In use                                              │
+                       │  › InUse         In use                                              │
+                       │  Use requires an enabled subscription with a valid cache.            │
                        │  ──────────────────────────────────────────────────────────────────  │
                        │                               [ Save ]                               │
                        │                                                                      │
                        ╰──────────────────────────────────────────────────────────────────────╯
 
- F2 details  Tab/↑/↓ fields  Enter next  Esc cancel
+
+
+
+ F2 details  Tab/↑/↓ fields  Enter apply now  Esc close

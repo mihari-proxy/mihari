@@ -23,15 +23,17 @@ const (
 )
 
 type formModel struct {
-	validationErr error
-	kind          formKind
-	inputs        []textinput.Model
-	labels        []string
-	index         int
-	baseline      protocol.Subscription
-	urlBaseline   string
-	urlTouched    bool
-	errorText     string
+	validationErr   error
+	kind            formKind
+	inputs          []textinput.Model
+	labels          []string
+	index           int
+	baseline        protocol.Subscription
+	urlBaseline     string
+	urlTouched      bool
+	errorText       string
+	actionOperation string
+	actionUncertain bool
 }
 
 func newAddForm() *formModel {
@@ -40,9 +42,9 @@ func newAddForm() *formModel {
 
 func newEditForm(subscription protocol.Subscription) *formModel {
 	f := newForm(formEdit,
-		[]string{"Name", "URL", "Interval", "Auto refresh", "Mode"},
-		[]string{subscription.Name, "", subscription.Interval, strconv.FormatBool(subscription.AutoRefresh), subscription.ProxyMode},
-		[]string{"Subscription name", "Loading URL...", "Use global interval when blank", "", ""},
+		[]string{"Name", "URL", "Interval", "Auto refresh", "Mode", "Enabled", "InUse"},
+		[]string{subscription.Name, "", subscription.Interval, strconv.FormatBool(subscription.AutoRefresh), subscription.ProxyMode, "", ""},
+		[]string{"Subscription name", "Loading URL...", "Use global interval when blank", "", "", "", ""},
 	)
 	f.baseline = subscription
 	return f
@@ -99,7 +101,7 @@ func (f *formModel) Update(message tea.Msg) (bool, tea.Cmd) {
 			return false, nil
 		}
 	}
-	if f.index >= len(f.inputs) || f.isCycle() {
+	if f.index >= len(f.inputs) || f.isCycle() || f.isAction() {
 		return false, nil
 	}
 	// Forward keys, bracketed paste, and clipboard paste results into the focused textinput.
@@ -113,7 +115,11 @@ func (f *formModel) Update(message tea.Msg) (bool, tea.Cmd) {
 }
 
 func (f *formModel) isCycle() bool {
-	return f.index < len(f.inputs) && (f.kind == formAdd && f.index == 2 || f.kind == formEdit && f.index >= 3)
+	return f.index < len(f.inputs) && (f.kind == formAdd && f.index == 2 || f.kind == formEdit && (f.index == 3 || f.index == 4))
+}
+
+func (f *formModel) isAction() bool {
+	return f.kind == formEdit && f.index >= 5 && f.index < len(f.inputs)
 }
 
 func (f *formModel) reveal(raw string) {
@@ -129,7 +135,7 @@ func (f *formModel) move(delta int) tea.Cmd {
 		f.inputs[f.index].Blur()
 	}
 	f.index = (f.index + delta + len(f.inputs) + 1) % (len(f.inputs) + 1)
-	if f.index < len(f.inputs) && !f.isCycle() {
+	if f.index < len(f.inputs) && !f.isCycle() && !f.isAction() {
 		return f.inputs[f.index].Focus()
 	}
 	return nil
