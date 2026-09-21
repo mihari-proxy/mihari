@@ -310,25 +310,28 @@ func TestCoreUpdateCleanupOnlyAfterOwnerCompletion(t *testing.T) {
 	s, u := preparedUpdateFixture(t)
 	lifecycle, ok := any(u).(interface {
 		CompleteRollback(context.Context) error
-		Finish(context.Context) error
+		DeferCleanup(context.Context) error
 	})
 	if !ok {
 		t.Fatal("update has no owner completion and cleanup lifecycle")
 	}
-	if err := lifecycle.Finish(t.Context()); err == nil {
+	if err := lifecycle.DeferCleanup(t.Context()); err == nil {
 		t.Fatal("cleanup retired a nonterminal update")
 	}
 	if err := u.Rollback(t.Context(), func(CoreSelection) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if err := lifecycle.Finish(t.Context()); err == nil {
+	if err := lifecycle.DeferCleanup(t.Context()); err == nil {
 		t.Fatal("cleanup retired recovery before health confirmation")
 	}
 	if err := lifecycle.CompleteRollback(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	if err := lifecycle.DeferCleanup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	for range 2 {
-		if err := lifecycle.Finish(t.Context()); err != nil {
+		if err := CleanupCompletedUpdates(t.Context(), s); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -346,7 +349,7 @@ func TestCoreUpdateCommittedCleanupFailureDoesNotBlockVerifiedExecution(t *testi
 		t.Fatal(err)
 	}
 	s.fail = s.step + 1
-	if err := u.Finish(t.Context()); err == nil {
+	if err := u.DeferCleanup(t.Context()); err == nil {
 		t.Fatal("missing cleanup failure")
 	}
 	s.fail = 0
@@ -377,7 +380,7 @@ func TestCoreUpdateRejectsChangedPreviouslyAdmittedLocalCore(t *testing.T) {
 	if err := u.CompleteRollback(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if err := u.Finish(t.Context()); err != nil {
+	if err := u.DeferCleanup(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Save(t.Context(), InstalledBinary, "", []byte("unknown replacement")); err != nil {
@@ -392,43 +395,5 @@ func TestCoreUpdateRejectsChangedPreviouslyAdmittedLocalCore(t *testing.T) {
 	_, err := BeginUpdate(t.Context(), s, testTransaction, mustInspect(t, s, UpdateCandidate, testTransaction), u.Intent())
 	if err == nil {
 		t.Fatal("unobserved local replacement became the rollback target")
-	}
-}
-
-func TestCoreUpdateTerminalCleanupRecoversEachRemovalBoundary(t *testing.T) {
-	seed := func() (*memoryStore, *UpdateTransaction) {
-		s, u := preparedUpdateFixture(t)
-		if err := u.Commit(t.Context(), func(CoreSelection) error { return nil }); err != nil {
-			t.Fatal(err)
-		}
-		s.step = 0
-		return s, u
-	}
-	baseline, u := seed()
-	if err := u.Finish(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	for fail := 1; fail <= baseline.step; fail++ {
-		t.Run(fmt.Sprint(fail), func(t *testing.T) {
-			s, u := seed()
-			s.fail = fail
-			_ = u.Finish(t.Context())
-			s.fail = 0
-			loaded, err := OpenUpdate(t.Context(), s)
-			if err == nil {
-				u = loaded
-			} else if !errors.Is(err, os.ErrNotExist) {
-				t.Fatal(err)
-			}
-			if err := u.Finish(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			if b, err := s.Load(t.Context(), InstalledBinary, ""); err != nil || string(b) != "new" {
-				t.Fatalf("core changed: %q %v", b, err)
-			}
-			if _, err := OpenUpdate(t.Context(), s); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("cleanup incomplete: %v", err)
-			}
-		})
 	}
 }

@@ -21,6 +21,7 @@ type Options struct {
 	DiagnosticHistory  *diagnostics.History
 	Listen             func(context.Context) (net.Listener, error)
 	OnReady            func() error
+	StartupCleanup     func(context.Context) error
 	Endpoint           string
 	Token              string
 	Version            string
@@ -55,6 +56,9 @@ func Run(parent context.Context, options Options) error {
 			reportCleanup(ctx, options.DiagnosticReporter, "listener.cleanup.failed", err)
 		}
 	}()
+	if !options.ValidationMode && options.StartupCleanup != nil {
+		reportCleanup(ctx, options.DiagnosticReporter, "startup.cleanup.failed", options.StartupCleanup(ctx))
+	}
 	if options.OnReady != nil {
 		if err := options.OnReady(); err != nil {
 			reportFailure(ctx, options.DiagnosticReporter, "ready.failed", err)

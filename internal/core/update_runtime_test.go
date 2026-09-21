@@ -185,6 +185,9 @@ func TestCoreUpdateRuntimeCommitsAfterHealthAndRecoversSettingsFailure(t *testin
 			if starter.fixture.UpdatePending() {
 				t.Fatal("completed update retains blocking journal")
 			}
+			if !starter.fixture.HasDeferredUpdate() {
+				t.Fatal("completed update did not retain cleanup authority until startup")
+			}
 		})
 	}
 }
