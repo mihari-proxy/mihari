@@ -60,7 +60,7 @@ Windows 增加能力 `app-update-prepare-v1`：
 
 ## 文件清理边界
 
-只处理当前程序目录中精确的 `<basename>.old-<规范正十进制 int64 时间戳>`；core owner 只处理已知 `data/bin/mihomo.exe.old-*`。这些名字保留为更新残留名称空间，名字并不构成历史事务来源证明。
+只处理当前程序目录中精确的 `<basename>.old-<规范正十进制 int64 时间戳>`，程序名前缀按 Windows 大小写不敏感规则匹配；core owner 只处理已知 `data/bin/mihomo.exe.old-*`。这些名字保留为更新残留名称空间，名字并不构成历史事务来源证明。
 
 Windows platform 固定本地卷和各级目录句柄，拒绝 reparse 跳转并在持锁期间禁止目录重命名；验证最终目录和锁 ACL。LocalSystem 只接受现有 ACL 中唯一的具体数据用户，以及既有管理员/SYSTEM 信任者，不改 ACL 或接受宽泛组写入。
 

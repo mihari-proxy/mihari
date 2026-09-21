@@ -161,7 +161,7 @@ func TestCleanupBinaryStashes_ExactNames(t *testing.T) {
 	dir := cleanupTestDir(t)
 	target := filepath.Join(dir, "mihari.exe")
 	keep := []string{"mihari.exe", "mihari.exe.old-0", "mihari.exe.old-01", "mihari.exe.old--1", "mihari.exe.old-1.bak", "other.exe.old-1", "mihari.exe.old-9223372036854775808"}
-	remove := []string{"mihari.exe.old-1", "mihari.exe.old-123456789"}
+	remove := []string{"mihari.exe.old-1", "mihari.exe.old-123456789", "MIHARI.EXE.old-123"}
 	for _, name := range append(append([]string{}, keep...), remove...) {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0600); err != nil {
 			t.Fatal(err)

@@ -188,10 +188,10 @@ func CleanupBinaryStashes(ctx context.Context, target string) (err error) {
 		if e := ctx.Err(); e != nil {
 			return errors.Join(err, e)
 		}
-		if !strings.HasPrefix(entry.name, prefix) {
+		if len(entry.name) < len(prefix) || !strings.EqualFold(entry.name[:len(prefix)], prefix) {
 			continue
 		}
-		suffix := strings.TrimPrefix(entry.name, prefix)
+		suffix := entry.name[len(prefix):]
 		stamp, e := strconv.ParseInt(suffix, 10, 64)
 		if e != nil || stamp <= 0 || strconv.FormatInt(stamp, 10) != suffix {
 			continue

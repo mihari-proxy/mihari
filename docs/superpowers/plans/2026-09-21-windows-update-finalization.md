@@ -23,7 +23,7 @@
 - `CGO_ENABLED=0`：Windows、Linux、macOS 的 amd64/arm64 六目标编译通过。
 - `go vet ./...` 通过。
 - `python -m pytest scripts/test/test_unix_layout_security.py -q`：74 passed，4 skipped（Windows 不运行 Unix root 环境分支）。
-- 全仓测试、race 和最终 lint/格式检查在提交前收口，最终结果记录于 PR。
+- `go test ./...`、`go test -race ./...`、golangci-lint、gofmt 和 diff check 通过。后续文件名大小写及停机边界复验的改动另通过 platform/app 包 race 与 lint。
 - 当前本地 runner 未提权，受保护外层 daemon Job 的原生测试明确跳过；提权 CI runner 会执行。编排用 fake 服务验证，不安装、停止或修改开发机真实服务。真实 SCM/控制台与真实 mihomo 属于另行授权的 testenv。
 
 ## 提交、评审与合并

@@ -74,7 +74,7 @@ func (s *fixtureApplicationService) Start() error {
 
 // TestWindowsUpdateMaintenance_DrainsBeforeStopping binds only an isolated fake daemon's copied executable.
 func TestWindowsUpdateMaintenance_DrainsBeforeStopping(t *testing.T) {
-	for _, scenario := range []string{"manual", "service", "drain-timeout", "old-daemon"} {
+	for _, scenario := range []string{"manual", "service", "drain-timeout", "old-daemon", "changed-after-drain"} {
 		t.Run(scenario, func(t *testing.T) {
 			dir := t.TempDir()
 			fs, err := platform.NewPrivateFS(dir)
@@ -146,8 +146,23 @@ func TestWindowsUpdateMaintenance_DrainsBeforeStopping(t *testing.T) {
 			coordinator.openTree = func(context.Context, string, *platform.WindowsProcessIdentity) (updateRuntimeTree, error) {
 				return fixtureUpdateTree{process}, nil
 			}
-			lease, err := coordinator.Acquire(ctx, update.PreparedUpdate{TargetPath: target})
-			if scenario == "drain-timeout" || scenario == "old-daemon" {
+			prepared := update.PreparedUpdate{TargetPath: target}
+			if scenario == "changed-after-drain" {
+				prepared.Preview, err = update.NewReplacementPreview(update.ReplacementCandidate{}, update.ReplacementSnapshot{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				observations := 0
+				coordinator.ObserveTargets = func(context.Context, string) (update.ReplacementSnapshot, error) {
+					observations++
+					if observations > 1 {
+						return update.ReplacementSnapshot{}, errors.New("service definition changed during drain")
+					}
+					return update.ReplacementSnapshot{}, nil
+				}
+			}
+			lease, err := coordinator.Acquire(ctx, prepared)
+			if scenario == "drain-timeout" || scenario == "old-daemon" || scenario == "changed-after-drain" {
 				if err == nil {
 					_ = lease.Close()
 					t.Fatal("unsafe update accepted")

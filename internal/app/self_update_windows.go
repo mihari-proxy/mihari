@@ -162,14 +162,11 @@ func (c *WindowsUpdateMaintenance) Acquire(ctx context.Context, p update.Prepare
 	if err != nil {
 		return nil, err
 	}
-	if c.ObserveTargets != nil {
-		snapshot, e := c.ObserveTargets(ctx, p.TargetPath)
-		if e != nil {
-			return nil, e
-		}
-		if e = update.RecheckReplacement(p.Preview, update.ReplacementCandidate{Version: p.Version, SHA256: p.SHA256, Channel: p.Channel}, snapshot); e != nil {
-			return nil, e
-		}
+	if serviceState == service.StatusRunning && daemon == nil {
+		return nil, errors.New("running installed daemon could not be bound to the update targets")
+	}
+	if err = c.recheckTargets(ctx, p); err != nil {
+		return nil, err
 	}
 	if daemon != nil {
 		if !slices.Contains(status.Capabilities, protocol.ApplicationUpdateCapability) {
@@ -219,11 +216,11 @@ func (c *WindowsUpdateMaintenance) Acquire(ctx context.Context, p update.Prepare
 			}
 		}
 	}
+	// Drain and other clients' exit can take time. Revalidate at the stop boundary.
+	if err = c.recheckTargets(ctx, p); err != nil {
+		return nil, err
+	}
 	if serviceState == service.StatusRunning {
-		// Drain is mandatory if the installed daemon was observed alive.
-		if daemon == nil {
-			return nil, errors.New("running installed daemon could not be bound to the update targets")
-		}
 		lease.restoreService = true
 		if err = c.Service.Stop(); err != nil {
 			return nil, err
@@ -259,6 +256,17 @@ func (c *WindowsUpdateMaintenance) Acquire(ctx context.Context, p update.Prepare
 		return nil, err
 	}
 	return lease, nil
+}
+
+func (c *WindowsUpdateMaintenance) recheckTargets(ctx context.Context, p update.PreparedUpdate) error {
+	if c.ObserveTargets == nil {
+		return nil
+	}
+	snapshot, err := c.ObserveTargets(ctx, p.TargetPath)
+	if err != nil {
+		return err
+	}
+	return update.RecheckReplacement(p.Preview, update.ReplacementCandidate{Version: p.Version, SHA256: p.SHA256, Channel: p.Channel}, snapshot)
 }
 
 type updateRuntimeTree interface {
