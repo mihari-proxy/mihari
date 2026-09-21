@@ -130,6 +130,60 @@ func TestVisibleContent_WrappedRowUsesActualHeight(t *testing.T) {
 	}
 }
 
+func TestRenderNode_WrappedMetadataKeepsFullWidthAndBottomAlignment(t *testing.T) {
+	for _, height := range []int{0, 8} {
+		t.Run(fmt.Sprint(height), func(t *testing.T) {
+			m := New(nil, nil)
+			node := protocol.ProxyNode{Name: "short", Type: "TROJAN", XUDP: true}
+			m.delays[node.Name] = DelayState{Kind: DelayValue, Milliseconds: 28}
+			card := ansi.Strip(m.renderNodeAtHeight(protocol.ProxyGroup{Name: "G"}, node, 18, height))
+			lines := strings.Split(card, "\n")
+			if len(lines) != max(5, height) {
+				t.Fatalf("height=%d want=%d:\n%s", len(lines), max(5, height), card)
+			}
+			for i, want := range []string{"TROJAN / XUDP", "28 ms"} {
+				if !strings.HasPrefix(lines[len(lines)-3+i], "│ "+want) {
+					t.Fatalf("metadata must use the full content width above the bottom border:\n%s", card)
+				}
+			}
+			for _, line := range lines {
+				if lipgloss.Width(line) != 18 {
+					t.Fatalf("wrapped metadata exceeds card width: %q", line)
+				}
+			}
+		})
+	}
+}
+
+func TestView_RowAlignsWrappedNamesAndWrappedMetadata(t *testing.T) {
+	m := New(nil, nil)
+	m.SetSize(56, 30) // Two cards, each 24 cells wide.
+	const longName = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789TAIL"
+	nodes := []protocol.ProxyNode{
+		{Name: longName, Type: "VLESS"},
+		{Name: "short", Type: "SHADOWSOCKSR", XUDP: true},
+	}
+	for _, node := range nodes {
+		m.delays[node.Name] = DelayState{Kind: DelayValue, Milliseconds: 28}
+	}
+	m.SetGroups(protocol.ProxyGroups{Groups: []protocol.ProxyGroup{{Name: "G", Nodes: nodes}}})
+	m.expanded["G"] = true
+	view := ansi.Strip(m.View())
+	lines := strings.Split(view, "\n")
+	if len(lines) != 9 || strings.Count(lines[7], "╰") != 2 {
+		t.Fatalf("cards must share the tallest six-line height:\n%s", view)
+	}
+	if !strings.Contains(lines[6], "VLESS  28 ms") || strings.Count(lines[6], "28 ms") != 2 {
+		t.Fatalf("metadata with different line counts must end above the common bottom border:\n%s", view)
+	}
+	if !strings.Contains(lines[5], "SHADOWSOCKSR / XUDP") || !strings.Contains(lines[5], "TAIL") {
+		t.Fatalf("wrapped name or metadata lost text:\n%s", view)
+	}
+	if lipgloss.Width(view) > m.width {
+		t.Fatalf("wrapped grid exceeds viewport width:\n%s", view)
+	}
+}
+
 func TestNavigation_WrappedNamesStayVisibleAfterLocatePagingAndResize(t *testing.T) {
 	for _, width := range []int{30, 80, 100, 160} {
 		t.Run(fmt.Sprint(width), func(t *testing.T) {
