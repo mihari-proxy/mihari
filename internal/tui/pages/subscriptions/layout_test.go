@@ -36,6 +36,8 @@ func TestSubscriptionWidths_ContentKeepsWideScreenColumnsTogether(t *testing.T) 
 	}
 }
 
+// TestSubscriptionWidths_NameFitsContentUpToLimit checks the display-cell cap,
+// ellipsis truncation, and alignment of the following InUse column.
 func TestSubscriptionWidths_NameFitsContentUpToLimit(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -73,6 +75,8 @@ func TestSubscriptionWidths_NameFitsContentUpToLimit(t *testing.T) {
 	}
 }
 
+// TestModel_ListRuleFillsSectionWidth verifies that compact columns leave no gap
+// between the header rule and the section's right padding.
 func TestModel_ListRuleFillsSectionWidth(t *testing.T) {
 	for _, width := range []int{72, 120, 200, 320} {
 		for _, name := range []string{"", "kanata", strings.Repeat("订阅", 30)} {
@@ -98,6 +102,8 @@ func TestModel_ListRuleFillsSectionWidth(t *testing.T) {
 	}
 }
 
+// TestModel_ListFocusFillsSectionWidth checks highlight boundaries and ensures
+// that only the focused row is highlighted while the page owns keyboard focus.
 func TestModel_ListFocusFillsSectionWidth(t *testing.T) {
 	for _, width := range []int{72, 120, 200, 320} {
 		for _, name := range []string{"kanata", strings.Repeat("订阅", 30)} {

@@ -619,6 +619,8 @@ func (m *Model) subscriptionWidths() ([]ui.TableColumn, []int) {
 	return ui.FitPriorityColumns(m.subscriptionColumns(), avail, 2)
 }
 
+// View renders the subscription list with compact columns and full-width row
+// focus, or the active add/edit form.
 func (m *Model) View() string {
 	inner := ui.FullSectionInner(m.layoutWidth())
 	textWidth := ui.SectionTextWidth(inner)
