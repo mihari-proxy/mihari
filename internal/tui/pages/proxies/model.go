@@ -411,12 +411,20 @@ func (m *Model) buildRenderedContent(focusWholeGroup bool, targets *[]pageTarget
 			barWidth := min(proxyBarMaxWidth, max(18, textW/columns-1))
 			for start := 0; start < len(group.Nodes); start += columns {
 				bars := make([]string, 0, columns)
+				rowHeight := 0
 				rowHasFocus := false
 				for i := start; i < min(start+columns, len(group.Nodes)); i++ {
 					node := group.Nodes[i]
 					bars = append(bars, m.renderNode(group, node, barWidth))
+					rowHeight = max(rowHeight, lipgloss.Height(bars[len(bars)-1]))
 					if m.focus == (FocusID{Group: group.Name, Node: node.Name}) {
 						rowHasFocus = true
+					}
+				}
+				// Each row follows its tallest card, including wrapped metadata.
+				for i, bar := range bars {
+					if lipgloss.Height(bar) < rowHeight {
+						bars[i] = m.renderNodeAtHeight(group, group.Nodes[start+i], barWidth, rowHeight)
 					}
 				}
 				row := lipgloss.JoinHorizontal(lipgloss.Top, bars...)
@@ -480,8 +488,13 @@ func (m *Model) ensureFocusVisible() {
 	m.scrollY = ui.EnsureLineVisible(m.scrollY, max(1, m.height-len(m.routingHeader())), len(lines), focusStart, focusEnd)
 }
 
-// renderNode renders selection, keyboard focus, and pending state independently within a fixed-size proxy card.
+// renderNode renders a fixed-width proxy card with enough height for its full name.
 func (m *Model) renderNode(group protocol.ProxyGroup, node protocol.ProxyNode, width int) string {
+	return m.renderNodeAtHeight(group, node, width, 0)
+}
+
+// renderNodeAtHeight pads above metadata to align cards with the tallest in their row.
+func (m *Model) renderNodeAtHeight(group protocol.ProxyGroup, node protocol.ProxyNode, width, height int) string {
 	id := FocusID{Group: group.Name, Node: node.Name}
 	focus := "  "
 	if m.focus == id && (!m.routing.available || m.routing.focus < 0) {
@@ -505,10 +518,13 @@ func (m *Model) renderNode(group protocol.ProxyGroup, node protocol.ProxyNode, w
 	}
 	// Network/protocol metadata shares the TCP/UDP network styling.
 	metadata = ui.StyleNetwork(m.theme, metadata)
-	// Truncate long names to the card's inner width so the card stays a stable
-	// two lines (design P3): width − border 2 − padding 2 − marker/selection 2.
-	name := ui.TruncateVisible(ui.DisplayProxyName(node.Name), max(4, width-7))
-	content := fmt.Sprintf("%s%s %s\n%s  %s", focus, selected, name, metadata, renderDelay(m.theme, m.delays[node.Name], m.now))
+	metadata = ansi.Wrap(metadata+"  "+renderDelay(m.theme, m.delays[node.Name], m.now), max(1, width-4), "")
+	// Reserve borders (2), padding (2), and focus/selection markers (4).
+	// Wrap before adding markers so continuation lines align with the name.
+	name := ansi.Wrap(ui.DisplayProxyName(node.Name), max(1, width-8), "")
+	name += strings.Repeat("\n", max(0, height-2-lipgloss.Height(name)-lipgloss.Height(metadata)))
+	name = strings.ReplaceAll(name, "\n", "\n    ")
+	content := fmt.Sprintf("%s%s %s\n%s", focus, selected, name, metadata)
 	style := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(width)
 	// Accent the focused node only while content owns keyboard focus.
 	if m.focus == id && m.contentFocused && (!m.routing.available || m.routing.focus < 0) {
