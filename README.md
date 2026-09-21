@@ -60,7 +60,7 @@ Press **F4** on any main page to open **Page Settings**, or use the entry in the
 
 Use ↑/↓ within either list, Enter/Space to expand a header or toggle an option, and Tab/Shift+Tab between the directory, settings, Cancel, and Save. The buttons stay visible; **Ctrl+S** saves from any position, while Esc/Cancel discards the draft. Changes take effect after saving. TUI and daemon should be upgraded together; older binaries cannot load a preferences file containing non-default Proxies settings. Restoring both switches to their defaults removes that optional block.
 
-The TUI subscription table sizes Name and Traffic to their contents, capped at 32 and 24 terminal columns. Extra width stays on the right; narrow terminals hide lower-priority fields first.
+The TUI subscription table sizes Name and Traffic to their contents, capped at 40 and 24 terminal columns. Extra width stays on the right; narrow terminals hide lower-priority fields first.
 
 Subscription Mode displays `auto` as **PROXY w Fallback to DIRECT**. It retries the main subscription YAML directly after eligible proxy network failures, including a timeout while reading a successful response body; HTTP errors and invalid documents do not trigger fallback. Each download attempt allows 30 seconds. Add/Refresh share a 120-second daemon execution budget, while CLI/TUI allow 180 seconds per subscription to include bounded rollback and the response. Shorter caller deadlines and cancellation still apply; batch refresh uses a fresh budget per item. Narrow lists hide the whole Mode column when necessary; editable details retain its full value. Provider download policies and Routing Mode are independent.
 

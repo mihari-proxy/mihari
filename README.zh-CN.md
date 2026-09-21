@@ -62,7 +62,7 @@ TUI 节点测速进行中时，卡片在协议名称旁仅显示盲文加载动�
 
 ↑/↓ 在列表内移动，Enter/Space 展开标题或切换开关；Tab/Shift+Tab 在左侧目录、右侧配置区、Cancel、Save 之间切换。底部按钮固定可见，任意位置按 **Ctrl+S** 保存，Esc/Cancel 放弃草稿，保存后生效。TUI 与 daemon 应配套升级；旧版不能读取包含非默认 Proxies 设置的偏好文件，将两个开关恢复默认会移除该可选块。
 
-TUI 订阅表格的 Name 和 Traffic 列按内容分配宽度，分别最多占 32 和 24 个终端字符格；多余空间留在右侧，窄屏优先隐藏次要字段。
+TUI 订阅表格的 Name 和 Traffic 列按内容分配宽度，分别最多占 40 和 24 个终端字符格；多余空间留在右侧，窄屏优先隐藏次要字段。
 
 订阅下载 Mode 将 `auto` 显示为 **PROXY w Fallback to DIRECT**。回退覆盖主订阅 YAML 的连接超时和成功响应正文读取超时等可重试网络错误；HTTP 错误、无效文档不触发回退。每次代理/直连尝试保留 30 秒预算，daemon 的 Add/Refresh 整次执行上限为 120 秒，CLI/TUI 每条等待最多 180 秒以容纳有界回滚和响应。更短的调用方 deadline 与主动取消仍优先，批量刷新逐条计时。窄列表必要时整列隐藏 Mode，进入详情可查看完整值。Provider 下载策略及 Proxies 页 Routing Mode 独立于此设置。
 
