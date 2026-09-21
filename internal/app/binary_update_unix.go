@@ -21,6 +21,7 @@ type unixBinaryTarget struct {
 	parent, stage          *platform.TrustedRoot
 	currentID, candidateID platform.FileIdentity
 	currentName, stageName string
+	published              bool
 }
 
 func openUnixBinaryTarget(ctx context.Context, binary string) (target *unixBinaryTarget, err error) {
@@ -55,9 +56,6 @@ func openUnixBinaryTarget(ctx context.Context, binary string) (target *unixBinar
 }
 
 func (t *unixBinaryTarget) Stage(ctx context.Context, req InstallRequest) (err error) {
-	if err = cleanupUnixBinaryStages(ctx, t.parent); err != nil {
-		return err
-	}
 	t.stageName = ".mihari-update-" + (&InstallTransaction{}).newTransactionID()
 	t.stage, err = t.parent.OpenDir(ctx, t.stageName, platform.RootPolicy{Owner: 0, Mode: 0700, AllowCreate: true})
 	if err != nil {
@@ -114,12 +112,19 @@ func (t *unixBinaryTarget) Publish(ctx context.Context) (bool, error) {
 	if err = t.lease.Validate(ctx, path); err != nil {
 		return false, err
 	}
-	return t.stage.MoveFileToPublished(ctx, "candidate", t.candidateID, t.parent, t.currentName, 0755, &t.currentID)
+	committed, err := t.stage.MoveFileToPublished(ctx, "candidate", t.candidateID, t.parent, t.currentName, 0755, &t.currentID)
+	t.published = committed
+	return committed, err
 }
 
 func (t *unixBinaryTarget) Close() (err error) {
 	if t == nil {
 		return nil
+	}
+	if t.published && t.stage != nil {
+		// Keep the completed stage identity for cleanup on a later startup.
+		err = errors.Join(err, t.stage.Close())
+		t.stage = nil
 	}
 	if t.stage != nil {
 		file, id, readErr := t.stage.OpenFile(context.Background(), "candidate", 0755)

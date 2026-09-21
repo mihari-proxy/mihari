@@ -49,7 +49,7 @@ func (s *unixProvenanceStore) check(ctx context.Context) error {
 }
 func rolePath(r ProvenanceRole, tx string) (string, uint32, error) {
 	switch r {
-	case UpdateJournal, UpdateCandidate, UpdateBackup, UpdateRestore, UpdateMarker, UpdateInterrupted:
+	case UpdateJournal, UpdateCandidate, UpdateBackup, UpdateRestore, UpdateMarker, UpdateInterrupted, UpdateCleanup:
 		return updateRolePath(r, tx)
 	case InstalledBinary:
 		return "bin/mihomo", 0700, nil

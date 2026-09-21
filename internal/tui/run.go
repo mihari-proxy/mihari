@@ -41,6 +41,7 @@ type Options struct {
 	Output                    io.Writer
 	OpenLogging               LoggingFactory
 	BuildExportLogs           func(LoggingResources) ui.ExportLogsOptions
+	StartupCleanup            func(context.Context) error
 	ErrorOutput               io.Writer
 }
 
@@ -273,6 +274,7 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 		return errors.Join(historyErr, resources.Close())
 	}
 	diagnosticReporter := diagnostics.NewOwner(history, logging.NewDiagnosticReporter(resources.Runtime.Logger(), resources.Redactor)).Report
+	runStartupCleanup(ctx, options.StartupCleanup, diagnosticReporter)
 	localDiagnostics := ui.LocalTaskDiagnostics{Reporter: diagnosticReporter}
 	actions.Diagnostics.Reporter = diagnosticReporter
 	installationWorker.diagnostics = actions.Diagnostics

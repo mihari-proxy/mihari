@@ -150,7 +150,7 @@ func TestCoreReinstall_UsesOriginalChannelAndRetainsInterruptedBackup(t *testing
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := u.Finish(ctx); err != nil {
+	if err := u.DeferCleanup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := authorizePendingUpdate(ctx, store); err != nil {

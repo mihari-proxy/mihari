@@ -37,11 +37,12 @@ import (
 )
 
 type RuntimeAssembly struct {
-	SetupRequired bool
-	Manager       *runtimeapi.Manager
-	Store         *state.Store
-	Web           *web.Server
-	mihomoStarter supervisor.CommandStarter
+	StartupCleanup func(context.Context) error
+	SetupRequired  bool
+	Manager        *runtimeapi.Manager
+	Store          *state.Store
+	Web            *web.Server
+	mihomoStarter  supervisor.CommandStarter
 }
 
 type RuntimeBuildOptions struct {
@@ -375,7 +376,20 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		},
 	})
 	webGateway.Mutator = webMutator{manager: manager, reporter: options.DiagnosticReporter}
-	return &RuntimeAssembly{Manager: manager, Store: store, Web: webGateway, mihomoStarter: mihomoStarter}, nil
+	return &RuntimeAssembly{Manager: manager, Store: store, Web: webGateway, mihomoStarter: mihomoStarter,
+		StartupCleanup: func(ctx context.Context) error {
+			store := installer.UpdateStore()
+			cleanupErr := core.CleanupCompletedUpdates(ctx, store)
+			if cleanupErr != nil {
+				return fmt.Errorf("cleanup core updates in %s: %w", filepath.Join(paths.Root, "staging", "core"), cleanupErr)
+			}
+			interrupted, err := core.InterruptedUpdate(ctx, store)
+			if err != nil || interrupted {
+				return errors.Join(cleanupErr, err)
+			}
+			return errors.Join(cleanupErr, platform.CleanupReplacedBinary(ctx, paths.CoreBinary))
+		},
+	}, nil
 }
 
 func schedulerSubscriptionRefresh(refresh func(context.Context, runtimeapi.Operation, string) (subscription.PublicProfile, error), now func() time.Time) func(context.Context, string) error {

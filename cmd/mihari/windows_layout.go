@@ -137,6 +137,7 @@ func legacyDependencies(diagnosticStderr, loggingFailureStderr io.Writer) cli.De
 				return err
 			}
 			return tui.Run(ctx, tui.Options{
+				StartupCleanup: app.CleanupCurrentBinaryUpdates,
 				Client:         localClient,
 				Service:        serviceManager,
 				Uninstaller:    uninstaller,

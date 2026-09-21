@@ -75,7 +75,7 @@ func TestFileUpdate_RetainsBackupUntilOwnerAcceptsRollback(t *testing.T) {
 	if err := u.CompleteRollback(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := u.Finish(ctx); err != nil {
+	if err := CleanupCompletedUpdates(ctx, store); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Load(ctx, UpdateJournal, ""); !errors.Is(err, os.ErrNotExist) {
@@ -174,7 +174,7 @@ func TestFileUpdate_PrepareRequiresOwnerAndKeepsInstalledCore(t *testing.T) {
 	if err := u.Commit(t.Context(), func(CoreSelection) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if err := u.Finish(t.Context()); err != nil {
+	if err := CleanupCompletedUpdates(t.Context(), store); err != nil {
 		t.Fatal(err)
 	}
 	if body, err := os.ReadFile(binary); err != nil || string(body) != "downloaded core" {

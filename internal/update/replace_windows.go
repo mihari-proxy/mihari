@@ -10,10 +10,10 @@ import (
 )
 
 func replaceBinary(candidate, target string) (error, error) {
-	return replaceBinaryWithOps(candidate, target, os.Rename, os.Remove)
+	return replaceBinaryWithOps(candidate, target, os.Rename)
 }
 
-func replaceBinaryWithOps(candidate, target string, rename func(string, string) error, remove func(string) error) (warning, resultErr error) {
+func replaceBinaryWithOps(candidate, target string, rename func(string, string) error) (warning, resultErr error) {
 	stash := fmt.Sprintf("%s.old-%d", target, time.Now().UnixNano())
 	stashed := false
 	if err := rename(target, stash); err == nil {
@@ -27,8 +27,6 @@ func replaceBinaryWithOps(candidate, target string, rename func(string, string) 
 		}
 		return nil, err
 	}
-	if stashed {
-		return remove(stash), nil
-	}
+	// A later startup retries deletion after old processes have released the image.
 	return nil, nil
 }

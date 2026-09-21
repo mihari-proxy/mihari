@@ -235,6 +235,13 @@ func (c *Candidate) cleanupProtected() {
 			return
 		}
 	}
+	// The completed owner has transferred these objects to startup cleanup.
+	// Archived interrupted transactions likewise retain their recovery identity.
+	for _, role := range []ProvenanceRole{UpdateCleanup, UpdateInterrupted} {
+		if _, err := p.store.Load(ctx, role, p.transaction); !errors.Is(err, os.ErrNotExist) {
+			return
+		}
+	}
 	for _, item := range []struct {
 		role     ProvenanceRole
 		expected ProvenanceObject

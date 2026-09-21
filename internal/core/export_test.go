@@ -108,6 +108,29 @@ func (f *TestTrustedFixture) UpdatePending() bool {
 	return !errors.Is(err, os.ErrNotExist)
 }
 
+func (f *TestTrustedFixture) HasDeferredUpdate() bool {
+	release, err := f.store.execution().acquire(context.Background())
+	if err != nil {
+		return false
+	}
+	defer release()
+	transactions, err := f.store.cleanupTransactions(context.Background())
+	if err != nil {
+		return false
+	}
+	for _, tx := range transactions {
+		record, err := f.store.Inspect(context.Background(), UpdateCleanup, tx)
+		if err != nil || !record.Present {
+			continue
+		}
+		marker, err := f.store.Inspect(context.Background(), UpdateMarker, tx)
+		if err == nil && marker.Present {
+			return true
+		}
+	}
+	return false
+}
+
 func (f *TestTrustedFixture) UpdateStartsNewCore() bool {
 	raw, err := f.store.Load(context.Background(), UpdateJournal, "")
 	if err != nil {
