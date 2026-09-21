@@ -82,6 +82,8 @@ F2 keeps each occurrence as a separate record, with severity colors and a highli
 
 A single CGO-free static binary (< 15 MB) contains everything, with built-in GitHub Releases self-update and local GeoIP resolution.
 
+Updates retain retired Mihari/mihomo binaries and completed transaction leftovers for a later startup. The daemon cleans its core files; daemon and TUI startup also try to clean leftovers beside the current Mihari executable. Busy files or other cleanup failures stay for the next startup and appear as warnings in **F2**, without failing the update or startup. Consecutive core updates remain available. Ordinary CLI queries do not trigger cleanup; interrupted recovery material and user backups are preserved.
+
 ## Quick start
 
 **Install**

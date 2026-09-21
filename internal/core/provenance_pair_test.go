@@ -31,7 +31,7 @@ func newMemoryStore() *memoryStore {
 func (s *memoryStore) coreStore() storeBackend { return s }
 func objectKey(r ProvenanceRole, tx string) string {
 	switch r {
-	case UpdateJournal, UpdateCandidate, UpdateBackup, UpdateRestore, UpdateMarker, UpdateInterrupted:
+	case UpdateJournal, UpdateCandidate, UpdateBackup, UpdateRestore, UpdateMarker, UpdateInterrupted, UpdateCleanup:
 		path, _, err := updateRolePath(r, tx)
 		if err != nil {
 			return "invalid:" + string(r) + ":" + tx

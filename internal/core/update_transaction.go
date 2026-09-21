@@ -17,6 +17,8 @@ const (
 	UpdateRestore     ProvenanceRole = "update_restore"
 	UpdateMarker      ProvenanceRole = "update_marker"
 	UpdateInterrupted ProvenanceRole = "update_interrupted"
+	// UpdateCleanup retains a completed transaction until a later startup.
+	UpdateCleanup ProvenanceRole = "update_cleanup"
 )
 
 // CoreSelection is the core-owned portion of settings and observed identity.
@@ -111,34 +113,41 @@ func OpenUpdate(ctx context.Context, store ProvenanceStore) (*UpdateTransaction,
 	if _, err := store.Load(ctx, PairJournal, ""); !errors.Is(err, os.ErrNotExist) {
 		return nil, errors.Join(dataFailure("legacy and current core recovery journals coexist"), err)
 	}
-	var journal updateJournal
-	if err := decodeStrict(raw, &journal); err != nil {
+	journal, err := decodeUpdateJournal(raw)
+	if err != nil {
 		return nil, err
-	}
-	if journal.Schema != updateSchema || !validTransaction(journal.Transaction) || !validSelection(journal.Intent.Previous) || !validSelection(journal.Intent.Next) {
-		return nil, dataFailure("invalid core update journal")
-	}
-	switch journal.Phase {
-	case "prepared", "publishing", "verifying", "committing", "committed", "rolling_back", "rolled_back", "recovery_required":
-	default:
-		return nil, dataFailure("invalid core update phase")
-	}
-	for _, object := range []ProvenanceObject{journal.Old, journal.New, journal.Backup, journal.Restore, journal.Marker} {
-		if !validProvenanceObject(object) {
-			return nil, dataFailure("invalid core update file observation")
-		}
-	}
-	if !journal.New.Present || !journal.Marker.Present || journal.Marker.SHA256 != digest([]byte(journal.Transaction)) || journal.Old.Present != journal.Backup.Present || journal.Old.Present != journal.Restore.Present {
-		return nil, dataFailure("incomplete core update journal")
-	}
-	if journal.Old.Present && (journal.Old.SHA256 != journal.Backup.SHA256 || journal.Old.SHA256 != journal.Restore.SHA256) {
-		return nil, dataFailure("core update recovery hashes disagree")
 	}
 	u := &UpdateTransaction{store: store, journal: journal}
 	if err := u.verifyMarker(ctx); err != nil {
 		return nil, err
 	}
 	return u, nil
+}
+
+func decodeUpdateJournal(raw []byte) (journal updateJournal, err error) {
+	if err := decodeStrict(raw, &journal); err != nil {
+		return journal, err
+	}
+	if journal.Schema != updateSchema || !validTransaction(journal.Transaction) || !validSelection(journal.Intent.Previous) || !validSelection(journal.Intent.Next) {
+		return journal, dataFailure("invalid core update journal")
+	}
+	switch journal.Phase {
+	case "prepared", "publishing", "verifying", "committing", "committed", "rolling_back", "rolled_back", "recovery_required":
+	default:
+		return journal, dataFailure("invalid core update phase")
+	}
+	for _, object := range []ProvenanceObject{journal.Old, journal.New, journal.Backup, journal.Restore, journal.Marker} {
+		if !validProvenanceObject(object) {
+			return journal, dataFailure("invalid core update file observation")
+		}
+	}
+	if !journal.New.Present || !journal.Marker.Present || journal.Marker.SHA256 != digest([]byte(journal.Transaction)) || journal.Old.Present != journal.Backup.Present || journal.Old.Present != journal.Restore.Present {
+		return journal, dataFailure("incomplete core update journal")
+	}
+	if journal.Old.Present && (journal.Old.SHA256 != journal.Backup.SHA256 || journal.Old.SHA256 != journal.Restore.SHA256) {
+		return journal, dataFailure("core update recovery hashes disagree")
+	}
+	return journal, nil
 }
 
 // BeginUpdate snapshots a prepared fixed-role candidate and the old local core.
@@ -166,7 +175,14 @@ func beginUpdate(ctx context.Context, store ProvenanceStore, transaction string,
 		return nil, pendingErr
 	}
 	if pending && !reinstall {
-		return nil, dataFailure("core recovery required before update")
+		completed, err := OpenUpdate(ctx, store)
+		if err != nil {
+			return nil, err
+		}
+		if err := completed.deferCleanupLocked(ctx); err != nil {
+			return nil, err
+		}
+		pending = false
 	}
 	if reinstall {
 		if pending {
@@ -372,69 +388,6 @@ func (u *UpdateTransaction) verifyFinalCore(ctx context.Context, committed bool)
 		return nil
 	}
 	return dataFailure("core identity disagrees with completed update")
-}
-
-// Finish retires only an acknowledged commit or health-confirmed rollback.
-// Each removal is identity-bound and can be repeated after a crash.
-func (u *UpdateTransaction) Finish(ctx context.Context) error {
-	if u == nil || u.uncertain || (u.journal.Phase != "committed" && u.journal.Phase != "rolled_back") {
-		return dataFailure("core update has not completed")
-	}
-	release, err := u.store.coreStore().execution().acquire(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-	if err := u.verifyFinalCore(ctx, u.journal.Phase == "committed"); err != nil {
-		return err
-	}
-	journal, err := u.store.Inspect(ctx, UpdateJournal, "")
-	if err != nil {
-		return err
-	}
-	if journal.Present {
-		raw, err := json.Marshal(u.journal)
-		if err != nil {
-			return err
-		}
-		if journal.SHA256 != digest(raw) {
-			return dataFailure("core cleanup journal changed")
-		}
-		if err := u.verifyMarker(ctx); err != nil {
-			return err
-		}
-		for _, item := range []struct {
-			role     ProvenanceRole
-			expected ProvenanceObject
-		}{
-			{UpdateCandidate, u.journal.New}, {UpdateBackup, u.journal.Backup}, {UpdateRestore, u.journal.Restore},
-		} {
-			current, err := u.store.Inspect(ctx, item.role, u.journal.Transaction)
-			if err != nil {
-				return err
-			}
-			if !current.Present {
-				continue
-			} // Already consumed or removed by a previous cleanup.
-			if !sameObject(current, item.expected) {
-				return dataFailure("core cleanup object changed")
-			}
-			if err := u.move(ctx, item.role, "", current, ProvenanceObject{}); err != nil {
-				return err
-			}
-		}
-		if err := u.move(ctx, UpdateJournal, "", journal, ProvenanceObject{}); err != nil {
-			return err
-		}
-	}
-	marker, err := u.store.Inspect(ctx, UpdateMarker, u.journal.Transaction)
-	if err != nil || !marker.Present {
-		return err
-	}
-	if !sameObject(marker, u.journal.Marker) {
-		return dataFailure("core cleanup marker changed")
-	}
-	return u.move(ctx, UpdateMarker, "", marker, ProvenanceObject{})
 }
 
 // Commit records intent before saving settings and then the logical commit point.

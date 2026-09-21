@@ -23,6 +23,8 @@ func updateRolePath(role ProvenanceRole, transaction string) (string, uint32, er
 		name = "backup-binary"
 	case UpdateInterrupted:
 		name = "interrupted-update.json"
+	case UpdateCleanup:
+		name = "pending-cleanup.json"
 	case UpdateMarker:
 		name = "transaction-id"
 	default:

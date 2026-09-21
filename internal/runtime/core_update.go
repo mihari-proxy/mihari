@@ -172,13 +172,13 @@ func (m *Manager) installCoreUpdate(ctx context.Context, operation Operation, in
 			if err := m.publishCoreSelection(recoveryCtx, inputs.selection, session.PID(), session.StartedAt()); err != nil {
 				return m.blockCoreUpdate(recoveryCtx, errors.Join(updateErr, err))
 			}
-			collectWarning(ctx, "core", "recovery.cleanup.warning", update.Finish(recoveryCtx))
+			collectWarning(ctx, "core", "recovery.cleanup.warning", update.DeferCleanup(recoveryCtx))
 			return updateErr
 		}
 		if err := m.publishCoreSelection(recoveryCtx, next, session.PID(), session.StartedAt()); err != nil {
 			return m.blockCoreUpdate(recoveryCtx, update.RequireRecovery(recoveryCtx, err))
 		}
-		collectWarning(ctx, "core", "update.cleanup.warning", update.Finish(recoveryCtx))
+		collectWarning(ctx, "core", "update.cleanup.warning", update.DeferCleanup(recoveryCtx))
 		if !update.HasPreviousCore() && session.PID() != 0 {
 			collectWarning(ctx, "system-proxy", "restore.warning", m.ApplyDesiredSystemProxy(recoveryCtx))
 		}
