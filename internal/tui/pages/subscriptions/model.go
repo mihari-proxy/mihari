@@ -596,7 +596,7 @@ func (m *Model) subscriptionColumns() []ui.TableColumn {
 		modeWidth = max(modeWidth, lipgloss.Width(proxyModeLabel(subscription.ProxyMode)))
 	}
 	return []ui.TableColumn{
-		{ID: "name", Title: ui.NameLabel, MinWidth: 10, MaxWidth: min(nameWidth, 32), Flex: 3, Priority: 8},
+		{ID: "name", Title: ui.NameLabel, MinWidth: 10, MaxWidth: min(nameWidth, 40), Flex: 3, Priority: 8},
 		{ID: "active", Title: "InUse", MinWidth: 5, Flex: 0, Priority: 7, Align: ui.AlignCenter},
 		{ID: "state", Title: "Enabled", MinWidth: 8, Flex: 0, Priority: 6},
 		{ID: "load", Title: "Status", MinWidth: 12, Flex: 0, Priority: 5},
@@ -619,9 +619,15 @@ func (m *Model) subscriptionWidths() ([]ui.TableColumn, []int) {
 	return ui.FitPriorityColumns(m.subscriptionColumns(), avail, 2)
 }
 
+// View renders the subscription list with compact columns and full-width row
+// focus, or the active add/edit form.
 func (m *Model) View() string {
+	inner := ui.FullSectionInner(m.layoutWidth())
+	textWidth := ui.SectionTextWidth(inner)
 	cols, widths := m.subscriptionWidths()
-	header, rule := ui.RenderHeaderRow(m.theme, cols, widths, 2, -1, false)
+	header, _ := ui.RenderHeaderRow(m.theme, cols, widths, 2, -1, false)
+	// Fill the section independently of the compact, content-sized columns.
+	rule := m.theme.SurfaceBorder.Render(strings.Repeat("─", max(0, textWidth-2)))
 	bodyLines := []string{"  " + header, "  " + rule}
 	if m.lastError != "" {
 		bodyLines = append(bodyLines, m.theme.Muted.Render(m.lastError))
@@ -644,11 +650,11 @@ func (m *Model) View() string {
 		line := marker + entry.Render(m.theme, cols, widths)
 		// Keyboard focus uses RowFocus; business active marker is ● (Success).
 		if rowFocused && m.contentFocused {
+			line = ui.PadCell(line, textWidth, ui.AlignLeft)
 			line = ui.ApplyFocusStyle(line, m.theme.RowFocus)
 		}
 		bodyLines = append(bodyLines, line)
 	}
-	inner := ui.FullSectionInner(m.layoutWidth())
 	title := ui.FormatSubscriptionsTitle(len(m.subscriptions))
 	content := ui.RenderBorderedSection(m.theme, title, strings.Join(bodyLines, "\n"), inner)
 	if m.form != nil {
