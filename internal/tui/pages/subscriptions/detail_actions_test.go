@@ -159,21 +159,40 @@ func TestDetailAction_ErrorsKeepDraftAndDoNotReplay(t *testing.T) {
 }
 
 func TestDetailAction_LateResultPreservesNewDialogAndCatalog(t *testing.T) {
-	p := protocol.Subscription{ID: "a", Name: "Main", Enabled: true, Cached: true}
-	c := &fakeClient{toggleResult: protocol.SubscriptionResult{Revision: 8, Subscription: protocol.Subscription{ID: "a", Name: "Main", Enabled: false}}}
-	m := New(c, nil, nil)
-	m.SetSubscriptions(protocol.SubscriptionList{Revision: 7, ActiveID: "a", Subscriptions: []protocol.Subscription{p}})
-	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	focusDetailAction(t, m, "Enabled")
-	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
-	p.Name = "Newer"
-	m.SetSubscriptions(protocol.SubscriptionList{Revision: 9, ActiveID: "a", Subscriptions: []protocol.Subscription{p}})
-	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m.form.inputs[0].SetValue("New draft")
-	drainCmd(t, m, cmd)
-	if m.form == nil || m.form.inputs[0].Value() != "New draft" || m.revision != 9 || m.subscriptions[0].Name != "Newer" || !m.subscriptions[0].Enabled || m.activeID != "a" {
-		t.Fatal("late action changed newer dialog or catalog")
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"success", nil},
+		{"rejected", protocol.APIError{Code: protocol.CodeInvalidState, Message: "old rejection"}},
+		{"conflict", protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "old conflict"}},
+		{"unknown", context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := protocol.Subscription{ID: "a", Name: "Main", Enabled: true, Cached: true}
+			c := &fakeClient{toggleErr: tc.err, toggleResult: protocol.SubscriptionResult{Revision: 8, Subscription: protocol.Subscription{ID: "a", Name: "Main", Enabled: false}}}
+			m := New(c, nil, nil)
+			m.SetSubscriptions(protocol.SubscriptionList{Revision: 7, ActiveID: "a", Subscriptions: []protocol.Subscription{p}})
+			m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			focusDetailAction(t, m, "Enabled")
+			_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+			p.Name = "Newer"
+			m.SetSubscriptions(protocol.SubscriptionList{Revision: 9, ActiveID: "a", Subscriptions: []protocol.Subscription{p}})
+			m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			m.form.inputs[0].SetValue("New draft")
+			m.lastError = "New page error"
+			m.form.errorText = "New form error"
+			c.list = protocol.SubscriptionList{Revision: 9, ActiveID: "a", Subscriptions: []protocol.Subscription{p}}
+			next := drainCmd(t, m, cmd)
+			drainCmd(t, m, next)
+			if m.form == nil || m.form.inputs[0].Value() != "New draft" || m.revision != 9 || m.subscriptions[0].Name != "Newer" || !m.subscriptions[0].Enabled || m.activeID != "a" {
+				t.Fatal("late action changed newer dialog or catalog")
+			}
+			if m.lastError != "New page error" || m.form.errorText != "New form error" {
+				t.Fatal("late action changed current error feedback")
+			}
+		})
 	}
 }
 

@@ -85,6 +85,12 @@ func (m *Model) finishDetailAction(msg mutationResultMsg) tea.Cmd {
 		m.form.actionOperation = ""
 	}
 	if msg.err != nil {
+		// A closed dialog no longer owns page feedback. Its failure still
+		// reaches shell diagnostics through mutationResultMsg, but must not
+		// start a reload that could clear a newer dialog's page error.
+		if !currentDialog {
+			return m.loadSpinCmdIfNeeded()
+		}
 		m.lastError = subscriptionErrorMessage(msg.err)
 		var api protocol.APIError
 		unknown := !errors.As(msg.err, &api) || api.Code == protocol.CodeDaemonUnavailable || errors.Is(msg.err, context.DeadlineExceeded)
@@ -92,19 +98,17 @@ func (m *Model) finishDetailAction(msg mutationResultMsg) tea.Cmd {
 		if errors.As(msg.err, &outcome) {
 			unknown = outcome.OutcomeUnknown()
 		}
-		if currentDialog {
-			m.form.errorText = m.lastError
-			if unknown {
-				m.form.actionUncertain = true
-				m.form.errorText = "Action outcome unknown. Close and reopen details to check the current state before retrying. " + m.lastError
-			}
-			m.ensureFormFocus()
-			// Keep the start of failure feedback visible even in a short window.
-			layout := m.formLayout()
-			lastField := layout.fields[len(layout.fields)-1]
-			m.dialogScroll = max(0, min(lastField.last+2, len(layout.lines)-layout.bodyHeight))
-			m.dialogManualScroll = true
+		m.form.errorText = m.lastError
+		if unknown {
+			m.form.actionUncertain = true
+			m.form.errorText = "Action outcome unknown. Close and reopen details to check the current state before retrying. " + m.lastError
 		}
+		m.ensureFormFocus()
+		// Keep the start of failure feedback visible even in a short window.
+		layout := m.formLayout()
+		lastField := layout.fields[len(layout.fields)-1]
+		m.dialogScroll = max(0, min(lastField.last+2, len(layout.lines)-layout.bodyHeight))
+		m.dialogManualScroll = true
 		if unknown || api.Code == protocol.CodeRevisionConflict {
 			return tea.Batch(m.reload(), m.loadSpinCmdIfNeeded())
 		}
@@ -125,8 +129,8 @@ func (m *Model) finishDetailAction(msg mutationResultMsg) tea.Cmd {
 			m.formRevision = msg.result.Revision
 		}
 	}
-	m.lastError = ""
 	if currentDialog {
+		m.lastError = ""
 		m.ensureFormFocus()
 	}
 	return m.loadSpinCmdIfNeeded()
