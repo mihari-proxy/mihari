@@ -151,8 +151,9 @@ type WebGateway interface {
 }
 
 type Manager struct {
-	routingMessage string // guarded by mutation ownership
-	trustedCore    *core.TrustedExecution
+	applicationUpdate applicationUpdateGate
+	routingMessage    string // guarded by mutation ownership
+	trustedCore       *core.TrustedExecution
 
 	subscriptionRecoveryTimeout time.Duration
 	subscriptionTimeout         time.Duration
@@ -923,7 +924,7 @@ func (m *Manager) checkOpen() error {
 }
 
 func (m *Manager) doOperation(ctx context.Context, key string, execute func(context.Context) (any, error)) (any, error) {
-	if m.ownsCoreUpdate(ctx) {
+	if m.ownsCoreUpdate(ctx) || ctx.Value(applicationWorkKey{}) == m {
 		// Internal startup/health work belongs to the enclosing update owner;
 		// retain its warning batch and report a final failure only once.
 		return execute(ctx)
@@ -932,7 +933,12 @@ func (m *Manager) doOperation(ctx context.Context, key string, execute func(cont
 		return nil, err
 	}
 	executeOnce := func() (any, protocol.WarningOutcome, error) {
-		executionCtx, batch := newOperationDiagnostics(ctx, key)
+		acceptedCtx, finish, admissionErr := m.beginApplicationWork(ctx)
+		if admissionErr != nil {
+			return nil, protocol.WarningOutcome{}, admissionErr
+		}
+		defer finish()
+		executionCtx, batch := newOperationDiagnostics(acceptedCtx, key)
 		var result any
 		var err error
 		if m.coreRecovery.Load() && !strings.HasPrefix(key, "reinstall:") {

@@ -276,7 +276,7 @@ func allowedBinEntry(parts []string, isDir bool) bool {
 		return false
 	}
 	name := parts[0]
-	return name == "mihomo" || name == "mihomo.exe" || name == "mihomo.provenance.json" || name == "core-channel" || canonicalPositiveSuffix(name, "mihomo.exe.old-")
+	return name == "mihomo" || name == "mihomo.exe" || name == "mihomo.provenance.json" || name == "core-channel" || name == ".mihari-binary.lock" || canonicalPositiveSuffix(name, "mihomo.exe.old-")
 }
 
 func allowedRuntimeEntry(parts []string, isDir bool) bool {

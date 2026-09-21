@@ -118,6 +118,10 @@ func (m *Manager) checkIfRevision(revision *uint64) error {
 func (m *Manager) lockMaintenance(ctx context.Context) error {
 	select {
 	case <-m.maintenance:
+		if m.applicationUpdate.prepared.Load() {
+			m.releaseMutation()
+			return updatePreparationConflict()
+		}
 		if err := m.checkOpen(); err != nil && !m.ownsCoreUpdate(ctx) {
 			m.unlock()
 			return err

@@ -20,6 +20,50 @@ type closeErrorListener struct {
 	closes atomic.Int32
 }
 
+func TestRun_StartupCleanupDoesNotBlockReadyOrShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready, started, joined := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Options{Endpoint: transporttest.Endpoint(t), Token: "fixture", Ready: ready, StartupCleanup: func(ctx context.Context) error {
+			select {
+			case <-ready:
+			default:
+				t.Error("cleanup started before Ready")
+			}
+			close(started)
+			<-ctx.Done()
+			close(joined)
+			return ctx.Err()
+		}})
+	}()
+	select {
+	case <-ready:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Ready blocked")
+	}
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cleanup never started")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("shutdown blocked")
+	}
+	select {
+	case <-joined:
+	default:
+		t.Fatal("cleanup not joined")
+	}
+}
+
 type closedOnSecondListener struct {
 	net.Listener
 	closes atomic.Int32

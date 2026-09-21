@@ -4,7 +4,10 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -25,6 +28,23 @@ import (
 )
 
 func executeProcess(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if !daemonInvocation(args) {
+		clientCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		closeSignal, err := platform.WindowsClientExitSignal(clientCtx, cancel)
+		if err != nil {
+			// Registration is optional for normal CLI operation. An updater will
+			// refuse an unregistered live instance and request that it be closed.
+			_, _ = fmt.Fprintln(stderr, err)
+		} else {
+			defer func() {
+				if err := closeSignal(); err != nil {
+					_, _ = fmt.Fprintln(stderr, err)
+				}
+			}()
+		}
+		ctx = clientCtx
+	}
 	var diagnosticStderr io.Writer
 	if daemonInvocation(args) && !daemonJSONOutput(args) && !service.IsInteractive() {
 		diagnosticStderr = stderr
@@ -41,11 +61,33 @@ func legacyDependencies(diagnosticStderr, loggingFailureStderr io.Writer) cli.De
 	var serviceManager *service.Manager
 	ready := make(chan struct{})
 	runDaemonBody := func(ctx context.Context) error {
+		var runtimeJob string
+		if elevate.IsElevated() {
+			var generation [16]byte
+			if _, err := rand.Read(generation[:]); err != nil {
+				return err
+			}
+			job, err := platform.CreateWindowsRuntimeJob(ctx, hex.EncodeToString(generation[:]))
+			if err != nil {
+				return err
+			}
+			// The process owns the native handles until os.Exit. Closing this
+			// kill-on-close Job here would terminate the daemon itself.
+			runtimeJob = job.Name()
+		}
 		root, err := prepareLocalRoot()
 		if err != nil {
 			return err
 		}
 		return runDaemonWith(ctx, daemonRunDeps{
+			UpdateRuntimeJob: runtimeJob,
+			StartupCleanup: func(ctx context.Context) error {
+				executable, err := os.Executable()
+				if err != nil {
+					return err
+				}
+				return app.CleanupApplicationBinary(ctx, executable)
+			},
 			Paths:                root.Paths,
 			PrivateFS:            root.FS,
 			Token:                root.Token,
@@ -75,6 +117,8 @@ func legacyDependencies(diagnosticStderr, loggingFailureStderr io.Writer) cli.De
 	}
 	selfUpdateCompletion := app.NewSelfUpdateServiceCompletion(serviceManager, localClient)
 	selfUpdater := update.SelfUpdater{ObserveTargets: selfUpdateCompletion.ObserveReplacement, AfterReplacePrepared: selfUpdateCompletion.AfterPreparedReplace}
+	maintenance := &app.WindowsUpdateMaintenance{Client: localClient, Service: serviceManager, ObserveTargets: selfUpdateCompletion.ObserveReplacement, ManualDaemonStopped: func() { _, _ = fmt.Fprintln(os.Stderr, "请先按原方式启动 mihari daemon") }}
+	selfUpdater.AcquireMaintenance = maintenance.Acquire
 	executable, executableError := os.Executable()
 	var uninstaller *app.Uninstaller
 	if paths, err := defaultAbsolutePaths(); err == nil {
@@ -145,13 +189,12 @@ func legacyDependencies(diagnosticStderr, loggingFailureStderr io.Writer) cli.De
 				BinaryPath:     executable,
 				Elevated:       elevate.IsElevated,
 				Relaunch: func() error {
-					return relaunchWithLocalRootCleanup(func() error {
-						return platform.Relaunch(executable, tuiRelaunchArgs(executable), os.Environ())
-					})
+					return finishWindowsUpdate(os.Stdout)
 				},
-				Input:       os.Stdin,
-				Output:      os.Stdout,
-				ErrorOutput: os.Stderr,
+				StartupCleanup: func(ctx context.Context) error { return app.CleanupApplicationBinary(ctx, executable) },
+				Input:          os.Stdin,
+				Output:         os.Stdout,
+				ErrorOutput:    os.Stderr,
 				OpenLogging: func(ctx context.Context) (tui.LoggingResources, error) {
 					return openTUILogging(ctx, root.Paths, root.Token, root.FS, os.Stderr)
 				},
@@ -162,4 +205,11 @@ func legacyDependencies(diagnosticStderr, loggingFailureStderr io.Writer) cli.De
 		RunInstallValidation: runInstallValidation,
 	}
 	return dependencies
+}
+
+func finishWindowsUpdate(out io.Writer) error {
+	return relaunchWithLocalRootCleanup(func() error {
+		_, err := fmt.Fprintln(out, "请重新输入 mihari")
+		return err
+	})
 }

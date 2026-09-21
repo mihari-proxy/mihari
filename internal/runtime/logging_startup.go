@@ -16,6 +16,16 @@ import (
 // PrepareCoreStart prepares saved configuration and holds mutation ownership
 // until the caller has started the child and invoked the returned release.
 func (m *Manager) PrepareCoreStart(ctx context.Context) (func(), error) {
+	ctx, finish, admissionErr := m.beginApplicationWork(ctx)
+	if admissionErr != nil {
+		return nil, admissionErr
+	}
+	retained := false
+	defer func() {
+		if !retained {
+			finish()
+		}
+	}()
 	if guard, ok := m.installer.(interface{ CheckExecution(context.Context) error }); ok {
 		if err := guard.CheckExecution(ctx); err != nil {
 			return nil, err
@@ -96,7 +106,9 @@ func (m *Manager) PrepareCoreStart(ctx context.Context) (func(), error) {
 	m.loggingUnsaved = false
 	m.loggingObservation = loggingObservation{}
 	success = true
+	retained = true
 	return func() {
+		defer finish()
 		m.releaseMutation()
 		m.reportWarning(ctx, "logging", "candidate.cleanup.failed", cleanupErr)
 	}, nil

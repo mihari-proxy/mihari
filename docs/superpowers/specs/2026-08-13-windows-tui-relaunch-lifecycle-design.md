@@ -1,5 +1,7 @@
 # Windows TUI 自更新进程交接修复设计
 
+> Windows 自更新入口的自动 relaunch 已由 [ADR 0006](../../adr/0006-windows-self-update-finalization.md) 的退出后手动重新输入方案取代；本文保留原问题与历史决策。
+
 日期：2026-08-13
 状态：已实施，待 Pull Request
 关联 Issue：#55

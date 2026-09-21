@@ -3,7 +3,6 @@ package supervisor
 import (
 	"context"
 	"errors"
-	"fmt"
 	"github.com/mihari-proxy/mihari/internal/core"
 	"io"
 	"os/exec"
@@ -39,15 +38,7 @@ func (s CommandStarter) StartContext(ctx context.Context) (Child, error) {
 	if err := prepareChildMode(command, s.ShareProcessGroup); err != nil {
 		return nil, err
 	}
-	if err := command.Start(); err != nil {
-		return nil, fmt.Errorf("start mihomo: %w", err)
-	}
-	if err := trackChild(command); err != nil {
-		_ = command.Process.Kill()
-		_ = command.Wait()
-		return nil, fmt.Errorf("track mihomo child: %w", err)
-	}
-	return startedChild(command, s.ShareProcessGroup), nil
+	return launchCommand(command, s.ShareProcessGroup)
 }
 
 func commandArguments(dataDir, configPath string) []string {

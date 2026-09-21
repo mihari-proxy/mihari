@@ -58,6 +58,8 @@ type SelfUpdater struct {
 	ObserveTargets ReplacementObserver
 	// AfterReplacePrepared takes precedence over AfterReplace when configured.
 	AfterReplacePrepared func(context.Context, PreparedUpdate) error
+	// AcquireMaintenance owns target serialization and update preparation until ApplyPrepared returns.
+	AcquireMaintenance func(context.Context, PreparedUpdate) (io.Closer, error)
 	// openCandidate is an optional test seam for candidate create/write/close failures.
 	openCandidate func(string) (io.WriteCloser, error)
 }

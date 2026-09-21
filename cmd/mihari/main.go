@@ -50,6 +50,8 @@ type processLocalRoot struct {
 }
 
 type daemonRunDeps struct {
+	UpdateRuntimeJob  string
+	StartupCleanup    func(context.Context) error
 	PrepareRuntime    func(context.Context, config.Settings) (app.RuntimeBuildOptions, error)
 	MachineSnapshot   bool
 	Paths             platform.Paths
@@ -747,7 +749,9 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 		onReady = func() error { return deps.ValidationReady(assembly.SetupRequired) }
 	}
 	return runDaemon(ctx, daemon.Options{
-		Listen: deps.Listen, OnReady: onReady, SnapshotSource: snapshot,
+		UpdateRuntimeJob: deps.UpdateRuntimeJob,
+		Listen:           deps.Listen, OnReady: onReady, SnapshotSource: snapshot,
+		StartupCleanup:     daemonStartupCleanup(deps.StartupCleanup, assembly.Manager.CleanupOldCore),
 		Endpoint:           deps.Endpoint,
 		Token:              deps.Token,
 		Version:            deps.Version,

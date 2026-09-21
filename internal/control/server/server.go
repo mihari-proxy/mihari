@@ -13,12 +13,14 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/control/transport"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/state"
 )
 
 type Options struct {
+	UpdateRuntimeJob   string
 	Onboarding         OnboardingAPI
 	Token              string
 	Store              *state.Store
@@ -31,6 +33,11 @@ type Options struct {
 }
 
 type Server struct {
+	updateRuntimeJob   string
+	updateMu           sync.Mutex
+	updateWG           sync.WaitGroup
+	updateLease        *applicationUpdateLease
+	openUpdateOwner    func(context.Context) (transport.UpdateOwner, error)
 	onboarding         OnboardingAPI
 	operations         operationObservation
 	token              string
@@ -61,6 +68,8 @@ func New(options Options) *Server {
 	}
 	snapshotCtx, snapshotCancel := context.WithCancel(context.Background())
 	server := &Server{
+		updateRuntimeJob:   options.UpdateRuntimeJob,
+		openUpdateOwner:    transport.OpenUpdateOwner,
 		onboarding:         options.Onboarding,
 		token:              options.Token,
 		store:              options.Store,
@@ -75,6 +84,7 @@ func New(options Options) *Server {
 		shutdownTimeout:    5 * time.Second,
 	}
 	server.http = &http.Server{
+		ConnContext:       transport.UpdateConnContext,
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -88,6 +98,10 @@ func New(options Options) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/status", s.status)
+	if transport.UpdatePreparationAvailable {
+		mux.HandleFunc("POST /v1/app-update/prepare", s.prepareApplicationUpdate)
+		mux.HandleFunc("DELETE /v1/app-update/prepare/{operation_id}", s.releaseApplicationUpdate)
+	}
 	mux.HandleFunc("GET /v1/operations/{operation_id}", s.operationStatus)
 	mux.HandleFunc("GET /v1/diagnostics", s.diagnosticList)
 	mux.HandleFunc("GET /v1/diagnostics/{id}", s.diagnosticDetail)
@@ -174,6 +188,9 @@ func (s *Server) status(writer http.ResponseWriter, request *http.Request) {
 		PID:             os.Getpid(),
 	}
 	if s.runtime != nil {
+		if _, ok := s.runtime.(applicationUpdateAPI); ok && transport.UpdatePreparationAvailable && s.updateRuntimeJob != "" {
+			status.Capabilities = append(status.Capabilities, protocol.ApplicationUpdateCapability)
+		}
 		status.Capabilities = append(status.Capabilities, protocol.OperationStatusCapability)
 		for _, capability := range s.runtime.Capabilities() {
 			if capability != protocol.MachineLogSnapshotCapability {
@@ -259,6 +276,7 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	s.cancelSnapshots()
 	closeErr := s.http.Close()
 	s.handlers.Wait()
+	s.updateWG.Wait()
 	s.snapshotHandlers.Wait()
 	s.snapshotWG.Wait()
 	if errors.Is(serveErr, http.ErrServerClosed) {

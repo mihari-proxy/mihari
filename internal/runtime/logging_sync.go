@@ -16,6 +16,11 @@ type loggingObservation struct {
 
 // SyncLogging observes and adopts the current core level without changing it.
 func (m *Manager) SyncLogging(ctx context.Context) error {
+	ctx, finish, admissionErr := m.beginApplicationWork(ctx)
+	if admissionErr != nil {
+		return nil
+	} // Paused background observation does not start a new operation.
+	defer finish()
 	ctx, batch := newOperationDiagnostics(ctx, "logging-sync:")
 	defer m.flushDiagnostics(ctx, batch)
 	if m.logging == nil || !m.businessMutationAllowed() || m.mutationDegraded.Load() {

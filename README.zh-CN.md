@@ -42,11 +42,13 @@ Overview 的 Core 卡片会缩短流量趋势图，为速度值及其单位保�
 - **Web 面板**:一键安装 / 更新 / 激活 / 回滚 zashboard 与 MetaCubeXD,置于带独立访问凭据的回环 Web 网关之后。
 - **系统代理与 TUN**:跨平台的系统代理控制与托管 TUN,均由守护进程持有并持久化。若其他产品已持有系统代理(`system_proxy_conflict`),或检测到其他 TUN / mihomo 实例(`tun_conflict`),enable 会失败,除非传入 `--force`(TUI 会要求确认)。
 - **端口配置**:System 页面可修改 Mixed / Controller / Web 端口;占用显示 `Owned` 或 `Occupied by name (pid)`。启动期间尚未收到核心身份时，已检测到监听进程的端口显示中性的 `Checking owner…`。重启后，归属判断随守护进程/核心 PID 更新，无需重新进入页面。应用后通常需要重启守护进程。
-- **TUI 内更新 Mihari**：System 页面进入时检查 GitHub Releases，显示 `当前版本 · 最新版本 available` 或 `当前版本 · Up to date`；以管理员/root 权限启动时可替换二进制、同步并重启已安装的系统服务副本、验证 daemon 版本，并自动进入更新后的 TUI。更新确认会将安全的非标准已安装构建标识显示为 `Unknown[标识]`，兼容性仍为未知；长内容可用 ↑/↓ 或 PgUp/PgDn 滚动，默认选择 Cancel。
+- **TUI 内更新 Mihari**：System 页面进入时检查 GitHub Releases，显示 `当前版本 · 最新版本 available` 或 `当前版本 · Up to date`；以管理员/root 权限启动时可替换二进制、同步并重启已安装的系统服务副本、验证 daemon 版本。Windows 退出后提示“请重新输入 mihari”；Unix 自动进入更新后的 TUI。更新确认会将安全的非标准已安装构建标识显示为 `Unknown[标识]`，兼容性仍为未知；长内容可用 ↑/↓ 或 PgUp/PgDn 滚动，默认选择 Cancel。
 - **内核通道**:System 页面可在 mihomo 的 `stable` / `alpha` 通道之间切换。
 - **自动版本检查**：进入 System 时检查 core 当前通道，进入 Web GUI 时逐项检查所有支持的面板，包括尚未安装的面板。检查显示 `Checking…`、最新版本/构建、`Up to date` 或 `Check failed`；成功结果在本次 TUI 会话内缓存 5 分钟，失败时重新进入页面可重试。core 安装/通道切换，以及面板安装/更新/回滚/重装/卸载成功后，立即刷新对应版本检查。检查仅通过 daemon 查询元数据，安装仍需确认。
 
 Windows 更新可使用同一用户的非管理员令牌查询用户目录中的安装版本，包括默认的 AppData 安装位置。若降权 UAC 令牌只能识别身份，Mihari 会在核验同一用户、同一登录会话和非管理员权限后，使用桌面 Shell 的令牌。目录权限不安全或无法取得通过核验的令牌时，版本仍显示 unknown；版本查询不会以管理员权限执行用户可写的文件。
+
+Windows 更新会等待 daemon 已接收的写入结束，再停止相关实例。手动启动的 daemon 更新后保持停止：先按原方式运行 `mihari daemon`，再输入 `mihari`。旧版或未提权的手动 daemon 不支持停机准备时，需要先正常关闭再更新。正常启动在后台清理旧二进制，失败详情可在 F2 查看，不阻塞启动。第一次由旧版发起的更新仍沿用旧版退出行为；必要时关闭旧会话后重新输入 `mihari`。
 
 单个无 CGO 的静态二进制(< 15 MB)即包含全部功能,内置 GitHub Releases 自动更新与本地 GeoIP 解析。
 
@@ -239,7 +241,7 @@ System → Logging → Level 同时控制 Mihari 文件日志与 mihomo 全局 `
 
 Logging 位于 Network 下方、About 上方。Unix 分别显示机器日志目录与本用户日志目录；Windows 的 **Logging Dir** 保持单目录只读路径，选中后按 Enter 复制。Export Logs 中的 **Current Time** 每秒刷新；↑/↓ 选择字段，Enter 进入编辑或应用修改，编辑时 Esc 弹窗确认放弃。Range 编辑支持方向键及 Tab/Shift+Tab 切换模式，自定义区间在行末提示 `Use YYYY-MM-DD HH:MM format`。选中 **Export** 后按 Enter 开始导出。
 
-Windows 私有日志授权给具体的数据用户及 LocalSystem，兼容提权进程创建、owner 为 Administrators 的数据目录；写入器启动时会修复 daemon、TUI、mihomo 的现有日志、保留归档及锁文件的 ACL，不改动内容。运行中的服务创建或加固文件时会重新读取根目录权限策略，避免轮转后恢复旧权限。如果旧版本已经移除了普通用户访问权限，需要更新后的程序以管理员权限运行一次完成修复。TUI 内的提权更新流程会以该权限进入新 TUI；手动替换二进制的用户可能需要首次以管理员权限启动。
+Windows 私有日志授权给具体的数据用户及 LocalSystem，兼容提权进程创建、owner 为 Administrators 的数据目录；写入器启动时会修复 daemon、TUI、mihomo 的现有日志、保留归档及锁文件的 ACL，不改动内容。运行中的服务创建或加固文件时会重新读取根目录权限策略，避免轮转后恢复旧权限。如果旧版本已经移除了普通用户访问权限，请从管理员终端运行更新后的程序一次完成修复。
 
 Unix 系统模式使用 `mihari-logs-export/v2`，通过认证的机器快照协议组合机器与本用户日志；离线时须明确选择仅本用户日志。Windows/显式私有 P 保持本地 v1。zip 固定包含 `manifest.json`，以及有内容时才出现的 `daemon/mihari-daemon.log`、`tui/mihari-tui.log`、`mihomo/mihomo.log`。记录经过有效性与时间范围筛选，并保留原始 JSON 记录字节；快照及导出均不脱敏。导出前与成功页面以红色文字说明：日志可能包含密码、访问令牌、完整订阅地址及用户配置，分享前请自行检查。
 

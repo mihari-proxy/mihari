@@ -42,6 +42,8 @@ type Options struct {
 	OpenLogging               LoggingFactory
 	BuildExportLogs           func(LoggingResources) ui.ExportLogsOptions
 	ErrorOutput               io.Writer
+	// StartupCleanup runs app-owned maintenance concurrently with the interface.
+	StartupCleanup func(context.Context) error
 }
 
 // Uninstaller is the local complete-uninstall use case owned by app assembly.
@@ -347,7 +349,10 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 		tea.WithInput(options.Input),
 		tea.WithOutput(options.Output),
 	)
+	stopCleanup := startCleanupTask(ctx, options.StartupCleanup, diagnosticReporter)
+	defer stopCleanup()
 	final, err := program.Run()
+	stopCleanup()
 	if page, ok := model.pages[ui.PageLogs].(*logspage.Model); ok {
 		page.Stop()
 	}

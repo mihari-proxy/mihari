@@ -15,6 +15,9 @@ import (
 )
 
 type Options struct {
+	UpdateRuntimeJob string
+	// StartupCleanup is app-owned maintenance run after Ready, with errors kept in diagnostics.
+	StartupCleanup     func(context.Context) error
 	Onboarding         controlserver.OnboardingAPI
 	SnapshotSource     logging.MachineSnapshotSource
 	DiagnosticReporter diagnostics.Reporter
@@ -64,6 +67,18 @@ func Run(parent context.Context, options Options) error {
 	if options.Ready != nil {
 		close(options.Ready)
 	}
+	if options.StartupCleanup != nil && !options.ValidationMode {
+		cleanupCtx, stopCleanup := context.WithCancel(ctx)
+		cleanupDone := make(chan struct{})
+		go func() {
+			defer close(cleanupDone)
+			err := options.StartupCleanup(cleanupCtx)
+			if !diagnostics.NormalCancellation(cleanupCtx, err) {
+				reportCleanup(cleanupCtx, options.DiagnosticReporter, "startup.cleanup.failed", err)
+			}
+		}()
+		defer func() { stopCleanup(); <-cleanupDone }()
+	}
 
 	store := options.Store
 	if store == nil {
@@ -84,7 +99,7 @@ func Run(parent context.Context, options Options) error {
 		}()
 	}
 	runtimeAPI, _ := options.Runtime.(controlserver.RuntimeAPI)
-	server := controlserver.New(controlserver.Options{Token: options.Token, Store: store, Runtime: runtimeAPI, Onboarding: options.Onboarding, SnapshotSource: options.SnapshotSource, DiagnosticReporter: options.DiagnosticReporter, DiagnosticHistory: options.DiagnosticHistory})
+	server := controlserver.New(controlserver.Options{UpdateRuntimeJob: options.UpdateRuntimeJob, Token: options.Token, Store: store, Runtime: runtimeAPI, Onboarding: options.Onboarding, SnapshotSource: options.SnapshotSource, DiagnosticReporter: options.DiagnosticReporter, DiagnosticHistory: options.DiagnosticHistory})
 	serverError := server.Serve(ctx, listener)
 	cancel()
 	if runtimeDone != nil {

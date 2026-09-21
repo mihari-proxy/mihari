@@ -9,6 +9,59 @@ import (
 	"testing"
 )
 
+type maintenanceTestCloser func() error
+
+func (c maintenanceTestCloser) Close() error { return c() }
+
+func TestApplyPrepared_StageFailureDoesNotStopRuntime(t *testing.T) {
+	env, p := preparedFixture(t)
+	called := false
+	env.updater.AcquireMaintenance = func(context.Context, PreparedUpdate) (io.Closer, error) {
+		called = true
+		return maintenanceTestCloser(func() error { return nil }), nil
+	}
+	env.updater.openCandidate = func(string) (io.WriteCloser, error) { return nil, errors.New("staging denied") }
+	result, err := env.updater.ApplyPrepared(context.Background(), p)
+	if err == nil || result.Updated || called {
+		t.Fatalf("runtime stopped before staging: result=%+v called=%v err=%v", result, called, err)
+	}
+}
+
+func TestApplyPrepared_MaintenanceRetainedThroughCompletion(t *testing.T) {
+	env, p := preparedFixture(t)
+	held, closed := false, false
+	warning := errors.New("maintenance release failed")
+	env.updater.AcquireMaintenance = func(context.Context, PreparedUpdate) (io.Closer, error) {
+		held = true
+		return maintenanceTestCloser(func() error { held = false; closed = true; return warning }), nil
+	}
+	env.updater.AfterReplacePrepared = func(context.Context, PreparedUpdate) error {
+		if !held {
+			t.Error("maintenance released before service completion")
+		}
+		return nil
+	}
+	result, err := env.updater.ApplyPrepared(context.Background(), p)
+	if !result.Updated || !closed || !errors.Is(err, warning) {
+		t.Fatalf("published result lost: %+v %v closed=%v", result, err, closed)
+	}
+}
+
+func TestApplyPrepared_MaintenanceFailurePreservesBinary(t *testing.T) {
+	env, p := preparedFixture(t)
+	before, err := os.ReadFile(p.TargetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("drain timed out")
+	env.updater.AcquireMaintenance = func(context.Context, PreparedUpdate) (io.Closer, error) { return nil, failure }
+	result, err := env.updater.ApplyPrepared(context.Background(), p)
+	after, readErr := os.ReadFile(p.TargetPath)
+	if !errors.Is(err, failure) || result.Updated || readErr != nil || !bytes.Equal(before, after) {
+		t.Fatalf("preparation failure published bytes: %+v %v %v", result, err, readErr)
+	}
+}
+
 func preparedFixture(t *testing.T) (*selfUpdateEnv, PreparedUpdate) {
 	t.Helper()
 	payload := []byte("prepared")

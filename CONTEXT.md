@@ -108,3 +108,15 @@ _Avoid_: daemon 启动时刻、本次 daemon 生命周期内第一次成功启�
 
 **核心重启次数（Core Restart Count）**：当前这次 daemon 生命周期内，core 进程被再次拉起的次数。第一次成功启动计为 0。自愿与非自愿的再次拉起都计入。
 _Avoid_: 崩溃次数、启动次数、daemon 重启次数。
+
+**应用新版已发布（Application Replacement Published）**：本次选定的 Mihari 新版已部署到目标程序位置。它不表示本次应退出的旧运行实例已经退出或旧文件已经清理。
+_Avoid_: 将新版已发布等同于应用更新完成。
+
+**应用更新完成（Application Update Completed）**：本次 Mihari 更新的新运行状态已经验证，应退出的旧运行实例已经退出，且本次旧文件清理已经结束。
+_Avoid_: 仅凭新版文件已部署或新版进程已启动就宣称更新完成。
+
+**应用更新收尾未完成（Application Update Finalization Pending）**：新版 Mihari 已发布，但旧运行实例退出、旧文件清理或新运行状态验证尚未全部完成。
+_Avoid_: 更新完全未发生、将收尾未完成视为可以直接重复更新。
+
+**应用更新停机准备（Application Update Quiescence）**：为应用更新停止接收新的业务操作，并等待已经开始的写入结束的阶段；结束后才可停止本次需要退出的运行实例。
+_Avoid_: 将关闭客户端连接等同于业务操作已结束、将丢弃界面草稿等同于取消执行中的写入。

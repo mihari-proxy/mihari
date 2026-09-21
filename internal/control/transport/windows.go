@@ -20,7 +20,11 @@ func Listen(endpoint string) (net.Listener, error) {
 		InputBufferSize:    64 * 1024,
 		OutputBufferSize:   64 * 1024,
 	}
-	return winio.ListenPipe(endpoint, config)
+	listener, err := winio.ListenPipe(endpoint, config)
+	if err != nil {
+		return nil, err
+	}
+	return &updateListener{Listener: listener}, nil
 }
 
 func DialContext(ctx context.Context, endpoint string) (net.Conn, error) {

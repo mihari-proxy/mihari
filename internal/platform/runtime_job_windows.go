@@ -139,6 +139,34 @@ func (p *WindowsProcessIdentity) Identity() WindowsProcessIdentityValue {
 	return p.identity
 }
 
+// AuthorizeUpdate requires the held caller to have administrator authority.
+// The bearer credential alone never grants global mutation suspension.
+func (p *WindowsProcessIdentity) AuthorizeUpdate() error {
+	elevated, err := p.updateTokenElevated()
+	if err != nil {
+		return err
+	}
+	if !elevated {
+		return fmt.Errorf("application update requires an elevated caller")
+	}
+	return nil
+}
+
+func (p *WindowsProcessIdentity) updateTokenElevated() (bool, error) {
+	finish, err := p.lifetime.begin(context.Background())
+	if err != nil {
+		return false, err
+	}
+	defer finish()
+	var token windows.Token
+	if err := windows.OpenProcessToken(windows.Handle(p.handle), windows.TOKEN_QUERY, &token); err != nil {
+		return false, err
+	}
+	elevated := token.IsElevated()
+	closeErr := token.Close()
+	return elevated, closeErr
+}
+
 // Exited reports whether the held process handle is signaled.
 func (p *WindowsProcessIdentity) Exited(ctx context.Context) (bool, error) {
 	if p == nil {

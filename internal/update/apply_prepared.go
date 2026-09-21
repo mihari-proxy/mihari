@@ -79,6 +79,13 @@ func (u SelfUpdater) ApplyPrepared(ctx context.Context, p PreparedUpdate) (resul
 	if err = verifyPreparedCandidate(ctx, staged, io.Discard); err != nil {
 		return result, err
 	}
+	if u.AcquireMaintenance != nil {
+		maintenance, acquireErr := u.AcquireMaintenance(ctx, p)
+		if acquireErr != nil {
+			return result, acquireErr
+		}
+		defer func() { err = errors.Join(err, maintenance.Close()) }()
+	}
 	snapshot, err = u.observeReplacement(ctx, p.TargetPath)
 	if err != nil {
 		return result, err
