@@ -19,6 +19,18 @@ import (
 	"github.com/mihari-proxy/mihari/internal/state"
 )
 
+func TestLatencyConcurrency_ProtocolAndStorageBoundsAgree(t *testing.T) {
+	if got := preferences.DefaultProxyPreferences().LatencyTestConcurrency; got != protocol.DefaultLatencyTestConcurrency {
+		t.Fatalf("storage default=%d protocol default=%d", got, protocol.DefaultLatencyTestConcurrency)
+	}
+	for value := -1; value <= protocol.MaxLatencyTestConcurrency+1; value++ {
+		valid := value >= 1 && value <= protocol.MaxLatencyTestConcurrency
+		if err := preferences.ValidateLatencyConcurrency(value); (err == nil) != valid {
+			t.Fatalf("value=%d storage validation=%v protocol valid=%t", value, err, valid)
+		}
+	}
+}
+
 func TestLatencyConcurrency_ControlRoundTripValidationAndLegacyPatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tui.json")
 	newClient := func() *controlclient.Client {

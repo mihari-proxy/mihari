@@ -98,7 +98,7 @@ func Open(path string) (*Service, error) {
 		}
 		preferences.ConnectionsColumns = append([]string(nil), persisted.ConnectionsColumns...)
 		if persisted.Proxies != nil {
-			if err := validateLatencyConcurrency(persisted.Proxies.LatencyTestConcurrency); err != nil {
+			if err := ValidateLatencyConcurrency(persisted.Proxies.LatencyTestConcurrency); err != nil {
 				return nil, fmt.Errorf("decode TUI preferences: %w", err)
 			}
 			preferences.Proxies = *persisted.Proxies
@@ -141,7 +141,7 @@ func (s *Service) Update(ctx context.Context, update Update) (Preferences, error
 		if next.Proxies.LatencyTestConcurrency == 0 {
 			next.Proxies.LatencyTestConcurrency = previousConcurrency
 		}
-		if err := validateLatencyConcurrency(next.Proxies.LatencyTestConcurrency); err != nil {
+		if err := ValidateLatencyConcurrency(next.Proxies.LatencyTestConcurrency); err != nil {
 			return Preferences{}, err
 		}
 	}
@@ -172,7 +172,8 @@ func (s *Service) Update(ctx context.Context, update Update) (Preferences, error
 	return clone(next), nil
 }
 
-func validateLatencyConcurrency(value int) error {
+// ValidateLatencyConcurrency shares the stored-value bounds with installer migration.
+func ValidateLatencyConcurrency(value int) error {
 	if value < 1 || value > maxLatencyConcurrency {
 		return ErrInvalidLatencyConcurrency
 	}
