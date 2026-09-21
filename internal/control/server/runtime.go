@@ -93,6 +93,7 @@ func (s *Server) runtimeRoutes(mux *http.ServeMux) {
 	s.onboardingRoutes(mux)
 	s.loggingRoutes(mux)
 	s.routingRoutes(mux)
+	s.egressRoutes(mux)
 	s.webGUIRoutes(mux)
 	s.serviceRoutes(mux)
 	s.installationRoutes(mux)

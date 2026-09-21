@@ -78,7 +78,9 @@ type GeoIPService interface {
 }
 
 type Options struct {
-	TrustedCore *core.TrustedExecution
+	// ListInterfaces is the adapter snapshot boundary; nil uses the platform enumerator.
+	ListInterfaces func(context.Context) ([]platform.NetworkInterface, error)
+	TrustedCore    *core.TrustedExecution
 
 	Store          *state.Store
 	Coordinator    *state.Coordinator
@@ -151,6 +153,7 @@ type WebGateway interface {
 }
 
 type Manager struct {
+	listInterfaces func(context.Context) ([]platform.NetworkInterface, error)
 	routingMessage string // guarded by mutation ownership
 	trustedCore    *core.TrustedExecution
 
@@ -177,6 +180,7 @@ type Manager struct {
 	onboardingRestartRequired atomic.Bool
 	logging                   LoggingRuntime
 	loggingObservation        loggingObservation // guarded by mutation ownership
+	egressTunName             string             // last confirmed own TUN, guarded by mutation ownership
 	loggingUnsaved            bool               // remains set across observation failures until saved or restarted
 	loggingWait               func(context.Context, time.Duration) error
 	refreshLogSecrets         func(catalogURLs []string)
@@ -223,6 +227,9 @@ type operationEntry struct {
 }
 
 func New(options Options) *Manager {
+	if options.ListInterfaces == nil {
+		options.ListInterfaces = platform.NetworkInterfaces
+	}
 	store := options.Store
 	if store == nil {
 		store = state.NewStore(state.Snapshot{Health: "ok"})
@@ -291,6 +298,7 @@ func New(options Options) *Manager {
 		webOpenToken:       options.WebOpenToken,
 		sysProxy:           sysProxy,
 		tunDetect:          tunDetect,
+		listInterfaces:     options.ListInterfaces,
 		lookupOccupant:     lookupOccupant,
 		settingsPath:       options.SettingsPath,
 		saveSettings:       saveSettings,

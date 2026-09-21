@@ -16,14 +16,21 @@ func Generate(base Document, overrides map[string]any, settings config.Settings)
 	if settings.ControllerSecret == "" {
 		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "controller secret is required"}
 	}
-	document, err := cloneDocument(base)
+	combined := make(Document, len(base)+len(overrides))
+	for key, value := range base {
+		combined[key] = value
+	}
+	for key, value := range overrides {
+		combined[key] = value
+	}
+	document, err := cloneDocument(combined)
 	if err != nil {
 		return nil, err
 	}
-	for key, value := range overrides {
-		document[key] = value
-	}
 	ensureRoutable(document)
+	if err := applyEgress(document, settings.EgressInterface); err != nil {
+		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "generate DNS outbound interface bindings"}, err)
+	}
 	document["mode"] = settings.RoutingMode()
 	document["log-level"] = settings.CoreLoggingLevel()
 	mixed, err := netip.ParseAddrPort(settings.MixedAddr)
@@ -97,8 +104,8 @@ func proxyNames(value any) []string {
 	proxies, _ := value.([]any)
 	names := make([]string, 0, len(proxies))
 	for _, raw := range proxies {
-		proxy, ok := raw.(map[string]any)
-		if !ok {
+		proxy := egressMapping(raw)
+		if proxy == nil {
 			continue
 		}
 		name, _ := proxy["name"].(string)

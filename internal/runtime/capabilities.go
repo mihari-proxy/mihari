@@ -11,6 +11,7 @@ func (m *Manager) Capabilities() []string {
 		protocol.CapabilityCore,
 		protocol.CapabilityProxies,
 		protocol.CapabilityRouting,
+		protocol.CapabilityEgress,
 		protocol.CapabilityConnections,
 		protocol.CapabilityRules,
 		protocol.CapabilityRuleProviders,

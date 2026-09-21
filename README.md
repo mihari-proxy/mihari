@@ -31,6 +31,7 @@ Specifically:
 - **Core management**: install, update, reinstall, and restart the mihomo core. Online updates use the latest official stable/alpha release; existing local cores need no official provenance receipt. Mihari application updates preserve the core and its channel. Interrupted core updates block uncertain starts; use **System → Reinstall core** or `mihari core reinstall` to fetch the original channel's latest release while retaining subscriptions and configuration.
 - **Service supervision**: run in the background as an OS service, with crash auto-restart
 - **System proxy / TUN**: enable system proxy or TUN; a foreign proxy or another TUN/mihomo instance requires confirmation or `--force`
+- **Outbound interface**: choose an adapter in **System → Network → Outbound Interface**, or use `mihari egress list|status|set <name>|auto`. Use ↑/↓ to browse the scrolling list, PgUp/PgDn for details, and Tab to reach Cancel / Apply. Unavailable saved adapters remain visible without automatic fallback. A running core reloads and closes tracked active connections; a stopped core only saves the choice. Automatic restores the original subscription configuration. This uses native mihomo bindings and does not guarantee two global TUNs can coexist. Before downgrading to an older Mihari, switch back to Automatic to remove the new settings field.
 - **Web panels**: one-click install and open of the zashboard / MetaCubeXD panels
 - **Connections & rules**: live view of connections, proxy groups, and rules, with local GeoIP resolution
 

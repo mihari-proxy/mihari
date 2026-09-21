@@ -1,0 +1,268 @@
+<meta charset="utf-8">
+<!-- THROWAWAY: Three outbound-interface dialog variants inside System/Network.
+     Compare ?variant=A|B|C. All devices and mutations are synthetic and in-memory. -->
+<div id="mihari-egress-prototype" aria-label="Mihari 出口网卡弹窗方案">
+  <style>
+    #mihari-egress-prototype {
+      --mi-bg: light-dark(#f4f4f5,#15161a); --mi-pane: light-dark(#fff,#1c1d22);
+      --mi-text: light-dark(#25252c,#e4e4e8); --mi-dim: light-dark(#64646f,#a0a1ad);
+      --mi-line: light-dark(#c5c5cd,#555661); --mi-focus: light-dark(#e6e9f8,#353b50);
+      --mi-accent: light-dark(#6350b5,#af9dff); --mi-info: light-dark(#236ca3,#75baff);
+      --mi-good: light-dark(#287b40,#87d787); --mi-warn: light-dark(#a4640b,#ffba69);
+      --mi-bad: light-dark(#b52c3e,#ff8191);
+      color:var(--mi-text); font:14px/1.55 Consolas,'Cascadia Mono','SFMono-Regular',monospace;
+      width:100%; container-type:inline-size; color-scheme:light dark;
+    }
+    #mihari-egress-prototype * {box-sizing:border-box}
+    #mihari-egress-prototype button {font:inherit;color:inherit;cursor:inherit}
+    #mihari-egress-prototype button:focus-visible {outline:2px solid var(--mi-info);outline-offset:2px}
+    #mihari-egress-prototype button:disabled {opacity:.45;cursor:default}
+    #mihari-egress-prototype .mi-stage {position:relative;display:grid;align-items:center;min-height:570px;background:var(--mi-bg);padding:28px 20px;color:var(--mi-text);isolation:isolate}
+    #mihari-egress-prototype .mi-page {position:absolute;inset:18px 24px;z-index:-1;opacity:.23;pointer-events:none}
+    #mihari-egress-prototype .mi-page-head {display:flex;justify-content:space-between;gap:16px;border-bottom:1px solid var(--mi-line);padding-bottom:10px}
+    #mihari-egress-prototype .mi-page-rows {display:grid;gap:8px;margin-top:22px}
+    #mihari-egress-prototype .mi-dialog {width:100%;max-width:680px;margin:24px auto;background:var(--mi-pane);border:1px solid var(--mi-line);border-radius:12px;padding:22px 24px;min-width:0}
+    #mihari-egress-prototype .mi-heading {display:flex;justify-content:space-between;gap:14px;align-items:baseline;margin-bottom:4px}
+    #mihari-egress-prototype .mi-title {color:var(--mi-accent);font-weight:500;font-size:16px}
+    #mihari-egress-prototype .mi-kicker {color:var(--mi-dim);font-size:12px}
+    #mihari-egress-prototype .mi-current {margin:12px 0 18px;display:flex;gap:10px;flex-wrap:wrap;align-items:baseline}
+    #mihari-egress-prototype .mi-dim {color:var(--mi-dim)}
+    #mihari-egress-prototype .mi-good {color:var(--mi-good)}
+    #mihari-egress-prototype .mi-warn {color:var(--mi-warn)}
+    #mihari-egress-prototype .mi-bad {color:var(--mi-bad)}
+    #mihari-egress-prototype .mi-info {color:var(--mi-info)}
+    #mihari-egress-prototype .mi-small {font-size:12px}
+    #mihari-egress-prototype .mi-device-list {display:grid;gap:3px;min-width:0}
+    #mihari-egress-prototype .mi-device {width:100%;border:0;border-radius:0;background:transparent;text-align:left;display:grid;grid-template-columns:17px minmax(0,1fr) auto;gap:8px;padding:9px 8px;align-items:baseline;min-width:0}
+    #mihari-egress-prototype .mi-device[data-chosen="true"] {background:var(--mi-focus)}
+    #mihari-egress-prototype .mi-device .mi-name {overflow-wrap:anywhere}
+    #mihari-egress-prototype .mi-marker {color:var(--mi-info)}
+    #mihari-egress-prototype .mi-status {font-size:12px;white-space:nowrap}
+    #mihari-egress-prototype .mi-sub {grid-column:2/4;color:var(--mi-dim);font-size:12px;overflow-wrap:anywhere}
+    #mihari-egress-prototype .mi-label {color:var(--mi-dim);font-size:12px;margin:0 0 8px}
+    #mihari-egress-prototype .mi-data {display:grid;grid-template-columns:68px minmax(0,1fr);gap:8px 12px;margin:16px 0}
+    #mihari-egress-prototype .mi-data dt {color:var(--mi-dim)}
+    #mihari-egress-prototype .mi-data dd {margin:0;overflow-wrap:anywhere}
+    #mihari-egress-prototype .mi-split {display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:22px;align-items:stretch}
+    #mihari-egress-prototype .mi-inspector {border-left:1px solid var(--mi-line);padding-left:22px;min-width:0}
+    #mihari-egress-prototype .mi-inspector-title {font-size:16px;overflow-wrap:anywhere;margin:4px 0 2px}
+    #mihari-egress-prototype .mi-detail-note {color:var(--mi-dim);font-size:12px;overflow-wrap:anywhere}
+    #mihari-egress-prototype .mi-inline-detail {padding:14px 8px 0;display:flex;gap:16px;flex-wrap:wrap;color:var(--mi-dim);font-size:12px}
+    #mihari-egress-prototype .mi-summary {border-top:1px solid var(--mi-line);margin-top:18px;padding-top:14px;display:grid;gap:4px;overflow-wrap:anywhere}
+    #mihari-egress-prototype .mi-warning {color:var(--mi-warn);font-size:12px;display:flex;align-items:baseline;gap:8px;margin-top:5px}
+    #mihari-egress-prototype .mi-footer {display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:20px}
+    #mihari-egress-prototype .mi-actions {display:flex;gap:10px;margin-left:auto}
+    #mihari-egress-prototype .mi-action {background:transparent;border:0;padding:6px 8px;white-space:nowrap;color:var(--mi-dim)}
+    #mihari-egress-prototype .mi-action.mi-primary {color:var(--mi-info);background:var(--mi-focus)}
+    #mihari-egress-prototype .mi-steps {display:flex;gap:14px;align-items:center;margin:16px 0 22px;color:var(--mi-dim);font-size:12px}
+    #mihari-egress-prototype .mi-steps .mi-active {color:var(--mi-info)}
+    #mihari-egress-prototype .mi-review-route {display:grid;grid-template-columns:1fr auto 1fr;gap:16px;align-items:center;margin:26px 0}
+    #mihari-egress-prototype .mi-review-route .mi-endpoint {overflow-wrap:anywhere}
+    #mihari-egress-prototype .mi-review-route .mi-endpoint:last-child {text-align:right}
+    #mihari-egress-prototype .mi-closed {padding:30px 8px;display:grid;gap:18px}
+    #mihari-egress-prototype .mi-closed-row {display:flex;gap:12px;flex-wrap:wrap}
+    #mihari-egress-prototype .mi-switcher {display:flex;justify-content:center;align-items:center;gap:8px;flex-wrap:wrap;padding:14px 0 3px;font-family:system-ui,sans-serif}
+    #mihari-egress-prototype .mi-switcher button {border:1px solid var(--mi-line);background:var(--mi-pane);padding:7px 11px;border-radius:6px;color:var(--mi-text)}
+    #mihari-egress-prototype .mi-switcher button[aria-pressed="true"] {border-color:var(--mi-accent);color:var(--mi-accent);background:var(--mi-focus)}
+    #mihari-egress-prototype .mi-variant-caption {text-align:center;font:12px/1.5 system-ui,sans-serif;color:var(--mi-dim);padding:8px 0 0}
+    #mihari-egress-prototype[data-variant="B"] .mi-dialog {max-width:720px;padding:24px}
+    #mihari-egress-prototype[data-variant="B"] .mi-heading {margin-bottom:18px}
+    #mihari-egress-prototype .mi-saved {display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding-bottom:16px;border-bottom:1px solid var(--mi-line);margin-bottom:20px}
+    #mihari-egress-prototype .mi-saved-name {color:var(--mi-text)}
+    #mihari-egress-prototype .mi-saved-state {margin-left:auto;font-size:12px}
+    #mihari-egress-prototype .mi-list-heading {display:flex;justify-content:space-between;gap:12px;align-items:baseline;margin-bottom:8px;color:var(--mi-dim);font-size:12px}
+    #mihari-egress-prototype .mi-b-list {display:grid;gap:3px}
+    #mihari-egress-prototype .mi-b-scroll {display:grid;gap:3px;max-height:300px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--mi-line) transparent;padding:3px}
+    #mihari-egress-prototype .mi-b-device {display:grid;grid-template-columns:16px minmax(0,1fr);gap:2px 8px;align-items:center;border:0;padding:9px 10px;text-align:left;background:transparent;width:100%;min-width:0}
+    #mihari-egress-prototype .mi-b-device[data-chosen="true"] {background:var(--mi-focus)}
+    #mihari-egress-prototype .mi-b-device .mi-b-name {display:flex;justify-content:space-between;align-items:baseline;gap:8px;min-width:0}
+    #mihari-egress-prototype .mi-b-device .mi-b-name span:first-child {overflow-wrap:anywhere}
+    #mihari-egress-prototype .mi-b-device .mi-b-note {grid-column:2;color:var(--mi-dim);font-size:12px}
+    #mihari-egress-prototype .mi-b-device .mi-b-note.mi-warn {color:var(--mi-warn)}
+    #mihari-egress-prototype .mi-b-current {color:var(--mi-info);font-size:11px;white-space:nowrap}
+    #mihari-egress-prototype .mi-b-divider {height:1px;background:var(--mi-line);margin:6px 8px}
+    #mihari-egress-prototype .mi-b-split {display:grid;grid-template-columns:minmax(0,.95fr) minmax(0,1.05fr);gap:22px;align-items:stretch}
+    #mihari-egress-prototype .mi-b-details {display:flex;flex-direction:column;border-left:1px solid var(--mi-line);padding-left:22px;min-width:0}
+    #mihari-egress-prototype .mi-b-detail-heading {display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:18px;color:var(--mi-dim);font-size:12px}
+    #mihari-egress-prototype .mi-b-title {font-size:17px;font-weight:500;overflow-wrap:anywhere;margin-bottom:3px}
+    #mihari-egress-prototype .mi-b-description {color:var(--mi-dim);font-size:12px;margin-bottom:6px}
+    #mihari-egress-prototype .mi-b-properties {display:grid;grid-template-columns:58px minmax(0,1fr);gap:12px 14px;margin:20px 0 16px}
+    #mihari-egress-prototype .mi-b-properties dt {color:var(--mi-dim);font-size:12px}
+    #mihari-egress-prototype .mi-b-properties dd {margin:0;overflow-wrap:anywhere}
+    #mihari-egress-prototype .mi-b-note {color:var(--mi-dim);font-size:12px;margin-top:6px}
+    #mihari-egress-prototype .mi-b-details .mi-warning {margin-top:auto;padding-top:20px}
+    #mihari-egress-prototype .mi-b-summary {border-top:1px solid var(--mi-line);margin-top:22px;padding-top:16px;display:grid;gap:6px;min-height:68px;overflow-wrap:anywhere}
+    #mihari-egress-prototype .mi-b-change {display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+    #mihari-egress-prototype[data-variant="B"] .mi-footer {margin-top:16px}
+    #mihari-egress-prototype[data-variant="B"] .mi-action {padding:7px 10px}
+    #mihari-egress-prototype[data-compact="true"] .mi-stage {max-width:390px;margin:auto;padding:12px 8px;min-height:530px}
+    #mihari-egress-prototype[data-compact="true"] .mi-dialog {padding:18px 14px}
+    #mihari-egress-prototype[data-compact="true"] .mi-split {grid-template-columns:1fr;gap:16px}
+    #mihari-egress-prototype[data-compact="true"] .mi-inspector {border-left:0;border-top:1px solid var(--mi-line);padding:14px 0 0}
+    #mihari-egress-prototype[data-compact="true"] .mi-footer {align-items:flex-end}
+    #mihari-egress-prototype[data-compact="true"][data-variant="B"] .mi-dialog {padding:18px 14px}
+    #mihari-egress-prototype[data-compact="true"] .mi-b-split {grid-template-columns:1fr;gap:18px}
+    #mihari-egress-prototype[data-compact="true"] .mi-b-details {border-left:0;border-top:1px solid var(--mi-line);padding:16px 0 0}
+    @container (max-width:540px) {
+      #mihari-egress-prototype .mi-stage {padding:12px 8px}
+      #mihari-egress-prototype .mi-dialog {padding:18px 14px}
+      #mihari-egress-prototype .mi-split {grid-template-columns:1fr;gap:16px}
+      #mihari-egress-prototype .mi-inspector {border-left:0;border-top:1px solid var(--mi-line);padding:14px 0 0}
+      #mihari-egress-prototype .mi-footer {align-items:flex-end}
+      #mihari-egress-prototype .mi-device {gap:5px;padding:9px 5px}
+      #mihari-egress-prototype .mi-kicker {font-size:11px}
+      #mihari-egress-prototype[data-variant="B"] .mi-dialog {padding:18px 14px}
+      #mihari-egress-prototype .mi-b-split {grid-template-columns:1fr;gap:18px}
+      #mihari-egress-prototype .mi-b-details {border-left:0;border-top:1px solid var(--mi-line);padding:16px 0 0}
+    }
+  </style>
+  <div class="mi-stage">
+    <div class="mi-page" aria-hidden="true">
+      <div class="mi-page-head"><span>Mihari</span><span>System</span></div>
+      <div class="mi-page-rows"><span>Network</span><span>System Proxy   Enabled</span><span>TUN            Enabled</span><span>Outbound Interface</span></div>
+    </div>
+    <div class="mi-dialog" id="mi-egress-dialog"></div>
+  </div>
+  <div class="mi-switcher" aria-label="弹窗布局方案">
+    <button class="cursor-interaction" type="button" data-cycle="-1" aria-label="上一个方案">←</button>
+    <button class="cursor-interaction" type="button" data-variant="A" aria-pressed="false">A · 紧凑列表</button>
+    <button class="cursor-interaction" type="button" data-variant="B" aria-pressed="true">B · 精修版</button>
+    <button class="cursor-interaction" type="button" data-variant="C" aria-pressed="false">C · 分步选择</button>
+    <button class="cursor-interaction" type="button" data-cycle="1" aria-label="下一个方案">→</button>
+  </div>
+  <div class="mi-variant-caption" id="mi-egress-caption"></div>
+  <script>
+  (() => {
+    const root = document.getElementById('mihari-egress-prototype');
+    const dialog = root.querySelector('#mi-egress-dialog');
+    const captions = {A:'信息集中，操作路径最短',B:'B 精修 · 已保存、待应用与网卡状态分别呈现',C:'选择与应用分开，操作意图最明确'};
+    const devices = [
+      {id:'auto',name:'Automatic',kind:'Automatic',state:'Default',ip:'—',desc:'Use the existing configuration.'},
+      {id:'ethernet',name:'Ethernet',kind:'Physical',state:'Available',ip:'192.0.2.10',desc:'Wired network adapter'},
+      {id:'wifi',name:'Wi-Fi',kind:'Physical',state:'Available',ip:'198.51.100.24',desc:'Wireless network adapter'},
+      {id:'work',name:'Work VPN',kind:'Virtual',state:'Available',ip:'203.0.113.7',desc:'VPN network adapter'},
+      {id:'travel',name:'Travel VPN',kind:'Virtual',state:'Not found',ip:'—',desc:'Previously selected VPN adapter'},
+      {id:'usb',name:'USB Ethernet',kind:'Physical',state:'Disconnected',ip:'—',desc:'USB network adapter'}
+    ];
+    const state = {variant:'B',current:'ethernet',candidate:'ethernet',open:true,step:1,busy:false,error:'',notice:'',compact:false,scenario:'normal'};
+    const initialParams = new URLSearchParams(location.search);
+    const initialVariant = initialParams.get('variant');
+    if (['A','B','C'].includes(initialVariant)) state.variant=initialVariant;
+    if (['normal','missing','failure'].includes(initialParams.get('scenario'))) state.scenario=initialParams.get('scenario');
+    state.compact=initialParams.get('compact')==='true';
+    if(state.scenario==='missing'){state.current='travel';state.candidate='travel';}
+    const get = id => devices.find(d=>d.id===id);
+    const unavailable = d => !['Available','Default'].includes(d.state);
+    const esc = value => String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const statusClass = d => unavailable(d)?'mi-warn':d.id==='auto'?'mi-dim':'mi-good';
+    const currentRow = () => {const d=get(state.current);return `<div class="mi-current"><span class="mi-dim">Current</span><span>${esc(d.name)}</span><span class="${statusClass(d)}">${unavailable(d)?'! Unavailable':d.state}</span></div>`;};
+    const savedRow = () => {const d=get(state.current);return `<div class="mi-saved"><span class="mi-small mi-dim">Saved</span><span class="mi-saved-name">${esc(d.name)}</span><span class="mi-saved-state ${statusClass(d)}">${unavailable(d)?'! Unavailable':d.id==='auto'?'Existing configuration':'● Available'}</span></div>`;};
+    function deviceRows(mode) {
+      return `<div class="mi-device-list" role="group" aria-label="Choose outbound interface">${devices.map(d=>{
+        const saved=d.id===state.current;
+        return `<button type="button" class="mi-device cursor-interaction" data-device="${d.id}" data-chosen="${d.id===state.candidate}" aria-pressed="${d.id===state.candidate}" ${state.busy?'disabled':''}><span class="mi-marker">${d.id===state.candidate?'›':' '}</span><span class="mi-name">${esc(d.name)}</span><span class="mi-status ${statusClass(d)}">${saved?'● ':''}${mode==='detail'?(saved?'Current':d.id==='auto'?'Default':unavailable(d)?'Offline':'Up'):d.state}</span>${mode==='steps'?`<span class="mi-sub">${esc(d.kind==='Automatic'?d.desc:d.kind+' · '+(unavailable(d)?d.state:d.ip))}</span>`:''}</button>`;
+      }).join('')}</div>`;
+    }
+    function inspector() {const d=get(state.candidate);return `<div class="mi-inspector"><div class="mi-label">SELECTED INTERFACE</div><div class="mi-inspector-title">${esc(d.name)}</div><div class="mi-small ${statusClass(d)}">${unavailable(d)?'! Unavailable':d.state}</div><dl class="mi-data"><dt>Type</dt><dd>${d.kind}</dd><dt>IPv4</dt><dd>${d.ip}</dd></dl><div class="mi-detail-note">${esc(d.desc)}</div>${unavailable(d)?'<div class="mi-warning">! You can save this choice while it is unavailable.</div>':''}</div>`;}
+    function summary() {
+      const d=get(state.candidate),same=state.current===state.candidate;
+      return `<div class="mi-summary"><div><span class="mi-dim">${same?'Selection':'Change'} </span> ${same?esc(d.name):esc(get(state.current).name)+' → <span class="mi-info">'+esc(d.name)+'</span>'}</div><div class="mi-small mi-dim">${same?'No changes to apply.':'Active connections will be closed. No core restart.'}</div>${unavailable(d)?'<div class="mi-warning">! Interface unavailable. No fallback to another interface.</div>':''}${state.error?`<div class="mi-bad mi-small" role="alert">${esc(state.error)}</div>`:''}</div>`;
+    }
+    function footer(review=false) {
+      const next=state.variant==='C'&&state.step===1;
+      return `<div class="mi-footer"><span class="mi-small mi-dim">${review?'Esc Back':'↑↓ Select · Tab Actions · Esc Cancel'}</span><div class="mi-actions">${review?`<button type="button" class="mi-action cursor-interaction" data-action="back" ${state.busy?'disabled':''}>[ Back ]</button>`:''}<button type="button" class="mi-action cursor-interaction" data-action="cancel" ${state.busy?'disabled':''}>[ Cancel ]</button><button type="button" class="mi-action mi-primary cursor-interaction" data-action="${next?'next':'apply'}" ${state.busy||(!next&&state.current===state.candidate)?'disabled':''}>[ ${state.busy?'Applying…':next?'Next →':'Apply'} ]</button></div></div>`;
+    }
+    function VariantA() {const d=get(state.candidate);return deviceRows('compact')+`<div class="mi-inline-detail"><span>${esc(d.kind)}</span><span>${d.id==='auto'?esc(d.desc):'IPv4 '+d.ip}</span></div>`+summary()+footer();}
+    function VariantB() {
+      const d=get(state.candidate),same=state.current===state.candidate;
+      const rows=devices.map((item,index)=>{
+        const note=item.id==='auto'?'Use existing configuration':unavailable(item)?item.state:item.kind+' · Available';
+        return `${index===1?'<div class="mi-b-divider"></div><div class="mi-b-scroll">':''}<button type="button" class="mi-b-device cursor-interaction" data-device="${item.id}" data-chosen="${item.id===state.candidate}" aria-pressed="${item.id===state.candidate}" ${state.busy?'disabled':''}><span class="mi-marker">${item.id===state.candidate?'›':''}</span><span class="mi-b-name"><span>${esc(item.name)}</span>${item.id===state.current?'<span class="mi-b-current">● Saved</span>':''}</span><span class="mi-b-note ${unavailable(item)?'mi-warn':''}">${esc(note)}</span></button>${index===devices.length-1?'</div>':''}`;
+      }).join('');
+      const details=d.id==='auto'?`<div class="mi-b-title">Automatic</div><div class="mi-b-description">Use the existing configuration</div><dl class="mi-b-properties"><dt>Mode</dt><dd>Automatic</dd></dl><div class="mi-b-note">Mihari no longer overrides the outbound interface. Existing subscription settings apply.</div>`:`<div class="mi-b-title">${esc(d.name)}</div><div class="mi-b-description">${esc(d.desc)}</div><dl class="mi-b-properties"><dt>Status</dt><dd class="${statusClass(d)}">${unavailable(d)?'! ':''}${d.state}</dd><dt>Type</dt><dd>${d.kind}</dd><dt>IPv4</dt><dd>${d.ip}</dd></dl>${unavailable(d)?'<div class="mi-warning">! This choice can be saved while unavailable.</div>':'<div class="mi-b-note">Availability reflects the adapter state, not Internet access.</div>'}`;
+      return `<div class="mi-b-split"><div><div class="mi-list-heading"><span>INTERFACES</span><span>↑↓</span></div><div class="mi-b-list" role="group" aria-label="Choose outbound interface">${rows}</div></div><div class="mi-b-details"><div class="mi-b-detail-heading"><span>DETAILS</span>${same?'<span>Saved selection</span>':'<span class="mi-info">Not applied</span>'}</div>${details}</div></div><div class="mi-b-summary">${same?'<div class="mi-small mi-dim">No changes to apply.</div>':`<div class="mi-b-change"><span class="mi-small mi-dim">Apply</span><span>${esc(get(state.current).name)}</span><span class="mi-dim">→</span><span class="mi-info">${esc(d.name)}</span></div><div class="mi-small mi-dim">Applying will close active connections.</div>`}${unavailable(d)?'<div class="mi-small mi-warn">Connections may fail until available. No automatic fallback.</div>':''}${state.error?`<div class="mi-bad mi-small" role="alert">${esc(state.error)}</div>`:''}</div>`+footer();
+    }
+    function VariantC() {
+      const steps=`<div class="mi-steps"><span class="${state.step===1?'mi-active':''}">01 Select interface</span><span>─</span><span class="${state.step===2?'mi-active':''}">02 Review</span></div>`;
+      if(state.step===1) return steps+deviceRows('steps')+footer();
+      const d=get(state.candidate);
+      return steps+`<div class="mi-review-route"><div class="mi-endpoint"><div class="mi-label">CURRENT</div>${esc(get(state.current).name)}</div><span class="mi-info">→</span><div class="mi-endpoint"><div class="mi-label">NEW SELECTION</div><span class="mi-info">${esc(d.name)}</span></div></div><dl class="mi-data"><dt>Status</dt><dd class="${statusClass(d)}">${d.state}</dd><dt>Type</dt><dd>${d.kind}</dd><dt>IPv4</dt><dd>${d.ip}</dd></dl>`+summary()+footer(true);
+    }
+    function render() {
+      const listScroll=dialog.querySelector('.mi-b-scroll')?.scrollTop||0;
+      root.dataset.compact=String(state.compact);
+      root.dataset.variant=state.variant;
+      root.querySelectorAll('[data-variant]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.variant===state.variant)));
+      root.querySelector('#mi-egress-caption').textContent=captions[state.variant];
+      if(!state.open){
+        const d=get(state.current);
+        dialog.innerHTML=`<div class="mi-title">Network</div><div class="mi-closed"><div class="mi-closed-row"><span class="mi-dim">Outbound Interface</span><span>${esc(d.name)}</span><span class="${statusClass(d)}">${unavailable(d)?'! Unavailable':d.state}</span></div><div class="mi-small ${unavailable(d)?'mi-warn':'mi-good'}" aria-live="polite">${esc(state.notice||'Selection unchanged.')}</div><button type="button" class="mi-action mi-primary cursor-interaction" data-action="open">[ Change interface ]</button></div>`;
+        return;
+      }
+      dialog.setAttribute('aria-label','Outbound Interface');
+      dialog.innerHTML=`<div class="mi-heading"><span class="mi-title">Outbound Interface</span><span class="mi-kicker">System / Network</span></div>${state.variant==='B'?savedRow():currentRow()}${({A:VariantA,B:VariantB,C:VariantC}[state.variant])()}`;
+      const list=dialog.querySelector('.mi-b-scroll');
+      if(list)list.scrollTop=listScroll;
+    }
+    function focusCandidate() {
+      const row=dialog.querySelector(`[data-device="${state.candidate}"]`);
+      if(!row)return;
+      row.focus({preventScroll:true});
+      const list=row.closest('.mi-b-scroll');
+      if(!list)return;
+      const itemBounds=row.getBoundingClientRect(),listBounds=list.getBoundingClientRect();
+      if(itemBounds.top<listBounds.top+3)list.scrollTop-=listBounds.top+3-itemBounds.top;
+      else if(itemBounds.bottom>listBounds.bottom-3)list.scrollTop+=itemBounds.bottom-listBounds.bottom+3;
+    }
+    function chooseVariant(v) {
+      if(state.busy)return;
+      state.variant=v;state.open=true;state.step=1;state.error='';
+      try{const url=new URL(location.href);if(['http:','https:','file:'].includes(url.protocol)){url.searchParams.set('variant',v);history.replaceState(null,'',url);}}catch{}
+      render();focusCandidate();
+    }
+    function cycle(delta){const keys=['A','B','C'];chooseVariant(keys[(keys.indexOf(state.variant)+delta+3)%3]);}
+    root.addEventListener('click',event=>{
+      const b=event.target.closest('button');if(!b||b.disabled)return;
+      if(b.dataset.variant){chooseVariant(b.dataset.variant);return;}
+      if(b.dataset.cycle){cycle(Number(b.dataset.cycle));return;}
+      if(b.dataset.device){state.candidate=b.dataset.device;state.error='';render();focusCandidate();return;}
+      switch(b.dataset.action){
+        case 'cancel':state.open=false;state.candidate=state.current;state.error='';state.notice='Selection unchanged.';render();break;
+        case 'open':state.open=true;state.candidate=state.current;state.step=1;state.error='';render();focusCandidate();break;
+        case 'next':state.step=2;render();break;
+        case 'back':state.step=1;render();break;
+        case 'apply':
+          if(state.busy||state.candidate===state.current)return;
+          state.busy=true;state.error='';render();
+          setTimeout(()=>{
+            state.busy=false;
+            if(state.scenario==='failure'){state.error='Could not apply configuration. Previous selection restored.';render();return;}
+            state.current=state.candidate;state.open=false;
+            state.notice=unavailable(get(state.current))?'Saved. Interface unavailable; no fallback.':'Applied. Active connections closed.';
+            render();
+          },650);
+          break;
+      }
+    });
+    root.addEventListener('keydown',event=>{
+      if(state.busy||event.target.matches('input,textarea,select,[contenteditable]'))return;
+      if((event.key==='ArrowLeft'||event.key==='ArrowRight')&&event.target.closest('.mi-switcher')){event.preventDefault();cycle(event.key==='ArrowRight'?1:-1);return;}
+      if(event.key==='Tab'&&!event.shiftKey&&event.target.closest('[data-device]')){event.preventDefault();root.querySelector('[data-action="cancel"]')?.focus();return;}
+      if(event.key==='Tab'&&event.shiftKey&&event.target.closest('[data-action="cancel"]')){event.preventDefault();focusCandidate();return;}
+      if(event.key==='Escape'&&state.open){event.preventDefault();if(state.variant==='C'&&state.step===2){state.step=1;}else{state.open=false;state.candidate=state.current;state.notice='Selection unchanged.';}render();return;}
+      if(['ArrowUp','ArrowDown'].includes(event.key)&&event.target.closest('[data-device]')&&state.open&&!(state.variant==='C'&&state.step===2)){
+        event.preventDefault();const at=devices.findIndex(d=>d.id===state.candidate);state.candidate=devices[Math.max(0,Math.min(devices.length-1,at+(event.key==='ArrowDown'?1:-1)))].id;state.error='';render();focusCandidate();
+      }
+    });
+    render();focusCandidate();
+    if(globalThis.Tweak){
+      const tweak=new Tweak({container:root,onChange:()=>{
+        if(state.scenario==='missing'){state.current='travel';state.candidate='travel';}
+        state.open=true;state.error='';state.step=1;render();
+      }});
+      tweak.addToggle(state,'compact',{label:'窄窗口'});
+      tweak.addSelect(state,'scenario',{label:'状态场景',options:[{label:'正常选择',value:'normal'},{label:'原选择不可用',value:'missing'},{label:'应用失败',value:'failure'}]});
+    }
+  })();
+  </script>
+</div>
