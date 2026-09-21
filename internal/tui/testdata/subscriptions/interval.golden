@@ -12,10 +12,10 @@
                        │                                                                      │
                        │  Settings                                                            │
                        │                                                                      │
-                       │  › Name          Example                                             │
+                       │    Name          Example                                             │
                        │    URL                                                               │
                        │    https://example.test/subscription/sample-sample-sample-sample-s…  │
-                       │    Interval      Global · 12h                        ns/us/ms/s/m/h  │
+                       │  › Interval      Global · 12h                        ns/us/ms/s/m/h  │
                        │    Auto refresh  ‹ On ›                                              │
                        │    Mode          ‹ PROXY ›                                           │
                        │                                                                      │

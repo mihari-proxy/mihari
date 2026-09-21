@@ -119,7 +119,7 @@ func TestSubscriptionDetail_TextKeysStayInForm(t *testing.T) {
 
 func TestSubscriptionDetail_MinimumRootFrame(t *testing.T) {
 	m := subscriptionDetailRoot()
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 8; i++ {
 		view := ansi.Strip(m.View().Content)
 		if len(strings.Split(view, "\n")) > 22 {
 			t.Fatalf("root height exceeded: %d", len(strings.Split(view, "\n")))
@@ -129,7 +129,7 @@ func TestSubscriptionDetail_MinimumRootFrame(t *testing.T) {
 				t.Fatal("root width exceeded")
 			}
 		}
-		if i == 5 && !strings.Contains(view, "Save") {
+		if i == 7 && !strings.Contains(view, "Save") {
 			t.Fatal("Save is clipped at minimum root size")
 		}
 		next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
@@ -147,17 +147,21 @@ func TestSubscriptionDetail_FooterFollowsFocusOnce(t *testing.T) {
 			next, _ = m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 			m = next.(Model)
 		}
-		count := 5
+		count := 7
 		if add {
 			count = 3
 		}
 		for i := 0; i <= count; i++ {
 			view := ansi.Strip(m.View().Content)
 			want := "Enter next"
+			escape := "Esc cancel"
 			if i == count {
 				want = "Enter save"
+			} else if !add && i >= 5 {
+				want = "Enter apply now"
+				escape = "Esc close"
 			}
-			if strings.Count(view, want) != 1 || strings.Contains(view, "next/save") || strings.Count(view, "Esc cancel") != 1 {
+			if strings.Count(view, want) != 1 || strings.Contains(view, "next/save") || strings.Count(view, escape) != 1 {
 				t.Fatalf("add=%v field=%d: incorrect or repeated footer\n%s", add, i, view)
 			}
 			next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})

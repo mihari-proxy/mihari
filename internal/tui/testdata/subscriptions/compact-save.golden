@@ -4,16 +4,16 @@
    3 Conns         │                                                │
    4 Rules         │  Edit subscription                             │
    5 Logs          │                                                │
- › 6 Subs          │  Next update   in 5h                           │
-   7 Web GUI       │                                                │
-   8 System        │  Settings                                      │
-                   │                                                │
-                   │    Name          Example                       │
-                   │    URL                                         │
-                   │    https://example.test/subscription/sample-…  │
-                   │    Interval      Global · 12h                  │
+ › 6 Subs          │    Name          Example                       │
+   7 Web GUI       │    URL                                         │
+   8 System        │    https://example.test/subscription/sample-…  │
+                   │    Interval      Global · 12h  ns/us/ms/s/m/h  │
                    │    Auto refresh  ‹ On ›                        │
                    │    Mode          ‹ PROXY ›                     │
+                   │                                                │
+                   │  Actions · Apply immediately                   │
+                   │    Enabled       [ Disable ]                   │
+                   │    InUse         In use                        │
                    │  ↑ PgUp/PgDn ────────────────────────────────  │
                    │                   › [ Save ]                   │
                    │                                                │
