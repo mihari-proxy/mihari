@@ -54,7 +54,7 @@ func TestDetailForm_ChangedFieldsAndSaveFocus(t *testing.T) {
 	if req.Name == nil || *req.Name != "Renamed" || req.Interval != nil || req.ProxyMode != nil {
 		t.Fatal("patch did not isolate changed name")
 	}
-	if len(f.inputs) != 5 {
+	if len(f.inputs) != 7 {
 		t.Fatalf("fields=%d", len(f.inputs))
 	}
 	for i := 0; i < len(f.inputs); i++ {

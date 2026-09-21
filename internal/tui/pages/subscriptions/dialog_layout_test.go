@@ -106,12 +106,42 @@ func TestDetailLayout_GlobalIntervalIsOnlyPlaceholder(t *testing.T) {
 	}
 	m.form.move(1)
 	m.form.move(1)
-	if !strings.Contains(ansi.Strip(m.View()), "Leave blank to use global interval") {
-		t.Fatal("missing focused interval guidance")
+	if strings.Contains(ansi.Strip(m.View()), "Leave blank to use global interval") {
+		t.Fatal("long interval guidance should not occupy a separate row")
 	}
 	m.globalInterval = "4h"
 	if !strings.Contains(ansi.Strip(m.View()), "Global · 4h") {
 		t.Fatal("stale global interval")
+	}
+}
+
+func TestDetailLayout_IntervalUnitsShareInputRow(t *testing.T) {
+	m := compactDetail()
+	m.form.inputs[2].SetValue("1h")
+	m.form.move(2)
+	for _, width := range []int{40, 54, 100} {
+		m.SetSize(width, 20)
+		layout := m.form.fieldLayout(m.theme, m.formTextWidth())
+		field := layout.fields[2]
+		found := false
+		for _, line := range layout.lines[field.first : field.last+1] {
+			plain := ansi.Strip(line)
+			if strings.Contains(plain, "1h") && strings.Contains(plain, "ns/us/ms/s/m/h") {
+				found = true
+				if !strings.Contains(line, m.theme.Muted.Render("ns/us/ms/s/m/h")) {
+					t.Fatal("units do not use muted styling")
+				}
+			}
+			if lipgloss.Width(line) > m.formTextWidth() {
+				t.Fatal("interval units overflow the field")
+			}
+		}
+		if !found {
+			t.Fatalf("width %d: units missing from input row", width)
+		}
+		if m.form.inputs[2].Value() != "1h" {
+			t.Fatal("unit hint changed the draft")
+		}
 	}
 }
 
@@ -199,12 +229,20 @@ func TestDetailLayout_InputAndCycleFocusStyles(t *testing.T) {
 	if r != wr || g != wg || b != wb {
 		t.Fatal("input cursor is not white")
 	}
-	for i := 0; i < 4; i++ {
-		m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	}
-	view := m.View()
-	if !strings.Contains(view, "\x1b[7m") || !strings.Contains(ansi.Strip(view), "‹ PROXY ›") {
-		t.Fatal("cycle field lacks reverse selection or arrows")
+	for _, field := range []struct {
+		index int
+		value string
+	}{
+		{3, "‹ On ›"},
+		{4, "‹ PROXY ›"},
+		{5, "[ Disable ]"},
+		{6, "In use"},
+	} {
+		m.form.index = field.index
+		m.ensureFormFocus()
+		if !strings.Contains(m.View(), m.theme.RowFocus.Render(field.value)) {
+			t.Fatalf("%s must highlight only its option, excluding label and row padding", m.form.labels[field.index])
+		}
 	}
 }
 

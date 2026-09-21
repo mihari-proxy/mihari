@@ -291,13 +291,15 @@ const (
 )
 
 type mutationResultMsg struct {
-	cancelled bool
-	kind      mutationKind
-	id        string
-	result    protocol.SubscriptionResult
-	remove    protocol.MutationResult
-	operation logging.OperationMetadata
-	err       error
+	detailEpoch     uint64
+	requestRevision uint64
+	cancelled       bool
+	kind            mutationKind
+	id              string
+	result          protocol.SubscriptionResult
+	remove          protocol.MutationResult
+	operation       logging.OperationMetadata
+	err             error
 }
 
 // Err implements the shell's action-outcome contract so subscription mutations
@@ -415,6 +417,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, nil
 	case mutationResultMsg:
 		m.finishRequest(typed.operation.ID)
+		if typed.detailEpoch != 0 {
+			return m, m.finishDetailAction(typed)
+		}
 		if m.form != nil && m.saveState == saveSending && typed.operation.ID == m.saveOperation {
 			return m, m.finishSave(typed)
 		}
@@ -673,7 +678,26 @@ func (m *Model) updateForm(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, m.updateSaveKeys(message)
 	}
 	key, isKey := message.(tea.KeyPressMsg)
+	if isKey && key.String() == "pgup" {
+		m.dialogManualScroll = true
+		m.dialogScroll = max(0, m.dialogScroll-3)
+		return m, nil
+	}
+	if isKey && key.String() == "pgdown" {
+		m.dialogManualScroll = true
+		m.dialogScroll += 3
+		return m, nil
+	}
+	if m.form.actionOperation != "" || m.form.actionUncertain {
+		if isKey && key.String() == "esc" {
+			return m, m.closeForm()
+		}
+		return m, nil
+	}
 	if isKey && key.String() == "enter" {
+		if m.form.isAction() {
+			return m, m.submitDetailAction()
+		}
 		if m.form.index < len(m.form.inputs) {
 			cmd := m.form.move(1)
 			m.ensureFormFocus()
@@ -692,16 +716,6 @@ func (m *Model) updateForm(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, m.closeForm()
 		}
 		return m, m.submitForm(form, id, revision)
-	}
-	if isKey && key.String() == "pgup" {
-		m.dialogManualScroll = true
-		m.dialogScroll = max(0, m.dialogScroll-3)
-		return m, nil
-	}
-	if isKey && key.String() == "pgdown" {
-		m.dialogManualScroll = true
-		m.dialogScroll += 3
-		return m, nil
 	}
 	oldIndex := m.form.index
 	closed, command := m.form.Update(message)

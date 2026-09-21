@@ -23,6 +23,10 @@ type formLayout struct {
 func (f *formModel) fieldLayout(theme ui.Theme, width int) formLayout {
 	layout := formLayout{}
 	for index, label := range f.labels {
+		if label == "Enabled" {
+			layout.lines = append(layout.lines, "")
+			layout.lines = append(layout.lines, strings.Split(ansi.Wrap(theme.Title.Render("Actions · Apply immediately"), width, ""), "\n")...)
+		}
 		first := len(layout.lines)
 		marker := "  "
 		if index == f.index {
@@ -34,9 +38,24 @@ func (f *formModel) fieldLayout(theme ui.Theme, width int) formLayout {
 			prefix = "  "
 		}
 		available := max(2, width-lipgloss.Width(prefix))
+		suffix := ""
+		if label == "Interval" {
+			const units = "ns/us/ms/s/m/h"
+			if available < len(units)+6 {
+				layout.lines = append(layout.lines, theme.Muted.Render(prefix))
+				prefix = "  "
+				available = width - len(prefix)
+			}
+			suffix = " " + theme.Muted.Render(units)
+			available = max(2, available-lipgloss.Width(suffix))
+		}
 		// Bubbles reserves an additional cell for its cursor, including when blurred.
 		f.inputs[index].SetWidth(available - 1)
-		value := f.inputs[index].View()
+		value := f.inputs[index].View() + suffix
+		action := label == "Enabled" || label == "InUse"
+		if action {
+			value = f.inputs[index].Value()
+		}
 		if label == "URL" && index != f.index && f.inputs[index].Value() != "" {
 			// Reading shows the origin; editing retains the full value and cursor offset.
 			value = f.inputs[index].Styles().Blurred.Text.Render(ui.TruncateVisible(f.inputs[index].Value(), available))
@@ -56,11 +75,22 @@ func (f *formModel) fieldLayout(theme ui.Theme, width int) formLayout {
 			layout.lines = append(layout.lines, theme.Muted.Render(prefix))
 			prefix = "  "
 		}
+		if action && lipgloss.Width(prefix+value) > width {
+			layout.lines = append(layout.lines, theme.Muted.Render(prefix))
+			prefix = ""
+		}
 		line := theme.Muted.Render(prefix) + value
-		if cycle && index == f.index {
-			line = theme.RowFocus.Render(ui.PadCell(prefix+value, width, ui.AlignLeft))
+		if (cycle || action) && index == f.index {
+			line = theme.Muted.Render(prefix) + theme.RowFocus.Render(value)
 		}
 		layout.lines = append(layout.lines, line)
+		if action && index == f.index {
+			help := "Use requires an enabled subscription with a valid cache."
+			if label == "Enabled" {
+				help = "Disabling also clears InUse. Enabling does not select the subscription."
+			}
+			layout.lines = append(layout.lines, strings.Split(ansi.Wrap(theme.Muted.Render(help), width, ""), "\n")...)
+		}
 		if label == "Mode" && index == f.index {
 			help := "Download subscription YAML directly."
 			switch f.inputs[index].Value() {
@@ -69,10 +99,6 @@ func (f *formModel) fieldLayout(theme ui.Theme, width int) formLayout {
 			case "auto":
 				help = "Download subscription YAML via proxy; retry DIRECT on eligible network errors."
 			}
-			layout.lines = append(layout.lines, strings.Split(ansi.Wrap(theme.Muted.Render(help), width, ""), "\n")...)
-		}
-		if label == "Interval" && index == f.index {
-			help := "Leave blank to use global interval"
 			layout.lines = append(layout.lines, strings.Split(ansi.Wrap(theme.Muted.Render(help), width, ""), "\n")...)
 		}
 		layout.fields = append(layout.fields, formFieldRows{first, len(layout.lines) - 1})
