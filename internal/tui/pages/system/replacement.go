@@ -51,7 +51,7 @@ func (m *Model) CancelMihariPreparation() tea.Cmd {
 	}
 	p := m.pendingPrepared
 	m.pendingPrepared = nil
-	if p != nil || (m.pendingRow == rowMihariUpdate && m.pendingNote != ui.MihariProgressChecking) {
+	if p != nil || m.pendingRow == rowMihariUpdate {
 		m.clearRowPending()
 		m.markRowOutcome(rowMihariUpdate, false, "Update cancelled")
 	}
