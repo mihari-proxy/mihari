@@ -339,6 +339,7 @@ type Model struct {
 	isElevated            func() bool
 	selfCheckResult       update.CheckResult
 	selfCheckLoaded       bool
+	selfChecking          bool
 	selfCheckGeneration   uint64
 	preparationGeneration uint64
 	preparationCancel     context.CancelFunc
@@ -736,7 +737,7 @@ func (m *Model) load(checkVersions bool) tea.Cmd {
 }
 
 func (m *Model) checkMihariVersion() tea.Cmd {
-	if m.selfUpdater == nil || m.pending || m.pendingPrepared != nil {
+	if m.selfUpdater == nil || m.pending || m.pendingPrepared != nil || m.selfChecking {
 		return nil
 	}
 	path, err := m.channelFilePath()
@@ -756,9 +757,7 @@ func (m *Model) checkMihariVersion() tea.Cmd {
 	m.mihariChannelFailed = false
 	m.selfCheckGeneration++
 	generation := m.selfCheckGeneration
-	m.pending = true
-	m.pendingRow = rowMihariUpdate
-	m.pendingNote = ui.MihariProgressChecking
+	m.selfChecking = true
 	if m.outcomeRow == rowMihariUpdate {
 		m.outcomeRow = ""
 		m.outcomeOK = false
@@ -773,6 +772,14 @@ func (m *Model) checkMihariVersion() tea.Cmd {
 		}
 	}
 	return tea.Batch(check, m.rowSpinCmdIfNeeded())
+}
+
+// invalidateMihariCheck prevents an older display check from replacing a
+// channel change or a prepared update. It does not cancel its network request.
+func (m *Model) invalidateMihariCheck() {
+	m.selfCheckGeneration++
+	m.selfChecking = false
+	m.selfCheckLoaded = false
 }
 
 func (m *Model) loadServiceStatus() tea.Cmd {
@@ -921,12 +928,12 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		if typed.err == nil && typed.result.Channel != "" {
 			m.coreVersion.channel = typed.result.Channel
 		}
-		return m, nil
+		return m, m.rowSpinCmdIfNeeded()
 	case selfCheckResultMsg:
 		if typed.generation != m.selfCheckGeneration {
 			return m, nil
 		}
-		m.clearRowPending()
+		m.selfChecking = false
 		if typed.err != nil {
 			m.selfCheckLoaded = false
 			m.markRowOutcome(rowMihariUpdate, false, actionErrorDetail(typed.err, ui.UpdateMihariCheckFailed))
@@ -934,11 +941,14 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		}
 		m.selfCheckResult = typed.result
 		m.selfCheckLoaded = true
-		m.outcomeRow = ""
-		m.outcomeDetail = ""
-		m.lastError = ""
+		if m.outcomeRow == rowMihariUpdate {
+			m.outcomeRow = ""
+			m.outcomeDetail = ""
+			m.lastError = ""
+		}
 		return m, m.rowSpinCmdIfNeeded()
 	case mihariChannelResultMsg:
+		m.invalidateMihariCheck()
 		discard := m.CancelMihariPreparation()
 		m.clearRowPending()
 		if typed.err != nil {
@@ -1059,6 +1069,9 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		}
 		return m, nil
 	case ui.ActionPendingMsg:
+		if typed.Action == ui.ActionSwitchMihariChannel {
+			m.invalidateMihariCheck()
+		}
 		m.beginRowPending(typed.Action)
 		return m, m.rowSpinCmdIfNeeded()
 	case startRowSpinMsg:
@@ -1408,6 +1421,10 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 			value = m.editInput.View()
 		case m.pending && m.pendingRow == item.id && m.pendingNote != "":
 			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, m.pendingNote))
+		case item.id == rowCoreUpdate && m.coreVersion.checking:
+			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, ui.MihariProgressChecking))
+		case item.id == rowMihariUpdate && m.selfChecking:
+			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, ui.MihariProgressChecking))
 		case m.outcomeRow == item.id:
 			if m.outcomeOK {
 				value = ui.RenderStatusChip(m.theme, ui.StatusChipDone, ui.DoneLabel)
@@ -1731,7 +1748,7 @@ func (m *Model) networkRows() []row {
 	if m.hasCapability(protocol.CapabilityEgress) {
 		value := "Loading…"
 		if m.egress.loaded {
-			value = "Saved · " + diagnostics.EscapeTerminal(egressLabel(m.egress.status.Selection))
+			value = m.theme.BrightYellow.Render(diagnostics.EscapeTerminal(egressLabel(m.egress.status.Selection)))
 			if m.egress.status.State == "unknown" {
 				value += " · Application unconfirmed"
 			}

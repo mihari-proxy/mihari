@@ -16,6 +16,8 @@ type Theme struct {
 	ColorInfo          color.Color
 	ColorMuted         color.Color
 	ColorSurfaceBorder color.Color
+	// ColorBrightYellow is 256-color 228 (#FFFF87).
+	ColorBrightYellow color.Color
 	// ColorOnSolid is the foreground for solid-background chips (Done/Failed/Pending).
 	// Dark text keeps contrast on Success/Warning/Danger fills in 256-color terminals.
 	ColorOnSolid color.Color
@@ -39,8 +41,10 @@ type Theme struct {
 
 	Success lipgloss.Style
 	Warning lipgloss.Style
-	Danger  lipgloss.Style
-	Info    lipgloss.Style
+	// BrightYellow marks a selected value with 256-color 228.
+	BrightYellow lipgloss.Style
+	Danger       lipgloss.Style
+	Info         lipgloss.Style
 
 	SurfaceBorder lipgloss.Style
 	Control       lipgloss.Style
@@ -61,6 +65,7 @@ func DefaultTheme() Theme {
 	surfaceBorder := lipgloss.Color("240")
 	muted := lipgloss.Color("245")
 	onSolid := lipgloss.Color("0")
+	brightYellow := lipgloss.Color("228")
 
 	return Theme{
 		ColorAccent:        accent,
@@ -71,6 +76,7 @@ func DefaultTheme() Theme {
 		ColorMuted:         muted,
 		ColorSurfaceBorder: surfaceBorder,
 		ColorOnSolid:       onSolid,
+		ColorBrightYellow:  brightYellow,
 
 		Rail:         lipgloss.NewStyle().Padding(0, 1),
 		RailSelected: lipgloss.NewStyle().Bold(true).Foreground(accent).Padding(0, 1),
@@ -85,10 +91,11 @@ func DefaultTheme() Theme {
 		RowSelected:  lipgloss.NewStyle().Bold(true).Foreground(accent),
 		RowFocus:     lipgloss.NewStyle().Reverse(true),
 
-		Success: lipgloss.NewStyle().Foreground(success),
-		Warning: lipgloss.NewStyle().Foreground(warning),
-		Danger:  lipgloss.NewStyle().Foreground(danger),
-		Info:    lipgloss.NewStyle().Foreground(info),
+		Success:      lipgloss.NewStyle().Foreground(success),
+		Warning:      lipgloss.NewStyle().Foreground(warning),
+		BrightYellow: lipgloss.NewStyle().Foreground(brightYellow),
+		Danger:       lipgloss.NewStyle().Foreground(danger),
+		Info:         lipgloss.NewStyle().Foreground(info),
 
 		SurfaceBorder: lipgloss.NewStyle().Foreground(surfaceBorder),
 		Control:       lipgloss.NewStyle().Foreground(muted).Padding(0, 1),
