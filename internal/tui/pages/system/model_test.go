@@ -3189,8 +3189,7 @@ func TestSystemCheckingMihariAllowsOtherRowActions(t *testing.T) {
 	}
 	model.focusID = rowCoreUpdate
 
-	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if command == nil {
 		t.Fatal("core update was blocked while Mihari check was pending")
 	}
