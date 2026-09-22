@@ -3165,23 +3165,48 @@ func TestSystemMihariVersionCheckRetryIgnoresStaleResult(t *testing.T) {
 	}
 }
 
-func TestSystemCheckingMihariBlocksOtherRowActions(t *testing.T) {
+func TestSystemCheckingMihariAllowsOtherRowActions(t *testing.T) {
 	model := New(&fakeClient{}, func() string { return "system-op" })
 	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityCore}}, protocol.CoreStatus{Version: "v1.19.0"})
 	model.SetMutationsEnabled(true)
 	model.SetSelfUpdater(&fakeSelfUpdater{}, "v0.3.1", "mihari", func() bool { return true })
+	model.channelPath = func() (string, error) { return "mihari-channel", nil }
+	model.loadChannel = func(string) (string, error) { return update.ChannelMain, nil }
 	if command := model.Load(); command == nil {
 		t.Fatal("version check did not start")
 	}
+	if model.pending {
+		t.Fatal("checking occupied mutation state")
+	}
+	before := model.View()
+	_, tick := model.Update(startRowSpinMsg{gen: model.rowSpinGen})
+	if tick == nil {
+		t.Fatal("checking did not schedule animation")
+	}
+	model.Update(rowSpinTickMsg{t: time.Unix(0, int64(rowSpinInterval)), gen: model.rowSpinGen})
+	if after := model.View(); before == after || !strings.Contains(after, ui.MihariProgressChecking) {
+		t.Fatalf("checking animation did not advance:\n%s", after)
+	}
 	model.focusID = rowCoreUpdate
 
-	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(*Model)
-	if command != nil {
-		t.Fatalf("core update was offered while Mihari check pending: %T", command())
+	_, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("core update was blocked while Mihari check was pending")
 	}
-	if model.pendingRow != rowMihariUpdate {
-		t.Fatalf("pending row=%q", model.pendingRow)
+	if _, ok := command().(ui.ActionIntentMsg); !ok {
+		t.Fatalf("core update command=%T", command())
+	}
+}
+
+func TestSystemMihariCheckResultDoesNotClearConcurrentMutation(t *testing.T) {
+	model := New(nil, nil)
+	model.selfCheckGeneration = 1
+	model.beginRowPending(ui.ActionUpdateCore)
+
+	updated, _ := model.Update(selfCheckResultMsg{generation: 1, result: update.CheckResult{Latest: "v9.9.9"}})
+	model = updated.(*Model)
+	if !model.pending || model.pendingRow != rowCoreUpdate {
+		t.Fatalf("check result cleared concurrent mutation: pending=%v row=%q", model.pending, model.pendingRow)
 	}
 }
 

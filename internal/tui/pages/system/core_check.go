@@ -38,10 +38,11 @@ func (m *Model) checkCoreVersion() tea.Cmd {
 	}
 	m.coreVersion = coreVersionState{checking: true, channel: channel, generation: m.coreVersion.generation + 1}
 	generation, ctx := m.coreVersion.generation, m.ctx
-	return func() tea.Msg {
+	check := func() tea.Msg {
 		result, err := checker.CheckCoreVersion(ctx)
 		return ui.PageResultMsg{Page: ui.PageSystem, Result: coreVersionMsg{generation: generation, result: result, err: err}}
 	}
+	return tea.Batch(check, m.rowSpinCmdIfNeeded())
 }
 
 func (m *Model) coreUpdateValue() string {

@@ -16,6 +16,35 @@ type egressTestClient struct {
 	calls int
 }
 
+func TestNetworkRows_SelectedEgressUsesWarningWithoutSaved(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		selection  protocol.EgressSelection
+		interfaces []protocol.EgressInterface
+		want       string
+	}{
+		{name: "automatic", selection: protocol.EgressSelection{Mode: "automatic"}, want: "Automatic"},
+		{name: "manual", selection: protocol.EgressSelection{Mode: "manual", InterfaceName: "Ethernet"}, interfaces: []protocol.EgressInterface{{Name: "Ethernet", Availability: "available", Selectable: true}}, want: "Ethernet"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m := New(&egressTestClient{}, nil)
+			m.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityEgress}}, protocol.CoreStatus{})
+			m.SetEgress(protocol.EgressStatus{Selection: test.selection, Interfaces: test.interfaces})
+			row := m.networkRows()[0]
+			if strings.Contains(row.value, "Saved") {
+				t.Fatalf("main row retained Saved: %q", row.value)
+			}
+			if want := m.theme.BrightYellow.Render(test.want); !strings.Contains(row.value, want) || strings.Contains(row.value, m.theme.Warning.Render(test.want)) {
+				t.Fatalf("selected mode is not bright yellow: value=%q", row.value)
+			}
+			m.openEgressDialog()
+			if view := m.egressDialogView(); !strings.Contains(view, "Saved") {
+				t.Fatalf("dialog lost Saved state: %s", view)
+			}
+		})
+	}
+}
+
 func TestEgressDialog_ScrollsDraftAndKeepsActionsVisible(t *testing.T) {
 	for _, size := range [][2]int{{90, 32}, {60, 26}, {42, 22}} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
