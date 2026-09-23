@@ -2,12 +2,12 @@ package system
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -24,8 +24,10 @@ type egressUI struct {
 	epoch, revision       uint64
 	candidate             string
 	detailTop             int
-	focus, top            int // list, Cancel, Apply
+	top                   int
 	err                   string
+	// result is "", "done", or "failed" for the latest apply in this dialog.
+	result string
 }
 
 type egressResultMsg struct {
@@ -42,7 +44,7 @@ func egressLabel(selection protocol.EgressSelection) string {
 	if selection.Mode == "manual" {
 		return selection.InterfaceName
 	}
-	return "Automatic"
+	return "No-Override"
 }
 func egressAvailability(state string) string {
 	switch state {
@@ -94,10 +96,10 @@ func (m *Model) openEgressDialog() tea.Cmd {
 	}
 	m.egress.open = true
 	m.egress.epoch++
-	m.egress.focus = 0
 	m.egress.top = 0
 	m.egress.detailTop = 0
 	m.egress.err = ""
+	m.egress.result = ""
 	m.egress.candidate = m.egress.status.Selection.InterfaceName
 	m.egress.revision = m.egress.status.Revision
 	return tea.Batch(func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputText} }, m.loadEgress())
@@ -110,13 +112,22 @@ func (m *Model) handleEgressResult(result egressResultMsg) tea.Cmd {
 	if result.mutation {
 		m.egress.pending = false
 		if result.err != nil {
+			m.egress.result = "failed"
 			m.egress.err = actionErrorDetail(result.err, "Could not apply outbound interface") + " (F2: details)"
 			return m.loadEgress()
 		}
+		m.egress.result = "done"
+		m.egress.err = ""
 		m.SetEgress(result.status)
-		m.egress.open = false
-		m.egress.epoch++
-		return tea.Batch(func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }, func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: result.status.Revision} })
+		if result.status.Revision >= m.egress.revision {
+			m.egress.revision = result.status.Revision
+		}
+		if result.status.Selection.Mode == "manual" {
+			m.egress.candidate = result.status.Selection.InterfaceName
+		} else {
+			m.egress.candidate = ""
+		}
+		return func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: result.status.Revision} }
 	}
 	if result.err != nil {
 		m.egress.err = actionErrorDetail(result.err, "Could not read network interfaces") + " (F2: details)"
@@ -142,8 +153,24 @@ func (m *Model) egressCandidateIndex() int {
 	return 0
 }
 
-func (m *Model) egressChanged() bool {
-	return m.egress.candidate != m.egress.status.Selection.InterfaceName
+func (m *Model) egressMatchesSelection() bool {
+	selection := m.egress.status.Selection
+	if m.egress.candidate == "" {
+		return selection.Mode == "automatic"
+	}
+	return selection.Mode == "manual" && selection.InterfaceName == m.egress.candidate
+}
+
+func (m *Model) egressCandidateSelectable() bool {
+	if m.egress.candidate == "" {
+		return true
+	}
+	for _, item := range m.egress.status.Interfaces {
+		if item.Name == m.egress.candidate && item.Selectable {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) updateEgressDialog(message tea.Msg) tea.Cmd {
@@ -154,18 +181,13 @@ func (m *Model) updateEgressDialog(message tea.Msg) tea.Cmd {
 	switch key.String() {
 	case "esc":
 		return m.closeEgressDialog()
-	case "tab":
-		m.egress.focus = (m.egress.focus + 1) % 3
-	case "shift+tab":
-		m.egress.focus = (m.egress.focus + 2) % 3
+	case "tab", "shift+tab":
+		return nil
 	case "pgup":
 		m.egress.detailTop = max(0, m.egress.detailTop-4)
 	case "pgdown":
 		m.egress.detailTop += 4
 	case "up", "down":
-		if m.egress.focus != 0 {
-			return nil
-		}
 		m.egress.detailTop = 0
 		delta := 1
 		if key.String() == "up" {
@@ -183,12 +205,13 @@ func (m *Model) updateEgressDialog(message tea.Msg) tea.Cmd {
 			}
 		}
 	case "enter", "space":
-		if m.egress.focus == 1 {
+		if m.egressMatchesSelection() {
 			return m.closeEgressDialog()
 		}
-		if m.egress.focus == 2 && m.egressChanged() && m.mutationsEnabled && m.egress.loaded {
-			return m.applyEgress()
+		if !m.egressCandidateSelectable() || !m.mutationsEnabled || !m.egress.loaded {
+			return nil
 		}
+		return m.applyEgress()
 	}
 	return nil
 }
@@ -197,6 +220,7 @@ func (m *Model) closeEgressDialog() tea.Cmd {
 	m.egress.open = false
 	m.egress.epoch++
 	m.egress.err = ""
+	m.egress.result = ""
 	return func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
 }
 
@@ -227,153 +251,343 @@ func (m *Model) applyEgress() tea.Cmd {
 	}
 	m.egress.pending = true
 	m.egress.err = ""
+	m.egress.result = ""
 	ctx := m.ctx
-	return func() tea.Msg {
+	submit := func() tea.Msg {
 		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
 		status, err := client.UpdateEgress(ctx, request)
 		return ui.PageResultMsg{Page: ui.PageSystem, Result: egressResultMsg{status: status, epoch: epoch, mutation: true, err: err}}
 	}
+	return tea.Batch(submit, m.rowSpinCmdIfNeeded())
+}
+
+func (m *Model) egressAvailabilityStyle(state string) lipgloss.Style {
+	switch state {
+	case "available":
+		return m.theme.Info
+	case "disconnected":
+		return m.theme.Warning
+	case "not_found":
+		return m.theme.Danger
+	default:
+		return m.theme.Muted
+	}
+}
+
+func (m *Model) egressValueStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
+}
+
+func (m *Model) egressInterfaceLines(item *protocol.EgressInterface, width int) []string {
+	automatic := item == nil
+	name := "No-Override"
+	if !automatic {
+		name = item.Name
+	}
+	chosen := automatic && m.egress.candidate == "" || !automatic && name == m.egress.candidate
+	selection := m.egress.status.Selection
+	effective := automatic && selection.Mode == "automatic" || !automatic && selection.Mode == "manual" && selection.InterfaceName == name
+	const prefixWidth = 4
+	nameWidth := max(1, width-prefixWidth)
+	parts := wrapColumns(diagnostics.EscapeTerminal(name), nameWidth)
+	gutter := "  "
+	if effective {
+		gutter = m.theme.BrightYellow.Render("▸") + " "
+	}
+	dot := "  "
+	if !automatic {
+		dot = m.egressAvailabilityStyle(item.Availability).Render("●") + " "
+	}
+	indent := strings.Repeat(" ", prefixWidth)
+	lines := make([]string, 0, len(parts))
+	for i, part := range parts {
+		text := part
+		if !chosen && effective {
+			text = m.theme.BrightYellow.Render(part)
+		} else if !chosen && !automatic && !item.Selectable {
+			text = m.theme.Muted.Render(part)
+		}
+		if chosen {
+			text = ui.ApplyFocusStyle(ui.PadCell(text, nameWidth, ui.AlignLeft), m.theme.RowFocus)
+		}
+		if i == 0 {
+			lines = append(lines, gutter+dot+text)
+			continue
+		}
+		lines = append(lines, indent+text)
+	}
+	return lines
+}
+
+func wrapColumns(text string, width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return []string{""}
+	}
+	var lines []string
+	current := ""
+	flush := func() {
+		if current == "" {
+			return
+		}
+		lines = append(lines, current)
+		current = ""
+	}
+	for _, word := range words {
+		if ansi.StringWidth(word) > width {
+			flush()
+			lines = append(lines, strings.Split(ansi.Hardwrap(word, width, false), "\n")...)
+			continue
+		}
+		if current == "" {
+			current = word
+			continue
+		}
+		if next := current + " " + word; ansi.StringWidth(next) <= width {
+			current = next
+			continue
+		}
+		flush()
+		current = word
+	}
+	flush()
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
+}
+
+func egressWindowStart(counts []int, top, selected, budget int) int {
+	if selected < 0 || len(counts) == 0 || budget < 1 {
+		return 0
+	}
+	top = max(0, min(top, len(counts)-1))
+	if selected < top {
+		return selected
+	}
+	used := 0
+	for i := top; i <= selected; i++ {
+		used += counts[i]
+	}
+	if used <= budget {
+		return top
+	}
+	start := selected
+	used = counts[selected]
+	if used > budget {
+		return selected
+	}
+	for start > 0 && used+counts[start-1] <= budget {
+		start--
+		used += counts[start]
+	}
+	return start
+}
+
+func (m *Model) egressDetailLines(candidate *protocol.EgressInterface, width int) []string {
+	const labelCol = 12
+	white := m.egressValueStyle()
+	lines := []string{m.theme.Title.Render(ui.TruncateVisible("● DETAILS", width))}
+	add := func(label, value string, style lipgloss.Style) {
+		gap := labelCol - ansi.StringWidth(label)
+		if gap < 2 {
+			gap = 2
+		}
+		column := ansi.StringWidth(label) + gap
+		valueWidth := max(1, width-column)
+		parts := wrapColumns(diagnostics.EscapeTerminal(value), valueWidth)
+		for i, part := range parts {
+			if i == 0 {
+				lines = append(lines, m.theme.Muted.Render(label)+strings.Repeat(" ", gap)+style.Render(part))
+				continue
+			}
+			lines = append(lines, strings.Repeat(" ", column)+style.Render(part))
+		}
+	}
+	cont := func(value string, style lipgloss.Style) {
+		parts := wrapColumns(diagnostics.EscapeTerminal(value), max(1, width-labelCol))
+		for _, part := range parts {
+			lines = append(lines, strings.Repeat(" ", labelCol)+style.Render(part))
+		}
+	}
+	if m.egress.candidate == "" {
+		add("Name", "No-Override", white)
+		cont("Use existing configuration", white)
+		return lines
+	}
+	if candidate == nil {
+		add("Name", m.egress.candidate, white)
+		add("Status", "No longer selectable", white)
+		return lines
+	}
+	add("Name", candidate.Name, white)
+	if candidate.Device != "" {
+		add("Device", candidate.Device, white)
+	}
+	add("Status", egressAvailability(candidate.Availability), m.egressAvailabilityStyle(candidate.Availability))
+	kind := candidate.Kind
+	if kind == "" {
+		kind = ui.MissingValue
+	}
+	add("Type", kind, white)
+	if len(candidate.Addresses) == 0 {
+		add("Addresses", ui.MissingValue, white)
+	} else {
+		add("Addresses", candidate.Addresses[0], white)
+		for _, address := range candidate.Addresses[1:] {
+			cont(address, white)
+		}
+	}
+	if !candidate.Selectable {
+		add("Reason", candidate.Reason, white)
+	}
+	return lines
+}
+
+func (m *Model) egressFootLines(inner int) []string {
+	clock := m.rowSpinClock
+	if clock.IsZero() {
+		clock = time.Unix(0, 0)
+	}
+	switch {
+	case m.egress.pending:
+		return []string{ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, "Applying…"))}
+	case m.egress.result == "done":
+		return []string{ui.RenderStatusChip(m.theme, ui.StatusChipDone, ui.DoneLabel)}
+	case m.egress.result == "failed":
+		chip := ui.RenderStatusChip(m.theme, ui.StatusChipFailed, ui.FailedLabel)
+		detail := diagnostics.EscapeTerminal(strings.TrimSpace(m.egress.err))
+		if detail == "" {
+			return []string{chip}
+		}
+		gap := "  "
+		firstWidth := max(1, inner-lipgloss.Width(chip)-ansi.StringWidth(gap))
+		parts := wrapColumns(detail, firstWidth)
+		lines := []string{chip + gap + parts[0]}
+		indent := strings.Repeat(" ", lipgloss.Width(chip)+ansi.StringWidth(gap))
+		for _, part := range parts[1:] {
+			lines = append(lines, indent+part)
+		}
+		return lines
+	}
+	note := "Enter applies and closes active connections. Esc closes without changes."
+	switch m.egress.status.State {
+	case "unknown":
+		note = "Saved configuration; application unconfirmed."
+	case "saved":
+		note = "Save for the next core start."
+	}
+	return wrapColumns(diagnostics.EscapeTerminal(note), inner)
+}
+
+// egressBoxWidth matches the subscription dialog offset: stay 8 columns inside
+// the page, and stop growing once the box is wide enough for both columns.
+func (m *Model) egressBoxWidth() int {
+	return min(100, max(40, m.layoutWidth()-8))
 }
 
 func (m *Model) egressDialogView() string {
-	width := max(18, min(82, m.width-4))
-	inner := max(12, width-6)
+	frameWidth := m.theme.Dialog.GetHorizontalFrameSize()
+	width := m.egressBoxWidth()
+	inner := max(12, width-frameWidth)
 	wide := inner >= 58
-	bodyHeight := max(2, m.height-15)
-	if !wide {
-		bodyHeight = max(2, bodyHeight-4)
+	frame, fixed := 4, 2
+	if wide && m.height >= 28 {
+		fixed = 3
 	}
-	slots := max(1, bodyHeight/2)
-	selected := m.egressCandidateIndex() - 1
-	if selected >= 0 {
-		if selected < m.egress.top {
-			m.egress.top = selected
-		}
-		if selected >= m.egress.top+slots {
-			m.egress.top = selected - slots + 1
-		}
+	noteLines := m.egressFootLines(inner)
+	if len(noteLines) == 0 {
+		noteLines = []string{""}
 	}
-	m.egress.top = max(0, min(m.egress.top, max(0, len(m.egress.status.Interfaces)-slots)))
+	budget := max(6, m.height-frame-fixed-max(0, len(noteLines)-1))
 	leftWidth := inner
 	if wide {
-		leftWidth = (inner - 3) / 2
-	}
-	line := func(text string) string { return ui.TruncateVisible(diagnostics.EscapeTerminal(text), leftWidth) }
-	selectionRow := func(name, note string, chosen, saved, enabled bool) string {
-		marker := "  "
-		if chosen {
-			marker = "› "
-		}
-		label := marker + name
-		if saved {
-			label += " · Saved"
-		}
-		a, b := line(label), line("  "+note)
-		if !enabled {
-			a = m.theme.Muted.Render(a)
-		}
-		if chosen && m.egress.focus == 0 {
-			a = ui.ApplyFocusStyle(ui.PadCell(a, leftWidth, ui.AlignLeft), m.theme.RowFocus)
-			b = ui.ApplyFocusStyle(ui.PadCell(b, leftWidth, ui.AlignLeft), m.theme.RowFocus)
-		}
-		return a + "\n" + b
-	}
-	left := []string{m.theme.Muted.Render("INTERFACES  ↑↓"), selectionRow("Automatic", "Use existing configuration", m.egress.candidate == "", m.egress.status.Selection.Mode == "automatic", true), m.theme.Muted.Render(strings.Repeat("─", leftWidth))}
-	var candidate *protocol.EgressInterface
-	for i, item := range m.egress.status.Interfaces {
-		if item.Name == m.egress.candidate {
-			copy := item
-			candidate = &copy
-		}
-		if i < m.egress.top || i >= m.egress.top+slots {
-			continue
-		}
-		note := egressAvailability(item.Availability)
-		if !item.Selectable {
-			note = item.Reason
-		} else if item.Kind != "unknown" && item.Kind != "" {
-			note = item.Kind + " · " + note
-		}
-		left = append(left, selectionRow(item.Name, note, item.Name == m.egress.candidate, item.Name == m.egress.status.Selection.InterfaceName, item.Selectable))
-	}
-	left = append(left, m.theme.Muted.Render(fmt.Sprintf("%d–%d / %d", min(len(m.egress.status.Interfaces), m.egress.top+1), min(len(m.egress.status.Interfaces), m.egress.top+slots), len(m.egress.status.Interfaces))))
-	details := []string{m.theme.Muted.Render("DETAILS"), "Automatic", "Use existing configuration"}
-	if m.egress.candidate != "" && candidate == nil {
-		details = []string{"DETAILS", diagnostics.EscapeTerminal(m.egress.candidate), "No longer selectable"}
-	}
-	if candidate != nil {
-		details = []string{m.theme.Muted.Render("DETAILS"), diagnostics.EscapeTerminal(candidate.Name), "Status  " + egressAvailability(candidate.Availability), "Type    " + candidate.Kind, "Addresses"}
-		for _, address := range candidate.Addresses {
-			details = append(details, diagnostics.EscapeTerminal(address))
-		}
-		if len(candidate.Addresses) == 0 {
-			details = append(details, "—")
+		usable := inner - 3
+		leftWidth = max(28, usable/2)
+		if usable-leftWidth < 28 {
+			leftWidth = max(12, usable-28)
 		}
 	}
-	if m.egressChanged() {
-		details = append(details, m.theme.Info.Render("Not applied"))
+	detailLines := 5
+	noOverride := m.egressInterfaceLines(nil, leftWidth)
+	rendered := make([][]string, len(m.egress.status.Interfaces))
+	counts := make([]int, len(rendered))
+	for i := range m.egress.status.Interfaces {
+		item := m.egress.status.Interfaces[i]
+		rendered[i] = m.egressInterfaceLines(&item, leftWidth)
+		counts[i] = max(1, len(rendered[i]))
+	}
+	detailReserve := 0
+	if !wide {
+		detailReserve = 1 + detailLines
+	}
+	ifaceBudget := max(1, budget-1-len(noOverride)-detailReserve)
+	selected := m.egressCandidateIndex() - 1
+	if selected >= 0 {
+		m.egress.top = egressWindowStart(counts, m.egress.top, selected, ifaceBudget)
+	}
+	if len(rendered) == 0 {
+		m.egress.top = 0
 	} else {
-		details = append(details, m.theme.Muted.Render("Saved selection"))
-	}
-	body := strings.Join(left, "\n")
-	rightWidth, detailHeight := inner, 4
-	if wide {
-		rightWidth, detailHeight = inner-leftWidth-3, lipgloss.Height(body)
-	}
-	wrapped := strings.Split(lipgloss.NewStyle().Width(rightWidth).Render(strings.Join(details, "\n")), "\n")
-	m.egress.detailTop = max(0, min(m.egress.detailTop, max(0, len(wrapped)-detailHeight)))
-	visibleDetails := strings.Join(ui.SliceLines(wrapped, m.egress.detailTop, detailHeight), "\n")
-	if wide {
-		right := lipgloss.NewStyle().Width(rightWidth).Render(visibleDetails)
-		body = lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(leftWidth).Render(body), " \u2502 ", right)
-	} else {
-		body += "\n" + visibleDetails
+		m.egress.top = max(0, min(m.egress.top, len(rendered)-1))
 	}
 
-	change := "No changes to apply."
-	if m.egressChanged() {
-		name := m.egress.candidate
-		if name == "" {
-			name = "Automatic"
-		}
-		change = "Apply " + egressLabel(m.egress.status.Selection) + " → " + name
-	}
-	note := " "
-	if m.egress.status.State == "unknown" {
-		note = "Saved configuration; application unconfirmed."
-	}
-	if m.egressChanged() {
-		note = "Applying will close active connections."
-		if m.egress.status.State == "saved" {
-			note = "Save for the next core start."
+	var candidate *protocol.EgressInterface
+	for i := range m.egress.status.Interfaces {
+		if m.egress.status.Interfaces[i].Name == m.egress.candidate {
+			item := m.egress.status.Interfaces[i]
+			candidate = &item
+			break
 		}
 	}
-	if candidate != nil && candidate.Availability != "available" {
-		note = "Interface unavailable. No automatic fallback."
-	}
-	if m.egress.err != "" {
-		note = m.egress.err
-	}
-	if m.egress.pending {
-		note = "Applying…"
-	}
-	button := func(label string, focus int) string {
-		if m.egress.focus == focus {
-			return m.theme.ButtonActive.Render(label)
+	left := []string{m.theme.Title.Render(ui.TruncateVisible("● INTERFACES", leftWidth))}
+	left = append(left, noOverride...)
+	used := 0
+	for i := m.egress.top; i < len(rendered); i++ {
+		if used > 0 && used+counts[i] > ifaceBudget {
+			break
 		}
-		return m.theme.Button.Render(label)
-	}
-	apply := button("[ Apply ]", 2)
-	if !m.egressChanged() || m.egress.pending || !m.mutationsEnabled {
-		apply = m.theme.Muted.Render("[ Apply ]")
-	}
-	savedLabel := egressLabel(m.egress.status.Selection)
-	for _, item := range m.egress.status.Interfaces {
-		if item.Name == m.egress.status.Selection.InterfaceName {
-			savedLabel += " · " + egressAvailability(item.Availability)
+		take := rendered[i]
+		if used == 0 && len(take) > ifaceBudget {
+			take = take[:ifaceBudget]
+		}
+		left = append(left, take...)
+		used += len(take)
+		if used >= ifaceBudget {
+			break
 		}
 	}
-	content := m.theme.Title.Render("Outbound Interface") + "\n" + m.theme.Muted.Render("System / Network") + "\n" + "Saved  " + ui.TruncateVisible(diagnostics.EscapeTerminal(savedLabel), inner-7) + "\n" + body + "\n" + m.theme.Muted.Render(strings.Repeat("─", inner)) + "\n" + ui.TruncateVisible(diagnostics.EscapeTerminal(change), inner) + "\n" + ui.TruncateVisible(diagnostics.EscapeTerminal(note), inner) + "\n" + button("[ Cancel ]", 1) + "  " + apply
+	rightWidth := inner
+	detailHeight := detailLines + 1
+	if wide {
+		rightWidth = inner - leftWidth - 3
+		detailHeight = len(left)
+	}
+	details := m.egressDetailLines(candidate, rightWidth)
+	m.egress.detailTop = max(0, min(m.egress.detailTop, max(0, len(details)-detailHeight)))
+	visible := ui.SliceLines(details, m.egress.detailTop, detailHeight)
+	body := strings.Join(left, "\n")
+	if wide {
+		for len(visible) < len(left) {
+			visible = append(visible, "")
+		}
+		rule := make([]string, len(left))
+		for i := range rule {
+			rule[i] = " │ "
+		}
+		right := lipgloss.NewStyle().Width(rightWidth).Render(strings.Join(visible, "\n"))
+		body = lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(leftWidth).Render(body), strings.Join(rule, "\n"), right)
+	} else {
+		body += "\n" + strings.Join(visible, "\n")
+	}
+	content := m.theme.Title.Render("Outbound Interface Override")
+	if fixed == 3 {
+		content += "\n"
+	}
+	content += "\n" + body + "\n" + strings.Join(noteLines, "\n")
 	return m.theme.Dialog.Width(width).Render(content)
 }
