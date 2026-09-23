@@ -51,13 +51,16 @@ func TestPageSettings_OpenExpandsEverySectionAndKeepsSourceVisible(t *testing.T)
 
 	m = openPageSettings(t, ui.PageSystem)
 	plain := ansi.Strip(m.pageSettings.view(72, 22))
-	if !strings.Contains(plain, "System") || strings.Count(plain, "No settings available yet") != 5 {
+	if !strings.Contains(plain, "› ▾ System") || strings.Count(plain, "No settings available yet") != 5 {
 		t.Fatalf("source header is not the visible end of the list:\n%s", plain)
 	}
 	if lipgloss.Width(m.pageSettings.view(72, 22)) > 72 || lipgloss.Height(m.pageSettings.view(72, 22)) > 22 {
 		t.Fatal("compact open exceeds 72x22")
 	}
+}
 
+func TestPageSettings_TooSmallIgnoresFoldKeys(t *testing.T) {
+	m := openPageSettings(t, ui.PageSystem)
 	m.width, m.height = 71, 22
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, ui.ResizeRequired) || strings.Contains(view, "] all") {
 		t.Fatalf("too-small view:\n%s", view)
@@ -68,7 +71,7 @@ func TestPageSettings_OpenExpandsEverySectionAndKeepsSourceVisible(t *testing.T)
 	}
 	m = pressPageSettings(m, tea.KeyPressMsg{Code: ']', Text: "]"})
 	for id, open := range expanded {
-		if m.pageSettings.expanded[id] != open {
+		if m.pageSettings == nil || m.pageSettings.expanded[id] != open {
 			t.Fatalf("%s changed while the terminal was too small", id)
 		}
 	}
@@ -76,11 +79,12 @@ func TestPageSettings_OpenExpandsEverySectionAndKeepsSourceVisible(t *testing.T)
 	if m.pageSettings != nil {
 		t.Fatal("Esc did not close the too-small dialog")
 	}
+}
 
-	m = NewModel()
-	m = pressPageSettings(m, tea.KeyPressMsg{Code: '?', Text: "?"})
+func TestPageSettings_HelpOmitsFoldAllKeys(t *testing.T) {
+	m := pressPageSettings(NewModel(), tea.KeyPressMsg{Code: '?', Text: "?"})
 	help := ansi.Strip(m.View().Content)
-	if strings.Contains(help, "] all") || strings.Contains(help, "[ all") {
+	if m.modal == nil || strings.Contains(help, "] all") || strings.Contains(help, "[ all") {
 		t.Fatal("global help lists fold-all keys")
 	}
 	for _, binding := range ui.Catalog() {
@@ -142,7 +146,7 @@ func TestPageSettings_CollapseAllSnapsSettingCursorToHeader(t *testing.T) {
 	}
 }
 
-func TestPageSettings_HeaderToggleAndDirectoryEnterKeepOtherSections(t *testing.T) {
+func TestPageSettings_HeaderToggleKeepsOtherSections(t *testing.T) {
 	m := openPageSettings(t, ui.PageProxies)
 	m = pressPageSettings(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.pageSettings.expanded[ui.PageProxies] || !m.pageSettings.expanded[ui.PageOverview] || !m.pageSettings.expanded[ui.PageSystem] {
@@ -152,8 +156,10 @@ func TestPageSettings_HeaderToggleAndDirectoryEnterKeepOtherSections(t *testing.
 	if !m.pageSettings.expanded[ui.PageProxies] || !m.pageSettings.expanded[ui.PageOverview] {
 		t.Fatal("Space did not expand only the focused header")
 	}
+}
 
-	m = openPageSettings(t, ui.PageProxies)
+func TestPageSettings_DirectoryEnterExpandsOnlyTarget(t *testing.T) {
+	m := openPageSettings(t, ui.PageProxies)
 	m = pressPageSettings(m, tea.KeyPressMsg{Code: '[', Text: "["})
 	m = pressPageSettings(m, tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	m = pressPageSettings(m, tea.KeyPressMsg{Code: tea.KeyDown})
