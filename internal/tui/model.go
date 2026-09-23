@@ -1234,6 +1234,11 @@ func (model Model) updateRail(key string) (tea.Model, tea.Cmd) {
 		}
 		model.focus = ui.Focus{Area: ui.FocusContent, Page: model.active}
 		model.pages[model.active].FocusFirst()
+		// System implements LoadStatus so Enter does not start another Mihari
+		// or core version check, and does not cancel one already running.
+		if page, ok := model.pages[model.active].(interface{ LoadStatus() tea.Cmd }); ok {
+			return model, page.LoadStatus()
+		}
 		if page, ok := model.pages[model.active].(interface{ Load() tea.Cmd }); ok {
 			return model, page.Load()
 		}
@@ -1264,8 +1269,9 @@ func (model Model) landRailPage(prev ui.PageID) (tea.Model, tea.Cmd) {
 	}
 	discard := model.clearSystemDoneIfLeaving(prev)
 	// Refresh page-owned snapshots when the rail lands on the page so previews
-	// are not empty until Enter. System (network/service) and Web GUI (panels)
-	// both need this; Enter still Load()s after content focus.
+	// are not empty until Enter. System (network/service, and a fresh Mihari
+	// and core version check) and Web GUI (panels) both need this. Enter into
+	// System calls LoadStatus and does not repeat those version checks.
 	switch model.active {
 	case ui.PageSystem, ui.PageWebGUI:
 		if page, ok := model.pages[model.active].(interface{ Load() tea.Cmd }); ok {
