@@ -31,8 +31,10 @@ func TestPageSettings_F4OpensFromRailAndEscapeReturns(t *testing.T) {
 
 func TestPageSettings_JumpExpandsAndFocusLinksDirectory(t *testing.T) {
 	d := newPageSettings(ui.PageProxies, protocol.TUIPreferences{})
-	if !d.expanded[ui.PageProxies] || d.expanded[ui.PageOverview] {
-		t.Fatal("wrong initial expansion")
+	for _, id := range ui.RailPages() {
+		if !d.expanded[id] {
+			t.Fatalf("%s starts collapsed", id)
+		}
 	}
 	d.key("shift+tab")
 	d.key("down")

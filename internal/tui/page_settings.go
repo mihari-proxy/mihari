@@ -34,7 +34,12 @@ type pageSettingsDialog struct {
 }
 
 func newPageSettings(page ui.PageID, prefs protocol.TUIPreferences) *pageSettingsDialog {
-	d := &pageSettingsDialog{pages: ui.RailPages(), expanded: map[ui.PageID]bool{page: true}, area: 1,
+	pages := ui.RailPages()
+	expanded := make(map[ui.PageID]bool, len(pages))
+	for _, id := range pages {
+		expanded[id] = true
+	}
+	d := &pageSettingsDialog{pages: pages, expanded: expanded, area: 1,
 		original: prefs.EffectiveProxies(), draft: prefs.EffectiveProxies()}
 	for i, id := range d.pages {
 		if id == page {
@@ -66,6 +71,14 @@ func (d *pageSettingsDialog) key(key string) ModalAction {
 		return ModalClose
 	case "ctrl+s":
 		return ModalConfirm
+	case "]", "[":
+		for _, id := range d.pages {
+			d.expanded[id] = key == "]"
+		}
+		if key == "[" && d.focus.field >= 0 {
+			d.focus.field = -1
+		}
+		return ModalNone
 	case "tab", "shift+tab":
 		delta := 1
 		if key == "shift+tab" {
@@ -241,9 +254,9 @@ func (d *pageSettingsDialog) view(width, height int) string {
 	} else if d.err != "" {
 		status = theme.Danger.Render(ui.TruncateVisible(d.err, inner))
 	}
-	hint := "Tab area  ↑/↓ move  Enter select  Esc cancel"
+	hint := "Tab area  ↑/↓ move  Enter select  ] all  [ all  Esc cancel"
 	if d.area == 1 && d.focus.field == 2 {
-		hint = "←/→ adjust (1–50)  Tab area  Esc cancel"
+		hint = "←/→ adjust (1–50)  Tab area  ] all  [ all  Esc cancel"
 	}
 	body := theme.Title.Render("Page Settings") + "\n\n" + strings.Join(lines, "\n") + "\n" + status + "\n" +
 		strings.Repeat(" ", max(0, inner-lipgloss.Width(buttons))) + buttons + "\n" + theme.Muted.Render(hint)

@@ -2,20 +2,20 @@
   │                                                                  │
   │  Page Settings                                                   │
   │                                                                  │
-  │  Sections       │   ▸ Overview                                   │
-  │                 │ › ▾ Proxies ─────────────────────────────────  │
-  │    Overview     │     Extra latency display                 [x]  │
-  │  ● Proxies      │     Automatic latency test                [x]  │
-  │    Conns        │     Test concurrency                    < 5 >  │
-  │    Rules        │   ▸ Conns                                      │
-  │    Logs         │   ▸ Rules                                      │
-  │    Subs         │   ▸ Logs                                       │
-  │    Web GUI      │   ▸ Subs                                       │
-  │    System       │   ▸ Web GUI                                    │
-  │                 │   ▸ System                                     │
-  │                 │                                                │
+  │  Sections       │   ▾ Overview ────────────────────────────────  │
+  │                 │     No settings available yet                  │
+  │    Overview     │ › ▾ Proxies ─────────────────────────────────  │
+  │  ● Proxies      │     Extra latency display                 [x]  │
+  │    Conns        │     Automatic latency test                [x]  │
+  │    Rules        │     Test concurrency                    < 5 >  │
+  │    Logs         │   ▾ Conns ───────────────────────────────────  │
+  │    Subs         │     No settings available yet                  │
+  │    Web GUI      │   ▾ Rules ───────────────────────────────────  │
+  │    System       │     No settings available yet                  │
+  │                 │   ▾ Logs ────────────────────────────────────  │
+  │                 │     No settings available yet                  │
   │                                                                  │
   │                                         [Cancel]  [Save] Ctrl+S  │
-  │  Tab area  ↑/↓ move  Enter select  Esc cancel                    │
+  │  Tab area  ↑/↓ move  Enter select  ] all  [ all  Esc cancel      │
   │                                                                  │
   ╰──────────────────────────────────────────────────────────────────╯
