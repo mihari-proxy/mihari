@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strings"
 )
 
 // NetworkInterface contains local adapter identity and link state, not reachability.
@@ -13,11 +14,34 @@ type NetworkInterface struct {
 	Kind         string
 	Availability string
 	Addresses    []string
+	// Description is the OS device description when it differs from Name.
+	Description string
 }
 
 // NetworkInterfaces enumerates all adapters, including disabled and disconnected ones.
 func NetworkInterfaces(ctx context.Context) ([]NetworkInterface, error) {
-	return enumerateNetworkInterfaces(ctx, net.Interfaces, func(adapter net.Interface) ([]net.Addr, error) { return adapter.Addrs() })
+	items, err := enumerateNetworkInterfaces(ctx, net.Interfaces, func(adapter net.Interface) ([]net.Addr, error) { return adapter.Addrs() })
+	if err != nil {
+		return nil, err
+	}
+	descriptions, err := interfaceDescriptions(ctx)
+	if err != nil {
+		return items, nil
+	}
+	attachInterfaceDescriptions(items, descriptions)
+	return items, nil
+}
+
+// attachInterfaceDescriptions records a device description only when it is a
+// distinct label from the connection name.
+func attachInterfaceDescriptions(items []NetworkInterface, byName map[string]string) {
+	for i := range items {
+		desc := strings.TrimSpace(byName[items[i].Name])
+		if desc == "" || desc == items[i].Name {
+			continue
+		}
+		items[i].Description = desc
+	}
 }
 
 func enumerateNetworkInterfaces(ctx context.Context, list func() ([]net.Interface, error), addrs func(net.Interface) ([]net.Addr, error)) ([]NetworkInterface, error) {

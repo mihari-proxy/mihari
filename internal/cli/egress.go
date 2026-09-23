@@ -77,7 +77,7 @@ func newEgressCommand(dependencies Dependencies, options *runOptions) *cobra.Com
 				}
 				return renderWarnings(command.ErrOrStderr(), status.WarningOutcome)
 			}
-			name := "Automatic"
+			name := "No-Override"
 			if status.Selection.Mode == "manual" {
 				name = strconv.Quote(status.Selection.InterfaceName)
 			}

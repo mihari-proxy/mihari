@@ -487,7 +487,7 @@ func (m *Model) HelpMode() string {
 // FooterHints returns edit-mode shortcuts while a port row is being typed.
 func (m *Model) FooterHints() string {
 	if m.egress.open {
-		return "↑/↓ select  PgUp/Dn details  Tab actions  Enter activate  Esc cancel"
+		return "↑/↓ select  PgUp/Dn details  Enter use  Esc close"
 	}
 	if m.directoryCopyAvailable(m.focusID) && m.editID == "" && m.detail == nil {
 		return "↑/↓ navigate  Enter copy directory  Esc back  ? help  q quit"
@@ -1745,21 +1745,6 @@ func padEndpointLabel(label string) string {
 func (m *Model) networkRows() []row {
 	section := ui.NetworkSectionTitle
 	var rows []row
-	if m.hasCapability(protocol.CapabilityEgress) {
-		value := "Loading…"
-		if m.egress.loaded {
-			value = m.theme.BrightYellow.Render(diagnostics.EscapeTerminal(egressLabel(m.egress.status.Selection)))
-			if m.egress.status.State == "unknown" {
-				value += " · Application unconfirmed"
-			}
-			for _, item := range m.egress.status.Interfaces {
-				if item.Name == m.egress.status.Selection.InterfaceName {
-					value += " · " + egressAvailability(item.Availability)
-				}
-			}
-		}
-		rows = append(rows, row{id: "egress", section: section, label: "Outbound Interface", value: value, detail: "Choose the outbound network interface"})
-	}
 	if m.hasCapability(protocol.CapabilitySystemProxy) {
 		// Status row shows observed state. It is never overlaid by the
 		// pending/outcome chips (those bind the action row below), so the live
@@ -1822,6 +1807,21 @@ func (m *Model) networkRows() []row {
 			value:  actionState(m.hasCapability(protocol.CapabilityTUN), m.mutationsEnabled),
 			detail: tunImpact,
 		})
+	}
+	if m.hasCapability(protocol.CapabilityEgress) {
+		value := "Loading…"
+		if m.egress.loaded {
+			value = m.theme.BrightYellow.Render(diagnostics.EscapeTerminal(egressLabel(m.egress.status.Selection)))
+			if m.egress.status.State == "unknown" {
+				value += " · Application unconfirmed"
+			}
+			for _, item := range m.egress.status.Interfaces {
+				if item.Name == m.egress.status.Selection.InterfaceName {
+					value += " · " + egressAvailability(item.Availability)
+				}
+			}
+		}
+		rows = append(rows, row{id: "egress", section: section, label: "Outbound Interface Override", value: value, detail: "Override the outbound interface binding"})
 	}
 	return rows
 }
