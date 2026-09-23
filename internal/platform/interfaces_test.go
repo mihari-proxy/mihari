@@ -27,6 +27,18 @@ func TestNetworkInterfaces_LinkStateOrderingAndCancellation(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+func TestAttachInterfaceDescriptions_SkipsBlankAndDuplicateNames(t *testing.T) {
+	items := []NetworkInterface{{Name: "以太网"}, {Name: "VMnet1"}, {Name: "本地连接"}}
+	attachInterfaceDescriptions(items, map[string]string{
+		"以太网":    "Realtek Gaming 2.5GbE Family Controller",
+		"VMnet1": "VMnet1",
+		"本地连接":   "  Wintun Userspace Tunnel  ",
+	})
+	if items[0].Description != "Realtek Gaming 2.5GbE Family Controller" || items[1].Description != "" || items[2].Description != "Wintun Userspace Tunnel" {
+		t.Fatalf("%+v", items)
+	}
+}
+
 func TestNetworkInterfaces_EnumerationFailureIsNotEmptySuccess(t *testing.T) {
 	failure := errors.New("enumeration failed")
 	_, err := enumerateNetworkInterfaces(t.Context(), func() ([]net.Interface, error) { return nil, failure }, nil)

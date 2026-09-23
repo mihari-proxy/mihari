@@ -72,6 +72,15 @@ func TestEgressCLI_CommandsPreserveNamesAndRevision(t *testing.T) {
 	}
 }
 
+func TestEgressCLI_TextShowsNoOverride(t *testing.T) {
+	c := &egressCLIClient{}
+	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
+	code := Execute(t.Context(), []string{"egress", "status"}, out, errOut, Dependencies{RuntimeClient: c})
+	if code != ExitOK || !strings.Contains(out.String(), "Saved: No-Override") {
+		t.Fatalf("code=%d out=%s err=%s", code, out, errOut)
+	}
+}
+
 func TestEgressCLI_ApplyFailureIsNotSuccess(t *testing.T) {
 	c := &egressCLIClient{failure: errors.New("apply failed")}
 	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}

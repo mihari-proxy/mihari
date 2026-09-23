@@ -11,6 +11,8 @@ type EgressInterface struct {
 	Addresses    []string `json:"addresses"`
 	Selectable   bool     `json:"selectable"`
 	Reason       string   `json:"reason,omitempty"`
+	// Device is the OS adapter description when it differs from Name.
+	Device string `json:"device,omitempty"`
 }
 
 // EgressSelection is automatic or bound to an exact local interface name.

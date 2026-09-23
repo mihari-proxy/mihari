@@ -180,15 +180,15 @@ mihari egress auto
 
 选择按网卡精确名称保存，作用于整个实例，切换订阅后保留。候选包括本次枚举到的物理或虚拟网卡，以及已保存但缺失的网卡；不能预填未知名称。自身 TUN 显示但禁选。类型无法可靠识别时显示 Unknown，可用状态只反映本地网卡状态，不探测互联网。
 
-手动模式在生成配置中覆盖全局、节点、provider override 和 DNS 的显式网卡绑定，保留原订阅、DNS 服务器及代理链选择。若 DNS 需要覆盖的接口名与代理名或 `RULES` 等保留名冲突，或包含原生片段语法的 `&` / `=`，生成失败并保留原配置，避免被核心误解为代理选择。Automatic 撤销 Mihari 的覆盖，恢复订阅原有语义。
+手动模式在生成配置中覆盖全局、节点、provider override 和 DNS 的显式网卡绑定，保留原订阅、DNS 服务器及代理链选择。若 DNS 需要覆盖的接口名与代理名或 `RULES` 等保留名冲突，或包含原生片段语法的 `&` / `=`，生成失败并保留原配置，避免被核心误解为代理选择。No-Override 撤销 Mihari 的覆盖，恢复订阅原有语义。
 
 核心运行时完整重载、读回确认并关闭其跟踪的活动连接；不重启核心，不承诺清除原生所有连接池或后台任务。核心停止时只保存，显示 Saved，下次启动使用。网卡 Down、缺失或恢复不会触发自动回退、停核或额外重载；同名重建按同一选择处理。失败补偿至旧配置，已关闭连接无法复活；恢复无法确认时进入 degraded，后续修改被拒绝。
 
-TUI 入口为 **System → Network → Outbound Interface**。Automatic 固定在左侧滚动区上方；↑/↓ 浏览、到首尾停止，PgUp/PgDn 滚动详情，Tab 进入 Cancel / Apply。失败保留草稿，F2 查看完整诊断。此操作与启用 TUN 的已有冲突确认相互独立，不增加二次确认。
+TUI 入口为 **System → Network → Outbound Interface Override**。No-Override 固定在左侧滚动区上方；↑/↓ 浏览、到首尾停止，PgUp/PgDn 滚动详情，回车使用当前行。失败保留当前行，F2 查看完整诊断。此操作与启用 TUN 的已有冲突确认相互独立，不增加二次确认。
 
 采用 mihomo 原生接口绑定；系统 DNS、DHCP DNS 来源、回环/链路本地等原生例外仍按核心语义执行。它不解决两个全局 TUN 的入口路由竞争，也不提供操作系统级隔离或 kill switch。真实双 TUN 流量归属需要在隔离环境单独验证。
 
-新增本地能力 `egress-interface-v1` 与 GET/PATCH `/v1/egress`，不向 Web gateway 开放。JSON 包含 `selection`、`state`（saved/applied/unknown）、`interfaces`、`revision`，set/auto 支持 `--if-revision`。设置字段 `egress-interface` 只在手动模式保存；降级到不认识该字段的旧 Mihari 前先执行 `egress auto`。
+新增本地能力 `egress-interface-v1` 与 GET/PATCH `/v1/egress`，不向 Web gateway 开放。JSON 包含 `selection`、`state`（saved/applied/unknown）、`interfaces`、`revision`，set/auto 支持 `--if-revision`。`interfaces[].device` 是与连接名不同的操作系统设备描述；没有单独描述时省略。设置字段 `egress-interface` 只在手动模式保存；降级到不认识该字段的旧 Mihari 前先执行 `egress auto`。
 
 ## Web 面板
 

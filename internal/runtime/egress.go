@@ -63,7 +63,7 @@ func (m *Manager) egressStatus(ctx context.Context) (protocol.EgressStatus, erro
 	own := m.egressOwnTun(ctx, live)
 	found := false
 	for _, adapter := range adapters {
-		item := protocol.EgressInterface{Name: adapter.Name, Kind: adapter.Kind, Availability: adapter.Availability, Addresses: append([]string{}, adapter.Addresses...), Selectable: adapter.Name != own}
+		item := protocol.EgressInterface{Name: adapter.Name, Kind: adapter.Kind, Availability: adapter.Availability, Addresses: append([]string{}, adapter.Addresses...), Device: adapter.Description, Selectable: adapter.Name != own}
 		if item.Kind == "" {
 			item.Kind = "unknown"
 		}
