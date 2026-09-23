@@ -287,6 +287,28 @@ func TestEgressDialog_WideRuleSpansBothColumns(t *testing.T) {
 	}
 }
 
+func TestEgressWindowStart_ScrollsOnlyWhenSelectionLeaves(t *testing.T) {
+	counts := make([]int, 30)
+	for i := range counts {
+		counts[i] = 1
+	}
+	top := 0
+	for selected := 0; selected < len(counts); selected++ {
+		top = egressWindowStart(counts, top, selected, 10)
+	}
+	if top == 0 {
+		t.Fatal("window did not follow the selection")
+	}
+	for selected := 29; selected >= top; selected-- {
+		if got := egressWindowStart(counts, top, selected, 10); got != top {
+			t.Fatalf("selection %d moved top %d to %d", selected, top, got)
+		}
+	}
+	if got := egressWindowStart(counts, top, top-1, 10); got != top-1 {
+		t.Fatalf("selection above the window stayed at %d", got)
+	}
+}
+
 func TestWrapColumns_BreaksOverlongToken(t *testing.T) {
 	lines := wrapColumns(strings.Repeat("a", 25), 10)
 	if strings.Join(lines, "") != strings.Repeat("a", 25) {

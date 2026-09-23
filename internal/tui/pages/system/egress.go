@@ -361,12 +361,23 @@ func wrapColumns(text string, width int) []string {
 	return lines
 }
 
-func egressWindowStart(counts []int, selected, budget int) int {
+func egressWindowStart(counts []int, top, selected, budget int) int {
 	if selected < 0 || len(counts) == 0 || budget < 1 {
 		return 0
 	}
+	top = max(0, min(top, len(counts)-1))
+	if selected < top {
+		return selected
+	}
+	used := 0
+	for i := top; i <= selected; i++ {
+		used += counts[i]
+	}
+	if used <= budget {
+		return top
+	}
 	start := selected
-	used := counts[selected]
+	used = counts[selected]
 	if used > budget {
 		return selected
 	}
@@ -517,7 +528,7 @@ func (m *Model) egressDialogView() string {
 	ifaceBudget := max(1, budget-1-len(noOverride)-detailReserve)
 	selected := m.egressCandidateIndex() - 1
 	if selected >= 0 {
-		m.egress.top = egressWindowStart(counts, selected, ifaceBudget)
+		m.egress.top = egressWindowStart(counts, m.egress.top, selected, ifaceBudget)
 	}
 	if len(rendered) == 0 {
 		m.egress.top = 0

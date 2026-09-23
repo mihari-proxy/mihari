@@ -26,6 +26,11 @@ func NetworkInterfaces(ctx context.Context) ([]NetworkInterface, error) {
 	}
 	descriptions, err := interfaceDescriptions(ctx)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		// Descriptions are display-only. Enumeration stays authoritative, so a
+		// lookup failure degrades to names without device descriptions.
 		return items, nil
 	}
 	attachInterfaceDescriptions(items, descriptions)
