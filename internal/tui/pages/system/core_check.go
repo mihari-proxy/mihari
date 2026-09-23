@@ -6,14 +6,12 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
-	"time"
 )
 
 type coreVersionState struct {
 	latest, channel  string
 	checking, failed bool
 	generation       uint64
-	checkedAt        time.Time
 }
 type coreVersionMsg struct {
 	generation uint64
@@ -32,8 +30,9 @@ func (m *Model) checkCoreVersion() tea.Cmd {
 		return nil
 	}
 	channel := coreChannelName(m.core.Channel)
-	if m.coreVersion.channel == channel && (m.coreVersion.checking ||
-		(!m.coreVersion.failed && m.coreVersion.latest != "" && time.Since(m.coreVersion.checkedAt) < 5*time.Minute)) {
+	// A check already running for this channel keeps its generation. Selecting
+	// the page again, or entering it, must not drop that result.
+	if m.coreVersion.channel == channel && m.coreVersion.checking {
 		return nil
 	}
 	m.coreVersion = coreVersionState{checking: true, channel: channel, generation: m.coreVersion.generation + 1}
@@ -69,5 +68,12 @@ func (m *Model) coreUpdateValue() string {
 	if current == state.latest {
 		return diagnostics.EscapeTerminal(state.latest) + " · Up to date"
 	}
-	return diagnostics.EscapeTerminal(state.latest) + " · available"
+	if current == "" {
+		current = ui.UnknownLabel
+	}
+	return updateAvailableValue(diagnostics.EscapeTerminal(current), diagnostics.EscapeTerminal(state.latest))
+}
+
+func updateAvailableValue(current, latest string) string {
+	return current + " -> " + latest + " " + ui.UpdateMihariAvailable
 }

@@ -2961,6 +2961,37 @@ func TestSystemPanelOpenFailureShowsStickyFailed(t *testing.T) {
 	}
 }
 
+func TestVersionChecks_RepeatLoadKeepsInFlightAndRechecksAfterCompletion(t *testing.T) {
+	updater := &fakeSelfUpdater{checkResult: update.CheckResult{Current: "v0.9.0", Latest: "v0.9.1", Available: true}}
+	client := &coreCheckingClient{result: protocol.VersionCheck{Latest: "v1.19.31", Channel: "stable"}}
+	model := New(client, nil)
+	model.SetSelfUpdater(updater, "v0.9.0", "mihari", func() bool { return true })
+	model.channelPath = func() (string, error) { return filepath.Join(t.TempDir(), "mihari-channel"), nil }
+	model.loadChannel = func(string) (string, error) { return update.ChannelMain, nil }
+	model.SetMutationsEnabled(true)
+	model.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityCore}}, protocol.CoreStatus{Version: "v1.19.30", Channel: "stable"})
+
+	first := model.Load()
+	mihariGen, coreGen := model.selfCheckGeneration, model.coreVersion.generation
+	if !model.selfChecking || !model.coreVersion.checking || mihariGen == 0 || coreGen == 0 {
+		t.Fatalf("first load mihari=%v gen=%d core=%v gen=%d", model.selfChecking, mihariGen, model.coreVersion.checking, coreGen)
+	}
+	if second := model.Load(); second != nil || model.selfCheckGeneration != mihariGen || model.coreVersion.generation != coreGen {
+		t.Fatalf("in-flight load interrupted mihari %d->%d core %d->%d cmd=%v", mihariGen, model.selfCheckGeneration, coreGen, model.coreVersion.generation, second != nil)
+	}
+	runCoreCheckCommands(model, first)
+	if updater.checkCalls != 1 || client.checks != 1 {
+		t.Fatalf("finished checks mihari=%d core=%d", updater.checkCalls, client.checks)
+	}
+	if !strings.Contains(model.View(), "v0.9.0 -> v0.9.1 available") || !strings.Contains(model.View(), "v1.19.30 -> v1.19.31 available") {
+		t.Fatalf("in-flight results dropped:\n%s", model.View())
+	}
+	runCoreCheckCommands(model, model.Load())
+	if updater.checkCalls != 2 || client.checks != 2 {
+		t.Fatalf("reload after completion mihari=%d core=%d", updater.checkCalls, client.checks)
+	}
+}
+
 func TestSystemLoadStartsMihariVersionCheck(t *testing.T) {
 	updater := &fakeSelfUpdater{checkResult: update.CheckResult{Current: "v0.3.1", Latest: "v0.4.0", Available: true}}
 	model := New(nil, nil)
@@ -2989,7 +3020,7 @@ func TestSystemMihariVersionCheckRendersAvailable(t *testing.T) {
 		result:     update.CheckResult{Current: "v0.3.1", Latest: "v0.4.0", Available: true},
 	})
 	model = updated.(*Model)
-	if view := model.View(); !strings.Contains(view, "v0.3.1 · v0.4.0 available") {
+	if view := model.View(); !strings.Contains(view, "v0.3.1 -> v0.4.0 available") {
 		t.Fatalf("available view:\n%s", view)
 	}
 }
@@ -3065,7 +3096,7 @@ func TestSystemMihariPrereleaseOnMainOffersOfficialUpdate(t *testing.T) {
 	})
 	model = updated.(*Model)
 	view := model.View()
-	if !strings.Contains(view, "v0.9.0-dev.8 · v0.8.2 "+ui.UpdateMihariAvailable) {
+	if !strings.Contains(view, "v0.9.0-dev.8 -> v0.8.2 "+ui.UpdateMihariAvailable) {
 		t.Fatalf("available view:\n%s", view)
 	}
 	if strings.Contains(view, fmt.Sprintf(ui.UpdateMihariAhead, update.ChannelMain, "v0.8.2")) {
@@ -3094,7 +3125,7 @@ func TestSystemMihariOfficialOnDevOffersPrereleaseUpdate(t *testing.T) {
 	})
 	model = updated.(*Model)
 	view := model.View()
-	if !strings.Contains(view, "v0.8.2 · v0.9.0-dev.8 "+ui.UpdateMihariAvailable) {
+	if !strings.Contains(view, "v0.8.2 -> v0.9.0-dev.8 "+ui.UpdateMihariAvailable) {
 		t.Fatalf("available view:\n%s", view)
 	}
 	if strings.Contains(view, fmt.Sprintf(ui.UpdateMihariAhead, update.ChannelDev, "v0.9.0-dev.8")) {

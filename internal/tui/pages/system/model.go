@@ -693,8 +693,14 @@ func (m *Model) Load() tea.Cmd {
 	return m.load(true)
 }
 
-func (m *Model) refresh() tea.Cmd {
+// LoadStatus refreshes System data without starting Mihari or core version checks.
+// Entering the page uses it so a check started by selecting the page keeps running.
+func (m *Model) LoadStatus() tea.Cmd {
 	return m.load(false)
+}
+
+func (m *Model) refresh() tea.Cmd {
+	return m.LoadStatus()
 }
 
 func (m *Model) load(checkVersions bool) tea.Cmd {
@@ -922,9 +928,6 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		m.coreVersion.checking = false
 		m.coreVersion.failed = typed.err != nil || typed.result.Latest == ""
 		m.coreVersion.latest = typed.result.Latest
-		if !m.coreVersion.failed {
-			m.coreVersion.checkedAt = time.Now()
-		}
 		if typed.err == nil && typed.result.Channel != "" {
 			m.coreVersion.channel = typed.result.Channel
 		}
@@ -1633,7 +1636,7 @@ func (m *Model) mihariUpdateRow() row {
 		latest := valueOr(m.selfCheckResult.Latest, ui.UnknownLabel)
 		switch {
 		case m.selfCheckResult.Available:
-			value = current + " · " + latest + " " + ui.UpdateMihariAvailable
+			value = updateAvailableValue(current, latest)
 		case m.selfCheckResult.Ahead:
 			channel := valueOr(m.selfCheckResult.Channel, m.currentMihariChannel())
 			value = current + " · " + fmt.Sprintf(ui.UpdateMihariAhead, channel, latest)
