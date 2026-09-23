@@ -30,6 +30,7 @@ func (m *Model) checkPanelVersions() tea.Cmd {
 	for _, panel := range m.status.Panels {
 		commands = append(commands, m.checkPanelVersion(panel.ID))
 	}
+	commands = append(commands, m.ensureVersionSpin())
 	return tea.Batch(commands...)
 }
 
@@ -56,6 +57,39 @@ func (m *Model) checkPanelVersion(id string) tea.Cmd {
 		result, err := checker.CheckPanelVersion(ctx, id)
 		return ui.PageResultMsg{Page: ui.PageWebGUI, Result: panelVersionMsg{id: id, result: result, err: err, generation: state.generation}}
 	}
+}
+
+func (m *Model) anyVersionChecking() bool {
+	for _, state := range m.versions {
+		if state.checking {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) ensureVersionSpin() tea.Cmd {
+	if m.versionSpinning || !m.anyVersionChecking() {
+		return nil
+	}
+	m.versionSpinning = true
+	m.versionSpinGen++
+	if m.versionClock.IsZero() {
+		m.versionClock = time.Now()
+	}
+	return m.versionTick()
+}
+
+func (m *Model) versionTick() tea.Cmd {
+	gen := m.versionSpinGen
+	return tea.Tick(installSpinInterval, func(at time.Time) tea.Msg {
+		return ui.PageResultMsg{Page: ui.PageWebGUI, Result: versionSpinTickMsg{at: at, gen: gen}}
+	})
+}
+
+type versionSpinTickMsg struct {
+	at  time.Time
+	gen uint64
 }
 
 // latestLabel describes the version check and update availability independently of progress.

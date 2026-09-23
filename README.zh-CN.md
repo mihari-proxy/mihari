@@ -128,7 +128,7 @@ mihari sysproxy enable
 - **端口配置**:System 页面可修改 Mixed / Controller / Web 端口;占用显示 `Owned` 或 `Occupied by name (pid)`。启动期间尚未收到核心身份时，已检测到监听进程的端口显示中性的 `Checking owner…`。重启后，归属判断随守护进程/核心 PID 更新，无需重新进入页面。应用后通常需要重启守护进程。
 - **TUI 内更新 Mihari**：导航栏选中 System、按 Enter 进入之前检查 GitHub Releases，显示 `当前版本 -> 最新版本 available` 或 `当前版本 · Up to date`；以管理员/root 权限启动时可替换二进制、同步并重启已安装的系统服务副本、验证 daemon 版本，并自动进入更新后的 TUI。更新确认会将安全的非标准已安装构建标识显示为 `Unknown[标识]`，兼容性仍为未知；长内容可用 ↑/↓ 或 PgUp/PgDn 滚动，默认选择 Cancel。
 - **内核通道**:System 页面可在 mihomo 的 `stable` / `alpha` 通道之间切换。
-- **自动版本检查**：导航栏选中 System、按 Enter 进入之前，每次都会检查 Mihari 和 core 当前通道。按 Enter 进入页面不会再次发起这两项检查，也不会取消已经在进行的检查。进入 Web GUI 时逐项检查所有支持的面板，包括尚未安装的面板。Core 与 Mihari 检查会显示带动画的 `Checking`，随后显示 `当前版本 -> 最新版本 available`、`Up to date` 或 `Check failed`；这些 System 检查不会阻断其他 System 操作。面板的成功结果在本次 TUI 会话内缓存 5 分钟。Mihari 或 core 检查失败时，下次用导航栏再次选中 System 会重试。core 安装/通道切换，以及面板安装/更新/回滚/重装/卸载成功后，立即刷新对应版本检查。检查只获取元数据，安装仍需确认。
+- **自动版本检查**：导航栏选中 System、按 Enter 进入之前，每次都会检查 Mihari 和 core 当前通道。按 Enter 进入页面不会再次发起这两项检查，也不会取消已经在进行的检查。进入 Web GUI 时逐项检查所有支持的面板，包括尚未安装的面板。Core 与 Mihari 检查会显示带动画的 `Checking`，随后显示 `当前版本 -> 最新版本 available`、`Up to date` 或 `Check failed`；这些 System 检查不会阻断其他 System 操作。Web GUI 面板检查进行时，Latest 使用同一个 badge。面板的成功结果在本次 TUI 会话内缓存 5 分钟。Mihari 或 core 检查失败时，下次用导航栏再次选中 System 会重试。core 安装/通道切换，以及面板安装/更新/回滚/重装/卸载成功后，立即刷新对应版本检查。检查只获取元数据，安装仍需确认。
 
 Windows 更新可使用同一用户的非管理员令牌查询用户目录中的安装版本，包括默认的 AppData 安装位置。若降权 UAC 令牌只能识别身份，Mihari 会在核验同一用户、同一登录会话和非管理员权限后，使用桌面 Shell 的令牌。目录权限不安全或无法取得通过核验的令牌时，版本仍显示 unknown；版本查询不会以管理员权限执行用户可写的文件。
 
@@ -144,7 +144,7 @@ TUI 节点测速进行中时，卡片在协议名称旁仅显示盲文加载动�
 
 任一主页面按 **F4** 打开统一 **Page Settings**，也可访问 Proxies 的 **Basic** 第一行第二列入口。弹窗左侧是 Section 目录，右侧保留完整、可滚动的配置列表；打开时全部 Section 展开，并聚焦来源页面。展开状态每次打开都恢复为全部展开。左侧 Enter 跳转并展开右侧对应标题，不改变其他 Section 的折叠状态；右侧光标跨组移动时，左侧高亮同步跟随。其他页面暂显示 **No settings available yet**。Proxies 提供默认开启的 **Extra latency display** 和 **Automatic latency test**，以及 **Test concurrency**（测速并发数，范围 **1–50**，默认 **5**）。选中并发数后用 ←/→ 调整；每个 TUI 的自动与手动测速共用此上限。保存后调高会立即补充排队任务，调低则让已开始的请求完成，再按新上限调度。这些设置由 daemon 保存，同一 daemon 的 TUI 客户端共享，重启 TUI 后保留，不覆盖 Conns 列设置。
 
-↑/↓ 在列表内移动，Enter/Space 展开标题或切换开关；Tab/Shift+Tab 在左侧目录、右侧配置区、Cancel、Save 之间切换。这四个区域按 **]** 展开全部 Section，按 **[** 折叠全部 Section，底栏显示 `] all` 与 `[ all`；折叠不改变草稿。底部按钮固定可见，任意位置按 **Ctrl+S** 保存，Esc/Cancel 放弃草稿，保存后生效。TUI 与 daemon 应配套升级；旧版不能读取包含非默认 Proxies 设置的偏好文件，旧版 daemon 也不能读取非默认测速并发数，降级前应先恢复为 5；两个开关和并发数都恢复默认后会移除该可选块。
+↑/↓ 在列表内移动，Enter/Space 展开标题或切换开关；Tab/Shift+Tab 在左侧目录、右侧配置区、Cancel、Save 之间切换。这四个区域按 **]** 展开全部 Section，按 **[** 折叠全部 Section，底栏显示 `] Expand all` 与 `[ Collapse all`；折叠不改变草稿。底部按钮固定可见。任意位置按 **Ctrl+S** 或 Save 开始保存，弹窗保持打开：先播放橙色 **Saving** 动画 badge，结束后显示绿色 **Done** badge，或红色 **Failed** badge 加错误详情。Esc 或 Cancel 才关闭弹窗。没有改动时不会请求 daemon，Ctrl+S 同样留在弹窗并显示 **Done**。保存成功后生效。TUI 与 daemon 应配套升级；旧版不能读取包含非默认 Proxies 设置的偏好文件，旧版 daemon 也不能读取非默认测速并发数，降级前应先恢复为 5；两个开关和并发数都恢复默认后会移除该可选块。
 
 TUI 订阅表格的 Name 和 Traffic 列按内容分配宽度，分别最多占 40 和 24 个终端字符格；多余空间留在右侧，窄屏优先隐藏次要字段。
 

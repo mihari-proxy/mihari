@@ -83,14 +83,25 @@ func TestPageSettings_LatencyConcurrencySaveAndCancel(t *testing.T) {
 			if cmd == nil {
 				t.Fatal("save command missing")
 			}
-			next, _ = m.Update(cmd())
+			msg := cmd()
+			if batch, ok := msg.(tea.BatchMsg); ok {
+				msg = batch[0]()
+			}
+			next, _ = m.Update(msg)
 			want, calls = 6, 1
 		} else {
 			next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 		}
 		m = next.(Model)
-		if m.pageSettings != nil || client.calls != calls || m.preferences.EffectiveProxies().LatencyTestConcurrency != want {
+		if client.calls != calls || m.preferences.EffectiveProxies().LatencyTestConcurrency != want {
 			t.Fatalf("save=%t calls=%d preferences=%+v", save, client.calls, m.preferences)
+		}
+		if save {
+			if m.pageSettings == nil || !m.pageSettings.showDone || m.pageSettings.draft.LatencyTestConcurrency != want {
+				t.Fatalf("save left dialog=%v", m.pageSettings)
+			}
+		} else if m.pageSettings != nil {
+			t.Fatal("cancel did not close Page Settings")
 		}
 		if save && (client.request.Proxies.LatencyTestConcurrency != 6 || *client.request.IfRevision != 7 || client.request.ConnectionsColumns != nil || client.request.LogLevels != nil) {
 			t.Fatalf("wrong save request: %+v", client.request)
