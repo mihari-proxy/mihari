@@ -30,7 +30,7 @@ func (m *Model) startupApplying(rowID string) bool {
 }
 
 func (m *Model) hasRowProgress() bool {
-	return (m.pending && m.pendingRow != "") || m.coreVersion.checking || m.selfChecking || m.startupApplying(rowSystemProxy) || m.startupApplying(rowTUN)
+	return (m.pending && m.pendingRow != "") || m.coreVersion.checking || m.selfChecking || m.startupApplying(rowSystemProxy) || m.startupApplying(rowTUN) || m.egress.pending
 }
 
 func (m *Model) withStartupBadge(value, rowID string) string {

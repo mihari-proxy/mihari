@@ -5,16 +5,19 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
 type egressTestClient struct {
 	fakeClient
 	calls int
+	last  protocol.EgressUpdateRequest
 }
 
 func TestNetworkRows_SelectedEgressUsesWarningWithoutSaved(t *testing.T) {
@@ -100,8 +103,9 @@ func TestEgressDialog_ScrollsDraftAndKeepsActionsVisible(t *testing.T) {
 func (c *egressTestClient) Egress(context.Context) (protocol.EgressStatus, error) {
 	return protocol.EgressStatus{Selection: protocol.EgressSelection{Mode: "automatic"}, Interfaces: []protocol.EgressInterface{{Name: "Ethernet", Selectable: true, Availability: "available"}}}, nil
 }
-func (c *egressTestClient) UpdateEgress(context.Context, protocol.EgressUpdateRequest) (protocol.EgressStatus, error) {
+func (c *egressTestClient) UpdateEgress(_ context.Context, request protocol.EgressUpdateRequest) (protocol.EgressStatus, error) {
 	c.calls++
+	c.last = request
 	return protocol.EgressStatus{}, nil
 }
 
@@ -167,26 +171,51 @@ func TestEgressDialog_EnterAppliesAndStaysOpen(t *testing.T) {
 	if again := m.updateEgressDialog(tea.KeyPressMsg{Code: tea.KeyEnter}); again != nil || !m.egress.pending {
 		t.Fatal("duplicate submission")
 	}
+	m.rowSpinClock = time.Unix(0, 0)
+	if view := m.egressDialogView(); !strings.Contains(view, ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(m.rowSpinClock, "Applying…"))) {
+		t.Fatalf("pending apply missing orange badge:\n%s", view)
+	}
 	m.handleEgressResult(egressResultMsg{mutation: true, epoch: m.egress.epoch, err: protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "reload rejected"}})
 	if !m.egress.open || m.egress.pending || m.egress.candidate != "Ethernet" || !strings.Contains(m.egress.err, "reload rejected") {
 		t.Fatalf("failure lost the dialog: %+v", m.egress)
+	}
+	failed := m.egressDialogView()
+	if !strings.Contains(failed, ui.RenderStatusChip(m.theme, ui.StatusChipFailed, ui.FailedLabel)) || !strings.Contains(failed, "reload rejected") {
+		t.Fatalf("failure missing red badge or error:\n%s", failed)
 	}
 	applied := status
 	applied.Revision = 2
 	applied.Selection = protocol.EgressSelection{Mode: "manual", InterfaceName: "Ethernet"}
 	applied.State = "applied"
 	m.handleEgressResult(egressResultMsg{mutation: true, epoch: m.egress.epoch, status: applied})
-	if !m.egress.open || m.egress.candidate != "Ethernet" || m.egress.status.Selection.InterfaceName != "Ethernet" {
+	if !m.egress.open || m.egress.candidate != "Ethernet" || m.egress.status.Selection.InterfaceName != "Ethernet" || m.egress.revision != 2 {
 		t.Fatalf("success closed the dialog: %+v", m.egress)
+	}
+	if !strings.Contains(m.egressDialogView(), ui.RenderStatusChip(m.theme, ui.StatusChipDone, ui.DoneLabel)) {
+		t.Fatal("success missing green Done badge")
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if !strings.Contains(m.egressDialogView(), m.theme.BrightYellow.Render("Ethernet")) {
 		t.Fatal("instance selection name is not yellow once the cursor leaves")
 	}
-	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m.egress.status.Interfaces = append(m.egress.status.Interfaces, protocol.EgressInterface{Name: "Wi-Fi", Selectable: true, Availability: "available"})
+	m.egress.candidate = "Wi-Fi"
+	again := m.updateEgressDialog(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if again == nil {
+		t.Fatal("second apply did not start")
+	}
+	if msg := again(); msg == nil {
+		t.Fatal("second apply produced no message")
+	}
+	if c.last.IfRevision == nil || *c.last.IfRevision != 2 {
+		t.Fatalf("second apply used revision %+v", c.last.IfRevision)
+	}
+	m.egress.candidate = "Ethernet"
+	m.egress.pending = false
+	calls := c.calls
 	oldEpoch := m.egress.epoch
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.egress.open || m.egress.pending || c.calls != 0 || m.egress.epoch == oldEpoch {
+	if m.egress.open || m.egress.pending || c.calls != calls || m.egress.epoch == oldEpoch {
 		t.Fatal("enter on the instance selection submitted again")
 	}
 	m.handleEgressResult(egressResultMsg{epoch: oldEpoch, status: protocol.EgressStatus{Revision: 99}})
@@ -255,6 +284,18 @@ func TestEgressDialog_WideRuleSpansBothColumns(t *testing.T) {
 	}
 	if rules < 5 {
 		t.Fatalf("vertical rule spans %d lines, want the full column height", rules)
+	}
+}
+
+func TestWrapColumns_BreaksOverlongToken(t *testing.T) {
+	lines := wrapColumns(strings.Repeat("a", 25), 10)
+	if strings.Join(lines, "") != strings.Repeat("a", 25) {
+		t.Fatalf("lost characters: %#v", lines)
+	}
+	for _, line := range lines {
+		if ansi.StringWidth(line) > 10 {
+			t.Fatalf("line %q wider than 10", line)
+		}
 	}
 }
 

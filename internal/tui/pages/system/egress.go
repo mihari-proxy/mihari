@@ -26,6 +26,8 @@ type egressUI struct {
 	detailTop             int
 	top                   int
 	err                   string
+	// result is "", "done", or "failed" for the latest apply in this dialog.
+	result string
 }
 
 type egressResultMsg struct {
@@ -97,6 +99,7 @@ func (m *Model) openEgressDialog() tea.Cmd {
 	m.egress.top = 0
 	m.egress.detailTop = 0
 	m.egress.err = ""
+	m.egress.result = ""
 	m.egress.candidate = m.egress.status.Selection.InterfaceName
 	m.egress.revision = m.egress.status.Revision
 	return tea.Batch(func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputText} }, m.loadEgress())
@@ -109,10 +112,16 @@ func (m *Model) handleEgressResult(result egressResultMsg) tea.Cmd {
 	if result.mutation {
 		m.egress.pending = false
 		if result.err != nil {
+			m.egress.result = "failed"
 			m.egress.err = actionErrorDetail(result.err, "Could not apply outbound interface") + " (F2: details)"
 			return m.loadEgress()
 		}
+		m.egress.result = "done"
+		m.egress.err = ""
 		m.SetEgress(result.status)
+		if result.status.Revision >= m.egress.revision {
+			m.egress.revision = result.status.Revision
+		}
 		if result.status.Selection.Mode == "manual" {
 			m.egress.candidate = result.status.Selection.InterfaceName
 		} else {
@@ -211,6 +220,7 @@ func (m *Model) closeEgressDialog() tea.Cmd {
 	m.egress.open = false
 	m.egress.epoch++
 	m.egress.err = ""
+	m.egress.result = ""
 	return func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
 }
 
@@ -241,13 +251,15 @@ func (m *Model) applyEgress() tea.Cmd {
 	}
 	m.egress.pending = true
 	m.egress.err = ""
+	m.egress.result = ""
 	ctx := m.ctx
-	return func() tea.Msg {
+	submit := func() tea.Msg {
 		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
 		status, err := client.UpdateEgress(ctx, request)
 		return ui.PageResultMsg{Page: ui.PageSystem, Result: egressResultMsg{status: status, epoch: epoch, mutation: true, err: err}}
 	}
+	return tea.Batch(submit, m.rowSpinCmdIfNeeded())
 }
 
 func (m *Model) egressAvailabilityStyle(state string) lipgloss.Style {
@@ -425,7 +437,32 @@ func (m *Model) egressDetailLines(candidate *protocol.EgressInterface, width int
 	return lines
 }
 
-func (m *Model) egressFootNote() string {
+func (m *Model) egressFootLines(inner int) []string {
+	clock := m.rowSpinClock
+	if clock.IsZero() {
+		clock = time.Unix(0, 0)
+	}
+	switch {
+	case m.egress.pending:
+		return []string{ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, "Applying…"))}
+	case m.egress.result == "done":
+		return []string{ui.RenderStatusChip(m.theme, ui.StatusChipDone, ui.DoneLabel)}
+	case m.egress.result == "failed":
+		chip := ui.RenderStatusChip(m.theme, ui.StatusChipFailed, ui.FailedLabel)
+		detail := diagnostics.EscapeTerminal(strings.TrimSpace(m.egress.err))
+		if detail == "" {
+			return []string{chip}
+		}
+		gap := "  "
+		firstWidth := max(1, inner-lipgloss.Width(chip)-ansi.StringWidth(gap))
+		parts := wrapColumns(detail, firstWidth)
+		lines := []string{chip + gap + parts[0]}
+		indent := strings.Repeat(" ", lipgloss.Width(chip)+ansi.StringWidth(gap))
+		for _, part := range parts[1:] {
+			lines = append(lines, indent+part)
+		}
+		return lines
+	}
 	note := "Enter applies and closes active connections. Esc closes without changes."
 	switch m.egress.status.State {
 	case "unknown":
@@ -433,13 +470,7 @@ func (m *Model) egressFootNote() string {
 	case "saved":
 		note = "Save for the next core start."
 	}
-	if m.egress.err != "" {
-		note = m.egress.err
-	}
-	if m.egress.pending {
-		note = "Applying…"
-	}
-	return note
+	return wrapColumns(diagnostics.EscapeTerminal(note), inner)
 }
 
 // egressBoxWidth matches the subscription dialog offset: stay 8 columns inside
@@ -457,7 +488,7 @@ func (m *Model) egressDialogView() string {
 	if wide && m.height >= 28 {
 		fixed = 3
 	}
-	noteLines := wrapColumns(diagnostics.EscapeTerminal(m.egressFootNote()), inner)
+	noteLines := m.egressFootLines(inner)
 	if len(noteLines) == 0 {
 		noteLines = []string{""}
 	}
