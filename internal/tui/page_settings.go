@@ -30,6 +30,8 @@ type pageSettingsDialog struct {
 	scroll          int
 	original, draft protocol.ProxyPreferences
 	saving          bool
+	showDone        bool
+	saveClock       time.Time
 	err             string
 }
 
@@ -109,7 +111,11 @@ func (d *pageSettingsDialog) key(key string) ModalAction {
 				if key == "left" {
 					delta = -1
 				}
-				d.draft.LatencyTestConcurrency = max(1, min(protocol.MaxLatencyTestConcurrency, d.draft.LatencyTestConcurrency+delta))
+				next := max(1, min(protocol.MaxLatencyTestConcurrency, d.draft.LatencyTestConcurrency+delta))
+				if next != d.draft.LatencyTestConcurrency {
+					d.draft.LatencyTestConcurrency = next
+					d.clearSaveFeedback()
+				}
 			}
 		case "up", "down", "pgup", "pgdown":
 			rows := d.rows()
@@ -134,8 +140,10 @@ func (d *pageSettingsDialog) key(key string) ModalAction {
 				d.expanded[id] = !d.expanded[id]
 			} else if d.focus.field == 0 {
 				d.draft.ExtraLatency = !d.draft.ExtraLatency
+				d.clearSaveFeedback()
 			} else if d.focus.field == 1 {
 				d.draft.AutoLatencyTest = !d.draft.AutoLatencyTest
+				d.clearSaveFeedback()
 			}
 		}
 	case 2, 3:
@@ -161,7 +169,8 @@ func (d *pageSettingsDialog) view(width, height int) string {
 	inner := boxWidth - 6
 	leftWidth := 14
 	rightWidth := inner - leftWidth - 3
-	rowsHeight := max(1, min(19, height-10))
+	hint := wrapPageSettingsHint(pageSettingsHint(d.area == 1 && d.focus.field == 2), inner)
+	rowsHeight := max(1, min(19, height-10-strings.Count(hint, "\n")))
 	var right []string
 	focusLine := 0
 	for i, id := range d.pages {
@@ -248,20 +257,82 @@ func (d *pageSettingsDialog) view(width, height int) string {
 		save = theme.RowFocus.Render(save)
 	}
 	buttons := cancel + "  " + save + " " + theme.Muted.Render("Ctrl+S")
-	status := ""
-	if d.saving {
-		status = theme.Info.Render("Saving…")
-	} else if d.err != "" {
-		status = theme.Danger.Render(ui.TruncateVisible(d.err, inner))
-	}
-	hint := "Tab area  ↑/↓ move  Enter select  ] all  [ all  Esc cancel"
-	if d.area == 1 && d.focus.field == 2 {
-		hint = "←/→ adjust (1–50)  Tab area  ] all  [ all  Esc cancel"
-	}
+	status := d.saveStatus(theme, inner)
 	body := theme.Title.Render("Page Settings") + "\n\n" + strings.Join(lines, "\n") + "\n" + status + "\n" +
 		strings.Repeat(" ", max(0, inner-lipgloss.Width(buttons))) + buttons + "\n" + theme.Muted.Render(hint)
 	box := theme.Dialog.Width(boxWidth).Render(body)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+}
+
+func pageSettingsHint(adjust bool) string {
+	if adjust {
+		return "←/→ adjust (1–50)  Tab area  ] Expand all  [ Collapse all  Esc cancel"
+	}
+	return "Tab area  ↑/↓ move  Enter select  ] Expand all  [ Collapse all  Esc cancel"
+}
+
+// wrapPageSettingsHint keeps Expand all and Collapse all together on the next
+// line when the minimum 72-column dialog cannot hold the full footer.
+func wrapPageSettingsHint(hint string, width int) string {
+	if width < 1 || lipgloss.Width(hint) <= width {
+		return hint
+	}
+	const marker = "] Expand all"
+	index := strings.Index(hint, marker)
+	if index <= 0 {
+		return hint
+	}
+	head := strings.TrimRight(hint[:index], " ")
+	tail := hint[index:]
+	if lipgloss.Width(head) <= width && lipgloss.Width(tail) <= width {
+		return head + "\n" + tail
+	}
+	return hint
+}
+
+func (d *pageSettingsDialog) clearSaveFeedback() {
+	d.showDone = false
+	d.err = ""
+}
+
+func (d *pageSettingsDialog) saveStatus(theme ui.Theme, width int) string {
+	switch {
+	case d.saving:
+		clock := d.saveClock
+		if clock.IsZero() {
+			clock = time.Unix(0, 0)
+		}
+		return ui.RenderStatusChip(theme, ui.StatusChipPending, ui.SpinnerLabel(clock, "Saving"))
+	case d.err != "":
+		badge := ui.RenderStatusChip(theme, ui.StatusChipFailed, ui.FailedLabel)
+		room := width - lipgloss.Width(badge) - 2
+		if room < 1 {
+			return badge
+		}
+		detail := ui.TruncateVisible(d.err, room)
+		if detail == "" {
+			return badge
+		}
+		return badge + "  " + theme.Danger.Render(detail)
+	case d.showDone:
+		return ui.RenderStatusChip(theme, ui.StatusChipDone, ui.DoneLabel)
+	default:
+		return ""
+	}
+}
+
+const pageSettingsSpinInterval = 100 * time.Millisecond
+
+type pageSettingsSpinMsg struct {
+	dialog *pageSettingsDialog
+	at     time.Time
+}
+
+func (d *pageSettingsDialog) spinCmd() tea.Cmd {
+	dialog := d
+	return tea.Tick(pageSettingsSpinInterval, func(at time.Time) tea.Msg {
+		return pageSettingsSpinMsg{dialog: dialog, at: at}
+	})
 }
 
 type pageSettingsSavedMsg struct {
@@ -283,18 +354,22 @@ func (model *Model) savePageSettings() tea.Cmd {
 		return nil
 	}
 	if d.draft == d.original {
-		model.pageSettings = nil
+		d.showDone = true
+		d.err = ""
 		return nil
 	}
 	if model.preferencesClient == nil || !model.preferencesLoaded {
+		d.showDone = false
 		d.err = "Page settings unavailable; wait for the daemon"
 		return nil
 	}
 	if model.preferences.EffectiveProxies() != d.original {
+		d.showDone = false
 		d.err = "Page settings changed elsewhere; reopen to review"
 		return nil
 	}
-	d.saving, d.err = true, ""
+	d.saving, d.showDone, d.err = true, false, ""
+	d.saveClock = time.Now()
 	draft, revision := d.draft, model.preferences.Revision
 	epoch, generation := model.statusEpoch, model.preferencesGeneration
 	client := model.preferencesClient
@@ -329,6 +404,7 @@ func (model *Model) updatePageSettings(message tea.Msg) (tea.Cmd, bool) {
 		if saved.epoch != model.statusEpoch || saved.generation != model.preferencesGeneration {
 			if model.pageSettings == saved.dialog {
 				saved.dialog.saving = false
+				saved.dialog.showDone = false
 				saved.dialog.err = "Daemon connection changed; reopen settings to review"
 			}
 			return nil, true
@@ -339,12 +415,23 @@ func (model *Model) updatePageSettings(message tea.Msg) (tea.Cmd, bool) {
 		if model.pageSettings == saved.dialog {
 			saved.dialog.saving = false
 			if saved.err == nil {
-				model.pageSettings = nil
+				saved.dialog.showDone = true
+				saved.dialog.err = ""
+				saved.dialog.original = saved.preferences.EffectiveProxies()
+				saved.dialog.draft = saved.dialog.original
 			} else {
-				saved.dialog.err = "Save failed: " + diagnosticSingleLine(saved.err.Error())
+				saved.dialog.showDone = false
+				saved.dialog.err = diagnosticSingleLine(saved.err.Error())
 			}
 		}
 		return nil, true
+	}
+	if spin, ok := message.(pageSettingsSpinMsg); ok {
+		if model.pageSettings != spin.dialog || !spin.dialog.saving {
+			return nil, true
+		}
+		spin.dialog.saveClock = spin.at
+		return spin.dialog.spinCmd(), true
 	}
 	if model.pageSettings == nil {
 		return nil, false
@@ -357,7 +444,11 @@ func (model *Model) updatePageSettings(message tea.Msg) (tea.Cmd, bool) {
 		case ModalClose:
 			model.pageSettings = nil
 		case ModalConfirm:
-			return model.savePageSettings(), true
+			cmd := model.savePageSettings()
+			if model.pageSettings != nil && model.pageSettings.saving {
+				return tea.Batch(cmd, model.pageSettings.spinCmd()), true
+			}
+			return cmd, true
 		}
 		return nil, true
 	}

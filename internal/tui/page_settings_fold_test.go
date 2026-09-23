@@ -62,7 +62,7 @@ func TestPageSettings_OpenExpandsEverySectionAndKeepsSourceVisible(t *testing.T)
 func TestPageSettings_TooSmallIgnoresFoldKeys(t *testing.T) {
 	m := openPageSettings(t, ui.PageSystem)
 	m.width, m.height = 71, 22
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, ui.ResizeRequired) || strings.Contains(view, "] all") {
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, ui.ResizeRequired) || strings.Contains(view, "Expand all") {
 		t.Fatalf("too-small view:\n%s", view)
 	}
 	expanded := map[ui.PageID]bool{}
@@ -84,7 +84,7 @@ func TestPageSettings_TooSmallIgnoresFoldKeys(t *testing.T) {
 func TestPageSettings_HelpOmitsFoldAllKeys(t *testing.T) {
 	m := pressPageSettings(NewModel(), tea.KeyPressMsg{Code: '?', Text: "?"})
 	help := ansi.Strip(m.View().Content)
-	if m.modal == nil || strings.Contains(help, "] all") || strings.Contains(help, "[ all") {
+	if m.modal == nil || strings.Contains(help, "Expand all") || strings.Contains(help, "Collapse all") {
 		t.Fatal("global help lists fold-all keys")
 	}
 	for _, binding := range ui.Catalog() {
@@ -170,16 +170,20 @@ func TestPageSettings_DirectoryEnterExpandsOnlyTarget(t *testing.T) {
 }
 
 func TestPageSettings_FooterShowsFoldKeysInEveryArea(t *testing.T) {
-	const normal = "Tab area  ↑/↓ move  Enter select  ] all  [ all  Esc cancel"
-	const adjust = "←/→ adjust (1–50)  Tab area  ] all  [ all  Esc cancel"
+	const normal = "Tab area  ↑/↓ move  Enter select  ] Expand all  [ Collapse all  Esc cancel"
+	const adjust = "←/→ adjust (1–50)  Tab area  ] Expand all  [ Collapse all  Esc cancel"
 	m := openPageSettings(t, ui.PageProxies)
 	for range 4 {
 		plain := ansi.Strip(m.pageSettings.view(100, 28))
 		if !strings.Contains(plain, normal) {
 			t.Fatalf("area %d footer:\n%s", m.pageSettings.area, plain)
 		}
-		if lipgloss.Width(m.pageSettings.view(72, 22)) > 72 {
-			t.Fatalf("area %d footer exceeds 72 columns", m.pageSettings.area)
+		compact := m.pageSettings.view(72, 22)
+		if lipgloss.Width(compact) > 72 || lipgloss.Height(compact) > 22 {
+			t.Fatalf("area %d footer exceeds 72x22: %dx%d", m.pageSettings.area, lipgloss.Width(compact), lipgloss.Height(compact))
+		}
+		if stripped := ansi.Strip(compact); !strings.Contains(stripped, "] Expand all") || !strings.Contains(stripped, "[ Collapse all") {
+			t.Fatalf("area %d compact footer:\n%s", m.pageSettings.area, stripped)
 		}
 		m = pressPageSettings(m, tea.KeyPressMsg{Code: tea.KeyTab})
 	}
@@ -187,9 +191,13 @@ func TestPageSettings_FooterShowsFoldKeysInEveryArea(t *testing.T) {
 	for range 3 {
 		m = pressPageSettings(m, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
-	plain := ansi.Strip(m.pageSettings.view(72, 22))
+	plain := ansi.Strip(m.pageSettings.view(100, 28))
 	if m.pageSettings.focus.field != 2 || !strings.Contains(plain, adjust) {
 		t.Fatalf("concurrency footer focus=%+v\n%s", m.pageSettings.focus, plain)
+	}
+	compact := ansi.Strip(m.pageSettings.view(72, 22))
+	if !strings.Contains(compact, "←/→ adjust (1–50)") || !strings.Contains(compact, "] Expand all") || !strings.Contains(compact, "[ Collapse all") {
+		t.Fatalf("compact concurrency footer:\n%s", compact)
 	}
 }
 

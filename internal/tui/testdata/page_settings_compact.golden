@@ -13,9 +13,9 @@
   │    Web GUI      │   ▾ Rules ───────────────────────────────────  │
   │    System       │     No settings available yet                  │
   │                 │   ▾ Logs ────────────────────────────────────  │
-  │                 │     No settings available yet                  │
   │                                                                  │
   │                                         [Cancel]  [Save] Ctrl+S  │
-  │  Tab area  ↑/↓ move  Enter select  ] all  [ all  Esc cancel      │
+  │  Tab area  ↑/↓ move  Enter select                                │
+  │  ] Expand all  [ Collapse all  Esc cancel                        │
   │                                                                  │
   ╰──────────────────────────────────────────────────────────────────╯

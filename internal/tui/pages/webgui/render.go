@@ -3,6 +3,7 @@ package webgui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -159,6 +160,14 @@ func (m *Model) panelBody(panel protocol.PanelStatus, index, inner int) string {
 		actions += separator + badge
 	}
 	field := func(label, value string) string { return m.theme.Muted.Render(fmt.Sprintf("%-11s", label)) + value }
-	body := strings.Join([]string{state, "", field("Installed", valueOr(panel.InstalledBuild, ui.MissingValue)), field("Latest", m.latestLabel(panel)), field("Rollback", valueOr(panel.RollbackBuild, ui.MissingValue)), "", actions}, "\n")
+	latest := m.latestLabel(panel)
+	if version, ok := m.versions[panel.ID]; ok && version.checking {
+		clock := m.versionClock
+		if clock.IsZero() {
+			clock = time.Unix(0, 0)
+		}
+		latest = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, ui.MihariProgressChecking))
+	}
+	body := strings.Join([]string{state, "", field("Installed", valueOr(panel.InstalledBuild, ui.MissingValue)), field("Latest", latest), field("Rollback", valueOr(panel.RollbackBuild, ui.MissingValue)), "", actions}, "\n")
 	return ansi.Wrap(body, ui.SectionTextWidth(inner), "")
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -131,8 +132,8 @@ func TestPageSettings_CommittedWarningReachesF2(t *testing.T) {
 	m.pageSettings.draft.ExtraLatency = false
 	next, _ := m.Update(m.savePageSettings()())
 	m = next.(Model)
-	if m.pageSettings != nil || m.preferences.EffectiveProxies().ExtraLatency || len(m.diagnosticWindow.entries) != 1 {
-		t.Fatal("warning changed save success or disappeared")
+	if m.pageSettings == nil || !m.pageSettings.showDone || m.pageSettings.saving || m.pageSettings.err != "" || m.preferences.EffectiveProxies().ExtraLatency || len(m.diagnosticWindow.entries) != 1 {
+		t.Fatal("warning changed save success or closed the dialog")
 	}
 	next, _ = m.Update(diagnosticKey(tea.KeyF2))
 	if next.(Model).diagnosticWindow.pinned.Detail != warning.Detail {
@@ -153,7 +154,7 @@ func TestPageSettings_SaveCommitsDraft(t *testing.T) {
 	}
 	next, _ := m.Update(cmd())
 	m = next.(Model)
-	if c.calls != 1 || c.request.ConnectionsColumns != nil || *c.request.IfRevision != 7 || c.request.Proxies.AutoLatencyTest || m.pageSettings != nil || m.preferences.EffectiveProxies().AutoLatencyTest {
+	if c.calls != 1 || c.request.ConnectionsColumns != nil || *c.request.IfRevision != 7 || c.request.Proxies.AutoLatencyTest || m.pageSettings == nil || !m.pageSettings.showDone || m.pageSettings.draft != m.pageSettings.original || m.preferences.EffectiveProxies().AutoLatencyTest {
 		t.Fatalf("request=%+v model=%+v", c.request, m.pageSettings)
 	}
 }
@@ -181,8 +182,13 @@ func TestPageSettings_FailureRetainsDraft(t *testing.T) {
 	m.pageSettings.draft.ExtraLatency = false
 	next, _ := m.Update(m.savePageSettings()())
 	m = next.(Model)
-	if m.pageSettings == nil || m.pageSettings.saving || m.pageSettings.draft.ExtraLatency || !strings.Contains(m.pageSettings.err, "synthetic save failure") || !m.preferences.EffectiveProxies().ExtraLatency {
+	if m.pageSettings == nil || m.pageSettings.saving || m.pageSettings.showDone || m.pageSettings.draft.ExtraLatency || !strings.Contains(m.pageSettings.err, "synthetic save failure") || !m.preferences.EffectiveProxies().ExtraLatency {
 		t.Fatal("failed save did not retain draft and committed state")
+	}
+	failed := ui.RenderStatusChip(ui.DefaultTheme(), ui.StatusChipFailed, ui.FailedLabel)
+	view := m.pageSettings.view(100, 28)
+	if !strings.Contains(view, failed) || !strings.Contains(ansi.Strip(view), "synthetic save failure") {
+		t.Fatal("failed save did not show the Failed badge and error detail")
 	}
 	if strings.Contains(m.pageSettings.err, "\n") {
 		t.Fatal("multiline failure breaks fixed dialog layout")
@@ -222,6 +228,67 @@ func TestPageSettings_ReconnectingRejectsOutstandingSave(t *testing.T) {
 	if m.preferencesLoaded || !m.preferences.EffectiveProxies().ExtraLatency || m.pageSettings == nil || m.pageSettings.saving || m.pageSettings.err == "" {
 		t.Fatal("save from disconnected session applied or discarded the draft")
 	}
+}
+
+func TestPageSettings_SaveShowsSavingThenDoneAndStaysOpen(t *testing.T) {
+	m := openSettingsForSave(t)
+	m.pageSettings.draft.ExtraLatency = false
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m = next.(Model)
+	if cmd == nil || m.pageSettings == nil || !m.pageSettings.saving {
+		t.Fatal("Ctrl+S did not start a save")
+	}
+	m.pageSettings.saveClock = time.Unix(0, 0)
+	theme := ui.DefaultTheme()
+	saving := ui.RenderStatusChip(theme, ui.StatusChipPending, ui.SpinnerLabel(m.pageSettings.saveClock, "Saving"))
+	before := m.pageSettings.view(100, 28)
+	if !strings.Contains(before, saving) {
+		t.Fatal("save did not show the orange Saving badge")
+	}
+	next, spin := m.Update(pageSettingsSpinMsg{dialog: m.pageSettings, at: time.Unix(0, int64(pageSettingsSpinInterval))})
+	m = next.(Model)
+	if spin == nil || m.pageSettings.view(100, 28) == before {
+		t.Fatal("Saving badge did not advance")
+	}
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = next.(Model)
+	if m.pageSettings == nil || !m.pageSettings.saving {
+		t.Fatal("Esc closed Page Settings while Saving")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatal("save command was not batched with the animation")
+	}
+	next, _ = m.Update(batch[0]())
+	m = next.(Model)
+	done := ui.RenderStatusChip(theme, ui.StatusChipDone, ui.DoneLabel)
+	if m.pageSettings == nil || m.pageSettings.saving || !strings.Contains(m.pageSettings.view(100, 28), done) || m.preferences.EffectiveProxies().ExtraLatency {
+		t.Fatal("successful save closed the dialog or skipped Done")
+	}
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if next.(Model).pageSettings != nil {
+		t.Fatal("Esc did not close Page Settings after Done")
+	}
+}
+
+func TestPageSettings_UnchangedSaveStaysOpenWithDone(t *testing.T) {
+	m := openSettingsForSave(t)
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m = next.(Model)
+	done := ui.RenderStatusChip(ui.DefaultTheme(), ui.StatusChipDone, ui.DoneLabel)
+	if cmd != nil || m.pageSettings == nil || !m.pageSettings.showDone || !strings.Contains(m.pageSettings.view(100, 28), done) {
+		t.Fatal("Ctrl+S with no changes closed Page Settings")
+	}
+}
+
+func openSettingsForSave(t *testing.T) Model {
+	t.Helper()
+	m := NewModel()
+	m.active = ui.PageProxies
+	m.preferencesClient = &settingsTestClient{}
+	m.applyPreferences(protocol.TUIPreferences{Revision: 7})
+	m.pageSettings = newPageSettings(ui.PageProxies, m.preferences)
+	return m
 }
 
 func TestPageSettings_DelayedEntryDoesNotCoverAnotherPage(t *testing.T) {

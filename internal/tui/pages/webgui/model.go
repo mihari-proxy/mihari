@@ -49,26 +49,29 @@ var _ interface{ Err() error } = mutationDoneMsg{}
 
 // Model is the Web GUI lifecycle page.
 type Model struct {
-	versions       map[string]panelVersionState
-	ctx            context.Context
-	client         Client
-	openBrowser    func(string) error
-	newOperationID func() string
-	available      bool
-	status         protocol.WebGUIStatus
-	selected       int
-	action         int
-	menuOpen       bool
-	menuIndex      int
-	lastError      string
-	toast          string
-	contentFocused bool
-	width          int
-	height         int
-	theme          ui.Theme
-	installing     map[string]bool
-	installClock   time.Time
-	installSpinGen uint64
+	versions        map[string]panelVersionState
+	ctx             context.Context
+	client          Client
+	openBrowser     func(string) error
+	newOperationID  func() string
+	available       bool
+	status          protocol.WebGUIStatus
+	selected        int
+	action          int
+	menuOpen        bool
+	menuIndex       int
+	lastError       string
+	toast           string
+	contentFocused  bool
+	width           int
+	height          int
+	theme           ui.Theme
+	installing      map[string]bool
+	installClock    time.Time
+	installSpinGen  uint64
+	versionClock    time.Time
+	versionSpinGen  uint64
+	versionSpinning bool
 }
 
 // New constructs a Web GUI page with background context.
@@ -177,6 +180,15 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		m.versions[typed.id] = state
 		return m, nil
+	case versionSpinTickMsg:
+		if typed.gen != m.versionSpinGen || !m.anyVersionChecking() {
+			if typed.gen == m.versionSpinGen {
+				m.versionSpinning = false
+			}
+			return m, nil
+		}
+		m.versionClock = typed.at
+		return m, m.versionTick()
 	case ui.ActionPendingMsg:
 		return m, m.beginInstall(typed)
 	case installSpinTickMsg:
@@ -206,7 +218,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 				if m.versions != nil {
 					m.versions[typed.changedPanel] = panelVersionState{generation: m.versions[typed.changedPanel].generation + 1}
 				}
-				return m, tea.Batch(m.load(false), m.checkPanelVersion(typed.changedPanel))
+				return m, tea.Batch(m.load(false), m.checkPanelVersion(typed.changedPanel), m.ensureVersionSpin())
 			}
 		}
 		return m, m.load(false)
