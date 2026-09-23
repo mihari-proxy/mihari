@@ -230,45 +230,92 @@ func TestPageSettings_ReconnectingRejectsOutstandingSave(t *testing.T) {
 	}
 }
 
-func TestPageSettings_SaveShowsSavingThenDoneAndStaysOpen(t *testing.T) {
-	m := openSettingsForSave(t)
-	m.pageSettings.draft.ExtraLatency = false
-	next, cmd := m.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-	m = next.(Model)
-	if cmd == nil || m.pageSettings == nil || !m.pageSettings.saving {
+func TestPageSettings_CtrlSStartsSaving(t *testing.T) {
+	m, cmd := startSettingsSave(t)
+	if cmd == nil || m.pageSettings == nil || !m.pageSettings.saving || m.pageSettings.showDone {
 		t.Fatal("Ctrl+S did not start a save")
 	}
+}
+
+func TestPageSettings_SavingBadgeUsesPendingChip(t *testing.T) {
+	m, _ := startSettingsSave(t)
 	m.pageSettings.saveClock = time.Unix(0, 0)
-	theme := ui.DefaultTheme()
-	saving := ui.RenderStatusChip(theme, ui.StatusChipPending, ui.SpinnerLabel(m.pageSettings.saveClock, "Saving"))
-	before := m.pageSettings.view(100, 28)
-	if !strings.Contains(before, saving) {
+	saving := ui.RenderStatusChip(ui.DefaultTheme(), ui.StatusChipPending, ui.SpinnerLabel(m.pageSettings.saveClock, "Saving"))
+	if !strings.Contains(m.pageSettings.view(100, 28), saving) {
 		t.Fatal("save did not show the orange Saving badge")
 	}
+}
+
+func TestPageSettings_SavingBadgeAdvances(t *testing.T) {
+	m, _ := startSettingsSave(t)
+	m.pageSettings.saveClock = time.Unix(0, 0)
+	before := m.pageSettings.view(100, 28)
 	next, spin := m.Update(pageSettingsSpinMsg{dialog: m.pageSettings, at: time.Unix(0, int64(pageSettingsSpinInterval))})
 	m = next.(Model)
-	if spin == nil || m.pageSettings.view(100, 28) == before {
+	if spin == nil || !m.pageSettings.saving || m.pageSettings.view(100, 28) == before {
 		t.Fatal("Saving badge did not advance")
 	}
-	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+}
+
+func TestPageSettings_EscapeIgnoredWhileSaving(t *testing.T) {
+	m, _ := startSettingsSave(t)
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = next.(Model)
 	if m.pageSettings == nil || !m.pageSettings.saving {
 		t.Fatal("Esc closed Page Settings while Saving")
 	}
-	batch, ok := cmd().(tea.BatchMsg)
-	if !ok || len(batch) == 0 {
-		t.Fatal("save command was not batched with the animation")
-	}
-	next, _ = m.Update(batch[0]())
+}
+
+func TestPageSettings_SuccessfulSaveShowsDone(t *testing.T) {
+	m, cmd := startSettingsSave(t)
+	next, _ := m.Update(finishSettingsSave(t, cmd))
 	m = next.(Model)
-	done := ui.RenderStatusChip(theme, ui.StatusChipDone, ui.DoneLabel)
+	done := ui.RenderStatusChip(ui.DefaultTheme(), ui.StatusChipDone, ui.DoneLabel)
 	if m.pageSettings == nil || m.pageSettings.saving || !strings.Contains(m.pageSettings.view(100, 28), done) || m.preferences.EffectiveProxies().ExtraLatency {
 		t.Fatal("successful save closed the dialog or skipped Done")
 	}
-	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+}
+
+func TestPageSettings_EscapeClosesAfterDone(t *testing.T) {
+	m, cmd := startSettingsSave(t)
+	next, _ := m.Update(finishSettingsSave(t, cmd))
+	next, _ = next.(Model).Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if next.(Model).pageSettings != nil {
 		t.Fatal("Esc did not close Page Settings after Done")
 	}
+}
+
+func TestPageSettings_SpinStopsAfterSave(t *testing.T) {
+	m, cmd := startSettingsSave(t)
+	next, _ := m.Update(finishSettingsSave(t, cmd))
+	m = next.(Model)
+	if m.pageSettings == nil || m.pageSettings.saving {
+		t.Fatal("save did not finish in the open dialog")
+	}
+	_, spin := m.Update(pageSettingsSpinMsg{dialog: m.pageSettings, at: time.Unix(1, 0)})
+	if spin != nil {
+		t.Fatal("spinner kept running after the save finished")
+	}
+}
+
+func startSettingsSave(t *testing.T) (Model, tea.Cmd) {
+	t.Helper()
+	m := openSettingsForSave(t)
+	m.pageSettings.draft.ExtraLatency = false
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	return next.(Model), cmd
+}
+
+func finishSettingsSave(t *testing.T, cmd tea.Cmd) tea.Msg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("save command missing")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) == 0 || batch[0] == nil {
+		t.Fatal("save command was not batched with the animation")
+	}
+	return batch[0]()
 }
 
 func TestPageSettings_UnchangedSaveStaysOpenWithDone(t *testing.T) {
