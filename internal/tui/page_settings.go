@@ -258,11 +258,14 @@ func (d *pageSettingsDialog) view(width, height int) string {
 	}
 	buttons := cancel + "  " + save + " " + theme.Muted.Render("Ctrl+S")
 	status := d.saveStatus(theme, inner)
-	body := theme.Title.Render("Page Settings") + "\n\n" + strings.Join(lines, "\n") + "\n" + status + "\n" +
+	body := theme.Title.Render("Page Settings") + "\n" + theme.Muted.Render(pageSettingsTabHint) + "\n\n" +
+		strings.Join(lines, "\n") + "\n" + status + "\n" +
 		strings.Repeat(" ", max(0, inner-lipgloss.Width(buttons))) + buttons + "\n" + theme.Muted.Render(hint)
 	box := theme.Dialog.Width(boxWidth).Render(body)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
+
+const pageSettingsTabHint = "Tab to switch: Sections · settings · Cancel · Save"
 
 func pageSettingsHint(adjust bool) string {
 	if adjust {
