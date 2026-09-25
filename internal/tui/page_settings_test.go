@@ -89,6 +89,45 @@ func TestPageSettings_LayoutFitsAndKeepsFooter(t *testing.T) {
 	}
 }
 
+func TestPageSettings_TitleShowsTabSwitchHint(t *testing.T) {
+	const hint = "Tab to switch: Sections · settings · Cancel · Save"
+	d := newPageSettings(ui.PageSystem, protocol.TUIPreferences{})
+	view := d.view(72, 22)
+	plain := ansi.Strip(view)
+	if lipgloss.Width(view) > 72 || lipgloss.Height(view) > 22 {
+		t.Fatalf("tab hint overflows 72x22: %dx%d", lipgloss.Width(view), lipgloss.Height(view))
+	}
+	foundTitle := false
+	for _, line := range strings.Split(plain, "\n") {
+		text := pageSettingsDialogLineText(line)
+		if !foundTitle {
+			if strings.Contains(text, "Page Settings") {
+				foundTitle = true
+			}
+			continue
+		}
+		if text == "" {
+			continue
+		}
+		if !strings.Contains(text, hint) {
+			t.Fatalf("line under title=%q\n%s", text, plain)
+		}
+		return
+	}
+	t.Fatalf("missing title hint:\n%s", plain)
+}
+
+func pageSettingsDialogLineText(line string) string {
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		switch r {
+		case '│', '╭', '╮', '╰', '╯', '─':
+			return -1
+		default:
+			return r
+		}
+	}, line))
+}
+
 type settingsTestClient struct {
 	calls    int
 	request  protocol.UpdateTUIPreferencesRequest

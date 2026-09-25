@@ -144,7 +144,7 @@ TUI 节点测速进行中时，卡片在协议名称旁仅显示盲文加载动�
 
 任一主页面按 **F4** 打开统一 **Page Settings**，也可访问 Proxies 的 **Basic** 第一行第二列入口。弹窗左侧是 Section 目录，右侧保留完整、可滚动的配置列表；打开时全部 Section 展开，并聚焦来源页面。展开状态每次打开都恢复为全部展开。左侧 Enter 跳转并展开右侧对应标题，不改变其他 Section 的折叠状态；右侧光标跨组移动时，左侧高亮同步跟随。其他页面暂显示 **No settings available yet**。Proxies 提供默认开启的 **Extra latency display** 和 **Automatic latency test**，以及 **Test concurrency**（测速并发数，范围 **1–50**，默认 **5**）。选中并发数后用 ←/→ 调整；每个 TUI 的自动与手动测速共用此上限。保存后调高会立即补充排队任务，调低则让已开始的请求完成，再按新上限调度。这些设置由 daemon 保存，同一 daemon 的 TUI 客户端共享，重启 TUI 后保留，不覆盖 Conns 列设置。
 
-↑/↓ 在列表内移动，Enter/Space 展开标题或切换开关；Tab/Shift+Tab 在左侧目录、右侧配置区、Cancel、Save 之间切换。这四个区域按 **]** 展开全部 Section，按 **[** 折叠全部 Section，底栏显示 `] Expand all` 与 `[ Collapse all`；折叠不改变草稿。底部按钮固定可见。任意位置按 **Ctrl+S** 或 Save 开始保存，弹窗保持打开：先播放橙色 **Saving** 动画 badge，结束后显示绿色 **Done** badge，或红色 **Failed** badge 加错误详情。Esc 或 Cancel 才关闭弹窗。没有改动时不会请求 daemon，Ctrl+S 同样留在弹窗并显示 **Done**。保存成功后生效。TUI 与 daemon 应配套升级；旧版不能读取包含非默认 Proxies 设置的偏好文件，旧版 daemon 也不能读取非默认测速并发数，降级前应先恢复为 5；两个开关和并发数都恢复默认后会移除该可选块。
+↑/↓ 在列表内移动，Enter/Space 展开标题或切换开关；Tab/Shift+Tab 在左侧目录、右侧配置区、Cancel、Save 之间切换。标题下方显示 `Tab to switch: Sections · settings · Cancel · Save`。这四个区域按 **]** 展开全部 Section，按 **[** 折叠全部 Section，底栏显示 `] Expand all` 与 `[ Collapse all`；折叠不改变草稿。底部按钮固定可见。任意位置按 **Ctrl+S** 或 Save 开始保存，弹窗保持打开：先播放橙色 **Saving** 动画 badge，结束后显示绿色 **Done** badge，或红色 **Failed** badge 加错误详情。Esc 或 Cancel 才关闭弹窗。没有改动时不会请求 daemon，Ctrl+S 同样留在弹窗并显示 **Done**。保存成功后生效。TUI 与 daemon 应配套升级；旧版不能读取包含非默认 Proxies 设置的偏好文件，旧版 daemon 也不能读取非默认测速并发数，降级前应先恢复为 5；两个开关和并发数都恢复默认后会移除该可选块。
 
 TUI 订阅表格的 Name 和 Traffic 列按内容分配宽度，分别最多占 40 和 24 个终端字符格；多余空间留在右侧，窄屏优先隐藏次要字段。
 
