@@ -13,7 +13,7 @@
 
 [Website](https://mihari-proxy.github.io/mihari/) · [Releases](https://github.com/mihari-proxy/mihari/releases)
 
-Mihari is a cross-platform [mihomo](https://github.com/MetaCubeX/mihomo) (Clash Meta) manager for Windows, Linux, and macOS. It provides a CLI, terminal UI (TUI), subscription management, system proxy, TUN mode, mihomo core management, and web panels.
+Mihari is a cross-platform [mihomo](https://github.com/MetaCubeX/mihomo) (Clash Meta) manager for Windows and Linux. It provides a CLI, terminal UI (TUI), subscription management, system proxy, TUN mode, mihomo core management, and web panels. macOS is currently unsupported; the existing Unix install channel and darwin release binaries remain available.
 
 An open-source terminal alternative to graphical Mihomo / Clash clients such as Clash Party and Sparkle. CLI, TUI, and browser panels share one daemon-owned control plane.
 
@@ -38,6 +38,8 @@ Specifically:
 ## Quick start
 
 **Install**
+
+macOS is currently unsupported. The Unix install commands below still include the retained darwin channel.
 
 **main release channel** (GitHub)
 
@@ -206,7 +208,8 @@ Upgrade the TUI and daemon together; mixed versions are not supported. Before up
 
 - Windows amd64 and arm64
 - Linux amd64 and arm64
-- macOS amd64 and arm64
+
+macOS is currently unsupported. The Unix install channel still publishes darwin amd64 and arm64 binaries.
 
 All release binaries are CGO-free.
 
@@ -216,7 +219,7 @@ All release binaries are CGO-free.
 | --- | --- | --- | --- |
 | Windows | `%USERPROFILE%\.mihari` | Same root | Same root |
 | Linux | `/var/lib/mihari` | `B/data` | Absolute `XDG_STATE_HOME/mihari`, otherwise trusted home `.local/state/mihari` |
-| macOS | `/Library/Application Support/mihari` | `B/data` | Trusted home `Library/Logs/mihari` |
+| macOS (currently unsupported) | `/Library/Application Support/mihari` | `B/data` | Trusted home `Library/Logs/mihari` |
 
 Unix E/C/channel are `B/control.sock`, `B/control.token`, and `B/mihari-channel`; I defaults to `/usr/local/lib/mihari`. B is root0711, D root0700, C/channel root0644, and E root0666. Every local user can authenticate to manage the same proxy and obtain controlled machine diagnostics without sudo; users cannot directly read D or another user's U. Windows retains `\\.\pipe\mihari-control`.
 

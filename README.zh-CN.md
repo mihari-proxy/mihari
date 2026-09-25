@@ -15,7 +15,7 @@
 
 [官网](https://mihari-proxy.github.io/mihari/zh/) · [Releases](https://github.com/mihari-proxy/mihari/releases)
 
-Mihari 是面向 Windows、Linux 和 macOS 的跨平台 [mihomo](https://github.com/MetaCubeX/mihomo)（Clash Meta）管理器。它提供 CLI、终端界面（TUI）、订阅管理、系统代理、TUN 模式、mihomo 核心管理与 Web 面板。
+Mihari 是面向 Windows 和 Linux 的跨平台 [mihomo](https://github.com/MetaCubeX/mihomo)（Clash Meta）管理器。它提供 CLI、终端界面（TUI）、订阅管理、系统代理、TUN 模式、mihomo 核心管理与 Web 面板。macOS 系统暂不支持；现有 Unix 安装通道与 darwin 发行二进制仍会保留。
 
 它是 Clash Party、Sparkle 等图形化 Mihomo / Clash 客户端的开源终端替代，CLI、TUI 与浏览器面板共享同一个守护进程控制面。
 
@@ -39,6 +39,8 @@ Overview 的 Core 卡片会缩短流量趋势图，为速度值及其单位保�
 ## 快速开始
 
 **安装**
+
+macOS 系统暂不支持。下方 Unix 安装命令仍包含保留的 darwin 通道。
 
 **main release 通道**（GitHub）
 
@@ -207,7 +209,8 @@ TUI 与 daemon 必须配套升级，不保证混用版本。升级前停止 daem
 
 - Windows amd64 与 arm64
 - Linux amd64 与 arm64
-- macOS amd64 与 arm64
+
+macOS 系统暂不支持。Unix 安装通道仍会发布 darwin amd64 与 arm64 二进制。
 
 所有发行二进制均为无 CGO。
 
@@ -217,7 +220,7 @@ TUI 与 daemon 必须配套升级，不保证混用版本。升级前停止 daem
 | --- | --- | --- | --- |
 | Windows | `%USERPROFILE%\.mihari` | 同左 | 同左 |
 | Linux | `/var/lib/mihari` | `B/data` | 绝对 `XDG_STATE_HOME/mihari`，否则可信 home 的 `.local/state/mihari` |
-| macOS | `/Library/Application Support/mihari` | `B/data` | 可信 home 的 `Library/Logs/mihari` |
+| macOS（暂不支持） | `/Library/Application Support/mihari` | `B/data` | 可信 home 的 `Library/Logs/mihari` |
 
 Unix 的 E/C/channel 分别为 `B/control.sock`、`B/control.token`、`B/mihari-channel`；I 默认 `/usr/local/lib/mihari`。B 为 root0711，D 为 root0700，C/channel 为 root0644，E 为 root0666。普通用户无需 sudo 即可认证并管理同一代理及读取受控机器诊断；不能直接读取 D 或其他用户的 U。Windows 继续使用 `\\.\pipe\mihari-control`。
 
