@@ -110,14 +110,14 @@ func TestNativeCoreInputs_BundleUsesChannelIndexNotGitHub(t *testing.T) {
 	t.Run("checksum mismatch", func(t *testing.T) {
 		client, calls := channelIndexInstallClient(t, "v1.2.3-dev.1", channelIndexOtherSum)
 		inputs, err := prepareNativeReleaseInputs(ctx, req, "", offline, client)
-		if err == nil || inputs != nil || *calls != 1 {
+		if err == nil || inputs != nil || *calls != 1 || !strings.Contains(err.Error(), "install bundle checksum mismatch") {
 			t.Fatalf("inputs=%v calls=%d err=%v", inputs, *calls, err)
 		}
 	})
 	t.Run("latest mismatch", func(t *testing.T) {
 		client, calls := channelIndexInstallClient(t, "v1.2.3-dev.2", bundleHash)
 		inputs, err := prepareNativeReleaseInputs(ctx, req, "", offline, client)
-		if err == nil || inputs != nil || *calls != 1 {
+		if err == nil || inputs != nil || *calls != 1 || !strings.Contains(err.Error(), "channel index latest does not match release tag") {
 			t.Fatalf("inputs=%v calls=%d err=%v", inputs, *calls, err)
 		}
 	})

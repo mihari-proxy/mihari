@@ -81,7 +81,10 @@ func prepareNativeReleaseInputs(ctx context.Context, req InstallRequest, sourceP
 			if err != nil {
 				return nil, err
 			}
-			if latest != req.ReleaseTag || sum != bundleHash {
+			if latest != req.ReleaseTag {
+				return nil, migrateData("channel index latest does not match release tag")
+			}
+			if sum != bundleHash {
 				return nil, migrateData("install bundle checksum mismatch")
 			}
 		}
