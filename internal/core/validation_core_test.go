@@ -52,6 +52,29 @@ func TestOpenValidationCore_AbsentBinaryWithPendingJournal(t *testing.T) {
 	}
 }
 
+func TestOpenValidationCore_AbsentBinaryWithPendingUpdate(t *testing.T) {
+	store := newMemoryStore()
+	for _, item := range []struct {
+		role        ProvenanceRole
+		tx, content string
+	}{
+		{UpdateCandidate, testTransaction, "new-official-core"},
+		{UpdateMarker, testTransaction, testTransaction},
+	} {
+		if err := store.Save(t.Context(), item.role, item.tx, []byte(item.content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	intent := UpdateIntent{Previous: CoreSelection{Channel: "stable"}, Next: CoreSelection{Channel: "stable"}}
+	if _, err := BeginUpdate(t.Context(), store, testTransaction, mustInspect(t, store, UpdateCandidate, testTransaction), intent); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := OpenValidationCore(t.Context(), store)
+	if err == nil || opened || !strings.Contains(err.Error(), "core update recovery or transaction ownership required") {
+		t.Fatalf("absent core with a pending update was accepted: opened=%v err=%v", opened, err)
+	}
+}
+
 func TestOpenValidationCore_PendingJournalStillRejected(t *testing.T) {
 	store := newMemoryStore()
 	if err := store.Save(t.Context(), InstalledBinary, "", []byte("bundled mihomo")); err != nil {
