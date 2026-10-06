@@ -215,14 +215,10 @@ func OpenValidationCore(ctx context.Context, s ProvenanceStore) (bool, error) {
 	if s == nil {
 		return false, dataFailure("provenance store unavailable")
 	}
-	observed, err := s.Inspect(ctx, InstalledBinary, "")
-	if err != nil {
-		return false, err
-	}
-	if !observed.Present {
+	verified, err := OpenInstalledCore(ctx, s)
+	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
-	verified, err := OpenInstalledCore(ctx, s)
 	if err != nil {
 		return false, err
 	}

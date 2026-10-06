@@ -41,6 +41,17 @@ func TestOpenValidationCore_AbsentBinary(t *testing.T) {
 	}
 }
 
+func TestOpenValidationCore_AbsentBinaryWithPendingJournal(t *testing.T) {
+	store := newMemoryStore()
+	if err := store.Save(t.Context(), PairJournal, "", []byte("unfinished journal")); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := OpenValidationCore(t.Context(), store)
+	if err == nil || opened || !strings.Contains(err.Error(), "provenance recovery required") {
+		t.Fatalf("absent core with a pending journal was accepted: opened=%v err=%v", opened, err)
+	}
+}
+
 func TestOpenValidationCore_PendingJournalStillRejected(t *testing.T) {
 	store := newMemoryStore()
 	if err := store.Save(t.Context(), InstalledBinary, "", []byte("bundled mihomo")); err != nil {
