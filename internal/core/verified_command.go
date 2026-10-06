@@ -207,6 +207,28 @@ func OpenInstalledCore(ctx context.Context, s ProvenanceStore) (*VerifiedCore, e
 	}
 	return &VerifiedCore{store: s, binary: binary, installed: true}, nil
 }
+
+// OpenValidationCore opens a bundled or local core for install validation.
+// A missing receipt is allowed. Absence is not an error. An unfinished
+// journal or pending core update still fails through OpenInstalledCore.
+func OpenValidationCore(ctx context.Context, s ProvenanceStore) (bool, error) {
+	if s == nil {
+		return false, dataFailure("provenance store unavailable")
+	}
+	observed, err := s.Inspect(ctx, InstalledBinary, "")
+	if err != nil {
+		return false, err
+	}
+	if !observed.Present {
+		return false, nil
+	}
+	verified, err := OpenInstalledCore(ctx, s)
+	if err != nil {
+		return false, err
+	}
+	return true, verified.Close()
+}
+
 func openVerifiedPair(ctx context.Context, s ProvenanceStore, br, rr ProvenanceRole, tx string, candidate *Candidate) (*VerifiedCore, error) {
 	rb, e := s.Load(ctx, rr, tx)
 	if e != nil {

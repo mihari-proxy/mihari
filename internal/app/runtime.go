@@ -483,26 +483,11 @@ func BuildValidationRuntime(ctx context.Context, paths platform.Paths, settings 
 		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid installed core"}
 	}
 	if options.ValidationCore != nil {
-		binary, err := options.ValidationCore.Inspect(ctx, core.InstalledBinary, "")
+		opened, err := core.OpenValidationCore(ctx, options.ValidationCore)
 		if err != nil {
 			return nil, err
 		}
-		receipt, err := options.ValidationCore.Inspect(ctx, core.InstalledReceipt, "")
-		if err != nil {
-			return nil, err
-		}
-		if binary.Present != receipt.Present {
-			return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "incomplete installed core provenance pair"}
-		}
-		if binary.Present {
-			verified, err := core.OpenInstalledCore(ctx, options.ValidationCore)
-			if err != nil {
-				return nil, err
-			}
-			if err := verified.Close(); err != nil {
-				return nil, err
-			}
-		} else {
+		if !opened {
 			setupRequired = true
 		}
 	}
