@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"runtime"
 
+	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/panel/archive"
 	"github.com/mihari-proxy/mihari/internal/update"
 )
@@ -103,7 +104,7 @@ func prepareNativeReleaseInputs(ctx context.Context, req InstallRequest, sourceP
 			case "data/bin/mihomo":
 				inputs.resources["bin/mihomo"] = body
 			case "data/bin/core-channel":
-				if string(body) != "stable" && string(body) != "stable\n" && string(body) != "alpha" && string(body) != "alpha\n" {
+				if _, _, ok := config.ParseCoreChannelSidecar(body); !ok {
 					return migrateState("unsupported bundled core channel")
 				}
 				inputs.resources["bin/core-channel"] = body

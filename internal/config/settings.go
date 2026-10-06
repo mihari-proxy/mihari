@@ -498,6 +498,21 @@ func (s Settings) Validate() error {
 	return nil
 }
 
+// ParseCoreChannelSidecar reads a packaged core-channel sidecar. The first
+// line is stable or alpha. The second line is a non-empty stamp.
+func ParseCoreChannelSidecar(raw []byte) (channel, stamp string, ok bool) {
+	lines := strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
+	if len(lines) < 2 {
+		return "", "", false
+	}
+	channel = strings.TrimSpace(lines[0])
+	stamp = strings.TrimSpace(lines[1])
+	if stamp == "" || (channel != "stable" && channel != "alpha") {
+		return "", "", false
+	}
+	return channel, stamp, true
+}
+
 // ApplyCoreChannelSidecar applies a packaged core-channel sidecar to settings.
 // A missing or invalid sidecar is ignored. An unchanged stamp is a no-op so a
 // later TUI channel switch is not reverted by an old sidecar file.
@@ -509,13 +524,8 @@ func ApplyCoreChannelSidecar(settings *Settings, sidecarPath string) (bool, erro
 		}
 		return false, err
 	}
-	lines := strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
-	if len(lines) < 2 {
-		return false, nil
-	}
-	channel := strings.TrimSpace(lines[0])
-	stamp := strings.TrimSpace(lines[1])
-	if stamp == "" || (channel != "stable" && channel != "alpha") {
+	channel, stamp, ok := ParseCoreChannelSidecar(raw)
+	if !ok {
 		return false, nil
 	}
 	if settings.CoreChannelBundle == stamp {
