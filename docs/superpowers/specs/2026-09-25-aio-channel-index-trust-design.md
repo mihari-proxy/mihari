@@ -12,7 +12,7 @@
 
 **远程安装**（`install-aio-remote.sh`，`bootstrap_mode=online`，带整合包）：
 
-1. 本机 `/usr/local/lib/mihari/mihari` 若通过既有 root 路径链，且 `service apply --help` 同时含 `--yes` 和 `--expected-preview`，则它是安装器。此路径不访问网络。
+1. 本机 `/usr/local/lib/mihari/mihari` 若通过既有 root 路径链，且 `service apply --help` 同时含 `--yes` 和 `--expected-preview`，则它是安装器。选择它不联网。整合包未被 install-trust 的 `bundles` 或 `binaries` 接受时，随后的安装事务仍请求固定通道索引。
 2. 否则 root 只请求该通道的固定通道索引：
    - `main`：`https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/index.txt`
    - `dev`：`https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt`
@@ -22,7 +22,7 @@
 
 **离线安装**（`install-aio.sh`，默认 `bootstrap_mode=offline`）：
 
-全程不建立网络连接。已有合格安装器时用它。没有时，只接受安装根下 `install-trust/manifest.json` 的 `binaries` 或 `bundles` 中已经钉住的 sha256；钉住的是整合包或其中的 `mihari` 均可。核对的是 root 临时目录里的副本。通过且程序具备确认参数后，由包内程序执行安装。否则拒绝，沿用现有“需要事先准备可信安装器”的失败。
+没有合格安装器时不拨号，只接受安装根下 `install-trust/manifest.json` 的 `binaries` 或 `bundles` 中已经钉住的 sha256；钉住的是整合包或其中的 `mihari` 均可。核对的是 root 临时目录里的副本。通过且程序具备确认参数后，由包内程序执行安装。已有合格安装器时由它执行；整合包未被这些摘要接受时，安装事务仍会请求通道索引。否则拒绝，沿用现有“需要事先准备可信安装器”的失败。
 
 **不在本次范围：**
 

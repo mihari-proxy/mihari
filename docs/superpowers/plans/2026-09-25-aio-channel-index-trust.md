@@ -29,7 +29,7 @@
 
 **Interfaces:**
 - Consumes: 无。
-- Produces: `func channelIndexURL(channel string) (string, error)`；`func parseChannelIndex(text, goos, goarch string) (latest, sum string, err error)`。`channel` 只接受 `main` 与 `dev`。重复键、缺 `latest`、缺本平台行、非规范 tag、非 64 位小写 sha256 都返回错误。
+- Produces: `func channelIndexURL(channel string) (string, error)`；`func parseChannelIndex(text, channel, goos, goarch string) (latest, sum string, err error)`。`channel` 只接受 `main` 与 `dev`。重复键、缺 `latest`、缺本平台行、非规范 tag、非 64 位小写 sha256 都返回错误。
 
 - [ ] **Step 1: 写失败测试**
 

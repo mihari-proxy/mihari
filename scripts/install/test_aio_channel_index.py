@@ -118,7 +118,7 @@ def root_block(name):
     return text.split("# BEGIN ROOT APPLY\n", 1)[1].split("\n# END ROOT APPLY", 1)[0]
 
 
-def fake_curl(tmp_path, body):
+def fake_curl(tmp_path, body, status=200):
     log = tmp_path / "curl.log"
     index = tmp_path / "index-body"
     index.write_bytes(body)
@@ -127,16 +127,19 @@ def fake_curl(tmp_path, body):
         "#!/bin/sh",
         'printf "%s\\n" "$*" >> ' + shlex.quote(str(log)),
         "out=",
+        "header=",
         "prev=",
         "url=",
         'for arg in "$@"; do',
-        '  if [ "$prev" = -o ]; then out=$arg; fi',
+        '  if [ "$prev" = -o ] || [ "$prev" = --output ]; then out=$arg; fi',
+        '  if [ "$prev" = --dump-header ]; then header=$arg; fi',
         '  case "$arg" in http://*|https://*) url=$arg ;; esac',
         "  prev=$arg",
         "done",
         'case "$url" in',
         "  " + DEV_INDEX + "|" + MAIN_INDEX + ")",
-        "    cat " + shlex.quote(str(index)) + ' > "$out"',
+        '    if [ -n "$header" ]; then printf "HTTP/1.1 ' + str(status) + '\\r\\n" > "$header"; fi',
+        '    if [ -z "$out" ] || [ "$out" = - ]; then cat ' + shlex.quote(str(index)) + "; else cat " + shlex.quote(str(index)) + ' > "$out"; fi',
         "    exit 0",
         "    ;;",
         "  *) exit 1 ;;",
@@ -146,7 +149,7 @@ def fake_curl(tmp_path, body):
     return program, log
 
 
-def run_flow(tmp_path, *, mode, index, script=CAPABLE, channel="dev", tag="v1.2.3-dev.1", install_root=None):
+def run_flow(tmp_path, *, mode, index, script=CAPABLE, channel="dev", tag="v1.2.3-dev.1", install_root=None, index_status=200, bundle_path=None):
     source = (INSTALL / "root-apply.sh.in").read_text(encoding="utf-8")
     archive = tmp_path / "caller-archive.tar.gz"
     digest = write_bundle(archive, script)
@@ -159,8 +162,8 @@ def run_flow(tmp_path, *, mode, index, script=CAPABLE, channel="dev", tag="v1.2.
     check_log = tmp_path / "checksum.log"
     for stale in (entry_log, check_log, tmp_path / "curl.log"):
         stale.unlink(missing_ok=True)
-    curl, curl_log = fake_curl(tmp_path, index.encode())
-    functions = "\n".join(extract_function(source, name) for name in ("checksum", "root_fetch"))
+    curl, curl_log = fake_curl(tmp_path, index.encode(), status=index_status)
+    functions = "\n".join(extract_function(source, name) for name in ("checksum", "root_fetch", "root_fetch_index"))
     functions = functions.replace("/usr/bin/curl", shlex.quote(str(curl)))
     functions = functions.replace(
         "checksum() {",
@@ -177,7 +180,7 @@ def run_flow(tmp_path, *, mode, index, script=CAPABLE, channel="dev", tag="v1.2.
         "tag=" + shlex.quote(tag),
         "channel=" + shlex.quote(channel),
         "candidate=" + shlex.quote(str(original)),
-        "bundle=" + shlex.quote(str(archive)),
+        "bundle=" + shlex.quote(str(archive if bundle_path is None else bundle_path)),
         "bootstrap_mode=" + shlex.quote(mode),
         "install_root=" + shlex.quote(root),
         "explicit_yes=0",
@@ -286,6 +289,54 @@ def test_online_bundle_without_confirmation_flags_does_not_set_helper(tmp_path):
     assert_no_github(curl_text)
 
 
+def test_online_index_redirect_is_not_a_trust_root(tmp_path):
+    archive = tmp_path / "preview.tar.gz"
+    digest = write_bundle(archive, CAPABLE)
+    result, curl_text, _, _, _, _, _ = run_flow(
+        tmp_path, mode="online", index=index_text("v1.2.3-dev.1", digest), index_status=302,
+    )
+    assert result.returncode != 0
+    assert "cannot fetch channel index" in result.stderr
+    assert "helper release metadata exceeds limit" not in result.stderr
+    assert curl_text.count("https://") == 1
+    assert "--location" not in curl_text
+    assert_no_github(curl_text)
+
+
+def test_relative_install_root_fails_closed(tmp_path):
+    result, curl_text, _, _, _, _, _ = run_flow(
+        tmp_path, mode="offline", index="", install_root="relative-root",
+    )
+    assert result.returncode != 0
+    assert "invalid install root" in result.stderr
+    assert curl_text == ""
+
+
+def test_symlink_bundle_is_not_staged(tmp_path):
+    archive = tmp_path / "real.tar.gz"
+    write_bundle(archive, CAPABLE)
+    link = tmp_path / "link.tar.gz"
+    link.symlink_to(archive)
+    result, curl_text, _, _, _, _, _ = run_flow(
+        tmp_path, mode="online", index="", bundle_path=link,
+    )
+    assert result.returncode != 0
+    assert "cannot stage install bundle" in result.stderr
+    assert curl_text == ""
+
+
+def test_oversize_bundle_is_not_staged(tmp_path):
+    huge = tmp_path / "huge.tar.gz"
+    with huge.open("wb") as raw:
+        raw.truncate(1073741824 + 1)
+    result, curl_text, _, _, _, _, _ = run_flow(
+        tmp_path, mode="online", index="", bundle_path=huge,
+    )
+    assert result.returncode != 0
+    assert "install bundle exceeds limit" in result.stderr
+    assert curl_text == ""
+
+
 def test_offline_without_manifest_does_not_call_curl(tmp_path):
     result, curl_text, _, _, _, _, _ = run_flow(tmp_path, mode="offline", index="")
     assert result.returncode != 0
@@ -359,6 +410,10 @@ def test_offline_manifest_reuses_trusted_entry_loop():
     loop = extract_function(source, "root_path_trusted")
     assert 'while [ "$entry_path" != / ]' in loop
     assert '[ "$owner" = 0 ]' in loop
+    assert '*) return 1 ;;' in loop
+    pin = source.index('manifest_pins_digest "$manifest" "$archive_sha" ""')
+    extract = source.index('stage_bundle_mihari "$stage/bundle" "$stage/mihari"')
+    assert pin < extract
     assert "manifest_pins_digest" in source
 
 

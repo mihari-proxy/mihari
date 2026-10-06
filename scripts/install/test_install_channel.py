@@ -683,6 +683,27 @@ def test_script3_sh_dev_rejects_stable_latest_without_bundle_download(tmp_path: 
 
 
 @requires_sh
+def test_script3_sh_rejects_non_latest_version_before_bundle_download():
+    server = IndexServer(b"latest v0.9.6-dev.11\nlinux-amd64 http://127.0.0.1/bundle deadbeef\n")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}/index.txt"
+        result = run_remote_sh(
+            ["--yes", "--channel", "dev"],
+            {"MIHARI_INDEX_URL": url, "MIHARI_VERSION": "v0.9.6-dev.10"},
+        )
+        assert result.returncode != 0, result.stdout
+        assert "channel index latest does not match release tag" in result.stderr
+        assert server.paths.count("/index.txt") >= 1
+        assert not any("bundle" in path for path in server.paths)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@requires_sh
 def test_script3_sh_unknown_flag_fails_before_fetch():
     result = run_remote_sh(["--nope"], {"MIHARI_INDEX_URL": "http://127.0.0.1:1/index.txt"})
     assert result.returncode != 0

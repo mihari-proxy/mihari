@@ -90,7 +90,7 @@ func TestChannelIndex_Rejects(t *testing.T) {
 		{name: "leading zero", channel: InstallChannelMain, goos: "linux", goarch: "amd64", text: channelIndexBody("v1.02.3", channelIndexSum)},
 		{name: "dev leading zero", channel: InstallChannelDev, goos: "linux", goarch: "amd64", text: channelIndexBody("v1.2.3-dev.04", channelIndexSum)},
 		{name: "unknown channel", channel: "stable", goos: "linux", goarch: "amd64", text: valid},
-		{name: "oversize", channel: InstallChannelMain, goos: "linux", goarch: "amd64", text: valid + strings.Repeat("\n", 65537-len(valid))},
+		{name: "oversize", channel: InstallChannelMain, goos: "linux", goarch: "amd64", text: valid + strings.Repeat("\n", channelIndexMaxBytes+1-len(valid))},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -104,11 +104,11 @@ func TestChannelIndex_Rejects(t *testing.T) {
 
 func TestChannelIndex_SizeBoundary(t *testing.T) {
 	body := channelIndexBody("v1.2.3", channelIndexSum)
-	if len(body) >= 65536 {
+	if len(body) >= channelIndexMaxBytes {
 		t.Fatalf("fixture length %d", len(body))
 	}
-	exact := body + "#" + strings.Repeat(".", 65536-len(body)-1)
-	if len(exact) != 65536 {
+	exact := body + "#" + strings.Repeat(".", channelIndexMaxBytes-len(body)-1)
+	if len(exact) != channelIndexMaxBytes {
 		t.Fatalf("boundary length %d", len(exact))
 	}
 	latest, sum, err := parseChannelIndex(exact, InstallChannelMain, "linux", "amd64")
@@ -116,7 +116,7 @@ func TestChannelIndex_SizeBoundary(t *testing.T) {
 		t.Fatalf("latest=%q sum=%q err=%v", latest, sum, err)
 	}
 	over := exact + "\n"
-	if len(over) != 65537 {
+	if len(over) != channelIndexMaxBytes+1 {
 		t.Fatalf("oversize length %d", len(over))
 	}
 	if _, _, err := parseChannelIndex(over, InstallChannelMain, "linux", "amd64"); err == nil {

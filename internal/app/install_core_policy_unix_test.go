@@ -209,6 +209,86 @@ func TestNativeCoreInputs_BinaryPinSkipsChannelIndex(t *testing.T) {
 	})
 }
 
+func TestNativeCoreInputs_BundlePinSkipsChannelIndex(t *testing.T) {
+	ctx, root := nativeInstallFixture(t)
+	appBinary := []byte("verified Mihari fixture")
+	coreBinary := []byte("newer official bundled core fixture")
+	bundle := nativeCoreBundle(t, map[string][]byte{
+		"mihari":                appBinary,
+		"data/bin/mihomo":       coreBinary,
+		"data/bin/core-channel": []byte("alpha\n"),
+	})
+	trust := filepath.Join(root, "trust")
+	if err := os.Mkdir(trust, 0700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := []byte(`{"binaries":[],"bundles":["` + sha256HexBytes(bundle) + `"]}`)
+	for name, body := range map[string][]byte{"trust/manifest.json": manifest, "candidate": appBinary, "bundle.tar.gz": bundle} {
+		if err := os.WriteFile(filepath.Join(root, name), body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := 0
+	client := &http.Client{Transport: replacementTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		t.Errorf("bundle pin requested the network: %s", r.URL.String())
+		return nil, errors.New("network forbidden")
+	})}
+	inputs, err := prepareNativeReleaseInputs(ctx, InstallRequest{
+		Binary:     filepath.Join(root, "candidate"),
+		Bundle:     filepath.Join(root, "bundle.tar.gz"),
+		ReleaseTag: "v1.2.3-dev.1",
+		Channel:    InstallChannelDev,
+	}, "", trust, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := inputs.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if calls != 0 || inputs.offlineBinary || !inputs.trust.acceptsBundle(sha256HexBytes(bundle)) || !inputs.trust.acceptsBinary(sha256HexBytes(appBinary)) {
+		t.Fatalf("calls=%d offline=%v bundle=%v binary=%v", calls, inputs.offlineBinary, inputs.trust.acceptsBundle(sha256HexBytes(bundle)), inputs.trust.acceptsBinary(sha256HexBytes(appBinary)))
+	}
+	if !bytes.Equal(inputs.core, coreBinary) {
+		t.Fatalf("bundled core changed: %q", inputs.core)
+	}
+}
+
+func TestNativeCoreInputs_MissingMemberRejected(t *testing.T) {
+	ctx, root := nativeInstallFixture(t)
+	appBinary := []byte("verified Mihari fixture")
+	bundle := nativeCoreBundle(t, map[string][]byte{
+		"data/bin/core-channel": []byte("alpha\n"),
+	})
+	trust := filepath.Join(root, "trust")
+	if err := os.Mkdir(trust, 0700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := []byte(`{"binaries":[],"bundles":["` + sha256HexBytes(bundle) + `"]}`)
+	for name, body := range map[string][]byte{"trust/manifest.json": manifest, "candidate": appBinary, "bundle.tar.gz": bundle} {
+		if err := os.WriteFile(filepath.Join(root, name), body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := 0
+	client := &http.Client{Transport: replacementTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		t.Errorf("pinned bundle requested the network: %s", r.URL.String())
+		return nil, errors.New("network forbidden")
+	})}
+	inputs, err := prepareNativeReleaseInputs(ctx, InstallRequest{
+		Binary:     filepath.Join(root, "candidate"),
+		Bundle:     filepath.Join(root, "bundle.tar.gz"),
+		ReleaseTag: "v1.2.3-dev.1",
+		Channel:    InstallChannelDev,
+	}, "", trust, client)
+	if err == nil || inputs != nil || calls != 0 || !strings.Contains(err.Error(), "bundle binary does not match verified candidate") {
+		t.Fatalf("inputs=%v calls=%d err=%v", inputs, calls, err)
+	}
+}
+
 func nativeCoreBundle(t *testing.T, entries map[string][]byte) []byte {
 	t.Helper()
 	var packed bytes.Buffer

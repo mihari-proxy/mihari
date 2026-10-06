@@ -212,12 +212,22 @@ fail() { printf '%s\n' "$1" >&2; exit 1; }
 tag=$1; channel=$2; candidate=$3; bundle=$4; source=$5; data=$6; endpoint=$7; credential=$8; install_root=$9; shift 9; path_binary=$1; explicit_yes=$2; bootstrap_mode=$3
 case "$bootstrap_mode" in online|offline) :;; *) fail "invalid bootstrap mode";; esac
 stage=$(mktemp -d /var/tmp/mihari-install.XXXXXXXX)
-cleanup() { rm -f "$stage/entry" "$stage/candidate" "$stage/checksums" "$stage/latest" "$stage/request.json" "$stage/result.json" "$stage/error.json" "$stage/helper-help" "$stage/helper-latest" "$stage/bundle" "$stage/mihari" "$stage/index" "$stage/tar-status"; rmdir "$stage"; }
+cleanup() { rm -f "$stage/entry" "$stage/candidate" "$stage/checksums" "$stage/latest" "$stage/request.json" "$stage/result.json" "$stage/error.json" "$stage/helper-help" "$stage/helper-latest" "$stage/bundle" "$stage/mihari" "$stage/index" "$stage/index-headers" "$stage/tar-status"; rmdir "$stage"; }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 root_fetch() {
   [ -x /usr/bin/curl ] || fail "trusted bootstrap requires /usr/bin/curl"
   /usr/bin/curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 120 --max-filesize 268435456 "$1" -o "$2"
+}
+# Channel index is the trust root: refuse redirects and keep at most 65537 bytes.
+# root_fetch still follows redirects for GitHub release assets.
+root_fetch_index() {
+  [ -x /usr/bin/curl ] || fail "trusted bootstrap requires /usr/bin/curl"
+  rm -f "$2" "$stage/index-headers"
+  /usr/bin/curl --silent --show-error --proto '=https' --proto-redir '=https' --max-time 120 --dump-header "$stage/index-headers" --max-filesize 65536 -o - "$1" | /bin/dd bs=65537 count=1 of="$2" 2>/dev/null || fail "cannot fetch channel index"
+  index_code=$(awk 'BEGIN { code = "" } /^HTTP\// { code = $2 } END { gsub(/\r/, "", code); if (code == "") exit 1; print code }' "$stage/index-headers") || fail "cannot fetch channel index"
+  [ "$index_code" = 200 ] || fail "cannot fetch channel index"
+  [ -f "$2" ] && [ "$(wc -c < "$2")" -le 65536 ] || fail "channel index exceeds limit"
 }
 checksum() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
@@ -257,6 +267,10 @@ verified_binary() {
 }
 root_path_trusted() {
   entry_path=$1
+  case "$entry_path" in
+    /*) ;;
+    *) return 1 ;;
+  esac
   [ -f "$entry_path" ] && [ ! -L "$entry_path" ] || return 1
   if [ "$os" = linux ]; then links=$(stat -c %h "$entry_path"); else links=$(stat -f %l "$entry_path"); fi
   [ "$links" = 1 ] || return 1
@@ -460,17 +474,20 @@ if [ -n "$entry" ] && ! helper_capable "$entry"; then entry=""; fi
 # bundle. Copy into this stage before hashing or extracting, and never execute
 # the caller archive path. Do not fall back to a GitHub helper.
 if [ -z "$entry" ] && [ -n "${bundle:-}" ]; then
+  [ -f "$bundle" ] && [ ! -L "$bundle" ] || fail "cannot stage install bundle"
+  if [ "$os" = linux ]; then bundle_size=$(stat -c %s "$bundle") || fail "cannot stage install bundle"; else bundle_size=$(stat -f %z "$bundle") || fail "cannot stage install bundle"; fi
+  [ "$bundle_size" -le 1073741824 ] || fail "install bundle exceeds limit"
   cp "$bundle" "$stage/bundle" || fail "cannot stage install bundle"
   chmod 0600 "$stage/bundle" || fail "cannot stage install bundle"
   archive_sha=$(checksum "$stage/bundle") || fail "cannot hash install bundle"
+  offline_bundle_pin=0
   if [ "$bootstrap_mode" = online ]; then
     case "$channel" in
       main) index_url=https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/index.txt ;;
       dev) index_url=https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt ;;
       *) fail "invalid helper channel" ;;
     esac
-    root_fetch "$index_url" "$stage/index"
-    [ "$(wc -c < "$stage/index")" -le 65536 ] || fail "channel index exceeds limit"
+    root_fetch_index "$index_url" "$stage/index"
     index_parsed=$(read_channel_index "$stage/index" "$os-$arch") || fail "invalid channel index"
     index_latest=$(printf '%s\n' "$index_parsed" | sed -n '1p')
     index_sum=$(printf '%s\n' "$index_parsed" | sed -n '2p')
@@ -478,11 +495,18 @@ if [ -z "$entry" ] && [ -n "${bundle:-}" ]; then
     [ "$index_sum" = "$archive_sha" ] || fail "install bundle checksum mismatch"
   else
     manifest="${install_root:-/usr/local/lib/mihari}/install-trust/manifest.json"
+    case "$manifest" in
+      /*) ;;
+      *) fail "invalid install root" ;;
+    esac
     root_path_trusted "$manifest" || fail "Offline installation requires a trusted helper with replacement confirmation support. Prepare a current Mihari installation before installing this offline candidate."
+    if manifest_pins_digest "$manifest" "$archive_sha" ""; then
+      offline_bundle_pin=1
+    fi
   fi
   stage_bundle_mihari "$stage/bundle" "$stage/mihari" || fail "bundle does not contain mihari"
   binary_sha=$(checksum "$stage/mihari") || fail "cannot hash bundled mihari"
-  if [ "$bootstrap_mode" != online ]; then
+  if [ "$bootstrap_mode" != online ] && [ "$offline_bundle_pin" != 1 ]; then
     manifest_pins_digest "$manifest" "$archive_sha" "$binary_sha" || fail "Offline installation requires a trusted helper with replacement confirmation support. Prepare a current Mihari installation before installing this offline candidate."
   fi
   helper_capable "$stage/mihari" || fail "The current official helper lacks replacement confirmation support. Update the installer helper before installing the selected version."
