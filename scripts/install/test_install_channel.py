@@ -674,7 +674,10 @@ def test_script3_sh_dev_rejects_stable_latest_without_bundle_download(tmp_path: 
         url = f"http://127.0.0.1:{server.server_address[1]}/index.txt"
         result = run_remote_sh(["--yes", "--channel", "dev"], {"MIHARI_INDEX_URL": url})
         assert result.returncode != 0, result.stdout
+        assert "dev index latest must be vX.Y.Z-dev.N" in result.stderr
         assert server.paths.count("/index.txt") >= 1
+        # Test mode exits before download_file_with_progress, so the server
+        # cannot show that the bundle URL was never requested.
         text = INSTALL_AIO_REMOTE_SH.read_text(encoding="utf-8")
         assert text.index("dev index latest must be vX.Y.Z-dev.N") < text.index('download_file_with_progress "$bundle_url"')
     finally:
@@ -697,6 +700,8 @@ def test_script3_sh_rejects_non_latest_version():
         assert result.returncode != 0, result.stdout
         assert "channel index latest does not match release tag" in result.stderr
         assert server.paths.count("/index.txt") >= 1
+        # Test mode exits before download_file_with_progress, so the server
+        # cannot show that the bundle URL was never requested.
         text = INSTALL_AIO_REMOTE_SH.read_text(encoding="utf-8")
         assert text.index("channel index latest does not match release tag") < text.index('download_file_with_progress "$bundle_url"')
     finally:

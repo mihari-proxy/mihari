@@ -32,6 +32,6 @@
 
 ## 安装事务
 
-`prepareNativeReleaseInputs` 在整合包摘要已被 install-trust 接受时保持现状，不联网。未被接受且请求带有整合包时，改为拉取对应通道的固定索引并核对 tag 与摘要；禁止再请求 `github.com` 上的 `SHA256SUMS.txt`。没有整合包的请求仍走现有 GitHub 单文件校验。
+`prepareNativeReleaseInputs` 在 install-trust 已接受整合包摘要或候选 `mihari` 摘要时不联网。候选摘要被接受时，归档里名为 `mihari` 的成员仍须与候选字节一致；该钉一并授权同一归档中的 core 与 geo。两者都未接受且请求带有整合包时，改为拉取对应通道的固定索引并核对 tag 与摘要；禁止再请求 `github.com` 上的 `SHA256SUMS.txt`。没有整合包的请求仍走现有 GitHub 单文件校验。
 
 离线脚本只在 install-trust 已接受摘要之后才执行包内程序，因此该次 Go 调用不会因为缺少摘要而去拉索引。

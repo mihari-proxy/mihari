@@ -101,7 +101,7 @@ linux-amd64 https://example.invalid/bundle <归档的 sha256>
 
 - [ ] **Step 1: 写失败测试**
 
-新 pytest 在 POSIX 上用假 `curl` 驱动从 `root-apply.sh.in` 抽出的在线分支（Windows 上 `pytest.skip`，与 `test_replacement_confirmation.py` 相同）：
+新 pytest 在 Linux 上用假 `curl` 驱动从 `root-apply.sh.in` 抽出的在线分支（Windows 与 macOS 上跳过：夹具把 `os` 固定为 `linux` 并调用 GNU `stat`。`test_replacement_confirmation.py` 只在非 POSIX 上跳过，因此会在 macOS 上运行）：
 
 - `channel=dev`、`bootstrap_mode=online`、本地归档的 sha256 与假索引一致、抽出的 `mihari` 是一个 `service apply --help` 印出 `--yes` 和 `--expected-preview` 的脚本。期望退出码 0，且 curl 记录里没有 `api.github.com` 或 `github.com`。
 - 索引 sha256 与归档不符时期望失败，stderr 不含 `helper release metadata exceeds limit`，也不出现第二份下载。
