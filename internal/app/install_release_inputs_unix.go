@@ -44,7 +44,10 @@ func prepareNativeReleaseInputs(ctx context.Context, req InstallRequest, sourceP
 	hash := sha256HexBytes(inputs.binary)
 	official := update.OfficialReleaseSource{Client: client}
 	inputs.offlineBinary = inputs.trust.acceptsBinary(hash)
-	if !inputs.offlineBinary {
+	// A request that carries a bundle must not ask GitHub for a digest. The
+	// candidate is authorized only when it matches mihari inside an archive
+	// that install-trust or the fixed channel index already accepted.
+	if req.Bundle == "" && !inputs.offlineBinary {
 		want, err := official.Checksum(ctx, req.ReleaseTag, "mihari-"+runtime.GOOS+"-"+runtime.GOARCH)
 		if err != nil {
 			return nil, err
@@ -70,25 +73,32 @@ func prepareNativeReleaseInputs(ctx context.Context, req InstallRequest, sourceP
 			return nil, err
 		}
 		bundleHash := sha256HexBytes(raw)
-		if !inputs.trust.acceptsBundle(bundleHash) {
-			want, err := official.Checksum(ctx, req.ReleaseTag, "mihari-all-in-one-"+runtime.GOOS+"-"+runtime.GOARCH+".tar.gz")
+		// A binaries pin or a bundle pin is already offline authority. Only an
+		// unpinned bundle consults the fixed channel index. The mihari member
+		// must still match the candidate before this archive is trusted.
+		if !inputs.trust.acceptsBundle(bundleHash) && !inputs.offlineBinary {
+			latest, sum, err := fetchChannelIndex(ctx, client, req.Channel, runtime.GOOS, runtime.GOARCH)
 			if err != nil {
 				return nil, err
 			}
-			if want != bundleHash {
+			if latest != req.ReleaseTag {
+				return nil, migrateData("channel index latest does not match release tag")
+			}
+			if sum != bundleHash {
 				return nil, migrateData("install bundle checksum mismatch")
 			}
-			inputs.trust.bundle[bundleHash] = struct{}{}
 		}
 		if req.BundleSHA256 != "" && req.BundleSHA256 != bundleHash {
 			return nil, migrateData("install bundle checksum mismatch")
 		}
+		matchedBundleBinary := false
 		err = archive.ExtractTarGzipBytes(raw, archive.Limits{MaxFile: migrationBinaryMax, MaxTotal: migrationBundleExpand, MaxEntries: migrationBundleFiles, MaxDepth: migrationMaxDepth}, nil, func(name string, body []byte) error {
 			switch name {
 			case "mihari":
 				if sha256HexBytes(body) != hash {
 					return migrateData("bundle binary does not match verified candidate")
 				}
+				matchedBundleBinary = true
 			case "install-aio.sh": // Inert installer text is never executed by apply.
 			case "data/bin/mihomo":
 				inputs.resources["bin/mihomo"] = body
@@ -108,6 +118,13 @@ func prepareNativeReleaseInputs(ctx context.Context, req InstallRequest, sourceP
 		if err != nil {
 			return nil, err
 		}
+		if !matchedBundleBinary {
+			return nil, migrateData("bundle binary does not match verified candidate")
+		}
+		if !inputs.trust.acceptsBundle(bundleHash) {
+			inputs.trust.bundle[bundleHash] = struct{}{}
+		}
+		inputs.trust.binary[hash] = struct{}{}
 	}
 	// The enclosing bundle has already been independently verified. Its core
 	// is an offline input, not a request to fetch the compiled legacy version.
