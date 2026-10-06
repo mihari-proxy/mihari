@@ -333,7 +333,7 @@ fail() { printf '%s\n' "$1" >&2; exit 1; }
 tag=$1; channel=$2; candidate=$3; bundle=$4; source=$5; data=$6; endpoint=$7; credential=$8; install_root=$9; shift 9; path_binary=$1; explicit_yes=$2; bootstrap_mode=$3
 case "$bootstrap_mode" in online|offline) :;; *) fail "invalid bootstrap mode";; esac
 stage=$(mktemp -d /var/tmp/mihari-install.XXXXXXXX)
-cleanup() { rm -f "$stage/entry" "$stage/candidate" "$stage/checksums" "$stage/latest" "$stage/request.json" "$stage/result.json" "$stage/error.json" "$stage/helper-help" "$stage/helper-latest" "$stage/bundle" "$stage/mihari" "$stage/index" "$stage/index-headers" "$stage/tar-status"; rmdir "$stage"; }
+cleanup() { rm -f "$stage/entry" "$stage/candidate" "$stage/checksums" "$stage/latest" "$stage/request.json" "$stage/result.json" "$stage/error.json" "$stage/helper-help" "$stage/helper-latest" "$stage/bundle" "$stage/mihari" "$stage/index" "$stage/index-headers" "$stage/index-status" "$stage/tar-status"; rmdir "$stage"; }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 root_fetch() {
@@ -344,11 +344,20 @@ root_fetch() {
 # root_fetch still follows redirects for GitHub release assets.
 root_fetch_index() {
   [ -x /usr/bin/curl ] || fail "trusted bootstrap requires /usr/bin/curl"
-  rm -f "$2" "$stage/index-headers"
-  /usr/bin/curl --silent --show-error --proto '=https' --proto-redir '=https' --max-time 120 --dump-header "$stage/index-headers" --max-filesize 65536 -o - "$1" | /bin/dd bs=65537 count=1 of="$2" 2>/dev/null || fail "cannot fetch channel index"
+  rm -f "$2" "$stage/index-headers" "$stage/index-status"
+  # head -c counts bytes across reads. dd count=1 can stop after one short
+  # pipe read, and the pipeline status would hide curl's exit code.
+  (
+    set +e
+    /usr/bin/curl --silent --show-error --proto '=https' --proto-redir '=https' --max-time 120 --dump-header "$stage/index-headers" --max-filesize 65536 -o - "$1"
+    printf '%s\n' "$?" > "$stage/index-status"
+  ) | head -c 65537 > "$2" || fail "cannot fetch channel index"
+  index_status=$(tr -d '[:space:]' < "$stage/index-status") || fail "cannot fetch channel index"
+  [ -f "$2" ] || fail "cannot fetch channel index"
+  [ "$(wc -c < "$2")" -le 65536 ] || fail "channel index exceeds limit"
+  [ "$index_status" = 0 ] || fail "cannot fetch channel index"
   index_code=$(awk 'BEGIN { code = "" } /^HTTP\// { code = $2 } END { gsub(/\r/, "", code); if (code == "") exit 1; print code }' "$stage/index-headers") || fail "cannot fetch channel index"
   [ "$index_code" = 200 ] || fail "cannot fetch channel index"
-  [ -f "$2" ] && [ "$(wc -c < "$2")" -le 65536 ] || fail "channel index exceeds limit"
 }
 checksum() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1

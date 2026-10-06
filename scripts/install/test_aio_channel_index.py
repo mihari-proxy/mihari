@@ -93,6 +93,16 @@ def extract_function(source, name):
                 quote = ""
             index += 1
             continue
+        # A '#' that begins a word is a comment through the next newline.
+        # Mid-word '#' (including ${#name}) stays in the token. An apostrophe
+        # inside that comment must not open a quote, or the brace match runs
+        # into the next function.
+        if char == "#" and (index == 0 or source[index - 1].isspace() or source[index - 1] in ";&|()"):
+            newline = source.find("\n", index)
+            if newline < 0:
+                break
+            index = newline
+            continue
         if char in "'\"":
             quote = char
             index += 1
@@ -118,7 +128,7 @@ def root_block(name):
     return text.split("# BEGIN ROOT APPLY\n", 1)[1].split("\n# END ROOT APPLY", 1)[0]
 
 
-def fake_curl(tmp_path, body, status=200):
+def fake_curl(tmp_path, body, status=200, exit_code=0):
     log = tmp_path / "curl.log"
     index = tmp_path / "index-body"
     index.write_bytes(body)
@@ -140,7 +150,7 @@ def fake_curl(tmp_path, body, status=200):
         "  " + DEV_INDEX + "|" + MAIN_INDEX + ")",
         '    if [ -n "$header" ]; then printf "HTTP/1.1 ' + str(status) + '\\r\\n" > "$header"; fi',
         '    if [ -z "$out" ] || [ "$out" = - ]; then cat ' + shlex.quote(str(index)) + "; else cat " + shlex.quote(str(index)) + ' > "$out"; fi',
-        "    exit 0",
+        "    exit " + str(exit_code),
         "    ;;",
         "  *) exit 1 ;;",
         "esac",
@@ -149,7 +159,7 @@ def fake_curl(tmp_path, body, status=200):
     return program, log
 
 
-def run_flow(tmp_path, *, mode, index, script=CAPABLE, channel="dev", tag="v1.2.3-dev.1", install_root=None, index_status=200, bundle_path=None):
+def run_flow(tmp_path, *, mode, index, script=CAPABLE, channel="dev", tag="v1.2.3-dev.1", install_root=None, index_status=200, index_exit=0, bundle_path=None):
     source = (INSTALL / "root-apply.sh.in").read_text(encoding="utf-8")
     archive = tmp_path / "caller-archive.tar.gz"
     digest = write_bundle(archive, script)
@@ -162,7 +172,7 @@ def run_flow(tmp_path, *, mode, index, script=CAPABLE, channel="dev", tag="v1.2.
     check_log = tmp_path / "checksum.log"
     for stale in (entry_log, check_log, tmp_path / "curl.log"):
         stale.unlink(missing_ok=True)
-    curl, curl_log = fake_curl(tmp_path, index.encode(), status=index_status)
+    curl, curl_log = fake_curl(tmp_path, index.encode(), status=index_status, exit_code=index_exit)
     functions = "\n".join(extract_function(source, name) for name in ("checksum", "root_fetch", "root_fetch_index"))
     functions = functions.replace("/usr/bin/curl", shlex.quote(str(curl)))
     functions = functions.replace(
@@ -203,6 +213,16 @@ def run_flow(tmp_path, *, mode, index, script=CAPABLE, channel="dev", tag="v1.2.
 def assert_no_github(curl_text):
     assert "api.github.com" not in curl_text
     assert "github.com" not in curl_text
+
+
+def test_extract_function_stops_at_root_fetch_index_despite_comment_apostrophe():
+    source = (INSTALL / "root-apply.sh.in").read_text(encoding="utf-8")
+    body = extract_function(source, "root_fetch_index")
+    assert body.startswith("root_fetch_index() {")
+    assert "curl's" in body
+    assert "checksum()" not in body
+    assert "manifest_pins_digest" not in body
+    assert body.rstrip().endswith('|| fail "cannot fetch channel index"\n}')
 
 
 @pytest.mark.parametrize(("channel", "tag", "url"), [
@@ -300,6 +320,19 @@ def test_online_index_redirect_is_not_a_trust_root(tmp_path):
     assert "helper release metadata exceeds limit" not in result.stderr
     assert curl_text.count("https://") == 1
     assert "--location" not in curl_text
+    assert_no_github(curl_text)
+
+
+def test_online_index_curl_failure_is_not_a_trust_root(tmp_path):
+    archive = tmp_path / "preview.tar.gz"
+    digest = write_bundle(archive, CAPABLE)
+    result, curl_text, _, _, _, _, _ = run_flow(
+        tmp_path, mode="online", index=index_text("v1.2.3-dev.1", digest), index_exit=1,
+    )
+    assert result.returncode != 0
+    assert "cannot fetch channel index" in result.stderr
+    assert "invalid channel index" not in result.stderr
+    assert curl_text.count("https://") == 1
     assert_no_github(curl_text)
 
 
