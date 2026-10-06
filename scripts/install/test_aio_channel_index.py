@@ -1,7 +1,7 @@
 """Root apply must trust an AIO bundle from the fixed index or install-trust.
 
-Windows cannot run the POSIX fixture. A skip there is not a pass; run this
-file on a POSIX host.
+The flow fixture sets os=linux and calls GNU stat. A skip on Windows or
+macOS is not a Linux pass; run this file on Linux.
 """
 import gzip
 import hashlib
@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import tarfile
 
 import pytest
@@ -23,7 +24,10 @@ OFFLINE_HELPER = (
 )
 CONFIRMATION = "lacks replacement confirmation support"
 
-pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX shell")
+pytestmark = pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="flow fixture sets os=linux and uses GNU stat",
+)
 
 
 def sha256(data):
