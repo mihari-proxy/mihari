@@ -212,7 +212,7 @@ fail() { printf '%s\n' "$1" >&2; exit 1; }
 tag=$1; channel=$2; candidate=$3; bundle=$4; source=$5; data=$6; endpoint=$7; credential=$8; install_root=$9; shift 9; path_binary=$1; explicit_yes=$2; bootstrap_mode=$3
 case "$bootstrap_mode" in online|offline) :;; *) fail "invalid bootstrap mode";; esac
 stage=$(mktemp -d /var/tmp/mihari-install.XXXXXXXX)
-cleanup() { rm -f "$stage/entry" "$stage/candidate" "$stage/checksums" "$stage/latest" "$stage/request.json" "$stage/result.json" "$stage/error.json" "$stage/helper-help" "$stage/helper-latest"; rmdir "$stage"; }
+cleanup() { rm -f "$stage/entry" "$stage/candidate" "$stage/checksums" "$stage/latest" "$stage/request.json" "$stage/result.json" "$stage/error.json" "$stage/helper-help" "$stage/helper-latest" "$stage/bundle" "$stage/mihari" "$stage/index" "$stage/tar-status"; rmdir "$stage"; }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 root_fetch() {
@@ -235,23 +235,7 @@ fi
 printf '%s\n' "$tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-dev\.(0|[1-9][0-9]*))?$' || fail "invalid fixed release tag"
 case "$tag:$channel" in *-dev.*:dev) :;; *-dev.*:*) fail "release channel mismatch";; *:main) :;; *) fail "release channel mismatch";; esac
 trusted_entry() {
-  entry_path=$1
-  [ -f "$entry_path" ] && [ ! -L "$entry_path" ] || return 1
-  if [ "$os" = linux ]; then links=$(stat -c %h "$entry_path"); else links=$(stat -f %l "$entry_path"); fi
-  [ "$links" = 1 ] || return 1
-  while [ "$entry_path" != / ]; do
-    [ ! -L "$entry_path" ] || return 1
-    if [ "$os" = linux ]; then
-      owner=$(stat -c %u "$entry_path") || return 1
-      mode=$(stat -c %a "$entry_path") || return 1
-    else
-      owner=$(stat -f %u "$entry_path") || return 1
-      mode=$(stat -f %Lp "$entry_path") || return 1
-      [ -z "$(ls -lde "$entry_path" | sed -n '2p')" ] || return 1
-    fi
-    [ "$owner" = 0 ] && [ "$((0$mode & 022))" -eq 0 ] || return 1
-    entry_path=$(dirname "$entry_path")
-  done
+  root_path_trusted "$1"
 }
 entry=/usr/local/lib/mihari/mihari
 helper_capable() {
@@ -271,8 +255,241 @@ verified_binary() {
   [ "$(checksum "$2")" = "$expected" ] || fail "official binary checksum mismatch"
   chmod 0700 "$2"
 }
+root_path_trusted() {
+  entry_path=$1
+  [ -f "$entry_path" ] && [ ! -L "$entry_path" ] || return 1
+  if [ "$os" = linux ]; then links=$(stat -c %h "$entry_path"); else links=$(stat -f %l "$entry_path"); fi
+  [ "$links" = 1 ] || return 1
+  while [ "$entry_path" != / ]; do
+    [ ! -L "$entry_path" ] || return 1
+    if [ "$os" = linux ]; then
+      owner=$(stat -c %u "$entry_path") || return 1
+      mode=$(stat -c %a "$entry_path") || return 1
+    else
+      owner=$(stat -f %u "$entry_path") || return 1
+      mode=$(stat -f %Lp "$entry_path") || return 1
+      [ -z "$(ls -lde "$entry_path" | sed -n '2p')" ] || return 1
+    fi
+    [ "$owner" = 0 ] && [ "$((0$mode & 022))" -eq 0 ] || return 1
+    entry_path=$(dirname "$entry_path")
+  done
+}
+# manifest_pins_digest FILE ARCHIVE_SHA256 MIHARI_SHA256
+# Accept only a 64-lowercase-hex digest in top-level bundles or binaries.
+# A manifest larger than 1048576 bytes does not match.
+manifest_pins_digest() {
+  pin_file=$1
+  pin_archive=$2
+  pin_binary=$3
+  [ -f "$pin_file" ] && [ ! -L "$pin_file" ] || return 1
+  [ "$(wc -c < "$pin_file")" -le 1048576 ] || return 1
+  printf '%s\n' "$pin_archive" | grep -Eq '^[0-9a-f]{64}$' || pin_archive=
+  printf '%s\n' "$pin_binary" | grep -Eq '^[0-9a-f]{64}$' || pin_binary=
+  [ -n "$pin_archive$pin_binary" ] || return 1
+  LC_ALL=C awk -v archive="$pin_archive" -v binary="$pin_binary" '
+    function failparse() { failed = 1; exit 1 }
+    function skip_ws(   c) {
+      while (p <= len) {
+        c = substr(text, p, 1)
+        if (c != " " && c != "\t" && c != "\n" && c != "\r") break
+        p++
+      }
+    }
+    function parse_string(   out, c) {
+      if (substr(text, p, 1) != "\"") failparse()
+      p++
+      out = ""
+      while (p <= len) {
+        c = substr(text, p, 1)
+        p++
+        if (c == "\"") return out
+        if (c == "\\") {
+          if (p > len) failparse()
+          c = substr(text, p, 1)
+          p++
+          if (c == "\"" || c == "\\" || c == "/") out = out c
+          else if (c == "b") out = out "\b"
+          else if (c == "f") out = out "\f"
+          else if (c == "n") out = out "\n"
+          else if (c == "r") out = out "\r"
+          else if (c == "t") out = out "\t"
+          else if (c == "u") {
+            if (p + 3 > len) failparse()
+            p += 4
+            out = out "\001"
+          } else failparse()
+          continue
+        }
+        if (c < " ") failparse()
+        out = out c
+      }
+      failparse()
+    }
+    function parse_literal(   c) {
+      c = substr(text, p, 1)
+      if (c == "t") { if (substr(text, p, 4) != "true") failparse(); p += 4; return }
+      if (c == "f") { if (substr(text, p, 5) != "false") failparse(); p += 5; return }
+      if (c == "n") { if (substr(text, p, 4) != "null") failparse(); p += 4; return }
+      if (c == "-" || (c >= "0" && c <= "9")) {
+        p++
+        while (p <= len && substr(text, p, 1) ~ /[0-9eE+.\-]/) p++
+        return
+      }
+      failparse()
+    }
+    function parse_array(collect, depth,   element, c) {
+      p++
+      skip_ws()
+      if (substr(text, p, 1) == "]") { p++; return }
+      while (1) {
+        skip_ws()
+        c = substr(text, p, 1)
+        if (c == "\"") {
+          element = parse_string()
+          if (collect == 1 && element ~ /^[0-9a-f]{64}$/) binaries[element] = 1
+          if (collect == 2 && element ~ /^[0-9a-f]{64}$/) bundles[element] = 1
+        } else parse_value(0, depth)
+        skip_ws()
+        c = substr(text, p, 1)
+        if (c == "]") { p++; return }
+        if (c != ",") failparse()
+        p++
+      }
+    }
+    function parse_object(depth,   key, collect_next, c) {
+      p++
+      skip_ws()
+      if (substr(text, p, 1) == "}") { p++; return }
+      while (1) {
+        skip_ws()
+        key = parse_string()
+        skip_ws()
+        if (substr(text, p, 1) != ":") failparse()
+        p++
+        collect_next = 0
+        if (depth == 1 && key == "binaries") collect_next = 1
+        if (depth == 1 && key == "bundles") collect_next = 2
+        parse_value(collect_next, depth)
+        skip_ws()
+        c = substr(text, p, 1)
+        if (c == "}") { p++; return }
+        if (c != ",") failparse()
+        p++
+      }
+    }
+    function parse_value(collect, depth,   c) {
+      skip_ws()
+      c = substr(text, p, 1)
+      if (c == "{") { parse_object(depth + 1); return }
+      if (c == "[") { parse_array(collect, depth); return }
+      if (c == "\"") { parse_string(); return }
+      parse_literal()
+    }
+    { text = text $0 "\n" }
+    END {
+      if (failed) exit 1
+      len = length(text)
+      p = 1
+      skip_ws()
+      if (substr(text, p, 1) != "{") exit 1
+      parse_object(1)
+      if (failed) exit 1
+      skip_ws()
+      if (p <= len) exit 1
+      if (archive != "" && (archive in bundles)) exit 0
+      if (binary != "" && (binary in binaries)) exit 0
+      exit 1
+    }
+  ' "$pin_file"
+}
+read_channel_index() {
+  index_file=$1
+  index_platform=$2
+  LC_ALL=C awk -v want="$index_platform" '
+    function platform(key) { return key ~ /^[a-z0-9]+-[a-z0-9]+$/ }
+    function sha(s) { return s ~ /^[0-9a-f]{64}$/ }
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      sub(/^[ \t]+/, "", line)
+      if (line == "" || line ~ /^#/ || line ~ /^\/\//) next
+      n = split(line, f, /[ \t]+/)
+      key = f[1]
+      if (key == "latest") {
+        if (have_latest || n != 2) { failed = 1; next }
+        latest = f[2]
+        have_latest = 1
+        next
+      }
+      if (key != want && !platform(key)) next
+      if (seen[key] || n != 3 || !sha(f[3])) { failed = 1; next }
+      seen[key] = 1
+      if (key == want) sum = f[3]
+    }
+    END {
+      if (failed || !have_latest || sum == "") exit 1
+      printf "%s\n%s\n", latest, sum
+    }
+  ' "$index_file"
+}
+stage_bundle_mihari() {
+  bundle_archive=$1
+  bundle_dest=$2
+  bundle_names=$(tar -tzf "$bundle_archive") || return 1
+  bundle_count=$(printf '%s\n' "$bundle_names" | grep -c -x mihari || true)
+  [ "$bundle_count" -eq 1 ] || return 1
+  bundle_kind=$(LC_ALL=C tar -tvzf "$bundle_archive" | LC_ALL=C awk '
+    $NF == "mihari" { print substr($1, 1, 1); c++ }
+    END { if (c != 1) exit 1 }
+  ') || return 1
+  [ "$bundle_kind" = "-" ] || return 1
+  rm -f "$stage/tar-status"
+  (
+    set +e
+    tar -xOzf "$bundle_archive" mihari
+    printf '%s\n' $? > "$stage/tar-status"
+  ) | head -c 268435457 > "$bundle_dest" || return 1
+  [ "$(wc -c < "$bundle_dest")" -le 268435456 ] || return 1
+  [ -f "$stage/tar-status" ] && [ "$(tr -d "[:space:]" < "$stage/tar-status")" -eq 0 ] || return 1
+  chmod 0700 "$bundle_dest" || return 1
+}
 if ! trusted_entry "$entry"; then entry=""; fi
 if [ -n "$entry" ] && ! helper_capable "$entry"; then entry=""; fi
+# Bundle authorization must run before the offline-helper refusal. An empty
+# machine has no helper yet; refusing first would reject a pinned or indexed
+# bundle. Copy into this stage before hashing or extracting, and never execute
+# the caller archive path. Do not fall back to a GitHub helper.
+if [ -z "$entry" ] && [ -n "${bundle:-}" ]; then
+  cp "$bundle" "$stage/bundle" || fail "cannot stage install bundle"
+  chmod 0600 "$stage/bundle" || fail "cannot stage install bundle"
+  archive_sha=$(checksum "$stage/bundle") || fail "cannot hash install bundle"
+  if [ "$bootstrap_mode" = online ]; then
+    case "$channel" in
+      main) index_url=https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/index.txt ;;
+      dev) index_url=https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt ;;
+      *) fail "invalid helper channel" ;;
+    esac
+    root_fetch "$index_url" "$stage/index"
+    [ "$(wc -c < "$stage/index")" -le 65536 ] || fail "channel index exceeds limit"
+    index_parsed=$(read_channel_index "$stage/index" "$os-$arch") || fail "invalid channel index"
+    index_latest=$(printf '%s\n' "$index_parsed" | sed -n '1p')
+    index_sum=$(printf '%s\n' "$index_parsed" | sed -n '2p')
+    [ "$index_latest" = "$tag" ] || fail "channel index latest does not match release tag"
+    [ "$index_sum" = "$archive_sha" ] || fail "install bundle checksum mismatch"
+  else
+    manifest="${install_root:-/usr/local/lib/mihari}/install-trust/manifest.json"
+    root_path_trusted "$manifest" || fail "Offline installation requires a trusted helper with replacement confirmation support. Prepare a current Mihari installation before installing this offline candidate."
+  fi
+  stage_bundle_mihari "$stage/bundle" "$stage/mihari" || fail "bundle does not contain mihari"
+  binary_sha=$(checksum "$stage/mihari") || fail "cannot hash bundled mihari"
+  if [ "$bootstrap_mode" != online ]; then
+    manifest_pins_digest "$manifest" "$archive_sha" "$binary_sha" || fail "Offline installation requires a trusted helper with replacement confirmation support. Prepare a current Mihari installation before installing this offline candidate."
+  fi
+  helper_capable "$stage/mihari" || fail "The current official helper lacks replacement confirmation support. Update the installer helper before installing the selected version."
+  entry=$stage/mihari
+  candidate=$stage/mihari
+  bundle=$stage/bundle
+fi
 # Local offline candidates never cause an implicit network bootstrap. Remote
 # AIO passes online explicitly, even though its verified bundle is now local.
 if [ "$bootstrap_mode" = offline ] && [ -n "$candidate" ] && [ -z "$entry" ]; then
@@ -282,7 +499,7 @@ if [ -z "$candidate" ]; then
   verified_binary "$tag" "$stage/candidate"
   candidate="$stage/candidate"
 fi
-if [ -z "$entry" ]; then
+if [ -z "${bundle:-}" ] && [ -z "$entry" ]; then
   # Resolve the helper independently; never change the selected candidate tag.
   case "$channel" in
     main) helper_url=https://api.github.com/repos/mihari-proxy/mihari/releases/latest;;
