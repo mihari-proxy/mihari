@@ -95,17 +95,28 @@ def test_posix_success_prompts_for_tui(tmp_path):
     result, args = run_posix(tmp_path, error="", first=0, stdout_body='{"schema":"mihari.install-result/v1"}', path_binary=binary)
     assert result.returncode == 0, result.stderr
     assert "Installation complete." in result.stdout
-    assert f"Run {binary} to open the TUI." in result.stdout
+    assert f"Run '{binary}' to open the TUI." in result.stdout
     assert "Run mihari to open the TUI." not in result.stdout
     assert "mihari.install-result" not in result.stdout
     assert args.count("apply") == 1
+
+
+def test_posix_success_hint_is_one_shell_word(tmp_path):
+    binary = "/opt/My Programs/o'brien/$HOME/*.mihari"
+    result, _args = run_posix(tmp_path, error="", first=0, stdout_body='{"schema":"mihari.install-result/v1"}', path_binary=binary)
+    assert result.returncode == 0, result.stderr
+    line = next(line for line in result.stdout.splitlines() if line.startswith("Run "))
+    quoted = line.removeprefix("Run ").removesuffix(" to open the TUI.")
+    echoed = subprocess.run(["sh", "-c", "printf %s " + quoted], capture_output=True, text=True, timeout=5)
+    assert echoed.returncode == 0, echoed.stderr
+    assert echoed.stdout == binary
 
 
 def test_posix_confirmed_replacement_prompts_for_tui(tmp_path):
     result, args = run_posix(tmp_path, second=0, stdout_body='{"schema":"mihari.install-result/v1"}')
     assert result.returncode == 0, result.stderr
     assert "Installation complete." in result.stdout
-    assert "Run /usr/local/bin/mihari to open the TUI." in result.stdout
+    assert "Run '/usr/local/bin/mihari' to open the TUI." in result.stdout
     assert "mihari.install-result" not in result.stdout
     assert args.count("apply") == 2
 
@@ -124,7 +135,7 @@ def test_posix_explicit_yes_prints_compatibility_warning(tmp_path):
     assert result.returncode == 0, result.stderr
     assert f"Warning: {warning}" in result.stderr
     assert "Installation complete." in result.stdout
-    assert "Run /usr/local/bin/mihari to open the TUI." in result.stdout
+    assert "Run '/usr/local/bin/mihari' to open the TUI." in result.stdout
     assert "mihari.install-result" not in result.stdout + result.stderr
     assert args.count("apply") == 1
 

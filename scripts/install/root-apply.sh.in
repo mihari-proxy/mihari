@@ -580,11 +580,29 @@ print_result_warnings() {
   }
   ' "$1" >&2
 }
+shell_quote() {
+  printf "'"
+  rest=$1
+  while :; do
+    case "$rest" in
+      *\'*)
+        printf '%s' "${rest%%\'*}"
+        printf "'\\''"
+        rest=${rest#*\'}
+        ;;
+      *)
+        printf '%s' "$rest"
+        break
+        ;;
+    esac
+  done
+  printf "'"
+}
 report_install_success() {
   cat "$stage/error.json" >&2
   print_result_warnings "$stage/result.json"
   printf '\033[1;32m•\033[0m %s\n' "Installation complete."
-  printf 'Run %s to open the TUI.\n' "$path_binary"
+  printf 'Run %s to open the TUI.\n' "$(shell_quote "$path_binary")"
 }
 report_install_failure() {
   printf '\033[1;31merror:\033[0m %s\n' "Installation failed." >&2
