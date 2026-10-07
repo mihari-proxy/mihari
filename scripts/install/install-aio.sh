@@ -494,7 +494,7 @@ if [ -z "${bundle:-}" ] && [ -z "$entry" ]; then
   # Resolve the helper independently; never change the selected candidate tag.
   case "$channel" in
     main) helper_url=https://api.github.com/repos/mihari-proxy/mihari/releases/latest;;
-    dev) helper_url='https://api.github.com/repos/mihari-proxy/mihari/releases?per_page=100';;
+    dev) helper_url='https://api.github.com/repos/mihari-proxy/mihari/releases?per_page=10';;
     *) fail "invalid helper channel";;
   esac
   root_fetch "$helper_url" "$stage/helper-latest"
