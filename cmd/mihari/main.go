@@ -50,6 +50,7 @@ type processLocalRoot struct {
 }
 
 type daemonRunDeps struct {
+	BinaryCleanup     func(context.Context) error
 	PrepareRuntime    func(context.Context, config.Settings) (app.RuntimeBuildOptions, error)
 	MachineSnapshot   bool
 	Paths             platform.Paths
@@ -735,7 +736,7 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 			store := app.NewDegradedStore(deps.Version, err)
 			recovery, recoveryErr := app.NewPortRecovery(deps.Paths, store, err, diagnosticReporter)
 			if recoveryErr == nil {
-				return runDaemon(ctx, daemon.Options{Listen: deps.Listen, Endpoint: deps.Endpoint, Token: deps.Token, Version: deps.Version, Ready: deps.Ready, Store: store, Onboarding: recovery, SnapshotSource: snapshot, DiagnosticReporter: diagnosticReporter, DiagnosticHistory: diagnosticHistory})
+				return runDaemon(ctx, daemon.Options{StartupCleanup: daemonStartupCleanup(deps, nil), Listen: deps.Listen, Endpoint: deps.Endpoint, Token: deps.Token, Version: deps.Version, Ready: deps.Ready, Store: store, Onboarding: recovery, SnapshotSource: snapshot, DiagnosticReporter: diagnosticReporter, DiagnosticHistory: diagnosticHistory})
 			}
 			reportDaemonDiagnostic(ctx, diagnosticReporter, diagnosticStderr, diagnostics.Record{Component: "daemon.startup", Event: "port_recovery_failed", Level: slog.LevelError, Err: recoveryErr})
 			return runDegradedDaemon(ctx, deps, recoveryErr, snapshot, diagnosticReporter, diagnosticHistory)
@@ -747,7 +748,8 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 		onReady = func() error { return deps.ValidationReady(assembly.SetupRequired) }
 	}
 	return runDaemon(ctx, daemon.Options{
-		Listen: deps.Listen, OnReady: onReady, SnapshotSource: snapshot,
+		StartupCleanup: daemonStartupCleanup(deps, assembly.StartupCleanup),
+		Listen:         deps.Listen, OnReady: onReady, SnapshotSource: snapshot,
 		Endpoint:           deps.Endpoint,
 		Token:              deps.Token,
 		Version:            deps.Version,
@@ -758,6 +760,23 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 		DiagnosticHistory:  diagnosticHistory,
 		ValidationMode:     deps.ValidationMode,
 	})
+}
+
+func daemonStartupCleanup(deps daemonRunDeps, coreCleanup func(context.Context) error) func(context.Context) error {
+	if deps.ValidationMode {
+		return nil
+	}
+	binaryCleanup := deps.BinaryCleanup
+	if binaryCleanup == nil {
+		binaryCleanup = app.CleanupCurrentBinaryUpdates
+	}
+	return func(ctx context.Context) error {
+		binaryErr := binaryCleanup(ctx)
+		if coreCleanup == nil {
+			return binaryErr
+		}
+		return errors.Join(binaryErr, coreCleanup(ctx))
+	}
 }
 
 func reportDaemonDiagnostic(ctx context.Context, reporter diagnostics.Reporter, fallback io.Writer, record diagnostics.Record) {
@@ -785,7 +804,7 @@ func runDegradedDaemon(ctx context.Context, deps daemonRunDeps, cause error, sna
 	if deps.ValidationMode {
 		return cause
 	}
-	return runDaemon(ctx, daemon.Options{Listen: deps.Listen, Endpoint: deps.Endpoint, Token: deps.Token, Version: deps.Version, Ready: deps.Ready, Store: app.NewDegradedStore(deps.Version, cause), SnapshotSource: snapshot, DiagnosticReporter: diagnosticReporter, DiagnosticHistory: diagnosticHistory})
+	return runDaemon(ctx, daemon.Options{StartupCleanup: daemonStartupCleanup(deps, nil), Listen: deps.Listen, Endpoint: deps.Endpoint, Token: deps.Token, Version: deps.Version, Ready: deps.Ready, Store: app.NewDegradedStore(deps.Version, cause), SnapshotSource: snapshot, DiagnosticReporter: diagnosticReporter, DiagnosticHistory: diagnosticHistory})
 }
 
 func daemonLoggingConfig(settings config.Settings) (logging.Config, error) {

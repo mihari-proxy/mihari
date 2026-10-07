@@ -1,13 +1,12 @@
  Mihari  ·  ● running  ·  0 conn  ·  ↑      0 B/s  ↓      0 B/s                           Connected
    1 Overview
-   2 Proxies
-   3 Conns             ╭──────────────────────────────────────────────────────────────────────╮
-   4 Rules             │                                                                      │
-   5 Logs              │  Edit subscription                                                   │
- › 6 Subs              │                                                                      │
-   7 Web GUI           │  ● In use · Failed · Enabled                                         │
-   8 System            │  Traffic       52.5 GiB/80.0 GiB                                     │
-                       │  Cache         Available                                             │
+   2 Proxies           ╭──────────────────────────────────────────────────────────────────────╮
+   3 Conns             │                                                                      │
+   4 Rules             │  Edit subscription                                                   │
+   5 Logs              │                                                                      │
+ › 6 Subs              │  ● In use · Failed · Enabled                                         │
+   7 Web GUI           │  Traffic       52.5 GiB/80.0 GiB                                     │
+   8 System            │  Cache         Available                                             │
                        │  Last update   2026-09-15 01:00                                      │
                        │  Next update   in 5h                                                 │
                        │  Last error    Download failed. The cached configuration remains     │
@@ -18,13 +17,14 @@
                        │  › Name          Example                                             │
                        │    URL                                                               │
                        │    https://example.test/subscription/sample-sample-sample-sample-s…  │
-                       │    Interval      Global · 12h                                        │
+                       │    Interval      Global · 12h                        ns/us/ms/s/m/h  │
                        │    Auto refresh  ‹ On ›                                              │
                        │    Mode          ‹ PROXY ›                                           │
-                       │  ──────────────────────────────────────────────────────────────────  │
+                       │                                                                      │
+                       │  Actions · Apply immediately                                         │
+                       │   PgUp/PgDn ↓──────────────────────────────────────────────────────  │
                        │                               [ Save ]                               │
                        │                                                                      │
                        ╰──────────────────────────────────────────────────────────────────────╯
-
 
  F2 details  Tab/↑/↓ fields  Enter next  Esc cancel

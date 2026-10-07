@@ -115,6 +115,15 @@ func observeBootstrapSource(ctx context.Context, source migrationCapability) (ma
 }
 
 func (p *preparedMigration) verifySource(ctx context.Context) error {
+	// Staging is otherwise excluded from business migration. Never copy an
+	// uncertain core while discarding the record that blocks its execution.
+	for _, path := range []string{"staging/core/update-journal.json", "staging/core/provenance-commit.json"} {
+		if _, err := p.source.Stat(ctx, path); err == nil {
+			return migrateState("complete core update repair in the source installation before migration")
+		} else if !isNotExist(err) {
+			return err
+		}
+	}
 	if !p.bootstrapOnly {
 		return verifyStationary(ctx, p.source, p.obs)
 	}

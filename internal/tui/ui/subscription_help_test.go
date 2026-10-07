@@ -21,6 +21,8 @@ func TestSubscriptionHelp_SaveAndCycleBindings(t *testing.T) {
 		{ModeSubscriptionInput, "next field", "refresh all"},
 		{ModeSubscriptionSubmit, "save changes", "next or save"},
 		{ModeSubscriptionCycle, "cycle draft value", "refresh all"},
+		{ModeSubscriptionAction, "apply action immediately", "next field"},
+		{ModeSubscriptionActionWaiting, "does not cancel the action", "apply action immediately"},
 		{ModeSubscriptionSaving, "Saving", "Esc cancel"},
 		{ModeSubscriptionUnknown, "confirm before submitting again", "activate"},
 		{ModeSubscriptionWaiting, "does not cancel the save", "next or save"},

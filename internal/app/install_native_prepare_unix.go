@@ -279,14 +279,26 @@ func (s *nativeInstallSession) prepareData(ctx context.Context, req InstallReque
 			}
 		}
 	}
-	if inputs.core != nil {
+	coreBytes := inputs.core
+	if s.tx.prepared != nil && s.tx.prepared.coreHash != "" {
+		// Migration has already copied and observed this local core. Retain
+		// those bytes even when the application update includes another core.
+		coreBytes, err = cap.ReadFile(ctx, "bin/mihomo", migrationBinaryMax)
+		if err != nil {
+			return err
+		}
+		if sha256HexBytes(coreBytes) != s.tx.prepared.coreHash {
+			return migrateState("staged local core changed")
+		}
+	}
+	if coreBytes != nil {
 		bin, err := stage.OpenDir(ctx, "bin", platform.RootPolicy{Owner: 0, Mode: 0700, AllowCreate: true})
 		if err != nil {
 			return err
 		}
 		defer func() { err = errors.Join(err, bin.Close()) }()
 		var expected *platform.FileIdentity
-		current, id, e := bin.OpenFile(ctx, "mihomo", 0700)
+		current, id, e := bin.OpenFile(ctx, "mihomo", 0600)
 		if e == nil {
 			if err := current.Close(); err != nil {
 				return err
@@ -295,10 +307,7 @@ func (s *nativeInstallSession) prepareData(ctx context.Context, req InstallReque
 		} else if !errors.Is(e, os.ErrNotExist) {
 			return e
 		}
-		if err := bin.WriteFile(ctx, "mihomo", inputs.core, 0700, expected); err != nil {
-			return err
-		}
-		if err := bin.WriteFile(ctx, "mihomo.provenance.json", inputs.receipt, 0600, nil); err != nil {
+		if err := bin.WriteFile(ctx, "mihomo", coreBytes, 0700, expected); err != nil {
 			return err
 		}
 	}

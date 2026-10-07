@@ -900,6 +900,159 @@ func TestRail_DigitShortcutDisabledInTextInputMode(t *testing.T) {
 	}
 }
 
+// Selecting System on the rail checks Mihari and core. Enter moves into the page
+// without starting another check or dropping the one already in flight.
+func TestRail_SystemEnterDoesNotRecheckOrInterruptVersions(t *testing.T) {
+	client := &versionProbeClient{}
+	updater := &countingSelfUpdater{rootSelfUpdater: rootSelfUpdater{result: update.CheckResult{
+		Current: "v0.9.0", Latest: "v0.9.1", Available: true,
+	}}}
+	page := systempage.New(client, nil)
+	page.SetSelfUpdater(updater, "v0.9.0", "mihari", func() bool { return true })
+	page.SetMutationsEnabled(true)
+	page.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityCore}}, protocol.CoreStatus{Version: "v1.19.30", Channel: "stable"})
+	page.SetSize(100, 40)
+	model := NewModel()
+	model.pages[ui.PageSystem] = page
+	model.inputMode = ui.InputNavigation
+
+	updated, landed := model.Update(tea.KeyPressMsg{Code: '8', Text: "8"})
+	model = updated.(Model)
+	if model.active != ui.PageSystem || model.focus.Area != ui.FocusRail {
+		t.Fatalf("land active=%s focus=%v", model.active, model.focus.Area)
+	}
+	model = applyVersionResults(t, model, landed)
+	if updater.checks != 1 || client.coreChecks != 1 {
+		t.Fatalf("rail checks mihari=%d core=%d", updater.checks, client.coreChecks)
+	}
+	updated, entered := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+	if model.focus.Area != ui.FocusContent {
+		t.Fatalf("enter focus=%v", model.focus.Area)
+	}
+	model = applyVersionResults(t, model, entered)
+	page = model.pages[ui.PageSystem].(*systempage.Model)
+	if updater.checks != 1 || client.coreChecks != 1 {
+		t.Fatalf("enter rechecked mihari=%d core=%d", updater.checks, client.coreChecks)
+	}
+	view := page.View()
+	if !strings.Contains(view, "v0.9.0 -> v0.9.1 available") || !strings.Contains(view, "v1.19.30 -> v1.19.31 available") {
+		t.Fatalf("enter dropped the rail check:\n%s", view)
+	}
+
+	model.focus.Area = ui.FocusRail
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyUp, Text: "up"})
+	model = updated.(Model)
+	updated, again := model.Update(tea.KeyPressMsg{Code: tea.KeyDown, Text: "down"})
+	model = updated.(Model)
+	if model.active != ui.PageSystem || model.focus.Area != ui.FocusRail {
+		t.Fatalf("return active=%s focus=%v", model.active, model.focus.Area)
+	}
+	model = applyVersionResults(t, model, again)
+	if updater.checks != 2 || client.coreChecks != 2 {
+		t.Fatalf("return checks mihari=%d core=%d", updater.checks, client.coreChecks)
+	}
+}
+
+func applyVersionResults(t *testing.T, model Model, cmd tea.Cmd) Model {
+	t.Helper()
+	for _, message := range flattenCmd(cmd) {
+		if _, ok := message.(ui.PageResultMsg); !ok {
+			continue
+		}
+		updated, _ := model.Update(message)
+		next, ok := updated.(Model)
+		if !ok {
+			t.Fatalf("model type=%T", updated)
+		}
+		model = next
+	}
+	return model
+}
+
+func flattenCmd(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	message := cmd()
+	if message == nil {
+		return nil
+	}
+	batch, ok := message.(tea.BatchMsg)
+	if !ok {
+		return []tea.Msg{message}
+	}
+	var messages []tea.Msg
+	for _, item := range batch {
+		messages = append(messages, flattenCmd(item)...)
+	}
+	return messages
+}
+
+type countingSelfUpdater struct {
+	rootSelfUpdater
+	checks int
+}
+
+func (f *countingSelfUpdater) Check(ctx context.Context, current, channel string) (update.CheckResult, error) {
+	f.checks++
+	return f.rootSelfUpdater.Check(ctx, current, channel)
+}
+
+type versionProbeClient struct {
+	coreChecks int
+}
+
+func (c *versionProbeClient) CheckCoreVersion(context.Context) (protocol.VersionCheck, error) {
+	c.coreChecks++
+	return protocol.VersionCheck{Latest: "v1.19.31", Channel: "stable"}, nil
+}
+func (c *versionProbeClient) Onboarding(context.Context) (protocol.OnboardingStatus, error) {
+	return protocol.OnboardingStatus{}, nil
+}
+func (c *versionProbeClient) Core(context.Context) (protocol.CoreStatus, error) {
+	return protocol.CoreStatus{}, nil
+}
+func (c *versionProbeClient) InstallCore(context.Context, protocol.MutationRequest) (protocol.CoreInstallResult, error) {
+	return protocol.CoreInstallResult{}, nil
+}
+func (c *versionProbeClient) RestartCore(context.Context, protocol.MutationRequest) (protocol.MutationResult, error) {
+	return protocol.MutationResult{}, nil
+}
+func (c *versionProbeClient) SystemProxy(context.Context) (protocol.SystemProxyStatus, error) {
+	return protocol.SystemProxyStatus{}, nil
+}
+func (c *versionProbeClient) EnableSystemProxy(context.Context, protocol.SystemProxyMutationRequest) (protocol.SystemProxyStatus, error) {
+	return protocol.SystemProxyStatus{}, nil
+}
+func (c *versionProbeClient) DisableSystemProxy(context.Context, protocol.SystemProxyMutationRequest) (protocol.SystemProxyStatus, error) {
+	return protocol.SystemProxyStatus{}, nil
+}
+func (c *versionProbeClient) Tun(context.Context) (protocol.TunStatus, error) {
+	return protocol.TunStatus{}, nil
+}
+func (c *versionProbeClient) EnableTun(context.Context, protocol.TunMutationRequest) (protocol.TunStatus, error) {
+	return protocol.TunStatus{}, nil
+}
+func (c *versionProbeClient) DisableTun(context.Context, protocol.TunMutationRequest) (protocol.TunStatus, error) {
+	return protocol.TunStatus{}, nil
+}
+func (c *versionProbeClient) WebGUI(context.Context) (protocol.WebGUIStatus, error) {
+	return protocol.WebGUIStatus{}, nil
+}
+func (c *versionProbeClient) OpenWebGUI(context.Context, string) (protocol.WebGUIOpenResult, error) {
+	return protocol.WebGUIOpenResult{}, nil
+}
+func (c *versionProbeClient) UpdateOnboarding(context.Context, protocol.OnboardingUpdateRequest) (protocol.OnboardingStatus, error) {
+	return protocol.OnboardingStatus{}, nil
+}
+func (c *versionProbeClient) Logging(context.Context) (protocol.LoggingStatus, error) {
+	return protocol.LoggingStatus{}, nil
+}
+func (c *versionProbeClient) UpdateLogging(context.Context, protocol.LoggingUpdateRequest) (protocol.LoggingStatus, error) {
+	return protocol.LoggingStatus{}, nil
+}
+
 // Digit-jumping to Web GUI must Load() the page on land, matching arrow-key rail
 // movement (landRailPage is the shared tail).
 func TestRail_DigitShortcutLoadsWebGUIOnLand(t *testing.T) {

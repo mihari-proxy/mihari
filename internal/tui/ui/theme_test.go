@@ -19,10 +19,12 @@ func TestDefaultTheme_HasSemanticRoles(t *testing.T) {
 	assertColor(t, "ColorSurfaceBorder", theme.ColorSurfaceBorder, lipgloss.Color("240"))
 	assertColor(t, "ColorMuted", theme.ColorMuted, lipgloss.Color("245"))
 	assertColor(t, "ColorOnSolid", theme.ColorOnSolid, lipgloss.Color("0"))
+	assertColor(t, "ColorBrightYellow", theme.ColorBrightYellow, lipgloss.Color("228"))
 
 	// Semantic styles are wired to their tokens.
 	assertStyleFG(t, "Success", theme.Success, theme.ColorSuccess)
 	assertStyleFG(t, "Warning", theme.Warning, theme.ColorWarning)
+	assertStyleFG(t, "BrightYellow", theme.BrightYellow, theme.ColorBrightYellow)
 	assertStyleFG(t, "Danger", theme.Danger, theme.ColorDanger)
 	assertStyleFG(t, "Info", theme.Info, theme.ColorInfo)
 	assertStyleFG(t, "DelayGood", theme.DelayGood, theme.ColorSuccess)

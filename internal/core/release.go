@@ -15,11 +15,13 @@ import (
 const maxReleaseResponseSize = 2 << 20
 
 type Asset struct {
-	ID     int64  `json:"id"`
-	Name   string `json:"name"`
-	URL    string `json:"browser_download_url"`
-	Size   int64  `json:"size"`
-	Digest string `json:"digest"`
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	URL       string `json:"browser_download_url"`
+	Size      int64  `json:"size"`
+	Digest    string `json:"digest"`
+	State     string `json:"state"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 type Release struct {
@@ -67,6 +69,12 @@ func (i Installer) LatestRelease(ctx context.Context, channel string) (release R
 }
 
 func SelectAsset(release Release, goos, goarch, channel string) (Asset, error) {
+	if (goos != "windows" && goos != "linux" && goos != "darwin") || (goarch != "amd64" && goarch != "arm64") {
+		return Asset{}, dataFailure("unsupported mihomo platform")
+	}
+	if channel != "" && channel != "stable" && channel != "alpha" {
+		return Asset{}, dataFailure("unsupported mihomo channel")
+	}
 	extension := ".gz"
 	if goos == "windows" {
 		extension = ".zip"
@@ -74,39 +82,59 @@ func SelectAsset(release Release, goos, goarch, channel string) (Asset, error) {
 	if channel == "alpha" {
 		return selectAlphaAsset(release, goos, goarch, extension)
 	}
-	prefix := "mihomo-" + strings.ToLower(goos) + "-"
-	archToken := strings.ToLower(goarch)
+	prefix := "mihomo-" + goos + "-" + goarch
 	bestScore := -1
 	var best Asset
+	ambiguous := false
 	for _, asset := range release.Assets {
-		name := strings.ToLower(asset.Name)
-		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, extension) || !strings.Contains(name, "-"+archToken) {
+		score := -1
+		suffix := "-" + release.TagName + extension
+		if asset.Name == prefix+suffix {
+			score = 10
+		} else if goarch == "amd64" && asset.Name == prefix+"-compatible"+suffix {
+			score = 15
+		} else if variant, ok := strings.CutPrefix(asset.Name, prefix+"-go"); ok {
+			if version, ok := strings.CutSuffix(variant, suffix); ok && decimalVersion(version) {
+				score = 5
+			}
+		}
+		if score < 0 {
 			continue
-		}
-		if goarch == "arm64" && strings.Contains(name, "armv") {
-			continue
-		}
-		score := 10
-		if goarch == "amd64" && strings.Contains(name, "-compatible") {
-			score += 5
-		}
-		if strings.Contains(name, strings.ToLower(release.TagName)) {
-			score += 3
 		}
 		if score > bestScore {
 			bestScore = score
 			best = asset
+			ambiguous = false
+		} else if score == bestScore {
+			ambiguous = true
 		}
 	}
 	if bestScore < 0 {
 		return Asset{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo release has no compatible asset"}
 	}
+	if ambiguous {
+		return Asset{}, dataFailure("mihomo release has ambiguous compatible assets")
+	}
 	return best, nil
+}
+
+func decimalVersion(version string) bool {
+	if version == "" {
+		return false
+	}
+	for _, digit := range version {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func selectAlphaAsset(release Release, goos, goarch, extension string) (Asset, error) {
 	prefix := "mihomo-" + strings.ToLower(goos) + "-"
 	archToken := strings.ToLower(goarch)
+	var selected Asset
+	found := false
 	for _, asset := range release.Assets {
 		if _, ok := parseAlphaAsset(asset.Name); !ok {
 			continue
@@ -118,7 +146,13 @@ func selectAlphaAsset(release Release, goos, goarch, extension string) (Asset, e
 		if !strings.HasPrefix(name, prefix+archToken+"-") {
 			continue
 		}
-		return asset, nil
+		if found {
+			return Asset{}, dataFailure("mihomo release has ambiguous compatible assets")
+		}
+		selected, found = asset, true
+	}
+	if found {
+		return selected, nil
 	}
 	return Asset{}, protocol.APIError{Code: protocol.CodeDataFailure, Message: "mihomo release has no compatible asset"}
 }

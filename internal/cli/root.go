@@ -186,6 +186,7 @@ func newRoot(dependencies Dependencies, options *runOptions) *cobra.Command {
 	root.AddCommand(newPanelCommand(dependencies, options))
 	root.AddCommand(newSysproxyCommand(dependencies, options))
 	root.AddCommand(newTunCommand(dependencies, options))
+	root.AddCommand(newEgressCommand(dependencies, options))
 	root.AddCommand(newServiceCommand(dependencies, options))
 	root.AddCommand(newSelfCommand(dependencies, options))
 	return root

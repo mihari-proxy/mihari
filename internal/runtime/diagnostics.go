@@ -82,6 +82,7 @@ func operationSuccessKey(key string) bool {
 }
 
 var operationDiagnosticNames = map[string]string{
+	"egress":           "egress.update",
 	"close":            "connection.close",
 	"close-all":        "connection.close_all",
 	"geoip":            "geoip.update",

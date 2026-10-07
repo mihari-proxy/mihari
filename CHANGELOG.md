@@ -4,6 +4,46 @@
 
 ## [Unreleased]
 
+## [v0.9.6] - 2026-10-07
+
+### Added
+
+- 增加实例级出口网卡选择：CLI `egress` 与 TUI System 的 Outbound Interface Override 可按网卡名覆盖订阅里的接口绑定，或切回自动；选择在切换订阅后保留（#298, #303）。
+- 代理页支持自动测速，并可配置测速并发（默认 5，上限 50）。Page Settings 默认展开，支持全部折叠、Tab 切换焦点区，保存设置时展示徽章并统一检查动画（#293, #297, #305, #307, #308）。
+- 订阅详情增加操作入口，并优化字段交互（#300）。
+- Proxies 展示连接规则；Logs 支持快速翻页，并保存页面上的级别选择（#290, #292）。
+- 启动时展示系统代理与 TUN 正在应用的状态（#286）。
+- 优化 Web GUI 概览，并为面板操作展示进度（#285）。
+- 统一 mihomo 的 stable/alpha 更新规则：在线安装绑定本次解析到的官方资产，提供 SHA-256 时必须校验。更新失败时恢复旧核心、原通道和运行意图。新增 `core reinstall` 与 TUI Reinstall core，按更新前的通道重装官方最新版，并保留配置和订阅（#284）。
+- 进入 System 时在后台检查内核与面板版本并标明可用更新，检查不阻塞页面；高亮当前出口模式（#302, #306）。
+- 完整卸载额外删除一个与安装程序字节相同的 PATH 命令文件。目录来自 `MIHARI_BIN`，未设置时使用安装器默认目录（#316）。
+- macOS 安装前说明支持不完整，并要求确认后才继续。README 的正式支持范围是 Windows 和 Linux，darwin 安装包仍然发布（#310, #315）。
+- 安装结束时明确提示成功或失败，进行中显示步骤和已用时间（#314, #319）。
+
+### Changed
+
+- 空机器上的整合包安装改为由通道索引授权包内二进制（#311）。
+
+### Fixed
+
+- 将更新后的旧文件清理延后到后续启动，避免更新进程仍占用这些文件（#282, #299）。
+- 整合包安装接受两行核心通道；缺少 `data/bin/mihomo.provenance.json` 属于预期结果（#312, #313）。
+- dev 通道安装只读取最新 10 条 GitHub release，避免空机器上的 release 列表超过 1 MiB（#309, #318）。
+- 节点名称可以换行，同一行卡片保持等高（#301）。
+- 调整订阅列表列宽，并改为整行高亮（#295）。
+- 启动期间等待核心身份就绪后再判断端口归属，修复重启后的误报（#287, #288）。
+
+### Upgrade notes
+
+- CLI/TUI 与 daemon 应同步升级。
+- 新增本地能力 `egress-interface-v1` 与 `GET/PATCH /v1/egress`，不向 Web gateway 开放。手动模式会把 `egress-interface` 写入 settings；降级到不认识该字段的旧版本前先执行 `mihari egress auto`。
+- 保存 TUI 偏好后，`preferences/tui.json` 会写入 `log_levels`，非默认代理设置时还会写入 `proxies`。旧版本会拒绝这些字段；降级前应备份该文件，无法读取时移走它，让旧版本按默认重建。
+- 新增 `mihari core reinstall` 与能力 `core-reinstall`。`GET /v1/status` 可增加可选 `startup_network`。
+- 完整卸载会多删除一个字节匹配的 PATH 命令文件。普通 `service uninstall` 仍只注销服务并保留数据。
+- 整合包捆绑的核心仍是 mihomo v1.19.30。`core update` 与 `core reinstall` 安装官方通道上的更新版本。
+- macOS 安装需要确认。正式支持范围仍是 Windows 和 Linux。
+- 日志、导出与本地错误详情仍不脱敏。
+
 ## [v0.9.5] - 2026-09-17
 
 ### Added

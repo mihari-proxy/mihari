@@ -10,7 +10,7 @@ import (
 )
 
 func (m *Model) showDuplicateNames() {
-	if len(m.proxyNamesPending) == 0 || m.modal != nil || (m.installation != nil && m.installation.visible) || (m.exportLogs != nil && !m.exportLogs.Closed()) {
+	if len(m.proxyNamesPending) == 0 || m.modal != nil || m.pageSettings != nil || (m.installation != nil && m.installation.visible) || (m.exportLogs != nil && !m.exportLogs.Closed()) {
 		return
 	}
 	const limit = 8

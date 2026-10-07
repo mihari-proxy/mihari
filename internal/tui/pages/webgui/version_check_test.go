@@ -4,6 +4,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"context"
 	"errors"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"strings"
@@ -23,6 +24,34 @@ func (c *checkingClient) CheckPanelVersion(_ context.Context, id string) (protoc
 		return protocol.VersionCheck{Latest: c.latest}, nil
 	}
 	return protocol.VersionCheck{Latest: "v9.0.0"}, nil
+}
+
+func TestPanelChecks_CheckingUsesAnimatedBadge(t *testing.T) {
+	c := &checkingClient{fakeClient: fakeClient{status: sampleStatus()}}
+	m := New(c, []string{protocol.CapabilityWebGUI})
+	m.SetStatus(c.status)
+	if m.checkPanelVersions() == nil || !m.versionSpinning {
+		t.Fatal("panel check did not start the Checking badge")
+	}
+	m.versionClock = time.Unix(0, 0)
+	want := ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(m.versionClock, ui.MihariProgressChecking))
+	body := m.panelBody(c.status.Panels[0], 0, 80)
+	m.SetSize(120, 40)
+	if !strings.Contains(body, want) || !strings.Contains(m.View(), want) || strings.Contains(ansi.Strip(body), "Checking…") {
+		t.Fatalf("Latest did not use the Checking badge: %s", body)
+	}
+	before := body
+	_, next := m.Update(versionSpinTickMsg{at: time.Unix(0, int64(installSpinInterval)), gen: m.versionSpinGen})
+	if next == nil || m.panelBody(c.status.Panels[0], 0, 80) == before {
+		t.Fatal("Checking badge did not advance")
+	}
+	for id, state := range m.versions {
+		m.Update(panelVersionMsg{id: id, result: protocol.VersionCheck{Latest: "v9.0.0"}, generation: state.generation})
+	}
+	_, next = m.Update(versionSpinTickMsg{at: time.Unix(1, 0), gen: m.versionSpinGen})
+	if next != nil || m.versionSpinning || strings.Contains(m.panelBody(c.status.Panels[0], 0, 80), ui.MihariProgressChecking) {
+		t.Fatal("Checking badge kept spinning after the check finished")
+	}
 }
 
 func TestPanelChecks_IndependentFailureRetryAndSnapshotRefresh(t *testing.T) {

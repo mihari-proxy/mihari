@@ -97,10 +97,15 @@ func (m *Model) updateLevelDialog(message tea.Msg) (ui.Page, tea.Cmd) {
 			dialog.invalid = true
 			return m, nil
 		}
+		changed := m.levels != dialog.draft
 		m.levels = dialog.draft
 		m.levelDialog = nil
 		m.reconcileFocus()
 		m.focus, m.controlIndex = focusControl, 0
+		if changed {
+			m.preference.version++
+			return m, m.savePreference()
+		}
 	}
 	return m, nil
 }

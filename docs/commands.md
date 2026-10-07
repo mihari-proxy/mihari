@@ -24,7 +24,7 @@ mihari service uninstall --purge --yes
 
 执行 `service install` + `start` 后,关闭 TUI 或普通控制台**不会**停止 Mihari;只有 `service stop`、卸载或操作系统才能停止它。同样的控制也在 TUI 的 **System** 页面中提供(变更操作需要提权 shell)。
 
-Unix 的 install/reinstall/update/start/stop/uninstall 走统一安装用例，未完成事务须显式恢复；Windows 保持原服务行为。Unix 自动化入口为 `mihari service apply --request /absolute/request.json`（严格版本化 JSON，请求文件 root0600）；operation=recover 用于恢复，不会隐式导入旧树。普通 `service uninstall` 只注销 OS 服务，保留数据与旧日志。`--purge --yes` 先卸载服务，再删除白名单内的受管文件；未知文件名会停止且不删除。`--purge --yes --force` 跳过内容检查并删除整个目标文件夹。TUI System 页 **Completely Uninstall Mihari** 列出将清空的文件夹并确认两次，等价于 `--force`。需要已提权 shell，不自动弹出 UAC/sudo。
+Unix 的 install/reinstall/update/start/stop/uninstall 走统一安装用例，未完成事务须显式恢复；Windows 保持原服务行为。Unix 自动化入口为 `mihari service apply --request /absolute/request.json`（严格版本化 JSON，请求文件 root0600）；operation=recover 用于恢复，不会隐式导入旧树。普通 `service uninstall` 只注销 OS 服务，保留数据与旧日志，也不删除 PATH 命令文件。`--purge --yes` 先卸载服务，再删除白名单内的受管文件；未知文件名会停止且不删除。`--purge --yes --force` 跳过内容检查并删除整个目标文件夹。TUI System 页 **Completely Uninstall Mihari** 列出将清空的文件夹并确认两次，等价于 `--force`。完整卸载还会删除一个与安装根程序字节相同的 PATH 命令文件：目录来自当前进程的 `MIHARI_BIN`，未设置时 Unix 为 `/usr/local/bin`，Windows 为 `%LOCALAPPDATA%\Programs\mihari`。确认列表除将清空的文件夹外，只列出将尝试删除的那一个命令文件。非绝对 `MIHARI_BIN` 在确认前失败。字节不一致时保留该文件，其余目标仍删除，且不宣称完全卸载，也不给出删除命令。Unix 上删除失败则立即停止；Windows 上正在运行的命令文件可以残留，同样不以完全卸载成功结束，错误中给出退出后执行的 `Remove-Item -LiteralPath '<路径>' -Force`。需要已提权 shell，不自动弹出 UAC/sudo。
 
 Linux 服务启动失败后，systemd 可能显示 `activating (auto-restart)`。如果此时主进程已退出（`MainPID=0`），`mihari service status` 返回 `stopped`，仍允许进入服务停止或重装流程；这不表示 systemd 已取消自动重启。升级旧版本后若日志提示 `existing data requires recovery or migration`，应使用包含此修复的版本执行 `sudo mihari service reinstall`，由安装事务处理旧数据和服务定义，而不是直接修改 unit 的启动参数。重装失败时保留报错和 `journalctl -u mihari` 日志继续排查。
 
@@ -100,6 +100,7 @@ Unix 自定义目标的同 UID 进程和本机 root/管理员属于受信主体�
 mihari core status
 mihari core install
 mihari core update
+mihari core reinstall
 mihari core restart
 mihari proxy groups
 mihari proxy mode
@@ -116,6 +117,10 @@ mihari rules list
 mihari traffic --follow
 mihari logs --follow
 ```
+
+`core install` / `core update` 从所选 stable/alpha 通道获取官方最新版，先检查候选，再替换和验收；常规失败保留或恢复旧核心与原通道。更新 Mihari 本身保留已有核心，离线首次安装可使用包内版本。本地已有核心不要求官方来源凭据，但仍遵守平台已有权限和文件身份保护。
+
+`core reinstall` 重新下载原通道官方最新版，即使当前版本相同也会重装；TUI System 的 **Reinstall core** 提供同一操作。更新中断后，它沿用更新前通道，保留订阅和配置，失败继续保留备份与阻断，验收成功才解除阻断。普通 `core restart` 不修复中断更新。诊断会列出数据根 `staging/core` 中的材料位置；不要删除中断记录来绕过阻断。损坏的记录、无效配置或权限错误仍须按诊断处理，重装不能保证修复所有故障。
 
 `proxy mode` 查询保存模式、实际模式和应用状态，带参数则切换；支持 `--json`。模式只有 `rule` / `global` / `direct`，默认 Rule，覆盖订阅自带 mode。模式由 Mihari 全局持久化，GLOBAL 出口按订阅记忆；Rule/Direct 下也能预选 GLOBAL，选择本身不会切换模式。Global 选择 `DIRECT` 表示所有新连接通过 GLOBAL 直连；Direct 是独立运行模式，不依赖 GLOBAL 的选择。
 
@@ -163,6 +168,27 @@ mihari tun disable
 `sysproxy enable` 将桌面 HTTP/HTTPS/SOCKS 系统代理指向 Mihari 的混合端点。如果另一产品已持有代理,enable 会以 `system_proxy_conflict` 失败,除非传入 `--force`(TUI 会要求确认)。`sysproxy disable` 只清除**由 Mihari 持有**的代理;它不会关闭外部代理。在 Windows 上,当 Mihari 作为 LocalSystem 服务运行时,它写入**交互式控制台用户**的 WinINET 配置单元(`HKEY_USERS\<SID>\…`),而不是 SYSTEM 自己的 `HKCU`,因此桌面浏览器能感知到变更。
 
 `tun enable|disable` 仅覆盖 `tun.enable`；stack、device、DNS、路由等其他 TUN 参数保留订阅原值，不自动注入默认 stack。未通过 Mihari 托管开关时，订阅的 enable 也保持原值。开关意图由 daemon 持久化，并在可用时通过控制器实时生效。开启前会检测系统上的其他 TUN 网卡与其他 mihomo 进程(忽略 Down 状态的残留适配器);冲突时以 `tun_conflict` 失败,除非传入 `--force`(TUI 会要求确认)。`--force` 只绕过冲突门控:若内核未真正开启 TUN,Desired 会回滚。TUN 根据 OS 不同可能需要提权或安装服务。没有用于修改端口的 CLI 命令;Mixed / Controller / Web 端口在 TUI System 页的 Ports Config 中修改。
+
+## egress — 出口网卡
+
+```console
+mihari egress list
+mihari egress status --json
+mihari egress set "Ethernet" --if-revision 12
+mihari egress auto
+```
+
+选择按网卡精确名称保存，作用于整个实例，切换订阅后保留。候选包括本次枚举到的物理或虚拟网卡，以及已保存但缺失的网卡；不能预填未知名称。自身 TUN 显示但禁选。类型无法可靠识别时显示 Unknown，可用状态只反映本地网卡状态，不探测互联网。
+
+手动模式在生成配置中覆盖全局、节点、provider override 和 DNS 的显式网卡绑定，保留原订阅、DNS 服务器及代理链选择。若 DNS 需要覆盖的接口名与代理名或 `RULES` 等保留名冲突，或包含原生片段语法的 `&` / `=`，生成失败并保留原配置，避免被核心误解为代理选择。No-Override 撤销 Mihari 的覆盖，恢复订阅原有语义。
+
+核心运行时完整重载、读回确认并关闭其跟踪的活动连接；不重启核心，不承诺清除原生所有连接池或后台任务。核心停止时只保存，显示 Saved，下次启动使用。网卡 Down、缺失或恢复不会触发自动回退、停核或额外重载；同名重建按同一选择处理。失败补偿至旧配置，已关闭连接无法复活；恢复无法确认时进入 degraded，后续修改被拒绝。
+
+TUI 入口为 **System → Network → Outbound Interface Override**。No-Override 固定在左侧滚动区上方；↑/↓ 浏览、到首尾停止，PgUp/PgDn 滚动详情，回车使用当前行。失败保留当前行，F2 查看完整诊断。此操作与启用 TUN 的已有冲突确认相互独立，不增加二次确认。
+
+采用 mihomo 原生接口绑定；系统 DNS、DHCP DNS 来源、回环/链路本地等原生例外仍按核心语义执行。它不解决两个全局 TUN 的入口路由竞争，也不提供操作系统级隔离或 kill switch。真实双 TUN 流量归属需要在隔离环境单独验证。
+
+新增本地能力 `egress-interface-v1` 与 GET/PATCH `/v1/egress`，不向 Web gateway 开放。JSON 包含 `selection`、`state`（saved/applied/unknown）、`interfaces`、`revision`，set/auto 支持 `--if-revision`。`interfaces[].device` 是与连接名不同的操作系统设备描述；没有单独描述时省略。设置字段 `egress-interface` 只在手动模式保存；降级到不认识该字段的旧 Mihari 前先执行 `egress auto`。
 
 ## Web 面板
 

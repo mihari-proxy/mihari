@@ -16,6 +16,11 @@ import (
 // PrepareCoreStart prepares saved configuration and holds mutation ownership
 // until the caller has started the child and invoked the returned release.
 func (m *Manager) PrepareCoreStart(ctx context.Context) (func(), error) {
+	if guard, ok := m.installer.(interface{ CheckExecution(context.Context) error }); ok {
+		if err := guard.CheckExecution(ctx); err != nil {
+			return nil, err
+		}
+	}
 	if err := m.lockMutation(ctx); err != nil {
 		return nil, err
 	}

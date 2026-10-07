@@ -28,14 +28,21 @@ func TestWebGUI_RefreshImmediatelyFollowsSummary(t *testing.T) {
 	t.Fatal("missing refresh callout")
 }
 
+// TestWebGUI_InstallAnimationLifetime verifies install, reinstall and update animation cleanup.
 func TestWebGUI_InstallAnimationLifetime(t *testing.T) {
-	for _, action := range []ui.Action{ui.ActionInstallPanel, ui.ActionReinstallPanel} {
+	for _, action := range []ui.Action{ui.ActionInstallPanel, ui.ActionReinstallPanel, ui.ActionUpdatePanel} {
 		for _, failed := range []bool{false, true} {
 			m := New(&fakeClient{}, []string{protocol.CapabilityWebGUI})
 			m.SetStatus(sampleStatus())
+			label := "Installing"
 			command := m.installSelected()
 			if action == ui.ActionReinstallPanel {
 				command = m.reinstallSelected()
+				label = "Reinstalling"
+			}
+			if action == ui.ActionUpdatePanel {
+				command = m.updateSelected()
+				label = "Updating"
 			}
 			intent := command().(ui.ActionIntentMsg)
 			pending := ui.ActionPendingMsg{Page: intent.Page, Action: intent.Action, Key: intent.Key}
@@ -50,14 +57,14 @@ func TestWebGUI_InstallAnimationLifetime(t *testing.T) {
 			for frame := 0; frame < 3; frame++ {
 				at := time.Unix(0, 0).Add(time.Duration(frame) * installSpinInterval)
 				_, next := m.Update(installSpinTickMsg{at: at, gen: generation})
-				badge := ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(at, "Installing"))
+				badge := ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(at, label))
 				if next == nil || !strings.Contains(m.View(), badge) {
 					t.Fatalf("missing animated orange badge at frame %d", frame)
 				}
 			}
 			// An unrelated action completing must not clear installation progress.
 			m.Update(mutationDoneMsg{})
-			if !strings.Contains(m.View(), "Installing") {
+			if !strings.Contains(m.View(), label) {
 				t.Fatal("unrelated result cleared installation")
 			}
 			result := intent.Execute().(mutationDoneMsg)
@@ -65,7 +72,7 @@ func TestWebGUI_InstallAnimationLifetime(t *testing.T) {
 				result.err = errors.New("fixture install failure")
 			}
 			_, reload := m.Update(result)
-			if reload == nil || strings.Contains(m.View(), "Installing") {
+			if reload == nil || strings.Contains(m.View(), label) {
 				t.Fatal("completion must clear progress and reload status")
 			}
 			if failed && !strings.Contains(m.View(), "fixture install failure") {

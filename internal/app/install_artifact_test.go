@@ -15,8 +15,8 @@ import (
 
 func TestInstallArtifact_RequestHashesAreNotTrustRoot(t *testing.T) {
 	fx := newMigrationFixture(t)
-	untrusted := []byte("not-a-trusted-core")
-	if err := os.WriteFile(fx.source.osPath("bin/mihomo"), untrusted, 0o700); err != nil {
+	untrusted := []byte("not-a-trusted-mihari-binary")
+	if err := os.WriteFile(fx.binaryPath, untrusted, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	fx.sourceSnap = fx.sourceHashes(t)
@@ -27,13 +27,13 @@ func TestInstallArtifact_RequestHashesAreNotTrustRoot(t *testing.T) {
 	opts.Request = req
 	_, err := prepareMigration(context.Background(), opts)
 	if err == nil {
-		t.Fatal("user artifact_sha256 must not make an untrusted core succeed")
+		t.Fatal("user artifact_sha256 must not make an untrusted Mihari binary succeed")
 	}
 	if strings.Contains(err.Error(), "not implemented") {
-		t.Fatal("missing untrusted-core rejection")
+		t.Fatal("missing untrusted-binary rejection")
 	}
 	if apiCode(err) != protocol.CodeInvalidState {
-		t.Fatalf("untrusted core: %v", err)
+		t.Fatalf("untrusted Mihari binary: %v", err)
 	}
 	fx.assertSourceUnchanged(t)
 }
@@ -65,8 +65,8 @@ func TestInstallArtifact_OmitsNoOpPath(t *testing.T) {
 
 func TestInstallArtifact_ApplyLockedConsumesPreparedNotUserHashes(t *testing.T) {
 	fx := newMigrationFixture(t)
-	evil := []byte("evil-core")
-	if err := os.WriteFile(fx.source.osPath("bin/mihomo"), evil, 0o700); err != nil {
+	evil := []byte("untrusted Mihari binary")
+	if err := os.WriteFile(fx.binaryPath, evil, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	h := newInstallHarness(t, InstallDataCreate)

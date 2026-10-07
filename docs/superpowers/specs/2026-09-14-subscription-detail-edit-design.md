@@ -2,6 +2,8 @@
 
 后续布局调整：详情与添加的紧凑分组、焦点样式、滚动和底部提示采用 [2026-09-15 紧凑弹窗执行计划](../plans/2026-09-15-subscription-compact-dialog.md)；本文的订阅业务与保存状态语义继续适用。
 
+2026-09-21 修订（[PR #300](https://github.com/mihari-proxy/mihari/pull/300)，用户已确认）：详情页新增立即执行的 Enabled 与 InUse 操作，替代原先必须返回列表的限制；设置草稿仍通过 Save 提交。Auto refresh、Mode、Enabled、InUse 仅高亮选项值；Interval 的支持单位移至输入值旁，以浅灰色显示。以下对应决策及 §7.2 已同步更新。
+
 日期：2026-09-14
 状态：用户已确认共同理解，grilling 完成，设计已定稿；后续授权实施已完成，验证见执行文档。
 分支：`feat/tui-subscription-detail-edit`
@@ -26,7 +28,7 @@
 | --- | --- | --- |
 | Q1 | 可改的「更新时间」 | 只改本条 `interval`；改 interval 后下次自动拉从**现在**起算 |
 | Q2 | 详情与编辑 | 合成一张 overlay |
-| Q3 / Q11 / Q37 | 可写字段 | Name、URL、Interval、Auto refresh、Mode 进草稿 + Save。Enabled 不在 overlay 里改，回列表 Space。Use / Refresh 也回列表 |
+| Q3 / Q11 / Q37 | 可写字段 | Name、URL、Interval、Auto refresh、Mode 进草稿 + Save。Enabled 与 InUse 在详情的独立操作区按 Enter 立即执行；Refresh 仍回列表 |
 | Q6 | 改 interval 的调度 | 复位到 now + 新 interval；不改 `updated_at`（仍是上次成功拉取缓存的时间） |
 | Q7 / Q16 / Q32 | URL 回显 | 本地控制 `GET /v1/subscriptions/{id}/url`，供 TUI 回显；打开详情即预填；失败则空框，仍可粘贴。list/show 仍不带 URL。调用权限见 G1 |
 | Q10 / Q29 | Mode | 列表头 Proxy→**Mode**；值仍是 DIRECT/PROXY/AUTO；footer `p` = cycle mode；协议字段仍是 `proxy_mode` |
@@ -37,9 +39,9 @@
 | Q25 / Q28 | In use | 列表头 **InUse**；详情 `In use: yes/no`。`●` 在 InUse 列居中 |
 | Q27 | 宽度 | Status `MinWidth: 12`；窄屏仍先丢 Next/Last update |
 | Q30 | 列表键 | 只留 **Enter** 打开详情；**去掉 `e`** |
-| Q31 / Q33 / Q34 / Q35 | 详情交互 | 显式 Save；方向键/Tab 移动；**仅 Save 上 Enter 提交**；输入框 Enter=下一项；提交前 Esc 丢草稿并关；保存中与结果未知的例外见 G8 |
+| Q31 / Q33 / Q34 / Q35 | 详情交互 | 显式 Save；方向键/Tab 移动；**仅 Save 上 Enter 提交设置草稿**，Enabled/InUse 操作项 Enter 立即执行；输入框 Enter=下一项；提交前 Esc 丢草稿并关；保存中与结果未知的例外见 G8，立即操作见 §7.2 |
 | Q36 | 添加 | 同一套导航 + Save；字段只有 Name、URL、Mode（现有 POST，不扩展）。add 仍立刻拉一次 |
-| Q18 | Enabled/Active 文案教育 | **搁置**（除上表已定的列名外，不另做术语帮助稿） |
+| Q18 | Enabled/Active 文案教育 | 增加操作项就地提示：停用会清除 InUse，启用不会自动选中；Use 需要已启用且有有效缓存。其他独立术语帮助稿仍搁置 |
 
 ### 2.1 本次 grilling 复核
 
@@ -236,15 +238,26 @@ Outdated 时必须同时有 **In use: yes/no**，不能只靠列表 `●`。
 
 下半草稿：Name、URL、Interval、Auto refresh、Mode。
 Auto refresh、Mode 为可聚焦循环行（左/右或 Space 改草稿，**Save 才写出**）。
+Interval 在输入值旁用浅灰色显示 `ns/us/ms/s/m/h`，不再另占一行说明；留空仍继承全局间隔。
+
+设置区下方为 **Actions · Apply immediately**：
+
+- **Enabled**：`[ Enable ]` / `[ Disable ]`，Enter 通过既有启用接口立即执行。停用当前订阅同时清除 InUse；重新启用不自动选中。
+- **InUse**：已使用时显示 `In use`；未使用时提供 `[ Use this subscription ]`。禁用或无有效缓存时分别显示 `Enable first` / `Refresh first`，不发送 Use 请求。不新增独立取消 InUse 的接口。
+- 操作成功后保持详情打开及设置草稿；只有本次操作自身推进的 revision 可用于后续 Save，外部变更仍触发既有冲突处理。
+- 执行中阻止重复操作及 Save，允许 PgUp/PgDn 滚动和 Esc 关闭；关闭不取消已发出的请求。明确失败在当前详情显示；结果未知时阻止直接重试，查询目录供核对，提示关闭后重新打开详情检查。
+- 迟到结果仍进入共享诊断；成功结果仅在 revision 不落后时更新目录。已关闭详情的结果不得设置或清空当前页面错误，也不得借错误后的 reload 清空新页面提示。
+
+Auto refresh、Mode、Enabled、InUse 仅对选项值反色，标签和行尾空白不高亮。
 底行可聚焦 **Save**。
 
 打开时请求 reveal，预填 URL。URL 读取期间允许用户输入；只有同一弹层实例、同一订阅且该字段尚未被用户编辑时才回填。关闭、重新打开、切换订阅后的旧结果全部忽略；用户曾编辑后又删回空值也不恢复自动回填。
 
 读取失败：框空，仍可粘贴；不把 reveal 响应 URL 写入 toast/日志。读取尚未完成或失败且用户未编辑 URL 时，Save 省略 URL 字段，保留原值；用户主动清空则显示 `URL is required.` 并阻止保存。读取成功且用户未改 URL 时同样省略 URL，不把回显动作当作修改。
 
-导航：↑/↓、Tab / Shift+Tab。文本框内输入即改草稿。文本框 Enter = 下一项。**只有焦点在 Save 上时 Enter 才 PATCH**（一次提交相对编辑基线实际变化的 Name/URL/Interval/Auto refresh/Mode）。提交前 Esc 关闭并丢草稿。已通过列表 Space 改过的 Enabled 不受影响。
+导航：↑/↓、Tab / Shift+Tab 在设置字段、操作项和 Save 之间移动。文本框内输入即改草稿。设置字段 Enter = 下一项。**只有焦点在 Save 上时 Enter 才 PATCH 设置草稿**（一次提交相对编辑基线实际变化的 Name/URL/Interval/Auto refresh/Mode）；Enabled/InUse 操作项的 Enter 立即调用各自既有接口，不提交草稿。提交前 Esc 关闭并丢草稿，已生效的 Enabled/InUse 操作不回滚。
 
-overlay 打开期间：`r`、`u`、全局 Space **不是**快捷键。要刷新、Use、开关 Enabled，先 Esc。焦点在 Auto refresh/Mode 行时 Space 只循环该草稿字段。
+overlay 打开期间：`r`、`u`、全局 Space **不是**快捷键。刷新仍需先 Esc 返回列表；Use 和 Enabled 可聚焦详情内对应操作项后按 Enter 执行。焦点在 Auto refresh/Mode 行时 Space 只循环该草稿字段。
 
 列表 `p` 与详情草稿 Mode：详情未打开时 `p` 立刻 PATCH。详情打开时不将 `p` 解释成列表快捷键；文本框中的 `p`、`r`、`u` 等正常作为字符输入。详情里改 Mode 走 Save。
 
@@ -269,18 +282,20 @@ Form mode（添加与详情共用）改为：
 | `↑/↓` | `up`,`down` | move between fields |
 | `Tab` / `Shift+Tab` | `tab`,`shift+tab` | move between fields |
 | `←/→` / `Space` | `left`,`right`,`space` | cycle Auto refresh or Mode when focused |
-| `Enter` | `enter` | next field, or save when Save focused |
+| `Enter` | `enter` | next field, save on Save, or apply immediately on Enabled/InUse |
 | `Esc` | `esc` | cancel before saving |
 
 循环键仅在 Auto refresh/Mode 行进入 catalog 的 This mode；文本框焦点下 Space 是字符。实现时按焦点过滤，帮助用一行说明「on cycle fields」。
 
 帮助与 footer 按 Editing / Saving / Conflict / Unknown 的真实按键过滤：Saving 不显示 Esc cancel 或可再次 Save；Unknown 的 Esc 仅为 close，不能标为 cancel save。所有帮助文字均为英文。
 
+详情操作项使用独立 footer：`Enter apply now`、`Esc close`；立即操作执行中或结果未知时仅提供滚动及关闭，`Esc close (does not cancel the action)` 明确关闭不会取消操作。
+
 ### 7.5 保存生命周期
 
 | 状态 | 显示与操作 |
 | --- | --- |
-| Editing | 允许编辑和导航；仅 Save 焦点 Enter 提交；Esc 丢弃本次未提交编辑并关闭 |
+| Editing | 允许编辑和导航；仅 Save 焦点 Enter 提交设置草稿，独立操作项按 §7.2 执行；Esc 丢弃本次未提交编辑并关闭 |
 | Saving | 显示 `Saving...`，冻结本次提交内容，禁用重复提交与编辑；Esc 暂不关闭，不改变普通请求的超时边界 |
 | 明确成功 | 关闭弹层；列表保持选中该 ID，显示最新状态 |
 | 明确失败 | 留在弹层显示安全英文错误，恢复编辑；用户可修改后重试，Esc 可放弃本次输入 |
@@ -351,8 +366,9 @@ Red–Green–Refactor。至少覆盖：
 - reveal 沿用现有认证，未认证拒绝，已认证可读；Web gateway 不挂载此路由；公开错误不暴露当前和旧缓存源 URL，文件日志遵循 dev 原始错误策略。
 - reveal 迟到不覆盖用户输入，不串弹层或订阅；读取失败未编辑省略 URL，主动清空阻止保存。
 - 旧目录无 `cache-url` 不全部变 Outdated。
-- TUI：列名、Status 词、`●` 居中、Enter 开详情、无 `e`、Save 焦点才能提交、Esc 丢草稿、add 三字段 + Save。
+- TUI：列名、Status 词、`●` 居中、Enter 开详情、无 `e`、Save 焦点才能提交设置草稿、Esc 丢草稿、add 三字段 + Save。
 - 帮助/footer 与 keymap 测试同步。
+- 详情 Enabled/InUse 操作保留设置草稿，禁用和无缓存时不能 Use；重复请求受阻，关闭详情后的成功、明确失败、冲突和结果未知均不覆盖当前页面或新详情的错误提示。
 - 冲突只在用户确认后使用最新 revision 重提实际改动字段，保留其他字段的新值；再次冲突再次确认。
 - Saving 不重复提交，Esc 暂不关闭；成功选中原条目；明确失败可编辑；Unknown 查询不重放请求，不把 finished 当作成功。
 - Unknown 核对仍不确定时，Submit again 必须二次确认；Cancel 不发送请求；确认使用新 operation ID，保留 revision 检查；添加确认说明可能重复创建。
@@ -377,7 +393,7 @@ Red–Green–Refactor。至少覆盖：
 - TUI 不编辑 `global-interval`。
 - 不在改 URL 时弹「必须强制拉取」确认（已否决）。
 - 不扩展 POST add 的 interval/auto-refresh。
-- Q18 的 Enabled/Active 用户教育文案（列名已在本次改完）。
+- 除详情操作项的就地提示外，Q18 的独立 Enabled/Active 术语帮助稿。
 - Web 面板订阅编辑。
 - 本功能能力标记、新旧 TUI/daemon 混用兼容、旧二进制直接读取新 catalog。
 - reveal 的额外 owner/admin 权限分层、持久草稿恢复、逐字段冲突合并。

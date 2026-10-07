@@ -22,6 +22,22 @@ import (
 // compare, never write, so a missing or changed golden fails loudly.
 var updateGolden = flag.Bool("update", false, "regenerate golden render fixtures")
 
+func TestGoldenPageSettings(t *testing.T) {
+	for _, size := range []struct {
+		name          string
+		width, height int
+	}{{"compact", 72, 22}, {"full", 100, 28}} {
+		t.Run(size.name, func(t *testing.T) {
+			d := newPageSettings(ui.PageProxies, protocol.TUIPreferences{})
+			assertGoldenContent(t, "page_settings_"+size.name, trimRenderPadding(normalizeRender(d.view(size.width, size.height))))
+			d.key("shift+tab")
+			d.key("down")
+			d.key("enter")
+			assertGoldenContent(t, "page_settings_jump_"+size.name, trimRenderPadding(normalizeRender(d.view(size.width, size.height))))
+		})
+	}
+}
+
 // ansiPattern strips CSI, OSC, and other VT100 escape sequences so fixtures pin
 // layout and copy instead of the ambient terminal color profile.
 var ansiPattern = regexp.MustCompile("\x1b\\[[0-9;]*[A-Za-z]|\x1b\\][^\x07]*(\x07|\x1b\\\\)|\x1b[@-Z\\-_]")

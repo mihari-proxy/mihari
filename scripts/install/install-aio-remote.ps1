@@ -46,6 +46,15 @@ function FixEncoding($s) {
 }
 function Info($m) { Write-Host ("* " + (FixEncoding $m)) -ForegroundColor Cyan }
 function Fail($m) { $f = FixEncoding $m; Write-Host ("error: " + $f) -ForegroundColor Red; throw $f }
+function Start-MihariStep($Name) {
+  Info $Name
+  $script:MihariStepWatch = [Diagnostics.Stopwatch]::StartNew()
+}
+function Complete-MihariStep {
+  $elapsed = $script:MihariStepWatch.Elapsed
+  $minutes = [int][Math]::Floor($elapsed.TotalMinutes)
+  Write-Host ('  elapsed {0}:{1:d2}' -f $minutes, $elapsed.Seconds)
+}
 function Confirm($p) {
   if ($explicitYes) { return $true }
   if ([Console]::IsInputRedirected -or [Environment]::GetCommandLineArgs() -contains '-NonInteractive') {
@@ -389,20 +398,23 @@ if (-not (Confirm 'Download and prepare the bundle?')) { throw 'Canceled. No ins
 $workdir = Join-Path $env:USERPROFILE 'Downloads\mihari-aio'
 New-Item -ItemType Directory -Force -Path $workdir | Out-Null
 $tmpArchive = Join-Path ([IO.Path]::GetTempPath()) ("mihari-aio-" + ([guid]::NewGuid().ToString('N')) + ".zip")
-Info "Downloading $resolvedUrl …"
+Start-MihariStep "Downloading $resolvedUrl..."
 Download-FileWithProgress -url $resolvedUrl -dest $tmpArchive
+Complete-MihariStep
 $verifiedSource = $false
 if ($wantSum) {
+  Start-MihariStep 'Verifying archive'
   if ($wantSum -cnotmatch '^[0-9a-fA-F]{64}$') { Remove-Item -LiteralPath $tmpArchive -Force; Fail 'The index checksum is invalid.' }
   $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $tmpArchive).Hash.ToLower()
   if ($got -ne $wantSum.ToLower()) { Remove-Item -LiteralPath $tmpArchive -Force; Fail "SHA-256 verification failed: expected $wantSum, got $got." }
   $verifiedSource = $true
-  Info 'SHA-256 verification passed.'
+  Complete-MihariStep
 }
-Info "Extracting to $workdir …"
+Start-MihariStep 'Extracting archive'
 if (Test-Path -LiteralPath $workdir) { Get-ChildItem -LiteralPath $workdir | Remove-Item -Recurse -Force }
 Expand-Archive -LiteralPath $tmpArchive -DestinationPath $workdir -Force
 Remove-Item -LiteralPath $tmpArchive -Force
+Complete-MihariStep
 
 # Only checksum-verified bundles can authorize capability probing and handoff.
 $localInstaller = Join-Path $workdir 'install-aio.ps1'

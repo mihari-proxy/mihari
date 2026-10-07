@@ -35,7 +35,7 @@ func TestSetupReadiness_RequiredResourcesOverrideHistoricalMarker(t *testing.T) 
 			if err != nil || required == exists {
 				t.Fatalf("complete=%v exists=%v required=%v err=%v", complete, exists, required, err)
 			}
-			m.onboardingRestartRequired = true
+			m.onboardingRestartRequired.Store(true)
 			required, err = m.SetupRequired(context.Background())
 			if err != nil || !required {
 				t.Fatal("saved but ineffective ports were treated as ready")

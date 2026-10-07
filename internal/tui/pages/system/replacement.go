@@ -51,7 +51,7 @@ func (m *Model) CancelMihariPreparation() tea.Cmd {
 	}
 	p := m.pendingPrepared
 	m.pendingPrepared = nil
-	if p != nil || (m.pendingRow == rowMihariUpdate && m.pendingNote != ui.MihariProgressChecking) {
+	if p != nil || m.pendingRow == rowMihariUpdate {
 		m.clearRowPending()
 		m.markRowOutcome(rowMihariUpdate, false, "Update cancelled")
 	}
@@ -73,7 +73,7 @@ func (m *Model) startMihariPreparation() tea.Cmd {
 	}
 	m.preparationGeneration++
 	generation := m.preparationGeneration
-	m.selfCheckGeneration++ // A queued display check must not clear Preparing.
+	m.invalidateMihariCheck() // A queued display check must not clear Preparing.
 	ctx := m.localTaskDiagnostics.NewContext(m.ctx, "self.prepare")
 	operation, _ := logging.OperationFromContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)

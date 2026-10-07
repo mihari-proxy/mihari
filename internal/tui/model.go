@@ -40,6 +40,12 @@ type Model struct {
 	focus                  ui.Focus
 	inputMode              ui.InputMode
 	modal                  *Modal
+	pageSettings           *pageSettingsDialog
+	preferencesClient      pagePreferencesClient
+	preferences            protocol.TUIPreferences
+	preferencesLoaded      bool
+	preferencesGeneration  uint64
+	quitting               bool
 	proxyNamesChecked      bool
 	proxyNamesPending      []string
 	width                  int
@@ -114,10 +120,13 @@ type rootServiceStatusMsg struct {
 
 // networkStatusMsg carries daemon-backed sysproxy/TUN snapshots for Overview and System.
 type networkStatusMsg struct {
-	proxy    protocol.SystemProxyStatus
-	proxyErr error
-	tun      protocol.TunStatus
-	tunErr   error
+	egress      *protocol.EgressStatus
+	egressPID   int
+	egressEpoch uint64
+	proxy       protocol.SystemProxyStatus
+	proxyErr    error
+	tun         protocol.TunStatus
+	tunErr      error
 }
 
 type actionExecuteMsg struct{ Intent ui.ActionIntentMsg }
@@ -168,14 +177,16 @@ func newModelWithPageClients(proxyClient proxypage.Client, connectionsClient con
 	pages[ui.PageConnections] = connectionspage.New(connectionsClient, nil)
 	pages[ui.PageRules] = rulespage.New(rulesClient, nil)
 	pages[ui.PageLogs] = logspage.New(0)
+	pages[ui.PageLogs].(*logspage.Model).SetPreferenceClient(connectionsClient, nil)
 	pages[ui.PageSubscriptions] = subscriptionspage.New(subscriptionsClient, nil, nil)
 	pages[ui.PageSetup] = setuppage.New(nil, nil)
 	pages[ui.PageWebGUI] = webguipage.New(nil, nil)
 	pages[ui.PageSystem] = systempage.New(nil, nil)
 	active := rail[0]
 	model := Model{
-		diagnosticWindow: newDiagnosticWindow(),
-		pages:            pages, rail: rail, active: active,
+		preferencesClient: connectionsClient,
+		diagnosticWindow:  newDiagnosticWindow(),
+		pages:             pages, rail: rail, active: active,
 		focus: ui.Focus{Area: ui.FocusRail, Page: active},
 		width: 100, height: 28, theme: ui.DefaultTheme(), monitor: NewMonitor(),
 		pendingActions: make(map[string]ui.Action),
@@ -232,6 +243,7 @@ func newModelWithClientContext(ctx context.Context, events <-chan session.Event,
 		ctx = context.Background()
 	}
 	model := newModelWithPageClients(client, client, client, client)
+	model.pages[ui.PageLogs].(*logspage.Model).SetPreferenceClient(client, func() (context.Context, context.CancelFunc) { return context.WithCancel(ctx) })
 	model.pages[ui.PageSubscriptions].(*subscriptionspage.Model).SetContextFactory(func() (context.Context, context.CancelFunc) { return context.WithCancel(ctx) })
 	model.pages[ui.PageSetup] = setuppage.NewWithContext(ctx, client, nil)
 	model.pages[ui.PageSystem] = systempage.NewWithContext(ctx, client, nil, nil)
@@ -239,6 +251,7 @@ func newModelWithClientContext(ctx context.Context, events <-chan session.Event,
 	model.resizePages()
 	model.events = events
 	model.pageCtx = ctx
+	model.pages[ui.PageProxies].(*proxypage.Model).SetContextFactory(func() (context.Context, context.CancelFunc) { return context.WithCancel(ctx) })
 	model.networkClient = client
 	if source, ok := client.(diagnosticClient); ok {
 		model.diagnosticWindow.client = source
@@ -341,6 +354,27 @@ func (model *Model) syncSystemNetworkStatus() {
 
 // Update routes shell, modal and page events while retaining ownership of asynchronous results.
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	next, command := model.update(message)
+	updated := next.(Model)
+	if page, ok := updated.pages[ui.PageProxies].(*proxypage.Model); ok {
+		if updated.quitting {
+			page.Stop()
+			return updated, command
+		}
+		page.SetObscured(updated.pageSettings != nil || updated.modal != nil || page.HelpMode() != "" ||
+			(updated.diagnosticWindow != nil && updated.diagnosticWindow.open) ||
+			(updated.installation != nil && updated.installation.visible) ||
+			(updated.exportLogs != nil && !updated.exportLogs.Closed()) || Classify(updated.width, updated.height) == ui.TooSmall)
+		ready := updated.connected && !updated.reconnecting && updated.preferencesLoaded && updated.core.Status == "running"
+		auto := page.ReconcileAutoTests(updated.active == ui.PageProxies, ready, updated.statusEpoch, updated.core)
+		if auto != nil {
+			command = tea.Batch(command, auto)
+		}
+	}
+	return updated, command
+}
+
+func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	model.showDuplicateNames()
 	if key, ok := message.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" {
 		if model.diagnosticWindow != nil {
@@ -352,12 +386,16 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
 			page.Stop()
 		}
+		model.quitting = true
 		return model, tea.Quit
 	}
 	if command, consumed := model.updateDiagnostics(message); consumed {
 		return model, command
 	}
 	model.observeDiagnosticMessage(message)
+	if command, consumed := model.updatePageSettings(message); consumed {
+		return model, command
+	}
 	if command, consumed := model.updateInstallation(message); consumed {
 		return model, command
 	}
@@ -427,6 +465,11 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.syncSystemServiceStatus()
 		return model, nil
 	case networkStatusMsg:
+		if typed.egress != nil && typed.egressPID == model.status.PID && typed.egressEpoch == model.statusEpoch {
+			if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
+				page.SetEgress(*typed.egress)
+			}
+		}
 		if typed.proxyErr == nil {
 			model.systemProxy = typed.proxy
 			model.systemProxyOK = true
@@ -503,7 +546,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.core = typed.Core
 		model.syncOverview()
 		model.syncSystem()
-		return model, nil
+		return model, model.syncSystemPorts()
 	case ui.RuntimeRevisionMsg:
 		model.status.Revision = max(model.status.Revision, typed.Revision)
 		model.syncOverview()
@@ -627,6 +670,15 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model, nil
 	case ui.OpenHelpMsg:
 		return model.openHelp()
+	case ui.OpenPageSettingsMsg:
+		if typed.Page != model.active || model.modal != nil || model.pageSettings != nil ||
+			(model.diagnosticWindow != nil && model.diagnosticWindow.open) ||
+			(model.installation != nil && model.installation.visible) ||
+			(model.exportLogs != nil && !model.exportLogs.Closed()) {
+			return model, nil
+		}
+		model.pageSettings = newPageSettings(model.active, model.preferences)
+		return model, nil
 	}
 
 	key, isKey := message.(tea.KeyPressMsg)
@@ -681,6 +733,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model.openHelp()
 	}
 	if name == "q" && model.inputMode != ui.InputText {
+		model.quitting = true
 		return model, tea.Quit
 	}
 	if Classify(model.width, model.height) == ui.TooSmall {
@@ -698,6 +751,13 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if page, ok := model.pages[model.active].(ui.HelpModeProvider); ok && page.HelpMode() == ui.ModeRouting {
 		return model.dispatchPage(message)
+	}
+	if name == "f4" {
+		if page, ok := model.pages[model.active].(ui.HelpModeProvider); ok && page.HelpMode() != "" && page.HelpMode() != ui.ModeSearch {
+			return model.dispatchPage(message)
+		}
+		model.pageSettings = newPageSettings(model.active, model.preferences)
+		return model, nil
 	}
 	// Digit keys 1–9 jump straight to the matching rail page while the focus is
 	// not in a text input (search box / form). InputText mode passes digits
@@ -743,6 +803,9 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		statusEpochAdvanced := !model.statusEpochKnown || event.Epoch > model.statusEpoch
 		if model.statusEpochKnown && (event.Epoch < model.statusEpoch || (!statusEpochAdvanced && event.Status.Revision < model.status.Revision)) {
 			break
+		}
+		if statusEpochAdvanced && model.statusEpochKnown {
+			model.preferencesLoaded = false
 		}
 		model.statusEpoch = event.Epoch
 		model.statusEpochKnown = true
@@ -809,11 +872,19 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 			page.Observe(event.Connections, event.ObservedAt)
 		}
 	case session.EventCore:
+		if model.statusEpochKnown && event.Epoch != 0 && event.Epoch < model.statusEpoch {
+			break
+		}
 		if event.Err != nil {
 			if page, ok := model.pages[ui.PageProxies].(*proxypage.Model); ok {
 				page.InvalidateGroups()
 			}
 			break
+		}
+		if model.core.PID != event.Core.PID || !model.core.StartedAt.Equal(event.Core.StartedAt) || model.core.Restarts != event.Core.Restarts {
+			if page, ok := model.pages[ui.PageProxies].(*proxypage.Model); ok {
+				page.InvalidateGroups()
+			}
 		}
 		model.core = event.Core
 		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
@@ -848,10 +919,14 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 			}
 		}
 	case session.EventPreferences:
+		if model.statusEpochKnown && event.Epoch != 0 && event.Epoch < model.statusEpoch {
+			break
+		}
 		if event.Err != nil {
 			break
 		}
-		if page, ok := model.pages[ui.PageConnections].(*connectionspage.Model); ok {
+		model.applyPreferences(event.Preferences)
+		if page, ok := model.pages[ui.PageLogs].(*logspage.Model); ok {
 			page.SetPreferences(event.Preferences)
 		}
 	case session.EventRules:
@@ -898,6 +973,8 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		}
 		command = tea.Batch(command, model.loadNetworkStatus())
 	case session.EventReconnecting:
+		model.preferencesLoaded = false
+		model.preferencesGeneration++
 		if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
 			command = tea.Batch(command, page.ObserveConnection(false))
 		}
@@ -949,7 +1026,10 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 	}
 	model.syncSystem()
 	model.syncOverview()
-	return tea.Batch(command, model.spinnerCmdIfNeeded())
+	if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
+		command = tea.Batch(command, page.SyncStartupNetwork())
+	}
+	return tea.Batch(command, model.syncSystemPorts(), model.spinnerCmdIfNeeded())
 }
 
 func (model *Model) resetLogging(epoch uint64) {
@@ -1028,17 +1108,26 @@ func (model *Model) syncSystemLoggingStatus(status protocol.LoggingStatus, avail
 
 func (model Model) loadNetworkStatus() tea.Cmd {
 	client := model.networkClient
-	if client == nil || !model.connected {
+	if client == nil || !model.connected || model.status.StartupNetwork.Applying() {
 		return nil
 	}
 	ctx := model.pageCtx
+	egressEnabled, daemonPID, epoch := slices.Contains(model.status.Capabilities, protocol.CapabilityEgress), model.status.PID, model.statusEpoch
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	return func() tea.Msg {
 		proxy, proxyErr := client.SystemProxy(ctx)
 		tun, tunErr := client.Tun(ctx)
-		return networkStatusMsg{proxy: proxy, proxyErr: proxyErr, tun: tun, tunErr: tunErr}
+		result := networkStatusMsg{proxy: proxy, proxyErr: proxyErr, tun: tun, tunErr: tunErr, egressPID: daemonPID, egressEpoch: epoch}
+		if egress, ok := client.(interface {
+			Egress(context.Context) (protocol.EgressStatus, error)
+		}); ok && egressEnabled {
+			if status, err := egress.Egress(ctx); err == nil {
+				result.egress = &status
+			}
+		}
+		return result
 	}
 }
 
@@ -1111,6 +1200,14 @@ func (model *Model) syncSystem() {
 	}
 }
 
+func (model *Model) syncSystemPorts() tea.Cmd {
+	page, ok := model.pages[ui.PageSystem].(*systempage.Model)
+	if !ok {
+		return nil
+	}
+	return page.SyncPortHolds()
+}
+
 // railDigit reports the 1-based rail position a digit key selects, or ok=false
 // for non-single-digit keys. Callers bound the result against the rail length so
 // 9 (and any digit past the rail) is ignored on an 8-page rail.
@@ -1137,6 +1234,11 @@ func (model Model) updateRail(key string) (tea.Model, tea.Cmd) {
 		}
 		model.focus = ui.Focus{Area: ui.FocusContent, Page: model.active}
 		model.pages[model.active].FocusFirst()
+		// System implements LoadStatus so Enter does not start another Mihari
+		// or core version check, and does not cancel one already running.
+		if page, ok := model.pages[model.active].(interface{ LoadStatus() tea.Cmd }); ok {
+			return model, page.LoadStatus()
+		}
 		if page, ok := model.pages[model.active].(interface{ Load() tea.Cmd }); ok {
 			return model, page.Load()
 		}
@@ -1167,8 +1269,9 @@ func (model Model) landRailPage(prev ui.PageID) (tea.Model, tea.Cmd) {
 	}
 	discard := model.clearSystemDoneIfLeaving(prev)
 	// Refresh page-owned snapshots when the rail lands on the page so previews
-	// are not empty until Enter. System (network/service) and Web GUI (panels)
-	// both need this; Enter still Load()s after content focus.
+	// are not empty until Enter. System (network/service, and a fresh Mihari
+	// and core version check) and Web GUI (panels) both need this. Enter into
+	// System calls LoadStatus and does not repeat those version checks.
 	switch model.active {
 	case ui.PageSystem, ui.PageWebGUI:
 		if page, ok := model.pages[model.active].(interface{ Load() tea.Cmd }); ok {
@@ -1208,6 +1311,13 @@ func (model Model) dispatchPageTo(id ui.PageID, message tea.Msg) (tea.Model, tea
 	}
 	updated, command := page.Update(message)
 	model.pages[id] = updated
+	if id == ui.PageSystem && model.active == id {
+		if page, ok := updated.(*systempage.Model); ok && page.HasEgressDialog() {
+			model.inputMode = ui.InputText
+		} else if provider, ok := updated.(ui.HelpModeProvider); ok && provider.HelpMode() == "" {
+			model.inputMode = ui.InputNavigation
+		}
+	}
 	if id == ui.PageSubscriptions && model.active == id {
 		model.inputMode = ui.InputNavigation
 		if page, ok := updated.(*subscriptionspage.Model); ok && page.HasDialog() {
@@ -1503,6 +1613,11 @@ func (model *Model) refreshDaemonHintForService() {
 
 // View renders the active shell or setup layout and overlays the current modal.
 func (model Model) View() tea.View {
+	if model.pageSettings != nil && (model.diagnosticWindow == nil || !model.diagnosticWindow.open) {
+		view := tea.NewView(model.pageSettings.view(model.width, model.height))
+		view.AltScreen, view.WindowTitle = true, ui.AppName
+		return view
+	}
 	if model.diagnosticWindow != nil && model.diagnosticWindow.open {
 		view := tea.NewView(model.diagnosticWindow.view(model.width, model.height))
 		view.AltScreen, view.WindowTitle = true, ui.AppName
@@ -1570,6 +1685,13 @@ func (model Model) View() tea.View {
 			}
 		}
 		// Compact mode metrics live in the status bar — never append ViewSummary.
+		settingsAvailable := true
+		if p, ok := page.(ui.HelpModeProvider); ok {
+			settingsAvailable = p.HelpMode() == "" || p.HelpMode() == ui.ModeSearch
+		}
+		if settingsAvailable && !strings.Contains(footer, "F4") {
+			footer = "F4 settings  " + footer
+		}
 		// Prefer dropping middle shortcuts before ?/q and the global spinner segment.
 		// Budget = width−2: the Footer style pads 1 cell each side (design S2),
 		// so the full width would word-wrap candidate strings at the edge.

@@ -25,7 +25,7 @@ func TestLatestVersion_MetadataOnly(t *testing.T) {
 				if r.URL.Path != path {
 					t.Errorf("unexpected request %s", r.URL.Path)
 				}
-				if err := json.NewEncoder(w).Encode(Release{TagName: tc.tag, Assets: []Asset{{Name: tc.asset}}}); err != nil {
+				if err := json.NewEncoder(w).Encode(Release{ID: 123, TagName: tc.tag, Assets: []Asset{{ID: 456, Name: tc.asset, State: "uploaded", Size: 32, UpdatedAt: "2026-09-17T01:00:00Z"}}}); err != nil {
 					t.Error(err)
 				}
 			}))
@@ -42,6 +42,14 @@ func TestLatestVersion_MetadataOnly(t *testing.T) {
 				t.Fatalf("got %q, err %v, requests %d", got, err, calls)
 			}
 		})
+	}
+}
+
+func TestLatestVersion_RejectsUninstallableAsset(t *testing.T) {
+	metadata := targetMetadata()
+	metadata["state"] = "new"
+	if version, err := targetInstaller(t, metadata).LatestVersion(t.Context(), "stable"); err == nil {
+		t.Fatalf("advertised unavailable core %q", version)
 	}
 }
 

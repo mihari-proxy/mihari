@@ -2,8 +2,11 @@
 import json
 import os
 from pathlib import Path
+import re
 import shlex
+import signal
 import subprocess
+import time
 import pytest
 
 INSTALL = Path(__file__).parent
@@ -17,7 +20,7 @@ def confirmation_error(preview="a" * 64):
                     "target_version": "v1.0.0", "preview_id": preview}}}
 
 
-def run_posix(tmp_path, error=None, consent="accept", explicit=False, second=0):
+def run_posix(tmp_path, error=None, consent="accept", explicit=False, second=0, first=2, stdout_body="", stderr_body="", path_binary="/usr/local/bin/mihari", delay=0, bundle="", bootstrap_mode=""):
     if os.name != "posix":
         pytest.skip("Native POSIX helper fixture paths require a POSIX host")
     source = (INSTALL / "root-apply.sh.in").read_text()
@@ -28,18 +31,31 @@ def run_posix(tmp_path, error=None, consent="accept", explicit=False, second=0):
     fixture = tmp_path / "fixture"
     fixture.write_text(error if isinstance(error, str) else json.dumps(error or confirmation_error(), separators=(",", ":")) + "\n")
     helper = tmp_path / "helper"
-    helper.write_text('#!/bin/sh\nprintf "%s\\n" "$@" >> "$ARG_LOG"\n'
-                      'if [ ! -f "$COUNT" ]; then : > "$COUNT"; cat "$FIXTURE" >&2; exit 2; fi\n'
+    helper.write_text('#!/bin/sh\nsleep "${DELAY:-0}"\nprintf "%s\\n" "$@" >> "$ARG_LOG"\n'
+                      'if [ ! -f "$COUNT" ]; then : > "$COUNT"; cat "$FIXTURE" >&2; '
+                      'if [ -n "${STDOUT_BODY:-}" ]; then printf "%s\\n" "$STDOUT_BODY"; fi\n'
+                      'exit "$FIRST"; fi\n'
+                      'if [ -n "${STDERR_BODY:-}" ]; then printf "%s\\n" "$STDERR_BODY" >&2; fi\n'
+                      'if [ -n "${STDOUT_BODY:-}" ]; then printf "%s\\n" "$STDOUT_BODY"; fi\n'
                       'exit "$SECOND"\n')
     helper.chmod(0o700)
     stage = tmp_path / "stage"
     stage.mkdir()
     override = {"accept": "confirm_replacement() { return 0; }", "cancel": "confirm_replacement() { return 1; }", "real": ""}[consent]
-    command = '\n'.join(["set -eu", "umask 077", "stage=" + shlex.quote(str(stage)),
-                          "entry=" + shlex.quote(str(helper)), "explicit_yes=" + str(int(explicit)),
-                          'fail() { printf "%s\\n" "$1" >&2; exit 1; }', block, override, "apply_with_confirmation"])
-    env = dict(os.environ, ARG_LOG=str(tmp_path / "argv"), COUNT=str(tmp_path / "count"), FIXTURE=str(fixture), SECOND=str(second))
-    result = subprocess.run(["sh", "-c", command], env=env, capture_output=True, text=True, timeout=10, start_new_session=True)
+    prelude = ["set -eu", "umask 077", "stage=" + shlex.quote(str(stage)),
+               "entry=" + shlex.quote(str(helper)), "explicit_yes=" + str(int(explicit)),
+               "path_binary=" + shlex.quote(path_binary)]
+    if bundle:
+        prelude.append("bundle=" + shlex.quote(bundle))
+    if bootstrap_mode:
+        prelude.append("bootstrap_mode=" + shlex.quote(bootstrap_mode))
+    command = '\n'.join(prelude + ['fail() { printf "%s\\n" "$1" >&2; exit 1; }', block, override, "apply_with_confirmation"])
+    env = dict(os.environ, ARG_LOG=str(tmp_path / "argv"), COUNT=str(tmp_path / "count"), FIXTURE=str(fixture),
+               SECOND=str(second), FIRST=str(first), STDOUT_BODY=stdout_body, STDERR_BODY=stderr_body, DELAY=str(delay))
+    result = subprocess.run(["sh", "-c", command], env=env, capture_output=True, timeout=10, start_new_session=True)
+    # Keep carriage returns. text=True would turn the in-place clock into extra lines.
+    result.stdout = result.stdout.decode()
+    result.stderr = result.stderr.decode()
     return result, (tmp_path / "argv").read_text().splitlines()
 
 
@@ -82,6 +98,197 @@ def test_posix_changed_preview_never_third_call(tmp_path):
     result, args = run_posix(tmp_path, second=2)
     assert result.returncode == 2
     assert args.count("apply") == 2
+
+
+def elapsed_seconds(text):
+    return [int(minutes) * 60 + int(seconds) for minutes, seconds in re.findall(r"\r  elapsed ([0-9]+):([0-9]{2})", text)]
+
+
+def test_posix_success_prompts_for_tui(tmp_path):
+    binary = "/opt/mihari/bin/mihari"
+    result, args = run_posix(tmp_path, error="", first=0, stdout_body='{"schema":"mihari.install-result/v1"}', path_binary=binary)
+    assert result.returncode == 0, result.stderr
+    assert re.search(r"Applying installation\n(?:\r  elapsed [0-9]+:[0-9]{2})+\n", result.stdout)
+    assert elapsed_seconds(result.stdout)
+    assert "Installation complete." in result.stdout
+    assert "Run mihari to open the TUI." in result.stdout
+    assert binary not in result.stdout
+    assert "mihari.install-result" not in result.stdout
+    assert args.count("apply") == 1
+
+
+def test_posix_apply_elapsed_advances_while_helper_runs(tmp_path):
+    result, args = run_posix(tmp_path, error="", first=0, stdout_body='{"schema":"mihari.install-result/v1"}', delay=2)
+    assert result.returncode == 0, result.stderr
+    assert "Applying installation" in result.stdout
+    assert max(elapsed_seconds(result.stdout)) >= 1
+    assert result.stdout.index("Applying installation") < result.stdout.index("Installation complete.")
+    assert args.count("apply") == 1
+
+
+@pytest.mark.parametrize(("bootstrap_mode", "label"), [("online", "Step 3/3 Applying installation"), ("offline", "Step 2/2 Applying installation")])
+def test_posix_bundle_apply_step_numbers(tmp_path, bootstrap_mode, label):
+    result, _args = run_posix(tmp_path, error="", first=0, stdout_body='{"schema":"mihari.install-result/v1"}', bundle="/bundle.tar.gz", bootstrap_mode=bootstrap_mode)
+    assert result.returncode == 0, result.stderr
+    assert label in result.stdout
+    assert elapsed_seconds(result.stdout)
+
+
+def test_posix_confirmed_replacement_prompts_for_tui(tmp_path):
+    result, args = run_posix(tmp_path, second=0, stdout_body='{"schema":"mihari.install-result/v1"}')
+    assert result.returncode == 0, result.stderr
+    assert "Installation complete." in result.stdout
+    assert "Run mihari to open the TUI." in result.stdout
+    assert "mihari.install-result" not in result.stdout
+    assert args.count("apply") == 2
+
+
+def test_posix_explicit_yes_prints_compatibility_warning(tmp_path):
+    warning = "Older Mihari versions may fail to load current data."
+    body = json.dumps({
+        "warnings": [{"message": warning}],
+        "schema": "mihari.install-result/v1",
+        "changed": True,
+        "service_status": "running",
+        "transaction_id": "ab" * 16,
+        "source_retained": True,
+    }, separators=(",", ":"))
+    result, args = run_posix(tmp_path, error="", explicit=True, first=0, stdout_body=body)
+    assert result.returncode == 0, result.stderr
+    assert f"Warning: {warning}" in result.stderr
+    assert "Installation complete." in result.stdout
+    assert "Run mihari to open the TUI." in result.stdout
+    assert "mihari.install-result" not in result.stdout + result.stderr
+    assert args.count("apply") == 1
+
+
+def test_posix_terminal_escape_warning_uses_fallback(tmp_path):
+    body = json.dumps({
+        "warnings": [{"message": "token\x1b[31mred"}],
+        "schema": "mihari.install-result/v1",
+    }, separators=(",", ":"))
+    result, _args = run_posix(tmp_path, error="", explicit=True, first=0, stdout_body=body)
+    assert result.returncode == 0, result.stderr
+    assert "Warning: a compatibility warning could not be displayed." in result.stderr
+    assert "token" not in result.stderr
+    assert "\x1b" not in result.stderr
+    assert "Installation complete." in result.stdout
+    assert "Run mihari to open the TUI." in result.stdout
+    assert "mihari.install-result" not in result.stdout + result.stderr
+
+
+def test_posix_warnings_omitted_prints_count(tmp_path):
+    warning = "Older Mihari versions may fail to load current data."
+    body = json.dumps({
+        "warnings": [{"message": warning}],
+        "warnings_omitted": 2,
+        "schema": "mihari.install-result/v1",
+    }, separators=(",", ":"))
+    result, _args = run_posix(tmp_path, error="", explicit=True, first=0, stdout_body=body)
+    assert result.returncode == 0, result.stderr
+    assert f"Warning: {warning}" in result.stderr
+    assert "Warning: 2 additional warnings exceeded the collection limit." in result.stderr
+    assert "Installation complete." in result.stdout
+    assert "Run mihari to open the TUI." in result.stdout
+    assert "mihari.install-result" not in result.stdout + result.stderr
+
+
+def test_posix_retry_failure_prints_error_json(tmp_path):
+    raw = json.dumps({"schema": "mihari.error/v1", "error": {"code": "invalid_state", "message": "retry failed"}}, separators=(",", ":"))
+    result, args = run_posix(tmp_path, second=9, stderr_body=raw)
+    assert result.returncode == 9, result.stderr
+    assert "Installation failed." in result.stderr
+    assert raw in result.stderr
+    assert "Installation complete." not in result.stdout + result.stderr
+    assert args.count("apply") == 2
+
+
+def test_posix_failure_prints_error_json(tmp_path):
+    payload = {"schema": "mihari.error/v1", "error": {"code": "invalid_state", "message": "validation pipe closed"}}
+    raw = json.dumps(payload, separators=(",", ":"))
+    result, args = run_posix(tmp_path, error=raw + "\n", first=1)
+    assert result.returncode == 1, result.stderr
+    assert "Installation failed." in result.stderr
+    assert raw in result.stderr
+    assert "Applying installation" in result.stdout
+    assert "Installation complete." not in result.stdout + result.stderr
+    assert not re.search(r"\r  elapsed [0-9]+:[0-9]{2}\n", result.stdout)
+    assert args.count("apply") == 1
+
+
+def installer_signal_block():
+    source = (INSTALL / "root-apply.sh.in").read_text()
+    marker = "stop_background() {"
+    if marker not in source:
+        return "trap 'exit 1' HUP INT TERM\n"
+    start = source.index(marker)
+    trap = "trap 'stop_background; exit 1' HUP INT TERM\n"
+    end = source.index(trap, start)
+    return source[start:end] + trap
+
+
+def test_term_to_installer_shell_stops_background_child(tmp_path):
+    if os.name != "posix":
+        pytest.skip("Signal delivery to a background installer child requires POSIX")
+    child_pid = tmp_path / "child"
+    command = installer_signal_block() + "\n" + "\n".join([
+        "sleep 30 &",
+        "apply_pid=$!",
+        "printf '%s\\n' \"$apply_pid\" > " + shlex.quote(str(child_pid)),
+        "while kill -0 \"$apply_pid\" 2>/dev/null; do sleep 0.1; done",
+    ])
+    proc = subprocess.Popen(["sh", "-c", command], start_new_session=True)
+    pid = None
+    for _ in range(50):
+        if child_pid.exists() and child_pid.stat().st_size:
+            pid = int(child_pid.read_text().strip())
+            break
+        time.sleep(0.05)
+    assert pid, "background child did not start"
+    os.kill(proc.pid, signal.SIGTERM)
+    proc.wait(timeout=3)
+    with pytest.raises(OSError):
+        os.kill(pid, 0)
+
+
+def test_windows_install_scripts_announce_steps():
+    program = (INSTALL / "install.ps1").read_text(encoding="utf-8")
+    remote = (INSTALL / "install-aio-remote.ps1").read_text(encoding="utf-8")
+    local = (INSTALL / "install-aio.ps1").read_text(encoding="utf-8")
+    program_body = program.split("$changed = $false", 1)[1]
+    assert program_body.index("Downloading release") < program_body.index("Invoke-WebRequest -Uri $url -OutFile $tmp")
+    assert program_body.index("Invoke-WebRequest -Uri $url -OutFile $tmp") < program_body.index("Verifying release")
+    assert program_body.index("Verifying release") < program_body.index("Confirm-Replacement")
+    assert program_body.index("Confirm-Replacement") < program_body.index("Installing mihari to")
+    assert program_body.index("Installing mihari to") < program_body.index("Action='Swap'")
+    assert program_body.index("Registering the Mihari service") < program_body.index("Action='Service'")
+    assert program_body.index("Starting the Mihari service") < program_body.index("service start")
+    assert "  elapsed {0}:{1:d2}" in program
+
+    remote_body = remote.split("Downloading $resolvedUrl", 1)[1]
+    assert "SHA-256 verification passed." not in remote
+    assert remote_body.index("Verifying archive") < remote_body.index("Get-FileHash")
+    assert remote_body.index("Extracting archive") < remote_body.index("Expand-Archive")
+    assert "  elapsed {0}:{1:d2}" in remote
+
+    local_body = local.split("Confirm-Replacement", 1)[1]
+    assert local_body.index("Installing mihari to") < local_body.index("Action='Stop'")
+    assert local_body.index("Installing the bundled mihomo core") < local_body.index("Copy-Item -LiteralPath $mihomoSrc")
+    assert local_body.index("Preserving the installed mihomo core") < local_body.index("Installing GeoIP data")
+    assert local_body.index("Installing GeoIP data") < local_body.index("geoip\\GeoLite2-Country.mmdb') -Destination")
+    assert local_body.index("Registering the Mihari service") < local_body.index("Action='Service'")
+    assert local_body.index("Starting the Mihari service") < local_body.index("service start")
+    assert "  elapsed {0}:{1:d2}" in local
+
+
+def test_aio_install_scripts_announce_steps_before_apply():
+    remote = (INSTALL / "install-aio-remote.sh").read_text(encoding="utf-8")
+    local = (INSTALL / "install-aio.sh").read_text(encoding="utf-8")
+    remote_tail = remote.split("# END ROOT APPLY", 1)[1]
+    local_tail = local.split("# END ROOT APPLY", 1)[1]
+    assert remote_tail.index("Step 1/3 Verifying archive") < remote_tail.index("Step 2/3 Extracting installer")
+    assert remote_tail.index("Step 2/3 Extracting installer") < remote_tail.index("root_apply ")
+    assert local_tail.index("Step 1/2 Extracting installer") < local_tail.index("root_apply ")
 
 
 def test_posix_explicit_yes_first_call_only(tmp_path):
@@ -213,6 +420,31 @@ def test_windows_capabilities_does_not_touch_bundle(tmp_path):
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {"schema": "mihari.install-script/v1", "capabilities": ["replacement_confirmation_v1"]}
     assert not missing.exists()
+
+
+@pytest.mark.parametrize("existing_core", [False, True])
+def test_windows_aio_preserves_existing_core_and_channel(tmp_path, existing_core):
+    bundle = tmp_path / "bundle"
+    for name in ["mihari.exe", "data/bin/mihomo.exe", "data/geoip/GeoLite2-Country.mmdb", "data/geoip/GeoLite2-ASN.mmdb"]:
+        file = bundle / name
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(b"bundled")
+    (bundle / "data/bin/core-channel").write_bytes(b"stable\n")
+    data = tmp_path / "data"
+    (data / "bin").mkdir(parents=True)
+    (data / "mihari.yaml").write_bytes(b"original settings")
+    if existing_core:
+        (data / "bin/mihomo.exe").write_bytes(b"existing custom core")
+        (data / "bin/core-channel").write_bytes(b"alpha\n")
+    env = dict(os.environ, MIHARI_INSTALL_TEST_MODE="1", MIHARI_YES="1",
+               MIHARI_BIN=str(tmp_path / "installed"), MIHARI_DATA=str(data),
+               USERPROFILE=str(tmp_path / "profile"), LOCALAPPDATA=str(tmp_path / "local"))
+    result = run_ps(tmp_path, "& " + ps_literal(INSTALL / "install-aio.ps1") +
+                    " -BundleDir " + ps_literal(bundle), env)
+    assert result.returncode == 0, result.stderr
+    assert (data / "bin/mihomo.exe").read_bytes() == (b"existing custom core" if existing_core else b"bundled")
+    assert (data / "bin/core-channel").read_bytes() == (b"alpha\n" if existing_core else b"stable\n")
+    assert (data / "mihari.yaml").read_bytes() == b"original settings"
 
 
 @pytest.mark.parametrize("explicit,expected", [(False, False), (True, True)])

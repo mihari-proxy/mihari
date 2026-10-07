@@ -16,7 +16,7 @@ func TestNativeBinaryStageCleanup_CrashAndIdentityMismatch(t *testing.T) {
 	for _, scenario := range []string{"verified", "published", "changed-bytes", "changed-inode", "missing-marker", "foreign-entry", "changed-stage"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx, root := nativeInstallFixture(t)
-			for _, name := range []string{"mihari", "update.lock"} {
+			for _, name := range []string{"mihari", "update.lock", "install-transaction.json"} {
 				if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0600); err != nil {
 					t.Fatal(err)
 				}
@@ -90,16 +90,81 @@ func TestNativeBinaryStageCleanup_CrashAndIdentityMismatch(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err = os.Stat(path)
-			wantGone := scenario == "verified" || scenario == "published"
+			wantGone := scenario == "published"
 			if errors.Is(err, os.ErrNotExist) != wantGone {
 				t.Fatalf("stage removed=%v, want %v (err=%v)", errors.Is(err, os.ErrNotExist), wantGone, err)
 			}
-			for _, name := range []string{"mihari", "update.lock"} {
+			for _, name := range []string{"mihari", "update.lock", "install-transaction.json"} {
 				raw, err := os.ReadFile(filepath.Join(root, name))
 				if err != nil || string(raw) != name {
 					t.Fatalf("unrelated %s changed: %q, %v", name, raw, err)
 				}
 			}
 		})
+	}
+}
+
+func TestNativeBinaryStageCleanup_PublishedCloseDefersUntilStartup(t *testing.T) {
+	ctx, root := nativeInstallFixture(t)
+	parent, err := platform.OpenTrustedRoot(ctx, root, platform.RootPolicy{Owner: 0, Mode: 0700})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := ".mihari-update-" + testTxnID
+	stage, err := parent.OpenDir(ctx, name, platform.RootPolicy{Owner: 0, Mode: 0700, AllowCreate: true})
+	if err != nil {
+		_ = parent.Close()
+		t.Fatal(err)
+	}
+	target := &unixBinaryTarget{parent: parent, stage: stage, stageName: name, published: true}
+	t.Cleanup(func() {
+		if err := target.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := stage.WriteFile(ctx, "candidate", []byte("candidate"), 0755, nil); err != nil {
+		t.Fatal(err)
+	}
+	f, id, err := stage.OpenFile(ctx, "candidate", 0755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, stageID, _, _, err := stage.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(binaryStageMarker{Schema: binaryStageSchema, StageIdentity: stageID, CandidateIdentity: id.Key(), SHA256: sha256Hex("candidate")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stage.WriteFile(ctx, "identity.json", raw, 0600, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := stage.RemoveFile(ctx, "candidate", 0755, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, name, "identity.json")); err != nil {
+		t.Fatalf("successful close discarded startup authority: %v", err)
+	}
+	parent, err = platform.OpenTrustedRoot(ctx, root, platform.RootPolicy{Owner: 0, Mode: 0700})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := parent.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := cleanupUnixBinaryStages(ctx, parent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, name)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("completed stage retained: %v", err)
 	}
 }

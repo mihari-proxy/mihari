@@ -26,6 +26,19 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 		response string
 		invoke   func(context.Context, *Client) error
 	}{
+		{"egress", http.MethodGet, "/v1/egress", "", `{"schema":"mihari/v1","selection":{"mode":"automatic"},"state":"saved","interfaces":[],"revision":1}`,
+			func(ctx context.Context, client *Client) error {
+				result, err := client.Egress(ctx)
+				if err == nil && result.Selection.Mode != "automatic" {
+					return errors.New("invalid egress selection")
+				}
+				return err
+			}},
+		{"egress update", http.MethodPatch, "/v1/egress", `{"operation_id":"op","mode":"manual","interface_name":"VPN 日本"}`, `{"schema":"mihari/v1","selection":{"mode":"manual","interface_name":"VPN 日本"},"state":"saved","interfaces":[],"revision":2}`,
+			func(ctx context.Context, client *Client) error {
+				_, err := client.UpdateEgress(ctx, protocol.EgressUpdateRequest{OperationID: "op", Mode: "manual", InterfaceName: "VPN 日本"})
+				return err
+			}},
 		{"routing", http.MethodGet, "/v1/routing", "", `{"schema":"mihari/v1","desired_mode":"rule","state":"pending","revision":1}`,
 			func(ctx context.Context, client *Client) error {
 				result, err := client.Routing(ctx)
@@ -60,6 +73,12 @@ func TestRuntimeClientFiniteEndpoints(t *testing.T) {
 			func(ctx context.Context, client *Client) error {
 				revision := uint64(1)
 				_, err := client.InstallCore(ctx, protocol.MutationRequest{OperationID: "op", IfRevision: &revision})
+				return err
+			}},
+		{"reinstall", http.MethodPost, "/v1/core/reinstall", `{"operation_id":"op","if_revision":1}`, `{"schema":"mihari/v1","version":"v1","updated":true,"revision":2}`,
+			func(ctx context.Context, client *Client) error {
+				revision := uint64(1)
+				_, err := client.ReinstallCore(ctx, protocol.MutationRequest{OperationID: "op", IfRevision: &revision})
 				return err
 			}},
 		{"restart", http.MethodPost, "/v1/core/restart", `{"operation_id":"op"}`, `{"schema":"mihari/v1","operation_id":"op"}`,

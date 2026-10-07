@@ -1017,6 +1017,31 @@ func TestLoadOrCreateWithOps_SharesDeadlineAcrossInitialReadAndCoordination(t *t
 	}
 }
 
+func TestParseCoreChannelSidecar(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		channel string
+		stamp   string
+		ok      bool
+	}{
+		{name: "stable stamp", body: "stable\nstable-v1.19.30\n", channel: "stable", stamp: "stable-v1.19.30", ok: true},
+		{name: "alpha stamp", body: "alpha\nalpha-e183c58\n", channel: "alpha", stamp: "alpha-e183c58", ok: true},
+		{name: "crlf", body: "stable\r\nstable-v1.19.30\r\n", channel: "stable", stamp: "stable-v1.19.30", ok: true},
+		{name: "channel only", body: "stable\n", ok: false},
+		{name: "blank stamp", body: "stable\n \n", ok: false},
+		{name: "dev channel", body: "dev\ndev-1\n", ok: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			channel, stamp, ok := ParseCoreChannelSidecar([]byte(tt.body))
+			if ok != tt.ok || channel != tt.channel || stamp != tt.stamp {
+				t.Fatalf("got channel=%q stamp=%q ok=%v", channel, stamp, ok)
+			}
+		})
+	}
+}
+
 func TestApplyCoreChannelSidecar(t *testing.T) {
 	write := func(t *testing.T, body string) string {
 		t.Helper()

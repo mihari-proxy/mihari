@@ -6,6 +6,8 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
+出口网卡覆盖可在 **System → Network → Outbound Interface Override** 中选择，或使用 `mihari egress list|status|set <网卡名>|auto`。System 主行以亮黄色显示当前选择。弹窗以 ↑/↓ 浏览滚动列表，PgUp/PgDn 查看详情，回车使用当前行。界面上的 No-Override 表示不写入 Mihari 覆盖。失效的已保存网卡仍会显示，不自动回退。详细语义见[出口网卡](docs/commands.md#egress--出口网卡)。
+
 [![license](https://img.shields.io/github/license/mihari-proxy/mihari)](LICENSE)
 [![ci](https://img.shields.io/github/actions/workflow/status/mihari-proxy/mihari/ci.yml?branch=main)](https://github.com/mihari-proxy/mihari/actions)
 [![go version](https://img.shields.io/github/go-mod/go-version/mihari-proxy/mihari)](go.mod)
@@ -13,7 +15,7 @@
 
 [官网](https://mihari-proxy.github.io/mihari/zh/) · [Releases](https://github.com/mihari-proxy/mihari/releases)
 
-Mihari 是面向 Windows、Linux 和 macOS 的跨平台 [mihomo](https://github.com/MetaCubeX/mihomo)（Clash Meta）管理器。它提供 CLI、终端界面（TUI）、订阅管理、系统代理、TUN 模式、mihomo 核心管理与 Web 面板。
+Mihari 是面向 Windows 和 Linux 的跨平台 [mihomo](https://github.com/MetaCubeX/mihomo)（Clash Meta）管理器。它提供 CLI、终端界面（TUI）、订阅管理、系统代理、TUN 模式、mihomo 核心管理与 Web 面板。macOS 系统暂不支持；现有 Unix 安装通道与 darwin 发行二进制仍会保留。
 
 它是 Clash Party、Sparkle 等图形化 Mihomo / Clash 客户端的开源终端替代，CLI、TUI 与浏览器面板共享同一个守护进程控制面。
 
@@ -28,43 +30,17 @@ Overview 的 Core 卡片会缩短流量趋势图，为速度值及其单位保�
 具体功能:
 
 - **订阅管理**:添加、刷新、切换订阅配置,支持离线切换、独立刷新间隔与按订阅的拉取代理
-- **核心管理**:安装、更新、重启 mihomo 核心
+- **核心管理**:安装、更新、重装和重启 mihomo 核心。在线更新使用官方 stable/alpha 最新版，本地已有核心不要求官方来源凭据；更新 Mihari 保留核心与通道。核心更新中断后阻止不确定启动，可通过 **System → Reinstall core** 或 `mihari core reinstall` 按原通道重装最新版，保留订阅和配置。
 - **服务监控**:以 OS 服务方式在后台运行,崩溃自动重启
 - **系统代理 / TUN**:开启系统代理或 TUN;若其他产品已占用系统代理或存在其他 TUN/mihomo 实例,需确认或传入 `--force`
 - **Web 面板**:一键安装并打开 zashboard / MetaCubeXD 面板
 - **连接与规则**:实时查看连接、代理组与规则,本地 GeoIP 解析
 
-## 特性
-
-- **一个守护进程,三种界面**:CLI、TUI 和浏览器面板经本地命名管道 / Unix 域套接字连接同一守护进程控制面,控制 API 从不绑定 TCP 端口。
-- **OS 服务托管**:可安装为 Windows 服务 / systemd 单元 / launchd 代理,带崩溃退避重启。
-- **订阅配置**:每个订阅独立缓存、离线切换、按配置独立的刷新间隔、按订阅的拉取代理(`direct` / `proxy` / `auto`;`auto` 在可回退的代理网络错误后尝试直连),以及经过校验的原子化配置生成与回滚。
-- **Web 面板**:一键安装 / 更新 / 激活 / 回滚 zashboard 与 MetaCubeXD,置于带独立访问凭据的回环 Web 网关之后。
-- **系统代理与 TUN**:跨平台的系统代理控制与托管 TUN,均由守护进程持有并持久化。若其他产品已持有系统代理(`system_proxy_conflict`),或检测到其他 TUN / mihomo 实例(`tun_conflict`),enable 会失败,除非传入 `--force`(TUI 会要求确认)。
-- **端口配置**:System 页面可修改 Mixed / Controller / Web 端口;占用显示 `Owned` 或 `Occupied by name (pid)`。应用后通常需要重启守护进程。
-- **TUI 内更新 Mihari**：System 页面进入时检查 GitHub Releases，显示 `当前版本 · 最新版本 available` 或 `当前版本 · Up to date`；以管理员/root 权限启动时可替换二进制、同步并重启已安装的系统服务副本、验证 daemon 版本，并自动进入更新后的 TUI。更新确认会将安全的非标准已安装构建标识显示为 `Unknown[标识]`，兼容性仍为未知；长内容可用 ↑/↓ 或 PgUp/PgDn 滚动，默认选择 Cancel。
-- **内核通道**:System 页面可在 mihomo 的 `stable` / `alpha` 通道之间切换。
-- **自动版本检查**：进入 System 时检查 core 当前通道，进入 Web GUI 时逐项检查所有支持的面板，包括尚未安装的面板。检查显示 `Checking…`、最新版本/构建、`Up to date` 或 `Check failed`；成功结果在本次 TUI 会话内缓存 5 分钟，失败时重新进入页面可重试。core 安装/通道切换，以及面板安装/更新/回滚/重装/卸载成功后，立即刷新对应版本检查。检查仅通过 daemon 查询元数据，安装仍需确认。
-
-Windows 更新可使用同一用户的非管理员令牌查询用户目录中的安装版本，包括默认的 AppData 安装位置。若降权 UAC 令牌只能识别身份，Mihari 会在核验同一用户、同一登录会话和非管理员权限后，使用桌面 Shell 的令牌。目录权限不安全或无法取得通过核验的令牌时，版本仍显示 unknown；版本查询不会以管理员权限执行用户可写的文件。
-
-单个无 CGO 的静态二进制(< 15 MB)即包含全部功能,内置 GitHub Releases 自动更新与本地 GeoIP 解析。
-
-代理节点测速会读取 provider 节点，并在需要时调用 mihomo 的 provider 专用接口。同名节点在每个组内合并显示、共享测速结果：优先全局普通节点，否则按 provider 名排序选择首个匹配项。TUI 启动后的首次成功检查会对重名弹窗提示，测速来源可能与组实际选中的来源不同。provider 读取对瞬时故障最多尝试三次；持续失败时保留旧列表，显示 **Stale data** 和关键原因，恢复后自动清除提示。CLI/TUI 与 daemon 应配套升级。
-
-TUI 节点测速进行中时，卡片在协议名称旁仅显示盲文加载动画。
-
-TUI 订阅表格的 Name 和 Traffic 列按内容分配宽度，分别最多占 32 和 24 个终端字符格；多余空间留在右侧，窄屏优先隐藏次要字段。
-
-订阅下载 Mode 将 `auto` 显示为 **PROXY w Fallback to DIRECT**。回退覆盖主订阅 YAML 的连接超时和成功响应正文读取超时等可重试网络错误；HTTP 错误、无效文档不触发回退。每次代理/直连尝试保留 30 秒预算，daemon 的 Add/Refresh 整次执行上限为 120 秒，CLI/TUI 每条等待最多 180 秒以容纳有界回滚和响应。更短的调用方 deadline 与主动取消仍优先，批量刷新逐条计时。窄列表必要时整列隐藏 Mode，进入详情可查看完整值。Provider 下载策略及 Proxies 页 Routing Mode 独立于此设置。
-
-mihomo HTTP 失败的原始报错与上游状态会写入诊断日志，范围包括 gateway 和 WebSocket 握手。日志、导出及本地 CLI/TUI 错误汇报均不脱敏，保留错误自带的凭据、URL、路径与配置片段。CLI 分段展示概要、错误分类和原始详情，JSON 增加可选诊断和 warnings，业务退出码保持不变。TUI 所有页面均可按 F2 打开统一诊断历史，滚动查看详情并复制原文。终端控制字符仅在显示时转义。
-
-F2 每次发生保留独立记录，以级别颜色和选中高亮帮助浏览。宽终端左右显示列表和详情，窄终端上下排列。Tab 切换窗格，方向键、PgUp/PgDn、Home/End 导航，c 复制原始详情，Esc 返回；新记录不会抢走当前选择。Web gateway 允许来自 mihomo 的单条消息最大 1 MiB，与 mihomo 流客户端一致；浏览器发送方向仍限制为 32 KiB。
-
 ## 快速开始
 
 **安装**
+
+macOS 系统暂不支持。下方 Unix 安装命令仍包含保留的 darwin 通道。
 
 **main release 通道**（GitHub）
 
@@ -144,6 +120,46 @@ mihari sub use <ID>
 mihari sysproxy enable
 ```
 
+## 特性
+
+- **一个守护进程,三种界面**:CLI、TUI 和浏览器面板经本地命名管道 / Unix 域套接字连接同一守护进程控制面,控制 API 从不绑定 TCP 端口。
+- **OS 服务托管**:可安装为 Windows 服务 / systemd 单元 / launchd 代理,带崩溃退避重启。
+- **订阅配置**:每个订阅独立缓存、离线切换、按配置独立的刷新间隔、按订阅的拉取代理(`direct` / `proxy` / `auto`;`auto` 在可回退的代理网络错误后尝试直连),以及经过校验的原子化配置生成与回滚。
+- **Web 面板**:一键安装 / 更新 / 激活 / 回滚 zashboard 与 MetaCubeXD,置于带独立访问凭据的回环 Web 网关之后。
+- **系统代理与 TUN**:跨平台的系统代理控制与托管 TUN,均由守护进程持有并持久化。若其他产品已持有系统代理(`system_proxy_conflict`),或检测到其他 TUN / mihomo 实例(`tun_conflict`),enable 会失败,除非传入 `--force`(TUI 会要求确认)。
+- **端口配置**:System 页面可修改 Mixed / Controller / Web 端口;占用显示 `Owned` 或 `Occupied by name (pid)`。启动期间尚未收到核心身份时，已检测到监听进程的端口显示中性的 `Checking owner…`。重启后，归属判断随守护进程/核心 PID 更新，无需重新进入页面。应用后通常需要重启守护进程。
+- **TUI 内更新 Mihari**：导航栏选中 System、按 Enter 进入之前检查 GitHub Releases，显示 `当前版本 -> 最新版本 available` 或 `当前版本 · Up to date`；以管理员/root 权限启动时可替换二进制、同步并重启已安装的系统服务副本、验证 daemon 版本，并自动进入更新后的 TUI。更新确认会将安全的非标准已安装构建标识显示为 `Unknown[标识]`，兼容性仍为未知；长内容可用 ↑/↓ 或 PgUp/PgDn 滚动，默认选择 Cancel。
+- **内核通道**:System 页面可在 mihomo 的 `stable` / `alpha` 通道之间切换。
+- **自动版本检查**：导航栏选中 System、按 Enter 进入之前，每次都会检查 Mihari 和 core 当前通道。按 Enter 进入页面不会再次发起这两项检查，也不会取消已经在进行的检查。进入 Web GUI 时逐项检查所有支持的面板，包括尚未安装的面板。Core 与 Mihari 检查会显示带动画的 `Checking`，随后显示 `当前版本 -> 最新版本 available`、`Up to date` 或 `Check failed`；这些 System 检查不会阻断其他 System 操作。Web GUI 面板检查进行时，Latest 使用同一个 badge。面板的成功结果在本次 TUI 会话内缓存 5 分钟。Mihari 或 core 检查失败时，下次用导航栏再次选中 System 会重试。core 安装/通道切换，以及面板安装/更新/回滚/重装/卸载成功后，立即刷新对应版本检查。检查只获取元数据，安装仍需确认。
+
+Windows 更新可使用同一用户的非管理员令牌查询用户目录中的安装版本，包括默认的 AppData 安装位置。若降权 UAC 令牌只能识别身份，Mihari 会在核验同一用户、同一登录会话和非管理员权限后，使用桌面 Shell 的令牌。目录权限不安全或无法取得通过核验的令牌时，版本仍显示 unknown；版本查询不会以管理员权限执行用户可写的文件。
+
+单个无 CGO 的静态二进制(< 15 MB)即包含全部功能,内置 GitHub Releases 自动更新与本地 GeoIP 解析。
+
+代理节点测速会读取 provider 节点，并在需要时调用 mihomo 的 provider 专用接口。同名节点在每个组内合并显示、共享测速结果：优先全局普通节点，否则按 provider 名排序选择首个匹配项。TUI 启动后的首次成功检查会对重名弹窗提示，测速来源可能与组实际选中的来源不同。provider 读取对瞬时故障最多尝试三次；持续失败时保留旧列表，显示 **Stale data** 和关键原因，恢复后自动清除提示。CLI/TUI 与 daemon 应配套升级。
+
+TUI 节点测速进行中时，卡片在协议名称旁仅显示盲文加载动画。
+
+**Proxies** 支持 **PgUp/PgDn** 在分组标题和已展开节点卡片之间按约一屏快速移动，保持焦点可见，并尽量保留当前列。翻页距离随窗口尺寸和固定 Basic 区域调整；焦点在 Basic 控件时，PgDn 也可进入分组列表。翻页不改变代理选择或分组展开状态。
+
+每次进入 **Proxies** 都开始新一轮自动测速。展开后的节点卡片内容首次进入视口时触发；视口内组头的当前选择和顶部 **Basic → GLOBAL** 也会沿选择关系找到最终节点并测速。同名项每轮只自动测一次，滚出视口后已排队任务继续执行；离页或关闭自动测速时取消自动任务。重新进入、重新开启、切换订阅或核心重启后开始新一轮。新测速状态和结果直接覆盖原显示；失败本轮不自动重试，可手动测速或下次进入再测。GLOBAL 与组头当前选择旁的额外延迟复用节点卡片的结果和配色。
+
+任一主页面按 **F4** 打开统一 **Page Settings**，也可访问 Proxies 的 **Basic** 第一行第二列入口。弹窗左侧是 Section 目录，右侧保留完整、可滚动的配置列表；打开时全部 Section 展开，并聚焦来源页面。展开状态每次打开都恢复为全部展开。左侧 Enter 跳转并展开右侧对应标题，不改变其他 Section 的折叠状态；右侧光标跨组移动时，左侧高亮同步跟随。其他页面暂显示 **No settings available yet**。Proxies 提供默认开启的 **Extra latency display** 和 **Automatic latency test**，以及 **Test concurrency**（测速并发数，范围 **1–50**，默认 **5**）。选中并发数后用 ←/→ 调整；每个 TUI 的自动与手动测速共用此上限。保存后调高会立即补充排队任务，调低则让已开始的请求完成，再按新上限调度。这些设置由 daemon 保存，同一 daemon 的 TUI 客户端共享，重启 TUI 后保留，不覆盖 Conns 列设置。
+
+↑/↓ 在列表内移动，Enter/Space 展开标题或切换开关；Tab/Shift+Tab 在左侧目录、右侧配置区、Cancel、Save 之间切换。标题下方显示 `Tab to switch: Sections · settings · Cancel · Save`。这四个区域按 **]** 展开全部 Section，按 **[** 折叠全部 Section，底栏显示 `] Expand all` 与 `[ Collapse all`；折叠不改变草稿。底部按钮固定可见。任意位置按 **Ctrl+S** 或 Save 开始保存，弹窗保持打开：先播放橙色 **Saving** 动画 badge，结束后显示绿色 **Done** badge，或红色 **Failed** badge 加错误详情。Esc 或 Cancel 才关闭弹窗。没有改动时不会请求 daemon，Ctrl+S 同样留在弹窗并显示 **Done**。保存成功后生效。TUI 与 daemon 应配套升级；旧版不能读取包含非默认 Proxies 设置的偏好文件，旧版 daemon 也不能读取非默认测速并发数，降级前应先恢复为 5；两个开关和并发数都恢复默认后会移除该可选块。
+
+TUI 订阅表格的 Name 和 Traffic 列按内容分配宽度，分别最多占 40 和 24 个终端字符格；多余空间留在右侧，窄屏优先隐藏次要字段。
+
+订阅下载 Mode 将 `auto` 显示为 **PROXY w Fallback to DIRECT**。回退覆盖主订阅 YAML 的连接超时和成功响应正文读取超时等可重试网络错误；HTTP 错误、无效文档不触发回退。每次代理/直连尝试保留 30 秒预算，daemon 的 Add/Refresh 整次执行上限为 120 秒，CLI/TUI 每条等待最多 180 秒以容纳有界回滚和响应。更短的调用方 deadline 与主动取消仍优先，批量刷新逐条计时。窄列表必要时整列隐藏 Mode，进入详情可查看完整值。Provider 下载策略及 Proxies 页 Routing Mode 独立于此设置。
+
+**System → Network** 在 daemon 启动时应用保存的系统代理或 TUN 状态期间显示橙色 **Applying…** 动画 badge，开启与关闭目标均适用。该次启动应用完成、失败或取消后停止动画。页面导航和手动操作保持可用；此标记不代表自动修复状态漂移。
+
+mihomo HTTP 失败的原始报错与上游状态会写入诊断日志，范围包括 gateway 和 WebSocket 握手。日志、导出及本地 CLI/TUI 错误汇报均不脱敏，保留错误自带的凭据、URL、路径与配置片段。CLI 分段展示概要、错误分类和原始详情，JSON 增加可选诊断和 warnings，业务退出码保持不变。TUI 所有页面均可按 F2 打开统一诊断历史，滚动查看详情并复制原文。终端控制字符仅在显示时转义。
+
+F2 每次发生保留独立记录，以级别颜色和选中高亮帮助浏览。宽终端左右显示列表和详情，窄终端上下排列。Tab 切换窗格，方向键、PgUp/PgDn、Home/End 导航，c 复制原始详情，Esc 返回；新记录不会抢走当前选择。Web gateway 允许来自 mihomo 的单条消息最大 1 MiB，与 mihomo 流客户端一致；浏览器发送方向仍限制为 32 KiB。
+
+更新后保留已退役的 Mihari/mihomo 二进制及已完成事务残留，留到后续启动尝试清理。daemon 清理其管理的核心文件；daemon 与 TUI 启动还会尝试清理当前 Mihari 程序旁的残留。占用或其他清理失败保留到下次启动重试，并在 **F2** 显示 warning，不影响更新或启动成功。同次运行可连续更新核心。普通 CLI 查询不触发删除；中断事务的恢复材料和用户备份会保留。
+
 ## 常用命令
 
 | 场景 | 命令 |
@@ -163,23 +179,25 @@ mihari sysproxy enable
 
 **Connections** 为 Chain 分配更多宽度，窄窗口中优先于 Source、Destination、Rule 保留。Traffic 使用固定宽度的上下行紧凑速率，`K/M/G/T/P/E` 按 1024 进制表示字节每秒；连接详情仍显示完整速率与代理链。**Rules** 用居中弹窗展示规则或 provider 的完整详情，↑/↓ 或 PgUp/PgDn 滚动，Enter/Esc 关闭后返回原行。
 
-**Conns、Rules、Logs** 支持 Ctrl+F 从侧栏或页面内容区直接聚焦检索框，保留已有文字并将光标移到末尾；页面内容区仍支持 `/`。弹窗打开时不抢走焦点。Conns 在当前 TUI 会话中保留最新 **5000 条已关闭连接记录**，切页保留，重连或退出后清空；活动连接不占此配额。
+**Conns、Rules、Logs** 支持 Ctrl+F 从侧栏或页面内容区直接聚焦检索框，保留已有文字并将光标移到末尾；页面内容区仍支持 `/`。弹窗打开时不抢走焦点。焦点位于列表行时，**PgUp/PgDn** 按当前窗口高度移动一页行数，在筛选结果的首尾停住；Rules 的 provider 列表同样支持。Logs 翻页后停止自动跟随，按 **G** 返回最新记录并恢复跟随。Conns 在当前 TUI 会话中保留最新 **5000 条已关闭连接记录**，切页保留，重连或退出后清空；活动连接不占此配额。
 
-**Logs** 中选中 **Level** 后按 Enter 打开多选小窗。↑/↓ 移动，Space 勾选 DEBUG、INFO、WARNING、ERROR；**Select all** 用于全选或清空。Enter 应用、Esc 放弃，至少勾选一个级别。连续选到 ERROR 的组合显示为 `DEBUG+`、`INFO+` 或 `WARNING+`，其他组合完整列出，例如 `DEBUG, WARNING`。这只是显示摘要，筛选按所选精确级别匹配，再与文字检索取交集。切页和重连保留选择，重启 TUI 恢复全选；全选时也保留未知级别记录。筛选不修改 System 日志设置或实时流订阅。
+**Logs** 中选中 **Level** 后按 Enter 打开多选小窗。↑/↓ 移动，Space 勾选 DEBUG、INFO、WARNING、ERROR；**Select all** 用于全选或清空。Enter 应用、Esc 放弃，至少勾选一个级别。连续选到 ERROR 的组合显示为 `DEBUG+`、`INFO+` 或 `WARNING+`，其他组合完整列出，例如 `DEBUG, WARNING`。这只是显示摘要，筛选按所选精确级别匹配，再与文字检索取交集。Enter 确认改动后异步保存，Level 旁显示 **Saving…**，不阻断导航和操作。保存失败保留当前筛选，显示 **Unsaved**，错误进入 F2；不重试、不在重连时补交，退出也不等待保存。新 TUI 恢复同一 daemon 最后成功保存的选择；已打开的窗口各自保留当前选择，切页和重连不覆盖。尚无已保存选择时默认全选；全选也保留未知级别记录。筛选不修改 System 日志设置或实时流订阅。TUI 与 daemon 须同步升级；旧版 daemon 无法读取含新增 `log_levels` 字段的偏好文件。
 
 连接详情采用单个居中页面，以 **Application → Routing → Outbound → Destination** 纵向展示处理链路，字段归入对应阶段。Routing 合并显示入站名称／类型／协议和 **Rule Matched**，并从外层代理组到出站逐级展开上报的选择链；Outbound 展示 **Remote** 及其 GeoIP，Destination 保留自己的目标地址及 GeoIP，选择树不代表完整网络中转拓扑。上传速率与累计量为绿色，下载为蓝色；拒绝出站以断线连接灰色的请求目标节点。长字段自动换行，深层选择树保留层级序号，面板最大 88 个终端字符列。↑/↓ 滚动，Enter/Esc 返回选中行。**Paused** 表示观测数据已冻结；已关闭连接显示最后观测速率与累计流量，**Closed observed** 是 TUI 发现连接消失的时间，不是内核报告的精确关闭时间。
 
-**Web GUI** 面板卡片宽屏并排、窄屏纵排。Tab/Shift+Tab 或 ←/→ 选择 Open/Install 或 Manage，Enter 执行，↑/↓ 切换面板。安装或重装期间，对应卡片显示橘色 Installing 状态 badge 和动态盲文动画，操作结束后清除；原有面板快捷键保留。Manage 包含更新、设为默认、重装、回滚及卸载，不可用项标明原因。黄色 **Ctrl+Shift+R** 刷新提示始终保留在卡片上方，网关保护说明移至 `?` 帮助。**System** 的 Network 分区移至 Ports Config 之后。
+**Web GUI** 面板卡片宽屏并排、窄屏纵排。Tab/Shift+Tab 或 ←/→ 选择 Open/Install 或 Manage，Enter 执行，↑/↓ 切换面板。顶部以三行对齐展示 Gateway、Default panel 和 Browser sessions。安装、重装或更新期间，橘色 Installing／Reinstalling／Updating 动画 badge 显示在 Manage 后（首次安装在 Install 后）；窄卡片中 badge 整体换到按钮下方，操作结束后清除。Update available 保留在 Latest 版本后，更新成功后刷新版本状态；原有面板快捷键保留。Manage 包含更新、设为默认、重装、回滚及卸载，不可用项标明原因。黄色 **Ctrl+Shift+R** 刷新提示始终保留在卡片上方，网关保护说明移至 `?` 帮助。**System** 的 Network 分区移至 Ports Config 之后。
 
-TUI **Proxies** 页顶部的 **Routing** 卡片包含 **Mode** 和 **GLOBAL**。**Mode** 按 Enter 打开 Rule / Global / Direct 选择弹窗，↑/↓ 选择、Enter 应用、Esc 取消；**GLOBAL** 入口展开 mihomo 返回的候选组，并自动滚动到整个 section 完整可见；超过一屏时从列表视口顶部展示，继续用方向键浏览候选。Mihari 全局保存模式、按订阅保存 GLOBAL 出口，支持面板发起的相同操作。默认使用 Rule，切换模式和出口保留已有连接。保存的出口消失时，有 DIRECT 候选则保存 DIRECT，否则保存 Rule；内核停止时保存的模式显示为 pending，待启动应用。
+TUI **Proxies** 页顶部的 **Basic** 卡片包含 **Mode**、**GLOBAL** 和 **Page Settings**。**Mode** 按 Enter 打开 Rule / Global / Direct 选择弹窗，↑/↓ 选择、Enter 应用、Esc 取消；**GLOBAL** 入口展开 mihomo 返回的候选组，并自动滚动到整个 section 完整可见；超过一屏时从列表视口顶部展示，继续用方向键浏览候选。Mihari 全局保存模式、按订阅保存 GLOBAL 出口，支持面板发起的相同操作。默认使用 Rule，切换模式和出口保留已有连接。保存的出口消失时，有 DIRECT 候选则保存 DIRECT，否则保存 Rule；内核停止时保存的模式显示为 pending，待启动应用。
 
-Routing 标签为白色、值为绿色。仅焦点行在值后紧跟显示 `· Press Enter to Change` 或 `· Press Enter to Select`；窄屏优先保留值，空间不足时隐藏操作提示。状态说明不随失焦隐藏。
+Basic 标签为白色、值为绿色。仅焦点行在值后紧跟显示 `· Press Enter to Change` 或 `· Press Enter to Select`；窄屏优先保留值，空间不足时隐藏操作提示。状态说明不随失焦隐藏。
 
-已选代理卡片使用蓝色 **●** 标记，颜色与日志 **INFO** 一致。Proxies 每个组（含 GLOBAL）的当前选择右侧都有 **→ Jump to Selected**（窄窗口缩短为 **→ Selected**）。在组标题上按 → 聚焦按钮，再按 Enter 自动展开并定位到当前选中的卡片；← 返回组标题。定位只移动键盘焦点，后续刷新改变选中项时不自动跟随。保留的 **Last selected** 数据仍可定位；选中项为空或不在候选列表中时按钮置灰。
+已选代理卡片使用蓝色 **●** 标记，颜色与日志 **INFO** 一致。候选节点的长名称在卡片内自动换行，不再截断；同一排卡片统一采用该排最高卡片的高度，各排独立计算。Proxies 每个组（含 GLOBAL）的当前选择右侧都有 **→ Jump to Selected**（窄窗口缩短为 **→ Selected**）。在组标题上按 → 聚焦按钮，再按 Enter 自动展开并定位到当前选中的卡片；← 返回组标题。定位只移动键盘焦点，后续刷新改变选中项时不自动跟随。保留的 **Last selected** 数据仍可定位；选中项为空或不在候选列表中时按钮置灰。
 
-TUI **Subs** 页按 Enter 打开可编辑详情，`a` 添加订阅。Tab/Shift+Tab 或 ↑/↓ 切换字段，←/→/Space 在 **Auto refresh** 和 **Mode** 行循环选择；文本框 Enter 进入下一项，仅 **Save** 焦点上的 Enter 提交。PgUp/PgDn 滚动正文，长 URL 单行横向滚动。所有 TUI 内置文案均为英文。列表显示 **InUse**、**Enabled**、**Status**、**Mode**，`p` 循环切换拉取模式。
+TUI **Subs** 页按 Enter 打开可编辑详情，`a` 添加订阅。Tab/Shift+Tab 或 ↑/↓ 切换字段和操作，←/→/Space 在 **Auto refresh** 和 **Mode** 行循环选择；设置字段上的 Enter 进入下一项，**Save** 上的 Enter 提交设置。**Enabled** 操作可立即启用或停用订阅；**InUse → Use this subscription** 可将已启用且有有效缓存的订阅设为当前使用，已选中的订阅显示 **In use**。停用会同时清除其 InUse；重新启用不会自动选中。操作后详情保持打开，未保存的设置草稿保留。PgUp/PgDn 滚动正文，长 URL 单行横向滚动。所有 TUI 内置文案均为英文。列表显示 **InUse**、**Enabled**、**Status**、**Mode**，`p` 循环切换拉取模式。
 
-添加和编辑共用居中紧凑表单，详情按运行状态和设置分组；没有错误时隐藏错误行，时间显示为本地时间并精确到分钟。窗口较矮时正文滚动，**Save** 始终可见。循环字段使用反色焦点，文本框使用浅色输入底和白色光标。快捷键仅在终端底部显示一份并随焦点变化。**Interval** 留空时以占位文字显示当前全局间隔，保存空值仍表示继承。
+列表各列保持紧凑，**Name** 随内容扩展，最多占 40 个终端显示单元，超长名称以省略号截断。表头分隔线和焦点行高亮延伸至区域右侧内边距。窄窗口会按需缩短名称并隐藏优先级较低的列。
+
+添加和编辑共用居中紧凑表单，详情按运行状态和设置分组；没有错误时隐藏错误行，时间显示为本地时间并精确到分钟。窗口较矮时正文滚动，**Save** 始终可见。Auto refresh、Mode、Enabled、InUse 仅对当前选项值反色高亮，标签和行尾空白保持原样；文本框使用浅色输入底和白色光标。快捷键仅在终端底部显示一份并随焦点变化。**Interval** 输入值旁用浅灰色显示支持的单位（`ns/us/ms/s/m/h`）；留空时以占位文字显示当前全局间隔，保存空值仍表示继承。
 
 修改 URL 会保留旧缓存和 InUse，不立即下载或 reload；**Outdated** 表示缓存来自旧 URL，仍可离线 Use。修改单条 interval 会重置下次刷新时间，并持久标记 **Expired**，直到刷新成功（包括有效 304）；Disabled、Failed、Missing、Outdated 等更高优先级状态仍优先显示。关闭 Auto refresh 时 Next 显示 **Manual**。
 
@@ -191,7 +209,8 @@ TUI 与 daemon 必须配套升级，不保证混用版本。升级前停止 daem
 
 - Windows amd64 与 arm64
 - Linux amd64 与 arm64
-- macOS amd64 与 arm64
+
+macOS 系统暂不支持。Unix 安装通道仍会发布 darwin amd64 与 arm64 二进制。
 
 所有发行二进制均为无 CGO。
 
@@ -201,7 +220,7 @@ TUI 与 daemon 必须配套升级，不保证混用版本。升级前停止 daem
 | --- | --- | --- | --- |
 | Windows | `%USERPROFILE%\.mihari` | 同左 | 同左 |
 | Linux | `/var/lib/mihari` | `B/data` | 绝对 `XDG_STATE_HOME/mihari`，否则可信 home 的 `.local/state/mihari` |
-| macOS | `/Library/Application Support/mihari` | `B/data` | 可信 home 的 `Library/Logs/mihari` |
+| macOS（暂不支持） | `/Library/Application Support/mihari` | `B/data` | 可信 home 的 `Library/Logs/mihari` |
 
 Unix 的 E/C/channel 分别为 `B/control.sock`、`B/control.token`、`B/mihari-channel`；I 默认 `/usr/local/lib/mihari`。B 为 root0711，D 为 root0700，C/channel 为 root0644，E 为 root0666。普通用户无需 sudo 即可认证并管理同一代理及读取受控机器诊断；不能直接读取 D 或其他用户的 U。Windows 继续使用 `\\.\pipe\mihari-control`。
 

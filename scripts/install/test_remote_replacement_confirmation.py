@@ -84,6 +84,10 @@ def test_remote_full_flow_forwards_only_explicit_yes(tmp_path, yes, inherited, a
     assert result.returncode == 0, result.stderr
     assert (extracted / 'installed').read_text().strip() == expected
     assert not (tmp_path / 'path-executed').exists()
+    text = result.stdout + result.stderr
+    assert text.index("Verifying archive") < text.index("Extracting archive")
+    assert "elapsed " in text
+    assert "SHA-256 verification passed." not in text
 
 
 def handoff_block():
@@ -108,6 +112,10 @@ def test_remote_full_flow_requires_successful_checksum(tmp_path, checksum):
     result, extracted = run_flow(tmp_path, installer_source(literal(CAPS)), checksum=checksum)
     assert result.returncode != 0
     assert not (extracted / 'installed').exists()
+    if checksum:
+        text = result.stdout + result.stderr
+        assert "Verifying archive" in text
+        assert "SHA-256 verification passed." not in text
 
 
 def test_remote_full_flow_no_terminal_fails_before_download(tmp_path):

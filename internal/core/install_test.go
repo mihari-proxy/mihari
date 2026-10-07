@@ -81,8 +81,7 @@ func TestInstallerDownloadsExtractsValidatesAndReplaces(t *testing.T) {
 		t.Run(target.goos+"/"+target.goarch, func(t *testing.T) {
 			binary := []byte("fake-mihomo-binary")
 			archive := target.archive(t, binary)
-			// TagName is deliberately not a semver so Version cannot be copied from the release tag.
-			server := releaseFixtureWithTag(t, "Prerelease-Alpha", target.name, archive)
+			server := releaseFixture(t, target.name, archive)
 			defer server.Close()
 
 			root := t.TempDir()
@@ -251,12 +250,19 @@ func releaseFixtureWithTag(t *testing.T, tagName, assetName string, archive []by
 	t.Helper()
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		asset := Asset{ID: 456, Name: assetName, URL: server.URL + "/asset", Size: int64(len(archive)), State: "uploaded", UpdatedAt: "2026-09-17T01:00:00Z"}
 		switch request.URL.Path {
 		case "/repos/MetaCubeX/mihomo/releases/latest":
 			if request.Header.Get("Accept") != "application/vnd.github+json" || request.Header.Get("X-GitHub-Api-Version") == "" {
 				t.Errorf("missing GitHub API headers")
 			}
-			_ = json.NewEncoder(response).Encode(Release{TagName: tagName, Assets: []Asset{{Name: assetName, URL: server.URL + "/asset", Size: int64(len(archive))}}})
+			_ = json.NewEncoder(response).Encode(Release{ID: 123, TagName: tagName, Assets: []Asset{asset}})
+		case "/repos/MetaCubeX/mihomo/releases/assets/456":
+			if request.Header.Get("Accept") == "application/octet-stream" {
+				_, _ = response.Write(archive)
+			} else {
+				_ = json.NewEncoder(response).Encode(asset)
+			}
 		case "/asset":
 			_, _ = response.Write(archive)
 		default:
@@ -270,15 +276,26 @@ func alphaReleaseFixture(t *testing.T, assetName string, archive []byte, request
 	t.Helper()
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		asset := Asset{ID: 456, Name: assetName, URL: server.URL + "/asset", Size: int64(len(archive)), State: "uploaded", UpdatedAt: "2026-09-17T01:00:00Z"}
 		if requested != nil {
-			*requested = append(*requested, request.URL.Path)
+			path := request.URL.Path
+			if request.Header.Get("Accept") == "application/octet-stream" {
+				path += "#download"
+			}
+			*requested = append(*requested, path)
 		}
 		switch request.URL.Path {
 		case "/repos/MetaCubeX/mihomo/releases/tags/Prerelease-Alpha":
 			if request.Header.Get("Accept") != "application/vnd.github+json" || request.Header.Get("X-GitHub-Api-Version") == "" {
 				t.Errorf("missing GitHub API headers")
 			}
-			_ = json.NewEncoder(response).Encode(Release{TagName: "Prerelease-Alpha", Assets: []Asset{{Name: assetName, URL: server.URL + "/asset", Size: int64(len(archive))}}})
+			_ = json.NewEncoder(response).Encode(Release{ID: 123, TagName: "Prerelease-Alpha", Assets: []Asset{asset}})
+		case "/repos/MetaCubeX/mihomo/releases/assets/456":
+			if request.Header.Get("Accept") == "application/octet-stream" {
+				_, _ = response.Write(archive)
+			} else {
+				_ = json.NewEncoder(response).Encode(asset)
+			}
 		case "/asset":
 			_, _ = response.Write(archive)
 		default:
@@ -371,7 +388,7 @@ func TestPrepare(t *testing.T) {
 		}
 	})
 
-	t.Run("same version with valid local binary short-circuits", func(t *testing.T) {
+	t.Run("same version still prepares official candidate", func(t *testing.T) {
 		server := releaseFixture(t, "mihomo-linux-amd64-compatible-v1.19.0.gz", gzipFixture(t, []byte("new-binary")))
 		defer server.Close()
 		root := t.TempDir()
@@ -391,17 +408,17 @@ func TestPrepare(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer candidate.Cleanup()
-		if candidate.Updated() {
-			t.Fatal("expected short-circuit, got updated candidate")
+		if !candidate.Updated() {
+			t.Fatal("explicit update must prepare official candidate")
 		}
 		if got, _ := os.ReadFile(binaryPath); string(got) != "existing-valid" {
-			t.Fatalf("binary changed=%q (download should not happen)", got)
+			t.Fatalf("binary changed=%q (prepare must not publish)", got)
 		}
 		result, err := candidate.Commit()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if result.Updated || result.Version != "v1.19.0" || result.AlphaSHA != "" {
+		if !result.Updated || result.Version != "v1.19.0" || result.AlphaSHA != "" {
 			t.Fatalf("result=%#v", result)
 		}
 	})
@@ -536,7 +553,7 @@ func TestPrepare(t *testing.T) {
 	})
 }
 
-func TestPrepareAlphaShortCircuitUsesSHA(t *testing.T) {
+func TestPrepareAlphaAlwaysFetchesOfficialCandidate(t *testing.T) {
 	const assetName = "mihomo-linux-amd64-alpha-e183c58.gz"
 	archive := gzipFixture(t, []byte("alpha-binary"))
 
@@ -548,11 +565,11 @@ func TestPrepareAlphaShortCircuitUsesSHA(t *testing.T) {
 		wantAssetHits  int
 	}{
 		{
-			name:           "matching sha short-circuits",
+			name:           "matching sha still downloads",
 			currentVersion: "alpha-e183c58",
 			alphaSHA:       "e183c58",
-			wantUpdated:    false,
-			wantAssetHits:  0,
+			wantUpdated:    true,
+			wantAssetHits:  1,
 		},
 		{
 			name:           "rolling sha downloads",
@@ -569,11 +586,11 @@ func TestPrepareAlphaShortCircuitUsesSHA(t *testing.T) {
 			wantAssetHits:  1,
 		},
 		{
-			name:           "B1 matching sha short-circuits despite Prerelease-Alpha version",
+			name:           "B1 matching sha still downloads despite Prerelease-Alpha version",
 			currentVersion: "Prerelease-Alpha",
 			alphaSHA:       "e183c58",
-			wantUpdated:    false,
-			wantAssetHits:  0,
+			wantUpdated:    true,
+			wantAssetHits:  1,
 		},
 		{
 			name:           "empty AlphaSHA must download",
@@ -621,7 +638,7 @@ func TestPrepareAlphaShortCircuitUsesSHA(t *testing.T) {
 			}
 			assetHits := 0
 			for _, path := range requested {
-				if path == "/asset" {
+				if path == "/repos/MetaCubeX/mihomo/releases/assets/456#download" {
 					assetHits++
 				}
 			}

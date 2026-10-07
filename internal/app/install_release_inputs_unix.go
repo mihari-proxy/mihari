@@ -6,22 +6,19 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"os"
-	"path/filepath"
 	"runtime"
 
-	"github.com/mihari-proxy/mihari/internal/core"
+	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/panel/archive"
-	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/update"
 )
 
 type nativeReleaseInputs struct {
-	offlineBinary         bool
-	binary, core, receipt []byte
-	resources             map[string][]byte
-	trust                 migrationTrust
-	source                migrationCapability
+	offlineBinary bool
+	binary, core  []byte
+	resources     map[string][]byte
+	trust         migrationTrust
+	source        migrationCapability
 }
 
 func (i *nativeReleaseInputs) Close() error {
@@ -48,7 +45,10 @@ func prepareNativeReleaseInputs(ctx context.Context, req InstallRequest, sourceP
 	hash := sha256HexBytes(inputs.binary)
 	official := update.OfficialReleaseSource{Client: client}
 	inputs.offlineBinary = inputs.trust.acceptsBinary(hash)
-	if !inputs.offlineBinary {
+	// A request that carries a bundle must not ask GitHub for a digest. The
+	// candidate is authorized only when it matches mihari inside an archive
+	// that install-trust or the fixed channel index already accepted.
+	if req.Bundle == "" && !inputs.offlineBinary {
 		want, err := official.Checksum(ctx, req.ReleaseTag, "mihari-"+runtime.GOOS+"-"+runtime.GOARCH)
 		if err != nil {
 			return nil, err
@@ -61,18 +61,12 @@ func prepareNativeReleaseInputs(ctx context.Context, req InstallRequest, sourceP
 	if req.ArtifactSHA256 != "" && req.ArtifactSHA256 != hash {
 		return nil, migrateData("install binary checksum mismatch")
 	}
-	needsCore := false
 	if sourcePath != "" {
 		inputs.source, err = openReadOnlyMigrationRoot(ctx, sourcePath)
 		if err != nil {
 			return nil, err
 		}
-		_, err = inputs.source.Stat(ctx, "bin/mihomo")
-		if err == nil {
-			needsCore = true
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
+
 	}
 	if req.Bundle != "" {
 		raw, err := readHostFile(req.Bundle, migrationBundleComp)
@@ -80,33 +74,40 @@ func prepareNativeReleaseInputs(ctx context.Context, req InstallRequest, sourceP
 			return nil, err
 		}
 		bundleHash := sha256HexBytes(raw)
-		if !inputs.trust.acceptsBundle(bundleHash) {
-			want, err := official.Checksum(ctx, req.ReleaseTag, "mihari-all-in-one-"+runtime.GOOS+"-"+runtime.GOARCH+".tar.gz")
+		// A binaries pin or a bundle pin is already offline authority. Only an
+		// unpinned bundle consults the fixed channel index. The mihari member
+		// must still match the candidate before this archive is trusted.
+		if !inputs.trust.acceptsBundle(bundleHash) && !inputs.offlineBinary {
+			latest, sum, err := fetchChannelIndex(ctx, client, req.Channel, runtime.GOOS, runtime.GOARCH)
 			if err != nil {
 				return nil, err
 			}
-			if want != bundleHash {
+			if latest != req.ReleaseTag {
+				return nil, migrateData("channel index latest does not match release tag")
+			}
+			if sum != bundleHash {
 				return nil, migrateData("install bundle checksum mismatch")
 			}
-			inputs.trust.bundle[bundleHash] = struct{}{}
 		}
 		if req.BundleSHA256 != "" && req.BundleSHA256 != bundleHash {
 			return nil, migrateData("install bundle checksum mismatch")
 		}
+		matchedBundleBinary := false
 		err = archive.ExtractTarGzipBytes(raw, archive.Limits{MaxFile: migrationBinaryMax, MaxTotal: migrationBundleExpand, MaxEntries: migrationBundleFiles, MaxDepth: migrationMaxDepth}, nil, func(name string, body []byte) error {
 			switch name {
 			case "mihari":
 				if sha256HexBytes(body) != hash {
 					return migrateData("bundle binary does not match verified candidate")
 				}
+				matchedBundleBinary = true
 			case "install-aio.sh": // Inert installer text is never executed by apply.
 			case "data/bin/mihomo":
 				inputs.resources["bin/mihomo"] = body
-				needsCore = true
 			case "data/bin/core-channel":
-				if string(body) != "stable" && string(body) != "stable\n" {
+				if _, _, ok := config.ParseCoreChannelSidecar(body); !ok {
 					return migrateState("unsupported bundled core channel")
 				}
+				inputs.resources["bin/core-channel"] = body
 			case "data/geoip/GeoLite2-Country.mmdb", "data/geoip/GeoLite2-ASN.mmdb":
 				inputs.resources[name[len("data/"):]] = body
 				inputs.trust.geo[sha256HexBytes(body)] = struct{}{}
@@ -118,42 +119,17 @@ func prepareNativeReleaseInputs(ctx context.Context, req InstallRequest, sourceP
 		if err != nil {
 			return nil, err
 		}
+		if !matchedBundleBinary {
+			return nil, migrateData("bundle binary does not match verified candidate")
+		}
+		if !inputs.trust.acceptsBundle(bundleHash) {
+			inputs.trust.bundle[bundleHash] = struct{}{}
+		}
+		inputs.trust.binary[hash] = struct{}{}
 	}
-	if needsCore {
-		digest, err := core.CompiledAssetDigest(ctx, runtime.GOOS, runtime.GOARCH, "v1.19.30", "stable")
-		if err != nil {
-			return nil, err
-		}
-		raw, err := readUnixOfflineArtifact(ctx, offlineRoot, digest+".gz", 128<<20)
-		if err == nil {
-			inputs.core, inputs.receipt, err = core.RebuildMigrationCore(ctx, runtime.GOOS, runtime.GOARCH, "v1.19.30", raw)
-		} else if errors.Is(err, os.ErrNotExist) {
-			inputs.core, inputs.receipt, err = core.DownloadMigrationCore(ctx, client, runtime.GOOS, runtime.GOARCH, "v1.19.30")
-		}
-		if err != nil {
-			return nil, err
-		}
-		coreHash := sha256HexBytes(inputs.core)
-		inputs.trust.core[coreHash] = struct{}{}
-		if bundled, ok := inputs.resources["bin/mihomo"]; ok && sha256HexBytes(bundled) != coreHash {
-			return nil, migrateState("unsupported bundled core")
-		}
-	}
+	// The enclosing bundle has already been independently verified. Its core
+	// is an offline input, not a request to fetch the compiled legacy version.
+	inputs.core = inputs.resources["bin/mihomo"]
+
 	return inputs, nil
-}
-func readUnixOfflineArtifact(ctx context.Context, rootPath, name string, limit int64) (raw []byte, err error) {
-	if filepath.Base(name) != name {
-		return nil, os.ErrInvalid
-	}
-	root, err := platform.OpenTrustedParent(ctx, rootPath, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { err = errors.Join(err, root.Close()) }()
-	file, _, err := root.OpenFile(ctx, name, 0644)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { err = errors.Join(err, file.Close()) }()
-	return readInstallFile(ctx, file, limit)
 }

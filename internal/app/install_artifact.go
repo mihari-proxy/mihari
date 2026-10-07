@@ -70,11 +70,6 @@ type migrationTrust struct {
 	bundle map[string]struct{}
 }
 
-func (t migrationTrust) acceptsCore(hash string) bool {
-	_, ok := t.core[hash]
-	return ok
-}
-
 func (t migrationTrust) acceptsGeo(hash string) bool {
 	_, ok := t.geo[hash]
 	return ok

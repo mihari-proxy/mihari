@@ -291,13 +291,15 @@ const (
 )
 
 type mutationResultMsg struct {
-	cancelled bool
-	kind      mutationKind
-	id        string
-	result    protocol.SubscriptionResult
-	remove    protocol.MutationResult
-	operation logging.OperationMetadata
-	err       error
+	detailEpoch     uint64
+	requestRevision uint64
+	cancelled       bool
+	kind            mutationKind
+	id              string
+	result          protocol.SubscriptionResult
+	remove          protocol.MutationResult
+	operation       logging.OperationMetadata
+	err             error
 }
 
 // Err implements the shell's action-outcome contract so subscription mutations
@@ -415,6 +417,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, nil
 	case mutationResultMsg:
 		m.finishRequest(typed.operation.ID)
+		if typed.detailEpoch != 0 {
+			return m, m.finishDetailAction(typed)
+		}
 		if m.form != nil && m.saveState == saveSending && typed.operation.ID == m.saveOperation {
 			return m, m.finishSave(typed)
 		}
@@ -596,7 +601,7 @@ func (m *Model) subscriptionColumns() []ui.TableColumn {
 		modeWidth = max(modeWidth, lipgloss.Width(proxyModeLabel(subscription.ProxyMode)))
 	}
 	return []ui.TableColumn{
-		{ID: "name", Title: ui.NameLabel, MinWidth: 10, MaxWidth: min(nameWidth, 32), Flex: 3, Priority: 8},
+		{ID: "name", Title: ui.NameLabel, MinWidth: 10, MaxWidth: min(nameWidth, 40), Flex: 3, Priority: 8},
 		{ID: "active", Title: "InUse", MinWidth: 5, Flex: 0, Priority: 7, Align: ui.AlignCenter},
 		{ID: "state", Title: "Enabled", MinWidth: 8, Flex: 0, Priority: 6},
 		{ID: "load", Title: "Status", MinWidth: 12, Flex: 0, Priority: 5},
@@ -619,9 +624,15 @@ func (m *Model) subscriptionWidths() ([]ui.TableColumn, []int) {
 	return ui.FitPriorityColumns(m.subscriptionColumns(), avail, 2)
 }
 
+// View renders the subscription list with compact columns and full-width row
+// focus, or the active add/edit form.
 func (m *Model) View() string {
+	inner := ui.FullSectionInner(m.layoutWidth())
+	textWidth := ui.SectionTextWidth(inner)
 	cols, widths := m.subscriptionWidths()
-	header, rule := ui.RenderHeaderRow(m.theme, cols, widths, 2, -1, false)
+	header, _ := ui.RenderHeaderRow(m.theme, cols, widths, 2, -1, false)
+	// Fill the section independently of the compact, content-sized columns.
+	rule := m.theme.SurfaceBorder.Render(strings.Repeat("─", max(0, textWidth-2)))
 	bodyLines := []string{"  " + header, "  " + rule}
 	if m.lastError != "" {
 		bodyLines = append(bodyLines, m.theme.Muted.Render(m.lastError))
@@ -644,11 +655,11 @@ func (m *Model) View() string {
 		line := marker + entry.Render(m.theme, cols, widths)
 		// Keyboard focus uses RowFocus; business active marker is ● (Success).
 		if rowFocused && m.contentFocused {
+			line = ui.PadCell(line, textWidth, ui.AlignLeft)
 			line = ui.ApplyFocusStyle(line, m.theme.RowFocus)
 		}
 		bodyLines = append(bodyLines, line)
 	}
-	inner := ui.FullSectionInner(m.layoutWidth())
 	title := ui.FormatSubscriptionsTitle(len(m.subscriptions))
 	content := ui.RenderBorderedSection(m.theme, title, strings.Join(bodyLines, "\n"), inner)
 	if m.form != nil {
@@ -667,7 +678,26 @@ func (m *Model) updateForm(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, m.updateSaveKeys(message)
 	}
 	key, isKey := message.(tea.KeyPressMsg)
+	if isKey && key.String() == "pgup" {
+		m.dialogManualScroll = true
+		m.dialogScroll = max(0, m.dialogScroll-3)
+		return m, nil
+	}
+	if isKey && key.String() == "pgdown" {
+		m.dialogManualScroll = true
+		m.dialogScroll += 3
+		return m, nil
+	}
+	if m.form.actionOperation != "" || m.form.actionUncertain {
+		if isKey && key.String() == "esc" {
+			return m, m.closeForm()
+		}
+		return m, nil
+	}
 	if isKey && key.String() == "enter" {
+		if m.form.isAction() {
+			return m, m.submitDetailAction()
+		}
 		if m.form.index < len(m.form.inputs) {
 			cmd := m.form.move(1)
 			m.ensureFormFocus()
@@ -686,16 +716,6 @@ func (m *Model) updateForm(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, m.closeForm()
 		}
 		return m, m.submitForm(form, id, revision)
-	}
-	if isKey && key.String() == "pgup" {
-		m.dialogManualScroll = true
-		m.dialogScroll = max(0, m.dialogScroll-3)
-		return m, nil
-	}
-	if isKey && key.String() == "pgdown" {
-		m.dialogManualScroll = true
-		m.dialogScroll += 3
-		return m, nil
 	}
 	oldIndex := m.form.index
 	closed, command := m.form.Update(message)

@@ -4,6 +4,9 @@ import tea "charm.land/bubbletea/v2"
 
 type PageID string
 
+// OpenPageSettingsMsg opens the shared settings dialog for the current page.
+type OpenPageSettingsMsg struct{ Page PageID }
+
 const (
 	PageOverview      PageID = "overview"
 	PageProxies       PageID = "proxies"

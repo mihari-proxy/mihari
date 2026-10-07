@@ -116,9 +116,9 @@ func coreHTTPEntrypoints(t *testing.T) map[string]func(*http.Client) error {
 		"legacy": func(c *http.Client) error {
 			return (Installer{HTTPClient: c}).Download(t.Context(), Asset{URL: "https://fixture.invalid/core?token=fixture"}, path)
 		},
-		"trusted": func(c *http.Client) error {
-			i := Installer{HTTPClient: c, GOOS: "linux", GOARCH: "amd64", GeneratedConfig: func(context.Context) (*ConfigCapability, error) { return nil, nil }}
-			_, err := i.prepareTrusted(t.Context(), InstallRequest{})
+		"protected": func(c *http.Client) error {
+			i := Installer{HTTPClient: c}
+			_, err := i.readTargetArchive(t.Context(), ReleaseTarget{repository: "MetaCubeX/mihomo", asset: Asset{ID: 456}})
 			return err
 		},
 	}

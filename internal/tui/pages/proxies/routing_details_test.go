@@ -17,6 +17,8 @@ import (
 // both rows offer actions instead of displaying stale-state explanations.
 func newRoutingDetailsModel() *Model {
 	m := New(nil, nil)
+	// These tests isolate routing hints and their segmented focus colors.
+	m.preferences.ExtraLatency = false
 	m.SetSize(100, 22)
 	m.SetContentFocused(true)
 	m.SetRoutingAvailable(true, 1)
@@ -30,7 +32,7 @@ func newRoutingDetailsModel() *Model {
 func TestLocateHeader_SelectedLabel(t *testing.T) {
 	m, _ := newLocateModel()
 	line := ansi.Strip(m.renderGroupHeader(m.groups[0], 74, true))
-	if !strings.Contains(line, "Now: two  → Jump to Selected") || strings.Contains(line, "[Locate]") {
+	if !strings.Contains(line, "Now: two —  → Jump to Selected") || strings.Contains(line, "[Locate]") {
 		t.Fatalf("unexpected locate label: %q", line)
 	}
 }
@@ -67,6 +69,9 @@ func TestRoutingHeader_ActionHintWidthPriority(t *testing.T) {
 		suffix := []string{" · Press Enter to Change", " · Press Enter to Select"}[row]
 		// Page chrome consumes six columns; the marker and aligned label use eleven.
 		boundary := 6 + 11 + test.valueWidth + lipgloss.Width(suffix)
+		if row == 0 {
+			boundary += 17
+		} // first-row Page Settings column and gap
 		for _, width := range []int{30, boundary - 1, boundary, boundary + 1, 58, 80, 160} {
 			t.Run(fmt.Sprintf("value=%s/width=%d", value, width), func(t *testing.T) {
 				m := newRoutingDetailsModel()
@@ -81,6 +86,12 @@ func TestRoutingHeader_ActionHintWidthPriority(t *testing.T) {
 				want := fmt.Sprintf("› %-9s%s", []string{"Mode", "GLOBAL"}[row], value)
 				if wantHint {
 					want += suffix
+				}
+				if row == 0 {
+					if !strings.HasPrefix(strings.TrimSpace(strings.Trim(plain, "│")), want) || strings.Contains(plain, suffix) != wantHint || (!wantHint && strings.Contains(plain, "Press")) {
+						t.Fatalf("Mode content=%q; want prefix %q", plain, want)
+					}
+					return
 				}
 				// Check the actual content, not the width enforced by the section
 				// painter: a clipped partial hint must not pass at narrow widths.
@@ -165,7 +176,7 @@ func TestRoutingHeader_SegmentedFocusColors(t *testing.T) {
 					assertRoutingColors(t, header[i+1], []string{" · Press Enter to Change", " · Press Enter to Select"}[i], 245, 0)
 				}
 			}
-			assertRoutingColors(t, header[0], "Routing", 63, 0)
+			assertRoutingColors(t, header[0], "Basic", 63, 0)
 		}
 	}
 	m := newRoutingDetailsModel()

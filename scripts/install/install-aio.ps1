@@ -5,8 +5,8 @@
 #
 # Bundle layout (produced by scripts/build-all-in-one):
 #   mihari.exe             -> $binDir\mihari.exe
-#   data\bin\mihomo.exe    -> $MIHARI_DATA\bin\mihomo.exe       (overwrite)
-#   data\bin\core-channel  -> $MIHARI_DATA\bin\core-channel     (overwrite if present)
+#   data\bin\mihomo.exe    -> $MIHARI_DATA\bin\mihomo.exe       (only if core absent)
+#   data\bin\core-channel  -> $MIHARI_DATA\bin\core-channel     (with new core only)
 #   data\geoip\*.mmdb      -> $MIHARI_DATA\geoip\*.mmdb         (overwrite)
 #
 # Never touches: mihari.yaml, subscriptions\, control.token, onboarding.json,
@@ -27,6 +27,15 @@ $ErrorActionPreference = 'Stop'
 
 function Info($m) { Write-Host "* $m" -ForegroundColor Cyan }
 function Fail($m) { Write-Host "error: $m" -ForegroundColor Red; throw $m }
+function Start-MihariStep($Name) {
+  Info $Name
+  $script:MihariStepWatch = [Diagnostics.Stopwatch]::StartNew()
+}
+function Complete-MihariStep {
+  $elapsed = $script:MihariStepWatch.Elapsed
+  $minutes = [int][Math]::Floor($elapsed.TotalMinutes)
+  Write-Host ('  elapsed {0}:{1:d2}' -f $minutes, $elapsed.Seconds)
+}
 
 # BEGIN REPLACEMENT CONFIRMATION
 # Kept in both standalone installers; exercised with one shared version fixture.
@@ -449,6 +458,7 @@ if (-not (Confirm-Replacement $preview ($env:MIHARI_YES -eq '1'))) { throw 'Canc
 Assert-ReplacementPreview $preview $mihariSrc $targets
 $changed = $false
 try {
+  Start-MihariStep "Installing mihari to $dest"
   if ($preview.StopRequired) {
     Invoke-ReplacementElevated ([pscustomobject]@{ Action='Stop'; Preview=$preview; Candidate=$mihariSrc; Targets=$targets; StopProcesses=($processes.Count -gt 0) })
     $changed = $true
@@ -457,12 +467,12 @@ try {
   New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 
   # 1. mihari binary -> binDir.
-  Info "Installing mihari to $dest"
   Assert-ReplacementPreview $preview $mihariSrc $targets
   Copy-Item -LiteralPath $mihariSrc -Destination $dest -Force
   $changed = $true
   Set-ReplacementWrittenTarget $preview $dest
   Assert-ReplacementPreview $preview $mihariSrc $targets
+  Complete-MihariStep
 
   # Add install dir to the user PATH if missing (mirrors install.ps1).
   if ($env:MIHARI_INSTALL_TEST_MODE -ne '1') {
@@ -474,18 +484,27 @@ try {
     }
   }
 
-  # 2. Data overlay -> MIHARI_DATA (bundle authoritative for core + GeoIP; user
-  #    config / panel state below is never touched).
+  # 2. Seed an absent core from the bundle; application updates preserve the
+  #    installed core and its channel. GeoIP remains a bundled data overlay.
   New-Item -ItemType Directory -Force -Path (Join-Path $dataDir 'bin') | Out-Null
   New-Item -ItemType Directory -Force -Path (Join-Path $dataDir 'geoip') | Out-Null
-  Info "Replacing the mihomo core and GeoIP files in $dataDir"
-  Copy-Item -LiteralPath $mihomoSrc -Destination (Join-Path $dataDir 'bin\mihomo.exe') -Force
-  $sidecarSrc = Join-Path $BundleDir 'data\bin\core-channel'
-  if (Test-Path -LiteralPath $sidecarSrc) {
-    Copy-Item -LiteralPath $sidecarSrc -Destination (Join-Path $dataDir 'bin\core-channel') -Force
+  $coreDest = Join-Path $dataDir 'bin\mihomo.exe'
+  if (-not (Test-Path -LiteralPath $coreDest)) {
+    Start-MihariStep "Installing the bundled mihomo core in $dataDir"
+    Copy-Item -LiteralPath $mihomoSrc -Destination $coreDest
+    $sidecarSrc = Join-Path $BundleDir 'data\bin\core-channel'
+    if (Test-Path -LiteralPath $sidecarSrc) {
+      Copy-Item -LiteralPath $sidecarSrc -Destination (Join-Path $dataDir 'bin\core-channel') -Force
+    }
+    Complete-MihariStep
+  } else {
+    Start-MihariStep 'Preserving the installed mihomo core and channel'
+    Complete-MihariStep
   }
+  Start-MihariStep 'Installing GeoIP data'
   Copy-Item -LiteralPath (Join-Path $BundleDir 'data\geoip\GeoLite2-Country.mmdb') -Destination (Join-Path $dataDir 'geoip\GeoLite2-Country.mmdb') -Force
   Copy-Item -LiteralPath (Join-Path $BundleDir 'data\geoip\GeoLite2-ASN.mmdb') -Destination (Join-Path $dataDir 'geoip\GeoLite2-ASN.mmdb') -Force
+  Complete-MihariStep
 
   if ($Channel) {
     $channelRoot = if ($env:MIHARI_DATA) { $env:MIHARI_DATA } else { Join-Path $env:USERPROFILE '.mihari' }
@@ -502,13 +521,17 @@ try {
   # retained after writing the PATH copy, including across the existing UAC step.
   Assert-ReplacementPreview $preview $dest $targets
   $serviceArgs = if ($serviceView.Path) { @('service','reinstall') } else { @('service','install') }
+  Start-MihariStep 'Registering the Mihari service...'
   Invoke-ReplacementElevated ([pscustomobject]@{ Action='Service'; Preview=$preview; Candidate=$dest; Targets=$targets; ServiceArgs=$serviceArgs; Environment=(Get-ReplacementEnvironment) })
+  Complete-MihariStep
   if (-not $serviceView.Path) {
+    Start-MihariStep 'Starting the Mihari service'
     if ($isAdmin) { & $dest service start; if ($LASTEXITCODE -ne 0) { throw 'Service start failed.' } }
     else {
       $process = Start-Process -FilePath $dest -ArgumentList @('service','start') -Verb RunAs -Wait -PassThru
       if ($process.ExitCode -ne 0) { throw 'Service start failed.' }
     }
+    Complete-MihariStep
   }
 } catch {
   if ($changed) { Write-Warning 'Some installation steps completed, but installation did not finish. The program or bundled data may already have changed.' }

@@ -41,7 +41,10 @@ func TestSubscriptionMode_FullLabelOrHiddenColumn(t *testing.T) {
 
 func TestSubscriptionMode_FormsWrapFullValueAndKeepRawMode(t *testing.T) {
 	for _, form := range []*formModel{newAddForm(), newEditForm(protocol.Subscription{})} {
-		index := len(form.inputs) - 1
+		index := 2
+		if form.kind == formEdit {
+			index = 4
+		}
 		form.inputs[index].SetValue("auto")
 		form.index = index
 		for _, width := range []int{44, 70} {

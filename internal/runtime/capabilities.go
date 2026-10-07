@@ -3,10 +3,15 @@ package runtime
 import "github.com/mihari-proxy/mihari/internal/control/protocol"
 
 func (m *Manager) Capabilities() []string {
+	if m.coreRecovery.Load() {
+		return []string{protocol.CapabilityCore, protocol.CapabilityCoreReinstall}
+	}
+
 	capabilities := []string{
 		protocol.CapabilityCore,
 		protocol.CapabilityProxies,
 		protocol.CapabilityRouting,
+		protocol.CapabilityEgress,
 		protocol.CapabilityConnections,
 		protocol.CapabilityRules,
 		protocol.CapabilityRuleProviders,
@@ -33,5 +38,6 @@ func (m *Manager) Capabilities() []string {
 	}
 	// TUN is always advertised; live apply depends on the mihomo controller.
 	capabilities = append(capabilities, protocol.CapabilityTUN)
+	capabilities = append(capabilities, protocol.CapabilityCoreReinstall)
 	return capabilities
 }

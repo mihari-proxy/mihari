@@ -6,16 +6,12 @@ import "context"
 func (i Installer) LatestVersion(ctx context.Context, channel string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, i.checkTimeout())
 	defer cancel()
-	release, err := i.LatestRelease(ctx, channel)
-	if err != nil {
-		return "", err
-	}
-	asset, err := SelectAsset(release, i.targetOS(), i.targetArch(), channel)
+	target, err := i.ResolveTarget(ctx, channel)
 	if err != nil {
 		return "", err
 	}
 	if channel == "alpha" {
-		return "alpha-" + ParseAlphaSHA(asset.Name), nil
+		return "alpha-" + ParseAlphaSHA(target.asset.Name), nil
 	}
-	return release.TagName, nil
+	return target.tag, nil
 }

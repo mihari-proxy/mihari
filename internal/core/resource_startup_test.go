@@ -244,8 +244,11 @@ func TestRootAssembly_InvalidSourceOrCandidatePreservesLastValidData(t *testing.
 				executions++
 				return nil, errors.New("synthetic refusal")
 			}
-			_, err = app.BuildRuntimeWithOptions(paths, settings, "test", nil, nil, app.RuntimeBuildOptions{TrustedCore: f.Trusted, PortProbeListen: portProbe})
-			if err == nil {
+			assembly, err := app.BuildRuntimeWithOptions(paths, settings, "test", nil, nil, app.RuntimeBuildOptions{TrustedCore: f.Trusted, PortProbeListen: portProbe})
+			if failure == "core-rejection" && (err != nil || assembly.Store.Load().Health != "degraded") {
+				t.Fatalf("core failure did not retain a blocked repair owner: %v", err)
+			}
+			if failure != "core-rejection" && err == nil {
 				t.Fatal("invalid authority accepted")
 			}
 			if failure != "core-rejection" {

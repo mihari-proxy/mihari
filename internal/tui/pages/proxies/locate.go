@@ -53,6 +53,11 @@ func (m *Model) renderGroupHeader(group protocol.ProxyGroup, width int, focused 
 	}
 	// Reserve the action before truncating names, including in retained snapshots.
 	available := max(0, width-lipgloss.Width(prefix)-2-lipgloss.Width(button))
+	latency := m.extraLatency(group.Now)
+	if lipgloss.Width(latency)+lipgloss.Width(label)+1 > available {
+		latency = ""
+	}
+	available -= lipgloss.Width(latency)
 	label = ui.TruncateVisible(label, max(0, available-1))
 	name := ui.DisplayProxyName(group.Now)
 	if name == "" {
@@ -72,5 +77,5 @@ func (m *Model) renderGroupHeader(group protocol.ProxyGroup, width int, focused 
 	if buttonFocused {
 		button = ui.ApplyFocusStyle(button, m.theme.RowFocus)
 	}
-	return header + "  " + button
+	return header + latency + "  " + button
 }

@@ -69,6 +69,7 @@ func TestCoreMutationCommandsBindOperationContext(t *testing.T) {
 	}{
 		{name: "install", args: []string{"core", "install", "--json"}, operation: "core.install"},
 		{name: "update", args: []string{"core", "update", "--json"}, operation: "core.install"},
+		{name: "reinstall", args: []string{"core", "reinstall", "--json"}, operation: "core.reinstall"},
 		{name: "restart", args: []string{"core", "restart", "--json"}, operation: "core.restart"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -183,6 +184,12 @@ func (c *fakeRuntimeClient) InstallCore(ctx context.Context, request protocol.Mu
 	c.coreOperation, _ = logging.OperationFromContext(ctx)
 	c.coreRequest = request
 	return protocol.CoreInstallResult{Schema: "mihari/v1", Version: "v1.19.0", Updated: true}, nil
+}
+
+func (c *fakeRuntimeClient) ReinstallCore(ctx context.Context, request protocol.MutationRequest) (protocol.CoreInstallResult, error) {
+	c.coreOperation, _ = logging.OperationFromContext(ctx)
+	c.coreRequest = request
+	return protocol.CoreInstallResult{Schema: "mihari/v1", Version: "v1.99.0", Updated: true}, nil
 }
 
 func (c *fakeRuntimeClient) RestartCore(ctx context.Context, request protocol.MutationRequest) (protocol.MutationResult, error) {

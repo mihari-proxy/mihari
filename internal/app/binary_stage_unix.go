@@ -84,10 +84,10 @@ func cleanupUnixBinaryStage(ctx context.Context, parent *platform.TrustedRoot, n
 	if !binaryStageMatches(marker, stageID, candidateKey, candidateHash) {
 		return nil
 	}
+	// A still-present candidate may belong to an interrupted publication.
+	// Only a completed publication (candidate consumed) is startup garbage.
 	if candidateKey != "" {
-		if err := stage.RemoveFile(ctx, "candidate", 0755, candidateID); err != nil {
-			return err
-		}
+		return nil
 	}
 	if err := stage.RemoveFile(ctx, "identity.json", 0600, markerID); err != nil {
 		return err

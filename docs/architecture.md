@@ -4,6 +4,8 @@
 
 ## 控制面
 
+出口网卡选择由 Manager 持久化为可选 `egress-interface`，通过认证本地 GET/PATCH `/v1/egress` 供 CLI/TUI 共用。平台枚举只提供网卡快照；精确名称是选择身份，不使用持久网卡库或自动回退。生成器在克隆的有效订阅上覆盖原生接口绑定，No-Override 不注入覆盖。在线修改遵循候选校验、重载及读回、关闭活动连接、保存设置的事务顺序；恢复失败使用现有 degraded 隔离。停止时只保存，启动生成器应用。能力不暴露至浏览器，也不改变 TUN 启用的冲突确认。参见 [ADR 0006](adr/0006-native-egress-binding.md) 与[命令语义](commands.md#egress--出口网卡)。
+
 Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CLI、TUI 和浏览器面板共享:
 
 - CLI、TUI 和浏览器面板通过本地命名管道 / Unix 域套接字连接同一守护进程控制面。
@@ -103,7 +105,7 @@ TUI 进入 System/Web GUI 时通过带认证的本地控制接口 `GET /v1/core/
 
 - TUI 只通过 `internal/control/client` 经原生 IPC 控制面与本地守护进程通信。它从不打开 mihomo 控制器、从不接收控制器密钥。
 - TUI 的日志直接写入例外是经 `internal/logging` 在当前 UID 的 U/logs 追加/轮转固定 `mihari-tui.log*`（Windows/显式私有 P 保留单根）;不得写 `mihari.yaml`、订阅、token、面板或其他业务状态。日志配置变更仍只走 daemon 控制面。
-- System 页面 Logging 下方的 Maintenance 区提供 **Completely Uninstall Mihari**。两次确认框都默认 Cancel，并列出将清空的文件夹；确认后先关闭 TUI 资源，再由已提权的本地卸载路径停止并注销 OS 服务，然后删除这些文件夹。CLI `mihari service uninstall --purge --yes` 仍只删除白名单内的受管文件；整根删除需再加 `--force`。普通 `service uninstall` 仍只注销服务。
+- System 页面 Logging 下方的 Maintenance 区提供 **Completely Uninstall Mihari**。两次确认框都默认 Cancel，并列出将清空的文件夹；与安装根程序字节一致的 PATH 命令文件也会列在其中。确认后先关闭 TUI 资源，再由已提权的本地卸载路径尝试删除列出的命令文件，然后停止并注销 OS 服务，再删除这些文件夹。Unix 上该文件删除失败则停止，服务和目录保持不变。Windows 上删除失败会留下该文件并继续清理，不以完全卸载成功结束，错误里给出一条退出后可复制的 `Remove-Item -LiteralPath` 命令。CLI `mihari service uninstall --purge --yes` 仍只删除白名单内的受管文件；整根删除需再加 `--force`。两者都会处理这一个命令文件。普通 `service uninstall` 仍只注销服务。
 - 搜索与表单字段中的括号粘贴和 Ctrl+V 使用纯 Go 实现的 `github.com/atotto/clipboard` 辅助库;Mihari 本身从不把密钥写入剪贴板。
 - 页面:独立的首次运行 Setup 路由、Overview、可展开的 Proxies、带本地 GeoIP 详情的活动/已关闭 Connections、Rules/Providers、有界的结构化 Logs 流、订阅管理表单、分类的 System 页面,以及驱动面板安装/更新/激活/打开/回滚的 Web GUI 页面(在守护进程通告 `web-gui` 能力之后)。
 - Setup 安装核心、可添加初始订阅、准备本地 GeoIP 数据,并请求守护进程持久化校验过的本地端点。
@@ -115,7 +117,8 @@ TUI 进入 System/Web GUI 时通过带认证的本地控制接口 `GET /v1/core/
 - System 页面通过与 `mihari service` 相同的本地服务适配器管理 OS 服务(安装/卸载/启动/停止/重启/状态);这些操作要求进程已经提权,且不经过守护进程控制协议。当守护进程通告相应能力时,System 页面显示实时的系统代理与 TUN 状态,并通过本地控制 API 切换它们(开启外部代理或其他 TUN / mihomo 实例需要强制确认;Mihari 从不清除其他产品的代理)。
 - System 页面的 Ports Config 可修改 Mixed / Controller / Web 端口;占用按本实例 PID 显示 `Owned`,或 `Occupied by name (pid)` / `Available`。写入复用 onboarding 更新,应用后通常 `RestartRequired`。没有对应 CLI。
 - System 页面的 Logging 区可修改 daemon-owned 的 level、最大文件大小与保留数量；更新经稳定的 `/v1/logging` 控制协议热应用，不需要 daemon restart。Logs 页的 `e` 与 System → Logging 的 **Export logs** 打开同一个本地导出对话框；导出不增加 CLI 命令；Unix 系统模式使用可选的 machine-log-snapshot-v1 控制协议。
-- System 页面还在进入时以只读方式检查 Mihari 的最新 GitHub Release,并用 `当前版本 · 最新版本 available`、`当前版本 · Up to date` 或 `ahead of <channel> <latest>` 展示结果。实际更新先准备固定候选，再按真实目标版本确认；确定降级保留完整风险；未知兼容性使用简短英文说明。更新确认专用布局保留可信已安装副本的安全非标准标识 `Unknown[label]`，按副本展示，支持正文滚动且默认取消；该内部显示证据不进入版本比较、preview ID、CLI/JSON、日志或持久化。确认后，本地 updater 在控制协议之外复核候选、目标和服务定义，替换 Mihari 可执行文件并尝试同步已安装服务；该写操作要求 TUI 进程已经具备管理员/root 权限,不会自动触发 UAC 或 sudo。旧 Bubble Tea 程序先关闭工作、IPC、日志与文件所有者并恢复终端，再提交和进入新 TUI。取消与迟到准备结果由 Run 所有者清理。Unix 复用安装锁，Windows 在主程序替换、服务停止及服务副本复制边界复核；后续同步失败保留主程序已更新的部分成功状态。预览只在本次调用中存在，跨 Unix helper 调用用不透明 preview_id 绑定，不改变 daemon /v1、安装请求或 journal 格式。
+- System 页面在导航栏选中、按 Enter 进入之前，以只读方式检查 Mihari 的最新 GitHub Release 和 core 当前通道，并用 `当前版本 -> 最新版本 available`、`当前版本 · Up to date` 或 `ahead of <channel> <latest>` 展示结果。再次选中会重新检查；按 Enter 进入页面不会再次发起，也不会中断进行中的检查。实际更新先准备固定候选，再按真实目标版本确认；确定降级保留完整风险；未知兼容性使用简短英文说明。更新确认专用布局保留可信已安装副本的安全非标准标识 `Unknown[label]`，按副本展示，支持正文滚动且默认取消；该内部显示证据不进入版本比较、preview ID、CLI/JSON、日志或持久化。确认后，本地 updater 在控制协议之外复核候选、目标和服务定义，替换 Mihari 可执行文件并尝试同步已安装服务；该写操作要求 TUI 进程已经具备管理员/root 权限,不会自动触发 UAC 或 sudo。旧 Bubble Tea 程序先关闭工作、IPC、日志与文件所有者并恢复终端，再提交和进入新 TUI。取消与迟到准备结果由 Run 所有者清理。Unix 复用安装锁，Windows 在主程序替换、服务停止及服务副本复制边界复核；后续同步失败保留主程序已更新的部分成功状态。预览只在本次调用中存在，跨 Unix helper 调用用不透明 preview_id 绑定，不改变 daemon /v1、安装请求或 journal 格式。
+- 更新成功后，旧二进制及已完成事务残留延后到后续启动清理。daemon 取得实例所有权后经 core store 清理其管理的事务，daemon/TUI 经 app 用例清理当前 Mihari 程序旁残留；普通查询及安装验证子进程不清理。核心终态先持久保存独立的 `pending-cleanup.json`，再释放当前 journal，允许同次运行连续更新。启动清理核对记录、marker 与对象身份，保留未决或不明恢复材料；失败以 WARN 进入已有 F2 历史，不影响启动，下次再试。Unix binary-only stage 仅在候选已被发布消耗时可回收；安装证明与迁移保留树不纳入。详见 [ADR 0006](adr/0006-defer-update-residue-cleanup.md)。
 - Windows 更新预览对管理员执行检查未通过的用户目录目标，增加同一用户的降权版本查询：持有并验证调用者关联的非管理员 UAC token，核对用户 SID、会话、elevation、管理员组、integrity 和 UIAccess，再以该用户的非管理员 owner/ACL 规则复查整个路径。若 linked token 只能识别身份、复制为 primary token 返回 `ERROR_BAD_IMPERSONATION_LEVEL`，可从桌面 Shell 取得 token，但必须再核对与调用者相同的用户 SID、桌面会话及 logon SID，并满足全部非管理员权限检查。Shell 只提供经过核验的 token，不作为子进程父进程，以兼容旧版 CLI 的 Explorer 启动拦截。提权调用者使用 CreateProcessWithTokenW 启动查询，持有的 token 仅增加创建进程所需的 default/session metadata 访问权，不启用调用者或子进程的额外特权；非提权调用者继续使用 Go 的普通 token 启动路径。只运行固定 `self version --json`，保留隔离环境、3 秒超时、4 KiB 输出上限和子进程回收；仅继承标准 IO 句柄，查询前后继续核对路径、文件身份、SHA256 与执行信任。另一个用户可写的路径、无 Shell、跨用户或跨登录会话、无法取得或验证降权令牌、启动失败仍保持 unknown；不回退为管理员执行该目标。原有管理员可信目标与 Unix 规则不变，不改变业务写入、CLI/JSON、确认标识或持久化契约。
 - Mihari 应用通道 `main`/`dev` 与 mihomo Core 通道 `stable`/`alpha` 分开：应用通道写在 Unix B/P 的 `mihari-channel` sidecar（Windows 为旧数据根），不进 `mihari.yaml` / `/v1`；AIO `--channel` 只写该 sidecar；CLI/TUI 自更新仍走 GitHub Releases。
 - System 页面的 `Core Channel` 行可在 `stable` / `alpha` 之间切换;切换后由守护进程按新通道重装核心。版本行显示 `ParseVersion(mihomo -v)` 的身份 token,从不显示 `Prerelease-Alpha`。

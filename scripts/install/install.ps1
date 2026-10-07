@@ -14,6 +14,15 @@ $ErrorActionPreference = 'Stop'
 
 function Info($m) { Write-Host "* $m" -ForegroundColor Cyan }
 function Fail($m) { Write-Host "error: $m" -ForegroundColor Red; throw $m }
+function Start-MihariStep($Name) {
+  Info $Name
+  $script:MihariStepWatch = [Diagnostics.Stopwatch]::StartNew()
+}
+function Complete-MihariStep {
+  $elapsed = $script:MihariStepWatch.Elapsed
+  $minutes = [int][Math]::Floor($elapsed.TotalMinutes)
+  Write-Host ('  elapsed {0}:{1:d2}' -f $minutes, $elapsed.Seconds)
+}
 
 # BEGIN REPLACEMENT CONFIRMATION
 # Kept in both standalone installers; exercised with one shared version fixture.
@@ -448,80 +457,60 @@ function Compare-Canonical([string]$left, [string]$right) {
   return 0
 }
 
-function Get-NextReleaseLink($headers) {
-  $values = @()
-  foreach ($key in @('Link', 'link')) {
-    if ($headers[$key]) { $values += $headers[$key] }
-  }
-  foreach ($value in $values) {
-    foreach ($part in (([string]$value) -split ',')) {
-      if ($part -match 'rel\s*=\s*"next"' -and $part -match '<([^>]+)>') {
-        return $Matches[1]
-      }
-    }
-  }
-  return $null
-}
-
 function Resolve-DevTag {
-  $url = "$githubApi/repos/$repo/releases?per_page=100"
+  # The newest dev tag is among the latest created releases. One page of 10
+  # does not grow with release history.
+  $url = "$githubApi/repos/$repo/releases?per_page=10"
   $best = $null
-  for ($page = 0; $page -lt 5; $page++) {
-    try {
-      $req = [Net.HttpWebRequest]::Create($url)
-      $req.Method = 'GET'
-      $req.UserAgent = 'mihari'
-      $req.Accept = 'application/vnd.github+json'
-      $req.KeepAlive = $false
-      $req.ServicePoint.Expect100Continue = $false
-      $resp = $req.GetResponse()
-    } catch {
-      Fail 'failed to list GitHub Releases; set MIHARI_VERSION=vX.Y.Z-dev.N'
+  try {
+    $req = [Net.HttpWebRequest]::Create($url)
+    $req.Method = 'GET'
+    $req.UserAgent = 'mihari'
+    $req.Accept = 'application/vnd.github+json'
+    $req.KeepAlive = $false
+    $req.ServicePoint.Expect100Continue = $false
+    $resp = $req.GetResponse()
+  } catch {
+    Fail 'failed to list GitHub Releases; set MIHARI_VERSION=vX.Y.Z-dev.N'
+  }
+  try {
+    $reader = New-Object IO.StreamReader($resp.GetResponseStream())
+    $body = $reader.ReadToEnd()
+    $reader.Close()
+    if ([Text.Encoding]::UTF8.GetByteCount($body) -gt 8MB) {
+      Fail 'mihari release list is too large; set MIHARI_VERSION=vX.Y.Z-dev.N'
     }
-    try {
-      $headers = @{}
-      foreach ($name in $resp.Headers.AllKeys) { $headers[$name] = $resp.Headers[$name] }
-      $reader = New-Object IO.StreamReader($resp.GetResponseStream())
-      $body = $reader.ReadToEnd()
-      $reader.Close()
-      if ([Text.Encoding]::UTF8.GetByteCount($body) -gt 8MB) {
-        Fail 'mihari release list is too large; set MIHARI_VERSION=vX.Y.Z-dev.N'
-      }
-    } finally {
-      if ($resp) { $resp.Close() }
-    }
-    $releases = @()
-    try {
-      # PS 5.1 flattens a top-level JSON array into one object. Wrapping
-      # preserves per-release tag_name / draft on nested GitHub payloads.
-      $parsed = ConvertFrom-Json -InputObject ('{"items":' + $body + '}')
-      if ($null -ne $parsed.items) { $releases = @($parsed.items) }
-    } catch {
-      try { $releases = @($body | ConvertFrom-Json) } catch { $releases = @() }
-    }
-    foreach ($rel in $releases) {
-      if ($rel.draft) { continue }
-      $tag = [string]$rel.tag_name
-      if (-not $tag) { $tag = [string]$rel.tagName }
-      if ($tag -match ' ') { continue }
+  } finally {
+    if ($resp) { $resp.Close() }
+  }
+  $releases = @()
+  try {
+    # PS 5.1 flattens a top-level JSON array into one object. Wrapping
+    # preserves per-release tag_name / draft on nested GitHub payloads.
+    $parsed = ConvertFrom-Json -InputObject ('{"items":' + $body + '}')
+    if ($null -ne $parsed.items) { $releases = @($parsed.items) }
+  } catch {
+    try { $releases = @($body | ConvertFrom-Json) } catch { $releases = @() }
+  }
+  foreach ($rel in $releases) {
+    if ($rel.draft) { continue }
+    $tag = [string]$rel.tag_name
+    if (-not $tag) { $tag = [string]$rel.tagName }
+    if ($tag -match ' ') { continue }
+    if (-not (Test-CanonicalDev $tag)) { continue }
+    if (-not $best -or (Compare-Canonical $tag $best) -gt 0) { $best = $tag }
+  }
+  if (-not $best) {
+    $tagHits = [regex]::Matches([string]$body, '"tag_name"\s*:\s*"([^"]*)"')
+    for ($i = 0; $i -lt $tagHits.Count; $i++) {
+      $tag = $tagHits[$i].Groups[1].Value
+      $start = $tagHits[$i].Index
+      $end = if ($i + 1 -lt $tagHits.Count) { $tagHits[$i + 1].Index } else { $body.Length }
+      $slice = $body.Substring($start, $end - $start)
+      if ($slice -match '"draft"\s*:\s*true') { continue }
       if (-not (Test-CanonicalDev $tag)) { continue }
       if (-not $best -or (Compare-Canonical $tag $best) -gt 0) { $best = $tag }
     }
-    if (-not $best) {
-      $tagHits = [regex]::Matches([string]$body, '"tag_name"\s*:\s*"([^"]*)"')
-      for ($i = 0; $i -lt $tagHits.Count; $i++) {
-        $tag = $tagHits[$i].Groups[1].Value
-        $start = $tagHits[$i].Index
-        $end = if ($i + 1 -lt $tagHits.Count) { $tagHits[$i + 1].Index } else { $body.Length }
-        $slice = $body.Substring($start, $end - $start)
-        if ($slice -match '"draft"\s*:\s*true') { continue }
-        if (-not (Test-CanonicalDev $tag)) { continue }
-        if (-not $best -or (Compare-Canonical $tag $best) -gt 0) { $best = $tag }
-      }
-    }
-    $next = Get-NextReleaseLink $headers
-    if (-not $next) { break }
-    $url = $next
   }
   if (-not $best) { Fail 'no canonical mihari dev release; set MIHARI_VERSION=vX.Y.Z-dev.N' }
   return $best
@@ -578,18 +567,22 @@ if ($installService) { $targets += Get-ReplacementServiceDestination }
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ('mihari-download-' + [Guid]::NewGuid().ToString('N') + '.exe')
 $changed = $false
 try {
-  Info "Downloading $asset from $repo..."
+  Start-MihariStep 'Downloading release'
   Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+  Complete-MihariStep
   $releaseAsset = @($release.assets | Where-Object { $_.name -ceq $asset })
   if ($releaseAsset.Count -eq 1 -and $releaseAsset[0].digest) {
+    Start-MihariStep 'Verifying release'
     if ($releaseAsset[0].digest -cnotmatch '^sha256:([0-9a-f]{64})$' -or
         (Get-ReplacementFile $tmp).Digest -cne $Matches[1]) { Fail 'Mihari release checksum mismatch' }
+    Complete-MihariStep
   }
   $preview = Get-ReplacementPreview -Candidate $tmp -TargetVersion $tag -Targets $targets
   if ($preview.Service -cne $serviceView.Definition) { throw 'Service installation changed. Retry the installation.' }
   if (-not (Confirm-Replacement $preview ($env:MIHARI_YES -eq '1'))) { throw 'Cancelled. No installation changes were made.' }
   Assert-ReplacementPreview $preview $tmp $targets
   New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+  Start-MihariStep "Installing mihari to $dest"
   if ($preview.StopRequired) {
     Invoke-ReplacementElevated ([pscustomobject]@{ Action='Swap'; Preview=$preview; Candidate=$tmp; Targets=$targets; Destination=$dest })
   } else {
@@ -599,6 +592,7 @@ try {
   $changed = $true
   Set-ReplacementWrittenTarget $preview $dest
   Assert-ReplacementPreview $preview $tmp $targets
+  Complete-MihariStep
   $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
   if ($userPath -notlike "*$binDir*") {
     Info "Adding $binDir to your PATH"
@@ -607,15 +601,18 @@ try {
   }
   if ($explicit -eq 1) { Write-MihariChannel $channel }
   if ($installService) {
-    Info 'Registering the Mihari service...'
+    Start-MihariStep 'Registering the Mihari service...'
     Invoke-ReplacementElevated ([pscustomobject]@{ Action='Service'; Preview=$preview; Candidate=$dest; Targets=$targets; ServiceArgs=@('service','install'); Environment=(Get-ReplacementEnvironment) })
+    Complete-MihariStep
     # Registration intentionally changed the definition. Start does not stage
     # binaries; retain the existing service-start operation without reapproval.
+    Start-MihariStep 'Starting the Mihari service'
     if ($isAdmin) { & $dest service start; if ($LASTEXITCODE -ne 0) { throw 'Service start failed.' } }
     else {
       $process = Start-Process -FilePath $dest -ArgumentList @('service','start') -Verb RunAs -Wait -PassThru
       if ($process.ExitCode -ne 0) { throw 'Service start failed.' }
     }
+    Complete-MihariStep
   }
 } catch {
   if ($changed) { Write-Warning 'Mihari was copied, but installation did not complete. Some installation changes were made.' }

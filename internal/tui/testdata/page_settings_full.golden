@@ -1,0 +1,28 @@
+      ╭──────────────────────────────────────────────────────────────────────────────────────╮
+      │                                                                                      │
+      │  Page Settings                                                                       │
+      │  Tab to switch: Sections · settings · Cancel · Save                                  │
+      │                                                                                      │
+      │  Sections       │   ▾ Overview ────────────────────────────────────────────────────  │
+      │                 │     No settings available yet                                      │
+      │    Overview     │ › ▾ Proxies ─────────────────────────────────────────────────────  │
+      │  ● Proxies      │     Extra latency display                                     [x]  │
+      │    Conns        │     Automatic latency test                                    [x]  │
+      │    Rules        │     Test concurrency                                        < 5 >  │
+      │    Logs         │   ▾ Conns ───────────────────────────────────────────────────────  │
+      │    Subs         │     No settings available yet                                      │
+      │    Web GUI      │   ▾ Rules ───────────────────────────────────────────────────────  │
+      │    System       │     No settings available yet                                      │
+      │                 │   ▾ Logs ────────────────────────────────────────────────────────  │
+      │                 │     No settings available yet                                      │
+      │                 │   ▾ Subs ────────────────────────────────────────────────────────  │
+      │                 │     No settings available yet                                      │
+      │                 │   ▾ Web GUI ─────────────────────────────────────────────────────  │
+      │                 │     No settings available yet                                      │
+      │                 │   ▾ System ──────────────────────────────────────────────────────  │
+      │                 │     No settings available yet                                      │
+      │                                                                                      │
+      │                                                             [Cancel]  [Save] Ctrl+S  │
+      │  Tab area  ↑/↓ move  Enter select  ] Expand all  [ Collapse all  Esc cancel          │
+      │                                                                                      │
+      ╰──────────────────────────────────────────────────────────────────────────────────────╯

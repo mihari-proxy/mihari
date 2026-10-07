@@ -23,6 +23,7 @@ func (m *Model) formLayout() formLayout {
 			global = ui.MissingValue
 		}
 		m.form.inputs[2].Placeholder = "Global · " + global
+		m.updateDetailActionLabels()
 	}
 	layout := m.form.fieldLayout(m.theme, width)
 	if m.form.kind == formEdit {

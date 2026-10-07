@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -54,11 +55,49 @@ func TestUnixMigration_PreservesFunction(t *testing.T) {
 	}
 }
 
+func TestUnixMigration_PreservesLocalCoreWithoutCompiledTrust(t *testing.T) {
+	for _, receipt := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy-receipt=%t", receipt), func(t *testing.T) {
+			fx := newMigrationFixture(t)
+			local := []byte("administrator deployed custom core")
+			mustWrite(t, fx.source.osPath("bin/mihomo"), local)
+			mustWrite(t, fx.source.osPath("bin/core-channel"), []byte("alpha\n"))
+			if receipt {
+				mustWrite(t, fx.source.osPath("bin/mihomo.provenance.json"), []byte("historical receipt"))
+			}
+			settings := bytes.ReplaceAll(fx.settingsYAML, []byte("core-channel: stable"), []byte("core-channel: alpha"))
+			mustWrite(t, fx.source.osPath("mihari.yaml"), settings)
+			before := fx.sourceHashes(t)
+			prepared, err := prepareMigration(t.Context(), fx.options())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer prepared.cleanup()
+			got, err := os.ReadFile(fx.staging.osPath("bin/mihomo"))
+			if err != nil || !bytes.Equal(got, local) {
+				t.Fatalf("local core replaced: %q, %v", got, err)
+			}
+			if !bytes.Contains(prepared.settings, []byte("core-channel: alpha")) {
+				t.Fatal("original core channel was lost")
+			}
+			if sidecar, err := os.ReadFile(fx.staging.osPath("bin/core-channel")); err != nil || string(sidecar) != "alpha\n" {
+				t.Fatalf("unconsumed channel sidecar lost: %q %v", sidecar, err)
+			}
+			if prepared.hasRel("bin/mihomo.provenance.json") {
+				t.Fatal("historical receipt became new installation authority")
+			}
+			if !mapsEqual(before, fx.sourceHashes(t)) {
+				t.Fatal("source modified during migration preparation")
+			}
+		})
+	}
+}
+
 func TestUnixMigration_NegativeCases(t *testing.T) {
 	cases := []string{
-		"missing-active-cache", "untrusted-core",
+		"missing-active-cache",
 		"unknown-top-level", "nested-source-target", "concurrent-business-write",
-		"oversize", "hardlink", "nested-mount",
+		"oversize", "hardlink", "nested-mount", "pending-core-update", "pending-core-pair",
 	}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -66,15 +105,17 @@ func TestUnixMigration_NegativeCases(t *testing.T) {
 			opts := fx.options()
 			wantCode := protocol.CodeDataFailure
 			switch name {
+			case "pending-core-update", "pending-core-pair":
+				journal := "staging/core/update-journal.json"
+				if name == "pending-core-pair" {
+					journal = "staging/core/provenance-commit.json"
+				}
+				mustWrite(t, fx.source.osPath(journal), []byte("pending update evidence"))
+				wantCode = protocol.CodeInvalidState
 			case "missing-active-cache":
 				if err := os.Remove(fx.source.osPath("subscriptions/cache/" + fx.profileID + ".yaml")); err != nil {
 					t.Fatal(err)
 				}
-			case "untrusted-core":
-				if err := os.WriteFile(fx.source.osPath("bin/mihomo"), []byte("evil-core"), 0o700); err != nil {
-					t.Fatal(err)
-				}
-				wantCode = protocol.CodeInvalidState
 			case "unknown-top-level":
 				if err := os.WriteFile(fx.source.osPath("evil.bin"), []byte("nope"), 0o600); err != nil {
 					t.Fatal(err)

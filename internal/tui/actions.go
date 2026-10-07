@@ -11,6 +11,7 @@ const (
 	RollbackPanel           = ui.ActionRollbackPanel
 	RestartCore             = ui.ActionRestartCore
 	UpdateCore              = ui.ActionUpdateCore
+	ReinstallCore           = ui.ActionReinstallCore
 	SwitchCoreChannel       = ui.ActionSwitchCoreChannel
 	SwitchMihariChannel     = ui.ActionSwitchMihariChannel
 	UpdateMihari            = ui.ActionUpdateMihari
@@ -44,7 +45,7 @@ const (
 
 func RequiresConfirmation(action Action) bool {
 	switch action {
-	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, SwitchCoreChannel, SwitchMihariChannel, UpdateMihari, ApplyEndpointChange,
+	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, ReinstallCore, SwitchCoreChannel, SwitchMihariChannel, UpdateMihari, ApplyEndpointChange,
 		UninstallPanel, ReinstallPanel,
 		ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart,
 		CompleteUninstall,
@@ -68,7 +69,7 @@ func RequiresDaemon(action Action) bool {
 
 func knownAction(action Action) bool {
 	switch action {
-	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, SwitchCoreChannel, SwitchMihariChannel, UpdateMihari, ApplyEndpointChange,
+	case DeleteSubscription, CloseAllConnections, UpdateAllProviders, RefreshAllSubscriptions, RollbackPanel, RestartCore, UpdateCore, ReinstallCore, SwitchCoreChannel, SwitchMihariChannel, UpdateMihari, ApplyEndpointChange,
 		SelectProxy, SetRouting, CloseConnection, RefreshSubscription, UpdateProvider,
 		InstallPanel, UpdatePanel, ActivatePanel, OpenWebGUI, UninstallPanel, ReinstallPanel,
 		ServiceInstall, ServiceUninstall, ServiceReinstall, ServiceStart, ServiceStop, ServiceRestart,

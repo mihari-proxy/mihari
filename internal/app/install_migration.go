@@ -15,10 +15,10 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
-	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/geoip"
 	"github.com/mihari-proxy/mihari/internal/panel"
 	"github.com/mihari-proxy/mihari/internal/panel/archive"
+	"github.com/mihari-proxy/mihari/internal/preferences"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/subscription"
 	"go.yaml.in/yaml/v3"
@@ -438,6 +438,10 @@ func copyBin(ctx context.Context, opts migrationOptions, prepared *preparedMigra
 		}
 		switch entry.Name {
 		case "core-channel":
+			if err := copyObserved(ctx, opts, prepared, obs, record, rel, 64); err != nil {
+				return err
+			}
+		case "mihomo.provenance.json":
 			if err := observeOnly(ctx, opts.Source, obs, record, rel); err != nil {
 				return err
 			}
@@ -445,13 +449,10 @@ func copyBin(ctx context.Context, opts migrationOptions, prepared *preparedMigra
 			if err := copyObserved(ctx, opts, prepared, obs, record, rel, migrationBinaryMax); err != nil {
 				return err
 			}
-			hash := prepared.hashes[rel]
-			if !opts.Trust.acceptsCore(hash) {
-				if err := core.VerifyCompiledAssetDigest(ctx, opts.GOOS, opts.GOARCH, "v1.19.30", "stable", hash); err != nil {
-					return migrateState("untrusted core")
-				}
-			}
-			prepared.coreHash = hash
+			// Retain the administrator's deployed core as inert bytes. The
+			// source observation is checked again after stopping the service;
+			// execution and configuration validation use protected staging.
+			prepared.coreHash = prepared.hashes[rel]
 		default:
 			if entry.Kind == "socket" || entry.Kind == "fifo" {
 				continue
@@ -1024,10 +1025,13 @@ func decodeTUIBytes(raw []byte) error {
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	var persisted struct {
-		Schema             string   `json:"schema"`
-		ConnectionsColumns []string `json:"connections_columns"`
-	}
+	defaults := preferences.DefaultProxyPreferences()
+	persisted := struct {
+		Schema             string                        `json:"schema"`
+		ConnectionsColumns []string                      `json:"connections_columns"`
+		Proxies            *preferences.ProxyPreferences `json:"proxies,omitempty"`
+		LogLevels          []string                      `json:"log_levels"`
+	}{Proxies: &defaults}
 	if err := dec.Decode(&persisted); err != nil {
 		return migrateData("invalid tui preferences")
 	}
@@ -1036,6 +1040,16 @@ func decodeTUIBytes(raw []byte) error {
 	}
 	if persisted.Schema != "mihari.tui-preferences/v1" {
 		return migrateData("unsupported tui preferences schema")
+	}
+	if persisted.Proxies != nil {
+		if err := preferences.ValidateLatencyConcurrency(persisted.Proxies.LatencyTestConcurrency); err != nil {
+			return migrateData("invalid tui latency test concurrency")
+		}
+	}
+	if persisted.LogLevels != nil {
+		if err := preferences.ValidateLogLevels(persisted.LogLevels); err != nil {
+			return migrateData("invalid tui log display levels")
+		}
 	}
 	return nil
 }

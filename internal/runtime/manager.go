@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -77,7 +78,9 @@ type GeoIPService interface {
 }
 
 type Options struct {
-	TrustedCore *core.TrustedExecution
+	// ListInterfaces is the adapter snapshot boundary; nil uses the platform enumerator.
+	ListInterfaces func(context.Context) ([]platform.NetworkInterface, error)
+	TrustedCore    *core.TrustedExecution
 
 	Store          *state.Store
 	Coordinator    *state.Coordinator
@@ -138,6 +141,8 @@ type Options struct {
 	// ActivationPhase is the durable install journal phase. Empty means no Unix
 	// install journal (Windows / non-root private / already complete).
 	ActivationPhase string
+	// CoreRepairRequired keeps ordinary mutations and automatic starts blocked.
+	CoreRepairRequired bool
 }
 
 // WebGateway is the loopback HTTP server for panel hosting and API proxying.
@@ -148,6 +153,7 @@ type WebGateway interface {
 }
 
 type Manager struct {
+	listInterfaces func(context.Context) ([]platform.NetworkInterface, error)
 	routingMessage string // guarded by mutation ownership
 	trustedCore    *core.TrustedExecution
 
@@ -171,9 +177,10 @@ type Manager struct {
 	geoip                     GeoIPService
 	prepareGeoIP              func(context.Context) (GeoIPCandidate, error)
 	onboarding                *onboarding.Service
-	onboardingRestartRequired bool
+	onboardingRestartRequired atomic.Bool
 	logging                   LoggingRuntime
 	loggingObservation        loggingObservation // guarded by mutation ownership
+	egressTunName             string             // last confirmed own TUN, guarded by mutation ownership
 	loggingUnsaved            bool               // remains set across observation failures until saved or restarted
 	loggingWait               func(context.Context, time.Duration) error
 	refreshLogSecrets         func(catalogURLs []string)
@@ -200,10 +207,16 @@ type Manager struct {
 	installed                 chan struct{}
 	closing                   atomic.Bool
 	mutationDegraded          atomic.Bool
+	coreUpdate                atomic.Pointer[coreUpdateReservation]
+	coreRecovery              atomic.Bool
 	stopCoreOnUnlock          atomic.Bool
 	running                   atomic.Bool
+	coreRunRequested          atomic.Bool
 	operationsMu              sync.Mutex
 	operations                map[string]*operationEntry
+
+	startupSystemProxyApplying atomic.Bool
+	startupTunApplying         atomic.Bool
 }
 
 type operationEntry struct {
@@ -214,6 +227,9 @@ type operationEntry struct {
 }
 
 func New(options Options) *Manager {
+	if options.ListInterfaces == nil {
+		options.ListInterfaces = platform.NetworkInterfaces
+	}
 	store := options.Store
 	if store == nil {
 		store = state.NewStore(state.Snapshot{Health: "ok"})
@@ -282,6 +298,7 @@ func New(options Options) *Manager {
 		webOpenToken:       options.WebOpenToken,
 		sysProxy:           sysProxy,
 		tunDetect:          tunDetect,
+		listInterfaces:     options.ListInterfaces,
 		lookupOccupant:     lookupOccupant,
 		settingsPath:       options.SettingsPath,
 		saveSettings:       saveSettings,
@@ -302,11 +319,20 @@ func New(options Options) *Manager {
 		manager.syncSubscriptionState(&snapshot, manager.subscriptions.Snapshot())
 		manager.store.Store(snapshot)
 	}
+	if options.CoreRepairRequired {
+		manager.coreRecovery.Store(true)
+		snapshot := manager.store.Load()
+		snapshot.Health, snapshot.LastError = "degraded", "Core update recovery required"
+		snapshot.Core.Status, snapshot.Core.LastError = "degraded", "Core update recovery required"
+		manager.store.Store(snapshot)
+	}
 	return manager
 }
 
 func (m *Manager) Run(ctx context.Context) error {
 	defer m.closing.Store(true)
+	defer m.startupSystemProxyApplying.Store(false)
+	defer m.startupTunApplying.Store(false)
 	if m.validationMode {
 		<-ctx.Done()
 		return nil
@@ -362,25 +388,47 @@ func (m *Manager) Run(ctx context.Context) error {
 		<-ctx.Done()
 		return nil
 	}
-	for !m.binaryExists() {
-		m.setCoreState(state.CoreState{Status: "missing"})
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-m.installed:
+	m.coreRunRequested.Store(true)
+	defer m.coreRunRequested.Store(false)
+	missing := m.coreRecovery.Load() || !m.binaryExists()
+	initialCoreAvailable := !missing
+	if paused, ok := m.supervisor.(interface{ WaitForCore() }); ok && missing {
+		if !m.coreRecovery.Load() {
+			m.setCoreState(state.CoreState{Status: "missing"})
+		}
+		paused.WaitForCore()
+	} else {
+		for missing {
+			m.setCoreState(state.CoreState{Status: "missing"})
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-m.installed:
+			}
+			missing = !m.binaryExists()
 		}
 	}
 	m.running.Store(true)
 	// Best-effort restore of desired OS system proxy; failures must not block core supervision.
-	if err := m.ApplyDesiredSystemProxy(ctx); err != nil {
-		m.reportWarning(ctx, "system-proxy", "restore.failed", err)
+	if !missing {
+		apply := m.ApplyDesiredSystemProxy
+		if initialCoreAvailable {
+			apply = m.applyStartupSystemProxy
+		}
+		if err := apply(ctx); err != nil {
+			m.reportWarning(ctx, "system-proxy", "restore.failed", err)
+		}
 	}
 	defer func() {
 		if err := m.ClearOwnedSystemProxy(context.Background()); err != nil {
 			m.reportWarning(ctx, "system-proxy", "cleanup.failed", err)
 		}
 	}()
+	if initialCoreAvailable && ctx.Err() == nil {
+		m.startupTunApplying.Store(tunManaged(m.settingsSnapshot().Tun))
+	}
 	err := m.supervisor.Run(ctx)
+	m.startupTunApplying.Store(false)
 	m.running.Store(false)
 	if ctx.Err() != nil {
 		if err == nil || diagnostics.NormalCancellation(ctx, err) {
@@ -428,6 +476,10 @@ func (m *Manager) reportBackgroundContext(ctx context.Context, component string,
 }
 
 func (m *Manager) Observe(observation supervisor.Observation) {
+	switch observation.Status {
+	case supervisor.StatusRunning, supervisor.StatusBackoff, supervisor.StatusDegraded, supervisor.StatusStopped:
+		m.startupTunApplying.Store(false)
+	}
 	if m.lockMaintenance(context.Background()) != nil {
 		return
 	}
@@ -546,8 +598,12 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		if m.installer == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "core installer is unavailable"}
 		}
+		inputs, err := m.captureCoreUpdateInputs(ctx)
+		if err != nil {
+			return nil, err
+		}
 
-		channel := m.settingsSnapshot().CoreChannel
+		channel := inputs.selection.Channel
 		if channel == "" {
 			channel = "stable"
 		}
@@ -616,6 +672,14 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 			return nil, err
 		}
 		defer candidate.Cleanup()
+		if prepared, ok := candidate.(interface{ Warnings() []error }); ok {
+			for _, warning := range prepared.Warnings() {
+				collectWarning(ctx, "core", "prepare.warning", warning)
+			}
+		}
+		if prepared, ok := candidate.(interface{ UpdateCandidate() core.PreparedUpdate }); ok && prepared.UpdateCandidate() != nil {
+			return m.installCoreUpdate(ctx, operation, inputs, candidate, prepared.UpdateCandidate(), channel, false)
+		}
 		var result core.InstallResult
 		commitWork := func() error {
 			if err := m.lockMutation(ctx); err != nil {
@@ -867,12 +931,23 @@ func (m *Manager) checkOpen() error {
 }
 
 func (m *Manager) doOperation(ctx context.Context, key string, execute func(context.Context) (any, error)) (any, error) {
+	if m.ownsCoreUpdate(ctx) {
+		// Internal startup/health work belongs to the enclosing update owner;
+		// retain its warning batch and report a final failure only once.
+		return execute(ctx)
+	}
 	if err := m.checkOpen(); err != nil {
 		return nil, err
 	}
 	executeOnce := func() (any, protocol.WarningOutcome, error) {
 		executionCtx, batch := newOperationDiagnostics(ctx, key)
-		result, err := execute(executionCtx)
+		var result any
+		var err error
+		if m.coreRecovery.Load() && !strings.HasPrefix(key, "reinstall:") {
+			err = protocol.APIError{Code: protocol.CodeInvalidState, Message: "core reinstall required"}
+		} else {
+			result, err = execute(executionCtx)
+		}
 		warnings := m.flushDiagnostics(executionCtx, batch)
 		if err != nil && !diagnostics.AlreadyReported(err) {
 			if level, emit := diagnostics.FailureLevel(executionCtx, err); emit {

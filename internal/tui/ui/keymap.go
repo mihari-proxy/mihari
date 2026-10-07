@@ -42,12 +42,16 @@ const (
 	// ModeSubscriptionInput identifies an editable subscription form field.
 	ModeSubscriptionInput = "subscription-input"
 	// ModeSubscriptionSubmit identifies the subscription form Save control.
-	ModeSubscriptionSubmit  = "subscription-submit"
-	ModeSubscriptionCycle   = "subscription-cycle"
-	ModeSubscriptionSaving  = "subscription-saving"
-	ModeSubscriptionUnknown = "subscription-unknown"
-	ModeSubscriptionWaiting = "subscription-waiting"
-	ModeSubscriptionConfirm = "subscription-confirm"
+	ModeSubscriptionSubmit = "subscription-submit"
+	ModeSubscriptionCycle  = "subscription-cycle"
+	// ModeSubscriptionAction identifies an immediately applied detail action.
+	ModeSubscriptionAction = "subscription-action"
+	// ModeSubscriptionActionWaiting allows closing without replaying an action.
+	ModeSubscriptionActionWaiting = "subscription-action-waiting"
+	ModeSubscriptionSaving        = "subscription-saving"
+	ModeSubscriptionUnknown       = "subscription-unknown"
+	ModeSubscriptionWaiting       = "subscription-waiting"
+	ModeSubscriptionConfirm       = "subscription-confirm"
 )
 
 // KeyBinding is one shortcut in a page or mode. Identity is (Scope, Page, Mode, Keys),
@@ -71,6 +75,7 @@ type FooterOpt struct {
 // the same physical key may appear more than once with different labels.
 func Catalog() []KeyBinding {
 	return []KeyBinding{
+		{Keys: []string{"f4"}, Display: "F4", Label: "open page settings", Footer: "F4 settings", Scope: ScopeGlobal},
 		{Keys: []string{"f2"}, Display: "F2", Label: "diagnostic history and error details", Footer: "F2 details", Scope: ScopeGlobal},
 		{Keys: []string{"up", "down"}, Display: "↑/↓", Label: "select a routing mode", Footer: "↑/↓ select", Scope: ScopeMode, Mode: ModeRouting},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "apply the selected mode", Footer: "Enter apply", Scope: ScopeMode, Mode: ModeRouting},
@@ -90,6 +95,7 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"t"}, Display: "t", Label: "test the focused node", Footer: "t test", Scope: ScopePage, Page: PageProxies},
 		{Keys: []string{"ctrl+t"}, Display: "Ctrl+T", Label: "test all", Footer: "Ctrl+T test all", Scope: ScopePage, Page: PageProxies},
 		{Keys: []string{"up", "down", "left", "right"}, Display: "↑/↓/←/→", Label: "move; at a group header, → focuses Locate and ← returns to the header", Scope: ScopePage, Page: PageProxies},
+		{Keys: []string{"pgup", "pgdown"}, Display: "PgUp/PgDn", Label: "page through groups and node cards", Scope: ScopePage, Page: PageProxies},
 
 		{Keys: []string{"/"}, Display: "/", Label: "search from page content", Footer: "/ search · Ctrl+F", Scope: ScopePage, Page: PageConnections},
 		{Keys: []string{"ctrl+f"}, Display: "Ctrl+F", Label: "focus search from the rail or page content", Scope: ScopePage, Page: PageConnections},
@@ -99,6 +105,7 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"ctrl+x"}, Display: "Ctrl+X", Label: "close all active connections", Scope: ScopePage, Page: PageConnections},
 		{Keys: []string{"tab"}, Display: "Tab", Label: "move between controls", Scope: ScopePage, Page: PageConnections},
 		{Keys: []string{"up", "down", "left", "right"}, Display: "↑/↓/←/→", Label: "move", Scope: ScopePage, Page: PageConnections},
+		{Keys: []string{"pgup", "pgdown"}, Display: "PgUp/PgDn", Label: "page through the focused list", Scope: ScopePage, Page: PageConnections},
 
 		{Keys: []string{"/"}, Display: "/", Label: "search from page content", Footer: "/ search · Ctrl+F", Scope: ScopePage, Page: PageRules},
 		{Keys: []string{"ctrl+f"}, Display: "Ctrl+F", Label: "focus search from the rail or page content", Scope: ScopePage, Page: PageRules},
@@ -107,6 +114,7 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"ctrl+u"}, Display: "Ctrl+U", Label: "update all providers", Footer: "Ctrl+U update all", Scope: ScopePage, Page: PageRules},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "open details or activate a control", Footer: "Enter details", Scope: ScopePage, Page: PageRules},
 		{Keys: []string{"up", "down", "left", "right"}, Display: "↑/↓/←/→", Label: "move", Scope: ScopePage, Page: PageRules},
+		{Keys: []string{"pgup", "pgdown"}, Display: "PgUp/PgDn", Label: "page through the focused list", Scope: ScopePage, Page: PageRules},
 
 		{Keys: []string{"/"}, Display: "/", Label: "search from page content", Footer: "/ search · Ctrl+F", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"ctrl+f"}, Display: "Ctrl+F", Label: "focus search from the rail or page content", Scope: ScopePage, Page: PageLogs},
@@ -116,6 +124,7 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"e"}, Display: "e", Label: "export logs", Footer: "e export", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "open details or activate a control", Footer: "Enter details", Scope: ScopePage, Page: PageLogs},
 		{Keys: []string{"up", "down", "left", "right"}, Display: "↑/↓/←/→", Label: "move", Scope: ScopePage, Page: PageLogs},
+		{Keys: []string{"pgup", "pgdown"}, Display: "PgUp/PgDn", Label: "page through the focused list; G resumes following", Scope: ScopePage, Page: PageLogs},
 
 		{Keys: []string{"enter"}, Display: "Enter", Label: "details", Footer: "Enter details", Scope: ScopePage, Page: PageSubscriptions},
 		{Keys: []string{"a"}, Display: "a", Label: "add", Footer: "a add", Scope: ScopePage, Page: PageSubscriptions},
@@ -165,6 +174,12 @@ func Catalog() []KeyBinding {
 		{Keys: []string{"tab", "shift+tab"}, Display: "Tab / Shift+Tab", Label: "move between fields", Footer: "Tab/Shift+Tab fields", Scope: ScopeMode, Mode: ModeForm},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "next or save", Footer: "Enter next/save", Scope: ScopeMode, Mode: ModeForm},
 		{Keys: []string{"esc"}, Display: "Esc", Label: "cancel", Footer: "Esc cancel", Scope: ScopeMode, Mode: ModeForm},
+		{Keys: []string{"tab", "shift+tab", "up", "down"}, Display: "Tab/Shift+Tab/↑/↓", Label: "move between fields and actions", Footer: "Tab/↑/↓ fields", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionAction},
+		{Keys: []string{"enter"}, Display: "Enter", Label: "apply action immediately", Footer: "Enter apply now", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionAction},
+		{Keys: []string{"pgup", "pgdown"}, Display: "PgUp/PgDn", Label: "scroll details", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionAction},
+		{Keys: []string{"esc"}, Display: "Esc", Label: "close; discard unsaved settings", Footer: "Esc close", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionAction},
+		{Keys: []string{"esc"}, Display: "Esc", Label: "close; does not cancel the action", Footer: "Esc close (does not cancel the action)", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionActionWaiting},
+		{Keys: []string{"pgup", "pgdown"}, Display: "PgUp/PgDn", Label: "scroll details", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionActionWaiting},
 		{Display: "Wait", Label: "Saving... No form input is accepted.", Footer: "Saving...", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionSaving},
 		{Keys: []string{"tab", "shift+tab", "up", "down"}, Display: "Tab/Shift+Tab/↑/↓", Label: "move between fields", Footer: "Tab/↑/↓ fields", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionInput},
 		{Keys: []string{"enter"}, Display: "Enter", Label: "next field", Footer: "Enter next", Scope: ScopeMode, Page: PageSubscriptions, Mode: ModeSubscriptionInput},
@@ -273,7 +288,7 @@ func renderPageFooter(page PageID, mode string, opt FooterOpt) string {
 	helpQuit := helpQuitTokens()
 	escBack := globalFooterToken("Esc")
 	switch mode {
-	case ModeSubscriptionInput, ModeSubscriptionSubmit, ModeSubscriptionSaving, ModeSubscriptionCycle, ModeSubscriptionUnknown, ModeSubscriptionWaiting, ModeSubscriptionConfirm:
+	case ModeSubscriptionInput, ModeSubscriptionSubmit, ModeSubscriptionSaving, ModeSubscriptionCycle, ModeSubscriptionUnknown, ModeSubscriptionWaiting, ModeSubscriptionConfirm, ModeSubscriptionAction, ModeSubscriptionActionWaiting:
 		return joinFooter(footerTokens(func(b KeyBinding) bool { return b.Mode == mode }))
 	case ModeSearch, ModeLogFilter:
 		tokens := footerTokens(func(b KeyBinding) bool {
@@ -417,6 +432,10 @@ func modeTitle(mode string) string {
 		return "Save changes"
 	case ModeSubscriptionCycle:
 		return "Cycle field"
+	case ModeSubscriptionAction:
+		return "Subscription action"
+	case ModeSubscriptionActionWaiting:
+		return "Subscription action pending"
 	case ModeSubscriptionSaving:
 		return "Saving"
 	case ModeSubscriptionUnknown:

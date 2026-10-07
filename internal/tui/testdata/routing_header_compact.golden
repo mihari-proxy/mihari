@@ -1,10 +1,10 @@
  Mihari  ·  ●  ·  0c  ·  ↑     0/s ↓     0/s  ·  0              Offline
-   1 Overview  ╭───Routing────────────────────────────────────────────╮
- › 2 Proxies   │ › Mode     Rule · Press Enter to Change              │
-   3 Conns     │   GLOBAL   DIRECT · direct connection                │
+   1 Overview  ╭───Basic──────────────────────────────────────────────╮
+ › 2 Proxies   │ › Mode     Rule               Page Settings          │
+   3 Conns     │   GLOBAL   DIRECT · direct connection —              │
    4 Rules     ╰──────────────────────────────────────────────────────╯
    5 Logs      ╭───GLOBAL · SELECTOR · 3──────────────────────────────╮
-   6 Subs      │   ▸  Now: DIRECT  → Jump to Selected                 │
+   6 Subs      │   ▸  Now: DIRECT —  → Jump to Selected               │
    7 Web GUI   ╰──────────────────────────────────────────────────────╯
    8 System
 
@@ -19,4 +19,4 @@
 
 
 
- ↑/↓ move  Enter select  Esc back  ? help  q quit
+ ↑/↓/←/→ move  Enter select  F4 settings  Esc back  ? help  q quit

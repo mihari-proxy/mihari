@@ -51,6 +51,13 @@ func (c *Client) InstallCore(ctx context.Context, request protocol.MutationReque
 	return result, err
 }
 
+// ReinstallCore requests a new official core in the last accepted channel.
+func (c *Client) ReinstallCore(ctx context.Context, request protocol.MutationRequest) (protocol.CoreInstallResult, error) {
+	var result protocol.CoreInstallResult
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "core.reinstall"}, http.MethodPost, "/v1/core/reinstall", request, &result)
+	return result, err
+}
+
 func (c *Client) RestartCore(ctx context.Context, request protocol.MutationRequest) (protocol.MutationResult, error) {
 	var result protocol.MutationResult
 	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "core.restart"}, http.MethodPost, "/v1/core/restart", request, &result)

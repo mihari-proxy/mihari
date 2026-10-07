@@ -16,6 +16,8 @@ type diagnosticResponse struct {
 
 func copyDiagnosticResponse(value any) diagnosticResponse {
 	switch result := value.(type) {
+	case protocol.EgressStatus:
+		return diagnosticResponse{value: &result, warnings: &result.WarningOutcome}
 	case protocol.LoggingStatus:
 		return diagnosticResponse{value: &result, warnings: &result.WarningOutcome}
 	case protocol.MutationResult:

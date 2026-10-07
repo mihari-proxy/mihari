@@ -38,6 +38,7 @@ type detailState struct {
 }
 
 type Model struct {
+	preference     preferenceState
 	buffer         *Buffer
 	focus          focusKind
 	controlIndex   int
@@ -125,7 +126,18 @@ func (m *Model) SetFilter(level, query string) {
 
 func (m *Model) Unread() int { return m.scrollUnread + m.buffer.Unread() }
 
+// Update routes input to the active log control, list, or dialog and manages follow mode.
 func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
+	switch typed := message.(type) {
+	case preferenceSavedMsg:
+		return m, m.finishPreference(typed)
+	case preferenceTickMsg:
+		if !m.preference.saving || typed.version != m.preference.savingVersion {
+			return m, nil
+		}
+		m.preference.clock = typed.at
+		return m, m.preferenceTick()
+	}
 	if m.levelDialog != nil {
 		return m.updateLevelDialog(message)
 	}
@@ -170,6 +182,18 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.scrollUnread = 0
 		m.focus = focusRow
 		m.focused = max(0, len(m.visibleEntries())-1)
+		return m, nil
+	case "pgup", "pgdown":
+		if m.focus == focusRow {
+			if count := m.visibleCount(); count > 0 {
+				delta := max(1, m.height-logChrome)
+				if key.String() == "pgup" {
+					delta = -delta
+				}
+				m.following = false
+				m.focused = min(max(0, m.focused+delta), count-1)
+			}
+		}
 		return m, nil
 	case "left":
 		if m.focus == focusControl {
@@ -230,7 +254,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 func (m *Model) View() string {
 	controlFocused := m.contentFocused && m.focus == focusControl
 	control := ui.RenderControlStrip(m.theme, []string{
-		fmt.Sprintf("%s: %s", ui.LevelLabel, m.renderLevelSummary()),
+		fmt.Sprintf("%s: %s", ui.LevelLabel, m.renderLevelSummary()) + m.preferenceBadge(),
 		fmt.Sprintf("%s: %s", ui.WrapLabel, ui.StatusDot(m.theme, ui.ClassifyStatusTone(onOff(m.wrap)), onOff(m.wrap))),
 		fmt.Sprintf("%s: %s", ui.PauseLabel, ui.StatusDot(m.theme, ui.ClassifyStatusTone(onOff(m.buffer.Paused())), onOff(m.buffer.Paused()))),
 		ui.ExportLabel,

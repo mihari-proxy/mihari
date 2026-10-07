@@ -255,7 +255,7 @@ func seedInstalledReceipt(t *testing.T, s *memoryStore, binary string) {
 		}
 	}
 }
-func TestInstalledProvenance_RejectsBeforeExecution(t *testing.T) {
+func TestLegacyProvenancePair_RejectsInvalidReceipt(t *testing.T) {
 	for _, name := range []string{"missing-receipt", "binary-hash-mismatch", "unknown-tag", "alpha-no-entry", "asset-hash-mismatch", "legacy-policy-mismatch", "user-owned-receipt"} {
 		t.Run(name, func(t *testing.T) {
 			s := newMemoryStore()
@@ -288,7 +288,7 @@ func TestInstalledProvenance_RejectsBeforeExecution(t *testing.T) {
 				}
 			}
 			x := &recordedExecutor{}
-			v, e := OpenInstalledCore(context.Background(), s)
+			v, e := openVerifiedPair(context.Background(), s, InstalledBinary, InstalledReceipt, "", nil)
 			if e == nil {
 				defer func() {
 					if closeErr := v.Close(); closeErr != nil {
@@ -340,66 +340,52 @@ func TestTrustedCandidate_ReplacedAndClosedRejected(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-func TestTrustedPrepare_BadCompressedHashNeverStagesOrExecutes(t *testing.T) {
-	entries, e := supportedAssets()
-	if e != nil {
-		t.Fatal(e)
-	}
-	for _, a := range entries {
-		t.Run(a.OS+"/"+a.Arch, func(t *testing.T) {
-			s, i, x := trustedFixture(t)
-			initial := len(s.disk.files)
-			requests := 0
-			i.GOOS = a.OS
-			i.GOARCH = a.Arch
-			i.HTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-				requests++
-				if r.URL.String() != a.URL {
-					t.Fatal("download did not use compiled URL")
-				}
-				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("hostile gzip")), Header: make(http.Header)}, nil
-			})}
-			if c, e := i.Prepare(context.Background(), InstallRequest{Channel: "stable"}); e == nil || c != nil {
-				t.Fatal("bad compressed asset accepted")
-			}
-			if len(s.disk.files) != initial || len(x.commands) != 0 || requests != 1 {
-				t.Fatal("digest rejection staged or executed a candidate")
-			}
-			requests = 0
-			if c, e := i.Prepare(context.Background(), InstallRequest{Channel: "alpha"}); e == nil || c != nil {
-				t.Fatal("alpha unexpectedly supported")
-			}
-			if requests != 0 {
-				t.Fatal("unknown policy made a network request")
-			}
-		})
+func TestProtectedPrepareBadDigestNeverStagesOrExecutes(t *testing.T) {
+	store, installer, executor := trustedFixture(t)
+	initial := len(store.disk.files)
+	installer.GOOS, installer.GOARCH = "linux", "amd64"
+	payload := []byte("hostile gzip")
+	asset := Asset{ID: 456, Name: "mihomo-linux-amd64-compatible-v1.20.0.gz", Size: int64(len(payload)), State: "uploaded", UpdatedAt: "2026-09-17T01:00:00Z", Digest: "sha256:" + strings.Repeat("0", 64)}
+	requests := 0
+	installer.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if request.Header.Get("Accept") == "application/octet-stream" {
+			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(payload)))}, nil
+		}
+		var value any = asset
+		if strings.HasSuffix(request.URL.Path, "/releases/latest") {
+			value = Release{ID: 123, TagName: "v1.20.0", Assets: []Asset{asset}}
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(raw)))}, nil
+	})}
+	candidate, err := installer.Prepare(t.Context(), InstallRequest{Channel: "stable"})
+	if err == nil || candidate != nil || len(store.disk.files) != initial || len(executor.commands) != 0 || requests != 3 {
+		t.Fatalf("bad digest reached staging or execution: err=%v requests=%d objects=%d commands=%d", err, requests, len(store.disk.files), len(executor.commands))
 	}
 }
 
-func TestTrustedPrepare_SameVersionUsesVerifiedLocalCoreOffline(t *testing.T) {
+func TestTrustedPrepare_SameVersionStillRequiresOfficialDownload(t *testing.T) {
 	for _, channel := range []string{"", "stable"} {
 		t.Run(channel, func(t *testing.T) {
 			s, installer, executor := trustedFixture(t)
 			seedInstalledReceipt(t, s, "installed trusted binary")
 			before := mustInspect(t, s, InstalledBinary, "")
 			installer.GOOS, installer.GOARCH = "linux", "amd64"
-			installer.GeneratedConfig = nil // No new config is needed for a no-op.
 			requests := 0
 			installer.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 				requests++
 				return nil, errors.New("offline")
 			})}
 			candidate, err := installer.Prepare(context.Background(), InstallRequest{CurrentVersion: "v1.19.30", Channel: channel})
-			if err != nil {
-				t.Fatalf("verified same-version install failed offline: %v", err)
+			if err == nil || candidate != nil || requests != 1 {
+				t.Fatalf("explicit update skipped official download: candidate=%v requests=%d err=%v", candidate, requests, err)
 			}
-			defer candidate.Cleanup()
-			result, err := candidate.Commit()
-			if err != nil || candidate.Updated() || result.Updated || result.Version != "v1.19.30" || requests != 0 {
-				t.Fatalf("same-version install was not a local no-op: result=%+v requests=%d err=%v", result, requests, err)
-			}
-			if len(executor.commands) != 1 || executor.commands[0].Args[0] != "-v" || mustInspect(t, s, InstalledBinary, "") != before {
-				t.Fatal("same-version fast path failed to verify or changed installed binary")
+			if len(executor.commands) != 0 || mustInspect(t, s, InstalledBinary, "") != before {
+				t.Fatal("failed official download executed or changed installed binary")
 			}
 		})
 	}

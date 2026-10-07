@@ -54,15 +54,22 @@ class RootApplyEntryTests(unittest.TestCase):
             ])
             return subprocess.run(["sh", "-c", script], capture_output=True, text=True, timeout=10)
 
+    def assert_step_elapsed(self, stdout, label, before):
+        self.assertLess(stdout.index(label), stdout.index(before))
+        self.assertRegex(stdout, label + r"\n  elapsed [0-9]+:[0-9]{2}\n")
+
     def test_remote_candidate_bootstraps_helper_on_clean_host(self):
         result = self.run_selection(installed=False, online_candidate=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "new-entry\n")
+        self.assertNotIn("Downloading release", result.stdout)
+        self.assert_step_elapsed(result.stdout, "Downloading installer", "Verifying installer")
+        self.assert_step_elapsed(result.stdout, "Verifying installer", "new-entry")
 
     def test_remote_candidate_bootstraps_helper_when_installed_helper_is_old(self):
         result = self.run_selection(capable=False, online_candidate=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "new-entry\n")
+        self.assertNotIn("Downloading release", result.stdout)
+        self.assert_step_elapsed(result.stdout, "Downloading installer", "new-entry")
 
     def test_offline_candidate_on_clean_host_refuses_without_network(self):
         result = self.run_selection(installed=False, offline=True)
@@ -73,22 +80,29 @@ class RootApplyEntryTests(unittest.TestCase):
     def test_online_upgrade_keeps_capable_trusted_entry(self):
         result = self.run_selection()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "old-entry\n")
+        self.assertNotIn("Downloading installer", result.stdout)
+        self.assert_step_elapsed(result.stdout, "Downloading release", "Verifying release")
+        self.assert_step_elapsed(result.stdout, "Verifying release", "old-entry")
 
     def test_first_install_executes_verified_entry(self):
         result = self.run_selection(installed=False)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "new-entry\n")
+        self.assert_step_elapsed(result.stdout, "Downloading release", "Verifying release")
+        self.assert_step_elapsed(result.stdout, "Verifying release", "Downloading installer")
+        self.assert_step_elapsed(result.stdout, "Downloading installer", "Verifying installer")
+        self.assert_step_elapsed(result.stdout, "Verifying installer", "new-entry")
 
     def test_offline_install_keeps_trusted_installed_entry(self):
         result = self.run_selection(offline=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "old-entry\n")
+        self.assertNotIn("Downloading release", result.stdout)
 
     def test_old_online_helper_is_replaced_by_current_capable_helper(self):
         result = self.run_selection(capable=False)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "new-entry\n")
+        self.assert_step_elapsed(result.stdout, "Downloading release", "Downloading installer")
+        self.assert_step_elapsed(result.stdout, "Verifying installer", "new-entry")
 
     def test_old_offline_helper_refuses_without_network(self):
         result = self.run_selection(offline=True, capable=False)
@@ -100,13 +114,19 @@ class RootApplyEntryTests(unittest.TestCase):
         result = self.run_selection(installed=False, latest_capable=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("confirmation", result.stderr.lower())
-        self.assertEqual(result.stdout, "")
+        self.assertRegex(result.stdout, r"Verifying installer\n  elapsed [0-9]+:[0-9]{2}\n")
+        self.assertNotIn("new-entry", result.stdout)
+        self.assertNotIn("old-entry", result.stdout)
 
     def test_bad_checksum_never_executes_an_apply_entry(self):
         result = self.run_selection(valid_checksum=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("official binary checksum mismatch", result.stderr)
-        self.assertEqual(result.stdout, "")
+        self.assertLess(result.stdout.index("Downloading release"), result.stdout.index("Verifying release"))
+        self.assertRegex(result.stdout, r"Downloading release\n  elapsed [0-9]+:[0-9]{2}\n")
+        self.assertNotRegex(result.stdout, r"Verifying release\n  elapsed ")
+        self.assertNotIn("old-entry", result.stdout)
+        self.assertNotIn("new-entry", result.stdout)
 
 
 @unittest.skipUnless(os.name == "posix" and shutil.which("sh"), "requires native POSIX shell")
@@ -122,6 +142,17 @@ class RemoteReplacementConsentTests(unittest.TestCase):
                 result = subprocess.run(["sh", "-c", script, "remote", *args], env=env, capture_output=True, text=True, timeout=5)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.splitlines(), [expected, "online"])
+
+
+class RootApplyProgressSourceTests(unittest.TestCase):
+    def test_program_install_names_download_and_verify_before_helper(self):
+        source = (INSTALL / "root-apply.sh.in").read_text(encoding="utf-8")
+        release = source.index('verified_binary "$tag" "$stage/candidate" "Downloading release" "Verifying release"')
+        helper = source.index('verified_binary "$helper_tag" "$stage/entry" "Downloading installer" "Verifying installer"')
+        self.assertLess(release, helper)
+        binary = source.index('root_fetch "$release/$asset" "$2" progress')
+        self.assertLess(source.index("verified_binary() {"), binary)
+        self.assertIn("downloaded", source[source.index("root_fetch_with_progress()"):source.index("verified_binary() {")])
 
 
 if __name__ == "__main__":

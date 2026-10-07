@@ -118,7 +118,7 @@ func (m *Manager) checkIfRevision(revision *uint64) error {
 func (m *Manager) lockMaintenance(ctx context.Context) error {
 	select {
 	case <-m.maintenance:
-		if err := m.checkOpen(); err != nil {
+		if err := m.checkOpen(); err != nil && !m.ownsCoreUpdate(ctx) {
 			m.unlock()
 			return err
 		}
@@ -129,7 +129,14 @@ func (m *Manager) lockMaintenance(ctx context.Context) error {
 }
 
 func (m *Manager) lockMutation(ctx context.Context) error {
+	if err := m.checkCoreUpdateReservation(ctx); err != nil {
+		return err
+	}
 	if err := m.lockMaintenance(ctx); err != nil {
+		return err
+	}
+	if err := m.checkCoreUpdateReservation(ctx); err != nil {
+		m.unlock()
 		return err
 	}
 	if !m.businessMutationAllowed() {

@@ -1,5 +1,8 @@
 package ui
 
+// PortCheckingOwner labels a listener whose core ownership is not yet known.
+const PortCheckingOwner = "Checking owner…"
+
 const (
 	ExportLogsTitle              = "Export Logs"
 	ExportLogsLabel              = "Export logs"
@@ -582,3 +585,11 @@ func PageLabel(id PageID) string {
 	}
 	return string(id)
 }
+
+const (
+	ReinstallCoreLabel       = "Reinstall core"
+	ReinstallCoreTitle       = "Reinstall mihomo core"
+	ReinstallCoreImpact      = "Download the latest official build from the original channel. Keep subscriptions and configuration."
+	ReinstallCoreRollback    = "If reinstall fails, retain backups and keep the uncertain core blocked."
+	CoreProgressReinstalling = "Reinstalling"
+)

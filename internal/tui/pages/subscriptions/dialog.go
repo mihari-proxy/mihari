@@ -316,6 +316,9 @@ func emptyPatch(r protocol.SubscriptionUpdateRequest) bool {
 
 // formHelpMode selects root help bindings for the current save phase or field.
 func (m *Model) formHelpMode() string {
+	if m.form.actionOperation != "" || m.form.actionUncertain {
+		return ui.ModeSubscriptionActionWaiting
+	}
 	switch m.saveState {
 	case saveSending:
 		return ui.ModeSubscriptionSaving
@@ -331,6 +334,9 @@ func (m *Model) formHelpMode() string {
 	}
 	if m.form.isCycle() {
 		return ui.ModeSubscriptionCycle
+	}
+	if m.form.isAction() {
+		return ui.ModeSubscriptionAction
 	}
 	if m.form.index == len(m.form.inputs) {
 		return ui.ModeSubscriptionSubmit

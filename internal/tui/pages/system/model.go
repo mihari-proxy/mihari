@@ -33,6 +33,7 @@ const (
 	rowCore               = "core"
 	rowCoreChannel        = "core-channel"
 	rowCoreUpdate         = "core-update"
+	rowCoreReinstall      = "core-reinstall"
 	rowCoreRestart        = "core-restart"
 	rowMihariChannel      = "mihari-channel"
 	rowMihariUpdate       = "mihari-update"
@@ -236,6 +237,7 @@ const (
 	actionUpdate actionKind = iota
 	actionRestart
 	actionSwitchChannel
+	actionReinstall
 )
 
 type serviceActionKind uint8
@@ -320,6 +322,7 @@ var _ interface{ Err() error } = actionResultMsg{}
 
 // Model is the System page.
 type Model struct {
+	egress                egressUI
 	coreVersion           coreVersionState
 	channelDiagnostic     tea.Cmd
 	writeClipboard        func(string) error
@@ -336,6 +339,7 @@ type Model struct {
 	isElevated            func() bool
 	selfCheckResult       update.CheckResult
 	selfCheckLoaded       bool
+	selfChecking          bool
 	selfCheckGeneration   uint64
 	preparationGeneration uint64
 	preparationCancel     context.CancelFunc
@@ -395,6 +399,8 @@ type Model struct {
 	editID           string
 	editInput        textinput.Model
 	portHolds        map[string]ui.PortHold
+	portProbeGen     uint64
+	portProbeNeeded  bool
 	listenFree       func(string) bool
 	lookupOccupant   func(string) (platform.TCPOccupant, bool)
 }
@@ -403,8 +409,9 @@ type Model struct {
 type RestartRequiredMsg struct{}
 
 type portHoldsMsg struct {
-	failures []error
-	holds    map[string]ui.PortHold
+	generation uint64
+	failures   []error
+	holds      map[string]ui.PortHold
 }
 
 type portsApplyResultMsg struct {
@@ -459,6 +466,9 @@ func NewWithContext(ctx context.Context, client Client, svc ServiceController, n
 }
 
 func (m *Model) HelpMode() string {
+	if m.egress.open {
+		return "egress"
+	}
 	if m.editID != "" {
 		if m.editID == rowLogLevel {
 			if m.pending {
@@ -476,6 +486,9 @@ func (m *Model) HelpMode() string {
 
 // FooterHints returns edit-mode shortcuts while a port row is being typed.
 func (m *Model) FooterHints() string {
+	if m.egress.open {
+		return "↑/↓ select  PgUp/Dn details  Enter use  Esc close"
+	}
 	if m.directoryCopyAvailable(m.focusID) && m.editID == "" && m.detail == nil {
 		return "↑/↓ navigate  Enter copy directory  Esc back  ? help  q quit"
 	}
@@ -621,7 +634,14 @@ func (m *Model) FocusFirst() {
 }
 
 func (m *Model) SetSnapshot(status protocol.Status, core protocol.CoreStatus) {
+	if m.status.PID != status.PID {
+		m.egress = egressUI{epoch: m.egress.epoch + 1}
+	}
+	if m.status.PID != status.PID || m.core.PID != core.PID || (m.core.Status != core.Status && core.Status == "running") {
+		m.portProbeNeeded = true
+	}
 	m.status, m.core = status, core
+	m.reconcilePortOwners()
 	m.ensureFocusVisible()
 }
 
@@ -656,15 +676,31 @@ func (m *Model) ApplyRootNetworkStatus(proxy protocol.SystemProxyStatus, proxyOK
 	m.tunLoaded = true
 }
 
-func (m *Model) SetMutationsEnabled(enabled bool) { m.mutationsEnabled = enabled }
+func (m *Model) SetMutationsEnabled(enabled bool) {
+	if m.mutationsEnabled && !enabled {
+		m.egress.epoch++
+		m.egress.pending = false
+		m.egress.loaded = false
+		if m.egress.open {
+			m.egress.err = "Disconnected. Reopen after reconnecting."
+		}
+	}
+	m.mutationsEnabled = enabled
+}
 
 // Load refreshes local status and checks Mihari and core versions when available.
 func (m *Model) Load() tea.Cmd {
 	return m.load(true)
 }
 
-func (m *Model) refresh() tea.Cmd {
+// LoadStatus refreshes System data without starting Mihari or core version checks.
+// Entering the page uses it so a check started by selecting the page keeps running.
+func (m *Model) LoadStatus() tea.Cmd {
 	return m.load(false)
+}
+
+func (m *Model) refresh() tea.Cmd {
+	return m.LoadStatus()
 }
 
 func (m *Model) load(checkVersions bool) tea.Cmd {
@@ -690,6 +726,9 @@ func (m *Model) load(checkVersions bool) tea.Cmd {
 	if m.client != nil && m.hasCapability(protocol.CapabilityTUN) {
 		cmds = append(cmds, m.loadTun())
 	}
+	if m.client != nil && m.hasCapability(protocol.CapabilityEgress) {
+		cmds = append(cmds, m.loadEgress())
+	}
 	if m.client != nil && m.hasCapability(protocol.CapabilityWebGUI) {
 		cmds = append(cmds, m.loadWebGUI())
 	}
@@ -704,7 +743,7 @@ func (m *Model) load(checkVersions bool) tea.Cmd {
 }
 
 func (m *Model) checkMihariVersion() tea.Cmd {
-	if m.selfUpdater == nil || m.pending || m.pendingPrepared != nil {
+	if m.selfUpdater == nil || m.pending || m.pendingPrepared != nil || m.selfChecking {
 		return nil
 	}
 	path, err := m.channelFilePath()
@@ -724,9 +763,7 @@ func (m *Model) checkMihariVersion() tea.Cmd {
 	m.mihariChannelFailed = false
 	m.selfCheckGeneration++
 	generation := m.selfCheckGeneration
-	m.pending = true
-	m.pendingRow = rowMihariUpdate
-	m.pendingNote = ui.MihariProgressChecking
+	m.selfChecking = true
 	if m.outcomeRow == rowMihariUpdate {
 		m.outcomeRow = ""
 		m.outcomeOK = false
@@ -741,6 +778,14 @@ func (m *Model) checkMihariVersion() tea.Cmd {
 		}
 	}
 	return tea.Batch(check, m.rowSpinCmdIfNeeded())
+}
+
+// invalidateMihariCheck prevents an older display check from replacing a
+// channel change or a prepared update. It does not cancel its network request.
+func (m *Model) invalidateMihariCheck() {
+	m.selfCheckGeneration++
+	m.selfChecking = false
+	m.selfCheckLoaded = false
 }
 
 func (m *Model) loadServiceStatus() tea.Cmd {
@@ -791,6 +836,8 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		m.ensureFocusVisible()
 	}()
 	switch typed := message.(type) {
+	case egressResultMsg:
+		return m, m.handleEgressResult(typed)
 	case ui.LoggingSyncMsg:
 		wasLoggingEdit := m.editID == rowLogLevel || m.editID == rowLogMaxSize || m.editID == rowLogMaxFiles
 		m.ApplyLoggingSync(typed)
@@ -881,18 +928,15 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		m.coreVersion.checking = false
 		m.coreVersion.failed = typed.err != nil || typed.result.Latest == ""
 		m.coreVersion.latest = typed.result.Latest
-		if !m.coreVersion.failed {
-			m.coreVersion.checkedAt = time.Now()
-		}
 		if typed.err == nil && typed.result.Channel != "" {
 			m.coreVersion.channel = typed.result.Channel
 		}
-		return m, nil
+		return m, m.rowSpinCmdIfNeeded()
 	case selfCheckResultMsg:
 		if typed.generation != m.selfCheckGeneration {
 			return m, nil
 		}
-		m.clearRowPending()
+		m.selfChecking = false
 		if typed.err != nil {
 			m.selfCheckLoaded = false
 			m.markRowOutcome(rowMihariUpdate, false, actionErrorDetail(typed.err, ui.UpdateMihariCheckFailed))
@@ -900,11 +944,14 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		}
 		m.selfCheckResult = typed.result
 		m.selfCheckLoaded = true
-		m.outcomeRow = ""
-		m.outcomeDetail = ""
-		m.lastError = ""
+		if m.outcomeRow == rowMihariUpdate {
+			m.outcomeRow = ""
+			m.outcomeDetail = ""
+			m.lastError = ""
+		}
 		return m, m.rowSpinCmdIfNeeded()
 	case mihariChannelResultMsg:
+		m.invalidateMihariCheck()
 		discard := m.CancelMihariPreparation()
 		m.clearRowPending()
 		if typed.err != nil {
@@ -940,7 +987,11 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		}
 		return m, m.probePortHolds()
 	case portHoldsMsg:
+		if typed.generation != m.portProbeGen {
+			return m, nil
+		}
 		m.portHolds = typed.holds
+		m.reconcilePortOwners()
 		return m, nil
 	case portsApplyResultMsg:
 		m.clearRowPending()
@@ -1007,22 +1058,27 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		m.markRowOutcome(typed.rowID, false, actionErrorDetail(typed.err, ui.WebGUIUnavailable))
 		return m, nil
 	case ui.CoreObservedMsg:
-		m.core = typed.Core
-		return m, nil
+		m.SetSnapshot(m.status, typed.Core)
+		return m, m.SyncPortHolds()
 	case coreLoadResultMsg:
 		if typed.err == nil {
 			previousChannel := coreChannelName(m.core.Channel)
-			m.core = typed.core
+			m.SetSnapshot(m.status, typed.core)
+			probe := m.SyncPortHolds()
 			if previousChannel != coreChannelName(m.core.Channel) || m.coreVersion.channel != coreChannelName(m.core.Channel) {
-				return m, m.checkCoreVersion()
+				return m, tea.Batch(probe, m.checkCoreVersion())
 			}
+			return m, probe
 		}
 		return m, nil
 	case ui.ActionPendingMsg:
+		if typed.Action == ui.ActionSwitchMihariChannel {
+			m.invalidateMihariCheck()
+		}
 		m.beginRowPending(typed.Action)
 		return m, m.rowSpinCmdIfNeeded()
 	case startRowSpinMsg:
-		if typed.gen != m.rowSpinGen || !m.pending {
+		if typed.gen != m.rowSpinGen || !m.hasRowProgress() {
 			if typed.gen == m.rowSpinGen {
 				m.rowSpinning = false
 			}
@@ -1036,7 +1092,7 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 			return m, nil
 		}
 		m.rowSpinClock = typed.t
-		if !m.pending {
+		if !m.hasRowProgress() {
 			m.rowSpinning = false
 			return m, nil
 		}
@@ -1079,7 +1135,7 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		}
 		m.markRowOutcome(rowID, true, "")
 		revision := typed.restart.Revision
-		if typed.kind == actionUpdate || typed.kind == actionSwitchChannel {
+		if typed.kind == actionUpdate || typed.kind == actionSwitchChannel || typed.kind == actionReinstall {
 			revision = typed.install.Revision
 			// Reload the committed channel before checking, and reject any
 			// metadata request that started before this mutation finished.
@@ -1121,6 +1177,9 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 	}
 
 	key, ok := message.(tea.KeyPressMsg)
+	if m.egress.open {
+		return m, m.updateEgressDialog(message)
+	}
 	if m.detail != nil {
 		if ok && (key.String() == "esc" || key.String() == "enter") {
 			m.detail = nil
@@ -1160,6 +1219,8 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 			return m, nil
 		}
 		switch m.focusID {
+		case "egress":
+			return m, m.openEgressDialog()
 		case rowZashboard:
 			return m, m.openPanelBrowser(panelIDZashboard)
 		case rowMetaCubeXD:
@@ -1186,6 +1247,11 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 				return m, nil
 			}
 			return m, m.confirmSwitchCoreChannel(otherCoreChannel(m.core.Channel))
+		case rowCoreReinstall:
+			if m.client == nil || !m.mutationsEnabled || !m.hasCapability(protocol.CapabilityCoreReinstall) {
+				return m, nil
+			}
+			return m, m.confirmAction(actionReinstall)
 		case rowCoreUpdate:
 			if m.client == nil || !m.mutationsEnabled || !m.hasCapability(protocol.CapabilityCore) {
 				return m, nil
@@ -1301,7 +1367,12 @@ func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cm
 	}, m.rowSpinCmdIfNeeded(), m.scheduleOutcomeFade(rowID))
 }
 
-func (m *Model) View() string {
+func (m *Model) View() (view string) {
+	defer func() {
+		if m.egress.open {
+			view = ui.CenterOverlay(m.theme, view, m.egressDialogView(), m.width, m.height)
+		}
+	}()
 	if m.detail != nil {
 		return m.theme.Content.Width(m.width).Height(m.height).Render(
 			m.theme.Title.Render(strings.TrimSpace(m.detail.label)+" details") + "\n\n" + m.detail.detail + "\n\n" + ui.EscCloseHint,
@@ -1353,6 +1424,10 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 			value = m.editInput.View()
 		case m.pending && m.pendingRow == item.id && m.pendingNote != "":
 			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, m.pendingNote))
+		case item.id == rowCoreUpdate && m.coreVersion.checking:
+			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, ui.MihariProgressChecking))
+		case item.id == rowMihariUpdate && m.selfChecking:
+			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, ui.MihariProgressChecking))
 		case m.outcomeRow == item.id:
 			if m.outcomeOK {
 				value = ui.RenderStatusChip(m.theme, ui.StatusChipDone, ui.DoneLabel)
@@ -1426,6 +1501,9 @@ func (m *Model) rows() []row {
 		row{id: rowCoreUpdate, section: ui.CoreSectionTitle, label: m.coreActionLabel(), value: m.coreUpdateValue(), detail: ui.UpdateCoreImpact},
 		row{id: rowCoreRestart, section: ui.CoreSectionTitle, label: ui.RestartCoreLabel, value: actionState(m.hasCapability(protocol.CapabilityCore), m.mutationsEnabled), detail: ui.RestartCoreImpact},
 	)
+	if m.hasCapability(protocol.CapabilityCoreReinstall) {
+		rows = append(rows, row{id: rowCoreReinstall, section: ui.CoreSectionTitle, label: ui.ReinstallCoreLabel, value: actionState(true, m.mutationsEnabled), detail: ui.ReinstallCoreImpact})
+	}
 	rows = append(rows, m.serviceRows()...)
 	rows = append(rows, m.loggingRows()...)
 	rows = append(rows, m.maintenanceRows()...)
@@ -1558,7 +1636,7 @@ func (m *Model) mihariUpdateRow() row {
 		latest := valueOr(m.selfCheckResult.Latest, ui.UnknownLabel)
 		switch {
 		case m.selfCheckResult.Available:
-			value = current + " · " + latest + " " + ui.UpdateMihariAvailable
+			value = updateAvailableValue(current, latest)
 		case m.selfCheckResult.Ahead:
 			channel := valueOr(m.selfCheckResult.Channel, m.currentMihariChannel())
 			value = current + " · " + fmt.Sprintf(ui.UpdateMihariAhead, channel, latest)
@@ -1588,6 +1666,9 @@ func (m *Model) portRow(id, label, addr string, ownerPID int) row {
 		value += "  " + status
 	}
 	detail := fmt.Sprintf("%s\n%s", valueOr(addr, ui.MissingValue), ui.FormatPortHoldLabel(hold))
+	if hold.Kind == ui.PortHoldChecking && hold.Process != "" {
+		detail += fmt.Sprintf("\nHolder process %s", hold.Process)
+	}
 	if hold.PID > 0 {
 		detail += fmt.Sprintf("\nHolder PID %d", hold.PID)
 	}
@@ -1684,7 +1765,7 @@ func (m *Model) networkRows() []row {
 		}
 		rows = append(rows, row{
 			id: rowSystemProxy, section: section, label: ui.SystemProxyLabel,
-			value: value, detail: systemProxyDetail(m.systemProxy),
+			value: m.withStartupBadge(value, rowSystemProxy), detail: systemProxyDetail(m.systemProxy),
 		})
 		// Action row carries the toggle verb; its badge (pending/Done/Failed)
 		// binds here via rowProgressForAction / outcomeRowID.
@@ -1717,7 +1798,7 @@ func (m *Model) networkRows() []row {
 	}
 	rows = append(rows, row{
 		id: rowTUN, section: section, label: ui.TUNLabel,
-		value: tunValue, detail: tunDetail,
+		value: m.withStartupBadge(tunValue, rowTUN), detail: tunDetail,
 	})
 	if m.hasCapability(protocol.CapabilityTUN) {
 		tunImpact := ui.EnableTunImpact
@@ -1729,6 +1810,21 @@ func (m *Model) networkRows() []row {
 			value:  actionState(m.hasCapability(protocol.CapabilityTUN), m.mutationsEnabled),
 			detail: tunImpact,
 		})
+	}
+	if m.hasCapability(protocol.CapabilityEgress) {
+		value := "Loading…"
+		if m.egress.loaded {
+			value = m.theme.BrightYellow.Render(diagnostics.EscapeTerminal(egressLabel(m.egress.status.Selection)))
+			if m.egress.status.State == "unknown" {
+				value += " · Application unconfirmed"
+			}
+			for _, item := range m.egress.status.Interfaces {
+				if item.Name == m.egress.status.Selection.InterfaceName {
+					value += " · " + egressAvailability(item.Availability)
+				}
+			}
+		}
+		rows = append(rows, row{id: "egress", section: section, label: "Outbound Interface Override", value: value, detail: "Override the outbound interface binding"})
 	}
 	return rows
 }
@@ -2002,6 +2098,8 @@ func coreRowForKind(kind actionKind) string {
 	switch kind {
 	case actionUpdate:
 		return rowCoreUpdate
+	case actionReinstall:
+		return rowCoreReinstall
 	case actionRestart:
 		return rowCoreRestart
 	case actionSwitchChannel:
@@ -2012,7 +2110,7 @@ func coreRowForKind(kind actionKind) string {
 }
 
 func (m *Model) rowSpinCmdIfNeeded() tea.Cmd {
-	if !m.pending || m.pendingRow == "" {
+	if !m.hasRowProgress() {
 		m.rowSpinning = false
 		return nil
 	}
@@ -2063,6 +2161,8 @@ func rowProgressForAction(action ui.Action, coreMissing bool) (rowID, note strin
 		return rowCoreUpdate, ui.CoreProgressUpdating
 	case ui.ActionSwitchCoreChannel:
 		return rowCoreChannel, ui.CoreProgressSwitching
+	case ui.ActionReinstallCore:
+		return rowCoreReinstall, ui.CoreProgressReinstalling
 	case ui.ActionRestartCore:
 		return rowCoreRestart, ui.CoreProgressRestarting
 	case ui.ActionEnableSystemProxy, ui.ActionForceSystemProxy:
@@ -2292,7 +2392,41 @@ func (m *Model) openPanelBrowser(panelID string) tea.Cmd {
 	}
 }
 
+// reconcilePortOwners keeps cached socket observations aligned with the latest
+// daemon/core identity. Owner snapshots and asynchronous probes arrive independently.
+func (m *Model) reconcilePortOwners() {
+	for id, hold := range m.portHolds {
+		owner := m.core.PID
+		if id == rowWeb {
+			owner = m.status.PID
+		}
+		hold = ui.ClassifyPortHold(hold.Kind == ui.PortHoldAvailable, hold.PID, hold.Process, owner)
+		// Startup network application defers core snapshots. A missing owner
+		// during that interval is not evidence of a foreign process. A stopped
+		// core, or a snapshot with a PID, still permits a definite classification.
+		if id != rowWeb && owner == 0 && (m.core.Status == "" || m.core.Status == "starting") && hold.Kind == ui.PortHoldOccupied {
+			hold.Kind = ui.PortHoldChecking
+		}
+		m.portHolds[id] = hold
+	}
+}
+
+// SyncPortHolds refreshes socket observations after an owner change. Repeated
+// snapshots with the same owners do not schedule additional probes.
+func (m *Model) SyncPortHolds() tea.Cmd {
+	if !m.portProbeNeeded || (m.onboarding.MixedAddr == "" && m.onboarding.ControllerAddr == "" && m.onboarding.WebAddr == "") {
+		return nil
+	}
+	probe := m.probePortHolds()
+	return func() tea.Msg {
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: probe()}
+	}
+}
+
 func (m *Model) probePortHolds() tea.Cmd {
+	m.portProbeNeeded = false
+	m.portProbeGen++
+	generation := m.portProbeGen
 	probe := ui.ProbeListen
 	if listen := m.listenFree; listen != nil {
 		probe = func(addr string) (bool, error) { return listen(addr), nil }
@@ -2329,7 +2463,7 @@ func (m *Model) probePortHolds() tea.Cmd {
 				failures = append(failures, fmt.Errorf("probe %s endpoint %q: %w", id, addr, err))
 			}
 		}
-		return portHoldsMsg{holds: holds, failures: failures}
+		return portHoldsMsg{generation: generation, holds: holds, failures: failures}
 	}
 }
 
@@ -2732,6 +2866,7 @@ func (m *Model) confirmAction(kind actionKind) tea.Cmd {
 	revision, operationID := m.currentRevision(), m.newOperationID()
 	title, object, impact, rollback := ui.UpdateCoreTitle, ui.MihomoCoreLabel, ui.UpdateCoreImpact, ui.UpdateCoreRollback
 	action := ui.ActionUpdateCore
+	capability := protocol.CapabilityCore
 	if kind == actionUpdate && m.core.Version == "" {
 		title, impact = ui.InstallCoreTitle, ui.InstallCoreImpact
 	}
@@ -2739,9 +2874,13 @@ func (m *Model) confirmAction(kind actionKind) tea.Cmd {
 		title, impact, rollback = ui.RestartCoreTitle, ui.RestartCoreImpact, ui.RestartCoreRollback
 		action = ui.ActionRestartCore
 	}
+	if kind == actionReinstall {
+		title, impact, rollback = ui.ReinstallCoreTitle, ui.ReinstallCoreImpact, ui.ReinstallCoreRollback
+		action, capability = ui.ActionReinstallCore, protocol.CapabilityCoreReinstall
+	}
 	return func() tea.Msg {
 		return ui.ActionIntentMsg{
-			Action: action, Page: ui.PageSystem, Capability: protocol.CapabilityCore, Key: "system:" + string(action),
+			Action: action, Page: ui.PageSystem, Capability: capability, Key: "system:" + string(action),
 			Title: title, Object: object, Impact: impact, Rollback: rollback,
 			Execute: m.runAction(actionStartMsg{kind: kind, operationID: operationID, revision: revision}),
 		}
@@ -2782,14 +2921,27 @@ func (m *Model) runAction(start actionStartMsg) tea.Cmd {
 	if start.kind == actionUpdate || start.kind == actionSwitchChannel {
 		operationName = "core.install"
 	}
+	if start.kind == actionReinstall {
+		operationName = "core.reinstall"
+	}
 	operation := logging.OperationMetadata{ID: start.operationID, Name: operationName}
 	return func() tea.Msg {
 		revision := start.revision
 		request := protocol.MutationRequest{OperationID: start.operationID, IfRevision: &revision, Source: start.source}
 		ctx := logging.WithOperation(m.ctx, operation)
-		if start.channel != "" {
+		if start.channel != "" && start.kind != actionReinstall {
 			channel := start.channel
 			request.Channel = &channel
+		}
+		if start.kind == actionReinstall {
+			repair, ok := m.client.(interface {
+				ReinstallCore(context.Context, protocol.MutationRequest) (protocol.CoreInstallResult, error)
+			})
+			if !ok {
+				return actionResultMsg{kind: start.kind, operation: operation, err: protocol.APIError{Code: protocol.CodeInvalidState, Message: "core reinstall unavailable"}}
+			}
+			result, err := repair.ReinstallCore(ctx, request)
+			return actionResultMsg{kind: start.kind, install: result, operation: operation, err: err}
 		}
 		if start.kind == actionUpdate || start.kind == actionSwitchChannel {
 			result, err := m.client.InstallCore(ctx, request)

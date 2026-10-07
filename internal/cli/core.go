@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/spf13/cobra"
@@ -34,7 +36,7 @@ func newCoreCommand(dependencies Dependencies, options *runOptions) *cobra.Comma
 			return err
 		},
 	})
-	for _, name := range []string{"install", "update"} {
+	for _, name := range []string{"install", "update", "reinstall"} {
 		name := name
 		root.AddCommand(&cobra.Command{
 			Use: name, Short: name + " the mihomo core", Args: cobra.NoArgs,
@@ -47,8 +49,18 @@ func newCoreCommand(dependencies Dependencies, options *runOptions) *cobra.Comma
 				if err != nil {
 					return err
 				}
-				ctx := logging.WithOperation(command.Context(), logging.OperationMetadata{ID: request.OperationID, Name: "core.install"})
-				result, err := client.InstallCore(ctx, request)
+				action, nameOfOperation := client.InstallCore, "core.install"
+				if name == "reinstall" {
+					repair, ok := client.(interface {
+						ReinstallCore(context.Context, protocol.MutationRequest) (protocol.CoreInstallResult, error)
+					})
+					if !ok {
+						return classifyRuntimeError(protocol.APIError{Code: protocol.CodeInvalidState, Message: "core reinstall unavailable"})
+					}
+					action, nameOfOperation = repair.ReinstallCore, "core.reinstall"
+				}
+				ctx := logging.WithOperation(command.Context(), logging.OperationMetadata{ID: request.OperationID, Name: nameOfOperation})
+				result, err := action(ctx, request)
 				if err != nil {
 					return classifyRuntimeError(err)
 				}

@@ -65,7 +65,7 @@ func TestLocateHeader_PreservesButtonWithLongName(t *testing.T) {
 // TestLocateHeader_ButtonFollowsShortName rejects alignment that detaches Locate from its label.
 func TestLocateHeader_ButtonFollowsShortName(t *testing.T) {
 	m, _ := newLocateModel()
-	if !strings.Contains(ansi.Strip(locateHeader(t, m)), "Now: two  → Jump to Selected") {
+	if !strings.Contains(ansi.Strip(locateHeader(t, m)), "Now: two —  → Jump to Selected") {
 		t.Fatal("Locate must immediately follow the name")
 	}
 }

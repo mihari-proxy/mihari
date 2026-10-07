@@ -48,6 +48,9 @@ jobs:
         run: python -m pytest scripts/install/test_install_channel.py -q
       - name: Test installer bootstrap and generated bridge
         run: python -m pytest scripts/install/test_root_apply_entry.py scripts/install/test_root_apply_generated.py -q
+      - name: Test channel index trust
+        if: runner.os == 'Linux'
+        run: python -m pytest scripts/install/test_aio_channel_index.py -q
       - name: Verify native Windows PowerShell 5.1
         if: runner.os == 'Windows'
         shell: powershell
