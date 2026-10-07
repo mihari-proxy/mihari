@@ -10,6 +10,26 @@ bundle_dir=""
 
 info() { printf '\033[1;34m•\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+confirm_macos_install() {
+  printf '\033[1;33mwarning:\033[0m %s\n' "macOS is currently unsupported. Support is incomplete and use is not recommended." >&2
+  if [ "${MIHARI_YES:-}" = "1" ] || [ "${YES:-0}" = "1" ]; then
+    return 0
+  fi
+  printf 'Continue anyway? [y/N] ' >&2
+  reply=''
+  # Test mode must not read /dev/tty; a real read would block the test runner.
+  if [ "${MIHARI_INSTALL_TEST_MODE:-}" = "1" ]; then
+    reply="${MIHARI_TEST_MACOS_CONFIRM:-}"
+  elif [ -t 0 ]; then
+    IFS= read -r reply || reply=''
+  else
+    IFS= read -r reply </dev/tty 2>/dev/null || reply=''
+  fi
+  case "$reply" in
+    y|Y|yes|YES|Yes) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -673,6 +693,19 @@ MIHARI_ROOT_APPLY
 }
 # END ROOT APPLY
 
+macos_install=0
+if [ "${MIHARI_INSTALL_TEST_MODE:-}" = "1" ]; then
+  if [ "${MIHARI_TEST_OS:-linux}" = "darwin" ]; then
+    macos_install=1
+  fi
+else
+  case "$(uname -s)" in
+    Darwin) macos_install=1 ;;
+  esac
+fi
+if [ "$macos_install" = "1" ]; then
+  confirm_macos_install || err "Cancelled; macOS installation was not confirmed. Use MIHARI_YES=1 to continue anyway."
+fi
 if [ "${MIHARI_INSTALL_TEST_MODE:-}" = "1" ]; then
   printf 'CHANNEL=%s\nEXPLICIT=%s\n' "$CHANNEL" "$CHANNEL_EXPLICIT"
   exit 0
