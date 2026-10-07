@@ -10,6 +10,11 @@ import shutil
 import subprocess
 import threading
 
+
+def query_has_per_page(queries: list[str], count: int) -> bool:
+    needle = f"per_page={count}"
+    return any(part == needle for query in queries for part in query.split("&"))
+
 import pytest
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -240,16 +245,17 @@ def test_script1_sh_channel_flag_and_equals(tmp_path: Path, github_server: GitHu
         assert not (tmp_path / "mihari-channel").exists()
         paths, queries = github_server.snapshot()
         assert any(path.endswith("/releases") for path in paths)
-        assert any("per_page=100" in query for query in queries)
+        assert query_has_per_page(queries, 10)
+        assert not query_has_per_page(queries, 100)
         assert not any(path.endswith("/releases/latest") for path in paths)
 
 
 @requires_sh
-def test_script1_sh_follows_next_not_last(tmp_path: Path, github_server: GitHubListServer):
+def test_script1_sh_uses_first_dev_page_only(tmp_path: Path, github_server: GitHubListServer):
     port = github_server.server_address[1]
     base = f"http://127.0.0.1:{port}/repos/mihari-proxy/mihari/releases"
     github_server.pages["1"] = (
-        b'[{"tag_name":"v0.9.0-dev.1"}]',
+        b'[{"tag_name":"v0.9.0"},{"tag_name":"v0.9.0-dev.1"}]',
         {
             "Link": f'<{base}?page=2>; rel="next", <{base}?page=9>; rel="last"',
         },
@@ -259,8 +265,10 @@ def test_script1_sh_follows_next_not_last(tmp_path: Path, github_server: GitHubL
     result = run_install_sh(tmp_path, ["--channel", "dev"], {"MIHARI_GITHUB_API": f"http://127.0.0.1:{port}"})
     assert result.returncode == 0, result.stderr
     got = parse_test_output(result.stdout)
-    assert "/releases/download/v0.9.0-dev.4/" in got.get("URL", "")
+    assert "/releases/download/v0.9.0-dev.1/" in got.get("URL", "")
     _, queries = github_server.snapshot()
+    assert query_has_per_page(queries, 10)
+    assert not any("page=2" in query for query in queries)
     assert not any("page=9" in query for query in queries)
 
 
@@ -357,12 +365,37 @@ def test_script1_ps1_channel_args_and_env(tmp_path: Path, github_server: GitHubL
     assert got.get("CHANNEL") == "dev"
     assert f"/releases/download/{CANONICAL_DEV}/mihari-windows-" in got.get("URL", "")
     assert (tmp_path / "mihari-channel").read_text(encoding="utf-8") == "dev\n"
+    _, queries = github_server.snapshot()
+    assert query_has_per_page(queries, 10)
+    assert not query_has_per_page(queries, 100)
 
     colon = run_install_ps1(tmp_path, ["-Channel:main"], {"MIHARI_GITHUB_API": api, "MIHARI_CHANNEL": "dev"})
     assert colon.returncode == 0, colon.stderr
     got = parse_test_output(colon.stdout)
     assert got.get("CHANNEL") == "main"
     assert "/releases/download/v0.8.2/" in got.get("URL", "")
+
+
+@requires_ps
+def test_script1_ps1_uses_first_dev_page_only(tmp_path: Path, github_server: GitHubListServer):
+    port = github_server.server_address[1]
+    base = f"http://127.0.0.1:{port}/repos/mihari-proxy/mihari/releases"
+    github_server.pages["1"] = (
+        b'[{"tag_name":"v0.9.0","draft":false},{"tag_name":"v0.9.0-dev.1","draft":false}]',
+        {
+            "Link": f'<{base}?page=2>; rel="next", <{base}?page=9>; rel="last"',
+        },
+    )
+    github_server.pages["2"] = (b'[{"tag_name":"v0.9.0-dev.4","draft":false}]', {})
+    github_server.pages["9"] = (b'[{"tag_name":"v0.9.0-dev.99","draft":false}]', {})
+    result = run_install_ps1(tmp_path, ["-Channel", "dev"], {"MIHARI_GITHUB_API": f"http://127.0.0.1:{port}"})
+    assert result.returncode == 0, result.stderr + result.stdout
+    got = parse_test_output(result.stdout)
+    assert "/releases/download/v0.9.0-dev.1/" in got.get("URL", "")
+    _, queries = github_server.snapshot()
+    assert query_has_per_page(queries, 10)
+    assert not any("page=2" in query for query in queries)
+    assert not any("page=9" in query for query in queries)
 
 
 @requires_ps

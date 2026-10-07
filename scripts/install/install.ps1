@@ -448,80 +448,60 @@ function Compare-Canonical([string]$left, [string]$right) {
   return 0
 }
 
-function Get-NextReleaseLink($headers) {
-  $values = @()
-  foreach ($key in @('Link', 'link')) {
-    if ($headers[$key]) { $values += $headers[$key] }
-  }
-  foreach ($value in $values) {
-    foreach ($part in (([string]$value) -split ',')) {
-      if ($part -match 'rel\s*=\s*"next"' -and $part -match '<([^>]+)>') {
-        return $Matches[1]
-      }
-    }
-  }
-  return $null
-}
-
 function Resolve-DevTag {
-  $url = "$githubApi/repos/$repo/releases?per_page=100"
+  # The newest dev tag is among the latest created releases. One page of 10
+  # does not grow with release history.
+  $url = "$githubApi/repos/$repo/releases?per_page=10"
   $best = $null
-  for ($page = 0; $page -lt 5; $page++) {
-    try {
-      $req = [Net.HttpWebRequest]::Create($url)
-      $req.Method = 'GET'
-      $req.UserAgent = 'mihari'
-      $req.Accept = 'application/vnd.github+json'
-      $req.KeepAlive = $false
-      $req.ServicePoint.Expect100Continue = $false
-      $resp = $req.GetResponse()
-    } catch {
-      Fail 'failed to list GitHub Releases; set MIHARI_VERSION=vX.Y.Z-dev.N'
+  try {
+    $req = [Net.HttpWebRequest]::Create($url)
+    $req.Method = 'GET'
+    $req.UserAgent = 'mihari'
+    $req.Accept = 'application/vnd.github+json'
+    $req.KeepAlive = $false
+    $req.ServicePoint.Expect100Continue = $false
+    $resp = $req.GetResponse()
+  } catch {
+    Fail 'failed to list GitHub Releases; set MIHARI_VERSION=vX.Y.Z-dev.N'
+  }
+  try {
+    $reader = New-Object IO.StreamReader($resp.GetResponseStream())
+    $body = $reader.ReadToEnd()
+    $reader.Close()
+    if ([Text.Encoding]::UTF8.GetByteCount($body) -gt 8MB) {
+      Fail 'mihari release list is too large; set MIHARI_VERSION=vX.Y.Z-dev.N'
     }
-    try {
-      $headers = @{}
-      foreach ($name in $resp.Headers.AllKeys) { $headers[$name] = $resp.Headers[$name] }
-      $reader = New-Object IO.StreamReader($resp.GetResponseStream())
-      $body = $reader.ReadToEnd()
-      $reader.Close()
-      if ([Text.Encoding]::UTF8.GetByteCount($body) -gt 8MB) {
-        Fail 'mihari release list is too large; set MIHARI_VERSION=vX.Y.Z-dev.N'
-      }
-    } finally {
-      if ($resp) { $resp.Close() }
-    }
-    $releases = @()
-    try {
-      # PS 5.1 flattens a top-level JSON array into one object. Wrapping
-      # preserves per-release tag_name / draft on nested GitHub payloads.
-      $parsed = ConvertFrom-Json -InputObject ('{"items":' + $body + '}')
-      if ($null -ne $parsed.items) { $releases = @($parsed.items) }
-    } catch {
-      try { $releases = @($body | ConvertFrom-Json) } catch { $releases = @() }
-    }
-    foreach ($rel in $releases) {
-      if ($rel.draft) { continue }
-      $tag = [string]$rel.tag_name
-      if (-not $tag) { $tag = [string]$rel.tagName }
-      if ($tag -match ' ') { continue }
+  } finally {
+    if ($resp) { $resp.Close() }
+  }
+  $releases = @()
+  try {
+    # PS 5.1 flattens a top-level JSON array into one object. Wrapping
+    # preserves per-release tag_name / draft on nested GitHub payloads.
+    $parsed = ConvertFrom-Json -InputObject ('{"items":' + $body + '}')
+    if ($null -ne $parsed.items) { $releases = @($parsed.items) }
+  } catch {
+    try { $releases = @($body | ConvertFrom-Json) } catch { $releases = @() }
+  }
+  foreach ($rel in $releases) {
+    if ($rel.draft) { continue }
+    $tag = [string]$rel.tag_name
+    if (-not $tag) { $tag = [string]$rel.tagName }
+    if ($tag -match ' ') { continue }
+    if (-not (Test-CanonicalDev $tag)) { continue }
+    if (-not $best -or (Compare-Canonical $tag $best) -gt 0) { $best = $tag }
+  }
+  if (-not $best) {
+    $tagHits = [regex]::Matches([string]$body, '"tag_name"\s*:\s*"([^"]*)"')
+    for ($i = 0; $i -lt $tagHits.Count; $i++) {
+      $tag = $tagHits[$i].Groups[1].Value
+      $start = $tagHits[$i].Index
+      $end = if ($i + 1 -lt $tagHits.Count) { $tagHits[$i + 1].Index } else { $body.Length }
+      $slice = $body.Substring($start, $end - $start)
+      if ($slice -match '"draft"\s*:\s*true') { continue }
       if (-not (Test-CanonicalDev $tag)) { continue }
       if (-not $best -or (Compare-Canonical $tag $best) -gt 0) { $best = $tag }
     }
-    if (-not $best) {
-      $tagHits = [regex]::Matches([string]$body, '"tag_name"\s*:\s*"([^"]*)"')
-      for ($i = 0; $i -lt $tagHits.Count; $i++) {
-        $tag = $tagHits[$i].Groups[1].Value
-        $start = $tagHits[$i].Index
-        $end = if ($i + 1 -lt $tagHits.Count) { $tagHits[$i + 1].Index } else { $body.Length }
-        $slice = $body.Substring($start, $end - $start)
-        if ($slice -match '"draft"\s*:\s*true') { continue }
-        if (-not (Test-CanonicalDev $tag)) { continue }
-        if (-not $best -or (Compare-Canonical $tag $best) -gt 0) { $best = $tag }
-      }
-    }
-    $next = Get-NextReleaseLink $headers
-    if (-not $next) { break }
-    $url = $next
   }
   if (-not $best) { Fail 'no canonical mihari dev release; set MIHARI_VERSION=vX.Y.Z-dev.N' }
   return $best

@@ -106,11 +106,9 @@ fi
 if command -v curl >/dev/null 2>&1; then
   dl() { curl -fsSL "$1" -o "$2"; }
   fetch() { curl -fsSL "$1"; }
-  fetch_headers_body() { curl -fsSL -D "$2" -o "$3" "$1"; }
 elif command -v wget >/dev/null 2>&1; then
   dl() { wget -qO "$2" "$1"; }
   fetch() { wget -qO- "$1"; }
-  fetch_headers_body() { wget -qS -O "$3" "$1" 2>"$2"; }
 else
   err "need curl or wget"
 fi
@@ -122,17 +120,6 @@ is_canonical_dev() {
 # Draft filtering is best-effort: POSIX extraction matches canonical tags only.
 extract_tag_names() {
   printf '%s' "$1" | tr '{' '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
-}
-
-next_release_link() {
-  tr -d '\r' < "$1" | awk 'tolower($1)=="link:" { $1=""; print substr($0,2) }' | tr ',' '\n' | while IFS= read -r part; do
-    case "$part" in
-      *rel=\"next\"*)
-        printf '%s' "$part" | sed -n 's/.*<\([^>]*\)>.*/\1/p'
-        break
-        ;;
-    esac
-  done
 }
 
 tag_cmp() {
@@ -168,42 +155,36 @@ tag_cmp() {
 }
 
 resolve_dev_tag() {
-  url="${GITHUB_API}/repos/${REPO}/releases?per_page=100"
+  # The newest dev tag is among the latest created releases. One page of 10
+  # stays under the root helper limit and does not grow with release history.
+  url="${GITHUB_API}/repos/${REPO}/releases?per_page=10"
   best=""
-  page=0
   tmpdir="$(mktemp -d)"
-  while [ "$page" -lt 5 ]; do
-    hdr="$tmpdir/hdr"
-    body="$tmpdir/body"
-    fetch_headers_body "$url" "$hdr" "$body" || {
-      rm -rf "$tmpdir"
-      err "failed to list GitHub Releases; set MIHARI_VERSION=vX.Y.Z-dev.N"
-    }
-    size="$(wc -c < "$body" | tr -d ' ')"
-    if [ "$size" -gt 8388608 ]; then
-      rm -rf "$tmpdir"
-      err "mihari release list is too large; set MIHARI_VERSION=vX.Y.Z-dev.N"
-    fi
-    raw="$(cat "$body")"
-    tags="$(extract_tag_names "$raw")"
-    if [ -n "$tags" ]; then
-      printf '%s\n' "$tags" | while IFS= read -r tag; do
-        is_canonical_dev "$tag" || continue
-        current=""
-        [ -f "$tmpdir/best" ] && current="$(cat "$tmpdir/best")"
-        if [ -z "$current" ] || [ "$(tag_cmp "$tag" "$current")" = "1" ]; then
-          printf '%s\n' "$tag" >"$tmpdir/best"
-        fi
-      done
-      if [ -f "$tmpdir/best" ]; then
-        best="$(cat "$tmpdir/best")"
+  body="$tmpdir/body"
+  fetch "$url" >"$body" || {
+    rm -rf "$tmpdir"
+    err "failed to list GitHub Releases; set MIHARI_VERSION=vX.Y.Z-dev.N"
+  }
+  size="$(wc -c < "$body" | tr -d ' ')"
+  if [ "$size" -gt 8388608 ]; then
+    rm -rf "$tmpdir"
+    err "mihari release list is too large; set MIHARI_VERSION=vX.Y.Z-dev.N"
+  fi
+  raw="$(cat "$body")"
+  tags="$(extract_tag_names "$raw")"
+  if [ -n "$tags" ]; then
+    printf '%s\n' "$tags" | while IFS= read -r tag; do
+      is_canonical_dev "$tag" || continue
+      current=""
+      [ -f "$tmpdir/best" ] && current="$(cat "$tmpdir/best")"
+      if [ -z "$current" ] || [ "$(tag_cmp "$tag" "$current")" = "1" ]; then
+        printf '%s\n' "$tag" >"$tmpdir/best"
       fi
+    done
+    if [ -f "$tmpdir/best" ]; then
+      best="$(cat "$tmpdir/best")"
     fi
-    next="$(next_release_link "$hdr")"
-    [ -n "$next" ] || break
-    url="$next"
-    page=$((page + 1))
-  done
+  fi
   rm -rf "$tmpdir"
   [ -n "$best" ] || err "no canonical mihari dev release; set MIHARI_VERSION=vX.Y.Z-dev.N"
   printf '%s\n' "$best"
@@ -559,7 +540,7 @@ if [ -z "${bundle:-}" ] && [ -z "$entry" ]; then
   # Resolve the helper independently; never change the selected candidate tag.
   case "$channel" in
     main) helper_url=https://api.github.com/repos/mihari-proxy/mihari/releases/latest;;
-    dev) helper_url='https://api.github.com/repos/mihari-proxy/mihari/releases?per_page=100';;
+    dev) helper_url='https://api.github.com/repos/mihari-proxy/mihari/releases?per_page=10';;
     *) fail "invalid helper channel";;
   esac
   root_fetch "$helper_url" "$stage/helper-latest"

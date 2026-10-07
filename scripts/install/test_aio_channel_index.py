@@ -8,6 +8,7 @@ import hashlib
 import io
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -457,10 +458,11 @@ def test_offline_manifest_reuses_trusted_entry_loop():
 def test_generated_install_sh_keeps_github_helper_after_empty_bundle():
     text = (INSTALL / "install.sh").read_text(encoding="utf-8")
     root = root_block("install.sh")
-    assert "per_page=100" in text
+    assert re.search(r"per_page=10(?!\d)", text)
+    assert "per_page=100" not in text
     assert '[ -z "${bundle:-}" ]' in root
     empty = root.index('[ -z "${bundle:-}" ]')
-    assert root.index("per_page=100", empty) > empty
+    assert re.search(r"per_page=10(?!\d)", root[empty:])
 
 
 def test_generated_remote_root_indexes_bundle_before_release_list():
@@ -469,5 +471,5 @@ def test_generated_remote_root_indexes_bundle_before_release_list():
     assert MAIN_INDEX in root
     bundle = root.index('[ -n "${bundle:-}" ]')
     empty = root.index('[ -z "${bundle:-}" ]')
-    release_list = root.index("releases?per_page=100")
+    release_list = root.index("releases?per_page=10'")
     assert bundle < empty < release_list
