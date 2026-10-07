@@ -62,7 +62,7 @@ sh install-aio.sh        # Windows: powershell -File install-aio.ps1
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `MIHARI_BIN` | `/usr/local/bin`（Linux/macOS）<br>`%LOCALAPPDATA%\Programs\mihari`（Windows） | mihari 二进制安装目录 |
+| `MIHARI_BIN` | `/usr/local/bin`（Linux/macOS）<br>`%LOCALAPPDATA%\Programs\mihari`（Windows） | mihari 二进制安装目录。完整卸载用它定位 PATH 上的那一个命令文件；未设置时用同一默认目录 |
 | `MIHARI_DATA` | Unix 默认不设置；Windows `%USERPROFILE%\.mihari` | 显式 Unix P 保持私有单根；默认业务 D 为系统 B/data |
 | `MIHARI_INSTALL_ROOT` | `/usr/local/lib/mihari`（Unix） | root0755 安装根 I；自定义 I 同样校验祖先安全 |
 | `MIHARI_INDEX_URL` | 公开直链（见脚本默认值） | index.txt 公开直链（脚本3）；默认仍是稳定 `/mihari-release/mihari/index.txt` |

@@ -41,6 +41,9 @@ func CheckUninstallFiles(ctx context.Context, targets []UninstallTarget) error {
 		if !validUninstallTargetKind(target.Kind) {
 			return fmt.Errorf("unknown uninstall target kind %q", target.Kind)
 		}
+		if target.Kind == "command" {
+			continue
+		}
 		info, err := os.Lstat(target.Path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -65,6 +68,9 @@ func inspectUninstallRoots(ctx context.Context, targets []UninstallTarget) error
 	for _, target := range targets {
 		if !validUninstallTargetKind(target.Kind) {
 			return fmt.Errorf("unknown uninstall target kind %q", target.Kind)
+		}
+		if target.Kind == "command" {
+			continue
 		}
 		info, err := os.Lstat(target.Path)
 		if errors.Is(err, os.ErrNotExist) {
@@ -129,7 +135,7 @@ func newUninstallFileError(target UninstallTarget, relative, reason string) *Uni
 
 func validUninstallTargetKind(kind string) bool {
 	switch kind {
-	case "data", "base", "logs", "program", "control":
+	case "data", "base", "logs", "program", "control", "command":
 		return true
 	default:
 		return false
