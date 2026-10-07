@@ -4,7 +4,9 @@ import os
 from pathlib import Path
 import re
 import shlex
+import signal
 import subprocess
+import time
 import pytest
 
 INSTALL = Path(__file__).parent
@@ -210,7 +212,43 @@ def test_posix_failure_prints_error_json(tmp_path):
     assert raw in result.stderr
     assert "Applying installation" in result.stdout
     assert "Installation complete." not in result.stdout + result.stderr
+    assert not re.search(r"\r  elapsed [0-9]+:[0-9]{2}\n", result.stdout)
     assert args.count("apply") == 1
+
+
+def installer_signal_block():
+    source = (INSTALL / "root-apply.sh.in").read_text()
+    marker = "stop_background() {"
+    if marker not in source:
+        return "trap 'exit 1' HUP INT TERM\n"
+    start = source.index(marker)
+    trap = "trap 'stop_background; exit 1' HUP INT TERM\n"
+    end = source.index(trap, start)
+    return source[start:end] + trap
+
+
+def test_term_to_installer_shell_stops_background_child(tmp_path):
+    if os.name != "posix":
+        pytest.skip("Signal delivery to a background installer child requires POSIX")
+    child_pid = tmp_path / "child"
+    command = installer_signal_block() + "\n" + "\n".join([
+        "sleep 30 &",
+        "apply_pid=$!",
+        "printf '%s\\n' \"$apply_pid\" > " + shlex.quote(str(child_pid)),
+        "while kill -0 \"$apply_pid\" 2>/dev/null; do sleep 0.1; done",
+    ])
+    proc = subprocess.Popen(["sh", "-c", command], start_new_session=True)
+    pid = None
+    for _ in range(50):
+        if child_pid.exists() and child_pid.stat().st_size:
+            pid = int(child_pid.read_text().strip())
+            break
+        time.sleep(0.05)
+    assert pid, "background child did not start"
+    os.kill(proc.pid, signal.SIGTERM)
+    proc.wait(timeout=3)
+    with pytest.raises(OSError):
+        os.kill(pid, 0)
 
 
 def test_windows_install_scripts_announce_steps():

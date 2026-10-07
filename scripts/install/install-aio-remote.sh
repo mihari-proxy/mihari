@@ -357,8 +357,21 @@ tag=$1; channel=$2; candidate=$3; bundle=$4; source=$5; data=$6; endpoint=$7; cr
 case "$bootstrap_mode" in online|offline) :;; *) fail "invalid bootstrap mode";; esac
 stage=$(mktemp -d /var/tmp/mihari-install.XXXXXXXX)
 cleanup() { rm -f "$stage/entry" "$stage/candidate" "$stage/checksums" "$stage/latest" "$stage/request.json" "$stage/result.json" "$stage/error.json" "$stage/helper-help" "$stage/helper-latest" "$stage/bundle" "$stage/mihari" "$stage/index" "$stage/index-headers" "$stage/index-status" "$stage/tar-status" "$stage/fetch-headers"; rmdir "$stage"; }
+stop_background() {
+  if [ -n "${fetch_pid:-}" ]; then
+    kill "$fetch_pid" 2>/dev/null || true
+    wait "$fetch_pid" 2>/dev/null || true
+    fetch_pid=
+  fi
+  if [ -n "${apply_pid:-}" ]; then
+    kill "$apply_pid" 2>/dev/null || true
+    wait "$apply_pid" 2>/dev/null || true
+    apply_pid=
+  fi
+  return 0
+}
 trap cleanup EXIT
-trap 'exit 1' HUP INT TERM
+trap 'stop_background; exit 1' HUP INT TERM
 root_fetch() {
   [ -x /usr/bin/curl ] || fail "trusted bootstrap requires /usr/bin/curl"
   if [ "${3:-}" = progress ]; then
@@ -392,6 +405,7 @@ root_fetch_with_progress() {
   done
   fetch_status=0
   wait "$fetch_pid" || fetch_status=$?
+  fetch_pid=
   fetch_got=0
   if [ -f "$fetch_dest" ]; then fetch_got=$(wc -c < "$fetch_dest" | tr -d ' '); fi
   fetch_percent=$((fetch_got * 100 / fetch_total))
@@ -1010,9 +1024,14 @@ run_apply_showing_elapsed() {
   done
   apply_status=0
   wait "$apply_pid" || apply_status=$?
-  apply_now=$(date +%s)
-  apply_elapsed=$((apply_now - apply_started))
-  printf '\r  elapsed %d:%02d\n' $((apply_elapsed / 60)) $((apply_elapsed % 60))
+  apply_pid=
+  if [ "$apply_status" -eq 0 ]; then
+    apply_now=$(date +%s)
+    apply_elapsed=$((apply_now - apply_started))
+    printf '\r  elapsed %d:%02d\n' $((apply_elapsed / 60)) $((apply_elapsed % 60))
+  else
+    printf '\r\033[K\n'
+  fi
   return "$apply_status"
 }
 apply_with_confirmation() {
