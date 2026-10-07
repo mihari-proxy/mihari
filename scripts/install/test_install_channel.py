@@ -10,12 +10,13 @@ import shutil
 import subprocess
 import threading
 
+import pytest
+
 
 def query_has_per_page(queries: list[str], count: int) -> bool:
     needle = f"per_page={count}"
     return any(part == needle for query in queries for part in query.split("&"))
 
-import pytest
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 INSTALL_SH = SCRIPT_DIR / "install.sh"
