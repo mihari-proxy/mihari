@@ -110,7 +110,7 @@ func TestUninstaller_RunLeavesMismatchedCommandAndFails(t *testing.T) {
 	}
 	var progress []string
 	err = runner.Run(context.Background(), func(message string) { progress = append(progress, message) })
-	if err == nil || !strings.Contains(err.Error(), command) || fileExists(command) == false || fileExists(data) || fileExists(program) {
+	if err == nil || !strings.Contains(err.Error(), command) || strings.Contains(err.Error(), "Remove-Item") || fileExists(command) == false || fileExists(data) || fileExists(program) {
 		t.Fatalf("Run error = %v, command = %t, data = %t, program = %t", err, fileExists(command), fileExists(data), fileExists(program))
 	}
 	if !progressHas(progress, command) || progressHas(progress, "Mihari has been completely uninstalled") {
@@ -261,11 +261,20 @@ func TestUninstaller_RunContinuesWhenCommandRemoveIsNotFatal(t *testing.T) {
 
 	var progress []string
 	err := runner.Run(context.Background(), func(message string) { progress = append(progress, message) })
-	if err == nil || !strings.Contains(err.Error(), command) || service.uninstallCalls != 1 || !fileExists(command) || fileExists(data) || fileExists(program) {
+	wantCmd := manualUninstallCommand(command)
+	if err == nil || !strings.Contains(err.Error(), wantCmd) || strings.Contains(err.Error(), "separate copy") || service.uninstallCalls != 1 || !fileExists(command) || fileExists(data) || fileExists(program) {
 		t.Fatalf("Run error = %v, calls = %d, command = %t, data = %t, program = %t", err, service.uninstallCalls, fileExists(command), fileExists(data), fileExists(program))
 	}
-	if !progressHas(progress, command) || progressHas(progress, "Mihari has been completely uninstalled") {
+	if !progressHas(progress, wantCmd) || progressHas(progress, "Mihari has been completely uninstalled") {
 		t.Fatalf("progress = %#v", progress)
+	}
+}
+
+func TestManualUninstallCommand_QuotesPathForPowerShell(t *testing.T) {
+	got := manualUninstallCommand(`C:\mihari's\mihari.exe`)
+	want := "Remove-Item -LiteralPath 'C:\\mihari''s\\mihari.exe' -Force"
+	if got != want {
+		t.Fatalf("command = %s, want %s", got, want)
 	}
 }
 

@@ -105,7 +105,7 @@ TUI 进入 System/Web GUI 时通过带认证的本地控制接口 `GET /v1/core/
 
 - TUI 只通过 `internal/control/client` 经原生 IPC 控制面与本地守护进程通信。它从不打开 mihomo 控制器、从不接收控制器密钥。
 - TUI 的日志直接写入例外是经 `internal/logging` 在当前 UID 的 U/logs 追加/轮转固定 `mihari-tui.log*`（Windows/显式私有 P 保留单根）;不得写 `mihari.yaml`、订阅、token、面板或其他业务状态。日志配置变更仍只走 daemon 控制面。
-- System 页面 Logging 下方的 Maintenance 区提供 **Completely Uninstall Mihari**。两次确认框都默认 Cancel，并列出将清空的文件夹；与安装根程序字节一致的 PATH 命令文件也会列在其中。确认后先关闭 TUI 资源，再由已提权的本地卸载路径删除列出的命令文件，然后停止并注销 OS 服务，再删除这些文件夹。CLI `mihari service uninstall --purge --yes` 仍只删除白名单内的受管文件；整根删除需再加 `--force`。两者都会处理这一个命令文件。普通 `service uninstall` 仍只注销服务。
+- System 页面 Logging 下方的 Maintenance 区提供 **Completely Uninstall Mihari**。两次确认框都默认 Cancel，并列出将清空的文件夹；与安装根程序字节一致的 PATH 命令文件也会列在其中。确认后先关闭 TUI 资源，再由已提权的本地卸载路径尝试删除列出的命令文件，然后停止并注销 OS 服务，再删除这些文件夹。Unix 上该文件删除失败则停止，服务和目录保持不变。Windows 上删除失败会留下该文件并继续清理，不以完全卸载成功结束，错误里给出一条退出后可复制的 `Remove-Item -LiteralPath` 命令。CLI `mihari service uninstall --purge --yes` 仍只删除白名单内的受管文件；整根删除需再加 `--force`。两者都会处理这一个命令文件。普通 `service uninstall` 仍只注销服务。
 - 搜索与表单字段中的括号粘贴和 Ctrl+V 使用纯 Go 实现的 `github.com/atotto/clipboard` 辅助库;Mihari 本身从不把密钥写入剪贴板。
 - 页面:独立的首次运行 Setup 路由、Overview、可展开的 Proxies、带本地 GeoIP 详情的活动/已关闭 Connections、Rules/Providers、有界的结构化 Logs 流、订阅管理表单、分类的 System 页面,以及驱动面板安装/更新/激活/打开/回滚的 Web GUI 页面(在守护进程通告 `web-gui` 能力之后)。
 - Setup 安装核心、可添加初始订阅、准备本地 GeoIP 数据,并请求守护进程持久化校验过的本地端点。

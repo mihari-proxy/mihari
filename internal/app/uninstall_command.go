@@ -113,6 +113,11 @@ func commandFileMatchesInstalled(installed, command string) (bool, error) {
 	return bytes.Equal(left, right), nil
 }
 
+func manualUninstallCommand(path string) string {
+	quoted := strings.ReplaceAll(path, "'", "''")
+	return "Remove-Item -LiteralPath '" + quoted + "' -Force"
+}
+
 func hashCommandFile(path string) ([]byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -135,7 +140,7 @@ func removeClassifiedUninstallCommand(plan uninstallCommandPlan, progress func(s
 		if err := removeUninstallCommandFile(plan.path); err != nil {
 			removeErr := fmt.Errorf("remove %s: %w", plan.path, err)
 			if !commandRemoveFailureIsFatal {
-				removeErr = fmt.Errorf("%w; run Mihari from a separate copy and retry the uninstall", removeErr)
+				removeErr = fmt.Errorf("%w; after this program exits, run: %s", removeErr, manualUninstallCommand(plan.path))
 			}
 			reportUninstallProgress(progress, removeErr.Error())
 			if commandRemoveFailureIsFatal {
