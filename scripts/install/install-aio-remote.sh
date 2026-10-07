@@ -69,6 +69,26 @@ fi
 
 info() { printf '\033[1;34m•\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+confirm_macos_install() {
+  printf '\033[1;33mwarning:\033[0m %s\n' "macOS is currently unsupported. Support is incomplete and use is not recommended." >&2
+  if [ "${MIHARI_YES:-}" = "1" ] || [ "${YES:-0}" = "1" ]; then
+    return 0
+  fi
+  printf 'Continue anyway? [y/N] ' >&2
+  reply=''
+  # Test mode must not read /dev/tty; a real read would block the test runner.
+  if [ "${MIHARI_INSTALL_TEST_MODE:-}" = "1" ]; then
+    reply="${MIHARI_TEST_MACOS_CONFIRM:-}"
+  elif [ -t 0 ]; then
+    IFS= read -r reply || reply=''
+  else
+    IFS= read -r reply </dev/tty 2>/dev/null || reply=''
+  fi
+  case "$reply" in
+    y|Y|yes|YES|Yes) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 # confirm: returns 0 (yes) / 1 (no). --yes bypasses. stdin tty → read; else
 # /dev/tty (when piped from curl, real stdin is occupied but the user's tty is
@@ -104,6 +124,9 @@ if [ "${MIHARI_INSTALL_TEST_MODE:-}" != "1" ]; then
     *) err "unsupported architecture: $arch" ;;
   esac
   platform="${os}-${arch}"
+fi
+if [ "${os:-}" = "darwin" ] || { [ "${MIHARI_INSTALL_TEST_MODE:-}" = "1" ] && [ "${MIHARI_TEST_OS:-}" = "darwin" ]; }; then
+  confirm_macos_install || err "Cancelled; macOS installation was not confirmed. Use MIHARI_YES=1 to continue anyway."
 fi
 
 # Downloader: dl writes to a file, fetch writes to stdout (mirrors install.sh).
