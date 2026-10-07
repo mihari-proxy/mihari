@@ -14,6 +14,15 @@ $ErrorActionPreference = 'Stop'
 
 function Info($m) { Write-Host "* $m" -ForegroundColor Cyan }
 function Fail($m) { Write-Host "error: $m" -ForegroundColor Red; throw $m }
+function Start-MihariStep($Name) {
+  Info $Name
+  $script:MihariStepWatch = [Diagnostics.Stopwatch]::StartNew()
+}
+function Complete-MihariStep {
+  $elapsed = $script:MihariStepWatch.Elapsed
+  $minutes = [int][Math]::Floor($elapsed.TotalMinutes)
+  Write-Host ('  elapsed {0}:{1:d2}' -f $minutes, $elapsed.Seconds)
+}
 
 # BEGIN REPLACEMENT CONFIRMATION
 # Kept in both standalone installers; exercised with one shared version fixture.
@@ -558,18 +567,22 @@ if ($installService) { $targets += Get-ReplacementServiceDestination }
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ('mihari-download-' + [Guid]::NewGuid().ToString('N') + '.exe')
 $changed = $false
 try {
-  Info "Downloading $asset from $repo..."
+  Start-MihariStep 'Downloading release'
   Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+  Complete-MihariStep
   $releaseAsset = @($release.assets | Where-Object { $_.name -ceq $asset })
   if ($releaseAsset.Count -eq 1 -and $releaseAsset[0].digest) {
+    Start-MihariStep 'Verifying release'
     if ($releaseAsset[0].digest -cnotmatch '^sha256:([0-9a-f]{64})$' -or
         (Get-ReplacementFile $tmp).Digest -cne $Matches[1]) { Fail 'Mihari release checksum mismatch' }
+    Complete-MihariStep
   }
   $preview = Get-ReplacementPreview -Candidate $tmp -TargetVersion $tag -Targets $targets
   if ($preview.Service -cne $serviceView.Definition) { throw 'Service installation changed. Retry the installation.' }
   if (-not (Confirm-Replacement $preview ($env:MIHARI_YES -eq '1'))) { throw 'Cancelled. No installation changes were made.' }
   Assert-ReplacementPreview $preview $tmp $targets
   New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+  Start-MihariStep "Installing mihari to $dest"
   if ($preview.StopRequired) {
     Invoke-ReplacementElevated ([pscustomobject]@{ Action='Swap'; Preview=$preview; Candidate=$tmp; Targets=$targets; Destination=$dest })
   } else {
@@ -579,6 +592,7 @@ try {
   $changed = $true
   Set-ReplacementWrittenTarget $preview $dest
   Assert-ReplacementPreview $preview $tmp $targets
+  Complete-MihariStep
   $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
   if ($userPath -notlike "*$binDir*") {
     Info "Adding $binDir to your PATH"
@@ -587,15 +601,18 @@ try {
   }
   if ($explicit -eq 1) { Write-MihariChannel $channel }
   if ($installService) {
-    Info 'Registering the Mihari service...'
+    Start-MihariStep 'Registering the Mihari service...'
     Invoke-ReplacementElevated ([pscustomobject]@{ Action='Service'; Preview=$preview; Candidate=$dest; Targets=$targets; ServiceArgs=@('service','install'); Environment=(Get-ReplacementEnvironment) })
+    Complete-MihariStep
     # Registration intentionally changed the definition. Start does not stage
     # binaries; retain the existing service-start operation without reapproval.
+    Start-MihariStep 'Starting the Mihari service'
     if ($isAdmin) { & $dest service start; if ($LASTEXITCODE -ne 0) { throw 'Service start failed.' } }
     else {
       $process = Start-Process -FilePath $dest -ArgumentList @('service','start') -Verb RunAs -Wait -PassThru
       if ($process.ExitCode -ne 0) { throw 'Service start failed.' }
     }
+    Complete-MihariStep
   }
 } catch {
   if ($changed) { Write-Warning 'Mihari was copied, but installation did not complete. Some installation changes were made.' }
