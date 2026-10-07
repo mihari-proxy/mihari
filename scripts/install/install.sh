@@ -235,12 +235,48 @@ fail() { printf '%s\n' "$1" >&2; exit 1; }
 tag=$1; channel=$2; candidate=$3; bundle=$4; source=$5; data=$6; endpoint=$7; credential=$8; install_root=$9; shift 9; path_binary=$1; explicit_yes=$2; bootstrap_mode=$3
 case "$bootstrap_mode" in online|offline) :;; *) fail "invalid bootstrap mode";; esac
 stage=$(mktemp -d /var/tmp/mihari-install.XXXXXXXX)
-cleanup() { rm -f "$stage/entry" "$stage/candidate" "$stage/checksums" "$stage/latest" "$stage/request.json" "$stage/result.json" "$stage/error.json" "$stage/helper-help" "$stage/helper-latest" "$stage/bundle" "$stage/mihari" "$stage/index" "$stage/index-headers" "$stage/index-status" "$stage/tar-status"; rmdir "$stage"; }
+cleanup() { rm -f "$stage/entry" "$stage/candidate" "$stage/checksums" "$stage/latest" "$stage/request.json" "$stage/result.json" "$stage/error.json" "$stage/helper-help" "$stage/helper-latest" "$stage/bundle" "$stage/mihari" "$stage/index" "$stage/index-headers" "$stage/index-status" "$stage/tar-status" "$stage/fetch-headers"; rmdir "$stage"; }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 root_fetch() {
   [ -x /usr/bin/curl ] || fail "trusted bootstrap requires /usr/bin/curl"
+  if [ "${3:-}" = progress ]; then
+    root_fetch_with_progress "$1" "$2"
+    return
+  fi
   /usr/bin/curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 120 --max-filesize 268435456 "$1" -o "$2"
+}
+root_fetch_with_progress() {
+  fetch_url=$1
+  fetch_dest=$2
+  rm -f "$stage/fetch-headers"
+  /usr/bin/curl --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 30 --head -D "$stage/fetch-headers" -o /dev/null "$fetch_url" || true
+  fetch_total=$(awk 'BEGIN { n = "" } tolower($1) == "content-length:" { n = $2 } END { gsub(/\r/, "", n); print n }' "$stage/fetch-headers" 2>/dev/null || true)
+  case "$fetch_total" in
+    ""|*[!0-9]*) fetch_total=0 ;;
+  esac
+  if [ "$fetch_total" -le 0 ]; then
+    /usr/bin/curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 120 --max-filesize 268435456 "$fetch_url" -o "$fetch_dest"
+    return
+  fi
+  /usr/bin/curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 120 --max-filesize 268435456 "$fetch_url" -o "$fetch_dest" &
+  fetch_pid=$!
+  while kill -0 "$fetch_pid" 2>/dev/null; do
+    fetch_got=0
+    if [ -f "$fetch_dest" ]; then fetch_got=$(wc -c < "$fetch_dest" | tr -d ' '); fi
+    fetch_percent=$((fetch_got * 100 / fetch_total))
+    if [ "$fetch_percent" -gt 100 ]; then fetch_percent=100; fi
+    printf '\r  downloaded %s / %s MB (%d%%)' "$(awk -v n="$fetch_got" 'BEGIN { printf "%.1f", n/1048576 }')" "$(awk -v n="$fetch_total" 'BEGIN { printf "%.1f", n/1048576 }')" "$fetch_percent"
+    sleep 0.1
+  done
+  fetch_status=0
+  wait "$fetch_pid" || fetch_status=$?
+  fetch_got=0
+  if [ -f "$fetch_dest" ]; then fetch_got=$(wc -c < "$fetch_dest" | tr -d ' '); fi
+  fetch_percent=$((fetch_got * 100 / fetch_total))
+  if [ "$fetch_percent" -gt 100 ]; then fetch_percent=100; fi
+  printf '\r  downloaded %s / %s MB (%d%%)\n' "$(awk -v n="$fetch_got" 'BEGIN { printf "%.1f", n/1048576 }')" "$(awk -v n="$fetch_total" 'BEGIN { printf "%.1f", n/1048576 }')" "$fetch_percent"
+  return "$fetch_status"
 }
 # Channel index is the trust root: refuse redirects and keep at most 65537 bytes.
 # root_fetch still follows redirects for GitHub release assets.
@@ -289,12 +325,22 @@ helper_capable() {
 verified_binary() {
   release="https://github.com/mihari-proxy/mihari/releases/download/$1"
   asset="mihari-$os-$arch"
+  download_label=$3
+  verify_label=$4
+  printf '\033[1;34m•\033[0m %s\n' "$download_label"
+  step_started=$(date +%s)
   root_fetch "$release/SHA256SUMS.txt" "$stage/checksums"
   [ "$(wc -c < "$stage/checksums")" -le 1048576 ] || fail "checksum manifest exceeds limit"
   expected=$(awk -v asset="$asset" '$2==asset || $2=="*"asset {print $1}' "$stage/checksums")
   printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$' || fail "missing unique official binary checksum"
-  root_fetch "$release/$asset" "$2"
+  root_fetch "$release/$asset" "$2" progress
+  step_now=$(date +%s)
+  printf '  elapsed %d:%02d\n' $(( (step_now - step_started) / 60 )) $(( (step_now - step_started) % 60 ))
+  printf '\033[1;34m•\033[0m %s\n' "$verify_label"
+  step_started=$(date +%s)
   [ "$(checksum "$2")" = "$expected" ] || fail "official binary checksum mismatch"
+  step_now=$(date +%s)
+  printf '  elapsed %d:%02d\n' $(( (step_now - step_started) / 60 )) $(( (step_now - step_started) % 60 ))
   chmod 0700 "$2"
 }
 root_path_trusted() {
@@ -566,7 +612,7 @@ if [ "$bootstrap_mode" = offline ] && [ -n "$candidate" ] && [ -z "$entry" ]; th
   fail "Offline installation requires a trusted helper with replacement confirmation support. Prepare a current Mihari installation before installing this offline candidate."
 fi
 if [ -z "$candidate" ]; then
-  verified_binary "$tag" "$stage/candidate"
+  verified_binary "$tag" "$stage/candidate" "Downloading release" "Verifying release"
   candidate="$stage/candidate"
 fi
 if [ -z "${bundle:-}" ] && [ -z "$entry" ]; then
@@ -591,7 +637,7 @@ if [ -z "${bundle:-}" ] && [ -z "$entry" ]; then
     }
     END { print best }')
   [ -n "$helper_tag" ] || fail "No current helper release found; prepare a trusted Mihari helper with replacement confirmation support."
-  verified_binary "$helper_tag" "$stage/entry"
+  verified_binary "$helper_tag" "$stage/entry" "Downloading installer" "Verifying installer"
   entry="$stage/entry"
   helper_capable "$entry" || fail "The current official helper lacks replacement confirmation support. Update the installer helper before installing the selected version."
 fi

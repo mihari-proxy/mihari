@@ -2,8 +2,8 @@
 
 mihari 面向两类用户分发：
 
-- **海外 / 可访问 GitHub 的用户**：在线安装，直接从 GitHub Releases 拉取二进制（脚本1）。
-- **墙内 / 无 GitHub 访问的用户**：离线安装，从自建 AList 网盘拉取 all-in-one 整合包（脚本3 → 脚本2）。
+- **海外 / 可访问 GitHub 的用户**：程序安装，直接从 GitHub Releases 拉取二进制（脚本1）。
+- **墙内 / 无 GitHub 访问的用户**：通道整合包安装，从自建 AList 网盘拉取 all-in-one 整合包（脚本3 → 脚本2）。
 
 本文档聚焦「运维/用户操作面」。详细的架构论证与设计取舍见 all-in-one 分发设计稿（仓库外规划文档）。
 
@@ -11,7 +11,7 @@ mihari 面向两类用户分发：
 
 ## 一、用户安装入口
 
-### 1. 在线安装（脚本1，需 GitHub 访问）
+### 1. 程序安装（脚本1，需 GitHub 访问）
 
 ```bash
 # Linux / macOS
@@ -21,9 +21,9 @@ curl -fsSL https://raw.githubusercontent.com/mihari-proxy/mihari/main/scripts/in
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/mihari-proxy/mihari/main/scripts/install/install.ps1)))
 ```
 
-脚本1 仅安装 mihari 二进制，核心（mihomo）与 GeoIP 在首次运行时联网下载。
+脚本1 仅安装 mihari 二进制，核心（mihomo）与 GeoIP 在首次运行时联网下载。拉取和校验发布时显示 `Downloading release` 与 `Verifying release`，步骤结束时打印 `elapsed M:SS`。Unix 随后的安装事务显示 `Applying installation` 并刷新这一行；Windows 在复制程序、注册服务和启动服务时各显示一步。
 
-### 2. 离线安装（脚本3 下载器，免 GitHub）
+### 2. 通道整合包安装（脚本3 下载器，免 GitHub）
 
 一条命令，全程不触碰 GitHub：
 
@@ -48,9 +48,9 @@ GitHub dev prerelease `v0.9.0-dev.2` 已发布并完成精确 14 个 assets 的�
 5. 调用包内的本地安装器（脚本2），传入 bundle 目录；
 6. 提示重启终端，运行 `mihari`。
 
-下载完成后，校验、解压和安装事务都会在终端显示步骤名。每个步骤结束时打印 `elapsed M:SS`；安装事务进行期间这一行按秒刷新，直到 `Installation complete.`
+下载完成后，校验、解压和安装都会显示步骤名，并在步骤结束时打印 `elapsed M:SS`。Unix 安装事务进行期间这一行会刷新，直到 `Installation complete.`
 
-### 3. 手动安装某个整合包
+### 3. 离线安装（本地整合包）
 
 无需脚本3，直接下载某版本的整合包解压后运行包内安装器：
 
@@ -59,6 +59,8 @@ GitHub dev prerelease `v0.9.0-dev.2` 已发布并完成精确 14 个 assets 的�
 tar -xzf mihari-all-in-one-linux-amd64.tar.gz
 sh install-aio.sh        # Windows: powershell -File install-aio.ps1
 ```
+
+本地安装会显示解压或复制、核心、地理数据和服务步骤，并在每步结束时打印 `elapsed M:SS`。Unix 安装事务进行期间这一行会刷新，直到 `Installation complete.`
 
 环境变量可覆盖默认安装位置：
 
@@ -98,7 +100,7 @@ Linux B=/var/lib/mihari，macOS B=/Library/Application Support/mihari；D=B/data
 
 普通安装、本地 AIO 和远程 AIO 的 sh/PowerShell 入口都会先固定候选，并在安装写入前判断实际目标版本。降级或兼容性 unknown 需要确认，交互默认否；需要确认却没有可用终端时立即失败。无人值守可明确设置 `MIHARI_YES=1`；远程入口也支持原有 `--yes` / `-Yes`，并将该选择传至内层。接受下载计划本身不等于接受后续降级。下载-only 保持原行为。
 
-已安装的 `/usr/local/lib/mihari/mihari` 若通过 root 路径链且 `service apply --help` 同时含 `--yes` 和 `--expected-preview`，由它执行。这次选择不联网；整合包未被 install-trust 的 `bundles` 或 `binaries` 接受时，安装事务仍请求固定通道索引。没有合格安装器时，在线整合包只请求固定通道索引（稳定 `https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/index.txt`，dev `https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt`），核对归档 sha256 与 `latest` 后执行包内程序。没有合格安装器的离线安装不联网，只接受 `install-trust/manifest.json` 的 `binaries` / `bundles` 摘要。`install.sh` 仍从 GitHub 取单文件。公开的 `install-aio-remote.sh` 仍只在下一次 stable 发布时上传。确认期间候选或目标变化，需要重新开始。离线候选还须通过受信副本的有界版本查询，确认其版本与请求的 tag 一致；无法证明版本时拒绝，不会为此隐式联网。
+已安装的 `/usr/local/lib/mihari/mihari` 若通过 root 路径链且 `service apply --help` 同时含 `--yes` 和 `--expected-preview`，由它执行。这次选择不联网；整合包未被 install-trust 的 `bundles` 或 `binaries` 接受时，安装事务仍请求固定通道索引。没有合格安装器时，通道整合包只请求固定通道索引（稳定 `https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari/index.txt`，dev `https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt`），核对归档 sha256 与 `latest` 后执行包内程序。没有合格安装器的离线安装不联网，只接受 `install-trust/manifest.json` 的 `binaries` / `bundles` 摘要。`install.sh` 仍从 GitHub 取单文件。公开的 `install-aio-remote.sh` 仍只在下一次 stable 发布时上传。确认期间候选或目标变化，需要重新开始。离线候选还须通过受信副本的有界版本查询，确认其版本与请求的 tag 一致；无法证明版本时拒绝，不会为此隐式联网。
 
 Windows 远程 AIO 只自动运行已校验且声明确认能力的本地安装脚本。旧 bundle 缺少能力时保留已校验的解压包；可事先保存当前 `install-aio.ps1`，使用 `-BundleDir <解压目录>` 安装旧包。该脚本的 `-Capabilities` 仅查询能力，不访问 bundle 或创建安装目录。本地旧包没有可信版本信息时以内容摘要绑定 unknown 候选，明确确认后仍可使用既有安装路径。不会为兼容旧包隐式下载另一个公共脚本。
 

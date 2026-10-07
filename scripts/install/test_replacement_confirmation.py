@@ -213,6 +213,36 @@ def test_posix_failure_prints_error_json(tmp_path):
     assert args.count("apply") == 1
 
 
+def test_windows_install_scripts_announce_steps():
+    program = (INSTALL / "install.ps1").read_text(encoding="utf-8")
+    remote = (INSTALL / "install-aio-remote.ps1").read_text(encoding="utf-8")
+    local = (INSTALL / "install-aio.ps1").read_text(encoding="utf-8")
+    program_body = program.split("$changed = $false", 1)[1]
+    assert program_body.index("Downloading release") < program_body.index("Invoke-WebRequest -Uri $url -OutFile $tmp")
+    assert program_body.index("Invoke-WebRequest -Uri $url -OutFile $tmp") < program_body.index("Verifying release")
+    assert program_body.index("Verifying release") < program_body.index("Confirm-Replacement")
+    assert program_body.index("Confirm-Replacement") < program_body.index("Installing mihari to")
+    assert program_body.index("Installing mihari to") < program_body.index("Action='Swap'")
+    assert program_body.index("Registering the Mihari service") < program_body.index("Action='Service'")
+    assert program_body.index("Starting the Mihari service") < program_body.index("service start")
+    assert "  elapsed {0}:{1:d2}" in program
+
+    remote_body = remote.split("Downloading $resolvedUrl", 1)[1]
+    assert "SHA-256 verification passed." not in remote
+    assert remote_body.index("Verifying archive") < remote_body.index("Get-FileHash")
+    assert remote_body.index("Extracting archive") < remote_body.index("Expand-Archive")
+    assert "  elapsed {0}:{1:d2}" in remote
+
+    local_body = local.split("Confirm-Replacement", 1)[1]
+    assert local_body.index("Installing mihari to") < local_body.index("Action='Stop'")
+    assert local_body.index("Installing the bundled mihomo core") < local_body.index("Copy-Item -LiteralPath $mihomoSrc")
+    assert local_body.index("Preserving the installed mihomo core") < local_body.index("Installing GeoIP data")
+    assert local_body.index("Installing GeoIP data") < local_body.index("geoip\\GeoLite2-Country.mmdb') -Destination")
+    assert local_body.index("Registering the Mihari service") < local_body.index("Action='Service'")
+    assert local_body.index("Starting the Mihari service") < local_body.index("service start")
+    assert "  elapsed {0}:{1:d2}" in local
+
+
 def test_aio_install_scripts_announce_steps_before_apply():
     remote = (INSTALL / "install-aio-remote.sh").read_text(encoding="utf-8")
     local = (INSTALL / "install-aio.sh").read_text(encoding="utf-8")
