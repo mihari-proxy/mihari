@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import pytest
@@ -17,7 +18,7 @@ def confirmation_error(preview="a" * 64):
                     "target_version": "v1.0.0", "preview_id": preview}}}
 
 
-def run_posix(tmp_path, error=None, consent="accept", explicit=False, second=0, first=2, stdout_body="", stderr_body="", path_binary="/usr/local/bin/mihari"):
+def run_posix(tmp_path, error=None, consent="accept", explicit=False, second=0, first=2, stdout_body="", stderr_body="", path_binary="/usr/local/bin/mihari", delay=0, bundle="", bootstrap_mode=""):
     if os.name != "posix":
         pytest.skip("Native POSIX helper fixture paths require a POSIX host")
     source = (INSTALL / "root-apply.sh.in").read_text()
@@ -28,7 +29,7 @@ def run_posix(tmp_path, error=None, consent="accept", explicit=False, second=0, 
     fixture = tmp_path / "fixture"
     fixture.write_text(error if isinstance(error, str) else json.dumps(error or confirmation_error(), separators=(",", ":")) + "\n")
     helper = tmp_path / "helper"
-    helper.write_text('#!/bin/sh\nprintf "%s\\n" "$@" >> "$ARG_LOG"\n'
+    helper.write_text('#!/bin/sh\nsleep "${DELAY:-0}"\nprintf "%s\\n" "$@" >> "$ARG_LOG"\n'
                       'if [ ! -f "$COUNT" ]; then : > "$COUNT"; cat "$FIXTURE" >&2; '
                       'if [ -n "${STDOUT_BODY:-}" ]; then printf "%s\\n" "$STDOUT_BODY"; fi\n'
                       'exit "$FIRST"; fi\n'
@@ -39,13 +40,20 @@ def run_posix(tmp_path, error=None, consent="accept", explicit=False, second=0, 
     stage = tmp_path / "stage"
     stage.mkdir()
     override = {"accept": "confirm_replacement() { return 0; }", "cancel": "confirm_replacement() { return 1; }", "real": ""}[consent]
-    command = '\n'.join(["set -eu", "umask 077", "stage=" + shlex.quote(str(stage)),
-                          "entry=" + shlex.quote(str(helper)), "explicit_yes=" + str(int(explicit)),
-                          "path_binary=" + shlex.quote(path_binary),
-                          'fail() { printf "%s\\n" "$1" >&2; exit 1; }', block, override, "apply_with_confirmation"])
+    prelude = ["set -eu", "umask 077", "stage=" + shlex.quote(str(stage)),
+               "entry=" + shlex.quote(str(helper)), "explicit_yes=" + str(int(explicit)),
+               "path_binary=" + shlex.quote(path_binary)]
+    if bundle:
+        prelude.append("bundle=" + shlex.quote(bundle))
+    if bootstrap_mode:
+        prelude.append("bootstrap_mode=" + shlex.quote(bootstrap_mode))
+    command = '\n'.join(prelude + ['fail() { printf "%s\\n" "$1" >&2; exit 1; }', block, override, "apply_with_confirmation"])
     env = dict(os.environ, ARG_LOG=str(tmp_path / "argv"), COUNT=str(tmp_path / "count"), FIXTURE=str(fixture),
-               SECOND=str(second), FIRST=str(first), STDOUT_BODY=stdout_body, STDERR_BODY=stderr_body)
-    result = subprocess.run(["sh", "-c", command], env=env, capture_output=True, text=True, timeout=10, start_new_session=True)
+               SECOND=str(second), FIRST=str(first), STDOUT_BODY=stdout_body, STDERR_BODY=stderr_body, DELAY=str(delay))
+    result = subprocess.run(["sh", "-c", command], env=env, capture_output=True, timeout=10, start_new_session=True)
+    # Keep carriage returns. text=True would turn the in-place clock into extra lines.
+    result.stdout = result.stdout.decode()
+    result.stderr = result.stderr.decode()
     return result, (tmp_path / "argv").read_text().splitlines()
 
 
@@ -90,15 +98,38 @@ def test_posix_changed_preview_never_third_call(tmp_path):
     assert args.count("apply") == 2
 
 
+def elapsed_seconds(text):
+    return [int(minutes) * 60 + int(seconds) for minutes, seconds in re.findall(r"\r  elapsed ([0-9]+):([0-9]{2})", text)]
+
+
 def test_posix_success_prompts_for_tui(tmp_path):
     binary = "/opt/mihari/bin/mihari"
     result, args = run_posix(tmp_path, error="", first=0, stdout_body='{"schema":"mihari.install-result/v1"}', path_binary=binary)
     assert result.returncode == 0, result.stderr
+    assert re.search(r"Applying installation\n(?:\r  elapsed [0-9]+:[0-9]{2})+\n", result.stdout)
+    assert elapsed_seconds(result.stdout)
     assert "Installation complete." in result.stdout
     assert "Run mihari to open the TUI." in result.stdout
     assert binary not in result.stdout
     assert "mihari.install-result" not in result.stdout
     assert args.count("apply") == 1
+
+
+def test_posix_apply_elapsed_advances_while_helper_runs(tmp_path):
+    result, args = run_posix(tmp_path, error="", first=0, stdout_body='{"schema":"mihari.install-result/v1"}', delay=2)
+    assert result.returncode == 0, result.stderr
+    assert "Applying installation" in result.stdout
+    assert max(elapsed_seconds(result.stdout)) >= 1
+    assert result.stdout.index("Applying installation") < result.stdout.index("Installation complete.")
+    assert args.count("apply") == 1
+
+
+@pytest.mark.parametrize(("bootstrap_mode", "label"), [("online", "Step 3/3 Applying installation"), ("offline", "Step 2/2 Applying installation")])
+def test_posix_bundle_apply_step_numbers(tmp_path, bootstrap_mode, label):
+    result, _args = run_posix(tmp_path, error="", first=0, stdout_body='{"schema":"mihari.install-result/v1"}', bundle="/bundle.tar.gz", bootstrap_mode=bootstrap_mode)
+    assert result.returncode == 0, result.stderr
+    assert label in result.stdout
+    assert elapsed_seconds(result.stdout)
 
 
 def test_posix_confirmed_replacement_prompts_for_tui(tmp_path):
@@ -177,8 +208,19 @@ def test_posix_failure_prints_error_json(tmp_path):
     assert result.returncode == 1, result.stderr
     assert "Installation failed." in result.stderr
     assert raw in result.stderr
+    assert "Applying installation" in result.stdout
     assert "Installation complete." not in result.stdout + result.stderr
     assert args.count("apply") == 1
+
+
+def test_aio_install_scripts_announce_steps_before_apply():
+    remote = (INSTALL / "install-aio-remote.sh").read_text(encoding="utf-8")
+    local = (INSTALL / "install-aio.sh").read_text(encoding="utf-8")
+    remote_tail = remote.split("# END ROOT APPLY", 1)[1]
+    local_tail = local.split("# END ROOT APPLY", 1)[1]
+    assert remote_tail.index("Step 1/3 Verifying archive") < remote_tail.index("Step 2/3 Extracting installer")
+    assert remote_tail.index("Step 2/3 Extracting installer") < remote_tail.index("root_apply ")
+    assert local_tail.index("Step 1/2 Extracting installer") < local_tail.index("root_apply ")
 
 
 def test_posix_explicit_yes_first_call_only(tmp_path):

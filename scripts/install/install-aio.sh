@@ -367,11 +367,17 @@ if [ -n "$entry" ] && ! helper_capable "$entry"; then entry=""; fi
 # bundle. Copy into this stage before hashing or extracting, and never execute
 # the caller archive path. Do not fall back to a GitHub helper.
 if [ -z "$entry" ] && [ -n "${bundle:-}" ]; then
+  printf '\033[1;34m•\033[0m %s\n' "Staging bundle"
+  step_started=$(date +%s)
   [ -f "$bundle" ] && [ ! -L "$bundle" ] || fail "cannot stage install bundle"
   if [ "$os" = linux ]; then bundle_size=$(stat -c %s "$bundle") || fail "cannot stage install bundle"; else bundle_size=$(stat -f %z "$bundle") || fail "cannot stage install bundle"; fi
   [ "$bundle_size" -le 1073741824 ] || fail "install bundle exceeds limit"
   cp "$bundle" "$stage/bundle" || fail "cannot stage install bundle"
   chmod 0600 "$stage/bundle" || fail "cannot stage install bundle"
+  step_now=$(date +%s)
+  printf '  elapsed %d:%02d\n' $(( (step_now - step_started) / 60 )) $(( (step_now - step_started) % 60 ))
+  printf '\033[1;34m•\033[0m %s\n' "Verifying bundle"
+  step_started=$(date +%s)
   archive_sha=$(checksum "$stage/bundle") || fail "cannot hash install bundle"
   offline_bundle_pin=0
   if [ "$bootstrap_mode" = online ]; then
@@ -386,6 +392,8 @@ if [ -z "$entry" ] && [ -n "${bundle:-}" ]; then
     index_sum=$(printf '%s\n' "$index_parsed" | sed -n '2p')
     [ "$index_latest" = "$tag" ] || fail "channel index latest does not match release tag"
     [ "$index_sum" = "$archive_sha" ] || fail "install bundle checksum mismatch"
+    step_now=$(date +%s)
+    printf '  elapsed %d:%02d\n' $(( (step_now - step_started) / 60 )) $(( (step_now - step_started) % 60 ))
   else
     manifest="${install_root:-/usr/local/lib/mihari}/install-trust/manifest.json"
     case "$manifest" in
@@ -396,7 +404,11 @@ if [ -z "$entry" ] && [ -n "${bundle:-}" ]; then
     if manifest_pins_digest "$manifest" "$archive_sha" ""; then
       offline_bundle_pin=1
     fi
+    step_now=$(date +%s)
+    printf '  elapsed %d:%02d\n' $(( (step_now - step_started) / 60 )) $(( (step_now - step_started) % 60 ))
   fi
+  printf '\033[1;34m•\033[0m %s\n' "Extracting bundled installer"
+  step_started=$(date +%s)
   stage_bundle_mihari "$stage/bundle" "$stage/mihari" || fail "bundle does not contain mihari"
   binary_sha=$(checksum "$stage/mihari") || fail "cannot hash bundled mihari"
   if [ "$bootstrap_mode" != online ] && [ "$offline_bundle_pin" != 1 ]; then
@@ -406,6 +418,8 @@ if [ -z "$entry" ] && [ -n "${bundle:-}" ]; then
   entry=$stage/mihari
   candidate=$stage/mihari
   bundle=$stage/bundle
+  step_now=$(date +%s)
+  printf '  elapsed %d:%02d\n' $(( (step_now - step_started) / 60 )) $(( (step_now - step_started) % 60 ))
 fi
 # Local offline candidates never cause an implicit network bootstrap. Remote
 # AIO passes online explicitly, even though its verified bundle is now local.
@@ -663,11 +677,43 @@ report_install_failure() {
   printf '\033[1;31merror:\033[0m %s\n' "Installation failed." >&2
   cat "$stage/error.json" >&2
 }
+apply_progress_label() {
+  if [ -n "${bundle:-}" ]; then
+    if [ "${bootstrap_mode:-}" = online ]; then
+      printf '%s\n' "Step 3/3 Applying installation"
+      return 0
+    fi
+    printf '%s\n' "Step 2/2 Applying installation"
+    return 0
+  fi
+  printf '%s\n' "Applying installation"
+}
+run_apply_showing_elapsed() {
+  apply_label=$1
+  shift
+  printf '\033[1;34m•\033[0m %s\n' "$apply_label"
+  apply_started=$(date +%s)
+  "$@" >"$stage/result.json" 2>"$stage/error.json" &
+  apply_pid=$!
+  printf '\r  elapsed 0:00'
+  while kill -0 "$apply_pid" 2>/dev/null; do
+    apply_now=$(date +%s)
+    apply_elapsed=$((apply_now - apply_started))
+    printf '\r  elapsed %d:%02d' $((apply_elapsed / 60)) $((apply_elapsed % 60))
+    sleep 0.1
+  done
+  apply_status=0
+  wait "$apply_pid" || apply_status=$?
+  apply_now=$(date +%s)
+  apply_elapsed=$((apply_now - apply_started))
+  printf '\r  elapsed %d:%02d\n' $((apply_elapsed / 60)) $((apply_elapsed % 60))
+  return "$apply_status"
+}
 apply_with_confirmation() {
   status=0
   set -- service apply --request "$stage/request.json" --json
   [ "$explicit_yes" != 1 ] || set -- "$@" --yes
-  "$entry" "$@" >"$stage/result.json" 2>"$stage/error.json" || status=$?
+  run_apply_showing_elapsed "$(apply_progress_label)" "$entry" "$@" || status=$?
   if [ "$status" -eq 0 ]; then
     report_install_success
     return 0
@@ -679,7 +725,7 @@ apply_with_confirmation() {
   preview_id=$(read_confirmation_preview "$stage/error.json") || fail "Installation requires review; no changes made."
   confirm_replacement "$stage/error.json" || fail "Cancelled; no installation changes made. Use MIHARI_YES=1 to explicitly accept replacement risk."
   status=0
-  "$entry" service apply --request "$stage/request.json" --json --yes --expected-preview "$preview_id" >"$stage/result.json" 2>"$stage/error.json" || status=$?
+  run_apply_showing_elapsed "$(apply_progress_label)" "$entry" service apply --request "$stage/request.json" --json --yes --expected-preview "$preview_id" || status=$?
   if [ "$status" -eq 0 ]; then
     report_install_success
     return 0
@@ -720,6 +766,10 @@ trap 'rm -f "$candidate_dir/mihari"; rmdir "$candidate_dir"' EXIT
 trap 'exit 1' HUP INT TERM
 # Extract only inert binary bytes; the privileged Go use case verifies the whole
 # original archive and all typed resources before publication.
+printf '\033[1;34m•\033[0m %s\n' "Step 1/2 Extracting installer"
+step_started=$(date +%s)
 tar -xOzf "$archive" mihari | head -c 268435457 > "$candidate_dir/mihari"
 [ "$(wc -c < "$candidate_dir/mihari")" -le 268435456 ] || err "binary exceeds limit"
+step_now=$(date +%s)
+printf '  elapsed %d:%02d\n' $(( (step_now - step_started) / 60 )) $(( (step_now - step_started) % 60 ))
 root_apply "$MIHARI_VERSION" "${CHANNEL:-main}" "$candidate_dir/mihari" "$archive"
