@@ -129,6 +129,37 @@ def test_posix_explicit_yes_prints_compatibility_warning(tmp_path):
     assert args.count("apply") == 1
 
 
+def test_posix_terminal_escape_warning_uses_fallback(tmp_path):
+    body = json.dumps({
+        "warnings": [{"message": "token\x1b[31mred"}],
+        "schema": "mihari.install-result/v1",
+    }, separators=(",", ":"))
+    result, _args = run_posix(tmp_path, error="", explicit=True, first=0, stdout_body=body)
+    assert result.returncode == 0, result.stderr
+    assert "Warning: a compatibility warning could not be displayed." in result.stderr
+    assert "token" not in result.stderr
+    assert "\x1b" not in result.stderr
+    assert "Installation complete." in result.stdout
+    assert "Run mihari to open the TUI." in result.stdout
+    assert "mihari.install-result" not in result.stdout + result.stderr
+
+
+def test_posix_warnings_omitted_prints_count(tmp_path):
+    warning = "Older Mihari versions may fail to load current data."
+    body = json.dumps({
+        "warnings": [{"message": warning}],
+        "warnings_omitted": 2,
+        "schema": "mihari.install-result/v1",
+    }, separators=(",", ":"))
+    result, _args = run_posix(tmp_path, error="", explicit=True, first=0, stdout_body=body)
+    assert result.returncode == 0, result.stderr
+    assert f"Warning: {warning}" in result.stderr
+    assert "Warning: 2 additional warnings exceeded the collection limit." in result.stderr
+    assert "Installation complete." in result.stdout
+    assert "Run mihari to open the TUI." in result.stdout
+    assert "mihari.install-result" not in result.stdout + result.stderr
+
+
 def test_posix_retry_failure_prints_error_json(tmp_path):
     raw = json.dumps({"schema": "mihari.error/v1", "error": {"code": "invalid_state", "message": "retry failed"}}, separators=(",", ":"))
     result, args = run_posix(tmp_path, second=9, stderr_body=raw)
