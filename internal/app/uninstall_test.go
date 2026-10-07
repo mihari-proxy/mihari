@@ -278,6 +278,7 @@ func TestUninstaller_RunForceStillRefusesSymlinkRoot(t *testing.T) {
 }
 
 func TestUninstaller_PreviewPrivateLayoutIncludesCapturedWindowsControlTarget(t *testing.T) {
+	t.Setenv("MIHARI_BIN", t.TempDir())
 	layout, data, program := uninstallTestLayout(t)
 	writeUninstallFixture(t, data, "mihari.yaml")
 	writeUninstallFixture(t, program, "mihari")
@@ -297,6 +298,7 @@ func TestUninstaller_PreviewPrivateLayoutIncludesCapturedWindowsControlTarget(t 
 }
 
 func TestUninstaller_RunRemovesCapturedControlWithoutPrivateBaseSibling(t *testing.T) {
+	t.Setenv("MIHARI_BIN", t.TempDir())
 	layout, data, program := uninstallTestLayout(t)
 	root := filepath.Dir(data)
 	control := filepath.Join(root, "system-base", "install-control")
@@ -337,6 +339,10 @@ func uninstallTestLayout(t *testing.T) (platform.ResolvedLayout, string, string)
 
 func newUninstallTestRunner(t *testing.T, layout platform.ResolvedLayout, opts UninstallerOptions) *Uninstaller {
 	t.Helper()
+	// Keep complete-uninstall tests off the real PATH command. Callers that need
+	// a specific MIHARI_BIN must set it after this helper; the value is read
+	// when Preview or Run executes.
+	t.Setenv("MIHARI_BIN", t.TempDir())
 	control := filepath.Join(t.TempDir(), "install-control")
 	if err := os.MkdirAll(control, 0o700); err != nil {
 		t.Fatal(err)

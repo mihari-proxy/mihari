@@ -65,8 +65,9 @@ func newUninstaller(layout platform.ResolvedLayout, opts UninstallerOptions, res
 	return &Uninstaller{layout: layout, opts: opts, controlRoot: controlRoot, controlRootErr: controlRootErr}
 }
 
-// Preview returns the fixed roots selected for uninstall. It does not inspect
-// folder contents; callers that must refuse unrecognized files use Run.
+// Preview returns the fixed roots selected for uninstall. When the PATH command
+// file matches the installed program, that file is included too. It does not
+// inspect folder contents; callers that must refuse unrecognized files use Run.
 func (u *Uninstaller) Preview(ctx context.Context) ([]UninstallTarget, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -74,9 +75,16 @@ func (u *Uninstaller) Preview(ctx context.Context) ([]UninstallTarget, error) {
 	if u.controlRootErr != nil {
 		return nil, fmt.Errorf("resolve Mihari installation control directory: %w", u.controlRootErr)
 	}
+	command, err := classifyUninstallCommand(u.layout.InstallRoot)
+	if err != nil {
+		return nil, err
+	}
 	targets := uninstallTargets(u.layout, u.controlRoot)
 	if err := inspectUninstallRoots(ctx, targets); err != nil {
 		return nil, err
+	}
+	if command.remove {
+		targets = append(targets, UninstallTarget{Path: command.path, Kind: "command"})
 	}
 	return targets, nil
 }
@@ -107,6 +115,15 @@ func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool
 		return errors.New("administrator privileges are required; re-run this command from an elevated shell")
 	}
 
+	command, err := classifyUninstallCommand(u.layout.InstallRoot)
+	if err != nil {
+		return err
+	}
+	commandErr, stop := removeClassifiedUninstallCommand(command, progress)
+	if stop != nil {
+		return stop
+	}
+
 	reportUninstallProgress(progress, "Uninstalling Mihari service")
 	if err := u.uninstallService(ctx); err != nil {
 		return fmt.Errorf("uninstall Mihari service: %w", err)
@@ -125,7 +142,7 @@ func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool
 
 	for phase := 0; phase < 3; phase++ {
 		for _, target := range targets {
-			if uninstallTargetPhase(target) != phase {
+			if target.Kind == "command" || uninstallTargetPhase(target) != phase {
 				continue
 			}
 			if err := ctx.Err(); err != nil {
@@ -139,6 +156,9 @@ func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool
 			}
 			reportUninstallProgress(progress, "Removed "+target.Path)
 		}
+	}
+	if commandErr != nil {
+		return commandErr
 	}
 	reportUninstallProgress(progress, "Mihari has been completely uninstalled")
 	return nil
