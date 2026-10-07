@@ -17,7 +17,7 @@ def confirmation_error(preview="a" * 64):
                     "target_version": "v1.0.0", "preview_id": preview}}}
 
 
-def run_posix(tmp_path, error=None, consent="accept", explicit=False, second=0, first=2, stdout_body="", stderr_body=""):
+def run_posix(tmp_path, error=None, consent="accept", explicit=False, second=0, first=2, stdout_body="", stderr_body="", path_binary="/usr/local/bin/mihari"):
     if os.name != "posix":
         pytest.skip("Native POSIX helper fixture paths require a POSIX host")
     source = (INSTALL / "root-apply.sh.in").read_text()
@@ -41,6 +41,7 @@ def run_posix(tmp_path, error=None, consent="accept", explicit=False, second=0, 
     override = {"accept": "confirm_replacement() { return 0; }", "cancel": "confirm_replacement() { return 1; }", "real": ""}[consent]
     command = '\n'.join(["set -eu", "umask 077", "stage=" + shlex.quote(str(stage)),
                           "entry=" + shlex.quote(str(helper)), "explicit_yes=" + str(int(explicit)),
+                          "path_binary=" + shlex.quote(path_binary),
                           'fail() { printf "%s\\n" "$1" >&2; exit 1; }', block, override, "apply_with_confirmation"])
     env = dict(os.environ, ARG_LOG=str(tmp_path / "argv"), COUNT=str(tmp_path / "count"), FIXTURE=str(fixture),
                SECOND=str(second), FIRST=str(first), STDOUT_BODY=stdout_body, STDERR_BODY=stderr_body)
@@ -90,10 +91,12 @@ def test_posix_changed_preview_never_third_call(tmp_path):
 
 
 def test_posix_success_prompts_for_tui(tmp_path):
-    result, args = run_posix(tmp_path, error="", first=0, stdout_body='{"schema":"mihari.install-result/v1"}')
+    binary = "/opt/mihari/bin/mihari"
+    result, args = run_posix(tmp_path, error="", first=0, stdout_body='{"schema":"mihari.install-result/v1"}', path_binary=binary)
     assert result.returncode == 0, result.stderr
     assert "Installation complete." in result.stdout
-    assert "Run mihari to open the TUI." in result.stdout
+    assert f"Run {binary} to open the TUI." in result.stdout
+    assert "Run mihari to open the TUI." not in result.stdout
     assert "mihari.install-result" not in result.stdout
     assert args.count("apply") == 1
 
@@ -102,7 +105,7 @@ def test_posix_confirmed_replacement_prompts_for_tui(tmp_path):
     result, args = run_posix(tmp_path, second=0, stdout_body='{"schema":"mihari.install-result/v1"}')
     assert result.returncode == 0, result.stderr
     assert "Installation complete." in result.stdout
-    assert "Run mihari to open the TUI." in result.stdout
+    assert "Run /usr/local/bin/mihari to open the TUI." in result.stdout
     assert "mihari.install-result" not in result.stdout
     assert args.count("apply") == 2
 
@@ -121,7 +124,7 @@ def test_posix_explicit_yes_prints_compatibility_warning(tmp_path):
     assert result.returncode == 0, result.stderr
     assert f"Warning: {warning}" in result.stderr
     assert "Installation complete." in result.stdout
-    assert "Run mihari to open the TUI." in result.stdout
+    assert "Run /usr/local/bin/mihari to open the TUI." in result.stdout
     assert "mihari.install-result" not in result.stdout + result.stderr
     assert args.count("apply") == 1
 

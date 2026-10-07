@@ -773,7 +773,7 @@ report_install_success() {
   cat "$stage/error.json" >&2
   print_result_warnings "$stage/result.json"
   printf '\033[1;32m•\033[0m %s\n' "Installation complete."
-  printf '%s\n' "Run mihari to open the TUI."
+  printf 'Run %s to open the TUI.\n' "$path_binary"
 }
 report_install_failure() {
   printf '\033[1;31merror:\033[0m %s\n' "Installation failed." >&2
