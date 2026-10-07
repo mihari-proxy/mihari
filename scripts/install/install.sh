@@ -672,23 +672,38 @@ confirm_replacement() {
     case "$answer" in y|Y|yes|YES) exit 0;; *) exit 1;; esac
   ) 2>/dev/null
 }
+report_install_success() {
+  cat "$stage/error.json" >&2
+  printf '\033[1;32m•\033[0m %s\n' "Installation complete."
+  printf '%s\n' "Run mihari to open the TUI."
+}
+report_install_failure() {
+  printf '\033[1;31merror:\033[0m %s\n' "Installation failed." >&2
+  cat "$stage/error.json" >&2
+}
 apply_with_confirmation() {
   status=0
   set -- service apply --request "$stage/request.json" --json
   [ "$explicit_yes" != 1 ] || set -- "$@" --yes
   "$entry" "$@" >"$stage/result.json" 2>"$stage/error.json" || status=$?
   if [ "$status" -eq 0 ]; then
-    cat "$stage/error.json" >&2
-    cat "$stage/result.json"
+    report_install_success
     return 0
   fi
   if [ "$status" -ne 2 ] || [ "$explicit_yes" = 1 ]; then
-    cat "$stage/error.json" >&2
+    report_install_failure
     return "$status"
   fi
   preview_id=$(read_confirmation_preview "$stage/error.json") || fail "Installation requires review; no changes made."
   confirm_replacement "$stage/error.json" || fail "Cancelled; no installation changes made. Use MIHARI_YES=1 to explicitly accept replacement risk."
-  "$entry" service apply --request "$stage/request.json" --json --yes --expected-preview "$preview_id"
+  status=0
+  "$entry" service apply --request "$stage/request.json" --json --yes --expected-preview "$preview_id" >"$stage/result.json" 2>"$stage/error.json" || status=$?
+  if [ "$status" -eq 0 ]; then
+    report_install_success
+    return 0
+  fi
+  report_install_failure
+  return "$status"
 }
 # END REPLACEMENT CONFIRMATION
 apply_with_confirmation
