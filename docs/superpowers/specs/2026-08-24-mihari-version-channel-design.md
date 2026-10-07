@@ -8,6 +8,14 @@ Issue：https://github.com/mihari-proxy/mihari/issues/125
 PR 目标：`dev`（再晋级 `main`）
 工作目录：`.worktrees/issue-125-mihari-channel`
 
+## 2026-10-07 修订（安装脚本的 dev 列表）
+
+下文第 5 条、§5.5 与文末测试计划仍是 2026-08-24 批准的原文：脚本 1 与 Go 共用 `per_page=100`，最多跟随 5 页 `rel="next"`。2026-10-07 起，安装脚本不再遵守其中的脚本部分（#309）：
+
+- 脚本 1（`install.sh`、`install.ps1`）的 `main` 仍是 `GET /repos/{repo}/releases/latest`。
+- 脚本 1 的 `dev`，以及 root 在空机器上为 dev 选择 helper 时，只请求 `GET /repos/{repo}/releases?per_page=10` 的第一页，不跟随 `Link`。在返回的 tag 中取最大 canonical `vX.Y.Z-dev.N`。零命中则失败，不回退 `/releases/latest`。单页 body 上限仍是 8 MiB；root helper 响应上限仍是 1 MiB。
+- `internal/update` 的 Go 自更新保持 2026-08-24 契约：`per_page=100`，最多 5 页。不要为了与脚本重新对齐而把安装脚本改回整页列表。
+
 ## 第三版相对第二版的变更
 
 1. **AList P2 已在 `dev` 落地。** 公开 dev index 为 `https://cloud.xn--30q18ry71c.com/p/public/mihari-release/mihari-dev/index.txt`。脚本 3 `--channel dev` 改为读该 index，不再失败退出。
@@ -160,7 +168,9 @@ AList `index.txt` **不是** 这条路径。本小节只服务 `internal/update`
 - Go 列出后用该条目的 assets；若分页条目没有完整 assets，再 `GET /releases/tags/{tag}`（单 tag 上限仍 2 MiB）。
 - 未认证 API 通常不含 draft。Go 仍过滤 `draft`。安装脚本的 POSIX 抽取做不到按对象绑 `draft`，以 tag 全匹配 canonical 为准，并在注释/文档写明 draft 过滤为尽力而为。
 
-**分页（Go 与脚本 1 相同契约）：**
+2026-10-07 起，安装脚本的 dev 列表改为首页 10 条；Go 自更新仍用下面的分页契约。见文首「2026-10-07 修订」。
+
+**分页（2026-08-24 批准：Go 与脚本 1 相同契约）：**
 
 1. 请求与响应的 **header 与 body 分开**（curl `-D` / wget `--server-response` / PowerShell `Invoke-WebRequest.Headers`；禁止把 header 混进 JSON 体）。
 2. 只跟随参数恰好为 `rel="next"` 的 URI。忽略 `rel="last"` / `rel="prev"` / `rel="first"`。
