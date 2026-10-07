@@ -483,8 +483,106 @@ confirm_replacement() {
     case "$answer" in y|Y|yes|YES) exit 0;; *) exit 1;; esac
   ) 2>/dev/null
 }
+print_result_warnings() {
+  [ -s "$1" ] || return 0
+  [ "$(wc -c < "$1")" -le 1048576 ] || {
+    printf '%s\n' "Warning: a compatibility warning could not be displayed." >&2
+    return 0
+  }
+  LC_ALL=C awk '
+  function printable(text, i, c) {
+    for (i = 1; i <= length(text); i++) if (substr(text, i, 1) !~ /^[ -~]$/) return 0
+    return 1
+  }
+  function decode(raw, out, i, c, hex) {
+    out = ""
+    i = 1
+    while (i <= length(raw)) {
+      c = substr(raw, i, 1)
+      if (c != "\\") { out = out c; i++; continue }
+      c = substr(raw, i + 1, 1)
+      if (c == "\"" || c == "\\" || c == "/") { out = out c; i += 2; continue }
+      if (c != "u") return ""
+      hex = substr(raw, i + 2, 4)
+      if (hex == "003e") c = ">"
+      else if (hex == "003c") c = "<"
+      else if (hex == "0026") c = "&"
+      else return ""
+      out = out c
+      i += 6
+    }
+    return out
+  }
+  function show(raw, msg) {
+    msg = decode(raw)
+    if (msg == "" || !printable(msg)) print "Warning: a compatibility warning could not be displayed."
+    else print "Warning: " msg
+  }
+  {
+    s = $0
+    key = "\"warnings\":"
+    p = index(s, key)
+    if (p == 0) exit
+    p += length(key)
+    while (substr(s, p, 1) == " ") p++
+    if (substr(s, p, 1) != "[") exit
+    p++
+    depth = 0
+    while (p <= length(s)) {
+      c = substr(s, p, 1)
+      if (c == "\"") {
+        q = p + 1
+        raw = ""
+        while (q <= length(s)) {
+          d = substr(s, q, 1)
+          if (d == "\\") { raw = raw substr(s, q, 2); q += 2; continue }
+          if (d == "\"") break
+          raw = raw d
+          q++
+        }
+        rest = substr(s, q + 1)
+        sub(/^ */, "", rest)
+        if (raw == "message" && substr(rest, 1, 1) == ":" && depth == 1) {
+          r = q + 1
+          while (substr(s, r, 1) == " ") r++
+          r++
+          while (substr(s, r, 1) == " ") r++
+          if (substr(s, r, 1) == "\"") {
+            r++
+            val = ""
+            while (r <= length(s)) {
+              d = substr(s, r, 1)
+              if (d == "\\") { val = val substr(s, r, 2); r += 2; continue }
+              if (d == "\"") break
+              val = val d
+              r++
+            }
+            show(val)
+            p = r + 1
+            continue
+          }
+        }
+        p = q + 1
+        continue
+      }
+      if (c == "{" || c == "[") depth++
+      else if (c == "}" || c == "]") {
+        if (c == "]" && depth == 0) break
+        if (depth > 0) depth--
+      }
+      p++
+    }
+    if (match(s, /"warnings_omitted":[0-9]+/)) {
+      num = substr(s, RSTART, RLENGTH)
+      sub(/.*:/, "", num)
+      if (num + 0 > 0) print "Warning: " num " additional warnings exceeded the collection limit."
+    }
+  }
+  ' "$1" >&2
+}
 report_install_success() {
   cat "$stage/error.json" >&2
+  print_result_warnings "$stage/result.json"
   printf '\033[1;32m•\033[0m %s\n' "Installation complete."
   printf '%s\n' "Run mihari to open the TUI."
 }

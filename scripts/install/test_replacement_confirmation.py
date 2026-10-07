@@ -17,7 +17,7 @@ def confirmation_error(preview="a" * 64):
                     "target_version": "v1.0.0", "preview_id": preview}}}
 
 
-def run_posix(tmp_path, error=None, consent="accept", explicit=False, second=0, first=2, stdout_body=""):
+def run_posix(tmp_path, error=None, consent="accept", explicit=False, second=0, first=2, stdout_body="", stderr_body=""):
     if os.name != "posix":
         pytest.skip("Native POSIX helper fixture paths require a POSIX host")
     source = (INSTALL / "root-apply.sh.in").read_text()
@@ -32,6 +32,7 @@ def run_posix(tmp_path, error=None, consent="accept", explicit=False, second=0, 
                       'if [ ! -f "$COUNT" ]; then : > "$COUNT"; cat "$FIXTURE" >&2; '
                       'if [ -n "${STDOUT_BODY:-}" ]; then printf "%s\\n" "$STDOUT_BODY"; fi\n'
                       'exit "$FIRST"; fi\n'
+                      'if [ -n "${STDERR_BODY:-}" ]; then printf "%s\\n" "$STDERR_BODY" >&2; fi\n'
                       'if [ -n "${STDOUT_BODY:-}" ]; then printf "%s\\n" "$STDOUT_BODY"; fi\n'
                       'exit "$SECOND"\n')
     helper.chmod(0o700)
@@ -42,7 +43,7 @@ def run_posix(tmp_path, error=None, consent="accept", explicit=False, second=0, 
                           "entry=" + shlex.quote(str(helper)), "explicit_yes=" + str(int(explicit)),
                           'fail() { printf "%s\\n" "$1" >&2; exit 1; }', block, override, "apply_with_confirmation"])
     env = dict(os.environ, ARG_LOG=str(tmp_path / "argv"), COUNT=str(tmp_path / "count"), FIXTURE=str(fixture),
-               SECOND=str(second), FIRST=str(first), STDOUT_BODY=stdout_body)
+               SECOND=str(second), FIRST=str(first), STDOUT_BODY=stdout_body, STDERR_BODY=stderr_body)
     result = subprocess.run(["sh", "-c", command], env=env, capture_output=True, text=True, timeout=10, start_new_session=True)
     return result, (tmp_path / "argv").read_text().splitlines()
 
@@ -103,6 +104,35 @@ def test_posix_confirmed_replacement_prompts_for_tui(tmp_path):
     assert "Installation complete." in result.stdout
     assert "Run mihari to open the TUI." in result.stdout
     assert "mihari.install-result" not in result.stdout
+    assert args.count("apply") == 2
+
+
+def test_posix_explicit_yes_prints_compatibility_warning(tmp_path):
+    warning = "Older Mihari versions may fail to load current data."
+    body = json.dumps({
+        "warnings": [{"message": warning}],
+        "schema": "mihari.install-result/v1",
+        "changed": True,
+        "service_status": "running",
+        "transaction_id": "ab" * 16,
+        "source_retained": True,
+    }, separators=(",", ":"))
+    result, args = run_posix(tmp_path, error="", explicit=True, first=0, stdout_body=body)
+    assert result.returncode == 0, result.stderr
+    assert f"Warning: {warning}" in result.stderr
+    assert "Installation complete." in result.stdout
+    assert "Run mihari to open the TUI." in result.stdout
+    assert "mihari.install-result" not in result.stdout + result.stderr
+    assert args.count("apply") == 1
+
+
+def test_posix_retry_failure_prints_error_json(tmp_path):
+    raw = json.dumps({"schema": "mihari.error/v1", "error": {"code": "invalid_state", "message": "retry failed"}}, separators=(",", ":"))
+    result, args = run_posix(tmp_path, second=9, stderr_body=raw)
+    assert result.returncode == 9, result.stderr
+    assert "Installation failed." in result.stderr
+    assert raw in result.stderr
+    assert "Installation complete." not in result.stdout + result.stderr
     assert args.count("apply") == 2
 
 
