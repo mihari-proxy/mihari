@@ -18,6 +18,18 @@ import (
 type coreUpdateReservation struct{ generation uint64 }
 type coreUpdateContextKey struct{}
 
+// CoreInstallPhaseTimeout bounds only the install work that starts after the
+// core archive has been downloaded and prepared. Download has no deadline.
+const CoreInstallPhaseTimeout = time.Minute
+
+func (m *Manager) beginCoreInstallPhase(ctx context.Context) (context.Context, context.CancelFunc) {
+	budget := m.coreInstallTimeout
+	if budget <= 0 {
+		budget = CoreInstallPhaseTimeout
+	}
+	return context.WithTimeout(ctx, budget)
+}
+
 type coreUpdateInputs struct {
 	generation uint64
 	selection  core.CoreSelection
@@ -323,7 +335,9 @@ func (m *Manager) Reinstall(ctx context.Context, operation Operation) (core.Inst
 		if !ok || prepared.UpdateCandidate() == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "core reinstall candidate unavailable"}
 		}
-		return m.installCoreUpdate(ctx, operation, inputs, candidate, prepared.UpdateCandidate(), request.Channel, true)
+		phaseCtx, cancelPhase := m.beginCoreInstallPhase(ctx)
+		defer cancelPhase()
+		return m.installCoreUpdate(phaseCtx, operation, inputs, candidate, prepared.UpdateCandidate(), request.Channel, true)
 	})
 	if err != nil {
 		return core.InstallResult{}, err

@@ -141,6 +141,9 @@ type Options struct {
 	// ActivationPhase is the durable install journal phase. Empty means no Unix
 	// install journal (Windows / non-root private / already complete).
 	ActivationPhase string
+	// CoreInstallTimeout bounds only the post-prepare install phase.
+	// Zero selects CoreInstallPhaseTimeout. Download does not use this field.
+	CoreInstallTimeout time.Duration
 	// CoreRepairRequired keeps ordinary mutations and automatic starts blocked.
 	CoreRepairRequired bool
 }
@@ -159,6 +162,7 @@ type Manager struct {
 
 	subscriptionRecoveryTimeout time.Duration
 	subscriptionTimeout         time.Duration
+	coreInstallTimeout          time.Duration
 
 	store                     *state.Store
 	coordinator               *state.Coordinator
@@ -271,6 +275,7 @@ func New(options Options) *Manager {
 	manager := &Manager{
 		subscriptionRecoveryTimeout: subscriptionRecoveryTimeout,
 		subscriptionTimeout:         subscriptionExecutionTimeout,
+		coreInstallTimeout:          options.CoreInstallTimeout,
 		trustedCore:                 options.TrustedCore,
 
 		store:              store,
@@ -677,16 +682,18 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 				collectWarning(ctx, "core", "prepare.warning", warning)
 			}
 		}
+		phaseCtx, cancelPhase := m.beginCoreInstallPhase(ctx)
+		defer cancelPhase()
 		if prepared, ok := candidate.(interface{ UpdateCandidate() core.PreparedUpdate }); ok && prepared.UpdateCandidate() != nil {
-			return m.installCoreUpdate(ctx, operation, inputs, candidate, prepared.UpdateCandidate(), channel, false)
+			return m.installCoreUpdate(phaseCtx, operation, inputs, candidate, prepared.UpdateCandidate(), channel, false)
 		}
 		var result core.InstallResult
 		commitWork := func() error {
-			if err := m.lockMutation(ctx); err != nil {
+			if err := m.lockMutation(phaseCtx); err != nil {
 				return err
 			}
 			defer m.unlock()
-			if err := ctx.Err(); err != nil {
+			if err := phaseCtx.Err(); err != nil {
 				return err
 			}
 			if err := m.checkIfRevision(operation.IfRevision); err != nil {
@@ -708,11 +715,11 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 					}
 					return snapshot
 				}
-				if _, err := m.updateSettings(ctx, func(settings *config.Settings) error {
+				if _, err := m.updateSettings(phaseCtx, func(settings *config.Settings) error {
 					settings.CoreChannel = channel
 					return nil
 				}); err != nil {
-					_, settlementErr := m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{
+					_, settlementErr := m.updateStateLocked(context.WithoutCancel(phaseCtx), state.CommandMeta{
 						ID: operation.ID, Source: operation.Source,
 					}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 						snapshot = applyCommittedIdentity(snapshot)
@@ -721,7 +728,7 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 					})
 					return settlementErr
 				}
-				_, err = m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{
+				_, err = m.updateStateLocked(context.WithoutCancel(phaseCtx), state.CommandMeta{
 					ID: operation.ID, Source: operation.Source,
 				}, func(snapshot state.Snapshot) (state.Snapshot, error) {
 					return applyCommittedIdentity(snapshot), nil
@@ -736,7 +743,7 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 			if !ok {
 				return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "trusted core maintenance unavailable"}
 			}
-			err = maintenance.Maintain(ctx, commitWork)
+			err = maintenance.Maintain(phaseCtx, commitWork)
 		} else {
 			err = commitWork()
 		}
@@ -747,7 +754,7 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 			return result, nil
 		}
 		if m.running.Load() && m.trustedCore == nil {
-			if err := m.supervisor.Restart(ctx); err != nil {
+			if err := m.supervisor.Restart(phaseCtx); err != nil {
 				return nil, err
 			}
 		} else {

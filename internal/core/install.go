@@ -42,7 +42,7 @@ type Installer struct {
 	GOOS         string
 	GOARCH       string
 	Runner       CommandRunner
-	CheckTimeout time.Duration // 包住"检查最新版"请求，默认 8s；下载仍用 httpClient 超时（design §4.3）
+	CheckTimeout time.Duration // 包住"检查最新版"请求，默认 8s。资产下载不设 http.Client.Timeout，只跟随请求 context。
 }
 
 type InstallRequest struct {
@@ -405,10 +405,10 @@ func (i Installer) httpClient() *http.Client {
 	if i.HTTPClient != nil {
 		return i.HTTPClient
 	}
-	return &http.Client{Timeout: 15 * time.Minute}
+	return &http.Client{}
 }
 
-// checkTimeout 返回"检查最新版"请求的超时（默认 8s）；下载仍用 httpClient 的 15min 超时（design §4.3）。
+// checkTimeout 返回"检查最新版"请求的超时（默认 8s）。资产下载不设客户端超时。
 func (i Installer) checkTimeout() time.Duration {
 	if i.CheckTimeout > 0 {
 		return i.CheckTimeout

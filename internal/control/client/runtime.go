@@ -29,7 +29,8 @@ const (
 const SubscriptionMutationTimeout = 180 * time.Second
 
 type runtimeRequestOptions struct {
-	timeout time.Duration
+	timeout   time.Duration
+	noTimeout bool
 }
 
 type runtimeOutcome struct {
@@ -47,14 +48,14 @@ func (c *Client) Core(ctx context.Context) (protocol.CoreStatus, error) {
 
 func (c *Client) InstallCore(ctx context.Context, request protocol.MutationRequest) (protocol.CoreInstallResult, error) {
 	var result protocol.CoreInstallResult
-	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "core.install"}, http.MethodPost, "/v1/core/install", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "core.install"}, http.MethodPost, "/v1/core/install", request, &result, runtimeRequestOptions{noTimeout: true})
 	return result, err
 }
 
 // ReinstallCore requests a new official core in the last accepted channel.
 func (c *Client) ReinstallCore(ctx context.Context, request protocol.MutationRequest) (protocol.CoreInstallResult, error) {
 	var result protocol.CoreInstallResult
-	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "core.reinstall"}, http.MethodPost, "/v1/core/reinstall", request, &result)
+	err := c.doMutation(ctx, logging.OperationMetadata{ID: request.OperationID, Name: "core.reinstall"}, http.MethodPost, "/v1/core/reinstall", request, &result, runtimeRequestOptions{noTimeout: true})
 	return result, err
 }
 
@@ -306,7 +307,7 @@ func (c *Client) RemoveSubscription(ctx context.Context, id string, request prot
 }
 
 func (c *Client) doMutation(ctx context.Context, operation logging.OperationMetadata, method, path string, input, output any, options ...runtimeRequestOptions) error {
-	if len(options) > 0 && options[0].timeout > 0 {
+	if len(options) > 0 && options[0].timeout > 0 && !options[0].noTimeout {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, options[0].timeout)
 		defer cancel()
@@ -577,9 +578,13 @@ func (c *Client) doRuntimeOutcome(ctx context.Context, method, path string, inpu
 	// Every return after Do may describe a request that reached the daemon.
 	defer func() { outcome.dispatched = true }()
 	httpClient := c.requestHTTP()
-	if len(options) > 0 && options[0].timeout > 0 {
+	if len(options) > 0 && (options[0].noTimeout || options[0].timeout > 0) {
 		copy := *httpClient
-		copy.Timeout = options[0].timeout
+		if options[0].noTimeout {
+			copy.Timeout = 0
+		} else {
+			copy.Timeout = options[0].timeout
+		}
 		httpClient = &copy
 	}
 	response, err := httpClient.Do(request)
