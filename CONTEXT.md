@@ -153,3 +153,25 @@ _Avoid_: daemon 启动时刻、本次 daemon 生命周期内第一次成功启�
 
 **核心重启次数（Core Restart Count）**：当前这次 daemon 生命周期内，core 进程被再次拉起的次数。第一次成功启动计为 0。自愿与非自愿的再次拉起都计入。
 _Avoid_: 崩溃次数、启动次数、daemon 重启次数。
+
+**未提权（not elevated）**：这个 TUI 进程不是 Windows 管理员，也不是 Unix root。
+_Avoid_: 服务已停止、守护进程没有权限
+
+**需要管理员（Needs admin）**：当前 TUI 进程缺少完成屏幕上这一步所需的管理员或 root 权限。这一步可以是系统服务操作，也可以是在 Linux 上说清某个托管端口的占用者。
+_Avoid_: not elevated、不能修改托管端口
+
+**端口归属（Port Hold）**：一个托管监听地址（Mixed、Controller 或 Web）和它的监听者之间的关系。
+_Avoid_: 服务状态
+
+**本实例占用（Owned）**：监听者是本 Mihari 实例。
+_Avoid_: 仅凭进程名叫 mihomo 或 mihari 就视为本实例
+
+**其他进程占用（Occupied）**：监听者是别的进程。
+
+**端口空闲（Available）**：这个托管地址可以绑定。
+
+**归属确认中（Checking）**：已经有监听者，本实例还不能确认那是不是自己。界面写 `Checking owner…`。
+_Avoid_: Unknown
+
+**未知端口归属（Unknown）**：托管端口没有确认到的占用者，而且原因不是缺少权限。地址还没配置，或者进程已经提权却仍无法分类，都是这种情况。
+_Avoid_: Needs admin、把版本未知或服务状态未知当成端口归属
