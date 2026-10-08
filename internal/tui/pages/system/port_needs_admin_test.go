@@ -55,8 +55,8 @@ func TestSystemPortStatus_UnelevatedLinuxInUseShowsNeedsAdmin(t *testing.T) {
 	}
 }
 
-// TestSystemPortStatus_NeedsAdminSurvivesReconcile fails if a later owner
-// snapshot rewrites the privilege hint before a new probe runs.
+// TestSystemPortStatus_NeedsAdminReprobesWhenOwnerChanges fails if a visible
+// owner snapshot does not trigger a reprobe that refiles the hold as Owned.
 func TestSystemPortStatus_NeedsAdminReprobesWhenOwnerChanges(t *testing.T) {
 	model := portsModel(t)
 	addr := boundLoopback(t)
@@ -91,6 +91,8 @@ func TestSystemPortStatus_NeedsAdminReprobesWhenOwnerChanges(t *testing.T) {
 	}
 }
 
+// TestSystemPortStatus_NeedsAdminSurvivesReconcile fails if a later owner
+// snapshot rewrites the privilege hint before a new probe runs.
 func TestSystemPortStatus_NeedsAdminSurvivesReconcile(t *testing.T) {
 	model := portsModel(t)
 	addr := boundLoopback(t)
