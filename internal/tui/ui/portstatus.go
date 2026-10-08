@@ -21,6 +21,9 @@ const (
 	// PortHoldChecking means the occupant is known but the managed core's
 	// identity has not arrived yet, so ownership cannot be decided.
 	PortHoldChecking
+	// PortHoldNeedsAdmin means the address is in use, this process cannot name
+	// the occupant, and elevation on this OS would reveal that occupant.
+	PortHoldNeedsAdmin
 )
 
 // PortHold is the classified result for one managed endpoint.
@@ -77,6 +80,8 @@ func FormatPortHoldLabel(hold PortHold) string {
 			return fmt.Sprintf(PortOccupiedByPID, hold.PID)
 		}
 		return PortOccupiedByOtherApp
+	case PortHoldNeedsAdmin:
+		return ServiceNeedsElevation
 	default:
 		return UnknownLabel
 	}
