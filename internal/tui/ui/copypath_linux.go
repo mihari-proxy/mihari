@@ -3,7 +3,9 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -59,15 +61,44 @@ func writeInvokingUserClipboard(text string) (error, bool) {
 	if wlErr != nil || runErr != nil || !ok {
 		return nil, false
 	}
+	return runUserClipboard(argv, text), true
+}
+
+// runUserClipboard runs a clipboard command that may fork a server after the
+// parent exits. Stdout and stderr go to a file, not a pipe: wl-copy's
+// background server keeps the inherited write end open, and waiting on that
+// pipe would block until some other client replaces the clipboard.
+func runUserClipboard(argv []string, text string) error {
+	if len(argv) == 0 {
+		return errors.New("clipboard command is missing")
+	}
+	output, err := os.CreateTemp("", "mihari-clipboard-*")
+	if err != nil {
+		return err
+	}
+	name := output.Name()
+	defer func() {
+		_ = output.Close()
+		_ = os.Remove(name)
+	}()
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin = strings.NewReader(text)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		detail := strings.TrimSpace(string(out))
-		if detail == "" {
-			return err, true
+	cmd.Stdout = output
+	cmd.Stderr = output
+	runErr := cmd.Run()
+	if _, seekErr := output.Seek(0, io.SeekStart); seekErr != nil {
+		if runErr != nil {
+			return runErr
 		}
-		return fmt.Errorf("%w: %s", err, detail), true
+		return seekErr
 	}
-	return nil, true
+	raw, readErr := io.ReadAll(output)
+	detail := strings.TrimSpace(string(raw))
+	if runErr != nil {
+		if detail == "" {
+			return runErr
+		}
+		return fmt.Errorf("%w: %s", runErr, detail)
+	}
+	return readErr
 }
