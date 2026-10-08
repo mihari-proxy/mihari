@@ -2,6 +2,7 @@ package core_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -9,12 +10,6 @@ import (
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 	"github.com/mihari-proxy/mihari/internal/supervisor"
 )
-
-func TestCoreInstallPhaseTimeout_DefaultIsOneMinute(t *testing.T) {
-	if runtimeapi.CoreInstallPhaseTimeout != time.Minute {
-		t.Fatalf("install phase = %s", runtimeapi.CoreInstallPhaseTimeout)
-	}
-}
 
 type holdingInstaller struct {
 	inner              runtimeapi.CoreInstaller
@@ -62,17 +57,34 @@ func (d *deadlineSupervisor) Reinstall(ctx context.Context, _ func(*supervisor.U
 	return nil
 }
 
-func TestCoreInstallPhase_BudgetStartsAfterPrepare(t *testing.T) {
+type blockingSupervisor struct {
+	started chan struct{}
+}
+
+func (b *blockingSupervisor) Run(context.Context) error     { return nil }
+func (b *blockingSupervisor) Restart(context.Context) error { return nil }
+
+func (b *blockingSupervisor) Update(ctx context.Context, _ func(*supervisor.UpdateSession) error) error {
+	close(b.started)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (b *blockingSupervisor) Reinstall(ctx context.Context, _ func(*supervisor.UpdateSession) error) error {
+	close(b.started)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestCoreInstall_DoesNotAddDeadline(t *testing.T) {
 	for _, reinstall := range []bool{false, true} {
 		t.Run(map[bool]string{false: "install", true: "reinstall"}[reinstall], func(t *testing.T) {
-			budget := 80 * time.Millisecond
 			holder := &holdingInstaller{started: make(chan struct{}), release: make(chan struct{})}
 			supervisor := &deadlineSupervisor{}
 			manager, _, _, _ := seamManager(t, func(o *runtimeapi.Options) {
 				holder.inner = o.Installer
 				o.Installer = holder
 				o.Supervisor = supervisor
-				o.CoreInstallTimeout = budget
 			})
 			errCh := make(chan error, 1)
 			go func() {
@@ -89,17 +101,8 @@ func TestCoreInstallPhase_BudgetStartsAfterPrepare(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("prepare did not start")
 			}
-			timer := time.NewTimer(budget + 40*time.Millisecond)
-			select {
-			case <-timer.C:
-			case err := <-errCh:
-				t.Fatalf("install finished while prepare was held: %v", err)
-			}
 			if holder.prepareHasDeadline {
-				until := time.Until(holder.prepareDeadline)
-				if until <= budget {
-					t.Fatalf("prepare deadline %s is inside the install budget %s", until, budget)
-				}
+				t.Fatalf("prepare added a deadline at %s", holder.prepareDeadline)
 			}
 			close(holder.release)
 			select {
@@ -110,21 +113,66 @@ func TestCoreInstallPhase_BudgetStartsAfterPrepare(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("install did not finish after prepare")
 			}
-			deadline, ok := supervisor.updateDeadline, supervisor.updateHasDeadline
 			if reinstall {
-				deadline, ok = supervisor.reinstallDeadline, supervisor.reinstallHasDeadline
 				if supervisor.updateHasDeadline {
 					t.Fatal("reinstall used the update session")
 				}
-			} else if supervisor.reinstallHasDeadline {
-				t.Fatal("install used the reinstall session")
+				if supervisor.reinstallHasDeadline {
+					t.Fatalf("reinstall added a deadline at %s", supervisor.reinstallDeadline)
+				}
+			} else {
+				if supervisor.reinstallHasDeadline {
+					t.Fatal("install used the reinstall session")
+				}
+				if supervisor.updateHasDeadline {
+					t.Fatalf("install added a deadline at %s", supervisor.updateDeadline)
+				}
 			}
-			if !ok {
-				t.Fatal("install phase has no deadline")
+		})
+	}
+}
+
+func TestCoreInstall_ParentCancelReachesInstall(t *testing.T) {
+	for _, reinstall := range []bool{false, true} {
+		t.Run(map[bool]string{false: "install", true: "reinstall"}[reinstall], func(t *testing.T) {
+			holder := &holdingInstaller{started: make(chan struct{}), release: make(chan struct{})}
+			supervisor := &blockingSupervisor{started: make(chan struct{})}
+			manager, _, _, _ := seamManager(t, func(o *runtimeapi.Options) {
+				holder.inner = o.Installer
+				o.Installer = holder
+				o.Supervisor = supervisor
+			})
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			errCh := make(chan error, 1)
+			go func() {
+				var err error
+				if reinstall {
+					_, err = manager.Reinstall(parent, runtimeapi.Operation{ID: "cancel-reinstall"})
+				} else {
+					_, err = manager.Install(parent, runtimeapi.Operation{ID: "cancel-install"})
+				}
+				errCh <- err
+			}()
+			select {
+			case <-holder.started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("prepare did not start")
 			}
-			remaining := time.Until(deadline)
-			if remaining <= budget/2 || remaining > budget {
-				t.Fatalf("install phase remaining = %s, budget = %s", remaining, budget)
+			close(holder.release)
+			select {
+			case <-supervisor.started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("install session did not start")
+			}
+			cancel()
+			select {
+			case err := <-errCh:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("parent cancel = %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("install did not observe parent cancel")
 			}
 		})
 	}

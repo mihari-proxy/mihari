@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 核心包下载不设超时；只有安装阶段有时限，并且是 1 分钟。
+**Goal:** 核心包下载和安装都不另设超时。安装与重装沿用请求 context：用户取消和父 deadline 仍然生效，daemon 不再在 `Prepare` 之后加 1 分钟。
 
-**Architecture:** 本地控制客户端仍是默认 10 秒，单个调用可以覆盖。`InstallCore` 与 `ReinstallCore` 覆盖为不设超时：复制客户端并把 `Timeout` 设为 0，也不给整次 RPC 加 deadline。daemon 的资产下载沿用这个没有 deadline 的请求 context，默认 core HTTP 客户端的 `Timeout` 也是 0。`Manager.Install` / `Manager.Reinstall` 在 `Prepare` 成功返回后才 `context.WithTimeout` 1 分钟，包住停旧进程、试运行、健康检查和提交。检查最新版仍用自己的 8 秒 context。父 context 取消仍然打断下载和尚未结束的安装。事务接受之后的补偿继续走 `context.WithoutCancel` 加现有 90 秒。
+**Architecture:** 本地控制客户端仍是默认 10 秒，单个调用可以覆盖。`InstallCore` 与 `ReinstallCore` 覆盖为不设超时：复制客户端并把 `Timeout` 设为 0，也不给整次 RPC 加 deadline。daemon 的资产下载和 `Prepare` 之后的安装、重装都沿用这个请求 context。默认 core HTTP 客户端的 `Timeout` 也是 0。检查最新版仍用自己的 8 秒 context。停进程、试运行健康检查和事务接受后的补偿继续用它们原有的时限。父 context 取消仍然打断下载和尚未结束的安装。
 
-**Tech Stack:** Go，`net/http` 的 `Timeout == 0` 表示没有客户端超时，`context.WithTimeout` 只包安装阶段，现有 `runtimeRequestOptions`。
+**Tech Stack:** Go，`net/http` 的 `Timeout == 0` 表示没有客户端超时，现有 `runtimeRequestOptions`。
 
-**Spec:** 本文件第 1 节。没有单独的设计文档。需求来自 2026-10-08 的 v0.9.6 失败日志，以及随后把安装时限定为 1 分钟、下载不设超时的决定。
+**Spec:** 本文件第 1 节。没有单独的设计文档。需求来自 2026-10-08 的 v0.9.6 失败日志。先定为下载不设超时、安装 1 分钟；同日决定去掉安装阶段这层时钟，因为文件替换不接收 context，这 1 分钟停不掉它。
 
 ## Global Constraints
 
@@ -36,23 +36,23 @@ v0.9.6 在 2026-10-08 00:30 更新核心失败。界面只显示 `local control 
 | --- | --- | --- |
 | 检查最新版 | 保持 8 秒 | `LatestVersion` / `recheckTarget` 自己的 context。这是元数据请求，不是包体下载 |
 | 资产下载 | 不设超时 | `readTargetArchive`、`downloadAsset` 只用父 context。默认 `http.Client.Timeout` 为 0。不再使用 15 分钟 |
-| 安装阶段 | 1 分钟 | `Prepare` 成功返回之后。包括受保护更新、旧式提交、试运行、健康检查、提交或作出回滚决定 |
+| 安装与重装 | 不另设超时 | `Prepare` 之后仍用原来的请求 context。包括受保护更新、旧式提交、试运行、健康检查、提交或作出回滚决定 |
+| 停旧进程 | 保持 5 秒后 Kill，子进程再等 5 秒 | supervisor 自己的 `StopTimeout` |
+| 试运行健康检查 | 保持约 40 秒 | 宽限 5 秒、最多 3 次、间隔 10 秒，再加 5 秒停止时间 |
 | 回滚补偿 | 保持 90 秒，且不跟随客户端取消 | `installCoreUpdate` 里已有的 `context.WithoutCancel` |
 | 本地控制等待 | 安装与重装不设超时 | 清掉默认 10 秒，并且不加整次 RPC deadline |
 | 其它本地控制请求 | 保持 10 秒 | 含 `GET /v1/core`、重启核心。订阅添加/刷新仍是 180 秒 |
 
-setup 已存在核心的快速路径在 `Prepare` 之前返回，不进入 1 分钟阶段。
+setup 已存在核心的快速路径在 `Prepare` 之前返回。
 
-健康检查的宽限 5 秒和间隔 10 秒不改。1 分钟是外层上限。用户取消和更短的父 deadline 优先。
-
-下载没有时钟：传输结束、连接失败或用户取消时才停。不要用一个很大的 duration 假装「不设超时」。
+用户取消和父 context 上已有的 deadline 优先。下载和安装都没有额外时钟：对应步骤结束、连接失败、该步骤自己的时限到了，或用户取消时才停。不要用一个很大的 duration 假装「不设超时」。
 
 ## 2. 文件
 
 - 修改 `internal/core/install.go`：默认 HTTP 客户端 `Timeout` 为 0。更新旁边「下载仍用 15 分钟」的注释。`targetHTTPClient` 会复制该客户端，因此资产下载和重校验走同一份 0。重校验仍由 `checkTimeout` 的 8 秒 context 限制。
 - 修改 `internal/control/client/runtime.go`：`runtimeRequestOptions` 增加 `noTimeout`。`InstallCore` 与 `ReinstallCore` 使用它。
-- 修改 `internal/runtime/manager.go`：`Options.CoreInstallTimeout`；`Install` 在 `Prepare` 之后进入安装阶段。
-- 修改 `internal/runtime/core_update.go`：安装阶段 helper；`Reinstall` 在 `Prepare` 之后使用它。
+- 修改 `internal/runtime/manager.go`：`Install` 在 `Prepare` 之后继续使用请求 context，不另加 deadline。
+- 修改 `internal/runtime/core_update.go`：`Reinstall` 在 `Prepare` 之后同样使用请求 context。
 - 测试 `internal/control/client/core_install_timeout_test.go`。
 - 测试 `internal/core/core_install_timeout_test.go`（`package core_test`，复用 `seamManager`）。
 - 测试 `internal/core/download_timeout_test.go`：默认下载客户端没有 `Timeout`。
@@ -119,7 +119,7 @@ git add internal/control/client/runtime.go internal/control/client/core_install_
 git commit -m "fix: 核心安装的本地控制调用不再设超时"
 ```
 
-### Task 2: 下载客户端不设超时，安装阶段 1 分钟
+### Task 2: 下载客户端不设超时，安装阶段不加时钟
 
 **Files:**
 
@@ -134,29 +134,29 @@ git commit -m "fix: 核心安装的本地控制调用不再设超时"
 - Consumes: `Prepare` 的请求 context。`installCoreUpdate` 已有的 90 秒 `context.WithoutCancel` 补偿。
 - Produces:
   - `Installer.httpClient` 在 `HTTPClient == nil` 时返回 `Timeout == 0` 的新客户端，并且不是 `http.DefaultClient`。
-  - `runtime.CoreInstallPhaseTimeout = time.Minute`
-  - `runtime.Options.CoreInstallTimeout`：正数覆盖阶段预算；零使用 `CoreInstallPhaseTimeout`
-  - `(*Manager) beginCoreInstallPhase(ctx) (context.Context, context.CancelFunc)`
+  - `Install` 与 `Reinstall` 在 `Prepare` 之后把同一个请求 context 传给更新、提交和重启。父 context 没有 deadline 时，这些调用也没有 deadline。
 
 - [ ] **Step 1: 写失败测试**
 
 `TestCoreDownloadClientHasNoTimeout`：`(Installer{}).httpClient()` 的 `Timeout` 是 0，且指针不等于 `http.DefaultClient`。调用两次，确认没有改到 `http.DefaultClient`。
 
-`TestCoreInstallPhase_BudgetStartsAfterPrepare` 放在 `package core_test`，用 `seamManager`。
+`TestCoreInstall_DoesNotAddDeadline` 放在 `package core_test`，用 `seamManager`。父 context 是 `context.Background()`。
 
 `holdingInstaller` 保存替换前的 `options.Installer`。`DetectVersion` 原样转给它。`Prepare` 记录 `ctx.Deadline()`，然后等待 `release` 或 `ctx.Done()`。
 
 `deadlineSupervisor` 实现 `Run`、`Restart`、`Update`、`Reinstall`。后两个只记录 `ctx.Deadline()` 并返回 nil，不调用 work。
 
-子测试 `install` 与 `reinstall` 把 `Options.CoreInstallTimeout` 设为 `80 * time.Millisecond`，装上 holder 和 supervisor。`started` 之后等待 `budget + 40*time.Millisecond`。此时 `Prepare` 的 context 必须仍未取消，并且没有被收成 `budget` 那么短的 deadline。再放开 `Prepare`。安装阶段记录到的 deadline 必须存在，`time.Until` 落在 `(budget/2, budget]`。`install` 只命中 `Update`，`reinstall` 只命中 `Reinstall`。
+子测试 `install` 与 `reinstall` 装上 holder 和 supervisor。`Prepare` 和随后的 `Update` 或 `Reinstall` 都不得带 deadline。`install` 只命中 `Update`，`reinstall` 只命中 `Reinstall`。
+
+`TestCoreInstall_ParentCancelReachesInstall` 在会话开始后取消父 context。安装或重装返回的错误必须 `errors.Is` 为 `context.Canceled`。
 
 - [ ] **Step 2: 确认失败原因**
 
 ```console
-go test -run '^TestCoreDownloadClientHasNoTimeout$|^TestCoreInstallPhase_BudgetStartsAfterPrepare$' ./internal/core
+go test -run '^TestCoreDownloadClientHasNoTimeout$|^TestCoreInstall_DoesNotAddDeadline$' ./internal/core
 ```
 
-预期：默认客户端 `Timeout` 仍是 15 分钟；`Prepare` 被安装预算取消，或安装阶段没有独立 deadline。
+预期：默认客户端 `Timeout` 仍是 15 分钟；`Prepare` 之后的安装会话带有约 1 分钟 deadline。
 
 - [ ] **Step 3: 最小实现**
 
@@ -171,30 +171,16 @@ func (i Installer) httpClient() *http.Client {
 
 注释改为：检查最新版默认 8 秒；资产下载不设 `http.Client.Timeout`，只跟随请求 context。
 
-```go
-const CoreInstallPhaseTimeout = time.Minute
+`Install` 的 setup 快速路径、`Prepare`，以及 `Prepare` 成功之后的 `installCoreUpdate`、`commitWork`、`updateSettings`、`updateStateLocked` 和 `supervisor.Restart` 都用原来的 `ctx`。不要增加 `CoreInstallTimeout` 或 `context.WithTimeout`。
 
-func (m *Manager) beginCoreInstallPhase(ctx context.Context) (context.Context, context.CancelFunc) {
-    budget := m.coreInstallTimeout
-    if budget <= 0 {
-        budget = CoreInstallPhaseTimeout
-    }
-    return context.WithTimeout(ctx, budget)
-}
-```
+`Reinstall` 同样：`Prepare` 和随后的 `installCoreUpdate` 都用原来的 `ctx`。
 
-`Options.CoreInstallTimeout` 的注释写明：只限制 `Prepare` 之后的安装阶段；零值使用 1 分钟。下载不使用这个字段。
-
-`Install` 的 setup 快速路径和 `Prepare` 仍用原来的 `ctx`。`Prepare` 成功并收集 warning 之后创建 `phaseCtx`。`installCoreUpdate`、`commitWork`、`updateSettings`、`updateStateLocked` 和 `supervisor.Restart` 改用 `phaseCtx`。
-
-`Reinstall` 的 `Prepare` 仍用原来的 `ctx`。成功并收集 warning 之后用 `phaseCtx` 调用 `installCoreUpdate`。
-
-不要改 `installCoreUpdate` 内部 `context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)`。`WithoutCancel` 会去掉这 1 分钟，补偿仍有自己的 90 秒。
+不要改 `installCoreUpdate` 内部 `context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)`。补偿仍有自己的 90 秒，并且不跟随客户端取消。
 
 - [ ] **Step 4: 测试通过，并确认旧更新测试仍通过**
 
 ```console
-go test -run '^TestCoreDownloadClientHasNoTimeout$|^TestCoreInstallPhase_BudgetStartsAfterPrepare$' ./internal/core
+go test -run '^TestCoreDownloadClientHasNoTimeout$|^TestCoreInstall_' ./internal/core
 go test -run 'CoreUpdate|Reinstall' ./internal/core
 ```
 
@@ -202,7 +188,7 @@ go test -run 'CoreUpdate|Reinstall' ./internal/core
 
 ```console
 git add internal/core/install.go internal/core/download_timeout_test.go internal/core/core_install_timeout_test.go internal/runtime/manager.go internal/runtime/core_update.go
-git commit -m "fix: 核心下载不设超时，安装阶段限时 1 分钟"
+git commit -m "fix: 核心下载和安装都不另设超时"
 ```
 
 ### Task 3: 入口核对与包级验证
@@ -215,7 +201,7 @@ git commit -m "fix: 核心下载不设超时，安装阶段限时 1 分钟"
 - `internal/tui/pages/setup/model.go` 的 `installCore`（`beginExecution` 只 `WithCancel`）
 - `internal/cli/core.go` 的 install / update / reinstall
 
-发现较短 deadline 时删掉。不要在 TUI 上再加 1 分钟，否则下载会被算进安装时限。
+发现较短 deadline 时删掉。不要在 TUI 或 daemon 上再加安装时限。
 
 - [ ] **Step 2: 验证**
 
@@ -230,8 +216,8 @@ go vet ./internal/control/client ./internal/runtime ./internal/core
 ## 4. 自检
 
 - 下载不设超时：默认 core 客户端 `Timeout == 0`；安装 RPC 在父 context 无 deadline 时自身也无 deadline，并能活过共享客户端的 10 秒。
-- 下载不计入 1 分钟：阶段预算到期后 `Prepare` 的 context 仍活着。
-- 安装阶段默认 1 分钟：`CoreInstallPhaseTimeout` 与测试里 `time.Until(deadline) <= budget`。
-- 取消仍生效：父 context 测试。
-- 补偿不被 1 分钟截断：不改现有 90 秒 `WithoutCancel` 补偿。
+- 安装不另设超时：父 context 无 deadline 时，`Prepare` 和随后的 `Update` / `Reinstall` 也无 deadline。
+- 取消仍生效：父 context 测试，包括安装会话已经开始之后取消。
+- 补偿保持 90 秒：不改现有 `WithoutCancel` 补偿。
 - 普通请求仍是 10 秒：`New` 与 `provider_client_unix.go` 不改；订阅测试仍通过。
+- 停进程、试运行健康检查、8 秒版本检查保持原预算。
