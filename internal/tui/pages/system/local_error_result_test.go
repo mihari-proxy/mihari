@@ -53,6 +53,31 @@ func TestSystemLocalFailures_PreserveCauseForGlobalDetails(t *testing.T) {
 	}
 }
 
+func TestSystemCopy_ShowsCauseOrTerminalNotice(t *testing.T) {
+	cause := errors.New("wl-copy: fixture")
+	failed := New(nil, nil)
+	failed.SetSize(120, 40)
+	failed.loggingAvailable = true
+	failed.logging.Dir = "fixture-path"
+	failed.focusID = rowLogDirectory
+	failed.writeClipboard = func(string) error { return cause }
+	if cmd := failed.copyDirectoryRow(rowLogDirectory, "fixture-path"); cmd == nil || failed.outcomeOK || failed.outcomeSent || !strings.Contains(failed.View(), "Could not copy path: wl-copy: fixture") {
+		t.Fatalf("ok=%v sent=%v view=%s", failed.outcomeOK, failed.outcomeSent, failed.View())
+	}
+	sent := New(nil, nil)
+	sent.SetSize(120, 40)
+	sent.loggingAvailable = true
+	sent.logging.Dir = "fixture-path"
+	sent.focusID = rowLogDirectory
+	sent.copyResult = func(string) ui.CopyResult { return ui.CopyResult{Kind: ui.CopySentToTerminal} }
+	_ = sent.copyDirectoryRow(rowLogDirectory, "fixture-path")
+	view := sent.View()
+	hint := sent.theme.BrightYellow.Render(ui.CopyManualHint)
+	if strings.Contains(view, ui.FailedLabel) || strings.Contains(view, ui.DoneLabel) || !strings.Contains(view, ui.CopySentNotice) || !strings.Contains(view, hint) {
+		t.Fatalf("sent view=%s", view)
+	}
+}
+
 func TestSystemChannelDiscoveryFailure_ReachesShellWithoutLogger(t *testing.T) {
 	for _, kind := range []string{"discovery", "path", "read"} {
 		t.Run(kind, func(t *testing.T) {

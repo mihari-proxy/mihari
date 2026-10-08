@@ -8,6 +8,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
 func TestErrorModal_ScrollsCopiesAndKeepsFocusOnCopyFailure(t *testing.T) {
@@ -35,6 +37,16 @@ func TestErrorModal_ScrollsCopiesAndKeepsFocusOnCopyFailure(t *testing.T) {
 	m = updated.(Model)
 	if m.modal != nil {
 		t.Fatal("details did not close")
+	}
+}
+
+func TestErrorModal_SentCopyShowsManualHint(t *testing.T) {
+	modal := NewErrorDetail("Details", "body")
+	modal.copyStatus = ui.CopySentNotice
+	view := modal.View(80, 24)
+	theme := ui.DefaultTheme()
+	if !strings.Contains(view, theme.BrightYellow.Render(ui.CopySentNotice)) || !strings.Contains(ansi.Strip(view), "manually if your terminal") {
+		t.Fatalf("sent copy stayed easy to miss:\n%s", view)
 	}
 }
 

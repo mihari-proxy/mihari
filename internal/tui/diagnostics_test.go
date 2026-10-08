@@ -136,7 +136,7 @@ func TestDiagnosticsF2_CopyAndEvictionKeepPinnedOccurrence(t *testing.T) {
 	}
 	next, _ = model.Update(cmd())
 	model = next.(Model)
-	if copied != original || !model.diagnosticWindow.open || model.diagnosticWindow.selected != first.ID || model.diagnosticWindow.scroll != scroll || model.diagnosticWindow.copyStatus != "Copy failed" {
+	if copied != original || !model.diagnosticWindow.open || model.diagnosticWindow.selected != first.ID || model.diagnosticWindow.scroll != scroll || model.diagnosticWindow.copyStatus != "Copy failed: clipboard fixture error" {
 		t.Fatal("copy escaped the original text or discarded the window")
 	}
 	next, _ = model.Update(diagnosticKey(tea.KeyEscape))
@@ -415,7 +415,7 @@ func TestDiagnostics_LegacyDetailCopyFailureReachesHistory(t *testing.T) {
 	if len(model.diagnosticWindow.entries) != 1 || !strings.Contains(model.diagnosticWindow.entries[0].snapshot.Detail, "fixture-detail") {
 		t.Fatal("copy failure lost")
 	}
-	if model.modal == nil || model.modal.body != "original body" || model.modal.copyStatus != "Copy failed" {
+	if model.modal == nil || model.modal.body != "original body" || model.modal.copyStatus != "Copy failed: clipboard token=fixture-detail" {
 		t.Fatal("copy error discarded original modal")
 	}
 }

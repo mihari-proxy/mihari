@@ -9,7 +9,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/atotto/clipboard"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/tui/session"
@@ -50,7 +49,7 @@ type diagnosticWindow struct {
 }
 
 func newDiagnosticWindow() *diagnosticWindow {
-	return &diagnosticWindow{pageWarnings: make(map[ui.PageID]string), resourceFailures: make(map[session.EventKind]string), preferred: make(map[ui.PageID]string), copyText: clipboard.WriteAll, maxRecords: 384, maxBytes: 16 << 20}
+	return &diagnosticWindow{pageWarnings: make(map[ui.PageID]string), resourceFailures: make(map[session.EventKind]string), preferred: make(map[ui.PageID]string), maxRecords: 384, maxBytes: 16 << 20}
 }
 
 func (w *diagnosticWindow) add(snapshot protocol.Diagnostic, page ui.PageID) string {
@@ -150,6 +149,16 @@ type diagnosticCopyMsg struct {
 	generation uint64
 	id         string
 	err        error
+}
+
+func (w *diagnosticWindow) copyBody(body string) ui.CopyResult {
+	if w.copyText != nil {
+		if err := w.copyText(body); err != nil {
+			return ui.CopyResult{Kind: ui.CopyFailed, Err: err}
+		}
+		return ui.CopyResult{Kind: ui.CopyConfirmed}
+	}
+	return ui.CopyText(body)
 }
 
 func (w *diagnosticWindow) selectRecord(ctx context.Context, index int) tea.Cmd {
@@ -329,7 +338,7 @@ func (model *Model) updateDiagnostics(message tea.Msg) (tea.Cmd, bool) {
 		if w.open && typed.generation == w.generation && typed.id == w.selected {
 			w.copyStatus = "Copied"
 			if typed.err != nil {
-				w.copyStatus = "Copy failed"
+				w.copyStatus = ui.CopyFailureText("Copy failed", typed.err)
 			}
 		}
 		if typed.err != nil {
@@ -363,8 +372,17 @@ func (model *Model) updateDiagnostics(message tea.Msg) (tea.Cmd, bool) {
 				w.copyStatus = "Details unavailable"
 				return nil, true
 			}
-			copyText, generation, id := w.copyText, w.generation, w.selected
-			return func() tea.Msg { return diagnosticCopyMsg{generation: generation, id: id, err: copyText(body)} }, true
+			result := w.copyBody(body)
+			if result.Kind == ui.CopySentToTerminal {
+				w.copyStatus = ui.CopySentNotice
+				return result.Command, true
+			}
+			err := result.Err
+			if result.Kind == ui.CopyConfirmed {
+				err = nil
+			}
+			generation, id := w.generation, w.selected
+			return func() tea.Msg { return diagnosticCopyMsg{generation: generation, id: id, err: err} }, true
 		case "up", "down", "pgup", "pgdown", "home", "end":
 			lines := w.detailLines(model.width)
 			layout := w.layout(model.width, model.height, len(lines))
