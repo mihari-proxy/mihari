@@ -617,7 +617,7 @@ func (m *Model) copyDirectoryRow(rowID, path string) tea.Cmd {
 	default:
 		err := result.Err
 		if err == nil {
-			err = errors.New(ui.ExportCopyFailed)
+			err = errors.New("clipboard copy failed")
 		}
 		m.markRowOutcome(rowID, false, ui.CopyFailureText(ui.ExportCopyFailed, err))
 		return m.localFailure("clipboard.write", ui.ExportCopyFailed, err)
