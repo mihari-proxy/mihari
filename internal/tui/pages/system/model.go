@@ -16,7 +16,6 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
-	"github.com/atotto/clipboard"
 	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
@@ -326,6 +325,7 @@ type Model struct {
 	coreVersion           coreVersionState
 	channelDiagnostic     tea.Cmd
 	writeClipboard        func(string) error
+	copyResult            func(string) ui.CopyResult
 	ctx                   context.Context
 	client                Client
 	service               ServiceController
@@ -384,7 +384,8 @@ type Model struct {
 	// Sticky outcome after an action finishes (cleared on page leave or re-run).
 	outcomeRow       string
 	outcomeOK        bool   // true=Done (green), false=Failed (red)
-	outcomeDetail    string // failure reason (shown under title + next to Failed)
+	outcomeSent      bool   // terminal handoff; not a confirmed copy
+	outcomeDetail    string // failure reason, or the sent notice
 	rowSpinClock     time.Time
 	rowSpinning      bool
 	rowSpinGen       uint64
@@ -600,16 +601,30 @@ func (m *Model) directoryCopyAvailable(rowID string) bool {
 }
 
 func (m *Model) copyDirectoryRow(rowID, path string) tea.Cmd {
-	write := m.writeClipboard
-	if write == nil {
-		write = clipboard.WriteAll
+	var result ui.CopyResult
+	switch {
+	case m.copyResult != nil:
+		result = m.copyResult(path)
+	case m.writeClipboard != nil:
+		result = ui.CopyPath(ui.CopyRequest{Text: path, Write: m.writeClipboard})
+	default:
+		result = ui.CopyText(path)
 	}
-	if err := write(path); err != nil {
-		m.markRowOutcome(rowID, false, ui.ExportCopyFailed)
+	switch result.Kind {
+	case ui.CopySentToTerminal:
+		m.markRowSent(rowID, ui.CopySentNotice)
+		return result.Command
+	case ui.CopyConfirmed:
+		m.markRowOutcome(rowID, true, "")
+		return m.scheduleOutcomeFade(rowID)
+	default:
+		err := result.Err
+		if err == nil {
+			err = errors.New("clipboard copy failed")
+		}
+		m.markRowOutcome(rowID, false, ui.CopyFailureText(ui.ExportCopyFailed, err))
 		return m.localFailure("clipboard.write", ui.ExportCopyFailed, err)
 	}
-	m.markRowOutcome(rowID, true, "")
-	return m.scheduleOutcomeFade(rowID)
 }
 
 func (m *Model) ID() ui.PageID { return ui.PageSystem }
@@ -770,6 +785,7 @@ func (m *Model) checkMihariVersion() tea.Cmd {
 	if m.outcomeRow == rowMihariUpdate {
 		m.outcomeRow = ""
 		m.outcomeOK = false
+		m.outcomeSent = false
 		m.outcomeDetail = ""
 		m.lastError = ""
 	}
@@ -949,6 +965,8 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		m.selfCheckLoaded = true
 		if m.outcomeRow == rowMihariUpdate {
 			m.outcomeRow = ""
+			m.outcomeOK = false
+			m.outcomeSent = false
 			m.outcomeDetail = ""
 			m.lastError = ""
 		}
@@ -1116,6 +1134,7 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		}
 		m.outcomeRow = ""
 		m.outcomeOK = false
+		m.outcomeSent = false
 		m.outcomeDetail = ""
 		return m, nil
 	case actionStartMsg:
@@ -1432,9 +1451,12 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 		case item.id == rowMihariUpdate && m.selfChecking:
 			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, ui.MihariProgressChecking))
 		case m.outcomeRow == item.id:
-			if m.outcomeOK {
+			switch {
+			case m.outcomeSent:
+				value = ui.RenderCopySentLines(m.theme.BrightYellow)
+			case m.outcomeOK:
 				value = ui.RenderStatusChip(m.theme, ui.StatusChipDone, ui.DoneLabel)
-			} else {
+			default:
 				value = ui.RenderStatusChip(m.theme, ui.StatusChipFailed, ui.FailedLabel)
 				if m.outcomeDetail != "" {
 					value += "  " + m.theme.Danger.Render(ui.TruncateVisible(m.outcomeDetail, 48))
@@ -2008,6 +2030,7 @@ func (m *Model) beginRowPending(action ui.Action) {
 	// New run replaces any sticky Done/Failed on this page.
 	m.outcomeRow = ""
 	m.outcomeOK = false
+	m.outcomeSent = false
 	m.outcomeDetail = ""
 	m.lastError = ""
 }
@@ -2036,6 +2059,7 @@ func (m *Model) markRowOutcome(rowID string, ok bool, detail string) {
 	}
 	m.outcomeRow = rowID
 	m.outcomeOK = ok
+	m.outcomeSent = false
 	if ok {
 		m.outcomeDetail = ""
 		m.lastError = ""
@@ -2045,15 +2069,31 @@ func (m *Model) markRowOutcome(rowID string, ok bool, detail string) {
 	m.lastError = m.outcomeDetail
 }
 
+func (m *Model) markRowSent(rowID, notice string) {
+	if m == nil || rowID == "" {
+		return
+	}
+	m.outcomeRow = rowID
+	m.outcomeOK = false
+	m.outcomeSent = true
+	m.outcomeDetail = notice
+	m.lastError = ""
+	m.ensureFocusVisible()
+}
+
 // ClearDone drops sticky Done/Failed badges (call when leaving the System page).
 func (m *Model) ClearDone() {
 	m.outcomeRow = ""
 	m.outcomeOK = false
+	m.outcomeSent = false
 	m.outcomeDetail = ""
 	m.lastError = ""
 }
 
 func (m *Model) visibleErrorDetail() string {
+	if m.outcomeSent {
+		return strings.TrimSpace(m.lastError)
+	}
 	if m.outcomeRow != "" && !m.outcomeOK && m.outcomeDetail != "" {
 		return m.outcomeDetail
 	}
@@ -2559,6 +2599,7 @@ func (m *Model) clearLoggingOutcome(rowID string) {
 	detail := m.outcomeDetail
 	m.outcomeRow = ""
 	m.outcomeOK = false
+	m.outcomeSent = false
 	m.outcomeDetail = ""
 	if m.lastError == detail {
 		m.lastError = ""

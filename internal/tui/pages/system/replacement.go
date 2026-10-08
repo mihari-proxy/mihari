@@ -83,6 +83,8 @@ func (m *Model) startMihariPreparation() tea.Cmd {
 	m.pendingRow = rowMihariUpdate
 	m.pendingNote = ui.MihariProgressPreparing
 	m.outcomeRow = ""
+	m.outcomeOK = false
+	m.outcomeSent = false
 	m.outcomeDetail = ""
 	m.lastError = ""
 	prepare := func() tea.Msg {

@@ -6,7 +6,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
-	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
@@ -53,7 +52,7 @@ type Modal struct {
 
 // NewErrorDetail creates a scrollable, copyable diagnostic dialog.
 func NewErrorDetail(title, body string) *Modal {
-	return &Modal{kind: modalError, title: title, body: body, copyText: clipboard.WriteAll}
+	return &Modal{kind: modalError, title: title, body: body}
 }
 
 type errorCopyResultMsg struct {
@@ -63,8 +62,21 @@ type errorCopyResultMsg struct {
 
 // copyCommand copies the supplied body and routes the result back to its owning modal.
 func (m *Modal) copyCommand() tea.Cmd {
-	body, copyText := m.body, m.copyText
-	return func() tea.Msg { return errorCopyResultMsg{modal: m, err: copyText(body)} }
+	if m.copyText != nil {
+		body, copyText := m.body, m.copyText
+		return func() tea.Msg { return errorCopyResultMsg{modal: m, err: copyText(body)} }
+	}
+	result := ui.CopyText(m.body)
+	if result.Kind == ui.CopySentToTerminal {
+		m.copyStatus = ui.CopySentNotice
+		return result.Command
+	}
+	err := result.Err
+	if result.Kind == ui.CopyConfirmed {
+		err = nil
+	}
+	modal := m
+	return func() tea.Msg { return errorCopyResultMsg{modal: modal, err: err} }
 }
 
 func NewDetail(title, body string) *Modal {
@@ -185,10 +197,13 @@ func (m *Modal) errorView(theme ui.Theme, width, height int) string {
 	start := min(m.scroll, max(0, len(lines)-rows))
 	end := min(len(lines), start+rows)
 	foot := "↑/↓ scroll  c copy  Esc close"
-	if m.copyStatus != "" {
+	sent := ""
+	if m.copyStatus == ui.CopySentNotice {
+		sent = ui.RenderCopySentLines(theme.BrightYellow) + "\n"
+	} else if m.copyStatus != "" {
 		foot = m.copyStatus + " · " + foot
 	}
-	body := theme.Title.Render(ui.TruncateVisible(m.title, inner)) + "\n\n" + strings.Join(lines[start:end], "\n") + "\n\n" + theme.Muted.Render(ui.TruncateVisible(foot, inner))
+	body := theme.Title.Render(ui.TruncateVisible(m.title, inner)) + "\n\n" + strings.Join(lines[start:end], "\n") + "\n\n" + sent + theme.Muted.Render(ui.TruncateVisible(foot, inner))
 	box := theme.Dialog.Width(boxWidth).MaxWidth(boxWidth).MaxHeight(max(1, height-2)).Render(body)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }

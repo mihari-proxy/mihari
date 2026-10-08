@@ -16,7 +16,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
-	"github.com/atotto/clipboard"
 	"github.com/mihari-proxy/mihari/internal/logging"
 )
 
@@ -42,6 +41,7 @@ type ExportLogsOptions struct {
 	MachineAvailable func() bool
 	SourcesPrompt    bool
 	WriteClipboard   func(string) error
+	Copy             func(string) CopyResult
 }
 
 type exportResultMsg struct {
@@ -227,7 +227,7 @@ type ExportLogsModel struct {
 	cursors                               map[exportFocus]int
 	resultPath, message                   string
 	warning                               bool
-	copySucceeded                         bool
+	copySucceeded, copySent               bool
 	editing, discardOpen, discardSelected bool
 	editValue                             string
 	editRange                             logging.RangeKind
@@ -248,9 +248,6 @@ func NewExportLogsModel(options ExportLogsOptions) *ExportLogsModel {
 	}
 	if options.Now == nil {
 		options.Now = func() time.Time { return time.Now().In(time.Local) }
-	}
-	if options.WriteClipboard == nil {
-		options.WriteClipboard = clipboard.WriteAll
 	}
 	runner := newExportRunner(options.Context, options.Export)
 	runner.diagnostics = options.Diagnostics
@@ -273,7 +270,7 @@ func (m *ExportLogsModel) Open() {
 	m.cursors = map[exportFocus]int{exportFocusFrom: TextCursorEnd(m.from), exportFocusTo: TextCursorEnd(m.to), exportFocusOutput: TextCursorEnd(m.output)}
 	m.resultPath, m.message, m.closed = "", "", false
 	m.warning = false
-	m.copySucceeded = false
+	m.copySucceeded, m.copySent = false, false
 	m.editing, m.discardOpen, m.discardSelected = false, false, false
 	m.clockGeneration++
 }
@@ -337,15 +334,21 @@ func (m *ExportLogsModel) Update(message tea.Msg) (command tea.Cmd, consumed boo
 		}
 		switch key.String() {
 		case "enter":
-			err := m.options.WriteClipboard(m.resultPath)
-			m.copySucceeded = err == nil
-			if !m.copySucceeded {
-				m.message = ExportCopyFailed
-				return m.localFailure("logs.export.copy", ExportCopyFailed, err), true
-			} else {
+			result := m.copyResult(m.resultPath)
+			switch result.Kind {
+			case CopySentToTerminal:
+				m.copySucceeded, m.copySent = false, true
+				m.message = CopySentNotice
+				return result.Command, true
+			case CopyConfirmed:
+				m.copySucceeded, m.copySent = true, false
 				m.message = ExportPathCopied
+				return nil, true
+			default:
+				m.copySucceeded, m.copySent = false, false
+				m.message = CopyFailureText(ExportCopyFailed, result.Err)
+				return m.localFailure("logs.export.copy", ExportCopyFailed, result.Err), true
 			}
-			return nil, true
 		case "esc":
 			m.closed = true
 			return nil, true
@@ -500,7 +503,7 @@ func (m *ExportLogsModel) submit() tea.Cmd {
 	}
 	m.pending, m.message = true, ""
 	m.warning = false
-	m.copySucceeded = false
+	m.copySucceeded, m.copySent = false, false
 	return func() tea.Msg { return <-results }
 }
 
@@ -652,14 +655,16 @@ func (m *ExportLogsModel) View(width, height int) string {
 			body += "\n\n" + exportWarningNotice
 		}
 		body += "\n\n" + ExportSuccessHelp
-		if m.message != "" {
+		if m.copySent {
+			body += "\n\n" + RenderCopySentLines(theme.BrightYellow)
+		} else if m.message != "" {
 			style := theme.Danger
 			if m.copySucceeded {
 				style = theme.Success
 			}
 			body += "\n\n" + style.Render(m.message)
 		}
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, theme.Dialog.Width(min(84, max(36, width-4))).Render(body))
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, theme.Dialog.Width(min(96, max(36, width-4))).Render(body))
 	}
 	line := func(field exportFocus, label, value string) string {
 		marker := "  "
@@ -821,6 +826,16 @@ func (m exportResultMsg) DiagnosticErrors() []error {
 }
 func (m exportResultMsg) Warnings() protocol.WarningOutcome { return m.outcome }
 func (m exportResultMsg) DiagnosticPage() PageID            { return PageLogs }
+
+func (m *ExportLogsModel) copyResult(path string) CopyResult {
+	if m.options.Copy != nil {
+		return m.options.Copy(path)
+	}
+	if m.options.WriteClipboard != nil {
+		return CopyPath(CopyRequest{Text: path, Write: m.options.WriteClipboard})
+	}
+	return CopyText(path)
+}
 
 func (m *ExportLogsModel) localFailure(operation, summary string, err error) tea.Cmd {
 	ctx := m.options.Diagnostics.NewContext(m.runner.parent, operation)

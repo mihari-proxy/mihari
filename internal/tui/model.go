@@ -419,7 +419,7 @@ func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if model.modal == typed.modal {
 			model.modal.copyStatus = "Copied"
 			if typed.err != nil {
-				model.modal.copyStatus = "Copy failed"
+				model.modal.copyStatus = ui.CopyFailureText("Copy failed", typed.err)
 			}
 		}
 		return model, nil

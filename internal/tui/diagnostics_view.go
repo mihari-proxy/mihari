@@ -199,11 +199,20 @@ func (w *diagnosticWindow) view(width, height int) string {
 	header += strings.Repeat(" ", max(1, l.innerWidth-lipgloss.Width(header)-lipgloss.Width(count))) + count
 	parts := []string{header, body}
 	if notice := w.notice(); notice != "" {
-		style := theme.Warning
-		if notice == "Copied" {
-			style = theme.Success
+		if notice == ui.CopySentNotice || strings.HasPrefix(notice, ui.CopySentNotice+" ·") {
+			for _, line := range ui.CopySentLines() {
+				parts = append(parts, theme.BrightYellow.Render(ui.TruncateVisible(line, l.innerWidth)))
+			}
+		} else {
+			style := theme.Warning
+			switch {
+			case notice == "Copied":
+				style = theme.Success
+			case strings.HasPrefix(notice, "Copy failed"):
+				style = theme.Danger
+			}
+			parts = append(parts, style.Render(ui.TruncateVisible(diagnosticSingleLine(notice), l.innerWidth)))
 		}
-		parts = append(parts, style.Render(ui.TruncateVisible(diagnosticSingleLine(notice), l.innerWidth)))
 	}
 	parts = append(parts, theme.Muted.Render(w.footer(l.innerWidth)))
 	// Lip Gloss v2 Width includes padding and borders. Measure both frame and
