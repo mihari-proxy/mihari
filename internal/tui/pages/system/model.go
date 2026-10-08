@@ -403,6 +403,9 @@ type Model struct {
 	portProbeNeeded  bool
 	listenFree       func(string) bool
 	lookupOccupant   func(string) (platform.TCPOccupant, bool)
+	// revealsListener overrides whether elevation can name a hidden occupant.
+	// Nil uses platform.ElevationRevealsListener.
+	revealsListener func() bool
 }
 
 // RestartRequiredMsg tells the root shell to show the existing restart dialog.
@@ -1665,7 +1668,11 @@ func (m *Model) portRow(id, label, addr string, ownerPID int) row {
 	if status != "" {
 		value += "  " + status
 	}
-	detail := fmt.Sprintf("%s\n%s", valueOr(addr, ui.MissingValue), ui.FormatPortHoldLabel(hold))
+	statusText := ui.FormatPortHoldLabel(hold)
+	if hold.Kind == ui.PortHoldNeedsAdmin {
+		statusText = ui.ServiceElevationRequired
+	}
+	detail := fmt.Sprintf("%s\n%s", valueOr(addr, ui.MissingValue), statusText)
 	if hold.Kind == ui.PortHoldChecking && hold.Process != "" {
 		detail += fmt.Sprintf("\nHolder process %s", hold.Process)
 	}
@@ -2396,6 +2403,9 @@ func (m *Model) openPanelBrowser(panelID string) tea.Cmd {
 // daemon/core identity. Owner snapshots and asynchronous probes arrive independently.
 func (m *Model) reconcilePortOwners() {
 	for id, hold := range m.portHolds {
+		if hold.Kind == ui.PortHoldNeedsAdmin {
+			continue
+		}
 		owner := m.core.PID
 		if id == rowWeb {
 			owner = m.status.PID
@@ -2435,6 +2445,14 @@ func (m *Model) probePortHolds() tea.Cmd {
 	if lookup == nil {
 		lookup = platform.LookupTCPOccupant
 	}
+	elevatedFn := m.isElevated
+	if elevatedFn == nil {
+		elevatedFn = elevate.IsElevated
+	}
+	revealsFn := m.revealsListener
+	if revealsFn == nil {
+		revealsFn = platform.ElevationRevealsListener
+	}
 	addrs := map[string]string{
 		rowMixed:      m.onboarding.MixedAddr,
 		rowController: m.onboarding.ControllerAddr,
@@ -2446,6 +2464,8 @@ func (m *Model) probePortHolds() tea.Cmd {
 		rowWeb:        m.status.PID,
 	}
 	return func() tea.Msg {
+		elevated := elevatedFn()
+		reveals := revealsFn()
 		holds := make(map[string]ui.PortHold, 3)
 		var failures []error
 		for id, addr := range addrs {
@@ -2458,8 +2478,14 @@ func (m *Model) probePortHolds() tea.Cmd {
 			if !free {
 				occ, _ = lookup(addr)
 			}
-			holds[id] = ui.ClassifyPortHold(free, occ.PID, occ.Process, owners[id])
-			if err != nil && !(owners[id] > 0 && occ.PID == owners[id]) {
+			hold := ui.ClassifyPortHold(free, occ.PID, occ.Process, owners[id])
+			// An ordinary Linux user cannot name a root listener. The row explains
+			// that, so the expected bind failure is not a diagnostic error.
+			if hold.Kind == ui.PortHoldUnknown && err != nil && ui.AddrInUse(err) && !elevated && reveals {
+				hold.Kind = ui.PortHoldNeedsAdmin
+			}
+			holds[id] = hold
+			if err != nil && hold.Kind != ui.PortHoldNeedsAdmin && !(owners[id] > 0 && occ.PID == owners[id]) {
 				failures = append(failures, fmt.Errorf("probe %s endpoint %q: %w", id, addr, err))
 			}
 		}
