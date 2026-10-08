@@ -146,7 +146,7 @@ git commit -m "fix: 核心安装的本地控制调用不再设超时"
 
 `deadlineSupervisor` 实现 `Run`、`Restart`、`Update`、`Reinstall`。后两个只记录 `ctx.Deadline()` 并返回 nil，不调用 work。
 
-子测试 `install` 与 `reinstall` 装上 holder 和 supervisor。`Prepare` 和随后的 `Update` 或 `Reinstall` 都不得带 deadline。`install` 只命中 `Update`，`reinstall` 只命中 `Reinstall`。
+子测试 `install` 与 `reinstall` 装上 holder 和 supervisor。`Prepare` 和随后的 `Update` 或 `Reinstall` 都不得带 deadline。选中的会话恰好调用一次，另一个为零。取消测试同样断言调用次数。
 
 `TestCoreInstall_ParentCancelReachesInstall` 在会话开始后取消父 context。安装或重装返回的错误必须 `errors.Is` 为 `context.Canceled`。
 

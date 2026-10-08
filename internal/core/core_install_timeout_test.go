@@ -42,38 +42,78 @@ type deadlineSupervisor struct {
 	updateHasDeadline    bool
 	reinstallDeadline    time.Time
 	reinstallHasDeadline bool
+	updateCalls          int
+	reinstallCalls       int
 }
 
 func (d *deadlineSupervisor) Run(context.Context) error     { return nil }
 func (d *deadlineSupervisor) Restart(context.Context) error { return nil }
 
 func (d *deadlineSupervisor) Update(ctx context.Context, _ func(*supervisor.UpdateSession) error) error {
+	d.updateCalls++
 	d.updateDeadline, d.updateHasDeadline = ctx.Deadline()
 	return nil
 }
 
 func (d *deadlineSupervisor) Reinstall(ctx context.Context, _ func(*supervisor.UpdateSession) error) error {
+	d.reinstallCalls++
 	d.reinstallDeadline, d.reinstallHasDeadline = ctx.Deadline()
 	return nil
 }
 
+func (d *deadlineSupervisor) assertSelected(t *testing.T, reinstall bool) {
+	t.Helper()
+	if reinstall {
+		if d.updateCalls != 0 || d.reinstallCalls != 1 {
+			t.Fatalf("update calls = %d, reinstall calls = %d", d.updateCalls, d.reinstallCalls)
+		}
+		if d.reinstallHasDeadline {
+			t.Fatalf("reinstall added a deadline at %s", d.reinstallDeadline)
+		}
+		return
+	}
+	if d.reinstallCalls != 0 || d.updateCalls != 1 {
+		t.Fatalf("update calls = %d, reinstall calls = %d", d.updateCalls, d.reinstallCalls)
+	}
+	if d.updateHasDeadline {
+		t.Fatalf("install added a deadline at %s", d.updateDeadline)
+	}
+}
+
 type blockingSupervisor struct {
-	started chan struct{}
+	started        chan struct{}
+	updateCalls    int
+	reinstallCalls int
 }
 
 func (b *blockingSupervisor) Run(context.Context) error     { return nil }
 func (b *blockingSupervisor) Restart(context.Context) error { return nil }
 
 func (b *blockingSupervisor) Update(ctx context.Context, _ func(*supervisor.UpdateSession) error) error {
+	b.updateCalls++
 	close(b.started)
 	<-ctx.Done()
 	return ctx.Err()
 }
 
 func (b *blockingSupervisor) Reinstall(ctx context.Context, _ func(*supervisor.UpdateSession) error) error {
+	b.reinstallCalls++
 	close(b.started)
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+func (b *blockingSupervisor) assertSelected(t *testing.T, reinstall bool) {
+	t.Helper()
+	if reinstall {
+		if b.updateCalls != 0 || b.reinstallCalls != 1 {
+			t.Fatalf("update calls = %d, reinstall calls = %d", b.updateCalls, b.reinstallCalls)
+		}
+		return
+	}
+	if b.reinstallCalls != 0 || b.updateCalls != 1 {
+		t.Fatalf("update calls = %d, reinstall calls = %d", b.updateCalls, b.reinstallCalls)
+	}
 }
 
 func TestCoreInstall_DoesNotAddDeadline(t *testing.T) {
@@ -113,21 +153,7 @@ func TestCoreInstall_DoesNotAddDeadline(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("install did not finish after prepare")
 			}
-			if reinstall {
-				if supervisor.updateHasDeadline {
-					t.Fatal("reinstall used the update session")
-				}
-				if supervisor.reinstallHasDeadline {
-					t.Fatalf("reinstall added a deadline at %s", supervisor.reinstallDeadline)
-				}
-			} else {
-				if supervisor.reinstallHasDeadline {
-					t.Fatal("install used the reinstall session")
-				}
-				if supervisor.updateHasDeadline {
-					t.Fatalf("install added a deadline at %s", supervisor.updateDeadline)
-				}
-			}
+			supervisor.assertSelected(t, reinstall)
 		})
 	}
 }
@@ -174,6 +200,7 @@ func TestCoreInstall_ParentCancelReachesInstall(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("install did not observe parent cancel")
 			}
+			supervisor.assertSelected(t, reinstall)
 		})
 	}
 }

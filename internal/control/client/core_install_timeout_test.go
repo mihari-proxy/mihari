@@ -65,8 +65,18 @@ func TestCoreInstallTimeout_OutlivesOrdinaryBudget(t *testing.T) {
 				case <-time.After(time.Second):
 					t.Fatal("install request was not dispatched")
 				}
-				if _, err := c.Core(context.Background()); err == nil {
-					t.Error("ordinary request lost its timeout")
+				ordinary := make(chan error, 1)
+				go func() {
+					_, err := c.Core(context.Background())
+					ordinary <- err
+				}()
+				select {
+				case err := <-ordinary:
+					if err == nil {
+						t.Error("ordinary request lost its timeout")
+					}
+				case <-time.After(time.Second):
+					t.Fatal("ordinary request hung")
 				}
 				select {
 				case err := <-done:
