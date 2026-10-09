@@ -67,6 +67,8 @@ jobs:
         run: python -m pytest scripts/install/test_replacement_confirmation.py scripts/install/test_remote_replacement_confirmation.py -q
       - name: Test isolated security runner without privileges
         run: python -m pytest scripts/test/test_unix_layout_security.py -q
+      - name: Test platform install fixture plan
+        run: python -m pytest scripts/test/test_platform_install_e2e.py -q
       - name: Test release safety policies
         env:
           PYTHONPATH: ${{ github.workspace }}/scripts/release

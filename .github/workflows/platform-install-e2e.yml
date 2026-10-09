@@ -1,0 +1,39 @@
+name: platform-install-e2e
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: install uninstall (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - name: Install, reinstall, and purge
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+          GOTOOLCHAIN: local
+          GOENV: "off"
+        run: python scripts/test/platform_install_e2e.py run
+      - name: Remove this job's service and roots
+        if: always()
+        shell: bash
+        run: python scripts/test/platform_install_e2e.py cleanup
