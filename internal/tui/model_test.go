@@ -688,6 +688,44 @@ func TestCompleteUninstallConfirmation_TwoConfirmsQuitAndPrepareUninstall(t *tes
 	}
 }
 
+func TestCompleteUninstallConfirmation_CommandChoiceKeepsOrDeletes(t *testing.T) {
+	for _, want := range []bool{false, true} {
+		model := NewModel()
+		updated, command := model.Update(ui.ActionIntentMsg{
+			Action: ui.ActionCompleteUninstall, Key: ui.CompleteUninstallCommandKey,
+			Title: ui.DeleteUnmatchedCommandTitle, Object: "/usr/local/bin/mihari",
+			Execute: func() tea.Msg { return ui.CompleteUninstallConfirmedMsg{DeleteUnmatchedCommand: true} },
+			Cancel:  func() tea.Msg { return ui.CompleteUninstallConfirmedMsg{} },
+		})
+		model = updated.(Model)
+		if command != nil || model.modal == nil || model.modal.selected != 1 {
+			t.Fatalf("want %t modal=%v selected=%d", want, model.modal != nil, modalSelected(model))
+		}
+		if want {
+			model.modal.selected = 0
+			updated, command = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			model = updated.(Model)
+			updated, command = model.Update(command())
+			model = updated.(Model)
+			model, command = applyRootCmd(model, command)
+		} else {
+			updated, command = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+			model = updated.(Model)
+			if command == nil {
+				t.Fatal("keep did not continue")
+			}
+			updated, command = model.Update(command())
+			model = updated.(Model)
+		}
+		if !model.preparedUninstall || model.deleteUnmatchedCommand != want {
+			t.Fatalf("want delete %t prepared=%v delete=%v", want, model.preparedUninstall, model.deleteUnmatchedCommand)
+		}
+		if want && (command == nil || command() != tea.Quit()) {
+			t.Fatal("delete choice did not quit")
+		}
+	}
+}
+
 func modalSelected(model Model) int {
 	if model.modal == nil {
 		return -1

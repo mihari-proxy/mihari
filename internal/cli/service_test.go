@@ -22,9 +22,12 @@ type fakeService struct {
 }
 
 type fakePurgeUninstaller struct {
-	calls      int
-	forceCalls int
-	err        error
+	calls        int
+	forceCalls   int
+	err          error
+	consent      app.UninstallCommandConsent
+	unmatched    app.UnmatchedCommandFile
+	hasUnmatched bool
 }
 
 func (*fakePurgeUninstaller) Preview(context.Context) ([]app.UninstallTarget, error) { return nil, nil }
@@ -39,6 +42,20 @@ func (f *fakePurgeUninstaller) RunForce(_ context.Context, progress func(string)
 	f.forceCalls++
 	progress("Uninstalling Mihari service")
 	return f.err
+}
+
+func (f *fakePurgeUninstaller) UnmatchedCommand(context.Context) (app.UnmatchedCommandFile, bool, error) {
+	return f.unmatched, f.hasUnmatched, nil
+}
+
+func (f *fakePurgeUninstaller) RunWithCommandConsent(_ context.Context, progress func(string), consent app.UninstallCommandConsent) error {
+	f.consent = consent
+	return f.Run(context.Background(), progress)
+}
+
+func (f *fakePurgeUninstaller) RunForceWithCommandConsent(_ context.Context, progress func(string), consent app.UninstallCommandConsent) error {
+	f.consent = consent
+	return f.RunForce(context.Background(), progress)
 }
 
 type orderedPurgeUninstaller struct {
@@ -60,6 +77,18 @@ func (f *orderedPurgeUninstaller) RunForce(context.Context, func(string)) error 
 	f.calls++
 	*f.order = append(*f.order, "run-force")
 	return nil
+}
+
+func (*orderedPurgeUninstaller) UnmatchedCommand(context.Context) (app.UnmatchedCommandFile, bool, error) {
+	return app.UnmatchedCommandFile{}, false, nil
+}
+
+func (f *orderedPurgeUninstaller) RunWithCommandConsent(ctx context.Context, progress func(string), _ app.UninstallCommandConsent) error {
+	return f.Run(ctx, progress)
+}
+
+func (f *orderedPurgeUninstaller) RunForceWithCommandConsent(ctx context.Context, progress func(string), _ app.UninstallCommandConsent) error {
+	return f.RunForce(ctx, progress)
 }
 
 func (f *fakeService) Install() error                      { f.installs++; return nil }
@@ -256,6 +285,70 @@ func TestServiceUninstall_PurgeYesForceRunsForceOnce(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "Uninstalling Mihari service") || !strings.Contains(stdout.String(), "Mihari has been completely uninstalled") {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestServiceUninstall_DeleteUnmatchedCommandRequiresPurge(t *testing.T) {
+	stderr := &bytes.Buffer{}
+	exit := Execute(context.Background(), []string{"service", "uninstall", "--delete-unmatched-command"}, io.Discard, stderr, Dependencies{})
+	if exit != ExitUsage || !strings.Contains(stderr.String(), "--delete-unmatched-command requires --purge") {
+		t.Fatalf("exit=%d stderr=%q", exit, stderr.String())
+	}
+}
+
+func TestServiceUninstall_DeleteUnmatchedCommandFlagConsentsWithoutPrompt(t *testing.T) {
+	prev := elevate.Check
+	t.Cleanup(func() { elevate.Check = prev })
+	elevate.Check = func() bool { return true }
+	prevTerminal := uninstallCommandIsTerminal
+	t.Cleanup(func() { uninstallCommandIsTerminal = prevTerminal })
+	uninstallCommandIsTerminal = func() bool { return true }
+	uninstaller := &fakePurgeUninstaller{hasUnmatched: true, unmatched: app.UnmatchedCommandFile{Path: "/usr/local/bin/mihari", Reason: "does not match"}}
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	exit := Execute(context.Background(), []string{"service", "uninstall", "--purge", "--yes", "--delete-unmatched-command"}, stdout, stderr, Dependencies{Uninstaller: uninstaller})
+	if exit != ExitOK || !uninstaller.consent.DeleteUnmatched || strings.Contains(stderr.String(), "Delete unmatched command file") {
+		t.Fatalf("exit=%d consent=%v stdout=%q stderr=%q", exit, uninstaller.consent, stdout.String(), stderr.String())
+	}
+}
+
+func TestServiceUninstall_PurgeYesWithoutTerminalLeavesUnmatchedCommand(t *testing.T) {
+	prev := elevate.Check
+	t.Cleanup(func() { elevate.Check = prev })
+	elevate.Check = func() bool { return true }
+	prevTerminal := uninstallCommandIsTerminal
+	t.Cleanup(func() { uninstallCommandIsTerminal = prevTerminal })
+	uninstallCommandIsTerminal = func() bool { return false }
+	uninstaller := &fakePurgeUninstaller{hasUnmatched: true, unmatched: app.UnmatchedCommandFile{Path: "/usr/local/bin/mihari"}}
+	exit := Execute(context.Background(), []string{"service", "uninstall", "--purge", "--yes"}, io.Discard, io.Discard, Dependencies{Uninstaller: uninstaller})
+	if exit != ExitOK || uninstaller.consent.DeleteUnmatched || uninstaller.calls != 1 {
+		t.Fatalf("exit=%d consent=%v calls=%d", exit, uninstaller.consent, uninstaller.calls)
+	}
+}
+
+func TestServiceUninstall_TerminalPromptConsentsOnlyToYes(t *testing.T) {
+	prev := elevate.Check
+	t.Cleanup(func() { elevate.Check = prev })
+	elevate.Check = func() bool { return true }
+	prevTerminal := uninstallCommandIsTerminal
+	prevInput := uninstallCommandInput
+	t.Cleanup(func() {
+		uninstallCommandIsTerminal = prevTerminal
+		uninstallCommandInput = prevInput
+	})
+	uninstallCommandIsTerminal = func() bool { return true }
+	for _, answer := range []struct {
+		input string
+		want  bool
+	}{{"y\n", true}, {"YES\n", true}, {"n\n", false}, {"\n", false}} {
+		t.Run(answer.input, func(t *testing.T) {
+			uninstallCommandInput = strings.NewReader(answer.input)
+			uninstaller := &fakePurgeUninstaller{hasUnmatched: true, unmatched: app.UnmatchedCommandFile{Path: "/usr/local/bin/mihari", Reason: "missing"}}
+			stderr := &bytes.Buffer{}
+			exit := Execute(context.Background(), []string{"service", "uninstall", "--purge", "--yes"}, io.Discard, stderr, Dependencies{Uninstaller: uninstaller})
+			if exit != ExitOK || uninstaller.consent.DeleteUnmatched != answer.want || !strings.Contains(stderr.String(), "Delete unmatched command file /usr/local/bin/mihari? [y/N]") {
+				t.Fatalf("exit=%d consent=%v stderr=%q", exit, uninstaller.consent, stderr.String())
+			}
+		})
 	}
 }
 

@@ -1097,14 +1097,21 @@ type fakeService struct {
 }
 
 type fakeUninstaller struct {
-	targets []app.UninstallTarget
-	err     error
-	calls   int
+	targets      []app.UninstallTarget
+	err          error
+	calls        int
+	unmatched    app.UnmatchedCommandFile
+	hasUnmatched bool
+	unmatchedErr error
 }
 
 func (f *fakeUninstaller) Preview(context.Context) ([]app.UninstallTarget, error) {
 	f.calls++
 	return f.targets, f.err
+}
+
+func (f *fakeUninstaller) UnmatchedCommand(context.Context) (app.UnmatchedCommandFile, bool, error) {
+	return f.unmatched, f.hasUnmatched, f.unmatchedErr
 }
 
 func (*fakeUninstaller) Run(context.Context, func(string)) error { return nil }
@@ -1434,6 +1441,35 @@ func TestSystemCompleteUninstall_PreviewsTargetsBeforeConfirmation(t *testing.T)
 	}
 	if _, ok := second.Execute().(ui.CompleteUninstallConfirmedMsg); !ok {
 		t.Fatalf("second execute=%T", second.Execute())
+	}
+}
+
+func TestSystemCompleteUninstall_UnmatchedCommandAsksBeforeDeleting(t *testing.T) {
+	preview := &fakeUninstaller{
+		targets:      []app.UninstallTarget{{Path: "/tmp/mihari-data", Kind: "data"}},
+		hasUnmatched: true,
+		unmatched:    app.UnmatchedCommandFile{Path: "/usr/local/bin/mihari", Reason: "leaving /usr/local/bin/mihari: command file does not match the installed Mihari program"},
+	}
+	model := New(nil, func() string { return "system-op" })
+	model.SetUninstaller(preview)
+	model.focusID = rowCompleteUninstall
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	_, command = model.Update(command())
+	intent := command().(ui.ActionIntentMsg)
+	second := intent.Execute().(ui.ActionIntentMsg)
+	third, ok := second.Execute().(ui.ActionIntentMsg)
+	if !ok || third.Key != ui.CompleteUninstallCommandKey || third.Object != "/usr/local/bin/mihari" || !strings.Contains(third.Impact, "does not match") {
+		t.Fatalf("third=%#v", third)
+	}
+	if confirmed, ok := third.Execute().(ui.CompleteUninstallConfirmedMsg); !ok || !confirmed.DeleteUnmatchedCommand {
+		t.Fatalf("confirm=%#v", third.Execute())
+	}
+	if third.Cancel == nil {
+		t.Fatal("keep choice missing")
+	}
+	if kept, ok := third.Cancel().(ui.CompleteUninstallConfirmedMsg); !ok || kept.DeleteUnmatchedCommand {
+		t.Fatalf("keep=%#v", third.Cancel())
 	}
 }
 
