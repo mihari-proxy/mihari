@@ -68,3 +68,30 @@ def test_keep_leaves_directories_and_purge_removes_them():
     e2e.assert_purged("linux", False, {key: False for key in present})
     with pytest.raises(SystemExit):
         e2e.assert_kept("linux", True, present)
+
+
+def test_commands_use_the_fixed_version_and_existing_installers():
+    assert e2e.build_command("go", "mihari") == [
+        "go", "build", "-trimpath", "-ldflags", e2e.LDFLAG, "-o", "mihari", "./cmd/mihari",
+    ]
+    assert e2e.unix_install_command("scripts/install/install-aio.sh", "bundle.tar.gz") == [
+        "sudo", "/usr/bin/env",
+        "MIHARI_VERSION=v0.0.0-dev.0",
+        "MIHARI_CHANNEL=dev",
+        "MIHARI_YES=1",
+        "scripts/install/install-aio.sh",
+        "--channel", "dev",
+        "bundle.tar.gz",
+    ]
+    assert e2e.windows_install_command("scripts/install/install-aio.ps1", r"C:\bundle") == [
+        "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+        "-File", "scripts/install/install-aio.ps1",
+        "-BundleDir", r"C:\bundle",
+        "-Channel", "dev",
+    ]
+    assert e2e.service_command("/usr/local/bin/mihari", False) == [
+        "sudo", "/usr/local/bin/mihari", "service", "uninstall",
+    ]
+    assert e2e.service_command("/usr/local/bin/mihari", True) == [
+        "sudo", "/usr/local/bin/mihari", "service", "uninstall", "--purge", "--yes",
+    ]
