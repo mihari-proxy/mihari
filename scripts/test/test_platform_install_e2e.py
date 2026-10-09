@@ -5,6 +5,8 @@ import sys
 import tarfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import platform_install_e2e as e2e
 
@@ -41,3 +43,28 @@ def test_manifest_pins_bundle_and_binary_only():
     parsed = json.loads(e2e.manifest_bytes(document).decode("utf-8"))
     assert list(parsed) == ["binaries", "bundles"]
     assert len(parsed["binaries"][0]) == 64
+
+
+def test_unix_success_text_and_macos_warning():
+    e2e.assert_install_success("linux", "Installation complete.\nRun mihari to open the TUI.\n", "")
+    e2e.assert_install_success(
+        "darwin",
+        "Installation complete.\nRun mihari to open the TUI.\n",
+        "warning: macOS is currently unsupported. Support is incomplete and use is not recommended.\n",
+    )
+    with pytest.raises(SystemExit):
+        e2e.assert_install_success("darwin", "Installation complete.\nRun mihari to open the TUI.\n", "")
+
+
+def test_version_json_must_match_the_fixed_tag():
+    e2e.assert_service_version('{"schema":"mihari/v1","version":"v0.0.0-dev.0"}\n')
+    with pytest.raises(SystemExit):
+        e2e.assert_service_version('{"schema":"mihari/v1","version":"dev"}\n')
+
+
+def test_keep_leaves_directories_and_purge_removes_them():
+    present = {"program": True, "data": True, "base": True, "path_command": True}
+    e2e.assert_kept("linux", False, present)
+    e2e.assert_purged("linux", False, {key: False for key in present})
+    with pytest.raises(SystemExit):
+        e2e.assert_kept("linux", True, present)
