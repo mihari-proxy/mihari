@@ -52,10 +52,12 @@ func (i Installer) prepareProtected(ctx context.Context, target ReleaseTarget) (
 	if err != nil {
 		return nil, err
 	}
+	reportPhase(ctx, protocol.ProgressPhaseExtracting)
 	binary, err := archiveBinary(archive, target.asset.Name)
 	if err != nil {
 		return nil, err
 	}
+	reportPhase(ctx, protocol.ProgressPhaseChecking)
 	candidate, err := i.stageUpdateCandidate(ctx, i.Provenance, target, binary)
 	if err != nil {
 		return nil, err
@@ -109,7 +111,9 @@ func (i Installer) readTargetArchive(ctx context.Context, target ReleaseTarget) 
 	if response.StatusCode != http.StatusOK {
 		return nil, coreHTTPError(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download mihomo core failed"}, "core GET asset", address, "response", response, nil)
 	}
-	archive, err = io.ReadAll(io.LimitReader(response.Body, maxCoreArchiveSize+1))
+	var downloaded bytes.Buffer
+	_, err = io.Copy(&downloaded, newProgressReader(ctx, io.LimitReader(response.Body, maxCoreArchiveSize+1), target.asset.Size))
+	archive = downloaded.Bytes()
 	if err != nil {
 		return nil, coreHTTPError(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "read mihomo core download failed"}, "core GET asset", address, "read", response, err)
 	}

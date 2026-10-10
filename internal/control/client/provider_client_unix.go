@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"time"
 )
 
 // WithCredentialProvider uses verified Unix peers and a fresh credential per request.
@@ -22,7 +21,7 @@ func WithCredentialProvider(locator platform.ControlLocator, provider Credential
 	}
 	c := NewHTTPWithCredentialProvider("http://mihari", provider, &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return transport.DialVerified(ctx, locator) },
-	}, Timeout: 10 * time.Second})
+	}, Timeout: DefaultTimeout})
 	c.classify = classifyUnixError
 	return c
 }

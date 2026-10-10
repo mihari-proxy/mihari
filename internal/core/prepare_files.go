@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 func (i Installer) prepareFileUpdate(ctx context.Context, target ReleaseTarget, request InstallRequest) (prepared PreparedCore, resultErr error) {
@@ -26,10 +28,12 @@ func (i Installer) prepareFileUpdate(ctx context.Context, target ReleaseTarget, 
 	if err != nil {
 		return nil, err
 	}
+	reportPhase(ctx, protocol.ProgressPhaseExtracting)
 	binary, err := archiveBinary(archive, target.asset.Name)
 	if err != nil {
 		return nil, err
 	}
+	reportPhase(ctx, protocol.ProgressPhaseChecking)
 	candidate, err := i.stageUpdateCandidate(ctx, store, target, binary)
 	if err != nil {
 		return nil, err
