@@ -9,6 +9,7 @@
 - GeoIP 使用仓库 `internal/app/testdata/migration-mmdb` 中已有的合成 MMDB（许可证与来源见该目录 README）；不下载真实地理数据。核心仍是占位文件，作业验证 Mihari 服务，不验证代理功能。
 - Windows 的保留数据卸载从 PATH 命令执行；完整卸载从临时目录执行同一份构建程序，避免正在运行的映像锁住待删除文件。
 - 三个平台都设置 `MIHARI_YES=1`。
+- Unix 仅在 `GITHUB_ACTIONS=true` 且 `RUNNER_ENVIRONMENT=github-hosted` 时执行安装。作业打印默认 PATH 目录 `/usr/local/bin` 的原始权限，然后只将该目录本身设为 root:root、0755，满足安装器的信任要求；不递归修改其中的工具，不改变 `/usr`、`/usr/local`，不放宽产品信任校验。
 - Linux 跑在 `ubuntu-latest`，服务是 systemd `mihari.service`。macOS 跑在 `macos-latest`，服务是 `/Library/LaunchDaemons/mihari.plist`。Windows 跑在 `windows-latest`，服务是 SCM `mihari`。
 
 ## 入口

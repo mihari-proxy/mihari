@@ -12,6 +12,40 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import platform_install_e2e as e2e
 
 
+def test_unix_install_prepares_command_directory_on_hosted_runner(monkeypatch, tmp_path):
+    command_dir = tmp_path / "bin"
+    command_dir.mkdir()
+    script = tmp_path / "scripts/install/install-aio.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text("fixture")
+    monkeypatch.setattr(e2e, "ROOT", tmp_path)
+    monkeypatch.setattr(e2e, "UNIX_COMMAND", str(command_dir / "mihari"))
+    monkeypatch.setattr(e2e, "host_system", lambda: "linux")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
+    inspected = []
+    commands = []
+    monkeypatch.setattr(e2e, "_require_trusted_ancestors", inspected.append)
+
+    def run(argv, **kwargs):
+        commands.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "\n".join(e2e.UNIX_SUCCESS), "")
+
+    monkeypatch.setattr(e2e, "_run", run)
+    e2e._install_unix("bundle.tar.gz")
+    assert ["sudo", "chown", "0:0", str(command_dir)] in commands
+    assert ["sudo", "chmod", "755", str(command_dir)] in commands
+    assert inspected == [str(tmp_path), str(command_dir)]
+
+
+def test_unix_install_refuses_to_repair_a_workstation(monkeypatch):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("RUNNER_ENVIRONMENT", raising=False)
+    monkeypatch.setattr(e2e, "_run", lambda *args, **kwargs: pytest.fail("must refuse before running commands"))
+    with pytest.raises(SystemExit, match="github-hosted"):
+        e2e._install_unix("bundle.tar.gz")
+
+
 def test_geoip_inputs_are_the_existing_synthetic_mmdb_fixtures():
     country, asn = e2e.geoip_fixtures()
     assert e2e.sha256_hex(country) == "b37601903448683d241af52893c8cbf0fed461e0cdebe0bfaca01891fdeb6db9"

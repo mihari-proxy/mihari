@@ -326,11 +326,28 @@ def _pin_unix(bundle: bytes, program: bytes) -> None:
 
 
 def _install_unix(archive: str) -> None:
+    _prepare_unix_command_directory()
     script = ROOT / "scripts" / "install" / "install-aio.sh"
     mode = script.stat().st_mode
     script.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     result = _run(unix_install_command(str(script), archive), cwd=str(ROOT))
     assert_install_success(host_system(), result.stdout, result.stderr)
+
+
+def _prepare_unix_command_directory() -> None:
+    if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
+        raise SystemExit("Unix install e2e requires a github-hosted runner")
+    directory = os.path.dirname(UNIX_COMMAND)
+    # Hosted images expose this shared tool directory as runner-owned or writable.
+    # Prepare the default PATH destination on the disposable VM; do not relax the
+    # installer policy or repair /usr or /usr/local. Never recurse into its files.
+    if os.path.islink(directory):
+        raise SystemExit(f"symlink {directory}")
+    _require_trusted_ancestors(os.path.dirname(directory))
+    _run(["ls", "-ld", directory])
+    _run(["sudo", "chown", "0:0", directory])
+    _run(["sudo", "chmod", "755", directory])
+    _require_trusted_ancestors(directory)
 
 
 def _install_windows(bundle_dir: str, env: dict[str, str]) -> None:
