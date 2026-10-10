@@ -101,10 +101,19 @@ func TestMihariPreparation_SpinnerRunsUntilPreparationEnds(t *testing.T) {
 }
 
 func TestMihariPreparation_ConfirmedUpdateKeepsVersionAndChannel(t *testing.T) {
-	m, _ := replacementFixture(t)
-	m.Update(ui.ActionPendingMsg{Action: ui.ActionUpdateMihari})
-	view := m.View()
-	if !strings.Contains(view, ui.SpinnerLabel(time.Unix(0, 0), ui.MihariProgressUpdating)) || !strings.Contains(view, "v2.0.0  main") {
-		t.Fatalf("confirmed update hid progress or current installation: %s", view)
+	for _, channel := range []string{"main", "dev", ""} {
+		t.Run(channel, func(t *testing.T) {
+			m, _ := replacementFixture(t)
+			m.mihariChannel = channel
+			m.Update(ui.ActionPendingMsg{Action: ui.ActionUpdateMihari})
+			view := m.View()
+			want := channel
+			if want == "" {
+				want = "main"
+			}
+			if !strings.Contains(view, ui.SpinnerLabel(time.Unix(0, 0), ui.MihariProgressUpdating)) || !strings.Contains(view, "v2.0.0  "+want) {
+				t.Fatalf("confirmed update hid progress or resolved installation: %s", view)
+			}
+		})
 	}
 }

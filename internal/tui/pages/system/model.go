@@ -1510,7 +1510,7 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 		case m.pending && m.pendingRow == item.id && m.pendingNote != "":
 			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, m.pendingNote))
 			if item.id == rowMihariUpdate {
-				value += "  " + m.theme.Muted.Render(valueOr(m.currentVersion, ui.UnknownLabel)+"  "+valueOr(m.mihariChannel, ui.UnknownLabel))
+				value += "  " + m.theme.Muted.Render(valueOr(m.currentVersion, ui.UnknownLabel)+"  "+m.currentMihariChannel())
 			}
 		case item.id == rowCoreUpdate && m.coreVersion.checking:
 			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, ui.MihariProgressChecking))
