@@ -310,7 +310,7 @@ def _require_trusted_ancestors(path: str) -> None:
         mode = stat.S_IMODE(info.st_mode)
         if info.st_uid != 0 or (mode & 0o022) != 0:
             raise SystemExit(f"{current} uid={info.st_uid} mode={mode:04o}")
-        if current == path and info.st_nlink != 1:
+        if current == path and stat.S_ISREG(info.st_mode) and info.st_nlink != 1:
             raise SystemExit(f"{current} nlink={info.st_nlink}")
         if host_system() == "darwin":
             listed = _run(["ls", "-lde", current])

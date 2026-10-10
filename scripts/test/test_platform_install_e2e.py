@@ -2,14 +2,25 @@ import hashlib
 import io
 import json
 import subprocess
+import stat
 import sys
 import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import platform_install_e2e as e2e
+
+
+def test_trusted_directory_link_count_is_not_a_file_link_count(monkeypatch):
+    monkeypatch.setattr(e2e, "host_system", lambda: "linux")
+    monkeypatch.setattr(e2e.os.path, "islink", lambda path: False)
+    monkeypatch.setattr(e2e.os, "stat", lambda *args, **kwargs: SimpleNamespace(
+        st_uid=0, st_mode=stat.S_IFDIR | 0o755, st_nlink=8,
+    ))
+    e2e._require_trusted_ancestors("/usr/local")
 
 
 def test_unix_install_prepares_command_directory_on_hosted_runner(monkeypatch, tmp_path):
