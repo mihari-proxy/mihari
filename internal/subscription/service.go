@@ -229,16 +229,15 @@ func (s *Service) noteRefreshError(id string, cause error, versions ...uint64) e
 func (s *Service) CommitRefresh(prepared PreparedRefresh) (Receipt, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.commitRefreshLocked(prepared)
+	return s.commitRefreshLocked(prepared, s.catalog.Clone())
 }
 
-func (s *Service) commitRefreshLocked(prepared PreparedRefresh) (Receipt, error) {
+func (s *Service) commitRefreshLocked(prepared PreparedRefresh, before Catalog) (Receipt, error) {
 	index := s.catalog.Index(prepared.profileID)
 	if index < 0 || s.catalog.Profiles[index].Version != prepared.profileVersion {
 		return Receipt{}, protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "subscription changed while refresh was in progress"}
 	}
-	before := s.catalog.Clone()
-	after := before.Clone()
+	after := s.catalog.Clone()
 	profile := &after.Profiles[index]
 	cachePath := s.CachePath(profile.ID)
 	cacheBefore, readErr := os.ReadFile(cachePath)
@@ -277,6 +276,11 @@ func (s *Service) commitRefreshLocked(prepared PreparedRefresh) (Receipt, error)
 	}
 	after.fillDefaults()
 	if err := s.saveCatalog(s.catalogPath, after); err != nil {
+		// Replacement may have committed before a directory-sync error. Restore
+		// catalog metadata as well as bytes so cached relative paths stay paired.
+		if restoreErr := s.saveCatalog(s.catalogPath, before); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore subscription catalog: %w", restoreErr))
+		}
 		return Receipt{}, s.failAfterRestore(err, cachePath, cacheBefore, hadCache, wroteCache)
 	}
 	s.catalog = after

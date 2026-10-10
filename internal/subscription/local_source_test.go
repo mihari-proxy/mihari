@@ -178,3 +178,55 @@ func TestCommitAdd_CatalogPostCommitFailureRestoresDisk(t *testing.T) {
 		t.Fatalf("cache err=%v", err)
 	}
 }
+
+func TestCommitRefresh_CatalogPostCommitFailureRestoresDirectory(t *testing.T) {
+	s, _ := newServiceForTest(t, http.NotFoundHandler())
+	a, b := filepath.Join(t.TempDir(), "main.yaml"), filepath.Join(t.TempDir(), "main.yaml")
+	for _, path := range []string{a, b} {
+		if err := os.WriteFile(path, []byte("proxies: []\nproxy-providers:\n  local: {type: file, path: nodes.yaml}\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prepared, err := s.PrepareAdd(context.Background(), "local", localTestURI(a), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CommitAdd(prepared); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = s.Mutate(func(catalog *Catalog) error {
+		catalog.Profiles[0].URL = localTestURI(b)
+		catalog.Profiles[0].Version++
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := s.Snapshot()
+	refresh, err := s.PrepareRefresh(context.Background(), prepared.ProfileID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cause := errors.New("catalog sync failed after replacement")
+	calls := 0
+	s.saveCatalog = func(path string, catalog Catalog) error {
+		calls++
+		if err := Save(path, catalog); err != nil {
+			return err
+		}
+		if calls == 1 {
+			return cause
+		}
+		return nil
+	}
+	if _, err := s.CommitRefresh(refresh); !errors.Is(err, cause) {
+		t.Fatalf("err=%v", err)
+	}
+	disk, err := Load(s.catalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disk.Profiles[0].CacheBaseDir != before.Profiles[0].CacheBaseDir || disk.Profiles[0].Generation != before.Profiles[0].Generation {
+		t.Fatalf("before=%+v disk=%+v", before, disk)
+	}
+}
