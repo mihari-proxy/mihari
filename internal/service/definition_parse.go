@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -417,37 +418,69 @@ func parsePlistValue(dec *xml.Decoder, start xml.StartElement) (any, error) {
 
 func parsePrintDisabled(raw []byte, label string) (bool, error) {
 	text := string(raw)
+	cause := fmt.Errorf("launchctl print-disabled: stdout:\n%s", raw)
 	if strings.Contains(text, "gui/") {
-		return false, invalidServiceState("service status is unknown")
+		return false, invalidServiceState("service status is unknown", cause)
 	}
-	trueKey := `"` + label + `" => true`
-	falseKey := `"` + label + `" => false`
-	nTrue := strings.Count(text, trueKey)
-	nFalse := strings.Count(text, falseKey)
-	if nTrue+nFalse != 1 {
-		return false, invalidServiceState("service status is unknown")
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	if len(lines) < 2 || (strings.TrimSpace(lines[0]) != "{" && strings.TrimSpace(lines[0]) != "disabled services = {") || strings.TrimSpace(lines[len(lines)-1]) != "}" {
+		return false, invalidServiceState("service status is unknown", cause)
 	}
-	return nTrue == 1, nil
+	disabled, found := false, false
+	for _, line := range lines[1 : len(lines)-1] {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=>")
+		key = strings.TrimSpace(key)
+		if !ok || len(key) < 3 || key[0] != '"' || key[len(key)-1] != '"' || strings.Contains(key[1:len(key)-1], `"`) {
+			return false, invalidServiceState("service status is unknown", cause)
+		}
+		var entryDisabled bool
+		switch strings.TrimSpace(value) {
+		case "true", "disabled":
+			entryDisabled = true
+		case "false", "enabled":
+		default:
+			return false, invalidServiceState("service status is unknown", cause)
+		}
+		if key[1:len(key)-1] == label {
+			if found {
+				return false, invalidServiceState("service status is unknown", cause)
+			}
+			disabled, found = entryDisabled, true
+		}
+	}
+	// launchd omits services without a disabled-state override; their default
+	// is enabled. A complete, well-formed override dictionary proves absence.
+	return disabled, nil
 }
 
 func parseLaunchdPrint(result CommandResult, target string) (loaded, running bool, pid int, err error) {
 	if result.ExitCode != 0 {
-		if len(bytes.TrimSpace(result.Stdout)) == 0 && string(result.Stderr) == "Could not find service \""+target+"\".\n" {
+		missing := "Could not find service \"" + target + "\"."
+		domain, label, ok := strings.Cut(target, "/")
+		stderr := strings.TrimSpace(string(result.Stderr))
+		missingInDomain := "Could not find service \"" + label + "\" in domain for " + domain
+		if len(bytes.TrimSpace(result.Stdout)) == 0 && (stderr == missing ||
+			(ok && domain == "system" && (stderr == missingInDomain || stderr == "Bad request.\n"+missingInDomain))) {
 			return false, false, 0, nil
 		}
-		return false, false, 0, invalidServiceState("service status is unknown")
+		return false, false, 0, invalidServiceState("service status is unknown", fmt.Errorf("launchctl print %s: exit status %d\nstdout:\n%s\nstderr:\n%s", target, result.ExitCode, result.Stdout, result.Stderr))
 	}
 	text := string(result.Stdout)
+	cause := fmt.Errorf("launchctl print %s: stdout:\n%s\nstderr:\n%s", target, result.Stdout, result.Stderr)
 	if strings.Contains(text, "gui/") {
-		return false, false, 0, invalidServiceState("service status is unknown")
+		return false, false, 0, invalidServiceState("service status is unknown", cause)
 	}
 	if !strings.Contains(text, target+" = {") && !strings.Contains(text, target+"={") {
-		return false, false, 0, invalidServiceState("service status is unknown")
+		return false, false, 0, invalidServiceState("service status is unknown", cause)
 	}
 	pid, pidOK := scanUniqueInt(text, "pid = ", `"pid" = `)
 	state, stateOK := scanUniqueToken(text, "state = ")
 	if !pidOK && !stateOK {
-		return false, false, 0, invalidServiceState("service status is unknown")
+		return false, false, 0, invalidServiceState("service status is unknown", cause)
 	}
 	running = pid > 0 || state == "running"
 	return true, running, pid, nil

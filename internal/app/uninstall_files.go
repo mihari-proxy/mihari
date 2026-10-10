@@ -298,7 +298,9 @@ func allowedRuntimeEntry(parts []string, isDir bool) bool {
 func allowedCoreHomeEntry(parts []string, isDir bool) bool {
 	if len(parts) == 1 {
 		if isDir {
-			return parts[0] == "providers" || parts[0] == "ruleset"
+			// The trusted core runtime creates tmp before launching the core.
+			// Its contents still require recognition and are refused below.
+			return parts[0] == "providers" || parts[0] == "ruleset" || parts[0] == "tmp"
 		}
 		return coreHomeFile(parts[0]) || mihomoWorkingFile(parts[0])
 	}

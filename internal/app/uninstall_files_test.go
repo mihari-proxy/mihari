@@ -8,6 +8,26 @@ import (
 	"testing"
 )
 
+func TestCheckUninstallFiles_RecognizesEmptyCoreTemporaryDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "runtime", "core-home", "tmp"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckUninstallFiles(t.Context(), []UninstallTarget{{Path: root, Kind: "data"}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCheckUninstallFiles_RefusesUnrecognizedCoreTemporaryContents(t *testing.T) {
+	root := t.TempDir()
+	writeUninstallFixture(t, root, "runtime/core-home/tmp/personal-notes")
+	err := CheckUninstallFiles(t.Context(), []UninstallTarget{{Path: root, Kind: "data"}})
+	var entry *UninstallFileError
+	if !errors.As(err, &entry) || entry.RelativePath != "runtime/core-home/tmp/personal-notes" {
+		t.Fatalf("error=%v, want rejection of the unrecognized temporary file", err)
+	}
+}
+
 func TestCheckUninstallFiles_RecognizedDataEntriesPass(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{
