@@ -73,7 +73,7 @@ func TestSubscriptionDetail_ResizesWithSaveVisible(t *testing.T) {
 			}
 			count := 5
 			if add {
-				count = 3
+				count = 4
 			}
 			for _, size := range [][2]int{{160, 42}, {72, 22}, {100, 30}, {160, 42}} {
 				next, _ := m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
@@ -149,7 +149,7 @@ func TestSubscriptionDetail_FooterFollowsFocusOnce(t *testing.T) {
 		}
 		count := 7
 		if add {
-			count = 3
+			count = 4
 		}
 		for i := 0; i <= count; i++ {
 			view := ansi.Strip(m.View().Content)

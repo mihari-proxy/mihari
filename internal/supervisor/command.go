@@ -77,6 +77,7 @@ func (c *processChild) Kill() error { return killChild(c.command) }
 
 func (s CommandStarter) command(ctx context.Context) (*exec.Cmd, func() error, error) {
 	command := exec.Command(s.BinaryPath, commandArguments(s.DataDir, s.ConfigPath)...)
+	command.Env = core.FileReferenceEnvironment()
 	release := func() error { return nil }
 	if s.CommandFactory != nil {
 		verified, closeCapabilities, e := s.CommandFactory(ctx)

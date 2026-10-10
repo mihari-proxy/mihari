@@ -1,12 +1,12 @@
  Mihari  ·  ● running  ·  0 conn  ·  ↑      0 B/s  ↓      0 B/s                           Connected
    1 Overview
    2 Proxies
-   3 Conns
-   4 Rules             ╭──────────────────────────────────────────────────────────────────────╮
-   5 Logs              │                                                                      │
- › 6 Subs              │  Edit subscription                                                   │
-   7 Web GUI           │                                                                      │
-   8 System            │  ● In use · Live · Enabled                                           │
+   3 Conns             ╭──────────────────────────────────────────────────────────────────────╮
+   4 Rules             │                                                                      │
+   5 Logs              │  Edit subscription                                                   │
+ › 6 Subs              │                                                                      │
+   7 Web GUI           │  ● In use · Live · Enabled                                           │
+   8 System            │  Source        URL                                                   │
                        │  Traffic       52.5 GiB/80.0 GiB                                     │
                        │  Cache         Available                                             │
                        │  Last update   2026-09-15 01:00                                      │

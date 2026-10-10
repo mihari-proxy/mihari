@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/config"
@@ -21,8 +23,9 @@ const (
 )
 
 type AddSubscriptionInput struct {
-	Name string
-	URL  string
+	AllowFileReferences bool
+	Name                string
+	URL                 string
 	// ProxyMode selects the per-subscription refresh transport (direct/proxy/auto).
 	ProxyMode string
 }
@@ -80,57 +83,54 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
 		}
+		prepared, err := m.subscriptions.PrepareAdd(ctx, input.Name, input.URL, input.ProxyMode)
+		if err != nil {
+			return nil, err
+		}
+		candidate, err := m.prepareConfig(ctx, prepared.Document())
+		if err != nil {
+			return nil, err
+		}
+		defer func() { collectWarning(ctx, "subscription", "candidate.cleanup.failed", candidate.cleanup()) }()
+		if refs := subscription.FileReferences(prepared.Document()); len(refs) > 0 && !input.AllowFileReferences {
+			var paths strings.Builder
+			for _, ref := range refs {
+				_, _ = fmt.Fprintf(&paths, "\n%q: %q", ref.Location, ref.Path) // strings.Builder writes never fail.
+			}
+			return nil, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: subscription.FileReferenceWarning + paths.String() + "\nProvide --allow-file-references to continue.", Details: map[string]any{"confirmation_required": "file_references", "file_references": refs}}
+		}
 		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
 		}
 		defer m.unlock()
-		var added subscription.Profile
-		_, err := m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
-			var addErr error
-			added, addErr = m.subscriptions.Add(input.Name, input.URL, input.ProxyMode)
-			if addErr != nil {
-				return snapshot, addErr
+		_, err = m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+			receipt, err := m.subscriptions.CommitAdd(prepared)
+			if err != nil {
+				return snapshot, err
 			}
-			m.syncSubscriptionState(&snapshot, m.subscriptions.Snapshot())
+			if receipt.After.ActiveID == prepared.ProfileID() {
+				if err := m.commitRuntimeConfig(ctx, candidate); err != nil {
+					if rollbackErr := m.subscriptions.Rollback(receipt); rollbackErr != nil {
+						return snapshot, degradedConfigError(err, rollbackErr)
+					}
+					return snapshot, err
+				}
+				markConfigApplied(&snapshot)
+			}
+			m.syncSubscriptionState(&snapshot, receipt.After)
 			return snapshot, nil
 		})
 		if err != nil {
+			m.markConfigDegraded(ctx, err)
 			return nil, err
 		}
 		m.refreshSubscriptionLogSecrets()
-		catalog := m.subscriptions.Snapshot().Public()
-		for _, profile := range catalog.Profiles {
-			if profile.ID == added.ID {
-				return profile, nil
-			}
-		}
-		return nil, subscriptionsUnavailable()
+		return findPublicProfile(m.subscriptions.Snapshot().Public(), prepared.ProfileID())
 	})
 	if err != nil {
 		return subscription.PublicProfile{}, err
 	}
-	profile := result.(subscription.PublicProfile)
-	// Pull once immediately so the profile does not sit in Missing until a manual refresh.
-	// Registration is already durable: fetch failures keep the profile and surface last_error.
-	refreshed, refreshErr := m.RefreshSubscription(ctx, Operation{
-		ID:     operation.ID + "-fetch",
-		Source: operation.Source,
-	}, profile.ID)
-	if refreshErr != nil {
-		// Registration committed before its independent first-fetch operation.
-		// Return that child's existing occurrence as a warning, including on
-		// replay; do not publish another failure or change the saved result.
-		snapshot, ok := diagnostics.Snapshot(refreshErr)
-		if !ok {
-			snapshot = diagnostics.Describe(ctx, diagnostics.Record{Err: refreshErr})
-		}
-		diagnostics.ReturnWarnings(ctx, protocol.WarningOutcome{Warnings: []protocol.Warning{{Code: snapshot.Code, Message: "Subscription saved; first download failed", Diagnostic: &snapshot}}})
-		if current, findErr := findPublicProfile(m.subscriptions.Snapshot().Public(), profile.ID); findErr == nil {
-			return current, nil
-		}
-		return profile, nil
-	}
-	return refreshed, nil
+	return result.(subscription.PublicProfile), nil
 }
 
 func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, id string) (subscription.PublicProfile, error) {
@@ -329,6 +329,9 @@ func (m *Manager) SetSubscription(ctx context.Context, operation Operation, id s
 	return m.mutateSubscription(ctx, "sub-set:", operation, id, func(catalog *subscription.Catalog, profile *subscription.Profile) error {
 		intervalChanged := input.Interval != nil && *input.Interval != profile.Interval
 		urlChanged := input.URL != nil && *input.URL != profile.URL
+		if urlChanged && subscription.IsFileSource(*input.URL) != subscription.IsFileSource(profile.URL) {
+			return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "subscription source type cannot be changed; create a new subscription"}
+		}
 		if intervalChanged || urlChanged {
 			m.subscriptions.ResetRefreshSchedule(profile)
 		}

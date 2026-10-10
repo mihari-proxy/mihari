@@ -222,9 +222,16 @@ func rowFrom(subscription protocol.Subscription, active bool, pending string, no
 	}
 	// Column traffic uses the compact quota form (e.g. 9G/100G, design S1).
 	traffic := ui.FormatSubscriptionTrafficCompact(subscription.Upload, subscription.Download, subscription.Total)
+	proxy := proxyModeLabel(subscription.ProxyMode)
+	name := subscription.Name
+	if subscription.SourceType == "file" {
+		proxy = "Local file"
+		traffic = ""
+		name += " [file]"
+	}
 	return row{
-		active: marker, name: subscription.Name, state: state, load: load,
-		proxy: proxyModeLabel(subscription.ProxyMode), traffic: traffic, lastSuccess: lastSuccess, nextRefresh: next,
+		active: marker, name: name, state: state, load: load,
+		proxy: proxy, traffic: traffic, lastSuccess: lastSuccess, nextRefresh: next,
 		loadTone: phaseTone(phase), stateTone: stateTone,
 	}
 }
@@ -595,10 +602,16 @@ func (m *Model) subscriptionColumns() []ui.TableColumn {
 	// right instead of pushing related fields apart on wide terminals.
 	nameWidth, trafficWidth, modeWidth := 10, 11, 6
 	for _, subscription := range m.subscriptions {
-		nameWidth = max(nameWidth, lipgloss.Width(subscription.Name))
+		name := subscription.Name
+		mode := proxyModeLabel(subscription.ProxyMode)
+		if subscription.SourceType == "file" {
+			name += " [file]"
+			mode = "Local file"
+		}
+		nameWidth = max(nameWidth, lipgloss.Width(name))
 		traffic := ui.FormatSubscriptionTrafficCompact(subscription.Upload, subscription.Download, subscription.Total)
 		trafficWidth = max(trafficWidth, lipgloss.Width(traffic))
-		modeWidth = max(modeWidth, lipgloss.Width(proxyModeLabel(subscription.ProxyMode)))
+		modeWidth = max(modeWidth, lipgloss.Width(mode))
 	}
 	return []ui.TableColumn{
 		{ID: "name", Title: ui.NameLabel, MinWidth: 10, MaxWidth: min(nameWidth, 40), Flex: 3, Priority: 8},

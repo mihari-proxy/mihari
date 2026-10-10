@@ -131,62 +131,67 @@ type CompletedMsg struct{ Status protocol.OnboardingStatus }
 type CancelledMsg struct{}
 
 type Model struct {
-	ctx                context.Context
-	client             Client
-	newOperationID     func() string
-	step               step
-	status             protocol.OnboardingStatus
-	initial            protocol.OnboardingStatus
-	inputs             []textinput.Model
-	subscriptionInputs []textinput.Model
-	focusedField       int
-	loading            bool
-	lastError          string
-	settlementNotice   string
-	progressLine       string
-	errorAdvice        string
-	errorDetail        string
-	operationID        string
-	cancelExecution    context.CancelFunc
-	cancelSettlement   context.CancelFunc
-	executionGen       uint64
-	executionStarted   time.Time
-	executionNow       time.Time
-	executionLabel     string
-	cancelRequested    bool
-	settling           bool
-	resultUnknown      bool
-	statusUnsupported  bool
-	coreLocal          protocol.CoreStatus
-	coreLocalLoaded    bool
-	coreLocalGen       uint64
-	geoipLocal         protocol.GeoIPStatus
-	geoipLocalLoaded   bool
-	geoipLocalGen      uint64
-	coreResult         protocol.CoreInstallResult
-	addedSubscription  *protocol.Subscription
-	geoipResult        *protocol.GeoIPUpdateResult
-	geoipSkipped       bool
-	serviceStatus      protocol.ServiceStatus
-	serviceLoaded      bool
-	serviceErr         bool
-	serviceGen         uint64
-	portProbe          [3]portState
-	portOwners         [3]int
-	automatic          bool
-	resumePending      bool
-	refreshInPlace     bool
-	portRecovery       bool
-	waitingRestart     bool
-	subscriptionsErr   error
-	subscriptions      protocol.SubscriptionList
-	portProbeLoaded    bool
-	portProbeGen       uint64
-	probe              func(string) portState
-	width              int
-	scroll             int
-	height             int
-	theme              ui.Theme
+	localSource          bool
+	fileConfirmationNote string
+	fileConfirmation     bool
+	fileConfirmYes       bool
+	allowFileReferences  bool
+	ctx                  context.Context
+	client               Client
+	newOperationID       func() string
+	step                 step
+	status               protocol.OnboardingStatus
+	initial              protocol.OnboardingStatus
+	inputs               []textinput.Model
+	subscriptionInputs   []textinput.Model
+	focusedField         int
+	loading              bool
+	lastError            string
+	settlementNotice     string
+	progressLine         string
+	errorAdvice          string
+	errorDetail          string
+	operationID          string
+	cancelExecution      context.CancelFunc
+	cancelSettlement     context.CancelFunc
+	executionGen         uint64
+	executionStarted     time.Time
+	executionNow         time.Time
+	executionLabel       string
+	cancelRequested      bool
+	settling             bool
+	resultUnknown        bool
+	statusUnsupported    bool
+	coreLocal            protocol.CoreStatus
+	coreLocalLoaded      bool
+	coreLocalGen         uint64
+	geoipLocal           protocol.GeoIPStatus
+	geoipLocalLoaded     bool
+	geoipLocalGen        uint64
+	coreResult           protocol.CoreInstallResult
+	addedSubscription    *protocol.Subscription
+	geoipResult          *protocol.GeoIPUpdateResult
+	geoipSkipped         bool
+	serviceStatus        protocol.ServiceStatus
+	serviceLoaded        bool
+	serviceErr           bool
+	serviceGen           uint64
+	portProbe            [3]portState
+	portOwners           [3]int
+	automatic            bool
+	resumePending        bool
+	refreshInPlace       bool
+	portRecovery         bool
+	waitingRestart       bool
+	subscriptionsErr     error
+	subscriptions        protocol.SubscriptionList
+	portProbeLoaded      bool
+	portProbeGen         uint64
+	probe                func(string) portState
+	width                int
+	scroll               int
+	height               int
+	theme                ui.Theme
 }
 
 func New(client Client, newOperationID func() string) *Model {
@@ -403,6 +408,13 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		if typed.err != nil {
 			var apiError protocol.APIError
+			if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeInvalidArgument && apiError.Details["confirmation_required"] == "file_references" {
+				m.fileConfirmationNote = diagnostics.EscapeTerminal(apiError.Message)
+				m.fileConfirmation = true
+				m.fileConfirmYes = false
+				m.lastError = ""
+				return m, nil
+			}
 			if errors.As(typed.err, &apiError) && apiError.Code == protocol.CodeRevisionConflict {
 				m.fail(ui.SetupChangedMessage, typed.err)
 				return m, m.reloadInPlace()
@@ -565,6 +577,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.step == stepSubscription && m.fileConfirmation {
+		return m.updateSubscription(message, key)
+	}
 	if key.String() == "esc" {
 		if m.step > stepEndpoints {
 			m.step--
@@ -644,13 +659,17 @@ func (m *Model) forwardTextInput(message tea.Msg) (ui.Page, tea.Cmd) {
 		m.inputs[m.focusedField] = updated
 		return m, command
 	case stepSubscription:
-		if m.hasSubscriptions() || m.subscriptionsErr != nil {
+		if m.fileConfirmation || m.focusedField == 2 || m.hasSubscriptions() || m.subscriptionsErr != nil {
 			return m, nil
 		}
 		if len(m.subscriptionInputs) == 0 || m.focusedField < 0 || m.focusedField >= len(m.subscriptionInputs) {
 			return m, nil
 		}
+		before := m.subscriptionInputs[m.focusedField].Value()
 		updated, command := m.subscriptionInputs[m.focusedField].Update(message)
+		if m.focusedField == 1 && before != updated.Value() {
+			m.allowFileReferences = false
+		}
 		m.subscriptionInputs[m.focusedField] = updated
 		return m, command
 	default:
@@ -695,6 +714,32 @@ func (m *Model) updateEndpoints(message tea.Msg, key tea.KeyPressMsg) (ui.Page, 
 
 // updateSubscription handles the initial form, saved-profile retry and explicit optional skip.
 func (m *Model) updateSubscription(message tea.Msg, key tea.KeyPressMsg) (ui.Page, tea.Cmd) {
+	if m.fileConfirmation {
+		switch key.String() {
+		case "left", "right", "tab", "shift+tab":
+			m.fileConfirmYes = !m.fileConfirmYes
+		case "esc":
+			m.fileConfirmation = false
+		case "enter":
+			m.fileConfirmation = false
+			if m.fileConfirmYes {
+				m.allowFileReferences = true
+				return m, m.submitSubscriptionDraft()
+			}
+		}
+		return m, nil
+	}
+	if m.focusedField == 2 && (key.String() == "left" || key.String() == "right" || key.String() == "space") {
+		m.localSource = !m.localSource
+		m.allowFileReferences = false
+		m.subscriptionInputs[1].SetValue("")
+		m.subscriptionInputs[1].Placeholder = "https://example.test/subscription"
+		if m.localSource {
+			m.subscriptionInputs[1].Placeholder = "Absolute YAML file path"
+		}
+		return m, nil
+	}
+
 	if key.String() == "ctrl+s" {
 		m.step = stepGeoIP
 		m.clearFailure()
@@ -723,19 +768,16 @@ func (m *Model) updateSubscription(message tea.Msg, key tea.KeyPressMsg) (ui.Pag
 		m.focusSubscription((m.focusedField - 1 + len(m.subscriptionInputs)) % len(m.subscriptionInputs))
 		return m, m.subscriptionInputs[m.focusedField].Focus()
 	case "enter":
-		name := strings.TrimSpace(m.subscriptionInputs[0].Value())
-		url := strings.TrimSpace(m.subscriptionInputs[1].Value())
-		if name == "" && url == "" {
-			m.step = stepGeoIP
-			return m, m.fetchGeoIPLocal()
-		}
-		if name == "" || url == "" {
-			return m, m.localFailure("Invalid subscription", protocol.APIError{Code: protocol.CodeInvalidArgument, Message: ui.InvalidSubscriptionForm})
-		}
-		m.loading = true
-		return m, m.addSubscription(name, url)
+		return m, m.submitSubscriptionDraft()
 	}
+	if m.focusedField >= 2 {
+		return m, nil
+	}
+	before := m.subscriptionInputs[m.focusedField].Value()
 	updated, command := m.subscriptionInputs[m.focusedField].Update(message)
+	if m.focusedField == 1 && before != updated.Value() {
+		m.allowFileReferences = false
+	}
 	m.subscriptionInputs[m.focusedField] = updated
 	return m, command
 }
@@ -799,7 +841,7 @@ func endpointInputs(status protocol.OnboardingStatus) []textinput.Model {
 }
 
 func subscriptionInputs() []textinput.Model {
-	return makeInputs([]string{"", ""}, []string{"Optional subscription name", "https://example.test/subscription"})
+	return makeInputs([]string{"", "", ""}, []string{"Optional subscription name", "https://example.test/subscription", ""})
 }
 
 func makeInputs(values, placeholders []string) []textinput.Model {
@@ -1061,9 +1103,10 @@ func (m *Model) installCore() tea.Cmd {
 // addSubscription submits one profile and retains successful registration for reuse or retry.
 func (m *Model) addSubscription(name, url string) tea.Cmd {
 	revision := m.status.Revision
+	allow := m.allowFileReferences
 	ctx, gen, operationID := m.beginExecution("Saving and fetching subscription")
 	return func() tea.Msg {
-		result, err := m.client.AddSubscription(ctx, protocol.SubscriptionAddRequest{OperationID: operationID, IfRevision: &revision, Name: name, URL: url})
+		result, err := m.client.AddSubscription(ctx, protocol.SubscriptionAddRequest{OperationID: operationID, IfRevision: &revision, Name: name, URL: url, AllowFileReferences: allow})
 		// Capture the added subscription so stepReview shows its name, not the
 		// "未添加（已跳过）" fallback. See installCore for the happens-before note.
 		subscription := result.Subscription
@@ -1220,4 +1263,25 @@ func defaultOperationID() string {
 		return "tui-setup-" + hex.EncodeToString(raw[:])
 	}
 	return fmt.Sprintf("tui-setup-%d", fallbackOperationID.Add(1))
+}
+
+func (m *Model) submitSubscriptionDraft() tea.Cmd {
+	name := strings.TrimSpace(m.subscriptionInputs[0].Value())
+	source := strings.TrimSpace(m.subscriptionInputs[1].Value())
+	if name == "" && source == "" {
+		m.step = stepGeoIP
+		return m.fetchGeoIPLocal()
+	}
+	if name == "" || source == "" {
+		return m.localFailure("Invalid subscription", protocol.APIError{Code: protocol.CodeInvalidArgument, Message: ui.InvalidSubscriptionForm})
+	}
+	if m.localSource {
+		uri, err := platform.FileURI(source)
+		if err != nil {
+			return m.localFailure("Invalid YAML file path", err)
+		}
+		source = uri
+	}
+	m.loading = true
+	return m.addSubscription(name, source)
 }

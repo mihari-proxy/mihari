@@ -156,7 +156,7 @@ func (c *ConfigCapability) verify(ctx context.Context, root string, committed bo
 	return c.file.verify(ctx)
 }
 func fixedEnvironment(home string) []string {
-	return []string{"PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C", "HOME=" + home, "TMPDIR=" + filepath.Join(home, "tmp")}
+	return []string{"PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C", "SKIP_SAFE_PATH_CHECK=true", "HOME=" + home, "TMPDIR=" + filepath.Join(home, "tmp")}
 }
 
 type trustedCandidate struct {

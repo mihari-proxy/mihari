@@ -2,6 +2,7 @@ package setup
 
 import (
 	"fmt"
+	"github.com/charmbracelet/x/ansi"
 	"strings"
 	"time"
 
@@ -128,7 +129,30 @@ func (m *Model) subscriptionStatusLines() []string {
 	}
 	if !m.hasSubscriptions() {
 		lines = append(lines, ui.SetupSubscriptionBody, "", m.theme.Muted.Render("Current status · No subscriptions"), "")
-		lines = append(lines, renderInputs([]string{"Name", "URL"}, m.subscriptionInputs, m.focusedField)...)
+		labels := []string{"Name", "URL"}
+		if m.localSource {
+			labels[1] = "YAML path"
+		}
+		lines = append(lines, renderInputs(labels, m.subscriptionInputs[:2], m.focusedField)...)
+		source := "URL"
+		if m.localSource {
+			source = "Local file"
+		}
+		row := "  Source  ‹ " + source + " ›"
+		if m.focusedField == 2 {
+			row = m.theme.RowFocus.Render(ui.FocusMarker + "Source  ‹ " + source + " ›")
+		}
+		lines = append(lines, row)
+		if m.fileConfirmation {
+			choices := "Continue    [Cancel]"
+			if m.fileConfirmYes {
+				choices = "[Continue]    Cancel"
+			}
+			lines = append(lines, "")
+			lines = append(lines, strings.Split(ansi.Wrap(m.fileConfirmationNote, max(20, min(86, m.width)-4), ""), "\n")...)
+			lines = append(lines, "", choices)
+			return append(lines, "", m.FooterHints())
+		}
 		return append(lines, "", ui.SetupSubscriptionHelp)
 	}
 	lines = append(lines, "", m.theme.Title.Render("Current status"), "  "+m.subscriptionCounts(),

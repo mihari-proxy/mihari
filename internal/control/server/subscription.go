@@ -93,7 +93,7 @@ func (s *Server) addSubscription(writer http.ResponseWriter, request *http.Reque
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "subscription.add"})
 	defer s.operations.begin(body.OperationID)()
-	profile, err := runtime.AddSubscription(ctx, runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, runtimeapi.AddSubscriptionInput{Name: body.Name, URL: body.URL, ProxyMode: body.ProxyMode})
+	profile, err := runtime.AddSubscription(ctx, runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, runtimeapi.AddSubscriptionInput{Name: body.Name, URL: body.URL, ProxyMode: body.ProxyMode, AllowFileReferences: body.AllowFileReferences})
 	if err != nil {
 		s.writeControlError(ctx, writer, err)
 		return
@@ -203,7 +203,7 @@ func subscriptionResultDTO(profile subscription.PublicProfile, operationID strin
 
 func subscriptionDTO(profile subscription.PublicProfile) protocol.Subscription {
 	return protocol.Subscription{
-		ID: profile.ID, Name: profile.Name, Enabled: profile.Enabled, AutoRefresh: profile.AutoRefresh,
+		SourceType: profile.SourceType, ID: profile.ID, Name: profile.Name, Enabled: profile.Enabled, AutoRefresh: profile.AutoRefresh,
 		Interval: profile.Interval, Cached: profile.Cached, Generation: profile.Generation,
 		UpdatedAt: profile.UpdatedAt, LastError: profile.LastError,
 		CacheOutdated: profile.CacheOutdated, ScheduleFrom: profile.ScheduleFrom, IntervalRefreshRequired: profile.IntervalRefreshRequired,

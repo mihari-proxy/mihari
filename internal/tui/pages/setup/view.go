@@ -9,6 +9,9 @@ import (
 
 // FooterHints keeps actions accurate for the current step and work state.
 func (m *Model) FooterHints() string {
+	if m.fileConfirmation {
+		return "←/→/Tab choose  Enter confirm  Esc cancel  PgUp/PgDn scroll"
+	}
 	if m.loading {
 		if m.settling || m.cancelRequested {
 			return "Waiting for settlement  Ctrl+C quit (saved work is kept)"
@@ -47,7 +50,7 @@ func (m *Model) FooterHints() string {
 		} else if m.subscriptionNeedsRetry() {
 			hints = "Enter retry download  Ctrl+S skip  Esc back  Ctrl+Q exit"
 		} else if !m.hasSubscriptions() {
-			hints += "  Ctrl+S skip"
+			hints += "  ←/→/Space source  Ctrl+S skip"
 		}
 	}
 	if m.step == stepGeoIP {

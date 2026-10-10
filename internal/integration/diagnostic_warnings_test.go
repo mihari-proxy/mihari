@@ -38,7 +38,7 @@ func (f *failedDiagnosticSubscriptionFetch) Fetch(context.Context, subscription.
 	return subscription.FetchResult{}, errors.New("first fetch token=fixture-cli-original")
 }
 
-func TestDiagnosticWarnings_SubscriptionFirstFetchReachesCLIThroughIPC(t *testing.T) {
+func TestSubscriptionFailure_FirstFetchReachesCLIThroughIPC(t *testing.T) {
 	fetcher := &failedDiagnosticSubscriptionFetch{}
 	fixture := newSubscriptionControlFixtureWithDownloader(t, fetcher, &editController{})
 	for _, asJSON := range []bool{false, true} {
@@ -48,22 +48,21 @@ func TestDiagnosticWarnings_SubscriptionFirstFetchReachesCLIThroughIPC(t *testin
 		}
 		var stdout, stderr bytes.Buffer
 		code := cli.Execute(context.Background(), args, &stdout, &stderr, cli.Dependencies{SubscriptionClient: fixture.client, NewOperationID: func() string { return "first-fetch-cli" }})
-		if code != cli.ExitOK {
-			t.Fatalf("registration became failure: %d %s", code, stderr.String())
+		if code == cli.ExitOK || stdout.Len() != 0 || !strings.Contains(stderr.String(), "token=fixture-cli-original") {
+			t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 		}
 		if asJSON {
-			var result protocol.SubscriptionResult
-			if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			var envelope map[string]any
+			if err := json.Unmarshal(stderr.Bytes(), &envelope); err != nil {
 				t.Fatal(err)
 			}
-			if stderr.Len() != 0 || result.Subscription.ID == "" || len(result.Warnings) != 1 || result.Warnings[0].Diagnostic == nil || !strings.Contains(result.Warnings[0].Diagnostic.Detail, "token=fixture-cli-original") {
-				t.Fatal("JSON lost committed result or original fetch cause")
-			}
-		} else if !strings.Contains(stdout.String(), "Fixture") || !strings.Contains(stderr.String(), "token=fixture-cli-original") {
-			t.Fatal("text omitted first-fetch warning")
 		}
 	}
 	if fetcher.calls.Load() != 1 {
-		t.Fatal("same operation was replayed during diagnostic delivery")
+		t.Fatal("same operation repeated fetch")
+	}
+	list, err := fixture.client.Subscriptions(context.Background())
+	if err != nil || len(list.Subscriptions) != 1 {
+		t.Fatalf("list=%+v err=%v", list, err)
 	}
 }

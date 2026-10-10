@@ -102,7 +102,7 @@ func TestOperationDiagnostic_MissingReporterStillReturnsOriginalDetail(t *testin
 	}
 }
 
-func TestSubscriptionDiagnostic_FirstFetchFailureReturnsWarningWithoutReplay(t *testing.T) {
+func TestSubscriptionDiagnostic_FirstFetchFailureReplaysOneFailure(t *testing.T) {
 	cause := errors.New("first fetch token=fixture-first-download")
 	fetcher := &scriptedSubscriptionFetcher{entries: []scriptedSubscriptionFetch{{err: cause}}}
 	manager, _, _, _ := subscriptionManagerWithDownloader(t, http.NotFoundHandler(), fetcher)
@@ -111,37 +111,23 @@ func TestSubscriptionDiagnostic_FirstFetchFailureReturnsWarningWithoutReplay(t *
 		t.Fatal(err)
 	}
 	manager.diagnosticReporter = diagnostics.NewOwner(history, nil).Report
-	var id, recordID string
+	var recordID string
 	for attempt := 0; attempt < 2; attempt++ {
-		ctx, receipt := diagnostics.WithResult(context.Background())
-		profile, err := manager.AddSubscription(ctx, Operation{ID: "add-partial", Source: "test"}, AddSubscriptionInput{Name: "fixture", URL: "https://fixture.invalid/sub"})
-		if err != nil || profile.ID == "" || profile.Cached {
-			t.Fatal("failed fetch invalidated registration")
+		_, err := manager.AddSubscription(context.Background(), Operation{ID: "add-partial", Source: "test"}, AddSubscriptionInput{Name: "fixture", URL: "https://fixture.invalid/sub"})
+		if !errors.Is(err, cause) || len(manager.Subscriptions().Profiles) != 0 {
+			t.Fatalf("err=%v", err)
 		}
-		if attempt == 0 {
-			id = profile.ID
-		} else if profile.ID != id {
-			t.Fatal("replay registered another subscription")
-		}
-		warnings := receipt.Warnings()
-		if len(warnings.Warnings) != 1 || warnings.Warnings[0].Diagnostic == nil {
-			t.Fatal("successful add response lost first-fetch warning")
-		}
-		snapshot := warnings.Warnings[0].Diagnostic
-		if snapshot.ID == "" || snapshot.OperationID != "add-partial-fetch" {
-			t.Fatal("warning did not reuse child owner")
-		}
-		detail := history.Get(snapshot.ID)
-		if detail.Diagnostic == nil || !strings.Contains(detail.Diagnostic.Detail, cause.Error()) {
-			t.Fatal("original first-fetch cause lost")
+		snapshot, ok := diagnostics.Snapshot(err)
+		if !ok || snapshot.ID == "" || snapshot.OperationID != "add-partial" || !strings.Contains(snapshot.Detail, cause.Error()) {
+			t.Fatalf("snapshot=%+v", snapshot)
 		}
 		if attempt == 0 {
 			recordID = snapshot.ID
 		} else if snapshot.ID != recordID {
-			t.Fatal("replay published new child occurrence")
+			t.Fatal("replay published another occurrence")
 		}
 	}
 	if fetcher.CallCount() != 1 || len(history.List("", 0, 100).Records) != 1 {
-		t.Fatal("first-fetch failure executed or published more than once")
+		t.Fatal("failure executed or published more than once")
 	}
 }

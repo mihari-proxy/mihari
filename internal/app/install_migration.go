@@ -745,6 +745,7 @@ func validateStagedBusiness(ctx context.Context, opts migrationOptions, prepared
 		if err != nil {
 			return err
 		}
+		subscription.ResolveFileReferences(document, profile.CacheBaseDir)
 		out, err := subscription.Generate(document, nil, settings)
 		if err != nil {
 			return err

@@ -9,7 +9,7 @@ import (
 )
 
 func TestSetupOperationIPC_TracksRegistrationThroughFirstDownload(t *testing.T) {
-	fixture := newSubscriptionControlFixture(t)
+	fixture := newSubscriptionControlFixture(t, &editController{})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	done := make(chan error, 1)

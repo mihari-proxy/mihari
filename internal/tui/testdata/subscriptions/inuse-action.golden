@@ -7,6 +7,7 @@
  › 6 Subs              │  Edit subscription                                                   │
    7 Web GUI           │                                                                      │
    8 System            │  ● In use · Live · Enabled                                           │
+                       │  Source        URL                                                   │
                        │  Traffic       52.5 GiB/80.0 GiB                                     │
                        │  Cache         Available                                             │
                        │  Last update   2026-09-15 01:00                                      │
@@ -29,7 +30,6 @@
                        │                               [ Save ]                               │
                        │                                                                      │
                        ╰──────────────────────────────────────────────────────────────────────╯
-
 
 
 

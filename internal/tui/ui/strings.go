@@ -439,7 +439,7 @@ const (
 	SetupEnterInstall               = "Enter install  Esc back"
 	SetupSubscriptionTitle          = "Subscription (optional)"
 	SetupSubscriptionBody           = "Add an initial subscription, or leave both fields blank."
-	SetupSubscriptionHelp           = "Enter add/skip empty form  Tab fields  Esc back"
+	SetupSubscriptionHelp           = "Enter add/skip empty form  Tab fields  ←/→/Space source  Esc back"
 	SetupGeoIPTitle                 = "Local GeoIP databases"
 	SetupGeoIPBody                  = "Prepare Country and ASN databases for local connection details."
 	SetupGeoIPLocalReady            = "Enter reuse Country/ASN; no download needed."

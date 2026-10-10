@@ -23,6 +23,7 @@ const (
 	saveRetryConfirm
 	saveChecking
 	saveRunning
+	saveFileReferences
 )
 
 type revealResultMsg struct {
@@ -136,6 +137,13 @@ func (m *Model) finishSave(result mutationResultMsg) tea.Cmd {
 		return tea.Batch(m.closeForm(), m.loadSpinCmdIfNeeded())
 	}
 	var api protocol.APIError
+	if errors.As(result.err, &api) && api.Code == protocol.CodeInvalidArgument && api.Details["confirmation_required"] == "file_references" {
+		m.saveState = saveFileReferences
+		m.confirmYes = false
+		m.dialogScroll = 0
+		m.dialogNote = diagnostics.EscapeTerminal(api.Message)
+		return nil
+	}
 	if errors.As(result.err, &api) && api.Code == protocol.CodeRevisionConflict {
 		m.saveState = saveConflict
 		m.confirmYes = false
@@ -170,30 +178,44 @@ func (m *Model) updateSaveKeys(message tea.Msg) tea.Cmd {
 		return nil
 	}
 	name := key.String()
+	if m.saveState == saveFileReferences {
+		if name == "pgup" {
+			m.dialogScroll = max(0, m.dialogScroll-3)
+			return nil
+		}
+		if name == "pgdown" {
+			m.dialogScroll += 3
+			return nil
+		}
+	}
 	if name == "esc" {
 		if m.saveState == saveRetryConfirm {
 			m.saveState = saveUnknown
 			m.dialogNote = "Unable to confirm the previous save."
 			return nil
 		}
-		if m.saveState != saveConflict {
+		if m.saveState != saveConflict && m.saveState != saveFileReferences {
 			m.lastError = "Closing does not cancel the save."
 		}
 		return m.closeForm()
 	}
 	switch m.saveState {
-	case saveConflict, saveRetryConfirm:
+	case saveConflict, saveRetryConfirm, saveFileReferences:
 		if name == "left" || name == "right" || name == "tab" || name == "shift+tab" {
 			m.confirmYes = !m.confirmYes
 		}
 		if name == "enter" {
 			if !m.confirmYes {
-				if m.saveState == saveConflict {
+				if m.saveState == saveConflict || m.saveState == saveFileReferences {
 					return m.closeForm()
 				}
 				m.saveState = saveUnknown
 				m.dialogNote = "Unable to confirm the previous save."
 				return nil
+			}
+			if m.saveState == saveFileReferences {
+				m.form.allowReferences = true
+				return m.submitForm(m.form, m.formID, m.formRevision)
 			}
 			return m.checkSave(m.saveState)
 		}
@@ -329,7 +351,7 @@ func (m *Model) formHelpMode() string {
 			return ui.ModeSubscriptionWaiting
 		}
 		return ui.ModeSubscriptionUnknown
-	case saveConflict, saveRetryConfirm:
+	case saveConflict, saveRetryConfirm, saveFileReferences:
 		return ui.ModeSubscriptionConfirm
 	}
 	if m.form.isCycle() {
@@ -444,7 +466,14 @@ func (m *Model) formStatus() string {
 		cache = "Available"
 	}
 	lines := []string{inUse + " · " + ui.ToneStyle(m.theme, phaseTone(phase)).Render(status) + " · " + enabledLabel(p.Enabled)}
-	for _, field := range [][2]string{{"Traffic", traffic}, {"Cache", cache}, {"Last update", formatTimestamp(p.UpdatedAt)}, {"Next update", nextRefreshLabel(p, m.now(), m.globalInterval)}} {
+	source := "URL"
+	if p.SourceType == "file" {
+		source = "Local file"
+	}
+	for _, field := range [][2]string{{"Source", source}, {"Traffic", traffic}, {"Cache", cache}, {"Last update", formatTimestamp(p.UpdatedAt)}, {"Next update", nextRefreshLabel(p, m.now(), m.globalInterval)}} {
+		if p.SourceType == "file" && field[0] == "Traffic" {
+			continue
+		}
 		lines = append(lines, m.theme.Muted.Render(fmt.Sprintf("%-14s", field[0]))+field[1])
 	}
 	if p.LastError != "" {
@@ -473,8 +502,11 @@ func (m *Model) Stop() {
 func (m *Model) saveBody() string {
 	body := m.dialogNote
 	switch m.saveState {
-	case saveConflict, saveRetryConfirm:
+	case saveConflict, saveRetryConfirm, saveFileReferences:
 		yes := "Overwrite"
+		if m.saveState == saveFileReferences {
+			yes = "Continue"
+		}
 		if m.saveState == saveRetryConfirm {
 			yes = "Submit again"
 		}

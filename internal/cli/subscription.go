@@ -1,12 +1,17 @@
 package cli
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
+	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/subscription"
 	"github.com/spf13/cobra"
 )
@@ -43,6 +48,12 @@ func newSubscriptionListCommand(dependencies Dependencies, options *runOptions) 
 			if profile.ID == result.ActiveID {
 				marker = "*"
 			}
+			if profile.SourceType == "file" {
+				if _, err := fmt.Fprintf(command.OutOrStdout(), "%s %s\t%s\tenabled=%t\tcached=%t\tauto=%t\tsource=file\t%s\n", marker, profile.ID, profile.Name, profile.Enabled, profile.Cached, profile.AutoRefresh, effectiveInterval(profile.Interval, result.GlobalInterval)); err != nil {
+					return err
+				}
+				continue
+			}
 			if _, err := fmt.Fprintf(command.OutOrStdout(), "%s %s\t%s\tenabled=%t\tcached=%t\tauto=%t\tproxy=%s\t%s\n", marker, profile.ID, profile.Name, profile.Enabled, profile.Cached, profile.AutoRefresh, proxyModeLabel(profile.ProxyMode), effectiveInterval(profile.Interval, result.GlobalInterval)); err != nil {
 				return err
 			}
@@ -70,11 +81,27 @@ func newSubscriptionShowCommand(dependencies Dependencies, options *runOptions) 
 
 func newSubscriptionAddCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
 	var revision uint64
-	var proxyMode string
-	command := &cobra.Command{Use: "add NAME URL", Short: "Add a subscription", Args: cobra.ExactArgs(2), RunE: func(command *cobra.Command, args []string) error {
+	var proxyMode, file string
+	var allowReferences bool
+	command := &cobra.Command{Use: "add NAME [URL]", Short: "Import and cache a YAML subscription from URL or --file", Args: cobra.RangeArgs(1, 2), RunE: func(command *cobra.Command, args []string) error {
 		client, err := subscriptionClient(dependencies)
 		if err != nil {
 			return err
+		}
+		source := ""
+		if command.Flags().Changed("file") {
+			if len(args) != 1 || command.Flags().Changed("proxy") {
+				return invalidArgument("--file cannot be combined with URL or --proxy")
+			}
+			source, err = platform.FileURI(file)
+			if err != nil {
+				return invalidArgument(err.Error())
+			}
+		} else {
+			if len(args) != 2 {
+				return invalidArgument("provide URL or --file with an absolute path")
+			}
+			source = args[1]
 		}
 		mode := resolveProxyFlag(proxyMode)
 		if !subscription.ValidProxyMode(mode) {
@@ -84,7 +111,28 @@ func newSubscriptionAddCommand(dependencies Dependencies, options *runOptions) *
 		if err != nil {
 			return err
 		}
-		result, err := client.AddSubscription(subscriptionOperationContext(command.Context(), id, "subscription.add"), protocol.SubscriptionAddRequest{OperationID: id, IfRevision: revisionFlag(command, revision), Name: args[0], URL: args[1], ProxyMode: mode})
+		request := protocol.SubscriptionAddRequest{OperationID: id, IfRevision: revisionFlag(command, revision), Name: args[0], URL: source, ProxyMode: mode, AllowFileReferences: allowReferences}
+		result, err := client.AddSubscription(subscriptionOperationContext(command.Context(), id, "subscription.add"), request)
+		var api protocol.APIError
+		if err != nil && errors.As(err, &api) && api.Code == protocol.CodeInvalidArgument && api.Details["confirmation_required"] == "file_references" && dependencies.Interactive && !options.json {
+			if _, writeErr := fmt.Fprintln(command.ErrOrStderr(), diagnostics.EscapeTerminal(api.Message)+" Continue? [y/N]"); writeErr != nil {
+				return writeErr
+			}
+			scanner := bufio.NewScanner(command.InOrStdin())
+			accepted := scanner.Scan() && (strings.EqualFold(strings.TrimSpace(scanner.Text()), "y") || strings.EqualFold(strings.TrimSpace(scanner.Text()), "yes"))
+			if scanner.Err() != nil {
+				return invalidArgument("could not read file reference confirmation")
+			}
+			if !accepted {
+				return invalidArgument("subscription creation cancelled")
+			}
+			request.OperationID, err = operationID(dependencies)
+			if err != nil {
+				return err
+			}
+			request.AllowFileReferences = true
+			result, err = client.AddSubscription(subscriptionOperationContext(command.Context(), request.OperationID, "subscription.add"), request)
+		}
 		if err != nil {
 			return classifyRuntimeError(err)
 		}
@@ -92,6 +140,8 @@ func newSubscriptionAddCommand(dependencies Dependencies, options *runOptions) *
 	}}
 	command.Flags().Uint64Var(&revision, "if-revision", 0, "require this state revision")
 	command.Flags().StringVar(&proxyMode, "proxy", "", "refresh fetch mode: direct (default), proxy, or auto")
+	command.Flags().StringVar(&file, "file", "", "absolute YAML file path or file URI, read by daemon")
+	command.Flags().BoolVar(&allowReferences, "allow-file-references", false, "accept native mihomo local file references and their runtime effects")
 	return command
 }
 
@@ -144,7 +194,7 @@ func newSubscriptionEnabledCommand(action string, enabled bool, dependencies Dep
 }
 
 func newSubscriptionSetCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
-	var name, rawURL, interval, globalInterval, proxyMode string
+	var name, rawURL, interval, globalInterval, proxyMode, file string
 	var autoRefresh bool
 	var revision uint64
 	command := &cobra.Command{Use: "set ID", Short: "Change subscription settings", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
@@ -160,8 +210,21 @@ func newSubscriptionSetCommand(dependencies Dependencies, options *runOptions) *
 		if command.Flags().Changed("name") {
 			request.Name = &name
 		}
+		if command.Flags().Changed("url") && command.Flags().Changed("file") {
+			return invalidArgument("--url and --file are mutually exclusive")
+		}
 		if command.Flags().Changed("url") {
 			request.URL = &rawURL
+		}
+		if command.Flags().Changed("file") {
+			source, err := platform.FileURI(file)
+			if err != nil {
+				return invalidArgument(err.Error())
+			}
+			if command.Flags().Changed("proxy") {
+				return invalidArgument("--file cannot be combined with --proxy")
+			}
+			request.URL = &source
 		}
 		if command.Flags().Changed("interval") {
 			request.Interval = &interval
@@ -190,6 +253,7 @@ func newSubscriptionSetCommand(dependencies Dependencies, options *runOptions) *
 	}}
 	command.Flags().StringVar(&name, "name", "", "new display name")
 	command.Flags().StringVar(&rawURL, "url", "", "new private subscription URL")
+	command.Flags().StringVar(&file, "file", "", "new absolute YAML file path or file URI; source type stays fixed")
 	command.Flags().StringVar(&interval, "interval", "", "per-subscription interval; empty follows global")
 	command.Flags().BoolVar(&autoRefresh, "auto-refresh", true, "enable scheduled refresh")
 	command.Flags().StringVar(&globalInterval, "global-interval", "", "global refresh interval")
@@ -259,6 +323,10 @@ func printSubscription(command *cobra.Command, profile protocol.Subscription) er
 	updated := "never"
 	if !profile.UpdatedAt.IsZero() {
 		updated = profile.UpdatedAt.Local().Format(time.RFC3339)
+	}
+	if profile.SourceType == "file" {
+		_, err := fmt.Fprintf(command.OutOrStdout(), "ID: %s\nName: %s\nSource: Local file\nEnabled: %t\nCached: %t\nAutomatic refresh: %t\nUpdated: %s\n", profile.ID, profile.Name, profile.Enabled, profile.Cached, profile.AutoRefresh, updated)
+		return err
 	}
 	_, err := fmt.Fprintf(command.OutOrStdout(), "ID: %s\nName: %s\nEnabled: %t\nCached: %t\nAutomatic refresh: %t\nProxy mode: %s\nUpdated: %s\n", profile.ID, profile.Name, profile.Enabled, profile.Cached, profile.AutoRefresh, proxyModeLabel(profile.ProxyMode), updated)
 	return err

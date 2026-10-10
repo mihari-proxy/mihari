@@ -3,6 +3,7 @@ package protocol
 import "time"
 
 type Subscription struct {
+	SourceType string `json:"source_type,omitempty"`
 	// CacheOutdated reports a cache fetched from a different current URL.
 	CacheOutdated bool `json:"cache_outdated,omitempty"`
 	// ScheduleFrom overrides cache age as the next refresh scheduling origin.
@@ -53,11 +54,12 @@ type SubscriptionResult struct {
 }
 
 type SubscriptionAddRequest struct {
-	OperationID string  `json:"operation_id"`
-	IfRevision  *uint64 `json:"if_revision,omitempty"`
-	Name        string  `json:"name"`
-	URL         string  `json:"url"`
-	ProxyMode   string  `json:"proxy_mode,omitempty"`
+	AllowFileReferences bool    `json:"allow_file_references,omitempty"`
+	OperationID         string  `json:"operation_id"`
+	IfRevision          *uint64 `json:"if_revision,omitempty"`
+	Name                string  `json:"name"`
+	URL                 string  `json:"url"`
+	ProxyMode           string  `json:"proxy_mode,omitempty"`
 }
 
 type SubscriptionEnabledRequest struct {

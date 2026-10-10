@@ -292,45 +292,19 @@ func TestSubscriptionDiagnostic_FailedReplayAndNewIDKeepCausesIsolated(t *testin
 	}
 }
 
-func TestSubscriptionDiagnostic_AddFailedChildKeepsSafeLastErrorAndCause(t *testing.T) {
-	const private = "private-add-fetch-sentinel"
-	cause := &os.PathError{Op: "read", Path: "/private/" + private, Err: os.ErrPermission}
+func TestSubscriptionDiagnostic_AddFailureKeepsCauseWithoutRegistration(t *testing.T) {
+	cause := &os.PathError{Op: "read", Path: "/private/private-add-fetch-sentinel", Err: os.ErrPermission}
 	fetcher := &scriptedSubscriptionFetcher{entries: []scriptedSubscriptionFetch{{err: cause}}}
-	manager, _, _, _ := subscriptionManagerWithDownloader(t, http.NotFoundHandler(), fetcher)
-
-	var output bytes.Buffer
-	level := new(slog.LevelVar)
-	level.Set(slog.LevelDebug)
-	redactor := logging.NewRedactor(private)
-	manager.diagnosticReporter = logging.NewDiagnosticReporter(slog.New(logging.NewJSONHandler(&output, level, "daemon", redactor)), redactor)
-	profile, err := manager.AddSubscription(context.Background(), Operation{ID: "add", Source: "test"}, AddSubscriptionInput{Name: "Broken", URL: "https://example.test/sub"})
-	if err != nil {
-		t.Fatalf("registration should survive child failure: %v", err)
+	manager, service, _, _ := subscriptionManagerWithDownloader(t, http.NotFoundHandler(), fetcher)
+	recorder := &coreDiagnosticRecorder{}
+	manager.diagnosticReporter = recorder.report
+	_, err := manager.AddSubscription(context.Background(), Operation{ID: "add", Source: "test"}, AddSubscriptionInput{Name: "Broken", URL: "https://example.test/sub"})
+	if !errors.Is(err, cause) || len(service.Snapshot().Profiles) != 0 {
+		t.Fatalf("err=%v catalog=%+v", err, service.Snapshot())
 	}
-	if profile.Cached || profile.LastError != "subscription refresh failed" {
-		t.Fatalf("unsafe or unexpected add response: %#v", profile)
-	}
-	catalog, err := json.Marshal(manager.Subscriptions())
-	if err != nil || strings.Contains(string(catalog), private) {
-		t.Fatalf("catalog response leaked private cause: %s err=%v", catalog, err)
-	}
-
-	raw := output.String()
-	decoder := json.NewDecoder(strings.NewReader(raw))
-	var records []map[string]any
-	for decoder.More() {
-		var record map[string]any
-		if err := decoder.Decode(&record); err != nil {
-			t.Fatal(err)
-		}
-		records = append(records, record)
-	}
-	if len(records) != 2 {
-		t.Fatalf("records=%#v", records)
-	}
-	child := records[1]
-	if child["msg"] != "operation.failed" || child["level"] != "ERROR" || child["operation_id"] != "add-fetch" || child["operation"] != "subscription.refresh" || child["cause"] != cause.Error() {
-		t.Fatalf("incomplete child diagnostic=%#v output=%s", child, raw)
+	records := recorder.snapshot()
+	if len(records) != 1 || records[0].operation.ID != "add" || records[0].record.Event != "operation.failed" || !errors.Is(records[0].record.Err, cause) {
+		t.Fatalf("records=%+v", records)
 	}
 }
 
@@ -425,10 +399,10 @@ func TestSubscriptionDiagnostic_AutoFallbackRecoveryDoesNotReportFailure(t *test
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(records) != 2 {
+	if len(records) != 1 {
 		t.Fatalf("records=%#v", records)
 	}
-	wantOperations := []logging.OperationMetadata{{ID: "auto-add", Name: "subscription.add"}, {ID: "auto-add-fetch", Name: "subscription.refresh"}}
+	wantOperations := []logging.OperationMetadata{{ID: "auto-add", Name: "subscription.add"}}
 	for index, diagnostic := range records {
 		if diagnostic.operation != wantOperations[index] || diagnostic.record.Event != "operation.succeeded" || diagnostic.record.Level != slog.LevelInfo {
 			t.Fatalf("recovered fallback recorded a failure: %#v", records)
@@ -457,33 +431,17 @@ func TestAddSubscriptionFetchesImmediately(t *testing.T) {
 	}
 }
 
-func TestAddSubscriptionKeepsProfileWhenFetchFails(t *testing.T) {
-	manager, _, _, url := subscriptionManager(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusBadGateway)
-	}))
-	var records []struct {
-		operation logging.OperationMetadata
-		record    diagnostics.Record
+func TestAddSubscriptionRejectsFailedFetch(t *testing.T) {
+	manager, _, _, source := subscriptionManager(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) }))
+	recorder := &coreDiagnosticRecorder{}
+	manager.diagnosticReporter = recorder.report
+	_, err := manager.AddSubscription(context.Background(), Operation{ID: "add", Source: "test"}, AddSubscriptionInput{Name: "Broken", URL: source})
+	if err == nil || len(manager.Subscriptions().Profiles) != 0 {
+		t.Fatalf("err=%v profiles=%+v", err, manager.Subscriptions())
 	}
-	manager.diagnosticReporter = func(ctx context.Context, record diagnostics.Record) {
-		operation, _ := logging.OperationFromContext(ctx)
-		records = append(records, struct {
-			operation logging.OperationMetadata
-			record    diagnostics.Record
-		}{operation: operation, record: record})
-	}
-	profile, err := manager.AddSubscription(context.Background(), Operation{ID: "add", Source: "test"}, AddSubscriptionInput{Name: "Broken", URL: url})
-	if err != nil {
-		t.Fatalf("add should keep registration when fetch fails: %v", err)
-	}
-	if profile.Cached || profile.LastError == "" {
-		t.Fatalf("expected uncached profile with last_error: %#v", profile)
-	}
-	if len(manager.Subscriptions().Profiles) != 1 {
-		t.Fatalf("profiles=%#v", manager.Subscriptions().Profiles)
-	}
-	if len(records) != 2 || records[0].record.Event != "operation.succeeded" || records[0].operation != (logging.OperationMetadata{ID: "add", Name: "subscription.add"}) || records[1].record.Event != "operation.failed" || records[1].operation != (logging.OperationMetadata{ID: "add-fetch", Name: "subscription.refresh"}) {
-		t.Fatalf("diagnostics=%#v", records)
+	records := recorder.snapshot()
+	if len(records) != 1 || records[0].record.Event != "operation.failed" || records[0].operation.ID != "add" {
+		t.Fatalf("records=%+v", records)
 	}
 }
 
@@ -561,15 +519,15 @@ func TestReloadFailureRollsBackSubscriptionActivation(t *testing.T) {
 	recorder := &coreDiagnosticRecorder{}
 	manager.diagnosticReporter = recorder.report
 	profile, err := manager.AddSubscription(context.Background(), Operation{ID: "add", Source: "test"}, AddSubscriptionInput{Name: "A", URL: url})
-	if err != nil {
-		t.Fatalf("add should not fail hard when auto-fetch reloads fail: %v", err)
+	if err == nil {
+		t.Fatal("add accepted failed reload")
 	}
 	records := recorder.snapshot()
-	if len(records) != 2 || records[0].record.Event != "operation.succeeded" || records[1].operation.ID != "add-fetch" || records[1].record.Event != "operation.failed" || !errors.Is(records[1].record.Err, first) || !errors.Is(records[1].record.Err, second) {
+	if len(records) != 1 || records[0].operation.ID != "add" || records[0].record.Event != "operation.failed" || !errors.Is(records[0].record.Err, first) || !errors.Is(records[0].record.Err, second) {
 		t.Errorf("auto-fetch lost cause or changed parent outcome: %#v", records)
 	}
 	got := manager.Subscriptions()
-	if got.ActiveID != "" || got.Profiles[0].Generation != 0 || profile.Cached {
+	if got.ActiveID != "" || len(got.Profiles) != 0 || profile.Cached {
 		t.Fatalf("failed auto-fetch should roll back cache/activation: profile=%#v catalog=%#v", profile, got)
 	}
 	if snapshot := manager.Snapshot(); snapshot.Health != "degraded" || snapshot.Config.DesiredRevision <= snapshot.Config.ObservedRevision {
@@ -623,9 +581,9 @@ func TestProxySelectionWaitsForSubscriptionReload(t *testing.T) {
 }
 
 func TestSubscriptionAddPersistsProxyMode(t *testing.T) {
-	manager, _, _, url := subscriptionManager(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	manager, _, _, url := subscriptionManagerWithDownloader(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte("proxies: []\nrules: [MATCH,DIRECT]\n"))
-	}))
+	}), &scriptedSubscriptionFetcher{entries: []scriptedSubscriptionFetch{{result: subscription.FetchResult{Content: []byte("proxies: []\n")}}}})
 	profile, err := manager.AddSubscription(context.Background(), Operation{ID: "add", Source: "test"}, AddSubscriptionInput{Name: "A", URL: url, ProxyMode: subscription.ProxyModeAuto})
 	if err != nil {
 		t.Fatal(err)

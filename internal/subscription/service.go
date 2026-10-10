@@ -38,6 +38,7 @@ type Service struct {
 	cacheDir    string
 	downloader  Fetcher
 	writeCache  func(string, []byte, os.FileMode) error
+	saveCatalog func(string, Catalog) error
 	now         func() time.Time
 	catalog     Catalog
 }
@@ -86,7 +87,7 @@ func Open(options ServiceOptions) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{catalogPath: options.CatalogPath, cacheDir: options.CacheDir, downloader: downloader, writeCache: config.AtomicWrite, now: now, catalog: catalog}, nil
+	return &Service{catalogPath: options.CatalogPath, cacheDir: options.CacheDir, downloader: downloader, writeCache: config.AtomicWrite, saveCatalog: Save, now: now, catalog: catalog}, nil
 }
 
 func (s *Service) Snapshot() Catalog {
@@ -145,7 +146,7 @@ func (s *Service) PrepareRefresh(ctx context.Context, id string) (PreparedRefres
 	}
 	profile := s.catalog.Profiles[index]
 	s.mu.RUnlock()
-	result, err := s.downloader.Fetch(ctx, FetchRequest{URL: profile.URL, ETag: profile.ETag, LastModified: profile.LastModified, Mode: profile.ProxyMode})
+	result, err := s.fetch(ctx, profile)
 	if err != nil {
 		return PreparedRefresh{}, s.refreshFailure(id, err, profile.Version)
 	}
@@ -164,6 +165,11 @@ func (s *Service) PrepareRefresh(ctx context.Context, id string) (PreparedRefres
 	if err != nil {
 		return PreparedRefresh{}, s.refreshFailure(id, err, profile.Version)
 	}
+	baseDir := result.BaseDir
+	if result.NotModified {
+		baseDir = profile.CacheBaseDir
+	}
+	ResolveFileReferences(document, baseDir)
 	return PreparedRefresh{profileID: id, profileVersion: profile.Version, result: result, document: document}, nil
 }
 
@@ -223,12 +229,15 @@ func (s *Service) noteRefreshError(id string, cause error, versions ...uint64) e
 func (s *Service) CommitRefresh(prepared PreparedRefresh) (Receipt, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.commitRefreshLocked(prepared, s.catalog.Clone())
+}
+
+func (s *Service) commitRefreshLocked(prepared PreparedRefresh, before Catalog) (Receipt, error) {
 	index := s.catalog.Index(prepared.profileID)
 	if index < 0 || s.catalog.Profiles[index].Version != prepared.profileVersion {
 		return Receipt{}, protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "subscription changed while refresh was in progress"}
 	}
-	before := s.catalog.Clone()
-	after := before.Clone()
+	after := s.catalog.Clone()
 	profile := &after.Profiles[index]
 	cachePath := s.CachePath(profile.ID)
 	cacheBefore, readErr := os.ReadFile(cachePath)
@@ -242,6 +251,7 @@ func (s *Service) CommitRefresh(prepared PreparedRefresh) (Receipt, error) {
 			return Receipt{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "write subscription cache"}, err)
 		}
 		profile.Generation++
+		profile.CacheBaseDir = prepared.result.BaseDir
 	}
 	profile.Version++
 	profile.UpdatedAt = s.now().UTC()
@@ -265,7 +275,12 @@ func (s *Service) CommitRefresh(prepared PreparedRefresh) (Receipt, error) {
 		return Receipt{}, s.failAfterRestore(err, cachePath, cacheBefore, hadCache, wroteCache)
 	}
 	after.fillDefaults()
-	if err := Save(s.catalogPath, after); err != nil {
+	if err := s.saveCatalog(s.catalogPath, after); err != nil {
+		// Replacement may have committed before a directory-sync error. Restore
+		// catalog metadata as well as bytes so cached relative paths stay paired.
+		if restoreErr := s.saveCatalog(s.catalogPath, before); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore subscription catalog: %w", restoreErr))
+		}
 		return Receipt{}, s.failAfterRestore(err, cachePath, cacheBefore, hadCache, wroteCache)
 	}
 	s.catalog = after
@@ -303,11 +318,21 @@ func (s *Service) ReadCache(id string) ([]byte, Document, error) {
 	if !profileIDPattern.MatchString(id) {
 		return nil, nil, notFoundError()
 	}
+	// Commit owns this same lock while replacing bytes and directory metadata;
+	// readers must observe both from one committed cache generation.
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	content, err := os.ReadFile(s.CachePath(id))
 	if err != nil {
 		return nil, nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription cache is unavailable"}, err)
 	}
 	document, err := ParseDocument(content)
+	if err == nil {
+		index := s.catalog.Index(id)
+		if index >= 0 {
+			ResolveFileReferences(document, s.catalog.Profiles[index].CacheBaseDir)
+		}
+	}
 	return content, document, err
 }
 

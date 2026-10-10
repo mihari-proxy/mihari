@@ -76,6 +76,21 @@ func (m *Model) formView(title string) string {
 	var body string
 	if m.saveState != saveEditing {
 		body = ansi.Wrap(m.saveBody(), width, "")
+		if m.saveState == saveFileReferences {
+			lines := strings.Split(ansi.Wrap(m.dialogNote, width, ""), "\n")
+			height := m.height
+			if height == 0 {
+				height = 32
+			}
+			budget := max(2, height-2-m.theme.Dialog.GetVerticalFrameSize()-6)
+			m.dialogScroll = max(0, min(m.dialogScroll, len(lines)-budget))
+			end := min(len(lines), m.dialogScroll+budget)
+			choices := "Continue    [Cancel]"
+			if m.confirmYes {
+				choices = "[Continue]    Cancel"
+			}
+			body = strings.Join(lines[m.dialogScroll:end], "\n") + "\n" + m.theme.Muted.Render("PgUp/PgDn scroll") + "\n\n" + choices
+		}
 	} else {
 		layout := m.formLayout()
 		m.dialogScroll = max(0, min(m.dialogScroll, len(layout.lines)-layout.bodyHeight))
