@@ -6,6 +6,8 @@
 
 - 使用空的 hosted runner。Unix 需要免密 `sudo`。Windows 作业用户已经是管理员。
 - 程序版本固定为 `v0.0.0-dev.0`，通道是 `dev`。两次安装使用同一份程序。
+- GeoIP 使用仓库 `internal/app/testdata/migration-mmdb` 中已有的合成 MMDB（许可证与来源见该目录 README）；不下载真实地理数据。核心仍是占位文件，作业验证 Mihari 服务，不验证代理功能。
+- Windows 的保留数据卸载从 PATH 命令执行；完整卸载从临时目录执行同一份构建程序，避免正在运行的映像锁住待删除文件。
 - 三个平台都设置 `MIHARI_YES=1`。
 - Linux 跑在 `ubuntu-latest`，服务是 systemd `mihari.service`。macOS 跑在 `macos-latest`，服务是 `/Library/LaunchDaemons/mihari.plist`。Windows 跑在 `windows-latest`，服务是 SCM `mihari`。
 
@@ -24,6 +26,8 @@ python scripts/test/platform_install_e2e.py cleanup
 ```
 
 它在服务还在时执行 `service uninstall --purge --yes`，并删除本次写出的程序目录、数据根和 PATH 命令。目标已经不存在则继续。卸载或删除返回非零时，这个步骤失败。
+
+Windows 清理先把已安装程序复制到临时目录，再从该副本执行完整卸载；等待进程退出后删除副本。不会忽略 PATH 命令删除失败或把部分卸载判定为成功。
 
 ## 分支保护
 

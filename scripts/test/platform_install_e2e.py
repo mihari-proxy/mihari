@@ -9,6 +9,7 @@ import io
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -142,6 +143,13 @@ def _assert_paths(system: str, service_installed: bool, paths_present: dict[str,
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def geoip_fixtures() -> tuple[bytes, bytes]:
+    root = ROOT / "internal" / "app" / "testdata" / "migration-mmdb"
+    return (root / "country.mmdb").read_bytes(), (root / "asn.mmdb").read_bytes()
+
+
 PROGRAM_DIR = "/usr/local/lib/mihari"
 TRUST_DIR = PROGRAM_DIR + "/install-trust"
 MANIFEST = TRUST_DIR + "/manifest.json"
@@ -331,9 +339,13 @@ def _install_windows(bundle_dir: str, env: dict[str, str]) -> None:
     assert_install_success("windows", result.stdout, result.stderr)
 
 
-def _service_argv(system: str, paths: dict[str, str], purge: bool) -> list[str]:
+def _service_argv(system: str, paths: dict[str, str], purge: bool, *, windows_binary: str | None = None) -> list[str]:
     binary = paths["path_command"]
     if system == "windows":
+        if purge:
+            if windows_binary is None:
+                raise ValueError("Windows purge requires an executable outside the installed roots")
+            binary = windows_binary
         argv = [binary, "service", "uninstall"]
         if purge:
             argv.extend(["--purge", "--yes"])
@@ -481,8 +493,7 @@ def execute() -> None:
         _run(build_command("go", built), env=build_env, cwd=str(ROOT))
         program = Path(built).read_bytes()
         core = b"placeholder-core"
-        country = b"placeholder-country"
-        asn = b"placeholder-asn"
+        country, asn = geoip_fixtures()
         if system == "windows":
             bundle_dir = os.path.join(work, "bundle")
             write_windows_bundle(Path(bundle_dir), program, core, country, asn)
@@ -506,7 +517,7 @@ def execute() -> None:
             _pin_unix(bundle, program)
             _install_unix(archive)
         _assert_installed(system, paths)
-        purged = _run(_service_argv(system, paths, True))
+        purged = _run(_service_argv(system, paths, True, windows_binary=built))
         if PURGE_TEXT not in purged.stdout:
             raise SystemExit(PURGE_TEXT)
         assert_purged(system, _service_registered(system), _paths_present(system, paths))
@@ -519,9 +530,15 @@ def cleanup() -> None:
         binary = _existing_binary(paths) if paths else None
         if binary is None:
             raise SystemExit(1)
-        uninstall = [binary, "service", "uninstall", "--purge", "--yes"] if system == "windows" else service_command(binary, True)
-        if _run(uninstall, check=False).returncode != 0:
-            raise SystemExit(1)
+        # Windows must release both installed images before deleting them.
+        # Keep the temporary copy alive until the uninstall process exits.
+        with tempfile.TemporaryDirectory(prefix="mihari-e2e-cleanup-") as work:
+            standalone = os.path.join(work, "mihari.exe")
+            if system == "windows":
+                shutil.copy2(binary, standalone)
+            uninstall = _service_argv(system, {"path_command": binary}, True, windows_binary=standalone)
+            if _run(uninstall, check=False).returncode != 0:
+                raise SystemExit(1)
     for path in _cleanup_paths(system):
         if os.path.lexists(path):
             _delete_path(system, path)

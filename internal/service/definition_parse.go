@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -432,10 +433,15 @@ func parsePrintDisabled(raw []byte, label string) (bool, error) {
 
 func parseLaunchdPrint(result CommandResult, target string) (loaded, running bool, pid int, err error) {
 	if result.ExitCode != 0 {
-		if len(bytes.TrimSpace(result.Stdout)) == 0 && string(result.Stderr) == "Could not find service \""+target+"\".\n" {
+		missing := "Could not find service \"" + target + "\"."
+		domain, label, ok := strings.Cut(target, "/")
+		stderr := strings.TrimSpace(string(result.Stderr))
+		missingInDomain := "Could not find service \"" + label + "\" in domain for " + domain
+		if len(bytes.TrimSpace(result.Stdout)) == 0 && (stderr == missing ||
+			(ok && domain == "system" && (stderr == missingInDomain || stderr == "Bad request.\n"+missingInDomain))) {
 			return false, false, 0, nil
 		}
-		return false, false, 0, invalidServiceState("service status is unknown")
+		return false, false, 0, invalidServiceState("service status is unknown", fmt.Errorf("launchctl print %s: exit status %d\nstdout:\n%s\nstderr:\n%s", target, result.ExitCode, result.Stdout, result.Stderr))
 	}
 	text := string(result.Stdout)
 	if strings.Contains(text, "gui/") {
