@@ -418,15 +418,16 @@ func parsePlistValue(dec *xml.Decoder, start xml.StartElement) (any, error) {
 
 func parsePrintDisabled(raw []byte, label string) (bool, error) {
 	text := string(raw)
+	cause := fmt.Errorf("launchctl print-disabled: stdout:\n%s", raw)
 	if strings.Contains(text, "gui/") {
-		return false, invalidServiceState("service status is unknown")
+		return false, invalidServiceState("service status is unknown", cause)
 	}
 	trueKey := `"` + label + `" => true`
 	falseKey := `"` + label + `" => false`
 	nTrue := strings.Count(text, trueKey)
 	nFalse := strings.Count(text, falseKey)
 	if nTrue+nFalse != 1 {
-		return false, invalidServiceState("service status is unknown")
+		return false, invalidServiceState("service status is unknown", cause)
 	}
 	return nTrue == 1, nil
 }
@@ -444,16 +445,17 @@ func parseLaunchdPrint(result CommandResult, target string) (loaded, running boo
 		return false, false, 0, invalidServiceState("service status is unknown", fmt.Errorf("launchctl print %s: exit status %d\nstdout:\n%s\nstderr:\n%s", target, result.ExitCode, result.Stdout, result.Stderr))
 	}
 	text := string(result.Stdout)
+	cause := fmt.Errorf("launchctl print %s: stdout:\n%s\nstderr:\n%s", target, result.Stdout, result.Stderr)
 	if strings.Contains(text, "gui/") {
-		return false, false, 0, invalidServiceState("service status is unknown")
+		return false, false, 0, invalidServiceState("service status is unknown", cause)
 	}
 	if !strings.Contains(text, target+" = {") && !strings.Contains(text, target+"={") {
-		return false, false, 0, invalidServiceState("service status is unknown")
+		return false, false, 0, invalidServiceState("service status is unknown", cause)
 	}
 	pid, pidOK := scanUniqueInt(text, "pid = ", `"pid" = `)
 	state, stateOK := scanUniqueToken(text, "state = ")
 	if !pidOK && !stateOK {
-		return false, false, 0, invalidServiceState("service status is unknown")
+		return false, false, 0, invalidServiceState("service status is unknown", cause)
 	}
 	running = pid > 0 || state == "running"
 	return true, running, pid, nil

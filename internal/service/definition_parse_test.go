@@ -9,6 +9,22 @@ import (
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
 
+func TestParsePrintDisabled_UnknownOutputPreservesDiagnostic(t *testing.T) {
+	raw := []byte("system => {\n\t\"mihari\" => unexpected\n}\n")
+	_, err := parsePrintDisabled(raw, "mihari")
+	if err == nil || !strings.Contains(diagnostics.Capture(err).Text, string(raw)) {
+		t.Fatalf("original output missing: %v", err)
+	}
+}
+
+func TestParseLaunchdPrint_UnknownSuccessOutputPreservesDiagnostic(t *testing.T) {
+	raw := []byte("system/mihari = {\n unexpected fixture\n}\n")
+	_, _, _, err := parseLaunchdPrint(CommandResult{Stdout: raw}, "system/mihari")
+	if err == nil || !strings.Contains(diagnostics.Capture(err).Text, string(raw)) {
+		t.Fatalf("original output missing: %v", err)
+	}
+}
+
 func TestParseLaunchdPrint_MissingSystemService(t *testing.T) {
 	for _, stderr := range []string{
 		"Could not find service \"system/mihari\".\n",
