@@ -422,14 +422,39 @@ func parsePrintDisabled(raw []byte, label string) (bool, error) {
 	if strings.Contains(text, "gui/") {
 		return false, invalidServiceState("service status is unknown", cause)
 	}
-	trueKey := `"` + label + `" => true`
-	falseKey := `"` + label + `" => false`
-	nTrue := strings.Count(text, trueKey)
-	nFalse := strings.Count(text, falseKey)
-	if nTrue+nFalse != 1 {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	if len(lines) < 2 || (strings.TrimSpace(lines[0]) != "{" && strings.TrimSpace(lines[0]) != "disabled services = {") || strings.TrimSpace(lines[len(lines)-1]) != "}" {
 		return false, invalidServiceState("service status is unknown", cause)
 	}
-	return nTrue == 1, nil
+	disabled, found := false, false
+	for _, line := range lines[1 : len(lines)-1] {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=>")
+		key = strings.TrimSpace(key)
+		if !ok || len(key) < 3 || key[0] != '"' || key[len(key)-1] != '"' || strings.Contains(key[1:len(key)-1], `"`) {
+			return false, invalidServiceState("service status is unknown", cause)
+		}
+		var entryDisabled bool
+		switch strings.TrimSpace(value) {
+		case "true", "disabled":
+			entryDisabled = true
+		case "false", "enabled":
+		default:
+			return false, invalidServiceState("service status is unknown", cause)
+		}
+		if key[1:len(key)-1] == label {
+			if found {
+				return false, invalidServiceState("service status is unknown", cause)
+			}
+			disabled, found = entryDisabled, true
+		}
+	}
+	// launchd omits services without a disabled-state override; their default
+	// is enabled. A complete, well-formed override dictionary proves absence.
+	return disabled, nil
 }
 
 func parseLaunchdPrint(result CommandResult, target string) (loaded, running bool, pid int, err error) {
