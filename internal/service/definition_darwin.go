@@ -2,8 +2,8 @@ package service
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
-	"fmt"
 	"runtime"
 	"syscall"
 	"unsafe"
@@ -129,11 +129,13 @@ func observeDarwinProcess(ctx context.Context, pid int) (darwinProcessObservatio
 }
 
 func darwinBootID() (string, error) {
-	tv, err := unix.SysctlTimeval("kern.boottime")
+	raw, err := unix.SysctlRaw("kern.boottime")
 	if err != nil {
 		return "", invalidServiceState("service process identity is unknown", err)
 	}
-	return fmt.Sprintf("%d.%d", tv.Sec, tv.Usec), nil
+	// Installation journals use the raw kernel boot observation as their opaque
+	// identity. Stop authority must compare against that same representation.
+	return hex.EncodeToString(raw), nil
 }
 
 func (t darwinProcessTree) Lookup(ctx context.Context, id ProcessIdentity) (bool, error) {
