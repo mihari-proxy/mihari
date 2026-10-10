@@ -61,6 +61,10 @@ func TestAddSubscription_FileReferencesRequireAcknowledgement(t *testing.T) {
 func TestLocalSource_EditRetainsCacheDirectoryAndRejectsTypeChange(t *testing.T) {
 	m, s, _, remote := subscriptionManager(t, http.NotFoundHandler())
 	dir := t.TempDir()
+	dir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(dir, "main.yaml")
 	if err := os.WriteFile(path, []byte("proxies: []\nproxy-providers:\n  local: {type: file, path: nodes.yaml}\n"), 0600); err != nil {
 		t.Fatal(err)

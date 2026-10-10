@@ -45,6 +45,14 @@ func TestLocalSource_RejectsDirectoryOversizeAndCancellation(t *testing.T) {
 func TestLocalSource_SymlinkRefreshPreservesSavedDirectory(t *testing.T) {
 	s, _ := newServiceForTest(t, http.NotFoundHandler())
 	a, b := t.TempDir(), t.TempDir()
+	a, err := filepath.EvalSymlinks(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err = filepath.EvalSymlinks(b)
+	if err != nil {
+		t.Fatal(err)
+	}
 	content := []byte("proxies: []\nproxy-providers:\n  nodes: {type: file, path: nodes.yaml}\n")
 	for _, dir := range []string{a, b} {
 		if err := os.WriteFile(filepath.Join(dir, "main.yaml"), content, 0600); err != nil {
