@@ -51,11 +51,15 @@ func TestPreparedUpdate_CleanupBeforeApplyAndRelaunch(t *testing.T) {
 				t.Fatalf("unsafe update order: %v want %v err=%v", events, want, err)
 			}
 			if failure == "after-rename" {
-				if warnings.String() != "Warning: Mihari updated, but installation recovery is required\n" {
+				if !strings.HasSuffix(warnings.String(), "Warning: Mihari updated, but installation recovery is required\n") {
 					t.Fatal("post-cleanup warning missing or leaked raw cause")
 				}
-			} else if warnings.Len() != 0 {
-				t.Fatal("unexpected post-cleanup output")
+			} else if failure == "program" || failure == "cleanup" {
+				if warnings.Len() != 0 {
+					t.Fatal("reported update progress before successful cleanup")
+				}
+			} else if strings.Contains(warnings.String(), "Warning:") {
+				t.Fatal("unexpected post-cleanup warning")
 			}
 			if failure != "" && err == nil {
 				t.Fatal("failure discarded")

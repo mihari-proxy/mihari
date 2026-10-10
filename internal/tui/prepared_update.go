@@ -142,19 +142,23 @@ func finishPreparedRun(ctx context.Context, final tea.Model, runErr error, out i
 	// Cleanup deliberately closes logging before replacement. This task only
 	// binds metadata; its existing safe error/partial-success outlet remains owner.
 	ctx = (ui.LocalTaskDiagnostics{}).Context(ctx, "self.apply")
+	finishProgress := beginMihariUpdateProgress(out, model.preparedUpdate.Version)
 	result, err := apply(ctx, *model.preparedUpdate)
 	if !result.Updated {
 		if err != nil {
-			return errors.Join(err, fmt.Errorf("mihari update did not complete; reopen Mihari and retry"))
+			return errors.Join(err, finishProgress("Mihari update failed"), fmt.Errorf("mihari update did not complete; reopen Mihari and retry"))
 		}
-		return nil
+		return finishProgress("Mihari update not applied")
 	}
 	err = errors.Join(err, model.preparedUpdate.Close())
+	progressResult := "Mihari updated to " + diagnostics.EscapeTerminal(model.preparedUpdate.Version)
 	if err != nil {
 		model.relaunchWarning = "Mihari updated, but installation recovery is required"
+		progressResult = "Mihari updated; recovery required"
 	}
+	progressErr := finishProgress(progressResult)
 	model.preparedUpdate = nil
-	return errors.Join(err, finishRun(model, nil, out, relaunch, nil))
+	return errors.Join(err, progressErr, finishRun(model, nil, out, relaunch, nil))
 }
 
 type discardPreparedResultMsg struct{ err error }

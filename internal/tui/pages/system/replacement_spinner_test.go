@@ -68,6 +68,9 @@ func TestMihariPreparation_SpinnerRunsUntilPreparationEnds(t *testing.T) {
 				t.Fatal("spinner start did not schedule a tick")
 			}
 			before := m.View()
+			if !strings.Contains(before, "v2.0.0  main") {
+				t.Fatal("Preparing hid the current Mihari version and channel")
+			}
 			for frame := 1; frame <= 3; frame++ {
 				at := time.Unix(0, 0).Add(time.Duration(frame) * rowSpinInterval)
 				_, tick = m.Update(rowSpinTickMsg{gen: start.gen, t: at})
@@ -92,6 +95,24 @@ func TestMihariPreparation_SpinnerRunsUntilPreparationEnds(t *testing.T) {
 			_, tick = m.Update(rowSpinTickMsg{gen: start.gen, t: time.Unix(1, 0)})
 			if tick != nil {
 				t.Fatal("spinner kept scheduling after preparation ended")
+			}
+		})
+	}
+}
+
+func TestMihariPreparation_ConfirmedUpdateKeepsVersionAndChannel(t *testing.T) {
+	for _, channel := range []string{"main", "dev", ""} {
+		t.Run(channel, func(t *testing.T) {
+			m, _ := replacementFixture(t)
+			m.mihariChannel = channel
+			m.Update(ui.ActionPendingMsg{Action: ui.ActionUpdateMihari})
+			view := m.View()
+			want := channel
+			if want == "" {
+				want = "main"
+			}
+			if !strings.Contains(view, ui.SpinnerLabel(time.Unix(0, 0), ui.MihariProgressUpdating)) || !strings.Contains(view, "v2.0.0  "+want) {
+				t.Fatalf("confirmed update hid progress or resolved installation: %s", view)
 			}
 		})
 	}
