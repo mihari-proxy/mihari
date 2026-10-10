@@ -1502,7 +1502,7 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 		case m.editID == item.id:
 			value = m.editInput.View()
 		case item.id == rowCore && m.pending && m.pendingNote != "" &&
-			(m.pendingRow == rowCoreUpdate || m.pendingRow == rowCoreReinstall || m.pendingRow == rowCoreChannel):
+			(m.pendingRow == rowCoreUpdate || m.pendingRow == rowCoreReinstall || m.pendingRow == rowCoreChannel || m.pendingRow == rowCoreRestart):
 			note := valueOr(m.coreProgressLine, m.pendingNote)
 			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, note)) + "  " + value
 		case m.pending && m.pendingRow == item.id && m.coreProgressLine != "":
