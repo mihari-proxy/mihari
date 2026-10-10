@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/service"
 )
@@ -89,19 +90,54 @@ func (u *Uninstaller) Preview(ctx context.Context) ([]UninstallTarget, error) {
 	return targets, nil
 }
 
+// UninstallCommandConsent is an explicit decision to delete one unmatched PATH command file.
+type UninstallCommandConsent struct {
+	DeleteUnmatched bool
+}
+
+// UnmatchedCommandFile is a regular PATH command file that could not be proven
+// to match the installed program.
+type UnmatchedCommandFile struct {
+	Path   string
+	Reason string
+}
+
+// UnmatchedCommand reports a regular command file that complete uninstall will
+// leave unless DeleteUnmatched is set. Directories and symlinks are not reported.
+func (u *Uninstaller) UnmatchedCommand(ctx context.Context) (UnmatchedCommandFile, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return UnmatchedCommandFile{}, false, err
+	}
+	plan, err := classifyUninstallCommand(u.layout.InstallRoot)
+	if err != nil || !plan.confirm || plan.leave == nil {
+		return UnmatchedCommandFile{}, false, err
+	}
+	return UnmatchedCommandFile{Path: plan.path, Reason: plan.leave.Error()}, true, nil
+}
+
+// RunWithCommandConsent is Run plus an explicit unmatched-command decision.
+func (u *Uninstaller) RunWithCommandConsent(ctx context.Context, progress func(string), consent UninstallCommandConsent) error {
+	return u.run(ctx, progress, false, consent)
+}
+
+// RunForceWithCommandConsent is RunForce plus an explicit unmatched-command decision.
+func (u *Uninstaller) RunForceWithCommandConsent(ctx context.Context, progress func(string), consent UninstallCommandConsent) error {
+	return u.run(ctx, progress, true, consent)
+}
+
 // Run stops and removes the service, then removes only roots whose contents
 // match the generated-file allowlist.
 func (u *Uninstaller) Run(ctx context.Context, progress func(string)) error {
-	return u.run(ctx, progress, false)
+	return u.RunWithCommandConsent(ctx, progress, UninstallCommandConsent{})
 }
 
 // RunForce stops and removes the service, then deletes the previewed folders
 // without inspecting unrecognized files inside them.
 func (u *Uninstaller) RunForce(ctx context.Context, progress func(string)) error {
-	return u.run(ctx, progress, true)
+	return u.RunForceWithCommandConsent(ctx, progress, UninstallCommandConsent{})
 }
 
-func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool) error {
+func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool, consent UninstallCommandConsent) error {
 	targets, err := u.Preview(ctx)
 	if err != nil {
 		return err
@@ -119,6 +155,7 @@ func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool
 	if err != nil {
 		return err
 	}
+	command = applyUnmatchedCommandConsent(command, consent)
 	commandErr, stop := removeClassifiedUninstallCommand(command, progress)
 	if stop != nil {
 		return stop
@@ -158,7 +195,7 @@ func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool
 		}
 	}
 	if commandErr != nil {
-		return commandErr
+		return protocol.APIError{Code: protocol.CodeInvalidState, Message: commandErr.Error()}
 	}
 	reportUninstallProgress(progress, "Mihari has been completely uninstalled")
 	return nil

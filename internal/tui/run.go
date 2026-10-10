@@ -48,8 +48,10 @@ type Options struct {
 // Uninstaller is the local complete-uninstall use case owned by app assembly.
 type Uninstaller interface {
 	Preview(context.Context) ([]app.UninstallTarget, error)
+	UnmatchedCommand(context.Context) (app.UnmatchedCommandFile, bool, error)
 	Run(context.Context, func(string)) error
 	RunForce(context.Context, func(string)) error
+	RunForceWithCommandConsent(context.Context, func(string), app.UninstallCommandConsent) error
 }
 
 // LocalLoggingHealth reports whether the local TUI file logger is available.

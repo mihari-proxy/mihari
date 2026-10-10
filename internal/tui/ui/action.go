@@ -76,7 +76,10 @@ type ActionIntentMsg struct {
 
 // CompleteUninstallConfirmedMsg marks an explicitly confirmed full uninstall.
 // The root shell exits before invoking the local app use case.
-type CompleteUninstallConfirmedMsg struct{}
+// DeleteUnmatchedCommand is set only by the separate command-file confirmation.
+type CompleteUninstallConfirmedMsg struct {
+	DeleteUnmatchedCommand bool
+}
 
 // ActionPendingMsg is delivered to the target page when a confirmed action begins
 // executing, so pages can show row-local progress (braille + note) before the result.

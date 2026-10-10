@@ -21,9 +21,10 @@ var errInstalledProgramMissing = errors.New("installed Mihari program is missing
 var errCommandNotComparable = errors.New("command file is not comparable")
 
 type uninstallCommandPlan struct {
-	path   string
-	remove bool
-	leave  error
+	path    string
+	remove  bool
+	confirm bool
+	leave   error
 }
 
 func uninstallCommandPath() (string, error) {
@@ -56,6 +57,7 @@ func classifyUninstallCommand(installRoot string) (uninstallCommandPlan, error) 
 		plan.leave = fmt.Errorf("leaving %s: command path is not a file", path)
 		return plan, nil
 	}
+	regularCommand := info.Mode().IsRegular()
 	followed, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -72,6 +74,7 @@ func classifyUninstallCommand(installRoot string) (uninstallCommandPlan, error) 
 	if err != nil {
 		if errors.Is(err, errInstalledProgramMissing) {
 			plan.leave = fmt.Errorf("leaving %s: installed Mihari program is missing, so the command file was left in place", path)
+			plan.confirm = regularCommand
 			return plan, nil
 		}
 		if errors.Is(err, errCommandNotComparable) {
@@ -82,10 +85,25 @@ func classifyUninstallCommand(installRoot string) (uninstallCommandPlan, error) 
 	}
 	if !match {
 		plan.leave = fmt.Errorf("leaving %s: command file does not match the installed Mihari program", path)
+		plan.confirm = regularCommand
 		return plan, nil
 	}
 	plan.remove = true
 	return plan, nil
+}
+
+func applyUnmatchedCommandConsent(plan uninstallCommandPlan, consent UninstallCommandConsent) uninstallCommandPlan {
+	if !plan.confirm || !consent.DeleteUnmatched {
+		return plan
+	}
+	info, err := os.Lstat(plan.path)
+	if err != nil || !info.Mode().IsRegular() {
+		return plan
+	}
+	plan.remove = true
+	plan.confirm = false
+	plan.leave = nil
+	return plan
 }
 
 func commandFileMatchesInstalled(installed, command string) (bool, error) {

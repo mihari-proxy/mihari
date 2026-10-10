@@ -23,8 +23,11 @@ type StatusClient interface {
 // Uninstaller is the local application use case for a confirmed full uninstall.
 type Uninstaller interface {
 	Preview(context.Context) ([]app.UninstallTarget, error)
+	UnmatchedCommand(context.Context) (app.UnmatchedCommandFile, bool, error)
 	Run(context.Context, func(string)) error
 	RunForce(context.Context, func(string)) error
+	RunWithCommandConsent(context.Context, func(string), app.UninstallCommandConsent) error
+	RunForceWithCommandConsent(context.Context, func(string), app.UninstallCommandConsent) error
 }
 
 type RuntimeClient interface {

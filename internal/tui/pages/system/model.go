@@ -117,6 +117,7 @@ type ServiceController interface {
 // Uninstaller previews the fixed local roots before a complete uninstall.
 type Uninstaller interface {
 	Preview(context.Context) ([]app.UninstallTarget, error)
+	UnmatchedCommand(context.Context) (app.UnmatchedCommandFile, bool, error)
 }
 
 type row struct {
@@ -537,6 +538,25 @@ func (m *Model) SetServiceController(svc ServiceController) {
 // SetUninstaller configures the local complete-uninstall preview action.
 func (m *Model) SetUninstaller(uninstaller Uninstaller) {
 	m.uninstaller = uninstaller
+}
+
+func completeUninstallDecision(uninstaller Uninstaller) tea.Msg {
+	if uninstaller == nil {
+		return ui.CompleteUninstallConfirmedMsg{}
+	}
+	file, ok, err := uninstaller.UnmatchedCommand(context.Background())
+	if err != nil || !ok {
+		if err != nil {
+			return uninstallPreviewMsg{err: err}
+		}
+		return ui.CompleteUninstallConfirmedMsg{}
+	}
+	return ui.ActionIntentMsg{
+		Action: ui.ActionCompleteUninstall, Page: ui.PageSystem, Key: ui.CompleteUninstallCommandKey,
+		Title: ui.DeleteUnmatchedCommandTitle, Object: file.Path, Impact: file.Reason, Rollback: ui.DeleteUnmatchedCommandRollback,
+		Execute: func() tea.Msg { return ui.CompleteUninstallConfirmedMsg{DeleteUnmatchedCommand: true} },
+		Cancel:  func() tea.Msg { return ui.CompleteUninstallConfirmedMsg{} },
+	}
 }
 
 // SetOpenBrowser injects the browser launcher (tests and headless environments).
@@ -1214,6 +1234,7 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 			m.markRowOutcome(rowCompleteUninstall, false, uninstallPreviewDetail(typed.err))
 			return m, m.rowSpinCmdIfNeeded()
 		}
+		uninstaller := m.uninstaller
 		return m, func() tea.Msg {
 			paths := uninstallTargetPaths(typed.targets)
 			return ui.ActionIntentMsg{
@@ -1223,7 +1244,7 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 					return ui.ActionIntentMsg{
 						Action: ui.ActionCompleteUninstall, Page: ui.PageSystem, Key: ui.CompleteUninstallConfirmKey,
 						Title: ui.CompleteUninstallConfirmTitle, Object: paths, Impact: ui.CompleteUninstallConfirmImpact, Rollback: ui.CompleteUninstallRollback,
-						Execute: func() tea.Msg { return ui.CompleteUninstallConfirmedMsg{} },
+						Execute: func() tea.Msg { return completeUninstallDecision(uninstaller) },
 					}
 				},
 			}
