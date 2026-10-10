@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -91,11 +90,24 @@ type completingProgressClient struct {
 	stopped chan struct{}
 }
 
-func (c *completingProgressClient) OperationStatus(ctx context.Context, _ string) (protocol.OperationStatus, error) {
-	close(c.started)
-	<-ctx.Done()
-	close(c.stopped)
-	return protocol.OperationStatus{}, ctx.Err()
+func (c *completingProgressClient) OperationStatus(context.Context, string) (protocol.OperationStatus, error) {
+	return protocol.OperationStatus{State: "running"}, nil
+}
+
+type progressCompletionWriter struct {
+	client  *completingProgressClient
+	started sync.Once
+	stopped sync.Once
+}
+
+func (w *progressCompletionWriter) Write(p []byte) (int, error) {
+	if strings.HasPrefix(string(p), "\r") {
+		w.started.Do(func() { close(w.client.started) })
+	}
+	if strings.Contains(string(p), "\n") {
+		w.stopped.Do(func() { close(w.client.stopped) })
+	}
+	return len(p), nil
 }
 
 func (c *completingProgressClient) InstallCore(ctx context.Context, _ protocol.MutationRequest) (protocol.CoreInstallResult, error) {
@@ -125,7 +137,7 @@ func TestCoreInstall_StopsProgressBeforeRenderingResult(t *testing.T) {
 	c := &completingProgressClient{fakeRuntimeClient: &fakeRuntimeClient{}, started: make(chan struct{}), stopped: make(chan struct{})}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	exit := Execute(ctx, []string{"core", "install"}, progressResultWriter{t, c.stopped}, io.Discard, Dependencies{RuntimeClient: c})
+	exit := Execute(ctx, []string{"core", "install"}, progressResultWriter{t, c.stopped}, &progressCompletionWriter{client: c}, Dependencies{RuntimeClient: c})
 	if exit != ExitOK {
 		t.Fatalf("exit=%d", exit)
 	}
