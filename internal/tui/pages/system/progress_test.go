@@ -70,8 +70,15 @@ func TestSystemCoreProgress_UsesInstallSentenceOnThePendingChip(t *testing.T) {
 	}
 	model.rowSpinClock = time.Unix(0, 0)
 	view := model.View()
-	if !strings.Contains(view, want) || strings.Contains(view, ui.CoreProgressUpdating) || strings.Contains(view, "⠋") {
+	if !strings.Contains(view, ui.SpinnerLabel(model.rowSpinClock, want)) || strings.Contains(view, ui.CoreProgressUpdating) {
 		t.Fatalf("view=%s", view)
+	}
+	for frame := 1; frame <= 3; frame++ {
+		at := time.Unix(0, int64(time.Duration(frame)*rowSpinInterval))
+		_, next := model.Update(rowSpinTickMsg{gen: model.rowSpinGen, t: at})
+		if next == nil || !strings.Contains(model.View(), ui.SpinnerLabel(at, want)) {
+			t.Fatalf("detailed progress stopped animating at frame %d", frame)
+		}
 	}
 
 	updated, _ = model.Update(coreProgressMsg{id: "other", line: "Extracting mihomo core  00:01"})
