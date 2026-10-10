@@ -17,6 +17,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/mihari-proxy/mihari/internal/app"
+	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/elevate"
@@ -2129,7 +2130,7 @@ func (m *Model) pollCoreProgress() tea.Cmd {
 		ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 		defer cancel()
 		var progress *protocol.OperationProgress
-		if status, err := observer.OperationStatus(ctx, id); err == nil {
+		if status, err := controlclient.ObserveOperationProgress(ctx, observer, id); err == nil {
 			progress = status.Progress
 		}
 		elapsed := time.Duration(0)

@@ -53,6 +53,7 @@ func TestSetupCoreProgress_ReplacesSpinnerUntilSettlement(t *testing.T) {
 	if strings.Contains(model.View(), "Downloading mihomo core") {
 		t.Fatal("settlement kept the download line")
 	}
+	model.settling = false
 	updated, next := model.Update(coreProgressMsg{gen: model.executionGen + 1, line: "Extracting mihomo core  00:01"})
 	model = updated.(*Model)
 	if next != nil || strings.Contains(model.progressLine, "Extracting") {

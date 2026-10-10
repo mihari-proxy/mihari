@@ -63,6 +63,9 @@ func (o *operationObservation) begin(id string) func() {
 		entry = &observedOperation{}
 		o.entries[id] = entry
 	}
+	if entry.active == 0 {
+		entry.progress = nil
+	}
 	entry.active++
 	o.sequence++
 	entry.order = o.sequence

@@ -155,6 +155,18 @@ func readOperationProgress(t *testing.T, s *Server, id string) protocol.Operatio
 	return body
 }
 
+func TestOperationProgress_ReusedIDStartsWithoutOldProgress(t *testing.T) {
+	var observation operationObservation
+	finish := observation.begin("reused")
+	observation.noteProgress("reused", core.Progress{Phase: protocol.ProgressPhaseChecking})
+	finish()
+	finish = observation.begin("reused")
+	defer finish()
+	if got := observation.snapshot("reused"); got.State != "running" || got.Progress != nil {
+		t.Fatalf("new operation inherited old progress: %+v", got)
+	}
+}
+
 func TestOperationStatus_Finished(t *testing.T) {
 	s := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: &fakeRuntime{}})
 	s.Handler().ServeHTTP(httptest.NewRecorder(), authorizedRequest(http.MethodPost, "/v1/core/install", bytes.NewBufferString(`{"operation_id":"finished"}`)))

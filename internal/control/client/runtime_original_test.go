@@ -16,6 +16,24 @@ import (
 
 type failingRequestJSON struct{ cause error }
 
+func TestObserveOperationProgress_FailureDoesNotFloodDiagnostics(t *testing.T) {
+	cause := errors.New("fixture credential unavailable")
+	capture := new(diagnosticCapture)
+	c := NewHTTPWithCredentialProvider("http://mihari", &sequenceProvider{err: cause}, &http.Client{})
+	if err := c.SetDiagnosticReporter(capture.report); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		_, err := ObserveOperationProgress(context.Background(), c, "fixture")
+		if !errors.Is(err, cause) {
+			t.Fatalf("cause lost: %v", err)
+		}
+	}
+	if records, _ := capture.snapshot(); len(records) != 0 {
+		t.Fatalf("polls reported: %+v", records)
+	}
+}
+
 func (v failingRequestJSON) MarshalJSON() ([]byte, error) { return nil, v.cause }
 
 func TestRuntimeOutcome_RequestEncodingPreservesCause(t *testing.T) {

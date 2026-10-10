@@ -63,6 +63,7 @@ func newCoreCommand(dependencies Dependencies, options *runOptions) *cobra.Comma
 				stopProgress := trackCoreInstallProgress(ctx, options.json, client, request.OperationID, command.ErrOrStderr())
 				defer stopProgress()
 				result, err := action(ctx, request)
+				stopProgress()
 				if err != nil {
 					return classifyRuntimeError(err)
 				}

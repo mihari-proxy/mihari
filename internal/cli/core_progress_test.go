@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -68,5 +69,64 @@ func TestTrackCoreInstallProgress_JSONStaysQuiet(t *testing.T) {
 	stop()
 	if buf.String() != "" {
 		t.Fatalf("json stderr = %q", buf.String())
+	}
+}
+
+func TestWriteCoreProgress_ChangedStatusRedrawsWithoutNewline(t *testing.T) {
+	var buf lockedBuffer
+	received, total := int64(1024), int64(2048)
+	client := progressStatusClient{progress: &protocol.OperationProgress{Phase: protocol.ProgressPhaseDownloading, ReceivedBytes: &received, TotalBytes: &total}}
+	previous, wrote := writeCoreProgress(context.Background(), client, "op", &buf, time.Time{}, "", false)
+	received = 2048
+	writeCoreProgress(context.Background(), client, "op", &buf, time.Time{}, previous, wrote)
+	output := buf.String()
+	if strings.Count(output, "\r") != 2 || strings.Contains(output, "\n") || !strings.Contains(output, "1.0 KiB") || !strings.Contains(output, "2.0 KiB / 2.0 KiB") {
+		t.Fatalf("stderr=%q", output)
+	}
+}
+
+type completingProgressClient struct {
+	*fakeRuntimeClient
+	started chan struct{}
+	stopped chan struct{}
+}
+
+func (c *completingProgressClient) OperationStatus(ctx context.Context, _ string) (protocol.OperationStatus, error) {
+	close(c.started)
+	<-ctx.Done()
+	close(c.stopped)
+	return protocol.OperationStatus{}, ctx.Err()
+}
+
+func (c *completingProgressClient) InstallCore(ctx context.Context, _ protocol.MutationRequest) (protocol.CoreInstallResult, error) {
+	select {
+	case <-c.started:
+		return protocol.CoreInstallResult{Version: "fixture"}, nil
+	case <-ctx.Done():
+		return protocol.CoreInstallResult{}, ctx.Err()
+	}
+}
+
+type progressResultWriter struct {
+	t       *testing.T
+	stopped <-chan struct{}
+}
+
+func (w progressResultWriter) Write(p []byte) (int, error) {
+	select {
+	case <-w.stopped:
+	default:
+		w.t.Error("result rendered before progress observer stopped")
+	}
+	return len(p), nil
+}
+
+func TestCoreInstall_StopsProgressBeforeRenderingResult(t *testing.T) {
+	c := &completingProgressClient{fakeRuntimeClient: &fakeRuntimeClient{}, started: make(chan struct{}), stopped: make(chan struct{})}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	exit := Execute(ctx, []string{"core", "install"}, progressResultWriter{t, c.stopped}, io.Discard, Dependencies{RuntimeClient: c})
+	if exit != ExitOK {
+		t.Fatalf("exit=%d", exit)
 	}
 }

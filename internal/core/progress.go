@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
@@ -39,15 +40,16 @@ func reportPhase(ctx context.Context, phase string) {
 
 // progressReader counts bytes copied from a release asset and publishes them.
 type progressReader struct {
-	ctx   context.Context
-	src   io.Reader
-	total int64
-	read  int64
+	ctx        context.Context
+	src        io.Reader
+	total      int64
+	read       int64
+	lastReport time.Time
 }
 
 func newProgressReader(ctx context.Context, src io.Reader, total int64) *progressReader {
 	ReportProgress(ctx, Progress{Phase: protocol.ProgressPhaseDownloading, Total: total})
-	return &progressReader{ctx: ctx, src: src, total: total}
+	return &progressReader{ctx: ctx, src: src, total: total, lastReport: time.Now()}
 }
 
 func (r *progressReader) Read(p []byte) (int, error) {
@@ -57,7 +59,11 @@ func (r *progressReader) Read(p []byte) (int, error) {
 	n, err := r.src.Read(p)
 	if n > 0 {
 		r.read += int64(n)
+	}
+	now := time.Now()
+	if (n > 0 && now.Sub(r.lastReport) >= 200*time.Millisecond) || err != nil {
 		ReportProgress(r.ctx, Progress{Phase: protocol.ProgressPhaseDownloading, Received: r.read, Total: r.total})
+		r.lastReport = now
 	}
 	return n, err
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
@@ -62,7 +63,7 @@ func writeCoreProgress(ctx context.Context, client coreProgressClient, id string
 	queryCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	var progress *protocol.OperationProgress
-	if status, err := client.OperationStatus(queryCtx, id); err == nil {
+	if status, err := controlclient.ObserveOperationProgress(queryCtx, client, id); err == nil {
 		progress = status.Progress
 	} else if ctx.Err() != nil {
 		return previous, wrote

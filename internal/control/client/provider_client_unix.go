@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"time"
 )
 
 // WithCredentialProvider uses verified Unix peers and a fresh credential per request.
