@@ -144,7 +144,11 @@ func (s *Server) installCoreAction(writer http.ResponseWriter, request *http.Req
 		action, name = repair.Reinstall, "core.reinstall"
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: name})
-	defer s.operations.begin(body.OperationID)()
+	release := s.operations.begin(body.OperationID)
+	defer release()
+	ctx = core.WithProgressReporter(ctx, func(progress core.Progress) {
+		s.operations.noteProgress(body.OperationID, progress)
+	})
 	result, err := action(ctx, runtimeapi.Operation{ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision, Channel: body.Channel})
 	if err != nil {
 		s.writeControlError(ctx, writer, err)

@@ -67,7 +67,7 @@ func (m *Model) fail(prefix string, err error) {
 
 // clearFailure removes obsolete error and settlement messages before another action.
 func (m *Model) clearFailure() {
-	m.lastError, m.errorAdvice, m.errorDetail, m.settlementNotice = "", "", "", ""
+	m.lastError, m.errorAdvice, m.errorDetail, m.settlementNotice, m.progressLine = "", "", "", "", ""
 }
 
 // uncertainOutcome identifies response failures that require readback before retrying a mutation.

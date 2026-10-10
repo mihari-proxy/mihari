@@ -14,9 +14,19 @@ import (
 type uninstallRunFake struct {
 	order    *[]string
 	runCalls int
+	consent  app.UninstallCommandConsent
 }
 
 func (f *uninstallRunFake) Preview(context.Context) ([]app.UninstallTarget, error) { return nil, nil }
+
+func (f *uninstallRunFake) UnmatchedCommand(context.Context) (app.UnmatchedCommandFile, bool, error) {
+	return app.UnmatchedCommandFile{}, false, nil
+}
+
+func (f *uninstallRunFake) RunForceWithCommandConsent(ctx context.Context, progress func(string), consent app.UninstallCommandConsent) error {
+	f.consent = consent
+	return f.RunForce(ctx, progress)
+}
 
 func (f *uninstallRunFake) Run(_ context.Context, progress func(string)) error {
 	f.runCalls++
@@ -42,6 +52,17 @@ func TestFinishCompleteUninstallRun_CleansUpBeforeRunningAndPrintsProgress(t *te
 	}, fake)
 	if err != nil || fake.runCalls != 1 || !reflect.DeepEqual(order, []string{"cleanup", "run"}) || output.String() != "Uninstalling Mihari service\n" {
 		t.Fatalf("err=%v calls=%d order=%v output=%q", err, fake.runCalls, order, output.String())
+	}
+}
+
+func TestFinishCompleteUninstallRun_PassesCommandConsent(t *testing.T) {
+	var order []string
+	fake := &uninstallRunFake{order: &order}
+	model := NewModel()
+	model.deleteUnmatchedCommand = true
+	err := finishCompleteUninstallRun(context.Background(), model, nil, nil, func(tea.Model) error { return nil }, fake)
+	if err != nil || !fake.consent.DeleteUnmatched || fake.runCalls != 1 {
+		t.Fatalf("err=%v consent=%v calls=%d", err, fake.consent, fake.runCalls)
 	}
 }
 

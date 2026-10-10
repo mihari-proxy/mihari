@@ -1,12 +1,16 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"strings"
 
+	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/elevate"
@@ -49,9 +53,31 @@ func serviceController(dependencies Dependencies) (ServiceController, error) {
 	return dependencies.ServiceController, nil
 }
 
+func confirmDeleteUnmatchedCommand(in io.Reader, out io.Writer, path string) (bool, error) {
+	if in == nil {
+		in = os.Stdin
+	}
+	if _, err := fmt.Fprintf(out, "Delete unmatched command file %s? [y/N] ", diagnostics.EscapeTerminal(path)); err != nil {
+		return false, err
+	}
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
 func newServiceUninstallCommand(dependencies Dependencies, options *runOptions) *cobra.Command {
-	var purge, yes, force bool
+	var purge, yes, force, deleteUnmatched bool
 	command := &cobra.Command{Use: "uninstall", Short: "Remove the Mihari OS service", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
+		if deleteUnmatched && !purge {
+			return invalidArgument("--delete-unmatched-command requires --purge")
+		}
 		if force && !purge {
 			return invalidArgument("--force requires --purge")
 		}
@@ -79,11 +105,26 @@ func newServiceUninstallCommand(dependencies Dependencies, options *runOptions) 
 				_, progressErr = fmt.Fprintln(command.ErrOrStderr(), diagnostics.EscapeTerminal(message))
 			}
 		}
-		run := dependencies.Uninstaller.Run
-		if force {
-			run = dependencies.Uninstaller.RunForce
+		file, unmatched, err := dependencies.Uninstaller.UnmatchedCommand(ctx)
+		if err != nil {
+			return err
 		}
-		runErr := run(ctx, progress)
+		consent := app.UninstallCommandConsent{}
+		if unmatched && deleteUnmatched {
+			consent.DeleteUnmatched = true
+		} else if unmatched && dependencies.Interactive && !options.json {
+			accepted, err := confirmDeleteUnmatchedCommand(command.InOrStdin(), command.ErrOrStderr(), file.Path)
+			if err != nil {
+				return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "could not read unmatched command confirmation"}, err)
+			}
+			consent.DeleteUnmatched = accepted
+		}
+		var runErr error
+		if force {
+			runErr = dependencies.Uninstaller.RunForceWithCommandConsent(ctx, progress, consent)
+		} else {
+			runErr = dependencies.Uninstaller.RunWithCommandConsent(ctx, progress, consent)
+		}
 		if err := errors.Join(runErr, progressErr); err != nil {
 			reportLocalTaskFailure(ctx, dependencies, "service.uninstall.purge.failed", err)
 			return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidState, Message: err.Error()}, err)
@@ -91,12 +132,13 @@ func newServiceUninstallCommand(dependencies Dependencies, options *runOptions) 
 		if options.json {
 			return renderJSON(command.OutOrStdout(), map[string]any{"schema": "mihari/v1", "action": "uninstall", "ok": true})
 		}
-		_, err := fmt.Fprintln(command.OutOrStdout(), "Mihari has been completely uninstalled")
+		_, err = fmt.Fprintln(command.OutOrStdout(), "Mihari has been completely uninstalled")
 		return err
 	}}
 	command.Flags().BoolVar(&purge, "purge", false, "remove the Mihari service and recognized Mihari files")
 	command.Flags().BoolVar(&yes, "yes", false, "confirm complete uninstall")
 	command.Flags().BoolVar(&force, "force", false, "delete entire target folders without checking recognized files (requires --purge --yes)")
+	command.Flags().BoolVar(&deleteUnmatched, "delete-unmatched-command", false, "delete a regular PATH command file that does not match the installed program (requires --purge --yes)")
 	return command
 }
 

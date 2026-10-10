@@ -233,9 +233,11 @@ func (i Installer) Prepare(ctx context.Context, request InstallRequest) (Prepare
 			}
 		}
 	}()
+	reportPhase(ctx, protocol.ProgressPhaseExtracting)
 	if err := extractAsset(archivePath, asset.Name, candidatePath); err != nil {
 		return nil, err
 	}
+	reportPhase(ctx, protocol.ProgressPhaseChecking)
 	if err := os.Chmod(candidatePath, 0o700); err != nil {
 		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "set core executable permissions"}, err)
 	}
@@ -302,7 +304,7 @@ func (i Installer) downloadAsset(ctx context.Context, asset Asset, destination, 
 		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "open core download file"}, err)
 	}
 	hash := sha256.New()
-	written, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, maxCoreArchiveSize+1))
+	written, copyErr := io.Copy(io.MultiWriter(file, hash), newProgressReader(ctx, io.LimitReader(response.Body, maxCoreArchiveSize+1), asset.Size))
 	closeErr := file.Close()
 	if copyErr != nil || closeErr != nil {
 		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "save mihomo core download failed"}, errors.Join(copyErr, closeErr))

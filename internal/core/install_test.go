@@ -20,6 +20,62 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
+func TestPrepare_ReportsDownloadExtractAndCheck(t *testing.T) {
+	binary := []byte("fake-mihomo-binary")
+	archive := gzipFixture(t, binary)
+	server := releaseFixture(t, "mihomo-linux-amd64-compatible-v1.19.0.gz", archive)
+	defer server.Close()
+	var seen []Progress
+	ctx := WithProgressReporter(context.Background(), func(progress Progress) { seen = append(seen, progress) })
+	root := t.TempDir()
+	runner := &recordingRunner{output: []byte("Mihomo Meta v1.19.0")}
+	installer := Installer{
+		HTTPClient: server.Client(), APIBase: server.URL, Repository: "MetaCubeX/mihomo",
+		GOOS: "linux", GOARCH: "amd64", Runner: runner,
+	}
+	_, err := installer.Install(ctx, InstallRequest{
+		BinaryPath: filepath.Join(root, "bin", "mihomo"),
+		DataDir:    root,
+		ConfigPath: filepath.Join(root, "config.yaml"),
+		StagingDir: filepath.Join(root, "staging"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertInstallPhases(t, seen, int64(len(archive)))
+}
+
+func assertInstallPhases(t *testing.T, seen []Progress, size int64) {
+	t.Helper()
+	var downloaded, extracted, checked bool
+	for _, progress := range seen {
+		switch progress.Phase {
+		case protocol.ProgressPhaseDownloading:
+			if extracted || checked {
+				t.Fatalf("download reported after a later phase: %+v", seen)
+			}
+			if progress.Received == size && progress.Total == size {
+				downloaded = true
+			}
+		case protocol.ProgressPhaseExtracting:
+			if !downloaded || checked {
+				t.Fatalf("extract out of order: %+v", seen)
+			}
+			extracted = true
+		case protocol.ProgressPhaseChecking:
+			if !extracted {
+				t.Fatalf("check before extract: %+v", seen)
+			}
+			checked = true
+		default:
+			t.Fatalf("phase %q", progress.Phase)
+		}
+	}
+	if !downloaded || !extracted || !checked {
+		t.Fatalf("phases=%+v", seen)
+	}
+}
+
 func TestSelectAssetForReleaseTargets(t *testing.T) {
 	release := Release{TagName: "v1.19.0", Assets: []Asset{
 		{Name: "mihomo-linux-amd64-compatible-v1.19.0.gz"},
