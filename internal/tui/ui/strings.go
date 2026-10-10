@@ -416,6 +416,9 @@ const (
 	CompleteUninstallUnavailable   = "Complete uninstall is unavailable"
 	CompleteUninstallPreviewFailed = "Complete uninstall preview failed"
 	CompleteUninstallConfirmKey    = "system:complete-uninstall-confirm"
+	CompleteUninstallCommandKey    = "system:complete-uninstall-command"
+	DeleteUnmatchedCommandTitle    = "Delete unmatched command file"
+	DeleteUnmatchedCommandRollback = "Cancel keeps this file and continues uninstall. Confirm deletes it."
 )
 
 const (
