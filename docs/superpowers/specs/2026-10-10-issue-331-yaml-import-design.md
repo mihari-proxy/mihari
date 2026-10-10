@@ -89,4 +89,4 @@ Subscriptions 添加表单与 Setup 首次订阅表单同时提供来源 toggle�
 
 回归覆盖：首次失败不留条目；同类型来源编辑保留旧缓存；禁止跨类型转换；符号链接版本切换与失败刷新仍使用旧目录；离线使用旧主缓存；file provider/inline/HTTP缓存路径区分；引用确认的无提交拒绝与新ID重试；定时读取失败诊断；核心校验/reload失败回滚；mode切换清空来源及两个入口一致性。
 
-全部使用临时目录、合成内容、httptest 与 fake 核心，不运行真实系统服务或连接真实订阅。先目标包测试，再集成和全仓；按风险执行 race、vet、格式化及三平台 CGO-free 编译。本地全仓普通测试、相关功能/集成测试、vet、golangci-lint，以及 Windows/amd64、Linux/amd64、darwin/arm64 的 CGO-free 编译已通过。全仓 race 的首次 4 分钟限制在已有资源恢复矩阵超时，按 CI 的 30 分钟上限重跑；最终 race 与 CI/bot review 结果记录在功能 PR。
+全部使用临时目录、合成内容、httptest 与 fake 核心，不运行真实系统服务或连接真实订阅。先目标包测试，再集成和全仓；按风险执行 race、vet、格式化及三平台 CGO-free 编译。本地全仓普通测试、相关功能/集成测试、vet、golangci-lint，以及 Windows/amd64、Linux/amd64、darwin/arm64 的 CGO-free 编译已通过。全仓 race 的首次 4 分钟限制在已有资源恢复矩阵超时，按 CI 的 30 分钟上限重跑已通过；CI/bot review 结果记录在功能 PR #337。

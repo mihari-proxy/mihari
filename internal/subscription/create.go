@@ -8,8 +8,11 @@ type PreparedAdd struct {
 	refresh PreparedRefresh
 }
 
+// Document returns the parsed candidate with local input references resolved.
 func (p PreparedAdd) Document() Document { return p.refresh.document }
-func (p PreparedAdd) ProfileID() string  { return p.profile.ID }
+
+// ProfileID returns the identifier reserved for this prepared subscription.
+func (p PreparedAdd) ProfileID() string { return p.profile.ID }
 
 // PrepareAdd validates and fetches before any catalog or cache is written.
 func (s *Service) PrepareAdd(ctx context.Context, name, source, mode string) (PreparedAdd, error) {
