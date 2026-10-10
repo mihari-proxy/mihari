@@ -1501,6 +1501,9 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 			value = m.loggingLevelEditorView(clock)
 		case m.editID == item.id:
 			value = m.editInput.View()
+		case item.id == rowCore && m.pending && m.pendingNote != "" &&
+			(m.pendingRow == rowCoreUpdate || m.pendingRow == rowCoreReinstall || m.pendingRow == rowCoreChannel):
+			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, m.pendingNote)) + "  " + value
 		case m.pending && m.pendingRow == item.id && m.coreProgressLine != "":
 			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, m.coreProgressLine)
 		case m.pending && m.pendingRow == item.id && m.pendingNote != "":
