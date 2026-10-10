@@ -9,7 +9,7 @@ import (
 
 // FileURI returns a canonical URI for an absolute native file path or file URI.
 func FileURI(path string) (string, error) {
-	if strings.HasPrefix(path, "file:") {
+	if len(path) >= 5 && strings.EqualFold(path[:5], "file:") {
 		var err error
 		path, err = FileURIPath(path)
 		if err != nil {
@@ -32,7 +32,7 @@ func FileURIPath(raw string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid file URI: %w", err)
 	}
-	if u.Scheme != "file" || u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.ContainsRune(u.Path, 0) {
+	if !strings.EqualFold(u.Scheme, "file") || u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.ContainsRune(u.Path, 0) {
 		return "", fmt.Errorf("invalid file URI: %s", raw)
 	}
 	path, err := nativeFilePath(u)

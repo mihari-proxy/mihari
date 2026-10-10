@@ -50,7 +50,7 @@ func (m *Model) FooterHints() string {
 		} else if m.subscriptionNeedsRetry() {
 			hints = "Enter retry download  Ctrl+S skip  Esc back  Ctrl+Q exit"
 		} else if !m.hasSubscriptions() {
-			hints += "  Ctrl+S skip"
+			hints += "  ←/→/Space source  Ctrl+S skip"
 		}
 	}
 	if m.step == stepGeoIP {

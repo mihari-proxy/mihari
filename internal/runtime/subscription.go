@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -94,7 +95,7 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 		if refs := subscription.FileReferences(prepared.Document()); len(refs) > 0 && !input.AllowFileReferences {
 			var paths strings.Builder
 			for _, ref := range refs {
-				paths.WriteString("\n" + ref.Location + ": " + ref.Path)
+				_, _ = fmt.Fprintf(&paths, "\n%q: %q", ref.Location, ref.Path) // strings.Builder writes never fail.
 			}
 			return nil, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: subscription.FileReferenceWarning + paths.String() + "\nProvide --allow-file-references to continue.", Details: map[string]any{"confirmation_required": "file_references", "file_references": refs}}
 		}

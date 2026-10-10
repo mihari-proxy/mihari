@@ -145,3 +145,36 @@ func TestPrepareRefresh_LocalSourceRetainsOriginalCache(t *testing.T) {
 		t.Fatalf("failed refresh replaced cache: %q %v", got, err)
 	}
 }
+
+func TestCommitAdd_CatalogPostCommitFailureRestoresDisk(t *testing.T) {
+	s, source := newServiceForTest(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("proxies: []\n")) }))
+	prepared, err := s.PrepareAdd(context.Background(), "new", source, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cause := errors.New("catalog directory sync failed after replacement")
+	calls := 0
+	s.saveCatalog = func(path string, catalog Catalog) error {
+		calls++
+		if err := Save(path, catalog); err != nil {
+			return err
+		}
+		if calls == 1 {
+			return cause
+		}
+		return nil
+	}
+	if _, err := s.CommitAdd(prepared); !errors.Is(err, cause) {
+		t.Fatalf("err=%v", err)
+	}
+	disk, err := Load(s.catalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(disk.Profiles) != 0 || len(s.Snapshot().Profiles) != 0 {
+		t.Fatalf("disk=%+v memory=%+v", disk, s.Snapshot())
+	}
+	if _, err := os.Stat(s.CachePath(prepared.ProfileID())); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cache err=%v", err)
+	}
+}

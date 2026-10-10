@@ -1,6 +1,10 @@
 package subscription
 
-import "context"
+import (
+	"context"
+	"errors"
+	"fmt"
+)
 
 // PreparedAdd holds a fetched and parsed new source without publishing it.
 type PreparedAdd struct {
@@ -51,6 +55,11 @@ func (s *Service) CommitAdd(prepared PreparedAdd) (Receipt, error) {
 	receipt, err := s.commitRefreshLocked(prepared.refresh)
 	if err != nil {
 		s.catalog = before
+		// Atomic catalog replacement can succeed before reporting a sync error.
+		// Restore the complete pre-add catalog, including removal of the new entry.
+		if restoreErr := s.saveCatalog(s.catalogPath, before); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore subscription catalog: %w", restoreErr))
+		}
 		return Receipt{}, err
 	}
 	receipt.Before = before

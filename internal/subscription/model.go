@@ -26,9 +26,10 @@ type Profile struct {
 	ID   string `yaml:"id"`
 	Name string `yaml:"name"`
 	URL  string `yaml:"url"`
-	// CacheURL identifies the source of the last successfully committed cache.
+	// CacheBaseDir is the resolved source directory associated with cached bytes.
 	CacheBaseDir string `yaml:"cache-base-dir,omitempty"`
-	CacheURL     string `yaml:"cache-url,omitempty"`
+	// CacheURL identifies the source of the last successfully committed cache.
+	CacheURL string `yaml:"cache-url,omitempty"`
 	// ScheduleFrom restarts the refresh interval without changing cache age.
 	ScheduleFrom time.Time `yaml:"schedule-from,omitempty"`
 	// IntervalRefreshRequired remains set until a refresh succeeds.

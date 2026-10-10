@@ -577,6 +577,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.step == stepSubscription && m.fileConfirmation {
+		return m.updateSubscription(message, key)
+	}
 	if key.String() == "esc" {
 		if m.step > stepEndpoints {
 			m.step--
@@ -662,7 +665,11 @@ func (m *Model) forwardTextInput(message tea.Msg) (ui.Page, tea.Cmd) {
 		if len(m.subscriptionInputs) == 0 || m.focusedField < 0 || m.focusedField >= len(m.subscriptionInputs) {
 			return m, nil
 		}
+		before := m.subscriptionInputs[m.focusedField].Value()
 		updated, command := m.subscriptionInputs[m.focusedField].Update(message)
+		if m.focusedField == 1 && before != updated.Value() {
+			m.allowFileReferences = false
+		}
 		m.subscriptionInputs[m.focusedField] = updated
 		return m, command
 	default:
@@ -766,7 +773,11 @@ func (m *Model) updateSubscription(message tea.Msg, key tea.KeyPressMsg) (ui.Pag
 	if m.focusedField >= 2 {
 		return m, nil
 	}
+	before := m.subscriptionInputs[m.focusedField].Value()
 	updated, command := m.subscriptionInputs[m.focusedField].Update(message)
+	if m.focusedField == 1 && before != updated.Value() {
+		m.allowFileReferences = false
+	}
 	m.subscriptionInputs[m.focusedField] = updated
 	return m, command
 }

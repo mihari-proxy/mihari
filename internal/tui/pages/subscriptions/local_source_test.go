@@ -76,3 +76,31 @@ func TestEditForm_LocalSourceLockedAndPathRevealed(t *testing.T) {
 		t.Fatal(f.errorText)
 	}
 }
+
+func TestAddForm_SourceEditClearsAcknowledgement(t *testing.T) {
+	f := newAddForm()
+	f.allowReferences = true
+	f.index = 1
+	f.inputs[1].Focus()
+	f.Update(tea.PasteMsg{Content: "https://fixture.test/new"})
+	if f.allowReferences {
+		t.Fatal("source edit retained acknowledgement")
+	}
+}
+func TestAddForm_EmptyLocalPathReportsPath(t *testing.T) {
+	f := newAddForm()
+	f.inputs[0].SetValue("local")
+	f.localSource = true
+	if f.valid() || !strings.Contains(f.errorText, "YAML file path") {
+		t.Fatalf("error=%s", f.errorText)
+	}
+}
+func TestLocalSource_TableDisplaysSourceLabels(t *testing.T) {
+	m := New(&fakeClient{}, func() string { return "op" }, nil)
+	m.SetSize(200, 24)
+	m.subscriptions = []protocol.Subscription{{Name: "A long local name", SourceType: "file", Enabled: true}}
+	view := m.View()
+	if !strings.Contains(view, "A long local name [file]") || !strings.Contains(view, "Local file") {
+		t.Fatalf("view=%s", view)
+	}
+}

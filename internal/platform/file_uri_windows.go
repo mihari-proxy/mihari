@@ -19,7 +19,8 @@ func nativeFilePath(u *url.URL) (string, error) {
 	if strings.Contains(u.Path, `\`) || strings.Contains(u.Host, ":") {
 		return "", fmt.Errorf("invalid Windows file URI")
 	}
-	if u.Host != "" && u.Host != "localhost" {
+	drivePath := len(u.Path) >= 4 && u.Path[0] == '/' && u.Path[2] == ':' && u.Path[3] == '/'
+	if u.Host != "" && !(strings.EqualFold(u.Host, "localhost") && drivePath) {
 		return `\\` + u.Host + strings.ReplaceAll(u.Path, "/", `\`), nil
 	}
 	if len(u.Path) < 4 || u.Path[0] != '/' || u.Path[2] != ':' || u.Path[3] != '/' {

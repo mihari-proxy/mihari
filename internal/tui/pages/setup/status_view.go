@@ -149,8 +149,9 @@ func (m *Model) subscriptionStatusLines() []string {
 				choices = "[Continue]    Cancel"
 			}
 			lines = append(lines, "")
-			lines = append(lines, strings.Split(ansi.Wrap(m.fileConfirmationNote, max(20, m.width-8), ""), "\n")...)
+			lines = append(lines, strings.Split(ansi.Wrap(m.fileConfirmationNote, max(20, min(86, m.width)-4), ""), "\n")...)
 			lines = append(lines, "", choices)
+			return append(lines, "", m.FooterHints())
 		}
 		return append(lines, "", ui.SetupSubscriptionHelp)
 	}

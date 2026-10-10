@@ -38,6 +38,7 @@ type Service struct {
 	cacheDir    string
 	downloader  Fetcher
 	writeCache  func(string, []byte, os.FileMode) error
+	saveCatalog func(string, Catalog) error
 	now         func() time.Time
 	catalog     Catalog
 }
@@ -86,7 +87,7 @@ func Open(options ServiceOptions) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{catalogPath: options.CatalogPath, cacheDir: options.CacheDir, downloader: downloader, writeCache: config.AtomicWrite, now: now, catalog: catalog}, nil
+	return &Service{catalogPath: options.CatalogPath, cacheDir: options.CacheDir, downloader: downloader, writeCache: config.AtomicWrite, saveCatalog: Save, now: now, catalog: catalog}, nil
 }
 
 func (s *Service) Snapshot() Catalog {
@@ -275,7 +276,7 @@ func (s *Service) commitRefreshLocked(prepared PreparedRefresh) (Receipt, error)
 		return Receipt{}, s.failAfterRestore(err, cachePath, cacheBefore, hadCache, wroteCache)
 	}
 	after.fillDefaults()
-	if err := Save(s.catalogPath, after); err != nil {
+	if err := s.saveCatalog(s.catalogPath, after); err != nil {
 		return Receipt{}, s.failAfterRestore(err, cachePath, cacheBefore, hadCache, wroteCache)
 	}
 	s.catalog = after

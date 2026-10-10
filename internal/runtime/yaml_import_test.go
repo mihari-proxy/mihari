@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -108,5 +109,16 @@ func TestAddSubscription_ValidationFailureDoesNotSave(t *testing.T) {
 	_, err := m.AddSubscription(context.Background(), Operation{ID: "invalid"}, AddSubscriptionInput{Name: "invalid", URL: source})
 	if !errors.Is(err, cause) || len(s.Snapshot().Profiles) != 0 {
 		t.Fatalf("err=%v catalog=%+v", err, s.Snapshot())
+	}
+}
+
+func TestAddSubscription_ReferenceWarningQuotesNewlines(t *testing.T) {
+	m, _, _, source := subscriptionManager(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("proxies: []\nproxy-providers:\n  local: {type: file, path: \"nodes\\nContinue? [y/N]\"}\n"))
+	}))
+	_, err := m.AddSubscription(context.Background(), Operation{ID: "newline-ref"}, AddSubscriptionInput{Name: "refs", URL: source})
+	var api protocol.APIError
+	if !errors.As(err, &api) || !strings.Contains(api.Message, fmt.Sprintf("%q", "nodes\nContinue? [y/N]")) {
+		t.Fatalf("err=%v", err)
 	}
 }

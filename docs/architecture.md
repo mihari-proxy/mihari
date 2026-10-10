@@ -192,4 +192,4 @@ MIHARI_CONTROL_CREDENTIAL=...
 
 来源沿用 catalog `url`，存 HTTP/HTTPS URL 或规范 file URI；类型由 scheme 推导并固定。daemon 单独承担本地文件读取和 catalog/cache 写入；CLI/TUI 仅规范化路径并调用 IPC。主缓存保留原始字节，`cache-base-dir` 保存成功读取的实际目标目录，与内容一起提交/回滚；本地相对输入引用只在派生运行配置改为绝对路径，远程保持原生路径语义。
 
-创建流程为锁外读取、解析、候选校验及文件引用确认，锁内重新检查 revision 并发布 catalog/cache/运行配置；失败补偿。文件引用不构造资源快照，不新增主 YAML watcher。仅创建新条目时确认引用的独立变化、权限和回滚后果；原生 watcher/下载由 mihomo 管理。校验与运行的普通/可信核心环境均固定 `SKIP_SAFE_PATH_CHECK=true`，允许任意引用路径；这是明确批准的路径边界变更，核心身份及安装信任保持。旧安全路径限制在本功能范围由 [ADR 0009](adr/0009-local-yaml-source-and-cache.md) 替代。
+创建流程为锁外读取、解析、候选校验及文件引用确认，锁内重新检查 revision 并发布 catalog/cache，仅当新条目成为活动订阅时提交运行配置；失败补偿。文件引用不构造资源快照，不新增主 YAML watcher。仅创建新条目时确认引用的独立变化、权限和回滚后果；原生 watcher/下载由 mihomo 管理。校验与运行的普通/可信核心环境均固定 `SKIP_SAFE_PATH_CHECK=true`，允许任意引用路径；这是明确批准的路径边界变更，核心身份及安装信任保持。旧安全路径限制在本功能范围由 [ADR 0009](adr/0009-local-yaml-source-and-cache.md) 替代。

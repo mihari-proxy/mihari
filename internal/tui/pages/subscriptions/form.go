@@ -132,6 +132,7 @@ func (f *formModel) Update(message tea.Msg) (bool, tea.Cmd) {
 	f.inputs[f.index] = updated
 	if f.index == 1 && before != updated.Value() {
 		f.urlTouched = true
+		f.allowReferences = false
 	}
 	return false, command
 }
@@ -180,6 +181,9 @@ func (f *formModel) valid() bool {
 	raw := strings.TrimSpace(f.inputs[1].Value())
 	if f.kind == formAdd || f.urlTouched || raw != "" {
 		if raw == "" {
+			if f.localSource {
+				return f.validationFailure("Enter an absolute YAML file path.", nil)
+			}
 			return f.validationFailure("URL is required.", nil)
 		}
 		if f.localSource {
