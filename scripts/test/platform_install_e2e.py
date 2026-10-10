@@ -330,7 +330,13 @@ def _install_unix(archive: str) -> None:
     script = ROOT / "scripts" / "install" / "install-aio.sh"
     mode = script.stat().st_mode
     script.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    result = _run(unix_install_command(str(script), archive), cwd=str(ROOT))
+    try:
+        result = _run(unix_install_command(str(script), archive), cwd=str(ROOT))
+    finally:
+        # This job's authorization pin is a fixture, not installed product data.
+        # Remove only the known file; rmdir refuses any unexpected contents.
+        _run(["sudo", "rm", "-f", "--", MANIFEST])
+        _run(["sudo", "rmdir", "--", TRUST_DIR])
     assert_install_success(host_system(), result.stdout, result.stderr)
 
 

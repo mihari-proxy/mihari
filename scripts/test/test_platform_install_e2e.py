@@ -47,6 +47,10 @@ def test_unix_install_prepares_command_directory_on_hosted_runner(monkeypatch, t
     assert ["sudo", "chown", "0:0", str(command_dir)] in commands
     assert ["sudo", "chmod", "755", str(command_dir)] in commands
     assert inspected == [str(tmp_path), str(command_dir)]
+    assert commands[-2:] == [
+        ["sudo", "rm", "-f", "--", e2e.MANIFEST],
+        ["sudo", "rmdir", "--", e2e.TRUST_DIR],
+    ]
 
 
 def test_unix_install_refuses_to_repair_a_workstation(monkeypatch):
