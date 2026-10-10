@@ -147,8 +147,13 @@ def test_unix_bundle_has_only_the_installer_members():
         "data/geoip/GeoLite2-ASN.mmdb",
     ]
     with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as archive:
-        mihari = archive.extractfile("mihari").read()
-    assert mihari == b"mihari-bytes"
+        for name, expected in {
+            "mihari": b"mihari-bytes",
+            "data/bin/mihomo": b"core",
+            "data/geoip/GeoLite2-Country.mmdb": b"country",
+            "data/geoip/GeoLite2-ASN.mmdb": b"asn",
+        }.items():
+            assert archive.extractfile(name).read() == expected
 
 
 def test_windows_bundle_uses_exe_names(tmp_path: Path):
@@ -168,6 +173,7 @@ def test_manifest_pins_bundle_and_binary_only():
         "bundles": [hashlib.sha256(blob).hexdigest()],
     }
     parsed = json.loads(e2e.manifest_bytes(document).decode("utf-8"))
+    assert parsed == document
     assert list(parsed) == ["binaries", "bundles"]
     assert len(parsed["binaries"][0]) == 64
 

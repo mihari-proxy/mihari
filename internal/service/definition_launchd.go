@@ -118,6 +118,9 @@ func (a *LaunchdAdapter) InspectDefinition(ctx context.Context) (Definition, err
 	if err != nil {
 		return Definition{}, err
 	}
+	if err := requireZeroExit(disabledOut); err != nil {
+		return Definition{}, err
+	}
 	disabled, err := parsePrintDisabled(disabledOut.Stdout, a.paths.Label)
 	if err != nil {
 		return Definition{}, err
