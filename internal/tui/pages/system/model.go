@@ -250,6 +250,19 @@ const (
 	serviceRestart
 )
 
+const coreProgressInterval = 200 * time.Millisecond
+
+type coreProgressObserver interface {
+	OperationStatus(context.Context, string) (protocol.OperationStatus, error)
+}
+
+type coreProgressMsg struct {
+	id   string
+	line string
+}
+
+type coreProgressTickMsg struct{ id string }
+
 // rowSpinTickMsg advances braille frames while a System row action is in flight.
 type rowSpinTickMsg struct {
 	t   time.Time
@@ -373,14 +386,17 @@ type Model struct {
 	clientLogDir          string
 	exportLogDir          string
 
-	serviceStatus service.StatusKind
-	serviceLoaded bool
-	elevated      bool
-	focusID       string
-	detail        *row
-	pending       bool
-	pendingRow    string // row id showing in-row braille progress
-	pendingNote   string // short status text next to the row (e.g. Installing)
+	serviceStatus       service.StatusKind
+	serviceLoaded       bool
+	elevated            bool
+	focusID             string
+	detail              *row
+	pending             bool
+	pendingRow          string // row id showing in-row braille progress
+	pendingNote         string // short status text next to the row (e.g. Installing)
+	coreProgressID      string
+	coreProgressStarted time.Time
+	coreProgressLine    string
 	// Sticky outcome after an action finishes (cleared on page leave or re-run).
 	outcomeRow       string
 	outcomeOK        bool   // true=Done (green), false=Failed (red)
@@ -1097,7 +1113,12 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 			m.invalidateMihariCheck()
 		}
 		m.beginRowPending(typed.Action)
-		return m, m.rowSpinCmdIfNeeded()
+		spin := m.rowSpinCmdIfNeeded()
+		poll := m.beginCoreInstallProgress(typed.Action)
+		if poll == nil {
+			return m, spin
+		}
+		return m, tea.Batch(spin, poll)
 	case startRowSpinMsg:
 		if typed.gen != m.rowSpinGen || !m.hasRowProgress() {
 			if typed.gen == m.rowSpinGen {
@@ -1120,6 +1141,20 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		return m, tea.Tick(rowSpinInterval, func(t time.Time) tea.Msg {
 			return ui.PageResultMsg{Page: ui.PageSystem, Result: rowSpinTickMsg{t: t, gen: typed.gen}}
 		})
+	case coreProgressMsg:
+		if !m.pending || typed.id == "" || typed.id != m.coreProgressID {
+			return m, nil
+		}
+		m.coreProgressLine = typed.line
+		id := m.coreProgressID
+		return m, tea.Tick(coreProgressInterval, func(time.Time) tea.Msg {
+			return ui.PageResultMsg{Page: ui.PageSystem, Result: coreProgressTickMsg{id: id}}
+		})
+	case coreProgressTickMsg:
+		if !m.pending || typed.id == "" || typed.id != m.coreProgressID {
+			return m, nil
+		}
+		return m, m.pollCoreProgress()
 	case startOutcomeFadeMsg:
 		return m, tea.Tick(outcomeFadeInterval, func(time.Time) tea.Msg {
 			// outcomeFadeMsg has the same shape as startOutcomeFadeMsg; convert
@@ -1444,6 +1479,8 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 			value = m.loggingLevelEditorView(clock)
 		case m.editID == item.id:
 			value = m.editInput.View()
+		case m.pending && m.pendingRow == item.id && m.coreProgressLine != "":
+			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, m.coreProgressLine)
 		case m.pending && m.pendingRow == item.id && m.pendingNote != "":
 			value = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, m.pendingNote))
 		case item.id == rowCoreUpdate && m.coreVersion.checking:
@@ -2039,6 +2076,70 @@ func (m *Model) clearRowPending() {
 	m.pending = false
 	m.pendingRow = ""
 	m.pendingNote = ""
+	m.clearCoreInstallProgress()
+}
+
+func (m *Model) clearCoreInstallProgress() {
+	m.coreProgressID = ""
+	m.coreProgressStarted = time.Time{}
+	m.coreProgressLine = ""
+}
+
+func coreInstallProgressAction(action ui.Action) bool {
+	switch action {
+	case ui.ActionUpdateCore, ui.ActionReinstallCore, ui.ActionSwitchCoreChannel:
+		return true
+	default:
+		return false
+	}
+}
+
+// beginCoreInstallProgress arms a poll for an install that already has an operation id.
+// Restart and every other row keep the short pending note.
+func (m *Model) beginCoreInstallProgress(action ui.Action) tea.Cmd {
+	if !coreInstallProgressAction(action) {
+		m.clearCoreInstallProgress()
+		return nil
+	}
+	if m.coreProgressID == "" {
+		m.coreProgressLine = ""
+		return nil
+	}
+	if _, ok := m.client.(coreProgressObserver); !ok {
+		m.coreProgressLine = ""
+		return nil
+	}
+	m.coreProgressStarted = time.Now()
+	m.coreProgressLine = protocol.FormatCoreInstallProgress(nil, 0)
+	return m.pollCoreProgress()
+}
+
+// pollCoreProgress reads one operation snapshot. The next read is scheduled from Update.
+func (m *Model) pollCoreProgress() tea.Cmd {
+	observer, ok := m.client.(coreProgressObserver)
+	if !ok || m.coreProgressID == "" {
+		return nil
+	}
+	parent := m.ctx
+	id, started := m.coreProgressID, m.coreProgressStarted
+	return func() tea.Msg {
+		if parent == nil {
+			parent = context.Background()
+		}
+		ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+		defer cancel()
+		var progress *protocol.OperationProgress
+		if status, err := observer.OperationStatus(ctx, id); err == nil {
+			progress = status.Progress
+		}
+		elapsed := time.Duration(0)
+		if !started.IsZero() {
+			elapsed = time.Since(started)
+		}
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: coreProgressMsg{
+			id: id, line: protocol.FormatCoreInstallProgress(progress, elapsed),
+		}}
+	}
 }
 
 // outcomeRowID prefers the in-flight pending row, then an explicit fallback, then focus.
@@ -2915,6 +3016,7 @@ func (m *Model) confirmSwitchCoreChannel(target string) tea.Cmd {
 		return nil
 	}
 	revision, operationID := m.currentRevision(), m.newOperationID()
+	m.coreProgressID = operationID
 	return func() tea.Msg {
 		return ui.ActionIntentMsg{
 			Action: ui.ActionSwitchCoreChannel, Page: ui.PageSystem, Capability: protocol.CapabilityCore,
@@ -2944,6 +3046,11 @@ func (m *Model) confirmAction(kind actionKind) tea.Cmd {
 	if kind == actionReinstall {
 		title, impact, rollback = ui.ReinstallCoreTitle, ui.ReinstallCoreImpact, ui.ReinstallCoreRollback
 		action, capability = ui.ActionReinstallCore, protocol.CapabilityCoreReinstall
+	}
+	if kind == actionUpdate || kind == actionReinstall {
+		m.coreProgressID = operationID
+	} else {
+		m.clearCoreInstallProgress()
 	}
 	return func() tea.Msg {
 		return ui.ActionIntentMsg{

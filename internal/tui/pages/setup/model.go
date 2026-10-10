@@ -143,6 +143,7 @@ type Model struct {
 	loading            bool
 	lastError          string
 	settlementNotice   string
+	progressLine       string
 	errorAdvice        string
 	errorDetail        string
 	operationID        string
@@ -264,7 +265,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		if typed.gen != m.executionGen {
 			return m, nil
 		}
-		m.loading, m.settling = false, false
+		m.loading, m.settling, m.progressLine = false, false, ""
 		cancelled := m.cancelRequested
 		m.cancelRequested = false
 		if m.cancelSettlement != nil {
@@ -308,6 +309,20 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case coreProgressMsg:
+		if typed.gen != m.executionGen || !m.loading || m.settling || m.cancelRequested {
+			return m, nil
+		}
+		m.progressLine = typed.line
+		gen := m.executionGen
+		return m, tea.Tick(coreProgressInterval, func(time.Time) tea.Msg {
+			return coreProgressTickMsg{gen: gen}
+		})
+	case coreProgressTickMsg:
+		if typed.gen != m.executionGen || !m.loading || m.settling || m.cancelRequested {
+			return m, nil
+		}
+		return m, m.pollCoreProgress()
 	case onboardingResultMsg:
 		m.loading = false
 		if typed.err != nil {
@@ -360,6 +375,7 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			return m, nil
 		}
 		m.loading = false
+		m.progressLine = ""
 		if typed.core != nil && typed.err == nil {
 			m.coreResult = *typed.core
 			if typed.core.Version != "" {
@@ -585,8 +601,12 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 			if !m.coreLocalLoaded {
 				return m, m.fetchCoreLocal()
 			}
-			m.loading = true
-			return m, m.installCore()
+			install := m.installCore()
+			if poll := m.pollCoreProgress(); poll != nil {
+				m.progressLine = protocol.FormatCoreInstallProgress(nil, 0)
+				return m, tea.Batch(install, poll)
+			}
+			return m, install
 		}
 	case stepSubscription:
 		return m.updateSubscription(message, key)

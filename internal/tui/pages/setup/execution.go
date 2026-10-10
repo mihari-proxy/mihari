@@ -19,6 +19,15 @@ type subscriptionReader interface {
 	RefreshSubscription(context.Context, string, protocol.MutationRequest) (protocol.SubscriptionResult, error)
 }
 
+const coreProgressInterval = 200 * time.Millisecond
+
+type coreProgressMsg struct {
+	gen  uint64
+	line string
+}
+
+type coreProgressTickMsg struct{ gen uint64 }
+
 type cancelExecutionMsg struct{ gen uint64 }
 type settlementMsg struct {
 	unsupported   bool
@@ -145,8 +154,37 @@ func (m *Model) settle() tea.Cmd {
 	}
 }
 
-// executionText renders the current action, spinner and elapsed time without estimated progress.
+// pollCoreProgress reads one operation snapshot. The next read is scheduled from Update.
+func (m *Model) pollCoreProgress() tea.Cmd {
+	observer, ok := m.client.(operationObserver)
+	if !ok {
+		return nil
+	}
+	parent := m.ctx
+	gen, id, started := m.executionGen, m.operationID, m.executionStarted
+	return func() tea.Msg {
+		if parent == nil {
+			parent = context.Background()
+		}
+		ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+		defer cancel()
+		var progress *protocol.OperationProgress
+		if status, err := observer.OperationStatus(ctx, id); err == nil {
+			progress = status.Progress
+		}
+		elapsed := time.Duration(0)
+		if !started.IsZero() {
+			elapsed = time.Since(started)
+		}
+		return coreProgressMsg{gen: gen, line: protocol.FormatCoreInstallProgress(progress, elapsed)}
+	}
+}
+
+// executionText renders the current action. A core install replaces the spinner with received bytes.
 func (m *Model) executionText() string {
+	if m.progressLine != "" && !m.settling && !m.cancelRequested {
+		return m.progressLine
+	}
 	label := m.executionLabel
 	if label == "" {
 		label = "Reading setup state"

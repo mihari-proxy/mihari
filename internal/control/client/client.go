@@ -17,6 +17,10 @@ import (
 	"github.com/mihari-proxy/mihari/internal/logging"
 )
 
+// DefaultTimeout bounds an ordinary local control request.
+// Core install and reinstall clear it. Subscription mutations keep a longer budget.
+const DefaultTimeout = 60 * time.Second
+
 type Client struct {
 	baseURL  string
 	tokenMu  sync.RWMutex
@@ -68,7 +72,7 @@ func New(endpoint, token string) *Client {
 	}
 	return NewHTTP("http://mihari", token, &http.Client{
 		Transport: transportClient,
-		Timeout:   10 * time.Second,
+		Timeout:   DefaultTimeout,
 	})
 }
 

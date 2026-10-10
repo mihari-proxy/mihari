@@ -60,6 +60,8 @@ func newCoreCommand(dependencies Dependencies, options *runOptions) *cobra.Comma
 					action, nameOfOperation = repair.ReinstallCore, "core.reinstall"
 				}
 				ctx := logging.WithOperation(command.Context(), logging.OperationMetadata{ID: request.OperationID, Name: nameOfOperation})
+				stopProgress := trackCoreInstallProgress(ctx, options.json, client, request.OperationID, command.ErrOrStderr())
+				defer stopProgress()
 				result, err := action(ctx, request)
 				if err != nil {
 					return classifyRuntimeError(err)

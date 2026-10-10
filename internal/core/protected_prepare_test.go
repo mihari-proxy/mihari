@@ -10,6 +10,44 @@ import (
 	"testing"
 )
 
+func TestProtectedPrepare_ReportsDownloadExtractAndCheck(t *testing.T) {
+	_, installer, _ := trustedFixture(t)
+	archive := gzipFixture(t, []byte("official new version"))
+	name := "mihomo-linux-amd64-compatible-v1.20.0.gz"
+	asset := Asset{ID: 456, Name: name, Size: int64(len(archive)), State: "uploaded", UpdatedAt: "2026-09-17T01:00:00Z"}
+	installer.GOOS, installer.GOARCH = "linux", "amd64"
+	installer.Executor = configExecutorFunc(func(context.Context, CoreCommand) ([]byte, error) {
+		return []byte("Mihomo Meta v1.20.0"), nil
+	})
+	installer.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var value any
+		switch {
+		case strings.HasSuffix(request.URL.Path, "/releases/latest"):
+			value = Release{ID: 123, TagName: "v1.20.0", Assets: []Asset{asset}}
+		case strings.HasSuffix(request.URL.Path, "/releases/assets/456"):
+			if request.Header.Get("Accept") == "application/octet-stream" {
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(archive))}, nil
+			}
+			value = asset
+		default:
+			return &http.Response{StatusCode: 404, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("missing"))}, nil
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(raw))}, nil
+	})}
+	var seen []Progress
+	ctx := WithProgressReporter(t.Context(), func(progress Progress) { seen = append(seen, progress) })
+	candidate, err := installer.Prepare(ctx, InstallRequest{Channel: "stable"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.Cleanup()
+	assertInstallPhases(t, seen, int64(len(archive)))
+}
+
 func TestProtectedPrepareUsesOfficialStableAndAlphaWithoutVersionTable(t *testing.T) {
 	for _, channel := range []string{"stable", "alpha"} {
 		t.Run(channel, func(t *testing.T) {

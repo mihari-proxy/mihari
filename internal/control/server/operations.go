@@ -5,15 +5,25 @@ import (
 	"encoding/hex"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/core"
 )
 
 const maxObservedOperations = 256
 
 type observedOperation struct {
-	active int
-	order  uint64
+	active   int
+	order    uint64
+	progress *observedProgress
+}
+
+type observedProgress struct {
+	phase    string
+	received int64
+	total    int64
+	started  time.Time
 }
 
 // Observation is independent of mutation caching. Concurrent requests with one
@@ -23,6 +33,7 @@ type operationObservation struct {
 	entries   map[string]*observedOperation
 	sequence  uint64
 	untracked int
+	now       func() time.Time
 }
 
 // begin tracks an active handler and returns its release callback; saturated records stay unknown.
@@ -64,21 +75,75 @@ func (o *operationObservation) begin(id string) func() {
 
 // state reports process-local settlement, conservatively returning unknown for untracked work.
 func (o *operationObservation) state(id string) string {
+	return o.snapshot(id).State
+}
+
+// noteProgress records the current core-install phase for a still-running operation.
+func (o *operationObservation) noteProgress(id string, progress core.Progress) {
+	switch progress.Phase {
+	case protocol.ProgressPhaseDownloading, protocol.ProgressPhaseExtracting, protocol.ProgressPhaseChecking:
+	default:
+		return
+	}
 	id = observationKey(id)
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	entry := o.entries[id]
+	if entry == nil || entry.active == 0 {
+		return
+	}
+	if entry.progress == nil || entry.progress.phase != progress.Phase {
+		entry.progress = &observedProgress{phase: progress.Phase, started: o.clockLocked()}
+	}
+	entry.progress.received = progress.Received
+	entry.progress.total = progress.Total
+}
+
+// snapshot reports settlement and, while running, the latest core-install progress.
+func (o *operationObservation) snapshot(id string) protocol.OperationStatus {
+	key := observationKey(id)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	status := protocol.OperationStatus{Schema: "mihari/v1", OperationID: id, State: "unknown"}
 	// A saturated request may share an ID with a later tracked request. Never
 	// claim settlement until every untracked handler has also returned.
 	if o.untracked > 0 {
-		return "unknown"
+		return status
 	}
-	if entry := o.entries[id]; entry != nil {
-		if entry.active > 0 {
-			return "running"
+	entry := o.entries[key]
+	if entry == nil {
+		return status
+	}
+	if entry.active > 0 {
+		status.State = "running"
+	} else {
+		status.State = "finished"
+	}
+	if status.State != "running" || entry.progress == nil {
+		return status
+	}
+	elapsed := o.clockLocked().Sub(entry.progress.started)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	reported := &protocol.OperationProgress{Phase: entry.progress.phase, ElapsedMilliseconds: elapsed.Milliseconds()}
+	if entry.progress.phase == protocol.ProgressPhaseDownloading {
+		received := entry.progress.received
+		reported.ReceivedBytes = &received
+		if entry.progress.total > 0 {
+			total := entry.progress.total
+			reported.TotalBytes = &total
 		}
-		return "finished"
 	}
-	return "unknown"
+	status.Progress = reported
+	return status
+}
+
+func (o *operationObservation) clockLocked() time.Time {
+	if o.now != nil {
+		return o.now()
+	}
+	return time.Now()
 }
 
 // observationKey bounds retained identifiers without storing their original text.
@@ -93,5 +158,5 @@ func (s *Server) operationStatus(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOperationID(r.Context(), w, id) {
 		return
 	}
-	writeJSON(w, http.StatusOK, protocol.OperationStatus{Schema: "mihari/v1", OperationID: id, State: s.operations.state(id)})
+	writeJSON(w, http.StatusOK, s.operations.snapshot(id))
 }

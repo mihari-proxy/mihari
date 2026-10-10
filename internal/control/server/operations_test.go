@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/core"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 	"github.com/mihari-proxy/mihari/internal/state"
@@ -90,6 +93,66 @@ func TestOperationStatus_CancelledRequestRemainsRunningUntilSettlement(t *testin
 	if got := readOperationState(t, s, "settling"); got != "running" {
 		t.Fatalf("state=%s", got)
 	}
+}
+
+type progressRuntime struct {
+	*fakeRuntime
+	started chan struct{}
+	hold    chan struct{}
+}
+
+func (f *progressRuntime) Install(ctx context.Context, _ runtimeapi.Operation) (core.InstallResult, error) {
+	core.ReportProgress(ctx, core.Progress{Phase: protocol.ProgressPhaseDownloading, Received: 1536, Total: 2048})
+	close(f.started)
+	<-f.hold
+	return core.InstallResult{Version: "v1.19.0"}, nil
+}
+
+func TestOperationStatus_RunningInstallReportsProgress(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	f := &progressRuntime{fakeRuntime: &fakeRuntime{}, started: make(chan struct{}), hold: make(chan struct{})}
+	s := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: f})
+	s.operations.now = func() time.Time { return now }
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.Handler().ServeHTTP(httptest.NewRecorder(), authorizedRequest(http.MethodPost, "/v1/core/install", bytes.NewBufferString(`{"operation_id":"download"}`)))
+	}()
+	var release sync.Once
+	finish := func() { release.Do(func() { close(f.hold) }) }
+	t.Cleanup(func() { finish(); <-done })
+	<-f.started
+	now = now.Add(1500 * time.Millisecond)
+	body := readOperationProgress(t, s, "download")
+	if body.State != "running" || body.Progress == nil || body.Progress.Phase != protocol.ProgressPhaseDownloading {
+		t.Fatalf("status=%+v", body)
+	}
+	if body.Progress.ReceivedBytes == nil || *body.Progress.ReceivedBytes != 1536 || body.Progress.TotalBytes == nil || *body.Progress.TotalBytes != 2048 {
+		t.Fatalf("progress=%+v", body.Progress)
+	}
+	if body.Progress.ElapsedMilliseconds != 1500 {
+		t.Fatalf("elapsed=%d", body.Progress.ElapsedMilliseconds)
+	}
+	finish()
+	<-done
+	finished := readOperationProgress(t, s, "download")
+	if finished.State != "finished" || finished.Progress != nil {
+		t.Fatalf("finished=%+v", finished)
+	}
+}
+
+func readOperationProgress(t *testing.T, s *Server, id string) protocol.OperationStatus {
+	t.Helper()
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, authorizedRequest(http.MethodGet, "/v1/operations/"+id, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("operation query status=%d", w.Code)
+	}
+	var body protocol.OperationStatus
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	return body
 }
 
 func TestOperationStatus_Finished(t *testing.T) {

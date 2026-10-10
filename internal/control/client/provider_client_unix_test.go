@@ -29,7 +29,7 @@ func TestSubscriptionTimeout_VerifiedUnixConstructorUsesLongBudget(t *testing.T)
 		if err := invokeSubscriptionMutation(context.Background(), c, add); err != nil {
 			t.Fatal(err)
 		}
-		if p.calls != 1 || c.http.Timeout != 10*time.Second {
+		if p.calls != 1 || c.http.Timeout != DefaultTimeout {
 			t.Fatal("Unix credential or ordinary budget changed")
 		}
 	}
