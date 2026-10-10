@@ -403,8 +403,9 @@ func TestUninstaller_CommandConsentLeavesSymlinkAndDirectory(t *testing.T) {
 			t.Fatalf("symlink unmatched ok=%t err=%v", ok, err)
 		}
 		err := runner.RunWithCommandConsent(context.Background(), nil, UninstallCommandConsent{DeleteUnmatched: true})
-		if err == nil || !fileExists(command) || fileExists(data) {
-			t.Fatalf("symlink Run error = %v, command = %t, data = %t", err, fileExists(command), fileExists(data))
+		outsideBytes, outsideErr := os.ReadFile(outside)
+		if err == nil || !fileExists(command) || fileExists(data) || outsideErr != nil || string(outsideBytes) != "different" {
+			t.Fatalf("symlink Run error = %v, command = %t, data = %t, outside=%q outsideErr=%v", err, fileExists(command), fileExists(data), outsideBytes, outsideErr)
 		}
 	})
 }

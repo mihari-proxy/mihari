@@ -19,16 +19,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var uninstallCommandIsTerminal = func() bool {
-	info, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
-}
-
-var uninstallCommandInput io.Reader = os.Stdin
-
 // ServiceController is the OS service surface used by CLI commands.
 type ServiceController interface {
 	Install() error
@@ -67,12 +57,12 @@ func confirmDeleteUnmatchedCommand(in io.Reader, out io.Writer, path string) (bo
 	if in == nil {
 		in = os.Stdin
 	}
-	if _, err := fmt.Fprintf(out, "Delete unmatched command file %s? [y/N] ", path); err != nil {
+	if _, err := fmt.Fprintf(out, "Delete unmatched command file %s? [y/N] ", diagnostics.EscapeTerminal(path)); err != nil {
 		return false, err
 	}
 	line, err := bufio.NewReader(in).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
-		return false, nil
+		return false, err
 	}
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
@@ -122,10 +112,10 @@ func newServiceUninstallCommand(dependencies Dependencies, options *runOptions) 
 		consent := app.UninstallCommandConsent{}
 		if unmatched && deleteUnmatched {
 			consent.DeleteUnmatched = true
-		} else if unmatched && uninstallCommandIsTerminal() {
-			accepted, err := confirmDeleteUnmatchedCommand(uninstallCommandInput, command.ErrOrStderr(), file.Path)
+		} else if unmatched && dependencies.Interactive && !options.json {
+			accepted, err := confirmDeleteUnmatchedCommand(command.InOrStdin(), command.ErrOrStderr(), file.Path)
 			if err != nil {
-				return err
+				return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "could not read unmatched command confirmation"}, err)
 			}
 			consent.DeleteUnmatched = accepted
 		}

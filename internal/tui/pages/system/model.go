@@ -530,7 +530,7 @@ func completeUninstallDecision(uninstaller Uninstaller) tea.Msg {
 	file, ok, err := uninstaller.UnmatchedCommand(context.Background())
 	if err != nil || !ok {
 		if err != nil {
-			return err
+			return uninstallPreviewMsg{err: err}
 		}
 		return ui.CompleteUninstallConfirmedMsg{}
 	}

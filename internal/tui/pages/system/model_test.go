@@ -1473,6 +1473,28 @@ func TestSystemCompleteUninstall_UnmatchedCommandAsksBeforeDeleting(t *testing.T
 	}
 }
 
+func TestSystemCompleteUninstall_UnmatchedCommandErrorStaysVisible(t *testing.T) {
+	preview := &fakeUninstaller{unmatchedErr: errors.New("inspect command file /usr/local/bin/mihari: permission denied")}
+	model := New(nil, func() string { return "system-op" })
+	model.SetUninstaller(preview)
+	model.focusID = rowCompleteUninstall
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(*Model)
+	_, command = model.Update(command())
+	intent := command().(ui.ActionIntentMsg)
+	second := intent.Execute().(ui.ActionIntentMsg)
+	result := second.Execute()
+	msg, ok := result.(uninstallPreviewMsg)
+	if !ok || msg.Err() == nil {
+		t.Fatalf("result=%T %#v", result, result)
+	}
+	updated, _ = model.Update(msg)
+	model = updated.(*Model)
+	if model.outcomeOK || model.outcomeRow != rowCompleteUninstall || !strings.Contains(model.outcomeDetail, "permission denied") {
+		t.Fatalf("outcome ok=%t row=%q detail=%q", model.outcomeOK, model.outcomeRow, model.outcomeDetail)
+	}
+}
+
 func TestSystemCompleteUninstall_PreviewFailureShowsRootError(t *testing.T) {
 	preview := &fakeUninstaller{err: &app.UninstallFileError{Kind: "data", RelativePath: ".", Reason: "symbolic link"}}
 	model := New(nil, func() string { return "system-op" })
