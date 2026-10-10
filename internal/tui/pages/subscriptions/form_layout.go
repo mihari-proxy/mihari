@@ -21,8 +21,11 @@ type formLayout struct {
 // fieldLayout renders shared add/edit fields and records their inclusive row bounds.
 // Display widths and clipping preserve the full input values and cursor offsets.
 func (f *formModel) fieldLayout(theme ui.Theme, width int) formLayout {
-	layout := formLayout{}
+	layout := formLayout{fields: make([]formFieldRows, len(f.labels))}
 	for index, label := range f.labels {
+		if label == "Mode" && f.localSource {
+			continue
+		}
 		if label == "Enabled" {
 			layout.lines = append(layout.lines, "")
 			layout.lines = append(layout.lines, strings.Split(ansi.Wrap(theme.Title.Render("Actions · Apply immediately"), width, ""), "\n")...)
@@ -33,7 +36,7 @@ func (f *formModel) fieldLayout(theme ui.Theme, width int) formLayout {
 			marker = ui.FocusMarker
 		}
 		prefix := marker + fmt.Sprintf("%-14s", label)
-		if label == "URL" {
+		if label == "URL" || label == "YAML path" {
 			layout.lines = append(layout.lines, marker+theme.Muted.Render(label))
 			prefix = "  "
 		}
@@ -56,11 +59,11 @@ func (f *formModel) fieldLayout(theme ui.Theme, width int) formLayout {
 		if action {
 			value = f.inputs[index].Value()
 		}
-		if label == "URL" && index != f.index && f.inputs[index].Value() != "" {
+		if (label == "URL" || label == "YAML path") && index != f.index && f.inputs[index].Value() != "" {
 			// Reading shows the origin; editing retains the full value and cursor offset.
 			value = f.inputs[index].Styles().Blurred.Text.Render(ui.TruncateVisible(f.inputs[index].Value(), available))
 		}
-		cycle := label == "Mode" || label == "Auto refresh"
+		cycle := label == "Mode" || label == "Auto refresh" || label == "Source"
 		if cycle {
 			value = proxyModeLabel(f.inputs[index].Value())
 			if label == "Auto refresh" {
@@ -68,6 +71,9 @@ func (f *formModel) fieldLayout(theme ui.Theme, width int) formLayout {
 				if f.inputs[index].Value() == "true" {
 					value = "On"
 				}
+			}
+			if label == "Source" {
+				value = f.inputs[index].Value()
 			}
 			value = "‹ " + value + " ›"
 		}
@@ -101,7 +107,7 @@ func (f *formModel) fieldLayout(theme ui.Theme, width int) formLayout {
 			}
 			layout.lines = append(layout.lines, strings.Split(ansi.Wrap(theme.Muted.Render(help), width, ""), "\n")...)
 		}
-		layout.fields = append(layout.fields, formFieldRows{first, len(layout.lines) - 1})
+		layout.fields[index] = formFieldRows{first, len(layout.lines) - 1}
 	}
 	return layout
 }

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -114,9 +114,20 @@ func (c *Catalog) Normalize() error {
 		if profile.Name == "" {
 			return dataError("subscription name is required")
 		}
-		parsed, err := url.Parse(profile.URL)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-			return dataError("subscription URL must use HTTP or HTTPS", err)
+		if err := validateSource(profile.URL); err != nil {
+			return err
+		}
+		if IsFileSource(profile.URL) && profile.ProxyMode != "" {
+			return dataError("local YAML sources do not support HTTP proxy mode")
+		}
+		if profile.CacheBaseDir != "" && !filepath.IsAbs(profile.CacheBaseDir) {
+			return dataError("cache base directory must be absolute")
+		}
+		if IsFileSource(profile.URL) && profile.Generation > 0 && profile.CacheBaseDir == "" {
+			return dataError("local YAML cache is missing its base directory")
+		}
+		if !IsFileSource(profile.URL) && profile.CacheBaseDir != "" {
+			return dataError("remote YAML cache cannot have a local base directory")
 		}
 		if !ValidProxyMode(profile.ProxyMode) {
 			return dataError("invalid subscription proxy mode")

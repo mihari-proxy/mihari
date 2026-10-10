@@ -34,6 +34,7 @@ type FetchRequest struct {
 }
 
 type FetchResult struct {
+	BaseDir      string
 	Content      []byte
 	ETag         string
 	LastModified string

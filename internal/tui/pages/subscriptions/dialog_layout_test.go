@@ -48,7 +48,7 @@ func TestDetailLayout_CompactSharedFields(t *testing.T) {
 			}
 		}
 		for i, line := range lines {
-			if strings.Contains(line, "URL") && (i+1 >= len(lines) || !strings.Contains(lines[i+1], "https://example.test/subscription")) {
+			if strings.Contains(line, "URL") && !strings.Contains(line, "Source") && (i+1 >= len(lines) || !strings.Contains(lines[i+1], "https://example.test/subscription")) {
 				t.Fatal("URL needs its own following input row")
 			}
 		}

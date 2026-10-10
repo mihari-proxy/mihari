@@ -3,7 +3,9 @@ package core
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"strings"
 )
 
 type CommandRunner interface {
@@ -13,7 +15,9 @@ type CommandRunner interface {
 type OSCommandRunner struct{}
 
 func (OSCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+	command := exec.CommandContext(ctx, name, args...)
+	command.Env = FileReferenceEnvironment()
+	return command.CombinedOutput()
 }
 
 // VerifiedExecutor consumes only a complete capability-generated command.
@@ -64,4 +68,17 @@ func executeVerifiedOwned(ctx context.Context, v *VerifiedCore, p CorePurpose, c
 		return output, verifiedExecutionError{cause: errors.Join(err, commandOutputCause("verified mihomo command", output))}
 	}
 	return output, nil
+}
+
+// FileReferenceEnvironment permits approved native mihomo file references.
+// Replace inherited policy rather than relying on duplicate environment keys.
+func FileReferenceEnvironment() []string {
+	env := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(strings.ToUpper(entry), "SKIP_SAFE_PATH_CHECK=") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env, "SKIP_SAFE_PATH_CHECK=true")
 }

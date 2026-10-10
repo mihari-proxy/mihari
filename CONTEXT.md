@@ -4,6 +4,27 @@ Mihari 管理本机 mihomo，并向本地用户提供一致的配置管理与运
 
 ## Language
 
+**YAML 导入（Import from YAML）**：从记录的本地文件来源取得 YAML 内容，形成可独立使用的配置副本。源文件变化仅在下一次成功刷新后更新该副本。
+_Avoid_: 直接运行文件、持续绑定源文件、将导入等同于文件同步
+
+**导入源文件（Import Source File）**：用户提供给某次 YAML 导入的原始文件。它由用户维护，不属于 Mihari 管理的运行配置。
+_Avoid_: 运行配置、将源文件等同于导入缓存
+
+**本地文件来源（Local File Source）**：导入条目所记录的 YAML 文件路径，是后续手动或定时刷新重新取得内容的位置。
+_Avoid_: 将记录来源路径等同于让 mihomo 直接运行源文件、一次性上传
+
+**本地来源刷新（Local Source Refresh）**：重新从已记录文件来源取得 YAML 内容，校验成功后更新导入缓存的操作。失败时保留最后有效缓存。
+_Avoid_: 文件监听、源文件发生变化即自动生效
+
+**本地文件引用（Local File Reference）**：配置内容对另一个本地输入文件的依赖，与主 YAML 自身的文件来源不同。
+_Avoid_: 主 YAML 文件来源、HTTP provider 的下载缓存路径
+
+**导入缓存（Imported Configuration Cache）**：Mihari 保存的一份已导入 YAML 原始内容副本；源文件不可用不影响该副本的独立使用。它与受 Mihari 参数覆盖影响的运行配置不同。
+_Avoid_: 源文件、运行配置、临时文件
+
+**运行配置（Runtime Configuration）**：结合已取得的配置内容与 Mihari 当前管理设置、实际提供给受管 mihomo 的配置。
+_Avoid_: 原始 YAML、导入缓存、将参数覆盖理解为修改源文件
+
 **整合包**：一次发布里带有 Mihari 程序、核心和地理数据的归档。
 _Avoid_: 离线包
 

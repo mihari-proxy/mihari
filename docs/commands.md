@@ -136,6 +136,9 @@ settings 新增可选 `routing.mode`、`routing.global-selections`（订阅 ID �
 ```console
 mihari sub add NAME URL
 mihari sub add NAME URL --proxy auto
+mihari sub add NAME --file /absolute/path/main.yaml
+mihari sub add NAME --file "C:\configs\main.yaml" --allow-file-references
+mihari sub set ID --file /absolute/path/new.yaml
 mihari sub list
 mihari sub show ID
 mihari sub refresh ID
@@ -149,7 +152,7 @@ mihari sub remove ID --yes
 
 订阅 URL 由守护进程持久化,并从普通 list/show 业务响应中省略；错误本身携带的 URL 会保留在诊断详情中。每个有效配置都有独立缓存,因此 `sub use` 在无 provider 网络访问时也能工作。`--proxy` 为主订阅 YAML 的拉取渠道:`direct`(默认)、`proxy` 或 `auto`。`auto` 在代理连接超时、拒绝、重置或成功响应正文读取超时后尝试直连；HTTP 错误、无效文档和整次操作取消不触发回退。生成的配置总是在 `mihomo -t` 与重载之前恢复 Mihari 托管的内环回控制器、密钥与端口不变量。
 
-`sub add` / `sub refresh` 的控制请求允许等待 180 秒，daemon 正常执行共用 120 秒上限，单次代理/直连下载各保留 30 秒；剩余等待余量用于已开始事务的有界补偿与响应。Ctrl+C 或更短的调用方 deadline 仍可提前取消。普通控制请求不使用该长预算。添加已注册但首次下载失败时保留订阅，应刷新同一 ID；客户端响应丢失不代表服务器未保存，不要盲目重复添加。CLI 的 `auto` 参数和输出不变，TUI 展示为 `PROXY w Fallback to DIRECT`，批量刷新每条使用独立预算。Provider override 不在该设置范围，CLI/TUI 与 daemon 应同步升级。
+`sub add` / `sub refresh` 的控制请求允许等待 180 秒，daemon 正常执行共用 120 秒上限，单次代理/直连下载各保留 30 秒；剩余等待余量用于已开始事务的有界补偿与响应。Ctrl+C 或更短的调用方 deadline 仍可提前取消。普通控制请求不使用该长预算。新建订阅先获取并校验，失败不保留条目；客户端响应丢失不代表服务器未保存，不要盲目重复添加。CLI 的 `auto` 参数和输出不变，TUI 展示为 `PROXY w Fallback to DIRECT`，批量刷新每条使用独立预算。Provider override 不在该设置范围，CLI/TUI 与 daemon 应同步升级。
 
 `sub set` 修改 URL 保留旧缓存与 InUse，不立即拉取或重载；修改单条 interval 重置调度并标记 Expired，成功刷新后清除。CLI 参数仍为 `--proxy`，JSON 字段仍为 `proxy_mode`；仅新增公开缓存状态字段，没有新增 reveal CLI 命令。普通 list/show 业务响应继续省略完整 URL；专门的认证本地 API 是支持的读取入口。文件日志、导出及 CLI/TUI 错误详情保留错误自带的 URL，不额外读取或转储订阅。TUI 操作、结果未知处理和配套升级/降级备份要求见 [README](../README.zh-CN.md)。
 
@@ -218,3 +221,7 @@ CLI 文本错误统一展示概要、既有错误码与原始详情。非流式 
 TUI 九个页面均可按 F2 打开诊断历史，在列表和详情间切换、滚动并复制已采集原文，关闭后恢复原有输入和确认弹窗。后台发生记录也会进入有界历史，不自动抢焦点。日志级别和文件 logger 的可用性不会抑制错误详情；主动取消和正常 EOF 不新增错误，取消伴随的实际清理失败仍保留。
 
 所有日志与本地错误汇报不脱敏。原文中的凭据、完整 URL、路径和配置片段均保留；终端展示只转义控制字符，JSON 和复制保留已采集文本。单条采集上限 256 KiB，截断会明确标记。daemon 历史最多 256 条/32 MiB，本地 TUI 历史最多 128 条/16 MiB；淘汰、重启、旧 daemon 不支持或详情获取失败均有明确状态，历史不持久化。每次实际发生分别记录，同一记录 ID 的重复传输不新增发生记录。
+
+本地 YAML 导入复用缓存、生成和刷新事务。`--file` 只接受绝对路径或 file URI，不与 URL/`--proxy` 合用；已有条目禁止 URL/file 跨类型转换。同类型来源编辑保留旧缓存及其目录，不立即 reload。daemon 使用自身权限读取普通文件，最大 16 MiB。Windows、Linux、macOS 路径由 platform 转换，普通业务响应不暴露完整路径。
+
+创建本地/远程订阅遇到本地文件引用时，校验后列出引用与后果。非交互/`--json` 须加 `--allow-file-references`，否则 `invalid_argument`、退出码 2，`details.confirmation_required=file_references`；交互 CLI/TUI 默认取消，同意后以新操作 ID 重新读取校验。后续更新不再询问。Mihari 只缓存主 YAML，原生 mihomo watcher/文件操作独立于自动刷新，引用文件不能随主缓存回滚。URL provider 原生下载保持。参见 [ADR 0009](adr/0009-local-yaml-source-and-cache.md)。

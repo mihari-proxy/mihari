@@ -9,6 +9,9 @@ import (
 
 // FooterHints keeps actions accurate for the current step and work state.
 func (m *Model) FooterHints() string {
+	if m.fileConfirmation {
+		return "←/→/Tab choose  Enter confirm  Esc cancel  PgUp/PgDn scroll"
+	}
 	if m.loading {
 		if m.settling || m.cancelRequested {
 			return "Waiting for settlement  Ctrl+C quit (saved work is kept)"

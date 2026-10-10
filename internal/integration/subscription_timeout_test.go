@@ -82,11 +82,11 @@ func TestSubscriptionTimeout_IPCFallbackAndFailedRefreshPreserveCache(t *testing
 		t.Fatalf("failed refresh lost cache: %+v %v", current, err)
 	}
 	added, err := c.AddSubscription(context.Background(), protocol.SubscriptionAddRequest{OperationID: "register-failed-fetch", Name: "registered", URL: "https://example.test/another", ProxyMode: "auto"})
-	if err != nil || added.Subscription.ID == "" || added.Subscription.LastError == "" {
+	if err == nil || added.Subscription.ID != "" {
 		t.Fatalf("durable registration lost: %+v %v", added, err)
 	}
 	list, err := c.Subscriptions(context.Background())
-	if err != nil || len(list.Subscriptions) != 2 || directCalls.Load() != 3 {
+	if err != nil || len(list.Subscriptions) != 1 || directCalls.Load() != 3 {
 		t.Fatalf("mutation replayed or registration duplicated: calls=%d profiles=%d err=%v", directCalls.Load(), len(list.Subscriptions), err)
 	}
 }

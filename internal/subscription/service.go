@@ -145,7 +145,7 @@ func (s *Service) PrepareRefresh(ctx context.Context, id string) (PreparedRefres
 	}
 	profile := s.catalog.Profiles[index]
 	s.mu.RUnlock()
-	result, err := s.downloader.Fetch(ctx, FetchRequest{URL: profile.URL, ETag: profile.ETag, LastModified: profile.LastModified, Mode: profile.ProxyMode})
+	result, err := s.fetch(ctx, profile)
 	if err != nil {
 		return PreparedRefresh{}, s.refreshFailure(id, err, profile.Version)
 	}
@@ -164,6 +164,11 @@ func (s *Service) PrepareRefresh(ctx context.Context, id string) (PreparedRefres
 	if err != nil {
 		return PreparedRefresh{}, s.refreshFailure(id, err, profile.Version)
 	}
+	baseDir := result.BaseDir
+	if result.NotModified {
+		baseDir = profile.CacheBaseDir
+	}
+	ResolveFileReferences(document, baseDir)
 	return PreparedRefresh{profileID: id, profileVersion: profile.Version, result: result, document: document}, nil
 }
 
@@ -223,6 +228,10 @@ func (s *Service) noteRefreshError(id string, cause error, versions ...uint64) e
 func (s *Service) CommitRefresh(prepared PreparedRefresh) (Receipt, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.commitRefreshLocked(prepared)
+}
+
+func (s *Service) commitRefreshLocked(prepared PreparedRefresh) (Receipt, error) {
 	index := s.catalog.Index(prepared.profileID)
 	if index < 0 || s.catalog.Profiles[index].Version != prepared.profileVersion {
 		return Receipt{}, protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "subscription changed while refresh was in progress"}
@@ -242,6 +251,7 @@ func (s *Service) CommitRefresh(prepared PreparedRefresh) (Receipt, error) {
 			return Receipt{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "write subscription cache"}, err)
 		}
 		profile.Generation++
+		profile.CacheBaseDir = prepared.result.BaseDir
 	}
 	profile.Version++
 	profile.UpdatedAt = s.now().UTC()
@@ -303,11 +313,21 @@ func (s *Service) ReadCache(id string) ([]byte, Document, error) {
 	if !profileIDPattern.MatchString(id) {
 		return nil, nil, notFoundError()
 	}
+	// Commit owns this same lock while replacing bytes and directory metadata;
+	// readers must observe both from one committed cache generation.
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	content, err := os.ReadFile(s.CachePath(id))
 	if err != nil {
 		return nil, nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription cache is unavailable"}, err)
 	}
 	document, err := ParseDocument(content)
+	if err == nil {
+		index := s.catalog.Index(id)
+		if index >= 0 {
+			ResolveFileReferences(document, s.catalog.Profiles[index].CacheBaseDir)
+		}
+	}
 	return content, document, err
 }
 

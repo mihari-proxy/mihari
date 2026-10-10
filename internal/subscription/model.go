@@ -27,7 +27,8 @@ type Profile struct {
 	Name string `yaml:"name"`
 	URL  string `yaml:"url"`
 	// CacheURL identifies the source of the last successfully committed cache.
-	CacheURL string `yaml:"cache-url,omitempty"`
+	CacheBaseDir string `yaml:"cache-base-dir,omitempty"`
+	CacheURL     string `yaml:"cache-url,omitempty"`
 	// ScheduleFrom restarts the refresh interval without changing cache age.
 	ScheduleFrom time.Time `yaml:"schedule-from,omitempty"`
 	// IntervalRefreshRequired remains set until a refresh succeeds.
@@ -58,6 +59,7 @@ type Catalog struct {
 }
 
 type PublicProfile struct {
+	SourceType string `json:"source_type,omitempty"`
 	// CacheOutdated reports a cache fetched from a different current URL.
 	CacheOutdated bool `json:"cache_outdated,omitempty"`
 	// ScheduleFrom overrides cache age as the next refresh scheduling origin.
@@ -92,6 +94,7 @@ func (c Catalog) Public() PublicCatalog {
 	result := PublicCatalog{ActiveID: c.ActiveID, GlobalInterval: c.GlobalInterval, Profiles: make([]PublicProfile, 0, len(c.Profiles))}
 	for _, profile := range c.Profiles {
 		result.Profiles = append(result.Profiles, PublicProfile{
+			SourceType:    sourceType(profile.URL),
 			CacheOutdated: profile.Generation > 0 && profile.CacheURL != profile.URL,
 			ScheduleFrom:  profile.ScheduleFrom, IntervalRefreshRequired: profile.IntervalRefreshRequired,
 			ID: profile.ID, Name: profile.Name, Enabled: profile.Enabled, AutoRefresh: profile.AutoRefresh,
@@ -107,4 +110,11 @@ func (c Catalog) Public() PublicCatalog {
 func (c Catalog) Clone() Catalog {
 	c.Profiles = append([]Profile(nil), c.Profiles...)
 	return c
+}
+
+func sourceType(source string) string {
+	if IsFileSource(source) {
+		return "file"
+	}
+	return ""
 }

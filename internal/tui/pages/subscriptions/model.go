@@ -222,9 +222,16 @@ func rowFrom(subscription protocol.Subscription, active bool, pending string, no
 	}
 	// Column traffic uses the compact quota form (e.g. 9G/100G, design S1).
 	traffic := ui.FormatSubscriptionTrafficCompact(subscription.Upload, subscription.Download, subscription.Total)
+	proxy := proxyModeLabel(subscription.ProxyMode)
+	name := subscription.Name
+	if subscription.SourceType == "file" {
+		proxy = "Local file"
+		traffic = ""
+		name += " [file]"
+	}
 	return row{
-		active: marker, name: subscription.Name, state: state, load: load,
-		proxy: proxyModeLabel(subscription.ProxyMode), traffic: traffic, lastSuccess: lastSuccess, nextRefresh: next,
+		active: marker, name: name, state: state, load: load,
+		proxy: proxy, traffic: traffic, lastSuccess: lastSuccess, nextRefresh: next,
 		loadTone: phaseTone(phase), stateTone: stateTone,
 	}
 }

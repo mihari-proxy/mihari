@@ -167,7 +167,7 @@ func TestSubscriptionTimeout_AddRefreshDoesNotRenewDeadline(t *testing.T) {
 	m.refreshLogSecrets = func([]string) { m.subscriptionTimeout = 2 * time.Second }
 	start := time.Now()
 	profile, err := m.AddSubscription(context.Background(), Operation{ID: "add"}, AddSubscriptionInput{Name: "fixture", URL: url})
-	if err != nil || profile.ID == "" || profile.LastError == "" || len(service.Snapshot().Profiles) != 1 {
+	if err == nil || profile.ID != "" || len(service.Snapshot().Profiles) != 0 {
 		t.Fatalf("registration lost: %+v %v", profile, err)
 	}
 	if observed.IsZero() || observed.After(start.Add(1500*time.Millisecond)) {

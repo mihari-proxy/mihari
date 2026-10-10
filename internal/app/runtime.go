@@ -524,6 +524,7 @@ func BuildValidationRuntime(ctx context.Context, paths platform.Paths, settings 
 			return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription cache exceeds size limit"}
 		}
 		if profile.ID == catalog.ActiveID {
+			subscription.ResolveFileReferences(document, profile.CacheBaseDir)
 			if _, err := subscription.Generate(document, nil, settings); err != nil {
 				return nil, err
 			}

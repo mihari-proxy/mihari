@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
+	"github.com/mihari-proxy/mihari/internal/platform"
 	"net/url"
 	"strconv"
 	"strings"
@@ -23,6 +24,8 @@ const (
 )
 
 type formModel struct {
+	localSource     bool
+	allowReferences bool
 	validationErr   error
 	kind            formKind
 	inputs          []textinput.Model
@@ -37,7 +40,7 @@ type formModel struct {
 }
 
 func newAddForm() *formModel {
-	return newForm(formAdd, []string{"Name", "URL", "Mode"}, []string{"", "", ""}, []string{"Subscription name", "https://example.test/subscription", ""})
+	return newForm(formAdd, []string{"Name", "URL", "Mode", "Source"}, []string{"", "", "", "URL"}, []string{"Subscription name", "https://example.test/subscription", "", ""})
 }
 
 func newEditForm(subscription protocol.Subscription) *formModel {
@@ -47,6 +50,11 @@ func newEditForm(subscription protocol.Subscription) *formModel {
 		[]string{"Subscription name", "Loading URL...", "Use global interval when blank", "", "", "", ""},
 	)
 	f.baseline = subscription
+	f.localSource = subscription.SourceType == "file"
+	if f.localSource {
+		f.labels[1] = "YAML path"
+		f.inputs[1].Placeholder = "Loading file path..."
+	}
 	return f
 }
 
@@ -87,6 +95,20 @@ func (f *formModel) Update(message tea.Msg) (bool, tea.Cmd) {
 		if f.isCycle() {
 			switch key.String() {
 			case "left", "right", "space":
+				if f.kind == formAdd && f.index == 3 {
+					f.localSource = !f.localSource
+					f.inputs[1].SetValue("")
+					f.allowReferences = false
+					f.labels[1] = "URL"
+					f.inputs[1].Placeholder = "https://example.test/subscription"
+					f.inputs[3].SetValue("URL")
+					if f.localSource {
+						f.labels[1] = "YAML path"
+						f.inputs[1].Placeholder = "Absolute YAML file path"
+						f.inputs[3].SetValue("Local file")
+					}
+					return false, nil
+				}
 				value := f.inputs[f.index].Value()
 				if f.kind == formEdit && f.index == 3 {
 					value = strconv.FormatBool(value != "true")
@@ -115,7 +137,7 @@ func (f *formModel) Update(message tea.Msg) (bool, tea.Cmd) {
 }
 
 func (f *formModel) isCycle() bool {
-	return f.index < len(f.inputs) && (f.kind == formAdd && f.index == 2 || f.kind == formEdit && (f.index == 3 || f.index == 4))
+	return f.index < len(f.inputs) && (f.kind == formAdd && (f.index == 2 || f.index == 3) || f.kind == formEdit && (f.index == 3 || f.index == 4))
 }
 
 func (f *formModel) isAction() bool {
@@ -127,6 +149,11 @@ func (f *formModel) reveal(raw string) {
 		return
 	}
 	f.urlBaseline = raw
+	if f.localSource {
+		if path, err := platform.FileURIPath(raw); err == nil {
+			raw = path
+		}
+	}
 	f.inputs[1].SetValue(raw)
 }
 
@@ -135,6 +162,9 @@ func (f *formModel) move(delta int) tea.Cmd {
 		f.inputs[f.index].Blur()
 	}
 	f.index = (f.index + delta + len(f.inputs) + 1) % (len(f.inputs) + 1)
+	if f.localSource && ((f.kind == formAdd && f.index == 2) || (f.kind == formEdit && f.index == 4)) {
+		f.index = (f.index + delta + len(f.inputs) + 1) % (len(f.inputs) + 1)
+	}
 	if f.index < len(f.inputs) && !f.isCycle() && !f.isAction() {
 		return f.inputs[f.index].Focus()
 	}
@@ -152,12 +182,18 @@ func (f *formModel) valid() bool {
 		if raw == "" {
 			return f.validationFailure("URL is required.", nil)
 		}
-		u, err := url.Parse(raw)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
-			if err == nil {
-				err = fmt.Errorf("subscription URL %q must use HTTP or HTTPS and have a host", raw)
+		if f.localSource {
+			if _, err := platform.FileURI(raw); err != nil {
+				return f.validationFailure("Enter an absolute YAML file path.", err)
 			}
-			return f.validationFailure("Enter a valid HTTP or HTTPS URL.", err)
+		} else {
+			u, err := url.Parse(raw)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+				if err == nil {
+					err = fmt.Errorf("subscription URL %q must use HTTP or HTTPS and have a host", raw)
+				}
+				return f.validationFailure("Enter a valid HTTP or HTTPS URL.", err)
+			}
 		}
 	}
 	if f.kind == formEdit {
@@ -177,6 +213,11 @@ func (f *formModel) valid() bool {
 
 func (f *formModel) addRequest(operationID string, revision uint64) protocol.SubscriptionAddRequest {
 	request := protocol.SubscriptionAddRequest{OperationID: operationID, Name: strings.TrimSpace(f.inputs[0].Value()), URL: strings.TrimSpace(f.inputs[1].Value()), ProxyMode: f.inputs[2].Value()}
+	if f.localSource {
+		request.URL, _ = platform.FileURI(request.URL)
+		request.ProxyMode = ""
+	}
+	request.AllowFileReferences = f.allowReferences
 	request.IfRevision = &revision
 	return request
 }
@@ -196,12 +237,19 @@ func (f *formModel) updateRequest(operationID string, revision uint64) protocol.
 		request.AutoRefresh = &autoRefresh
 	}
 	mode := f.inputs[4].Value()
-	if mode != f.baseline.ProxyMode {
+	if !f.localSource && mode != f.baseline.ProxyMode {
 		request.ProxyMode = &mode
 	}
-	if rawURL := strings.TrimSpace(f.inputs[1].Value()); f.urlTouched && rawURL != "" && rawURL != f.urlBaseline {
-		request.URL = &rawURL
+	rawURL := strings.TrimSpace(f.inputs[1].Value())
+	if f.urlTouched && rawURL != "" {
+		if f.localSource {
+			rawURL, _ = platform.FileURI(rawURL)
+		}
+		if rawURL != f.urlBaseline {
+			request.URL = &rawURL
+		}
 	}
+
 	return request
 }
 
