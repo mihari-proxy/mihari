@@ -16,6 +16,15 @@ func TestCommitRefresh_CatalogCompensationFailureKeepsCachePair(t *testing.T) {
 		t.Run(fmt.Sprint(restored), func(t *testing.T) {
 			s, _ := newServiceForTest(t, http.NotFoundHandler())
 			a, b := t.TempDir(), t.TempDir()
+			var pathErr error
+			a, pathErr = filepath.EvalSymlinks(a)
+			if pathErr != nil {
+				t.Fatal(pathErr)
+			}
+			b, pathErr = filepath.EvalSymlinks(b)
+			if pathErr != nil {
+				t.Fatal(pathErr)
+			}
 			oldContent := []byte("proxies: []\nproxy-providers:\n  local: {type: file, path: old.yaml}\n")
 			newContent := []byte("proxies: []\nproxy-providers:\n  local: {type: file, path: new.yaml}\n")
 			for path, content := range map[string][]byte{filepath.Join(a, "main.yaml"): oldContent, filepath.Join(b, "main.yaml"): newContent} {
