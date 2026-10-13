@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/service"
 )
@@ -151,7 +152,7 @@ func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool
 	}
 	command = applyUnmatchedCommandConsent(command, consent)
 	allowedCommand := ""
-	if command.remove {
+	if command.remove || command.leave != nil {
 		allowedCommand = command.path
 	}
 	if !force {
@@ -163,6 +164,13 @@ func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool
 		return errors.New("administrator privileges are required; re-run this command from an elevated shell")
 	}
 
+	// Reclassify the captured command path after the potentially long scan.
+	// A changed byte match must not silently authorize an unmatched deletion.
+	command, err = classifyUninstallCommandFile(u.layout.InstallRoot, command.path)
+	if err != nil {
+		return err
+	}
+	command = applyUnmatchedCommandConsent(command, consent)
 	commandErr, stop := removeClassifiedUninstallCommand(command, progress)
 	if stop != nil {
 		return stop
@@ -170,39 +178,53 @@ func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool
 
 	reportUninstallProgress(progress, "Uninstalling Mihari service")
 	if err := u.uninstallService(ctx); err != nil {
-		return fmt.Errorf("uninstall Mihari service: %w", err)
+		return errors.Join(commandErr, fmt.Errorf("uninstall Mihari service: %w", err))
 	}
 	if err := u.waitForDaemonStop(ctx, progress); err != nil {
-		return err
+		return errors.Join(commandErr, err)
 	}
 	if err := inspectUninstallRoots(ctx, targets); err != nil {
-		return err
+		return errors.Join(commandErr, err)
 	}
 	if !force {
 		if err := checkUninstallFiles(ctx, targets, allowedCommand); err != nil {
-			return err
+			return errors.Join(commandErr, err)
 		}
 	}
 
+	retainedCommand := ""
+	if commandErr != nil {
+		retainedCommand = command.path
+	}
 	for phase := 0; phase < 3; phase++ {
 		for _, target := range targets {
 			if target.Kind == "command" || uninstallTargetPhase(target) != phase {
 				continue
 			}
 			if err := ctx.Err(); err != nil {
-				return err
+				return errors.Join(commandErr, err)
 			}
-			if err := removeUninstallTarget(target, u.opts.Remove); err != nil {
+			removed, err := cleanUninstallTarget(ctx, target, retainedCommand, u.opts.Remove)
+			if err != nil {
+				cleanupErr := fmt.Errorf("remove %s: %w", target.Path, err)
 				if target.Kind == "program" && runtime.GOOS == "windows" {
-					return fmt.Errorf("remove %s: %w; run Mihari from a separate copy and retry the uninstall", target.Path, err)
+					cleanupErr = fmt.Errorf("%w; run Mihari from a separate copy and retry the uninstall", cleanupErr)
 				}
-				return fmt.Errorf("remove %s: %w", target.Path, err)
+				if commandErr != nil {
+					commandErr = errors.Join(commandErr, cleanupErr)
+					continue
+				}
+				return cleanupErr
 			}
-			reportUninstallProgress(progress, "Removed "+target.Path)
+			if removed {
+				reportUninstallProgress(progress, "Removed "+target.Path)
+			} else {
+				reportUninstallProgress(progress, "Cleaned "+target.Path+" except retained command "+retainedCommand)
+			}
 		}
 	}
 	if commandErr != nil {
-		return protocol.APIError{Code: protocol.CodeInvalidState, Message: commandErr.Error()}
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidState, Message: commandErr.Error()}, commandErr)
 	}
 	reportUninstallProgress(progress, "Mihari has been completely uninstalled")
 	return nil

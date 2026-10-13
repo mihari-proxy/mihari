@@ -121,7 +121,8 @@ func checkUninstallDirectory(ctx context.Context, target UninstallTarget, path, 
 		if reason := uninstallRootLinkReason(info); reason != "" {
 			return newUninstallFileError(target, rel, reason)
 		}
-		// Only the exact separately approved regular command is exempt.
+		// Only the exact classified regular PATH command is exempt.
+		// Its separate remove/retain decision is honored by cleanup.
 		// Parent directories and every neighboring entry retain the allowlist.
 		if command != "" && sameUninstallPath(entryPath, command) && info.Mode().IsRegular() {
 			continue

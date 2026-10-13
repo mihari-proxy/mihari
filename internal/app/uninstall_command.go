@@ -46,6 +46,10 @@ func classifyUninstallCommand(installRoot string) (uninstallCommandPlan, error) 
 	if err != nil {
 		return uninstallCommandPlan{}, err
 	}
+	return classifyUninstallCommandFile(installRoot, path)
+}
+
+func classifyUninstallCommandFile(installRoot, path string) (uninstallCommandPlan, error) {
 	plan := uninstallCommandPlan{path: path}
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
