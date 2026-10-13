@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"time"
 
@@ -281,6 +282,20 @@ func (s *Service) commitRefreshLocked(prepared PreparedRefresh, before Catalog) 
 		// catalog metadata as well as bytes so cached relative paths stay paired.
 		if restoreErr := s.saveCatalog(s.catalogPath, before); restoreErr != nil {
 			err = errors.Join(err, fmt.Errorf("restore subscription catalog: %w", restoreErr))
+			durable, readErr := Load(s.catalogPath)
+			if readErr != nil {
+				return Receipt{}, errors.Join(err, fmt.Errorf("inspect subscription catalog after failed restore: %w", readErr))
+			}
+			if reflect.DeepEqual(durable, after) {
+				// The new catalog remains committed: retain its matching bytes
+				// and publish the same generation to in-process readers.
+				s.catalog = durable
+				return Receipt{}, err
+			}
+			if !reflect.DeepEqual(durable, before) {
+				return Receipt{}, errors.Join(err, errors.New("subscription catalog changed during failed restore"))
+			}
+
 		}
 		return Receipt{}, s.failAfterRestore(err, cachePath, cacheBefore, hadCache, wroteCache)
 	}
