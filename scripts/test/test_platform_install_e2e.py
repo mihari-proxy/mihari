@@ -14,6 +14,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import platform_install_e2e as e2e
 
 
+@pytest.mark.parametrize("entry", ["run", "cleanup"])
+@pytest.mark.parametrize("actions,runner", [(None, None), ("true", "self-hosted"), ("true", None), (None, "github-hosted")])
+def test_mutating_entry_refuses_non_hosted_runner(monkeypatch, entry, actions, runner):
+    for key, value in (("GITHUB_ACTIONS", actions), ("RUNNER_ENVIRONMENT", runner)):
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
+    monkeypatch.setattr(e2e, "host_system", lambda: "linux")
+    monkeypatch.setattr(e2e, "install_paths", lambda system: {})
+    monkeypatch.setattr(e2e, "_run", lambda *args, **kwargs: pytest.fail("command ran before hosted guard"))
+    monkeypatch.setattr(e2e, "_service_registered", lambda *args: pytest.fail("service inspected before hosted guard"))
+    monkeypatch.setattr(e2e, "_delete_path", lambda *args: pytest.fail("path deleted before hosted guard"))
+    with pytest.raises(SystemExit, match="github-hosted"):
+        e2e.main(["platform_install_e2e.py", entry])
+
+
 def test_trusted_directory_link_count_is_not_a_file_link_count(monkeypatch):
     monkeypatch.setattr(e2e, "host_system", lambda: "linux")
     monkeypatch.setattr(e2e.os.path, "islink", lambda path: False)
@@ -78,6 +95,10 @@ def test_windows_purge_runs_outside_the_installed_roots():
 
 
 def test_windows_execute_uses_valid_geoip_and_temporary_purge_binary(monkeypatch, tmp_path):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
     paths = {"path_command": str(tmp_path / "command.exe"), "program_file": str(tmp_path / "service.exe")}
     commands = []
     bundles = []
@@ -113,6 +134,10 @@ def test_windows_execute_uses_valid_geoip_and_temporary_purge_binary(monkeypatch
 
 
 def test_windows_cleanup_copies_installed_binary_before_purge(monkeypatch, tmp_path):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
     installed = tmp_path / "installed.exe"
     installed.write_bytes(b"installed-program")
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))

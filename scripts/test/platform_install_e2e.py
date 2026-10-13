@@ -340,9 +340,13 @@ def _install_unix(archive: str) -> None:
     assert_install_success(host_system(), result.stdout, result.stderr)
 
 
-def _prepare_unix_command_directory() -> None:
+def _require_hosted_runner() -> None:
     if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
-        raise SystemExit("Unix install e2e requires a github-hosted runner")
+        raise SystemExit("Install e2e run and cleanup require a github-hosted runner")
+
+
+def _prepare_unix_command_directory() -> None:
+    _require_hosted_runner()
     directory = os.path.dirname(UNIX_COMMAND)
     # Hosted images expose this shared tool directory as runner-owned or writable.
     # Prepare the default PATH destination on the disposable VM; do not relax the
@@ -506,6 +510,7 @@ def _delete_path(system: str, path: str) -> None:
 
 
 def execute() -> None:
+    _require_hosted_runner()
     system = host_system()
     paths = install_paths(system)
     build_env = os.environ.copy()
@@ -547,6 +552,7 @@ def execute() -> None:
 
 
 def cleanup() -> None:
+    _require_hosted_runner()
     system = host_system()
     paths = install_paths(system) if system != "windows" or ("LOCALAPPDATA" in os.environ and "USERPROFILE" in os.environ) else {}
     if _service_registered(system):
