@@ -3,6 +3,8 @@
 package ui
 
 import (
+	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -83,5 +85,29 @@ func TestRunUserClipboard_FailureKeepsStderr(t *testing.T) {
 	err := runUserClipboard([]string{"/bin/sh", script}, "fixture")
 	if err == nil || !strings.Contains(err.Error(), "wl-copy: fixture unavailable") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestRunUserClipboard_CancellationStopsCommand(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := runUserClipboardContext(ctx, []string{"/bin/sh", "-c", "exec sleep 60"}, "fixture")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestRunUserClipboard_DeadlineStopsRunningCommand(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- runUserClipboardContext(ctx, []string{"/bin/sh", "-c", "exec sleep 60"}, "fixture") }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err=%v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("clipboard command outlived its deadline")
 	}
 }

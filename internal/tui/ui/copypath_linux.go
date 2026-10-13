@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/atotto/clipboard"
 )
@@ -69,6 +71,12 @@ func writeInvokingUserClipboard(text string) (error, bool) {
 // background server keeps the inherited write end open, and waiting on that
 // pipe would block until some other client replaces the clipboard.
 func runUserClipboard(argv []string, text string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return runUserClipboardContext(ctx, argv, text)
+}
+
+func runUserClipboardContext(ctx context.Context, argv []string, text string) error {
 	if len(argv) == 0 {
 		return errors.New("clipboard command is missing")
 	}
@@ -81,11 +89,15 @@ func runUserClipboard(argv []string, text string) error {
 		_ = output.Close()
 		_ = os.Remove(name)
 	}()
-	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.WaitDelay = time.Second
 	cmd.Stdin = strings.NewReader(text)
 	cmd.Stdout = output
 	cmd.Stderr = output
 	runErr := cmd.Run()
+	if ctx.Err() != nil {
+		runErr = errors.Join(runErr, ctx.Err())
+	}
 	if _, seekErr := output.Seek(0, io.SeekStart); seekErr != nil {
 		if runErr != nil {
 			return runErr
