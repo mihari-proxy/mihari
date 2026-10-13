@@ -178,7 +178,12 @@ func TestRunUserClipboard_CancellationKillsCommandChildren(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("child did not signal readiness")
 	}
-	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	childExited := false
+	t.Cleanup(func() {
+		if !childExited {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
 	cancel()
 	select {
 	case err := <-done:
@@ -195,14 +200,17 @@ func TestRunUserClipboard_CancellationKillsCommandChildren(t *testing.T) {
 	for {
 		name, _, readErr := readProcIdentity(pid)
 		if errors.Is(readErr, os.ErrNotExist) {
+			childExited = true
 			return
 		}
 		raw, readErr := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 		if errors.Is(readErr, os.ErrNotExist) {
+			childExited = true
 			return
 		}
 		close := strings.LastIndexByte(string(raw), ')')
 		if close >= 0 && strings.HasPrefix(string(raw)[close+1:], " Z ") {
+			childExited = true
 			return
 		}
 		select {
