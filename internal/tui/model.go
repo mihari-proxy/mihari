@@ -417,6 +417,12 @@ func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.modal = NewErrorDetail(typed.Title, typed.Body)
 		return model, nil
 	case errorCopyResultMsg:
+		if typed.kind == ui.CopySentToTerminal {
+			if model.modal == typed.modal {
+				model.modal.copyStatus = ui.CopySentNotice
+			}
+			return model, typed.command
+		}
 		if model.modal == typed.modal {
 			model.modal.copyStatus = "Copied"
 			if typed.err != nil {

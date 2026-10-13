@@ -45,6 +45,7 @@ type Modal struct {
 	selected      int
 	scroll        int
 	copyText      func(string) error
+	copyResult    func(string) ui.CopyResult
 	copyStatus    string
 	updateContent *ui.MihariUpdateConfirmation
 	updateRows    int
@@ -52,12 +53,14 @@ type Modal struct {
 
 // NewErrorDetail creates a scrollable, copyable diagnostic dialog.
 func NewErrorDetail(title, body string) *Modal {
-	return &Modal{kind: modalError, title: title, body: body}
+	return &Modal{kind: modalError, title: title, body: body, copyResult: ui.CopyText}
 }
 
 type errorCopyResultMsg struct {
-	modal *Modal
-	err   error
+	modal   *Modal
+	err     error
+	kind    ui.CopyKind
+	command tea.Cmd
 }
 
 // copyCommand copies the supplied body and routes the result back to its owning modal.
@@ -66,17 +69,14 @@ func (m *Modal) copyCommand() tea.Cmd {
 		body, copyText := m.body, m.copyText
 		return func() tea.Msg { return errorCopyResultMsg{modal: m, err: copyText(body)} }
 	}
-	result := ui.CopyText(m.body)
-	if result.Kind == ui.CopySentToTerminal {
-		m.copyStatus = ui.CopySentNotice
-		return result.Command
+	body, copyResult := m.body, m.copyResult
+	if copyResult == nil {
+		copyResult = ui.CopyText
 	}
-	err := result.Err
-	if result.Kind == ui.CopyConfirmed {
-		err = nil
+	return func() tea.Msg {
+		result := copyResult(body)
+		return errorCopyResultMsg{modal: m, err: result.Err, kind: result.Kind, command: result.Command}
 	}
-	modal := m
-	return func() tea.Msg { return errorCopyResultMsg{modal: modal, err: err} }
 }
 
 func NewDetail(title, body string) *Modal {
@@ -194,15 +194,16 @@ func (m *Modal) errorView(theme ui.Theme, width, height int) string {
 	inner := max(1, boxWidth-6)
 	lines := strings.Split(ansi.Hardwrap(m.body, inner, true), "\n")
 	rows := max(1, height-10)
-	start := min(m.scroll, max(0, len(lines)-rows))
-	end := min(len(lines), start+rows)
 	foot := "↑/↓ scroll  c copy  Esc close"
 	sent := ""
 	if m.copyStatus == ui.CopySentNotice {
-		sent = ui.RenderCopySentLines(theme.BrightYellow) + "\n"
+		sent = ansi.Hardwrap(ui.RenderCopySentLines(theme.BrightYellow), inner, true) + "\n"
 	} else if m.copyStatus != "" {
 		foot = m.copyStatus + " · " + foot
 	}
+	rows = max(1, rows-lipgloss.Height(sent))
+	start := min(m.scroll, max(0, len(lines)-rows))
+	end := min(len(lines), start+rows)
 	body := theme.Title.Render(ui.TruncateVisible(m.title, inner)) + "\n\n" + strings.Join(lines[start:end], "\n") + "\n\n" + sent + theme.Muted.Render(ui.TruncateVisible(foot, inner))
 	box := theme.Dialog.Width(boxWidth).MaxWidth(boxWidth).MaxHeight(max(1, height-2)).Render(body)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
