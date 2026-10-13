@@ -666,3 +666,49 @@ func TestUninstaller_PrecheckDoesNotKeepStaleByteMatch(t *testing.T) {
 		t.Fatalf("stale match used: err=%v command=%t", err, fileExists(command))
 	}
 }
+
+func TestUninstaller_CommandAppearingAfterScanIsRetained(t *testing.T) {
+	layout, data, program := uninstallTestLayout(t)
+	writeUninstallFixture(t, data, "mihari.yaml")
+	writeProgramBytes(t, program, []byte("installed"))
+	bin := filepath.Join(data, "bin")
+	if err := os.MkdirAll(bin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	command := filepath.Join(bin, platform.InstalledBinaryName())
+	svc := &uninstallFakeService{status: service.StatusStopped}
+	opts := uninstallCommandTestOptions(svc)
+	opts.Elevated = func() bool {
+		if err := os.WriteFile(command, []byte("new user command"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		return true
+	}
+	runner := newUninstallTestRunner(t, layout, opts)
+	t.Setenv("MIHARI_BIN", bin)
+	err := runner.Run(context.Background(), nil)
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodeInvalidState || !fileExists(command) || fileExists(program) || fileExists(filepath.Join(data, "mihari.yaml")) {
+		t.Fatalf("err=%v command=%t program=%t datafile=%t", err, fileExists(command), fileExists(program), fileExists(filepath.Join(data, "mihari.yaml")))
+	}
+}
+
+func TestUninstaller_RetainedCommandServiceFailureKeepsInvalidState(t *testing.T) {
+	layout, data, program := uninstallTestLayout(t)
+	writeUninstallFixture(t, data, "mihari.yaml")
+	writeProgramBytes(t, program, []byte("installed"))
+	bin := t.TempDir()
+	command := filepath.Join(bin, platform.InstalledBinaryName())
+	if err := os.WriteFile(command, []byte("user command"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("fixture service failure")
+	svc := &uninstallFakeService{status: service.StatusStopped, uninstallErr: failure}
+	runner := newUninstallTestRunner(t, layout, uninstallCommandTestOptions(svc))
+	t.Setenv("MIHARI_BIN", bin)
+	err := runner.Run(context.Background(), nil)
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodeInvalidState || !errors.Is(err, failure) || !fileExists(command) || !fileExists(program) || !fileExists(data) {
+		t.Fatalf("err=%v command=%t program=%t data=%t", err, fileExists(command), fileExists(program), fileExists(data))
+	}
+}

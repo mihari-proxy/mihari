@@ -171,6 +171,10 @@ func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool
 		return err
 	}
 	command = applyUnmatchedCommandConsent(command, consent)
+	allowedCommand = ""
+	if command.remove || command.leave != nil {
+		allowedCommand = command.path
+	}
 	commandErr, stop := removeClassifiedUninstallCommand(command, progress)
 	if stop != nil {
 		return stop
@@ -178,17 +182,17 @@ func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool
 
 	reportUninstallProgress(progress, "Uninstalling Mihari service")
 	if err := u.uninstallService(ctx); err != nil {
-		return errors.Join(commandErr, fmt.Errorf("uninstall Mihari service: %w", err))
+		return uninstallPartialError(commandErr, fmt.Errorf("uninstall Mihari service: %w", err))
 	}
 	if err := u.waitForDaemonStop(ctx, progress); err != nil {
-		return errors.Join(commandErr, err)
+		return uninstallPartialError(commandErr, err)
 	}
 	if err := inspectUninstallRoots(ctx, targets); err != nil {
-		return errors.Join(commandErr, err)
+		return uninstallPartialError(commandErr, err)
 	}
 	if !force {
 		if err := checkUninstallFiles(ctx, targets, allowedCommand); err != nil {
-			return errors.Join(commandErr, err)
+			return uninstallPartialError(commandErr, err)
 		}
 	}
 
@@ -202,7 +206,7 @@ func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool
 				continue
 			}
 			if err := ctx.Err(); err != nil {
-				return errors.Join(commandErr, err)
+				return uninstallPartialError(commandErr, err)
 			}
 			removed, err := cleanUninstallTarget(ctx, target, retainedCommand, u.opts.Remove)
 			if err != nil {
@@ -224,10 +228,20 @@ func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool
 		}
 	}
 	if commandErr != nil {
-		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidState, Message: commandErr.Error()}, commandErr)
+		return uninstallPartialError(commandErr, nil)
 	}
 	reportUninstallProgress(progress, "Mihari has been completely uninstalled")
 	return nil
+}
+
+// uninstallPartialError preserves the contract and original causes when a
+// retained command makes even an otherwise aborted uninstall incomplete.
+func uninstallPartialError(commandErr, subsequent error) error {
+	if commandErr == nil {
+		return subsequent
+	}
+	cause := errors.Join(commandErr, subsequent)
+	return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidState, Message: cause.Error()}, cause)
 }
 
 func (u *Uninstaller) uninstallService(ctx context.Context) error {
