@@ -12,8 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/atotto/clipboard"
 )
 
 func sshAncestor() bool {
@@ -46,7 +44,11 @@ func writeFeedbackClipboard(text string) error {
 	if err, handled := writeInvokingUserClipboard(text); handled {
 		return err
 	}
-	return clipboard.WriteAll(text)
+	argv, err := linuxClipboardCommand(os.Getenv("WAYLAND_DISPLAY") != "", exec.LookPath)
+	if err != nil {
+		return err
+	}
+	return runUserClipboard(argv, text)
 }
 
 func writeInvokingUserClipboard(text string) (error, bool) {
@@ -95,7 +97,7 @@ func runUserClipboardContext(ctx context.Context, argv []string, text string) er
 	cmd.Stdout = output
 	cmd.Stderr = output
 	runErr := cmd.Run()
-	if ctx.Err() != nil {
+	if runErr != nil && ctx.Err() != nil {
 		runErr = errors.Join(runErr, ctx.Err())
 	}
 	if _, seekErr := output.Seek(0, io.SeekStart); seekErr != nil {
@@ -113,4 +115,33 @@ func runUserClipboardContext(ctx context.Context, argv []string, text string) er
 		return fmt.Errorf("%w: %s", runErr, detail)
 	}
 	return readErr
+}
+
+// linuxClipboardCommand preserves the pinned clipboard backend preference.
+// Selection is injected so tests never invoke the user's desktop utilities.
+func linuxClipboardCommand(wayland bool, lookup func(string) (string, error)) ([]string, error) {
+	type backend struct {
+		args      []string
+		companion string
+	}
+	backends := []backend{}
+	if wayland {
+		backends = append(backends, backend{[]string{"wl-copy"}, "wl-paste"})
+	}
+	backends = append(backends, backend{[]string{"xclip", "-in", "-selection", "clipboard"}, ""}, backend{[]string{"xsel", "--input", "--clipboard"}, ""}, backend{[]string{"termux-clipboard-set"}, "termux-clipboard-get"}, backend{[]string{"clip.exe"}, "powershell.exe"})
+	for _, b := range backends {
+		path, err := lookup(b.args[0])
+		if err != nil {
+			continue
+		}
+		if b.companion != "" {
+			if _, err := lookup(b.companion); err != nil {
+				continue
+			}
+		}
+		argv := append([]string(nil), b.args...)
+		argv[0] = path
+		return argv, nil
+	}
+	return nil, errors.New("no clipboard utilities available; install xclip, xsel or wl-clipboard")
 }

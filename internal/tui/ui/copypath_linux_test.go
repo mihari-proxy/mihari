@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -109,5 +110,39 @@ func TestRunUserClipboard_DeadlineStopsRunningCommand(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("clipboard command outlived its deadline")
+	}
+}
+
+func TestLinuxClipboardCommand_PreservesBackendAndSelection(t *testing.T) {
+	cases := []struct {
+		name    string
+		wayland bool
+		tools   []string
+		want    []string
+	}{
+		{"wayland", true, []string{"wl-copy", "wl-paste", "xclip"}, []string{"/fixture/wl-copy"}},
+		{"xclip", false, []string{"wl-copy", "wl-paste", "xclip"}, []string{"/fixture/xclip", "-in", "-selection", "clipboard"}},
+		{"xsel", true, []string{"xsel"}, []string{"/fixture/xsel", "--input", "--clipboard"}},
+		{"termux", false, []string{"termux-clipboard-set", "termux-clipboard-get"}, []string{"/fixture/termux-clipboard-set"}},
+		{"wsl", false, []string{"clip.exe", "powershell.exe"}, []string{"/fixture/clip.exe"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lookup := func(name string) (string, error) {
+				for _, tool := range tc.tools {
+					if name == tool {
+						return "/fixture/" + name, nil
+					}
+				}
+				return "", os.ErrNotExist
+			}
+			got, err := linuxClipboardCommand(tc.wayland, lookup)
+			if err != nil || !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("argv=%v err=%v", got, err)
+			}
+		})
+	}
+	if _, err := linuxClipboardCommand(false, func(string) (string, error) { return "", os.ErrNotExist }); err == nil {
+		t.Fatal("missing tools accepted")
 	}
 }
