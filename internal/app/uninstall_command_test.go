@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -463,4 +464,40 @@ func restoreUninstallCommandRemove(t *testing.T) {
 		commandRemoveFailureIsFatal = prevFatal
 		removeUninstallCommandFile = prevRemove
 	})
+}
+
+func TestUninstaller_ConsentAllowsOnlyCommandInsideDataRoot(t *testing.T) {
+	for _, extra := range []bool{false, true} {
+		t.Run(fmt.Sprint(extra), func(t *testing.T) {
+			layout, data, program := uninstallTestLayout(t)
+			writeUninstallFixture(t, data, "mihari.yaml")
+			writeProgramBytes(t, program, []byte("installed"))
+			bin := filepath.Join(data, "bin")
+			if err := os.MkdirAll(bin, 0700); err != nil {
+				t.Fatal(err)
+			}
+			command := filepath.Join(bin, platform.InstalledBinaryName())
+			if err := os.WriteFile(command, []byte("unmatched"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if extra {
+				if err := os.WriteFile(filepath.Join(bin, "unrelated.txt"), []byte("keep"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			svc := &uninstallFakeService{status: service.StatusStopped}
+			runner := newUninstallTestRunner(t, layout, uninstallCommandTestOptions(svc))
+			t.Setenv("MIHARI_BIN", bin)
+			err := runner.RunWithCommandConsent(context.Background(), nil, UninstallCommandConsent{DeleteUnmatched: true})
+			if extra {
+				if err == nil || !fileExists(command) || svc.uninstallCalls != 0 {
+					t.Fatalf("err=%v command=%t calls=%d", err, fileExists(command), svc.uninstallCalls)
+				}
+				return
+			}
+			if err != nil || fileExists(command) || fileExists(data) || svc.uninstallCalls != 1 {
+				t.Fatalf("err=%v command=%t data=%t calls=%d", err, fileExists(command), fileExists(data), svc.uninstallCalls)
+			}
+		})
+	}
 }

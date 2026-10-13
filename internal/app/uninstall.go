@@ -145,8 +145,17 @@ func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool
 	if err != nil {
 		return err
 	}
+	command, err := classifyUninstallCommand(u.layout.InstallRoot)
+	if err != nil {
+		return err
+	}
+	command = applyUnmatchedCommandConsent(command, consent)
+	allowedCommand := ""
+	if command.remove {
+		allowedCommand = command.path
+	}
 	if !force {
-		if err := CheckUninstallFiles(ctx, targets); err != nil {
+		if err := checkUninstallFiles(ctx, targets, allowedCommand); err != nil {
 			return err
 		}
 	}
@@ -154,11 +163,6 @@ func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool
 		return errors.New("administrator privileges are required; re-run this command from an elevated shell")
 	}
 
-	command, err := classifyUninstallCommand(u.layout.InstallRoot)
-	if err != nil {
-		return err
-	}
-	command = applyUnmatchedCommandConsent(command, consent)
 	commandErr, stop := removeClassifiedUninstallCommand(command, progress)
 	if stop != nil {
 		return stop
