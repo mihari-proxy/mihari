@@ -72,6 +72,13 @@ func TestCommitRefresh_CatalogCompensationFailureKeepsCachePair(t *testing.T) {
 			if !reflect.DeepEqual(s.Snapshot(), disk) {
 				t.Fatal("memory and persisted catalog differ after failed compensation")
 			}
+			expectedBase := a
+			if !restored {
+				expectedBase = b
+			}
+			if disk.Profiles[0].CacheBaseDir != expectedBase {
+				t.Fatalf("cache base=%q want=%q", disk.Profiles[0].CacheBaseDir, expectedBase)
+			}
 			expected := oldContent
 			if !restored {
 				expected = newContent
