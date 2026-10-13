@@ -418,7 +418,7 @@ const (
 	CompleteUninstallConfirmKey    = "system:complete-uninstall-confirm"
 	CompleteUninstallCommandKey    = "system:complete-uninstall-command"
 	DeleteUnmatchedCommandTitle    = "Delete unmatched command file"
-	DeleteUnmatchedCommandRollback = "Cancel keeps this file and continues uninstall. Confirm deletes it."
+	DeleteUnmatchedCommandRollback = "Cancel keeps this file and continues cleanup, but complete uninstall reports failure. Confirm deletes it."
 )
 
 const (

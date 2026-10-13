@@ -553,7 +553,7 @@ func completeUninstallDecision(uninstaller Uninstaller) tea.Msg {
 	}
 	return ui.ActionIntentMsg{
 		Action: ui.ActionCompleteUninstall, Page: ui.PageSystem, Key: ui.CompleteUninstallCommandKey,
-		Title: ui.DeleteUnmatchedCommandTitle, Object: file.Path, Impact: file.Reason, Rollback: ui.DeleteUnmatchedCommandRollback,
+		Title: ui.DeleteUnmatchedCommandTitle, Object: diagnostics.EscapeTerminal(file.Path), Impact: diagnostics.EscapeTerminal(file.Reason), Rollback: ui.DeleteUnmatchedCommandRollback,
 		Execute: func() tea.Msg { return ui.CompleteUninstallConfirmedMsg{DeleteUnmatchedCommand: true} },
 		Cancel:  func() tea.Msg { return ui.CompleteUninstallConfirmedMsg{} },
 	}

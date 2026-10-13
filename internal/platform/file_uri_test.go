@@ -22,6 +22,13 @@ func TestFileURI_RoundTripEscapedPath(t *testing.T) {
 	}
 }
 
+func TestFileURI_RejectsNativeNUL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "invalid\x00.yaml")
+	if _, err := FileURI(path); err == nil {
+		t.Fatalf("accepted %q", path)
+	}
+}
+
 func TestFileURI_RejectsRelativeOrNonFile(t *testing.T) {
 	for _, input := range []string{"local.yaml", "file:local.yaml", "file:///a?query=yes", "file:///a#fragment", "file://user@host/a", "https://example.test/a", "file:///a%00.yaml"} {
 		if _, err := FileURI(input); err == nil {

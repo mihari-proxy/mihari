@@ -107,7 +107,8 @@ func newServiceUninstallCommand(dependencies Dependencies, options *runOptions) 
 		}
 		file, unmatched, err := dependencies.Uninstaller.UnmatchedCommand(ctx)
 		if err != nil {
-			return err
+			reportLocalTaskFailure(ctx, dependencies, "service.uninstall.purge.failed", err)
+			return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidState, Message: err.Error()}, err)
 		}
 		consent := app.UninstallCommandConsent{}
 		if unmatched && deleteUnmatched {

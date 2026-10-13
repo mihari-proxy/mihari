@@ -203,6 +203,10 @@ func (w *diagnosticWindow) view(width, height int) string {
 			for _, line := range ui.CopySentLines() {
 				parts = append(parts, theme.BrightYellow.Render(ui.TruncateVisible(line, l.innerWidth)))
 			}
+			remaining := strings.TrimPrefix(strings.TrimPrefix(notice, ui.CopySentNotice), " · ")
+			if remaining != "" {
+				parts = append(parts, theme.Warning.Render(ui.TruncateVisible(diagnosticSingleLine(remaining), l.innerWidth)))
+			}
 		} else {
 			style := theme.Warning
 			switch {

@@ -181,8 +181,8 @@ func (c *Client) responseError(ctx context.Context, response *http.Response) err
 	return c.responseOutcome(ctx, response).err
 }
 
-func (c *Client) responseOutcome(ctx context.Context, response *http.Response) (outcome runtimeOutcome) {
-	defer c.closeRuntimeResponse(ctx, response, &outcome)
+func (c *Client) responseOutcome(ctx context.Context, response *http.Response, options ...runtimeRequestOptions) (outcome runtimeOutcome) {
+	defer c.closeRuntimeResponse(ctx, response, &outcome, options...)
 	err, remoteEnvelope := decodeRuntimeHTTPErrorOutcome(response)
 	if remoteEnvelope && ctx.Value(diagnosticQueryContextKey{}) == nil {
 		err = c.resolveErrorDiagnostic(ctx, err)

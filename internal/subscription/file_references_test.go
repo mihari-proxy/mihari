@@ -60,3 +60,16 @@ func TestFileReferences_InlineTLSAndSSHRemainUnchanged(t *testing.T) {
 		t.Fatal("inline values changed")
 	}
 }
+
+func TestFileReferences_WireGuardPrivateKeyRemainsInline(t *testing.T) {
+	key := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	proxy := Document{"type": "wireguard", "private-key": key}
+	doc := Document{"proxies": []any{proxy}}
+	if refs := FileReferences(doc); len(refs) != 0 {
+		t.Fatalf("WireGuard key classified as file: %v", refs)
+	}
+	ResolveFileReferences(doc, t.TempDir())
+	if proxy["private-key"] != key {
+		t.Fatalf("WireGuard key changed: %v", proxy["private-key"])
+	}
+}

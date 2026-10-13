@@ -149,6 +149,8 @@ type diagnosticCopyMsg struct {
 	generation uint64
 	id         string
 	err        error
+	kind       ui.CopyKind
+	command    tea.Cmd
 }
 
 func (w *diagnosticWindow) copyBody(body string) ui.CopyResult {
@@ -336,6 +338,10 @@ func (model *Model) updateDiagnostics(message tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 	case diagnosticCopyMsg:
 		if w.open && typed.generation == w.generation && typed.id == w.selected {
+			if typed.kind == ui.CopySentToTerminal {
+				w.copyStatus = ui.CopySentNotice
+				return typed.command, true
+			}
 			w.copyStatus = "Copied"
 			if typed.err != nil {
 				w.copyStatus = ui.CopyFailureText("Copy failed", typed.err)
@@ -372,17 +378,12 @@ func (model *Model) updateDiagnostics(message tea.Msg) (tea.Cmd, bool) {
 				w.copyStatus = "Details unavailable"
 				return nil, true
 			}
-			result := w.copyBody(body)
-			if result.Kind == ui.CopySentToTerminal {
-				w.copyStatus = ui.CopySentNotice
-				return result.Command, true
-			}
-			err := result.Err
-			if result.Kind == ui.CopyConfirmed {
-				err = nil
-			}
 			generation, id := w.generation, w.selected
-			return func() tea.Msg { return diagnosticCopyMsg{generation: generation, id: id, err: err} }, true
+			copyWindow := diagnosticWindow{copyText: w.copyText}
+			return func() tea.Msg {
+				result := copyWindow.copyBody(body)
+				return diagnosticCopyMsg{generation: generation, id: id, err: result.Err, kind: result.Kind, command: result.Command}
+			}, true
 		case "up", "down", "pgup", "pgdown", "home", "end":
 			lines := w.detailLines(model.width)
 			layout := w.layout(model.width, model.height, len(lines))

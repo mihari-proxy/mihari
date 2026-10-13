@@ -30,6 +30,7 @@ type fakePurgeUninstaller struct {
 	consent      app.UninstallCommandConsent
 	unmatched    app.UnmatchedCommandFile
 	hasUnmatched bool
+	unmatchedErr error
 }
 
 func (*fakePurgeUninstaller) Preview(context.Context) ([]app.UninstallTarget, error) { return nil, nil }
@@ -59,7 +60,19 @@ func (f *fakePurgeUninstaller) finish(progress func(string)) error {
 }
 
 func (f *fakePurgeUninstaller) UnmatchedCommand(context.Context) (app.UnmatchedCommandFile, bool, error) {
-	return f.unmatched, f.hasUnmatched, nil
+	return f.unmatched, f.hasUnmatched, f.unmatchedErr
+}
+
+func TestServiceUninstall_PreflightFailureUsesInvalidState(t *testing.T) {
+	prev := elevate.Check
+	t.Cleanup(func() { elevate.Check = prev })
+	elevate.Check = func() bool { return true }
+	uninstaller := &fakePurgeUninstaller{unmatchedErr: errors.New("MIHARI_BIN must be absolute")}
+	stderr := &bytes.Buffer{}
+	exit := Execute(context.Background(), []string{"service", "uninstall", "--purge", "--yes"}, io.Discard, stderr, Dependencies{Uninstaller: uninstaller})
+	if exit != ExitInvalidState || uninstaller.calls != 0 || !strings.Contains(stderr.String(), "MIHARI_BIN must be absolute") {
+		t.Fatalf("exit=%d calls=%d stderr=%q", exit, uninstaller.calls, stderr.String())
+	}
 }
 
 func (f *fakePurgeUninstaller) RunWithCommandConsent(_ context.Context, progress func(string), consent app.UninstallCommandConsent) error {

@@ -3,12 +3,41 @@
 package ui
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestWaylandDisplay_PrefersSessionAndRejectsAmbiguity(t *testing.T) {
+	dir := t.TempDir()
+	one, err := net.Listen("unix", filepath.Join(dir, "wayland-0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = one.Close() })
+	two, err := net.Listen("unix", filepath.Join(dir, "wayland-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = two.Close() })
+	t.Setenv("WAYLAND_DISPLAY", "wayland-1")
+	if got := waylandDisplay(dir); got != "wayland-1" {
+		t.Fatalf("session ignored: %q", got)
+	}
+	t.Setenv("WAYLAND_DISPLAY", "")
+	if got := waylandDisplay(dir); got != "" {
+		t.Fatalf("ambiguous session selected: %q", got)
+	}
+	if err := two.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := waylandDisplay(dir); got != "wayland-0" {
+		t.Fatalf("unique socket missed: %q", got)
+	}
+}
 
 func TestRunUserClipboard_ReturnsWhileChildHoldsStderr(t *testing.T) {
 	dir := t.TempDir()

@@ -29,8 +29,9 @@ const (
 const SubscriptionMutationTimeout = 180 * time.Second
 
 type runtimeRequestOptions struct {
-	timeout   time.Duration
-	noTimeout bool
+	timeout      time.Duration
+	noTimeout    bool
+	quietCleanup bool
 }
 
 type runtimeOutcome struct {
@@ -592,9 +593,9 @@ func (c *Client) doRuntimeOutcome(ctx context.Context, method, path string, inpu
 		return c.localRuntimeOutcome(err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return c.responseOutcome(ctx, response)
+		return c.responseOutcome(ctx, response, options...)
 	}
-	defer c.closeRuntimeResponse(ctx, response, &outcome)
+	defer c.closeRuntimeResponse(ctx, response, &outcome, options...)
 	raw, err := io.ReadAll(io.LimitReader(response.Body, responseLimit+1))
 	if err != nil {
 		return c.localRuntimeOutcome(err)
@@ -630,7 +631,7 @@ func decodeRuntimeHTTPErrorOutcome(response *http.Response) (error, bool) {
 
 // closeRuntimeResponse keeps local cleanup causes with the local failure owner.
 // A valid response remains valid when cleanup alone fails.
-func (c *Client) closeRuntimeResponse(ctx context.Context, response *http.Response, outcome *runtimeOutcome) {
+func (c *Client) closeRuntimeResponse(ctx context.Context, response *http.Response, outcome *runtimeOutcome, options ...runtimeRequestOptions) {
 	if err := response.Body.Close(); err != nil {
 		if outcome.err != nil && !outcome.remoteEnvelope {
 			var api protocol.APIError
@@ -639,6 +640,9 @@ func (c *Client) closeRuntimeResponse(ctx context.Context, response *http.Respon
 			} else {
 				outcome.err = errors.Join(outcome.err, err)
 			}
+			return
+		}
+		if len(options) > 0 && options[0].quietCleanup {
 			return
 		}
 		if reporter := c.diagnosticReporter(); reporter != nil {

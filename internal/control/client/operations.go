@@ -23,7 +23,7 @@ func ObserveOperationProgress(ctx context.Context, observer interface {
 }, id string) (protocol.OperationStatus, error) {
 	if c, ok := observer.(*Client); ok {
 		var result protocol.OperationStatus
-		outcome := c.doRuntimeOutcome(ctx, http.MethodGet, "/v1/operations/"+url.PathEscape(id), nil, &result, maxControlResponseSize)
+		outcome := c.doRuntimeOutcome(ctx, http.MethodGet, "/v1/operations/"+url.PathEscape(id), nil, &result, maxControlResponseSize, runtimeRequestOptions{quietCleanup: true})
 		return result, outcome.err
 	}
 	return observer.OperationStatus(ctx, id)

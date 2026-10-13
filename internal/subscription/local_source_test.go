@@ -7,9 +7,73 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestCommitCache_PostReplacementFailureRestoresSnapshot(t *testing.T) {
+	for _, adding := range []bool{true, false} {
+		t.Run(map[bool]string{true: "add", false: "refresh"}[adding], func(t *testing.T) {
+			s, source := newServiceForTest(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("proxies: []\nmode: direct\n")) }))
+			_, _, err := s.Mutate(func(c *Catalog) error { c.GlobalInterval = "7h"; return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			prepared, err := s.PrepareAdd(context.Background(), "new", source, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !adding {
+				if _, err := s.CommitAdd(prepared); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := s.Snapshot()
+			cachePath := s.CachePath(prepared.ProfileID())
+			cacheBefore, readErr := os.ReadFile(cachePath)
+			if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+				t.Fatal(readErr)
+			}
+			cause := errors.New("cache sync failed after replacement")
+			s.writeCache = func(path string, content []byte, mode os.FileMode) error {
+				if err := os.WriteFile(path, content, mode); err != nil {
+					return err
+				}
+				return cause
+			}
+			if adding {
+				_, err = s.CommitAdd(prepared)
+			} else {
+				refresh, prepErr := s.PrepareRefresh(context.Background(), prepared.ProfileID())
+				if prepErr != nil {
+					t.Fatal(prepErr)
+				}
+				refresh.result.Content = []byte("proxies: []\nmode: global\n")
+				refresh.result.BaseDir = t.TempDir()
+				_, err = s.CommitRefresh(refresh)
+			}
+			if !errors.Is(err, cause) {
+				t.Fatalf("err=%v", err)
+			}
+			disk, err := Load(s.catalogPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(disk, before) || !reflect.DeepEqual(s.Snapshot(), before) {
+				t.Fatalf("catalog changed: before=%+v disk=%+v memory=%+v", before, disk, s.Snapshot())
+			}
+			cacheAfter, err := os.ReadFile(cachePath)
+			if adding {
+				if !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("orphan cache: %q %v", cacheAfter, err)
+				}
+			} else if err != nil || string(cacheAfter) != string(cacheBefore) {
+				t.Fatalf("cache changed: before=%q after=%q err=%v", cacheBefore, cacheAfter, err)
+			}
+		})
+	}
+}
 
 func localTestURI(path string) string {
 	path = filepath.ToSlash(path)

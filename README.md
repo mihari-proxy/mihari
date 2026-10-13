@@ -176,6 +176,8 @@ Mihomo HTTP failures retain their original error text and upstream status in dia
 
 F2 keeps each occurrence as a separate record, with severity colors and a highlighted selection. The list and details appear side by side in wide terminals and stack in narrow ones. Tab switches panes; arrows, PgUp/PgDn and Home/End navigate; c copies the original detail; Esc returns. New records do not move the current selection. Web gateway messages from mihomo allow up to 1 MiB, matching the mihomo stream client; browser-originated messages retain a 32 KiB limit.
 
+F2 clipboard writes run in the background so the dialog stays responsive. An OSC 52 handoff remains unconfirmed and keeps history-availability notices visible. Linux Wayland copying uses the invoking session's usable display socket; without a specified display, discovery requires exactly one usable socket. The privileged `runuser` helper is resolved only from standard absolute system paths.
+
 A single CGO-free static binary (< 15 MB) contains everything, with built-in GitHub Releases self-update and local GeoIP resolution.
 
 Updates retain retired Mihari/mihomo binaries and completed transaction leftovers for a later startup. The daemon cleans its core files; daemon and TUI startup also try to clean leftovers beside the current Mihari executable. Busy files or other cleanup failures stay for the next startup and appear as warnings in **F2**, without failing the update or startup. Consecutive core updates remain available. Ordinary CLI queries do not trigger cleanup; interrupted recovery material and user backups are preserved.

@@ -1495,6 +1495,14 @@ func TestSystemCompleteUninstall_UnmatchedCommandErrorStaysVisible(t *testing.T)
 	}
 }
 
+func TestCompleteUninstallDecision_EscapesTerminalControls(t *testing.T) {
+	file := app.UnmatchedCommandFile{Path: "fixture\x1b]52;c;payload\a", Reason: "reason\x1b[2J"}
+	intent := completeUninstallDecision(&fakeUninstaller{unmatched: file, hasUnmatched: true}).(ui.ActionIntentMsg)
+	if strings.ContainsAny(intent.Object+intent.Impact, "\x1b\a") || !strings.Contains(intent.Object, "fixture") {
+		t.Fatalf("unescaped intent: %#v", intent)
+	}
+}
+
 func TestSystemCompleteUninstall_PreviewFailureShowsRootError(t *testing.T) {
 	preview := &fakeUninstaller{err: &app.UninstallFileError{Kind: "data", RelativePath: ".", Reason: "symbolic link"}}
 	model := New(nil, func() string { return "system-op" })

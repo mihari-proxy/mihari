@@ -9,6 +9,9 @@ import (
 
 // FileURI returns a canonical URI for an absolute native file path or file URI.
 func FileURI(path string) (string, error) {
+	if strings.ContainsRune(path, 0) {
+		return "", fmt.Errorf("file path must not contain NUL: %q", path)
+	}
 	if len(path) >= 5 && strings.EqualFold(path[:5], "file:") {
 		var err error
 		path, err = FileURIPath(path)

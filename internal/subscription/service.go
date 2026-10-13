@@ -248,6 +248,7 @@ func (s *Service) commitRefreshLocked(prepared PreparedRefresh, before Catalog) 
 	wroteCache := !prepared.result.NotModified
 	if wroteCache {
 		if err := s.writeCache(cachePath, prepared.result.Content, 0o600); err != nil {
+			err = s.failAfterRestore(err, cachePath, cacheBefore, hadCache, true)
 			return Receipt{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "write subscription cache"}, err)
 		}
 		profile.Generation++

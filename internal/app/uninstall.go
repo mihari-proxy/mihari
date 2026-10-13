@@ -108,6 +108,9 @@ func (u *Uninstaller) UnmatchedCommand(ctx context.Context) (UnmatchedCommandFil
 	if err := ctx.Err(); err != nil {
 		return UnmatchedCommandFile{}, false, err
 	}
+	if u.controlRootErr != nil {
+		return UnmatchedCommandFile{}, false, fmt.Errorf("resolve Mihari installation control directory: %w", u.controlRootErr)
+	}
 	plan, err := classifyUninstallCommand(u.layout.InstallRoot)
 	if err != nil || !plan.confirm || plan.leave == nil {
 		return UnmatchedCommandFile{}, false, err

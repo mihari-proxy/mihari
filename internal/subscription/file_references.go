@@ -63,7 +63,7 @@ func visitFileReferences(document Document, visit func(map[string]any, string, s
 			if key, _ := m["private-key"].(string); !strings.Contains(key, "PRIVATE KEY") {
 				field(m, "private-key", location)
 			}
-		} else {
+		} else if m["type"] != "wireguard" {
 			certificates(m, location)
 		}
 	}

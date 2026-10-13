@@ -56,7 +56,7 @@ func writeInvokingUserClipboard(text string) (error, bool) {
 	runtimeDir := "/run/user/" + uid
 	display := waylandDisplay(runtimeDir)
 	wlCopy, wlErr := exec.LookPath("wl-copy")
-	runuser, runErr := exec.LookPath("runuser")
+	runuser, runErr := findRunuser(exec.LookPath)
 	argv, ok := userWaylandArgs(os.Geteuid(), uid, user, display, wlCopy, runuser)
 	if wlErr != nil || runErr != nil || !ok {
 		return nil, false

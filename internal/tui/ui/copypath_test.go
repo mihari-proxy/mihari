@@ -30,6 +30,31 @@ func TestCopyPath_SSHSendsToTerminalWithoutWriting(t *testing.T) {
 	}
 }
 
+func TestFindRunuser_IgnoresInheritedSearchPath(t *testing.T) {
+	var tried []string
+	path, err := findRunuser(func(path string) (string, error) {
+		tried = append(tried, path)
+		if path == "/usr/bin/runuser" {
+			return path, nil
+		}
+		return "", errors.New("missing helper")
+	})
+	if err != nil || path != "/usr/bin/runuser" || strings.Join(tried, ",") != "/usr/sbin/runuser,/usr/bin/runuser" {
+		t.Fatalf("path=%q tried=%v err=%v", path, tried, err)
+	}
+}
+
+func TestWaylandDisplay_RejectsRegularFiles(t *testing.T) {
+	t.Setenv("WAYLAND_DISPLAY", "")
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/wayland-0", []byte("stale fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := waylandDisplay(dir); got != "" {
+		t.Fatalf("non-socket selected: %q", got)
+	}
+}
+
 func TestCopyPath_SSHWithoutTerminalFails(t *testing.T) {
 	called := false
 	got := CopyPath(CopyRequest{
@@ -169,7 +194,7 @@ func TestSSHDetectionAndUserWaylandCommand(t *testing.T) {
 	if err := os.WriteFile(dir+"/wayland-1", []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := waylandDisplay(dir); got != "wayland-1" {
+	if got := waylandDisplay(dir); got != "" {
 		t.Fatalf("display=%q", got)
 	}
 }

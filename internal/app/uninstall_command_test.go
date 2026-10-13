@@ -13,6 +13,15 @@ import (
 	"github.com/mihari-proxy/mihari/internal/service"
 )
 
+func TestUnmatchedCommand_ControlRootFailureStopsPreflight(t *testing.T) {
+	cause := errors.New("control root unavailable")
+	u := &Uninstaller{controlRootErr: cause}
+	_, _, err := u.UnmatchedCommand(context.Background())
+	if !errors.Is(err, cause) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestUninstaller_PreviewRejectsRelativeCommandDirectory(t *testing.T) {
 	layout, data, program := uninstallTestLayout(t)
 	writeUninstallFixture(t, data, "mihari.yaml")

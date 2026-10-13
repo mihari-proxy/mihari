@@ -34,6 +34,44 @@ func TestObserveOperationProgress_FailureDoesNotFloodDiagnostics(t *testing.T) {
 	}
 }
 
+func TestObserveOperationProgress_CloseFailureDoesNotFloodDiagnostics(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusBadGateway} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			capture := new(diagnosticCapture)
+			closes := 0
+			c := NewHTTP("http://mihari", "token", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				body := "{}"
+				if status != http.StatusOK {
+					body = `{"schema":"mihari.error/v1","error":{"code":"data_failure","message":"fixture failure"}}`
+				}
+				return &http.Response{StatusCode: status, Header: make(http.Header), Body: &progressCloseFailureBody{Reader: strings.NewReader(body), closes: &closes}}, nil
+			})})
+			if err := c.SetDiagnosticReporter(capture.report); err != nil {
+				t.Fatal(err)
+			}
+			for range 3 {
+				_, err := ObserveOperationProgress(context.Background(), c, "fixture")
+				if (err == nil) != (status == http.StatusOK) {
+					t.Fatalf("status=%d err=%v", status, err)
+				}
+			}
+			if records, _ := capture.snapshot(); len(records) != 0 || closes != 3 {
+				t.Fatalf("records=%+v closes=%d", records, closes)
+			}
+		})
+	}
+}
+
+type progressCloseFailureBody struct {
+	io.Reader
+	closes *int
+}
+
+func (b *progressCloseFailureBody) Close() error {
+	*b.closes++
+	return errors.New("fixture response cleanup failed")
+}
+
 func (v failingRequestJSON) MarshalJSON() ([]byte, error) { return nil, v.cause }
 
 func TestRuntimeOutcome_RequestEncodingPreservesCause(t *testing.T) {
