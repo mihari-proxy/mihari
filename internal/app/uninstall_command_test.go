@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/service"
 )
@@ -499,5 +500,53 @@ func TestUninstaller_ConsentAllowsOnlyCommandInsideDataRoot(t *testing.T) {
 				t.Fatalf("err=%v command=%t data=%t calls=%d", err, fileExists(command), fileExists(data), svc.uninstallCalls)
 			}
 		})
+	}
+}
+
+func TestUninstaller_DeferredCommandFailureStillChecksOtherRoots(t *testing.T) {
+	layout, data, program := uninstallTestLayout(t)
+	writeUninstallFixture(t, data, "mihari.yaml")
+	writeProgramBytes(t, program, []byte("installed"))
+	bin := filepath.Join(data, "bin")
+	if err := os.MkdirAll(bin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	command := filepath.Join(bin, platform.InstalledBinaryName())
+	if err := os.WriteFile(command, []byte("unmatched"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	originalRemove, originalFatal := removeUninstallCommandFile, commandRemoveFailureIsFatal
+	removeUninstallCommandFile = func(string) error { return errors.New("fixture image locked") }
+	commandRemoveFailureIsFatal = false
+	t.Cleanup(func() { removeUninstallCommandFile, commandRemoveFailureIsFatal = originalRemove, originalFatal })
+	svc := &uninstallFakeService{status: service.StatusStopped}
+	runner := newUninstallTestRunner(t, layout, uninstallCommandTestOptions(svc))
+	t.Setenv("MIHARI_BIN", bin)
+	err := runner.RunWithCommandConsent(context.Background(), nil, UninstallCommandConsent{DeleteUnmatched: true})
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodeInvalidState || fileExists(data) || fileExists(program) {
+		t.Fatalf("err=%v data=%t program=%t", err, fileExists(data), fileExists(program))
+	}
+}
+
+func TestUninstallCommand_ConsentedFileRecheckedBeforeRemoval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), platform.InstalledBinaryName())
+	if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan := applyUnmatchedCommandConsent(uninstallCommandPlan{path: path, confirm: true}, UninstallCommandConsent{DeleteUnmatched: true})
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	deferred, stop := removeClassifiedUninstallCommand(plan, nil)
+	if deferred == nil && stop == nil {
+		t.Fatal("changed command directory treated as removable file")
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("command directory removed: %v", err)
 	}
 }

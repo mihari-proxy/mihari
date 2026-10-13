@@ -179,7 +179,7 @@ func (u *Uninstaller) run(ctx context.Context, progress func(string), force bool
 		return err
 	}
 	if !force {
-		if err := CheckUninstallFiles(ctx, targets); err != nil {
+		if err := checkUninstallFiles(ctx, targets, allowedCommand); err != nil {
 			return err
 		}
 	}

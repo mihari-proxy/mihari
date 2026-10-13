@@ -21,10 +21,11 @@ var errInstalledProgramMissing = errors.New("installed Mihari program is missing
 var errCommandNotComparable = errors.New("command file is not comparable")
 
 type uninstallCommandPlan struct {
-	path    string
-	remove  bool
-	confirm bool
-	leave   error
+	path        string
+	remove      bool
+	confirm     bool
+	regularOnly bool
+	leave       error
 }
 
 func uninstallCommandPath() (string, error) {
@@ -101,6 +102,7 @@ func applyUnmatchedCommandConsent(plan uninstallCommandPlan, consent UninstallCo
 		return plan
 	}
 	plan.remove = true
+	plan.regularOnly = true
 	plan.confirm = false
 	plan.leave = nil
 	return plan
@@ -155,6 +157,19 @@ func hashCommandFile(path string) ([]byte, error) {
 // go away.
 func removeClassifiedUninstallCommand(plan uninstallCommandPlan, progress func(string)) (deferred error, stop error) {
 	if plan.remove {
+		if plan.regularOnly {
+			info, err := os.Lstat(plan.path)
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, nil
+			}
+			if err != nil {
+				return nil, fmt.Errorf("recheck approved command file %s: %w", plan.path, err)
+			}
+			if !info.Mode().IsRegular() {
+				return nil, fmt.Errorf("approved command file is no longer a regular file: %s", plan.path)
+			}
+		}
+
 		if err := removeUninstallCommandFile(plan.path); err != nil {
 			removeErr := fmt.Errorf("remove %s: %w", plan.path, err)
 			if !commandRemoveFailureIsFatal {
