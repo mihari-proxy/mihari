@@ -9,8 +9,8 @@
 ### Added
 
 - 支持本地 YAML 订阅来源：CLI `sub add NAME --file PATH`、`sub set ID --file PATH`，以及 TUI Subscriptions / Setup 的 URL / Local file 开关。daemon 读取并缓存原始主 YAML，支持手动与定时刷新；本地相对文件引用按成功读取时的实际源目录解析（#337）。
-- 核心安装、更新、重装和切换通道展示下载字节与进度；CLI 与 TUI 共用操作进度，普通控制请求默认超时放宽到 30 秒（#333）。
-- 完整卸载遇到与安装程序字节不匹配的普通 PATH 命令文件时，CLI 单独询问是否删除；非交互或 JSON 模式可使用 `--delete-unmatched-command` 明确同意。TUI 默认保留，并说明未完全清理（#332）。
+- 核心安装、更新、重装和切换通道展示下载字节与进度；CLI 与 TUI 共用操作进度，普通控制请求默认超时放宽到 60 秒（#333）。
+- 完整卸载遇到与安装程序字节不匹配的普通 PATH 命令文件时，CLI 单独询问是否删除；拒绝后仍清理其他目标，但返回 `invalid_state` 且不报告完全卸载成功。非交互或 JSON 模式可使用 `--delete-unmatched-command` 明确同意；TUI 默认保留，并说明未完全清理（#332）。
 
 ### Changed
 
