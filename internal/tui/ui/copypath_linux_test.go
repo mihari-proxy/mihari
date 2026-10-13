@@ -3,13 +3,16 @@
 package ui
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -144,5 +147,68 @@ func TestLinuxClipboardCommand_PreservesBackendAndSelection(t *testing.T) {
 	}
 	if _, err := linuxClipboardCommand(false, func(string) (string, error) { return "", os.ErrNotExist }); err == nil {
 		t.Fatal("missing tools accepted")
+	}
+}
+
+func TestRunUserClipboard_CancellationKillsCommandChildren(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "ready")
+	if err := syscall.Mkfifo(fifo, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := os.OpenFile(fifo, os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ready.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- runUserClipboardContext(ctx, []string{"/bin/sh", "-c", `sleep 60 & echo $! > "$1"; wait`, "fixture", fifo}, "fixture")
+	}()
+	pidResult := make(chan string, 1)
+	go func() { line, _ := bufio.NewReader(ready).ReadString('\n'); pidResult <- strings.TrimSpace(line) }()
+	var pid int
+	select {
+	case line := <-pidResult:
+		pid, err = strconv.Atoi(line)
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("child did not signal readiness")
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err=%v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("clipboard parent did not stop")
+	}
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		name, _, readErr := readProcIdentity(pid)
+		if errors.Is(readErr, os.ErrNotExist) {
+			return
+		}
+		raw, readErr := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+		if errors.Is(readErr, os.ErrNotExist) {
+			return
+		}
+		close := strings.LastIndexByte(string(raw), ')')
+		if close >= 0 && strings.HasPrefix(string(raw)[close+1:], " Z ") {
+			return
+		}
+		select {
+		case <-tick.C:
+		case <-deadline.C:
+			t.Fatalf("clipboard child still alive: pid=%d name=%q", pid, name)
+		}
 	}
 }
