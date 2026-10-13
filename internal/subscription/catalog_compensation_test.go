@@ -82,3 +82,42 @@ func TestCommitRefresh_CatalogCompensationFailureKeepsCachePair(t *testing.T) {
 		})
 	}
 }
+
+func TestCommitAdd_FailedCompensationKeepsPublishedGeneration(t *testing.T) {
+	s, _ := newServiceForTest(t, http.NotFoundHandler())
+	path := filepath.Join(t.TempDir(), "main.yaml")
+	content := []byte("proxies: []\n")
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := s.PrepareAdd(context.Background(), "local", localTestURI(path), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitCause, restoreCause := errors.New("committed sync failure"), errors.New("restore failed")
+	calls := 0
+	s.saveCatalog = func(path string, c Catalog) error {
+		calls++
+		if calls == 1 {
+			if err := Save(path, c); err != nil {
+				return err
+			}
+			return commitCause
+		}
+		return restoreCause
+	}
+	if _, err := s.CommitAdd(prepared); !errors.Is(err, commitCause) || !errors.Is(err, restoreCause) {
+		t.Fatalf("err=%v", err)
+	}
+	disk, err := Load(s.catalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(s.Snapshot(), disk) {
+		t.Fatal("new subscription vanished from live snapshot while committed on disk")
+	}
+	cache, _, err := s.ReadCache(prepared.ProfileID())
+	if err != nil || string(cache) != string(content) {
+		t.Fatalf("cache=%q err=%v", cache, err)
+	}
+}

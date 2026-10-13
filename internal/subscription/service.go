@@ -233,7 +233,13 @@ func (s *Service) CommitRefresh(prepared PreparedRefresh) (Receipt, error) {
 	return s.commitRefreshLocked(prepared, s.catalog.Clone())
 }
 
-func (s *Service) commitRefreshLocked(prepared PreparedRefresh, before Catalog) (Receipt, error) {
+func (s *Service) commitRefreshLocked(prepared PreparedRefresh, before Catalog) (receipt Receipt, err error) {
+	keepCommitted := false
+	defer func() {
+		if err != nil && !keepCommitted {
+			s.catalog = before.Clone()
+		}
+	}()
 	index := s.catalog.Index(prepared.profileID)
 	if index < 0 || s.catalog.Profiles[index].Version != prepared.profileVersion {
 		return Receipt{}, protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "subscription changed while refresh was in progress"}
@@ -290,6 +296,7 @@ func (s *Service) commitRefreshLocked(prepared PreparedRefresh, before Catalog) 
 				// The new catalog remains committed: retain its matching bytes
 				// and publish the same generation to in-process readers.
 				s.catalog = durable
+				keepCommitted = true
 				return Receipt{}, err
 			}
 			if !reflect.DeepEqual(durable, before) {

@@ -50,7 +50,6 @@ func (s *Service) CommitAdd(prepared PreparedAdd) (Receipt, error) {
 	s.catalog.Profiles = append(s.catalog.Profiles, prepared.profile)
 	receipt, err := s.commitRefreshLocked(prepared.refresh, before)
 	if err != nil {
-		s.catalog = before
 		return Receipt{}, err
 	}
 	return receipt, nil
