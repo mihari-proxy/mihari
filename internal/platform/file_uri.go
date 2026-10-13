@@ -35,7 +35,7 @@ func FileURIPath(raw string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid file URI: %w", err)
 	}
-	if !strings.EqualFold(u.Scheme, "file") || u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.ContainsRune(u.Path, 0) {
+	if !strings.EqualFold(u.Scheme, "file") || u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(raw, "#") || strings.ContainsRune(u.Path, 0) {
 		return "", fmt.Errorf("invalid file URI: %s", raw)
 	}
 	path, err := nativeFilePath(u)

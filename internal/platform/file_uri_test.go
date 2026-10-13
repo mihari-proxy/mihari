@@ -29,8 +29,20 @@ func TestFileURI_RejectsNativeNUL(t *testing.T) {
 	}
 }
 
+func TestFileURI_RejectsEmptyURIComponents(t *testing.T) {
+	canonical, err := FileURI(filepath.Join(t.TempDir(), "main.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, delimiter := range []string{"?", "#"} {
+		if _, err := FileURI(canonical + delimiter); err == nil {
+			t.Fatalf("accepted empty component: %s", canonical+delimiter)
+		}
+	}
+}
+
 func TestFileURI_RejectsRelativeOrNonFile(t *testing.T) {
-	for _, input := range []string{"local.yaml", "file:local.yaml", "file:///a?query=yes", "file:///a#fragment", "file://user@host/a", "https://example.test/a", "file:///a%00.yaml"} {
+	for _, input := range []string{"local.yaml", "file:local.yaml", "file:///a?query=yes", "file:///a#fragment", "file:///a?", "file:///a#", "file://user@host/a", "https://example.test/a", "file:///a%00.yaml"} {
 		if _, err := FileURI(input); err == nil {
 			t.Errorf("accepted %q", input)
 		}
