@@ -77,7 +77,7 @@ func (f *formModel) fieldLayout(theme ui.Theme, width int) formLayout {
 			}
 			value = "‹ " + value + " ›"
 		}
-		if label == "Mode" && lipgloss.Width(prefix+value) > width {
+		if cycle && lipgloss.Width(prefix+value) > width {
 			layout.lines = append(layout.lines, theme.Muted.Render(prefix))
 			prefix = "  "
 		}
