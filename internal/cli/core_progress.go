@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/term"
 	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
@@ -80,7 +81,13 @@ func writeCoreProgress(ctx context.Context, client coreProgressClient, id string
 	if len(previous) > len(line) {
 		padding = strings.Repeat(" ", len(previous)-len(line))
 	}
-	if _, err := fmt.Fprintf(errOut, "\r%s%s", line, padding); err != nil {
+	var err error
+	if fd, ok := errOut.(interface{ Fd() uintptr }); ok && term.IsTerminal(fd.Fd()) {
+		_, err = fmt.Fprintf(errOut, "\r%s%s", line, padding)
+	} else {
+		_, err = fmt.Fprintln(errOut, line)
+	}
+	if err != nil {
 		return previous, wrote
 	}
 	return line, true

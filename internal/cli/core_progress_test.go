@@ -36,7 +36,7 @@ func (c progressStatusClient) OperationStatus(context.Context, string) (protocol
 	return protocol.OperationStatus{State: "running", Progress: c.progress}, nil
 }
 
-func TestFollowCoreProgress_RewritesOneStderrLine(t *testing.T) {
+func TestFollowCoreProgress_RedirectedOutputUsesCompleteLines(t *testing.T) {
 	received := int64(1024)
 	total := int64(2048)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -57,7 +57,7 @@ func TestFollowCoreProgress_RewritesOneStderrLine(t *testing.T) {
 	}
 	cancel()
 	<-done
-	if !strings.HasPrefix(buf.String(), "\r") || !strings.HasSuffix(buf.String(), "\n") {
+	if strings.Contains(buf.String(), "\r") || !strings.HasSuffix(buf.String(), "\n") {
 		t.Fatalf("stderr = %q", buf.String())
 	}
 }
@@ -71,7 +71,16 @@ func TestTrackCoreInstallProgress_JSONStaysQuiet(t *testing.T) {
 	}
 }
 
-func TestWriteCoreProgress_ChangedStatusRedrawsWithoutNewline(t *testing.T) {
+func TestTrackCoreInstallProgress_RedirectedOutputDoesNotRedraw(t *testing.T) {
+	var buf lockedBuffer
+	stop := trackCoreInstallProgress(context.Background(), false, progressStatusClient{}, "fixture", &buf)
+	stop()
+	if strings.Contains(buf.String(), "\r") {
+		t.Fatalf("terminal redraw sent to redirected output: %q", buf.String())
+	}
+}
+
+func TestWriteCoreProgress_RedirectedChangedStatusUsesNewlines(t *testing.T) {
 	var buf lockedBuffer
 	received, total := int64(1024), int64(2048)
 	client := progressStatusClient{progress: &protocol.OperationProgress{Phase: protocol.ProgressPhaseDownloading, ReceivedBytes: &received, TotalBytes: &total}}
@@ -79,7 +88,7 @@ func TestWriteCoreProgress_ChangedStatusRedrawsWithoutNewline(t *testing.T) {
 	received = 2048
 	writeCoreProgress(context.Background(), client, "op", &buf, time.Time{}, previous, wrote)
 	output := buf.String()
-	if strings.Count(output, "\r") != 2 || strings.Contains(output, "\n") || !strings.Contains(output, "1.0 KiB") || !strings.Contains(output, "2.0 KiB / 2.0 KiB") {
+	if strings.Contains(output, "\r") || strings.Count(output, "\n") != 2 || !strings.Contains(output, "1.0 KiB") || !strings.Contains(output, "2.0 KiB / 2.0 KiB") {
 		t.Fatalf("stderr=%q", output)
 	}
 }
@@ -101,10 +110,10 @@ type progressCompletionWriter struct {
 }
 
 func (w *progressCompletionWriter) Write(p []byte) (int, error) {
-	if strings.HasPrefix(string(p), "\r") {
+	if strings.Contains(string(p), "Installing mihomo core") {
 		w.started.Do(func() { close(w.client.started) })
 	}
-	if strings.Contains(string(p), "\n") {
+	if string(p) == "\n" {
 		w.stopped.Do(func() { close(w.client.stopped) })
 	}
 	return len(p), nil
