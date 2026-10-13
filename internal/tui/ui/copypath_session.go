@@ -3,12 +3,18 @@ package ui
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
 func findRunuser(lookup func(string) (string, error)) (string, error) {
 	var failures []error
-	for _, path := range []string{"/usr/sbin/runuser", "/usr/bin/runuser", "/sbin/runuser", "/bin/runuser"} {
+	for _, path := range []string{
+		"/usr/sbin/runuser", "/usr/bin/runuser", "/sbin/runuser", "/bin/runuser",
+		"/usr/local/sbin/runuser", "/usr/local/bin/runuser",
+		"/run/current-system/sw/bin/runuser",
+		"/run/current-system/profile/sbin/runuser", "/run/current-system/profile/bin/runuser",
+	} {
 		found, err := lookup(path)
 		if err == nil {
 			return found, nil
@@ -77,6 +83,7 @@ func waylandDisplay(runtimeDir string) string {
 	}
 	preferred := os.Getenv("WAYLAND_DISPLAY")
 	var display string
+	var sockets int
 	for _, entry := range entries {
 		name := entry.Name()
 		if !validWaylandDisplay(name) {
@@ -86,18 +93,16 @@ func waylandDisplay(runtimeDir string) string {
 		if err != nil || info.Mode()&os.ModeSocket == 0 {
 			continue
 		}
-		if preferred != "" {
-			if name == preferred {
-				return name
-			}
-			continue
+		if name == preferred || filepath.Join(runtimeDir, name) == preferred {
+			return name
 		}
-		if display != "" {
-			return ""
-		}
+		sockets++
 		display = name
 	}
-	return display
+	if sockets == 1 {
+		return display
+	}
+	return ""
 }
 
 func validWaylandDisplay(name string) bool {

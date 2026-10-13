@@ -337,11 +337,13 @@ func (model *Model) updateDiagnostics(message tea.Msg) (tea.Cmd, bool) {
 		}
 		return nil, true
 	case diagnosticCopyMsg:
-		if w.open && typed.generation == w.generation && typed.id == w.selected {
-			if typed.kind == ui.CopySentToTerminal {
+		if typed.kind == ui.CopySentToTerminal {
+			if w.open && typed.generation == w.generation && typed.id == w.selected {
 				w.copyStatus = ui.CopySentNotice
-				return typed.command, true
 			}
+			return typed.command, true
+		}
+		if w.open && typed.generation == w.generation && typed.id == w.selected {
 			w.copyStatus = "Copied"
 			if typed.err != nil {
 				w.copyStatus = ui.CopyFailureText("Copy failed", typed.err)

@@ -44,6 +44,25 @@ func TestFindRunuser_IgnoresInheritedSearchPath(t *testing.T) {
 	}
 }
 
+func TestFindRunuser_UsesManagedSystemPrefixes(t *testing.T) {
+	for _, target := range []string{"/usr/local/sbin/runuser", "/run/current-system/sw/bin/runuser", "/run/current-system/profile/sbin/runuser"} {
+		t.Run(target, func(t *testing.T) {
+			path, err := findRunuser(func(path string) (string, error) {
+				if path == "runuser" {
+					t.Fatal("inherited PATH searched")
+				}
+				if path == target {
+					return path, nil
+				}
+				return "", errors.New("not in this prefix")
+			})
+			if err != nil || path != target {
+				t.Fatalf("path=%q err=%v", path, err)
+			}
+		})
+	}
+}
+
 func TestWaylandDisplay_RejectsRegularFiles(t *testing.T) {
 	t.Setenv("WAYLAND_DISPLAY", "")
 	dir := t.TempDir()

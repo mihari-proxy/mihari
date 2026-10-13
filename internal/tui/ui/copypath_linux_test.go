@@ -27,6 +27,10 @@ func TestWaylandDisplay_PrefersSessionAndRejectsAmbiguity(t *testing.T) {
 	if got := waylandDisplay(dir); got != "wayland-1" {
 		t.Fatalf("session ignored: %q", got)
 	}
+	t.Setenv("WAYLAND_DISPLAY", filepath.Join(dir, "wayland-1"))
+	if got := waylandDisplay(dir); got != "wayland-1" {
+		t.Fatalf("absolute session path ignored: %q", got)
+	}
 	t.Setenv("WAYLAND_DISPLAY", "")
 	if got := waylandDisplay(dir); got != "" {
 		t.Fatalf("ambiguous session selected: %q", got)
@@ -36,6 +40,10 @@ func TestWaylandDisplay_PrefersSessionAndRejectsAmbiguity(t *testing.T) {
 	}
 	if got := waylandDisplay(dir); got != "wayland-0" {
 		t.Fatalf("unique socket missed: %q", got)
+	}
+	t.Setenv("WAYLAND_DISPLAY", "wayland-99")
+	if got := waylandDisplay(dir); got != "wayland-0" {
+		t.Fatalf("unique fallback missed: %q", got)
 	}
 }
 

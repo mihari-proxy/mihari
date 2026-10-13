@@ -44,6 +44,23 @@ func TestDiagnostics_CopyRunsOutsideUpdate(t *testing.T) {
 	}
 }
 
+func TestDiagnostics_StaleCopyStillDispatchesTerminalCommand(t *testing.T) {
+	for _, open := range []bool{true, false} {
+		model := NewModel()
+		w := model.diagnosticWindow
+		w.open, w.generation, w.selected, w.copyStatus = open, 2, "new-record", "new-status"
+		called := false
+		cmd, consumed := model.updateDiagnostics(diagnosticCopyMsg{generation: 1, id: "old-record", kind: ui.CopySentToTerminal, command: func() tea.Msg { called = true; return nil }})
+		if !consumed || cmd == nil || w.copyStatus != "new-status" {
+			t.Fatalf("copy dropped or changed current status: open=%v status=%q", open, w.copyStatus)
+		}
+		cmd()
+		if !called {
+			t.Fatal("terminal command not dispatched")
+		}
+	}
+}
+
 func TestDiagnostics_TerminalCopyKeepsHistoryNotices(t *testing.T) {
 	w := newDiagnosticWindow()
 	w.copyStatus = ui.CopySentNotice

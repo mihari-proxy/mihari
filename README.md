@@ -176,7 +176,7 @@ Mihomo HTTP failures retain their original error text and upstream status in dia
 
 F2 keeps each occurrence as a separate record, with severity colors and a highlighted selection. The list and details appear side by side in wide terminals and stack in narrow ones. Tab switches panes; arrows, PgUp/PgDn and Home/End navigate; c copies the original detail; Esc returns. New records do not move the current selection. Web gateway messages from mihomo allow up to 1 MiB, matching the mihomo stream client; browser-originated messages retain a 32 KiB limit.
 
-F2 clipboard writes run in the background so the dialog stays responsive. An OSC 52 handoff remains unconfirmed and keeps history-availability notices visible. Linux Wayland copying uses the invoking session's usable display socket; without a specified display, discovery requires exactly one usable socket. The privileged `runuser` helper is resolved only from standard absolute system paths.
+F2 clipboard writes run in the background so the dialog stays responsive. An OSC 52 handoff remains unconfirmed and keeps history-availability notices visible. Under sudo on Linux, Wayland copying prefers the invoking session's usable display socket; if it cannot be found, discovery requires exactly one usable socket. The privileged `runuser` helper is resolved only from fixed absolute system paths, including system profiles. Other local sessions use the system clipboard tool.
 
 A single CGO-free static binary (< 15 MB) contains everything, with built-in GitHub Releases self-update and local GeoIP resolution.
 
