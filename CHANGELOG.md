@@ -4,34 +4,6 @@
 
 ## [Unreleased]
 
-## [v0.9.7] - 2026-10-13
-
-### Added
-
-- 支持本地 YAML 订阅来源：CLI `sub add NAME --file PATH`、`sub set ID --file PATH`，以及 TUI Subscriptions / Setup 的 URL / Local file 开关。daemon 读取并缓存原始主 YAML，支持手动与定时刷新；本地相对文件引用按成功读取时的实际源目录解析（#337）。
-- 核心安装、更新、重装和切换通道展示下载字节与进度；CLI 与 TUI 共用操作进度，普通控制请求默认超时放宽到 60 秒（#333）。
-- 完整卸载遇到与安装程序字节不匹配的普通 PATH 命令文件时，CLI 单独询问是否删除；拒绝后仍清理其他目标，但返回 `invalid_state` 且不报告完全卸载成功。非交互或 JSON 模式可使用 `--delete-unmatched-command` 明确同意；TUI 默认保留，并说明未完全清理（#332）。
-
-### Changed
-
-- 新建远程与本地订阅均先获取、校验，再创建；初次获取或校验失败不留下条目。检测到文件引用时默认取消确认，非交互 / JSON 模式须提供 `--allow-file-references`（#337）。
-- 核心下载与安装不再另设固定超时，仍响应调用方取消或更短的 deadline；订阅下载超时保持原有规则（#327, #333）。
-
-### Fixed
-
-- 补齐核心操作的进度动画，以及 Mihari 更新下载、校验和替换阶段的状态动画；重定向输出使用普通状态行（#335）。
-- 区分已确认写入系统剪贴板和仅发给终端的 OSC 52 复制请求，避免后者误报复制成功（#329）。
-- Linux 未提权且无法识别端口占用者时，System 页面显示 Needs admin（#328）。
-- 补齐 macOS 服务定义与重启恢复的解析验证，并增加全平台隔离安装 / 卸载端到端 CI（#334）。
-
-### Upgrade notes
-
-- CLI/TUI 与 daemon 应同步升级。`/v1` 可选增加操作进度、`allow_file_references` 请求字段及派生 `source_type=file`，既有 schema、JSON envelope、错误码与退出码保持。
-- 本地来源保存在现有 `url` 字段中（规范 `file:` URI），catalog 可增加 `cache-base-dir`；含本地条目的 catalog 不保证旧版本可读，降级前需移除本地条目或恢复兼容的完整备份。
-- daemon 按自身权限读取本地 YAML；校验与运行通过 `SKIP_SAFE_PATH_CHECK=true` 允许任意文件引用路径，仍受操作系统权限限制。仅主 YAML 被缓存；外部引用文件不复制、不备份，原生 watcher 独立于订阅刷新开关，主 YAML 回滚不能恢复外部文件。
-- 整合包沿用已锁定的 mihomo v1.19.30 与 GeoIP 输入。macOS 仍不在正式支持范围，darwin 安装包继续发布。
-- 日志、导出与本地错误详情仍不脱敏。
-
 ## [v0.9.6] - 2026-10-07
 
 ### Added
