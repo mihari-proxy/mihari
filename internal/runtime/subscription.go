@@ -103,7 +103,7 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 			return nil
 		}
 		var committedProfile subscription.PublicProfile
-		err = m.commitSubscriptionCandidate(ctx, operation, prepared.Document(), checkReferences, func(snapshot state.Snapshot, candidate configCandidate) (state.Snapshot, error) {
+		err = m.commitSubscriptionCandidate(ctx, operation, func() (subscription.Document, error) { return prepared.Document(), nil }, checkReferences, func(snapshot state.Snapshot, candidate configCandidate) (state.Snapshot, error) {
 			commit := m.subscriptions.CommitAdd
 			if operation.ExecutionMode == protocol.ExecutionModeSetup {
 				commit = m.subscriptions.CommitAddAndActivate
@@ -133,7 +133,6 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 			return snapshot, nil
 		})
 		if err != nil {
-			m.markConfigDegraded(ctx, err)
 			return nil, err
 		}
 		m.refreshSubscriptionLogSecrets()
@@ -162,13 +161,25 @@ func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, 
 			return nil, err
 		}
 		var committedProfile subscription.PublicProfile
-		err = m.commitSubscriptionCandidate(ctx, operation, prepared.Document(), nil, func(snapshot state.Snapshot, candidate configCandidate) (state.Snapshot, error) {
+		err = m.commitSubscriptionCandidate(ctx, operation, func() (subscription.Document, error) {
+			if operation.ExecutionMode == protocol.ExecutionModeSetup {
+				next, err := m.subscriptions.ReprepareSetupRefresh(ctx, prepared)
+				if err != nil {
+					return nil, err
+				}
+				prepared = next
+			}
+			return prepared.Document(), nil
+		}, nil, func(snapshot state.Snapshot, candidate configCandidate) (state.Snapshot, error) {
 			commit := m.subscriptions.CommitRefresh
 			if operation.ExecutionMode == protocol.ExecutionModeSetup {
 				commit = m.subscriptions.CommitRefreshAndActivate
 			}
 			receipt, commitErr := commit(prepared)
 			if commitErr != nil {
+				if operation.ExecutionMode == protocol.ExecutionModeSetup && errors.Is(commitErr, subscription.ErrRefreshChanged) {
+					return snapshot, setupPreparationChanged{resource: "Selected subscription"}
+				}
 				return snapshot, commitErr
 			}
 			profile, profileErr := findPublicProfile(receipt.After.Public(), id)
@@ -192,7 +203,6 @@ func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, 
 			return snapshot, nil
 		})
 		if err != nil {
-			m.markConfigDegraded(ctx, err)
 			return nil, m.subscriptions.RecordRefreshFailure(prepared, err)
 		}
 		return committedProfile, nil

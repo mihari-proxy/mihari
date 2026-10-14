@@ -91,8 +91,10 @@ func TestSetupTargetIPC_ConcurrentObservationAndActivation(t *testing.T) {
 		t.Fatalf("status=%+v err=%v", status, err)
 	}
 	result := make(chan error, 1)
+	var aID string
 	go func() {
-		_, err := client.AddSubscription(ctx, protocol.SubscriptionAddRequest{OperationID: "setup-a", ExecutionMode: protocol.ExecutionModeSetup, Name: "A", URL: source.URL + "/a"})
+		a, err := client.AddSubscription(ctx, protocol.SubscriptionAddRequest{OperationID: "setup-a", ExecutionMode: protocol.ExecutionModeSetup, Name: "A", URL: source.URL + "/a"})
+		aID = a.Subscription.ID
 		result <- err
 	}()
 	select {
@@ -111,7 +113,7 @@ func TestSetupTargetIPC_ConcurrentObservationAndActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	list, err := client.Subscriptions(t.Context())
-	if err != nil || len(list.Subscriptions) != 2 || list.ActiveID == b.Subscription.ID {
+	if err != nil || len(list.Subscriptions) != 2 || (aID == "" || list.ActiveID != aID || list.ActiveID == b.Subscription.ID) {
 		t.Fatalf("list=%+v err=%v", list, err)
 	}
 	if _, err := client.AddSubscription(t.Context(), protocol.SubscriptionAddRequest{OperationID: "setup-a", ExecutionMode: protocol.ExecutionModeSetup, Name: "A", URL: source.URL + "/a"}); err != nil {

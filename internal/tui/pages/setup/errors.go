@@ -51,6 +51,9 @@ func (m *Model) fail(prefix string, err error) {
 	} else if errors.Is(err, context.DeadlineExceeded) {
 		cause, advice = "The request timed out.", "Check the saved result before retrying."
 	}
+	if api.Details["degraded"] == true {
+		advice = "Recovery is required. Press F2 for details, resolve the reported cause, then restart Mihari's daemon before continuing. Restarting only the core is insufficient."
+	}
 	m.lastError = prefix + ": " + strings.Join(strings.Fields(cause), " ")
 	m.errorAdvice = advice
 	if snapshot.Code == "" {

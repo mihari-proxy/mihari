@@ -78,7 +78,7 @@ func (m *Model) saveEndpointsPrompt() tea.Cmd {
 	}
 }
 
-// saveEndpoints submits endpoint edits with the observed revision through the control client.
+// saveEndpoints submits endpoint targets in setup mode through the control client.
 func (m *Model) saveEndpoints() tea.Cmd {
 	if !m.setupTargetAvailable {
 		return m.setupUpgradeRequired()

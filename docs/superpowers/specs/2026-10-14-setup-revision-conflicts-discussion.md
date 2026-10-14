@@ -62,7 +62,7 @@ Setup 新请求不携带 `if_revision`。旧字段的含义保持全局严格前
 | 步骤 | 本次目标与覆盖 | 保留/复用 |
 | --- | --- | --- |
 | 端口 | 本次提交的三个端口值；每次在最新设置上应用这些字段，完成校验再保存 | 其他设置保留最新值；仍遵循已有重启提示与重连流程 |
-| 核心 | 请求接受时捕获的保存通道；需要下载时固定首次解析的制品身份 | 满足目标的可用核心复用；保留既有本地核心接纳政策，不增加官方来源证明要求；不能仅凭缺失核心时 DTO 的空通道判断 stable |
+| 核心 | 请求接受时捕获的保存通道；需要下载时固定首次解析的制品身份 | 满足目标且通过当前生成配置校验的可用核心复用；保留既有本地核心接纳政策，不增加官方来源证明要求；不能仅凭缺失核心时 DTO 的空通道判断 stable |
 | 订阅 | 本次填写的名称、来源及文件引用确认；成功后新条目成为当前订阅并应用其配置 | 向最新目录加入条目，保留其他条目；运行配置使用最新未由 setup 覆盖的管理设置 |
 | 已保存订阅刷新 | 用户已明确选择重试的条目，刷新并使其满足本步目标 | 不因操作重试重复创建条目；若原对象已删除或身份不符，保留草稿并报告具体原因，不复活旧对象 |
 | GeoIP | Country 与 ASN 均通过现有验证并可用 | 提交前重新检查；后台已经完成准备时直接复用，不要求最新时间戳或清除历史错误 |
@@ -113,3 +113,10 @@ Setup 新请求不携带 `if_revision`。旧字段的含义保持全局严格前
 ## 最终确认
 
 用户已通过“在 worktree 中完成修复，然后提交 PR”确认以上方案并授权实施。如实现发现与已确认行为冲突的技术限制，先修订设计，不静默缩减行为。
+
+
+## Review follow-up
+
+Subscription persistence errors may occur after an atomic replacement has committed. Setup must settle a retained catalog before returning a normal failure: restore the previous catalog and matching cache, or report degraded when compensation cannot be confirmed. The latter blocks further mutations and stops the core before returning. Setup provides F2 diagnostics and explicitly directs the user to resolve the cause and restart the Mihari daemon; restarting only mihomo is insufficient, and restarting the daemon does not guarantee recovery. Global recovery workflows remain tracked by [Issue #218](https://github.com/mihari-proxy/mihari/issues/218).
+
+Refreshing a saved subscription retains the selected object and source. Harmless metadata changes can be rebased within the same bounded preparation budget without downloading again. A conditional response tied to a changed cache requires fresh preparation. A deleted object or changed source is rejected with a specific error rather than resurrecting the object or silently following a different source.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -47,7 +48,9 @@ func TestSetupAdd_ActivatesTargetAndPreservesOtherProfiles(t *testing.T) {
 
 func TestSetupCore_ReuseStillAppliesCapturedChannel(t *testing.T) {
 	var manager *Manager
-	manager = newTestManager(Options{Settings: config.Defaults(), Installer: &fakeInstaller{detectVersion: func(ctx context.Context, _ string) (string, error) {
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("ab", 32)
+	manager = newTestManager(Options{Settings: settings, StagingDir: t.TempDir(), Installer: &fakeInstaller{detectVersion: func(ctx context.Context, _ string) (string, error) {
 		_, err := manager.updateSettings(ctx, func(s *config.Settings) error { s.CoreChannel = "alpha"; return nil })
 		return "v1.19.0", err
 	}}})
@@ -223,5 +226,146 @@ func TestSetupCore_UnrelatedObservationDoesNotRejectAndExplicitRevisionStillAppl
 	var api protocol.APIError
 	if !errors.As(err, &api) || api.Code != protocol.CodeRevisionConflict || commits != 1 {
 		t.Fatalf("err=%v commits=%d", err, commits)
+	}
+}
+
+func TestSetupCore_ReuseValidatesCurrentConfiguration(t *testing.T) {
+	rejection := errors.New("existing core rejects setup configuration")
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("ab", 32)
+	manager := newTestManager(Options{Settings: settings, StagingDir: t.TempDir(), ValidateConfig: func(context.Context, string) error { return rejection }, Installer: &fakeInstaller{detectVersion: func(context.Context, string) (string, error) { return "v1.19.0", nil }}})
+	manager.installRequest.BinaryPath = t.TempDir() + "/mihomo"
+	if err := os.WriteFile(manager.installRequest.BinaryPath, []byte("fixture"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := manager.Install(t.Context(), Operation{ID: "reuse-invalid", ExecutionMode: protocol.ExecutionModeSetup})
+	if !errors.Is(err, rejection) {
+		t.Fatalf("invalid existing core accepted: %v", err)
+	}
+	if manager.store.Load().Core.Version != "" {
+		t.Fatal("rejected core published")
+	}
+}
+
+func TestSetupRefresh_MetadataChangePreservesTargetAndLatestMetadata(t *testing.T) {
+	manager, _, _, source := subscriptionManager(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("proxies: []\n")) }))
+	a, err := manager.AddSubscription(t.Context(), Operation{ID: "a"}, AddSubscriptionInput{Name: "A", URL: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	once := false
+	manager.validateConfig = func(ctx context.Context, _ string) error {
+		if !once {
+			once = true
+			name := "renamed"
+			_, err := manager.SetSubscription(ctx, Operation{ID: "rename"}, a.ID, SetSubscriptionInput{Name: &name})
+			return err
+		}
+		return nil
+	}
+	got, err := manager.RefreshSubscription(t.Context(), Operation{ID: "setup-refresh", ExecutionMode: protocol.ExecutionModeSetup}, a.ID)
+	if err != nil || got.Name != "renamed" || manager.Subscriptions().ActiveID != a.ID {
+		t.Fatalf("profile=%+v err=%v", got, err)
+	}
+}
+
+func TestSetupCommit_UnconfirmedCompensationStopsCoreAndBlocksMutations(t *testing.T) {
+	manager, _, _, source := subscriptionManager(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("proxies: []\n")) }))
+	if _, err := manager.AddSubscription(t.Context(), Operation{ID: "seed"}, AddSubscriptionInput{Name: "B", URL: source}); err != nil {
+		t.Fatal(err)
+	}
+	stopped := false
+	manager.supervisor = &coreMaintenanceSupervisor{fakeSupervisor: &fakeSupervisor{}, maintain: func(_ context.Context, work func() error) error { stopped = true; return work() }}
+	catalogPath := filepath.Join(filepath.Dir(filepath.Dir(manager.runtimeConfig)), "subscriptions", "catalog.yaml")
+	manager.validateConfig = func(context.Context, string) error {
+		if err := os.Remove(catalogPath); err != nil {
+			return err
+		}
+		if err := os.Mkdir(catalogPath, 0700); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(catalogPath, "blocked"), []byte("fixture"), 0600)
+	}
+	_, err := manager.AddSubscription(t.Context(), Operation{ID: "setup", ExecutionMode: protocol.ExecutionModeSetup}, AddSubscriptionInput{Name: "A", URL: source})
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Details["degraded"] != true || !stopped || manager.store.Load().Health != "degraded" {
+		t.Fatalf("err=%v stopped=%v state=%+v", err, stopped, manager.store.Load())
+	}
+	if err := manager.lockMutation(t.Context()); err == nil {
+		manager.unlock()
+		t.Fatal("unsafe mutation allowed after failed compensation")
+	}
+}
+
+func TestSetupRefresh_SourceChangeOrDeletionDoesNotRestoreOldObject(t *testing.T) {
+	for _, deleted := range []bool{false, true} {
+		t.Run(fmt.Sprint(deleted), func(t *testing.T) {
+			manager, _, _, source := subscriptionManager(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("proxies: []\n")) }))
+			a, err := manager.AddSubscription(t.Context(), Operation{ID: "a"}, AddSubscriptionInput{Name: "A", URL: source})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Keep A inactive so concurrent edits need no nested config generation.
+			b, err := manager.AddSubscription(t.Context(), Operation{ID: "b"}, AddSubscriptionInput{Name: "B", URL: source})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := manager.UseSubscription(t.Context(), Operation{ID: "use-b"}, b.ID); err != nil {
+				t.Fatal(err)
+			}
+			once := false
+			manager.validateConfig = func(ctx context.Context, _ string) error {
+				if once {
+					return nil
+				}
+				once = true
+				if deleted {
+					return manager.RemoveSubscription(ctx, Operation{ID: "delete"}, a.ID)
+				}
+				url := source + "?new-source"
+				_, err := manager.SetSubscription(ctx, Operation{ID: "change-source"}, a.ID, SetSubscriptionInput{URL: &url})
+				return err
+			}
+			_, err = manager.RefreshSubscription(t.Context(), Operation{ID: "setup-refresh", ExecutionMode: protocol.ExecutionModeSetup}, a.ID)
+			var api protocol.APIError
+			if !errors.As(err, &api) || (api.Code != protocol.CodeInvalidArgument && api.Code != protocol.CodeInvalidState) {
+				t.Fatalf("expected explicit identity error: %v", err)
+			}
+			if manager.Subscriptions().ActiveID != b.ID {
+				t.Fatal("invalidated target changed active subscription")
+			}
+			profiles := manager.Subscriptions().Profiles
+			if deleted && len(profiles) != 1 {
+				t.Fatalf("deleted target resurrected: %+v", profiles)
+			}
+			if !deleted {
+				url, readErr := manager.SubscriptionURL(t.Context(), a.ID)
+				if readErr != nil || url != source+"?new-source" {
+					t.Fatalf("source overwritten: %s %v", url, readErr)
+				}
+			}
+		})
+	}
+}
+
+func TestSetupRefresh_ReprepareRemainsBounded(t *testing.T) {
+	manager, _, _, source := subscriptionManager(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("proxies: []\n")) }))
+	a, err := manager.AddSubscription(t.Context(), Operation{ID: "a"}, AddSubscriptionInput{Name: "A", URL: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := 0
+	manager.validateConfig = func(ctx context.Context, _ string) error {
+		attempts++
+		name := fmt.Sprintf("name-%d", attempts)
+		_, err := manager.SetSubscription(ctx, Operation{ID: name}, a.ID, SetSubscriptionInput{Name: &name})
+		return err
+	}
+	_, err = manager.RefreshSubscription(t.Context(), Operation{ID: "setup-refresh", ExecutionMode: protocol.ExecutionModeSetup}, a.ID)
+	if err == nil || attempts != 3 {
+		t.Fatalf("err=%v attempts=%d", err, attempts)
+	}
+	if manager.mutationDegraded.Load() {
+		t.Fatal("preparation conflict entered degraded")
 	}
 }

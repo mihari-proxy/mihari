@@ -361,3 +361,11 @@ func TestSetupSubscription_PartialSuccessDoesNotAdvance(t *testing.T) {
 		t.Fatal("partial failure was hidden")
 	}
 }
+
+func TestSetupDegradedFailure_ExplainsRecovery(t *testing.T) {
+	m := supportedModel(&fakeClient{}, func() string { return "setup-test" })
+	m.fail("Subscription", protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription state rollback failed", Details: map[string]any{"degraded": true}})
+	if !strings.Contains(m.errorAdvice, "restart Mihari") || !strings.Contains(m.errorAdvice, "F2") {
+		t.Fatalf("no recovery advice: %s", m.errorAdvice)
+	}
+}

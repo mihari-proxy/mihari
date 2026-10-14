@@ -46,8 +46,15 @@ func TestSetupStoppedCore_RevalidatesFreshInputsWithSelectedCandidate(t *testing
 			installer.TestTrustedFixture = f
 			starter.fixture = f
 			changed, validations := false, 0
+			var installedValidationBinary string
 			f.Execute = func(_ context.Context, c core.CoreCommand) ([]byte, error) {
+				if !changed && len(c.Args) > 0 && c.Args[0] == "-t" && installedValidationBinary == "" {
+					installedValidationBinary = c.Binary
+				}
 				if changed && len(c.Args) > 0 && c.Args[0] == "-t" {
+					if installedValidationBinary == "" || c.Binary == installedValidationBinary {
+						t.Fatalf("fresh validation did not use selected candidate: installed=%q validation=%q", installedValidationBinary, c.Binary)
+					}
 					validations++
 					if !strings.Contains(string(f.CommandConfig(c)), "19700") {
 						t.Fatalf("revalidated stale committed config: %s", f.CommandConfig(c))

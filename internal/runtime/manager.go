@@ -629,8 +629,8 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		installRequest.CurrentVersion = m.store.Load().Core.Version
 		installRequest.Channel = channel
 		installRequest.AlphaSHA = m.store.Load().Core.AlphaSHA
-		// setup 预检（design §4.3）：aio 脚本已预置核心时，对现有文件 -v 成功即秒过，不联网。
-		// store.Core.Version 不作判据（DetectVersion 失败时旧值残留，见 runtime.go 启动检测）。
+		// Setup may reuse a matching local core after validating current generated inputs.
+		// Legacy source-only requests retain their existing version-probe behavior.
 		if operation.ExecutionMode == protocol.ExecutionModeSetup {
 			result, reused, err := m.reuseSetupCore(ctx, operation, channel, inputs.selection.Bundle)
 			if err != nil {

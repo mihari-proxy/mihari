@@ -60,7 +60,10 @@ func (s *Service) commitAdd(prepared PreparedAdd, activate bool) (Receipt, error
 	if activate {
 		s.catalog.ActiveID = prepared.profile.ID
 	}
-	receipt, err := s.commitRefreshLocked(prepared.refresh, before)
+	receipt, err := s.commitRefreshLocked(prepared.refresh, before, activate)
+	if activate {
+		return s.settleSetupCommitLocked(receipt, err)
+	}
 	if err != nil {
 		return Receipt{}, err
 	}

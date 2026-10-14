@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/mihari-proxy/mihari/internal/config"
-	"github.com/mihari-proxy/mihari/internal/core"
 	"os"
 	"strings"
 
+	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/core"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/subscription"
@@ -51,8 +51,13 @@ func retrySetupPreparation(ctx context.Context, op Operation, work func() (any, 
 
 // commitSubscriptionCandidate reuses the fetched document while regenerating
 // only the configuration invalidated by a real settings change.
-func (m *Manager) commitSubscriptionCandidate(ctx context.Context, op Operation, document subscription.Document, check func() error, commit func(state.Snapshot, configCandidate) (state.Snapshot, error)) error {
+func (m *Manager) commitSubscriptionCandidate(ctx context.Context, op Operation, prepare func() (subscription.Document, error), check func() error, commit func(state.Snapshot, configCandidate) (state.Snapshot, error)) error {
+	degradedMarked := false
 	_, err := retrySetupPreparation(ctx, op, func() (any, error) {
+		document, err := prepare()
+		if err != nil {
+			return nil, err
+		}
 		candidate, err := m.prepareConfig(ctx, document)
 		if err != nil {
 			return nil, err
@@ -74,8 +79,18 @@ func (m *Manager) commitSubscriptionCandidate(ctx context.Context, op Operation,
 			return nil, setupPreparationChanged{resource: "Subscription configuration"}
 		}
 		_, err = m.updateStateLocked(ctx, state.CommandMeta{ID: op.ID, Source: op.Source, IfRevision: op.IfRevision}, func(s state.Snapshot) (state.Snapshot, error) { return commit(s, candidate) })
+		var api protocol.APIError
+		if op.ExecutionMode == protocol.ExecutionModeSetup && errors.As(err, &api) && api.Details["degraded"] == true {
+			m.mutationDegraded.Store(true)
+			m.stopCoreOnUnlock.Store(true)
+			m.markConfigDegraded(ctx, err)
+			degradedMarked = true
+		}
 		return nil, err
 	})
+	if !degradedMarked {
+		m.markConfigDegraded(ctx, err)
+	}
 	return err
 }
 
@@ -125,6 +140,16 @@ func (m *Manager) reuseSetupCore(ctx context.Context, op Operation, channel, bun
 		if err != nil || version == "" || coreVersionChannel(version) != channel {
 			return nil, nil
 		}
+		identity := m.coreConfigIdentity()
+		document, err := m.setupCoreDocument(identity)
+		if err != nil {
+			return nil, err
+		}
+		configuration, err := m.prepareConfig(ctx, document)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { collectWarning(ctx, "core", "candidate.cleanup.failed", configuration.cleanup()) }()
 		if err := m.lockSetupMutation(ctx, op); err != nil {
 			return nil, err
 		}
@@ -134,6 +159,9 @@ func (m *Manager) reuseSetupCore(ctx context.Context, op Operation, channel, bun
 		}
 		if err := m.checkIfRevision(op.IfRevision); err != nil {
 			return nil, err
+		}
+		if configuration.generation != m.currentConfigGeneration() || identity != m.coreConfigIdentity() {
+			return nil, setupPreparationChanged{resource: "Local core configuration"}
 		}
 		after, err := os.Stat(m.installRequest.BinaryPath)
 		if errors.Is(err, os.ErrNotExist) {
@@ -195,13 +223,9 @@ func (m *Manager) coreConfigIdentity() coreConfigIdentity {
 func (m *Manager) revalidateSetupCore(ctx context.Context, candidate PreparedCore) (uint64, coreConfigIdentity, error) {
 	settings, generation := m.configInputs()
 	identity := m.coreConfigIdentity()
-	document := subscription.Document{"proxies": []any{}, "proxy-groups": []any{}, "rules": []any{"MATCH,DIRECT"}}
-	if m.subscriptions != nil && identity.active != "" {
-		_, doc, err := m.subscriptions.ReadCache(identity.active)
-		if err != nil {
-			return 0, identity, err
-		}
-		document = doc
+	document, err := m.setupCoreDocument(identity)
+	if err != nil {
+		return 0, identity, err
 	}
 	content, err := subscription.Generate(document, nil, settings)
 	if err != nil {
@@ -217,4 +241,12 @@ func (m *Manager) revalidateSetupCore(ctx context.Context, candidate PreparedCor
 		err = protocol.APIError{Code: protocol.CodeInvalidState, Message: "core inputs changed; candidate revalidation is unavailable"}
 	}
 	return generation, identity, err
+}
+
+func (m *Manager) setupCoreDocument(identity coreConfigIdentity) (subscription.Document, error) {
+	if m.subscriptions != nil && identity.active != "" {
+		_, doc, err := m.subscriptions.ReadCache(identity.active)
+		return doc, err
+	}
+	return subscription.Document{"proxies": []any{}, "proxy-groups": []any{}, "rules": []any{"MATCH,DIRECT"}}, nil
 }
