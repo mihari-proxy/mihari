@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-## [v0.9.7] - 2026-10-13
+## [v0.9.7] - 2026-10-14
 
 ### Added
 
@@ -34,9 +34,13 @@
 - 核心安装进度在重定向 stderr 时使用普通文本行；本地文件 URI 同时拒绝空查询、空片段及未转义的分隔符（#345）。
 - 全平台安装测试与清理入口在任何系统操作前验证 GitHub-hosted runner 标记，防止工作站误执行（#345）。
 
+- 完整卸载时保留清理根内未获单独删除同意的 PATH 普通命令文件及必要父目录，其余目标继续清理；`--force` 不替代单独确认（#348）。
+- Setup 按每一步提交的目标执行，正常后台状态更新不再使核心安装、订阅导入等步骤报 `State changed`；新添加或显式刷新的订阅在同一步中启用，保留其他订阅和此前成功步骤（#350）。
+- 复用已有核心前校验当前生成配置；补齐 setup 订阅补偿的缓存与目录配对，回滚无法确认时阻止后续修改、停止核心并给出诊断与 daemon 重启指引（#350）。
+
 ### Upgrade notes
 
-- CLI/TUI 与 daemon 应同步升级。`/v1` 可选增加操作进度、`allow_file_references` 请求字段及派生 `source_type=file`，既有 schema、JSON envelope、错误码与退出码保持。
+- CLI/TUI 与 daemon 应同步升级并重启 daemon。`/v1` 可选增加操作进度、`allow_file_references` 与 `execution_mode` 请求字段、派生 `source_type=file` 及 `setup-target-v1` 能力声明，既有 schema、JSON envelope、错误码与退出码保持。
 - 本地来源保存在现有 `url` 字段中（规范 `file:` URI），catalog 可增加 `cache-base-dir`；含本地条目的 catalog 不保证旧版本可读，降级前需移除本地条目或恢复兼容的完整备份。
 - daemon 按自身权限读取本地 YAML；校验与运行通过 `SKIP_SAFE_PATH_CHECK=true` 允许任意文件引用路径，仍受操作系统权限限制。仅主 YAML 被缓存；外部引用文件不复制、不备份，原生 watcher 独立于订阅刷新开关，主 YAML 回滚不能恢复外部文件。
 - 整合包沿用已锁定的 mihomo v1.19.30 与 GeoIP 输入。macOS 仍不在正式支持范围，darwin 安装包继续发布。
