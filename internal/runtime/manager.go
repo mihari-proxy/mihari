@@ -57,10 +57,11 @@ type Controller interface {
 }
 
 type Operation struct {
-	ID         string
-	Source     string
-	IfRevision *uint64
-	Channel    *string
+	ExecutionMode string
+	ID            string
+	Source        string
+	IfRevision    *uint64
+	Channel       *string
 }
 
 // GeoIPCandidate is the minimal prepared-pair contract used by the mutation coordinator.
@@ -595,15 +596,26 @@ func (m *Manager) Stream(ctx context.Context, kind mihomo.StreamKind, receive fu
 
 func (m *Manager) Install(ctx context.Context, operation Operation) (core.InstallResult, error) {
 	result, err := m.doOperation(ctx, "install:"+operation.ID, func(ctx context.Context) (any, error) {
+		if operation.ExecutionMode == protocol.ExecutionModeSetup {
+			if err := m.checkIfRevision(operation.IfRevision); err != nil {
+				return nil, err
+			}
+		}
 		if m.installer == nil {
 			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "core installer is unavailable"}
 		}
-		inputs, err := m.captureCoreUpdateInputs(ctx)
+		targetSettings := m.settingsSnapshot()
+
+		inputs, err := m.captureCoreUpdateInputsForOperation(ctx, operation)
 		if err != nil {
 			return nil, err
 		}
 
 		channel := inputs.selection.Channel
+		if operation.ExecutionMode == protocol.ExecutionModeSetup {
+			channel = targetSettings.CoreChannel
+			inputs.selection.Bundle = targetSettings.CoreChannelBundle
+		}
 		if channel == "" {
 			channel = "stable"
 		}
@@ -619,10 +631,19 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		installRequest.AlphaSHA = m.store.Load().Core.AlphaSHA
 		// setup 预检（design §4.3）：aio 脚本已预置核心时，对现有文件 -v 成功即秒过，不联网。
 		// store.Core.Version 不作判据（DetectVersion 失败时旧值残留，见 runtime.go 启动检测）。
-		if operation.Source == "setup" {
+		if operation.ExecutionMode == protocol.ExecutionModeSetup {
+			result, reused, err := m.reuseSetupCore(ctx, operation, channel, inputs.selection.Bundle)
+			if err != nil {
+				return nil, err
+			}
+			if reused {
+				return result, nil
+			}
+		}
+		if operation.Source == "setup" && operation.ExecutionMode == "" {
 			if version, detectErr := m.installer.DetectVersion(ctx, installRequest.BinaryPath); detectErr == nil && version != "" {
 				err := func() error {
-					if err := m.lockMutation(ctx); err != nil {
+					if err := m.lockSetupMutation(ctx, operation); err != nil {
 						return err
 					}
 					defer m.unlock()
@@ -677,12 +698,30 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 				collectWarning(ctx, "core", "prepare.warning", warning)
 			}
 		}
+		attempt := 0
+		revalidate := func() error {
+			currentAttempt := attempt
+			attempt++
+			if operation.ExecutionMode == protocol.ExecutionModeSetup && currentAttempt > 0 && (inputs.generation != m.currentConfigGeneration() || inputs.configuration != m.coreConfigIdentity()) {
+				generation, identity, err := m.revalidateSetupCore(ctx, candidate)
+				if err != nil {
+					return err
+				}
+				inputs.generation, inputs.configuration = generation, identity
+			}
+			return nil
+		}
 		if prepared, ok := candidate.(interface{ UpdateCandidate() core.PreparedUpdate }); ok && prepared.UpdateCandidate() != nil {
-			return m.installCoreUpdate(ctx, operation, inputs, candidate, prepared.UpdateCandidate(), channel, false)
+			return retrySetupPreparation(ctx, operation, func() (any, error) {
+				if err := revalidate(); err != nil {
+					return nil, err
+				}
+				return m.installCoreUpdate(ctx, operation, inputs, candidate, prepared.UpdateCandidate(), channel, false)
+			})
 		}
 		var result core.InstallResult
 		commitWork := func() error {
-			if err := m.lockMutation(ctx); err != nil {
+			if err := m.lockSetupMutation(ctx, operation); err != nil {
 				return err
 			}
 			defer m.unlock()
@@ -691,6 +730,10 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 			}
 			if err := m.checkIfRevision(operation.IfRevision); err != nil {
 				return err
+			}
+
+			if operation.ExecutionMode == protocol.ExecutionModeSetup && (inputs.generation != m.currentConfigGeneration() || inputs.configuration != m.coreConfigIdentity()) {
+				return setupPreparationChanged{resource: "Core configuration"}
 			}
 
 			candidateUpdated := candidate.Updated()
@@ -710,6 +753,9 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 				}
 				if _, err := m.updateSettings(ctx, func(settings *config.Settings) error {
 					settings.CoreChannel = channel
+					if operation.ExecutionMode == protocol.ExecutionModeSetup {
+						settings.CoreChannelBundle = inputs.selection.Bundle
+					}
 					return nil
 				}); err != nil {
 					_, settlementErr := m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{
@@ -729,17 +775,24 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 			}
 			return err
 		}
-		if m.trustedCore != nil {
-			maintenance, ok := m.supervisor.(interface {
-				Maintain(context.Context, func() error) error
-			})
-			if !ok {
-				return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "trusted core maintenance unavailable"}
+		_, err = retrySetupPreparation(ctx, operation, func() (any, error) {
+			if err := revalidate(); err != nil {
+				return nil, err
 			}
-			err = maintenance.Maintain(ctx, commitWork)
-		} else {
-			err = commitWork()
-		}
+
+			if m.trustedCore != nil {
+				maintenance, ok := m.supervisor.(interface {
+					Maintain(context.Context, func() error) error
+				})
+				if !ok {
+					return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "trusted core maintenance unavailable"}
+				}
+				err = maintenance.Maintain(ctx, commitWork)
+			} else {
+				err = commitWork()
+			}
+			return nil, err
+		})
 		if err != nil {
 			return nil, err
 		}

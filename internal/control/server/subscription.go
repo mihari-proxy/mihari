@@ -93,7 +93,7 @@ func (s *Server) addSubscription(writer http.ResponseWriter, request *http.Reque
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: "subscription.add"})
 	defer s.operations.begin(body.OperationID)()
-	profile, err := runtime.AddSubscription(ctx, runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, runtimeapi.AddSubscriptionInput{Name: body.Name, URL: body.URL, ProxyMode: body.ProxyMode, AllowFileReferences: body.AllowFileReferences})
+	profile, err := runtime.AddSubscription(ctx, runtimeapi.Operation{ExecutionMode: body.ExecutionMode, ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, runtimeapi.AddSubscriptionInput{Name: body.Name, URL: body.URL, ProxyMode: body.ProxyMode, AllowFileReferences: body.AllowFileReferences})
 	if err != nil {
 		s.writeControlError(ctx, writer, err)
 		return
@@ -125,7 +125,7 @@ func (s *Server) subscriptionProfileMutation(writer http.ResponseWriter, request
 	}
 	ctx := logging.WithOperation(request.Context(), logging.OperationMetadata{ID: body.OperationID, Name: operationName})
 	defer s.operations.begin(body.OperationID)()
-	profile, err := mutate(ctx, runtime, runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, request.PathValue("id"))
+	profile, err := mutate(ctx, runtime, runtimeapi.Operation{ExecutionMode: body.ExecutionMode, ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, request.PathValue("id"))
 	if err != nil {
 		s.writeControlError(ctx, writer, err)
 		return

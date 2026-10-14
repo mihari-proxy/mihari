@@ -205,14 +205,17 @@ func (m *Model) executionText() string {
 
 // refreshSavedSubscription retries the saved profile through the daemon without adding a duplicate.
 func (m *Model) refreshSavedSubscription() tea.Cmd {
+	if !m.setupTargetAvailable {
+		return m.setupUpgradeRequired()
+	}
 	reader, ok := m.client.(subscriptionReader)
 	if !ok {
 		return m.localFailure("Refresh unavailable", protocol.APIError{Code: protocol.CodeInvalidState, Message: "Reconnect to a compatible daemon to refresh this saved subscription."})
 	}
-	id, revision := m.addedSubscription.ID, m.status.Revision
+	id := m.addedSubscription.ID
 	ctx, gen, operationID := m.beginExecution("Refreshing saved subscription")
 	return func() tea.Msg {
-		result, err := reader.RefreshSubscription(ctx, id, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision})
+		result, err := reader.RefreshSubscription(ctx, id, protocol.MutationRequest{OperationID: operationID, ExecutionMode: protocol.ExecutionModeSetup})
 		var profile *protocol.Subscription
 		if err == nil {
 			profile = &result.Subscription

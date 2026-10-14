@@ -12,6 +12,8 @@ type OnboardingStatus struct {
 }
 
 type OnboardingUpdateRequest struct {
+	// ExecutionMode optionally selects daemon-owned setup target execution.
+	ExecutionMode  string  `json:"execution_mode,omitempty"`
 	OperationID    string  `json:"operation_id"`
 	IfRevision     *uint64 `json:"if_revision,omitempty"`
 	Complete       *bool   `json:"complete,omitempty"`

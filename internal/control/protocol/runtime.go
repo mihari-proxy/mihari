@@ -120,10 +120,12 @@ type DelayResult struct {
 }
 
 type MutationRequest struct {
-	OperationID string  `json:"operation_id"`
-	IfRevision  *uint64 `json:"if_revision,omitempty"`
-	Source      string  `json:"source,omitempty"` // request origin; empty defaults to "control" (normalized by handlers)
-	Channel     *string `json:"channel,omitempty"`
+	// ExecutionMode optionally selects daemon-owned setup target execution.
+	ExecutionMode string  `json:"execution_mode,omitempty"`
+	OperationID   string  `json:"operation_id"`
+	IfRevision    *uint64 `json:"if_revision,omitempty"`
+	Source        string  `json:"source,omitempty"` // request origin; empty defaults to "control" (normalized by handlers)
+	Channel       *string `json:"channel,omitempty"`
 }
 
 type ProxySelectionRequest struct {

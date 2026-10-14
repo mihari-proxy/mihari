@@ -202,6 +202,9 @@ func (s *Server) status(writer http.ResponseWriter, request *http.Request) {
 	}
 	if s.runtime == nil && s.onboarding != nil {
 		status.Capabilities = sortedUnique(append(status.Capabilities, protocol.CapabilityOnboarding, protocol.OperationStatusCapability))
+		if surface, ok := s.onboarding.(interface{ SupportsSetupTarget() bool }); ok && surface.SupportsSetupTarget() {
+			status.Capabilities = sortedUnique(append(status.Capabilities, protocol.CapabilitySetupTarget))
+		}
 		status.SetupRequired = true
 	}
 	if snapshot.Config.Status != "" {

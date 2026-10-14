@@ -15,12 +15,16 @@ import (
 	"github.com/mihari-proxy/mihari/internal/supervisor"
 )
 
-type coreUpdateReservation struct{ generation uint64 }
+type coreUpdateReservation struct {
+	generation uint64
+	done       chan struct{}
+}
 type coreUpdateContextKey struct{}
 
 type coreUpdateInputs struct {
-	generation uint64
-	selection  core.CoreSelection
+	configuration coreConfigIdentity
+	generation    uint64
+	selection     core.CoreSelection
 }
 
 func (m *Manager) ownsCoreUpdate(ctx context.Context) bool {
@@ -36,7 +40,11 @@ func (m *Manager) checkCoreUpdateReservation(ctx context.Context) error {
 }
 
 func (m *Manager) captureCoreUpdateInputs(ctx context.Context) (coreUpdateInputs, error) {
-	if err := m.lockMutation(ctx); err != nil {
+	return m.captureCoreUpdateInputsForOperation(ctx, Operation{})
+}
+
+func (m *Manager) captureCoreUpdateInputsForOperation(ctx context.Context, operation Operation) (coreUpdateInputs, error) {
+	if err := m.lockSetupMutation(ctx, operation); err != nil {
 		return coreUpdateInputs{}, err
 	}
 	defer m.unlock()
@@ -46,7 +54,7 @@ func (m *Manager) captureCoreUpdateInputs(ctx context.Context) (coreUpdateInputs
 	if channel == "" {
 		channel = "stable"
 	}
-	return coreUpdateInputs{generation: generation, selection: core.CoreSelection{
+	return coreUpdateInputs{configuration: m.coreConfigIdentity(), generation: generation, selection: core.CoreSelection{
 		Channel: channel, Bundle: settings.CoreChannelBundle, Version: current.Version, AlphaSHA: current.AlphaSHA,
 	}}, nil
 }
@@ -68,12 +76,22 @@ func (m *Manager) installCoreUpdate(ctx context.Context, operation Operation, in
 		}
 		runUpdate = repair.Reinstall
 	}
-	if err := m.lockMutation(ctx); err != nil {
+	if err := m.lockSetupMutation(ctx, operation); err != nil {
 		return core.InstallResult{}, err
 	}
+	targetBundle := inputs.selection.Bundle
 	err := m.checkIfRevision(operation.IfRevision)
-	if err == nil && inputs.generation != m.currentConfigGeneration() {
-		err = protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "configuration changed during core preparation"}
+	if err == nil && (inputs.generation != m.currentConfigGeneration() || operation.ExecutionMode == protocol.ExecutionModeSetup && inputs.configuration != m.coreConfigIdentity()) {
+		err = preparationChanged(operation, "Core configuration", "configuration changed during core preparation")
+	}
+	if err == nil && operation.ExecutionMode == protocol.ExecutionModeSetup {
+		settings, generation := m.configInputs()
+		current := m.store.Load().Core
+		previousChannel := settings.CoreChannel
+		if previousChannel == "" {
+			previousChannel = "stable"
+		}
+		inputs = coreUpdateInputs{configuration: m.coreConfigIdentity(), generation: generation, selection: core.CoreSelection{Channel: previousChannel, Bundle: settings.CoreChannelBundle, Version: current.Version, AlphaSHA: current.AlphaSHA}}
 	}
 	if err == nil {
 		err = ctx.Err()
@@ -82,12 +100,12 @@ func (m *Manager) installCoreUpdate(ctx context.Context, operation Operation, in
 		m.unlock()
 		return core.InstallResult{}, err
 	}
-	reservation := &coreUpdateReservation{generation: inputs.generation}
+	reservation := &coreUpdateReservation{generation: inputs.generation, done: make(chan struct{})}
 	m.coreUpdate.Store(reservation)
 	m.releaseMutation()
-	defer m.coreUpdate.CompareAndSwap(reservation, nil)
+	defer func() { m.coreUpdate.CompareAndSwap(reservation, nil); close(reservation.done) }()
 	ctx = context.WithValue(ctx, coreUpdateContextKey{}, reservation)
-	next := core.CoreSelection{Channel: channel, Bundle: inputs.selection.Bundle, Version: candidate.Version()}
+	next := core.CoreSelection{Channel: channel, Bundle: targetBundle, Version: candidate.Version()}
 	if channel == "alpha" {
 		next.AlphaSHA = strings.TrimPrefix(next.Version, "alpha-")
 	}
@@ -279,10 +297,10 @@ func (m *Manager) Reinstall(ctx context.Context, operation Operation) (core.Inst
 			m.releaseMutation()
 			return nil, err
 		}
-		reservation := &coreUpdateReservation{generation: m.currentConfigGeneration()}
+		reservation := &coreUpdateReservation{generation: m.currentConfigGeneration(), done: make(chan struct{})}
 		m.coreUpdate.Store(reservation)
 		m.releaseMutation()
-		defer m.coreUpdate.CompareAndSwap(reservation, nil)
+		defer func() { m.coreUpdate.CompareAndSwap(reservation, nil); close(reservation.done) }()
 		ctx = context.WithValue(ctx, coreUpdateContextKey{}, reservation)
 		inputs, err := m.captureCoreUpdateInputs(ctx)
 		if err != nil {

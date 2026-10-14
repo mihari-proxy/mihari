@@ -58,7 +58,7 @@ func TestSetupSubscriptionOverview_CountsStatesAndPreservesInputs(t *testing.T) 
 		{ID: "two", Name: "Backup", Cached: true, LastError: "download failed"},
 		{ID: "three", Name: "Pending", Enabled: true},
 	}}
-	m := New(f, nil)
+	m := supportedModel(f, nil)
 	msg := m.Load()().(onboardingResultMsg)
 	msg.subscriptions.ActiveID = "one"
 	m.Update(msg)
@@ -108,7 +108,7 @@ func TestSetupStatusViews_CompactLayoutAndScrollReset(t *testing.T) {
 		{ID: "two", Name: strings.Repeat("Very long name ", 20), LastError: "download failed"},
 		{ID: "three", Name: "Pending"},
 	}}
-	m := New(f, nil)
+	m := supportedModel(f, nil)
 	m.Update(m.Load()())
 	m.SetSize(70, 20)
 	m.coreLocal = protocol.CoreStatus{LocalReady: true, LocalVersion: "v1.19.0", Status: "running", Channel: "stable"}

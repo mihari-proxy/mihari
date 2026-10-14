@@ -149,7 +149,7 @@ func (s *Server) installCoreAction(writer http.ResponseWriter, request *http.Req
 	ctx = core.WithProgressReporter(ctx, func(progress core.Progress) {
 		s.operations.noteProgress(body.OperationID, progress)
 	})
-	result, err := action(ctx, runtimeapi.Operation{ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision, Channel: body.Channel})
+	result, err := action(ctx, runtimeapi.Operation{ExecutionMode: body.ExecutionMode, ID: body.OperationID, Source: mutationSource(body.Source), IfRevision: body.IfRevision, Channel: body.Channel})
 	if err != nil {
 		s.writeControlError(ctx, writer, err)
 		return
@@ -597,7 +597,7 @@ func (s *Server) decodeControlJSON(writer http.ResponseWriter, request *http.Req
 		s.writeRequestRejection(request.Context(), writer, "request body must contain one JSON object", err)
 		return false
 	}
-	return true
+	return s.validateExecutionMode(writer, request, target)
 }
 
 func (s *Server) requireOperationID(ctx context.Context, writer http.ResponseWriter, operationID string) bool {

@@ -29,7 +29,7 @@ func (c *referenceSetupClient) AddSubscription(_ context.Context, r protocol.Sub
 func TestSetup_LocalSourceToggleAndConfirmation(t *testing.T) {
 	c := &referenceSetupClient{}
 	n := 0
-	m := New(c, func() string { n++; return fmt.Sprintf("op-%d", n) })
+	m := supportedModel(c, func() string { n++; return fmt.Sprintf("op-%d", n) })
 	m.step = stepSubscription
 	m.loading = false
 	m.subscriptionInputs = subscriptionInputs()
@@ -57,7 +57,7 @@ func TestSetup_LocalSourceToggleAndConfirmation(t *testing.T) {
 }
 
 func TestSetup_ConfirmationEscapeStaysOnSubscription(t *testing.T) {
-	m := New(&fakeClient{}, func() string { return "op" })
+	m := supportedModel(&fakeClient{}, func() string { return "op" })
 	m.step, m.loading, m.fileConfirmation = stepSubscription, false, true
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.fileConfirmation || m.step != stepSubscription {
@@ -66,7 +66,7 @@ func TestSetup_ConfirmationEscapeStaysOnSubscription(t *testing.T) {
 }
 func TestSetup_SourceEditClearsAcknowledgement(t *testing.T) {
 	for _, message := range []tea.Msg{tea.PasteMsg{Content: "https://fixture.test/new"}, tea.KeyPressMsg{Code: 'x', Text: "x"}} {
-		m := New(&fakeClient{}, func() string { return "op" })
+		m := supportedModel(&fakeClient{}, func() string { return "op" })
 		m.step, m.loading, m.allowFileReferences = stepSubscription, false, true
 		m.subscriptionInputs = subscriptionInputs()
 		m.focusSubscription(1)
@@ -77,7 +77,7 @@ func TestSetup_SourceEditClearsAcknowledgement(t *testing.T) {
 	}
 }
 func TestSetup_ConfirmationWrapsToFrame(t *testing.T) {
-	m := New(&fakeClient{}, func() string { return "op" })
+	m := supportedModel(&fakeClient{}, func() string { return "op" })
 	m.SetSize(180, 100)
 	m.step, m.loading, m.fileConfirmation = stepSubscription, false, true
 	m.subscriptionInputs = subscriptionInputs()

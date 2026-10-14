@@ -61,90 +61,94 @@ func (m *Manager) SetupRequired(ctx context.Context) (bool, error) {
 func (m *Manager) UpdateOnboarding(ctx context.Context, operation Operation, update onboarding.Update) (onboarding.Snapshot, error) {
 
 	result, err := m.doOperation(ctx, "onboarding:"+operation.ID, func(ctx context.Context) (any, error) {
-		if m.onboarding == nil {
-			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "onboarding service is unavailable"}
-		}
-		if err := m.checkIfRevision(operation.IfRevision); err != nil {
-			return nil, err
-		}
-		candidate, err := m.prepareSettings(applyEndpointUpdate(update))
-		if err != nil {
-			return nil, err
-		}
-		var catalog subscription.Catalog
-		if m.trustedCore != nil {
-			if m.subscriptions == nil {
-				return nil, subscriptionsUnavailable()
-			}
-			catalog = m.subscriptions.Snapshot()
-			generated, err := m.prepareCatalogConfigWithSettings(ctx, catalog, candidate.after, candidate.generation)
-			if err != nil {
-				return nil, err
-			}
-			defer func() { collectWarning(ctx, "onboarding", "candidate.cleanup.failed", generated.cleanup()) }()
-			// The controller and health clients retain startup endpoints.
-			// Validate now; daemon restart regenerates and publishes using
-			// persisted settings before constructing those clients.
-		}
-		if err := m.lockMutation(ctx); err != nil {
-			return nil, err
-		}
-		defer m.unlock()
-		meta := state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}
-		if err := m.checkIfRevision(meta.IfRevision); err != nil {
-			return nil, err
-		}
-		if candidate.generation != m.currentConfigGeneration() || m.trustedCore != nil && !sameActiveSubscription(catalog, m.subscriptions.Snapshot()) {
-			return nil, protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "configuration inputs changed during onboarding preparation"}
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if _, err := m.saveSettingsCandidate(ctx, candidate); err != nil {
-			return nil, err
-		}
-
-		updatedState, err := m.onboarding.Update(update.Complete)
-		if err != nil {
-			if candidate.changed {
-				rollbackCandidate := settingsCandidate{
-					before:  candidate.after,
-					after:   candidate.before,
-					changed: true,
-				}
-				rollback, rollbackErr := m.saveSettingsCandidate(ctx, rollbackCandidate)
-				if rollbackErr != nil && !rollback.Committed {
-					m.publishSettings(candidate)
-					m.onboardingRestartRequired.Store(true)
-					_, degradedErr := m.updateStateLocked(context.WithoutCancel(ctx), meta, func(snapshot state.Snapshot) (state.Snapshot, error) {
-						degradedErr := m.enterMutationDegraded(&snapshot)
-						return snapshot, degradedErr
-					})
-					return nil, degradedErr
-				}
-			}
-			return nil, mapPersistError(err)
-		}
-
-		m.publishSettings(candidate)
-		if candidate.changed {
-			m.onboardingRestartRequired.Store(true)
-		}
-		committed, err := m.updateStateLocked(context.WithoutCancel(ctx), meta, func(snapshot state.Snapshot) (state.Snapshot, error) {
-			return snapshot, nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		return onboarding.Snapshot{
-			Status:   m.composeOnboardingStatus(updatedState),
-			Revision: committed.Revision,
-		}, nil
+		return retrySetupPreparation(ctx, operation, func() (any, error) { return m.updateOnboardingAttempt(ctx, operation, update) })
 	})
 	if err != nil {
 		return onboarding.Snapshot{}, err
 	}
 	return result.(onboarding.Snapshot), nil
+}
+
+func (m *Manager) updateOnboardingAttempt(ctx context.Context, operation Operation, update onboarding.Update) (any, error) {
+	if m.onboarding == nil {
+		return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "onboarding service is unavailable"}
+	}
+	if err := m.checkIfRevision(operation.IfRevision); err != nil {
+		return nil, err
+	}
+	candidate, err := m.prepareSettings(applyEndpointUpdate(update))
+	if err != nil {
+		return nil, err
+	}
+	var catalog subscription.Catalog
+	if m.trustedCore != nil {
+		if m.subscriptions == nil {
+			return nil, subscriptionsUnavailable()
+		}
+		catalog = m.subscriptions.Snapshot()
+		generated, err := m.prepareCatalogConfigWithSettings(ctx, catalog, candidate.after, candidate.generation)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { collectWarning(ctx, "onboarding", "candidate.cleanup.failed", generated.cleanup()) }()
+		// The controller and health clients retain startup endpoints.
+		// Validate now; daemon restart regenerates and publishes using
+		// persisted settings before constructing those clients.
+	}
+	if err := m.lockSetupMutation(ctx, operation); err != nil {
+		return nil, err
+	}
+	defer m.unlock()
+	meta := state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}
+	if err := m.checkIfRevision(meta.IfRevision); err != nil {
+		return nil, err
+	}
+	if candidate.generation != m.currentConfigGeneration() || m.trustedCore != nil && !sameActiveSubscription(catalog, m.subscriptions.Snapshot()) {
+		return nil, preparationChanged(operation, "Setup endpoints", "configuration inputs changed during onboarding preparation")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := m.saveSettingsCandidate(ctx, candidate); err != nil {
+		return nil, err
+	}
+
+	updatedState, err := m.onboarding.Update(update.Complete)
+	if err != nil {
+		if candidate.changed {
+			rollbackCandidate := settingsCandidate{
+				before:  candidate.after,
+				after:   candidate.before,
+				changed: true,
+			}
+			rollback, rollbackErr := m.saveSettingsCandidate(ctx, rollbackCandidate)
+			if rollbackErr != nil && !rollback.Committed {
+				m.publishSettings(candidate)
+				m.onboardingRestartRequired.Store(true)
+				_, degradedErr := m.updateStateLocked(context.WithoutCancel(ctx), meta, func(snapshot state.Snapshot) (state.Snapshot, error) {
+					degradedErr := m.enterMutationDegraded(&snapshot)
+					return snapshot, degradedErr
+				})
+				return nil, degradedErr
+			}
+		}
+		return nil, mapPersistError(err)
+	}
+
+	m.publishSettings(candidate)
+	if candidate.changed {
+		m.onboardingRestartRequired.Store(true)
+	}
+	committed, err := m.updateStateLocked(context.WithoutCancel(ctx), meta, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		return snapshot, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return onboarding.Snapshot{
+		Status:   m.composeOnboardingStatus(updatedState),
+		Revision: committed.Revision,
+	}, nil
 }
 
 func applyEndpointUpdate(update onboarding.Update) func(*config.Settings) error {

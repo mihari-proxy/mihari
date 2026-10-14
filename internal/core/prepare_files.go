@@ -78,5 +78,24 @@ func (i Installer) prepareFileUpdate(ctx context.Context, target ReleaseTarget, 
 	if err = check(); err != nil {
 		return nil, err
 	}
+	candidate.revalidate = func(recheckCtx context.Context, configuration []byte) error {
+		inspect := func() error {
+			actual, err := store.Inspect(recheckCtx, UpdateCandidate, p.transaction)
+			if err != nil {
+				return err
+			}
+			if !sameObject(actual, p.binary) {
+				return dataFailure("validated core candidate changed")
+			}
+			return nil
+		}
+		if err := inspect(); err != nil {
+			return err
+		}
+		if err := validateSetupContent(recheckCtx, i.Runner, path, request.DataDir, filepath.Dir(path), configuration); err != nil {
+			return err
+		}
+		return inspect()
+	}
 	return candidate, nil
 }

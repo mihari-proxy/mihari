@@ -181,6 +181,7 @@ type Model struct {
 	automatic            bool
 	resumePending        bool
 	refreshInPlace       bool
+	setupTargetAvailable bool
 	portRecovery         bool
 	waitingRestart       bool
 	subscriptionsErr     error
@@ -1088,12 +1089,14 @@ func findAvailablePortsForStates(current [3]string, states [3]portState) [3]stri
 
 // installCore starts a cancellable daemon installation and returns its generation-tagged result.
 func (m *Model) installCore() tea.Cmd {
-	revision := m.status.Revision
+	if !m.setupTargetAvailable {
+		return m.setupUpgradeRequired()
+	}
 	executionCtx, gen, operationID := m.beginExecution("Installing mihomo core")
 	operation := logging.OperationMetadata{ID: operationID, Name: "core.install"}
 	return func() tea.Msg {
 		ctx := logging.WithOperation(executionCtx, operation)
-		result, err := m.client.InstallCore(ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision, Source: "setup"})
+		result, err := m.client.InstallCore(ctx, protocol.MutationRequest{OperationID: operationID, ExecutionMode: protocol.ExecutionModeSetup, Source: "setup"})
 		// Capture the install outcome so stepReview can summarize "本地已有/新装/安装失败".
 		// The cmd→channel→Update path provides the happens-before guarantee (design §7.4).
 		return actionResultMsg{cancelled: diagnostics.NormalCancellation(ctx, err), warnings: result.WarningOutcome, gen: gen, core: &result, next: stepSubscription, revision: result.Revision, operation: operation, err: err}
@@ -1102,11 +1105,13 @@ func (m *Model) installCore() tea.Cmd {
 
 // addSubscription submits one profile and retains successful registration for reuse or retry.
 func (m *Model) addSubscription(name, url string) tea.Cmd {
-	revision := m.status.Revision
+	if !m.setupTargetAvailable {
+		return m.setupUpgradeRequired()
+	}
 	allow := m.allowFileReferences
 	ctx, gen, operationID := m.beginExecution("Saving and fetching subscription")
 	return func() tea.Msg {
-		result, err := m.client.AddSubscription(ctx, protocol.SubscriptionAddRequest{OperationID: operationID, IfRevision: &revision, Name: name, URL: url, AllowFileReferences: allow})
+		result, err := m.client.AddSubscription(ctx, protocol.SubscriptionAddRequest{OperationID: operationID, ExecutionMode: protocol.ExecutionModeSetup, Name: name, URL: url, AllowFileReferences: allow})
 		// Capture the added subscription so stepReview shows its name, not the
 		// "未添加（已跳过）" fallback. See installCore for the happens-before note.
 		subscription := result.Subscription
@@ -1120,12 +1125,14 @@ func (m *Model) addSubscription(name, url string) tea.Cmd {
 
 // updateGeoIP starts an observed database preparation and returns copied status to the page owner.
 func (m *Model) updateGeoIP() tea.Cmd {
-	revision := m.status.Revision
+	if !m.setupTargetAvailable {
+		return m.setupUpgradeRequired()
+	}
 	executionCtx, gen, operationID := m.beginExecution("Preparing Country and ASN databases")
 	operation := logging.OperationMetadata{ID: operationID, Name: "geoip.update"}
 	ctx := logging.WithOperation(executionCtx, operation)
 	return func() tea.Msg {
-		result, err := m.client.UpdateGeoIP(ctx, protocol.MutationRequest{OperationID: operationID, IfRevision: &revision, Source: "setup"})
+		result, err := m.client.UpdateGeoIP(ctx, protocol.MutationRequest{OperationID: operationID, ExecutionMode: protocol.ExecutionModeSetup, Source: "setup"})
 		// Capture the update outcome so stepReview shows "Country ✓ ASN ✓" or "更新失败".
 		// Copied by value; the runtime result is not retained. See installCore for the note.
 		resultCopy := result
@@ -1244,10 +1251,13 @@ func (m *Model) restartSuffix() string {
 
 // complete submits the final marker without resubmitting endpoints already saved by their step.
 func (m *Model) complete() tea.Cmd {
-	revision, complete := m.status.Revision, true
+	if !m.setupTargetAvailable {
+		return m.setupUpgradeRequired()
+	}
+	complete := true
 	ctx, gen, operationID := m.beginExecution("Finishing setup")
 	request := protocol.OnboardingUpdateRequest{
-		OperationID: operationID, IfRevision: &revision, Complete: &complete,
+		OperationID: operationID, ExecutionMode: protocol.ExecutionModeSetup, Complete: &complete,
 	}
 	return func() tea.Msg {
 		status, err := m.client.UpdateOnboarding(ctx, request)

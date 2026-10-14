@@ -80,6 +80,11 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 	ctx, cancel := context.WithTimeout(ctx, m.subscriptionTimeout)
 	defer cancel()
 	result, err := m.doOperation(ctx, "sub-add:"+operation.ID, func(ctx context.Context) (any, error) {
+		if operation.ExecutionMode == protocol.ExecutionModeSetup {
+			if err := m.checkIfRevision(operation.IfRevision); err != nil {
+				return nil, err
+			}
+		}
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
 		}
@@ -87,27 +92,34 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 		if err != nil {
 			return nil, err
 		}
-		candidate, err := m.prepareConfig(ctx, prepared.Document())
-		if err != nil {
-			return nil, err
-		}
-		defer func() { collectWarning(ctx, "subscription", "candidate.cleanup.failed", candidate.cleanup()) }()
-		if refs := subscription.FileReferences(prepared.Document()); len(refs) > 0 && !input.AllowFileReferences {
-			var paths strings.Builder
-			for _, ref := range refs {
-				_, _ = fmt.Fprintf(&paths, "\n%q: %q", ref.Location, ref.Path) // strings.Builder writes never fail.
+		checkReferences := func() error {
+			if refs := subscription.FileReferences(prepared.Document()); len(refs) > 0 && !input.AllowFileReferences {
+				var paths strings.Builder
+				for _, ref := range refs {
+					_, _ = fmt.Fprintf(&paths, "\n%q: %q", ref.Location, ref.Path) // strings.Builder writes never fail.
+				}
+				return protocol.APIError{Code: protocol.CodeInvalidArgument, Message: subscription.FileReferenceWarning + paths.String() + "\nProvide --allow-file-references to continue.", Details: map[string]any{"confirmation_required": "file_references", "file_references": refs}}
 			}
-			return nil, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: subscription.FileReferenceWarning + paths.String() + "\nProvide --allow-file-references to continue.", Details: map[string]any{"confirmation_required": "file_references", "file_references": refs}}
+			return nil
 		}
-		if err := m.lockMutation(ctx); err != nil {
-			return nil, err
-		}
-		defer m.unlock()
-		_, err = m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
-			receipt, err := m.subscriptions.CommitAdd(prepared)
+		var committedProfile subscription.PublicProfile
+		err = m.commitSubscriptionCandidate(ctx, operation, prepared.Document(), checkReferences, func(snapshot state.Snapshot, candidate configCandidate) (state.Snapshot, error) {
+			commit := m.subscriptions.CommitAdd
+			if operation.ExecutionMode == protocol.ExecutionModeSetup {
+				commit = m.subscriptions.CommitAddAndActivate
+			}
+			receipt, err := commit(prepared)
 			if err != nil {
 				return snapshot, err
 			}
+			profile, profileErr := findPublicProfile(receipt.After.Public(), prepared.ProfileID())
+			if profileErr != nil {
+				if rollbackErr := m.subscriptions.Rollback(receipt); rollbackErr != nil {
+					return snapshot, degradedConfigError(profileErr, rollbackErr)
+				}
+				return snapshot, profileErr
+			}
+			committedProfile = profile
 			if receipt.After.ActiveID == prepared.ProfileID() {
 				if err := m.commitRuntimeConfig(ctx, candidate); err != nil {
 					if rollbackErr := m.subscriptions.Rollback(receipt); rollbackErr != nil {
@@ -125,7 +137,7 @@ func (m *Manager) AddSubscription(ctx context.Context, operation Operation, inpu
 			return nil, err
 		}
 		m.refreshSubscriptionLogSecrets()
-		return findPublicProfile(m.subscriptions.Snapshot().Public(), prepared.ProfileID())
+		return committedProfile, nil
 	})
 	if err != nil {
 		return subscription.PublicProfile{}, err
@@ -137,6 +149,11 @@ func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, 
 	ctx, cancel := context.WithTimeout(ctx, m.subscriptionTimeout)
 	defer cancel()
 	result, err := m.doOperation(ctx, "sub-refresh:"+operation.ID, func(ctx context.Context) (any, error) {
+		if operation.ExecutionMode == protocol.ExecutionModeSetup {
+			if err := m.checkIfRevision(operation.IfRevision); err != nil {
+				return nil, err
+			}
+		}
 		if m.subscriptions == nil {
 			return nil, subscriptionsUnavailable()
 		}
@@ -144,20 +161,24 @@ func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, 
 		if err != nil {
 			return nil, err
 		}
-		candidate, err := m.prepareConfig(ctx, prepared.Document())
-		if err != nil {
-			return nil, m.subscriptions.RecordRefreshFailure(prepared, err)
-		}
-		defer func() { collectWarning(ctx, "subscription", "candidate.cleanup.failed", candidate.cleanup()) }()
-		if err := m.lockMutation(ctx); err != nil {
-			return nil, err
-		}
-		defer m.unlock()
-		_, err = m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
-			receipt, commitErr := m.subscriptions.CommitRefresh(prepared)
+		var committedProfile subscription.PublicProfile
+		err = m.commitSubscriptionCandidate(ctx, operation, prepared.Document(), nil, func(snapshot state.Snapshot, candidate configCandidate) (state.Snapshot, error) {
+			commit := m.subscriptions.CommitRefresh
+			if operation.ExecutionMode == protocol.ExecutionModeSetup {
+				commit = m.subscriptions.CommitRefreshAndActivate
+			}
+			receipt, commitErr := commit(prepared)
 			if commitErr != nil {
 				return snapshot, commitErr
 			}
+			profile, profileErr := findPublicProfile(receipt.After.Public(), id)
+			if profileErr != nil {
+				if rollbackErr := m.subscriptions.Rollback(receipt); rollbackErr != nil {
+					return snapshot, degradedConfigError(profileErr, rollbackErr)
+				}
+				return snapshot, profileErr
+			}
+			committedProfile = profile
 			if receipt.After.ActiveID == id {
 				if applyErr := m.commitRuntimeConfig(ctx, candidate); applyErr != nil {
 					if rollbackErr := m.subscriptions.Rollback(receipt); rollbackErr != nil {
@@ -174,7 +195,7 @@ func (m *Manager) RefreshSubscription(ctx context.Context, operation Operation, 
 			m.markConfigDegraded(ctx, err)
 			return nil, m.subscriptions.RecordRefreshFailure(prepared, err)
 		}
-		return findPublicProfile(m.subscriptions.Snapshot().Public(), id)
+		return committedProfile, nil
 	})
 	if err != nil {
 		return subscription.PublicProfile{}, err

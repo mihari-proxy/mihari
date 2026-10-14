@@ -37,6 +37,7 @@ func (m *Model) WaitingRestart() bool { return m.waitingRestart }
 
 // ObserveDaemon supplies owner identity already available on the authenticated session.
 func (m *Model) ObserveDaemon(status protocol.Status, core protocol.CoreStatus) {
+	m.setupTargetAvailable = slices.Contains(status.Capabilities, protocol.CapabilitySetupTarget)
 	m.statusUnsupported = !slices.Contains(status.Capabilities, protocol.OperationStatusCapability)
 	m.portOwners = [3]int{core.PID, core.PID, status.PID}
 	m.portRecovery = status.Health == "degraded" && slices.Contains(status.Capabilities, protocol.CapabilityOnboarding) && !slices.Contains(status.Capabilities, protocol.CapabilityCore)
@@ -79,11 +80,13 @@ func (m *Model) saveEndpointsPrompt() tea.Cmd {
 
 // saveEndpoints submits endpoint edits with the observed revision through the control client.
 func (m *Model) saveEndpoints() tea.Cmd {
+	if !m.setupTargetAvailable {
+		return m.setupUpgradeRequired()
+	}
 	mixed, controller, web := m.endpointValues()
-	revision := m.status.Revision
 	ctx, gen, id := m.beginExecution("Saving local endpoints")
 	client := m.client
-	request := protocol.OnboardingUpdateRequest{OperationID: id, IfRevision: &revision, MixedAddr: &mixed, ControllerAddr: &controller, WebAddr: &web}
+	request := protocol.OnboardingUpdateRequest{OperationID: id, ExecutionMode: protocol.ExecutionModeSetup, MixedAddr: &mixed, ControllerAddr: &controller, WebAddr: &web}
 	return func() tea.Msg {
 		status, err := client.UpdateOnboarding(ctx, request)
 		return endpointsSavedMsg{cancelled: diagnostics.NormalCancellation(ctx, err), gen: gen, status: status, err: err}

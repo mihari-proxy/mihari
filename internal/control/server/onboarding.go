@@ -57,7 +57,7 @@ func (s *Server) updateOnboarding(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	defer s.operations.begin(body.OperationID)()
-	status, err := runtime.UpdateOnboarding(request.Context(), runtimeapi.Operation{ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, onboarding.Update{Complete: body.Complete, MixedAddr: body.MixedAddr, ControllerAddr: body.ControllerAddr, WebAddr: body.WebAddr})
+	status, err := runtime.UpdateOnboarding(request.Context(), runtimeapi.Operation{ExecutionMode: body.ExecutionMode, ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, onboarding.Update{Complete: body.Complete, MixedAddr: body.MixedAddr, ControllerAddr: body.ControllerAddr, WebAddr: body.WebAddr})
 	if err != nil {
 		s.writeControlError(request.Context(), writer, err)
 		return

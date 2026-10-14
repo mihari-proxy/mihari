@@ -34,7 +34,7 @@ func TestSubscriptionTimeout_SetupOwnsAddAndRetryCancellation(t *testing.T) {
 				}
 				return got.Err()
 			}}
-			m := NewWithContext(ctx, client, nil)
+			m := supportedModelWithContext(ctx, client, nil)
 			cmd := m.addSubscription("fixture", "https://example.test/sub")
 			if retry {
 				m.addedSubscription = &protocol.Subscription{ID: "saved"}

@@ -106,7 +106,7 @@ func (f *subscriptionClient) RefreshSubscription(_ context.Context, id string, _
 
 func TestSetupExistingSubscription_ShowsOverviewBeforeContinuing(t *testing.T) {
 	f := &subscriptionClient{fakeClient: &fakeClient{status: defaultStatus(false)}, profiles: []protocol.Subscription{{ID: "existing", LastError: "download failed"}}}
-	m := New(f, nil)
+	m := supportedModel(f, nil)
 	m.Update(m.Load()())
 	m.Update(actionResultMsg{next: stepSubscription})
 	if m.step != stepSubscription || f.addCalls != 0 {
@@ -127,7 +127,7 @@ func TestSetupExistingSubscription_ShowsOverviewBeforeContinuing(t *testing.T) {
 
 func TestSetupPartialSubscription_RetryRefreshesSameID(t *testing.T) {
 	f := &subscriptionClient{fakeClient: &fakeClient{status: defaultStatus(false), subscriptionResult: protocol.SubscriptionResult{Subscription: protocol.Subscription{ID: "saved", LastError: "download failed"}}}}
-	m := New(f, nil)
+	m := supportedModel(f, nil)
 	m.Update(m.Load()())
 	m.step = stepSubscription
 	m.Update(m.addSubscription("Name", "https://example.test/sub")())
@@ -157,7 +157,7 @@ func TestSetupErrorDetails_PreservesOriginalCauseAndURL(t *testing.T) {
 
 func TestSetupReadFailure_ReachesShellWithoutMakingReadinessFalse(t *testing.T) {
 	cause := fmt.Errorf("fixture core read: token=original")
-	m := New(&fakeClient{status: defaultStatus(false), coreErr: cause}, nil)
+	m := supportedModel(&fakeClient{status: defaultStatus(false), coreErr: cause}, nil)
 	result := m.Load()()
 	outcome, ok := result.(interface{ Err() error })
 	if !ok || !errors.Is(outcome.Err(), cause) {

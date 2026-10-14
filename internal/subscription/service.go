@@ -233,6 +233,18 @@ func (s *Service) CommitRefresh(prepared PreparedRefresh) (Receipt, error) {
 	return s.commitRefreshLocked(prepared, s.catalog.Clone())
 }
 
+// CommitRefreshAndActivate refreshes and selects an existing profile in one receipt.
+func (s *Service) CommitRefreshAndActivate(prepared PreparedRefresh) (Receipt, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	before := s.catalog.Clone()
+	s.catalog.ActiveID = prepared.profileID
+	if index := s.catalog.Index(prepared.profileID); index >= 0 {
+		s.catalog.Profiles[index].Enabled = true
+	}
+	return s.commitRefreshLocked(prepared, before)
+}
+
 func (s *Service) commitRefreshLocked(prepared PreparedRefresh, before Catalog) (receipt Receipt, err error) {
 	keepCommitted := false
 	defer func() {

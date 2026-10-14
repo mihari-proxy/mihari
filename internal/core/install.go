@@ -111,8 +111,9 @@ func (i Installer) CheckExecution(ctx context.Context) error {
 }
 
 type Candidate struct {
-	trusted   *trustedCandidate
-	protected *protectedCandidate
+	revalidate func(context.Context, []byte) error
+	trusted    *trustedCandidate
+	protected  *protectedCandidate
 
 	path       string
 	binaryPath string
@@ -132,6 +133,14 @@ type PreparedCore interface {
 }
 
 func (c *Candidate) Version() string { return c.version }
+
+// Revalidate checks retained legacy candidate bytes against current config inputs.
+func (c *Candidate) Revalidate(ctx context.Context, content []byte) error {
+	if c.revalidate == nil {
+		return protocol.APIError{Code: protocol.CodeInvalidState, Message: "core candidate cannot be revalidated"}
+	}
+	return c.revalidate(ctx, content)
+}
 
 func (c *Candidate) Updated() bool { return c.updated }
 
@@ -266,11 +275,38 @@ func (i Installer) Prepare(ctx context.Context, request InstallRequest) (Prepare
 	if err := ValidateConfig(ctx, runner, candidatePath, request.DataDir, request.ConfigPath); err != nil {
 		return nil, err
 	}
-	keepCandidate = true
 	prepared := &Candidate{path: candidatePath, binaryPath: request.BinaryPath, version: version, alphaSHA: ParseAlphaSHA(asset.Name), updated: true, reporter: i.Reporter}
+	candidateBytes, err := os.ReadFile(candidatePath)
+	if err != nil {
+		return nil, err
+	}
+	candidateHash := sha256.Sum256(candidateBytes)
+	prepared.revalidate = func(ctx context.Context, configuration []byte) error {
+		content, err := os.ReadFile(candidatePath)
+		if err != nil {
+			return err
+		}
+		expected := candidateHash
+		if sha256.Sum256(content) != expected {
+			return dataFailure("core candidate changed before revalidation")
+		}
+		if err := validateSetupContent(ctx, runner, candidatePath, request.DataDir, request.StagingDir, configuration); err != nil {
+			return err
+		}
+		after, err := os.ReadFile(candidatePath)
+		if err != nil {
+			return err
+		}
+		if sha256.Sum256(after) != expected {
+			return dataFailure("core candidate changed during revalidation")
+		}
+		return nil
+	}
+
 	if asset.Digest == "" {
 		prepared.warnings = []error{missingDigestWarning(asset)}
 	}
+	keepCandidate = true
 	return prepared, nil
 }
 

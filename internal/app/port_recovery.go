@@ -52,6 +52,9 @@ func NewPortRecovery(paths platform.Paths, store *state.Store, cause error, repo
 	return &PortRecovery{manager: manager}, nil
 }
 
+// SupportsSetupTarget reports support only for the restricted endpoint surface.
+func (r *PortRecovery) SupportsSetupTarget() bool { return true }
+
 // OnboardingStatus reads saved endpoint values without claiming recovery is complete.
 func (r *PortRecovery) OnboardingStatus(ctx context.Context) (onboarding.Snapshot, error) {
 	return r.manager.OnboardingStatus(ctx)

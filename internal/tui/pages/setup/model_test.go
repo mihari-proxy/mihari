@@ -322,7 +322,7 @@ func TestSetupCompletionConflictReloadsAuthoritativeState(t *testing.T) {
 func TestSetupCommandsUseOwnedContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &fakeClient{status: defaultStatus(false)}
-	model := NewWithContext(ctx, client, func() string { return "setup-op" })
+	model := supportedModelWithContext(ctx, client, func() string { return "setup-op" })
 	updated, _ := model.Update(onboardingResultMsg{status: client.status, core: &client.coreStatus})
 	model = updated.(*Model)
 	model.step = stepCore
@@ -392,7 +392,8 @@ func defaultStatus(complete bool) protocol.OnboardingStatus {
 }
 
 func loadedModel(client *fakeClient) *Model {
-	model := New(client, func() string { return "setup-op" })
+	model := supportedModel(client, func() string { return "setup-op" })
+	model.ObserveDaemon(protocol.Status{Capabilities: []string{protocol.CapabilitySetupTarget, protocol.OperationStatusCapability}}, protocol.CoreStatus{})
 	result := onboardingResultMsg{status: client.status}
 	if client.coreErr == nil {
 		result.core = &client.coreStatus

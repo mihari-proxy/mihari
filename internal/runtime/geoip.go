@@ -57,47 +57,7 @@ func (m *Manager) LookupGeoIP(_ context.Context, addresses []netip.Addr) ([]geoi
 // UpdateGeoIP prepares outside the mutation gate and commits under revision control.
 func (m *Manager) UpdateGeoIP(ctx context.Context, operation Operation) (geoip.Status, error) {
 	result, err := m.doOperation(ctx, "geoip:"+operation.ID, func(ctx context.Context) (any, error) {
-		// setup 预检（design §4.3）：aio 脚本已预置 GeoIP 且本地 MMDB 有效时直接返回，不联网下载。
-		if operation.Source == "setup" && m.geoip != nil {
-			if status := m.geoip.Status(); status.Country.Available && status.ASN.Available {
-				return status, nil
-			}
-			// 无效 → 落联网下载。
-		}
-		if m.geoip == nil || m.prepareGeoIP == nil {
-			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "geoip updater is unavailable"}
-		}
-		candidate, err := m.prepareGeoIP(ctx)
-		if err != nil {
-			return nil, geoIPUpdateFailure("prepare GeoIP databases", err)
-		}
-		defer candidate.Cleanup()
-		if err := m.lockMutation(ctx); err != nil {
-			return nil, err
-		}
-		defer m.unlock()
-		if err := m.checkOpen(); err != nil {
-			return nil, err
-		}
-		if candidate.Identity() == "" || !candidate.Valid() {
-			return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "geoip update candidate changed before commit"}
-		}
-		_, err = m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
-			if !candidate.Valid() {
-				return snapshot, protocol.APIError{Code: protocol.CodeDataFailure, Message: "geoip update candidate changed before commit"}
-			}
-			if err := candidate.Commit(); err != nil {
-				if errors.Is(err, geoip.ErrStaleCandidate) {
-					return snapshot, protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "geoip database pair changed during update"}
-				}
-				return snapshot, geoIPUpdateFailure("activate GeoIP databases", err)
-			}
-			return snapshot, nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		return m.geoip.Status(), nil
+		return retrySetupPreparation(ctx, operation, func() (any, error) { return m.updateGeoIPAttempt(ctx, operation) })
 	})
 	if recorder, ok := m.geoip.(interface{ RecordUpdateError(error) }); ok {
 		var apiError protocol.APIError
@@ -112,6 +72,82 @@ func (m *Manager) UpdateGeoIP(ctx context.Context, operation Operation) (geoip.S
 		return geoip.Status{}, err
 	}
 	return result.(geoip.Status), nil
+}
+
+func (m *Manager) setupGeoIPReady() (geoip.Status, bool) {
+	if m.geoip == nil {
+		return geoip.Status{}, false
+	}
+	status := m.geoip.Status()
+	return status, status.Country.Available && status.ASN.Available
+}
+func (m *Manager) updateGeoIPAttempt(ctx context.Context, operation Operation) (any, error) {
+	// setup 预检（design §4.3）：aio 脚本已预置 GeoIP 且本地 MMDB 有效时直接返回，不联网下载。
+	if operation.ExecutionMode == protocol.ExecutionModeSetup {
+		if err := m.checkIfRevision(operation.IfRevision); err != nil {
+			return nil, err
+		}
+		if err := m.lockSetupMutation(ctx, operation); err != nil {
+			return nil, err
+		}
+		if err := m.checkIfRevision(operation.IfRevision); err != nil {
+			m.unlock()
+			return nil, err
+		}
+		status, ready := m.setupGeoIPReady()
+		m.unlock()
+		if ready {
+			return status, nil
+		}
+	}
+	if operation.Source == "setup" && operation.ExecutionMode == "" && m.geoip != nil {
+		if status := m.geoip.Status(); status.Country.Available && status.ASN.Available {
+			return status, nil
+		}
+		// 无效 → 落联网下载。
+	}
+	if m.geoip == nil || m.prepareGeoIP == nil {
+		return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "geoip updater is unavailable"}
+	}
+	candidate, err := m.prepareGeoIP(ctx)
+	if err != nil {
+		return nil, geoIPUpdateFailure("prepare GeoIP databases", err)
+	}
+	defer candidate.Cleanup()
+	if err := m.lockSetupMutation(ctx, operation); err != nil {
+		return nil, err
+	}
+	defer m.unlock()
+	if err := m.checkOpen(); err != nil {
+		return nil, err
+	}
+	if operation.ExecutionMode == protocol.ExecutionModeSetup {
+		if err := m.checkIfRevision(operation.IfRevision); err != nil {
+			return nil, err
+		}
+		if status, ready := m.setupGeoIPReady(); ready {
+			return status, nil
+		}
+	}
+	if candidate.Identity() == "" || !candidate.Valid() {
+		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "geoip update candidate changed before commit"}
+	}
+	_, err = m.updateStateLocked(ctx, state.CommandMeta{ID: operation.ID, Source: operation.Source, IfRevision: operation.IfRevision}, func(snapshot state.Snapshot) (state.Snapshot, error) {
+		if !candidate.Valid() {
+			return snapshot, protocol.APIError{Code: protocol.CodeDataFailure, Message: "geoip update candidate changed before commit"}
+		}
+		if err := candidate.Commit(); err != nil {
+			if errors.Is(err, geoip.ErrStaleCandidate) {
+				return snapshot, preparationChanged(operation, "GeoIP databases", "geoip database pair changed during update")
+			}
+			return snapshot, geoIPUpdateFailure("activate GeoIP databases", err)
+		}
+		return snapshot, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return m.geoip.Status(), nil
 }
 
 // geoIPUpdateFailure adds a classified safe reason while retaining existing codes and internal causes.
