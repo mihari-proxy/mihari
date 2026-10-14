@@ -34,14 +34,15 @@ type ServiceOptions struct {
 }
 
 type Service struct {
-	mu          sync.RWMutex
-	catalogPath string
-	cacheDir    string
-	downloader  Fetcher
-	writeCache  func(string, []byte, os.FileMode) error
-	saveCatalog func(string, Catalog) error
-	now         func() time.Time
-	catalog     Catalog
+	mu               sync.RWMutex
+	catalogPath      string
+	cacheDir         string
+	downloader       Fetcher
+	writeCache       func(string, []byte, os.FileMode) error
+	restoreCacheFile func(string, []byte, os.FileMode) (config.CommitResult, error)
+	saveCatalog      func(string, Catalog) error
+	now              func() time.Time
+	catalog          Catalog
 }
 
 type PreparedRefresh struct {
@@ -89,7 +90,7 @@ func Open(options ServiceOptions) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{catalogPath: options.CatalogPath, cacheDir: options.CacheDir, downloader: downloader, writeCache: config.AtomicWrite, saveCatalog: Save, now: now, catalog: catalog}, nil
+	return &Service{catalogPath: options.CatalogPath, cacheDir: options.CacheDir, downloader: downloader, writeCache: config.AtomicWrite, restoreCacheFile: config.AtomicWriteWithCommit, saveCatalog: Save, now: now, catalog: catalog}, nil
 }
 
 func (s *Service) Snapshot() Catalog {
@@ -387,16 +388,28 @@ func (s *Service) failAfterRestore(original error, path string, content []byte, 
 }
 
 func (s *Service) restoreCache(path string, content []byte, existed, changed bool) error {
+	_, err := s.restoreCacheWithCommit(path, content, existed, changed)
+	return err
+}
+
+// restoreCacheWithCommit distinguishes a failed replacement from a sync warning
+// after replacement, even when the old and new YAML bytes happen to be equal.
+func (s *Service) restoreCacheWithCommit(path string, content []byte, existed, changed bool) (bool, error) {
 	if !changed {
-		return nil
+		return true, nil
 	}
 	if existed {
-		return config.AtomicWrite(path, content, 0o600)
+		result, err := s.restoreCacheFile(path, content, 0600)
+		return result.Committed, errors.Join(err, result.Warning)
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "remove rolled-back subscription cache"}, err)
+	err := os.Remove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
 	}
-	return nil
+	if err != nil {
+		return false, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "remove rolled-back subscription cache"}, err)
+	}
+	return true, nil
 }
 
 func newProfileID() (string, error) {
@@ -456,25 +469,46 @@ func subscriptionRollbackError(err error, setup bool) error {
 }
 
 // settleSetupCommitLocked compensates a retained catalog before the runtime has
-// applied its configuration. Keep matching new cache bytes if metadata cannot
-// be restored; never pair a retained new catalog with old cache contents.
+// applied its configuration. Restore cache bytes first so a failed replacement
+// leaves the committed catalog and its matching cache untouched.
 func (s *Service) settleSetupCommitLocked(receipt Receipt, err error) (Receipt, error) {
 	if err == nil || receipt.profileID == "" {
 		return receipt, err
+	}
+	var cacheAfter []byte
+	if receipt.wroteCache {
+		var readErr error
+		cacheAfter, readErr = os.ReadFile(receipt.cachePath)
+		if readErr != nil {
+			return Receipt{}, subscriptionRollbackError(errors.Join(err, fmt.Errorf("read committed subscription cache before compensation: %w", readErr)), true)
+		}
+	}
+	restored, cacheErr := s.restoreCacheWithCommit(receipt.cachePath, receipt.cacheBefore, receipt.hadCache, receipt.wroteCache)
+	if !restored {
+		return Receipt{}, subscriptionRollbackError(errors.Join(err, cacheErr), true)
 	}
 	restoreErr := s.saveCatalog(s.catalogPath, receipt.Before)
 	if restoreErr != nil {
 		durable, readErr := Load(s.catalogPath)
 		if readErr != nil {
-			return Receipt{}, subscriptionRollbackError(errors.Join(err, restoreErr, readErr), true)
+			return Receipt{}, subscriptionRollbackError(errors.Join(err, cacheErr, restoreErr, readErr), true)
 		}
 		s.catalog = durable
+		if reflect.DeepEqual(durable, receipt.After) {
+			// Metadata stayed committed. Put back the matching new cache rather than
+			// pairing that generation and reference base with rolled-back bytes.
+			if receipt.wroteCache {
+				if forwardErr := s.writeCache(receipt.cachePath, cacheAfter, 0600); forwardErr != nil {
+					return Receipt{}, subscriptionRollbackError(errors.Join(err, cacheErr, restoreErr, fmt.Errorf("restore committed subscription cache after failed catalog rollback: %w", forwardErr)), true)
+				}
+			}
+			return Receipt{}, subscriptionRollbackError(errors.Join(err, cacheErr, restoreErr), true)
+		}
 		if !reflect.DeepEqual(durable, receipt.Before) {
-			return Receipt{}, subscriptionRollbackError(errors.Join(err, restoreErr), true)
+			return Receipt{}, subscriptionRollbackError(errors.Join(err, cacheErr, restoreErr, errors.New("subscription catalog changed during setup compensation")), true)
 		}
 	}
 	s.catalog = receipt.Before.Clone()
-	cacheErr := s.restoreCache(receipt.cachePath, receipt.cacheBefore, receipt.hadCache, receipt.wroteCache)
 	if restoreErr != nil || cacheErr != nil {
 		return Receipt{}, subscriptionRollbackError(errors.Join(err, restoreErr, cacheErr), true)
 	}
