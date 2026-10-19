@@ -14,6 +14,49 @@ import (
 
 type geoIPDiagnosticTransport func(*http.Request) (*http.Response, error)
 
+func TestGeoIPHTTP_OnlyFixedGitHubSourcesReceiveGitHubSummary(t *testing.T) {
+	for _, tt := range []struct {
+		name, source, final string
+		limited             bool
+	}{
+		{"country", DefaultCountryURL, DefaultCountryURL, true},
+		{"country checksum", DefaultCountryChecksumURL, DefaultCountryChecksumURL, true},
+		{"asn", DefaultASNURL, DefaultASNURL, true},
+		{"asn checksum", DefaultASNChecksumURL, DefaultASNChecksumURL, true},
+		{"custom source", "https://fixture.invalid/geoip", "https://fixture.invalid/geoip", false},
+		{"custom Github source", "https://raw.githubusercontent.com/fixture/repo/main/db", "https://raw.githubusercontent.com/fixture/repo/main/db", false},
+		{"redirect outside Github", DefaultCountryURL, "https://fixture.invalid/geoip", false},
+		{"redirect lookalike", DefaultCountryURL, "https://raw.githubusercontent.com.fixture.invalid/geoip", false},
+		{"custom redirect into Github", "https://fixture.invalid/geoip", DefaultCountryURL, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			requests := 0
+			client := &http.Client{Transport: geoIPDiagnosticTransport(func(r *http.Request) (*http.Response, error) {
+				requests++
+				if tt.source != tt.final && r.URL.String() == tt.source {
+					return &http.Response{StatusCode: 302, Request: r, Header: http.Header{"Location": []string{tt.final}}, Body: io.NopCloser(strings.NewReader(""))}, nil
+				}
+				return &http.Response{StatusCode: 429, Request: r, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("API rate limit exceeded"))}, nil
+			})}
+			_, err := doGET(t.Context(), client, tt.source, false)
+			want := "download geoip resource: unexpected HTTP status 429"
+			if tt.limited {
+				want = diagnostics.GitHubRateLimitSummary
+			}
+			if err == nil || SafeFailureReason(err) != want {
+				t.Fatalf("error=%v want=%q", err, want)
+			}
+			wantRequests := 1
+			if tt.source != tt.final {
+				wantRequests = 2
+			}
+			if requests != wantRequests {
+				t.Fatalf("requests=%d want=%d", requests, wantRequests)
+			}
+		})
+	}
+}
+
 func TestGeoIPHTTP_GitHubRateLimitSummary(t *testing.T) {
 	for _, checksum := range []bool{false, true} {
 		closeCause := errors.New("fixture close")

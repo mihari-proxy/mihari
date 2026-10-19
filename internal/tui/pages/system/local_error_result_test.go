@@ -5,6 +5,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"context"
 	"errors"
+	"fmt"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -12,6 +14,30 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestSystemGitHubRateLimit_NarrowRowShowsEllipsisInsteadOfSilentClipping(t *testing.T) {
+	for _, width := range []int{50, 60, 70} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			m := New(nil, nil)
+			m.SetSelfUpdateChannel(func(context.Context) (string, error) { return "main", nil })
+			m.SetSize(width, 80)
+			m.Update(selfCheckResultMsg{generation: m.selfCheckGeneration, err: protocol.APIError{Code: protocol.CodeNetworkFailure, Message: diagnostics.GitHubRateLimitSummary}})
+			found := false
+			for _, line := range strings.Split(ansi.Strip(m.View()), "\n") {
+				if strings.Contains(line, "Update Mihari") {
+					found = true
+					text := strings.TrimSpace(strings.TrimSuffix(line, "│"))
+					if !strings.Contains(text, ui.FailedLabel) || !strings.HasSuffix(text, "…") || !strings.Contains(text, "GitHub") {
+						t.Fatalf("silently clipped row: %q", line)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("missing update row")
+			}
+		})
+	}
+}
 
 func TestSystemGitHubRateLimit_ShowsFullRedExplanationAndShortBadge(t *testing.T) {
 	err := diagnostics.GitHubHTTPError(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch mihari release failed"}, &http.Response{StatusCode: 429}, &diagnostics.HTTPError{Status: 429, Operation: "update GET", Body: "Too Many Requests"})

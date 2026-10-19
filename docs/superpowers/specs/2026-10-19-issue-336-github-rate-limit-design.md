@@ -70,7 +70,7 @@
 - CLI 文本和 JSON error.message、Diagnostics summary、已有红色错误说明及操作结果使用统一限流文案；原始操作、状态、URL、正文和原因链继续保留在详情。
 - 截图锚点：System → Update Mihari 行保持 `Failed`，其后的红字变为 `GitHub rate limit exceeded. Please try again later.`；同页顶部红色错误说明显示相同内容。
 - Core 和 Web 面板版本行继续只显示短的 `Check failed`，不增加受控概要状态或新的展示区域；其 F2 概要明确限流，详细日志保留。
-- Setup 已有错误说明使用限流原因，建议统一 try again later；核心限流不附加通用 AIO 下载提示。普通网络失败保留原提示。
+- Setup 已有错误说明包含 try again later，不再另显示一行重复建议；核心限流不附加通用 AIO 下载提示。普通网络失败保留原提示。
 - 不自动打开 F2、不抢焦点、不引入倒计时，不使用响应时间头抑制后续检查。
 
 ### 实施步骤与验证
@@ -113,15 +113,15 @@
 - 新增 internal/diagnostics/github.go，固定 GitHub 入口显式调用；普通 HTTP 错误和自定义订阅不参与识别。
 - JSON 正文仅从顶层 message 提取判定证据，不使用 documentation_url 或嵌套内容；在 message 已完整采集但后续正文被截断时仍能识别。
 - update/core/panel 的现有 HTTP 采集边界复用原始正文后生成统一概要，原概要保留在原因链中。GeoIP 继续通过其既有 failure reason 和运行时错误映射，保留 CodeInternal。
-- System 行内原有 48 字符摘要会截掉这条固定提示的尾部；仅对统一限流文案取消该固定截断，仍受页面可用宽度约束。其他错误摘要规则及所有 Badge 保持。
-- 已确认 Setup 的建议改为稍后重试，限流失败不附加 AIO 网络环境建议。重试时间头不读取，不增加状态或重试。
+- System 行内原有 48 字符摘要会截掉这条固定提示的尾部；统一限流文案改按扣除行标签、间隔及 Badge 后的实际剩余宽度截断。宽窗口显示完整提示，窄窗口带省略号，避免边框静默裁切。其他错误摘要规则及所有 Badge 保持。
+- Setup 的稍后重试建议已包含在概要中，不另显示重复建议；限流失败不附加 AIO 网络环境建议。重试时间头不读取，不增加状态或重试。
 - README 中英文与 CONTEXT.md 已同步。
 
 新增/扩展回归覆盖：共享识别正负例及无效时间头；Mihari 六类 HTTP 入口；核心 release、普通下载、迁移下载、制品复查及复查后的受保护下载；面板 release/branch 与 archive；GeoIP checksum/database 及运行时错误码；System 双处红字；Core/Panel 短 Badge；Setup 建议；CLI 文本/JSON envelope；本地 owner 日志与 F2 快照、报告一次；自定义 GitHub 订阅保持原行为。
 
 ## 验证结果
 
-2026-10-19 在 Windows 开发机执行：
+初始实现于 2026-10-19 在 Windows 开发机执行：
 
 - 定向测试先因仍输出旧的泛化提示而失败，接入实现后通过；System 48 字符截断及 Setup 网络建议分别由回归测试先复现后修复。
 - 受影响包测试通过。
@@ -132,3 +132,16 @@
 - `CGO_ENABLED=0` 构建 Windows amd64、Linux amd64、darwin arm64 均通过，产物位于系统临时目录。
 - 未运行真实 GitHub 限流、真实 mihomo 或系统服务验证；回归测试均使用本地 fixture/注入 transport。
 - 未改 `CHANGELOG.md`；提交、推送和 PR 按用户后续授权执行。
+
+## PR #353 首轮评审修正
+
+首轮 CI 全部通过；Pullfrog 未发现新问题，Cubic 提出四项建议，经核查均处理：
+
+1. GeoIP 的 ServiceOptions/Downloader 也支持自定义来源。只有初始 URL 精确匹配四个内置数据库/校验资源，且最终响应 URL 仍为无 userinfo 的 HTTPS raw.githubusercontent.com 默认 origin，才使用 GitHub 专用分类。真实 client 重定向的本地 transport fixture 覆盖自定义来源、同域自定义路径、域名伪装及双向跨域重定向，不改变下载或重定向策略。
+2. System 限流说明按实际行内可用宽度显示，新增 50/60/70 列省略号回归，原 160 列双处完整红字回归保留。
+3. Setup 概要已包含等待建议，移除重复的 advice 行；普通失败建议不变。
+4. 时间头测试同时覆盖 429 与普通权限 403，包含有效秒数、未来 epoch、HTTP-date、无效及超大值；普通 403 不因时间头而被归类为限流。
+
+上述行为修复均先通过回归测试复现，再进行最小生产修复；时间头负例用于补足已有正确行为的覆盖。
+
+本轮本地验证：`go test ./...`、`go test -race ./internal/geoip ./internal/diagnostics ./internal/tui/pages/system ./internal/tui/pages/setup ./internal/runtime ./internal/integration`、`go vet ./...` 均通过；`gofmt -l cmd internal` 无输出，`git diff --check` 通过。新提交的全平台 CI 与增量 bot review 由 PR #353 继续验证。

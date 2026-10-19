@@ -57,11 +57,17 @@ func TestGitHubHTTPError_RateLimitClassification(t *testing.T) {
 }
 
 func TestGitHubHTTPError_IgnoresRetryTimingHeaders(t *testing.T) {
-	for _, value := range []string{"", "120", "Wed, 21 Oct 2015 07:28:00 GMT", "invalid", "9999999999999999999999999"} {
-		response := &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": []string{value}, "X-Ratelimit-Reset": []string{value}}}
-		err := GitHubHTTPError(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch failed"}, response, &HTTPError{Status: 429})
-		if err.Error() != GitHubRateLimitSummary {
-			t.Fatalf("timing %q: %v", value, err)
+	for _, value := range []string{"", "120", "4102444800", "Wed, 21 Oct 2015 07:28:00 GMT", "invalid", "9999999999999999999999999"} {
+		for _, status := range []int{403, 429} {
+			response := &http.Response{StatusCode: status, Header: http.Header{"Retry-After": []string{value}, "X-Ratelimit-Reset": []string{value}}}
+			err := GitHubHTTPError(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch failed"}, response, &HTTPError{Status: status, Body: `{"message":"Resource not accessible by integration"}`})
+			want := "fetch failed"
+			if status == 429 {
+				want = GitHubRateLimitSummary
+			}
+			if err.Error() != want {
+				t.Fatalf("status %d timing %q: %v", status, value, err)
+			}
 		}
 	}
 }
