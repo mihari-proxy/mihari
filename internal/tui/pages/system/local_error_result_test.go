@@ -8,9 +8,28 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
+	"net/http"
 	"strings"
 	"testing"
 )
+
+func TestSystemGitHubRateLimit_ShowsFullRedExplanationAndShortBadge(t *testing.T) {
+	err := diagnostics.GitHubHTTPError(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch mihari release failed"}, &http.Response{StatusCode: 429}, &diagnostics.HTTPError{Status: 429, Operation: "update GET", Body: "Too Many Requests"})
+	m := New(nil, nil)
+	m.SetSelfUpdateChannel(func(context.Context) (string, error) { return "main", nil })
+	m.SetSize(160, 80)
+	m.Update(selfCheckResultMsg{generation: m.selfCheckGeneration, err: err})
+	if m.outcomeDetail != diagnostics.GitHubRateLimitSummary || m.outcomeOK {
+		t.Fatalf("outcome=%q", m.outcomeDetail)
+	}
+	view := m.View()
+	if strings.Count(view, diagnostics.GitHubRateLimitSummary) != 2 || !strings.Contains(view, ui.FailedLabel) {
+		t.Fatalf("view lacks full row/top explanation or badge:\n%s", view)
+	}
+	if snapshot := diagnostics.Describe(t.Context(), diagnostics.Record{Err: err}); snapshot.Summary != diagnostics.GitHubRateLimitSummary || !strings.Contains(snapshot.Detail, "Too Many Requests") || !strings.Contains(snapshot.Detail, "fetch mihari release failed") {
+		t.Fatalf("F2 snapshot=%+v", snapshot)
+	}
+}
 
 func TestSystemLocalFailures_PreserveCauseForGlobalDetails(t *testing.T) {
 	for _, kind := range []string{"clipboard", "browser", "channel_path", "channel_read"} {

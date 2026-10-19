@@ -3,6 +3,7 @@ package subscription
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,7 +13,30 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
+
+type subscriptionLimitTransport struct{ requests int }
+
+func (s *subscriptionLimitTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	s.requests++
+	return &http.Response{StatusCode: 403, Request: r, Header: http.Header{"X-Ratelimit-Remaining": []string{"0"}}, Body: io.NopCloser(strings.NewReader(`{"message":"API rate limit exceeded"}`))}, nil
+}
+
+func TestDownloader_CustomGitHubSubscriptionKeepsExistingFailureAndNoFallback(t *testing.T) {
+	transport := &subscriptionLimitTransport{}
+	client := &http.Client{Transport: transport}
+	d := &Downloader{direct: client, proxy: client}
+	_, err := d.Fetch(t.Context(), FetchRequest{URL: "https://raw.githubusercontent.com/fixture/repo/main/sub.yaml", Mode: ProxyModeAuto})
+	var api protocol.APIError
+	var detail *diagnostics.HTTPError
+	if !errors.As(err, &api) || api.Code != protocol.CodeNetworkFailure || api.Message != "subscription provider returned an unsuccessful response" || transport.requests != 1 {
+		t.Fatalf("error=%v requests=%d", err, transport.requests)
+	}
+	if !errors.As(err, &detail) || !strings.Contains(detail.Body, "API rate limit exceeded") {
+		t.Fatal("original diagnostic lost")
+	}
+}
 
 func TestDownloaderDiagnostic_PreservesNetworkCause(t *testing.T) {
 	injected := errors.New("transport fixture failure")

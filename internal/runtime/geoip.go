@@ -161,5 +161,9 @@ func geoIPUpdateFailure(stage string, err error) error {
 		reason = "failed; the cause could not be confirmed"
 	}
 	// Preserve the established error code while improving its safe explanation.
-	return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: stage + ": " + reason}, err)
+	failure := diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: stage + ": " + reason}, err)
+	if reason == diagnostics.GitHubRateLimitSummary {
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInternal, Message: reason}, failure)
+	}
+	return failure
 }

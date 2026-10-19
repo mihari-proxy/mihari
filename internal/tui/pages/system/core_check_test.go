@@ -5,11 +5,23 @@ import (
 	"context"
 	"errors"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestCoreCheck_RateLimitKeepsShortBadge(t *testing.T) {
+	m := New(&coreCheckingClient{}, nil)
+	m.SetMutationsEnabled(true)
+	m.SetSnapshot(protocol.Status{Capabilities: []string{protocol.CapabilityCore}}, protocol.CoreStatus{Channel: "stable"})
+	m.checkCoreVersion()
+	m.Update(coreVersionMsg{generation: m.coreVersion.generation, err: protocol.APIError{Code: protocol.CodeNetworkFailure, Message: diagnostics.GitHubRateLimitSummary}})
+	if got := m.coreUpdateValue(); got != "Check failed" {
+		t.Fatalf("badge=%q", got)
+	}
+}
 
 type coreCheckingClient struct {
 	fakeClient

@@ -6,11 +6,24 @@ import (
 	"errors"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestPanelCheck_RateLimitKeepsShortBadge(t *testing.T) {
+	c := &checkingClient{fakeClient: fakeClient{status: sampleStatus()}}
+	m := New(c, []string{protocol.CapabilityWebGUI})
+	m.SetStatus(c.status)
+	panel := c.status.Panels[0]
+	m.checkPanelVersion(panel.ID)
+	m.Update(panelVersionMsg{id: panel.ID, generation: m.versions[panel.ID].generation, err: protocol.APIError{Code: protocol.CodeNetworkFailure, Message: diagnostics.GitHubRateLimitSummary}})
+	if got := m.latestLabel(panel); got != "Check failed" {
+		t.Fatalf("badge=%q", got)
+	}
+}
 
 type checkingClient struct {
 	fakeClient

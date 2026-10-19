@@ -240,11 +240,11 @@ func (u SelfUpdater) fetchExpectedChecksum(ctx context.Context, asset Asset, tar
 	}
 	defer closeUpdateResponse(ctx, response, asset.URL, &resultErr, u.Reporter)
 	if response.StatusCode != http.StatusOK {
-		return zero, diagnostics.Wrap(protocol.APIError{
+		return zero, updateHTTPStatus(protocol.APIError{
 			Code:    protocol.CodeNetworkFailure,
 			Message: "download checksum manifest failed",
 			Details: map[string]any{"status": response.StatusCode},
-		}, updateHTTPStatus(response, asset.URL))
+		}, response, asset.URL)
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxChecksumManifestSize+1))
 	if err != nil {
@@ -321,11 +321,11 @@ func (u SelfUpdater) fetchReleaseListPage(ctx context.Context, pageURL string) (
 	}
 	defer closeUpdateResponse(ctx, response, pageURL, &resultErr, u.Reporter)
 	if response.StatusCode != http.StatusOK {
-		return nil, "", diagnostics.Wrap(protocol.APIError{
+		return nil, "", updateHTTPStatus(protocol.APIError{
 			Code:    protocol.CodeNetworkFailure,
 			Message: "fetch mihari release list failed",
 			Details: map[string]any{"status": response.StatusCode},
-		}, updateHTTPStatus(response, pageURL))
+		}, response, pageURL)
 	}
 	next := nextReleaseLink(response.Header)
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxReleaseListResponseSize+1))
@@ -358,11 +358,11 @@ func (u SelfUpdater) releaseByTag(ctx context.Context, tag string) (result Relea
 	}
 	defer closeUpdateResponse(ctx, response, url, &resultErr, u.Reporter)
 	if response.StatusCode != http.StatusOK {
-		return release, diagnostics.Wrap(protocol.APIError{
+		return release, updateHTTPStatus(protocol.APIError{
 			Code:    protocol.CodeNetworkFailure,
 			Message: "fetch mihari release failed",
 			Details: map[string]any{"status": response.StatusCode},
-		}, updateHTTPStatus(response, url))
+		}, response, url)
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxReleaseResponseSize+1))
 	if err != nil {
@@ -431,10 +431,10 @@ func (u SelfUpdater) latestMainRelease(ctx context.Context) (result Release, res
 	}
 	defer closeUpdateResponse(ctx, response, url, &resultErr, u.Reporter)
 	if response.StatusCode != http.StatusOK {
-		return release, diagnostics.Wrap(protocol.APIError{
+		return release, updateHTTPStatus(protocol.APIError{
 			Code: protocol.CodeNetworkFailure, Message: "fetch mihari release failed",
 			Details: map[string]any{"status": response.StatusCode},
-		}, updateHTTPStatus(response, url))
+		}, response, url)
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxReleaseResponseSize+1))
 	if err != nil {
@@ -471,11 +471,11 @@ func (u SelfUpdater) download(ctx context.Context, asset Asset, expected [sha256
 	}
 	defer closeUpdateResponse(ctx, response, asset.URL, &resultErr, u.Reporter)
 	if response.StatusCode != http.StatusOK {
-		return diagnostics.Wrap(protocol.APIError{
+		return updateHTTPStatus(protocol.APIError{
 			Code:    protocol.CodeNetworkFailure,
 			Message: "download mihari asset failed",
 			Details: map[string]any{"status": response.StatusCode},
-		}, updateHTTPStatus(response, asset.URL))
+		}, response, asset.URL)
 	}
 	file, err := u.openCandidateFile(destination)
 	if err != nil {

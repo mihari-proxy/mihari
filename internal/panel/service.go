@@ -694,10 +694,10 @@ func (s *Service) download(ctx context.Context, panelID, build, assetURL string)
 	}()
 	if response.StatusCode != http.StatusOK {
 		raw, readErr := io.ReadAll(io.LimitReader(response.Body, diagnostics.MaxHTTPBodyBytes+1))
-		return "", diagnostics.Wrap(protocol.APIError{
+		return "", diagnostics.GitHubHTTPError(protocol.APIError{
 			Code: protocol.CodeNetworkFailure, Message: "download panel asset failed",
 			Details: map[string]any{"status": response.StatusCode},
-		}, &diagnostics.HTTPError{Operation: "panel GET asset", URL: assetURL, Phase: "response", Status: response.StatusCode, Body: diagnostics.HTTPBody(raw), BodyTruncated: len(raw) > diagnostics.MaxHTTPBodyBytes, Cause: readErr})
+		}, response, &diagnostics.HTTPError{Operation: "panel GET asset", URL: assetURL, Phase: "response", Status: response.StatusCode, Body: diagnostics.HTTPBody(raw), BodyTruncated: len(raw) > diagnostics.MaxHTTPBodyBytes, Cause: readErr})
 	}
 	file, err := os.CreateTemp(s.stagingDir, "."+sanitizeBuild(panelID+"-"+build)+"-*.zip")
 	if err != nil {

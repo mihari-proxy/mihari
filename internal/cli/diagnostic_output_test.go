@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -14,6 +15,39 @@ import (
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/update"
 )
+
+func TestExecute_GitHubRateLimitPreservesEnvelopeCodeAndDetails(t *testing.T) {
+	const body = `{"message":"API rate limit exceeded for fixture IP."}`
+	failure := diagnostics.GitHubHTTPError(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "fetch mihari release failed", Details: map[string]any{"status": 403}}, &http.Response{StatusCode: 403}, &diagnostics.HTTPError{Operation: "update GET", URL: "https://fixture.invalid/releases", Status: 403, Body: body})
+	for _, asJSON := range []bool{false, true} {
+		args := []string{"status"}
+		if asJSON {
+			args = append(args, "--json")
+		}
+		var stdout, stderr bytes.Buffer
+		if code := Execute(t.Context(), args, &stdout, &stderr, Dependencies{SetupError: failure}); code != ExitNetwork {
+			t.Fatalf("exit=%d", code)
+		}
+		if stdout.Len() != 0 {
+			t.Fatal("failure wrote success output")
+		}
+		if asJSON {
+			var envelope protocol.ErrorEnvelope
+			decoder := json.NewDecoder(&stderr)
+			if err := decoder.Decode(&envelope); err != nil {
+				t.Fatal(err)
+			}
+			if envelope.Schema != "mihari.error/v1" || envelope.Error.Code != protocol.CodeNetworkFailure || envelope.Error.Message != diagnostics.GitHubRateLimitSummary || envelope.Error.Diagnostic == nil || !strings.Contains(envelope.Error.Diagnostic.Detail, body) {
+				t.Fatalf("envelope=%+v", envelope)
+			}
+			if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+				t.Fatalf("extra JSON output: %v", err)
+			}
+		} else if !strings.Contains(stderr.String(), diagnostics.GitHubRateLimitSummary) || !strings.Contains(stderr.String(), body) || !strings.Contains(stderr.String(), "fetch mihari release failed") {
+			t.Fatalf("output=%s", stderr.String())
+		}
+	}
+}
 
 func TestExecute_OriginalSetupDetails(t *testing.T) {
 	const original = "open /private/password=fixture-original.yaml\nhttps://u:p@fixture.invalid/sub?token=abc"

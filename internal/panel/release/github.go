@@ -132,11 +132,11 @@ func (c Client) getJSON(ctx context.Context, url string, dest any) (resultErr er
 	}()
 	if response.StatusCode != http.StatusOK {
 		raw, readErr := io.ReadAll(io.LimitReader(response.Body, diagnostics.MaxHTTPBodyBytes+1))
-		return diagnostics.Wrap(protocol.APIError{
+		return diagnostics.GitHubHTTPError(protocol.APIError{
 			Code:    protocol.CodeNetworkFailure,
 			Message: "fetch github resource failed",
 			Details: map[string]any{"status": response.StatusCode},
-		}, &diagnostics.HTTPError{Operation: "github GET resource", URL: url, Phase: "response", Status: response.StatusCode, Body: diagnostics.HTTPBody(raw), BodyTruncated: len(raw) > diagnostics.MaxHTTPBodyBytes, Cause: readErr})
+		}, response, &diagnostics.HTTPError{Operation: "github GET resource", URL: url, Phase: "response", Status: response.StatusCode, Body: diagnostics.HTTPBody(raw), BodyTruncated: len(raw) > diagnostics.MaxHTTPBodyBytes, Cause: readErr})
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseSize+1))
 	if err != nil {

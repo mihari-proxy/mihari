@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -12,6 +14,25 @@ import (
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/geoip"
 )
+
+type geoIPLimitTransport struct{}
+
+func (geoIPLimitTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: 429, Request: r, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("Too Many Requests"))}, nil
+}
+
+func TestGeoIPDiagnostic_RateLimitKeepsInternalCodeAndOriginalStage(t *testing.T) {
+	_, failure := (geoip.Downloader{Client: &http.Client{Transport: geoIPLimitTransport{}}, StagingDir: t.TempDir()}).Prepare(t.Context(), geoip.DownloadSpec{URL: geoip.DefaultCountryURL, ChecksumURL: geoip.DefaultCountryChecksumURL, Destination: "unused.mmdb"})
+	err := geoIPUpdateFailure("prepare geoip update", failure)
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodeInternal || api.Message != diagnostics.GitHubRateLimitSummary {
+		t.Fatalf("error=%v", err)
+	}
+	snapshot := diagnostics.Describe(t.Context(), diagnostics.Record{Err: err})
+	if !strings.Contains(snapshot.Detail, "prepare geoip update") || !strings.Contains(snapshot.Detail, "HTTP 429") {
+		t.Fatalf("detail=%s", snapshot.Detail)
+	}
+}
 
 func TestGeoIPDiagnostic_PrepareCommitAndReplayJSON(t *testing.T) {
 	for _, stage := range []string{"prepare", "commit"} {

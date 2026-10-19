@@ -1525,7 +1525,11 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 			default:
 				value = ui.RenderStatusChip(m.theme, ui.StatusChipFailed, ui.FailedLabel)
 				if m.outcomeDetail != "" {
-					value += "  " + m.theme.Danger.Render(ui.TruncateVisible(m.outcomeDetail, 48))
+					detail := ui.TruncateVisible(m.outcomeDetail, 48)
+					if m.outcomeDetail == diagnostics.GitHubRateLimitSummary {
+						detail = m.outcomeDetail
+					}
+					value += "  " + m.theme.Danger.Render(detail)
 				}
 			}
 		}

@@ -14,6 +14,25 @@ import (
 
 type geoIPDiagnosticTransport func(*http.Request) (*http.Response, error)
 
+func TestGeoIPHTTP_GitHubRateLimitSummary(t *testing.T) {
+	for _, checksum := range []bool{false, true} {
+		closeCause := errors.New("fixture close")
+		body := &geoIPDiagnosticBody{Reader: strings.NewReader("API rate limit exceeded"), closeErr: closeCause}
+		client := &http.Client{Transport: geoIPDiagnosticTransport(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 403, Header: make(http.Header), Body: body, Request: r}, nil
+		})}
+		var err error
+		if checksum {
+			_, err = downloadChecksum(t.Context(), client, DefaultCountryChecksumURL, false, nil)
+		} else {
+			_, err = downloadFile(t.Context(), client, DefaultCountryURL, io.Discard, 1024, false, nil)
+		}
+		if SafeFailureReason(err) != diagnostics.GitHubRateLimitSummary || !errors.Is(err, closeCause) || body.closes != 1 {
+			t.Fatalf("checksum=%t error=%v closes=%d", checksum, err, body.closes)
+		}
+	}
+}
+
 func (f geoIPDiagnosticTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 type geoIPDiagnosticBody struct {

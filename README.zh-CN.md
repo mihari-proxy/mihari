@@ -170,6 +170,8 @@ TUI 订阅表格的 Name 和 Traffic 列按内容分配宽度，分别最多占 
 
 mihomo HTTP 失败的原始报错与上游状态会写入诊断日志，范围包括 gateway 和 WebSocket 握手。日志、导出及本地 CLI/TUI 错误汇报均不脱敏，保留错误自带的凭据、URL、路径与配置片段。CLI 分段展示概要、错误分类和原始详情，JSON 增加可选诊断和 warnings，业务退出码保持不变。TUI 所有页面均可按 F2 打开统一诊断历史，滚动查看详情并复制原文。终端控制字符仅在显示时转义。
 
+固定 GitHub 资源（Mihari、mihomo、内置面板及 GeoIP）确认限流时，错误说明统一为 `GitHub rate limit exceeded. Please try again later.`。失败 Badge 保持简短；F2 保留原始操作、HTTP 状态、URL、响应正文与原因链。不处理重试时间头，不改变现有重试行为；自定义订阅地址及安装脚本不在此处理范围。
+
 F2 每次发生保留独立记录，以级别颜色和选中高亮帮助浏览。宽终端左右显示列表和详情，窄终端上下排列。Tab 切换窗格，方向键、PgUp/PgDn、Home/End 导航，c 复制原始详情，Esc 返回；新记录不会抢走当前选择。Web gateway 允许来自 mihomo 的单条消息最大 1 MiB，与 mihomo 流客户端一致；浏览器发送方向仍限制为 32 KiB。
 
 F2 的剪贴板写入在后台执行，保持弹窗可操作。OSC 52 仅表示请求已交给终端，不确认复制成功，并保留历史不可用等提示。在 Linux 使用 sudo 启动时，Wayland 复制优先使用发起会话指定的可用显示 socket；未找到时，自动发现要求只有一个可用 socket。提权 helper `runuser` 只从固定的绝对系统路径查找，包括系统 profile。其他本地会话使用系统剪贴板工具。

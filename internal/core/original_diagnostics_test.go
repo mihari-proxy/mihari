@@ -109,6 +109,10 @@ func coreHTTPEntrypoints(t *testing.T) map[string]func(*http.Client) error {
 		t.Fatal(err)
 	}
 	return map[string]func(*http.Client) error{
+		"migration": func(c *http.Client) error {
+			_, _, err := DownloadMigrationCore(t.Context(), c, "linux", "amd64", "v1.19.30")
+			return err
+		},
 		"release": func(c *http.Client) error {
 			_, err := (Installer{HTTPClient: c}).LatestRelease(t.Context(), "stable")
 			return err
@@ -121,6 +125,49 @@ func coreHTTPEntrypoints(t *testing.T) map[string]func(*http.Client) error {
 			_, err := i.readTargetArchive(t.Context(), ReleaseTarget{repository: "MetaCubeX/mihomo", asset: Asset{ID: 456}})
 			return err
 		},
+	}
+}
+
+func TestCoreHTTP_GitHubRateLimitSummary(t *testing.T) {
+	for name, run := range coreHTTPEntrypoints(t) {
+		t.Run(name, func(t *testing.T) {
+			requests := 0
+			err := run(&http.Client{Transport: diagnosticRoundTripper(func(r *http.Request) (*http.Response, error) {
+				requests++
+				return &http.Response{StatusCode: 429, Body: io.NopCloser(strings.NewReader("Too Many Requests")), Header: make(http.Header), Request: r}, nil
+			})})
+			if err == nil || withAIOHint(err).Error() != diagnostics.GitHubRateLimitSummary || requests != 1 {
+				t.Fatalf("error=%v requests=%d", err, requests)
+			}
+			var api protocol.APIError
+			code := protocol.CodeNetworkFailure
+			if name == "migration" {
+				code = protocol.CodeDataFailure
+			}
+			if !errors.As(err, &api) || api.Code != code {
+				t.Fatalf("classification changed: %v", err)
+			}
+		})
+	}
+}
+
+func TestCoreHTTP_ProtectedArchiveRateLimitAfterMetadata(t *testing.T) {
+	requests := 0
+	i := Installer{HTTPClient: &http.Client{Transport: diagnosticRoundTripper(func(r *http.Request) (*http.Response, error) {
+		requests++
+		status, body := 200, `{"id":456}`
+		if r.Header.Get("Accept") == "application/octet-stream" {
+			status, body = 403, `{"message":"API rate limit exceeded"}`
+		}
+		return &http.Response{StatusCode: status, Header: make(http.Header), Request: r, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}}
+	_, err := i.readTargetArchive(t.Context(), ReleaseTarget{repository: "MetaCubeX/mihomo", asset: Asset{ID: 456}})
+	if err == nil || err.Error() != diagnostics.GitHubRateLimitSummary || requests != 2 {
+		t.Fatalf("error=%v requests=%d", err, requests)
+	}
+	var detail *diagnostics.HTTPError
+	if !errors.As(err, &detail) || detail.Operation != "core GET asset" {
+		t.Fatalf("detail=%+v", detail)
 	}
 }
 

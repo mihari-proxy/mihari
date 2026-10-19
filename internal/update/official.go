@@ -84,7 +84,7 @@ func (s OfficialReleaseSource) Download(ctx context.Context, tag, asset string, 
 	}
 	defer closeUpdateResponse(ctx, response, address, &resultErr, s.Reporter)
 	if response.StatusCode != http.StatusOK {
-		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download official release evidence"}, updateHTTPStatus(response, address))
+		return nil, updateHTTPStatus(protocol.APIError{Code: protocol.CodeNetworkFailure, Message: "download official release evidence"}, response, address)
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {

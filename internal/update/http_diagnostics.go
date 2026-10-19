@@ -18,12 +18,12 @@ func updateHTTPDetail(response *http.Response, address, phase string, cause erro
 	return &diagnostics.HTTPError{Operation: "update GET", URL: address, Phase: phase, Status: response.StatusCode, Cause: cause}
 }
 
-func updateHTTPStatus(response *http.Response, address string) error {
+func updateHTTPStatus(api protocol.APIError, response *http.Response, address string) error {
 	raw, err := io.ReadAll(io.LimitReader(response.Body, diagnostics.MaxHTTPBodyBytes+1))
 	detail := updateHTTPDetail(response, address, "response", err)
 	detail.Body = diagnostics.HTTPBody(raw)
 	detail.BodyTruncated = len(raw) > diagnostics.MaxHTTPBodyBytes
-	return detail
+	return diagnostics.GitHubHTTPError(api, response, detail)
 }
 
 func updateHTTPTransport(address string, cause error) error {

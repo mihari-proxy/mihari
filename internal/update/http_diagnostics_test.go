@@ -31,6 +31,27 @@ func (b *updateDiagnosticBody) Close() error { b.closes++; return b.closeErr }
 
 type updateReadFailure struct{ err error }
 
+func TestUpdateHTTP_GitHubRateLimitSummary(t *testing.T) {
+	for name, run := range updateHTTPEntrypoints(t) {
+		t.Run(name, func(t *testing.T) {
+			requests := 0
+			body := `{"message":"API rate limit exceeded for fixture IP."}`
+			err := run(&http.Client{Transport: officialTransport(func(r *http.Request) (*http.Response, error) {
+				requests++
+				return &http.Response{StatusCode: 403, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+			})})
+			var api protocol.APIError
+			var detail *diagnostics.HTTPError
+			if !errors.As(err, &api) || api.Message != "GitHub rate limit exceeded. Please try again later." || api.Code != protocol.CodeNetworkFailure {
+				t.Fatalf("error = %v", err)
+			}
+			if requests != 1 || !errors.As(err, &detail) || detail.Body != body || detail.Status != 403 {
+				t.Fatalf("requests=%d, detail=%+v", requests, detail)
+			}
+		})
+	}
+}
+
 func (r updateReadFailure) Read([]byte) (int, error) { return 0, r.err }
 
 func updateHTTPEntrypoints(t *testing.T) map[string]func(*http.Client) error {

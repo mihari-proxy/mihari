@@ -61,7 +61,7 @@ func TestPreparedUpdater_CheckPreservesUnreportedAndReportedResults(t *testing.T
 
 func TestPreparedUpdater_CheckFailureReportsCauseOnce(t *testing.T) {
 	for _, channel := range []string{update.ChannelMain, update.ChannelDev} {
-		for _, failure := range []string{"transport", "timeout", "http", "decode", "canceled", "success"} {
+		for _, failure := range []string{"transport", "timeout", "http", "rate_limit", "decode", "canceled", "success"} {
 			t.Run(channel+"/"+failure, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
@@ -79,6 +79,8 @@ func TestPreparedUpdater_CheckFailureReportsCauseOnce(t *testing.T) {
 						return nil, r.Context().Err()
 					case "http":
 						return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(`{"message":"fixture rate limit"}`))}, nil
+					case "rate_limit":
+						return &http.Response{StatusCode: http.StatusForbidden, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"message":"API rate limit exceeded for fixture IP."}`))}, nil
 					case "decode":
 						return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{`))}, nil
 					default:
@@ -148,6 +150,12 @@ func TestPreparedUpdater_CheckFailureReportsCauseOnce(t *testing.T) {
 				var api protocol.APIError
 				if !errors.As(err, &api) || strings.Contains(err.Error(), "fixture") {
 					t.Fatal("public error changed or exposed internal details")
+				}
+				if failure == "rate_limit" {
+					snapshot, ok := diagnostics.Snapshot(err)
+					if api.Message != diagnostics.GitHubRateLimitSummary || !ok || snapshot.Summary != diagnostics.GitHubRateLimitSummary || !strings.Contains(snapshot.Detail, "API rate limit exceeded for fixture IP.") || !strings.Contains(logged.Cause, "HTTP 403") {
+						t.Fatalf("rate limit diagnostic lost: api=%+v snapshot=%+v", api, snapshot)
+					}
 				}
 				if failure == "timeout" && (!errors.Is(err, context.DeadlineExceeded) || !strings.Contains(logged.Cause, "context deadline exceeded")) {
 					t.Fatal("timeout cause missing from logger output")

@@ -16,6 +16,23 @@ import (
 
 type githubDiagnosticTransport func(*http.Request) (*http.Response, error)
 
+func TestGitHubHTTP_RateLimitSummary(t *testing.T) {
+	for _, branch := range []bool{false, true} {
+		client := Client{HTTPClient: &http.Client{Transport: githubDiagnosticTransport(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 403, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"message":"You have exceeded a secondary rate limit."}`)), Request: r}, nil
+		})}}
+		var err error
+		if branch {
+			_, err = client.BranchTip(t.Context(), "owner", "repo", "main")
+		} else {
+			_, err = client.LatestRelease(t.Context(), "owner", "repo")
+		}
+		if err == nil || err.Error() != diagnostics.GitHubRateLimitSummary {
+			t.Fatalf("branch=%t error=%v", branch, err)
+		}
+	}
+}
+
 func (f githubDiagnosticTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestGitHubDiagnostics_PreservesTransportAndDecodeCauses(t *testing.T) {

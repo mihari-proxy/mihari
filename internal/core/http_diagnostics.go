@@ -22,6 +22,9 @@ func coreHTTPError(api protocol.APIError, operation, address, phase string, resp
 			detail.Cause = errors.Join(cause, readErr)
 		}
 	}
+	if response != nil && phase == "response" {
+		return diagnostics.GitHubHTTPError(api, response, detail)
+	}
 	return diagnostics.Wrap(api, detail)
 }
 

@@ -457,7 +457,7 @@ func (i Installer) checkTimeout() time.Duration {
 // withAIOHint 给网络类失败的错误信息追加 aio 离线安装脚本引导（design §6 错误处理）。
 func withAIOHint(err error) error {
 	var apiError protocol.APIError
-	if errors.As(err, &apiError) && apiError.Code == protocol.CodeNetworkFailure {
+	if errors.As(err, &apiError) && apiError.Code == protocol.CodeNetworkFailure && apiError.Message != diagnostics.GitHubRateLimitSummary {
 		apiError.Message += "; for offline or restricted networks, use the all-in-one installer (install-aio-remote.sh / .ps1)"
 		return diagnostics.Wrap(apiError, err)
 	}

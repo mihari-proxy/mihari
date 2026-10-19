@@ -79,6 +79,16 @@ func TestPanelDiagnostic_DownloadPreservesSafeCause(t *testing.T) {
 
 var _ io.ReadCloser = (*diagnosticReadBody)(nil)
 
+func TestPanelHTTP_GitHubRateLimitSummary(t *testing.T) {
+	service := &Service{stagingDir: t.TempDir(), httpClient: &http.Client{Transport: diagnosticTransport(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 403, Header: http.Header{"X-Ratelimit-Remaining": []string{"0"}}, Body: io.NopCloser(strings.NewReader("Forbidden")), Request: r}, nil
+	})}}
+	_, err := service.download(t.Context(), "fixture", "v1", "https://fixture.invalid/panel")
+	if err == nil || err.Error() != diagnostics.GitHubRateLimitSummary {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestPanelDiagnostic_StatusBodyAndCloseCausePreserved(t *testing.T) {
 	closeCause := errors.New("close panel response")
 	body := &diagnosticReadBody{content: strings.NewReader("token=fixture\n" + strings.Repeat("x", diagnostics.MaxHTTPBodyBytes)), closeErr: closeCause}
