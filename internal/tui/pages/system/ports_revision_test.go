@@ -196,3 +196,38 @@ func TestSystemPorts_RevisionRetriesBounded(t *testing.T) {
 		t.Fatalf("result=%+v requests=%+v", result, c.requests)
 	}
 }
+
+func TestSystemPorts_FinalWriteFailureReturnsFreshEndpoints(t *testing.T) {
+	for _, failure := range []string{"transport", "revision"} {
+		t.Run(failure, func(t *testing.T) {
+			_, c, intent := mixedPortIntent(t)
+			if failure == "transport" {
+				c.writeErr = errors.New("response lost after write")
+			}
+			c.beforeWrite = func(c *revisionPortsClient) {
+				c.status.Revision++
+				if failure == "transport" || len(c.requests) == 3 {
+					c.status.MixedAddr = "127.0.0.1:29190"
+				}
+			}
+			result := intent.Execute().(portsApplyResultMsg)
+			if result.err == nil || result.status.MixedAddr != c.status.MixedAddr || result.status.Revision != c.status.Revision {
+				t.Fatalf("result=%+v current=%+v", result, c.status)
+			}
+			if failure == "transport" && (len(c.requests) != 1 || !errors.Is(result.err, c.writeErr)) {
+				t.Fatalf("ambiguous write retried or lost cause: %+v", result)
+			}
+		})
+	}
+}
+
+func TestSystemPorts_FailedPostWriteReadPreservesBothErrors(t *testing.T) {
+	_, c, intent := mixedPortIntent(t)
+	c.writeErr = errors.New("write response lost")
+	readErr := errors.New("status unavailable")
+	c.beforeWrite = func(c *revisionPortsClient) { c.readErr = readErr }
+	result := intent.Execute().(portsApplyResultMsg)
+	if !errors.Is(result.err, c.writeErr) || !errors.Is(result.err, readErr) || result.status.MixedAddr != "" || len(c.requests) != 1 {
+		t.Fatalf("result=%+v requests=%+v", result, c.requests)
+	}
+}

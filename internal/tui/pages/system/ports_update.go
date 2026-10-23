@@ -64,7 +64,11 @@ func applyPortUpdate(ctx context.Context, client Client, baseline protocol.Onboa
 		}
 		var api protocol.APIError
 		if attempt >= 2 || !errors.As(err, &api) || api.Code != protocol.CodeRevisionConflict {
-			return current, err
+			latest, refreshErr := client.Onboarding(ctx)
+			if refreshErr != nil {
+				return protocol.OnboardingStatus{}, errors.Join(err, fmt.Errorf("refresh ports after failed update: %w", refreshErr))
+			}
+			return latest, err
 		}
 	}
 }
