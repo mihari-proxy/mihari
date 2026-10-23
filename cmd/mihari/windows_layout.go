@@ -45,7 +45,7 @@ func legacyDependencies(diagnosticStderr, loggingFailureStderr io.Writer) cli.De
 		if err != nil {
 			return err
 		}
-		return runDaemonWith(ctx, daemonRunDeps{
+		return runDaemonWithClaimedListener(ctx, daemonRunDeps{
 			Paths:                root.Paths,
 			PrivateFS:            root.FS,
 			Token:                root.Token,

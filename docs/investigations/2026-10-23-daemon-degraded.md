@@ -49,9 +49,9 @@ details: {"field":"bind-address"}
 
 17:22:39 的 pipe 拒绝访问是另一项启动失败；日志没有给出占用进程或 ACL 详情，不能确认是重复 daemon 还是权限问题。它不能解释后续仍可通过 IPC 返回 runtime unavailable 的降级状态。早间订阅 HTTP 502、TUI 旧二进制清理失败以及 pipe 关闭错误均没有证据表明触发了这次 bind-address 校验失败。
 
-## 源码链路
+## 修复前的源码链路
 
-调查基线：`9a445bd6`，日志包不含运行程序的版本信息，因此这里是与当前源码的对应分析。
+调查基线：修复前的 `9a445bd6`，日志包不含运行程序的版本信息。以下链路描述该基线；本 PR 已将普通启动路径改为 `core.ReconcileRuntimeEndpoints`，见末尾“后续修复”。
 
 1. `internal/app/runtime.go` 的普通运行路径调用 `core.EnsureRuntimeConfig(paths.RuntimeConfig, settings)`；失败直接返回，发生在受管端口探测之前。
 2. `internal/platform/paths.go` 定义运行配置为数据根下的 `runtime/config.yaml`。
@@ -75,5 +75,7 @@ details: {"field":"bind-address"}
 修复分支从 origin/dev 创建，普通 daemon 启动在核心更新恢复检查之后、构造控制客户端和启动核心之前调用 core.ReconcileRuntimeEndpoints。只同步 mixed-port、bind-address、external-controller；保留其余运行配置，secret 和 allow-lan 继续严格匹配，缺失字段、字段类型错误或非法 YAML 不进入修复。配置原本匹配时不重写、不额外运行核心检查。
 
 不匹配时先生成同目录临时候选；存在本地核心则通过其 -t 检查，检查有 15 秒超时。发布前重查原文件字节，发生变动拒绝覆盖，成功后沿用原子写入。核心尚未启动，不执行 live reload。尚未安装核心时可保存端点，沿用 bootstrap 配置无需本地核心的行为。未完成核心更新时仍跳过该路径，保留既有修复控制面。
+
+该启动 API 要求调用方独占此数据根的业务写入权。Unix 启动已有 daemon lease；Windows 改为先独占控制 named pipe，再读取 settings、装配 runtime，并将同一 listener 交给正常或 degraded 控制服务。重复启动在进入业务配置处理前失败，listener 在装配失败及服务退出时关闭，底层只关闭一次。执行同步时 Manager.Run 尚未启动，因此不存在当前 Manager 的并发配置 mutation。源文件重查用于发现候选准备期间的变化，不是为不遵守单写入者约束的任意外部写者提供 compare-and-swap 保证。启动快速路径也会在完成配置读取或 bootstrap 创建后重新检查 context，避免已经取消的启动继续成功。
 
 正式回归测试 TestBuildRuntime_EndpointUpdateSurvivesRestart 通过业务 Manager 保存端点后重新装配 daemon，覆盖 Mixed IP、Mixed 端口、Controller 和 Web 地址。旧代码在前三种场景失败，修复后全部通过。core 测试另外覆盖校验前不发布、校验失败或取消保留原文件、准备期间源配置变动拒绝覆盖、候选清理、认证/非法字段拒绝和配置无变动时保持原字节。全部使用合成配置及隔离目录。

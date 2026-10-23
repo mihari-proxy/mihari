@@ -16,13 +16,16 @@ import (
 
 // ReconcileRuntimeEndpoints applies saved endpoints before the stopped core is
 // started. Authentication invariants remain strict; unrelated YAML is retained.
+// The caller must be the sole business-file writer for this data root. This is
+// startup assembly, before Manager.Run can accept or execute config mutations;
+// the source recheck detects stale preparation, not arbitrary external writers.
 func ReconcileRuntimeEndpoints(ctx context.Context, runner CommandRunner, binaryPath, dataDir, path string, settings config.Settings) (resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	err := EnsureRuntimeConfig(path, settings)
 	if err == nil {
-		return nil
+		return ctx.Err()
 	}
 	var api protocol.APIError
 	if !errors.As(err, &api) || api.Code != protocol.CodeDataFailure {

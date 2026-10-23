@@ -61,6 +61,15 @@ func TestBuildRuntime_EndpointUpdateSurvivesRestart(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if update.MixedAddr != nil && persisted.MixedAddr != *update.MixedAddr {
+				t.Fatalf("saved mixed endpoint=%q want=%q", persisted.MixedAddr, *update.MixedAddr)
+			}
+			if update.ControllerAddr != nil && persisted.ControllerAddr != *update.ControllerAddr {
+				t.Fatalf("saved controller endpoint=%q want=%q", persisted.ControllerAddr, *update.ControllerAddr)
+			}
+			if update.WebAddr != nil && persisted.WebAddr != *update.WebAddr {
+				t.Fatalf("saved web endpoint=%q want=%q", persisted.WebAddr, *update.WebAddr)
+			}
 			restarted, err := BuildRuntime(paths, persisted, "test", nil, nil)
 			if err != nil {
 				t.Fatalf("restart after successful endpoint update: %v", err)

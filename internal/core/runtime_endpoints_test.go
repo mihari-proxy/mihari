@@ -16,6 +16,35 @@ import (
 
 type endpointRunner func(context.Context, string, ...string) ([]byte, error)
 
+type bootstrapCancellationContext struct {
+	context.Context
+	path   string
+	cancel context.CancelFunc
+}
+
+func (c bootstrapCancellationContext) Err() error {
+	if _, err := os.Stat(c.path); err == nil {
+		c.cancel()
+	}
+	return c.Context.Err()
+}
+
+func TestReconcileRuntimeEndpoints_CancellationAfterBootstrap(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "config.yaml")
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("a", 64)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	// Observing the completed bootstrap cancels the context, without relying
+	// on parsing speed or a sleep to land cancellation during filesystem IO.
+	observed := bootstrapCancellationContext{Context: ctx, path: path, cancel: cancel}
+	err := ReconcileRuntimeEndpoints(observed, nil, filepath.Join(root, "missing-core"), root, path, settings)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("startup ignored cancellation after bootstrap: %v", err)
+	}
+}
+
 func (f endpointRunner) Run(ctx context.Context, binary string, args ...string) ([]byte, error) {
 	return f(ctx, binary, args...)
 }
