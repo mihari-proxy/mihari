@@ -167,7 +167,13 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 			return nil, err
 		}
 		if !coreRepairRequired {
-			if err := core.EnsureRuntimeConfig(paths.RuntimeConfig, settings); err != nil {
+			// Endpoint edits persist settings for the next daemon lifetime. Bring
+			// the retained runtime YAML up to date before constructing clients or
+			// starting the core; a rejected candidate leaves the old file intact.
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			err := core.ReconcileRuntimeEndpoints(ctx, core.OSCommandRunner{}, paths.CoreBinary, paths.Root, paths.RuntimeConfig, settings)
+			cancel()
+			if err != nil {
 				return nil, err
 			}
 		}
