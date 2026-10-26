@@ -97,6 +97,9 @@ type Session struct {
 	loggingCapability      bool
 	loggingCapabilityKnown bool
 	routingCapability      bool
+	daemonIdentityKnown    bool
+	daemonPID              int
+	daemonStartedAt        time.Time
 }
 
 func New(client Client, options Options) *Session {
@@ -363,9 +366,16 @@ func (s *Session) putStatus(ctx context.Context, status protocol.Status) bool {
 func (s *Session) observeLoggingCapability(status protocol.Status) {
 	present := slices.Contains(status.Capabilities, protocol.CapabilityLogging)
 	routing := slices.Contains(status.Capabilities, protocol.CapabilityRouting)
-	if (s.loggingCapabilityKnown && s.loggingCapability && !present) || (s.routingCapability && !routing) {
+	identityKnown := status.PID > 0 || !status.StartedAt.IsZero()
+	ownerChanged := identityKnown && s.daemonIdentityKnown && (s.daemonPID != status.PID || !s.daemonStartedAt.Equal(status.StartedAt))
+	if ownerChanged || (s.loggingCapabilityKnown && s.loggingCapability && !present) || (s.routingCapability && !routing) {
 		s.loggingEpoch++
 		s.loggingRevision = nil
+	}
+	if identityKnown {
+		s.daemonIdentityKnown = true
+		s.daemonPID = status.PID
+		s.daemonStartedAt = status.StartedAt
 	}
 	s.routingCapability = routing
 	s.loggingCapability = present

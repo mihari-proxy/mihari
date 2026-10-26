@@ -1064,7 +1064,7 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		m.markRowOutcome(m.focusID, true, "")
 		cmds := []tea.Cmd{m.probePortHolds(), m.rowSpinCmdIfNeeded()}
 		if typed.status.RestartRequired {
-			cmds = append(cmds, func() tea.Msg { return RestartRequiredMsg{} })
+			cmds = append(cmds, func() tea.Msg { return ui.ApplySavedEndpointsMsg{Page: ui.PageSystem, Status: typed.status} })
 		}
 		return m, tea.Batch(cmds...)
 	case serviceStatusMsg:
@@ -2901,7 +2901,7 @@ func (m *Model) confirmPortEdit() tea.Cmd {
 		return ui.ActionIntentMsg{
 			Action: ui.ActionApplyEndpointChange, Page: ui.PageSystem, Capability: protocol.CapabilityOnboarding,
 			Key: "system:ports", Title: ui.ReplaceConfigurationTitle, Object: ui.PortsConfigSectionTitle,
-			Impact: ui.ReplaceConfigurationImpact, Rollback: ui.ReplaceConfigurationRollback,
+			Impact: "Save changed ports and restart the installed Mihari service to apply them. Active connections will be interrupted. Administrator/root privileges are required for automatic restart.", Rollback: "Saved ports remain in place if the service restart fails.",
 			Execute: func() tea.Msg {
 				status, err := applyPortUpdate(ctx, client, baseline, request)
 				return portsApplyResultMsg{status: status, err: err}

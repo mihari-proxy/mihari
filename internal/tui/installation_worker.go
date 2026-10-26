@@ -9,7 +9,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
-// Run owns all inspection/preparation calls, including discarded tea messages.
+// Run owns inspection, preparation and endpoint application calls, including discarded tea messages.
 type installationWorker struct {
 	diagnostics ui.LocalTaskDiagnostics
 	mu          sync.Mutex
