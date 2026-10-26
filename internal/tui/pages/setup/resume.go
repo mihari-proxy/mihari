@@ -35,6 +35,11 @@ func (m *Model) Automatic() bool { return m.automatic }
 // WaitingRestart reports saved configuration awaiting a new daemon instance.
 func (m *Model) WaitingRestart() bool { return m.waitingRestart }
 
+// SetEndpointRestartState shows service application without discarding setup input.
+func (m *Model) SetEndpointRestartState(pending bool, message string) {
+	m.restartApplying, m.restartMessage = pending, message
+}
+
 // ObserveDaemon supplies owner identity already available on the authenticated session.
 func (m *Model) ObserveDaemon(status protocol.Status, core protocol.CoreStatus) {
 	m.setupTargetAvailable = slices.Contains(status.Capabilities, protocol.CapabilitySetupTarget)
@@ -53,7 +58,7 @@ func (m *Model) resumeFromState() tea.Cmd {
 	if m.status.RestartRequired {
 		m.waitingRestart = true
 		m.step = stepEndpoints
-		return nil
+		return m.applySavedEndpoints(false)
 	}
 	if m.portRecovery {
 		m.step = stepEndpoints
@@ -74,7 +79,7 @@ func (m *Model) resumeFromState() tea.Cmd {
 // saveEndpointsPrompt explains immediate persistence and the required daemon restart.
 func (m *Model) saveEndpointsPrompt() tea.Cmd {
 	return func() tea.Msg {
-		return ui.ConfirmationRequestMsg{Title: "Save local endpoints?", Impact: "Save these ports now, then restart the daemon to apply them before continuing.", Rollback: "Saved ports remain in place if setup is interrupted.", OnConfirm: func() tea.Msg { return saveEndpointsStartMsg{} }}
+		return ui.ConfirmationRequestMsg{Title: "Save and apply local endpoints?", Impact: "Save these ports and restart the installed Mihari service to apply them. Active connections will be interrupted. Administrator/root privileges are required for automatic restart.", Rollback: "Saved ports remain in place if service restart fails or setup is interrupted.", OnConfirm: func() tea.Msg { return saveEndpointsStartMsg{} }}
 	}
 }
 
@@ -123,7 +128,12 @@ func (m *Model) handleEndpointsSaved(msg endpointsSavedMsg) (ui.Page, tea.Cmd) {
 		m.step = stepCore
 		return m, m.fetchCoreLocal()
 	}
-	return m, nil
+	return m, m.applySavedEndpoints(false)
+}
+
+func (m *Model) applySavedEndpoints(retry bool) tea.Cmd {
+	request := ui.ApplySavedEndpointsMsg{Page: ui.PageSetup, Status: m.status, Retry: retry}
+	return func() tea.Msg { return request }
 }
 
 // reloadInPlace refreshes daemon state while retaining the current page and input.
