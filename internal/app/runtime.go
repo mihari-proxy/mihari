@@ -171,7 +171,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 			// the retained runtime YAML up to date before constructing clients or
 			// starting the core; a rejected candidate leaves the old file intact.
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			err := core.ReconcileRuntimeEndpoints(ctx, core.OSCommandRunner{}, paths.CoreBinary, paths.Root, paths.RuntimeConfig, settings)
+			err := core.ReconcileRuntimeEndpoints(ctx, core.OSCommandRunner{}, paths.CoreBinary, paths.Root, paths.RuntimeConfig, settings, options.DiagnosticReporter)
 			cancel()
 			if err != nil {
 				return nil, err

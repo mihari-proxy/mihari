@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -19,7 +20,9 @@ import (
 // The caller must be the sole business-file writer for this data root. This is
 // startup assembly, before Manager.Run can accept or execute config mutations;
 // the source recheck detects stale preparation, not arbitrary external writers.
-func ReconcileRuntimeEndpoints(ctx context.Context, runner CommandRunner, binaryPath, dataDir, path string, settings config.Settings) (resultErr error) {
+// On Windows all daemons sharing a data root must use the same control endpoint;
+// endpoint reservation does not serialize different endpoints on the same root.
+func ReconcileRuntimeEndpoints(ctx context.Context, runner CommandRunner, binaryPath, dataDir, path string, settings config.Settings, reporter diagnostics.Reporter) (resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -75,7 +78,13 @@ func ReconcileRuntimeEndpoints(ctx context.Context, runner CommandRunner, binary
 	}
 	defer func() {
 		if cleanupErr := os.Remove(candidate.Name()); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
-			resultErr = errors.Join(resultErr, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "remove runtime endpoint candidate"}, cleanupErr))
+			if resultErr != nil {
+				resultErr = errors.Join(resultErr, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "remove runtime endpoint candidate"}, cleanupErr))
+			} else if reporter != nil {
+				// The runtime file has already committed. Candidate cleanup is a
+				// warning, matching trusted startup, and must not degrade startup.
+				reporter(ctx, diagnostics.Record{Component: "core", Event: "configuration.cleanup.failed", Level: slog.LevelWarn, Err: cleanupErr})
+			}
 		}
 	}()
 	_, writeErr := candidate.Write(content)

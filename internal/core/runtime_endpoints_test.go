@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -39,9 +41,50 @@ func TestReconcileRuntimeEndpoints_CancellationAfterBootstrap(t *testing.T) {
 	// Observing the completed bootstrap cancels the context, without relying
 	// on parsing speed or a sleep to land cancellation during filesystem IO.
 	observed := bootstrapCancellationContext{Context: ctx, path: path, cancel: cancel}
-	err := ReconcileRuntimeEndpoints(observed, nil, filepath.Join(root, "missing-core"), root, path, settings)
+	err := ReconcileRuntimeEndpoints(observed, nil, filepath.Join(root, "missing-core"), root, path, settings, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("startup ignored cancellation after bootstrap: %v", err)
+	}
+}
+
+func TestReconcileRuntimeEndpoints_CommittedCleanupFailureIsWarning(t *testing.T) {
+	root := t.TempDir()
+	path, binary := filepath.Join(root, "config.yaml"), filepath.Join(root, "mihomo")
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("a", 64)
+	if err := WriteBootstrapConfig(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("inert core fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settings.MixedAddr = "127.0.0.2:9290"
+	runner := endpointRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		candidate := args[4]
+		if err := EnsureRuntimeConfig(candidate, settings); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(candidate); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(candidate, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(candidate, "block-cleanup"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return nil, nil
+	})
+	var records []diagnostics.Record
+	err := ReconcileRuntimeEndpoints(t.Context(), runner, binary, root, path, settings, func(_ context.Context, record diagnostics.Record) { records = append(records, record) })
+	if err != nil {
+		t.Fatalf("committed endpoints became startup failure: %v", err)
+	}
+	if err := EnsureRuntimeConfig(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Level != slog.LevelWarn || records[0].Event != "configuration.cleanup.failed" || records[0].Err == nil {
+		t.Fatalf("cleanup warning lost: %+v", records)
 	}
 }
 
@@ -66,7 +109,7 @@ func TestReconcileRuntimeEndpoints_AlignedConfigRemainsUntouched(t *testing.T) {
 		t.Fatal("unchanged config was revalidated")
 		return nil, nil
 	})
-	if err := ReconcileRuntimeEndpoints(t.Context(), runner, root, root, path, settings); err != nil {
+	if err := ReconcileRuntimeEndpoints(t.Context(), runner, root, root, path, settings, nil); err != nil {
 		t.Fatal(err)
 	}
 	current, err := os.ReadFile(path)
@@ -129,7 +172,7 @@ func TestReconcileRuntimeEndpoints_ValidatesBeforePublication(t *testing.T) {
 				}
 				return nil, nil
 			})
-			err = ReconcileRuntimeEndpoints(ctx, runner, binary, root, path, settings)
+			err = ReconcileRuntimeEndpoints(ctx, runner, binary, root, path, settings, nil)
 			if calls != 1 {
 				t.Fatalf("validation calls=%d", calls)
 			}
@@ -213,7 +256,7 @@ func TestReconcileRuntimeEndpoints_RejectsUnmanagedFields(t *testing.T) {
 				t.Fatal("unsafe config reached validation")
 				return nil, nil
 			})
-			if err := ReconcileRuntimeEndpoints(t.Context(), runner, filepath.Join(root, "missing-core"), root, path, settings); err == nil {
+			if err := ReconcileRuntimeEndpoints(t.Context(), runner, filepath.Join(root, "missing-core"), root, path, settings, nil); err == nil {
 				t.Fatal("unmanaged configuration accepted")
 			}
 			current, err := os.ReadFile(path)

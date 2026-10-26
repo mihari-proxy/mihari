@@ -76,6 +76,8 @@ details: {"field":"bind-address"}
 
 不匹配时先生成同目录临时候选；存在本地核心则通过其 -t 检查，检查有 15 秒超时。发布前重查原文件字节，发生变动拒绝覆盖，成功后沿用原子写入。核心尚未启动，不执行 live reload。尚未安装核心时可保存端点，沿用 bootstrap 配置无需本地核心的行为。未完成核心更新时仍跳过该路径，保留既有修复控制面。
 
-该启动 API 要求调用方独占此数据根的业务写入权。Unix 启动已有 daemon lease；Windows 改为先独占控制 named pipe，再读取 settings、装配 runtime，并将同一 listener 交给正常或 degraded 控制服务。重复启动在进入业务配置处理前失败，listener 在装配失败及服务退出时关闭，底层只关闭一次。执行同步时 Manager.Run 尚未启动，因此不存在当前 Manager 的并发配置 mutation。源文件重查用于发现候选准备期间的变化，不是为不遵守单写入者约束的任意外部写者提供 compare-and-swap 保证。启动快速路径也会在完成配置读取或 bootstrap 创建后重新检查 context，避免已经取消的启动继续成功。
+该启动 API 要求调用方独占此数据根的业务写入权。Unix 启动已有 daemon lease；Windows 改为先独占控制 named pipe，再读取 settings、装配 runtime，并将同一 listener 交给正常或 degraded 控制服务。Windows 的保证要求共享同一数据根的 daemon 使用同一控制端点；用不同 MIHARI_CONTROL_ENDPOINT 同时运行多个 daemon 共享同一数据根不在此保证范围内。重复启动在进入业务配置处理前失败，listener 在装配失败及服务退出时关闭，底层只关闭一次。执行同步时 Manager.Run 尚未启动，因此不存在当前 Manager 的并发配置 mutation。源文件重查用于发现候选准备期间的变化，不是为不遵守单写入者约束的任意外部写者提供 compare-and-swap 保证。ReconcileRuntimeEndpoints 在完成读取或 bootstrap 创建后重新检查自身传入的 context；这不表示既有 BuildRuntimeWithOptions 整个装配过程已支持调用方取消。
 
 正式回归测试 TestBuildRuntime_EndpointUpdateSurvivesRestart 通过业务 Manager 保存端点后重新装配 daemon，覆盖 Mixed IP、Mixed 端口、Controller 和 Web 地址。旧代码在前三种场景失败，修复后全部通过。core 测试另外覆盖校验前不发布、校验失败或取消保留原文件、准备期间源配置变动拒绝覆盖、候选清理、认证/非法字段拒绝和配置无变动时保持原字节。全部使用合成配置及隔离目录。
+
+候选临时文件在成功提交后清理失败，只通过现有诊断 reporter 记录 WARN，不把已成功更新的配置改判为启动失败；准备本身已失败时仍合并保留清理错误。此行为与 trusted 启动保持一致，并有单独回归测试。
