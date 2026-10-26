@@ -396,6 +396,11 @@ func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if command, consumed := model.updateDiagnostics(message); consumed {
 		return model, command
 	}
+	if key, ok := message.(tea.KeyPressMsg); ok {
+		if command, consumed := model.retrySavedEndpoints(key); consumed {
+			return model, command
+		}
+	}
 	if model.endpointRestart != nil && model.endpointRestart.pending {
 		if _, key := message.(tea.KeyPressMsg); key {
 			return model, nil
@@ -531,9 +536,6 @@ func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model, model.applySavedEndpoints(typed)
 	case endpointRestartResultMsg:
 		return model, model.finishEndpointRestart(typed)
-	case systempage.RestartRequiredMsg:
-		model.modal = NewDetail(ui.RestartRequiredTitle, ui.RestartRequiredBody)
-		return model, nil
 	case setuppage.ReadyMsg:
 		if model.endpointRestart != nil && model.endpointRestart.pending {
 			return model, nil
@@ -818,6 +820,9 @@ func (model Model) openHelp() (Model, tea.Cmd) {
 
 // applySessionEvent reconciles daemon observations and resumes setup across owner changes.
 func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
+	if model.ignoresPreRestartEvent(event) {
+		return nil
+	}
 	var command tea.Cmd
 	model.monitor.Observe(event)
 	// Only push-stream events carry a non-zero ObservedAt; non-stream events
@@ -827,9 +832,6 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 	}
 	switch event.Kind {
 	case session.EventStatus:
-		if model.ignoresPreRestartStatus(event.Status) {
-			return nil
-		}
 		statusEpochAdvanced := !model.statusEpochKnown || event.Epoch > model.statusEpoch
 		if model.statusEpochKnown && (event.Epoch < model.statusEpoch || (!statusEpochAdvanced && event.Status.Revision < model.status.Revision)) {
 			break

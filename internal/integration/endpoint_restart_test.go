@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/app"
+	"github.com/mihari-proxy/mihari/internal/buildinfo"
 	"github.com/mihari-proxy/mihari/internal/config"
 	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -45,7 +46,7 @@ func TestEndpointRestartIPC_AppliesSavedSettingsAfterOwnerReplacement(t *testing
 		if err != nil {
 			return nil, err
 		}
-		store := state.NewStore(state.Snapshot{Health: "ok", StartedAt: startedAt, Core: state.CoreState{Status: "missing"}})
+		store := state.NewStore(state.Snapshot{Version: buildinfo.Version, Health: "ok", StartedAt: startedAt, Core: state.CoreState{Status: "missing"}})
 		manager := runtimeapi.New(runtimeapi.Options{Store: store, Settings: settings, SettingsPath: settingsPath, Onboarding: ob})
 		listener, err := transport.Listen(endpoint)
 		if err != nil {

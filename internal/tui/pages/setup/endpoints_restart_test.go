@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"reflect"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -16,7 +17,7 @@ func TestSetupSavedEndpoints_RequestsAutomaticApplication(t *testing.T) {
 		t.Fatal("saving endpoints only displayed restart instructions")
 	}
 	request, ok := cmd().(ui.ApplySavedEndpointsMsg)
-	if !ok || request.Page != ui.PageSetup || request.Status.MixedAddr != status.MixedAddr {
+	if !ok || request.Page != ui.PageSetup || request.Retry || !reflect.DeepEqual(request.Status, status) {
 		t.Fatalf("request=%+v", request)
 	}
 }

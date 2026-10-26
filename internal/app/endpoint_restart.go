@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/mihari-proxy/mihari/internal/buildinfo"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
@@ -26,10 +27,11 @@ type EndpointRestartService interface {
 
 // EndpointRestartOptions supplies the service boundary and cancellable waiter.
 type EndpointRestartOptions struct {
-	Client   EndpointRestartClient
-	Service  EndpointRestartService
-	Elevated func() bool
-	Wait     func(context.Context, time.Duration) error
+	CurrentVersion string
+	Client         EndpointRestartClient
+	Service        EndpointRestartService
+	Elevated       func() bool
+	Wait           func(context.Context, time.Duration) error
 }
 
 // EndpointRestartResult confirms the new daemon and its applied endpoint settings.
@@ -51,6 +53,13 @@ func RestartSavedEndpoints(ctx context.Context, target protocol.OnboardingStatus
 	before, err := readEndpointRestartState(ctx, opts.Client)
 	if err != nil {
 		return EndpointRestartResult{}, err
+	}
+	version := opts.CurrentVersion
+	if version == "" {
+		version = buildinfo.Version
+	}
+	if err := endpointVersionError(before.Status, version); err != nil {
+		return before, err
 	}
 	if !sameEndpointTargets(before.Ports, target) {
 		return before, protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "Saved ports changed before the service restart; recheck the latest configuration"}
@@ -75,6 +84,11 @@ func RestartSavedEndpoints(ctx context.Context, target protocol.OnboardingStatus
 	}
 	for {
 		current, readErr := readEndpointRestartState(ctx, opts.Client)
+		if readErr == nil {
+			if err := endpointVersionError(current.Status, version); err != nil {
+				return current, err
+			}
+		}
 		if readErr == nil && current.Status.PID > 0 &&
 			(!needsRestart || current.Status.PID != before.Status.PID || !current.Status.StartedAt.Equal(before.Status.StartedAt)) &&
 			current.Status.Health == "ok" && !current.Ports.RestartRequired && sameEndpointTargets(current.Ports, target) {
@@ -85,6 +99,11 @@ func RestartSavedEndpoints(ctx context.Context, target protocol.OnboardingStatus
 			coreOptional := !requireCore && !core.LocalReady && core.Status == "missing"
 			if coreErr == nil && (core.Status == "running" || coreOptional) {
 				confirmed, confirmErr := readEndpointRestartState(ctx, opts.Client)
+				if confirmErr == nil {
+					if err := endpointVersionError(confirmed.Status, version); err != nil {
+						return confirmed, err
+					}
+				}
 				if confirmErr == nil && confirmed.Status.PID == current.Status.PID && confirmed.Status.StartedAt.Equal(current.Status.StartedAt) &&
 					confirmed.Status.Health == "ok" && !confirmed.Ports.RestartRequired && sameEndpointTargets(confirmed.Ports, target) {
 					return confirmed, nil
@@ -103,6 +122,13 @@ func RestartSavedEndpoints(ctx context.Context, target protocol.OnboardingStatus
 			return before, diagnostics.Wrap(endpointRestartError("Ports are saved, but the daemon has not confirmed their application"), errors.Join(err, readErr))
 		}
 	}
+}
+
+func endpointVersionError(status protocol.Status, version string) error {
+	if version == "" || status.DaemonVersion != version {
+		return endpointRestartError(fmt.Sprintf("Ports are saved. Daemon version %q must match CLI version %q; synchronize the installed Mihari binary before applying ports", status.DaemonVersion, version))
+	}
+	return nil
 }
 
 func restartEndpointOwner(ctx context.Context, before protocol.Status, opts EndpointRestartOptions) error {
