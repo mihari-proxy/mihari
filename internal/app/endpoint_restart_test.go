@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mihari-proxy/mihari/internal/buildinfo"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
@@ -14,6 +15,7 @@ type endpointRestartFake struct {
 	status     protocol.Status
 	ports      protocol.OnboardingStatus
 	pid        int
+	pidErr     error
 	restarts   int
 	restartErr error
 	onRestart  func()
@@ -35,7 +37,7 @@ func (f *endpointRestartFake) Core(context.Context) (protocol.CoreStatus, error)
 	}
 	return f.core, nil
 }
-func (f *endpointRestartFake) ManagedDaemonPID(context.Context) (int, error) { return f.pid, nil }
+func (f *endpointRestartFake) ManagedDaemonPID(context.Context) (int, error) { return f.pid, f.pidErr }
 func (f *endpointRestartFake) Restart() error {
 	f.restarts++
 	if f.onRestart != nil {
@@ -46,10 +48,38 @@ func (f *endpointRestartFake) Restart() error {
 
 func endpointRestartFixture() (*endpointRestartFake, EndpointRestartOptions) {
 	f := &endpointRestartFake{
-		status: protocol.Status{PID: 42, StartedAt: time.Unix(100, 0), Health: "ok"}, pid: 42,
+		status: protocol.Status{DaemonVersion: buildinfo.Version, PID: 42, StartedAt: time.Unix(100, 0), Health: "ok"}, pid: 42,
 		ports: protocol.OnboardingStatus{MixedAddr: "127.0.0.1:19190", ControllerAddr: "127.0.0.1:9090", WebAddr: "127.0.0.1:9191", RestartRequired: true},
 	}
 	return f, EndpointRestartOptions{Client: f, Service: f, Elevated: func() bool { return true }}
+}
+
+func TestRestartSavedEndpoints_RequiresMatchingClientVersion(t *testing.T) {
+	for _, phase := range []string{"before restart", "after restart", "missing version", "different prerelease case"} {
+		t.Run(phase, func(t *testing.T) {
+			f, opts := endpointRestartFixture()
+			target := f.ports
+			wantRestarts := 0
+			switch phase {
+			case "after restart":
+				wantRestarts = 1
+				f.onRestart = func() { f.status.PID++; f.status.DaemonVersion = "v0.0.1-other"; f.ports.RestartRequired = false }
+			case "missing version":
+				f.status.DaemonVersion = ""
+			case "different prerelease case":
+				opts.CurrentVersion = "v1.0.0-dev.A"
+				f.status.DaemonVersion = "v1.0.0-dev.a"
+			default:
+				f.status.DaemonVersion = "v0.0.1-other"
+			}
+			opts.Wait = func(context.Context, time.Duration) error { return context.DeadlineExceeded }
+			_, err := RestartSavedEndpoints(context.Background(), target, opts)
+			var api protocol.APIError
+			if !errors.As(err, &api) || api.Code != protocol.CodeInvalidState || f.restarts != wantRestarts || !sameEndpointTargets(f.ports, target) {
+				t.Fatalf("mismatched daemon accepted: restarts=%d err=%v", f.restarts, err)
+			}
+		})
+	}
 }
 
 func TestRestartSavedEndpoints_CoreConfirmationRechecksEndpoints(t *testing.T) {
@@ -81,6 +111,16 @@ func TestRestartSavedEndpoints_VerifiesNewDaemonAndSavedPorts(t *testing.T) {
 	}
 }
 
+func TestRestartSavedEndpoints_UsesRunningClientVersion(t *testing.T) {
+	f, opts := endpointRestartFixture()
+	opts.CurrentVersion = "v9.9.9-dev.2"
+	f.status.DaemonVersion = opts.CurrentVersion
+	f.ports.RestartRequired = false
+	if _, err := RestartSavedEndpoints(context.Background(), f.ports, opts); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRestartSavedEndpoints_AlreadyAppliedDoesNotRestart(t *testing.T) {
 	f, opts := endpointRestartFixture()
 	want := f.ports
@@ -93,7 +133,7 @@ func TestRestartSavedEndpoints_AlreadyAppliedDoesNotRestart(t *testing.T) {
 }
 
 func TestRestartSavedEndpoints_RejectsUnsafeRestart(t *testing.T) {
-	for _, condition := range []string{"permission", "foreign daemon", "changed ports", "cancelled", "unreachable"} {
+	for _, condition := range []string{"permission", "foreground daemon", "service probe error", "foreign daemon", "changed ports", "cancelled", "unreachable"} {
 		t.Run(condition, func(t *testing.T) {
 			f, opts := endpointRestartFixture()
 			want := f.ports
@@ -102,6 +142,10 @@ func TestRestartSavedEndpoints_RejectsUnsafeRestart(t *testing.T) {
 			switch condition {
 			case "permission":
 				opts.Elevated = func() bool { return false }
+			case "foreground daemon":
+				opts.Service = nil
+			case "service probe error":
+				f.pidErr = errors.New("service inspection failed")
 			case "foreign daemon":
 				f.pid = 99
 			case "changed ports":
@@ -114,6 +158,35 @@ func TestRestartSavedEndpoints_RejectsUnsafeRestart(t *testing.T) {
 			_, err := RestartSavedEndpoints(ctx, want, opts)
 			if err == nil || f.restarts != 0 || !f.ports.RestartRequired {
 				t.Fatalf("ports=%+v restarts=%d err=%v", f.ports, f.restarts, err)
+			}
+			var api protocol.APIError
+			switch condition {
+			case "permission", "foreground daemon", "foreign daemon", "changed ports":
+				code := protocol.CodeInvalidState
+				if condition == "permission" {
+					code = protocol.CodePermissionDenied
+				}
+				if condition == "changed ports" {
+					code = protocol.CodeRevisionConflict
+				}
+				if !errors.As(err, &api) || api.Code != code {
+					t.Fatalf("expected %s, got %v", code, err)
+				}
+			case "service probe error":
+				if !errors.Is(err, f.pidErr) {
+					t.Fatalf("lost inspection failure: %v", err)
+				}
+			case "cancelled":
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("lost cancellation: %v", err)
+				}
+			case "unreachable":
+				if !errors.Is(err, f.statusErr) {
+					t.Fatalf("lost connection failure: %v", err)
+				}
+			}
+			if !sameEndpointTargets(f.ports, want) && condition != "changed ports" {
+				t.Fatal("failed application changed saved ports")
 			}
 		})
 	}

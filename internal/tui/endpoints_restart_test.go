@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/app"
+	"github.com/mihari-proxy/mihari/internal/buildinfo"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	setuppage "github.com/mihari-proxy/mihari/internal/tui/pages/setup"
 	"github.com/mihari-proxy/mihari/internal/tui/session"
@@ -54,6 +55,7 @@ func (f *endpointRestartClient) Restart() error {
 func endpointRestartModel() (Model, *endpointRestartClient, ui.ApplySavedEndpointsMsg) {
 	f := &endpointRestartClient{status: protocol.Status{PID: 42, StartedAt: time.Unix(100, 0), Health: "ok", SetupRequired: true}, ports: protocol.OnboardingStatus{MixedAddr: "127.0.0.1:19190", ControllerAddr: "127.0.0.1:9090", WebAddr: "127.0.0.1:9191", RestartRequired: true}, managedPID: 42}
 	m := NewModel()
+	f.status.DaemonVersion = buildinfo.Version
 	m.status = f.status
 	m.connected = true
 	m.active = ui.PageSystem
@@ -62,6 +64,71 @@ func endpointRestartModel() (Model, *endpointRestartClient, ui.ApplySavedEndpoin
 		return app.RestartSavedEndpoints(ctx, target, opts)
 	}
 	return m, f, ui.ApplySavedEndpointsMsg{Page: ui.PageSystem, Status: f.ports}
+}
+
+func TestEndpointRestart_QueuesDifferentSavedTargets(t *testing.T) {
+	m, f, request := endpointRestartModel()
+	next, first := m.Update(request)
+	m = next.(Model)
+	f.ports.MixedAddr = "127.0.0.1:29190"
+	request.Status = f.ports
+	next, concurrent := m.Update(request)
+	m = next.(Model)
+	if concurrent != nil {
+		t.Fatal("started overlapping application")
+	}
+	next, queued := m.Update(first())
+	m = next.(Model)
+	if queued == nil || !m.endpointRestart.pending {
+		t.Fatal("newer saved ports were silently dropped")
+	}
+	next, _ = m.Update(queued())
+	m = next.(Model)
+	if f.restarts != 1 || m.endpointRestart.pending || m.endpointRestart.result.Ports.MixedAddr != request.Status.MixedAddr {
+		t.Fatal("newer saved ports were not applied")
+	}
+}
+
+func TestEndpointRestart_FailedSystemApplicationCanRetryWithKey(t *testing.T) {
+	m, f, request := endpointRestartModel()
+	f.failure = protocol.APIError{Code: protocol.CodeInvalidState, Message: "specific restart failure"}
+	next, cmd := m.Update(request)
+	m = next.(Model)
+	next, _ = m.Update(cmd())
+	m = next.(Model)
+	view := m.modal.body
+	if !strings.Contains(view, "could not be restarted") || !strings.Contains(view, "F2") || !strings.Contains(view, "mihari service restart") {
+		t.Fatalf("failure dropped cause or recovery instructions: %s", view)
+	}
+	f.failure = nil
+	next, retry := m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	m = next.(Model)
+	if retry == nil || !m.endpointRestart.pending {
+		t.Fatal("System has no explicit retry")
+	}
+	next, _ = m.Update(retry())
+	m = next.(Model)
+	if f.restarts != 2 || m.endpointRestart.pending {
+		t.Fatal("retry did not complete")
+	}
+}
+
+func TestEndpointRestart_DropsOldResourceSnapshots(t *testing.T) {
+	m, _, request := endpointRestartModel()
+	old := m.status
+	next, cmd := m.Update(request)
+	m = next.(Model)
+	next, _ = m.Update(cmd())
+	m = next.(Model)
+	m.core = protocol.CoreStatus{Status: "running", PID: 900}
+	m.applySessionEvent(session.Event{Kind: session.EventCore, Status: old, Core: protocol.CoreStatus{Status: "stopped", PID: 800}})
+	if m.core.PID != 900 {
+		t.Fatal("old core snapshot replaced restarted state")
+	}
+	m.applySessionEvent(session.Event{Kind: session.EventCore, Status: m.status, Core: protocol.CoreStatus{Status: "running", PID: 901}})
+	if m.core.PID != 901 {
+		t.Fatal("new daemon snapshot was rejected")
+	}
 }
 
 func TestEndpointRestart_SystemSaveRestartsOnceAndReturnsToSystem(t *testing.T) {

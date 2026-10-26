@@ -11,6 +11,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	setuppage "github.com/mihari-proxy/mihari/internal/tui/pages/setup"
 	systempage "github.com/mihari-proxy/mihari/internal/tui/pages/system"
+	"github.com/mihari-proxy/mihari/internal/tui/session"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -21,6 +22,8 @@ type endpointRestartUI struct {
 	result     app.EndpointRestartResult
 	generation uint64
 	modal      *Modal
+	queued     *ui.ApplySavedEndpointsMsg
+	failed     bool
 }
 
 type endpointRestartResultMsg struct {
@@ -45,6 +48,10 @@ func (model *Model) applySavedEndpoints(request ui.ApplySavedEndpointsMsg) tea.C
 	previous := model.endpointRestart
 	if previous != nil {
 		if previous.pending {
+			if !sameSavedEndpoints(previous.request.Status, request.Status) {
+				previous.queued = &request
+				return nil
+			}
 			// A status poll can enter automatic setup before the save result
 			// reaches System. Retain the explicit edit's return destination.
 			if sameSavedEndpoints(previous.request.Status, request.Status) && request.Page == ui.PageSystem {
@@ -94,16 +101,21 @@ func (model *Model) finishEndpointRestart(result endpointRestartResultMsg) tea.C
 	}
 	intent := ui.ActionIntentMsg{Action: ui.ActionServiceRestart, Page: u.request.Page, Title: "Apply saved ports"}
 	model.recordActionOutcome(intent, result)
+	if u.queued != nil {
+		return model.applySavedEndpoints(*u.queued)
+	}
 	if result.err != nil {
-		message := "Ports are saved. Automatic service restart did not complete; see F2 for details.\nRun mihari service restart from an administrator/root terminal, or stop and restart the foreground daemon."
+		u.failed = true
+		message := "Ports are saved. Automatic service restart did not complete; see F2 for details.\nRun mihari service restart from an administrator/root terminal, or stop and restart the foreground daemon.\nPress r to retry automatic application."
 		var api protocol.APIError
 		if errors.As(result.err, &api) {
-			message = diagnostics.EscapeTerminal(api.Message)
+			message = diagnostics.EscapeTerminal(api.Message) + "\n" + message
 		}
 		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
 			page.SetEndpointRestartState(false, message)
 		}
 		model.modal = NewDetail("Ports saved; restart required", message)
+		u.modal = model.modal
 		return model.loadRootServiceStatus()
 	}
 	u.result = result.result
@@ -128,6 +140,28 @@ func (model *Model) finishEndpointRestart(result endpointRestartResultMsg) tea.C
 		}
 	}
 	return model.loadRootServiceStatus()
+}
+
+func (model *Model) retrySavedEndpoints(key tea.KeyPressMsg) (tea.Cmd, bool) {
+	u := model.endpointRestart
+	if key.String() != "r" || u == nil || u.pending || !u.failed || u.request.Page != ui.PageSystem ||
+		(model.modal != u.modal && (model.modal != nil || model.active != ui.PageSystem)) {
+		return nil, false
+	}
+	request := u.request
+	request.Retry = true
+	return model.applySavedEndpoints(request), true
+}
+
+func (model *Model) ignoresPreRestartEvent(event session.Event) bool {
+	u := model.endpointRestart
+	if u == nil || event.Status.PID <= 0 {
+		return false
+	}
+	if u.pending && event.Kind != session.EventStatus {
+		return sameDaemonOwner(event.Status, u.before)
+	}
+	return model.ignoresPreRestartStatus(event.Status)
 }
 
 func sameDaemonOwner(a, b protocol.Status) bool {

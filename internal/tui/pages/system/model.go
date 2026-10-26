@@ -428,9 +428,6 @@ type Model struct {
 	revealsListener func() bool
 }
 
-// RestartRequiredMsg tells the root shell to show the existing restart dialog.
-type RestartRequiredMsg struct{}
-
 type portHoldsMsg struct {
 	generation uint64
 	failures   []error
