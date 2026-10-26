@@ -80,4 +80,4 @@ details: {"field":"bind-address"}
 
 正式回归测试 TestBuildRuntime_EndpointUpdateSurvivesRestart 通过业务 Manager 保存端点后重新装配 daemon，覆盖 Mixed IP、Mixed 端口、Controller 和 Web 地址。旧代码在前三种场景失败，修复后全部通过。core 测试另外覆盖校验前不发布、校验失败或取消保留原文件、准备期间源配置变动拒绝覆盖、候选清理、认证/非法字段拒绝和配置无变动时保持原字节。全部使用合成配置及隔离目录。
 
-候选临时文件在成功提交后清理失败，只通过现有诊断 reporter 记录 WARN，不把已成功更新的配置改判为启动失败；准备本身已失败时仍合并保留清理错误。此行为与 trusted 启动保持一致，并有单独回归测试。
+候选临时文件在成功提交后清理失败，只通过现有诊断 reporter 记录 WARN，不把已成功更新的配置改判为启动失败；准备本身已失败时仍合并保留清理错误。运行配置发布使用既有 AtomicWriteWithCommit 结果，目录同步等提交后 warning 同样记录 WARN 并保持成功，不与未提交失败混淆。候选清理和已提交 warning 均有单独回归测试。

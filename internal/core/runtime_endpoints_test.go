@@ -88,6 +88,36 @@ func TestReconcileRuntimeEndpoints_CommittedCleanupFailureIsWarning(t *testing.T
 	}
 }
 
+func TestCommitRuntimeEndpoints_PostCommitWarningKeepsPublishedConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	previous, candidate := []byte("old configuration"), []byte("new configuration")
+	if err := config.AtomicWrite(path, previous, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	warning := errors.New("synthetic directory sync warning")
+	var records []diagnostics.Record
+	err := commitRuntimeEndpoints(t.Context(), func(_ context.Context, record diagnostics.Record) {
+		records = append(records, record)
+	}, func() (config.CommitResult, error) {
+		result, err := config.AtomicWriteWithCommit(path, candidate, 0o600)
+		if err != nil || !result.Committed {
+			t.Fatalf("fixture could not commit: %+v %v", result, err)
+		}
+		result.Warning = warning
+		return result, nil
+	})
+	if err != nil {
+		t.Fatalf("published config became startup failure: %v", err)
+	}
+	current, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(current, candidate) {
+		t.Fatalf("published config lost: %q %v", current, err)
+	}
+	if len(records) != 1 || records[0].Level != slog.LevelWarn || !errors.Is(records[0].Err, warning) {
+		t.Fatalf("commit warning lost: %+v", records)
+	}
+}
+
 func (f endpointRunner) Run(ctx context.Context, binary string, args ...string) ([]byte, error) {
 	return f(ctx, binary, args...)
 }

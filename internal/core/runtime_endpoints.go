@@ -112,8 +112,21 @@ func ReconcileRuntimeEndpoints(ctx context.Context, runner CommandRunner, binary
 		return protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "runtime configuration changed during endpoint preparation"}
 	}
 	// The core has not started, so publication needs no live controller reload.
-	if err := config.AtomicWrite(path, content, 0o600); err != nil {
+	return commitRuntimeEndpoints(ctx, reporter, func() (config.CommitResult, error) {
+		return config.AtomicWriteWithCommit(path, content, 0o600)
+	})
+}
+
+func commitRuntimeEndpoints(ctx context.Context, reporter diagnostics.Reporter, commit func() (config.CommitResult, error)) error {
+	result, err := commit()
+	if err != nil {
 		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "persist runtime endpoints"}, err)
+	}
+	if !result.Committed {
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "persist runtime endpoints"}, errors.New("runtime endpoints were not committed"))
+	}
+	if result.Warning != nil && reporter != nil {
+		reporter(ctx, diagnostics.Record{Component: "core", Event: "configuration.commit.warning", Level: slog.LevelWarn, Err: result.Warning})
 	}
 	return nil
 }
