@@ -162,9 +162,9 @@ Occupied 行上就要有 PID，不藏到详情里。Owned / Available / Unknown 
 3. Esc：丢草稿，回到查看。
 4. Enter：校验 → **仅 Occupied（他人占用）** 才自动换成空闲口；Owned / Available 不换。校验失败则 `lastError`，不弹确认。
 5. 值相对当前设置有变化 → `ActionApplyEndpointChange` 确认框（已有文案 `Replace configuration`）。
-6. 确认后 `PATCH /v1/onboarding`，只带三个地址，**不**改 `complete`。
-7. 成功：刷新 onboarding 行值；`RestartRequired` 则弹已有 `Restart required` 详情框。
-8. 失败：行 Failed chip + 顶部错误；不把底层错误原文（路径、完整订阅 URL）渲出去。
+6. 确认后通过 `PATCH /v1/onboarding` 仅提交实际变化的地址，**不**改 `complete`；先读取最新端口与 revision，无关 revision 冲突最多追加两次重试，目标地址被其他客户端修改则停止，网络等写入结果不明的失败不重放。确认文案说明自动服务重启与连接中断。
+7. 保存成功后刷新 onboarding 行值；`RestartRequired` 交给 TUI 根层的应用流程。管理员/root 权限下，先核对服务管理器中的 PID 与认证 IPC 中的 daemon PID，再重启已安装服务。等待新 daemon 的 PID 或启动时间变化、状态正常、保存地址一致且不再需要重启；此前已就绪的核心还须恢复 running。System 编辑完成后保留 System 页面；显式 Setup 在新状态加载后继续引导，自动恢复的 Setup 在资源就绪后退出。重复状态刷新不重复重启，排队的旧 daemon 状态不得重新打开 Setup。
+8. 保存失败仍显示行 Failed chip。服务重启或应用验证失败则明确显示“端口已保存，应用未完成”，保留已提交配置并通过共享诊断保留原因；不会将保存成功改成失败。权限不足时提示在管理员/root 终端运行 `mihari service restart`；前台或归属不符的 daemon 提示停止原进程后运行 `mihari daemon`。Setup 中 `r` 显式重试自动应用，Enter 重新读取状态；重新打开 TUI 会尝试处理仍待应用的配置。
 
 `pending` 时忽略 Enter，与其它 System 行一致。`mutationsEnabled == false` 或缺少 onboarding capability 时不能进编辑。
 
@@ -214,7 +214,7 @@ System `Client` 增加 `UpdateOnboarding`（Setup 已有）。
 2. 单列（width 70）：六张卡片自上而下，无水平拼接。
 3. 双栏（width 84）：Ports 全宽；下一行同时有 Daemon 与 mihomo core；About 全宽。
 4. Enter Mixed → 编辑态；Esc 恢复原值且不调用 UpdateOnboarding。
-5. 改 Controller 后 Enter → `ActionApplyEndpointChange`；Execute 发出的 PATCH 含三个地址、不含 `complete`。
+5. 改 Controller 后 Enter → `ActionApplyEndpointChange`；Execute 发出的 PATCH 只含实际变化的地址、不含 `complete`。
 6. 非法地址 / 非 loopback / 端口冲突 → 不弹确认，顶部错误。
 7. 状态分类（注入 listen + lookup，不读真实网卡表）：
    - listen 成功 → 灰 `Available`
@@ -225,7 +225,7 @@ System `Client` 增加 `UpdateOnboarding`（Setup 已有）。
    - lookup 失败 → 灰 `Unknown`
    - 渲染含 StatusDot，Occupied 为 Danger，Owned 为 Positive
 8. Occupied 行 Enter apply → 换成空闲口后再确认；Owned 行不改地址则不换口、不写盘。
-9. 写入后 `RestartRequired` → 根 shell 弹出已有 Restart required 框（可放 `internal/tui/model_test.go`）。
+9. 写入后 `RestartRequired` → 根 shell 发起自动应用；验证权限、服务 PID 归属、一次重启、新 daemon 身份、目标端口与已有核心恢复。失败保留保存结果，显式重试可恢复；退出 TUI 取消并回收应用任务。
 10. 断开 / 无 capability：Enter 端口行不进编辑。
 11. 面板行 Enter 仍走打开浏览器。
 

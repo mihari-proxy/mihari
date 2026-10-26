@@ -14,6 +14,7 @@ import (
 	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
+	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/logging"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	logspage "github.com/mihari-proxy/mihari/internal/tui/pages/logs"
@@ -315,6 +316,17 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 		events = controlSession.Start(sessionCtx)
 	}
 	model := newRunModel(ctx, options.Client, events, health, applier)
+	restartOptions := app.EndpointRestartOptions{Elevated: options.Elevated}
+	if restartOptions.Elevated == nil {
+		restartOptions.Elevated = elevate.IsElevated
+	}
+	if options.Client != nil {
+		restartOptions.Client = options.Client
+	}
+	if ownedService, ok := options.Service.(app.EndpointRestartService); ok {
+		restartOptions.Service = ownedService
+	}
+	model.endpointRestartApply = endpointRestartTask(installationWorker, restartOptions)
 	if page, ok := model.pages[ui.PageLogs].(*logspage.Model); ok {
 		defer page.Stop()
 	}
