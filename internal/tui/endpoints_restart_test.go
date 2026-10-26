@@ -25,6 +25,21 @@ type endpointRestartClient struct {
 	keepPending bool
 }
 
+type endpointSetupClient struct {
+	setuppage.Client
+	source *endpointRestartClient
+	reads  int
+}
+
+func (f *endpointSetupClient) Onboarding(ctx context.Context) (protocol.OnboardingStatus, error) {
+	f.reads++
+	return f.source.Onboarding(ctx)
+}
+
+func (f *endpointSetupClient) Core(ctx context.Context) (protocol.CoreStatus, error) {
+	return f.source.Core(ctx)
+}
+
 func (f *endpointRestartClient) Status(context.Context) (protocol.Status, error) {
 	return f.status, nil
 }
@@ -114,19 +129,55 @@ func TestEndpointRestart_FailedSystemApplicationCanRetryWithKey(t *testing.T) {
 }
 
 func TestEndpointRestart_SetupFailureDoesNotBlockRecoveryKeys(t *testing.T) {
-	m, f, request := endpointRestartModel()
-	m.active = ui.PageSetup
-	request.Page = ui.PageSetup
-	f.failure = errors.New("service restart failed")
-	next, cmd := m.Update(request)
-	m = next.(Model)
-	next, _ = m.Update(cmd())
-	m = next.(Model)
-	if m.modal != nil {
-		t.Fatal("Setup failure modal blocks the page's retry and recheck keys")
-	}
-	if m.endpointRestart.pending || !m.endpointRestart.failed {
-		t.Fatal("Setup failure did not release application state")
+	for _, key := range []tea.KeyPressMsg{{Code: 'r', Text: "r"}, {Code: tea.KeyEnter}} {
+		t.Run(key.String(), func(t *testing.T) {
+			m, f, request := endpointRestartModel()
+			m.active = ui.PageSetup
+			m.focus = ui.Focus{Area: ui.FocusContent, Page: ui.PageSetup}
+			m.width, m.height = 140, 50
+			client := &endpointSetupClient{source: f}
+			page := setuppage.NewWithContext(t.Context(), client, nil)
+			// Read saved state, but do not execute the unrelated host port probe.
+			page.Update(page.Load()())
+			m.pages[ui.PageSetup] = page
+			request.Page = ui.PageSetup
+			f.failure = errors.New("service restart failed")
+			next, cmd := m.Update(request)
+			m = next.(Model)
+			next, _ = m.Update(cmd())
+			m = next.(Model)
+			if m.modal != nil || m.endpointRestart.pending || !m.endpointRestart.failed {
+				t.Fatal("Setup failure blocked recovery")
+			}
+			if view := page.View(); !strings.Contains(view, "F2") || !strings.Contains(view, "mihari service restart") {
+				t.Fatal("Setup failure lost its recovery guidance")
+			}
+			reads := client.reads
+			_, recovery := m.Update(key)
+			if recovery == nil {
+				t.Fatal("recovery key was swallowed")
+			}
+			var requests []ui.ApplySavedEndpointsMsg
+			var execute func(tea.Cmd)
+			execute = func(command tea.Cmd) {
+				switch message := command().(type) {
+				case tea.BatchMsg:
+					for _, child := range message {
+						execute(child)
+					}
+				case ui.ApplySavedEndpointsMsg:
+					requests = append(requests, message)
+				}
+			}
+			execute(recovery)
+			if key.String() == "r" {
+				if len(requests) != 1 || !requests[0].Retry || requests[0].Page != ui.PageSetup || requests[0].Status.MixedAddr != f.ports.MixedAddr {
+					t.Fatalf("retry command did not request the saved endpoints: %+v", requests)
+				}
+			} else if client.reads != reads+1 {
+				t.Fatal("Enter did not re-read saved setup state")
+			}
+		})
 	}
 }
 
