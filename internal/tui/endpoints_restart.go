@@ -114,6 +114,11 @@ func (model *Model) finishEndpointRestart(result endpointRestartResultMsg) tea.C
 		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
 			page.SetEndpointRestartState(false, message)
 		}
+		if u.request.Page == ui.PageSetup {
+			// Setup renders the cause and recovery commands in place; keep its
+			// retry and recheck keys available without another modal dismissal.
+			return model.loadRootServiceStatus()
+		}
 		model.modal = NewDetail("Ports saved; restart required", message)
 		u.modal = model.modal
 		return model.loadRootServiceStatus()
