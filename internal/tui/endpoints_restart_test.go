@@ -113,6 +113,23 @@ func TestEndpointRestart_FailedSystemApplicationCanRetryWithKey(t *testing.T) {
 	}
 }
 
+func TestEndpointRestart_SetupFailureDoesNotBlockRecoveryKeys(t *testing.T) {
+	m, f, request := endpointRestartModel()
+	m.active = ui.PageSetup
+	request.Page = ui.PageSetup
+	f.failure = errors.New("service restart failed")
+	next, cmd := m.Update(request)
+	m = next.(Model)
+	next, _ = m.Update(cmd())
+	m = next.(Model)
+	if m.modal != nil {
+		t.Fatal("Setup failure modal blocks the page's retry and recheck keys")
+	}
+	if m.endpointRestart.pending || !m.endpointRestart.failed {
+		t.Fatal("Setup failure did not release application state")
+	}
+}
+
 func TestEndpointRestart_DropsOldResourceSnapshots(t *testing.T) {
 	m, _, request := endpointRestartModel()
 	old := m.status
