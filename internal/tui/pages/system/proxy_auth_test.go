@@ -160,3 +160,24 @@ func TestProxyAuth_LongRevealedCredentialsWrapScrollAndHide(t *testing.T) {
 		t.Fatal("hide retained revealed credentials")
 	}
 }
+
+func TestProxyAuth_PagingRequiresSelectionBeforeRowActions(t *testing.T) {
+	m := New(&fakeClient{}, nil)
+	m.SetSize(44, 20)
+	m.auth = authUI{open: true, loaded: true, selected: 3, draft: protocol.ProxyAuthConfig{Users: []protocol.ProxyAuthUser{{Username: "alice"}}}}
+	for i := range 20 {
+		m.auth.draft.Users = append(m.auth.draft.Users, protocol.ProxyAuthUser{Username: fmt.Sprint("user", i)})
+	}
+	m.updateAuth(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	m.updateAuth(tea.KeyPressMsg{Code: 'd'})
+	m.updateAuth(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(m.auth.draft.Users) != 21 || m.auth.edit != "" || m.auth.err == "" {
+		t.Fatal("paging allowed an action on the hidden selection")
+	}
+	m.updateAuth(tea.KeyPressMsg{Code: tea.KeyDown})
+	m.updateAuth(tea.KeyPressMsg{Code: tea.KeyUp})
+	m.updateAuth(tea.KeyPressMsg{Code: 'd'})
+	if len(m.auth.draft.Users) != 20 {
+		t.Fatal("explicit navigation did not restore row actions")
+	}
+}

@@ -289,6 +289,10 @@ func (m *Model) updateAuth(message tea.Msg) tea.Cmd {
 	if !a.loaded {
 		return nil
 	}
+	if a.manualScroll && (key.String() == "enter" || key.String() == "d" || key.String() == "delete") {
+		a.err = "Use Up/Down to select a row before editing or removing it."
+		return nil
+	}
 	users := m.authUsers()
 	n := len(users)
 	prefixStart := 4 + n
@@ -297,9 +301,11 @@ func (m *Model) updateAuth(message tea.Msg) tea.Cmd {
 	switch key.String() {
 	case "up":
 		a.manualScroll = false
+		a.err = ""
 		a.selected = max(0, a.selected-1)
 	case "down":
 		a.manualScroll = false
+		a.err = ""
 		a.selected = min(len(m.authRows())-1, a.selected+1)
 	case "pgup":
 		a.manualScroll = true
