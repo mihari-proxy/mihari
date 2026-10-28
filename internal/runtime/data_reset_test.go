@@ -101,7 +101,7 @@ func TestDataReset_RefusedMaintenanceRestoresOwnedProxy(t *testing.T) {
 	m := newTestManager(Options{BusinessReset: &resetFailureStore{}, Supervisor: refusingResetSupervisor{}, SysProxy: backend})
 	m.store.Store(state.Snapshot{Health: "ok", Core: state.CoreState{Status: "running", PID: 42}})
 	_, err := m.ResetBusinessData(t.Context(), Operation{ID: "refused"}, protocol.DataResetRequest{Digest: "fixture", Confirm: true, ConfirmAgain: true})
-	if err == nil || !backend.State.Enabled || m.store.Load().Core.PID != 42 {
+	if err == nil || backend.DisableCalls == 0 || backend.EnableCalls == 0 || !backend.State.Enabled || m.store.Load().Core.PID != 42 {
 		t.Fatalf("refused maintenance changed running service/proxy: enabled=%v err=%v", backend.State.Enabled, err)
 	}
 }

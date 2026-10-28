@@ -168,3 +168,14 @@ func TestProxyAuth_UnchangedConfigurationDoesNotReload(t *testing.T) {
 		t.Fatalf("unchanged config reloaded: reloads=%d err=%v", core.reloads, err)
 	}
 }
+
+func TestProxyAuth_UnresolvedReadReportsWarningAndReturnsFallback(t *testing.T) {
+	m := startupLoggingManager(t)
+	m.settings.ProxyAuth = &config.ProxyAuthSettings{Mode: "enabled"}
+	var records []diagnostics.Record
+	m.diagnosticReporter = func(_ context.Context, record diagnostics.Record) { records = append(records, record) }
+	status, err := m.ProxyAuth(t.Context(), false)
+	if err != nil || status.Problem == "" || len(records) != 1 || records[0].Event != "status.unresolved" || records[0].Err == nil {
+		t.Fatalf("unresolved read lost diagnostic or fallback: records=%d err=%v", len(records), err)
+	}
+}

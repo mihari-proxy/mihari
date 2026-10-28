@@ -17,10 +17,13 @@ func (m *Manager) ProxyAuth(ctx context.Context, reveal bool) (protocol.ProxyAut
 	if err := m.lockMaintenance(ctx); err != nil {
 		return protocol.ProxyAuthStatus{}, err
 	}
-	defer m.unlock()
-	status, err := m.proxyAuthStatus(m.settingsSnapshot(), reveal)
+	settings := m.settingsSnapshot()
+	status, err := m.proxyAuthStatus(settings, reveal)
+	revision := m.store.Load().Revision
+	m.unlock()
 	if err != nil {
-		return proxyAuthFallback(m.settingsSnapshot(), m.store.Load().Revision, "Saved proxy authentication cannot be resolved; inspect the subscription or reset proxy authentication", reveal), nil
+		m.reportWarning(ctx, "proxy-auth", "status.unresolved", err)
+		return proxyAuthFallback(settings, revision, "Saved proxy authentication cannot be resolved; inspect the subscription or reset proxy authentication", reveal), nil
 	}
 	return status, nil
 }
