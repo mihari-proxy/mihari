@@ -5,7 +5,13 @@ import (
 	"errors"
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/subscription"
+	"go.yaml.in/yaml/v3"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -71,5 +77,82 @@ func TestProxyAuth_StaleGenerationCannotPublishValidatedCandidate(t *testing.T) 
 	_, err := m.UpdateProxyAuth(t.Context(), Operation{ID: "stale"}, protocol.ProxyAuthUpdateRequest{Config: protocol.ProxyAuthConfig{Mode: "enabled", Users: []protocol.ProxyAuthUser{{Username: "u", Password: "p"}}}})
 	if err == nil || c.reloads != 0 || m.settingsSnapshot().ProxyAuth != nil {
 		t.Fatalf("stale auth committed: err=%v reloads=%d", err, c.reloads)
+	}
+}
+
+func TestProxyAuth_CommittedUpdateReturnsWarningWhenStatusReadFails(t *testing.T) {
+	m, _ := onlineEgressManager(t)
+	root := t.TempDir()
+	service, err := subscription.Open(subscription.ServiceOptions{CatalogPath: filepath.Join(root, "catalog.yaml"), CacheDir: filepath.Join(root, "cache")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := subscription.Defaults()
+	id := strings.Repeat("a", 32)
+	catalog.ActiveID = id
+	catalog.Profiles = []subscription.Profile{{ID: id, Name: "fixture", URL: "https://example.invalid/sub", Enabled: true, Generation: 1}}
+	if err := service.Restore(catalog); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(service.CachePath(id), []byte("proxies: []\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m.subscriptions = service
+	m.saveSettings = func(path string, s config.Settings) (config.CommitResult, error) {
+		result, err := config.SaveWithCommit(path, s)
+		if err == nil {
+			if err := os.Remove(service.CachePath(id)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return result, err
+	}
+	ctx, outcome := diagnostics.WithResult(t.Context())
+	got, err := m.UpdateProxyAuth(ctx, Operation{ID: "commit-status"}, protocol.ProxyAuthUpdateRequest{Config: protocol.ProxyAuthConfig{Mode: "enabled", Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "fixture"}}}})
+	if err != nil || got.Config.Mode != "enabled" || len(outcome.Warnings().Warnings) == 0 || got.Config.Users[0].Password != "" {
+		t.Fatalf("committed auth misreported as failure: warnings=%v err=%v", outcome.Warnings(), err)
+	}
+}
+
+func TestProxyAuth_ResetRemovesPersistedDefaultBlock(t *testing.T) {
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("ab", 32)
+	settings.ProxyAuth = &config.ProxyAuthSettings{Mode: "follow", BypassMode: "follow"}
+	path := filepath.Join(t.TempDir(), "settings.yaml")
+	raw, err := yaml.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestManager(Options{Settings: settings, SettingsPath: path, BinaryExists: func() bool { return false }})
+	m.store.Store(state.Snapshot{Core: state.CoreState{Status: "missing"}})
+	if _, err := m.UpdateProxyAuth(t.Context(), Operation{ID: "remove-default"}, protocol.ProxyAuthUpdateRequest{Reset: true}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = os.ReadFile(path)
+	if err != nil || strings.Contains(string(raw), "proxy-auth:") {
+		t.Fatalf("reset left a default block behind: %v", err)
+	}
+}
+
+func TestProxyAuth_RecoveryResetFinishesAfterCommitCancellation(t *testing.T) {
+	m := startupLoggingManager(t)
+	m.settingsPath = filepath.Join(t.TempDir(), "settings.yaml")
+	m.recoveryOnly, m.authResetAllowed = true, true
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	m.saveSettings = func(path string, settings config.Settings) (config.CommitResult, error) {
+		result, err := config.SaveWithCommit(path, settings)
+		if result.Committed {
+			cancel()
+		}
+		return result, err
+	}
+	before := m.store.Load().Revision
+	status, err := m.UpdateProxyAuth(ctx, Operation{ID: "recovery-cancel"}, protocol.ProxyAuthUpdateRequest{Reset: true})
+	if err != nil || ctx.Err() == nil || status.Revision <= before || !m.onboardingRestartRequired.Load() {
+		t.Fatalf("committed recovery reset did not finish: revision=%d err=%v", status.Revision, err)
 	}
 }

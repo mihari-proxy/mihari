@@ -5,18 +5,18 @@ const CapabilityProxyAuth = "proxy-auth-v1"
 
 // ProxyAuthUser is a configured proxy credential. Passwords only appear in explicit reads.
 type ProxyAuthUser struct {
-	Username string `json:"username" yaml:"username"`
-	Password string `json:"password,omitempty" yaml:"password"`
-	Source   string `json:"source,omitempty" yaml:"-"`
+	Username string `json:"username"`
+	Password string `json:"password,omitempty"`
+	Source   string `json:"source,omitempty"`
 }
 
 // ProxyAuthConfig is the saved instance override; follow leaves subscription users unchanged.
 type ProxyAuthConfig struct {
-	Mode           string          `json:"mode" yaml:"mode"`
-	Users          []ProxyAuthUser `json:"users" yaml:"users,omitempty"`
-	BypassMode     string          `json:"bypass_mode" yaml:"bypass-mode,omitempty"`
-	LocalBypass    bool            `json:"local_bypass" yaml:"local-bypass,omitempty"`
-	BypassPrefixes []string        `json:"bypass_prefixes" yaml:"bypass-prefixes,omitempty"`
+	Mode           string          `json:"mode"`
+	Users          []ProxyAuthUser `json:"users"`
+	BypassMode     string          `json:"bypass_mode"`
+	LocalBypass    bool            `json:"local_bypass"`
+	BypassPrefixes []string        `json:"bypass_prefixes"`
 }
 
 // ProxyAuthStatus separates saved overrides from effective subscription users.

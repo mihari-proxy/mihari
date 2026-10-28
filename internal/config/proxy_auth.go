@@ -8,13 +8,30 @@ import (
 	"unicode/utf8"
 )
 
-// EffectiveProxyAuth returns a detached configuration with explicit defaults.
+// ProxyAuthSettings is the persisted instance authentication intent, independent of wire DTOs.
+type ProxyAuthSettings struct {
+	Mode           string                `yaml:"mode"`
+	Users          []ProxyAuthCredential `yaml:"users,omitempty"`
+	BypassMode     string                `yaml:"bypass-mode,omitempty"`
+	LocalBypass    bool                  `yaml:"local-bypass,omitempty"`
+	BypassPrefixes []string              `yaml:"bypass-prefixes,omitempty"`
+}
+
+// ProxyAuthCredential is one saved username/password override.
+type ProxyAuthCredential struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+}
+
+// EffectiveProxyAuth explicitly converts saved intent into a detached wire configuration.
 func (s Settings) EffectiveProxyAuth() protocol.ProxyAuthConfig {
 	c := protocol.ProxyAuthConfig{Mode: "follow", BypassMode: "follow", Users: []protocol.ProxyAuthUser{}, BypassPrefixes: []string{}}
-	if s.ProxyAuth != nil {
-		c = *s.ProxyAuth
-		c.Users = append([]protocol.ProxyAuthUser{}, c.Users...)
-		c.BypassPrefixes = append([]string{}, c.BypassPrefixes...)
+	if saved := s.ProxyAuth; saved != nil {
+		c.Mode, c.BypassMode, c.LocalBypass = saved.Mode, saved.BypassMode, saved.LocalBypass
+		for _, user := range saved.Users {
+			c.Users = append(c.Users, protocol.ProxyAuthUser{Username: user.Username, Password: user.Password})
+		}
+		c.BypassPrefixes = append(c.BypassPrefixes, saved.BypassPrefixes...)
 		if c.Mode == "" {
 			c.Mode = "follow"
 		}
@@ -23,6 +40,25 @@ func (s Settings) EffectiveProxyAuth() protocol.ProxyAuthConfig {
 		}
 	}
 	return c
+}
+
+// SetProxyAuth converts a wire candidate to persistent intent and omits default-equivalent overrides.
+func (s *Settings) SetProxyAuth(c protocol.ProxyAuthConfig) {
+	if c.Mode == "" {
+		c.Mode = "follow"
+	}
+	if c.BypassMode == "" {
+		c.BypassMode = "follow"
+	}
+	if c.Mode == "follow" && c.BypassMode == "follow" && !c.LocalBypass && len(c.Users) == 0 && len(c.BypassPrefixes) == 0 {
+		s.ProxyAuth = nil
+		return
+	}
+	saved := &ProxyAuthSettings{Mode: c.Mode, BypassMode: c.BypassMode, LocalBypass: c.LocalBypass, BypassPrefixes: append([]string{}, c.BypassPrefixes...)}
+	for _, user := range c.Users {
+		saved.Users = append(saved.Users, ProxyAuthCredential{Username: user.Username, Password: user.Password})
+	}
+	s.ProxyAuth = saved
 }
 
 // ValidateProxyAuth checks explicit modes, unique credentials and non-loopback CIDRs.
@@ -55,7 +91,7 @@ func ValidateProxyAuth(c protocol.ProxyAuthConfig) error {
 			return dataError("invalid proxy authentication bypass CIDR")
 		}
 		prefix = prefix.Masked()
-		if prefix.Overlaps(v4) || prefix.Overlaps(v6) {
+		if prefix.Overlaps(v4) || prefix.Overlaps(v6) || prefix.Overlaps(netip.MustParsePrefix("::ffff:0:0/96")) {
 			return dataError("bypass CIDR overlaps loopback; use the local bypass switch")
 		}
 		if seenPrefixes[prefix] {

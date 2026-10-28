@@ -203,7 +203,7 @@ F2 的剪贴板写入在后台执行，保持弹窗可操作。OSC 52 仅表示�
 
 连接详情采用单个居中页面，以 **Application → Routing → Outbound → Destination** 纵向展示处理链路，字段归入对应阶段。Routing 合并显示入站名称／类型／协议和 **Rule Matched**，并从外层代理组到出站逐级展开上报的选择链；Outbound 展示 **Remote** 及其 GeoIP，Destination 保留自己的目标地址及 GeoIP，选择树不代表完整网络中转拓扑。上传速率与累计量为绿色，下载为蓝色；拒绝出站以断线连接灰色的请求目标节点。长字段自动换行，深层选择树保留层级序号，面板最大 88 个终端字符列。↑/↓ 滚动，Enter/Esc 返回选中行。**Paused** 表示观测数据已冻结；已关闭连接显示最后观测速率与累计流量，**Closed observed** 是 TUI 发现连接消失的时间，不是内核报告的精确关闭时间。
 
-**Web GUI** 面板卡片宽屏并排、窄屏纵排。Tab/Shift+Tab 或 ←/→ 选择 Open/Install 或 Manage，Enter 执行，↑/↓ 切换面板。顶部以三行对齐展示 Gateway、Default panel 和 Browser sessions。安装、重装或更新期间，橘色 Installing／Reinstalling／Updating 动画 badge 显示在 Manage 后（首次安装在 Install 后）；窄卡片中 badge 整体换到按钮下方，操作结束后清除。Update available 保留在 Latest 版本后，更新成功后刷新版本状态；原有面板快捷键保留。Manage 包含更新、设为默认、重装、回滚及卸载，不可用项标明原因。黄色 **Ctrl+Shift+R** 刷新提示始终保留在卡片上方，网关保护说明移至 `?` 帮助。**System** 的 Network 分区移至 Ports Config 之后。
+**Web GUI** 面板卡片宽屏并排、窄屏纵排。Tab/Shift+Tab 或 ←/→ 选择 Open/Install 或 Manage，Enter 执行，↑/↓ 切换面板。顶部以三行对齐展示 Gateway、Default panel 和 Browser sessions。安装、重装或更新期间，橘色 Installing／Reinstalling／Updating 动画 badge 显示在 Manage 后（首次安装在 Install 后）；窄卡片中 badge 整体换到按钮下方，操作结束后清除。Update available 保留在 Latest 版本后，更新成功后刷新版本状态；原有面板快捷键保留。Manage 包含更新、设为默认、重装、回滚及卸载，不可用项标明原因。黄色 **Ctrl+Shift+R** 刷新提示始终保留在卡片上方，网关保护说明移至 `?` 帮助。**System** 的 Network 分区移至 Ports & Authentication 之后。
 
 TUI **Proxies** 页顶部的 **Basic** 卡片包含 **Mode**、**GLOBAL** 和 **Page Settings**。**Mode** 按 Enter 打开 Rule / Global / Direct 选择弹窗，↑/↓ 选择、Enter 应用、Esc 取消；**GLOBAL** 入口展开 mihomo 返回的候选组，并自动滚动到整个 section 完整可见；超过一屏时从列表视口顶部展示，继续用方向键浏览候选。Mihari 全局保存模式、按订阅保存 GLOBAL 出口，支持面板发起的相同操作。默认使用 Rule，切换模式和出口保留已有连接。保存的出口消失时，有 DIRECT 候选则保存 DIRECT，否则保存 Rule；内核停止时保存的模式显示为 pending，待启动应用。
 
@@ -312,6 +312,6 @@ Mihari 是一个独立项目,与 mihomo 项目或 MetaCubeX 无关联,也不受�
 
 免认证支持沿用订阅（follow）、自定义（custom）和全部要求认证（required）。自定义提供本机回环免认证开关及额外 CIDR；额外 CIDR 不允许与 IPv4/IPv6 回环范围重叠。这不会改变监听地址或开放局域网访问。关闭认证仍保留已编辑凭据。保存后热重载，不重启 mihomo，也不主动断开已有连接。未获免认证的客户端需要提供代理用户名密码，使用系统代理的应用同样如此。
 
-密码默认遮罩，仅通过认证本地 IPC 的显式操作查看。CLI 支持隐藏终端输入或 `--password-stdin`，不提供密码命令行参数。非默认 `proxy-auth` 设置需要支持此功能的版本；降级前执行 `mihari proxy-auth reset --yes` 移除该设置块。
+密码默认遮罩，仅通过认证本地 IPC 的显式操作查看。CLI 支持隐藏终端输入或 `--password-stdin`，不提供密码命令行参数。非默认 `proxy-auth` 设置需要支持此功能的版本；降级前执行 `mihari proxy-auth reset --yes` 移除该设置块，并先完成未结束的业务数据重置与 Setup。
 
 **Reset Proxy Authentication** 只清除实例代理凭据及免认证覆盖，恢复订阅认证。**System → Maintenance → Reset Mihari Data** 清除业务设置、订阅及缓存、生成配置、节点选择缓存和该实例的偏好存储，保留程序、系统服务、已下载内核/面板/GeoIP、日志与导出、本地控制凭据及未知文件。全量重置先预览精确文件，再确认两次；更新 Controller/Web 凭据，停止代理和 Web gateway，并返回 Setup。需要重启 daemon 以绑定新的端口和凭据；完成 Setup 前不自动启动内核。中断清理由持久标记保护，在启动打开业务存储前继续完成。启动降级时只开放受限本地重置操作，不启动未校验的内核。

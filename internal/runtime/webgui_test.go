@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -42,5 +43,26 @@ func TestWebGUIStatusAndOpenURL(t *testing.T) {
 	}
 	if strings.Contains(openURL, "zashboard") {
 		t.Fatalf("selected panel open leaked default panel: %s", openURL)
+	}
+}
+
+type unlockedActivePanels struct {
+	fakePanels
+	manager *Manager
+}
+
+func (p *unlockedActivePanels) Active() (panel.Active, error) {
+	if !p.manager.settingsMu.TryLock() {
+		return panel.Active{}, errors.New("settings lock held across panel IO")
+	}
+	p.manager.settingsMu.Unlock()
+	return panel.Active{}, nil
+}
+func TestOpenWebGUI_ReleasesSettingsLockBeforePanelAccess(t *testing.T) {
+	panels := &unlockedActivePanels{}
+	m := newTestManager(Options{Panels: panels, WebGateway: stubGateway{}, WebOpenToken: "fixture"})
+	panels.manager = m
+	if _, _, err := m.OpenWebGUI(t.Context(), ""); err != nil {
+		t.Fatal(err)
 	}
 }

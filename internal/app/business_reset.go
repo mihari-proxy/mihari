@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,7 +21,11 @@ import (
 )
 
 // BusinessReset owns a fixed list of business files. Call only under daemon mutation ownership.
-type BusinessReset struct{ Paths platform.Paths }
+type BusinessReset struct {
+	Paths        platform.Paths
+	Reporter     diagnostics.Reporter
+	saveSettings func(string, config.Settings) (config.CommitResult, error)
+}
 
 var resetCacheName = regexp.MustCompile(`^[0-9a-f]{32}\.yaml$`)
 
@@ -54,7 +60,9 @@ func (b BusinessReset) Resume(ctx context.Context) error {
 		return err
 	}
 	if string(content) == "clearing\n" {
-		_, _, err = b.clear(ctx)
+		_, _, err = b.clear(context.WithoutCancel(ctx), func(e error) {
+			_ = diagnostics.ReportError(ctx, b.Reporter, diagnostics.Record{Component: "data-reset", Event: "persist.warning", Level: slog.LevelWarn, Err: e})
+		})
 	}
 	return err
 }
@@ -165,7 +173,7 @@ func (b BusinessReset) Preview(ctx context.Context) (protocol.ResetPreview, erro
 }
 
 // Reset rechecks the plan before the first durable change. Its marker makes interrupted clears restart-safe.
-func (b BusinessReset) Reset(ctx context.Context, digest string) (config.Settings, string, error) {
+func (b BusinessReset) Reset(ctx context.Context, digest string, warning func(error)) (config.Settings, string, error) {
 	preview, err := b.Preview(ctx)
 	if err != nil {
 		return config.Settings{}, "", err
@@ -179,13 +187,13 @@ func (b BusinessReset) Reset(ctx context.Context, digest string) (config.Setting
 	if err := b.checkPath(b.marker()); err != nil {
 		return config.Settings{}, "", err
 	}
-	if err := config.AtomicWrite(b.marker(), []byte("clearing\n"), 0600); err != nil {
+	if err := b.write(b.marker(), []byte("clearing\n"), warning); err != nil {
 		return config.Settings{}, "", err
 	}
 	// Once the marker commits, finish under owner lifetime even when the client disconnects.
-	return b.clear(context.WithoutCancel(ctx))
+	return b.clear(context.WithoutCancel(ctx), warning)
 }
-func (b BusinessReset) clear(ctx context.Context) (config.Settings, string, error) {
+func (b BusinessReset) clear(ctx context.Context, warning func(error)) (config.Settings, string, error) {
 	targets, err := b.targets()
 	if err != nil {
 		return config.Settings{}, "", err
@@ -194,6 +202,21 @@ func (b BusinessReset) clear(ctx context.Context) (config.Settings, string, erro
 	// Channel is installed-resource identity and is preserved with the core binary.
 	if old, e := config.Load(b.Paths.Settings); e == nil {
 		settings.CoreChannel, settings.CoreChannelBundle = old.CoreChannel, old.CoreChannelBundle
+	} else if repaired, e2 := config.LoadForProxyAuthReset(b.Paths.Settings); e2 == nil {
+		settings.CoreChannel, settings.CoreChannelBundle = repaired.CoreChannel, repaired.CoreChannelBundle
+	} else {
+		// Full reset must remain available for malformed business settings. Preserve
+		// installed-channel identity from its fixed resource sidecar when available.
+		if !errors.Is(e, os.ErrNotExist) && warning != nil {
+			warning(fmt.Errorf("resetting unreadable business settings; preserving installed resources: %w", e))
+		}
+		sidecar := filepath.Join(b.Paths.Bin, "core-channel")
+		if err := b.checkPath(sidecar); err != nil {
+			return config.Settings{}, "", err
+		}
+		if _, err := config.ApplyCoreChannelSidecar(&settings, sidecar); err != nil {
+			return config.Settings{}, "", err
+		}
 	}
 	secret := make([]byte, 64)
 	if _, err := rand.Read(secret); err != nil {
@@ -212,17 +235,42 @@ func (b BusinessReset) clear(ctx context.Context) (config.Settings, string, erro
 			return config.Settings{}, "", fmt.Errorf("reset interrupted removing %s; rerun data reset: %w", path, err)
 		}
 	}
-	if err := config.Save(b.Paths.Settings, settings); err != nil {
+	save := b.saveSettings
+	if save == nil {
+		save = config.SaveWithCommit
+	}
+	saved, err := save(b.Paths.Settings, settings)
+	if err != nil {
 		return config.Settings{}, "", err
 	}
-	if err := config.AtomicWrite(b.Paths.WebCredential, []byte(web+"\n"), 0600); err != nil {
+	if !saved.Committed {
+		return config.Settings{}, "", errors.New("reset settings were not committed")
+	}
+	if saved.Warning != nil && warning != nil {
+		warning(saved.Warning)
+	}
+	if err := b.write(b.Paths.WebCredential, []byte(web+"\n"), warning); err != nil {
 		return config.Settings{}, "", err
 	}
-	if err := config.AtomicWrite(b.Paths.Onboarding, []byte(`{"schema":"mihari.onboarding/v1","complete":false}`), 0600); err != nil {
+	if err := b.write(b.Paths.Onboarding, []byte(`{"schema":"mihari.onboarding/v1","complete":false}`), warning); err != nil {
 		return config.Settings{}, "", err
 	}
-	if err := config.AtomicWrite(b.marker(), []byte("setup\n"), 0600); err != nil {
+	if err := b.write(b.marker(), []byte("setup\n"), warning); err != nil {
 		return config.Settings{}, "", err
 	}
-	return settings, web, ctx.Err()
+	return settings, web, nil
+}
+
+func (b BusinessReset) write(path string, content []byte, warning func(error)) error {
+	result, err := config.AtomicWriteWithCommit(path, content, 0600)
+	if err != nil {
+		return err
+	}
+	if !result.Committed {
+		return errors.New("reset file was not committed")
+	}
+	if result.Warning != nil && warning != nil {
+		warning(result.Warning)
+	}
+	return nil
 }

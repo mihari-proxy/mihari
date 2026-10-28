@@ -514,3 +514,6 @@ func (s *Service) settleSetupCommitLocked(receipt Receipt, err error) (Receipt, 
 	}
 	return Receipt{}, err
 }
+
+// ResetAfterDataClear publishes an empty catalog after the daemon reset owner cleared its files.
+func (s *Service) ResetAfterDataClear() { s.mu.Lock(); defer s.mu.Unlock(); s.catalog = Defaults() }

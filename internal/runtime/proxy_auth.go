@@ -20,13 +20,7 @@ func (m *Manager) ProxyAuth(ctx context.Context, reveal bool) (protocol.ProxyAut
 	defer m.unlock()
 	status, err := m.proxyAuthStatus(m.settingsSnapshot(), reveal)
 	if err != nil {
-		auth := m.settingsSnapshot().EffectiveProxyAuth()
-		if !reveal {
-			for i := range auth.Users {
-				auth.Users[i].Password = ""
-			}
-		}
-		return protocol.ProxyAuthStatus{Schema: "mihari/v1", Revision: m.store.Load().Revision, Config: auth, Users: []protocol.ProxyAuthUser{}, Problem: "Saved proxy authentication cannot be resolved; inspect the subscription or reset proxy authentication"}, nil
+		return proxyAuthFallback(m.settingsSnapshot(), m.store.Load().Revision, "Saved proxy authentication cannot be resolved; inspect the subscription or reset proxy authentication", reveal), nil
 	}
 	return status, nil
 }
@@ -104,14 +98,14 @@ func (m *Manager) UpdateProxyAuth(ctx context.Context, op Operation, request pro
 			}
 			m.publishSettings(candidate)
 			m.onboardingRestartRequired.Store(true)
-			_, err = m.updateStateLocked(ctx, state.CommandMeta{ID: op.ID, Source: op.Source}, func(s state.Snapshot) (state.Snapshot, error) {
+			_, err = m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{ID: op.ID, Source: op.Source}, func(s state.Snapshot) (state.Snapshot, error) {
 				s.LastError = "Proxy authentication reset; restart the daemon"
 				return s, nil
 			})
 			if err != nil {
 				return nil, err
 			}
-			return m.proxyAuthStatus(candidate.after, false)
+			return m.committedProxyAuthStatus(ctx, candidate.after)
 		}
 		if err := m.lockMutation(ctx); err != nil {
 			return nil, err
@@ -144,9 +138,7 @@ func (m *Manager) UpdateProxyAuth(ctx context.Context, op Operation, request pro
 					}
 				}
 			}
-			s.ProxyAuth = &auth
-			normalized := s.EffectiveProxyAuth()
-			s.ProxyAuth = &normalized
+			s.SetProxyAuth(auth)
 			return nil
 		})
 		if err != nil {
@@ -239,10 +231,28 @@ func (m *Manager) UpdateProxyAuth(ctx context.Context, op Operation, request pro
 		}); err != nil {
 			return nil, err
 		}
-		return m.proxyAuthStatus(candidate.after, false)
+		return m.committedProxyAuthStatus(ctx, candidate.after)
 	})
 	if err != nil {
 		return protocol.ProxyAuthStatus{}, err
 	}
 	return result.(protocol.ProxyAuthStatus), nil
+}
+
+func proxyAuthFallback(settings config.Settings, revision uint64, problem string, reveal bool) protocol.ProxyAuthStatus {
+	auth := settings.EffectiveProxyAuth()
+	if !reveal {
+		for i := range auth.Users {
+			auth.Users[i].Password = ""
+		}
+	}
+	return protocol.ProxyAuthStatus{Schema: "mihari/v1", Revision: revision, Config: auth, Users: []protocol.ProxyAuthUser{}, BypassPrefixes: []string{}, Problem: problem}
+}
+func (m *Manager) committedProxyAuthStatus(ctx context.Context, settings config.Settings) (protocol.ProxyAuthStatus, error) {
+	status, err := m.proxyAuthStatus(settings, false)
+	if err == nil {
+		return status, nil
+	}
+	collectWarning(ctx, "proxy-auth", "status.unresolved", err)
+	return proxyAuthFallback(settings, m.store.Load().Revision, "Authentication settings saved; effective status is unavailable. Inspect the subscription or restart the daemon.", false), nil
 }

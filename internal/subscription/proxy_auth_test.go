@@ -1,7 +1,7 @@
 package subscription
 
 import (
-	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/config"
 	"go.yaml.in/yaml/v3"
 	"reflect"
 	"testing"
@@ -64,7 +64,7 @@ func TestGenerateProxyAuth_FollowDisabledAndRequired(t *testing.T) {
 	} {
 		t.Run(test.mode, func(t *testing.T) {
 			s := testSettings()
-			s.ProxyAuth = &protocol.ProxyAuthConfig{Mode: test.mode, BypassMode: test.bypass, Users: []protocol.ProxyAuthUser{{Username: "bob", Password: "added"}}}
+			s.ProxyAuth = &config.ProxyAuthSettings{Mode: test.mode, BypassMode: test.bypass, Users: []config.ProxyAuthCredential{{Username: "bob", Password: "added"}}}
 			raw, err := Generate(Document{"authentication": []any{"alice:old"}, "skip-auth-prefixes": []any{"192.0.2.0/24"}}, nil, s)
 			if err != nil {
 				t.Fatal(err)

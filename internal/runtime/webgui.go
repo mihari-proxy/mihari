@@ -58,8 +58,9 @@ func (m *Manager) ListPanels(context.Context) ([]panel.PanelInfo, error) {
 // Callers must not log or persist the result beyond immediately launching a browser.
 func (m *Manager) OpenWebGUI(_ context.Context, panelID string) (string, string, error) {
 	m.settingsMu.RLock()
-	defer m.settingsMu.RUnlock()
-	if m.webGateway == nil || m.webOpenToken == "" {
+	token := m.webOpenToken
+	m.settingsMu.RUnlock()
+	if m.webGateway == nil || token == "" {
 		return "", "", protocol.APIError{Code: protocol.CodeInvalidState, Message: "web gui open is unavailable"}
 	}
 	id := strings.TrimSpace(panelID)
@@ -93,9 +94,9 @@ func (m *Manager) OpenWebGUI(_ context.Context, panelID string) (string, string,
 	}
 	base := strings.TrimRight(addr, "/")
 	if id == "" {
-		return base + "/?token=" + m.webOpenToken, "", nil
+		return base + "/?token=" + token, "", nil
 	}
-	return base + panel.UIMount(id) + "/?token=" + m.webOpenToken, id, nil
+	return base + panel.UIMount(id) + "/?token=" + token, id, nil
 }
 
 func panelInfoDTO(info panel.PanelInfo) protocol.PanelStatus {

@@ -18,5 +18,5 @@ func NewBusinessRecovery(paths platform.Paths, store *state.Store, reporter diag
 		settings = config.Defaults()
 		settings.ControllerSecret = strings.Repeat("0", 64)
 	}
-	return runtimeapi.New(runtimeapi.Options{RecoveryOnly: true, AuthResetAllowed: allowed, Store: store, Settings: settings, SettingsPath: paths.Settings, BusinessReset: BusinessReset{Paths: paths}, DiagnosticReporter: reporter})
+	return runtimeapi.New(runtimeapi.Options{RecoveryOnly: true, AuthResetAllowed: allowed, Store: store, Settings: settings, SettingsPath: paths.Settings, BusinessReset: BusinessReset{Paths: paths, Reporter: reporter}, DiagnosticReporter: reporter})
 }

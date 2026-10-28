@@ -16,7 +16,7 @@ import (
 // PrepareCoreStart prepares saved configuration and holds mutation ownership
 // until the caller has started the child and invoked the returned release.
 func (m *Manager) PrepareCoreStart(ctx context.Context) (func(), error) {
-	if m.dataResetPending.Load() {
+	if m.dataResetPending.Load() && !(m.ownsCoreUpdate(ctx) && ctx.Value(resetSetupStartKey{}) == true) {
 		return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "complete Setup after data reset before starting the core"}
 	}
 	if guard, ok := m.installer.(interface{ CheckExecution(context.Context) error }); ok {

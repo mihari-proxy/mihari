@@ -5,7 +5,8 @@ import (
 	"strings"
 )
 
-// ApplyProxyAuth merges instance credentials without mutating the source list.
+// ApplyProxyAuth updates authentication and bypass keys in document.
+// Callers must pass a detached document; existing source list elements are never mutated.
 func ApplyProxyAuth(document Document, auth protocol.ProxyAuthConfig) ([]protocol.ProxyAuthUser, error) {
 	users := []protocol.ProxyAuthUser{}
 	indexes := map[string]int{}

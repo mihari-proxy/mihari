@@ -173,7 +173,7 @@ mihari tun disable
 
 `sysproxy enable` 将桌面 HTTP/HTTPS/SOCKS 系统代理指向 Mihari 的混合端点。如果另一产品已持有代理,enable 会以 `system_proxy_conflict` 失败,除非传入 `--force`(TUI 会要求确认)。`sysproxy disable` 只清除**由 Mihari 持有**的代理;它不会关闭外部代理。在 Windows 上,当 Mihari 作为 LocalSystem 服务运行时,它写入**交互式控制台用户**的 WinINET 配置单元(`HKEY_USERS\<SID>\…`),而不是 SYSTEM 自己的 `HKCU`,因此桌面浏览器能感知到变更。
 
-`tun enable|disable` 仅覆盖 `tun.enable`；stack、device、DNS、路由等其他 TUN 参数保留订阅原值，不自动注入默认 stack。未通过 Mihari 托管开关时，订阅的 enable 也保持原值。开关意图由 daemon 持久化，并在可用时通过控制器实时生效。开启前会检测系统上的其他 TUN 网卡与其他 mihomo 进程(忽略 Down 状态的残留适配器);冲突时以 `tun_conflict` 失败,除非传入 `--force`(TUI 会要求确认)。`--force` 只绕过冲突门控:若内核未真正开启 TUN,Desired 会回滚。TUN 根据 OS 不同可能需要提权或安装服务。没有用于修改端口的 CLI 命令;Mixed / Controller / Web 端口在 TUI System 页的 Ports Config 中修改。
+`tun enable|disable` 仅覆盖 `tun.enable`；stack、device、DNS、路由等其他 TUN 参数保留订阅原值，不自动注入默认 stack。未通过 Mihari 托管开关时，订阅的 enable 也保持原值。开关意图由 daemon 持久化，并在可用时通过控制器实时生效。开启前会检测系统上的其他 TUN 网卡与其他 mihomo 进程(忽略 Down 状态的残留适配器);冲突时以 `tun_conflict` 失败,除非传入 `--force`(TUI 会要求确认)。`--force` 只绕过冲突门控:若内核未真正开启 TUN,Desired 会回滚。TUN 根据 OS 不同可能需要提权或安装服务。没有用于修改端口的 CLI 命令;Mixed / Controller / Web 端口在 TUI System 页的 Ports & Authentication 中修改。
 
 ## egress — 出口网卡
 
@@ -243,6 +243,8 @@ mihari proxy-auth prefix add CIDR
 mihari proxy-auth prefix remove CIDR
 mihari proxy-auth reset --yes
 ```
+
+降级前执行 `mihari proxy-auth reset --yes` 移除非默认认证设置，并完成待处理的数据重置与 Setup。
 
 支持全局 `--json`。`user set` 不带 `--password-stdin` 时要求交互终端并隐藏输入；编辑已有实例用户时空密码保留原值，新用户密码不能为空。普通查询隐藏密码，`user reveal` 显式查看。用户按精确用户名增量合并；`remove` 仅移除实例项，订阅同名用户恢复其原密码，不支持排除订阅用户。模式 `follow` 不应用保存的用户覆盖，`enabled` 要求最终至少一个用户，`disabled` 不要求认证但保留凭据。免认证模式独立；关闭认证时显示为不生效。
 

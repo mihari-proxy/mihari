@@ -74,7 +74,7 @@ func operationSuccessKey(key string) bool {
 		return false
 	}
 	switch prefix {
-	case "install", "restart", "sub-add", "sub-refresh", "sub-remove", "sub-set", "sub-enabled", "sub-use":
+	case "proxy-auth", "data-reset", "install", "restart", "sub-add", "sub-refresh", "sub-remove", "sub-set", "sub-enabled", "sub-use":
 		return true
 	default:
 		return false
@@ -82,6 +82,8 @@ func operationSuccessKey(key string) bool {
 }
 
 var operationDiagnosticNames = map[string]string{
+	"proxy-auth":       "proxy-auth.update",
+	"data-reset":       "data.reset",
 	"egress":           "egress.update",
 	"close":            "connection.close",
 	"close-all":        "connection.close_all",

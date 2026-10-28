@@ -242,3 +242,8 @@ func (s *Service) Reset(ctx context.Context) (Preferences, error) {
 	proxies := DefaultProxyPreferences()
 	return s.Update(ctx, Update{ConnectionsColumns: append([]string{}, defaultColumns...), Proxies: &proxies, LogLevels: append([]string{}, defaultLogLevels...)})
 }
+
+// ResetAfterDataClear publishes defaults after the daemon reset owner removed the preferences file.
+func (s *Service) ResetAfterDataClear() {
+	s.snapshot.Store(Preferences{ConnectionsColumns: append([]string{}, defaultColumns...), Proxies: DefaultProxyPreferences(), LogLevels: append([]string{}, defaultLogLevels...)})
+}

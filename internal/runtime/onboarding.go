@@ -66,7 +66,12 @@ func (m *Manager) UpdateOnboarding(ctx context.Context, operation Operation, upd
 	result, err := m.doOperation(ctx, "onboarding:"+operation.ID, func(ctx context.Context) (any, error) {
 		value, err := retrySetupPreparation(ctx, operation, func() (any, error) { return m.updateOnboardingAttempt(ctx, operation, update) })
 		if err == nil {
-			err = m.completeResetSetup(ctx, update.Complete)
+			m.completeResetSetup(ctx, update.Complete)
+			if snapshot, ok := value.(onboarding.Snapshot); ok {
+				snapshot.Status = m.composeOnboardingStatus(m.onboarding.State())
+				snapshot.Revision = m.store.Load().Revision
+				value = snapshot
+			}
 		}
 		return value, err
 	})
@@ -89,6 +94,9 @@ func (m *Manager) updateOnboardingAttempt(ctx context.Context, operation Operati
 	candidate, err := m.prepareSettings(applyEndpointUpdate(update))
 	if err != nil {
 		return nil, err
+	}
+	if update.Complete != nil && *update.Complete && m.dataResetPending.Load() && candidate.changed {
+		return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "save endpoint changes and restart the daemon before completing Setup"}
 	}
 	var catalog subscription.Catalog
 	if m.trustedCore != nil {
@@ -179,7 +187,7 @@ func applyEndpointUpdate(update onboarding.Update) func(*config.Settings) error 
 func (m *Manager) composeOnboardingStatus(onboardingState onboarding.State) onboarding.Status {
 	settings := m.settingsSnapshot()
 	return onboarding.Status{
-		Complete:        onboardingState.Complete,
+		Complete:        onboardingState.Complete && !m.dataResetPending.Load(),
 		MixedAddr:       settings.MixedAddr,
 		ControllerAddr:  settings.ControllerAddr,
 		WebAddr:         settings.WebAddr,

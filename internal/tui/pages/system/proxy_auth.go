@@ -4,6 +4,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
@@ -18,7 +19,9 @@ type authClient interface {
 	UpdateProxyAuth(context.Context, protocol.ProxyAuthUpdateRequest) (protocol.ProxyAuthStatus, error)
 }
 type authUI struct {
+	revealed                      map[string]string
 	open, loaded, pending, reveal bool
+	conflict                      bool
 	epoch                         uint64
 	status                        protocol.ProxyAuthStatus
 	draft                         protocol.ProxyAuthConfig
@@ -66,10 +69,23 @@ func (m *Model) handleAuthResult(r authResultMsg) tea.Cmd {
 	m.auth.pending = false
 	if r.err != nil {
 		m.auth.err = actionErrorDetail(r.err, "Proxy authentication failed") + " (F2: details)"
+		var api protocol.APIError
+		if errors.As(r.err, &api) && api.Code == protocol.CodeRevisionConflict {
+			m.auth.conflict = true
+			return m.authLoad(false)
+		}
 		return nil
 	}
 	if r.reveal {
-		m.auth.status.Users = r.status.Users
+		m.auth.revealed = map[string]string{}
+		for _, u := range r.status.Users {
+			m.auth.revealed[u.Username] = u.Password
+		}
+		for _, u := range r.status.Config.Users {
+			if _, found := m.auth.revealed[u.Username]; !found {
+				m.auth.revealed[u.Username] = u.Password
+			}
+		}
 		m.auth.reveal = true
 		return nil
 	}
@@ -77,7 +93,12 @@ func (m *Model) handleAuthResult(r authResultMsg) tea.Cmd {
 	m.auth.draft = r.status.Config
 	m.auth.loaded = true
 	m.auth.reveal = false
+	m.auth.revealed = nil
 	m.auth.err = ""
+	if m.auth.conflict {
+		m.auth.conflict = false
+		m.auth.err = "Settings changed. Current configuration reloaded; review and reapply your edits."
+	}
 	if r.mutation {
 		return func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: r.status.Revision} }
 	}
@@ -93,10 +114,8 @@ func (m *Model) authRows() []string {
 	for _, u := range m.authUsers() {
 		label := diagnostics.EscapeTerminal(u.Username) + " · " + u.Source
 		if a.reveal {
-			for _, v := range a.status.Users {
-				if v.Username == u.Username {
-					label += " · " + diagnostics.EscapeTerminal(v.Password)
-				}
+			if password, found := a.revealed[u.Username]; found {
+				label += " · saved: " + diagnostics.EscapeTerminal(password)
 			}
 		}
 		rows = append(rows, "User: "+label)
@@ -223,6 +242,10 @@ func (m *Model) updateAuth(message tea.Msg) tea.Cmd {
 					}
 					u := protocol.ProxyAuthUser{Username: name, Password: a.inputs[1].Value()}
 					i := slices.IndexFunc(a.draft.Users, func(v protocol.ProxyAuthUser) bool { return v.Username == name })
+					if u.Password == "" && a.original == "" && i < 0 {
+						a.err = "Password is required"
+						return nil
+					}
 					if u.Password == "" && a.original != "" && i < 0 {
 						a.edit = ""
 						return nil
@@ -271,6 +294,7 @@ func (m *Model) updateAuth(message tea.Msg) tea.Cmd {
 	case "ctrl+r":
 		if a.reveal {
 			a.reveal = false
+			a.revealed = nil
 			for i := range a.status.Users {
 				a.status.Users[i].Password = ""
 			}
@@ -286,6 +310,11 @@ func (m *Model) updateAuth(message tea.Msg) tea.Cmd {
 				return nil
 			}
 			a.draft.Users = slices.Delete(a.draft.Users, i, i+1)
+			a.reveal = false
+			a.revealed = nil
+			for j := range a.status.Users {
+				a.status.Users[j].Password = ""
+			}
 			for i := range a.status.Users {
 				if a.status.Users[i].Username == name && a.status.Users[i].Source == "overridden" {
 					a.status.Users[i].Source = "subscription"

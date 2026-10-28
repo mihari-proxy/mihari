@@ -582,8 +582,10 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 	}
 
 	if !deps.ValidationMode {
-		if err := (app.BusinessReset{Paths: deps.Paths}).Resume(ctx); err != nil {
-			return runDegradedDaemon(ctx, deps, err, nil, diagnosticReporter, diagnosticHistory)
+		if err := (app.BusinessReset{Paths: deps.Paths, Reporter: diagnosticReporter}).Resume(ctx); err != nil {
+			failure := diagnostics.ReportError(ctx, diagnosticReporter, diagnostics.Record{Component: "daemon.startup", Event: "business_reset.resume.failed", Level: slog.LevelError, Err: diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "resume business reset"}, err)})
+			reportDaemonStartupFailure(diagnosticStderr, "resume business reset", err)
+			return runDegradedDaemon(ctx, deps, failure, nil, diagnosticReporter, diagnosticHistory)
 		}
 	}
 	sidecar := filepath.Join(deps.Paths.Bin, "core-channel")

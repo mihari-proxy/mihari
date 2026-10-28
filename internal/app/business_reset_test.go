@@ -1,7 +1,11 @@
 package app
 
 import (
+	"context"
+	"errors"
+	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/platform"
+	"go.yaml.in/yaml/v3"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,7 +31,7 @@ func TestBusinessReset_PreservesResourcesAndRotatesManagementSecrets(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings, web, err := b.Reset(t.Context(), preview.Digest)
+	settings, web, err := b.Reset(t.Context(), preview.Digest, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,8 +63,12 @@ func TestBusinessReset_StalePreviewNeverDeletes(t *testing.T) {
 	if err := os.WriteFile(paths.Settings, []byte("changed"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := b.Reset(t.Context(), preview.Digest); err == nil {
+	if _, _, err := b.Reset(t.Context(), preview.Digest, nil); err == nil {
 		t.Fatal("stale reset plan accepted")
+	}
+	pending, pendingErr := b.Pending()
+	if pendingErr != nil || pending {
+		t.Fatal("stale plan created a durable reset marker")
 	}
 	got, err := os.ReadFile(paths.Settings)
 	if err != nil || string(got) != "changed" {
@@ -117,5 +125,75 @@ func TestBusinessReset_RefusesLinkedTarget(t *testing.T) {
 	data, err := os.ReadFile(external)
 	if err != nil || string(data) != "keep" {
 		t.Fatal("external file changed")
+	}
+}
+
+func TestBusinessReset_CommittedSettingsWarningDoesNotAbortClear(t *testing.T) {
+	paths := platform.NewPaths(t.TempDir())
+	if err := paths.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	syncWarning := errors.New("fixture committed sync warning")
+	b := BusinessReset{Paths: paths, saveSettings: func(path string, s config.Settings) (config.CommitResult, error) {
+		result, err := config.SaveWithCommit(path, s)
+		if err == nil {
+			result.Warning = syncWarning
+		}
+		return result, err
+	}}
+	preview, err := b.Preview(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var warnings []error
+	_, _, err = b.Reset(t.Context(), preview.Digest, func(e error) { warnings = append(warnings, e) })
+	if err != nil || len(warnings) != 1 || !errors.Is(warnings[0], syncWarning) {
+		t.Fatalf("committed settings warning failed reset: warnings=%v err=%v", warnings, err)
+	}
+	data, err := os.ReadFile(filepath.Join(paths.Root, "business-reset.state"))
+	if err != nil || string(data) != "setup\n" {
+		t.Fatal("reset did not reach Setup after committed warning")
+	}
+}
+func TestBusinessReset_CompletedResumeDoesNotReturnLateCancellation(t *testing.T) {
+	paths := platform.NewPaths(t.TempDir())
+	if err := paths.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	b := BusinessReset{Paths: paths}
+	if err := os.WriteFile(filepath.Join(paths.Root, "business-reset.state"), []byte("clearing\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := b.Resume(ctx); err != nil {
+		t.Fatalf("durable completed reset misreported as failed: %v", err)
+	}
+}
+
+func TestBusinessReset_CorruptAuthPreservesInstalledChannel(t *testing.T) {
+	paths := platform.NewPaths(t.TempDir())
+	if err := paths.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	settings := config.Defaults()
+	settings.ControllerSecret = strings.Repeat("ab", 32)
+	settings.CoreChannel = "alpha"
+	settings.ProxyAuth = &config.ProxyAuthSettings{Mode: "broken"}
+	data, err := yaml.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.Settings, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	b := BusinessReset{Paths: paths}
+	preview, err := b.Preview(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reset, _, err := b.Reset(t.Context(), preview.Digest, nil)
+	if err != nil || reset.CoreChannel != "alpha" {
+		t.Fatalf("reset lost installed channel from auth-corrupt settings: %v", err)
 	}
 }

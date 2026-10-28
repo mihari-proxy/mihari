@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"io"
 	"testing"
 )
 
@@ -23,8 +25,20 @@ func TestDataResetCLI_RequiresDigestAndBothConfirmations(t *testing.T) {
 		c := &resetCLIClient{}
 		root := newRoot(Dependencies{RuntimeClient: c}, &runOptions{})
 		root.SetArgs(args)
-		if err := root.ExecuteContext(t.Context()); err == nil || c.calls != 0 {
+		var api protocol.APIError
+		if err := root.ExecuteContext(t.Context()); !errors.As(err, &api) || api.Code != protocol.CodeInvalidArgument || c.calls != 0 {
 			t.Fatal("unreviewed reset reached daemon")
 		}
+	}
+}
+
+func TestDataResetCLI_ConfirmedReviewedPlanReachesDaemonOnce(t *testing.T) {
+	c := &resetCLIClient{}
+	root := newRoot(Dependencies{RuntimeClient: c, NewOperationID: func() string { return "fixture" }}, &runOptions{})
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	root.SetArgs([]string{"data-reset", "run", "--digest", "fixture-digest", "--yes", "--confirm"})
+	if err := root.ExecuteContext(t.Context()); err != nil || c.calls != 1 {
+		t.Fatalf("confirmed reset not sent exactly once: calls=%d err=%v", c.calls, err)
 	}
 }

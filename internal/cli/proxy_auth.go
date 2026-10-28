@@ -55,7 +55,8 @@ func newProxyAuthCommand(deps Dependencies, options *runOptions) *cobra.Command 
 				return classifyRuntimeError(err)
 			}
 			if a.kind == "reveal" {
-				for _, u := range status.Users {
+				users := append(append([]protocol.ProxyAuthUser{}, status.Users...), status.Config.Users...)
+				for _, u := range users {
 					if u.Username == args[0] {
 						if options.json {
 							return renderJSON(command.OutOrStdout(), struct {
@@ -86,6 +87,9 @@ func newProxyAuthCommand(deps Dependencies, options *runOptions) *cobra.Command 
 					cfg.BypassMode = "custom"
 					cfg.BypassPrefixes = append(cfg.BypassPrefixes, args[0])
 				case "prefix-remove":
+					if !slices.Contains(cfg.BypassPrefixes, args[0]) {
+						return invalidArgument("bypass CIDR not found")
+					}
 					cfg.BypassPrefixes = slices.DeleteFunc(cfg.BypassPrefixes, func(s string) bool { return s == args[0] })
 				case "remove":
 					found := slices.ContainsFunc(cfg.Users, func(u protocol.ProxyAuthUser) bool { return u.Username == args[0] })

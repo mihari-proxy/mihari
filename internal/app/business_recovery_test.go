@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/platform"
@@ -19,7 +20,7 @@ func TestBusinessRecovery_AuthResetRepairsOnlyAuthAndNeverStartsCore(t *testing.
 	settings := config.Defaults()
 	settings.ControllerSecret = strings.Repeat("ab", 32)
 	settings.MixedAddr = "127.0.0.1:19390"
-	settings.ProxyAuth = &protocol.ProxyAuthConfig{Mode: "invalid"}
+	settings.ProxyAuth = &config.ProxyAuthSettings{Mode: "invalid"}
 	raw, err := yaml.Marshal(settings)
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +41,8 @@ func TestBusinessRecovery_AuthResetRepairsOnlyAuthAndNeverStartsCore(t *testing.
 	if m.Snapshot().Core.PID != 0 {
 		t.Fatal("recovery started a core")
 	}
-	if _, err = m.EnableSystemProxy(t.Context(), runtimeapi.Operation{ID: "forbidden"}, false); err == nil {
+	var api protocol.APIError
+	if _, err = m.EnableSystemProxy(t.Context(), runtimeapi.Operation{ID: "forbidden"}, false); !errors.As(err, &api) || api.Code != protocol.CodeInvalidState {
 		t.Fatal("recovery allowed an unrelated business mutation")
 	}
 }

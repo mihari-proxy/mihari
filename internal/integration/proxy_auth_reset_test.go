@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"github.com/mihari-proxy/mihari/internal/app"
 	"github.com/mihari-proxy/mihari/internal/config"
 	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
@@ -84,6 +85,9 @@ func TestProxyAuthAndReset_AuthenticatedIPCAndPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := client.ResetBusinessData(t.Context(), protocol.DataResetRequest{OperationID: "one-confirm", Digest: preview.Digest, Confirm: true}); err == nil {
+		t.Fatal("missing second confirmation accepted")
+	}
 	if _, err := client.ResetBusinessData(t.Context(), protocol.DataResetRequest{OperationID: "no-confirm", Digest: preview.Digest}); err == nil {
 		t.Fatal("missing confirmations accepted")
 	}
@@ -129,7 +133,8 @@ func TestProxyAuthAndReset_RunningCoreStopsBeforeResetAndRemainsStopped(t *testi
 	if err := config.Save(paths.Settings, settings); err != nil {
 		t.Fatal(err)
 	}
-	assembly, err := app.BuildRuntimeWithOptions(paths, settings, "fixture", io.Discard, io.Discard, app.RuntimeBuildOptions{SysProxy: &sysproxy.FakeBackend{}})
+	resetStore := &rejectingFirstReset{BusinessReset: app.BusinessReset{Paths: paths}, reject: true}
+	assembly, err := app.BuildRuntimeWithOptions(paths, settings, "fixture", io.Discard, io.Discard, app.RuntimeBuildOptions{SysProxy: &sysproxy.FakeBackend{}, ResetStore: resetStore})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +173,20 @@ func TestProxyAuthAndReset_RunningCoreStopsBeforeResetAndRemainsStopped(t *testi
 		t.Fatal(err)
 	}
 	preview, err := client.DataResetPreview(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.ResetBusinessData(t.Context(), protocol.DataResetRequest{OperationID: "rejected-before-marker", Digest: preview.Digest, Confirm: true, ConfirmAgain: true})
+	var rejected protocol.APIError
+	if !errors.As(err, &rejected) || rejected.Code != protocol.CodeRevisionConflict {
+		t.Fatalf("expected pre-marker rejection: %v", err)
+	}
+	waitForCore(t, client, done, func(s protocol.CoreStatus) bool { return s.Status == "running" && s.PID != 0 })
+	pending, pendingErr := resetStore.Pending()
+	if pendingErr != nil || pending {
+		t.Fatal("rejected reset crossed its commit marker")
+	}
+	preview, err = client.DataResetPreview(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,4 +271,17 @@ func TestProxyAuthAndReset_RunningCoreStopsBeforeResetAndRemainsStopped(t *testi
 		t.Fatalf("Setup did not release startup barrier: %v", err)
 	}
 
+}
+
+type rejectingFirstReset struct {
+	app.BusinessReset
+	reject bool
+}
+
+func (r *rejectingFirstReset) Reset(ctx context.Context, digest string, warning func(error)) (config.Settings, string, error) {
+	if r.reject {
+		r.reject = false
+		return config.Settings{}, "", protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "fixture source changed before reset commit"}
+	}
+	return r.BusinessReset.Reset(ctx, digest, warning)
 }

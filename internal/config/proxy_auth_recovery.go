@@ -30,20 +30,15 @@ func LoadForProxyAuthReset(path string) (Settings, error) {
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return Settings{}, dataError("settings file must contain one document")
+		return Settings{}, dataError("settings file must contain one document", err)
 	}
 	if len(node.Content) != 1 || node.Content[0].Kind != yaml.MappingNode {
 		return Settings{}, dataError("invalid settings mapping")
 	}
 	mapping := node.Content[0]
 	entries := []*yaml.Node{}
-	seen := false
 	for i := 0; i < len(mapping.Content); i += 2 {
 		if mapping.Content[i].Value == "proxy-auth" {
-			if seen {
-				return Settings{}, dataError("duplicate proxy-auth setting")
-			}
-			seen = true
 			continue
 		}
 		entries = append(entries, mapping.Content[i], mapping.Content[i+1])
