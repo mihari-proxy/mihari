@@ -303,3 +303,13 @@ Mihari is an independent project and is not affiliated with or endorsed by the m
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/chart?repos=mihari-proxy/mihari&type=date&legend=bottom-right)](https://www.star-history.com/?repos=mihari-proxy%2Fmihari&type=date&legend=bottom-right)
+
+## Proxy authentication and data reset
+
+Open **System → Ports & Authentication → Proxy Authentication**, or use `mihari proxy-auth`. Authentication modes are `follow` (subscription), `enabled` (merge subscription users and instance overrides by exact username), and `disabled`. Removing an override restores the subscription password. Excluding subscription users is tracked separately in #357.
+
+Bypass modes are `follow`, `custom`, and `required`. Custom rules have a local loopback bypass switch and additional CIDRs; additional CIDRs cannot overlap IPv4/IPv6 loopback ranges. These rules do not change listening addresses or enable LAN access. Saved credentials remain available when authentication is disabled. Changes apply by hot reload without restarting mihomo or explicitly closing existing connections. Clients, including applications using the system proxy, must supply proxy credentials when their source is not exempt.
+
+Passwords are masked by default. Explicit reveal is available over authenticated local IPC only. CLI password input uses a hidden terminal prompt or `--password-stdin`; no password command-line argument is provided. A nondefault `proxy-auth` settings block requires this version or newer; run `mihari proxy-auth reset --yes` before downgrading to versions without this feature.
+
+**Reset Proxy Authentication** clears instance credentials and bypass overrides and restores subscription authentication. **System → Maintenance → Reset Mihari Data** clears business settings, subscriptions/cache, generated configuration, node selection cache and the selected preferences store, while retaining the program, service, downloaded core/panels/GeoIP, logs/exports, local control credential and unknown files. Full reset previews exact managed files and requires two confirmations. It rotates Controller/Web credentials, stops proxying and the Web gateway, and returns to Setup. Restart the daemon to bind the fresh endpoints/credentials; automatic core startup remains paused until Setup completes. A durable reset marker resumes an interrupted clear before business stores open. Startup degradation provides restricted local reset operations rather than starting an unvalidated core.

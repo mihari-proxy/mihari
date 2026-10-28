@@ -336,6 +336,7 @@ var _ interface{ Err() error } = actionResultMsg{}
 
 // Model is the System page.
 type Model struct {
+	auth                  authUI
 	egress                egressUI
 	coreVersion           coreVersionState
 	channelDiagnostic     tea.Cmd
@@ -488,6 +489,9 @@ func NewWithContext(ctx context.Context, client Client, svc ServiceController, n
 }
 
 func (m *Model) HelpMode() string {
+	if m.auth.open {
+		return "proxy-auth"
+	}
 	if m.egress.open {
 		return "egress"
 	}
@@ -508,6 +512,9 @@ func (m *Model) HelpMode() string {
 
 // FooterHints returns edit-mode shortcuts while a port row is being typed.
 func (m *Model) FooterHints() string {
+	if m.auth.open {
+		return "Enter edit · Ctrl+S save · Esc cancel"
+	}
 	if m.egress.open {
 		return "↑/↓ select  PgUp/Dn details  Enter use  Esc close"
 	}
@@ -691,6 +698,7 @@ func (m *Model) FocusFirst() {
 func (m *Model) SetSnapshot(status protocol.Status, core protocol.CoreStatus) {
 	if m.status.PID != status.PID {
 		m.egress = egressUI{epoch: m.egress.epoch + 1}
+		m.auth = authUI{epoch: m.auth.epoch + 1}
 	}
 	if m.status.PID != status.PID || m.core.PID != core.PID || (m.core.Status != core.Status && core.Status == "running") {
 		m.portProbeNeeded = true
@@ -733,6 +741,12 @@ func (m *Model) ApplyRootNetworkStatus(proxy protocol.SystemProxyStatus, proxyOK
 
 func (m *Model) SetMutationsEnabled(enabled bool) {
 	if m.mutationsEnabled && !enabled {
+		m.auth.epoch++
+		m.auth.pending = false
+		m.auth.loaded = false
+		if m.auth.open {
+			m.auth.err = "Disconnected. Close and reopen after reconnecting."
+		}
 		m.egress.epoch++
 		m.egress.pending = false
 		m.egress.loaded = false
@@ -892,6 +906,26 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		m.ensureFocusVisible()
 	}()
 	switch typed := message.(type) {
+	case resetPreviewMsg:
+		if typed.err != nil {
+			m.markRowOutcome("data-reset", false, actionErrorDetail(typed.err, "Could not preview data reset"))
+			return m, nil
+		}
+		return m, m.confirmDataReset(typed.preview)
+	case resetConfirmedMsg:
+		return m, m.runDataReset(typed.preview)
+	case resetResultMsg:
+		m.clearRowPending()
+		if typed.err != nil {
+			m.markRowOutcome("data-reset", false, actionErrorDetail(typed.err, "Reset interrupted; review a new preview to retry"))
+			return m, nil
+		}
+		m.auth = authUI{epoch: m.auth.epoch + 1}
+		return m, tea.Batch(func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: typed.result.Revision} }, func() tea.Msg { return ui.RouteRequestMsg{Page: ui.PageSetup} })
+	case authResultMsg:
+		return m, m.handleAuthResult(typed)
+	case authResetConfirmedMsg:
+		return m, m.authSave(true)
 	case egressResultMsg:
 		return m, m.handleEgressResult(typed)
 	case ui.LoggingSyncMsg:
@@ -1259,6 +1293,9 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 	}
 
 	key, ok := message.(tea.KeyPressMsg)
+	if m.auth.open {
+		return m, m.updateAuth(message)
+	}
 	if m.egress.open {
 		return m, m.updateEgressDialog(message)
 	}
@@ -1301,6 +1338,10 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 			return m, nil
 		}
 		switch m.focusID {
+		case "data-reset":
+			return m, m.previewDataReset()
+		case "proxy-auth":
+			return m, m.openAuth()
 		case "egress":
 			return m, m.openEgressDialog()
 		case rowZashboard:
@@ -1451,6 +1492,9 @@ func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cm
 
 func (m *Model) View() (view string) {
 	defer func() {
+		if m.auth.open {
+			view = ui.CenterOverlay(m.theme, view, m.authView(), m.width, m.height)
+		}
 		if m.egress.open {
 			view = ui.CenterOverlay(m.theme, view, m.egressDialogView(), m.width, m.height)
 		}
@@ -1612,12 +1656,16 @@ func (m *Model) rows() []row {
 }
 
 func (m *Model) maintenanceRows() []row {
-	return []row{{
+	rows := []row{{
 		id:      rowCompleteUninstall,
 		section: ui.MaintenanceSectionTitle,
 		label:   ui.CompleteUninstallLabel,
 		detail:  ui.CompleteUninstallImpact,
 	}}
+	if m.hasCapability(protocol.CapabilityDataReset) {
+		rows = append([]row{{id: "data-reset", section: ui.MaintenanceSectionTitle, label: "Reset Mihari Data", detail: "Clear business data; retain installation, downloaded resources and logs"}}, rows...)
+	}
+	return rows
 }
 
 func (m *Model) previewCompleteUninstall() tea.Cmd {
@@ -1751,11 +1799,19 @@ func (m *Model) mihariUpdateRow() row {
 }
 
 func (m *Model) portRows() []row {
-	return []row{
+	rows := []row{
 		m.portRow(rowMixed, ui.MixedLabel, m.onboarding.MixedAddr, m.core.PID),
 		m.portRow(rowController, ui.ControllerPortLabel, m.onboarding.ControllerAddr, m.core.PID),
 		m.portRow(rowWeb, ui.WebPortLabel, m.onboarding.WebAddr, m.status.PID),
 	}
+	if m.hasCapability(protocol.CapabilityProxyAuth) {
+		value := "Configure"
+		if m.auth.loaded {
+			value = fmt.Sprintf("%s · %d users", m.auth.status.Config.Mode, len(m.auth.status.Users))
+		}
+		rows = append(rows, row{id: "proxy-auth", section: ui.PortsConfigSectionTitle, label: "Proxy Authentication", value: value, detail: "Manage proxy users and authentication bypass"})
+	}
+	return rows
 }
 
 func (m *Model) portRow(id, label, addr string, ownerPID int) row {

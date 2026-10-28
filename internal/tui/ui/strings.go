@@ -231,7 +231,7 @@ const (
 	AboutGitHubURL         = "https://github.com/mihari-proxy/mihari"
 	AboutGitHubOpenFailed  = "Could not open GitHub"
 
-	PortsConfigSectionTitle      = "Ports Config"
+	PortsConfigSectionTitle      = "Ports & Authentication"
 	MixedLabel                   = "Mixed"
 	ControllerPortLabel          = "Controller"
 	WebPortLabel                 = "Web"

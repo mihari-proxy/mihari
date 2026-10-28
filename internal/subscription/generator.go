@@ -27,6 +27,9 @@ func Generate(base Document, overrides map[string]any, settings config.Settings)
 	if err != nil {
 		return nil, err
 	}
+	if _, err := ApplyProxyAuth(document, settings.EffectiveProxyAuth()); err != nil {
+		return nil, err
+	}
 	ensureRoutable(document)
 	if err := applyEgress(document, settings.EgressInterface); err != nil {
 		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "generate DNS outbound interface bindings"}, err)

@@ -236,3 +236,9 @@ func readFile(path string) ([]byte, error) {
 	}
 	return raw, nil
 }
+
+// Reset restores this preferences store to its defaults through the normal persistence path.
+func (s *Service) Reset(ctx context.Context) (Preferences, error) {
+	proxies := DefaultProxyPreferences()
+	return s.Update(ctx, Update{ConnectionsColumns: append([]string{}, defaultColumns...), Proxies: &proxies, LogLevels: append([]string{}, defaultLogLevels...)})
+}

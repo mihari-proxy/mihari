@@ -1324,7 +1324,7 @@ func (model Model) dispatchPageTo(id ui.PageID, message tea.Msg) (tea.Model, tea
 	updated, command := page.Update(message)
 	model.pages[id] = updated
 	if id == ui.PageSystem && model.active == id {
-		if page, ok := updated.(*systempage.Model); ok && page.HasEgressDialog() {
+		if page, ok := updated.(*systempage.Model); ok && page.HasInputDialog() {
 			model.inputMode = ui.InputText
 		} else if provider, ok := updated.(ui.HelpModeProvider); ok && provider.HelpMode() == "" {
 			model.inputMode = ui.InputNavigation

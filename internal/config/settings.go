@@ -37,18 +37,19 @@ type LoggingSettings struct {
 }
 
 type Settings struct {
-	EgressInterface    string           `yaml:"egress-interface,omitempty"`
-	Routing            *RoutingSettings `yaml:"routing,omitempty"`
-	Schema             string           `yaml:"schema"`
-	MixedAddr          string           `yaml:"mixed-addr"`
-	ControllerAddr     string           `yaml:"controller-addr"`
-	WebAddr            string           `yaml:"web-addr"`
-	ControllerSecret   string           `yaml:"controller-secret"`
-	SystemProxyDesired bool             `yaml:"system-proxy-desired,omitempty"`
-	Tun                map[string]any   `yaml:"tun,omitempty"` // managed block; empty = unmanaged
-	CoreChannel        string           `yaml:"core-channel,omitempty"`
-	CoreChannelBundle  string           `yaml:"core-channel-bundle,omitempty"`
-	Logging            *LoggingSettings `yaml:"log,omitempty"`
+	ProxyAuth          *protocol.ProxyAuthConfig `yaml:"proxy-auth,omitempty"`
+	EgressInterface    string                    `yaml:"egress-interface,omitempty"`
+	Routing            *RoutingSettings          `yaml:"routing,omitempty"`
+	Schema             string                    `yaml:"schema"`
+	MixedAddr          string                    `yaml:"mixed-addr"`
+	ControllerAddr     string                    `yaml:"controller-addr"`
+	WebAddr            string                    `yaml:"web-addr"`
+	ControllerSecret   string                    `yaml:"controller-secret"`
+	SystemProxyDesired bool                      `yaml:"system-proxy-desired,omitempty"`
+	Tun                map[string]any            `yaml:"tun,omitempty"` // managed block; empty = unmanaged
+	CoreChannel        string                    `yaml:"core-channel,omitempty"`
+	CoreChannelBundle  string                    `yaml:"core-channel-bundle,omitempty"`
+	Logging            *LoggingSettings          `yaml:"log,omitempty"`
 }
 
 // DefaultLoggingSettings returns the logging configuration used when no override is persisted.
@@ -91,6 +92,10 @@ func (s *Settings) SetLogging(logging LoggingSettings) {
 // Clone returns a copy of Settings that does not share mutable YAML values.
 func (s Settings) Clone() Settings {
 	clone := s
+	if s.ProxyAuth != nil {
+		auth := s.EffectiveProxyAuth()
+		clone.ProxyAuth = &auth
+	}
 	if s.Routing != nil {
 		routing := *s.Routing
 		if s.Routing.GlobalSelections != nil {
@@ -448,6 +453,9 @@ func SaveWithCommit(path string, settings Settings) (CommitResult, error) {
 }
 
 func (s Settings) Validate() error {
+	if err := ValidateProxyAuth(s.EffectiveProxyAuth()); err != nil {
+		return err
+	}
 	if err := validateRouting(s.Routing); err != nil {
 		return err
 	}

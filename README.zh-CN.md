@@ -305,3 +305,13 @@ Mihari 是一个独立项目,与 mihomo 项目或 MetaCubeX 无关联,也不受�
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/chart?repos=mihari-proxy/mihari&type=date&legend=bottom-right)](https://www.star-history.com/?repos=mihari-proxy%2Fmihari&type=date&legend=bottom-right)
+
+## 代理认证与业务数据重置
+
+入口为 **System → Ports & Authentication → Proxy Authentication**，CLI 为 `mihari proxy-auth`。认证支持沿用订阅（follow）、启用（enabled）和关闭（disabled）。启用时按用户名精确匹配合并订阅和实例用户：新增用户追加，同名覆盖密码；移除覆盖恢复订阅密码。排除订阅用户留待 #357。
+
+免认证支持沿用订阅（follow）、自定义（custom）和全部要求认证（required）。自定义提供本机回环免认证开关及额外 CIDR；额外 CIDR 不允许与 IPv4/IPv6 回环范围重叠。这不会改变监听地址或开放局域网访问。关闭认证仍保留已编辑凭据。保存后热重载，不重启 mihomo，也不主动断开已有连接。未获免认证的客户端需要提供代理用户名密码，使用系统代理的应用同样如此。
+
+密码默认遮罩，仅通过认证本地 IPC 的显式操作查看。CLI 支持隐藏终端输入或 `--password-stdin`，不提供密码命令行参数。非默认 `proxy-auth` 设置需要支持此功能的版本；降级前执行 `mihari proxy-auth reset --yes` 移除该设置块。
+
+**Reset Proxy Authentication** 只清除实例代理凭据及免认证覆盖，恢复订阅认证。**System → Maintenance → Reset Mihari Data** 清除业务设置、订阅及缓存、生成配置、节点选择缓存和该实例的偏好存储，保留程序、系统服务、已下载内核/面板/GeoIP、日志与导出、本地控制凭据及未知文件。全量重置先预览精确文件，再确认两次；更新 Controller/Web 凭据，停止代理和 Web gateway，并返回 Setup。需要重启 daemon 以绑定新的端口和凭据；完成 Setup 前不自动启动内核。中断清理由持久标记保护，在启动打开业务存储前继续完成。启动降级时只开放受限本地重置操作，不启动未校验的内核。

@@ -1507,3 +1507,31 @@ func readFileString(t *testing.T, path string) string {
 	}
 	return string(raw)
 }
+
+func TestRunDaemon_ResetResumeFailureKeepsRecoveryIPC(t *testing.T) {
+	resetDaemonRunSeamsForTest(t)
+	paths := absoluteTempPaths(t)
+	fs, err := platform.NewPrivateFS(paths.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fs.Close() })
+	if err := os.WriteFile(filepath.Join(paths.Root, "business-reset.state"), []byte("clearing\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(paths.Settings, 0700); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	runDaemon = func(_ context.Context, options daemon.Options) error {
+		called = true
+		recovery, ok := options.Runtime.(interface{ Capabilities() []string })
+		if !ok || !slices.Contains(recovery.Capabilities(), protocol.CapabilityDataReset) {
+			t.Fatal("reset recovery unavailable")
+		}
+		return nil
+	}
+	if err := runDaemonWith(t.Context(), daemonRunDeps{Paths: paths, PrivateFS: fs, Token: "fixture", Version: "fixture"}); err != nil || !called {
+		t.Fatalf("reset failure lost local recovery: called=%v err=%v", called, err)
+	}
+}

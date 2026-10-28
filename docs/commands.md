@@ -227,3 +227,35 @@ TUI 九个页面均可按 F2 打开诊断历史，在列表和详情间切换、
 本地 YAML 导入复用缓存、生成和刷新事务。`--file` 只接受绝对路径或 file URI，不与 URL/`--proxy` 合用；已有条目禁止 URL/file 跨类型转换。同类型来源编辑保留旧缓存及其目录，不立即 reload。daemon 使用自身权限读取普通文件，最大 16 MiB。Windows、Linux、macOS 路径由 platform 转换，普通业务响应不暴露完整路径。
 
 创建本地/远程订阅遇到本地文件引用时，校验后列出引用与后果。非交互/`--json` 须加 `--allow-file-references`，否则 `invalid_argument`、退出码 2，`details.confirmation_required=file_references`；交互 CLI/TUI 默认取消，同意后以新操作 ID 重新读取校验。后续更新不再询问。Mihari 只缓存主 YAML，原生 mihomo watcher/文件操作独立于自动刷新，引用文件不能随主缓存回滚。URL provider 原生下载保持。参见 [ADR 0009](adr/0009-local-yaml-source-and-cache.md)。
+
+## proxy-auth — 实例代理认证
+
+```console
+mihari proxy-auth status
+mihari proxy-auth user set USER --password-stdin
+mihari proxy-auth user set USER
+mihari proxy-auth user remove USER
+mihari proxy-auth user reveal USER
+mihari proxy-auth mode follow|enabled|disabled
+mihari proxy-auth bypass follow|custom|required
+mihari proxy-auth local-bypass on|off
+mihari proxy-auth prefix add CIDR
+mihari proxy-auth prefix remove CIDR
+mihari proxy-auth reset --yes
+```
+
+支持全局 `--json`。`user set` 不带 `--password-stdin` 时要求交互终端并隐藏输入；编辑已有实例用户时空密码保留原值，新用户密码不能为空。普通查询隐藏密码，`user reveal` 显式查看。用户按精确用户名增量合并；`remove` 仅移除实例项，订阅同名用户恢复其原密码，不支持排除订阅用户。模式 `follow` 不应用保存的用户覆盖，`enabled` 要求最终至少一个用户，`disabled` 不要求认证但保留凭据。免认证模式独立；关闭认证时显示为不生效。
+
+`local-bypass` 与 `prefix add` 自动选择自定义免认证模式。额外 CIDR 不得与 127.0.0.0/8 或 ::1/128 重叠。热重载立即应用，不主动清理已有连接。认证变更遵循候选校验、原子发布、reload 及失败恢复；订阅切换或刷新导致明确启用的认证没有用户时拒绝应用。
+
+## data-reset — 保留安装的业务重置
+
+```console
+mihari data-reset preview
+mihari data-reset preview --json
+mihari data-reset run --digest DIGEST --yes --confirm
+```
+
+`DIGEST` 来自刚审阅的预览；文件变化需重新预览。`run` 必须提供两次显式确认，非交互同样适用。仅通过认证本地 IPC 由 daemon 执行；CLI 不直接写业务文件。
+
+清除设置、订阅记录和受管缓存、运行配置、节点选择缓存、面板选择及偏好；保留安装程序/命令、服务、内核/面板/GeoIP 下载、日志/导出、本地控制凭据及未知文件。Controller/Web 凭据重新生成。重置后代理及 Web gateway 停止，本地 IPC 保持；重启 daemon 后完成 Setup 才恢复内核运行。与 `service uninstall --purge` 不同，本命令不卸载程序或服务。启动降级时可用受限重置恢复；其他业务 mutation 仍拒绝。完成初始化前不应降级到不识别重置标记的旧版本。

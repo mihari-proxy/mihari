@@ -57,6 +57,8 @@ func (m *Manager) ListPanels(context.Context) ([]panel.PanelInfo, error) {
 // panelID selects which installed panel to open; empty uses the default active panel.
 // Callers must not log or persist the result beyond immediately launching a browser.
 func (m *Manager) OpenWebGUI(_ context.Context, panelID string) (string, string, error) {
+	m.settingsMu.RLock()
+	defer m.settingsMu.RUnlock()
 	if m.webGateway == nil || m.webOpenToken == "" {
 		return "", "", protocol.APIError{Code: protocol.CodeInvalidState, Message: "web gui open is unavailable"}
 	}

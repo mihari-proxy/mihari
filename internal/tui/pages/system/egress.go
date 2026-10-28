@@ -62,6 +62,9 @@ func egressAvailability(state string) string {
 // HasEgressDialog lets the shell keep keyboard ownership synchronous with the dialog.
 func (m *Model) HasEgressDialog() bool { return m.egress.open }
 
+// HasInputDialog reports dialogs that own text input in the root shell.
+func (m *Model) HasInputDialog() bool { return m.egress.open || m.auth.open }
+
 // SetEgress observes a daemon snapshot without discarding a dialog's draft or revision.
 func (m *Model) SetEgress(status protocol.EgressStatus) {
 	if m.egress.loaded && status.Revision < m.egress.status.Revision {

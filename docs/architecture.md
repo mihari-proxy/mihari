@@ -200,3 +200,11 @@ MIHARI_CONTROL_CREDENTIAL=...
 本地控制请求可选 `execution_mode: "setup"`，适用端口/完成标记、核心安装、订阅添加与显式刷新、GeoIP 更新。`setup-target-v1` 仅表示已开放资源支持这套语义，不扩大端口恢复 surface 或 Web gateway 权限。Setup TUI 先检查能力，不携带旧页面 `if_revision`；旧请求省略新字段时语义不变，同时提供 `if_revision` 仍执行全局严格前提。
 
 Manager 固定本步目标，合并最新未覆盖设置并经原 mutation owner 提交。只有提交前的相关输入失效才允许最多两次追加准备，下载与选定制品复用；失败、回滚失败或未知结果不能作为内部重提理由。核心重新校验用最新设置和活动订阅生成的配置及同一核心候选，停止状态也不能跳过；核心复用在取得所有权后复查对象身份。添加并启用订阅同一步提交，失败恢复此前有效目录和运行配置。完成引导只写完成标记，跳过不写资源，其他订阅及面板不被清除。全局其他入口的 revision 误冲突另由 Issue #349 跟进。
+
+## 代理认证与业务数据重置
+
+Manager 持有可选 `proxy-auth` 意图，在生成器克隆订阅后应用用户合并及免认证模式；普通状态不返回密码，显式 reveal 仅经认证本地 IPC。新增 `/v1/proxy-auth` GET/PUT 与 `/v1/data-reset` GET/POST 是独立的向后兼容接口，未改变现有 v1 DTO/退出码。浏览器不获得这些入口。
+
+认证使用既有候选文件校验、原子替换、reload 与失败恢复路径。校验期间释放 mutation 所有权，提交前重查设置 generation、订阅 catalog/hash 和 core epoch；内核缺失时不尝试执行校验程序。认证失败不能使显式启用状态退化成无密码服务。
+
+业务重置由 daemon 在 supervisor.Update 停止并回收内核后执行，使用固定受管文件清单，不删除根目录、未知文件或下载资源。business-reset.state 的 clearing 阶段保证中断后先完成清理，setup 阶段阻止初始化完成前的自动内核启动。当前进程停止 Web gateway 并要求重启 daemon，以重新绑定端口及 Controller/Web 凭据；本地控制凭据保持。启动失败可运行只提供认证重置/业务重置的恢复 Manager，拒绝其他业务 mutation，不启动内核或 Web。该路径不扩展 CLI/TUI 的业务文件写入权限。
