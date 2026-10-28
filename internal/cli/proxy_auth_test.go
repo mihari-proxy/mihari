@@ -9,13 +9,15 @@ import (
 
 type authCLIClient struct {
 	RuntimeClient
-	config protocol.ProxyAuthConfig
-	reads  int
-	last   protocol.ProxyAuthUpdateRequest
+	config     protocol.ProxyAuthConfig
+	reads      int
+	lastReveal bool
+	last       protocol.ProxyAuthUpdateRequest
 }
 
-func (c *authCLIClient) ProxyAuth(context.Context, bool) (protocol.ProxyAuthStatus, error) {
+func (c *authCLIClient) ProxyAuth(_ context.Context, reveal bool) (protocol.ProxyAuthStatus, error) {
 	c.reads++
+	c.lastReveal = reveal
 	return protocol.ProxyAuthStatus{Config: c.config, Revision: 3}, nil
 }
 func (c *authCLIClient) UpdateProxyAuth(_ context.Context, r protocol.ProxyAuthUpdateRequest) (protocol.ProxyAuthStatus, error) {
@@ -55,7 +57,7 @@ func TestProxyAuthCLI_RevealsInactiveSavedCredential(t *testing.T) {
 	root.SetArgs([]string{"proxy-auth", "user", "reveal", "alice"})
 	var out bytes.Buffer
 	root.SetOut(&out)
-	if err := root.ExecuteContext(t.Context()); err != nil || !bytes.Contains(out.Bytes(), []byte("fixture-secret")) {
+	if err := root.ExecuteContext(t.Context()); err != nil || !c.lastReveal || !bytes.Contains(out.Bytes(), []byte("fixture-secret")) {
 		t.Fatalf("inactive saved credential cannot be revealed: %v", err)
 	}
 }

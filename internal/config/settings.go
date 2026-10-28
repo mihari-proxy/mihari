@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -94,8 +95,8 @@ func (s Settings) Clone() Settings {
 	clone := s
 	if s.ProxyAuth != nil {
 		auth := *s.ProxyAuth
-		auth.Users = append([]ProxyAuthCredential(nil), s.ProxyAuth.Users...)
-		auth.BypassPrefixes = append([]string(nil), s.ProxyAuth.BypassPrefixes...)
+		auth.Users = slices.Clone(s.ProxyAuth.Users)
+		auth.BypassPrefixes = slices.Clone(s.ProxyAuth.BypassPrefixes)
 		clone.ProxyAuth = &auth
 	}
 	if s.Routing != nil {

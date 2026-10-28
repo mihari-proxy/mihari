@@ -82,9 +82,7 @@ func (m *Model) handleAuthResult(r authResultMsg) tea.Cmd {
 			m.auth.revealed[u.Username] = u.Password
 		}
 		for _, u := range r.status.Config.Users {
-			if _, found := m.auth.revealed[u.Username]; !found {
-				m.auth.revealed[u.Username] = u.Password
-			}
+			m.auth.revealed[u.Username] = u.Password
 		}
 		m.auth.reveal = true
 		return nil

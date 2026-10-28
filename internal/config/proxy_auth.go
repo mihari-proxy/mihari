@@ -54,7 +54,7 @@ func (s *Settings) SetProxyAuth(c protocol.ProxyAuthConfig) {
 		s.ProxyAuth = nil
 		return
 	}
-	saved := &ProxyAuthSettings{Mode: c.Mode, BypassMode: c.BypassMode, LocalBypass: c.LocalBypass, BypassPrefixes: append([]string{}, c.BypassPrefixes...)}
+	saved := &ProxyAuthSettings{Mode: c.Mode, BypassMode: c.BypassMode, LocalBypass: c.LocalBypass, BypassPrefixes: append([]string(nil), c.BypassPrefixes...)}
 	for _, user := range c.Users {
 		saved.Users = append(saved.Users, ProxyAuthCredential{Username: user.Username, Password: user.Password})
 	}

@@ -46,7 +46,7 @@ func TestProxyAuth_DraftRemovalAndScrollDoNotApply(t *testing.T) {
 		command()
 	}
 	if slices.ContainsFunc(m.authUsers(), func(u protocol.ProxyAuthUser) bool { return u.Username == "fixture-00" }) {
-		t.Fatal("wrong user removed")
+		t.Fatal("selected user was not removed")
 	}
 	if len(m.authUsers()) != 24 {
 		t.Fatal("removed instance user remains visible")
@@ -119,5 +119,16 @@ func TestProxyAuth_ExplicitRevealIncludesInactiveSavedUsers(t *testing.T) {
 	m.handleAuthResult(authResultMsg{epoch: 1, reveal: true, status: protocol.ProxyAuthStatus{Config: protocol.ProxyAuthConfig{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "saved-secret"}}}}})
 	if !strings.Contains(m.authView(), "saved-secret") {
 		t.Fatal("explicit reveal omitted inactive saved credential")
+	}
+}
+
+func TestProxyAuth_RevealPrefersSavedOverrideInFollowMode(t *testing.T) {
+	m := New(&fakeClient{}, nil)
+	m.SetSize(90, 28)
+	m.auth = authUI{open: true, loaded: true, epoch: 1, draft: protocol.ProxyAuthConfig{Mode: "follow", Users: []protocol.ProxyAuthUser{{Username: "alice"}}}}
+	m.handleAuthResult(authResultMsg{epoch: 1, reveal: true, status: protocol.ProxyAuthStatus{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "subscription-secret"}}, Config: protocol.ProxyAuthConfig{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "saved-secret"}}}}})
+	view := m.authView()
+	if !strings.Contains(view, "saved-secret") || strings.Contains(view, "subscription-secret") {
+		t.Fatal("saved override reveal was replaced by the subscription credential")
 	}
 }

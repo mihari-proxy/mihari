@@ -187,6 +187,10 @@ func (b BusinessReset) Reset(ctx context.Context, digest string, warning func(er
 	if err := b.checkPath(b.marker()); err != nil {
 		return config.Settings{}, "", err
 	}
+	// Reject installed-resource errors before committing the recovery barrier.
+	if _, err := b.resetSettings(nil); err != nil {
+		return config.Settings{}, "", err
+	}
 	if err := b.write(b.marker(), []byte("clearing\n"), warning); err != nil {
 		return config.Settings{}, "", err
 	}
@@ -198,25 +202,9 @@ func (b BusinessReset) clear(ctx context.Context, warning func(error)) (config.S
 	if err != nil {
 		return config.Settings{}, "", err
 	}
-	settings := config.Defaults()
-	// Channel is installed-resource identity and is preserved with the core binary.
-	if old, e := config.Load(b.Paths.Settings); e == nil {
-		settings.CoreChannel, settings.CoreChannelBundle = old.CoreChannel, old.CoreChannelBundle
-	} else if repaired, e2 := config.LoadForProxyAuthReset(b.Paths.Settings); e2 == nil {
-		settings.CoreChannel, settings.CoreChannelBundle = repaired.CoreChannel, repaired.CoreChannelBundle
-	} else {
-		// Full reset must remain available for malformed business settings. Preserve
-		// installed-channel identity from its fixed resource sidecar when available.
-		if !errors.Is(e, os.ErrNotExist) && warning != nil {
-			warning(fmt.Errorf("resetting unreadable business settings; preserving installed resources: %w", e))
-		}
-		sidecar := filepath.Join(b.Paths.Bin, "core-channel")
-		if err := b.checkPath(sidecar); err != nil {
-			return config.Settings{}, "", err
-		}
-		if _, err := config.ApplyCoreChannelSidecar(&settings, sidecar); err != nil {
-			return config.Settings{}, "", err
-		}
+	settings, err := b.resetSettings(warning)
+	if err != nil {
+		return config.Settings{}, "", err
 	}
 	secret := make([]byte, 64)
 	if _, err := rand.Read(secret); err != nil {
@@ -259,6 +247,30 @@ func (b BusinessReset) clear(ctx context.Context, warning func(error)) (config.S
 		return config.Settings{}, "", err
 	}
 	return settings, web, nil
+}
+
+func (b BusinessReset) resetSettings(warning func(error)) (config.Settings, error) {
+	settings := config.Defaults()
+	// Channel is installed-resource identity and is preserved with the core binary.
+	if old, e := config.Load(b.Paths.Settings); e == nil {
+		settings.CoreChannel, settings.CoreChannelBundle = old.CoreChannel, old.CoreChannelBundle
+	} else if repaired, e2 := config.LoadForProxyAuthReset(b.Paths.Settings); e2 == nil {
+		settings.CoreChannel, settings.CoreChannelBundle = repaired.CoreChannel, repaired.CoreChannelBundle
+	} else {
+		// Full reset must remain available for malformed business settings. Preserve
+		// installed-channel identity from its fixed resource sidecar when available.
+		if !errors.Is(e, os.ErrNotExist) && warning != nil {
+			warning(fmt.Errorf("resetting unreadable business settings; preserving installed resources: %w", e))
+		}
+		sidecar := filepath.Join(b.Paths.Bin, "core-channel")
+		if err := b.checkPath(sidecar); err != nil {
+			return config.Settings{}, err
+		}
+		if _, err := config.ApplyCoreChannelSidecar(&settings, sidecar); err != nil {
+			return config.Settings{}, err
+		}
+	}
+	return settings, nil
 }
 
 func (b BusinessReset) write(path string, content []byte, warning func(error)) error {

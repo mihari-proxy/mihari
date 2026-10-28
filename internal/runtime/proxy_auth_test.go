@@ -156,3 +156,15 @@ func TestProxyAuth_RecoveryResetFinishesAfterCommitCancellation(t *testing.T) {
 		t.Fatalf("committed recovery reset did not finish: revision=%d err=%v", status.Revision, err)
 	}
 }
+
+func TestProxyAuth_UnchangedConfigurationDoesNotReload(t *testing.T) {
+	m, core := onlineEgressManager(t)
+	request := protocol.ProxyAuthUpdateRequest{Config: protocol.ProxyAuthConfig{Mode: "enabled", BypassMode: "follow", Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "fixture"}}}}
+	if _, err := m.UpdateProxyAuth(t.Context(), Operation{ID: "first"}, request); err != nil {
+		t.Fatal(err)
+	}
+	before := m.store.Load().Revision
+	if _, err := m.UpdateProxyAuth(t.Context(), Operation{ID: "unchanged"}, request); err != nil || core.reloads != 1 || m.store.Load().Revision != before {
+		t.Fatalf("unchanged config reloaded: reloads=%d err=%v", core.reloads, err)
+	}
+}

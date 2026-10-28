@@ -169,6 +169,33 @@ func TestBusinessReset_CompletedResumeDoesNotReturnLateCancellation(t *testing.T
 	if err := b.Resume(ctx); err != nil {
 		t.Fatalf("durable completed reset misreported as failed: %v", err)
 	}
+	if marker, err := os.ReadFile(b.marker()); err != nil || string(marker) != "setup\n" {
+		t.Fatalf("resume did not reach Setup: %v", err)
+	}
+}
+
+func TestBusinessReset_UnsafeChannelSidecarRejectedBeforeMarker(t *testing.T) {
+	paths := platform.NewPaths(t.TempDir())
+	if err := paths.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.Settings, []byte("malformed: ["), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(paths.Bin, "core-channel"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	b := BusinessReset{Paths: paths}
+	preview, err := b.Preview(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.Reset(t.Context(), preview.Digest, nil); err == nil {
+		t.Fatal("unsafe installed channel sidecar accepted")
+	}
+	if pending, err := b.Pending(); err != nil || pending {
+		t.Fatalf("preflight failure left a durable reset marker: %v", err)
+	}
 }
 
 func TestBusinessReset_CorruptAuthPreservesInstalledChannel(t *testing.T) {
