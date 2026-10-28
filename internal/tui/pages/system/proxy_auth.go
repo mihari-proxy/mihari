@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -18,8 +19,12 @@ type authClient interface {
 	ProxyAuth(context.Context, bool) (protocol.ProxyAuthStatus, error)
 	UpdateProxyAuth(context.Context, protocol.ProxyAuthUpdateRequest) (protocol.ProxyAuthStatus, error)
 }
+type revealedAuthCredential struct {
+	saved, effective *protocol.ProxyAuthUser
+}
 type authUI struct {
-	revealed                      map[string]string
+	revealed                      map[string]revealedAuthCredential
+	manualScroll                  bool
 	open, loaded, pending, reveal bool
 	conflict                      bool
 	epoch                         uint64
@@ -77,12 +82,14 @@ func (m *Model) handleAuthResult(r authResultMsg) tea.Cmd {
 		return nil
 	}
 	if r.reveal {
-		m.auth.revealed = map[string]string{}
+		m.auth.revealed = map[string]revealedAuthCredential{}
 		for _, u := range r.status.Users {
-			m.auth.revealed[u.Username] = u.Password
+			m.auth.revealed[u.Username] = revealedAuthCredential{effective: &u}
 		}
 		for _, u := range r.status.Config.Users {
-			m.auth.revealed[u.Username] = u.Password
+			credential := m.auth.revealed[u.Username]
+			credential.saved = &u
+			m.auth.revealed[u.Username] = credential
 		}
 		m.auth.reveal = true
 		return nil
@@ -112,8 +119,13 @@ func (m *Model) authRows() []string {
 	for _, u := range m.authUsers() {
 		label := diagnostics.EscapeTerminal(u.Username) + " · " + u.Source
 		if a.reveal {
-			if password, found := a.revealed[u.Username]; found {
-				label += " · saved: " + diagnostics.EscapeTerminal(password)
+			if credential, found := a.revealed[u.Username]; found {
+				if credential.saved != nil {
+					label += "\n  saved: " + diagnostics.EscapeTerminal(credential.saved.Password)
+				}
+				if credential.effective != nil {
+					label += "\n  effective (" + diagnostics.EscapeTerminal(credential.effective.Source) + "): " + diagnostics.EscapeTerminal(credential.effective.Password)
+				}
 			}
 		}
 		rows = append(rows, "User: "+label)
@@ -284,9 +296,17 @@ func (m *Model) updateAuth(message tea.Msg) tea.Cmd {
 	cycle := func(value string, values []string) string { return values[(slices.Index(values, value)+1)%len(values)] }
 	switch key.String() {
 	case "up":
+		a.manualScroll = false
 		a.selected = max(0, a.selected-1)
 	case "down":
+		a.manualScroll = false
 		a.selected = min(len(m.authRows())-1, a.selected+1)
+	case "pgup":
+		a.manualScroll = true
+		a.top = max(0, a.top-max(1, m.height-12))
+	case "pgdown":
+		a.manualScroll = true
+		a.top += max(1, m.height-12)
 	case "ctrl+s":
 		return m.authSave(false)
 	case "ctrl+r":
@@ -368,15 +388,32 @@ func (m *Model) authView() string {
 	} else {
 		rows := m.authRows()
 		a.selected = min(a.selected, len(rows)-1)
-		a.top = ui.EnsureLineVisible(a.top, height, len(rows), a.selected, a.selected+1)
-		for i, line := range ui.SliceLines(rows, a.top, height) {
-			line = ui.TruncateVisible(line, width-4)
-			if i+a.top == a.selected {
+		var rendered []string
+		var owners []int
+		selectedStart, selectedEnd := 0, 1
+		for i, row := range rows {
+			start := len(rendered)
+			parts := strings.Split(ansi.Hardwrap(row, width-4, true), "\n")
+			rendered = append(rendered, parts...)
+			for range parts {
+				owners = append(owners, i)
+			}
+			if i == a.selected {
+				selectedStart, selectedEnd = start, len(rendered)
+			}
+		}
+		if a.manualScroll {
+			a.top = min(a.top, max(0, len(rendered)-height))
+		} else {
+			a.top = ui.EnsureLineVisible(a.top, height, len(rendered), selectedStart, selectedEnd)
+		}
+		for i, line := range ui.SliceLines(rendered, a.top, height) {
+			if owners[i+a.top] == a.selected {
 				line = m.theme.RowFocus.Render("› " + line)
 			}
 			lines = append(lines, line)
 		}
-		lines = append(lines, "Enter edit/cycle · d remove override/CIDR · Ctrl+R reveal", "Ctrl+S save · Esc cancel · Existing connections remain")
+		lines = append(lines, "Enter edit · d remove · Ctrl+R reveal · PgUp/PgDn scroll", "Ctrl+S save · Esc cancel · Existing connections remain")
 	}
 	if !a.loaded {
 		lines = append(lines, "Loading…")

@@ -5,6 +5,7 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 	"context"
 	"fmt"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"slices"
@@ -122,13 +123,40 @@ func TestProxyAuth_ExplicitRevealIncludesInactiveSavedUsers(t *testing.T) {
 	}
 }
 
-func TestProxyAuth_RevealPrefersSavedOverrideInFollowMode(t *testing.T) {
+func TestProxyAuth_RevealIncludesSavedAndEffectiveCredentialsInFollowMode(t *testing.T) {
 	m := New(&fakeClient{}, nil)
 	m.SetSize(90, 28)
 	m.auth = authUI{open: true, loaded: true, epoch: 1, draft: protocol.ProxyAuthConfig{Mode: "follow", Users: []protocol.ProxyAuthUser{{Username: "alice"}}}}
-	m.handleAuthResult(authResultMsg{epoch: 1, reveal: true, status: protocol.ProxyAuthStatus{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "subscription-secret"}}, Config: protocol.ProxyAuthConfig{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "saved-secret"}}}}})
+	m.handleAuthResult(authResultMsg{epoch: 1, reveal: true, status: protocol.ProxyAuthStatus{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "subscription-secret", Source: "subscription"}}, Config: protocol.ProxyAuthConfig{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "saved-secret"}}}}})
 	view := m.authView()
-	if !strings.Contains(view, "saved-secret") || strings.Contains(view, "subscription-secret") {
-		t.Fatal("saved override reveal was replaced by the subscription credential")
+	if !strings.Contains(view, "saved: saved-secret") || !strings.Contains(view, "effective (subscription): subscription-secret") {
+		t.Fatal("reveal omitted the saved or effective credential and its source")
+	}
+}
+
+func TestProxyAuth_LongRevealedCredentialsWrapScrollAndHide(t *testing.T) {
+	m := New(&fakeClient{}, nil)
+	m.SetSize(44, 20)
+	m.auth = authUI{open: true, loaded: true, epoch: 1, draft: protocol.ProxyAuthConfig{Mode: "follow", Users: []protocol.ProxyAuthUser{{Username: "alice"}}}}
+	m.handleAuthResult(authResultMsg{epoch: 1, reveal: true, status: protocol.ProxyAuthStatus{
+		Users:  []protocol.ProxyAuthUser{{Username: "alice", Password: strings.Repeat("e", 220) + "effective-tail", Source: "subscription"}},
+		Config: protocol.ProxyAuthConfig{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: strings.Repeat("s", 220) + "saved-tail"}}},
+	}})
+	var views strings.Builder
+	for range 12 {
+		view := m.authView()
+		if lipgloss.Width(view) > 44 || lipgloss.Height(view) > 20 {
+			t.Fatal("revealed credentials exceed viewport")
+		}
+		views.WriteString(view)
+		m.updateAuth(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	}
+	visible := strings.Join(strings.Fields(ansi.Strip(views.String())), "")
+	if !strings.Contains(visible, "saved-tail") || !strings.Contains(visible, "effective-tail") {
+		t.Fatal("long saved/effective credentials cannot be scrolled into view")
+	}
+	m.updateAuth(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
+	if m.auth.reveal || m.auth.revealed != nil {
+		t.Fatal("hide retained revealed credentials")
 	}
 }
