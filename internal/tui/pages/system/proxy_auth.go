@@ -289,7 +289,7 @@ func (m *Model) updateAuth(message tea.Msg) tea.Cmd {
 	if !a.loaded {
 		return nil
 	}
-	if a.manualScroll && (key.String() == "enter" || key.String() == "d" || key.String() == "delete") {
+	if a.manualScroll && slices.Contains([]string{"enter", "space", "d", "delete"}, key.String()) {
 		a.err = "Use Up/Down to select a row before editing or removing it."
 		return nil
 	}

@@ -171,6 +171,7 @@ func TestProxyAuth_PagingRequiresSelectionBeforeRowActions(t *testing.T) {
 	m.updateAuth(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	m.updateAuth(tea.KeyPressMsg{Code: 'd'})
 	m.updateAuth(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m.updateAuth(tea.KeyPressMsg{Code: tea.KeySpace})
 	if len(m.auth.draft.Users) != 21 || m.auth.edit != "" || m.auth.err == "" {
 		t.Fatal("paging allowed an action on the hidden selection")
 	}
