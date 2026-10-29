@@ -173,7 +173,7 @@ mihari tun disable
 
 `sysproxy enable` 将桌面 HTTP/HTTPS/SOCKS 系统代理指向 Mihari 的混合端点。如果另一产品已持有代理,enable 会以 `system_proxy_conflict` 失败,除非传入 `--force`(TUI 会要求确认)。`sysproxy disable` 只清除**由 Mihari 持有**的代理;它不会关闭外部代理。在 Windows 上,当 Mihari 作为 LocalSystem 服务运行时,它写入**交互式控制台用户**的 WinINET 配置单元(`HKEY_USERS\<SID>\…`),而不是 SYSTEM 自己的 `HKCU`,因此桌面浏览器能感知到变更。
 
-`tun enable|disable` 仅覆盖 `tun.enable`；stack、device、DNS、路由等其他 TUN 参数保留订阅原值，不自动注入默认 stack。未通过 Mihari 托管开关时，订阅的 enable 也保持原值。开关意图由 daemon 持久化，并在可用时通过控制器实时生效。开启前会检测系统上的其他 TUN 网卡与其他 mihomo 进程(忽略 Down 状态的残留适配器);冲突时以 `tun_conflict` 失败,除非传入 `--force`(TUI 会要求确认)。`--force` 只绕过冲突门控:若内核未真正开启 TUN,Desired 会回滚。TUN 根据 OS 不同可能需要提权或安装服务。没有用于修改端口的 CLI 命令;Mixed / Controller / Web 端口在 TUI System 页的 Ports Config 中修改。
+`tun enable|disable` 仅覆盖 `tun.enable`；stack、device、DNS、路由等其他 TUN 参数保留订阅原值，不自动注入默认 stack。未通过 Mihari 托管开关时，订阅的 enable 也保持原值。开关意图由 daemon 持久化，并在可用时通过控制器实时生效。开启前会检测系统上的其他 TUN 网卡与其他 mihomo 进程(忽略 Down 状态的残留适配器);冲突时以 `tun_conflict` 失败,除非传入 `--force`(TUI 会要求确认)。`--force` 只绕过冲突门控:若内核未真正开启 TUN,Desired 会回滚。TUN 根据 OS 不同可能需要提权或安装服务。没有用于修改端口的 CLI 命令;Mixed / Controller / Web 端口在 TUI System 页的 Ports & Authentication 中修改。
 
 ## egress — 出口网卡
 
@@ -227,3 +227,37 @@ TUI 九个页面均可按 F2 打开诊断历史，在列表和详情间切换、
 本地 YAML 导入复用缓存、生成和刷新事务。`--file` 只接受绝对路径或 file URI，不与 URL/`--proxy` 合用；已有条目禁止 URL/file 跨类型转换。同类型来源编辑保留旧缓存及其目录，不立即 reload。daemon 使用自身权限读取普通文件，最大 16 MiB。Windows、Linux、macOS 路径由 platform 转换，普通业务响应不暴露完整路径。
 
 创建本地/远程订阅遇到本地文件引用时，校验后列出引用与后果。非交互/`--json` 须加 `--allow-file-references`，否则 `invalid_argument`、退出码 2，`details.confirmation_required=file_references`；交互 CLI/TUI 默认取消，同意后以新操作 ID 重新读取校验。后续更新不再询问。Mihari 只缓存主 YAML，原生 mihomo watcher/文件操作独立于自动刷新，引用文件不能随主缓存回滚。URL provider 原生下载保持。参见 [ADR 0009](adr/0009-local-yaml-source-and-cache.md)。
+
+## proxy-auth — 实例代理认证
+
+```console
+mihari proxy-auth status
+mihari proxy-auth user set USER --password-stdin
+mihari proxy-auth user set USER
+mihari proxy-auth user remove USER
+mihari proxy-auth user reveal USER
+mihari proxy-auth mode follow|enabled|disabled
+mihari proxy-auth bypass follow|custom|required
+mihari proxy-auth local-bypass on|off
+mihari proxy-auth prefix add CIDR
+mihari proxy-auth prefix remove CIDR
+mihari proxy-auth reset --yes
+```
+
+降级前执行 `mihari proxy-auth reset --yes` 移除非默认认证设置，并完成待处理的数据重置与 Setup。
+
+支持全局 `--json`。`user set` 不带 `--password-stdin` 时要求交互终端并隐藏输入；编辑已有实例用户时空密码保留原值，新用户密码不能为空。普通查询隐藏密码，`user reveal` 显式查看。用户按精确用户名增量合并；`remove` 仅移除实例项，订阅同名用户恢复其原密码，不支持排除订阅用户。模式 `follow` 不应用保存的用户覆盖，`enabled` 要求最终至少一个用户，`disabled` 不要求认证但保留凭据。免认证模式独立；关闭认证时显示为不生效。
+
+`local-bypass` 与 `prefix add` 自动选择自定义免认证模式。额外 CIDR 不得与 127.0.0.0/8 或 ::1/128 重叠。热重载立即应用，不主动清理已有连接。认证变更遵循候选校验、原子发布、reload 及失败恢复；订阅切换或刷新导致明确启用的认证没有用户时拒绝应用。
+
+## data-reset — 保留安装的业务重置
+
+```console
+mihari data-reset preview
+mihari data-reset preview --json
+mihari data-reset run --digest DIGEST --yes --confirm
+```
+
+`DIGEST` 来自刚审阅的预览；文件变化需重新预览。`run` 必须提供两次显式确认，非交互同样适用。仅通过认证本地 IPC 由 daemon 执行；CLI 不直接写业务文件。
+
+清除设置、订阅记录和受管缓存、运行配置、节点选择缓存、面板选择及偏好；保留安装程序/命令、服务、内核/面板/GeoIP 下载、日志/导出、本地控制凭据及未知文件。Controller/Web 凭据重新生成。重置后代理及 Web gateway 停止，本地 IPC 保持；重启 daemon 后完成 Setup 才恢复内核运行。与 `service uninstall --purge` 不同，本命令不卸载程序或服务。启动降级时可用受限重置恢复；其他业务 mutation 仍拒绝。完成初始化前不应降级到不识别重置标记的旧版本。

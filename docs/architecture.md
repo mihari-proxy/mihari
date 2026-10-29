@@ -115,7 +115,7 @@ TUI 进入 System/Web GUI 时通过带认证的本地控制接口 `GET /v1/core/
 - 仅已确认的启动端口占用可开放 daemon 内部受限 onboarding 适配器，复用 Manager 的校验和原子设置事务。健康仍为 degraded，不挂载完整 RuntimeAPI；不扩大权限错误、安装事务失败等场景的可写边界。当前服务适配器不提供实例身份，端口保存后提供手动重启及重连检查，不自动操作无法核对身份的服务。
 - 新增认证只读 `GET /v1/operations/{operation_id}`（能力 `operation-status-v1`）：响应 schema、operation_id、state（running/finished/unknown），不返回请求体或内部原因。内存最多保留 256 条固定长度摘要键记录，饱和时保守 unknown；重启/淘汰亦为 unknown。覆盖 setup 的 core install、GeoIP update、onboarding update、订阅 add（含首次刷新）及 profile mutation 的完整 handler 生命周期；同 ID 所有 handler 收尾后才可能 finished。finished 不代表业务成功，取消后仍读取对应领域状态；查询绝不重放 mutation。
 - System 页面通过与 `mihari service` 相同的本地服务适配器管理 OS 服务(安装/卸载/启动/停止/重启/状态);这些操作要求进程已经提权,且不经过守护进程控制协议。当守护进程通告相应能力时,System 页面显示实时的系统代理与 TUN 状态,并通过本地控制 API 切换它们(开启外部代理或其他 TUN / mihomo 实例需要强制确认;Mihari 从不清除其他产品的代理)。
-- System 页面的 Ports Config 可修改 Mixed / Controller / Web 端口;占用按本实例 PID 显示 `Owned`,或 `Occupied by name (pid)` / `Available`。写入复用 onboarding 更新,应用后通常 `RestartRequired`。没有对应 CLI。
+- System 页面的 Ports & Authentication 可修改 Mixed / Controller / Web 端口;占用按本实例 PID 显示 `Owned`,或 `Occupied by name (pid)` / `Available`。写入复用 onboarding 更新,应用后通常 `RestartRequired`。没有对应 CLI。
 - System 页面的 Logging 区可修改 daemon-owned 的 level、最大文件大小与保留数量；更新经稳定的 `/v1/logging` 控制协议热应用，不需要 daemon restart。Logs 页的 `e` 与 System → Logging 的 **Export logs** 打开同一个本地导出对话框；导出不增加 CLI 命令；Unix 系统模式使用可选的 machine-log-snapshot-v1 控制协议。
 - System 页面在导航栏选中、按 Enter 进入之前，以只读方式检查 Mihari 的最新 GitHub Release 和 core 当前通道，并用 `当前版本 -> 最新版本 available`、`当前版本 · Up to date` 或 `ahead of <channel> <latest>` 展示结果。再次选中会重新检查；按 Enter 进入页面不会再次发起，也不会中断进行中的检查。实际更新先准备固定候选，再按真实目标版本确认；确定降级保留完整风险；未知兼容性使用简短英文说明。更新确认专用布局保留可信已安装副本的安全非标准标识 `Unknown[label]`，按副本展示，支持正文滚动且默认取消；该内部显示证据不进入版本比较、preview ID、CLI/JSON、日志或持久化。确认后，本地 updater 在控制协议之外复核候选、目标和服务定义，替换 Mihari 可执行文件并尝试同步已安装服务；该写操作要求 TUI 进程已经具备管理员/root 权限,不会自动触发 UAC 或 sudo。旧 Bubble Tea 程序先关闭工作、IPC、日志与文件所有者并恢复终端，再提交和进入新 TUI。取消与迟到准备结果由 Run 所有者清理。Unix 复用安装锁，Windows 在主程序替换、服务停止及服务副本复制边界复核；后续同步失败保留主程序已更新的部分成功状态。预览只在本次调用中存在，跨 Unix helper 调用用不透明 preview_id 绑定，不改变 daemon /v1、安装请求或 journal 格式。
 - 更新成功后，旧二进制及已完成事务残留延后到后续启动清理。daemon 取得实例所有权后经 core store 清理其管理的事务，daemon/TUI 经 app 用例清理当前 Mihari 程序旁残留；普通查询及安装验证子进程不清理。核心终态先持久保存独立的 `pending-cleanup.json`，再释放当前 journal，允许同次运行连续更新。启动清理核对记录、marker 与对象身份，保留未决或不明恢复材料；失败以 WARN 进入已有 F2 历史，不影响启动，下次再试。Unix binary-only stage 仅在候选已被发布消耗时可回收；安装证明与迁移保留树不纳入。详见 [ADR 0006](adr/0006-defer-update-residue-cleanup.md)。
@@ -200,3 +200,13 @@ MIHARI_CONTROL_CREDENTIAL=...
 本地控制请求可选 `execution_mode: "setup"`，适用端口/完成标记、核心安装、订阅添加与显式刷新、GeoIP 更新。`setup-target-v1` 仅表示已开放资源支持这套语义，不扩大端口恢复 surface 或 Web gateway 权限。Setup TUI 先检查能力，不携带旧页面 `if_revision`；旧请求省略新字段时语义不变，同时提供 `if_revision` 仍执行全局严格前提。
 
 Manager 固定本步目标，合并最新未覆盖设置并经原 mutation owner 提交。只有提交前的相关输入失效才允许最多两次追加准备，下载与选定制品复用；失败、回滚失败或未知结果不能作为内部重提理由。核心重新校验用最新设置和活动订阅生成的配置及同一核心候选，停止状态也不能跳过；核心复用在取得所有权后复查对象身份。添加并启用订阅同一步提交，失败恢复此前有效目录和运行配置。完成引导只写完成标记，跳过不写资源，其他订阅及面板不被清除。全局其他入口的 revision 误冲突另由 Issue #349 跟进。
+
+## 代理认证与业务数据重置
+
+Manager 持有可选 `proxy-auth` 意图，在生成器克隆订阅后应用用户合并及免认证模式；普通状态不返回密码，显式 reveal 仅经认证本地 IPC。新增 `/v1/proxy-auth` GET/PUT 与 `/v1/data-reset` GET/POST 是独立的向后兼容接口，未改变现有 v1 DTO/退出码。浏览器不获得这些入口。
+
+认证使用既有候选文件校验、原子替换、reload 与失败恢复路径。校验期间释放 mutation 所有权，提交前重查设置 generation、订阅 catalog/hash 和 core epoch；内核缺失时不尝试执行校验程序。认证失败不能使显式启用状态退化成无密码服务。
+
+业务重置由 daemon 在 supervisor.Update 停止并回收内核后执行，使用固定受管文件清单，不删除根目录、未知文件或下载资源。business-reset.state 的 clearing 阶段保证中断后先完成清理，setup 阶段阻止初始化完成前的自动内核启动。当前进程停止 Web gateway 并要求重启 daemon，以重新绑定端口及 Controller/Web 凭据；本地控制凭据保持。启动失败可运行只提供认证重置/业务重置的恢复 Manager，拒绝其他业务 mutation，不启动内核或 Web。该路径不扩展 CLI/TUI 的业务文件写入权限。
+
+非默认 `proxy-auth` 设置块会被旧版本严格解码拒绝；降级前执行 `mihari proxy-auth reset --yes`，并先完成业务数据重置和 Setup。

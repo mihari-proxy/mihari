@@ -171,3 +171,10 @@ func dataError(message string, causes ...error) error {
 	}
 	return public
 }
+
+// ResetAfterDataClear publishes incomplete onboarding after the reset owner committed its reset file.
+func (s *Service) ResetAfterDataClear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state = State{Complete: false}
+}

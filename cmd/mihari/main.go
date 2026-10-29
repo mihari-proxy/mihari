@@ -581,6 +581,13 @@ func runDaemonWith(ctx context.Context, deps daemonRunDeps) (resultErr error) {
 		}
 	}
 
+	if !deps.ValidationMode {
+		if err := (app.BusinessReset{Paths: deps.Paths, Reporter: diagnosticReporter}).Resume(ctx); err != nil {
+			failure := diagnostics.ReportError(ctx, diagnosticReporter, diagnostics.Record{Component: "daemon.startup", Event: "business_reset.resume.failed", Level: slog.LevelError, Err: diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "resume business reset"}, err)})
+			reportDaemonStartupFailure(diagnosticStderr, "resume business reset", err)
+			return runDegradedDaemon(ctx, deps, failure, nil, diagnosticReporter, diagnosticHistory)
+		}
+	}
 	sidecar := filepath.Join(deps.Paths.Bin, "core-channel")
 	loadSettings := deps.LoadSettings
 	if loadSettings == nil {
@@ -804,7 +811,9 @@ func runDegradedDaemon(ctx context.Context, deps daemonRunDeps, cause error, sna
 	if deps.ValidationMode {
 		return cause
 	}
-	return runDaemon(ctx, daemon.Options{StartupCleanup: daemonStartupCleanup(deps, nil), Listen: deps.Listen, Endpoint: deps.Endpoint, Token: deps.Token, Version: deps.Version, Ready: deps.Ready, Store: app.NewDegradedStore(deps.Version, cause), SnapshotSource: snapshot, DiagnosticReporter: diagnosticReporter, DiagnosticHistory: diagnosticHistory})
+	store := app.NewDegradedStore(deps.Version, cause)
+	recovery := app.NewBusinessRecovery(deps.Paths, store, diagnosticReporter)
+	return runDaemon(ctx, daemon.Options{StartupCleanup: daemonStartupCleanup(deps, nil), Listen: deps.Listen, Endpoint: deps.Endpoint, Token: deps.Token, Version: deps.Version, Ready: deps.Ready, Store: store, Runtime: recovery, SnapshotSource: snapshot, DiagnosticReporter: diagnosticReporter, DiagnosticHistory: diagnosticHistory})
 }
 
 func daemonLoggingConfig(settings config.Settings) (logging.Config, error) {

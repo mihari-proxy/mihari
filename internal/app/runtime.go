@@ -46,6 +46,10 @@ type RuntimeAssembly struct {
 }
 
 type RuntimeBuildOptions struct {
+	// ResetStore injects the daemon-owned reset boundary; nil uses fixed managed files.
+	ResetStore runtimeapi.BusinessResetStore
+	// SysProxy is injectable so integration tests never touch the workstation proxy.
+	SysProxy    sysproxy.Backend
 	TrustedCore *core.TrustedExecution
 	Resources   StartupResources
 	// PortProbeListen opens temporary TCP listeners only for the managed-port probe.
@@ -112,6 +116,20 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 				settings = recovered.Clone()
 			}
 		} else if err := options.Resources.Recover(context.Background()); err != nil {
+			return nil, err
+		}
+	}
+	resetOwner := BusinessReset{Paths: paths, Reporter: options.DiagnosticReporter}
+	if err := resetOwner.Resume(context.Background()); err != nil {
+		return nil, err
+	}
+	resetPending, err := resetOwner.Pending()
+	if err != nil {
+		return nil, err
+	}
+	if resetPending {
+		settings, err = config.Load(paths.Settings)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -317,7 +335,13 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 			}
 		},
 	})
+	managerResetStore := options.ResetStore
+	if managerResetStore == nil {
+		managerResetStore = resetOwner
+	}
 	manager = runtimeapi.New(runtimeapi.Options{
+		BusinessReset:      managerResetStore,
+		ResetSetupRequired: resetPending,
 		ActivationPhase:    options.ActivationPhase,
 		CoreRepairRequired: coreRepairRequired,
 		Store:              store,
@@ -350,7 +374,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		ServiceStatus:      options.ServiceStatus,
 		InstallationStatus: installationStatusReader(options.InstallationInspect),
 		OnBackgroundError:  options.OnBackgroundError,
-		SysProxy:           sysproxy.Platform(),
+		SysProxy:           options.SysProxy,
 		TunDetect:          tundetect.Platform(),
 		RuntimeConfig:      paths.RuntimeConfig,
 		StagingDir:         paths.SubscriptionStaging,

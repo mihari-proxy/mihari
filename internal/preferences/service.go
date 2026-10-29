@@ -236,3 +236,14 @@ func readFile(path string) ([]byte, error) {
 	}
 	return raw, nil
 }
+
+// Reset restores this preferences store to its defaults through the normal persistence path.
+func (s *Service) Reset(ctx context.Context) (Preferences, error) {
+	proxies := DefaultProxyPreferences()
+	return s.Update(ctx, Update{ConnectionsColumns: append([]string{}, defaultColumns...), Proxies: &proxies, LogLevels: append([]string{}, defaultLogLevels...)})
+}
+
+// ResetAfterDataClear publishes defaults after the daemon reset owner removed the preferences file.
+func (s *Service) ResetAfterDataClear() {
+	s.snapshot.Store(Preferences{ConnectionsColumns: append([]string{}, defaultColumns...), Proxies: DefaultProxyPreferences(), LogLevels: append([]string{}, defaultLogLevels...)})
+}

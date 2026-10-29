@@ -129,7 +129,7 @@ mihari sysproxy enable
 - **订阅配置**:每个订阅独立缓存、离线切换、按配置独立的刷新间隔、按订阅的拉取代理(`direct` / `proxy` / `auto`;`auto` 在可回退的代理网络错误后尝试直连),以及经过校验的原子化配置生成与回滚。
 - **Web 面板**:一键安装 / 更新 / 激活 / 回滚 zashboard 与 MetaCubeXD,置于带独立访问凭据的回环 Web 网关之后。
 - **系统代理与 TUN**:跨平台的系统代理控制与托管 TUN,均由守护进程持有并持久化。若其他产品已持有系统代理(`system_proxy_conflict`),或检测到其他 TUN / mihomo 实例(`tun_conflict`),enable 会失败,除非传入 `--force`(TUI 会要求确认)。
-- **端口配置**:System 页面可修改 Mixed / Controller / Web 端口;占用显示 `Owned` 或 `Occupied by name (pid)`。启动期间尚未收到核心身份时，已检测到监听进程的端口显示中性的 `Checking owner…`。在 Linux 上，未提权的 TUI 无法确认占用者时显示 `Needs admin`。重启后，归属判断随守护进程/核心 PID 更新，无需重新进入页面。保存时仅提交实际改动的端口，刷新无关状态导致的旧版本；提交期间仅对已确认的版本冲突最多追加两次重试，网络错误等写入结果不明的失败不重试。正在编辑的端口被其他客户端修改时，需重新打开编辑器；其他端口的修改会保留。应用后通常需要重启守护进程。daemon 会在启动核心前将已保存的 Mixed / Controller 地址同步到现有运行配置；存在本地核心时，候选配置须先通过核心校验再原子替换，校验失败保留原文件。
+- **端口配置**:System 页面可管理实例代理用户及免认证规则，并修改 Mixed / Controller / Web 端口;占用显示 `Owned` 或 `Occupied by name (pid)`。启动期间尚未收到核心身份时，已检测到监听进程的端口显示中性的 `Checking owner…`。在 Linux 上，未提权的 TUI 无法确认占用者时显示 `Needs admin`。重启后，归属判断随守护进程/核心 PID 更新，无需重新进入页面。保存时仅提交实际改动的端口，刷新无关状态导致的旧版本；提交期间仅对已确认的版本冲突最多追加两次重试，网络错误等写入结果不明的失败不重试。正在编辑的端口被其他客户端修改时，需重新打开编辑器；其他端口的修改会保留。应用后通常需要重启守护进程。daemon 会在启动核心前将已保存的 Mixed / Controller 地址同步到现有运行配置；存在本地核心时，候选配置须先通过核心校验再原子替换，校验失败保留原文件。
 - **TUI 内更新 Mihari**：导航栏选中 System、按 Enter 进入之前检查 GitHub Releases，显示 `当前版本 -> 最新版本 available` 或 `当前版本 · Up to date`；以管理员/root 权限启动时可替换二进制、同步并重启已安装的系统服务副本、验证 daemon 版本，并自动进入更新后的 TUI。更新确认会将安全的非标准已安装构建标识显示为 `Unknown[标识]`，兼容性仍为未知；长内容可用 ↑/↓ 或 PgUp/PgDn 滚动，默认选择 Cancel。
 - **内核通道**:System 页面可在 mihomo 的 `stable` / `alpha` 通道之间切换。核心安装、更新、重装、切换通道或重启期间，mihomo core 信息行和操作行都会显示盲文运行动画与进度状态。动画标记添加在原有信息之前，操作成功或失败后消失；窄窗口优先显示动画，其余信息按可用宽度裁剪。
 - **自动版本检查**：导航栏选中 System、按 Enter 进入之前，每次都会检查 Mihari 和 core 当前通道。按 Enter 进入页面不会再次发起这两项检查，也不会取消已经在进行的检查。进入 Web GUI 时逐项检查所有支持的面板，包括尚未安装的面板。Core 与 Mihari 检查会显示带动画的 `Checking`，随后显示 `当前版本 -> 最新版本 available`、`Up to date` 或 `Check failed`；这些 System 检查不会阻断其他 System 操作。Web GUI 面板检查进行时，Latest 使用同一个 badge。面板的成功结果在本次 TUI 会话内缓存 5 分钟。Mihari 或 core 检查失败时，下次用导航栏再次选中 System 会重试。core 安装/通道切换，以及面板安装/更新/回滚/重装/卸载成功后，立即刷新对应版本检查。检查只获取元数据，安装仍需确认。
@@ -203,7 +203,7 @@ F2 的剪贴板写入在后台执行，保持弹窗可操作。OSC 52 仅表示�
 
 连接详情采用单个居中页面，以 **Application → Routing → Outbound → Destination** 纵向展示处理链路，字段归入对应阶段。Routing 合并显示入站名称／类型／协议和 **Rule Matched**，并从外层代理组到出站逐级展开上报的选择链；Outbound 展示 **Remote** 及其 GeoIP，Destination 保留自己的目标地址及 GeoIP，选择树不代表完整网络中转拓扑。上传速率与累计量为绿色，下载为蓝色；拒绝出站以断线连接灰色的请求目标节点。长字段自动换行，深层选择树保留层级序号，面板最大 88 个终端字符列。↑/↓ 滚动，Enter/Esc 返回选中行。**Paused** 表示观测数据已冻结；已关闭连接显示最后观测速率与累计流量，**Closed observed** 是 TUI 发现连接消失的时间，不是内核报告的精确关闭时间。
 
-**Web GUI** 面板卡片宽屏并排、窄屏纵排。Tab/Shift+Tab 或 ←/→ 选择 Open/Install 或 Manage，Enter 执行，↑/↓ 切换面板。顶部以三行对齐展示 Gateway、Default panel 和 Browser sessions。安装、重装或更新期间，橘色 Installing／Reinstalling／Updating 动画 badge 显示在 Manage 后（首次安装在 Install 后）；窄卡片中 badge 整体换到按钮下方，操作结束后清除。Update available 保留在 Latest 版本后，更新成功后刷新版本状态；原有面板快捷键保留。Manage 包含更新、设为默认、重装、回滚及卸载，不可用项标明原因。黄色 **Ctrl+Shift+R** 刷新提示始终保留在卡片上方，网关保护说明移至 `?` 帮助。**System** 的 Network 分区移至 Ports Config 之后。
+**Web GUI** 面板卡片宽屏并排、窄屏纵排。Tab/Shift+Tab 或 ←/→ 选择 Open/Install 或 Manage，Enter 执行，↑/↓ 切换面板。顶部以三行对齐展示 Gateway、Default panel 和 Browser sessions。安装、重装或更新期间，橘色 Installing／Reinstalling／Updating 动画 badge 显示在 Manage 后（首次安装在 Install 后）；窄卡片中 badge 整体换到按钮下方，操作结束后清除。Update available 保留在 Latest 版本后，更新成功后刷新版本状态；原有面板快捷键保留。Manage 包含更新、设为默认、重装、回滚及卸载，不可用项标明原因。黄色 **Ctrl+Shift+R** 刷新提示始终保留在卡片上方，网关保护说明移至 `?` 帮助。**System** 的 Network 分区移至 Ports & Authentication 之后。
 
 TUI **Proxies** 页顶部的 **Basic** 卡片包含 **Mode**、**GLOBAL** 和 **Page Settings**。**Mode** 按 Enter 打开 Rule / Global / Direct 选择弹窗，↑/↓ 选择、Enter 应用、Esc 取消；**GLOBAL** 入口展开 mihomo 返回的候选组，并自动滚动到整个 section 完整可见；超过一屏时从列表视口顶部展示，继续用方向键浏览候选。Mihari 全局保存模式、按订阅保存 GLOBAL 出口，支持面板发起的相同操作。默认使用 Rule，切换模式和出口保留已有连接。保存的出口消失时，有 DIRECT 候选则保存 DIRECT，否则保存 Rule；内核停止时保存的模式显示为 pending，待启动应用。
 
@@ -305,3 +305,13 @@ Mihari 是一个独立项目,与 mihomo 项目或 MetaCubeX 无关联,也不受�
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/chart?repos=mihari-proxy/mihari&type=date&legend=bottom-right)](https://www.star-history.com/?repos=mihari-proxy%2Fmihari&type=date&legend=bottom-right)
+
+## 代理认证与业务数据重置
+
+入口为 **System → Ports & Authentication → Proxy Authentication**，CLI 为 `mihari proxy-auth`。认证支持沿用订阅（follow）、启用（enabled）和关闭（disabled）。启用时按用户名精确匹配合并订阅和实例用户：新增用户追加，同名覆盖密码；移除覆盖恢复订阅密码。排除订阅用户留待 #357。
+
+免认证支持沿用订阅（follow）、自定义（custom）和全部要求认证（required）。自定义提供本机回环免认证开关及额外 CIDR；额外 CIDR 不允许与 IPv4/IPv6 回环范围重叠。这不会改变监听地址或开放局域网访问。关闭认证仍保留已编辑凭据。保存后热重载，不重启 mihomo，也不主动断开已有连接。未获免认证的客户端需要提供代理用户名密码，使用系统代理的应用同样如此。
+
+密码默认遮罩，仅通过认证本地 IPC 的显式操作查看。CLI 支持隐藏终端输入或 `--password-stdin`，不提供密码命令行参数。非默认 `proxy-auth` 设置需要支持此功能的版本；降级前执行 `mihari proxy-auth reset --yes` 移除该设置块，并先完成未结束的业务数据重置与 Setup。
+
+**Reset Proxy Authentication** 只清除实例代理凭据及免认证覆盖，恢复订阅认证。**System → Maintenance → Reset Mihari Data** 清除业务设置、订阅及缓存、生成配置、节点选择缓存和该实例的偏好存储，保留程序、系统服务、已下载内核/面板/GeoIP、日志与导出、本地控制凭据及未知文件。全量重置先预览精确文件，再确认两次；更新 Controller/Web 凭据，停止代理和 Web gateway，并返回 Setup。需要重启 daemon 以绑定新的端口和凭据；完成 Setup 前不自动启动内核。中断清理由持久标记保护，在启动打开业务存储前继续完成。启动降级时只开放受限本地重置操作，不启动未校验的内核。

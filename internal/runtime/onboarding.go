@@ -28,6 +28,9 @@ func (m *Manager) OnboardingStatus(ctx context.Context) (onboarding.Snapshot, er
 // SetupRequired derives required setup from effective runtime resources. Optional
 // subscriptions/GeoIP and the historical welcome marker do not force onboarding.
 func (m *Manager) SetupRequired(ctx context.Context) (bool, error) {
+	if m.dataResetPending.Load() {
+		return true, nil
+	}
 	if m.onboarding == nil {
 		return false, nil
 	}
@@ -61,7 +64,16 @@ func (m *Manager) SetupRequired(ctx context.Context) (bool, error) {
 func (m *Manager) UpdateOnboarding(ctx context.Context, operation Operation, update onboarding.Update) (onboarding.Snapshot, error) {
 
 	result, err := m.doOperation(ctx, "onboarding:"+operation.ID, func(ctx context.Context) (any, error) {
-		return retrySetupPreparation(ctx, operation, func() (any, error) { return m.updateOnboardingAttempt(ctx, operation, update) })
+		value, err := retrySetupPreparation(ctx, operation, func() (any, error) { return m.updateOnboardingAttempt(ctx, operation, update) })
+		if err == nil {
+			m.completeResetSetup(ctx, update.Complete)
+			if snapshot, ok := value.(onboarding.Snapshot); ok {
+				snapshot.Status = m.composeOnboardingStatus(m.onboarding.State())
+				snapshot.Revision = m.store.Load().Revision
+				value = snapshot
+			}
+		}
+		return value, err
 	})
 	if err != nil {
 		return onboarding.Snapshot{}, err
@@ -70,6 +82,9 @@ func (m *Manager) UpdateOnboarding(ctx context.Context, operation Operation, upd
 }
 
 func (m *Manager) updateOnboardingAttempt(ctx context.Context, operation Operation, update onboarding.Update) (any, error) {
+	if update.Complete != nil && *update.Complete && m.dataResetPending.Load() && m.onboardingRestartRequired.Load() {
+		return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "restart the daemon after data reset before completing Setup"}
+	}
 	if m.onboarding == nil {
 		return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "onboarding service is unavailable"}
 	}
@@ -79,6 +94,9 @@ func (m *Manager) updateOnboardingAttempt(ctx context.Context, operation Operati
 	candidate, err := m.prepareSettings(applyEndpointUpdate(update))
 	if err != nil {
 		return nil, err
+	}
+	if update.Complete != nil && *update.Complete && m.dataResetPending.Load() && candidate.changed {
+		return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "save endpoint changes and restart the daemon before completing Setup"}
 	}
 	var catalog subscription.Catalog
 	if m.trustedCore != nil {
@@ -169,7 +187,7 @@ func applyEndpointUpdate(update onboarding.Update) func(*config.Settings) error 
 func (m *Manager) composeOnboardingStatus(onboardingState onboarding.State) onboarding.Status {
 	settings := m.settingsSnapshot()
 	return onboarding.Status{
-		Complete:        onboardingState.Complete,
+		Complete:        onboardingState.Complete && !m.dataResetPending.Load(),
 		MixedAddr:       settings.MixedAddr,
 		ControllerAddr:  settings.ControllerAddr,
 		WebAddr:         settings.WebAddr,

@@ -79,6 +79,10 @@ type GeoIPService interface {
 }
 
 type Options struct {
+	RecoveryOnly       bool
+	AuthResetAllowed   bool
+	BusinessReset      BusinessResetStore
+	ResetSetupRequired bool
 	// ListInterfaces is the adapter snapshot boundary; nil uses the platform enumerator.
 	ListInterfaces func(context.Context) ([]platform.NetworkInterface, error)
 	TrustedCore    *core.TrustedExecution
@@ -154,9 +158,13 @@ type WebGateway interface {
 }
 
 type Manager struct {
-	listInterfaces func(context.Context) ([]platform.NetworkInterface, error)
-	routingMessage string // guarded by mutation ownership
-	trustedCore    *core.TrustedExecution
+	recoveryOnly     bool
+	authResetAllowed bool
+	businessReset    BusinessResetStore
+	dataResetPending atomic.Bool
+	listInterfaces   func(context.Context) ([]platform.NetworkInterface, error)
+	routingMessage   string // guarded by mutation ownership
+	trustedCore      *core.TrustedExecution
 
 	subscriptionRecoveryTimeout time.Duration
 	subscriptionTimeout         time.Duration
@@ -270,6 +278,8 @@ func New(options Options) *Manager {
 		settings = config.Defaults()
 	}
 	manager := &Manager{
+		recoveryOnly: options.RecoveryOnly, authResetAllowed: options.AuthResetAllowed,
+		businessReset:               options.BusinessReset,
 		subscriptionRecoveryTimeout: subscriptionRecoveryTimeout,
 		subscriptionTimeout:         subscriptionExecutionTimeout,
 		trustedCore:                 options.TrustedCore,
@@ -313,6 +323,7 @@ func New(options Options) *Manager {
 		installed:          make(chan struct{}, 1),
 		operations:         make(map[string]*operationEntry),
 	}
+	manager.dataResetPending.Store(options.ResetSetupRequired)
 	manager.subscriptionChanges = make(chan struct{}, 1)
 	manager.maintenance <- struct{}{}
 	if manager.subscriptions != nil {
@@ -334,7 +345,7 @@ func (m *Manager) Run(ctx context.Context) error {
 	defer m.closing.Store(true)
 	defer m.startupSystemProxyApplying.Store(false)
 	defer m.startupTunApplying.Store(false)
-	if m.validationMode {
+	if m.validationMode || m.recoveryOnly {
 		<-ctx.Done()
 		return nil
 	}
@@ -391,10 +402,10 @@ func (m *Manager) Run(ctx context.Context) error {
 	}
 	m.coreRunRequested.Store(true)
 	defer m.coreRunRequested.Store(false)
-	missing := m.coreRecovery.Load() || !m.binaryExists()
+	missing := m.coreRecovery.Load() || !m.binaryExists() || m.dataResetPending.Load()
 	initialCoreAvailable := !missing
 	if paused, ok := m.supervisor.(interface{ WaitForCore() }); ok && missing {
-		if !m.coreRecovery.Load() {
+		if !m.coreRecovery.Load() && !m.dataResetPending.Load() {
 			m.setCoreState(state.CoreState{Status: "missing"})
 		}
 		paused.WaitForCore()
@@ -996,7 +1007,9 @@ func (m *Manager) doOperation(ctx context.Context, key string, execute func(cont
 		executionCtx, batch := newOperationDiagnostics(ctx, key)
 		var result any
 		var err error
-		if m.coreRecovery.Load() && !strings.HasPrefix(key, "reinstall:") {
+		if m.recoveryOnly && !strings.HasPrefix(key, "data-reset:") && !strings.HasPrefix(key, "proxy-auth:") {
+			err = protocol.APIError{Code: protocol.CodeInvalidState, Message: "startup recovery only permits data or proxy-auth reset; restart the daemon after recovery"}
+		} else if m.coreRecovery.Load() && !strings.HasPrefix(key, "reinstall:") {
 			err = protocol.APIError{Code: protocol.CodeInvalidState, Message: "core reinstall required"}
 		} else {
 			result, err = execute(executionCtx)
