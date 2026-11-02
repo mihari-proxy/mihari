@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -124,6 +125,28 @@ func TestProxyAuthPreview_FollowPreservesNativeFieldShape(t *testing.T) {
 	}
 	if string(gotYAML) != string(wantYAML) {
 		t.Fatalf("native fields changed: got=%s want=%s", gotYAML, wantYAML)
+	}
+}
+
+func TestProxyAuthPreview_DefaultMasksNativeAuthenticationValuesAndMetadata(t *testing.T) {
+	base := subscription.Document{"authentication": []any{map[string]any{"username": "fixture", "password": "native-secret"}, 123456, "opaque-native-secret", "valid:string-secret"}}
+	for _, reveal := range []bool{false, true} {
+		entries, err := authPreviewLines(base, protocol.ProxyAuthConfig{Mode: "follow", BypassMode: "follow"}, reveal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(diffAuthPreview(entries, entries))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, secret := range []string{"native-secret", "123456", "opaque-native-secret", "string-secret"} {
+			if strings.Contains(string(encoded), secret) != reveal {
+				t.Fatalf("reveal=%t leaked/lost native credential %q: %s", reveal, secret, encoded)
+			}
+		}
+	}
+	if base["authentication"].([]any)[0].(map[string]any)["password"] != "native-secret" {
+		t.Fatal("preview changed the source document")
 	}
 }
 

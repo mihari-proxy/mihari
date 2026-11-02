@@ -124,13 +124,27 @@ func authPreviewLines(base subscription.Document, auth protocol.ProxyAuthConfig,
 			if err != nil {
 				return nil, fmt.Errorf("render authentication preview entry: %w", err)
 			}
-			target := item.Value
-			if field == "authentication" && item.Kind == yaml.ScalarNode && item.Tag == "!!str" {
-				name, _, found := strings.Cut(item.Value, ":")
-				target = name
-				if !reveal && found {
-					item.Value = name + ":********"
+			target := ""
+			if field == "authentication" {
+				if item.Kind == yaml.ScalarNode && item.Tag == "!!str" {
+					name, _, found := strings.Cut(item.Value, ":")
+					if found {
+						target = name
+					}
+					if !reveal {
+						item.Value = "********"
+						if found {
+							item.Value = name + ":********"
+						}
+					}
+				} else if !reveal {
+					// Unknown native shapes have no credential schema to safely
+					// inspect. Mask the whole display entry, including map keys,
+					// rather than leaking arbitrary native values or metadata.
+					*item = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Style: yaml.DoubleQuotedStyle, Value: "********"}
 				}
+			} else {
+				target = item.Value
 			}
 			shown, err := yaml.Marshal(item)
 			if err != nil {

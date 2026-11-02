@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 	"net/http"
@@ -27,6 +28,11 @@ func (s *Server) proxyAuthRoutes(mux *http.ServeMux) {
 		}
 		value, err := api.PreviewProxyAuth(r.Context(), body)
 		if err != nil {
+			var apiError protocol.APIError
+			if errors.As(err, &apiError) && apiError.Code == protocol.CodeInvalidArgument {
+				s.writeRequestRejection(r.Context(), w, apiError.Message, err)
+				return
+			}
 			s.writeControlError(r.Context(), w, err)
 			return
 		}
