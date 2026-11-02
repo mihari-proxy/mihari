@@ -1253,9 +1253,9 @@ func railDigit(name string) (int, bool) {
 func (model Model) updateRail(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "up":
-		model.railIndex = max(0, model.railIndex-1)
+		model.railIndex = (model.railIndex + len(model.rail) - 1) % len(model.rail)
 	case "down":
-		model.railIndex = min(len(model.rail)-1, model.railIndex+1)
+		model.railIndex = (model.railIndex + 1) % len(model.rail)
 	case "enter":
 		// Enter opens the selected page only when it has in-page keyboard
 		// targets. Overview and unavailable stubs do not implement

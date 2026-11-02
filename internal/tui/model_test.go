@@ -459,6 +459,33 @@ func TestRail_EnterOnOverviewKeepsRailFocus(t *testing.T) {
 	}
 }
 
+func TestRail_ArrowNavigationWraps(t *testing.T) {
+	for _, direction := range []struct {
+		name string
+		key  tea.KeyPressMsg
+		step int
+	}{
+		{name: "up", key: tea.KeyPressMsg{Code: tea.KeyUp}, step: -1},
+		{name: "down", key: tea.KeyPressMsg{Code: tea.KeyDown}, step: 1},
+	} {
+		t.Run(direction.name, func(t *testing.T) {
+			model := NewModel()
+			count := len(model.rail)
+			for step := 1; step <= 2*count; step++ {
+				model = updateModelKey(t, model, direction.key)
+				wantIndex := ((direction.step*step)%count + count) % count
+				wantPage := model.rail[wantIndex]
+				if model.railIndex != wantIndex || model.active != wantPage {
+					t.Fatalf("step %d: index=%d active=%s, want index=%d active=%s", step, model.railIndex, model.active, wantIndex, wantPage)
+				}
+				if model.focus.Area != ui.FocusRail || model.focus.Page != wantPage {
+					t.Fatalf("step %d: focus=%v, want rail focus on %s", step, model.focus, wantPage)
+				}
+			}
+		})
+	}
+}
+
 func TestRail_HJKLNeverNavigates(t *testing.T) {
 	model := NewModel()
 	model.inputMode = ui.InputNavigation
