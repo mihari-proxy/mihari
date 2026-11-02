@@ -1566,6 +1566,9 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 				value = ui.RenderCopySentLines(m.theme.BrightYellow)
 			case m.outcomeOK:
 				value = ui.RenderStatusChip(m.theme, ui.StatusChipDone, ui.DoneLabel)
+				if item.id == rowMixed || item.id == rowController || item.id == rowWeb {
+					value = item.value + "  " + value
+				}
 			default:
 				value = ui.RenderStatusChip(m.theme, ui.StatusChipFailed, ui.FailedLabel)
 				if m.outcomeDetail != "" {
