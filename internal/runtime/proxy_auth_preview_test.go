@@ -129,23 +129,31 @@ func TestProxyAuthPreview_FollowPreservesNativeFieldShape(t *testing.T) {
 }
 
 func TestProxyAuthPreview_DefaultMasksNativeAuthenticationValuesAndMetadata(t *testing.T) {
-	base := subscription.Document{"authentication": []any{map[string]any{"username": "fixture", "password": "native-secret"}, 123456, "opaque-native-secret", "valid:string-secret"}}
+	base := subscription.Document{"authentication": []any{map[string]any{"username": "fixture", "password": "map-password-fixture"}, 123456, "opaque-native-secret", "valid:string-secret"}}
 	for _, reveal := range []bool{false, true} {
 		entries, err := authPreviewLines(base, protocol.ProxyAuthConfig{Mode: "follow", BypassMode: "follow"}, reveal)
 		if err != nil {
 			t.Fatal(err)
 		}
-		encoded, err := json.Marshal(diffAuthPreview(entries, entries))
+		lines := diffAuthPreview(entries, entries)
+		encoded, err := json.Marshal(lines)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, secret := range []string{"native-secret", "123456", "opaque-native-secret", "string-secret"} {
+		var display strings.Builder
+		for _, line := range lines {
+			display.WriteString(line.Text + "\n")
+		}
+		for _, secret := range []string{"map-password-fixture", "123456", "opaque-native-secret", "string-secret"} {
 			if strings.Contains(string(encoded), secret) != reveal {
 				t.Fatalf("reveal=%t leaked/lost native credential %q: %s", reveal, secret, encoded)
 			}
+			if reveal && !strings.Contains(display.String(), secret) {
+				t.Fatalf("revealed credential %q absent from display", secret)
+			}
 		}
 	}
-	if base["authentication"].([]any)[0].(map[string]any)["password"] != "native-secret" {
+	if base["authentication"].([]any)[0].(map[string]any)["password"] != "map-password-fixture" {
 		t.Fatal("preview changed the source document")
 	}
 }
