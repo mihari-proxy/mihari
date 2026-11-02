@@ -143,15 +143,18 @@ func TestProxyAuth_LongRevealedCredentialsWrapScrollAndHide(t *testing.T) {
 		Config: protocol.ProxyAuthConfig{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: strings.Repeat("s", 220) + "saved-tail"}}},
 	}})
 	var views strings.Builder
-	for range 12 {
+	for range 40 {
 		view := m.authView()
 		if lipgloss.Width(view) > 44 || lipgloss.Height(view) > 20 {
-			t.Fatal("revealed credentials exceed viewport")
+			t.Fatalf("revealed credentials exceed viewport: %dx%d\n%s", lipgloss.Width(view), lipgloss.Height(view), view)
 		}
-		views.WriteString(view)
+		// Collect the scrolling parameter pane without repeating the fixed
+		// frame/footer between pages; a credential may wrap across pages.
+		paneWidth := m.width - 4 - m.theme.Dialog.GetHorizontalFrameSize()
+		views.WriteString(strings.Join(m.authParameterLines(paneWidth, m.auth.parameterPage), "\n"))
 		m.updateAuth(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	}
-	visible := strings.Join(strings.Fields(ansi.Strip(views.String())), "")
+	visible := strings.Join(strings.Fields(strings.ReplaceAll(ansi.Strip(views.String()), "│", "")), "")
 	if !strings.Contains(visible, "saved-tail") || !strings.Contains(visible, "effective-tail") {
 		t.Fatal("long saved/effective credentials cannot be scrolled into view")
 	}

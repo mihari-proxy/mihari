@@ -13,6 +13,25 @@ type proxyAuthAPI interface {
 }
 
 func (s *Server) proxyAuthRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /v1/proxy-auth/preview", func(w http.ResponseWriter, r *http.Request) {
+		api, ok := s.runtime.(interface {
+			PreviewProxyAuth(context.Context, protocol.ProxyAuthPreviewRequest) (protocol.ProxyAuthPreview, error)
+		})
+		if !ok {
+			s.writeControlError(r.Context(), w, protocol.APIError{Code: protocol.CodeInvalidState, Message: "proxy authentication preview unavailable"})
+			return
+		}
+		var body protocol.ProxyAuthPreviewRequest
+		if !s.decodeControlJSON(w, r, &body) {
+			return
+		}
+		value, err := api.PreviewProxyAuth(r.Context(), body)
+		if err != nil {
+			s.writeControlError(r.Context(), w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, value)
+	})
 	mux.HandleFunc("GET /v1/proxy-auth", func(w http.ResponseWriter, r *http.Request) {
 		api, ok := s.runtime.(proxyAuthAPI)
 		if !ok {

@@ -18,6 +18,13 @@ func (c *Client) ProxyAuth(ctx context.Context, reveal bool) (protocol.ProxyAuth
 	return result, err
 }
 
+// PreviewProxyAuth reads a draft preview without changing daemon state.
+func (c *Client) PreviewProxyAuth(ctx context.Context, request protocol.ProxyAuthPreviewRequest) (protocol.ProxyAuthPreview, error) {
+	var result protocol.ProxyAuthPreview
+	err := c.doRuntime(ctx, http.MethodPost, "/v1/proxy-auth/preview", request, &result)
+	return result, err
+}
+
 // UpdateProxyAuth replaces instance proxy authentication overrides.
 func (c *Client) UpdateProxyAuth(ctx context.Context, request protocol.ProxyAuthUpdateRequest) (protocol.ProxyAuthStatus, error) {
 	var result protocol.ProxyAuthStatus

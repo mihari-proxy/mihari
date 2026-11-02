@@ -127,20 +127,7 @@ func (m *Manager) UpdateProxyAuth(ctx context.Context, op Operation, request pro
 				s.ProxyAuth = nil
 				return nil
 			}
-			auth := request.Config
-			old := s.EffectiveProxyAuth()
-			// Empty passwords preserve an existing override; new credentials must be explicit.
-			auth.Users = append([]protocol.ProxyAuthUser{}, auth.Users...)
-			for i := range auth.Users {
-				auth.Users[i].Source = ""
-				if auth.Users[i].Password == "" {
-					for _, u := range old.Users {
-						if u.Username == auth.Users[i].Username {
-							auth.Users[i].Password = u.Password
-						}
-					}
-				}
-			}
+			auth := resolveProxyAuthPasswords(request.Config, s.EffectiveProxyAuth())
 			s.SetProxyAuth(auth)
 			return nil
 		})
