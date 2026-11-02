@@ -29,19 +29,27 @@ type authPreviewResultMsg struct {
 
 func (m *Model) toggleAuthReveal() tea.Cmd {
 	a := &m.auth
-	a.reveal = !a.reveal
+	if a.reveal {
+		m.hideAuthSecrets()
+		return nil
+	}
+	a.reveal = true
+	a.revealSequence++
+	a.inputs[1].EchoMode = textinput.EchoNormal
+	return m.authLoad(true)
+}
+
+func (m *Model) hideAuthSecrets() {
+	a := &m.auth
+	a.reveal = false
 	a.revealSequence++
 	a.inputs[1].EchoMode = textinput.EchoPassword
-	if a.reveal {
-		a.inputs[1].EchoMode = textinput.EchoNormal
-		return m.authLoad(true)
-	}
 	a.revealed = nil
 	a.preview.Lines = nil
+	a.previewRevealed = false
 	for i := range a.status.Users {
 		a.status.Users[i].Password = ""
 	}
-	return nil
 }
 
 func (m *Model) scheduleAuthPreview() tea.Cmd {

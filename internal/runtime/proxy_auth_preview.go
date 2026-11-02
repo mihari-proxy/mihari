@@ -99,12 +99,12 @@ func authPreviewLines(base subscription.Document, auth protocol.ProxyAuthConfig,
 			return nil, fmt.Errorf("encode authentication preview: %w", err)
 		}
 		if node.Kind != yaml.SequenceNode || len(node.Content) == 0 {
-			raw, err := yaml.Marshal(&node)
+			raw, err := yaml.Marshal(subscription.Document{field: value})
 			if err != nil {
 				return nil, fmt.Errorf("render authentication preview: %w", err)
 			}
 			for _, part := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
-				text := field + ": " + part
+				text := part
 				result = append(result, authPreviewEntry{identity: text, line: protocol.ProxyAuthPreviewLine{Text: text, Field: field}})
 			}
 			continue

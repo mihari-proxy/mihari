@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +13,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/subscription"
+	"go.yaml.in/yaml/v3"
 )
 
 type authPreviewAPI interface {
@@ -72,8 +74,36 @@ func TestProxyAuthPreview_CanceledRequestDoesNotResolve(t *testing.T) {
 	m := startupLoggingManager(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := m.PreviewProxyAuth(ctx, protocol.ProxyAuthPreviewRequest{}); err == nil {
-		t.Fatal("canceled preview succeeded")
+	request := protocol.ProxyAuthPreviewRequest{Config: protocol.ProxyAuthConfig{Mode: "enabled", BypassMode: "required", Users: []protocol.ProxyAuthUser{{Username: "fixture", Password: "synthetic-secret"}}}}
+	if _, err := m.PreviewProxyAuth(ctx, request); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+}
+
+func TestProxyAuthPreview_FollowPreservesNativeFieldShape(t *testing.T) {
+	base := subscription.Document{"authentication": nil, "skip-auth-prefixes": map[string]any{"fixture": "native-value"}}
+	lines, err := authPreviewLines(base, protocol.ProxyAuthConfig{Mode: "follow", BypassMode: "follow"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text strings.Builder
+	for _, line := range lines {
+		text.WriteString(line.line.Text + "\n")
+	}
+	var got subscription.Document
+	if err := yaml.Unmarshal([]byte(text.String()), &got); err != nil {
+		t.Fatalf("native shape became invalid YAML: %v", err)
+	}
+	wantYAML, err := yaml.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotYAML, err := yaml.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotYAML) != string(wantYAML) {
+		t.Fatalf("native fields changed: got=%s want=%s", gotYAML, wantYAML)
 	}
 }
 

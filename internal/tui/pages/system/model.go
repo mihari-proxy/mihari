@@ -744,6 +744,7 @@ func (m *Model) SetMutationsEnabled(enabled bool) {
 		}
 		m.auth.previewPending = false
 		m.auth.previewErr = "Disconnected. Reopen after reconnecting."
+		m.hideAuthSecrets()
 		m.auth.epoch++
 		m.auth.pending = false
 		m.auth.loaded = false

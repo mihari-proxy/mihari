@@ -111,8 +111,7 @@ func (m *Model) handleAuthResult(r authResultMsg) tea.Cmd {
 	m.auth.status = r.status
 	m.auth.draft = r.status.Config
 	m.auth.loaded = true
-	m.auth.reveal = false
-	m.auth.revealed = nil
+	m.hideAuthSecrets()
 	m.auth.err = ""
 	if m.auth.conflict {
 		m.auth.conflict = false
@@ -350,11 +349,7 @@ func (m *Model) updateAuthControls(message tea.Msg) tea.Cmd {
 				return nil
 			}
 			a.draft.Users = slices.Delete(a.draft.Users, i, i+1)
-			a.reveal = false
-			a.revealed = nil
-			for j := range a.status.Users {
-				a.status.Users[j].Password = ""
-			}
+			m.hideAuthSecrets()
 			for i := range a.status.Users {
 				if a.status.Users[i].Username == name && a.status.Users[i].Source == "overridden" {
 					a.status.Users[i].Source = "subscription"
