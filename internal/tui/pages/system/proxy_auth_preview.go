@@ -9,7 +9,6 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
@@ -279,7 +278,7 @@ func (m *Model) authPreviewLines(width, height int) []string {
 				text = m.theme.Muted.Render(text)
 			}
 			if selected {
-				text = lipgloss.NewStyle().Background(lipgloss.Color("236")).Width(width).Render(text)
+				text = m.theme.PreviewFocus.Width(width).Render(text)
 			}
 			body = append(body, text)
 		}

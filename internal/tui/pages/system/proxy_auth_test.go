@@ -118,7 +118,7 @@ func TestProxyAuth_ExplicitRevealIncludesInactiveSavedUsers(t *testing.T) {
 	m.SetSize(90, 28)
 	m.auth = authUI{open: true, loaded: true, epoch: 1, draft: protocol.ProxyAuthConfig{Mode: "disabled", BypassMode: "follow", Users: []protocol.ProxyAuthUser{{Username: "alice"}}}}
 	m.handleAuthResult(authResultMsg{epoch: 1, reveal: true, status: protocol.ProxyAuthStatus{Config: protocol.ProxyAuthConfig{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "saved-secret"}}}}})
-	if !strings.Contains(strings.Join(m.authParameterLines(86, 100), "\n"), "saved-secret") {
+	if !strings.Contains(authRenderedParameterPages(t, m), "saved-secret") {
 		t.Fatal("explicit reveal omitted inactive saved credential")
 	}
 }
@@ -128,10 +128,24 @@ func TestProxyAuth_RevealIncludesSavedAndEffectiveCredentialsInFollowMode(t *tes
 	m.SetSize(90, 28)
 	m.auth = authUI{open: true, loaded: true, epoch: 1, draft: protocol.ProxyAuthConfig{Mode: "follow", Users: []protocol.ProxyAuthUser{{Username: "alice"}}}}
 	m.handleAuthResult(authResultMsg{epoch: 1, reveal: true, status: protocol.ProxyAuthStatus{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "subscription-secret", Source: "subscription"}}, Config: protocol.ProxyAuthConfig{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "saved-secret"}}}}})
-	view := strings.Join(m.authParameterLines(86, 100), "\n")
+	view := authRenderedParameterPages(t, m)
 	if !strings.Contains(view, "saved: saved-secret") || !strings.Contains(view, "effective (subscription): subscription-secret") {
 		t.Fatal("reveal omitted the saved or effective credential and its source")
 	}
+}
+
+func authRenderedParameterPages(t *testing.T, m *Model) string {
+	t.Helper()
+	var pages strings.Builder
+	for range 12 {
+		view := m.authView()
+		if lipgloss.Width(view) > m.width || lipgloss.Height(view) > m.height {
+			t.Fatalf("revealed dialog exceeds viewport: %dx%d", lipgloss.Width(view), lipgloss.Height(view))
+		}
+		pages.WriteString(ansi.Strip(view))
+		m.updateAuth(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	}
+	return pages.String()
 }
 
 func TestProxyAuth_LongRevealedCredentialsWrapScrollAndHide(t *testing.T) {

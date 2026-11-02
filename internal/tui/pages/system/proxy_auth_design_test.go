@@ -196,3 +196,56 @@ func TestProxyAuthDesign_NavigationReachesHeaderActionBeforeUserRows(t *testing.
 		t.Fatal("down from Authentication mode did not reach the Add user header action")
 	}
 }
+
+func TestProxyAuthDesign_BypassPickerDoesNotExpandEmptyForm(t *testing.T) {
+	m := New(&fakeClient{}, nil)
+	m.SetSize(160, 60)
+	m.auth = authUI{open: true, loaded: true, selected: 1, draft: protocol.ProxyAuthConfig{Mode: "enabled", BypassMode: "custom"}}
+	height := lipgloss.Height(m.authView())
+	m.updateAuth(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if lipgloss.Height(m.authView()) != height {
+		t.Fatal("Bypass picker expanded the empty form")
+	}
+}
+
+func TestProxyAuthDesign_StatusRowsDoNotMakePagingSkipContent(t *testing.T) {
+	m := New(&fakeClient{}, nil)
+	m.auth = authUI{open: true, loaded: true, err: "fixture validation error", draft: protocol.ProxyAuthConfig{Mode: "enabled", BypassMode: "custom"}}
+	for i := range 20 {
+		m.auth.draft.Users = append(m.auth.draft.Users, protocol.ProxyAuthUser{Username: strings.Repeat("u", i+1)})
+	}
+	first := m.authParameterLines(65, 8)
+	last := ansi.Strip(first[len(first)-2])
+	m.updateAuth(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	second := m.authParameterLines(65, 8)
+	all := m.authParameterContent(65)
+	next := ""
+	for i, line := range all {
+		if ansi.Strip(line.text) == last && i+1 < len(all) {
+			next = ansi.Strip(all[i+1].text)
+			break
+		}
+	}
+	if next == "" || ansi.Strip(second[0]) != next {
+		t.Fatal("paging skipped the first content line after the previous page")
+	}
+}
+
+func TestProxyAuthDesign_PreviewUsesThemeFocusStyle(t *testing.T) {
+	m := New(&fakeClient{}, nil)
+	m.theme.PreviewFocus = lipgloss.NewStyle().Background(lipgloss.Color("52"))
+	m.auth = authUI{loaded: true, draft: protocol.ProxyAuthConfig{Mode: "enabled"}, preview: protocol.ProxyAuthPreview{ActiveID: "fixture", Lines: []protocol.ProxyAuthPreviewLine{{Text: "authentication: []", Field: "authentication"}}}}
+	got := strings.Join(m.authPreviewLines(65, 10), "\n")
+	if !strings.Contains(got, m.theme.PreviewFocus.Width(65).Render("  authentication: []")) {
+		t.Fatal("preview ignored configured theme focus style")
+	}
+}
+
+func TestProxyAuthDesign_UnavailableCIDRRemovalExplainsReason(t *testing.T) {
+	m := New(&fakeClient{}, nil)
+	m.auth = authUI{open: true, loaded: true, selected: 4, draft: protocol.ProxyAuthConfig{Mode: "enabled", BypassMode: "follow", BypassPrefixes: []string{"192.0.2.0/24"}}}
+	m.updateAuth(tea.KeyPressMsg{Code: 'd'})
+	if !strings.Contains(m.auth.err, "Choose Custom") || len(m.auth.draft.BypassPrefixes) != 1 {
+		t.Fatal("unavailable removal did not explain why it cannot apply")
+	}
+}

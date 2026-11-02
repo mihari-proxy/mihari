@@ -27,7 +27,8 @@ func (m *Model) authView() string {
 	}
 	hints := strings.Split(ansi.Wrap(hint, inner, ""), "\n")
 	available := max(2, m.height-m.theme.Dialog.GetVerticalFrameSize()-len(hints)-6)
-	natural := len(m.authParameterContent(leftWidth))
+	parameters := m.authParameterContent(leftWidth)
+	natural := len(parameters)
 	previewNatural := len(m.auth.preview.Lines) + 8
 	leftHeight, rightHeight := 0, 0
 	if wide {
@@ -38,7 +39,7 @@ func (m *Model) authView() string {
 		leftHeight = max(1, budget/2)
 		rightHeight = max(1, budget-leftHeight-1)
 	}
-	left := m.authParameterLines(leftWidth, leftHeight)
+	left := m.authParameterWindow(parameters, leftWidth, leftHeight)
 	right := m.authPreviewLines(rightWidth, rightHeight)
 	var body string
 	if wide {

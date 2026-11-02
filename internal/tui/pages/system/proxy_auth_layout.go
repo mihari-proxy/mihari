@@ -97,6 +97,19 @@ func (m *Model) authCustomBypass() bool {
 	return m.auth.draft.Mode != "disabled" && m.auth.draft.BypassMode == "custom"
 }
 
+func (m *Model) authBypassUnavailableReason() string {
+	if m.auth.draft.Mode == "disabled" {
+		return "Authentication disabled. Saved bypass settings are retained."
+	}
+	if m.auth.draft.BypassMode == "follow" {
+		return "Using subscription bypass rules. Choose Custom to edit."
+	}
+	if m.auth.draft.BypassMode == "required" {
+		return "All clients require authentication. Choose Custom to edit."
+	}
+	return ""
+}
+
 // Row identities stay stable while navigation follows the visual parameter order.
 func (m *Model) authNavigation() []int {
 	n := len(m.authUsers())
@@ -335,24 +348,27 @@ func (m *Model) authParameterContent(width int) []authParameterLine {
 	muted("Allow loopback clients to connect without authentication.", 2)
 	muted("127.0.0.0/8 · ::1/128", 2)
 	if !m.authCustomBypass() {
-		reason := "Using subscription bypass rules. Choose Custom to edit."
-		if a.draft.Mode == "disabled" {
-			reason = "Authentication disabled. Saved bypass settings are retained."
-		} else if a.draft.BypassMode == "required" {
-			reason = "All clients require authentication. Choose Custom to edit."
-		}
-		muted(reason, 2)
+		muted(m.authBypassUnavailableReason(), 2)
 	}
 	add("", prefixStart)
-	pair("Additional bypass CIDRs", "[ + Add CIDR ]", prefixStart+len(a.draft.BypassPrefixes))
+	addCIDR := "[ + Add CIDR ]"
+	if !m.authCustomBypass() {
+		addCIDR = m.theme.Muted.Render(addCIDR)
+	}
+	pair("Additional bypass CIDRs", addCIDR, prefixStart+len(a.draft.BypassPrefixes))
 	for i, prefix := range a.draft.BypassPrefixes {
-		pair(diagnostics.EscapeTerminal(prefix), "[ d: Remove ]", prefixStart+i)
+		action := "[ d: Remove ]"
+		if !m.authCustomBypass() {
+			action = m.theme.Muted.Render("Not applied")
+		}
+		pair(diagnostics.EscapeTerminal(prefix), action, prefixStart+i)
 	}
 	if len(a.draft.BypassPrefixes) == 0 {
 		muted("None configured", prefixStart)
 	}
 	// The dropdown covers the rows below its field, keeping the dialog's size
 	// stable while choosing. Row ownership keeps scrolling attached to the menu.
+	popupStart = max(0, min(popupStart, len(lines)-len(popup)))
 	for i, text := range popup {
 		index := popupStart + i
 		if index < len(lines) {
@@ -365,10 +381,12 @@ func (m *Model) authParameterContent(width int) []authParameterLine {
 }
 
 func (m *Model) authParameterLines(width, height int) []string {
+	return m.authParameterWindow(m.authParameterContent(width), width, height)
+}
+
+func (m *Model) authParameterWindow(content []authParameterLine, width, height int) []string {
 	a := &m.auth
 	height = max(1, height)
-	a.parameterPage = height
-	content := m.authParameterContent(width)
 	start, end := 0, 1
 	found := false
 	for i, line := range content {
@@ -414,7 +432,12 @@ func (m *Model) authParameterLines(width, height int) []string {
 	if a.err != "" {
 		status = append(status, m.theme.Danger.Render(ui.TruncateVisible(a.err, width)))
 	}
-	height = max(1, height-len(status))
+	if len(status) >= height {
+		a.parameterPage = 1
+		return ui.SliceLines(status, 0, height)
+	}
+	height -= len(status)
+	a.parameterPage = height
 	if a.manualScroll {
 		a.top = min(a.top, max(0, len(content)-height))
 	} else {

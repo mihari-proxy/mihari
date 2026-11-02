@@ -344,6 +344,7 @@ func (m *Model) updateAuthControls(message tea.Msg) tea.Cmd {
 		return m.toggleAuthReveal()
 	case "d", "delete":
 		if a.selected >= prefixStart && a.selected <= prefixStart+len(a.draft.BypassPrefixes) && !m.authCustomBypass() {
+			a.err = m.authBypassUnavailableReason()
 			return nil
 		}
 		if a.selected >= 3 && a.selected < 3+n {
@@ -374,6 +375,7 @@ func (m *Model) updateAuthControls(message tea.Msg) tea.Cmd {
 			m.openAuthMode("bypass")
 		case a.selected == 2:
 			if !m.authCustomBypass() {
+				a.err = m.authBypassUnavailableReason()
 				return nil
 			}
 			a.draft.LocalBypass = !a.draft.LocalBypass
@@ -383,11 +385,13 @@ func (m *Model) updateAuthControls(message tea.Msg) tea.Cmd {
 			return m.authEdit("user", "")
 		case a.selected >= prefixStart && a.selected < prefixStart+len(a.draft.BypassPrefixes):
 			if !m.authCustomBypass() {
+				a.err = m.authBypassUnavailableReason()
 				return nil
 			}
 			return m.authEdit("prefix", a.draft.BypassPrefixes[a.selected-prefixStart])
 		case a.selected == prefixStart+len(a.draft.BypassPrefixes):
 			if !m.authCustomBypass() {
+				a.err = m.authBypassUnavailableReason()
 				return nil
 			}
 			return m.authEdit("prefix", "")
