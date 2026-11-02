@@ -206,6 +206,9 @@ func TestProxyAuthDesign_BypassPickerDoesNotExpandEmptyForm(t *testing.T) {
 	if lipgloss.Height(m.authView()) != height {
 		t.Fatal("Bypass picker expanded the empty form")
 	}
+	if !strings.Contains(ansi.Strip(m.authView()), "Bypass mode") {
+		t.Fatalf("Bypass picker covered its own field label:\n%s", ansi.Strip(m.authView()))
+	}
 }
 
 func TestProxyAuthDesign_StatusRowsDoNotMakePagingSkipContent(t *testing.T) {

@@ -26,7 +26,7 @@ func authModeOptions(kind string) []authModeOption {
 	return []authModeOption{
 		{"follow", "Follow subscription", "Use skip-auth-prefixes from the active subscription."},
 		{"custom", "Custom", "Use Local bypass and Additional bypass CIDRs below."},
-		{"required", "Require all", "Require authentication from every client, including localhost."},
+		{"required", "Require all", "Require authentication for every client, including localhost."},
 	}
 }
 
@@ -162,6 +162,7 @@ func (m *Model) authParameterContent(width int) []authParameterLine {
 	var lines []authParameterLine
 	var popup []string
 	popupStart, popupOwner := 0, 0
+	popupField := 0
 	popupFocusStart, popupFocusEnd := 0, 0
 	add := func(text string, owner int) {
 		for _, part := range strings.Split(ansi.Hardwrap(text, width, true), "\n") {
@@ -188,6 +189,7 @@ func (m *Model) authParameterContent(width int) []authParameterLine {
 		add(pointer+lipgloss.NewStyle().Bold(true).Render(label)+strings.Repeat(" ", gap)+focus(value, row), row)
 	}
 	mode := func(kind, label string, row int) {
+		fieldStart := len(lines)
 		value := a.draft.Mode
 		if kind == "bypass" {
 			value = a.draft.BypassMode
@@ -203,8 +205,9 @@ func (m *Model) authParameterContent(width int) []authParameterLine {
 		muted(current.help, row)
 		if a.picker == kind {
 			popupStart, popupOwner = len(lines), row
+			popupField = fieldStart
 			var menu []string
-			menuWidth := max(1, width-6)
+			menuWidth := max(1, width-4)
 			for i, option := range opts {
 				choiceStart := len(menu) + 1 // bordered menu's first line
 				marker := "○ "
@@ -368,7 +371,9 @@ func (m *Model) authParameterContent(width int) []authParameterLine {
 	}
 	// The dropdown covers the rows below its field, keeping the dialog's size
 	// stable while choosing. Row ownership keeps scrolling attached to the menu.
-	popupStart = max(0, min(popupStart, len(lines)-len(popup)))
+	if popupStart+len(popup) > len(lines) {
+		popupStart = max(0, popupField-len(popup))
+	}
 	for i, text := range popup {
 		index := popupStart + i
 		if index < len(lines) {
