@@ -124,6 +124,8 @@ mihari sysproxy enable
 
 ## Features
 
+In the TUI navigation rail, ↑/↓ cycles through pages: ↑ on the first item selects the last, and ↓ on the last selects the first. Enter opens the selected page's controls; Esc returns to the rail.
+
 - **One daemon, three surfaces**: CLI, TUI, and browser panels talk to the same daemon-owned control plane over a local named pipe / Unix domain socket. The control API never binds a TCP port.
 - **OS service supervision**: install as a Windows service / systemd unit / launchd agent, with crash backoff restart.
 - **Subscription profiles**: per-subscription independent caches, offline switching, per-profile refresh intervals, per-profile fetch proxy (`direct` / `proxy` / `auto`; `auto` falls back to direct), and validated atomic config generation with rollback.
