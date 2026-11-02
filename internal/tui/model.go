@@ -31,6 +31,9 @@ import (
 )
 
 type Model struct {
+	endpointRestartApply func(context.Context, protocol.OnboardingStatus) (app.EndpointRestartResult, error)
+	endpointRestart      *endpointRestartUI
+
 	diagnosticWindow       *diagnosticWindow
 	localDiagnosticHistory *diagnostics.History
 	pages                  map[ui.PageID]ui.Page
@@ -393,6 +396,16 @@ func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if command, consumed := model.updateDiagnostics(message); consumed {
 		return model, command
 	}
+	if key, ok := message.(tea.KeyPressMsg); ok {
+		if command, consumed := model.retrySavedEndpoints(key); consumed {
+			return model, command
+		}
+	}
+	if model.endpointRestart != nil && model.endpointRestart.pending {
+		if _, key := message.(tea.KeyPressMsg); key {
+			return model, nil
+		}
+	}
 	model.observeDiagnosticMessage(message)
 	if command, consumed := model.updatePageSettings(message); consumed {
 		return model, command
@@ -519,10 +532,14 @@ func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return model, tea.Batch(command, waitSessionEvent(model.events), model.loadRootServiceStatus())
 		}
 		return model, tea.Batch(command, waitSessionEvent(model.events))
-	case systempage.RestartRequiredMsg:
-		model.modal = NewDetail(ui.RestartRequiredTitle, ui.RestartRequiredBody)
-		return model, nil
+	case ui.ApplySavedEndpointsMsg:
+		return model, model.applySavedEndpoints(typed)
+	case endpointRestartResultMsg:
+		return model, model.finishEndpointRestart(typed)
 	case setuppage.ReadyMsg:
+		if model.endpointRestart != nil && model.endpointRestart.pending {
+			return model, nil
+		}
 		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); !ok || !page.Automatic() || page.Busy() {
 			return model, nil
 		}
@@ -803,6 +820,9 @@ func (model Model) openHelp() (Model, tea.Cmd) {
 
 // applySessionEvent reconciles daemon observations and resumes setup across owner changes.
 func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
+	if model.ignoresPreRestartEvent(event) {
+		return nil
+	}
 	var command tea.Cmd
 	model.monitor.Observe(event)
 	// Only push-stream events carry a non-zero ObservedAt; non-stream events
@@ -856,7 +876,7 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 			page.SetCapabilities(event.Status.Capabilities)
 		}
 		model.setupObserved = true
-		if event.Status.SetupRequired {
+		if event.Status.SetupRequired && (model.endpointRestart == nil || !model.endpointRestart.pending) {
 			entering := model.active != ui.PageSetup
 			discard := model.clearSystemDoneIfLeaving(model.active)
 			model.setupReturn = ""
@@ -1343,6 +1363,9 @@ func (model Model) dispatchPageTo(id ui.PageID, message tea.Msg) (tea.Model, tea
 }
 
 func (model Model) handleActionIntent(intent ui.ActionIntentMsg) (tea.Model, tea.Cmd) {
+	if model.endpointRestart != nil && model.endpointRestart.pending {
+		return model, intent.Cancel
+	}
 	if intent.Action == ui.ActionUpdateMihari && intent.Cancel != nil {
 		page, ok := model.pages[ui.PageSystem].(*systempage.Model)
 		if !ok || model.active != ui.PageSystem || !page.AcceptsMihariPreparation(intent.Key) {
@@ -1389,6 +1412,9 @@ func (model Model) handleActionIntent(intent ui.ActionIntentMsg) (tea.Model, tea
 }
 
 func (model Model) executeAction(intent ui.ActionIntentMsg) (tea.Model, tea.Cmd) {
+	if model.endpointRestart != nil && model.endpointRestart.pending {
+		return model, intent.Cancel
+	}
 	if intent.Action == ui.ActionUpdateMihari && intent.Cancel != nil {
 		page, ok := model.pages[ui.PageSystem].(*systempage.Model)
 		if !ok || model.active != ui.PageSystem || !page.AcceptsMihariPreparation(intent.Key) {

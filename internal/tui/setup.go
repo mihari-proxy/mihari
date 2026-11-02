@@ -19,7 +19,7 @@ func setupCommand(command tea.Cmd) tea.Cmd {
 				value[i] = setupCommand(value[i])
 			}
 			return value
-		case ui.ConfirmationRequestMsg, ui.ErrorDetailMsg, ui.OpenHelpMsg, ui.ActionIntentMsg,
+		case ui.ConfirmationRequestMsg, ui.ErrorDetailMsg, ui.OpenHelpMsg, ui.ActionIntentMsg, ui.ApplySavedEndpointsMsg,
 			setuppage.ReadyMsg, setuppage.CompletedMsg, setuppage.CancelledMsg, tea.QuitMsg:
 			return result
 		default:

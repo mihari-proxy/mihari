@@ -43,15 +43,16 @@ type Event struct {
 	Kind            EventKind
 	ObservedAt      time.Time
 	Attempt         int
-	Status          protocol.Status
-	Core            protocol.CoreStatus
-	Subscriptions   protocol.SubscriptionList
-	Proxies         protocol.ProxyGroups
-	Routing         protocol.RoutingStatus
-	Preferences     protocol.TUIPreferences
-	Rules           protocol.RuleList
-	RuleProviders   protocol.RuleProviderList
-	WebGUI          protocol.WebGUIStatus
+	// Status identifies the daemon that supplied a resource or stream event.
+	Status        protocol.Status
+	Core          protocol.CoreStatus
+	Subscriptions protocol.SubscriptionList
+	Proxies       protocol.ProxyGroups
+	Routing       protocol.RoutingStatus
+	Preferences   protocol.TUIPreferences
+	Rules         protocol.RuleList
+	RuleProviders protocol.RuleProviderList
+	WebGUI        protocol.WebGUIStatus
 	// Logging contains the daemon logging status associated with the event.
 	Logging     protocol.LoggingStatus
 	Traffic     protocol.TrafficSample
@@ -97,6 +98,9 @@ type Session struct {
 	loggingCapability      bool
 	loggingCapabilityKnown bool
 	routingCapability      bool
+	daemonIdentityKnown    bool
+	daemonPID              int
+	daemonStartedAt        time.Time
 }
 
 func New(client Client, options Options) *Session {
@@ -281,7 +285,7 @@ func (s *Session) pollSnapshots(ctx context.Context, status protocol.Status) err
 			return ctx.Err()
 		}
 		failures = append(failures, err)
-		if !putOrdered(ctx, s.control, Event{Kind: EventCore, Core: coreStatus, Err: err}) {
+		if !putOrdered(ctx, s.control, Event{Kind: EventCore, Status: status, Core: coreStatus, Err: err}) {
 			return ctx.Err()
 		}
 	}
@@ -291,7 +295,7 @@ func (s *Session) pollSnapshots(ctx context.Context, status protocol.Status) err
 			return ctx.Err()
 		}
 		failures = append(failures, err)
-		if !putOrdered(ctx, s.control, Event{Kind: EventSubscriptions, Subscriptions: subscriptions, Err: err}) {
+		if !putOrdered(ctx, s.control, Event{Kind: EventSubscriptions, Status: status, Subscriptions: subscriptions, Err: err}) {
 			return ctx.Err()
 		}
 	}
@@ -301,7 +305,7 @@ func (s *Session) pollSnapshots(ctx context.Context, status protocol.Status) err
 			return ctx.Err()
 		}
 		failures = append(failures, err)
-		if !putOrdered(ctx, s.control, Event{Kind: EventProxies, Proxies: proxies, Epoch: s.loggingEpoch, Err: err}) {
+		if !putOrdered(ctx, s.control, Event{Kind: EventProxies, Status: status, Proxies: proxies, Epoch: s.loggingEpoch, Err: err}) {
 			return ctx.Err()
 		}
 	}
@@ -311,7 +315,7 @@ func (s *Session) pollSnapshots(ctx context.Context, status protocol.Status) err
 			return ctx.Err()
 		}
 		failures = append(failures, err)
-		if !putOrdered(ctx, s.control, Event{Kind: EventRules, Rules: rules, Err: err}) {
+		if !putOrdered(ctx, s.control, Event{Kind: EventRules, Status: status, Rules: rules, Err: err}) {
 			return ctx.Err()
 		}
 	}
@@ -321,7 +325,7 @@ func (s *Session) pollSnapshots(ctx context.Context, status protocol.Status) err
 			return ctx.Err()
 		}
 		failures = append(failures, err)
-		if !putOrdered(ctx, s.control, Event{Kind: EventRuleProviders, RuleProviders: providers, Err: err}) {
+		if !putOrdered(ctx, s.control, Event{Kind: EventRuleProviders, Status: status, RuleProviders: providers, Err: err}) {
 			return ctx.Err()
 		}
 	}
@@ -331,7 +335,7 @@ func (s *Session) pollSnapshots(ctx context.Context, status protocol.Status) err
 			return ctx.Err()
 		}
 		failures = append(failures, err)
-		if !putOrdered(ctx, s.control, Event{Kind: EventPreferences, Preferences: preferences, Err: err}) {
+		if !putOrdered(ctx, s.control, Event{Kind: EventPreferences, Status: status, Preferences: preferences, Err: err}) {
 			return ctx.Err()
 		}
 	}
@@ -341,7 +345,7 @@ func (s *Session) pollSnapshots(ctx context.Context, status protocol.Status) err
 			return ctx.Err()
 		}
 		failures = append(failures, err)
-		if !putOrdered(ctx, s.control, Event{Kind: EventWebGUI, WebGUI: webGUI, Err: err}) {
+		if !putOrdered(ctx, s.control, Event{Kind: EventWebGUI, Status: status, WebGUI: webGUI, Err: err}) {
 			return ctx.Err()
 		}
 	}
@@ -363,9 +367,16 @@ func (s *Session) putStatus(ctx context.Context, status protocol.Status) bool {
 func (s *Session) observeLoggingCapability(status protocol.Status) {
 	present := slices.Contains(status.Capabilities, protocol.CapabilityLogging)
 	routing := slices.Contains(status.Capabilities, protocol.CapabilityRouting)
-	if (s.loggingCapabilityKnown && s.loggingCapability && !present) || (s.routingCapability && !routing) {
+	identityKnown := status.PID > 0 || !status.StartedAt.IsZero()
+	ownerChanged := identityKnown && s.daemonIdentityKnown && (s.daemonPID != status.PID || !s.daemonStartedAt.Equal(status.StartedAt))
+	if ownerChanged || (s.loggingCapabilityKnown && s.loggingCapability && !present) || (s.routingCapability && !routing) {
 		s.loggingEpoch++
 		s.loggingRevision = nil
+	}
+	if identityKnown {
+		s.daemonIdentityKnown = true
+		s.daemonPID = status.PID
+		s.daemonStartedAt = status.StartedAt
 	}
 	s.routingCapability = routing
 	s.loggingCapability = present
@@ -384,7 +395,7 @@ func (s *Session) pollLogging(ctx context.Context, status protocol.Status) {
 	if ctx.Err() != nil {
 		return
 	}
-	if !putOrdered(ctx, s.control, Event{Kind: EventLogging, Logging: observed, Epoch: requestEpoch, Err: err}) || err != nil {
+	if !putOrdered(ctx, s.control, Event{Kind: EventLogging, Status: status, Logging: observed, Epoch: requestEpoch, Err: err}) || err != nil {
 		return
 	}
 	if requestEpoch == s.loggingEpoch {
@@ -410,7 +421,7 @@ func (s *Session) pollRouting(ctx context.Context, status protocol.Status) {
 		return
 	}
 	observed, err := client.Routing(ctx)
-	putOrdered(ctx, s.control, Event{Kind: EventRouting, Routing: observed, Epoch: s.loggingEpoch, Err: err})
+	putOrdered(ctx, s.control, Event{Kind: EventRouting, Status: status, Routing: observed, Epoch: s.loggingEpoch, Err: err})
 }
 
 // superviseStreams keeps the push streams resident for the whole daemon
@@ -439,7 +450,8 @@ func (s *Session) superviseStreams(ctx context.Context) error {
 		case <-streamHealthy:
 		default:
 		}
-		go func() { streamErr <- s.runStreams(streamCtx, streamHealthy) }()
+		owner := protocol.Status{PID: s.daemonPID, StartedAt: s.daemonStartedAt}
+		go func() { streamErr <- s.runStreams(streamCtx, streamHealthy, owner) }()
 	}
 	startStreams()
 	streamAttempt := 0
@@ -487,6 +499,10 @@ func (s *Session) superviseStreams(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			if s.daemonIdentityKnown && (status.PID != s.daemonPID || !status.StartedAt.Equal(s.daemonStartedAt)) {
+				// Rejoin old stream producers before opening streams for the new owner.
+				return errControlStreamEnded
+			}
 			// Status is the daemon transport health boundary. A snapshot error
 			// after it succeeds may only mean the restarted controller is not
 			// ready yet and must not mark the daemon stale.
@@ -518,7 +534,7 @@ func (s *Session) reportStreamFailure(ctx context.Context, err error) error {
 	return err
 }
 
-func (s *Session) runStreams(parent context.Context, healthy chan<- struct{}) error {
+func (s *Session) runStreams(parent context.Context, healthy chan<- struct{}, owner protocol.Status) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	errCh := make(chan error, 1)
@@ -533,6 +549,7 @@ func (s *Session) runStreams(parent context.Context, healthy chan<- struct{}) er
 				if decodeErr != nil {
 					return decodeErr
 				}
+				event.Status = owner
 				switch event.Kind {
 				case EventTraffic:
 					if !putLatest(ctx, s.traffic, event) {

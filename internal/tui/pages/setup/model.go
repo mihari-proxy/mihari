@@ -184,6 +184,8 @@ type Model struct {
 	setupTargetAvailable bool
 	portRecovery         bool
 	waitingRestart       bool
+	restartApplying      bool
+	restartMessage       string
 	subscriptionsErr     error
 	subscriptions        protocol.SubscriptionList
 	portProbeLoaded      bool
@@ -568,7 +570,12 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		return m, nil
 	}
 	if m.waitingRestart {
+		if m.restartApplying {
+			return m, nil
+		}
 		switch key.String() {
+		case "r":
+			return m, m.applySavedEndpoints(true)
 		case "enter":
 			m.resumePending = true
 			return m, m.Load()
@@ -786,7 +793,12 @@ func (m *Model) updateSubscription(message tea.Msg, key tea.KeyPressMsg) (ui.Pag
 // View renders the current wizard step, restart guidance or loading state with safe diagnostics.
 func (m *Model) View() string {
 	if m.waitingRestart {
-		lines := []string{ui.RestartRequiredTitle, "Ports are saved. Restart the Mihari daemon to apply them.", "For an installed service: restart Mihari with administrator/root privileges.", "For a foreground daemon: stop it and run mihari daemon again.", "Enter recheck connection and saved state"}
+		lines := []string{"Ports saved; restart required", "Ports are saved. The Mihari daemon must restart to apply them.", "For an installed service: run mihari service restart in an administrator/root terminal.", "For a foreground daemon: stop it and run mihari daemon again.", "r retry automatic restart  Enter recheck connection and saved state"}
+		if m.restartApplying {
+			lines = []string{"Applying saved ports", "Ports are saved. Restarting the Mihari service and waiting for the new daemon."}
+		} else if m.restartMessage != "" {
+			lines = append(lines[:1], append([]string{m.restartMessage}, lines[2:]...)...)
+		}
 		if m.width > 0 {
 			return m.renderFrame(lines)
 		}
