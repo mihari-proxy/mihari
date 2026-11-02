@@ -1,9 +1,14 @@
 package subscription
 
 import (
+	"errors"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"strings"
 )
+
+// ErrProxyAuthNoUsers identifies an enabled authentication configuration with no users.
+var ErrProxyAuthNoUsers = errors.New("proxy authentication is enabled but there are no users; add a user or reset proxy authentication")
 
 // ApplyProxyAuth updates authentication and bypass keys in document.
 // Callers must pass a detached document; existing source list elements are never mutated.
@@ -45,7 +50,7 @@ func ApplyProxyAuth(document Document, auth protocol.ProxyAuthConfig) ([]protoco
 			}
 		}
 		if len(users) == 0 {
-			return nil, authError("proxy authentication is enabled but there are no users; add a user or reset proxy authentication")
+			return nil, diagnostics.Wrap(authError(ErrProxyAuthNoUsers.Error()), ErrProxyAuthNoUsers)
 		}
 	}
 	if auth.Mode != "follow" {
@@ -70,6 +75,6 @@ func ApplyProxyAuth(document Document, auth protocol.ProxyAuthConfig) ([]protoco
 	return users, nil
 }
 
-func authError(message string) error {
+func authError(message string) protocol.APIError {
 	return protocol.APIError{Code: protocol.CodeDataFailure, Message: message}
 }

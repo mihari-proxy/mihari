@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -36,7 +37,7 @@ func (m *Manager) PreviewProxyAuth(ctx context.Context, request protocol.ProxyAu
 	old := settings.EffectiveProxyAuth()
 	draft := resolveProxyAuthPasswords(request.Config, old)
 	if err := config.ValidateProxyAuth(draft); err != nil {
-		return protocol.ProxyAuthPreview{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "Invalid authentication draft"}, err)
+		return protocol.ProxyAuthPreview{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: err.Error()}, err)
 	}
 	before, err := authPreviewLines(base, old, request.Reveal)
 	if err != nil {
@@ -44,6 +45,9 @@ func (m *Manager) PreviewProxyAuth(ctx context.Context, request protocol.ProxyAu
 	}
 	after, err := authPreviewLines(base, draft, request.Reveal)
 	if err != nil {
+		if errors.Is(err, subscription.ErrProxyAuthNoUsers) {
+			return protocol.ProxyAuthPreview{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: err.Error()}, err)
+		}
 		return protocol.ProxyAuthPreview{}, err
 	}
 	if err := m.lockMaintenance(ctx); err != nil {

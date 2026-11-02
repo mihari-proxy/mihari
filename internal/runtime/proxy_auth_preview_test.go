@@ -80,6 +80,26 @@ func TestProxyAuthPreview_CanceledRequestDoesNotResolve(t *testing.T) {
 	}
 }
 
+func TestProxyAuthPreview_DraftFailuresKeepSpecificInvalidArgumentReasons(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		draft  protocol.ProxyAuthConfig
+		reason string
+	}{
+		{name: "loopback overlap", draft: protocol.ProxyAuthConfig{Mode: "follow", BypassMode: "custom", BypassPrefixes: []string{"127.0.0.1/32"}}, reason: "overlaps loopback"},
+		{name: "no users", draft: protocol.ProxyAuthConfig{Mode: "enabled", BypassMode: "required"}, reason: "there are no users"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := startupLoggingManager(t)
+			_, err := m.PreviewProxyAuth(t.Context(), protocol.ProxyAuthPreviewRequest{Config: tc.draft})
+			var api protocol.APIError
+			if !errors.As(err, &api) || api.Code != protocol.CodeInvalidArgument || !strings.Contains(api.Message, tc.reason) {
+				t.Fatalf("draft reason/classification lost: %v", err)
+			}
+		})
+	}
+}
+
 func TestProxyAuthPreview_FollowPreservesNativeFieldShape(t *testing.T) {
 	base := subscription.Document{"authentication": nil, "skip-auth-prefixes": map[string]any{"fixture": "native-value"}}
 	lines, err := authPreviewLines(base, protocol.ProxyAuthConfig{Mode: "follow", BypassMode: "follow"}, false)
