@@ -23,7 +23,7 @@ func TestProxyAuthPreview_DialogBorderAndModeDescriptions(t *testing.T) {
 			t.Errorf("dialog missing %q", want)
 		}
 	}
-	if !strings.Contains(strings.Join(m.authRows(), "\n"), "Follow subscription bypass rules") {
+	if !strings.Contains(view, "Use skip-auth-prefixes from the active subscription.") {
 		t.Fatal("bypass mode explanation missing")
 	}
 }
@@ -203,7 +203,7 @@ func TestProxyAuthPreview_PreviewPagingPreservesVisibleParameterSelection(t *tes
 	m.updateAuth(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	m.updateAuth(tea.KeyPressMsg{Code: tea.KeyTab})
 	view := ansi.Strip(m.authView())
-	if m.auth.top != top || m.auth.selected != selected || !strings.Contains(view, "› User: fixture") {
+	if m.auth.top != top || m.auth.selected != selected || !strings.Contains(view, "› fixture") {
 		t.Fatal("preview paging changed or hid parameter selection")
 	}
 	m.updateAuth(tea.KeyPressMsg{Code: tea.KeyEnter})

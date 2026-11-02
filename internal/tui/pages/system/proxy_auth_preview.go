@@ -154,7 +154,7 @@ func (m *Model) handleAuthPreview(result authPreviewResultMsg) {
 
 func (m *Model) updateAuth(message tea.Msg) tea.Cmd {
 	a := &m.auth
-	if key, ok := message.(tea.KeyPressMsg); ok && a.edit == "" && a.loaded && !a.pending {
+	if key, ok := message.(tea.KeyPressMsg); ok && a.edit == "" && a.picker == "" && a.loaded && !a.pending {
 		if key.String() == "tab" || key.String() == "shift+tab" {
 			a.previewFocus = !a.previewFocus
 			return nil
@@ -245,7 +245,7 @@ func (m *Model) authPreviewLines(width, height int) []string {
 		notes = append(notes, "Preview stale: "+diagnostics.EscapeTerminal(a.previewErr))
 	}
 	if !a.previewPending && a.previewErr == "" && a.preview.ActiveID == "" {
-		notes = append(notes, "No active subscription. Preview uses instance settings only.")
+		notes = append(notes, "No active subscription. Preview uses settings saved in Mihari only.")
 	}
 	if !a.reveal {
 		notes = append(notes, "Passwords masked; placeholders are display only.")
@@ -279,13 +279,20 @@ func (m *Model) authPreviewLines(width, height int) []string {
 				text = m.theme.Muted.Render(text)
 			}
 			if selected {
-				text = m.theme.RowFocus.Render(text)
+				text = lipgloss.NewStyle().Background(lipgloss.Color("236")).Width(width).Render(text)
 			}
 			body = append(body, text)
 		}
 		if selected && selectedStart < 0 {
 			selectedStart, selectedEnd = start, len(body)
 		}
+	}
+	body = append(body, "")
+	for _, part := range strings.Split(ansi.Wrap("+ added · - removed · focused parameter shaded", max(1, width), ""), "\n") {
+		body = append(body, m.theme.Muted.Render(part))
+	}
+	for _, part := range strings.Split(ansi.Wrap("To edit this YAML directly, use a local YAML file in Subscriptions.", max(1, width), ""), "\n") {
+		body = append(body, m.theme.Muted.Render(part))
 	}
 	budget := max(1, height-1)
 	a.previewPage = budget
@@ -294,42 +301,4 @@ func (m *Model) authPreviewLines(width, height int) []string {
 	}
 	a.previewTop = min(a.previewTop, max(0, len(body)-budget))
 	return append(lines, ui.SliceLines(body, a.previewTop, budget)...)
-}
-
-func (m *Model) authView() string {
-	outer := max(12, min(136, m.width-4))
-	inner := max(6, outer-m.theme.Dialog.GetHorizontalFrameSize())
-	wide := inner >= 96
-	footer := "Enter edit · d remove · Tab pane · ↑/↓ select/scroll · PgUp/PgDn scroll · Ctrl+R reveal"
-	saveHint := "Ctrl+S save · Esc cancel · Existing connections remain"
-	if m.height < 24 {
-		footer = "Enter edit · d remove · Tab pane\n↑/↓ · PgUp/PgDn scroll"
-		saveHint = "Ctrl+R reveal · Ctrl+S save · Esc"
-	}
-	if m.auth.edit != "" {
-		footer = "Enter accept · Tab field · Ctrl+R reveal · Esc cancel edit"
-	}
-	footerLines := strings.Split(ansi.Wrap(footer, inner, ""), "\n")
-	footerLines = append(footerLines, strings.Split(ansi.Wrap(saveHint, inner, ""), "\n")...)
-	note := strings.Split(ansi.Wrap("To edit the configuration directly, use a local YAML file in Subscriptions.", inner, ""), "\n")
-	budget := max(2, m.height-m.theme.Dialog.GetVerticalFrameSize()-1-len(footerLines)-len(note)-2)
-	leftWidth, rightWidth := inner, inner
-	leftHeight, rightHeight := max(1, budget/2), max(1, budget-budget/2)
-	if wide {
-		leftWidth = (inner - 3) / 2
-		rightWidth = inner - 3 - leftWidth
-		leftHeight = budget
-		rightHeight = budget
-	}
-	left := m.authParameterLines(leftWidth, leftHeight)
-	left = ui.SliceLines(left, 0, leftHeight)
-	right := m.authPreviewLines(rightWidth, rightHeight)
-	var body string
-	if wide {
-		body = lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(leftWidth).Height(budget).Render(strings.Join(left, "\n")), m.theme.Muted.Render(strings.TrimSuffix(strings.Repeat(" │ \n", budget), "\n")), strings.Join(right, "\n"))
-	} else {
-		body = strings.Join(append(left, right...), "\n")
-	}
-	lines := []string{m.theme.Title.Render("Proxy Authentication"), body, m.theme.Muted.Render(strings.Join(note, "\n")), m.theme.Muted.Render(strings.Join(footerLines, "\n"))}
-	return m.theme.Dialog.Width(outer).Render(strings.Join(lines, "\n"))
 }

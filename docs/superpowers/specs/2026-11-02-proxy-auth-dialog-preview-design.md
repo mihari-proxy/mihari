@@ -15,7 +15,7 @@
 
 - 右侧为只读预览；显示英文提示：`Preview only. To edit the configuration directly, use a local YAML file in Subscriptions.`
 - 当前焦点参数影响的配置行使用背景高亮；相对已保存配置的未保存变化使用 `+ / −` 标记，两者区分。
-- 模式行后始终显示当前模式的简短说明，随模式切换更新；说明使用英文、浅灰色。
+- 模式行下方始终显示当前模式的简短说明，随模式切换更新；说明使用英文、浅灰色。
 - 密码默认遮罩；Ctrl+R 主动显示，两列显示状态同步。遮罩时说明占位符不代表实际生成值。
 - 宽窗口两列；窄窗口上方参数、下方预览，保留边框与焦点高亮。
 
@@ -35,9 +35,19 @@
 
 ## 第三轮已确认
 
-- 无活动订阅时，以空订阅为基础计算实例认证预览，并显示 `No active subscription. Preview uses instance settings only.`；开启认证但没有用户时显示校验错误。
+- 无活动订阅时，以空订阅为基础计算认证预览，并显示 `No active subscription. Preview uses settings saved in Mihari only.`；开启认证但没有用户时显示校验错误。
 - 区分字段缺失与显式空列表。缺失字段使用浅灰注释，例如 `# authentication: not set`；实际生成空列表则显示 `authentication: []`。`skip-auth-prefixes` 遵循相同规则。
 - 选中左侧参数时，右侧自动滚动至对应配置行；Tab 切换两侧焦点，右侧支持方向键与 PgUp/PgDn 滚动，底部显示快捷键提示。
+
+## 视觉原型细化后确认
+
+- 采用方案 1 紧凑参数表，明确使用 Authentication mode、Bypass mode、Local bypass、Additional bypass CIDRs 标签。弹窗按内容确定高度；空间不足时滚动，不用空白填满终端。
+- 两个模式均默认显示单值，Enter 展开带边框的全部模式及浅灰英文说明。菜单覆盖下方参数，不扩大弹窗；方向键仅改变候选，Enter 确认，Esc 收起且不更改草稿。模式值或用户名获得焦点强调，说明不整行反色。
+- Users 展示用户名与凭据来源，标明活动订阅名称；名称暂不可用时明确显示订阅 ID。区分 `Subscription: <name>`、`Password set in Mihari`（同时说明 `User from subscription: <name>`）、`Added in Mihari`，不使用 `instance` 代替来源。
+- 当前订阅存在同名用户时，Mihari 保存的是密码覆盖；移除覆盖恢复订阅密码。当前订阅不存在同名用户时，才称为 Mihari 新增用户。来源随活动订阅变化，不是永久用户类型。
+- 复用现有只读预览接口的 follow 草稿获取原始用户名，不请求明文密码；通过现有订阅列表取得名称。来源必须与认证状态的 revision 一致；无法确认时说明来源不可用，不错误宣称新增用户。
+- Local bypass 标题下第一行为浅灰含义说明：`Allow loopback clients to connect without authentication.`；第二行显示 `127.0.0.0/8 · ::1/128`。
+- Local bypass 和额外 CIDR 保持可见；非 Custom 或认证关闭时不可编辑，并说明具体原因。用户列表仍可编辑保留的凭据。
 
 ## 实施与验证要求
 

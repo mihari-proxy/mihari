@@ -52,7 +52,7 @@ func TestProxyAuth_DraftRemovalAndScrollDoNotApply(t *testing.T) {
 	if len(m.authUsers()) != 24 {
 		t.Fatal("removed instance user remains visible")
 	}
-	m.auth.selected = len(m.authRows()) - 1
+	m.auth.selected = len(m.authNavigation()) - 1
 	view := m.authView()
 	if !strings.Contains(view, "[ Save ]") || m.auth.top == 0 {
 		t.Fatal("actions did not scroll into view")
@@ -118,7 +118,7 @@ func TestProxyAuth_ExplicitRevealIncludesInactiveSavedUsers(t *testing.T) {
 	m.SetSize(90, 28)
 	m.auth = authUI{open: true, loaded: true, epoch: 1, draft: protocol.ProxyAuthConfig{Mode: "disabled", BypassMode: "follow", Users: []protocol.ProxyAuthUser{{Username: "alice"}}}}
 	m.handleAuthResult(authResultMsg{epoch: 1, reveal: true, status: protocol.ProxyAuthStatus{Config: protocol.ProxyAuthConfig{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "saved-secret"}}}}})
-	if !strings.Contains(m.authView(), "saved-secret") {
+	if !strings.Contains(strings.Join(m.authParameterLines(86, 100), "\n"), "saved-secret") {
 		t.Fatal("explicit reveal omitted inactive saved credential")
 	}
 }
@@ -128,7 +128,7 @@ func TestProxyAuth_RevealIncludesSavedAndEffectiveCredentialsInFollowMode(t *tes
 	m.SetSize(90, 28)
 	m.auth = authUI{open: true, loaded: true, epoch: 1, draft: protocol.ProxyAuthConfig{Mode: "follow", Users: []protocol.ProxyAuthUser{{Username: "alice"}}}}
 	m.handleAuthResult(authResultMsg{epoch: 1, reveal: true, status: protocol.ProxyAuthStatus{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "subscription-secret", Source: "subscription"}}, Config: protocol.ProxyAuthConfig{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "saved-secret"}}}}})
-	view := m.authView()
+	view := strings.Join(m.authParameterLines(86, 100), "\n")
 	if !strings.Contains(view, "saved: saved-secret") || !strings.Contains(view, "effective (subscription): subscription-secret") {
 		t.Fatal("reveal omitted the saved or effective credential and its source")
 	}

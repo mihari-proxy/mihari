@@ -312,6 +312,8 @@ Mihari 是一个独立项目,与 mihomo 项目或 MetaCubeX 无关联,也不受�
 
 Proxy Authentication 使用带边框的弹窗：左侧调整参数，右侧只读预览生成配置中的 `authentication` 和 `skip-auth-prefixes`。模式说明为英文浅灰色。输入时实时更新，当前参数影响的行高亮，`+`/`−` 标记相对已保存设置的变化。密码默认遮罩，Ctrl+R 主动显示；Tab 切换两侧焦点，方向键和 PgUp/PgDn 滚动预览，窄窗口上下排列。预览不保存、不重载配置；直接编辑配置请在 Subscriptions 使用本地 YAML 文件。预览需要 daemon 提供 `proxy-auth-preview-v1` 能力。
 
+Authentication mode 和 Bypass mode 默认只显示当前值，Enter 展开全部模式及独立说明，Enter 确认，Esc 收起且不更改草稿。弹窗按内容确定高度，空间不足时滚动。用户来源明确区分当前订阅名称（名称不可用时明确显示 ID）、Mihari 为订阅用户设置的密码覆盖、Mihari 新增用户；移除密码覆盖会恢复订阅密码。Local bypass 表示允许回环地址客户端免认证连接，标题下第一行解释含义，第二行列出 `127.0.0.0/8` 和 `::1/128`。不生效时仍展示 Local bypass 和额外 CIDR，并说明原因；认证未关闭且选择 Custom 后才能编辑。
+
 入口为 **System → Ports & Authentication → Proxy Authentication**，CLI 为 `mihari proxy-auth`。认证支持沿用订阅（follow）、启用（enabled）和关闭（disabled）。启用时按用户名精确匹配合并订阅和实例用户：新增用户追加，同名覆盖密码；移除覆盖恢复订阅密码。排除订阅用户留待 #357。
 
 免认证支持沿用订阅（follow）、自定义（custom）和全部要求认证（required）。自定义提供本机回环免认证开关及额外 CIDR；额外 CIDR 不允许与 IPv4/IPv6 回环范围重叠。这不会改变监听地址或开放局域网访问。关闭认证仍保留已编辑凭据。保存后热重载，不重启 mihomo，也不主动断开已有连接。未获免认证的客户端需要提供代理用户名密码，使用系统代理的应用同样如此。

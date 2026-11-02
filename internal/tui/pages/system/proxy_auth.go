@@ -5,10 +5,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"context"
 	"errors"
-	"fmt"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
-	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"slices"
 	"strings"
@@ -23,6 +20,11 @@ type revealedAuthCredential struct {
 	saved, effective *protocol.ProxyAuthUser
 }
 type authUI struct {
+	picker                                      string
+	pickerIndex                                 int
+	sourceUsers                                 []protocol.ProxyAuthUser
+	sourceID, sourceName, sourceErr             string
+	sourceLoaded                                bool
 	previewCancel                               context.CancelFunc
 	previewRevealed                             bool
 	preview                                     protocol.ProxyAuthPreview
@@ -46,11 +48,14 @@ type authUI struct {
 	input                                       int
 }
 type authResultMsg struct {
-	revealSequence   uint64
-	status           protocol.ProxyAuthStatus
-	epoch            uint64
-	mutation, reveal bool
-	err              error
+	sourceUsers                     []protocol.ProxyAuthUser
+	sourceID, sourceName, sourceErr string
+	sourceLoaded                    bool
+	revealSequence                  uint64
+	status                          protocol.ProxyAuthStatus
+	epoch                           uint64
+	mutation, reveal                bool
+	err                             error
 }
 
 func (m authResultMsg) Err() error                        { return m.err }
@@ -61,11 +66,16 @@ func (m *Model) authLoad(reveal bool) tea.Cmd {
 		return nil
 	}
 	epoch, revealSequence, ctx := m.auth.epoch, m.auth.revealSequence, m.ctx
+	hasPreview := m.hasCapability(protocol.CapabilityProxyAuthPreview)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
 		v, e := client.ProxyAuth(ctx, reveal)
-		return ui.PageResultMsg{Page: ui.PageSystem, Result: authResultMsg{status: v, epoch: epoch, revealSequence: revealSequence, reveal: reveal, err: e}}
+		result := authResultMsg{status: v, epoch: epoch, revealSequence: revealSequence, reveal: reveal, err: e}
+		if e == nil && !reveal {
+			loadAuthSource(ctx, client, hasPreview, &result)
+		}
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: result}
 	}
 }
 func (m *Model) openAuth() tea.Cmd {
@@ -109,7 +119,11 @@ func (m *Model) handleAuthResult(r authResultMsg) tea.Cmd {
 		return m.scheduleAuthPreview()
 	}
 	m.auth.status = r.status
+	m.auth.sourceUsers, m.auth.sourceLoaded = r.sourceUsers, r.sourceLoaded
+	m.auth.sourceID, m.auth.sourceName, m.auth.sourceErr = r.sourceID, r.sourceName, r.sourceErr
 	m.auth.draft = r.status.Config
+	m.auth.draft.Users = slices.Clone(r.status.Config.Users)
+	m.auth.draft.BypassPrefixes = slices.Clone(r.status.Config.BypassPrefixes)
 	m.auth.loaded = true
 	m.hideAuthSecrets()
 	m.auth.err = ""
@@ -122,48 +136,13 @@ func (m *Model) handleAuthResult(r authResultMsg) tea.Cmd {
 	}
 	return m.scheduleAuthPreview()
 }
-func (m *Model) authRows() []string {
-	a := &m.auth
-	inactive := ""
-	if a.draft.Mode == "disabled" {
-		inactive = m.theme.Muted.Render(" (Authentication disabled)")
-	}
-	modeHelp := map[string]string{"follow": "Keep subscription authentication; ignore saved user overrides", "enabled": "Merge subscription users with saved overrides", "disabled": "Disable authentication; keep saved credentials"}
-	bypassHelp := map[string]string{"follow": "Follow subscription bypass rules", "custom": "Replace subscription bypass rules with local settings", "required": "Require authentication for every address"}
-	rows := []string{"Authentication: " + a.draft.Mode + " — " + modeHelp[a.draft.Mode], "Bypass rules: " + a.draft.BypassMode + inactive + " — " + bypassHelp[a.draft.BypassMode], fmt.Sprintf("Local bypass: %t", a.draft.LocalBypass) + inactive}
-	for _, u := range m.authUsers() {
-		label := diagnostics.EscapeTerminal(u.Username) + " · " + u.Source
-		if a.draft.Mode == "disabled" {
-			label += m.theme.Muted.Render(" (Authentication disabled)")
-		} else if a.draft.Mode == "follow" && u.Source != "subscription" {
-			label += m.theme.Muted.Render(" (Following subscription)")
-		}
-		if a.reveal {
-			for _, draft := range a.draft.Users {
-				if draft.Username == u.Username && draft.Password != "" {
-					label += "\n  draft: " + diagnostics.EscapeTerminal(draft.Password)
-				}
-			}
-			if credential, found := a.revealed[u.Username]; found {
-				if credential.saved != nil {
-					label += "\n  saved: " + diagnostics.EscapeTerminal(credential.saved.Password)
-				}
-				if credential.effective != nil {
-					label += "\n  effective (" + diagnostics.EscapeTerminal(credential.effective.Source) + "): " + diagnostics.EscapeTerminal(credential.effective.Password)
-				}
-			}
-		}
-		rows = append(rows, "User: "+label)
-	}
-	rows = append(rows, "[ Add user ]")
-	for _, p := range a.draft.BypassPrefixes {
-		rows = append(rows, "Bypass CIDR: "+diagnostics.EscapeTerminal(p))
-	}
-	return append(rows, "[ Add bypass CIDR ]", "[ Reset Proxy Authentication ]", "[ Save ]")
-}
 func (m *Model) authUsers() []protocol.ProxyAuthUser {
 	users := []protocol.ProxyAuthUser{}
-	for _, u := range m.auth.status.Users {
+	base := m.auth.status.Users
+	if m.auth.sourceLoaded {
+		base = m.auth.sourceUsers
+	}
+	for _, u := range base {
 		if u.Source == "added" {
 			continue
 		}
@@ -198,12 +177,17 @@ func (m *Model) authSave(reset bool) tea.Cmd {
 	request.Config.BypassPrefixes = append([]string{}, request.Config.BypassPrefixes...)
 	m.auth.epoch++
 	epoch, ctx := m.auth.epoch, m.ctx
+	hasPreview := m.hasCapability(protocol.CapabilityProxyAuthPreview)
 	m.auth.pending = true
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
 		v, e := client.UpdateProxyAuth(ctx, request)
-		return ui.PageResultMsg{Page: ui.PageSystem, Result: authResultMsg{status: v, epoch: epoch, mutation: true, err: e}}
+		result := authResultMsg{status: v, epoch: epoch, mutation: true, err: e}
+		if e == nil {
+			loadAuthSource(ctx, client, hasPreview, &result)
+		}
+		return ui.PageResultMsg{Page: ui.PageSystem, Result: result}
 	}
 }
 func (m *Model) authEdit(kind, name string) tea.Cmd {
@@ -238,6 +222,25 @@ func (m *Model) updateAuthControls(message tea.Msg) tea.Cmd {
 	a := &m.auth
 	key, ok := message.(tea.KeyPressMsg)
 	if a.pending {
+		return nil
+	}
+	if a.picker != "" && ok {
+		switch key.String() {
+		case "esc":
+			a.picker = ""
+		case "up":
+			a.pickerIndex = (a.pickerIndex + 2) % 3
+		case "down":
+			a.pickerIndex = (a.pickerIndex + 1) % 3
+		case "enter", "space":
+			choice := authModeOptions(a.picker)[a.pickerIndex].value
+			if a.picker == "auth" {
+				a.draft.Mode = choice
+			} else {
+				a.draft.BypassMode = choice
+			}
+			a.picker = ""
+		}
 		return nil
 	}
 	if a.edit != "" {
@@ -320,16 +323,15 @@ func (m *Model) updateAuthControls(message tea.Msg) tea.Cmd {
 	n := len(users)
 	prefixStart := 4 + n
 	resetRow := prefixStart + len(a.draft.BypassPrefixes) + 1
-	cycle := func(value string, values []string) string { return values[(slices.Index(values, value)+1)%len(values)] }
 	switch key.String() {
 	case "up":
 		a.manualScroll = false
 		a.err = ""
-		a.selected = max(0, a.selected-1)
+		m.moveAuthSelection(-1)
 	case "down":
 		a.manualScroll = false
 		a.err = ""
-		a.selected = min(len(m.authRows())-1, a.selected+1)
+		m.moveAuthSelection(1)
 	case "pgup":
 		a.manualScroll = true
 		a.top = max(0, a.top-max(1, a.parameterPage))
@@ -341,6 +343,9 @@ func (m *Model) updateAuthControls(message tea.Msg) tea.Cmd {
 	case "ctrl+r":
 		return m.toggleAuthReveal()
 	case "d", "delete":
+		if a.selected >= prefixStart && a.selected <= prefixStart+len(a.draft.BypassPrefixes) && !m.authCustomBypass() {
+			return nil
+		}
 		if a.selected >= 3 && a.selected < 3+n {
 			name := users[a.selected-3].Username
 			i := slices.IndexFunc(a.draft.Users, func(u protocol.ProxyAuthUser) bool { return u.Username == name })
@@ -364,23 +369,31 @@ func (m *Model) updateAuthControls(message tea.Msg) tea.Cmd {
 	case "enter", "space":
 		switch {
 		case a.selected == 0:
-			a.draft.Mode = cycle(a.draft.Mode, []string{"follow", "enabled", "disabled"})
+			m.openAuthMode("auth")
 		case a.selected == 1:
-			a.draft.BypassMode = cycle(a.draft.BypassMode, []string{"follow", "custom", "required"})
+			m.openAuthMode("bypass")
 		case a.selected == 2:
+			if !m.authCustomBypass() {
+				return nil
+			}
 			a.draft.LocalBypass = !a.draft.LocalBypass
-			a.draft.BypassMode = "custom"
 		case a.selected >= 3 && a.selected < 3+n:
 			return m.authEdit("user", users[a.selected-3].Username)
 		case a.selected == 3+n:
 			return m.authEdit("user", "")
 		case a.selected >= prefixStart && a.selected < prefixStart+len(a.draft.BypassPrefixes):
+			if !m.authCustomBypass() {
+				return nil
+			}
 			return m.authEdit("prefix", a.draft.BypassPrefixes[a.selected-prefixStart])
 		case a.selected == prefixStart+len(a.draft.BypassPrefixes):
+			if !m.authCustomBypass() {
+				return nil
+			}
 			return m.authEdit("prefix", "")
 		case a.selected == resetRow:
 			return func() tea.Msg {
-				return ui.ConfirmationRequestMsg{Title: "Reset Proxy Authentication", Impact: "Clear instance users and bypass rules; restore subscription authentication", Rollback: "Saved overrides will be removed", OnConfirm: func() tea.Msg { return authResetConfirmedMsg{} }}
+				return ui.ConfirmationRequestMsg{Title: "Reset Proxy Authentication", Impact: "Clear users and bypass rules saved in Mihari; restore subscription authentication", Rollback: "Saved overrides will be removed", OnConfirm: func() tea.Msg { return authResetConfirmedMsg{} }}
 			}
 		default:
 			return m.authSave(false)
@@ -390,65 +403,3 @@ func (m *Model) updateAuthControls(message tea.Msg) tea.Cmd {
 }
 
 type authResetConfirmedMsg struct{}
-
-func (m *Model) authParameterLines(width, height int) []string {
-	a := &m.auth
-	var status []string
-	if !a.loaded {
-		status = append(status, "Loading…")
-	}
-	if a.pending {
-		status = append(status, "Saving…")
-	}
-	if a.err != "" {
-		status = append(status, m.theme.Danger.Render(ui.TruncateVisible(a.err, width)))
-	}
-	if len(status) >= height {
-		return ui.SliceLines(status, 0, height)
-	}
-	height -= len(status)
-	a.parameterPage = height
-	lines := []string{}
-	if a.edit != "" {
-		for i := range a.inputs {
-			a.inputs[i].SetWidth(max(1, width-2))
-		}
-		lines = append(lines, a.inputs[0].View())
-		if a.edit == "user" {
-			lines = append(lines, a.inputs[1].View())
-		}
-	} else {
-		rows := m.authRows()
-		a.selected = min(a.selected, len(rows)-1)
-		var rendered []string
-		var owners []int
-		selectedStart, selectedEnd := 0, 1
-		for i, row := range rows {
-			start := len(rendered)
-			label, help, found := strings.Cut(row, " — ")
-			if found {
-				row = label + m.theme.Muted.Render(" — "+help)
-			}
-			parts := strings.Split(ansi.Wrap(row, max(1, width-2), ""), "\n")
-			rendered = append(rendered, parts...)
-			for range parts {
-				owners = append(owners, i)
-			}
-			if i == a.selected {
-				selectedStart, selectedEnd = start, len(rendered)
-			}
-		}
-		if a.manualScroll {
-			a.top = min(a.top, max(0, len(rendered)-height))
-		} else {
-			a.top = ui.EnsureLineVisible(a.top, height, len(rendered), selectedStart, selectedEnd)
-		}
-		for i, line := range ui.SliceLines(rendered, a.top, height) {
-			if owners[i+a.top] == a.selected {
-				line = m.theme.RowFocus.Render("› " + line)
-			}
-			lines = append(lines, line)
-		}
-	}
-	return append(ui.SliceLines(lines, 0, height), status...)
-}

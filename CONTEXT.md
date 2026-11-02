@@ -10,6 +10,15 @@ _Avoid_: Web 面板登录、控制 API 令牌、远端代理节点的认证。
 **代理用户（Proxy User）**：实例代理认证中的一组用户名与密码，不代表操作系统账号或带有管理权限的 Mihari 用户。
 _Avoid_: 系统用户、面板管理员、代理节点账号。
 
+**订阅代理用户（Subscription Proxy User）**：用户名与原始密码来自当前活动订阅的代理用户；其原始凭据由该订阅提供。
+_Avoid_: 系统用户、把订阅用户与 Mihari 管理账号混用。
+
+**Mihari 新增代理用户（Proxy User Added in Mihari）**：凭据由 Mihari 保存、且用户名在当前活动订阅中不存在的代理用户。该来源分类随活动订阅中的同名用户是否存在而变化。
+_Avoid_: Instance 用户、本机账号。
+
+**Mihari 密码覆盖（Mihari Password Override）**：Mihari 保存的凭据与当前订阅用户同名时，对该用户密码的替代；用户的订阅来源仍然保留。
+_Avoid_: 把密码覆盖称为替换或删除订阅用户。
+
 **认证配置预览（Authentication Configuration Preview）**：按当前编辑选择展示的运行配置认证片段，用于查看参数对认证结果的影响。预览本身不保存或应用配置，也不是直接编辑配置的入口。
 _Avoid_: 已生效配置、配置编辑器、完整运行配置。
 
