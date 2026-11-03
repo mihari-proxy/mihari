@@ -738,6 +738,13 @@ func (m *Model) ApplyRootNetworkStatus(proxy protocol.SystemProxyStatus, proxyOK
 
 func (m *Model) SetMutationsEnabled(enabled bool) {
 	if m.mutationsEnabled && !enabled {
+		if m.auth.previewCancel != nil {
+			m.auth.previewCancel()
+			m.auth.previewCancel = nil
+		}
+		m.auth.previewPending = false
+		m.auth.previewErr = "Disconnected. Reopen after reconnecting."
+		m.hideAuthSecrets()
 		m.auth.epoch++
 		m.auth.pending = false
 		m.auth.loaded = false
@@ -921,6 +928,11 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		return m, tea.Batch(func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: typed.result.Revision} }, func() tea.Msg { return ui.RouteRequestMsg{Page: ui.PageSetup} })
 	case authResultMsg:
 		return m, m.handleAuthResult(typed)
+	case authPreviewDueMsg:
+		return m, m.loadAuthPreview(typed)
+	case authPreviewResultMsg:
+		m.handleAuthPreview(typed)
+		return m, nil
 	case authResetConfirmedMsg:
 		return m, m.authSave(true)
 	case egressResultMsg:

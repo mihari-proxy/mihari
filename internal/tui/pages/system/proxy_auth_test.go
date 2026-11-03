@@ -52,7 +52,7 @@ func TestProxyAuth_DraftRemovalAndScrollDoNotApply(t *testing.T) {
 	if len(m.authUsers()) != 24 {
 		t.Fatal("removed instance user remains visible")
 	}
-	m.auth.selected = len(m.authRows()) - 1
+	m.auth.selected = len(m.authNavigation()) - 1
 	view := m.authView()
 	if !strings.Contains(view, "[ Save ]") || m.auth.top == 0 {
 		t.Fatal("actions did not scroll into view")
@@ -118,7 +118,7 @@ func TestProxyAuth_ExplicitRevealIncludesInactiveSavedUsers(t *testing.T) {
 	m.SetSize(90, 28)
 	m.auth = authUI{open: true, loaded: true, epoch: 1, draft: protocol.ProxyAuthConfig{Mode: "disabled", BypassMode: "follow", Users: []protocol.ProxyAuthUser{{Username: "alice"}}}}
 	m.handleAuthResult(authResultMsg{epoch: 1, reveal: true, status: protocol.ProxyAuthStatus{Config: protocol.ProxyAuthConfig{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "saved-secret"}}}}})
-	if !strings.Contains(m.authView(), "saved-secret") {
+	if !strings.Contains(authRenderedParameterPages(t, m), "saved-secret") {
 		t.Fatal("explicit reveal omitted inactive saved credential")
 	}
 }
@@ -128,10 +128,24 @@ func TestProxyAuth_RevealIncludesSavedAndEffectiveCredentialsInFollowMode(t *tes
 	m.SetSize(90, 28)
 	m.auth = authUI{open: true, loaded: true, epoch: 1, draft: protocol.ProxyAuthConfig{Mode: "follow", Users: []protocol.ProxyAuthUser{{Username: "alice"}}}}
 	m.handleAuthResult(authResultMsg{epoch: 1, reveal: true, status: protocol.ProxyAuthStatus{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "subscription-secret", Source: "subscription"}}, Config: protocol.ProxyAuthConfig{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: "saved-secret"}}}}})
-	view := m.authView()
+	view := authRenderedParameterPages(t, m)
 	if !strings.Contains(view, "saved: saved-secret") || !strings.Contains(view, "effective (subscription): subscription-secret") {
 		t.Fatal("reveal omitted the saved or effective credential and its source")
 	}
+}
+
+func authRenderedParameterPages(t *testing.T, m *Model) string {
+	t.Helper()
+	var pages strings.Builder
+	for range 12 {
+		view := m.authView()
+		if lipgloss.Width(view) > m.width || lipgloss.Height(view) > m.height {
+			t.Fatalf("revealed dialog exceeds viewport: %dx%d", lipgloss.Width(view), lipgloss.Height(view))
+		}
+		pages.WriteString(ansi.Strip(view))
+		m.updateAuth(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	}
+	return pages.String()
 }
 
 func TestProxyAuth_LongRevealedCredentialsWrapScrollAndHide(t *testing.T) {
@@ -143,15 +157,18 @@ func TestProxyAuth_LongRevealedCredentialsWrapScrollAndHide(t *testing.T) {
 		Config: protocol.ProxyAuthConfig{Users: []protocol.ProxyAuthUser{{Username: "alice", Password: strings.Repeat("s", 220) + "saved-tail"}}},
 	}})
 	var views strings.Builder
-	for range 12 {
+	for range 40 {
 		view := m.authView()
 		if lipgloss.Width(view) > 44 || lipgloss.Height(view) > 20 {
-			t.Fatal("revealed credentials exceed viewport")
+			t.Fatalf("revealed credentials exceed viewport: %dx%d\n%s", lipgloss.Width(view), lipgloss.Height(view), view)
 		}
-		views.WriteString(view)
+		// Collect the scrolling parameter pane without repeating the fixed
+		// frame/footer between pages; a credential may wrap across pages.
+		paneWidth := m.width - 4 - m.theme.Dialog.GetHorizontalFrameSize()
+		views.WriteString(strings.Join(m.authParameterLines(paneWidth, m.auth.parameterPage), "\n"))
 		m.updateAuth(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	}
-	visible := strings.Join(strings.Fields(ansi.Strip(views.String())), "")
+	visible := strings.Join(strings.Fields(strings.ReplaceAll(ansi.Strip(views.String()), "│", "")), "")
 	if !strings.Contains(visible, "saved-tail") || !strings.Contains(visible, "effective-tail") {
 		t.Fatal("long saved/effective credentials cannot be scrolled into view")
 	}

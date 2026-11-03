@@ -47,7 +47,7 @@ func (m *Manager) Capabilities() []string {
 	// TUN is always advertised; live apply depends on the mihomo controller.
 	capabilities = append(capabilities, protocol.CapabilityTUN)
 	capabilities = append(capabilities, protocol.CapabilityCoreReinstall)
-	capabilities = append(capabilities, protocol.CapabilityProxyAuth)
+	capabilities = append(capabilities, protocol.CapabilityProxyAuth, protocol.CapabilityProxyAuthPreview)
 	if m.businessReset != nil {
 		capabilities = append(capabilities, protocol.CapabilityDataReset)
 	}

@@ -1,11 +1,25 @@
 package subscription
 
 import (
+	"errors"
 	"github.com/mihari-proxy/mihari/internal/config"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"go.yaml.in/yaml/v3"
 	"reflect"
 	"testing"
 )
+
+func TestApplyProxyAuth_NoUsersCausePreservesDataFailureContract(t *testing.T) {
+	_, err := ApplyProxyAuth(Document{}, protocol.ProxyAuthConfig{Mode: "enabled", BypassMode: "required"})
+	var api protocol.APIError
+	if !errors.Is(err, ErrProxyAuthNoUsers) || !errors.As(err, &api) || api.Code != protocol.CodeDataFailure || api.Message != ErrProxyAuthNoUsers.Error() {
+		t.Fatalf("no-users cause/contract lost: %v", err)
+	}
+	_, err = ApplyProxyAuth(Document{"authentication": "invalid-shape"}, protocol.ProxyAuthConfig{Mode: "enabled"})
+	if errors.Is(err, ErrProxyAuthNoUsers) || !errors.As(err, &api) || api.Code != protocol.CodeDataFailure {
+		t.Fatalf("malformed source misclassified: %v", err)
+	}
+}
 
 func TestGenerateProxyAuth_MergesUsersAndReplacesBypass(t *testing.T) {
 	s := testSettings()

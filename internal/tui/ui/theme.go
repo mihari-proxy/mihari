@@ -38,6 +38,9 @@ type Theme struct {
 	RowSelected lipgloss.Style
 	// RowFocus marks keyboard focus on a list/table row (distinct from RowSelected).
 	RowFocus lipgloss.Style
+	// PreviewFocus shades affected configuration lines without reversing their
+	// semantic added/removed colors.
+	PreviewFocus lipgloss.Style
 
 	Success lipgloss.Style
 	Warning lipgloss.Style
@@ -90,6 +93,7 @@ func DefaultTheme() Theme {
 		ButtonActive: lipgloss.NewStyle().Bold(true).Foreground(accent).Padding(0, 1),
 		RowSelected:  lipgloss.NewStyle().Bold(true).Foreground(accent),
 		RowFocus:     lipgloss.NewStyle().Reverse(true),
+		PreviewFocus: lipgloss.NewStyle().Background(lipgloss.Color("236")),
 
 		Success:      lipgloss.NewStyle().Foreground(success),
 		Warning:      lipgloss.NewStyle().Foreground(warning),
