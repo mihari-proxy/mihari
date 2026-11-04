@@ -35,6 +35,8 @@ Specifically:
 - **Web panels**: one-click install and open of the zashboard / MetaCubeXD panels
 - **Connections & rules**: live view of connections, proxy groups, and rules, with local GeoIP resolution
 
+Local core readiness and version use the daemon's last confirmed observation. Normal status refreshes do not execute the core or scan its binary. Installation and update operations refresh the observation; external file changes can remain undisplayed until the next relevant operation or daemon restart. Execution retains its file checks. If the initial version probe fails, management remains available so you can retry installing the core.
+
 ## Quick start
 
 **Install**

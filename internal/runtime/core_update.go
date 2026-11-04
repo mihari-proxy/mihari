@@ -260,11 +260,15 @@ func (m *Manager) publishCoreSelection(ctx context.Context, selection core.CoreS
 		}
 		return snapshot, nil
 	})
+	if err == nil {
+		m.publishLocalCore(selection.Version)
+	}
 	return err
 }
 
 func (m *Manager) blockCoreUpdate(ctx context.Context, cause error) error {
 	m.coreRecovery.Store(true)
+	m.publishLocalCore("")
 	if err := m.lockMaintenance(ctx); err == nil {
 		_, stateErr := m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{Source: "core-update"}, func(s state.Snapshot) (state.Snapshot, error) {
 			s.Health, s.Core.Status, s.Core.LastError = "degraded", "degraded", "Core update recovery required"

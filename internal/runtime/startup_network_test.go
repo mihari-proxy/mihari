@@ -10,6 +10,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/onboarding"
+	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/supervisor"
 	"github.com/mihari-proxy/mihari/internal/sysproxy"
 )
@@ -36,7 +37,7 @@ func TestStartupNetwork_SystemProxyApplyingDuringOSWrite(t *testing.T) {
 					t.Fatal(err)
 				}
 				supervised := make(chan struct{})
-				m := newTestManager(Options{SysProxy: backend, Onboarding: service, Settings: config.Settings{Schema: "mihari.settings/v1", MixedAddr: "127.0.0.1:7890", SystemProxyDesired: desired}, Supervisor: &fakeSupervisor{run: func(ctx context.Context) error {
+				m := newTestManager(Options{Store: state.NewStore(state.Snapshot{Core: state.CoreState{Version: "v1.19.0"}}), SysProxy: backend, Onboarding: service, Settings: config.Settings{Schema: "mihari.settings/v1", MixedAddr: "127.0.0.1:7890", SystemProxyDesired: desired}, Supervisor: &fakeSupervisor{run: func(ctx context.Context) error {
 					close(supervised)
 					<-ctx.Done()
 					return nil

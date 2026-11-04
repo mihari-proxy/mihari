@@ -14,6 +14,7 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 - 守护进程可以安装、校验、托管、查询并重启 mihomo,同时将 Mihari 托管的 TCP 控制器保持在 loopback。
 - 守护进程还负责订阅持久化、有界的自动刷新、校验过的配置生成、重载回滚与离线配置切换。
 - 控制面新增只读端点 `GET /v1/service/status`,返回 mihari 自身的 OS 服务注册状态(`running`/`stopped`/`not_installed`/`unknown`);`GET /v1/core` 增加可选 `localReady`/`localVersion` 字段反映本地 core 就绪。两者均为向后兼容增量,不改变现有协议字段、onboarding `Complete` 契约或持久化格式。
+- `localReady`/`localVersion` 是 daemon 最近确认的本地核心观测：启动装配在开放控制服务前进行一次有超时的版本检测，安装、更新、回滚和重装复用各自已验证的结果；普通状态轮询只读内存。初次探测失败仍保留管理入口，显示未就绪并记录原因，由用户主动重试安装。外部删除/替换后观测允许暂时过时；实际执行仍检查权限、文件身份、内容及未完成事务。仅需摘要的文件检查采用有界缓冲流式读取，不新增定时校验。
 - `/v1` 的 `CoreStatus`、`CoreInstallResult` 增加可选 `channel`;`MutationRequest` 增加可选 `channel` 以显式指定本次安装通道。均为向后兼容增量。
 - 统一日志配置：System → Logging → Level 同时控制 Mihari 文件日志与 mihomo 全局 `log-level`，生成配置覆盖订阅值但不修改原缓存。主动可选 `debug`、`info`、`warn`、`error`。在线修改经过校验、内核确认、reload 与保存，失败补偿恢复；内核停止时保存到下次启动应用。外部内核变化每 2 秒观察：保存失败保留内核现状、显示未保存并重试最新值。仅被动采纳内核的 `silent`，保留历史文件和操作错误提示，用户可切回四档。旧版本可能拒绝已保存的 `silent`，降级前应切回支持级别或恢复兼容的停机备份。TUI/Web 实时日志筛选独立于文件级别，silent 也不限制实时订阅。网关允许单字段 `PATCH /configs {"log-level":"debug"}`，混合及未知写入仍拒绝。
 - LoggingStatus 的 `level` 保留为已保存的文件级别，可选 `core_level`、`sync_state`、`sync_message` 分别表示确认的实际值、applied/pending/unsaved/unknown 与安全提示；不放入原始错误。状态变化推进 revision，不单独推进配置 generation。受控写和外部采纳分别补偿与重试。外部采纳只保存 settings 并应用文件 logger，派生 runtime 在正常生成或每次子进程启动前更新；启动准备持有提交所有权直到 Start 返回，周期健康检查不覆盖外部日志修改。

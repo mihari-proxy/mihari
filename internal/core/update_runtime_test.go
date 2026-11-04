@@ -74,9 +74,12 @@ func TestCoreUpdateRuntimeFirstInstallStartsButIdleUpdateStaysStopped(t *testing
 				}
 			}
 			channel := "alpha"
-			_, err := manager.Install(context.WithValue(t.Context(), updateTestContextKey{}, true), runtimeapi.Operation{ID: "first-or-stopped", Channel: &channel})
+			result, err := manager.Install(context.WithValue(t.Context(), updateTestContextKey{}, true), runtimeapi.Operation{ID: "first-or-stopped", Channel: &channel})
 			if err != nil {
 				t.Fatal(err)
+			}
+			if local, err := manager.LocalCore(t.Context()); err != nil || !local.Ready || local.Version != result.Version {
+				t.Fatalf("installed core observation=%+v err=%v", local, err)
 			}
 			want := int32(0)
 			if firstInstall {
@@ -176,6 +179,9 @@ func TestCoreUpdateRuntimeCommitsAfterHealthAndRecoversSettingsFailure(t *testin
 			if disk.CoreChannel != wantChannel || disk.CoreChannelBundle != "existing-bundle-stamp" || manager.Snapshot().Core.Channel != wantChannel {
 				t.Fatalf("settings/state inconsistent: disk=%s bundle=%s state=%+v", disk.CoreChannel, disk.CoreChannelBundle, manager.Snapshot().Core)
 			}
+			if local, err := manager.LocalCore(t.Context()); err != nil || !local.Ready || local.Version != manager.Snapshot().Core.Version {
+				t.Fatalf("update/rollback observation=%+v core=%+v err=%v", local, manager.Snapshot().Core, err)
+			}
 			if got := string(starter.fixture.Binary()); got != wantBinary {
 				t.Fatalf("core=%q want=%q", got, wantBinary)
 			}
@@ -228,6 +234,9 @@ func TestCoreUpdateRuntimeRestartDoesNotRepairFailedUpdate(t *testing.T) {
 	if starter.starts.Load() != 3 || manager.Snapshot().Health != "degraded" || !starter.fixture.UpdatePending() {
 		t.Fatal("failed recovery did not preserve blocked transaction")
 	}
+	if local, err := manager.LocalCore(t.Context()); err != nil || local.Ready || local.Version != "" {
+		t.Fatalf("uncertain core still offered for reuse: local=%+v err=%v", local, err)
+	}
 	if err := sup.Restart(ctx); err == nil {
 		t.Fatal("ordinary supervisor restart bypassed recovery")
 	}
@@ -253,6 +262,9 @@ func TestCoreUpdateRuntimeRestartDoesNotRepairFailedUpdate(t *testing.T) {
 	}
 	if result.Version != "v1.20.0" || manager.Snapshot().Core.Channel != "stable" || manager.Snapshot().Health != "ok" || starter.fixture.UpdatePending() {
 		t.Fatalf("reinstall failed to restore original channel: result=%+v snapshot=%+v", result, manager.Snapshot())
+	}
+	if local, err := manager.LocalCore(t.Context()); err != nil || !local.Ready || local.Version != result.Version {
+		t.Fatalf("reinstall did not publish the repaired observation: local=%+v err=%v", local, err)
 	}
 	if starter.starts.Load() != 5 || string(starter.fixture.Binary()) != "new official stable" {
 		t.Fatalf("reinstall did not adopt fresh official core: starts=%d binary=%q", starter.starts.Load(), starter.fixture.Binary())

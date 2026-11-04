@@ -199,6 +199,7 @@ func (m *Manager) reuseSetupCore(ctx context.Context, op Operation, channel, bun
 				return nil, err
 			}
 		}
+		m.publishLocalCore(version)
 		return core.InstallResult{Version: version}, nil
 	})
 	if err != nil {

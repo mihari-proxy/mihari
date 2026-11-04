@@ -107,7 +107,7 @@ func updateFileParent(r *os.Root, path string, create bool) error {
 	}
 	return nil
 }
-func readUpdateFile(ctx context.Context, r *os.Root, path string) (body []byte, object ProvenanceObject, err error) {
+func readUpdateFile(ctx context.Context, r *os.Root, path string, retainContent bool) (body []byte, object ProvenanceObject, err error) {
 	if err = updateFileParent(r, path, false); err != nil {
 		return nil, object, err
 	}
@@ -134,12 +134,25 @@ func readUpdateFile(ctx context.Context, r *os.Root, path string) (body []byte, 
 	if err != nil {
 		return nil, object, err
 	}
-	body, err = io.ReadAll(io.LimitReader(f, maxCoreBinarySize+1))
+	var hash string
+	var size int64
+	if retainContent {
+		body, err = io.ReadAll(io.LimitReader(contextReader{ctx: ctx, r: f}, maxCoreBinarySize+1))
+		size = int64(len(body))
+		if size > maxCoreBinarySize {
+			return nil, object, os.ErrInvalid
+		}
+		if err == nil {
+			hash = digest(body)
+		}
+	} else {
+		hash, size, err = digestCoreFile(ctx, f, maxCoreBinarySize)
+		if size > maxCoreBinarySize {
+			return nil, object, os.ErrInvalid
+		}
+	}
 	if err != nil {
 		return nil, object, err
-	}
-	if len(body) > maxCoreBinarySize {
-		return nil, object, os.ErrInvalid
 	}
 	after, err := f.Stat()
 	if err != nil {
@@ -149,13 +162,13 @@ func readUpdateFile(ctx context.Context, r *os.Root, path string) (body []byte, 
 	if err != nil {
 		return nil, object, err
 	}
-	if !os.SameFile(before, current) || before.Size() != after.Size() || before.Size() != int64(len(body)) || before.Mode() != after.Mode() || !before.ModTime().Equal(after.ModTime()) {
+	if !os.SameFile(before, current) || before.Size() != after.Size() || before.Size() != size || before.Mode() != after.Mode() || !before.ModTime().Equal(after.ModTime()) {
 		return nil, object, os.ErrPermission
 	}
 	if err = ctx.Err(); err != nil {
 		return nil, object, err
 	}
-	return body, ProvenanceObject{Present: true, SHA256: digest(body), Identity: id, BootID: "file-update-identity-v1"}, nil
+	return body, ProvenanceObject{Present: true, SHA256: hash, Identity: id, BootID: "file-update-identity-v1"}, nil
 }
 func (s *fileUpdateStore) Load(ctx context.Context, role ProvenanceRole, tx string) (body []byte, err error) {
 	path, _, err := fileUpdatePath(role, tx)
@@ -167,7 +180,7 @@ func (s *fileUpdateStore) Load(ctx context.Context, role ProvenanceRole, tx stri
 		return nil, err
 	}
 	defer func() { err = errors.Join(err, r.Close()) }()
-	body, _, err = readUpdateFile(ctx, r, path)
+	body, _, err = readUpdateFile(ctx, r, path, true)
 	return body, err
 }
 func (s *fileUpdateStore) Inspect(ctx context.Context, role ProvenanceRole, tx string) (object ProvenanceObject, err error) {
@@ -180,7 +193,7 @@ func (s *fileUpdateStore) Inspect(ctx context.Context, role ProvenanceRole, tx s
 		return object, err
 	}
 	defer func() { err = errors.Join(err, r.Close()) }()
-	_, object, err = readUpdateFile(ctx, r, path)
+	_, object, err = readUpdateFile(ctx, r, path, false)
 	if errors.Is(err, os.ErrNotExist) {
 		return ProvenanceObject{}, nil
 	}
@@ -252,7 +265,7 @@ func (s *fileUpdateStore) Apply(ctx context.Context, a ProvenanceMutation) (err 
 	if err = updateFileParent(r, path, true); err != nil {
 		return err
 	}
-	_, actual, err := readUpdateFile(ctx, r, path)
+	_, actual, err := readUpdateFile(ctx, r, path, false)
 	if errors.Is(err, os.ErrNotExist) {
 		err = nil
 	}
@@ -277,7 +290,7 @@ func (s *fileUpdateStore) Apply(ctx context.Context, a ProvenanceMutation) (err 
 		if err != nil {
 			return err
 		}
-		_, from, err := readUpdateFile(ctx, r, source)
+		_, from, err := readUpdateFile(ctx, r, source, false)
 		if err != nil {
 			return err
 		}

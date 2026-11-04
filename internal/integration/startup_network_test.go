@@ -82,7 +82,7 @@ func TestStartupNetwork_StatusOverIPCDuringApplication(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				store := state.NewStore(state.Snapshot{Revision: 7, Health: "ok"})
+				store := state.NewStore(state.Snapshot{Revision: 7, Health: "ok", Core: state.CoreState{Version: "v1.19.0"}})
 				manager := runtimeapi.New(runtimeapi.Options{Store: store, Coordinator: state.NewCoordinator(store), SysProxy: backend, TunDetect: &tundetect.FakeBackend{}, Supervisor: core, Onboarding: setup, Settings: settings, BinaryExists: func() bool { return true }})
 				core.manager = manager
 				endpoint := transporttest.Endpoint(t)

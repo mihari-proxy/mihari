@@ -212,10 +212,17 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 		Health:    "ok",
 	})
 	if info, err := os.Stat(paths.CoreBinary); !coreRepairRequired && err == nil && !info.IsDir() {
-		if version, err := installer.DetectVersion(context.Background(), paths.CoreBinary); err == nil {
+		probeCtx, cancelProbe := context.WithTimeout(context.Background(), 5*time.Second)
+		version, probeErr := installer.DetectVersion(probeCtx, paths.CoreBinary)
+		cancelProbe()
+		if probeErr == nil && version != "" {
 			snapshot := store.Load()
 			snapshot.Core = state.CoreState{Status: "stopped", Version: version, Channel: settings.CoreChannel}
 			store.Store(snapshot)
+		} else if probeErr != nil && options.DiagnosticReporter != nil {
+			options.DiagnosticReporter(context.Background(), diagnostics.Record{
+				Component: "core", Event: "version.observe.failed", Level: slog.LevelError, Err: probeErr,
+			})
 		}
 	}
 	coordinator := state.NewCoordinator(store)

@@ -303,9 +303,7 @@ func TestBuildRuntimeWithOptionsWiresSupervisorDiagnosticReporter(t *testing.T) 
 	if err := paths.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(paths.CoreBinary, []byte("not an executable"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeFakeCoreBinary(t, paths.CoreBinary, "Mihomo Meta v1.19.0")
 	settings := testRuntimeSettings(t)
 	settings.ControllerSecret = strings.Repeat("d", 64)
 	records := make(chan diagnostics.Record, 1)
@@ -321,6 +319,11 @@ func TestBuildRuntimeWithOptionsWiresSupervisorDiagnosticReporter(t *testing.T) 
 		},
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	// External replacement after the initial observation still fails at the
+	// actual execution boundary, without a status query executing the file.
+	if err := os.WriteFile(paths.CoreBinary, []byte("not an executable"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -379,6 +382,48 @@ func TestBuildRuntimeSetsCoreChannelFromSettingsWhenVersionDetected(t *testing.T
 	snapshot := assembly.Store.Load()
 	if snapshot.Core.Status != "stopped" || snapshot.Core.Version != "v1.19.0" || snapshot.Core.Channel != "alpha" {
 		t.Fatalf("core=%#v", snapshot.Core)
+	}
+	// No periodic query executes a subsequently replaced local executable.
+	if err := os.WriteFile(paths.CoreBinary, []byte("externally replaced binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for range 30 {
+		if local, err := assembly.Manager.LocalCore(t.Context()); err != nil || !local.Ready || local.Version != "v1.19.0" {
+			t.Fatalf("query did not reuse startup observation: local=%+v err=%v", local, err)
+		}
+		if required, err := assembly.Manager.SetupRequired(t.Context()); err != nil || required {
+			t.Fatalf("query rechecked external replacement: required=%v err=%v", required, err)
+		}
+	}
+}
+
+func TestBuildRuntime_FailedCoreObservationKeepsManagementAvailable(t *testing.T) {
+	paths := platform.NewPaths(t.TempDir())
+	if err := paths.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.CoreBinary, []byte("invalid executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var records []diagnostics.Record
+	settings := testRuntimeSettings(t)
+	settings.ControllerSecret = strings.Repeat("c", 64)
+	assembly, err := BuildRuntimeWithOptions(paths, settings, "test", nil, nil, RuntimeBuildOptions{
+		DiagnosticReporter: func(_ context.Context, record diagnostics.Record) { records = append(records, record) },
+	})
+	if err != nil {
+		t.Fatalf("version failure removed the management entrypoint: %v", err)
+	}
+	for range 30 {
+		if local, err := assembly.Manager.LocalCore(t.Context()); err != nil || local.Ready || local.Version != "" {
+			t.Fatalf("failed probe was treated as ready: local=%+v err=%v", local, err)
+		}
+		if required, err := assembly.Manager.SetupRequired(t.Context()); err != nil || !required {
+			t.Fatalf("failed probe did not require setup: required=%v err=%v", required, err)
+		}
+	}
+	if len(records) != 1 || records[0].Event != "version.observe.failed" || records[0].Err == nil {
+		t.Fatalf("probe failure was lost or repeated by queries: %+v", records)
 	}
 }
 

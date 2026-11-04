@@ -7,6 +7,7 @@ import (
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/onboarding"
+	"github.com/mihari-proxy/mihari/internal/state"
 )
 
 func TestSetupReadiness_UnusableCoreIsNotComplete(t *testing.T) {
@@ -30,7 +31,11 @@ func TestSetupReadiness_RequiredResourcesOverrideHistoricalMarker(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			m := newTestManager(Options{Onboarding: service, BinaryExists: func() bool { return exists }})
+			version := ""
+			if exists {
+				version = "v1.19.0"
+			}
+			m := newTestManager(Options{Onboarding: service, Store: state.NewStore(state.Snapshot{Core: state.CoreState{Version: version}})})
 			required, err := m.SetupRequired(context.Background())
 			if err != nil || required == exists {
 				t.Fatalf("complete=%v exists=%v required=%v err=%v", complete, exists, required, err)

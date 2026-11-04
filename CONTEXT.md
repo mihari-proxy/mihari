@@ -4,6 +4,9 @@ Mihari 管理本机 mihomo，并向本地用户提供一致的配置管理与运
 
 ## Language
 
+**本地核心观测（Local Core Observation）**：Mihari 最近一次确认的磁盘核心可用性与自报版本；外部修改后可暂时保留上次结果，不代表当前运行进程，也不构成执行许可。
+_Avoid_: 实时文件校验、运行中核心状态、执行授权。
+
 **实例代理认证（Instance Proxy Authentication）**：本 Mihari 实例接受代理连接时使用的用户名与密码认证；凭据可有多组，切换订阅不改变实例保存的凭据。
 _Avoid_: Web 面板登录、控制 API 令牌、远端代理节点的认证。
 
