@@ -134,23 +134,7 @@ func readUpdateFile(ctx context.Context, r *os.Root, path string, retainContent 
 	if err != nil {
 		return nil, object, err
 	}
-	var hash string
-	var size int64
-	if retainContent {
-		body, err = io.ReadAll(io.LimitReader(contextReader{ctx: ctx, r: f}, maxCoreBinarySize+1))
-		size = int64(len(body))
-		if size > maxCoreBinarySize {
-			return nil, object, os.ErrInvalid
-		}
-		if err == nil {
-			hash = digest(body)
-		}
-	} else {
-		hash, size, err = digestCoreFile(ctx, f, maxCoreBinarySize)
-		if size > maxCoreBinarySize {
-			return nil, object, os.ErrInvalid
-		}
-	}
+	body, hash, size, err := readUpdateContent(ctx, f, retainContent, maxCoreBinarySize)
 	if err != nil {
 		return nil, object, err
 	}
@@ -170,6 +154,31 @@ func readUpdateFile(ctx context.Context, r *os.Root, path string, retainContent 
 	}
 	return body, ProvenanceObject{Present: true, SHA256: hash, Identity: id, BootID: "file-update-identity-v1"}, nil
 }
+
+func readUpdateContent(ctx context.Context, reader io.Reader, retainContent bool, limit int64) (body []byte, hash string, size int64, err error) {
+	if retainContent {
+		body, err = io.ReadAll(io.LimitReader(contextReader{ctx: ctx, r: reader}, limit+1))
+		size = int64(len(body))
+	} else {
+		hash, size, err = digestCoreFile(ctx, reader, limit)
+	}
+	// A bounded read may return both bytes beyond the limit and a real failure.
+	// Translate only our size marker; keep the original IO error or cancellation.
+	if err != nil && !errors.Is(err, errCoreObjectTooLarge) {
+		return nil, "", size, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", size, err
+	}
+	if size > limit {
+		return nil, "", size, os.ErrInvalid
+	}
+	if retainContent {
+		hash = digest(body)
+	}
+	return body, hash, size, nil
+}
+
 func (s *fileUpdateStore) Load(ctx context.Context, role ProvenanceRole, tx string) (body []byte, err error) {
 	path, _, err := fileUpdatePath(role, tx)
 	if err != nil {

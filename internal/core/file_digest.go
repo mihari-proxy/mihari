@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 )
+
+var errCoreObjectTooLarge = errors.New("core object exceeds size limit")
 
 // digestCoreFile retains no executable bytes. The reader is bounded and checks
 // cancellation between chunks, including when the input is already cached.
@@ -20,7 +23,7 @@ func digestCoreFile(ctx context.Context, reader io.Reader, limit int64) (string,
 		return "", size, err
 	}
 	if size > limit {
-		return "", size, dataFailure("core object exceeds size limit")
+		return "", size, dataFailureCause(errCoreObjectTooLarge.Error(), errCoreObjectTooLarge)
 	}
 	return hex.EncodeToString(hash.Sum(nil)), size, nil
 }

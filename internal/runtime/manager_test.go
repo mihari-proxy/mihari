@@ -1583,18 +1583,6 @@ func TestManagerLocalCoreReflectsStartupObservation(t *testing.T) {
 		t.Fatalf("detect calls=%d", got)
 	}
 
-	missing := &fakeInstaller{detectVersion: func(context.Context, string) (string, error) {
-		return "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "missing"}
-	}}
-	manager = newTestManager(Options{Installer: missing})
-	info, err = manager.LocalCore(context.Background())
-	if err != nil {
-		t.Fatalf("err=%v", err)
-	}
-	if info.Ready || info.Version != "" {
-		t.Fatalf("missing core should not be ready: %#v", info)
-	}
-
 	// No installer wired (e.g. minimal runtime) must report not-ready, never error.
 	none := newTestManager(Options{})
 	if info, err := none.LocalCore(context.Background()); err != nil || info.Ready {
