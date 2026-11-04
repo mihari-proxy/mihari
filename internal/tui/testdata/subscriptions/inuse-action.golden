@@ -2,34 +2,34 @@
    1 Overview
    2 Proxies
    3 Conns
-   4 Rules            ╭──────────────────────────────────────────────────────────────────────╮
-   5 Logs             │                                                                      │
- › 6 Subs             │  Edit subscription                                                   │
-   7 Web GUI          │                                                                      │
-   8 System           │  ● In use · Live · Enabled                                           │
-                      │  Source        URL                                                   │
-                      │  Traffic       52.5 GiB/80.0 GiB                                     │
-                      │  Cache         Available                                             │
-                      │  Last update   2026-09-15 01:00                                      │
-                      │  Next update   in 5h                                                 │
-                      │                                                                      │
-                      │  Settings                                                            │
-                      │                                                                      │
-                      │    Name          Example                                             │
-                      │    URL                                                               │
-                      │    https://example.test/subscription/sample-sample-sample-sample-s…  │
-                      │    Interval      Global · 12h                        ns/us/ms/s/m/h  │
-                      │    Auto refresh  ‹ On ›                                              │
-                      │    Mode          ‹ PROXY ›                                           │
-                      │                                                                      │
-                      │  Actions · Apply immediately                                         │
-                      │    Enabled       [ Disable ]                                         │
-                      │  › InUse         In use                                              │
-                      │  Use requires an enabled subscription with a valid cache.            │
-                      │  ──────────────────────────────────────────────────────────────────  │
-                      │                               [ Save ]                               │
-                      │                                                                      │
-                      ╰──────────────────────────────────────────────────────────────────────╯
+   4 Rules             ╭──────────────────────────────────────────────────────────────────────╮
+   5 Logs              │                                                                      │
+ › 6 Subs              │  Edit subscription                                                   │
+   7 Web GUI           │                                                                      │
+   8 System            │  ● In use · Live · Enabled                                           │
+                       │  Source        URL                                                   │
+                       │  Traffic       52.5 GiB/80.0 GiB                                     │
+                       │  Cache         Available                                             │
+                       │  Last update   2026-09-15 01:00                                      │
+                       │  Next update   in 5h                                                 │
+                       │                                                                      │
+                       │  Settings                                                            │
+                       │                                                                      │
+                       │    Name          Example                                             │
+                       │    URL                                                               │
+                       │    https://example.test/subscription/sample-sample-sample-sample-s…  │
+                       │    Interval      Global · 12h                        ns/us/ms/s/m/h  │
+                       │    Auto refresh  ‹ On ›                                              │
+                       │    Mode          ‹ PROXY ›                                           │
+                       │                                                                      │
+                       │  Actions · Apply immediately                                         │
+                       │    Enabled       [ Disable ]                                         │
+                       │  › InUse         In use                                              │
+                       │  Use requires an enabled subscription with a valid cache.            │
+                       │  ──────────────────────────────────────────────────────────────────  │
+                       │                               [ Save ]                               │
+                       │                                                                      │
+                       ╰──────────────────────────────────────────────────────────────────────╯
 
 
 

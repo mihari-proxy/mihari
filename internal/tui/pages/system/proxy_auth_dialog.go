@@ -9,8 +9,13 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+// authViewportWidth excludes the shell's content padding from the overlay area.
+func (m *Model) authViewportWidth() int {
+	return max(1, m.width-m.theme.Content.GetHorizontalFrameSize())
+}
+
 func (m *Model) authView() string {
-	outer := max(12, min(144, m.width-4))
+	outer := max(12, min(144, m.authViewportWidth()-4))
 	inner := max(6, outer-m.theme.Dialog.GetHorizontalFrameSize())
 	wide := inner >= 112
 	leftWidth, rightWidth := inner, inner

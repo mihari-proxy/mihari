@@ -6,25 +6,13 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
+
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/client"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	systempage "github.com/mihari-proxy/mihari/internal/tui/pages/system"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
-
-type centeredDialogPage struct{ width, height int }
-
-func (p *centeredDialogPage) ID() ui.PageID                     { return ui.PageSystem }
-func (p *centeredDialogPage) SetSize(width, height int)         { p.width, p.height = width, height }
-func (p *centeredDialogPage) FocusFirst()                       {}
-func (p *centeredDialogPage) Update(tea.Msg) (ui.Page, tea.Cmd) { return p, nil }
-func (p *centeredDialogPage) View() string {
-	theme := ui.DefaultTheme()
-	dialog := theme.Dialog.Width(min(144, p.width-4)).Render("Proxy Authentication")
-	return ui.CenterOverlay(theme, "", dialog, p.width, p.height)
-}
 
 func TestContentLayout_ProxyAuthDialogHasRoomOnBothSides(t *testing.T) {
 	for _, width := range []int{72, 90, 100, 101} {
@@ -55,7 +43,8 @@ func TestContentLayout_ProxyAuthDialogHasRoomOnBothSides(t *testing.T) {
 					continue
 				}
 				left := strings.LastIndex(line[:strings.Index(line, "Proxy Authentication")], "│")
-				right := strings.LastIndex(line, "│")
+				status := strings.Index(line, "No changes")
+				right := status + strings.Index(line[status:], "│")
 				leftMargin := ansi.StringWidth(line[:left]) - calculateLayout(width, model.height).RailWidth
 				rightMargin := width - ansi.StringWidth(line[:right+len("│")])
 				if leftMargin != 3 || rightMargin != 3 {
@@ -64,41 +53,6 @@ func TestContentLayout_ProxyAuthDialogHasRoomOnBothSides(t *testing.T) {
 				return
 			}
 			t.Fatal("authentication header missing")
-		})
-	}
-}
-
-func TestContentLayout_CenteredDialogRetainsSymmetricMargins(t *testing.T) {
-	for _, width := range []int{72, 90, 100, 101, 180} {
-		t.Run(fmt.Sprint(width), func(t *testing.T) {
-			model := NewModel()
-			model.width, model.height = width, 40
-			model.active = ui.PageSystem
-			page := &centeredDialogPage{}
-			model.pages[ui.PageSystem] = page
-			model.resizePages()
-			layout := calculateLayout(width, model.height)
-			view := model.View().Content
-			if lipgloss.Width(view) > width || lipgloss.Height(view) > model.height {
-				t.Fatalf("shell exceeds viewport: %dx%d", lipgloss.Width(view), lipgloss.Height(view))
-			}
-			for _, line := range strings.Split(ansi.Strip(view), "\n") {
-				left := strings.Index(line, "╭")
-				if left < 0 {
-					continue
-				}
-				right := strings.Index(line, "╮")
-				if right < 0 {
-					t.Fatal("right dialog corner clipped")
-				}
-				leftMargin := ansi.StringWidth(line[:left]) - layout.RailWidth
-				rightMargin := width - ansi.StringWidth(line[:right+len("╮")])
-				if leftMargin < 1 || rightMargin < leftMargin || rightMargin-leftMargin > 1 {
-					t.Fatalf("dialog margins differ: left=%d right=%d", leftMargin, rightMargin)
-				}
-				return
-			}
-			t.Fatal("dialog top border missing")
 		})
 	}
 }

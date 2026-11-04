@@ -1,22 +1,22 @@
  Mihari  ·  ● running  ·  0c  ·  ↑     0/s ↓     0/s          Connected
    1 Overview
-   2 Proxies       ╭──────────────────────────────────────────────╮
-   3 Conns         │                                              │
-   4 Rules         │  Edit subscription                           │
-   5 Logs          │                                              │
- › 6 Subs          │    Name          Example                     │
-   7 Web GUI       │    URL                                       │
-   8 System        │    https://example.test/subscription/sampl…  │
-                   │    Interval      Global · 12 ns/us/ms/s/m/h  │
-                   │    Auto refresh  ‹ On ›                      │
-                   │    Mode          ‹ PROXY ›                   │
-                   │                                              │
-                   │  Actions · Apply immediately                 │
-                   │    Enabled       [ Disable ]                 │
-                   │    InUse         In use                      │
-                   │  ↑ PgUp/PgDn ──────────────────────────────  │
-                   │                  › [ Save ]                  │
-                   │                                              │
-                   ╰──────────────────────────────────────────────╯
+   2 Proxies       ╭────────────────────────────────────────────────╮
+   3 Conns         │                                                │
+   4 Rules         │  Edit subscription                             │
+   5 Logs          │                                                │
+ › 6 Subs          │    Name          Example                       │
+   7 Web GUI       │    URL                                         │
+   8 System        │    https://example.test/subscription/sample-…  │
+                   │    Interval      Global · 12h  ns/us/ms/s/m/h  │
+                   │    Auto refresh  ‹ On ›                        │
+                   │    Mode          ‹ PROXY ›                     │
+                   │                                                │
+                   │  Actions · Apply immediately                   │
+                   │    Enabled       [ Disable ]                   │
+                   │    InUse         In use                        │
+                   │  ↑ PgUp/PgDn ────────────────────────────────  │
+                   │                   › [ Save ]                   │
+                   │                                                │
+                   ╰────────────────────────────────────────────────╯
 
  F2 details  Tab/↑/↓ fields  Enter save  Esc cancel

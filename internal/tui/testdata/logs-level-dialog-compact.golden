@@ -1,19 +1,19 @@
  Mihari  ·  ●  ·  0c  ·  ↑     0/s ↓     0/s  ·  0              Offline 
-   1 Overview  ╭───Controls─────────────────────────────────────────╮   
-   2 Proxies   │ Level: DEBUG+  Wrap: ● Off  Pause: ● Off  Export   │   
-   3 Conns     │ / Search…                                          │   
-   4 Rules     ╰────────────────────────────────────────────────────╯   
- › 5 Logs      ╭───Logs─────────────────────────────────────────────╮   
-   6 Subs      │   Tim╭──────────────────────────────────────╮      │   
-   7 Web GUI   │   ───│ Log levels                           │───── │   
-   8 System    │ No ma│ › [x] Select all                     │      │   
-               ╰──────│   [x] DEBUG                          │──────╯   
-                      │   [x] INFO                           │  0/0     
-                      │   [x] WARNING                        │          
-                      │   [x] ERROR                          │          
-                      │ Space toggle                         │          
-                      │ Enter apply · Esc cancel             │          
-                      ╰──────────────────────────────────────╯          
+   1 Overview  ╭───Controls───────────────────────────────────────────╮ 
+   2 Proxies   │ Level: DEBUG+  Wrap: ● Off  Pause: ● Off  Export     │ 
+   3 Conns     │ / Search…                                            │ 
+   4 Rules     ╰──────────────────────────────────────────────────────╯ 
+ › 5 Logs      ╭───Logs───────────────────────────────────────────────╮ 
+   6 Subs      │   Time╭──────────────────────────────────────╮       │ 
+   7 Web GUI   │   ────│ Log levels                           │────── │ 
+   8 System    │ No mat│ › [x] Select all                     │       │ 
+               ╰───────│   [x] DEBUG                          │───────╯ 
+                       │   [x] INFO                           │   0/0   
+                       │   [x] WARNING                        │         
+                       │   [x] ERROR                          │         
+                       │ Space toggle                         │         
+                       │ Enter apply · Esc cancel             │         
+                       ╰──────────────────────────────────────╯         
                                                                         
                                                                         
                                                                         
