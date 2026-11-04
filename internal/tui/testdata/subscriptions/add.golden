@@ -6,19 +6,19 @@
    5 Logs
  › 6 Subs
    7 Web GUI
-   8 System            ╭──────────────────────────────────────────────────────────────────────╮
-                       │                                                                      │
-                       │  Add subscription                                                    │
-                       │                                                                      │
-                       │  › Name          Example                                             │
-                       │    URL                                                               │
-                       │    https://example.test/subscription/sample-sample-sample-sample-s…  │
-                       │    Mode          ‹ DIRECT ›                                          │
-                       │    Source        ‹ URL ›                                             │
-                       │  ──────────────────────────────────────────────────────────────────  │
-                       │                               [ Save ]                               │
-                       │                                                                      │
-                       ╰──────────────────────────────────────────────────────────────────────╯
+   8 System           ╭──────────────────────────────────────────────────────────────────────╮
+                      │                                                                      │
+                      │  Add subscription                                                    │
+                      │                                                                      │
+                      │  › Name          Example                                             │
+                      │    URL                                                               │
+                      │    https://example.test/subscription/sample-sample-sample-sample-s…  │
+                      │    Mode          ‹ DIRECT ›                                          │
+                      │    Source        ‹ URL ›                                             │
+                      │  ──────────────────────────────────────────────────────────────────  │
+                      │                               [ Save ]                               │
+                      │                                                                      │
+                      ╰──────────────────────────────────────────────────────────────────────╯
 
 
 

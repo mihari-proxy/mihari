@@ -1,28 +1,28 @@
  Mihari  ·  ●  ·  1 conn  ·  ↑      0 B/s  ↓      0 B/s  ·  0 B                             Offline
-   1 Overview     ╭───Connection details─────────────────────────────────────────────────────────╮
-   2 Proxies      │ ● Active · Paused                                                            │
- › 3 Conns        │                                                                              │
-   4 Rules        │ api.example.test:443                                                         │
-   5 Logs         │                                                                              │
-   6 Subs         │ ↑ Upload                                ↓ Download                           │
-   7 Web GUI      │ Rate        1.0 KiB/s                   Rate        3.0 KiB/s                │
-   8 System       │ Sent        2.0 KiB                     Received    4.0 KiB                  │
-                  │                                                                              │
-                  │ ● APPLICATION                                                                │
-                  │ │ chrome.exe                                                                 │
-                  │ │ Source            192.168.1.12:52341                                       │
-                  │ │ Process path      C:/Apps/Browser/chrome.exe                               │
-                  │ │                                                                            │
-                  │ ● ROUTING                                                                    │
-                  │ │ Inbound           mixed-in · HTTP · TCP                                    │
-                  │ │ Rule Matched      DomainSuffix · example.test                              │
-                  │ │                                                                            │
-                  │ │ Proxy                                                                      │
-                  │ │   └─ Auto Select                                                           │
-                  │ │      └─ Japan 01                                                           │
-                  │ │                                                                            │
-                  │ ● OUTBOUND                                                                   │
-                  │ │ Japan 01                                                                   │
-                  │ 1–21 / 31                                                                    │
-                  ╰──────────────────────────────────────────────────────────────────────────────╯
+   1 Overview     ╭───Connection details───────────────────────────────────────────────────────╮
+   2 Proxies      │ ● Active · Paused                                                          │
+ › 3 Conns        │                                                                            │
+   4 Rules        │ api.example.test:443                                                       │
+   5 Logs         │                                                                            │
+   6 Subs         │ ↑ Upload                               ↓ Download                          │
+   7 Web GUI      │ Rate        1.0 KiB/s                  Rate        3.0 KiB/s               │
+   8 System       │ Sent        2.0 KiB                    Received    4.0 KiB                 │
+                  │                                                                            │
+                  │ ● APPLICATION                                                              │
+                  │ │ chrome.exe                                                               │
+                  │ │ Source            192.168.1.12:52341                                     │
+                  │ │ Process path      C:/Apps/Browser/chrome.exe                             │
+                  │ │                                                                          │
+                  │ ● ROUTING                                                                  │
+                  │ │ Inbound           mixed-in · HTTP · TCP                                  │
+                  │ │ Rule Matched      DomainSuffix · example.test                            │
+                  │ │                                                                          │
+                  │ │ Proxy                                                                    │
+                  │ │   └─ Auto Select                                                         │
+                  │ │      └─ Japan 01                                                         │
+                  │ │                                                                          │
+                  │ ● OUTBOUND                                                                 │
+                  │ │ Japan 01                                                                 │
+                  │ 1–21 / 31                                                                  │
+                  ╰────────────────────────────────────────────────────────────────────────────╯
  F2 details  Enter/Esc close  ↑/↓ scroll  ? help  q quit

@@ -1,16 +1,16 @@
  Mihari  ·  ●  ·  0c  ·  ↑     0/s ↓     0/s  ·  0              Offline 
-   1 Overview  ╭───Controls───────────────────────────────────────────╮ 
-   2 Proxies   │ Level: DEBUG+  Wrap: ● Off  Pause: ● Off  Export     │ 
-   3 Conns     │ / Search…                                            │ 
-   4 Rules     ╰──────────────────────────────────────────────────────╯ 
- › 5 Logs      ╭───Logs───────────────────────────────────────────────╮ 
-   6 Subs      │   Time      Level    Message                         │ 
-   7 Web GUI   │   ────────────────────────────────────────────────── │ 
-   8 System    │   22:13:20  INFO     daemon started                  │ 
-               │   22:13:21  WARNING  geoip database missing          │ 
-               │   22:13:22  ERROR    upstream connection reset       │ 
-               ╰──────────────────────────────────────────────────────╯ 
-                                                                  —/3   
+   1 Overview  ╭───Controls─────────────────────────────────────────╮   
+   2 Proxies   │ Level: DEBUG+  Wrap: ● Off  Pause: ● Off  Export   │   
+   3 Conns     │ / Search…                                          │   
+   4 Rules     ╰────────────────────────────────────────────────────╯   
+ › 5 Logs      ╭───Logs─────────────────────────────────────────────╮   
+   6 Subs      │   Time      Level    Message                       │   
+   7 Web GUI   │   ──────────────────────────────────────────────── │   
+   8 System    │   22:13:20  INFO     daemon started                │   
+               │   22:13:21  WARNING  geoip database missing        │   
+               │   22:13:22  ERROR    upstream connection reset     │   
+               ╰────────────────────────────────────────────────────╯   
+                                                                —/3     
                                                                         
                                                                         
                                                                         

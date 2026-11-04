@@ -1,22 +1,22 @@
  Mihari  ·  ●  ·  1c  ·  ↑     0/s ↓     0/s  ·  0              Offline
-   1 Overview   ╭───Connection details───────────────────────────────╮
-   2 Proxies    │ ● Active                                           │
- › 3 Conns      │                                                    │
-   4 Rules      │ api.example.test:443                               │
-   5 Logs       │                                                    │
-   6 Subs       │ ↑ Upload                                           │
-   7 Web GUI    │ Rate        1.0 KiB/s                              │
-   8 System     │ Sent        2.0 KiB                                │
-                │ ↓ Download                                         │
-                │ Rate        3.0 KiB/s                              │
-                │ Received    4.0 KiB                                │
-                │                                                    │
-                │ ● APPLICATION                                      │
-                │ │ chrome.exe                                       │
-                │ │ Source            192.168.1.12:52341             │
-                │ │ Process path      C:/Apps/Browser/chrome.exe     │
-                │ │                                                  │
-                │ ● ROUTING                                          │
-                │ 1–15 / 35                                          │
-                ╰────────────────────────────────────────────────────╯
+   1 Overview   ╭───Connection details─────────────────────────────╮
+   2 Proxies    │ ● Active                                         │
+ › 3 Conns      │                                                  │
+   4 Rules      │ api.example.test:443                             │
+   5 Logs       │                                                  │
+   6 Subs       │ ↑ Upload                                         │
+   7 Web GUI    │ Rate        1.0 KiB/s                            │
+   8 System     │ Sent        2.0 KiB                              │
+                │ ↓ Download                                       │
+                │ Rate        3.0 KiB/s                            │
+                │ Received    4.0 KiB                              │
+                │                                                  │
+                │ ● APPLICATION                                    │
+                │ │ chrome.exe                                     │
+                │ │ Source            192.168.1.12:52341           │
+                │ │ Process path      C:/Apps/Browser/chrome.exe   │
+                │ │                                                │
+                │ ● ROUTING                                        │
+                │ 1–15 / 35                                        │
+                ╰──────────────────────────────────────────────────╯
  F2 details  Enter/Esc close  ↑/↓ scroll  ? help  q quit

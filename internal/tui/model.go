@@ -1750,8 +1750,11 @@ func (model Model) View() tea.View {
 // resizePages applies shell dimensions and gives setup its dedicated wizard area.
 func (model Model) resizePages() {
 	layout := calculateLayout(model.width, model.height)
+	// Pages render inside the shell's content padding. Include only that inner
+	// viewport so page-owned overlays remain centered and are not clipped.
+	pageWidth := max(1, layout.ContentWidth-model.theme.Content.GetHorizontalFrameSize())
 	for _, page := range model.pages {
-		page.SetSize(layout.ContentWidth, layout.ContentHeight)
+		page.SetSize(pageWidth, layout.ContentHeight)
 	}
 	if page := model.pages[ui.PageSetup]; page != nil {
 		page.SetSize(max(1, model.width-2), max(1, model.height-2))
