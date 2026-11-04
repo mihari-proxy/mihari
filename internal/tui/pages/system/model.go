@@ -1502,7 +1502,7 @@ func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cm
 func (m *Model) View() (view string) {
 	defer func() {
 		if m.auth.open {
-			view = ui.CenterOverlay(m.theme, view, m.authView(), m.width, m.height)
+			view = ui.CenterOverlay(m.theme, view, m.authView(), m.authViewportWidth(), m.height)
 		}
 		if m.egress.open {
 			view = ui.CenterOverlay(m.theme, view, m.egressDialogView(), m.width, m.height)
