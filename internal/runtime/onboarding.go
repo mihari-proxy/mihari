@@ -45,20 +45,8 @@ func (m *Manager) SetupRequired(ctx context.Context) (bool, error) {
 	if m.onboardingRestartRequired.Load() {
 		return true, nil
 	}
-	coreState := m.store.Load().Core
-	if !m.binaryExists() || coreState.Status == "missing" {
-		return true, nil
-	}
-	// A known running/starting or previously validated core is not missing
-	// configuration merely because runtime health is temporarily degraded.
-	if m.installer != nil && coreState.Version == "" && coreState.Status != "running" && coreState.Status != "starting" {
-		local, err := m.LocalCore(ctx)
-		if ctx.Err() != nil {
-			return false, ctx.Err()
-		}
-		return !local.Ready, err
-	}
-	return false, nil
+	local, err := m.LocalCore(ctx)
+	return !local.Ready, err
 }
 
 func (m *Manager) UpdateOnboarding(ctx context.Context, operation Operation, update onboarding.Update) (onboarding.Snapshot, error) {

@@ -61,10 +61,9 @@ type InstallResult struct {
 	AlphaSHA string
 }
 
-// LocalCoreInfo reports whether an existing local core binary satisfies setup
-// without a network download. Ready mirrors the Install setup fast-path predicate
-// (DetectVersion success + non-empty version), kept DRY with manager.Install
-// (design §4.3). Read-only; never persists or mutates state.
+// LocalCoreInfo records the last confirmed local executable version and whether
+// it can be offered for setup reuse. It is advisory, not execution authority;
+// lifecycle operations still perform their own permission and identity checks.
 type LocalCoreInfo struct {
 	Ready   bool
 	Version string

@@ -176,6 +176,7 @@ type Manager struct {
 	supervisor                CoreSupervisor
 	controller                Controller
 	binaryExists              func() bool
+	localCore                 atomic.Pointer[core.LocalCoreInfo]
 	subscriptions             *subscription.Service
 	preferences               *preferences.Service
 	settings                  config.Settings
@@ -323,6 +324,7 @@ func New(options Options) *Manager {
 		installed:          make(chan struct{}, 1),
 		operations:         make(map[string]*operationEntry),
 	}
+	manager.publishLocalCore(store.Load().Core.Version)
 	manager.dataResetPending.Store(options.ResetSetupRequired)
 	manager.subscriptionChanges = make(chan struct{}, 1)
 	manager.maintenance <- struct{}{}
@@ -332,6 +334,7 @@ func New(options Options) *Manager {
 		manager.store.Store(snapshot)
 	}
 	if options.CoreRepairRequired {
+		manager.publishLocalCore("")
 		manager.coreRecovery.Store(true)
 		snapshot := manager.store.Load()
 		snapshot.Health, snapshot.LastError = "degraded", "Core update recovery required"
@@ -652,12 +655,16 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 			}
 		}
 		if operation.Source == "setup" && operation.ExecutionMode == "" {
+			observed := m.localCore.Load()
 			if version, detectErr := m.installer.DetectVersion(ctx, installRequest.BinaryPath); detectErr == nil && version != "" {
 				err := func() error {
 					if err := m.lockSetupMutation(ctx, operation); err != nil {
 						return err
 					}
 					defer m.unlock()
+					if observed != m.localCore.Load() {
+						return protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "local core changed during version detection"}
+					}
 					if err := ctx.Err(); err != nil {
 						return err
 					}
@@ -677,6 +684,7 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 						return err
 					}
 					if !candidate.changed {
+						m.publishLocalCore(version)
 						return nil
 					}
 					if _, err := m.saveSettingsCandidate(ctx, candidate); err != nil {
@@ -690,6 +698,9 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 						snapshot.Core.Channel = candidate.after.CoreChannel
 						return snapshot, nil
 					})
+					if err == nil {
+						m.publishLocalCore(version)
+					}
 					return err
 				}()
 				if err != nil {
@@ -752,6 +763,7 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 			if err != nil {
 				return err
 			}
+			m.publishLocalCore(result.Version)
 			if candidateUpdated {
 				applyCommittedIdentity := func(snapshot state.Snapshot) state.Snapshot {
 					snapshot.Core.Version = result.Version
@@ -826,21 +838,6 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 		return core.InstallResult{}, err
 	}
 	return result.(core.InstallResult), nil
-}
-
-// LocalCore reports whether the configured core binary already satisfies setup
-// locally (mihomo -v succeeds), so onboarding can hint "use existing" without a
-// network install. Read-only: no lock, no store mutation. Mirrors the Install
-// setup fast-path predicate (design §4.3), DRY — same DetectVersion judgment.
-func (m *Manager) LocalCore(ctx context.Context) (core.LocalCoreInfo, error) {
-	if m.installer == nil {
-		return core.LocalCoreInfo{}, nil
-	}
-	version, err := m.installer.DetectVersion(ctx, m.installRequest.BinaryPath)
-	if err != nil || version == "" {
-		return core.LocalCoreInfo{}, nil
-	}
-	return core.LocalCoreInfo{Ready: true, Version: version}, nil
 }
 
 // ServiceStatus reports the OS service registration state for onboarding review.

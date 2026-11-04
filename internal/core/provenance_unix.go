@@ -149,20 +149,6 @@ func readCoreFile(ctx context.Context, f io.Reader, limit int64) ([]byte, error)
 	return b, nil
 }
 
-type contextReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (r contextReader) Read(b []byte) (int, error) {
-	if e := r.ctx.Err(); e != nil {
-		return 0, e
-	}
-	if len(b) > 32768 {
-		b = b[:32768]
-	}
-	return r.r.Read(b)
-}
 func (s *unixProvenanceStore) Load(ctx context.Context, r ProvenanceRole, tx string) (b []byte, err error) {
 	p, n, m, e := s.parent(ctx, r, tx, false)
 	if e != nil {
@@ -197,11 +183,11 @@ func (s *unixProvenanceStore) Inspect(ctx context.Context, r ProvenanceRole, tx 
 		return result, e
 	}
 	defer func() { err = errors.Join(err, f.Close()) }()
-	b, e := readCoreFile(ctx, f, maxCoreBinarySize)
+	hash, _, e := digestCoreFile(ctx, f, maxCoreBinarySize)
 	if e != nil {
 		return result, e
 	}
-	return ProvenanceObject{Present: true, SHA256: digest(b), Identity: s.identity + "/" + id.Key(), BootID: s.boot}, nil
+	return ProvenanceObject{Present: true, SHA256: hash, Identity: s.identity + "/" + id.Key(), BootID: s.boot}, nil
 }
 func (s *unixProvenanceStore) Save(ctx context.Context, r ProvenanceRole, tx string, b []byte) (err error) {
 	p, n, m, e := s.parent(ctx, r, tx, true)
@@ -298,7 +284,7 @@ func (s *unixProvenanceStore) open(ctx context.Context, r ProvenanceRole, tx str
 	if e != nil {
 		return nil, errors.Join(e, p.Close())
 	}
-	b, e := readCoreFile(ctx, f, maxCoreBinarySize)
+	hash, _, e := digestCoreFile(ctx, f, maxCoreBinarySize)
 	if e != nil {
 		return nil, errors.Join(e, f.Close(), p.Close())
 	}
@@ -306,7 +292,7 @@ func (s *unixProvenanceStore) open(ctx context.Context, r ProvenanceRole, tx str
 	if e != nil {
 		return nil, errors.Join(e, f.Close(), p.Close())
 	}
-	return &unixVerifiedFile{parent: p, file: f, id: id, name: n, path: filepath.Join(s.path, filepath.FromSlash(relative)), mode: m, hash: digest(b)}, nil
+	return &unixVerifiedFile{parent: p, file: f, id: id, name: n, path: filepath.Join(s.path, filepath.FromSlash(relative)), mode: m, hash: hash}, nil
 }
 
 type unixVerifiedFile struct {
@@ -333,11 +319,11 @@ func (f *unixVerifiedFile) verify(ctx context.Context) (string, error) {
 	if info.Mode().Perm() != os.FileMode(f.mode) {
 		return "", os.ErrPermission
 	}
-	b, e := readCoreFile(ctx, io.NewSectionReader(f.file, 0, maxCoreBinarySize+1), maxCoreBinarySize)
+	hash, _, e := digestCoreFile(ctx, io.NewSectionReader(f.file, 0, maxCoreBinarySize+1), maxCoreBinarySize)
 	if e != nil {
 		return "", e
 	}
-	if digest(b) != f.hash {
+	if hash != f.hash {
 		return "", dataFailure("verified core object bytes changed")
 	}
 	return f.path, nil

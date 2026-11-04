@@ -1567,11 +1567,11 @@ func TestMissingCoreStaysControllableAndStartsAfterInstall(t *testing.T) {
 	}
 }
 
-func TestManagerLocalCoreReflectsDetectVersion(t *testing.T) {
+func TestManagerLocalCoreReflectsStartupObservation(t *testing.T) {
 	installer := &fakeInstaller{detectVersion: func(context.Context, string) (string, error) {
 		return "v1.18.5", nil
 	}}
-	manager := newTestManager(Options{Installer: installer})
+	manager := New(Options{Installer: installer, Store: state.NewStore(state.Snapshot{Core: state.CoreState{Version: "v1.18.5"}})})
 	info, err := manager.LocalCore(context.Background())
 	if err != nil {
 		t.Fatalf("err=%v", err)
@@ -1579,20 +1579,8 @@ func TestManagerLocalCoreReflectsDetectVersion(t *testing.T) {
 	if !info.Ready || info.Version != "v1.18.5" {
 		t.Fatalf("info=%#v", info)
 	}
-	if got := installer.detectCalls.Load(); got != 1 {
+	if got := installer.detectCalls.Load(); got != 0 {
 		t.Fatalf("detect calls=%d", got)
-	}
-
-	missing := &fakeInstaller{detectVersion: func(context.Context, string) (string, error) {
-		return "", protocol.APIError{Code: protocol.CodeDataFailure, Message: "missing"}
-	}}
-	manager = newTestManager(Options{Installer: missing})
-	info, err = manager.LocalCore(context.Background())
-	if err != nil {
-		t.Fatalf("err=%v", err)
-	}
-	if info.Ready || info.Version != "" {
-		t.Fatalf("missing core should not be ready: %#v", info)
 	}
 
 	// No installer wired (e.g. minimal runtime) must report not-ready, never error.
@@ -1637,7 +1625,10 @@ func TestActivation_ManagerMutationGate(t *testing.T) {
 }
 
 func newTestManager(options Options) *Manager {
-	store := state.NewStore(state.Snapshot{Health: "ok"})
+	store := options.Store
+	if store == nil {
+		store = state.NewStore(state.Snapshot{Health: "ok"})
+	}
 	options.Store = store
 	options.Coordinator = state.NewCoordinator(store)
 	if options.BinaryExists == nil {
