@@ -108,24 +108,37 @@ func discoveryFDACL(target int, strict bool, owner uint32) (err error) {
 		if selector == "system.posix_acl_default" && !strict {
 			break
 		}
-		buf := make([]byte, 65536)
-		n, e := unix.Getxattr(path, selector, buf)
-		if e != nil && !errors.Is(e, unix.ENODATA) {
+		if e := checkDiscoveryACL(func(buf []byte) (int, error) {
+			return unix.Getxattr(path, selector, buf)
+		}, strict, owner); e != nil {
 			return e
-		}
-		if e == nil {
-			if n < 0 || n > len(buf) || strict {
-				return os.ErrPermission
-			}
-			if e = trustedPOSIXACL(buf[:n], owner); e != nil {
-				return e
-			}
 		}
 		if err = check(); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func checkDiscoveryACL(read func([]byte) (int, error), strict bool, owner uint32) error {
+	// Most objects have no ACL; ordinary ACLs also fit in this small buffer.
+	// Preserve the previous bound and fail-closed policy for larger values.
+	buf := make([]byte, 256)
+	n, err := read(buf)
+	if errors.Is(err, unix.ERANGE) {
+		buf = make([]byte, 65536)
+		n, err = read(buf)
+	}
+	if errors.Is(err, unix.ENODATA) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if n < 0 || n > len(buf) || strict {
+		return os.ErrPermission
+	}
+	return trustedPOSIXACL(buf[:n], owner)
 }
 
 func sameDiscoveryStat(a, b unix.Stat_t) bool {
