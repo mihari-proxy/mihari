@@ -6,6 +6,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -306,15 +307,13 @@ func (m *Manager) buildTunStatus(ctx context.Context, lastError string) protocol
 	// Conflict evidence is always surfaced (even when only corroborating signal B is
 	// present) so status/CLI/TUI can display it; the enable gate keys off
 	// OtherTunInterfaces alone.
-	conflict := m.detectTunConflict(ctx)
+	// One query uses one live observation, including when the read fails.
+	configs := sync.OnceValue(func() map[string]any { return m.liveTunConfigs(ctx) })
+	conflict := m.detectTunConflictWithConfigs(ctx, configs)
 
 	var liveEnable *bool
-	if m.controller != nil && ctx.Err() == nil {
-		if configs, err := m.controller.Configs(ctx); err == nil {
-			if live, ok := liveTunEnable(configs); ok {
-				liveEnable = &live
-			}
-		}
+	if live, ok := liveTunEnable(configs()); ok {
+		liveEnable = &live
 	}
 	return buildTunStatusFromObservation(settings, m.store.Load().Revision, conflict, liveEnable, lastError)
 }
@@ -466,6 +465,10 @@ func mapTunApplyError(err error) error {
 // block enable: nil means "no evidence", so an opaque detection error cannot
 // prevent a legitimate user action.
 func (m *Manager) detectTunConflict(ctx context.Context) *protocol.TunConflict {
+	return m.detectTunConflictWithConfigs(ctx, func() map[string]any { return m.liveTunConfigs(ctx) })
+}
+
+func (m *Manager) detectTunConflictWithConfigs(ctx context.Context, configs func() map[string]any) *protocol.TunConflict {
 	if m.tunDetect == nil {
 		return nil
 	}
@@ -473,7 +476,7 @@ func (m *Manager) detectTunConflict(ctx context.Context) *protocol.TunConflict {
 	if err != nil {
 		return nil
 	}
-	return tundetect.Classify(detection, m.selfFromLive(ctx))
+	return tundetect.Classify(detection, m.selfFromConfigs(ctx, configs))
 }
 
 // selfFromLive builds the Classify identity from the running core PID, the
@@ -482,6 +485,10 @@ func (m *Manager) detectTunConflict(ctx context.Context) *protocol.TunConflict {
 // best-effort. A missing controller or unreadable configs leave TunActive
 // false so no adapter is subtracted.
 func (m *Manager) selfFromLive(ctx context.Context) tundetect.Self {
+	return m.selfFromConfigs(ctx, func() map[string]any { return m.liveTunConfigs(ctx) })
+}
+
+func (m *Manager) selfFromConfigs(ctx context.Context, configs func() map[string]any) tundetect.Self {
 	self := tundetect.Self{
 		CorePID:    m.store.Load().Core.PID,
 		DaemonPID:  os.Getpid(),
@@ -496,15 +503,23 @@ func (m *Manager) selfFromLive(ctx context.Context) tundetect.Self {
 			self.OccupantPID = pid
 		}
 	}
-	configs, err := m.controller.Configs(ctx)
-	if err != nil {
-		return self
-	}
-	if live, ok := liveTunEnable(configs); ok && live {
+	liveConfigs := configs()
+	if live, ok := liveTunEnable(liveConfigs); ok && live {
 		self.TunActive = true
-		self.TunName = liveTunDevice(configs)
+		self.TunName = liveTunDevice(liveConfigs)
 	}
 	return self
+}
+
+func (m *Manager) liveTunConfigs(ctx context.Context) map[string]any {
+	if m.controller == nil || ctx.Err() != nil {
+		return nil
+	}
+	configs, err := m.controller.Configs(ctx)
+	if err != nil {
+		return nil
+	}
+	return configs
 }
 
 func liveTunDevice(configs map[string]any) string {

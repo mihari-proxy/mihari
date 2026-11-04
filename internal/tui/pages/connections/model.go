@@ -58,6 +58,7 @@ const (
 var allColumnIDs = []string{"host", "traffic", "network", "rule", "start", "process", "chain", "source", "destination", "upload", "download"}
 
 type Model struct {
+	projection     rowProjection
 	client         Client
 	newOperationID func() string
 	history        *History
@@ -85,6 +86,20 @@ type Model struct {
 	width          int
 	height         int
 	theme          ui.Theme
+}
+
+// rowProjection is owned by the page update loop. Its rows are read-only and
+// expire whenever history or any filter/sort input changes.
+type rowProjection struct {
+	valid         bool
+	history       *History
+	revision      uint64
+	dataset       datasetKind
+	query, source string
+	columns       []string
+	sortColumn    string
+	sortDirection sortDirection
+	rows          []protocol.Connection
 }
 
 type closeResultMsg struct {
@@ -165,6 +180,7 @@ func (m *Model) FocusFirst() { m.focus = pageFocus{kind: focusControl} }
 // ResetSession discards connection state that only exists for the current TUI stream session.
 func (m *Model) ResetSession() {
 	m.history.Reset()
+	m.projection = rowProjection{}
 	m.pending = nil
 	m.detail = nil
 	m.focus = pageFocus{kind: focusControl}
@@ -543,13 +559,20 @@ func (m *Model) cycleSort() {
 }
 
 func (m *Model) datasetRows() []protocol.Connection {
+	// The page owns History. Callers borrow these rows without modifying them.
 	if m.dataset == datasetClosed {
-		return m.history.Closed()
+		return m.history.closed
 	}
-	return m.history.Active()
+	return m.history.active
 }
 
 func (m *Model) visibleRows() []protocol.Connection {
+	p := &m.projection
+	if p.valid && p.history == m.history && p.revision == m.history.revision &&
+		p.dataset == m.dataset && p.query == m.query && p.source == m.source &&
+		p.sortColumn == m.sortColumn && p.sortDirection == m.sortDirection && slices.Equal(p.columns, m.columns) {
+		return p.rows
+	}
 	rows := m.datasetRows()
 	filtered := make([]protocol.Connection, 0, len(rows))
 	for _, connection := range rows {
@@ -569,7 +592,13 @@ func (m *Model) visibleRows() []protocol.Connection {
 			return comparison
 		})
 	}
-	return filtered
+	*p = rowProjection{
+		valid: true, history: m.history, revision: m.history.revision,
+		dataset: m.dataset, query: m.query, source: m.source,
+		columns: append(p.columns[:0], m.columns...), sortColumn: m.sortColumn,
+		sortDirection: m.sortDirection, rows: filtered,
+	}
+	return p.rows
 }
 
 func (m *Model) reconcile() {

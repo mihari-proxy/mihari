@@ -6,6 +6,7 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/mihari-proxy/mihari/internal/config"
@@ -32,6 +33,21 @@ func (m *Manager) EgressStatus(ctx context.Context) (protocol.EgressStatus, erro
 }
 
 func (m *Manager) egressStatus(ctx context.Context) (protocol.EgressStatus, error) {
+	return m.egressStatusWithConfig(ctx, m.egressPreviousConfig)
+}
+
+func (m *Manager) egressStatusWithConfig(ctx context.Context, readConfig func(context.Context) ([]byte, error)) (protocol.EgressStatus, error) {
+	// Both derived fields belong to the same captured document. Keep failures
+	// too: a status query must not retry an unreadable file for each field.
+	previous := sync.OnceValues(func() (map[string]any, error) {
+		content, err := readConfig(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var document map[string]any
+		err = yaml.Unmarshal(content, &document)
+		return document, err
+	})
 	saved := m.settingsSnapshot().EgressInterface
 	status := protocol.EgressStatus{Schema: "mihari/v1", Revision: m.store.Load().Revision, Selection: egressSelection(saved), State: "unknown", Interfaces: []protocol.EgressInterface{}}
 	adapters, err := m.listInterfaces(ctx)
@@ -47,12 +63,9 @@ func (m *Manager) egressStatus(ctx context.Context) (protocol.EgressStatus, erro
 			want := saved
 			known := saved != ""
 			if saved == "" {
-				if content, readErr := m.egressPreviousConfig(ctx); readErr == nil {
-					var document map[string]any
-					if parseErr := yaml.Unmarshal(content, &document); parseErr == nil {
-						want, _ = document["interface-name"].(string)
-						known = true
-					}
+				if document, readErr := previous(); readErr == nil {
+					want, _ = document["interface-name"].(string)
+					known = true
 				}
 			}
 			if actual, ok := live["interface-name"].(string); ok && known && actual == want {
@@ -60,7 +73,7 @@ func (m *Manager) egressStatus(ctx context.Context) (protocol.EgressStatus, erro
 			}
 		}
 	}
-	own := m.egressOwnTun(ctx, live)
+	own := m.egressOwnTun(live, previous)
 	found := false
 	for _, adapter := range adapters {
 		item := protocol.EgressInterface{Name: adapter.Name, Kind: adapter.Kind, Availability: adapter.Availability, Addresses: append([]string{}, adapter.Addresses...), Device: adapter.Description, Selectable: adapter.Name != own}
@@ -94,21 +107,18 @@ func (m *Manager) egressPreviousConfig(ctx context.Context) ([]byte, error) {
 	return os.ReadFile(m.runtimeConfig)
 }
 
-func (m *Manager) egressOwnTun(ctx context.Context, live map[string]any) string {
+func (m *Manager) egressOwnTun(live map[string]any, previous func() (map[string]any, error)) string {
 	if tun, ok := live["tun"].(map[string]any); ok {
 		if name, ok := tun["device"].(string); ok && name != "" {
 			m.egressTunName = name
 			return name
 		}
 	}
-	if content, err := m.egressPreviousConfig(ctx); err == nil {
-		var document map[string]any
-		if err := yaml.Unmarshal(content, &document); err == nil {
-			if tun, ok := document["tun"].(map[string]any); ok {
-				name, _ := tun["device"].(string)
-				if name != "" {
-					return name
-				}
+	if document, err := previous(); err == nil {
+		if tun, ok := document["tun"].(map[string]any); ok {
+			name, _ := tun["device"].(string)
+			if name != "" {
+				return name
 			}
 		}
 	}
