@@ -272,7 +272,10 @@ func TestCache_DisplacedFlightRequestsNewIdentity(t *testing.T) {
 	<-entered
 	second := make(chan error, 1)
 	go func() {
-		_, err := c.Get(t.Context(), 2, 0, func(context.Context) (int, error) { return 2, nil })
+		value, err := c.Get(t.Context(), 2, 0, func(context.Context) (int, error) { return 2, nil })
+		if err == nil && value != 2 {
+			err = errors.New("displacing request received the wrong identity's value")
+		}
 		second <- err
 	}()
 	err := <-first
