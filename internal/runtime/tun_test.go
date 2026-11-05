@@ -1206,21 +1206,16 @@ func newTunManagerWithDetect(t *testing.T, controller *fakeController, settings 
 	if err := config.Save(settingsPath, settings); err != nil {
 		t.Fatal(err)
 	}
-	prefs, err := preferences.Open(filepath.Join(t.TempDir(), "tui.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	policy := preferences.PerformancePreferences{ControllerOwnerDetection: true}
-	if _, err = prefs.Update(t.Context(), preferences.Update{Performance: &policy}); err != nil {
-		t.Fatal(err)
-	}
-	return newTestManager(Options{
-		Preferences:  prefs,
+
+	m := newTestManager(Options{
 		Controller:   controller,
 		SettingsPath: settingsPath,
 		Settings:     settings,
 		TunDetect:    detect,
 	})
+	// Legacy TUN scenarios require owner detection and no completed reuse.
+	setObservationPolicy(t, m, preferences.PerformancePreferences{ControllerOwnerDetection: true})
+	return m
 }
 
 func assertPersistedTun(t *testing.T, path string, wantEnable bool, wantStack string) {

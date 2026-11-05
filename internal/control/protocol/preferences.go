@@ -6,6 +6,12 @@ const DefaultLatencyTestConcurrency = 5
 // MaxLatencyTestConcurrency bounds simultaneous latency requests per TUI.
 const MaxLatencyTestConcurrency = 50
 
+// DefaultObservationReuseSeconds is the instance display observation lifetime.
+const DefaultObservationReuseSeconds = 3
+
+// MaxObservationReuseSeconds bounds display observation reuse.
+const MaxObservationReuseSeconds = 5
+
 type TUIPreferences struct {
 	Performance *PerformancePreferences `json:"performance,omitempty"`
 	WarningOutcome
@@ -17,13 +23,16 @@ type TUIPreferences struct {
 	LogLevels []string `json:"log_levels,omitempty"`
 }
 
-// ProxyPreferences controls page presentation and automatic latency tests.
 // PerformancePreferences controls instance-wide display observation policy.
+// A supplied block replaces both fields; omitted scalar fields use their JSON
+// zero values, including zero seconds (no completed-result reuse).
+// Omit the whole block on PATCH to preserve the saved policy.
 type PerformancePreferences struct {
 	ControllerOwnerDetection bool `json:"controller_owner_detection"`
 	ObservationReuseSeconds  int  `json:"observation_reuse_seconds"`
 }
 
+// ProxyPreferences controls page presentation and automatic latency tests.
 type ProxyPreferences struct {
 	ExtraLatency    bool `json:"extra_latency"`
 	AutoLatencyTest bool `json:"auto_latency_test"`
@@ -56,7 +65,7 @@ type UpdateTUIPreferencesRequest struct {
 // EffectivePerformance supplies instance defaults for older snapshots.
 func (p TUIPreferences) EffectivePerformance() PerformancePreferences {
 	if p.Performance == nil {
-		return PerformancePreferences{ObservationReuseSeconds: 3}
+		return PerformancePreferences{ObservationReuseSeconds: DefaultObservationReuseSeconds}
 	}
 	return *p.Performance
 }

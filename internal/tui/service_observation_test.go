@@ -64,3 +64,15 @@ func TestServiceObservation_RefreshAndMutationInvalidate(t *testing.T) {
 		t.Fatal("service mutation did not invalidate")
 	}
 }
+
+func TestServiceObservation_DefaultBeforePreferencesLoad(t *testing.T) {
+	backend := &observationServiceFake{}
+	m := NewModel()
+	m.SetServiceController(backend)
+	defer m.closeServiceObservations()
+	m.loadRootServiceStatus()()
+	m.loadRootServiceStatus()()
+	if got := backend.calls.Load(); got != 1 {
+		t.Fatalf("default reuse not applied: calls=%d", got)
+	}
+}

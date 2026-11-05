@@ -256,3 +256,31 @@ func TestCache_FreshFailureRetiresPreviousSuccess(t *testing.T) {
 		t.Fatalf("known failure resurrected old success: got=%d err=%v", got, err)
 	}
 }
+
+func TestCache_DisplacedFlightRequestsNewIdentity(t *testing.T) {
+	var c Cache[int, int]
+	entered, release := make(chan struct{}), make(chan struct{})
+	first := make(chan error, 1)
+	go func() {
+		_, err := c.Get(t.Context(), 1, 0, func(context.Context) (int, error) {
+			close(entered)
+			<-release
+			return 1, nil
+		})
+		first <- err
+	}()
+	<-entered
+	second := make(chan error, 1)
+	go func() {
+		_, err := c.Get(t.Context(), 2, 0, func(context.Context) (int, error) { return 2, nil })
+		second <- err
+	}()
+	err := <-first
+	close(release)
+	if !errors.Is(err, ErrInvalidated) {
+		t.Errorf("displacement must request identity refresh, got %v", err)
+	}
+	if err := <-second; err != nil {
+		t.Fatal(err)
+	}
+}

@@ -22,3 +22,24 @@ func TestDecodeTUIBytes_LogLevels(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodeTUIBytes_Performance(t *testing.T) {
+	for _, tc := range []struct {
+		name, field string
+		valid       bool
+	}{
+		{"absent", "", true},
+		{"zero", `,"performance":{"controller_owner_detection":false,"observation_reuse_seconds":0}`, true},
+		{"five", `,"performance":{"controller_owner_detection":true,"observation_reuse_seconds":5}`, true},
+		{"negative", `,"performance":{"observation_reuse_seconds":-1}`, false},
+		{"too-large", `,"performance":{"observation_reuse_seconds":6}`, false},
+		{"unknown-key", `,"performance":{"observation_reuse_seconds":3,"unexpected":true}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := decodeTUIBytes([]byte(`{"schema":"mihari.tui-preferences/v1","connections_columns":["host"]` + tc.field + `}`))
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v err=%v", tc.valid, err)
+			}
+		})
+	}
+}

@@ -3,10 +3,12 @@ package runtime
 import (
 	"context"
 	"errors"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/observation"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/preferences"
 	"github.com/mihari-proxy/mihari/internal/state"
+	"github.com/mihari-proxy/mihari/internal/sysproxy"
 	"github.com/mihari-proxy/mihari/internal/tundetect"
 	"os"
 	"path/filepath"
@@ -212,4 +214,39 @@ func TestSystemObservation_TunErrorConcurrentRead(t *testing.T) {
 		}
 	}
 	group.Wait()
+}
+
+func TestSystemObservation_EgressEnumerationFailurePreservesError(t *testing.T) {
+	m := newTunManager(t, &fakeController{}, defaultTunSettings(nil))
+	setObservationPolicy(t, m, preferences.DefaultPerformancePreferences())
+	failure := errors.New("interface enumeration failed")
+	calls := 0
+	m.listInterfaces = func(context.Context) ([]platform.NetworkInterface, error) { calls++; return nil, failure }
+	for range 2 {
+		_, err := m.EgressStatus(t.Context())
+		var api protocol.APIError
+		if !errors.Is(err, failure) || !errors.As(err, &api) || api.Code != protocol.CodeDataFailure {
+			t.Fatalf("err=%v", err)
+		}
+	}
+	if calls != 2 {
+		t.Fatal("failed enumeration cached")
+	}
+}
+
+type scopeFailureBackend struct {
+	sysproxy.FakeBackend
+	failure error
+}
+
+func (b *scopeFailureBackend) ObservationScope() (string, error) { return "", b.failure }
+func TestSystemObservation_ProxyScopeFailurePreservesClassification(t *testing.T) {
+	m := newTunManager(t, &fakeController{}, defaultTunSettings(nil))
+	failure := errors.New("console session unavailable")
+	m.sysProxy = &scopeFailureBackend{failure: failure}
+	_, err := m.SystemProxyStatus(t.Context())
+	var api protocol.APIError
+	if !errors.Is(err, failure) || !errors.As(err, &api) || api.Code != protocol.CodeUpstreamFailure || api.Message != "read system proxy state" {
+		t.Fatalf("err=%v", err)
+	}
 }

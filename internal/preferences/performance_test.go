@@ -102,7 +102,7 @@ func TestPreferences_SyncFailureRestoresOldFileAndAllowsRetry(t *testing.T) {
 	}
 }
 
-func TestPreferences_RestoreFailurePreservesBothCausesAndDraftCanRetry(t *testing.T) {
+func TestPreferences_RestoreFailureKeepsBothErrorsAndRetryPublishes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tui.json")
 	s, err := Open(path)
 	if err != nil {

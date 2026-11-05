@@ -10,7 +10,7 @@ Compared PR #369 baseline b48ad7e with this change on the same Ubuntu VM, one ro
 | /proc/*/comm reads over 8 seconds | 2,504 | 1,292 |
 | controller owner fd readlinks over 8 seconds | 8,317 | 0 |
 
-The daemon sample decreased by about 33%; TUI CPU did not improve in this run. Other TUI polling and credential-validation work remains in #367 and #368. Filesystem counts were collected separately with strace, outside the CPU interval. Post-install idle CPU was sampled immediately after restart and is not compared with the settled baseline.
+The daemon sample decreased by about 33%, while TUI CPU increased from 11.83% to 14.37% and mihomo CPU increased from 0.83% to 1.08%. The measured three-process total increased from 16.94% to 18.30% in this single sample; it does not demonstrate a net CPU reduction. Other TUI polling and credential-validation work remains in #367 and #368. Filesystem counts were collected separately with strace, outside the CPU interval. Post-install idle CPU was sampled immediately after restart and is not compared with the settled baseline.
 
 The candidate was installed through the existing offline-pinned installer transaction. Candidate Linux amd64 SHA256: 6d27ad081144863482c6b97e93017c893d9ed0f899e28a8ff314a2d0dcb8c0e3. It retains the dev.7 version string solely for the test installer; the hash distinguishes the candidate from the baseline.
 

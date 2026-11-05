@@ -93,6 +93,11 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K, ttl time.Duration, probe f
 		}
 		f := c.running
 		if f != nil && (f.key != key || f.generation != c.generation || f.cancelErr != nil) {
+			if f.key != key && f.generation == c.generation {
+				// The owner must capture current identity again, rather than
+				// mistaking displacement for cancellation of its request.
+				c.generation++
+			}
 			c.cancelFlight(f)
 			done := f.done
 			c.mu.Unlock()

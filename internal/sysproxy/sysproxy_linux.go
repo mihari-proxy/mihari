@@ -95,12 +95,7 @@ func gsettings(args ...string) error {
 	return nil
 }
 
-// gsettingsGet reads a single key, trimming the surrounding quotes gsettings
-// prints for string values.
-func gsettingsGet(schema, key string) (string, error) {
-	return gsettingsGetContext(context.Background(), schema, key)
-}
-
+// gsettingsGetContext reads one key and trims surrounding quotes.
 func gsettingsGetContext(ctx context.Context, schema, key string) (string, error) {
 	out, err := exec.CommandContext(ctx, "gsettings", "get", schema, key).Output()
 	if err != nil {

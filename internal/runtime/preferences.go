@@ -50,7 +50,7 @@ func (m *Manager) UpdateTUIPreferences(ctx context.Context, operation Operation,
 
 func preferenceMutationError(err error) error {
 	if errors.Is(err, preferences.ErrInvalidPerformance) {
-		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: err.Error()}, err)
+		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "observation reuse seconds must be between 0 and 5"}, err)
 	}
 	if errors.Is(err, preferences.ErrInvalidLatencyConcurrency) {
 		return diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "latency test concurrency must be between 1 and 50"}, err)

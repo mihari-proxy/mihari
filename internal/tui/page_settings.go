@@ -124,7 +124,7 @@ func (d *pageSettingsDialog) key(key string) ModalAction {
 				if key == "left" {
 					delta = -1
 				}
-				next := max(0, min(5, d.draftPerformance.ObservationReuseSeconds+delta))
+				next := max(0, min(protocol.MaxObservationReuseSeconds, d.draftPerformance.ObservationReuseSeconds+delta))
 				if next != d.draftPerformance.ObservationReuseSeconds {
 					d.draftPerformance.ObservationReuseSeconds = next
 					d.clearSaveFeedback()

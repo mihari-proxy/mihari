@@ -29,6 +29,7 @@ type tunObservation struct {
 type egressObservation struct {
 	state      string
 	interfaces []protocol.EgressInterface
+	failure    error
 }
 type systemObservations struct {
 	generation atomic.Uint64
@@ -200,13 +201,14 @@ func (m *Manager) displayTunStatus(ctx context.Context) (protocol.TunStatus, err
 func (m *Manager) displayEgressStatus(ctx context.Context) (protocol.EgressStatus, error) {
 	return readSystemObservation(m, ctx, &m.systemObservations.egress, nil, func(worker context.Context, _ systemObservationKey) (egressObservation, error) {
 		status, err := m.egressStatus(worker)
+		failure := err
 		if p, ok := worker.Value(displayObservationKey{}).(*displayProbe); ok {
 			err = errors.Join(err, p.failure)
 		}
-		return egressObservation{state: status.State, interfaces: status.Interfaces}, err
+		return egressObservation{state: status.State, interfaces: status.Interfaces, failure: failure}, err
 	}, func(out egressObservation, err error) (protocol.EgressStatus, error) {
-		if err != nil && out.interfaces == nil {
-			return protocol.EgressStatus{}, err
+		if out.failure != nil {
+			return protocol.EgressStatus{}, out.failure
 		}
 		adapters := slices.Clone(out.interfaces)
 		for i := range adapters {
@@ -224,7 +226,11 @@ func (m *Manager) egressConfigs(ctx context.Context) (map[string]any, error) {
 func (m *Manager) displaySystemProxyStatus(ctx context.Context) (protocol.SystemProxyStatus, error) {
 	scope := func() (string, error) {
 		if backend, ok := m.sysProxy.(interface{ ObservationScope() (string, error) }); ok {
-			return backend.ObservationScope()
+			value, err := backend.ObservationScope()
+			if err != nil {
+				return "", diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "read system proxy state"}, err)
+			}
+			return value, nil
 		}
 		return "", nil
 	}

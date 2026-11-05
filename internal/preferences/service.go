@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 
 	"github.com/mihari-proxy/mihari/internal/config"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 const (
@@ -46,13 +47,13 @@ type Preferences struct {
 	LogLevels []string
 }
 
-// ProxyPreferences controls Proxies presentation and automatic latency tests.
 // PerformancePreferences controls instance-wide display observation policy.
 type PerformancePreferences struct {
 	ControllerOwnerDetection bool `json:"controller_owner_detection"`
 	ObservationReuseSeconds  int  `json:"observation_reuse_seconds"`
 }
 
+// ProxyPreferences controls Proxies presentation and automatic latency tests.
 type ProxyPreferences struct {
 	ExtraLatency           bool `json:"extra_latency"`
 	AutoLatencyTest        bool `json:"auto_latency_test"`
@@ -294,12 +295,12 @@ func (s *Service) ResetAfterDataClear() {
 
 // DefaultPerformancePreferences disables display owner scans and reuses observations for three seconds.
 func DefaultPerformancePreferences() PerformancePreferences {
-	return PerformancePreferences{ObservationReuseSeconds: 3}
+	return PerformancePreferences{ObservationReuseSeconds: protocol.DefaultObservationReuseSeconds}
 }
 
 // ValidatePerformance checks the instance observation bounds.
 func ValidatePerformance(value PerformancePreferences) error {
-	if value.ObservationReuseSeconds < 0 || value.ObservationReuseSeconds > 5 {
+	if value.ObservationReuseSeconds < 0 || value.ObservationReuseSeconds > protocol.MaxObservationReuseSeconds {
 		return ErrInvalidPerformance
 	}
 	return nil

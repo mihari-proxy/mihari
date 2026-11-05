@@ -288,9 +288,7 @@ func (model *Model) SetServiceController(ctrl systempage.ServiceController) {
 	if ctrl != nil {
 		cached := &observedServiceController{ServiceController: ctrl}
 		cached.generation.Store(1)
-		if model.preferencesLoaded {
-			cached.setPolicy(model.preferences.EffectivePerformance())
-		}
+		cached.setPolicy(model.preferences.EffectivePerformance())
 		ctrl = cached
 	}
 	model.serviceCtrl = ctrl
