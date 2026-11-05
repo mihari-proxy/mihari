@@ -1028,10 +1028,11 @@ func decodeTUIBytes(raw []byte) error {
 	dec.DisallowUnknownFields()
 	defaults := preferences.DefaultProxyPreferences()
 	persisted := struct {
-		Schema             string                        `json:"schema"`
-		ConnectionsColumns []string                      `json:"connections_columns"`
-		Proxies            *preferences.ProxyPreferences `json:"proxies,omitempty"`
-		LogLevels          []string                      `json:"log_levels"`
+		Performance        *preferences.PerformancePreferences `json:"performance,omitempty"`
+		Schema             string                              `json:"schema"`
+		ConnectionsColumns []string                            `json:"connections_columns"`
+		Proxies            *preferences.ProxyPreferences       `json:"proxies,omitempty"`
+		LogLevels          []string                            `json:"log_levels"`
 	}{Proxies: &defaults}
 	if err := dec.Decode(&persisted); err != nil {
 		return migrateData("invalid tui preferences")
@@ -1041,6 +1042,11 @@ func decodeTUIBytes(raw []byte) error {
 	}
 	if persisted.Schema != "mihari.tui-preferences/v1" {
 		return migrateData("unsupported tui preferences schema")
+	}
+	if persisted.Performance != nil {
+		if err := preferences.ValidatePerformance(*persisted.Performance); err != nil {
+			return migrateData("invalid observation reuse seconds")
+		}
 	}
 	if persisted.Proxies != nil {
 		if err := preferences.ValidateLatencyConcurrency(persisted.Proxies.LatencyTestConcurrency); err != nil {

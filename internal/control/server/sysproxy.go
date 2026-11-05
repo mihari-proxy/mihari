@@ -2,6 +2,7 @@ package server
 
 import (
 	"github.com/mihari-proxy/mihari/internal/logging"
+	"github.com/mihari-proxy/mihari/internal/observation"
 	"net/http"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -15,6 +16,10 @@ func (s *Server) systemProxyRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) systemProxyStatus(writer http.ResponseWriter, request *http.Request) {
+	if request.URL.Query().Get("fresh") == "1" {
+		request = request.WithContext(observation.WithFresh(request.Context()))
+	}
+
 	if !s.requireRuntime(request.Context(), writer) {
 		return
 	}

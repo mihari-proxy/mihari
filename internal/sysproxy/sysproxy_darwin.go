@@ -3,6 +3,7 @@
 package sysproxy
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -57,15 +58,17 @@ func disable() error {
 }
 
 // get reports the web-proxy state of the first active network service.
-func get() (State, error) {
-	services, err := networkServices()
+func get() (State, error) { return getContext(context.Background()) }
+
+func getContext(ctx context.Context) (State, error) {
+	services, err := networkServicesContext(ctx)
 	if err != nil {
 		return State{}, err
 	}
 	if len(services) == 0 {
 		return State{}, nil
 	}
-	out, err := exec.Command("networksetup", "-getwebproxy", services[0]).Output()
+	out, err := exec.CommandContext(ctx, "networksetup", "-getwebproxy", services[0]).Output()
 	if err != nil {
 		return State{}, fmt.Errorf("sysproxy: getwebproxy: %w", err)
 	}
@@ -74,8 +77,10 @@ func get() (State, error) {
 
 // networkServices lists the enabled network services. Disabled services are
 // prefixed with '*' by networksetup and are skipped.
-func networkServices() ([]string, error) {
-	out, err := exec.Command("networksetup", "-listallnetworkservices").Output()
+func networkServices() ([]string, error) { return networkServicesContext(context.Background()) }
+
+func networkServicesContext(ctx context.Context) ([]string, error) {
+	out, err := exec.CommandContext(ctx, "networksetup", "-listallnetworkservices").Output()
 	if err != nil {
 		return nil, fmt.Errorf("sysproxy: list network services: %w", err)
 	}
@@ -99,3 +104,6 @@ func networksetup(args ...string) error {
 	}
 	return nil
 }
+
+// GetContext observes the platform proxy with cancellation of external commands.
+func (PlatformBackend) GetContext(ctx context.Context) (State, error) { return getContext(ctx) }

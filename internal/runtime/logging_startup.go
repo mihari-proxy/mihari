@@ -28,6 +28,7 @@ func (m *Manager) PrepareCoreStart(ctx context.Context) (func(), error) {
 		return nil, err
 	}
 	m.coreEpoch++
+	m.invalidateSystemObservations()
 	epoch := m.coreEpoch
 	current := m.store.Load().Core
 	current.Status, current.PID = "starting", 0

@@ -6,7 +6,6 @@ import (
 	"os"
 	"reflect"
 	"strings"
-	"sync"
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -19,11 +18,7 @@ import (
 
 // TunStatus returns desired managed TUN intent plus live observation from mihomo when available.
 func (m *Manager) TunStatus(ctx context.Context) (protocol.TunStatus, error) {
-	if err := m.lockMaintenance(ctx); err != nil {
-		return protocol.TunStatus{}, err
-	}
-	defer m.unlock()
-	return m.buildTunStatus(ctx, ""), nil
+	return m.displayTunStatus(ctx)
 }
 
 // EnableTun persists managed TUN enable=true and applies it to the running core.
@@ -295,27 +290,6 @@ func (m *Manager) captureTunLive(ctx context.Context) (map[string]any, bool, err
 		return nil, false, err
 	}
 	return normalized, true, nil
-}
-
-func (m *Manager) buildTunStatus(ctx context.Context, lastError string) protocol.TunStatus {
-	settings := m.settingsSnapshot()
-	m.settingsMu.Lock()
-	if lastError == "" {
-		lastError = m.tunLastError
-	}
-	m.settingsMu.Unlock()
-	// Conflict evidence is always surfaced (even when only corroborating signal B is
-	// present) so status/CLI/TUI can display it; the enable gate keys off
-	// OtherTunInterfaces alone.
-	// One query uses one live observation, including when the read fails.
-	configs := sync.OnceValue(func() map[string]any { return m.liveTunConfigs(ctx) })
-	conflict := m.detectTunConflictWithConfigs(ctx, configs)
-
-	var liveEnable *bool
-	if live, ok := liveTunEnable(configs()); ok {
-		liveEnable = &live
-	}
-	return buildTunStatusFromObservation(settings, m.store.Load().Revision, conflict, liveEnable, lastError)
 }
 
 func buildTunStatusFromObservation(settings config.Settings, revision uint64, conflict *protocol.TunConflict, liveEnable *bool, lastError string) protocol.TunStatus {

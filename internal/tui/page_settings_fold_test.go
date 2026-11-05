@@ -29,10 +29,10 @@ func openPageSettings(t *testing.T, page ui.PageID) Model {
 
 func assertEverySection(t *testing.T, m Model, expanded bool) {
 	t.Helper()
-	if len(m.pageSettings.pages) != 8 {
+	if len(m.pageSettings.pages) != len(ui.RailPages())+1 {
 		t.Fatalf("sections=%d", len(m.pageSettings.pages))
 	}
-	for _, id := range ui.RailPages() {
+	for _, id := range append(ui.RailPages(), ui.PageID("performance")) {
 		if m.pageSettings.expanded[id] != expanded {
 			t.Fatalf("%s expanded=%v want %v", id, m.pageSettings.expanded[id], expanded)
 		}

@@ -345,6 +345,7 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 	}
 	if options.Service != nil {
 		model.SetServiceController(options.Service)
+		defer model.closeServiceObservations()
 	}
 	if options.Uninstaller != nil {
 		if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {

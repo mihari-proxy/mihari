@@ -25,11 +25,7 @@ func egressSelection(name string) protocol.EgressSelection {
 
 // EgressStatus returns saved selection and a fresh local adapter snapshot.
 func (m *Manager) EgressStatus(ctx context.Context) (protocol.EgressStatus, error) {
-	if err := m.lockMaintenance(ctx); err != nil {
-		return protocol.EgressStatus{}, err
-	}
-	defer m.unlock()
-	return m.egressStatus(ctx)
+	return m.displayEgressStatus(ctx)
 }
 
 func (m *Manager) egressStatus(ctx context.Context) (protocol.EgressStatus, error) {
@@ -42,10 +38,12 @@ func (m *Manager) egressStatusWithConfig(ctx context.Context, readConfig func(co
 	previous := sync.OnceValues(func() (map[string]any, error) {
 		content, err := readConfig(ctx)
 		if err != nil {
+			recordDisplayFailure(ctx, err)
 			return nil, err
 		}
 		var document map[string]any
 		err = yaml.Unmarshal(content, &document)
+		recordDisplayFailure(ctx, err)
 		return document, err
 	})
 	saved := m.settingsSnapshot().EgressInterface
@@ -58,7 +56,7 @@ func (m *Manager) egressStatusWithConfig(ctx context.Context, readConfig func(co
 	if m.routingCoreStopped() {
 		status.State = "saved"
 	} else if m.controller != nil {
-		live, err = m.controller.Configs(ctx)
+		live, err = m.egressConfigs(ctx)
 		if err == nil && !m.mutationDegraded.Load() {
 			want := saved
 			known := saved != ""

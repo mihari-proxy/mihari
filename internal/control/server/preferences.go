@@ -47,6 +47,9 @@ func (s *Server) updateTUIPreferences(writer http.ResponseWriter, request *http.
 		return
 	}
 	update := preferences.Update{ConnectionsColumns: body.ConnectionsColumns, LogLevels: body.LogLevels}
+	if body.Performance != nil {
+		update.Performance = &preferences.PerformancePreferences{ControllerOwnerDetection: body.Performance.ControllerOwnerDetection, ObservationReuseSeconds: body.Performance.ObservationReuseSeconds}
+	}
 	if body.Proxies != nil {
 		update.Proxies = &preferences.ProxyPreferences{ExtraLatency: body.Proxies.ExtraLatency, AutoLatencyTest: body.Proxies.AutoLatencyTest, LatencyTestConcurrency: body.Proxies.LatencyTestConcurrency}
 	}
@@ -63,6 +66,7 @@ func (s *Server) updateTUIPreferences(writer http.ResponseWriter, request *http.
 func tuiPreferencesDTO(value preferences.Preferences, revision uint64) protocol.TUIPreferences {
 	return protocol.TUIPreferences{
 		Schema: "mihari/v1", Revision: revision,
+		Performance:        &protocol.PerformancePreferences{ControllerOwnerDetection: value.Performance.ControllerOwnerDetection, ObservationReuseSeconds: value.Performance.ObservationReuseSeconds},
 		ConnectionsColumns: append([]string(nil), value.ConnectionsColumns...),
 		Proxies:            &protocol.ProxyPreferences{ExtraLatency: value.Proxies.ExtraLatency, AutoLatencyTest: value.Proxies.AutoLatencyTest, LatencyTestConcurrency: value.Proxies.LatencyTestConcurrency},
 		LogLevels:          append([]string(nil), value.LogLevels...),

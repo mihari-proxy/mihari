@@ -129,6 +129,7 @@ func (m *Manager) lockMaintenance(ctx context.Context) error {
 }
 
 func (m *Manager) lockMutation(ctx context.Context) error {
+	m.invalidateSystemObservations()
 	if err := m.checkCoreUpdateReservation(ctx); err != nil {
 		return err
 	}

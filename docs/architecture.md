@@ -24,6 +24,12 @@ Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CL
 - OS 服务 `Start` 等待控制通道 Ready;listen 失败则向 SCM 返回错误,不得保持假 running。
 - 托管端口预检失败时 details 可含占用 PID 与进程基名;不自动杀进程。
 
+## 系统展示观测与性能偏好
+
+F4 Performance 属于实例偏好，沿用 preferences/tui.json 与 /v1/preferences/tui，daemon 单写入、单次保存全部草稿。默认关闭普通展示的 controller 端口归属反查，观测成功后默认复用 3 秒（0–5 可调）；操作门禁、回滚前像和结果确认使用实时探测。网络观测由 Manager 管理，常规 OS 服务观测在 TUI 共享 controller 中复用；展示的当前设置/revision 另行投影。主动刷新通过相关本地 GET 的可选 fresh=1 请求绕过已完成缓存，仍允许合并有效在途执行。探测具备取消、5 秒等待期限、mutation/core 身份失效与过期结果拒绝，不新增周期后台任务。
+
+偏好保存用例以文件替换和目录同步全部完成为成功；后续同步失败要撤回文件修改并保留旧内存/revision及页面草稿，撤回的 IO 失败保留真实诊断，不虚报恢复成功。这个用例边界不改变下述 Settings 已提交 warning 规则。参见 [观测设计](superpowers/specs/2026-11-05-shared-system-observation-design.md)、[性能偏好 ADR](adr/0011-instance-performance-preferences.md)、[偏好保存 ADR](adr/0012-preference-save-sync-boundary.md)。
+
 ## Settings 提交与降级
 
 - Settings 的单文件 replace 是提交点：replace 前失败时磁盘仍为旧文件；replace 成功后的目录 sync 失败仅作为已提交后的 durability warning，上报诊断但不回滚、不把已生效的 mutation 报为失败。

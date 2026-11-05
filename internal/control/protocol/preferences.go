@@ -7,6 +7,7 @@ const DefaultLatencyTestConcurrency = 5
 const MaxLatencyTestConcurrency = 50
 
 type TUIPreferences struct {
+	Performance *PerformancePreferences `json:"performance,omitempty"`
 	WarningOutcome
 	Schema             string            `json:"schema"`
 	Revision           uint64            `json:"revision"`
@@ -17,6 +18,12 @@ type TUIPreferences struct {
 }
 
 // ProxyPreferences controls page presentation and automatic latency tests.
+// PerformancePreferences controls instance-wide display observation policy.
+type PerformancePreferences struct {
+	ControllerOwnerDetection bool `json:"controller_owner_detection"`
+	ObservationReuseSeconds  int  `json:"observation_reuse_seconds"`
+}
+
 type ProxyPreferences struct {
 	ExtraLatency    bool `json:"extra_latency"`
 	AutoLatencyTest bool `json:"auto_latency_test"`
@@ -37,10 +44,19 @@ func (p TUIPreferences) EffectiveProxies() ProxyPreferences {
 }
 
 type UpdateTUIPreferencesRequest struct {
-	OperationID        string            `json:"operation_id"`
-	IfRevision         *uint64           `json:"if_revision,omitempty"`
-	ConnectionsColumns []string          `json:"connections_columns"`
-	Proxies            *ProxyPreferences `json:"proxies,omitempty"`
+	Performance        *PerformancePreferences `json:"performance,omitempty"`
+	OperationID        string                  `json:"operation_id"`
+	IfRevision         *uint64                 `json:"if_revision,omitempty"`
+	ConnectionsColumns []string                `json:"connections_columns"`
+	Proxies            *ProxyPreferences       `json:"proxies,omitempty"`
 	// LogLevels preserves the saved selection when nil; an explicit empty list is invalid.
 	LogLevels []string `json:"log_levels,omitzero"`
+}
+
+// EffectivePerformance supplies instance defaults for older snapshots.
+func (p TUIPreferences) EffectivePerformance() PerformancePreferences {
+	if p.Performance == nil {
+		return PerformancePreferences{ObservationReuseSeconds: 3}
+	}
+	return *p.Performance
 }

@@ -3,6 +3,7 @@
 package sysproxy
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os/exec"
@@ -48,22 +49,24 @@ func disable() error {
 }
 
 // get reports the current GNOME proxy state.
-func get() (State, error) {
+func get() (State, error) { return getContext(context.Background()) }
+
+func getContext(ctx context.Context) (State, error) {
 	if err := requireGsettings(); err != nil {
 		return State{}, err
 	}
-	mode, err := gsettingsGet(gsettingsSchema, "mode")
+	mode, err := gsettingsGetContext(ctx, gsettingsSchema, "mode")
 	if err != nil {
 		return State{}, err
 	}
 	if mode != "manual" {
 		return State{}, nil
 	}
-	host, err := gsettingsGet(gsettingsSchema+".http", "host")
+	host, err := gsettingsGetContext(ctx, gsettingsSchema+".http", "host")
 	if err != nil {
 		return State{}, err
 	}
-	port, err := gsettingsGet(gsettingsSchema+".http", "port")
+	port, err := gsettingsGetContext(ctx, gsettingsSchema+".http", "port")
 	if err != nil {
 		return State{}, err
 	}
@@ -95,9 +98,16 @@ func gsettings(args ...string) error {
 // gsettingsGet reads a single key, trimming the surrounding quotes gsettings
 // prints for string values.
 func gsettingsGet(schema, key string) (string, error) {
-	out, err := exec.Command("gsettings", "get", schema, key).Output()
+	return gsettingsGetContext(context.Background(), schema, key)
+}
+
+func gsettingsGetContext(ctx context.Context, schema, key string) (string, error) {
+	out, err := exec.CommandContext(ctx, "gsettings", "get", schema, key).Output()
 	if err != nil {
 		return "", fmt.Errorf("sysproxy: gsettings get %s %s: %w", schema, key, err)
 	}
 	return strings.Trim(strings.TrimSpace(string(out)), "'"), nil
 }
+
+// GetContext observes the platform proxy with cancellation of external commands.
+func (PlatformBackend) GetContext(ctx context.Context) (State, error) { return getContext(ctx) }

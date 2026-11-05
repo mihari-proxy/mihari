@@ -118,8 +118,9 @@ type networkStatusClient interface {
 
 // rootServiceStatusMsg is the root-level poll of OS service install state.
 type rootServiceStatusMsg struct {
-	status service.StatusKind
-	err    error
+	generation uint64
+	status     service.StatusKind
+	err        error
 }
 
 // networkStatusMsg carries daemon-backed sysproxy/TUN snapshots for Overview and System.
@@ -284,6 +285,14 @@ func (model Model) scheduleServicePoll() tea.Cmd {
 // SetServiceController injects the OS service controller used for the top-right badge
 // and the System page. Safe to call before Run.
 func (model *Model) SetServiceController(ctrl systempage.ServiceController) {
+	if ctrl != nil {
+		cached := &observedServiceController{ServiceController: ctrl}
+		cached.generation.Store(1)
+		if model.preferencesLoaded {
+			cached.setPolicy(model.preferences.EffectivePerformance())
+		}
+		ctrl = cached
+	}
 	model.serviceCtrl = ctrl
 	if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
 		page.SetServiceController(ctrl)
@@ -320,9 +329,17 @@ func (model Model) loadRootServiceStatus() tea.Cmd {
 	if ctrl == nil {
 		return nil
 	}
+	generation := uint64(0)
+	if c, ok := ctrl.(interface{ ObservationGeneration() uint64 }); ok {
+		generation = c.ObservationGeneration()
+	}
 	return func() tea.Msg {
-		status, err := ctrl.Status()
-		return rootServiceStatusMsg{status: status, err: err}
+		ctx := model.pageCtx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		status, err := readServiceStatus(ctx, ctrl)
+		return rootServiceStatusMsg{status: status, err: err, generation: generation}
 	}
 }
 
@@ -468,6 +485,9 @@ func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case servicePollTickMsg:
 		return model, tea.Batch(model.loadRootServiceStatus(), model.scheduleServicePoll())
 	case rootServiceStatusMsg:
+		if c, ok := model.serviceCtrl.(interface{ ObservationGeneration() uint64 }); ok && typed.generation != 0 && typed.generation != c.ObservationGeneration() {
+			return model, nil
+		}
 		model.serviceLoaded = true
 		if typed.err != nil {
 			// Status() normally maps not-installed to a nil error; keep a text fallback.
@@ -485,6 +505,9 @@ func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.syncSystemServiceStatus()
 		return model, nil
 	case networkStatusMsg:
+		if (typed.egressEpoch != 0 && typed.egressEpoch != model.statusEpoch) || (typed.egressPID != 0 && typed.egressPID != model.status.PID) {
+			return model, nil
+		}
 		if typed.egress != nil && typed.egressPID == model.status.PID && typed.egressEpoch == model.statusEpoch {
 			if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
 				page.SetEgress(*typed.egress)

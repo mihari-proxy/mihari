@@ -11,7 +11,7 @@ import (
 // Egress returns the saved selection and current interface snapshot.
 func (c *Client) Egress(ctx context.Context) (protocol.EgressStatus, error) {
 	var result protocol.EgressStatus
-	err := c.doRuntime(ctx, http.MethodGet, "/v1/egress", nil, &result)
+	err := c.doRuntime(ctx, http.MethodGet, observationPath(ctx, "/v1/egress"), nil, &result)
 	return result, err
 }
 
