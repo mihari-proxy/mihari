@@ -4,6 +4,12 @@ Mihari 管理本机 mihomo，并向本地用户提供一致的配置管理与运
 
 ## Language
 
+**系统状态观测（System State Observation）**：Mihari 对本机运行环境的一次探测结果；它不同于用户保存的期望设置，也不构成后续操作的执行许可。
+_Avoid_: 将上次探测结果等同于当前事实、将展示观测复用等同于跳过操作前检查。
+
+**Controller 端口归属探测（Controller Port Ownership Detection）**：识别监听受管 mihomo 控制地址的进程，为区分自身与其他实例提供补充身份信息。它不同于控制接口认证、其他 mihomo 进程枚举和 TUN 网卡冲突检测。
+_Avoid_: 将端口归属等同于进程所属用户、将关闭端口归属探测等同于关闭所有冲突检查。
+
 **本地核心观测（Local Core Observation）**：Mihari 最近一次确认的磁盘核心可用性与自报版本；外部修改后可暂时保留上次结果，不代表当前运行进程，也不构成执行许可。
 _Avoid_: 实时文件校验、运行中核心状态、执行授权。
 

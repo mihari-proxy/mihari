@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -141,16 +142,22 @@ func (m *Model) SetSize(width, height int) { m.width, m.height = width, height }
 func (m *Model) FocusFirst() { m.focus = pageFocus{kind: focusControl} }
 
 func (m *Model) SetRules(result protocol.RuleList) {
+	if slices.Equal(m.rules, result.Rules) {
+		return
+	}
 	m.rules = append([]protocol.Rule(nil), result.Rules...)
 	m.reconcileFocus()
 }
 
 func (m *Model) SetProviders(result protocol.RuleProviderList) {
-	m.rememberFocusedProvider()
-	m.providers = append([]protocol.RuleProvider(nil), result.Providers...)
 	if result.Revision != 0 {
 		m.revision = result.Revision
 	}
+	if slices.Equal(m.providers, result.Providers) {
+		return
+	}
+	m.rememberFocusedProvider()
+	m.providers = append([]protocol.RuleProvider(nil), result.Providers...)
 	m.reconcileFocus()
 }
 

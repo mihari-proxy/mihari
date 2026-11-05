@@ -37,6 +37,8 @@ Specifically:
 
 Local core readiness and version use the daemon's last confirmed observation. Normal status refreshes do not execute the core or scan its binary. Installation and update operations refresh the observation; external file changes can remain undisplayed until the next relevant operation or daemon restart. Execution retains its file checks. If the initial version probe fails, management remains available so you can retry installing the core.
 
+F4 includes a global **Performance** section. **Controller owner detection** is off by default and affects display queries only; operation checks remain live. **Observation reuse (seconds)** defaults to 3 and accepts 0–5; 0 disables completed-result reuse. System refresh requests a live observation and may join one already in progress. The instance saves all F4 changes together; a failed save retains the old values and your draft. Non-default Performance fields require this version: restore defaults before downgrading to a version that cannot read them.
+
 ## Quick start
 
 **Install**

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -155,15 +156,26 @@ func (m *Model) FocusFirst() {
 }
 
 func (m *Model) SetGroups(groups protocol.ProxyGroups) {
-	m.autoDirty = true
+	metadataChanged := !m.groupsFresh || m.loadError != "" || m.groupsSubscription != groups.SubscriptionID ||
+		(m.groupsRevision == nil) != (groups.Revision == nil) ||
+		(m.groupsRevision != nil && groups.Revision != nil && *m.groupsRevision != *groups.Revision)
 	m.loadError = ""
 	m.groupsFresh = true
-	m.groupsRevision = nil
-	if groups.Revision != nil {
-		revision := *groups.Revision
-		m.groupsRevision = &revision
+	if metadataChanged {
+		m.groupsRevision = nil
+		if groups.Revision != nil {
+			revision := *groups.Revision
+			m.groupsRevision = &revision
+		}
+		m.groupsSubscription = groups.SubscriptionID
 	}
-	m.groupsSubscription = groups.SubscriptionID
+	if !metadataChanged && slices.EqualFunc(m.groups, groups.Groups, func(a, b protocol.ProxyGroup) bool {
+		return a.Name == b.Name && a.Type == b.Type && a.Now == b.Now && a.TestURL == b.TestURL &&
+			slices.Equal(a.All, b.All) && sameProxyNodes(a.Nodes, b.Nodes)
+	}) {
+		return
+	}
+	m.autoDirty = true
 	m.groups = append([]protocol.ProxyGroup(nil), groups.Groups...)
 	for index := range m.groups {
 		m.groups[index].All = append([]string(nil), groups.Groups[index].All...)
@@ -187,6 +199,30 @@ func (m *Model) SetGroups(groups protocol.ProxyGroups) {
 		}
 	}
 	m.ensureFocusVisible()
+}
+
+// Stored nodes retain the first occurrence of each name. Avoid rebuilding when
+// an incoming snapshot differs only by occurrences the page already ignores.
+func sameProxyNodes(current, incoming []protocol.ProxyNode) bool {
+	if slices.Equal(current, incoming) {
+		return true
+	}
+	if len(incoming) <= len(current) {
+		return false
+	}
+	seen := make(map[string]bool, len(current))
+	index := 0
+	for _, node := range incoming {
+		if seen[node.Name] {
+			continue
+		}
+		if index >= len(current) || current[index] != node {
+			return false
+		}
+		seen[node.Name] = true
+		index++
+	}
+	return index == len(current)
 }
 
 // Update applies page results and keyboard events, including local-only Locate navigation.

@@ -21,28 +21,38 @@ type pagePreferencesClient interface {
 
 type settingsFocus struct{ section, field int } // field -1 is a section header
 
+const performanceSection ui.PageID = "performance"
+
+func settingsSectionLabel(id ui.PageID) string {
+	if id == performanceSection {
+		return "Performance"
+	}
+	return ui.PageLabel(id)
+}
+
 type pageSettingsDialog struct {
-	pages           []ui.PageID
-	expanded        map[ui.PageID]bool
-	directory       int
-	area            int // directory, configuration, Cancel, Save
-	focus           settingsFocus
-	scroll          int
-	original, draft protocol.ProxyPreferences
-	saving          bool
-	showDone        bool
-	saveClock       time.Time
-	err             string
+	originalPerformance, draftPerformance protocol.PerformancePreferences
+	pages                                 []ui.PageID
+	expanded                              map[ui.PageID]bool
+	directory                             int
+	area                                  int // directory, configuration, Cancel, Save
+	focus                                 settingsFocus
+	scroll                                int
+	original, draft                       protocol.ProxyPreferences
+	saving                                bool
+	showDone                              bool
+	saveClock                             time.Time
+	err                                   string
 }
 
 func newPageSettings(page ui.PageID, prefs protocol.TUIPreferences) *pageSettingsDialog {
-	pages := ui.RailPages()
+	pages := append(ui.RailPages(), performanceSection)
 	expanded := make(map[ui.PageID]bool, len(pages))
 	for _, id := range pages {
 		expanded[id] = true
 	}
 	d := &pageSettingsDialog{pages: pages, expanded: expanded, area: 1,
-		original: prefs.EffectiveProxies(), draft: prefs.EffectiveProxies()}
+		original: prefs.EffectiveProxies(), draft: prefs.EffectiveProxies(), originalPerformance: prefs.EffectivePerformance(), draftPerformance: prefs.EffectivePerformance()}
 	for i, id := range d.pages {
 		if id == page {
 			d.directory = i
@@ -57,6 +67,9 @@ func (d *pageSettingsDialog) rows() []settingsFocus {
 	var rows []settingsFocus
 	for i, id := range d.pages {
 		rows = append(rows, settingsFocus{i, -1})
+		if id == performanceSection && d.expanded[id] {
+			rows = append(rows, settingsFocus{i, 0}, settingsFocus{i, 1})
+		}
 		if id == ui.PageProxies && d.expanded[id] {
 			rows = append(rows, settingsFocus{i, 0}, settingsFocus{i, 1}, settingsFocus{i, 2})
 		}
@@ -106,7 +119,17 @@ func (d *pageSettingsDialog) key(key string) ModalAction {
 	case 1:
 		switch key {
 		case "left", "right":
-			if d.focus.field == 2 {
+			if d.pages[d.focus.section] == performanceSection && d.focus.field == 1 {
+				delta := 1
+				if key == "left" {
+					delta = -1
+				}
+				next := max(0, min(protocol.MaxObservationReuseSeconds, d.draftPerformance.ObservationReuseSeconds+delta))
+				if next != d.draftPerformance.ObservationReuseSeconds {
+					d.draftPerformance.ObservationReuseSeconds = next
+					d.clearSaveFeedback()
+				}
+			} else if d.focus.field == 2 {
 				delta := 1
 				if key == "left" {
 					delta = -1
@@ -138,6 +161,11 @@ func (d *pageSettingsDialog) key(key string) ModalAction {
 			if d.focus.field < 0 {
 				id := d.pages[d.focus.section]
 				d.expanded[id] = !d.expanded[id]
+			} else if d.pages[d.focus.section] == performanceSection {
+				if d.focus.field == 0 {
+					d.draftPerformance.ControllerOwnerDetection = !d.draftPerformance.ControllerOwnerDetection
+					d.clearSaveFeedback()
+				}
 			} else if d.focus.field == 0 {
 				d.draft.ExtraLatency = !d.draft.ExtraLatency
 				d.clearSaveFeedback()
@@ -169,7 +197,12 @@ func (d *pageSettingsDialog) view(width, height int) string {
 	inner := boxWidth - 6
 	leftWidth := 14
 	rightWidth := inner - leftWidth - 3
-	hint := wrapPageSettingsHint(pageSettingsHint(d.area == 1 && d.focus.field == 2), inner)
+	numeric := d.area == 1 && ((d.pages[d.focus.section] == ui.PageProxies && d.focus.field == 2) || (d.pages[d.focus.section] == performanceSection && d.focus.field == 1))
+	hintText := pageSettingsHint(numeric)
+	if d.pages[d.focus.section] == performanceSection && d.focus.field == 1 {
+		hintText = strings.ReplaceAll(hintText, "(1–50)", "(0–5)")
+	}
+	hint := wrapPageSettingsHint(hintText, inner)
 	rowsHeight := max(1, min(19, height-10-strings.Count(hint, "\n")))
 	var right []string
 	focusLine := 0
@@ -178,11 +211,11 @@ func (d *pageSettingsDialog) view(width, height int) string {
 		if d.expanded[id] {
 			marker = "▾ "
 		}
-		line := "  " + marker + ui.PageLabel(id)
+		line := "  " + marker + settingsSectionLabel(id)
 		if d.focus == (settingsFocus{i, -1}) {
 			focusLine = len(right)
 			if d.area == 1 {
-				line = theme.RowFocus.Render("› " + marker + ui.PageLabel(id))
+				line = theme.RowFocus.Render("› " + marker + settingsSectionLabel(id))
 			}
 		}
 		if d.expanded[id] {
@@ -190,7 +223,27 @@ func (d *pageSettingsDialog) view(width, height int) string {
 		}
 		right = append(right, ui.TruncateVisible(line, rightWidth))
 		if d.expanded[id] {
-			if id == ui.PageProxies {
+			switch id {
+			case performanceSection:
+				for field, label := range []string{"Controller owner detection", "Observation reuse (seconds)"} {
+					value := "[ ]"
+					if d.draftPerformance.ControllerOwnerDetection {
+						value = "[x]"
+					}
+					if field == 1 {
+						value = fmt.Sprintf("< %d >", d.draftPerformance.ObservationReuseSeconds)
+					}
+					labelWidth := rightWidth - 6 - lipgloss.Width(value)
+					text := "    " + ui.PadCell(ui.TruncateVisible(label, labelWidth), labelWidth, ui.AlignLeft) + "  " + value
+					if d.focus == (settingsFocus{i, field}) {
+						focusLine = len(right)
+						if d.area == 1 {
+							text = theme.RowFocus.Render(text)
+						}
+					}
+					right = append(right, text)
+				}
+			case ui.PageProxies:
 				for field, label := range []string{"Extra latency display", "Automatic latency test", "Test concurrency"} {
 					checked := d.draft.ExtraLatency
 					if field == 1 {
@@ -213,7 +266,7 @@ func (d *pageSettingsDialog) view(width, height int) string {
 					}
 					right = append(right, text)
 				}
-			} else {
+			default:
 				right = append(right, theme.Muted.Render(ui.TruncateVisible("    No settings available yet", rightWidth)))
 			}
 		}
@@ -222,9 +275,9 @@ func (d *pageSettingsDialog) view(width, height int) string {
 	right = ui.SliceLines(right, d.scroll, rowsHeight)
 	left := []string{theme.Muted.Render("Sections"), ""}
 	for i, id := range d.pages {
-		label := "  " + ui.PageLabel(id)
+		label := "  " + settingsSectionLabel(id)
 		if i == d.directory {
-			label = "● " + ui.PageLabel(id)
+			label = "● " + settingsSectionLabel(id)
 			if d.area == 0 {
 				label = theme.RowFocus.Render(label)
 			} else {
@@ -356,7 +409,7 @@ func (model *Model) savePageSettings() tea.Cmd {
 	if d == nil || d.saving {
 		return nil
 	}
-	if d.draft == d.original {
+	if d.draft == d.original && d.draftPerformance == d.originalPerformance {
 		d.showDone = true
 		d.err = ""
 		return nil
@@ -366,7 +419,7 @@ func (model *Model) savePageSettings() tea.Cmd {
 		d.err = "Page settings unavailable; wait for the daemon"
 		return nil
 	}
-	if model.preferences.EffectiveProxies() != d.original {
+	if model.preferences.EffectiveProxies() != d.original || model.preferences.EffectivePerformance() != d.originalPerformance {
 		d.showDone = false
 		d.err = "Page settings changed elsewhere; reopen to review"
 		return nil
@@ -374,6 +427,16 @@ func (model *Model) savePageSettings() tea.Cmd {
 	d.saving, d.showDone, d.err = true, false, ""
 	d.saveClock = time.Now()
 	draft, revision := d.draft, model.preferences.Revision
+	var performance *protocol.PerformancePreferences
+	if d.draftPerformance != d.originalPerformance {
+		if model.preferences.Performance == nil {
+			d.saving = false
+			d.err = "Upgrade daemon to change Performance settings"
+			return nil
+		}
+		value := d.draftPerformance
+		performance = &value
+	}
 	epoch, generation := model.statusEpoch, model.preferencesGeneration
 	client := model.preferencesClient
 	parent := model.pageCtx
@@ -384,7 +447,7 @@ func (model *Model) savePageSettings() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 		defer cancel()
-		prefs, err := client.UpdateTUIPreferences(ctx, protocol.UpdateTUIPreferencesRequest{OperationID: id, IfRevision: &revision, Proxies: &draft})
+		prefs, err := client.UpdateTUIPreferences(ctx, protocol.UpdateTUIPreferencesRequest{OperationID: id, IfRevision: &revision, Proxies: &draft, Performance: performance})
 		return pageSettingsSavedMsg{dialog: d, preferences: prefs, err: err, epoch: epoch, generation: generation}
 	}
 }
@@ -394,6 +457,9 @@ func (model *Model) applyPreferences(prefs protocol.TUIPreferences) {
 		return
 	}
 	model.preferences, model.preferencesLoaded = prefs, true
+	if ctrl, ok := model.serviceCtrl.(*observedServiceController); ok {
+		ctrl.setPolicy(prefs.EffectivePerformance())
+	}
 	if page, ok := model.pages[ui.PageConnections].(*connectionspage.Model); ok {
 		page.SetPreferences(prefs)
 	}
@@ -422,6 +488,8 @@ func (model *Model) updatePageSettings(message tea.Msg) (tea.Cmd, bool) {
 				saved.dialog.err = ""
 				saved.dialog.original = saved.preferences.EffectiveProxies()
 				saved.dialog.draft = saved.dialog.original
+				saved.dialog.originalPerformance = saved.preferences.EffectivePerformance()
+				saved.dialog.draftPerformance = saved.dialog.originalPerformance
 			} else {
 				saved.dialog.showDone = false
 				saved.dialog.err = diagnosticSingleLine(saved.err.Error())

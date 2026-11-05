@@ -9,6 +9,7 @@ import (
 const defaultHistoryLimit = 5000
 
 type History struct {
+	revision   uint64
 	limit      int
 	active     []protocol.Connection
 	closed     []protocol.Connection
@@ -23,6 +24,7 @@ func NewHistory(limit int) *History {
 }
 
 func (h *History) Observe(connections []protocol.Connection, observedAt time.Time) {
+	h.revision++
 	previous := make(map[string]protocol.Connection, len(h.active))
 	for _, connection := range h.active {
 		previous[connection.ID] = connection
@@ -58,6 +60,7 @@ func (h *History) Active() []protocol.Connection { return cloneConnections(h.act
 func (h *History) Closed() []protocol.Connection { return cloneConnections(h.closed) }
 
 func (h *History) Reset() {
+	h.revision++
 	h.active = nil
 	h.closed = nil
 	h.observedAt = time.Time{}

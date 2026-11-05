@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -18,6 +19,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/geoip"
 	"github.com/mihari-proxy/mihari/internal/mihomo"
+	"github.com/mihari-proxy/mihari/internal/observation"
 	"github.com/mihari-proxy/mihari/internal/onboarding"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/preferences"
@@ -158,13 +160,14 @@ type WebGateway interface {
 }
 
 type Manager struct {
-	recoveryOnly     bool
-	authResetAllowed bool
-	businessReset    BusinessResetStore
-	dataResetPending atomic.Bool
-	listInterfaces   func(context.Context) ([]platform.NetworkInterface, error)
-	routingMessage   string // guarded by mutation ownership
-	trustedCore      *core.TrustedExecution
+	systemObservations systemObservations
+	recoveryOnly       bool
+	authResetAllowed   bool
+	businessReset      BusinessResetStore
+	dataResetPending   atomic.Bool
+	listInterfaces     func(context.Context) ([]platform.NetworkInterface, error)
+	routingMessage     string // guarded by mutation ownership
+	trustedCore        *core.TrustedExecution
 
 	subscriptionRecoveryTimeout time.Duration
 	subscriptionTimeout         time.Duration
@@ -345,6 +348,7 @@ func New(options Options) *Manager {
 }
 
 func (m *Manager) Run(ctx context.Context) error {
+	defer m.closeSystemObservations()
 	defer m.closing.Store(true)
 	defer m.startupSystemProxyApplying.Store(false)
 	defer m.startupTunApplying.Store(false)
@@ -394,6 +398,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			m.closing.Store(true)
+			m.closeSystemObservations()
 		case <-shutdownObserved:
 		}
 	}()
@@ -502,6 +507,7 @@ func (m *Manager) Observe(observation supervisor.Observation) {
 	current := m.store.Load().Core
 	if current.Status != string(observation.Status) || current.PID != observation.PID || current.Restarts != observation.Restarts || !current.StartedAt.Equal(observation.StartedAt) {
 		m.coreEpoch++
+		m.invalidateSystemObservations()
 		m.loggingObservation = loggingObservation{}
 	}
 	m.setCoreStateLocked(state.CoreState{
@@ -843,15 +849,34 @@ func (m *Manager) Install(ctx context.Context, operation Operation) (core.Instal
 // ServiceStatus reports the OS service registration state for onboarding review.
 // Advisory: a nil injector or any error resolves to "unknown" and never fails, so the
 // endpoint stays 200 and onboarding is never blocked (design §5.3, §8).
-func (m *Manager) ServiceStatus(context.Context) (protocol.ServiceStatus, error) {
+func (m *Manager) ServiceStatus(ctx context.Context) (protocol.ServiceStatus, error) {
+	unknown := protocol.ServiceStatus{Schema: "mihari/v1", Status: "unknown"}
 	if m.serviceStatus == nil {
-		return protocol.ServiceStatus{Schema: "mihari/v1", Status: "unknown"}, nil
+		return unknown, nil
 	}
-	status, err := m.serviceStatus()
-	if err != nil || status == "" {
-		return protocol.ServiceStatus{Schema: "mihari/v1", Status: "unknown"}, nil
+	for {
+		key := m.observationKey("")
+		status, err := m.systemObservations.service.Get(ctx, key, time.Duration(key.policy.ObservationReuseSeconds)*time.Second, func(context.Context) (string, error) {
+			value, err := m.serviceStatus()
+			if err == nil && value == "" {
+				err = errors.New("service observation unavailable")
+			}
+			return value, err
+		})
+		if errors.Is(err, observation.ErrInvalidated) && ctx.Err() == nil {
+			continue
+		}
+		if err != nil {
+			return unknown, nil
+		}
+		if key != m.observationKey("") {
+			if ctx.Err() != nil {
+				return unknown, nil
+			}
+			continue
+		}
+		return protocol.ServiceStatus{Schema: "mihari/v1", Status: status}, nil
 	}
-	return protocol.ServiceStatus{Schema: "mihari/v1", Status: status}, nil
 }
 
 func (m *Manager) Restart(ctx context.Context, operation Operation) error {

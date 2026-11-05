@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"sync/atomic"
 
 	"github.com/mihari-proxy/mihari/internal/config"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 )
 
 const (
@@ -22,7 +24,9 @@ const (
 )
 
 var (
-	ErrInvalidColumns = errors.New("invalid connections columns")
+	// ErrInvalidPerformance identifies an out-of-range observation reuse duration.
+	ErrInvalidPerformance = errors.New("observation reuse seconds must be between 0 and 5")
+	ErrInvalidColumns     = errors.New("invalid connections columns")
 	// ErrInvalidLogLevels identifies an empty, unknown, or duplicate display-level selection.
 	ErrInvalidLogLevels = errors.New("invalid log display levels")
 	// ErrInvalidLatencyConcurrency identifies an out-of-range latency test limit.
@@ -36,10 +40,17 @@ var (
 )
 
 type Preferences struct {
+	Performance        PerformancePreferences
 	ConnectionsColumns []string
 	Proxies            ProxyPreferences
 	// LogLevels is the committed set of canonical levels restored by new TUI sessions.
 	LogLevels []string
+}
+
+// PerformancePreferences controls instance-wide display observation policy.
+type PerformancePreferences struct {
+	ControllerOwnerDetection bool `json:"controller_owner_detection"`
+	ObservationReuseSeconds  int  `json:"observation_reuse_seconds"`
 }
 
 // ProxyPreferences controls Proxies presentation and automatic latency tests.
@@ -55,6 +66,7 @@ func DefaultProxyPreferences() ProxyPreferences {
 }
 
 type Update struct {
+	Performance        *PerformancePreferences
 	ConnectionsColumns []string
 	Proxies            *ProxyPreferences
 	// LogLevels replaces the saved set when non-nil; an empty set is invalid.
@@ -62,26 +74,33 @@ type Update struct {
 }
 
 type Service struct {
-	path     string
-	snapshot atomic.Value
+	writeFile  func(string, []byte, os.FileMode) (config.CommitResult, error)
+	removeFile func(string) error
+	syncDir    func(string) error
+	persisted  []byte
+	existed    bool
+	path       string
+	snapshot   atomic.Value
 }
 
 type document struct {
-	Schema             string            `json:"schema"`
-	ConnectionsColumns []string          `json:"connections_columns"`
-	Proxies            *ProxyPreferences `json:"proxies,omitempty"`
-	LogLevels          []string          `json:"log_levels"`
+	Performance        *PerformancePreferences `json:"performance,omitempty"`
+	Schema             string                  `json:"schema"`
+	ConnectionsColumns []string                `json:"connections_columns"`
+	Proxies            *ProxyPreferences       `json:"proxies,omitempty"`
+	LogLevels          []string                `json:"log_levels"`
 }
 
 func Open(path string) (*Service, error) {
-	preferences := Preferences{ConnectionsColumns: append([]string(nil), defaultColumns...), Proxies: DefaultProxyPreferences(), LogLevels: append([]string(nil), defaultLogLevels...)}
+	preferences := Preferences{Performance: DefaultPerformancePreferences(), ConnectionsColumns: append([]string(nil), defaultColumns...), Proxies: DefaultProxyPreferences(), LogLevels: append([]string(nil), defaultLogLevels...)}
 	raw, err := readFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read TUI preferences: %w", err)
 	}
 	if err == nil {
 		defaults := DefaultProxyPreferences()
-		persisted := document{Proxies: &defaults}
+		performanceDefaults := DefaultPerformancePreferences()
+		persisted := document{Proxies: &defaults, Performance: &performanceDefaults}
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
 		if decodeErr := decoder.Decode(&persisted); decodeErr != nil {
@@ -95,6 +114,12 @@ func Open(path string) (*Service, error) {
 		}
 		if validateErr := validateColumns(persisted.ConnectionsColumns); validateErr != nil {
 			return nil, fmt.Errorf("decode TUI preferences: %w", validateErr)
+		}
+		if persisted.Performance != nil {
+			if err := ValidatePerformance(*persisted.Performance); err != nil {
+				return nil, err
+			}
+			preferences.Performance = *persisted.Performance
 		}
 		preferences.ConnectionsColumns = append([]string(nil), persisted.ConnectionsColumns...)
 		if persisted.Proxies != nil {
@@ -110,7 +135,7 @@ func Open(path string) (*Service, error) {
 			preferences.LogLevels = append([]string(nil), persisted.LogLevels...)
 		}
 	}
-	service := &Service{path: path}
+	service := &Service{path: path, writeFile: config.AtomicWriteWithCommit, removeFile: os.Remove, syncDir: syncPreferenceDirectory, persisted: append([]byte(nil), raw...), existed: err == nil}
 	service.snapshot.Store(preferences)
 	return service, nil
 }
@@ -125,12 +150,18 @@ func (s *Service) Update(ctx context.Context, update Update) (Preferences, error
 	}
 	// An omitted field preserves its committed value. An empty update retains
 	// the former invalid-columns error instead of silently writing a no-op.
-	if update.ConnectionsColumns != nil || (update.Proxies == nil && update.LogLevels == nil) {
+	if update.ConnectionsColumns != nil || (update.Proxies == nil && update.LogLevels == nil && update.Performance == nil) {
 		if err := validateColumns(update.ConnectionsColumns); err != nil {
 			return Preferences{}, err
 		}
 	}
 	next := s.Snapshot()
+	if update.Performance != nil {
+		if err := ValidatePerformance(*update.Performance); err != nil {
+			return Preferences{}, err
+		}
+		next.Performance = *update.Performance
+	}
 	if update.ConnectionsColumns != nil {
 		next.ConnectionsColumns = append([]string(nil), update.ConnectionsColumns...)
 	}
@@ -160,14 +191,25 @@ func (s *Service) Update(ctx context.Context, update Update) (Preferences, error
 		}
 		proxyOverrides = &overrides
 	}
-	raw, err := json.MarshalIndent(document{Schema: fileSchema, ConnectionsColumns: next.ConnectionsColumns, Proxies: proxyOverrides, LogLevels: next.LogLevels}, "", "  ")
+	var performanceOverrides *PerformancePreferences
+	if next.Performance != DefaultPerformancePreferences() {
+		v := next.Performance
+		performanceOverrides = &v
+	}
+	raw, err := json.MarshalIndent(document{Performance: performanceOverrides, Schema: fileSchema, ConnectionsColumns: next.ConnectionsColumns, Proxies: proxyOverrides, LogLevels: next.LogLevels}, "", "  ")
 	if err != nil {
 		return Preferences{}, fmt.Errorf("encode TUI preferences: %w", err)
 	}
 	raw = append(raw, '\n')
-	if err := config.AtomicWrite(s.path, raw, 0o600); err != nil {
+	result, err := s.writeFile(s.path, raw, 0o600)
+	if err = errors.Join(err, result.Warning, ctx.Err()); err != nil {
+		if result.Committed {
+			err = errors.Join(err, s.restore())
+		}
 		return Preferences{}, fmt.Errorf("persist TUI preferences: %w", err)
 	}
+	s.persisted = append([]byte(nil), raw...)
+	s.existed = true
 	s.snapshot.Store(next)
 	return clone(next), nil
 }
@@ -240,10 +282,43 @@ func readFile(path string) ([]byte, error) {
 // Reset restores this preferences store to its defaults through the normal persistence path.
 func (s *Service) Reset(ctx context.Context) (Preferences, error) {
 	proxies := DefaultProxyPreferences()
-	return s.Update(ctx, Update{ConnectionsColumns: append([]string{}, defaultColumns...), Proxies: &proxies, LogLevels: append([]string{}, defaultLogLevels...)})
+	performance := DefaultPerformancePreferences()
+	return s.Update(ctx, Update{Performance: &performance, ConnectionsColumns: append([]string{}, defaultColumns...), Proxies: &proxies, LogLevels: append([]string{}, defaultLogLevels...)})
 }
 
 // ResetAfterDataClear publishes defaults after the daemon reset owner removed the preferences file.
 func (s *Service) ResetAfterDataClear() {
-	s.snapshot.Store(Preferences{ConnectionsColumns: append([]string{}, defaultColumns...), Proxies: DefaultProxyPreferences(), LogLevels: append([]string{}, defaultLogLevels...)})
+	s.persisted = nil
+	s.existed = false
+	s.snapshot.Store(Preferences{Performance: DefaultPerformancePreferences(), ConnectionsColumns: append([]string{}, defaultColumns...), Proxies: DefaultProxyPreferences(), LogLevels: append([]string{}, defaultLogLevels...)})
+}
+
+// DefaultPerformancePreferences disables display owner scans and reuses observations for three seconds.
+func DefaultPerformancePreferences() PerformancePreferences {
+	return PerformancePreferences{ObservationReuseSeconds: protocol.DefaultObservationReuseSeconds}
+}
+
+// ValidatePerformance checks the instance observation bounds.
+func ValidatePerformance(value PerformancePreferences) error {
+	if value.ObservationReuseSeconds < 0 || value.ObservationReuseSeconds > protocol.MaxObservationReuseSeconds {
+		return ErrInvalidPerformance
+	}
+	return nil
+}
+
+func (s *Service) restore() error {
+	if s.existed {
+		result, err := s.writeFile(s.path, s.persisted, 0o600)
+		if err = errors.Join(err, result.Warning); err != nil {
+			return fmt.Errorf("restore previous TUI preferences: %w", err)
+		}
+		return nil
+	}
+	if err := s.removeFile(s.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove failed initial TUI preferences: %w", err)
+	}
+	if err := s.syncDir(filepath.Dir(s.path)); err != nil {
+		return fmt.Errorf("sync restored preferences directory: %w", err)
+	}
+	return nil
 }

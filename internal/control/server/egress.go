@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"github.com/mihari-proxy/mihari/internal/observation"
 	"net/http"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -28,6 +29,10 @@ func (s *Server) egressRuntime(ctx context.Context, w http.ResponseWriter) (egre
 }
 
 func (s *Server) egressStatus(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("fresh") == "1" {
+		r = r.WithContext(observation.WithFresh(r.Context()))
+	}
+
 	runtime, ok := s.egressRuntime(r.Context(), w)
 	if !ok {
 		return

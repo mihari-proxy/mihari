@@ -22,6 +22,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/elevate"
 	"github.com/mihari-proxy/mihari/internal/logging"
+	"github.com/mihari-proxy/mihari/internal/observation"
 	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/service"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
@@ -149,9 +150,10 @@ func (m mihariChannelResultMsg) Err() error { return m.err }
 var _ interface{ Err() error } = mihariChannelResultMsg{}
 
 type serviceStatusMsg struct {
-	status   service.StatusKind
-	elevated bool
-	err      error
+	generation uint64
+	status     service.StatusKind
+	elevated   bool
+	err        error
 }
 
 type serviceResultMsg struct {
@@ -763,20 +765,24 @@ func (m *Model) SetMutationsEnabled(enabled bool) {
 
 // Load refreshes local status and checks Mihari and core versions when available.
 func (m *Model) Load() tea.Cmd {
-	return m.load(true)
+	return m.load(true, true)
 }
 
 // LoadStatus refreshes System data without starting Mihari or core version checks.
 // Entering the page uses it so a check started by selecting the page keeps running.
 func (m *Model) LoadStatus() tea.Cmd {
-	return m.load(false)
+	return m.load(false, false)
 }
 
 func (m *Model) refresh() tea.Cmd {
-	return m.LoadStatus()
+	return m.load(false, true)
 }
 
-func (m *Model) load(checkVersions bool) tea.Cmd {
+func (m *Model) load(checkVersions, fresh bool) tea.Cmd {
+	ctx := m.ctx
+	if fresh {
+		ctx = observation.WithFresh(ctx)
+	}
 	var cmds []tea.Cmd
 	if checkVersions {
 		cmds = append(cmds, m.checkCoreVersion())
@@ -791,16 +797,16 @@ func (m *Model) load(checkVersions bool) tea.Cmd {
 		})
 	}
 	if m.service != nil {
-		cmds = append(cmds, m.loadServiceStatus())
+		cmds = append(cmds, m.loadServiceStatus(ctx))
 	}
 	if m.client != nil && m.hasCapability(protocol.CapabilitySystemProxy) {
-		cmds = append(cmds, m.loadSystemProxy())
+		cmds = append(cmds, m.loadSystemProxy(ctx))
 	}
 	if m.client != nil && m.hasCapability(protocol.CapabilityTUN) {
-		cmds = append(cmds, m.loadTun())
+		cmds = append(cmds, m.loadTun(ctx))
 	}
 	if m.client != nil && m.hasCapability(protocol.CapabilityEgress) {
-		cmds = append(cmds, m.loadEgress())
+		cmds = append(cmds, m.loadEgress(ctx))
 	}
 	if m.client != nil && m.hasCapability(protocol.CapabilityWebGUI) {
 		cmds = append(cmds, m.loadWebGUI())
@@ -862,23 +868,47 @@ func (m *Model) invalidateMihariCheck() {
 	m.selfCheckLoaded = false
 }
 
-func (m *Model) loadServiceStatus() tea.Cmd {
+func (m *Model) loadServiceStatus(contexts ...context.Context) tea.Cmd {
+	ctx := m.ctx
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
+	generation := uint64(0)
+	if c, ok := m.service.(interface{ ObservationGeneration() uint64 }); ok {
+		generation = c.ObservationGeneration()
+	}
 	return func() tea.Msg {
-		status, err := m.service.Status()
-		return serviceStatusMsg{status: status, elevated: elevate.IsElevated(), err: err}
+		var status service.StatusKind
+		var err error
+		if backend, ok := m.service.(interface {
+			StatusContext(context.Context) (service.StatusKind, error)
+		}); ok {
+			status, err = backend.StatusContext(ctx)
+		} else {
+			status, err = m.service.Status()
+		}
+		return serviceStatusMsg{status: status, elevated: elevate.IsElevated(), err: err, generation: generation}
 	}
 }
 
-func (m *Model) loadSystemProxy() tea.Cmd {
+func (m *Model) loadSystemProxy(contexts ...context.Context) tea.Cmd {
+	ctx := m.ctx
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
 	return func() tea.Msg {
-		status, err := m.client.SystemProxy(m.ctx)
+		status, err := m.client.SystemProxy(ctx)
 		return systemProxyStatusMsg{status: status, err: err}
 	}
 }
 
-func (m *Model) loadTun() tea.Cmd {
+func (m *Model) loadTun(contexts ...context.Context) tea.Cmd {
+	ctx := m.ctx
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
 	return func() tea.Msg {
-		status, err := m.client.Tun(m.ctx)
+		status, err := m.client.Tun(ctx)
 		return tunStatusMsg{status: status, err: err}
 	}
 }
@@ -1111,6 +1141,9 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case serviceStatusMsg:
+		if c, ok := m.service.(interface{ ObservationGeneration() uint64 }); ok && typed.generation != 0 && typed.generation != c.ObservationGeneration() {
+			return m, nil
+		}
 		m.serviceLoaded = true
 		m.elevated = typed.elevated
 		if typed.err != nil {

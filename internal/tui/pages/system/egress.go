@@ -76,12 +76,15 @@ func (m *Model) SetEgress(status protocol.EgressStatus) {
 	}
 }
 
-func (m *Model) loadEgress() tea.Cmd {
+func (m *Model) loadEgress(contexts ...context.Context) tea.Cmd {
 	client, ok := m.client.(egressClient)
 	if !ok {
 		return nil
 	}
 	epoch, ctx := m.egress.epoch, m.ctx
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()

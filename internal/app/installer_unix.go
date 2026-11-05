@@ -409,8 +409,13 @@ func (i *UnixInstaller) RunService(ctx context.Context, operation string) (err e
 
 // Status uses a bounded read-only service query for legacy controller consumers.
 func (i *UnixInstaller) Status() (status service.StatusKind, err error) {
+	return i.StatusContext(context.Background())
+}
+
+// StatusContext inspects the service with the caller's lifetime.
+func (i *UnixInstaller) StatusContext(parent context.Context) (status service.StatusKind, err error) {
 	defer func() { err = ClassifyUnixLocalError(err) }()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	def, err := i.adapter(nil).InspectDefinition(ctx)
 	return def.Status, err

@@ -16,6 +16,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/core"
+	"github.com/mihari-proxy/mihari/internal/preferences"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/subscription"
 	"github.com/mihari-proxy/mihari/internal/tundetect"
@@ -1205,12 +1206,16 @@ func newTunManagerWithDetect(t *testing.T, controller *fakeController, settings 
 	if err := config.Save(settingsPath, settings); err != nil {
 		t.Fatal(err)
 	}
-	return newTestManager(Options{
+
+	m := newTestManager(Options{
 		Controller:   controller,
 		SettingsPath: settingsPath,
 		Settings:     settings,
 		TunDetect:    detect,
 	})
+	// Legacy TUN scenarios require owner detection and no completed reuse.
+	setObservationPolicy(t, m, preferences.PerformancePreferences{ControllerOwnerDetection: true})
+	return m
 }
 
 func assertPersistedTun(t *testing.T, path string, wantEnable bool, wantStack string) {
@@ -1417,6 +1422,7 @@ func TestTunStatusSubtractsSelfWhenCorePIDZeroButOccupantMatches(t *testing.T) {
 		},
 	})
 
+	setObservationPolicy(t, manager, preferences.PerformancePreferences{ControllerOwnerDetection: true})
 	status, err := manager.TunStatus(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -1488,6 +1494,7 @@ func TestTunStatusStaleCorePIDUsesOccupant(t *testing.T) {
 	})
 	manager.store.Store(state.Snapshot{Health: "ok", Core: state.CoreState{PID: 11111}})
 
+	setObservationPolicy(t, manager, preferences.PerformancePreferences{ControllerOwnerDetection: true})
 	status, err := manager.TunStatus(context.Background())
 	if err != nil {
 		t.Fatal(err)

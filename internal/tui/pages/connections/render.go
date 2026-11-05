@@ -12,7 +12,7 @@ import (
 // View renders the connection list or its active detail/column overlay.
 func (m *Model) View() string {
 	controlFocused := m.contentFocused && m.focus.kind == focusControl
-	activeN, closedN := len(m.history.Active()), len(m.history.Closed())
+	activeN, closedN := len(m.history.active), len(m.history.closed)
 	control := ui.RenderControlStrip(m.theme, []string{
 		fmt.Sprintf("[%s %d | %s %d]", ui.ConnectionsActiveLabel, activeN, ui.ConnectionsClosedLabel, closedN),
 		fmt.Sprintf("[%s: %s]", ui.SourceIPLabel, m.source),

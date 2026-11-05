@@ -14,11 +14,11 @@ func detect(ctx context.Context) (Detection, error) {
 	if err := ctx.Err(); err != nil {
 		return Detection{}, err
 	}
-	tun, err := enumerateLinuxTun()
+	tun, err := enumerateLinuxTun(ctx)
 	if err != nil {
 		return Detection{}, err
 	}
-	mihomo, err := enumerateLinuxMihomo()
+	mihomo, err := enumerateLinuxMihomo(ctx)
 	if err != nil {
 		return Detection{}, err
 	}
@@ -27,13 +27,16 @@ func detect(ctx context.Context) (Detection, error) {
 
 // enumerateLinuxTun lists net devices that expose tun_flags, i.e. adapters
 // created by the kernel tun/tap driver which mihomo uses on Linux.
-func enumerateLinuxTun() ([]string, error) {
+func enumerateLinuxTun(ctx context.Context) ([]string, error) {
 	entries, err := os.ReadDir("/sys/class/net")
 	if err != nil {
 		return nil, err
 	}
 	var tun []string
 	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if !e.IsDir() {
 			continue
 		}
@@ -45,13 +48,16 @@ func enumerateLinuxTun() ([]string, error) {
 }
 
 // enumerateLinuxMihomo lists processes whose comm reads as mihomo.
-func enumerateLinuxMihomo() ([]Process, error) {
+func enumerateLinuxMihomo(ctx context.Context) ([]Process, error) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return nil, err
 	}
 	var procs []Process
 	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if !e.IsDir() || !isAllDigits(e.Name()) {
 			continue
 		}

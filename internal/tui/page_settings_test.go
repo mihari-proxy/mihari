@@ -138,7 +138,7 @@ type settingsTestClient struct {
 func (c *settingsTestClient) UpdateTUIPreferences(_ context.Context, req protocol.UpdateTUIPreferencesRequest) (protocol.TUIPreferences, error) {
 	c.calls++
 	c.request = req
-	return protocol.TUIPreferences{Revision: 8, Proxies: req.Proxies, WarningOutcome: c.warnings}, c.err
+	return protocol.TUIPreferences{Revision: 8, Proxies: req.Proxies, Performance: req.Performance, WarningOutcome: c.warnings}, c.err
 }
 
 func TestPageSettings_FullSaveFailureReachesF2(t *testing.T) {

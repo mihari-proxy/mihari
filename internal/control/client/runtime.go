@@ -17,6 +17,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/logging"
+	"github.com/mihari-proxy/mihari/internal/observation"
 )
 
 const (
@@ -189,7 +190,7 @@ func (c *Client) UpdateLogging(ctx context.Context, request protocol.LoggingUpda
 // SystemProxy returns desired intent and live OS system-proxy observation.
 func (c *Client) SystemProxy(ctx context.Context) (protocol.SystemProxyStatus, error) {
 	var result protocol.SystemProxyStatus
-	err := c.doRuntime(ctx, http.MethodGet, "/v1/system-proxy", nil, &result)
+	err := c.doRuntime(ctx, http.MethodGet, observationPath(ctx, "/v1/system-proxy"), nil, &result)
 	return result, err
 }
 
@@ -210,7 +211,7 @@ func (c *Client) DisableSystemProxy(ctx context.Context, request protocol.System
 // Tun returns desired managed TUN intent and live mihomo observation when available.
 func (c *Client) Tun(ctx context.Context) (protocol.TunStatus, error) {
 	var result protocol.TunStatus
-	err := c.doRuntime(ctx, http.MethodGet, "/v1/tun", nil, &result)
+	err := c.doRuntime(ctx, http.MethodGet, observationPath(ctx, "/v1/tun"), nil, &result)
 	return result, err
 }
 
@@ -659,4 +660,11 @@ func (c *Client) localRuntimeOutcome(cause error) runtimeOutcome {
 		return runtimeOutcome{err: diagnostics.Wrap(api, cause)}
 	}
 	return runtimeOutcome{err: public}
+}
+
+func observationPath(ctx context.Context, path string) string {
+	if observation.Fresh(ctx) {
+		return path + "?fresh=1"
+	}
+	return path
 }
