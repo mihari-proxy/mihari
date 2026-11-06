@@ -163,6 +163,9 @@ func (m *Model) SetGroups(groups protocol.ProxyGroups) {
 		(m.groupsRevision != nil && groups.Revision != nil && *m.groupsRevision != *groups.Revision)
 	m.loadError = ""
 	m.groupsFresh = true
+	if m.lastError == "Candidates unavailable; wait for a successful refresh" {
+		m.lastError = ""
+	}
 	if metadataChanged {
 		m.groupsRevision = nil
 		if groups.Revision != nil {

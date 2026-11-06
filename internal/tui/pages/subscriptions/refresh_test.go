@@ -45,3 +45,15 @@ func TestSharedRefresh_DeleteGateRunsBeforeCommand(t *testing.T) {
 		t.Fatal("successful refresh retained stale gate warning")
 	}
 }
+
+func TestSharedRefresh_BulkRefreshGateDoesNotOpenConfirmation(t *testing.T) {
+	m := New(&fakeClient{}, func() string { return "op" }, time.Now)
+	defer m.Stop()
+	m.SetSnapshotRefresh(func(bool) tea.Cmd { return nil })
+	m.SetSubscriptions(protocol.SubscriptionList{Subscriptions: []protocol.Subscription{{ID: "fixture"}}})
+	m.SetSnapshotState("subscriptions", ui.SnapshotState{Loaded: true, Pending: true})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatal("blocked refresh opened empty execution confirmation")
+	}
+}

@@ -35,3 +35,19 @@ func TestSharedRefresh_SelectionResultKeepsItsPage(t *testing.T) {
 		t.Fatal("off-page selection completion lost its owner")
 	}
 }
+
+func TestSharedRefresh_FreshGroupsClearOnlyGateWarning(t *testing.T) {
+	m := New(&fakeClient{}, nil)
+	m.SetSnapshotRefresh(func(bool) tea.Cmd { return nil })
+	m.InvalidateGroups()
+	m.testAll()
+	m.SetGroups(protocol.ProxyGroups{})
+	if m.lastError != "" {
+		t.Fatal("fresh groups kept stale gate warning")
+	}
+	m.lastError = "fixture operation failure"
+	m.SetGroups(protocol.ProxyGroups{})
+	if m.lastError == "" {
+		t.Fatal("snapshot erased unrelated operation failure")
+	}
+}

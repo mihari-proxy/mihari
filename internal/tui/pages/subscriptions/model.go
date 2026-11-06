@@ -544,6 +544,9 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		if len(m.subscriptions) > 0 {
 			baseID := m.newOperationID()
 			execute := m.refreshAllWithID(baseID)
+			if execute == nil {
+				return m, nil
+			}
 			return m, func() tea.Msg {
 				return ui.ActionIntentMsg{
 					Action: ui.ActionRefreshAllSubscriptions, Page: ui.PageSubscriptions, Capability: protocol.CapabilitySubscriptions, Key: "subscriptions:refresh-all",
