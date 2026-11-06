@@ -568,11 +568,15 @@ func (m *Model) Update(message tea.Msg) (ui.Page, tea.Cmd) {
 		if index >= 0 {
 			subscription := m.subscriptions[index]
 			operationID, revision := m.newOperationID(), m.revision
+			execute := m.remove(subscription.ID, operationID, revision)
+			if execute == nil {
+				return m, nil
+			}
 			return m, func() tea.Msg {
 				return ui.ActionIntentMsg{
 					Action: ui.ActionDeleteSubscription, Page: ui.PageSubscriptions, Capability: protocol.CapabilitySubscriptions, Key: "subscription:delete:" + subscription.ID,
 					Title: ui.RemoveSubscriptionTitle, Object: subscription.Name, Impact: ui.RemoveSubscriptionImpact, Rollback: ui.RemoveSubscriptionRollback,
-					Execute: m.remove(subscription.ID, operationID, revision),
+					Execute: execute,
 				}
 			}
 		}
@@ -1125,6 +1129,9 @@ func (m *Model) SetSnapshotState(resource string, state ui.SnapshotState) {
 		m.snapshotStates = make(map[string]ui.SnapshotState)
 	}
 	m.snapshotStates[resource] = state
+	if resource == "subscriptions" && state.Loaded && !state.Pending && state.Failure == "" && m.lastError == "Subscriptions are refreshing; wait for a successful snapshot" {
+		m.lastError = ""
+	}
 }
 
 // SetSnapshotRefresh uses the root's shared resource owner for ordinary reads.

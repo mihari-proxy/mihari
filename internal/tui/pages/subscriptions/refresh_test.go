@@ -28,3 +28,20 @@ func TestSharedRefresh_OldSubscriptionCannotStartCandidateWrites(t *testing.T) {
 		t.Fatal("fresh subscription remained disabled")
 	}
 }
+
+func TestSharedRefresh_DeleteGateRunsBeforeCommand(t *testing.T) {
+	m := New(&fakeClient{}, func() string { return "op" }, time.Now)
+	defer m.Stop()
+	m.SetSnapshotRefresh(func(bool) tea.Cmd { return nil })
+	m.SetSubscriptions(protocol.SubscriptionList{Subscriptions: []protocol.Subscription{{ID: "fixture", Name: "fixture"}}})
+	m.focus = pageFocus{kind: focusRow, id: "fixture"}
+	m.SetSnapshotState("subscriptions", ui.SnapshotState{Loaded: true, Pending: true})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	if cmd != nil || m.lastError == "" {
+		t.Fatal("delete gate deferred to command goroutine")
+	}
+	m.SetSnapshotState("subscriptions", ui.SnapshotState{Loaded: true})
+	if m.lastError != "" {
+		t.Fatal("successful refresh retained stale gate warning")
+	}
+}

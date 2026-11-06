@@ -74,7 +74,7 @@ func RenderStatusBar(theme Theme, data StatusBarData, width int, compact bool) s
 		segments = append(segments,
 			PrioritySegment{Priority: 5, Render: func() string { return ObservedMetric(fmt.Sprintf("%dc", data.Connections), data.ConnectionsUnknown) }},
 			PrioritySegment{Priority: 5, Render: func() string {
-				return fmt.Sprintf("↑%s/s ↓%s/s", ObservedMetric(statusRateLabel(data.UploadRate, true), data.TrafficUnknown), ObservedMetric(statusRateLabel(data.DownloadRate, true), data.TrafficUnknown))
+				return fmt.Sprintf("↑%s/s ↓%s/s", observedStatusRate(data.UploadRate, true, data.TrafficUnknown), observedStatusRate(data.DownloadRate, true, data.TrafficUnknown))
 			}},
 			PrioritySegment{Priority: 2, Render: func() string { return ObservedMetric(formatCompactIEC(data.MemoryInUse), data.MemoryUnknown) }},
 		)
@@ -84,7 +84,7 @@ func RenderStatusBar(theme Theme, data StatusBarData, width int, compact bool) s
 				return ObservedMetric(fmt.Sprintf("%d conn", data.Connections), data.ConnectionsUnknown)
 			}},
 			PrioritySegment{Priority: 5, Render: func() string {
-				return fmt.Sprintf("↑%s  ↓%s", ObservedMetric(statusRateLabel(data.UploadRate, false), data.TrafficUnknown), ObservedMetric(statusRateLabel(data.DownloadRate, false), data.TrafficUnknown))
+				return fmt.Sprintf("↑%s  ↓%s", observedStatusRate(data.UploadRate, false, data.TrafficUnknown), observedStatusRate(data.DownloadRate, false, data.TrafficUnknown))
 			}},
 			PrioritySegment{Priority: 2, Render: func() string { return ObservedMetric(FormatBytes(data.MemoryInUse), data.MemoryUnknown) }},
 		)
@@ -203,4 +203,15 @@ func formatCompactIEC(value int64) string {
 		return fmt.Sprintf("%.0f%s", amount, units[unit])
 	}
 	return fmt.Sprintf("%.1f%s", amount, units[unit])
+}
+
+func observedStatusRate(value int64, compact, unknown bool) string {
+	if !unknown {
+		return statusRateLabel(value, compact)
+	}
+	width := statusRateWidth
+	if compact {
+		width = statusCompactRateWidth
+	}
+	return PadCell("—", width, AlignRight)
 }

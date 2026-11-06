@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -254,7 +255,8 @@ func TestSession_LoadsDemandedSnapshotsAfterConnected(t *testing.T) {
 		protocol.CapabilityCore, protocol.CapabilitySubscriptions, protocol.CapabilityProxies,
 		protocol.CapabilityRules, protocol.CapabilityRuleProviders,
 	}}
-	session := New(fake, Options{Backoff: func(int) time.Duration { return 0 }})
+	client := &countInactiveClient{fakeClient: fake}
+	session := New(client, Options{Backoff: func(int) time.Duration { return 0 }, PollInterval: 10 * time.Millisecond})
 	events := session.Start(context.Background())
 	defer session.Close()
 	waitForEvent(t, events, EventConnected)
@@ -263,7 +265,10 @@ func TestSession_LoadsDemandedSnapshotsAfterConnected(t *testing.T) {
 	defer timer.Stop()
 	for !seen[EventCore] || !seen[EventSubscriptions] {
 		select {
-		case event := <-events:
+		case event, open := <-events:
+			if !open {
+				t.Fatal("session closed before demanded snapshots")
+			}
 			if event.Kind == EventProxies || event.Kind == EventRules || event.Kind == EventRuleProviders {
 				t.Fatal("inactive resource fetched")
 			}
@@ -271,6 +276,10 @@ func TestSession_LoadsDemandedSnapshotsAfterConnected(t *testing.T) {
 		case <-timer.C:
 			t.Fatal("visible resource snapshots missing")
 		}
+	}
+	waitForStatusCallAfter(t, fake, fake.statusCallCount())
+	if client.calls.Load() != 0 {
+		t.Fatal("inactive endpoint fetched before or after Connected")
 	}
 }
 
@@ -763,4 +772,22 @@ func (f *fakeClient) failNextCore() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.coreFailures++
+}
+
+type countInactiveClient struct {
+	*fakeClient
+	calls atomic.Int32
+}
+
+func (c *countInactiveClient) ProxyGroups(ctx context.Context) (protocol.ProxyGroups, error) {
+	c.calls.Add(1)
+	return c.fakeClient.ProxyGroups(ctx)
+}
+func (c *countInactiveClient) Rules(ctx context.Context) (protocol.RuleList, error) {
+	c.calls.Add(1)
+	return c.fakeClient.Rules(ctx)
+}
+func (c *countInactiveClient) RuleProviders(ctx context.Context) (protocol.RuleProviderList, error) {
+	c.calls.Add(1)
+	return c.fakeClient.RuleProviders(ctx)
 }

@@ -92,6 +92,10 @@ func (s *Session) schedule(ctx context.Context) {
 			wanted := owner.online && !owner.status.StartupNetwork.Applying() && interval > 0 && supported
 			if resource.flight != nil {
 				if !wanted || resource.flight.generation != version {
+					if !wanted && resource.flight.generation == version {
+						r.versions[kind]++
+						r.dirty[kind], r.fresh[kind] = true, true
+					}
 					resource.flight.cancel()
 				}
 				// Ordinary ticks and refreshes join the existing execution.

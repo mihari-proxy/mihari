@@ -313,3 +313,27 @@ func TestSchedule_QueuedLoadingStateIsRetiredWithItsRequest(t *testing.T) {
 		t.Fatal("queued loading marker survived its retired request")
 	}
 }
+
+func TestSchedule_StartupSuspensionDiscardsCanceledRead(t *testing.T) {
+	client := &gatedRulesClient{fakeClient: newFakeClient(), entered: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{})}
+	s, _, _ := scheduleFixture(t, client, time.Second)
+	defer func() {
+		select {
+		case <-client.release:
+		default:
+			close(client.release)
+		}
+	}()
+	<-client.entered
+	s.owners <- snapshotOwner{online: true, epoch: 1, status: protocol.Status{PID: 1, Capabilities: []string{protocol.CapabilityRules, protocol.CapabilitySubscriptions}, StartupNetwork: &protocol.StartupNetworkStatus{TunApplying: true}}}
+	select {
+	case <-client.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("suspended resource not canceled")
+	}
+	close(client.release)
+	event := scheduledEvent(t, s, EventRules, false)
+	if s.Valid(event) {
+		t.Fatal("startup suspension published canceled payload as success")
+	}
+}

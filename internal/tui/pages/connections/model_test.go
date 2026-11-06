@@ -504,7 +504,11 @@ func TestRetireSession_KeepsClosedHistoryAndRetiresOldActiveIDs(t *testing.T) {
 	first := time.Unix(100, 0)
 	m.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{ID: "older"}}}, first)
 	m.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{ID: "active"}}}, first.Add(time.Second))
+	m.focus = pageFocus{kind: focusRow}
 	m.RetireSession()
+	if m.focus.kind != focusControl {
+		t.Fatal("retirement retained row focus")
+	}
 	if len(m.history.Closed()) != 2 || len(m.history.Active()) != 0 {
 		t.Fatal("owner replacement lost history or retained live old IDs")
 	}

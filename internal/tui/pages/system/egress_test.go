@@ -477,6 +477,9 @@ func TestEgressSharedRefresh_StaleCandidateCannotApply(t *testing.T) {
 	if m.applyEgress() != nil || m.egress.pending || client.calls != 0 {
 		t.Fatal("stale candidate started an outbound mutation")
 	}
+	if m.egress.result != "failed" {
+		t.Fatal("blocked candidate reason hidden")
+	}
 	m.SetSnapshotState("egress", ui.SnapshotState{Loaded: true})
 	if m.applyEgress() == nil {
 		t.Fatal("fresh candidate remained disabled")

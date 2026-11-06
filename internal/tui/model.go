@@ -587,6 +587,10 @@ func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.suppressSharedSync = false
 			model.syncSystem()
 			model.syncOverview()
+			if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
+				commands = append(commands, page.SyncStartupNetwork())
+			}
+			commands = append(commands, model.syncSystemPorts(), model.spinnerCmdIfNeeded())
 			command = tea.Batch(commands...)
 		} else {
 			command = model.applySessionEvent(typed.Event)
@@ -654,7 +658,7 @@ func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model, nil
 	case ui.ActionIntentMsg:
 		if !model.snapshotActionReady(typed) {
-			return model, nil
+			return model, typed.Cancel
 		}
 		return model.handleActionIntent(typed)
 	case ui.CompleteUninstallConfirmedMsg:
@@ -1647,9 +1651,15 @@ func (model Model) statusBarData() ui.StatusBarData {
 	if model.snapshotStates != nil {
 		if state := model.snapshotStates[session.EventCore]; !state.Loaded {
 			data.CorePlaceholder = "Core: " + state.Placeholder("")
+			if state.Failure != "" {
+				data.CorePlaceholder = "Core: Unavailable"
+			}
 		}
 		if state := model.snapshotStates[session.EventSubscriptions]; !state.Loaded {
 			data.Subscription = "Subscription: " + state.Placeholder("")
+			if state.Failure != "" {
+				data.Subscription = "Subscription: Unavailable"
+			}
 			data.SubscriptionCompact = data.Subscription
 		}
 		data.ConnectionsUnknown = !model.streamSeen[session.EventConnections]

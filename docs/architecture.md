@@ -30,7 +30,13 @@ F4 Performance 属于实例偏好，沿用 preferences/tui.json 与 /v1/preferen
 
 偏好保存用例以文件替换和目录同步全部完成为成功；后续同步失败要撤回文件修改并保留旧内存/revision及页面草稿，撤回的 IO 失败保留真实诊断，不虚报恢复成功。这个用例边界不改变下述 Settings 已提交 warning 规则。参见 [观测设计](superpowers/specs/2026-11-05-shared-system-observation-design.md)、[性能偏好 ADR](adr/0011-instance-performance-preferences.md)、[偏好保存 ADR](adr/0012-preference-save-sync-boundary.md)。
 
-## TUI 页面刷新需求\n\nTUI 的 Session 持有按资源隔离的普通快照 worker，页面导航与 F4 可见性发布需求，全局消费者持续保留。失去所有消费者时取消只读查询，业务操作和流式生产者保持各自生命周期。每资源最多一个在途请求，普通刷新可共享在途结果，mutation 和运行身份变化提升资源代次，禁止陈旧数据覆盖新状态；附带诊断读取纳入五秒快照预算。Session 退出取消并 join 全部新增 worker，然后再关闭日志。\n\n健康检查成功即可进入已连接状态，各资源分别呈现首轮加载、成功空或失败；旧快照只可显示，依赖候选的操作等待新鲜结果。已就绪的事件按原顺序成组应用，只合并共享视图同步；业务内容相同可跳过重建，但有效性、操作元数据和新诊断不被省略。日志、连接历史、诊断和操作结果保留顺序；不引入快照覆盖中间事件的规则。不以 Mihari 全局 revision 代替对 core 外部变化的观察。完整决策见 [页面需求刷新设计](superpowers/specs/2026-11-05-page-demand-refresh-design.md)。\n\n## Settings 提交与降级
+## TUI 页面刷新需求
+
+TUI 的 Session 持有按资源隔离的普通快照 worker，页面导航与 F4 可见性发布需求，全局消费者持续保留。失去所有消费者时取消只读查询，业务操作和流式生产者保持各自生命周期。每资源最多一个在途请求，普通刷新可共享在途结果，mutation 和运行身份变化提升资源代次，禁止陈旧数据覆盖新状态；附带诊断读取纳入五秒快照预算。Session 退出取消并 join 全部新增 worker，然后再关闭日志。
+
+健康检查成功即可进入已连接状态，各资源分别呈现首轮加载、成功空或失败；旧快照只可显示，依赖候选的操作等待新鲜结果。已就绪的事件按原顺序成组应用，只合并共享视图同步；业务内容相同可跳过重建，但有效性、操作元数据和新诊断不被省略。日志、连接历史、诊断和操作结果保留顺序；不引入快照覆盖中间事件的规则。不以 Mihari 全局 revision 代替对 core 外部变化的观察。完整决策见 [页面需求刷新设计](superpowers/specs/2026-11-05-page-demand-refresh-design.md)。
+
+## Settings 提交与降级
 
 - Settings 的单文件 replace 是提交点：replace 前失败时磁盘仍为旧文件；replace 成功后的目录 sync 失败仅作为已提交后的 durability warning，上报诊断但不回滚、不把已生效的 mutation 报为失败。
 - onboarding、系统代理或 TUN 等需要补偿的 mutation，若补偿写在提交点前失败，daemon 会按已经提交的磁盘状态收敛内存、推进 revision，并将 health 标为 `degraded`。只读请求仍可用；后续 mutation 返回 `invalid_state`，必须重启后重新加载并重试。

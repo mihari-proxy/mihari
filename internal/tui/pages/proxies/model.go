@@ -584,7 +584,7 @@ func (m *Model) columnsFor(textW int) int {
 
 func (m *Model) selectFocused() tea.Cmd {
 	if m.sharedRefresh != nil && !m.groupsFresh {
-		m.lastError = "Candidates are refreshing; wait for a successful snapshot"
+		m.lastError = "Candidates unavailable; wait for a successful refresh"
 		return nil
 	}
 
@@ -729,7 +729,7 @@ func (m *Model) enqueueFront(name string) {
 
 func (m *Model) testAll() tea.Cmd {
 	if m.sharedRefresh != nil && !m.groupsFresh {
-		m.lastError = "Candidates are refreshing; wait for a successful snapshot"
+		m.lastError = "Candidates unavailable; wait for a successful refresh"
 		return nil
 	}
 
@@ -743,7 +743,7 @@ func (m *Model) testAll() tea.Cmd {
 
 func (m *Model) testNode(node string) tea.Cmd {
 	if m.sharedRefresh != nil && !m.groupsFresh {
-		m.lastError = "Candidates are refreshing; wait for a successful snapshot"
+		m.lastError = "Candidates unavailable; wait for a successful refresh"
 		return nil
 	}
 
@@ -865,7 +865,7 @@ func (m *Model) SetSnapshotState(resource string, state ui.SnapshotState) {
 	m.snapshotStates[resource] = state
 }
 
-// SetSnapshotRefresh uses the root's shared resource owner for ordinary reads.
+// SetSnapshotRefresh attaches shared-observation mode; the root schedules proxy reads.
 func (m *Model) SetSnapshotRefresh(refresh func(bool) tea.Cmd) { m.sharedRefresh = refresh }
 
 func (m *Model) snapshotPlaceholder(resource, empty string) string {

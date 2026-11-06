@@ -1635,7 +1635,7 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 			case m.outcomeOK:
 				value = ui.RenderStatusChip(m.theme, ui.StatusChipDone, ui.DoneLabel)
 				if item.id == rowMixed || item.id == rowController || item.id == rowWeb {
-					value = item.value + "  " + value
+					value = m.snapshotRowValue(item.id, item.value) + "  " + value
 				}
 			default:
 				value = ui.RenderStatusChip(m.theme, ui.StatusChipFailed, ui.FailedLabel)
@@ -1651,7 +1651,7 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 			}
 		}
 		if isLoggingRow(item.id) && m.editID != item.id && ((m.pending && m.pendingRow == item.id && m.pendingNote != "") || m.outcomeRow == item.id) {
-			value = item.value + "  " + value
+			value = m.snapshotRowValue(item.id, item.value) + "  " + value
 		}
 		if value != "" {
 			value = "  " + value

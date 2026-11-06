@@ -9,10 +9,10 @@ type SnapshotState struct {
 
 // Placeholder uses an empty-state label only after a successful observation.
 func (s SnapshotState) Placeholder(empty string) string {
+	if s.Failure != "" {
+		return "Unavailable: " + s.Failure
+	}
 	if !s.Loaded {
-		if s.Failure != "" {
-			return "Unavailable: " + s.Failure
-		}
 		return "⠋ Loading…"
 	}
 	return empty
@@ -24,7 +24,7 @@ type RefreshSnapshotsMsg struct {
 	AfterMutation bool
 }
 
-// ObservedLabel avoids displaying an unobserved measurement as zero.
+// ObservedMetric avoids displaying an unobserved measurement as zero.
 func ObservedMetric(value string, unknown bool) string {
 	if unknown {
 		return "—"

@@ -680,4 +680,5 @@ func (m *Model) RetireSession() {
 	m.projection = rowProjection{}
 	m.pending = nil
 	m.detail = nil
+	m.focus = pageFocus{kind: focusControl}
 }

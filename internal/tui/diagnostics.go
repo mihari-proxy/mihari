@@ -551,7 +551,7 @@ func (model Model) diagnosticResourceSummary() string {
 	}
 	// Deterministic ordering avoids a changing footer when several independent
 	// resources fail in one poll. All occurrences remain in the F2 list.
-	for _, kind := range []session.EventKind{session.EventCore, session.EventSubscriptions, session.EventProxies, session.EventRouting, session.EventRules, session.EventRuleProviders, session.EventPreferences, session.EventWebGUI, session.EventLogging} {
+	for _, kind := range []session.EventKind{session.EventCore, session.EventSubscriptions, session.EventProxies, session.EventRouting, session.EventRules, session.EventRuleProviders, session.EventPreferences, session.EventWebGUI, session.EventLogging, session.EventSystemProxy, session.EventTUN, session.EventEgress, session.EventOnboarding} {
 		if summary := model.diagnosticWindow.resourceFailures[kind]; summary != "" && diagnosticEventPage(kind) == model.active {
 			return summary
 		}

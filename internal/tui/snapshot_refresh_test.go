@@ -1,6 +1,7 @@
 package tui
 
 import (
+	tea "charm.land/bubbletea/v2"
 	"errors"
 	"strings"
 	"testing"
@@ -126,5 +127,40 @@ func TestSnapshotReset_FailedAttemptRetainsDisplayButRetiresCandidates(t *testin
 	m.refreshAfterResult(ui.PageSystem, resetSnapshotFixture{})
 	if len(m.snapshotValues[session.EventProxies].Proxies.Groups) != 0 {
 		t.Fatal("successful reset retained old runtime display")
+	}
+}
+
+func TestSnapshotActionRejected_PreservesCancellation(t *testing.T) {
+	m := NewModel()
+	m.setRefreshSession(session.New(nil, session.Options{}))
+	called := false
+	_, cmd := m.Update(ui.ActionIntentMsg{Capability: protocol.CapabilitySubscriptions, Cancel: func() tea.Msg { called = true; return nil }})
+	if cmd == nil {
+		t.Fatal("rejection dropped cleanup")
+	}
+	cmd()
+	if !called {
+		t.Fatal("cleanup did not run")
+	}
+}
+func TestSnapshotStatusBar_UsesBoundedFailureLabel(t *testing.T) {
+	m := NewModel()
+	m.width = 140
+	m.height = 40
+	m.setRefreshSession(session.New(nil, session.Options{}))
+	m.setSnapshotState(session.EventCore, ui.SnapshotState{Failure: strings.Repeat("fixture failure ", 100)})
+	if strings.Contains(strings.Split(m.View().Content, "\n")[0], strings.Repeat("fixture failure ", 3)) {
+		t.Fatal("raw failure escaped into status bar")
+	}
+}
+
+func TestSnapshotDiagnostics_NewResourceFailuresReachSystemSummary(t *testing.T) {
+	for _, kind := range []session.EventKind{session.EventSystemProxy, session.EventTUN, session.EventEgress, session.EventOnboarding} {
+		m := NewModel()
+		m.active = ui.PageSystem
+		m.observeDiagnosticMessage(sessionEventMsg{Open: true, Event: session.Event{Kind: kind, Err: errors.New("fixture failure")}})
+		if m.diagnosticResourceSummary() == "" {
+			t.Fatalf("missing %s summary", kind)
+		}
 	}
 }

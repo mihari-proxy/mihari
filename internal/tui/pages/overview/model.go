@@ -255,7 +255,7 @@ func wrapStatusDot(theme ui.Theme, tone ui.StatusTone, text string, valueWidth i
 // renderWebGUICard shows the gateway health dot plus address, default panel and
 // browser sessions once the daemon supplies a WebGUI snapshot (design G5).
 func (m *Model) renderWebGUICard() string {
-	if m.snapshot.TrackLoading && !m.snapshot.WebGUIState.Loaded {
+	if m.snapshot.TrackLoading && !m.snapshot.WebGUIState.Loaded && m.snapshot.WebGUIState.Failure != "not supported" {
 		return m.snapshot.WebGUIState.Placeholder("")
 	}
 	status := m.snapshot.WebGUI
@@ -552,13 +552,13 @@ func padRightTime(left string, at time.Time, width int) string {
 }
 
 func (m *Model) systemProxyLabel() string {
-	if m.snapshot.TrackLoading && !m.snapshot.SystemProxyState.Loaded {
+	if m.snapshot.TrackLoading && !m.snapshot.SystemProxyState.Loaded && m.snapshot.SystemProxyState.Failure != "not supported" {
 		return m.snapshot.SystemProxyState.Placeholder("")
 	}
 	return formatSysProxyValue(m.theme, m.snapshot)
 }
 func (m *Model) tunLabel() string {
-	if m.snapshot.TrackLoading && !m.snapshot.TUNState.Loaded {
+	if m.snapshot.TrackLoading && !m.snapshot.TUNState.Loaded && m.snapshot.TUNState.Failure != "not supported" {
 		return m.snapshot.TUNState.Placeholder("")
 	}
 	return formatTunValue(m.theme, m.snapshot)

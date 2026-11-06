@@ -724,3 +724,14 @@ func TestOverview_ConfigErrorEscapesControls(t *testing.T) {
 		t.Fatalf("original controls were not escaped: %q", view)
 	}
 }
+
+func TestOverview_UnsupportedSharedResourcesKeepCapabilityFallback(t *testing.T) {
+	m := New()
+	state := ui.SnapshotState{Failure: "not supported"}
+	m.SetSnapshot(Snapshot{TrackLoading: true, WebGUIState: state, SystemProxyState: state, TUNState: state})
+	for _, text := range []string{m.renderWebGUICard(), m.systemProxyLabel(), m.tunLabel()} {
+		if strings.Contains(text, "not supported") || strings.Contains(text, "Loading") {
+			t.Fatal(text)
+		}
+	}
+}

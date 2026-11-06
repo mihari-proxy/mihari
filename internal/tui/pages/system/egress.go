@@ -235,6 +235,7 @@ func (m *Model) closeEgressDialog() tea.Cmd {
 
 func (m *Model) applyEgress() tea.Cmd {
 	if !m.snapshotReady("egress") {
+		m.egress.result = "failed"
 		m.egress.err = "Interfaces are refreshing; wait for a successful snapshot"
 		return nil
 	}
