@@ -182,3 +182,17 @@ func TestPanelChecks_RefreshOnlyChangedPanelAfterMutation(t *testing.T) {
 		})
 	}
 }
+
+func TestSharedSnapshot_UnchangedContentStillResumesEntryChecks(t *testing.T) {
+	c := &checkingClient{fakeClient: fakeClient{status: sampleStatus()}}
+	m := New(c, []string{protocol.CapabilityWebGUI})
+	m.SetStatus(c.status)
+	m.SetSnapshotRefresh(func(bool) tea.Cmd { return nil })
+	m.Load()
+	if m.ConfirmSnapshot() == nil {
+		t.Fatal("unchanged shared snapshot lost the page entry's version checks")
+	}
+	if m.ConfirmSnapshot() != nil {
+		t.Fatal("ordinary snapshots repeated version checks")
+	}
+}

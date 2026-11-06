@@ -237,6 +237,8 @@ func rowFrom(subscription protocol.Subscription, active bool, pending string, no
 }
 
 type Model struct {
+	snapshotStates     map[string]ui.SnapshotState
+	sharedRefresh      func(bool) tea.Cmd
 	client             Client
 	newContext         func() (context.Context, context.CancelFunc)
 	requestTimeout     time.Duration
@@ -651,7 +653,7 @@ func (m *Model) View() string {
 		bodyLines = append(bodyLines, m.theme.Muted.Render(m.lastError))
 	}
 	if len(m.subscriptions) == 0 {
-		bodyLines = append(bodyLines, m.theme.Muted.Render(ui.NoSubscriptions))
+		bodyLines = append(bodyLines, m.theme.Muted.Render(m.snapshotPlaceholder("subscriptions", ui.NoSubscriptions)))
 	}
 	clock := m.loadSpinClock
 	if clock.IsZero() {
@@ -778,6 +780,10 @@ func (m *Model) submitForm(form *formModel, id string, revision uint64) tea.Cmd 
 }
 
 func (m *Model) toggle(subscription protocol.Subscription) tea.Cmd {
+	if !m.snapshotReady("subscriptions") {
+		m.lastError = "Subscriptions are refreshing; wait for a successful snapshot"
+		return nil
+	}
 	if m.client == nil {
 		return nil
 	}
@@ -797,6 +803,10 @@ func (m *Model) toggle(subscription protocol.Subscription) tea.Cmd {
 // direct → proxy → auto → direct cycle. The server validates the value; an
 // unsupported build surfaces the error via the normal mutation path.
 func (m *Model) cycleProxy(subscription protocol.Subscription) tea.Cmd {
+	if !m.snapshotReady("subscriptions") {
+		m.lastError = "Subscriptions are refreshing; wait for a successful snapshot"
+		return nil
+	}
 	if m.client == nil {
 		return nil
 	}
@@ -839,6 +849,10 @@ func proxyModeLabel(mode string) string {
 }
 
 func (m *Model) refresh(id string) tea.Cmd {
+	if !m.snapshotReady("subscriptions") {
+		m.lastError = "Subscriptions are refreshing; wait for a successful snapshot"
+		return nil
+	}
 	if m.client == nil {
 		return nil
 	}
@@ -862,6 +876,10 @@ func (m *Model) refreshAll() tea.Cmd {
 }
 
 func (m *Model) refreshAllWithID(baseID string) tea.Cmd {
+	if !m.snapshotReady("subscriptions") {
+		m.lastError = "Subscriptions are refreshing; wait for a successful snapshot"
+		return nil
+	}
 	if m.client == nil {
 		return nil
 	}
@@ -900,6 +918,10 @@ func (m *Model) refreshAllWithID(baseID string) tea.Cmd {
 }
 
 func (m *Model) use(id string) tea.Cmd {
+	if !m.snapshotReady("subscriptions") {
+		m.lastError = "Subscriptions are refreshing; wait for a successful snapshot"
+		return nil
+	}
 	if m.client == nil {
 		return nil
 	}
@@ -939,6 +961,10 @@ func (m *Model) loadSpinCmdIfNeeded() tea.Cmd {
 // pending state, so the row is not marked until the typed result is reconciled.
 // This mirrors the rules, system, connections, and setup action-intent paths.
 func (m *Model) remove(id, operationID string, revision uint64) tea.Cmd {
+	if !m.snapshotReady("subscriptions") {
+		m.lastError = "Subscriptions are refreshing; wait for a successful snapshot"
+		return nil
+	}
 	if m.client == nil {
 		return nil
 	}
@@ -953,6 +979,9 @@ func (m *Model) remove(id, operationID string, revision uint64) tea.Cmd {
 }
 
 func (m *Model) reload() tea.Cmd {
+	if m.sharedRefresh != nil {
+		return m.sharedRefresh(false)
+	}
 	if m.client == nil {
 		return nil
 	}
@@ -1088,4 +1117,36 @@ func defaultOperationID() string {
 		return "tui-subscription-" + hex.EncodeToString(raw)
 	}
 	return fmt.Sprintf("tui-subscription-%d", fallbackOperationID.Add(1))
+}
+
+// SetSnapshotState receives the shared observer's resource presentation state.
+func (m *Model) SetSnapshotState(resource string, state ui.SnapshotState) {
+	if m.snapshotStates == nil {
+		m.snapshotStates = make(map[string]ui.SnapshotState)
+	}
+	m.snapshotStates[resource] = state
+}
+
+// SetSnapshotRefresh uses the root's shared resource owner for ordinary reads.
+func (m *Model) SetSnapshotRefresh(refresh func(bool) tea.Cmd) { m.sharedRefresh = refresh }
+
+func (m *Model) snapshotPlaceholder(resource, empty string) string {
+	if state, ok := m.snapshotStates[resource]; ok {
+		return state.Placeholder(empty)
+	}
+	return empty
+}
+
+// InvalidatesSnapshots identifies completed writes, including writes that failed.
+func (mutationResultMsg) InvalidatesSnapshots() bool { return true }
+
+// InvalidatesSnapshots identifies a completed bulk refresh.
+func (refreshAllResultMsg) InvalidatesSnapshots() bool { return true }
+
+func (m *Model) snapshotReady(resource string) bool {
+	if m.sharedRefresh == nil {
+		return true
+	}
+	state, ok := m.snapshotStates[resource]
+	return ok && state.Loaded && !state.Pending && state.Failure == ""
 }

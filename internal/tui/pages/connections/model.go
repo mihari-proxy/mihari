@@ -672,3 +672,12 @@ var connectionOperationID atomic.Uint64
 func defaultConnectionOperationID() string {
 	return fmt.Sprintf("tui-connection-%d", connectionOperationID.Add(1))
 }
+
+// RetireSession ends the last observed active set while retaining closed history.
+func (m *Model) RetireSession() {
+	m.history.Observe(nil, time.Now().UTC())
+	m.history.observedAt = time.Time{}
+	m.projection = rowProjection{}
+	m.pending = nil
+	m.detail = nil
+}

@@ -75,3 +75,6 @@ func (m *Model) runDataReset(p protocol.ResetPreview) tea.Cmd {
 		return ui.PageResultMsg{Page: ui.PageSystem, Result: resetResultMsg{result: v, err: err}}
 	}
 }
+
+// InvalidatesAllSnapshots retires every resource after a business reset attempt.
+func (resetResultMsg) InvalidatesAllSnapshots() bool { return true }

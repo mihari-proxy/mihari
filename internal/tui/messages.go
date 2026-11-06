@@ -19,6 +19,28 @@ func waitSessionEvent(events <-chan session.Event) tea.Cmd {
 	}
 	return func() tea.Msg {
 		event, open := <-events
+		if open {
+			select {
+			case next, more := <-events:
+				if !more {
+					return sessionEventMsg{Event: event, Open: true}
+				}
+				batch := []session.Event{event, next}
+				for len(batch) < 32 {
+					select {
+					case item, more := <-events:
+						if !more {
+							return sessionEventMsg{Event: session.Event{Batch: batch}, Open: true}
+						}
+						batch = append(batch, item)
+					default:
+						return sessionEventMsg{Event: session.Event{Batch: batch}, Open: true}
+					}
+				}
+				event = session.Event{Batch: batch}
+			default:
+			}
+		}
 		return sessionEventMsg{Event: event, Open: open}
 	}
 }

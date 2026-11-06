@@ -407,3 +407,6 @@ func (m *Model) updateAuthControls(message tea.Msg) tea.Cmd {
 }
 
 type authResetConfirmedMsg struct{}
+
+// InvalidatesSnapshots distinguishes credential writes from read-only previews.
+func (m authResultMsg) InvalidatesSnapshots() bool { return m.mutation }

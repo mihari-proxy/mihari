@@ -50,6 +50,8 @@ type detailState struct {
 }
 
 type Model struct {
+	snapshotStates  map[string]ui.SnapshotState
+	sharedRefresh   func(bool) tea.Cmd
 	client          Client
 	newOperationID  func() string
 	rules           []protocol.Rule
@@ -433,7 +435,7 @@ func (m *Model) renderRules() []string {
 	lines := []string{"  " + header, "  " + ruleLine}
 	indexes := m.VisibleIndexes()
 	if len(indexes) == 0 {
-		return append(lines, m.theme.Muted.Render(ui.NoMatchingRules))
+		return append(lines, m.theme.Muted.Render(m.snapshotPlaceholder("rules", ui.NoMatchingRules)))
 	}
 	focused := 0
 	if m.focus.kind == focusRow {
@@ -480,7 +482,7 @@ func (m *Model) renderProviders() []string {
 	lines := []string{"  " + header, "  " + ruleLine}
 	indexes := m.visibleProviderIndexes()
 	if len(indexes) == 0 {
-		return append(lines, m.theme.Muted.Render(ui.NoMatchingRuleProviders))
+		return append(lines, m.theme.Muted.Render(m.snapshotPlaceholder("rule-providers", ui.NoMatchingRuleProviders)))
 	}
 	focused := 0
 	if m.focus.kind == focusRow {
@@ -728,6 +730,9 @@ func (m *Model) startSearch() tea.Cmd {
 }
 
 func (m *Model) reloadRules() tea.Cmd {
+	if m.sharedRefresh != nil {
+		return m.sharedRefresh(false)
+	}
 	if m.client == nil {
 		return nil
 	}
@@ -740,6 +745,9 @@ func (m *Model) reloadRules() tea.Cmd {
 }
 
 func (m *Model) reloadProviders() tea.Cmd {
+	if m.sharedRefresh != nil {
+		return m.sharedRefresh(false)
+	}
 	if m.client == nil {
 		return nil
 	}
@@ -752,6 +760,9 @@ func (m *Model) reloadProviders() tea.Cmd {
 }
 
 func (m *Model) updateFocusedProvider() tea.Cmd {
+	if !m.snapshotReady("rule-providers") {
+		return nil
+	}
 	if m.client == nil || m.focus.kind != focusRow {
 		return nil
 	}
@@ -772,7 +783,11 @@ func (m *Model) updateFocusedProvider() tea.Cmd {
 			request.IfRevision = &revision
 		}
 		result, err := m.client.UpdateRuleProvider(logging.WithOperation(ctx, operation), name, request)
-		return providerUpdateResultMsg{warnings: result.WarningOutcome, operation: operation, name: name, revision: result.Revision, err: err}
+		message := providerUpdateResultMsg{warnings: result.WarningOutcome, operation: operation, name: name, revision: result.Revision, err: err}
+		if m.sharedRefresh != nil {
+			return ui.PageResultMsg{Page: ui.PageRules, Result: message}
+		}
+		return message
 	}
 }
 
@@ -882,3 +897,32 @@ func defaultOperationID() string {
 	}
 	return fmt.Sprintf("tui-provider-%d", fallbackOperationID.Add(1))
 }
+
+// SetSnapshotState receives the shared observer's resource presentation state.
+func (m *Model) SetSnapshotState(resource string, state ui.SnapshotState) {
+	if m.snapshotStates == nil {
+		m.snapshotStates = make(map[string]ui.SnapshotState)
+	}
+	m.snapshotStates[resource] = state
+}
+
+// SetSnapshotRefresh uses the root's shared resource owner for ordinary reads.
+func (m *Model) SetSnapshotRefresh(refresh func(bool) tea.Cmd) { m.sharedRefresh = refresh }
+
+func (m *Model) snapshotPlaceholder(resource, empty string) string {
+	if state, ok := m.snapshotStates[resource]; ok {
+		return state.Placeholder(empty)
+	}
+	return empty
+}
+
+func (m *Model) snapshotReady(resource string) bool {
+	if m.sharedRefresh == nil {
+		return true
+	}
+	state, ok := m.snapshotStates[resource]
+	return ok && state.Loaded && !state.Pending && state.Failure == ""
+}
+
+// InvalidatesSnapshots retires reads started before a provider update completed.
+func (providerUpdateResultMsg) InvalidatesSnapshots() bool { return true }

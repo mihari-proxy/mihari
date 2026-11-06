@@ -39,7 +39,7 @@ Local core readiness and version use the daemon's last confirmed observation. No
 
 F4 includes a global **Performance** section. **Controller owner detection** is off by default and affects display queries only; operation checks remain live. **Observation reuse (seconds)** defaults to 3 and accepts 0–5; 0 disables completed-result reuse. System refresh requests a live observation and may join one already in progress. The instance saves all F4 changes together; a failed save retains the old values and your draft. Non-default Performance fields require this version: restore defaults before downgrading to a version that cannot read them.
 
-## Quick start
+The TUI refreshes snapshots needed by the selected page and global indicators; unused page snapshots stop polling. Initial data shows Loading/Fetching rather than a confirmed empty result, and returning pages retain old data while refreshing. Ordinary snapshots have a five-second total timeout and refresh independently. Status/Core and visible page snapshots refresh every second; subscriptions outside Overview/Subscriptions and preferences outside F4 refresh every five seconds. Streams and diagnostic history keep their existing cadence.\n\n## Quick start
 
 **Install**
 

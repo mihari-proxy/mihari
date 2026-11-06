@@ -77,6 +77,9 @@ func (m *Model) SetEgress(status protocol.EgressStatus) {
 }
 
 func (m *Model) loadEgress(contexts ...context.Context) tea.Cmd {
+	if m.sharedRefresh != nil {
+		return m.sharedRefresh(false)
+	}
 	client, ok := m.client.(egressClient)
 	if !ok {
 		return nil
@@ -231,6 +234,10 @@ func (m *Model) closeEgressDialog() tea.Cmd {
 }
 
 func (m *Model) applyEgress() tea.Cmd {
+	if !m.snapshotReady("egress") {
+		m.egress.err = "Interfaces are refreshing; wait for a successful snapshot"
+		return nil
+	}
 	client, ok := m.client.(egressClient)
 	if !ok {
 		return nil
@@ -597,3 +604,6 @@ func (m *Model) egressDialogView() string {
 	content += "\n" + body + "\n" + strings.Join(noteLines, "\n")
 	return m.theme.Dialog.Width(width).Render(content)
 }
+
+// InvalidatesSnapshots identifies a completed outbound-interface mutation.
+func (m egressResultMsg) InvalidatesSnapshots() bool { return m.mutation }

@@ -316,6 +316,9 @@ func Run(ctx context.Context, options Options) (resultErr error) {
 		events = controlSession.Start(sessionCtx)
 	}
 	model := newRunModel(ctx, options.Client, events, health, applier)
+	if controlSession != nil {
+		model.setRefreshSession(controlSession)
+	}
 	restartOptions := app.EndpointRestartOptions{Elevated: options.Elevated, CurrentVersion: options.CurrentVersion}
 	if restartOptions.Elevated == nil {
 		restartOptions.Elevated = elevate.IsElevated

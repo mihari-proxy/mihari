@@ -498,3 +498,18 @@ func (c *fakeConnectionsClient) LookupGeoIP(_ context.Context, request protocol.
 	c.geoIPAddresses = append([]string(nil), request.Addresses...)
 	return c.geoIPResult, c.geoIPErr
 }
+
+func TestRetireSession_KeepsClosedHistoryAndRetiresOldActiveIDs(t *testing.T) {
+	m := New(nil, nil)
+	first := time.Unix(100, 0)
+	m.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{ID: "older"}}}, first)
+	m.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{ID: "active"}}}, first.Add(time.Second))
+	m.RetireSession()
+	if len(m.history.Closed()) != 2 || len(m.history.Active()) != 0 {
+		t.Fatal("owner replacement lost history or retained live old IDs")
+	}
+	m.Observe(protocol.ConnectionList{Connections: []protocol.Connection{{ID: "active", Upload: 100}}}, first.Add(2*time.Second))
+	if m.history.Active()[0].UploadSpeed != 0 {
+		t.Fatal("old owner contributed a rate baseline")
+	}
+}

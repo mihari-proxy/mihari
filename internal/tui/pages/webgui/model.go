@@ -49,29 +49,32 @@ var _ interface{ Err() error } = mutationDoneMsg{}
 
 // Model is the Web GUI lifecycle page.
 type Model struct {
-	versions        map[string]panelVersionState
-	ctx             context.Context
-	client          Client
-	openBrowser     func(string) error
-	newOperationID  func() string
-	available       bool
-	status          protocol.WebGUIStatus
-	selected        int
-	action          int
-	menuOpen        bool
-	menuIndex       int
-	lastError       string
-	toast           string
-	contentFocused  bool
-	width           int
-	height          int
-	theme           ui.Theme
-	installing      map[string]bool
-	installClock    time.Time
-	installSpinGen  uint64
-	versionClock    time.Time
-	versionSpinGen  uint64
-	versionSpinning bool
+	snapshotStates             map[string]ui.SnapshotState
+	sharedRefresh              func(bool) tea.Cmd
+	checkVersionsAfterSnapshot bool
+	versions                   map[string]panelVersionState
+	ctx                        context.Context
+	client                     Client
+	openBrowser                func(string) error
+	newOperationID             func() string
+	available                  bool
+	status                     protocol.WebGUIStatus
+	selected                   int
+	action                     int
+	menuOpen                   bool
+	menuIndex                  int
+	lastError                  string
+	toast                      string
+	contentFocused             bool
+	width                      int
+	height                     int
+	theme                      ui.Theme
+	installing                 map[string]bool
+	installClock               time.Time
+	installSpinGen             uint64
+	versionClock               time.Time
+	versionSpinGen             uint64
+	versionSpinning            bool
 }
 
 // New constructs a Web GUI page with background context.
@@ -158,6 +161,10 @@ func (m *Model) Load() tea.Cmd {
 }
 
 func (m *Model) load(checkVersions bool) tea.Cmd {
+	if m.sharedRefresh != nil {
+		m.checkVersionsAfterSnapshot = m.checkVersionsAfterSnapshot || checkVersions
+		return m.sharedRefresh(false)
+	}
 	if !m.available || m.client == nil {
 		return nil
 	}
@@ -494,4 +501,37 @@ func randomOperationID() string {
 	var value [8]byte
 	_, _ = rand.Read(value[:])
 	return hex.EncodeToString(value[:])
+}
+
+// SetSnapshotState receives the shared observer's resource presentation state.
+func (m *Model) SetSnapshotState(resource string, state ui.SnapshotState) {
+	if m.snapshotStates == nil {
+		m.snapshotStates = make(map[string]ui.SnapshotState)
+	}
+	m.snapshotStates[resource] = state
+}
+
+// SetSnapshotRefresh uses the root's shared resource owner for ordinary reads.
+func (m *Model) SetSnapshotRefresh(refresh func(bool) tea.Cmd) { m.sharedRefresh = refresh }
+
+// ObserveStatus applies a shared snapshot and resumes an entry's version check.
+func (m *Model) ObserveStatus(status protocol.WebGUIStatus) tea.Cmd {
+	m.SetStatus(status)
+	return m.ConfirmSnapshot()
+}
+
+func (m *Model) snapshotPlaceholder(resource, empty string) string {
+	if state, ok := m.snapshotStates[resource]; ok {
+		return state.Placeholder(empty)
+	}
+	return empty
+}
+
+// ConfirmSnapshot resumes entry checks even when shared data did not change.
+func (m *Model) ConfirmSnapshot() tea.Cmd {
+	if m.checkVersionsAfterSnapshot {
+		m.checkVersionsAfterSnapshot = false
+		return m.checkPanelVersions()
+	}
+	return nil
 }

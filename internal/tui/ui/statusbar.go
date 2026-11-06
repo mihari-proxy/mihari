@@ -11,9 +11,11 @@ import (
 // Callers must never put secrets, controller addresses, full subscription URLs,
 // or auth tokens into these fields.
 type StatusBarData struct {
-	CoreStatus   string // running / disconnected / reconnecting / …
-	CoreVersion  string
-	Subscription string // full format, e.g. "Main · 9.0 GiB/100.0 GiB"
+	CorePlaceholder                                   string
+	ConnectionsUnknown, TrafficUnknown, MemoryUnknown bool
+	CoreStatus                                        string // running / disconnected / reconnecting / …
+	CoreVersion                                       string
+	Subscription                                      string // full format, e.g. "Main · 9.0 GiB/100.0 GiB"
 	// SubscriptionCompact is the compact format for compact bars
 	// (name truncated to 16 columns + compact usage, e.g. "Main · 9G/100G").
 	SubscriptionCompact string
@@ -46,7 +48,12 @@ const (
 func RenderStatusBar(theme Theme, data StatusBarData, width int, compact bool) string {
 	segments := []PrioritySegment{
 		{Priority: 6, Render: func() string { return theme.Title.Render(AppName) }},
-		{Priority: 5, Render: func() string { return renderStatusCore(theme, data.CoreStatus, data.Stale) }},
+		{Priority: 5, Render: func() string {
+			if data.CorePlaceholder != "" {
+				return theme.Muted.Render(data.CorePlaceholder)
+			}
+			return renderStatusCore(theme, data.CoreStatus, data.Stale)
+		}},
 	}
 	if !compact && strings.TrimSpace(data.CoreVersion) != "" {
 		segments = append(segments, PrioritySegment{Priority: 1, Render: func() string {
@@ -65,19 +72,21 @@ func RenderStatusBar(theme Theme, data StatusBarData, width int, compact bool) s
 	}
 	if compact {
 		segments = append(segments,
-			PrioritySegment{Priority: 5, Render: func() string { return fmt.Sprintf("%dc", data.Connections) }},
+			PrioritySegment{Priority: 5, Render: func() string { return ObservedMetric(fmt.Sprintf("%dc", data.Connections), data.ConnectionsUnknown) }},
 			PrioritySegment{Priority: 5, Render: func() string {
-				return fmt.Sprintf("↑%s/s ↓%s/s", statusRateLabel(data.UploadRate, true), statusRateLabel(data.DownloadRate, true))
+				return fmt.Sprintf("↑%s/s ↓%s/s", ObservedMetric(statusRateLabel(data.UploadRate, true), data.TrafficUnknown), ObservedMetric(statusRateLabel(data.DownloadRate, true), data.TrafficUnknown))
 			}},
-			PrioritySegment{Priority: 2, Render: func() string { return formatCompactIEC(data.MemoryInUse) }},
+			PrioritySegment{Priority: 2, Render: func() string { return ObservedMetric(formatCompactIEC(data.MemoryInUse), data.MemoryUnknown) }},
 		)
 	} else {
 		segments = append(segments,
-			PrioritySegment{Priority: 5, Render: func() string { return fmt.Sprintf("%d conn", data.Connections) }},
 			PrioritySegment{Priority: 5, Render: func() string {
-				return fmt.Sprintf("↑%s  ↓%s", statusRateLabel(data.UploadRate, false), statusRateLabel(data.DownloadRate, false))
+				return ObservedMetric(fmt.Sprintf("%d conn", data.Connections), data.ConnectionsUnknown)
 			}},
-			PrioritySegment{Priority: 2, Render: func() string { return FormatBytes(data.MemoryInUse) }},
+			PrioritySegment{Priority: 5, Render: func() string {
+				return fmt.Sprintf("↑%s  ↓%s", ObservedMetric(statusRateLabel(data.UploadRate, false), data.TrafficUnknown), ObservedMetric(statusRateLabel(data.DownloadRate, false), data.TrafficUnknown))
+			}},
+			PrioritySegment{Priority: 2, Render: func() string { return ObservedMetric(FormatBytes(data.MemoryInUse), data.MemoryUnknown) }},
 		)
 	}
 

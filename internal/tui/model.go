@@ -31,6 +31,11 @@ import (
 )
 
 type Model struct {
+	refreshSession       *session.Session
+	snapshotStates       map[session.EventKind]ui.SnapshotState
+	snapshotValues       map[session.EventKind]session.Event
+	streamSeen           map[session.EventKind]bool
+	suppressSharedSync   bool
 	endpointRestartApply func(context.Context, protocol.OnboardingStatus) (app.EndpointRestartResult, error)
 	endpointRestart      *endpointRestartUI
 
@@ -375,6 +380,7 @@ func (model *Model) syncSystemNetworkStatus() {
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	next, command := model.update(message)
 	updated := next.(Model)
+	updated.updateSnapshotDemand(model)
 	if page, ok := updated.pages[ui.PageProxies].(*proxypage.Model); ok {
 		if updated.quitting {
 			page.Stop()
@@ -385,6 +391,10 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			(updated.installation != nil && updated.installation.visible) ||
 			(updated.exportLogs != nil && !updated.exportLogs.Closed()) || Classify(updated.width, updated.height) == ui.TooSmall)
 		ready := updated.connected && !updated.reconnecting && updated.preferencesLoaded && updated.core.Status == "running"
+		if updated.snapshotStates != nil {
+			coreState := updated.snapshotStates[session.EventCore]
+			ready = ready && coreState.Loaded && coreState.Failure == ""
+		}
 		auto := page.ReconcileAutoTests(updated.active == ui.PageProxies, ready, updated.statusEpoch, updated.core)
 		if auto != nil {
 			command = tea.Batch(command, auto)
@@ -439,7 +449,23 @@ func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	switch typed := message.(type) {
+	case ui.RefreshSnapshotsMsg:
+		if model.refreshSession != nil {
+			if typed.AfterMutation {
+				model.refreshAfterOperation(typed.Page)
+			} else {
+				model.refreshSession.Refresh(pageSnapshots(typed.Page)...)
+			}
+			if typed.Page == ui.PageSystem {
+				return model, model.loadRootServiceStatus()
+			}
+			return model, nil
+		}
+		return model, nil
 	case subscriptionspage.Message:
+		if result, ok := message.(interface{ InvalidatesSnapshots() bool }); ok && result.InvalidatesSnapshots() {
+			model.refreshAfterOperation(ui.PageSubscriptions)
+		}
 		return model.dispatchPageTo(ui.PageSubscriptions, message)
 	case ui.ErrorDetailMsg:
 		model.modal = NewErrorDetail(typed.Title, typed.Body)
@@ -470,6 +496,7 @@ func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.preparedUpdate = typed.Prepared
 		return model, tea.Quit
 	case ui.PageResultMsg:
+		model.refreshAfterResult(typed.Page, typed.Result)
 		if typed.Result == nil {
 			return model, nil
 		}
@@ -548,7 +575,22 @@ func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		refreshService := typed.Event.Kind == session.EventConnected ||
 			typed.Event.Kind == session.EventReconnecting ||
 			typed.Event.Kind == session.EventTerminalError
-		command := model.applySessionEvent(typed.Event)
+		var command tea.Cmd
+		if len(typed.Event.Batch) > 0 {
+			model.suppressSharedSync = true
+			var commands []tea.Cmd
+			for _, event := range typed.Event.Batch {
+				model.observeDiagnosticMessage(sessionEventMsg{Event: event, Open: true})
+				commands = append(commands, model.applySessionEvent(event))
+				refreshService = refreshService || event.Kind == session.EventConnected || event.Kind == session.EventReconnecting || event.Kind == session.EventTerminalError
+			}
+			model.suppressSharedSync = false
+			model.syncSystem()
+			model.syncOverview()
+			command = tea.Batch(commands...)
+		} else {
+			command = model.applySessionEvent(typed.Event)
+		}
 		if refreshService {
 			return model, tea.Batch(command, waitSessionEvent(model.events), model.loadRootServiceStatus())
 		}
@@ -611,12 +653,19 @@ func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return model, nil
 	case ui.ActionIntentMsg:
+		if !model.snapshotActionReady(typed) {
+			return model, nil
+		}
 		return model.handleActionIntent(typed)
 	case ui.CompleteUninstallConfirmedMsg:
 		model.preparedUninstall = true
 		model.deleteUnmatchedCommand = typed.DeleteUnmatchedCommand
 		return model, tea.Quit
 	case actionExecuteMsg:
+		if !model.snapshotActionReady(typed.Intent) {
+			return model, typed.Intent.Cancel
+		}
+		model.refreshAfterOperation(typed.Intent.Page)
 		return model.executeAction(typed.Intent)
 	case actionCompletedMsg:
 		delete(model.pendingActions, typed.Intent.Key)
@@ -646,6 +695,7 @@ func (model Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		model.recordActionOutcome(typed.Intent, typed.Result)
+		model.refreshAfterOperation(typed.Intent.Page)
 		var pageCmd tea.Cmd
 		if typed.Result != nil {
 			var next tea.Model
@@ -844,6 +894,42 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 	if model.ignoresPreRestartEvent(event) {
 		return nil
 	}
+	if model.refreshSession != nil && !model.refreshSession.Valid(event) {
+		return nil
+	}
+	if event.Scheduled && model.statusEpochKnown && event.Epoch != model.statusEpoch {
+		return nil
+	}
+	if event.Kind == session.EventSnapshotLoading {
+		model.observeSnapshotState(event)
+		if !model.suppressSharedSync {
+			model.syncOverview()
+		}
+		return model.spinnerCmdIfNeeded()
+	}
+	stateChanged := model.observeSnapshotState(event)
+	if model.unchangedSnapshot(event) {
+		if stateChanged && !model.suppressSharedSync {
+			model.syncOverview()
+		}
+		if event.Kind == session.EventWebGUI {
+			if page, ok := model.pages[ui.PageWebGUI].(*webguipage.Model); ok {
+				return tea.Batch(page.ConfirmSnapshot(), model.spinnerCmdIfNeeded())
+			}
+		}
+		if event.Kind == session.EventProxies {
+			if page, ok := model.pages[ui.PageProxies].(*proxypage.Model); ok {
+				page.ObserveSnapshot(event.Proxies, event.ObservedAt, nil)
+			}
+		}
+		return model.spinnerCmdIfNeeded()
+	}
+	if model.streamSeen != nil {
+		switch event.Kind {
+		case session.EventTraffic, session.EventMemory, session.EventConnections, session.EventLog:
+			model.streamSeen[event.Kind] = true
+		}
+	}
 	var command tea.Cmd
 	model.monitor.Observe(event)
 	// Only push-stream events carry a non-zero ObservedAt; non-stream events
@@ -880,7 +966,20 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 			}
 		}
 		previousPID := model.status.PID
+		if model.refreshSession != nil && model.statusEpochKnown && model.status.PID > 0 && (previousPID != event.Status.PID || !model.status.StartedAt.Equal(event.Status.StartedAt)) {
+			model.resetRuntimeSnapshots(true)
+		}
 		model.status = event.Status
+		if model.refreshSession != nil {
+			for _, kind := range observedSnapshots {
+				state := model.snapshotStates[kind]
+				if !slices.Contains(event.Status.Capabilities, session.SnapshotCapability(kind)) {
+					state.Pending = false
+					state.Failure = "not supported"
+				}
+				model.setSnapshotState(kind, state)
+			}
+		}
 		if page, ok := model.pages[ui.PageProxies].(*proxypage.Model); ok {
 			page.SetRoutingAvailable(slices.Contains(event.Status.Capabilities, protocol.CapabilityRouting), event.Epoch)
 		}
@@ -912,7 +1011,7 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 			}
 		}
 		// Refresh network strip when status/capabilities land after connect.
-		if model.connected {
+		if model.connected && model.refreshSession == nil {
 			command = tea.Batch(command, model.loadNetworkStatus())
 		}
 	case session.EventTraffic:
@@ -924,6 +1023,8 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		if page, ok := model.pages[ui.PageConnections].(*connectionspage.Model); ok {
 			page.Observe(event.Connections, event.ObservedAt)
 		}
+	case session.EventSystemProxy, session.EventTUN, session.EventEgress, session.EventOnboarding:
+		model.applySharedNetwork(event)
 	case session.EventCore:
 		if model.statusEpochKnown && event.Epoch != 0 && event.Epoch < model.statusEpoch {
 			break
@@ -938,6 +1039,9 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 			if page, ok := model.pages[ui.PageProxies].(*proxypage.Model); ok {
 				page.InvalidateGroups()
 			}
+		}
+		if model.refreshSession != nil && model.core.Schema != "" && (model.core.PID != event.Core.PID || !model.core.StartedAt.Equal(event.Core.StartedAt) || model.core.Restarts != event.Core.Restarts) {
+			model.resetRuntimeSnapshots(false)
 		}
 		model.core = event.Core
 		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok {
@@ -1000,8 +1104,7 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		if event.Err != nil {
 			break
 		}
-		webGUI := event.WebGUI
-		model.webGUI = &webGUI
+		command = tea.Batch(command, model.applySharedWebGUI(event.WebGUI))
 	case session.EventLogging:
 		if event.Err != nil {
 			break
@@ -1024,7 +1127,9 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		if model.status.Health != "degraded" {
 			model.daemonHint = ""
 		}
-		command = tea.Batch(command, model.loadNetworkStatus())
+		if model.refreshSession == nil {
+			command = tea.Batch(command, model.loadNetworkStatus())
+		}
 	case session.EventReconnecting:
 		model.preferencesLoaded = false
 		model.preferencesGeneration++
@@ -1051,7 +1156,9 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		model.systemProxyOK = false
 		model.tunOK = false
 		if page, ok := model.pages[ui.PageConnections].(*connectionspage.Model); ok {
-			page.ResetSession()
+			if model.refreshSession == nil {
+				page.ResetSession()
+			}
 		}
 	case session.EventTerminalError:
 		if page, ok := model.pages[ui.PageSubscriptions].(*subscriptionspage.Model); ok {
@@ -1070,12 +1177,17 @@ func (model *Model) applySessionEvent(event session.Event) tea.Cmd {
 		model.systemProxyOK = false
 		model.tunOK = false
 		if page, ok := model.pages[ui.PageConnections].(*connectionspage.Model); ok {
-			page.ResetSession()
+			if model.refreshSession == nil {
+				page.ResetSession()
+			}
 		}
 	}
 	// Transient reconnect banner clears once live data resumes.
 	if model.globalState == ui.StateReconnected && event.Kind != session.EventConnected {
 		model.globalState = ""
+	}
+	if model.suppressSharedSync {
+		return command
 	}
 	model.syncSystem()
 	model.syncOverview()
@@ -1228,8 +1340,16 @@ func (model *Model) syncOverview() {
 		return
 	}
 	monitorSnap := model.monitor.Snapshot()
+	if model.snapshotStates != nil {
+		monitorSnap.ConnectionsUnknown = !model.streamSeen[session.EventConnections]
+		monitorSnap.TrafficUnknown = !model.streamSeen[session.EventTraffic]
+		monitorSnap.MemoryUnknown = !model.streamSeen[session.EventMemory]
+	}
 	snap := overview.Snapshot{
 		Status: model.status, Core: model.core, Subscriptions: model.subscriptions,
+		TrackLoading: model.snapshotStates != nil,
+		CoreState:    model.snapshotStates[session.EventCore], SubscriptionState: model.snapshotStates[session.EventSubscriptions],
+		WebGUIState: model.snapshotStates[session.EventWebGUI], SystemProxyState: model.snapshotStates[session.EventSystemProxy], TUNState: model.snapshotStates[session.EventTUN],
 		Monitor: monitorSnap, Operations: model.operations,
 		ServiceStatus: model.serviceStatus, ServiceLoaded: model.serviceLoaded,
 		Connected: model.connected, MihariVersion: buildinfo.Version,
@@ -1287,6 +1407,9 @@ func (model Model) updateRail(key string) (tea.Model, tea.Cmd) {
 		}
 		model.focus = ui.Focus{Area: ui.FocusContent, Page: model.active}
 		model.pages[model.active].FocusFirst()
+		if model.refreshSession != nil && (model.active == ui.PageSystem || model.active == ui.PageWebGUI) {
+			return model, nil
+		}
 		// System implements LoadStatus so Enter does not start another Mihari
 		// or core version check, and does not cancel one already running.
 		if page, ok := model.pages[model.active].(interface{ LoadStatus() tea.Cmd }); ok {
@@ -1353,6 +1476,13 @@ func (model *Model) clearSystemDoneIfLeaving(prev ui.PageID) tea.Cmd {
 // call this). Async Load/IO results must still land while the rail is focused,
 // so the page preview can leave Loading… without requiring Enter.
 func (model Model) dispatchPage(message tea.Msg) (tea.Model, tea.Cmd) {
+	if model.refreshSession != nil {
+		if origin, ok := message.(interface{ DiagnosticPage() ui.PageID }); ok {
+			page := origin.DiagnosticPage()
+			model.refreshAfterResult(page, message)
+			return model.dispatchPageTo(page, message)
+		}
+	}
 	return model.dispatchPageTo(model.active, message)
 }
 
@@ -1466,6 +1596,13 @@ func (model Model) executeAction(intent ui.ActionIntentMsg) (tea.Model, tea.Cmd)
 
 // needsSpinner reports visible setup work or pending shell actions that need animation.
 func (model Model) needsSpinner() bool {
+	if model.refreshSession != nil {
+		for _, kind := range pageSnapshots(model.active) {
+			if model.snapshotStates[kind].Pending {
+				return true
+			}
+		}
+	}
 	if model.active == ui.PageSetup {
 		if page, ok := model.pages[ui.PageSetup].(*setuppage.Model); ok && page.Busy() {
 			return true
@@ -1495,7 +1632,7 @@ func (model *Model) spinnerCmdIfNeeded() tea.Cmd {
 
 func (model Model) statusBarData() ui.StatusBarData {
 	snap := model.monitor.Snapshot()
-	return ui.StatusBarData{
+	data := ui.StatusBarData{
 		CoreStatus:          model.core.Status,
 		CoreVersion:         model.core.Version,
 		Subscription:        activeSubscriptionName(model.subscriptions),
@@ -1507,6 +1644,19 @@ func (model Model) statusBarData() ui.StatusBarData {
 		Stale:               snap.Stale,
 		RightStatus:         model.statusBarRightStatus(),
 	}
+	if model.snapshotStates != nil {
+		if state := model.snapshotStates[session.EventCore]; !state.Loaded {
+			data.CorePlaceholder = "Core: " + state.Placeholder("")
+		}
+		if state := model.snapshotStates[session.EventSubscriptions]; !state.Loaded {
+			data.Subscription = "Subscription: " + state.Placeholder("")
+			data.SubscriptionCompact = data.Subscription
+		}
+		data.ConnectionsUnknown = !model.streamSeen[session.EventConnections]
+		data.TrafficUnknown = !model.streamSeen[session.EventTraffic]
+		data.MemoryUnknown = !model.streamSeen[session.EventMemory]
+	}
+	return data
 }
 
 // statusBarRightStatus builds the top-right dual badge: Service (OS) + Daemon (IPC).
@@ -1733,6 +1883,9 @@ func (model Model) View() tea.View {
 		left := railNav
 		if layout.MonitorHeight > 0 {
 			monitor := model.monitor.ViewFull(layout.RailWidth, layout.MonitorHeight)
+			if model.refreshSession != nil && (!model.streamSeen[session.EventTraffic] || !model.streamSeen[session.EventMemory] || !model.streamSeen[session.EventConnections]) {
+				monitor = model.viewWaitingMonitor(layout.RailWidth, layout.MonitorHeight)
+			}
 			left = lipgloss.JoinVertical(lipgloss.Left, railNav, monitor)
 		}
 		rail := lipgloss.NewStyle().Width(layout.RailWidth).MaxWidth(layout.RailWidth).Height(layout.ContentHeight).MaxHeight(layout.ContentHeight).Render(left)
@@ -1740,7 +1893,7 @@ func (model Model) View() tea.View {
 		if focused, ok := page.(ui.ContentFocusable); ok {
 			focused.SetContentFocused(model.focus.Area == ui.FocusContent)
 		}
-		body := model.theme.Content.Width(layout.ContentWidth).MaxWidth(layout.ContentWidth).Height(layout.ContentHeight).Render(page.View())
+		body := model.theme.Content.Width(layout.ContentWidth).MaxWidth(layout.ContentWidth).Height(layout.ContentHeight).Render(model.viewSnapshotBody(page))
 		main := lipgloss.JoinHorizontal(lipgloss.Top, rail, body)
 		footer := ui.FooterRail
 		if model.focus.Area == ui.FocusContent {
