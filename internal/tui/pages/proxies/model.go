@@ -45,6 +45,8 @@ type DelayState struct {
 }
 
 type Model struct {
+	snapshotStates         map[string]ui.SnapshotState
+	sharedRefresh          func(bool) tea.Cmd
 	concurrencyChanged     bool
 	preferences            protocol.ProxyPreferences
 	contextFactory         func() (context.Context, context.CancelFunc)
@@ -161,6 +163,9 @@ func (m *Model) SetGroups(groups protocol.ProxyGroups) {
 		(m.groupsRevision != nil && groups.Revision != nil && *m.groupsRevision != *groups.Revision)
 	m.loadError = ""
 	m.groupsFresh = true
+	if m.lastError == "Candidates unavailable; wait for a successful refresh" {
+		m.lastError = ""
+	}
 	if metadataChanged {
 		m.groupsRevision = nil
 		if groups.Revision != nil {
@@ -365,7 +370,7 @@ func (m *Model) View() string {
 			return strings.Join(append(header, lines...), "\n")
 		}
 		inner := ui.FullSectionInner(m.width)
-		body := m.theme.Muted.Render(ui.NoProxyGroups)
+		body := m.theme.Muted.Render(m.snapshotPlaceholder("proxies", ui.NoProxyGroups))
 		if m.loadError != "" {
 			body = m.theme.Danger.Render("Unable to load proxy groups") + "\n" + m.loadError + "\n" + m.theme.Muted.Render("Waiting for automatic retry")
 		}
@@ -581,6 +586,11 @@ func (m *Model) columnsFor(textW int) int {
 }
 
 func (m *Model) selectFocused() tea.Cmd {
+	if m.sharedRefresh != nil && !m.groupsFresh {
+		m.lastError = "Candidates unavailable; wait for a successful refresh"
+		return nil
+	}
+
 	if m.client == nil || m.focus.Node == "" {
 		return nil
 	}
@@ -608,7 +618,7 @@ func (m *Model) selectFocused() tea.Cmd {
 		defer cancel()
 		outcome, err := m.client.SelectProxy(ctx, id.Group, protocol.ProxySelectionRequest{OperationID: operationID, Name: id.Node, IfRevision: revision})
 		result := selectionResultMsg{warnings: outcome.WarningOutcome, group: id.Group, node: id.Node, err: err, routing: routing, epoch: epoch, subscription: subscription}
-		if routing {
+		if routing || m.sharedRefresh != nil {
 			return ui.PageResultMsg{Page: ui.PageProxies, Result: result}
 		}
 		return result
@@ -721,6 +731,11 @@ func (m *Model) enqueueFront(name string) {
 }
 
 func (m *Model) testAll() tea.Cmd {
+	if m.sharedRefresh != nil && !m.groupsFresh {
+		m.lastError = "Candidates unavailable; wait for a successful refresh"
+		return nil
+	}
+
 	m.autoQueued = make(map[string]bool)
 	for _, task := range m.delayTasks {
 		task.automatic = false
@@ -730,6 +745,11 @@ func (m *Model) testAll() tea.Cmd {
 }
 
 func (m *Model) testNode(node string) tea.Cmd {
+	if m.sharedRefresh != nil && !m.groupsFresh {
+		m.lastError = "Candidates unavailable; wait for a successful refresh"
+		return nil
+	}
+
 	if node == "" {
 		return nil
 	}
@@ -839,3 +859,24 @@ func defaultOperationID() string {
 	}
 	return fmt.Sprintf("tui-%d", fallbackOperationID.Add(1))
 }
+
+// SetSnapshotState receives the shared observer's resource presentation state.
+func (m *Model) SetSnapshotState(resource string, state ui.SnapshotState) {
+	if m.snapshotStates == nil {
+		m.snapshotStates = make(map[string]ui.SnapshotState)
+	}
+	m.snapshotStates[resource] = state
+}
+
+// SetSnapshotRefresh attaches shared-observation mode; the root schedules proxy reads.
+func (m *Model) SetSnapshotRefresh(refresh func(bool) tea.Cmd) { m.sharedRefresh = refresh }
+
+func (m *Model) snapshotPlaceholder(resource, empty string) string {
+	if state, ok := m.snapshotStates[resource]; ok {
+		return state.Placeholder(empty)
+	}
+	return empty
+}
+
+// InvalidatesSnapshots retires queries started before a selection finished.
+func (selectionResultMsg) InvalidatesSnapshots() bool { return true }

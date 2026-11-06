@@ -339,3 +339,20 @@ func TestStatusBar_TruncatesToWidth(t *testing.T) {
 		t.Fatalf("width=%d exceeds max %d: %q", w, width, stripANSI(got))
 	}
 }
+
+func TestStatusBar_UnknownRatesKeepFixedSlots(t *testing.T) {
+	for _, compact := range []bool{false, true} {
+		data := sampleStatusBarData()
+		ready := RenderStatusBar(DefaultTheme(), data, 0, compact)
+		data.TrafficUnknown = true
+		waiting := RenderStatusBar(DefaultTheme(), data, 0, compact)
+		if lipgloss.Width(ready) != lipgloss.Width(waiting) {
+			t.Fatal("unknown rates changed bar width")
+		}
+	}
+}
+func TestSnapshotPlaceholder_FailureAfterEmptySuccess(t *testing.T) {
+	if got := (SnapshotState{Loaded: true, Failure: "fixture failure"}).Placeholder("empty"); !strings.Contains(got, "fixture failure") {
+		t.Fatal(got)
+	}
+}

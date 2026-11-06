@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -163,11 +164,11 @@ func TestSession_CoreRestartReconnectsStreamsWithoutDaemonReconnect(t *testing.T
 			events := session.Start(context.Background())
 			defer session.Close()
 
+			waitForEvent(t, events, EventConnected)
 			initial := waitForEvent(t, events, EventCore)
 			if initial.Core.Channel != test.from {
 				t.Fatalf("initial channel=%q want %q", initial.Core.Channel, test.from)
 			}
-			waitForEvent(t, events, EventConnected)
 			waitForStreamStarts(t, fake.started, 4)
 
 			fake.setCoreChannel(test.to)
@@ -248,36 +249,52 @@ func TestSession_ConsecutiveStreamFailuresIncreaseBackoffUntilStreamDataRecovers
 	}
 }
 
-func TestSession_LoadsCapabilitySnapshotsBeforeConnected(t *testing.T) {
+func TestSession_LoadsDemandedSnapshotsAfterConnected(t *testing.T) {
 	fake := newFakeClient()
 	fake.status = protocol.Status{Schema: "mihari/v1", Capabilities: []string{
 		protocol.CapabilityCore, protocol.CapabilitySubscriptions, protocol.CapabilityProxies,
 		protocol.CapabilityRules, protocol.CapabilityRuleProviders,
 	}}
-	session := New(fake, Options{Backoff: func(int) time.Duration { return 0 }})
+	client := &countInactiveClient{fakeClient: fake}
+	session := New(client, Options{Backoff: func(int) time.Duration { return 0 }, PollInterval: 10 * time.Millisecond})
 	events := session.Start(context.Background())
 	defer session.Close()
-	waitForEvent(t, events, EventStatus)
-	waitForEvent(t, events, EventCore)
-	waitForEvent(t, events, EventSubscriptions)
-	waitForEvent(t, events, EventProxies)
-	waitForEvent(t, events, EventRules)
-	waitForEvent(t, events, EventRuleProviders)
 	waitForEvent(t, events, EventConnected)
+	seen := map[EventKind]bool{}
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+	for !seen[EventCore] || !seen[EventSubscriptions] {
+		select {
+		case event, open := <-events:
+			if !open {
+				t.Fatal("session closed before demanded snapshots")
+			}
+			if event.Kind == EventProxies || event.Kind == EventRules || event.Kind == EventRuleProviders {
+				t.Fatal("inactive resource fetched")
+			}
+			seen[event.Kind] = true
+		case <-timer.C:
+			t.Fatal("visible resource snapshots missing")
+		}
+	}
+	waitForStatusCallAfter(t, fake, fake.statusCallCount())
+	if client.calls.Load() != 0 {
+		t.Fatal("inactive endpoint fetched before or after Connected")
+	}
 }
 
-func TestSession_LoadsTUIPreferencesBeforeConnected(t *testing.T) {
+func TestSession_LoadsTUIPreferencesAfterConnected(t *testing.T) {
 	fake := newFakeClient()
 	fake.status = protocol.Status{Schema: "mihari/v1", Capabilities: []string{protocol.CapabilityPreferences}}
 	fake.preferences = protocol.TUIPreferences{Schema: "mihari/v1", Revision: 7, ConnectionsColumns: []string{"host", "chain"}}
 	session := New(fake, Options{Backoff: func(int) time.Duration { return 0 }})
 	events := session.Start(context.Background())
 	defer session.Close()
+	waitForEvent(t, events, EventConnected)
 	event := waitForEvent(t, events, EventPreferences)
 	if event.Preferences.Revision != 7 || len(event.Preferences.ConnectionsColumns) != 2 {
 		t.Fatalf("preferences=%#v", event.Preferences)
 	}
-	waitForEvent(t, events, EventConnected)
 }
 
 func TestSession_LoggingInitialFetchAndSameRevisionDeduplicates(t *testing.T) {
@@ -755,4 +772,22 @@ func (f *fakeClient) failNextCore() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.coreFailures++
+}
+
+type countInactiveClient struct {
+	*fakeClient
+	calls atomic.Int32
+}
+
+func (c *countInactiveClient) ProxyGroups(ctx context.Context) (protocol.ProxyGroups, error) {
+	c.calls.Add(1)
+	return c.fakeClient.ProxyGroups(ctx)
+}
+func (c *countInactiveClient) Rules(ctx context.Context) (protocol.RuleList, error) {
+	c.calls.Add(1)
+	return c.fakeClient.Rules(ctx)
+}
+func (c *countInactiveClient) RuleProviders(ctx context.Context) (protocol.RuleProviderList, error) {
+	c.calls.Add(1)
+	return c.fakeClient.RuleProviders(ctx)
 }

@@ -477,12 +477,24 @@ func (model *Model) observeDiagnosticMessage(message tea.Msg) {
 				warnings = typed.Event.Preferences.WarningOutcome
 			case session.EventWebGUI:
 				warnings = typed.Event.WebGUI.WarningOutcome
+			case session.EventSystemProxy:
+				warnings = typed.Event.SystemProxy.WarningOutcome
+			case session.EventTUN:
+				warnings = typed.Event.TUN.WarningOutcome
+			case session.EventEgress:
+				warnings = typed.Event.Egress.WarningOutcome
+			case session.EventOnboarding:
+				warnings = typed.Event.Onboarding.WarningOutcome
 			case session.EventLogging:
 				warnings = typed.Event.Logging.WarningOutcome
 			}
 			model.recordWarnings(warnings, diagnosticEventPage(typed.Event.Kind))
+			validResource := !typed.Event.Discarded && (model.refreshSession == nil || model.refreshSession.Valid(typed.Event))
 			switch typed.Event.Kind {
-			case session.EventCore, session.EventSubscriptions, session.EventProxies, session.EventRouting, session.EventRules, session.EventRuleProviders, session.EventPreferences, session.EventWebGUI, session.EventLogging:
+			case session.EventCore, session.EventSubscriptions, session.EventProxies, session.EventRouting, session.EventRules, session.EventRuleProviders, session.EventPreferences, session.EventWebGUI, session.EventLogging, session.EventSystemProxy, session.EventTUN, session.EventEgress, session.EventOnboarding:
+				if !validResource {
+					break
+				}
 				if typed.Event.Err == nil {
 					delete(model.diagnosticWindow.resourceFailures, typed.Event.Kind)
 				} else {
@@ -539,7 +551,7 @@ func (model Model) diagnosticResourceSummary() string {
 	}
 	// Deterministic ordering avoids a changing footer when several independent
 	// resources fail in one poll. All occurrences remain in the F2 list.
-	for _, kind := range []session.EventKind{session.EventCore, session.EventSubscriptions, session.EventProxies, session.EventRouting, session.EventRules, session.EventRuleProviders, session.EventPreferences, session.EventWebGUI, session.EventLogging} {
+	for _, kind := range []session.EventKind{session.EventCore, session.EventSubscriptions, session.EventProxies, session.EventRouting, session.EventRules, session.EventRuleProviders, session.EventPreferences, session.EventWebGUI, session.EventLogging, session.EventSystemProxy, session.EventTUN, session.EventEgress, session.EventOnboarding} {
 		if summary := model.diagnosticWindow.resourceFailures[kind]; summary != "" && diagnosticEventPage(kind) == model.active {
 			return summary
 		}
@@ -549,7 +561,7 @@ func (model Model) diagnosticResourceSummary() string {
 
 func diagnosticEventPage(kind session.EventKind) ui.PageID {
 	switch kind {
-	case session.EventCore, session.EventLogging:
+	case session.EventCore, session.EventLogging, session.EventSystemProxy, session.EventTUN, session.EventEgress, session.EventOnboarding:
 		return ui.PageSystem
 	case session.EventSubscriptions:
 		return ui.PageSubscriptions

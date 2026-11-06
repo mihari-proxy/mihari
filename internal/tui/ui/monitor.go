@@ -16,15 +16,16 @@ type MemoryPoint struct {
 }
 
 type MonitorSnapshot struct {
-	Traffic       []TrafficPoint
-	Memory        []MemoryPoint
-	Connections   int
-	MemoryInUse   int64
-	UploadTotal   int64
-	DownloadTotal int64
-	UploadRate    int64
-	DownloadRate  int64
-	Stale         bool
+	ConnectionsUnknown, TrafficUnknown, MemoryUnknown bool
+	Traffic                                           []TrafficPoint
+	Memory                                            []MemoryPoint
+	Connections                                       int
+	MemoryInUse                                       int64
+	UploadTotal                                       int64
+	DownloadTotal                                     int64
+	UploadRate                                        int64
+	DownloadRate                                      int64
+	Stale                                             bool
 }
 
 type OperationRecord struct {

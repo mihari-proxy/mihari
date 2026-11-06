@@ -15,16 +15,21 @@ import (
 type EventKind string
 
 const (
-	EventDiagnostics   EventKind = "diagnostics"
-	EventStatus        EventKind = "status"
-	EventCore          EventKind = "core"
-	EventSubscriptions EventKind = "subscriptions"
-	EventProxies       EventKind = "proxies"
-	EventRouting       EventKind = "routing"
-	EventPreferences   EventKind = "preferences"
-	EventRules         EventKind = "rules"
-	EventRuleProviders EventKind = "rule-providers"
-	EventWebGUI        EventKind = "web-gui"
+	EventSnapshotLoading EventKind = "snapshot-loading"
+	EventSystemProxy     EventKind = "system-proxy"
+	EventTUN             EventKind = "tun"
+	EventEgress          EventKind = "egress"
+	EventOnboarding      EventKind = "onboarding"
+	EventDiagnostics     EventKind = "diagnostics"
+	EventStatus          EventKind = "status"
+	EventCore            EventKind = "core"
+	EventSubscriptions   EventKind = "subscriptions"
+	EventProxies         EventKind = "proxies"
+	EventRouting         EventKind = "routing"
+	EventPreferences     EventKind = "preferences"
+	EventRules           EventKind = "rules"
+	EventRuleProviders   EventKind = "rule-providers"
+	EventWebGUI          EventKind = "web-gui"
 	// EventLogging carries an epoch-tagged daemon Logging snapshot.
 	EventLogging       EventKind = "logging"
 	EventTraffic       EventKind = "traffic"
@@ -37,6 +42,15 @@ const (
 )
 
 type Event struct {
+	Onboarding  protocol.OnboardingStatus
+	Resource    EventKind
+	Generation  uint64
+	Scheduled   bool
+	Discarded   bool
+	SystemProxy protocol.SystemProxyStatus
+	TUN         protocol.TunStatus
+	Egress      protocol.EgressStatus
+	Batch       []Event
 	Diagnostics protocol.DiagnosticList
 	// DiagnosticQuery distinguishes history lookup errors from stream failures.
 	DiagnosticQuery bool
@@ -65,6 +79,7 @@ type Event struct {
 }
 
 type Options struct {
+	snapshotClock snapshotClock
 	// Reporter is the optional owner-provided diagnostic output.
 	Reporter         diagnostics.Reporter
 	Backoff          func(attempt int) time.Duration
@@ -72,10 +87,13 @@ type Options struct {
 	EventBufferSize  int
 	// PollInterval is the cadence for re-polling status snapshots (status, core,
 	// proxies, subscriptions, ...) while the push streams stay connected.
-	PollInterval time.Duration
+	PollInterval    time.Duration
+	SnapshotTimeout time.Duration
 }
 
 type Session struct {
+	refresh               *refreshRequests
+	owners                chan snapshotOwner
 	diagnosticInstance    string
 	diagnosticSequence    uint64
 	diagnosticUnsupported bool
@@ -117,7 +135,7 @@ func New(client Client, options Options) *Session {
 		options.PollInterval = time.Second
 	}
 	return &Session{
-		client: client, options: options,
+		client: client, options: options, refresh: newRefreshRequests(), owners: make(chan snapshotOwner, 16),
 		done: make(chan struct{}), events: make(chan Event, options.EventBufferSize),
 		control: make(chan Event, 16), ordered: make(chan Event, options.OrderedQueueSize),
 		traffic: make(chan Event, 1), memory: make(chan Event, 1),
@@ -158,7 +176,10 @@ func (s *Session) run(ctx context.Context) {
 		defer dispatch.Done()
 		s.dispatch(ctx)
 	}()
+	schedulerDone := make(chan struct{})
+	go func() { defer close(schedulerDone); s.schedule(ctx) }()
 	s.supervise(ctx)
+	<-schedulerDone
 	dispatch.Wait()
 	close(s.events)
 	close(s.done)
@@ -171,7 +192,7 @@ func (s *Session) supervise(ctx context.Context) {
 	}
 	attempt := 0
 	for ctx.Err() == nil {
-		status, err := s.client.Status(ctx)
+		status, err := s.readStatus(ctx)
 		if err != nil {
 			attempt++
 			if !s.putReconnecting(ctx, attempt, err) || !waitBackoff(ctx, s.options.Backoff(attempt)) {
@@ -183,8 +204,13 @@ func (s *Session) supervise(ctx context.Context) {
 		// Status is the daemon transport health boundary. Capability snapshots
 		// backed by mihomo may fail while its controller starts or restarts; keep
 		// the daemon connected and retry those snapshots during supervision.
-		_ = s.pollStatus(ctx, status)
+		if !s.putStatus(ctx, status) {
+			return
+		}
 		if !putOrdered(ctx, s.control, Event{Kind: EventConnected}) {
+			return
+		}
+		if !s.notifySnapshots(ctx, status) {
 			return
 		}
 		err = s.waitStartupNetwork(ctx, status)
@@ -217,14 +243,14 @@ func (s *Session) waitStartupNetwork(ctx context.Context, status protocol.Status
 			return ctx.Err()
 		case <-ticker.C:
 		}
-		next, err := s.client.Status(ctx)
+		next, err := s.readStatus(ctx)
 		if err != nil {
 			return err
 		}
 		status = next
 		// Snapshot errors after a healthy status remain nonfatal, as in the
 		// ordinary session poll. Cancellation is handled by the owner.
-		_ = s.pollStatus(ctx, status)
+		s.publishStatus(ctx, status)
 	}
 	return ctx.Err()
 }
@@ -359,6 +385,18 @@ func (s *Session) pollStatus(ctx context.Context, status protocol.Status) error 
 	return s.poll(ctx, status)
 }
 
+func (s *Session) publishStatus(ctx context.Context, status protocol.Status) bool {
+	return s.putStatus(ctx, status) && s.notifySnapshots(ctx, status)
+}
+func (s *Session) notifySnapshots(ctx context.Context, status protocol.Status) bool {
+	select {
+	case s.owners <- snapshotOwner{status: status, epoch: s.loggingEpoch, online: true}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (s *Session) putStatus(ctx context.Context, status protocol.Status) bool {
 	s.observeLoggingCapability(status)
 	return putOrdered(ctx, s.control, Event{Kind: EventStatus, Status: status, Epoch: s.loggingEpoch})
@@ -406,6 +444,11 @@ func (s *Session) pollLogging(ctx context.Context, status protocol.Status) {
 
 func (s *Session) putReconnecting(ctx context.Context, attempt int, err error) bool {
 	s.loggingEpoch++
+	select {
+	case s.owners <- snapshotOwner{epoch: s.loggingEpoch}:
+	case <-ctx.Done():
+		return false
+	}
 	s.loggingRevision = nil
 	s.loggingCapability = false
 	s.loggingCapabilityKnown = false
@@ -475,13 +518,13 @@ func (s *Session) superviseStreams(ctx context.Context) error {
 			if err != nil && !putOrdered(ctx, s.control, Event{Kind: EventDiagnostics, Err: err}) {
 				return ctx.Err()
 			}
-			status, statusErr := s.client.Status(streamCtx)
+			status, statusErr := s.readStatus(streamCtx)
 			if statusErr != nil {
 				// The fresh health probe owns the reconnect diagnosis. Keeping
 				// a stale stream error first would hide credential/path failures.
 				return statusErr
 			}
-			if !s.putStatus(streamCtx, status) {
+			if !s.publishStatus(streamCtx, status) {
 				return streamCtx.Err()
 			}
 			streamAttempt++
@@ -493,9 +536,9 @@ func (s *Session) superviseStreams(ctx context.Context) error {
 			// temporarily unavailable after Status proves the daemon is alive.
 			// Reopen streams first, retain the last observed snapshot, and let
 			// this or the next periodic poll refresh it when mihomo is ready.
-			_ = s.poll(streamCtx, status)
+			s.publishStatus(streamCtx, status)
 		case <-ticker.C:
-			status, err := s.client.Status(streamCtx)
+			status, err := s.readStatus(streamCtx)
 			if err != nil {
 				return err
 			}
@@ -506,7 +549,7 @@ func (s *Session) superviseStreams(ctx context.Context) error {
 			// Status is the daemon transport health boundary. A snapshot error
 			// after it succeeds may only mean the restarted controller is not
 			// ready yet and must not mark the daemon stale.
-			_ = s.pollStatus(streamCtx, status)
+			s.publishStatus(streamCtx, status)
 		}
 	}
 }

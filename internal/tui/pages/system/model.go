@@ -338,6 +338,8 @@ var _ interface{ Err() error } = actionResultMsg{}
 
 // Model is the System page.
 type Model struct {
+	snapshotStates        map[string]ui.SnapshotState
+	sharedRefresh         func(bool) tea.Cmd
 	auth                  authUI
 	egress                egressUI
 	coreVersion           coreVersionState
@@ -707,7 +709,12 @@ func (m *Model) SetSnapshot(status protocol.Status, core protocol.CoreStatus) {
 	m.ensureFocusVisible()
 }
 
-func (m *Model) SetOnboarding(status protocol.OnboardingStatus) { m.onboarding = status }
+func (m *Model) SetOnboarding(status protocol.OnboardingStatus) {
+	if m.onboarding.MixedAddr != status.MixedAddr || m.onboarding.ControllerAddr != status.ControllerAddr || m.onboarding.WebAddr != status.WebAddr {
+		m.portProbeNeeded = true
+	}
+	m.onboarding = status
+}
 
 // SetSystemProxy injects system-proxy status (tests and optional external refresh).
 func (m *Model) SetSystemProxy(status protocol.SystemProxyStatus) {
@@ -790,25 +797,32 @@ func (m *Model) load(checkVersions, fresh bool) tea.Cmd {
 	if checkVersions && m.selfUpdater != nil && !m.pending {
 		cmds = append(cmds, m.checkMihariVersion())
 	}
-	if m.client != nil && m.hasCapability(protocol.CapabilityOnboarding) {
+	if m.sharedRefresh != nil {
+		cmds = append(cmds, m.sharedRefresh(false))
+		if checkVersions || fresh {
+			m.portProbeNeeded = true
+			cmds = append(cmds, m.SyncPortHolds())
+		}
+	}
+	if m.sharedRefresh == nil && m.client != nil && m.hasCapability(protocol.CapabilityOnboarding) {
 		cmds = append(cmds, func() tea.Msg {
 			status, err := m.client.Onboarding(m.ctx)
 			return onboardingResultMsg{status: status, err: err}
 		})
 	}
-	if m.service != nil {
+	if m.sharedRefresh == nil && m.service != nil {
 		cmds = append(cmds, m.loadServiceStatus(ctx))
 	}
-	if m.client != nil && m.hasCapability(protocol.CapabilitySystemProxy) {
+	if m.sharedRefresh == nil && m.client != nil && m.hasCapability(protocol.CapabilitySystemProxy) {
 		cmds = append(cmds, m.loadSystemProxy(ctx))
 	}
-	if m.client != nil && m.hasCapability(protocol.CapabilityTUN) {
+	if m.sharedRefresh == nil && m.client != nil && m.hasCapability(protocol.CapabilityTUN) {
 		cmds = append(cmds, m.loadTun(ctx))
 	}
-	if m.client != nil && m.hasCapability(protocol.CapabilityEgress) {
+	if m.sharedRefresh == nil && m.client != nil && m.hasCapability(protocol.CapabilityEgress) {
 		cmds = append(cmds, m.loadEgress(ctx))
 	}
-	if m.client != nil && m.hasCapability(protocol.CapabilityWebGUI) {
+	if m.sharedRefresh == nil && m.client != nil && m.hasCapability(protocol.CapabilityWebGUI) {
 		cmds = append(cmds, m.loadWebGUI())
 	}
 	switch len(cmds) {
@@ -892,6 +906,9 @@ func (m *Model) loadServiceStatus(contexts ...context.Context) tea.Cmd {
 }
 
 func (m *Model) loadSystemProxy(contexts ...context.Context) tea.Cmd {
+	if m.sharedRefresh != nil {
+		return m.sharedRefresh(false)
+	}
 	ctx := m.ctx
 	if len(contexts) > 0 {
 		ctx = contexts[0]
@@ -903,6 +920,9 @@ func (m *Model) loadSystemProxy(contexts ...context.Context) tea.Cmd {
 }
 
 func (m *Model) loadTun(contexts ...context.Context) tea.Cmd {
+	if m.sharedRefresh != nil {
+		return m.sharedRefresh(false)
+	}
 	ctx := m.ctx
 	if len(contexts) > 0 {
 		ctx = contexts[0]
@@ -914,6 +934,9 @@ func (m *Model) loadTun(contexts ...context.Context) tea.Cmd {
 }
 
 func (m *Model) loadWebGUI() tea.Cmd {
+	if m.sharedRefresh != nil {
+		return m.sharedRefresh(false)
+	}
 	return func() tea.Msg {
 		status, err := m.client.WebGUI(m.ctx)
 		return webGUIStatusMsg{status: status, err: err}
@@ -1584,7 +1607,7 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 			marker = ui.FocusMarker
 		}
 		labelPart := marker + item.label
-		value := item.value
+		value := m.snapshotRowValue(item.id, item.value)
 		switch {
 		case m.editID == rowLogLevel && item.id == rowLogLevel:
 			value = m.loggingLevelEditorView(clock)
@@ -1612,7 +1635,7 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 			case m.outcomeOK:
 				value = ui.RenderStatusChip(m.theme, ui.StatusChipDone, ui.DoneLabel)
 				if item.id == rowMixed || item.id == rowController || item.id == rowWeb {
-					value = item.value + "  " + value
+					value = m.snapshotRowValue(item.id, item.value) + "  " + value
 				}
 			default:
 				value = ui.RenderStatusChip(m.theme, ui.StatusChipFailed, ui.FailedLabel)
@@ -1628,7 +1651,7 @@ func (m *Model) buildSectionContent() (lines []string, focusStart, focusEnd int)
 			}
 		}
 		if isLoggingRow(item.id) && m.editID != item.id && ((m.pending && m.pendingRow == item.id && m.pendingNote != "") || m.outcomeRow == item.id) {
-			value = item.value + "  " + value
+			value = m.snapshotRowValue(item.id, item.value) + "  " + value
 		}
 		if value != "" {
 			value = "  " + value
@@ -3275,6 +3298,9 @@ func (m *Model) runAction(start actionStartMsg) tea.Cmd {
 }
 
 func (m *Model) loadCore() tea.Cmd {
+	if m.sharedRefresh != nil {
+		return m.sharedRefresh(false)
+	}
 	if m.client == nil || !m.hasCapability(protocol.CapabilityCore) {
 		return nil
 	}
@@ -3593,4 +3619,46 @@ func defaultOperationID() string {
 		return "tui-system-" + hex.EncodeToString(raw[:])
 	}
 	return fmt.Sprintf("tui-system-%d-%d", time.Now().UnixNano(), fallbackOperationID.Add(1))
+}
+
+// SetSnapshotRefresh uses the root's shared ordinary snapshot owner.
+func (m *Model) SetSnapshotRefresh(refresh func(bool) tea.Cmd) { m.sharedRefresh = refresh }
+
+// SetSnapshotState distinguishes initial fetches and failures from empty values.
+func (m *Model) SetSnapshotState(resource string, state ui.SnapshotState) {
+	if m.snapshotStates == nil {
+		m.snapshotStates = make(map[string]ui.SnapshotState)
+	}
+	m.snapshotStates[resource] = state
+}
+func (m *Model) snapshotRowValue(rowID, value string) string {
+	resource := ""
+	switch rowID {
+	case rowCore, rowCoreChannel:
+		resource = "core"
+	case rowSystemProxy:
+		resource = "system-proxy"
+	case rowTUN:
+		resource = "tun"
+	case "egress":
+		resource = "egress"
+	case rowZashboard, rowMetaCubeXD:
+		resource = "web-gui"
+	case rowMixed, rowController, rowWeb:
+		resource = "onboarding"
+	case rowLogLevel, rowLogMaxSize, rowLogMaxFiles:
+		resource = "logging"
+	}
+	if state, ok := m.snapshotStates[resource]; ok && !state.Loaded {
+		return state.Placeholder("")
+	}
+	return value
+}
+
+func (m *Model) snapshotReady(resource string) bool {
+	if m.sharedRefresh == nil {
+		return true
+	}
+	state, ok := m.snapshotStates[resource]
+	return ok && state.Loaded && !state.Pending && state.Failure == ""
 }

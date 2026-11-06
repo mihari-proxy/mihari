@@ -26,14 +26,14 @@ func (m *Model) View() string {
 	if height <= 0 {
 		height = 40
 	}
-	active := valueOr(m.status.ActivePanel, "None")
+	active := m.snapshotPlaceholder("web-gui", valueOr(m.status.ActivePanel, "None"))
 	field := func(label, value string) string {
 		return m.theme.Muted.Render(fmt.Sprintf("%-18s", label)) + value
 	}
 	summary := strings.Join([]string{
 		field("Gateway", m.theme.Info.Render(valueOr(m.status.GatewayAddr, ui.MissingValue))),
 		field(ui.ActivePanelLabel, active),
-		field(ui.BrowserSessionsLabel, fmt.Sprint(m.status.BrowserSessions)),
+		field(ui.BrowserSessionsLabel, m.snapshotPlaceholder("web-gui", fmt.Sprint(m.status.BrowserSessions))),
 	}, "\n")
 	summaryLines := strings.Split(summary, "\n")
 	for i, line := range summaryLines {
@@ -71,7 +71,7 @@ func (m *Model) View() string {
 
 func (m *Model) panelLines() (lines []string, start, end int) {
 	if len(m.status.Panels) == 0 {
-		return strings.Split(ui.RenderBorderedSection(m.theme, "Panels", m.theme.Muted.Render(ui.NoWebGUIPanels), ui.FullSectionInner(m.layoutWidth())), "\n"), 0, 1
+		return strings.Split(ui.RenderBorderedSection(m.theme, "Panels", m.theme.Muted.Render(m.snapshotPlaceholder("web-gui", ui.NoWebGUIPanels)), ui.FullSectionInner(m.layoutWidth())), "\n"), 0, 1
 	}
 	columns := 1
 	inner := ui.FullSectionInner(m.layoutWidth())

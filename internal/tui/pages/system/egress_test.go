@@ -466,3 +466,22 @@ func TestEgressDialog_ListUsesStatusColorAndDetailIndent(t *testing.T) {
 		t.Fatal("enter on a non-selectable interface changed the dialog")
 	}
 }
+
+func TestEgressSharedRefresh_StaleCandidateCannotApply(t *testing.T) {
+	client := &egressTestClient{}
+	m := New(client, func() string { return "op" })
+	m.SetSnapshotRefresh(func(bool) tea.Cmd { return nil })
+	m.SetEgress(protocol.EgressStatus{Selection: protocol.EgressSelection{Mode: "automatic"}, Interfaces: []protocol.EgressInterface{{Name: "fixture", Selectable: true}}})
+	m.egress.candidate = "fixture"
+	m.SetSnapshotState("egress", ui.SnapshotState{Loaded: true, Pending: true})
+	if m.applyEgress() != nil || m.egress.pending || client.calls != 0 {
+		t.Fatal("stale candidate started an outbound mutation")
+	}
+	if m.egress.result != "failed" {
+		t.Fatal("blocked candidate reason hidden")
+	}
+	m.SetSnapshotState("egress", ui.SnapshotState{Loaded: true})
+	if m.applyEgress() == nil {
+		t.Fatal("fresh candidate remained disabled")
+	}
+}

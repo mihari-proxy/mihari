@@ -28,11 +28,13 @@ const wideMinWidth = 80
 const overviewLabelWidth = 9
 
 type Snapshot struct {
-	Status        protocol.Status
-	Core          protocol.CoreStatus
-	Subscriptions protocol.SubscriptionList
-	Monitor       ui.MonitorSnapshot
-	Operations    []ui.OperationRecord
+	TrackLoading                                                          bool
+	CoreState, SubscriptionState, WebGUIState, SystemProxyState, TUNState ui.SnapshotState
+	Status                                                                protocol.Status
+	Core                                                                  protocol.CoreStatus
+	Subscriptions                                                         protocol.SubscriptionList
+	Monitor                                                               ui.MonitorSnapshot
+	Operations                                                            []ui.OperationRecord
 	// Local / daemon-backed strip fields (Service is OS-local; others need daemon).
 	ServiceStatus service.StatusKind
 	ServiceLoaded bool
@@ -80,6 +82,9 @@ func (m *Model) View() string {
 	general := m.renderGeneralBody(m.fullCardInner())
 
 	subscription := renderActiveSubscription(m.snapshot.Subscriptions, m.snapshot.Stale)
+	if m.snapshot.TrackLoading && !m.snapshot.SubscriptionState.Loaded {
+		subscription = m.snapshot.SubscriptionState.Placeholder("")
+	}
 	webGUI := m.renderWebGUICard()
 
 	operations := ui.NoRecentOperations
@@ -150,6 +155,9 @@ func (m *Model) View() string {
 // card is too narrow to keep the full date and count together.
 func (m *Model) renderCoreCard(inner int) string {
 	coreStatusRaw := valueOr(m.snapshot.Core.Status, ui.UnknownLabel)
+	if m.snapshot.TrackLoading && !m.snapshot.CoreState.Loaded {
+		coreStatusRaw = m.snapshot.CoreState.Placeholder("")
+	}
 	coreTone := ui.ClassifyStatusTone(coreStatusRaw)
 	if m.snapshot.Stale {
 		// Keep the last-known glyph, degrade the dot to caution yellow, and
@@ -161,18 +169,18 @@ func (m *Model) renderCoreCard(inner int) string {
 	coreVersion := valueOr(m.snapshot.Core.Version, ui.UnknownLabel)
 	line1 := fmt.Sprintf("%s  %s · %s %s",
 		coreStatus, m.theme.Muted.Render(coreVersion),
-		ui.MonitorMemoryShort, ui.FormatBytes(m.snapshot.Monitor.MemoryInUse))
-	connLabel := fmt.Sprintf("%d conn", m.snapshot.Monitor.Connections)
+		ui.MonitorMemoryShort, ui.ObservedMetric(ui.FormatBytes(m.snapshot.Monitor.MemoryInUse), m.snapshot.Monitor.MemoryUnknown))
+	connLabel := ui.ObservedMetric(fmt.Sprintf("%d conn", m.snapshot.Monitor.Connections), m.snapshot.Monitor.ConnectionsUnknown)
 	if m.snapshot.Stale {
 		connLabel += " · " + ui.StaleLabel
 	}
 	line2 := fmt.Sprintf("%s · %s",
 		connLabel,
 		ui.StyleTrafficPair(m.theme,
-			"↑"+ui.FormatBytes(m.snapshot.Monitor.UploadTotal),
-			"↓"+ui.FormatBytes(m.snapshot.Monitor.DownloadTotal)))
-	uploadRate := ui.FormatRate(m.snapshot.Monitor.UploadRate)
-	downloadRate := ui.FormatRate(m.snapshot.Monitor.DownloadRate)
+			"↑"+ui.ObservedMetric(ui.FormatBytes(m.snapshot.Monitor.UploadTotal), m.snapshot.Monitor.ConnectionsUnknown),
+			"↓"+ui.ObservedMetric(ui.FormatBytes(m.snapshot.Monitor.DownloadTotal), m.snapshot.Monitor.ConnectionsUnknown)))
+	uploadRate := ui.ObservedMetric(ui.FormatRate(m.snapshot.Monitor.UploadRate), m.snapshot.Monitor.TrafficUnknown)
+	downloadRate := ui.ObservedMetric(ui.FormatRate(m.snapshot.Monitor.DownloadRate), m.snapshot.Monitor.TrafficUnknown)
 	// Budget against printable width, excluding the card's horizontal padding.
 	// Keep a stable reserve for typical rates, growing it for longer values.
 	// Both charts share the same width; narrow cards shrink the charts first.
@@ -184,11 +192,15 @@ func (m *Model) renderCoreCard(inner int) string {
 	for index, point := range m.snapshot.Monitor.Traffic {
 		upload[index], download[index] = point.Up, point.Down
 	}
+	lifetime := formatCoreLifetime(inner, m.snapshot.Core.StartedAt, m.snapshot.Core.Restarts)
+	if m.snapshot.TrackLoading && !m.snapshot.CoreState.Loaded {
+		lifetime = ui.UpSinceLabel + " —  " + ui.RestartsLabel + " —"
+	}
 	return strings.Join([]string{
 		line1, line2,
 		ui.MonitorUploadShort + " " + ui.Sparkline(upload, chartWidth) + " " + uploadRate,
 		ui.MonitorDownloadShort + " " + ui.Sparkline(download, chartWidth) + " " + downloadRate,
-		formatCoreLifetime(inner, m.snapshot.Core.StartedAt, m.snapshot.Core.Restarts),
+		lifetime,
 	}, "\n")
 }
 
@@ -243,6 +255,9 @@ func wrapStatusDot(theme ui.Theme, tone ui.StatusTone, text string, valueWidth i
 // renderWebGUICard shows the gateway health dot plus address, default panel and
 // browser sessions once the daemon supplies a WebGUI snapshot (design G5).
 func (m *Model) renderWebGUICard() string {
+	if m.snapshot.TrackLoading && !m.snapshot.WebGUIState.Loaded && m.snapshot.WebGUIState.Failure != "not supported" {
+		return m.snapshot.WebGUIState.Placeholder("")
+	}
 	status := m.snapshot.WebGUI
 	if status == nil {
 		if slices.Contains(m.snapshot.Status.Capabilities, protocol.CapabilityWebGUI) {
@@ -272,8 +287,8 @@ func (m *Model) renderGeneralBody(inner int) string {
 	rows := []struct{ label, value string }{
 		{ui.OverviewServiceLabel, formatServiceValue(m.theme, m.snapshot)},
 		{ui.OverviewMihariLabel, formatMihariVersion(m.snapshot.MihariVersion)},
-		{ui.OverviewSysProxyLabel, formatSysProxyValue(m.theme, m.snapshot)},
-		{ui.OverviewTunLabel, formatTunValue(m.theme, m.snapshot)},
+		{ui.OverviewSysProxyLabel, m.systemProxyLabel()},
+		{ui.OverviewTunLabel, m.tunLabel()},
 		{ui.OverviewHealthLabel, formatConfigHealth(m.theme, m.snapshot, inner-overviewLabelWidth-2)},
 		{ui.UpSinceLabel, formatOverviewClock(m.snapshot.Status.StartedAt)},
 	}
@@ -534,4 +549,17 @@ func padRightTime(left string, at time.Time, width int) string {
 		return left
 	}
 	return left + strings.Repeat(" ", gap) + clock
+}
+
+func (m *Model) systemProxyLabel() string {
+	if m.snapshot.TrackLoading && !m.snapshot.SystemProxyState.Loaded && m.snapshot.SystemProxyState.Failure != "not supported" {
+		return m.snapshot.SystemProxyState.Placeholder("")
+	}
+	return formatSysProxyValue(m.theme, m.snapshot)
+}
+func (m *Model) tunLabel() string {
+	if m.snapshot.TrackLoading && !m.snapshot.TUNState.Loaded && m.snapshot.TUNState.Failure != "not supported" {
+		return m.snapshot.TUNState.Placeholder("")
+	}
+	return formatTunValue(m.theme, m.snapshot)
 }

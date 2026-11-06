@@ -72,3 +72,18 @@ func (m preparedMihariResultMsg) DiagnosticErrors() []error {
 	}
 	return []error{m.err}
 }
+
+// InvalidatesSnapshots identifies writes independently of the current page.
+func (actionResultMsg) InvalidatesSnapshots() bool { return true }
+
+// InvalidatesSnapshots identifies a system proxy write.
+func (systemProxyActionResultMsg) InvalidatesSnapshots() bool { return true }
+
+// InvalidatesSnapshots identifies a managed TUN write.
+func (tunActionResultMsg) InvalidatesSnapshots() bool { return true }
+
+// InvalidatesSnapshots identifies a logging policy write.
+func (loggingUpdateResultMsg) InvalidatesSnapshots() bool { return true }
+
+// InvalidatesSnapshots identifies an endpoint settings write.
+func (portsApplyResultMsg) InvalidatesSnapshots() bool { return true }

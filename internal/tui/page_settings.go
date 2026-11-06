@@ -12,6 +12,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	connectionspage "github.com/mihari-proxy/mihari/internal/tui/pages/connections"
 	proxypage "github.com/mihari-proxy/mihari/internal/tui/pages/proxies"
+	"github.com/mihari-proxy/mihari/internal/tui/session"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -480,6 +481,9 @@ func (model *Model) updatePageSettings(message tea.Msg) (tea.Cmd, bool) {
 		}
 		if saved.err == nil {
 			model.applyPreferences(saved.preferences)
+			if model.refreshSession != nil {
+				model.refreshSession.Invalidate(session.EventPreferences, session.EventSystemProxy, session.EventTUN, session.EventEgress)
+			}
 		}
 		if model.pageSettings == saved.dialog {
 			saved.dialog.saving = false

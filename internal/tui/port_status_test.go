@@ -17,6 +17,10 @@ func TestSystemPortStatus_RootSchedulesProbe(t *testing.T) {
 		name  string
 		apply func(*Model) tea.Cmd
 	}{
+		{"batch-onboarding", func(m *Model) tea.Cmd {
+			_, cmd := m.Update(sessionEventMsg{Open: true, Event: session.Event{Batch: []session.Event{{Kind: session.EventOnboarding, Onboarding: protocol.OnboardingStatus{MixedAddr: "new-invalid-endpoint"}}, {Kind: session.EventMemory}}}})
+			return cmd
+		}},
 		{"core", func(m *Model) tea.Cmd {
 			return m.applySessionEvent(session.Event{Kind: session.EventCore, Core: protocol.CoreStatus{PID: 43, Status: "running"}})
 		}},
