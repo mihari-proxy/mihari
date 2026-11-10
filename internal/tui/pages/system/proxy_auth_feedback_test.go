@@ -25,8 +25,8 @@ func feedbackAuthModel() *Model {
 func TestProxyAuthFeedback_FailedSaveReschedulesCurrentDraftPreview(t *testing.T) {
 	m := newAuthPreviewTestModel(&authPreviewRecordingClient{})
 	m.auth = authUI{open: true, loaded: true, pending: true, epoch: 1, draft: protocol.ProxyAuthConfig{Mode: "enabled"}}
-	m.handleAuthResult(authResultMsg{epoch: 1, mutation: true, err: errors.New("synthetic save error")})
-	if m.auth.pending || !m.auth.previewPending {
+	cmd := m.handleAuthResult(authResultMsg{epoch: 1, mutation: true, err: errors.New("synthetic save error")})
+	if m.auth.pending || !m.auth.previewPending || cmd == nil {
 		t.Fatal("failed save left the current draft without a preview request")
 	}
 }
