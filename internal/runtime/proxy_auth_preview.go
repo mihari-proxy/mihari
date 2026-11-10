@@ -25,13 +25,13 @@ func (m *Manager) PreviewProxyAuth(ctx context.Context, request protocol.ProxyAu
 	m.unlock()
 	base := subscription.Document{}
 	if catalog.ActiveID != "" {
-		generation := uint64(0)
+		profileGeneration := uint64(0)
 		if index := catalog.Index(catalog.ActiveID); index >= 0 {
-			generation = catalog.Profiles[index].Generation
+			profileGeneration = catalog.Profiles[index].Generation
 		}
-		key := authPreviewSourceKey{service: m.subscriptions, id: catalog.ActiveID, generation: generation}
+		key := authPreviewSourceKey{service: m.subscriptions, id: catalog.ActiveID, generation: profileGeneration}
 		document, err := m.authPreviewSourceCache.load(ctx, key, func() (subscription.Document, error) {
-			_, document, err := m.subscriptions.ReadCacheAtGeneration(catalog.ActiveID, generation)
+			_, document, err := m.subscriptions.ReadCacheAtGeneration(catalog.ActiveID, profileGeneration)
 			return document, err
 		})
 		if err != nil {

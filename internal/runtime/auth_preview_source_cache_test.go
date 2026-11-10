@@ -53,7 +53,9 @@ func TestAuthPreviewSourceCache_PanicReleasesEntryAndAllowsRetry(t *testing.T) {
 				t.Error("loader panic was swallowed")
 			}
 		}()
-		cache.load(t.Context(), key, func() (subscription.Document, error) { ready = cache.entry.ready; panic("synthetic read panic") })
+		if _, err := cache.load(t.Context(), key, func() (subscription.Document, error) { ready = cache.entry.ready; panic("synthetic read panic") }); err != nil {
+			t.Fatal(err)
+		}
 	}()
 	select {
 	case <-ready:
