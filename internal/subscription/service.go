@@ -357,6 +357,16 @@ func (s *Service) CachePath(id string) string {
 }
 
 func (s *Service) ReadCache(id string) ([]byte, Document, error) {
+	return s.readCache(id, nil)
+}
+
+// ReadCacheAtGeneration reads only the expected committed cache generation.
+// Identity is checked under the same read lock that protects cache bytes.
+func (s *Service) ReadCacheAtGeneration(id string, generation uint64) ([]byte, Document, error) {
+	return s.readCache(id, &generation)
+}
+
+func (s *Service) readCache(id string, generation *uint64) ([]byte, Document, error) {
 	if !profileIDPattern.MatchString(id) {
 		return nil, nil, notFoundError()
 	}
@@ -364,6 +374,12 @@ func (s *Service) ReadCache(id string) ([]byte, Document, error) {
 	// readers must observe both from one committed cache generation.
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if generation != nil {
+		index := s.catalog.Index(id)
+		if index < 0 || s.catalog.Profiles[index].Generation != *generation {
+			return nil, nil, protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "subscription cache generation changed"}
+		}
+	}
 	content, err := os.ReadFile(s.CachePath(id))
 	if err != nil {
 		return nil, nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "subscription cache is unavailable"}, err)

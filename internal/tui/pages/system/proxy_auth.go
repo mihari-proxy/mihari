@@ -20,14 +20,25 @@ type revealedAuthCredential struct {
 	saved, effective *protocol.ProxyAuthUser
 }
 type authUI struct {
+	background                                  *ui.PreparedOverlay
+	backgroundWidth, backgroundHeight           int
+	exitOpen, closeAfterSave, saveDone          bool
+	exitChoice                                  int
+	errorText                                   string
+	errorWidth                                  int
+	errorLines                                  []string
 	picker                                      string
 	pickerIndex                                 int
 	sourceUsers                                 []protocol.ProxyAuthUser
 	sourceID, sourceName, sourceErr             string
 	sourceLoaded                                bool
 	previewCancel                               context.CancelFunc
+	previewTimerCancel                          context.CancelFunc
 	previewRevealed                             bool
 	preview                                     protocol.ProxyAuthPreview
+	previewRenderKey                            authPreviewRenderKey
+	previewRenderSource                         []protocol.ProxyAuthPreviewLine
+	previewRendered                             []string
 	previewSeq                                  uint64
 	previewPending, previewFocus, previewManual bool
 	previewTop                                  int
@@ -97,13 +108,14 @@ func (m *Model) handleAuthResult(r authResultMsg) tea.Cmd {
 	}
 	m.auth.pending = false
 	if r.err != nil {
+		m.auth.closeAfterSave = false
 		m.auth.err = actionErrorDetail(r.err, "Proxy authentication failed") + " (F2: details)"
 		var api protocol.APIError
 		if errors.As(r.err, &api) && api.Code == protocol.CodeRevisionConflict {
 			m.auth.conflict = true
 			return m.authLoad(false)
 		}
-		return nil
+		return m.rowSpinCmdIfNeeded()
 	}
 	if r.reveal {
 		m.auth.revealed = map[string]revealedAuthCredential{}
@@ -132,6 +144,10 @@ func (m *Model) handleAuthResult(r authResultMsg) tea.Cmd {
 		m.auth.err = "Settings changed. Current configuration reloaded; review and reapply your edits."
 	}
 	if r.mutation {
+		m.auth.saveDone = true
+		if m.auth.closeAfterSave {
+			return tea.Batch(m.closeAuth(), func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: r.status.Revision} })
+		}
 		return tea.Batch(m.scheduleAuthPreview(), func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: r.status.Revision} })
 	}
 	return m.scheduleAuthPreview()
@@ -179,7 +195,9 @@ func (m *Model) authSave(reset bool) tea.Cmd {
 	epoch, ctx := m.auth.epoch, m.ctx
 	hasPreview := m.hasCapability(protocol.CapabilityProxyAuthPreview)
 	m.auth.pending = true
-	return func() tea.Msg {
+	m.auth.saveDone = false
+	m.auth.err = ""
+	save := func() tea.Msg {
 		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
 		v, e := client.UpdateProxyAuth(ctx, request)
@@ -189,6 +207,7 @@ func (m *Model) authSave(reset bool) tea.Cmd {
 		}
 		return ui.PageResultMsg{Page: ui.PageSystem, Result: result}
 	}
+	return tea.Batch(save, m.rowSpinCmdIfNeeded())
 }
 func (m *Model) authEdit(kind, name string) tea.Cmd {
 	a := &m.auth
@@ -224,6 +243,9 @@ func (m *Model) updateAuthControls(message tea.Msg) tea.Cmd {
 	if a.pending {
 		return nil
 	}
+	if a.exitOpen && ok {
+		return m.authExitKey(key.String())
+	}
 	if a.picker != "" && ok {
 		switch key.String() {
 		case "esc":
@@ -246,6 +268,8 @@ func (m *Model) updateAuthControls(message tea.Msg) tea.Cmd {
 	if a.edit != "" {
 		if ok {
 			switch key.String() {
+			case "ctrl+s":
+				return m.requestAuthSave(false)
 			case "esc":
 				a.edit = ""
 				return nil
@@ -308,9 +332,12 @@ func (m *Model) updateAuthControls(message tea.Msg) tea.Cmd {
 		return nil
 	}
 	if key.String() == "esc" {
-		epoch := a.epoch + 1
-		*a = authUI{epoch: epoch}
-		return func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
+		if a.loaded && m.authDirty() {
+			a.exitOpen = true
+			a.exitChoice = 2
+			return nil
+		}
+		return m.closeAuth()
 	}
 	if !a.loaded {
 		return nil
@@ -399,6 +426,13 @@ func (m *Model) updateAuthControls(message tea.Msg) tea.Cmd {
 			return func() tea.Msg {
 				return ui.ConfirmationRequestMsg{Title: "Reset Proxy Authentication", Impact: "Clear users and bypass rules saved in Mihari; restore subscription authentication", Rollback: "Saved overrides will be removed", OnConfirm: func() tea.Msg { return authResetConfirmedMsg{} }}
 			}
+		case a.selected == resetRow+2:
+			if m.authDirty() {
+				a.exitOpen = true
+				a.exitChoice = 2
+				return nil
+			}
+			return m.closeAuth()
 		default:
 			return m.authSave(false)
 		}

@@ -1556,10 +1556,18 @@ func (m *Model) handleTunActionResult(typed tunActionResultMsg) (ui.Page, tea.Cm
 }
 
 func (m *Model) View() (view string) {
-	defer func() {
-		if m.auth.open {
-			view = ui.CenterOverlay(m.theme, view, m.authView(), m.authViewportWidth(), m.height)
+	if m.auth.open {
+		if m.auth.background == nil || m.auth.backgroundWidth != m.width || m.auth.backgroundHeight != m.height {
+			m.auth.background = ui.PrepareOverlay(m.theme, m.systemView(), m.authViewportWidth(), m.height)
+			m.auth.backgroundWidth, m.auth.backgroundHeight = m.width, m.height
 		}
+		return m.auth.background.Center(m.authView())
+	}
+	return m.systemView()
+}
+
+func (m *Model) systemView() (view string) {
+	defer func() {
 		if m.egress.open {
 			view = ui.CenterOverlay(m.theme, view, m.egressDialogView(), m.width, m.height)
 		}
@@ -2380,6 +2388,9 @@ func (m *Model) errorChromeLines() []string {
 }
 
 func (m *Model) ensureFocusVisible() {
+	if m.auth.open {
+		return
+	}
 	lines, focusStart, focusEnd := m.buildSectionContent()
 	avail := m.height - len(m.errorChromeLines())
 	m.scrollY = ui.EnsureLineVisible(m.scrollY, avail, len(lines), focusStart, focusEnd)

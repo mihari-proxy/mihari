@@ -52,9 +52,10 @@ func TestProxyAuth_DraftRemovalAndScrollDoNotApply(t *testing.T) {
 	if len(m.authUsers()) != 24 {
 		t.Fatal("removed instance user remains visible")
 	}
-	m.auth.selected = len(m.authNavigation()) - 1
+	navigation := m.authNavigation()
+	m.auth.selected = navigation[len(navigation)-1]
 	view := m.authView()
-	if !strings.Contains(view, "[ Save ]") || m.auth.top == 0 {
+	if !strings.Contains(view, "[Save]") || m.auth.top == 0 {
 		t.Fatal("actions did not scroll into view")
 	}
 	if lipgloss.Width(view) > 72 || lipgloss.Height(view) > 22 {
