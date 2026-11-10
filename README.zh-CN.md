@@ -320,7 +320,7 @@ Proxy Authentication 使用带边框的弹窗：左侧调整参数，右侧只�
 
 Authentication mode 和 Bypass mode 默认只显示当前值，Enter 展开全部模式及独立说明，Enter 确认，Esc 收起且不更改草稿。弹窗按内容确定高度，空间不足时滚动。用户来源明确区分当前订阅名称（名称不可用时明确显示 ID）、Mihari 为订阅用户设置的密码覆盖、Mihari 新增用户；移除密码覆盖会恢复订阅密码。Local bypass 表示允许回环地址客户端免认证连接，标题下第一行解释含义，第二行列出 `127.0.0.0/8` 和 `::1/128`。不生效时仍展示 Local bypass 和额外 CIDR，并说明原因；认证未关闭且选择 Custom 后才能编辑。
 
-新增用户、编辑密码或编辑绕过 CIDR 时，Esc 仅取消当前编辑并返回认证参数。返回参数页后，有未保存改动时再按 Esc 才弹出 Save / Discard / Keep editing，默认继续编辑；保存失败会保留草稿。Cancel 和 Save 位于 Reset authentication 下方，Esc / Ctrl+S 使用独立浅灰提示；保存期间 Ctrl+S 提示替换为动态 Saving badge。错误 badge 位于标题右侧，详情在标题下换行显示，完整诊断仍可通过 F2 查看。字符输入保持本地即时更新，预览合并 300ms 内的连续输入；daemon 按已提交订阅 generation 复用仅含认证字段的快照，TUI 复用弹窗背景和未变化的 YAML 渲染结果。
+新增用户、编辑密码或编辑绕过 CIDR 时，Esc 仅取消当前编辑并返回认证参数。返回参数页后，有未保存改动时再按 Esc 才弹出 Save / Discard / Keep editing，默认继续编辑；保存失败会保留草稿。Cancel 和 Save 位于 Reset authentication 下方，Esc / Ctrl+S 使用独立浅灰提示；保存期间 Ctrl+S 提示替换为动态 Saving badge。错误 badge 位于标题右侧，详情在标题下换行显示，完整诊断仍可通过 F2 查看。字符输入保持本地即时更新，预览合并 300ms 内的连续输入；daemon 按已提交订阅 generation 复用仅含认证字段的快照，TUI 复用弹窗背景和未变化的 YAML 渲染结果。弹窗打开期间，暗化的 System 背景保持为打开时的快照；返回 System 后显示当前状态。
 
 入口为 **System → Ports & Authentication → Proxy Authentication**，CLI 为 `mihari proxy-auth`。认证支持沿用订阅（follow）、启用（enabled）和关闭（disabled）。启用时按用户名精确匹配合并订阅和实例用户：新增用户追加，同名覆盖密码；移除覆盖恢复订阅密码。排除订阅用户留待 #357。
 
