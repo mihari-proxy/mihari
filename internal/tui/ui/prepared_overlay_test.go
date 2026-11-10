@@ -13,9 +13,15 @@ func TestPreparedOverlay_RepeatedFramesAvoidCellBufferAllocations(t *testing.T) 
 	background := strings.Repeat(strings.Repeat("X", 160)+"\n", 50)
 	overlay := PrepareOverlay(theme, background, 160, 50)
 	dialog := theme.Dialog.Width(90).Render("Synthetic input")
-	allocations := testing.AllocsPerRun(5, func() { overlay.Center(dialog) })
-	if allocations > 1000 {
-		t.Fatalf("each frame allocates a cell grid: %.0f allocations", allocations)
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			overlay.Center(dialog)
+		}
+	})
+	// 160x50 text needs about 8 KiB. A 64 KiB budget permits row/string
+	// bookkeeping while rejecting a full grid of styled terminal cells.
+	if result.AllocedBytesPerOp() > 64*1024 {
+		t.Fatalf("frame exceeds row-rendering allocation budget: %d bytes", result.AllocedBytesPerOp())
 	}
 }
 
@@ -38,8 +44,9 @@ func TestPreparedOverlay_PreservesOpaqueUnicodeAndColors(t *testing.T) {
 			if lipgloss.Width(got) > 80 || lipgloss.Height(got) > 24 {
 				t.Fatal("overlay exceeded the viewport")
 			}
-			if !strings.Contains(got, "38;5;245") || !strings.Contains(got, "38;5;63") {
-				t.Fatal("background or dialog lost its colors")
+			firstBackground := strings.Split(strings.TrimSuffix(background, "\n"), "\n")[0]
+			if strings.Split(got, "\n")[0] != theme.Muted.Render(firstBackground) || !strings.Contains(got, theme.Title.Render("编辑 user")) {
+				t.Fatal("background row or dialog title lost its assigned color")
 			}
 		}
 	}

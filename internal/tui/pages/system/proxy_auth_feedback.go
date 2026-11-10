@@ -39,8 +39,7 @@ func (m *Model) closeAuth() tea.Cmd {
 	}
 	epoch := a.epoch + 1
 	*a = authUI{epoch: epoch}
-	m.rowSpinCmdIfNeeded()
-	return func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }
+	return tea.Batch(func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }, m.rowSpinCmdIfNeeded())
 }
 
 func (m *Model) requestAuthSave(closeAfter bool) tea.Cmd {

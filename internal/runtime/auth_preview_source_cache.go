@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"github.com/mihari-proxy/mihari/internal/subscription"
 	"sync"
 )
@@ -39,10 +40,24 @@ func (c *authPreviewSourceCache) load(ctx context.Context, key authPreviewSource
 	entry := &authPreviewSourceEntry{key: key, ready: make(chan struct{})}
 	c.entry = entry
 	c.mu.Unlock()
+	var auth subscription.Document
+	var err error
+	completed := false
+	defer func() {
+		if !completed {
+			err = errors.New("authentication preview source load interrupted")
+		}
+		c.mu.Lock()
+		entry.document, entry.err = auth, err
+		if err != nil && c.entry == entry {
+			c.entry = nil
+		}
+		close(entry.ready)
+		c.mu.Unlock()
+	}()
 	// Only the loading request performs IO. Waiters can cancel independently;
 	// neither parsing nor disk access runs while the cache mutex is held.
 	document, err := read()
-	var auth subscription.Document
 	if err == nil {
 		auth = subscription.Document{}
 		for _, field := range []string{"authentication", "skip-auth-prefixes"} {
@@ -51,12 +66,6 @@ func (c *authPreviewSourceCache) load(ctx context.Context, key authPreviewSource
 			}
 		}
 	}
-	c.mu.Lock()
-	entry.document, entry.err = auth, err
-	if err != nil && c.entry == entry {
-		c.entry = nil
-	}
-	close(entry.ready)
-	c.mu.Unlock()
+	completed = true
 	return auth, err
 }

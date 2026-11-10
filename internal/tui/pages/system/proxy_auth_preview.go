@@ -351,5 +351,5 @@ func (m *Model) renderAuthPreviewLines(width, height int) []string {
 		a.previewTop = ui.EnsureLineVisible(a.previewTop, budget, len(body), selectedStart, selectedEnd)
 	}
 	a.previewTop = min(a.previewTop, max(0, len(body)-budget))
-	return append(lines, ui.SliceLines(body, a.previewTop, budget)...)
+	return ui.SliceLines(append(lines, ui.SliceLines(body, a.previewTop, budget)...), 0, max(1, height))
 }

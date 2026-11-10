@@ -77,8 +77,9 @@ func TestProxyAuthPreview_LiveEditCancelAndLatestRequest(t *testing.T) {
 		t.Fatalf("requests=%+v", c.previews)
 	}
 	m.updateAuth(tea.KeyPressMsg{Code: tea.KeyEscape})
-	m.updateAuth(tea.KeyPressMsg{Code: tea.KeyLeft}) // Explicitly discard from the exit confirmation.
-	m.updateAuth(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.auth.open || m.auth.edit != "" || m.auth.exitOpen || m.auth.previewSeq == result.sequence {
+		t.Fatal("canceling user input must keep authentication open and invalidate its preview")
+	}
 	m.handleAuthPreview(result)
 	if len(m.auth.preview.Lines) != 0 || len(m.auth.draft.Users) != 0 {
 		t.Fatal("cancel accepted an obsolete edit preview")

@@ -22,6 +22,68 @@ func feedbackAuthModel() *Model {
 	return m
 }
 
+func TestProxyAuthFeedback_FailedSaveReschedulesCurrentDraftPreview(t *testing.T) {
+	m := newAuthPreviewTestModel(&authPreviewRecordingClient{})
+	m.auth = authUI{open: true, loaded: true, pending: true, epoch: 1, draft: protocol.ProxyAuthConfig{Mode: "enabled"}}
+	m.handleAuthResult(authResultMsg{epoch: 1, mutation: true, err: errors.New("synthetic save error")})
+	if m.auth.pending || !m.auth.previewPending {
+		t.Fatal("failed save left the current draft without a preview request")
+	}
+}
+
+func TestProxyAuthFeedback_ErrorRetainsDirtyIndicator(t *testing.T) {
+	m := feedbackAuthModel()
+	m.auth.draft.Mode = "enabled"
+	m.auth.err = "Username is required"
+	view := ansi.Strip(m.authView())
+	if !strings.Contains(view, "Unsaved changes") || !strings.Contains(view, "Failed") {
+		t.Fatal("validation feedback hid the unsaved draft indicator")
+	}
+}
+
+func TestProxyAuthFeedback_CloseKeepsOtherProgressAnimating(t *testing.T) {
+	m := feedbackAuthModel()
+	m.selfChecking = true
+	cmd := m.closeAuth()
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatal("closing authentication dropped the other operation's spinner command")
+	}
+	started := false
+	for _, child := range batch {
+		if result, ok := child().(ui.PageResultMsg); ok {
+			if _, ok := result.Result.(startRowSpinMsg); ok {
+				started = true
+			}
+		}
+	}
+	if !started {
+		t.Fatal("remaining operation has no animation owner")
+	}
+}
+
+func TestProxyAuthFeedback_NarrowFooterRemainsVisible(t *testing.T) {
+	for _, width := range []int{30, 36, 44} {
+		m := feedbackAuthModel()
+		m.SetSize(width, 22)
+		m.auth.pending = true
+		m.auth.err = "fixture error"
+		var view strings.Builder
+		for _, line := range strings.Split(ansi.Strip(m.authView()), "\n") {
+			if strings.HasPrefix(line, "│") {
+				content := strings.TrimSuffix(strings.TrimPrefix(line, "│  "), "  │")
+				view.WriteString(strings.Join(strings.Fields(content), ""))
+			}
+		}
+		for _, want := range []string{"[Cancel]", "[Save]", "Saving", "Ctrl+R reveal"} {
+			if !strings.Contains(view.String(), strings.ReplaceAll(want, " ", "")) {
+				t.Errorf("width=%d footer missing %q\n%s", width, want, ansi.Strip(m.authView()))
+			}
+		}
+	}
+}
+
 func TestProxyAuthFeedback_ReplacedPreviewTimerDoesNotEmitObsoleteMessages(t *testing.T) {
 	m := newAuthPreviewTestModel(&authPreviewRecordingClient{})
 	ctx, cancel := context.WithCancel(context.Background())

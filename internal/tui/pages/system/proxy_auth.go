@@ -115,6 +115,9 @@ func (m *Model) handleAuthResult(r authResultMsg) tea.Cmd {
 			m.auth.conflict = true
 			return m.authLoad(false)
 		}
+		if m.auth.loaded {
+			return tea.Batch(m.rowSpinCmdIfNeeded(), m.scheduleAuthPreview())
+		}
 		return m.rowSpinCmdIfNeeded()
 	}
 	if r.reveal {

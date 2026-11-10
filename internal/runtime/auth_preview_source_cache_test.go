@@ -23,7 +23,7 @@ func TestAuthPreviewSourceCache_ReusesOnlyCurrentSourceGeneration(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(doc) != 2 || doc["authentication"] == nil {
+		if len(doc) != 2 || doc["authentication"] == nil || doc["skip-auth-prefixes"] == nil {
 			t.Fatal("cache retained unrelated configuration instead of only authentication fields")
 		}
 	}
@@ -40,6 +40,29 @@ func TestAuthPreviewSourceCache_ReusesOnlyCurrentSourceGeneration(t *testing.T) 
 	}
 	if reads != 3 {
 		t.Fatal("source identity/generation changes did not invalidate cached authentication")
+	}
+}
+
+func TestAuthPreviewSourceCache_PanicReleasesEntryAndAllowsRetry(t *testing.T) {
+	var cache authPreviewSourceCache
+	key := authPreviewSourceKey{id: "fixture", generation: 1}
+	var ready chan struct{}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("loader panic was swallowed")
+			}
+		}()
+		cache.load(t.Context(), key, func() (subscription.Document, error) { ready = cache.entry.ready; panic("synthetic read panic") })
+	}()
+	select {
+	case <-ready:
+	default:
+		t.Fatal("panicking loader stranded its waiters")
+	}
+	doc, err := cache.load(t.Context(), key, func() (subscription.Document, error) { return subscription.Document{"authentication": "retry"}, nil })
+	if err != nil || doc["authentication"] != "retry" {
+		t.Fatal("panicking source remained cached")
 	}
 }
 
@@ -64,8 +87,13 @@ func TestAuthPreviewSourceCache_ErrorIsRetriedAndCanceledWaiterDoesNotOwnLoad(t 
 	go func() { defer close(done); _, err := cache.load(t.Context(), key, reader); finished <- err }()
 	<-started
 	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	waiter := &observedAuthWaitContext{Context: ctx, joined: make(chan struct{})}
+	waiterDone := make(chan error, 1)
+	go func() { _, err := cache.load(waiter, key, reader); waiterDone <- err }()
+	<-waiter.joined
 	cancel()
-	if _, err := cache.load(ctx, key, reader); !errors.Is(err, context.Canceled) {
+	if err := <-waiterDone; !errors.Is(err, context.Canceled) {
 		t.Fatal("canceled waiter did not return promptly")
 	}
 	releaseOnce.Do(func() { close(release) })
@@ -78,6 +106,17 @@ func TestAuthPreviewSourceCache_ErrorIsRetriedAndCanceledWaiterDoesNotOwnLoad(t 
 	if reads.Load() != 1 {
 		t.Fatal("source parsed again after cancellation of another request")
 	}
+}
+
+type observedAuthWaitContext struct {
+	context.Context
+	joined chan struct{}
+	once   sync.Once
+}
+
+func (c *observedAuthWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.joined) })
+	return c.Context.Done()
 }
 
 func TestAuthPreviewSourceCache_LateOldGenerationCannotReplaceNewSnapshot(t *testing.T) {

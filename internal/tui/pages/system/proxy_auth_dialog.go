@@ -32,30 +32,6 @@ func (m *Model) authView() string {
 	}
 	hints := strings.Split(ansi.Wrap(hint, inner, ""), "\n")
 	errors := m.authErrorLines(inner)
-	available := max(2, m.height-m.theme.Dialog.GetVerticalFrameSize()-len(hints)-len(errors)-6)
-	parameters := m.authParameterContent(leftWidth)
-	natural := len(parameters)
-	previewNatural := len(m.auth.preview.Lines) + 8
-	leftHeight, rightHeight := 0, 0
-	if wide {
-		budget := min(available, max(natural, min(24, previewNatural)))
-		leftHeight, rightHeight = budget, budget
-	} else {
-		budget := min(available, natural+previewNatural+1)
-		leftHeight = max(1, budget/2)
-		rightHeight = max(1, budget-leftHeight-1)
-	}
-	left := m.authParameterWindow(parameters, leftWidth, leftHeight)
-	right := m.authPreviewLines(rightWidth, rightHeight)
-	var body string
-	if wide {
-		body = lipgloss.JoinHorizontal(lipgloss.Top,
-			lipgloss.NewStyle().Width(leftWidth).Height(leftHeight).Render(strings.Join(left, "\n")),
-			m.theme.Muted.Render(strings.TrimSuffix(strings.Repeat(" │ \n", leftHeight), "\n")),
-			lipgloss.NewStyle().Width(rightWidth).Render(strings.Join(right, "\n")))
-	} else {
-		body = strings.Join(left, "\n") + "\n" + m.theme.Muted.Render(strings.Repeat("─", inner)) + "\n" + strings.Join(right, "\n")
-	}
 	rule := m.theme.Muted.Render(strings.Repeat("─", inner))
 	dirty := "Unsaved changes"
 	if !m.authDirty() {
@@ -64,7 +40,7 @@ func (m *Model) authView() string {
 	title := m.theme.Title.Render("Proxy Authentication")
 	feedback := m.theme.Muted.Render(dirty)
 	if m.auth.err != "" {
-		feedback = ui.RenderStatusChip(m.theme, ui.StatusChipFailed, ui.FailedLabel)
+		feedback += " · " + ui.RenderStatusChip(m.theme, ui.StatusChipFailed, ui.FailedLabel)
 	}
 	header := title + strings.Repeat(" ", max(1, inner-ansi.StringWidth(title)-ansi.StringWidth(feedback))) + feedback
 	n := len(m.authUsers())
@@ -90,8 +66,34 @@ func (m *Model) authView() string {
 		saveHint = ui.RenderStatusChip(m.theme, ui.StatusChipDone, ui.DoneLabel)
 	}
 	actions := cancel + " " + m.theme.Muted.Render("Esc") + "  " + save + " " + saveHint
+	header = ansi.Hardwrap(header, inner, true)
+	footer := ansi.Hardwrap(strings.Join([]string{rule, reset, actions, m.theme.Muted.Render(strings.Join(hints, "\n"))}, "\n"), inner, true)
+	available := max(2, m.height-m.theme.Dialog.GetVerticalFrameSize()-lipgloss.Height(header)-len(errors)-1-lipgloss.Height(footer))
+	parameters := m.authParameterContent(leftWidth)
+	natural := len(parameters)
+	previewNatural := len(m.auth.preview.Lines) + 8
+	leftHeight, rightHeight := 0, 0
+	if wide {
+		budget := min(available, max(natural, min(24, previewNatural)))
+		leftHeight, rightHeight = budget, budget
+	} else {
+		budget := min(available, natural+previewNatural+1)
+		leftHeight = max(1, budget/2)
+		rightHeight = max(1, budget-leftHeight-1)
+	}
+	left := m.authParameterWindow(parameters, leftWidth, leftHeight)
+	right := m.authPreviewLines(rightWidth, rightHeight)
+	var body string
+	if wide {
+		body = lipgloss.JoinHorizontal(lipgloss.Top,
+			lipgloss.NewStyle().Width(leftWidth).Height(leftHeight).Render(strings.Join(left, "\n")),
+			m.theme.Muted.Render(strings.TrimSuffix(strings.Repeat(" │ \n", leftHeight), "\n")),
+			lipgloss.NewStyle().Width(rightWidth).Render(strings.Join(right, "\n")))
+	} else {
+		body = strings.Join(left, "\n") + "\n" + m.theme.Muted.Render(strings.Repeat("─", inner)) + "\n" + strings.Join(right, "\n")
+	}
 	lines := append([]string{header}, errors...)
-	lines = append(lines, rule, body, rule, reset, actions, m.theme.Muted.Render(strings.Join(hints, "\n")))
+	lines = append(lines, rule, body, footer)
 	// Very small viewports reserve the frame first; all parameters and YAML remain
 	// available through their independent scrolling panes.
 	dialog := m.theme.Dialog.Width(outer).Render(strings.Join(ui.SliceLines(strings.Split(ansi.Hardwrap(strings.Join(lines, "\n"), inner, true), "\n"), 0, max(1, m.height-m.theme.Dialog.GetVerticalFrameSize())), "\n"))
