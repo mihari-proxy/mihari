@@ -559,7 +559,15 @@ func (m *Model) renderNodeAtHeight(group protocol.ProxyGroup, node protocol.Prox
 	}
 	// Network/protocol metadata shares the TCP/UDP network styling.
 	metadata = ui.StyleNetwork(m.theme, metadata)
-	metadata = ansi.Wrap(metadata+"  "+renderDelay(m.theme, m.delays[node.Name], m.now), max(1, width-4), "")
+	delayName := node.Name
+	if m.groupIndex(delayName) >= 0 {
+		delayName = m.selectedLeaf(delayName)
+	}
+	delay := DelayState{}
+	if delayName != "" {
+		delay = m.delays[delayName]
+	}
+	metadata = ansi.Wrap(metadata+"  "+renderDelay(m.theme, delay, m.now), max(1, width-4), "")
 	// Reserve borders (2), padding (2), and focus/selection markers (4).
 	// Wrap before adding markers so continuation lines align with the name.
 	name := ansi.Wrap(ui.DisplayProxyName(node.Name), max(1, width-8), "")

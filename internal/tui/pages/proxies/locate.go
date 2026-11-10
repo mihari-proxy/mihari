@@ -61,7 +61,7 @@ func (m *Model) renderGroupHeader(group protocol.ProxyGroup, width int, focused 
 	label = ui.TruncateVisible(label, max(0, available-1))
 	name := ui.DisplayProxyName(group.Now)
 	if name == "" {
-		name = ui.MissingValue
+		name = "No node"
 	}
 	name = ui.TruncateVisible(name, max(0, available-lipgloss.Width(label)))
 	if group.Now != "" {

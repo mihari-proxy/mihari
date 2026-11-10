@@ -125,7 +125,7 @@ func (m *Model) routingHeader() []string {
 	global := status.GlobalSelection
 	switch global {
 	case "":
-		global = "Not selected"
+		global = "No node"
 	case "DIRECT":
 		global = "DIRECT · direct connection"
 	}
