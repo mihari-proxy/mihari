@@ -218,7 +218,7 @@ func TestProxyAuthDesign_StatusRowsDoNotMakePagingSkipContent(t *testing.T) {
 		m.auth.draft.Users = append(m.auth.draft.Users, protocol.ProxyAuthUser{Username: strings.Repeat("u", i+1)})
 	}
 	first := m.authParameterLines(65, 8)
-	last := ansi.Strip(first[len(first)-2])
+	last := ansi.Strip(first[len(first)-1])
 	m.updateAuth(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	second := m.authParameterLines(65, 8)
 	all := m.authParameterContent(65)

@@ -1,8 +1,8 @@
 package system
 
 import (
-	"reflect"
 	"strings"
+	"time"
 
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -23,15 +23,52 @@ func (m *Model) authView() string {
 		leftWidth = (inner - 3) / 2
 		rightWidth = inner - 3 - leftWidth
 	}
-	hint := "↑/↓ select · Enter open/edit · d remove · Tab pane · Ctrl+R reveal · Ctrl+S save · Esc cancel"
+	hint := "↑/↓ select · Enter open/edit · d remove · Tab pane · Ctrl+R reveal"
 	if m.auth.edit != "" {
-		hint = "Enter accept · Tab field · Ctrl+R reveal · Esc cancel edit"
+		hint = "Enter accept · Tab field · Ctrl+R reveal"
 	}
 	if m.auth.picker != "" {
 		hint = "↑/↓ choose mode · Enter confirm · Esc close options"
 	}
 	hints := strings.Split(ansi.Wrap(hint, inner, ""), "\n")
-	available := max(2, m.height-m.theme.Dialog.GetVerticalFrameSize()-len(hints)-6)
+	errors := m.authErrorLines(inner)
+	rule := m.theme.Muted.Render(strings.Repeat("─", inner))
+	dirty := "Unsaved changes"
+	if !m.authDirty() {
+		dirty = "No changes"
+	}
+	title := m.theme.Title.Render("Proxy Authentication")
+	feedback := m.theme.Muted.Render(dirty)
+	if m.auth.err != "" {
+		feedback += " · " + ui.RenderStatusChip(m.theme, ui.StatusChipFailed, ui.FailedLabel)
+	}
+	header := title + strings.Repeat(" ", max(1, inner-ansi.StringWidth(title)-ansi.StringWidth(feedback))) + feedback
+	n := len(m.authUsers())
+	resetRow := 5 + n + len(m.auth.draft.BypassPrefixes)
+	reset, save, cancel := "[ Reset authentication ]", "[Save]", "[Cancel]"
+	if m.auth.selected == resetRow {
+		reset = m.theme.RowSelected.Render(reset)
+	}
+	if m.auth.selected == resetRow+1 {
+		save = m.theme.RowSelected.Render(save)
+	}
+	if m.auth.selected == resetRow+2 {
+		cancel = m.theme.RowSelected.Render(cancel)
+	}
+	saveHint := m.theme.Muted.Render("Ctrl+S")
+	if m.auth.pending {
+		clock := m.rowSpinClock
+		if clock.IsZero() {
+			clock = time.Unix(0, 0)
+		}
+		saveHint = ui.RenderStatusChip(m.theme, ui.StatusChipPending, ui.SpinnerLabel(clock, "Saving"))
+	} else if m.auth.saveDone && !m.authDirty() {
+		saveHint = ui.RenderStatusChip(m.theme, ui.StatusChipDone, ui.DoneLabel)
+	}
+	actions := cancel + " " + m.theme.Muted.Render("Esc") + "  " + save + " " + saveHint
+	header = ansi.Hardwrap(header, inner, true)
+	footer := ansi.Hardwrap(strings.Join([]string{rule, reset, actions, m.theme.Muted.Render(strings.Join(hints, "\n"))}, "\n"), inner, true)
+	available := max(2, m.height-m.theme.Dialog.GetVerticalFrameSize()-lipgloss.Height(header)-len(errors)-1-lipgloss.Height(footer))
 	parameters := m.authParameterContent(leftWidth)
 	natural := len(parameters)
 	previewNatural := len(m.auth.preview.Lines) + 8
@@ -55,29 +92,13 @@ func (m *Model) authView() string {
 	} else {
 		body = strings.Join(left, "\n") + "\n" + m.theme.Muted.Render(strings.Repeat("─", inner)) + "\n" + strings.Join(right, "\n")
 	}
-	rule := m.theme.Muted.Render(strings.Repeat("─", inner))
-	dirty := "Unsaved changes"
-	if reflect.DeepEqual(m.auth.draft, m.auth.status.Config) {
-		dirty = "No changes"
-	}
-	title := m.theme.Title.Render("Proxy Authentication")
-	header := title + strings.Repeat(" ", max(1, inner-ansi.StringWidth(title)-len(dirty))) + m.theme.Muted.Render(dirty)
-	n := len(m.authUsers())
-	resetRow := 5 + n + len(m.auth.draft.BypassPrefixes)
-	reset, save := "[ Reset authentication ]", "[ Save ]"
-	if m.auth.selected == resetRow {
-		reset = m.theme.RowSelected.Render(reset)
-	}
-	if m.auth.selected == resetRow+1 {
-		save = m.theme.RowSelected.Render(save)
-	}
-	rightActions := "[ Esc cancel ] " + save
-	actions := reset + strings.Repeat(" ", max(1, inner-ansi.StringWidth(reset)-ansi.StringWidth(rightActions))) + rightActions
-	if ansi.StringWidth(actions) > inner {
-		actions = reset + "\n[ Esc cancel ] " + save
-	}
-	lines := []string{header, rule, body, rule, actions, m.theme.Muted.Render(strings.Join(hints, "\n"))}
+	lines := append([]string{header}, errors...)
+	lines = append(lines, rule, body, footer)
 	// Very small viewports reserve the frame first; all parameters and YAML remain
 	// available through their independent scrolling panes.
-	return m.theme.Dialog.Width(outer).Render(strings.Join(ui.SliceLines(strings.Split(strings.Join(lines, "\n"), "\n"), 0, max(1, m.height-m.theme.Dialog.GetVerticalFrameSize())), "\n"))
+	dialog := m.theme.Dialog.Width(outer).Render(strings.Join(ui.SliceLines(strings.Split(ansi.Hardwrap(strings.Join(lines, "\n"), inner, true), "\n"), 0, max(1, m.height-m.theme.Dialog.GetVerticalFrameSize())), "\n"))
+	if m.auth.exitOpen {
+		return ui.CenterOverlay(m.theme, dialog, m.authExitView(inner), lipgloss.Width(dialog), lipgloss.Height(dialog))
+	}
+	return dialog
 }

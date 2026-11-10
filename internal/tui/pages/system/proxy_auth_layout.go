@@ -122,7 +122,7 @@ func (m *Model) authNavigation() []int {
 	for i := range len(m.auth.draft.BypassPrefixes) {
 		rows = append(rows, 4+n+i)
 	}
-	rows = append(rows, 5+n+len(m.auth.draft.BypassPrefixes), 6+n+len(m.auth.draft.BypassPrefixes))
+	rows = append(rows, 5+n+len(m.auth.draft.BypassPrefixes), 7+n+len(m.auth.draft.BypassPrefixes), 6+n+len(m.auth.draft.BypassPrefixes))
 	return rows
 }
 
@@ -430,12 +430,6 @@ func (m *Model) authParameterWindow(content []authParameterLine, width, height i
 	var status []string
 	if !a.loaded {
 		status = append(status, "Loading…")
-	}
-	if a.pending {
-		status = append(status, "Saving…")
-	}
-	if a.err != "" {
-		status = append(status, m.theme.Danger.Render(ui.TruncateVisible(a.err, width)))
 	}
 	if len(status) >= height {
 		a.parameterPage = 1

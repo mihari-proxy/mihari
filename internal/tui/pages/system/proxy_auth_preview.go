@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +20,9 @@ type authPreviewClient interface {
 	PreviewProxyAuth(context.Context, protocol.ProxyAuthPreviewRequest) (protocol.ProxyAuthPreview, error)
 }
 type authPreviewDueMsg struct{ epoch, sequence uint64 }
+
+const authPreviewDebounce = 300 * time.Millisecond
+
 type authPreviewResultMsg struct {
 	reveal          bool
 	epoch, sequence uint64
@@ -40,11 +44,17 @@ func (m *Model) toggleAuthReveal() tea.Cmd {
 
 func (m *Model) hideAuthSecrets() {
 	a := &m.auth
+	if a.previewTimerCancel != nil {
+		a.previewTimerCancel()
+		a.previewTimerCancel = nil
+	}
 	a.reveal = false
 	a.revealSequence++
 	a.inputs[1].EchoMode = textinput.EchoPassword
 	a.revealed = nil
 	a.preview.Lines = nil
+	a.previewRenderSource = nil
+	a.previewRendered = nil
 	a.previewRevealed = false
 	for i := range a.status.Users {
 		a.status.Users[i].Password = ""
@@ -53,6 +63,10 @@ func (m *Model) hideAuthSecrets() {
 
 func (m *Model) scheduleAuthPreview() tea.Cmd {
 	a := &m.auth
+	if a.previewTimerCancel != nil {
+		a.previewTimerCancel()
+		a.previewTimerCancel = nil
+	}
 	if a.previewCancel != nil {
 		a.previewCancel()
 		a.previewCancel = nil
@@ -73,14 +87,25 @@ func (m *Model) scheduleAuthPreview() tea.Cmd {
 		a.previewErr = "Preview unavailable. Update the daemon and TUI."
 		return nil
 	}
-	if !a.open || !a.loaded {
+	if !a.open || !a.loaded || a.pending {
+		a.previewPending = false
 		return nil
 	}
 	a.previewPending = true
 	epoch, sequence := a.epoch, a.previewSeq
-	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg {
-		return ui.PageResultMsg{Page: ui.PageSystem, Result: authPreviewDueMsg{epoch, sequence}}
-	})
+	ctx, cancel := context.WithCancel(m.ctx)
+	a.previewTimerCancel = cancel
+	return func() tea.Msg {
+		defer cancel()
+		timer := time.NewTimer(authPreviewDebounce)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-timer.C:
+			return ui.PageResultMsg{Page: ui.PageSystem, Result: authPreviewDueMsg{epoch, sequence}}
+		}
+	}
 }
 
 func (m *Model) authPreviewDraft() protocol.ProxyAuthConfig {
@@ -153,7 +178,7 @@ func (m *Model) handleAuthPreview(result authPreviewResultMsg) {
 
 func (m *Model) updateAuth(message tea.Msg) tea.Cmd {
 	a := &m.auth
-	if key, ok := message.(tea.KeyPressMsg); ok && a.edit == "" && a.picker == "" && a.loaded && !a.pending {
+	if key, ok := message.(tea.KeyPressMsg); ok && a.edit == "" && a.picker == "" && !a.exitOpen && a.loaded && !a.pending {
 		if key.String() == "tab" || key.String() == "shift+tab" {
 			a.previewFocus = !a.previewFocus
 			return nil
@@ -192,6 +217,7 @@ func (m *Model) updateAuth(message tea.Msg) tea.Cmd {
 		a.preview.Lines = nil
 	}
 	if a.open && a.loaded && (!reflect.DeepEqual(before, m.authPreviewDraft()) || edit != a.edit || reveal != a.reveal) && sequence == a.previewSeq {
+		a.saveDone = false
 		return tea.Batch(cmd, m.scheduleAuthPreview())
 	}
 	return cmd
@@ -201,14 +227,14 @@ func (m *Model) authPreviewPageSize() int { return max(1, m.auth.previewPage) }
 
 func (m *Model) authPreviewSelected(line protocol.ProxyAuthPreviewLine) bool {
 	a := &m.auth
-	users := m.authUsers()
-	prefixStart := 4 + len(users)
 	if a.edit == "user" {
 		return line.Field == "authentication" && line.Target == a.inputs[0].Value()
 	}
 	if a.edit == "prefix" {
 		return line.Field == "skip-auth-prefixes" && (line.Target == strings.TrimSpace(a.inputs[0].Value()) || line.Target == a.original)
 	}
+	users := m.authUsers()
+	prefixStart := 4 + len(users)
 	switch {
 	case a.selected == 0:
 		return line.Field == "authentication" || (line.Field == "skip-auth-prefixes" && line.Change != "" && (a.draft.Mode == "disabled" || a.status.Config.Mode == "disabled"))
@@ -224,7 +250,33 @@ func (m *Model) authPreviewSelected(line protocol.ProxyAuthPreviewLine) bool {
 	return false
 }
 
+type authPreviewRenderKey struct {
+	width, height, top                             int
+	pending, focused, reveal, manual, disabledNote bool
+	err, activeID, focus                           string
+}
+
 func (m *Model) authPreviewLines(width, height int) []string {
+	a := &m.auth
+	focus := "row:" + strconv.Itoa(a.selected)
+	switch a.edit {
+	case "user":
+		focus = "user:" + a.inputs[0].Value()
+	case "prefix":
+		focus = "prefix:" + a.inputs[0].Value() + "\x00" + a.original
+	}
+	key := authPreviewRenderKey{width: width, height: height, top: a.previewTop, pending: a.previewPending, focused: a.previewFocus, reveal: a.reveal, manual: a.previewManual, disabledNote: a.draft.Mode == "disabled" && a.selected > 0, err: a.previewErr, activeID: a.preview.ActiveID, focus: focus}
+	sameSource := len(a.previewRenderSource) == len(a.preview.Lines) && (len(a.preview.Lines) == 0 || &a.previewRenderSource[0] == &a.preview.Lines[0])
+	if a.previewRendered != nil && sameSource && key == a.previewRenderKey {
+		return a.previewRendered
+	}
+	lines := m.renderAuthPreviewLines(width, height)
+	key.top = a.previewTop
+	a.previewRenderKey, a.previewRenderSource, a.previewRendered = key, a.preview.Lines, lines
+	return lines
+}
+
+func (m *Model) renderAuthPreviewLines(width, height int) []string {
 	a := &m.auth
 	header := "Preview only"
 	if a.previewPending {
@@ -299,5 +351,5 @@ func (m *Model) authPreviewLines(width, height int) []string {
 		a.previewTop = ui.EnsureLineVisible(a.previewTop, budget, len(body), selectedStart, selectedEnd)
 	}
 	a.previewTop = min(a.previewTop, max(0, len(body)-budget))
-	return append(lines, ui.SliceLines(body, a.previewTop, budget)...)
+	return ui.SliceLines(append(lines, ui.SliceLines(body, a.previewTop, budget)...), 0, max(1, height))
 }

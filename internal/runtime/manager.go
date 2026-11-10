@@ -160,14 +160,15 @@ type WebGateway interface {
 }
 
 type Manager struct {
-	systemObservations systemObservations
-	recoveryOnly       bool
-	authResetAllowed   bool
-	businessReset      BusinessResetStore
-	dataResetPending   atomic.Bool
-	listInterfaces     func(context.Context) ([]platform.NetworkInterface, error)
-	routingMessage     string // guarded by mutation ownership
-	trustedCore        *core.TrustedExecution
+	systemObservations     systemObservations
+	authPreviewSourceCache authPreviewSourceCache
+	recoveryOnly           bool
+	authResetAllowed       bool
+	businessReset          BusinessResetStore
+	dataResetPending       atomic.Bool
+	listInterfaces         func(context.Context) ([]platform.NetworkInterface, error)
+	routingMessage         string // guarded by mutation ownership
+	trustedCore            *core.TrustedExecution
 
 	subscriptionRecoveryTimeout time.Duration
 	subscriptionTimeout         time.Duration
