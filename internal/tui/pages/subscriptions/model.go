@@ -630,7 +630,9 @@ func (m *Model) subscriptionColumns() []ui.TableColumn {
 		{ID: "proxy", Title: "Mode", MinWidth: modeWidth, Flex: 0, Priority: 4},
 		{ID: "traffic", Title: ui.TrafficLabel, MinWidth: 11, MaxWidth: min(trafficWidth, 24), Flex: 1, Priority: 3},
 		{ID: "lastSuccess", Title: ui.LastUpdateLabel, MinWidth: 11, Flex: 0, Priority: 2},
-		{ID: "nextRefresh", Title: ui.NextUpdateLabel, MinWidth: 11, Flex: 0, Priority: 1},
+		// Reserve the longest fixed schedule label even when the current rows
+		// do not need it yet; fixed columns never grow with spare screen space.
+		{ID: "nextRefresh", Title: ui.NextUpdateLabel, MinWidth: max(lipgloss.Width(ui.NextUpdateLabel), lipgloss.Width(ui.RetryPendingLabel)), Flex: 0, Priority: 1},
 	}
 }
 

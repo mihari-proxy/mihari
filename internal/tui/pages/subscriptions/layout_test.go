@@ -12,6 +12,63 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+func TestSubscriptionWidths_FixedLiteralsRemainComplete(t *testing.T) {
+	clock := time.Unix(100, 0)
+	literals := map[string][]string{
+		"active":      {"●", ""},
+		"state":       {ui.EnabledLabel, ui.DisabledLabel},
+		"proxy":       {proxyModeLabel(""), proxyModeLabel("proxy"), proxyModeLabel("auto"), "Local file"},
+		"traffic":     {ui.MissingValue},
+		"lastSuccess": {ui.MissingValue, "now"},
+		"nextRefresh": {ui.DisabledLabel, ui.ManualLabel, ui.RetryPendingLabel, "now"},
+	}
+	for _, phase := range []loadPhase{
+		loadDisabled, loadMissing, loadFetching, loadApplying, loadWorking,
+		loadCached, loadStale, loadFailed, loadLive, loadOutdated, loadExpired,
+	} {
+		label, _ := loadPhaseLabel(phase, clock)
+		literals["load"] = append(literals["load"], label)
+	}
+	for _, mode := range []string{"", "proxy", "auto", "file"} {
+		for _, width := range []int{40, 58, 72, 84, 100, 120, 200, 320} {
+			t.Run(fmt.Sprintf("%s/%d", mode, width), func(t *testing.T) {
+				m := New(nil, nil, func() time.Time { return clock })
+				m.SetSize(width, 20)
+				sub := protocol.Subscription{ID: "a", Name: "fixture", Enabled: true, AutoRefresh: true, ProxyMode: mode}
+				if mode == "file" {
+					sub.SourceType, sub.ProxyMode = "file", ""
+				}
+				m.SetSubscriptions(protocol.SubscriptionList{Subscriptions: []protocol.Subscription{sub}})
+				cols, widths := m.subscriptionWidths()
+				if width >= 200 && len(cols) != 8 {
+					t.Fatalf("wide screen lost columns: %+v", cols)
+				}
+				for i, col := range cols {
+					values := append([]string{col.Title}, literals[col.ID]...)
+					if col.ID == "proxy" {
+						// Mode sizes to the catalog's current values.
+						values = []string{col.Title, rowFrom(sub, false, "", clock, clock, "").proxy}
+					}
+					for _, value := range values {
+						if got := strings.TrimSpace(ansi.Strip(ui.PadCell(value, widths[i], col.Align))); got != value {
+							t.Errorf("%s width %d truncates %q to %q", col.ID, widths[i], value, got)
+						}
+					}
+				}
+				view := ansi.Strip(m.View())
+				if width >= 200 && !strings.Contains(view, ui.RetryPendingLabel) {
+					t.Errorf("retry label missing from rendered page:\n%s", view)
+				}
+				for _, line := range strings.Split(view, "\n") {
+					if lipgloss.Width(line) > width {
+						t.Errorf("page overflows width %d: %q", width, line)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestSubscriptionWidths_ContentKeepsWideScreenColumnsTogether(t *testing.T) {
 	for _, width := range []int{120, 200, 320} {
 		t.Run(fmt.Sprint(width), func(t *testing.T) {
