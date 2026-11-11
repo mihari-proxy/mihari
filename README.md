@@ -21,7 +21,7 @@ An open-source terminal alternative to graphical Mihomo / Clash clients such as 
 
 Overview's Core card shortens its traffic charts to keep each speed and its unit together on the chart line.
 
-Subscriptions keeps fixed status and schedule labels, including `Retry pending`, complete in visible columns; narrow windows hide lower-priority columns first.
+The Subscriptions page keeps fixed status and schedule labels, including `Retry pending`, complete in visible columns; narrow windows hide lower-priority columns first.
 
 ## What is this?
 
