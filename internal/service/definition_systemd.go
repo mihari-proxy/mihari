@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -106,7 +108,9 @@ func (a *SystemdAdapter) definitionFromShow(ctx context.Context, props map[strin
 	load := props["LoadState"]
 	active := props["ActiveState"]
 	fragment := props["FragmentPath"]
-	dropins := strings.Fields(props["DropInPaths"])
+	dropins := slices.DeleteFunc(strings.Fields(props["DropInPaths"]), func(name string) bool {
+		return !allowedDropin(a.paths.DropinDir, name) && globalSystemdServiceDropin(name)
+	})
 	unitFileState := props["UnitFileState"]
 
 	unit, unitErr := a.files.Read(ctx, a.paths.UnitFile)
@@ -628,6 +632,16 @@ func (a *SystemdAdapter) stopUnit(ctx context.Context) error {
 		return nil
 	}
 	return invalidServiceState("service status is unknown")
+}
+
+// globalSystemdServiceDropin reports top-level service.d entries that systemd
+// applies to every service unit. DropInPaths is authoritative; the parent unit
+// root can be changed by the distribution or SYSTEMD_UNIT_PATH, so identify the
+// drop-in by its service.d directory instead of hardcoding unit roots. These
+// entries belong to the OS, not to this unit, so they must not enter
+// Definition.Files or be removed by an installation.
+func globalSystemdServiceDropin(name string) bool {
+	return unixAbs(name) && strings.HasSuffix(name, ".conf") && path.Base(path.Dir(name)) == "service.d"
 }
 
 func allowedDropin(dir, name string) bool {
