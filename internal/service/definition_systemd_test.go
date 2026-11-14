@@ -329,6 +329,38 @@ func TestSystemdInspect_TrustedDropinAllowed(t *testing.T) {
 	}
 }
 
+func TestSystemdInspect_IgnoresGlobalServiceDropin(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{"fedora", "/usr/lib/systemd/system/service.d/10-timeout-abort.conf"},
+		{"custom-unit-root", "/srv/systemd/system/service.d/10-custom.conf"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			global := DefinitionFile{
+				Path:  tc.path,
+				Bytes: []byte("[Service]\nTimeoutStopFailureMode=abort\n"),
+				Kind:  "dropin",
+				Mode:  0o644,
+			}
+			h := newSystemdHarness(t, false, true, trustedUnitFile(t), global)
+			got, err := h.adapter.InspectDefinition(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Binary != "/usr/local/lib/mihari/mihari" {
+				t.Fatalf("binary=%q", got.Binary)
+			}
+			for _, file := range got.Files {
+				if file.Path == global.Path {
+					t.Fatalf("global drop-in was treated as owned: %s", file.Path)
+				}
+			}
+		})
+	}
+}
+
 func TestSystemdInspect_MissingToolIsInvalidState(t *testing.T) {
 	h := newSystemdHarness(t, false, false, trustedUnitFile(t))
 	h.runner.handlers = nil
