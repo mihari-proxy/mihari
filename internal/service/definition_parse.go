@@ -51,6 +51,7 @@ func parseSystemdUnitFile(raw []byte) (parsedUnit, error) {
 			continue
 		}
 		key, value, ok := strings.Cut(line, "=")
+		key = strings.TrimSpace(key)
 		if !ok || key == "" {
 			return parsedUnit{}, invalidServiceState("service definition is unsupported")
 		}
@@ -94,13 +95,21 @@ func systemdLogicalLines(raw []byte) ([]string, error) {
 	var lines []string
 	var pending string
 	for scanner.Scan() {
-		line := strings.TrimRight(scanner.Text(), " \t")
+		rawLine := scanner.Text()
+		trimmedLeft := strings.TrimLeft(rawLine, " \t")
+		if trimmedLeft != "" && (trimmedLeft[0] == '#' || trimmedLeft[0] == ';') {
+			continue
+		}
+		line := rawLine
 		if pending != "" {
-			line = pending + strings.TrimLeft(line, " \t")
+			line = pending + line
 			pending = ""
 		}
-		if strings.HasSuffix(line, "\\") {
-			pending = strings.TrimSuffix(line, "\\")
+		// Only an unescaped backslash at the physical end continues the line.
+		// systemd replaces it with a space and preserves the next line's indent.
+		trailingBackslashes := len(line) - len(strings.TrimRight(line, "\\"))
+		if trailingBackslashes%2 == 1 {
+			pending = line[:len(line)-1] + " "
 			continue
 		}
 		lines = append(lines, strings.TrimSpace(line))

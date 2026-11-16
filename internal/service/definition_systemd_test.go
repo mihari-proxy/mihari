@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -326,6 +328,393 @@ func TestSystemdInspect_TrustedDropinAllowed(t *testing.T) {
 	}
 	if len(got.Files) < 2 {
 		t.Fatalf("expected unit and drop-in, got %d files", len(got.Files))
+	}
+}
+
+func TestSystemdInspect_GlobalServiceDropinNotOwned(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{"fedora", "/usr/lib/systemd/system/service.d/10-timeout-abort.conf"},
+		{"custom-global-root", "/srv/systemd/system/service.d/10-custom.conf"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			global := DefinitionFile{
+				Path:  tc.path,
+				Bytes: []byte("[Service]\nTimeoutStopFailureMode=abort\n"),
+				Kind:  "dropin",
+				Mode:  0o644,
+			}
+			h := newSystemdHarness(t, false, true, trustedUnitFile(t), global)
+			got, err := h.adapter.InspectDefinition(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Binary != "/usr/local/lib/mihari/mihari" {
+				t.Fatalf("binary=%q", got.Binary)
+			}
+			for _, file := range got.Files {
+				if file.Path == global.Path {
+					t.Fatalf("global drop-in was treated as owned: %s", file.Path)
+				}
+			}
+		})
+	}
+}
+
+func TestSystemdInspect_CustomUnitRootWithGlobalDropinNotOwned(t *testing.T) {
+	paths := SystemdPaths{
+		Systemctl: defaultSystemctl,
+		UnitDir:   "/srv/systemd/system",
+		UnitFile:  "/srv/systemd/system/mihari.service",
+		DropinDir: "/srv/systemd/system/mihari.service.d",
+		WantsLink: "/srv/systemd/system/multi-user.target.wants/mihari.service",
+		DevNull:   defaultDevNull,
+	}
+	unit := trustedUnitFile(t)
+	unit.Path = paths.UnitFile
+	owned := trustedDropinFile(t)
+	owned.Path = paths.DropinDir + "/10-mihari.conf"
+	global := DefinitionFile{
+		Path:  paths.UnitDir + "/service.d/10-global.conf",
+		Bytes: []byte("[Service]\nTimeoutStopFailureMode=abort\n"),
+		Kind:  "dropin",
+		Mode:  0o644,
+	}
+	h := newSystemdHarness(t, false, false, unit, owned, global)
+	show, err := substituteFixtureOnce(h.show, "FragmentPath="+defaultSystemdUnitFile, "FragmentPath="+paths.UnitFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.show = show
+	h.files.links[paths.WantsLink] = paths.UnitFile
+	adapter := NewSystemdAdapterWithConfig(SystemdConfig{
+		Runner: h.runner,
+		Files:  h.files,
+		Tree:   h.tree,
+		Clock:  h.clock,
+		Hook:   h.hook.wrap,
+		Paths:  paths,
+	})
+	got, err := adapter.InspectDefinition(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Binary != "/usr/local/lib/mihari/mihari" || strings.Join(got.Args, " ") != "daemon --system-service" {
+		t.Fatalf("exec %q %v", got.Binary, got.Args)
+	}
+	if len(got.Files) != 2 || got.Files[0].Path != unit.Path || got.Files[1].Path != owned.Path {
+		t.Fatalf("expected only the custom unit and owned drop-in, got %+v", got.Files)
+	}
+	if !got.Enabled || len(got.Links) != 1 || got.Links[0].Path != paths.WantsLink || got.Links[0].Target != paths.UnitFile {
+		t.Fatalf("custom enable link missing from definition: %+v", got)
+	}
+	if len(h.hook.kinds) != 0 {
+		t.Fatal("custom root inspection caused mutation")
+	}
+}
+
+func TestSystemdInspect_GlobalServiceDropinRejectsExec(t *testing.T) {
+	for _, key := range []string{"ExecStart", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload", "ExecCondition"} {
+		t.Run(key, func(t *testing.T) {
+			global := DefinitionFile{
+				Path:  "/etc/systemd/system/service.d/99-exec.conf",
+				Bytes: []byte("[Service]\n" + key + "=/usr/bin/true\n"),
+				Kind:  "dropin",
+				Mode:  0o644,
+			}
+			h := newSystemdHarness(t, false, true, trustedUnitFile(t), global)
+			_, err := h.adapter.InspectDefinition(context.Background())
+			if err == nil {
+				t.Fatal("accepted an execution command in a global drop-in")
+			}
+			requireInvalidState(t, err)
+			if len(h.hook.kinds) != 0 {
+				t.Fatal("unsupported global drop-in caused mutation")
+			}
+		})
+	}
+}
+
+func TestSystemdInspect_GlobalServiceDropinRejectsSpacedExec(t *testing.T) {
+	global := DefinitionFile{
+		Path:  "/usr/lib/systemd/system/service.d/10-exec.conf",
+		Bytes: []byte("[Service]\nExecStart =\nExecStart =/opt/wrapper/mihari daemon\n"),
+		Kind:  "dropin",
+		Mode:  0o644,
+	}
+	h := newSystemdHarness(t, false, true, trustedUnitFile(t), global)
+	_, err := h.adapter.InspectDefinition(context.Background())
+	if err == nil {
+		t.Fatal("accepted a global drop-in whose ExecStart key has space before '='")
+	}
+	requireInvalidState(t, err)
+	if len(h.hook.kinds) != 0 {
+		t.Fatal("spaced global exec caused mutation")
+	}
+}
+
+func TestSystemdInspect_GlobalServiceDropinRejectsCommentContinuation(t *testing.T) {
+	for _, marker := range []string{"#", ";"} {
+		t.Run(marker, func(t *testing.T) {
+			global := DefinitionFile{
+				Path:  "/usr/lib/systemd/system/service.d/10-exec.conf",
+				Bytes: []byte("[Service]\n" + marker + " comment \\\nExecStartPre=/usr/bin/true\n"),
+				Kind:  "dropin",
+				Mode:  0o644,
+			}
+			h := newSystemdHarness(t, false, true, trustedUnitFile(t), global)
+			_, err := h.adapter.InspectDefinition(context.Background())
+			if err == nil {
+				t.Fatal("accepted an execution command hidden by a comment continuation")
+			}
+			requireInvalidState(t, err)
+			if len(h.hook.kinds) != 0 {
+				t.Fatal("comment continuation caused mutation")
+			}
+		})
+	}
+}
+
+func TestSystemdInspect_DropinRejectsExecAfterNonContinuation(t *testing.T) {
+	for _, scope := range []string{"global", "owned"} {
+		t.Run(scope, func(t *testing.T) {
+			for _, tc := range []struct {
+				name   string
+				suffix string
+			}{
+				{"double-backslash", `\\`},
+				{"four-backslashes", `\\\\`},
+				{"backslash-space", "\\ "},
+				{"backslash-tab", "\\\t"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					dropin := trustedDropinFile(t)
+					if scope == "global" {
+						dropin.Path = "/usr/lib/systemd/system/service.d/99-exec.conf"
+					}
+					dropin.Bytes = []byte("[Service]\nEnvironment=REVIEW=value" + tc.suffix + "\nExecStartPre=/usr/bin/false\n")
+					h := newSystemdHarness(t, false, true, trustedUnitFile(t), dropin)
+					_, err := h.adapter.InspectDefinition(context.Background())
+					if err == nil {
+						t.Fatal("accepted an execution command after a line that does not continue")
+					}
+					requireInvalidState(t, err)
+					if len(h.hook.kinds) != 0 {
+						t.Fatal("unsupported drop-in caused mutation")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestSystemdInspect_GlobalServiceDropinContinuationAllowed(t *testing.T) {
+	global := DefinitionFile{
+		Path:  "/usr/lib/systemd/system/service.d/10-global.conf",
+		Bytes: []byte("[Service]\nEnvironment=FIRST=one\\\n# comment\nSECOND=two\nTimeoutStopFailureMode=abort\n"),
+		Kind:  "dropin",
+		Mode:  0o644,
+	}
+	h := newSystemdHarness(t, false, true, trustedUnitFile(t), global)
+	got, err := h.adapter.InspectDefinition(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Binary != "/usr/local/lib/mihari/mihari" {
+		t.Fatalf("binary=%q", got.Binary)
+	}
+	if len(got.Files) != 1 || got.Files[0].Path != defaultSystemdUnitFile {
+		t.Fatalf("expected only the owned unit, got %+v", got.Files)
+	}
+	if len(h.hook.kinds) != 0 {
+		t.Fatal("global drop-in inspection caused mutation")
+	}
+}
+
+func TestSystemdInspect_OwnedDropinRejectsHiddenExec(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "spaced-exec", body: "[Service]\nExecStop =/usr/bin/true\n"},
+		{name: "comment-continuation", body: "[Service]\n# comment \\\nExecStartPre=/usr/bin/true\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			owned := trustedDropinFile(t)
+			owned.Bytes = []byte(tc.body)
+			h := newSystemdHarness(t, false, true, trustedUnitFile(t), owned)
+			_, err := h.adapter.InspectDefinition(context.Background())
+			if err == nil {
+				t.Fatal("accepted a hidden execution command in an owned drop-in")
+			}
+			requireInvalidState(t, err)
+		})
+	}
+}
+
+func substituteFixtureOnce(raw, old, replacement string) (string, error) {
+	if got := strings.Count(raw, old); got != 1 {
+		return "", fmt.Errorf("fixture text %q matched %d times, want 1", old, got)
+	}
+	return strings.Replace(raw, old, replacement, 1), nil
+}
+
+func TestSubstituteFixtureOnce_RequiresOneMatch(t *testing.T) {
+	if _, err := substituteFixtureOnce("ExecStart=/bin/mihari", "ExecStartMissing=", "x"); err == nil {
+		t.Fatal("accepted a fixture substitution that matched nothing")
+	}
+	got, err := substituteFixtureOnce("ExecStart=/bin/mihari", "ExecStart=", "ExecStart =")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "ExecStart =/bin/mihari" {
+		t.Fatalf("substituted %q", got)
+	}
+	if _, err := substituteFixtureOnce("ExecStart=/a\nExecStart=/b", "ExecStart=", "x"); err == nil {
+		t.Fatal("accepted a fixture substitution that matched twice")
+	}
+}
+
+func TestSystemdInspect_SpacedExecStartStillIdentifiesUnit(t *testing.T) {
+	unit := trustedUnitFile(t)
+	replaced, err := substituteFixtureOnce(string(unit.Bytes), "ExecStart=", "ExecStart =")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unit.Bytes = []byte(replaced)
+	h := newSystemdHarness(t, false, true, unit)
+	got, err := h.adapter.InspectDefinition(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Binary != "/usr/local/lib/mihari/mihari" || strings.Join(got.Args, " ") != "daemon --system-service" {
+		t.Fatalf("spaced ExecStart parsed as %+v", got)
+	}
+}
+
+func TestSystemdInspect_CommentInsideContinuationStillIdentifiesUnit(t *testing.T) {
+	unit := trustedUnitFile(t)
+	replaced, err := substituteFixtureOnce(string(unit.Bytes),
+		`ExecStart="/usr/local/lib/mihari/mihari" daemon --system-service`,
+		"ExecStart=\"/usr/local/lib/mihari/mihari\" \\\n# comment\n  daemon --system-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unit.Bytes = []byte(replaced)
+	h := newSystemdHarness(t, false, true, unit)
+	got, err := h.adapter.InspectDefinition(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Binary != "/usr/local/lib/mihari/mihari" || strings.Join(got.Args, " ") != "daemon --system-service" {
+		t.Fatalf("continued ExecStart parsed as %+v", got)
+	}
+}
+
+func TestSystemdInspect_GlobalServiceDropinReadFailurePreservesCause(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cause error
+	}{
+		{"permission-denied", os.ErrPermission},
+		{"io-failure", errors.New("fixture global drop-in read failure")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			global := DefinitionFile{
+				Path:  "/usr/lib/systemd/system/service.d/10-global.conf",
+				Bytes: []byte("[Service]\nTimeoutStopFailureMode=abort\n"),
+				Kind:  "dropin",
+				Mode:  0o644,
+			}
+			h := newSystemdHarness(t, false, true, trustedUnitFile(t), global)
+			h.files.readErrors = map[string]error{
+				global.Path: &os.PathError{Op: "open", Path: global.Path, Err: tc.cause},
+			}
+			_, err := h.adapter.InspectDefinition(context.Background())
+			if err == nil {
+				t.Fatal("accepted a global drop-in that could not be read")
+			}
+			requireInvalidState(t, err)
+			if !errors.Is(err, tc.cause) {
+				t.Fatalf("lost global drop-in read cause: %v", err)
+			}
+			if len(h.hook.kinds) != 0 {
+				t.Fatal("global drop-in read failure caused mutation")
+			}
+		})
+	}
+}
+
+func TestSystemdInspect_GlobalServiceDropinRejectsMissingOrInvalid(t *testing.T) {
+	for _, condition := range []string{"missing", "symlink", "mask", "malformed", "exec-reset"} {
+		t.Run(condition, func(t *testing.T) {
+			global := DefinitionFile{
+				Path:  "/usr/lib/systemd/system/service.d/10-global.conf",
+				Bytes: []byte("[Service]\nTimeoutStopFailureMode=abort\n"),
+				Kind:  "dropin",
+				Mode:  0o644,
+			}
+			h := newSystemdHarness(t, false, true, trustedUnitFile(t), global)
+			switch condition {
+			case "missing":
+				delete(h.files.files, global.Path)
+			case "symlink", "mask":
+				delete(h.files.files, global.Path)
+				if condition == "mask" {
+					h.files.links[global.Path] = defaultDevNull
+				} else {
+					h.files.links[global.Path] = "/other/global.conf"
+				}
+			case "malformed":
+				global.Bytes = []byte("[Service\n")
+				h.files.files[global.Path] = global
+			case "exec-reset":
+				global.Bytes = []byte("[Service]\nExecStart=\nExecStart=/opt/wrapper/mihari daemon\n")
+				h.files.files[global.Path] = global
+			}
+			_, err := h.adapter.InspectDefinition(context.Background())
+			if err == nil {
+				t.Fatal("accepted an unreadable or unsupported global drop-in")
+			}
+			requireInvalidState(t, err)
+		})
+	}
+}
+
+func TestSystemdInspect_GlobalServiceDropinKeepsOwnedValidation(t *testing.T) {
+	for _, condition := range []string{"supported", "exec", "foreign-path"} {
+		t.Run(condition, func(t *testing.T) {
+			global := DefinitionFile{
+				Path:  "/srv/systemd/system/service.d/10-global.conf",
+				Bytes: []byte("[Service]\nTimeoutStopFailureMode=abort\n"),
+				Kind:  "dropin",
+				Mode:  0o644,
+			}
+			owned := trustedDropinFile(t)
+			switch condition {
+			case "exec":
+				owned.Bytes = []byte("[Service]\nExecStop=/usr/bin/true\n")
+			case "foreign-path":
+				owned.Path = "/usr/lib/systemd/system/mihari.service.d/other.conf"
+			}
+			h := newSystemdHarness(t, false, true, trustedUnitFile(t), global, owned)
+			got, err := h.adapter.InspectDefinition(context.Background())
+			if condition != "supported" {
+				if err == nil {
+					t.Fatal("global drop-in bypassed unit-specific validation")
+				}
+				requireInvalidState(t, err)
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Files) != 2 || got.Files[0].Path != defaultSystemdUnitFile || got.Files[1].Path != owned.Path {
+				t.Fatalf("expected only unit and owned drop-in, got %+v", got.Files)
+			}
+		})
 	}
 }
 

@@ -2,12 +2,65 @@ package service
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
 )
+
+func TestSystemdLogicalLines_ContinuationBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{"single-backslash", "Key=first\\\nsecond\n", []string{"Key=first second"}},
+		{"double-backslash", "Key=first\\\\\nNext=second\n", []string{`Key=first\\`, "Next=second"}},
+		{"triple-backslash", "Key=first\\\\\\\nsecond\n", []string{`Key=first\\ second`}},
+		{"four-backslashes", "Key=first\\\\\\\\\nNext=second\n", []string{`Key=first\\\\`, "Next=second"}},
+		{"backslash-space", "Key=first\\ \nNext=second\n", []string{`Key=first\`, "Next=second"}},
+		{"backslash-tab", "Key=first\\\t\nNext=second\n", []string{`Key=first\`, "Next=second"}},
+		{"preserve-indentation", "Key=first\\\n \tsecond\n", []string{"Key=first  \tsecond"}},
+		{"multiple-continuations", "Key=first\\\nsecond\\\nthird\n", []string{"Key=first second third"}},
+		{"comment-block", "Key=first\\\n # comment \\\n\t; comment \\\nsecond\n", []string{"Key=first second"}},
+		{"comment-before-exec", "# comment \\\nExecStartPre=/usr/bin/false\n", []string{"ExecStartPre=/usr/bin/false"}},
+		{"blank-line-ends-continuation", "Key=first\\\n\nNext=second\n", []string{"Key=first", "Next=second"}},
+		{"crlf", "Key=first\\\r\nsecond\r\n", []string{"Key=first second"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := systemdLogicalLines([]byte(tc.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("logical lines=%q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseSystemdUnit_ContinuationSeparatesArguments(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		comment string
+	}{
+		{"adjacent-lines", ""},
+		{"comment-block", "# comment\n; comment\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := "[Service]\nExecStart=/usr/local/lib/mihari/mihari\\\n" + tc.comment + "daemon\\\n--system-service\n"
+			got, err := parseSystemdUnit([]byte(raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Binary != "/usr/local/lib/mihari/mihari" || !slices.Equal(got.Args, []string{"daemon", "--system-service"}) {
+				t.Fatalf("continued ExecStart parsed as %+v", got)
+			}
+		})
+	}
+}
 
 func TestParsePrintDisabled_CurrentAndLegacyStates(t *testing.T) {
 	for _, tc := range []struct {

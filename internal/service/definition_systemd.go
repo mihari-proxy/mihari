@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -155,7 +156,7 @@ func (a *SystemdAdapter) definitionFromShow(ctx context.Context, props map[strin
 	}
 
 	for _, dropin := range dropins {
-		if !allowedDropin(a.paths.DropinDir, dropin) {
+		if !allowedDropin(a.paths.DropinDir, dropin) && !globalSystemdServiceDropin(dropin) {
 			return Definition{}, invalidServiceState("service definition is unsupported")
 		}
 	}
@@ -163,26 +164,14 @@ func (a *SystemdAdapter) definitionFromShow(ctx context.Context, props map[strin
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Definition{}, invalidServiceState("service status is unknown", err)
 	}
-	listedSet := map[string]struct{}{}
 	for _, name := range listed {
 		if !strings.HasSuffix(name, ".conf") {
 			continue
 		}
-		listedSet[name] = struct{}{}
 		if !containsString(dropins, name) {
 			return Definition{}, invalidServiceState("service definition is unsupported")
 		}
 	}
-	for _, dropin := range dropins {
-		if _, ok := listedSet[dropin]; !ok {
-			file, readErr := a.files.Read(ctx, dropin)
-			if readErr != nil {
-				return Definition{}, invalidServiceState("service definition is unsupported", readErr)
-			}
-			_ = file
-		}
-	}
-
 	def := Definition{
 		Masked:  masked,
 		Running: running,
@@ -223,8 +212,12 @@ func (a *SystemdAdapter) definitionFromShow(ctx context.Context, props map[strin
 		if parsed.Binary != "" || parsed.execKeys > 0 {
 			return Definition{}, invalidServiceState("service definition is unsupported")
 		}
-		file.Kind = "dropin"
-		def.Files = append(def.Files, file)
+		// Global drop-ins affect execution and need the same validation, but
+		// remain outside the files this unit's install/restore transaction owns.
+		if allowedDropin(a.paths.DropinDir, dropinPath) {
+			file.Kind = "dropin"
+			def.Files = append(def.Files, file)
+		}
 	}
 
 	if link, err := a.files.ReadLink(ctx, a.paths.WantsLink); err == nil {
@@ -628,6 +621,16 @@ func (a *SystemdAdapter) stopUnit(ctx context.Context) error {
 		return nil
 	}
 	return invalidServiceState("service status is unknown")
+}
+
+// globalSystemdServiceDropin reports top-level service.d entries that systemd
+// applies to every service unit. DropInPaths is authoritative; the parent unit
+// root can be changed by the distribution or SYSTEMD_UNIT_PATH, so identify the
+// drop-in by its service.d directory instead of hardcoding unit roots. These
+// entries still need read-only content validation, but belong to the OS, not to
+// this unit, so they must not enter Definition.Files or be removed by an installation.
+func globalSystemdServiceDropin(name string) bool {
+	return unixAbs(name) && strings.HasSuffix(name, ".conf") && path.Base(path.Dir(name)) == "service.d"
 }
 
 func allowedDropin(dir, name string) bool {
