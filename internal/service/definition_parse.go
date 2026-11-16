@@ -51,6 +51,7 @@ func parseSystemdUnitFile(raw []byte) (parsedUnit, error) {
 			continue
 		}
 		key, value, ok := strings.Cut(line, "=")
+		key = strings.TrimSpace(key)
 		if !ok || key == "" {
 			return parsedUnit{}, invalidServiceState("service definition is unsupported")
 		}
@@ -94,7 +95,12 @@ func systemdLogicalLines(raw []byte) ([]string, error) {
 	var lines []string
 	var pending string
 	for scanner.Scan() {
-		line := strings.TrimRight(scanner.Text(), " \t")
+		rawLine := scanner.Text()
+		trimmedLeft := strings.TrimLeft(rawLine, " \t")
+		if trimmedLeft != "" && (trimmedLeft[0] == '#' || trimmedLeft[0] == ';') {
+			continue
+		}
+		line := strings.TrimRight(rawLine, " \t")
 		if pending != "" {
 			line = pending + strings.TrimLeft(line, " \t")
 			pending = ""

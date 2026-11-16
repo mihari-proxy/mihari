@@ -384,6 +384,96 @@ func TestSystemdInspect_GlobalServiceDropinRejectsExec(t *testing.T) {
 	}
 }
 
+func TestSystemdInspect_GlobalServiceDropinRejectsSpacedExec(t *testing.T) {
+	global := DefinitionFile{
+		Path:  "/usr/lib/systemd/system/service.d/10-exec.conf",
+		Bytes: []byte("[Service]\nExecStart =\nExecStart =/opt/wrapper/mihari daemon\n"),
+		Kind:  "dropin",
+		Mode:  0o644,
+	}
+	h := newSystemdHarness(t, false, true, trustedUnitFile(t), global)
+	_, err := h.adapter.InspectDefinition(context.Background())
+	if err == nil {
+		t.Fatal("accepted a global drop-in whose ExecStart key has space before '='")
+	}
+	requireInvalidState(t, err)
+	if len(h.hook.kinds) != 0 {
+		t.Fatal("spaced global exec caused mutation")
+	}
+}
+
+func TestSystemdInspect_GlobalServiceDropinRejectsCommentContinuation(t *testing.T) {
+	for _, marker := range []string{"#", ";"} {
+		t.Run(marker, func(t *testing.T) {
+			global := DefinitionFile{
+				Path:  "/usr/lib/systemd/system/service.d/10-exec.conf",
+				Bytes: []byte("[Service]\n" + marker + " comment \\\nExecStartPre=/usr/bin/true\n"),
+				Kind:  "dropin",
+				Mode:  0o644,
+			}
+			h := newSystemdHarness(t, false, true, trustedUnitFile(t), global)
+			_, err := h.adapter.InspectDefinition(context.Background())
+			if err == nil {
+				t.Fatal("accepted an execution command hidden by a comment continuation")
+			}
+			requireInvalidState(t, err)
+			if len(h.hook.kinds) != 0 {
+				t.Fatal("comment continuation caused mutation")
+			}
+		})
+	}
+}
+
+func TestSystemdInspect_OwnedDropinRejectsHiddenExec(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "spaced-exec", body: "[Service]\nExecStop =/usr/bin/true\n"},
+		{name: "comment-continuation", body: "[Service]\n# comment \\\nExecStartPre=/usr/bin/true\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			owned := trustedDropinFile(t)
+			owned.Bytes = []byte(tc.body)
+			h := newSystemdHarness(t, false, true, trustedUnitFile(t), owned)
+			_, err := h.adapter.InspectDefinition(context.Background())
+			if err == nil {
+				t.Fatal("accepted a hidden execution command in an owned drop-in")
+			}
+			requireInvalidState(t, err)
+		})
+	}
+}
+
+func TestSystemdInspect_SpacedExecStartStillIdentifiesUnit(t *testing.T) {
+	unit := trustedUnitFile(t)
+	unit.Bytes = []byte(strings.Replace(string(unit.Bytes), "ExecStart=", "ExecStart =", 1))
+	h := newSystemdHarness(t, false, true, unit)
+	got, err := h.adapter.InspectDefinition(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Binary != "/usr/local/lib/mihari/mihari" || strings.Join(got.Args, " ") != "daemon --system-service" {
+		t.Fatalf("spaced ExecStart parsed as %+v", got)
+	}
+}
+
+func TestSystemdInspect_CommentInsideContinuationStillIdentifiesUnit(t *testing.T) {
+	unit := trustedUnitFile(t)
+	unit.Bytes = []byte(strings.Replace(string(unit.Bytes),
+		`ExecStart="/usr/local/lib/mihari/mihari" daemon --system-service`,
+		"ExecStart=\"/usr/local/lib/mihari/mihari\" \\\n# comment\n  daemon --system-service",
+		1))
+	h := newSystemdHarness(t, false, true, unit)
+	got, err := h.adapter.InspectDefinition(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Binary != "/usr/local/lib/mihari/mihari" || strings.Join(got.Args, " ") != "daemon --system-service" {
+		t.Fatalf("continued ExecStart parsed as %+v", got)
+	}
+}
+
 func TestSystemdInspect_GlobalServiceDropinReadFailurePreservesCause(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
