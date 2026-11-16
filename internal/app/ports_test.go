@@ -36,6 +36,33 @@ func TestProbeManagedPorts_WildcardDetectsSpecificListener(t *testing.T) {
 	}
 }
 
+func TestProbeManagedPorts_InjectedLookupBlocksWildcardBeforeBind(t *testing.T) {
+	for _, address := range []string{"0.0.0.0:9190", "[::ffff:0.0.0.0]:9190"} {
+		t.Run(address, func(t *testing.T) {
+			settings := config.Defaults()
+			settings.AllowLAN = true
+			settings.MixedAddr = address
+			err := probeManagedPortsWithListener(settings, func(got string) (platform.TCPOccupant, bool) {
+				if got != "0.0.0.0:9190" {
+					return platform.TCPOccupant{}, false
+				}
+				return platform.TCPOccupant{PID: 77, Process: "holder"}, true
+			}, func(string, string) (net.Listener, error) {
+				t.Fatal("wildcard precheck fell through to bind")
+				return nil, errors.New("bind")
+			})
+			var conflict *ManagedPortConflict
+			if !errors.As(err, &conflict) {
+				t.Fatalf("err=%v", err)
+			}
+			apiError := conflict.failure
+			if apiError.Details["pid"] != 77 || apiError.Details["process"] != "holder" || apiError.Details["address"] != address {
+				t.Fatalf("details=%v", apiError.Details)
+			}
+		})
+	}
+}
+
 func TestProbeManagedPortsReportsOccupantDetails(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
