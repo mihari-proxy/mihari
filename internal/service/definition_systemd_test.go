@@ -329,13 +329,13 @@ func TestSystemdInspect_TrustedDropinAllowed(t *testing.T) {
 	}
 }
 
-func TestSystemdInspect_IgnoresGlobalServiceDropin(t *testing.T) {
+func TestSystemdInspect_GlobalServiceDropinNotOwned(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		path string
 	}{
 		{"fedora", "/usr/lib/systemd/system/service.d/10-timeout-abort.conf"},
-		{"custom-unit-root", "/srv/systemd/system/service.d/10-custom.conf"},
+		{"custom-global-root", "/srv/systemd/system/service.d/10-custom.conf"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			global := DefinitionFile{
@@ -356,6 +356,99 @@ func TestSystemdInspect_IgnoresGlobalServiceDropin(t *testing.T) {
 				if file.Path == global.Path {
 					t.Fatalf("global drop-in was treated as owned: %s", file.Path)
 				}
+			}
+		})
+	}
+}
+
+func TestSystemdInspect_GlobalServiceDropinRejectsExec(t *testing.T) {
+	for _, key := range []string{"ExecStart", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload", "ExecCondition"} {
+		t.Run(key, func(t *testing.T) {
+			global := DefinitionFile{
+				Path:  "/etc/systemd/system/service.d/99-exec.conf",
+				Bytes: []byte("[Service]\n" + key + "=/usr/bin/true\n"),
+				Kind:  "dropin",
+				Mode:  0o644,
+			}
+			h := newSystemdHarness(t, false, true, trustedUnitFile(t), global)
+			_, err := h.adapter.InspectDefinition(context.Background())
+			if err == nil {
+				t.Fatal("accepted an execution command in a global drop-in")
+			}
+			requireInvalidState(t, err)
+			if len(h.hook.kinds) != 0 {
+				t.Fatal("unsupported global drop-in caused mutation")
+			}
+		})
+	}
+}
+
+func TestSystemdInspect_GlobalServiceDropinRejectsUnreadableOrInvalid(t *testing.T) {
+	for _, condition := range []string{"missing", "symlink", "mask", "malformed", "exec-reset"} {
+		t.Run(condition, func(t *testing.T) {
+			global := DefinitionFile{
+				Path:  "/usr/lib/systemd/system/service.d/10-global.conf",
+				Bytes: []byte("[Service]\nTimeoutStopFailureMode=abort\n"),
+				Kind:  "dropin",
+				Mode:  0o644,
+			}
+			h := newSystemdHarness(t, false, true, trustedUnitFile(t), global)
+			switch condition {
+			case "missing":
+				delete(h.files.files, global.Path)
+			case "symlink", "mask":
+				delete(h.files.files, global.Path)
+				if condition == "mask" {
+					h.files.links[global.Path] = defaultDevNull
+				} else {
+					h.files.links[global.Path] = "/other/global.conf"
+				}
+			case "malformed":
+				global.Bytes = []byte("[Service\n")
+				h.files.files[global.Path] = global
+			case "exec-reset":
+				global.Bytes = []byte("[Service]\nExecStart=\nExecStart=/opt/wrapper/mihari daemon\n")
+				h.files.files[global.Path] = global
+			}
+			_, err := h.adapter.InspectDefinition(context.Background())
+			if err == nil {
+				t.Fatal("accepted an unreadable or unsupported global drop-in")
+			}
+			requireInvalidState(t, err)
+		})
+	}
+}
+
+func TestSystemdInspect_GlobalServiceDropinKeepsOwnedValidation(t *testing.T) {
+	for _, condition := range []string{"supported", "exec", "foreign-path"} {
+		t.Run(condition, func(t *testing.T) {
+			global := DefinitionFile{
+				Path:  "/srv/systemd/system/service.d/10-global.conf",
+				Bytes: []byte("[Service]\nTimeoutStopFailureMode=abort\n"),
+				Kind:  "dropin",
+				Mode:  0o644,
+			}
+			owned := trustedDropinFile(t)
+			switch condition {
+			case "exec":
+				owned.Bytes = []byte("[Service]\nExecStop=/usr/bin/true\n")
+			case "foreign-path":
+				owned.Path = "/usr/lib/systemd/system/mihari.service.d/other.conf"
+			}
+			h := newSystemdHarness(t, false, true, trustedUnitFile(t), global, owned)
+			got, err := h.adapter.InspectDefinition(context.Background())
+			if condition != "supported" {
+				if err == nil {
+					t.Fatal("global drop-in bypassed unit-specific validation")
+				}
+				requireInvalidState(t, err)
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Files) != 2 || got.Files[0].Path != defaultSystemdUnitFile || got.Files[1].Path != owned.Path {
+				t.Fatalf("expected only unit and owned drop-in, got %+v", got.Files)
 			}
 		})
 	}
