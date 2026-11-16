@@ -112,6 +112,9 @@ func (f *fakeOnboardingRuntime) OnboardingStatus(context.Context) (onboarding.Sn
 
 func (f *fakeOnboardingRuntime) UpdateOnboarding(_ context.Context, operation runtimeapi.Operation, update onboarding.Update) (onboarding.Snapshot, error) {
 	f.operation, f.update = operation, update
+	if update.AllowLAN != nil {
+		f.status.AllowLAN = *update.AllowLAN
+	}
 	f.status.RestartRequired = true
 	f.revision++
 	return onboarding.Snapshot{Status: f.status, Revision: f.revision}, nil
@@ -175,5 +178,30 @@ func TestOnboardingUpdateRejectsEmptyMutation(t *testing.T) {
 	server.Handler().ServeHTTP(response, authorizedRequest(http.MethodPatch, "/v1/onboarding", bytes.NewBufferString(`{"operation_id":"empty"}`)))
 	if response.Code != http.StatusBadRequest || fake.revision != 2 {
 		t.Fatalf("status=%d revision=%d body=%s", response.Code, fake.revision, response.Body.String())
+	}
+}
+
+func TestOnboarding_AllowLANOnlyUpdateAndRead(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		fake := &fakeOnboardingRuntime{fakeRuntime: &fakeRuntime{}, status: onboarding.Status{AllowLAN: !enabled}}
+		s := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Onboarding: fake})
+		body, err := json.Marshal(protocol.OnboardingUpdateRequest{OperationID: "toggle", AllowLAN: &enabled})
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, authorizedRequest(http.MethodPatch, "/v1/onboarding", bytes.NewReader(body)))
+		if w.Code != http.StatusOK || fake.update.AllowLAN == nil || *fake.update.AllowLAN != enabled {
+			t.Fatalf("status=%d body=%s update=%+v", w.Code, w.Body.String(), fake.update)
+		}
+		w = httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, authorizedRequest(http.MethodGet, "/v1/onboarding", nil))
+		var got protocol.OnboardingStatus
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.AllowLAN != enabled {
+			t.Fatalf("status=%+v", got)
+		}
 	}
 }

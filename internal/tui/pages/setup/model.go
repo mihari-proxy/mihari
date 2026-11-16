@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/netip"
 	"strings"
 	"sync/atomic"
@@ -695,6 +694,10 @@ func (m *Model) updateEndpoints(message tea.Msg, key tea.KeyPressMsg) (ui.Page, 
 		m.focusEndpoint((m.focusedField - 1 + len(m.inputs)) % len(m.inputs))
 		return m, m.inputs[m.focusedField].Focus()
 	case "enter":
+		mixed, _, _ := m.endpointValues()
+		if err := ui.ValidateMixedLAN(mixed, m.status.AllowLAN); err != nil {
+			return m, m.localFailure("Invalid mixed / Allow LAN combination", err)
+		}
 		if err := validateEndpoints(m.endpointValues()); err != nil {
 			return m, m.localFailure("Invalid endpoints", err)
 		}
@@ -1024,15 +1027,15 @@ func probeEndpoint(addr string) portState {
 }
 
 func probeEndpointResult(addr string) (portState, error) {
-	listener, err := net.Listen("tcp", addr)
+	free, err := ui.ProbeListen(addr)
 	if err != nil {
 		if isAddrInUse(err) {
 			return portOccupied, err
 		}
 		return portUnknown, err
 	}
-	if err := listener.Close(); err != nil {
-		return portUnknown, fmt.Errorf("close endpoint probe: %w", err)
+	if !free {
+		return portUnknown, nil
 	}
 	return portFree, nil
 }

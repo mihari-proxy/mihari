@@ -42,7 +42,7 @@ func Generate(base Document, overrides map[string]any, settings config.Settings)
 	}
 	document["mixed-port"] = int(mixed.Port())
 	document["bind-address"] = mixed.Addr().String()
-	document["allow-lan"] = false
+	document["allow-lan"] = settings.AllowLAN
 	document["external-controller"] = settings.ControllerAddr
 	document["secret"] = settings.ControllerSecret
 	delete(document, "external-ui")

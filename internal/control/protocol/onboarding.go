@@ -2,6 +2,7 @@ package protocol
 
 type OnboardingStatus struct {
 	WarningOutcome
+	AllowLAN        bool   `json:"allow_lan,omitempty"`
 	Schema          string `json:"schema"`
 	Revision        uint64 `json:"revision"`
 	Complete        bool   `json:"complete"`
@@ -12,6 +13,7 @@ type OnboardingStatus struct {
 }
 
 type OnboardingUpdateRequest struct {
+	AllowLAN *bool `json:"allow_lan,omitempty"`
 	// ExecutionMode optionally selects daemon-owned setup target execution.
 	ExecutionMode  string  `json:"execution_mode,omitempty"`
 	OperationID    string  `json:"operation_id"`

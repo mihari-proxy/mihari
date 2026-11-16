@@ -40,6 +40,25 @@ func LookupTCPOccupant(address string) (TCPOccupant, bool) {
 	return TCPOccupant{}, false
 }
 
+// LookupWildcardBindOccupant reports a same-family listener that can overlap a
+// family-specific wildcard bind. tcp4 considers the IPv4 table only, and tcp6
+// considers the IPv6 table only. The other family is left to the actual bind.
+func LookupWildcardBindOccupant(address string) (TCPOccupant, bool) {
+	ip, port, ok := parseTCPAddress(address)
+	if !ok || !ip.IsUnspecified() {
+		return TCPOccupant{}, false
+	}
+	family := uint32(windows.AF_INET6)
+	if ip.To4() != nil {
+		family = windows.AF_INET
+	}
+	pid, ok := occupantPID(family, ip, port)
+	if !ok {
+		return TCPOccupant{}, false
+	}
+	return occupantFromPID(pid)
+}
+
 func occupantFromPID(pid uint32) (TCPOccupant, bool) {
 	if pid == 0 {
 		return TCPOccupant{}, false

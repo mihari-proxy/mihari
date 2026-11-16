@@ -57,6 +57,7 @@ const (
 	rowAbout              = "about"
 	rowGitHub             = "github"
 	rowMixed              = "port-mixed"
+	rowAllowLAN           = "allow-lan"
 	rowController         = "port-controller"
 	rowWeb                = "port-web"
 	rowLogLevel           = "log-level"
@@ -439,6 +440,7 @@ type portHoldsMsg struct {
 }
 
 type portsApplyResultMsg struct {
+	rowID  string
 	status protocol.OnboardingStatus
 	err    error
 }
@@ -710,7 +712,7 @@ func (m *Model) SetSnapshot(status protocol.Status, core protocol.CoreStatus) {
 }
 
 func (m *Model) SetOnboarding(status protocol.OnboardingStatus) {
-	if m.onboarding.MixedAddr != status.MixedAddr || m.onboarding.ControllerAddr != status.ControllerAddr || m.onboarding.WebAddr != status.WebAddr {
+	if m.onboarding.MixedAddr != status.MixedAddr || m.onboarding.ControllerAddr != status.ControllerAddr || m.onboarding.WebAddr != status.WebAddr || m.onboarding.AllowLAN != status.AllowLAN {
 		m.portProbeNeeded = true
 	}
 	m.onboarding = status
@@ -1148,16 +1150,20 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		m.reconcilePortOwners()
 		return m, nil
 	case portsApplyResultMsg:
+		rowID := typed.rowID
+		if rowID == "" {
+			rowID = m.focusID
+		}
 		m.clearRowPending()
 		if typed.err != nil {
 			if typed.status.MixedAddr != "" {
 				m.onboarding = typed.status
 			}
-			m.markRowOutcome(m.focusID, false, ui.PortsApplyFailed)
+			m.markRowOutcome(rowID, false, ui.PortsApplyFailed)
 			return m, m.rowSpinCmdIfNeeded()
 		}
 		m.onboarding = typed.status
-		m.markRowOutcome(m.focusID, true, "")
+		m.markRowOutcome(rowID, true, "")
 		cmds := []tea.Cmd{m.probePortHolds(), m.rowSpinCmdIfNeeded()}
 		if typed.status.RestartRequired {
 			cmds = append(cmds, func() tea.Msg { return ui.ApplySavedEndpointsMsg{Page: ui.PageSystem, Status: typed.status} })
@@ -1466,6 +1472,8 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 			return m, m.confirmSystemProxyToggle()
 		case rowTUNAction:
 			return m, m.confirmTunToggle()
+		case rowAllowLAN:
+			return m, m.confirmAllowLANToggle()
 		case rowGitHub:
 			return m, m.openGitHub()
 		case rowMixed, rowController, rowWeb:
@@ -2061,6 +2069,17 @@ func (m *Model) networkRows() []row {
 			}
 		}
 		rows = append(rows, row{id: "egress", section: section, label: "Outbound Interface Override", value: value, detail: "Override the outbound interface binding"})
+	}
+	if m.hasCapability(protocol.CapabilityOnboarding) {
+		value := ui.StatusDot(m.theme, ui.ToneNeutral, ui.DisabledLabel)
+		if m.onboarding.AllowLAN {
+			value = ui.StatusDot(m.theme, ui.TonePositive, ui.EnabledLabel)
+		}
+		if m.onboarding.RestartRequired {
+			value += " · Restart required"
+		}
+		rows = append(rows, row{id: rowAllowLAN, section: section, label: "Allow LAN", value: value,
+			detail: "Enter to toggle. Enable before setting Mixed to 0.0.0.0 or another non-loopback address. Uses the saved Mixed address; does not add proxy authentication. Requires a daemon restart."})
 	}
 	return rows
 }
@@ -3003,6 +3022,10 @@ func (m *Model) confirmPortEdit() tea.Cmd {
 		m.lastError = ui.InvalidPortEndpoint
 		return m.localFailure("endpoints.validate", ui.InvalidPortEndpoint, err)
 	}
+	if err := ui.ValidateMixedLAN(mixed, m.onboarding.AllowLAN); err != nil {
+		m.lastError = err.Error()
+		return m.localFailure("endpoints.validate", "Invalid mixed / Allow LAN combination", err)
+	}
 	occupied := [3]bool{
 		m.portHolds[rowMixed].Kind == ui.PortHoldOccupied,
 		m.portHolds[rowController].Kind == ui.PortHoldOccupied,
@@ -3017,6 +3040,7 @@ func (m *Model) confirmPortEdit() tea.Cmd {
 	if mixed == m.onboarding.MixedAddr && controller == m.onboarding.ControllerAddr && web == m.onboarding.WebAddr {
 		return m.cancelPortEdit()
 	}
+	rowID := m.editID
 	_ = m.cancelPortEdit()
 	baseline := m.onboarding
 	request := protocol.OnboardingUpdateRequest{
@@ -3039,7 +3063,7 @@ func (m *Model) confirmPortEdit() tea.Cmd {
 			Impact: "Save changed ports and restart the installed Mihari service to apply them. Active connections will be interrupted. Administrator/root privileges are required for automatic restart.", Rollback: "Saved ports remain in place if the service restart fails.",
 			Execute: func() tea.Msg {
 				status, err := applyPortUpdate(ctx, client, baseline, request)
-				return portsApplyResultMsg{status: status, err: err}
+				return portsApplyResultMsg{rowID: rowID, status: status, err: err}
 			},
 		}
 	}
@@ -3655,7 +3679,7 @@ func (m *Model) snapshotRowValue(rowID, value string) string {
 		resource = "egress"
 	case rowZashboard, rowMetaCubeXD:
 		resource = "web-gui"
-	case rowMixed, rowController, rowWeb:
+	case rowMixed, rowController, rowWeb, rowAllowLAN:
 		resource = "onboarding"
 	case rowLogLevel, rowLogMaxSize, rowLogMaxFiles:
 		resource = "logging"

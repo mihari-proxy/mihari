@@ -155,7 +155,7 @@ func restartEndpointOwner(ctx context.Context, before protocol.Status, opts Endp
 }
 
 func sameEndpointTargets(a, b protocol.OnboardingStatus) bool {
-	return a.MixedAddr == b.MixedAddr && a.ControllerAddr == b.ControllerAddr && a.WebAddr == b.WebAddr
+	return a.MixedAddr == b.MixedAddr && a.ControllerAddr == b.ControllerAddr && a.WebAddr == b.WebAddr && a.AllowLAN == b.AllowLAN
 }
 
 func readEndpointRestartState(ctx context.Context, client EndpointRestartClient) (EndpointRestartResult, error) {

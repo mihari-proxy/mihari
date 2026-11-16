@@ -52,12 +52,12 @@ func (s *Server) updateOnboarding(writer http.ResponseWriter, request *http.Requ
 	if !s.decodeControlJSON(writer, request, &body) || !s.requireOperationID(request.Context(), writer, body.OperationID) {
 		return
 	}
-	if body.Complete == nil && body.MixedAddr == nil && body.ControllerAddr == nil && body.WebAddr == nil {
+	if body.Complete == nil && body.MixedAddr == nil && body.ControllerAddr == nil && body.WebAddr == nil && body.AllowLAN == nil {
 		s.writeInvalidArgument(request.Context(), writer, "onboarding update is empty")
 		return
 	}
 	defer s.operations.begin(body.OperationID)()
-	status, err := runtime.UpdateOnboarding(request.Context(), runtimeapi.Operation{ExecutionMode: body.ExecutionMode, ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, onboarding.Update{Complete: body.Complete, MixedAddr: body.MixedAddr, ControllerAddr: body.ControllerAddr, WebAddr: body.WebAddr})
+	status, err := runtime.UpdateOnboarding(request.Context(), runtimeapi.Operation{ExecutionMode: body.ExecutionMode, ID: body.OperationID, Source: "control", IfRevision: body.IfRevision}, onboarding.Update{AllowLAN: body.AllowLAN, Complete: body.Complete, MixedAddr: body.MixedAddr, ControllerAddr: body.ControllerAddr, WebAddr: body.WebAddr})
 	if err != nil {
 		s.writeControlError(request.Context(), writer, err)
 		return
@@ -67,5 +67,5 @@ func (s *Server) updateOnboarding(writer http.ResponseWriter, request *http.Requ
 
 func onboardingDTO(snapshot onboarding.Snapshot) protocol.OnboardingStatus {
 	status := snapshot.Status
-	return protocol.OnboardingStatus{Schema: "mihari/v1", Revision: snapshot.Revision, Complete: status.Complete, MixedAddr: status.MixedAddr, ControllerAddr: status.ControllerAddr, WebAddr: status.WebAddr, RestartRequired: status.RestartRequired}
+	return protocol.OnboardingStatus{Schema: "mihari/v1", Revision: snapshot.Revision, AllowLAN: status.AllowLAN, Complete: status.Complete, MixedAddr: status.MixedAddr, ControllerAddr: status.ControllerAddr, WebAddr: status.WebAddr, RestartRequired: status.RestartRequired}
 }

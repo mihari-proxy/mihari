@@ -4,6 +4,8 @@
 
 ## 控制面
 
+Allow LAN 由 Manager 在 settings 中保存为可选 `allow-lan`（默认 false），通过认证本地 `/v1/onboarding` 的可选 `allow_lan` 字段读取和更新。System → Network 提供开关，沿用端点保存、revision 复查和 daemon 重启确认；开关也参与重启目标身份比较。关闭时 mixed 必须为回环地址，开启时允许 `0.0.0.0`、`::` 或具体非回环地址；controller 与 Web 地址仍限回环。启动及订阅生成均覆盖 `allow-lan` 为该已保存值，重启前以候选校验、源内容复查及原子替换同步运行配置，保留凭据校验。此开关不改变代理认证策略，不新增浏览器 mutation 权限。通配监听的本机系统代理和订阅下载连接转换为相应回环地址。端口探测固定地址协议族，并在通配地址探测前核对已知监听进程，避免 Windows 重叠绑定成功被误报为空闲。
+
 出口网卡选择由 Manager 持久化为可选 `egress-interface`，通过认证本地 GET/PATCH `/v1/egress` 供 CLI/TUI 共用。平台枚举只提供网卡快照；精确名称是选择身份，不使用持久网卡库或自动回退。生成器在克隆的有效订阅上覆盖原生接口绑定，No-Override 不注入覆盖。在线修改遵循候选校验、重载及读回、关闭活动连接、保存设置的事务顺序；恢复失败使用现有 degraded 隔离。停止时只保存，启动生成器应用。能力不暴露至浏览器，也不改变 TUN 启用的冲突确认。参见 [ADR 0006](adr/0006-native-egress-binding.md) 与[命令语义](commands.md#egress--出口网卡)。
 
 Mihari 围绕一个由守护进程持有的控制面(control plane)设计,由 CLI、TUI 和浏览器面板共享:

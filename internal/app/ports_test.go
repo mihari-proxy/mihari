@@ -3,13 +3,65 @@ package app
 import (
 	"errors"
 	"net"
+	"net/netip"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/platform"
 )
+
+func TestProbeManagedPorts_WildcardDetectsSpecificListener(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("Darwin has no TCP occupant table, and binding 0.0.0.0 succeeds while 127.0.0.1 is listening")
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := listener.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	settings := config.Defaults()
+	settings.AllowLAN = true
+	settings.MixedAddr = netip.AddrPortFrom(netip.IPv4Unspecified(), uint16(listener.Addr().(*net.TCPAddr).Port)).String()
+	err = probeManagedPorts(settings, nil)
+	var conflict *ManagedPortConflict
+	if !errors.As(err, &conflict) {
+		t.Fatalf("wildcard probe missed listener: %v", err)
+	}
+}
+
+func TestProbeManagedPorts_InjectedLookupBlocksWildcardBeforeBind(t *testing.T) {
+	for _, address := range []string{"0.0.0.0:9190", "[::ffff:0.0.0.0]:9190"} {
+		t.Run(address, func(t *testing.T) {
+			settings := config.Defaults()
+			settings.AllowLAN = true
+			settings.MixedAddr = address
+			err := probeManagedPortsWithListener(settings, func(got string) (platform.TCPOccupant, bool) {
+				if got != "0.0.0.0:9190" {
+					return platform.TCPOccupant{}, false
+				}
+				return platform.TCPOccupant{PID: 77, Process: "holder"}, true
+			}, func(string, string) (net.Listener, error) {
+				t.Fatal("wildcard precheck fell through to bind")
+				return nil, errors.New("bind")
+			})
+			var conflict *ManagedPortConflict
+			if !errors.As(err, &conflict) {
+				t.Fatalf("err=%v", err)
+			}
+			apiError := conflict.failure
+			if apiError.Details["pid"] != 77 || apiError.Details["process"] != "holder" || apiError.Details["address"] != address {
+				t.Fatalf("details=%v", apiError.Details)
+			}
+		})
+	}
+}
 
 func TestProbeManagedPortsReportsOccupantDetails(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -88,7 +140,7 @@ func TestProbeManagedPorts_InjectedListenerReceivesAndClosesEachEndpoint(t *test
 	closed := 0
 	err := probeManagedPortsWithListener(settings, nil, func(network, address string) (net.Listener, error) {
 		listener, ok := listeners[address]
-		if network != "tcp" || !ok {
+		if network != "tcp4" || !ok {
 			return nil, errors.New("unexpected endpoint")
 		}
 		addresses = append(addresses, address)
