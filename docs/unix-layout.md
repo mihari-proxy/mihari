@@ -20,7 +20,7 @@ D 保存 settings、订阅、运行配置、GeoIP、面板、provider、核心�
 
 系统根与 I 必须经过从 `/` 开始的 no-follow owner/mode/ACL/挂载校验。Linux 要求支持安全能力的本地文件系统；macOS 要求启用 ownership 的本地 APFS/HFS。安装不会修复 `/usr/local` 等主机祖先权限；默认 I 不安全时可显式选择安全 I，例如 `/Library/PrivilegedHelperTools/mihari`。离线可信清单来自一次性解析的 `<I>/install-trust`，包括自定义 I；相邻下载 checksum、请求路径和旧用户树均不能成为 root 执行信任来源。
 
-配置生成统一保留订阅中的非托管字段，仅覆盖 mixed 端口/地址、allow-lan=false、controller 地址和 secret，并删除 external-ui 三个字段。TUN 开关只覆盖 tun.enable，不覆盖 stack、device、DNS 或路由等其他参数；未托管开关时保留订阅原值。Mihari 不再使用完整 YAML 字段白名单，配置语义与 provider 下载/缓存由 mihomo 原生处理；CLI/Web provider 更新入口继续经统一 mutation coordinator。Mihari 保留候选核心校验、revision 复查、原子发布和 reload 失败回滚。
+配置生成统一保留订阅中的非托管字段，仅覆盖 mixed 端口/地址、显式保存的 allow-lan（默认 false）、controller 地址和 secret，并删除 external-ui 三个字段。TUN 开关只覆盖 tun.enable，不覆盖 stack、device、DNS 或路由等其他参数；未托管开关时保留订阅原值。Mihari 不再使用完整 YAML 字段白名单，配置语义与 provider 下载/缓存由 mihomo 原生处理；CLI/Web provider 更新入口继续经统一 mutation coordinator。Mihari 保留候选核心校验、revision 复查、原子发布和 reload 失败回滚。
 
 Unix root 仍只接受 v1.19.30 的四个 Unix OS/arch 内置核心 hash，继续核验 provenance receipt 与执行文件身份，不执行旧用户树 binary。移除 YAML 策略不扩大可信核心版本范围。Mihari 不再保证所有传给 root 核心的字段都经注册表审计；关键覆盖不限制所有额外 listener 或文件访问。
 

@@ -40,7 +40,7 @@ func BootstrapConfig(settings config.Settings) ([]byte, error) {
 	}
 	document := bootstrapDocument{
 		MixedPort:          mixed.Port(),
-		AllowLAN:           false,
+		AllowLAN:           settings.AllowLAN,
 		BindAddress:        mixed.Addr().String(),
 		Mode:               settings.RoutingMode(),
 		LogLevel:           settings.CoreLoggingLevel(),

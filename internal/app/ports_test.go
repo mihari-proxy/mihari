@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"net"
+	"net/netip"
 	"reflect"
 	"testing"
 
@@ -10,6 +11,26 @@ import (
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/platform"
 )
+
+func TestProbeManagedPorts_WildcardDetectsSpecificListener(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := listener.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	settings := config.Defaults()
+	settings.AllowLAN = true
+	settings.MixedAddr = netip.AddrPortFrom(netip.IPv4Unspecified(), uint16(listener.Addr().(*net.TCPAddr).Port)).String()
+	err = probeManagedPorts(settings, nil)
+	var conflict *ManagedPortConflict
+	if !errors.As(err, &conflict) {
+		t.Fatalf("wildcard probe missed listener: %v", err)
+	}
+}
 
 func TestProbeManagedPortsReportsOccupantDetails(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -88,7 +109,7 @@ func TestProbeManagedPorts_InjectedListenerReceivesAndClosesEachEndpoint(t *test
 	closed := 0
 	err := probeManagedPortsWithListener(settings, nil, func(network, address string) (net.Listener, error) {
 		listener, ok := listeners[address]
-		if network != "tcp" || !ok {
+		if network != "tcp4" || !ok {
 			return nil, errors.New("unexpected endpoint")
 		}
 		addresses = append(addresses, address)

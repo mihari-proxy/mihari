@@ -178,6 +178,8 @@ TUI 订阅表格的 Name 和 Traffic 列按内容分配宽度，分别最多占 
 
 **System → Network** 在 daemon 启动时应用保存的系统代理或 TUN 状态期间显示橙色 **Applying…** 动画 badge，开启与关闭目标均适用。该次启动应用完成、失败或取消后停止动画。页面导航和手动操作保持可用；此标记不代表自动修复状态漂移。
 
+**System → Network → Allow LAN** 控制 Mixed 代理监听的局域网访问，默认关闭。先开启，再将 Mixed 改为 `0.0.0.0:9190` 或其他非本地地址；两者均通过 daemon 保存，并沿用端点变更的重启流程。关闭前须先将 Mixed 改回本地回环地址。开关保留现有代理认证策略，不会自动添加账号。本机系统代理和订阅下载在监听地址为通配地址时使用回环地址连接。CLI/TUI 与 daemon 须同步升级；降级前关闭 Allow LAN，以移除可选的 `allow-lan` 配置字段。旧版本已保存的“非本地 Mixed、LAN 关闭”组合需在升级前改回本地地址，或在 daemon 停止时明确配置 `allow-lan: true`。
+
 mihomo HTTP 失败的原始报错与上游状态会写入诊断日志，范围包括 gateway 和 WebSocket 握手。日志、导出及本地 CLI/TUI 错误汇报均不脱敏，保留错误自带的凭据、URL、路径与配置片段。CLI 分段展示概要、错误分类和原始详情，JSON 增加可选诊断和 warnings，业务退出码保持不变。TUI 所有页面均可按 F2 打开统一诊断历史，滚动查看详情并复制原文。终端控制字符仅在显示时转义。
 
 固定 GitHub 资源（Mihari、mihomo、内置面板及 GeoIP）确认限流时，错误说明统一为 `GitHub rate limit exceeded. Please try again later.`。失败 Badge 保持简短；F2 保留原始操作、HTTP 状态、URL、响应正文与原因链。不处理重试时间头，不改变现有重试行为；自定义订阅地址及安装脚本不在此处理范围。

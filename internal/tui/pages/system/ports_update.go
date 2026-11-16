@@ -23,6 +23,13 @@ func applyPortUpdate(ctx context.Context, client Client, baseline protocol.Onboa
 			return protocol.OnboardingStatus{}, err
 		}
 		mixed, controller, web := current.MixedAddr, current.ControllerAddr, current.WebAddr
+		allowLAN := current.AllowLAN
+		if request.AllowLAN != nil {
+			if current.AllowLAN != baseline.AllowLAN {
+				return current, protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "Allow LAN changed while editing; reopen Networks and try again"}
+			}
+			allowLAN = *request.AllowLAN
+		}
 		for _, endpoint := range []struct {
 			name    string
 			before  string
@@ -46,6 +53,9 @@ func applyPortUpdate(ctx context.Context, client Client, baseline protocol.Onboa
 			*endpoint.current = *endpoint.target
 		}
 		if err := ui.ValidateManagedEndpoints(mixed, controller, web); err != nil {
+			return current, err
+		}
+		if err := ui.ValidateMixedLAN(mixed, allowLAN); err != nil {
 			return current, err
 		}
 		if err := ctx.Err(); err != nil {

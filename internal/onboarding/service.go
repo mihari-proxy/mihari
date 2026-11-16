@@ -32,6 +32,7 @@ type Options struct {
 }
 
 type Status struct {
+	AllowLAN        bool
 	Complete        bool
 	MixedAddr       string
 	ControllerAddr  string
@@ -46,6 +47,7 @@ type Snapshot struct {
 }
 
 type Update struct {
+	AllowLAN       *bool
 	Complete       *bool
 	MixedAddr      *string
 	ControllerAddr *string

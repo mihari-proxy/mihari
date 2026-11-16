@@ -57,7 +57,7 @@ func startupSettings(t *testing.T) (config.Settings, func(string, string) (net.L
 	}
 	probe := func(network, address string) (net.Listener, error) {
 		listener, ok := listeners[address]
-		if network != "tcp" || !ok {
+		if network != platform.TCPNetwork(address) || !ok {
 			return nil, errors.New("unexpected startup probe endpoint")
 		}
 		return reservedStartupListener{Listener: listener}, nil

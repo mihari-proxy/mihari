@@ -5,10 +5,23 @@ import (
 	"fmt"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
+	"github.com/mihari-proxy/mihari/internal/platform"
 	"net"
 	"net/netip"
 	"syscall"
 )
+
+// ValidateMixedLAN rejects a listen address that allow-lan=false would ignore.
+func ValidateMixedLAN(value string, allowLAN bool) error {
+	endpoint, err := netip.ParseAddrPort(value)
+	if err != nil || endpoint.Port() == 0 {
+		return endpointFailure("mixed endpoint must be an IP address and valid port", value, err)
+	}
+	if !allowLAN && !endpoint.Addr().IsLoopback() {
+		return endpointFailure("Mixed must use a loopback address when Allow LAN is disabled; enable Allow LAN first", value, nil)
+	}
+	return nil
+}
 
 // ValidateManagedEndpoints checks Mixed / Controller / Web the same way Setup does.
 func ValidateManagedEndpoints(mixedValue, controllerValue, webValue string) error {
@@ -40,7 +53,14 @@ func ListenFree(addr string) bool {
 
 // ProbeListen reports availability and preserves any bind or cleanup failure.
 func ProbeListen(addr string) (bool, error) {
-	listener, err := net.Listen("tcp", addr)
+	// Windows permits overlapping wildcard/specific binds. A successful bind
+	// alone cannot establish that the whole wildcard endpoint is available.
+	if endpoint, err := netip.ParseAddrPort(addr); err == nil && endpoint.Addr().IsUnspecified() {
+		if occupant, ok := platform.LookupTCPOccupant(addr); ok && occupant.PID > 0 {
+			return false, fmt.Errorf("listen %s: %w", addr, syscall.EADDRINUSE)
+		}
+	}
+	listener, err := net.Listen(platform.TCPNetwork(addr), addr)
 	if err != nil {
 		return false, err
 	}
