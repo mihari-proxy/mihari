@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -445,9 +446,36 @@ func TestSystemdInspect_OwnedDropinRejectsHiddenExec(t *testing.T) {
 	}
 }
 
+func substituteFixtureOnce(raw, old, replacement string) (string, error) {
+	if got := strings.Count(raw, old); got != 1 {
+		return "", fmt.Errorf("fixture text %q matched %d times, want 1", old, got)
+	}
+	return strings.Replace(raw, old, replacement, 1), nil
+}
+
+func TestSubstituteFixtureOnce_RequiresOneMatch(t *testing.T) {
+	if _, err := substituteFixtureOnce("ExecStart=/bin/mihari", "ExecStartMissing=", "x"); err == nil {
+		t.Fatal("accepted a fixture substitution that matched nothing")
+	}
+	got, err := substituteFixtureOnce("ExecStart=/bin/mihari", "ExecStart=", "ExecStart =")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "ExecStart =/bin/mihari" {
+		t.Fatalf("substituted %q", got)
+	}
+	if _, err := substituteFixtureOnce("ExecStart=/a\nExecStart=/b", "ExecStart=", "x"); err == nil {
+		t.Fatal("accepted a fixture substitution that matched twice")
+	}
+}
+
 func TestSystemdInspect_SpacedExecStartStillIdentifiesUnit(t *testing.T) {
 	unit := trustedUnitFile(t)
-	unit.Bytes = []byte(strings.Replace(string(unit.Bytes), "ExecStart=", "ExecStart =", 1))
+	replaced, err := substituteFixtureOnce(string(unit.Bytes), "ExecStart=", "ExecStart =")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unit.Bytes = []byte(replaced)
 	h := newSystemdHarness(t, false, true, unit)
 	got, err := h.adapter.InspectDefinition(context.Background())
 	if err != nil {
@@ -460,10 +488,13 @@ func TestSystemdInspect_SpacedExecStartStillIdentifiesUnit(t *testing.T) {
 
 func TestSystemdInspect_CommentInsideContinuationStillIdentifiesUnit(t *testing.T) {
 	unit := trustedUnitFile(t)
-	unit.Bytes = []byte(strings.Replace(string(unit.Bytes),
+	replaced, err := substituteFixtureOnce(string(unit.Bytes),
 		`ExecStart="/usr/local/lib/mihari/mihari" daemon --system-service`,
-		"ExecStart=\"/usr/local/lib/mihari/mihari\" \\\n# comment\n  daemon --system-service",
-		1))
+		"ExecStart=\"/usr/local/lib/mihari/mihari\" \\\n# comment\n  daemon --system-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unit.Bytes = []byte(replaced)
 	h := newSystemdHarness(t, false, true, unit)
 	got, err := h.adapter.InspectDefinition(context.Background())
 	if err != nil {
