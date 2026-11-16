@@ -51,7 +51,8 @@ func (m *Model) ObserveDaemon(status protocol.Status, core protocol.CoreStatus) 
 // resumeFromState selects missing required setup from confirmed resources and restart state.
 func (m *Model) resumeFromState() tea.Cmd {
 	m.resumePending = false
-	if validateEndpoints(m.endpointValues()) != nil || m.anyPortOccupied() {
+	mixed, controller, web := m.endpointValues()
+	if validateEndpoints(mixed, controller, web) != nil || ui.ValidateMixedLAN(mixed, m.status.AllowLAN) != nil || m.anyPortOccupied() {
 		m.step = stepEndpoints
 		return nil
 	}

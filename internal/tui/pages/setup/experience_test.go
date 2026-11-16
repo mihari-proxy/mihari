@@ -43,6 +43,21 @@ func TestSetupResume_RequiredStateNotWelcomeMarker(t *testing.T) {
 	}
 }
 
+func TestSetupResume_DisabledLANRejectsNonLoopbackMixed(t *testing.T) {
+	status := defaultStatus(false)
+	status.AllowLAN = false
+	status.MixedAddr = "0.0.0.0:9190"
+	m := loadedModel(&fakeClient{status: status})
+	m.SetAutomatic(true)
+	m.coreLocalLoaded = true
+	m.coreLocal.LocalReady = true
+	m.portProbe = [3]portState{portFree, portFree, portFree}
+	cmd := m.resumeFromState()
+	if cmd != nil || m.step != stepEndpoints {
+		t.Fatalf("step=%v cmd=%v", m.step, cmd != nil)
+	}
+}
+
 func TestSetupComplete_DoesNotResubmitSavedEndpoints(t *testing.T) {
 	f := &fakeClient{status: defaultStatus(false)}
 	m := loadedModel(f)

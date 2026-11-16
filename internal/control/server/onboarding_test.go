@@ -112,6 +112,9 @@ func (f *fakeOnboardingRuntime) OnboardingStatus(context.Context) (onboarding.Sn
 
 func (f *fakeOnboardingRuntime) UpdateOnboarding(_ context.Context, operation runtimeapi.Operation, update onboarding.Update) (onboarding.Snapshot, error) {
 	f.operation, f.update = operation, update
+	if update.AllowLAN != nil {
+		f.status.AllowLAN = *update.AllowLAN
+	}
 	f.status.RestartRequired = true
 	f.revision++
 	return onboarding.Snapshot{Status: f.status, Revision: f.revision}, nil
@@ -180,7 +183,7 @@ func TestOnboardingUpdateRejectsEmptyMutation(t *testing.T) {
 
 func TestOnboarding_AllowLANOnlyUpdateAndRead(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
-		fake := &fakeOnboardingRuntime{fakeRuntime: &fakeRuntime{}, status: onboarding.Status{AllowLAN: enabled}}
+		fake := &fakeOnboardingRuntime{fakeRuntime: &fakeRuntime{}, status: onboarding.Status{AllowLAN: !enabled}}
 		s := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Onboarding: fake})
 		body, err := json.Marshal(protocol.OnboardingUpdateRequest{OperationID: "toggle", AllowLAN: &enabled})
 		if err != nil {

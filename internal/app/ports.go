@@ -27,8 +27,9 @@ func probeManagedPortsWithListener(settings config.Settings, lookup func(string)
 		{"controller-addr", settings.ControllerAddr},
 		{"web-addr", settings.WebAddr},
 	} {
-		if address, err := netip.ParseAddrPort(endpoint.address); err == nil && address.Addr().IsUnspecified() {
-			if occupant, ok := lookup(endpoint.address); ok && occupant.PID > 0 {
+		if address, err := netip.ParseAddrPort(endpoint.address); err == nil && address.Addr().Unmap().IsUnspecified() {
+			normalized := netip.AddrPortFrom(address.Addr().Unmap(), address.Port()).String()
+			if occupant, ok := platform.LookupWildcardBindOccupant(normalized); ok && occupant.PID > 0 {
 				return &ManagedPortConflict{failure: protocol.APIError{Code: protocol.CodeInvalidState, Message: "managed port is unavailable",
 					Details: map[string]any{"setting": endpoint.setting, "address": endpoint.address, "pid": occupant.PID, "process": filepath.Base(occupant.Process)}}}
 			}

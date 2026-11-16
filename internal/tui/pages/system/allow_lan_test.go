@@ -3,6 +3,7 @@ package system
 import (
 	tea "charm.land/bubbletea/v2"
 	"errors"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"strings"
@@ -85,6 +86,43 @@ func TestAllowLAN_ConcurrentToggleDoesNotOverwrite(t *testing.T) {
 	var api protocol.APIError
 	if !errors.As(result.err, &api) || api.Code != protocol.CodeRevisionConflict || len(c.requests) != 0 {
 		t.Fatalf("result=%+v requests=%v", result, c.requests)
+	}
+}
+
+func TestAllowLAN_UnloadedSnapshotDoesNotShowConfirmedState(t *testing.T) {
+	m := portsModel(t)
+	m.SetSize(84, 40)
+	m.SetSnapshotState("onboarding", ui.SnapshotState{})
+	for _, line := range strings.Split(ansi.Strip(m.View()), "\n") {
+		if !strings.Contains(line, "Allow LAN") {
+			continue
+		}
+		if strings.Contains(line, "Disabled") || strings.Contains(line, "Enabled") || !strings.Contains(line, "Loading") {
+			t.Fatalf("unloaded Allow LAN presented as confirmed: %q", line)
+		}
+		return
+	}
+	t.Fatal("Allow LAN row missing")
+}
+
+func TestPortEdit_ResultMarksEditedRowAfterFocusMoves(t *testing.T) {
+	m := portsModel(t)
+	if cmd := m.beginPortEdit(rowMixed); cmd == nil {
+		t.Fatal("port edit did not start")
+	}
+	m.editInput.SetValue("127.0.0.1:9192")
+	intent, ok := m.confirmPortEdit()().(ui.ActionIntentMsg)
+	if !ok {
+		t.Fatal("port edit did not request confirmation")
+	}
+	m.focusID = rowWeb
+	result, ok := intent.Execute().(portsApplyResultMsg)
+	if !ok || result.rowID != rowMixed {
+		t.Fatalf("result=%#v", result)
+	}
+	m.Update(result)
+	if m.outcomeRow != rowMixed {
+		t.Fatalf("outcome=%q focus=%q", m.outcomeRow, m.focusID)
 	}
 }
 

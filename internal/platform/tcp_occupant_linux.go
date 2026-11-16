@@ -30,6 +30,25 @@ func LookupTCPOccupant(address string) (TCPOccupant, bool) {
 	return occupantBySocketInode(inode)
 }
 
+// LookupWildcardBindOccupant reports a same-family listener that can overlap a
+// family-specific wildcard bind. tcp4 reads /proc/net/tcp only, and tcp6 reads
+// /proc/net/tcp6 only. The other family is left to the actual bind.
+func LookupWildcardBindOccupant(address string) (TCPOccupant, bool) {
+	ip, port, ok := parseTCPAddress(address)
+	if !ok || !ip.IsUnspecified() {
+		return TCPOccupant{}, false
+	}
+	path := "/proc/net/tcp6"
+	if ip.To4() != nil {
+		path = "/proc/net/tcp"
+	}
+	inode, ok := listenInode(path, ip, port)
+	if !ok {
+		return TCPOccupant{}, false
+	}
+	return occupantBySocketInode(inode)
+}
+
 func listenInode(path string, query net.IP, port int) (uint64, bool) {
 	f, err := os.Open(path)
 	if err != nil {

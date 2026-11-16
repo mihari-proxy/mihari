@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/config"
@@ -13,6 +14,9 @@ import (
 )
 
 func TestProbeManagedPorts_WildcardDetectsSpecificListener(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("Darwin has no TCP occupant table, and binding 0.0.0.0 succeeds while 127.0.0.1 is listening")
+	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

@@ -16,9 +16,11 @@ func TestOnboarding_AllowLANValidatesBeforePersistence(t *testing.T) {
 	settings := config.Defaults()
 	settings.ControllerSecret = strings.Repeat("a", 64)
 	saves := 0
+	var saved []config.Settings
 	m := newTestManager(Options{Settings: settings, SettingsPath: "injected-settings", Onboarding: service,
-		SaveSettings: func(_ string, _ config.Settings) (config.CommitResult, error) {
+		SaveSettings: func(_ string, candidate config.Settings) (config.CommitResult, error) {
 			saves++
+			saved = append(saved, candidate)
 			return config.CommitResult{Committed: true}, nil
 		},
 	})
@@ -30,8 +32,8 @@ func TestOnboarding_AllowLANValidatesBeforePersistence(t *testing.T) {
 		t.Fatal("invalid edit persisted")
 	}
 	result, err := m.UpdateOnboarding(t.Context(), Operation{ID: "enable"}, onboarding.Update{MixedAddr: &wildcard, AllowLAN: &enable})
-	if err != nil || !result.Status.AllowLAN || !result.Status.RestartRequired || saves != 1 {
-		t.Fatalf("result=%+v saves=%d err=%v", result, saves, err)
+	if err != nil || !result.Status.AllowLAN || !result.Status.RestartRequired || saves != 1 || !saved[0].AllowLAN || saved[0].MixedAddr != wildcard {
+		t.Fatalf("result=%+v saves=%d saved=%+v err=%v", result, saves, saved, err)
 	}
 	if _, err := m.UpdateOnboarding(t.Context(), Operation{ID: "disable-invalid"}, onboarding.Update{AllowLAN: &disable}); err == nil {
 		t.Fatal("disabled LAN with wildcard still saved")
@@ -41,7 +43,7 @@ func TestOnboarding_AllowLANValidatesBeforePersistence(t *testing.T) {
 	}
 	loopback := settings.MixedAddr
 	result, err = m.UpdateOnboarding(t.Context(), Operation{ID: "disable"}, onboarding.Update{MixedAddr: &loopback, AllowLAN: &disable})
-	if err != nil || result.Status.AllowLAN || saves != 2 {
-		t.Fatalf("result=%+v saves=%d err=%v", result, saves, err)
+	if err != nil || result.Status.AllowLAN || saves != 2 || saved[1].AllowLAN || saved[1].MixedAddr != loopback {
+		t.Fatalf("result=%+v saves=%d saved=%+v err=%v", result, saves, saved, err)
 	}
 }

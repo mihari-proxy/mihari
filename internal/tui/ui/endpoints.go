@@ -55,8 +55,9 @@ func ListenFree(addr string) bool {
 func ProbeListen(addr string) (bool, error) {
 	// Windows permits overlapping wildcard/specific binds. A successful bind
 	// alone cannot establish that the whole wildcard endpoint is available.
-	if endpoint, err := netip.ParseAddrPort(addr); err == nil && endpoint.Addr().IsUnspecified() {
-		if occupant, ok := platform.LookupTCPOccupant(addr); ok && occupant.PID > 0 {
+	if endpoint, err := netip.ParseAddrPort(addr); err == nil && endpoint.Addr().Unmap().IsUnspecified() {
+		normalized := netip.AddrPortFrom(endpoint.Addr().Unmap(), endpoint.Port()).String()
+		if occupant, ok := platform.LookupWildcardBindOccupant(normalized); ok && occupant.PID > 0 {
 			return false, fmt.Errorf("listen %s: %w", addr, syscall.EADDRINUSE)
 		}
 	}

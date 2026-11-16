@@ -2079,7 +2079,7 @@ func (m *Model) networkRows() []row {
 			value += " · Restart required"
 		}
 		rows = append(rows, row{id: rowAllowLAN, section: section, label: "Allow LAN", value: value,
-			detail: "Enter to toggle. Enable before setting Mixed to 0.0.0.0 or a LAN address. Uses the saved Mixed address; does not add proxy authentication. Requires a daemon restart."})
+			detail: "Enter to toggle. Enable before setting Mixed to 0.0.0.0 or another non-loopback address. Uses the saved Mixed address; does not add proxy authentication. Requires a daemon restart."})
 	}
 	return rows
 }
@@ -3040,6 +3040,7 @@ func (m *Model) confirmPortEdit() tea.Cmd {
 	if mixed == m.onboarding.MixedAddr && controller == m.onboarding.ControllerAddr && web == m.onboarding.WebAddr {
 		return m.cancelPortEdit()
 	}
+	rowID := m.editID
 	_ = m.cancelPortEdit()
 	baseline := m.onboarding
 	request := protocol.OnboardingUpdateRequest{
@@ -3062,7 +3063,7 @@ func (m *Model) confirmPortEdit() tea.Cmd {
 			Impact: "Save changed ports and restart the installed Mihari service to apply them. Active connections will be interrupted. Administrator/root privileges are required for automatic restart.", Rollback: "Saved ports remain in place if the service restart fails.",
 			Execute: func() tea.Msg {
 				status, err := applyPortUpdate(ctx, client, baseline, request)
-				return portsApplyResultMsg{status: status, err: err}
+				return portsApplyResultMsg{rowID: rowID, status: status, err: err}
 			},
 		}
 	}
@@ -3678,7 +3679,7 @@ func (m *Model) snapshotRowValue(rowID, value string) string {
 		resource = "egress"
 	case rowZashboard, rowMetaCubeXD:
 		resource = "web-gui"
-	case rowMixed, rowController, rowWeb:
+	case rowMixed, rowController, rowWeb, rowAllowLAN:
 		resource = "onboarding"
 	case rowLogLevel, rowLogMaxSize, rowLogMaxFiles:
 		resource = "logging"
