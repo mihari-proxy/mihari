@@ -425,6 +425,62 @@ func TestSystemdInspect_GlobalServiceDropinRejectsCommentContinuation(t *testing
 	}
 }
 
+func TestSystemdInspect_DropinRejectsExecAfterNonContinuation(t *testing.T) {
+	for _, scope := range []string{"global", "owned"} {
+		t.Run(scope, func(t *testing.T) {
+			for _, tc := range []struct {
+				name   string
+				suffix string
+			}{
+				{"double-backslash", `\\`},
+				{"four-backslashes", `\\\\`},
+				{"backslash-space", "\\ "},
+				{"backslash-tab", "\\\t"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					dropin := trustedDropinFile(t)
+					if scope == "global" {
+						dropin.Path = "/usr/lib/systemd/system/service.d/99-exec.conf"
+					}
+					dropin.Bytes = []byte("[Service]\nEnvironment=REVIEW=value" + tc.suffix + "\nExecStartPre=/usr/bin/false\n")
+					h := newSystemdHarness(t, false, true, trustedUnitFile(t), dropin)
+					_, err := h.adapter.InspectDefinition(context.Background())
+					if err == nil {
+						t.Fatal("accepted an execution command after a line that does not continue")
+					}
+					requireInvalidState(t, err)
+					if len(h.hook.kinds) != 0 {
+						t.Fatal("unsupported drop-in caused mutation")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestSystemdInspect_GlobalServiceDropinContinuationAllowed(t *testing.T) {
+	global := DefinitionFile{
+		Path:  "/usr/lib/systemd/system/service.d/10-global.conf",
+		Bytes: []byte("[Service]\nEnvironment=FIRST=one\\\n# comment\nSECOND=two\nTimeoutStopFailureMode=abort\n"),
+		Kind:  "dropin",
+		Mode:  0o644,
+	}
+	h := newSystemdHarness(t, false, true, trustedUnitFile(t), global)
+	got, err := h.adapter.InspectDefinition(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Binary != "/usr/local/lib/mihari/mihari" {
+		t.Fatalf("binary=%q", got.Binary)
+	}
+	if len(got.Files) != 1 || got.Files[0].Path != defaultSystemdUnitFile {
+		t.Fatalf("expected only the owned unit, got %+v", got.Files)
+	}
+	if len(h.hook.kinds) != 0 {
+		t.Fatal("global drop-in inspection caused mutation")
+	}
+}
+
 func TestSystemdInspect_OwnedDropinRejectsHiddenExec(t *testing.T) {
 	for _, tc := range []struct {
 		name string

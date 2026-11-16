@@ -100,13 +100,16 @@ func systemdLogicalLines(raw []byte) ([]string, error) {
 		if trimmedLeft != "" && (trimmedLeft[0] == '#' || trimmedLeft[0] == ';') {
 			continue
 		}
-		line := strings.TrimRight(rawLine, " \t")
+		line := rawLine
 		if pending != "" {
-			line = pending + strings.TrimLeft(line, " \t")
+			line = pending + line
 			pending = ""
 		}
-		if strings.HasSuffix(line, "\\") {
-			pending = strings.TrimSuffix(line, "\\")
+		// Only an unescaped backslash at the physical end continues the line.
+		// systemd replaces it with a space and preserves the next line's indent.
+		trailingBackslashes := len(line) - len(strings.TrimRight(line, "\\"))
+		if trailingBackslashes%2 == 1 {
+			pending = line[:len(line)-1] + " "
 			continue
 		}
 		lines = append(lines, strings.TrimSpace(line))
