@@ -363,6 +363,58 @@ func TestSystemdInspect_GlobalServiceDropinNotOwned(t *testing.T) {
 	}
 }
 
+func TestSystemdInspect_CustomUnitRootWithGlobalDropinNotOwned(t *testing.T) {
+	paths := SystemdPaths{
+		Systemctl: defaultSystemctl,
+		UnitDir:   "/srv/systemd/system",
+		UnitFile:  "/srv/systemd/system/mihari.service",
+		DropinDir: "/srv/systemd/system/mihari.service.d",
+		WantsLink: "/srv/systemd/system/multi-user.target.wants/mihari.service",
+		DevNull:   defaultDevNull,
+	}
+	unit := trustedUnitFile(t)
+	unit.Path = paths.UnitFile
+	owned := trustedDropinFile(t)
+	owned.Path = paths.DropinDir + "/10-mihari.conf"
+	global := DefinitionFile{
+		Path:  paths.UnitDir + "/service.d/10-global.conf",
+		Bytes: []byte("[Service]\nTimeoutStopFailureMode=abort\n"),
+		Kind:  "dropin",
+		Mode:  0o644,
+	}
+	h := newSystemdHarness(t, false, false, unit, owned, global)
+	show, err := substituteFixtureOnce(h.show, "FragmentPath="+defaultSystemdUnitFile, "FragmentPath="+paths.UnitFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.show = show
+	h.files.links[paths.WantsLink] = paths.UnitFile
+	adapter := NewSystemdAdapterWithConfig(SystemdConfig{
+		Runner: h.runner,
+		Files:  h.files,
+		Tree:   h.tree,
+		Clock:  h.clock,
+		Hook:   h.hook.wrap,
+		Paths:  paths,
+	})
+	got, err := adapter.InspectDefinition(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Binary != "/usr/local/lib/mihari/mihari" || strings.Join(got.Args, " ") != "daemon --system-service" {
+		t.Fatalf("exec %q %v", got.Binary, got.Args)
+	}
+	if len(got.Files) != 2 || got.Files[0].Path != unit.Path || got.Files[1].Path != owned.Path {
+		t.Fatalf("expected only the custom unit and owned drop-in, got %+v", got.Files)
+	}
+	if !got.Enabled || len(got.Links) != 1 || got.Links[0].Path != paths.WantsLink || got.Links[0].Target != paths.UnitFile {
+		t.Fatalf("custom enable link missing from definition: %+v", got)
+	}
+	if len(h.hook.kinds) != 0 {
+		t.Fatal("custom root inspection caused mutation")
+	}
+}
+
 func TestSystemdInspect_GlobalServiceDropinRejectsExec(t *testing.T) {
 	for _, key := range []string{"ExecStart", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload", "ExecCondition"} {
 		t.Run(key, func(t *testing.T) {
