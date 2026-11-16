@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -383,7 +384,41 @@ func TestSystemdInspect_GlobalServiceDropinRejectsExec(t *testing.T) {
 	}
 }
 
-func TestSystemdInspect_GlobalServiceDropinRejectsUnreadableOrInvalid(t *testing.T) {
+func TestSystemdInspect_GlobalServiceDropinReadFailurePreservesCause(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cause error
+	}{
+		{"permission-denied", os.ErrPermission},
+		{"io-failure", errors.New("fixture global drop-in read failure")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			global := DefinitionFile{
+				Path:  "/usr/lib/systemd/system/service.d/10-global.conf",
+				Bytes: []byte("[Service]\nTimeoutStopFailureMode=abort\n"),
+				Kind:  "dropin",
+				Mode:  0o644,
+			}
+			h := newSystemdHarness(t, false, true, trustedUnitFile(t), global)
+			h.files.readErrors = map[string]error{
+				global.Path: &os.PathError{Op: "open", Path: global.Path, Err: tc.cause},
+			}
+			_, err := h.adapter.InspectDefinition(context.Background())
+			if err == nil {
+				t.Fatal("accepted a global drop-in that could not be read")
+			}
+			requireInvalidState(t, err)
+			if !errors.Is(err, tc.cause) {
+				t.Fatalf("lost global drop-in read cause: %v", err)
+			}
+			if len(h.hook.kinds) != 0 {
+				t.Fatal("global drop-in read failure caused mutation")
+			}
+		})
+	}
+}
+
+func TestSystemdInspect_GlobalServiceDropinRejectsMissingOrInvalid(t *testing.T) {
 	for _, condition := range []string{"missing", "symlink", "mask", "malformed", "exec-reset"} {
 		t.Run(condition, func(t *testing.T) {
 			global := DefinitionFile{

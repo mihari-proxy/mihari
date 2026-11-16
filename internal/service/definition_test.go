@@ -76,8 +76,9 @@ func (f *fakeRunner) Run(_ context.Context, argv []string) (CommandResult, error
 }
 
 type memFS struct {
-	files map[string]DefinitionFile
-	links map[string]string
+	files      map[string]DefinitionFile
+	links      map[string]string
+	readErrors map[string]error
 }
 
 func newMemFS() *memFS {
@@ -85,6 +86,9 @@ func newMemFS() *memFS {
 }
 
 func (m *memFS) Read(_ context.Context, name string) (DefinitionFile, error) {
+	if err := m.readErrors[name]; err != nil {
+		return DefinitionFile{}, err
+	}
 	if target, ok := m.links[name]; ok {
 		kind := "link"
 		if target == defaultDevNull {
