@@ -159,6 +159,9 @@ func (m *Manager) updateOnboardingAttempt(ctx context.Context, operation Operati
 
 func applyEndpointUpdate(update onboarding.Update) func(*config.Settings) error {
 	return func(settings *config.Settings) error {
+		if update.AllowLAN != nil {
+			settings.AllowLAN = *update.AllowLAN
+		}
 		if update.MixedAddr != nil {
 			settings.MixedAddr = *update.MixedAddr
 		}
@@ -175,6 +178,7 @@ func applyEndpointUpdate(update onboarding.Update) func(*config.Settings) error 
 func (m *Manager) composeOnboardingStatus(onboardingState onboarding.State) onboarding.Status {
 	settings := m.settingsSnapshot()
 	return onboarding.Status{
+		AllowLAN:        settings.AllowLAN,
 		Complete:        onboardingState.Complete && !m.dataResetPending.Load(),
 		MixedAddr:       settings.MixedAddr,
 		ControllerAddr:  settings.ControllerAddr,

@@ -80,9 +80,12 @@ func TestEndpointRestartIPC_AppliesSavedSettingsAfterOwnerReplacement(t *testing
 		}
 	})
 	client := controlclient.New(endpoint, "fixture-token")
-	mixed := "127.0.0.1:19190"
-	saved, err := client.UpdateOnboarding(ctx, protocol.OnboardingUpdateRequest{OperationID: "change-mixed-port", MixedAddr: &mixed})
-	if err != nil || !saved.RestartRequired {
+	mixed, allowLAN := "0.0.0.0:19190", true
+	if _, err := client.UpdateOnboarding(ctx, protocol.OnboardingUpdateRequest{OperationID: "invalid-wildcard", MixedAddr: &mixed}); err == nil {
+		t.Fatal("IPC accepted wildcard Mixed with Allow LAN disabled")
+	}
+	saved, err := client.UpdateOnboarding(ctx, protocol.OnboardingUpdateRequest{OperationID: "change-mixed-port", MixedAddr: &mixed, AllowLAN: &allowLAN})
+	if err != nil || !saved.RestartRequired || !saved.AllowLAN {
 		t.Fatalf("saved=%+v err=%v", saved, err)
 	}
 	service := &endpointIPCService{restart: func() error {
@@ -101,11 +104,11 @@ func TestEndpointRestartIPC_AppliesSavedSettingsAfterOwnerReplacement(t *testing
 		return nil
 	}}
 	result, err := app.RestartSavedEndpoints(ctx, saved, app.EndpointRestartOptions{Client: client, Service: service, Elevated: func() bool { return true }})
-	if err != nil || service.calls != 1 || result.Ports.RestartRequired || result.Ports.MixedAddr != mixed || !result.Status.StartedAt.Equal(time.Unix(101, 0)) {
+	if err != nil || service.calls != 1 || result.Ports.RestartRequired || result.Ports.MixedAddr != mixed || !result.Ports.AllowLAN || !result.Status.StartedAt.Equal(time.Unix(101, 0)) {
 		t.Fatalf("result=%+v restarts=%d err=%v", result, service.calls, err)
 	}
 	final, err := config.Load(settingsPath)
-	if err != nil || final.MixedAddr != mixed || final.ControllerAddr != settings.ControllerAddr || final.WebAddr != settings.WebAddr {
+	if err != nil || final.MixedAddr != mixed || !final.AllowLAN || final.ControllerAddr != settings.ControllerAddr || final.WebAddr != settings.WebAddr {
 		t.Fatalf("unexpected persisted endpoints: mixed=%s controller=%s web=%s err=%v", final.MixedAddr, final.ControllerAddr, final.WebAddr, err)
 	}
 }

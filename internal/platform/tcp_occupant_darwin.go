@@ -6,3 +6,8 @@ package platform
 func LookupTCPOccupant(string) (TCPOccupant, bool) {
 	return TCPOccupant{}, false
 }
+
+// LookupWildcardBindOccupant is unavailable on Darwin without CGO or lsof.
+func LookupWildcardBindOccupant(string) (TCPOccupant, bool) {
+	return TCPOccupant{}, false
+}

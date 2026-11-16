@@ -246,7 +246,7 @@ func TestReconcileRuntimeEndpoints_ValidatesBeforePublication(t *testing.T) {
 }
 
 func TestReconcileRuntimeEndpoints_RejectsUnmanagedFields(t *testing.T) {
-	for _, field := range []string{"allow-lan", "secret", "missing bind-address", "mixed-port type", "invalid yaml"} {
+	for _, field := range []string{"allow-lan type", "secret", "missing bind-address", "mixed-port type", "invalid yaml"} {
 		t.Run(field, func(t *testing.T) {
 			root := t.TempDir()
 			path := filepath.Join(root, "config.yaml")
@@ -261,8 +261,8 @@ func TestReconcileRuntimeEndpoints_RejectsUnmanagedFields(t *testing.T) {
 				t.Fatal(err)
 			}
 			switch field {
-			case "allow-lan":
-				document[field] = true
+			case "allow-lan type":
+				document["allow-lan"] = "true"
 			case "secret":
 				document[field] = strings.Repeat("b", 64)
 			case "missing bind-address":

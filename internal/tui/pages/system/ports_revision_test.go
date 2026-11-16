@@ -39,6 +39,9 @@ func (c *revisionPortsClient) UpdateOnboarding(_ context.Context, request protoc
 	if request.MixedAddr != nil {
 		c.status.MixedAddr = *request.MixedAddr
 	}
+	if request.AllowLAN != nil {
+		c.status.AllowLAN = *request.AllowLAN
+	}
 	if request.ControllerAddr != nil {
 		c.status.ControllerAddr = *request.ControllerAddr
 	}

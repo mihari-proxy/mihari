@@ -35,7 +35,7 @@ func ReconcileRuntimeEndpoints(ctx context.Context, runner CommandRunner, binary
 		return err
 	}
 	switch api.Details["field"] {
-	case "mixed-port", "bind-address", "external-controller":
+	case "mixed-port", "bind-address", "external-controller", "allow-lan":
 	default:
 		return err
 	}
@@ -59,13 +59,13 @@ func ReconcileRuntimeEndpoints(ctx context.Context, runner CommandRunner, binary
 	}
 	for _, key := range []string{"mixed-port", "allow-lan", "bind-address", "external-controller", "secret"} {
 		// Do not convert an unmanaged or malformed document into a managed one,
-		// or hide a credential / LAN-policy mismatch behind an endpoint change.
+		// or hide a credential mismatch behind an endpoint change.
 		if reflect.TypeOf(document[key]) != reflect.TypeOf(managed[key]) ||
-			(key == "allow-lan" || key == "secret") && !reflect.DeepEqual(document[key], managed[key]) {
+			key == "secret" && !reflect.DeepEqual(document[key], managed[key]) {
 			return protocol.APIError{Code: protocol.CodeDataFailure, Message: "runtime configuration violates a mihari-managed field", Details: map[string]any{"field": key}}
 		}
 	}
-	for _, key := range []string{"mixed-port", "bind-address", "external-controller"} {
+	for _, key := range []string{"mixed-port", "bind-address", "external-controller", "allow-lan"} {
 		document[key] = managed[key]
 	}
 	content, err := yaml.Marshal(document)

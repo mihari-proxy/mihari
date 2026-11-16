@@ -174,7 +174,7 @@ func sameDaemonOwner(a, b protocol.Status) bool {
 }
 
 func sameSavedEndpoints(a, b protocol.OnboardingStatus) bool {
-	return a.MixedAddr == b.MixedAddr && a.ControllerAddr == b.ControllerAddr && a.WebAddr == b.WebAddr
+	return a.MixedAddr == b.MixedAddr && a.ControllerAddr == b.ControllerAddr && a.WebAddr == b.WebAddr && a.AllowLAN == b.AllowLAN
 }
 
 func (model *Model) ignoresPreRestartStatus(status protocol.Status) bool {

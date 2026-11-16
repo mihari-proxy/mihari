@@ -136,7 +136,7 @@ func BuildRuntimeWithOptions(paths platform.Paths, settings config.Settings, dae
 	subscriptions, err := subscription.Open(subscription.ServiceOptions{
 		CatalogPath: paths.SubscriptionCatalog,
 		CacheDir:    paths.SubscriptionCache,
-		ProxyAddr:   settings.MixedAddr,
+		ProxyAddr:   platform.TCPDialAddress(settings.MixedAddr),
 		Reporter:    options.DiagnosticReporter,
 	})
 	if err != nil {

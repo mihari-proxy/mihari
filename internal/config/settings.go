@@ -38,6 +38,7 @@ type LoggingSettings struct {
 }
 
 type Settings struct {
+	AllowLAN           bool               `yaml:"allow-lan,omitempty"`
 	ProxyAuth          *ProxyAuthSettings `yaml:"proxy-auth,omitempty"`
 	EgressInterface    string             `yaml:"egress-interface,omitempty"`
 	Routing            *RoutingSettings   `yaml:"routing,omitempty"`
@@ -469,6 +470,9 @@ func (s Settings) Validate() error {
 	mixed, err := parseEndpoint("mixed-addr", s.MixedAddr, false)
 	if err != nil {
 		return err
+	}
+	if !s.AllowLAN && !mixed.Addr().IsLoopback() {
+		return dataError("mixed-addr must use a loopback address when allow-lan is disabled; enable Allow LAN before using a non-loopback address")
 	}
 	controller, err := parseEndpoint("controller-addr", s.ControllerAddr, true)
 	if err != nil {

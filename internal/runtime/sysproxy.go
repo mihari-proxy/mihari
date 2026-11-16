@@ -11,6 +11,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
+	"github.com/mihari-proxy/mihari/internal/platform"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/sysproxy"
 )
@@ -256,7 +257,7 @@ func (m *Manager) buildSystemProxyStatus(desired bool, target string, observed s
 }
 
 func resolveSystemProxyTarget(mixedAddr string) (target, host string, port int, err error) {
-	addrPort, parseErr := netip.ParseAddrPort(mixedAddr)
+	addrPort, parseErr := netip.ParseAddrPort(platform.TCPDialAddress(mixedAddr))
 	if parseErr != nil {
 		return "", "", 0, diagnostics.Wrap(protocol.APIError{
 			Code:    protocol.CodeInvalidArgument,
