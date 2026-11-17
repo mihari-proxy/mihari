@@ -59,6 +59,11 @@ func (m *Manager) mutateSystemProxy(ctx context.Context, op Operation, enable, f
 	if err := m.checkIfRevision(op.IfRevision); err != nil {
 		return protocol.SystemProxyStatus{}, err
 	}
+	if checker, ok := m.sysProxy.(interface{ CheckWritable() error }); ok {
+		if err := checker.CheckWritable(); err != nil {
+			return protocol.SystemProxyStatus{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "check system proxy write availability"}, err)
+		}
+	}
 
 	settings := m.settingsSnapshot()
 	target, host, port, err := resolveSystemProxyTarget(settings.MixedAddr)
