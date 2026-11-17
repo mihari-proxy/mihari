@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -52,6 +53,9 @@ func disable() error {
 func get() (State, error) { return getContext(context.Background()) }
 
 func getContext(ctx context.Context) (State, error) {
+	if err := ctx.Err(); err != nil {
+		return State{}, err
+	}
 	if err := requireGsettings(); err != nil {
 		return State{}, err
 	}
@@ -82,6 +86,12 @@ func getContext(ctx context.Context) (State, error) {
 func requireGsettings() error {
 	if _, err := exec.LookPath("gsettings"); err != nil {
 		return fmt.Errorf("sysproxy: gsettings not found; system proxy is only supported on GNOME-based desktops")
+	}
+	// A system daemon has no desktop session. Reads can still return defaults
+	// and writes can exit successfully despite dconf failing to commit. Reject
+	// that context before the runtime commits intent or attempts any OS writes.
+	if os.Getenv("DBUS_SESSION_BUS_ADDRESS") == "" && os.Getenv("XDG_RUNTIME_DIR") == "" {
+		return fmt.Errorf("sysproxy: GNOME desktop session is unavailable; system proxy requires a user session bus (DBUS_SESSION_BUS_ADDRESS or XDG_RUNTIME_DIR)")
 	}
 	return nil
 }
