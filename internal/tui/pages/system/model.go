@@ -534,6 +534,7 @@ func (m *Model) ApplyServiceStatus(status service.StatusKind, loaded bool) {
 		return
 	}
 	m.serviceLoaded = loaded
+	m.elevated = elevate.IsElevated()
 	if loaded {
 		m.serviceStatus = status
 	}

@@ -4346,3 +4346,17 @@ func TestTunDiagnostic_TUIMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestSystemServiceSharedObservationPreservesElevation(t *testing.T) {
+	for _, elevated := range []bool{false, true} {
+		t.Run(fmt.Sprint(elevated), func(t *testing.T) {
+			withElevation(t, elevated)
+			model := NewWithService(&fakeClient{}, &fakeService{status: service.StatusRunning}, nil)
+			model.ApplyServiceStatus(service.StatusRunning, true)
+			view := model.View()
+			if strings.Contains(view, ui.ServiceRestartLabel) != elevated {
+				t.Fatalf("Restart service visibility disagrees with process elevation %v", elevated)
+			}
+		})
+	}
+}
