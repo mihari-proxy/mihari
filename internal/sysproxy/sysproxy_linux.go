@@ -19,7 +19,7 @@ const gsettingsSchema = "org.gnome.system.proxy"
 // enable sets the GNOME proxy to manual mode pointing at host:port for HTTP,
 // HTTPS and SOCKS.
 func enable(host string, port int) error {
-	if err := requireGsettings(); err != nil {
+	if err := requireWritableGsettings(); err != nil {
 		return err
 	}
 	p := strconv.Itoa(port)
@@ -43,7 +43,7 @@ func enable(host string, port int) error {
 
 // disable returns the GNOME proxy to "none".
 func disable() error {
-	if err := requireGsettings(); err != nil {
+	if err := requireWritableGsettings(); err != nil {
 		return err
 	}
 	return gsettings("set", gsettingsSchema, "mode", "none")
@@ -87,9 +87,19 @@ func requireGsettings() error {
 	if _, err := exec.LookPath("gsettings"); err != nil {
 		return fmt.Errorf("sysproxy: gsettings not found; system proxy is only supported on GNOME-based desktops")
 	}
-	// A system daemon has no desktop session. Reads can still return defaults
-	// and writes can exit successfully despite dconf failing to commit. Reject
-	// that context before the runtime commits intent or attempts any OS writes.
+	return nil
+}
+
+// CheckWritable lets the runtime reject an unsupported mutation before saving
+// its desired state. Read-only observations do not require a writable session.
+func (PlatformBackend) CheckWritable() error { return requireWritableGsettings() }
+
+func requireWritableGsettings() error {
+	if err := requireGsettings(); err != nil {
+		return err
+	}
+	// Without a session bus, gsettings writes can exit successfully despite
+	// dconf failing to commit. Check both before saving intent and at OS writes.
 	if os.Getenv("DBUS_SESSION_BUS_ADDRESS") == "" && os.Getenv("XDG_RUNTIME_DIR") == "" {
 		return fmt.Errorf("sysproxy: GNOME desktop session is unavailable; system proxy requires a user session bus (DBUS_SESSION_BUS_ADDRESS or XDG_RUNTIME_DIR)")
 	}
