@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/config"
+	controlclient "github.com/mihari-proxy/mihari/internal/control/client"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 	"github.com/mihari-proxy/mihari/internal/state"
@@ -95,12 +96,14 @@ func TestConfigOverridesPreview_LargeScalarAndInheritedSource(t *testing.T) {
 		o.Settings.ControllerSecret = strings.Repeat("ab", 32)
 		o.Subscriptions = service
 	})
+	// The large preview exercises production IPC and its normal request budget.
+	client := controlclient.New(f.endpoint, diagnosticsIPCToken)
 	req := protocol.ConfigOverridesPreviewRequest{Category: "dns", Full: true, DNS: map[string]protocol.DNSFieldOverride{"nameserver": {Operation: "set", Servers: []string{"9.9.9.9"}}}}
 	var reconstructed strings.Builder
 	pages := 0
 	seenIPv6 := false
 	for {
-		page, err := f.client.PreviewConfigOverrides(t.Context(), req)
+		page, err := client.PreviewConfigOverrides(t.Context(), req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -131,7 +134,7 @@ func TestConfigOverridesPreview_LargeScalarAndInheritedSource(t *testing.T) {
 		t.Fatalf("incomplete scalar (%d pages, %d bytes)", pages, reconstructed.Len())
 	}
 	req.Reveal = true
-	_, err = f.client.PreviewConfigOverrides(t.Context(), req)
+	_, err = client.PreviewConfigOverrides(t.Context(), req)
 	var api protocol.APIError
 	if !errors.As(err, &api) || api.Code != protocol.CodeRevisionConflict {
 		t.Fatalf("mismatched cursor: %v", err)
