@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -33,6 +32,30 @@ func (m *Manager) PreviewConfigOverrides(ctx context.Context, req protocol.Confi
 	catalog := m.loggingCatalog()
 	revision := m.store.Load().Revision
 	m.unlock()
+	input := currentPreviewInput(m.previewSession, generation, catalog)
+	if req.Offset < 0 || (req.Offset > 0 && req.Snapshot == "") {
+		return result, invalidPreview("invalid preview offset")
+	}
+	if req.Snapshot != "" {
+		start, _, found := strings.Cut(req.Snapshot, "/")
+		var err error
+		revision, err = strconv.ParseUint(start, 10, 64)
+		if !found || err != nil {
+			return result, routingConflict()
+		}
+	}
+	identity, err := previewIdentity(req, input, revision)
+	if err != nil {
+		return result, err
+	}
+	if req.Snapshot != "" && req.Snapshot != identity {
+		return result, routingConflict()
+	}
+	if req.Offset > 0 {
+		if cached := m.previewSnapshots.get(identity); cached != nil {
+			return cached.page(req.Offset)
+		}
+	}
 	base, err := m.catalogSourceDocument(catalog)
 	if err != nil {
 		return result, err
@@ -47,44 +70,45 @@ func (m *Manager) PreviewConfigOverrides(ctx context.Context, req protocol.Confi
 	}
 	source := "Built-in configuration"
 	if index := catalog.Index(catalog.ActiveID); index >= 0 {
-		source = catalog.Profiles[index].Name
+		source = previewLabel(catalog.Profiles[index].Name)
 	}
 	after, err := renderOverridesCandidate(ctx, base, draft, fields, source, req.Reveal)
 	if err != nil {
 		return result, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid configuration draft"}, err)
 	}
-	before, baselineErr := renderOverridesCandidate(ctx, base, saved, fields, source, req.Reveal)
-	if err := ctx.Err(); err != nil {
-		return result, err
+	var lines []protocol.ProxyAuthPreviewLine
+	if reflect.DeepEqual(saved, draft) {
+		lines = make([]protocol.ProxyAuthPreviewLine, len(after))
+		for i, entry := range after {
+			lines[i] = entry.line
+		}
+	} else {
+		before, baselineErr := renderOverridesCandidate(ctx, base, saved, fields, source, req.Reveal)
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		lines = diffAuthPreview(before, after)
+		if baselineErr != nil {
+			lines = append([]protocol.ProxyAuthPreviewLine{{Text: "# Saved configuration is invalid for this source; showing the draft."}}, lines...)
+		}
 	}
-	lines := diffAuthPreview(before, after)
-	if baselineErr != nil {
-		lines = append([]protocol.ProxyAuthPreviewLine{{Text: "# Saved configuration is invalid for this source; showing the draft."}}, lines...)
-	}
-	// Bind continuation pages to the draft, input generation and active subscription.
-	identity, err := previewIdentity(req, generation, catalog)
+	result.Revision, result.ActiveID, result.Snapshot = revision, catalog.ActiveID, identity
+	result.ActiveName = previewLabel(input.ActiveName)
+	snapshot, err := newPreviewSnapshot(ctx, result, lines)
 	if err != nil {
 		return result, err
-	}
-	if req.Offset < 0 || (req.Offset > 0 && req.Snapshot == "") {
-		return result, invalidPreview("invalid preview offset")
-	}
-	if req.Snapshot != "" && req.Snapshot != identity {
-		return result, routingConflict()
 	}
 	if err = m.lockMaintenance(ctx); err != nil {
 		return result, err
 	}
-	current := m.loggingCatalog()
-	stale := m.currentConfigGeneration() != generation || current.ActiveID != catalog.ActiveID || activePreviewGeneration(current) != activePreviewGeneration(catalog)
+	stale := currentPreviewInput(m.previewSession, m.currentConfigGeneration(), m.loggingCatalog()) != input
 	m.unlock()
 	if stale {
-		return result, routingConflict()
+		return protocol.ConfigOverridesPreview{}, routingConflict()
 	}
-	result.Lines, result.NextOffset, err = overridePreviewPage(lines, req.Offset)
-	result.Revision, result.ActiveID, result.Snapshot = revision, catalog.ActiveID, identity
-	if catalog.ActiveID != "" {
-		result.ActiveName = source
+	result, err = snapshot.page(req.Offset)
+	if err == nil && (result.NextOffset != 0 || req.Offset > 0) {
+		m.previewSnapshots.put(identity, snapshot)
 	}
 	return result, err
 }
@@ -124,18 +148,28 @@ func applyPreviewDraft(saved config.Settings, req protocol.ConfigOverridesPrevie
 	return after, nil
 }
 
-func activePreviewGeneration(c subscription.Catalog) uint64 {
-	if i := c.Index(c.ActiveID); i >= 0 {
-		return c.Profiles[i].Generation
-	}
-	return 0
+type previewInput struct {
+	Session                string
+	Generation             uint64
+	ActiveID               string
+	ActiveName             string
+	SubscriptionGeneration uint64
 }
 
-func previewIdentity(req protocol.ConfigOverridesPreviewRequest, generation uint64, c subscription.Catalog) (string, error) {
+func currentPreviewInput(session string, generation uint64, c subscription.Catalog) previewInput {
+	input := previewInput{Session: session, Generation: generation, ActiveID: c.ActiveID}
+	if i := c.Index(c.ActiveID); i >= 0 {
+		input.SubscriptionGeneration = c.Profiles[i].Generation
+		input.ActiveName = c.Profiles[i].Name
+	}
+	return input
+}
+
+func previewIdentity(req protocol.ConfigOverridesPreviewRequest, input previewInput, revision uint64) (string, error) {
 	req.Offset, req.Snapshot = 0, ""
 	h := sha256.New()
-	err := json.NewEncoder(h).Encode([]any{req, generation, c.ActiveID, activePreviewGeneration(c)})
-	return hex.EncodeToString(h.Sum(nil)), err
+	err := json.NewEncoder(h).Encode([]any{req, input, revision})
+	return strconv.FormatUint(revision, 10) + "/" + hex.EncodeToString(h.Sum(nil)), err
 }
 
 func overridePreviewFields(saved, draft config.Settings, req protocol.ConfigOverridesPreviewRequest) (map[string]bool, error) {
@@ -302,52 +336,4 @@ func maskedOverrideAuth(value *yaml.Node, reveal bool, source string, origins ma
 		result = append(result, entry)
 	}
 	return result, nil
-}
-
-const previewSegmentBytes = 32 << 10
-const previewPageBytes = 1 << 20
-
-// Offset counts display segments, so a single long YAML scalar can span several pages.
-func overridePreviewPage(lines []protocol.ProxyAuthPreviewLine, offset int) ([]protocol.OverridePreviewLine, int, error) {
-	var result []protocol.OverridePreviewLine
-	count, used := 0, 0
-	for _, line := range lines {
-		text := line.Text
-		continued := false
-		for {
-			end := min(len(text), previewSegmentBytes)
-			for end > 0 && end < len(text) && !utf8.RuneStart(text[end]) {
-				end--
-			}
-			if count >= offset {
-				change := ""
-				switch line.Change {
-				case "+":
-					change = "added"
-				case "-":
-					change = "removed"
-				}
-				segment := protocol.OverridePreviewLine{Field: line.Field, Source: line.Source, Change: change, Text: text[:end], Continued: continued}
-				encoded, err := json.Marshal(segment)
-				if err != nil {
-					return nil, 0, err
-				}
-				if used+len(encoded)+1 > previewPageBytes && len(result) > 0 {
-					return result, count, nil
-				}
-				result = append(result, segment)
-				used += len(encoded) + 1
-			}
-			count++
-			text = text[end:]
-			if len(text) == 0 {
-				break
-			}
-			continued = true
-		}
-	}
-	if offset > count {
-		return nil, 0, invalidPreview("preview offset exceeds available content")
-	}
-	return result, 0, nil
 }

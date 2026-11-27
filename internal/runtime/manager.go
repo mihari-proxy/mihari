@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -162,6 +163,8 @@ type WebGateway interface {
 type Manager struct {
 	systemObservations     systemObservations
 	authPreviewSourceCache authPreviewSourceCache
+	previewSession         string
+	previewSnapshots       overridePreviewCache
 	recoveryOnly           bool
 	authResetAllowed       bool
 	businessReset          BusinessResetStore
@@ -283,7 +286,8 @@ func New(options Options) *Manager {
 		settings = config.Defaults()
 	}
 	manager := &Manager{
-		recoveryOnly: options.RecoveryOnly, authResetAllowed: options.AuthResetAllowed,
+		previewSession: rand.Text(),
+		recoveryOnly:   options.RecoveryOnly, authResetAllowed: options.AuthResetAllowed,
 		businessReset:               options.BusinessReset,
 		subscriptionRecoveryTimeout: subscriptionRecoveryTimeout,
 		subscriptionTimeout:         subscriptionExecutionTimeout,

@@ -125,3 +125,41 @@ func TestConfigOverridesPreview_LongSourceLabelFitsWireBudget(t *testing.T) {
 		t.Fatalf("preview page bytes=%d err=%v", len(encoded), err)
 	}
 }
+
+func TestConfigOverridesPreview_ConcurrentClientsRetainTheirOpeningRevision(t *testing.T) {
+	m, _, _ := newPagedOverridePreview(t, "Office")
+	req := protocol.ConfigOverridesPreviewRequest{Category: "dns", Full: true}
+	first, err := m.PreviewConfigOverrides(t.Context(), req)
+	if err != nil || first.NextOffset == 0 {
+		t.Fatalf("missing first page: %v", err)
+	}
+	// An unrelated status update can occur between two editors opening the same draft.
+	updated := m.store.Load()
+	updated.Revision++
+	m.store.Store(updated)
+	second, err := m.PreviewConfigOverrides(t.Context(), req)
+	if err != nil || second.Revision != updated.Revision {
+		t.Fatalf("missing second editor revision: %d %v", second.Revision, err)
+	}
+	req.Offset, req.Snapshot = first.NextOffset, first.Snapshot
+	cont, err := m.PreviewConfigOverrides(t.Context(), req)
+	if err != nil || cont.Revision != first.Revision {
+		t.Fatalf("first editor's revision changed: got=%d want=%d err=%v", cont.Revision, first.Revision, err)
+	}
+}
+
+func TestConfigOverridesPreview_NewManagerRejectsPreviousCursor(t *testing.T) {
+	m, _, _ := newPagedOverridePreview(t, "Office")
+	req := protocol.ConfigOverridesPreviewRequest{Category: "dns", Full: true}
+	first, err := m.PreviewConfigOverrides(t.Context(), req)
+	if err != nil || first.NextOffset == 0 {
+		t.Fatalf("missing first page: %v", err)
+	}
+	replacement, _, _ := newPagedOverridePreview(t, "Office")
+	req.Offset, req.Snapshot = first.NextOffset, first.Snapshot
+	_, err = replacement.PreviewConfigOverrides(t.Context(), req)
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodeRevisionConflict {
+		t.Fatalf("restarted daemon accepted an old cursor: %v", err)
+	}
+}
