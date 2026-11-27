@@ -1,6 +1,10 @@
 package config
 
 import (
+	"fmt"
+	"net"
+	"net/netip"
+	"net/url"
 	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
@@ -43,6 +47,16 @@ func ValidateOverrides(input *protocol.ConfigOverrides) error {
 		if !validDNSField(field, op) {
 			return dataError("invalid DNS override for " + field + " (" + op.Operation + ")")
 		}
+		if field == "default-nameserver" && (op.Operation == "set" || op.Operation == "append") {
+			if op.Operation == "set" && len(op.Servers) == 0 {
+				return dataError("dns.default-nameserver cannot be an empty list")
+			}
+			for _, server := range op.Servers {
+				if !IsBootstrapAddress(server) {
+					return dataError(fmt.Sprintf("dns.default-nameserver %q needs an IP address or system resolver", server))
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -76,4 +90,48 @@ func validDNSField(field string, op protocol.DNSFieldOverride) bool {
 		}
 		return true
 	}
+}
+
+// IsBootstrapAddress checks the bootstrap address requirement for an effective
+// default-nameserver. The core validates the selected resolver protocol.
+func IsBootstrapAddress(server string) bool {
+	if server == "system" {
+		return true
+	}
+	if _, err := netip.ParseAddr(server); err == nil {
+		return true
+	}
+	if !strings.Contains(server, "://") {
+		server = "udp://" + server
+	}
+	endpoint, err := url.Parse(server)
+	if err != nil {
+		return false
+	}
+	switch endpoint.Scheme {
+	case "system":
+		// mihomo selects its system resolver by scheme, ignoring the host.
+		return true
+	case "dhcp":
+		// mihomo leaves the DHCP identifier verbatim as its resolver address.
+		// Unlike udp/tcp/tls it does not add a default port before checking it.
+		_, address, found := strings.Cut(server, "://")
+		if !found {
+			return false
+		}
+		if address == "system" {
+			return true
+		}
+		if host, _, err := net.SplitHostPort(address); err == nil && net.ParseIP(host) != nil {
+			return true
+		}
+		u, err := url.Parse(address)
+		if err != nil {
+			// The core's bootstrap IP check skips unparseable DHCP identifiers.
+			return true
+		}
+		return net.ParseIP(u.Hostname()) != nil
+	}
+	_, err = netip.ParseAddr(endpoint.Hostname())
+	return err == nil
 }

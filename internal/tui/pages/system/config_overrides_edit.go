@@ -2,6 +2,7 @@ package system
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -189,7 +190,7 @@ func readOverrideFile(ctx context.Context, path string) (string, error) {
 		return "", fmt.Errorf("open YAML file: %w", err)
 	}
 	defer file.Close()
-	const maxBytes = 1 << 20 // The existing local control request limit also bounds a single fragment.
+	const maxBytes = protocol.MaxControlRequestBytes
 	data, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("read YAML file: %w", err)
@@ -210,7 +211,29 @@ func (m *Model) handleOverrideImport(r overrideImportMsg) tea.Cmd {
 		o.notice = actionErrorDetail(r.err, r.err.Error()) + " (F2: details)"
 		return nil
 	}
-	o.draft.Fragments = append(o.draft.Fragments, protocol.OverrideFragment{ID: m.newOperationID(), Name: r.name, YAML: r.content, Enabled: true})
+	fragment := protocol.OverrideFragment{ID: m.newOperationID(), Name: r.name, YAML: r.content, Enabled: true}
+	fragments := append(slices.Clip(o.draft.Fragments), fragment)
+	saveID := o.importedSaveID
+	if saveID == "" {
+		saveID = m.newOperationID()
+	}
+	// Continuation metadata travels in the URL. Test the largest actual preview
+	// body (both flags enabled) and the next save, including all previous drafts.
+	preview := protocol.ConfigOverridesPreviewRequest{Category: "fragments", Fragments: fragments, Full: true, Reveal: true}
+	save := protocol.ConfigOverridesUpdateRequest{OperationID: saveID, IfRevision: &o.status.Revision, Fragments: fragments}
+	for _, request := range []any{preview, save} {
+		raw, err := json.Marshal(request)
+		if err != nil {
+			o.notice = "Could not encode import: " + err.Error()
+			return nil
+		}
+		if len(raw) > protocol.MaxControlRequestBytes {
+			o.notice = "Import exceeds the 1 MiB control request limit for the complete fragment list"
+			return nil
+		}
+	}
+	o.draft.Fragments = fragments
+	o.importedSaveID = saveID
 	o.selected = len(o.draft.Fragments) - 1
 	o.notice = "Imported into draft"
 	return m.refreshOverridePreview()

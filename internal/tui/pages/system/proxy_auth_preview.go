@@ -166,7 +166,7 @@ func (m *Model) loadAuthPreview(due authPreviewDueMsg) tea.Cmd {
 				case "removed":
 					change = "-"
 				}
-				preview.Lines = append(preview.Lines, protocol.ProxyAuthPreviewLine{Text: line.Text, Field: line.Field, Change: change, Source: line.Source})
+				preview.Lines = append(preview.Lines, protocol.ProxyAuthPreviewLine{Text: line.Text, Field: line.Field, Target: line.Target, Change: change, Source: line.Source})
 			}
 			return ui.PageResultMsg{Page: ui.PageSystem, Result: authPreviewResultMsg{epoch: due.epoch, sequence: due.sequence, reveal: request.Reveal, value: preview, err: err}}
 		}
@@ -281,9 +281,9 @@ func (m *Model) authPreviewSelected(line protocol.ProxyAuthPreviewLine) bool {
 }
 
 type authPreviewRenderKey struct {
-	width, height, top                             int
-	pending, focused, reveal, manual, disabledNote bool
-	err, activeID, focus                           string
+	width, height, top                                   int
+	pending, focused, reveal, manual, disabledNote, full bool
+	err, activeID, focus                                 string
 }
 
 func (m *Model) authPreviewLines(width, height int) []string {
@@ -295,7 +295,7 @@ func (m *Model) authPreviewLines(width, height int) []string {
 	case "prefix":
 		focus = "prefix:" + a.inputs[0].Value() + "\x00" + a.original
 	}
-	key := authPreviewRenderKey{width: width, height: height, top: a.previewTop, pending: a.previewPending, focused: a.previewFocus, reveal: a.reveal, manual: a.previewManual, disabledNote: a.draft.Mode == "disabled" && a.selected > 0, err: a.previewErr, activeID: a.preview.ActiveID, focus: focus}
+	key := authPreviewRenderKey{full: a.previewFull, width: width, height: height, top: a.previewTop, pending: a.previewPending, focused: a.previewFocus, reveal: a.reveal, manual: a.previewManual, disabledNote: a.draft.Mode == "disabled" && a.selected > 0, err: a.previewErr, activeID: a.preview.ActiveID, focus: focus}
 	sameSource := len(a.previewRenderSource) == len(a.preview.Lines) && (len(a.preview.Lines) == 0 || &a.previewRenderSource[0] == &a.preview.Lines[0])
 	if a.previewRendered != nil && sameSource && key == a.previewRenderKey {
 		return a.previewRendered

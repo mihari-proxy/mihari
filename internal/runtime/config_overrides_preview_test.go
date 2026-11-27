@@ -23,7 +23,7 @@ func TestConfigOverridesPreviewFinalDraftAndSecrets(t *testing.T) {
 	if !ok {
 		t.Fatal("missing configuration override draft preview")
 	}
-	req := protocol.ConfigOverridesPreviewRequest{Category: "fragments", Full: true, Fragments: []protocol.OverrideFragment{{ID: "lab", Name: "Lab DNS", Enabled: true, YAML: "dns: {enable: true, nameserver: [1.1.1.1]}\nauthentication: ['alice:synthetic-preview-password']"}}}
+	req := protocol.ConfigOverridesPreviewRequest{Category: "fragments", Full: true, Fragments: []protocol.OverrideFragment{{ID: "lab", Name: "Lab DNS", Enabled: true, YAML: "dns: {enable: true, nameserver: [1.1.1.1]}\nauthentication: ['alice:synthetic-preview-password']\nskip-auth-prefixes: ['10.0.0.0/8']"}}}
 	got, err := api.PreviewConfigOverrides(t.Context(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -32,7 +32,7 @@ func TestConfigOverridesPreviewFinalDraftAndSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"1.1.1.1", "Lab DNS", "alice:", "MATCH,DIRECT"} {
+	for _, want := range []string{"1.1.1.1", "Lab DNS", "alice:", "MATCH,DIRECT", `"target":"alice"`, `"target":"10.0.0.0/8"`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("missing %s in %s", want, raw)
 		}
@@ -51,6 +51,9 @@ func TestConfigOverridesPreviewFinalDraftAndSecrets(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "synthetic-preview-password") || strings.Contains(string(raw), m.settingsSnapshot().ControllerSecret) {
 		t.Fatal("explicit password reveal changed controller visibility")
+	}
+	if core.reloads != 0 {
+		t.Fatalf("revealed preview reloaded core %d times", core.reloads)
 	}
 }
 
@@ -161,5 +164,62 @@ func TestConfigOverridesPreview_NewManagerRejectsPreviousCursor(t *testing.T) {
 	var api protocol.APIError
 	if !errors.As(err, &api) || api.Code != protocol.CodeRevisionConflict {
 		t.Fatalf("restarted daemon accepted an old cursor: %v", err)
+	}
+}
+
+func TestConfigOverridesPreview_PreservesSavedDataFailure(t *testing.T) {
+	m := startupLoggingManager(t)
+	m.settings.ControllerSecret = ""
+	_, err := m.PreviewConfigOverrides(t.Context(), protocol.ConfigOverridesPreviewRequest{Category: "dns", Full: true})
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodeDataFailure || !strings.Contains(err.Error(), "controller secret") {
+		t.Fatalf("reclassified settings failure: %v", err)
+	}
+}
+
+type cancelDuringPreviewPage struct {
+	context.Context
+	cancel context.CancelFunc
+	checks int
+}
+
+func (c *cancelDuringPreviewPage) Err() error {
+	c.checks++
+	if c.checks >= 2 {
+		c.cancel()
+	}
+	return c.Context.Err()
+}
+
+func TestConfigOverridesPreview_DeadlineInterruptsMultiSegmentLine(t *testing.T) {
+	parent, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx := &cancelDuringPreviewPage{Context: parent, cancel: cancel}
+	_, err := newPreviewSnapshot(ctx, protocol.ConfigOverridesPreview{}, []protocol.ProxyAuthPreviewLine{{Text: strings.Repeat("a", 3*previewSegmentBytes)}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("single long line ignored cancellation: %v", err)
+	}
+}
+
+func TestConfigOverridesPreview_CandidateCancellationPreservesClassification(t *testing.T) {
+	m := startupLoggingManager(t)
+	parent, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx := &cancelDuringPreviewPage{Context: parent, cancel: cancel, checks: 1}
+	_, err := m.PreviewConfigOverrides(ctx, protocol.ConfigOverridesPreviewRequest{Category: "dns", Full: true})
+	var api protocol.APIError
+	if !errors.Is(err, context.Canceled) || errors.As(err, &api) {
+		t.Fatalf("unexpected cancellation classification: %v", err)
+	}
+}
+
+func TestConfigOverridesPreview_ExistingInvalidAuthenticationKeepsDataFailure(t *testing.T) {
+	m := startupLoggingManager(t)
+	m.settings.SetProxyAuth(protocol.ProxyAuthConfig{Mode: "enabled", BypassMode: "follow"})
+	unchanged := m.settings.EffectiveProxyAuth()
+	_, err := m.PreviewConfigOverrides(t.Context(), protocol.ConfigOverridesPreviewRequest{Category: "auth", Full: true, Authentication: &unchanged})
+	var api protocol.APIError
+	if !errors.As(err, &api) || api.Code != protocol.CodeDataFailure || !errors.Is(err, subscription.ErrProxyAuthNoUsers) {
+		t.Fatalf("misclassified underlying authentication failure: %+v", err)
 	}
 }

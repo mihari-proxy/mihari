@@ -7,6 +7,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -271,5 +272,122 @@ func TestConfigOverrides_AuthenticationConflictKeepsUnsavedCredentials(t *testin
 	runOverrideCmd(t, m, m.handleAuthResult(authResultMsg{epoch: 2, mutation: true, err: protocol.APIError{Code: protocol.CodeRevisionConflict, Message: "changed"}}))
 	if len(m.auth.draft.Users) != 1 || m.auth.draft.Users[0].Password != "pending-fixture" || m.auth.status.Revision != 8 {
 		t.Fatal("conflict lost the authentication draft")
+	}
+}
+
+func TestConfigOverrides_EnhancedModeNormalChoice(t *testing.T) {
+	m := New(nil, nil)
+	m.overrides = overrideUI{open: true, loaded: true, category: "dns", selected: 2, draft: protocol.ConfigOverrides{DNS: map[string]protocol.DNSFieldOverride{"enhanced-mode": {Operation: "set", Mode: "redir-host"}}}}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	choice := m.overrides.draft.DNS["enhanced-mode"]
+	if choice.Operation != "set" || choice.Mode != "normal" {
+		t.Fatalf("normal unavailable: %+v", choice)
+	}
+}
+
+func TestConfigOverrides_PreviewStyleShowsChangesAndSelectedField(t *testing.T) {
+	m := New(nil, nil)
+	m.overrides = overrideUI{category: "dns", preview: []protocol.OverridePreviewLine{
+		{Field: "dns.enable", Text: "enable: true", Change: "added"},
+		{Field: "dns.ipv6", Text: "ipv6: false", Change: "removed"},
+	}}
+	view := m.overridePreviewView(40, 8)
+	if !strings.Contains(view, m.theme.PreviewFocus.Inherit(m.theme.Success).Width(40).Render("+ enable: true")) || !strings.Contains(view, m.theme.Danger.Render("- ipv6: false")) {
+		t.Fatalf("missing focused addition or removal color: %q", view)
+	}
+}
+
+func TestConfigOverrides_ImportChecksEntireEncodedDraftBeforeAccepting(t *testing.T) {
+	c := &overrideRecordingClient{saved: protocol.ConfigOverridesStatus{Revision: 2026, Config: protocol.ConfigOverrides{Fragments: []protocol.OverrideFragment{{ID: "old", Name: "Existing", Enabled: true, YAML: strings.Repeat("x", 768<<10)}}}}}
+	m := openOverrideTest(t, c, 2)
+	// This file is well below the body size in bytes, but JSON escapes every '<' as six bytes.
+	result := overrideImportMsg{epoch: m.overrides.epoch, name: "escaped.yaml", content: strings.Repeat("<", 48<<10)}
+	_, cmd := m.Update(result)
+	runOverrideCmd(t, m, cmd)
+	if len(m.overrides.draft.Fragments) != 1 || !strings.Contains(m.overrides.notice, "1 MiB") {
+		t.Fatal("oversized encoded import was accepted or did not report the cause")
+	}
+	result.content = strings.Repeat("y", 245<<10)
+	_, cmd = m.Update(result)
+	runOverrideCmd(t, m, cmd)
+	if len(m.overrides.draft.Fragments) != 2 {
+		t.Fatalf("valid near-limit import rejected: %s", m.overrides.notice)
+	}
+}
+
+type duplicateAuthSource struct{ authRecordingClient }
+
+func (duplicateAuthSource) PreviewProxyAuth(context.Context, protocol.ProxyAuthPreviewRequest) (protocol.ProxyAuthPreview, error) {
+	return protocol.ProxyAuthPreview{Lines: []protocol.ProxyAuthPreviewLine{
+		{Field: "authentication", Target: "lab"}, {Field: "authentication", Target: "other"}, {Field: "authentication", Target: "lab", Source: "Office"},
+	}}, nil
+}
+func TestConfigOverrides_AuthenticationSourceUsesLastDuplicate(t *testing.T) {
+	var result authResultMsg
+	loadAuthSource(t.Context(), &duplicateAuthSource{}, true, &result)
+	if len(result.sourceUsers) != 2 || result.sourceUsers[0].Username != "lab" || result.sourceUsers[0].BaseSource != "Office" || result.sourceUsers[1].Username != "other" {
+		t.Fatalf("source mismatch: %+v", result.sourceUsers)
+	}
+}
+
+func TestConfigOverrides_YAMLReadsClipboardForTerminalCtrlV(t *testing.T) {
+	m := New(nil, nil)
+	m.beginOverrideInput("YAML", "")
+	key := tea.KeyPressMsg{Code: 'v', Text: "v", Mod: tea.ModCtrl}
+	cmd := m.updateYAMLInput(key)
+	if cmd == nil || reflect.ValueOf(cmd).Pointer() != reflect.ValueOf(ui.ReadClipboard).Pointer() {
+		t.Fatal("terminal Ctrl+V did not request the raw clipboard")
+	}
+}
+
+func TestConfigOverrides_ShortWindowFitsAndShowsPreviewShortcuts(t *testing.T) {
+	m := New(nil, nil)
+	m.SetSize(42, 7)
+	for _, tc := range []struct {
+		tab  int
+		kind string
+	}{{1, "dns"}, {2, "fragments"}} {
+		m.overrides = overrideUI{open: true, loaded: true, category: tc.kind, menu: tc.tab}
+		if h := lipgloss.Height(m.View()); h > 7 {
+			t.Errorf("%s needs %d lines", tc.kind, h)
+		}
+		if !strings.Contains(m.overrideHint(), "Ctrl+R reveal") {
+			t.Errorf("%s hides reveal shortcut", tc.kind)
+		}
+	}
+}
+func TestConfigOverrides_AuthPreviewCacheTracksModeWhenPending(t *testing.T) {
+	m := New(nil, nil)
+	m.auth = authUI{previewPending: true}
+	if got := strings.Join(m.authPreviewLines(60, 8), "\n"); !strings.Contains(got, "Preview only") {
+		t.Fatalf("bad initial header: %s", got)
+	}
+	m.auth.previewFull = true
+	if got := strings.Join(m.authPreviewLines(60, 8), "\n"); !strings.Contains(got, "Full preview") {
+		t.Fatalf("unchanged cached header: %s", got)
+	}
+}
+func TestConfigOverrides_ValidReplacementCharacterOccupiesOneEditableColumn(t *testing.T) {
+	m := New(nil, nil)
+	m.SetSize(100, 30)
+	m.overrides = overrideUI{open: true, loaded: true, category: "fragments", menu: 2, draft: protocol.ConfigOverrides{Fragments: []protocol.OverrideFragment{{ID: "f", Name: "file", Enabled: true, YAML: "A�B"}}}}
+	m.beginOverrideInput("YAML", "A�B")
+	if !strings.Contains(m.View(), "A�B") {
+		t.Fatalf("valid rune lost in editor: %s", m.View())
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if got := m.inputDraft().Fragments[0].YAML; got != "AB" {
+		t.Fatalf("backspace must remove one code point: %q", got)
+	}
+}
+
+func TestConfigOverrides_FullAuthenticationPreviewPreservesRowTargets(t *testing.T) {
+	c := &overrideRecordingClient{lines: []protocol.OverridePreviewLine{{Text: "lab:***", Field: "authentication", Target: "lab"}, {Text: "127.0.0.0/8", Field: "skip-auth-prefixes", Target: "127.0.0.0/8"}}}
+	m := New(c, nil)
+	m.auth = authUI{open: true, loaded: true, epoch: 1, previewSeq: 1, previewFull: true}
+	runOverrideCmd(t, m, m.loadAuthPreview(authPreviewDueMsg{1, 1}))
+	if len(m.auth.preview.Lines) != 2 || m.auth.preview.Lines[0].Target != "lab" || m.auth.preview.Lines[1].Target != "127.0.0.0/8" {
+		t.Fatalf("full preview lost target: %+v", m.auth.preview.Lines)
 	}
 }

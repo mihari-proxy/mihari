@@ -1372,8 +1372,12 @@ func (model *Model) syncOverview() {
 
 func (model *Model) syncSystem() {
 	if page, ok := model.pages[ui.PageSystem].(*systempage.Model); ok {
+		hadInputDialog := page.HasInputDialog()
 		page.SetSnapshot(model.status, model.core)
 		page.SetMutationsEnabled(model.mutationsEnabled)
+		if hadInputDialog && !page.HasInputDialog() && model.active == ui.PageSystem && model.inputMode == ui.InputText {
+			model.inputMode = ui.InputNavigation
+		}
 	}
 }
 

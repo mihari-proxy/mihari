@@ -113,11 +113,19 @@ func TestConfigOverridesDNSValidationUsesEffectiveSettings(t *testing.T) {
 		valid          bool
 	}{
 		{"combine inherited resolver with form", "dns: {proxy-server-nameserver: [1.1.1.1]}", map[string]protocol.DNSFieldOverride{"respect-rules": {Operation: "set", Bool: &enabled}}, true},
+		{"remove invalid inherited bootstrap", "dns: {default-nameserver: [dns.example, system]}", map[string]protocol.DNSFieldOverride{"default-nameserver": {Operation: "remove", Servers: []string{"dns.example"}}}, true},
+		{"replacement repairs invalid inherited bootstrap", "dns: {default-nameserver: [dns.example]}", map[string]protocol.DNSFieldOverride{"default-nameserver": {Operation: "set", Servers: []string{"system"}}}, true},
 		{"missing resolver", "dns: {}", map[string]protocol.DNSFieldOverride{"respect-rules": {Operation: "set", Bool: &enabled}}, false},
 		{"omitted nameserver inherits core defaults", "dns: {enable: true}", nil, true},
 		{"empty nameserver", "dns: {enable: true, nameserver: []}", nil, false},
 		{"bootstrap DNS uses concrete IP", "dns: {default-nameserver: [https://dns.example/query]}", nil, false},
 		{"bootstrap allows system and encrypted IP", "dns: {default-nameserver: [system, 'https://[2001:db8::1]/query']}", nil, true},
+		{"native system URI with authority", "dns: {default-nameserver: [system://resolver.example]}", nil, true},
+		{"incomplete DHCP reference", "dns: {default-nameserver: ['dhcp:']}", nil, false},
+		{"DHCP missing authority separator", "dns: {default-nameserver: ['dhcp:x']}", nil, false},
+		{"legacy DHCP system", "dns: {default-nameserver: [dhcp://system]}", nil, true},
+		{"DHCP identifier is not a bootstrap address", "dns: {default-nameserver: [dhcp://192.0.2.1]}", nil, false},
+		{"DHCP identifier passes the core IP and port check", "dns: {default-nameserver: [dhcp://192.0.2.1:53]}", nil, true},
 		{"invalid mode", "dns: {enhanced-mode: unsupported}", nil, false},
 		{"invalid boolean", "dns: {ipv6: banana}", nil, false},
 	} {
@@ -237,5 +245,41 @@ instance:
 	}
 	if !reflect.DeepEqual(result["instance"], map[string]any{"entries": []any{"B", "A", "C"}}) {
 		t.Fatalf("got %#v", result["instance"])
+	}
+}
+
+func TestEmptyListAdditionLeavesContentsAndSourcesUnchanged(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		overrides protocol.ConfigOverrides
+	}{
+		{"form append", protocol.ConfigOverrides{DNS: map[string]protocol.DNSFieldOverride{"default-nameserver": {Operation: "append"}}}},
+		{"YAML append", protocol.ConfigOverrides{Fragments: []protocol.OverrideFragment{{ID: "one", Name: "One", Enabled: true, YAML: "dns: {default-nameserver+: []}"}}}},
+		{"YAML prepend", protocol.ConfigOverrides{Fragments: []protocol.OverrideFragment{{ID: "one", Name: "One", Enabled: true, YAML: "dns: {+default-nameserver: []}"}}}},
+	} {
+		for _, base := range []struct {
+			name string
+			doc  Document
+		}{
+			{"absent DNS", Document{}},
+			{"absent list", Document{"dns": map[string]any{"enable": true}}},
+			{"existing list", Document{"dns": map[string]any{"default-nameserver": []any{"system"}}}},
+		} {
+			t.Run(tc.name+"/"+base.name, func(t *testing.T) {
+				settings := testSettings()
+				before, beforeSources, err := GenerateWithSources(base.doc, nil, settings)
+				if err != nil {
+					t.Fatal(err)
+				}
+				settings.SetOverrides(tc.overrides)
+				after, afterSources, err := GenerateWithSources(base.doc, nil, settings)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(before) != string(after) || !reflect.DeepEqual(beforeSources, afterSources) {
+					t.Fatalf("empty list changed effective YAML or source:\n%s\n%v", after, afterSources)
+				}
+			})
+		}
 	}
 }

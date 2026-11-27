@@ -47,10 +47,7 @@ func newPreviewSnapshot(ctx context.Context, header protocol.ConfigOverridesPrev
 	snap := &previewSnapshot{header: header, budget: int64(previewPageBytes - len(encodedHeader) - 64)}
 	var used int64
 	for _, line := range lines {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		segment := protocol.OverridePreviewLine{Field: previewLabel(line.Field), Source: previewLabel(line.Source)}
+		segment := protocol.OverridePreviewLine{Field: previewLabel(line.Field), Target: previewLabel(line.Target), Source: previewLabel(line.Source)}
 		switch line.Change {
 		case "+":
 			segment.Change = "added"
@@ -59,6 +56,9 @@ func newPreviewSnapshot(ctx context.Context, header protocol.ConfigOverridesPrev
 		}
 		text := line.Text
 		for {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			end := min(len(text), previewSegmentBytes)
 			for end < len(text) && !utf8.RuneStart(text[end]) {
 				end--

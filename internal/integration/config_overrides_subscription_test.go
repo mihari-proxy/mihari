@@ -82,9 +82,17 @@ func TestConfigOverridesIPC_RefreshAndSwitchUseOverridesWithoutChangingSource(t 
 	if _, err = f.client.UseSubscription(t.Context(), first, protocol.MutationRequest{OperationID: "use-first"}); err != nil {
 		t.Fatal(err)
 	}
+	originalCache, _, err := subs.ReadCache(first)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = f.client.UpdateConfigOverrides(t.Context(), "fragments", protocol.ConfigOverridesUpdateRequest{OperationID: "fragment", Fragments: []protocol.OverrideFragment{{ID: "extra", Name: "Extra resolver", Enabled: true, YAML: "dns: {nameserver+: [9.9.9.9]}"}}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	cachedAfterSave, _, err := subs.ReadCache(first)
+	if err != nil || !slices.Equal(originalCache, cachedAfterSave) {
+		t.Fatalf("saving fragment changed source cache: %v", err)
 	}
 	yes := true
 	_, err = f.client.UpdateConfigOverrides(t.Context(), "dns", protocol.ConfigOverridesUpdateRequest{OperationID: "dns", DNS: map[string]protocol.DNSFieldOverride{"enable": {Operation: "set", Bool: &yes}}})

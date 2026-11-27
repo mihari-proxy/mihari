@@ -48,7 +48,7 @@ func TestConfigOverrides_SaveFailureRestoresReloadedRuntime(t *testing.T) {
 	req := protocol.ConfigOverridesUpdateRequest{Fragments: []protocol.OverrideFragment{{ID: "office", Name: "Office", Enabled: true, YAML: "rules: ['MATCH,DIRECT']"}}}
 	_, err = api.UpdateConfigOverrides(t.Context(), Operation{ID: "failure"}, "fragments", req)
 	after, readErr := os.ReadFile(core.path)
-	if err == nil || readErr != nil || core.reloads != 2 || !bytes.Equal(previous, after) {
+	if err == nil || readErr != nil || core.reloads != 2 || core.name != "previous" || !bytes.Equal(previous, after) {
 		t.Fatalf("err=%v read=%v reloads=%d restored=%v", err, readErr, core.reloads, bytes.Equal(previous, after))
 	}
 	status, err := api.ConfigOverrides(t.Context())
@@ -165,6 +165,95 @@ func TestConfigOverrides_RecoveryModesRejectMutations(t *testing.T) {
 			}
 			if slices.Contains(m.Capabilities(), protocol.CapabilityConfigOverrides) {
 				t.Fatal("recovery advertises editing")
+			}
+		})
+	}
+}
+
+func TestConfigOverrides_RejectsCoreDegradedDuringCandidateValidation(t *testing.T) {
+	m, core := onlineEgressManager(t)
+	before, err := os.ReadFile(core.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.validateConfig = func(context.Context, string) error {
+		snapshot := m.store.Load()
+		snapshot.Core.Status = "degraded"
+		m.store.Store(snapshot)
+		return nil
+	}
+	writes := 0
+	m.saveSettings = func(string, config.Settings) (config.CommitResult, error) {
+		writes++
+		return config.CommitResult{Committed: true}, nil
+	}
+	req := protocol.ConfigOverridesUpdateRequest{DNS: map[string]protocol.DNSFieldOverride{"nameserver": {Operation: "set", Servers: []string{"1.1.1.1"}}}}
+	_, err = m.UpdateConfigOverrides(t.Context(), Operation{ID: "core-transition"}, "dns", req)
+	var conflict protocol.APIError
+	if !errors.As(err, &conflict) || conflict.Code != protocol.CodeRevisionConflict || core.reloads != 0 || writes != 0 {
+		t.Fatalf("degraded core accepted stale edit: error=%v reloads=%d writes=%d", err, core.reloads, writes)
+	}
+	after, err := os.ReadFile(core.path)
+	if err != nil || !bytes.Equal(before, after) || m.settingsSnapshot().Overrides != nil {
+		t.Fatalf("stale candidate published: %v", err)
+	}
+}
+
+// The controller can acknowledge selection calls during recovery while its live
+// GLOBAL choice remains on the reset default.
+type unconfirmedOverrideRecovery struct{ *routingReloadController }
+
+func (c unconfirmedOverrideRecovery) SelectProxy(ctx context.Context, group, exit string) error {
+	if c.reloads >= 2 {
+		return nil
+	}
+	return c.routingReloadController.SelectProxy(ctx, group, exit)
+}
+
+func TestConfigOverrides_SettingsSaveFailureRestoresLiveGlobalExit(t *testing.T) {
+	for _, tc := range []struct {
+		name, saved string
+		unconfirmed bool
+	}{
+		{"preserve selected exit", "Node B", false},
+		{"undo saved fallback", "retired node", false},
+		{"unconfirmed recovery degrades", "Node B", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, base := routingFixture(t)
+			m.settings.SetRoutingMode("global")
+			m.settings.SetGlobalSelection("a", tc.saved)
+			base.mode, base.selected = "global", "Node B"
+			controller := &routingReloadController{routingController: base}
+			m.controller = controller
+			if tc.unconfirmed {
+				m.controller = unconfirmedOverrideRecovery{controller}
+			}
+			m.stagingDir = t.TempDir()
+			m.runtimeConfig = filepath.Join(t.TempDir(), "runtime.yaml")
+			if err := os.WriteFile(m.runtimeConfig, []byte("mode: global\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cause := errors.New("fixture persistence unavailable")
+			m.saveSettings = func(path string, s config.Settings) (config.CommitResult, error) {
+				if s.Overrides != nil {
+					return config.CommitResult{}, cause
+				}
+				return config.SaveWithCommit(path, s)
+			}
+			req := protocol.ConfigOverridesUpdateRequest{DNS: map[string]protocol.DNSFieldOverride{"nameserver": {Operation: "set", Servers: []string{"1.1.1.1"}}}}
+			_, err := m.UpdateConfigOverrides(t.Context(), Operation{ID: "fail-after-GLOBAL"}, "dns", req)
+			if !errors.Is(err, cause) || controller.reloads != 2 || m.settingsSnapshot().Overrides != nil || m.mutationDegraded.Load() != tc.unconfirmed {
+				t.Fatalf("error=%v reloads=%d degraded=%t", err, controller.reloads, m.mutationDegraded.Load())
+			}
+			if !tc.unconfirmed && (base.mode != "global" || base.selected != "Node B" || m.settingsSnapshot().GlobalSelection("a") != tc.saved) {
+				t.Fatalf("mode=%s live selection=%s saved=%s", base.mode, base.selected, m.settingsSnapshot().GlobalSelection("a"))
+			}
+			if tc.saved == "retired node" {
+				stored, e := config.Load(m.settingsPath)
+				if e != nil || stored.GlobalSelection("a") != tc.saved {
+					t.Fatalf("saved fallback not restored: %v %v", stored.Routing, e)
+				}
 			}
 		})
 	}

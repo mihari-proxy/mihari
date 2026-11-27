@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 )
 
@@ -48,9 +49,11 @@ func (s *Server) configOverridesRoutes(mux *http.ServeMux) {
 				s.writeControlError(r.Context(), w, protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "send the complete collection for the selected override category"})
 				return
 			}
-			v, err := api.UpdateConfigOverrides(r.Context(), runtimeapi.Operation{ID: req.OperationID, IfRevision: req.IfRevision, Source: "control"}, category, req)
+			ctx := logging.WithOperation(r.Context(), logging.OperationMetadata{ID: req.OperationID, Name: "config-overrides." + category})
+			defer s.operations.begin(req.OperationID)()
+			v, err := api.UpdateConfigOverrides(ctx, runtimeapi.Operation{ID: req.OperationID, IfRevision: req.IfRevision, Source: "control"}, category, req)
 			if err != nil {
-				s.writeControlError(r.Context(), w, err)
+				s.writeControlError(ctx, w, err)
 				return
 			}
 			writeJSON(w, http.StatusOK, v)

@@ -74,7 +74,14 @@ func (m *Manager) PreviewConfigOverrides(ctx context.Context, req protocol.Confi
 	}
 	after, err := renderOverridesCandidate(ctx, base, draft, fields, source, req.Reveal)
 	if err != nil {
-		return result, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: "invalid configuration draft"}, err)
+		if req.Category == "auth" && errors.Is(err, subscription.ErrProxyAuthNoUsers) && !reflect.DeepEqual(saved.ProxyAuth, draft.ProxyAuth) {
+			// An enabled saved form can itself lack users after a source change.
+			// Attribute this failure to the edit only when its baseline still works.
+			if _, baselineErr := subscription.Generate(base, nil, saved); baselineErr == nil {
+				return result, diagnostics.Wrap(invalidPreview("invalid authentication draft"), err)
+			}
+		}
+		return result, err
 	}
 	var lines []protocol.ProxyAuthPreviewLine
 	if reflect.DeepEqual(saved, draft) {
@@ -134,11 +141,17 @@ func applyPreviewDraft(saved config.Settings, req protocol.ConfigOverridesPrevie
 		if req.Authentication != nil || req.DNS != nil {
 			return after, invalidPreview("expected only a fragment list")
 		}
+		if err := config.ValidateOverrides(&protocol.ConfigOverrides{Fragments: req.Fragments}); err != nil {
+			return after, diagnostics.Wrap(invalidPreview("invalid fragment list"), err)
+		}
 		overrides.Fragments = req.Fragments
 		after.SetOverrides(overrides)
 	case "dns":
 		if req.Authentication != nil || req.Fragments != nil {
 			return after, invalidPreview("expected only a DNS draft")
+		}
+		if err := config.ValidateOverrides(&protocol.ConfigOverrides{DNS: req.DNS}); err != nil {
+			return after, diagnostics.Wrap(invalidPreview("invalid DNS draft"), err)
 		}
 		overrides.DNS = req.DNS
 		after.SetOverrides(overrides)
@@ -254,8 +267,8 @@ func renderOverridesCandidate(ctx context.Context, base subscription.Document, s
 		case "secret":
 			line := "secret: '********'"
 			entries = append(entries, authPreviewEntry{identity: field, line: protocol.ProxyAuthPreviewLine{Text: line, Field: field, Source: "Mihari"}})
-		case "authentication":
-			authLines, err := maskedOverrideAuth(val, reveal, source, origins)
+		case "authentication", "skip-auth-prefixes":
+			authLines, err := overrideAuthLines(field, val, reveal, source, origins)
 			if err != nil {
 				return nil, err
 			}
@@ -316,18 +329,18 @@ func annotateOverrideNode(node *yaml.Node, path, source string, origins map[stri
 	}
 }
 
-func maskedOverrideAuth(value *yaml.Node, reveal bool, source string, origins map[string]string) ([]authPreviewEntry, error) {
+func overrideAuthLines(field string, value *yaml.Node, reveal bool, source string, origins map[string]string) ([]authPreviewEntry, error) {
 	var native any
 	if err := value.Decode(&native); err != nil {
 		return nil, err
 	}
-	lines, err := authPreviewLines(subscription.Document{"authentication": native}, protocol.ProxyAuthConfig{Mode: "follow", BypassMode: "follow"}, reveal, origins)
+	lines, err := authPreviewLines(subscription.Document{field: native}, protocol.ProxyAuthConfig{Mode: "follow", BypassMode: "follow"}, reveal, origins)
 	if err != nil {
 		return nil, err
 	}
 	var result []authPreviewEntry
 	for _, entry := range lines {
-		if entry.line.Field != "authentication" {
+		if entry.line.Field != field {
 			continue
 		}
 		if entry.line.Source == "" {

@@ -23,6 +23,7 @@ type overrideClient interface {
 }
 
 type overrideUI struct {
+	importedSaveID                                                   string
 	open, loaded, saving, full, reveal, previewFocus, confirmDiscard bool
 	reloading                                                        bool
 	display                                                          overridePreviewDisplay
@@ -146,7 +147,12 @@ func (m *Model) saveOverrides() tea.Cmd {
 	o.notice = ""
 	draft := o.draft.Clone()
 	rev, ctx, epoch, category := o.status.Revision, m.ctx, o.epoch, o.category
-	req := protocol.ConfigOverridesUpdateRequest{OperationID: m.newOperationID(), IfRevision: &rev}
+	id := o.importedSaveID
+	if id == "" {
+		id = m.newOperationID()
+	}
+	o.importedSaveID = ""
+	req := protocol.ConfigOverridesUpdateRequest{OperationID: id, IfRevision: &rev}
 	if category == "dns" {
 		req.DNS = draft.DNS
 	} else {
@@ -373,7 +379,7 @@ func dnsChoices(key string) []string {
 		return []string{"inherit", "true", "false", "delete"}
 	}
 	if key == "enhanced-mode" {
-		return []string{"inherit", "fake-ip", "redir-host", "delete"}
+		return []string{"inherit", "fake-ip", "redir-host", "normal", "delete"}
 	}
 	return []string{"inherit", "set", "append", "remove", "delete"}
 }
@@ -419,7 +425,7 @@ func (m *Model) editDNSField(k string) tea.Cmd {
 		case "true", "false":
 			b := next == "true"
 			o.draft.DNS[field] = protocol.DNSFieldOverride{Operation: "set", Bool: &b}
-		case "fake-ip", "redir-host":
+		case "fake-ip", "redir-host", "normal":
 			o.draft.DNS[field] = protocol.DNSFieldOverride{Operation: "set", Mode: next}
 		case "delete":
 			o.draft.DNS[field] = protocol.DNSFieldOverride{Operation: "delete"}

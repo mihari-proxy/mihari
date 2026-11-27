@@ -50,12 +50,17 @@ func loadAuthSource(ctx context.Context, client authClient, hasPreview bool, res
 	}
 	result.sourceLoaded = true
 	result.sourceID = preview.ActiveID
-	seen := map[string]bool{}
+	positions := map[string]int{}
 	for _, line := range preview.Lines {
-		if line.Field == "authentication" && line.Target != "" && line.Change != "-" && !seen[line.Target] {
-			result.sourceUsers = append(result.sourceUsers, protocol.ProxyAuthUser{Username: line.Target, Source: "subscription", BaseSource: line.Source})
-			seen[line.Target] = true
+		if line.Field != "authentication" || line.Target == "" || line.Change == "-" {
+			continue
 		}
+		if i, exists := positions[line.Target]; exists {
+			result.sourceUsers[i].BaseSource = line.Source
+			continue
+		}
+		positions[line.Target] = len(result.sourceUsers)
+		result.sourceUsers = append(result.sourceUsers, protocol.ProxyAuthUser{Username: line.Target, Source: "subscription", BaseSource: line.Source})
 	}
 	if catalogClient, ok := client.(interface {
 		Subscriptions(context.Context) (protocol.SubscriptionList, error)

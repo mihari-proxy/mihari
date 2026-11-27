@@ -1,5 +1,8 @@
 package protocol
 
+// MaxControlRequestBytes bounds the encoded JSON sent to a local mutation or preview.
+const MaxControlRequestBytes = 1 << 20
+
 // CapabilityConfigOverrides identifies instance overrides and read-only draft previews.
 const CapabilityConfigOverrides = "config-overrides-v1"
 
@@ -57,6 +60,7 @@ type ConfigOverridesPreviewRequest struct {
 
 // OverridePreviewLine is a display segment of candidate YAML or a removed line.
 type OverridePreviewLine struct {
+	Target    string `json:"target,omitempty"`
 	Text      string `json:"text"`
 	Field     string `json:"field,omitempty"`
 	Source    string `json:"source,omitempty"`

@@ -21,7 +21,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/state"
 )
 
-const maxControlBodySize = 1 << 20
+const maxControlBodySize = protocol.MaxControlRequestBytes
 
 const (
 	defaultDelayTestURL   = "https://www.gstatic.com/generate_204"

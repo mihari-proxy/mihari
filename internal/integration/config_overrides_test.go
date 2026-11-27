@@ -98,6 +98,7 @@ func TestConfigOverridesPreview_LargeScalarAndInheritedSource(t *testing.T) {
 	req := protocol.ConfigOverridesPreviewRequest{Category: "dns", Full: true, DNS: map[string]protocol.DNSFieldOverride{"nameserver": {Operation: "set", Servers: []string{"9.9.9.9"}}}}
 	var reconstructed strings.Builder
 	pages := 0
+	seenIPv6 := false
 	for {
 		page, err := f.client.PreviewConfigOverrides(t.Context(), req)
 		if err != nil {
@@ -108,8 +109,11 @@ func TestConfigOverridesPreview_LargeScalarAndInheritedSource(t *testing.T) {
 			if l.Field == "x-native" && l.Change != "removed" {
 				reconstructed.WriteString(l.Text)
 			}
-			if l.Field == "dns.ipv6" && l.Source != "Office" {
-				t.Errorf("inherited IPv6 mislabeled: %+v", l)
+			if l.Field == "dns.ipv6" {
+				seenIPv6 = true
+				if l.Source != "Office" {
+					t.Errorf("inherited IPv6 mislabeled: %+v", l)
+				}
 			}
 		}
 		if page.NextOffset == 0 {
@@ -119,6 +123,9 @@ func TestConfigOverridesPreview_LargeScalarAndInheritedSource(t *testing.T) {
 			t.Fatal("preview did not advance")
 		}
 		req.Offset, req.Snapshot = page.NextOffset, page.Snapshot
+	}
+	if !seenIPv6 {
+		t.Fatal("full preview omitted inherited dns.ipv6")
 	}
 	if pages < 2 || reconstructed.String() != "x-native: "+value {
 		t.Fatalf("incomplete scalar (%d pages, %d bytes)", pages, reconstructed.Len())

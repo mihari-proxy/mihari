@@ -3,14 +3,13 @@ package subscription
 import (
 	"errors"
 	"fmt"
-	"go.yaml.in/yaml/v3"
 	"maps"
-	"net/netip"
-	"net/url"
 	"slices"
 	"strings"
 
+	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"go.yaml.in/yaml/v3"
 )
 
 func applyDNSForm(document Document, origins *fieldOrigin, form map[string]protocol.DNSFieldOverride) error {
@@ -18,14 +17,15 @@ func applyDNSForm(document Document, origins *fieldOrigin, form map[string]proto
 		return nil
 	}
 	dns := egressMapping(document["dns"])
-	if dns == nil {
-		if raw, exists := document["dns"]; exists && raw != nil {
-			return errors.New("dns must be a mapping to apply the DNS form")
-		}
-	}
-	origin := origins.field("dns")
+
 	for _, key := range slices.Sorted(maps.Keys(form)) {
 		change := form[key]
+		if (change.Operation == "append" || change.Operation == "remove") && len(change.Servers) == 0 {
+			continue
+		}
+		if dns == nil && document["dns"] != nil {
+			return errors.New("dns must be a mapping to apply the DNS form")
+		}
 		op := replaceField
 		var value any
 		switch change.Operation {
@@ -60,6 +60,7 @@ func applyDNSForm(document Document, origins *fieldOrigin, form map[string]proto
 			dns = map[string]any{}
 			document["dns"] = dns
 		}
+		origin := origins.field("dns")
 		if err := applyFieldOperation(dns, origin.field(key), key, op, value, "DNS form"); err != nil {
 			return fmt.Errorf("dns.%s: %w", key, err)
 		}
@@ -115,7 +116,7 @@ func validateEffectiveDNS(document Document) error {
 			if !ok || s == "" {
 				return fmt.Errorf("dns.%s requires nonempty server strings", field)
 			}
-			if field == "default-nameserver" && !bootstrapResolver(s) {
+			if field == "default-nameserver" && !config.IsBootstrapAddress(s) {
 				return fmt.Errorf("dns.default-nameserver %q needs an IP address or system resolver", s)
 			}
 		}
@@ -130,27 +131,4 @@ func validateEffectiveDNS(document Document) error {
 		}
 	}
 	return nil
-}
-
-// A resolver used to bootstrap other DNS hostnames must be reachable without
-// resolving another hostname. mihomo also accepts its legacy dhcp://system form.
-func bootstrapResolver(server string) bool {
-	if server == "system" || server == "dhcp://system" {
-		return true
-	}
-	if _, err := netip.ParseAddr(server); err == nil {
-		return true
-	}
-	if !strings.Contains(server, "://") {
-		server = "udp://" + server
-	}
-	endpoint, err := url.Parse(server)
-	if err != nil {
-		return false
-	}
-	if endpoint.Scheme == "system" {
-		return true
-	}
-	_, err = netip.ParseAddr(endpoint.Hostname())
-	return err == nil
 }

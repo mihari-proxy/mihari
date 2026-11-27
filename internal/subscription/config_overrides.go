@@ -27,7 +27,7 @@ func ApplyConfigOverrides(document Document, overrides *protocol.ConfigOverrides
 		}
 		node, err := parseOverrideFragment(fragment.YAML)
 		if err == nil {
-			err = mergeOverrideMapping(document, &root, node, "", fragment.Name)
+			_, err = mergeOverrideMapping(document, &root, node, "", fragment.Name)
 		}
 		if err != nil {
 			return nil, overrideError(fmt.Errorf("fragment %q: %w", fragment.Name, err))
@@ -36,7 +36,7 @@ func ApplyConfigOverrides(document Document, overrides *protocol.ConfigOverrides
 	if err := applyDNSForm(document, &root, overrides.DNS); err != nil {
 		return nil, overrideError(err)
 	}
-	if root.fields["dns"] != nil {
+	if dns := root.fields["dns"]; dns != nil && dns.source != "" {
 		if err := validateEffectiveDNS(document); err != nil {
 			return nil, overrideError(err)
 		}
@@ -219,51 +219,62 @@ func overrideEntries(mapping *yaml.Node) []*yaml.Node {
 	return append(result, content[mergeAt+2:]...)
 }
 
-func mergeOverrideMapping(target map[string]any, origins *fieldOrigin, mapping *yaml.Node, parent, source string) error {
+func mergeOverrideMapping(target map[string]any, origins *fieldOrigin, mapping *yaml.Node, parent, source string) (bool, error) {
+	applied := false
 	entries := overrideEntries(mapping)
 	for i := 0; i < len(entries); i += 2 {
 		rawKey, value := entries[i], entries[i+1]
 		if rawKey.Kind != yaml.ScalarNode || rawKey.ShortTag() != "!!str" {
-			return fmt.Errorf("line %d: override key must be a string", rawKey.Line)
+			return false, fmt.Errorf("line %d: override key must be a string", rawKey.Line)
 		}
 		key, operation, err := overrideKey(rawKey.Value)
 		if err != nil {
-			return fmt.Errorf("line %d: %w", rawKey.Line, err)
+			return false, fmt.Errorf("line %d: %w", rawKey.Line, err)
 		}
 		path := overridePath(parent, key)
 		if parent == "" && protectedOverride(key) {
-			return fmt.Errorf("%s is managed by Mihari", key)
+			return false, fmt.Errorf("%s is managed by Mihari", key)
 		}
 		if value.Kind == yaml.AliasNode {
 			value = value.Alias
+		}
+		if (operation == prependItems || operation == appendItems || operation == removeFieldOrItems) && value.Kind == yaml.SequenceNode && len(value.Content) == 0 {
+			continue
 		}
 		field := origins.field(key)
 		if operation == mergeField && value.Kind == yaml.MappingNode {
 			existing, exists := target[key]
 			dest := egressMapping(existing)
+			childOrigin := field
 			if dest == nil {
 				dest = map[string]any{}
-				field.replace(nil, source)
+				childOrigin = &fieldOrigin{}
 			}
-			if err := mergeOverrideMapping(dest, field, value, path, source); err != nil {
-				return err
+			childApplied, err := mergeOverrideMapping(dest, childOrigin, value, path, source)
+			if err != nil {
+				return false, err
 			}
-			if !exists && len(dest) == 0 && len(value.Content) > 0 {
+			if len(value.Content) > 0 && (!childApplied || !exists && len(dest) == 0) {
 				continue
 			}
 			target[key] = dest
-			field.source = source
+			childOrigin.source = source
+			if childOrigin != field {
+				*field = *childOrigin
+			}
+			applied = true
 			continue
 		}
 		var decoded any
 		if err := value.Decode(&decoded); err != nil {
-			return fmt.Errorf("%s: %w", path, err)
+			return false, fmt.Errorf("%s: %w", path, err)
 		}
 		if err := applyFieldOperation(target, field, key, operation, decoded, source); err != nil {
-			return fmt.Errorf("%s: %w", path, err)
+			return false, fmt.Errorf("%s: %w", path, err)
 		}
+		applied = true
 	}
-	return nil
+	return applied, nil
 }
 
 func applyFieldOperation(target map[string]any, origin *fieldOrigin, key string, op fieldOperation, value any, source string) error {

@@ -70,36 +70,41 @@ func (m *Manager) applyGeneratedSettings(ctx context.Context, op Operation, comp
 	if err != nil {
 		return nil, err
 	}
-	if hash != newHash || candidate.generation != m.currentConfigGeneration() || epoch != m.coreEpoch || !reflect.DeepEqual(catalog, m.loggingCatalog()) || stopped != m.routingCoreStopped() {
+	if (stopped && !m.routingCoreStopped()) || (!stopped && m.store.Load().Core.Status != "running") {
+		return nil, routingConflict()
+	}
+	if hash != newHash || candidate.generation != m.currentConfigGeneration() || epoch != m.coreEpoch || !reflect.DeepEqual(catalog, m.loggingCatalog()) {
 		return nil, routingConflict()
 	}
 	if err := m.checkIfRevision(op.IfRevision); err != nil {
 		return nil, err
 	}
-	var previous []byte
+	previousSettings := candidate.before
+	var previous routingCheckpoint
 	if !stopped {
 		if m.loggingUnsaved {
 			return nil, loggingCoreError("save the observed core logging level before reloading configuration", nil)
 		}
-		previous, err = m.egressPreviousConfig(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if err = m.commitRuntimeConfig(ctx, generated); err != nil {
+		if err = m.commitRuntimeConfigTracked(ctx, generated, &previous); err != nil {
 			m.markConfigDegraded(ctx, err)
 			return nil, err
 		}
 		// Reload may publish a restored GLOBAL selection. Retain that result.
 		candidate, err = m.prepareSettings(update)
-		if err != nil {
-			return nil, err
-		}
 	}
-	if _, err = m.saveSettingsCandidate(ctx, candidate); err != nil {
+	if err == nil {
+		_, err = m.saveSettingsCandidate(ctx, candidate)
+	}
+	if err != nil {
 		if !stopped {
 			recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 			defer cancel()
-			if restoreErr := m.restoreRoutingConfig(recovery, previous); restoreErr != nil {
+			restoreErr := m.restoreRoutingCheckpoint(recovery, previous)
+			if !reflect.DeepEqual(previousSettings, m.settingsSnapshot()) {
+				_, settingsErr := m.restoreSettings(recovery, previousSettings)
+				restoreErr = errors.Join(restoreErr, settingsErr)
+			}
+			if restoreErr != nil {
 				m.mutationDegraded.Store(true)
 				m.stopCoreOnUnlock.Store(true)
 				err = diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: component + " recovery failed; restart required", Details: map[string]any{"degraded": true}}, errors.Join(err, restoreErr))

@@ -10,6 +10,10 @@ import (
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
+// The textarea sanitizer removes every U+FFFD, including valid UTF-8. Use a
+// single printable cell internally and restore the glyph when rendering.
+const yamlReplacementCell = "\ufdd0"
+
 // The textarea represents newlines and tab stops visually. Keep the original
 // source bytes for untouched text, including CRLF and literal tabs in scalars.
 func yamlEditorToken(raw string) (display string, size int) {
@@ -23,8 +27,14 @@ func yamlEditorToken(raw string) (display string, size int) {
 		return "    ", 1
 	}
 	r, n := utf8.DecodeRuneInString(raw)
-	if r == utf8.RuneError {
+	if r == utf8.RuneError && n == 1 {
 		return `\ufffd`, n
+	}
+	if r == utf8.RuneError {
+		return yamlReplacementCell, n
+	}
+	if raw[:n] == yamlReplacementCell {
+		return `\ufdd0`, n
 	}
 	if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
 		return diagnostics.EscapeTerminal(raw[:n]), n
@@ -62,7 +72,7 @@ func splitYAMLDisplay(raw string, at int) (string, string) {
 
 func (m *Model) updateYAMLInput(msg tea.Msg) tea.Cmd {
 	o := &m.overrides
-	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+v" {
+	if key, ok := msg.(tea.KeyPressMsg); ok && ui.IsPasteKey(key) {
 		return ui.ReadClipboard
 	}
 	if clipboard, ok := msg.(ui.ClipboardPasteMsg); ok {
@@ -89,6 +99,9 @@ func (m *Model) updateYAMLInput(msg tea.Msg) tea.Cmd {
 		o.yamlRaw = left + p.Content + right
 		o.input.InsertString(yamlEditorDisplay(p.Content))
 		return m.refreshOverridePreview()
+	}
+	if key, ok := msg.(tea.KeyPressMsg); ok && strings.ContainsAny(key.Text, "�"+yamlReplacementCell) {
+		return m.updateYAMLInput(tea.PasteMsg{Content: key.Text})
 	}
 	var cmd tea.Cmd
 	o.input, cmd = o.input.Update(msg)

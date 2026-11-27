@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
+	"github.com/mihari-proxy/mihari/internal/logging"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
 	"github.com/mihari-proxy/mihari/internal/state"
 )
@@ -19,6 +20,7 @@ import (
 type configOverrideRuntime struct {
 	fakeRuntime
 	category string
+	onUpdate func(context.Context)
 	preview  protocol.ConfigOverridesPreviewRequest
 }
 
@@ -29,7 +31,10 @@ func (f *configOverrideRuntime) PreviewConfigOverrides(_ context.Context, req pr
 	f.preview = req
 	return protocol.ConfigOverridesPreview{Revision: 8}, nil
 }
-func (f *configOverrideRuntime) UpdateConfigOverrides(_ context.Context, _ runtimeapi.Operation, category string, _ protocol.ConfigOverridesUpdateRequest) (protocol.ConfigOverridesStatus, error) {
+func (f *configOverrideRuntime) UpdateConfigOverrides(ctx context.Context, _ runtimeapi.Operation, category string, _ protocol.ConfigOverridesUpdateRequest) (protocol.ConfigOverridesStatus, error) {
+	if f.onUpdate != nil {
+		f.onUpdate(ctx)
+	}
 	f.category = category
 	return protocol.ConfigOverridesStatus{Revision: 9}, nil
 }
@@ -116,5 +121,23 @@ func TestConfigOverridesPreview_ValidatesCursorAndAcceptsBodyOnlyClients(t *test
 				t.Fatal("invalid cursor reached runtime")
 			}
 		})
+	}
+}
+
+func TestConfigOverridesSaveReportsOperationState(t *testing.T) {
+	f := &configOverrideRuntime{}
+	s := New(Options{Token: "token", Store: state.NewStore(state.Snapshot{}), Runtime: f})
+	f.onUpdate = func(ctx context.Context) {
+		if meta, ok := logging.OperationFromContext(ctx); !ok || meta.ID != "edit" || meta.Name != "config-overrides.dns" {
+			t.Errorf("lost operation metadata: %+v", meta)
+		}
+		if got := readOperationState(t, s, "edit"); got != "running" {
+			t.Errorf("during save: %s", got)
+		}
+	}
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, authorizedRequest(http.MethodPut, "/v1/config-overrides/dns", bytes.NewBufferString(`{"operation_id":"edit","dns":{}}`)))
+	if w.Code != 200 || readOperationState(t, s, "edit") != "finished" {
+		t.Fatalf("unsettled save: %d", w.Code)
 	}
 }
