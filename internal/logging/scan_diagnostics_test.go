@@ -101,7 +101,7 @@ func TestExportOriginal_SuccessWarningsKeepCleanupCause(t *testing.T) {
 				writeExportFixture(t, fs, paths.DaemonLog, `{"time":"2026-09-02T10:00:00Z","msg":"fixture"}`)
 				cause := errors.New("fixture /private/archive cleanup")
 				var warnings []error
-				request := ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: filepath.Join(t.TempDir(), "export.zip"), Paths: paths, PrivateFS: fs, OnWarning: func(err error) { warnings = append(warnings, err) }}
+				request := ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: filepath.Join(privateExportParent(t), "export.zip"), Paths: paths, PrivateFS: fs, OnWarning: func(err error) { warnings = append(warnings, err) }}
 				ops := exportOps{}
 				if stage == "publish" {
 					ops.Publish = func(d *platform.PublishDir, w *platform.PublishWorkspace, temp, target string, warning func(error)) error {

@@ -83,7 +83,7 @@ func TestAssemble_FixtureSourcesPublishManifestV2(t *testing.T) {
 
 func TestAssemble_AllEmptyDoesNotPublish(t *testing.T) {
 	fs, paths := openExportTestFS(t)
-	parent := t.TempDir()
+	parent := privateExportParent(t)
 	out := filepath.Join(parent, "export.zip")
 	request := ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: out, Paths: paths, PrivateFS: fs}
 	sources := []NamedSource{
@@ -114,7 +114,7 @@ func TestAssemble_AllEmptyDoesNotPublish(t *testing.T) {
 
 func TestAssemble_FinishFailureDoesNotPublish(t *testing.T) {
 	fs, paths := openExportTestFS(t)
-	parent := t.TempDir()
+	parent := privateExportParent(t)
 	out := filepath.Join(parent, "export.zip")
 	request := ExportRequest{Now: time.Now(), Range: ExportRange{Kind: RangeAll}, OutputPath: out, Paths: paths, PrivateFS: fs}
 	payload := []byte(`{"time":"2026-09-05T00:00:00Z","msg":"ok"}`)
