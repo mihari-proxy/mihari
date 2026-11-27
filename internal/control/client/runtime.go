@@ -30,9 +30,10 @@ const (
 const SubscriptionMutationTimeout = 180 * time.Second
 
 type runtimeRequestOptions struct {
-	timeout      time.Duration
-	noTimeout    bool
-	quietCleanup bool
+	timeout       time.Duration
+	responseLimit int64
+	noTimeout     bool
+	quietCleanup  bool
 }
 
 type runtimeOutcome struct {
@@ -319,7 +320,11 @@ func (c *Client) doMutation(ctx context.Context, operation logging.OperationMeta
 	if reporter != nil {
 		reporter(ctx, diagnostics.Record{Component: "control.client", Event: "mutation_started", Level: slog.LevelDebug})
 	}
-	outcome := c.doRuntimeOutcome(ctx, method, path, input, output, maxControlResponseSize, options...)
+	responseLimit := int64(maxControlResponseSize)
+	if len(options) > 0 && options[0].responseLimit > 0 {
+		responseLimit = options[0].responseLimit
+	}
+	outcome := c.doRuntimeOutcome(ctx, method, path, input, output, responseLimit, options...)
 	if outcome.err != nil && !outcome.remoteEnvelope && (operation.Name == "subscription.add" || operation.Name == "subscription.set") {
 		if outcome.dispatched {
 			outcome.err = unknownSubscriptionOutcome{outcome.err}

@@ -244,7 +244,7 @@ mihari proxy-auth prefix remove CIDR
 mihari proxy-auth reset --yes
 ```
 
-降级前执行 `mihari proxy-auth reset --yes` 移除非默认认证设置，并完成待处理的数据重置与 Setup。
+`mihari proxy-auth reset --yes` 清除认证表单并恢复沿用当前订阅和启用片段提供的凭据。降级前也要在配置覆写页清空 DNS 表单和全部片段，并完成待处理的数据重置与 Setup。
 
 支持全局 `--json`。`user set` 不带 `--password-stdin` 时要求交互终端并隐藏输入；编辑已有实例用户时空密码保留原值，新用户密码不能为空。普通查询隐藏密码，`user reveal` 显式查看。用户按精确用户名增量合并；`remove` 仅移除实例项，订阅同名用户恢复其原密码，不支持排除订阅用户。模式 `follow` 不应用保存的用户覆盖，`enabled` 要求最终至少一个用户，`disabled` 不要求认证但保留凭据。免认证模式独立；关闭认证时显示为不生效。
 

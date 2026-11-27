@@ -48,7 +48,7 @@ func newProxyAuthCommand(deps Dependencies, options *runOptions) *cobra.Command 
 				return invalidArgument("proxy authentication capability is unavailable; upgrade Mihari")
 			}
 			if a.kind == "reset" && !yes {
-				return invalidArgument("reset restores subscription authentication and clears saved overrides; pass --yes to confirm")
+				return invalidArgument("reset clears the authentication form and restores inherited authentication; pass --yes to confirm")
 			}
 			status, err := api.ProxyAuth(command.Context(), a.kind == "reveal")
 			if err != nil {
@@ -131,7 +131,14 @@ func newProxyAuthCommand(deps Dependencies, options *runOptions) *cobra.Command 
 				return err
 			}
 			for _, u := range status.Users {
-				if _, err := fmt.Fprintf(command.OutOrStdout(), "%s\t%s\n", strconv.Quote(u.Username), u.Source); err != nil {
+				source := u.Source
+				if u.BaseSource != "" {
+					source = "fragment " + strconv.Quote(u.BaseSource)
+					if u.Source == "overridden" {
+						source += " (password set in Mihari)"
+					}
+				}
+				if _, err := fmt.Fprintf(command.OutOrStdout(), "%s\t%s\n", strconv.Quote(u.Username), source); err != nil {
 					return err
 				}
 			}

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"strconv"
 
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	runtimeapi "github.com/mihari-proxy/mihari/internal/runtime"
@@ -62,6 +63,17 @@ func (s *Server) configOverridesRoutes(mux *http.ServeMux) {
 		var req protocol.ConfigOverridesPreviewRequest
 		if !s.decodeControlJSON(w, r, &req) {
 			return
+		}
+		query := r.URL.Query()
+		if query.Has("snapshot") || query.Has("offset") {
+			snapshot := query.Get("snapshot")
+			offset, err := strconv.Atoi(query.Get("offset"))
+			if len(query["snapshot"]) != 1 || len(query["offset"]) != 1 || err != nil || offset < 0 || snapshot == "" ||
+				(req.Snapshot != "" && req.Snapshot != snapshot) || (req.Offset != 0 && req.Offset != offset) {
+				s.writeRequestRejection(r.Context(), w, "invalid preview continuation", nil)
+				return
+			}
+			req.Offset, req.Snapshot = offset, snapshot
 		}
 		v, err := api.PreviewConfigOverrides(r.Context(), req)
 		if err != nil {
