@@ -8,6 +8,8 @@ type ProxyAuthUser struct {
 	Username string `json:"username"`
 	Password string `json:"password,omitempty"`
 	Source   string `json:"source,omitempty"`
+	// BaseSource names the fragment that supplied the inherited credential.
+	BaseSource string `json:"base_source,omitempty"`
 }
 
 // ProxyAuthConfig is the saved instance override; follow leaves subscription users unchanged.

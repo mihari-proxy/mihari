@@ -9,6 +9,7 @@ import (
 
 type authCLIClient struct {
 	RuntimeClient
+	users      []protocol.ProxyAuthUser
 	config     protocol.ProxyAuthConfig
 	reads      int
 	lastReveal bool
@@ -18,7 +19,7 @@ type authCLIClient struct {
 func (c *authCLIClient) ProxyAuth(_ context.Context, reveal bool) (protocol.ProxyAuthStatus, error) {
 	c.reads++
 	c.lastReveal = reveal
-	return protocol.ProxyAuthStatus{Config: c.config, Revision: 3}, nil
+	return protocol.ProxyAuthStatus{Config: c.config, Users: c.users, Revision: 3}, nil
 }
 func (c *authCLIClient) UpdateProxyAuth(_ context.Context, r protocol.ProxyAuthUpdateRequest) (protocol.ProxyAuthStatus, error) {
 	c.last = r
@@ -59,5 +60,19 @@ func TestProxyAuthCLI_RevealsInactiveSavedCredential(t *testing.T) {
 	root.SetOut(&out)
 	if err := root.ExecuteContext(t.Context()); err != nil || !c.lastReveal || !bytes.Contains(out.Bytes(), []byte("fixture-secret")) {
 		t.Fatalf("inactive saved credential cannot be revealed: %v", err)
+	}
+}
+
+func TestProxyAuthCLI_StatusNamesTheFragmentSource(t *testing.T) {
+	c := &authCLIClient{users: []protocol.ProxyAuthUser{{Username: "alice", Source: "subscription", BaseSource: "Office"}}}
+	root := newRoot(Dependencies{RuntimeClient: c}, &runOptions{})
+	root.SetArgs([]string{"proxy-auth", "status"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	if err := root.ExecuteContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out.Bytes(), []byte(`fragment "Office"`)) {
+		t.Fatalf("missing fragment source: %s", out.String())
 	}
 }

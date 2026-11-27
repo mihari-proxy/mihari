@@ -103,7 +103,7 @@ func TestProxyAuthPreview_DraftFailuresKeepSpecificInvalidArgumentReasons(t *tes
 
 func TestProxyAuthPreview_FollowPreservesNativeFieldShape(t *testing.T) {
 	base := subscription.Document{"authentication": nil, "skip-auth-prefixes": map[string]any{"fixture": "native-value"}}
-	lines, err := authPreviewLines(base, protocol.ProxyAuthConfig{Mode: "follow", BypassMode: "follow"}, false)
+	lines, err := authPreviewLines(base, protocol.ProxyAuthConfig{Mode: "follow", BypassMode: "follow"}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestProxyAuthPreview_FollowPreservesNativeFieldShape(t *testing.T) {
 func TestProxyAuthPreview_DefaultMasksNativeAuthenticationValuesAndMetadata(t *testing.T) {
 	base := subscription.Document{"authentication": []any{map[string]any{"username": "fixture", "password": "map-password-fixture"}, 123456, "opaque-native-secret", "valid:string-secret"}}
 	for _, reveal := range []bool{false, true} {
-		entries, err := authPreviewLines(base, protocol.ProxyAuthConfig{Mode: "follow", BypassMode: "follow"}, reveal)
+		entries, err := authPreviewLines(base, protocol.ProxyAuthConfig{Mode: "follow", BypassMode: "follow"}, reveal, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

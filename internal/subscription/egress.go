@@ -3,20 +3,22 @@ package subscription
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
 // applyEgress edits only the cloned effective configuration. Native proxy-chain
 // and DNS proxy selection retain their meaning; automatic leaves them untouched.
-func applyEgress(document Document, name string) error {
+func applyEgress(document Document, name string, sources map[string]string) error {
 	if name == "" {
 		return nil
 	}
 	document["interface-name"] = name
+	sources["interface-name"] = "Mihari"
 	proxyNames := map[string]bool{"DIRECT": true, "REJECT": true, "REJECT-DROP": true, "PASS": true, "PASS-RULE": true, "GLOBAL": true, "COMPATIBLE": true, "RULES": true}
 	for _, key := range []string{"proxies", "proxy-groups"} {
 		items, _ := document[key].([]any)
-		for _, raw := range items {
+		for i, raw := range items {
 			item := egressMapping(raw)
 			if item == nil {
 				continue
@@ -26,11 +28,12 @@ func applyEgress(document Document, name string) error {
 			}
 			if key == "proxies" {
 				item["interface-name"] = name
+				sources["proxies["+strconv.Itoa(i)+"].interface-name"] = "Mihari"
 			}
 		}
 	}
 	providers := egressMapping(document["proxy-providers"])
-	for _, raw := range providers {
+	for providerName, raw := range providers {
 		provider := egressMapping(raw)
 		if provider == nil {
 			continue
@@ -41,11 +44,12 @@ func applyEgress(document Document, name string) error {
 		}
 		override["interface-name"] = name
 		provider["override"] = override
+		sources["proxy-providers."+providerName+".override.interface-name"] = "Mihari"
 	}
 	dns := egressMapping(document["dns"])
 	for _, key := range []string{"nameserver", "fallback", "default-nameserver", "proxy-server-nameserver", "direct-nameserver", "nameserver-policy"} {
 		if value, ok := dns[key]; ok {
-			rewritten, err := egressDNS(value, name, proxyNames)
+			rewritten, err := egressDNS(value, name, proxyNames, "dns."+key, sources)
 			if err != nil {
 				return err
 			}
@@ -55,10 +59,10 @@ func applyEgress(document Document, name string) error {
 	return nil
 }
 
-func egressDNS(value any, name string, proxies map[string]bool) (any, error) {
+func egressDNS(value any, name string, proxies map[string]bool, path string, sources map[string]string) (any, error) {
 	switch value := value.(type) {
 	case Document:
-		return egressDNS(map[string]any(value), name, proxies)
+		return egressDNS(map[string]any(value), name, proxies, path, sources)
 	case string:
 		base, fragment, ok := strings.Cut(value, "#")
 		if !ok {
@@ -85,10 +89,11 @@ func egressDNS(value any, name string, proxies map[string]bool) (any, error) {
 		// Only the last bare token is effective in mihomo's parser.
 		parts[last] = name
 		u := url.URL{Fragment: strings.Join(parts, "&")}
+		sources[path] = "Mihari"
 		return base + "#" + u.EscapedFragment(), nil
 	case []any:
 		for i, item := range value {
-			rewritten, err := egressDNS(item, name, proxies)
+			rewritten, err := egressDNS(item, name, proxies, path+"["+strconv.Itoa(i)+"]", sources)
 			if err != nil {
 				return nil, err
 			}
@@ -97,7 +102,7 @@ func egressDNS(value any, name string, proxies map[string]bool) (any, error) {
 		return value, nil
 	case map[string]any:
 		for key, item := range value {
-			rewritten, err := egressDNS(item, name, proxies)
+			rewritten, err := egressDNS(item, name, proxies, overridePath(path, key), sources)
 			if err != nil {
 				return nil, err
 			}

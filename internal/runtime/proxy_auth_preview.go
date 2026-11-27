@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/mihari-proxy/mihari/internal/config"
@@ -24,7 +26,18 @@ func (m *Manager) PreviewProxyAuth(ctx context.Context, request protocol.ProxyAu
 	generation, revision := m.currentConfigGeneration(), m.store.Load().Revision
 	m.unlock()
 	base := subscription.Document{}
-	if catalog.ActiveID != "" {
+	var sources map[string]string
+	if settings.Overrides != nil {
+		var err error
+		base, err = m.catalogSourceDocument(catalog)
+		if err != nil {
+			return protocol.ProxyAuthPreview{}, err
+		}
+		sources, err = subscription.ApplyConfigOverrides(base, settings.Overrides)
+		if err != nil {
+			return protocol.ProxyAuthPreview{}, err
+		}
+	} else if catalog.ActiveID != "" {
 		profileGeneration := uint64(0)
 		if index := catalog.Index(catalog.ActiveID); index >= 0 {
 			profileGeneration = catalog.Profiles[index].Generation
@@ -47,11 +60,11 @@ func (m *Manager) PreviewProxyAuth(ctx context.Context, request protocol.ProxyAu
 	if err := config.ValidateProxyAuth(draft); err != nil {
 		return protocol.ProxyAuthPreview{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: err.Error()}, err)
 	}
-	before, err := authPreviewLines(base, old, request.Reveal)
+	before, err := authPreviewLines(base, old, request.Reveal, sources)
 	if err != nil {
 		return protocol.ProxyAuthPreview{}, err
 	}
-	after, err := authPreviewLines(base, draft, request.Reveal)
+	after, err := authPreviewLines(base, draft, request.Reveal, sources)
 	if err != nil {
 		if errors.Is(err, subscription.ErrProxyAuthNoUsers) {
 			return protocol.ProxyAuthPreview{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeInvalidArgument, Message: err.Error()}, err)
@@ -73,6 +86,7 @@ func resolveProxyAuthPasswords(draft, saved protocol.ProxyAuthConfig) protocol.P
 	draft.Users = append([]protocol.ProxyAuthUser{}, draft.Users...)
 	for i := range draft.Users {
 		draft.Users[i].Source = ""
+		draft.Users[i].BaseSource = ""
 		if draft.Users[i].Password == "" {
 			for _, old := range saved.Users {
 				if old.Username == draft.Users[i].Username {
@@ -90,20 +104,23 @@ type authPreviewEntry struct {
 	line     protocol.ProxyAuthPreviewLine
 }
 
-func authPreviewLines(base subscription.Document, auth protocol.ProxyAuthConfig, reveal bool) ([]authPreviewEntry, error) {
+func authPreviewLines(base subscription.Document, auth protocol.ProxyAuthConfig, reveal bool, sources map[string]string) ([]authPreviewEntry, error) {
 	document := subscription.Document{}
 	for key, value := range base {
 		document[key] = value
 	}
-	if _, err := subscription.ApplyProxyAuth(document, auth); err != nil {
+	lineSources := make(map[string]string, len(sources))
+	maps.Copy(lineSources, sources)
+	if _, err := subscription.ApplyProxyAuthWithSources(document, auth, lineSources); err != nil {
 		return nil, err
 	}
 	var result []authPreviewEntry
 	for _, field := range []string{"authentication", "skip-auth-prefixes"} {
+		fieldSource := lineSources[field]
 		value, exists := document[field]
 		if !exists {
 			text := "# " + field + ": not set"
-			result = append(result, authPreviewEntry{identity: text, line: protocol.ProxyAuthPreviewLine{Text: text, Field: field}})
+			result = append(result, authPreviewEntry{identity: text, line: protocol.ProxyAuthPreviewLine{Text: text, Field: field, Source: fieldSource}})
 			continue
 		}
 		var node yaml.Node
@@ -117,12 +134,16 @@ func authPreviewLines(base subscription.Document, auth protocol.ProxyAuthConfig,
 			}
 			for _, part := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
 				text := part
-				result = append(result, authPreviewEntry{identity: text, line: protocol.ProxyAuthPreviewLine{Text: text, Field: field}})
+				result = append(result, authPreviewEntry{identity: text, line: protocol.ProxyAuthPreviewLine{Text: text, Field: field, Source: fieldSource}})
 			}
 			continue
 		}
-		result = append(result, authPreviewEntry{identity: field + ":", line: protocol.ProxyAuthPreviewLine{Text: field + ":", Field: field}})
-		for _, item := range node.Content {
+		result = append(result, authPreviewEntry{identity: field + ":", line: protocol.ProxyAuthPreviewLine{Text: field + ":", Field: field, Source: fieldSource}})
+		for i, item := range node.Content {
+			source := lineSources[field+"["+strconv.Itoa(i)+"]"]
+			if source == "" && field == "skip-auth-prefixes" && fieldSource == "Authentication form" {
+				source = fieldSource
+			}
 			// Quote scalar strings so credentials and control characters remain a
 			// single YAML line; the UI additionally escapes terminal controls.
 			if item.Kind == yaml.ScalarNode && item.Tag == "!!str" {
@@ -164,7 +185,7 @@ func authPreviewLines(base subscription.Document, auth protocol.ProxyAuthConfig,
 				if i == 0 {
 					prefix = "  - "
 				}
-				result = append(result, authPreviewEntry{identity: fmt.Sprintf("%s:%d", identity, i), line: protocol.ProxyAuthPreviewLine{Text: prefix + part, Field: field, Target: target}})
+				result = append(result, authPreviewEntry{identity: fmt.Sprintf("%s:%d", identity, i), line: protocol.ProxyAuthPreviewLine{Text: prefix + part, Field: field, Target: target, Source: source}})
 			}
 		}
 	}

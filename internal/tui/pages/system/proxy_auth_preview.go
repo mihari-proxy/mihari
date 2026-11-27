@@ -147,6 +147,30 @@ func (m *Model) loadAuthPreview(due authPreviewDueMsg) tea.Cmd {
 		return nil
 	}
 	request := protocol.ProxyAuthPreviewRequest{Config: m.authPreviewDraft(), Reveal: a.reveal}
+	if a.previewFull {
+		general, ok := m.client.(overrideClient)
+		if !ok {
+			return nil
+		}
+		ctx, cancel := context.WithCancel(m.ctx)
+		a.previewCancel = cancel
+		return func() tea.Msg {
+			defer cancel()
+			value, err := loadOverridePreview(ctx, general, protocol.ConfigOverridesPreviewRequest{Category: "auth", Authentication: &request.Config, Full: true, Reveal: request.Reveal})
+			preview := protocol.ProxyAuthPreview{Revision: value.Revision, ActiveID: value.ActiveID}
+			for _, line := range value.Lines {
+				change := line.Change
+				switch change {
+				case "added":
+					change = "+"
+				case "removed":
+					change = "-"
+				}
+				preview.Lines = append(preview.Lines, protocol.ProxyAuthPreviewLine{Text: line.Text, Field: line.Field, Target: line.Target, Change: change, Source: line.Source})
+			}
+			return ui.PageResultMsg{Page: ui.PageSystem, Result: authPreviewResultMsg{epoch: due.epoch, sequence: due.sequence, reveal: request.Reveal, value: preview, err: err}}
+		}
+	}
 	ctx, cancel := context.WithTimeout(m.ctx, 15*time.Second)
 	a.previewCancel = cancel
 	return func() tea.Msg {
@@ -178,6 +202,12 @@ func (m *Model) handleAuthPreview(result authPreviewResultMsg) {
 
 func (m *Model) updateAuth(message tea.Msg) tea.Cmd {
 	a := &m.auth
+	if key, ok := message.(tea.KeyPressMsg); ok && key.String() == "ctrl+o" && m.hasCapability(protocol.CapabilityConfigOverrides) && a.loaded && !a.exitOpen && !a.pending {
+		a.previewFull = !a.previewFull
+		a.preview.Lines = nil
+		a.previewTop = 0
+		return m.scheduleAuthPreview()
+	}
 	if key, ok := message.(tea.KeyPressMsg); ok && a.edit == "" && a.picker == "" && !a.exitOpen && a.loaded && !a.pending {
 		if key.String() == "tab" || key.String() == "shift+tab" {
 			a.previewFocus = !a.previewFocus
@@ -251,9 +281,9 @@ func (m *Model) authPreviewSelected(line protocol.ProxyAuthPreviewLine) bool {
 }
 
 type authPreviewRenderKey struct {
-	width, height, top                             int
-	pending, focused, reveal, manual, disabledNote bool
-	err, activeID, focus                           string
+	width, height, top                                   int
+	pending, focused, reveal, manual, disabledNote, full bool
+	err, activeID, focus                                 string
 }
 
 func (m *Model) authPreviewLines(width, height int) []string {
@@ -265,7 +295,7 @@ func (m *Model) authPreviewLines(width, height int) []string {
 	case "prefix":
 		focus = "prefix:" + a.inputs[0].Value() + "\x00" + a.original
 	}
-	key := authPreviewRenderKey{width: width, height: height, top: a.previewTop, pending: a.previewPending, focused: a.previewFocus, reveal: a.reveal, manual: a.previewManual, disabledNote: a.draft.Mode == "disabled" && a.selected > 0, err: a.previewErr, activeID: a.preview.ActiveID, focus: focus}
+	key := authPreviewRenderKey{full: a.previewFull, width: width, height: height, top: a.previewTop, pending: a.previewPending, focused: a.previewFocus, reveal: a.reveal, manual: a.previewManual, disabledNote: a.draft.Mode == "disabled" && a.selected > 0, err: a.previewErr, activeID: a.preview.ActiveID, focus: focus}
 	sameSource := len(a.previewRenderSource) == len(a.preview.Lines) && (len(a.preview.Lines) == 0 || &a.previewRenderSource[0] == &a.preview.Lines[0])
 	if a.previewRendered != nil && sameSource && key == a.previewRenderKey {
 		return a.previewRendered
@@ -279,6 +309,9 @@ func (m *Model) authPreviewLines(width, height int) []string {
 func (m *Model) renderAuthPreviewLines(width, height int) []string {
 	a := &m.auth
 	header := "Preview only"
+	if a.previewFull {
+		header = "Full preview"
+	}
 	if a.previewPending {
 		header += " · updating"
 	} else if a.previewErr != "" {
@@ -320,7 +353,11 @@ func (m *Model) renderAuthPreviewLines(width, height int) []string {
 		}
 		selected := m.authPreviewSelected(line)
 		start := len(body)
-		for _, part := range strings.Split(ansi.Hardwrap(diagnostics.EscapeTerminal(line.Text), max(1, width-2), true), "\n") {
+		text := diagnostics.EscapeTerminal(line.Text)
+		if line.Source != "" {
+			text += "  # " + diagnostics.EscapeTerminal(line.Source)
+		}
+		for _, part := range strings.Split(ansi.Hardwrap(text, max(1, width-2), true), "\n") {
 			text := mark + part
 			if line.Change == "+" {
 				text = m.theme.Success.Render(text)
@@ -337,6 +374,9 @@ func (m *Model) renderAuthPreviewLines(width, height int) []string {
 		if selected && selectedStart < 0 {
 			selectedStart, selectedEnd = start, len(body)
 		}
+	}
+	if m.hasCapability(protocol.CapabilityConfigOverrides) && !a.previewFull {
+		body = append(body, m.theme.Muted.Render("…"))
 	}
 	body = append(body, "")
 	for _, part := range strings.Split(ansi.Wrap("+ added · - removed · focused parameter shaded", max(1, width), ""), "\n") {

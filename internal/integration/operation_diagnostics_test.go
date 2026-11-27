@@ -139,6 +139,7 @@ func TestOperationDiagnosticsIPC_CommittedWarningPreservesSuccess(t *testing.T) 
 }
 
 type operationDiagnosticsIPCFixture struct {
+	endpoint   string
 	client     *controlclient.Client
 	manager    *runtime.Manager
 	saver      *ipcSettingsSaver
@@ -202,7 +203,8 @@ func newOperationDiagnosticsIPCFixture(t *testing.T, result config.CommitResult,
 		Transport: responses.Wrap(clientTransport), Timeout: 10 * time.Second,
 	})
 	fixture := &operationDiagnosticsIPCFixture{
-		client: client, manager: manager, saver: saver, daemonLogs: daemonLogs, clientLogs: clientLogs, responses: responses,
+		endpoint: endpoint,
+		client:   client, manager: manager, saver: saver, daemonLogs: daemonLogs, clientLogs: clientLogs, responses: responses,
 		cancel: cancel, done: done,
 	}
 	t.Cleanup(func() { fixture.close(t) })

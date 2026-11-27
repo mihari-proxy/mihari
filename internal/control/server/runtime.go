@@ -21,7 +21,7 @@ import (
 	"github.com/mihari-proxy/mihari/internal/state"
 )
 
-const maxControlBodySize = 1 << 20
+const maxControlBodySize = protocol.MaxControlRequestBytes
 
 const (
 	defaultDelayTestURL   = "https://www.gstatic.com/generate_204"
@@ -95,6 +95,7 @@ func (s *Server) runtimeRoutes(mux *http.ServeMux) {
 	s.routingRoutes(mux)
 	s.egressRoutes(mux)
 	s.proxyAuthRoutes(mux)
+	s.configOverridesRoutes(mux)
 	s.dataResetRoutes(mux)
 	s.webGUIRoutes(mux)
 	s.serviceRoutes(mux)

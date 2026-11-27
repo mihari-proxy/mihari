@@ -1821,3 +1821,28 @@ func (p *loggingResultRecordingPage) Update(message tea.Msg) (ui.Page, tea.Cmd) 
 	}
 	return p, nil
 }
+
+func TestModel_OverrideDisconnectReleasesKeyboard(t *testing.T) {
+	m := NewModel()
+	m.active = ui.PageSystem
+	m.status = protocol.Status{PID: 10, Capabilities: []string{protocol.CapabilityConfigOverrides}}
+	m.mutationsEnabled = true
+	m.syncSystem()
+	page := m.pages[ui.PageSystem].(*systempage.Model)
+	for i := 0; i < 12 && !page.HasInputDialog(); i++ {
+		page.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		if !page.HasInputDialog() {
+			page.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+			page.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		}
+	}
+	if !page.HasInputDialog() {
+		t.Fatal("failed to enter Configuration Overrides")
+	}
+	m.inputMode = ui.InputText
+	m.mutationsEnabled = false
+	m.syncSystem()
+	if m.inputMode != ui.InputNavigation {
+		t.Fatal("closed override page still owns keyboard")
+	}
+}

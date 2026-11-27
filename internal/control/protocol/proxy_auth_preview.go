@@ -14,6 +14,8 @@ type ProxyAuthPreviewLine struct {
 	Text   string `json:"text"`
 	Field  string `json:"field"`
 	Target string `json:"target,omitempty"`
+	// Source names a contributing fragment or the authentication form.
+	Source string `json:"source,omitempty"`
 	Change string `json:"change,omitempty"`
 }
 

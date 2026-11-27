@@ -320,18 +320,37 @@ Mihari 是一个独立项目,与 mihomo 项目或 MetaCubeX 无关联,也不受�
 
 [![Star History Chart](https://api.star-history.com/chart?repos=mihari-proxy/mihari&type=date&legend=bottom-right)](https://www.star-history.com/?repos=mihari-proxy%2Fmihari&type=date&legend=bottom-right)
 
+## 配置覆写
+
+进入 **System → Configuration Overrides**，选择 Authentication、DNS 或 YAML 片段。Authentication 与 **Ports & Authentication** 共用同一个编辑器。订阅缺少 DNS 时，可将 `enable` 设为开启，填写 `nameserver`，查看右侧 DNS 配置后保存。其余六项为 `ipv6`、`enhanced-mode`、`default-nameserver`、`proxy-server-nameserver`、`respect-rules`、`fallback`。每项均可沿用已有配置；列表还可替换、追加、按值移除或删除整个字段。
+
+启用的 YAML 片段按列表顺序作用于当前订阅，再应用显式填写的表单和 Mihari 托管设置。新增或从文件导入片段后可编辑原文，保存时统一应用整份列表。普通映射递归合并，列表和标量整体替换。下面的片段保留其他 DNS 字段，替换域名策略表，再依书写顺序调整解析器列表。
+
+```yaml
+dns:
+  nameserver-policy!:
+    "+.corp.example": 10.0.0.53
+  nameserver-: [8.8.8.8]
+  +nameserver: [1.1.1.1]
+  nameserver+: [9.9.9.9]
+```
+
+`key-: [A]` 移除所有完全匹配的 A，`key!: []` 清空列表并保留键，`key-: null` 删除整个键。递归合并时可写 `"<+.corp.example>"` 表示完整域名键，整块替换的值直接使用原生 YAML。mixed 监听设置、controller 与 secret、路由模式、日志级别及外部 UI 设置由 Mihari 管理，片段写入这些字段时会提示具体键名。
+
+**Ctrl+O** 切换相关字段和完整候选预览，**Ctrl+R** 切换认证密码显隐。保存失败保留上一份有效配置。刷新或切换订阅、重启后都会重新应用已保存的实例覆写。降级到不支持 `config-overrides` 的版本前，清空 DNS 表单并删除全部片段，包括停用的片段。
+
 ## 代理认证与业务数据重置
 
 Proxy Authentication 使用带边框的弹窗：左侧调整参数，右侧只读预览生成配置中的 `authentication` 和 `skip-auth-prefixes`。模式说明为英文浅灰色。输入时实时更新，当前参数影响的行高亮，`+`/`−` 标记相对已保存设置的变化。密码默认遮罩，Ctrl+R 主动显示；Tab 切换两侧焦点，方向键和 PgUp/PgDn 滚动预览，窄窗口上下排列。预览不保存、不重载配置；直接编辑配置请在 Subscriptions 使用本地 YAML 文件。预览需要 daemon 提供 `proxy-auth-preview-v1` 能力。
 
-Authentication mode 和 Bypass mode 默认只显示当前值，Enter 展开全部模式及独立说明，Enter 确认，Esc 收起且不更改草稿。弹窗按内容确定高度，空间不足时滚动。用户来源明确区分当前订阅名称（名称不可用时明确显示 ID）、Mihari 为订阅用户设置的密码覆盖、Mihari 新增用户；移除密码覆盖会恢复订阅密码。Local bypass 表示允许回环地址客户端免认证连接，标题下第一行解释含义，第二行列出 `127.0.0.0/8` 和 `::1/128`。不生效时仍展示 Local bypass 和额外 CIDR，并说明原因；认证未关闭且选择 Custom 后才能编辑。
+Authentication mode 和 Bypass mode 默认只显示当前值，Enter 展开全部模式及独立说明，Enter 确认，Esc 收起且不更改草稿。弹窗按内容确定高度，空间不足时滚动。用户来源明确区分当前订阅名称（名称不可用时明确显示 ID）、Mihari 为订阅用户设置的密码覆盖、Mihari 新增用户；移除密码覆盖会恢复该用户从订阅或片段继承的密码。Local bypass 表示允许回环地址客户端免认证连接，标题下第一行解释含义，第二行列出 `127.0.0.0/8` 和 `::1/128`。不生效时仍展示 Local bypass 和额外 CIDR，并说明原因；认证未关闭且选择 Custom 后才能编辑。
 
 新增用户、编辑密码或编辑绕过 CIDR 时，Esc 仅取消当前编辑并返回认证参数。返回参数页后，有未保存改动时再按 Esc 才弹出 Save / Discard / Keep editing，默认继续编辑；保存失败会保留草稿。Cancel 和 Save 位于 Reset authentication 下方，Esc / Ctrl+S 使用独立浅灰提示；保存期间 Ctrl+S 提示替换为动态 Saving badge。错误 badge 位于标题右侧，详情在标题下换行显示，完整诊断仍可通过 F2 查看。字符输入保持本地即时更新，预览合并 300ms 内的连续输入；daemon 按已提交订阅 generation 复用仅含认证字段的快照，TUI 复用弹窗背景和未变化的 YAML 渲染结果。弹窗打开期间，暗化的 System 背景保持为打开时的快照；调整窗口大小时按当前状态重建，返回 System 后也显示当前状态。
 
-入口为 **System → Ports & Authentication → Proxy Authentication**，CLI 为 `mihari proxy-auth`。认证支持沿用订阅（follow）、启用（enabled）和关闭（disabled）。启用时按用户名精确匹配合并订阅和实例用户：新增用户追加，同名覆盖密码；移除覆盖恢复订阅密码。排除订阅用户留待 #357。
+入口为 **System → Ports & Authentication → Proxy Authentication**，CLI 为 `mihari proxy-auth`。认证支持沿用订阅和启用片段的结果（follow）、启用（enabled）和关闭（disabled）。启用时按用户名精确匹配合并订阅和实例用户：新增用户追加，同名覆盖密码；移除覆盖恢复继承的密码。排除订阅用户留待 #357。
 
-免认证支持沿用订阅（follow）、自定义（custom）和全部要求认证（required）。自定义提供本机回环免认证开关及额外 CIDR；额外 CIDR 不允许与 IPv4/IPv6 回环范围重叠。这不会改变监听地址或开放局域网访问。关闭认证仍保留已编辑凭据。保存后热重载，不重启 mihomo，也不主动断开已有连接。未获免认证的客户端需要提供代理用户名密码，使用系统代理的应用同样如此。
+免认证支持沿用订阅和启用片段的结果（follow）、自定义（custom）和全部要求认证（required）。自定义提供本机回环免认证开关及额外 CIDR；额外 CIDR 不允许与 IPv4/IPv6 回环范围重叠。这不会改变监听地址或开放局域网访问。关闭认证仍保留已编辑凭据。保存后热重载，不重启 mihomo，也不主动断开已有连接。未获免认证的客户端需要提供代理用户名密码，使用系统代理的应用同样如此。
 
 密码默认遮罩，仅通过认证本地 IPC 的显式操作查看。CLI 支持隐藏终端输入或 `--password-stdin`，不提供密码命令行参数。非默认 `proxy-auth` 设置需要支持此功能的版本；降级前执行 `mihari proxy-auth reset --yes` 移除该设置块，并先完成未结束的业务数据重置与 Setup。
 
-**Reset Proxy Authentication** 只清除实例代理凭据及免认证覆盖，恢复订阅认证。**System → Maintenance → Reset Mihari Data** 清除业务设置、订阅及缓存、生成配置、节点选择缓存和该实例的偏好存储，保留程序、系统服务、已下载内核/面板/GeoIP、日志与导出、本地控制凭据及未知文件。全量重置先预览精确文件，再确认两次；更新 Controller/Web 凭据，停止代理和 Web gateway，并返回 Setup。需要重启 daemon 以绑定新的端口和凭据；完成 Setup 前不自动启动内核。中断清理由持久标记保护，在启动打开业务存储前继续完成。启动降级时只开放受限本地重置操作，不启动未校验的内核。
+**Reset Proxy Authentication** 只清除实例代理凭据及免认证覆盖，恢复沿用已有的认证设置，包括已启用片段提供的认证。**System → Maintenance → Reset Mihari Data** 清除业务设置、订阅及缓存、生成配置、节点选择缓存和该实例的偏好存储，保留程序、系统服务、已下载内核/面板/GeoIP、日志与导出、本地控制凭据及未知文件。全量重置先预览精确文件，再确认两次；更新 Controller/Web 凭据，停止代理和 Web gateway，并返回 Setup。需要重启 daemon 以绑定新的端口和凭据；完成 Setup 前不自动启动内核。中断清理由持久标记保护，在启动打开业务存储前继续完成。启动降级时只开放受限本地重置操作，不启动未校验的内核。

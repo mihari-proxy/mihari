@@ -44,7 +44,7 @@ func EditTextField(value string, cursor int, message tea.Msg, maxRunes int) (str
 	case ClipboardPasteMsg:
 		return insertLimited(value, cursor, sanitizePaste(msg.Text), maxRunes)
 	case tea.KeyPressMsg:
-		if isPasteKey(msg) {
+		if IsPasteKey(msg) {
 			return value, cursor, true, ReadClipboard
 		}
 		switch msg.String() {
@@ -93,7 +93,7 @@ func IsTextEditMsg(message tea.Msg) bool {
 	case tea.PasteMsg, ClipboardPasteMsg:
 		return true
 	case tea.KeyPressMsg:
-		if isPasteKey(msg) {
+		if IsPasteKey(msg) {
 			return true
 		}
 		switch msg.String() {
@@ -106,7 +106,8 @@ func IsTextEditMsg(message tea.Msg) bool {
 	return false
 }
 
-func isPasteKey(msg tea.KeyPressMsg) bool {
+// IsPasteKey recognizes Ctrl+V with either text or modifier-based terminal encoding.
+func IsPasteKey(msg tea.KeyPressMsg) bool {
 	if msg.String() == "ctrl+v" {
 		return true
 	}

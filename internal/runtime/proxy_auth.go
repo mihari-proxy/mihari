@@ -2,14 +2,10 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"github.com/mihari-proxy/mihari/internal/config"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
-	"github.com/mihari-proxy/mihari/internal/diagnostics"
 	"github.com/mihari-proxy/mihari/internal/state"
 	"github.com/mihari-proxy/mihari/internal/subscription"
-	"reflect"
-	"time"
 )
 
 // ProxyAuth returns effective users; only explicit reveal reads include passwords.
@@ -28,27 +24,17 @@ func (m *Manager) ProxyAuth(ctx context.Context, reveal bool) (protocol.ProxyAut
 	return status, nil
 }
 
-func (m *Manager) proxyAuthDocument() (subscription.Document, error) {
-	document := subscription.Document{}
-	catalog := m.loggingCatalog()
-	if catalog.ActiveID != "" {
-		_, base, err := m.subscriptions.ReadCache(catalog.ActiveID)
-		if err != nil {
-			return nil, err
-		}
-		for k, v := range base {
-			document[k] = v
-		}
-	}
-	return document, nil
-}
 func (m *Manager) proxyAuthStatus(settings config.Settings, reveal bool) (protocol.ProxyAuthStatus, error) {
 	auth := settings.EffectiveProxyAuth()
-	document, err := m.proxyAuthDocument()
+	document, err := m.catalogSourceDocument(m.loggingCatalog())
 	if err != nil {
 		return protocol.ProxyAuthStatus{}, err
 	}
-	users, err := subscription.ApplyProxyAuth(document, auth)
+	sources, err := subscription.ApplyConfigOverrides(document, settings.Overrides)
+	if err != nil {
+		return protocol.ProxyAuthStatus{}, err
+	}
+	users, err := subscription.ApplyProxyAuthWithSources(document, auth, sources)
 	if err != nil {
 		return protocol.ProxyAuthStatus{}, err
 	}
@@ -110,19 +96,7 @@ func (m *Manager) UpdateProxyAuth(ctx context.Context, op Operation, request pro
 			}
 			return m.committedProxyAuthStatus(ctx, candidate.after)
 		}
-		if err := m.lockMutation(ctx); err != nil {
-			return nil, err
-		}
-		owned := true
-		defer func() {
-			if owned {
-				m.unlock()
-			}
-		}()
-		if err := m.checkIfRevision(op.IfRevision); err != nil {
-			return nil, err
-		}
-		candidate, err := m.prepareSettings(func(s *config.Settings) error {
+		update := func(s *config.Settings) error {
 			if request.Reset {
 				s.ProxyAuth = nil
 				return nil
@@ -130,98 +104,13 @@ func (m *Manager) UpdateProxyAuth(ctx context.Context, op Operation, request pro
 			auth := resolveProxyAuthPasswords(request.Config, s.EffectiveProxyAuth())
 			s.SetProxyAuth(auth)
 			return nil
+		}
+		return m.applyGeneratedSettings(ctx, op, "proxy-auth", update, func(settings config.Settings, committed bool) (any, error) {
+			if !committed {
+				return m.proxyAuthStatus(settings, false)
+			}
+			return m.committedProxyAuthStatus(ctx, settings)
 		})
-		if err != nil {
-			return nil, err
-		}
-		if !candidate.changed {
-			return m.proxyAuthStatus(candidate.after, false)
-		}
-		if _, err := m.proxyAuthStatus(candidate.after, false); err != nil {
-			return nil, err
-		}
-		catalog, epoch := m.loggingCatalog(), m.coreEpoch
-		hash, err := m.loggingCacheHash(catalog.ActiveID)
-		if err != nil {
-			return nil, err
-		}
-		stopped := m.routingCoreStopped()
-		if !stopped && m.store.Load().Core.Status != "running" {
-			return nil, protocol.APIError{Code: protocol.CodeInvalidState, Message: "core is not ready for authentication changes"}
-		}
-		m.unlock()
-		owned = false
-		var generated configCandidate
-		if stopped && !m.binaryExists() {
-			document, e := m.proxyAuthDocument()
-			if e != nil {
-				return nil, e
-			}
-			_, err = subscription.Generate(document, nil, candidate.after)
-		} else {
-			generated, err = m.prepareCatalogConfigWithSettings(ctx, catalog, candidate.after, candidate.generation)
-		}
-		if err != nil {
-			return nil, err
-		}
-		defer func() { collectWarning(ctx, "proxy-auth", "candidate.cleanup.failed", generated.cleanup()) }()
-		if err := m.lockMutation(ctx); err != nil {
-			return nil, err
-		}
-		owned = true
-		newHash, err := m.loggingCacheHash(catalog.ActiveID)
-		if err != nil {
-			return nil, err
-		}
-		if hash != newHash || candidate.generation != m.currentConfigGeneration() || epoch != m.coreEpoch || !reflect.DeepEqual(catalog, m.loggingCatalog()) || stopped != m.routingCoreStopped() {
-			return nil, routingConflict()
-		}
-		if err := m.checkIfRevision(op.IfRevision); err != nil {
-			return nil, err
-		}
-		var previous []byte
-		if !stopped {
-			if m.loggingUnsaved {
-				return nil, loggingCoreError("save the observed core logging level before reloading configuration", nil)
-			}
-			previous, err = m.egressPreviousConfig(ctx)
-			if err != nil {
-				return nil, err
-			}
-			if err = m.commitRuntimeConfig(ctx, generated); err != nil {
-				m.markConfigDegraded(ctx, err)
-				return nil, err
-			}
-			// Reload may publish a restored GLOBAL selection. Retain that result.
-			next := candidate.after.ProxyAuth
-			candidate, err = m.prepareSettings(func(s *config.Settings) error { s.ProxyAuth = next; return nil })
-			if err != nil {
-				return nil, err
-			}
-		}
-		if _, err = m.saveSettingsCandidate(ctx, candidate); err != nil {
-			if !stopped {
-				recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-				defer cancel()
-				if restoreErr := m.restoreRoutingConfig(recovery, previous); restoreErr != nil {
-					m.mutationDegraded.Store(true)
-					m.stopCoreOnUnlock.Store(true)
-					err = diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "proxy authentication recovery failed; restart required", Details: map[string]any{"degraded": true}}, errors.Join(err, restoreErr))
-					m.markConfigDegraded(recovery, err)
-				}
-			}
-			return nil, err
-		}
-		m.publishSettings(candidate)
-		if _, err = m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{ID: op.ID, Source: op.Source}, func(s state.Snapshot) (state.Snapshot, error) {
-			if !stopped {
-				markConfigApplied(&s)
-			}
-			return s, nil
-		}); err != nil {
-			return nil, err
-		}
-		return m.committedProxyAuthStatus(ctx, candidate.after)
 	})
 	if err != nil {
 		return protocol.ProxyAuthStatus{}, err

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/diagnostics"
+	"strconv"
 	"strings"
 )
 
@@ -77,4 +78,57 @@ func ApplyProxyAuth(document Document, auth protocol.ProxyAuthConfig) ([]protoco
 
 func authError(message string) protocol.APIError {
 	return protocol.APIError{Code: protocol.CodeDataFailure, Message: message}
+}
+
+// ApplyProxyAuthWithSources resolves users and bypasses against the fragment
+// result, retaining the origin of each inherited username and final YAML line.
+func ApplyProxyAuthWithSources(document Document, auth protocol.ProxyAuthConfig, sources map[string]string) ([]protocol.ProxyAuthUser, error) {
+	raw, _ := document["authentication"].([]any)
+	users, err := ApplyProxyAuth(document, auth)
+	if err != nil || sources == nil {
+		return users, err
+	}
+	const source = "Authentication form"
+	inputSources := make(map[string]string, len(users))
+	for i, item := range raw {
+		entry, ok := item.(string)
+		if username, _, found := strings.Cut(entry, ":"); ok && found {
+			inputSources[username] = sources["authentication["+strconv.Itoa(i)+"]"]
+		}
+	}
+	if auth.Mode != "follow" {
+		sources["authentication"] = source
+		for path := range sources {
+			if strings.HasPrefix(path, "authentication[") {
+				delete(sources, path)
+			}
+		}
+	}
+	for i := range users {
+		user := &users[i]
+		user.BaseSource = inputSources[user.Username]
+		if auth.Mode != "follow" {
+			label := source
+			if user.Source == "subscription" {
+				label = user.BaseSource
+			}
+			if label != "" {
+				sources["authentication["+strconv.Itoa(i)+"]"] = label
+			}
+		}
+	}
+	if auth.Mode != "disabled" && (auth.BypassMode == "custom" || auth.BypassMode == "required") {
+		sources["skip-auth-prefixes"] = source
+		for path := range sources {
+			if strings.HasPrefix(path, "skip-auth-prefixes[") {
+				delete(sources, path)
+			}
+		}
+		if list, ok := document["skip-auth-prefixes"].([]string); ok {
+			for i := range list {
+				sources["skip-auth-prefixes["+strconv.Itoa(i)+"]"] = source
+			}
+		}
+	}
+	return users, nil
 }

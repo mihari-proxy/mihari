@@ -9,12 +9,19 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+// Generate renders the effective YAML for the managed core.
 func Generate(base Document, overrides map[string]any, settings config.Settings) ([]byte, error) {
+	content, _, err := GenerateWithSources(base, overrides, settings)
+	return content, err
+}
+
+// GenerateWithSources renders the effective configuration and its field provenance.
+func GenerateWithSources(base Document, overrides map[string]any, settings config.Settings) ([]byte, map[string]string, error) {
 	if err := settings.Validate(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if settings.ControllerSecret == "" {
-		return nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "controller secret is required"}
+		return nil, nil, protocol.APIError{Code: protocol.CodeDataFailure, Message: "controller secret is required"}
 	}
 	combined := make(Document, len(base)+len(overrides))
 	for key, value := range base {
@@ -25,20 +32,32 @@ func Generate(base Document, overrides map[string]any, settings config.Settings)
 	}
 	document, err := cloneDocument(combined)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if _, err := ApplyProxyAuth(document, settings.EffectiveProxyAuth()); err != nil {
-		return nil, err
+	sources, err := ApplyConfigOverrides(document, settings.Overrides)
+	if err != nil {
+		return nil, nil, err
+	}
+	if sources == nil {
+		sources = make(map[string]string)
+	}
+	if _, err := ApplyProxyAuthWithSources(document, settings.EffectiveProxyAuth(), sources); err != nil {
+		return nil, nil, err
+	}
+	for _, key := range []string{"rules", "proxy-groups"} {
+		if list, ok := document[key].([]any); !ok || len(list) == 0 {
+			sources[key] = "Mihari"
+		}
 	}
 	ensureRoutable(document)
-	if err := applyEgress(document, settings.EgressInterface); err != nil {
-		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "generate DNS outbound interface bindings"}, err)
+	if err := applyEgress(document, settings.EgressInterface, sources); err != nil {
+		return nil, nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "generate DNS outbound interface bindings"}, err)
 	}
 	document["mode"] = settings.RoutingMode()
 	document["log-level"] = settings.CoreLoggingLevel()
 	mixed, err := netip.ParseAddrPort(settings.MixedAddr)
 	if err != nil {
-		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mixed address"}, err)
+		return nil, nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "invalid mixed address"}, err)
 	}
 	document["mixed-port"] = int(mixed.Port())
 	document["bind-address"] = mixed.Addr().String()
@@ -58,19 +77,23 @@ func Generate(base Document, overrides map[string]any, settings config.Settings)
 				err = yaml.Unmarshal(content, &tun)
 			}
 			if err != nil || tun == nil {
-				return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "tun must be a mapping"}, err)
+				return nil, nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "tun must be a mapping"}, err)
 			}
 		} else {
 			tun = make(map[string]any)
 		}
 		tun["enable"] = enable
 		document["tun"] = tun
+		sources["tun.enable"] = "Mihari"
+	}
+	for _, key := range []string{"mode", "log-level", "mixed-port", "bind-address", "allow-lan", "external-controller", "secret"} {
+		sources[key] = "Mihari"
 	}
 	content, err := yaml.Marshal(document)
 	if err != nil {
-		return nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "encode generated configuration"}, err)
+		return nil, nil, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeDataFailure, Message: "encode generated configuration"}, err)
 	}
-	return content, nil
+	return content, sources, nil
 }
 
 func cloneDocument(base Document) (Document, error) {

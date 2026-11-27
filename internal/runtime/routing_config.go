@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"os"
 	"reflect"
 	"time"
 
@@ -14,6 +13,18 @@ import (
 // mutation. The catalog already identifies the candidate subscription; the
 // caller restores it on failure. Never re-enter the coordinator here.
 func (m *Manager) commitRuntimeConfig(ctx context.Context, candidate configCandidate) error {
+	return m.commitRuntimeConfigTracked(ctx, candidate, nil)
+}
+
+type routingCheckpoint struct {
+	content []byte
+	mode    string
+	exit    string
+}
+
+// commitRuntimeConfigTracked shares the captured state with settings transactions
+// that may need to compensate a successful reload after a later persistence failure.
+func (m *Manager) commitRuntimeConfigTracked(ctx context.Context, candidate configCandidate, outer *routingCheckpoint) error {
 	if m.loggingUnsaved && ctx.Value(controlledLoggingContextKey{}) != true {
 		return loggingCoreError("save the observed core logging level before reloading configuration", nil)
 	}
@@ -21,18 +32,17 @@ func (m *Manager) commitRuntimeConfig(ctx context.Context, candidate configCandi
 		return routingConflict()
 	}
 	settings := m.settingsSnapshot()
-	if settings.Routing == nil {
+	if settings.Routing == nil && outer == nil {
 		return m.commitRuntimeConfigBytes(ctx, candidate)
 	}
-	var previous []byte
-	var err error
-	if m.trustedCore != nil {
-		previous, err = m.trustedCore.PreviousConfig(ctx)
-	} else {
-		previous, err = os.ReadFile(m.runtimeConfig)
-	}
+	previous, err := m.egressPreviousConfig(ctx)
 	if err != nil {
 		return routingUnavailable("capture configuration before routing reload", err)
+	}
+	before := routingCheckpoint{content: previous}
+	if settings.Routing == nil {
+		*outer = before
+		return m.commitRuntimeConfigBytes(ctx, candidate)
 	}
 	oldMode, err := m.observeRoutingMode(ctx)
 	if err != nil {
@@ -44,6 +54,10 @@ func (m *Manager) commitRuntimeConfig(ctx context.Context, candidate configCandi
 	if globalErr != nil {
 		return globalErr
 	}
+	before.mode, before.exit = oldMode, oldGlobal.Now
+	if outer != nil {
+		*outer = before
+	}
 	err = m.commitRuntimeConfigBytes(ctx, candidate)
 	if err == nil {
 		_, _, err = m.changeRoutingLocked(ctx, settings.RoutingMode(), "", true, false)
@@ -53,16 +67,23 @@ func (m *Manager) commitRuntimeConfig(ctx context.Context, candidate configCandi
 	}
 	recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
-	restoreErr := m.restoreRoutingConfig(recovery, previous)
-	if restoreErr == nil {
-		restoreErr = m.applyRoutingLive(recovery, oldMode, oldGlobal.Now)
-	}
+	restoreErr := m.restoreRoutingCheckpoint(recovery, before)
 	if restoreErr != nil {
 		m.mutationDegraded.Store(true)
 		m.stopCoreOnUnlock.Store(m.trustedCore != nil)
 		return degradedConfigError(err, restoreErr)
 	}
 	return err
+}
+
+func (m *Manager) restoreRoutingCheckpoint(ctx context.Context, before routingCheckpoint) error {
+	if err := m.restoreRoutingConfig(ctx, before.content); err != nil {
+		return err
+	}
+	if before.mode != "" {
+		return m.applyRoutingLive(ctx, before.mode, before.exit)
+	}
+	return nil
 }
 
 func (m *Manager) restoreRoutingConfig(ctx context.Context, content []byte) error {
