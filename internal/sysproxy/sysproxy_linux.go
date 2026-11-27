@@ -6,9 +6,12 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // gsettingsSchema is the GNOME proxy schema. Mihari drives the desktop proxy
@@ -18,7 +21,7 @@ const gsettingsSchema = "org.gnome.system.proxy"
 // enable sets the GNOME proxy to manual mode pointing at host:port for HTTP,
 // HTTPS and SOCKS.
 func enable(host string, port int) error {
-	if err := requireGsettings(); err != nil {
+	if err := requireWritableGsettings(context.Background()); err != nil {
 		return err
 	}
 	p := strconv.Itoa(port)
@@ -42,7 +45,7 @@ func enable(host string, port int) error {
 
 // disable returns the GNOME proxy to "none".
 func disable() error {
-	if err := requireGsettings(); err != nil {
+	if err := requireWritableGsettings(context.Background()); err != nil {
 		return err
 	}
 	return gsettings("set", gsettingsSchema, "mode", "none")
@@ -52,6 +55,9 @@ func disable() error {
 func get() (State, error) { return getContext(context.Background()) }
 
 func getContext(ctx context.Context) (State, error) {
+	if err := ctx.Err(); err != nil {
+		return State{}, err
+	}
 	if err := requireGsettings(); err != nil {
 		return State{}, err
 	}
@@ -84,6 +90,34 @@ func requireGsettings() error {
 		return fmt.Errorf("sysproxy: gsettings not found; system proxy is only supported on GNOME-based desktops")
 	}
 	return nil
+}
+
+// CheckWritable lets the runtime reject an unsupported mutation before saving
+// its desired state. Read-only observations do not require a writable session.
+func (PlatformBackend) CheckWritable(ctx context.Context) error { return requireWritableGsettings(ctx) }
+
+func requireWritableGsettings(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := requireGsettings(); err != nil {
+		return err
+	}
+	// Let GLib resolve explicit D-Bus addresses, including non-filesystem transports.
+	if os.Getenv("DBUS_SESSION_BUS_ADDRESS") != "" {
+		return nil
+	}
+	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
+	if !filepath.IsAbs(runtimeDir) {
+		return fmt.Errorf("sysproxy: GNOME desktop session is unavailable; system proxy requires a user session bus")
+	}
+	// A sessionless systemd service may have a runtime directory or a stale socket.
+	dialer := net.Dialer{Timeout: time.Second}
+	conn, err := dialer.DialContext(ctx, "unix", filepath.Join(runtimeDir, "bus"))
+	if err != nil {
+		return fmt.Errorf("sysproxy: GNOME desktop session is unavailable: %w", err)
+	}
+	return conn.Close()
 }
 
 // gsettings runs the tool with args, surfacing any error output.
