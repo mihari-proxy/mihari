@@ -84,13 +84,15 @@ func (m *Manager) mutateSystemProxy(ctx context.Context, op Operation, enable, f
 		}
 	}
 	writeProxy := enable || sysproxy.IsOwned(observed, target)
+	var writeCheckErr error
 	if checker, ok := m.sysProxy.(interface{ CheckWritable(context.Context) error }); ok && writeProxy {
-		if err := checker.CheckWritable(ctx); err != nil {
-			return protocol.SystemProxyStatus{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "check system proxy write availability"}, err)
-		}
+		writeCheckErr = checker.CheckWritable(ctx)
 	}
 	if err := ctx.Err(); err != nil {
 		return protocol.SystemProxyStatus{}, err
+	}
+	if writeCheckErr != nil {
+		return protocol.SystemProxyStatus{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "check system proxy write availability"}, writeCheckErr)
 	}
 
 	candidate, err := m.updateSettings(ctx, func(next *config.Settings) error {

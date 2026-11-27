@@ -97,6 +97,9 @@ func requireGsettings() error {
 func (PlatformBackend) CheckWritable(ctx context.Context) error { return requireWritableGsettings(ctx) }
 
 func requireWritableGsettings(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := requireGsettings(); err != nil {
 		return err
 	}

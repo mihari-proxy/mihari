@@ -64,6 +64,15 @@ func TestGetContext_CanceledBeforeCommandStarts(t *testing.T) {
 	}
 }
 
+func TestCheckWritable_CanceledBeforeToolLookup(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := (PlatformBackend{}).CheckWritable(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("CheckWritable returned %v, want context.Canceled", err)
+	}
+}
+
 func TestPlatformBackend_NoSessionRejectsWritesBeforeCommand(t *testing.T) {
 	root := t.TempDir()
 	marker := filepath.Join(root, "executed")

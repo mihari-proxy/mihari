@@ -253,6 +253,31 @@ func TestSystemProxyPreCommitFailureSkipsOSWriteSettings(t *testing.T) {
 	}
 }
 
+type cancelingProxyPreflight struct {
+	sysproxy.FakeBackend
+	cancel context.CancelFunc
+}
+
+func (b *cancelingProxyPreflight) CheckWritable(context.Context) error {
+	b.cancel()
+	return errors.New("session bus unavailable")
+}
+
+func TestEnableSystemProxy_CanceledDuringWriteCheck(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	backend := &cancelingProxyPreflight{cancel: cancel}
+	manager := newTestManager(Options{SysProxy: backend, Settings: defaultSysProxySettings(false)})
+	_, err := manager.EnableSystemProxy(ctx, Operation{ID: "cancel-preflight", Source: "test"}, false)
+	var api protocol.APIError
+	if !errors.Is(err, context.Canceled) || errors.As(err, &api) {
+		t.Fatalf("EnableSystemProxy returned %v, want cancellation", err)
+	}
+	if manager.settingsSnapshot().SystemProxyDesired || manager.Snapshot().Revision != 0 || backend.EnableCalls != 0 {
+		t.Fatal("canceled preflight changed proxy settings or state")
+	}
+}
+
 func TestSystemProxyConflictGatesBeforeSaveSettings(t *testing.T) {
 	tests := []struct {
 		name     string
