@@ -189,6 +189,9 @@ func unixAssembleRequest(t *testing.T) (logging.ExportRequest, string, string) {
 		t.Fatal(err)
 	}
 	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	out := filepath.Join(parent, "export.zip")
 	return logging.ExportRequest{
 		Now: time.Now(), Range: logging.ExportRange{Kind: logging.RangeAll}, OutputPath: out,

@@ -219,6 +219,16 @@ func TestExportTarget_AdvancePreservesTimezoneStemAndDetectsOverflow(t *testing.
 	}
 }
 
+// Full workspace cleanup requires a parent that other users cannot modify.
+func privateExportParent(t *testing.T) string {
+	t.Helper()
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return parent
+}
+
 func openExportTestFS(t *testing.T) (*platform.PrivateFS, ExportPaths) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "data")

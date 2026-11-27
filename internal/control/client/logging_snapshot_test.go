@@ -423,6 +423,9 @@ func newAssembleRequest(t *testing.T) (logging.ExportRequest, string, string) {
 		t.Fatal(err)
 	}
 	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	out := filepath.Join(parent, "export.zip")
 	return logging.ExportRequest{
 		Now:        time.Date(2026, 9, 5, 12, 0, 0, 0, time.FixedZone("UTC+8", 8*3600)),
