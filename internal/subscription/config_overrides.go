@@ -239,6 +239,9 @@ func mergeOverrideMapping(target map[string]any, origins *fieldOrigin, mapping *
 			value = value.Alias
 		}
 		if (operation == prependItems || operation == appendItems || operation == removeFieldOrItems) && value.Kind == yaml.SequenceNode && len(value.Content) == 0 {
+			if _, err := overrideListTarget(target, key); err != nil {
+				return false, fmt.Errorf("%s: %w", path, err)
+			}
 			continue
 		}
 		field := origins.field(key)
@@ -277,6 +280,15 @@ func mergeOverrideMapping(target map[string]any, origins *fieldOrigin, mapping *
 	return applied, nil
 }
 
+func overrideListTarget(target map[string]any, key string) ([]any, error) {
+	current, exists := target[key]
+	list, ok := current.([]any)
+	if exists && !ok {
+		return nil, errors.New("list operation requires an existing list or an absent key")
+	}
+	return list, nil
+}
+
 func applyFieldOperation(target map[string]any, origin *fieldOrigin, key string, op fieldOperation, value any, source string) error {
 	if op == mergeField || op == replaceField {
 		target[key] = value
@@ -292,12 +304,11 @@ func applyFieldOperation(target map[string]any, origin *fieldOrigin, key string,
 	if !ok {
 		return errors.New("list operation requires a list (use null to delete the field)")
 	}
-	current, exists := target[key]
-	list, ok := current.([]any)
-	if exists && !ok {
-		return errors.New("list operation requires an existing list or an absent key")
+	list, err := overrideListTarget(target, key)
+	if err != nil {
+		return err
 	}
-	if op == removeFieldOrItems && (!exists || len(values) == 0) {
+	if op == removeFieldOrItems && (list == nil || len(values) == 0) {
 		return nil
 	}
 	items := origin.items

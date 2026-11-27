@@ -283,3 +283,20 @@ func TestEmptyListAdditionLeavesContentsAndSourcesUnchanged(t *testing.T) {
 		}
 	}
 }
+
+func TestEmptyListOverrideRequiresListTarget(t *testing.T) {
+	for _, key := range []string{"hosts+", "+hosts", "hosts-"} {
+		s := testSettings()
+		s.SetOverrides(protocol.ConfigOverrides{Fragments: []protocol.OverrideFragment{{ID: "office", Name: "Office", Enabled: true, YAML: key + ": []"}}})
+		if _, err := Generate(Document{"hosts": map[string]any{"example.invalid": "127.0.0.1"}}, nil, s); err == nil || !strings.Contains(err.Error(), "hosts") {
+			t.Fatalf("%s accepted a non-list: %v", key, err)
+		}
+	}
+	for _, op := range []string{"append", "remove"} {
+		s := testSettings()
+		s.SetOverrides(protocol.ConfigOverrides{DNS: map[string]protocol.DNSFieldOverride{"fallback": {Operation: op}}})
+		if _, err := Generate(Document{"dns": map[string]any{"fallback": "invalid-shape"}}, nil, s); err == nil || !strings.Contains(err.Error(), "fallback") {
+			t.Fatalf("DNS %s accepted a non-list: %v", op, err)
+		}
+	}
+}

@@ -20,11 +20,14 @@ func applyDNSForm(document Document, origins *fieldOrigin, form map[string]proto
 
 	for _, key := range slices.Sorted(maps.Keys(form)) {
 		change := form[key]
-		if (change.Operation == "append" || change.Operation == "remove") && len(change.Servers) == 0 {
-			continue
-		}
 		if dns == nil && document["dns"] != nil {
 			return errors.New("dns must be a mapping to apply the DNS form")
+		}
+		if (change.Operation == "append" || change.Operation == "remove") && len(change.Servers) == 0 {
+			if _, err := overrideListTarget(dns, key); err != nil {
+				return fmt.Errorf("dns.%s: %w", key, err)
+			}
+			continue
 		}
 		op := replaceField
 		var value any
