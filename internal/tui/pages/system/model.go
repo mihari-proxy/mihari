@@ -342,6 +342,7 @@ type Model struct {
 	snapshotStates        map[string]ui.SnapshotState
 	sharedRefresh         func(bool) tea.Cmd
 	auth                  authUI
+	overrides             overrideUI
 	egress                egressUI
 	coreVersion           coreVersionState
 	channelDiagnostic     tea.Cmd
@@ -495,6 +496,9 @@ func (m *Model) HelpMode() string {
 	if m.auth.open {
 		return "proxy-auth"
 	}
+	if m.overrides.open {
+		return "config-overrides"
+	}
 	if m.egress.open {
 		return "egress"
 	}
@@ -517,6 +521,9 @@ func (m *Model) HelpMode() string {
 func (m *Model) FooterHints() string {
 	if m.auth.open {
 		return "Enter edit · Ctrl+S save · Esc cancel"
+	}
+	if m.overrides.open {
+		return m.overrideHint()
 	}
 	if m.egress.open {
 		return "↑/↓ select  PgUp/Dn details  Enter use  Esc close"
@@ -701,6 +708,7 @@ func (m *Model) FocusFirst() {
 
 func (m *Model) SetSnapshot(status protocol.Status, core protocol.CoreStatus) {
 	if m.status.PID != status.PID {
+		m.resetOverrides()
 		m.egress = egressUI{epoch: m.egress.epoch + 1}
 		m.auth = authUI{epoch: m.auth.epoch + 1}
 	}
@@ -750,6 +758,7 @@ func (m *Model) ApplyRootNetworkStatus(proxy protocol.SystemProxyStatus, proxyOK
 
 func (m *Model) SetMutationsEnabled(enabled bool) {
 	if m.mutationsEnabled && !enabled {
+		m.resetOverrides()
 		if m.auth.previewCancel != nil {
 			m.auth.previewCancel()
 			m.auth.previewCancel = nil
@@ -982,6 +991,13 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		}
 		m.auth = authUI{epoch: m.auth.epoch + 1}
 		return m, tea.Batch(func() tea.Msg { return ui.RuntimeRevisionMsg{Revision: typed.result.Revision} }, func() tea.Msg { return ui.RouteRequestMsg{Page: ui.PageSetup} })
+	case overrideStatusMsg:
+		return m, m.handleOverrideStatus(typed)
+	case overridePreviewMsg:
+		m.handleOverridePreview(typed)
+		return m, nil
+	case overrideImportMsg:
+		return m, m.handleOverrideImport(typed)
 	case authResultMsg:
 		return m, m.handleAuthResult(typed)
 	case authPreviewDueMsg:
@@ -1368,6 +1384,9 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 	if m.auth.open {
 		return m, m.updateAuth(message)
 	}
+	if m.overrides.open {
+		return m, m.updateOverrides(message)
+	}
 	if m.egress.open {
 		return m, m.updateEgressDialog(message)
 	}
@@ -1412,6 +1431,8 @@ func (m *Model) Update(message tea.Msg) (page ui.Page, command tea.Cmd) {
 		switch m.focusID {
 		case "data-reset":
 			return m, m.previewDataReset()
+		case "config-overrides":
+			return m, m.openOverrides()
 		case "proxy-auth":
 			return m, m.openAuth()
 		case "egress":
@@ -1576,6 +1597,9 @@ func (m *Model) View() (view string) {
 }
 
 func (m *Model) systemView() (view string) {
+	if m.overrides.open {
+		return m.overrideView()
+	}
 	defer func() {
 		if m.egress.open {
 			view = ui.CenterOverlay(m.theme, view, m.egressDialogView(), m.width, m.height)
@@ -1719,6 +1743,9 @@ func (m *Model) rows() []row {
 	core := fmt.Sprintf("Status %s\nVersion %s\nPID %d\nRestarts %d\n%s", valueOr(m.core.Status, ui.UnknownLabel), valueOr(m.core.Version, ui.UnknownLabel), m.core.PID, m.core.Restarts, formatUpSinceDetail(m.core.StartedAt))
 	rows := m.portRows()
 	rows = append(rows, m.networkRows()...)
+	if m.hasCapability(protocol.CapabilityConfigOverrides) {
+		rows = append(rows, row{id: "config-overrides", section: "Configuration", label: "Configuration Overrides", detail: "Edit authentication, DNS and ordered YAML fragments"})
+	}
 	rows = append(rows, row{id: rowDaemon, section: ui.DaemonSectionTitle, label: ui.DaemonLabel, value: daemonValue(m.theme, m.status, !m.mutationsEnabled), detail: daemon})
 	rows = append(rows, m.panelRows()...)
 	rows = append(rows, m.mihariChannelRow())
@@ -2408,7 +2435,7 @@ func (m *Model) errorChromeLines() []string {
 }
 
 func (m *Model) ensureFocusVisible() {
-	if m.auth.open {
+	if m.auth.open || m.overrides.open {
 		return
 	}
 	lines, focusStart, focusEnd := m.buildSectionContent()

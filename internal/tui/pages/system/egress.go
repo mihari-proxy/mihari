@@ -63,7 +63,7 @@ func egressAvailability(state string) string {
 func (m *Model) HasEgressDialog() bool { return m.egress.open }
 
 // HasInputDialog reports dialogs that own text input in the root shell.
-func (m *Model) HasInputDialog() bool { return m.egress.open || m.auth.open }
+func (m *Model) HasInputDialog() bool { return m.egress.open || m.auth.open || m.overrides.open }
 
 // SetEgress observes a daemon snapshot without discarding a dialog's draft or revision.
 func (m *Model) SetEgress(status protocol.EgressStatus) {

@@ -477,14 +477,24 @@ func (m *Manager) prepareCatalogConfig(ctx context.Context, catalog subscription
 }
 
 func (m *Manager) prepareCatalogConfigWithSettings(ctx context.Context, catalog subscription.Catalog, settings config.Settings, generation uint64) (configCandidate, error) {
-	if catalog.ActiveID == "" {
-		return m.prepareConfigWithSettings(ctx, subscription.Document{"proxies": []any{}, "proxy-groups": []any{}, "rules": []any{"MATCH,DIRECT"}}, settings, generation)
-	}
-	_, document, err := m.subscriptions.ReadCache(catalog.ActiveID)
+	document, err := m.catalogSourceDocument(catalog)
 	if err != nil {
 		return configCandidate{}, err
 	}
 	return m.prepareConfigWithSettings(ctx, document, settings, generation)
+}
+
+// catalogSourceDocument returns independent input for generation and draft previews.
+func (m *Manager) catalogSourceDocument(catalog subscription.Catalog) (subscription.Document, error) {
+	if catalog.ActiveID == "" {
+		return subscription.Document{"proxies": []any{}, "proxy-groups": []any{}, "rules": []any{"MATCH,DIRECT"}}, nil
+	}
+	index := catalog.Index(catalog.ActiveID)
+	if index < 0 {
+		return nil, routingConflict()
+	}
+	_, document, err := m.subscriptions.ReadCacheAtGeneration(catalog.ActiveID, catalog.Profiles[index].Generation)
+	return document, err
 }
 
 func (m *Manager) prepareConfig(ctx context.Context, document subscription.Document) (configCandidate, error) {

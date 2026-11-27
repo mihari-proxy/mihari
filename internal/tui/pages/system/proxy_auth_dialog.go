@@ -6,6 +6,7 @@ import (
 
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/mihari-proxy/mihari/internal/control/protocol"
 	"github.com/mihari-proxy/mihari/internal/tui/ui"
 )
 
@@ -29,6 +30,13 @@ func (m *Model) authView() string {
 	}
 	if m.auth.picker != "" {
 		hint = "↑/↓ choose mode · Enter confirm · Esc close options"
+	}
+	if m.hasCapability(protocol.CapabilityConfigOverrides) {
+		if m.auth.previewFull {
+			hint += " · Ctrl+O Focused preview"
+		} else {
+			hint += " · Ctrl+O Full preview"
+		}
 	}
 	hints := strings.Split(ansi.Wrap(hint, inner, ""), "\n")
 	errors := m.authErrorLines(inner)

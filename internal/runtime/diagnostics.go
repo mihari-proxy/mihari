@@ -74,7 +74,7 @@ func operationSuccessKey(key string) bool {
 		return false
 	}
 	switch prefix {
-	case "proxy-auth", "data-reset", "install", "restart", "sub-add", "sub-refresh", "sub-remove", "sub-set", "sub-enabled", "sub-use":
+	case "proxy-auth", "config-overrides-dns", "config-overrides-fragments", "data-reset", "install", "restart", "sub-add", "sub-refresh", "sub-remove", "sub-set", "sub-enabled", "sub-use":
 		return true
 	default:
 		return false
@@ -82,33 +82,35 @@ func operationSuccessKey(key string) bool {
 }
 
 var operationDiagnosticNames = map[string]string{
-	"proxy-auth":       "proxy-auth.update",
-	"data-reset":       "data.reset",
-	"egress":           "egress.update",
-	"close":            "connection.close",
-	"close-all":        "connection.close_all",
-	"geoip":            "geoip.update",
-	"install":          "core.install",
-	"logging":          "logging.update",
-	"onboarding":       "onboarding.update",
-	"panel-activate":   "panel.activate",
-	"panel-install":    "panel.install",
-	"panel-reinstall":  "panel.reinstall",
-	"panel-rollback":   "panel.rollback",
-	"panel-uninstall":  "panel.uninstall",
-	"panel-update":     "panel.update",
-	"preferences-tui":  "preferences.update",
-	"restart":          "core.restart",
-	"rule-provider":    "rule_provider.refresh",
-	"select":           "proxy.select",
-	"sub-add":          "subscription.add",
-	"sub-refresh":      "subscription.refresh",
-	"sub-remove":       "subscription.remove",
-	"sub-set":          "subscription.set",
-	"sub-enabled":      "subscription.enabled",
-	"sub-use":          "subscription.use",
-	"sysproxy-disable": "system_proxy.disable",
-	"sysproxy-enable":  "system_proxy.enable",
-	"tun-disable":      "tun.disable",
-	"tun-enable":       "tun.enable",
+	"proxy-auth":                 "proxy-auth.update",
+	"config-overrides-dns":       "config-overrides.dns",
+	"config-overrides-fragments": "config-overrides.fragments",
+	"data-reset":                 "data.reset",
+	"egress":                     "egress.update",
+	"close":                      "connection.close",
+	"close-all":                  "connection.close_all",
+	"geoip":                      "geoip.update",
+	"install":                    "core.install",
+	"logging":                    "logging.update",
+	"onboarding":                 "onboarding.update",
+	"panel-activate":             "panel.activate",
+	"panel-install":              "panel.install",
+	"panel-reinstall":            "panel.reinstall",
+	"panel-rollback":             "panel.rollback",
+	"panel-uninstall":            "panel.uninstall",
+	"panel-update":               "panel.update",
+	"preferences-tui":            "preferences.update",
+	"restart":                    "core.restart",
+	"rule-provider":              "rule_provider.refresh",
+	"select":                     "proxy.select",
+	"sub-add":                    "subscription.add",
+	"sub-refresh":                "subscription.refresh",
+	"sub-remove":                 "subscription.remove",
+	"sub-set":                    "subscription.set",
+	"sub-enabled":                "subscription.enabled",
+	"sub-use":                    "subscription.use",
+	"sysproxy-disable":           "system_proxy.disable",
+	"sysproxy-enable":            "system_proxy.enable",
+	"tun-disable":                "tun.disable",
+	"tun-enable":                 "tun.enable",
 }

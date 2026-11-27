@@ -64,6 +64,12 @@ _Avoid_: 源文件、运行配置、临时文件
 **运行配置（Runtime Configuration）**：结合已取得的配置内容与 Mihari 当前管理设置、实际提供给受管 mihomo 的配置。
 _Avoid_: 原始 YAML、导入缓存、将参数覆盖理解为修改源文件
 
+**实例配置覆写（Instance Configuration Override）**：用户为本 Mihari 实例保存的配置调整。切换订阅后，同一组调整作用于新的活动订阅。
+_Avoid_: 修改订阅源、将实例覆写绑定到单条订阅。
+
+**YAML 覆写片段（YAML Override Fragment）**：实例配置覆写列表中的一段 YAML，用字段名和操作符表达配置调整。每个启用的片段作用于前面各片段处理后的配置。
+_Avoid_: 完整订阅、导入源文件。
+
 **整合包**：一次发布里带有 Mihari 程序、核心和地理数据的归档。
 _Avoid_: 离线包
 

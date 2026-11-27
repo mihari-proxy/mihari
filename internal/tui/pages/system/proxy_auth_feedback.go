@@ -39,6 +39,9 @@ func (m *Model) closeAuth() tea.Cmd {
 	}
 	epoch := a.epoch + 1
 	*a = authUI{epoch: epoch}
+	if m.overrides.open {
+		return m.rowSpinCmdIfNeeded()
+	}
 	return tea.Batch(func() tea.Msg { return ui.InputModeMsg{Mode: ui.InputNavigation} }, m.rowSpinCmdIfNeeded())
 }
 

@@ -318,6 +318,25 @@ Mihari is an independent project and is not affiliated with or endorsed by the m
 
 [![Star History Chart](https://api.star-history.com/chart?repos=mihari-proxy/mihari&type=date&legend=bottom-right)](https://www.star-history.com/?repos=mihari-proxy%2Fmihari&type=date&legend=bottom-right)
 
+## Configuration overrides
+
+Open **System → Configuration Overrides** to edit Authentication, DNS, or an ordered list of YAML fragments. Authentication opens the same editor as **Ports & Authentication**. To supply missing DNS, set `enable` to true, set `nameserver` to your resolver list, review the generated DNS block, and save. Each of the eight form fields can follow the underlying configuration. A list can also replace, append, remove matching entries, or remove the field entirely. The other fields are `ipv6`, `enhanced-mode`, `default-nameserver`, `proxy-server-nameserver`, `respect-rules`, and `fallback`.
+
+Enabled fragments apply in list order to the current subscription, followed by explicit form values and Mihari's managed settings. Add or import a fragment, edit it, then save the list together. Ordinary mappings merge recursively. Ordinary lists and scalars replace. In the example below, the DNS table keeps its other keys, the domain policy is replaced, and the resolver list is edited in written order.
+
+```yaml
+dns:
+  nameserver-policy!:
+    "+.corp.example": 10.0.0.53
+  nameserver-: [8.8.8.8]
+  +nameserver: [1.1.1.1]
+  nameserver+: [9.9.9.9]
+```
+
+`key-: [A]` removes every exact match, `key!: []` leaves an empty list, and `key-: null` removes the field. Within a recursive merge, use `"<+.corp.example>"` for a literal domain key. Values inside a whole-field replacement are native YAML. Mihari protects its mixed listener settings, controller and secret, route mode, log level and external UI configuration from fragment writes.
+
+**Ctrl+O** switches between affected fields and the complete candidate. **Ctrl+R** controls authentication password visibility. The daemon validates and applies the saved draft; an invalid update leaves the last effective config available. Refreshing or switching subscriptions and restarting reapply the instance's saved overrides. Before downgrading to a version without `config-overrides`, clear the DNS form and remove every fragment, including disabled ones.
+
 ## Proxy authentication and data reset
 
 The bordered Proxy Authentication dialog shows editable parameters beside a read-only preview of the generated `authentication` and `skip-auth-prefixes` YAML. Mode descriptions appear in light gray. The preview updates while typing: the focused parameter highlights its affected lines, and `+`/`−` marks changes from saved settings. Passwords stay masked unless explicitly revealed with Ctrl+R. Tab switches panes; arrows and PgUp/PgDn scroll the preview. Narrow windows stack the panes. Previewing never saves or reloads configuration; use a local YAML file in Subscriptions for direct configuration editing. This preview requires a daemon advertising `proxy-auth-preview-v1`.
@@ -332,4 +351,4 @@ Bypass modes are `follow`, `custom`, and `required`. Custom rules have a local l
 
 Passwords are masked by default. Explicit reveal is available over authenticated local IPC only. CLI password input uses a hidden terminal prompt or `--password-stdin`; no password command-line argument is provided. A nondefault `proxy-auth` settings block requires this version or newer; run `mihari proxy-auth reset --yes` before downgrading to versions without this feature, and finish any pending data reset and Setup first because older binaries do not recognize the reset marker.
 
-**Reset Proxy Authentication** clears instance credentials and bypass overrides and restores subscription authentication. **System → Maintenance → Reset Mihari Data** clears business settings, subscriptions/cache, generated configuration, node selection cache and the selected preferences store, while retaining the program, service, downloaded core/panels/GeoIP, logs/exports, local control credential and unknown files. Full reset previews exact managed files and requires two confirmations. It rotates Controller/Web credentials, stops proxying and the Web gateway, and returns to Setup. Restart the daemon to bind the fresh endpoints/credentials; automatic core startup remains paused until Setup completes. A durable reset marker resumes an interrupted clear before business stores open. Startup degradation provides restricted local reset operations rather than starting an unvalidated core.
+**Reset Proxy Authentication** clears instance credentials and bypass overrides and restores inherited authentication, including enabled fragments. **System → Maintenance → Reset Mihari Data** clears business settings, subscriptions/cache, generated configuration, node selection cache and the selected preferences store, while retaining the program, service, downloaded core/panels/GeoIP, logs/exports, local control credential and unknown files. Full reset previews exact managed files and requires two confirmations. It rotates Controller/Web credentials, stops proxying and the Web gateway, and returns to Setup. Restart the daemon to bind the fresh endpoints/credentials; automatic core startup remains paused until Setup completes. A durable reset marker resumes an interrupted clear before business stores open. Startup degradation provides restricted local reset operations rather than starting an unvalidated core.

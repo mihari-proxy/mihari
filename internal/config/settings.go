@@ -38,20 +38,21 @@ type LoggingSettings struct {
 }
 
 type Settings struct {
-	AllowLAN           bool               `yaml:"allow-lan,omitempty"`
-	ProxyAuth          *ProxyAuthSettings `yaml:"proxy-auth,omitempty"`
-	EgressInterface    string             `yaml:"egress-interface,omitempty"`
-	Routing            *RoutingSettings   `yaml:"routing,omitempty"`
-	Schema             string             `yaml:"schema"`
-	MixedAddr          string             `yaml:"mixed-addr"`
-	ControllerAddr     string             `yaml:"controller-addr"`
-	WebAddr            string             `yaml:"web-addr"`
-	ControllerSecret   string             `yaml:"controller-secret"`
-	SystemProxyDesired bool               `yaml:"system-proxy-desired,omitempty"`
-	Tun                map[string]any     `yaml:"tun,omitempty"` // managed block; empty = unmanaged
-	CoreChannel        string             `yaml:"core-channel,omitempty"`
-	CoreChannelBundle  string             `yaml:"core-channel-bundle,omitempty"`
-	Logging            *LoggingSettings   `yaml:"log,omitempty"`
+	Overrides          *protocol.ConfigOverrides `yaml:"config-overrides,omitempty"`
+	AllowLAN           bool                      `yaml:"allow-lan,omitempty"`
+	ProxyAuth          *ProxyAuthSettings        `yaml:"proxy-auth,omitempty"`
+	EgressInterface    string                    `yaml:"egress-interface,omitempty"`
+	Routing            *RoutingSettings          `yaml:"routing,omitempty"`
+	Schema             string                    `yaml:"schema"`
+	MixedAddr          string                    `yaml:"mixed-addr"`
+	ControllerAddr     string                    `yaml:"controller-addr"`
+	WebAddr            string                    `yaml:"web-addr"`
+	ControllerSecret   string                    `yaml:"controller-secret"`
+	SystemProxyDesired bool                      `yaml:"system-proxy-desired,omitempty"`
+	Tun                map[string]any            `yaml:"tun,omitempty"` // managed block; empty = unmanaged
+	CoreChannel        string                    `yaml:"core-channel,omitempty"`
+	CoreChannelBundle  string                    `yaml:"core-channel-bundle,omitempty"`
+	Logging            *LoggingSettings          `yaml:"log,omitempty"`
 }
 
 // DefaultLoggingSettings returns the logging configuration used when no override is persisted.
@@ -94,6 +95,9 @@ func (s *Settings) SetLogging(logging LoggingSettings) {
 // Clone returns a copy of Settings that does not share mutable YAML values.
 func (s Settings) Clone() Settings {
 	clone := s
+	if s.Overrides != nil {
+		clone.SetOverrides(*s.Overrides)
+	}
 	if s.ProxyAuth != nil {
 		auth := *s.ProxyAuth
 		auth.Users = slices.Clone(s.ProxyAuth.Users)
@@ -458,6 +462,9 @@ func SaveWithCommit(path string, settings Settings) (CommitResult, error) {
 }
 
 func (s Settings) Validate() error {
+	if err := ValidateOverrides(s.Overrides); err != nil {
+		return err
+	}
 	if err := ValidateProxyAuth(s.EffectiveProxyAuth()); err != nil {
 		return err
 	}

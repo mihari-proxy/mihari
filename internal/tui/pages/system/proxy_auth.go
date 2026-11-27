@@ -35,6 +35,7 @@ type authUI struct {
 	previewCancel                               context.CancelFunc
 	previewTimerCancel                          context.CancelFunc
 	previewRevealed                             bool
+	previewFull                                 bool
 	preview                                     protocol.ProxyAuthPreview
 	previewRenderKey                            authPreviewRenderKey
 	previewRenderSource                         []protocol.ProxyAuthPreviewLine
@@ -136,15 +137,17 @@ func (m *Model) handleAuthResult(r authResultMsg) tea.Cmd {
 	m.auth.status = r.status
 	m.auth.sourceUsers, m.auth.sourceLoaded = r.sourceUsers, r.sourceLoaded
 	m.auth.sourceID, m.auth.sourceName, m.auth.sourceErr = r.sourceID, r.sourceName, r.sourceErr
-	m.auth.draft = r.status.Config
-	m.auth.draft.Users = slices.Clone(r.status.Config.Users)
-	m.auth.draft.BypassPrefixes = slices.Clone(r.status.Config.BypassPrefixes)
+	if !m.auth.conflict {
+		m.auth.draft = r.status.Config
+		m.auth.draft.Users = slices.Clone(r.status.Config.Users)
+		m.auth.draft.BypassPrefixes = slices.Clone(r.status.Config.BypassPrefixes)
+	}
 	m.auth.loaded = true
 	m.hideAuthSecrets()
 	m.auth.err = ""
 	if m.auth.conflict {
 		m.auth.conflict = false
-		m.auth.err = "Settings changed. Current configuration reloaded; review and reapply your edits."
+		m.auth.err = "Settings changed. Current configuration reloaded; review your retained draft before saving again."
 	}
 	if r.mutation {
 		m.auth.saveDone = true
@@ -427,7 +430,7 @@ func (m *Model) updateAuthControls(message tea.Msg) tea.Cmd {
 			return m.authEdit("prefix", "")
 		case a.selected == resetRow:
 			return func() tea.Msg {
-				return ui.ConfirmationRequestMsg{Title: "Reset Proxy Authentication", Impact: "Clear users and bypass rules saved in Mihari; restore subscription authentication", Rollback: "Saved overrides will be removed", OnConfirm: func() tea.Msg { return authResetConfirmedMsg{} }}
+				return ui.ConfirmationRequestMsg{Title: "Reset Proxy Authentication", Impact: "Clear the authentication form and inherit credentials from the subscription and enabled fragments", Rollback: "Saved overrides will be removed", OnConfirm: func() tea.Msg { return authResetConfirmedMsg{} }}
 			}
 		case a.selected == resetRow+2:
 			if m.authDirty() {

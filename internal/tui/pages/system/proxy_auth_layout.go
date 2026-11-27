@@ -53,7 +53,7 @@ func loadAuthSource(ctx context.Context, client authClient, hasPreview bool, res
 	seen := map[string]bool{}
 	for _, line := range preview.Lines {
 		if line.Field == "authentication" && line.Target != "" && line.Change != "-" && !seen[line.Target] {
-			result.sourceUsers = append(result.sourceUsers, protocol.ProxyAuthUser{Username: line.Target, Source: "subscription"})
+			result.sourceUsers = append(result.sourceUsers, protocol.ProxyAuthUser{Username: line.Target, Source: "subscription", BaseSource: line.Source})
 			seen[line.Target] = true
 		}
 	}
@@ -195,6 +195,14 @@ func (m *Model) authParameterContent(width int) []authParameterLine {
 			value = a.draft.BypassMode
 		}
 		opts := authModeOptions(kind)
+		if m.hasCapability(protocol.CapabilityConfigOverrides) {
+			opts[0].label = "Inherit"
+			if kind == "auth" {
+				opts[0].help = "Use users and passwords from the subscription and enabled fragments."
+			} else {
+				opts[0].help = "Use bypass rules from the subscription and enabled fragments."
+			}
+		}
 		current := opts[0]
 		for _, option := range opts {
 			if option.value == value {
@@ -248,10 +256,15 @@ func (m *Model) authParameterContent(width int) []authParameterLine {
 		name := diagnostics.EscapeTerminal(u.Username)
 		source := "Subscription: " + m.authSubscriptionLabel()
 		detail := ""
+		inherited := "User from subscription: " + m.authSubscriptionLabel()
+		if u.BaseSource != "" {
+			source = "Fragment: " + diagnostics.EscapeTerminal(u.BaseSource)
+			inherited = "User from " + source
+		}
 		switch u.Source {
 		case "overridden":
 			source = "Password set in Mihari"
-			detail = "User from subscription: " + m.authSubscriptionLabel()
+			detail = inherited
 		case "added":
 			source = "Added in Mihari"
 			detail = "Saved across subscriptions"
@@ -290,7 +303,11 @@ func (m *Model) authParameterContent(width int) []authParameterLine {
 			}
 			muted(action, row)
 			if u.Source == "overridden" {
-				muted("Removing the override restores the subscription password.", row)
+				if u.BaseSource != "" {
+					muted("Removing the override restores the fragment password.", row)
+				} else {
+					muted("Removing the override restores the subscription password.", row)
+				}
 			}
 		}
 		if a.reveal {

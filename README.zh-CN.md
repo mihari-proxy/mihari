@@ -320,6 +320,25 @@ Mihari 是一个独立项目,与 mihomo 项目或 MetaCubeX 无关联,也不受�
 
 [![Star History Chart](https://api.star-history.com/chart?repos=mihari-proxy/mihari&type=date&legend=bottom-right)](https://www.star-history.com/?repos=mihari-proxy%2Fmihari&type=date&legend=bottom-right)
 
+## 配置覆写
+
+进入 **System → Configuration Overrides**，选择 Authentication、DNS 或 YAML 片段。Authentication 与 **Ports & Authentication** 共用同一个编辑器。订阅缺少 DNS 时，可将 `enable` 设为开启，填写 `nameserver`，查看右侧 DNS 配置后保存。其余六项为 `ipv6`、`enhanced-mode`、`default-nameserver`、`proxy-server-nameserver`、`respect-rules`、`fallback`。每项均可沿用已有配置；列表还可替换、追加、按值移除或删除整个字段。
+
+启用的 YAML 片段按列表顺序作用于当前订阅，再应用显式填写的表单和 Mihari 托管设置。新增或从文件导入片段后可编辑原文，保存时统一应用整份列表。普通映射递归合并，列表和标量整体替换。下面的片段保留其他 DNS 字段，替换域名策略表，再依书写顺序调整解析器列表。
+
+```yaml
+dns:
+  nameserver-policy!:
+    "+.corp.example": 10.0.0.53
+  nameserver-: [8.8.8.8]
+  +nameserver: [1.1.1.1]
+  nameserver+: [9.9.9.9]
+```
+
+`key-: [A]` 移除所有完全匹配的 A，`key!: []` 清空列表并保留键，`key-: null` 删除整个键。递归合并时可写 `"<+.corp.example>"` 表示完整域名键，整块替换的值直接使用原生 YAML。mixed 监听设置、controller 与 secret、路由模式、日志级别及外部 UI 设置由 Mihari 管理，片段写入这些字段时会提示具体键名。
+
+**Ctrl+O** 切换相关字段和完整候选预览，**Ctrl+R** 切换认证密码显隐。保存失败保留上一份有效配置。刷新或切换订阅、重启后都会重新应用已保存的实例覆写。降级到不支持 `config-overrides` 的版本前，清空 DNS 表单并删除全部片段，包括停用的片段。
+
 ## 代理认证与业务数据重置
 
 Proxy Authentication 使用带边框的弹窗：左侧调整参数，右侧只读预览生成配置中的 `authentication` 和 `skip-auth-prefixes`。模式说明为英文浅灰色。输入时实时更新，当前参数影响的行高亮，`+`/`−` 标记相对已保存设置的变化。密码默认遮罩，Ctrl+R 主动显示；Tab 切换两侧焦点，方向键和 PgUp/PgDn 滚动预览，窄窗口上下排列。预览不保存、不重载配置；直接编辑配置请在 Subscriptions 使用本地 YAML 文件。预览需要 daemon 提供 `proxy-auth-preview-v1` 能力。
@@ -334,4 +353,4 @@ Authentication mode 和 Bypass mode 默认只显示当前值，Enter 展开全�
 
 密码默认遮罩，仅通过认证本地 IPC 的显式操作查看。CLI 支持隐藏终端输入或 `--password-stdin`，不提供密码命令行参数。非默认 `proxy-auth` 设置需要支持此功能的版本；降级前执行 `mihari proxy-auth reset --yes` 移除该设置块，并先完成未结束的业务数据重置与 Setup。
 
-**Reset Proxy Authentication** 只清除实例代理凭据及免认证覆盖，恢复订阅认证。**System → Maintenance → Reset Mihari Data** 清除业务设置、订阅及缓存、生成配置、节点选择缓存和该实例的偏好存储，保留程序、系统服务、已下载内核/面板/GeoIP、日志与导出、本地控制凭据及未知文件。全量重置先预览精确文件，再确认两次；更新 Controller/Web 凭据，停止代理和 Web gateway，并返回 Setup。需要重启 daemon 以绑定新的端口和凭据；完成 Setup 前不自动启动内核。中断清理由持久标记保护，在启动打开业务存储前继续完成。启动降级时只开放受限本地重置操作，不启动未校验的内核。
+**Reset Proxy Authentication** 只清除实例代理凭据及免认证覆盖，恢复沿用已有的认证设置，包括已启用片段提供的认证。**System → Maintenance → Reset Mihari Data** 清除业务设置、订阅及缓存、生成配置、节点选择缓存和该实例的偏好存储，保留程序、系统服务、已下载内核/面板/GeoIP、日志与导出、本地控制凭据及未知文件。全量重置先预览精确文件，再确认两次；更新 Controller/Web 凭据，停止代理和 Web gateway，并返回 Setup。需要重启 daemon 以绑定新的端口和凭据；完成 Setup 前不自动启动内核。中断清理由持久标记保护，在启动打开业务存储前继续完成。启动降级时只开放受限本地重置操作，不启动未校验的内核。
